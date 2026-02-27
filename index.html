@@ -761,9 +761,12 @@ async function generateThesis(gameId){
       renderGenProgress(gameId);
       if(i < calls.length-1) await new Promise(r=>setTimeout(r,1500));
     }
-    // Cache for re-runs
-    try{ localStorage.setItem(cacheKey, JSON.stringify(collected)); console.log('SR data cached for', gameId); }
-    catch(e){ console.warn('Cache write failed:', e.message); }
+    // Cache for re-runs (skip if too large for localStorage)
+    try{
+      const cacheStr = JSON.stringify(collected);
+      if(cacheStr.length < 3000000) localStorage.setItem(cacheKey, cacheStr);
+      else console.warn('SR data too large to cache:', (cacheStr.length/1024).toFixed(0)+'KB');
+    }catch(e){ console.warn('Cache write failed:', e.message); }
   }
 
   // Now send to Sonnet — prompt built client-side, function is thin Anthropic proxy
@@ -802,8 +805,11 @@ async function generateThesis(gameId){
     };
     const trimDepth = (d) => {
       if(!d) return '(unavailable)';
-      return (d.positions||[]).map(pos =>
-        pos.name + ': ' + (pos.players||[]).map(pl=>`${pl.depth||'?'}. ${pl.full_name}`).join(', ')
+      console.log('Depth chart structure:', typeof d, Array.isArray(d), Object.keys(d).slice(0,10));
+      const pos = Array.isArray(d.positions) ? d.positions : Array.isArray(d) ? d : [];
+      if(pos.length===0) return JSON.stringify(d).substring(0,2000);
+      return pos.map(p =>
+        (p.name||p.position||'?') + ': ' + (Array.isArray(p.players)?p.players:[]).map(pl=>`${pl.depth||'?'}. ${pl.full_name||pl.name||'?'}`).join(', ')
       ).join('\n');
     };
     const trimStandings = (s) => {
