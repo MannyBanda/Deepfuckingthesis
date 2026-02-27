@@ -691,6 +691,7 @@ async function generateThesis(gameId){
   const cs = cardState[gameId];
   if(!game||!cs) return;
   cs.generating = true;
+  cs.genError = null;
   const wasPaused = paused;
   paused = true; // Pause polling during generation to avoid SR rate limit conflicts
   const homeAlias = game.home?.alias||'';
@@ -908,8 +909,10 @@ WATCH
   }catch(e){
     cs.genSteps[12].status = 'err';
     cs.genSteps[12].error = e.message;
+    console.error('Thesis generation failed at step 13:', e.message, e.stack);
   }
   cs.generating = false;
+  cs.genError = cs.genSteps[12]?.status==='err' ? cs.genSteps[12].error : null;
   paused = wasPaused; // Resume polling state
   renderCard(game);
 }
@@ -1308,7 +1311,7 @@ function crossRef(parsed,ind){
 function mountCard(game){
   const id=game.id;
   cardState[id]={logs:[],lastUp:null,editing:false,generating:false,analyzing:false,
-    prevLvl:null,_countdown:null,lastFingerprint:'',analysis:null,analysisTime:null,genSteps:null};
+    prevLvl:null,_countdown:null,lastFingerprint:'',analysis:null,analysisTime:null,genSteps:null,genError:null};
   const div=document.createElement('div');
   div.id='card-'+id;
   document.getElementById('grid').appendChild(div);
@@ -1417,6 +1420,8 @@ function renderCard(game){
       const icon=s.status==='done'?'✓':s.status==='active'?'⟳':s.status==='err'?'✗':'·';
       return `<span class="gen-step ${s.status}">${icon} ${s.label}${s.error?' — '+s.error:''}</span>`;
     }).join('<br>')}</div>`;
+  } else if(cs.genError && !thesis){
+    html+=`<div style="font-size:7px;color:var(--red);padding:4px 0;">⚠ Thesis generation failed: ${esc(cs.genError)}</div>`;
   } else if(thesis){
     html+=`<div class="tbody">${esc(thesis)}</div>`;
     if(p.lean||p.entry||p.pass||p.watches.length){
