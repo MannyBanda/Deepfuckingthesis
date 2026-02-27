@@ -1,80 +1,5 @@
-// Pre-Game Thesis Generation via Claude Sonnet
-// Receives all SR pre-game data for both teams, returns compact thesis
-
-const SYSTEM_PROMPT = `You are an NBA pre-game structural analyst. You build game thesis documents that predict where the structural battle will be fought and what to monitor live.
-
-AVAILABILITY HARD GATE: Classify every key player: IN, IN (limited), OUT, UNKNOWN. OUT players removed from all evaluation. If unclear → NO EDGE / NO TRADE.
-
-FIVE INDICATORS (weighted):
-I1 — Possession & Transition (25%): TO margin tendencies, steals, OREBs, POT, SCP, FBP conversion rates. Who generates extra possessions and converts them.
-I2 — Rim Pressure & Foul (25%): Paint scoring, at-rim rates, FTA generation, blocks, foul drawing. Interior control is the most predictive of sustained leads.
-I3 — Shot Quality & Creation (20%): Assist ratio, eFG%, shot zone tendencies. 65%+ assist ratio = sustainable. <50% = isolation-dependent.
-I4 — Lineup Integrity (20%): Bench depth, biggest lead tendencies, win/loss performance delta.
-I5 — Tempo & Efficiency (10%): Preferred pace, pts/possession from splits.
-
-SCORING: Each indicator 1.0 (clear edge), 0.5 (contested), 0.0 (opponent edge).
-CONTROL: 0.90+ DOMINANT | 0.75-0.89 STRONG | 0.60-0.74 EARNED | 0.45-0.59 NO EDGE | <0.45 WAIT
-
-ANALYTICAL LAYERS TO COMPUTE:
-- Context-Adjusted Strength: Use home/away split (primary) blended with rest-bucket split (40% modifier). Fall back to season average only if no split applies.
-- Structural Identity per indicator: Strong/Moderate/Weak based on relevant stat fields from splits.
-- Shot Diet Classification: Interior/Transition dominant, Perimeter/Creation dominant, or Balanced.
-- Win/Loss Delta: PPG, ORtg, 3PT%, TO rate swing between wins and losses. Low (<8 PPG) = consistent. High (15+) = fragile.
-- Comeback Score (0-10): Based on offensive stability in losses.
-- Lead-Keep Score (0-10): Based on defensive consistency across game states.
-- Ball Handler Volatility (BHV): Primary PG TO rate. LOW <2.5, MODERATE 2.5-3.5, HIGH >3.5. New acquisitions (<4 weeks) auto-elevate one tier.
-- Chaos Risk: HIGH BHV + opponent top-7 steals = CHAOS RISK HIGH.
-- Foul Crisis Resilience: Compare starter vs backup at top-2 USG positions. HIGH/MODERATE/LOW.
-- Pythagorean Win Expectation: Compare actual vs expected W-L. Cap control scores for teams 3+ wins above/below expected.
-- System Resilience Modifier: Top-10 defensive teams with stars OUT get reduced degradation on I1 and I2.
-
-OUTPUT FORMAT — Use this exact compact thesis structure:
-
-COMPACT THESIS — [AWAY] vs [HOME] | [Time] ET
-[Date] | [Venue]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-AVAILABILITY
-[TEAM A]  [Player] ✅ IN | [Player] ❌ OUT | [Player] ⚠️ GTD
-[TEAM B]  [Player] ✅ IN | [Player] ❌ OUT | [Player] ⚠️ GTD
-
-REST       [TEAM A] X day | [TEAM B] X day
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CONTROL SCORE: [Team] [X.XX] — [Verdict]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-I1  Possession & Transition  (25%)   [Team 1.0 | CONTESTED 0.5 | Team 0.0]
-[1-line reason]
-
-I2  Rim Pressure & Foul      (25%)   [Team 1.0 | CONTESTED 0.5 | Team 0.0]
-[1-line reason]
-
-I3  Shot Quality & Creation  (20%)   [Team 1.0 | CONTESTED 0.5 | Team 0.0]
-[1-line reason]
-
-I4  Lineup Integrity         (20%)   [Team 1.0 | CONTESTED 0.5 | Team 0.0]
-[1-line reason]
-
-I5  Tempo & Efficiency       (10%)   [Team 1.0 | CONTESTED 0.5 | Team 0.0]
-[1-line reason]
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-KEY FLAGS
-⚠ [Flag 1]
-⚠ [Flag 2]
-✓ [Clean read note if applicable]
-
-ENTRY      [Trigger condition]
-PASS       [Pass condition]
-
-WATCH
-1. [Signal] — confirms if [X], denies if [Y]
-2. [Signal] — confirms if [X], denies if [Y]
-3. [Signal] — confirms if [X], denies if [Y]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Be precise and evidence-based. Every indicator score must be justified by specific data from the provided statistics. Do not hedge — state which team has the edge and why. If genuinely contested, score 0.5 with clear reasoning. WATCH items should be specific and testable during the live game.`;
+// Thin Anthropic proxy for thesis generation
+// Prompt is built client-side and sent as text — keeps body small
 
 exports.handler = async (event) => {
   const headers = {
@@ -102,125 +27,12 @@ exports.handler = async (event) => {
   }
 
   try {
-    console.log('generate-thesis: Received request, body length:', (event.body||'').length);
-    
-    const {
-      homeTeam,
-      awayTeam,
-      gameDate,
-      venue,
-      gameTime,
-      injuries,
-      homeProfile,
-      awayProfile,
-      homeDepth,
-      awayDepth,
-      homeStats,
-      awayStats,
-      homeSplitsGame,
-      awaySplitsGame,
-      homeSplitsSchedule,
-      awaySplitsSchedule,
-      standings,
-    } = JSON.parse(event.body);
+    const { systemPrompt, userPrompt } = JSON.parse(event.body);
+    console.log('generate-thesis: body length:', (event.body||'').length, 'prompt length:', (userPrompt||'').length);
 
-    console.log('generate-thesis: Parsed OK. Teams:', awayTeam, '@', homeTeam);
-
-    // Check minimum required data
-    if (!homeStats && !awayStats) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ error: 'Insufficient data — team statistics required. SR may have been rate limited during collection.' }),
-      };
+    if (!userPrompt) {
+      return { statusCode: 400, headers, body: JSON.stringify({ error: 'userPrompt required' }) };
     }
-
-    // Trim large objects to stay within Anthropic context limits
-    // Only keep team-level stats, not full player arrays
-    const trimProfile = (p) => {
-      if (!p) return null;
-      const { players, ...rest } = p;
-      const keyPlayers = (players||[])
-        .filter(pl => pl.status === 'ACT' || pl.status === 'SUS')
-        .map(pl => ({
-          full_name: pl.full_name, position: pl.position, status: pl.status,
-          jersey_number: pl.jersey_number, id: pl.id,
-          injuries: pl.injuries,
-        }));
-      return { ...rest, players: keyPlayers };
-    };
-
-    const trimStats = (s) => {
-      if (!s) return null;
-      const own = s.own_record || s.opponents || s;
-      // Keep team-level stats and top players by usage
-      const teamStats = s.own_record?.statistics || s.statistics || {};
-      const oppStats = s.opponents?.statistics || {};
-      const players = (s.own_record?.players || s.players || [])
-        .sort((a,b) => (b.average?.minutes||0) - (a.average?.minutes||0))
-        .slice(0, 12)
-        .map(pl => ({
-          full_name: pl.full_name, position: pl.position,
-          average: pl.average, total: pl.total,
-        }));
-      return { team: s.own_record?.name || s.name, statistics: teamStats, opponent_statistics: oppStats, top_players: players };
-    };
-
-    const trimSplits = (s) => {
-      if (!s) return null;
-      // Just stringify and truncate if too large
-      const str = JSON.stringify(s);
-      if (str.length > 15000) return JSON.parse(str.substring(0, 15000) + '..."truncated"}');
-      return s;
-    };
-
-    const safeJSON = (d) => d ? JSON.stringify(d, null, 1) : '(DATA UNAVAILABLE — SR rate limited during collection)';
-
-    const userPrompt = `Build a complete pre-game thesis for this NBA matchup using ALL provided data. Some data sources may be unavailable due to API rate limiting — work with what is available.
-
-MATCHUP: ${awayTeam} @ ${homeTeam}
-DATE: ${gameDate} | TIME: ${gameTime} ET
-VENUE: ${venue || 'TBD'}
-
-=== INJURY REPORT ===
-${safeJSON(injuries)}
-
-=== ${homeTeam} PROFILE (roster + status flags) ===
-${safeJSON(trimProfile(homeProfile))}
-
-=== ${awayTeam} PROFILE (roster + status flags) ===
-${safeJSON(trimProfile(awayProfile))}
-
-=== ${homeTeam} DEPTH CHART ===
-${safeJSON(homeDepth)}
-
-=== ${awayTeam} DEPTH CHART ===
-${safeJSON(awayDepth)}
-
-=== ${homeTeam} SEASON STATISTICS ===
-${safeJSON(trimStats(homeStats))}
-
-=== ${awayTeam} SEASON STATISTICS ===
-${safeJSON(trimStats(awayStats))}
-
-=== ${homeTeam} SPLITS (Game: H/A, W/L, per-opponent) ===
-${safeJSON(trimSplits(homeSplitsGame))}
-
-=== ${awayTeam} SPLITS (Game: H/A, W/L, per-opponent) ===
-${safeJSON(trimSplits(awaySplitsGame))}
-
-=== ${homeTeam} SPLITS (Schedule: rest days) ===
-${safeJSON(trimSplits(homeSplitsSchedule))}
-
-=== ${awayTeam} SPLITS (Schedule: rest days) ===
-${safeJSON(trimSplits(awaySplitsSchedule))}
-
-=== STANDINGS ===
-${safeJSON(standings)}
-
-Compute all analytical layers (strength profiles, structural identity, shot diet, BHV, chaos risk, foul resilience, Pythagorean check, win/loss delta) from this data. Output the compact thesis format.`;
-
-    console.log('generate-thesis: Prompt size:', userPrompt.length, 'chars (~', Math.round(userPrompt.length/4), 'tokens)');
 
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -232,13 +44,14 @@ Compute all analytical layers (strength profiles, structural identity, shot diet
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 3000,
-        system: SYSTEM_PROMPT,
+        system: systemPrompt || 'You are an NBA pre-game structural analyst.',
         messages: [{ role: 'user', content: userPrompt }],
       }),
     });
 
     if (!resp.ok) {
       const errText = await resp.text();
+      console.error('Anthropic error:', resp.status, errText.substring(0, 500));
       return {
         statusCode: resp.status,
         headers,
