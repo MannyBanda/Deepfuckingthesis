@@ -242,6 +242,11 @@ let pollInterval = 90000; // default 90s
 const theses = JSON.parse(localStorage.getItem('nba4:theses')||'{}');
 const cardState = {};
 
+// BDL fallback state
+const bdlGameMap = {}; // SR game ID → BDL game ID
+let srExhausted = false; // true when daily limit suspected
+let sr429Count = 0; // consecutive 429s across games
+
 // Known team IDs for thesis generation
 const TEAM_IDS = {
   ATL:'583ecb8f-fb46-11e1-82cb-f4ce4684ea4c',BOS:'583eccfa-fb46-11e1-82cb-f4ce4684ea4c',
@@ -295,6 +300,138 @@ async function srSequential(calls, delayMs=1100){
 // ══════════════════════════════════════════════════════════════════════════════
 // DATE HELPER
 // ══════════════════════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════════════════════
+// BDL FALLBACK — DATA PROXY & GAME MAPPING
+// ══════════════════════════════════════════════════════════════════════════════
+async function bdl(type, params={}){
+  const qs = new URLSearchParams({type, ...params}).toString();
+  const r = await fetch(FN+'bdl-data?'+qs);
+  if(!r.ok){
+    const d = await r.json().catch(()=>({error:r.statusText}));
+    throw new Error(d.error||'BDL error '+r.status);
+  }
+  return r.json();
+}
+
+// BDL team name normalization — maps SR alias to BDL matching patterns
+const BDL_TEAM_MATCH = {
+  ATL:'Hawks',BOS:'Celtics',BKN:'Nets',CHA:'Hornets',CHI:'Bulls',CLE:'Cavaliers',
+  DAL:'Mavericks',DEN:'Nuggets',DET:'Pistons',GSW:'Warriors',HOU:'Rockets',IND:'Pacers',
+  LAC:'Clippers',LAL:'Lakers',MEM:'Grizzlies',MIA:'Heat',MIL:'Bucks',MIN:'Timberwolves',
+  NOP:'Pelicans',NYK:'Knicks',OKC:'Thunder',ORL:'Magic',PHI:'76ers',PHX:'Suns',
+  POR:'Trail Blazers',SAC:'Kings',SAS:'Spurs',TOR:'Raptors',UTA:'Jazz',WAS:'Wizards',
+};
+
+async function buildBdlGameMap(dateStr){
+  try{
+    const data = await bdl('games',{date:dateStr});
+    const bdlGames = data.data||[];
+    // Match each SR game to a BDL game by team names
+    for(const game of games){
+      const hAlias = game.home?.alias, aAlias = game.away?.alias;
+      if(!hAlias||!aAlias) continue;
+      const hMatch = BDL_TEAM_MATCH[hAlias], aMatch = BDL_TEAM_MATCH[aAlias];
+      const match = bdlGames.find(bg =>
+        bg.home_team?.full_name?.includes(hMatch) && bg.visitor_team?.full_name?.includes(aMatch)
+      );
+      if(match) bdlGameMap[game.id] = match.id;
+    }
+    console.log('BDL game map built:', Object.keys(bdlGameMap).length, 'games mapped');
+  }catch(e){
+    console.warn('BDL game map failed:', e.message);
+  }
+}
+
+// Fetch BDL data for a game — returns aggregated team stats
+async function fetchBdlSummary(game){
+  const bdlId = bdlGameMap[game.id];
+  if(!bdlId) throw new Error('No BDL game ID mapped for '+game.id);
+
+  // Fetch game info (scores, quarters, bonus) + basic stats + advanced stats in parallel
+  const [gameInfo, statsData, advData] = await Promise.all([
+    bdl('game',{game_id:bdlId}),
+    bdl('stats',{game_id:bdlId}),
+    bdl('advanced',{game_id:bdlId}),
+  ]);
+
+  const g = gameInfo; // or gameInfo.data depending on BDL response
+  const gd = g.data || g;
+  const stats = (statsData.data||[]).filter(s=>s.min && s.min!=='00'&&s.min!=='0:00');
+  const adv = (advData.data||[]).filter(s=>s.possessions>0);
+
+  // Determine home/away team IDs
+  const homeTeamId = gd.home_team?.id;
+  const awayTeamId = gd.visitor_team?.id;
+
+  // Aggregate basic stats by team
+  function aggBasic(teamId){
+    const pl = stats.filter(s=>(s.team?.id||s.player?.team_id)===teamId);
+    return {
+      steals: pl.reduce((a,s)=>a+(s.stl||0),0),
+      blocks: pl.reduce((a,s)=>a+(s.blk||0),0),
+      offensive_rebounds: pl.reduce((a,s)=>a+(s.oreb||0),0),
+      turnovers: pl.reduce((a,s)=>a+(s.turnover||0),0),
+      assists: pl.reduce((a,s)=>a+(s.ast||0),0),
+      field_goals_made: pl.reduce((a,s)=>a+(s.fgm||0),0),
+      field_goals_att: pl.reduce((a,s)=>a+(s.fga||0),0),
+      three_points_made: pl.reduce((a,s)=>a+(s.fg3m||0),0),
+      three_points_att: pl.reduce((a,s)=>a+(s.fg3a||0),0),
+      free_throws_att: pl.reduce((a,s)=>a+(s.fta||0),0),
+      free_throws_made: pl.reduce((a,s)=>a+(s.ftm||0),0),
+      personal_fouls: pl.reduce((a,s)=>a+(s.pf||0),0),
+      players: pl, // keep individual player stats
+    };
+  }
+
+  // Aggregate advanced stats by team
+  function aggAdvanced(teamId){
+    const pl = adv.filter(s=>(s.team?.id||s.player?.team_id)===teamId);
+    const totalPoss = pl.reduce((a,s)=>a+(s.possessions||0),0);
+    return {
+      fast_break_points: pl.reduce((a,s)=>a+(s.points_fast_break||0),0),
+      points_off_turnovers: pl.reduce((a,s)=>a+(s.points_off_turnovers||0),0),
+      second_chance_points: pl.reduce((a,s)=>a+(s.points_second_chance||0),0),
+      points_in_the_paint: pl.reduce((a,s)=>a+(s.points_paint||0),0),
+      possessions: totalPoss,
+      // Weighted average for ratings
+      offensive_rating: totalPoss>0 ? pl.reduce((a,s)=>a+(s.offensive_rating||0)*(s.possessions||0),0)/totalPoss : 0,
+      defensive_rating: totalPoss>0 ? pl.reduce((a,s)=>a+(s.defensive_rating||0)*(s.possessions||0),0)/totalPoss : 0,
+      assist_ratio: totalPoss>0 ? pl.reduce((a,s)=>a+(s.assist_ratio||0)*(s.possessions||0),0)/totalPoss : 0,
+    };
+  }
+
+  const hBasic = aggBasic(homeTeamId);
+  const aBasic = aggBasic(awayTeamId);
+  const hAdv = aggAdvanced(homeTeamId);
+  const aAdv = aggAdvanced(awayTeamId);
+
+  // Build quarter scores from game info
+  const quarters = [];
+  for(let q=1; q<=4; q++){
+    const hq = gd['home_q'+q], aq = gd['visitor_q'+q];
+    if(hq!=null) quarters.push({quarter:q, home_points:hq, away_points:aq});
+  }
+  // OT
+  if(gd.home_ot1!=null) quarters.push({quarter:5, home_points:gd.home_ot1, away_points:gd.visitor_ot1});
+
+  return {
+    source: 'BDL',
+    bdlGameId: bdlId,
+    homePoints: gd.home_team_score || 0,
+    awayPoints: gd.visitor_team_score || 0,
+    status: gd.status,
+    period: gd.period || quarters.length,
+    time: gd.time || '',
+    homeBonus: gd.home_in_bonus || false,
+    awayBonus: gd.visitor_in_bonus || false,
+    quarters,
+    home: {...hBasic, ...hAdv, alias: game.home?.alias||'HOME', name: game.home?.name||'HOME'},
+    away: {...aBasic, ...aAdv, alias: game.away?.alias||'AWAY', name: game.away?.name||'AWAY'},
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 function getEasternDate(offset=0){
   const now = new Date();
   const eastern = new Date(now.toLocaleString('en-US',{timeZone:'America/New_York'}));
@@ -328,6 +465,8 @@ async function loadSchedule(){
       period: 0,
       clock: '',
       summary: null, // full SR summary stored here
+      bdlData: null, // BDL fallback data stored here
+      dataSource: 'SR', // 'SR' or 'BDL'
     }));
     const order = {inprogress:0, halftime:0, scheduled:1, closed:2, complete:2, 'created':1};
     games.sort((a,b)=>{
@@ -337,6 +476,8 @@ async function loadSchedule(){
     });
     document.getElementById('date-lbl').innerHTML = 'Schedule for <span>'+d.str+'</span> (Eastern)';
     renderPills(); updateCounts();
+    // Build BDL game map for fallback
+    buildBdlGameMap(d.str);
     // Start polling
     clearInterval(pollTimer);
     pollTimer = setInterval(()=>{ if(!paused) refreshLiveCards(); }, pollInterval);
@@ -360,17 +501,26 @@ function refreshLiveCards(){
 async function fetchSummary(game){
   const cs = cardState[game.id];
   if(!cs || cs.editing || cs.generating) return;
-  addLog(game.id,'Fetching summary…',true);
+
+  // If SR daily limit exhausted, go straight to BDL
+  if(srExhausted){
+    return fetchBdlFallback(game, 'SR daily limit exhausted');
+  }
+
+  addLog(game.id,'Fetching SR summary…',true);
   try{
     const data = await sr('summary',{game_id:game.id});
+    sr429Count = 0; // reset on success
     game.summary = data;
+    game.bdlData = null; // clear any fallback data
+    game.dataSource = 'SR';
     game.homePoints = data.home?.points ?? 0;
     game.awayPoints = data.away?.points ?? 0;
     game.status = data.status;
     game.period = (data.periods||[]).length;
     game.clock = data.clock || '';
     cs.lastUp = new Date();
-    addLog(game.id,'OK — summary loaded',true);
+    addLog(game.id,'OK — SR summary loaded',true);
 
     // Check if data changed meaningfully
     const fp = fingerprint(data);
@@ -385,9 +535,72 @@ async function fetchSummary(game){
       triggerAnalysis(game);
     }
   }catch(e){
+    // Check if this is a rate limit — trigger BDL fallback
+    if(e.message.includes('rate limit') || e.message.includes('429')){
+      sr429Count++;
+      // 3+ consecutive 429s across any games = daily limit suspected
+      if(sr429Count >= 3){
+        srExhausted = true;
+        addLog(game.id,'⚠ SR DAILY LIMIT — switching to BDL for session',false);
+        document.getElementById('hdr-sub').textContent = 'LIVE · BDL FALLBACK · v4.0 · PARTIAL';
+      }
+      return fetchBdlFallback(game, e.message);
+    }
     addLog(game.id, e.message, false);
     renderCard(game);
   }
+}
+
+async function fetchBdlFallback(game, reason){
+  const cs = cardState[game.id];
+  if(!cs) return;
+  addLog(game.id,'BDL fallback ('+reason+')',true);
+  try{
+    const data = await fetchBdlSummary(game);
+    game.bdlData = data;
+    game.summary = null; // clear SR data
+    game.dataSource = 'BDL';
+    game.homePoints = data.homePoints;
+    game.awayPoints = data.awayPoints;
+    game.period = data.period;
+    game.clock = data.time || '';
+    // Map BDL status to our format
+    const bst = (data.status||'').toLowerCase();
+    if(bst.includes('final')) game.status = 'closed';
+    else if(bst.includes('progress')||data.period>0&&!bst.includes('final')) game.status = 'inprogress';
+    cs.lastUp = new Date();
+    addLog(game.id,'OK — BDL data loaded (PARTIAL)',true);
+
+    const fp = fingerprintBDL(data);
+    const changed = fp !== cs.lastFingerprint;
+    cs.lastFingerprint = fp;
+
+    renderCard(game);
+    checkAlert(game);
+
+    if(changed && getState(game)==='LIVE' && game.period >= 2){
+      triggerAnalysis(game);
+    }
+  }catch(e){
+    addLog(game.id, 'BDL fallback failed: '+e.message, false);
+    renderCard(game);
+  }
+}
+
+function fingerprintBDL(data){
+  if(!data) return '';
+  return [
+    data.homePoints, data.awayPoints, data.period,
+    data.home?.turnovers, data.away?.turnovers,
+    data.home?.steals, data.away?.steals,
+    data.home?.offensive_rebounds, data.away?.offensive_rebounds,
+    data.home?.points_in_the_paint, data.away?.points_in_the_paint,
+    data.home?.free_throws_att, data.away?.free_throws_att,
+    data.home?.blocks, data.away?.blocks,
+    data.home?.field_goals_made, data.away?.field_goals_made,
+    data.home?.assists, data.away?.assists,
+    data.homeBonus?1:0, data.awayBonus?1:0,
+  ].join('|');
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -423,12 +636,18 @@ async function triggerAnalysis(game){
     const thesis = theses[game.id]||'';
     const periodLabel = game.period ? 'Q'+game.period : '';
     const score = (game.awayPoints||0)+'–'+(game.homePoints||0);
+    const isBDL = game.dataSource==='BDL';
+    const dataSourceNote = isBDL ? '\n\nDATA SOURCE: BDL FALLBACK (PARTIAL)\nUnavailable: T4 Foul Gate | T7 Closing Lineup | I1 chaos layer | at-rim splits\nAll five indicators computable but with reduced sub-layer coverage.' : '';
+
+    // Send whichever data source is active
+    const summaryPayload = isBDL ? game.bdlData : game.summary;
+
     const resp = await fetch(FN+'analyze',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
-        summaryData: game.summary,
-        thesis: thesis,
+        summaryData: summaryPayload,
+        thesis: thesis + dataSourceNote,
         homeTeam: game.home?.alias||game.home?.name||'HOME',
         awayTeam: game.away?.alias||game.away?.name||'AWAY',
         period: periodLabel,
@@ -531,33 +750,152 @@ async function generateThesis(gameId){
     if(i < calls.length-1) await new Promise(r=>setTimeout(r,1500));
   }
 
-  // Now send to Sonnet
+  // Now send to Sonnet — prompt built client-side, function is thin Anthropic proxy
   cs.genSteps[12].status = 'active';
   renderGenProgress(gameId);
   try{
     const tipTime = new Date(game.scheduled).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/New_York'});
+
+    // Trim functions to reduce prompt size
+    const trimProfile = (p) => {
+      if(!p) return '(unavailable)';
+      const players = (p.players||[])
+        .filter(pl => pl.status==='ACT'||pl.status==='SUS'||pl.status==='NWT')
+        .map(pl => `${pl.full_name} [${pl.primary_position||pl.position||'?'}] ${pl.status}${pl.injuries?' — '+JSON.stringify(pl.injuries):''}`);
+      return players.join('\n');
+    };
+    const trimStats = (s) => {
+      if(!s) return '(unavailable)';
+      const own = s.own_record||s;
+      const teamStats = own.statistics||s.statistics||{};
+      const oppStats = (s.opponents||{}).statistics||{};
+      const players = (own.players||s.players||[])
+        .sort((a,b)=>(b.average?.minutes||0)-(a.average?.minutes||0))
+        .slice(0,10)
+        .map(pl=>`${pl.full_name} [${pl.primary_position||'?'}] ${pl.average?.minutes||0}mpg ${pl.average?.points||0}ppg ${pl.average?.assists||0}apg ${pl.average?.rebounds||0}rpg ${pl.average?.steals||0}spg ${pl.average?.turnovers||0}to FG:${pl.average?.field_goals_made||0}/${pl.average?.field_goals_att||0} 3P:${pl.average?.three_points_made||0}/${pl.average?.three_points_att||0} FT:${pl.average?.free_throws_made||0}/${pl.average?.free_throws_att||0} USG:${(pl.average?.usage_pct||0).toFixed(1)}%`);
+      const t = teamStats;
+      const teamLine = `Team: ${t.points||0}ppg ${t.assists||0}apg ${t.rebounds||0}rpg ${t.steals||0}spg ${t.blocks||0}bpg ${t.turnovers||0}to FBP:${t.fast_break_points||0} POT:${t.points_off_turnovers||0} SCP:${t.second_chance_points||0} Paint:${t.points_in_the_paint||0} OREB:${t.offensive_rebounds||0} FTA:${t.free_throws_att||0} eFG:${(((t.field_goals_made||0)+.5*(t.three_points_made||0))/(t.field_goals_att||1)*100).toFixed(1)}%`;
+      const opp = oppStats;
+      const oppLine = opp ? `Opp allowed: ${opp.points||0}ppg Paint:${opp.points_in_the_paint||0} FTA:${opp.free_throws_att||0} OREB:${opp.offensive_rebounds||0} Stl:${opp.steals||0}` : '';
+      return teamLine + '\n' + oppLine + '\nTop players:\n' + players.join('\n');
+    };
+    const trimSplits = (s) => {
+      if(!s) return '(unavailable)';
+      const str = JSON.stringify(s);
+      return str.length > 12000 ? str.substring(0, 12000) + '...(truncated)' : str;
+    };
+    const trimDepth = (d) => {
+      if(!d) return '(unavailable)';
+      return (d.positions||[]).map(pos =>
+        pos.name + ': ' + (pos.players||[]).map(pl=>`${pl.depth||'?'}. ${pl.full_name}`).join(', ')
+      ).join('\n');
+    };
+    const trimStandings = (s) => {
+      if(!s) return '(unavailable)';
+      const teams = [];
+      (s.conferences||[]).forEach(conf=>{
+        (conf.divisions||[]).forEach(div=>{
+          (div.teams||[]).forEach(t=>{
+            teams.push(`${t.name} ${t.wins}-${t.losses} (${(t.win_pct||0).toFixed(3)}) PF:${t.calc_points?.for||'?'} PA:${t.calc_points?.against||'?'}`);
+          });
+        });
+      });
+      return teams.join('\n');
+    };
+    const trimInjuries = (inj) => {
+      if(!inj) return '(unavailable)';
+      return (inj.teams||[]).filter(t=>(t.players||[]).length>0)
+        .map(t=> t.alias + ': ' + (t.players||[]).map(p=>`${p.full_name} [${p.primary_position||p.position||'?'}] ${p.status} — ${p.desc||p.comment||p.injury||'?'}`).join('; '))
+        .join('\n');
+    };
+
+    const c = collected;
+    const userPrompt = `Build a complete pre-game thesis for this NBA matchup.
+
+MATCHUP: ${awayAlias} @ ${homeAlias}
+DATE: ${getEasternDate(0).str} | TIME: ${tipTime} ET
+VENUE: ${game.venue||'TBD'}
+
+=== INJURIES ===
+${trimInjuries(c.injuries)}
+
+=== ${homeAlias} ROSTER ===
+${trimProfile(c.homeProfile)}
+
+=== ${awayAlias} ROSTER ===
+${trimProfile(c.awayProfile)}
+
+=== ${homeAlias} DEPTH CHART ===
+${trimDepth(c.homeDepth)}
+
+=== ${awayAlias} DEPTH CHART ===
+${trimDepth(c.awayDepth)}
+
+=== ${homeAlias} SEASON STATS ===
+${trimStats(c.homeStats)}
+
+=== ${awayAlias} SEASON STATS ===
+${trimStats(c.awayStats)}
+
+=== ${homeAlias} SPLITS (Game) ===
+${trimSplits(c.homeSplitsGame)}
+
+=== ${awayAlias} SPLITS (Game) ===
+${trimSplits(c.awaySplitsGame)}
+
+=== ${homeAlias} SPLITS (Schedule) ===
+${trimSplits(c.homeSplitsSchedule)}
+
+=== ${awayAlias} SPLITS (Schedule) ===
+${trimSplits(c.awaySplitsSchedule)}
+
+=== STANDINGS ===
+${trimStandings(c.standings)}
+
+Compute all analytical layers (strength profiles, structural identity, shot diet, BHV, chaos risk, foul resilience, Pythagorean check, win/loss delta) from this data. Output the compact thesis format.`;
+
+    const systemPrompt = `You are an NBA pre-game structural analyst. Build game thesis documents predicting where the structural battle will be fought and what to monitor live.
+
+INDICATORS (weighted): I1 Possession & Transition (25%) — TO margin, steals, OREBs, POT, SCP, FBP. I2 Rim Pressure & Foul (25%) — paint pts, at-rim rates, FTA, blocks. I3 Shot Quality & Creation (20%) — assist ratio, eFG%, shot zones. I4 Lineup Integrity (20%) — bench depth, biggest lead, win/loss delta. I5 Tempo & Efficiency (10%) — pace, pts/possession.
+
+Each scored 1.0 (clear edge), 0.5 (contested), 0.0 (opponent). Control: 0.90+ DOMINANT | 0.75-0.89 STRONG | 0.60-0.74 EARNED | 0.45-0.59 NO EDGE | <0.45 WAIT.
+
+Compute: Context-Adjusted Strength, Structural Identity, Shot Diet (Interior/Transition vs Perimeter/Creation vs Balanced), Win/Loss Delta, Comeback Score (0-10), Lead-Keep Score (0-10), BHV (LOW <2.5, MOD 2.5-3.5, HIGH >3.5 TO/gm), Chaos Risk (HIGH BHV + top-7 steals opp), Foul Resilience, Pythagorean check (PF^13.91/(PF^13.91+PA^13.91)), System Resilience (top-10 DEF teams with stars OUT).
+
+OUTPUT FORMAT:
+COMPACT THESIS — [AWAY] vs [HOME] | [Time] ET
+[Date] | [Venue]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AVAILABILITY
+[TEAM A] [Player] ✅ IN | [Player] ❌ OUT | [Player] ⚠️ GTD
+[TEAM B] [same]
+REST [TEAM A] X day | [TEAM B] X day
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CONTROL SCORE: [Team] [X.XX] — [Verdict]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+I1 Possession & Transition (25%) [Team 1.0 | CONTESTED 0.5 | Team 0.0]
+[1-line reason]
+I2 Rim Pressure & Foul (25%) [same format]
+I3 Shot Quality & Creation (20%) [same]
+I4 Lineup Integrity (20%) [same]
+I5 Tempo & Efficiency (10%) [same]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+KEY FLAGS
+⚠ [Flag 1]
+✓ [Clean read if applicable]
+ENTRY [Trigger condition]
+PASS [Pass condition]
+WATCH
+1. [Signal] — confirms if [X], denies if [Y]
+2. [Signal] — confirms if [X], denies if [Y]
+3. [Signal] — confirms if [X], denies if [Y]`;
+
+    console.log('Thesis prompt size:', (userPrompt.length/1024).toFixed(1)+'KB');
+
     const resp = await fetch(FN+'generate-thesis',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        homeTeam: homeAlias,
-        awayTeam: awayAlias,
-        gameDate: getEasternDate(0).str,
-        gameTime: tipTime,
-        venue: game.venue,
-        injuries: collected.injuries,
-        homeProfile: collected.homeProfile,
-        awayProfile: collected.awayProfile,
-        homeDepth: collected.homeDepth,
-        awayDepth: collected.awayDepth,
-        homeStats: collected.homeStats,
-        awayStats: collected.awayStats,
-        homeSplitsGame: collected.homeSplitsGame,
-        awaySplitsGame: collected.awaySplitsGame,
-        homeSplitsSchedule: collected.homeSplitsSchedule,
-        awaySplitsSchedule: collected.awaySplitsSchedule,
-        standings: collected.standings,
-      })
+      body: JSON.stringify({ systemPrompt, userPrompt }),
     });
     if(!resp.ok){
       const errData = await resp.json().catch(()=>({error:'Unknown error '+resp.status}));
@@ -726,6 +1064,122 @@ function getVerdict(s){
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// COMPUTE DISPATCH — routes to SR or BDL compute path
+// ══════════════════════════════════════════════════════════════════════════════
+function computeAny(game){
+  if(game.dataSource==='BDL' && game.bdlData) return computeBDL(game);
+  return compute(game);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// COMPUTE INDICATORS (BDL FORMAT) — Option B: separate path
+// ══════════════════════════════════════════════════════════════════════════════
+function computeBDL(game){
+  const d = game.bdlData;
+  if(!d || getState(game)==='PRE') return null;
+  const hs = d.home, as = d.away;
+  const hA = hs.alias||'HOME', aA = as.alias||'AWAY';
+  const hS = d.homePoints||0, aS = d.awayPoints||0;
+
+  // I1 — Possession & Transition (no chaos layer — forced/unforced TOs unavailable)
+  const hGen = (hs.steals||0)+(hs.offensive_rebounds||0)-(hs.turnovers||0);
+  const aGen = (as.steals||0)+(as.offensive_rebounds||0)-(as.turnovers||0);
+  const hConv = (hs.fast_break_points||0)+(hs.points_off_turnovers||0)+(hs.second_chance_points||0);
+  const aConv = (as.fast_break_points||0)+(as.points_off_turnovers||0)+(as.second_chance_points||0);
+  const i1 = (hGen>aGen?1:hGen<aGen?-1:0)+(hConv>aConv?1:hConv<aConv?-1:0);
+  const I1={score:i1>0?1:i1===0?.5:0, leader:i1>0?hA:i1<0?aA:'EVEN',
+    detail:`${hA} ${hs.steals||0}stl ${hs.offensive_rebounds||0}or ${hs.turnovers||0}to | ${aA} ${as.steals||0}stl ${as.offensive_rebounds||0}or ${as.turnovers||0}to | Conv:${hConv}–${aConv} [no chaos layer]`};
+
+  // I2 — Rim Pressure & Foul (paint + FTA + bonus from BDL — no at-rim splits)
+  const hPaint = hs.points_in_the_paint||0, aPaint = as.points_in_the_paint||0;
+  const hFTA = hs.free_throws_att||0, aFTA = as.free_throws_att||0;
+  const hBlk = hs.blocks||0, aBlk = as.blocks||0;
+  const rimScore = (hPaint+hFTA+hBlk)-(aPaint+aFTA+aBlk);
+  const I2={score:rimScore>8?1:rimScore<-8?0:.5, leader:rimScore>8?hA:rimScore<-8?aA:'EVEN',
+    detail:`Paint:${hPaint}–${aPaint} FTA:${hFTA}–${aFTA} BLK:${hBlk}–${aBlk}${d.homeBonus?' '+hA+'⬤':''}${d.awayBonus?' '+aA+'⬤':''} [no at-rim]`};
+
+  // I3 — Shot Quality & Creation (full-game assist ratio only, no per-quarter trend)
+  const hFGA=hs.field_goals_att||1, aFGA=as.field_goals_att||1;
+  const hEFG=(((hs.field_goals_made||0)+.5*(hs.three_points_made||0))/hFGA);
+  const aEFG=(((as.field_goals_made||0)+.5*(as.three_points_made||0))/aFGA);
+  const hAst=hs.assists||0, aAst=as.assists||0;
+  const hFGM=hs.field_goals_made||1, aFGM=as.field_goals_made||1;
+  const hAR=(hAst/hFGM)*100, aAR=(aAst/aFGM)*100;
+  const i3=(hEFG>aEFG+.02?1:hEFG<aEFG-.02?-1:0)+(hAR>aAR+5?1:hAR<aAR-5?-1:0);
+  const I3={score:i3>0?1:i3===0?.5:0, leader:i3>0?hA:i3<0?aA:'EVEN',
+    detail:`eFG%:${(hEFG*100).toFixed(1)}–${(aEFG*100).toFixed(1)} AR:${hAR.toFixed(0)}–${aAR.toFixed(0)} AST:${hAst}–${aAst}`};
+
+  // I4 — Lineup Integrity (score delta + quarters — no on_court, no per-Q plus/minus)
+  const qDs = (d.quarters||[]).map(q=>(q.home_points||0)-(q.away_points||0));
+  const trend = qDs.length>=2 ? qDs[qDs.length-1]-qDs[0] : 0;
+  // No biggest_lead from BDL — use score differential as proxy
+  const scoreDiff = Math.abs(hS-aS);
+  const i4 = (scoreDiff>8&&hS>aS?1:scoreDiff>8&&aS>hS?-1:0)+(trend>2?1:trend<-2?-1:0);
+  const I4={score:i4>0?1:i4===0?.5:0, leader:i4>0?hA:i4<0?aA:'EVEN',
+    detail:`Δ:${hS>aS?'+':''}${hS-aS} trend:${trend>0?'+':''}${trend} ${qDs.map((dd,i)=>'Q'+(i+1)+':'+(dd>0?'+':'')+dd).join(' ')} [no lineup/bench split]`};
+
+  // I5 — Tempo & Efficiency (derived from BDL offensive/defensive rating)
+  const hOPPP = (hs.offensive_rating||0)/100, aOPPP = (as.offensive_rating||0)/100;
+  const hDPPP = (hs.defensive_rating||0)/100, aDPPP = (as.defensive_rating||0)/100;
+  const effD = (hOPPP-aDPPP)-(aOPPP-hDPPP);
+  const hPoss = hs.possessions||0, aPoss = as.possessions||0;
+  const I5={score:effD>0.08?1:effD<-0.08?0:.5, leader:effD>0.08?hA:effD<-0.08?aA:'EVEN',
+    detail:`ORtg:${(hs.offensive_rating||0).toFixed(1)}–${(as.offensive_rating||0).toFixed(1)} DRtg:${(hs.defensive_rating||0).toFixed(1)}–${(as.defensive_rating||0).toFixed(1)} Poss:${hPoss}–${aPoss}`};
+
+  const raw = I1.score*W.I1 + I2.score*W.I2 + I3.score*W.I3 + I4.score*W.I4 + I5.score*W.I5;
+  const controlHome = raw>=.5, cTeam = controlHome?hA:aA, score = controlHome?raw:1-raw;
+
+  // Trajectory — BDL partial (T4 and T7 unavailable)
+  const traj = buildTrajectoryBDL(game, hA, aA, hs, as, hS, aS, qDs, d);
+
+  return {I1,I2,I3,I4,I5, score, controlTeam:cTeam, dataQuality:'PARTIAL', traj};
+}
+
+function buildTrajectoryBDL(game, hA, aA, hs, as, hS, aS, qDs, d){
+  const p = game.period||0;
+  if(p<2) return {signals:[], lean:'NEUTRAL', count:0, total:0, tooEarly:true};
+  const sigs = [], overall=hS-aS, currQ=qDs.length>0?qDs[qDs.length-1]:null;
+
+  // T1 — Conversion (available via BDL advanced)
+  const hC=(hs.fast_break_points||0)+(hs.points_off_turnovers||0), aC=(as.fast_break_points||0)+(as.points_off_turnovers||0);
+  if(Math.abs(hC-aC)>=10){const w=hC>aC?hA:aA;sigs.push({key:'T1',w:1,team:w,color:'#ffd166',text:w+' conversion +'+(Math.abs(hC-aC))+' (FBP+POT)'});}
+  else sigs.push({key:'T1',w:0,team:null,color:'#3e3e48',text:'Conversion flat ('+hC+'–'+aC+')'});
+
+  // T3 — Quarter Delta (available from BDL quarter scores)
+  if(currQ!=null&&Math.abs(currQ)>=6){const w=currQ>0?hA:aA,tr=(currQ>0&&overall<0)||(currQ<0&&overall>0);sigs.push({key:'T3',w:2,team:w,color:'#00ff88',text:w+' winning Q'+p+' by '+Math.abs(currQ)+(tr?' (trailing—comeback)':'')});}
+  else sigs.push({key:'T3',w:0,team:null,color:'#3e3e48',text:'Q delta <6 — neutral'});
+
+  // T4 — UNAVAILABLE in BDL (no per-player per-quarter fouls)
+  sigs.push({key:'T4',w:0,team:null,color:'#555',text:'⊘ Unavailable (BDL — no per-player fouls)'});
+
+  // T5 — Interior Trend (paint points available)
+  const hPaint=hs.points_in_the_paint||0, aPaint=as.points_in_the_paint||0;
+  if(Math.abs(hPaint-aPaint)>=8){const w=hPaint>aPaint?hA:aA;sigs.push({key:'T5',w:1,team:w,color:'#a8ff78',text:w+' paint +'+(Math.abs(hPaint-aPaint))+' ('+hPaint+'–'+aPaint+')'});}
+  else sigs.push({key:'T5',w:0,team:null,color:'#3e3e48',text:'Paint even ('+hPaint+'–'+aPaint+')'});
+
+  // T6 — Assist Ratio (full-game only, no per-quarter)
+  const hFGM=hs.field_goals_made||1,aFGM=as.field_goals_made||1;
+  const hAR=(hs.assists||0)/hFGM*100, aAR=(as.assists||0)/aFGM*100;
+  if(Math.abs(hAR-aAR)>=15){const w=hAR>aAR?hA:aA;sigs.push({key:'T6',w:1,team:w,color:'#a8ff78',text:w+' AR '+Math.max(hAR,aAR).toFixed(0)+'% vs '+Math.min(hAR,aAR).toFixed(0)+'%'});}
+  else sigs.push({key:'T6',w:0,team:null,color:'#3e3e48',text:'AR even ('+hAR.toFixed(0)+'% vs '+aAR.toFixed(0)+'%)'});
+
+  // T7 — UNAVAILABLE in BDL (no on_court flags)
+  sigs.push({key:'T7',w:0,team:null,color:'#555',text:'⊘ Unavailable (BDL — no lineup data)'});
+
+  // T8 — Shot Diet (3PA/FGA available from BDL basic stats)
+  const hFGA=hs.field_goals_att||1, aFGA=as.field_goals_att||1;
+  const h3r=(hs.three_points_att||0)/hFGA*100, a3r=(as.three_points_att||0)/aFGA*100;
+  if(h3r>=40)sigs.push({key:'T8',w:1,team:aA,color:'#ff6b6b',text:hA+' 3PA/FGA '+h3r.toFixed(0)+'% — perimeter heavy'});
+  else if(a3r>=40)sigs.push({key:'T8',w:1,team:hA,color:'#ff6b6b',text:aA+' 3PA/FGA '+a3r.toFixed(0)+'% — perimeter heavy'});
+  else sigs.push({key:'T8',w:0,team:null,color:'#3e3e48',text:'Diet nominal ('+hA+' '+h3r.toFixed(0)+'% / '+aA+' '+a3r.toFixed(0)+'%)'});
+
+  const lm={};sigs.forEach(s=>{if(s.team&&s.w>0)lm[s.team]=(lm[s.team]||0)+s.w;});
+  const sorted=Object.entries(lm).sort((a,b)=>b[1]-a[1]),lean=sorted.length>0?sorted[0][0]:'NEUTRAL';
+  const count=sigs.filter(s=>s.team===lean&&s.w>0).length,total=sigs.filter(s=>s.w>0).length;
+  return {signals:sigs, lean, count, total, tooEarly:false};
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // UI HELPERS
 // ══════════════════════════════════════════════════════════════════════════════
 function showLoading(v){document.getElementById('loading').style.display=v?'flex':'none';}
@@ -770,7 +1224,7 @@ function hideAlert(){document.getElementById('abar').className='abar';}
 
 function checkAlert(game){
   const cs=cardState[game.id];if(!cs)return;
-  const ind=compute(game);if(!ind)return;
+  const ind=computeAny(game);if(!ind)return;
   const v=getVerdict(ind.score);
   if(v.lvl&&v.lvl!==cs.prevLvl)
     showAlert(v.lvl,ind.controlTeam+' '+v.label+' — '+(game.away?.alias||'')+'@'+(game.home?.alias||''));
@@ -869,7 +1323,7 @@ function renderCard(game){
   if(!cs||cs.editing) return;
   const el=document.getElementById('card-'+id);
   if(!el)return;
-  const state=getState(game), ind=compute(game), v=ind?getVerdict(ind.score):null;
+  const state=getState(game), ind=computeAny(game), v=ind?getVerdict(ind.score):null;
   const thesis=theses[id]||'', p=parseThesis(thesis);
   const xrefs=ind&&state!=='PRE'?crossRef(p,ind):[];
   const hA=game.home?.alias||'HOME', aA=game.away?.alias||'AWAY';
@@ -905,7 +1359,7 @@ function renderCard(game){
       <div><div class="cl">CONTROL</div><div class="ct">${esc(ind.controlTeam)}</div></div>
       <div class="bw"><div class="bt2"><div class="bf" style="width:${ind.score*100}%;background:${v.color}"></div></div></div>
       <div class="cn" style="color:${v.color}">${ind.score.toFixed(2)}</div>
-      <span class="dq">${ind.dataQuality}</span>
+      <span class="dq" style="${ind.dataQuality==='PARTIAL'?'color:var(--yellow);border-color:var(--yellow)':''}">${ind.dataQuality}</span>
     </div>
     <div class="inds">
     ${[{id:'I1',nm:'POSSESS/TRANS',wt:25,d:ind.I1},{id:'I2',nm:'RIM/FOUL',wt:25,d:ind.I2},
@@ -919,7 +1373,7 @@ function renderCard(game){
       </div>`).join('')}
     </div>
     <div class="traj">
-      <div class="th">TRAJECTORY — 8/8 signals (FULL)
+      <div class="th">TRAJECTORY — ${ind.dataQuality==='FULL'?'8/8 signals (FULL)':'6/8 signals (PARTIAL — T4,T7 unavail)'}
         ${!ind.traj.tooEarly?`<span class="tl" style="color:${ind.traj.lean==='NEUTRAL'?'var(--t3)':'var(--amber)'};border-color:${ind.traj.lean==='NEUTRAL'?'var(--b2)':'var(--amber)'}">${esc(ind.traj.lean)}${ind.traj.total>0?' '+ind.traj.count+'/'+ind.traj.total:''}</span>`:''}
       </div>
       ${ind.traj.tooEarly
@@ -983,7 +1437,7 @@ function renderCard(game){
   if(cs.logs.length){
     html+=`<div class="log">${cs.logs.map(l=>`<div class="${l.ok?'ok':'er'}">${l.t} ${esc(l.msg)}</div>`).join('')}</div>`;
   }
-  if(cs.lastUp) html+=`<div class="foot">↻ ${cs.lastUp.toLocaleTimeString()} · ${pollInterval/1000}s auto-refresh</div>`;
+  if(cs.lastUp) html+=`<div class="foot">↻ ${cs.lastUp.toLocaleTimeString()} · ${pollInterval/1000}s · ${game.dataSource==='BDL'?'<span style="color:var(--yellow)">BDL FALLBACK</span>':'SR'}</div>`;
 
   el.innerHTML=html;
 
