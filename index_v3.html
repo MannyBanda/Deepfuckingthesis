@@ -735,20 +735,35 @@ async function generateThesis(gameId){
     {key:'awaySplitsSchedule', type:'splits_schedule', params:{team_id:awayId}},
   ];
 
-  const collected = {};
-  for(let i=0; i<calls.length; i++){
-    cs.genSteps[i].status = 'active';
+  const cacheKey = 'nba4:srCache:'+gameId;
+  let collected = {};
+  const cached = localStorage.getItem(cacheKey);
+
+  if(cached){
+    // Use cached SR data — skip all 12 API calls
+    collected = JSON.parse(cached);
+    cs.genSteps.forEach((s,i)=>{ if(i<12) s.status='done'; });
     renderGenProgress(gameId);
-    try{
-      const data = await sr(calls[i].type, calls[i].params);
-      collected[calls[i].key] = data;
-      cs.genSteps[i].status = 'done';
-    }catch(e){
-      cs.genSteps[i].status = 'err';
-      cs.genSteps[i].error = e.message;
+    console.log('Using cached SR data for', gameId);
+  } else {
+    // Fetch fresh SR data
+    for(let i=0; i<calls.length; i++){
+      cs.genSteps[i].status = 'active';
+      renderGenProgress(gameId);
+      try{
+        const data = await sr(calls[i].type, calls[i].params);
+        collected[calls[i].key] = data;
+        cs.genSteps[i].status = 'done';
+      }catch(e){
+        cs.genSteps[i].status = 'err';
+        cs.genSteps[i].error = e.message;
+      }
+      renderGenProgress(gameId);
+      if(i < calls.length-1) await new Promise(r=>setTimeout(r,1500));
     }
-    renderGenProgress(gameId);
-    if(i < calls.length-1) await new Promise(r=>setTimeout(r,1500));
+    // Cache for re-runs
+    try{ localStorage.setItem(cacheKey, JSON.stringify(collected)); console.log('SR data cached for', gameId); }
+    catch(e){ console.warn('Cache write failed:', e.message); }
   }
 
   // Now send to Sonnet — prompt built client-side, function is thin Anthropic proxy
@@ -811,6 +826,9 @@ async function generateThesis(gameId){
     };
 
     const c = collected;
+    // Wrap each trim in try/catch to isolate crashes
+    const safe = (fn, label) => { try{ return fn(); }catch(e){ console.error('TRIM CRASH in '+label+':', e.message, e.stack); return '(ERROR: '+label+' — '+e.message+')'; } };
+
     const userPrompt = `Build a complete pre-game thesis for this NBA matchup.
 
 MATCHUP: ${awayAlias} @ ${homeAlias}
@@ -818,40 +836,40 @@ DATE: ${getEasternDate(0).str} | TIME: ${tipTime} ET
 VENUE: ${game.venue||'TBD'}
 
 === INJURIES ===
-${trimInjuries(c.injuries)}
+${safe(()=>trimInjuries(c.injuries), 'injuries')}
 
 === ${homeAlias} ROSTER ===
-${trimProfile(c.homeProfile)}
+${safe(()=>trimProfile(c.homeProfile), 'homeProfile')}
 
 === ${awayAlias} ROSTER ===
-${trimProfile(c.awayProfile)}
+${safe(()=>trimProfile(c.awayProfile), 'awayProfile')}
 
 === ${homeAlias} DEPTH CHART ===
-${trimDepth(c.homeDepth)}
+${safe(()=>trimDepth(c.homeDepth), 'homeDepth')}
 
 === ${awayAlias} DEPTH CHART ===
-${trimDepth(c.awayDepth)}
+${safe(()=>trimDepth(c.awayDepth), 'awayDepth')}
 
 === ${homeAlias} SEASON STATS ===
-${trimStats(c.homeStats)}
+${safe(()=>trimStats(c.homeStats), 'homeStats')}
 
 === ${awayAlias} SEASON STATS ===
-${trimStats(c.awayStats)}
+${safe(()=>trimStats(c.awayStats), 'awayStats')}
 
 === ${homeAlias} SPLITS (Game) ===
-${trimSplits(c.homeSplitsGame)}
+${safe(()=>trimSplits(c.homeSplitsGame), 'homeSplitsGame')}
 
 === ${awayAlias} SPLITS (Game) ===
-${trimSplits(c.awaySplitsGame)}
+${safe(()=>trimSplits(c.awaySplitsGame), 'awaySplitsGame')}
 
 === ${homeAlias} SPLITS (Schedule) ===
-${trimSplits(c.homeSplitsSchedule)}
+${safe(()=>trimSplits(c.homeSplitsSchedule), 'homeSplitsSchedule')}
 
 === ${awayAlias} SPLITS (Schedule) ===
-${trimSplits(c.awaySplitsSchedule)}
+${safe(()=>trimSplits(c.awaySplitsSchedule), 'awaySplitsSchedule')}
 
 === STANDINGS ===
-${trimStandings(c.standings)}
+${safe(()=>trimStandings(c.standings), 'standings')}
 
 Compute all analytical layers (strength profiles, structural identity, shot diet, BHV, chaos risk, foul resilience, Pythagorean check, win/loss delta) from this data. Output the compact thesis format.`;
 
@@ -1410,7 +1428,7 @@ function renderCard(game){
     <div class="thdr">
       PRE-GAME THESIS
       <div style="display:flex;gap:6px;align-items:center;">
-        ${state==='PRE'&&!cs.generating?`<button class="tgen" onclick="generateThesis('${id}')">⚡ GENERATE</button>`:''}
+        ${state==='PRE'&&!cs.generating?`<button class="tgen" onclick="generateThesis('${id}')">⚡ ${localStorage.getItem('nba4:srCache:'+id)?'GEN (cached)':'GENERATE'}</button>${localStorage.getItem('nba4:srCache:'+id)?`<button class="tedit" onclick="localStorage.removeItem('nba4:srCache:${id}');renderCard(games.find(g=>g.id==='${id}'))">🗑 CLR</button>`:''}`:''}
         <button class="tedit" onclick="startEdit('${id}')">EDIT</button>
       </div>
     </div>`;
