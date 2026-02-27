@@ -559,7 +559,10 @@ async function generateThesis(gameId){
         standings: collected.standings,
       })
     });
-    if(!resp.ok) throw new Error('Thesis gen failed: '+resp.status);
+    if(!resp.ok){
+      const errData = await resp.json().catch(()=>({error:'Unknown error '+resp.status}));
+      throw new Error(errData.error||'Thesis gen failed: '+resp.status);
+    }
     const data = await resp.json();
     theses[gameId] = data.thesis;
     localStorage.setItem('nba4:theses', JSON.stringify(theses));
