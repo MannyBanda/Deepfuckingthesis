@@ -472,6 +472,8 @@ async function generateThesis(gameId){
   const cs = cardState[gameId];
   if(!game||!cs) return;
   cs.generating = true;
+  const wasPaused = paused;
+  paused = true; // Pause polling during generation to avoid SR rate limit conflicts
   const homeAlias = game.home?.alias||'';
   const awayAlias = game.away?.alias||'';
   const homeId = TEAM_IDS[homeAlias];
@@ -526,7 +528,7 @@ async function generateThesis(gameId){
       cs.genSteps[i].error = e.message;
     }
     renderGenProgress(gameId);
-    if(i < calls.length-1) await new Promise(r=>setTimeout(r,1100));
+    if(i < calls.length-1) await new Promise(r=>setTimeout(r,1500));
   }
 
   // Now send to Sonnet
@@ -567,6 +569,7 @@ async function generateThesis(gameId){
     cs.genSteps[12].error = e.message;
   }
   cs.generating = false;
+  paused = wasPaused; // Resume polling state
   renderCard(game);
 }
 
