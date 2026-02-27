@@ -122,47 +122,58 @@ exports.handler = async (event) => {
       standings,
     } = JSON.parse(event.body);
 
-    const userPrompt = `Build a complete pre-game thesis for this NBA matchup using ALL provided data.
+    // Check minimum required data
+    if (!homeStats && !awayStats) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ error: 'Insufficient data — team statistics required. SR may have been rate limited during collection.' }),
+      };
+    }
+
+    const safeJSON = (d) => d ? JSON.stringify(d, null, 1) : '(DATA UNAVAILABLE — SR rate limited during collection)';
+
+    const userPrompt = `Build a complete pre-game thesis for this NBA matchup using ALL provided data. Some data sources may be unavailable due to API rate limiting — work with what is available.
 
 MATCHUP: ${awayTeam} @ ${homeTeam}
 DATE: ${gameDate} | TIME: ${gameTime} ET
 VENUE: ${venue || 'TBD'}
 
 === INJURY REPORT ===
-${JSON.stringify(injuries, null, 1)}
+${safeJSON(injuries)}
 
 === ${homeTeam} PROFILE (roster + status flags) ===
-${JSON.stringify(homeProfile, null, 1)}
+${safeJSON(homeProfile)}
 
 === ${awayTeam} PROFILE (roster + status flags) ===
-${JSON.stringify(awayProfile, null, 1)}
+${safeJSON(awayProfile)}
 
 === ${homeTeam} DEPTH CHART ===
-${JSON.stringify(homeDepth, null, 1)}
+${safeJSON(homeDepth)}
 
 === ${awayTeam} DEPTH CHART ===
-${JSON.stringify(awayDepth, null, 1)}
+${safeJSON(awayDepth)}
 
 === ${homeTeam} SEASON STATISTICS ===
-${JSON.stringify(homeStats, null, 1)}
+${safeJSON(homeStats)}
 
 === ${awayTeam} SEASON STATISTICS ===
-${JSON.stringify(awayStats, null, 1)}
+${safeJSON(awayStats)}
 
 === ${homeTeam} SPLITS (Game: H/A, W/L, per-opponent) ===
-${JSON.stringify(homeSplitsGame, null, 1)}
+${safeJSON(homeSplitsGame)}
 
 === ${awayTeam} SPLITS (Game: H/A, W/L, per-opponent) ===
-${JSON.stringify(awaySplitsGame, null, 1)}
+${safeJSON(awaySplitsGame)}
 
 === ${homeTeam} SPLITS (Schedule: rest days) ===
-${JSON.stringify(homeSplitsSchedule, null, 1)}
+${safeJSON(homeSplitsSchedule)}
 
 === ${awayTeam} SPLITS (Schedule: rest days) ===
-${JSON.stringify(awaySplitsSchedule, null, 1)}
+${safeJSON(awaySplitsSchedule)}
 
 === STANDINGS ===
-${JSON.stringify(standings, null, 1)}
+${safeJSON(standings)}
 
 Compute all analytical layers (strength profiles, structural identity, shot diet, BHV, chaos risk, foul resilience, Pythagorean check, win/loss delta) from this data. Output the compact thesis format.`;
 
