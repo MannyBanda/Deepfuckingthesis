@@ -102,6 +102,8 @@ exports.handler = async (event) => {
   }
 
   try {
+    console.log('generate-thesis: Received request, body length:', (event.body||'').length);
+    
     const {
       homeTeam,
       awayTeam,
@@ -122,6 +124,8 @@ exports.handler = async (event) => {
       standings,
     } = JSON.parse(event.body);
 
+    console.log('generate-thesis: Parsed OK. Teams:', awayTeam, '@', homeTeam);
+
     // Check minimum required data
     if (!homeStats && !awayStats) {
       return {
@@ -130,6 +134,45 @@ exports.handler = async (event) => {
         body: JSON.stringify({ error: 'Insufficient data — team statistics required. SR may have been rate limited during collection.' }),
       };
     }
+
+    // Trim large objects to stay within Anthropic context limits
+    // Only keep team-level stats, not full player arrays
+    const trimProfile = (p) => {
+      if (!p) return null;
+      const { players, ...rest } = p;
+      const keyPlayers = (players||[])
+        .filter(pl => pl.status === 'ACT' || pl.status === 'SUS')
+        .map(pl => ({
+          full_name: pl.full_name, position: pl.position, status: pl.status,
+          jersey_number: pl.jersey_number, id: pl.id,
+          injuries: pl.injuries,
+        }));
+      return { ...rest, players: keyPlayers };
+    };
+
+    const trimStats = (s) => {
+      if (!s) return null;
+      const own = s.own_record || s.opponents || s;
+      // Keep team-level stats and top players by usage
+      const teamStats = s.own_record?.statistics || s.statistics || {};
+      const oppStats = s.opponents?.statistics || {};
+      const players = (s.own_record?.players || s.players || [])
+        .sort((a,b) => (b.average?.minutes||0) - (a.average?.minutes||0))
+        .slice(0, 12)
+        .map(pl => ({
+          full_name: pl.full_name, position: pl.position,
+          average: pl.average, total: pl.total,
+        }));
+      return { team: s.own_record?.name || s.name, statistics: teamStats, opponent_statistics: oppStats, top_players: players };
+    };
+
+    const trimSplits = (s) => {
+      if (!s) return null;
+      // Just stringify and truncate if too large
+      const str = JSON.stringify(s);
+      if (str.length > 15000) return JSON.parse(str.substring(0, 15000) + '..."truncated"}');
+      return s;
+    };
 
     const safeJSON = (d) => d ? JSON.stringify(d, null, 1) : '(DATA UNAVAILABLE — SR rate limited during collection)';
 
@@ -143,10 +186,10 @@ VENUE: ${venue || 'TBD'}
 ${safeJSON(injuries)}
 
 === ${homeTeam} PROFILE (roster + status flags) ===
-${safeJSON(homeProfile)}
+${safeJSON(trimProfile(homeProfile))}
 
 === ${awayTeam} PROFILE (roster + status flags) ===
-${safeJSON(awayProfile)}
+${safeJSON(trimProfile(awayProfile))}
 
 === ${homeTeam} DEPTH CHART ===
 ${safeJSON(homeDepth)}
@@ -155,27 +198,29 @@ ${safeJSON(homeDepth)}
 ${safeJSON(awayDepth)}
 
 === ${homeTeam} SEASON STATISTICS ===
-${safeJSON(homeStats)}
+${safeJSON(trimStats(homeStats))}
 
 === ${awayTeam} SEASON STATISTICS ===
-${safeJSON(awayStats)}
+${safeJSON(trimStats(awayStats))}
 
 === ${homeTeam} SPLITS (Game: H/A, W/L, per-opponent) ===
-${safeJSON(homeSplitsGame)}
+${safeJSON(trimSplits(homeSplitsGame))}
 
 === ${awayTeam} SPLITS (Game: H/A, W/L, per-opponent) ===
-${safeJSON(awaySplitsGame)}
+${safeJSON(trimSplits(awaySplitsGame))}
 
 === ${homeTeam} SPLITS (Schedule: rest days) ===
-${safeJSON(homeSplitsSchedule)}
+${safeJSON(trimSplits(homeSplitsSchedule))}
 
 === ${awayTeam} SPLITS (Schedule: rest days) ===
-${safeJSON(awaySplitsSchedule)}
+${safeJSON(trimSplits(awaySplitsSchedule))}
 
 === STANDINGS ===
 ${safeJSON(standings)}
 
 Compute all analytical layers (strength profiles, structural identity, shot diet, BHV, chaos risk, foul resilience, Pythagorean check, win/loss delta) from this data. Output the compact thesis format.`;
+
+    console.log('generate-thesis: Prompt size:', userPrompt.length, 'chars (~', Math.round(userPrompt.length/4), 'tokens)');
 
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -213,6 +258,7 @@ Compute all analytical layers (strength profiles, structural identity, shot diet
       body: JSON.stringify({ thesis, usage: data.usage }),
     };
   } catch (err) {
+    console.error('generate-thesis error:', err.message, err.stack);
     return {
       statusCode: 500,
       headers,
