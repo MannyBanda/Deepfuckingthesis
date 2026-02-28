@@ -151,6 +151,16 @@ input,textarea,select{font-size:16px!important;}
 .di-btn:hover{border-color:var(--amber);color:var(--amber);}
 .di-saved{font-size:5px;color:var(--green);margin-left:4px;}
 
+/* Clutch Upload Zone */
+.clutch-upload{display:flex;align-items:center;gap:6px;padding:6px 0;flex-wrap:wrap;}
+.cu-btn{font-size:7px;letter-spacing:1px;text-transform:uppercase;background:rgba(147,130,220,.08);border:1px dashed rgba(147,130,220,.3);color:#9382dc;font-family:var(--mono);padding:7px 12px;cursor:pointer;-webkit-appearance:none;border-radius:0;min-height:32px;transition:all .15s;}
+.cu-btn:hover{border-color:#9382dc;background:rgba(147,130,220,.15);}
+.cu-btn.active{border-color:var(--amber);color:var(--amber);background:rgba(245,166,42,.06);border-style:solid;}
+.cu-status{font-size:7px;color:var(--t3);font-family:var(--mono);}
+.cu-status.ok{color:var(--green);}
+.cu-status.err{color:var(--red);}
+.cu-badge{display:inline-flex;align-items:center;gap:3px;font-size:6px;letter-spacing:.5px;background:rgba(0,255,136,.06);border:1px solid rgba(0,255,136,.2);color:var(--green);padding:3px 8px;font-family:var(--mono);}
+
 /* Thesis xref */
 .xref{padding:6px 11px;border-bottom:1px solid var(--b1);background:rgba(245,166,42,.03);}
 .xh{font-size:6px;color:var(--amber);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:3px;}
@@ -233,7 +243,7 @@ input,textarea,select{font-size:16px!important;}
     <div style="display:flex;align-items:center;min-width:0;">
       <span class="logo">NBA Control</span>
       <div class="pulse" id="pulse"></div>
-      <span class="hdr-sub" id="hdr-sub">LIVE · SR via Netlify · v4.0 · FULL</span>
+      <span class="hdr-sub" id="hdr-sub">LIVE · SR via Netlify · v5.0 · FULL</span>
     </div>
     <div class="hdr-r"><span id="live-count">0</span> live · <span id="sel-count">0</span>/5</div>
   </div>
@@ -251,6 +261,18 @@ input,textarea,select{font-size:16px!important;}
     </div>
     <button class="cbtn" onclick="clearTheses()">CLEAR</button>
     <span class="cml"><span id="game-count">0</span> games</span>
+  </div>
+
+  <!-- Clutch Upload Zone -->
+  <div class="clutch-upload" id="clutch-zone">
+    <input type="file" id="clutch-file" accept="image/*" style="display:none" onchange="handleClutchUpload(this)">
+    <button class="cu-btn" id="cu-btn" onclick="document.getElementById('clutch-file').click()">📋 UPLOAD L15 CLUTCH</button>
+    <select id="cu-segment" style="font-size:7px;font-family:var(--mono);background:var(--s2);border:1px solid var(--b2);color:var(--t2);padding:5px;-webkit-appearance:none;border-radius:0;min-height:28px;">
+      <option value="L15">Last 15</option>
+      <option value="L10">Last 10</option>
+    </select>
+    <span class="cu-status" id="cu-status"></span>
+    <span id="cu-badge" style="display:none"></span>
   </div>
 
   <div id="loading" class="loading" style="display:none;"><div class="spin"></div> Loading schedule…</div>
@@ -275,6 +297,7 @@ const cardState = {};
 
 // BDL fallback state
 const bdlGameMap = {}; // SR game ID → BDL game ID
+let globalClutchData = null; // { segment, teams: { "BOS": { netRtg, offRtg, ... }, ... }, teamCount }
 let srExhausted = false; // true when daily limit suspected
 let sr429Count = 0; // consecutive 429s across games
 
@@ -608,7 +631,7 @@ async function fetchSummary(game){
       if(sr429Count >= 3){
         srExhausted = true;
         addLog(game.id,'⚠ SR DAILY LIMIT — switching to BDL for session',false);
-        document.getElementById('hdr-sub').textContent = 'LIVE · BDL FALLBACK · v4.0 · PARTIAL';
+        document.getElementById('hdr-sub').textContent = 'LIVE · BDL FALLBACK · v5.0 · PARTIAL';
       }
       return fetchBdlFallback(game, e.message);
     }
@@ -717,6 +740,15 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
 
     const summaryPayload = isBDL ? game.bdlData : game.summary;
 
+    // Build clutch data with tier info
+    let clutchPayload = cs.clutchData || null;
+    if(clutchPayload && !clutchPayload.tier) clutchPayload.tier = cs.clutchTier || 1;
+    // If no manual clutch data, try to build Tier 2 proxy from thesis
+    if(!clutchPayload && thesis){
+      const proxyClutch = parseThesisClutchProxy(thesis, game.home?.alias, game.away?.alias);
+      if(proxyClutch){ clutchPayload = proxyClutch; cs.clutchTier = 2; }
+    }
+
     const resp = await fetch(FN+'analyze',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -727,8 +759,10 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
         awayTeam: game.away?.alias||game.away?.name||'AWAY',
         period: periodLabel,
         score: score,
-        clutchData: cs.clutchData || null,
+        clutchData: clutchPayload,
         oddsData: cs.oddsData || null,
+        edgeHistory: cs.edgeHistory.length > 0 ? cs.edgeHistory : null,
+        trackingData: cs.trackingData || null,
       })
     });
     if(!resp.ok) throw new Error('Analysis failed: '+resp.status);
@@ -750,6 +784,20 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
     if(decision){
       cs.prediction = decision;
       console.log('Decision parsed:', decision.conviction, decision.entry, decision.prediction);
+      // Track edge history for entry timing
+      if(decision.edgeNum !== null || decision.fwp){
+        cs.edgeHistory.push({
+          time: new Date().toLocaleTimeString(),
+          period: game.period||'?',
+          edge: decision.edge||'?',
+          edgeNum: decision.edgeNum,
+          fwp: decision.fwp||'?',
+          control: parsed?.controlTeam||'?',
+          score: ((game.awayPoints||0)+'-'+(game.homePoints||0)),
+        });
+        // Keep last 20 entries max
+        if(cs.edgeHistory.length > 20) cs.edgeHistory = cs.edgeHistory.slice(-20);
+      }
     }
 
     renderCard(game);
@@ -780,12 +828,18 @@ function saveClutch(gameId){
   const aDef = parseFloat(g('cl-a-def-'+gameId));
   const aGP = g('cl-a-gp-'+gameId)||'';
   const aWL = g('cl-a-wl-'+gameId)||'';
-  if(isNaN(hNet) && isNaN(aNet)){cs.clutchData=null;} else {
+  if(isNaN(hNet) && isNaN(aNet)){cs.clutchData=null; cs.clutchTier=3;} else {
+    // Preserve enriched OCR fields if they exist
+    const prevH = cs.clutchData?.home || {};
+    const prevA = cs.clutchData?.away || {};
     cs.clutchData = {
       tier: 1,
-      home: {netRtg:hNet||null, offRtg:hOff||null, defRtg:hDef||null, gp:hGP, wl:hWL},
-      away: {netRtg:aNet||null, offRtg:aOff||null, defRtg:aDef||null, gp:aGP, wl:aWL},
+      home: {netRtg:hNet||null, offRtg:hOff||null, defRtg:hDef||null, gp:hGP, wl:hWL,
+        efg:prevH.efg, ts:prevH.ts, pace:prevH.pace, pie:prevH.pie, tovPct:prevH.tovPct, orebPct:prevH.orebPct, drebPct:prevH.drebPct, astRatio:prevH.astRatio},
+      away: {netRtg:aNet||null, offRtg:aOff||null, defRtg:aDef||null, gp:aGP, wl:aWL,
+        efg:prevA.efg, ts:prevA.ts, pace:prevA.pace, pie:prevA.pie, tovPct:prevA.tovPct, orebPct:prevA.orebPct, drebPct:prevA.drebPct, astRatio:prevA.astRatio},
     };
+    cs.clutchTier = 1;
   }
   const game = games.find(g=>g.id===gameId);
   if(game) renderCard(game);
@@ -812,13 +866,272 @@ function toggleEV(gameId){
   cs.evCollapsed = !cs.evCollapsed;
   const body = document.getElementById('ev-body-'+gameId);
   const toggle = document.getElementById('ev-toggle-'+gameId);
-  if(body){
-    if(cs.evCollapsed){body.classList.add('collapsed');} else {body.classList.remove('collapsed');}
-  }
-  if(toggle){
-    if(cs.evCollapsed){toggle.classList.remove('open');} else {toggle.classList.add('open');}
+  if(body){ if(cs.evCollapsed){body.classList.add('collapsed');} else {body.classList.remove('collapsed');} }
+  if(toggle){ if(cs.evCollapsed){toggle.classList.remove('open');} else {toggle.classList.add('open');} }
+}
+
+// BDL Enrichment — auto-pull clutch + odds + tracking via bdl-enrich function
+async function enrichFromBDL(gameId){
+  const cs = cardState[gameId]; if(!cs) return;
+  const game = games.find(g=>g.id===gameId); if(!game) return;
+  const hA = game.home?.alias||'', aA = game.away?.alias||'';
+  if(!hA||!aA) return;
+
+  cs.enriching = true;
+  renderCard(game);
+
+  try{
+    const bdlGid = bdlGameMap[gameId] || null;
+    const resp = await fetch(FN+'bdl-enrich',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        homeTeam: hA,
+        awayTeam: aA,
+        bdlGameId: bdlGid,
+        season: 2025,
+        pulls: ['clutch','odds','tracking'],
+      })
+    });
+    if(!resp.ok) throw new Error('BDL enrich failed: '+resp.status);
+    const data = await resp.json();
+
+    // Populate clutch (Tier 2 — season-wide). Only overwrite if user hasn't set L15 (Tier 1)
+    if(data.clutch){
+      if(!cs.clutchData || cs.clutchData.tier !== 1){
+        cs.clutchData = data.clutch;
+        cs.clutchTier = 2;
+      }
+    }
+
+    // Populate odds. Only overwrite if user hasn't manually entered
+    if(data.odds){
+      if(!cs.oddsData || !cs.oddsData.homeML){
+        cs.oddsData = {
+          homeSpread: String(data.odds.homeSpread||''),
+          homeML: String(data.odds.homeML||''),
+          awayML: String(data.odds.awayML||''),
+          total: String(data.odds.total||''),
+          vendor: data.odds.vendor,
+        };
+      }
+      if(data.oddsAll) cs.oddsAll = data.oddsAll;
+    }
+
+    // Store tracking data for sustainability scoring
+    if(data.tracking) cs.trackingData = data.tracking;
+
+    const srcList = (data.sources||[]).join(', ');
+    const errList = (data.errors||[]);
+    addLog(gameId, '⚡ BDL enriched: '+srcList+(errList.length?' ⚠ '+errList.length+' errors':''), errList.length===0);
+    if(errList.length) console.warn('BDL enrich partial errors:', errList);
+
+  }catch(e){
+    console.error('BDL enrich error:', e);
+    addLog(gameId, 'BDL enrich failed: '+e.message, false);
+  }finally{
+    cs.enriching = false;
+    renderCard(game);
   }
 }
+
+// ── Clutch Screenshot Upload & Distribution ──
+
+async function handleClutchUpload(input){
+  const file = input.files?.[0];
+  if(!file) return;
+  const status = document.getElementById('cu-status');
+  const btn = document.getElementById('cu-btn');
+  const badge = document.getElementById('cu-badge');
+  const segment = document.getElementById('cu-segment')?.value || 'L15';
+
+  status.textContent = '⏳ Processing...';
+  status.className = 'cu-status';
+  btn.classList.add('active');
+  btn.textContent = '⏳ EXTRACTING...';
+  btn.disabled = true;
+
+  try{
+    // Convert to base64
+    const base64 = await new Promise((res, rej) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result;
+        // Strip data:image/...;base64, prefix
+        const b64 = result.split(',')[1];
+        res(b64);
+      };
+      reader.onerror = () => rej(new Error('File read failed'));
+      reader.readAsDataURL(file);
+    });
+
+    const mediaType = file.type || 'image/png';
+
+    // Send to clutch-ocr function
+    const resp = await fetch(FN+'clutch-ocr',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ image: base64, mediaType, segment })
+    });
+
+    if(!resp.ok){
+      const err = await resp.json().catch(()=>({error:resp.statusText}));
+      throw new Error(err.error || 'OCR failed: '+resp.status);
+    }
+
+    const data = await resp.json();
+
+    if(data.error){
+      throw new Error(data.error + (data.rawText ? ' — raw: '+data.rawText.substring(0,100) : ''));
+    }
+
+    if(!data.teams || Object.keys(data.teams).length === 0){
+      throw new Error('No teams extracted from screenshot');
+    }
+
+    // Store globally
+    globalClutchData = data;
+    const count = Object.keys(data.teams).length;
+
+    // Distribute to all active game cards
+    distributeClutchToCards();
+
+    status.textContent = `✓ ${count} teams extracted`;
+    status.className = 'cu-status ok';
+    badge.style.display = 'inline-flex';
+    badge.className = 'cu-badge';
+    badge.textContent = `✓ ${segment} CLUTCH · ${count} teams · Tier 1`;
+
+    const tokens = data.usage ? `${data.usage.input||0}+${data.usage.output||0} tokens` : '';
+    console.log('Clutch OCR complete:', count, 'teams,', tokens, data.teams);
+
+  }catch(e){
+    console.error('Clutch upload error:', e);
+    status.textContent = '✗ '+e.message;
+    status.className = 'cu-status err';
+  }finally{
+    btn.classList.remove('active');
+    btn.textContent = '📋 UPLOAD L15 CLUTCH';
+    btn.disabled = false;
+    // Reset file input so same file can be re-uploaded
+    input.value = '';
+  }
+}
+
+function distributeClutchToCards(){
+  if(!globalClutchData?.teams) return;
+  const teams = globalClutchData.teams;
+  let distributed = 0;
+
+  for(const game of games){
+    const cs = cardState[game.id];
+    if(!cs) continue;
+    const hA = game.home?.alias||'';
+    const aA = game.away?.alias||'';
+    const hClutch = teams[hA];
+    const aClutch = teams[aA];
+
+    if(hClutch || aClutch){
+      // Only upgrade if not already Tier 1 from manual entry
+      // Screenshot data IS Tier 1 (it's L15 from NBA.com)
+      cs.clutchData = {
+        tier: 1,
+        home: hClutch ? {
+          netRtg: hClutch.netRtg,
+          offRtg: hClutch.offRtg,
+          defRtg: hClutch.defRtg,
+          gp: hClutch.gp,
+          w: hClutch.w,
+          l: hClutch.l,
+          wl: hClutch.wl || (hClutch.w!=null&&hClutch.l!=null ? hClutch.w+'-'+hClutch.l : null),
+          efg: hClutch.efg,
+          ts: hClutch.ts,
+          pace: hClutch.pace,
+          pie: hClutch.pie,
+          tovPct: hClutch.tovPct,
+          orebPct: hClutch.orebPct,
+          drebPct: hClutch.drebPct,
+          astRatio: hClutch.astRatio,
+        } : (cs.clutchData?.home || {}),
+        away: aClutch ? {
+          netRtg: aClutch.netRtg,
+          offRtg: aClutch.offRtg,
+          defRtg: aClutch.defRtg,
+          gp: aClutch.gp,
+          w: aClutch.w,
+          l: aClutch.l,
+          wl: aClutch.wl || (aClutch.w!=null&&aClutch.l!=null ? aClutch.w+'-'+aClutch.l : null),
+          efg: aClutch.efg,
+          ts: aClutch.ts,
+          pace: aClutch.pace,
+          pie: aClutch.pie,
+          tovPct: aClutch.tovPct,
+          orebPct: aClutch.orebPct,
+          drebPct: aClutch.drebPct,
+          astRatio: aClutch.astRatio,
+        } : (cs.clutchData?.away || {}),
+      };
+      cs.clutchTier = 1;
+      distributed++;
+      addLog(game.id, `📋 L15 clutch loaded: ${hClutch?hA+' NetRtg '+hClutch.netRtg:''}${hClutch&&aClutch?' / ':''}${aClutch?aA+' NetRtg '+aClutch.netRtg:''}`, true);
+    }
+  }
+
+  console.log('Clutch distributed to', distributed, 'game cards');
+
+  // Re-render all visible cards
+  for(const game of games){
+    if(selIds.includes(game.id)){
+      renderCard(game);
+    }
+  }
+}
+
+// Parse clutch proxy from thesis text — extracts Comeback Score + Lead-Keep Score as Tier 2
+function parseThesisClutchProxy(thesis, homeAlias, awayAlias){
+  if(!thesis) return null;
+  try{
+    // Look for Comeback Score patterns: "Comeback Score: 6.2" or "Comeback: X.X/10"
+    const comebackMatch = thesis.match(/comeback\s*(?:score)?[:\s]+(\d+\.?\d*)\s*(?:\/\s*10)?/i);
+    const leadKeepMatch = thesis.match(/lead[- ]?keep\s*(?:score)?[:\s]+(\d+\.?\d*)\s*(?:\/\s*10)?/i);
+    // Also try to find per-team comeback/lead-keep
+    const hComebackMatch = thesis.match(new RegExp(homeAlias+'[^\\n]*comeback[:\\s]+(\\d+\\.?\\d*)', 'i')) ||
+                           thesis.match(new RegExp('comeback[^\\n]*'+homeAlias+'[:\\s]+(\\d+\\.?\\d*)', 'i'));
+    const aComebackMatch = thesis.match(new RegExp(awayAlias+'[^\\n]*comeback[:\\s]+(\\d+\\.?\\d*)', 'i')) ||
+                           thesis.match(new RegExp('comeback[^\\n]*'+awayAlias+'[:\\s]+(\\d+\\.?\\d*)', 'i'));
+    const hLeadKeepMatch = thesis.match(new RegExp(homeAlias+'[^\\n]*lead[- ]?keep[:\\s]+(\\d+\\.?\\d*)', 'i')) ||
+                           thesis.match(new RegExp('lead[- ]?keep[^\\n]*'+homeAlias+'[:\\s]+(\\d+\\.?\\d*)', 'i'));
+    const aLeadKeepMatch = thesis.match(new RegExp(awayAlias+'[^\\n]*lead[- ]?keep[:\\s]+(\\d+\\.?\\d*)', 'i')) ||
+                           thesis.match(new RegExp('lead[- ]?keep[^\\n]*'+awayAlias+'[:\\s]+(\\d+\\.?\\d*)', 'i'));
+
+    const hComeback = hComebackMatch ? parseFloat(hComebackMatch[1]) : (comebackMatch ? parseFloat(comebackMatch[1]) : null);
+    const aComeback = aComebackMatch ? parseFloat(aComebackMatch[1]) : null;
+    const hLeadKeep = hLeadKeepMatch ? parseFloat(hLeadKeepMatch[1]) : (leadKeepMatch ? parseFloat(leadKeepMatch[1]) : null);
+    const aLeadKeep = aLeadKeepMatch ? parseFloat(aLeadKeepMatch[1]) : null;
+
+    // Need at least one value to be useful
+    if(hComeback===null && aComeback===null && hLeadKeep===null && aLeadKeep===null) return null;
+
+    // Convert to NetRtg proxy: (Comeback+LeadKeep)/2 mapped to clutch-like range
+    // Score 7+ → positive NetRtg proxy, Score 5 → ~0, Score 3 → negative
+    const toProxy = (cb, lk) => {
+      if(cb===null && lk===null) return null;
+      const avg = cb!==null && lk!==null ? (cb+lk)/2 : (cb||lk);
+      return ((avg - 5) * 2).toFixed(1); // Maps 5→0, 7→+4, 3→-4
+    };
+
+    return {
+      tier: 2,
+      home: { netRtg: toProxy(hComeback, hLeadKeep), comebackScore: hComeback, leadKeepScore: hLeadKeep },
+      away: { netRtg: toProxy(aComeback, aLeadKeep), comebackScore: aComeback, leadKeepScore: aLeadKeep },
+    };
+  }catch(e){
+    console.warn('Thesis clutch proxy parse failed:', e.message);
+    return null;
+  }
+}
+
+
 function parseSonnetScores(text, homeAlias, awayAlias){
   if(!text) return null;
   try{
@@ -982,6 +1295,7 @@ async function generateThesis(gameId){
     {label:awayAlias+' Splits(G)',status:'pending'},
     {label:homeAlias+' Splits(S)',status:'pending'},
     {label:awayAlias+' Splits(S)',status:'pending'},
+    {label:'BDL Enrichment',status:'pending'},
     {label:'Sonnet Thesis',status:'pending'},
   ];
   renderGenProgress(gameId);
@@ -1035,8 +1349,42 @@ async function generateThesis(gameId){
     }catch(e){ console.warn('Cache write failed:', e.message); }
   }
 
-  // Now send to Sonnet — prompt built client-side, function is thin Anthropic proxy
+  // BDL Enrichment — try to pull odds for this game
   cs.genSteps[12].status = 'active';
+  renderGenProgress(gameId);
+  try{
+    const bdlId = bdlGameMap[game.id];
+    if(bdlId){
+      try{
+        const oddsResp = await bdl('odds',{game_id:bdlId});
+        const oddsArr = oddsResp.data || oddsResp || [];
+        if(Array.isArray(oddsArr) && oddsArr.length > 0){
+          // Find consensus or first bookmaker
+          const book = oddsArr[0];
+          if(book){
+            const hML = book.home_team_ml || book.home_moneyline || '';
+            const aML = book.away_team_ml || book.away_moneyline || book.visitor_team_ml || '';
+            const spread = book.home_team_spread || book.home_spread || '';
+            const total = book.over_under || book.total || '';
+            if(hML || spread){
+              cs.oddsData = {homeSpread:String(spread), homeML:String(hML), awayML:String(aML), total:String(total)};
+              console.log('BDL odds auto-populated:', cs.oddsData);
+            }
+          }
+        }
+      }catch(oe){ console.warn('BDL odds pull failed (non-fatal):', oe.message); }
+    } else {
+      console.log('No BDL game ID — odds not auto-populated');
+    }
+    cs.genSteps[12].status = 'done';
+  }catch(e){
+    cs.genSteps[12].status = 'err';
+    cs.genSteps[12].error = 'optional';
+  }
+  renderGenProgress(gameId);
+
+  // Now send to Sonnet — prompt built client-side, function is thin Anthropic proxy
+  cs.genSteps[13].status = 'active';
   renderGenProgress(gameId);
   try{
     const tipTime = new Date(game.scheduled).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/New_York'});
@@ -1195,14 +1543,14 @@ WATCH
     const data = await resp.json();
     theses[gameId] = data.thesis;
     localStorage.setItem('nba4:theses', JSON.stringify(theses));
-    cs.genSteps[12].status = 'done';
+    cs.genSteps[13].status = 'done';
   }catch(e){
-    cs.genSteps[12].status = 'err';
-    cs.genSteps[12].error = e.message;
-    console.error('Thesis generation failed at step 13:', e.message, e.stack);
+    cs.genSteps[13].status = 'err';
+    cs.genSteps[13].error = e.message;
+    console.error('Thesis generation failed at step 14:', e.message, e.stack);
   }
   cs.generating = false;
-  cs.genError = cs.genSteps[12]?.status==='err' ? cs.genSteps[12].error : null;
+  cs.genError = cs.genSteps[13]?.status==='err' ? cs.genSteps[13].error : null;
   paused = wasPaused; // Resume polling state
   renderCard(game);
 }
@@ -1491,7 +1839,7 @@ function setPaused(v){
   document.getElementById('btn-live').classList.toggle('on',!v);
   document.getElementById('btn-pause').classList.toggle('on',v);
   document.getElementById('pulse').classList.toggle('off',v);
-  document.getElementById('hdr-sub').textContent=(v?'PAUSED':'LIVE')+' · SR via Netlify · v4.0 · FULL';
+  document.getElementById('hdr-sub').textContent=(v?'PAUSED':'LIVE')+' · SR via Netlify · v5.0 · FULL';
 }
 
 function setFreq(sec){
@@ -1603,7 +1951,22 @@ function mountCard(game){
   cardState[id]={logs:[],lastUp:null,editing:false,generating:false,analyzing:false,
     prevLvl:null,_countdown:null,lastFingerprint:'',analysis:null,analysisTime:null,genSteps:null,genError:null,
     lastScoreFP:'',lastStatsFP:'',staleCount:0,dataFreshness:'FRESH',sonnetIndicators:null,
-    prediction:null, clutchData:null, oddsData:null, evCollapsed:true};
+    prediction:null, clutchData:null, clutchTier:3, oddsData:null, oddsAll:null, trackingData:null, enriching:false, evCollapsed:true, edgeHistory:[]};
+  // Auto-distribute global clutch data if available (uploaded before game selected)
+  if(globalClutchData?.teams){
+    const hA = game.home?.alias||'', aA = game.away?.alias||'';
+    const hC = globalClutchData.teams[hA], aC = globalClutchData.teams[aA];
+    if(hC || aC){
+      const cs = cardState[id];
+      cs.clutchData = {
+        tier:1,
+        home: hC ? { netRtg:hC.netRtg, offRtg:hC.offRtg, defRtg:hC.defRtg, gp:hC.gp, w:hC.w, l:hC.l, wl:hC.wl, efg:hC.efg, ts:hC.ts, pace:hC.pace, pie:hC.pie, tovPct:hC.tovPct, orebPct:hC.orebPct, drebPct:hC.drebPct, astRatio:hC.astRatio } : {},
+        away: aC ? { netRtg:aC.netRtg, offRtg:aC.offRtg, defRtg:aC.defRtg, gp:aC.gp, w:aC.w, l:aC.l, wl:aC.wl, efg:aC.efg, ts:aC.ts, pace:aC.pace, pie:aC.pie, tovPct:aC.tovPct, orebPct:aC.orebPct, drebPct:aC.drebPct, astRatio:aC.astRatio } : {},
+      };
+      cs.clutchTier = 1;
+      addLog(id, `📋 L15 clutch auto-loaded from OCR`, true);
+    }
+  }
   const div=document.createElement('div');
   div.id='card-'+id;
   document.getElementById('grid').appendChild(div);
@@ -1677,6 +2040,22 @@ function renderCard(game){
       const edgeColor = edgeNum===null?'var(--t3)':edgeNum>=10?'var(--green)':edgeNum>=5?'var(--g2)':edgeNum>=1?'var(--yellow)':edgeNum>=0?'var(--t3)':'var(--red)';
       const convColor = ({DOMINANT:'var(--green)',STRONG:'var(--g2)',EARNED:'var(--yellow)',CONDITIONAL:'var(--amber)'})[pred.conviction]||'var(--t3)';
       const entryColor = pred.entry==='OPTIMAL WINDOW'?'var(--green)':pred.entry==='WINDOW OPEN'?'var(--g2)':pred.entry==='WINDOW CLOSING'?'var(--yellow)':'var(--t3)';
+
+      // Edge history analysis
+      const eh = cs.edgeHistory.filter(e=>e.edgeNum!==null&&e.edgeNum!==undefined);
+      let peakEdge = null, edgeTrend = '';
+      if(eh.length >= 2){
+        peakEdge = eh.reduce((max,e)=>e.edgeNum>max.edgeNum?e:max, eh[0]);
+        const recent = eh.slice(-2);
+        const diff = recent[1].edgeNum - recent[0].edgeNum;
+        edgeTrend = diff > 1.5 ? '▲' : diff < -1.5 ? '▼' : '─';
+      }
+
+      // Clutch tier badge
+      const clutchTier = cs.clutchTier || (cs.clutchData?.tier) || 3;
+      const tierBadge = clutchTier===1 ? 'T1·L15' : clutchTier===2 ? 'T2·PRX' : 'T3·Δ';
+      const tierColor = clutchTier===1 ? 'var(--green)' : clutchTier===2 ? 'var(--yellow)' : 'var(--t3)';
+
       html+=`
       <div class="dv">
         <div class="dv-hdr">DECISION ${analyzeBtn}<span class="analysis-cost">${cs.analysisTime?cs.analysisTime.toLocaleTimeString():''}</span></div>
@@ -1685,7 +2064,9 @@ function renderCard(game){
           <span class="dv-val" style="color:${edgeColor}">${esc(pred.edge||'—')}</span>
           <span class="dv-sub">FWP ${esc(pred.fwp||'—')}</span>
           <span class="dv-sub" style="opacity:.6">MIP ${esc(pred.mip||'N/A')}</span>
+          ${edgeTrend?`<span style="font-size:8px;color:${edgeTrend==='▲'?'var(--green)':edgeTrend==='▼'?'var(--red)':'var(--t3)'};margin-left:2px">${edgeTrend}</span>`:''}
         </div>
+        ${peakEdge?`<div class="dv-row"><span class="dv-label">PEAK</span><span class="dv-sub" style="color:var(--t2)">+${peakEdge.edgeNum.toFixed(1)}% at ${peakEdge.time} (${peakEdge.score})</span></div>`:''}
         <div class="dv-row">
           <span class="dv-label">ENTRY</span>
           <span class="dv-tag" style="color:${entryColor};border-color:${entryColor}">${esc(pred.entry||'—')}</span>
@@ -1697,9 +2078,11 @@ function renderCard(game){
         </div>
         <div class="dv-row">
           <span class="dv-label">CLUTCH</span>
+          <span class="dv-tag" style="font-size:5px;color:${tierColor};border-color:${tierColor};padding:0 3px">${tierBadge}</span>
           <span class="dv-sub">${esc(pred.clutch||'No data')}</span>
         </div>
         <div class="dv-pred">${esc(pred.prediction||'')}</div>
+        ${eh.length>=3?`<div style="font-size:5px;color:var(--t3);margin-top:3px;letter-spacing:.5px">EDGE HISTORY: ${eh.slice(-6).map(e=>(e.edgeNum>=0?'+':'')+e.edgeNum.toFixed(0)+'%').join(' → ')}</div>`:''}
       </div>`;
     } else if(cs.analyzing){
       html+=`<div class="dv"><div class="dv-hdr">DECISION</div><div class="analysis-loading"><div class="spin"></div> Sonnet analyzing…</div></div>`;
@@ -1709,8 +2092,13 @@ function renderCard(game){
 
     // ─── DATA INPUTS (Clutch + Odds) ───
     const cl = cs.clutchData, od = cs.oddsData;
+    const cTier = cs.clutchTier || (cl?.tier) || 3;
+    const isOCR = cTier===1 && globalClutchData?.teams;
+    const cTierLabel = cTier===1 ? (isOCR ? '<span style="color:var(--green)">✓ TIER 1 (OCR)</span>' : '<span style="color:var(--green)">✓ TIER 1 (L15)</span>') : cTier===2 ? '<span style="color:var(--yellow)">✓ TIER 2 (BDL)</span>' : '<span style="color:var(--t3)">TIER 3 (manual)</span>';
     html+=`<div class="data-inputs">
-      <div class="di-hdr">MARKET & CLUTCH<span style="font-size:5px;color:var(--t3)">${cl?'✓ L15':'no clutch'} · ${od?'✓ odds':'no odds'}</span></div>
+      <div class="di-hdr">MARKET & CLUTCH<span style="font-size:5px">${cTierLabel} · ${od?'<span style="color:var(--green)">✓ odds</span>':'<span style="color:var(--t3)">no odds</span>'}${cs.trackingData?' · <span style="color:var(--green)">✓ tracking</span>':''}</span>
+        <button class="di-btn" style="margin-left:auto;background:${cs.enriching?'var(--b2)':'rgba(147,130,220,.15)'};color:${cs.enriching?'var(--t3)':'#9382dc'};font-size:6px;padding:2px 6px" onclick="enrichFromBDL('${id}')" ${cs.enriching?'disabled':''}>${cs.enriching?'⏳ PULLING...':'⚡ ENRICH'}</button>
+      </div>
       <div class="di-row">
         <span class="di-lbl">ODDS</span>
         <input class="di-input" id="od-hs-${id}" placeholder="spread" value="${od?.homeSpread||''}" style="width:42px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
