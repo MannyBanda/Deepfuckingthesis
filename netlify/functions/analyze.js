@@ -163,27 +163,27 @@ exports.handler = async (event) => {
 
     let clutchSection = '';
     if (clutchData) {
-      const tierLabel = clutchData.tier === 1 ? 'L15 Manual — Tier 1' : clutchData.tier === 2 ? 'Season-Wide BDL — Tier 2' : 'Win/Loss Delta — Tier 3';
+      const tierLabel = clutchData.tier === 1 ? 'L15 NBA.com — Tier 1' : clutchData.tier === 2 ? 'Season-Wide BDL — Tier 2' : 'Win/Loss Delta — Tier 3';
       clutchSection = `\nCLUTCH DATA (${tierLabel}):\n`;
       clutchSection += `${homeTeam}: NetRtg ${clutchData.home?.netRtg ?? 'N/A'} | OffRtg ${clutchData.home?.offRtg ?? 'N/A'} | DefRtg ${clutchData.home?.defRtg ?? 'N/A'} | GP ${clutchData.home?.gp ?? 'N/A'} | W-L ${clutchData.home?.wl ?? 'N/A'}\n`;
       clutchSection += `${awayTeam}: NetRtg ${clutchData.away?.netRtg ?? 'N/A'} | OffRtg ${clutchData.away?.offRtg ?? 'N/A'} | DefRtg ${clutchData.away?.defRtg ?? 'N/A'} | GP ${clutchData.away?.gp ?? 'N/A'} | W-L ${clutchData.away?.wl ?? 'N/A'}\n`;
-      // Enriched fields from BDL (Tier 2)
-      if (clutchData.tier === 2) {
+      // Enriched profile fields (available from OCR Tier 1 and BDL Tier 2)
+      if (clutchData.tier <= 2) {
         const h = clutchData.home || {}, a = clutchData.away || {};
         if (h.efg != null || h.ts != null) {
-          clutchSection += `${homeTeam} clutch profile: eFG ${h.efg ?? '?'}% | TS ${h.ts ?? '?'}% | TOV ratio ${h.tovRatio ?? '?'} | PIE ${h.pie ?? '?'} | Pace ${h.pace ?? '?'}\n`;
+          clutchSection += `${homeTeam} clutch profile: eFG ${h.efg ?? '?'}% | TS ${h.ts ?? '?'}% | TOV% ${h.tovPct ?? h.tovRatio ?? '?'} | PIE ${h.pie ?? '?'} | Pace ${h.pace ?? '?'} | AST ratio ${h.astRatio ?? '?'} | OREB% ${h.orebPct ?? '?'} | DREB% ${h.drebPct ?? '?'}\n`;
         }
         if (a.efg != null || a.ts != null) {
-          clutchSection += `${awayTeam} clutch profile: eFG ${a.efg ?? '?'}% | TS ${a.ts ?? '?'}% | TOV ratio ${a.tovRatio ?? '?'} | PIE ${a.pie ?? '?'} | Pace ${a.pace ?? '?'}\n`;
+          clutchSection += `${awayTeam} clutch profile: eFG ${a.efg ?? '?'}% | TS ${a.ts ?? '?'}% | TOV% ${a.tovPct ?? a.tovRatio ?? '?'} | PIE ${a.pie ?? '?'} | Pace ${a.pace ?? '?'} | AST ratio ${a.astRatio ?? '?'} | OREB% ${a.orebPct ?? '?'} | DREB% ${a.drebPct ?? '?'}\n`;
         }
-        // Clutch conversion context (misc)
+        // Clutch conversion context (BDL Tier 2 only — misc endpoint)
         if (h.fbp != null || h.paint != null) {
           clutchSection += `${homeTeam} clutch conversion: FBP ${h.fbp ?? '?'} | POT ${h.pot ?? '?'} | Paint ${h.paint ?? '?'} | SCP ${h.scp ?? '?'} | Opp paint ${h.oppPaint ?? '?'}\n`;
         }
         if (a.fbp != null || a.paint != null) {
           clutchSection += `${awayTeam} clutch conversion: FBP ${a.fbp ?? '?'} | POT ${a.pot ?? '?'} | Paint ${a.paint ?? '?'} | SCP ${a.scp ?? '?'} | Opp paint ${a.oppPaint ?? '?'}\n`;
         }
-        // Clutch shot diet (scoring)
+        // Clutch shot diet (BDL Tier 2 only — scoring endpoint)
         if (h.pctPts3pt != null || h.pctPtsPaint != null) {
           clutchSection += `${homeTeam} clutch shot diet: %pts 3PT ${h.pctPts3pt ?? '?'} | %pts paint ${h.pctPtsPaint ?? '?'} | %pts FT ${h.pctPtsFt ?? '?'} | %assisted FGM ${h.pctAssistedFgm ?? '?'}\n`;
         }
