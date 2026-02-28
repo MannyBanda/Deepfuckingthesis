@@ -102,7 +102,7 @@ input,textarea,select{font-size:16px!important;}
 .in{font-size:6px;color:var(--t2);width:78px;flex-shrink:0;}
 .iw{font-size:6px;color:var(--t3);width:18px;flex-shrink:0;}
 .pip{width:5px;height:5px;border-radius:1px;flex-shrink:0;}
-.pw{background:var(--green);}.pd{background:var(--yellow);}.pl{background:var(--red);}
+.pw{background:#00ff88;}.plw{background:#a8ff78;}.pd{background:var(--yellow);}.pll{background:#ff8c42;}.pl{background:var(--red);}
 .il{font-size:7px;font-weight:600;width:26px;flex-shrink:0;}
 .id{font-size:6px;color:var(--t3);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 
@@ -740,25 +740,28 @@ function parseSonnetScores(text, homeAlias, awayAlias){
       'I5':{weight:0.10, nm:'TEMPO/EFF'},
     };
     for(const [key, meta] of Object.entries(iMap)){
-      const rx = new RegExp(key+'[^:]*:\\s*(\\S+)\\s+(1\\.0|0\\.5|0\\.0)\\s*[—–-]\\s*(.+)', 'i');
+      // Match any decimal score: "I1 Possession... : CLE 0.75 — explanation"
+      const rx = new RegExp(key+'[^:]*:\\s*(\\S+)\\s+(\\d\\.\\d{1,2})\\s*[—–-]\\s*(.+)', 'i');
       const m = text.match(rx);
       if(m){
         const team = m[1].replace(/[^A-Za-z]/g,'').toUpperCase();
         const score = parseFloat(m[2]);
         const isHome = team === homeAlias.toUpperCase() || team.includes(homeAlias.toUpperCase().substring(0,3));
-        const homeScore = isHome ? score : (score===1?0:score===0?1:0.5);
+        // Flip score perspective: if away team named, invert
+        const homeScore = isHome ? score : (1 - score);
         ind[key] = {
           score: homeScore,
           leader: m[1],
           detail: m[3].trim(),
           sonnet: true,
+          rawScore: score, // original score as stated by Sonnet
         };
       }
     }
     if(Object.keys(ind).length < 3) return null;
 
     for(const key of Object.keys(iMap)){
-      if(!ind[key]) ind[key] = {score:0.5, leader:'EVEN', detail:'(not parsed from Sonnet)', sonnet:false};
+      if(!ind[key]) ind[key] = {score:0.5, leader:'EVEN', detail:'(not parsed from Sonnet)', sonnet:false, rawScore:0.5};
     }
 
     const W = {I1:0.25, I2:0.25, I3:0.20, I4:0.20, I5:0.10};
@@ -783,6 +786,24 @@ function parseSonnetScores(text, homeAlias, awayAlias){
     console.warn('Sonnet score parse failed:', e.message);
     return null;
   }
+}
+
+// 5-tier indicator color: green → yellow-green → yellow → orange → red
+function indColor(score){
+  if(score >= 0.875) return '#00ff88'; // clear edge — green
+  if(score >= 0.625) return '#a8ff78'; // lean — yellow-green
+  if(score >= 0.375) return '#ffd166'; // contested — yellow
+  if(score >= 0.125) return '#ff8c42'; // opponent leans — orange
+  return '#ff5252';                     // opponent controls — red
+}
+
+// 5-tier pip class (for background color via CSS)
+function pipClass(score){
+  if(score >= 0.875) return 'pw';  // win
+  if(score >= 0.625) return 'plw'; // lean-win
+  if(score >= 0.375) return 'pd';  // draw/contested
+  if(score >= 0.125) return 'pll'; // lean-loss
+  return 'pl';                      // loss
 }
 
 function updateAnalysisUI(gameId, state){
@@ -1472,8 +1493,8 @@ function renderCard(game){
   // Prefer Sonnet indicators when available, fall back to compute()
   const ind = cs.sonnetIndicators || rawInd;
   const v=ind?getVerdict(ind.score):null;
-  // Count indicators won outright (1.0) by control team
-  const indWon = ind ? [ind.I1,ind.I2,ind.I3,ind.I4,ind.I5].filter(d=>d.score===1).length : 0;
+  // Count indicators won (1.0 or 0.75 for Sonnet, 1.0 for compute) by control team
+  const indWon = ind ? [ind.I1,ind.I2,ind.I3,ind.I4,ind.I5].filter(d=> ind.source==='sonnet' ? d.rawScore>=0.75 : d.score===1).length : 0;
   const indTotal = 5;
   const thesis=theses[id]||'', p=parseThesis(thesis);
   const xrefs=ind&&state!=='PRE'?crossRef(p,ind):[];
@@ -1515,14 +1536,18 @@ function renderCard(game){
     <div class="inds">
     ${[{id:'I1',nm:'POSSESS/TRANS',wt:25,d:ind.I1},{id:'I2',nm:'RIM/FOUL',wt:25,d:ind.I2},
        {id:'I3',nm:'SHOT QUALITY',wt:20,d:ind.I3},{id:'I4',nm:'LINEUP INTEG',wt:20,d:ind.I4},
-       {id:'I5',nm:'TEMPO/EFF',wt:10,d:ind.I5}].map(({id:iid,nm,wt,d})=>`
+       {id:'I5',nm:'TEMPO/EFF',wt:10,d:ind.I5}].map(({id:iid,nm,wt,d})=>{
+      const sc = d.sonnet ? d.rawScore : d.score;
+      const col = d.sonnet ? indColor(d.rawScore) : (d.score===1?'var(--green)':d.score===.5?'var(--yellow)':'var(--red)');
+      const pc = d.sonnet ? pipClass(d.rawScore) : (d.score===1?'pw':d.score===.5?'pd':'pl');
+      return `
       <div class="ind">
         <span class="ii">${iid}</span><span class="in">${nm}</span><span class="iw">${wt}%</span>
-        <div class="pip ${d.score===1?'pw':d.score===.5?'pd':'pl'}"></div>
-        <span class="il" style="color:${d.score===1?'var(--green)':d.score===.5?'var(--yellow)':'var(--red)'}">${esc(d.leader)}</span>
+        <div class="pip ${pc}"></div>
+        <span class="il" style="color:${col}">${esc(d.leader)}${d.sonnet?' <span style="opacity:0.6">'+d.rawScore.toFixed(2)+'</span>':''}</span>
         ${d.sonnet?'<span style="color:#a78bfa;font-size:5px;margin-left:2px">◈</span>':''}
         <span class="id">${esc(d.detail)}</span>
-      </div>`).join('')}
+      </div>`;}).join('')}
     </div>
     <div class="traj">
       <div class="th">TRAJECTORY — ${ind.dataQuality==='SONNET'?'Sonnet-scored':ind.dataQuality==='FULL'?'8/8 signals (FULL)':'6/8 signals (PARTIAL — T4,T7 unavail)'}
