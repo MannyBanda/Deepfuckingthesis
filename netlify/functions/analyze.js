@@ -155,7 +155,7 @@ exports.handler = async (event) => {
   }
 
   try {
-    const { summaryData, thesis, homeTeam, awayTeam, period, score, clutchData, oddsData, edgeHistory } = JSON.parse(event.body);
+    const { summaryData, thesis, homeTeam, awayTeam, period, score, clutchData, oddsData, edgeHistory, trackingData } = JSON.parse(event.body);
 
     if (!summaryData) {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'summaryData required' }) };
@@ -163,10 +163,34 @@ exports.handler = async (event) => {
 
     let clutchSection = '';
     if (clutchData) {
-      const tierLabel = clutchData.tier === 1 ? 'L15 Manual — Tier 1' : clutchData.tier === 2 ? 'Season Proxy — Tier 2' : 'Win/Loss Delta — Tier 3';
+      const tierLabel = clutchData.tier === 1 ? 'L15 Manual — Tier 1' : clutchData.tier === 2 ? 'Season-Wide BDL — Tier 2' : 'Win/Loss Delta — Tier 3';
       clutchSection = `\nCLUTCH DATA (${tierLabel}):\n`;
       clutchSection += `${homeTeam}: NetRtg ${clutchData.home?.netRtg ?? 'N/A'} | OffRtg ${clutchData.home?.offRtg ?? 'N/A'} | DefRtg ${clutchData.home?.defRtg ?? 'N/A'} | GP ${clutchData.home?.gp ?? 'N/A'} | W-L ${clutchData.home?.wl ?? 'N/A'}\n`;
       clutchSection += `${awayTeam}: NetRtg ${clutchData.away?.netRtg ?? 'N/A'} | OffRtg ${clutchData.away?.offRtg ?? 'N/A'} | DefRtg ${clutchData.away?.defRtg ?? 'N/A'} | GP ${clutchData.away?.gp ?? 'N/A'} | W-L ${clutchData.away?.wl ?? 'N/A'}\n`;
+      // Enriched fields from BDL (Tier 2)
+      if (clutchData.tier === 2) {
+        const h = clutchData.home || {}, a = clutchData.away || {};
+        if (h.efg != null || h.ts != null) {
+          clutchSection += `${homeTeam} clutch profile: eFG ${h.efg ?? '?'}% | TS ${h.ts ?? '?'}% | TOV ratio ${h.tovRatio ?? '?'} | PIE ${h.pie ?? '?'} | Pace ${h.pace ?? '?'}\n`;
+        }
+        if (a.efg != null || a.ts != null) {
+          clutchSection += `${awayTeam} clutch profile: eFG ${a.efg ?? '?'}% | TS ${a.ts ?? '?'}% | TOV ratio ${a.tovRatio ?? '?'} | PIE ${a.pie ?? '?'} | Pace ${a.pace ?? '?'}\n`;
+        }
+        // Clutch conversion context (misc)
+        if (h.fbp != null || h.paint != null) {
+          clutchSection += `${homeTeam} clutch conversion: FBP ${h.fbp ?? '?'} | POT ${h.pot ?? '?'} | Paint ${h.paint ?? '?'} | SCP ${h.scp ?? '?'} | Opp paint ${h.oppPaint ?? '?'}\n`;
+        }
+        if (a.fbp != null || a.paint != null) {
+          clutchSection += `${awayTeam} clutch conversion: FBP ${a.fbp ?? '?'} | POT ${a.pot ?? '?'} | Paint ${a.paint ?? '?'} | SCP ${a.scp ?? '?'} | Opp paint ${a.oppPaint ?? '?'}\n`;
+        }
+        // Clutch shot diet (scoring)
+        if (h.pctPts3pt != null || h.pctPtsPaint != null) {
+          clutchSection += `${homeTeam} clutch shot diet: %pts 3PT ${h.pctPts3pt ?? '?'} | %pts paint ${h.pctPtsPaint ?? '?'} | %pts FT ${h.pctPtsFt ?? '?'} | %assisted FGM ${h.pctAssistedFgm ?? '?'}\n`;
+        }
+        if (a.pctPts3pt != null || a.pctPtsPaint != null) {
+          clutchSection += `${awayTeam} clutch shot diet: %pts 3PT ${a.pctPts3pt ?? '?'} | %pts paint ${a.pctPtsPaint ?? '?'} | %pts FT ${a.pctPtsFt ?? '?'} | %assisted FGM ${a.pctAssistedFgm ?? '?'}\n`;
+        }
+      }
       if (clutchData.comebackScore != null) clutchSection += `Comeback Score: ${homeTeam} ${clutchData.home?.comebackScore ?? '?'} | ${awayTeam} ${clutchData.away?.comebackScore ?? '?'}\n`;
       if (clutchData.leadKeepScore != null) clutchSection += `Lead-Keep Score: ${homeTeam} ${clutchData.home?.leadKeepScore ?? '?'} | ${awayTeam} ${clutchData.away?.leadKeepScore ?? '?'}\n`;
       if (clutchData.divergence) clutchSection += `⚠ DIVERGENCE: ${clutchData.divergence}\n`;
@@ -176,9 +200,22 @@ exports.handler = async (event) => {
 
     let oddsSection = '';
     if (oddsData && (oddsData.homeML || oddsData.homeSpread)) {
-      oddsSection = `\nMARKET DATA:\nSpread: ${homeTeam} ${oddsData.homeSpread ?? 'N/A'} | ML: ${homeTeam} ${oddsData.homeML ?? 'N/A'} / ${awayTeam} ${oddsData.awayML ?? 'N/A'} | Total: ${oddsData.total ?? 'N/A'}\n`;
+      oddsSection = `\nMARKET DATA${oddsData.vendor ? ' ('+oddsData.vendor+')' : ''}:\nSpread: ${homeTeam} ${oddsData.homeSpread ?? 'N/A'} | ML: ${homeTeam} ${oddsData.homeML ?? 'N/A'} / ${awayTeam} ${oddsData.awayML ?? 'N/A'} | Total: ${oddsData.total ?? 'N/A'}\n`;
     } else {
       oddsSection = '\nMARKET DATA: Not provided. Skip edge calculation.\n';
+    }
+
+    let trackingSection = '';
+    if (trackingData) {
+      const h = trackingData.home || {}, a = trackingData.away || {};
+      trackingSection = '\nTRACKING DATA (sustainability baselines):\n';
+      if (h.catchAndShoot || a.catchAndShoot) {
+        trackingSection += `Catch-and-shoot: ${homeTeam} eFG ${h.catchAndShoot?.efg ?? '?'}% 3PT% ${h.catchAndShoot?.fg3pct ?? '?'}% | ${awayTeam} eFG ${a.catchAndShoot?.efg ?? '?'}% 3PT% ${a.catchAndShoot?.fg3pct ?? '?'}%\n`;
+      }
+      if (h.pullUp || a.pullUp) {
+        trackingSection += `Pull-up: ${homeTeam} eFG ${h.pullUp?.efg ?? '?'}% 3PT% ${h.pullUp?.fg3pct ?? '?'}% | ${awayTeam} eFG ${a.pullUp?.efg ?? '?'}% 3PT% ${a.pullUp?.fg3pct ?? '?'}%\n`;
+      }
+      trackingSection += 'Use these baselines to evaluate sustainability: if live 3PT% exceeds catch-and-shoot eFG by 8%+, flag as UNSUSTAINABLE. High pull-up efficiency = creation-based offense (more sustainable).\n';
     }
 
     let edgeSection = '';
@@ -195,6 +232,7 @@ GAME: ${awayTeam} @ ${homeTeam} | ${period} | Score: ${score}
 ${thesis ? `PRE-GAME THESIS:\n${thesis}\n` : 'No pre-game thesis provided.'}
 ${clutchSection}
 ${oddsSection}
+${trackingSection}
 ${edgeSection}
 SPORTRADAR GAME SUMMARY DATA:
 ${JSON.stringify(summaryData, null, 1)}`;
