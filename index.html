@@ -1016,18 +1016,19 @@ async function handleClutchUpload(input){
     // Store globally
     globalClutchData = data;
     const count = Object.keys(data.teams).length;
+    const extractedList = Object.keys(data.teams).join(', ');
 
     // Distribute to all active game cards
     distributeClutchToCards();
 
-    status.textContent = `✓ ${count} teams extracted`;
+    status.textContent = `✓ ${count} teams: ${extractedList}`;
     status.className = 'cu-status ok';
     badge.style.display = 'inline-flex';
     badge.className = 'cu-badge';
     badge.textContent = `✓ ${segment} CLUTCH · ${count} teams · Tier 1`;
 
     const tokens = data.usage ? `${data.usage.input||0}+${data.usage.output||0} tokens` : '';
-    console.log('Clutch OCR complete:', count, 'teams,', tokens, data.teams);
+    console.log('Clutch OCR complete:', count, 'teams:', extractedList, tokens, data.teams);
 
   }catch(e){
     console.error('Clutch upload error:', e);
@@ -1045,7 +1046,18 @@ async function handleClutchUpload(input){
 function distributeClutchToCards(){
   if(!globalClutchData?.teams) return;
   const teams = globalClutchData.teams;
+  const extractedKeys = Object.keys(teams);
   let distributed = 0;
+
+  // Debug: show what was extracted vs what games need
+  const neededAliases = [];
+  for(const game of games){
+    if(!selIds.includes(game.id)) continue;
+    if(game.home?.alias) neededAliases.push(game.home.alias);
+    if(game.away?.alias) neededAliases.push(game.away.alias);
+  }
+  console.log('Clutch distribute: extracted=', extractedKeys, 'needed=', neededAliases, 
+    'missing=', neededAliases.filter(a => !teams[a]));
 
   for(const game of games){
     const cs = cardState[game.id];
