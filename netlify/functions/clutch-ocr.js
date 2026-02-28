@@ -25,10 +25,11 @@ exports.handler = async (event) => {
   }
 
   try {
-    const { image, mediaType, segment } = JSON.parse(event.body);
+    const { image, mediaType, segment, teams } = JSON.parse(event.body);
     // image = base64-encoded image data (no data:... prefix)
     // mediaType = "image/png" or "image/jpeg"
     // segment = "L10" or "L15" (for labeling, default L15)
+    // teams = optional array of team abbreviations to extract (e.g. ["BOS","NYK","CLE","MIL"])
 
     if (!image) {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'image (base64) required' }) };
@@ -36,10 +37,14 @@ exports.handler = async (event) => {
 
     const mType = mediaType || 'image/png';
     const segLabel = segment || 'L15';
+    const teamFilter = Array.isArray(teams) && teams.length > 0 ? teams : null;
+    const filterNote = teamFilter
+      ? `IMPORTANT: Only extract these specific teams: ${teamFilter.join(', ')}. Ignore all other rows.`
+      : 'Extract ALL visible team rows.';
 
     const systemPrompt = `You are a precise data extraction tool. You extract NBA clutch statistics from screenshots of NBA.com tables.
 
-TASK: Extract every team row visible in the screenshot. The table is from NBA.com > Teams > Clutch > Advanced stats.
+TASK: ${filterNote} The table is from NBA.com > Teams > Clutch > Advanced stats.
 
 OUTPUT FORMAT: Respond with ONLY a JSON object. No markdown, no backticks, no explanation. Just the raw JSON.
 
@@ -100,8 +105,8 @@ RULES:
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 4000,
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: teamFilter ? Math.max(800, teamFilter.length * 150) : 3000,
         system: systemPrompt,
         messages: [{
           role: 'user',
@@ -116,7 +121,9 @@ RULES:
             },
             {
               type: 'text',
-              text: `Extract all team clutch stats from this NBA.com screenshot. This is the ${segLabel} segment (Last ${segLabel.replace('L','')} Games). Return ONLY the JSON object, no other text.`,
+              text: teamFilter
+                ? `Extract clutch stats for ONLY these teams: ${teamFilter.join(', ')}. This is the ${segLabel} segment. Return ONLY the JSON object, no other text.`
+                : `Extract all team clutch stats from this NBA.com screenshot. This is the ${segLabel} segment (Last ${segLabel.replace('L','')} Games). Return ONLY the JSON object, no other text.`,
             },
           ],
         }],
