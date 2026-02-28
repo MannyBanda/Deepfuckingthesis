@@ -43,6 +43,8 @@ KEY READS: [2-4 most important structural observations]
 THESIS STATUS: [CONFIRMED|DEVELOPING|CONTESTED|DENIED] — [1-line note]
 ENTRY/PASS: [Current recommendation based on structural read]
 
+DIVERGENCE NOTES: If dashboard computed scores are provided, note where your indicator scores differ and why (e.g., "Dashboard scored I2 as contested but FTA trend is accelerating — I weight this as edge"). This helps calibrate the automated scoring.
+
 Be concise. Each indicator explanation should be 1 line. Key reads should be actionable. Do not hedge excessively — state what the data shows.`;
 
 exports.handler = async (event) => {
