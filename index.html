@@ -937,6 +937,29 @@ async function enrichFromBDL(gameId){
 
 // ── Clutch Screenshot Upload & Distribution ──
 
+// Convert any image (including HEIC) to compressed JPEG for Sonnet vision
+function compressImage(file, maxW, quality){
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let w = img.naturalWidth, h = img.naturalHeight;
+      if(w > maxW){ h = Math.round(h * maxW / w); w = maxW; }
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      const dataUrl = c.toDataURL('image/jpeg', quality);
+      const b64 = dataUrl.split(',')[1];
+      console.log(`Image compressed: ${file.name} → ${w}×${h} JPEG, ~${Math.round(b64.length*3/4/1024)}KB`);
+      res({ base64: b64, mediaType: 'image/jpeg' });
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('Image load failed — unsupported format?')); };
+    img.src = url;
+  });
+}
+
 async function handleClutchUpload(input){
   const file = input.files?.[0];
   if(!file) return;
@@ -952,20 +975,10 @@ async function handleClutchUpload(input){
   btn.disabled = true;
 
   try{
-    // Convert to base64
-    const base64 = await new Promise((res, rej) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = reader.result;
-        // Strip data:image/...;base64, prefix
-        const b64 = result.split(',')[1];
-        res(b64);
-      };
-      reader.onerror = () => rej(new Error('File read failed'));
-      reader.readAsDataURL(file);
-    });
-
-    const mediaType = file.type || 'image/png';
+    // Compress image client-side to avoid Netlify function timeout
+    // iPhone screenshots can be 3-5MB; resize to max 1600px wide JPEG
+    status.textContent = '⏳ Compressing...';
+    const {base64, mediaType} = await compressImage(file, 1600, 0.82);
 
     // Send to clutch-ocr function
     const resp = await fetch(FN+'clutch-ocr',{
