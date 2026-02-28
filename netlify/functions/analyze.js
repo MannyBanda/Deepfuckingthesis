@@ -1,4 +1,4 @@
-// Live Game Analysis via Claude Sonnet — Predictive Layer v1.0
+// Live Game Analysis via Claude Sonnet - Predictive Layer v1.0
 // Receives SR game summary + thesis + clutch + odds, returns structural + predictive analysis
 
 const SYSTEM_PROMPT = `You are an NBA live-game control analyst and outcome predictor. You evaluate structural control using five weighted indicators and eight trajectory signals, then synthesize all available data into a progressive predictive assessment that sharpens each quarter.
@@ -165,30 +165,41 @@ exports.handler = async (event) => {
     if (clutchData) {
       const tierLabel = clutchData.tier === 1 ? 'L15 NBA.com — Tier 1' : clutchData.tier === 2 ? 'Season-Wide BDL — Tier 2' : 'Win/Loss Delta — Tier 3';
       clutchSection = `\nCLUTCH DATA (${tierLabel}):\n`;
-      clutchSection += `${homeTeam}: NetRtg ${clutchData.home?.netRtg ?? 'N/A'} | OffRtg ${clutchData.home?.offRtg ?? 'N/A'} | DefRtg ${clutchData.home?.defRtg ?? 'N/A'} | GP ${clutchData.home?.gp ?? 'N/A'} | W-L ${clutchData.home?.wl ?? 'N/A'}\n`;
-      clutchSection += `${awayTeam}: NetRtg ${clutchData.away?.netRtg ?? 'N/A'} | OffRtg ${clutchData.away?.offRtg ?? 'N/A'} | DefRtg ${clutchData.away?.defRtg ?? 'N/A'} | GP ${clutchData.away?.gp ?? 'N/A'} | W-L ${clutchData.away?.wl ?? 'N/A'}\n`;
+      // List AWAY team first to match GAME line order (AWAY @ HOME)
+      clutchSection += `${awayTeam} (AWAY): NetRtg ${clutchData.away?.netRtg ?? 'N/A'} | OffRtg ${clutchData.away?.offRtg ?? 'N/A'} | DefRtg ${clutchData.away?.defRtg ?? 'N/A'} | GP ${clutchData.away?.gp ?? 'N/A'} | W-L ${clutchData.away?.wl ?? 'N/A'}\n`;
+      clutchSection += `${homeTeam} (HOME): NetRtg ${clutchData.home?.netRtg ?? 'N/A'} | OffRtg ${clutchData.home?.offRtg ?? 'N/A'} | DefRtg ${clutchData.home?.defRtg ?? 'N/A'} | GP ${clutchData.home?.gp ?? 'N/A'} | W-L ${clutchData.home?.wl ?? 'N/A'}\n`;
+      // Add explicit comparison so Sonnet cannot misread which team has clutch edge
+      const hNet = clutchData.home?.netRtg, aNet = clutchData.away?.netRtg;
+      if (hNet != null && aNet != null) {
+        const better = hNet > aNet ? homeTeam : awayTeam;
+        const worse = hNet > aNet ? awayTeam : homeTeam;
+        const betterVal = hNet > aNet ? hNet : aNet;
+        const worseVal = hNet > aNet ? aNet : hNet;
+        const gap = Math.abs(hNet - aNet).toFixed(1);
+        clutchSection += `>>> CLUTCH EDGE: ${better} (NetRtg ${betterVal > 0 ? '+' : ''}${betterVal}) is SIGNIFICANTLY BETTER in clutch than ${worse} (NetRtg ${worseVal > 0 ? '+' : ''}${worseVal}). Gap: ${gap} pts. Higher NetRtg = better. Use this in your Clutch Gate evaluation.\n`;
+      }
       // Enriched profile fields (available from OCR Tier 1 and BDL Tier 2)
       if (clutchData.tier <= 2) {
         const h = clutchData.home || {}, a = clutchData.away || {};
-        if (h.efg != null || h.ts != null) {
-          clutchSection += `${homeTeam} clutch profile: eFG ${h.efg ?? '?'}% | TS ${h.ts ?? '?'}% | TOV% ${h.tovPct ?? h.tovRatio ?? '?'} | PIE ${h.pie ?? '?'} | Pace ${h.pace ?? '?'} | AST ratio ${h.astRatio ?? '?'} | OREB% ${h.orebPct ?? '?'} | DREB% ${h.drebPct ?? '?'}\n`;
-        }
         if (a.efg != null || a.ts != null) {
           clutchSection += `${awayTeam} clutch profile: eFG ${a.efg ?? '?'}% | TS ${a.ts ?? '?'}% | TOV% ${a.tovPct ?? a.tovRatio ?? '?'} | PIE ${a.pie ?? '?'} | Pace ${a.pace ?? '?'} | AST ratio ${a.astRatio ?? '?'} | OREB% ${a.orebPct ?? '?'} | DREB% ${a.drebPct ?? '?'}\n`;
         }
-        // Clutch conversion context (BDL Tier 2 only — misc endpoint)
-        if (h.fbp != null || h.paint != null) {
-          clutchSection += `${homeTeam} clutch conversion: FBP ${h.fbp ?? '?'} | POT ${h.pot ?? '?'} | Paint ${h.paint ?? '?'} | SCP ${h.scp ?? '?'} | Opp paint ${h.oppPaint ?? '?'}\n`;
+        if (h.efg != null || h.ts != null) {
+          clutchSection += `${homeTeam} clutch profile: eFG ${h.efg ?? '?'}% | TS ${h.ts ?? '?'}% | TOV% ${h.tovPct ?? h.tovRatio ?? '?'} | PIE ${h.pie ?? '?'} | Pace ${h.pace ?? '?'} | AST ratio ${h.astRatio ?? '?'} | OREB% ${h.orebPct ?? '?'} | DREB% ${h.drebPct ?? '?'}\n`;
         }
+        // Clutch conversion context (BDL Tier 2 only — misc endpoint)
         if (a.fbp != null || a.paint != null) {
           clutchSection += `${awayTeam} clutch conversion: FBP ${a.fbp ?? '?'} | POT ${a.pot ?? '?'} | Paint ${a.paint ?? '?'} | SCP ${a.scp ?? '?'} | Opp paint ${a.oppPaint ?? '?'}\n`;
         }
-        // Clutch shot diet (BDL Tier 2 only — scoring endpoint)
-        if (h.pctPts3pt != null || h.pctPtsPaint != null) {
-          clutchSection += `${homeTeam} clutch shot diet: %pts 3PT ${h.pctPts3pt ?? '?'} | %pts paint ${h.pctPtsPaint ?? '?'} | %pts FT ${h.pctPtsFt ?? '?'} | %assisted FGM ${h.pctAssistedFgm ?? '?'}\n`;
+        if (h.fbp != null || h.paint != null) {
+          clutchSection += `${homeTeam} clutch conversion: FBP ${h.fbp ?? '?'} | POT ${h.pot ?? '?'} | Paint ${h.paint ?? '?'} | SCP ${h.scp ?? '?'} | Opp paint ${h.oppPaint ?? '?'}\n`;
         }
+        // Clutch shot diet (BDL Tier 2 only — scoring endpoint)
         if (a.pctPts3pt != null || a.pctPtsPaint != null) {
           clutchSection += `${awayTeam} clutch shot diet: %pts 3PT ${a.pctPts3pt ?? '?'} | %pts paint ${a.pctPtsPaint ?? '?'} | %pts FT ${a.pctPtsFt ?? '?'} | %assisted FGM ${a.pctAssistedFgm ?? '?'}\n`;
+        }
+        if (h.pctPts3pt != null || h.pctPtsPaint != null) {
+          clutchSection += `${homeTeam} clutch shot diet: %pts 3PT ${h.pctPts3pt ?? '?'} | %pts paint ${h.pctPtsPaint ?? '?'} | %pts FT ${h.pctPtsFt ?? '?'} | %assisted FGM ${h.pctAssistedFgm ?? '?'}\n`;
         }
       }
       if (clutchData.comebackScore != null) clutchSection += `Comeback Score: ${homeTeam} ${clutchData.home?.comebackScore ?? '?'} | ${awayTeam} ${clutchData.away?.comebackScore ?? '?'}\n`;
@@ -200,7 +211,7 @@ exports.handler = async (event) => {
 
     let oddsSection = '';
     if (oddsData && (oddsData.homeML || oddsData.homeSpread)) {
-      oddsSection = `\nMARKET DATA${oddsData.vendor ? ' ('+oddsData.vendor+')' : ''}:\nSpread: ${homeTeam} ${oddsData.homeSpread ?? 'N/A'} | ML: ${homeTeam} ${oddsData.homeML ?? 'N/A'} / ${awayTeam} ${oddsData.awayML ?? 'N/A'} | Total: ${oddsData.total ?? 'N/A'}\n`;
+      oddsSection = `\nMARKET DATA${oddsData.vendor ? ' ('+oddsData.vendor+')' : ''}:\nSpread: ${homeTeam} ${oddsData.homeSpread ?? 'N/A'} | ML: ${awayTeam} (AWAY) ${oddsData.awayML ?? 'N/A'} / ${homeTeam} (HOME) ${oddsData.homeML ?? 'N/A'} | Total: ${oddsData.total ?? 'N/A'}\n`;
     } else {
       oddsSection = '\nMARKET DATA: Not provided. Skip edge calculation.\n';
     }
@@ -210,10 +221,10 @@ exports.handler = async (event) => {
       const h = trackingData.home || {}, a = trackingData.away || {};
       trackingSection = '\nTRACKING DATA (sustainability baselines):\n';
       if (h.catchAndShoot || a.catchAndShoot) {
-        trackingSection += `Catch-and-shoot: ${homeTeam} eFG ${h.catchAndShoot?.efg ?? '?'}% 3PT% ${h.catchAndShoot?.fg3pct ?? '?'}% | ${awayTeam} eFG ${a.catchAndShoot?.efg ?? '?'}% 3PT% ${a.catchAndShoot?.fg3pct ?? '?'}%\n`;
+        trackingSection += `Catch-and-shoot: ${awayTeam} eFG ${a.catchAndShoot?.efg ?? '?'}% 3PT% ${a.catchAndShoot?.fg3pct ?? '?'}% | ${homeTeam} eFG ${h.catchAndShoot?.efg ?? '?'}% 3PT% ${h.catchAndShoot?.fg3pct ?? '?'}%\n`;
       }
       if (h.pullUp || a.pullUp) {
-        trackingSection += `Pull-up: ${homeTeam} eFG ${h.pullUp?.efg ?? '?'}% 3PT% ${h.pullUp?.fg3pct ?? '?'}% | ${awayTeam} eFG ${a.pullUp?.efg ?? '?'}% 3PT% ${a.pullUp?.fg3pct ?? '?'}%\n`;
+        trackingSection += `Pull-up: ${awayTeam} eFG ${a.pullUp?.efg ?? '?'}% 3PT% ${a.pullUp?.fg3pct ?? '?'}% | ${homeTeam} eFG ${h.pullUp?.efg ?? '?'}% 3PT% ${h.pullUp?.fg3pct ?? '?'}%\n`;
       }
       trackingSection += 'Use these baselines to evaluate sustainability: if live 3PT% exceeds catch-and-shoot eFG by 8%+, flag as UNSUSTAINABLE. High pull-up efficiency = creation-based offense (more sustainable).\n';
     }
