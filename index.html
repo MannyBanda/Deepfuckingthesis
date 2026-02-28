@@ -980,11 +980,22 @@ async function handleClutchUpload(input){
     status.textContent = '⏳ Compressing...';
     const {base64, mediaType} = await compressImage(file, 1600, 0.82);
 
-    // Send to clutch-ocr function
+    // Collect active team abbreviations from selected games
+    const activeTeams = [];
+    for(const gid of selIds){
+      const g = games.find(x=>x.id===gid);
+      if(g){
+        if(g.home?.alias) activeTeams.push(g.home.alias);
+        if(g.away?.alias) activeTeams.push(g.away.alias);
+      }
+    }
+
+    // Send to clutch-ocr function with team filter
+    status.textContent = '⏳ Extracting ' + activeTeams.length + ' teams...';
     const resp = await fetch(FN+'clutch-ocr',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ image: base64, mediaType, segment })
+      body:JSON.stringify({ image: base64, mediaType, segment, teams: activeTeams })
     });
 
     if(!resp.ok){
