@@ -724,7 +724,7 @@ async function triggerAnalysis(game){
   try{
     const thesis = theses[game.id]||'';
     const periodLabel = game.period ? 'Q'+game.period : '';
-    const score = (game.awayPoints||0)+'–'+(game.homePoints||0);
+    const score = (game.away?.alias||'AWAY')+' '+(game.awayPoints||0)+' - '+(game.home?.alias||'HOME')+' '+(game.homePoints||0);
     const isBDL = game.dataSource==='BDL';
     const dataSourceNote = isBDL ? '\n\nDATA SOURCE: BDL FALLBACK (PARTIAL)\nUnavailable: T4 Foul Gate | T7 Closing Lineup | I1 chaos layer | at-rim splits\nAll five indicators computable but with reduced sub-layer coverage.' : '';
     const freshnessNote = cs.dataFreshness==='STALE' ? '\n⚠ DATA FRESHNESS: STALE — stats may lag behind live score.' : cs.dataFreshness==='WATCH' ? '\n⚠ DATA FRESHNESS: WATCH — possible stats delay.' : '';
@@ -793,7 +793,7 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
           edgeNum: decision.edgeNum,
           fwp: decision.fwp||'?',
           control: parsed?.controlTeam||'?',
-          score: ((game.awayPoints||0)+'-'+(game.homePoints||0)),
+          score: ((game.away?.alias||'AWAY')+' '+(game.awayPoints||0)+'-'+(game.home?.alias||'HOME')+' '+(game.homePoints||0)),
         });
         // Keep last 20 entries max
         if(cs.edgeHistory.length > 20) cs.edgeHistory = cs.edgeHistory.slice(-20);
@@ -1223,16 +1223,26 @@ function parseSonnetScores(text, homeAlias, awayAlias){
 
     const trajMatch = text.match(/TRAJECTORY:\s*(\S+)\s*[—–-]\s*(\d+)\/(\d+)/i);
     const trajLean = trajMatch ? trajMatch[1] : 'NEUTRAL';
-    // Count actual T1-T8 signal lines instead of relying on header count
-    const signalLines = text.match(/T[1-8]\s*[—–-]/g);
-    const trajCount = signalLines ? signalLines.length : (trajMatch ? parseInt(trajMatch[2]) : 0);
+    // Parse individual T1-T8 signal lines
+    const signalRegex = /(T[1-8])\s*[—–-]\s*([^:]+):\s*(.+)/g;
+    const parsedSignals = [];
+    let sm;
+    while((sm = signalRegex.exec(text)) !== null){
+      const key = sm[1];
+      const label = sm[2].trim();
+      const detail = sm[3].trim();
+      const isClear = /^CLEAR/i.test(detail);
+      const col = isClear ? '#3e3e48' : 'var(--amber)';
+      parsedSignals.push({key, text: label + ': ' + detail, color: col});
+    }
+    const trajCount = parsedSignals.length > 0 ? parsedSignals.filter(s => !/CLEAR/i.test(s.text)).length : (trajMatch ? parseInt(trajMatch[2]) : 0);
     const trajTotal = trajMatch ? parseInt(trajMatch[3]) : 8;
 
     return {
       I1:ind.I1, I2:ind.I2, I3:ind.I3, I4:ind.I4, I5:ind.I5,
       score, controlTeam,
       dataQuality: 'SONNET',
-      traj: {signals:[], lean:trajLean, count:trajCount, total:trajTotal, tooEarly:false},
+      traj: {signals:parsedSignals, lean:trajLean, count:trajCount, total:trajTotal, tooEarly:false},
       source: 'sonnet',
     };
   }catch(e){
@@ -1987,7 +1997,7 @@ function mountCard(game){
   cardState[id]={logs:[],lastUp:null,editing:false,generating:false,analyzing:false,
     prevLvl:null,_countdown:null,lastFingerprint:'',analysis:null,analysisTime:null,genSteps:null,genError:null,
     lastScoreFP:'',lastStatsFP:'',staleCount:0,dataFreshness:'FRESH',sonnetIndicators:null,
-    prediction:null, clutchData:null, clutchTier:3, oddsData:null, oddsAll:null, trackingData:null, enriching:false, evCollapsed:true, edgeHistory:[]};
+    prediction:null, clutchData:null, clutchTier:3, oddsData:null, oddsAll:null, trackingData:null, enriching:false, evCollapsed:false, edgeHistory:[]};
   // Auto-distribute global clutch data if available (uploaded before game selected)
   if(globalClutchData?.teams){
     const hA = game.home?.alias||'', aA = game.away?.alias||'';
