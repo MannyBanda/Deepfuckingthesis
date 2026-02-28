@@ -520,7 +520,42 @@ async function fetchSummary(game){
     game.period = (data.periods||[]).length;
     game.clock = data.clock || '';
     cs.lastUp = new Date();
-    addLog(game.id,'OK — SR summary loaded',true);
+
+    // ── STALENESS DETECTION ──
+    // Separate score fingerprint from stats fingerprint
+    const scoreFP = [data.home?.points, data.away?.points, (data.periods||[]).length, data.clock].join('|');
+    const hs = data.home?.statistics||{}, as = data.away?.statistics||{};
+    const statsFP = [
+      hs.turnovers, as.turnovers, hs.steals, as.steals,
+      hs.field_goals_made, as.field_goals_made, hs.field_goals_att, as.field_goals_att,
+      hs.assists, as.assists, hs.offensive_rebounds, as.offensive_rebounds,
+      hs.free_throws_att, as.free_throws_att, hs.blocks, as.blocks,
+      hs.points_in_the_paint, as.points_in_the_paint,
+    ].join('|');
+
+    const scoreChanged = scoreFP !== cs.lastScoreFP;
+    const statsChanged = statsFP !== cs.lastStatsFP;
+
+    if(scoreChanged && !statsChanged && cs.lastStatsFP){
+      cs.staleCount = (cs.staleCount||0) + 1;
+      if(cs.staleCount >= 2){
+        // Stats frozen for 2+ polls while score changed — SR data is stale
+        cs.dataFreshness = 'STALE';
+        addLog(game.id, '⚠ STALE: score updated but stats frozen for '+cs.staleCount+' polls — trying BDL', false);
+        return fetchBdlFallback(game, 'SR data stale (stats frozen '+cs.staleCount+' polls)');
+      } else {
+        cs.dataFreshness = 'WATCH';
+        addLog(game.id, '⚠ Stats unchanged despite score change (poll '+cs.staleCount+')', false);
+      }
+    } else if(statsChanged){
+      cs.staleCount = 0;
+      cs.dataFreshness = 'FRESH';
+    }
+    cs.lastScoreFP = scoreFP;
+    cs.lastStatsFP = statsFP;
+    // ── END STALENESS DETECTION ──
+
+    addLog(game.id,'OK — SR summary loaded'+(cs.dataFreshness==='WATCH'?' [stats lag]':''),true);
 
     // Check if data changed meaningfully
     const fp = fingerprint(data);
@@ -638,6 +673,16 @@ async function triggerAnalysis(game){
     const score = (game.awayPoints||0)+'–'+(game.homePoints||0);
     const isBDL = game.dataSource==='BDL';
     const dataSourceNote = isBDL ? '\n\nDATA SOURCE: BDL FALLBACK (PARTIAL)\nUnavailable: T4 Foul Gate | T7 Closing Lineup | I1 chaos layer | at-rim splits\nAll five indicators computable but with reduced sub-layer coverage.' : '';
+    const freshnessNote = cs.dataFreshness==='STALE' ? '\n⚠ DATA FRESHNESS: STALE — stats may lag behind live score.' : cs.dataFreshness==='WATCH' ? '\n⚠ DATA FRESHNESS: WATCH — possible stats delay.' : '';
+
+    // Include dashboard computed scores so Sonnet can address divergences
+    const dashInd = computeAny(game);
+    let dashNote = '';
+    if(dashInd){
+      dashNote = `\n\nDASHBOARD COMPUTED SCORES (simplified math — note any divergences in your analysis):
+I1:${dashInd.I1.score} (${dashInd.I1.leader}) I2:${dashInd.I2.score} (${dashInd.I2.leader}) I3:${dashInd.I3.score} (${dashInd.I3.leader}) I4:${dashInd.I4.score} (${dashInd.I4.leader}) I5:${dashInd.I5.score} (${dashInd.I5.leader})
+Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${dashInd.dataQuality}`;
+    }
 
     // Send whichever data source is active
     const summaryPayload = isBDL ? game.bdlData : game.summary;
@@ -647,7 +692,7 @@ async function triggerAnalysis(game){
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
         summaryData: summaryPayload,
-        thesis: thesis + dataSourceNote,
+        thesis: thesis + dataSourceNote + freshnessNote + dashNote,
         homeTeam: game.home?.alias||game.home?.name||'HOME',
         awayTeam: game.away?.alias||game.away?.name||'AWAY',
         period: periodLabel,
@@ -659,12 +704,84 @@ async function triggerAnalysis(game){
     cs.analysis = data.analysis;
     cs.analysisUsage = data.usage;
     cs.analysisTime = new Date();
+
+    // Parse Sonnet's indicator scores to drive dashboard
+    const hAlias = game.home?.alias||'HOME', aAlias = game.away?.alias||'AWAY';
+    const parsed = parseSonnetScores(data.analysis, hAlias, aAlias);
+    if(parsed){
+      cs.sonnetIndicators = parsed;
+      console.log('Sonnet scores parsed:', parsed.controlTeam, parsed.score.toFixed(2));
+    } else {
+      console.warn('Could not parse Sonnet scores — dashboard using compute()');
+    }
+
     updateAnalysisUI(game.id, 'ready');
+    renderCard(game); // re-render to update indicators with Sonnet scores
   }catch(e){
     cs.analysisError = e.message;
     updateAnalysisUI(game.id, 'error');
   }finally{
     cs.analyzing = false;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SONNET SCORE PARSER — extracts structured scores from analysis text
+// ══════════════════════════════════════════════════════════════════════════════
+function parseSonnetScores(text, homeAlias, awayAlias){
+  if(!text) return null;
+  try{
+    const ind = {};
+    const iMap = {
+      'I1':{weight:0.25, nm:'POSSESS/TRANS'},
+      'I2':{weight:0.25, nm:'RIM/FOUL'},
+      'I3':{weight:0.20, nm:'SHOT QUALITY'},
+      'I4':{weight:0.20, nm:'LINEUP INTEG'},
+      'I5':{weight:0.10, nm:'TEMPO/EFF'},
+    };
+    for(const [key, meta] of Object.entries(iMap)){
+      const rx = new RegExp(key+'[^:]*:\\s*(\\S+)\\s+(1\\.0|0\\.5|0\\.0)\\s*[—–-]\\s*(.+)', 'i');
+      const m = text.match(rx);
+      if(m){
+        const team = m[1].replace(/[^A-Za-z]/g,'').toUpperCase();
+        const score = parseFloat(m[2]);
+        const isHome = team === homeAlias.toUpperCase() || team.includes(homeAlias.toUpperCase().substring(0,3));
+        const homeScore = isHome ? score : (score===1?0:score===0?1:0.5);
+        ind[key] = {
+          score: homeScore,
+          leader: m[1],
+          detail: m[3].trim(),
+          sonnet: true,
+        };
+      }
+    }
+    if(Object.keys(ind).length < 3) return null;
+
+    for(const key of Object.keys(iMap)){
+      if(!ind[key]) ind[key] = {score:0.5, leader:'EVEN', detail:'(not parsed from Sonnet)', sonnet:false};
+    }
+
+    const W = {I1:0.25, I2:0.25, I3:0.20, I4:0.20, I5:0.10};
+    const raw = ind.I1.score*W.I1 + ind.I2.score*W.I2 + ind.I3.score*W.I3 + ind.I4.score*W.I4 + ind.I5.score*W.I5;
+    const controlHome = raw >= 0.5;
+    const score = controlHome ? raw : 1 - raw;
+    const controlTeam = controlHome ? homeAlias : awayAlias;
+
+    const trajMatch = text.match(/TRAJECTORY:\s*(\S+)\s*[—–-]\s*(\d+)\/(\d+)/i);
+    const trajLean = trajMatch ? trajMatch[1] : 'NEUTRAL';
+    const trajCount = trajMatch ? parseInt(trajMatch[2]) : 0;
+    const trajTotal = trajMatch ? parseInt(trajMatch[3]) : 0;
+
+    return {
+      I1:ind.I1, I2:ind.I2, I3:ind.I3, I4:ind.I4, I5:ind.I5,
+      score, controlTeam,
+      dataQuality: 'SONNET',
+      traj: {signals:[], lean:trajLean, count:trajCount, total:trajTotal, tooEarly:false},
+      source: 'sonnet',
+    };
+  }catch(e){
+    console.warn('Sonnet score parse failed:', e.message);
+    return null;
   }
 }
 
@@ -1251,7 +1368,7 @@ function hideAlert(){document.getElementById('abar').className='abar';}
 
 function checkAlert(game){
   const cs=cardState[game.id];if(!cs)return;
-  const ind=computeAny(game);if(!ind)return;
+  const ind=cs.sonnetIndicators||computeAny(game);if(!ind)return;
   const v=getVerdict(ind.score);
   if(v.lvl&&v.lvl!==cs.prevLvl)
     showAlert(v.lvl,ind.controlTeam+' '+v.label+' — '+(game.away?.alias||'')+'@'+(game.home?.alias||''));
@@ -1335,7 +1452,8 @@ function crossRef(parsed,ind){
 function mountCard(game){
   const id=game.id;
   cardState[id]={logs:[],lastUp:null,editing:false,generating:false,analyzing:false,
-    prevLvl:null,_countdown:null,lastFingerprint:'',analysis:null,analysisTime:null,genSteps:null,genError:null};
+    prevLvl:null,_countdown:null,lastFingerprint:'',analysis:null,analysisTime:null,genSteps:null,genError:null,
+    lastScoreFP:'',lastStatsFP:'',staleCount:0,dataFreshness:'FRESH',sonnetIndicators:null};
   const div=document.createElement('div');
   div.id='card-'+id;
   document.getElementById('grid').appendChild(div);
@@ -1350,7 +1468,13 @@ function renderCard(game){
   if(!cs||cs.editing) return;
   const el=document.getElementById('card-'+id);
   if(!el)return;
-  const state=getState(game), ind=computeAny(game), v=ind?getVerdict(ind.score):null;
+  const state=getState(game), rawInd=computeAny(game);
+  // Prefer Sonnet indicators when available, fall back to compute()
+  const ind = cs.sonnetIndicators || rawInd;
+  const v=ind?getVerdict(ind.score):null;
+  // Count indicators won outright (1.0) by control team
+  const indWon = ind ? [ind.I1,ind.I2,ind.I3,ind.I4,ind.I5].filter(d=>d.score===1).length : 0;
+  const indTotal = 5;
   const thesis=theses[id]||'', p=parseThesis(thesis);
   const xrefs=ind&&state!=='PRE'?crossRef(p,ind):[];
   const hA=game.home?.alias||'HOME', aA=game.away?.alias||'AWAY';
@@ -1382,11 +1506,11 @@ function renderCard(game){
   if(state!=='PRE'&&ind){
     html+=`
     <div class="ctrl-bar">
-      <div class="vrd" style="color:${v.color};border-color:${v.color};background:${v.bg}">${v.label}</div>
+      <div class="vrd" style="color:${v.color};border-color:${v.color};background:${v.bg}">${v.label} (${indWon}/${indTotal})</div>
       <div><div class="cl">CONTROL</div><div class="ct">${esc(ind.controlTeam)}</div></div>
       <div class="bw"><div class="bt2"><div class="bf" style="width:${ind.score*100}%;background:${v.color}"></div></div></div>
       <div class="cn" style="color:${v.color}">${ind.score.toFixed(2)}</div>
-      <span class="dq" style="${ind.dataQuality==='PARTIAL'?'color:var(--yellow);border-color:var(--yellow)':''}">${ind.dataQuality}</span>
+      <span class="dq" style="${ind.dataQuality==='PARTIAL'?'color:var(--yellow);border-color:var(--yellow)':ind.dataQuality==='SONNET'?'color:#a78bfa;border-color:#a78bfa':''}">${ind.dataQuality==='SONNET'?'SONNET':ind.dataQuality}${ind.traj&&!ind.traj.tooEarly?' ('+ind.traj.count+'/'+ind.traj.total+')':''}</span>
     </div>
     <div class="inds">
     ${[{id:'I1',nm:'POSSESS/TRANS',wt:25,d:ind.I1},{id:'I2',nm:'RIM/FOUL',wt:25,d:ind.I2},
@@ -1396,30 +1520,36 @@ function renderCard(game){
         <span class="ii">${iid}</span><span class="in">${nm}</span><span class="iw">${wt}%</span>
         <div class="pip ${d.score===1?'pw':d.score===.5?'pd':'pl'}"></div>
         <span class="il" style="color:${d.score===1?'var(--green)':d.score===.5?'var(--yellow)':'var(--red)'}">${esc(d.leader)}</span>
+        ${d.sonnet?'<span style="color:#a78bfa;font-size:5px;margin-left:2px">◈</span>':''}
         <span class="id">${esc(d.detail)}</span>
       </div>`).join('')}
     </div>
     <div class="traj">
-      <div class="th">TRAJECTORY — ${ind.dataQuality==='FULL'?'8/8 signals (FULL)':'6/8 signals (PARTIAL — T4,T7 unavail)'}
+      <div class="th">TRAJECTORY — ${ind.dataQuality==='SONNET'?'Sonnet-scored':ind.dataQuality==='FULL'?'8/8 signals (FULL)':'6/8 signals (PARTIAL — T4,T7 unavail)'}
         ${!ind.traj.tooEarly?`<span class="tl" style="color:${ind.traj.lean==='NEUTRAL'?'var(--t3)':'var(--amber)'};border-color:${ind.traj.lean==='NEUTRAL'?'var(--b2)':'var(--amber)'}">${esc(ind.traj.lean)}${ind.traj.total>0?' '+ind.traj.count+'/'+ind.traj.total:''}</span>`:''}
       </div>
       ${ind.traj.tooEarly
         ?'<div style="font-size:6px;color:var(--t3)">Q1 — trajectory check begins Q2</div>'
-        :ind.traj.signals.map(s=>`<div class="ts"><span class="tk" style="color:${s.color}">${s.key}</span><span class="tt" style="color:${s.color==='#3e3e48'?'var(--t3)':s.color}">${esc(s.text)}</span></div>`).join('')}
+        :ind.traj.signals.length>0
+          ?ind.traj.signals.map(s=>`<div class="ts"><span class="tk" style="color:${s.color}">${s.key}</span><span class="tt" style="color:${s.color==='#3e3e48'?'var(--t3)':s.color}">${esc(s.text)}</span></div>`).join('')
+          :(rawInd&&rawInd.traj&&!rawInd.traj.tooEarly
+            ?rawInd.traj.signals.map(s=>`<div class="ts"><span class="tk" style="color:${s.color}">${s.key}</span><span class="tt" style="color:${s.color==='#3e3e48'?'var(--t3)':s.color}">${esc(s.text)}</span></div>`).join('')
+            :'<div style="font-size:6px;color:var(--t3)">See Sonnet analysis for trajectory detail</div>')}
     </div>`;
 
     // Sonnet Analysis section
+    const analyzeBtn = state==='LIVE'&&!cs.analyzing ? `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;" onclick="triggerAnalysis(games.find(g=>g.id==='${id}'))">⚡ ANALYZE</button>` : '';
     html+=`<div class="analysis" id="analysis-${id}">`;
     if(cs.analysis){
       const usage=cs.analysisUsage;
       const cost=usage?((usage.input_tokens*3+usage.output_tokens*15)/1000000).toFixed(4):'?';
-      html+=`<div class="analysis-hdr">SONNET ANALYSIS <span class="analysis-cost">~$${cost} · ${cs.analysisTime?.toLocaleTimeString()||''}</span></div><div class="analysis-body">${esc(cs.analysis)}</div>`;
+      html+=`<div class="analysis-hdr">SONNET ANALYSIS ${analyzeBtn}<span class="analysis-cost">~$${cost} · ${cs.analysisTime?.toLocaleTimeString()||''}</span></div><div class="analysis-body">${esc(cs.analysis)}</div>`;
     } else if(cs.analyzing){
       html+=`<div class="analysis-loading"><div class="spin"></div> Sonnet analyzing…</div>`;
     } else if(game.period<2){
-      html+=`<div style="font-size:6px;color:var(--t3)">Analysis activates Q2+ on data change</div>`;
+      html+=`<div style="font-size:6px;color:var(--t3)">Analysis activates Q2+ on data change ${analyzeBtn}</div>`;
     } else {
-      html+=`<div style="font-size:6px;color:var(--t3)">Awaiting meaningful data change…</div>`;
+      html+=`<div style="font-size:6px;color:var(--t3)">Awaiting meaningful data change… ${analyzeBtn}</div>`;
     }
     html+=`</div>`;
   }
@@ -1466,7 +1596,11 @@ function renderCard(game){
   if(cs.logs.length){
     html+=`<div class="log">${cs.logs.map(l=>`<div class="${l.ok?'ok':'er'}">${l.t} ${esc(l.msg)}</div>`).join('')}</div>`;
   }
-  if(cs.lastUp) html+=`<div class="foot">↻ ${cs.lastUp.toLocaleTimeString()} · ${pollInterval/1000}s · ${game.dataSource==='BDL'?'<span style="color:var(--yellow)">BDL FALLBACK</span>':'SR'}</div>`;
+  if(cs.lastUp){
+    const srcLabel = game.dataSource==='BDL'?'<span style="color:var(--yellow)">BDL</span>':'SR';
+    const freshLabel = cs.dataFreshness==='STALE'?' · <span style="color:var(--red)">STALE</span>':cs.dataFreshness==='WATCH'?' · <span style="color:var(--yellow)">STATS LAG</span>':'';
+    html+=`<div class="foot">↻ ${cs.lastUp.toLocaleTimeString()} · ${pollInterval/1000}s · ${srcLabel}${freshLabel}</div>`;
+  }
 
   el.innerHTML=html;
 
