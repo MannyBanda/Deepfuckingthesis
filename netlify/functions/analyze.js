@@ -23,7 +23,7 @@ CRITICAL RULES:
 
 2. TEAM QUALITY MATTERS: A bad team (bottom-12, missing stars) leading a good team (top-12, full strength) is almost always variance. The spread tells you what the market expects. If you disagree by 30%+, re-examine.
 
-3. MIP IS PRE-COMPUTED: MIP values are provided per team. Edge = YOUR FWP for the predicted winner MINUS that SAME team's MIP. Example: If you predict NOP wins with FWP 75% and NOP's MIP is 97%, Edge = 75% - 97% = -22% (COUNTER-SIGNAL). Do NOT subtract the losing team's MIP.
+3. EDGE IS COMPUTED CLIENT-SIDE: Just output your FWP accurately. The dashboard computes Edge from odds data. You may still reference the MIP values for context (e.g., "market prices NOP at 94%") but do NOT compute edge yourself.
 
 4. COHERENCE CHECK: Your prediction MUST match your sustainability assessment. If you flag UNSUSTAINABLE, you cannot recommend entry on that team.
 
