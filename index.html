@@ -1085,14 +1085,11 @@ async function handleClutchUpload(input){
     status.textContent = '⏳ Compressing...';
     const {base64, mediaType} = await compressImage(file, 1600, 0.82);
 
-    // Collect active team abbreviations from selected games
+    // Collect all team abbreviations from the full day's slate
     const activeTeams = [];
-    for(const gid of selIds){
-      const g = games.find(x=>x.id===gid);
-      if(g){
-        if(g.home?.alias) activeTeams.push(g.home.alias);
-        if(g.away?.alias) activeTeams.push(g.away.alias);
-      }
+    for(const g of games){
+      if(g.home?.alias) activeTeams.push(g.home.alias);
+      if(g.away?.alias) activeTeams.push(g.away.alias);
     }
 
     // Send to clutch-ocr function with team filter
@@ -1158,7 +1155,6 @@ function distributeClutchToCards(){
   // Debug: show what was extracted vs what games need
   const neededAliases = [];
   for(const game of games){
-    if(!selIds.includes(game.id)) continue;
     if(game.home?.alias) neededAliases.push(game.home.alias);
     if(game.away?.alias) neededAliases.push(game.away.alias);
   }
