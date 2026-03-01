@@ -260,7 +260,8 @@ input,textarea,select{font-size:16px!important;}
       <button class="cbtn freq" onclick="setFreq(60)" id="f60">60s</button>
       <button class="cbtn freq on" onclick="setFreq(90)" id="f90">90s</button>
     </div>
-    <button class="cbtn" onclick="clearTheses()">CLEAR</button>
+    <button class="cbtn" onclick="clearTheses()">CLR THESIS</button>
+    <button class="cbtn" onclick="clearMarketCache()">CLR MKT</button>
     <span class="cml"><span id="game-count">0</span> games</span>
   </div>
 
@@ -294,6 +295,11 @@ const FN = '/.netlify/functions/';
 let games = [], selIds = [], paused = false, pollTimer = null, alertTimer = null;
 let pollInterval = 90000; // default 90s
 const theses = JSON.parse(localStorage.getItem('nba4:theses')||'{}');
+const cachedClutch = JSON.parse(localStorage.getItem('nba4:clutch')||'{}');
+const cachedOdds = JSON.parse(localStorage.getItem('nba4:odds')||'{}');
+const cachedOddsHistory = JSON.parse(localStorage.getItem('nba4:oddsHist')||'{}');
+function persistClutch(id,cs){cachedClutch[id]={data:cs.clutchData,tier:cs.clutchTier};localStorage.setItem('nba4:clutch',JSON.stringify(cachedClutch));}
+function persistOdds(id,cs){cachedOdds[id]=cs.oddsData;cachedOddsHistory[id]=cs.oddsHistory;localStorage.setItem('nba4:odds',JSON.stringify(cachedOdds));localStorage.setItem('nba4:oddsHist',JSON.stringify(cachedOddsHistory));}
 const cardState = {};
 
 // BDL fallback state
@@ -572,13 +578,20 @@ async function fetchSummary(game){
     game.homePoints = data.home?.points ?? 0;
     game.awayPoints = data.away?.points ?? 0;
     game.status = data.status;
-    game.period = (data.periods||[]).length;
+    game.period = data.quarter || (data.home?.periods||[]).length || 0;
     game.clock = data.clock || '';
+    // Build merged periods array for indicator use (SR nests under home/away)
+    if(!data.periods && data.home?.periods){
+      data.periods = (data.home.periods||[]).map((hp,i)=>{
+        const ap = (data.away?.periods||[])[i]||{};
+        return {number:hp.number||i+1, home_points:hp.points||0, away_points:ap.points||0};
+      });
+    }
     cs.lastUp = new Date();
 
     // ── STALENESS DETECTION ──
     // Separate score fingerprint from stats fingerprint
-    const scoreFP = [data.home?.points, data.away?.points, (data.periods||[]).length, data.clock].join('|');
+    const scoreFP = [data.home?.points, data.away?.points, game.period, data.clock].join('|');
     const hs = data.home?.statistics||{}, as = data.away?.statistics||{};
     const statsFP = [
       hs.turnovers, as.turnovers, hs.steals, as.steals,
@@ -701,7 +714,7 @@ function fingerprint(summary){
   const h = summary.home?.statistics||{}, a = summary.away?.statistics||{};
   return [
     summary.home?.points, summary.away?.points,
-    (summary.periods||[]).length,
+    summary.quarter || (summary.periods||[]).length,
     h.turnovers, a.turnovers,
     h.steals, a.steals,
     h.offensive_rebounds, a.offensive_rebounds,
@@ -766,7 +779,10 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
         trackingData: cs.trackingData || null,
       })
     });
-    if(!resp.ok) throw new Error('Analysis failed: '+resp.status);
+    if(!resp.ok){
+      const errData = await resp.json().catch(()=>({error:'HTTP '+resp.status}));
+      throw new Error(errData.error || 'Analysis failed: '+resp.status);
+    }
     const data = await resp.json();
     cs.analysis = data.analysis;
     cs.analysisUsage = data.usage;
@@ -842,6 +858,7 @@ function saveClutch(gameId){
     };
     cs.clutchTier = 1;
   }
+  persistClutch(gameId, cs);
   const game = games.find(g=>g.id===gameId);
   if(game) renderCard(game);
 }
@@ -878,6 +895,7 @@ function saveOdds(gameId){
   if(!hML && !hSpread){cs.oddsData=null;} else {
     cs.oddsData = {homeSpread:hSpread, homeML:hML, awayML:aML, total:total};
   }
+  persistOdds(gameId, cs);
   const game = games.find(g=>g.id===gameId);
   if(game) renderCard(game);
 }
@@ -923,6 +941,7 @@ async function enrichFromBDL(gameId){
       if(!cs.clutchData || cs.clutchData.tier !== 1){
         cs.clutchData = data.clutch;
         cs.clutchTier = 2;
+        persistClutch(gameId, cs);
       }
     }
 
@@ -943,6 +962,7 @@ async function enrichFromBDL(gameId){
       }
       cs.oddsData = newOdds;
       if(data.oddsAll) cs.oddsAll = data.oddsAll;
+      persistOdds(gameId, cs);
     }
 
     // Store tracking data for sustainability scoring
@@ -1137,6 +1157,7 @@ function distributeClutchToCards(){
         } : (cs.clutchData?.away || {}),
       };
       cs.clutchTier = 1;
+      persistClutch(game.id, cs);
       distributed++;
       addLog(game.id, `📋 L15 clutch loaded: ${hClutch?hA+' NetRtg '+hClutch.netRtg:''}${hClutch&&aClutch?' / ':''}${aClutch?aA+' NetRtg '+aClutch.netRtg:''}`, true);
     }
@@ -1451,6 +1472,7 @@ async function generateThesis(gameId){
                 if(cs.oddsHistory.length > 20) cs.oddsHistory = cs.oddsHistory.slice(-20);
               }
               cs.oddsData = {homeSpread:String(spread), homeML:String(hML), awayML:String(aML), total:String(total), time:new Date().toLocaleTimeString()};
+              persistOdds(gameId, cs);
               console.log('BDL odds auto-populated:', cs.oddsData);
             }
           }
@@ -1998,6 +2020,7 @@ function renderGrid(){
 // ── Thesis helpers ────────────────────────────────────────────────────────
 function saveThesis(gameId,text){theses[gameId]=text;localStorage.setItem('nba4:theses',JSON.stringify(theses));}
 function clearTheses(){if(!confirm('Clear all theses?'))return;Object.keys(theses).forEach(k=>delete theses[k]);localStorage.removeItem('nba4:theses');games.filter(g=>selIds.includes(g.id)).forEach(g=>renderCard(g));}
+function clearMarketCache(){if(!confirm('Clear all cached clutch + odds data?'))return;Object.keys(cachedClutch).forEach(k=>delete cachedClutch[k]);Object.keys(cachedOdds).forEach(k=>delete cachedOdds[k]);Object.keys(cachedOddsHistory).forEach(k=>delete cachedOddsHistory[k]);localStorage.removeItem('nba4:clutch');localStorage.removeItem('nba4:odds');localStorage.removeItem('nba4:oddsHist');for(const id of selIds){const cs=cardState[id];if(cs){cs.clutchData=null;cs.clutchTier=3;cs.oddsData=null;cs.oddsHistory=[];}}games.filter(g=>selIds.includes(g.id)).forEach(g=>renderCard(g));}
 function parseThesis(t){
   if(!t)return{lean:null,entry:null,pass:null,watches:[],flags:[]};
   const r={lean:null,entry:null,pass:null,watches:[],flags:[]};
@@ -2035,7 +2058,20 @@ function mountCard(game){
     prevLvl:null,_countdown:null,lastFingerprint:'',analysis:null,analysisTime:null,genSteps:null,genError:null,
     lastScoreFP:'',lastStatsFP:'',staleCount:0,dataFreshness:'FRESH',sonnetIndicators:null,
     prediction:null, clutchData:null, clutchTier:3, oddsData:null, oddsAll:null, oddsHistory:[], trackingData:null, enriching:false, enrichDone:false, evCollapsed:false, edgeHistory:[]};
-  // Auto-distribute global clutch data if available (uploaded before game selected)
+  // Restore cached clutch data from localStorage
+  if(cachedClutch[id]){
+    const cs = cardState[id];
+    cs.clutchData = cachedClutch[id].data;
+    cs.clutchTier = cachedClutch[id].tier || 2;
+    addLog(id, '📋 Clutch restored from cache (Tier '+cs.clutchTier+')', true);
+  }
+  // Restore cached odds from localStorage
+  if(cachedOdds[id]){
+    cardState[id].oddsData = cachedOdds[id];
+    cardState[id].oddsHistory = cachedOddsHistory[id] || [];
+    addLog(id, '📋 Odds restored from cache', true);
+  }
+  // Auto-distribute global clutch data if available (uploaded before game selected — overrides cache)
   if(globalClutchData?.teams){
     const hA = game.home?.alias||'', aA = game.away?.alias||'';
     const hC = globalClutchData.teams[hA], aC = globalClutchData.teams[aA];
@@ -2047,6 +2083,7 @@ function mountCard(game){
         away: aC ? { netRtg:aC.netRtg, offRtg:aC.offRtg, defRtg:aC.defRtg, gp:aC.gp, w:aC.w, l:aC.l, wl:aC.wl, efg:aC.efg, ts:aC.ts, pace:aC.pace, pie:aC.pie, tovPct:aC.tovPct, orebPct:aC.orebPct, drebPct:aC.drebPct, astRatio:aC.astRatio } : {},
       };
       cs.clutchTier = 1;
+      persistClutch(id, cs);
       addLog(id, `📋 L15 clutch auto-loaded from OCR`, true);
     }
   }
