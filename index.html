@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#07070a">
-<title>NBA Control v4.0</title>
+<title>NBA Control v5.0</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
@@ -104,10 +104,10 @@ input,textarea,select{font-size:16px!important;}
 .pip{width:5px;height:5px;border-radius:1px;flex-shrink:0;}
 .pw{background:#00ff88;}.plw{background:#a8ff78;}.pd{background:var(--yellow);}.pll{background:#ff8c42;}.pl{background:var(--red);}
 .il{font-size:7px;font-weight:600;width:26px;flex-shrink:0;}
-.id{font-size:6px;color:var(--t3);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.id{font-size:6px;color:var(--t2);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 
 .traj{padding:6px 11px;border-bottom:1px solid var(--b1);}
-.th{font-size:6px;color:var(--t3);letter-spacing:1.5px;text-transform:uppercase;display:flex;align-items:center;margin-bottom:3px;gap:4px;flex-wrap:wrap;}
+.th{font-size:6px;color:var(--t2);letter-spacing:1.5px;text-transform:uppercase;display:flex;align-items:center;margin-bottom:3px;gap:4px;flex-wrap:wrap;}
 .tl{font-size:6px;font-weight:600;letter-spacing:1px;padding:1px 5px;border:1px solid;margin-left:auto;}
 .ts{display:flex;align-items:flex-start;gap:3px;padding:2px 0;}
 .tk{font-size:6px;font-weight:600;width:16px;flex-shrink:0;padding-top:1px;}
@@ -118,7 +118,49 @@ input,textarea,select{font-size:16px!important;}
 .analysis-hdr{font-size:6px;color:var(--green);letter-spacing:1.5px;text-transform:uppercase;display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;}
 .analysis-body{font-size:7px;color:var(--t2);line-height:1.7;font-family:var(--sans);white-space:pre-wrap;word-break:break-word;}
 .analysis-loading{font-size:7px;color:var(--t3);display:flex;align-items:center;gap:6px;}
-.analysis-cost{font-size:5px;color:var(--t3);}
+.analysis-cost{font-size:5px;color:var(--t2);}
+
+/* Decision View */
+.dv{padding:8px 11px;border-bottom:1px solid var(--b1);background:rgba(167,139,250,.04);}
+.dv-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px;}
+.dv-row:last-child{margin-bottom:0;}
+.dv-label{font-size:5px;color:var(--t2);letter-spacing:1.5px;text-transform:uppercase;width:56px;flex-shrink:0;}
+.dv-val{font-size:9px;font-weight:600;}
+.dv-sub{font-size:6px;color:var(--t2);}
+.dv-tag{font-size:6px;letter-spacing:1px;padding:1px 5px;border:1px solid;white-space:nowrap;}
+.dv-pred{font-size:7px;color:var(--t1);font-family:var(--sans);line-height:1.5;padding:4px 0 0;}
+.dv-hdr{font-size:6px;color:#a78bfa;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:5px;display:flex;align-items:center;justify-content:space-between;}
+
+/* Evidence toggle */
+.ev-toggle{font-size:6px;color:var(--t2);letter-spacing:1.5px;text-transform:uppercase;padding:5px 11px;border-bottom:1px solid var(--b1);cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none;-webkit-user-select:none;}
+.ev-toggle:hover{color:var(--t2);background:rgba(255,255,255,.02);}
+.ev-toggle .arr{transition:transform .2s;display:inline-block;}
+.ev-toggle.open .arr{transform:rotate(90deg);}
+.ev-body{overflow:hidden;transition:max-height .3s ease;}
+.ev-body.collapsed{max-height:0!important;overflow:hidden;}
+
+/* Data inputs (clutch + odds) */
+.data-inputs{padding:6px 11px;border-bottom:1px solid var(--b1);background:rgba(245,166,42,.03);}
+.di-hdr{font-size:6px;color:var(--amber);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px;display:flex;align-items:center;justify-content:space-between;}
+.di-row{display:flex;align-items:center;gap:4px;margin-bottom:3px;flex-wrap:wrap;}
+.di-lbl{font-size:6px;color:var(--t2);width:50px;flex-shrink:0;}
+.di-input{background:var(--s2);border:1px solid var(--b2);color:var(--t1);font-family:var(--mono);font-size:6px;padding:2px 3px;width:56px;outline:none;-webkit-appearance:none;border-radius:0;text-align:center;}
+.di-input:focus{border-color:var(--amber);}
+.di-input.di-sm{font-size:5px;padding:2px 2px;}
+.di-input::placeholder{color:var(--t3);font-size:5px;}
+.di-btn{font-size:6px;letter-spacing:1px;background:none;border:1px solid var(--b2);color:var(--t2);font-family:var(--mono);padding:3px 8px;cursor:pointer;-webkit-appearance:none;border-radius:0;}
+.di-btn:hover{border-color:var(--amber);color:var(--amber);}
+.di-saved{font-size:5px;color:var(--green);margin-left:4px;}
+
+/* Clutch Upload Zone */
+.clutch-upload{display:flex;align-items:center;gap:6px;padding:6px 0;flex-wrap:wrap;}
+.cu-btn{font-size:7px;letter-spacing:1px;text-transform:uppercase;background:rgba(147,130,220,.08);border:1px dashed rgba(147,130,220,.3);color:#9382dc;font-family:var(--mono);padding:7px 12px;cursor:pointer;-webkit-appearance:none;border-radius:0;min-height:32px;transition:all .15s;}
+.cu-btn:hover{border-color:#9382dc;background:rgba(147,130,220,.15);}
+.cu-btn.active{border-color:var(--amber);color:var(--amber);background:rgba(245,166,42,.06);border-style:solid;}
+.cu-status{font-size:7px;color:var(--t3);font-family:var(--mono);}
+.cu-status.ok{color:var(--green);}
+.cu-status.err{color:var(--red);}
+.cu-badge{display:inline-flex;align-items:center;gap:3px;font-size:6px;letter-spacing:.5px;background:rgba(0,255,136,.06);border:1px solid rgba(0,255,136,.2);color:var(--green);padding:3px 8px;font-family:var(--mono);}
 
 /* Thesis xref */
 .xref{padding:6px 11px;border-bottom:1px solid var(--b1);background:rgba(245,166,42,.03);}
@@ -202,7 +244,7 @@ input,textarea,select{font-size:16px!important;}
     <div style="display:flex;align-items:center;min-width:0;">
       <span class="logo">NBA Control</span>
       <div class="pulse" id="pulse"></div>
-      <span class="hdr-sub" id="hdr-sub">LIVE · SR via Netlify · v4.0 · FULL</span>
+      <span class="hdr-sub" id="hdr-sub">LIVE · SR via Netlify · v5.0 · FULL</span>
     </div>
     <div class="hdr-r"><span id="live-count">0</span> live · <span id="sel-count">0</span>/5</div>
   </div>
@@ -218,8 +260,21 @@ input,textarea,select{font-size:16px!important;}
       <button class="cbtn freq" onclick="setFreq(60)" id="f60">60s</button>
       <button class="cbtn freq on" onclick="setFreq(90)" id="f90">90s</button>
     </div>
-    <button class="cbtn" onclick="clearTheses()">CLEAR</button>
+    <button class="cbtn" onclick="clearTheses()">CLR THESIS</button>
+    <button class="cbtn" onclick="clearMarketCache()">CLR MKT</button>
     <span class="cml"><span id="game-count">0</span> games</span>
+  </div>
+
+  <!-- Clutch Upload Zone -->
+  <div class="clutch-upload" id="clutch-zone">
+    <input type="file" id="clutch-file" accept="image/*" style="display:none" onchange="handleClutchUpload(this)">
+    <button class="cu-btn" id="cu-btn" onclick="document.getElementById('clutch-file').click()">📋 UPLOAD L15 CLUTCH</button>
+    <select id="cu-segment" style="font-size:7px;font-family:var(--mono);background:var(--s2);border:1px solid var(--b2);color:var(--t2);padding:5px;-webkit-appearance:none;border-radius:0;min-height:28px;">
+      <option value="L15">Last 15</option>
+      <option value="L10">Last 10</option>
+    </select>
+    <span class="cu-status" id="cu-status"></span>
+    <span id="cu-badge" style="display:none"></span>
   </div>
 
   <div id="loading" class="loading" style="display:none;"><div class="spin"></div> Loading schedule…</div>
@@ -240,10 +295,16 @@ const FN = '/.netlify/functions/';
 let games = [], selIds = [], paused = false, pollTimer = null, alertTimer = null;
 let pollInterval = 90000; // default 90s
 const theses = JSON.parse(localStorage.getItem('nba4:theses')||'{}');
+const cachedClutch = JSON.parse(localStorage.getItem('nba4:clutch')||'{}');
+const cachedOdds = JSON.parse(localStorage.getItem('nba4:odds')||'{}');
+const cachedOddsHistory = JSON.parse(localStorage.getItem('nba4:oddsHist')||'{}');
+function persistClutch(id,cs){cachedClutch[id]={data:cs.clutchData,tier:cs.clutchTier};localStorage.setItem('nba4:clutch',JSON.stringify(cachedClutch));}
+function persistOdds(id,cs){cachedOdds[id]=cs.oddsData;cachedOddsHistory[id]=cs.oddsHistory;localStorage.setItem('nba4:odds',JSON.stringify(cachedOdds));localStorage.setItem('nba4:oddsHist',JSON.stringify(cachedOddsHistory));}
 const cardState = {};
 
 // BDL fallback state
 const bdlGameMap = {}; // SR game ID → BDL game ID
+let globalClutchData = null; // { segment, teams: { "BOS": { netRtg, offRtg, ... }, ... }, teamCount }
 let srExhausted = false; // true when daily limit suspected
 let sr429Count = 0; // consecutive 429s across games
 
@@ -474,7 +535,7 @@ async function loadSchedule(){
       if(oa!==ob) return oa-ob;
       return new Date(a.scheduled)-new Date(b.scheduled);
     });
-    document.getElementById('date-lbl').innerHTML = 'Schedule for <span>'+d.str+'</span> (Eastern)';
+    document.getElementById('date-lbl').innerHTML = 'Schedule for <span>'+d.str+'</span> (times MST)';
     renderPills(); updateCounts();
     // Build BDL game map for fallback
     buildBdlGameMap(d.str);
@@ -517,13 +578,20 @@ async function fetchSummary(game){
     game.homePoints = data.home?.points ?? 0;
     game.awayPoints = data.away?.points ?? 0;
     game.status = data.status;
-    game.period = (data.periods||[]).length;
+    game.period = data.quarter || (data.home?.periods||[]).length || 0;
     game.clock = data.clock || '';
+    // Build merged periods array for indicator use (SR nests under home/away)
+    if(!data.periods && data.home?.periods){
+      data.periods = (data.home.periods||[]).map((hp,i)=>{
+        const ap = (data.away?.periods||[])[i]||{};
+        return {number:hp.number||i+1, home_points:hp.points||0, away_points:ap.points||0};
+      });
+    }
     cs.lastUp = new Date();
 
     // ── STALENESS DETECTION ──
     // Separate score fingerprint from stats fingerprint
-    const scoreFP = [data.home?.points, data.away?.points, (data.periods||[]).length, data.clock].join('|');
+    const scoreFP = [data.home?.points, data.away?.points, game.period, data.clock].join('|');
     const hs = data.home?.statistics||{}, as = data.away?.statistics||{};
     const statsFP = [
       hs.turnovers, as.turnovers, hs.steals, as.steals,
@@ -577,7 +645,7 @@ async function fetchSummary(game){
       if(sr429Count >= 3){
         srExhausted = true;
         addLog(game.id,'⚠ SR DAILY LIMIT — switching to BDL for session',false);
-        document.getElementById('hdr-sub').textContent = 'LIVE · BDL FALLBACK · v4.0 · PARTIAL';
+        document.getElementById('hdr-sub').textContent = 'LIVE · BDL FALLBACK · v5.0 · PARTIAL';
       }
       return fetchBdlFallback(game, e.message);
     }
@@ -646,7 +714,7 @@ function fingerprint(summary){
   const h = summary.home?.statistics||{}, a = summary.away?.statistics||{};
   return [
     summary.home?.points, summary.away?.points,
-    (summary.periods||[]).length,
+    summary.quarter || (summary.periods||[]).length,
     h.turnovers, a.turnovers,
     h.steals, a.steals,
     h.offensive_rebounds, a.offensive_rebounds,
@@ -666,26 +734,34 @@ async function triggerAnalysis(game){
   const cs = cardState[game.id];
   if(!cs || cs.analyzing) return;
   cs.analyzing = true;
-  updateAnalysisUI(game.id, 'loading');
+  renderCard(game);
   try{
     const thesis = theses[game.id]||'';
     const periodLabel = game.period ? 'Q'+game.period : '';
-    const score = (game.awayPoints||0)+'–'+(game.homePoints||0);
+    const score = (game.away?.alias||'AWAY')+' '+(game.awayPoints||0)+' - '+(game.home?.alias||'HOME')+' '+(game.homePoints||0);
     const isBDL = game.dataSource==='BDL';
     const dataSourceNote = isBDL ? '\n\nDATA SOURCE: BDL FALLBACK (PARTIAL)\nUnavailable: T4 Foul Gate | T7 Closing Lineup | I1 chaos layer | at-rim splits\nAll five indicators computable but with reduced sub-layer coverage.' : '';
     const freshnessNote = cs.dataFreshness==='STALE' ? '\n⚠ DATA FRESHNESS: STALE — stats may lag behind live score.' : cs.dataFreshness==='WATCH' ? '\n⚠ DATA FRESHNESS: WATCH — possible stats delay.' : '';
 
-    // Include dashboard computed scores so Sonnet can address divergences
+    // Include dashboard computed scores
     const dashInd = computeAny(game);
     let dashNote = '';
     if(dashInd){
-      dashNote = `\n\nDASHBOARD COMPUTED SCORES (simplified math — note any divergences in your analysis):
+      dashNote = `\n\nDASHBOARD COMPUTED SCORES (simplified math):
 I1:${dashInd.I1.score} (${dashInd.I1.leader}) I2:${dashInd.I2.score} (${dashInd.I2.leader}) I3:${dashInd.I3.score} (${dashInd.I3.leader}) I4:${dashInd.I4.score} (${dashInd.I4.leader}) I5:${dashInd.I5.score} (${dashInd.I5.leader})
 Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${dashInd.dataQuality}`;
     }
 
-    // Send whichever data source is active
     const summaryPayload = isBDL ? game.bdlData : game.summary;
+
+    // Build clutch data with tier info
+    let clutchPayload = cs.clutchData || null;
+    if(clutchPayload && !clutchPayload.tier) clutchPayload.tier = cs.clutchTier || 1;
+    // If no manual clutch data, try to build Tier 2 proxy from thesis
+    if(!clutchPayload && thesis){
+      const proxyClutch = parseThesisClutchProxy(thesis, game.home?.alias, game.away?.alias);
+      if(proxyClutch){ clutchPayload = proxyClutch; cs.clutchTier = 2; }
+    }
 
     const resp = await fetch(FN+'analyze',{
       method:'POST',
@@ -697,29 +773,55 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
         awayTeam: game.away?.alias||game.away?.name||'AWAY',
         period: periodLabel,
         score: score,
+        clutchData: clutchPayload,
+        oddsData: cs.oddsData || null,
+        edgeHistory: cs.edgeHistory.length > 0 ? cs.edgeHistory : null,
+        trackingData: cs.trackingData || null,
       })
     });
-    if(!resp.ok) throw new Error('Analysis failed: '+resp.status);
+    if(!resp.ok){
+      const errData = await resp.json().catch(()=>({error:'HTTP '+resp.status}));
+      throw new Error(errData.error || 'Analysis failed: '+resp.status);
+    }
     const data = await resp.json();
     cs.analysis = data.analysis;
     cs.analysisUsage = data.usage;
     cs.analysisTime = new Date();
 
-    // Parse Sonnet's indicator scores to drive dashboard
+    // Parse structural indicators
     const hAlias = game.home?.alias||'HOME', aAlias = game.away?.alias||'AWAY';
     const parsed = parseSonnetScores(data.analysis, hAlias, aAlias);
     if(parsed){
       cs.sonnetIndicators = parsed;
       console.log('Sonnet scores parsed:', parsed.controlTeam, parsed.score.toFixed(2));
-    } else {
-      console.warn('Could not parse Sonnet scores — dashboard using compute()');
     }
 
-    updateAnalysisUI(game.id, 'ready');
-    renderCard(game); // re-render to update indicators with Sonnet scores
+    // Parse decision/predictive layer
+    const decision = parseSonnetDecision(data.analysis);
+    if(decision){
+      cs.prediction = decision;
+      console.log('Decision parsed:', decision.conviction, decision.entry, decision.prediction);
+      // Track edge history for entry timing
+      if(decision.edgeNum !== null || decision.fwp){
+        cs.edgeHistory.push({
+          time: new Date().toLocaleTimeString(),
+          period: game.period||'?',
+          edge: decision.edge||'?',
+          edgeNum: decision.edgeNum,
+          fwp: decision.fwp||'?',
+          control: parsed?.controlTeam||'?',
+          score: ((game.away?.alias||'AWAY')+' '+(game.awayPoints||0)+'-'+(game.home?.alias||'HOME')+' '+(game.homePoints||0)),
+        });
+        // Keep last 20 entries max
+        if(cs.edgeHistory.length > 20) cs.edgeHistory = cs.edgeHistory.slice(-20);
+      }
+    }
+
+    renderCard(game);
   }catch(e){
     cs.analysisError = e.message;
-    updateAnalysisUI(game.id, 'error');
+    console.error('Analysis error:', e);
+    renderCard(game);
   }finally{
     cs.analyzing = false;
   }
@@ -728,6 +830,394 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
 // ══════════════════════════════════════════════════════════════════════════════
 // SONNET SCORE PARSER — extracts structured scores from analysis text
 // ══════════════════════════════════════════════════════════════════════════════
+
+// Clutch data save handler
+function saveClutch(gameId){
+  const cs = cardState[gameId]; if(!cs) return;
+  const g = id => document.getElementById(id)?.value?.trim();
+  const hNet = parseFloat(g('cl-h-net-'+gameId));
+  const hOff = parseFloat(g('cl-h-off-'+gameId));
+  const hDef = parseFloat(g('cl-h-def-'+gameId));
+  const hGP = g('cl-h-gp-'+gameId)||'';
+  const hWL = g('cl-h-wl-'+gameId)||'';
+  const aNet = parseFloat(g('cl-a-net-'+gameId));
+  const aOff = parseFloat(g('cl-a-off-'+gameId));
+  const aDef = parseFloat(g('cl-a-def-'+gameId));
+  const aGP = g('cl-a-gp-'+gameId)||'';
+  const aWL = g('cl-a-wl-'+gameId)||'';
+  if(isNaN(hNet) && isNaN(aNet)){cs.clutchData=null; cs.clutchTier=3;} else {
+    // Preserve enriched OCR fields if they exist
+    const prevH = cs.clutchData?.home || {};
+    const prevA = cs.clutchData?.away || {};
+    cs.clutchData = {
+      tier: 1,
+      home: {netRtg:hNet||null, offRtg:hOff||null, defRtg:hDef||null, gp:hGP, wl:hWL,
+        efg:prevH.efg, ts:prevH.ts, pace:prevH.pace, pie:prevH.pie, tovPct:prevH.tovPct, orebPct:prevH.orebPct, drebPct:prevH.drebPct, astRatio:prevH.astRatio},
+      away: {netRtg:aNet||null, offRtg:aOff||null, defRtg:aDef||null, gp:aGP, wl:aWL,
+        efg:prevA.efg, ts:prevA.ts, pace:prevA.pace, pie:prevA.pie, tovPct:prevA.tovPct, orebPct:prevA.orebPct, drebPct:prevA.drebPct, astRatio:prevA.astRatio},
+    };
+    cs.clutchTier = 1;
+  }
+  persistClutch(gameId, cs);
+  const game = games.find(g=>g.id===gameId);
+  if(game) renderCard(game);
+}
+
+// Odds data save handler
+function oddsMovement(cs){
+  if(!cs.oddsHistory || cs.oddsHistory.length===0 || !cs.oddsData) return null;
+  const open = cs.oddsHistory[0], cur = cs.oddsData;
+  function delta(curV, openV){
+    const c=parseFloat(curV), o=parseFloat(openV);
+    if(isNaN(c)||isNaN(o)) return null;
+    const d = c - o;
+    if(Math.abs(d)<0.1) return {val:'—',color:'var(--t2)',raw:0};
+    const sign = d>0?'+':'';
+    return {val:sign+d.toFixed(1), color:d>0?'var(--green)':'var(--red)', raw:d};
+  }
+  return {
+    spread: delta(cur.homeSpread, open.homeSpread),
+    homeML: delta(cur.homeML, open.homeML),
+    awayML: delta(cur.awayML, open.awayML),
+    total: delta(cur.total, open.total),
+    pulls: cs.oddsHistory.length + 1,
+    openTime: open.time || '?',
+  };
+}
+
+function saveOdds(gameId){
+  const cs = cardState[gameId]; if(!cs) return;
+  const g = id => document.getElementById(id)?.value?.trim();
+  const hSpread = g('od-hs-'+gameId)||'';
+  const hML = g('od-hml-'+gameId)||'';
+  const aML = g('od-aml-'+gameId)||'';
+  const total = g('od-tot-'+gameId)||'';
+  if(!hML && !hSpread){cs.oddsData=null;} else {
+    cs.oddsData = {homeSpread:hSpread, homeML:hML, awayML:aML, total:total};
+  }
+  persistOdds(gameId, cs);
+  const game = games.find(g=>g.id===gameId);
+  if(game) renderCard(game);
+}
+
+// Evidence View toggle
+function toggleEV(gameId){
+  const cs = cardState[gameId]; if(!cs) return;
+  cs.evCollapsed = !cs.evCollapsed;
+  const body = document.getElementById('ev-body-'+gameId);
+  const toggle = document.getElementById('ev-toggle-'+gameId);
+  if(body){ if(cs.evCollapsed){body.classList.add('collapsed');} else {body.classList.remove('collapsed');} }
+  if(toggle){ if(cs.evCollapsed){toggle.classList.remove('open');} else {toggle.classList.add('open');} }
+}
+
+// BDL Enrichment — auto-pull clutch + odds + tracking via bdl-enrich function
+async function enrichFromBDL(gameId){
+  const cs = cardState[gameId]; if(!cs) return;
+  const game = games.find(g=>g.id===gameId); if(!game) return;
+  const hA = game.home?.alias||'', aA = game.away?.alias||'';
+  if(!hA||!aA) return;
+
+  cs.enriching = true;
+  renderCard(game);
+
+  try{
+    const bdlGid = bdlGameMap[gameId] || null;
+    const resp = await fetch(FN+'bdl-enrich',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        homeTeam: hA,
+        awayTeam: aA,
+        bdlGameId: bdlGid,
+        season: 2025,
+        pulls: ['clutch','odds','tracking'],
+      })
+    });
+    if(!resp.ok) throw new Error('BDL enrich failed: '+resp.status);
+    const data = await resp.json();
+
+    // Populate clutch (Tier 2 — season-wide). Only overwrite if user hasn't set L15 (Tier 1)
+    if(data.clutch){
+      if(!cs.clutchData || cs.clutchData.tier !== 1){
+        cs.clutchData = data.clutch;
+        cs.clutchTier = 2;
+        persistClutch(gameId, cs);
+      }
+    }
+
+    // Populate odds — always update and track movement
+    if(data.odds){
+      const newOdds = {
+        homeSpread: String(data.odds.homeSpread||''),
+        homeML: String(data.odds.homeML||''),
+        awayML: String(data.odds.awayML||''),
+        total: String(data.odds.total||''),
+        vendor: data.odds.vendor,
+        time: new Date().toLocaleTimeString(),
+      };
+      // Track movement if previous odds exist
+      if(cs.oddsData && cs.oddsData.homeML){
+        cs.oddsHistory.push({...cs.oddsData, time: cs.oddsData.time || cs.lastUp?.toLocaleTimeString() || '?'});
+        if(cs.oddsHistory.length > 20) cs.oddsHistory = cs.oddsHistory.slice(-20);
+      }
+      cs.oddsData = newOdds;
+      if(data.oddsAll) cs.oddsAll = data.oddsAll;
+      persistOdds(gameId, cs);
+    }
+
+    // Store tracking data for sustainability scoring
+    if(data.tracking) cs.trackingData = data.tracking;
+
+    const srcList = (data.sources||[]).join(', ');
+    const errList = (data.errors||[]);
+    addLog(gameId, '⚡ BDL enriched: '+srcList+(errList.length?' ⚠ '+errList.length+' errors':''), errList.length===0);
+    if(errList.length) console.warn('BDL enrich partial errors:', errList);
+    cs.enrichDone = true;
+    setTimeout(()=>{ cs.enrichDone = false; const g = games.find(x=>x.id===gameId); if(g) renderCard(g); }, 3000);
+
+  }catch(e){
+    console.error('BDL enrich error:', e);
+    addLog(gameId, 'BDL enrich failed: '+e.message, false);
+  }finally{
+    cs.enriching = false;
+    renderCard(game);
+  }
+}
+
+// ── Clutch Screenshot Upload & Distribution ──
+
+// Convert any image (including HEIC) to compressed JPEG for Sonnet vision
+function compressImage(file, maxW, quality){
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let w = img.naturalWidth, h = img.naturalHeight;
+      if(w > maxW){ h = Math.round(h * maxW / w); w = maxW; }
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      const dataUrl = c.toDataURL('image/jpeg', quality);
+      const b64 = dataUrl.split(',')[1];
+      console.log(`Image compressed: ${file.name} → ${w}×${h} JPEG, ~${Math.round(b64.length*3/4/1024)}KB`);
+      res({ base64: b64, mediaType: 'image/jpeg' });
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('Image load failed — unsupported format?')); };
+    img.src = url;
+  });
+}
+
+async function handleClutchUpload(input){
+  const file = input.files?.[0];
+  if(!file) return;
+  const status = document.getElementById('cu-status');
+  const btn = document.getElementById('cu-btn');
+  const badge = document.getElementById('cu-badge');
+  const segment = document.getElementById('cu-segment')?.value || 'L15';
+
+  status.textContent = '⏳ Processing...';
+  status.className = 'cu-status';
+  btn.classList.add('active');
+  btn.textContent = '⏳ EXTRACTING...';
+  btn.disabled = true;
+
+  try{
+    // Compress image client-side to avoid Netlify function timeout
+    // iPhone screenshots can be 3-5MB; resize to max 1600px wide JPEG
+    status.textContent = '⏳ Compressing...';
+    const {base64, mediaType} = await compressImage(file, 1600, 0.82);
+
+    // Collect active team abbreviations from selected games
+    const activeTeams = [];
+    for(const gid of selIds){
+      const g = games.find(x=>x.id===gid);
+      if(g){
+        if(g.home?.alias) activeTeams.push(g.home.alias);
+        if(g.away?.alias) activeTeams.push(g.away.alias);
+      }
+    }
+
+    // Send to clutch-ocr function with team filter
+    status.textContent = '⏳ Extracting ' + activeTeams.length + ' teams...';
+    const resp = await fetch(FN+'clutch-ocr',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ image: base64, mediaType, segment, teams: activeTeams })
+    });
+
+    if(!resp.ok){
+      const err = await resp.json().catch(()=>({error:resp.statusText}));
+      throw new Error(err.error || 'OCR failed: '+resp.status);
+    }
+
+    const data = await resp.json();
+
+    if(data.error){
+      throw new Error(data.error + (data.rawText ? ' — raw: '+data.rawText.substring(0,100) : ''));
+    }
+
+    if(!data.teams || Object.keys(data.teams).length === 0){
+      throw new Error('No teams extracted from screenshot');
+    }
+
+    // Store globally
+    globalClutchData = data;
+    const count = Object.keys(data.teams).length;
+    const extractedList = Object.keys(data.teams).join(', ');
+
+    // Distribute to all active game cards
+    distributeClutchToCards();
+
+    status.textContent = `✓ ${count} teams: ${extractedList}`;
+    status.className = 'cu-status ok';
+    badge.style.display = 'inline-flex';
+    badge.className = 'cu-badge';
+    badge.textContent = `✓ ${segment} CLUTCH · ${count} teams · Tier 1`;
+
+    const tokens = data.usage ? `${data.usage.input||0}+${data.usage.output||0} tokens` : '';
+    console.log('Clutch OCR complete:', count, 'teams:', extractedList, tokens, data.teams);
+
+  }catch(e){
+    console.error('Clutch upload error:', e);
+    status.textContent = '✗ '+e.message;
+    status.className = 'cu-status err';
+  }finally{
+    btn.classList.remove('active');
+    btn.textContent = '📋 UPLOAD L15 CLUTCH';
+    btn.disabled = false;
+    // Reset file input so same file can be re-uploaded
+    input.value = '';
+  }
+}
+
+function distributeClutchToCards(){
+  if(!globalClutchData?.teams) return;
+  const teams = globalClutchData.teams;
+  const extractedKeys = Object.keys(teams);
+  let distributed = 0;
+
+  // Debug: show what was extracted vs what games need
+  const neededAliases = [];
+  for(const game of games){
+    if(!selIds.includes(game.id)) continue;
+    if(game.home?.alias) neededAliases.push(game.home.alias);
+    if(game.away?.alias) neededAliases.push(game.away.alias);
+  }
+  console.log('Clutch distribute: extracted=', extractedKeys, 'needed=', neededAliases, 
+    'missing=', neededAliases.filter(a => !teams[a]));
+
+  for(const game of games){
+    const cs = cardState[game.id];
+    if(!cs) continue;
+    const hA = game.home?.alias||'';
+    const aA = game.away?.alias||'';
+    const hClutch = teams[hA];
+    const aClutch = teams[aA];
+
+    if(hClutch || aClutch){
+      // Only upgrade if not already Tier 1 from manual entry
+      // Screenshot data IS Tier 1 (it's L15 from NBA.com)
+      cs.clutchData = {
+        tier: 1,
+        home: hClutch ? {
+          netRtg: hClutch.netRtg,
+          offRtg: hClutch.offRtg,
+          defRtg: hClutch.defRtg,
+          gp: hClutch.gp,
+          w: hClutch.w,
+          l: hClutch.l,
+          wl: hClutch.wl || (hClutch.w!=null&&hClutch.l!=null ? hClutch.w+'-'+hClutch.l : null),
+          efg: hClutch.efg,
+          ts: hClutch.ts,
+          pace: hClutch.pace,
+          pie: hClutch.pie,
+          tovPct: hClutch.tovPct,
+          orebPct: hClutch.orebPct,
+          drebPct: hClutch.drebPct,
+          astRatio: hClutch.astRatio,
+        } : (cs.clutchData?.home || {}),
+        away: aClutch ? {
+          netRtg: aClutch.netRtg,
+          offRtg: aClutch.offRtg,
+          defRtg: aClutch.defRtg,
+          gp: aClutch.gp,
+          w: aClutch.w,
+          l: aClutch.l,
+          wl: aClutch.wl || (aClutch.w!=null&&aClutch.l!=null ? aClutch.w+'-'+aClutch.l : null),
+          efg: aClutch.efg,
+          ts: aClutch.ts,
+          pace: aClutch.pace,
+          pie: aClutch.pie,
+          tovPct: aClutch.tovPct,
+          orebPct: aClutch.orebPct,
+          drebPct: aClutch.drebPct,
+          astRatio: aClutch.astRatio,
+        } : (cs.clutchData?.away || {}),
+      };
+      cs.clutchTier = 1;
+      persistClutch(game.id, cs);
+      distributed++;
+      addLog(game.id, `📋 L15 clutch loaded: ${hClutch?hA+' NetRtg '+hClutch.netRtg:''}${hClutch&&aClutch?' / ':''}${aClutch?aA+' NetRtg '+aClutch.netRtg:''}`, true);
+    }
+  }
+
+  console.log('Clutch distributed to', distributed, 'game cards');
+
+  // Re-render all visible cards
+  for(const game of games){
+    if(selIds.includes(game.id)){
+      renderCard(game);
+    }
+  }
+}
+
+// Parse clutch proxy from thesis text — extracts Comeback Score + Lead-Keep Score as Tier 2
+function parseThesisClutchProxy(thesis, homeAlias, awayAlias){
+  if(!thesis) return null;
+  try{
+    // Look for Comeback Score patterns: "Comeback Score: 6.2" or "Comeback: X.X/10"
+    const comebackMatch = thesis.match(/comeback\s*(?:score)?[:\s]+(\d+\.?\d*)\s*(?:\/\s*10)?/i);
+    const leadKeepMatch = thesis.match(/lead[- ]?keep\s*(?:score)?[:\s]+(\d+\.?\d*)\s*(?:\/\s*10)?/i);
+    // Also try to find per-team comeback/lead-keep
+    const hComebackMatch = thesis.match(new RegExp(homeAlias+'[^\\n]*comeback[:\\s]+(\\d+\\.?\\d*)', 'i')) ||
+                           thesis.match(new RegExp('comeback[^\\n]*'+homeAlias+'[:\\s]+(\\d+\\.?\\d*)', 'i'));
+    const aComebackMatch = thesis.match(new RegExp(awayAlias+'[^\\n]*comeback[:\\s]+(\\d+\\.?\\d*)', 'i')) ||
+                           thesis.match(new RegExp('comeback[^\\n]*'+awayAlias+'[:\\s]+(\\d+\\.?\\d*)', 'i'));
+    const hLeadKeepMatch = thesis.match(new RegExp(homeAlias+'[^\\n]*lead[- ]?keep[:\\s]+(\\d+\\.?\\d*)', 'i')) ||
+                           thesis.match(new RegExp('lead[- ]?keep[^\\n]*'+homeAlias+'[:\\s]+(\\d+\\.?\\d*)', 'i'));
+    const aLeadKeepMatch = thesis.match(new RegExp(awayAlias+'[^\\n]*lead[- ]?keep[:\\s]+(\\d+\\.?\\d*)', 'i')) ||
+                           thesis.match(new RegExp('lead[- ]?keep[^\\n]*'+awayAlias+'[:\\s]+(\\d+\\.?\\d*)', 'i'));
+
+    const hComeback = hComebackMatch ? parseFloat(hComebackMatch[1]) : (comebackMatch ? parseFloat(comebackMatch[1]) : null);
+    const aComeback = aComebackMatch ? parseFloat(aComebackMatch[1]) : null;
+    const hLeadKeep = hLeadKeepMatch ? parseFloat(hLeadKeepMatch[1]) : (leadKeepMatch ? parseFloat(leadKeepMatch[1]) : null);
+    const aLeadKeep = aLeadKeepMatch ? parseFloat(aLeadKeepMatch[1]) : null;
+
+    // Need at least one value to be useful
+    if(hComeback===null && aComeback===null && hLeadKeep===null && aLeadKeep===null) return null;
+
+    // Convert to NetRtg proxy: (Comeback+LeadKeep)/2 mapped to clutch-like range
+    // Score 7+ → positive NetRtg proxy, Score 5 → ~0, Score 3 → negative
+    const toProxy = (cb, lk) => {
+      if(cb===null && lk===null) return null;
+      const avg = cb!==null && lk!==null ? (cb+lk)/2 : (cb||lk);
+      return ((avg - 5) * 2).toFixed(1); // Maps 5→0, 7→+4, 3→-4
+    };
+
+    return {
+      tier: 2,
+      home: { netRtg: toProxy(hComeback, hLeadKeep), comebackScore: hComeback, leadKeepScore: hLeadKeep },
+      away: { netRtg: toProxy(aComeback, aLeadKeep), comebackScore: aComeback, leadKeepScore: aLeadKeep },
+    };
+  }catch(e){
+    console.warn('Thesis clutch proxy parse failed:', e.message);
+    return null;
+  }
+}
+
+
 function parseSonnetScores(text, homeAlias, awayAlias){
   if(!text) return null;
   try{
@@ -767,19 +1257,42 @@ function parseSonnetScores(text, homeAlias, awayAlias){
     const W = {I1:0.25, I2:0.25, I3:0.20, I4:0.20, I5:0.10};
     const raw = ind.I1.score*W.I1 + ind.I2.score*W.I2 + ind.I3.score*W.I3 + ind.I4.score*W.I4 + ind.I5.score*W.I5;
     const controlHome = raw >= 0.5;
-    const score = controlHome ? raw : 1 - raw;
-    const controlTeam = controlHome ? homeAlias : awayAlias;
+    let score = controlHome ? raw : 1 - raw;
+    let controlTeam = controlHome ? homeAlias : awayAlias;
+
+    // Prefer Sonnet's own stated control score if parseable
+    const controlMatch = text.match(/CONTROL:\s*(\S+)\s+([\d.]+)\s*[—–-]/i);
+    if(controlMatch){
+      const statedTeam = controlMatch[1];
+      const statedScore = parseFloat(controlMatch[2]);
+      if(statedScore >= 0.4 && statedScore <= 1.0){
+        controlTeam = statedTeam;
+        score = statedScore;
+      }
+    }
 
     const trajMatch = text.match(/TRAJECTORY:\s*(\S+)\s*[—–-]\s*(\d+)\/(\d+)/i);
     const trajLean = trajMatch ? trajMatch[1] : 'NEUTRAL';
-    const trajCount = trajMatch ? parseInt(trajMatch[2]) : 0;
-    const trajTotal = trajMatch ? parseInt(trajMatch[3]) : 0;
+    // Parse individual T1-T8 signal lines
+    const signalRegex = /(T[1-8])\s*[—–-]\s*([^:]+):\s*(.+)/g;
+    const parsedSignals = [];
+    let sm;
+    while((sm = signalRegex.exec(text)) !== null){
+      const key = sm[1];
+      const label = sm[2].trim();
+      const detail = sm[3].trim();
+      const isClear = /^CLEAR/i.test(detail);
+      const col = isClear ? '#3e3e48' : 'var(--amber)';
+      parsedSignals.push({key, text: label + ': ' + detail, color: col});
+    }
+    const trajCount = parsedSignals.length > 0 ? parsedSignals.filter(s => !/CLEAR/i.test(s.text)).length : (trajMatch ? parseInt(trajMatch[2]) : 0);
+    const trajTotal = trajMatch ? parseInt(trajMatch[3]) : 8;
 
     return {
       I1:ind.I1, I2:ind.I2, I3:ind.I3, I4:ind.I4, I5:ind.I5,
       score, controlTeam,
       dataQuality: 'SONNET',
-      traj: {signals:[], lean:trajLean, count:trajCount, total:trajTotal, tooEarly:false},
+      traj: {signals:parsedSignals, lean:trajLean, count:trajCount, total:trajTotal, tooEarly:false},
       source: 'sonnet',
     };
   }catch(e){
@@ -806,18 +1319,45 @@ function pipClass(score){
   return 'pl';                      // loss
 }
 
-function updateAnalysisUI(gameId, state){
-  const el = document.getElementById('analysis-'+gameId);
-  if(!el) return;
-  const cs = cardState[gameId];
-  if(state==='loading'){
-    el.innerHTML = '<div class="analysis-loading"><div class="spin"></div> Sonnet analyzing…</div>';
-  } else if(state==='ready'){
-    const usage = cs.analysisUsage;
-    const cost = usage ? ((usage.input_tokens*3+usage.output_tokens*15)/1000000).toFixed(4) : '?';
-    el.innerHTML = `<div class="analysis-hdr">SONNET ANALYSIS <span class="analysis-cost">~$${cost} · ${cs.analysisTime?.toLocaleTimeString()||''}</span></div><div class="analysis-body">${esc(cs.analysis)}</div>`;
-  } else if(state==='error'){
-    el.innerHTML = `<div style="font-size:7px;color:var(--red);">⚠ ${esc(cs.analysisError)}</div>`;
+// Parse Decision View fields from Sonnet analysis text
+function parseSonnetDecision(text){
+  if(!text) return null;
+  try{
+    const d = {};
+    // Parse EDGE line: "EDGE: +11.3% | FWP: 72.4% | MIP: 61.1%"
+    const edgeMatch = text.match(/EDGE:\s*([^\|]+)\|\s*FWP:\s*([^\|]+)\|\s*MIP:\s*(.+)/i);
+    if(edgeMatch){
+      d.edge = edgeMatch[1].trim();
+      d.fwp = edgeMatch[2].trim();
+      d.mip = edgeMatch[3].trim();
+      // Extract numeric edge
+      const edgeNum = parseFloat(d.edge.replace(/[+%]/g,''));
+      d.edgeNum = isNaN(edgeNum) ? null : edgeNum;
+    }
+    // Parse ENTRY line
+    const entryMatch = text.match(/ENTRY:\s*(OPTIMAL WINDOW|WINDOW OPEN|WINDOW CLOSING|NO WINDOW|COUNTER-SIGNAL)/i);
+    d.entry = entryMatch ? entryMatch[1] : null;
+    // Parse CONVICTION line
+    const convMatch = text.match(/CONVICTION:\s*(DOMINANT|STRONG|EARNED|CONDITIONAL|NO ENTRY)/i);
+    d.conviction = convMatch ? convMatch[1] : null;
+    // Parse Sustainability line
+    const sustMatch = text.match(/Sustainability:\s*(.+)/i);
+    d.sustainability = sustMatch ? sustMatch[1].trim() : null;
+    // Parse Team Quality line
+    const tqMatch = text.match(/Team Quality:\s*(.+)/i);
+    d.teamQuality = tqMatch ? tqMatch[1].trim() : null;
+    // Parse Clutch line
+    const clutchMatch = text.match(/Clutch:\s*(.+)/i);
+    d.clutch = clutchMatch ? clutchMatch[1].trim() : null;
+    // Parse Prediction line
+    const predMatch = text.match(/Prediction:\s*(.+)/i);
+    d.prediction = predMatch ? predMatch[1].trim() : null;
+    // Need at least prediction or conviction to be valid
+    if(!d.prediction && !d.conviction) return null;
+    return d;
+  }catch(e){
+    console.warn('Decision parse failed:', e.message);
+    return null;
   }
 }
 
@@ -854,6 +1394,7 @@ async function generateThesis(gameId){
     {label:awayAlias+' Splits(G)',status:'pending'},
     {label:homeAlias+' Splits(S)',status:'pending'},
     {label:awayAlias+' Splits(S)',status:'pending'},
+    {label:'BDL Enrichment',status:'pending'},
     {label:'Sonnet Thesis',status:'pending'},
   ];
   renderGenProgress(gameId);
@@ -907,11 +1448,51 @@ async function generateThesis(gameId){
     }catch(e){ console.warn('Cache write failed:', e.message); }
   }
 
-  // Now send to Sonnet — prompt built client-side, function is thin Anthropic proxy
+  // BDL Enrichment — try to pull odds for this game
   cs.genSteps[12].status = 'active';
   renderGenProgress(gameId);
   try{
-    const tipTime = new Date(game.scheduled).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/New_York'});
+    const bdlId = bdlGameMap[game.id];
+    if(bdlId){
+      try{
+        const oddsResp = await bdl('odds',{game_id:bdlId});
+        const oddsArr = oddsResp.data || oddsResp || [];
+        if(Array.isArray(oddsArr) && oddsArr.length > 0){
+          // Find consensus or first bookmaker
+          const book = oddsArr[0];
+          if(book){
+            const hML = book.home_team_ml || book.home_moneyline || '';
+            const aML = book.away_team_ml || book.away_moneyline || book.visitor_team_ml || '';
+            const spread = book.home_team_spread || book.home_spread || '';
+            const total = book.over_under || book.total || '';
+            if(hML || spread){
+              if(cs.oddsData && cs.oddsData.homeML){
+                cs.oddsHistory = cs.oddsHistory || [];
+                cs.oddsHistory.push({...cs.oddsData, time: cs.oddsData.time || cs.lastUp?.toLocaleTimeString() || '?'});
+                if(cs.oddsHistory.length > 20) cs.oddsHistory = cs.oddsHistory.slice(-20);
+              }
+              cs.oddsData = {homeSpread:String(spread), homeML:String(hML), awayML:String(aML), total:String(total), time:new Date().toLocaleTimeString()};
+              persistOdds(gameId, cs);
+              console.log('BDL odds auto-populated:', cs.oddsData);
+            }
+          }
+        }
+      }catch(oe){ console.warn('BDL odds pull failed (non-fatal):', oe.message); }
+    } else {
+      console.log('No BDL game ID — odds not auto-populated');
+    }
+    cs.genSteps[12].status = 'done';
+  }catch(e){
+    cs.genSteps[12].status = 'err';
+    cs.genSteps[12].error = 'optional';
+  }
+  renderGenProgress(gameId);
+
+  // Now send to Sonnet — prompt built client-side, function is thin Anthropic proxy
+  cs.genSteps[13].status = 'active';
+  renderGenProgress(gameId);
+  try{
+    const tipTime = new Date(game.scheduled).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/Phoenix'});
 
     // Trim functions to reduce prompt size
     const trimProfile = (p) => {
@@ -976,7 +1557,7 @@ async function generateThesis(gameId){
     const userPrompt = `Build a complete pre-game thesis for this NBA matchup.
 
 MATCHUP: ${awayAlias} @ ${homeAlias}
-DATE: ${getEasternDate(0).str} | TIME: ${tipTime} ET
+DATE: ${getEasternDate(0).str} | TIME: ${tipTime} MST
 VENUE: ${game.venue||'TBD'}
 
 === INJURIES ===
@@ -1026,7 +1607,7 @@ Each scored 1.0 (clear edge), 0.5 (contested), 0.0 (opponent). Control: 0.90+ DO
 Compute: Context-Adjusted Strength, Structural Identity, Shot Diet (Interior/Transition vs Perimeter/Creation vs Balanced), Win/Loss Delta, Comeback Score (0-10), Lead-Keep Score (0-10), BHV (LOW <2.5, MOD 2.5-3.5, HIGH >3.5 TO/gm), Chaos Risk (HIGH BHV + top-7 steals opp), Foul Resilience, Pythagorean check (PF^13.91/(PF^13.91+PA^13.91)), System Resilience (top-10 DEF teams with stars OUT).
 
 OUTPUT FORMAT:
-COMPACT THESIS — [AWAY] vs [HOME] | [Time] ET
+COMPACT THESIS — [AWAY] vs [HOME] | [Time] MST
 [Date] | [Venue]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 AVAILABILITY
@@ -1067,14 +1648,14 @@ WATCH
     const data = await resp.json();
     theses[gameId] = data.thesis;
     localStorage.setItem('nba4:theses', JSON.stringify(theses));
-    cs.genSteps[12].status = 'done';
+    cs.genSteps[13].status = 'done';
   }catch(e){
-    cs.genSteps[12].status = 'err';
-    cs.genSteps[12].error = e.message;
-    console.error('Thesis generation failed at step 13:', e.message, e.stack);
+    cs.genSteps[13].status = 'err';
+    cs.genSteps[13].error = e.message;
+    console.error('Thesis generation failed at step 14:', e.message, e.stack);
   }
   cs.generating = false;
-  cs.genError = cs.genSteps[12]?.status==='err' ? cs.genSteps[12].error : null;
+  cs.genError = cs.genSteps[13]?.status==='err' ? cs.genSteps[13].error : null;
   paused = wasPaused; // Resume polling state
   renderCard(game);
 }
@@ -1363,7 +1944,7 @@ function setPaused(v){
   document.getElementById('btn-live').classList.toggle('on',!v);
   document.getElementById('btn-pause').classList.toggle('on',v);
   document.getElementById('pulse').classList.toggle('off',v);
-  document.getElementById('hdr-sub').textContent=(v?'PAUSED':'LIVE')+' · SR via Netlify · v4.0 · FULL';
+  document.getElementById('hdr-sub').textContent=(v?'PAUSED':'LIVE')+' · SR via Netlify · v5.0 · FULL';
 }
 
 function setFreq(sec){
@@ -1409,7 +1990,7 @@ function renderPills(){
     let label=(g.away?.alias||'?')+'@'+(g.home?.alias||'?');
     if(gs==='LIVE') label+=' Q'+(g.period||'?');
     else if(gs==='FINAL') label+=' F';
-    else try{label+=' '+new Date(g.scheduled).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/New_York'});}catch(e){}
+    else try{label+=' '+new Date(g.scheduled).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/Phoenix'});}catch(e){}
     return`<button class="${cls}" onclick="toggleGame('${g.id}')">${label}</button>`;
   }).join('');
   renderGrid();
@@ -1439,6 +2020,7 @@ function renderGrid(){
 // ── Thesis helpers ────────────────────────────────────────────────────────
 function saveThesis(gameId,text){theses[gameId]=text;localStorage.setItem('nba4:theses',JSON.stringify(theses));}
 function clearTheses(){if(!confirm('Clear all theses?'))return;Object.keys(theses).forEach(k=>delete theses[k]);localStorage.removeItem('nba4:theses');games.filter(g=>selIds.includes(g.id)).forEach(g=>renderCard(g));}
+function clearMarketCache(){if(!confirm('Clear all cached clutch + odds data?'))return;Object.keys(cachedClutch).forEach(k=>delete cachedClutch[k]);Object.keys(cachedOdds).forEach(k=>delete cachedOdds[k]);Object.keys(cachedOddsHistory).forEach(k=>delete cachedOddsHistory[k]);localStorage.removeItem('nba4:clutch');localStorage.removeItem('nba4:odds');localStorage.removeItem('nba4:oddsHist');for(const id of selIds){const cs=cardState[id];if(cs){cs.clutchData=null;cs.clutchTier=3;cs.oddsData=null;cs.oddsHistory=[];}}games.filter(g=>selIds.includes(g.id)).forEach(g=>renderCard(g));}
 function parseThesis(t){
   if(!t)return{lean:null,entry:null,pass:null,watches:[],flags:[]};
   const r={lean:null,entry:null,pass:null,watches:[],flags:[]};
@@ -1474,7 +2056,37 @@ function mountCard(game){
   const id=game.id;
   cardState[id]={logs:[],lastUp:null,editing:false,generating:false,analyzing:false,
     prevLvl:null,_countdown:null,lastFingerprint:'',analysis:null,analysisTime:null,genSteps:null,genError:null,
-    lastScoreFP:'',lastStatsFP:'',staleCount:0,dataFreshness:'FRESH',sonnetIndicators:null};
+    lastScoreFP:'',lastStatsFP:'',staleCount:0,dataFreshness:'FRESH',sonnetIndicators:null,
+    prediction:null, clutchData:null, clutchTier:3, oddsData:null, oddsAll:null, oddsHistory:[], trackingData:null, enriching:false, enrichDone:false, evCollapsed:false, edgeHistory:[]};
+  // Restore cached clutch data from localStorage
+  if(cachedClutch[id]){
+    const cs = cardState[id];
+    cs.clutchData = cachedClutch[id].data;
+    cs.clutchTier = cachedClutch[id].tier || 2;
+    addLog(id, '📋 Clutch restored from cache (Tier '+cs.clutchTier+')', true);
+  }
+  // Restore cached odds from localStorage
+  if(cachedOdds[id]){
+    cardState[id].oddsData = cachedOdds[id];
+    cardState[id].oddsHistory = cachedOddsHistory[id] || [];
+    addLog(id, '📋 Odds restored from cache', true);
+  }
+  // Auto-distribute global clutch data if available (uploaded before game selected — overrides cache)
+  if(globalClutchData?.teams){
+    const hA = game.home?.alias||'', aA = game.away?.alias||'';
+    const hC = globalClutchData.teams[hA], aC = globalClutchData.teams[aA];
+    if(hC || aC){
+      const cs = cardState[id];
+      cs.clutchData = {
+        tier:1,
+        home: hC ? { netRtg:hC.netRtg, offRtg:hC.offRtg, defRtg:hC.defRtg, gp:hC.gp, w:hC.w, l:hC.l, wl:hC.wl, efg:hC.efg, ts:hC.ts, pace:hC.pace, pie:hC.pie, tovPct:hC.tovPct, orebPct:hC.orebPct, drebPct:hC.drebPct, astRatio:hC.astRatio } : {},
+        away: aC ? { netRtg:aC.netRtg, offRtg:aC.offRtg, defRtg:aC.defRtg, gp:aC.gp, w:aC.w, l:aC.l, wl:aC.wl, efg:aC.efg, ts:aC.ts, pace:aC.pace, pie:aC.pie, tovPct:aC.tovPct, orebPct:aC.orebPct, drebPct:aC.drebPct, astRatio:aC.astRatio } : {},
+      };
+      cs.clutchTier = 1;
+      persistClutch(id, cs);
+      addLog(id, `📋 L15 clutch auto-loaded from OCR`, true);
+    }
+  }
   const div=document.createElement('div');
   div.id='card-'+id;
   document.getElementById('grid').appendChild(div);
@@ -1493,8 +2105,12 @@ function renderCard(game){
   // Prefer Sonnet indicators when available, fall back to compute()
   const ind = cs.sonnetIndicators || rawInd;
   const v=ind?getVerdict(ind.score):null;
-  // Count indicators won (1.0 or 0.75 for Sonnet, 1.0 for compute) by control team
-  const indWon = ind ? [ind.I1,ind.I2,ind.I3,ind.I4,ind.I5].filter(d=> ind.source==='sonnet' ? d.rawScore>=0.75 : d.score===1).length : 0;
+  // Count indicators where the leader matches the controlling team (0.75+ for Sonnet, 1.0 for compute)
+  const indWon = ind ? [ind.I1,ind.I2,ind.I3,ind.I4,ind.I5].filter(d => {
+    if(d.leader === 'EVEN') return false;
+    const leaderMatchesControl = d.leader.toUpperCase().substring(0,3) === ind.controlTeam.toUpperCase().substring(0,3);
+    return leaderMatchesControl;
+  }).length : 0;
   const indTotal = 5;
   const thesis=theses[id]||'', p=parseThesis(thesis);
   const xrefs=ind&&state!=='PRE'?crossRef(p,ind):[];
@@ -1525,6 +2141,10 @@ function renderCard(game){
   }
 
   if(state!=='PRE'&&ind){
+    const analyzeBtn = state==='LIVE' ? (cs.analyzing ? `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;opacity:.5;color:var(--t3);border-color:var(--t3);" disabled>⏳ ANALYZING</button>` : `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;" onclick="triggerAnalysis(games.find(g=>g.id==='${id}'))">⚡ ANALYZE</button>`) : '';
+    const pred = cs.prediction;
+
+    // ─── CONTROL BAR (compact) ───
     html+=`
     <div class="ctrl-bar">
       <div class="vrd" style="color:${v.color};border-color:${v.color};background:${v.bg}">${v.label} (${indWon}/${indTotal})</div>
@@ -1532,14 +2152,149 @@ function renderCard(game){
       <div class="bw"><div class="bt2"><div class="bf" style="width:${ind.score*100}%;background:${v.color}"></div></div></div>
       <div class="cn" style="color:${v.color}">${ind.score.toFixed(2)}</div>
       <span class="dq" style="${ind.dataQuality==='PARTIAL'?'color:var(--yellow);border-color:var(--yellow)':ind.dataQuality==='SONNET'?'color:#a78bfa;border-color:#a78bfa':''}">${ind.dataQuality==='SONNET'?'SONNET':ind.dataQuality}${ind.traj&&!ind.traj.tooEarly?' ('+ind.traj.count+'/'+ind.traj.total+')':''}</span>
-    </div>
-    <div class="inds">
+    </div>`;
+
+    // ─── DECISION VIEW (primary — always visible) ───
+    if(pred){
+      const edgeNum = pred.edgeNum;
+      const edgeColor = edgeNum===null?'var(--t3)':edgeNum>=10?'var(--green)':edgeNum>=5?'var(--g2)':edgeNum>=1?'var(--yellow)':edgeNum>=0?'var(--t3)':'var(--red)';
+      const convColor = ({DOMINANT:'var(--green)',STRONG:'var(--g2)',EARNED:'var(--yellow)',CONDITIONAL:'var(--amber)'})[pred.conviction]||'var(--t3)';
+      const entryColor = pred.entry==='OPTIMAL WINDOW'?'var(--green)':pred.entry==='WINDOW OPEN'?'var(--g2)':pred.entry==='WINDOW CLOSING'?'var(--yellow)':pred.entry==='COUNTER-SIGNAL'?'var(--red)':'var(--t3)';
+
+      // Edge history analysis
+      const eh = cs.edgeHistory.filter(e=>e.edgeNum!==null&&e.edgeNum!==undefined);
+      let peakEdge = null, edgeTrend = '';
+      if(eh.length >= 2){
+        peakEdge = eh.reduce((max,e)=>e.edgeNum>max.edgeNum?e:max, eh[0]);
+        const recent = eh.slice(-2);
+        const diff = recent[1].edgeNum - recent[0].edgeNum;
+        edgeTrend = diff > 1.5 ? '▲' : diff < -1.5 ? '▼' : '─';
+      }
+
+      // Clutch tier badge
+      const clutchTier = cs.clutchTier || (cs.clutchData?.tier) || 3;
+      const tierBadge = clutchTier===1 ? 'T1·L15' : clutchTier===2 ? 'T2·PRX' : 'T3·Δ';
+      const tierColor = clutchTier===1 ? 'var(--green)' : clutchTier===2 ? 'var(--yellow)' : 'var(--t3)';
+
+      html+=`
+      <div class="dv">
+        <div class="dv-hdr">DECISION ${analyzeBtn}<span class="analysis-cost">${cs.analysisTime?cs.analysisTime.toLocaleTimeString():''}</span></div>
+        <div class="dv-row">
+          <span class="dv-label">EDGE</span>
+          <span class="dv-val" style="color:${edgeColor}">${esc(pred.edge||'—')}</span>
+          <span class="dv-sub">FWP ${esc(pred.fwp||'—')}</span>
+          <span class="dv-sub">MIP ${esc(pred.mip||'N/A')}</span>
+          ${edgeTrend?`<span style="font-size:8px;color:${edgeTrend==='▲'?'var(--green)':edgeTrend==='▼'?'var(--red)':'var(--t3)'};margin-left:2px">${edgeTrend}</span>`:''}
+        </div>
+        ${peakEdge?`<div class="dv-row"><span class="dv-label">PEAK</span><span class="dv-sub" style="color:var(--t2)">+${peakEdge.edgeNum.toFixed(1)}% at ${peakEdge.time} (${peakEdge.score})</span></div>`:''}
+        <div class="dv-row">
+          <span class="dv-label">ENTRY</span>
+          <span class="dv-tag" style="color:${entryColor};border-color:${entryColor}">${esc(pred.entry||'—')}</span>
+          <span class="dv-tag" style="color:${convColor};border-color:${convColor};margin-left:4px">${esc(pred.conviction||'—')}</span>
+        </div>
+        <div class="dv-row">
+          <span class="dv-label">SUSTAIN</span>
+          <span class="dv-sub">${esc(pred.sustainability||'—')}</span>
+        </div>
+        <div class="dv-row">
+          <span class="dv-label">CLUTCH</span>
+          <span class="dv-tag" style="font-size:5px;color:${tierColor};border-color:${tierColor};padding:0 3px">${tierBadge}</span>
+          <span class="dv-sub">${esc(pred.clutch||'No data')}</span>
+        </div>
+        <div class="dv-pred">${esc(pred.prediction||'')}</div>
+        ${eh.length>=3?`<div style="font-size:5px;color:var(--t2);margin-top:3px;letter-spacing:.5px">EDGE HISTORY: ${eh.slice(-6).map(e=>(e.edgeNum>=0?'+':'')+e.edgeNum.toFixed(0)+'%').join(' → ')}</div>`:''}
+      </div>`;
+    } else if(cs.analyzing){
+      html+=`<div class="dv"><div class="dv-hdr">DECISION</div><div class="analysis-loading"><div class="spin"></div> Sonnet analyzing…</div></div>`;
+    } else {
+      html+=`<div class="dv"><div class="dv-hdr">DECISION ${analyzeBtn}</div><div style="font-size:6px;color:var(--t3);padding:2px 0">${cs.analysisError?'<span style="color:var(--red)">⚠ '+esc(cs.analysisError)+'</span>':game.period<2?'Predictive layer activates Q2+ on data change':'Awaiting analysis — press ⚡ or wait for data change'}</div></div>`;
+    }
+
+    // ─── DATA INPUTS (Clutch + Odds) ───
+    const cl = cs.clutchData, od = cs.oddsData;
+    const cTier = cs.clutchTier || (cl?.tier) || 3;
+    const isOCR = cTier===1 && globalClutchData?.teams;
+    const cTierLabel = cTier===1 ? (isOCR ? '<span style="color:var(--green)">✓ TIER 1 (OCR)</span>' : '<span style="color:var(--green)">✓ TIER 1 (L15)</span>') : cTier===2 ? '<span style="color:var(--yellow)">✓ TIER 2 (BDL)</span>' : '<span style="color:var(--t3)">TIER 3 (manual)</span>';
+    html+=`<div class="data-inputs">
+      <div class="di-hdr">MARKET & CLUTCH<span style="font-size:5px">${cTierLabel} · ${od?'<span style="color:var(--green)">✓ ODDS</span>':'<span style="color:var(--t3)">no odds</span>'}${cs.trackingData?' · <span style="color:var(--green)">✓ TRACKING</span>':''}</span>
+        <button class="di-btn" style="margin-left:auto;background:${cs.enriching?'var(--b2)':cs.enrichDone?'rgba(0,255,136,.15)':'rgba(147,130,220,.15)'};color:${cs.enriching?'var(--t3)':cs.enrichDone?'var(--green)':'#9382dc'};font-size:6px;padding:2px 6px" onclick="enrichFromBDL('${id}')" ${cs.enriching?'disabled':''}>${cs.enriching?'⏳ PULLING...':cs.enrichDone?'✓ UPDATED':'⚡ ENRICH'}</button>
+      </div>
+      <div class="di-row" style="margin-bottom:0;gap:3px">
+        <span class="di-lbl"></span>
+        <span style="width:54px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">SPREAD</span>
+        <span style="width:54px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">${esc(hA)} ML</span>
+        <span style="width:54px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">${esc(aA)} ML</span>
+        <span style="width:48px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">TOTAL</span>
+      </div>
+      <div class="di-row" style="gap:3px">
+        <span class="di-lbl">ODDS</span>
+        <input class="di-input di-sm" id="od-hs-${id}" placeholder="sprd" value="${od?.homeSpread||''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="od-hml-${id}" placeholder="ML" value="${od?.homeML||''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="od-aml-${id}" placeholder="ML" value="${od?.awayML||''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="od-tot-${id}" placeholder="O/U" value="${od?.total||''}" style="width:48px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <button class="di-btn" onclick="saveOdds('${id}')">SET</button>
+      </div>`;
+    // Odds movement row
+    const mv = oddsMovement(cs);
+    if(mv){
+      const cell = (d) => d ? `<span style="width:54px;font-size:5px;text-align:center;color:${d.color}">${d.val}</span>` : `<span style="width:54px;font-size:5px;text-align:center;color:var(--t3)">—</span>`;
+      html+=`<div class="di-row" style="gap:3px;margin-top:0;margin-bottom:1px">
+        <span class="di-lbl" style="font-size:5px;color:var(--t2)">MOVE</span>
+        ${cell(mv.spread)}${cell(mv.homeML)}${cell(mv.awayML)}
+        <span style="width:48px;font-size:5px;text-align:center;color:${mv.total?mv.total.color:'var(--t3)'}">${mv.total?mv.total.val:'—'}</span>
+        <span style="font-size:4px;color:var(--t2);white-space:nowrap">${mv.pulls} pulls</span>
+      </div>`;
+    }
+    html+=`<div class="di-row" style="margin-bottom:0;gap:3px">
+        <span class="di-lbl"></span>
+        <span style="width:54px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">NET RTG</span>
+        <span style="width:54px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">OFF RTG</span>
+        <span style="width:54px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">DEF RTG</span>
+        <span style="width:32px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">GP</span>
+        <span style="width:40px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">W-L</span>
+      </div>
+      <div class="di-row" style="gap:3px">
+        <span class="di-lbl">L15 ${esc(hA)}</span>
+        <input class="di-input di-sm" id="cl-h-net-${id}" placeholder="" value="${cl?.home?.netRtg??''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="cl-h-off-${id}" placeholder="" value="${cl?.home?.offRtg??''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="cl-h-def-${id}" placeholder="" value="${cl?.home?.defRtg??''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="cl-h-gp-${id}" placeholder="" value="${cl?.home?.gp??''}" style="width:32px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="cl-h-wl-${id}" placeholder="" value="${cl?.home?.wl??''}" style="width:40px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+      </div>
+      <div class="di-row" style="gap:3px">
+        <span class="di-lbl">L15 ${esc(aA)}</span>
+        <input class="di-input di-sm" id="cl-a-net-${id}" placeholder="" value="${cl?.away?.netRtg??''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="cl-a-off-${id}" placeholder="" value="${cl?.away?.offRtg??''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="cl-a-def-${id}" placeholder="" value="${cl?.away?.defRtg??''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="cl-a-gp-${id}" placeholder="" value="${cl?.away?.gp??''}" style="width:32px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="cl-a-wl-${id}" placeholder="" value="${cl?.away?.wl??''}" style="width:40px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+      </div>
+      <div class="di-row"><button class="di-btn" onclick="saveClutch('${id}')">SET CLUTCH</button></div>
+    </div>`;
+
+    // ─── EVIDENCE VIEW TOGGLE ───
+    html+=`<div class="ev-toggle ${cs.evCollapsed?'':'open'}" id="ev-toggle-${id}" onclick="toggleEV('${id}')">
+      EVIDENCE <span class="arr">▸</span>
+      <span style="margin-left:auto;font-size:5px;color:var(--t2)">Control ${ind.controlTeam} ${ind.score.toFixed(2)} · Traj ${ind.traj.tooEarly?'Q1':ind.traj.lean+' '+ind.traj.count+'/'+ind.traj.total}</span>
+    </div>`;
+
+    // ─── EVIDENCE BODY (collapsible) ───
+    html+=`<div class="ev-body ${cs.evCollapsed?'collapsed':''}" id="ev-body-${id}" style="${cs.evCollapsed?'max-height:0':'max-height:2000px'}">`;
+
+    // Indicators
+    html+=`<div class="inds">
     ${[{id:'I1',nm:'POSSESS/TRANS',wt:25,d:ind.I1},{id:'I2',nm:'RIM/FOUL',wt:25,d:ind.I2},
        {id:'I3',nm:'SHOT QUALITY',wt:20,d:ind.I3},{id:'I4',nm:'LINEUP INTEG',wt:20,d:ind.I4},
        {id:'I5',nm:'TEMPO/EFF',wt:10,d:ind.I5}].map(({id:iid,nm,wt,d})=>{
-      const sc = d.sonnet ? d.rawScore : d.score;
-      const col = d.sonnet ? indColor(d.rawScore) : (d.score===1?'var(--green)':d.score===.5?'var(--yellow)':'var(--red)');
-      const pc = d.sonnet ? pipClass(d.rawScore) : (d.score===1?'pw':d.score===.5?'pd':'pl');
+      let displayScore;
+      if(d.sonnet){
+        const leaderIsControl = d.leader.toUpperCase().substring(0,3) === ind.controlTeam.toUpperCase().substring(0,3);
+        displayScore = leaderIsControl ? d.rawScore : (1 - d.rawScore);
+      } else {
+        displayScore = d.score;
+      }
+      const col = d.sonnet ? indColor(displayScore) : (d.score===1?'var(--green)':d.score===.5?'var(--yellow)':'var(--red)');
+      const pc = d.sonnet ? pipClass(displayScore) : (d.score===1?'pw':d.score===.5?'pd':'pl');
       return `
       <div class="ind">
         <span class="ii">${iid}</span><span class="in">${nm}</span><span class="iw">${wt}%</span>
@@ -1548,8 +2303,10 @@ function renderCard(game){
         ${d.sonnet?'<span style="color:#a78bfa;font-size:5px;margin-left:2px">◈</span>':''}
         <span class="id">${esc(d.detail)}</span>
       </div>`;}).join('')}
-    </div>
-    <div class="traj">
+    </div>`;
+
+    // Trajectory
+    html+=`<div class="traj">
       <div class="th">TRAJECTORY — ${ind.dataQuality==='SONNET'?'Sonnet-scored':ind.dataQuality==='FULL'?'8/8 signals (FULL)':'6/8 signals (PARTIAL — T4,T7 unavail)'}
         ${!ind.traj.tooEarly?`<span class="tl" style="color:${ind.traj.lean==='NEUTRAL'?'var(--t3)':'var(--amber)'};border-color:${ind.traj.lean==='NEUTRAL'?'var(--b2)':'var(--amber)'}">${esc(ind.traj.lean)}${ind.traj.total>0?' '+ind.traj.count+'/'+ind.traj.total:''}</span>`:''}
       </div>
@@ -1562,20 +2319,20 @@ function renderCard(game){
             :'<div style="font-size:6px;color:var(--t3)">See Sonnet analysis for trajectory detail</div>')}
     </div>`;
 
-    // Sonnet Analysis section
-    const analyzeBtn = state==='LIVE'&&!cs.analyzing ? `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;" onclick="triggerAnalysis(games.find(g=>g.id==='${id}'))">⚡ ANALYZE</button>` : '';
+    // Full Sonnet analysis text (in evidence view)
     html+=`<div class="analysis" id="analysis-${id}">`;
     if(cs.analysis){
       const usage=cs.analysisUsage;
       const cost=usage?((usage.input_tokens*3+usage.output_tokens*15)/1000000).toFixed(4):'?';
-      html+=`<div class="analysis-hdr">SONNET ANALYSIS ${analyzeBtn}<span class="analysis-cost">~$${cost} · ${cs.analysisTime?.toLocaleTimeString()||''}</span></div><div class="analysis-body">${esc(cs.analysis)}</div>`;
+      html+=`<div class="analysis-hdr">FULL ANALYSIS<span class="analysis-cost">~$${cost} · ${cs.analysisTime?.toLocaleTimeString()||''}</span></div><div class="analysis-body">${esc(cs.analysis)}</div>`;
     } else if(cs.analyzing){
-      html+=`<div class="analysis-loading"><div class="spin"></div> Sonnet analyzing…</div>`;
-    } else if(game.period<2){
-      html+=`<div style="font-size:6px;color:var(--t3)">Analysis activates Q2+ on data change ${analyzeBtn}</div>`;
+      html+=`<div class="analysis-loading"><div class="spin"></div> Analyzing…</div>`;
     } else {
-      html+=`<div style="font-size:6px;color:var(--t3)">Awaiting meaningful data change… ${analyzeBtn}</div>`;
+      html+=`<div style="font-size:6px;color:var(--t3)">No analysis yet</div>`;
     }
+    html+=`</div>`;
+
+    // Close evidence body
     html+=`</div>`;
   }
 
@@ -1646,7 +2403,11 @@ function startEdit(cardId){
   tb.innerHTML=`
     <div class="thdr">PRE-GAME THESIS<span style="font-size:6px;color:var(--amber);letter-spacing:1px;">EDITING</span></div>
     <textarea class="ta" id="ta-${cardId}" autocomplete="off" autocorrect="on" spellcheck="true">${esc(currentThesis)}</textarea>
-    <div class="thint">Lean: [team]\nEntry: [trigger]\nPass: [condition]\nWatch: [signal]\nFlag: [risk]</div>
+    <div class="thint">Lean: [team]
+Entry: [trigger]
+Pass: [condition]
+Watch: [signal]
+Flag: [risk]</div>
     <div class="tbtn-row">
       <button class="tsave" onclick="saveThesisFromCard('${cardId}')">SAVE</button>
       <button class="tcancel" onclick="cancelEdit('${cardId}')">CANCEL</button>
