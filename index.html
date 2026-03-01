@@ -560,8 +560,8 @@ async function loadSchedule(){
     }
     document.getElementById('date-lbl').innerHTML = 'Schedule for <span>'+d.str+'</span> (times MST)';
     renderPills(); updateCounts(); renderConfidenceTable();
-    // Build BDL game map for fallback
-    buildBdlGameMap(d.str);
+    // Build BDL game map for fallback (await so enrich has IDs ready)
+    await buildBdlGameMap(d.str);
     // Start polling
     clearInterval(pollTimer);
     pollTimer = setInterval(()=>{ if(!paused) refreshLiveCards(); }, pollInterval);
@@ -966,6 +966,7 @@ function toggleEV(gameId){
 
 // BDL Enrichment — auto-pull clutch + odds + tracking via bdl-enrich function
 async function enrichFromBDL(gameId){
+  if(gameId === DEMO_ID) return; // Demo mode — no real data
   const cs = cardState[gameId]; if(!cs) return;
   const game = games.find(g=>g.id===gameId); if(!game) return;
   const hA = game.home?.alias||'', aA = game.away?.alias||'';
@@ -1433,6 +1434,7 @@ async function generateThesis(gameId){
   }
 
   cs.genSteps = [
+    {label:'BDL Enrich',status:'pending'},
     {label:'Injuries',status:'pending'},
     {label:'Standings',status:'pending'},
     {label:homeAlias+' Profile',status:'pending'},
@@ -1445,9 +1447,30 @@ async function generateThesis(gameId){
     {label:awayAlias+' Splits(G)',status:'pending'},
     {label:homeAlias+' Splits(S)',status:'pending'},
     {label:awayAlias+' Splits(S)',status:'pending'},
-    {label:'BDL Enrichment',status:'pending'},
+    {label:'BDL Odds',status:'pending'},
     {label:'Sonnet Thesis',status:'pending'},
   ];
+  renderGenProgress(gameId);
+
+  // ── STEP 0: Ensure BDL enrichment is complete (odds, clutch, tracking) ──
+  cs.genSteps[0].status = 'active';
+  renderGenProgress(gameId);
+  try{
+    if(cs.enriching){
+      // Enrichment already in progress — wait for it (up to 12s)
+      addLog(gameId, 'Waiting for BDL enrichment to finish…', true);
+      for(let w=0;w<24&&cs.enriching;w++) await new Promise(r=>setTimeout(r,500));
+    } else if(!cs.enrichDone && !cs.oddsData && !cs.trackingData){
+      // Not started yet — trigger and wait
+      addLog(gameId, 'Triggering BDL enrichment for thesis…', true);
+      await enrichFromBDL(gameId);
+    }
+    cs.genSteps[0].status = (cs.oddsData||cs.clutchData||cs.trackingData)?'done':'err';
+    if(cs.genSteps[0].status==='err') cs.genSteps[0].error = 'No data (optional)';
+  }catch(e){
+    cs.genSteps[0].status = 'err';
+    cs.genSteps[0].error = 'optional';
+  }
   renderGenProgress(gameId);
 
   const calls = [
@@ -1472,21 +1495,21 @@ async function generateThesis(gameId){
   if(cached){
     // Use cached SR data — skip all 12 API calls
     collected = JSON.parse(cached);
-    cs.genSteps.forEach((s,i)=>{ if(i<12) s.status='done'; });
+    cs.genSteps.forEach((s,i)=>{ if(i>=1 && i<=12) s.status='done'; });
     renderGenProgress(gameId);
     console.log('Using cached SR data for', gameId);
   } else {
     // Fetch fresh SR data
     for(let i=0; i<calls.length; i++){
-      cs.genSteps[i].status = 'active';
+      cs.genSteps[i+1].status = 'active';
       renderGenProgress(gameId);
       try{
         const data = await sr(calls[i].type, calls[i].params);
         collected[calls[i].key] = data;
-        cs.genSteps[i].status = 'done';
+        cs.genSteps[i+1].status = 'done';
       }catch(e){
-        cs.genSteps[i].status = 'err';
-        cs.genSteps[i].error = e.message;
+        cs.genSteps[i+1].status = 'err';
+        cs.genSteps[i+1].error = e.message;
       }
       renderGenProgress(gameId);
       if(i < calls.length-1) await new Promise(r=>setTimeout(r,1500));
@@ -1499,8 +1522,12 @@ async function generateThesis(gameId){
     }catch(e){ console.warn('Cache write failed:', e.message); }
   }
 
-  // BDL Enrichment — try to pull odds for this game
-  cs.genSteps[12].status = 'active';
+  // BDL Odds — skip if already populated by step 0 enrich
+  if(cs.oddsData && cs.oddsData.homeML){
+    cs.genSteps[13].status = 'done';
+    renderGenProgress(gameId);
+  } else {
+  cs.genSteps[13].status = 'active';
   renderGenProgress(gameId);
   try{
     const bdlId = bdlGameMap[game.id];
@@ -1532,15 +1559,16 @@ async function generateThesis(gameId){
     } else {
       console.log('No BDL game ID — odds not auto-populated');
     }
-    cs.genSteps[12].status = 'done';
+    cs.genSteps[13].status = 'done';
   }catch(e){
-    cs.genSteps[12].status = 'err';
-    cs.genSteps[12].error = 'optional';
+    cs.genSteps[13].status = 'err';
+    cs.genSteps[13].error = 'optional';
   }
+  } // end skip-if-already-populated
   renderGenProgress(gameId);
 
   // Now send to Sonnet — prompt built client-side, function is thin Anthropic proxy
-  cs.genSteps[13].status = 'active';
+  cs.genSteps[14].status = 'active';
   renderGenProgress(gameId);
   try{
     const tipTime = new Date(game.scheduled).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/Phoenix'});
@@ -1646,10 +1674,38 @@ ${safe(()=>trimSplits(c.awaySplitsSchedule), 'awaySplitsSchedule')}
 
 === STANDINGS ===
 ${safe(()=>trimStandings(c.standings), 'standings')}
-
-Compute all analytical layers (strength profiles, structural identity, shot diet, BHV, chaos risk, foul resilience, Pythagorean check, win/loss delta) from this data. Output the compact thesis format.`;
+${(function(){
+  var sections = '';
+  // Inject odds if available from BDL enrich
+  var od = cs.oddsData;
+  if(od && (od.homeML || od.homeSpread)){
+    sections += '\n=== MARKET ODDS ===\nSpread: '+homeAlias+' '+(od.homeSpread||'N/A')+' | ML: '+awayAlias+' '+(od.awayML||'N/A')+' / '+homeAlias+' '+(od.homeML||'N/A')+' | O/U: '+(od.total||'N/A')+'\n';
+  } else {
+    sections += '\n=== MARKET ODDS ===\nNot yet available — ML THRESHOLD will read "Awaiting odds"\n';
+  }
+  // Inject tracking baselines if available
+  var td = cs.trackingData;
+  if(td){
+    var ht = td.home||{}, at = td.away||{};
+    sections += '\n=== SHOOTING BASELINES (BDL Tracking) ===\n';
+    if(at.catchAndShoot || ht.catchAndShoot) sections += 'Catch & Shoot eFG%: '+awayAlias+' '+(at.catchAndShoot?at.catchAndShoot.efg||'?':'?')+'% | '+homeAlias+' '+(ht.catchAndShoot?ht.catchAndShoot.efg||'?':'?')+'%\n';
+    if(at.pullUp || ht.pullUp) sections += 'Pull-up eFG%: '+awayAlias+' '+(at.pullUp?at.pullUp.efg||'?':'?')+'% | '+homeAlias+' '+(ht.pullUp?ht.pullUp.efg||'?':'?')+'%\n';
+  }
+  // Inject clutch data if available
+  var cd = cs.clutchData;
+  if(cd){
+    var tierLabel = cd.tier===1?'L15 NBA.com (Tier 1)':cd.tier===2?'Season BDL (Tier 2)':'Proxy (Tier 3)';
+    sections += '\n=== CLUTCH DATA ('+tierLabel+') ===\n';
+    if(cd.away) sections += awayAlias+': NetRtg '+(cd.away.netRtg!=null?cd.away.netRtg:'N/A')+' OffRtg '+(cd.away.offRtg!=null?cd.away.offRtg:'N/A')+' DefRtg '+(cd.away.defRtg!=null?cd.away.defRtg:'N/A')+' '+(cd.away.wl||'')+'\n';
+    if(cd.home) sections += homeAlias+': NetRtg '+(cd.home.netRtg!=null?cd.home.netRtg:'N/A')+' OffRtg '+(cd.home.offRtg!=null?cd.home.offRtg:'N/A')+' DefRtg '+(cd.home.defRtg!=null?cd.home.defRtg:'N/A')+' '+(cd.home.wl||'')+'\n';
+  }
+  return sections;
+})()}
+Compute all analytical layers (strength profiles, structural identity, shot diet, BHV, chaos risk, foul resilience, Pythagorean check, win/loss delta, 3PT vulnerability profile, ML threshold) from this data. Output the compact thesis format.`;
 
     const systemPrompt = `You are an NBA pre-game structural analyst. Build game thesis documents predicting where the structural battle will be fought and what to monitor live.
+
+The user's strategy: BET THE STRUCTURALLY DOMINANT TEAM WHEN TRAILING, because the opponent's lead is built on unsustainable variance (hot 3PT shooting from non-shooters, role player heaters, shot diet misalignment). The thesis exists to identify WHICH team has real structural control, so the live system knows who to buy when they fall behind on variance.
 
 INDICATORS (weighted): I1 Possession & Transition (25%) — TO margin, steals, OREBs, POT, SCP, FBP. I2 Rim Pressure & Foul (25%) — paint pts, at-rim rates, FTA, blocks. I3 Shot Quality & Creation (20%) — assist ratio, eFG%, shot zones. I4 Lineup Integrity (20%) — bench depth, biggest lead, win/loss delta. I5 Tempo & Efficiency (10%) — pace, pts/possession.
 
@@ -1657,12 +1713,27 @@ Each scored 1.0 (clear edge), 0.5 (contested), 0.0 (opponent). Control: 0.90+ DO
 
 Compute: Context-Adjusted Strength, Structural Identity, Shot Diet (Interior/Transition vs Perimeter/Creation vs Balanced), Win/Loss Delta, Comeback Score (0-10), Lead-Keep Score (0-10), BHV (LOW <2.5, MOD 2.5-3.5, HIGH >3.5 TO/gm), Chaos Risk (HIGH BHV + top-7 steals opp), Foul Resilience, Pythagorean check (PF^13.91/(PF^13.91+PA^13.91)), System Resilience (top-10 DEF teams with stars OUT).
 
+3PT VULNERABILITY PROFILE (compute for BOTH teams):
+For each team, identify players most likely to produce unsustainable 3PT variance:
+- NON-SHOOTERS: <33% season 3PT or <1.5 3PA/gm — hot streaks are pure variance
+- VOLATILE SHOOTERS: 33-38% on 3+ att/gm — can look elite on any given night
+- Name 2-3 specific players per team as the "heater watchlist" for live monitoring
+- Note team season 3PT% and shot diet classification so the live audit has a baseline
+
+ML THRESHOLD (compute if odds provided):
+If market odds are available, compute entry threshold for the thesis team:
+- Convert control score to implied win probability (e.g. 0.82 = ~82% FWP)
+- Compare against thesis team's current MIP from moneyline
+- ML THRESHOLD = the ML where thesis team's MIP is at least 5% below FWP
+- Example: FWP 82%, current MIP 77.5% at -340 → threshold "CLE below -250 ML" (MIP ~71%)
+- If no odds available, output "ML THRESHOLD: Awaiting odds"
+
 OUTPUT FORMAT:
 COMPACT THESIS — [AWAY] vs [HOME] | [Time] MST
 [Date] | [Venue]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 AVAILABILITY
-[TEAM A] [Player] ✅ IN | [Player] ❌ OUT | [Player] ⚠️ GTD
+[TEAM A] [Player] IN | [Player] OUT | [Player] GTD
 [TEAM B] [same]
 REST [TEAM A] X day | [TEAM B] X day
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1675,15 +1746,32 @@ I3 Shot Quality & Creation (20%) [same]
 I4 Lineup Integrity (20%) [same]
 I5 Tempo & Efficiency (10%) [same]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SHOT DIET
+[TEAM A]: [Interior/Transition | Perimeter/Creation | Balanced] — season 3PT% [X]% on [Y] 3PA/gm
+[TEAM B]: [same]
+
+3PT HEATER WATCHLIST
+[TEAM A]: [Player1] ([szn 3PT%] on [vol]/gm) [NON-SHOOTER|VOLATILE], [Player2] [same]
+[TEAM B]: [same]
+
 KEY FLAGS
-⚠ [Flag 1]
-✓ [Clean read if applicable]
-ENTRY [Trigger condition]
-PASS [Pass condition]
+[Flag 1]
+[Flag 2]
+[Clean read note if applicable]
+
+MARKET: Spread [X] | ML [X/X] | O/U [X]
+ML THRESHOLD: [Thesis team] below [ML value] ([X]% MIP vs [Y]% FWP = [Z]%+ edge)
+
+ENTRY      [Thesis team] trails by [X]+ on [opponent] unsustainable 3PT | OR [thesis team] ML above [threshold]
+PASS       [Opponent] lead structural (LOCKED/DURABLE 3PT) — do NOT fade
+
+CLUTCH GATE: [pre-game note]
+
 WATCH
-1. [Signal] — confirms if [X], denies if [Y]
-2. [Signal] — confirms if [X], denies if [Y]
-3. [Signal] — confirms if [X], denies if [Y]`;
+1. [Opponent] 3PT sustainability — confirms entry if [opp] shooting [X]%+ from 3 with [Z]%+ from non-shooters; denies if from elite shooters at normal rates
+2. [Thesis team] interior/structural — confirms if paint pts + FTA on pace; denies if interior suppressed
+3. [TO/chaos] — confirms if [thesis team] TO rate holds below [X]; denies if BHV/integration materializes`;
+
 
     console.log('Thesis prompt size:', (userPrompt.length/1024).toFixed(1)+'KB');
 
@@ -1699,15 +1787,15 @@ WATCH
     const data = await resp.json();
     theses[gameId] = data.thesis;
     localStorage.setItem('nba4:theses', JSON.stringify(theses));
-    cs.genSteps[13].status = 'done';
+    cs.genSteps[14].status = 'done';
   }catch(e){
-    cs.genSteps[13].status = 'err';
-    cs.genSteps[13].error = e.message;
+    cs.genSteps[14].status = 'err';
+    cs.genSteps[14].error = e.message;
     console.error('Thesis generation failed at step 14:', e.message, e.stack);
   }
   cs.generating = false;
   renderConfidenceTable();
-  cs.genError = cs.genSteps[13]?.status==='err' ? cs.genSteps[13].error : null;
+  cs.genError = cs.genSteps[14]?.status==='err' ? cs.genSteps[14].error : null;
   paused = wasPaused; // Resume polling state
   renderCard(game);
 }
@@ -2074,17 +2162,26 @@ function saveThesis(gameId,text){theses[gameId]=text;localStorage.setItem('nba4:
 function clearTheses(){if(!confirm('Clear all theses?'))return;Object.keys(theses).forEach(k=>delete theses[k]);localStorage.removeItem('nba4:theses');games.filter(g=>selIds.includes(g.id)).forEach(g=>renderCard(g));renderConfidenceTable();}
 function clearMarketCache(){if(!confirm('Clear all cached clutch + odds data?'))return;Object.keys(cachedClutch).forEach(k=>delete cachedClutch[k]);Object.keys(cachedOdds).forEach(k=>delete cachedOdds[k]);Object.keys(cachedOddsHistory).forEach(k=>delete cachedOddsHistory[k]);globalClutchData=null;localStorage.removeItem('nba4:clutch');localStorage.removeItem('nba4:odds');localStorage.removeItem('nba4:oddsHist');localStorage.removeItem('nba4:globalClutch');for(const id of selIds){const cs=cardState[id];if(cs){cs.clutchData=null;cs.clutchTier=3;cs.oddsData=null;cs.oddsHistory=[];}}games.filter(g=>selIds.includes(g.id)).forEach(g=>renderCard(g));}
 function parseThesis(t){
-  if(!t)return{lean:null,entry:null,pass:null,watches:[],flags:[]};
-  const r={lean:null,entry:null,pass:null,watches:[],flags:[]};
+  if(!t)return{lean:null,entry:null,pass:null,mlThreshold:null,watches:[],flags:[],shotDiet:null,heaterWatch:null,clutchGate:null};
+  const r={lean:null,entry:null,pass:null,mlThreshold:null,watches:[],flags:[],shotDiet:null,heaterWatch:null,clutchGate:null};
   t.split('\n').map(l=>l.trim()).filter(Boolean).forEach(line=>{
     const l=line.toLowerCase();
     if(l.startsWith('lean:'))r.lean=line.replace(/^lean:?\s*/i,'').trim();
     else if(l.startsWith('entry'))r.entry=line.replace(/^entry(?: trigger)?:?\s*/i,'').trim();
     else if(l.startsWith('pass'))r.pass=line.replace(/^pass(?: if)?:?\s*/i,'').trim();
+    else if(l.startsWith('ml threshold'))r.mlThreshold=line.replace(/^ml\s*threshold:?\s*/i,'').trim();
+    else if(l.startsWith('shot diet'))r.shotDiet=line.replace(/^shot\s*diet:?\s*/i,'').trim();
+    else if(l.startsWith('3pt heater'))r.heaterWatch=line.replace(/^3pt\s*heater\s*watchlist:?\s*/i,'').trim();
+    else if(l.startsWith('clutch gate'))r.clutchGate=line.replace(/^clutch\s*gate:?\s*/i,'').trim();
     else if(l.startsWith('watch:'))r.watches.push(line.replace(/^-?\s*watch:?\s*/i,'').trim());
     else if(l.startsWith('flag:')||l.startsWith('⚠')||l.startsWith('!'))r.flags.push(line.replace(/^[⚠!]\s*|^flag:?\s*/i,'').trim());
     else if(/^\d+\.\s+/.test(line))r.watches.push(line.replace(/^\d+\.\s+/,''));
   });
+  // Try to extract ML value from threshold line (e.g., "CLE below -250 ML")
+  if(r.mlThreshold){
+    const mlMatch = r.mlThreshold.match(/below\s+([+-]?\d+)/i);
+    if(mlMatch) r.mlValue = parseInt(mlMatch[1]);
+  }
   return r;
 }
 // ── CONFIDENCE TABLE — auto-builds from all loaded theses ──
@@ -2111,7 +2208,7 @@ function renderConfidenceTable(){
     const fwp = pred?.fwp || null;
     const edge = pred?.edgeNum ?? null;
     if(!team && !score) continue;
-    rows.push({matchup, team, score, verdict, entry:p.entry||'—', pass:p.pass||'—', gameId:g.id, fwp, edge});
+    rows.push({matchup, team, score, verdict, entry:p.entry||'—', pass:p.pass||'—', mlThreshold:p.mlThreshold||null, mlValue:p.mlValue||null, gameId:g.id, fwp, edge});
   }
   if(!rows.length){ el.style.display='none'; return; }
   rows.sort((a,b)=>b.score-a.score);
@@ -2122,14 +2219,16 @@ function renderConfidenceTable(){
   const edgeStr = (e) => e===null?'':'<span style="color:'+(e>=5?'var(--green)':e>=1?'var(--yellow)':e>=0?'var(--t3)':'var(--red)')+'">'+(e>=0?'+':'')+e.toFixed(1)+'%</span>';
   let html = `<div class="ct-hdr" onclick="confCollapsed=!confCollapsed;renderConfidenceTable()" style="cursor:pointer">CONFIDENCE TABLE <span class="arr" style="display:inline-block;transition:transform .2s;transform:rotate(${confCollapsed?'0':'90'}deg);margin-left:2px">▸</span><span style="font-size:5px;color:var(--t3);margin-left:auto">${rows.length} ${rows.length===1?'thesis':'theses'} loaded</span></div>`;
   if(!confCollapsed){
-  html += `<table><tr><th>MATCHUP</th><th>CTRL</th><th style="text-align:center">SCORE</th><th>FWP</th><th>EDGE</th><th>ENTRY IF</th><th>PASS IF</th></tr>`;
+  html += `<table><tr><th>MATCHUP</th><th>CTRL</th><th style="text-align:center">SCORE</th><th>FWP</th><th>EDGE</th><th>ML THR</th><th>ENTRY IF</th><th>PASS IF</th></tr>`;
   for(const r of rows){
+    const mlStr = r.mlValue ? '<span style="color:var(--amber);font-size:7px;font-weight:600">'+r.mlValue+'</span>' : '<span style="color:var(--t3);font-size:6px">—</span>';
     html += `<tr style="cursor:pointer" onclick="document.getElementById('card-${r.gameId}')?.scrollIntoView({behavior:'smooth',block:'start'})">
       <td class="ct-matchup">${esc(r.matchup)}</td>
       <td style="color:${vColor(r.verdict)}">${esc(r.team)}</td>
       <td class="ct-score" style="color:${vColor(r.verdict)}">${r.score.toFixed(2)}<div class="ct-verdict" style="color:${vColor(r.verdict)}">${esc(r.verdict)}</div></td>
       <td style="color:var(--t1);font-size:8px;text-align:center;font-weight:600">${r.fwp||'—'}</td>
       <td style="font-size:7px;text-align:center">${edgeStr(r.edge)}</td>
+      <td style="text-align:center">${mlStr}</td>
       <td class="ct-cond" style="color:var(--green)">${esc(r.entry)}</td>
       <td class="ct-cond" style="color:var(--red)">${esc(r.pass)}</td>
     </tr>`;
@@ -2197,6 +2296,8 @@ function mountCard(game){
   document.getElementById('grid').appendChild(div);
   renderCard(game);
   if(getState(game)==='LIVE'||getState(game)==='FINAL') fetchSummary(game);
+  // Auto-enrich from BDL if not already done
+  if(!cardState[id].enrichDone && !cardState[id].enriching) enrichFromBDL(id);
 }
 
 function addLog(id,msg,ok){const cs=cardState[id];if(!cs)return;cs.logs=[...cs.logs.slice(-5),{msg,ok,t:new Date().toLocaleTimeString()}];}
@@ -2651,8 +2752,8 @@ function toggleDemo(){
 Feb 28 2026 | Rocket Mortgage FieldHouse
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 AVAILABILITY
-CLE  Mitchell ✅ Garland ✅ Mobley ✅ Allen ✅
-MIL  Giannis ❌ OUT | Lillard ✅ | Middleton ⚠️ GTD (knee)
+CLE  Mitchell IN | Garland IN | Mobley IN | Allen IN
+MIL  Giannis OUT | Lillard IN | Middleton GTD (knee)
 
 REST   CLE 2 day | MIL 1 day
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2673,20 +2774,31 @@ CLE full strength + deep bench vs MIL missing Giannis + Middleton limited
 I5  Tempo & Efficiency       (10%)   CONTESTED 0.5
 Similar pace profiles, efficiency TBD
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SHOT DIET
+CLE: Interior/Transition — season 3PT% 36.1% on 33.2 3PA/gm
+MIL: Perimeter/Creation — season 3PT% 35.8% on 37.4 3PA/gm
+
+3PT HEATER WATCHLIST
+MIL: Bobby Portis (31.2% on 3.1/gm) NON-SHOOTER, Pat Connaughton (35.8% on 4.2/gm) VOLATILE, AJ Green (36.5% on 3.8/gm) VOLATILE
+CLE: Caris LeVert (33.1% on 2.1/gm) VOLATILE, Craig Porter Jr (29.8% on 1.2/gm) NON-SHOOTER
+
 KEY FLAGS
-⚠ Giannis OUT — MIL structural ceiling severely capped
-⚠ Middleton knee — may be limited or pulled early
-✓ CLE full strength with 2 days rest
+Giannis OUT — MIL structural ceiling severely capped
+Middleton knee — may be limited or pulled early
+CLE full strength with 2 days rest
 
-MARKET     Spread: CLE -8.5 | ML: CLE -380 / MIL +300 | Total: 221.5
+MARKET: Spread CLE -8.5 | ML CLE -380 / MIL +300 | O/U 221.5
+ML THRESHOLD: CLE below -250 (71.4% MIP vs 78% FWP = 6.6%+ edge)
 
-ENTRY      CLE trails or within 3 in Q2+ on MIL unsustainable shooting
-PASS       CLE leads wire-to-wire — no value at -380
+ENTRY      CLE trails by 5+ on MIL unsustainable 3PT | OR CLE ML above -250
+PASS       MIL lead structural (LOCKED/DURABLE 3PT from Lillard/Middleton at normal rates) — do NOT fade
+
+CLUTCH GATE: CLE season NetRtg +0.5, L10 +44.7 (4GP 3-1) vs MIL +38.0 (4GP 4-0) contaminated — gate unlikely to fire
 
 WATCH
-1. Lillard 3PT volume — if 12+ attempts, MIL chasing variance
-2. MIL turnover rate — Giannis absence historically +3 TO/gm
-3. CLE paint dominance — Mobley/Allen vs undersized MIL frontcourt`;
+1. MIL 3PT sustainability — confirms entry if MIL shooting 40%+ from 3 with 40%+ makes from Portis/Connaughton/non-shooters; denies if Lillard hitting at normal career rates
+2. CLE interior structural — confirms if Mobley+Allen paint pts + FTA on pace with 48+/16+ season norms; denies if MIL small-ball forces CLE to perimeter
+3. MIL turnover rate — confirms if MIL TO count exceeds 8 at half (season avg 14.2 w/ Giannis); denies if Lillard stabilizes ball handling below 12 pace`;
 
   // ── Inject into games array + mount ──
   games.unshift(demoGame);
