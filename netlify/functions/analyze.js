@@ -23,7 +23,7 @@ CRITICAL RULES:
 
 2. TEAM QUALITY MATTERS: A bad team (bottom-12, missing stars) leading a good team (top-12, full strength) is almost always variance. The spread tells you what the market expects. If you disagree by 30%+, re-examine.
 
-3. MIP IS PRE-COMPUTED: Use the provided MIP values directly. Do NOT recalculate from moneylines. Edge = FWP - MIP.
+3. MIP IS PRE-COMPUTED: MIP values are provided per team. Edge = YOUR FWP for the predicted winner MINUS that SAME team's MIP. Example: If you predict NOP wins with FWP 75% and NOP's MIP is 97%, Edge = 75% - 97% = -22% (COUNTER-SIGNAL). Do NOT subtract the losing team's MIP.
 
 4. COHERENCE CHECK: Your prediction MUST match your sustainability assessment. If you flag UNSUSTAINABLE, you cannot recommend entry on that team.
 
@@ -142,7 +142,9 @@ exports.handler = async (event) => {
       let mipNote = '';
       if (homeMIP !== null && awayMIP !== null) {
         const vigSum = homeMIP + awayMIP;
-        mipNote = `\nMIP: ${homeTeam} = ${(homeMIP / vigSum * 100).toFixed(1)}% | ${awayTeam} = ${(awayMIP / vigSum * 100).toFixed(1)}% (pre-computed, use directly)\n`;
+        const homeNorm = (homeMIP / vigSum * 100).toFixed(1);
+        const awayNorm = (awayMIP / vigSum * 100).toFixed(1);
+        mipNote = `\nPRE-COMPUTED MIP: If ${homeTeam} wins → Edge = FWP - ${homeNorm}% | If ${awayTeam} wins → Edge = FWP - ${awayNorm}%\nUse the MIP of the team you are PREDICTING TO WIN. Do not use the other team's MIP.\n`;
       }
       oddsSection = `\nMARKET: Spread ${homeTeam} ${oddsData.homeSpread ?? 'N/A'} | ML ${awayTeam} ${oddsData.awayML ?? 'N/A'} / ${homeTeam} ${oddsData.homeML ?? 'N/A'} | O/U ${oddsData.total ?? 'N/A'}${mipNote}\n`;
     } else {
