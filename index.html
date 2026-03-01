@@ -847,6 +847,27 @@ function saveClutch(gameId){
 }
 
 // Odds data save handler
+function oddsMovement(cs){
+  if(!cs.oddsHistory || cs.oddsHistory.length===0 || !cs.oddsData) return null;
+  const open = cs.oddsHistory[0], cur = cs.oddsData;
+  function delta(curV, openV){
+    const c=parseFloat(curV), o=parseFloat(openV);
+    if(isNaN(c)||isNaN(o)) return null;
+    const d = c - o;
+    if(Math.abs(d)<0.1) return {val:'—',color:'var(--t2)',raw:0};
+    const sign = d>0?'+':'';
+    return {val:sign+d.toFixed(1), color:d>0?'var(--green)':'var(--red)', raw:d};
+  }
+  return {
+    spread: delta(cur.homeSpread, open.homeSpread),
+    homeML: delta(cur.homeML, open.homeML),
+    awayML: delta(cur.awayML, open.awayML),
+    total: delta(cur.total, open.total),
+    pulls: cs.oddsHistory.length + 1,
+    openTime: open.time || '?',
+  };
+}
+
 function saveOdds(gameId){
   const cs = cardState[gameId]; if(!cs) return;
   const g = id => document.getElementById(id)?.value?.trim();
@@ -905,17 +926,22 @@ async function enrichFromBDL(gameId){
       }
     }
 
-    // Populate odds. Only overwrite if user hasn't manually entered
+    // Populate odds — always update and track movement
     if(data.odds){
-      if(!cs.oddsData || !cs.oddsData.homeML){
-        cs.oddsData = {
-          homeSpread: String(data.odds.homeSpread||''),
-          homeML: String(data.odds.homeML||''),
-          awayML: String(data.odds.awayML||''),
-          total: String(data.odds.total||''),
-          vendor: data.odds.vendor,
-        };
+      const newOdds = {
+        homeSpread: String(data.odds.homeSpread||''),
+        homeML: String(data.odds.homeML||''),
+        awayML: String(data.odds.awayML||''),
+        total: String(data.odds.total||''),
+        vendor: data.odds.vendor,
+        time: new Date().toLocaleTimeString(),
+      };
+      // Track movement if previous odds exist
+      if(cs.oddsData && cs.oddsData.homeML){
+        cs.oddsHistory.push({...cs.oddsData, time: cs.oddsData.time || cs.lastUp?.toLocaleTimeString() || '?'});
+        if(cs.oddsHistory.length > 20) cs.oddsHistory = cs.oddsHistory.slice(-20);
       }
+      cs.oddsData = newOdds;
       if(data.oddsAll) cs.oddsAll = data.oddsAll;
     }
 
@@ -926,6 +952,8 @@ async function enrichFromBDL(gameId){
     const errList = (data.errors||[]);
     addLog(gameId, '⚡ BDL enriched: '+srcList+(errList.length?' ⚠ '+errList.length+' errors':''), errList.length===0);
     if(errList.length) console.warn('BDL enrich partial errors:', errList);
+    cs.enrichDone = true;
+    setTimeout(()=>{ cs.enrichDone = false; const g = games.find(x=>x.id===gameId); if(g) renderCard(g); }, 3000);
 
   }catch(e){
     console.error('BDL enrich error:', e);
@@ -1414,7 +1442,12 @@ async function generateThesis(gameId){
             const spread = book.home_team_spread || book.home_spread || '';
             const total = book.over_under || book.total || '';
             if(hML || spread){
-              cs.oddsData = {homeSpread:String(spread), homeML:String(hML), awayML:String(aML), total:String(total)};
+              if(cs.oddsData && cs.oddsData.homeML){
+                cs.oddsHistory = cs.oddsHistory || [];
+                cs.oddsHistory.push({...cs.oddsData, time: cs.oddsData.time || cs.lastUp?.toLocaleTimeString() || '?'});
+                if(cs.oddsHistory.length > 20) cs.oddsHistory = cs.oddsHistory.slice(-20);
+              }
+              cs.oddsData = {homeSpread:String(spread), homeML:String(hML), awayML:String(aML), total:String(total), time:new Date().toLocaleTimeString()};
               console.log('BDL odds auto-populated:', cs.oddsData);
             }
           }
@@ -1998,7 +2031,7 @@ function mountCard(game){
   cardState[id]={logs:[],lastUp:null,editing:false,generating:false,analyzing:false,
     prevLvl:null,_countdown:null,lastFingerprint:'',analysis:null,analysisTime:null,genSteps:null,genError:null,
     lastScoreFP:'',lastStatsFP:'',staleCount:0,dataFreshness:'FRESH',sonnetIndicators:null,
-    prediction:null, clutchData:null, clutchTier:3, oddsData:null, oddsAll:null, trackingData:null, enriching:false, evCollapsed:false, edgeHistory:[]};
+    prediction:null, clutchData:null, clutchTier:3, oddsData:null, oddsAll:null, oddsHistory:[], trackingData:null, enriching:false, enrichDone:false, evCollapsed:false, edgeHistory:[]};
   // Auto-distribute global clutch data if available (uploaded before game selected)
   if(globalClutchData?.teams){
     const hA = game.home?.alias||'', aA = game.away?.alias||'';
@@ -2068,7 +2101,7 @@ function renderCard(game){
   }
 
   if(state!=='PRE'&&ind){
-    const analyzeBtn = state==='LIVE'&&!cs.analyzing ? `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;" onclick="triggerAnalysis(games.find(g=>g.id==='${id}'))">⚡ ANALYZE</button>` : '';
+    const analyzeBtn = state==='LIVE' ? (cs.analyzing ? `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;opacity:.5;color:var(--t3);border-color:var(--t3);" disabled>⏳ ANALYZING</button>` : `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;" onclick="triggerAnalysis(games.find(g=>g.id==='${id}'))">⚡ ANALYZE</button>`) : '';
     const pred = cs.prediction;
 
     // ─── CONTROL BAR (compact) ───
@@ -2144,7 +2177,7 @@ function renderCard(game){
     const cTierLabel = cTier===1 ? (isOCR ? '<span style="color:var(--green)">✓ TIER 1 (OCR)</span>' : '<span style="color:var(--green)">✓ TIER 1 (L15)</span>') : cTier===2 ? '<span style="color:var(--yellow)">✓ TIER 2 (BDL)</span>' : '<span style="color:var(--t3)">TIER 3 (manual)</span>';
     html+=`<div class="data-inputs">
       <div class="di-hdr">MARKET & CLUTCH<span style="font-size:5px">${cTierLabel} · ${od?'<span style="color:var(--green)">✓ ODDS</span>':'<span style="color:var(--t3)">no odds</span>'}${cs.trackingData?' · <span style="color:var(--green)">✓ TRACKING</span>':''}</span>
-        <button class="di-btn" style="margin-left:auto;background:${cs.enriching?'var(--b2)':'rgba(147,130,220,.15)'};color:${cs.enriching?'var(--t3)':'#9382dc'};font-size:6px;padding:2px 6px" onclick="enrichFromBDL('${id}')" ${cs.enriching?'disabled':''}>${cs.enriching?'⏳ PULLING...':'⚡ ENRICH'}</button>
+        <button class="di-btn" style="margin-left:auto;background:${cs.enriching?'var(--b2)':cs.enrichDone?'rgba(0,255,136,.15)':'rgba(147,130,220,.15)'};color:${cs.enriching?'var(--t3)':cs.enrichDone?'var(--green)':'#9382dc'};font-size:6px;padding:2px 6px" onclick="enrichFromBDL('${id}')" ${cs.enriching?'disabled':''}>${cs.enriching?'⏳ PULLING...':cs.enrichDone?'✓ UPDATED':'⚡ ENRICH'}</button>
       </div>
       <div class="di-row" style="margin-bottom:0;gap:3px">
         <span class="di-lbl"></span>
@@ -2160,8 +2193,19 @@ function renderCard(game){
         <input class="di-input di-sm" id="od-aml-${id}" placeholder="ML" value="${od?.awayML||''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
         <input class="di-input di-sm" id="od-tot-${id}" placeholder="O/U" value="${od?.total||''}" style="width:48px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
         <button class="di-btn" onclick="saveOdds('${id}')">SET</button>
-      </div>
-      <div class="di-row" style="margin-bottom:0;gap:3px">
+      </div>`;
+    // Odds movement row
+    const mv = oddsMovement(cs);
+    if(mv){
+      const cell = (d) => d ? `<span style="width:54px;font-size:5px;text-align:center;color:${d.color}">${d.val}</span>` : `<span style="width:54px;font-size:5px;text-align:center;color:var(--t3)">—</span>`;
+      html+=`<div class="di-row" style="gap:3px;margin-top:0;margin-bottom:1px">
+        <span class="di-lbl" style="font-size:5px;color:var(--t2)">MOVE</span>
+        ${cell(mv.spread)}${cell(mv.homeML)}${cell(mv.awayML)}
+        <span style="width:48px;font-size:5px;text-align:center;color:${mv.total?mv.total.color:'var(--t3)'}">${mv.total?mv.total.val:'—'}</span>
+        <span style="font-size:4px;color:var(--t2);white-space:nowrap">${mv.pulls} pulls</span>
+      </div>`;
+    }
+    html+=`<div class="di-row" style="margin-bottom:0;gap:3px">
         <span class="di-lbl"></span>
         <span style="width:54px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">NET RTG</span>
         <span style="width:54px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">OFF RTG</span>
