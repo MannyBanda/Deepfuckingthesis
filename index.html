@@ -799,6 +799,34 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
     // Parse decision/predictive layer
     const decision = parseSonnetDecision(data.analysis);
     if(decision){
+      // ── CLIENT-SIDE EDGE OVERRIDE ──
+      // Sonnet consistently uses the wrong team's MIP. Compute edge here using cached odds.
+      const od = cs.oddsData;
+      if(od && decision.fwp && (od.homeML || od.awayML)){
+        const fwpNum = parseFloat((decision.fwp||'').replace(/[%\s]/g,''));
+        if(!isNaN(fwpNum)){
+          const mlToProb = (ml) => { const n=parseFloat(ml); if(isNaN(n)||n===0) return null; return n<0?Math.abs(n)/(Math.abs(n)+100):100/(n+100); };
+          const rawH = mlToProb(od.homeML), rawA = mlToProb(od.awayML);
+          if(rawH!==null && rawA!==null){
+            const vigSum = rawH + rawA;
+            const homeMIP = rawH/vigSum*100, awayMIP = rawA/vigSum*100;
+            // Determine which team Sonnet predicts to win
+            const predText = (decision.prediction||'').toUpperCase();
+            const controlTeam = (parsed?.controlTeam||'').toUpperCase();
+            const isHomePred = predText.includes(hAlias.toUpperCase()) || controlTeam===hAlias.toUpperCase();
+            const isAwayPred = predText.includes(aAlias.toUpperCase()) || controlTeam===aAlias.toUpperCase();
+            let winnerMIP = null;
+            if(isHomePred && !isAwayPred) winnerMIP = homeMIP;
+            else if(isAwayPred && !isHomePred) winnerMIP = awayMIP;
+            else winnerMIP = fwpNum >= 50 ? homeMIP : awayMIP; // fallback
+            const edge = fwpNum - winnerMIP;
+            decision.edge = (edge>=0?'+':'')+edge.toFixed(1)+'%';
+            decision.edgeNum = parseFloat(edge.toFixed(1));
+            decision.mip = winnerMIP.toFixed(1)+'%';
+            console.log('Edge override: FWP',fwpNum,'MIP',winnerMIP.toFixed(1),'Edge',edge.toFixed(1),'Winner:',isHomePred?hAlias:aAlias);
+          }
+        }
+      }
       cs.prediction = decision;
       console.log('Decision parsed:', decision.conviction, decision.entry, decision.prediction);
       // Track edge history for entry timing
