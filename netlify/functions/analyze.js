@@ -141,10 +141,7 @@ If odds/spread provided:
     For UNDERDOGS (positive ML, e.g. +1100): MIP = 100 / (ML + 100). Example: +1100 → 100/1200 = 8.3%. Example: +200 → 100/300 = 33.3%.
   - Edge = FWP - MIP (for the team you predict will win)
   - +10%+ STRONG ENTRY | +5-9% MODERATE ENTRY | +1-4% MARGINAL | 0 to -4% NO EDGE | -5%+ COUNTER-SIGNAL
-  CRITICAL: A -2500 favorite has ~96% MIP, NOT 62%. A +1100 underdog has ~8% MIP. If your FWP for the favorite is 85% but their MIP is 96%, the edge is -11% (COUNTER-SIGNAL), not +23%.
-  - Edge = FWP - MIP
-  - +10%+ STRONG ENTRY | +5-9% MODERATE ENTRY | +1-4% MARGINAL | 0 to -4% NO EDGE | -5%+ COUNTER-SIGNAL
-  CRITICAL: When the spread is large (8+), it tells you the market strongly expects one team to win. If your FWP disagrees with the market by 30%+, you are probably wrong — re-examine your sustainability and team quality assessments.
+  CRITICAL: A -2500 favorite has ~96% MIP, NOT 62%. A +1100 underdog has ~8% MIP. If your FWP for the favorite is 85% but their MIP is 96%, the edge is -11% (COUNTER-SIGNAL), not +23%. When the spread is large (8+), the market strongly expects one team to win. If your FWP disagrees by 30%+, re-examine sustainability and team quality.
 
 CLUTCH GATE (tiered authority):
   Tier 1 — L15 Manual (highest): User-provided L15 clutch data. Override everything.
@@ -401,7 +398,7 @@ ${JSON.stringify(trimmedData)}`;
 
     // AbortController to timeout before Netlify kills us with 502
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 9000);
+    const timeout = setTimeout(() => controller.abort(), 25000);
 
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -439,7 +436,7 @@ ${JSON.stringify(trimmedData)}`;
     };
   } catch (err) {
     if (err.name === 'AbortError') {
-      return { statusCode: 504, headers, body: JSON.stringify({ error: 'Analysis timed out (9s). Anthropic API was too slow. Try again — response times vary.' }) };
+      return { statusCode: 504, headers, body: JSON.stringify({ error: 'Analysis timed out (25s). Anthropic API was too slow. Try again.' }) };
     }
     return { statusCode: 500, headers, body: JSON.stringify({ error: err.message }) };
   }
