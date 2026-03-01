@@ -2145,13 +2145,20 @@ function renderCard(game){
     const pred = cs.prediction;
 
     // ─── CONTROL BAR (compact) ───
+    const fwpDisplay = pred?.fwp ? pred.fwp.replace('%','') : null;
+    const fwpNum = fwpDisplay ? parseFloat(fwpDisplay) : null;
+    const fwpColor = fwpNum===null?v.color:fwpNum>=70?'var(--green)':fwpNum>=58?'var(--g2)':fwpNum>=50?'var(--yellow)':fwpNum>=42?'var(--amber)':'var(--red)';
+    const trajTeam = ind.traj&&!ind.traj.tooEarly&&ind.traj.lean!=='NEUTRAL' ? ind.traj.lean : null;
+    const trajBadgeColor = trajTeam ? 'var(--amber)' : 'var(--t3)';
+    const trajBadgeText = ind.traj&&!ind.traj.tooEarly ? (trajTeam||'EVEN')+' '+ind.traj.count+'/'+ind.traj.total : '';
     html+=`
     <div class="ctrl-bar">
       <div class="vrd" style="color:${v.color};border-color:${v.color};background:${v.bg}">${v.label} (${indWon}/${indTotal})</div>
       <div><div class="cl">CONTROL</div><div class="ct">${esc(ind.controlTeam)}</div></div>
       <div class="bw"><div class="bt2"><div class="bf" style="width:${ind.score*100}%;background:${v.color}"></div></div></div>
-      <div class="cn" style="color:${v.color}">${ind.score.toFixed(2)}</div>
-      <span class="dq" style="${ind.dataQuality==='PARTIAL'?'color:var(--yellow);border-color:var(--yellow)':ind.dataQuality==='SONNET'?'color:#a78bfa;border-color:#a78bfa':''}">${ind.dataQuality==='SONNET'?'SONNET':ind.dataQuality}${ind.traj&&!ind.traj.tooEarly?' ('+ind.traj.count+'/'+ind.traj.total+')':''}</span>
+      <div class="cn" style="color:${fwpNum!==null?fwpColor:v.color}">${fwpNum!==null?fwpNum.toFixed(0)+'<span style="font-size:8px">%</span>':ind.score.toFixed(2)}</div>
+      ${fwpNum!==null?`<span style="font-size:5px;color:var(--t3);margin-left:-2px;letter-spacing:.3px">FWP</span>`:`<span style="font-size:5px;color:var(--t3);margin-left:-2px;letter-spacing:.3px">CTL</span>`}
+      ${trajBadgeText?`<span class="dq" style="color:${trajBadgeColor};border-color:${trajBadgeColor}">${trajBadgeText}</span>`:''}
     </div>`;
 
     // ─── DECISION VIEW (primary — always visible) ───
@@ -2307,7 +2314,7 @@ function renderCard(game){
 
     // Trajectory
     html+=`<div class="traj">
-      <div class="th">TRAJECTORY — ${ind.dataQuality==='SONNET'?'Sonnet-scored':ind.dataQuality==='FULL'?'8/8 signals (FULL)':'6/8 signals (PARTIAL — T4,T7 unavail)'}
+      <div class="th">TRAJECTORY
         ${!ind.traj.tooEarly?`<span class="tl" style="color:${ind.traj.lean==='NEUTRAL'?'var(--t3)':'var(--amber)'};border-color:${ind.traj.lean==='NEUTRAL'?'var(--b2)':'var(--amber)'}">${esc(ind.traj.lean)}${ind.traj.total>0?' '+ind.traj.count+'/'+ind.traj.total:''}</span>`:''}
       </div>
       ${ind.traj.tooEarly
