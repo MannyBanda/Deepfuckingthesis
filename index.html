@@ -810,6 +810,7 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
     const data = await resp.json();
     cs.analysis = data.analysis;
     cs.analysisUsage = data.usage;
+    cs.sustainabilityAudit = data.sustainabilityAudit || null;
     cs.analysisTime = new Date();
 
     // Parse structural indicators
@@ -2161,7 +2162,7 @@ function mountCard(game){
   cardState[id]={logs:[],lastUp:null,editing:false,generating:false,analyzing:false,
     prevLvl:null,_countdown:null,lastFingerprint:'',analysis:null,analysisTime:null,genSteps:null,genError:null,
     lastScoreFP:'',lastStatsFP:'',staleCount:0,dataFreshness:'FRESH',sonnetIndicators:null,
-    prediction:null, clutchData:null, clutchTier:3, oddsData:null, oddsAll:null, oddsHistory:[], trackingData:null, enriching:false, enrichDone:false, evCollapsed:false, edgeHistory:[]};
+    prediction:null, sustainabilityAudit:null, clutchData:null, clutchTier:3, oddsData:null, oddsAll:null, oddsHistory:[], trackingData:null, enriching:false, enrichDone:false, evCollapsed:false, edgeHistory:[]};
   // Restore cached clutch data from localStorage
   if(cachedClutch[id]){
     const cs = cardState[id];
@@ -2328,7 +2329,18 @@ function renderCard(game){
         </div>
         <div class="dv-row">
           <span class="dv-label">SUSTAIN</span>
-          <span class="dv-sub">${esc(pred.sustainability||'—')}</span>
+          ${(function(){
+            var sa = cs.sustainabilityAudit;
+            if(!sa) return '<span class="dv-sub">'+esc(pred.sustainability||'—')+'</span>';
+            function tierTag(t){
+              if(!t) return '<span class="dv-sub">—</span>';
+              var c = t.tier==='LOCKED'?'var(--green)':t.tier==='DURABLE'?'var(--g2)':t.tier==='MIXED'?'var(--yellow)':t.tier==='FRAGILE'?'var(--amber)':t.tier==='UNSUSTAINABLE'?'var(--red)':'var(--t3)';
+              var detail = t.tier==='TOO EARLY'?'':'P:'+t.personnelGrade.substring(0,3)+' R:'+t.regressionGrade.substring(0,3)+' S:'+t.shotTypeGrade.substring(0,3);
+              return '<span class="dv-tag" style="color:'+c+';border-color:'+c+';font-size:5.5px;padding:0 3px">'+t.teamAlias+' '+t.tier+'</span>'
+                +(detail?'<span class="dv-sub" style="font-size:4.5px;margin-left:1px">('+detail+')</span>':'');
+            }
+            return tierTag(sa.away)+' '+tierTag(sa.home);
+          })()}
         </div>
         <div class="dv-row">
           <span class="dv-label">CLUTCH</span>
@@ -2721,11 +2733,15 @@ WATCH
 
   cs.prediction = {
     edge:'+6.2%', edgeNum:6.2, fwp:'83.7%', mip:'77.5%',
-    entry:'WINDOW OPEN', conviction:'STRONG',
-    sustainability:'CLE: SUSTAINABLE | MIL: MIXED',
+    entry:'WINDOW CLOSING', conviction:'STRONG',
+    sustainability:'CLE: LOCKED | MIL: FRAGILE',
     teamQuality:'CLE 44-16 full strength, top-3 East | MIL 32-28 missing Giannis, Middleton limited',
     clutch:'Tier 2 (proxy) — CLEAR',
-    prediction:'Cleveland wins by 10-14. MIL structural ceiling too low without Giannis; CLE interior dominance compounds through Q4.',
+    prediction:'Cleveland wins by 10-14. MIL 3PT production unsustainable (9/28 from non-shooters); CLE interior dominance compounds through Q4.',
+  };
+  cs.sustainabilityAudit = {
+    home:{teamAlias:'CLE',live3PM:8,live3PA:22,live3Pct:'36.4',seasonPrior:'36.1',gotSeasonData:true,deviation:'0.3',personnelGrade:'N/A (at baseline)',personnelDetails:[],elitePct:'0',nonPct:'0',posteriorMean:'36.2',regressionPull:'0',regressionProb:25,regressionGrade:'MINIMAL',shotTypeGrade:'DURABLE',shotTypeNote:'High ast% (65%)',assistRatio:'65',composite:'0.00',tier:'LOCKED'},
+    away:{teamAlias:'MIL',live3PM:9,live3PA:28,live3Pct:'32.1',seasonPrior:'35.8',gotSeasonData:true,deviation:'-3.7',personnelGrade:'FRAGILE',personnelDetails:[{name:'Bobby Portis',live3m:3,live3a:7,livePct:'43',sznPct:31.2,sznVol:3.1,sznStr:'31.2% (3.1/gm)',tier:'non',tierLabel:'NON-SHOOTER',hot:true},{name:'Pat Connaughton',live3m:3,live3a:6,livePct:'50',sznPct:35.8,sznVol:4.2,sznStr:'35.8% (4.2/gm)',tier:'average',tierLabel:'AVERAGE',hot:true}],elitePct:'22',nonPct:'44',posteriorMean:'34.5',regressionPull:'45',regressionProb:62,regressionGrade:'MODERATE',shotTypeGrade:'FRAGILE',shotTypeNote:'Low ast% (42%) suggests pull-up/iso',assistRatio:'42',composite:'1.55',tier:'FRAGILE'},
   };
 
   cs.edgeHistory = [
