@@ -1314,7 +1314,7 @@ function parseSonnetDecision(text){
       d.edgeNum = isNaN(edgeNum) ? null : edgeNum;
     }
     // Parse ENTRY line
-    const entryMatch = text.match(/ENTRY:\s*(OPTIMAL WINDOW|WINDOW OPEN|WINDOW CLOSING|NO WINDOW)/i);
+    const entryMatch = text.match(/ENTRY:\s*(OPTIMAL WINDOW|WINDOW OPEN|WINDOW CLOSING|NO WINDOW|COUNTER-SIGNAL)/i);
     d.entry = entryMatch ? entryMatch[1] : null;
     // Parse CONVICTION line
     const convMatch = text.match(/CONVICTION:\s*(DOMINANT|STRONG|EARNED|CONDITIONAL|NO ENTRY)/i);
@@ -1322,6 +1322,9 @@ function parseSonnetDecision(text){
     // Parse Sustainability line
     const sustMatch = text.match(/Sustainability:\s*(.+)/i);
     d.sustainability = sustMatch ? sustMatch[1].trim() : null;
+    // Parse Team Quality line
+    const tqMatch = text.match(/Team Quality:\s*(.+)/i);
+    d.teamQuality = tqMatch ? tqMatch[1].trim() : null;
     // Parse Clutch line
     const clutchMatch = text.match(/Clutch:\s*(.+)/i);
     d.clutch = clutchMatch ? clutchMatch[1].trim() : null;
@@ -2119,7 +2122,7 @@ function renderCard(game){
       const edgeNum = pred.edgeNum;
       const edgeColor = edgeNum===null?'var(--t3)':edgeNum>=10?'var(--green)':edgeNum>=5?'var(--g2)':edgeNum>=1?'var(--yellow)':edgeNum>=0?'var(--t3)':'var(--red)';
       const convColor = ({DOMINANT:'var(--green)',STRONG:'var(--g2)',EARNED:'var(--yellow)',CONDITIONAL:'var(--amber)'})[pred.conviction]||'var(--t3)';
-      const entryColor = pred.entry==='OPTIMAL WINDOW'?'var(--green)':pred.entry==='WINDOW OPEN'?'var(--g2)':pred.entry==='WINDOW CLOSING'?'var(--yellow)':'var(--t3)';
+      const entryColor = pred.entry==='OPTIMAL WINDOW'?'var(--green)':pred.entry==='WINDOW OPEN'?'var(--g2)':pred.entry==='WINDOW CLOSING'?'var(--yellow)':pred.entry==='COUNTER-SIGNAL'?'var(--red)':'var(--t3)';
 
       // Edge history analysis
       const eh = cs.edgeHistory.filter(e=>e.edgeNum!==null&&e.edgeNum!==undefined);
