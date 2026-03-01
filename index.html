@@ -1112,15 +1112,11 @@ async function handleClutchUpload(input){
       throw new Error('Image still too large after compression ('+payloadMB+'MB). Try cropping the screenshot to just the table area.');
     }
     status.textContent = '⏳ Extracting ' + activeTeams.length + ' teams (~15s, '+payloadMB+'MB)...';
-    const ocrController = new AbortController();
-    const ocrTimeout = setTimeout(() => ocrController.abort(), 28000);
     const resp = await fetch(FN+'clutch-ocr',{
       method:'POST',
-      signal: ocrController.signal,
       headers:{'Content-Type':'application/json'},
       body: payload
     });
-    clearTimeout(ocrTimeout);
 
     if(!resp.ok){
       if(resp.status === 502) throw new Error('Server crashed processing image ('+payloadMB+'MB). Try cropping to just the table.');
@@ -1160,8 +1156,7 @@ async function handleClutchUpload(input){
 
   }catch(e){
     console.error('Clutch upload error:', e);
-    var errMsg = e.name === 'AbortError' ? 'OCR timed out — try cropping the screenshot or reducing image size' : e.message;
-    status.textContent = '✗ '+errMsg;
+    status.textContent = '✗ '+e.message;
     status.className = 'cu-status err';
   }finally{
     btn.classList.remove('active');
