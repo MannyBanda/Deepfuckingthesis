@@ -1,83 +1,343 @@
-// Live Game Analysis via Claude Sonnet - Predictive Layer v3.0
-// Lean prompt, full data, trust Sonnet's basketball intelligence
+// Live Game Analysis via Claude Sonnet - Predictive Layer v3.1
+// Added: 3PT Sustainability Audit (personnel, Bayesian regression, shot type, tiered output)
 
-const SYSTEM_PROMPT = `You are an elite NBA live-game analyst providing real-time control assessment and outcome prediction for sports betting.
+// ══════════════════════════════════════════════════════════════════════════════
+// 3PT SUSTAINABILITY AUDIT ENGINE
+// ══════════════════════════════════════════════════════════════════════════════
 
-CORE TASK: Determine which team structurally controls this game and predict who wins, using the full game summary data provided.
+function computeSustainabilityAudit(summaryData, trackingData, homeTeam, awayTeam) {
+  if (!summaryData) return null;
 
-FIVE INDICATORS (score each 0.00-1.00 for the controlling team):
-I1 Possession & Transition (25%): TO margin, steals, OREBs, fast break pts, pts off TOs, second chance pts
-I2 Rim Pressure & Foul (25%): Paint points, at-rim FG, FTA, blocks, fouls, bonus status
-I3 Shot Quality & Creation (20%): eFG%, assist ratio (65%+ sustainable, <50% isolation-dependent), shot diet
-I4 Lineup Integrity (20%): Biggest lead, bench contribution, which lineups producing, plus/minus
-I5 Tempo & Efficiency (10%): Possessions, pts/possession differential, pace control
+  function auditTeam(teamData, oppData, teamAlias, tracking) {
+    if (!teamData) return null;
+    var stats = teamData.statistics || {};
+    var players = teamData.players || [];
 
-CONTROL: 0.90+ DOMINANT | 0.75-0.89 STRONG | 0.60-0.74 EARNED | 0.45-0.59 NO EDGE | <0.45 WAIT
+    // ── Team-level live 3PT ──
+    var team3PM = stats.three_points_made || 0;
+    var team3PA = stats.three_points_att || 0;
+    var teamFGA = stats.field_goals_att || 1;
+    var live3Pct = team3PA > 0 ? (team3PM / team3PA * 100) : 0;
+    var live3Rate = (team3PA / teamFGA * 100);
 
-EIGHT TRAJECTORY SIGNALS (evaluate for BOTH teams):
-T1 Role Player Heater | T2 Star Process Integrity | T3 Quarter Delta (highest weight) | T4 Foul Gate | T5 Interior Trend | T6 Quarter Assist Ratio | T7 Closing Lineup | T8 Shot Diet Misalignment
+    // ── Team season 3PT baseline from player averages ──
+    var seasonPrior3Pct = 36.0; // NBA average fallback
+    var gotSeasonData = false;
+    var seasonTot3PM = 0, seasonTot3PA = 0;
+    players.forEach(function(p) {
+      var avg = p.average || p.season || {};
+      var m = avg.three_points_made || avg.fg3m || 0;
+      var a = avg.three_points_att || avg.fg3a || 0;
+      seasonTot3PM += m;
+      seasonTot3PA += a;
+    });
+    if (seasonTot3PA >= 5) {
+      seasonPrior3Pct = seasonTot3PM / seasonTot3PA * 100;
+      gotSeasonData = true;
+    }
 
-CRITICAL RULES:
+    // ── PERSONNEL AUDIT ──
+    var personnelDetails = [];
+    var makesByTier = { elite: 0, average: 0, non: 0 };
+    var attByTier = { elite: 0, average: 0, non: 0 };
 
-1. SUSTAINABILITY BEFORE PREDICTION: Audit the leading team's production before predicting. Hot 3PT shooting above season norms, role player heaters, interior teams jacking threes (T8) = UNSUSTAINABLE variance, not real control. Cap their win probability and flag the trailing team as the entry opportunity. UNSUSTAINABLE teams cannot get DOMINANT/STRONG conviction or OPTIMAL WINDOW entry.
+    players.forEach(function(p) {
+      var live = p.statistics || {};
+      var avg = p.average || p.season || {};
+      var live3m = live.three_points_made || 0;
+      var live3a = live.three_points_att || 0;
+      if (live3a < 2) return;
 
-2. TEAM QUALITY MATTERS: A bad team (bottom-12, missing stars) leading a good team (top-12, full strength) is almost always variance. The spread tells you what the market expects. If you disagree by 30%+, re-examine.
+      var szn3m = avg.three_points_made || avg.fg3m || 0;
+      var szn3a = avg.three_points_att || avg.fg3a || 0;
+      var sznPct = szn3a >= 1.0 ? (szn3m / szn3a * 100) : null;
+      var sznVol = szn3a;
 
-3. EDGE IS COMPUTED CLIENT-SIDE: Just output your FWP accurately. The dashboard computes Edge from odds data. You may still reference the MIP values for context (e.g., "market prices NOP at 94%") but do NOT compute edge yourself.
+      var tier, tierLabel;
+      if (sznPct === null) {
+        tier = 'non'; tierLabel = 'UNKNOWN';
+      } else if (sznPct >= 38.0 && sznVol >= 2.0) {
+        tier = 'elite'; tierLabel = 'ELITE';
+      } else if (sznPct >= 33.0 || (sznPct >= 30.0 && sznVol >= 3.0)) {
+        tier = 'average'; tierLabel = 'AVERAGE';
+      } else {
+        tier = 'non'; tierLabel = 'NON-SHOOTER';
+      }
 
-4. COHERENCE CHECK: Your prediction MUST match your sustainability assessment. If you flag UNSUSTAINABLE, you cannot recommend entry on that team.
+      // Low-volume overrides
+      if (sznVol < 1.5 && tier === 'elite') { tier = 'average'; tierLabel = 'AVG (low vol)'; }
+      if (sznVol < 0.8 && tier !== 'non') { tier = 'non'; tierLabel = 'NON-SHOOTER (rare)'; }
 
-5. CONVICTION:
-  DOMINANT = sustainable control 0.85+ by a quality team
-  STRONG = sustainable control 0.70+
-  EARNED = sustainable/mixed control 0.60+ with edge
-  CONDITIONAL = sustainability or quality concerns
-  NO ENTRY = unsustainable leader, mixed signals, no edge
+      makesByTier[tier] += live3m;
+      attByTier[tier] += live3a;
 
-6. ENTRY TIMING:
-  OPTIMAL WINDOW = thesis-favored team trailing while opponent has UNSUSTAINABLE production
-  WINDOW OPEN = positive edge + sustainable control confirmed
-  WINDOW CLOSING = edge narrowing as market corrects
-  NO WINDOW = no structural edge
-  COUNTER-SIGNAL = thesis team trailing against SUSTAINABLE opponent control
+      var livePct = (live3m / live3a * 100).toFixed(0);
+      var sznStr = sznPct !== null ? sznPct.toFixed(1) + '% (' + sznVol.toFixed(1) + '/gm)' : 'N/A';
+      var hot = sznPct !== null && (live3m / live3a * 100) > sznPct + 12;
 
-OUTPUT FORMAT (follow exactly):
+      personnelDetails.push({
+        name: p.full_name || p.name || '?',
+        live3m: live3m, live3a: live3a, livePct: livePct,
+        sznPct: sznPct, sznVol: sznVol, sznStr: sznStr,
+        tier: tier, tierLabel: tierLabel, hot: hot,
+      });
+    });
 
-DECISION:
-EDGE: [+X% | No market data] | FWP: [X%] | MIP: [X% | N/A]
-ENTRY: [OPTIMAL WINDOW | WINDOW OPEN | WINDOW CLOSING | NO WINDOW | COUNTER-SIGNAL]
-CONVICTION: [DOMINANT | STRONG | EARNED | CONDITIONAL | NO ENTRY]
-Sustainability: [TeamA]: [SUSTAINABLE|MIXED|UNSUSTAINABLE] | [TeamB]: [SUSTAINABLE|MIXED|UNSUSTAINABLE]
-Team Quality: [context for both teams]
-Clutch: [Tier X] — [CLEAR|WATCH|FIRES|NEUTRALIZED]
-Prediction: [1-line decisive call]
+    var totalMakes = team3PM || 1;
+    var elitePct = (makesByTier.elite / totalMakes * 100);
+    var nonPct = (makesByTier.non / totalMakes * 100);
 
-EVIDENCE:
-CONTROL: [Team] [score] — [level]
+    var personnelGrade;
+    if (elitePct >= 70) personnelGrade = 'LOCKED';
+    else if (elitePct >= 50 && nonPct <= 20) personnelGrade = 'DURABLE';
+    else if (nonPct >= 50) personnelGrade = 'UNSUSTAINABLE';
+    else if (nonPct >= 35) personnelGrade = 'FRAGILE';
+    else personnelGrade = 'MIXED';
 
-I1 Possession & Transition (25%): [team] [score] — [explanation]
-I2 Rim Pressure & Foul (25%): [team] [score] — [explanation]
-I3 Shot Quality & Creation (20%): [team] [score] — [explanation]
-I4 Lineup Integrity (20%): [team] [score] — [explanation]
-I5 Tempo & Efficiency (10%): [team] [score] — [explanation]
+    // ── BAYESIAN REGRESSION MODEL ──
+    var priorStrength = 30; // ~1 game of 3PA as prior weight
+    var priorAlpha = seasonPrior3Pct / 100 * priorStrength;
+    var priorBeta = (1 - seasonPrior3Pct / 100) * priorStrength;
+    var posteriorAlpha = priorAlpha + team3PM;
+    var posteriorBeta = priorBeta + (team3PA - team3PM);
+    var posteriorMean = posteriorAlpha / (posteriorAlpha + posteriorBeta) * 100;
 
-TRAJECTORY: [team or NEUTRAL] — [count]/8 signals
-T1 — Role Player Heater: [detail or CLEAR]
-T2 — Star Process Integrity: [detail or CLEAR]
-T3 — Quarter Delta: [detail or CLEAR]
-T4 — Foul Gate: [detail or CLEAR]
-T5 — Interior Trend: [detail or CLEAR]
-T6 — Quarter Assist Ratio: [detail or CLEAR]
-T7 — Closing Lineup: [detail or CLEAR]
-T8 — Shot Diet Misalignment: [detail or CLEAR]
+    var deviation = live3Pct - seasonPrior3Pct;
 
-THESIS STATUS: [CONFIRMED|DEVELOPING|CONTESTED|DENIED] — [note]
-DIVERGENCE NOTES: [where your scores differ from dashboard and why]
+    // Regression pull: how far posterior moved from observed toward prior
+    var regressionPull = 0;
+    if (team3PA > 0 && Math.abs(live3Pct - seasonPrior3Pct) > 0.5) {
+      regressionPull = Math.abs(posteriorMean - live3Pct) / Math.abs(live3Pct - seasonPrior3Pct) * 100;
+    }
+    regressionPull = Math.min(100, Math.max(0, regressionPull));
 
-Be concise. 1 line per indicator. Decisive when clear. Passing is correct when it isn't.`;
+    // Regression probability: base rate from sample size, adjusted by deviation
+    var regressionProb;
+    if (team3PA <= 8) regressionProb = 85;
+    else if (team3PA <= 14) regressionProb = 70;
+    else if (team3PA <= 20) regressionProb = 55;
+    else if (team3PA <= 28) regressionProb = 40;
+    else regressionProb = 25;
 
-exports.handler = async (event) => {
-  const headers = {
+    if (deviation > 15) regressionProb = Math.min(95, regressionProb + 15);
+    else if (deviation > 8) regressionProb = Math.min(95, regressionProb + 8);
+    else if (deviation > 3) regressionProb = Math.min(95, regressionProb + 3);
+    else if (deviation < -8) regressionProb = Math.max(5, regressionProb - 15);
+    else if (deviation < -3) regressionProb = Math.max(5, regressionProb - 8);
+
+    var regressionGrade;
+    if (regressionProb >= 75) regressionGrade = 'HIGH';
+    else if (regressionProb >= 55) regressionGrade = 'MODERATE';
+    else if (regressionProb >= 35) regressionGrade = 'LOW';
+    else regressionGrade = 'MINIMAL';
+
+    // ── SHOT TYPE CONTEXT ──
+    var shotTypeGrade = 'UNKNOWN';
+    var shotTypeNote = '';
+    var teamAssists = stats.assists || 0;
+    var teamFGM = stats.field_goals_made || 1;
+    var assistRatio = teamAssists / teamFGM * 100;
+
+    if (tracking) {
+      var cas = tracking.catchAndShoot || {};
+      var pu = tracking.pullUp || {};
+      var casEfg = cas.efg || cas.fg3pct || null;
+      var puEfg = pu.efg || pu.fg3pct || null;
+
+      if (casEfg !== null && puEfg !== null) {
+        if (assistRatio >= 60 && casEfg >= 38) {
+          shotTypeGrade = 'DURABLE';
+          shotTypeNote = 'High ast% (' + assistRatio.toFixed(0) + '%) + strong C&S baseline (' + casEfg + '%)';
+        } else if (assistRatio < 45 && puEfg < 35) {
+          shotTypeGrade = 'FRAGILE';
+          shotTypeNote = 'Low ast% (' + assistRatio.toFixed(0) + '%) + weak pull-up baseline (' + puEfg + '%)';
+        } else if (assistRatio >= 50) {
+          shotTypeGrade = 'MIXED';
+          shotTypeNote = 'Moderate ast% (' + assistRatio.toFixed(0) + '%) — C&S ' + casEfg + '% / Pull-up ' + puEfg + '%';
+        } else {
+          shotTypeGrade = 'FRAGILE';
+          shotTypeNote = 'Pull-up heavy (' + assistRatio.toFixed(0) + '% ast) — pull-up baseline ' + puEfg + '%';
+        }
+      } else {
+        if (assistRatio >= 65) { shotTypeGrade = 'DURABLE'; shotTypeNote = 'High ast% (' + assistRatio.toFixed(0) + '%) suggests C&S'; }
+        else if (assistRatio < 45) { shotTypeGrade = 'FRAGILE'; shotTypeNote = 'Low ast% (' + assistRatio.toFixed(0) + '%) suggests pull-up/iso'; }
+        else { shotTypeGrade = 'MIXED'; shotTypeNote = 'Moderate ast% (' + assistRatio.toFixed(0) + '%)'; }
+      }
+    } else {
+      if (assistRatio >= 65) { shotTypeGrade = 'DURABLE'; shotTypeNote = 'High ast% (' + assistRatio.toFixed(0) + '%)'; }
+      else if (assistRatio < 45) { shotTypeGrade = 'FRAGILE'; shotTypeNote = 'Low ast% (' + assistRatio.toFixed(0) + '%)'; }
+      else { shotTypeGrade = 'MIXED'; shotTypeNote = 'Moderate ast% (' + assistRatio.toFixed(0) + '%)'; }
+    }
+
+    // ── COMPOSITE TIER ──
+    var scores = { personnel: 0, regression: 0, shotType: 0 };
+
+    if (personnelGrade === 'LOCKED') scores.personnel = 0;
+    else if (personnelGrade === 'DURABLE') scores.personnel = 0.5;
+    else if (personnelGrade === 'MIXED') scores.personnel = 1;
+    else if (personnelGrade === 'FRAGILE') scores.personnel = 1.5;
+    else scores.personnel = 2;
+
+    if (regressionGrade === 'MINIMAL') scores.regression = 0;
+    else if (regressionGrade === 'LOW') scores.regression = 0.5;
+    else if (regressionGrade === 'MODERATE') scores.regression = 1;
+    else scores.regression = 2;
+
+    if (shotTypeGrade === 'LOCKED' || shotTypeGrade === 'DURABLE') scores.shotType = 0;
+    else if (shotTypeGrade === 'MIXED') scores.shotType = 1;
+    else scores.shotType = 2;
+
+    // Weighted: personnel 40%, regression 35%, shot type 25%
+    var composite = scores.personnel * 0.40 + scores.regression * 0.35 + scores.shotType * 0.25;
+
+    var tier;
+    if (composite <= 0.3) tier = 'LOCKED';
+    else if (composite <= 0.7) tier = 'DURABLE';
+    else if (composite <= 1.1) tier = 'MIXED';
+    else if (composite <= 1.5) tier = 'FRAGILE';
+    else tier = 'UNSUSTAINABLE';
+
+    // ── Override: at/below season norm = not a sustainability concern ──
+    if (live3Pct <= seasonPrior3Pct + 2) {
+      tier = 'LOCKED';
+      regressionGrade = 'MINIMAL';
+      personnelGrade = 'N/A (at baseline)';
+    }
+
+    // ── Override: too few attempts ──
+    if (team3PA < 5) tier = 'TOO EARLY';
+
+    return {
+      teamAlias: teamAlias,
+      live3PM: team3PM, live3PA: team3PA,
+      live3Pct: live3Pct.toFixed(1), live3Rate: live3Rate.toFixed(1),
+      seasonPrior: seasonPrior3Pct.toFixed(1), gotSeasonData: gotSeasonData,
+      deviation: deviation.toFixed(1),
+      personnelGrade: personnelGrade, personnelDetails: personnelDetails,
+      elitePct: elitePct.toFixed(0), nonPct: nonPct.toFixed(0),
+      posteriorMean: posteriorMean.toFixed(1),
+      regressionPull: regressionPull.toFixed(0),
+      regressionProb: regressionProb, regressionGrade: regressionGrade,
+      shotTypeGrade: shotTypeGrade, shotTypeNote: shotTypeNote,
+      assistRatio: assistRatio.toFixed(0),
+      composite: composite.toFixed(2), tier: tier,
+    };
+  }
+
+  return {
+    home: auditTeam(summaryData.home, summaryData.away, homeTeam, trackingData ? trackingData.home : null),
+    away: auditTeam(summaryData.away, summaryData.home, awayTeam, trackingData ? trackingData.away : null),
+  };
+}
+
+function formatSustainabilityAudit(audit) {
+  if (!audit) return '';
+
+  function formatTeam(t) {
+    if (!t) return '';
+    if (t.tier === 'TOO EARLY') return t.teamAlias + ': ' + t.live3PM + '/' + t.live3PA + ' 3PT — TOO EARLY (< 5 attempts)\n';
+
+    var out = t.teamAlias + ': ' + t.live3PM + '/' + t.live3PA + ' (' + t.live3Pct + '%) vs season ' + t.seasonPrior + '%'
+      + (t.gotSeasonData ? '' : ' [NBA avg fallback]') + '\n';
+
+    if (t.personnelGrade === 'N/A (at baseline)') {
+      out += '  Personnel: N/A — shooting at/below baseline\n';
+    } else {
+      out += '  Personnel: ' + t.elitePct + '% makes from ELITE, ' + t.nonPct + '% from NON-SHOOTERS — ' + t.personnelGrade + '\n';
+      t.personnelDetails.forEach(function(p) {
+        out += '    ' + p.name + ': ' + p.live3m + '/' + p.live3a + ' (' + p.livePct + '%) vs szn ' + p.sznStr + ' [' + p.tierLabel + ']' + (p.hot ? ' HOT' : '') + '\n';
+      });
+    }
+
+    out += '  Regression: prior ' + t.seasonPrior + '% | posterior ' + t.posteriorMean + '% | pull ' + t.regressionPull + '% — ' + t.regressionGrade + ' (' + t.regressionProb + '%)\n';
+    out += '  Shot type: ' + t.shotTypeNote + ' — ' + t.shotTypeGrade + '\n';
+    out += '  -> TIER: ' + t.tier + ' (composite ' + t.composite + ')\n';
+    return out;
+  }
+
+  return '\n3PT SUSTAINABILITY AUDIT:\n' + formatTeam(audit.away) + formatTeam(audit.home);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SYSTEM PROMPT
+// ══════════════════════════════════════════════════════════════════════════════
+
+var SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing real-time control assessment and outcome prediction for sports betting.\n\n'
++ 'CORE TASK: Determine which team structurally controls this game and predict who wins, using the full game summary data provided.\n\n'
++ 'FIVE INDICATORS (score each 0.00-1.00 for the controlling team):\n'
++ 'I1 Possession & Transition (25%): TO margin, steals, OREBs, fast break pts, pts off TOs, second chance pts\n'
++ 'I2 Rim Pressure & Foul (25%): Paint points, at-rim FG, FTA, blocks, fouls, bonus status\n'
++ 'I3 Shot Quality & Creation (20%): eFG%, assist ratio (65%+ sustainable, <50% isolation-dependent), shot diet\n'
++ 'I4 Lineup Integrity (20%): Biggest lead, bench contribution, which lineups producing, plus/minus\n'
++ 'I5 Tempo & Efficiency (10%): Possessions, pts/possession differential, pace control\n\n'
++ 'CONTROL: 0.90+ DOMINANT | 0.75-0.89 STRONG | 0.60-0.74 EARNED | 0.45-0.59 NO EDGE | <0.45 WAIT\n\n'
++ 'EIGHT TRAJECTORY SIGNALS (evaluate for BOTH teams):\n'
++ 'T1 Role Player Heater | T2 Star Process Integrity | T3 Quarter Delta (highest weight) | T4 Foul Gate | T5 Interior Trend | T6 Quarter Assist Ratio | T7 Closing Lineup | T8 Shot Diet Misalignment\n\n'
++ 'CRITICAL RULES:\n\n'
++ '1. SUSTAINABILITY IS YOUR PRIMARY LENS: A pre-computed 3PT SUSTAINABILITY AUDIT is provided for both teams. It contains:\n'
++ '   - PERSONNEL AUDIT: What % of 3PM came from ELITE shooters (38%+ season, 2+ 3PA/gm) vs NON-SHOOTERS (<33% or <0.8 3PA/gm)\n'
++ '   - BAYESIAN REGRESSION MODEL: Posterior expected 3PT% given season prior + live data. Includes regression probability accounting for sample size.\n'
++ '   - SHOT TYPE: Assist ratio proxy for catch-and-shoot (durable) vs pull-up/isolation (fragile), cross-referenced with season C&S and pull-up baselines\n'
++ '   - COMPOSITE TIER: LOCKED (structural) / DURABLE (mostly structural) / MIXED / FRAGILE (regression likely) / UNSUSTAINABLE (variance-driven)\n\n'
++ '   USE THESE TIERS DIRECTLY. Do not override unless you have specific evidence the audit missed. If you override, state why.\n\n'
++ '2. ENTRY STRATEGY — BUYING STRUCTURAL CONTROL AT A DISCOUNT:\n'
++ '   The user bets on the structurally dominant team WHEN TRAILING or at value odds because the opponent produces on unsustainable variance. This is the ONLY entry.\n\n'
++ '   OPTIMAL WINDOW = thesis team TRAILING + opponent 3PT tier FRAGILE/UNSUSTAINABLE. Maximum edge — opponent lead built on math that regresses.\n'
++ '   WINDOW OPEN = thesis team TRAILING or below ML threshold + opponent tier MIXED. Moderate edge — some regression expected.\n'
++ '   WINDOW CLOSING = thesis team now LEADING + opponent variance already cooling. Edge shrinking as market corrects.\n'
++ '   NO WINDOW = thesis team already leading at market-priced odds (no discount), OR opponent tier LOCKED/DURABLE (their lead is real).\n'
++ '   COUNTER-SIGNAL = thesis team trailing against LOCKED/DURABLE opponent. Pre-game thesis may be wrong. Do NOT buy.\n\n'
++ '   A team AHEAD and priced as heavy favorite has NO EDGE. Say "NO WINDOW — already priced in."\n\n'
++ '3. SUSTAINABILITY TIER CAPS ON ENTRY:\n'
++ '   LOCKED/DURABLE opponent lead = COUNTER-SIGNAL (do not fade)\n'
++ '   MIXED opponent lead = CONDITIONAL (reduced conviction)\n'
++ '   FRAGILE opponent lead = ENTRY SUPPORTED\n'
++ '   UNSUSTAINABLE opponent lead = OPTIMAL WINDOW\n'
++ '   TOO EARLY = WAIT\n\n'
++ '4. EDGE IS COMPUTED CLIENT-SIDE: Just output your FWP accurately.\n\n'
++ '5. COHERENCE CHECK: Sustainability tier, entry signal, and prediction MUST align. Cannot call OPTIMAL WINDOW if opponent is DURABLE. Cannot call COUNTER-SIGNAL if opponent is UNSUSTAINABLE.\n\n'
++ '6. CONVICTION:\n'
++ '  DOMINANT = sustainable control 0.85+ by quality team, opponent FRAGILE/UNSUSTAINABLE\n'
++ '  STRONG = sustainable control 0.70+, opponent MIXED or worse\n'
++ '  EARNED = sustainable/mixed control 0.60+ with edge\n'
++ '  CONDITIONAL = sustainability concerns or quality gaps\n'
++ '  NO ENTRY = no structural edge, opponent LOCKED/DURABLE, or already priced in\n\n'
++ '7. TEAM QUALITY: Bad team (bottom-12, missing stars) leading good team (top-12, full strength) on FRAGILE/UNSUSTAINABLE shooting = ideal entry. State quality gap.\n\n'
++ 'OUTPUT FORMAT (follow exactly):\n\n'
++ 'DECISION:\n'
++ 'EDGE: [+X% | No market data] | FWP: [X%] | MIP: [X% | N/A]\n'
++ 'ENTRY: [OPTIMAL WINDOW | WINDOW OPEN | WINDOW CLOSING | NO WINDOW | COUNTER-SIGNAL]\n'
++ 'CONVICTION: [DOMINANT | STRONG | EARNED | CONDITIONAL | NO ENTRY]\n'
++ 'Sustainability: [TeamA]: [LOCKED|DURABLE|MIXED|FRAGILE|UNSUSTAINABLE] | [TeamB]: [LOCKED|DURABLE|MIXED|FRAGILE|UNSUSTAINABLE]\n'
++ 'Team Quality: [context for both teams]\n'
++ 'Clutch: [Tier X] — [CLEAR|WATCH|FIRES|NEUTRALIZED]\n'
++ 'Prediction: [1-line decisive call]\n\n'
++ 'EVIDENCE:\n'
++ 'CONTROL: [Team] [score] — [level]\n\n'
++ 'I1 Possession & Transition (25%): [team] [score] — [explanation]\n'
++ 'I2 Rim Pressure & Foul (25%): [team] [score] — [explanation]\n'
++ 'I3 Shot Quality & Creation (20%): [team] [score] — [explanation]\n'
++ 'I4 Lineup Integrity (20%): [team] [score] — [explanation]\n'
++ 'I5 Tempo & Efficiency (10%): [team] [score] — [explanation]\n\n'
++ 'TRAJECTORY: [team or NEUTRAL] — [count]/8 signals\n'
++ 'T1 — Role Player Heater: [detail or CLEAR]\n'
++ 'T2 — Star Process Integrity: [detail or CLEAR]\n'
++ 'T3 — Quarter Delta: [detail or CLEAR]\n'
++ 'T4 — Foul Gate: [detail or CLEAR]\n'
++ 'T5 — Interior Trend: [detail or CLEAR]\n'
++ 'T6 — Quarter Assist Ratio: [detail or CLEAR]\n'
++ 'T7 — Closing Lineup: [detail or CLEAR]\n'
++ 'T8 — Shot Diet Misalignment: [detail or CLEAR]\n\n'
++ 'THESIS STATUS: [CONFIRMED|DEVELOPING|CONTESTED|DENIED] — [note]\n'
++ 'DIVERGENCE NOTES: [where your scores differ from dashboard and why]\n\n'
++ 'Be concise. 1 line per indicator. Decisive when clear. Passing is correct when it is not.';
+
+// ══════════════════════════════════════════════════════════════════════════════
+// HANDLER
+// ══════════════════════════════════════════════════════════════════════════════
+
+exports.handler = async function(event) {
+  var headers = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -85,99 +345,112 @@ exports.handler = async (event) => {
   };
 
   if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 204, headers, body: '' };
+    return { statusCode: 204, headers: headers, body: '' };
   }
 
   if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, headers, body: JSON.stringify({ error: 'POST only' }) };
+    return { statusCode: 405, headers: headers, body: JSON.stringify({ error: 'POST only' }) };
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  var apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    return { statusCode: 500, headers, body: JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured' }) };
+    return { statusCode: 500, headers: headers, body: JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured' }) };
   }
 
   try {
-    const { summaryData, thesis, homeTeam, awayTeam, period, score, clutchData, oddsData, edgeHistory, trackingData } = JSON.parse(event.body);
+    var body = JSON.parse(event.body);
+    var summaryData = body.summaryData;
+    var thesis = body.thesis;
+    var homeTeam = body.homeTeam;
+    var awayTeam = body.awayTeam;
+    var period = body.period;
+    var score = body.score;
+    var clutchData = body.clutchData;
+    var oddsData = body.oddsData;
+    var edgeHistory = body.edgeHistory;
+    var trackingData = body.trackingData;
 
     if (!summaryData) {
-      return { statusCode: 400, headers, body: JSON.stringify({ error: 'summaryData required' }) };
+      return { statusCode: 400, headers: headers, body: JSON.stringify({ error: 'summaryData required' }) };
     }
 
+    // ── 3PT SUSTAINABILITY AUDIT (pre-computed) ──
+    var audit = computeSustainabilityAudit(summaryData, trackingData, homeTeam, awayTeam);
+    var sustainabilitySection = formatSustainabilityAudit(audit);
+
     // ── CLUTCH SECTION ──
-    let clutchSection = '';
+    var clutchSection = '';
     if (clutchData) {
-      const tierLabel = clutchData.tier === 1 ? 'L15 NBA.com Tier 1' : clutchData.tier === 2 ? 'Season BDL Tier 2' : 'Tier 3';
-      clutchSection = `\nCLUTCH (${tierLabel}):\n`;
-      clutchSection += `${awayTeam}: NetRtg ${clutchData.away?.netRtg ?? 'N/A'} OffRtg ${clutchData.away?.offRtg ?? 'N/A'} DefRtg ${clutchData.away?.defRtg ?? 'N/A'} ${clutchData.away?.wl ?? ''}\n`;
-      clutchSection += `${homeTeam}: NetRtg ${clutchData.home?.netRtg ?? 'N/A'} OffRtg ${clutchData.home?.offRtg ?? 'N/A'} DefRtg ${clutchData.home?.defRtg ?? 'N/A'} ${clutchData.home?.wl ?? ''}\n`;
-      const hNet = clutchData.home?.netRtg, aNet = clutchData.away?.netRtg;
+      var tierLabel = clutchData.tier === 1 ? 'L15 NBA.com Tier 1' : clutchData.tier === 2 ? 'Season BDL Tier 2' : 'Tier 3';
+      clutchSection = '\nCLUTCH (' + tierLabel + '):\n';
+      clutchSection += awayTeam + ': NetRtg ' + (clutchData.away && clutchData.away.netRtg != null ? clutchData.away.netRtg : 'N/A') + ' OffRtg ' + (clutchData.away && clutchData.away.offRtg != null ? clutchData.away.offRtg : 'N/A') + ' DefRtg ' + (clutchData.away && clutchData.away.defRtg != null ? clutchData.away.defRtg : 'N/A') + ' ' + (clutchData.away && clutchData.away.wl ? clutchData.away.wl : '') + '\n';
+      clutchSection += homeTeam + ': NetRtg ' + (clutchData.home && clutchData.home.netRtg != null ? clutchData.home.netRtg : 'N/A') + ' OffRtg ' + (clutchData.home && clutchData.home.offRtg != null ? clutchData.home.offRtg : 'N/A') + ' DefRtg ' + (clutchData.home && clutchData.home.defRtg != null ? clutchData.home.defRtg : 'N/A') + ' ' + (clutchData.home && clutchData.home.wl ? clutchData.home.wl : '') + '\n';
+      var hNet = clutchData.home ? clutchData.home.netRtg : null;
+      var aNet = clutchData.away ? clutchData.away.netRtg : null;
       if (hNet != null && aNet != null) {
-        const better = hNet > aNet ? homeTeam : awayTeam;
-        clutchSection += `Edge: ${better} by ${Math.abs(hNet - aNet).toFixed(1)} NetRtg\n`;
+        var better = hNet > aNet ? homeTeam : awayTeam;
+        clutchSection += 'Edge: ' + better + ' by ' + Math.abs(hNet - aNet).toFixed(1) + ' NetRtg\n';
       }
       if (clutchData.tier <= 2) {
-        const h = clutchData.home || {}, a = clutchData.away || {};
-        if (a.efg != null) clutchSection += `${awayTeam}: eFG ${a.efg}% TS ${a.ts ?? '?'}% TOV% ${a.tovPct ?? '?'} Pace ${a.pace ?? '?'}\n`;
-        if (h.efg != null) clutchSection += `${homeTeam}: eFG ${h.efg}% TS ${h.ts ?? '?'}% TOV% ${h.tovPct ?? '?'} Pace ${h.pace ?? '?'}\n`;
-        if (a.fbp != null) clutchSection += `${awayTeam} conv: FBP ${a.fbp} POT ${a.pot ?? '?'} Paint ${a.paint ?? '?'}\n`;
-        if (h.fbp != null) clutchSection += `${homeTeam} conv: FBP ${h.fbp} POT ${h.pot ?? '?'} Paint ${h.paint ?? '?'}\n`;
-        if (a.pctPts3pt != null) clutchSection += `${awayTeam} diet: 3PT% ${a.pctPts3pt} Paint% ${a.pctPtsPaint ?? '?'} FT% ${a.pctPtsFt ?? '?'}\n`;
-        if (h.pctPts3pt != null) clutchSection += `${homeTeam} diet: 3PT% ${h.pctPts3pt} Paint% ${h.pctPtsPaint ?? '?'} FT% ${h.pctPtsFt ?? '?'}\n`;
+        var h = clutchData.home || {}, a = clutchData.away || {};
+        if (a.efg != null) clutchSection += awayTeam + ': eFG ' + a.efg + '% TS ' + (a.ts != null ? a.ts : '?') + '% TOV% ' + (a.tovPct != null ? a.tovPct : '?') + ' Pace ' + (a.pace != null ? a.pace : '?') + '\n';
+        if (h.efg != null) clutchSection += homeTeam + ': eFG ' + h.efg + '% TS ' + (h.ts != null ? h.ts : '?') + '% TOV% ' + (h.tovPct != null ? h.tovPct : '?') + ' Pace ' + (h.pace != null ? h.pace : '?') + '\n';
+        if (a.fbp != null) clutchSection += awayTeam + ' conv: FBP ' + a.fbp + ' POT ' + (a.pot != null ? a.pot : '?') + ' Paint ' + (a.paint != null ? a.paint : '?') + '\n';
+        if (h.fbp != null) clutchSection += homeTeam + ' conv: FBP ' + h.fbp + ' POT ' + (h.pot != null ? h.pot : '?') + ' Paint ' + (h.paint != null ? h.paint : '?') + '\n';
+        if (a.pctPts3pt != null) clutchSection += awayTeam + ' diet: 3PT% ' + a.pctPts3pt + ' Paint% ' + (a.pctPtsPaint != null ? a.pctPtsPaint : '?') + ' FT% ' + (a.pctPtsFt != null ? a.pctPtsFt : '?') + '\n';
+        if (h.pctPts3pt != null) clutchSection += homeTeam + ' diet: 3PT% ' + h.pctPts3pt + ' Paint% ' + (h.pctPtsPaint != null ? h.pctPtsPaint : '?') + ' FT% ' + (h.pctPtsFt != null ? h.pctPtsFt : '?') + '\n';
       }
     } else {
       clutchSection = '\nCLUTCH: Not provided.\n';
     }
 
     // ── ODDS + SERVER-SIDE MIP ──
-    let oddsSection = '';
+    var oddsSection = '';
     if (oddsData && (oddsData.homeML || oddsData.homeSpread)) {
       function mlToProb(ml) {
-        const n = parseFloat(ml);
+        var n = parseFloat(ml);
         if (isNaN(n) || n === 0) return null;
         return n < 0 ? Math.abs(n) / (Math.abs(n) + 100) : 100 / (n + 100);
       }
-      const homeMIP = mlToProb(oddsData.homeML);
-      const awayMIP = mlToProb(oddsData.awayML);
-      let mipNote = '';
+      var homeMIP = mlToProb(oddsData.homeML);
+      var awayMIP = mlToProb(oddsData.awayML);
+      var mipNote = '';
       if (homeMIP !== null && awayMIP !== null) {
-        const vigSum = homeMIP + awayMIP;
-        const homeNorm = (homeMIP / vigSum * 100).toFixed(1);
-        const awayNorm = (awayMIP / vigSum * 100).toFixed(1);
-        mipNote = `\nPRE-COMPUTED MIP: If ${homeTeam} wins → Edge = FWP - ${homeNorm}% | If ${awayTeam} wins → Edge = FWP - ${awayNorm}%\nUse the MIP of the team you are PREDICTING TO WIN. Do not use the other team's MIP.\n`;
+        var vigSum = homeMIP + awayMIP;
+        var homeNorm = (homeMIP / vigSum * 100).toFixed(1);
+        var awayNorm = (awayMIP / vigSum * 100).toFixed(1);
+        mipNote = '\nPRE-COMPUTED MIP: If ' + homeTeam + ' wins -> Edge = FWP - ' + homeNorm + '% | If ' + awayTeam + ' wins -> Edge = FWP - ' + awayNorm + '%\nUse the MIP of the team you are PREDICTING TO WIN.\n';
       }
-      oddsSection = `\nMARKET: Spread ${homeTeam} ${oddsData.homeSpread ?? 'N/A'} | ML ${awayTeam} ${oddsData.awayML ?? 'N/A'} / ${homeTeam} ${oddsData.homeML ?? 'N/A'} | O/U ${oddsData.total ?? 'N/A'}${mipNote}\n`;
+      oddsSection = '\nMARKET: Spread ' + homeTeam + ' ' + (oddsData.homeSpread || 'N/A') + ' | ML ' + awayTeam + ' ' + (oddsData.awayML || 'N/A') + ' / ' + homeTeam + ' ' + (oddsData.homeML || 'N/A') + ' | O/U ' + (oddsData.total || 'N/A') + mipNote + '\n';
     } else {
       oddsSection = '\nMARKET: No odds.\n';
     }
 
-    // ── TRACKING ──
-    let trackingSection = '';
+    // ── TRACKING BASELINES ──
+    var trackingSection = '';
     if (trackingData) {
-      const h = trackingData.home || {}, a = trackingData.away || {};
+      var ht = trackingData.home || {}, at = trackingData.away || {};
       trackingSection = '\nSHOOTING BASELINES:\n';
-      if (h.catchAndShoot || a.catchAndShoot) trackingSection += `C&S: ${awayTeam} ${a.catchAndShoot?.efg ?? '?'}% | ${homeTeam} ${h.catchAndShoot?.efg ?? '?'}%\n`;
-      if (h.pullUp || a.pullUp) trackingSection += `Pull-up: ${awayTeam} ${a.pullUp?.efg ?? '?'}% | ${homeTeam} ${h.pullUp?.efg ?? '?'}%\n`;
+      if (ht.catchAndShoot || at.catchAndShoot) trackingSection += 'C&S: ' + awayTeam + ' ' + (at.catchAndShoot ? at.catchAndShoot.efg || '?' : '?') + '% | ' + homeTeam + ' ' + (ht.catchAndShoot ? ht.catchAndShoot.efg || '?' : '?') + '%\n';
+      if (ht.pullUp || at.pullUp) trackingSection += 'Pull-up: ' + awayTeam + ' ' + (at.pullUp ? at.pullUp.efg || '?' : '?') + '% | ' + homeTeam + ' ' + (ht.pullUp ? ht.pullUp.efg || '?' : '?') + '%\n';
     }
 
     // ── EDGE HISTORY ──
-    let edgeSection = '';
+    var edgeSection = '';
     if (edgeHistory && edgeHistory.length > 0) {
-      edgeSection = '\nEDGE HISTORY:\n' + edgeHistory.map(e => `${e.time} | ${e.edge} FWP ${e.fwp} | ${e.control} ${e.score}`).join('\n') + '\n';
+      edgeSection = '\nEDGE HISTORY:\n' + edgeHistory.map(function(e) { return e.time + ' | ' + e.edge + ' FWP ' + e.fwp + ' | ' + e.control + ' ' + e.score; }).join('\n') + '\n';
     }
 
-    // ── FULL DATA — no trimming ──
-    const userPrompt = `${awayTeam} @ ${homeTeam} | ${period} | ${score}
+    // ── BUILD PROMPT ──
+    var userPrompt = awayTeam + ' @ ' + homeTeam + ' | ' + period + ' | ' + score + '\n\n'
+      + (thesis ? 'THESIS:\n' + thesis + '\n' : 'No thesis.')
+      + '\n' + clutchSection + oddsSection + trackingSection + sustainabilitySection + edgeSection
+      + '\nGAME DATA:\n' + JSON.stringify(summaryData);
 
-${thesis ? `THESIS:\n${thesis}\n` : 'No thesis.'}
-${clutchSection}${oddsSection}${trackingSection}${edgeSection}
-GAME DATA:
-${JSON.stringify(summaryData)}`;
+    var controller = new AbortController();
+    var timeout = setTimeout(function() { controller.abort(); }, 25000);
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 25000);
-
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    var resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       signal: controller.signal,
       headers: {
@@ -195,18 +468,22 @@ ${JSON.stringify(summaryData)}`;
     clearTimeout(timeout);
 
     if (!resp.ok) {
-      const errText = await resp.text();
-      return { statusCode: resp.status, headers, body: JSON.stringify({ error: `Anthropic ${resp.status}: ${errText.substring(0, 300)}` }) };
+      var errText = await resp.text();
+      return { statusCode: resp.status, headers: headers, body: JSON.stringify({ error: 'Anthropic ' + resp.status + ': ' + errText.substring(0, 300) }) };
     }
 
-    const data = await resp.json();
-    const analysis = data.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+    var data = await resp.json();
+    var analysis = data.content.filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('\n');
 
-    return { statusCode: 200, headers, body: JSON.stringify({ analysis, usage: data.usage }) };
+    return {
+      statusCode: 200,
+      headers: headers,
+      body: JSON.stringify({ analysis: analysis, usage: data.usage, sustainabilityAudit: audit }),
+    };
   } catch (err) {
     if (err.name === 'AbortError') {
-      return { statusCode: 504, headers, body: JSON.stringify({ error: 'Analysis timed out (25s). Try again.' }) };
+      return { statusCode: 504, headers: headers, body: JSON.stringify({ error: 'Analysis timed out (25s). Try again.' }) };
     }
-    return { statusCode: 500, headers, body: JSON.stringify({ error: err.message }) };
+    return { statusCode: 500, headers: headers, body: JSON.stringify({ error: err.message }) };
   }
 };
