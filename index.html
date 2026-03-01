@@ -1054,9 +1054,20 @@ function compressImage(file, maxW, quality){
       c.width = w; c.height = h;
       const ctx = c.getContext('2d');
       ctx.drawImage(img, 0, 0, w, h);
-      const dataUrl = c.toDataURL('image/jpeg', quality);
-      const b64 = dataUrl.split(',')[1];
-      console.log(`Image compressed: ${file.name} → ${w}×${h} JPEG, ~${Math.round(b64.length*3/4/1024)}KB`);
+      let dataUrl = c.toDataURL('image/jpeg', quality);
+      let b64 = dataUrl.split(',')[1];
+      // If payload still too large (>800KB base64 ≈ ~600KB image), re-compress harder
+      if(b64.length > 800000 && quality > 0.5){
+        const q2 = Math.max(0.45, quality - 0.25);
+        const w2 = Math.min(w, 1100);
+        const h2 = Math.round(h * w2 / w);
+        c.width = w2; c.height = h2;
+        ctx.drawImage(img, 0, 0, w2, h2);
+        dataUrl = c.toDataURL('image/jpeg', q2);
+        b64 = dataUrl.split(',')[1];
+        console.log('Re-compressed: '+w2+'x'+h2+' q='+q2+' ~'+Math.round(b64.length*3/4/1024)+'KB');
+      }
+      console.log('Image compressed: '+file.name+' → '+w+'x'+h+' JPEG, ~'+Math.round(b64.length*3/4/1024)+'KB (b64: '+Math.round(b64.length/1024)+'KB)');
       res({ base64: b64, mediaType: 'image/jpeg' });
     };
     img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('Image load failed — unsupported format?')); };
@@ -1082,7 +1093,7 @@ async function handleClutchUpload(input){
     // Compress image client-side to avoid Netlify function timeout
     // iPhone screenshots can be 3-5MB; resize to max 1600px wide JPEG
     status.textContent = '⏳ Compressing...';
-    const {base64, mediaType} = await compressImage(file, 1600, 0.82);
+    const {base64, mediaType} = await compressImage(file, 1400, 0.72);
 
     // Collect all team abbreviations from the full day's slate
     const activeTeams = [];
@@ -1092,14 +1103,20 @@ async function handleClutchUpload(input){
     }
 
     // Send to clutch-ocr function with team filter
-    status.textContent = '⏳ Extracting ' + activeTeams.length + ' teams...';
+    status.textContent = '⏳ Extracting ' + activeTeams.length + ' teams...(~15s)';
+    const ocrController = new AbortController();
+    const ocrTimeout = setTimeout(() => ocrController.abort(), 28000);
     const resp = await fetch(FN+'clutch-ocr',{
       method:'POST',
+      signal: ocrController.signal,
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({ image: base64, mediaType, segment, teams: activeTeams })
     });
+    clearTimeout(ocrTimeout);
 
     if(!resp.ok){
+      if(resp.status === 504) throw new Error('Server timed out — image may be too large. Try cropping the screenshot.');
+      if(resp.status === 413) throw new Error('Image too large for server. Try a smaller screenshot or crop.');
       const err = await resp.json().catch(()=>({error:resp.statusText}));
       throw new Error(err.error || 'OCR failed: '+resp.status);
     }
@@ -1134,7 +1151,8 @@ async function handleClutchUpload(input){
 
   }catch(e){
     console.error('Clutch upload error:', e);
-    status.textContent = '✗ '+e.message;
+    var errMsg = e.name === 'AbortError' ? 'OCR timed out — try cropping the screenshot or reducing image size' : e.message;
+    status.textContent = '✗ '+errMsg;
     status.className = 'cu-status err';
   }finally{
     btn.classList.remove('active');
