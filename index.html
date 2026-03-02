@@ -234,13 +234,24 @@ input,textarea,select{font-size:16px!important;}
 #conf-table .ct-hdr{font-size:7px;letter-spacing:1.5px;color:var(--t2);text-transform:uppercase;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;}
 #conf-table table{width:100%;border-collapse:collapse;font-size:7px;}
 #conf-table th{color:var(--t3);font-weight:400;text-align:left;padding:2px 4px;border-bottom:1px solid var(--b1);font-size:5.5px;letter-spacing:.5px;text-transform:uppercase;}
-#conf-table td{padding:4px;border-bottom:1px solid rgba(255,255,255,.03);vertical-align:top;}
+#conf-table td{padding:4px;border-bottom:1px solid rgba(255,255,255,.03);vertical-align:middle;}
 #conf-table tr:last-child td{border-bottom:none;}
 #conf-table .ct-matchup{color:var(--t1);font-weight:600;letter-spacing:.3px;white-space:nowrap;}
 #conf-table .ct-score{font-weight:600;font-size:8px;text-align:center;}
 #conf-table .ct-verdict{font-size:5.5px;letter-spacing:.5px;text-align:center;}
 #conf-table .ct-cond{color:var(--t2);font-size:6px;line-height:1.4;max-width:180px;}
-@media(max-width:600px){#conf-table .ct-cond{max-width:120px;font-size:5.5px;}}
+#conf-table tr.ct-final td{color:var(--t3) !important;opacity:.5;}
+#conf-table tr.ct-final .ct-matchup{color:var(--t3);}
+#conf-table tr.ct-row{border-left:2px solid transparent;}
+#conf-table tr.ct-optimal{border-left:2px solid var(--green);background:rgba(0,200,83,.04);}
+#conf-table tr.ct-window{border-left:2px solid var(--amber);background:rgba(255,160,0,.03);}
+#conf-table tr.ct-closing{border-left:2px solid var(--yellow);background:rgba(255,235,59,.02);}
+#conf-table tr.ct-counter{border-left:2px solid var(--red);background:rgba(255,82,82,.03);}
+#conf-table .ct-badge{font-size:5px;letter-spacing:.5px;padding:1px 4px;border-radius:3px;font-weight:600;display:inline-block;text-transform:uppercase;}
+#conf-table .ct-live{background:rgba(0,200,83,.15);color:var(--green);}
+#conf-table .ct-pre{background:rgba(255,255,255,.06);color:var(--t3);}
+#conf-table .ct-done{background:rgba(255,255,255,.04);color:var(--t3);}
+@media(max-width:600px){#conf-table .ct-cond{max-width:120px;font-size:5.5px;}#conf-table table{font-size:6px;}}
 </style>
 </head>
 <body>
@@ -292,8 +303,8 @@ input,textarea,select{font-size:16px!important;}
   <div id="loading" class="loading" style="display:none;"><div class="spin"></div> Loading schedule…</div>
   <div id="err" class="err-msg" style="display:none;"></div>
   <div id="date-lbl" class="date-label"></div>
-  <div id="pills" class="pills"></div>
   <div id="conf-table" style="display:none"></div>
+  <div id="pills" class="pills"></div>
   <div id="empty" class="empty">SELECT UP TO 5 GAMES ABOVE TO BEGIN</div>
   <div id="grid" class="grid"></div>
 </div>
@@ -363,8 +374,10 @@ const theses = JSON.parse(localStorage.getItem('nba4:theses')||'{}');
 const cachedClutch = JSON.parse(localStorage.getItem('nba4:clutch')||'{}');
 const cachedOdds = JSON.parse(localStorage.getItem('nba4:odds')||'{}');
 const cachedOddsHistory = JSON.parse(localStorage.getItem('nba4:oddsHist')||'{}');
+const confCache = JSON.parse(localStorage.getItem('nba4:confTable')||'{}');
 function persistClutch(id,cs){cachedClutch[id]={data:cs.clutchData,tier:cs.clutchTier};localStorage.setItem('nba4:clutch',JSON.stringify(cachedClutch));}
 function persistOdds(id,cs){cachedOdds[id]=cs.oddsData;cachedOddsHistory[id]=cs.oddsHistory;localStorage.setItem('nba4:odds',JSON.stringify(cachedOdds));localStorage.setItem('nba4:oddsHist',JSON.stringify(cachedOddsHistory));}
+function persistConfRow(gameId, rowData){confCache[gameId]=rowData;localStorage.setItem('nba4:confTable',JSON.stringify(confCache));}
 const cardState = {};
 
 // BDL fallback state
@@ -709,6 +722,7 @@ async function fetchSummary(game){
     cs.lastFingerprint = fp;
 
     renderCard(game);
+    renderConfidenceTable();
     checkAlert(game);
 
     // Auto-analyze disabled — use manual ⚡ ANALYZE button to control token spend
@@ -757,6 +771,7 @@ async function fetchBdlFallback(game, reason){
     cs.lastFingerprint = fp;
 
     renderCard(game);
+    renderConfidenceTable();
     checkAlert(game);
 
     // Auto-analyze disabled — use manual ⚡ ANALYZE button
@@ -1725,6 +1740,9 @@ function parseSonnetDecision(text){
     // Parse Prediction line
     const predMatch = text.match(/Prediction:\s*(.+)/i);
     d.prediction = predMatch ? predMatch[1].trim() : null;
+    // Parse Thesis Status line
+    const tsMatch = text.match(/THESIS\s*STATUS:\s*(CONFIRMED|DEVELOPING|CONTESTED|DENIED)/i);
+    d.thesisStatus = tsMatch ? tsMatch[1].toUpperCase() : null;
     // Need at least prediction or conviction to be valid
     if(!d.prediction && !d.conviction) return null;
     return d;
@@ -2542,7 +2560,7 @@ function renderGrid(){
 
 // ── Thesis helpers ────────────────────────────────────────────────────────
 function saveThesis(gameId,text){theses[gameId]=text;localStorage.setItem('nba4:theses',JSON.stringify(theses));renderConfidenceTable();}
-function clearTheses(){if(!confirm('Clear all theses?'))return;Object.keys(theses).forEach(k=>delete theses[k]);localStorage.removeItem('nba4:theses');games.filter(g=>selIds.includes(g.id)).forEach(g=>renderCard(g));renderConfidenceTable();}
+function clearTheses(){if(!confirm('Clear all theses?'))return;Object.keys(theses).forEach(k=>delete theses[k]);Object.keys(confCache).forEach(k=>delete confCache[k]);localStorage.removeItem('nba4:theses');localStorage.removeItem('nba4:confTable');games.filter(g=>selIds.includes(g.id)).forEach(g=>renderCard(g));renderConfidenceTable();}
 function clearMarketCache(){if(!confirm('Clear all cached clutch + odds data?'))return;Object.keys(cachedClutch).forEach(k=>delete cachedClutch[k]);Object.keys(cachedOdds).forEach(k=>delete cachedOdds[k]);Object.keys(cachedOddsHistory).forEach(k=>delete cachedOddsHistory[k]);globalClutchData=null;localStorage.removeItem('nba4:clutch');localStorage.removeItem('nba4:odds');localStorage.removeItem('nba4:oddsHist');localStorage.removeItem('nba4:globalClutch');for(const id of selIds){const cs=cardState[id];if(cs){cs.clutchData=null;cs.clutchTier=3;cs.oddsData=null;cs.oddsHistory=[];}}games.filter(g=>selIds.includes(g.id)).forEach(g=>renderCard(g));}
 function parseThesis(t){
   if(!t)return{lean:null,entry:null,pass:null,mlThreshold:null,watches:[],flags:[],shotDiet:null,heaterWatch:null,clutchGate:null};
@@ -2567,56 +2585,160 @@ function parseThesis(t){
   }
   return r;
 }
-// ── CONFIDENCE TABLE — auto-builds from all loaded theses ──
+// ── CONFIDENCE TABLE — live-updating command center ──
 function renderConfidenceTable(){
   const el = document.getElementById('conf-table');
   if(!el) return;
+  const entryPriority = {'OPTIMAL WINDOW':0,'WINDOW OPEN':1,'WINDOW CLOSING':2,'NO WINDOW':3,'COUNTER-SIGNAL':4};
   const rows = [];
   for(const g of games){
     const t = theses[g.id];
     if(!t) continue;
     const hA = g.home?.alias||'HOME', aA = g.away?.alias||'AWAY';
     const matchup = aA + ' @ ' + hA;
-    // Parse CONTROL SCORE line
+    const state = getState(g);
+    // Parse thesis baseline
     let team='', score=0, verdict='';
     const csMatch = t.match(/CONTROL\s+SCORE:\s*(\w+)\s+([\d.]+)\s*[—–-]\s*(\w+)/i);
     if(csMatch){ team=csMatch[1]; score=parseFloat(csMatch[2]); verdict=csMatch[3]; }
-    // Parse ENTRY / PASS
     const p = parseThesis(t);
-    // If live Sonnet analysis exists, use that instead
+    // Pull live data from cardState
     const cs = cardState[g.id];
     const si = cs?.sonnetIndicators;
     if(si && si.score){ team=si.controlTeam; score=si.score; verdict=getVerdict(si)?.label||verdict; }
     const pred = cs?.prediction;
     const fwp = pred?.fwp || null;
     const edge = pred?.edgeNum ?? null;
+    const entry = pred?.entry || null;
+    const conviction = pred?.conviction || null;
+    const thesisStatus = pred?.thesisStatus || null;
+    // Sustainability from audit
+    let sustHome = null, sustAway = null;
+    const sa = cs?.sustainabilityAudit;
+    if(sa){ sustHome = sa.homeTier || sa.home?.tier || null; sustAway = sa.awayTier || sa.away?.tier || null; }
+    else if(pred?.sustainability){ sustHome = pred.sustainability; sustAway = null; }
+    // Live score
+    const homeScore = g.homePoints, awayScore = g.awayPoints;
+    const period = g.period||0, clock = g.clock||'';
     if(!team && !score) continue;
-    rows.push({matchup, team, score, verdict, entry:p.entry||'—', pass:p.pass||'—', mlThreshold:p.mlThreshold||null, mlValue:p.mlValue||null, gameId:g.id, fwp, edge});
+    const row = {matchup, team, score, verdict, gameId:g.id, state, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, hA, aA, entryIf:p.entry||null, passIf:p.pass||null};
+    // Persist live data to cache whenever we have analysis results
+    if(pred || si){
+      persistConfRow(g.id, {team, score, verdict, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, state, ts:Date.now()});
+    } else {
+      // Fall back to cached data if no live cardState (e.g. page refresh, card not mounted)
+      const cached = confCache[g.id];
+      if(cached){
+        if(!row.entry && cached.entry) row.entry = cached.entry;
+        if(!row.conviction && cached.conviction) row.conviction = cached.conviction;
+        if(!row.thesisStatus && cached.thesisStatus) row.thesisStatus = cached.thesisStatus;
+        if(!row.fwp && cached.fwp) row.fwp = cached.fwp;
+        if(row.edge===null && cached.edge!==null) row.edge = cached.edge;
+        if(!row.sustHome && cached.sustHome) row.sustHome = cached.sustHome;
+        if(!row.sustAway && cached.sustAway) row.sustAway = cached.sustAway;
+        if(row.homeScore===null && cached.homeScore!==null){ row.homeScore=cached.homeScore; row.awayScore=cached.awayScore; row.period=cached.period; row.clock=cached.clock; }
+        if(cached.state==='FINAL' && row.state==='PRE') row.state = cached.state;
+        if(cached.team && !si) { row.team=cached.team; row.score=cached.score; row.verdict=cached.verdict; }
+      }
+    }
+    rows.push(row);
   }
   if(!rows.length){ el.style.display='none'; return; }
-  rows.sort((a,b)=>b.score-a.score);
+  // Sort: LIVE first (by entry priority), then PRE (by score), then FINAL (by score)
+  const stateOrder = {LIVE:0, PRE:1, FINAL:2};
+  rows.sort((a,b)=>{
+    const sa = stateOrder[a.state]??1, sb = stateOrder[b.state]??1;
+    if(sa!==sb) return sa-sb;
+    if(a.state==='LIVE'){
+      const ea = entryPriority[a.entry]??5, eb = entryPriority[b.entry]??5;
+      if(ea!==eb) return ea-eb;
+    }
+    return b.score-a.score;
+  });
   const vColor = (v) => {
     const lv = (v||'').toLowerCase();
     return lv.includes('dominant')?'var(--green)':lv.includes('strong')?'var(--g2)':lv.includes('earned')?'var(--yellow)':lv.includes('no edge')||lv.includes('wait')?'var(--red)':'var(--t2)';
   };
-  const edgeStr = (e) => e===null?'':'<span style="color:'+(e>=5?'var(--green)':e>=1?'var(--yellow)':e>=0?'var(--t3)':'var(--red)')+'">'+(e>=0?'+':'')+e.toFixed(1)+'%</span>';
-  let html = `<div class="ct-hdr" onclick="confCollapsed=!confCollapsed;renderConfidenceTable()" style="cursor:pointer">CONFIDENCE TABLE <span class="arr" style="display:inline-block;transition:transform .2s;transform:rotate(${confCollapsed?'0':'90'}deg);margin-left:2px">▸</span><span style="font-size:5px;color:var(--t3);margin-left:auto">${rows.length} ${rows.length===1?'thesis':'theses'} loaded</span></div>`;
+  const edgeStr = (e) => e===null||e===undefined?'':'<span style="color:'+(e>=5?'var(--green)':e>=1?'var(--yellow)':e>=0?'var(--t3)':'var(--red)')+'">'+(e>=0?'+':'')+e.toFixed(1)+'%</span>';
+  const entryColor = (e) => e==='OPTIMAL WINDOW'?'var(--green)':e==='WINDOW OPEN'?'var(--g2)':e==='WINDOW CLOSING'?'var(--yellow)':e==='COUNTER-SIGNAL'?'var(--red)':'var(--t3)';
+  const convColor = (c) => ({DOMINANT:'var(--green)',STRONG:'var(--g2)',EARNED:'var(--yellow)',CONDITIONAL:'var(--amber)'})[c]||'var(--t3)';
+  const tsColor = (s) => s==='CONFIRMED'?'var(--green)':s==='DEVELOPING'?'var(--g2)':s==='CONTESTED'?'var(--amber)':s==='DENIED'?'var(--red)':'var(--t3)';
+  const entryClass = (e) => e==='OPTIMAL WINDOW'?'ct-optimal':e==='WINDOW OPEN'?'ct-window':e==='WINDOW CLOSING'?'ct-closing':e==='COUNTER-SIGNAL'?'ct-counter':'';
+  const liveCount = rows.filter(r=>r.state==='LIVE').length;
+  const preCount = rows.filter(r=>r.state==='PRE').length;
+  const finalCount = rows.filter(r=>r.state==='FINAL').length;
+  const statsSummary = [liveCount?liveCount+' live':'', preCount?preCount+' pre':'', finalCount?finalCount+' final':''].filter(Boolean).join(' / ');
+  let html = '<div class="ct-hdr" onclick="confCollapsed=!confCollapsed;renderConfidenceTable()" style="cursor:pointer">CONFIDENCE TABLE <span class="arr" style="display:inline-block;transition:transform .2s;transform:rotate('+(confCollapsed?'0':'90')+'deg);margin-left:2px">&#9656;</span><span style="font-size:5px;color:var(--t3);margin-left:auto">'+rows.length+' '+(rows.length===1?'game':'games')+' &#183; '+statsSummary+'</span></div>';
   if(!confCollapsed){
-  html += `<table><tr><th>MATCHUP</th><th>CTRL</th><th style="text-align:center">SCORE</th><th>FWP</th><th>EDGE</th><th>ML THR</th><th>ENTRY IF</th><th>PASS IF</th></tr>`;
+  html += '<table><tr><th></th><th>MATCHUP</th><th style="text-align:center">SCORE</th><th>CTRL</th><th style="text-align:center">CTRL</th><th>FWP</th><th>EDGE</th><th>ENTRY</th><th>CONV</th><th>SUST</th><th>THESIS</th></tr>';
   for(const r of rows){
-    const mlStr = r.mlValue ? '<span style="color:var(--amber);font-size:7px;font-weight:600">'+r.mlValue+'</span>' : '<span style="color:var(--t3);font-size:6px">—</span>';
-    html += `<tr style="cursor:pointer" onclick="document.getElementById('card-${r.gameId}')?.scrollIntoView({behavior:'smooth',block:'start'})">
-      <td class="ct-matchup">${esc(r.matchup)}</td>
-      <td style="color:${vColor(r.verdict)}">${esc(r.team)}</td>
-      <td class="ct-score" style="color:${vColor(r.verdict)}">${r.score.toFixed(2)}<div class="ct-verdict" style="color:${vColor(r.verdict)}">${esc(r.verdict)}</div></td>
-      <td style="color:var(--t1);font-size:8px;text-align:center;font-weight:600">${r.fwp||'—'}</td>
-      <td style="font-size:7px;text-align:center">${edgeStr(r.edge)}</td>
-      <td style="text-align:center">${mlStr}</td>
-      <td class="ct-cond" style="color:var(--green)">${esc(r.entry)}</td>
-      <td class="ct-cond" style="color:var(--red)">${esc(r.pass)}</td>
-    </tr>`;
+    const isFinal = r.state==='FINAL';
+    const rowClass = 'ct-row'+(isFinal?' ct-final':' '+entryClass(r.entry));
+    // State badge
+    let stateBadge = '';
+    if(r.state==='LIVE'){
+      const qStr = r.period ? 'Q'+r.period+(r.clock?' '+r.clock:'') : 'LIVE';
+      stateBadge = '<span class="ct-badge ct-live">'+esc(qStr)+'</span>';
+    } else if(r.state==='FINAL'){
+      stateBadge = '<span class="ct-badge ct-done">FINAL</span>';
+    } else {
+      stateBadge = '<span class="ct-badge ct-pre">PRE</span>';
+    }
+    // Score display
+    let scoreStr = '';
+    if(r.homeScore!==null && r.homeScore!==undefined){
+      scoreStr = '<span style="font-weight:600;font-size:7px">'+esc(r.aA)+' '+r.awayScore+'</span><span style="color:var(--t3);margin:0 2px">-</span><span style="font-weight:600;font-size:7px">'+r.homeScore+' '+esc(r.hA)+'</span>';
+    } else { scoreStr = '<span style="color:var(--t3)">&#8212;</span>'; }
+    // Sustainability — show both teams compact
+    let sustStr = '';
+    if(r.sustHome || r.sustAway){
+      const shorten = (s) => {
+        if(!s) return '?';
+        const u = s.toUpperCase();
+        if(u.includes('LOCKED')) return 'LCKD';
+        if(u.includes('DURABLE')) return 'DUR';
+        if(u.includes('MIXED')) return 'MIX';
+        if(u.includes('FRAGILE')) return 'FRG';
+        if(u.includes('UNSUST')) return 'UNS';
+        return s.substring(0,4).toUpperCase();
+      };
+      const sustColor = (s) => {
+        if(!s) return 'var(--t3)';
+        const u = s.toUpperCase();
+        if(u.includes('LOCKED')) return 'var(--green)';
+        if(u.includes('DURABLE')) return 'var(--g2)';
+        if(u.includes('MIXED')) return 'var(--yellow)';
+        if(u.includes('FRAGILE')) return 'var(--amber)';
+        if(u.includes('UNSUST')) return 'var(--red)';
+        return 'var(--t3)';
+      };
+      if(r.sustAway){
+        sustStr = '<span style="color:'+sustColor(r.sustHome)+'">'+esc(r.hA)+':'+shorten(r.sustHome)+'</span> <span style="color:'+sustColor(r.sustAway)+'">'+esc(r.aA)+':'+shorten(r.sustAway)+'</span>';
+      } else {
+        sustStr = '<span style="color:'+sustColor(r.sustHome)+'">'+esc(r.sustHome||'')+'</span>';
+      }
+    } else { sustStr = '<span style="color:var(--t3)">&#8212;</span>'; }
+    // Entry signal
+    const entryStr = r.entry ? '<span style="color:'+entryColor(r.entry)+'">'+esc(r.entry)+'</span>' : '<span style="color:var(--t3)">&#8212;</span>';
+    // Conviction
+    const convStr = r.conviction ? '<span style="color:'+convColor(r.conviction)+'">'+esc(r.conviction)+'</span>' : '<span style="color:var(--t3)">&#8212;</span>';
+    // Thesis status
+    const tsStr = r.thesisStatus ? '<span style="color:'+tsColor(r.thesisStatus)+'">'+esc(r.thesisStatus)+'</span>' : '<span style="color:var(--t3)">&#8212;</span>';
+    html += '<tr class="'+rowClass+'" style="cursor:pointer" onclick="document.getElementById(\'card-'+r.gameId+'\')?.scrollIntoView({behavior:\'smooth\',block:\'start\'})">'
+      + '<td style="text-align:center">'+stateBadge+'</td>'
+      + '<td class="ct-matchup">'+esc(r.matchup)+'</td>'
+      + '<td style="text-align:center;white-space:nowrap;font-size:7px">'+scoreStr+'</td>'
+      + '<td style="color:'+vColor(r.verdict)+'">'+esc(r.team)+'</td>'
+      + '<td class="ct-score" style="color:'+vColor(r.verdict)+'">'+r.score.toFixed(2)+'<div class="ct-verdict" style="color:'+vColor(r.verdict)+'">'+esc(r.verdict)+'</div></td>'
+      + '<td style="color:var(--t1);font-size:8px;text-align:center;font-weight:600">'+(r.fwp||'&#8212;')+'</td>'
+      + '<td style="font-size:7px;text-align:center">'+edgeStr(r.edge)+'</td>'
+      + '<td style="font-size:6px;text-align:center;white-space:nowrap">'+entryStr+'</td>'
+      + '<td style="font-size:6px;text-align:center">'+convStr+'</td>'
+      + '<td style="font-size:5.5px;text-align:center;white-space:nowrap">'+sustStr+'</td>'
+      + '<td style="font-size:6px;text-align:center">'+tsStr+'</td>'
+      + '</tr>';
   }
-  html += `</table>`;
+  html += '</table>';
   } // end if(!confCollapsed)
   el.innerHTML = html;
   el.style.display = 'block';
@@ -3297,6 +3419,7 @@ WATCH
     edge:'+6.2%', edgeNum:6.2, fwp:'83.7%', mip:'77.5%',
     entry:'WINDOW CLOSING', conviction:'STRONG',
     sustainability:'CLE: LOCKED IN | MIL: FRAGILE',
+    thesisStatus:'CONFIRMED',
     teamQuality:'CLE 44-16 full strength, top-3 East | MIL 32-28 missing Giannis, Middleton limited',
     clutch:'CLEAR — both teams above -2.0 L15 NetRtg',
     prediction:'Cleveland wins by 10-14. MIL 3PT production unsustainable (9/28 from non-shooters); CLE interior dominance compounds through Q4.',
