@@ -35,7 +35,7 @@ exports.handler = async (event) => {
       url = `${BDL_BASE}/v1/games?dates[]=${params.date}&per_page=25`;
       break;
     case 'game':
-      // /v1/games/:id — single game with quarter scores and bonus
+      // /v1/games/:id - single game with quarter scores and bonus
       url = `${BDL_BASE}/v1/games/${params.game_id}`;
       break;
     case 'stats':
