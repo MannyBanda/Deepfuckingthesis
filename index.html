@@ -2914,7 +2914,7 @@ function renderCard(game){
 
       html+=`
       <div class="dv">
-        <div class="dv-hdr">DECISION ${analyzeBtn}<span class="analysis-cost">${cs.analysisTime?cs.analysisTime.toLocaleTimeString():''}</span></div>
+        <div class="dv-hdr">DECISION<span style="display:flex;align-items:center;gap:6px;margin-left:auto">${analyzeBtn}<span class="analysis-cost">${cs.analysisTime?cs.analysisTime.toLocaleTimeString():''}</span></span></div>
         <div class="dv-row">
           <span class="dv-label">EDGE</span>
           <span class="dv-val" style="color:${edgeColor}">${esc(pred.edge||'—')}</span>
@@ -2953,7 +2953,7 @@ function renderCard(game){
     } else if(cs.analyzing){
       html+=`<div class="dv"><div class="dv-hdr">DECISION</div><div class="analysis-loading"><div class="spin"></div> Sonnet analyzing…</div></div>`;
     } else {
-      html+=`<div class="dv"><div class="dv-hdr">DECISION ${analyzeBtn}</div><div style="font-size:6px;color:var(--t3);padding:2px 0">${cs.analysisError?'<span style="color:var(--red)">⚠ '+esc(cs.analysisError)+'</span>':game.period<2?'Predictive layer activates Q2+ — press ⚡ to analyze':'Awaiting analysis — press ⚡ ANALYZE'}</div></div>`;
+      html+=`<div class="dv"><div class="dv-hdr">DECISION<span style="margin-left:auto">${analyzeBtn}</span></div><div style="font-size:6px;color:var(--t3);padding:2px 0">${cs.analysisError?'<span style="color:var(--red)">⚠ '+esc(cs.analysisError)+'</span>':game.period<2?'Predictive layer activates Q2+ — press ⚡ to analyze':'Awaiting analysis — press ⚡ ANALYZE'}</div></div>`;
     }
 
     // ─── DATA INPUTS (Clutch + Odds) ───
@@ -3021,10 +3021,10 @@ function renderCard(game){
     html+=`<div class="ev-toggle ${cs.evCollapsed?'':'open'}" id="ev-toggle-${id}" onclick="toggleEV('${id}')">
       EVIDENCE<span style="font-size:5px;color:var(--t3);margin-left:1px">▾</span> <span class="arr">▸</span>
       <span style="margin-left:auto;display:flex;align-items:center;gap:6px">
-        ${depthBtn}
         <span style="font-size:7px;color:${v.color};letter-spacing:.5px">CONTROL <span style="font-size:9px;font-weight:600">${esc(ind.controlTeam)}</span> <span style="font-size:9px">${ind.score.toFixed(2)}</span></span>
         <span style="font-size:6px;color:var(--t3)">·</span>
         <span style="font-size:7px;color:${ind.traj.lean!=='NEUTRAL'&&!ind.traj.tooEarly?'var(--amber)':'var(--t3)'}">TRAJ ${ind.traj.tooEarly?'Q1':esc(ind.traj.lean)+' '+ind.traj.count+'/'+ind.traj.total}</span>
+        ${depthBtn}
       </span>
     </div>`;
 
