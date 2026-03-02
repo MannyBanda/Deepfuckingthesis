@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#07070a">
-<title>NBA Control v5.0</title>
+<title>NBA Control v5.1</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
@@ -257,7 +257,7 @@ input,textarea,select{font-size:16px!important;}
     <div style="display:flex;align-items:center;min-width:0;">
       <span class="logo">NBA Control</span>
       <div class="pulse" id="pulse"></div>
-      <span class="hdr-sub" id="hdr-sub">LIVE · SR via Netlify · v5.0 · FULL</span>
+      <span class="hdr-sub" id="hdr-sub">LIVE · SR via Netlify · v5.1 · FULL</span>
     </div>
     <div class="hdr-r"><span id="live-count">0</span> live · <span id="sel-count">0</span>/5</div>
   </div>
@@ -300,6 +300,58 @@ input,textarea,select{font-size:16px!important;}
   <div id="empty" class="empty">SELECT UP TO 5 GAMES ABOVE TO BEGIN</div>
   <div id="grid" class="grid"></div>
 </div>
+
+<script>
+// ══════════════════════════════════════════════════════════════════════════════
+// BOOT DIAGNOSTICS — catches parse/runtime failures in main script
+// This runs in its own <script> tag so it survives main script parse errors
+// ══════════════════════════════════════════════════════════════════════════════
+window.__nbaBooted = false;
+window.__nbaVersion = 'v5.1';
+window.__bootErrors = [];
+
+window.onerror = function(msg, src, line, col, err) {
+  window.__bootErrors.push({msg:msg, line:line, col:col, src:src});
+  var el = document.getElementById('err');
+  if(el){
+    el.style.display = 'block';
+    el.style.whiteSpace = 'pre-wrap';
+    el.innerHTML = '<span style="color:#ff6b6b;font-weight:600">⚠ JS ERROR</span> ' + window.__nbaVersion + '\n'
+      + String(msg) + '\nLine ' + line + (col ? ':' + col : '') + '\n'
+      + '<span style="color:#888;font-size:5px">Check console for full trace. This usually means a syntax error in index.html.</span>';
+  }
+  console.error('[NBA CONTROL BOOT ERROR]', msg, 'at line', line, col, err);
+};
+
+window.addEventListener('unhandledrejection', function(e) {
+  var msg = e.reason ? (e.reason.message || String(e.reason)) : 'Unknown async error';
+  window.__bootErrors.push({msg:msg, async:true});
+  console.error('[NBA CONTROL ASYNC ERROR]', msg, e.reason);
+});
+
+// Boot canary — fires 4s after page load. If main script parsed and ran,
+// window.__nbaBooted will be true. If not, something broke silently.
+setTimeout(function(){
+  if(!window.__nbaBooted){
+    var el = document.getElementById('err');
+    if(el){
+      el.style.display = 'block';
+      el.style.whiteSpace = 'pre-wrap';
+      var detail = window.__bootErrors.length > 0
+        ? '\nCaptured errors:\n' + window.__bootErrors.map(function(e){return '  ' + e.msg + (e.line ? ' (L'+e.line+')' : '');}).join('\n')
+        : '\nNo errors captured — main script likely failed to parse entirely.';
+      el.innerHTML = '<span style="color:#ff6b6b;font-weight:600">⚠ BOOT FAILURE</span> ' + window.__nbaVersion + '\n'
+        + 'Dashboard JS did not initialize.' + detail + '\n'
+        + '<span style="color:#888;font-size:5px">This usually means a syntax error was introduced in the last deployment.\n'
+        + 'Open browser DevTools → Console to see the parse error.\n'
+        + 'Redeploy the last known working version from GitHub.</span>';
+    }
+    // Also make it obvious in the header
+    var hdr = document.getElementById('hdr-sub');
+    if(hdr) hdr.textContent = 'BOOT FAILURE · JS did not initialize · ' + window.__nbaVersion;
+  }
+}, 4000);
+</script>
 
 <script>
 // ══════════════════════════════════════════════════════════════════════════════
@@ -574,6 +626,8 @@ async function loadSchedule(){
 
 // Load on page ready
 loadSchedule();
+window.__nbaBooted = true; // Boot canary — proves main script parsed successfully
+console.log('[NBA CONTROL]', window.__nbaVersion, 'initialized —', new Date().toLocaleTimeString());
 
 // ══════════════════════════════════════════════════════════════════════════════
 // REFRESH
@@ -672,7 +726,7 @@ async function fetchSummary(game){
       if(sr429Count >= 3){
         srExhausted = true;
         addLog(game.id,'⚠ SR DAILY LIMIT — switching to BDL for session',false);
-        document.getElementById('hdr-sub').textContent = 'LIVE · BDL FALLBACK · v5.0 · PARTIAL';
+        document.getElementById('hdr-sub').textContent = 'LIVE · BDL FALLBACK · v5.1 · PARTIAL';
       }
       return fetchBdlFallback(game, e.message);
     }
@@ -2416,7 +2470,3336 @@ function setPaused(v){
   document.getElementById('btn-live').classList.toggle('on',!v);
   document.getElementById('btn-pause').classList.toggle('on',v);
   document.getElementById('pulse').classList.toggle('off',v);
-  document.getElementById('hdr-sub').textContent=(v?'PAUSED':'LIVE')+' · SR via Netlify · v5.0 · FULL';
+  document.getElementById('hdr-sub').textContent=(v?'PAUSED':'LIVE')+' · SR via Netlify · v5.1 · FULL';
+}
+
+function setFreq(sec){
+  pollInterval=sec*1000;
+  ['f30','f60','f90'].forEach(id=>{
+    const el=document.getElementById(id);
+    el.classList.remove('on','warn');
+  });
+  document.getElementById('f'+sec).classList.add('on');
+  if(sec===30) document.getElementById('f30').classList.add('warn');
+  clearInterval(pollTimer);
+  pollTimer=setInterval(()=>{if(!paused)refreshLiveCards();}, pollInterval);
+}
+
+// ── Alert ─────────────────────────────────────────────────────────────────
+function showAlert(type,msg){
+  const el=document.getElementById('abar');
+  document.getElementById('abar-msg').textContent=(type==='entry'?'⬤ ENTRY SIGNAL':'⬤ WATCH')+' — '+msg;
+  el.className='abar show '+type;
+  clearTimeout(alertTimer);alertTimer=setTimeout(hideAlert,8000);
+}
+function hideAlert(){document.getElementById('abar').className='abar';}
+
+function checkAlert(game){
+  const cs=cardState[game.id];if(!cs)return;
+  const ind=cs.sonnetIndicators||computeAny(game);if(!ind)return;
+  const v=getVerdict(ind.score);
+  if(v.lvl&&v.lvl!==cs.prevLvl)
+    showAlert(v.lvl,ind.controlTeam+' '+v.label+' — '+(game.away?.alias||'')+'@'+(game.home?.alias||''));
+  cs.prevLvl=v.lvl;
+}
+
+// ── Pills ─────────────────────────────────────────────────────────────────
+function renderPills(){
+  const q=(document.getElementById('search').value||'').toUpperCase();
+  const filtered=games.filter(g=>{
+    if(!q)return true;
+    return[g.home?.alias,g.away?.alias,g.home?.name,g.away?.name].some(s=>s?.toUpperCase().includes(q));
+  });
+  document.getElementById('pills').innerHTML=filtered.map(g=>{
+    const gs=getState(g),sel=selIds.includes(g.id);
+    const cls='pill'+(sel?' sel':gs==='LIVE'?' live':gs==='FINAL'?' done':'');
+    let label=(g.away?.alias||'?')+'@'+(g.home?.alias||'?');
+    if(gs==='LIVE') label+=' Q'+(g.period||'?');
+    else if(gs==='FINAL') label+=' F';
+    else try{label+=' '+new Date(g.scheduled).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/Phoenix'});}catch(e){}
+    return`<button class="${cls}" onclick="toggleGame('${g.id}')">${label}</button>`;
+  }).join('');
+  renderGrid();
+}
+
+function toggleGame(id){
+  if(selIds.includes(id)) selIds=selIds.filter(x=>x!==id);
+  else if(selIds.length<5) selIds.push(id);
+  renderPills(); updateCounts();
+}
+
+function renderGrid(){
+  const sel=games.filter(g=>selIds.includes(g.id));
+  document.getElementById('empty').style.display=sel.length?'none':'block';
+  document.getElementById('grid').style.display=sel.length?'grid':'none';
+  sel.forEach(g=>{if(!document.getElementById('card-'+g.id))mountCard(g);});
+  document.querySelectorAll('[id^="card-"]').forEach(el=>{
+    const id=el.id.replace('card-','');
+    if(!selIds.includes(id)){
+      if(cardState[id]?._countdown)clearInterval(cardState[id]._countdown);
+      delete cardState[id];
+      el.remove();
+    }
+  });
+}
+
+// ── Thesis helpers ────────────────────────────────────────────────────────
+function saveThesis(gameId,text){theses[gameId]=text;localStorage.setItem('nba4:theses',JSON.stringify(theses));renderConfidenceTable();}
+function clearTheses(){if(!confirm('Clear all theses?'))return;Object.keys(theses).forEach(k=>delete theses[k]);localStorage.removeItem('nba4:theses');games.filter(g=>selIds.includes(g.id)).forEach(g=>renderCard(g));renderConfidenceTable();}
+function clearMarketCache(){if(!confirm('Clear all cached clutch + odds data?'))return;Object.keys(cachedClutch).forEach(k=>delete cachedClutch[k]);Object.keys(cachedOdds).forEach(k=>delete cachedOdds[k]);Object.keys(cachedOddsHistory).forEach(k=>delete cachedOddsHistory[k]);globalClutchData=null;localStorage.removeItem('nba4:clutch');localStorage.removeItem('nba4:odds');localStorage.removeItem('nba4:oddsHist');localStorage.removeItem('nba4:globalClutch');for(const id of selIds){const cs=cardState[id];if(cs){cs.clutchData=null;cs.clutchTier=3;cs.oddsData=null;cs.oddsHistory=[];}}games.filter(g=>selIds.includes(g.id)).forEach(g=>renderCard(g));}
+function parseThesis(t){
+  if(!t)return{lean:null,entry:null,pass:null,mlThreshold:null,watches:[],flags:[],shotDiet:null,heaterWatch:null,clutchGate:null};
+  const r={lean:null,entry:null,pass:null,mlThreshold:null,watches:[],flags:[],shotDiet:null,heaterWatch:null,clutchGate:null};
+  t.split('\n').map(l=>l.trim()).filter(Boolean).forEach(line=>{
+    const l=line.toLowerCase();
+    if(l.startsWith('lean:'))r.lean=line.replace(/^lean:?\s*/i,'').trim();
+    else if(l.startsWith('entry'))r.entry=line.replace(/^entry(?: trigger)?:?\s*/i,'').trim();
+    else if(l.startsWith('pass'))r.pass=line.replace(/^pass(?: if)?:?\s*/i,'').trim();
+    else if(l.startsWith('ml threshold'))r.mlThreshold=line.replace(/^ml\s*threshold:?\s*/i,'').trim();
+    else if(l.startsWith('shot diet'))r.shotDiet=line.replace(/^shot\s*diet:?\s*/i,'').trim();
+    else if(l.startsWith('3pt heater'))r.heaterWatch=line.replace(/^3pt\s*heater\s*watchlist:?\s*/i,'').trim();
+    else if(l.startsWith('clutch gate'))r.clutchGate=line.replace(/^clutch\s*gate:?\s*/i,'').trim();
+    else if(l.startsWith('watch:'))r.watches.push(line.replace(/^-?\s*watch:?\s*/i,'').trim());
+    else if(l.startsWith('flag:')||l.startsWith('⚠')||l.startsWith('!'))r.flags.push(line.replace(/^[⚠!]\s*|^flag:?\s*/i,'').trim());
+    else if(/^\d+\.\s+/.test(line))r.watches.push(line.replace(/^\d+\.\s+/,''));
+  });
+  // Try to extract ML value from threshold line (e.g., "CLE below -250 ML")
+  if(r.mlThreshold){
+    const mlMatch = r.mlThreshold.match(/below\s+([+-]?\d+)/i);
+    if(mlMatch) r.mlValue = parseInt(mlMatch[1]);
+  }
+  return r;
+}
+// ── CONFIDENCE TABLE — auto-builds from all loaded theses ──
+function renderConfidenceTable(){
+  const el = document.getElementById('conf-table');
+  if(!el) return;
+  const rows = [];
+  for(const g of games){
+    const t = theses[g.id];
+    if(!t) continue;
+    const hA = g.home?.alias||'HOME', aA = g.away?.alias||'AWAY';
+    const matchup = aA + ' @ ' + hA;
+    // Parse CONTROL SCORE line
+    let team='', score=0, verdict='';
+    const csMatch = t.match(/CONTROL\s+SCORE:\s*(\w+)\s+([\d.]+)\s*[—–-]\s*(\w+)/i);
+    if(csMatch){ team=csMatch[1]; score=parseFloat(csMatch[2]); verdict=csMatch[3]; }
+    // Parse ENTRY / PASS
+    const p = parseThesis(t);
+    // If live Sonnet analysis exists, use that instead
+    const cs = cardState[g.id];
+    const si = cs?.sonnetIndicators;
+    if(si && si.score){ team=si.controlTeam; score=si.score; verdict=getVerdict(si)?.label||verdict; }
+    const pred = cs?.prediction;
+    const fwp = pred?.fwp || null;
+    const edge = pred?.edgeNum ?? null;
+    if(!team && !score) continue;
+    rows.push({matchup, team, score, verdict, entry:p.entry||'—', pass:p.pass||'—', mlThreshold:p.mlThreshold||null, mlValue:p.mlValue||null, gameId:g.id, fwp, edge});
+  }
+  if(!rows.length){ el.style.display='none'; return; }
+  rows.sort((a,b)=>b.score-a.score);
+  const vColor = (v) => {
+    const lv = (v||'').toLowerCase();
+    return lv.includes('dominant')?'var(--green)':lv.includes('strong')?'var(--g2)':lv.includes('earned')?'var(--yellow)':lv.includes('no edge')||lv.includes('wait')?'var(--red)':'var(--t2)';
+  };
+  const edgeStr = (e) => e===null?'':'<span style="color:'+(e>=5?'var(--green)':e>=1?'var(--yellow)':e>=0?'var(--t3)':'var(--red)')+'">'+(e>=0?'+':'')+e.toFixed(1)+'%</span>';
+  let html = `<div class="ct-hdr" onclick="confCollapsed=!confCollapsed;renderConfidenceTable()" style="cursor:pointer">CONFIDENCE TABLE <span class="arr" style="display:inline-block;transition:transform .2s;transform:rotate(${confCollapsed?'0':'90'}deg);margin-left:2px">▸</span><span style="font-size:5px;color:var(--t3);margin-left:auto">${rows.length} ${rows.length===1?'thesis':'theses'} loaded</span></div>`;
+  if(!confCollapsed){
+  html += `<table><tr><th>MATCHUP</th><th>CTRL</th><th style="text-align:center">SCORE</th><th>FWP</th><th>EDGE</th><th>ML THR</th><th>ENTRY IF</th><th>PASS IF</th></tr>`;
+  for(const r of rows){
+    const mlStr = r.mlValue ? '<span style="color:var(--amber);font-size:7px;font-weight:600">'+r.mlValue+'</span>' : '<span style="color:var(--t3);font-size:6px">—</span>';
+    html += `<tr style="cursor:pointer" onclick="document.getElementById('card-${r.gameId}')?.scrollIntoView({behavior:'smooth',block:'start'})">
+      <td class="ct-matchup">${esc(r.matchup)}</td>
+      <td style="color:${vColor(r.verdict)}">${esc(r.team)}</td>
+      <td class="ct-score" style="color:${vColor(r.verdict)}">${r.score.toFixed(2)}<div class="ct-verdict" style="color:${vColor(r.verdict)}">${esc(r.verdict)}</div></td>
+      <td style="color:var(--t1);font-size:8px;text-align:center;font-weight:600">${r.fwp||'—'}</td>
+      <td style="font-size:7px;text-align:center">${edgeStr(r.edge)}</td>
+      <td style="text-align:center">${mlStr}</td>
+      <td class="ct-cond" style="color:var(--green)">${esc(r.entry)}</td>
+      <td class="ct-cond" style="color:var(--red)">${esc(r.pass)}</td>
+    </tr>`;
+  }
+  html += `</table>`;
+  } // end if(!confCollapsed)
+  el.innerHTML = html;
+  el.style.display = 'block';
+}
+
+function crossRef(parsed,ind){
+  if(!parsed||!ind||!parsed.watches.length)return[];
+  const a=[],txt=parsed.watches.join(' ').toLowerCase();
+  if((txt.includes('turnover')||txt.includes('to rate'))&&ind.I1)
+    a.push(ind.I1.score===0?{msg:'⚠ Turnover concern confirmed — I1 flagged',level:'warn'}:{msg:'✓ Turnover rate holding — I1 intact',level:'ok'});
+  if((txt.includes('paint')||txt.includes('interior')||txt.includes('rim'))&&ind.I2)
+    a.push(ind.I2.score===1?{msg:'✓ Interior edge confirmed — I2 developing',level:'ok'}:ind.I2.score===0?{msg:'⚠ Interior edge denied',level:'warn'}:{msg:'I2 contested',level:'info'});
+  if((txt.includes('assist')||txt.includes('creation'))&&ind.I3)
+    a.push(ind.I3.score===1?{msg:'✓ Ball movement confirmed — I3 developing',level:'ok'}:{msg:'⚠ Creation edge not materializing',level:'warn'});
+  if((txt.includes('bonus')||txt.includes('foul'))&&ind.I2)
+    a.push({msg:'Foul/bonus: '+ind.I2.detail,level:'info'});
+  return a;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CARD MOUNT & RENDER
+// ══════════════════════════════════════════════════════════════════════════════
+function mountCard(game){
+  const id=game.id;
+  cardState[id]={logs:[],lastUp:null,editing:false,generating:false,analyzing:false,
+    prevLvl:null,_countdown:null,lastFingerprint:'',analysis:null,analysisTime:null,genSteps:null,genError:null,
+    lastScoreFP:'',lastStatsFP:'',staleCount:0,dataFreshness:'FRESH',sonnetIndicators:null,
+    prediction:null, sustainabilityAudit:null, clutchData:null, clutchTier:3, oddsData:null, oddsAll:null, oddsHistory:[], trackingData:null, enriching:false, enrichDone:false, evCollapsed:false, edgeHistory:[], pbpAudit:null, pbpTime:null, pbpPeriod:null, pbpLoading:false};
+  // Restore cached clutch data from localStorage
+  if(cachedClutch[id]){
+    const cs = cardState[id];
+    cs.clutchData = cachedClutch[id].data;
+    cs.clutchTier = cachedClutch[id].tier || 2;
+    addLog(id, '📋 Clutch restored from cache', true);
+  }
+  // Restore cached odds from localStorage
+  if(cachedOdds[id]){
+    cardState[id].oddsData = cachedOdds[id];
+    cardState[id].oddsHistory = cachedOddsHistory[id] || [];
+    addLog(id, '📋 Odds restored from cache', true);
+  }
+  // Auto-distribute global clutch data if available (uploaded before game selected — overrides cache)
+  if(globalClutchData?.teams){
+    const hA = game.home?.alias||'', aA = game.away?.alias||'';
+    const hC = globalClutchData.teams[hA], aC = globalClutchData.teams[aA];
+    if(hC || aC){
+      const cs = cardState[id];
+      cs.clutchData = {
+        tier:1,
+        home: hC ? { netRtg:hC.netRtg, offRtg:hC.offRtg, defRtg:hC.defRtg, gp:hC.gp, w:hC.w, l:hC.l, wl:hC.wl, efg:hC.efg, ts:hC.ts, pace:hC.pace, pie:hC.pie, tovPct:hC.tovPct, orebPct:hC.orebPct, drebPct:hC.drebPct, astRatio:hC.astRatio } : {},
+        away: aC ? { netRtg:aC.netRtg, offRtg:aC.offRtg, defRtg:aC.defRtg, gp:aC.gp, w:aC.w, l:aC.l, wl:aC.wl, efg:aC.efg, ts:aC.ts, pace:aC.pace, pie:aC.pie, tovPct:aC.tovPct, orebPct:aC.orebPct, drebPct:aC.drebPct, astRatio:aC.astRatio } : {},
+      };
+      cs.clutchTier = 1;
+      persistClutch(id, cs);
+      addLog(id, `📋 L15 clutch auto-loaded from OCR`, true);
+    }
+  }
+  const div=document.createElement('div');
+  div.id='card-'+id;
+  document.getElementById('grid').appendChild(div);
+  renderCard(game);
+  if(getState(game)==='LIVE'||getState(game)==='FINAL') fetchSummary(game);
+  // Auto-enrich from BDL if not already done
+  if(!cardState[id].enrichDone && !cardState[id].enriching) enrichFromBDL(id);
+}
+
+function addLog(id,msg,ok){const cs=cardState[id];if(!cs)return;cs.logs=[...cs.logs.slice(-5),{msg,ok,t:new Date().toLocaleTimeString()}];}
+
+function renderCard(game){
+  const id=game.id, cs=cardState[id];
+  if(!cs||cs.editing) return;
+  const el=document.getElementById('card-'+id);
+  if(!el)return;
+  const state=getState(game), rawInd=computeAny(game);
+  // Prefer Sonnet indicators when available, fall back to compute()
+  const ind = cs.sonnetIndicators || rawInd;
+  const v=ind?getVerdict(ind.score):null;
+  // Count indicators where the leader matches the controlling team (0.75+ for Sonnet, 1.0 for compute)
+  const indWon = ind ? [ind.I1,ind.I2,ind.I3,ind.I4,ind.I5].filter(d => {
+    if(d.leader === 'EVEN') return false;
+    const leaderMatchesControl = d.leader.toUpperCase().substring(0,3) === ind.controlTeam.toUpperCase().substring(0,3);
+    return leaderMatchesControl;
+  }).length : 0;
+  const indTotal = 5;
+  const thesis=theses[id]||'', p=parseThesis(thesis);
+  const xrefs=ind&&state!=='PRE'?crossRef(p,ind):[];
+  const hA=game.home?.alias||'HOME', aA=game.away?.alias||'AWAY';
+  const periodLabel=state==='PRE'?'PRE':state==='FINAL'?'FINAL':({1:'1ST',2:'2ND',3:'3RD',4:'4TH',5:'OT',6:'2OT'}[game.period]||'Q'+game.period);
+  el.className='card'+(v?.lvl==='entry'?' ce':v?.lvl==='watch'?' cw':'');
+
+  let html=`
+  <div class="ch">
+    <div><div class="mup">${esc(aA)} @ ${esc(hA)}</div>
+    <div class="sub">${esc(game.away?.name)} at ${esc(game.home?.name)}${game.venue?' · '+esc(game.venue):''}</div></div>
+    <div class="chr">${state==='LIVE'?'<div class="ld"></div>':''}<span class="pb">${periodLabel}${game.clock?' '+game.clock:''}</span></div>
+  </div>
+  <div class="sr">
+    <div><div class="srt">${esc(aA)}</div>
+    <div><span class="srs">${state==='PRE'?'—':game.awayPoints??'—'}</span>${game.summary?.away?.bonus?'<span class="bonus-tag">BONUS</span>':''}</div></div>
+    <span class="sr-sep">–</span>
+    <div style="text-align:right"><div class="srt">${esc(hA)}</div>
+    <div>${game.summary?.home?.bonus?'<span class="bonus-tag">BONUS</span>':''}<span class="srs">${state==='PRE'?'—':game.homePoints??'—'}</span></div></div>
+  </div>`;
+
+  if(state==='PRE'){
+    const ms=new Date(game.scheduled)-new Date();
+    const h=Math.max(0,Math.floor(ms/3600000)),m=Math.max(0,Math.floor((ms%3600000)/60000)),s=Math.max(0,Math.floor((ms%60000)/1000));
+    const cdown=ms<=0?'TIP OFF SOON':(h>0?h+'h ':'')+m+'m '+String(s).padStart(2,'0')+'s';
+    html+=`<div class="pre"><div class="prelbl">TIP OFF IN</div><div class="countdown">${cdown}</div>
+    <div class="prediv"></div><div style="font-size:6px;color:var(--t3)">Indicators activate at tip · Generate or paste thesis below</div></div>`;
+  }
+
+  if(state!=='PRE'&&ind){
+    const analyzeBtn = state==='LIVE' ? (cs.analyzing ? `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;opacity:.5;color:var(--t3);border-color:var(--t3);" disabled>⏳ ANALYZING</button>` : `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;" onclick="triggerAnalysis(games.find(g=>g.id==='${id}'))">⚡ ANALYZE</button>`) : '';
+    const pred = cs.prediction;
+
+    // ── RECOMPUTE EDGE CLIENT-SIDE on every render (fixes stale Sonnet edge on refresh) ──
+    if(pred && pred.fwp && cs.oddsData){
+      const od = cs.oddsData;
+      if(od.homeML || od.awayML){
+        const fwpVal = parseFloat((pred.fwp||'').replace(/[%\s]/g,''));
+        if(!isNaN(fwpVal)){
+          const _mlP = (ml) => { const n=parseFloat(ml); if(isNaN(n)||n===0) return null; return n<0?Math.abs(n)/(Math.abs(n)+100):100/(n+100); };
+          const rH=_mlP(od.homeML), rA=_mlP(od.awayML);
+          if(rH!==null && rA!==null){
+            const vs=rH+rA, hMIP=rH/vs*100, aMIP=rA/vs*100;
+            const pTxt=(pred.prediction||'').toUpperCase(), cTeam=(ind.controlTeam||'').toUpperCase();
+            const isH=pTxt.includes(hA.toUpperCase())||cTeam===hA.toUpperCase();
+            const isA=pTxt.includes(aA.toUpperCase())||cTeam===aA.toUpperCase();
+            const wMIP = (isA&&!isH)?aMIP:(isH&&!isA)?hMIP:(fwpVal>=50?hMIP:aMIP);
+            const edge=fwpVal-wMIP;
+            pred.edge=(edge>=0?'+':'')+edge.toFixed(1)+'%';
+            pred.edgeNum=parseFloat(edge.toFixed(1));
+            pred.mip=wMIP.toFixed(1)+'%';
+          }
+        }
+      }
+    }
+
+    // ─── CONTROL BAR (compact) ───
+    const fwpDisplay = pred?.fwp ? pred.fwp.replace('%','') : null;
+    const fwpNum = fwpDisplay ? parseFloat(fwpDisplay) : null;
+    const fwpColor = fwpNum===null?v.color:fwpNum>=70?'var(--green)':fwpNum>=58?'var(--g2)':fwpNum>=50?'var(--yellow)':fwpNum>=42?'var(--amber)':'var(--red)';
+    const trajTeam = ind.traj&&!ind.traj.tooEarly&&ind.traj.lean!=='NEUTRAL' ? ind.traj.lean : null;
+    const trajBadgeColor = trajTeam ? 'var(--amber)' : 'var(--t3)';
+    const trajBadgeText = ind.traj&&!ind.traj.tooEarly ? (trajTeam||'EVEN')+' '+ind.traj.count+'/'+ind.traj.total : '';
+    html+=`
+    <div class="ctrl-bar">
+      <div class="vrd" style="color:${v.color};border-color:${v.color};background:${v.bg}">${v.label} (${ind.score.toFixed(2)})</div>
+      <div><div class="cl">CONTROL</div><div class="ct">${esc(ind.controlTeam)}</div></div>
+      <div class="bw"><div class="bt2"><div class="bf" style="width:${ind.score*100}%;background:${v.color}"></div></div></div>
+      <div class="cn" style="color:${fwpNum!==null?fwpColor:v.color}">${fwpNum!==null?fwpNum.toFixed(0)+'<span style="font-size:8px">%</span>':ind.score.toFixed(2)}</div>
+      ${fwpNum!==null?`<span style="font-size:5px;color:var(--t3);margin-left:-2px;letter-spacing:.3px">FWP</span>`:`<span style="font-size:5px;color:var(--t3);margin-left:-2px;letter-spacing:.3px">CTL</span>`}
+      ${trajBadgeText?`<span class="dq" style="color:${trajBadgeColor};border-color:${trajBadgeColor}">${trajBadgeText}</span>`:''}
+    </div>`;
+
+    // ─── DECISION VIEW (primary — always visible) ───
+    if(pred){
+      const edgeNum = pred.edgeNum;
+      const edgeColor = edgeNum===null?'var(--t3)':edgeNum>=10?'var(--green)':edgeNum>=5?'var(--g2)':edgeNum>=1?'var(--yellow)':edgeNum>=0?'var(--t3)':'var(--red)';
+      const convColor = ({DOMINANT:'var(--green)',STRONG:'var(--g2)',EARNED:'var(--yellow)',CONDITIONAL:'var(--amber)'})[pred.conviction]||'var(--t3)';
+      const entryColor = pred.entry==='OPTIMAL WINDOW'?'var(--green)':pred.entry==='WINDOW OPEN'?'var(--g2)':pred.entry==='WINDOW CLOSING'?'var(--yellow)':pred.entry==='COUNTER-SIGNAL'?'var(--red)':'var(--t3)';
+
+      // Edge history analysis
+      const eh = cs.edgeHistory.filter(e=>e.edgeNum!==null&&e.edgeNum!==undefined);
+      let peakEdge = null, edgeTrend = '';
+      if(eh.length >= 2){
+        peakEdge = eh.reduce((max,e)=>e.edgeNum>max.edgeNum?e:max, eh[0]);
+        const recent = eh.slice(-2);
+        const diff = recent[1].edgeNum - recent[0].edgeNum;
+        edgeTrend = diff > 1.5 ? '▲' : diff < -1.5 ? '▼' : '─';
+      }
+
+      html+=`
+      <div class="dv">
+        <div class="dv-hdr">DECISION ${analyzeBtn}<span class="analysis-cost">${cs.analysisTime?cs.analysisTime.toLocaleTimeString():''}</span></div>
+        <div class="dv-row">
+          <span class="dv-label">EDGE</span>
+          <span class="dv-val" style="color:${edgeColor}">${esc(pred.edge||'—')}</span>
+          <span class="dv-sub">FWP ${esc(pred.fwp||'—')}</span>
+          <span class="dv-sub">MIP ${esc(pred.mip||'N/A')}</span>
+          ${edgeTrend?`<span style="font-size:8px;color:${edgeTrend==='▲'?'var(--green)':edgeTrend==='▼'?'var(--red)':'var(--t3)'};margin-left:2px">${edgeTrend}</span>`:''}
+        </div>
+        ${peakEdge?`<div class="dv-row"><span class="dv-label">PEAK</span><span class="dv-sub" style="color:var(--t2)">+${peakEdge.edgeNum.toFixed(1)}% at ${peakEdge.time} (${peakEdge.score})</span></div>`:''}
+        <div class="dv-row">
+          <span class="dv-label">ENTRY</span>
+          <span class="dv-tag" style="color:${entryColor};border-color:${entryColor}">${esc(pred.entry||'—')}</span>
+          <span class="dv-tag" style="color:${convColor};border-color:${convColor};margin-left:4px">${esc(pred.conviction||'—')}</span>
+        </div>
+        <div class="dv-row">
+          <span class="dv-label">SUSTAIN</span>
+          ${(function(){
+            var sa = cs.sustainabilityAudit;
+            if(!sa) return '<span class="dv-sub">'+esc(pred.sustainability||'—')+'</span>';
+            function tierTag(t){
+              if(!t) return '<span class="dv-sub">—</span>';
+              var c = t.tier==='LOCKED IN'?'var(--green)':t.tier==='DURABLE'?'var(--g2)':t.tier==='MIXED'?'var(--yellow)':t.tier==='FRAGILE'?'var(--amber)':t.tier==='UNSUSTAINABLE'?'var(--red)':'var(--t3)';
+              var detail = t.tier==='TOO EARLY'?'':'P:'+t.personnelGrade.substring(0,3)+' R:'+t.regressionGrade.substring(0,3)+' S:'+t.shotTypeGrade.substring(0,3);
+              return '<span class="dv-tag" style="color:'+c+';border-color:'+c+';font-size:5.5px;padding:0 3px">'+t.teamAlias+' '+t.tier+'</span>'
+                +(detail?'<span class="dv-sub" style="font-size:4.5px;margin-left:1px">('+detail+')</span>':'');
+            }
+            return tierTag(sa.away)+' '+tierTag(sa.home);
+          })()}
+        </div>
+        <div class="dv-row">
+          <span class="dv-label">CLUTCH</span>
+          <span class="dv-sub">${esc(pred.clutch||'No data')}</span>
+        </div>
+        <div class="dv-pred">${esc(pred.prediction||'')}</div>
+        ${eh.length>=3?`<div style="font-size:5px;color:var(--t2);margin-top:3px;letter-spacing:.5px">EDGE HISTORY: ${eh.slice(-6).map(e=>(e.edgeNum>=0?'+':'')+e.edgeNum.toFixed(0)+'%').join(' → ')}</div>`:''}
+      </div>`;
+    } else if(cs.analyzing){
+      html+=`<div class="dv"><div class="dv-hdr">DECISION</div><div class="analysis-loading"><div class="spin"></div> Sonnet analyzing…</div></div>`;
+    } else {
+      html+=`<div class="dv"><div class="dv-hdr">DECISION ${analyzeBtn}</div><div style="font-size:6px;color:var(--t3);padding:2px 0">${cs.analysisError?'<span style="color:var(--red)">⚠ '+esc(cs.analysisError)+'</span>':game.period<2?'Predictive layer activates Q2+ — press ⚡ to analyze':'Awaiting analysis — press ⚡ ANALYZE'}</div></div>`;
+    }
+
+    // ─── DATA INPUTS (Clutch + Odds) ───
+    const cl = cs.clutchData, od = cs.oddsData;
+    html+=`<div class="data-inputs">
+      <div class="di-hdr">MARKET & CLUTCH<span style="font-size:5px">${od?'<span style="color:var(--green)">✓ ODDS</span>':'<span style="color:var(--t3)">no odds</span>'} · ${cl?'<span style="color:var(--green)">✓ CLUTCH</span>':'<span style="color:var(--t3)">no clutch</span>'}${cs.trackingData?' · <span style="color:var(--green)">✓ TRACKING</span>':''}</span>
+        <button class="di-btn" style="margin-left:auto;background:${cs.enriching?'var(--b2)':cs.enrichDone?'rgba(0,255,136,.15)':'rgba(147,130,220,.15)'};color:${cs.enriching?'var(--t3)':cs.enrichDone?'var(--green)':'#9382dc'};font-size:6px;padding:2px 6px" onclick="enrichFromBDL('${id}')" ${cs.enriching?'disabled':''}>${cs.enriching?'⏳ PULLING...':cs.enrichDone?'✓ UPDATED':'⚡ ODDS'}</button>
+      </div>
+      <div class="di-row" style="margin-bottom:0;gap:3px">
+        <span class="di-lbl"></span>
+        <span style="width:54px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">SPREAD</span>
+        <span style="width:54px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">${esc(hA)} ML</span>
+        <span style="width:54px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">${esc(aA)} ML</span>
+        <span style="width:48px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">TOTAL</span>
+      </div>
+      <div class="di-row" style="gap:3px">
+        <span class="di-lbl">ODDS</span>
+        <input class="di-input di-sm" id="od-hs-${id}" placeholder="sprd" value="${od?.homeSpread||''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="od-hml-${id}" placeholder="ML" value="${od?.homeML||''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="od-aml-${id}" placeholder="ML" value="${od?.awayML||''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="od-tot-${id}" placeholder="O/U" value="${od?.total||''}" style="width:48px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <button class="di-btn" onclick="saveOdds('${id}')">SET</button>
+      </div>`;
+    // Odds movement row
+    const mv = oddsMovement(cs);
+    if(mv){
+      const cell = (d) => d ? `<span style="width:54px;font-size:5px;text-align:center;color:${d.color}">${d.val}</span>` : `<span style="width:54px;font-size:5px;text-align:center;color:var(--t3)">—</span>`;
+      html+=`<div class="di-row" style="gap:3px;margin-top:0;margin-bottom:1px">
+        <span class="di-lbl" style="font-size:5px;color:var(--t2)">MOVE</span>
+        ${cell(mv.spread)}${cell(mv.homeML)}${cell(mv.awayML)}
+        <span style="width:48px;font-size:5px;text-align:center;color:${mv.total?mv.total.color:'var(--t3)'}">${mv.total?mv.total.val:'—'}</span>
+        <span style="font-size:4px;color:var(--t2);white-space:nowrap">${mv.pulls} pulls</span>
+      </div>`;
+    }
+    html+=`<div class="di-row" style="margin-bottom:0;gap:3px">
+        <span class="di-lbl"></span>
+        <span style="width:54px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">NET RTG</span>
+        <span style="width:54px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">OFF RTG</span>
+        <span style="width:54px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">DEF RTG</span>
+        <span style="width:32px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">GP</span>
+        <span style="width:40px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">W-L</span>
+      </div>
+      <div class="di-row" style="gap:3px">
+        <span class="di-lbl">L15 ${esc(hA)}</span>
+        <input class="di-input di-sm" id="cl-h-net-${id}" placeholder="" value="${cl?.home?.netRtg??''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="cl-h-off-${id}" placeholder="" value="${cl?.home?.offRtg??''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="cl-h-def-${id}" placeholder="" value="${cl?.home?.defRtg??''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="cl-h-gp-${id}" placeholder="" value="${cl?.home?.gp??''}" style="width:32px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="cl-h-wl-${id}" placeholder="" value="${cl?.home?.wl??''}" style="width:40px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+      </div>
+      <div class="di-row" style="gap:3px">
+        <span class="di-lbl">L15 ${esc(aA)}</span>
+        <input class="di-input di-sm" id="cl-a-net-${id}" placeholder="" value="${cl?.away?.netRtg??''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="cl-a-off-${id}" placeholder="" value="${cl?.away?.offRtg??''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="cl-a-def-${id}" placeholder="" value="${cl?.away?.defRtg??''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="cl-a-gp-${id}" placeholder="" value="${cl?.away?.gp??''}" style="width:32px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+        <input class="di-input di-sm" id="cl-a-wl-${id}" placeholder="" value="${cl?.away?.wl??''}" style="width:40px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
+      </div>
+      <div class="di-row"><button class="di-btn" onclick="saveClutch('${id}')">SET CLUTCH</button></div>
+    </div>`;
+
+    // ─── EVIDENCE VIEW TOGGLE ───
+    const pbpTs = cs.pbpTime ? 'Q'+(cs.pbpPeriod||'?')+' '+cs.pbpTime.toLocaleTimeString() : '';
+    const depthBtn = `<button class="di-btn" style="background:${cs.pbpLoading?'var(--b2)':cs.pbpAudit?'rgba(0,255,136,.15)':'rgba(147,130,220,.15)'};color:${cs.pbpLoading?'var(--t3)':cs.pbpAudit?'var(--green)':'#9382dc'};font-size:6px;padding:1px 5px;margin-left:4px" onclick="event.stopPropagation();fetchPBP('${id}')" ${cs.pbpLoading?'disabled':''}>${cs.pbpLoading?'⏳ PBP...':cs.pbpAudit?'✓ DEPTH ('+pbpTs+')':'⚡ DEPTH'}</button>`;
+    html+=`<div class="ev-toggle ${cs.evCollapsed?'':'open'}" id="ev-toggle-${id}" onclick="toggleEV('${id}')">
+      EVIDENCE<span style="font-size:5px;color:var(--t3);margin-left:1px">▾</span> <span class="arr">▸</span>
+      <span style="margin-left:auto;display:flex;align-items:center;gap:6px">
+        ${depthBtn}
+        <span style="font-size:7px;color:${v.color};letter-spacing:.5px">CONTROL <span style="font-size:9px;font-weight:600">${esc(ind.controlTeam)}</span> <span style="font-size:9px">${ind.score.toFixed(2)}</span></span>
+        <span style="font-size:6px;color:var(--t3)">·</span>
+        <span style="font-size:7px;color:${ind.traj.lean!=='NEUTRAL'&&!ind.traj.tooEarly?'var(--amber)':'var(--t3)'}">TRAJ ${ind.traj.tooEarly?'Q1':esc(ind.traj.lean)+' '+ind.traj.count+'/'+ind.traj.total}</span>
+      </span>
+    </div>`;
+
+    // ─── EVIDENCE BODY (collapsible) ───
+    html+=`<div class="ev-body ${cs.evCollapsed?'collapsed':''}" id="ev-body-${id}" style="${cs.evCollapsed?'max-height:0':'max-height:2000px'}">`;
+
+    // Indicators
+    html+=`<div class="inds">
+    ${[{id:'I1',nm:'POSSESS/TRANS',wt:25,d:ind.I1},{id:'I2',nm:'RIM/FOUL',wt:25,d:ind.I2},
+       {id:'I3',nm:'SHOT QUALITY',wt:20,d:ind.I3},{id:'I4',nm:'LINEUP INTEG',wt:20,d:ind.I4},
+       {id:'I5',nm:'TEMPO/EFF',wt:10,d:ind.I5}].map(({id:iid,nm,wt,d})=>{
+      let displayScore;
+      if(d.sonnet){
+        const leaderIsControl = d.leader.toUpperCase().substring(0,3) === ind.controlTeam.toUpperCase().substring(0,3);
+        displayScore = leaderIsControl ? d.rawScore : (1 - d.rawScore);
+      } else {
+        displayScore = d.score;
+      }
+      const col = d.sonnet ? indColor(displayScore) : (d.score===1?'var(--green)':d.score===.5?'var(--yellow)':'var(--red)');
+      const pc = d.sonnet ? pipClass(displayScore) : (d.score===1?'pw':d.score===.5?'pd':'pl');
+      return `
+      <div class="ind">
+        <span class="ii">${iid}</span><span class="in">${nm}</span><span class="iw">${wt}%</span>
+        <div class="pip ${pc}"></div>
+        <span class="il" style="color:${col}">${esc(d.leader)}${d.sonnet?' <span style="opacity:0.6">'+d.rawScore.toFixed(2)+'</span>':''}</span>
+        ${d.sonnet?'<span style="color:#a78bfa;font-size:5px;margin-left:2px">◈</span>':''}
+        <span class="id">${esc(d.detail)}</span>
+      </div>`;}).join('')}
+    </div>`;
+
+    // Trajectory
+    html+=`<div class="traj">
+      <div class="th">TRAJECTORY
+        ${!ind.traj.tooEarly?`<span class="tl" style="color:${ind.traj.lean==='NEUTRAL'?'var(--t3)':'var(--amber)'};border-color:${ind.traj.lean==='NEUTRAL'?'var(--b2)':'var(--amber)'}">${esc(ind.traj.lean)}${ind.traj.total>0?' '+ind.traj.count+'/'+ind.traj.total:''}</span>`:''}
+      </div>
+      ${ind.traj.tooEarly
+        ?'<div style="font-size:6px;color:var(--t3)">Q1 — trajectory check begins Q2</div>'
+        :ind.traj.signals.length>0
+          ?ind.traj.signals.map(s=>`<div class="ts"><span class="tk" style="color:${s.color}">${s.key}</span><span class="tt" style="color:${s.color==='#3e3e48'?'var(--t3)':s.color}">${esc(s.text)}</span></div>`).join('')
+          :(rawInd&&rawInd.traj&&!rawInd.traj.tooEarly
+            ?rawInd.traj.signals.map(s=>`<div class="ts"><span class="tk" style="color:${s.color}">${s.key}</span><span class="tt" style="color:${s.color==='#3e3e48'?'var(--t3)':s.color}">${esc(s.text)}</span></div>`).join('')
+            :'<div style="font-size:6px;color:var(--t3)">See Sonnet analysis for trajectory detail</div>')}
+    </div>`;
+
+    // ─── PBP DEPTH AUDIT (when available) ───
+    if(cs.pbpAudit){
+      const pbp = cs.pbpAudit;
+      const hPbp = pbp.home, aPbp = pbp.away;
+      const pbpAge = cs.pbpTime ? Math.round((Date.now() - cs.pbpTime.getTime())/60000) : '?';
+      html+=`<div class="traj" style="border-top:1px solid var(--b1);margin-top:2px">
+        <div class="th">DEPTH AUDIT <span style="font-size:5px;color:var(--t3)">Q${cs.pbpPeriod||'?'} · ${pbpAge}m ago</span></div>`;
+
+      // Shot creation quality
+      const hA3 = hPbp.threes, aA3 = aPbp.threes;
+      const hAstPct = hA3.made>0 ? (hA3.assisted/hA3.made*100).toFixed(0) : '0';
+      const aAstPct = aA3.made>0 ? (aA3.assisted/aA3.made*100).toFixed(0) : '0';
+      html+=`<div class="ts"><span class="tk" style="color:#a78bfa">3PT</span><span class="tt">${pbp.homeAlias} ${hA3.made}/${hA3.att} (${hA3.pct}%) ${hAstPct}% ast · corner ${hA3.corner.made}/${hA3.corner.att} above ${hA3.above.made}/${hA3.above.att}</span></div>`;
+      html+=`<div class="ts"><span class="tk" style="color:#a78bfa">3PT</span><span class="tt">${pbp.awayAlias} ${aA3.made}/${aA3.att} (${aA3.pct}%) ${aAstPct}% ast · corner ${aA3.corner.made}/${aA3.corner.att} above ${aA3.above.made}/${aA3.above.att}</span></div>`;
+
+      // Player 3PT detail (top shooters)
+      [pbp.homeAlias, pbp.awayAlias].forEach((tm, ti) => {
+        const tPbp = ti===0 ? hPbp : aPbp;
+        tPbp.threes.byPlayer.slice(0,3).forEach(p => {
+          const astFlag = p.made>0 && p.assisted>0 ? ' ('+p.assisted+' ast)' : '';
+          const ctx = Object.entries(p.contexts).map(([k,v])=>k+':'+v).join(' ');
+          html+=`<div class="ts"><span class="tk" style="color:var(--t3);font-size:5px">  </span><span class="tt" style="font-size:5px;color:var(--t3)">${p.name}: ${p.made}/${p.att}${astFlag} · ${ctx}</span></div>`;
+        });
+      });
+
+      // Rim pressure
+      html+=`<div class="ts"><span class="tk" style="color:#ff9f43">RIM</span><span class="tt">${pbp.homeAlias} ${hPbp.rim.made}/${hPbp.rim.att} (${hPbp.rim.pct}%) · ${pbp.awayAlias} ${aPbp.rim.made}/${aPbp.rim.att} (${aPbp.rim.pct}%)</span></div>`;
+
+      // Mid-range
+      html+=`<div class="ts"><span class="tk" style="color:var(--t3)">MID</span><span class="tt">${pbp.homeAlias} ${hPbp.mid.made}/${hPbp.mid.att} (${hPbp.mid.pct}%) ${hPbp.mid.att>0?(hPbp.mid.assisted/Math.max(hPbp.mid.made,1)*100).toFixed(0)+'% ast':''} · ${pbp.awayAlias} ${aPbp.mid.made}/${aPbp.mid.att} (${aPbp.mid.pct}%) ${aPbp.mid.att>0?(aPbp.mid.assisted/Math.max(aPbp.mid.made,1)*100).toFixed(0)+'% ast':''}</span></div>`;
+
+      // Chaos layer — forced vs unforced TOs
+      const hTO = hPbp.tos, aTO = aPbp.tos;
+      const hForcedPct = hTO.total>0 ? ((hTO.forced||0)/hTO.total*100).toFixed(0) : '?';
+      const aForcedPct = aTO.total>0 ? ((aTO.forced||0)/aTO.total*100).toFixed(0) : '?';
+      html+=`<div class="ts"><span class="tk" style="color:${Math.abs((hTO.forced||0)-(aTO.forced||0))>=3?'#ff6b6b':'var(--t3)'}">TOs</span><span class="tt">${pbp.homeAlias} ${hTO.total} (${hTO.forced||0}F/${hTO.unforced||0}U${hTO.unknown>0?'/'+hTO.unknown+'?':''}) · ${pbp.awayAlias} ${aTO.total} (${aTO.forced||0}F/${aTO.unforced||0}U${aTO.unknown>0?'/'+aTO.unknown+'?':''})</span></div>`;
+
+      // Shot diet breakdown
+      html+=`<div class="ts"><span class="tk" style="color:var(--t3)">DIET</span><span class="tt">${pbp.homeAlias} 3P:${hPbp.shotDiet.threePct}% rim:${hPbp.shotDiet.rimPct}% mid:${hPbp.shotDiet.midPct}% · ${pbp.awayAlias} 3P:${aPbp.shotDiet.threePct}% rim:${aPbp.shotDiet.rimPct}% mid:${aPbp.shotDiet.midPct}%</span></div>`;
+
+      // Scoring runs
+      if(pbp.runs.length > 0){
+        pbp.runs.slice(0,3).forEach(r => {
+          const mech = r.mechanism.reduce((acc,v)=>{acc[v]=(acc[v]||0)+1;return acc;},{});
+          const mechStr = Object.entries(mech).map(([k,v])=>v+k).join('+');
+          html+=`<div class="ts"><span class="tk" style="color:#ffd166">RUN</span><span class="tt">${r.team} ${r.pts}-0 (Q${r.q}) — ${mechStr}${r.lineup.length>0?' · '+r.lineup.slice(0,3).map(n=>n.split(' ').pop()).join('/'):''}</span></div>`;
+        });
+      }
+
+      html+=`</div>`;
+    }
+
+    // PBP Depth Audit display (when available)
+    if(cs.pbpAudit){
+      const pa = cs.pbpAudit;
+      html+=`<div style="padding:4px 8px;border-top:1px solid var(--b1)">
+        <div style="font-size:6px;color:var(--t2);letter-spacing:1px;margin-bottom:3px">DEPTH AUDIT <span style="color:var(--t3)">Q${cs.pbpPeriod||'?'} · ${pa.totalShots} shots · ${pa.totalTOs} TOs · ${pa.runs.length} runs</span></div>`;
+      [pa.away, pa.home].forEach(tm=>{
+        if(!tm)return;
+        const alias = tm===pa.away ? pa.awayAlias : pa.homeAlias;
+        html+=`<div style="font-size:6px;color:var(--t1);margin:2px 0">${esc(alias)}:</div>`;
+        if(tm.threes&&tm.threes.att>0)html+=`<div style="font-size:5.5px;color:var(--t2);padding-left:6px">3PT ${tm.threes.made}/${tm.threes.att} (${tm.threes.pct}%) · ${tm.threes.assisted}/${tm.threes.made} ast · C${tm.threes.corner?.att||0}/AB${tm.threes.above?.att||0}</div>`;
+        if(tm.rim&&tm.rim.att>0)html+=`<div style="font-size:5.5px;color:var(--t2);padding-left:6px">RIM ${tm.rim.made}/${tm.rim.att} (${tm.rim.pct}%)</div>`;
+        if(tm.mid&&tm.mid.att>0)html+=`<div style="font-size:5.5px;color:var(--t2);padding-left:6px">MID ${tm.mid.made}/${tm.mid.att} (${tm.mid.pct}%) · ${tm.mid.assisted}/${tm.mid.made} ast</div>`;
+        if(tm.tos&&tm.tos.total>0)html+=`<div style="font-size:5.5px;color:var(--t2);padding-left:6px">TO ${tm.tos.forced}f/${tm.tos.unforced}u${tm.tos.unknown>0?'/'+tm.tos.unknown+'?':''}</div>`;
+        if(tm.shotDiet)html+=`<div style="font-size:5.5px;color:var(--t3);padding-left:6px">diet: rim${tm.shotDiet.rimPct}% mid${tm.shotDiet.midPct}% 3pt${tm.shotDiet.threePct}%</div>`;
+      });
+      if(pa.runs&&pa.runs.length>0){
+        html+=`<div style="font-size:6px;color:var(--t2);margin-top:2px">RUNS: ${pa.runs.map(r=>`${esc(r.team)} ${r.pts}pt Q${r.q} (${Array.isArray(r.mechanism)?r.mechanism.join('+'):r.mechanism||'?'})`).join(' · ')}</div>`;
+      }
+      html+=`</div>`;
+    }
+
+    // Full Sonnet analysis text (in evidence view)
+    html+=`<div class="analysis" id="analysis-${id}">`;
+    if(cs.analysis){
+      const usage=cs.analysisUsage;
+      const cost=usage?((usage.input_tokens*3+usage.output_tokens*15)/1000000).toFixed(4):'?';
+      html+=`<div class="analysis-hdr">FULL ANALYSIS<span class="analysis-cost">~$${cost} · ${cs.analysisTime?.toLocaleTimeString()||''}</span></div><div class="analysis-body">${esc(cs.analysis)}</div>`;
+    } else if(cs.analyzing){
+      html+=`<div class="analysis-loading"><div class="spin"></div> Analyzing…</div>`;
+    } else {
+      html+=`<div style="font-size:6px;color:var(--t3)">No analysis yet</div>`;
+    }
+    html+=`</div>`;
+
+    // Close evidence body
+    html+=`</div>`;
+  }
+
+  // Thesis xref
+  if(xrefs.length){
+    html+=`<div class="xref"><div class="xh">THESIS × LIVE</div>${xrefs.map(r=>`<div class="xr ${r.level}">${esc(r.msg)}</div>`).join('')}</div>`;
+  }
+
+  // Thesis block
+  html+=`<div class="thesis" id="thesis-block-${id}">
+    <div class="thdr">
+      PRE-GAME THESIS
+      <div style="display:flex;gap:6px;align-items:center;">
+        ${state==='PRE'&&!cs.generating?`<button class="tgen" onclick="generateThesis('${id}')">⚡ ${localStorage.getItem('nba4:srCache:'+id)?'GEN (cached)':'GENERATE'}</button>${localStorage.getItem('nba4:srCache:'+id)?`<button class="tedit" onclick="localStorage.removeItem('nba4:srCache:${id}');renderCard(games.find(g=>g.id==='${id}'))">🗑 CLR</button>`:''}`:''}
+        <button class="tedit" onclick="startEdit('${id}')">EDIT</button>
+      </div>
+    </div>`;
+
+  if(cs.generating){
+    html+=`<div class="gen-progress" id="gen-progress-${id}">${(cs.genSteps||[]).map(s=>{
+      const icon=s.status==='done'?'✓':s.status==='active'?'⟳':s.status==='err'?'✗':'·';
+      return `<span class="gen-step ${s.status}">${icon} ${s.label}${s.error?' — '+s.error:''}</span>`;
+    }).join('<br>')}</div>`;
+  } else if(cs.genError && !thesis){
+    html+=`<div style="font-size:7px;color:var(--red);padding:4px 0;">⚠ Thesis generation failed: ${esc(cs.genError)}</div>`;
+  } else if(thesis){
+    html+=`<div class="tbody">${esc(thesis)}</div>`;
+    if(p.lean||p.entry||p.pass||p.watches.length){
+      html+=`<div class="tpr">
+        ${p.lean?`<div class="trow">LEAN: <span>${esc(p.lean)}</span></div>`:''}
+        ${p.entry?`<div class="trow">ENTRY: <span>${esc(p.entry)}</span></div>`:''}
+        ${p.pass?`<div class="trow">PASS IF: <span>${esc(p.pass)}</span></div>`:''}
+        ${p.watches.map(w=>`<div class="trow">WATCH: <span>${esc(w)}</span></div>`).join('')}
+        ${p.flags.map(f=>`<div class="trow" style="color:var(--yellow)">⚠ ${esc(f)}</div>`).join('')}
+      </div>`;
+    }
+  } else {
+    html+=`<div class="tempty">No thesis — click GENERATE or EDIT</div>`;
+  }
+  html+=`</div>`;
+
+  // Logs + footer
+  if(cs.logs.length){
+    html+=`<div class="log">${cs.logs.map(l=>`<div class="${l.ok?'ok':'er'}">${l.t} ${esc(l.msg)}</div>`).join('')}</div>`;
+  }
+  if(cs.lastUp){
+    const srcLabel = game.dataSource==='BDL'?'<span style="color:var(--yellow)">BDL</span>':'SR';
+    const freshLabel = cs.dataFreshness==='STALE'?' · <span style="color:var(--red)">STALE</span>':cs.dataFreshness==='WATCH'?' · <span style="color:var(--yellow)">STATS LAG</span>':'';
+    html+=`<div class="foot">↻ ${cs.lastUp.toLocaleTimeString()} · ${pollInterval/1000}s · ${srcLabel}${freshLabel}</div>`;
+  }
+
+  el.innerHTML=html;
+
+  // Countdown for PRE
+  if(state==='PRE'&&game.scheduled){
+    if(cs._countdown)clearInterval(cs._countdown);
+    cs._countdown=setInterval(()=>{if(!cs.editing&&!cs.generating)renderCard(game);},1000);
+  }else if(cs._countdown){clearInterval(cs._countdown);cs._countdown=null;}
+}
+
+// ── Thesis editing ────────────────────────────────────────────────────────
+function startEdit(cardId){
+  const cs=cardState[cardId];if(!cs)return;
+  cs.editing=true;
+  const tb=document.getElementById('thesis-block-'+cardId);
+  if(!tb)return;
+  const currentThesis=theses[cardId]||'';
+  var h='<div class="thdr">PRE-GAME THESIS<span style="font-size:6px;color:var(--amber);letter-spacing:1px;">EDITING</span></div>';
+  h+='<textarea class="ta" id="ta-'+cardId+'" autocomplete="off" autocorrect="on" spellcheck="true">'+esc(currentThesis)+'</textarea>';
+
+h+=’<div class="thint">Lean: [team]\nEntry: [trigger]\nPass: [condition]\nWatch: [signal]\nFlag: [risk]</div>’;
+h+=’<div class="tbtn-row">’;
+h+=’<button class="tsave" onclick="saveThesisFromCard(\''+cardId+'\')">SAVE</button>’;
+h+=’<button class="tcancel" onclick="cancelEdit(\''+cardId+'\')">CANCEL</button>’;
+h+=’</div>’;
+tb.innerHTML=h;
+setTimeout(function(){var ta=document.getElementById(‘ta-’+cardId);if(ta){ta.focus();ta.setSelectionRange(ta.value.length,ta.value.length);}},50);
+}
+function cancelEdit(cardId){const cs=cardState[cardId];if(!cs)return;cs.editing=false;const g=games.find(x=>x.id===cardId);if(g)renderCard(g);}
+function saveThesisFromCard(cardId){
+const ta=document.getElementById(‘ta-’+cardId);if(!ta)return;
+saveThesis(cardId,ta.value);
+const cs=cardState[cardId];if(cs)cs.editing=false;
+const g=games.find(x=>x.id===cardId);if(g)renderCard(g);
+}
+
+// ── Visibility API ────────────────────────────────────────────────────────
+document.addEventListener(‘visibilitychange’,()=>{if(!document.hidden&&!paused)refreshLiveCards();});
+
+// ══════════════════════════════════════════════════════════════════════════
+// DEMO MODE — inject fake game for UI testing
+// ══════════════════════════════════════════════════════════════════════════
+const DEMO_ID = ‘demo-game-001’;
+let demoActive = false;
+
+function toggleDemo(){
+if(demoActive){
+// Remove demo game
+games = games.filter(g=>g.id!==DEMO_ID);
+delete cardState[DEMO_ID];
+delete theses[DEMO_ID];
+demoActive = false;
+document.getElementById(‘btn-demo’).style.background=‘transparent’;
+renderPills(); updateCounts(); renderConfidenceTable();
+return;
+}
+demoActive = true;
+document.getElementById(‘btn-demo’).style.background=‘rgba(255,180,50,.15)’;
+
+// ── Fake game object ──
+const demoGame = {
+id: DEMO_ID, status: ‘inprogress’,
+scheduled: new Date().toISOString(),
+venue: ‘Demo Arena’,
+home: {id:‘demo-h’, name:‘Cleveland Cavaliers’, alias:‘CLE’, sr_id:‘demo-h’},
+away: {id:‘demo-a’, name:‘Milwaukee Bucks’, alias:‘MIL’, sr_id:‘demo-a’},
+homePoints: 78, awayPoints: 71, period: 3, clock: ‘4:22’,
+dataSource: ‘DEMO’,
+summary: {
+status:‘inprogress’, quarter:3, clock:‘4:22’,
+home:{
+name:‘Cavaliers’, alias:‘CLE’, points:78, bonus:false,
+statistics:{
+assists:19, turnovers:8, steals:7, blocks:4, offensive_rebounds:9,
+field_goals_made:31, field_goals_att:62, three_points_made:8, three_points_att:22,
+free_throws_made:8, free_throws_att:10, points_in_the_paint:38,
+fast_break_points:14, points_off_turnovers:16, second_chance_points:11,
+biggest_lead:15, bench_points:22, possessions:65,
+offensive_points_per_possession:1.20, defensive_points_per_possession:1.09,
+field_goals_at_rim_made:14, field_goals_at_rim_att:18, fouls:12,
+},
+players:[
+{full_name:‘Donovan Mitchell’,on_court:true,starter:true,statistics:{minutes:‘28:11’,points:24,assists:5,field_goals_made:9,field_goals_att:17,three_points_made:3,three_points_att:7,rebounds:4,turnovers:2,steals:2,plus_minus:9,personal_fouls:1}},
+{full_name:‘Darius Garland’,on_court:true,starter:true,statistics:{minutes:‘26:44’,points:16,assists:7,field_goals_made:6,field_goals_att:12,three_points_made:2,three_points_att:5,rebounds:2,turnovers:1,steals:1,plus_minus:7,personal_fouls:2}},
+{full_name:‘Evan Mobley’,on_court:true,starter:true,statistics:{minutes:‘27:30’,points:14,assists:2,field_goals_made:7,field_goals_att:11,three_points_made:0,three_points_att:1,rebounds:8,turnovers:2,steals:1,plus_minus:11,personal_fouls:2}},
+{full_name:‘Jarrett Allen’,on_court:false,starter:true,statistics:{minutes:‘22:15’,points:10,assists:1,field_goals_made:5,field_goals_att:7,three_points_made:0,three_points_att:0,rebounds:9,turnovers:1,steals:0,plus_minus:5,personal_fouls:3}},
+{full_name:‘Max Strus’,on_court:true,starter:true,statistics:{minutes:‘25:00’,points:8,assists:2,field_goals_made:3,field_goals_att:8,three_points_made:2,three_points_att:6,rebounds:3,turnovers:0,steals:1,plus_minus:4,personal_fouls:1}},
+{full_name:‘Caris LeVert’,on_court:false,starter:false,statistics:{minutes:‘14:20’,points:6,assists:2,field_goals_made:2,field_goals_att:5,three_points_made:1,three_points_att:3,rebounds:1,turnovers:1,steals:1,plus_minus:3,personal_fouls:2}},
+],
+periods:[{number:1,scoring:{points:28}},{number:2,scoring:{points:26}},{number:3,scoring:{points:24}}],
+},
+away:{
+name:‘Bucks’, alias:‘MIL’, points:71, bonus:true,
+statistics:{
+assists:14, turnovers:13, steals:4, blocks:2, offensive_rebounds:5,
+field_goals_made:27, field_goals_att:64, three_points_made:9, three_points_att:28,
+free_throws_made:8, free_throws_att:11, points_in_the_paint:26,
+fast_break_points:8, points_off_turnovers:10, second_chance_points:6,
+biggest_lead:3, bench_points:16, possessions:66,
+offensive_points_per_possession:1.08, defensive_points_per_possession:1.18,
+field_goals_at_rim_made:8, field_goals_at_rim_att:13, fouls:14,
+},
+players:[
+{full_name:‘Damian Lillard’,on_court:true,starter:true,statistics:{minutes:‘28:00’,points:22,assists:5,field_goals_made:8,field_goals_att:19,three_points_made:4,three_points_att:11,rebounds:3,turnovers:4,steals:1,plus_minus:-5,personal_fouls:2}},
+{full_name:‘Bobby Portis’,on_court:true,starter:true,statistics:{minutes:‘26:30’,points:16,assists:2,field_goals_made:7,field_goals_att:13,three_points_made:2,three_points_att:5,rebounds:7,turnovers:2,steals:1,plus_minus:-3,personal_fouls:3}},
+{full_name:‘Khris Middleton’,on_court:false,starter:true,statistics:{minutes:‘24:00’,points:12,assists:3,field_goals_made:5,field_goals_att:12,three_points_made:1,three_points_att:4,rebounds:3,turnovers:3,steals:0,plus_minus:-8,personal_fouls:2}},
+{full_name:‘Taurean Prince’,on_court:true,starter:true,statistics:{minutes:‘22:00’,points:9,assists:1,field_goals_made:3,field_goals_att:8,three_points_made:2,three_points_att:5,rebounds:4,turnovers:2,steals:1,plus_minus:-4,personal_fouls:3}},
+{full_name:‘Andre Jackson’,on_court:true,starter:false,statistics:{minutes:‘18:00’,points:7,assists:2,field_goals_made:3,field_goals_att:7,three_points_made:0,three_points_att:2,rebounds:5,turnovers:1,steals:1,plus_minus:-2,personal_fouls:2}},
+],
+periods:[{number:1,scoring:{points:25}},{number:2,scoring:{points:27}},{number:3,scoring:{points:19}}],
+},
+},
+};
+
+// ── Fake thesis ──
+theses[DEMO_ID] = `COMPACT THESIS — MIL vs CLE | 7:00 PM ET
+Feb 28 2026 | Rocket Mortgage FieldHouse
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AVAILABILITY
+CLE  Mitchell ✅ IN | Garland ✅ IN | Mobley ✅ IN | Allen ✅ IN
+MIL  Giannis ❌ OUT | Lillard ✅ IN | Middleton ⚠️ GTD (knee)
+
+REST   CLE 2 day | MIL 1 day
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CONTROL SCORE: CLE 0.78 — Strong
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+I1  Possession & Transition  (25%)   CLE 1.0
+CLE top-5 steals + transition, MIL TO-prone without Giannis
+
+I2  Rim Pressure & Foul      (25%)   CLE 1.0
+CLE elite interior with Mobley+Allen vs MIL missing Giannis rim protection
+
+I3  Shot Quality & Creation  (20%)   CLE 0.5
+Both teams efficient creators, but MIL has Lillard pulling up from deep
+
+I4  Lineup Integrity         (20%)   CLE 1.0
+CLE full strength + deep bench vs MIL missing Giannis + Middleton limited
+
+I5  Tempo & Efficiency       (10%)   CONTESTED 0.5
+Similar pace profiles, efficiency TBD
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SHOT DIET
+CLE: Interior/Transition — season 3PT% 36.1% on 33.2 3PA/gm
+MIL: Perimeter/Creation — season 3PT% 35.8% on 37.4 3PA/gm
+
+3PT HEATER WATCHLIST
+MIL: Bobby Portis (31.2% on 3.1/gm) NON-SHOOTER, Pat Connaughton (35.8% on 4.2/gm) VOLATILE, AJ Green (36.5% on 3.8/gm) VOLATILE
+CLE: Caris LeVert (33.1% on 2.1/gm) VOLATILE, Craig Porter Jr (29.8% on 1.2/gm) NON-SHOOTER
+
+KEY FLAGS
+⚠ Giannis OUT — MIL structural ceiling severely capped
+⚠ Middleton knee — may be limited or pulled early
+✓ CLE full strength with 2 days rest
+
+MARKET: Spread CLE -8.5 | ML CLE -380 / MIL +300 | O/U 221.5
+ML THRESHOLD: CLE below -250 (71.4% MIP vs 78% FWP = 6.6%+ edge)
+
+ENTRY      CLE trails by 5+ on MIL unsustainable 3PT | OR CLE ML above -250
+PASS       MIL lead structural (LOCKED IN/DURABLE 3PT from Lillard/Middleton at normal rates) — do NOT fade
+
+CLUTCH GATE: CLE season NetRtg +0.5, L10 +44.7 (4GP 3-1) vs MIL +38.0 (4GP 4-0) contaminated — gate unlikely to fire
+
+WATCH
+
+1. MIL 3PT sustainability — confirms entry if MIL shooting 40%+ from 3 with 40%+ makes from Portis/Connaughton/non-shooters; denies if Lillard hitting at normal career rates
+1. CLE interior structural — confirms if Mobley+Allen paint pts + FTA on pace with 48+/16+ season norms; denies if MIL small-ball forces CLE to perimeter
+1. MIL turnover rate — confirms if MIL TO count exceeds 8 at half (season avg 14.2 w/ Giannis); denies if Lillard stabilizes ball handling below 12 pace`;
+
+// ── Inject into games array + mount ──
+games.unshift(demoGame);
+mountCard(demoGame);
+
+// ── Set up full cardState with mock data ──
+const cs = cardState[DEMO_ID];
+
+cs.oddsData = {homeSpread:’-8.5’, homeML:’-380’, awayML:’+300’, total:‘221.5’};
+cs._demoSummary = demoGame.summary; // preserve for re-injection after schedule refresh
+cs.clutchData = {
+tier:2,
+home:{netRtg:8.2, offRtg:118.5, defRtg:110.3, gp:12, wl:‘8-4’, efg:54.2, ts:58.1, tovPct:11.2, pace:98.5},
+away:{netRtg:-3.5, offRtg:108.0, defRtg:111.5, gp:10, wl:‘4-6’, efg:48.8, ts:52.4, tovPct:14.8, pace:100.2},
+};
+cs.clutchTier = 2;
+cs.trackingData = {
+home:{catchAndShoot:{efg:58.2,fg3pct:39.1},pullUp:{efg:48.5,fg3pct:34.2}},
+away:{catchAndShoot:{efg:52.1,fg3pct:35.8},pullUp:{efg:44.3,fg3pct:31.5}},
+};
+
+cs.sonnetIndicators = {
+I1:{score:0.85,leader:‘CLE’,detail:‘Dominant 14 FBP, +5 TO margin, 7 steals forcing MIL chaos’,sonnet:true,rawScore:0.85},
+I2:{score:0.90,leader:‘CLE’,detail:‘78% at-rim (14/18), 38 paint pts, MIL in bonus with 14 fouls’,sonnet:true,rawScore:0.90},
+I3:{score:0.70,leader:‘CLE’,detail:‘50% FG, 19 AST on 31 FGM (61% assisted) vs MIL 42% shooting’,sonnet:true,rawScore:0.70},
+I4:{score:0.75,leader:‘CLE’,detail:‘15-pt biggest lead, bench 22 pts, all 5 starters positive +/-’,sonnet:true,rawScore:0.75},
+I5:{score:0.65,leader:‘CLE’,detail:‘1.20 vs 1.08 pts/poss — controlling pace at 65 possessions’,sonnet:true,rawScore:0.65},
+score: 0.82, controlTeam: ‘CLE’, dataQuality: ‘SONNET’,
+traj:{
+signals:[
+{key:‘T1’,text:‘Role Player Heater: CLEAR’,color:’#3e3e48’},
+{key:‘T2’,text:‘Star Process: Lillard 8/19 (42%) cold — process declining Q-over-Q’,color:‘var(–amber)’},
+{key:‘T3’,text:‘Quarter Delta: CLE winning Q3 24-19, extending lead’,color:‘var(–amber)’},
+{key:‘T4’,text:‘Foul Gate: Portis 3 fouls in Q3 — CONSTRAINT’,color:‘var(–amber)’},
+{key:‘T5’,text:‘Interior Trend: CLE at-rim rising (4→6→8 att per Q)’,color:‘var(–amber)’},
+{key:‘T6’,text:‘Quarter Assist Ratio: CLEAR’,color:’#3e3e48’},
+{key:‘T7’,text:‘Closing Lineup: CLE starters on court, generating control’,color:‘var(–amber)’},
+{key:‘T8’,text:‘Shot Diet: MIL 32% 3PA rate — ALIGNED with perimeter identity’,color:’#3e3e48’},
+],
+lean:‘CLE’, count:5, total:8, tooEarly:false,
+},
+source:‘sonnet’,
+};
+
+cs.prediction = {
+edge:’+6.2%’, edgeNum:6.2, fwp:‘83.7%’, mip:‘77.5%’,
+entry:‘WINDOW CLOSING’, conviction:‘STRONG’,
+sustainability:‘CLE: LOCKED IN | MIL: FRAGILE’,
+teamQuality:‘CLE 44-16 full strength, top-3 East | MIL 32-28 missing Giannis, Middleton limited’,
+clutch:‘CLEAR — both teams above -2.0 L15 NetRtg’,
+prediction:‘Cleveland wins by 10-14. MIL 3PT production unsustainable (9/28 from non-shooters); CLE interior dominance compounds through Q4.’,
+};
+cs.sustainabilityAudit = {
+home:{teamAlias:‘CLE’,live3PM:8,live3PA:22,live3Pct:‘36.4’,seasonPrior:‘36.1’,gotSeasonData:true,deviation:‘0.3’,personnelGrade:‘N/A (at baseline)’,personnelDetails:[],elitePct:‘0’,nonPct:‘0’,posteriorMean:‘36.2’,regressionPull:‘0’,regressionProb:25,regressionGrade:‘MINIMAL’,shotTypeGrade:‘DURABLE’,shotTypeNote:‘High ast% (65%)’,assistRatio:‘65’,composite:‘0.00’,tier:‘LOCKED IN’},
+away:{teamAlias:‘MIL’,live3PM:9,live3PA:28,live3Pct:‘32.1’,seasonPrior:‘35.8’,gotSeasonData:true,deviation:’-3.7’,personnelGrade:‘FRAGILE’,personnelDetails:[{name:‘Bobby Portis’,live3m:3,live3a:7,livePct:‘43’,sznPct:31.2,sznVol:3.1,sznStr:‘31.2% (3.1/gm)’,tier:‘non’,tierLabel:‘NON-SHOOTER’,hot:true},{name:‘Pat Connaughton’,live3m:3,live3a:6,livePct:‘50’,sznPct:35.8,sznVol:4.2,sznStr:‘35.8% (4.2/gm)’,tier:‘average’,tierLabel:‘AVERAGE’,hot:true}],elitePct:‘22’,nonPct:‘44’,posteriorMean:‘34.5’,regressionPull:‘45’,regressionProb:62,regressionGrade:‘MODERATE’,shotTypeGrade:‘FRAGILE’,shotTypeNote:‘Low ast% (42%) suggests pull-up/iso’,assistRatio:‘42’,composite:‘1.55’,tier:‘FRAGILE’},
+};
+
+cs.edgeHistory = [
+{time:‘7:12 PM’,period:1,edge:’+3.1%’,edgeNum:3.1,fwp:‘80.6%’,control:‘CLE’,score:‘MIL 18-CLE 20’},
+{time:‘7:28 PM’,period:2,edge:’+4.8%’,edgeNum:4.8,fwp:‘82.3%’,control:‘CLE’,score:‘MIL 42-CLE 48’},
+{time:‘7:45 PM’,period:3,edge:’+6.2%’,edgeNum:6.2,fwp:‘83.7%’,control:‘CLE’,score:‘MIL 71-CLE 78’},
+];
+
+renderPills(); updateCounts();
+// Select the demo pill
+selIds = [DEMO_ID];
+renderPills();
+renderCard(demoGame);
+renderConfidenceTable();
+}
+
+</script>
+</body>
+</html><!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#07070a">
+<title>NBA Control v5.1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+:root{
+  --bg:#07070a;--s1:#0e0e12;--s2:#131318;--b1:#1c1c22;--b2:#252529;
+  --t1:#d2d2de;--t2:#80808e;--t3:#3e3e48;
+  --amber:#f5a62a;--green:#00ff88;--g2:#a8ff78;--red:#ff5252;--yellow:#ffd166;
+  --mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans',sans-serif;
+}
+html,body{background:var(--bg);color:var(--t1);font-family:var(--mono);min-height:100vh;min-height:100dvh;overscroll-behavior:none;}
+input,textarea,select{font-size:16px!important;}
+@media(min-width:600px){input,textarea,select{font-size:inherit!important;}}
+.app{padding:12px;max-width:1400px;margin:0 auto;padding-bottom:env(safe-area-inset-bottom,12px);}
+
+/* Header */
+.hdr{display:flex;align-items:center;justify-content:space-between;padding:7px 0 10px;border-bottom:1px solid var(–b1);margin-bottom:9px;gap:6px;}
+.logo{font-size:8px;font-weight:600;letter-spacing:4px;color:var(–amber);text-transform:uppercase;white-space:nowrap;}
+.pulse{width:5px;height:5px;border-radius:50%;background:var(–green);box-shadow:0 0 6px var(–green);animation:blink 2s ease-in-out infinite;margin:0 7px;flex-shrink:0;}
+.pulse.off{background:var(–t3);box-shadow:none;animation:none;}
+.hdr-sub{font-size:7px;color:var(–t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.hdr-r{font-size:7px;color:var(–t3);white-space:nowrap;flex-shrink:0;}
+.hdr-r span{color:var(–amber);}
+
+/* Controls */
+.ctrls{display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-bottom:9px;}
+.cbtn{font-size:7px;letter-spacing:1.5px;text-transform:uppercase;background:none;border:1px solid var(–b2);color:var(–t2);font-family:var(–mono);padding:7px 10px;cursor:pointer;transition:all .15s;white-space:nowrap;-webkit-appearance:none;border-radius:0;min-height:32px;}
+.cbtn:hover,.cbtn.on{border-color:var(–amber);color:var(–amber);background:rgba(245,166,42,.06);}
+.cbtn:active{opacity:.7;}
+.cbtn.freq{font-size:6px;padding:5px 7px;min-height:28px;}
+.cbtn.freq.on{border-color:var(–green);color:var(–green);background:rgba(0,255,136,.06);}
+.cbtn.freq.warn{border-color:var(–red);color:var(–red);}
+.ci{background:var(–s1);border:1px solid var(–b2);color:var(–t1);font-family:var(–mono);padding:7px 8px;outline:none;width:120px;-webkit-appearance:none;border-radius:0;min-height:32px;}
+.ci:focus{border-color:var(–amber);}
+.ci::placeholder{color:var(–t3);}
+.cml{margin-left:auto;font-size:7px;color:var(–t3);white-space:nowrap;}
+.cml span{color:var(–amber);}
+.freq-group{display:flex;align-items:center;gap:2px;margin-left:4px;}
+.freq-lbl{font-size:6px;color:var(–t3);letter-spacing:1px;margin-right:2px;}
+
+/* Pills */
+.pills{display:flex;flex-wrap:wrap;gap:3px;margin-bottom:9px;}
+.pill{font-size:7px;letter-spacing:.8px;padding:6px 10px;border:1px solid var(–b2);cursor:pointer;font-family:var(–mono);color:var(–t2);background:none;transition:all .15s;-webkit-appearance:none;border-radius:0;min-height:30px;}
+.pill:hover,.pill.sel{border-color:var(–green);color:var(–green);background:rgba(0,255,136,.04);}
+.pill.live{border-color:var(–yellow);color:var(–yellow);}
+.pill.done{color:var(–t3);border-color:var(–b1);}
+
+/* Grid */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:8px;}
+
+/* Card */
+@keyframes fu{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+@keyframes cg{0%,100%{box-shadow:0 0 0 0 rgba(0,255,136,.12)}50%{box-shadow:0 0 0 8px rgba(0,255,136,0)}}
+.card{background:var(–s1);border:1px solid var(–b1);animation:fu .2s ease;overflow:hidden;position:relative;}
+.card.ce{border-color:var(–green);animation:fu .2s ease,cg 2.5s ease-in-out infinite;}
+.card.cw{border-color:var(–yellow);}
+.card.ce::before,.card.cw::before{content:’’;position:absolute;top:0;left:0;right:0;height:2px;}
+.card.ce::before{background:var(–green);box-shadow:0 0 8px var(–green);}
+.card.cw::before{background:var(–yellow);}
+
+.ch{display:flex;align-items:center;justify-content:space-between;padding:8px 11px;background:var(–s2);border-bottom:1px solid var(–b1);}
+.mup{font-size:12px;font-weight:500;}
+.sub{font-size:6px;color:var(–t3);margin-top:1px;}
+.chr{display:flex;align-items:center;gap:5px;}
+.pb{font-size:7px;letter-spacing:1px;padding:2px 6px;border:1px solid var(–b2);color:var(–amber);}
+.ld{width:5px;height:5px;border-radius:50%;background:var(–green);box-shadow:0 0 5px var(–green);animation:blink 1.5s ease-in-out infinite;flex-shrink:0;}
+
+.sr{display:flex;align-items:center;justify-content:space-between;padding:10px 11px;border-bottom:1px solid var(–b1);}
+.srt{font-size:7px;color:var(–t2);letter-spacing:1px;margin-bottom:2px;}
+.srs{font-size:26px;font-weight:600;letter-spacing:-1px;line-height:1;}
+.bonus-tag{font-size:6px;color:var(–red);border:1px solid var(–red);padding:1px 3px;margin-left:3px;vertical-align:middle;}
+.sr-sep{font-size:13px;color:var(–t3);}
+
+.pre{padding:16px 11px;text-align:center;}
+.prelbl{font-size:7px;color:var(–t2);letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;}
+.prediv{height:1px;background:var(–b1);margin:14px 0;}
+.countdown{color:var(–amber);font-size:22px;font-weight:600;}
+
+.ctrl-bar{display:flex;align-items:center;gap:7px;padding:8px 11px;border-bottom:1px solid var(–b1);flex-wrap:wrap;}
+.vrd{font-size:7px;font-weight:600;letter-spacing:2px;padding:2px 7px;border:1px solid;text-transform:uppercase;white-space:nowrap;flex-shrink:0;}
+.cl{font-size:6px;color:var(–t3);letter-spacing:1px;}
+.ct{font-size:12px;font-weight:600;}
+.bw{flex:1;min-width:60px;padding:0 3px;}
+.bt2{height:2px;background:var(–b2);}
+.bf{height:100%;transition:width .6s ease;}
+.cn{font-size:17px;font-weight:600;letter-spacing:-1px;flex-shrink:0;}
+.dq{font-size:6px;letter-spacing:1px;padding:1px 4px;border:1px solid;color:var(–green);border-color:var(–green);}
+
+.inds{padding:6px 11px;border-bottom:1px solid var(–b1);}
+.ind{display:flex;align-items:center;gap:4px;padding:2px 0;border-bottom:1px solid var(–b1);}
+.ind:last-child{border:none;}
+.ii{font-size:6px;color:var(–t3);width:14px;flex-shrink:0;}
+.in{font-size:6px;color:var(–t2);width:78px;flex-shrink:0;}
+.iw{font-size:6px;color:var(–t3);width:18px;flex-shrink:0;}
+.pip{width:5px;height:5px;border-radius:1px;flex-shrink:0;}
+.pw{background:#00ff88;}.plw{background:#a8ff78;}.pd{background:var(–yellow);}.pll{background:#ff8c42;}.pl{background:var(–red);}
+.il{font-size:7px;font-weight:600;width:26px;flex-shrink:0;}
+.id{font-size:6px;color:var(–t2);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+.traj{padding:6px 11px;border-bottom:1px solid var(–b1);}
+.th{font-size:6px;color:var(–t2);letter-spacing:1.5px;text-transform:uppercase;display:flex;align-items:center;margin-bottom:3px;gap:4px;flex-wrap:wrap;}
+.tl{font-size:6px;font-weight:600;letter-spacing:1px;padding:1px 5px;border:1px solid;margin-left:auto;}
+.ts{display:flex;align-items:flex-start;gap:3px;padding:2px 0;}
+.tk{font-size:6px;font-weight:600;width:16px;flex-shrink:0;padding-top:1px;}
+.tt{font-size:6px;flex:1;line-height:1.5;}
+
+/* Sonnet Analysis */
+.analysis{padding:8px 11px;border-bottom:1px solid var(–b1);background:rgba(0,255,136,.02);}
+.analysis-hdr{font-size:6px;color:var(–green);letter-spacing:1.5px;text-transform:uppercase;display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;}
+.analysis-body{font-size:7px;color:var(–t2);line-height:1.7;font-family:var(–sans);white-space:pre-wrap;word-break:break-word;}
+.analysis-loading{font-size:7px;color:var(–t3);display:flex;align-items:center;gap:6px;}
+.analysis-cost{font-size:5px;color:var(–t2);}
+
+/* Decision View */
+.dv{padding:8px 11px;border-bottom:1px solid var(–b1);background:rgba(167,139,250,.04);}
+.dv-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px;}
+.dv-row:last-child{margin-bottom:0;}
+.dv-label{font-size:5px;color:var(–t2);letter-spacing:1.5px;text-transform:uppercase;width:56px;flex-shrink:0;}
+.dv-val{font-size:9px;font-weight:600;}
+.dv-sub{font-size:6px;color:var(–t2);}
+.dv-tag{font-size:6px;letter-spacing:1px;padding:1px 5px;border:1px solid;white-space:nowrap;}
+.dv-pred{font-size:7px;color:var(–t1);font-family:var(–sans);line-height:1.5;padding:4px 0 0;}
+.dv-hdr{font-size:6px;color:#a78bfa;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:5px;display:flex;align-items:center;justify-content:space-between;}
+
+/* Evidence toggle */
+.ev-toggle{font-size:6px;color:var(–t2);letter-spacing:1.5px;text-transform:uppercase;padding:7px 11px;border-bottom:1px solid var(–b1);border-top:1px solid var(–b1);cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none;-webkit-user-select:none;background:rgba(255,255,255,.01);}
+.ev-toggle:hover{color:var(–t2);background:rgba(255,255,255,.02);}
+.ev-toggle .arr{transition:transform .2s;display:inline-block;}
+.ev-toggle.open .arr{transform:rotate(90deg);}
+.ev-body{overflow:hidden;transition:max-height .3s ease;}
+.ev-body.collapsed{max-height:0!important;overflow:hidden;}
+
+/* Data inputs (clutch + odds) */
+.data-inputs{padding:6px 11px;border-bottom:1px solid var(–b1);background:rgba(245,166,42,.03);}
+.di-hdr{font-size:6px;color:var(–amber);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px;display:flex;align-items:center;justify-content:space-between;}
+.di-row{display:flex;align-items:center;gap:4px;margin-bottom:3px;flex-wrap:wrap;}
+.di-lbl{font-size:6px;color:var(–t2);width:50px;flex-shrink:0;}
+.di-input{background:var(–s2);border:1px solid var(–b2);color:var(–t1);font-family:var(–mono);font-size:6px;padding:2px 3px;width:56px;outline:none;-webkit-appearance:none;border-radius:0;text-align:center;}
+.di-input:focus{border-color:var(–amber);}
+.di-input.di-sm{font-size:5px;padding:2px 2px;}
+.di-input::placeholder{color:var(–t3);font-size:5px;}
+.di-btn{font-size:6px;letter-spacing:1px;background:none;border:1px solid var(–b2);color:var(–t2);font-family:var(–mono);padding:3px 8px;cursor:pointer;-webkit-appearance:none;border-radius:0;}
+.di-btn:hover{border-color:var(–amber);color:var(–amber);}
+.di-saved{font-size:5px;color:var(–green);margin-left:4px;}
+
+/* Clutch Upload Zone */
+.clutch-upload{display:flex;align-items:center;gap:6px;padding:6px 0;flex-wrap:wrap;}
+.cu-btn{font-size:7px;letter-spacing:1px;text-transform:uppercase;background:rgba(147,130,220,.08);border:1px dashed rgba(147,130,220,.3);color:#9382dc;font-family:var(–mono);padding:7px 12px;cursor:pointer;-webkit-appearance:none;border-radius:0;min-height:32px;transition:all .15s;}
+.cu-btn:hover{border-color:#9382dc;background:rgba(147,130,220,.15);}
+.cu-btn.active{border-color:var(–amber);color:var(–amber);background:rgba(245,166,42,.06);border-style:solid;}
+.cu-status{font-size:7px;color:var(–t3);font-family:var(–mono);}
+.cu-status.ok{color:var(–green);}
+.cu-status.err{color:var(–red);}
+.cu-badge{display:inline-flex;align-items:center;gap:3px;font-size:6px;letter-spacing:.5px;background:rgba(0,255,136,.06);border:1px solid rgba(0,255,136,.2);color:var(–green);padding:3px 8px;font-family:var(–mono);}
+
+/* Thesis xref */
+.xref{padding:6px 11px;border-bottom:1px solid var(–b1);background:rgba(245,166,42,.03);}
+.xh{font-size:6px;color:var(–amber);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:3px;}
+.xr{font-size:6px;padding:1px 0;}
+.xr.ok{color:var(–g2);}.xr.warn{color:var(–yellow);}.xr.info{color:var(–t2);}
+
+/* Thesis */
+.thesis{padding:7px 11px;}
+.thdr{font-size:6px;color:var(–t3);letter-spacing:1.5px;text-transform:uppercase;display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;gap:4px;}
+.tedit,.tgen{font-size:7px;color:var(–amber);background:none;border:none;cursor:pointer;font-family:var(–mono);letter-spacing:1px;padding:6px 4px;min-height:28px;}
+.tgen{color:var(–green);border:1px solid var(–green);padding:6px 10px;}
+.tgen:active{background:rgba(0,255,136,.1);}
+.tgen:disabled{opacity:.4;cursor:default;}
+.tbody{font-size:7px;color:var(–t2);line-height:1.7;font-family:var(–sans);white-space:pre-wrap;word-break:break-word;}
+.tpr{margin-top:5px;padding-top:5px;border-top:1px solid var(–b1);}
+.trow{font-size:6px;color:var(–t3);padding:1px 0;}
+.trow span{color:var(–t1);}
+.tempty{font-size:7px;color:var(–t3);font-style:italic;}
+.ta{width:100%;background:var(–bg);border:1px solid var(–b2);color:var(–t1);font-family:var(–sans);padding:10px;resize:vertical;min-height:120px;outline:none;line-height:1.6;border-radius:0;-webkit-appearance:none;touch-action:manipulation;}
+.ta:focus{border-color:var(–amber);}
+.thint{font-size:6px;color:var(–t3);margin-top:3px;line-height:1.7;white-space:pre-line;}
+.tbtn-row{display:flex;gap:6px;margin-top:6px;}
+.tsave,.tcancel{font-size:7px;background:none;font-family:var(–mono);padding:7px 14px;cursor:pointer;letter-spacing:1px;-webkit-appearance:none;border-radius:0;min-height:32px;}
+.tsave{border:1px solid var(–amber);color:var(–amber);}
+.tsave:active{background:rgba(245,166,42,.15);}
+.tcancel{border:1px solid var(–b2);color:var(–t2);}
+
+/* Gen progress */
+.gen-progress{font-size:7px;color:var(–t2);padding:6px 0;line-height:1.7;}
+.gen-step{color:var(–t3);}
+.gen-step.done{color:var(–green);}
+.gen-step.active{color:var(–amber);}
+.gen-step.err{color:var(–red);}
+
+.log{background:var(–s2);border-top:1px solid var(–b1);padding:4px 11px;font-size:6px;color:var(–t3);max-height:40px;overflow-y:auto;}
+.log .ok{color:#3d9970;}.log .er{color:var(–red);}
+.foot{font-size:6px;color:var(–t3);padding:3px 11px 6px;}
+
+.loading{display:flex;align-items:center;gap:6px;padding:11px;font-size:7px;color:var(–t3);}
+.err-msg{font-size:7px;color:var(–red);padding:6px 11px;}
+.empty{padding:44px;text-align:center;color:var(–t3);font-size:8px;letter-spacing:2px;}
+.date-label{font-size:7px;color:var(–t2);letter-spacing:1px;margin-bottom:6px;padding:4px 0;}
+.date-label span{color:var(–amber);}
+
+/* Alert bar */
+.abar{position:fixed;top:0;left:0;right:0;z-index:200;display:flex;align-items:center;gap:9px;padding:10px 14px;font-size:8px;letter-spacing:1px;transform:translateY(-100%);transition:transform .3s ease;padding-top:max(10px,env(safe-area-inset-top));}
+.abar.show{transform:translateY(0);}
+.abar.entry{background:rgba(0,255,136,.12);border-bottom:1px solid var(–green);color:var(–green);}
+.abar.watch{background:rgba(255,209,102,.10);border-bottom:1px solid var(–yellow);color:var(–yellow);}
+.ax{margin-left:auto;cursor:pointer;opacity:.5;font-size:14px;padding:6px;min-width:28px;text-align:center;}
+
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.spin{width:8px;height:8px;border:1px solid var(–b2);border-top-color:var(–amber);border-radius:50%;animation:spin .7s linear infinite;display:inline-block;}
+
+@media(max-width:600px){
+.app{padding:8px;padding-bottom:max(8px,env(safe-area-inset-bottom));}
+.grid{grid-template-columns:1fr;}
+.ctrls{gap:3px;}
+.cbtn{font-size:7px;padding:7px 8px;}
+.ci{width:100px;}
+.cml{display:none;}
+.mup{font-size:11px;}
+.srs{font-size:22px;}
+.cn{font-size:15px;}
+.in{width:68px;}
+.id{font-size:5px;}
+}
+#conf-table{margin:0 11px 8px;padding:8px 10px;background:var(–c1);border:1px solid var(–b1);border-radius:6px;}
+#conf-table .ct-hdr{font-size:7px;letter-spacing:1.5px;color:var(–t2);text-transform:uppercase;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;}
+#conf-table table{width:100%;border-collapse:collapse;font-size:7px;}
+#conf-table th{color:var(–t3);font-weight:400;text-align:left;padding:2px 4px;border-bottom:1px solid var(–b1);font-size:5.5px;letter-spacing:.5px;text-transform:uppercase;}
+#conf-table td{padding:4px;border-bottom:1px solid rgba(255,255,255,.03);vertical-align:top;}
+#conf-table tr:last-child td{border-bottom:none;}
+#conf-table .ct-matchup{color:var(–t1);font-weight:600;letter-spacing:.3px;white-space:nowrap;}
+#conf-table .ct-score{font-weight:600;font-size:8px;text-align:center;}
+#conf-table .ct-verdict{font-size:5.5px;letter-spacing:.5px;text-align:center;}
+#conf-table .ct-cond{color:var(–t2);font-size:6px;line-height:1.4;max-width:180px;}
+@media(max-width:600px){#conf-table .ct-cond{max-width:120px;font-size:5.5px;}}
+</style>
+
+</head>
+<body>
+
+<div id="abar" class="abar">
+  <span id="abar-msg"></span>
+  <span class="ax" onclick="hideAlert()">✕</span>
+</div>
+
+<div class="app">
+  <div class="hdr">
+    <div style="display:flex;align-items:center;min-width:0;">
+      <span class="logo">NBA Control</span>
+      <div class="pulse" id="pulse"></div>
+      <span class="hdr-sub" id="hdr-sub">LIVE · SR via Netlify · v5.1 · FULL</span>
+    </div>
+    <div class="hdr-r"><span id="live-count">0</span> live · <span id="sel-count">0</span>/5</div>
+  </div>
+
+  <div class="ctrls">
+    <button class="cbtn on" id="btn-live" onclick="setPaused(false)">LIVE</button>
+    <button class="cbtn" id="btn-pause" onclick="setPaused(true)">PAUSE</button>
+    <button class="cbtn" onclick="loadSchedule()">↻ REFRESH</button>
+    <input class="ci" id="search" placeholder="Filter…" oninput="renderPills()"/>
+    <div class="freq-group">
+      <span class="freq-lbl">POLL:</span>
+      <button class="cbtn freq" onclick="setFreq(30)" id="f30">30s</button>
+      <button class="cbtn freq" onclick="setFreq(60)" id="f60">60s</button>
+      <button class="cbtn freq on" onclick="setFreq(90)" id="f90">90s</button>
+    </div>
+    <button class="cbtn" onclick="clearTheses()">CLR THESIS</button>
+    <button class="cbtn" onclick="clearMarketCache()">CLR MKT</button>
+    <button class="cbtn" id="btn-demo" onclick="toggleDemo()" style="color:var(--amber);border-color:var(--amber)">DEMO</button>
+    <span class="cml"><span id="game-count">0</span> games</span>
+  </div>
+
+  <!-- Clutch Upload Zone -->
+
+  <div class="clutch-upload" id="clutch-zone">
+    <input type="file" id="clutch-file" accept="image/*" style="display:none" onchange="handleClutchUpload(this)">
+    <button class="cu-btn" id="cu-btn" onclick="document.getElementById('clutch-file').click()">📋 UPLOAD L15 CLUTCH</button>
+    <select id="cu-segment" style="font-size:7px;font-family:var(--mono);background:var(--s2);border:1px solid var(--b2);color:var(--t2);padding:5px;-webkit-appearance:none;border-radius:0;min-height:28px;">
+      <option value="L15">Last 15</option>
+      <option value="L10">Last 10</option>
+    </select>
+    <span class="cu-status" id="cu-status"></span>
+    <span id="cu-badge" style="display:none"></span>
+  </div>
+
+  <div id="loading" class="loading" style="display:none;"><div class="spin"></div> Loading schedule…</div>
+  <div id="err" class="err-msg" style="display:none;"></div>
+  <div id="date-lbl" class="date-label"></div>
+  <div id="pills" class="pills"></div>
+  <div id="conf-table" style="display:none"></div>
+  <div id="empty" class="empty">SELECT UP TO 5 GAMES ABOVE TO BEGIN</div>
+  <div id="grid" class="grid"></div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════════════════════
+// BOOT DIAGNOSTICS — catches parse/runtime failures in main script
+// This runs in its own <script> tag so it survives main script parse errors
+// ══════════════════════════════════════════════════════════════════════════════
+window.__nbaBooted = false;
+window.__nbaVersion = 'v5.1';
+window.__bootErrors = [];
+
+window.onerror = function(msg, src, line, col, err) {
+  window.__bootErrors.push({msg:msg, line:line, col:col, src:src});
+  var el = document.getElementById('err');
+  if(el){
+    el.style.display = 'block';
+    el.style.whiteSpace = 'pre-wrap';
+    el.innerHTML = '<span style="color:#ff6b6b;font-weight:600">⚠ JS ERROR</span> ' + window.__nbaVersion + '\n'
+      + String(msg) + '\nLine ' + line + (col ? ':' + col : '') + '\n'
+      + '<span style="color:#888;font-size:5px">Check console for full trace. This usually means a syntax error in index.html.</span>';
+  }
+  console.error('[NBA CONTROL BOOT ERROR]', msg, 'at line', line, col, err);
+};
+
+window.addEventListener('unhandledrejection', function(e) {
+  var msg = e.reason ? (e.reason.message || String(e.reason)) : 'Unknown async error';
+  window.__bootErrors.push({msg:msg, async:true});
+  console.error('[NBA CONTROL ASYNC ERROR]', msg, e.reason);
+});
+
+// Boot canary — fires 4s after page load. If main script parsed and ran,
+// window.__nbaBooted will be true. If not, something broke silently.
+setTimeout(function(){
+  if(!window.__nbaBooted){
+    var el = document.getElementById('err');
+    if(el){
+      el.style.display = 'block';
+      el.style.whiteSpace = 'pre-wrap';
+      var detail = window.__bootErrors.length > 0
+        ? '\nCaptured errors:\n' + window.__bootErrors.map(function(e){return '  ' + e.msg + (e.line ? ' (L'+e.line+')' : '');}).join('\n')
+        : '\nNo errors captured — main script likely failed to parse entirely.';
+      el.innerHTML = '<span style="color:#ff6b6b;font-weight:600">⚠ BOOT FAILURE</span> ' + window.__nbaVersion + '\n'
+        + 'Dashboard JS did not initialize.' + detail + '\n'
+        + '<span style="color:#888;font-size:5px">This usually means a syntax error was introduced in the last deployment.\n'
+        + 'Open browser DevTools → Console to see the parse error.\n'
+        + 'Redeploy the last known working version from GitHub.</span>';
+    }
+    // Also make it obvious in the header
+    var hdr = document.getElementById('hdr-sub');
+    if(hdr) hdr.textContent = 'BOOT FAILURE · JS did not initialize · ' + window.__nbaVersion;
+  }
+}, 4000);
+</script>
+
+<script>
+// ══════════════════════════════════════════════════════════════════════════════
+// CONSTANTS & STATE
+// ══════════════════════════════════════════════════════════════════════════════
+const W = {I1:.25, I2:.25, I3:.20, I4:.20, I5:.10};
+const FN = '/.netlify/functions/';
+
+let games = [], selIds = [], paused = false, pollTimer = null, alertTimer = null, confCollapsed = false;
+let pollInterval = 90000; // default 90s
+const theses = JSON.parse(localStorage.getItem('nba4:theses')||'{}');
+const cachedClutch = JSON.parse(localStorage.getItem('nba4:clutch')||'{}');
+const cachedOdds = JSON.parse(localStorage.getItem('nba4:odds')||'{}');
+const cachedOddsHistory = JSON.parse(localStorage.getItem('nba4:oddsHist')||'{}');
+function persistClutch(id,cs){cachedClutch[id]={data:cs.clutchData,tier:cs.clutchTier};localStorage.setItem('nba4:clutch',JSON.stringify(cachedClutch));}
+function persistOdds(id,cs){cachedOdds[id]=cs.oddsData;cachedOddsHistory[id]=cs.oddsHistory;localStorage.setItem('nba4:odds',JSON.stringify(cachedOdds));localStorage.setItem('nba4:oddsHist',JSON.stringify(cachedOddsHistory));}
+const cardState = {};
+
+// BDL fallback state
+const bdlGameMap = {}; // SR game ID → BDL game ID
+let globalClutchData = JSON.parse(localStorage.getItem('nba4:globalClutch')||'null'); // { segment, teams: { "BOS": { netRtg, offRtg, ... }, ... }, teamCount }
+let srExhausted = false; // true when daily limit suspected
+let sr429Count = 0; // consecutive 429s across games
+
+// Known team IDs for thesis generation
+const TEAM_IDS = {
+  ATL:'583ecb8f-fb46-11e1-82cb-f4ce4684ea4c',BOS:'583eccfa-fb46-11e1-82cb-f4ce4684ea4c',
+  BKN:'583ec9d6-fb46-11e1-82cb-f4ce4684ea4c',CHA:'583ec97e-fb46-11e1-82cb-f4ce4684ea4c',
+  CHI:'583ec5fd-fb46-11e1-82cb-f4ce4684ea4c',CLE:'583ec773-fb46-11e1-82cb-f4ce4684ea4c',
+  DAL:'583ecf50-fb46-11e1-82cb-f4ce4684ea4c',DEN:'583ed102-fb46-11e1-82cb-f4ce4684ea4c',
+  DET:'583ec928-fb46-11e1-82cb-f4ce4684ea4c',GSW:'583ec825-fb46-11e1-82cb-f4ce4684ea4c',
+  HOU:'583ecb3a-fb46-11e1-82cb-f4ce4684ea4c',IND:'583ec7cd-fb46-11e1-82cb-f4ce4684ea4c',
+  LAC:'583ecdfb-fb46-11e1-82cb-f4ce4684ea4c',LAL:'583ecae2-fb46-11e1-82cb-f4ce4684ea4c',
+  MEM:'583eca88-fb46-11e1-82cb-f4ce4684ea4c',MIA:'583ecea6-fb46-11e1-82cb-f4ce4684ea4c',
+  MIL:'583ecefd-fb46-11e1-82cb-f4ce4684ea4c',MIN:'583eca2f-fb46-11e1-82cb-f4ce4684ea4c',
+  NOP:'583ecc9a-fb46-11e1-82cb-f4ce4684ea4c',NYK:'583ec70e-fb46-11e1-82cb-f4ce4684ea4c',
+  OKC:'583ecfff-fb46-11e1-82cb-f4ce4684ea4c',ORL:'583ed157-fb46-11e1-82cb-f4ce4684ea4c',
+  PHI:'583ec87d-fb46-11e1-82cb-f4ce4684ea4c',PHX:'583ecfa8-fb46-11e1-82cb-f4ce4684ea4c',
+  POR:'583ed056-fb46-11e1-82cb-f4ce4684ea4c',SAC:'583ed0ac-fb46-11e1-82cb-f4ce4684ea4c',
+  SAS:'583ecd4f-fb46-11e1-82cb-f4ce4684ea4c',TOR:'583ecda6-fb46-11e1-82cb-f4ce4684ea4c',
+  UTA:'583ece50-fb46-11e1-82cb-f4ce4684ea4c',WAS:'583ec8d4-fb46-11e1-82cb-f4ce4684ea4c',
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SR DATA PROXY
+// ══════════════════════════════════════════════════════════════════════════════
+async function sr(type, params={}){
+  const qs = new URLSearchParams({type, ...params}).toString();
+  const r = await fetch(FN+'sr-data?'+qs);
+  if(r.status===429) throw new Error('SR rate limited — retry in 1s');
+  if(!r.ok){
+    const d = await r.json().catch(()=>({error:r.statusText}));
+    throw new Error(d.error||'SR error '+r.status);
+  }
+  return r.json();
+}
+
+// Rate-limited sequential fetch with delay
+async function srSequential(calls, delayMs=1100){
+  const results = [];
+  for(const call of calls){
+    try{
+      const data = await sr(call.type, call.params);
+      results.push({key:call.key, data, ok:true});
+    }catch(e){
+      results.push({key:call.key, data:null, ok:false, error:e.message});
+    }
+    if(calls.indexOf(call) < calls.length-1){
+      await new Promise(r=>setTimeout(r, delayMs));
+    }
+  }
+  return results;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DATE HELPER
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════════════════════
+// BDL FALLBACK — DATA PROXY & GAME MAPPING
+// ══════════════════════════════════════════════════════════════════════════════
+async function bdl(type, params={}){
+  const qs = new URLSearchParams({type, ...params}).toString();
+  const r = await fetch(FN+'bdl-data?'+qs);
+  if(!r.ok){
+    const d = await r.json().catch(()=>({error:r.statusText}));
+    throw new Error(d.error||'BDL error '+r.status);
+  }
+  return r.json();
+}
+
+// BDL team name normalization — maps SR alias to BDL matching patterns
+const BDL_TEAM_MATCH = {
+  ATL:'Hawks',BOS:'Celtics',BKN:'Nets',CHA:'Hornets',CHI:'Bulls',CLE:'Cavaliers',
+  DAL:'Mavericks',DEN:'Nuggets',DET:'Pistons',GSW:'Warriors',HOU:'Rockets',IND:'Pacers',
+  LAC:'Clippers',LAL:'Lakers',MEM:'Grizzlies',MIA:'Heat',MIL:'Bucks',MIN:'Timberwolves',
+  NOP:'Pelicans',NYK:'Knicks',OKC:'Thunder',ORL:'Magic',PHI:'76ers',PHX:'Suns',
+  POR:'Trail Blazers',SAC:'Kings',SAS:'Spurs',TOR:'Raptors',UTA:'Jazz',WAS:'Wizards',
+};
+
+async function buildBdlGameMap(dateStr){
+  try{
+    const data = await bdl('games',{date:dateStr});
+    const bdlGames = data.data||[];
+    // Match each SR game to a BDL game by team names
+    for(const game of games){
+      const hAlias = game.home?.alias, aAlias = game.away?.alias;
+      if(!hAlias||!aAlias) continue;
+      const hMatch = BDL_TEAM_MATCH[hAlias], aMatch = BDL_TEAM_MATCH[aAlias];
+      const match = bdlGames.find(bg =>
+        bg.home_team?.full_name?.includes(hMatch) && bg.visitor_team?.full_name?.includes(aMatch)
+      );
+      if(match) bdlGameMap[game.id] = match.id;
+    }
+    console.log('BDL game map built:', Object.keys(bdlGameMap).length, 'games mapped');
+  }catch(e){
+    console.warn('BDL game map failed:', e.message);
+  }
+}
+
+// Fetch BDL data for a game — returns aggregated team stats
+async function fetchBdlSummary(game){
+  const bdlId = bdlGameMap[game.id];
+  if(!bdlId) throw new Error('No BDL game ID mapped for '+game.id);
+
+  // Fetch game info (scores, quarters, bonus) + basic stats + advanced stats in parallel
+  const [gameInfo, statsData, advData] = await Promise.all([
+    bdl('game',{game_id:bdlId}),
+    bdl('stats',{game_id:bdlId}),
+    bdl('advanced',{game_id:bdlId}),
+  ]);
+
+  const g = gameInfo; // or gameInfo.data depending on BDL response
+  const gd = g.data || g;
+  const stats = (statsData.data||[]).filter(s=>s.min && s.min!=='00'&&s.min!=='0:00');
+  const adv = (advData.data||[]).filter(s=>s.possessions>0);
+
+  // Determine home/away team IDs
+  const homeTeamId = gd.home_team?.id;
+  const awayTeamId = gd.visitor_team?.id;
+
+  // Aggregate basic stats by team
+  function aggBasic(teamId){
+    const pl = stats.filter(s=>(s.team?.id||s.player?.team_id)===teamId);
+    return {
+      steals: pl.reduce((a,s)=>a+(s.stl||0),0),
+      blocks: pl.reduce((a,s)=>a+(s.blk||0),0),
+      offensive_rebounds: pl.reduce((a,s)=>a+(s.oreb||0),0),
+      turnovers: pl.reduce((a,s)=>a+(s.turnover||0),0),
+      assists: pl.reduce((a,s)=>a+(s.ast||0),0),
+      field_goals_made: pl.reduce((a,s)=>a+(s.fgm||0),0),
+      field_goals_att: pl.reduce((a,s)=>a+(s.fga||0),0),
+      three_points_made: pl.reduce((a,s)=>a+(s.fg3m||0),0),
+      three_points_att: pl.reduce((a,s)=>a+(s.fg3a||0),0),
+      free_throws_att: pl.reduce((a,s)=>a+(s.fta||0),0),
+      free_throws_made: pl.reduce((a,s)=>a+(s.ftm||0),0),
+      personal_fouls: pl.reduce((a,s)=>a+(s.pf||0),0),
+      players: pl, // keep individual player stats
+    };
+  }
+
+  // Aggregate advanced stats by team
+  function aggAdvanced(teamId){
+    const pl = adv.filter(s=>(s.team?.id||s.player?.team_id)===teamId);
+    const totalPoss = pl.reduce((a,s)=>a+(s.possessions||0),0);
+    return {
+      fast_break_points: pl.reduce((a,s)=>a+(s.points_fast_break||0),0),
+      points_off_turnovers: pl.reduce((a,s)=>a+(s.points_off_turnovers||0),0),
+      second_chance_points: pl.reduce((a,s)=>a+(s.points_second_chance||0),0),
+      points_in_the_paint: pl.reduce((a,s)=>a+(s.points_paint||0),0),
+      possessions: totalPoss,
+      // Weighted average for ratings
+      offensive_rating: totalPoss>0 ? pl.reduce((a,s)=>a+(s.offensive_rating||0)*(s.possessions||0),0)/totalPoss : 0,
+      defensive_rating: totalPoss>0 ? pl.reduce((a,s)=>a+(s.defensive_rating||0)*(s.possessions||0),0)/totalPoss : 0,
+      assist_ratio: totalPoss>0 ? pl.reduce((a,s)=>a+(s.assist_ratio||0)*(s.possessions||0),0)/totalPoss : 0,
+    };
+  }
+
+  const hBasic = aggBasic(homeTeamId);
+  const aBasic = aggBasic(awayTeamId);
+  const hAdv = aggAdvanced(homeTeamId);
+  const aAdv = aggAdvanced(awayTeamId);
+
+  // Build quarter scores from game info
+  const quarters = [];
+  for(let q=1; q<=4; q++){
+    const hq = gd['home_q'+q], aq = gd['visitor_q'+q];
+    if(hq!=null) quarters.push({quarter:q, home_points:hq, away_points:aq});
+  }
+  // OT
+  if(gd.home_ot1!=null) quarters.push({quarter:5, home_points:gd.home_ot1, away_points:gd.visitor_ot1});
+
+  return {
+    source: 'BDL',
+    bdlGameId: bdlId,
+    homePoints: gd.home_team_score || 0,
+    awayPoints: gd.visitor_team_score || 0,
+    status: gd.status,
+    period: gd.period || quarters.length,
+    time: gd.time || '',
+    homeBonus: gd.home_in_bonus || false,
+    awayBonus: gd.visitor_in_bonus || false,
+    quarters,
+    home: {...hBasic, ...hAdv, alias: game.home?.alias||'HOME', name: game.home?.name||'HOME'},
+    away: {...aBasic, ...aAdv, alias: game.away?.alias||'AWAY', name: game.away?.name||'AWAY'},
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+function getEasternDate(offset=0){
+  const now = new Date();
+  const eastern = new Date(now.toLocaleString('en-US',{timeZone:'America/New_York'}));
+  eastern.setDate(eastern.getDate()+offset);
+  return {
+    year: String(eastern.getFullYear()),
+    month: String(eastern.getMonth()+1).padStart(2,'0'),
+    day: String(eastern.getDate()).padStart(2,'0'),
+    str: `${eastern.getFullYear()}-${String(eastern.getMonth()+1).padStart(2,'0')}-${String(eastern.getDate()).padStart(2,'0')}`
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SCHEDULE
+// ══════════════════════════════════════════════════════════════════════════════
+async function loadSchedule(){
+  showLoading(true); showErr(null);
+  try{
+    const d = getEasternDate(0);
+    const data = await sr('schedule',{year:d.year, month:d.month, day:d.day});
+    games = (data.games||[]).map(g=>({
+      id: g.id,
+      status: g.status,
+      scheduled: g.scheduled,
+      venue: g.venue?.name||'',
+      home: g.home,
+      away: g.away,
+      // Live fields populated by summary
+      homePoints: null,
+      awayPoints: null,
+      period: 0,
+      clock: '',
+      summary: null, // full SR summary stored here
+      bdlData: null, // BDL fallback data stored here
+      dataSource: 'SR', // 'SR' or 'BDL'
+    }));
+    const order = {inprogress:0, halftime:0, scheduled:1, closed:2, complete:2, 'created':1};
+    games.sort((a,b)=>{
+      const oa=order[a.status]??1, ob=order[b.status]??1;
+      if(oa!==ob) return oa-ob;
+      return new Date(a.scheduled)-new Date(b.scheduled);
+    });
+    // Re-inject demo game if active
+    if(demoActive && !games.find(g=>g.id===DEMO_ID)){
+      const dcs = cardState[DEMO_ID];
+      if(dcs){
+        const dg = {id:DEMO_ID,status:'inprogress',scheduled:new Date().toISOString(),venue:'Demo Arena',
+          home:{id:'demo-h',name:'Cleveland Cavaliers',alias:'CLE'},away:{id:'demo-a',name:'Milwaukee Bucks',alias:'MIL'},
+          homePoints:78,awayPoints:71,period:3,clock:'4:22',dataSource:'DEMO',summary:dcs._demoSummary||null};
+        games.unshift(dg);
+      }
+    }
+    document.getElementById('date-lbl').innerHTML = 'Schedule for <span>'+d.str+'</span> (times MST)';
+    renderPills(); updateCounts(); renderConfidenceTable();
+    // Build BDL game map for fallback (await so enrich has IDs ready)
+    await buildBdlGameMap(d.str);
+    // Start polling
+    clearInterval(pollTimer);
+    pollTimer = setInterval(()=>{ if(!paused) refreshLiveCards(); }, pollInterval);
+  }catch(e){ showErr(e.message); }
+  finally{ showLoading(false); }
+}
+
+// Load on page ready
+loadSchedule();
+window.__nbaBooted = true; // Boot canary — proves main script parsed successfully
+console.log('[NBA CONTROL]', window.__nbaVersion, 'initialized —', new Date().toLocaleTimeString());
+
+// ══════════════════════════════════════════════════════════════════════════════
+// REFRESH
+// ══════════════════════════════════════════════════════════════════════════════
+function refreshLiveCards(){
+  selIds.forEach(id=>{
+    const g = games.find(x=>x.id===id);
+    if(g && getState(g)==='LIVE') fetchSummary(g);
+  });
+}
+
+async function fetchSummary(game){
+  if(game.id === DEMO_ID) return; // Demo game — no API calls
+  const cs = cardState[game.id];
+  if(!cs || cs.editing || cs.generating) return;
+
+  // If SR daily limit exhausted, go straight to BDL
+  if(srExhausted){
+    return fetchBdlFallback(game, 'SR daily limit exhausted');
+  }
+
+  addLog(game.id,'Fetching SR summary…',true);
+  try{
+    const data = await sr('summary',{game_id:game.id});
+    sr429Count = 0; // reset on success
+    game.summary = data;
+    game.bdlData = null; // clear any fallback data
+    game.dataSource = 'SR';
+    game.homePoints = data.home?.points ?? 0;
+    game.awayPoints = data.away?.points ?? 0;
+    game.status = data.status;
+    game.period = data.quarter || (data.home?.periods||[]).length || 0;
+    game.clock = data.clock || '';
+    // Build merged periods array for indicator use (SR nests under home/away)
+    if(!data.periods && data.home?.periods){
+      data.periods = (data.home.periods||[]).map((hp,i)=>{
+        const ap = (data.away?.periods||[])[i]||{};
+        return {number:hp.number||i+1, home_points:hp.points||0, away_points:ap.points||0};
+      });
+    }
+    cs.lastUp = new Date();
+
+    // ── STALENESS DETECTION ──
+    // Separate score fingerprint from stats fingerprint
+    const scoreFP = [data.home?.points, data.away?.points, game.period, data.clock].join('|');
+    const hs = data.home?.statistics||{}, as = data.away?.statistics||{};
+    const statsFP = [
+      hs.turnovers, as.turnovers, hs.steals, as.steals,
+      hs.field_goals_made, as.field_goals_made, hs.field_goals_att, as.field_goals_att,
+      hs.assists, as.assists, hs.offensive_rebounds, as.offensive_rebounds,
+      hs.free_throws_att, as.free_throws_att, hs.blocks, as.blocks,
+      hs.points_in_the_paint, as.points_in_the_paint,
+    ].join('|');
+
+    const scoreChanged = scoreFP !== cs.lastScoreFP;
+    const statsChanged = statsFP !== cs.lastStatsFP;
+
+    if(scoreChanged && !statsChanged && cs.lastStatsFP){
+      cs.staleCount = (cs.staleCount||0) + 1;
+      if(cs.staleCount >= 2){
+        // Stats frozen for 2+ polls while score changed — SR data is stale
+        cs.dataFreshness = 'STALE';
+        addLog(game.id, '⚠ STALE: score updated but stats frozen for '+cs.staleCount+' polls — trying BDL', false);
+        return fetchBdlFallback(game, 'SR data stale (stats frozen '+cs.staleCount+' polls)');
+      } else {
+        cs.dataFreshness = 'WATCH';
+        addLog(game.id, '⚠ Stats unchanged despite score change (poll '+cs.staleCount+')', false);
+      }
+    } else if(statsChanged){
+      cs.staleCount = 0;
+      cs.dataFreshness = 'FRESH';
+    }
+    cs.lastScoreFP = scoreFP;
+    cs.lastStatsFP = statsFP;
+    // ── END STALENESS DETECTION ──
+
+    addLog(game.id,'OK — SR summary loaded'+(cs.dataFreshness==='WATCH'?' [stats lag]':''),true);
+
+    // Check if data changed meaningfully
+    const fp = fingerprint(data);
+    const changed = fp !== cs.lastFingerprint;
+    cs.lastFingerprint = fp;
+
+    renderCard(game);
+    checkAlert(game);
+
+    // Auto-analyze disabled — use manual ⚡ ANALYZE button to control token spend
+    // if(changed && getState(game)==='LIVE' && game.period >= 2){
+    //   triggerAnalysis(game);
+    // }
+  }catch(e){
+    // Check if this is a rate limit — trigger BDL fallback
+    if(e.message.includes('rate limit') || e.message.includes('429')){
+      sr429Count++;
+      // 3+ consecutive 429s across any games = daily limit suspected
+      if(sr429Count >= 3){
+        srExhausted = true;
+        addLog(game.id,'⚠ SR DAILY LIMIT — switching to BDL for session',false);
+        document.getElementById('hdr-sub').textContent = 'LIVE · BDL FALLBACK · v5.1 · PARTIAL';
+      }
+      return fetchBdlFallback(game, e.message);
+    }
+    addLog(game.id, e.message, false);
+    renderCard(game);
+  }
+}
+
+async function fetchBdlFallback(game, reason){
+  const cs = cardState[game.id];
+  if(!cs) return;
+  addLog(game.id,'BDL fallback ('+reason+')',true);
+  try{
+    const data = await fetchBdlSummary(game);
+    game.bdlData = data;
+    game.summary = null; // clear SR data
+    game.dataSource = 'BDL';
+    game.homePoints = data.homePoints;
+    game.awayPoints = data.awayPoints;
+    game.period = data.period;
+    game.clock = data.time || '';
+    // Map BDL status to our format
+    const bst = (data.status||'').toLowerCase();
+    if(bst.includes('final')) game.status = 'closed';
+    else if(bst.includes('progress')||data.period>0&&!bst.includes('final')) game.status = 'inprogress';
+    cs.lastUp = new Date();
+    addLog(game.id,'OK — BDL data loaded (PARTIAL)',true);
+
+    const fp = fingerprintBDL(data);
+    const changed = fp !== cs.lastFingerprint;
+    cs.lastFingerprint = fp;
+
+    renderCard(game);
+    checkAlert(game);
+
+    // Auto-analyze disabled — use manual ⚡ ANALYZE button
+    // if(changed && getState(game)==='LIVE' && game.period >= 2){
+    //   triggerAnalysis(game);
+    // }
+  }catch(e){
+    addLog(game.id, 'BDL fallback failed: '+e.message, false);
+    renderCard(game);
+  }
+}
+
+function fingerprintBDL(data){
+  if(!data) return '';
+  return [
+    data.homePoints, data.awayPoints, data.period,
+    data.home?.turnovers, data.away?.turnovers,
+    data.home?.steals, data.away?.steals,
+    data.home?.offensive_rebounds, data.away?.offensive_rebounds,
+    data.home?.points_in_the_paint, data.away?.points_in_the_paint,
+    data.home?.free_throws_att, data.away?.free_throws_att,
+    data.home?.blocks, data.away?.blocks,
+    data.home?.field_goals_made, data.away?.field_goals_made,
+    data.home?.assists, data.away?.assists,
+    data.homeBonus?1:0, data.awayBonus?1:0,
+  ].join('|');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// FINGERPRINT (meaningful change detection)
+// ══════════════════════════════════════════════════════════════════════════════
+function fingerprint(summary){
+  if(!summary) return '';
+  const h = summary.home?.statistics||{}, a = summary.away?.statistics||{};
+  return [
+    summary.home?.points, summary.away?.points,
+    summary.quarter || (summary.periods||[]).length,
+    h.turnovers, a.turnovers,
+    h.steals, a.steals,
+    h.offensive_rebounds, a.offensive_rebounds,
+    h.points_in_the_paint, a.points_in_the_paint,
+    h.free_throws_att, a.free_throws_att,
+    h.blocks, a.blocks,
+    h.field_goals_made, a.field_goals_made,
+    h.assists, a.assists,
+    summary.home?.bonus?1:0, summary.away?.bonus?1:0,
+  ].join('|');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SONNET ANALYSIS
+// ══════════════════════════════════════════════════════════════════════════════
+async function triggerAnalysis(game){
+  const cs = cardState[game.id];
+  if(!cs || cs.analyzing) return;
+  cs.analyzing = true;
+  renderCard(game);
+  try{
+    const thesis = theses[game.id]||'';
+    const periodLabel = game.period ? 'Q'+game.period : '';
+    const score = (game.away?.alias||'AWAY')+' '+(game.awayPoints||0)+' - '+(game.home?.alias||'HOME')+' '+(game.homePoints||0);
+    const isBDL = game.dataSource==='BDL';
+    const dataSourceNote = isBDL ? '\n\nDATA SOURCE: BDL FALLBACK (PARTIAL)\nUnavailable: T4 Foul Gate | T7 Closing Lineup | I1 chaos layer | at-rim splits\nAll five indicators computable but with reduced sub-layer coverage.' : '';
+    const freshnessNote = cs.dataFreshness==='STALE' ? '\n⚠ DATA FRESHNESS: STALE — stats may lag behind live score.' : cs.dataFreshness==='WATCH' ? '\n⚠ DATA FRESHNESS: WATCH — possible stats delay.' : '';
+
+    // Include dashboard computed scores
+    const dashInd = computeAny(game);
+    let dashNote = '';
+    if(dashInd){
+      dashNote = `\n\nDASHBOARD COMPUTED SCORES (simplified math):
+I1:${dashInd.I1.score} (${dashInd.I1.leader}) I2:${dashInd.I2.score} (${dashInd.I2.leader}) I3:${dashInd.I3.score} (${dashInd.I3.leader}) I4:${dashInd.I4.score} (${dashInd.I4.leader}) I5:${dashInd.I5.score} (${dashInd.I5.leader})
+Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${dashInd.dataQuality}`;
+    }
+
+    const summaryPayload = isBDL ? game.bdlData : game.summary;
+
+    // Build clutch data with tier info
+    let clutchPayload = cs.clutchData || null;
+    if(clutchPayload && !clutchPayload.tier) clutchPayload.tier = cs.clutchTier || 1;
+    // If no manual clutch data, try to build Tier 2 proxy from thesis
+    if(!clutchPayload && thesis){
+      const proxyClutch = parseThesisClutchProxy(thesis, game.home?.alias, game.away?.alias);
+      if(proxyClutch){ clutchPayload = proxyClutch; cs.clutchTier = 2; }
+    }
+
+    const resp = await fetch(FN+'analyze',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        summaryData: summaryPayload,
+        thesis: thesis + dataSourceNote + freshnessNote + dashNote,
+        homeTeam: game.home?.alias||game.home?.name||'HOME',
+        awayTeam: game.away?.alias||game.away?.name||'AWAY',
+        period: periodLabel,
+        score: score,
+        clutchData: clutchPayload,
+        oddsData: cs.oddsData || null,
+        edgeHistory: cs.edgeHistory.length > 0 ? cs.edgeHistory : null,
+        trackingData: cs.trackingData || null,
+        pbpAudit: cs.pbpAudit ? {home:cs.pbpAudit.home, away:cs.pbpAudit.away, homeAlias:cs.pbpAudit.homeAlias, awayAlias:cs.pbpAudit.awayAlias, runs:cs.pbpAudit.runs, pbpPeriod:cs.pbpPeriod, pbpAge:cs.pbpTime?Math.round((Date.now()-cs.pbpTime.getTime())/60000):null} : null,
+      })
+    });
+    if(!resp.ok){
+      const errData = await resp.json().catch(()=>({error:'HTTP '+resp.status}));
+      throw new Error(errData.error || 'Analysis failed: '+resp.status);
+    }
+    const data = await resp.json();
+    cs.analysis = data.analysis;
+    cs.analysisUsage = data.usage;
+    cs.sustainabilityAudit = data.sustainabilityAudit || null;
+    cs.analysisTime = new Date();
+
+    // Parse structural indicators
+    const hAlias = game.home?.alias||'HOME', aAlias = game.away?.alias||'AWAY';
+    const parsed = parseSonnetScores(data.analysis, hAlias, aAlias);
+    if(parsed){
+      cs.sonnetIndicators = parsed;
+      console.log('Sonnet scores parsed:', parsed.controlTeam, parsed.score.toFixed(2));
+    }
+
+    // Parse decision/predictive layer
+    const decision = parseSonnetDecision(data.analysis);
+    if(decision){
+      // ── CLIENT-SIDE EDGE OVERRIDE ──
+      // Sonnet consistently uses the wrong team's MIP. Compute edge here using cached odds.
+      const od = cs.oddsData;
+      if(od && decision.fwp && (od.homeML || od.awayML)){
+        const fwpNum = parseFloat((decision.fwp||'').replace(/[%\s]/g,''));
+        if(!isNaN(fwpNum)){
+          const mlToProb = (ml) => { const n=parseFloat(ml); if(isNaN(n)||n===0) return null; return n<0?Math.abs(n)/(Math.abs(n)+100):100/(n+100); };
+          const rawH = mlToProb(od.homeML), rawA = mlToProb(od.awayML);
+          if(rawH!==null && rawA!==null){
+            const vigSum = rawH + rawA;
+            const homeMIP = rawH/vigSum*100, awayMIP = rawA/vigSum*100;
+            // Determine which team Sonnet predicts to win
+            const predText = (decision.prediction||'').toUpperCase();
+            const controlTeam = (parsed?.controlTeam||'').toUpperCase();
+            const isHomePred = predText.includes(hAlias.toUpperCase()) || controlTeam===hAlias.toUpperCase();
+            const isAwayPred = predText.includes(aAlias.toUpperCase()) || controlTeam===aAlias.toUpperCase();
+            let winnerMIP = null;
+            if(isHomePred && !isAwayPred) winnerMIP = homeMIP;
+            else if(isAwayPred && !isHomePred) winnerMIP = awayMIP;
+            else winnerMIP = fwpNum >= 50 ? homeMIP : awayMIP; // fallback
+            const edge = fwpNum - winnerMIP;
+            decision.edge = (edge>=0?'+':'')+edge.toFixed(1)+'%';
+            decision.edgeNum = parseFloat(edge.toFixed(1));
+            decision.mip = winnerMIP.toFixed(1)+'%';
+            console.log('Edge override: FWP',fwpNum,'MIP',winnerMIP.toFixed(1),'Edge',edge.toFixed(1),'Winner:',isHomePred?hAlias:aAlias);
+          }
+        }
+      }
+      cs.prediction = decision;
+      console.log('Decision parsed:', decision.conviction, decision.entry, decision.prediction);
+      // Track edge history for entry timing
+      if(decision.edgeNum !== null || decision.fwp){
+        cs.edgeHistory.push({
+          time: new Date().toLocaleTimeString(),
+          period: game.period||'?',
+          edge: decision.edge||'?',
+          edgeNum: decision.edgeNum,
+          fwp: decision.fwp||'?',
+          control: parsed?.controlTeam||'?',
+          score: ((game.away?.alias||'AWAY')+' '+(game.awayPoints||0)+'-'+(game.home?.alias||'HOME')+' '+(game.homePoints||0)),
+        });
+        // Keep last 20 entries max
+        if(cs.edgeHistory.length > 20) cs.edgeHistory = cs.edgeHistory.slice(-20);
+      }
+    }
+
+    renderCard(game);
+    renderConfidenceTable();
+  }catch(e){
+    cs.analysisError = e.message;
+    console.error('Analysis error:', e);
+    renderCard(game);
+  }finally{
+    cs.analyzing = false;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SONNET SCORE PARSER — extracts structured scores from analysis text
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Clutch data save handler
+function saveClutch(gameId){
+  const cs = cardState[gameId]; if(!cs) return;
+  const g = id => document.getElementById(id)?.value?.trim();
+  const hNet = parseFloat(g('cl-h-net-'+gameId));
+  const hOff = parseFloat(g('cl-h-off-'+gameId));
+  const hDef = parseFloat(g('cl-h-def-'+gameId));
+  const hGP = g('cl-h-gp-'+gameId)||'';
+  const hWL = g('cl-h-wl-'+gameId)||'';
+  const aNet = parseFloat(g('cl-a-net-'+gameId));
+  const aOff = parseFloat(g('cl-a-off-'+gameId));
+  const aDef = parseFloat(g('cl-a-def-'+gameId));
+  const aGP = g('cl-a-gp-'+gameId)||'';
+  const aWL = g('cl-a-wl-'+gameId)||'';
+  if(isNaN(hNet) && isNaN(aNet)){cs.clutchData=null; cs.clutchTier=3;} else {
+    // Preserve enriched OCR fields if they exist
+    const prevH = cs.clutchData?.home || {};
+    const prevA = cs.clutchData?.away || {};
+    cs.clutchData = {
+      tier: 1,
+      home: {netRtg:hNet||null, offRtg:hOff||null, defRtg:hDef||null, gp:hGP, wl:hWL,
+        efg:prevH.efg, ts:prevH.ts, pace:prevH.pace, pie:prevH.pie, tovPct:prevH.tovPct, orebPct:prevH.orebPct, drebPct:prevH.drebPct, astRatio:prevH.astRatio},
+      away: {netRtg:aNet||null, offRtg:aOff||null, defRtg:aDef||null, gp:aGP, wl:aWL,
+        efg:prevA.efg, ts:prevA.ts, pace:prevA.pace, pie:prevA.pie, tovPct:prevA.tovPct, orebPct:prevA.orebPct, drebPct:prevA.drebPct, astRatio:prevA.astRatio},
+    };
+    cs.clutchTier = 1;
+  }
+  persistClutch(gameId, cs);
+  const game = games.find(g=>g.id===gameId);
+  if(game) renderCard(game);
+}
+
+// Odds data save handler
+function oddsMovement(cs){
+  if(!cs.oddsHistory || cs.oddsHistory.length===0 || !cs.oddsData) return null;
+  const open = cs.oddsHistory[0], cur = cs.oddsData;
+  function delta(curV, openV){
+    const c=parseFloat(curV), o=parseFloat(openV);
+    if(isNaN(c)||isNaN(o)) return null;
+    const d = c - o;
+    if(Math.abs(d)<0.1) return {val:'—',color:'var(--t2)',raw:0};
+    const sign = d>0?'+':'';
+    return {val:sign+d.toFixed(1), color:d>0?'var(--green)':'var(--red)', raw:d};
+  }
+  return {
+    spread: delta(cur.homeSpread, open.homeSpread),
+    homeML: delta(cur.homeML, open.homeML),
+    awayML: delta(cur.awayML, open.awayML),
+    total: delta(cur.total, open.total),
+    pulls: cs.oddsHistory.length + 1,
+    openTime: open.time || '?',
+  };
+}
+
+function saveOdds(gameId){
+  const cs = cardState[gameId]; if(!cs) return;
+  const g = id => document.getElementById(id)?.value?.trim();
+  const hSpread = g('od-hs-'+gameId)||'';
+  const hML = g('od-hml-'+gameId)||'';
+  const aML = g('od-aml-'+gameId)||'';
+  const total = g('od-tot-'+gameId)||'';
+  if(!hML && !hSpread){cs.oddsData=null;} else {
+    cs.oddsData = {homeSpread:hSpread, homeML:hML, awayML:aML, total:total};
+  }
+  persistOdds(gameId, cs);
+  const game = games.find(g=>g.id===gameId);
+  if(game) renderCard(game);
+}
+
+// Evidence View toggle
+function toggleEV(gameId){
+  const cs = cardState[gameId]; if(!cs) return;
+  cs.evCollapsed = !cs.evCollapsed;
+  const body = document.getElementById('ev-body-'+gameId);
+  const toggle = document.getElementById('ev-toggle-'+gameId);
+  if(body){ if(cs.evCollapsed){body.classList.add('collapsed');} else {body.classList.remove('collapsed');} }
+  if(toggle){ if(cs.evCollapsed){toggle.classList.remove('open');} else {toggle.classList.add('open');} }
+}
+
+// BDL Enrichment — auto-pull clutch + odds + tracking via bdl-enrich function
+async function enrichFromBDL(gameId){
+  if(gameId === DEMO_ID) return; // Demo mode — no real data
+  const cs = cardState[gameId]; if(!cs) return;
+  const game = games.find(g=>g.id===gameId); if(!game) return;
+  const hA = game.home?.alias||'', aA = game.away?.alias||'';
+  if(!hA||!aA) return;
+
+  cs.enriching = true;
+  renderCard(game);
+
+  try{
+    const bdlGid = bdlGameMap[gameId] || null;
+    const resp = await fetch(FN+'bdl-enrich',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        homeTeam: hA,
+        awayTeam: aA,
+        bdlGameId: bdlGid,
+        season: 2025,
+        pulls: ['clutch','odds','tracking'],
+      })
+    });
+    if(!resp.ok) throw new Error('BDL enrich failed: '+resp.status);
+    const data = await resp.json();
+
+    // Populate clutch (Tier 2 — season-wide). Only overwrite if user hasn't set L15 (Tier 1)
+    if(data.clutch){
+      if(!cs.clutchData || cs.clutchData.tier !== 1){
+        cs.clutchData = data.clutch;
+        cs.clutchTier = 2;
+        persistClutch(gameId, cs);
+      }
+    }
+
+    // Populate odds — always update and track movement
+    if(data.odds){
+      const newOdds = {
+        homeSpread: String(data.odds.homeSpread||''),
+        homeML: String(data.odds.homeML||''),
+        awayML: String(data.odds.awayML||''),
+        total: String(data.odds.total||''),
+        vendor: data.odds.vendor,
+        time: new Date().toLocaleTimeString(),
+      };
+      // Track movement if previous odds exist
+      if(cs.oddsData && cs.oddsData.homeML){
+        cs.oddsHistory.push({...cs.oddsData, time: cs.oddsData.time || cs.lastUp?.toLocaleTimeString() || '?'});
+        if(cs.oddsHistory.length > 20) cs.oddsHistory = cs.oddsHistory.slice(-20);
+      }
+      cs.oddsData = newOdds;
+      if(data.oddsAll) cs.oddsAll = data.oddsAll;
+      persistOdds(gameId, cs);
+    }
+
+    // Store tracking data for sustainability scoring
+    if(data.tracking) cs.trackingData = data.tracking;
+
+    const srcList = (data.sources||[]).join(', ');
+    const errList = (data.errors||[]);
+    addLog(gameId, '⚡ BDL enriched: '+srcList+(errList.length?' ⚠ '+errList.length+' errors':''), errList.length===0);
+    if(errList.length) console.warn('BDL enrich partial errors:', errList);
+    cs.enrichDone = true;
+    setTimeout(()=>{ cs.enrichDone = false; const g = games.find(x=>x.id===gameId); if(g) renderCard(g); }, 3000);
+
+  }catch(e){
+    console.error('BDL enrich error:', e);
+    addLog(gameId, 'BDL enrich failed: '+e.message, false);
+  }finally{
+    cs.enriching = false;
+    renderCard(game);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PBP DEPTH — On-demand play-by-play structural audit
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function fetchPBP(gameId){
+  if(gameId === DEMO_ID) return;
+  const cs = cardState[gameId]; if(!cs) return;
+  const game = games.find(g=>g.id===gameId); if(!game) return;
+  cs.pbpLoading = true;
+  renderCard(game);
+  try{
+    addLog(gameId, '⚡ Pulling PBP data...', true);
+    const data = await sr('pbp', {game_id: gameId});
+    const audit = parsePBP(data, game);
+    cs.pbpAudit = audit;
+    cs.pbpTime = new Date();
+    cs.pbpPeriod = game.period || 0;
+    addLog(gameId, '✓ DEPTH loaded — '+audit.totalShots+' shots, '+audit.totalTOs+' TOs, '+audit.runs.length+' runs parsed (Q'+cs.pbpPeriod+')', true);
+  }catch(e){
+    addLog(gameId, 'PBP failed: '+e.message, false);
+  }finally{
+    cs.pbpLoading = false;
+    renderCard(game);
+  }
+}
+
+function parsePBP(pbpData, game){
+  const hId = game.home?.id||'', aId = game.away?.id||'';
+  const hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
+
+  // Collect all events across periods
+  const allEvents = [];
+  const periods = pbpData?.periods || [];
+  periods.forEach(per => {
+    const q = per.number || per.sequence || 0;
+    (per.events || []).forEach(ev => {
+      ev._quarter = q;
+      allEvents.push(ev);
+    });
+  });
+
+  // ── SHOT MAP (3PT + at-rim + mid-range: player-level makes AND misses) ──
+  const shots = [];
+  allEvents.forEach(ev => {
+    const et = (ev.event_type||'').toLowerCase().replace(/[\s_-]/g,'');
+    const isThree = et.includes('threepoint') || et.includes('3pt');
+    const isTwo = et.includes('twopoint') || et.includes('2pt');
+    if(!isThree && !isTwo) return;
+    const made = et.includes('made');
+
+    // Get player info — check multiple possible locations
+    const stat = (ev.statistics||[])[0] || {};
+    const player = stat.player || ev.player || {};
+    const playerName = player.full_name || player.name || '?';
+
+    // Team attribution
+    const attrId = ev.attribution?.id || stat.team?.id || '';
+    const team = attrId === hId ? hA : attrId === aId ? aA : (ev.attribution?.market||'?');
+
+    // Shot location / zone
+    const loc = ev.location || {};
+    const actionArea = (loc.action_area || ev.action_area || stat.action_area || '').toLowerCase();
+    const coordX = loc.coord_x ?? ev.coord_x ?? null;
+    const coordY = loc.coord_y ?? ev.coord_y ?? null;
+
+    // Classify zone
+    let zone;
+    if(isThree){
+      if(actionArea.includes('corner') || (coordY !== null && (coordY < 8 || coordY > 42))) zone = 'corner3';
+      else zone = 'above3';
+    } else {
+      if(actionArea.includes('restricted') || actionArea.includes('rim') || (coordX !== null && Math.abs(coordX - 25) < 5 && coordY !== null && Math.abs(coordY - 5.25) < 5)) zone = 'rim';
+      else if(actionArea.includes('paint') || actionArea.includes('lane')) zone = 'paint';
+      else zone = 'mid';
+    }
+
+    // Assisted check — look for assist event immediately before this made shot
+    let assisted = false;
+    if(made){
+      const shotDesc = (ev.description||'').toLowerCase();
+      if(shotDesc.includes('assist')) assisted = true;
+      // Also check statistics array for assist linkage
+      (ev.statistics||[]).forEach(s => { if((s.type||'').toLowerCase().includes('assist')) assisted = true; });
+    }
+
+    // Shot type context (drive, catch-and-shoot, pull-up, putback, cut, transition)
+    const shotType = (stat.shot_type_desc || stat.shot_type || ev.shot_type_desc || ev.shot_type || '').toLowerCase();
+    let context = 'halfcourt';
+    if(shotType.includes('driving') || shotType.includes('drive') || shotType.includes('layup') || shotType.includes('dunk')) context = 'drive';
+    else if(shotType.includes('pullup') || shotType.includes('pull-up') || shotType.includes('pull up') || shotType.includes('step back') || shotType.includes('stepback') || shotType.includes('fadeaway')) context = 'pullup';
+    else if(shotType.includes('putback') || shotType.includes('tip') || shotType.includes('put-back')) context = 'putback';
+    else if(shotType.includes('cutting') || shotType.includes('cut') || shotType.includes('alley')) context = 'cut';
+    else if(shotType.includes('fast') || shotType.includes('transition') || shotType.includes('break')) context = 'transition';
+    else if(shotType.includes('hook') || shotType.includes('float') || shotType.includes('runner')) context = 'floater';
+    else if(assisted && isThree) context = 'catch-shoot';
+
+    shots.push({p:playerName, tm:team, z:zone, m:made, a:assisted, q:ev._quarter, ctx:context, is3:isThree});
+  });
+
+  // ── TURNOVER LOG ──
+  const turnovers = [];
+  allEvents.forEach(ev => {
+    const et = (ev.event_type||'').toLowerCase().replace(/[\s_-]/g,'');
+    if(!et.includes('turnover')) return;
+    const stat = (ev.statistics||[])[0] || {};
+    const player = stat.player || ev.player || {};
+    const playerName = player.full_name || player.name || '?';
+    const attrId = ev.attribution?.id || stat.team?.id || '';
+    const team = attrId === hId ? hA : attrId === aId ? aA : '?';
+
+    // Forced vs unforced — check multiple field locations
+    const toType = (stat.turnover_type || ev.turnover_type || '').toLowerCase();
+    const desc = (ev.description||'').toLowerCase();
+    let forced = null;
+    if(toType.includes('steal') || toType.includes('forced') || toType.includes('bad pass') || desc.includes('steal')) forced = true;
+    else if(toType.includes('lost ball') || toType.includes('out of bounds') || toType.includes('travel') || toType.includes('violation') || toType.includes('offensive foul') || toType.includes('backcourt') || toType.includes('3 sec') || toType.includes('5 sec') || toType.includes('shot clock')) forced = false;
+    // If unclear, attempt from description
+    if(forced === null){
+      if(desc.includes('steal') || desc.includes('strip')) forced = true;
+      else if(desc.includes('lost ball') || desc.includes('out of bounds') || desc.includes('travel') || desc.includes('violation')) forced = false;
+    }
+
+    turnovers.push({p:playerName, tm:team, q:ev._quarter, forced:forced, type:toType||desc.substring(0,40)});
+  });
+
+  // ── SCORING RUNS ──
+  // Track score progression and find biggest runs
+  let hScore = 0, aScore = 0;
+  const scoreLog = [];
+  allEvents.forEach(ev => {
+    const et = (ev.event_type||'').toLowerCase().replace(/[\s_-]/g,'');
+    let pts = 0;
+    if(et.includes('made')){
+      if(et.includes('threepoint') || et.includes('3pt')) pts = 3;
+      else if(et.includes('freethrow') || et.includes('ft')) pts = 1;
+      else if(et.includes('twopoint') || et.includes('2pt')) pts = 2;
+    }
+    if(pts === 0) return;
+    const attrId = ev.attribution?.id || (ev.statistics||[])[0]?.team?.id || '';
+    const team = attrId === hId ? hA : attrId === aId ? aA : '?';
+    if(team === hA) hScore += pts; else aScore += pts;
+
+    // Get on_court lineup for run attribution
+    const onCourt = ev.on_court || {};
+    const homePlayers = (onCourt.home?.players || []).map(p => p.full_name || p.name || '?');
+    const awayPlayers = (onCourt.away?.players || []).map(p => p.full_name || p.name || '?');
+
+    scoreLog.push({team, pts, hScore, aScore, q:ev._quarter, lineup: team===hA ? homePlayers : awayPlayers});
+  });
+
+  // Find runs: consecutive scoring by same team (3+ scores or 8+ pts)
+  const runs = [];
+  let runTeam = null, runPts = 0, runStart = 0, runCount = 0, runLineup = [], runShotTypes = [];
+  for(let i = 0; i < scoreLog.length; i++){
+    const s = scoreLog[i];
+    if(s.team === runTeam){
+      runPts += s.pts; runCount++;
+      if(s.lineup.length > 0) runLineup = s.lineup;
+      runShotTypes.push(s.pts === 3 ? '3PT' : s.pts === 1 ? 'FT' : '2PT');
+    } else {
+      if(runPts >= 8 || runCount >= 3){
+        runs.push({team:runTeam, pts:runPts, count:runCount, q:scoreLog[runStart]?.q, lineup:runLineup, mechanism:runShotTypes.slice()});
+      }
+      runTeam = s.team; runPts = s.pts; runStart = i; runCount = 1;
+      runLineup = s.lineup; runShotTypes = [s.pts === 3 ? '3PT' : s.pts === 1 ? 'FT' : '2PT'];
+    }
+  }
+  if(runPts >= 8 || runCount >= 3){
+    runs.push({team:runTeam, pts:runPts, count:runCount, q:scoreLog[runStart]?.q, lineup:runLineup, mechanism:runShotTypes.slice()});
+  }
+  // Keep top 5 biggest runs
+  runs.sort((a,b) => b.pts - a.pts);
+  const topRuns = runs.slice(0, 5);
+
+  // ── AGGREGATE SUMMARIES ──
+  function teamShots(tm){ return shots.filter(s => s.tm === tm); }
+  function aggTeam(tm){
+    const s = teamShots(tm);
+    const threes = s.filter(x => x.is3);
+    const rim = s.filter(x => x.z === 'rim');
+    const mid = s.filter(x => x.z === 'mid');
+    const threeMade = threes.filter(x => x.m);
+    const rimMade = rim.filter(x => x.m);
+    const midMade = mid.filter(x => x.m);
+    const assistedThrees = threeMade.filter(x => x.a).length;
+    const assistedRim = rimMade.filter(x => x.m && x.a).length;
+
+    // Per-player 3PT detail
+    const playerThrees = {};
+    threes.forEach(x => {
+      if(!playerThrees[x.p]) playerThrees[x.p] = {name:x.p, made:0, att:0, assisted:0, zones:{corner3:0,above3:0}, contexts:{}};
+      playerThrees[x.p].att++;
+      if(x.m){ playerThrees[x.p].made++; if(x.a) playerThrees[x.p].assisted++; playerThrees[x.p].zones[x.z] = (playerThrees[x.p].zones[x.z]||0)+1; }
+      playerThrees[x.p].contexts[x.ctx] = (playerThrees[x.p].contexts[x.ctx]||0)+1;
+    });
+
+    // Per-player at-rim detail
+    const playerRim = {};
+    rim.forEach(x => {
+      if(!playerRim[x.p]) playerRim[x.p] = {name:x.p, made:0, att:0, contexts:{}};
+      playerRim[x.p].att++;
+      if(x.m) playerRim[x.p].made++;
+      playerRim[x.p].contexts[x.ctx] = (playerRim[x.p].contexts[x.ctx]||0)+1;
+    });
+
+    // Per-player mid-range detail
+    const playerMid = {};
+    mid.forEach(x => {
+      if(!playerMid[x.p]) playerMid[x.p] = {name:x.p, made:0, att:0, assisted:0};
+      playerMid[x.p].att++;
+      if(x.m){ playerMid[x.p].made++; if(x.a) playerMid[x.p].assisted++; }
+    });
+
+    // TO breakdown
+    const tms = turnovers.filter(t => t.tm === tm);
+    const forced = tms.filter(t => t.forced === true).length;
+    const unforced = tms.filter(t => t.forced === false).length;
+    const unknown = tms.filter(t => t.forced === null).length;
+
+    return {
+      threes:{made:threeMade.length, att:threes.length, assisted:assistedThrees, pct:threes.length>0?(threeMade.length/threes.length*100).toFixed(1):'0',
+        corner:{made:threeMade.filter(x=>x.z==='corner3').length, att:threes.filter(x=>x.z==='corner3').length},
+        above:{made:threeMade.filter(x=>x.z==='above3').length, att:threes.filter(x=>x.z==='above3').length},
+        byPlayer:Object.values(playerThrees).filter(x=>x.att>=1).sort((a,b)=>b.att-a.att)},
+      rim:{made:rimMade.length, att:rim.length, assisted:assistedRim, pct:rim.length>0?(rimMade.length/rim.length*100).toFixed(1):'0',
+        byPlayer:Object.values(playerRim).filter(x=>x.att>=1).sort((a,b)=>b.att-a.att)},
+      mid:{made:midMade.length, att:mid.length, assisted:midMade.filter(x=>x.a).length, pct:mid.length>0?(midMade.length/mid.length*100).toFixed(1):'0',
+        byPlayer:Object.values(playerMid).filter(x=>x.att>=1).sort((a,b)=>b.att-a.att)},
+      tos:{total:tms.length, forced, unforced, unknown, byPlayer:tms},
+      shotDiet:{total:s.length, threePct:s.length>0?(threes.length/s.length*100).toFixed(1):'0', rimPct:s.length>0?(rim.length/s.length*100).toFixed(1):'0', midPct:s.length>0?(mid.length/s.length*100).toFixed(1):'0'},
+    };
+  }
+
+  const home = aggTeam(hA);
+  const away = aggTeam(aA);
+
+  return {
+    home, away, homeAlias:hA, awayAlias:aA,
+    totalShots: shots.length, totalTOs: turnovers.length,
+    runs: topRuns,
+    raw: {shots, turnovers}, // keep raw for potential deep dives
+  };
+}
+
+// Convert any image (including HEIC) to compressed JPEG for Sonnet vision
+function compressImage(file, maxW, quality){
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let w = img.naturalWidth, h = img.naturalHeight;
+      const c = document.createElement('canvas');
+      const ctx = c.getContext('2d');
+
+      // Iterative compression: shrink until base64 < 600KB
+      let targetW = Math.min(w, maxW);
+      let q = quality;
+      let b64, attempts = 0;
+      while(attempts < 4){
+        let cw = targetW, ch = Math.round(h * targetW / w);
+        c.width = cw; c.height = ch;
+        ctx.drawImage(img, 0, 0, cw, ch);
+        let dataUrl = c.toDataURL('image/jpeg', q);
+        b64 = dataUrl.split(',')[1];
+        let sizeKB = Math.round(b64.length * 3 / 4 / 1024);
+        console.log('Compress pass '+(attempts+1)+': '+cw+'x'+ch+' q='+q.toFixed(2)+' → '+sizeKB+'KB (b64: '+Math.round(b64.length/1024)+'KB)');
+        if(b64.length <= 600000) break; // under ~450KB image = safe for Netlify
+        // Reduce more aggressively each pass
+        targetW = Math.round(targetW * 0.75);
+        q = Math.max(0.35, q - 0.15);
+        attempts++;
+      }
+      res({ base64: b64, mediaType: 'image/jpeg' });
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('Image load failed — unsupported format?')); };
+    img.src = url;
+  });
+}
+
+async function handleClutchUpload(input){
+  const file = input.files?.[0];
+  if(!file) return;
+  const status = document.getElementById('cu-status');
+  const btn = document.getElementById('cu-btn');
+  const badge = document.getElementById('cu-badge');
+  const segment = document.getElementById('cu-segment')?.value || 'L15';
+
+  status.textContent = '⏳ Processing...';
+  status.className = 'cu-status';
+  btn.classList.add('active');
+  btn.textContent = '⏳ EXTRACTING...';
+  btn.disabled = true;
+
+  try{
+    // Compress image client-side to avoid Netlify function timeout
+    // iPhone screenshots can be 3-5MB; resize to max 1600px wide JPEG
+    status.textContent = '⏳ Compressing...';
+    const {base64, mediaType} = await compressImage(file, 1400, 0.72);
+
+    // Collect team abbreviations from selected games only (not full slate)
+    const activeTeams = [];
+    const targetGames = selIds.length > 0 ? games.filter(g => selIds.includes(g.id)) : games;
+    for(const g of targetGames){
+      if(g.home?.alias) activeTeams.push(g.home.alias);
+      if(g.away?.alias) activeTeams.push(g.away.alias);
+    }
+
+    // Send to clutch-ocr function with team filter
+    const payload = JSON.stringify({ image: base64, mediaType, segment, teams: activeTeams });
+    const payloadMB = (payload.length / 1024 / 1024).toFixed(1);
+    console.log('Clutch OCR payload:', payloadMB+'MB');
+    if(payload.length > 5500000){
+      throw new Error('Image still too large after compression ('+payloadMB+'MB). Try cropping the screenshot to just the table area.');
+    }
+    status.textContent = '⏳ Extracting ' + activeTeams.length + ' teams from ' + targetGames.length + ' games (~15s, '+payloadMB+'MB)...';
+    const resp = await fetch(FN+'clutch-ocr',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: payload
+    });
+
+    if(!resp.ok){
+      if(resp.status === 502) throw new Error('Server crashed processing image ('+payloadMB+'MB). Try cropping to just the table.');
+      if(resp.status === 504) throw new Error('Server timed out. Try cropping the screenshot.');
+      if(resp.status === 413) throw new Error('Image too large for server. Try a smaller screenshot.');
+      const err = await resp.json().catch(()=>({error:resp.statusText}));
+      throw new Error(err.error || 'OCR failed: '+resp.status);
+    }
+
+    const data = await resp.json();
+
+    if(data.error){
+      throw new Error(data.error + (data.rawText ? ' — raw: '+data.rawText.substring(0,100) : ''));
+    }
+
+    if(!data.teams || Object.keys(data.teams).length === 0){
+      throw new Error('No teams extracted from screenshot');
+    }
+
+    // Store globally
+    globalClutchData = data;
+    localStorage.setItem('nba4:globalClutch', JSON.stringify(data));
+    const count = Object.keys(data.teams).length;
+    const extractedList = Object.keys(data.teams).join(', ');
+
+    // Distribute to all active game cards
+    distributeClutchToCards();
+
+    status.textContent = `✓ ${count} teams: ${extractedList}`;
+    status.className = 'cu-status ok';
+    badge.style.display = 'inline-flex';
+    badge.className = 'cu-badge';
+    badge.textContent = `✓ ${segment} CLUTCH · ${count} teams`;
+
+    const tokens = data.usage ? `${data.usage.input||0}+${data.usage.output||0} tokens` : '';
+    console.log('Clutch OCR complete:', count, 'teams:', extractedList, tokens, data.teams);
+
+  }catch(e){
+    console.error('Clutch upload error:', e);
+    status.textContent = '✗ '+e.message;
+    status.className = 'cu-status err';
+  }finally{
+    btn.classList.remove('active');
+    btn.textContent = '📋 UPLOAD L15 CLUTCH';
+    btn.disabled = false;
+    // Reset file input so same file can be re-uploaded
+    input.value = '';
+  }
+}
+
+function distributeClutchToCards(){
+  if(!globalClutchData?.teams) return;
+  const teams = globalClutchData.teams;
+  const extractedKeys = Object.keys(teams);
+  let distributed = 0;
+
+  // Debug: show what was extracted vs what games need
+  const neededAliases = [];
+  for(const game of games){
+    if(game.home?.alias) neededAliases.push(game.home.alias);
+    if(game.away?.alias) neededAliases.push(game.away.alias);
+  }
+  console.log('Clutch distribute: extracted=', extractedKeys, 'needed=', neededAliases, 
+    'missing=', neededAliases.filter(a => !teams[a]));
+
+  for(const game of games){
+    const cs = cardState[game.id];
+    if(!cs) continue;
+    const hA = game.home?.alias||'';
+    const aA = game.away?.alias||'';
+    const hClutch = teams[hA];
+    const aClutch = teams[aA];
+
+    if(hClutch || aClutch){
+      // Only upgrade if not already Tier 1 from manual entry
+      // Screenshot data IS Tier 1 (it's L15 from NBA.com)
+      cs.clutchData = {
+        tier: 1,
+        home: hClutch ? {
+          netRtg: hClutch.netRtg,
+          offRtg: hClutch.offRtg,
+          defRtg: hClutch.defRtg,
+          gp: hClutch.gp,
+          w: hClutch.w,
+          l: hClutch.l,
+          wl: hClutch.wl || (hClutch.w!=null&&hClutch.l!=null ? hClutch.w+'-'+hClutch.l : null),
+          efg: hClutch.efg,
+          ts: hClutch.ts,
+          pace: hClutch.pace,
+          pie: hClutch.pie,
+          tovPct: hClutch.tovPct,
+          orebPct: hClutch.orebPct,
+          drebPct: hClutch.drebPct,
+          astRatio: hClutch.astRatio,
+        } : (cs.clutchData?.home || {}),
+        away: aClutch ? {
+          netRtg: aClutch.netRtg,
+          offRtg: aClutch.offRtg,
+          defRtg: aClutch.defRtg,
+          gp: aClutch.gp,
+          w: aClutch.w,
+          l: aClutch.l,
+          wl: aClutch.wl || (aClutch.w!=null&&aClutch.l!=null ? aClutch.w+'-'+aClutch.l : null),
+          efg: aClutch.efg,
+          ts: aClutch.ts,
+          pace: aClutch.pace,
+          pie: aClutch.pie,
+          tovPct: aClutch.tovPct,
+          orebPct: aClutch.orebPct,
+          drebPct: aClutch.drebPct,
+          astRatio: aClutch.astRatio,
+        } : (cs.clutchData?.away || {}),
+      };
+      cs.clutchTier = 1;
+      persistClutch(game.id, cs);
+      distributed++;
+      addLog(game.id, `📋 L15 clutch loaded: ${hClutch?hA+' NetRtg '+hClutch.netRtg:''}${hClutch&&aClutch?' / ':''}${aClutch?aA+' NetRtg '+aClutch.netRtg:''}`, true);
+    }
+  }
+
+  console.log('Clutch distributed to', distributed, 'game cards');
+
+  // Re-render all visible cards
+  for(const game of games){
+    if(selIds.includes(game.id)){
+      renderCard(game);
+    }
+  }
+}
+
+// Parse clutch proxy from thesis text — extracts Comeback Score + Lead-Keep Score as Tier 2
+function parseThesisClutchProxy(thesis, homeAlias, awayAlias){
+  if(!thesis) return null;
+  try{
+    // Look for Comeback Score patterns: "Comeback Score: 6.2" or "Comeback: X.X/10"
+    const comebackMatch = thesis.match(/comeback\s*(?:score)?[:\s]+(\d+\.?\d*)\s*(?:\/\s*10)?/i);
+    const leadKeepMatch = thesis.match(/lead[- ]?keep\s*(?:score)?[:\s]+(\d+\.?\d*)\s*(?:\/\s*10)?/i);
+    // Also try to find per-team comeback/lead-keep
+    const hComebackMatch = thesis.match(new RegExp(homeAlias+'[^\\n]*comeback[:\\s]+(\\d+\\.?\\d*)', 'i')) ||
+                           thesis.match(new RegExp('comeback[^\\n]*'+homeAlias+'[:\\s]+(\\d+\\.?\\d*)', 'i'));
+    const aComebackMatch = thesis.match(new RegExp(awayAlias+'[^\\n]*comeback[:\\s]+(\\d+\\.?\\d*)', 'i')) ||
+                           thesis.match(new RegExp('comeback[^\\n]*'+awayAlias+'[:\\s]+(\\d+\\.?\\d*)', 'i'));
+    const hLeadKeepMatch = thesis.match(new RegExp(homeAlias+'[^\\n]*lead[- ]?keep[:\\s]+(\\d+\\.?\\d*)', 'i')) ||
+                           thesis.match(new RegExp('lead[- ]?keep[^\\n]*'+homeAlias+'[:\\s]+(\\d+\\.?\\d*)', 'i'));
+    const aLeadKeepMatch = thesis.match(new RegExp(awayAlias+'[^\\n]*lead[- ]?keep[:\\s]+(\\d+\\.?\\d*)', 'i')) ||
+                           thesis.match(new RegExp('lead[- ]?keep[^\\n]*'+awayAlias+'[:\\s]+(\\d+\\.?\\d*)', 'i'));
+
+    const hComeback = hComebackMatch ? parseFloat(hComebackMatch[1]) : (comebackMatch ? parseFloat(comebackMatch[1]) : null);
+    const aComeback = aComebackMatch ? parseFloat(aComebackMatch[1]) : null;
+    const hLeadKeep = hLeadKeepMatch ? parseFloat(hLeadKeepMatch[1]) : (leadKeepMatch ? parseFloat(leadKeepMatch[1]) : null);
+    const aLeadKeep = aLeadKeepMatch ? parseFloat(aLeadKeepMatch[1]) : null;
+
+    // Need at least one value to be useful
+    if(hComeback===null && aComeback===null && hLeadKeep===null && aLeadKeep===null) return null;
+
+    // Convert to NetRtg proxy: (Comeback+LeadKeep)/2 mapped to clutch-like range
+    // Score 7+ → positive NetRtg proxy, Score 5 → ~0, Score 3 → negative
+    const toProxy = (cb, lk) => {
+      if(cb===null && lk===null) return null;
+      const avg = cb!==null && lk!==null ? (cb+lk)/2 : (cb||lk);
+      return ((avg - 5) * 2).toFixed(1); // Maps 5→0, 7→+4, 3→-4
+    };
+
+    return {
+      tier: 2,
+      home: { netRtg: toProxy(hComeback, hLeadKeep), comebackScore: hComeback, leadKeepScore: hLeadKeep },
+      away: { netRtg: toProxy(aComeback, aLeadKeep), comebackScore: aComeback, leadKeepScore: aLeadKeep },
+    };
+  }catch(e){
+    console.warn('Thesis clutch proxy parse failed:', e.message);
+    return null;
+  }
+}
+
+
+function parseSonnetScores(text, homeAlias, awayAlias){
+  if(!text) return null;
+  try{
+    const ind = {};
+    const iMap = {
+      'I1':{weight:0.25, nm:'POSSESS/TRANS'},
+      'I2':{weight:0.25, nm:'RIM/FOUL'},
+      'I3':{weight:0.20, nm:'SHOT QUALITY'},
+      'I4':{weight:0.20, nm:'LINEUP INTEG'},
+      'I5':{weight:0.10, nm:'TEMPO/EFF'},
+    };
+    for(const [key, meta] of Object.entries(iMap)){
+      // Match any decimal score: "I1 Possession... : CLE 0.75 — explanation"
+      const rx = new RegExp(key+'[^:]*:\\s*(\\S+)\\s+(\\d\\.\\d{1,2})\\s*[—–-]\\s*(.+)', 'i');
+      const m = text.match(rx);
+      if(m){
+        const team = m[1].replace(/[^A-Za-z]/g,'').toUpperCase();
+        const score = parseFloat(m[2]);
+        const isHome = team === homeAlias.toUpperCase() || team.includes(homeAlias.toUpperCase().substring(0,3));
+        // Flip score perspective: if away team named, invert
+        const homeScore = isHome ? score : (1 - score);
+        ind[key] = {
+          score: homeScore,
+          leader: m[1],
+          detail: m[3].trim(),
+          sonnet: true,
+          rawScore: score, // original score as stated by Sonnet
+        };
+      }
+    }
+    if(Object.keys(ind).length < 3) return null;
+
+    for(const key of Object.keys(iMap)){
+      if(!ind[key]) ind[key] = {score:0.5, leader:'EVEN', detail:'(not parsed from Sonnet)', sonnet:false, rawScore:0.5};
+    }
+
+    const W = {I1:0.25, I2:0.25, I3:0.20, I4:0.20, I5:0.10};
+    const raw = ind.I1.score*W.I1 + ind.I2.score*W.I2 + ind.I3.score*W.I3 + ind.I4.score*W.I4 + ind.I5.score*W.I5;
+    const controlHome = raw >= 0.5;
+    let score = controlHome ? raw : 1 - raw;
+    let controlTeam = controlHome ? homeAlias : awayAlias;
+
+    // Prefer Sonnet's own stated control score if parseable
+    const controlMatch = text.match(/CONTROL:\s*(\S+)\s+([\d.]+)\s*[—–-]/i);
+    if(controlMatch){
+      const statedTeam = controlMatch[1];
+      const statedScore = parseFloat(controlMatch[2]);
+      if(statedScore >= 0.4 && statedScore <= 1.0){
+        controlTeam = statedTeam;
+        score = statedScore;
+      }
+    }
+
+    const trajMatch = text.match(/TRAJECTORY:\s*(\S+)\s*[—–-]\s*(\d+)\/(\d+)/i);
+    const trajLean = trajMatch ? trajMatch[1] : 'NEUTRAL';
+    // Parse individual T1-T8 signal lines
+    const signalRegex = /(T[1-8])\s*[—–-]\s*([^:]+):\s*(.+)/g;
+    const parsedSignals = [];
+    let sm;
+    while((sm = signalRegex.exec(text)) !== null){
+      const key = sm[1];
+      const label = sm[2].trim();
+      const detail = sm[3].trim();
+      const isClear = /^CLEAR/i.test(detail);
+      const col = isClear ? '#3e3e48' : 'var(--amber)';
+      parsedSignals.push({key, text: label + ': ' + detail, color: col});
+    }
+    const trajCount = parsedSignals.length > 0 ? parsedSignals.filter(s => !/CLEAR/i.test(s.text)).length : (trajMatch ? parseInt(trajMatch[2]) : 0);
+    const trajTotal = trajMatch ? parseInt(trajMatch[3]) : 8;
+
+    return {
+      I1:ind.I1, I2:ind.I2, I3:ind.I3, I4:ind.I4, I5:ind.I5,
+      score, controlTeam,
+      dataQuality: 'SONNET',
+      traj: {signals:parsedSignals, lean:trajLean, count:trajCount, total:trajTotal, tooEarly:false},
+      source: 'sonnet',
+    };
+  }catch(e){
+    console.warn('Sonnet score parse failed:', e.message);
+    return null;
+  }
+}
+
+// 5-tier indicator color: green → yellow-green → yellow → orange → red
+function indColor(score){
+  if(score >= 0.875) return '#00ff88'; // clear edge — green
+  if(score >= 0.625) return '#a8ff78'; // lean — yellow-green
+  if(score >= 0.375) return '#ffd166'; // contested — yellow
+  if(score >= 0.125) return '#ff8c42'; // opponent leans — orange
+  return '#ff5252';                     // opponent controls — red
+}
+
+// 5-tier pip class (for background color via CSS)
+function pipClass(score){
+  if(score >= 0.875) return 'pw';  // win
+  if(score >= 0.625) return 'plw'; // lean-win
+  if(score >= 0.375) return 'pd';  // draw/contested
+  if(score >= 0.125) return 'pll'; // lean-loss
+  return 'pl';                      // loss
+}
+
+// Parse Decision View fields from Sonnet analysis text
+function parseSonnetDecision(text){
+  if(!text) return null;
+  try{
+    const d = {};
+    // Parse EDGE line: "EDGE: +11.3% | FWP: 72.4% | MIP: 61.1%"
+    const edgeMatch = text.match(/EDGE:\s*([^\|]+)\|\s*FWP:\s*([^\|]+)\|\s*MIP:\s*(.+)/i);
+    if(edgeMatch){
+      d.edge = edgeMatch[1].trim();
+      d.fwp = edgeMatch[2].trim();
+      d.mip = edgeMatch[3].trim();
+      // Extract numeric edge
+      const edgeNum = parseFloat(d.edge.replace(/[+%]/g,''));
+      d.edgeNum = isNaN(edgeNum) ? null : edgeNum;
+    }
+    // Parse ENTRY line
+    const entryMatch = text.match(/ENTRY:\s*(OPTIMAL WINDOW|WINDOW OPEN|WINDOW CLOSING|NO WINDOW|COUNTER-SIGNAL)/i);
+    d.entry = entryMatch ? entryMatch[1] : null;
+    // Parse CONVICTION line
+    const convMatch = text.match(/CONVICTION:\s*(DOMINANT|STRONG|EARNED|CONDITIONAL|NO ENTRY)/i);
+    d.conviction = convMatch ? convMatch[1] : null;
+    // Parse Sustainability line
+    const sustMatch = text.match(/Sustainability:\s*(.+)/i);
+    d.sustainability = sustMatch ? sustMatch[1].trim() : null;
+    // Parse Team Quality line
+    const tqMatch = text.match(/Team Quality:\s*(.+)/i);
+    d.teamQuality = tqMatch ? tqMatch[1].trim() : null;
+    // Parse Clutch line
+    const clutchMatch = text.match(/Clutch:\s*(.+)/i);
+    d.clutch = clutchMatch ? clutchMatch[1].trim() : null;
+    // Parse Prediction line
+    const predMatch = text.match(/Prediction:\s*(.+)/i);
+    d.prediction = predMatch ? predMatch[1].trim() : null;
+    // Need at least prediction or conviction to be valid
+    if(!d.prediction && !d.conviction) return null;
+    return d;
+  }catch(e){
+    console.warn('Decision parse failed:', e.message);
+    return null;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// THESIS GENERATION
+// ══════════════════════════════════════════════════════════════════════════════
+async function generateThesis(gameId){
+  const game = games.find(g=>g.id===gameId);
+  const cs = cardState[gameId];
+  if(!game||!cs) return;
+  cs.generating = true;
+  cs.genError = null;
+  const wasPaused = paused;
+  paused = true; // Pause polling during generation to avoid SR rate limit conflicts
+  const homeAlias = game.home?.alias||'';
+  const awayAlias = game.away?.alias||'';
+  const homeId = TEAM_IDS[homeAlias];
+  const awayId = TEAM_IDS[awayAlias];
+  if(!homeId||!awayId){
+    cs.genError = 'Unknown team alias: '+(homeId?'':homeAlias)+' '+(awayId?'':awayAlias);
+    cs.generating=false; renderCard(game); return;
+  }
+
+  cs.genSteps = [
+    {label:'BDL Enrich',status:'pending'},
+    {label:'Injuries',status:'pending'},
+    {label:'Standings',status:'pending'},
+    {label:homeAlias+' Profile',status:'pending'},
+    {label:awayAlias+' Profile',status:'pending'},
+    {label:homeAlias+' Depth',status:'pending'},
+    {label:awayAlias+' Depth',status:'pending'},
+    {label:homeAlias+' Stats',status:'pending'},
+    {label:awayAlias+' Stats',status:'pending'},
+    {label:homeAlias+' Splits(G)',status:'pending'},
+    {label:awayAlias+' Splits(G)',status:'pending'},
+    {label:homeAlias+' Splits(S)',status:'pending'},
+    {label:awayAlias+' Splits(S)',status:'pending'},
+    {label:'BDL Odds',status:'pending'},
+    {label:'Sonnet Thesis',status:'pending'},
+  ];
+  renderGenProgress(gameId);
+
+  // ── STEP 0: Ensure BDL enrichment is complete (odds, clutch, tracking) ──
+  cs.genSteps[0].status = 'active';
+  renderGenProgress(gameId);
+  try{
+    if(cs.enriching){
+      // Enrichment already in progress — wait for it (up to 12s)
+      addLog(gameId, 'Waiting for BDL enrichment to finish…', true);
+      for(let w=0;w<24&&cs.enriching;w++) await new Promise(r=>setTimeout(r,500));
+    } else if(!cs.enrichDone && !cs.oddsData && !cs.trackingData){
+      // Not started yet — trigger and wait
+      addLog(gameId, 'Triggering BDL enrichment for thesis…', true);
+      await enrichFromBDL(gameId);
+    }
+    cs.genSteps[0].status = (cs.oddsData||cs.clutchData||cs.trackingData)?'done':'err';
+    if(cs.genSteps[0].status==='err') cs.genSteps[0].error = 'No data (optional)';
+  }catch(e){
+    cs.genSteps[0].status = 'err';
+    cs.genSteps[0].error = 'optional';
+  }
+  renderGenProgress(gameId);
+
+  const calls = [
+    {key:'injuries', type:'injuries', params:{}},
+    {key:'standings', type:'standings', params:{}},
+    {key:'homeProfile', type:'profile', params:{team_id:homeId}},
+    {key:'awayProfile', type:'profile', params:{team_id:awayId}},
+    {key:'homeDepth', type:'depth_chart', params:{team_id:homeId}},
+    {key:'awayDepth', type:'depth_chart', params:{team_id:awayId}},
+    {key:'homeStats', type:'statistics', params:{team_id:homeId}},
+    {key:'awayStats', type:'statistics', params:{team_id:awayId}},
+    {key:'homeSplitsGame', type:'splits_game', params:{team_id:homeId}},
+    {key:'awaySplitsGame', type:'splits_game', params:{team_id:awayId}},
+    {key:'homeSplitsSchedule', type:'splits_schedule', params:{team_id:homeId}},
+    {key:'awaySplitsSchedule', type:'splits_schedule', params:{team_id:awayId}},
+  ];
+
+  const cacheKey = 'nba4:srCache:'+gameId;
+  let collected = {};
+  const cached = localStorage.getItem(cacheKey);
+
+  if(cached){
+    // Use cached SR data — skip all 12 API calls
+    collected = JSON.parse(cached);
+    cs.genSteps.forEach((s,i)=>{ if(i>=1 && i<=12) s.status='done'; });
+    renderGenProgress(gameId);
+    console.log('Using cached SR data for', gameId);
+  } else {
+    // Fetch fresh SR data
+    for(let i=0; i<calls.length; i++){
+      cs.genSteps[i+1].status = 'active';
+      renderGenProgress(gameId);
+      try{
+        const data = await sr(calls[i].type, calls[i].params);
+        collected[calls[i].key] = data;
+        cs.genSteps[i+1].status = 'done';
+      }catch(e){
+        cs.genSteps[i+1].status = 'err';
+        cs.genSteps[i+1].error = e.message;
+      }
+      renderGenProgress(gameId);
+      if(i < calls.length-1) await new Promise(r=>setTimeout(r,1500));
+    }
+    // Cache for re-runs (skip if too large for localStorage)
+    try{
+      const cacheStr = JSON.stringify(collected);
+      if(cacheStr.length < 3000000) localStorage.setItem(cacheKey, cacheStr);
+      else console.warn('SR data too large to cache:', (cacheStr.length/1024).toFixed(0)+'KB');
+    }catch(e){ console.warn('Cache write failed:', e.message); }
+  }
+
+  // BDL Odds — skip if already populated by step 0 enrich
+  if(cs.oddsData && cs.oddsData.homeML){
+    cs.genSteps[13].status = 'done';
+    renderGenProgress(gameId);
+  } else {
+  cs.genSteps[13].status = 'active';
+  renderGenProgress(gameId);
+  try{
+    const bdlId = bdlGameMap[game.id];
+    if(bdlId){
+      try{
+        const oddsResp = await bdl('odds',{game_id:bdlId});
+        const oddsArr = oddsResp.data || oddsResp || [];
+        if(Array.isArray(oddsArr) && oddsArr.length > 0){
+          // Find consensus or first bookmaker
+          const book = oddsArr[0];
+          if(book){
+            const hML = book.home_team_ml || book.home_moneyline || '';
+            const aML = book.away_team_ml || book.away_moneyline || book.visitor_team_ml || '';
+            const spread = book.home_team_spread || book.home_spread || '';
+            const total = book.over_under || book.total || '';
+            if(hML || spread){
+              if(cs.oddsData && cs.oddsData.homeML){
+                cs.oddsHistory = cs.oddsHistory || [];
+                cs.oddsHistory.push({...cs.oddsData, time: cs.oddsData.time || cs.lastUp?.toLocaleTimeString() || '?'});
+                if(cs.oddsHistory.length > 20) cs.oddsHistory = cs.oddsHistory.slice(-20);
+              }
+              cs.oddsData = {homeSpread:String(spread), homeML:String(hML), awayML:String(aML), total:String(total), time:new Date().toLocaleTimeString()};
+              persistOdds(gameId, cs);
+              console.log('BDL odds auto-populated:', cs.oddsData);
+            }
+          }
+        }
+      }catch(oe){ console.warn('BDL odds pull failed (non-fatal):', oe.message); }
+    } else {
+      console.log('No BDL game ID — odds not auto-populated');
+    }
+    cs.genSteps[13].status = 'done';
+  }catch(e){
+    cs.genSteps[13].status = 'err';
+    cs.genSteps[13].error = 'optional';
+  }
+  } // end skip-if-already-populated
+  renderGenProgress(gameId);
+
+  // Now send to Sonnet — prompt built client-side, function is thin Anthropic proxy
+  cs.genSteps[14].status = 'active';
+  renderGenProgress(gameId);
+  try{
+    const tipTime = new Date(game.scheduled).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/Phoenix'});
+
+    // Trim functions to reduce prompt size
+    const trimProfile = (p) => {
+      if(!p) return '(unavailable)';
+      const players = (p.players||[])
+        .filter(pl => pl.status==='ACT'||pl.status==='SUS'||pl.status==='NWT')
+        .map(pl => `${pl.full_name} [${pl.primary_position||pl.position||'?'}] ${pl.status}${pl.injuries?' — '+JSON.stringify(pl.injuries):''}`);
+      return players.join('\n');
+    };
+    const trimStats = (s) => {
+      if(!s) return '(unavailable)';
+      const own = s.own_record||s;
+      const teamStats = own.statistics||s.statistics||{};
+      const oppStats = (s.opponents||{}).statistics||{};
+      const players = (own.players||s.players||[])
+        .sort((a,b)=>(b.average?.minutes||0)-(a.average?.minutes||0))
+        .slice(0,10)
+        .map(pl=>`${pl.full_name} [${pl.primary_position||'?'}] ${pl.average?.minutes||0}mpg ${pl.average?.points||0}ppg ${pl.average?.assists||0}apg ${pl.average?.rebounds||0}rpg ${pl.average?.steals||0}spg ${pl.average?.turnovers||0}to FG:${pl.average?.field_goals_made||0}/${pl.average?.field_goals_att||0} 3P:${pl.average?.three_points_made||0}/${pl.average?.three_points_att||0} FT:${pl.average?.free_throws_made||0}/${pl.average?.free_throws_att||0} USG:${(pl.average?.usage_pct||0).toFixed(1)}%`);
+      const t = teamStats;
+      const teamLine = `Team: ${t.points||0}ppg ${t.assists||0}apg ${t.rebounds||0}rpg ${t.steals||0}spg ${t.blocks||0}bpg ${t.turnovers||0}to FBP:${t.fast_break_points||0} POT:${t.points_off_turnovers||0} SCP:${t.second_chance_points||0} Paint:${t.points_in_the_paint||0} OREB:${t.offensive_rebounds||0} FTA:${t.free_throws_att||0} eFG:${(((t.field_goals_made||0)+.5*(t.three_points_made||0))/(t.field_goals_att||1)*100).toFixed(1)}%`;
+      const opp = oppStats;
+      const oppLine = opp ? `Opp allowed: ${opp.points||0}ppg Paint:${opp.points_in_the_paint||0} FTA:${opp.free_throws_att||0} OREB:${opp.offensive_rebounds||0} Stl:${opp.steals||0}` : '';
+      return teamLine + '\n' + oppLine + '\nTop players:\n' + players.join('\n');
+    };
+    const trimSplits = (s) => {
+      if(!s) return '(unavailable)';
+      const str = JSON.stringify(s);
+      return str.length > 12000 ? str.substring(0, 12000) + '...(truncated)' : str;
+    };
+    const trimDepth = (d) => {
+      if(!d) return '(unavailable)';
+      console.log('Depth chart structure:', typeof d, Array.isArray(d), Object.keys(d).slice(0,10));
+      const pos = Array.isArray(d.positions) ? d.positions : Array.isArray(d) ? d : [];
+      if(pos.length===0) return JSON.stringify(d).substring(0,2000);
+      return pos.map(p =>
+        (p.name||p.position||'?') + ': ' + (Array.isArray(p.players)?p.players:[]).map(pl=>`${pl.depth||'?'}. ${pl.full_name||pl.name||'?'}`).join(', ')
+      ).join('\n');
+    };
+    const trimStandings = (s) => {
+      if(!s) return '(unavailable)';
+      const teams = [];
+      (s.conferences||[]).forEach(conf=>{
+        (conf.divisions||[]).forEach(div=>{
+          (div.teams||[]).forEach(t=>{
+            teams.push(`${t.name} ${t.wins}-${t.losses} (${(t.win_pct||0).toFixed(3)}) PF:${t.calc_points?.for||'?'} PA:${t.calc_points?.against||'?'}`);
+          });
+        });
+      });
+      return teams.join('\n');
+    };
+    const trimInjuries = (inj) => {
+      if(!inj) return '(unavailable)';
+      return (inj.teams||[]).filter(t=>(t.players||[]).length>0)
+        .map(t=> t.alias + ': ' + (t.players||[]).map(p=>`${p.full_name} [${p.primary_position||p.position||'?'}] ${p.status} — ${p.desc||p.comment||p.injury||'?'}`).join('; '))
+        .join('\n');
+    };
+
+    const c = collected;
+    // Wrap each trim in try/catch to isolate crashes
+    const safe = (fn, label) => { try{ return fn(); }catch(e){ console.error('TRIM CRASH in '+label+':', e.message, e.stack); return '(ERROR: '+label+' — '+e.message+')'; } };
+
+    const userPrompt = `Build a complete pre-game thesis for this NBA matchup.
+
+MATCHUP: ${awayAlias} @ ${homeAlias}
+DATE: ${getEasternDate(0).str} | TIME: ${tipTime} MST
+VENUE: ${game.venue||'TBD'}
+
+=== INJURIES ===
+${safe(()=>trimInjuries(c.injuries), 'injuries')}
+
+=== ${homeAlias} ROSTER ===
+${safe(()=>trimProfile(c.homeProfile), 'homeProfile')}
+
+=== ${awayAlias} ROSTER ===
+${safe(()=>trimProfile(c.awayProfile), 'awayProfile')}
+
+=== ${homeAlias} DEPTH CHART ===
+${safe(()=>trimDepth(c.homeDepth), 'homeDepth')}
+
+=== ${awayAlias} DEPTH CHART ===
+${safe(()=>trimDepth(c.awayDepth), 'awayDepth')}
+
+=== ${homeAlias} SEASON STATS ===
+${safe(()=>trimStats(c.homeStats), 'homeStats')}
+
+=== ${awayAlias} SEASON STATS ===
+${safe(()=>trimStats(c.awayStats), 'awayStats')}
+
+=== ${homeAlias} SPLITS (Game) ===
+${safe(()=>trimSplits(c.homeSplitsGame), 'homeSplitsGame')}
+
+=== ${awayAlias} SPLITS (Game) ===
+${safe(()=>trimSplits(c.awaySplitsGame), 'awaySplitsGame')}
+
+=== ${homeAlias} SPLITS (Schedule) ===
+${safe(()=>trimSplits(c.homeSplitsSchedule), 'homeSplitsSchedule')}
+
+=== ${awayAlias} SPLITS (Schedule) ===
+${safe(()=>trimSplits(c.awaySplitsSchedule), 'awaySplitsSchedule')}
+
+=== STANDINGS ===
+${safe(()=>trimStandings(c.standings), 'standings')}
+${(function(){
+  var sections = '';
+  // Inject odds if available from BDL enrich
+  var od = cs.oddsData;
+  if(od && (od.homeML || od.homeSpread)){
+    sections += '\n=== MARKET ODDS ===\nSpread: '+homeAlias+' '+(od.homeSpread||'N/A')+' | ML: '+awayAlias+' '+(od.awayML||'N/A')+' / '+homeAlias+' '+(od.homeML||'N/A')+' | O/U: '+(od.total||'N/A')+'\n';
+  } else {
+    sections += '\n=== MARKET ODDS ===\nNot yet available — ML THRESHOLD will read "Awaiting odds"\n';
+  }
+  // Inject tracking baselines if available
+  var td = cs.trackingData;
+  if(td){
+    var ht = td.home||{}, at = td.away||{};
+    sections += '\n=== SHOOTING BASELINES (BDL Tracking) ===\n';
+    if(at.catchAndShoot || ht.catchAndShoot) sections += 'Catch & Shoot eFG%: '+awayAlias+' '+(at.catchAndShoot?at.catchAndShoot.efg||'?':'?')+'% | '+homeAlias+' '+(ht.catchAndShoot?ht.catchAndShoot.efg||'?':'?')+'%\n';
+    if(at.pullUp || ht.pullUp) sections += 'Pull-up eFG%: '+awayAlias+' '+(at.pullUp?at.pullUp.efg||'?':'?')+'% | '+homeAlias+' '+(ht.pullUp?ht.pullUp.efg||'?':'?')+'%\n';
+  }
+  // Inject clutch data if available
+  var cd = cs.clutchData;
+  if(cd){
+    var tierLabel = cd.tier===1?'L15 NBA.com (Tier 1)':cd.tier===2?'Season BDL (Tier 2)':'Proxy (Tier 3)';
+    sections += '\n=== CLUTCH DATA ('+tierLabel+') ===\n';
+    if(cd.away) sections += awayAlias+': NetRtg '+(cd.away.netRtg!=null?cd.away.netRtg:'N/A')+' OffRtg '+(cd.away.offRtg!=null?cd.away.offRtg:'N/A')+' DefRtg '+(cd.away.defRtg!=null?cd.away.defRtg:'N/A')+' '+(cd.away.wl||'')+'\n';
+    if(cd.home) sections += homeAlias+': NetRtg '+(cd.home.netRtg!=null?cd.home.netRtg:'N/A')+' OffRtg '+(cd.home.offRtg!=null?cd.home.offRtg:'N/A')+' DefRtg '+(cd.home.defRtg!=null?cd.home.defRtg:'N/A')+' '+(cd.home.wl||'')+'\n';
+  }
+  return sections;
+})()}
+Compute all analytical layers (strength profiles, structural identity, shot diet, BHV, chaos risk, foul resilience, Pythagorean check, win/loss delta, 3PT vulnerability profile, ML threshold) from this data. Output the compact thesis format.`;
+
+    const systemPrompt = `You are an NBA pre-game structural analyst. Build game thesis documents predicting where the structural battle will be fought and what to monitor live.
+
+The user's strategy: BET THE STRUCTURALLY DOMINANT TEAM WHEN TRAILING, because the opponent's lead is built on unsustainable variance (hot 3PT shooting from non-shooters, role player heaters, shot diet misalignment). The thesis exists to identify WHICH team has real structural control, so the live system knows who to buy when they fall behind on variance.
+
+INDICATORS (weighted): I1 Possession & Transition (25%) — TO margin, steals, OREBs, POT, SCP, FBP. I2 Rim Pressure & Foul (25%) — paint pts, at-rim rates, FTA, blocks. I3 Shot Quality & Creation (20%) — assist ratio, eFG%, shot zones. I4 Lineup Integrity (20%) — bench depth, biggest lead, win/loss delta. I5 Tempo & Efficiency (10%) — pace, pts/possession.
+
+Each scored 1.0 (clear edge), 0.5 (contested), 0.0 (opponent). Control: 0.90+ DOMINANT | 0.75-0.89 STRONG | 0.60-0.74 EARNED | 0.45-0.59 NO EDGE | <0.45 WAIT.
+
+Compute: Context-Adjusted Strength, Structural Identity, Shot Diet (Interior/Transition vs Perimeter/Creation vs Balanced), Win/Loss Delta, Comeback Score (0-10), Lead-Keep Score (0-10), BHV (LOW <2.5, MOD 2.5-3.5, HIGH >3.5 TO/gm), Chaos Risk (HIGH BHV + top-7 steals opp), Foul Resilience, Pythagorean check (PF^13.91/(PF^13.91+PA^13.91)), System Resilience (top-10 DEF teams with stars OUT).
+
+3PT VULNERABILITY PROFILE (compute for BOTH teams):
+For each team, identify players most likely to produce unsustainable 3PT variance:
+- NON-SHOOTERS: <33% season 3PT or <1.5 3PA/gm — hot streaks are pure variance
+- VOLATILE SHOOTERS: 33-38% on 3+ att/gm — can look elite on any given night
+- Name 2-3 specific players per team as the "heater watchlist" for live monitoring
+- Note team season 3PT% and shot diet classification so the live audit has a baseline
+
+ML THRESHOLD (compute if odds provided):
+If market odds are available, compute entry threshold for the thesis team:
+- Convert control score to implied win probability (e.g. 0.82 = ~82% FWP)
+- Compare against thesis team's current MIP from moneyline
+- ML THRESHOLD = the ML where thesis team's MIP is at least 5% below FWP
+- Example: FWP 82%, current MIP 77.5% at -340 → threshold "CLE below -250 ML" (MIP ~71%)
+- If no odds available, output "ML THRESHOLD: Awaiting odds"
+
+OUTPUT FORMAT:
+COMPACT THESIS — [AWAY] vs [HOME] | [Time] MST
+[Date] | [Venue]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AVAILABILITY
+[TEAM A] [Player] ✅ IN | [Player] ❌ OUT | [Player] ⚠️ GTD
+[TEAM B] [same]
+REST [TEAM A] X day | [TEAM B] X day
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CONTROL SCORE: [Team] [X.XX] — [Verdict]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+I1 Possession & Transition (25%) [Team 1.0 | CONTESTED 0.5 | Team 0.0]
+[1-line reason]
+I2 Rim Pressure & Foul (25%) [same format]
+I3 Shot Quality & Creation (20%) [same]
+I4 Lineup Integrity (20%) [same]
+I5 Tempo & Efficiency (10%) [same]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SHOT DIET
+[TEAM A]: [Interior/Transition | Perimeter/Creation | Balanced] — season 3PT% [X]% on [Y] 3PA/gm
+[TEAM B]: [same]
+
+3PT HEATER WATCHLIST
+[TEAM A]: [Player1] ([szn 3PT%] on [vol]/gm) [NON-SHOOTER|VOLATILE], [Player2] [same]
+[TEAM B]: [same]
+
+KEY FLAGS
+⚠ [Flag 1]
+⚠ [Flag 2]
+✓ [Clean read note if applicable]
+
+MARKET: Spread [X] | ML [X/X] | O/U [X]
+ML THRESHOLD: [Thesis team] below [ML value] ([X]% MIP vs [Y]% FWP = [Z]%+ edge)
+
+ENTRY      [Thesis team] trails by [X]+ on [opponent] unsustainable 3PT | OR [thesis team] ML above [threshold]
+PASS       [Opponent] lead structural (LOCKED IN/DURABLE 3PT) — do NOT fade
+
+CLUTCH GATE: [pre-game note]
+
+WATCH
+1. [Opponent] 3PT sustainability — confirms entry if [opp] shooting [X]%+ from 3 with [Z]%+ from non-shooters; denies if from elite shooters at normal rates
+2. [Thesis team] interior/structural — confirms if paint pts + FTA on pace; denies if interior suppressed
+3. [TO/chaos] — confirms if [thesis team] TO rate holds below [X]; denies if BHV/integration materializes`;
+
+
+    console.log('Thesis prompt size:', (userPrompt.length/1024).toFixed(1)+'KB');
+
+    const resp = await fetch(FN+'generate-thesis',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ systemPrompt, userPrompt }),
+    });
+    if(!resp.ok){
+      const errData = await resp.json().catch(()=>({error:'Unknown error '+resp.status}));
+      throw new Error(errData.error||'Thesis gen failed: '+resp.status);
+    }
+    const data = await resp.json();
+    theses[gameId] = data.thesis;
+    localStorage.setItem('nba4:theses', JSON.stringify(theses));
+    cs.genSteps[14].status = 'done';
+  }catch(e){
+    cs.genSteps[14].status = 'err';
+    cs.genSteps[14].error = e.message;
+    console.error('Thesis generation failed at step 14:', e.message, e.stack);
+  }
+  cs.generating = false;
+  renderConfidenceTable();
+  cs.genError = cs.genSteps[14]?.status==='err' ? cs.genSteps[14].error : null;
+  paused = wasPaused; // Resume polling state
+  renderCard(game);
+}
+
+function renderGenProgress(gameId){
+  const el = document.getElementById('gen-progress-'+gameId);
+  const cs = cardState[gameId];
+  if(!el||!cs?.genSteps) return;
+  el.innerHTML = cs.genSteps.map(s=>{
+    const icon = s.status==='done'?'✓':s.status==='active'?'⟳':s.status==='err'?'✗':'·';
+    return `<span class="gen-step ${s.status}">${icon} ${s.label}${s.error?' — '+s.error:''}</span>`;
+  }).join('<br>');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// COMPUTE INDICATORS (SR FORMAT)
+// ══════════════════════════════════════════════════════════════════════════════
+function compute(game){
+  if(!game?.summary || getState(game)==='PRE') return null;
+  const s = game.summary;
+  const H = s.home, A = s.away;
+  const hs = H?.statistics||{}, as = A?.statistics||{};
+  const hA = H?.alias||H?.name||'HOME', aA = A?.alias||A?.name||'AWAY';
+  const hS = H?.points||0, aS = A?.points||0;
+
+  // I1 — Possession & Transition
+  const hGen = (hs.steals||0)+(hs.offensive_rebounds||0)-(hs.turnovers||0);
+  const aGen = (as.steals||0)+(as.offensive_rebounds||0)-(as.turnovers||0);
+  const hConv = (hs.fast_break_points||0)+(hs.points_off_turnovers||0)+(hs.second_chance_points||0);
+  const aConv = (as.fast_break_points||0)+(as.points_off_turnovers||0)+(as.second_chance_points||0);
+  let i1 = (hGen>aGen?1:hGen<aGen?-1:0)+(hConv>aConv?1:hConv<aConv?-1:0);
+  // Chaos layer from PBP — forced vs unforced TOs
+  const pbp = cardState[game.id]?.pbpAudit;
+  let chaosNote = '';
+  if(pbp){
+    const hForced = pbp.away.tos.forced||0; // home team FORCES opponent (away) TOs
+    const aForced = pbp.home.tos.forced||0; // away team FORCES opponent (home) TOs
+    const hUnforced = pbp.home.tos.unforced||0; // home team's own unforced
+    const aUnforced = pbp.away.tos.unforced||0; // away team's own unforced
+    if(hForced >= aForced+3) { i1 += 1; chaosNote = ` | CHAOS:${hA} +${hForced-aForced} forced`; }
+    else if(aForced >= hForced+3) { i1 -= 1; chaosNote = ` | CHAOS:${aA} +${aForced-hForced} forced`; }
+    else if(hUnforced >= aUnforced+3) { i1 -= 1; chaosNote = ` | CHAOS:${hA} ${hUnforced} unforced`; }
+    else if(aUnforced >= hUnforced+3) { i1 += 1; chaosNote = ` | CHAOS:${aA} ${aUnforced} unforced`; }
+    else { chaosNote = ` | chaos:even`; }
+  }
+  const I1={score:i1>0?1:i1===0?.5:0, leader:i1>0?hA:i1<0?aA:'EVEN',
+    detail:`${hA} ${hs.steals||0}stl ${hs.offensive_rebounds||0}or ${hs.turnovers||0}to | ${aA} ${as.steals||0}stl ${as.offensive_rebounds||0}or ${as.turnovers||0}to | Conv:${hConv}–${aConv}${chaosNote}`};
+
+  // I2 — Rim Pressure & Foul
+  const hPaint = hs.points_in_the_paint||0, aPaint = as.points_in_the_paint||0;
+  const hAtRim = hs.field_goals_at_rim_att||0, aAtRim = as.field_goals_at_rim_att||0;
+  const hFTA = hs.free_throws_att||0, aFTA = as.free_throws_att||0;
+  const hBlk = hs.blocks||0, aBlk = as.blocks||0;
+  const rimScore = (hPaint+hAtRim+hFTA+hBlk)-(aPaint+aAtRim+aFTA+aBlk);
+  const I2={score:rimScore>10?1:rimScore<-10?0:.5, leader:rimScore>10?hA:rimScore<-10?aA:'EVEN',
+    detail:`Paint:${hPaint}–${aPaint} AtRim:${hs.field_goals_at_rim_made||0}/${hAtRim}–${as.field_goals_at_rim_made||0}/${aAtRim} FTA:${hFTA}–${aFTA} BLK:${hBlk}–${aBlk}${H?.bonus?' '+hA+'⬤':''}${A?.bonus?' '+aA+'⬤':''}`};
+
+  // I3 — Shot Quality & Creation (enhanced with PBP zone data)
+  const hFGA=hs.field_goals_att||1, aFGA=as.field_goals_att||1;
+  const hEFG=(((hs.field_goals_made||0)+.5*(hs.three_points_made||0))/hFGA);
+  const aEFG=(((as.field_goals_made||0)+.5*(as.three_points_made||0))/aFGA);
+  const hAst=hs.assists||0, aAst=as.assists||0;
+  const hFGM=hs.field_goals_made||1, aFGM=as.field_goals_made||1;
+  const hAR=(hAst/hFGM)*100, aAR=(aAst/aFGM)*100;
+  const i3=(hEFG>aEFG+.02?1:hEFG<aEFG-.02?-1:0)+(hAR>aAR+5?1:hAR<aAR-5?-1:0);
+  let i3detail=`eFG%:${(hEFG*100).toFixed(1)}–${(aEFG*100).toFixed(1)} AR:${hAR.toFixed(0)}–${aAR.toFixed(0)} AST:${hAst}–${aAst}`;
+  if(pbp){
+    const hD=pbp.home?.shotDiet, aD=pbp.away?.shotDiet;
+    if(hD&&aD) i3detail+=` | diet ${hA}:rim${hD.rimPct}%/mid${hD.midPct}%/3pt${hD.threePct}% ${aA}:rim${aD.rimPct}%/mid${aD.midPct}%/3pt${aD.threePct}%`;
+  }
+  const I3={score:i3>0?1:i3===0?.5:0, leader:i3>0?hA:i3<0?aA:'EVEN', detail:i3detail};
+
+  // I4 — Lineup Integrity
+  const periods = s.periods||[];
+  const qDs = periods.map(p=>(p.home_points||0)-(p.away_points||0));
+  const trend = qDs.length>=2 ? qDs[qDs.length-1]-qDs[0] : 0;
+  const hBigLead = hs.biggest_lead||0, aBigLead = as.biggest_lead||0;
+  const i4 = (hBigLead>aBigLead+4?1:hBigLead<aBigLead-4?-1:0)+(trend>2?1:trend<-2?-1:0);
+  const I4={score:i4>0?1:i4===0?.5:0, leader:i4>0?hA:i4<0?aA:'EVEN',
+    detail:`BigLead:${hBigLead}–${aBigLead} Δ:${hS>aS?'+':''}${hS-aS} trend:${trend>0?'+':''}${trend} ${qDs.map((d,i)=>'Q'+(i+1)+':'+(d>0?'+':'')+d).join(' ')}`};
+
+  // I5 — Tempo & Efficiency
+  const hOPPP = hs.offensive_points_per_possession||0, aOPPP = as.offensive_points_per_possession||0;
+  const hDPPP = hs.defensive_points_per_possession||0, aDPPP = as.defensive_points_per_possession||0;
+  const effD = (hOPPP-aDPPP)-(aOPPP-hDPPP);
+  const hPoss = hs.possessions||0, aPoss = as.possessions||0;
+  const I5={score:effD>0.08?1:effD<-0.08?0:.5, leader:effD>0.08?hA:effD<-0.08?aA:'EVEN',
+    detail:`OPPP:${hOPPP.toFixed(2)}–${aOPPP.toFixed(2)} DPPP:${hDPPP.toFixed(2)}–${aDPPP.toFixed(2)} NetΔ:${effD>0?'+':''}${effD.toFixed(3)} Poss:${hPoss}–${aPoss}`};
+
+  const raw = I1.score*W.I1 + I2.score*W.I2 + I3.score*W.I3 + I4.score*W.I4 + I5.score*W.I5;
+  const controlHome = raw>=.5, cTeam = controlHome?hA:aA, score = controlHome?raw:1-raw;
+
+  // Trajectory
+  const traj = buildTrajectory(game, hA, aA, hs, as, H, A, hS, aS, qDs, periods);
+
+  return {I1,I2,I3,I4,I5, score, controlTeam:cTeam, dataQuality:'FULL', traj};
+}
+
+function buildTrajectory(game, hA, aA, hs, as, H, A, hS, aS, qDs, periods){
+  const p = game.period||0;
+  if(p<2) return {signals:[], lean:'NEUTRAL', count:0, total:0, tooEarly:true};
+  const sigs = [], overall=hS-aS, currQ=qDs.length>0?qDs[qDs.length-1]:null;
+
+  // T1 — Conversion (enhanced with PBP run context)
+  const hC=(hs.fast_break_points||0)+(hs.points_off_turnovers||0), aC=(as.fast_break_points||0)+(as.points_off_turnovers||0);
+  if(Math.abs(hC-aC)>=10){
+    const w=hC>aC?hA:aA;
+    let t1detail=w+' conversion +'+(Math.abs(hC-aC))+' (FBP+POT)';
+    if(pbpD && pbpD.runs && pbpD.runs.length>0){
+      const wRuns = pbpD.runs.filter(r=>r.team===w);
+      if(wRuns.length>0){
+        const bigRun = wRuns[0];
+        const mech = Array.isArray(bigRun.mechanism)?bigRun.mechanism.join('+'):'?';
+        t1detail += ' | run: '+bigRun.pts+'pt Q'+bigRun.q+' ('+mech+')';
+      }
+    }
+    sigs.push({key:'T1',w:1,team:w,color:'#ffd166',text:t1detail});
+  }
+  else sigs.push({key:'T1',w:0,team:null,color:'#3e3e48',text:'Conversion flat ('+hC+'–'+aC+')'});
+
+  // T3 — Quarter Delta (highest weight)
+  if(currQ!=null&&Math.abs(currQ)>=6){const w=currQ>0?hA:aA,tr=(currQ>0&&overall<0)||(currQ<0&&overall>0);sigs.push({key:'T3',w:2,team:w,color:'#00ff88',text:w+' winning Q'+p+' by '+Math.abs(currQ)+(tr?' (trailing—comeback)':'')});}
+  else sigs.push({key:'T3',w:0,team:null,color:'#3e3e48',text:'Q delta <6 — neutral'});
+
+  // T4 — Foul Gate (now available via SR per-player data)
+  let t4sig = {key:'T4',w:0,team:null,color:'#3e3e48',text:'No foul crisis detected'};
+  if(H?.players && A?.players){
+    const allPlayers = [...(H.players||[]).map(pl=>({...pl,team:hA})),...(A.players||[]).map(pl=>({...pl,team:aA}))];
+    for(const pl of allPlayers){
+      const pf = pl.statistics?.personal_fouls||0;
+      if((p<=1&&pf>=2)||(p===2&&pf>=3)||(p===3&&pf>=4)){
+        const level=p<=1?'WATCH':p===2?'CONSTRAINT':'CRISIS';
+        t4sig={key:'T4',w:1,team:pl.team===hA?aA:hA,color:'#ff6b6b',text:(pl.full_name||'?')+' '+pf+' fouls Q'+p+' — '+level};
+        break;
+      }
+    }
+  }
+  sigs.push(t4sig);
+
+  // T5 — Interior Trend (enhanced with PBP at-rim context)
+  const hPaint=hs.points_in_the_paint||0, aPaint=as.points_in_the_paint||0;
+  if(Math.abs(hPaint-aPaint)>=8){
+    const w=hPaint>aPaint?hA:aA;
+    let t5detail=w+' paint +'+(Math.abs(hPaint-aPaint))+' ('+hPaint+'–'+aPaint+')';
+    if(pbpD){
+      const wRim = w===hA ? pbpD.home?.rim : pbpD.away?.rim;
+      if(wRim && wRim.byPlayer && wRim.byPlayer.length>0){
+        // Show top rim attacker's context breakdown
+        const top = wRim.byPlayer[0];
+        const ctxStr = Object.entries(top.contexts||{}).map(([k,v])=>k+':'+v).join('/');
+        t5detail += ' | rim: '+wRim.made+'/'+wRim.att+' ('+top.name+' '+top.made+'/'+top.att+' '+ctxStr+')';
+      }
+    }
+    sigs.push({key:'T5',w:1,team:w,color:'#a8ff78',text:t5detail});
+  }
+  else sigs.push({key:'T5',w:0,team:null,color:'#3e3e48',text:'Paint even ('+hPaint+'–'+aPaint+')'});
+
+  // T6 — Assist Ratio
+  const hFGM=hs.field_goals_made||1,aFGM=as.field_goals_made||1;
+  const hAR=(hs.assists||0)/hFGM*100, aAR=(as.assists||0)/aFGM*100;
+  if(Math.abs(hAR-aAR)>=15){const w=hAR>aAR?hA:aA;sigs.push({key:'T6',w:1,team:w,color:'#a8ff78',text:w+' AR '+Math.max(hAR,aAR).toFixed(0)+'% vs '+Math.min(hAR,aAR).toFixed(0)+'%'});}
+  else sigs.push({key:'T6',w:0,team:null,color:'#3e3e48',text:'AR even ('+hAR.toFixed(0)+'% vs '+aAR.toFixed(0)+'%)'});
+
+  // T7 — Closing Lineup (now available via SR on_court)
+  let t7sig = {key:'T7',w:0,team:null,color:'#3e3e48',text:'Lineup data pending'};
+  if(p>=2 && H?.players && A?.players){
+    // Identify on_court players and check if they're starters (high USG/minutes)
+    const hOnCourt = (H.players||[]).filter(pl=>pl.on_court).map(pl=>pl.full_name||'?');
+    const aOnCourt = (A.players||[]).filter(pl=>pl.on_court).map(pl=>pl.full_name||'?');
+    if(hOnCourt.length>0||aOnCourt.length>0){
+      t7sig.text = hA+': '+hOnCourt.length+' on court | '+aA+': '+aOnCourt.length+' on court';
+    }
+  }
+  sigs.push(t7sig);
+
+  // T8 — Shot Diet (enhanced with PBP zone data when available)
+  const hFGA=hs.field_goals_att||1, aFGA=as.field_goals_att||1;
+  const h3r=(hs.three_points_att||0)/hFGA*100, a3r=(as.three_points_att||0)/aFGA*100;
+  const pbpD = cardState[game.id]?.pbpAudit;
+  if(h3r>=40){
+    let detail = hA+' 3PA/FGA '+h3r.toFixed(0)+'% — perimeter heavy';
+    if(pbpD){
+      const h3 = pbpD.home.threes;
+      const astPct = h3.made>0 ? (h3.assisted/h3.made*100).toFixed(0) : '0';
+      detail += ' ('+astPct+'% ast, corner:'+h3.corner.att+' above:'+h3.above.att+')';
+    }
+    sigs.push({key:'T8',w:1,team:aA,color:'#ff6b6b',text:detail});
+  } else if(a3r>=40){
+    let detail = aA+' 3PA/FGA '+a3r.toFixed(0)+'% — perimeter heavy';
+    if(pbpD){
+      const a3 = pbpD.away.threes;
+      const astPct = a3.made>0 ? (a3.assisted/a3.made*100).toFixed(0) : '0';
+      detail += ' ('+astPct+'% ast, corner:'+a3.corner.att+' above:'+a3.above.att+')';
+    }
+    sigs.push({key:'T8',w:1,team:hA,color:'#ff6b6b',text:detail});
+  } else {
+    let dietNote = hA+' '+h3r.toFixed(0)+'% / '+aA+' '+a3r.toFixed(0)+'%';
+    if(pbpD) dietNote += ' | rim:'+pbpD.home.shotDiet.rimPct+'%/'+pbpD.away.shotDiet.rimPct+'%';
+    sigs.push({key:'T8',w:0,team:null,color:'#3e3e48',text:'Diet nominal ('+dietNote+')'});
+  }
+
+  const lm={};sigs.forEach(s=>{if(s.team&&s.w>0)lm[s.team]=(lm[s.team]||0)+s.w;});
+  const sorted=Object.entries(lm).sort((a,b)=>b[1]-a[1]),lean=sorted.length>0?sorted[0][0]:'NEUTRAL';
+  const count=sigs.filter(s=>s.team===lean&&s.w>0).length,total=sigs.filter(s=>s.w>0).length;
+  return {signals:sigs, lean, count, total, tooEarly:false};
+}
+
+function getVerdict(s){
+  if(s>=.90) return {label:'DOMINANT',color:'#00ff88',bg:'rgba(0,255,136,.10)',lvl:'entry'};
+  if(s>=.75) return {label:'STRONG',color:'#a8ff78',bg:'rgba(168,255,120,.08)',lvl:'entry'};
+  if(s>=.60) return {label:'EARNED',color:'#ffd166',bg:'rgba(255,209,102,.08)',lvl:'watch'};
+  if(s>=.45) return {label:'NO EDGE',color:'#ff5252',bg:'rgba(255,82,82,.06)',lvl:null};
+  return {label:'WAIT',color:'#555',bg:'rgba(60,60,60,.06)',lvl:null};
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// COMPUTE DISPATCH — routes to SR or BDL compute path
+// ══════════════════════════════════════════════════════════════════════════════
+function computeAny(game){
+  if(game.dataSource==='BDL' && game.bdlData) return computeBDL(game);
+  return compute(game);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// COMPUTE INDICATORS (BDL FORMAT) — Option B: separate path
+// ══════════════════════════════════════════════════════════════════════════════
+function computeBDL(game){
+  const d = game.bdlData;
+  if(!d || getState(game)==='PRE') return null;
+  const hs = d.home, as = d.away;
+  const hA = hs.alias||'HOME', aA = as.alias||'AWAY';
+  const hS = d.homePoints||0, aS = d.awayPoints||0;
+
+  // I1 — Possession & Transition (no chaos layer — forced/unforced TOs unavailable)
+  const hGen = (hs.steals||0)+(hs.offensive_rebounds||0)-(hs.turnovers||0);
+  const aGen = (as.steals||0)+(as.offensive_rebounds||0)-(as.turnovers||0);
+  const hConv = (hs.fast_break_points||0)+(hs.points_off_turnovers||0)+(hs.second_chance_points||0);
+  const aConv = (as.fast_break_points||0)+(as.points_off_turnovers||0)+(as.second_chance_points||0);
+  const i1 = (hGen>aGen?1:hGen<aGen?-1:0)+(hConv>aConv?1:hConv<aConv?-1:0);
+  const I1={score:i1>0?1:i1===0?.5:0, leader:i1>0?hA:i1<0?aA:'EVEN',
+    detail:`${hA} ${hs.steals||0}stl ${hs.offensive_rebounds||0}or ${hs.turnovers||0}to | ${aA} ${as.steals||0}stl ${as.offensive_rebounds||0}or ${as.turnovers||0}to | Conv:${hConv}–${aConv} [no chaos layer]`};
+
+  // I2 — Rim Pressure & Foul (paint + FTA + bonus from BDL — no at-rim splits)
+  const hPaint = hs.points_in_the_paint||0, aPaint = as.points_in_the_paint||0;
+  const hFTA = hs.free_throws_att||0, aFTA = as.free_throws_att||0;
+  const hBlk = hs.blocks||0, aBlk = as.blocks||0;
+  const rimScore = (hPaint+hFTA+hBlk)-(aPaint+aFTA+aBlk);
+  const I2={score:rimScore>8?1:rimScore<-8?0:.5, leader:rimScore>8?hA:rimScore<-8?aA:'EVEN',
+    detail:`Paint:${hPaint}–${aPaint} FTA:${hFTA}–${aFTA} BLK:${hBlk}–${aBlk}${d.homeBonus?' '+hA+'⬤':''}${d.awayBonus?' '+aA+'⬤':''} [no at-rim]`};
+
+  // I3 — Shot Quality & Creation (full-game assist ratio only, no per-quarter trend)
+  const hFGA=hs.field_goals_att||1, aFGA=as.field_goals_att||1;
+  const hEFG=(((hs.field_goals_made||0)+.5*(hs.three_points_made||0))/hFGA);
+  const aEFG=(((as.field_goals_made||0)+.5*(as.three_points_made||0))/aFGA);
+  const hAst=hs.assists||0, aAst=as.assists||0;
+  const hFGM=hs.field_goals_made||1, aFGM=as.field_goals_made||1;
+  const hAR=(hAst/hFGM)*100, aAR=(aAst/aFGM)*100;
+  const i3=(hEFG>aEFG+.02?1:hEFG<aEFG-.02?-1:0)+(hAR>aAR+5?1:hAR<aAR-5?-1:0);
+  const I3={score:i3>0?1:i3===0?.5:0, leader:i3>0?hA:i3<0?aA:'EVEN',
+    detail:`eFG%:${(hEFG*100).toFixed(1)}–${(aEFG*100).toFixed(1)} AR:${hAR.toFixed(0)}–${aAR.toFixed(0)} AST:${hAst}–${aAst}`};
+
+  // I4 — Lineup Integrity (score delta + quarters — no on_court, no per-Q plus/minus)
+  const qDs = (d.quarters||[]).map(q=>(q.home_points||0)-(q.away_points||0));
+  const trend = qDs.length>=2 ? qDs[qDs.length-1]-qDs[0] : 0;
+  // No biggest_lead from BDL — use score differential as proxy
+  const scoreDiff = Math.abs(hS-aS);
+  const i4 = (scoreDiff>8&&hS>aS?1:scoreDiff>8&&aS>hS?-1:0)+(trend>2?1:trend<-2?-1:0);
+  const I4={score:i4>0?1:i4===0?.5:0, leader:i4>0?hA:i4<0?aA:'EVEN',
+    detail:`Δ:${hS>aS?'+':''}${hS-aS} trend:${trend>0?'+':''}${trend} ${qDs.map((dd,i)=>'Q'+(i+1)+':'+(dd>0?'+':'')+dd).join(' ')} [no lineup/bench split]`};
+
+  // I5 — Tempo & Efficiency (derived from BDL offensive/defensive rating)
+  const hOPPP = (hs.offensive_rating||0)/100, aOPPP = (as.offensive_rating||0)/100;
+  const hDPPP = (hs.defensive_rating||0)/100, aDPPP = (as.defensive_rating||0)/100;
+  const effD = (hOPPP-aDPPP)-(aOPPP-hDPPP);
+  const hPoss = hs.possessions||0, aPoss = as.possessions||0;
+  const I5={score:effD>0.08?1:effD<-0.08?0:.5, leader:effD>0.08?hA:effD<-0.08?aA:'EVEN',
+    detail:`ORtg:${(hs.offensive_rating||0).toFixed(1)}–${(as.offensive_rating||0).toFixed(1)} DRtg:${(hs.defensive_rating||0).toFixed(1)}–${(as.defensive_rating||0).toFixed(1)} Poss:${hPoss}–${aPoss}`};
+
+  const raw = I1.score*W.I1 + I2.score*W.I2 + I3.score*W.I3 + I4.score*W.I4 + I5.score*W.I5;
+  const controlHome = raw>=.5, cTeam = controlHome?hA:aA, score = controlHome?raw:1-raw;
+
+  // Trajectory — BDL partial (T4 and T7 unavailable)
+  const traj = buildTrajectoryBDL(game, hA, aA, hs, as, hS, aS, qDs, d);
+
+  return {I1,I2,I3,I4,I5, score, controlTeam:cTeam, dataQuality:'PARTIAL', traj};
+}
+
+function buildTrajectoryBDL(game, hA, aA, hs, as, hS, aS, qDs, d){
+  const p = game.period||0;
+  if(p<2) return {signals:[], lean:'NEUTRAL', count:0, total:0, tooEarly:true};
+  const sigs = [], overall=hS-aS, currQ=qDs.length>0?qDs[qDs.length-1]:null;
+
+  // T1 — Conversion (available via BDL advanced)
+  const hC=(hs.fast_break_points||0)+(hs.points_off_turnovers||0), aC=(as.fast_break_points||0)+(as.points_off_turnovers||0);
+  if(Math.abs(hC-aC)>=10){const w=hC>aC?hA:aA;sigs.push({key:'T1',w:1,team:w,color:'#ffd166',text:w+' conversion +'+(Math.abs(hC-aC))+' (FBP+POT)'});}
+  else sigs.push({key:'T1',w:0,team:null,color:'#3e3e48',text:'Conversion flat ('+hC+'–'+aC+')'});
+
+  // T3 — Quarter Delta (available from BDL quarter scores)
+  if(currQ!=null&&Math.abs(currQ)>=6){const w=currQ>0?hA:aA,tr=(currQ>0&&overall<0)||(currQ<0&&overall>0);sigs.push({key:'T3',w:2,team:w,color:'#00ff88',text:w+' winning Q'+p+' by '+Math.abs(currQ)+(tr?' (trailing—comeback)':'')});}
+  else sigs.push({key:'T3',w:0,team:null,color:'#3e3e48',text:'Q delta <6 — neutral'});
+
+  // T4 — UNAVAILABLE in BDL (no per-player per-quarter fouls)
+  sigs.push({key:'T4',w:0,team:null,color:'#555',text:'⊘ Unavailable (BDL — no per-player fouls)'});
+
+  // T5 — Interior Trend (paint points available)
+  const hPaint=hs.points_in_the_paint||0, aPaint=as.points_in_the_paint||0;
+  if(Math.abs(hPaint-aPaint)>=8){const w=hPaint>aPaint?hA:aA;sigs.push({key:'T5',w:1,team:w,color:'#a8ff78',text:w+' paint +'+(Math.abs(hPaint-aPaint))+' ('+hPaint+'–'+aPaint+')'});}
+  else sigs.push({key:'T5',w:0,team:null,color:'#3e3e48',text:'Paint even ('+hPaint+'–'+aPaint+')'});
+
+  // T6 — Assist Ratio (full-game only, no per-quarter)
+  const hFGM=hs.field_goals_made||1,aFGM=as.field_goals_made||1;
+  const hAR=(hs.assists||0)/hFGM*100, aAR=(as.assists||0)/aFGM*100;
+  if(Math.abs(hAR-aAR)>=15){const w=hAR>aAR?hA:aA;sigs.push({key:'T6',w:1,team:w,color:'#a8ff78',text:w+' AR '+Math.max(hAR,aAR).toFixed(0)+'% vs '+Math.min(hAR,aAR).toFixed(0)+'%'});}
+  else sigs.push({key:'T6',w:0,team:null,color:'#3e3e48',text:'AR even ('+hAR.toFixed(0)+'% vs '+aAR.toFixed(0)+'%)'});
+
+  // T7 — UNAVAILABLE in BDL (no on_court flags)
+  sigs.push({key:'T7',w:0,team:null,color:'#555',text:'⊘ Unavailable (BDL — no lineup data)'});
+
+  // T8 — Shot Diet (3PA/FGA available from BDL basic stats)
+  const hFGA=hs.field_goals_att||1, aFGA=as.field_goals_att||1;
+  const h3r=(hs.three_points_att||0)/hFGA*100, a3r=(as.three_points_att||0)/aFGA*100;
+  if(h3r>=40)sigs.push({key:'T8',w:1,team:aA,color:'#ff6b6b',text:hA+' 3PA/FGA '+h3r.toFixed(0)+'% — perimeter heavy'});
+  else if(a3r>=40)sigs.push({key:'T8',w:1,team:hA,color:'#ff6b6b',text:aA+' 3PA/FGA '+a3r.toFixed(0)+'% — perimeter heavy'});
+  else sigs.push({key:'T8',w:0,team:null,color:'#3e3e48',text:'Diet nominal ('+hA+' '+h3r.toFixed(0)+'% / '+aA+' '+a3r.toFixed(0)+'%)'});
+
+  const lm={};sigs.forEach(s=>{if(s.team&&s.w>0)lm[s.team]=(lm[s.team]||0)+s.w;});
+  const sorted=Object.entries(lm).sort((a,b)=>b[1]-a[1]),lean=sorted.length>0?sorted[0][0]:'NEUTRAL';
+  const count=sigs.filter(s=>s.team===lean&&s.w>0).length,total=sigs.filter(s=>s.w>0).length;
+  return {signals:sigs, lean, count, total, tooEarly:false};
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// UI HELPERS
+// ══════════════════════════════════════════════════════════════════════════════
+function showLoading(v){document.getElementById('loading').style.display=v?'flex':'none';}
+function showErr(msg){const el=document.getElementById('err');el.style.display=msg?'block':'none';if(msg)el.textContent='⚠ '+msg;}
+function getState(g){const s=(g.status||'').toLowerCase();if(s==='closed'||s==='complete')return'FINAL';if(s==='inprogress'||s==='halftime')return'LIVE';return'PRE';}
+function updateCounts(){
+  const lc=games.filter(g=>getState(g)==='LIVE').length;
+  document.getElementById('live-count').textContent=lc;
+  document.getElementById('sel-count').textContent=selIds.length;
+  document.getElementById('game-count').textContent=games.length;
+}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/\x60/g,'&#96;').replace(/\$\{/g,'&#36;{');}
+
+function setPaused(v){
+  paused=v;
+  document.getElementById('btn-live').classList.toggle('on',!v);
+  document.getElementById('btn-pause').classList.toggle('on',v);
+  document.getElementById('pulse').classList.toggle('off',v);
+  document.getElementById('hdr-sub').textContent=(v?'PAUSED':'LIVE')+' · SR via Netlify · v5.1 · FULL';
 }
 
 function setFreq(sec){
