@@ -2239,6 +2239,7 @@ function buildTrajectory(game, hA, aA, hs, as, H, A, hS, aS, qDs, periods){
   const sigs = [], overall=hS-aS, currQ=qDs.length>0?qDs[qDs.length-1]:null;
 
   // T1 — Conversion (enhanced with PBP run context)
+  const pbpD = cardState[game.id]?.pbpAudit;
   const hC=(hs.fast_break_points||0)+(hs.points_off_turnovers||0), aC=(as.fast_break_points||0)+(as.points_off_turnovers||0);
   if(Math.abs(hC-aC)>=10){
     const w=hC>aC?hA:aA;
@@ -2313,7 +2314,6 @@ function buildTrajectory(game, hA, aA, hs, as, H, A, hS, aS, qDs, periods){
   // T8 — Shot Diet (enhanced with PBP zone data when available)
   const hFGA=hs.field_goals_att||1, aFGA=as.field_goals_att||1;
   const h3r=(hs.three_points_att||0)/hFGA*100, a3r=(as.three_points_att||0)/aFGA*100;
-  const pbpD = cardState[game.id]?.pbpAudit;
   if(h3r>=40){
     let detail = hA+' 3PA/FGA '+h3r.toFixed(0)+'% — perimeter heavy';
     if(pbpD){
