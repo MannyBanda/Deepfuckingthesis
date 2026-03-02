@@ -895,8 +895,7 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
     // Parse decision/predictive layer
     const decision = parseSonnetDecision(data.analysis);
     if(decision){
-      // ── CLIENT-SIDE EDGE OVERRIDE ──
-      // Sonnet consistently uses the wrong team's MIP. Compute edge here using cached odds.
+      // ── CLIENT-SIDE EDGE OVERRIDE — COMPUTE BOTH TEAMS ──
       const od = cs.oddsData;
       if(od && decision.fwp && (od.homeML || od.awayML)){
         const fwpNum = parseFloat((decision.fwp||'').replace(/[%\s]/g,''));
@@ -906,20 +905,27 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
           if(rawH!==null && rawA!==null){
             const vigSum = rawH + rawA;
             const homeMIP = rawH/vigSum*100, awayMIP = rawA/vigSum*100;
-            // Determine which team Sonnet predicts to win
+            // Determine which team Sonnet predicts to win (higher FWP team)
             const predText = (decision.prediction||'').toUpperCase();
             const controlTeam = (parsed?.controlTeam||'').toUpperCase();
             const isHomePred = predText.includes(hAlias.toUpperCase()) || controlTeam===hAlias.toUpperCase();
             const isAwayPred = predText.includes(aAlias.toUpperCase()) || controlTeam===aAlias.toUpperCase();
-            let winnerMIP = null;
-            if(isHomePred && !isAwayPred) winnerMIP = homeMIP;
-            else if(isAwayPred && !isHomePred) winnerMIP = awayMIP;
-            else winnerMIP = fwpNum >= 50 ? homeMIP : awayMIP; // fallback
-            const edge = fwpNum - winnerMIP;
+            let homeFWP, awayFWP;
+            if(isHomePred && !isAwayPred){ homeFWP=fwpNum; awayFWP=100-fwpNum; }
+            else if(isAwayPred && !isHomePred){ awayFWP=fwpNum; homeFWP=100-fwpNum; }
+            else { homeFWP=fwpNum>=50?fwpNum:100-fwpNum; awayFWP=100-homeFWP; }
+            // Two-sided value
+            decision.homeValue = {team:hAlias, fwp:homeFWP, mip:homeMIP, edge:parseFloat((homeFWP-homeMIP).toFixed(1)), ml:od.homeML||'—', spread:od.homeSpread||'—'};
+            var _aSprd = od.homeSpread ? parseFloat(od.homeSpread)*-1 : null;
+            var _aSprdStr = _aSprd!==null&&!isNaN(_aSprd) ? (_aSprd>0?'+':'')+_aSprd : '—';
+            decision.awayValue = {team:aAlias, fwp:awayFWP, mip:awayMIP, edge:parseFloat((awayFWP-awayMIP).toFixed(1)), ml:od.awayML||'—', spread:_aSprdStr};
+            // Legacy fields for backward compat
+            const winnerMIP = homeFWP>=awayFWP ? homeMIP : awayMIP;
+            const edge = Math.max(homeFWP,awayFWP) - winnerMIP;
             decision.edge = (edge>=0?'+':'')+edge.toFixed(1)+'%';
             decision.edgeNum = parseFloat(edge.toFixed(1));
             decision.mip = winnerMIP.toFixed(1)+'%';
-            console.log('Edge override: FWP',fwpNum,'MIP',winnerMIP.toFixed(1),'Edge',edge.toFixed(1),'Winner:',isHomePred?hAlias:aAlias);
+            console.log('Two-sided:', hAlias, homeFWP.toFixed(1)+'%/'+homeMIP.toFixed(1)+'%', aAlias, awayFWP.toFixed(1)+'%/'+awayMIP.toFixed(1)+'%');
           }
         }
       }
@@ -1743,6 +1749,17 @@ function parseSonnetDecision(text){
     // Parse Thesis Status line
     const tsMatch = text.match(/THESIS\s*STATUS:\s*(CONFIRMED|DEVELOPING|CONTESTED|DENIED)/i);
     d.thesisStatus = tsMatch ? tsMatch[1].toUpperCase() : null;
+    // Parse Spread Analysis line
+    const spreadMatch = text.match(/SPREAD\s*ANALYSIS:\s*(.+)/i);
+    d.spreadAnalysis = spreadMatch ? spreadMatch[1].trim() : null;
+    // Parse SIGNAL line: "SIGNAL: BUY DET — trailing on ORL variance"
+    const sigMatch = text.match(/SIGNAL:\s*(BUY\s+\w+|NO VALUE|PASS)\s*(?:[—–-]\s*(.+))?/i);
+    if(sigMatch){
+      d.signalType = sigMatch[1].trim().toUpperCase();
+      d.signalNote = sigMatch[2] ? sigMatch[2].trim() : '';
+      const buyMatch = d.signalType.match(/BUY\s+(\w+)/i);
+      d.buyTeam = buyMatch ? buyMatch[1].toUpperCase() : null;
+    }
     // Need at least prediction or conviction to be valid
     if(!d.prediction && !d.conviction) return null;
     return d;
@@ -2621,10 +2638,19 @@ function renderConfidenceTable(){
     const homeScore = g.homePoints, awayScore = g.awayPoints;
     const period = g.period||0, clock = g.clock||'';
     if(!team && !score) continue;
-    const row = {matchup, team, score, verdict, gameId:g.id, state, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, hA, aA, entryIf:p.entry||null, passIf:p.pass||null};
+    // Best edge from two-sided value
+    let bestEdgeTeam = null, bestEdgeVal = null, bestEdgeSpread = null;
+    const csPred = cs?.prediction;
+    if(csPred?.homeValue && csPred?.awayValue){
+      const hv = csPred.homeValue, av = csPred.awayValue;
+      if(hv.edge > av.edge && hv.edge >= 5){ bestEdgeTeam = hv.team; bestEdgeVal = hv.edge; bestEdgeSpread = hv.spread; }
+      else if(av.edge > hv.edge && av.edge >= 5){ bestEdgeTeam = av.team; bestEdgeVal = av.edge; bestEdgeSpread = av.spread; }
+    }
+    const signal = csPred?.signalType || null;
+    const row = {matchup, team, score, verdict, gameId:g.id, state, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, hA, aA, entryIf:p.entry||null, passIf:p.pass||null, bestEdgeTeam, bestEdgeVal, bestEdgeSpread, signal};
     // Persist live data to cache whenever we have analysis results
     if(pred || si){
-      persistConfRow(g.id, {team, score, verdict, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, state, ts:Date.now()});
+      persistConfRow(g.id, {team, score, verdict, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, state, bestEdgeTeam, bestEdgeVal, signal:csPred?.signalType||null, ts:Date.now()});
     } else {
       // Fall back to cached data if no live cardState (e.g. page refresh, card not mounted)
       const cached = confCache[g.id];
@@ -2636,6 +2662,8 @@ function renderConfidenceTable(){
         if(row.edge===null && cached.edge!==null) row.edge = cached.edge;
         if(!row.sustHome && cached.sustHome) row.sustHome = cached.sustHome;
         if(!row.sustAway && cached.sustAway) row.sustAway = cached.sustAway;
+        if(!row.bestEdgeTeam && cached.bestEdgeTeam){ row.bestEdgeTeam=cached.bestEdgeTeam; row.bestEdgeVal=cached.bestEdgeVal; }
+        if(!row.signal && cached.signal) row.signal = cached.signal;
         if(row.homeScore===null && cached.homeScore!==null){ row.homeScore=cached.homeScore; row.awayScore=cached.awayScore; row.period=cached.period; row.clock=cached.clock; }
         if(cached.state==='FINAL' && row.state==='PRE') row.state = cached.state;
         if(cached.team && !si) { row.team=cached.team; row.score=cached.score; row.verdict=cached.verdict; }
@@ -2670,7 +2698,7 @@ function renderConfidenceTable(){
   const statsSummary = [liveCount?liveCount+' live':'', preCount?preCount+' pre':'', finalCount?finalCount+' final':''].filter(Boolean).join(' / ');
   let html = '<div class="ct-hdr" onclick="confCollapsed=!confCollapsed;renderConfidenceTable()" style="cursor:pointer">CONFIDENCE TABLE <span class="arr" style="display:inline-block;transition:transform .2s;transform:rotate('+(confCollapsed?'0':'90')+'deg);margin-left:2px">&#9656;</span><span style="font-size:5px;color:var(--t3);margin-left:auto">'+rows.length+' '+(rows.length===1?'game':'games')+' &#183; '+statsSummary+'</span></div>';
   if(!confCollapsed){
-  html += '<table><tr><th></th><th>MATCHUP</th><th style="text-align:center">SCORE</th><th>CTRL</th><th style="text-align:center">CTRL</th><th>FWP</th><th>EDGE</th><th>ENTRY</th><th>CONV</th><th>SUST</th><th>THESIS</th></tr>';
+  html += '<table><tr><th></th><th>MATCHUP</th><th style="text-align:center">SCORE</th><th>CTRL</th><th style="text-align:center">CTRL</th><th>BEST EDGE</th><th>FWP</th><th>SIGNAL</th><th>SUST</th><th>THESIS</th></tr>';
   for(const r of rows){
     const isFinal = r.state==='FINAL';
     const rowClass = 'ct-row'+(isFinal?' ct-final':' '+entryClass(r.entry));
@@ -2718,10 +2746,29 @@ function renderConfidenceTable(){
         sustStr = '<span style="color:'+sustColor(r.sustHome)+'">'+esc(r.sustHome||'')+'</span>';
       }
     } else { sustStr = '<span style="color:var(--t3)">&#8212;</span>'; }
-    // Entry signal
-    const entryStr = r.entry ? '<span style="color:'+entryColor(r.entry)+'">'+esc(r.entry)+'</span>' : '<span style="color:var(--t3)">&#8212;</span>';
-    // Conviction
-    const convStr = r.conviction ? '<span style="color:'+convColor(r.conviction)+'">'+esc(r.conviction)+'</span>' : '<span style="color:var(--t3)">&#8212;</span>';
+    // Best edge display
+    let bestEdgeStr = '<span style="color:var(--t3)">&#8212;</span>';
+    if(r.bestEdgeTeam && r.bestEdgeVal !== null){
+      bestEdgeStr = '<span style="color:var(--green);font-weight:700">'+esc(r.bestEdgeTeam)+' +'+r.bestEdgeVal.toFixed(1)+'%</span>';
+    } else if(r.edge !== null && r.edge >= 5){
+      bestEdgeStr = edgeStr(r.edge);
+    }
+    // FWP labeled with team
+    let fwpStr = '<span style="color:var(--t3)">&#8212;</span>';
+    if(r.fwp){
+      // Extract team from FWP direction
+      const fwpTeam = r.bestEdgeTeam || r.team || '';
+      fwpStr = '<span style="color:var(--t1);font-weight:600">'+esc(fwpTeam)+' '+esc(r.fwp)+'</span>';
+    }
+    // Signal display (entry type + conviction combined)
+    let sigStr = '<span style="color:var(--t3)">&#8212;</span>';
+    if(r.signal){
+      const sigCol = r.signal.startsWith('BUY')?'var(--green)':r.signal==='COUNTER'||r.signal==='COUNTER-SIGNAL'?'var(--red)':'var(--t3)';
+      sigStr = '<span style="color:'+sigCol+'">'+esc(r.signal)+'</span>';
+    } else if(r.entry){
+      sigStr = '<span style="color:'+entryColor(r.entry)+'">'+esc(r.entry)+'</span>';
+      if(r.conviction) sigStr += ' <span style="color:'+convColor(r.conviction)+';font-size:5px">'+esc(r.conviction)+'</span>';
+    }
     // Thesis status
     const tsStr = r.thesisStatus ? '<span style="color:'+tsColor(r.thesisStatus)+'">'+esc(r.thesisStatus)+'</span>' : '<span style="color:var(--t3)">&#8212;</span>';
     html += '<tr class="'+rowClass+'" style="cursor:pointer" onclick="document.getElementById(\'card-'+r.gameId+'\')?.scrollIntoView({behavior:\'smooth\',block:\'start\'})">'
@@ -2730,10 +2777,9 @@ function renderConfidenceTable(){
       + '<td style="text-align:center;white-space:nowrap;font-size:7px">'+scoreStr+'</td>'
       + '<td style="color:'+vColor(r.verdict)+'">'+esc(r.team)+'</td>'
       + '<td class="ct-score" style="color:'+vColor(r.verdict)+'">'+r.score.toFixed(2)+'<div class="ct-verdict" style="color:'+vColor(r.verdict)+'">'+esc(r.verdict)+'</div></td>'
-      + '<td style="color:var(--t1);font-size:8px;text-align:center;font-weight:600">'+(r.fwp||'&#8212;')+'</td>'
-      + '<td style="font-size:7px;text-align:center">'+edgeStr(r.edge)+'</td>'
-      + '<td style="font-size:6px;text-align:center;white-space:nowrap">'+entryStr+'</td>'
-      + '<td style="font-size:6px;text-align:center">'+convStr+'</td>'
+      + '<td style="font-size:7px;text-align:center;white-space:nowrap">'+bestEdgeStr+'</td>'
+      + '<td style="font-size:7px;text-align:center;white-space:nowrap">'+fwpStr+'</td>'
+      + '<td style="font-size:6px;text-align:center;white-space:nowrap">'+sigStr+'</td>'
       + '<td style="font-size:5.5px;text-align:center;white-space:nowrap">'+sustStr+'</td>'
       + '<td style="font-size:6px;text-align:center">'+tsStr+'</td>'
       + '</tr>';
@@ -2868,8 +2914,16 @@ function renderCard(game){
             const pTxt=(pred.prediction||'').toUpperCase(), cTeam=(ind.controlTeam||'').toUpperCase();
             const isH=pTxt.includes(hA.toUpperCase())||cTeam===hA.toUpperCase();
             const isA=pTxt.includes(aA.toUpperCase())||cTeam===aA.toUpperCase();
-            const wMIP = (isA&&!isH)?aMIP:(isH&&!isA)?hMIP:(fwpVal>=50?hMIP:aMIP);
-            const edge=fwpVal-wMIP;
+            let hFWP,aFWP;
+            if(isH&&!isA){hFWP=fwpVal;aFWP=100-fwpVal;}
+            else if(isA&&!isH){aFWP=fwpVal;hFWP=100-fwpVal;}
+            else{hFWP=fwpVal>=50?fwpVal:100-fwpVal;aFWP=100-hFWP;}
+            pred.homeValue={team:hA,fwp:hFWP,mip:hMIP,edge:parseFloat((hFWP-hMIP).toFixed(1)),ml:od.homeML||'—',spread:od.homeSpread||'—'};
+            var awaySpr = od.homeSpread ? parseFloat(od.homeSpread)*-1 : null;
+            var awaySprStr = awaySpr!==null&&!isNaN(awaySpr) ? (awaySpr>0?'+':'')+awaySpr : '—';
+            pred.awayValue={team:aA,fwp:aFWP,mip:aMIP,edge:parseFloat((aFWP-aMIP).toFixed(1)),ml:od.awayML||'—',spread:awaySprStr};
+            const wMIP=Math.max(hFWP,aFWP)===hFWP?hMIP:aMIP;
+            const edge=Math.max(hFWP,aFWP)-wMIP;
             pred.edge=(edge>=0?'+':'')+edge.toFixed(1)+'%';
             pred.edgeNum=parseFloat(edge.toFixed(1));
             pred.mip=wMIP.toFixed(1)+'%';
@@ -2878,10 +2932,7 @@ function renderCard(game){
       }
     }
 
-    // ─── CONTROL BAR (compact) ───
-    const fwpDisplay = pred?.fwp ? pred.fwp.replace('%','') : null;
-    const fwpNum = fwpDisplay ? parseFloat(fwpDisplay) : null;
-    const fwpColor = fwpNum===null?v.color:fwpNum>=70?'var(--green)':fwpNum>=58?'var(--g2)':fwpNum>=50?'var(--yellow)':fwpNum>=42?'var(--amber)':'var(--red)';
+    // ─── CONTROL BAR (compact — pure mechanical, no FWP) ───
     const trajTeam = ind.traj&&!ind.traj.tooEarly&&ind.traj.lean!=='NEUTRAL' ? ind.traj.lean : null;
     const trajBadgeColor = trajTeam ? 'var(--amber)' : 'var(--t3)';
     const trajBadgeText = ind.traj&&!ind.traj.tooEarly ? (trajTeam||'EVEN')+' '+ind.traj.count+'/'+ind.traj.total : '';
@@ -2890,70 +2941,128 @@ function renderCard(game){
       <div class="vrd" style="color:${v.color};border-color:${v.color};background:${v.bg}">${v.label} (${ind.score.toFixed(2)})</div>
       <div><div class="cl">CONTROL</div><div class="ct">${esc(ind.controlTeam)}</div></div>
       <div class="bw"><div class="bt2"><div class="bf" style="width:${ind.score*100}%;background:${v.color}"></div></div></div>
-      <div class="cn" style="color:${fwpNum!==null?fwpColor:v.color}">${fwpNum!==null?fwpNum.toFixed(0)+'<span style="font-size:8px">%</span>':ind.score.toFixed(2)}</div>
-      ${fwpNum!==null?`<span style="font-size:5px;color:var(--t3);margin-left:-2px;letter-spacing:.3px">FWP</span>`:`<span style="font-size:5px;color:var(--t3);margin-left:-2px;letter-spacing:.3px">CTL</span>`}
+      <div class="cn" style="color:${v.color}">${ind.score.toFixed(2)}</div>
+      <span style="font-size:5px;color:var(--t3);margin-left:-2px;letter-spacing:.3px">CTL</span>
       ${trajBadgeText?`<span class="dq" style="color:${trajBadgeColor};border-color:${trajBadgeColor}">${trajBadgeText}</span>`:''}
     </div>`;
 
-    // ─── DECISION VIEW (primary — always visible) ───
-    if(pred){
-      const edgeNum = pred.edgeNum;
-      const edgeColor = edgeNum===null?'var(--t3)':edgeNum>=10?'var(--green)':edgeNum>=5?'var(--g2)':edgeNum>=1?'var(--yellow)':edgeNum>=0?'var(--t3)':'var(--red)';
-      const convColor = ({DOMINANT:'var(--green)',STRONG:'var(--g2)',EARNED:'var(--yellow)',CONDITIONAL:'var(--amber)'})[pred.conviction]||'var(--t3)';
-      const entryColor = pred.entry==='OPTIMAL WINDOW'?'var(--green)':pred.entry==='WINDOW OPEN'?'var(--g2)':pred.entry==='WINDOW CLOSING'?'var(--yellow)':pred.entry==='COUNTER-SIGNAL'?'var(--red)':'var(--t3)';
+    // ─── SUSTAINABILITY BRIDGE ───
+    var sa = cs.sustainabilityAudit;
+    var leadTeam = (game.homePoints||0)>=(game.awayPoints||0) ? hA : aA;
+    var trailTeam = leadTeam===hA ? aA : hA;
+    var leadSA = sa ? (leadTeam===hA ? sa.home : sa.away) : null;
+    var trailSA = sa ? (trailTeam===hA ? sa.home : sa.away) : null;
+    function sustColor(tier){ if(!tier) return 'var(--t3)'; var t=(tier||'').toUpperCase(); return t.includes('LOCKED')?'var(--green)':t.includes('DURABLE')?'var(--g2)':t.includes('MIXED')?'var(--yellow)':t.includes('FRAGILE')?'var(--amber)':t.includes('UNSUST')?'var(--red)':'var(--t3)'; }
+    function sustDetail(t){ if(!t||!t.personnelGrade) return ''; return 'P:'+t.personnelGrade.substring(0,3)+' R:'+t.regressionGrade.substring(0,3)+' S:'+t.shotTypeGrade.substring(0,3); }
+    if(sa || (pred && pred.sustainability)){
+      html+='<div style="padding:6px 10px;border-top:1px solid var(--b1)">';
+      html+='<div style="font-size:6px;color:#a78bfa;letter-spacing:1.5px;margin-bottom:4px;font-family:inherit">SUSTAINABILITY &#8212; IS THE LEAD STRUCTURAL?</div>';
+      if(leadSA){
+        html+='<div style="display:flex;align-items:center;gap:4px;margin-bottom:2px"><span style="font-size:7px;color:var(--t3);width:48px">LEADING</span><span class="dv-tag" style="color:'+sustColor(leadSA.tier)+';border-color:'+sustColor(leadSA.tier)+';font-size:6px;padding:0 4px">'+esc(leadSA.teamAlias||leadTeam)+' '+(leadSA.tier||'?')+'</span><span style="font-size:5.5px;color:var(--t3)">('+sustDetail(leadSA)+')</span></div>';
+        if(leadSA.shotTypeNote) html+='<div style="font-size:6px;color:var(--t2);margin-left:52px;margin-bottom:3px">'+esc(leadSA.shotTypeNote)+'</div>';
+        html+='<div style="display:flex;align-items:center;gap:4px"><span style="font-size:7px;color:var(--t3);width:48px">TRAILING</span><span class="dv-tag" style="color:'+sustColor(trailSA.tier)+';border-color:'+sustColor(trailSA.tier)+';font-size:6px;padding:0 4px">'+esc(trailSA.teamAlias||trailTeam)+' '+(trailSA.tier||'?')+'</span><span style="font-size:5.5px;color:var(--t3)">('+sustDetail(trailSA)+')</span></div>';
+        if(trailSA.shotTypeNote) html+='<div style="font-size:6px;color:var(--t2);margin-left:52px">'+esc(trailSA.shotTypeNote)+'</div>';
+      } else if(pred && pred.sustainability){
+        html+='<div style="font-size:6px;color:var(--t2)">'+esc(pred.sustainability)+'</div>';
+      }
+      html+='</div>';
+    }
 
-      // Edge history analysis
-      const eh = cs.edgeHistory.filter(e=>e.edgeNum!==null&&e.edgeNum!==undefined);
-      let peakEdge = null, edgeTrend = '';
+    // ─── VALUE READ (two-sided — primary decision interface) ───
+    if(pred){
+      var hv = pred.homeValue, av = pred.awayValue;
+      var hasValues = hv && av;
+      // Determine best edge team
+      var bestTeam = null, bestEdge = null;
+      if(hasValues){
+        if(hv.edge > av.edge && hv.edge >= 5){ bestTeam = hA; bestEdge = hv; }
+        else if(av.edge > hv.edge && av.edge >= 5){ bestTeam = aA; bestEdge = av; }
+      }
+      var entryColor = pred.entry==='OPTIMAL WINDOW'?'var(--green)':pred.entry==='WINDOW OPEN'?'var(--g2)':pred.entry==='WINDOW CLOSING'?'var(--yellow)':pred.entry==='COUNTER-SIGNAL'?'var(--red)':'var(--t3)';
+      var convColor = ({DOMINANT:'var(--green)',STRONG:'var(--g2)',EARNED:'var(--yellow)',CONDITIONAL:'var(--amber)'})[pred.conviction]||'var(--t3)';
+      // Edge history
+      var eh = cs.edgeHistory.filter(function(e){return e.edgeNum!==null&&e.edgeNum!==undefined;});
+      var peakEdge = null, edgeTrend = '';
       if(eh.length >= 2){
-        peakEdge = eh.reduce((max,e)=>e.edgeNum>max.edgeNum?e:max, eh[0]);
-        const recent = eh.slice(-2);
-        const diff = recent[1].edgeNum - recent[0].edgeNum;
-        edgeTrend = diff > 1.5 ? '▲' : diff < -1.5 ? '▼' : '─';
+        peakEdge = eh.reduce(function(max,e){return e.edgeNum>max.edgeNum?e:max;}, eh[0]);
+        var recent = eh.slice(-2);
+        var diff = recent[1].edgeNum - recent[0].edgeNum;
+        edgeTrend = diff > 1.5 ? '&#9650;' : diff < -1.5 ? '&#9660;' : '&#9472;';
+      }
+      // Thesis status
+      var tsCol = pred.thesisStatus==='CONFIRMED'?'var(--green)':pred.thesisStatus==='DEVELOPING'?'var(--g2)':pred.thesisStatus==='CONTESTED'?'var(--amber)':pred.thesisStatus==='DENIED'?'var(--red)':'var(--t3)';
+      // Parse thesis team from thesis text
+      var thesisTeamMatch = (theses[id]||'').match(/CONTROL\s+SCORE:\s*(\w+)/i);
+      var thesisTeam = thesisTeamMatch ? thesisTeamMatch[1] : '';
+
+      html+='<div class="dv" style="'+(bestTeam?'border-left:2px solid var(--green);background:rgba(0,200,83,.02)':'')+'">';
+      // Header
+      html+='<div class="dv-hdr">VALUE READ<span style="display:flex;align-items:center;gap:6px;margin-left:auto">';
+      if(thesisTeam && pred.thesisStatus) html+='<span style="font-size:5.5px;color:var(--t3);letter-spacing:.3px">THESIS '+esc(thesisTeam)+': <span style="color:'+tsCol+'">'+esc(pred.thesisStatus)+'</span></span>';
+      html+=analyzeBtn+'<span class="analysis-cost">'+(cs.analysisTime?cs.analysisTime.toLocaleTimeString():'')+'</span></span></div>';
+
+      if(hasValues){
+        // Table header
+        html+='<div style="display:grid;grid-template-columns:42px 1fr 1fr 1fr 52px 52px;gap:2px;padding:0 2px;margin-bottom:2px">';
+        var hdrs = ['','FWP','MIP','EDGE','ML','SPREAD'];
+        for(var hi=0;hi<hdrs.length;hi++) html+='<span style="font-size:5px;color:var(--t3);letter-spacing:.5px;text-align:'+(hi?'center':'left')+'">'+hdrs[hi]+'</span>';
+        html+='</div>';
+        // Rows
+        var rows = [av, hv];
+        for(var ri=0;ri<rows.length;ri++){
+          var rv = rows[ri];
+          var isBest = bestTeam && rv.team===bestTeam;
+          var isHigherFwp = rv.fwp >= 50;
+          var tColor = isHigherFwp ? 'var(--t1)' : 'var(--t3)';
+          var eColor = isHigherFwp ? (rv.edge>=10?'var(--green)':rv.edge>=5?'var(--g2)':rv.edge>=1?'var(--yellow)':rv.edge>=0?'var(--t3)':'var(--red)') : 'var(--t3)';
+          html+='<div style="display:grid;grid-template-columns:42px 1fr 1fr 1fr 52px 52px;gap:2px;padding:3px 2px;border-radius:3px;margin-bottom:1px;'+(isBest?'background:rgba(0,200,83,.08);border-left:2px solid var(--green)':'border-left:2px solid transparent')+'">';
+          html+='<span style="font-size:9px;font-weight:700;color:'+(isHigherFwp?'var(--t1)':'var(--t3)')+'">'+esc(rv.team)+'</span>';
+          html+='<span style="font-size:10px;font-weight:600;color:'+tColor+';text-align:center">'+rv.fwp.toFixed(0)+'%</span>';
+          html+='<span style="font-size:10px;color:'+(isHigherFwp?'var(--t2)':'var(--t3)')+';text-align:center">'+rv.mip.toFixed(1)+'%</span>';
+          html+='<span style="font-size:10px;font-weight:700;color:'+eColor+';text-align:center">'+(rv.edge>=0?'+':'')+rv.edge.toFixed(1)+'%</span>';
+          html+='<span style="font-size:9px;color:'+(isHigherFwp?'var(--t2)':'var(--t3)')+';text-align:center">'+esc(String(rv.ml))+'</span>';
+          html+='<span style="font-size:9px;color:'+(isHigherFwp?'var(--t2)':'var(--t3)')+';text-align:center">'+esc(String(rv.spread))+'</span>';
+          html+='</div>';
+        }
+      } else {
+        // Fallback: single-line legacy edge display
+        var legEdgeNum = pred.edgeNum;
+        var legEdgeColor = legEdgeNum===null?'var(--t3)':legEdgeNum>=10?'var(--green)':legEdgeNum>=5?'var(--g2)':legEdgeNum>=1?'var(--yellow)':legEdgeNum>=0?'var(--t3)':'var(--red)';
+        html+='<div class="dv-row"><span class="dv-label">EDGE</span><span class="dv-val" style="color:'+legEdgeColor+'">'+esc(pred.edge||'&#8212;')+'</span><span class="dv-sub">FWP '+esc(pred.fwp||'&#8212;')+'</span><span class="dv-sub">MIP '+esc(pred.mip||'N/A')+'</span></div>';
       }
 
-      html+=`
-      <div class="dv">
-        <div class="dv-hdr">DECISION<span style="display:flex;align-items:center;gap:6px;margin-left:auto">${analyzeBtn}<span class="analysis-cost">${cs.analysisTime?cs.analysisTime.toLocaleTimeString():''}</span></span></div>
-        <div class="dv-row">
-          <span class="dv-label">EDGE</span>
-          <span class="dv-val" style="color:${edgeColor}">${esc(pred.edge||'—')}</span>
-          <span class="dv-sub">FWP ${esc(pred.fwp||'—')}</span>
-          <span class="dv-sub">MIP ${esc(pred.mip||'N/A')}</span>
-          ${edgeTrend?`<span style="font-size:8px;color:${edgeTrend==='▲'?'var(--green)':edgeTrend==='▼'?'var(--red)':'var(--t3)'};margin-left:2px">${edgeTrend}</span>`:''}
-        </div>
-        ${peakEdge?`<div class="dv-row"><span class="dv-label">PEAK</span><span class="dv-sub" style="color:var(--t2)">+${peakEdge.edgeNum.toFixed(1)}% at ${peakEdge.time} (${peakEdge.score})</span></div>`:''}
-        <div class="dv-row">
-          <span class="dv-label">ENTRY</span>
-          <span class="dv-tag" style="color:${entryColor};border-color:${entryColor}">${esc(pred.entry||'—')}</span>
-          <span class="dv-tag" style="color:${convColor};border-color:${convColor};margin-left:4px">${esc(pred.conviction||'—')}</span>
-        </div>
-        <div class="dv-row">
-          <span class="dv-label">SUSTAIN</span>
-          ${(function(){
-            var sa = cs.sustainabilityAudit;
-            if(!sa) return '<span class="dv-sub">'+esc(pred.sustainability||'—')+'</span>';
-            function tierTag(t){
-              if(!t) return '<span class="dv-sub">—</span>';
-              var c = t.tier==='LOCKED IN'?'var(--green)':t.tier==='DURABLE'?'var(--g2)':t.tier==='MIXED'?'var(--yellow)':t.tier==='FRAGILE'?'var(--amber)':t.tier==='UNSUSTAINABLE'?'var(--red)':'var(--t3)';
-              var detail = t.tier==='TOO EARLY'?'':'P:'+t.personnelGrade.substring(0,3)+' R:'+t.regressionGrade.substring(0,3)+' S:'+t.shotTypeGrade.substring(0,3);
-              return '<span class="dv-tag" style="color:'+c+';border-color:'+c+';font-size:5.5px;padding:0 3px">'+t.teamAlias+' '+t.tier+'</span>'
-                +(detail?'<span class="dv-sub" style="font-size:4.5px;margin-left:1px">('+detail+')</span>':'');
-            }
-            return tierTag(sa.away)+' '+tierTag(sa.home);
-          })()}
-        </div>
-        <div class="dv-row">
-          <span class="dv-label">CLUTCH</span>
-          <span class="dv-sub">${esc(pred.clutch||'No data')}</span>
-        </div>
-        <div class="dv-pred">${esc(pred.prediction||'')}</div>
-        ${eh.length>=3?`<div style="font-size:5px;color:var(--t2);margin-top:3px;letter-spacing:.5px">EDGE HISTORY: ${eh.slice(-6).map(e=>(e.edgeNum>=0?'+':'')+e.edgeNum.toFixed(0)+'%').join(' → ')}</div>`:''}
-      </div>`;
+      // Signal bar (entry + conviction + buy team)
+      var sigType = pred.signalType || (pred.entry==='OPTIMAL WINDOW'||pred.entry==='WINDOW OPEN'?(bestTeam?'BUY '+bestTeam:'WINDOW'):pred.entry==='COUNTER-SIGNAL'?'COUNTER':pred.entry==='NO WINDOW'?'NO VALUE':'PASS');
+      var sigNote = pred.signalNote || pred.prediction || '';
+      var sigIcon = sigType.startsWith('BUY')?'&#9889; ':sigType==='NO VALUE'?'&#9675; ':sigType==='COUNTER'?'&#10005; ':'&#9675; ';
+      var sigCol = sigType.startsWith('BUY')?'var(--green)':sigType==='COUNTER'?'var(--red)':'var(--t3)';
+      html+='<div style="margin-top:6px;padding:5px 7px;border-radius:4px;border:1px solid '+(bestTeam?'var(--green)':'var(--b1)')+';background:'+(bestTeam?'rgba(0,200,83,.06)':'rgba(255,255,255,.02)')+';display:flex;align-items:center;gap:6px">';
+      html+='<span style="font-size:6.5px;font-weight:700;letter-spacing:.8px;color:'+sigCol+';white-space:nowrap">'+sigIcon+esc(sigType)+'</span>';
+      html+='<span style="font-size:6.5px;color:var(--t2)">'+esc(sigNote)+'</span>';
+      html+='</div>';
+
+      // Entry + Conviction tags
+      html+='<div class="dv-row" style="margin-top:5px"><span class="dv-label">ENTRY</span><span class="dv-tag" style="color:'+entryColor+';border-color:'+entryColor+'">'+esc(pred.entry||'&#8212;')+'</span><span class="dv-tag" style="color:'+convColor+';border-color:'+convColor+';margin-left:4px">'+esc(pred.conviction||'&#8212;')+'</span></div>';
+
+      // Spread analysis (from Sonnet)
+      if(pred.spreadAnalysis){
+        html+='<div style="font-size:6px;color:var(--t2);margin-top:3px;padding:2px 0"><span style="color:var(--amber);font-size:5.5px;letter-spacing:.5px">SPREAD: </span>'+esc(pred.spreadAnalysis)+'</div>';
+      }
+
+      // Clutch
+      html+='<div class="dv-row" style="margin-top:2px"><span class="dv-label">CLUTCH</span><span class="dv-sub">'+esc(pred.clutch||'No data')+'</span></div>';
+
+      // Prediction
+      html+='<div class="dv-pred">'+esc(pred.prediction||'')+'</div>';
+
+      // Peak edge + edge history
+      if(peakEdge) html+='<div class="dv-row"><span class="dv-label">PEAK</span><span class="dv-sub" style="color:var(--t2)">+'+peakEdge.edgeNum.toFixed(1)+'% at '+peakEdge.time+' ('+peakEdge.score+')</span></div>';
+      if(eh.length>=3) html+='<div style="font-size:5px;color:var(--t2);margin-top:2px;letter-spacing:.5px">EDGE: '+eh.slice(-6).map(function(e){return (e.edgeNum>=0?'+':'')+e.edgeNum.toFixed(0)+'%';}).join(' &#8594; ')+'</div>';
+      html+='</div>';
     } else if(cs.analyzing){
-      html+=`<div class="dv"><div class="dv-hdr">DECISION</div><div class="analysis-loading"><div class="spin"></div> Sonnet analyzing…</div></div>`;
+      html+='<div class="dv"><div class="dv-hdr">VALUE READ</div><div class="analysis-loading"><div class="spin"></div> Sonnet analyzing&#8230;</div></div>';
     } else {
-      html+=`<div class="dv"><div class="dv-hdr">DECISION<span style="margin-left:auto">${analyzeBtn}</span></div><div style="font-size:6px;color:var(--t3);padding:2px 0">${cs.analysisError?'<span style="color:var(--red)">⚠ '+esc(cs.analysisError)+'</span>':game.period<2?'Predictive layer activates Q2+ — press ⚡ to analyze':'Awaiting analysis — press ⚡ ANALYZE'}</div></div>`;
+      html+='<div class="dv"><div class="dv-hdr">VALUE READ<span style="margin-left:auto">'+analyzeBtn+'</span></div><div style="font-size:6px;color:var(--t3);padding:2px 0">'+(cs.analysisError?'<span style="color:var(--red)">&#9888; '+esc(cs.analysisError)+'</span>':game.period<2?'Predictive layer activates Q2+ &#8212; press &#9889; to analyze':'Awaiting analysis &#8212; press &#9889; ANALYZE')+'</div></div>';
     }
 
     // ─── DATA INPUTS (Clutch + Odds) ───
@@ -3423,6 +3532,10 @@ WATCH
     teamQuality:'CLE 44-16 full strength, top-3 East | MIL 32-28 missing Giannis, Middleton limited',
     clutch:'CLEAR — both teams above -2.0 L15 NetRtg',
     prediction:'Cleveland wins by 10-14. MIL 3PT production unsustainable (9/28 from non-shooters); CLE interior dominance compounds through Q4.',
+    signalType:'BUY CLE', signalNote:'CLE structural control accelerating — MIL 3PT FRAGILE + Portis foul trouble', buyTeam:'CLE',
+    spreadAnalysis:'CLE -8.5 looks accurate — interior dominance + MIL foul trouble projects 10-14pt win margin, spread may tighten if MIL makes run',
+    homeValue:{team:'CLE', fwp:83.7, mip:77.5, edge:6.2, ml:'-380', spread:'-8.5'},
+    awayValue:{team:'MIL', fwp:16.3, mip:22.5, edge:-6.2, ml:'+300', spread:'+8.5'},
   };
   cs.sustainabilityAudit = {
     home:{teamAlias:'CLE',live3PM:8,live3PA:22,live3Pct:'36.4',seasonPrior:'36.1',gotSeasonData:true,deviation:'0.3',personnelGrade:'N/A (at baseline)',personnelDetails:[],elitePct:'0',nonPct:'0',posteriorMean:'36.2',regressionPull:'0',regressionProb:25,regressionGrade:'MINIMAL',shotTypeGrade:'DURABLE',shotTypeNote:'High ast% (65%)',assistRatio:'65',composite:'0.00',tier:'LOCKED IN'},
