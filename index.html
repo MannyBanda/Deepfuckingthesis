@@ -236,12 +236,10 @@ input,textarea,select{font-size:16px!important;}
 #conf-table th{color:var(--t3);font-weight:400;text-align:left;padding:2px 4px;border-bottom:1px solid var(--b1);font-size:5.5px;letter-spacing:.5px;text-transform:uppercase;}
 #conf-table td{padding:4px;border-bottom:1px solid rgba(255,255,255,.03);vertical-align:middle;}
 #conf-table tr:last-child td{border-bottom:none;}
-#conf-table .ct-matchup{color:var(--t1);font-weight:600;letter-spacing:.3px;white-space:nowrap;}
 #conf-table .ct-score{font-weight:600;font-size:8px;text-align:center;}
 #conf-table .ct-verdict{font-size:5.5px;letter-spacing:.5px;text-align:center;}
 #conf-table .ct-cond{color:var(--t2);font-size:6px;line-height:1.4;max-width:180px;}
 #conf-table tr.ct-final td{color:var(--t3) !important;opacity:.5;}
-#conf-table tr.ct-final .ct-matchup{color:var(--t3);}
 #conf-table tr.ct-row{border-left:2px solid transparent;}
 #conf-table tr.ct-optimal{border-left:2px solid var(--green);background:rgba(0,200,83,.04);}
 #conf-table tr.ct-window{border-left:2px solid var(--amber);background:rgba(255,160,0,.03);}
@@ -3178,28 +3176,35 @@ function renderConfidenceTable(){
   const statsSummary = [liveCount?liveCount+' live':'', preCount?preCount+' pre':'', finalCount?finalCount+' final':''].filter(Boolean).join(' / ');
   let html = '<div class="ct-hdr" onclick="confCollapsed=!confCollapsed;renderConfidenceTable()" style="cursor:pointer">CONFIDENCE TABLE <span class="arr" style="display:inline-block;transition:transform .2s;transform:rotate('+(confCollapsed?'0':'90')+'deg);margin-left:2px">&#9656;</span><span style="font-size:5px;color:var(--t3);margin-left:auto">'+rows.length+' '+(rows.length===1?'game':'games')+' &#183; '+statsSummary+'</span></div>';
   if(!confCollapsed){
-  html += '<table><tr><th></th><th>MATCHUP</th><th style="text-align:center">SCORE</th><th>CTRL</th><th style="text-align:center">CTRL</th><th>BEST EDGE</th><th>FWP</th><th>SIGNAL</th><th>SUST</th><th>THESIS</th></tr>';
+  html += '<table><tr><th style="text-align:center">SCORE</th><th style="text-align:center">SUST</th><th style="text-align:center">FWP</th><th style="text-align:center">BEST EDGE</th><th style="text-align:center">SIGNAL</th><th>CTRL</th><th style="text-align:center">CTRL</th><th style="text-align:center">THESIS</th></tr>';
   for(const r of rows){
     const isFinal = r.state==='FINAL';
     const rowClass = 'ct-row'+(isFinal?' ct-final':' '+entryClass(r.entry));
-    // State badge
+    // State badge (folded into score cell)
     let stateBadge = '';
     if(r.state==='LIVE'){
       const qStr = r.period ? 'Q'+r.period+(r.clock?' '+r.clock:'') : 'LIVE';
-      stateBadge = '<span class="ct-badge ct-live">'+esc(qStr)+'</span>';
+      stateBadge = '<span class="ct-badge ct-live" style="margin-right:4px;vertical-align:middle">'+esc(qStr)+'</span>';
     } else if(r.state==='FINAL'){
-      stateBadge = '<span class="ct-badge ct-done">FINAL</span>';
-    } else {
-      stateBadge = '<span class="ct-badge ct-pre">PRE</span>';
+      stateBadge = '<span class="ct-badge ct-done" style="margin-right:4px;vertical-align:middle">FIN</span>';
     }
-    // Score display
+    // Score display — always show team names, blank scores when pregame
     let scoreStr = '';
     if(r.homeScore!==null && r.homeScore!==undefined){
-      scoreStr = '<span style="font-weight:600;font-size:7px">'+esc(r.aA)+' '+r.awayScore+'</span><span style="color:var(--t3);margin:0 2px">-</span><span style="font-weight:600;font-size:7px">'+r.homeScore+' '+esc(r.hA)+'</span>';
-    } else { scoreStr = '<span style="color:var(--t3)">&#8212;</span>'; }
-    // Sustainability — show both teams compact
+      scoreStr = stateBadge+'<span style="font-weight:600;font-size:7px">'+esc(r.aA)+' '+r.awayScore+'</span><span style="color:var(--t3);margin:0 2px">-</span><span style="font-weight:600;font-size:7px">'+r.homeScore+' '+esc(r.hA)+'</span>';
+    } else {
+      scoreStr = '<span style="font-weight:600;font-size:7px;color:var(--t2)">'+esc(r.aA)+'</span><span style="color:var(--t3);margin:0 3px">@</span><span style="font-weight:600;font-size:7px;color:var(--t2)">'+esc(r.hA)+'</span>';
+    }
+    // Sustainability — show both teams compact, pull client-side fallback
     let sustStr = '';
-    if(r.sustHome || r.sustAway){
+    const csForSust = cardState[r.gameId];
+    let effSustHome = r.sustHome, effSustAway = r.sustAway;
+    if(!effSustHome && csForSust?.clientSustainability){
+      const cS = csForSust.clientSustainability;
+      effSustHome = cS.home?.tier||null;
+      effSustAway = cS.away?.tier||null;
+    }
+    if(effSustHome || effSustAway){
       const shorten = (s) => {
         if(!s) return '?';
         const u = s.toUpperCase();
@@ -3220,10 +3225,10 @@ function renderConfidenceTable(){
         if(u.includes('UNSUST')) return 'var(--red)';
         return 'var(--t3)';
       };
-      if(r.sustAway){
-        sustStr = '<span style="color:'+sustColor(r.sustHome)+'">'+esc(r.hA)+':'+shorten(r.sustHome)+'</span> <span style="color:'+sustColor(r.sustAway)+'">'+esc(r.aA)+':'+shorten(r.sustAway)+'</span>';
+      if(effSustAway){
+        sustStr = '<span style="color:'+sustColor(effSustHome)+'">'+esc(r.hA)+':'+shorten(effSustHome)+'</span> <span style="color:'+sustColor(effSustAway)+'">'+esc(r.aA)+':'+shorten(effSustAway)+'</span>';
       } else {
-        sustStr = '<span style="color:'+sustColor(r.sustHome)+'">'+esc(r.sustHome||'')+'</span>';
+        sustStr = '<span style="color:'+sustColor(effSustHome)+'">'+esc(effSustHome||'')+'</span>';
       }
     } else { sustStr = '<span style="color:var(--t3)">&#8212;</span>'; }
     // Best edge display
@@ -3236,7 +3241,6 @@ function renderConfidenceTable(){
     // FWP labeled with team
     let fwpStr = '<span style="color:var(--t3)">&#8212;</span>';
     if(r.fwp){
-      // Extract team from FWP direction
       const fwpTeam = r.bestEdgeTeam || r.team || '';
       fwpStr = '<span style="color:var(--t1);font-weight:600">'+esc(fwpTeam)+' '+esc(r.fwp)+'</span>';
     }
@@ -3252,15 +3256,13 @@ function renderConfidenceTable(){
     // Thesis status
     const tsStr = r.thesisStatus ? '<span style="color:'+tsColor(r.thesisStatus)+'">'+esc(r.thesisStatus)+'</span>' : '<span style="color:var(--t3)">&#8212;</span>';
     html += '<tr class="'+rowClass+'" style="cursor:pointer" onclick="document.getElementById(\'card-'+r.gameId+'\')?.scrollIntoView({behavior:\'smooth\',block:\'start\'})">'
-      + '<td style="text-align:center">'+stateBadge+'</td>'
-      + '<td class="ct-matchup">'+esc(r.matchup)+'</td>'
       + '<td style="text-align:center;white-space:nowrap;font-size:7px">'+scoreStr+'</td>'
+      + '<td style="font-size:5.5px;text-align:center;white-space:nowrap">'+sustStr+'</td>'
+      + '<td style="font-size:7px;text-align:center;white-space:nowrap">'+fwpStr+'</td>'
+      + '<td style="font-size:7px;text-align:center;white-space:nowrap">'+bestEdgeStr+'</td>'
+      + '<td style="font-size:6px;text-align:center;white-space:nowrap">'+sigStr+'</td>'
       + '<td style="color:'+vColor(r.verdict)+'">'+esc(r.team)+'</td>'
       + '<td class="ct-score" style="color:'+vColor(r.verdict)+'">'+r.score.toFixed(2)+'<div class="ct-verdict" style="color:'+vColor(r.verdict)+'">'+esc(r.verdict)+'</div></td>'
-      + '<td style="font-size:7px;text-align:center;white-space:nowrap">'+bestEdgeStr+'</td>'
-      + '<td style="font-size:7px;text-align:center;white-space:nowrap">'+fwpStr+'</td>'
-      + '<td style="font-size:6px;text-align:center;white-space:nowrap">'+sigStr+'</td>'
-      + '<td style="font-size:5.5px;text-align:center;white-space:nowrap">'+sustStr+'</td>'
       + '<td style="font-size:6px;text-align:center">'+tsStr+'</td>'
       + '</tr>';
   }
