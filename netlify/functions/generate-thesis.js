@@ -125,21 +125,24 @@ function computeRosterAudit(analytical, homeAlias, awayAlias, matchup) {
     if (!side) return;
 
     (team.players || []).forEach(function(p) {
-      // SR injuries uses various field names for status
-      var st = (p.status || p.injury_status || (p.injury && typeof p.injury === 'object' && p.injury.status) || '').toUpperCase();
-      // Some SR endpoints embed status in desc or comment
-      if (!st) {
-        var desc = (p.desc || p.description || p.comment || '').toUpperCase();
-        if (desc.indexOf('OUT') >= 0 || desc.indexOf('NOT WITH TEAM') >= 0) st = 'OUT';
-        else if (desc.indexOf('DAY-TO-DAY') >= 0 || desc.indexOf('GAME TIME') >= 0) st = 'DAY-TO-DAY';
-        else if (desc.indexOf('DOUBTFUL') >= 0) st = 'DOUBTFUL';
-        else if (desc.indexOf('QUESTIONABLE') >= 0) st = 'QUESTIONABLE';
-        else if (desc.indexOf('PROBABLE') >= 0) st = 'PROBABLE';
+      // SR nests status inside p.injuries[0].status, NOT p.status
+      var injArr = Array.isArray(p.injuries) ? p.injuries : [];
+      var latestInj = injArr.length > 0 ? injArr[0] : {};
+      var st = (latestInj.status || p.status || '').toUpperCase();
+      var injDesc = latestInj.desc || latestInj.comment || p.desc || p.comment || '?';
+      // Fallback: parse comment text for status keywords
+      if (!st && injDesc) {
+        var descUp = (typeof injDesc === 'string' ? injDesc : '').toUpperCase();
+        if (descUp.indexOf('OUT') >= 0 || descUp.indexOf('NOT WITH TEAM') >= 0) st = 'OUT';
+        else if (descUp.indexOf('DAY-TO-DAY') >= 0 || descUp.indexOf('GAME TIME') >= 0) st = 'DAY-TO-DAY';
+        else if (descUp.indexOf('DOUBTFUL') >= 0) st = 'DOUBTFUL';
+        else if (descUp.indexOf('QUESTIONABLE') >= 0) st = 'QUESTIONABLE';
+        else if (descUp.indexOf('PROBABLE') >= 0) st = 'PROBABLE';
       }
       var entry = {
         name: p.full_name || p.name || '?',
         position: p.primary_position || p.position || '?',
-        injury: p.desc || p.comment || (p.injury && typeof p.injury === 'string' ? p.injury : '') || '?',
+        injury: injDesc,
         stats: null
       };
       if (st === 'OUT' || st === 'O' || st === 'IR' || st === 'NOT WITH TEAM') {
@@ -768,12 +771,11 @@ function diagnoseData(analytical, homeAlias, awayAlias, matchup) {
       matched.forEach(function(t) {
         (t.players || []).forEach(function(p) {
           var nm = p.full_name || p.name || '?';
-          // Exhaustive status search
-          var st = p.status || p.injury_status || p.type || p.designation
-            || (p.injury && typeof p.injury === 'string' ? p.injury : '')
-            || (p.injury && typeof p.injury === 'object' ? (p.injury.status || p.injury.type || p.injury.designation || p.injury.desc || JSON.stringify(p.injury).substring(0,80)) : '')
-            || p.comment || p.desc || p.description || p.note || '??';
-          allStatuses.push(nm + ':' + st);
+          var injArr = Array.isArray(p.injuries) ? p.injuries : [];
+          var latestInj = injArr.length > 0 ? injArr[0] : {};
+          var st = latestInj.status || p.status || '??';
+          var desc = latestInj.desc || '';
+          allStatuses.push(nm + ':' + st + (desc ? '(' + desc + ')' : ''));
         });
       });
       injReport.matchedPlayerStatuses = allStatuses;
@@ -895,7 +897,11 @@ function diagnoseData(analytical, homeAlias, awayAlias, matchup) {
     var alias = side === 'home' ? homeAlias : awayAlias;
     var teamInj = injTeams.find(function(t) { return matchTeamSide(t, homeAlias, awayAlias, homeId, awayId) === side; });
     if (!teamInj) { crossRef[side].push('No injury team found for ' + alias + ' (id:' + (side === 'home' ? homeId : awayId).substring(0,8) + ')'); return; }
-    var outPlayers = (teamInj.players || []).filter(function(p) { var s = (p.status || '').toUpperCase(); return s === 'OUT' || s === 'O' || s === 'IR'; });
+    var outPlayers = (teamInj.players || []).filter(function(p) {
+      var injArr = Array.isArray(p.injuries) ? p.injuries : [];
+      var st = (injArr.length > 0 ? (injArr[0].status || '') : (p.status || '')).toUpperCase();
+      return st === 'OUT' || st === 'O' || st === 'IR';
+    });
     var statPlayers = getPlayers(analytical[side + 'Stats']);
     outPlayers.forEach(function(op) {
       var opName = (op.full_name || op.name || '?').toLowerCase();
