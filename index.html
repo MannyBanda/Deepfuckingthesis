@@ -2164,7 +2164,7 @@ async function generateThesis(gameId){
     };
 
     const payload = {
-      matchup: { home: homeAlias, away: awayAlias, date: getEasternDate(0).str, time: tipTime, venue: game.venue||'TBD' },
+      matchup: { home: homeAlias, away: awayAlias, homeId: homeId, awayId: awayId, date: getEasternDate(0).str, time: tipTime, venue: game.venue||'TBD' },
       sections: sections,
       analytical: analytical,
     };
@@ -2222,7 +2222,7 @@ async function generateThesis(gameId){
         // Injuries structure detail — the data we need most right now
         const injDx = dx.endpoints && dx.endpoints.injuries;
         if(injDx){
-          const matchedStr = (injDx.matchedTeams||[]).map(t=>(t.alias||t.name||'?')+':'+t.players+'p').join(', ');
+          const matchedStr = (injDx.matchedTeams||[]).map(t=>(t.side||'?')+'='+t.market+' '+t.name+':'+t.players+'p').join(', ');
           addLog(gameId, '🩺 Injuries: '+(injDx.hasTeams?injDx.teamsCount+' teams':'NO .teams[]')+' | matched=['+matchedStr+'] | topKeys=['+((injDx.topKeys||[]).join(','))+']', true);
           if(injDx.sampleTeamKeys) addLog(gameId, '🩺 Team keys: '+injDx.sampleTeamKeys.join(', '), true);
           if(injDx.matchedPlayerStatuses && injDx.matchedPlayerStatuses.length > 0) addLog(gameId, '🩺 Statuses: '+injDx.matchedPlayerStatuses.join(' | '), true);
@@ -2231,7 +2231,10 @@ async function generateThesis(gameId){
         // Depth chart diagnostics
         ['home','away'].forEach(side=>{
           const depDx = dx.endpoints && dx.endpoints[side+'Depth'];
-          if(depDx) addLog(gameId, '📐 '+(side==='home'?homeAlias:awayAlias)+' depth: '+(depDx.resolvedPositions||depDx.positionCount||0)+' positions resolved | topKeys=['+(depDx.topKeys||[]).slice(0,6).join(',')+']', true);
+          if(depDx){
+            addLog(gameId, '📐 '+(side==='home'?homeAlias:awayAlias)+' depth: '+(depDx.resolvedPositions||0)+' positions | hasPositions:'+depDx.hasPositions+' | allKeys=['+(depDx.allKeys||[]).join(',')+']', true);
+            if(depDx.keyTypes) addLog(gameId, '📐 keyTypes: '+Object.entries(depDx.keyTypes).map(([k,v])=>k+':'+v).join(' | '), true);
+          }
         });
       }
     }
@@ -2655,6 +2658,20 @@ function extractStructuralContext(gameId){
     const game = games.find(g=>g.id===gameId);
     if(!game) return null;
     const hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
+    const hId = game.home?.id||game.home?.sr_id||'', aId = game.away?.id||game.away?.sr_id||'';
+
+    // Multi-strategy team matching for injuries (same as server)
+    function matchSide(t){
+      if(hId && (t.id===hId || t.sr_id===hId)) return 'home';
+      if(aId && (t.id===aId || t.sr_id===aId)) return 'away';
+      const a = (t.alias||t.abbreviation||t.abbr||'').toUpperCase();
+      if(a && a===hA.toUpperCase()) return 'home';
+      if(a && a===aA.toUpperCase()) return 'away';
+      const nm = (t.name||'').toLowerCase(), mk = (t.market||'').toLowerCase();
+      if(nm.indexOf(hA.toLowerCase())>=0 || mk.indexOf(hA.toLowerCase())>=0) return 'home';
+      if(nm.indexOf(aA.toLowerCase())>=0 || mk.indexOf(aA.toLowerCase())>=0) return 'away';
+      return null;
+    }
 
     // Closers from depth charts
     const closers = {home:[], away:[]};
@@ -2728,14 +2745,14 @@ function extractStructuralContext(gameId){
     // Key outs from injuries
     const keyOuts = [];
     if(c.injuries?.teams){
-      const relevantAliases = [hA.toUpperCase(), aA.toUpperCase()];
       c.injuries.teams.forEach(t=>{
-        if(!relevantAliases.includes((t.alias||t.abbreviation||t.abbr||'').toUpperCase())) return;
+        const side = matchSide(t);
+        if(!side) return;
         (t.players||[]).forEach(p=>{
           const st = (p.status||'').toUpperCase();
           if(st==='OUT'||st==='O'){
-            keyOuts.push({name:p.full_name||'?', team:t.alias||t.abbreviation||t.name||'?', position:p.primary_position||p.position||'?',
-              injury:p.desc||p.comment||p.injury||'?', status:'OUT'});
+            keyOuts.push({name:p.full_name||'?', team:t.alias||t.abbreviation||t.market||'?', position:p.primary_position||p.position||'?',
+              injury:p.desc||p.comment||p.injury||'?', status:'OUT', side: side});
           }
         });
       });
