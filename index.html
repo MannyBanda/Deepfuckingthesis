@@ -3299,10 +3299,22 @@ function crossRef(parsed,ind){
 // ══════════════════════════════════════════════════════════════════════════════
 function mountCard(game){
   const id=game.id;
+  // Preserve existing Sonnet analysis results if card was previously mounted
+  const prev = cardState[id];
+  const _analysis = prev?.analysis||null;
+  const _analysisTime = prev?.analysisTime||null;
+  const _sonnetIndicators = prev?.sonnetIndicators||null;
+  const _prediction = prev?.prediction||null;
+  const _sustainabilityAudit = prev?.sustainabilityAudit||null;
+  const _edgeHistory = prev?.edgeHistory||[];
+  const _pbpAudit = prev?.pbpAudit||null;
+  const _pbpTime = prev?.pbpTime||null;
+  const _pbpPeriod = prev?.pbpPeriod||null;
+  const _clientIndAtAnalysis = prev?.clientIndAtAnalysis||null;
   cardState[id]={logs:[],lastUp:null,editing:false,generating:false,analyzing:false,
-    prevLvl:null,_countdown:null,lastFingerprint:'',analysis:null,analysisTime:null,genSteps:null,genError:null,
-    lastScoreFP:'',lastStatsFP:'',staleCount:0,dataFreshness:'FRESH',sonnetIndicators:null,
-    prediction:null, sustainabilityAudit:null, clutchData:null, clutchTier:3, oddsData:null, oddsAll:null, oddsHistory:[], trackingData:null, enriching:false, enrichDone:false, evCollapsed:false, edgeHistory:[], pbpAudit:null, pbpTime:null, pbpPeriod:null, pbpLoading:false};
+    prevLvl:null,_countdown:null,lastFingerprint:'',analysis:_analysis,analysisTime:_analysisTime,genSteps:null,genError:null,
+    lastScoreFP:'',lastStatsFP:'',staleCount:0,dataFreshness:'FRESH',sonnetIndicators:_sonnetIndicators,
+    prediction:_prediction, sustainabilityAudit:_sustainabilityAudit, clutchData:null, clutchTier:3, oddsData:null, oddsAll:null, oddsHistory:[], trackingData:null, enriching:false, enrichDone:false, evCollapsed:false, edgeHistory:_edgeHistory, pbpAudit:_pbpAudit, pbpTime:_pbpTime, pbpPeriod:_pbpPeriod, pbpLoading:false};
   // Restore cached clutch data from localStorage
   if(cachedClutch[id]){
     const cs = cardState[id];
@@ -3331,7 +3343,9 @@ function mountCard(game){
   cardState[id].clientSustainability = null;
   cardState[id].divergences = [];
   cardState[id].clientInd = null;
+  cardState[id].clientIndAtAnalysis = _clientIndAtAnalysis;
   cardState[id]._baselineLogged = false;
+  if(_analysis) addLog(id, '📋 Analysis preserved from previous mount', true);
   // Auto-distribute global clutch data if available (uploaded before game selected — overrides cache)
   if(globalClutchData?.teams){
     const hA = game.home?.alias||'', aA = game.away?.alias||'';
@@ -3526,7 +3540,13 @@ function renderCard(game){
     if(pred){
       var hv = pred.homeValue, av = pred.awayValue;
       var hasValues = hv && av;
-      // Determine best edge team
+      // Determine highest FWP team for green highlight
+      var fwpTeam = null;
+      if(hasValues){
+        if(hv.fwp > av.fwp){ fwpTeam = hA; }
+        else if(av.fwp > hv.fwp){ fwpTeam = aA; }
+      }
+      // Best edge team (for signal bar)
       var bestTeam = null, bestEdge = null;
       if(hasValues){
         if(hv.edge > av.edge && hv.edge >= 5){ bestTeam = hA; bestEdge = hv; }
@@ -3549,7 +3569,7 @@ function renderCard(game){
       var thesisTeamMatch = (theses[id]||'').match(/CONTROL\s+SCORE:\s*(\w+)/i);
       var thesisTeam = thesisTeamMatch ? thesisTeamMatch[1] : '';
 
-      html+='<div class="dv" style="'+(bestTeam?'border-left:2px solid var(--green);background:rgba(0,200,83,.02)':'')+'">';
+      html+='<div class="dv" style="'+(fwpTeam?'border-left:2px solid var(--green);background:rgba(0,200,83,.02)':'')+'">';
       // Header
       html+='<div class="dv-hdr">VALUE READ<span style="display:flex;align-items:center;gap:6px;margin-left:auto">';
       if(thesisTeam && pred.thesisStatus) html+='<span style="font-size:5.5px;color:var(--t3);letter-spacing:.3px">THESIS '+esc(thesisTeam)+': <span style="color:'+tsCol+'">'+esc(pred.thesisStatus)+'</span></span>';
@@ -3565,11 +3585,11 @@ function renderCard(game){
         var rows = [av, hv];
         for(var ri=0;ri<rows.length;ri++){
           var rv = rows[ri];
-          var isBest = bestTeam && rv.team===bestTeam;
+          var isBest = fwpTeam && rv.team===fwpTeam;
           var isHigherFwp = rv.fwp >= 50;
           var tColor = isHigherFwp ? 'var(--t1)' : 'var(--t3)';
           var eColor = isHigherFwp ? (rv.edge>=10?'var(--green)':rv.edge>=5?'var(--g2)':rv.edge>=1?'var(--yellow)':rv.edge>=0?'var(--t3)':'var(--red)') : 'var(--t3)';
-          html+='<div style="display:grid;grid-template-columns:42px 1fr 1fr 1fr 52px 52px;gap:2px;padding:3px 2px;border-radius:3px;margin-bottom:1px;'+(isBest?'background:rgba(0,200,83,.08);border-left:2px solid var(--green)':'border-left:2px solid transparent')+'">';
+          html+='<div style="display:grid;grid-template-columns:42px 1fr 1fr 1fr 52px 52px;gap:2px;padding:3px 2px;border-radius:3px;margin-bottom:1px;'+(isHigherFwp?'background:rgba(0,200,83,.08);border-left:2px solid var(--green)':'border-left:2px solid transparent')+'">';
           html+='<span style="font-size:9px;font-weight:700;color:'+(isHigherFwp?'var(--t1)':'var(--t3)')+'">'+esc(rv.team)+'</span>';
           html+='<span style="font-size:10px;font-weight:600;color:'+tColor+';text-align:center">'+rv.fwp.toFixed(0)+'%</span>';
           html+='<span style="font-size:10px;color:'+(isHigherFwp?'var(--t2)':'var(--t3)')+';text-align:center">'+rv.mip.toFixed(1)+'%</span>';
