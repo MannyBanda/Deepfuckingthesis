@@ -12,8 +12,8 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 :root{
-  --bg:#07070a;--s1:#0e0e12;--s2:#131318;--b1:#1c1c22;--b2:#252529;
-  --t1:#d2d2de;--t2:#80808e;--t3:#3e3e48;
+  --bg:#07070a;--s1:#0e0e12;--s2:#131318;--b1:#22222a;--b2:#2e2e38;
+  --t1:#e2e2ee;--t2:#9a9aac;--t3:#5a5a6a;
   --amber:#f5a62a;--green:#00ff88;--g2:#a8ff78;--red:#ff5252;--yellow:#ffd166;
   --mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans',sans-serif;
 }
@@ -3755,11 +3755,11 @@ function renderCard(game){
       // Odds row (read-only)
       if(od){
         const mv = oddsMovement(cs);
-        html+=`<div style="display:flex;gap:6px;align-items:baseline;margin-bottom:2px;flex-wrap:wrap">
-          <span style="font-size:5px;color:var(--t3);width:28px">ODDS</span>
-          <span style="font-size:5.5px;color:var(--t2)">${esc(hA)} <span style="color:var(--t1)">${od.homeSpread||'—'}</span> ML <span style="color:var(--t1)">${od.homeML||'—'}</span></span>
-          <span style="font-size:5.5px;color:var(--t2)">${esc(aA)} ML <span style="color:var(--t1)">${od.awayML||'—'}</span></span>
-          <span style="font-size:5.5px;color:var(--t2)">O/U <span style="color:var(--t1)">${od.total||'—'}</span></span>
+        html+=`<div style="display:flex;gap:8px;align-items:baseline;margin-bottom:2px;flex-wrap:wrap">
+          <span style="font-size:5px;color:var(--amber);width:28px">ODDS</span>
+          <span style="font-size:6px"><span style="color:var(--t1);font-weight:600">${esc(hA)}</span> <span style="color:var(--t1)">${od.homeSpread||'—'}</span> <span style="color:var(--t3)">ML</span> <span style="color:var(--t1)">${od.homeML||'—'}</span></span>
+          <span style="font-size:6px"><span style="color:var(--t1);font-weight:600">${esc(aA)}</span> <span style="color:var(--t3)">ML</span> <span style="color:var(--t1)">${od.awayML||'—'}</span></span>
+          <span style="font-size:6px"><span style="color:var(--t3)">O/U</span> <span style="color:var(--t1)">${od.total||'—'}</span></span>
         </div>`;
         if(mv){
           const mvCell = (d) => d ? `<span style="color:${d.color}">${d.val}</span>` : '—';
@@ -3773,22 +3773,22 @@ function renderCard(game){
         const cRow = (label, d) => {
           if(!d || (!d.netRtg && d.netRtg!==0)) return '';
           const nrCol = parseFloat(d.netRtg)>=0?'var(--green)':parseFloat(d.netRtg)>=-2?'var(--yellow)':'var(--red)';
-          return `<div style="display:flex;gap:4px;align-items:baseline;margin-bottom:1px">
-            <span style="font-size:5px;color:var(--t3);width:28px">${label}</span>
-            <span style="font-size:5.5px;color:${nrCol}">Net ${d.netRtg}</span>
-            <span style="font-size:5px;color:var(--t2)">Off ${d.offRtg??'—'} Def ${d.defRtg??'—'}</span>
-            <span style="font-size:5px;color:var(--t2)">GP ${d.gp??'—'} ${d.wl??''}</span>
+          return `<div style="display:flex;gap:5px;align-items:baseline;margin-bottom:1px">
+            <span style="font-size:5.5px;color:var(--t1);font-weight:600;width:28px">${label}</span>
+            <span style="font-size:6px;color:${nrCol};font-weight:600">Net ${d.netRtg}</span>
+            <span style="font-size:5.5px"><span style="color:var(--t3)">Off</span> <span style="color:var(--t1)">${d.offRtg??'—'}</span> <span style="color:var(--t3)">Def</span> <span style="color:var(--t1)">${d.defRtg??'—'}</span></span>
+            <span style="font-size:5.5px"><span style="color:var(--t3)">GP</span> <span style="color:var(--t1)">${d.gp??'—'}</span> <span style="color:var(--t1)">${d.wl??''}</span></span>
           </div>`;
         };
         html+='<div style="border-top:1px solid var(--b1);padding-top:2px;margin-top:2px">';
-        html+=`<div style="font-size:4.5px;color:var(--t3);letter-spacing:1px;margin-bottom:2px">L15 CLUTCH (Tier ${cs.clutchTier||'?'})</div>`;
+        html+=`<div style="font-size:4.5px;color:var(--amber);letter-spacing:1px;margin-bottom:2px">L15 CLUTCH (Tier ${cs.clutchTier||'?'})</div>`;
         html+=cRow(esc(hA), cl.home);
         html+=cRow(esc(aA), cl.away);
         // Extra clutch fields if available
         if(cl.home?.efg || cl.away?.efg){
-          html+=`<div style="font-size:4.5px;color:var(--t3);margin-top:1px">`;
-          if(cl.home?.efg) html+=`${esc(hA)}: eFG ${cl.home.efg} TS ${cl.home.ts||'—'} Pace ${cl.home.pace||'—'} PIE ${cl.home.pie||'—'} `;
-          if(cl.away?.efg) html+=`${esc(aA)}: eFG ${cl.away.efg} TS ${cl.away.ts||'—'} Pace ${cl.away.pace||'—'} PIE ${cl.away.pie||'—'}`;
+          html+=`<div style="font-size:5px;color:var(--t2);margin-top:1px">`;
+          if(cl.home?.efg) html+=`<span style="color:var(--t1);font-weight:600">${esc(hA)}</span>: eFG ${cl.home.efg} TS ${cl.home.ts||'—'} Pace ${cl.home.pace||'—'} PIE ${cl.home.pie||'—'} `;
+          if(cl.away?.efg) html+=`<span style="color:var(--t1);font-weight:600">${esc(aA)}</span>: eFG ${cl.away.efg} TS ${cl.away.ts||'—'} Pace ${cl.away.pace||'—'} PIE ${cl.away.pie||'—'}`;
           html+=`</div>`;
         }
         html+='</div>';
@@ -3798,9 +3798,9 @@ function renderCard(game){
       // Tracking baselines
       if(cs.trackingData){
         const ht=cs.trackingData.home||{}, at=cs.trackingData.away||{};
-        html+=`<div style="font-size:4.5px;color:var(--t3);border-top:1px solid var(--b1);padding-top:2px;margin-top:2px">`;
-        if(ht.catchAndShoot||at.catchAndShoot) html+=`C&S: ${esc(aA)} ${at.catchAndShoot?.efg||'?'}% · ${esc(hA)} ${ht.catchAndShoot?.efg||'?'}% `;
-        if(ht.pullUp||at.pullUp) html+=`Pull-up: ${esc(aA)} ${at.pullUp?.efg||'?'}% · ${esc(hA)} ${ht.pullUp?.efg||'?'}%`;
+        html+=`<div style="font-size:5px;color:var(--t2);border-top:1px solid var(--b1);padding-top:2px;margin-top:2px">`;
+        if(ht.catchAndShoot||at.catchAndShoot) html+=`C&S: <span style="color:var(--t1);font-weight:600">${esc(aA)}</span> ${at.catchAndShoot?.efg||'?'}% · <span style="color:var(--t1);font-weight:600">${esc(hA)}</span> ${ht.catchAndShoot?.efg||'?'}% `;
+        if(ht.pullUp||at.pullUp) html+=`Pull-up: <span style="color:var(--t1);font-weight:600">${esc(aA)}</span> ${at.pullUp?.efg||'?'}% · <span style="color:var(--t1);font-weight:600">${esc(hA)}</span> ${ht.pullUp?.efg||'?'}%`;
         html+=`</div>`;
       }
     }
