@@ -550,10 +550,64 @@ function applyAdjustments(sia, redistribution, srm) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// 8b. FLOOR SCORE — Guaranteed minimum for each team from opponent's SIA caps
+// ══════════════════════════════════════════════════════════════════════════════
+
+function computeFloorScores(finalCaps, depletion) {
+  var W = { I1: 0.25, I2: 0.25, I3: 0.20, I4: 0.20, I5: 0.10 };
+  var floors = { home: null, away: null };
+
+  // For each side, compute their guaranteed floor from the OPPONENT's caps
+  // If opponent is capped at 0.0 on I2, this team gets I2 = 1.0 guaranteed
+  // If opponent is capped at 0.5 on I4, this team gets I4 >= 0.5 guaranteed
+  // Uncapped indicators assume contested baseline (0.5)
+  ['home', 'away'].forEach(function(side) {
+    var oppSide = side === 'home' ? 'away' : 'home';
+    var oppCaps = finalCaps[oppSide] && finalCaps[oppSide].caps;
+    if (!oppCaps) return;
+
+    var hasAnyCap = false;
+    ['I1','I2','I3','I4','I5'].forEach(function(ind) { if (oppCaps[ind] !== null && oppCaps[ind] !== undefined) hasAnyCap = true; });
+    if (!hasAnyCap) return;
+
+    var floor = 0;
+    var details = [];
+    ['I1','I2','I3','I4','I5'].forEach(function(ind) {
+      var oppCap = oppCaps[ind];
+      var myMin;
+      if (oppCap === 0.0) {
+        // Opponent capped at 0 → this team guaranteed 1.0 on this indicator
+        myMin = 1.0;
+        details.push(ind + '=1.0 (opp capped 0.0)');
+      } else if (oppCap === 0.5) {
+        // Opponent capped at 0.5 → this team guaranteed at least 0.5
+        myMin = 0.5;
+        details.push(ind + '>=0.5 (opp capped 0.5)');
+      } else {
+        // Uncapped — assume contested baseline
+        myMin = 0.5;
+      }
+      floor += myMin * W[ind];
+    });
+
+    // Round to 3 decimal places
+    floor = Math.round(floor * 1000) / 1000;
+
+    // Apply own depletion ceiling — floor can't exceed own ceiling
+    var ceiling = depletion[side] ? depletion[side].ceiling : 1.0;
+    if (floor > ceiling) floor = ceiling;
+
+    floors[side] = { floor: floor, details: details, verdict: floor >= 0.90 ? 'DOMINANT' : floor >= 0.75 ? 'STRONG' : floor >= 0.60 ? 'EARNED' : floor >= 0.45 ? 'NO EDGE' : 'WAIT' };
+  });
+
+  return floors;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // 9. FORMAT PRE-COMPUTED ASSESSMENT
 // ══════════════════════════════════════════════════════════════════════════════
 
-function formatPreComputed(homeAlias, awayAlias, rosterAudit, sia, finalCaps, redistribution, srm, depletion, pyth, bhv) {
+function formatPreComputed(homeAlias, awayAlias, rosterAudit, sia, finalCaps, redistribution, srm, depletion, pyth, bhv, floorScores) {
   var L = [];
   L.push('=== PRE-COMPUTED STRUCTURAL ASSESSMENT (server-side \u2014 DO NOT OVERRIDE) ===');
   L.push('');
@@ -637,6 +691,20 @@ function formatPreComputed(homeAlias, awayAlias, rosterAudit, sia, finalCaps, re
   });
 
   L.push('');
+  // Floor scores — guaranteed minimums from opponent SIA caps
+  var hasFloor = false;
+  ['away', 'home'].forEach(function(side) {
+    var alias = side === 'home' ? homeAlias : awayAlias;
+    var f = floorScores && floorScores[side];
+    if (f) {
+      hasFloor = true;
+      L.push('FLOOR SCORE: ' + alias + ' MINIMUM ' + f.floor.toFixed(3) + ' (' + f.verdict + ' guaranteed)');
+      L.push('  Basis: ' + f.details.join(' | '));
+      L.push('  RULE: ' + alias + ' control score CANNOT be below ' + f.floor.toFixed(2) + '. This is mathematically guaranteed by opponent SIA caps.');
+    }
+  });
+  if (hasFloor) L.push('');
+
   L.push('=== END PRE-COMPUTED ASSESSMENT \u2014 Score indicators WITHIN these caps ===');
   return L.join('\n');
 }
@@ -663,6 +731,8 @@ function buildSystemPrompt() {
     '4. Redistribution and System Resilience adjustments are ALREADY applied \u2014 do not double-count',
     '5. Show the full SIA in your AVAILABILITY section with per-player impact notation',
     '6. When season team stats conflict with SIA caps, the caps win \u2014 season stats include production from OUT players',
+    '7. If a FLOOR SCORE is provided for a team, that team CANNOT score below the floor. The floor is mathematically guaranteed by opponent SIA caps.',
+    '8. NOTE: The client will recompute the weighted control score from your individual I1-I5 scores. Focus on scoring each indicator accurately \u2014 do not worry about the weighted arithmetic.',
     '',
     'Compute from the data: Context-Adjusted Strength, Structural Identity, Shot Diet, Win/Loss Delta, Comeback Score (0-10), Lead-Keep Score (0-10), Foul Resilience.',
     'BHV, Chaos Risk, and Pythagorean are pre-computed \u2014 use provided values.',
@@ -968,8 +1038,9 @@ exports.handler = async function(event) {
     var depletion = computeDepletionGate(rosterAudit);
     var pyth = computePythagorean(analytical.standings, homeAlias, awayAlias);
     var bhv = computeBHV(analytical, homeAlias, awayAlias, rosterAudit);
+    var floorScores = computeFloorScores(finalCaps, depletion);
 
-    var preComputed = formatPreComputed(homeAlias, awayAlias, rosterAudit, sia, finalCaps, redistribution, srm, depletion, pyth, bhv);
+    var preComputed = formatPreComputed(homeAlias, awayAlias, rosterAudit, sia, finalCaps, redistribution, srm, depletion, pyth, bhv, floorScores);
 
     // ── BUILD PROMPTS ──
     var systemPrompt = buildSystemPrompt();
@@ -1019,6 +1090,7 @@ exports.handler = async function(event) {
             homeOutNames: rosterAudit.out.home.map(function(p) { return p.name; }),
             awayOutNames: rosterAudit.out.away.map(function(p) { return p.name; }) },
           siaCaps: { home: finalCaps.home.caps, away: finalCaps.away.caps },
+          floorScores: floorScores,
           depletion: depletion, pyth: pyth, bhv: bhv,
           diagnostics: diagnostics
         }
