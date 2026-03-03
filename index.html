@@ -2156,6 +2156,26 @@ async function generateThesis(gameId){
     };
 
     console.log('Thesis payload size:', (JSON.stringify(payload).length/1024).toFixed(1)+'KB');
+    // Pre-send diagnostic — what does the client think it's sending?
+    const injCheck = payload.analytical.injuries;
+    console.log('%c📋 CLIENT PRE-SEND: injuries', 'color:#f0c040;font-weight:bold', {
+      type: typeof injCheck, isNull: injCheck===null, isUndef: injCheck===undefined,
+      topKeys: injCheck ? Object.keys(injCheck) : 'N/A',
+      hasTeams: injCheck ? Array.isArray(injCheck.teams) : false,
+      teamsCount: injCheck && Array.isArray(injCheck.teams) ? injCheck.teams.length : 0,
+      sampleTeam: injCheck && Array.isArray(injCheck.teams) && injCheck.teams.length > 0 ? {alias:injCheck.teams[0].alias, players:(injCheck.teams[0].players||[]).length} : 'N/A',
+      jsonSize: injCheck ? JSON.stringify(injCheck).length : 0
+    });
+    console.log('%c📋 CLIENT PRE-SEND: all analytical', 'color:#f0c040', {
+      injuries: injCheck ? Object.keys(injCheck).join(',') : 'EMPTY',
+      homeProfile: payload.analytical.homeProfile ? (payload.analytical.homeProfile.players||[]).length + ' players' : 'EMPTY',
+      awayProfile: payload.analytical.awayProfile ? (payload.analytical.awayProfile.players||[]).length + ' players' : 'EMPTY',
+      homeStats: payload.analytical.homeStats ? Object.keys(payload.analytical.homeStats).join(',') : 'EMPTY',
+      awayStats: payload.analytical.awayStats ? Object.keys(payload.analytical.awayStats).join(',') : 'EMPTY',
+      homeDepth: payload.analytical.homeDepth ? Object.keys(payload.analytical.homeDepth).join(',') : 'EMPTY',
+      awayDepth: payload.analytical.awayDepth ? Object.keys(payload.analytical.awayDepth).join(',') : 'EMPTY',
+      standings: payload.analytical.standings ? Object.keys(payload.analytical.standings).join(',') : 'EMPTY',
+    });
 
     const resp = await fetch(FN+'generate-thesis',{
       method:'POST',
@@ -2172,7 +2192,28 @@ async function generateThesis(gameId){
     // Log pre-computed SIA results if available
     if(data.preComputed){
       const pc = data.preComputed;
-      addLog(gameId, '🔬 SIA: '+homeAlias+' '+pc.rosterAudit.homeOut+' OUT, '+awayAlias+' '+pc.rosterAudit.awayOut+' OUT'+(pc.depletion.home?' | '+homeAlias+' '+pc.depletion.home.label:'')+(pc.depletion.away?' | '+awayAlias+' '+pc.depletion.away.label:''), true);
+      addLog(gameId, '🔬 SIA: '+homeAlias+' '+pc.rosterAudit.homeOut+' OUT ('+((pc.rosterAudit.homeOutNames||[]).join(', ')||'none')+'), '+awayAlias+' '+pc.rosterAudit.awayOut+' OUT ('+((pc.rosterAudit.awayOutNames||[]).join(', ')||'none')+')'+(pc.depletion.home?' | '+homeAlias+' '+pc.depletion.home.label:'')+(pc.depletion.away?' | '+awayAlias+' '+pc.depletion.away.label:''), true);
+      // Data integrity diagnostics
+      if(pc.diagnostics){
+        const dx = pc.diagnostics;
+        console.log('%c📋 DATA INTEGRITY REPORT', 'color:#f0c040;font-weight:bold', dx);
+        let dxLog = '📋 Data: '+dx.summary;
+        if(dx.critical && dx.critical.length > 0) dxLog += ' ❌ '+dx.critical.join(', ');
+        if(dx.warnings && dx.warnings.length > 0) dxLog += ' ⚠️ '+dx.warnings.join(', ');
+        addLog(gameId, dxLog, true);
+        // Cross-reference: can SIA match injury names to stats?
+        const cr = dx.crossRef || {};
+        if(cr.home && cr.home.length > 0) addLog(gameId, '🔗 '+homeAlias+' xref: '+cr.home.join(' | '), true);
+        if(cr.away && cr.away.length > 0) addLog(gameId, '🔗 '+awayAlias+' xref: '+cr.away.join(' | '), true);
+        // Injuries structure detail — the data we need most right now
+        const injDx = dx.endpoints && dx.endpoints.injuries;
+        if(injDx){
+          const matchedStr = (injDx.matchedTeams||[]).map(t=>t.alias+':'+t.players+'p').join(', ');
+          addLog(gameId, '🩺 Injuries: '+(injDx.hasTeams?injDx.teamsCount+' teams':'NO .teams[]')+' | matched=['+matchedStr+'] | topKeys=['+((injDx.topKeys||[]).join(','))+']', true);
+          if(injDx.matchedPlayerStatuses && injDx.matchedPlayerStatuses.length > 0) addLog(gameId, '🩺 Statuses: '+injDx.matchedPlayerStatuses.join(' | '), true);
+          if(injDx.nestedPath) addLog(gameId, '🩺 ⚠️ Found nested path: '+injDx.nestedPath+' — compute may need patching', true);
+        }
+      }
     }
     cs.genSteps[14].status = 'done';
   }catch(e){
