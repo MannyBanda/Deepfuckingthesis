@@ -557,34 +557,56 @@ function computeFloorScores(finalCaps, depletion) {
   var W = { I1: 0.25, I2: 0.25, I3: 0.20, I4: 0.20, I5: 0.10 };
   var floors = { home: null, away: null };
 
-  // For each side, compute their guaranteed floor from the OPPONENT's caps
-  // If opponent is capped at 0.0 on I2, this team gets I2 = 1.0 guaranteed
-  // If opponent is capped at 0.5 on I4, this team gets I4 >= 0.5 guaranteed
-  // Uncapped indicators assume contested baseline (0.5)
+  // For each side, compute their guaranteed floor considering BOTH teams' caps
+  // Key logic: if BOTH teams capped at 0 on same indicator → contested (0.5), not a free win
   ['home', 'away'].forEach(function(side) {
     var oppSide = side === 'home' ? 'away' : 'home';
     var oppCaps = finalCaps[oppSide] && finalCaps[oppSide].caps;
-    if (!oppCaps) return;
+    var ownCaps = finalCaps[side] && finalCaps[side].caps;
+    if (!oppCaps && !ownCaps) return;
 
     var hasAnyCap = false;
-    ['I1','I2','I3','I4','I5'].forEach(function(ind) { if (oppCaps[ind] !== null && oppCaps[ind] !== undefined) hasAnyCap = true; });
+    if (oppCaps) ['I1','I2','I3','I4','I5'].forEach(function(ind) { if (oppCaps[ind] !== null && oppCaps[ind] !== undefined) hasAnyCap = true; });
+    if (ownCaps) ['I1','I2','I3','I4','I5'].forEach(function(ind) { if (ownCaps[ind] !== null && ownCaps[ind] !== undefined) hasAnyCap = true; });
     if (!hasAnyCap) return;
 
     var floor = 0;
     var details = [];
     ['I1','I2','I3','I4','I5'].forEach(function(ind) {
-      var oppCap = oppCaps[ind];
+      var oppCap = oppCaps ? oppCaps[ind] : null;
+      var ownCap = ownCaps ? ownCaps[ind] : null;
       var myMin;
-      if (oppCap === 0.0) {
-        // Opponent capped at 0 → this team guaranteed 1.0 on this indicator
-        myMin = 1.0;
-        details.push(ind + '=1.0 (opp capped 0.0)');
-      } else if (oppCap === 0.5) {
-        // Opponent capped at 0.5 → this team guaranteed at least 0.5
+
+      // Both teams gutted on this indicator → contested
+      if (oppCap === 0.0 && ownCap === 0.0) {
         myMin = 0.5;
-        details.push(ind + '>=0.5 (opp capped 0.5)');
-      } else {
-        // Uncapped — assume contested baseline
+        details.push(ind + '=0.5 (BOTH capped 0.0 — contested)');
+      }
+      // Own team gutted → lose the indicator
+      else if (ownCap === 0.0) {
+        myMin = 0.0;
+        details.push(ind + '=0.0 (own capped 0.0 — lose)');
+      }
+      // Opponent gutted, own uncapped → guaranteed win
+      else if (oppCap === 0.0 && (ownCap === null || ownCap === undefined)) {
+        myMin = 1.0;
+        details.push(ind + '=1.0 (opp capped 0.0, own healthy)');
+      }
+      // Opponent gutted, own limited → can't fully exploit
+      else if (oppCap === 0.0 && ownCap === 0.5) {
+        myMin = 0.5;
+        details.push(ind + '=0.5 (opp capped 0.0, own capped 0.5)');
+      }
+      // Opponent limited → at least contested
+      else if (oppCap === 0.5) {
+        myMin = 0.5;
+      }
+      // Own limited but opponent uncapped → contested at best
+      else if (ownCap === 0.5) {
+        myMin = 0.5;
+      }
+      // No relevant caps → contested baseline
+      else {
         myMin = 0.5;
       }
       floor += myMin * W[ind];
@@ -597,7 +619,10 @@ function computeFloorScores(finalCaps, depletion) {
     var ceiling = depletion[side] ? depletion[side].ceiling : 1.0;
     if (floor > ceiling) floor = ceiling;
 
-    floors[side] = { floor: floor, details: details, verdict: floor >= 0.90 ? 'DOMINANT' : floor >= 0.75 ? 'STRONG' : floor >= 0.60 ? 'EARNED' : floor >= 0.45 ? 'NO EDGE' : 'WAIT' };
+    // Only report floor if it's meaningfully above baseline (0.50)
+    if (details.length > 0) {
+      floors[side] = { floor: floor, details: details, verdict: floor >= 0.90 ? 'DOMINANT' : floor >= 0.75 ? 'STRONG' : floor >= 0.60 ? 'EARNED' : floor >= 0.45 ? 'NO EDGE' : 'WAIT' };
+    }
   });
 
   return floors;
