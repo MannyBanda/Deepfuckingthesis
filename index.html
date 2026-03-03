@@ -196,7 +196,7 @@ input,textarea,select{font-size:16px!important;}
 .gen-step.active{color:var(--amber);}
 .gen-step.err{color:var(--red);}
 
-.log{background:var(--s2);border-top:1px solid var(--b1);padding:4px 11px;font-size:6px;color:var(--t3);max-height:140px;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;}
+.log{background:var(--s2);border-top:1px solid var(--b1);padding:4px 11px;font-size:6px;color:var(--t3);max-height:200px;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;}
 .log .ok{color:#3d9970;}.log .er{color:var(--red);}
 .foot{font-size:6px;color:var(--t3);padding:3px 11px 6px;}
 
@@ -2242,6 +2242,8 @@ async function generateThesis(gameId){
           if(injDx.sampleTeamKeys) addLog(gameId, '🩺 Team keys: '+injDx.sampleTeamKeys.join(', '), true);
           if(injDx.samplePlayerKeys) addLog(gameId, '🩺 Player keys: '+injDx.samplePlayerKeys.join(', '), true);
           if(injDx.samplePlayerDump) addLog(gameId, '🩺 Sample player: '+JSON.stringify(injDx.samplePlayerDump).substring(0,300), true);
+          if(injDx.rawPlayerKeys) addLog(gameId, '🔑 MATCHED player keys: '+injDx.rawPlayerKeys.join(', '), true);
+          if(injDx.rawPlayerJSON) addLog(gameId, '🔑 RAW PLAYER: '+injDx.rawPlayerJSON, true);
           if(injDx.matchedPlayerStatuses && injDx.matchedPlayerStatuses.length > 0) addLog(gameId, '🩺 Statuses: '+injDx.matchedPlayerStatuses.join(' | '), true);
           if(injDx.nestedPath) addLog(gameId, '🩺 ⚠️ Found nested path: '+injDx.nestedPath+' — compute may need patching', true);
         }
@@ -3495,7 +3497,7 @@ function mountCard(game){
   if(!cardState[id].enrichDone && !cardState[id].enriching) enrichFromBDL(id);
 }
 
-function addLog(id,msg,ok){const cs=cardState[id];if(!cs)return;cs.logs=[...cs.logs.slice(-19),{msg,ok,t:new Date().toLocaleTimeString()}];}
+function addLog(id,msg,ok){const cs=cardState[id];if(!cs)return;cs.logs=[...cs.logs.slice(-29),{msg,ok,t:new Date().toLocaleTimeString()}];}
 
 function renderCard(game){
   const id=game.id, cs=cardState[id];
