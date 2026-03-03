@@ -40,6 +40,34 @@ function dgSym(n) {
   return '\u2014';
 }
 
+// Resolve team alias from various SR field name conventions
+function resolveAlias(team) {
+  return (team.alias || team.abbreviation || team.abbr || '').toUpperCase();
+}
+
+// Resolve depth chart positions from various SR response structures
+// SR depth_chart endpoint wraps positions inside team metadata object
+function resolveDepthPositions(depth) {
+  if (!depth) return [];
+  // Direct positions array
+  if (Array.isArray(depth.positions)) return depth.positions;
+  if (Array.isArray(depth)) return depth;
+  // Nested under team wrapper keys
+  if (depth.positions && Array.isArray(depth.positions)) return depth.positions;
+  // SR sometimes nests as depth_chart.positions within team object
+  if (depth.depth_chart && Array.isArray(depth.depth_chart.positions)) return depth.depth_chart.positions;
+  if (depth.depth_chart && Array.isArray(depth.depth_chart)) return depth.depth_chart;
+  // Search for any key containing an array of objects with 'players' arrays (likely positions)
+  var keys = Object.keys(depth);
+  for (var i = 0; i < keys.length; i++) {
+    var val = depth[keys[i]];
+    if (Array.isArray(val) && val.length > 0 && val[0] && (Array.isArray(val[0].players) || val[0].name || val[0].position)) {
+      return val;
+    }
+  }
+  return [];
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // 1. ROSTER AUDIT
 // ══════════════════════════════════════════════════════════════════════════════
@@ -50,7 +78,7 @@ function computeRosterAudit(analytical, homeAlias, awayAlias) {
   var injTeams = (analytical.injuries && analytical.injuries.teams) || [];
 
   injTeams.forEach(function(team) {
-    var alias = (team.alias || '').toUpperCase();
+    var alias = resolveAlias(team);
     var side = alias === homeAlias.toUpperCase() ? 'home' :
                alias === awayAlias.toUpperCase() ? 'away' : null;
     if (!side) return;
@@ -223,7 +251,7 @@ function computeRedistribution(rosterAudit, sia, analytical, homeAlias, awayAlia
     // Parse depth chart
     var depthPos = [];
     if (ownDepth) {
-      var pos = Array.isArray(ownDepth.positions) ? ownDepth.positions : Array.isArray(ownDepth) ? ownDepth : [];
+      var pos = resolveDepthPositions(ownDepth);
       pos.forEach(function(p) {
         var pls = Array.isArray(p.players) ? p.players : [];
         depthPos.push({
@@ -378,7 +406,7 @@ function computeBHV(analytical, homeAlias, awayAlias, rosterAudit) {
 
     var pgName = null;
     if (depth) {
-      var positions = Array.isArray(depth.positions) ? depth.positions : Array.isArray(depth) ? depth : [];
+      var positions = resolveDepthPositions(depth);
       for (var i = 0; i < positions.length; i++) {
         var pName = (positions[i].name || positions[i].position || '').toUpperCase();
         if (pName === 'PG' || pName === 'POINT GUARD') {
@@ -649,9 +677,11 @@ function diagnoseData(analytical, homeAlias, awayAlias) {
     injReport.teamsCount = Array.isArray(inj.teams) ? inj.teams.length : 0;
     if (Array.isArray(inj.teams) && inj.teams.length > 0) {
       var sample = inj.teams[0];
-      injReport.sampleTeam = { alias: sample.alias, hasPlayers: Array.isArray(sample.players), playerCount: (sample.players || []).length };
+      injReport.sampleTeamKeys = Object.keys(sample);
+      injReport.sampleTeam = { alias: sample.alias, name: sample.name, market: sample.market, abbreviation: sample.abbreviation, abbr: sample.abbr, sr_id: sample.sr_id, hasPlayers: Array.isArray(sample.players), playerCount: (sample.players || []).length };
       if (sample.players && sample.players.length > 0) {
         var sp = sample.players[0];
+        injReport.samplePlayerKeys = Object.keys(sp);
         injReport.samplePlayer = { full_name: sp.full_name, name: sp.name, status: sp.status, desc: sp.desc, comment: sp.comment, injury: sp.injury, primary_position: sp.primary_position, position: sp.position };
       }
     }
@@ -662,9 +692,10 @@ function diagnoseData(analytical, homeAlias, awayAlias) {
     // Find teams matching our aliases
     if (Array.isArray(inj.teams)) {
       var matched = inj.teams.filter(function(t) {
-        return (t.alias || '').toUpperCase() === homeAlias.toUpperCase() || (t.alias || '').toUpperCase() === awayAlias.toUpperCase();
+        var a = resolveAlias(t);
+        return a === homeAlias.toUpperCase() || a === awayAlias.toUpperCase();
       });
-      injReport.matchedTeams = matched.map(function(t) { return { alias: t.alias, players: (t.players || []).length }; });
+      injReport.matchedTeams = matched.map(function(t) { return { alias: resolveAlias(t), name: t.name, market: t.market, players: (t.players || []).length }; });
       var allStatuses = [];
       matched.forEach(function(t) {
         (t.players || []).forEach(function(p) {
@@ -737,8 +768,9 @@ function diagnoseData(analytical, homeAlias, awayAlias) {
     var depthReport = { exists: !!depth, structure: keys(depth, 1) };
     if (depth) {
       depthReport.topKeys = Object.keys(depth);
-      var pos = Array.isArray(depth.positions) ? depth.positions : Array.isArray(depth) ? depth : [];
+      var pos = resolveDepthPositions(depth);
       depthReport.hasPositions = Array.isArray(depth.positions);
+      depthReport.resolvedPositions = pos.length;
       depthReport.positionCount = pos.length;
       if (pos.length > 0) {
         depthReport.samplePosition = { name: pos[0].name, position: pos[0].position, playerCount: (pos[0].players || []).length };
@@ -777,7 +809,7 @@ function diagnoseData(analytical, homeAlias, awayAlias) {
   ['home', 'away'].forEach(function(side) {
     var injTeams = (analytical.injuries && analytical.injuries.teams) || [];
     var alias = side === 'home' ? homeAlias : awayAlias;
-    var teamInj = injTeams.find(function(t) { return (t.alias || '').toUpperCase() === alias.toUpperCase(); });
+    var teamInj = injTeams.find(function(t) { return resolveAlias(t) === alias.toUpperCase(); });
     if (!teamInj) { crossRef[side].push('No injury team found for ' + alias); return; }
     var outPlayers = (teamInj.players || []).filter(function(p) { var s = (p.status || '').toUpperCase(); return s === 'OUT' || s === 'O' || s === 'IR'; });
     var statPlayers = getPlayers(analytical[side + 'Stats']);
