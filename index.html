@@ -901,6 +901,16 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
       cs.sonnetIndicators = parsed;
       // Snapshot client indicators at analysis time — divergence compares future client reads against THIS baseline
       cs.clientIndAtAnalysis = computeAny(game);
+      // ── FLOOR ENFORCEMENT — SIA guarantees minimum score ──
+      if(cs.floorScores && parsed.controlTeam){
+        const ctUp = parsed.controlTeam.toUpperCase();
+        const isHome = ctUp === hAlias.toUpperCase() || ctUp.includes(hAlias.toUpperCase().substring(0,3));
+        const floor = isHome ? cs.floorScores.home : cs.floorScores.away;
+        if(floor && parsed.score < floor.floor){
+          console.log('FLOOR OVERRIDE (live): ' + parsed.controlTeam + ' ' + parsed.score.toFixed(3) + ' → ' + floor.floor.toFixed(3) + ' (SIA floor)');
+          parsed.score = floor.floor;
+        }
+      }
       console.log('Sonnet scores parsed:', parsed.controlTeam, parsed.score.toFixed(2));
     }
 
@@ -948,6 +958,25 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
         }
       }
       cs.prediction = decision;
+
+      // ── CONVICTION OVERRIDE — client score is authoritative, Sonnet can downgrade only ──
+      if(parsed?.score && decision.conviction){
+        const convictionRank = {'DOMINANT':4, 'STRONG':3, 'EARNED':2, 'CONDITIONAL':1, 'NO ENTRY':0};
+        const scoreVerdict = getVerdict(parsed.score);
+        // Map verdict labels to conviction labels (DOMINANT→DOMINANT, STRONG→STRONG, EARNED→EARNED, NO EDGE→CONDITIONAL, WAIT→NO ENTRY)
+        const verdictToConviction = {'DOMINANT':'DOMINANT', 'STRONG':'STRONG', 'EARNED':'EARNED', 'NO EDGE':'CONDITIONAL', 'WAIT':'NO ENTRY'};
+        const scoreConviction = verdictToConviction[scoreVerdict?.label] || 'CONDITIONAL';
+        const scoreRank = convictionRank[scoreConviction] ?? 1;
+        const sonnetRank = convictionRank[decision.conviction] ?? 1;
+        // Sonnet can downgrade (qualitative caution) but not upgrade (arithmetic error)
+        if(sonnetRank > scoreRank){
+          console.log('CONVICTION OVERRIDE: Sonnet said ' + decision.conviction + ' but score ' + parsed.score.toFixed(2) + ' implies ' + scoreConviction + ' — using ' + scoreConviction);
+          decision.conviction = scoreConviction;
+          decision.convictionOverride = true;
+        } else if(sonnetRank < scoreRank){
+          console.log('CONVICTION DOWNGRADE (Sonnet caution): Score implies ' + scoreConviction + ' but Sonnet says ' + decision.conviction + ' — keeping Sonnet');
+        }
+      }
       console.log('Decision parsed:', decision.conviction, decision.entry, decision.prediction);
       // Track edge history for entry timing
       if(decision.edgeNum !== null || decision.fwp){
@@ -1707,15 +1736,21 @@ function parseSonnetScores(text, homeAlias, awayAlias){
     let score = controlHome ? raw : 1 - raw;
     let controlTeam = controlHome ? homeAlias : awayAlias;
 
-    // Prefer Sonnet's own stated control score if parseable
+    // Parse Sonnet's stated team attribution (which team controls) — trust the team, not the score
     const controlMatch = text.match(/CONTROL:\s*(\S+)\s+([\d.]+)\s*[—–-]/i);
+    let sonnetStatedScore = null;
     if(controlMatch){
       const statedTeam = controlMatch[1];
-      const statedScore = parseFloat(controlMatch[2]);
-      if(statedScore >= 0.4 && statedScore <= 1.0){
+      sonnetStatedScore = parseFloat(controlMatch[2]);
+      if(sonnetStatedScore >= 0.4 && sonnetStatedScore <= 1.0){
+        // Use Sonnet's team call — it knows which team it's analyzing for
         controlTeam = statedTeam;
-        score = statedScore;
       }
+    }
+    // Client-computed weighted sum is AUTHORITATIVE — Sonnet's stated score is divergence check
+    if(sonnetStatedScore !== null && Math.abs(score - sonnetStatedScore) >= 0.03){
+      console.log('SCORE DIVERGENCE: Sonnet stated ' + (controlMatch?controlMatch[1]:'?') + ' ' + sonnetStatedScore.toFixed(2) +
+        ' | Client computed ' + controlTeam + ' ' + score.toFixed(3) + ' (delta ' + Math.abs(score - sonnetStatedScore).toFixed(2) + ')');
     }
 
     const trajMatch = text.match(/TRAJECTORY:\s*(\S+)\s*[—–-]\s*(\d+)\/(\d+)/i);
@@ -2226,6 +2261,15 @@ async function generateThesis(gameId){
     if(data.preComputed){
       const pc = data.preComputed;
       addLog(gameId, '🔬 SIA: '+homeAlias+' '+pc.rosterAudit.homeOut+' OUT ('+((pc.rosterAudit.homeOutNames||[]).join(', ')||'none')+'), '+awayAlias+' '+pc.rosterAudit.awayOut+' OUT ('+((pc.rosterAudit.awayOutNames||[]).join(', ')||'none')+')'+(pc.depletion.home?' | '+homeAlias+' '+pc.depletion.home.label:'')+(pc.depletion.away?' | '+awayAlias+' '+pc.depletion.away.label:''), true);
+      // Store SIA caps and floor scores for live enforcement
+      cs.siaCaps = pc.siaCaps;
+      cs.floorScores = pc.floorScores || null;
+      if(cs.floorScores){
+        ['home','away'].forEach(side=>{
+          const f = cs.floorScores[side];
+          if(f) addLog(gameId, '📊 FLOOR: '+(side==='home'?homeAlias:awayAlias)+' minimum '+f.floor.toFixed(3)+' ('+f.verdict+') — '+f.details.join(', '), true);
+        });
+      }
       // Data integrity diagnostics
       if(pc.diagnostics){
         const dx = pc.diagnostics;
@@ -3207,6 +3251,17 @@ function renderConfidenceTable(){
     const cs = cardState[g.id];
     const si = cs?.sonnetIndicators;
     if(si && si.score){ team=si.controlTeam; score=si.score; verdict=getVerdict(si.score)?.label||verdict; }
+    // ── FLOOR ENFORCEMENT — SIA guarantees minimum score for healthy team ──
+    if(cs?.floorScores && team){
+      const teamUp = team.toUpperCase();
+      const isHome = teamUp === hA.toUpperCase() || teamUp.includes(hA.toUpperCase().substring(0,3));
+      const floor = isHome ? cs.floorScores.home : cs.floorScores.away;
+      if(floor && score < floor.floor){
+        console.log('FLOOR OVERRIDE: ' + team + ' score ' + score.toFixed(3) + ' below floor ' + floor.floor.toFixed(3) + ' → enforcing floor');
+        score = floor.floor;
+        verdict = getVerdict(score)?.label || verdict;
+      }
+    }
     const pred = cs?.prediction;
     const fwp = pred?.fwp || null;
     const edge = pred?.edgeNum ?? null;
