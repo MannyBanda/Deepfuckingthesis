@@ -2032,13 +2032,13 @@ async function generateThesis(gameId){
   } // end skip-if-already-populated
   renderGenProgress(gameId);
 
-  // Now send to Sonnet — prompt built client-side, function is thin Anthropic proxy
+  // Now send to Sonnet via smart compute layer — server pre-computes SIA, redistribution, Pythagorean, BHV
   cs.genSteps[14].status = 'active';
   renderGenProgress(gameId);
   try{
     const tipTime = new Date(game.scheduled).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/Phoenix'});
 
-    // Trim functions to reduce prompt size
+    // Trim functions to reduce prompt size (text sections for Sonnet context)
     const trimProfile = (p) => {
       if(!p) return '(unavailable)';
       const players = (p.players||[])
@@ -2095,155 +2095,72 @@ async function generateThesis(gameId){
     };
 
     const c = collected;
-    // Wrap each trim in try/catch to isolate crashes
     const safe = (fn, label) => { try{ return fn(); }catch(e){ console.error('TRIM CRASH in '+label+':', e.message, e.stack); return '(ERROR: '+label+' — '+e.message+')'; } };
 
-    const userPrompt = `Build a complete pre-game thesis for this NBA matchup.
+    // Build text sections for Sonnet context
+    const sections = {
+      injuries: safe(()=>trimInjuries(c.injuries), 'injuries'),
+      homeRoster: safe(()=>trimProfile(c.homeProfile), 'homeProfile'),
+      awayRoster: safe(()=>trimProfile(c.awayProfile), 'awayProfile'),
+      homeDepth: safe(()=>trimDepth(c.homeDepth), 'homeDepth'),
+      awayDepth: safe(()=>trimDepth(c.awayDepth), 'awayDepth'),
+      homeStats: safe(()=>trimStats(c.homeStats), 'homeStats'),
+      awayStats: safe(()=>trimStats(c.awayStats), 'awayStats'),
+      homeSplitsGame: safe(()=>trimSplits(c.homeSplitsGame), 'homeSplitsGame'),
+      awaySplitsGame: safe(()=>trimSplits(c.awaySplitsGame), 'awaySplitsGame'),
+      homeSplitsSchedule: safe(()=>trimSplits(c.homeSplitsSchedule), 'homeSplitsSchedule'),
+      awaySplitsSchedule: safe(()=>trimSplits(c.awaySplitsSchedule), 'awaySplitsSchedule'),
+      standings: safe(()=>trimStandings(c.standings), 'standings'),
+    };
 
-MATCHUP: ${awayAlias} @ ${homeAlias}
-DATE: ${getEasternDate(0).str} | TIME: ${tipTime} MST
-VENUE: ${game.venue||'TBD'}
+    // Inject enrichment data into sections
+    const od = cs.oddsData;
+    if(od && (od.homeML || od.homeSpread)){
+      sections.odds = '\n=== MARKET ODDS ===\nSpread: '+homeAlias+' '+(od.homeSpread||'N/A')+' | ML: '+awayAlias+' '+(od.awayML||'N/A')+' / '+homeAlias+' '+(od.homeML||'N/A')+' | O/U: '+(od.total||'N/A')+'\n';
+    } else {
+      sections.odds = '\n=== MARKET ODDS ===\nNot yet available — ML THRESHOLD will read "Awaiting odds"\n';
+    }
+    const td = cs.trackingData;
+    if(td){
+      const ht = td.home||{}, at = td.away||{};
+      let trk = '\n=== SHOOTING BASELINES (BDL Tracking) ===\n';
+      if(at.catchAndShoot || ht.catchAndShoot) trk += 'Catch & Shoot eFG%: '+awayAlias+' '+(at.catchAndShoot?at.catchAndShoot.efg||'?':'?')+'% | '+homeAlias+' '+(ht.catchAndShoot?ht.catchAndShoot.efg||'?':'?')+'%\n';
+      if(at.pullUp || ht.pullUp) trk += 'Pull-up eFG%: '+awayAlias+' '+(at.pullUp?at.pullUp.efg||'?':'?')+'% | '+homeAlias+' '+(ht.pullUp?ht.pullUp.efg||'?':'?')+'%\n';
+      sections.tracking = trk;
+    } else { sections.tracking = ''; }
+    const cd = cs.clutchData;
+    if(cd){
+      const tierLabel = cd.tier===1?'L15 NBA.com (Tier 1)':cd.tier===2?'Season BDL (Tier 2)':'Proxy (Tier 3)';
+      let cl = '\n=== CLUTCH DATA ('+tierLabel+') ===\n';
+      if(cd.away) cl += awayAlias+': NetRtg '+(cd.away.netRtg!=null?cd.away.netRtg:'N/A')+' OffRtg '+(cd.away.offRtg!=null?cd.away.offRtg:'N/A')+' DefRtg '+(cd.away.defRtg!=null?cd.away.defRtg:'N/A')+' '+(cd.away.wl||'')+'\n';
+      if(cd.home) cl += homeAlias+': NetRtg '+(cd.home.netRtg!=null?cd.home.netRtg:'N/A')+' OffRtg '+(cd.home.offRtg!=null?cd.home.offRtg:'N/A')+' DefRtg '+(cd.home.defRtg!=null?cd.home.defRtg:'N/A')+' '+(cd.home.wl||'')+'\n';
+      sections.clutch = cl;
+    } else { sections.clutch = ''; }
 
-=== INJURIES ===
-${safe(()=>trimInjuries(c.injuries), 'injuries')}
+    // Build analytical payload — raw structured data for server-side SIA computation
+    const analytical = {
+      injuries: c.injuries || {},
+      homeProfile: c.homeProfile || {},
+      awayProfile: c.awayProfile || {},
+      homeStats: c.homeStats || {},
+      awayStats: c.awayStats || {},
+      homeDepth: c.homeDepth || {},
+      awayDepth: c.awayDepth || {},
+      standings: c.standings || {},
+    };
 
-=== ${homeAlias} ROSTER ===
-${safe(()=>trimProfile(c.homeProfile), 'homeProfile')}
+    const payload = {
+      matchup: { home: homeAlias, away: awayAlias, date: getEasternDate(0).str, time: tipTime, venue: game.venue||'TBD' },
+      sections: sections,
+      analytical: analytical,
+    };
 
-=== ${awayAlias} ROSTER ===
-${safe(()=>trimProfile(c.awayProfile), 'awayProfile')}
-
-=== ${homeAlias} DEPTH CHART ===
-${safe(()=>trimDepth(c.homeDepth), 'homeDepth')}
-
-=== ${awayAlias} DEPTH CHART ===
-${safe(()=>trimDepth(c.awayDepth), 'awayDepth')}
-
-=== ${homeAlias} SEASON STATS ===
-${safe(()=>trimStats(c.homeStats), 'homeStats')}
-
-=== ${awayAlias} SEASON STATS ===
-${safe(()=>trimStats(c.awayStats), 'awayStats')}
-
-=== ${homeAlias} SPLITS (Game) ===
-${safe(()=>trimSplits(c.homeSplitsGame), 'homeSplitsGame')}
-
-=== ${awayAlias} SPLITS (Game) ===
-${safe(()=>trimSplits(c.awaySplitsGame), 'awaySplitsGame')}
-
-=== ${homeAlias} SPLITS (Schedule) ===
-${safe(()=>trimSplits(c.homeSplitsSchedule), 'homeSplitsSchedule')}
-
-=== ${awayAlias} SPLITS (Schedule) ===
-${safe(()=>trimSplits(c.awaySplitsSchedule), 'awaySplitsSchedule')}
-
-=== STANDINGS ===
-${safe(()=>trimStandings(c.standings), 'standings')}
-${(function(){
-  var sections = '';
-  // Inject odds if available from BDL enrich
-  var od = cs.oddsData;
-  if(od && (od.homeML || od.homeSpread)){
-    sections += '\n=== MARKET ODDS ===\nSpread: '+homeAlias+' '+(od.homeSpread||'N/A')+' | ML: '+awayAlias+' '+(od.awayML||'N/A')+' / '+homeAlias+' '+(od.homeML||'N/A')+' | O/U: '+(od.total||'N/A')+'\n';
-  } else {
-    sections += '\n=== MARKET ODDS ===\nNot yet available — ML THRESHOLD will read "Awaiting odds"\n';
-  }
-  // Inject tracking baselines if available
-  var td = cs.trackingData;
-  if(td){
-    var ht = td.home||{}, at = td.away||{};
-    sections += '\n=== SHOOTING BASELINES (BDL Tracking) ===\n';
-    if(at.catchAndShoot || ht.catchAndShoot) sections += 'Catch & Shoot eFG%: '+awayAlias+' '+(at.catchAndShoot?at.catchAndShoot.efg||'?':'?')+'% | '+homeAlias+' '+(ht.catchAndShoot?ht.catchAndShoot.efg||'?':'?')+'%\n';
-    if(at.pullUp || ht.pullUp) sections += 'Pull-up eFG%: '+awayAlias+' '+(at.pullUp?at.pullUp.efg||'?':'?')+'% | '+homeAlias+' '+(ht.pullUp?ht.pullUp.efg||'?':'?')+'%\n';
-  }
-  // Inject clutch data if available
-  var cd = cs.clutchData;
-  if(cd){
-    var tierLabel = cd.tier===1?'L15 NBA.com (Tier 1)':cd.tier===2?'Season BDL (Tier 2)':'Proxy (Tier 3)';
-    sections += '\n=== CLUTCH DATA ('+tierLabel+') ===\n';
-    if(cd.away) sections += awayAlias+': NetRtg '+(cd.away.netRtg!=null?cd.away.netRtg:'N/A')+' OffRtg '+(cd.away.offRtg!=null?cd.away.offRtg:'N/A')+' DefRtg '+(cd.away.defRtg!=null?cd.away.defRtg:'N/A')+' '+(cd.away.wl||'')+'\n';
-    if(cd.home) sections += homeAlias+': NetRtg '+(cd.home.netRtg!=null?cd.home.netRtg:'N/A')+' OffRtg '+(cd.home.offRtg!=null?cd.home.offRtg:'N/A')+' DefRtg '+(cd.home.defRtg!=null?cd.home.defRtg:'N/A')+' '+(cd.home.wl||'')+'\n';
-  }
-  return sections;
-})()}
-Compute all analytical layers (strength profiles, structural identity, shot diet, BHV, chaos risk, foul resilience, Pythagorean check, win/loss delta, 3PT vulnerability profile, ML threshold) from this data. Output the compact thesis format.`;
-
-    const systemPrompt = `You are an NBA pre-game structural analyst. Build game thesis documents predicting where the structural battle will be fought and what to monitor live.
-
-The user's strategy: BET THE STRUCTURALLY DOMINANT TEAM WHEN TRAILING, because the opponent's lead is built on unsustainable variance (hot 3PT shooting from non-shooters, role player heaters, shot diet misalignment). The thesis exists to identify WHICH team has real structural control, so the live system knows who to buy when they fall behind on variance.
-
-INDICATORS (weighted): I1 Possession & Transition (25%) — TO margin, steals, OREBs, POT, SCP, FBP. I2 Rim Pressure & Foul (25%) — paint pts, at-rim rates, FTA, blocks. I3 Shot Quality & Creation (20%) — assist ratio, eFG%, shot zones. I4 Lineup Integrity (20%) — bench depth, biggest lead, win/loss delta. I5 Tempo & Efficiency (10%) — pace, pts/possession.
-
-Each scored 1.0 (clear edge), 0.5 (contested), 0.0 (opponent). Control: 0.90+ DOMINANT | 0.75-0.89 STRONG | 0.60-0.74 EARNED | 0.45-0.59 NO EDGE | <0.45 WAIT.
-
-Compute: Context-Adjusted Strength, Structural Identity, Shot Diet (Interior/Transition vs Perimeter/Creation vs Balanced), Win/Loss Delta, Comeback Score (0-10), Lead-Keep Score (0-10), BHV (LOW <2.5, MOD 2.5-3.5, HIGH >3.5 TO/gm), Chaos Risk (HIGH BHV + top-7 steals opp), Foul Resilience, Pythagorean check (PF^13.91/(PF^13.91+PA^13.91)), System Resilience (top-10 DEF teams with stars OUT).
-
-3PT VULNERABILITY PROFILE (compute for BOTH teams):
-For each team, identify players most likely to produce unsustainable 3PT variance:
-- NON-SHOOTERS: <33% season 3PT or <1.5 3PA/gm — hot streaks are pure variance
-- VOLATILE SHOOTERS: 33-38% on 3+ att/gm — can look elite on any given night
-- Name 2-3 specific players per team as the "heater watchlist" for live monitoring
-- Note team season 3PT% and shot diet classification so the live audit has a baseline
-
-ML THRESHOLD (compute if odds provided):
-If market odds are available, compute entry threshold for the thesis team:
-- Convert control score to implied win probability (e.g. 0.82 = ~82% FWP)
-- Compare against thesis team's current MIP from moneyline
-- ML THRESHOLD = the ML where thesis team's MIP is at least 5% below FWP
-- Example: FWP 82%, current MIP 77.5% at -340 → threshold "CLE below -250 ML" (MIP ~71%)
-- If no odds available, output "ML THRESHOLD: Awaiting odds"
-
-OUTPUT FORMAT:
-COMPACT THESIS — [AWAY] vs [HOME] | [Time] MST
-[Date] | [Venue]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-AVAILABILITY
-[TEAM A] [Player] ✅ IN | [Player] ❌ OUT | [Player] ⚠️ GTD
-[TEAM B] [same]
-REST [TEAM A] X day | [TEAM B] X day
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CONTROL SCORE: [Team] [X.XX] — [Verdict]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-I1 Possession & Transition (25%) [Team 1.0 | CONTESTED 0.5 | Team 0.0]
-[1-line reason]
-I2 Rim Pressure & Foul (25%) [same format]
-I3 Shot Quality & Creation (20%) [same]
-I4 Lineup Integrity (20%) [same]
-I5 Tempo & Efficiency (10%) [same]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SHOT DIET
-[TEAM A]: [Interior/Transition | Perimeter/Creation | Balanced] — season 3PT% [X]% on [Y] 3PA/gm
-[TEAM B]: [same]
-
-3PT HEATER WATCHLIST
-[TEAM A]: [Player1] ([szn 3PT%] on [vol]/gm) [NON-SHOOTER|VOLATILE], [Player2] [same]
-[TEAM B]: [same]
-
-KEY FLAGS
-⚠ [Flag 1]
-⚠ [Flag 2]
-✓ [Clean read note if applicable]
-
-MARKET: Spread [X] | ML [X/X] | O/U [X]
-ML THRESHOLD: [Thesis team] below [ML value] ([X]% MIP vs [Y]% FWP = [Z]%+ edge)
-
-ENTRY      [Thesis team] trails by [X]+ on [opponent] unsustainable 3PT | OR [thesis team] ML above [threshold]
-PASS       [Opponent] lead structural (LOCKED IN/DURABLE 3PT) — do NOT fade
-
-CLUTCH GATE: [pre-game note]
-
-WATCH
-1. [Opponent] 3PT sustainability — confirms entry if [opp] shooting [X]%+ from 3 with [Z]%+ from non-shooters; denies if from elite shooters at normal rates
-2. [Thesis team] interior/structural — confirms if paint pts + FTA on pace; denies if interior suppressed
-3. [TO/chaos] — confirms if [thesis team] TO rate holds below [X]; denies if BHV/integration materializes`;
-
-
-    console.log('Thesis prompt size:', (userPrompt.length/1024).toFixed(1)+'KB');
+    console.log('Thesis payload size:', (JSON.stringify(payload).length/1024).toFixed(1)+'KB');
 
     const resp = await fetch(FN+'generate-thesis',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ systemPrompt, userPrompt }),
+      body: JSON.stringify(payload),
     });
     if(!resp.ok){
       const errData = await resp.json().catch(()=>({error:'Unknown error '+resp.status}));
@@ -2252,6 +2169,11 @@ WATCH
     const data = await resp.json();
     theses[gameId] = data.thesis;
     localStorage.setItem('nba4:theses', JSON.stringify(theses));
+    // Log pre-computed SIA results if available
+    if(data.preComputed){
+      const pc = data.preComputed;
+      addLog(gameId, '🔬 SIA: '+homeAlias+' '+pc.rosterAudit.homeOut+' OUT, '+awayAlias+' '+pc.rosterAudit.awayOut+' OUT'+(pc.depletion.home?' | '+homeAlias+' '+pc.depletion.home.label:'')+(pc.depletion.away?' | '+awayAlias+' '+pc.depletion.away.label:''), true);
+    }
     cs.genSteps[14].status = 'done';
   }catch(e){
     cs.genSteps[14].status = 'err';
