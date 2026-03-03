@@ -40,9 +40,22 @@ function dgSym(n) {
   return '\u2014';
 }
 
-// Resolve team alias from various SR field name conventions
-function resolveAlias(team) {
-  return (team.alias || team.abbreviation || team.abbr || '').toUpperCase();
+// Match an injury/standings team object to home/away using multiple strategies
+function matchTeamSide(team, homeAlias, awayAlias, homeId, awayId) {
+  // Strategy 1: Match by SR ID (most reliable — injuries lack alias)
+  if (homeId && (team.id === homeId || team.sr_id === homeId)) return 'home';
+  if (awayId && (team.id === awayId || team.sr_id === awayId)) return 'away';
+  // Strategy 2: Match by alias/abbreviation
+  var alias = (team.alias || team.abbreviation || team.abbr || '').toUpperCase();
+  if (alias && alias === homeAlias.toUpperCase()) return 'home';
+  if (alias && alias === awayAlias.toUpperCase()) return 'away';
+  // Strategy 3: Match by name (e.g. "Hornets") or market (e.g. "Charlotte")
+  var name = (team.name || '').toLowerCase();
+  var market = (team.market || '').toLowerCase();
+  var hL = homeAlias.toLowerCase(), aL = awayAlias.toLowerCase();
+  if (name.indexOf(hL) >= 0 || market.indexOf(hL) >= 0) return 'home';
+  if (name.indexOf(aL) >= 0 || market.indexOf(aL) >= 0) return 'away';
+  return null;
 }
 
 // Resolve depth chart positions from various SR response structures
@@ -72,15 +85,15 @@ function resolveDepthPositions(depth) {
 // 1. ROSTER AUDIT
 // ══════════════════════════════════════════════════════════════════════════════
 
-function computeRosterAudit(analytical, homeAlias, awayAlias) {
+function computeRosterAudit(analytical, homeAlias, awayAlias, matchup) {
   var out = { home: [], away: [] };
   var gtd = { home: [], away: [] };
   var injTeams = (analytical.injuries && analytical.injuries.teams) || [];
+  var homeId = (matchup && matchup.homeId) || '';
+  var awayId = (matchup && matchup.awayId) || '';
 
   injTeams.forEach(function(team) {
-    var alias = resolveAlias(team);
-    var side = alias === homeAlias.toUpperCase() ? 'home' :
-               alias === awayAlias.toUpperCase() ? 'away' : null;
+    var side = matchTeamSide(team, homeAlias, awayAlias, homeId, awayId);
     if (!side) return;
 
     (team.players || []).forEach(function(p) {
@@ -656,8 +669,10 @@ function buildSystemPrompt() {
 // DATA INTEGRITY DIAGNOSTIC — Checks every field path the compute layer needs
 // ══════════════════════════════════════════════════════════════════════════════
 
-function diagnoseData(analytical, homeAlias, awayAlias) {
+function diagnoseData(analytical, homeAlias, awayAlias, matchup) {
   var report = { endpoints: {}, critical: [], warnings: [], summary: '' };
+  var homeId = (matchup && matchup.homeId) || '';
+  var awayId = (matchup && matchup.awayId) || '';
 
   function keys(obj, depth) {
     if (!obj || typeof obj !== 'object') return String(obj === null ? 'null' : typeof obj);
@@ -692,10 +707,12 @@ function diagnoseData(analytical, homeAlias, awayAlias) {
     // Find teams matching our aliases
     if (Array.isArray(inj.teams)) {
       var matched = inj.teams.filter(function(t) {
-        var a = resolveAlias(t);
-        return a === homeAlias.toUpperCase() || a === awayAlias.toUpperCase();
+        return matchTeamSide(t, homeAlias, awayAlias, homeId, awayId) !== null;
       });
-      injReport.matchedTeams = matched.map(function(t) { return { alias: resolveAlias(t), name: t.name, market: t.market, players: (t.players || []).length }; });
+      injReport.matchedTeams = matched.map(function(t) {
+        var side = matchTeamSide(t, homeAlias, awayAlias, homeId, awayId);
+        return { side: side, id: t.id, name: t.name, market: t.market, players: (t.players || []).length };
+      });
       var allStatuses = [];
       matched.forEach(function(t) {
         (t.players || []).forEach(function(p) {
@@ -767,7 +784,17 @@ function diagnoseData(analytical, homeAlias, awayAlias) {
     var depth = analytical[side + 'Depth'];
     var depthReport = { exists: !!depth, structure: keys(depth, 1) };
     if (depth) {
+      depthReport.allKeys = Object.keys(depth);
       depthReport.topKeys = Object.keys(depth);
+      // Check each key's type/shape for depth resolution debugging
+      var keyTypes = {};
+      Object.keys(depth).forEach(function(k) {
+        var v = depth[k];
+        if (Array.isArray(v)) keyTypes[k] = 'Array(' + v.length + ')' + (v.length > 0 && v[0] ? ' first:{' + Object.keys(v[0]).slice(0,5).join(',') + '}' : '');
+        else if (v && typeof v === 'object') keyTypes[k] = 'Object{' + Object.keys(v).slice(0,5).join(',') + '}';
+        else keyTypes[k] = typeof v;
+      });
+      depthReport.keyTypes = keyTypes;
       var pos = resolveDepthPositions(depth);
       depthReport.hasPositions = Array.isArray(depth.positions);
       depthReport.resolvedPositions = pos.length;
@@ -809,8 +836,8 @@ function diagnoseData(analytical, homeAlias, awayAlias) {
   ['home', 'away'].forEach(function(side) {
     var injTeams = (analytical.injuries && analytical.injuries.teams) || [];
     var alias = side === 'home' ? homeAlias : awayAlias;
-    var teamInj = injTeams.find(function(t) { return resolveAlias(t) === alias.toUpperCase(); });
-    if (!teamInj) { crossRef[side].push('No injury team found for ' + alias); return; }
+    var teamInj = injTeams.find(function(t) { return matchTeamSide(t, homeAlias, awayAlias, homeId, awayId) === side; });
+    if (!teamInj) { crossRef[side].push('No injury team found for ' + alias + ' (id:' + (side === 'home' ? homeId : awayId).substring(0,8) + ')'); return; }
     var outPlayers = (teamInj.players || []).filter(function(p) { var s = (p.status || '').toUpperCase(); return s === 'OUT' || s === 'O' || s === 'IR'; });
     var statPlayers = getPlayers(analytical[side + 'Stats']);
     outPlayers.forEach(function(op) {
@@ -869,8 +896,8 @@ exports.handler = async function(event) {
     var awayAlias = matchup.away || 'AWAY';
 
     // ── PRE-COMPUTE ──
-    var diagnostics = diagnoseData(analytical, homeAlias, awayAlias);
-    var rosterAudit = computeRosterAudit(analytical, homeAlias, awayAlias);
+    var diagnostics = diagnoseData(analytical, homeAlias, awayAlias, matchup);
+    var rosterAudit = computeRosterAudit(analytical, homeAlias, awayAlias, matchup);
     var sia = computeSIA(rosterAudit, analytical, homeAlias, awayAlias);
     var redistribution = computeRedistribution(rosterAudit, sia, analytical, homeAlias, awayAlias);
     var srm = computeSRM(rosterAudit, analytical);
