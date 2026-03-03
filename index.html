@@ -140,15 +140,15 @@ input,textarea,select{font-size:16px!important;}
 .ev-body.collapsed{max-height:0!important;overflow:hidden;}
 
 /* Data inputs (clutch + odds) */
-.data-inputs{padding:6px 11px;border-bottom:1px solid var(--b1);background:rgba(245,166,42,.03);}
-.di-hdr{font-size:6px;color:var(--amber);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px;display:flex;align-items:center;justify-content:space-between;}
-.di-row{display:flex;align-items:center;gap:4px;margin-bottom:3px;flex-wrap:wrap;}
-.di-lbl{font-size:6px;color:var(--t2);width:50px;flex-shrink:0;}
-.di-input{background:var(--s2);border:1px solid var(--b2);color:var(--t1);font-family:var(--mono);font-size:6px;padding:2px 3px;width:56px;outline:none;-webkit-appearance:none;border-radius:0;text-align:center;}
+.data-inputs{padding:4px 11px;border-bottom:1px solid var(--b1);background:rgba(245,166,42,.02);}
+.di-hdr{font-size:5.5px;color:var(--amber);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:3px;display:flex;align-items:center;justify-content:space-between;opacity:.8;}
+.di-row{display:flex;align-items:center;gap:3px;margin-bottom:2px;flex-wrap:wrap;}
+.di-lbl{font-size:5px;color:var(--t3);width:42px;flex-shrink:0;}
+.di-input{background:var(--s2);border:1px solid var(--b1);color:var(--t2);font-family:var(--mono);font-size:5px;padding:1px 2px;width:44px;outline:none;-webkit-appearance:none;border-radius:0;text-align:center;}
 .di-input:focus{border-color:var(--amber);}
-.di-input.di-sm{font-size:5px;padding:2px 2px;}
-.di-input::placeholder{color:var(--t3);font-size:5px;}
-.di-btn{font-size:6px;letter-spacing:1px;background:none;border:1px solid var(--b2);color:var(--t2);font-family:var(--mono);padding:3px 8px;cursor:pointer;-webkit-appearance:none;border-radius:0;}
+.di-input.di-sm{font-size:5px;padding:1px 2px;}
+.di-input::placeholder{color:var(--t3);font-size:4.5px;}
+.di-btn{font-size:5px;letter-spacing:1px;background:none;border:1px solid var(--b2);color:var(--t2);font-family:var(--mono);padding:2px 6px;cursor:pointer;-webkit-appearance:none;border-radius:0;}
 .di-btn:hover{border-color:var(--amber);color:var(--amber);}
 .di-saved{font-size:5px;color:var(--green);margin-left:4px;}
 
@@ -378,6 +378,8 @@ function persistOdds(id,cs){cachedOdds[id]=cs.oddsData;cachedOddsHistory[id]=cs.
 function persistConfRow(gameId, rowData){confCache[gameId]=rowData;localStorage.setItem('nba4:confTable',JSON.stringify(confCache));}
 function persistTracking(id,cs){try{localStorage.setItem('nba4:tracking:'+id,JSON.stringify(cs.trackingData));}catch(e){console.warn('Tracking persist failed:',e.message);}}
 function persistStructural(id,cs){try{localStorage.setItem('nba4:structural:'+id,JSON.stringify(cs.structural));}catch(e){console.warn('Structural persist failed:',e.message);}}
+function persistAnalysis(id,cs){try{localStorage.setItem('nba4:analysis:'+id,JSON.stringify({analysis:cs.analysis,analysisTime:cs.analysisTime?cs.analysisTime.getTime():null,sonnetIndicators:cs.sonnetIndicators,prediction:cs.prediction,sustainabilityAudit:cs.sustainabilityAudit,analysisHistory:cs.analysisHistory||[],edgeHistory:cs.edgeHistory||[],clientIndAtAnalysis:cs.clientIndAtAnalysis}));}catch(e){console.warn('Analysis persist failed:',e.message);}}
+function persistDepth(id,cs){try{localStorage.setItem('nba4:depth:'+id,JSON.stringify({pbpAudit:cs.pbpAudit,pbpTime:cs.pbpTime?cs.pbpTime.getTime():null,pbpPeriod:cs.pbpPeriod}));}catch(e){console.warn('Depth persist failed:',e.message);}}
 const cardState = {};
 
 // BDL fallback state
@@ -996,6 +998,7 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
       if(cs.analysisHistory.length > 15) cs.analysisHistory = cs.analysisHistory.slice(-15);
     }
 
+    persistAnalysis(game.id, cs);
     renderCard(game);
     renderConfidenceTable();
   }catch(e){
@@ -1182,6 +1185,7 @@ async function fetchPBP(gameId){
     cs.pbpAudit = audit;
     cs.pbpTime = new Date();
     cs.pbpPeriod = game.period || 0;
+    persistDepth(gameId, cs);
     addLog(gameId, '✓ DEPTH loaded — '+audit.totalShots+' shots, '+audit.totalTOs+' TOs, '+audit.runs.length+' runs parsed (Q'+cs.pbpPeriod+')', true);
   }catch(e){
     addLog(gameId, 'PBP failed: '+e.message, false);
@@ -3142,7 +3146,7 @@ function renderConfidenceTable(){
     // Pull live data from cardState
     const cs = cardState[g.id];
     const si = cs?.sonnetIndicators;
-    if(si && si.score){ team=si.controlTeam; score=si.score; verdict=getVerdict(si)?.label||verdict; }
+    if(si && si.score){ team=si.controlTeam; score=si.score; verdict=getVerdict(si.score)?.label||verdict; }
     const pred = cs?.prediction;
     const fwp = pred?.fwp || null;
     const edge = pred?.edgeNum ?? null;
@@ -3158,19 +3162,20 @@ function renderConfidenceTable(){
     const homeScore = g.homePoints, awayScore = g.awayPoints;
     const period = g.period||0, clock = g.clock||'';
     if(!team && !score) continue;
-    // Best edge from two-sided value
-    let bestEdgeTeam = null, bestEdgeVal = null, bestEdgeSpread = null;
+    // Highest FWP team edge (replaces best edge)
+    let fwpTeamAlias = null, fwpTeamEdge = null, fwpTeamFwp = null, fwpTeamEntry = null;
     const csPred = cs?.prediction;
     if(csPred?.homeValue && csPred?.awayValue){
       const hv = csPred.homeValue, av = csPred.awayValue;
-      if(hv.edge > av.edge && hv.edge >= 5){ bestEdgeTeam = hv.team; bestEdgeVal = hv.edge; bestEdgeSpread = hv.spread; }
-      else if(av.edge > hv.edge && av.edge >= 5){ bestEdgeTeam = av.team; bestEdgeVal = av.edge; bestEdgeSpread = av.spread; }
+      if(hv.fwp >= av.fwp){ fwpTeamAlias = hv.team; fwpTeamEdge = hv.edge; fwpTeamFwp = hv.fwp; }
+      else { fwpTeamAlias = av.team; fwpTeamEdge = av.edge; fwpTeamFwp = av.fwp; }
     }
+    fwpTeamEntry = csPred?.entry || null;
     const signal = csPred?.signalType || null;
-    const row = {matchup, team, score, verdict, gameId:g.id, state, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, hA, aA, entryIf:p.entry||null, passIf:p.pass||null, bestEdgeTeam, bestEdgeVal, bestEdgeSpread, signal};
+    const row = {matchup, team, score, verdict, gameId:g.id, state, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, hA, aA, entryIf:p.entry||null, passIf:p.pass||null, fwpTeamAlias, fwpTeamEdge, fwpTeamFwp, fwpTeamEntry, signal};
     // Persist live data to cache whenever we have analysis results
     if(pred || si){
-      persistConfRow(g.id, {team, score, verdict, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, state, bestEdgeTeam, bestEdgeVal, signal:csPred?.signalType||null, ts:Date.now()});
+      persistConfRow(g.id, {team, score, verdict, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, state, fwpTeamAlias, fwpTeamEdge, fwpTeamFwp, fwpTeamEntry, signal:csPred?.signalType||null, ts:Date.now()});
     } else {
       // Fall back to cached data if no live cardState (e.g. page refresh, card not mounted)
       const cached = confCache[g.id];
@@ -3182,7 +3187,7 @@ function renderConfidenceTable(){
         if(row.edge===null && cached.edge!==null) row.edge = cached.edge;
         if(!row.sustHome && cached.sustHome) row.sustHome = cached.sustHome;
         if(!row.sustAway && cached.sustAway) row.sustAway = cached.sustAway;
-        if(!row.bestEdgeTeam && cached.bestEdgeTeam){ row.bestEdgeTeam=cached.bestEdgeTeam; row.bestEdgeVal=cached.bestEdgeVal; }
+        if(!row.fwpTeamAlias && cached.fwpTeamAlias){ row.fwpTeamAlias=cached.fwpTeamAlias; row.fwpTeamEdge=cached.fwpTeamEdge; row.fwpTeamFwp=cached.fwpTeamFwp; row.fwpTeamEntry=cached.fwpTeamEntry; }
         if(!row.signal && cached.signal) row.signal = cached.signal;
         if(row.homeScore===null && cached.homeScore!==null){ row.homeScore=cached.homeScore; row.awayScore=cached.awayScore; row.period=cached.period; row.clock=cached.clock; }
         if(cached.state==='FINAL' && row.state==='PRE') row.state = cached.state;
@@ -3218,7 +3223,7 @@ function renderConfidenceTable(){
   const statsSummary = [liveCount?liveCount+' live':'', preCount?preCount+' pre':'', finalCount?finalCount+' final':''].filter(Boolean).join(' / ');
   let html = '<div class="ct-hdr" onclick="confCollapsed=!confCollapsed;renderConfidenceTable()" style="cursor:pointer">CONFIDENCE TABLE <span class="arr" style="display:inline-block;transition:transform .2s;transform:rotate('+(confCollapsed?'0':'90')+'deg);margin-left:2px">&#9656;</span><span style="font-size:5px;color:var(--t3);margin-left:auto">'+rows.length+' '+(rows.length===1?'game':'games')+' &#183; '+statsSummary+'</span></div>';
   if(!confCollapsed){
-  html += '<table><tr><th style="text-align:center">SCORE</th><th style="text-align:center">SUST</th><th style="text-align:center">FWP</th><th style="text-align:center">BEST EDGE</th><th style="text-align:center">SIGNAL</th><th>CTRL</th><th style="text-align:center">CTRL</th><th style="text-align:center">THESIS</th></tr>';
+  html += '<table><tr><th style="text-align:center">SCORE</th><th style="text-align:center">SUST</th><th style="text-align:center">FWP</th><th style="text-align:center">EDGE</th><th style="text-align:center">ENTRY</th><th>CTRL</th><th style="text-align:center">CTRL</th><th style="text-align:center">THESIS</th></tr>';
   for(const r of rows){
     const isFinal = r.state==='FINAL';
     const rowClass = 'ct-row'+(isFinal?' ct-final':' '+entryClass(r.entry));
@@ -3273,27 +3278,27 @@ function renderConfidenceTable(){
         sustStr = '<span style="color:'+sustColor(effSustHome)+'">'+esc(effSustHome||'')+'</span>';
       }
     } else { sustStr = '<span style="color:var(--t3)">&#8212;</span>'; }
-    // Best edge display
-    let bestEdgeStr = '<span style="color:var(--t3)">&#8212;</span>';
-    if(r.bestEdgeTeam && r.bestEdgeVal !== null){
-      bestEdgeStr = '<span style="color:var(--green);font-weight:700">'+esc(r.bestEdgeTeam)+' +'+r.bestEdgeVal.toFixed(1)+'%</span>';
-    } else if(r.edge !== null && r.edge >= 5){
-      bestEdgeStr = edgeStr(r.edge);
+    // Edge display — show highest FWP team's edge
+    let edgeDispStr = '<span style="color:var(--t3)">&#8212;</span>';
+    if(r.fwpTeamAlias && r.fwpTeamEdge !== null && r.fwpTeamEdge !== undefined){
+      const ec = r.fwpTeamEdge>=10?'var(--green)':r.fwpTeamEdge>=5?'var(--g2)':r.fwpTeamEdge>=1?'var(--yellow)':r.fwpTeamEdge>=0?'var(--t3)':'var(--red)';
+      edgeDispStr = '<span style="color:'+ec+';font-weight:700">'+esc(r.fwpTeamAlias)+' '+(r.fwpTeamEdge>=0?'+':'')+r.fwpTeamEdge.toFixed(1)+'%</span>';
     }
-    // FWP labeled with team
+    // FWP labeled with highest FWP team
     let fwpStr = '<span style="color:var(--t3)">&#8212;</span>';
-    if(r.fwp){
-      const fwpTeam = r.bestEdgeTeam || r.team || '';
-      fwpStr = '<span style="color:var(--t1);font-weight:600">'+esc(fwpTeam)+' '+esc(r.fwp)+'</span>';
+    if(r.fwpTeamAlias && r.fwpTeamFwp){
+      fwpStr = '<span style="color:var(--t1);font-weight:600">'+esc(r.fwpTeamAlias)+' '+r.fwpTeamFwp.toFixed(0)+'%</span>';
+    } else if(r.fwp){
+      fwpStr = '<span style="color:var(--t1);font-weight:600">'+esc(r.team||'')+' '+esc(r.fwp)+'</span>';
     }
-    // Signal display (entry type + conviction combined)
-    let sigStr = '<span style="color:var(--t3)">&#8212;</span>';
-    if(r.signal){
+    // Entry signal for highest FWP team
+    let entryStr = '<span style="color:var(--t3)">&#8212;</span>';
+    if(r.fwpTeamEntry){
+      const shortEntry = r.fwpTeamEntry.replace('WINDOW ','W/').replace('COUNTER-SIGNAL','COUNTER');
+      entryStr = '<span style="color:'+entryColor(r.fwpTeamEntry)+'">'+esc(shortEntry)+'</span>';
+    } else if(r.signal){
       const sigCol = r.signal.startsWith('BUY')?'var(--green)':r.signal==='COUNTER'||r.signal==='COUNTER-SIGNAL'?'var(--red)':'var(--t3)';
-      sigStr = '<span style="color:'+sigCol+'">'+esc(r.signal)+'</span>';
-    } else if(r.entry){
-      sigStr = '<span style="color:'+entryColor(r.entry)+'">'+esc(r.entry)+'</span>';
-      if(r.conviction) sigStr += ' <span style="color:'+convColor(r.conviction)+';font-size:5px">'+esc(r.conviction)+'</span>';
+      entryStr = '<span style="color:'+sigCol+'">'+esc(r.signal)+'</span>';
     }
     // Thesis status
     const tsStr = r.thesisStatus ? '<span style="color:'+tsColor(r.thesisStatus)+'">'+esc(r.thesisStatus)+'</span>' : '<span style="color:var(--t3)">&#8212;</span>';
@@ -3301,8 +3306,8 @@ function renderConfidenceTable(){
       + '<td style="text-align:center;white-space:nowrap;font-size:7px">'+scoreStr+'</td>'
       + '<td style="font-size:5.5px;text-align:center;white-space:nowrap">'+sustStr+'</td>'
       + '<td style="font-size:7px;text-align:center;white-space:nowrap">'+fwpStr+'</td>'
-      + '<td style="font-size:7px;text-align:center;white-space:nowrap">'+bestEdgeStr+'</td>'
-      + '<td style="font-size:6px;text-align:center;white-space:nowrap">'+sigStr+'</td>'
+      + '<td style="font-size:7px;text-align:center;white-space:nowrap">'+edgeDispStr+'</td>'
+      + '<td style="font-size:6px;text-align:center;white-space:nowrap">'+entryStr+'</td>'
       + '<td style="color:'+vColor(r.verdict)+'">'+esc(r.team)+'</td>'
       + '<td class="ct-score" style="color:'+vColor(r.verdict)+'">'+r.score.toFixed(2)+'<div class="ct-verdict" style="color:'+vColor(r.verdict)+'">'+esc(r.verdict)+'</div></td>'
       + '<td style="font-size:6px;text-align:center">'+tsStr+'</td>'
@@ -3373,6 +3378,37 @@ function mountCard(game){
     const savedTracking = localStorage.getItem('nba4:tracking:'+id);
     if(savedTracking){ cardState[id].trackingData = JSON.parse(savedTracking); addLog(id, '📋 Tracking baselines restored', true); }
   }catch(e){}
+  // Restore analysis data from localStorage (fallback when in-memory prev was deleted on deselect or browser refresh)
+  if(!cardState[id].analysis){
+    try{
+      const savedAnalysis = localStorage.getItem('nba4:analysis:'+id);
+      if(savedAnalysis){
+        const sa = JSON.parse(savedAnalysis);
+        cardState[id].analysis = sa.analysis;
+        cardState[id].analysisTime = sa.analysisTime ? new Date(sa.analysisTime) : null;
+        cardState[id].sonnetIndicators = sa.sonnetIndicators;
+        cardState[id].prediction = sa.prediction;
+        cardState[id].sustainabilityAudit = sa.sustainabilityAudit;
+        cardState[id].analysisHistory = sa.analysisHistory || [];
+        cardState[id].edgeHistory = sa.edgeHistory || [];
+        cardState[id].clientIndAtAnalysis = sa.clientIndAtAnalysis || null;
+        addLog(id, '📋 Analysis restored from cache ('+((sa.analysisHistory||[]).length)+' reads)', true);
+      }
+    }catch(e){ console.warn('Analysis restore failed:', e.message); }
+  }
+  // Restore depth audit from localStorage
+  if(!cardState[id].pbpAudit){
+    try{
+      const savedDepth = localStorage.getItem('nba4:depth:'+id);
+      if(savedDepth){
+        const sd = JSON.parse(savedDepth);
+        cardState[id].pbpAudit = sd.pbpAudit;
+        cardState[id].pbpTime = sd.pbpTime ? new Date(sd.pbpTime) : null;
+        cardState[id].pbpPeriod = sd.pbpPeriod;
+        addLog(id, '📋 Depth audit restored from cache (Q'+(sd.pbpPeriod||'?')+')', true);
+      }
+    }catch(e){ console.warn('Depth restore failed:', e.message); }
+  }
   // Initialize new fields
   cardState[id].baselines = null;
   cardState[id].clientSustainability = null;
@@ -3571,37 +3607,6 @@ function renderCard(game){
       html+='</div>';
     }
 
-    // ─── GAME NARRATIVE STRIP (analysis history timeline) ───
-    var nh = cs.analysisHistory;
-    if(nh && nh.length > 0){
-      html+='<div style="padding:6px 10px;border-top:1px solid var(--b1)">';
-      html+='<div style="font-size:6px;color:#67e8f9;letter-spacing:1.5px;margin-bottom:5px;font-family:inherit">GAME NARRATIVE <span style="color:var(--t3);letter-spacing:0">('+nh.length+' read'+(nh.length>1?'s':'')+')</span></div>';
-      html+='<div style="display:flex;gap:3px;overflow-x:auto;padding-bottom:3px;-webkit-overflow-scrolling:touch">';
-      for(var ni=0;ni<nh.length;ni++){
-        var ne = nh[ni];
-        var nCtrlCol = ne.controlScore>=0.75?'var(--green)':ne.controlScore>=0.60?'var(--g2)':ne.controlScore>=0.45?'var(--yellow)':'var(--t3)';
-        var nSigCol = (ne.signal||'').startsWith('BUY')?'var(--green)':(ne.signal||'')==='COUNTER'?'var(--red)':'var(--t3)';
-        var nEntCol = ne.entry==='OPTIMAL WINDOW'?'var(--green)':ne.entry==='WINDOW OPEN'?'var(--g2)':ne.entry==='WINDOW CLOSING'?'var(--yellow)':ne.entry==='COUNTER-SIGNAL'?'var(--red)':'var(--t3)';
-        var nLsCol = sustColor(ne.leadSust);
-        var nTsCol = sustColor(ne.trailSust);
-        var isLatest = ni===nh.length-1;
-        html+='<div style="min-width:72px;max-width:82px;flex-shrink:0;padding:4px 5px;border-radius:4px;border:1px solid '+(isLatest?'var(--b2)':'var(--b1)')+';background:'+(isLatest?'rgba(255,255,255,.04)':'rgba(255,255,255,.01)')+'">';
-        // Row 1: Period + clock + score
-        html+='<div style="font-size:5.5px;color:var(--t3);margin-bottom:2px">Q'+(ne.period||'?')+(ne.clock?' '+ne.clock:'')+' <span style="color:var(--t2)">'+(ne.time||'')+'</span></div>';
-        html+='<div style="font-size:7px;color:var(--t2);margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+(ne.score||'')+'</div>';
-        // Row 2: Control score bar
-        html+='<div style="display:flex;align-items:center;gap:3px;margin-bottom:2px"><span style="font-size:7px;font-weight:700;color:'+nCtrlCol+'">'+(ne.controlTeam||'?')+'</span><span style="font-size:8px;font-weight:700;color:'+nCtrlCol+'">'+(ne.controlScore?ne.controlScore.toFixed(2):'?')+'</span></div>';
-        // Row 3: Sustainability shift
-        html+='<div style="display:flex;gap:2px;align-items:center;margin-bottom:2px"><span style="font-size:5px;color:'+nLsCol+';border:1px solid '+nLsCol+';padding:0 2px;border-radius:2px">'+(ne.leadTeam||'L')+' '+(ne.leadSust?ne.leadSust.substring(0,4).toUpperCase():'?')+'</span>';
-        html+='<span style="font-size:5px;color:'+nTsCol+';border:1px solid '+nTsCol+';padding:0 2px;border-radius:2px">'+(ne.trailTeam||'T')+' '+(ne.trailSust?ne.trailSust.substring(0,4).toUpperCase():'?')+'</span></div>';
-        // Row 4: Entry signal
-        html+='<div style="font-size:5px;color:'+nEntCol+';letter-spacing:.3px">'+(ne.entry?ne.entry.replace('WINDOW ','W/'):ne.conviction||'—')+'</div>';
-        html+='</div>';
-      }
-      html+='</div>';
-      html+='</div>';
-    }
-
     // ─── VALUE READ (two-sided — primary decision interface) ───
     if(pred){
       var hv = pred.homeValue, av = pred.awayValue;
@@ -3703,6 +3708,32 @@ function renderCard(game){
       html+='<div class="dv"><div class="dv-hdr">VALUE READ</div><div class="analysis-loading"><div class="spin"></div> Sonnet analyzing&#8230;</div></div>';
     } else {
       html+='<div class="dv"><div class="dv-hdr">VALUE READ<span style="margin-left:auto">'+analyzeBtn+'</span></div><div style="font-size:6px;color:var(--t3);padding:2px 0">'+(cs.analysisError?'<span style="color:var(--red)">&#9888; '+esc(cs.analysisError)+'</span>':game.period<2?'Predictive layer activates Q2+ &#8212; press &#9889; to analyze':'Awaiting analysis &#8212; press &#9889; ANALYZE')+'</div></div>';
+    }
+
+    // ─── GAME NARRATIVE STRIP (analysis history timeline — after value read) ───
+    var nh = cs.analysisHistory;
+    if(nh && nh.length > 0){
+      html+='<div style="padding:6px 10px;border-top:1px solid var(--b1)">';
+      html+='<div style="font-size:6px;color:#67e8f9;letter-spacing:1.5px;margin-bottom:5px;font-family:inherit">GAME NARRATIVE <span style="color:var(--t3);letter-spacing:0">('+nh.length+' read'+(nh.length>1?'s':'')+')</span></div>';
+      html+='<div style="display:flex;gap:3px;overflow-x:auto;padding-bottom:3px;-webkit-overflow-scrolling:touch">';
+      for(var ni=0;ni<nh.length;ni++){
+        var ne = nh[ni];
+        var nCtrlCol = ne.controlScore>=0.75?'var(--green)':ne.controlScore>=0.60?'var(--g2)':ne.controlScore>=0.45?'var(--yellow)':'var(--t3)';
+        var nEntCol = ne.entry==='OPTIMAL WINDOW'?'var(--green)':ne.entry==='WINDOW OPEN'?'var(--g2)':ne.entry==='WINDOW CLOSING'?'var(--yellow)':ne.entry==='COUNTER-SIGNAL'?'var(--red)':'var(--t3)';
+        var nLsCol = sustColor(ne.leadSust);
+        var nTsCol = sustColor(ne.trailSust);
+        var isLatest = ni===nh.length-1;
+        html+='<div style="min-width:72px;max-width:82px;flex-shrink:0;padding:4px 5px;border-radius:4px;border:1px solid '+(isLatest?'var(--b2)':'var(--b1)')+';background:'+(isLatest?'rgba(255,255,255,.04)':'rgba(255,255,255,.01)')+'">';
+        html+='<div style="font-size:5.5px;color:var(--t3);margin-bottom:2px">Q'+(ne.period||'?')+(ne.clock?' '+ne.clock:'')+' <span style="color:var(--t2)">'+(ne.time||'')+'</span></div>';
+        html+='<div style="font-size:7px;color:var(--t2);margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+(ne.score||'')+'</div>';
+        html+='<div style="display:flex;align-items:center;gap:3px;margin-bottom:2px"><span style="font-size:7px;font-weight:700;color:'+nCtrlCol+'">'+(ne.controlTeam||'?')+'</span><span style="font-size:8px;font-weight:700;color:'+nCtrlCol+'">'+(ne.controlScore?ne.controlScore.toFixed(2):'?')+'</span></div>';
+        html+='<div style="display:flex;gap:2px;align-items:center;margin-bottom:2px"><span style="font-size:5px;color:'+nLsCol+';border:1px solid '+nLsCol+';padding:0 2px;border-radius:2px">'+(ne.leadTeam||'L')+' '+(ne.leadSust?ne.leadSust.substring(0,4).toUpperCase():'?')+'</span>';
+        html+='<span style="font-size:5px;color:'+nTsCol+';border:1px solid '+nTsCol+';padding:0 2px;border-radius:2px">'+(ne.trailTeam||'T')+' '+(ne.trailSust?ne.trailSust.substring(0,4).toUpperCase():'?')+'</span></div>';
+        html+='<div style="font-size:5px;color:'+nEntCol+';letter-spacing:.3px">'+(ne.entry?ne.entry.replace('WINDOW ','W/'):ne.conviction||'—')+'</div>';
+        html+='</div>';
+      }
+      html+='</div>';
+      html+='</div>';
     }
 
     // ─── DATA INPUTS (Clutch + Odds) ───
