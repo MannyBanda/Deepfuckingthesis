@@ -760,10 +760,19 @@ function diagnoseData(analytical, homeAlias, awayAlias, matchup) {
         return { side: side, id: t.id, name: t.name, market: t.market, players: (t.players || []).length };
       });
       var allStatuses = [];
+      // RAW DUMP of first matched player — definitively identifies field structure
+      if (matched.length > 0 && matched[0].players && matched[0].players.length > 0) {
+        injReport.rawPlayerJSON = JSON.stringify(matched[0].players[0]).substring(0, 600);
+        injReport.rawPlayerKeys = Object.keys(matched[0].players[0]);
+      }
       matched.forEach(function(t) {
         (t.players || []).forEach(function(p) {
           var nm = p.full_name || p.name || '?';
-          var st = p.status || p.injury_status || (p.injury && p.injury.status) || p.comment || p.desc || '??';
+          // Exhaustive status search
+          var st = p.status || p.injury_status || p.type || p.designation
+            || (p.injury && typeof p.injury === 'string' ? p.injury : '')
+            || (p.injury && typeof p.injury === 'object' ? (p.injury.status || p.injury.type || p.injury.designation || p.injury.desc || JSON.stringify(p.injury).substring(0,80)) : '')
+            || p.comment || p.desc || p.description || p.note || '??';
           allStatuses.push(nm + ':' + st);
         });
       });
