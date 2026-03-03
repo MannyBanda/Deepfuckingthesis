@@ -2119,7 +2119,11 @@ async function generateThesis(gameId){
     const trimInjuries = (inj) => {
       if(!inj) return '(unavailable)';
       return (inj.teams||[]).filter(t=>(t.players||[]).length>0)
-        .map(t=> t.alias + ': ' + (t.players||[]).map(p=>`${p.full_name} [${p.primary_position||p.position||'?'}] ${p.status} — ${p.desc||p.comment||p.injury||'?'}`).join('; '))
+        .map(t=> (t.alias||t.market||'?') + ': ' + (t.players||[]).map(p=>{
+          const injArr = Array.isArray(p.injuries)?p.injuries:[];
+          const li = injArr.length>0?injArr[0]:{};
+          return `${p.full_name} [${p.primary_position||p.position||'?'}] ${li.status||p.status||'?'} — ${li.desc||li.comment||p.desc||'?'}`;
+        }).join('; '))
         .join('\n');
     };
 
@@ -2783,17 +2787,19 @@ function extractStructuralContext(gameId){
         const side = matchSide(t);
         if(!side) return;
         (t.players||[]).forEach(p=>{
-          let st = (p.status || p.injury_status || (p.injury && typeof p.injury === 'object' && p.injury.status) || '').toUpperCase();
+          const injArr = Array.isArray(p.injuries) ? p.injuries : [];
+          const latestInj = injArr.length > 0 ? injArr[0] : {};
+          let st = (latestInj.status || p.status || '').toUpperCase();
           if(!st){
-            const desc = (p.desc||p.description||p.comment||'').toUpperCase();
+            const desc = (latestInj.comment||latestInj.desc||p.desc||'').toUpperCase();
             if(desc.indexOf('OUT')>=0 || desc.indexOf('NOT WITH TEAM')>=0) st='OUT';
-            else if(desc.indexOf('DAY-TO-DAY')>=0 || desc.indexOf('GAME TIME')>=0) st='DAY-TO-DAY';
             else if(desc.indexOf('DOUBTFUL')>=0) st='DOUBTFUL';
             else if(desc.indexOf('QUESTIONABLE')>=0) st='QUESTIONABLE';
           }
+          const injDesc = latestInj.desc || latestInj.comment || p.desc || '?';
           if(st==='OUT'||st==='O'||st==='IR'||st==='NOT WITH TEAM'){
             keyOuts.push({name:p.full_name||'?', team:t.alias||t.abbreviation||t.market||'?', position:p.primary_position||p.position||'?',
-              injury:p.desc||p.comment||p.injury||'?', status:'OUT', side: side});
+              injury:injDesc, status:'OUT', side: side});
           }
         });
       });
