@@ -196,7 +196,7 @@ input,textarea,select{font-size:16px!important;}
 .gen-step.active{color:var(--amber);}
 .gen-step.err{color:var(--red);}
 
-.log{background:var(--s2);border-top:1px solid var(--b1);padding:4px 11px;font-size:6px;color:var(--t3);max-height:40px;overflow-y:auto;}
+.log{background:var(--s2);border-top:1px solid var(--b1);padding:4px 11px;font-size:6px;color:var(--t3);max-height:140px;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;}
 .log .ok{color:#3d9970;}.log .er{color:var(--red);}
 .foot{font-size:6px;color:var(--t3);padding:3px 11px 6px;}
 
@@ -2068,8 +2068,22 @@ async function generateThesis(gameId){
     };
     const trimDepth = (d) => {
       if(!d) return '(unavailable)';
-      console.log('Depth chart structure:', typeof d, Array.isArray(d), Object.keys(d).slice(0,10));
-      const pos = Array.isArray(d.positions) ? d.positions : Array.isArray(d) ? d : [];
+      // Resolve positions from various SR nesting structures
+      let pos = [];
+      if(Array.isArray(d.positions)) pos = d.positions;
+      else if(Array.isArray(d)) pos = d;
+      else if(d.depth_chart?.positions) pos = d.depth_chart.positions;
+      else if(Array.isArray(d.depth_chart)) pos = d.depth_chart;
+      else {
+        // Search for array of position-like objects
+        for(const k of Object.keys(d)){
+          const v = d[k];
+          if(Array.isArray(v) && v.length > 0 && v[0] && (Array.isArray(v[0].players) || v[0].name || v[0].position)){
+            pos = v; break;
+          }
+        }
+      }
+      console.log('Depth chart resolved:', pos.length, 'positions from', Object.keys(d).slice(0,6));
       if(pos.length===0) return JSON.stringify(d).substring(0,2000);
       return pos.map(p =>
         (p.name||p.position||'?') + ': ' + (Array.isArray(p.players)?p.players:[]).map(pl=>`${pl.depth||'?'}. ${pl.full_name||pl.name||'?'}`).join(', ')
@@ -2208,11 +2222,17 @@ async function generateThesis(gameId){
         // Injuries structure detail — the data we need most right now
         const injDx = dx.endpoints && dx.endpoints.injuries;
         if(injDx){
-          const matchedStr = (injDx.matchedTeams||[]).map(t=>t.alias+':'+t.players+'p').join(', ');
+          const matchedStr = (injDx.matchedTeams||[]).map(t=>(t.alias||t.name||'?')+':'+t.players+'p').join(', ');
           addLog(gameId, '🩺 Injuries: '+(injDx.hasTeams?injDx.teamsCount+' teams':'NO .teams[]')+' | matched=['+matchedStr+'] | topKeys=['+((injDx.topKeys||[]).join(','))+']', true);
+          if(injDx.sampleTeamKeys) addLog(gameId, '🩺 Team keys: '+injDx.sampleTeamKeys.join(', '), true);
           if(injDx.matchedPlayerStatuses && injDx.matchedPlayerStatuses.length > 0) addLog(gameId, '🩺 Statuses: '+injDx.matchedPlayerStatuses.join(' | '), true);
           if(injDx.nestedPath) addLog(gameId, '🩺 ⚠️ Found nested path: '+injDx.nestedPath+' — compute may need patching', true);
         }
+        // Depth chart diagnostics
+        ['home','away'].forEach(side=>{
+          const depDx = dx.endpoints && dx.endpoints[side+'Depth'];
+          if(depDx) addLog(gameId, '📐 '+(side==='home'?homeAlias:awayAlias)+' depth: '+(depDx.resolvedPositions||depDx.positionCount||0)+' positions resolved | topKeys=['+(depDx.topKeys||[]).slice(0,6).join(',')+']', true);
+        });
       }
     }
     cs.genSteps[14].status = 'done';
@@ -2639,8 +2659,21 @@ function extractStructuralContext(gameId){
     // Closers from depth charts
     const closers = {home:[], away:[]};
     const foulBackups = {home:{}, away:{}};
+    function resolvePos(d){
+      if(!d) return [];
+      if(Array.isArray(d.positions)) return d.positions;
+      if(Array.isArray(d)) return d;
+      if(d.depth_chart?.positions) return d.depth_chart.positions;
+      if(Array.isArray(d.depth_chart)) return d.depth_chart;
+      const ks = Object.keys(d);
+      for(let i=0;i<ks.length;i++){
+        const v=d[ks[i]];
+        if(Array.isArray(v)&&v.length>0&&v[0]&&(Array.isArray(v[0].players)||v[0].name||v[0].position)) return v;
+      }
+      return [];
+    }
     function extractDepth(d, side){
-      const pos = Array.isArray(d?.positions)?d.positions:Array.isArray(d)?d:[];
+      const pos = resolvePos(d);
       pos.forEach(p=>{
         const pls = Array.isArray(p.players)?p.players:[];
         const d1 = pls.find(x=>x.depth===1||x.depth==='1');
@@ -2697,11 +2730,11 @@ function extractStructuralContext(gameId){
     if(c.injuries?.teams){
       const relevantAliases = [hA.toUpperCase(), aA.toUpperCase()];
       c.injuries.teams.forEach(t=>{
-        if(!relevantAliases.includes((t.alias||'').toUpperCase())) return;
+        if(!relevantAliases.includes((t.alias||t.abbreviation||t.abbr||'').toUpperCase())) return;
         (t.players||[]).forEach(p=>{
           const st = (p.status||'').toUpperCase();
           if(st==='OUT'||st==='O'){
-            keyOuts.push({name:p.full_name||'?', team:t.alias, position:p.primary_position||p.position||'?',
+            keyOuts.push({name:p.full_name||'?', team:t.alias||t.abbreviation||t.name||'?', position:p.primary_position||p.position||'?',
               injury:p.desc||p.comment||p.injury||'?', status:'OUT'});
           }
         });
@@ -3406,7 +3439,7 @@ function mountCard(game){
   if(!cardState[id].enrichDone && !cardState[id].enriching) enrichFromBDL(id);
 }
 
-function addLog(id,msg,ok){const cs=cardState[id];if(!cs)return;cs.logs=[...cs.logs.slice(-5),{msg,ok,t:new Date().toLocaleTimeString()}];}
+function addLog(id,msg,ok){const cs=cardState[id];if(!cs)return;cs.logs=[...cs.logs.slice(-19),{msg,ok,t:new Date().toLocaleTimeString()}];}
 
 function renderCard(game){
   const id=game.id, cs=cardState[id];
@@ -3961,7 +3994,17 @@ function renderCard(game){
     html+=`<div class="foot">↻ ${cs.lastUp.toLocaleTimeString()} · ${pollInterval/1000}s · ${srcLabel}${freshLabel}</div>`;
   }
 
+  // Preserve log scroll position before re-render
+  const logEl = el.querySelector('.log');
+  const logScroll = logEl ? logEl.scrollTop : 0;
+  const logWasAtBottom = logEl ? (logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 5) : true;
   el.innerHTML=html;
+  // Restore log scroll — if user was at bottom, stay at bottom; otherwise preserve position
+  const newLog = el.querySelector('.log');
+  if(newLog){
+    if(logWasAtBottom) newLog.scrollTop = newLog.scrollHeight;
+    else newLog.scrollTop = logScroll;
+  }
 
   // Countdown for PRE
   if(state==='PRE'&&game.scheduled){
