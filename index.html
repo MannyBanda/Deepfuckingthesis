@@ -573,15 +573,17 @@ async function fetchBdlSummary(game){
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-function getEasternDate(offset=0){
+function getSlateDate(offset=0){
+  // Use Arizona time (MST, no DST) so the dashboard doesn't flip to tomorrow's
+  // games while late West Coast games are still playing
   const now = new Date();
-  const eastern = new Date(now.toLocaleString('en-US',{timeZone:'America/New_York'}));
-  eastern.setDate(eastern.getDate()+offset);
+  const mst = new Date(now.toLocaleString('en-US',{timeZone:'America/Phoenix'}));
+  mst.setDate(mst.getDate()+offset);
   return {
-    year: String(eastern.getFullYear()),
-    month: String(eastern.getMonth()+1).padStart(2,'0'),
-    day: String(eastern.getDate()).padStart(2,'0'),
-    str: `${eastern.getFullYear()}-${String(eastern.getMonth()+1).padStart(2,'0')}-${String(eastern.getDate()).padStart(2,'0')}`
+    year: String(mst.getFullYear()),
+    month: String(mst.getMonth()+1).padStart(2,'0'),
+    day: String(mst.getDate()).padStart(2,'0'),
+    str: `${mst.getFullYear()}-${String(mst.getMonth()+1).padStart(2,'0')}-${String(mst.getDate()).padStart(2,'0')}`
   };
 }
 
@@ -591,7 +593,7 @@ function getEasternDate(offset=0){
 async function loadSchedule(){
   showLoading(true); showErr(null);
   try{
-    const d = getEasternDate(0);
+    const d = getSlateDate(0);
     const data = await sr('schedule',{year:d.year, month:d.month, day:d.day});
     games = (data.games||[]).map(g=>({
       id: g.id,
@@ -2266,7 +2268,7 @@ async function generateThesis(gameId){
     };
 
     const payload = {
-      matchup: { home: homeAlias, away: awayAlias, homeId: homeId, awayId: awayId, date: getEasternDate(0).str, time: tipTime, venue: game.venue||'TBD' },
+      matchup: { home: homeAlias, away: awayAlias, homeId: homeId, awayId: awayId, date: getSlateDate(0).str, time: tipTime, venue: game.venue||'TBD' },
       sections: sections,
       analytical: analytical,
     };
