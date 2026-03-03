@@ -2070,13 +2070,28 @@ async function generateThesis(gameId){
       if(!d) return '(unavailable)';
       // Resolve positions from various SR nesting structures
       let pos = [];
-      if(Array.isArray(d.positions)) pos = d.positions;
-      else if(Array.isArray(d)) pos = d;
-      else if(d.depth_chart?.positions) pos = d.depth_chart.positions;
-      else if(Array.isArray(d.depth_chart)) pos = d.depth_chart;
-      else {
-        // Search for array of position-like objects
+      if(d.positions){
+        if(Array.isArray(d.positions)) pos = d.positions;
+        else if(typeof d.positions === 'object'){
+          Object.keys(d.positions).forEach(posName=>{
+            const val = d.positions[posName];
+            let players = [];
+            if(Array.isArray(val)) players = val;
+            else if(val?.players && Array.isArray(val.players)) players = val.players;
+            else if(val && typeof val === 'object') players = Object.values(val).filter(v=>v&&typeof v==='object'&&(v.full_name||v.name));
+            if(players.length>0) pos.push({name:posName, position:posName, players});
+          });
+        }
+      }
+      if(pos.length===0 && Array.isArray(d)) pos = d;
+      if(pos.length===0 && d.depth_chart){
+        if(Array.isArray(d.depth_chart)) pos = d.depth_chart;
+        else if(d.depth_chart.positions) return trimDepth(d.depth_chart);
+      }
+      if(pos.length===0){
+        const skip = ['id','name','market','alias','founded','sr_id','reference','venue','league','conference','division','coaches'];
         for(const k of Object.keys(d)){
+          if(skip.includes(k)) continue;
           const v = d[k];
           if(Array.isArray(v) && v.length > 0 && v[0] && (Array.isArray(v[0].players) || v[0].name || v[0].position)){
             pos = v; break;
@@ -2225,6 +2240,8 @@ async function generateThesis(gameId){
           const matchedStr = (injDx.matchedTeams||[]).map(t=>(t.side||'?')+'='+t.market+' '+t.name+':'+t.players+'p').join(', ');
           addLog(gameId, '🩺 Injuries: '+(injDx.hasTeams?injDx.teamsCount+' teams':'NO .teams[]')+' | matched=['+matchedStr+'] | topKeys=['+((injDx.topKeys||[]).join(','))+']', true);
           if(injDx.sampleTeamKeys) addLog(gameId, '🩺 Team keys: '+injDx.sampleTeamKeys.join(', '), true);
+          if(injDx.samplePlayerKeys) addLog(gameId, '🩺 Player keys: '+injDx.samplePlayerKeys.join(', '), true);
+          if(injDx.samplePlayerDump) addLog(gameId, '🩺 Sample player: '+JSON.stringify(injDx.samplePlayerDump).substring(0,300), true);
           if(injDx.matchedPlayerStatuses && injDx.matchedPlayerStatuses.length > 0) addLog(gameId, '🩺 Statuses: '+injDx.matchedPlayerStatuses.join(' | '), true);
           if(injDx.nestedPath) addLog(gameId, '🩺 ⚠️ Found nested path: '+injDx.nestedPath+' — compute may need patching', true);
         }
@@ -2678,13 +2695,28 @@ function extractStructuralContext(gameId){
     const foulBackups = {home:{}, away:{}};
     function resolvePos(d){
       if(!d) return [];
-      if(Array.isArray(d.positions)) return d.positions;
+      // Check positions key first
+      if(d.positions){
+        if(Array.isArray(d.positions)) return d.positions;
+        if(typeof d.positions === 'object'){
+          const conv = [];
+          Object.keys(d.positions).forEach(posName=>{
+            const val = d.positions[posName];
+            let players = [];
+            if(Array.isArray(val)) players = val;
+            else if(val?.players && Array.isArray(val.players)) players = val.players;
+            else if(val && typeof val === 'object') players = Object.values(val).filter(v=>v&&typeof v==='object'&&(v.full_name||v.name));
+            if(players.length>0) conv.push({name:posName, position:posName, players});
+          });
+          if(conv.length>0) return conv;
+        }
+      }
       if(Array.isArray(d)) return d;
-      if(d.depth_chart?.positions) return d.depth_chart.positions;
-      if(Array.isArray(d.depth_chart)) return d.depth_chart;
-      const ks = Object.keys(d);
-      for(let i=0;i<ks.length;i++){
-        const v=d[ks[i]];
+      if(d.depth_chart) return resolvePos(d.depth_chart);
+      const skip = ['id','name','market','alias','founded','sr_id','reference','venue','league','conference','division','coaches'];
+      for(const k of Object.keys(d)){
+        if(skip.includes(k)) continue;
+        const v=d[k];
         if(Array.isArray(v)&&v.length>0&&v[0]&&(Array.isArray(v[0].players)||v[0].name||v[0].position)) return v;
       }
       return [];
@@ -2749,8 +2781,15 @@ function extractStructuralContext(gameId){
         const side = matchSide(t);
         if(!side) return;
         (t.players||[]).forEach(p=>{
-          const st = (p.status||'').toUpperCase();
-          if(st==='OUT'||st==='O'){
+          let st = (p.status || p.injury_status || (p.injury && typeof p.injury === 'object' && p.injury.status) || '').toUpperCase();
+          if(!st){
+            const desc = (p.desc||p.description||p.comment||'').toUpperCase();
+            if(desc.indexOf('OUT')>=0 || desc.indexOf('NOT WITH TEAM')>=0) st='OUT';
+            else if(desc.indexOf('DAY-TO-DAY')>=0 || desc.indexOf('GAME TIME')>=0) st='DAY-TO-DAY';
+            else if(desc.indexOf('DOUBTFUL')>=0) st='DOUBTFUL';
+            else if(desc.indexOf('QUESTIONABLE')>=0) st='QUESTIONABLE';
+          }
+          if(st==='OUT'||st==='O'||st==='IR'||st==='NOT WITH TEAM'){
             keyOuts.push({name:p.full_name||'?', team:t.alias||t.abbreviation||t.market||'?', position:p.primary_position||p.position||'?',
               injury:p.desc||p.comment||p.injury||'?', status:'OUT', side: side});
           }
