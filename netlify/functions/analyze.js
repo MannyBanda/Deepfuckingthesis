@@ -312,6 +312,7 @@ var SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing real-time 
 + '  CONDITIONAL = sustainability concerns or quality gaps\n'
 + '  NO ENTRY = no structural edge, opponent LOCKED IN/DURABLE, or already priced in\n\n'
 + '8. TEAM QUALITY: Bad team (bottom-12, missing stars) leading good team (top-12, full strength) on FRAGILE/UNSUSTAINABLE shooting = ideal entry. State quality gap.\n\n'
++ '9. GAME NARRATIVE: When prior analysis history is provided, use it for continuity. Track how control, sustainability, and your signals have evolved across calls. Reference shifts explicitly: "Control climbed from 0.65→0.78 as opponent sustainability degraded MIXED→FRAGILE." If your prior read was wrong, own it. If the window you called earlier has closed, say so. Never repeat your prior read verbatim — each call should advance the narrative.\n\n'
 + 'OUTPUT FORMAT (follow exactly):\n\n'
 + 'DECISION:\n'
 + 'EDGE: [+X% | No market data] | FWP: [X%] | MIP: [X% | N/A]\n'
@@ -379,6 +380,7 @@ exports.handler = async function(event) {
     var clutchData = body.clutchData;
     var oddsData = body.oddsData;
     var edgeHistory = body.edgeHistory;
+    var analysisHistory = body.analysisHistory;
     var trackingData = body.trackingData;
     var pbpAudit = body.pbpAudit;
 
@@ -451,6 +453,22 @@ exports.handler = async function(event) {
     var edgeSection = '';
     if (edgeHistory && edgeHistory.length > 0) {
       edgeSection = '\nEDGE HISTORY:\n' + edgeHistory.map(function(e) { return e.time + ' | ' + e.edge + ' FWP ' + e.fwp + ' | ' + e.control + ' ' + e.score; }).join('\n') + '\n';
+    }
+
+    // ── ANALYSIS HISTORY (game narrative across prior calls) ──
+    var narrativeSection = '';
+    if (analysisHistory && analysisHistory.length > 0) {
+      narrativeSection = '\nGAME NARRATIVE (your prior reads this game — track how your assessment has evolved):\n';
+      analysisHistory.forEach(function(h, i) {
+        narrativeSection += (i+1) + '. ' + (h.time||'?') + ' Q' + (h.period||'?') + (h.clock?' '+h.clock:'') + ' ' + (h.score||'') + ' | '
+          + (h.controlTeam||'?') + ' ' + (h.controlScore ? h.controlScore.toFixed(2) : '?') + ' ' + (h.verdict||'')
+          + ' | ' + (h.entry||'—') + '/' + (h.conviction||'—')
+          + ' | Lead:' + (h.leadTeam||'?') + '=' + (h.leadSust||'?') + ' Trail:' + (h.trailTeam||'?') + '=' + (h.trailSust||'?')
+          + ' | ' + (h.signal||'—')
+          + (h.thesisStatus ? ' | Thesis:' + h.thesisStatus : '')
+          + (h.keyRead ? ' — ' + h.keyRead.substring(0, 80) : '')
+          + '\n';
+      });
     }
 
     // ── PBP DEPTH AUDIT ──
@@ -528,7 +546,7 @@ exports.handler = async function(event) {
     // ── BUILD PROMPT ──
     var userPrompt = awayTeam + ' @ ' + homeTeam + ' | ' + period + ' | ' + score + '\n\n'
       + (thesis ? 'THESIS:\n' + thesis + '\n' : 'No thesis.')
-      + '\n' + clutchSection + oddsSection + trackingSection + sustainabilitySection + pbpSection + edgeSection
+      + '\n' + clutchSection + oddsSection + trackingSection + sustainabilitySection + pbpSection + edgeSection + narrativeSection
       + '\nGAME DATA:\n' + JSON.stringify(summaryData);
 
     var controller = new AbortController();
