@@ -896,6 +896,8 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
     const parsed = parseSonnetScores(data.analysis, hAlias, aAlias);
     if(parsed){
       cs.sonnetIndicators = parsed;
+      // Snapshot client indicators at analysis time — divergence compares future client reads against THIS baseline
+      cs.clientIndAtAnalysis = computeAny(game);
       console.log('Sonnet scores parsed:', parsed.controlTeam, parsed.score.toFixed(2));
     }
 
@@ -3445,22 +3447,23 @@ function renderCard(game){
     </div>`;
 
     // ─── DIVERGENCE DETECTION ───
-    if(cs.sonnetIndicators && rawInd){
+    const baseInd = cs.clientIndAtAnalysis;
+    if(cs.sonnetIndicators && rawInd && baseInd){
       const divergences = [];
       const iKeys = ['I1','I2','I3','I4','I5'];
       for(const k of iKeys){
-        const sL = cs.sonnetIndicators[k]?.leader?.toUpperCase().substring(0,3)||'';
+        const bL = baseInd[k]?.leader?.toUpperCase().substring(0,3)||'';
         const cL = rawInd[k]?.leader?.toUpperCase().substring(0,3)||'';
-        if(sL && cL && sL!=='EVE' && cL!=='EVE' && sL!==cL){
-          divergences.push(k+' flipped: Sonnet='+cs.sonnetIndicators[k].leader+' → Client='+rawInd[k].leader);
+        if(bL && cL && bL!=='EVE' && cL!=='EVE' && bL!==cL){
+          divergences.push(k+' flipped: '+baseInd[k].leader+' → '+rawInd[k].leader);
         }
       }
-      const scoreDelta = Math.abs((rawInd.score||0)-(cs.sonnetIndicators.score||0));
+      const scoreDelta = Math.abs((rawInd.score||0)-(baseInd.score||0));
       if(scoreDelta>=0.15){
-        divergences.push('Control shifted '+(cs.sonnetIndicators.score||0).toFixed(2)+' → '+(rawInd.score||0).toFixed(2)+' (Δ'+scoreDelta.toFixed(2)+')');
+        divergences.push('Control shifted '+(baseInd.score||0).toFixed(2)+' → '+(rawInd.score||0).toFixed(2)+' (Δ'+scoreDelta.toFixed(2)+')');
       }
-      if(rawInd.controlTeam && cs.sonnetIndicators.controlTeam && rawInd.controlTeam.toUpperCase().substring(0,3)!==cs.sonnetIndicators.controlTeam.toUpperCase().substring(0,3)){
-        divergences.push('Control team flipped: '+cs.sonnetIndicators.controlTeam+' → '+rawInd.controlTeam);
+      if(rawInd.controlTeam && baseInd.controlTeam && rawInd.controlTeam.toUpperCase().substring(0,3)!==baseInd.controlTeam.toUpperCase().substring(0,3)){
+        divergences.push('Control team flipped: '+baseInd.controlTeam+' → '+rawInd.controlTeam);
       }
       cs.divergences = divergences;
       cs.clientInd = rawInd;
@@ -4094,6 +4097,7 @@ WATCH
   if(bl){ cs.baselines = bl; console.log('DEMO baselines:', bl.built, 'stars:', bl.stars); }
   cs.divergences = [];
   cs.clientInd = null;
+  cs.clientIndAtAnalysis = computeAny(demoGame);
   cs.analysisTime = new Date();
 
   renderPills(); updateCounts();
