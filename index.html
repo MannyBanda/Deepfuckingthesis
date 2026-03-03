@@ -3351,10 +3351,11 @@ function mountCard(game){
   const _pbpPeriod = prev?.pbpPeriod||null;
   const _clientIndAtAnalysis = prev?.clientIndAtAnalysis||null;
   const _analysisHistory = prev?.analysisHistory||[];
+  const _mktCollapsed = prev?.mktCollapsed !== undefined ? prev.mktCollapsed : true;
   cardState[id]={logs:[],lastUp:null,editing:false,generating:false,analyzing:false,
     prevLvl:null,_countdown:null,lastFingerprint:'',analysis:_analysis,analysisTime:_analysisTime,genSteps:null,genError:null,
     lastScoreFP:'',lastStatsFP:'',staleCount:0,dataFreshness:'FRESH',sonnetIndicators:_sonnetIndicators,
-    prediction:_prediction, sustainabilityAudit:_sustainabilityAudit, clutchData:null, clutchTier:3, oddsData:null, oddsAll:null, oddsHistory:[], trackingData:null, enriching:false, enrichDone:false, evCollapsed:false, edgeHistory:_edgeHistory, analysisHistory:_analysisHistory, pbpAudit:_pbpAudit, pbpTime:_pbpTime, pbpPeriod:_pbpPeriod, pbpLoading:false};
+    prediction:_prediction, sustainabilityAudit:_sustainabilityAudit, clutchData:null, clutchTier:3, oddsData:null, oddsAll:null, oddsHistory:[], trackingData:null, enriching:false, enrichDone:false, evCollapsed:false, mktCollapsed:_mktCollapsed, edgeHistory:_edgeHistory, analysisHistory:_analysisHistory, pbpAudit:_pbpAudit, pbpTime:_pbpTime, pbpPeriod:_pbpPeriod, pbpLoading:false};
   // Restore cached clutch data from localStorage
   if(cachedClutch[id]){
     const cs = cardState[id];
@@ -3738,62 +3739,72 @@ function renderCard(game){
 
     // ─── DATA INPUTS (Clutch + Odds) ───
     const cl = cs.clutchData, od = cs.oddsData;
-    html+=`<div class="data-inputs">
-      <div class="di-hdr">MARKET & CLUTCH<span style="font-size:5px">${od?'<span style="color:var(--green)">✓ ODDS</span>':'<span style="color:var(--t3)">no odds</span>'} · ${cl?'<span style="color:var(--green)">✓ CLUTCH</span>':'<span style="color:var(--t3)">no clutch</span>'}${cs.trackingData?' · <span style="color:var(--green)">✓ TRACKING</span>':''}</span>
-        <button class="di-btn" style="margin-left:auto;background:${cs.enriching?'var(--b2)':cs.enrichDone?'rgba(0,255,136,.15)':'rgba(147,130,220,.15)'};color:${cs.enriching?'var(--t3)':cs.enrichDone?'var(--green)':'#9382dc'};font-size:6px;padding:2px 6px" onclick="enrichFromBDL('${id}')" ${cs.enriching?'disabled':''}>${cs.enriching?'⏳ PULLING...':cs.enrichDone?'✓ UPDATED':'⚡ ODDS'}</button>
-      </div>
-      <div class="di-row" style="margin-bottom:0;gap:3px">
-        <span class="di-lbl"></span>
-        <span style="width:54px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">SPREAD</span>
-        <span style="width:54px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">${esc(hA)} ML</span>
-        <span style="width:54px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">${esc(aA)} ML</span>
-        <span style="width:48px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">TOTAL</span>
-      </div>
-      <div class="di-row" style="gap:3px">
-        <span class="di-lbl">ODDS</span>
-        <input class="di-input di-sm" id="od-hs-${id}" placeholder="sprd" value="${od?.homeSpread||''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
-        <input class="di-input di-sm" id="od-hml-${id}" placeholder="ML" value="${od?.homeML||''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
-        <input class="di-input di-sm" id="od-aml-${id}" placeholder="ML" value="${od?.awayML||''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
-        <input class="di-input di-sm" id="od-tot-${id}" placeholder="O/U" value="${od?.total||''}" style="width:48px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
-        <button class="di-btn" onclick="saveOdds('${id}')">SET</button>
+    // ─── MARKET & CLUTCH (read-only, collapsible) ───
+    const mktHasData = od || cl || cs.trackingData;
+    const mktCollapsed = cs.mktCollapsed !== false; // default collapsed
+    const mktStatus = (od?'<span style="color:var(--green)">✓ ODDS</span>':'<span style="color:var(--t3)">no odds</span>')+' · '+(cl?'<span style="color:var(--green)">✓ CLUTCH</span>':'<span style="color:var(--t3)">no clutch</span>')+(cs.trackingData?' · <span style="color:var(--green)">✓ TRK</span>':'');
+    html+=`<div class="data-inputs" style="padding:3px 11px">
+      <div class="di-hdr" style="cursor:pointer;margin-bottom:${mktCollapsed?'0':'3px'}" onclick="cardState['${id}'].mktCollapsed=!cardState['${id}'].mktCollapsed;renderCard(games.find(g=>g.id==='${id}'))">
+        <span>MARKET & CLUTCH</span><span style="font-size:4.5px;margin-left:4px">${mktStatus}</span>
+        <span style="margin-left:auto;display:flex;align-items:center;gap:4px">
+          <button class="di-btn" style="background:${cs.enriching?'var(--b2)':cs.enrichDone?'rgba(0,255,136,.15)':'rgba(147,130,220,.15)'};color:${cs.enriching?'var(--t3)':cs.enrichDone?'var(--green)':'#9382dc'};padding:1px 5px" onclick="event.stopPropagation();enrichFromBDL('${id}')" ${cs.enriching?'disabled':''}>${cs.enriching?'⏳...':cs.enrichDone?'✓ ODDS':'⚡ ODDS'}</button>
+          <span style="font-size:6px;color:var(--t3);display:inline-block;transition:transform .2s;transform:rotate(${mktCollapsed?'0':'90'}deg)">&#9656;</span>
+        </span>
       </div>`;
-    // Odds movement row
-    const mv = oddsMovement(cs);
-    if(mv){
-      const cell = (d) => d ? `<span style="width:54px;font-size:5px;text-align:center;color:${d.color}">${d.val}</span>` : `<span style="width:54px;font-size:5px;text-align:center;color:var(--t3)">—</span>`;
-      html+=`<div class="di-row" style="gap:3px;margin-top:0;margin-bottom:1px">
-        <span class="di-lbl" style="font-size:5px;color:var(--t2)">MOVE</span>
-        ${cell(mv.spread)}${cell(mv.homeML)}${cell(mv.awayML)}
-        <span style="width:48px;font-size:5px;text-align:center;color:${mv.total?mv.total.color:'var(--t3)'}">${mv.total?mv.total.val:'—'}</span>
-        <span style="font-size:4px;color:var(--t2);white-space:nowrap">${mv.pulls} pulls</span>
-      </div>`;
+    if(!mktCollapsed){
+      // Odds row (read-only)
+      if(od){
+        const mv = oddsMovement(cs);
+        html+=`<div style="display:flex;gap:6px;align-items:baseline;margin-bottom:2px;flex-wrap:wrap">
+          <span style="font-size:5px;color:var(--t3);width:28px">ODDS</span>
+          <span style="font-size:5.5px;color:var(--t2)">${esc(hA)} <span style="color:var(--t1)">${od.homeSpread||'—'}</span> ML <span style="color:var(--t1)">${od.homeML||'—'}</span></span>
+          <span style="font-size:5.5px;color:var(--t2)">${esc(aA)} ML <span style="color:var(--t1)">${od.awayML||'—'}</span></span>
+          <span style="font-size:5.5px;color:var(--t2)">O/U <span style="color:var(--t1)">${od.total||'—'}</span></span>
+        </div>`;
+        if(mv){
+          const mvCell = (d) => d ? `<span style="color:${d.color}">${d.val}</span>` : '—';
+          html+=`<div style="font-size:4.5px;color:var(--t3);margin-bottom:2px;margin-left:28px">MOVE: sprd ${mvCell(mv.spread)} · ${esc(hA)} ${mvCell(mv.homeML)} · ${esc(aA)} ${mvCell(mv.awayML)} · O/U ${mv.total?mvCell(mv.total):'—'} (${mv.pulls} pulls)</div>`;
+        }
+      } else {
+        html+=`<div style="font-size:5px;color:var(--t3);margin-bottom:2px">No odds — tap ⚡ ODDS to pull</div>`;
+      }
+      // Clutch row (read-only)
+      if(cl){
+        const cRow = (label, d) => {
+          if(!d || (!d.netRtg && d.netRtg!==0)) return '';
+          const nrCol = parseFloat(d.netRtg)>=0?'var(--green)':parseFloat(d.netRtg)>=-2?'var(--yellow)':'var(--red)';
+          return `<div style="display:flex;gap:4px;align-items:baseline;margin-bottom:1px">
+            <span style="font-size:5px;color:var(--t3);width:28px">${label}</span>
+            <span style="font-size:5.5px;color:${nrCol}">Net ${d.netRtg}</span>
+            <span style="font-size:5px;color:var(--t2)">Off ${d.offRtg??'—'} Def ${d.defRtg??'—'}</span>
+            <span style="font-size:5px;color:var(--t2)">GP ${d.gp??'—'} ${d.wl??''}</span>
+          </div>`;
+        };
+        html+='<div style="border-top:1px solid var(--b1);padding-top:2px;margin-top:2px">';
+        html+=`<div style="font-size:4.5px;color:var(--t3);letter-spacing:1px;margin-bottom:2px">L15 CLUTCH (Tier ${cs.clutchTier||'?'})</div>`;
+        html+=cRow(esc(hA), cl.home);
+        html+=cRow(esc(aA), cl.away);
+        // Extra clutch fields if available
+        if(cl.home?.efg || cl.away?.efg){
+          html+=`<div style="font-size:4.5px;color:var(--t3);margin-top:1px">`;
+          if(cl.home?.efg) html+=`${esc(hA)}: eFG ${cl.home.efg} TS ${cl.home.ts||'—'} Pace ${cl.home.pace||'—'} PIE ${cl.home.pie||'—'} `;
+          if(cl.away?.efg) html+=`${esc(aA)}: eFG ${cl.away.efg} TS ${cl.away.ts||'—'} Pace ${cl.away.pace||'—'} PIE ${cl.away.pie||'—'}`;
+          html+=`</div>`;
+        }
+        html+='</div>';
+      } else {
+        html+=`<div style="font-size:5px;color:var(--t3);border-top:1px solid var(--b1);padding-top:2px;margin-top:2px">No clutch — upload L15 via OCR</div>`;
+      }
+      // Tracking baselines
+      if(cs.trackingData){
+        const ht=cs.trackingData.home||{}, at=cs.trackingData.away||{};
+        html+=`<div style="font-size:4.5px;color:var(--t3);border-top:1px solid var(--b1);padding-top:2px;margin-top:2px">`;
+        if(ht.catchAndShoot||at.catchAndShoot) html+=`C&S: ${esc(aA)} ${at.catchAndShoot?.efg||'?'}% · ${esc(hA)} ${ht.catchAndShoot?.efg||'?'}% `;
+        if(ht.pullUp||at.pullUp) html+=`Pull-up: ${esc(aA)} ${at.pullUp?.efg||'?'}% · ${esc(hA)} ${ht.pullUp?.efg||'?'}%`;
+        html+=`</div>`;
+      }
     }
-    html+=`<div class="di-row" style="margin-bottom:0;gap:3px">
-        <span class="di-lbl"></span>
-        <span style="width:54px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">NET RTG</span>
-        <span style="width:54px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">OFF RTG</span>
-        <span style="width:54px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">DEF RTG</span>
-        <span style="width:32px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">GP</span>
-        <span style="width:40px;font-size:5px;color:var(--t2);text-align:center;letter-spacing:.3px">W-L</span>
-      </div>
-      <div class="di-row" style="gap:3px">
-        <span class="di-lbl">L15 ${esc(hA)}</span>
-        <input class="di-input di-sm" id="cl-h-net-${id}" placeholder="" value="${cl?.home?.netRtg??''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
-        <input class="di-input di-sm" id="cl-h-off-${id}" placeholder="" value="${cl?.home?.offRtg??''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
-        <input class="di-input di-sm" id="cl-h-def-${id}" placeholder="" value="${cl?.home?.defRtg??''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
-        <input class="di-input di-sm" id="cl-h-gp-${id}" placeholder="" value="${cl?.home?.gp??''}" style="width:32px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
-        <input class="di-input di-sm" id="cl-h-wl-${id}" placeholder="" value="${cl?.home?.wl??''}" style="width:40px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
-      </div>
-      <div class="di-row" style="gap:3px">
-        <span class="di-lbl">L15 ${esc(aA)}</span>
-        <input class="di-input di-sm" id="cl-a-net-${id}" placeholder="" value="${cl?.away?.netRtg??''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
-        <input class="di-input di-sm" id="cl-a-off-${id}" placeholder="" value="${cl?.away?.offRtg??''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
-        <input class="di-input di-sm" id="cl-a-def-${id}" placeholder="" value="${cl?.away?.defRtg??''}" style="width:54px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
-        <input class="di-input di-sm" id="cl-a-gp-${id}" placeholder="" value="${cl?.away?.gp??''}" style="width:32px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
-        <input class="di-input di-sm" id="cl-a-wl-${id}" placeholder="" value="${cl?.away?.wl??''}" style="width:40px" onfocus="cardState['${id}'].editing=true" onblur="cardState['${id}'].editing=false">
-      </div>
-      <div class="di-row"><button class="di-btn" onclick="saveClutch('${id}')">SET CLUTCH</button></div>
-    </div>`;
+    html+=`</div>`;
 
     // ─── EVIDENCE VIEW TOGGLE ───
     const pbpTs = cs.pbpTime ? 'Q'+(cs.pbpPeriod||'?')+' '+cs.pbpTime.toLocaleTimeString() : '';
@@ -4160,6 +4171,12 @@ WATCH
   const cs = cardState[DEMO_ID];
 
   cs.oddsData = {homeSpread:'-8.5', homeML:'-380', awayML:'+300', total:'221.5'};
+  cs.enrichDone = true;
+  cs.mktCollapsed = false;
+  cs.oddsHistory = [
+    {homeSpread:'-7.5', homeML:'-320', awayML:'+260', total:'223', ts:Date.now()-3600000},
+    {homeSpread:'-8.5', homeML:'-380', awayML:'+300', total:'221.5', ts:Date.now()},
+  ];
   cs._demoSummary = demoGame.summary; // preserve for re-injection after schedule refresh
   cs.clutchData = {
     tier:2,
