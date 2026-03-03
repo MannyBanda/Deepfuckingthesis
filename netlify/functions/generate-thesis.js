@@ -60,19 +60,47 @@ function matchTeamSide(team, homeAlias, awayAlias, homeId, awayId) {
 
 // Resolve depth chart positions from various SR response structures
 // SR depth_chart endpoint wraps positions inside team metadata object
+// positions can be: Array of {name, players[]} OR Object {PG: [...], SG: [...], ...}
 function resolveDepthPositions(depth) {
   if (!depth) return [];
-  // Direct positions array
-  if (Array.isArray(depth.positions)) return depth.positions;
+  
+  // Check for positions key first (most common)
+  var positions = depth.positions;
+  if (positions) {
+    // If it's already an array, use directly
+    if (Array.isArray(positions)) return positions;
+    // If it's an object keyed by position name (e.g. {PG: [...], SG: [...], C: [...], PF: [...], SF: [...]})
+    if (typeof positions === 'object' && positions !== null) {
+      var converted = [];
+      Object.keys(positions).forEach(function(posName) {
+        var val = positions[posName];
+        // Value could be array of players directly, or object with players array
+        var players = [];
+        if (Array.isArray(val)) {
+          players = val;
+        } else if (val && Array.isArray(val.players)) {
+          players = val.players;
+        } else if (val && typeof val === 'object') {
+          // Could be nested: {depth1: {...}, depth2: {...}} or similar
+          players = Object.values(val).filter(function(v) { return v && typeof v === 'object' && (v.full_name || v.name); });
+        }
+        if (players.length > 0) {
+          converted.push({ name: posName, position: posName, players: players });
+        }
+      });
+      if (converted.length > 0) return converted;
+    }
+  }
+  
+  // Direct array
   if (Array.isArray(depth)) return depth;
-  // Nested under team wrapper keys
-  if (depth.positions && Array.isArray(depth.positions)) return depth.positions;
   // SR sometimes nests as depth_chart.positions within team object
-  if (depth.depth_chart && Array.isArray(depth.depth_chart.positions)) return depth.depth_chart.positions;
-  if (depth.depth_chart && Array.isArray(depth.depth_chart)) return depth.depth_chart;
-  // Search for any key containing an array of objects with 'players' arrays (likely positions)
+  if (depth.depth_chart) return resolveDepthPositions(depth.depth_chart);
+  // Search for any key containing an array of objects with 'players' arrays
   var keys = Object.keys(depth);
   for (var i = 0; i < keys.length; i++) {
+    // Skip known non-position keys
+    if (['id','name','market','alias','founded','sr_id','reference','venue','league','conference','division','coaches'].indexOf(keys[i]) >= 0) continue;
     var val = depth[keys[i]];
     if (Array.isArray(val) && val.length > 0 && val[0] && (Array.isArray(val[0].players) || val[0].name || val[0].position)) {
       return val;
@@ -97,16 +125,26 @@ function computeRosterAudit(analytical, homeAlias, awayAlias, matchup) {
     if (!side) return;
 
     (team.players || []).forEach(function(p) {
-      var st = (p.status || '').toUpperCase();
+      // SR injuries uses various field names for status
+      var st = (p.status || p.injury_status || (p.injury && typeof p.injury === 'object' && p.injury.status) || '').toUpperCase();
+      // Some SR endpoints embed status in desc or comment
+      if (!st) {
+        var desc = (p.desc || p.description || p.comment || '').toUpperCase();
+        if (desc.indexOf('OUT') >= 0 || desc.indexOf('NOT WITH TEAM') >= 0) st = 'OUT';
+        else if (desc.indexOf('DAY-TO-DAY') >= 0 || desc.indexOf('GAME TIME') >= 0) st = 'DAY-TO-DAY';
+        else if (desc.indexOf('DOUBTFUL') >= 0) st = 'DOUBTFUL';
+        else if (desc.indexOf('QUESTIONABLE') >= 0) st = 'QUESTIONABLE';
+        else if (desc.indexOf('PROBABLE') >= 0) st = 'PROBABLE';
+      }
       var entry = {
         name: p.full_name || p.name || '?',
         position: p.primary_position || p.position || '?',
-        injury: p.desc || p.comment || p.injury || '?',
+        injury: p.desc || p.comment || (p.injury && typeof p.injury === 'string' ? p.injury : '') || '?',
         stats: null
       };
-      if (st === 'OUT' || st === 'O' || st === 'IR') {
+      if (st === 'OUT' || st === 'O' || st === 'IR' || st === 'NOT WITH TEAM') {
         out[side].push(entry);
-      } else if (st === 'DAY-TO-DAY' || st === 'GTD' || st === 'DOUBTFUL' || st === 'QUESTIONABLE' || st === 'D' || st === 'Q') {
+      } else if (st === 'DAY-TO-DAY' || st === 'GTD' || st === 'DOUBTFUL' || st === 'QUESTIONABLE' || st === 'D' || st === 'Q' || st === 'GAME TIME' || st === 'PROBABLE') {
         entry.statusLabel = st;
         gtd[side].push(entry);
       }
@@ -697,6 +735,14 @@ function diagnoseData(analytical, homeAlias, awayAlias, matchup) {
       if (sample.players && sample.players.length > 0) {
         var sp = sample.players[0];
         injReport.samplePlayerKeys = Object.keys(sp);
+        // Dump ALL scalar values from sample player for field discovery
+        var playerDump = {};
+        Object.keys(sp).forEach(function(k) {
+          var v = sp[k];
+          if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' || v === null) playerDump[k] = v;
+          else if (typeof v === 'object' && v !== null) playerDump[k] = '{' + Object.keys(v).join(',') + '}';
+        });
+        injReport.samplePlayerDump = playerDump;
         injReport.samplePlayer = { full_name: sp.full_name, name: sp.name, status: sp.status, desc: sp.desc, comment: sp.comment, injury: sp.injury, primary_position: sp.primary_position, position: sp.position };
       }
     }
@@ -716,7 +762,9 @@ function diagnoseData(analytical, homeAlias, awayAlias, matchup) {
       var allStatuses = [];
       matched.forEach(function(t) {
         (t.players || []).forEach(function(p) {
-          allStatuses.push((p.full_name || p.name || '?') + ':' + (p.status || '?'));
+          var nm = p.full_name || p.name || '?';
+          var st = p.status || p.injury_status || (p.injury && p.injury.status) || p.comment || p.desc || '??';
+          allStatuses.push(nm + ':' + st);
         });
       });
       injReport.matchedPlayerStatuses = allStatuses;
