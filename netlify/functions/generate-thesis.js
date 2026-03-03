@@ -625,6 +625,179 @@ function buildSystemPrompt() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// DATA INTEGRITY DIAGNOSTIC — Checks every field path the compute layer needs
+// ══════════════════════════════════════════════════════════════════════════════
+
+function diagnoseData(analytical, homeAlias, awayAlias) {
+  var report = { endpoints: {}, critical: [], warnings: [], summary: '' };
+
+  function keys(obj, depth) {
+    if (!obj || typeof obj !== 'object') return String(obj === null ? 'null' : typeof obj);
+    if (depth <= 0) return Array.isArray(obj) ? '[Array(' + obj.length + ')]' : '{' + Object.keys(obj).length + ' keys}';
+    if (Array.isArray(obj)) return '[Array(' + obj.length + ')' + (obj.length > 0 ? ' → ' + keys(obj[0], depth - 1) : '') + ']';
+    var k = Object.keys(obj);
+    if (k.length > 12) return '{' + k.slice(0, 12).join(', ') + '... (' + k.length + ' keys)}';
+    return '{' + k.join(', ') + '}';
+  }
+
+  // ── INJURIES ──
+  var inj = analytical.injuries;
+  var injReport = { exists: !!inj, structure: keys(inj, 2) };
+  if (inj) {
+    injReport.topKeys = Object.keys(inj);
+    injReport.hasTeams = Array.isArray(inj.teams);
+    injReport.teamsCount = Array.isArray(inj.teams) ? inj.teams.length : 0;
+    if (Array.isArray(inj.teams) && inj.teams.length > 0) {
+      var sample = inj.teams[0];
+      injReport.sampleTeam = { alias: sample.alias, hasPlayers: Array.isArray(sample.players), playerCount: (sample.players || []).length };
+      if (sample.players && sample.players.length > 0) {
+        var sp = sample.players[0];
+        injReport.samplePlayer = { full_name: sp.full_name, name: sp.name, status: sp.status, desc: sp.desc, comment: sp.comment, injury: sp.injury, primary_position: sp.primary_position, position: sp.position };
+      }
+    }
+    // Check for nested structures (common SR pattern)
+    if (inj.league && inj.league.teams) { injReport.nestedPath = 'league.teams'; injReport.nestedCount = inj.league.teams.length; }
+    if (inj.season && inj.season.teams) { injReport.nestedPath = 'season.teams'; }
+
+    // Find teams matching our aliases
+    if (Array.isArray(inj.teams)) {
+      var matched = inj.teams.filter(function(t) {
+        return (t.alias || '').toUpperCase() === homeAlias.toUpperCase() || (t.alias || '').toUpperCase() === awayAlias.toUpperCase();
+      });
+      injReport.matchedTeams = matched.map(function(t) { return { alias: t.alias, players: (t.players || []).length }; });
+      var allStatuses = [];
+      matched.forEach(function(t) {
+        (t.players || []).forEach(function(p) {
+          allStatuses.push((p.full_name || p.name || '?') + ':' + (p.status || '?'));
+        });
+      });
+      injReport.matchedPlayerStatuses = allStatuses;
+    }
+  } else {
+    report.critical.push('injuries: MISSING — analytical.injuries is falsy');
+  }
+  report.endpoints.injuries = injReport;
+
+  // ── PROFILES ──
+  ['home', 'away'].forEach(function(side) {
+    var alias = side === 'home' ? homeAlias : awayAlias;
+    var prof = analytical[side + 'Profile'];
+    var profReport = { exists: !!prof, structure: keys(prof, 1) };
+    if (prof) {
+      profReport.topKeys = Object.keys(prof);
+      profReport.hasPlayers = Array.isArray(prof.players);
+      profReport.playerCount = (prof.players || []).length;
+      if (prof.players && prof.players.length > 0) {
+        var sp = prof.players[0];
+        profReport.samplePlayer = { full_name: sp.full_name, status: sp.status, primary_position: sp.primary_position };
+        // Count by status
+        var counts = {};
+        prof.players.forEach(function(p) { var s = p.status || '?'; counts[s] = (counts[s] || 0) + 1; });
+        profReport.statusCounts = counts;
+      }
+    } else {
+      report.critical.push(side + 'Profile: MISSING');
+    }
+    report.endpoints[side + 'Profile'] = profReport;
+  });
+
+  // ── STATS ──
+  ['home', 'away'].forEach(function(side) {
+    var alias = side === 'home' ? homeAlias : awayAlias;
+    var stats = analytical[side + 'Stats'];
+    var statsReport = { exists: !!stats, structure: keys(stats, 1) };
+    if (stats) {
+      statsReport.topKeys = Object.keys(stats);
+      statsReport.hasOwnRecord = !!stats.own_record;
+      statsReport.hasStatistics = !!(stats.statistics || (stats.own_record && stats.own_record.statistics));
+      statsReport.hasOpponents = !!(stats.opponents || (stats.own_record && stats.own_record.opponents));
+      var ts = getTeamStats(stats);
+      statsReport.teamStatsKeys = Object.keys(ts).slice(0, 15);
+      statsReport.teamStatsPoints = ts.points;
+      statsReport.teamStatsSteals = ts.steals;
+      var os = getOppStats(stats);
+      statsReport.oppStatsKeys = Object.keys(os).slice(0, 10);
+      statsReport.oppStatsPaint = os.points_in_the_paint;
+      var players = getPlayers(stats);
+      statsReport.playerCount = players.length;
+      if (players.length > 0) {
+        var sp = players[0];
+        statsReport.samplePlayer = { full_name: sp.full_name, hasAverage: !!sp.average, averageKeys: sp.average ? Object.keys(sp.average).slice(0, 10) : [] };
+      }
+      if (players.length === 0) report.critical.push(side + 'Stats: 0 players found via getPlayers()');
+    } else {
+      report.critical.push(side + 'Stats: MISSING');
+    }
+    report.endpoints[side + 'Stats'] = statsReport;
+  });
+
+  // ── DEPTH CHARTS ──
+  ['home', 'away'].forEach(function(side) {
+    var depth = analytical[side + 'Depth'];
+    var depthReport = { exists: !!depth, structure: keys(depth, 1) };
+    if (depth) {
+      depthReport.topKeys = Object.keys(depth);
+      var pos = Array.isArray(depth.positions) ? depth.positions : Array.isArray(depth) ? depth : [];
+      depthReport.hasPositions = Array.isArray(depth.positions);
+      depthReport.positionCount = pos.length;
+      if (pos.length > 0) {
+        depthReport.samplePosition = { name: pos[0].name, position: pos[0].position, playerCount: (pos[0].players || []).length };
+        if (pos[0].players && pos[0].players.length > 0) {
+          depthReport.sampleDepthPlayer = { full_name: pos[0].players[0].full_name, name: pos[0].players[0].name, depth: pos[0].players[0].depth };
+        }
+      }
+      if (pos.length === 0) report.warnings.push(side + 'Depth: 0 positions found');
+    } else {
+      report.warnings.push(side + 'Depth: MISSING');
+    }
+    report.endpoints[side + 'Depth'] = depthReport;
+  });
+
+  // ── STANDINGS ──
+  var stnd = analytical.standings;
+  var stndReport = { exists: !!stnd, structure: keys(stnd, 1) };
+  if (stnd) {
+    stndReport.topKeys = Object.keys(stnd);
+    stndReport.hasConferences = Array.isArray(stnd.conferences);
+    var teamCount = 0;
+    (stnd.conferences || []).forEach(function(c) {
+      (c.divisions || []).forEach(function(d) {
+        teamCount += (d.teams || []).length;
+      });
+    });
+    stndReport.totalTeams = teamCount;
+    if (teamCount === 0) report.warnings.push('standings: 0 teams found in conferences.divisions.teams path');
+  } else {
+    report.warnings.push('standings: MISSING');
+  }
+  report.endpoints.standings = stndReport;
+
+  // ── CROSS-REFERENCE: Can SIA match injury names to stat lines? ──
+  var crossRef = { home: [], away: [] };
+  ['home', 'away'].forEach(function(side) {
+    var injTeams = (analytical.injuries && analytical.injuries.teams) || [];
+    var alias = side === 'home' ? homeAlias : awayAlias;
+    var teamInj = injTeams.find(function(t) { return (t.alias || '').toUpperCase() === alias.toUpperCase(); });
+    if (!teamInj) { crossRef[side].push('No injury team found for ' + alias); return; }
+    var outPlayers = (teamInj.players || []).filter(function(p) { var s = (p.status || '').toUpperCase(); return s === 'OUT' || s === 'O' || s === 'IR'; });
+    var statPlayers = getPlayers(analytical[side + 'Stats']);
+    outPlayers.forEach(function(op) {
+      var opName = (op.full_name || op.name || '?').toLowerCase();
+      var found = statPlayers.some(function(sp) { return (sp.full_name || sp.name || '').toLowerCase() === opName; });
+      crossRef[side].push(opName + ': stats ' + (found ? 'MATCHED' : 'NOT FOUND'));
+    });
+  });
+  report.crossRef = crossRef;
+
+  // ── SUMMARY ──
+  var total = Object.keys(report.endpoints).length;
+  var ok = Object.values(report.endpoints).filter(function(e) { return e.exists; }).length;
+  report.summary = ok + '/' + total + ' endpoints present | ' + report.critical.length + ' critical | ' + report.warnings.length + ' warnings';
+
+  return report;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // HANDLER
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -664,6 +837,7 @@ exports.handler = async function(event) {
     var awayAlias = matchup.away || 'AWAY';
 
     // ── PRE-COMPUTE ──
+    var diagnostics = diagnoseData(analytical, homeAlias, awayAlias);
     var rosterAudit = computeRosterAudit(analytical, homeAlias, awayAlias);
     var sia = computeSIA(rosterAudit, analytical, homeAlias, awayAlias);
     var redistribution = computeRedistribution(rosterAudit, sia, analytical, homeAlias, awayAlias);
@@ -723,7 +897,8 @@ exports.handler = async function(event) {
             homeOutNames: rosterAudit.out.home.map(function(p) { return p.name; }),
             awayOutNames: rosterAudit.out.away.map(function(p) { return p.name; }) },
           siaCaps: { home: finalCaps.home.caps, away: finalCaps.away.caps },
-          depletion: depletion, pyth: pyth, bhv: bhv
+          depletion: depletion, pyth: pyth, bhv: bhv,
+          diagnostics: diagnostics
         }
       })
     };
