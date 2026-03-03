@@ -906,22 +906,27 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
     if(decision){
       // ── CLIENT-SIDE EDGE OVERRIDE — COMPUTE BOTH TEAMS ──
       const od = cs.oddsData;
-      if(od && decision.fwp && (od.homeML || od.awayML)){
-        const fwpNum = parseFloat((decision.fwp||'').replace(/[%\s]/g,''));
+      // Use control score as FWP source (more reliable than Sonnet's text-parsed FWP)
+      const fwpFromControl = parsed?.score ? parsed.score * 100 : null;
+      const fwpNum = fwpFromControl || parseFloat((decision.fwp||'').replace(/[%\s]/g,''));
+      if(od && !isNaN(fwpNum) && (od.homeML || od.awayML)){
         if(!isNaN(fwpNum)){
           const mlToProb = (ml) => { const n=parseFloat(ml); if(isNaN(n)||n===0) return null; return n<0?Math.abs(n)/(Math.abs(n)+100):100/(n+100); };
           const rawH = mlToProb(od.homeML), rawA = mlToProb(od.awayML);
           if(rawH!==null && rawA!==null){
             const vigSum = rawH + rawA;
             const homeMIP = rawH/vigSum*100, awayMIP = rawA/vigSum*100;
-            // Determine which team Sonnet predicts to win (higher FWP team)
-            const predText = (decision.prediction||'').toUpperCase();
+            // Determine which team Sonnet predicts to win — use controlTeam as primary signal
+            // predText.includes() is unreliable since prediction text typically mentions BOTH teams
             const controlTeam = (parsed?.controlTeam||'').toUpperCase();
-            const isHomePred = predText.includes(hAlias.toUpperCase()) || controlTeam===hAlias.toUpperCase();
-            const isAwayPred = predText.includes(aAlias.toUpperCase()) || controlTeam===aAlias.toUpperCase();
+            const buyTeam = (decision.buyTeam||'').toUpperCase();
+            // Priority: buyTeam from SIGNAL line > controlTeam from indicators > predText fallback
+            const fwpTeam = buyTeam || controlTeam;
+            const isHomeFWP = fwpTeam === hAlias.toUpperCase();
+            const isAwayFWP = fwpTeam === aAlias.toUpperCase();
             let homeFWP, awayFWP;
-            if(isHomePred && !isAwayPred){ homeFWP=fwpNum; awayFWP=100-fwpNum; }
-            else if(isAwayPred && !isHomePred){ awayFWP=fwpNum; homeFWP=100-fwpNum; }
+            if(isHomeFWP){ homeFWP=fwpNum; awayFWP=100-fwpNum; }
+            else if(isAwayFWP){ awayFWP=fwpNum; homeFWP=100-fwpNum; }
             else { homeFWP=fwpNum>=50?fwpNum:100-fwpNum; awayFWP=100-homeFWP; }
             // Two-sided value
             decision.homeValue = {team:hAlias, fwp:homeFWP, mip:homeMIP, edge:parseFloat((homeFWP-homeMIP).toFixed(1)), ml:od.homeML||'—', spread:od.homeSpread||'—'};
@@ -934,7 +939,8 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
             decision.edge = (edge>=0?'+':'')+edge.toFixed(1)+'%';
             decision.edgeNum = parseFloat(edge.toFixed(1));
             decision.mip = winnerMIP.toFixed(1)+'%';
-            console.log('Two-sided:', hAlias, homeFWP.toFixed(1)+'%/'+homeMIP.toFixed(1)+'%', aAlias, awayFWP.toFixed(1)+'%/'+awayMIP.toFixed(1)+'%');
+            decision.fwp = fwpNum.toFixed(1)+'%';
+            console.log('Two-sided (FWP from '+(fwpFromControl?'control score':'Sonnet')+'):', hAlias, homeFWP.toFixed(1)+'%/'+homeMIP.toFixed(1)+'%', aAlias, awayFWP.toFixed(1)+'%/'+awayMIP.toFixed(1)+'%');
           }
         }
       }
@@ -3402,21 +3408,24 @@ function renderCard(game){
     const pred = cs.prediction;
 
     // ── RECOMPUTE EDGE CLIENT-SIDE on every render (fixes stale Sonnet edge on refresh) ──
-    if(pred && pred.fwp && cs.oddsData){
+    if(pred && cs.oddsData && ind){
       const od = cs.oddsData;
       if(od.homeML || od.awayML){
-        const fwpVal = parseFloat((pred.fwp||'').replace(/[%\s]/g,''));
+        // Derive FWP from control score (primary) or Sonnet text parse (fallback)
+        const fwpVal = ind.score ? ind.score * 100 : parseFloat((pred.fwp||'').replace(/[%\s]/g,''));
         if(!isNaN(fwpVal)){
           const _mlP = (ml) => { const n=parseFloat(ml); if(isNaN(n)||n===0) return null; return n<0?Math.abs(n)/(Math.abs(n)+100):100/(n+100); };
           const rH=_mlP(od.homeML), rA=_mlP(od.awayML);
           if(rH!==null && rA!==null){
             const vs=rH+rA, hMIP=rH/vs*100, aMIP=rA/vs*100;
-            const pTxt=(pred.prediction||'').toUpperCase(), cTeam=(ind.controlTeam||'').toUpperCase();
-            const isH=pTxt.includes(hA.toUpperCase())||cTeam===hA.toUpperCase();
-            const isA=pTxt.includes(aA.toUpperCase())||cTeam===aA.toUpperCase();
+            const cTeam=(ind.controlTeam||'').toUpperCase();
+            const bTeam=(pred.buyTeam||'').toUpperCase();
+            const fwpTeam = bTeam || cTeam;
+            const isH = fwpTeam===hA.toUpperCase();
+            const isA = fwpTeam===aA.toUpperCase();
             let hFWP,aFWP;
-            if(isH&&!isA){hFWP=fwpVal;aFWP=100-fwpVal;}
-            else if(isA&&!isH){aFWP=fwpVal;hFWP=100-fwpVal;}
+            if(isH){hFWP=fwpVal;aFWP=100-fwpVal;}
+            else if(isA){aFWP=fwpVal;hFWP=100-fwpVal;}
             else{hFWP=fwpVal>=50?fwpVal:100-fwpVal;aFWP=100-hFWP;}
             pred.homeValue={team:hA,fwp:hFWP,mip:hMIP,edge:parseFloat((hFWP-hMIP).toFixed(1)),ml:od.homeML||'—',spread:od.homeSpread||'—'};
             var awaySpr = od.homeSpread ? parseFloat(od.homeSpread)*-1 : null;
@@ -3427,6 +3436,7 @@ function renderCard(game){
             pred.edge=(edge>=0?'+':'')+edge.toFixed(1)+'%';
             pred.edgeNum=parseFloat(edge.toFixed(1));
             pred.mip=wMIP.toFixed(1)+'%';
+            pred.fwp=fwpVal.toFixed(1)+'%';
           }
         }
       }
