@@ -899,6 +899,54 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
     const parsed = parseSonnetScores(data.analysis, hAlias, aAlias);
     if(parsed){
       cs.sonnetIndicators = parsed;
+      // ── INDICATOR CAP ENFORCEMENT — override Sonnet when it violates SIA caps ──
+      if(cs.siaCaps){
+        const hCaps = cs.siaCaps.home || {};
+        const aCaps = cs.siaCaps.away || {};
+        const W = {I1:0.25, I2:0.25, I3:0.20, I4:0.20, I5:0.10};
+        let capChanged = false;
+        ['I1','I2','I3','I4','I5'].forEach(key => {
+          const ind = parsed[key];
+          if(!ind) return;
+          const hCap = hCaps[key]; // home team's max (null = uncapped, 0.5 = contested max, 0.0 = loses)
+          const aCap = aCaps[key]; // away team's max
+          const orig = ind.score; // from HOME perspective (1.0 = home wins, 0.0 = away wins)
+          let adj = orig;
+
+          // Both teams gutted → contested regardless of what Sonnet said
+          if(hCap === 0.0 && aCap === 0.0){ adj = 0.5; }
+          // Home gutted → home can't win this indicator
+          else if(hCap === 0.0){ adj = Math.min(adj, hCap); }
+          // Home limited → home can't fully claim
+          else if(hCap === 0.5){ adj = Math.min(adj, 0.5); }
+          // Away gutted → home gets guaranteed win (if home not also capped)
+          if(aCap === 0.0 && hCap !== 0.0 && hCap !== 0.5){ adj = Math.max(adj, 1.0); }
+          // Away limited → home gets at least contested
+          else if(aCap === 0.5 && (hCap === null || hCap === undefined)){ adj = Math.max(adj, 0.5); }
+
+          if(Math.abs(adj - orig) >= 0.01){
+            console.log('CAP ENFORCEMENT ' + key + ': ' + orig.toFixed(2) + ' → ' + adj.toFixed(2) +
+              ' (homeCap=' + hCap + ', awayCap=' + aCap + ')');
+            ind.score = adj;
+            ind.capOverride = true;
+            capChanged = true;
+          }
+        });
+        // Recompute weighted score if any caps were enforced
+        if(capChanged){
+          const newRaw = parsed.I1.score*W.I1 + parsed.I2.score*W.I2 + parsed.I3.score*W.I3 + parsed.I4.score*W.I4 + parsed.I5.score*W.I5;
+          const newHome = newRaw >= 0.5;
+          const newScore = newHome ? newRaw : 1 - newRaw;
+          console.log('CAP ENFORCEMENT recomputed: ' + parsed.score.toFixed(3) + ' → ' + newScore.toFixed(3));
+          parsed.score = newScore;
+          // Update control team if perspective flipped
+          const newTeam = newHome ? hAlias : aAlias;
+          if(newTeam !== parsed.controlTeam){
+            console.log('CAP ENFORCEMENT flipped control: ' + parsed.controlTeam + ' → ' + newTeam);
+            parsed.controlTeam = newTeam;
+          }
+        }
+      }
       // Snapshot client indicators at analysis time — divergence compares future client reads against THIS baseline
       cs.clientIndAtAnalysis = computeAny(game);
       // ── FLOOR ENFORCEMENT — SIA guarantees minimum score ──
@@ -3247,8 +3295,41 @@ function renderConfidenceTable(){
     const csMatch = t.match(/CONTROL\s+SCORE:\s*(\w+)\s+([\d.]+)\s*[—–-]\s*(\w+)/i);
     if(csMatch){ team=csMatch[1]; score=parseFloat(csMatch[2]); verdict=csMatch[3]; }
     const p = parseThesis(t);
-    // Pull live data from cardState
+    // ── THESIS INDICATOR RECOMPUTE — parse I1-I5 from thesis text, enforce caps, recompute weighted score ──
     const cs = cardState[g.id];
+    if(!cs?.sonnetIndicators && cs?.siaCaps && t){
+      const thesisParsed = parseSonnetScores(t, hA, aA);
+      if(thesisParsed){
+        // Enforce SIA caps on thesis indicators
+        const hCaps = cs.siaCaps.home || {};
+        const aCaps = cs.siaCaps.away || {};
+        const Wt = {I1:0.25, I2:0.25, I3:0.20, I4:0.20, I5:0.10};
+        let thesisCapChanged = false;
+        ['I1','I2','I3','I4','I5'].forEach(key => {
+          const ind = thesisParsed[key];
+          if(!ind) return;
+          const hCap = hCaps[key], aCap = aCaps[key];
+          const orig = ind.score;
+          let adj = orig;
+          if(hCap === 0.0 && aCap === 0.0){ adj = 0.5; }
+          else if(hCap === 0.0){ adj = Math.min(adj, 0.0); }
+          else if(hCap === 0.5){ adj = Math.min(adj, 0.5); }
+          if(aCap === 0.0 && hCap !== 0.0 && hCap !== 0.5){ adj = Math.max(adj, 1.0); }
+          else if(aCap === 0.5 && (hCap === null || hCap === undefined)){ adj = Math.max(adj, 0.5); }
+          if(Math.abs(adj - orig) >= 0.01){ ind.score = adj; thesisCapChanged = true; }
+        });
+        // Recompute weighted score from cap-enforced indicators
+        const tRaw = thesisParsed.I1.score*Wt.I1 + thesisParsed.I2.score*Wt.I2 + thesisParsed.I3.score*Wt.I3 + thesisParsed.I4.score*Wt.I4 + thesisParsed.I5.score*Wt.I5;
+        const tHome = tRaw >= 0.5;
+        const tScore = tHome ? tRaw : 1 - tRaw;
+        const tTeam = tHome ? hA : aA;
+        if(thesisCapChanged || Math.abs(tScore - score) >= 0.03){
+          console.log('THESIS RECOMPUTE: Sonnet said ' + team + ' ' + score.toFixed(2) + ' | Cap-enforced: ' + tTeam + ' ' + tScore.toFixed(3));
+          team = tTeam; score = tScore; verdict = getVerdict(score)?.label || verdict;
+        }
+      }
+    }
+    // Pull live data from cardState
     const si = cs?.sonnetIndicators;
     if(si && si.score){ team=si.controlTeam; score=si.score; verdict=getVerdict(si.score)?.label||verdict; }
     // ── FLOOR ENFORCEMENT — SIA guarantees minimum score for healthy team ──
