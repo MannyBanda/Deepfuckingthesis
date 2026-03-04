@@ -231,10 +231,11 @@ input,textarea,select{font-size:16px!important;}
   .id{font-size:5px;}
 }
 #conf-table{margin:0 11px 8px;padding:8px 10px;background:var(--c1);border:1px solid var(--b1);border-radius:6px;}
-#conf-table .ct-hdr{font-size:7px;letter-spacing:1.5px;color:var(--t2);text-transform:uppercase;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;}
-#conf-table table{width:100%;border-collapse:collapse;font-size:7px;}
-#conf-table th{color:var(--t3);font-weight:400;text-align:left;padding:2px 4px;border-bottom:1px solid var(--b1);font-size:5.5px;letter-spacing:.5px;text-transform:uppercase;}
-#conf-table td{padding:4px;border-bottom:1px solid rgba(255,255,255,.03);vertical-align:middle;}
+#conf-table .ct-hdr{font-size:7px;letter-spacing:1.5px;color:var(--t2);text-transform:uppercase;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:nowrap;gap:6px;}
+#conf-table .ct-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+#conf-table table{border-collapse:collapse;font-size:7px;min-width:700px;white-space:nowrap;}
+#conf-table th{color:var(--t3);font-weight:400;text-align:left;padding:2px 6px;border-bottom:1px solid var(--b1);font-size:5.5px;letter-spacing:.5px;text-transform:uppercase;white-space:nowrap;}
+#conf-table td{padding:4px 6px;border-bottom:1px solid rgba(255,255,255,.03);vertical-align:middle;white-space:nowrap;}
 #conf-table tr:last-child td{border-bottom:none;}
 #conf-table .ct-score{font-weight:600;font-size:8px;text-align:center;}
 #conf-table .ct-verdict{font-size:5.5px;letter-spacing:.5px;text-align:center;}
@@ -249,7 +250,7 @@ input,textarea,select{font-size:16px!important;}
 #conf-table .ct-live{background:rgba(0,200,83,.15);color:var(--green);}
 #conf-table .ct-pre{background:rgba(255,255,255,.06);color:var(--t3);}
 #conf-table .ct-done{background:rgba(255,255,255,.04);color:var(--t3);}
-@media(max-width:600px){#conf-table .ct-cond{max-width:120px;font-size:5.5px;}#conf-table table{font-size:6px;}}
+@media(max-width:600px){#conf-table .ct-cond{max-width:120px;font-size:5.5px;}#conf-table table{min-width:600px;font-size:6px;}}
 </style>
 </head>
 <body>
@@ -3383,12 +3384,12 @@ function renderConfidenceTable(){
   const statsSummary = [liveCount?liveCount+' live':'', preCount?preCount+' pre':'', finalCount?finalCount+' final':''].filter(Boolean).join(' / ');
   let html = '<div class="ct-hdr" onclick="confCollapsed=!confCollapsed;renderConfidenceTable()" style="cursor:pointer">CONFIDENCE TABLE <span class="arr" style="display:inline-block;transition:transform .2s;transform:rotate('+(confCollapsed?'0':'90')+'deg);margin-left:2px">&#9656;</span><span style="font-size:5px;color:var(--t3);margin-left:auto">'+rows.length+' '+(rows.length===1?'game':'games')+' &#183; '+statsSummary+'</span>';
   if(!confCollapsed && liveCount>0){
-    html += '<span style="margin-left:8px" onclick="event.stopPropagation();ctRefreshAll()" title="Force refresh all live games"><span style="font-size:6px;padding:2px 5px;border:1px solid var(--b1);border-radius:3px;color:var(--t2);cursor:pointer;letter-spacing:.5px">&#8635; REFRESH</span></span>';
-    html += '<span style="margin-left:4px" onclick="event.stopPropagation();ctAnalyzeAll()" title="Analyze all live games with thesis"><span style="font-size:6px;padding:2px 5px;border:1px solid var(--amber);border-radius:3px;color:var(--amber);cursor:pointer;letter-spacing:.5px">&#9889; ANALYZE ALL</span></span>';
+    html += '<span style="margin-left:8px;flex-shrink:0" onclick="event.stopPropagation();ctRefreshAll()" title="Force refresh all live games"><span style="font-size:6px;padding:2px 5px;border:1px solid var(--b1);border-radius:3px;color:var(--t2);cursor:pointer;letter-spacing:.5px;white-space:nowrap">&#8635; REFRESH</span></span>';
+    html += '<span style="margin-left:4px;flex-shrink:0" onclick="event.stopPropagation();ctAnalyzeAll()" title="Analyze all live games with thesis"><span style="font-size:6px;padding:2px 5px;border:1px solid var(--amber);border-radius:3px;color:var(--amber);cursor:pointer;letter-spacing:.5px;white-space:nowrap">&#9889; ANALYZE ALL</span></span>';
   }
   html += '</div>';
   if(!confCollapsed){
-  html += '<table><tr><th style="text-align:center">SCORE</th><th style="text-align:center">SUST</th><th style="text-align:center">FWP</th><th style="text-align:center">EDGE</th><th style="text-align:center">ENTRY</th><th>CTRL</th><th style="text-align:center">CTRL</th><th style="text-align:center">THESIS</th></tr>';
+  html += '<div class="ct-scroll"><table><tr><th style="text-align:center">SCORE</th><th style="text-align:center">SUST</th><th style="text-align:center">FWP</th><th style="text-align:center">EDGE</th><th style="text-align:center">ENTRY</th><th>CTRL</th><th style="text-align:center">CTRL</th><th style="text-align:center">THESIS</th></tr>';
   for(const r of rows){
     const isFinal = r.state==='FINAL';
     const rowClass = 'ct-row'+(isFinal?' ct-final':' '+entryClass(r.entry));
@@ -3480,7 +3481,7 @@ function renderConfidenceTable(){
       + '<td style="font-size:6px;text-align:center">'+tsStr+'</td>'
       + '</tr>';
   }
-  html += '</table>';
+  html += '</table></div>';
   } // end if(!confCollapsed)
   el.innerHTML = html;
   el.style.display = 'block';
