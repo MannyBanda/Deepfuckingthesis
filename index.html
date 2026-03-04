@@ -2007,37 +2007,28 @@ async function generateThesis(gameId){
 
   const cacheKey = 'nba4:srCache:'+gameId;
   let collected = {};
-  const cached = localStorage.getItem(cacheKey);
 
-  if(cached){
-    // Use cached SR data — skip all 12 API calls
-    collected = JSON.parse(cached);
-    cs.genSteps.forEach((s,i)=>{ if(i>=1 && i<=12) s.status='done'; });
+  // Always fetch fresh SR data — show every API call in progress UI
+  for(let i=0; i<calls.length; i++){
+    cs.genSteps[i+1].status = 'active';
     renderGenProgress(gameId);
-    console.log('Using cached SR data for', gameId);
-  } else {
-    // Fetch fresh SR data
-    for(let i=0; i<calls.length; i++){
-      cs.genSteps[i+1].status = 'active';
-      renderGenProgress(gameId);
-      try{
-        const data = await sr(calls[i].type, calls[i].params);
-        collected[calls[i].key] = data;
-        cs.genSteps[i+1].status = 'done';
-      }catch(e){
-        cs.genSteps[i+1].status = 'err';
-        cs.genSteps[i+1].error = e.message;
-      }
-      renderGenProgress(gameId);
-      if(i < calls.length-1) await new Promise(r=>setTimeout(r,1500));
-    }
-    // Cache for re-runs (skip if too large for localStorage)
     try{
-      const cacheStr = JSON.stringify(collected);
-      if(cacheStr.length < 3000000) localStorage.setItem(cacheKey, cacheStr);
-      else console.warn('SR data too large to cache:', (cacheStr.length/1024).toFixed(0)+'KB');
-    }catch(e){ console.warn('Cache write failed:', e.message); }
+      const data = await sr(calls[i].type, calls[i].params);
+      collected[calls[i].key] = data;
+      cs.genSteps[i+1].status = 'done';
+    }catch(e){
+      cs.genSteps[i+1].status = 'err';
+      cs.genSteps[i+1].error = e.message;
+    }
+    renderGenProgress(gameId);
+    if(i < calls.length-1) await new Promise(r=>setTimeout(r,1500));
   }
+  // Cache for structural context extraction (used by extractStructuralContext)
+  try{
+    const cacheStr = JSON.stringify(collected);
+    if(cacheStr.length < 3000000) localStorage.setItem(cacheKey, cacheStr);
+    else console.warn('SR data too large to cache:', (cacheStr.length/1024).toFixed(0)+'KB');
+  }catch(e){ console.warn('Cache write failed:', e.message); }
 
   // Extract structural context from cached SR data (closers, Pythagorean, opp profiles, shot diet)
   try{
@@ -4147,8 +4138,7 @@ function renderCard(game){
     <div class="thdr">
       PRE-GAME THESIS
       <div style="display:flex;gap:6px;align-items:center;">
-        ${state==='PRE'&&!cs.generating?`<button class="tgen" onclick="generateThesis('${id}')">⚡ ${localStorage.getItem('nba4:srCache:'+id)?'GEN (cached)':'GENERATE'}</button>${localStorage.getItem('nba4:srCache:'+id)?`<button class="tedit" onclick="localStorage.removeItem('nba4:srCache:${id}');renderCard(games.find(g=>g.id==='${id}'))">🗑 CLR</button>`:''}`:''}
-        <button class="tedit" onclick="startEdit('${id}')">EDIT</button>
+        ${state==='PRE'&&!cs.generating?`<button class="tgen" onclick="generateThesis('${id}')">⚡ GENERATE</button>`:''}        <button class="tedit" onclick="startEdit('${id}')">EDIT</button>
       </div>
     </div>`;
 
