@@ -624,7 +624,7 @@ async function loadSchedule(){
       if(dcs){
         const dg = {id:DEMO_ID,status:'inprogress',scheduled:new Date().toISOString(),venue:'Demo Arena',
           home:{id:'demo-h',name:'Cleveland Cavaliers',alias:'CLE'},away:{id:'demo-a',name:'Milwaukee Bucks',alias:'MIL'},
-          homePoints:68,awayPoints:72,period:3,clock:'6:15',dataSource:'DEMO',summary:dcs._demoSummary||null};
+          homePoints:46,awayPoints:56,period:2,clock:'3:20',dataSource:'DEMO',summary:dcs._demoSummary||null};
         games.unshift(dg);
       }
     }
@@ -727,6 +727,9 @@ async function fetchSummary(game){
       cs.baselines = bl;
       if(bl.built && !cs._baselineLogged){ addLog(game.id,'📊 Baselines built — '+Object.keys(bl.players).length+' players, stars: '+[...bl.stars.home,...bl.stars.away].join(', '),true); cs._baselineLogged=true; }
     }
+
+    // Capture quarter snapshot (rolling window infrastructure)
+    captureSnapshot(game);
 
     // Check if data changed meaningfully
     const fp = fingerprint(data);
@@ -885,6 +888,11 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
         analysisHistory: cs.analysisHistory && cs.analysisHistory.length > 0 ? cs.analysisHistory : null,
         trackingData: cs.trackingData || null,
         pbpAudit: cs.pbpAudit ? {home:cs.pbpAudit.home, away:cs.pbpAudit.away, homeAlias:cs.pbpAudit.homeAlias, awayAlias:cs.pbpAudit.awayAlias, runs:cs.pbpAudit.runs, pbpPeriod:cs.pbpPeriod, pbpAge:cs.pbpTime?Math.round((Date.now()-cs.pbpTime.getTime())/60000):null} : null,
+        rollingWindow: cs.rollingWindow || null,
+        acceleration: cs.acceleration || null,
+        subMetricArrows: cs.subMetricArrows || null,
+        adjustment: cs.adjustment || null,
+        combinedRead: cs.combinedRead || null,
       })
     });
     if(!resp.ok){
@@ -1782,17 +1790,21 @@ function parseSonnetScores(text, homeAlias, awayAlias){
         ' | Client computed ' + controlTeam + ' ' + score.toFixed(3) + ' (delta ' + Math.abs(score - sonnetStatedScore).toFixed(2) + ')');
     }
 
-    const trajMatch = text.match(/TRAJECTORY:\s*(\S+)\s*[—–-]\s*(\d+)\/(\d+)/i);
-    // Parse individual T1-T8 signal lines with team attribution
-    const signalRegex = /(T[1-8])\s*[—–-]\s*([^:]+):\s*(.+)/g;
+    const trajMatch = text.match(/(?:TRAJECTORY|EVENT FLAGS):\s*(\S+)\s*[—–-]\s*(\d+)\/(\d+)/i);
+    // Parse individual Trag1-4 (or T1-T8 fallback) signal lines with team attribution
+    const signalRegex = /(?:Trag([1-4])|T([1-8]))\s*[—–-]\s*([^:]+):\s*(.+)/g;
     const parsedSignals = [];
     let sm;
     const hUp = homeAlias.toUpperCase(), aUp = awayAlias.toUpperCase();
     const hSub = hUp.substring(0,3), aSub = aUp.substring(0,3);
+    // Map Trag numbers to T keys for consistency
+    const tragToT = {'1':'T1','2':'T2','3':'T4','4':'T7'};
     while((sm = signalRegex.exec(text)) !== null){
-      const key = sm[1];
-      const label = sm[2].trim();
-      const detail = sm[3].trim();
+      const tragNum = sm[1]; // Trag match
+      const tNum = sm[2]; // T match (fallback)
+      const key = tragNum ? tragToT[tragNum] : ('T'+tNum);
+      const label = sm[3].trim();
+      const detail = sm[4].trim();
       const isClear = /^CLEAR/i.test(detail);
       const col = isClear ? '#3e3e48' : 'var(--amber)';
       // Extract team attribution from signal text
@@ -1801,11 +1813,10 @@ function parseSonnetScores(text, homeAlias, awayAlias){
         const detUp = detail.toUpperCase();
         const hasHome = detUp.includes(hUp) || detUp.includes(hSub);
         const hasAway = detUp.includes(aUp) || detUp.includes(aSub);
-        // Check for [TEAM] bracket prefix from analyze.js
         const bracketMatch = detail.match(/\[([A-Z]{2,4})\]/);
         const bracketTeam = bracketMatch ? bracketMatch[1].toUpperCase() : null;
-        if(key==='T1'||key==='T8'){
-          // Heater/misalignment on team X → benefits opponent
+        if(key==='T1'){
+          // Heater on team X → benefits opponent
           if(bracketTeam){
             sigTeam = (bracketTeam===hUp||bracketTeam===hSub) ? awayAlias : homeAlias;
           } else if(hasHome && !hasAway) sigTeam = awayAlias;
@@ -1817,7 +1828,7 @@ function parseSonnetScores(text, homeAlias, awayAlias){
           } else if(hasHome && !hasAway) sigTeam = awayAlias;
           else if(hasAway && !hasHome) sigTeam = homeAlias;
         } else if(key==='T2'){
-          // Star cold: process accelerating/intact → benefits star's team; declining/collapsed → benefits opponent
+          // Star cold: declining → benefits opponent; intact → benefits star's team
           const declining = /declin|collaps/i.test(detail);
           if(bracketTeam){
             sigTeam = declining ? ((bracketTeam===hUp||bracketTeam===hSub)?awayAlias:homeAlias) : ((bracketTeam===hUp||bracketTeam===hSub)?homeAlias:awayAlias);
@@ -1827,7 +1838,7 @@ function parseSonnetScores(text, homeAlias, awayAlias){
             sigTeam = declining ? homeAlias : awayAlias;
           }
         } else {
-          // T3, T5, T6, T7: named team IS the beneficiary
+          // T7: named team IS the beneficiary
           if(bracketTeam){
             sigTeam = (bracketTeam===hUp||bracketTeam===hSub) ? homeAlias : awayAlias;
           } else if(hasHome && !hasAway) sigTeam = homeAlias;
@@ -1916,6 +1927,10 @@ function parseSonnetDecision(text){
     // Parse Thesis Status line
     const tsMatch = text.match(/THESIS\s*STATUS:\s*(CONFIRMED|DEVELOPING|CONTESTED|DENIED|FLIPPED)/i);
     d.thesisStatus = tsMatch ? tsMatch[1].toUpperCase() : null;
+    // Parse Combined Read line
+    const crMatch = text.match(/COMBINED\s*READ:\s*(DOMINANT|STRONG|EMERGING|EARNED|ERODING|FADING|COLLAPSING|SHIFT|FLIPPED|NO EDGE)\s*(?:[—–-]\s*(.+))?/i);
+    d.combinedRead = crMatch ? crMatch[1].toUpperCase() : null;
+    d.combinedReadNote = crMatch && crMatch[2] ? crMatch[2].trim() : null;
     // Parse Spread Analysis line
     const spreadMatch = text.match(/SPREAD\s*ANALYSIS:\s*(.+)/i);
     d.spreadAnalysis = spreadMatch ? spreadMatch[1].trim() : null;
@@ -2457,6 +2472,29 @@ function compute(game){
   // Client-side lead composition
   const clientLC = computeLeadCompositionClient(game);
   if(clientLC) cardState[game.id].clientLeadComposition = clientLC;
+
+  // Rolling window
+  const windowResult = computeRollingWindow(game);
+  cardState[game.id].rollingWindow = windowResult;
+
+  // Gap acceleration
+  if(windowResult && windowResult.available){
+    updateGapLog(game.id, score, cTeam, windowResult, game);
+  }
+  const accelResult = computeAcceleration(cardState[game.id].gapLog);
+  cardState[game.id].acceleration = accelResult;
+
+  // Sub-metric arrows
+  const arrows = computeSubMetricArrows(game.id);
+  cardState[game.id].subMetricArrows = arrows;
+
+  // Adjustment signal
+  const adjustment = classifyAdjustment(arrows, cTeam, hA, aA);
+  cardState[game.id].adjustment = adjustment;
+
+  // Combined read
+  const combinedRead = classifyCombinedRead(score, cTeam, windowResult, accelResult);
+  cardState[game.id].combinedRead = combinedRead;
 
   // Trajectory
   const traj = buildTrajectory(game, hA, aA, hs, as, H, A, hS, aS, qDs, periods);
@@ -3073,6 +3111,546 @@ function computeLeadCompositionClient(game){
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// ROLLING WINDOW ARCHITECTURE — Snapshot, Window, Gap, Arrows
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Snapshot Capture ─────────────────────────────────────────────────────────
+// Called every poll from fetchSummary. Stores cumulative stats at quarter boundaries.
+function captureSnapshot(game){
+  const cs = cardState[game.id]; if(!cs) return;
+  const s = game.summary; if(!s||!s.home||!s.away) return;
+  const currentPeriod = game.period||0;
+  if(currentPeriod < 1) return;
+
+  if(!cs.quarterSnapshots){
+    // First poll — initialize with current cumulative as baseline
+    const snap = {
+      ts: Date.now(),
+      home: Object.assign({}, s.home.statistics||{}),
+      away: Object.assign({}, s.away.statistics||{}),
+    };
+    cs.quarterSnapshots = {
+      boundaries: { 0: snap },
+      quarters: {},
+      lastSnapshotPeriod: 0,
+      backfillNeeded: [],
+      backfillDone: false,
+    };
+    addLog(game.id, '📸 Snapshot baseline captured (Q'+currentPeriod+')', true);
+    return;
+  }
+
+  const qs = cs.quarterSnapshots;
+
+  // Always store latest cumulative as rolling overwrite for current partial quarter
+  qs._latestCumulative = {
+    ts: Date.now(),
+    home: Object.assign({}, s.home.statistics||{}),
+    away: Object.assign({}, s.away.statistics||{}),
+  };
+
+  // Detect quarter boundary crossing
+  if(currentPeriod > qs.lastSnapshotPeriod + 1){
+    // Crossed 1+ boundaries
+    const missed = [];
+    for(let q = qs.lastSnapshotPeriod+1; q < currentPeriod; q++) missed.push(q);
+
+    if(missed.length === 1 && !qs.boundaries[missed[0]]){
+      // Normal: caught boundary (within poll drift)
+      // Use the previous poll's latest cumulative as the boundary
+      const prevCum = qs._prevCumulative || qs._latestCumulative;
+      qs.boundaries[missed[0]] = {
+        ts: Date.now(),
+        home: Object.assign({}, prevCum.home),
+        away: Object.assign({}, prevCum.away),
+      };
+      computeQuarterDelta(qs, missed[0]);
+      qs.lastSnapshotPeriod = missed[0];
+      addLog(game.id, '📸 Q'+missed[0]+' boundary captured', true);
+    } else if(missed.length > 1){
+      // Missed boundaries — phone asleep etc.
+      qs.backfillNeeded = missed.filter(q => !qs.boundaries[q]);
+      qs.lastSnapshotPeriod = currentPeriod - 1;
+      addLog(game.id, '⚠ Missed Q'+missed.join(',')+' boundaries — BDL backfill queued', false);
+      // Trigger async backfill
+      if(qs.backfillNeeded.length > 0 && !qs._backfilling){
+        backfillMissingQuarters(game);
+      }
+    }
+  } else if(currentPeriod === qs.lastSnapshotPeriod + 1 && !qs.boundaries[qs.lastSnapshotPeriod+1]){
+    // Just crossed into new quarter — capture boundary for previous quarter
+    const q = qs.lastSnapshotPeriod + 1;
+    // Boundary = previous poll's cumulative (closest to quarter end)
+    if(qs._prevCumulative){
+      qs.boundaries[q] = {
+        ts: Date.now(),
+        home: Object.assign({}, qs._prevCumulative.home),
+        away: Object.assign({}, qs._prevCumulative.away),
+      };
+      computeQuarterDelta(qs, q);
+      qs.lastSnapshotPeriod = q;
+      addLog(game.id, '📸 Q'+q+' boundary captured', true);
+    }
+  }
+
+  // Compute current partial quarter delta
+  const prevBoundary = qs.boundaries[currentPeriod - 1] || qs.boundaries[qs.lastSnapshotPeriod];
+  if(prevBoundary && qs._latestCumulative){
+    qs.quarters[currentPeriod] = {
+      home: diffStats(qs._latestCumulative.home, prevBoundary.home),
+      away: diffStats(qs._latestCumulative.away, prevBoundary.away),
+      source: 'snapshot',
+      partial: true,
+    };
+  }
+
+  // Store prev for next poll's boundary detection
+  qs._prevCumulative = {
+    home: Object.assign({}, s.home.statistics||{}),
+    away: Object.assign({}, s.away.statistics||{}),
+  };
+
+  // Persist snapshots
+  try { localStorage.setItem('nba4:snap:'+game.id, JSON.stringify({
+    boundaries: qs.boundaries, quarters: qs.quarters,
+    lastSnapshotPeriod: qs.lastSnapshotPeriod,
+  })); } catch(e){}
+}
+
+function diffStats(current, previous){
+  const d = {};
+  const keys = ['points_in_the_paint','fast_break_points','points_off_turnovers',
+    'second_chance_points','possessions','field_goals_at_rim_made','field_goals_at_rim_att',
+    'field_goals_made','field_goals_att','three_points_made','three_points_att',
+    'free_throws_made','free_throws_att','assists','turnovers','steals','blocks',
+    'offensive_rebounds','personal_fouls','points','bench_points',
+    'offensive_points_per_possession','defensive_points_per_possession'];
+  keys.forEach(k => {
+    const c = current[k], p = previous[k];
+    if(c!=null && p!=null) d[k] = c - p;
+    else if(c!=null) d[k] = c;
+    else d[k] = null;
+  });
+  // Derived
+  const fga = d.field_goals_att||1;
+  d.efg = fga>0 ? ((d.field_goals_made||0)+0.5*(d.three_points_made||0))/fga : null;
+  d.assist_ratio = (d.field_goals_made||0)>0 ? ((d.assists||0)/(d.field_goals_made||1))*100 : null;
+  d.fg3a_share = fga>0 ? ((d.three_points_att||0)/fga)*100 : null;
+  return d;
+}
+
+function computeQuarterDelta(qs, quarterNum){
+  const curr = qs.boundaries[quarterNum];
+  const prev = qs.boundaries[quarterNum-1];
+  if(!curr||!prev) return;
+  qs.quarters[quarterNum] = {
+    home: diffStats(curr.home, prev.home),
+    away: diffStats(curr.away, prev.away),
+    source: 'snapshot',
+    partial: false,
+  };
+}
+
+// ── BDL Backfill ─────────────────────────────────────────────────────────────
+async function backfillMissingQuarters(game){
+  const cs = cardState[game.id]; if(!cs) return;
+  const qs = cs.quarterSnapshots; if(!qs) return;
+  const bdlId = bdlGameMap[game.id];
+  if(!bdlId){ addLog(game.id,'BDL backfill skipped — no BDL game ID',false); return; }
+  qs._backfilling = true;
+  const needed = [...qs.backfillNeeded];
+  addLog(game.id,'⚡ Backfilling Q'+needed.join(',')+' from BDL…',true);
+
+  for(const q of needed){
+    try{
+      await new Promise(r=>setTimeout(r,200)); // stagger
+      const adv = await bdl('advanced',{game_id:bdlId,period:String(q)});
+      const basic = await bdl('stats',{game_id:bdlId,period:String(q)});
+      const hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
+      const hId = game.home?.id, aId = game.away?.id;
+
+      // Aggregate by team
+      function aggTeam(data, teamId, teamAlias){
+        const players = (data.data||[]).filter(p=>{
+          const tid = p.team?.id || p.player?.team_id;
+          return String(tid)===String(teamId);
+        });
+        const sum = (arr,key) => arr.reduce((a,p)=>a+(p[key]||0),0);
+        return players.length>0 ? players : [];
+      }
+
+      function aggBasicTeam(basicData, teamAlias){
+        const pl = (basicData.data||[]).filter(p=>(p.team?.abbreviation||'')=== teamAlias);
+        const sum = (key) => pl.reduce((a,p)=>a+(p[key]||0),0);
+        return {
+          field_goals_made:sum('fgm'), field_goals_att:sum('fga'),
+          three_points_made:sum('fg3m'), three_points_att:sum('fg3a'),
+          free_throws_made:sum('ftm'), free_throws_att:sum('fta'),
+          assists:sum('ast'), turnovers:sum('turnover'),
+          steals:sum('stl'), blocks:sum('blk'),
+          offensive_rebounds:sum('oreb'), personal_fouls:sum('pf'),
+          points:sum('pts'),
+        };
+      }
+
+      function aggAdvTeam(advData, teamAlias){
+        const pl = (advData.data||[]).filter(p=>(p.team?.abbreviation||'')===teamAlias && (p.possessions||0)>0);
+        const sum = (key) => pl.reduce((a,p)=>a+(p[key]||0),0);
+        return {
+          points_in_the_paint:sum('points_paint'),
+          fast_break_points:sum('points_fast_break'),
+          points_off_turnovers:sum('points_off_turnovers'),
+          second_chance_points:sum('points_second_chance'),
+          possessions:sum('possessions'),
+        };
+      }
+
+      const hBasic = aggBasicTeam(basic, hA);
+      const aBasic = aggBasicTeam(basic, aA);
+      const hAdv = aggAdvTeam(adv, hA);
+      const aAdv = aggAdvTeam(adv, aA);
+
+      qs.quarters[q] = {
+        home: Object.assign({}, hBasic, hAdv, {
+          field_goals_at_rim_made:null, field_goals_at_rim_att:null,
+          bench_points:null, // can't easily derive from BDL per-period
+        }),
+        away: Object.assign({}, aBasic, aAdv, {
+          field_goals_at_rim_made:null, field_goals_at_rim_att:null,
+          bench_points:null,
+        }),
+        source: 'bdl', partial: false,
+      };
+      // Derive ratios
+      ['home','away'].forEach(side=>{
+        const d = qs.quarters[q][side];
+        const fga = d.field_goals_att||1;
+        d.efg = fga>0?((d.field_goals_made||0)+0.5*(d.three_points_made||0))/fga:null;
+        d.assist_ratio = (d.field_goals_made||0)>0?((d.assists||0)/(d.field_goals_made||1))*100:null;
+        d.fg3a_share = fga>0?((d.three_points_att||0)/fga)*100:null;
+      });
+
+      qs.backfillNeeded = qs.backfillNeeded.filter(x=>x!==q);
+      addLog(game.id,'✓ Q'+q+' backfilled from BDL (at-rim N/A)',true);
+    }catch(e){
+      addLog(game.id,'⚠ Q'+q+' backfill failed: '+e.message,false);
+    }
+  }
+  qs._backfilling = false;
+  qs.backfillDone = true;
+  // Persist
+  try { localStorage.setItem('nba4:snap:'+game.id, JSON.stringify({
+    boundaries: qs.boundaries, quarters: qs.quarters,
+    lastSnapshotPeriod: qs.lastSnapshotPeriod,
+  })); } catch(e){}
+}
+
+// ── Restore snapshots from localStorage ──────────────────────────────────────
+function restoreSnapshots(gameId){
+  try{
+    const raw = localStorage.getItem('nba4:snap:'+gameId);
+    if(!raw) return null;
+    return JSON.parse(raw);
+  }catch(e){ return null; }
+}
+
+// ── Rolling Window ───────────────────────────────────────────────────────────
+function computeRollingWindow(game){
+  const cs = cardState[game.id]; if(!cs) return null;
+  const qs = cs.quarterSnapshots; if(!qs) return null;
+  const p = game.period||0;
+  if(p < 3) return { available:false, reason:'TOO EARLY' };
+
+  // Determine window quarters
+  let windowQs = [];
+  if(p===3){ windowQs = [2,3]; }
+  else if(p===4){ windowQs = [2,3]; }
+  else if(p>=5){ windowQs = [3,4]; } // OT: Q3+Q4
+
+  // Check availability
+  const available = windowQs.every(q => qs.quarters[q]);
+  if(!available){
+    const missing = windowQs.filter(q => !qs.quarters[q]);
+    return { available:false, reason:'Missing Q'+missing.join(','), windowQuarters:windowQs };
+  }
+
+  // Aggregate stats across window quarters (weighted by natural volume)
+  function aggWindow(side){
+    const agg = {};
+    const sumKeys = ['points_in_the_paint','fast_break_points','points_off_turnovers',
+      'second_chance_points','possessions','field_goals_at_rim_made','field_goals_at_rim_att',
+      'field_goals_made','field_goals_att','three_points_made','three_points_att',
+      'free_throws_made','free_throws_att','assists','turnovers','steals','blocks',
+      'offensive_rebounds','personal_fouls','points','bench_points'];
+    sumKeys.forEach(k=>{ agg[k]=0; let hasAny=false;
+      windowQs.forEach(q=>{ const v=qs.quarters[q]?.[side]?.[k]; if(v!=null){agg[k]+=v;hasAny=true;} });
+      if(!hasAny) agg[k]=null;
+    });
+    // Derived
+    const fga=agg.field_goals_att||1;
+    agg.efg=fga>0?((agg.field_goals_made||0)+0.5*(agg.three_points_made||0))/fga:null;
+    agg.assist_ratio=(agg.field_goals_made||0)>0?((agg.assists||0)/(agg.field_goals_made||1))*100:null;
+    agg.fg3a_share=fga>0?((agg.three_points_att||0)/fga)*100:null;
+    return agg;
+  }
+
+  const hW = aggWindow('home'), aW = aggWindow('away');
+  const hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
+
+  // Score indicators on window data
+  const W = {I1:.25,I2:.25,I3:.20,I4:.20,I5:.10};
+
+  // I1 window
+  const hGen=(hW.steals||0)+(hW.offensive_rebounds||0)-(hW.turnovers||0);
+  const aGen=(aW.steals||0)+(aW.offensive_rebounds||0)-(aW.turnovers||0);
+  const hConv=(hW.fast_break_points||0)+(hW.points_off_turnovers||0)+(hW.second_chance_points||0);
+  const aConv=(aW.fast_break_points||0)+(aW.points_off_turnovers||0)+(aW.second_chance_points||0);
+  const convAvail = hConv>0||aConv>0;
+  let i1 = (hGen>aGen?1:hGen<aGen?-1:0);
+  if(convAvail) i1 += (hConv>aConv?1:hConv<aConv?-1:0);
+  const wI1 = {score:i1>0?1:i1===0?.5:0, detail:'Gen:'+hGen+'–'+aGen+(convAvail?' Conv:'+hConv+'–'+aConv:' (conv N/A)')};
+
+  // I2 window
+  const hPaint=hW.points_in_the_paint||0, aPaint=aW.points_in_the_paint||0;
+  const hFTA=hW.free_throws_att||0, aFTA=aW.free_throws_att||0;
+  const hBlk=hW.blocks||0, aBlk=aW.blocks||0;
+  const hFouls=hW.personal_fouls||0, aFouls=aW.personal_fouls||0;
+  const hAtRim=hW.field_goals_at_rim_att, aAtRim=aW.field_goals_at_rim_att;
+  let rim = (hPaint+hFTA+hBlk)-(aPaint+aFTA+aBlk);
+  if(hAtRim!=null&&aAtRim!=null) rim += (hAtRim-aAtRim);
+  const rimThresh = (hAtRim!=null)?10:6; // lower threshold without at-rim
+  const wI2 = {score:rim>rimThresh?1:rim<-rimThresh?0:.5, detail:'Paint:'+hPaint+'–'+aPaint+' FTA:'+hFTA+'–'+aFTA+(hAtRim!=null?' Rim:'+hAtRim+'–'+aAtRim:'')};
+
+  // I3 window
+  const hEFG=hW.efg, aEFG=aW.efg;
+  const hAR=hW.assist_ratio||0, aAR=aW.assist_ratio||0;
+  let i3=0;
+  if(hEFG!=null&&aEFG!=null) i3+=(hEFG>aEFG+.02?1:hEFG<aEFG-.02?-1:0);
+  i3+=(hAR>aAR+5?1:hAR<aAR-5?-1:0);
+  const wI3 = {score:i3>0?1:i3===0?.5:0, detail:'eFG:'+(hEFG!=null?(hEFG*100).toFixed(0):'?')+'–'+(aEFG!=null?(aEFG*100).toFixed(0):'?')+' AR:'+hAR.toFixed(0)+'–'+aAR.toFixed(0)};
+
+  // I4 window — use point differential + bench in window
+  const hPts=hW.points||0, aPts=aW.points||0;
+  const pDiff=hPts-aPts;
+  const hBench=hW.bench_points||0, aBench=aW.bench_points||0;
+  let i4=(Math.abs(pDiff)>4?(pDiff>0?1:-1):0);
+  if(hBench>0||aBench>0) i4+=(hBench>aBench+4?1:hBench<aBench-4?-1:0);
+  const wI4 = {score:i4>0?1:i4===0?.5:0, detail:'Window Δ:'+pDiff+' Bench:'+hBench+'–'+aBench};
+
+  // I5 window — efficiency from per-possession if available, else from raw
+  const hPoss=hW.possessions||0, aPoss=aW.possessions||0;
+  let hEff=0,aEff=0;
+  if(hPoss>0&&aPoss>0){ hEff=hPts/hPoss; aEff=aPts/aPoss; }
+  const effD=hEff-aEff;
+  const wI5 = {score:effD>0.06?1:effD<-0.06?0:.5, detail:'Eff:'+hEff.toFixed(2)+'–'+aEff.toFixed(2)+' Poss:'+hPoss+'–'+aPoss};
+
+  const raw = wI1.score*W.I1 + wI2.score*W.I2 + wI3.score*W.I3 + wI4.score*W.I4 + wI5.score*W.I5;
+  const controlHome = raw>=0.5;
+  const score = controlHome?raw:1-raw;
+  const controlTeam = controlHome?hA:aA;
+
+  // Data quality
+  const missingFields = [];
+  if(hW.points_in_the_paint===null) missingFields.push('paint');
+  if(hW.field_goals_at_rim_att===null) missingFields.push('at_rim');
+  if(hW.fast_break_points===null) missingFields.push('fbp');
+  if(hW.possessions===null) missingFields.push('poss');
+
+  return {
+    available: true,
+    windowQuarters: windowQs,
+    windowPossessions: (hPoss||0)+(aPoss||0),
+    home: hW, away: aW,
+    I1:wI1, I2:wI2, I3:wI3, I4:wI4, I5:wI5,
+    score, controlTeam,
+    dataQuality: missingFields.length>0?'PARTIAL':'FULL',
+    missingFields,
+  };
+}
+
+// ── Gap Acceleration ─────────────────────────────────────────────────────────
+function updateGapLog(gameId, floorScore, floorTeam, windowResult, game){
+  const cs = cardState[gameId]; if(!cs) return;
+  if(!cs.gapLog) cs.gapLog = [];
+  if(!windowResult||!windowResult.available) return;
+
+  const wScore = windowResult.score;
+  const wTeam = windowResult.controlTeam;
+  // Normalize: gap positive means window stronger for floor's control team
+  let gap = 0;
+  if(floorTeam === wTeam){ gap = wScore - floorScore; }
+  else { gap = -(wScore + floorScore - 1); } // teams differ: divergence
+
+  cs.gapLog.push({
+    ts: Date.now(),
+    period: game.period||0,
+    clock: game.clock||'',
+    floor: floorScore,
+    floorTeam,
+    window: wScore,
+    windowTeam: wTeam,
+    windowSize: windowResult.windowQuarters.length,
+    gap: Math.round(gap*1000)/1000,
+    score: (game.away?.alias||'?')+' '+(game.awayPoints||0)+'-'+(game.homePoints||0)+' '+(game.home?.alias||'?'),
+  });
+
+  // Cap log size
+  if(cs.gapLog.length > 50) cs.gapLog = cs.gapLog.slice(-50);
+
+  // Persist
+  try{ localStorage.setItem('nba4:gap:'+gameId, JSON.stringify(cs.gapLog)); }catch(e){}
+}
+
+function computeAcceleration(gapLog){
+  if(!gapLog||gapLog.length<1) return {accel:'TOO EARLY',entries:[],consecutive:0};
+
+  // Filter to current window-size phase
+  const currentSize = gapLog[gapLog.length-1].windowSize;
+  const samePhase = gapLog.filter(e=>e.windowSize===currentSize);
+
+  if(samePhase.length<2) return {accel:'TOO EARLY',entries:samePhase,consecutive:0};
+
+  const recent = samePhase.slice(-4); // last 4 readings
+  const deltas = [];
+  for(let i=1;i<recent.length;i++) deltas.push(recent[i].gap - recent[i-1].gap);
+
+  // Check if gap flipped sign
+  const lastTwo = samePhase.slice(-2);
+  if((lastTwo[0].gap>0.02 && lastTwo[1].gap<-0.02)||(lastTwo[0].gap<-0.02 && lastTwo[1].gap>0.02)){
+    return {accel:'FLIPPED',entries:samePhase.slice(-5),consecutive:1};
+  }
+
+  // Count consecutive direction
+  const threshold = 0.015;
+  let growing=0, declining=0;
+  for(let i=deltas.length-1;i>=0;i--){
+    if(deltas[i]>threshold) growing++;
+    else if(deltas[i]<-threshold) declining++;
+    else break;
+  }
+
+  if(growing>=2) return {accel:'GROWING',entries:samePhase.slice(-5),consecutive:growing};
+  if(declining>=2) return {accel:'DECLINING',entries:samePhase.slice(-5),consecutive:declining};
+
+  // Check if phase just started (only 2-3 entries)
+  if(samePhase.length<=3 && samePhase.length>=2 && gapLog.length>samePhase.length){
+    return {accel:'NEW_PHASE',entries:samePhase,consecutive:0};
+  }
+
+  return {accel:'STABLE',entries:samePhase.slice(-5),consecutive:0};
+}
+
+// ── Sub-Metric Arrows ────────────────────────────────────────────────────────
+function computeSubMetricArrows(gameId){
+  const cs = cardState[gameId]; if(!cs) return null;
+  const qs = cs.quarterSnapshots; if(!qs) return null;
+
+  // Get ordered quarter numbers with data
+  const qNums = Object.keys(qs.quarters).map(Number).sort((a,b)=>a-b);
+  if(qNums.length<2) return null;
+
+  const metrics = [
+    {key:'paint', field:'points_in_the_paint', label:'Paint pts', indicator:'I2', threshold:3, structural:true},
+    {key:'atRim', field:'field_goals_at_rim_att', label:'At-rim att', indicator:'I2', threshold:2, structural:true},
+    {key:'fta', field:'free_throws_att', label:'FTA', indicator:'I2', threshold:2, structural:true},
+    {key:'steals', field:'steals', label:'Steals', indicator:'I1', threshold:1, structural:true},
+    {key:'tos', field:'turnovers', label:'TOs', indicator:'I1', threshold:1, structural:false}, // lower is better
+    {key:'fg3aShare', field:'fg3a_share', label:'3PA%', indicator:'I3', threshold:5, structural:false}, // lower = less variance
+    {key:'astRatio', field:'assist_ratio', label:'Ast ratio', indicator:'I3', threshold:8, structural:true},
+    {key:'poss', field:'possessions', label:'Poss', indicator:'I5', threshold:2, structural:true},
+  ];
+
+  function computeArrow(values, threshold){
+    const valid = values.filter(v=>v!=null);
+    if(valid.length<2) return {arrow:null, values};
+    const last3 = valid.slice(-3);
+    if(last3.length<2) return {arrow:null, values:last3};
+    const first=last3[0], last=last3[last3.length-1];
+    const diff=last-first;
+    // Monotonically rising
+    let rising=true,falling=true;
+    for(let i=1;i<last3.length;i++){
+      if(last3[i]<last3[i-1]) rising=false;
+      if(last3[i]>last3[i-1]) falling=false;
+    }
+    if(rising && diff>threshold) return {arrow:'RISING', values:last3};
+    if(falling && Math.abs(diff)>threshold) return {arrow:'FALLING', values:last3};
+    // Non-monotonic but directional
+    if(last3.length>=3){
+      if(last3[1]>first+threshold && last>first+threshold) return {arrow:'RISING', values:last3};
+      if(last3[1]<first-threshold && last<first-threshold) return {arrow:'FALLING', values:last3};
+    }
+    return {arrow:'FLAT', values:last3};
+  }
+
+  const result = {home:{}, away:{}};
+  ['home','away'].forEach(side=>{
+    metrics.forEach(m=>{
+      const vals = qNums.map(q=>qs.quarters[q]?.[side]?.[m.field]??null);
+      const {arrow,values} = computeArrow(vals, m.threshold);
+      const display = arrow ? (arrow==='RISING'?'▲':arrow==='FALLING'?'▼':'▬') : '—';
+      const valStr = values.map(v=>v!=null?(m.field.includes('share')||m.field.includes('ratio')?v.toFixed(0)+'%':String(Math.round(v))):'?').join('→');
+      result[side][m.key] = {arrow, values, display:display+' ('+valStr+')', label:m.label, indicator:m.indicator, structural:m.structural};
+    });
+  });
+
+  return result;
+}
+
+function classifyAdjustment(arrows, controlTeam, hA, aA){
+  if(!arrows) return {signal:'NO DATA',note:'Arrows unavailable'};
+  const side = controlTeam===hA?'home':'away';
+  const a = arrows[side];
+  const risingStructural = ['paint','atRim','fta','steals'].filter(k=>a[k]?.arrow==='RISING').length;
+  const fallingVariance = ['fg3aShare','tos'].filter(k=>a[k]?.arrow==='FALLING').length;
+  const fallingStructural = ['paint','atRim','fta'].filter(k=>a[k]?.arrow==='FALLING').length;
+  const risingVariance = ['fg3aShare','tos'].filter(k=>a[k]?.arrow==='RISING').length;
+
+  if(risingStructural>=2 && fallingVariance>=1)
+    return {signal:'INTERIOR PIVOT',note:'Progressive rim pressure replacing perimeter variance',risingStructural,fallingVariance,team:controlTeam};
+  if(fallingStructural>=2)
+    return {signal:'STRUCTURAL EROSION',note:'Interior game fading — structural edge at risk',fallingStructural,team:controlTeam};
+  if(risingVariance>=1 && fallingStructural>=1)
+    return {signal:'VARIANCE SHIFT',note:'Shifting to perimeter — production becoming less durable',risingVariance,fallingStructural,team:controlTeam};
+  if(risingStructural>=2)
+    return {signal:'STRUCTURAL ACCEL',note:'Multiple structural inputs compounding',risingStructural,team:controlTeam};
+  return {signal:'NO ADJUSTMENT',note:'Shot diet stable',team:controlTeam};
+}
+
+// ── Combined Read Classification ─────────────────────────────────────────────
+function classifyCombinedRead(floorScore, floorTeam, windowResult, accelResult){
+  if(!windowResult||!windowResult.available) return {read:'TOO EARLY', note:'Window not yet available'};
+  const wScore = windowResult.score;
+  const wTeam = windowResult.controlTeam;
+  const accel = accelResult?.accel||'STABLE';
+
+  // If different teams control floor vs window
+  if(floorTeam !== wTeam){
+    if(accel==='FLIPPED') return {read:'FLIPPED', note:wTeam+' taking control from '+floorTeam};
+    return {read:'SHIFT', note:'Floor: '+floorTeam+' / Window: '+wTeam+' — control contested'};
+  }
+
+  // Same team controls both
+  if(floorScore>=0.75 && wScore>=0.80 && (accel==='GROWING'||accel==='STABLE'))
+    return {read:'DOMINANT', note:'Structural edge compounding'};
+  if(floorScore>=0.75 && wScore>=0.75)
+    return {read:'STRONG', note:'Structural edge holding'};
+  if(floorScore>=0.75 && wScore>=0.60 && wScore<0.75 && (accel==='DECLINING'||accel==='STABLE'))
+    return {read:'ERODING', note:'Structure holds but momentum lost'};
+  if(floorScore>=0.75 && wScore<0.60)
+    return {read:'COLLAPSING', note:'Structural edge breaking down'};
+  if(floorScore>=0.60 && floorScore<0.75 && wScore>=0.75 && accel==='GROWING')
+    return {read:'EMERGING', note:'Edge strengthening toward confirmation'};
+  if(floorScore>=0.60 && floorScore<0.75 && wScore>=0.60)
+    return {read:'EARNED', note:'Modest edge, steady'};
+  if(floorScore>=0.60 && floorScore<0.75 && wScore<0.60)
+    return {read:'FADING', note:'Edge was real but dissipating'};
+  if(floorScore<0.60 && wScore>=0.65 && accel==='GROWING')
+    return {read:'SHIFT', note:'No cumulative edge but recent control emerging'};
+  return {read:'NO EDGE', note:'Insufficient signal'};
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // COMPUTE DISPATCH — routes to SR or BDL compute path
 // ══════════════════════════════════════════════════════════════════════════════
 function computeAny(game){
@@ -3396,7 +3974,16 @@ function renderConfidenceTable(){
     }
     fwpTeamEntry = csPred?.entry || null;
     const signal = csPred?.signalType || null;
-    const row = {matchup, team, score, verdict, gameId:g.id, state, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, hA, aA, entryIf:p.entry||null, passIf:p.pass||null, fwpTeamAlias, fwpTeamEdge, fwpTeamFwp, fwpTeamEntry, signal};
+    // Rolling window + gap for confidence table
+    const rwData = cs?.rollingWindow;
+    const accelData = cs?.acceleration;
+    const crData = cs?.combinedRead;
+    const windowScore = (rwData && rwData.available) ? rwData.score : null;
+    const windowTeam = (rwData && rwData.available) ? rwData.controlTeam : null;
+    const gapVal = (accelData && accelData.entries && accelData.entries.length>0) ? accelData.entries[accelData.entries.length-1].gap : null;
+    const accelLabel = accelData?.accel || null;
+    const combinedReadLabel = crData?.read || null;
+    const row = {matchup, team, score, verdict, gameId:g.id, state, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, hA, aA, entryIf:p.entry||null, passIf:p.pass||null, fwpTeamAlias, fwpTeamEdge, fwpTeamFwp, fwpTeamEntry, signal, windowScore, windowTeam, gapVal, accelLabel, combinedReadLabel};
     // Persist live data to cache whenever we have analysis results or fresh live sustainability
     if(pred || si || (state==='LIVE' && (sustHome || sustAway))){
       persistConfRow(g.id, {team, score, verdict, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, state, fwpTeamAlias, fwpTeamEdge, fwpTeamFwp, fwpTeamEntry, signal:csPred?.signalType||null, ts:Date.now()});
@@ -3452,7 +4039,7 @@ function renderConfidenceTable(){
   }
   html += '</div>';
   if(!confCollapsed){
-  html += '<div class="ct-scroll"><table><tr><th style="text-align:center">SCORE</th><th style="text-align:center">SUST</th><th style="text-align:center">FWP</th><th style="text-align:center">EDGE</th><th style="text-align:center">ENTRY</th><th>CTRL</th><th style="text-align:center">CTRL</th><th style="text-align:center">THESIS</th></tr>';
+  html += '<div class="ct-scroll"><table><tr><th style="text-align:center">SCORE</th><th style="text-align:center">SUST</th><th style="text-align:center">FWP</th><th style="text-align:center">EDGE</th><th style="text-align:center">ENTRY</th><th style="text-align:center">FLOOR</th><th style="text-align:center">WIN</th><th style="text-align:center">GAP</th><th style="text-align:center">THESIS</th></tr>';
   for(const r of rows){
     const isFinal = r.state==='FINAL';
     const rowClass = 'ct-row'+(isFinal?' ct-final':' '+entryClass(r.entry));
@@ -3539,8 +4126,9 @@ function renderConfidenceTable(){
       + '<td style="font-size:7px;text-align:center;white-space:nowrap">'+fwpStr+'</td>'
       + '<td style="font-size:7px;text-align:center;white-space:nowrap">'+edgeDispStr+'</td>'
       + '<td style="font-size:6px;text-align:center;white-space:nowrap">'+entryStr+'</td>'
-      + '<td style="color:'+vColor(r.verdict)+'">'+esc(r.team)+'</td>'
-      + '<td class="ct-score" style="color:'+vColor(r.verdict)+'">'+r.score.toFixed(2)+'<div class="ct-verdict" style="color:'+vColor(r.verdict)+'">'+esc(r.verdict)+'</div></td>'
+      + '<td class="ct-score" style="color:'+vColor(r.verdict)+'">'+r.score.toFixed(2)+'<div class="ct-verdict" style="color:'+vColor(r.verdict)+'">'+esc(r.team||'')+'</div></td>'
+      + '<td style="text-align:center;font-size:7px">'+(r.windowScore!=null?'<span style="font-weight:600;color:'+(r.windowScore>=0.75?'var(--g2)':r.windowScore>=0.60?'var(--yellow)':'var(--t3)')+'">'+r.windowScore.toFixed(2)+'</span>':'<span style="color:var(--t3)">&#8212;</span>')+'</td>'
+      + '<td style="text-align:center;font-size:7px">'+(r.gapVal!=null?'<span style="color:'+(r.gapVal>0.03?'var(--green)':r.gapVal<-0.03?'var(--amber)':'var(--t3)')+'">'+(r.gapVal>=0?'+':'')+r.gapVal.toFixed(2)+'</span>'+(r.accelLabel&&r.accelLabel!=='TOO EARLY'&&r.accelLabel!=='STABLE'?' <span style="font-size:5px;color:'+(r.accelLabel==='GROWING'?'var(--green)':r.accelLabel==='DECLINING'?'var(--amber)':r.accelLabel==='FLIPPED'?'var(--red)':'var(--t3)')+'">'+({'GROWING':'▲','DECLINING':'▼','FLIPPED':'⟳','NEW_PHASE':'◆'}[r.accelLabel]||'')+'</span>':''):'<span style="color:var(--t3)">&#8212;</span>')+'</td>'
       + '<td style="font-size:6px;text-align:center">'+tsStr+'</td>'
       + '</tr>';
   }
@@ -3612,10 +4200,22 @@ function mountCard(game){
   const _clientIndAtAnalysis = prev?.clientIndAtAnalysis||null;
   const _analysisHistory = prev?.analysisHistory||[];
   const _mktCollapsed = prev?.mktCollapsed !== undefined ? prev.mktCollapsed : true;
+  const _quarterSnapshots = prev?.quarterSnapshots||null;
+  const _gapLog = prev?.gapLog||null;
+  const _rollingWindow = prev?.rollingWindow||null;
+  const _acceleration = prev?.acceleration||null;
+  const _subMetricArrows = prev?.subMetricArrows||null;
+  const _adjustment = prev?.adjustment||null;
+  const _combinedRead = prev?.combinedRead||null;
+  const _leadComposition = prev?.leadComposition||null;
+  const _clientLeadComposition = prev?.clientLeadComposition||null;
   cardState[id]={logs:[],lastUp:null,editing:false,generating:false,analyzing:false,
     prevLvl:null,_countdown:null,lastFingerprint:'',analysis:_analysis,analysisTime:_analysisTime,genSteps:null,genError:null,
     lastScoreFP:'',lastStatsFP:'',staleCount:0,dataFreshness:'FRESH',sonnetIndicators:_sonnetIndicators,
-    prediction:_prediction, sustainabilityAudit:_sustainabilityAudit, clutchData:null, clutchTier:3, oddsData:null, oddsAll:null, oddsHistory:[], trackingData:null, enriching:false, enrichDone:false, evCollapsed:false, mktCollapsed:_mktCollapsed, edgeHistory:_edgeHistory, analysisHistory:_analysisHistory, pbpAudit:_pbpAudit, pbpTime:_pbpTime, pbpPeriod:_pbpPeriod, pbpLoading:false};
+    prediction:_prediction, sustainabilityAudit:_sustainabilityAudit, clutchData:null, clutchTier:3, oddsData:null, oddsAll:null, oddsHistory:[], trackingData:null, enriching:false, enrichDone:false, evCollapsed:false, mktCollapsed:_mktCollapsed, edgeHistory:_edgeHistory, analysisHistory:_analysisHistory, pbpAudit:_pbpAudit, pbpTime:_pbpTime, pbpPeriod:_pbpPeriod, pbpLoading:false,
+    quarterSnapshots:_quarterSnapshots, gapLog:_gapLog, rollingWindow:_rollingWindow,
+    acceleration:_acceleration, subMetricArrows:_subMetricArrows, adjustment:_adjustment,
+    combinedRead:_combinedRead, leadComposition:_leadComposition, clientLeadComposition:_clientLeadComposition};
   // Restore cached clutch data from localStorage
   if(cachedClutch[id]){
     const cs = cardState[id];
@@ -3639,6 +4239,20 @@ function mountCard(game){
     const savedTracking = localStorage.getItem('nba4:tracking:'+id);
     if(savedTracking){ cardState[id].trackingData = JSON.parse(savedTracking); addLog(id, '📋 Tracking baselines restored', true); }
   }catch(e){}
+  // Restore quarter snapshots from localStorage
+  if(!cardState[id].quarterSnapshots){
+    try{
+      const savedSnap = localStorage.getItem('nba4:snap:'+id);
+      if(savedSnap){ cardState[id].quarterSnapshots = JSON.parse(savedSnap); addLog(id, '📸 Snapshots restored (Q'+Object.keys(cardState[id].quarterSnapshots.quarters||{}).join(',')+')', true); }
+    }catch(e){}
+  }
+  // Restore gap log from localStorage
+  if(!cardState[id].gapLog){
+    try{
+      const savedGap = localStorage.getItem('nba4:gap:'+id);
+      if(savedGap){ cardState[id].gapLog = JSON.parse(savedGap); }
+    }catch(e){}
+  }
   // Restore analysis data from localStorage (fallback when in-memory prev was deleted on deselect or browser refresh)
   if(!cardState[id].analysis){
     try{
@@ -3778,14 +4392,17 @@ function renderCard(game){
     // ─── CONTROL BAR (compact — pure mechanical, no FWP) ───
     const trajTeam = ind.traj&&!ind.traj.tooEarly&&ind.traj.lean!=='NEUTRAL' ? ind.traj.lean : null;
     const trajBadgeColor = trajTeam ? 'var(--amber)' : 'var(--t3)';
-    const trajBadgeText = ind.traj&&!ind.traj.tooEarly ? (trajTeam||'EVEN')+' '+ind.traj.count+'/'+ind.traj.total : '';
+    const _tragKeys2 = ['T1','T2','T4','T7'];
+    const _filtSigs2 = (ind.traj&&ind.traj.signals||[]).filter(s=>_tragKeys2.includes(s.key));
+    const _tragActive2 = _filtSigs2.filter(s=>s.w>0).length;
+    const trajBadgeText = ind.traj&&!ind.traj.tooEarly ? (trajTeam||'EVEN')+' '+_tragActive2+'/'+_filtSigs2.length : '';
     html+=`
     <div class="ctrl-bar">
       <div class="vrd" style="color:${v.color};border-color:${v.color};background:${v.bg}">${v.label} (${ind.score.toFixed(2)})</div>
       <div><div class="cl">CONTROL</div><div class="ct">${esc(ind.controlTeam)}</div></div>
       <div class="bw"><div class="bt2"><div class="bf" style="width:${ind.score*100}%;background:${v.color}"></div></div></div>
       <div class="cn" style="color:${v.color}">${ind.score.toFixed(2)}</div>
-      <span style="font-size:5px;color:var(--t3);margin-left:-2px;letter-spacing:.3px">CTL</span>
+      <span style="font-size:5px;color:var(--t3);margin-left:-2px;letter-spacing:.3px">FLAGS</span>
       ${trajBadgeText?`<span class="dq" style="color:${trajBadgeColor};border-color:${trajBadgeColor}">${trajBadgeText}</span>`:''}
     </div>`;
 
@@ -3823,7 +4440,7 @@ function renderCard(game){
       html+='</div>';
     }
 
-    // ─── SUSTAINABILITY BRIDGE ───
+    // ─── 1. SUSTAINABILITY ───
     var sa = cs.sustainabilityAudit;
     var cSust = cs.clientSustainability;
     var leadTeam = (game.homePoints||0)>=(game.awayPoints||0) ? hA : aA;
@@ -3855,58 +4472,7 @@ function renderCard(game){
       html+='</div>';
     }
 
-    // ─── LEAD COMPOSITION (where did the margin come from?) ───
-    var lc = cs.leadComposition || cs.clientLeadComposition;
-    var lcIsClient = !cs.leadComposition && !!cs.clientLeadComposition;
-    if(lc && lc.absMargin > 2){
-      var lcStructColor = lc.structuralMargin > 0 ? 'var(--green)' : lc.structuralMargin < 0 ? 'var(--red)' : 'var(--t3)';
-      var lcVarColor = lc.varianceMargin > 0 ? 'var(--amber)' : lc.varianceMargin < 0 ? 'var(--green)' : 'var(--t3)';
-      var lcDurColor = lc.durability.includes('STRUCTURALLY SOURCED') ? 'var(--green)' : lc.durability.includes('VARIANCE SOURCED') ? 'var(--amber)' : 'var(--t2)';
-      html+='<div style="padding:6px 10px;border-top:1px solid var(--b1)">';
-      html+='<div style="font-size:6px;color:#a78bfa;letter-spacing:1.5px;margin-bottom:4px;font-family:inherit">LEAD COMPOSITION &#8212; WHERE DID THE MARGIN COME FROM?'+(lcIsClient?' <span style="color:var(--t3);letter-spacing:0">(client-side)</span>':'')+'</div>';
-      // Team bars
-      [lc.away, lc.home].forEach(function(tm){
-        if(!tm) return;
-        var sPct = tm.structuralPct, vPct = tm.variancePct;
-        html+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">';
-        html+='<span style="font-size:7px;color:var(--t1);width:26px;text-align:right;font-weight:600">'+esc(tm.team)+'</span>';
-        html+='<span style="font-size:6px;color:var(--t2);width:18px;text-align:right">'+tm.total+'</span>';
-        // Stacked bar
-        html+='<div style="flex:1;display:flex;height:10px;border-radius:3px;overflow:hidden;background:var(--b2)">';
-        if(tm.paint>0) html+='<div style="width:'+(tm.paint/tm.total*100)+'%;background:#4caf50" title="Paint '+tm.paint+'"></div>';
-        if(tm.ft>0) html+='<div style="width:'+(tm.ft/tm.total*100)+'%;background:#66bb6a" title="FT '+tm.ft+'"></div>';
-        if(tm.transition>0) html+='<div style="width:'+(tm.transition/tm.total*100)+'%;background:#81c784" title="Trans '+tm.transition+'"></div>';
-        if(tm.three>0) html+='<div style="width:'+(tm.three/tm.total*100)+'%;background:#ff9800" title="3PT '+tm.three+'"></div>';
-        if(tm.midOther>0) html+='<div style="width:'+(tm.midOther/tm.total*100)+'%;background:#ffc107" title="Mid '+tm.midOther+'"></div>';
-        html+='</div>';
-        html+='<span style="font-size:5.5px;color:var(--t3);width:50px">S:'+sPct+'% V:'+vPct+'%</span>';
-        html+='</div>';
-      });
-      // Legend
-      html+='<div style="display:flex;gap:8px;margin:3px 0 3px 34px;font-size:5px;color:var(--t3)">';
-      html+='<span><span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:#4caf50;vertical-align:middle;margin-right:2px"></span>Paint</span>';
-      html+='<span><span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:#66bb6a;vertical-align:middle;margin-right:2px"></span>FT</span>';
-      html+='<span><span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:#81c784;vertical-align:middle;margin-right:2px"></span>Trans</span>';
-      html+='<span><span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:#ff9800;vertical-align:middle;margin-right:2px"></span>3PT</span>';
-      html+='<span><span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:#ffc107;vertical-align:middle;margin-right:2px"></span>Mid</span>';
-      html+='</div>';
-      // Margin summary
-      html+='<div style="display:flex;gap:10px;font-size:6px;margin-left:34px">';
-      html+='<span style="color:'+lcStructColor+'">Structural: '+(lc.structuralMargin>=0?lc.leadTeam:lc.trailTeam)+' +'+Math.abs(lc.structuralMargin)+'</span>';
-      html+='<span style="color:'+lcVarColor+'">Variance: '+(lc.varianceMargin>=0?lc.leadTeam:lc.trailTeam)+' +'+Math.abs(lc.varianceMargin)+'</span>';
-      html+='</div>';
-      html+='<div style="font-size:6px;color:'+lcDurColor+';margin:3px 0 0 34px;font-weight:500">'+esc(lc.durability)+'</div>';
-      html+='</div>';
-    } else if(pred && pred.leadSource) {
-      // Fallback: show Sonnet's Lead Source line when no server-side composition data
-      var lsColor = pred.leadSource==='STRUCTURAL'?'var(--green)':pred.leadSource==='VARIANCE'?'var(--amber)':pred.leadSource==='EVEN'?'var(--t3)':'var(--t2)';
-      html+='<div style="padding:4px 10px;border-top:1px solid var(--b1)">';
-      html+='<div style="font-size:6px"><span style="color:#a78bfa;letter-spacing:1px">LEAD:</span> <span style="color:'+lsColor+';font-weight:600">'+esc(pred.leadSource)+'</span>';
-      if(pred.leadSourceNote) html+=' <span style="color:var(--t3)">&#8212; '+esc(pred.leadSourceNote)+'</span>';
-      html+='</div></div>';
-    }
-
-    // ─── VALUE READ (two-sided — primary decision interface) ───
+    // ─── 2. VALUE READ (two-sided — primary decision interface) ───
     if(pred){
       var hv = pred.homeValue, av = pred.awayValue;
       var hasValues = hv && av;
@@ -4007,6 +4573,160 @@ function renderCard(game){
       html+='<div class="dv"><div class="dv-hdr">VALUE READ</div><div class="analysis-loading"><div class="spin"></div> Sonnet analyzing&#8230;</div></div>';
     } else {
       html+='<div class="dv"><div class="dv-hdr">VALUE READ<span style="margin-left:auto">'+analyzeBtn+'</span></div><div style="font-size:6px;color:var(--t3);padding:2px 0">'+(cs.analysisError?'<span style="color:var(--red)">&#9888; '+esc(cs.analysisError)+'</span>':game.period<2?'Predictive layer activates Q2+ &#8212; press &#9889; to analyze':'Awaiting analysis &#8212; press &#9889; ANALYZE')+'</div></div>';
+    }
+
+    // ─── 3. LEAD COMPOSITION (where did the margin come from?) ───
+    var lc = cs.leadComposition || cs.clientLeadComposition;
+    var lcIsClient = !cs.leadComposition && !!cs.clientLeadComposition;
+    if(lc && lc.absMargin > 2){
+      var lcStructColor = lc.structuralMargin > 0 ? 'var(--green)' : lc.structuralMargin < 0 ? 'var(--red)' : 'var(--t3)';
+      var lcVarColor = lc.varianceMargin > 0 ? 'var(--amber)' : lc.varianceMargin < 0 ? 'var(--green)' : 'var(--t3)';
+      var lcDurColor = lc.durability.includes('STRUCTURALLY SOURCED') ? 'var(--green)' : lc.durability.includes('VARIANCE SOURCED') ? 'var(--amber)' : 'var(--t2)';
+      html+='<div style="padding:6px 10px;border-top:1px solid var(--b1)">';
+      html+='<div style="font-size:6px;color:#a78bfa;letter-spacing:1.5px;margin-bottom:4px;font-family:inherit">LEAD COMPOSITION &#8212; WHERE DID THE MARGIN COME FROM?'+(lcIsClient?' <span style="color:var(--t3);letter-spacing:0">(client-side)</span>':'')+'</div>';
+      // Team bars
+      [lc.away, lc.home].forEach(function(tm){
+        if(!tm) return;
+        var sPct = tm.structuralPct, vPct = tm.variancePct;
+        html+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">';
+        html+='<span style="font-size:7px;color:var(--t1);width:26px;text-align:right;font-weight:600">'+esc(tm.team)+'</span>';
+        html+='<span style="font-size:6px;color:var(--t2);width:18px;text-align:right">'+tm.total+'</span>';
+        // Stacked bar
+        html+='<div style="flex:1;display:flex;height:10px;border-radius:3px;overflow:hidden;background:var(--b2)">';
+        if(tm.paint>0) html+='<div style="width:'+(tm.paint/tm.total*100)+'%;background:#4caf50" title="Paint '+tm.paint+'"></div>';
+        if(tm.ft>0) html+='<div style="width:'+(tm.ft/tm.total*100)+'%;background:#66bb6a" title="FT '+tm.ft+'"></div>';
+        if(tm.transition>0) html+='<div style="width:'+(tm.transition/tm.total*100)+'%;background:#81c784" title="Trans '+tm.transition+'"></div>';
+        if(tm.three>0) html+='<div style="width:'+(tm.three/tm.total*100)+'%;background:#ff9800" title="3PT '+tm.three+'"></div>';
+        if(tm.midOther>0) html+='<div style="width:'+(tm.midOther/tm.total*100)+'%;background:#ffc107" title="Mid '+tm.midOther+'"></div>';
+        html+='</div>';
+        html+='<span style="font-size:5.5px;color:var(--t3);width:50px">S:'+sPct+'% V:'+vPct+'%</span>';
+        html+='</div>';
+      });
+      // Legend
+      html+='<div style="display:flex;gap:8px;margin:3px 0 3px 34px;font-size:5px;color:var(--t3)">';
+      html+='<span><span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:#4caf50;vertical-align:middle;margin-right:2px"></span>Paint</span>';
+      html+='<span><span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:#66bb6a;vertical-align:middle;margin-right:2px"></span>FT</span>';
+      html+='<span><span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:#81c784;vertical-align:middle;margin-right:2px"></span>Trans</span>';
+      html+='<span><span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:#ff9800;vertical-align:middle;margin-right:2px"></span>3PT</span>';
+      html+='<span><span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:#ffc107;vertical-align:middle;margin-right:2px"></span>Mid</span>';
+      html+='</div>';
+      // Margin summary
+      html+='<div style="display:flex;gap:10px;font-size:6px;margin-left:34px">';
+      html+='<span style="color:'+lcStructColor+'">Structural: '+(lc.structuralMargin>=0?lc.leadTeam:lc.trailTeam)+' +'+Math.abs(lc.structuralMargin)+'</span>';
+      html+='<span style="color:'+lcVarColor+'">Variance: '+(lc.varianceMargin>=0?lc.leadTeam:lc.trailTeam)+' +'+Math.abs(lc.varianceMargin)+'</span>';
+      html+='</div>';
+      html+='<div style="font-size:6px;color:'+lcDurColor+';margin:3px 0 0 34px;font-weight:500">'+esc(lc.durability)+'</div>';
+      html+='</div>';
+    } else if(pred && pred.leadSource) {
+      // Fallback: show Sonnet's Lead Source line when no server-side composition data
+      var lsColor = pred.leadSource==='STRUCTURAL'?'var(--green)':pred.leadSource==='VARIANCE'?'var(--amber)':pred.leadSource==='EVEN'?'var(--t3)':'var(--t2)';
+      html+='<div style="padding:4px 10px;border-top:1px solid var(--b1)">';
+      html+='<div style="font-size:6px"><span style="color:#a78bfa;letter-spacing:1px">LEAD:</span> <span style="color:'+lsColor+';font-weight:600">'+esc(pred.leadSource)+'</span>';
+      if(pred.leadSourceNote) html+=' <span style="color:var(--t3)">&#8212; '+esc(pred.leadSourceNote)+'</span>';
+      html+='</div></div>';
+    }
+
+    // ─── 4. CONTROL LAYERS (floor + window + gap + acceleration) ───
+    var rw = cs.rollingWindow;
+    var accel = cs.acceleration;
+    var cRead = cs.combinedRead;
+    var floorInd = cs.clientInd || cs.sonnetIndicators;
+    var _vc = function(vrd){ return vrd==='DOMINANT'?'var(--green)':vrd==='STRONG'?'var(--g2)':vrd==='EARNED'?'var(--yellow)':vrd==='NO EDGE'?'var(--t3)':'var(--t3)'; };
+    if(floorInd && floorInd.score){
+      var fScore = floorInd.score, fTeam = floorInd.controlTeam||'?';
+      var fVerdict = fScore>=0.90?'DOMINANT':fScore>=0.75?'STRONG':fScore>=0.60?'EARNED':fScore>=0.45?'NO EDGE':'WAIT';
+      html+='<div style="padding:6px 10px;border-top:1px solid var(--b1)">';
+      html+='<div style="font-size:6px;color:#a78bfa;letter-spacing:1.5px;margin-bottom:5px;font-family:inherit">CONTROL LAYERS</div>';
+      html+='<div style="display:flex;gap:12px;align-items:flex-start">';
+      // Floor
+      html+='<div style="flex:1"><div style="font-size:5px;color:var(--t3);letter-spacing:.5px;margin-bottom:2px">STRUCTURAL FLOOR</div>';
+      html+='<div style="font-size:9px;font-weight:700;color:'+_vc(fVerdict)+'">'+fTeam+' '+fScore.toFixed(2)+'</div>';
+      html+='<div style="font-size:5.5px;color:'+_vc(fVerdict)+'">'+fVerdict+'</div></div>';
+      // Window
+      html+='<div style="flex:1"><div style="font-size:5px;color:var(--t3);letter-spacing:.5px;margin-bottom:2px">ROLLING WINDOW</div>';
+      if(rw && rw.available){
+        var wVerdict = rw.score>=0.90?'DOMINANT':rw.score>=0.75?'STRONG':rw.score>=0.60?'EARNED':rw.score>=0.45?'NO EDGE':'WAIT';
+        html+='<div style="font-size:9px;font-weight:700;color:'+_vc(wVerdict)+'">'+rw.controlTeam+' '+rw.score.toFixed(2)+'</div>';
+        html+='<div style="font-size:5.5px;color:var(--t3)">'+rw.windowQuarters.map(function(q){return 'Q'+q;}).join('+')+' ('+rw.windowPossessions+' poss)</div>';
+      } else {
+        html+='<div style="font-size:7px;color:var(--t3)">'+((rw&&rw.reason)||'Too early')+'</div>';
+      }
+      html+='</div>';
+      // Gap + Acceleration
+      html+='<div style="flex:1"><div style="font-size:5px;color:var(--t3);letter-spacing:.5px;margin-bottom:2px">GAP</div>';
+      if(accel && accel.entries && accel.entries.length>0){
+        var lastGap = accel.entries[accel.entries.length-1]?.gap||0;
+        var accelLabel = accel.accel;
+        var accelColor = accelLabel==='GROWING'?'var(--green)':accelLabel==='DECLINING'?'var(--amber)':accelLabel==='FLIPPED'?'var(--red)':accelLabel==='NEW_PHASE'?'#60a5fa':'var(--t3)';
+        var accelIcon = accelLabel==='GROWING'?'▲':accelLabel==='DECLINING'?'▼':accelLabel==='FLIPPED'?'⟳':accelLabel==='NEW_PHASE'?'◆':'▬';
+        html+='<div style="font-size:9px;font-weight:700;color:'+(lastGap>0.03?'var(--green)':lastGap<-0.03?'var(--amber)':'var(--t2)')+'">'+(lastGap>=0?'+':'')+lastGap.toFixed(2)+'</div>';
+        html+='<div style="font-size:5.5px;color:'+accelColor+'">'+accelIcon+' '+accelLabel+'</div>';
+      } else {
+        html+='<div style="font-size:7px;color:var(--t3)">Too early</div>';
+      }
+      html+='</div>';
+      html+='</div>'; // end flex row
+      // Combined read badge
+      if(cRead && cRead.read && cRead.read!=='TOO EARLY'){
+        var crColor = ({DOMINANT:'var(--green)',STRONG:'var(--g2)',EMERGING:'var(--green)',EARNED:'var(--yellow)',ERODING:'var(--amber)',FADING:'var(--amber)',COLLAPSING:'var(--red)',SHIFT:'#60a5fa',FLIPPED:'#a78bfa'})[cRead.read]||'var(--t3)';
+        html+='<div style="margin-top:5px;display:flex;align-items:center;gap:6px"><span class="dv-tag" style="color:'+crColor+';border-color:'+crColor+';font-size:6px;padding:1px 6px;font-weight:600">'+esc(cRead.read)+'</span><span style="font-size:6px;color:var(--t2)">'+esc(cRead.note)+'</span></div>';
+      }
+      html+='</div>';
+    }
+
+
+    // ─── 5. DIRECTIONAL ARROWS (two-team table, grouped by indicator) ───
+    var arrows = cs.subMetricArrows;
+    var adj = cs.adjustment;
+    var floorInd2 = cs.clientInd || cs.sonnetIndicators;
+    if(arrows && arrows.home && arrows.away){
+      var _arrowColor = function(arrow, isVariance){
+        if(!arrow||arrow==="FLAT") return "var(--t3)";
+        if(arrow==="RISING") return isVariance?"var(--amber)":"var(--green)";
+        return isVariance?"var(--green)":"var(--amber)";
+      };
+      var _arrowSym = function(arrow){ return arrow==="RISING"?"▲":arrow==="FALLING"?"▼":"▬"; };
+      var _vals = function(m){ if(!m||!m.values) return "—"; return m.values.map(function(v){return v!=null?((m.label&&(m.label.includes("%")||m.label.includes("ratio")))?v.toFixed(0)+"%":String(Math.round(v))):"?";}).join("→"); };
+      html+='<div style="padding:5px 10px;border-top:1px solid var(--b1)">';
+      html+='<div style="font-size:6px;color:#a78bfa;letter-spacing:1.5px;margin-bottom:4px;font-family:inherit">DIRECTIONAL ARROWS</div>';
+      // Table header
+      html+='<table style="width:100%;border-collapse:collapse;font-size:6px">';
+      html+='<tr><th style="text-align:left;color:var(--t3);font-weight:400;padding:1px 4px;border-bottom:1px solid var(--b1);font-size:5px;letter-spacing:.5px"></th>';
+      html+='<th style="text-align:center;color:var(--t1);font-weight:600;padding:1px 4px;border-bottom:1px solid var(--b1)">'+esc(hA)+'</th>';
+      html+='<th style="text-align:center;color:var(--t1);font-weight:600;padding:1px 4px;border-bottom:1px solid var(--b1)">'+esc(aA)+'</th></tr>';
+      // Rows grouped by indicator
+      var arrowGroups = [
+        {header:"I2 — RIM PRESSURE", keys:["paint","atRim","fta"]},
+        {header:"I1 — POSSESSION", keys:["steals","tos"]},
+        {header:"I3 — SHOT QUALITY", keys:["fg3aShare","astRatio"]},
+        {header:"I5 — TEMPO", keys:["poss"]},
+      ];
+      arrowGroups.forEach(function(grp){
+        html+='<tr><td colspan="3" style="font-size:5px;color:var(--t3);letter-spacing:.8px;padding:4px 4px 1px;border:none">'+grp.header+'</td></tr>';
+        grp.keys.forEach(function(key){
+          var hm = arrows.home[key], am = arrows.away[key];
+          var isVar = (key==="fg3aShare"||key==="tos");
+          var label = hm?hm.label:(am?am.label:key);
+          var hArrow = hm&&hm.arrow ? _arrowSym(hm.arrow) : "—";
+          var aArrow = am&&am.arrow ? _arrowSym(am.arrow) : "—";
+          var hCol = _arrowColor(hm&&hm.arrow, isVar);
+          var aCol = _arrowColor(am&&am.arrow, isVar);
+          var hVals = hm?_vals(hm):"—";
+          var aVals = am?_vals(am):"—";
+          html+='<tr>';
+          html+='<td style="padding:1px 4px;color:var(--t2);border:none">'+esc(label)+'</td>';
+          html+='<td style="text-align:center;padding:1px 4px;border:none"><span style="color:'+hCol+';font-weight:600">'+hArrow+'</span> <span style="font-size:5px;color:var(--t3)">'+esc(hVals)+'</span></td>';
+          html+='<td style="text-align:center;padding:1px 4px;border:none"><span style="color:'+aCol+';font-weight:600">'+aArrow+'</span> <span style="font-size:5px;color:var(--t3)">'+esc(aVals)+'</span></td>';
+          html+='</tr>';
+        });
+      });
+      html+='</table>';
+      // Adjustment signal row
+      if(adj && adj.signal && adj.signal!=="NO ADJUSTMENT" && adj.signal!=="NO DATA"){
+        var adjColor2 = adj.signal==="INTERIOR PIVOT"?"var(--green)":adj.signal==="STRUCTURAL ACCEL"?"var(--green)":adj.signal==="STRUCTURAL EROSION"?"var(--red)":adj.signal==="VARIANCE SHIFT"?"var(--amber)":"var(--t3)";
+        html+='<div style="margin-top:4px;font-size:6px;color:'+adjColor2+';font-weight:500">'+esc(adj.signal)+' <span style="font-weight:400;color:var(--t2)">&#8212; '+esc(adj.note)+'</span></div>';
+      }
+      html+='</div>';
     }
 
     // ─── GAME NARRATIVE STRIP (analysis history timeline — after value read) ───
@@ -4112,7 +4832,7 @@ function renderCard(game){
       <span style="margin-left:auto;display:flex;align-items:center;gap:6px">
         <span style="font-size:7px;color:${v.color};letter-spacing:.5px">CONTROL <span style="font-size:9px;font-weight:600">${esc(ind.controlTeam)}</span> <span style="font-size:9px">${ind.score.toFixed(2)}</span></span>
         <span style="font-size:6px;color:var(--t3)">·</span>
-        <span style="font-size:7px;color:${ind.traj.lean!=='NEUTRAL'&&!ind.traj.tooEarly?'var(--amber)':'var(--t3)'}">TRAJ ${ind.traj.tooEarly?'Q1':esc(ind.traj.lean)+' '+ind.traj.count+'/'+ind.traj.total}</span>
+        <span style="font-size:7px;color:${ind.traj.lean!=='NEUTRAL'&&!ind.traj.tooEarly?'var(--amber)':'var(--t3)'}">FLAGS ${ind.traj.tooEarly?'Q1':esc(ind.traj.lean)+' '+_tragActive2+'/'+_filtSigs2.length}</span>
         ${depthBtn}
       </span>
     </div>`;
@@ -4144,18 +4864,23 @@ function renderCard(game){
       </div>`;}).join('')}
     </div>`;
 
-    // Trajectory
+    // Trajectory (Event Flags — T1, T2, T4, T7 only)
+    var tragMap = {'T1':'Trag1','T2':'Trag2','T4':'Trag3','T7':'Trag4'};
+    var tragKeys = ['T1','T2','T4','T7'];
+    var allSigs = (ind.traj&&ind.traj.signals) ? ind.traj.signals : (rawInd&&rawInd.traj ? rawInd.traj.signals : []);
+    var filtSigs = allSigs.filter(function(s){ return tragKeys.indexOf(s.key)!==-1; });
+    var tragCount = filtSigs.filter(function(s){ return s.w>0; }).length;
+    var tragTeam = null;
+    filtSigs.forEach(function(s){ if(s.team && s.w>0) tragTeam = s.team; });
     html+=`<div class="traj">
-      <div class="th">TRAJECTORY
-        ${!ind.traj.tooEarly?`<span class="tl" style="color:${ind.traj.lean==='NEUTRAL'?'var(--t3)':'var(--amber)'};border-color:${ind.traj.lean==='NEUTRAL'?'var(--b2)':'var(--amber)'}">${esc(ind.traj.lean)}${ind.traj.total>0?' '+ind.traj.count+'/'+ind.traj.total:''}</span>`:''}
+      <div class="th">EVENT FLAGS
+        ${filtSigs.length>0&&!ind.traj.tooEarly?`<span class="tl" style="color:${tragTeam?'var(--amber)':'var(--t3)'};border-color:${tragTeam?'var(--amber)':'var(--b2)'}">${esc(tragTeam||'EVEN')} ${tragCount}/${filtSigs.length}</span>`:''}
       </div>
       ${ind.traj.tooEarly
-        ?'<div style="font-size:6px;color:var(--t3)">Q1 — trajectory check begins Q2</div>'
-        :ind.traj.signals.length>0
-          ?ind.traj.signals.map(s=>`<div class="ts"><span class="tk" style="color:${s.color}">${s.key}</span><span class="tt" style="color:${s.color==='#3e3e48'?'var(--t3)':s.color}">${esc(s.text)}</span></div>`).join('')
-          :(rawInd&&rawInd.traj&&!rawInd.traj.tooEarly
-            ?rawInd.traj.signals.map(s=>`<div class="ts"><span class="tk" style="color:${s.color}">${s.key}</span><span class="tt" style="color:${s.color==='#3e3e48'?'var(--t3)':s.color}">${esc(s.text)}</span></div>`).join('')
-            :'<div style="font-size:6px;color:var(--t3)">See Sonnet analysis for trajectory detail</div>')}
+        ?'<div style="font-size:6px;color:var(--t3)">Q1 — event flags activate Q2</div>'
+        :filtSigs.length>0
+          ?filtSigs.map(s=>`<div class="ts"><span class="tk" style="color:${s.color}">${tragMap[s.key]||s.key}</span><span class="tt" style="color:${s.color==='#3e3e48'?'var(--t3)':s.color}">${esc(s.text)}</span></div>`).join('')
+          :'<div style="font-size:6px;color:var(--t3)">No event flags active</div>'}
     </div>`;
 
     // ─── PBP DEPTH AUDIT (when available) ───
@@ -4369,50 +5094,50 @@ function toggleDemo(){
     venue: 'Demo Arena',
     home: {id:'demo-h', name:'Cleveland Cavaliers', alias:'CLE', sr_id:'demo-h'},
     away: {id:'demo-a', name:'Milwaukee Bucks', alias:'MIL', sr_id:'demo-a'},
-    homePoints: 68, awayPoints: 72, period: 3, clock: '6:15',
+    homePoints: 46, awayPoints: 56, period: 2, clock: '3:20',
     dataSource: 'DEMO',
     summary: {
-      status:'inprogress', quarter:3, clock:'6:15',
+      status:'inprogress', quarter:2, clock:'3:20',
       home:{
-        name:'Cavaliers', alias:'CLE', points:68, bonus:false,
+        name:'Cavaliers', alias:'CLE', points:46, bonus:false,
         statistics:{
-          assists:17, turnovers:7, steals:8, blocks:5, offensive_rebounds:10,
-          field_goals_made:27, field_goals_att:54, three_points_made:5, three_points_att:16,
-          free_throws_made:9, free_throws_att:11, points_in_the_paint:36,
-          fast_break_points:15, points_off_turnovers:18, second_chance_points:12,
-          biggest_lead:4, bench_points:18, possessions:60,
-          offensive_points_per_possession:1.13, defensive_points_per_possession:1.20,
-          field_goals_at_rim_made:14, field_goals_at_rim_att:19, fouls:10,
+          assists:11, turnovers:5, steals:5, blocks:3, offensive_rebounds:7,
+          field_goals_made:18, field_goals_att:36, three_points_made:3, three_points_att:10,
+          free_throws_made:7, free_throws_att:8, points_in_the_paint:22,
+          fast_break_points:9, points_off_turnovers:12, second_chance_points:7,
+          biggest_lead:2, bench_points:12, possessions:44,
+          offensive_points_per_possession:1.05, defensive_points_per_possession:1.27,
+          field_goals_at_rim_made:9, field_goals_at_rim_att:12, fouls:8,
         },
         players:[
-          {full_name:'Donovan Mitchell',on_court:true,starter:true,primary_position:'SG',average:{points:24.1,assists:4.5,rebounds:4.2,field_goals_made:8.5,field_goals_att:18.2,three_points_made:3.1,three_points_att:8.0,steals:1.4,usage_pct:29.5,minutes:33.5},statistics:{minutes:'25:11',points:18,assists:4,field_goals_made:7,field_goals_att:15,three_points_made:2,three_points_att:5,rebounds:3,turnovers:2,steals:3,plus_minus:-2,personal_fouls:1}},
-          {full_name:'Darius Garland',on_court:true,starter:true,primary_position:'PG',average:{points:21.3,assists:6.8,rebounds:2.5,field_goals_made:7.6,field_goals_att:16.1,three_points_made:2.8,three_points_att:7.2,steals:1.1,usage_pct:26.8,minutes:32.0},statistics:{minutes:'24:44',points:14,assists:6,field_goals_made:5,field_goals_att:11,three_points_made:2,three_points_att:4,rebounds:2,turnovers:1,steals:1,plus_minus:-1,personal_fouls:2}},
-          {full_name:'Evan Mobley',on_court:true,starter:true,primary_position:'PF',average:{points:18.2,assists:3.1,rebounds:9.4,field_goals_made:7.2,field_goals_att:13.5,three_points_made:0.8,three_points_att:2.2,steals:0.9,usage_pct:22.1,minutes:34.0},statistics:{minutes:'25:30',points:16,assists:3,field_goals_made:8,field_goals_att:12,three_points_made:0,three_points_att:1,rebounds:9,turnovers:2,steals:2,plus_minus:1,personal_fouls:2}},
-          {full_name:'Jarrett Allen',on_court:false,starter:true,primary_position:'C',average:{points:13.8,assists:1.5,rebounds:10.2,field_goals_made:5.8,field_goals_att:9.1,three_points_made:0.1,three_points_att:0.3,steals:0.5,usage_pct:16.2,minutes:30.0},statistics:{minutes:'20:15',points:10,assists:1,field_goals_made:5,field_goals_att:8,three_points_made:0,three_points_att:0,rebounds:8,turnovers:1,steals:0,plus_minus:-3,personal_fouls:3}},
-          {full_name:'Max Strus',on_court:true,starter:true,primary_position:'SF',average:{points:11.5,assists:2.0,rebounds:3.8,field_goals_made:4.0,field_goals_att:9.5,three_points_made:2.2,three_points_att:6.1,steals:0.7,usage_pct:14.5,minutes:28.0},statistics:{minutes:'23:00',points:5,assists:2,field_goals_made:1,field_goals_att:5,three_points_made:1,three_points_att:5,rebounds:3,turnovers:0,steals:1,plus_minus:0,personal_fouls:1}},
-          {full_name:'Caris LeVert',on_court:false,starter:false,primary_position:'SG',average:{points:9.2,assists:2.5,rebounds:2.1,field_goals_made:3.4,field_goals_att:8.0,three_points_made:1.0,three_points_att:3.2,steals:0.6,usage_pct:18.0,minutes:20.0},statistics:{minutes:'12:20',points:5,assists:1,field_goals_made:1,field_goals_att:3,three_points_made:0,three_points_att:1,rebounds:1,turnovers:0,steals:1,plus_minus:1,personal_fouls:1}},
+          {full_name:'Donovan Mitchell',on_court:true,starter:true,primary_position:'SG',average:{points:24.1,assists:4.5,rebounds:4.2,field_goals_made:8.5,field_goals_att:18.2,three_points_made:3.1,three_points_att:8.0,steals:1.4,usage_pct:29.5,minutes:33.5},statistics:{minutes:'18:11',points:14,assists:3,field_goals_made:5,field_goals_att:11,three_points_made:1,three_points_att:3,rebounds:2,turnovers:1,steals:2,plus_minus:-5,personal_fouls:1}},
+          {full_name:'Darius Garland',on_court:true,starter:true,primary_position:'PG',average:{points:21.3,assists:6.8,rebounds:2.5,field_goals_made:7.6,field_goals_att:16.1,three_points_made:2.8,three_points_att:7.2,steals:1.1,usage_pct:26.8,minutes:32.0},statistics:{minutes:'17:44',points:10,assists:4,field_goals_made:4,field_goals_att:8,three_points_made:1,three_points_att:3,rebounds:1,turnovers:1,steals:1,plus_minus:-4,personal_fouls:1}},
+          {full_name:'Evan Mobley',on_court:true,starter:true,primary_position:'PF',average:{points:18.2,assists:3.1,rebounds:9.4,field_goals_made:7.2,field_goals_att:13.5,three_points_made:0.8,three_points_att:2.2,steals:0.9,usage_pct:22.1,minutes:34.0},statistics:{minutes:'18:30',points:12,assists:2,field_goals_made:6,field_goals_att:9,three_points_made:0,three_points_att:1,rebounds:7,turnovers:1,steals:1,plus_minus:-2,personal_fouls:2}},
+          {full_name:'Jarrett Allen',on_court:false,starter:true,primary_position:'C',average:{points:13.8,assists:1.5,rebounds:10.2,field_goals_made:5.8,field_goals_att:9.1,three_points_made:0.1,three_points_att:0.3,steals:0.5,usage_pct:16.2,minutes:30.0},statistics:{minutes:'14:15',points:6,assists:1,field_goals_made:3,field_goals_att:5,three_points_made:0,three_points_att:0,rebounds:5,turnovers:1,steals:0,plus_minus:-6,personal_fouls:2}},
+          {full_name:'Max Strus',on_court:true,starter:true,primary_position:'SF',average:{points:11.5,assists:2.0,rebounds:3.8,field_goals_made:4.0,field_goals_att:9.5,three_points_made:2.2,three_points_att:6.1,steals:0.7,usage_pct:14.5,minutes:28.0},statistics:{minutes:'16:00',points:2,assists:1,field_goals_made:0,field_goals_att:2,three_points_made:1,three_points_att:3,rebounds:2,turnovers:0,steals:1,plus_minus:-3,personal_fouls:1}},
+          {full_name:'Caris LeVert',on_court:false,starter:false,primary_position:'SG',average:{points:9.2,assists:2.5,rebounds:2.1,field_goals_made:3.4,field_goals_att:8.0,three_points_made:1.0,three_points_att:3.2,steals:0.6,usage_pct:18.0,minutes:20.0},statistics:{minutes:'8:20',points:2,assists:0,field_goals_made:0,field_goals_att:1,three_points_made:0,three_points_att:0,rebounds:1,turnovers:0,steals:0,plus_minus:2,personal_fouls:1}},
         ],
-        periods:[{number:1,scoring:{points:18}},{number:2,scoring:{points:28}},{number:3,scoring:{points:22}}],
+        periods:[{number:1,scoring:{points:18}},{number:2,scoring:{points:28}}],
       },
       away:{
-        name:'Bucks', alias:'MIL', points:72, bonus:true,
+        name:'Bucks', alias:'MIL', points:56, bonus:true,
         statistics:{
-          assists:12, turnovers:14, steals:4, blocks:1, offensive_rebounds:4,
-          field_goals_made:26, field_goals_att:61, three_points_made:12, three_points_att:30,
-          free_throws_made:8, free_throws_att:10, points_in_the_paint:22,
-          fast_break_points:6, points_off_turnovers:8, second_chance_points:4,
-          biggest_lead:14, bench_points:14, possessions:61,
-          offensive_points_per_possession:1.18, defensive_points_per_possession:1.11,
-          field_goals_at_rim_made:6, field_goals_at_rim_att:12, fouls:15,
+          assists:9, turnovers:10, steals:3, blocks:1, offensive_rebounds:3,
+          field_goals_made:21, field_goals_att:48, three_points_made:9, three_points_att:24,
+          free_throws_made:5, free_throws_att:7, points_in_the_paint:18,
+          fast_break_points:5, points_off_turnovers:7, second_chance_points:3,
+          biggest_lead:14, bench_points:10, possessions:44,
+          offensive_points_per_possession:1.27, defensive_points_per_possession:1.05,
+          field_goals_at_rim_made:5, field_goals_at_rim_att:10, fouls:11,
         },
         players:[
-          {full_name:'Damian Lillard',on_court:true,starter:true,primary_position:'PG',average:{points:25.8,assists:7.2,rebounds:4.5,field_goals_made:8.8,field_goals_att:19.5,three_points_made:3.2,three_points_att:9.0,steals:0.9,usage_pct:31.2,minutes:35.5},statistics:{minutes:'26:00',points:28,assists:4,field_goals_made:9,field_goals_att:21,three_points_made:6,three_points_att:14,rebounds:3,turnovers:4,steals:1,plus_minus:6,personal_fouls:2}},
-          {full_name:'Bobby Portis',on_court:true,starter:true,primary_position:'PF',average:{points:14.5,assists:1.8,rebounds:8.5,field_goals_made:5.5,field_goals_att:12.0,three_points_made:1.2,three_points_att:3.8,steals:0.6,usage_pct:18.5,minutes:26.0},statistics:{minutes:'24:30',points:14,assists:2,field_goals_made:6,field_goals_att:12,three_points_made:2,three_points_att:5,rebounds:6,turnovers:3,steals:1,plus_minus:3,personal_fouls:4}},
-          {full_name:'Khris Middleton',on_court:false,starter:true,primary_position:'SF',average:{points:16.2,assists:4.1,rebounds:4.8,field_goals_made:6.0,field_goals_att:14.0,three_points_made:1.8,three_points_att:5.0,steals:0.7,usage_pct:24.5,minutes:29.0},statistics:{minutes:'22:00',points:10,assists:3,field_goals_made:4,field_goals_att:10,three_points_made:1,three_points_att:3,rebounds:3,turnovers:3,steals:0,plus_minus:2,personal_fouls:2}},
-          {full_name:'Taurean Prince',on_court:true,starter:true,primary_position:'SF',average:{points:8.5,assists:1.2,rebounds:3.5,field_goals_made:3.1,field_goals_att:7.5,three_points_made:1.0,three_points_att:3.5,steals:0.5,usage_pct:12.0,minutes:22.0},statistics:{minutes:'20:00',points:11,assists:1,field_goals_made:4,field_goals_att:9,three_points_made:2,three_points_att:5,rebounds:4,turnovers:2,steals:1,plus_minus:1,personal_fouls:4}},
-          {full_name:'Andre Jackson',on_court:true,starter:false,primary_position:'SG',average:{points:5.2,assists:1.5,rebounds:3.8,field_goals_made:2.0,field_goals_att:4.5,three_points_made:0.5,three_points_att:1.8,steals:0.8,usage_pct:8.5,minutes:18.0},statistics:{minutes:'16:00',points:9,assists:2,field_goals_made:3,field_goals_att:9,three_points_made:1,three_points_att:3,rebounds:4,turnovers:2,steals:1,plus_minus:-1,personal_fouls:3}},
+          {full_name:'Damian Lillard',on_court:true,starter:true,primary_position:'PG',average:{points:25.8,assists:7.2,rebounds:4.5,field_goals_made:8.8,field_goals_att:19.5,three_points_made:3.2,three_points_att:9.0,steals:0.9,usage_pct:31.2,minutes:35.5},statistics:{minutes:'19:00',points:22,assists:3,field_goals_made:7,field_goals_att:17,three_points_made:5,three_points_att:11,rebounds:2,turnovers:3,steals:1,plus_minus:8,personal_fouls:1}},
+          {full_name:'Bobby Portis',on_court:true,starter:true,primary_position:'PF',average:{points:14.5,assists:1.8,rebounds:8.5,field_goals_made:5.5,field_goals_att:12.0,three_points_made:1.2,three_points_att:3.8,steals:0.6,usage_pct:18.5,minutes:26.0},statistics:{minutes:'17:30',points:12,assists:1,field_goals_made:5,field_goals_att:10,three_points_made:2,three_points_att:4,rebounds:5,turnovers:2,steals:1,plus_minus:5,personal_fouls:3}},
+          {full_name:'Khris Middleton',on_court:false,starter:true,primary_position:'SF',average:{points:16.2,assists:4.1,rebounds:4.8,field_goals_made:6.0,field_goals_att:14.0,three_points_made:1.8,three_points_att:5.0,steals:0.7,usage_pct:24.5,minutes:29.0},statistics:{minutes:'16:00',points:8,assists:2,field_goals_made:3,field_goals_att:8,three_points_made:1,three_points_att:3,rebounds:2,turnovers:2,steals:0,plus_minus:4,personal_fouls:2}},
+          {full_name:'Taurean Prince',on_court:true,starter:true,primary_position:'SF',average:{points:8.5,assists:1.2,rebounds:3.5,field_goals_made:3.1,field_goals_att:7.5,three_points_made:1.0,three_points_att:3.5,steals:0.5,usage_pct:12.0,minutes:22.0},statistics:{minutes:'15:00',points:8,assists:1,field_goals_made:3,field_goals_att:7,three_points_made:1,three_points_att:3,rebounds:3,turnovers:2,steals:1,plus_minus:2,personal_fouls:2}},
+          {full_name:'Andre Jackson',on_court:true,starter:false,primary_position:'SG',average:{points:5.2,assists:1.5,rebounds:3.8,field_goals_made:2.0,field_goals_att:4.5,three_points_made:0.5,three_points_att:1.8,steals:0.8,usage_pct:8.5,minutes:18.0},statistics:{minutes:'12:00',points:6,assists:2,field_goals_made:3,field_goals_att:6,three_points_made:0,three_points_att:3,rebounds:3,turnovers:1,steals:0,plus_minus:1,personal_fouls:3}},
         ],
-        periods:[{number:1,scoring:{points:32}},{number:2,scoring:{points:24}},{number:3,scoring:{points:16}}],
+        periods:[{number:1,scoring:{points:32}},{number:2,scoring:{points:24}}],
       },
     },
   };
@@ -4497,22 +5222,22 @@ WATCH
   };
 
   cs.sonnetIndicators = {
-    I1:{score:0.90,leader:'CLE',detail:'CLE +7 TO margin (14 forced), 8 steals, 18 POT + 15 FBP — dominant generation + conversion',sonnet:true,rawScore:0.90},
-    I2:{score:0.85,leader:'CLE',detail:'CLE 36 paint (14/19 at-rim 74%) vs MIL 22 paint (6/12). CLE 9 FTA, MIL in bonus with 15 fouls',sonnet:true,rawScore:0.85},
-    I3:{score:0.55,leader:'CLE',detail:'CLE 63% assisted (17/27 FGM) but MIL eFG% higher on Lillard pull-ups. Creation quality CLE, efficiency MIL on variance',sonnet:true,rawScore:0.55},
-    I4:{score:0.65,leader:'CLE',detail:'MIL biggest lead 14 (Q1 heater) but CLE outscoring in Q2-Q3. CLE bench 18 vs MIL 14. Portis 4 fouls.',sonnet:true,rawScore:0.65},
-    I5:{score:0.60,leader:'CLE',detail:'CLE 1.13 vs MIL 1.18 pts/poss — MIL efficiency edge inflated by unsustainable 40% from three',sonnet:true,rawScore:0.60},
-    score: 0.77, controlTeam: 'CLE', dataQuality: 'SONNET',
+    I1:{score:0.80,leader:'CLE',detail:'CLE +5 TO margin, 5 steals, 12 POT + 9 FBP — generation + conversion building',sonnet:true,rawScore:0.80},
+    I2:{score:0.75,leader:'CLE',detail:'CLE 22 paint (9/12 at-rim 75%) vs MIL 18 paint (5/10). CLE 8 FTA, MIL 11 fouls',sonnet:true,rawScore:0.75},
+    I3:{score:0.50,leader:'EVEN',detail:'CLE 63% assisted (11/18 FGM) but MIL eFG% higher on Lillard pull-ups. Contested.',sonnet:true,rawScore:0.50},
+    I4:{score:0.55,leader:'CLE',detail:'MIL biggest lead 14 (Q1 heater) but CLE outscoring Q2 28-24. CLE bench 12 vs MIL 10.',sonnet:true,rawScore:0.55},
+    I5:{score:0.50,leader:'EVEN',detail:'CLE 1.05 vs MIL 1.27 pts/poss — MIL efficiency edge still holds from Q1 run',sonnet:true,rawScore:0.50},
+    score: 0.68, controlTeam: 'CLE', dataQuality: 'SONNET',
     traj:{
       signals:[
-        {key:'T1',text:'Role Player Heater: [MIL] Taurean Prince 2/5 from 3 (szn 28.6%) + Andre Jackson 1/3 (szn 27.8%) — 3 makes from NON-SHOOTERS',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T2',text:'Star Process: [MIL] Lillard 6/14 from 3 (43%) vs szn 35.6% — hot but pull-up heavy (8/14 unassisted). Process declining Q2→Q3',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T3',text:'Quarter Delta: CLE winning Q3 22-16 while trailing overall 68-72 — active comeback trajectory',color:'var(--green)',team:'CLE',w:2},
-        {key:'T4',text:'Foul Gate: [MIL] Portis 4 fouls in Q3 — CRISIS / resilience LOW. Prince 4 fouls — CRISIS',color:'var(--green)',team:'CLE',w:2},
-        {key:'T5',text:'Interior Trend: CLE at-rim RISING (5→6→8 att per Q) — MIL rim protection collapsing without Giannis',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T6',text:'Quarter Assist Ratio: CLE Q3 ast ratio 71% vs cumulative 63% — ball movement improving',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T7',text:'Closing Lineup: CLE closing 4/5 on floor — sustained edge. Allen resting but Mobley anchoring',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T8',text:'Shot Diet: MIL 3PA/FGA 49% vs structural baseline 34% — MISALIGNED. Interior game abandoned.',color:'var(--green)',team:'CLE',w:2},
+        {key:'T1',text:'Role Player Heater: [MIL] Portis 2/4 from 3 (szn 31.2%) — NON-SHOOTER hot',color:'var(--amber)',team:'CLE',w:1},
+        {key:'T2',text:'Star Process: Lillard 5/11 from 3 (43%) vs szn 35.6% — hot but pull-up heavy',color:'var(--amber)',team:'CLE',w:1},
+        {key:'T3',text:'Quarter Delta: CLE winning Q2 28-24 while trailing overall — comeback developing',color:'var(--green)',team:'CLE',w:2},
+        {key:'T4',text:'Foul Gate: [MIL] Portis 3 fouls Q2 — CONSTRAINT / resilience LOW',color:'var(--amber)',team:'CLE',w:1},
+        {key:'T5',text:'Interior Trend: CLE at-rim rising (5→7 att Q1→Q2)',color:'var(--amber)',team:'CLE',w:1},
+        {key:'T6',text:'Quarter Assist Ratio: CLE Q2 ast ratio 64% vs Q1 57% — improving',color:'var(--amber)',team:'CLE',w:1},
+        {key:'T7',text:'Closing Lineup: CLE starters 4/5 on floor',color:'var(--amber)',team:'CLE',w:1},
+        {key:'T8',text:'Shot Diet: MIL 3PA/FGA 50% vs structural baseline 34% — MISALIGNED',color:'var(--green)',team:'CLE',w:2},
       ],
       lean:'CLE', count:8, total:8, tooEarly:false,
     },
@@ -4520,43 +5245,41 @@ WATCH
   };
 
   cs.prediction = {
-    edge:'+5.8%', edgeNum:5.8, fwp:'79.2%', mip:'73.7%',
-    entry:'OPTIMAL WINDOW', conviction:'STRONG',
-    sustainability:'CLE: LOCKED IN | MIL: UNSUSTAINABLE',
-    leadSource:'VARIANCE', leadSourceNote:'MIL +4 lead built on +19 variance margin (36 3PT pts) while CLE holds +15 structural margin (45 Paint/FT)',
-    thesisStatus:'CONFIRMED',
-    teamQuality:'CLE 44-16 full strength, top-3 East | MIL 32-28 missing Giannis, Middleton limited — quality gap widens in Q4',
+    edge:'+1.8%', edgeNum:1.8, fwp:'72.4%', mip:'70.6%',
+    entry:'WINDOW OPEN', conviction:'EARNED',
+    sustainability:'CLE: LOCKED IN | MIL: FRAGILE',
+    leadSource:'VARIANCE', leadSourceNote:'MIL +10 lead built on 3PT variance (27 3PT pts) while CLE holds +7 structural margin (29 Paint/FT vs 23)',
+    thesisStatus:'DEVELOPING',
+    teamQuality:'CLE 44-16 full strength, top-3 East | MIL 32-28 missing Giannis, Middleton limited',
     clutch:'CLEAR — CLE +8.2 L10 NetRtg vs MIL -3.5',
-    prediction:'Cleveland wins by 8-12. MIL 3PT production collapsing Q2→Q3 (8→6→2 3PM per Q). CLE structural margin (+15 Paint/FT) overtakes MIL variance lead as regression compounds.',
-    signalType:'BUY CLE', signalNote:'CLE structural control 0.77 while trailing — MIL lead VARIANCE SOURCED + 3PT UNSUSTAINABLE. Textbook entry.', buyTeam:'CLE',
-    spreadAnalysis:'CLE -6.5 looks soft — structural reads project CLE winning by 8-12 once MIL 3PT regression completes. Spread may have already moved from -8.5 on MIL Q1 run.',
-    homeValue:{team:'CLE', fwp:79.2, mip:73.7, edge:5.5, ml:'-280', spread:'-6.5'},
-    awayValue:{team:'MIL', fwp:20.8, mip:26.3, edge:-5.5, ml:'+230', spread:'+6.5'},
+    prediction:'CLE structural edge building. MIL Q1 lead variance-sourced — Lillard 5/11 from 3 + Portis 2/4 as non-shooter. CLE Q2 interior pivot underway. Monitor Q3 for confirmation.',
+    signalType:'BUY CLE', signalNote:'CLE structural floor 0.68 + arrows show INTERIOR PIVOT developing — early window on MIL variance lead', buyTeam:'CLE',
+    spreadAnalysis:'CLE -6.5 moved from -8.5 on MIL Q1 run — value emerging if structural trend holds through halftime',
+    homeValue:{team:'CLE', fwp:72.4, mip:70.6, edge:1.8, ml:'-280', spread:'-6.5'},
+    awayValue:{team:'MIL', fwp:27.6, mip:29.4, edge:-1.8, ml:'+230', spread:'+6.5'},
   };
   cs.sustainabilityAudit = {
-    home:{teamAlias:'CLE',live3PM:5,live3PA:16,live3Pct:'31.3',seasonPrior:'36.1',gotSeasonData:true,deviation:'-4.8',personnelGrade:'N/A (at baseline)',personnelDetails:[],elitePct:'0',nonPct:'0',posteriorMean:'34.9',regressionPull:'0',regressionProb:15,regressionGrade:'MINIMAL',shotTypeGrade:'DURABLE',shotTypeNote:'High ast% (63%)',assistRatio:'63',composite:'0.00',tier:'LOCKED IN'},
-    away:{teamAlias:'MIL',live3PM:12,live3PA:30,live3Pct:'40.0',seasonPrior:'35.2',gotSeasonData:true,deviation:'4.8',personnelGrade:'UNSUSTAINABLE',personnelDetails:[{name:'Damian Lillard',live3m:6,live3a:14,livePct:'43',sznPct:35.6,sznVol:9.0,sznStr:'35.6% (9.0/gm)',tier:'average',tierLabel:'AVERAGE',hot:true},{name:'Bobby Portis',live3m:2,live3a:5,livePct:'40',sznPct:31.2,sznVol:3.8,sznStr:'31.2% (3.8/gm)',tier:'non',tierLabel:'NON-SHOOTER',hot:true},{name:'Taurean Prince',live3m:2,live3a:5,livePct:'40',sznPct:28.6,sznVol:3.5,sznStr:'28.6% (3.5/gm)',tier:'non',tierLabel:'NON-SHOOTER',hot:true},{name:'Andre Jackson',live3m:1,live3a:3,livePct:'33',sznPct:27.8,sznVol:1.8,sznStr:'27.8% (1.8/gm)',tier:'non',tierLabel:'NON-SHOOTER',hot:false}],elitePct:'0',nonPct:'58',posteriorMean:'36.8',regressionPull:'52',regressionProb:78,regressionGrade:'HIGH',shotTypeGrade:'FRAGILE',shotTypeNote:'Low ast% (46%) + pull-up heavy — Lillard 8/14 unassisted',assistRatio:'46',composite:'1.75',tier:'UNSUSTAINABLE'},
+    home:{teamAlias:'CLE',live3PM:3,live3PA:10,live3Pct:'30.0',seasonPrior:'36.1',gotSeasonData:true,deviation:'-6.1',personnelGrade:'N/A (below baseline)',personnelDetails:[],elitePct:'0',nonPct:'0',posteriorMean:'34.5',regressionPull:'0',regressionProb:10,regressionGrade:'MINIMAL',shotTypeGrade:'DURABLE',shotTypeNote:'High ast% (61%)',assistRatio:'61',composite:'0.00',tier:'LOCKED IN'},
+    away:{teamAlias:'MIL',live3PM:9,live3PA:24,live3Pct:'37.5',seasonPrior:'35.2',gotSeasonData:true,deviation:'2.3',personnelGrade:'FRAGILE',personnelDetails:[{name:'Damian Lillard',live3m:5,live3a:11,livePct:'45',sznPct:35.6,sznVol:9.0,sznStr:'35.6% (9.0/gm)',tier:'average',tierLabel:'AVERAGE',hot:true},{name:'Bobby Portis',live3m:2,live3a:4,livePct:'50',sznPct:31.2,sznVol:3.8,sznStr:'31.2% (3.8/gm)',tier:'non',tierLabel:'NON-SHOOTER',hot:true}],elitePct:'0',nonPct:'33',posteriorMean:'35.8',regressionPull:'38',regressionProb:55,regressionGrade:'MODERATE',shotTypeGrade:'FRAGILE',shotTypeNote:'Low ast% (43%) + Lillard pull-up heavy',assistRatio:'43',composite:'1.35',tier:'FRAGILE'},
   };
 
-  // ── Lead Composition (matches game summary stats) ──
+  // ── Lead Composition (matches Q2 game summary stats) ──
   cs.leadComposition = {
-    home:{team:'CLE',total:68,paint:36,ft:9,three:15,midOther:8,transition:15,pot:18,secondChance:12,structural:45,variance:23,structuralPct:66,variancePct:34},
-    away:{team:'MIL',total:72,paint:22,ft:8,three:36,midOther:6,transition:6,pot:8,secondChance:4,structural:30,variance:42,structuralPct:42,variancePct:58},
-    margin:-4, absMargin:4, leadTeam:'MIL', trailTeam:'CLE',
-    structuralMargin:15, varianceMargin:-19,
-    durability:'MIL lead is VARIANCE SOURCED — variance production (+19) drives margin while structural favors CLE (+15)',
+    home:{team:'CLE',total:46,paint:22,ft:7,three:9,midOther:8,transition:9,pot:12,secondChance:7,structural:29,variance:17,structuralPct:63,variancePct:37},
+    away:{team:'MIL',total:56,paint:18,ft:5,three:27,midOther:6,transition:5,pot:7,secondChance:3,structural:23,variance:33,structuralPct:41,variancePct:59},
+    margin:-10, absMargin:10, leadTeam:'MIL', trailTeam:'CLE',
+    structuralMargin:6, varianceMargin:-16,
+    durability:'MIL lead is VARIANCE SOURCED — 3PT variance (+16) drives margin while structural favors CLE (+6)',
   };
 
   cs.edgeHistory = [
     {time:'7:05 PM',period:1,edge:'-2.1%',edgeNum:-2.1,fwp:'55.2%',control:'CLE',score:'MIL 32-CLE 18'},
-    {time:'7:25 PM',period:2,edge:'+1.8%',edgeNum:1.8,fwp:'72.4%',control:'CLE',score:'MIL 56-CLE 46'},
-    {time:'7:42 PM',period:3,edge:'+5.8%',edgeNum:5.8,fwp:'79.2%',control:'CLE',score:'MIL 72-CLE 68'},
+    {time:'7:20 PM',period:2,edge:'+1.8%',edgeNum:1.8,fwp:'72.4%',control:'CLE',score:'MIL 56-CLE 46'},
   ];
 
   cs.analysisHistory = [
-    {time:'7:05 PM',period:'1',clock:'1:30',score:'MIL 32-CLE 18',controlTeam:'CLE',controlScore:0.58,verdict:'NO EDGE',entry:'NO WINDOW',conviction:'CONDITIONAL',signal:'PASS',buyTeam:null,leadTeam:'MIL',trailTeam:'CLE',leadSust:'FRAGILE',trailSust:'LOCKED IN',thesisStatus:'CONTESTED',keyRead:'MIL Q1 explosion on Lillard 4/6 from 3 + Prince/Portis heater. Divergence gate TRIGGERED — 2 VARIANCE flags.',fwp:'55.2%',edge:'-2.1%'},
-    {time:'7:25 PM',period:'2',clock:'3:45',score:'MIL 56-CLE 46',controlTeam:'CLE',controlScore:0.71,verdict:'EARNED',entry:'OPTIMAL WINDOW',conviction:'EARNED',signal:'BUY CLE',buyTeam:'CLE',leadTeam:'MIL',trailTeam:'CLE',leadSust:'UNSUSTAINABLE',trailSust:'LOCKED IN',thesisStatus:'DEVELOPING',keyRead:'CLE outscored MIL 28-24 in Q2. MIL 3PT cooled 8→4 makes. Lead composition: MIL +10 but structural margin already CLE +11.',fwp:'72.4%',edge:'+1.8%'},
-    {time:'7:42 PM',period:'3',clock:'6:15',score:'MIL 72-CLE 68',controlTeam:'CLE',controlScore:0.77,verdict:'STRONG',entry:'OPTIMAL WINDOW',conviction:'STRONG',signal:'BUY CLE',buyTeam:'CLE',leadTeam:'MIL',trailTeam:'CLE',leadSust:'UNSUSTAINABLE',trailSust:'LOCKED IN',thesisStatus:'CONFIRMED',keyRead:'MIL lead collapsed 14→4. Portis + Prince 4 fouls each. 8/8 trajectory signals lean CLE. MIL 3PT UNSUSTAINABLE, lead VARIANCE SOURCED.',fwp:'79.2%',edge:'+5.8%'},
+    {time:'7:05 PM',period:'1',clock:'1:30',score:'MIL 32-CLE 18',controlTeam:'CLE',controlScore:0.55,verdict:'NO EDGE',entry:'NO WINDOW',conviction:'CONDITIONAL',signal:'PASS',buyTeam:null,leadTeam:'MIL',trailTeam:'CLE',leadSust:'MIXED',trailSust:'LOCKED IN',thesisStatus:'CONTESTED',keyRead:'MIL Q1 explosion on Lillard 5/6 from 3 + Portis heater. Divergence gate TRIGGERED.',fwp:'55.2%',edge:'-2.1%'},
+    {time:'7:20 PM',period:'2',clock:'3:20',score:'MIL 56-CLE 46',controlTeam:'CLE',controlScore:0.68,verdict:'EARNED',entry:'WINDOW OPEN',conviction:'EARNED',signal:'BUY CLE',buyTeam:'CLE',leadTeam:'MIL',trailTeam:'CLE',leadSust:'FRAGILE',trailSust:'LOCKED IN',thesisStatus:'DEVELOPING',keyRead:'CLE outscoring MIL 28-24 in Q2. Arrows: INTERIOR PIVOT (paint ▲ at-rim ▲ FTA ▲ 3PA% ▼). MIL lead VARIANCE SOURCED.',fwp:'72.4%',edge:'+1.8%'},
   ];
 
   // Build baselines from demo player averages
@@ -4566,6 +5289,52 @@ WATCH
   cs.clientInd = null;
   cs.clientIndAtAnalysis = computeAny(demoGame);
   cs.analysisTime = new Date();
+
+  // ── Demo rolling window architecture data (Q2 — early read) ──
+  cs.quarterSnapshots = {
+    boundaries: {
+      0: {ts:Date.now()-3600000, home:{points_in_the_paint:0,fast_break_points:0,points_off_turnovers:0,second_chance_points:0,possessions:0,field_goals_at_rim_att:0,field_goals_at_rim_made:0,steals:0,turnovers:0,free_throws_att:0,assists:0,field_goals_made:0,field_goals_att:0,three_points_made:0,three_points_att:0}, away:{points_in_the_paint:0,fast_break_points:0,points_off_turnovers:0,second_chance_points:0,possessions:0,field_goals_at_rim_att:0,field_goals_at_rim_made:0,steals:0,turnovers:0,free_throws_att:0,assists:0,field_goals_made:0,field_goals_att:0,three_points_made:0,three_points_att:0}},
+      1: {ts:Date.now()-1800000, home:{points_in_the_paint:8,fast_break_points:3,points_off_turnovers:4,second_chance_points:2,possessions:22,field_goals_at_rim_att:5,field_goals_at_rim_made:3,steals:2,turnovers:3,free_throws_att:2,assists:4,field_goals_made:7,field_goals_att:18,three_points_made:2,three_points_att:6,points:18}, away:{points_in_the_paint:10,fast_break_points:4,points_off_turnovers:5,second_chance_points:2,possessions:23,field_goals_at_rim_att:5,field_goals_at_rim_made:3,steals:3,turnovers:4,free_throws_att:3,assists:5,field_goals_made:12,field_goals_att:22,three_points_made:5,three_points_att:12,points:32}},
+    },
+    quarters: {
+      1: {home:{points_in_the_paint:8,fast_break_points:3,points_off_turnovers:4,second_chance_points:2,possessions:22,field_goals_at_rim_att:5,field_goals_at_rim_made:3,steals:2,turnovers:3,free_throws_att:2,assists:4,field_goals_made:7,field_goals_att:18,three_points_made:2,three_points_att:6,points:18,efg:0.444,assist_ratio:57.1,fg3a_share:33.3}, away:{points_in_the_paint:10,fast_break_points:4,points_off_turnovers:5,second_chance_points:2,possessions:23,field_goals_at_rim_att:5,field_goals_at_rim_made:3,steals:3,turnovers:4,free_throws_att:3,assists:5,field_goals_made:12,field_goals_att:22,three_points_made:5,three_points_att:12,points:32,efg:0.659,assist_ratio:41.7,fg3a_share:54.5}, source:'snapshot',partial:false},
+      2: {home:{points_in_the_paint:14,fast_break_points:6,points_off_turnovers:8,second_chance_points:5,possessions:22,field_goals_at_rim_att:7,field_goals_at_rim_made:6,steals:3,turnovers:2,free_throws_att:6,assists:7,field_goals_made:11,field_goals_att:18,three_points_made:1,three_points_att:4,points:28,efg:0.639,assist_ratio:63.6,fg3a_share:22.2}, away:{points_in_the_paint:8,fast_break_points:1,points_off_turnovers:2,second_chance_points:1,possessions:21,field_goals_at_rim_att:5,field_goals_at_rim_made:2,steals:0,turnovers:6,free_throws_att:4,assists:4,field_goals_made:9,field_goals_att:26,three_points_made:4,three_points_att:12,points:24,efg:0.423,assist_ratio:44.4,fg3a_share:46.2}, source:'snapshot',partial:true},
+    },
+    lastSnapshotPeriod: 1, backfillNeeded: [], backfillDone: false,
+  };
+
+  // Window TOO EARLY in Q2
+  cs.rollingWindow = { available:false, reason:'TOO EARLY' };
+
+  // No gap log yet (window not active)
+  cs.gapLog = [];
+  cs.acceleration = {accel:'TOO EARLY',entries:[],consecutive:0};
+
+  // Arrows fire with Q1 + partial Q2 data (2 data points)
+  cs.subMetricArrows = {
+    home:{
+      paint:{arrow:'RISING',values:[8,14],display:'▲ (8→14)',label:'Paint pts',indicator:'I2',structural:true},
+      atRim:{arrow:'RISING',values:[5,7],display:'▲ (5→7)',label:'At-rim att',indicator:'I2',structural:true},
+      fta:{arrow:'RISING',values:[2,6],display:'▲ (2→6)',label:'FTA',indicator:'I2',structural:true},
+      steals:{arrow:'RISING',values:[2,3],display:'▲ (2→3)',label:'Steals',indicator:'I1',structural:true},
+      tos:{arrow:'FALLING',values:[3,2],display:'▼ (3→2)',label:'TOs',indicator:'I1',structural:false},
+      fg3aShare:{arrow:'FALLING',values:[33,22],display:'▼ (33%→22%)',label:'3PA%',indicator:'I3',structural:false},
+      astRatio:{arrow:'RISING',values:[57,64],display:'▲ (57%→64%)',label:'Ast ratio',indicator:'I3',structural:true},
+      poss:{arrow:'FLAT',values:[22,22],display:'▬ (22→22)',label:'Poss',indicator:'I5',structural:true},
+    },
+    away:{
+      paint:{arrow:'FALLING',values:[10,8],display:'▼ (10→8)',label:'Paint pts',indicator:'I2',structural:true},
+      atRim:{arrow:'FLAT',values:[5,5],display:'▬ (5→5)',label:'At-rim att',indicator:'I2',structural:true},
+      fta:{arrow:'FLAT',values:[3,4],display:'▬ (3→4)',label:'FTA',indicator:'I2',structural:true},
+      steals:{arrow:'FALLING',values:[3,0],display:'▼ (3→0)',label:'Steals',indicator:'I1',structural:true},
+      tos:{arrow:'RISING',values:[4,6],display:'▲ (4→6)',label:'TOs',indicator:'I1',structural:false},
+      fg3aShare:{arrow:'FLAT',values:[55,46],display:'▬ (55%→46%)',label:'3PA%',indicator:'I3',structural:false},
+      astRatio:{arrow:'FLAT',values:[42,44],display:'▬ (42%→44%)',label:'Ast ratio',indicator:'I3',structural:true},
+      poss:{arrow:'FLAT',values:[23,21],display:'▬ (23→21)',label:'Poss',indicator:'I5',structural:true},
+    },
+  };
+  cs.adjustment = {signal:'INTERIOR PIVOT',note:'CLE progressive rim pressure + falling 3PA share (Q1→Q2 early)',risingStructural:3,fallingVariance:1,team:'CLE'};
+  cs.combinedRead = {read:'TOO EARLY',note:'Window activates Q3 — arrows show early directional reads'};
 
   renderPills(); updateCounts();
   // Select the demo pill
