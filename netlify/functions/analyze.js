@@ -1,5 +1,6 @@
-// Live Game Analysis via Claude Sonnet - Predictive Layer v3.1
-// Added: 3PT Sustainability Audit (personnel, Bayesian regression, shot type, tiered output)
+// Live Game Analysis via Claude Sonnet - Predictive Layer v4.0
+// v4.0: Lead Composition engine, guardrails-based entry logic, bidirectional team-named signals, FLIPPED thesis status
+// v3.1: 3PT Sustainability Audit (personnel, Bayesian regression, shot type, tiered output)
 
 // ══════════════════════════════════════════════════════════════════════════════
 // 3PT SUSTAINABILITY AUDIT ENGINE
@@ -259,11 +260,108 @@ function formatSustainabilityAudit(audit) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// LEAD COMPOSITION ENGINE
+// ══════════════════════════════════════════════════════════════════════════════
+
+function computeLeadComposition(summaryData, homeTeam, awayTeam) {
+  if (!summaryData) return null;
+
+  function composeTeam(teamData, alias) {
+    if (!teamData) return null;
+    var stats = teamData.statistics || {};
+    var totalPts = stats.points || 0;
+    if (totalPts === 0) return null;
+
+    var paintPts = stats.points_in_the_paint || 0;
+    var ftPts = stats.free_throws_made || 0;
+    var threePts = (stats.three_points_made || 0) * 3;
+    var fbPts = stats.fast_break_points || 0;
+    var potPts = stats.points_off_turnovers || 0;
+    var scPts = stats.second_chance_points || 0;
+
+    // Mid/Other = everything not paint, FT, or 3PT
+    var midOther = Math.max(0, totalPts - paintPts - ftPts - threePts);
+
+    // Structural = paint + FT (scheme-driven, matchup-driven, contact-driven)
+    var structural = paintPts + ftPts;
+    // Variance = 3PT + mid-range (shooting % fluctuates game-to-game)
+    var variance = threePts + midOther;
+
+    return {
+      team: alias,
+      total: totalPts,
+      paint: paintPts,
+      ft: ftPts,
+      three: threePts,
+      midOther: midOther,
+      transition: fbPts,
+      pot: potPts,
+      secondChance: scPts,
+      structural: structural,
+      variance: variance,
+      structuralPct: totalPts > 0 ? Math.round(structural / totalPts * 100) : 0,
+      variancePct: totalPts > 0 ? Math.round(variance / totalPts * 100) : 0,
+    };
+  }
+
+  var home = composeTeam(summaryData.home, homeTeam);
+  var away = composeTeam(summaryData.away, awayTeam);
+  if (!home || !away) return null;
+
+  // Margin analysis
+  var margin = home.total - away.total;
+  var leadTeam = margin >= 0 ? homeTeam : awayTeam;
+  var trailTeam = margin >= 0 ? awayTeam : homeTeam;
+  var lead = margin >= 0 ? home : away;
+  var trail = margin >= 0 ? away : home;
+
+  var structuralMargin = lead.structural - trail.structural;
+  var varianceMargin = lead.variance - trail.variance;
+
+  // Classify margin durability
+  var durability;
+  if (Math.abs(margin) <= 2) {
+    durability = 'EVEN — margin too small to classify';
+  } else if (structuralMargin >= Math.abs(margin) * 0.6) {
+    durability = leadTeam + ' lead is STRUCTURALLY SOURCED — structural margin (' + (structuralMargin >= 0 ? '+' : '') + structuralMargin + ') exceeds total margin (' + (margin >= 0 ? '+' : '') + margin + ')';
+  } else if (varianceMargin >= Math.abs(margin) * 0.6) {
+    durability = leadTeam + ' lead is VARIANCE SOURCED — variance production (' + (varianceMargin >= 0 ? '+' : '') + varianceMargin + ') drives margin while structural favors ' + (structuralMargin >= 0 ? leadTeam : trailTeam) + ' (' + (structuralMargin >= 0 ? '+' : '') + structuralMargin + ')';
+  } else {
+    durability = 'MIXED — lead built from both structural (' + (structuralMargin >= 0 ? '+' : '') + structuralMargin + ') and variance (' + (varianceMargin >= 0 ? '+' : '') + varianceMargin + ') sources';
+  }
+
+  return {
+    home: home, away: away,
+    margin: margin, absMargin: Math.abs(margin),
+    leadTeam: leadTeam, trailTeam: trailTeam,
+    structuralMargin: structuralMargin,
+    varianceMargin: varianceMargin,
+    durability: durability,
+  };
+}
+
+function formatLeadComposition(comp) {
+  if (!comp) return '';
+  var h = comp.home, a = comp.away;
+
+  var out = '\nLEAD COMPOSITION: ' + a.team + ' ' + a.total + ' — ' + h.team + ' ' + h.total + ' (' + comp.leadTeam + ' ' + (comp.margin >= 0 ? '+' : '') + comp.margin + ')\n';
+
+  out += a.team + ': Paint ' + a.paint + ' (' + Math.round(a.paint/a.total*100) + '%) | FT ' + a.ft + ' | 3PT ' + a.three + ' (' + Math.round(a.three/a.total*100) + '%) | Mid ' + a.midOther + ' | Trans ' + a.transition + '\n';
+  out += h.team + ': Paint ' + h.paint + ' (' + Math.round(h.paint/h.total*100) + '%) | FT ' + h.ft + ' | 3PT ' + h.three + ' (' + Math.round(h.three/h.total*100) + '%) | Mid ' + h.midOther + ' | Trans ' + h.transition + '\n';
+
+  out += 'Structural (Paint+FT): ' + a.team + ' ' + a.structural + ' (' + a.structuralPct + '%) vs ' + h.team + ' ' + h.structural + ' (' + h.structuralPct + '%) = ' + (comp.structuralMargin >= 0 ? comp.leadTeam : comp.trailTeam) + ' +' + Math.abs(comp.structuralMargin) + '\n';
+  out += 'Variance (3PT+Mid): ' + a.team + ' ' + a.variance + ' (' + a.variancePct + '%) vs ' + h.team + ' ' + h.variance + ' (' + h.variancePct + '%) = ' + (comp.varianceMargin >= 0 ? comp.leadTeam : comp.trailTeam) + ' +' + Math.abs(comp.varianceMargin) + '\n';
+  out += 'MARGIN DURABILITY: ' + comp.durability + '\n';
+
+  return out;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // SYSTEM PROMPT
 // ══════════════════════════════════════════════════════════════════════════════
 
 var SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing real-time control assessment and outcome prediction for sports betting.\n\n'
-+ 'CORE TASK: Determine which team structurally controls this game and predict who wins, using the full game summary data provided.\n\n'
++ 'CORE TASK: Determine which team structurally controls this game, assess whether each team\'s production is sustainable, and identify the best entry — on EITHER team — using pre-computed data and your own reasoning.\n\n'
 + 'FIVE INDICATORS (score each 0.00-1.00 for the controlling team):\n'
 + 'I1 Possession & Transition (25%): TO margin, steals, OREBs, fast break pts, pts off TOs, second chance pts\n'
 + 'I2 Rim Pressure & Foul (25%): Paint points, at-rim FG, FTA, blocks, fouls, bonus status\n'
@@ -273,67 +371,69 @@ var SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing real-time 
 + 'CONTROL: 0.90+ DOMINANT | 0.75-0.89 STRONG | 0.60-0.74 EARNED | 0.45-0.59 NO EDGE | <0.45 WAIT\n\n'
 + 'EIGHT TRAJECTORY SIGNALS (evaluate for BOTH teams):\n'
 + 'T1 Role Player Heater | T2 Star Process Integrity | T3 Quarter Delta (highest weight) | T4 Foul Gate | T5 Interior Trend | T6 Quarter Assist Ratio | T7 Closing Lineup | T8 Shot Diet Misalignment\n\n'
-+ 'CRITICAL RULES:\n\n'
-+ '1. SUSTAINABILITY IS YOUR PRIMARY LENS: A pre-computed 3PT SUSTAINABILITY AUDIT is provided for both teams. It contains:\n'
++ 'YOU RECEIVE THREE PRE-COMPUTED DATA LAYERS:\n\n'
++ '1. 3PT SUSTAINABILITY AUDIT (per team):\n'
 + '   - PERSONNEL AUDIT: What % of 3PM came from ELITE shooters (38%+ season, 2+ 3PA/gm) vs NON-SHOOTERS (<33% or <0.8 3PA/gm)\n'
-+ '   - BAYESIAN REGRESSION MODEL: Posterior expected 3PT% given season prior + live data. Includes regression probability accounting for sample size.\n'
-+ '   - SHOT TYPE: Assist ratio proxy for catch-and-shoot (durable) vs pull-up/isolation (fragile), cross-referenced with season C&S and pull-up baselines\n'
-+ '   - COMPOSITE TIER: LOCKED IN (structural) / DURABLE (mostly structural) / MIXED / FRAGILE (regression likely) / UNSUSTAINABLE (variance-driven)\n\n'
-+ '   USE THESE TIERS DIRECTLY. Do not override unless you have specific evidence the audit missed. If you override, state why.\n\n'
-+ '   When DEPTH AUDIT (PBP) data is provided, USE IT to enhance your reads:\n'
-+ '   - 3PT assisted/unassisted splits override team-level assist ratio proxy — actual shot creation quality\n'
-+ '   - Forced vs unforced TO classification enables I1 chaos layer — forced TOs are structural, unforced regress\n'
-+ '   - Shot zone distribution vs structural identity enables precise T8 reads\n'
-+ '   - Scoring run composition shows whether leads are paint/transition (structural) or perimeter heaters (variance)\n'
-+ '   - At-rim contexts (drive/cut/putback/transition) show scheme-driven vs opportunity-driven interior pressure\n'
-+ '   - Mid-range assisted/unassisted shows creation quality at that range\n\n'
-+ '2. ENTRY STRATEGY — BIDIRECTIONAL STRUCTURAL EDGE DETECTION:\n'
-+ '   Primary lens: thesis team. But value can exist on EITHER side.\n\n'
-+ '   PASS 1 — THESIS TEAM EVALUATION:\n'
-+ '   OPTIMAL WINDOW = thesis team TRAILING + opponent 3PT tier FRAGILE/UNSUSTAINABLE. Maximum edge — opponent lead built on math that regresses.\n'
-+ '   WINDOW OPEN = thesis team TRAILING or below ML threshold + opponent tier MIXED. Moderate edge — some regression expected.\n'
-+ '   WINDOW CLOSING = thesis team now LEADING + opponent variance already cooling. Edge shrinking as market corrects.\n'
-+ '   NO WINDOW = thesis team already leading at market-priced odds (no discount), OR no structural edge identified.\n'
-+ '   FADE = thesis team trailing against LOCKED IN/DURABLE opponent AND thesis is DENIED. Structural read was wrong. Do NOT buy thesis team.\n\n'
-+ '   A team AHEAD and priced as heavy favorite has NO EDGE. Say "NO WINDOW — already priced in."\n'
-+ '   CRITICAL: If a team is leading AND their ML is beyond -400, there is NO VALUE regardless of structural control. Entry = NO WINDOW, Signal = NO VALUE. The market has already priced in their dominance. Do NOT say BUY.\n\n'
-+ '   PASS 2 — OPPONENT CHECK (run ALWAYS, not just on thesis denial):\n'
-+ '   Independently evaluate the non-thesis team. If opponent holds 0.65+ control with LOCKED/DURABLE sustainability and positive edge vs MIP, they are a valid BUY. This is not a counter-bet — it is a separate structural read.\n'
-+ '   OPPONENT WINDOW = opponent has independent structural edge at value odds. Thesis team sustainability FRAGILE/UNSUSTAINABLE while opponent LOCKED/DURABLE. This is the primary strategy in mirror — just pointed the other direction.\n'
-+ '   A thesis can be CONTESTED (not denied) while the opponent is simultaneously the better structural buy.\n\n'
-+ '   SIGNAL line names the SPECIFIC TEAM to buy or says NO VALUE/PASS. Follow the edge wherever it is.\n\n'
-+ '3. SUSTAINABILITY TIER CAPS ON ENTRY:\n'
-+ '   LOCKED IN/DURABLE opponent lead = FADE thesis team (do not buy thesis team)\n'
-+ '   But check: is thesis team sustainability FRAGILE/UNSUSTAINABLE while opponent is LOCKED/DURABLE? If yes and opponent has value odds → OPPONENT WINDOW\n'
-+ '   MIXED opponent lead = CONDITIONAL (reduced conviction)\n'
-+ '   FRAGILE opponent lead = ENTRY SUPPORTED\n'
-+ '   UNSUSTAINABLE opponent lead = OPTIMAL WINDOW\n'
-+ '   Mirror applies: thesis team FRAGILE/UNSUSTAINABLE + opponent structural control = OPPONENT WINDOW\n'
-+ '   TOO EARLY = WAIT\n\n'
-+ '4. FWP (Framework Win Probability) IS GAME-STATE-AWARE:\n'
++ '   - BAYESIAN REGRESSION MODEL: Posterior expected 3PT% given season prior + live data. Sample-size-aware regression probability.\n'
++ '   - SHOT TYPE: Assist ratio proxy for catch-and-shoot (durable) vs pull-up/isolation (fragile)\n'
++ '   - COMPOSITE TIER: LOCKED IN / DURABLE / MIXED / FRAGILE / UNSUSTAINABLE\n'
++ '   Use these tiers as your primary 3PT sustainability read. Override only with specific evidence and explicit justification.\n\n'
++ '2. LEAD COMPOSITION (both teams):\n'
++ '   - Structural points (Paint + FT): scheme-driven, matchup-driven, contact-driven — these don\'t randomly disappear\n'
++ '   - Variance points (3PT + Mid-range): shooting % fluctuates game-to-game — these can regress\n'
++ '   - Transition points: supplementary structural signal (cross-ref with I1 for durability)\n'
++ '   - MARGIN DURABILITY: pre-computed classification of whether the lead is structurally sourced, variance sourced, or mixed\n'
++ '   This tells you WHERE the margin came from. The 3PT audit tells you whether the perimeter portion will hold. Together they answer: is this lead real?\n\n'
++ '3. DEPTH AUDIT (PBP, when available):\n'
++ '   - 3PT assisted/unassisted splits — actual shot creation quality\n'
++ '   - Forced vs unforced TO classification — I1 chaos layer\n'
++ '   - Shot zone distribution vs structural identity — T8 reads\n'
++ '   - Scoring run composition — paint/transition (structural) vs perimeter heaters (variance)\n'
++ '   - At-rim contexts (drive/cut/putback/transition) — scheme-driven vs opportunity interior pressure\n\n'
++ 'ENTRY STRATEGY — FIND THE STRUCTURAL EDGE AT VALUE PRICE:\n'
++ '   Evaluate BOTH teams as potential entries. The pre-game thesis identified a projected dominant team — use as context for divergence tracking, not as a permanent anchor.\n\n'
++ '   The core strategy: buy the team with structural control when they are trailing or at value odds, because the other team\'s lead is built on production that will regress.\n'
++ '   This applies in EITHER direction. If the thesis team is structurally dominant and trailing, buy the thesis team. If the thesis was wrong and the other team has emerged as structurally dominant while trailing or at value, buy that team instead.\n\n'
++ '   ENTRY SIGNAL GUIDELINES (defaults — you may deviate with explicit justification):\n'
++ '   OPTIMAL WINDOW = structurally dominant team TRAILING + lead team\'s production FRAGILE/UNSUSTAINABLE + lead composition confirms variance-sourced margin\n'
++ '   WINDOW OPEN = structurally dominant team TRAILING or at value odds + lead team MIXED sustainability\n'
++ '   WINDOW CLOSING = structurally dominant team now LEADING + variance cooling. Edge shrinking.\n'
++ '   NO WINDOW = no structural edge for either team, OR dominant team already leading at fully-priced odds\n'
++ '   FADE = structural read says do not buy either team — thesis team trailing against durable opponent, no flip opportunity\n\n'
++ '   CRITICAL: A team leading AND priced beyond -400 ML has NO VALUE regardless of structural control.\n\n'
++ '   SUSTAINABILITY + LEAD COMPOSITION INTERACTION (guidelines, not absolute rules):\n'
++ '   When lead is VARIANCE SOURCED and opponent 3PT is FRAGILE/UNSUSTAINABLE → strong entry signal on trailing team\n'
++ '   When lead is STRUCTURALLY SOURCED (60%+ from Paint/FT) → 3PT tier is less relevant to margin durability. A team can be FRAGILE from 3PT but hold a structural lead built on paint dominance.\n'
++ '   When lead is STRUCTURALLY SOURCED and 3PT is LOCKED/DURABLE → strongest fade signal (do not buy trailing team)\n'
++ '   When lead is MIXED → weigh both sustainability and composition; explain which factor dominates your read\n'
++ '   If your entry signal conflicts with the default sustainability mapping, state which data resolves the tension (e.g., "Despite MIA 3PT tier DURABLE, their lead is only +4 while structural margin favors CLE by +10 — perimeter shooting is real but insufficient to hold").\n\n'
++ 'FWP (Framework Win Probability) IS GAME-STATE-AWARE:\n'
 + '   FWP is NOT the control score. FWP = probability of WINNING THE GAME given current score, time remaining, AND structural control.\n'
 + '   A team with 0.66 control UP 9 in Q4 has ~90%+ FWP. That same team DOWN 3 in Q1 might have ~55% FWP.\n'
 + '   Factor in: score margin, quarter, time remaining, momentum trajectory. Edge is computed client-side from your FWP vs market odds.\n'
 + '   If your FWP is too low for a team leading comfortably, the edge calculation will show a false negative edge and recommend PASS on a winning team.\n'
 + '   If your FWP is too high for a trailing team, it will show a false positive edge. BE ACCURATE.\n\n'
-+ '5. SPREAD ANALYSIS: Compare live spread against your structural projection. If you project Team A winning by 8-12 and spread is Team A -1.5, the spread is mispriced. If spread aligns with projection, say so. Always reference specific structural factors.\n\n'
-+ '6. COHERENCE CHECK: Sustainability tier, entry signal, and prediction MUST align. Cannot call OPTIMAL WINDOW if opponent is DURABLE. Cannot call FADE if opponent is UNSUSTAINABLE. OPPONENT WINDOW requires opponent LOCKED/DURABLE + thesis team FRAGILE/UNSUSTAINABLE.\n\n'
-+ '7. CONVICTION:\n'
-+ '  DOMINANT = sustainable control 0.85+ by quality team, opponent FRAGILE/UNSUSTAINABLE\n'
-+ '  STRONG = sustainable control 0.70+, opponent MIXED or worse\n'
-+ '  EARNED = sustainable/mixed control 0.60+ with edge\n'
-+ '  CONDITIONAL = sustainability concerns or quality gaps\n'
-+ '  NO ENTRY = no structural edge, opponent LOCKED IN/DURABLE, or already priced in\n\n'
-+ '8. TEAM QUALITY: Bad team (bottom-12, missing stars) leading good team (top-12, full strength) on FRAGILE/UNSUSTAINABLE shooting = ideal entry. State quality gap.\n\n'
-+ '9. GAME NARRATIVE: When prior analysis history is provided, use it for continuity. Track how control, sustainability, and your signals have evolved across calls. Reference shifts explicitly: "Control climbed from 0.65→0.78 as opponent sustainability degraded MIXED→FRAGILE." If your prior read was wrong, own it. If the window you called earlier has closed, say so. Never repeat your prior read verbatim — each call should advance the narrative.\n\n'
++ 'EDGE IS COMPUTED CLIENT-SIDE: Just output your FWP accurately.\n\n'
++ 'SPREAD ANALYSIS: Compare live spread against your structural projection. Reference specific structural factors.\n\n'
++ 'COHERENCE: Your entry signal, conviction, sustainability reads, lead composition, and prediction should tell a consistent story. If they don\'t, explain the tension. Unusual combinations (e.g., OPTIMAL WINDOW + opponent DURABLE) are not prohibited but should be rare and explicitly justified by lead composition data.\n\n'
++ 'CONVICTION GUIDELINES:\n'
++ '  DOMINANT = control 0.85+ driven primarily by I1+I2 (structural indicators), opponent production clearly unsustainable\n'
++ '  STRONG = control 0.70+, lead composition supports structural durability or variance regression\n'
++ '  EARNED = control 0.60+ with identifiable edge, may have mixed sustainability picture\n'
++ '  CONDITIONAL = structural edge exists but sustainability concerns, quality gaps, or lead composition tension\n'
++ '  NO ENTRY = no structural edge for either team, or no value at current price\n'
++ '  State which indicators are driving your score. I1+I2 heavy (50% weight, most structurally predictive) warrants higher conviction than I4+I5 heavy (30% weight, least decisive).\n\n'
++ 'TEAM QUALITY: Bad team (bottom-12, missing stars) leading good team (top-12, full strength) on FRAGILE/UNSUSTAINABLE shooting = ideal entry. State quality gap.\n\n'
++ 'GAME NARRATIVE: When prior analysis history is provided, track how control, sustainability, and your signals have evolved. Reference shifts explicitly. Own prior mistakes. Never repeat verbatim — advance the narrative.\n\n'
 + 'OUTPUT FORMAT (follow exactly):\n\n'
 + 'DECISION:\n'
 + 'EDGE: [+X% | No market data] | FWP: [X%] | MIP: [X% | N/A]\n'
-+ 'ENTRY: [OPTIMAL WINDOW | WINDOW OPEN | WINDOW CLOSING | NO WINDOW | FADE | OPPONENT WINDOW]\n'
++ 'ENTRY: [OPTIMAL WINDOW | WINDOW OPEN | WINDOW CLOSING | NO WINDOW | FADE]\n'
 + 'CONVICTION: [DOMINANT | STRONG | EARNED | CONDITIONAL | NO ENTRY]\n'
 + 'SIGNAL: [BUY TeamAlias | NO VALUE | PASS] — [1-line reason naming both teams]\n'
 + 'Sustainability: [TeamA]: [LOCKED IN|DURABLE|MIXED|FRAGILE|UNSUSTAINABLE] | [TeamB]: [LOCKED IN|DURABLE|MIXED|FRAGILE|UNSUSTAINABLE]\n'
-+ 'SPREAD ANALYSIS: [1-line — is spread accurate given structural reads? e.g. "ORL -1.5 mispriced — DET projects winning outright by 6-10"]\n'
++ 'Lead Source: [STRUCTURAL | VARIANCE | MIXED | EVEN] — [1-line noting structural vs variance margin]\n'
++ 'SPREAD ANALYSIS: [1-line — is spread accurate given structural reads?]\n'
 + 'Team Quality: [context for both teams]\n'
 + 'Clutch: [Tier X] — [CLEAR|WATCH|FIRES|NEUTRALIZED]\n'
 + 'Prediction: [1-line decisive call]\n\n'
@@ -345,15 +445,16 @@ var SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing real-time 
 + 'I4 Lineup Integrity (20%): [team] [score] — [explanation]\n'
 + 'I5 Tempo & Efficiency (10%): [team] [score] — [explanation]\n\n'
 + 'TRAJECTORY: [team or NEUTRAL] — [count]/8 signals\n'
-+ 'T1 — Role Player Heater: [TEAM_ALIAS] [player] [detail] or CLEAR (prefix with team alias in brackets of the team with the heater)\n'
-+ 'T2 — Star Process Integrity: [TEAM_ALIAS] [player] [detail] or CLEAR (prefix with the cold star\'s team alias in brackets)\n'
++ 'T1 — Role Player Heater: [TEAM_ALIAS] [player] [detail] or CLEAR\n'
++ 'T2 — Star Process Integrity: [TEAM_ALIAS] [player] [detail] or CLEAR\n'
 + 'T3 — Quarter Delta: [detail or CLEAR]\n'
-+ 'T4 — Foul Gate: [TEAM_ALIAS] [player] [detail] or CLEAR (prefix with team alias of player in foul trouble)\n'
++ 'T4 — Foul Gate: [TEAM_ALIAS] [player] [detail] or CLEAR\n'
 + 'T5 — Interior Trend: [detail or CLEAR]\n'
 + 'T6 — Quarter Assist Ratio: [detail or CLEAR]\n'
 + 'T7 — Closing Lineup: [detail or CLEAR]\n'
-+ 'T8 — Shot Diet Misalignment: [TEAM_ALIAS] [detail] or CLEAR (prefix with team alias of the misaligned team)\n\n'
-+ 'THESIS STATUS: [CONFIRMED|DEVELOPING|CONTESTED|DENIED] — [note]\n'
++ 'T8 — Shot Diet Misalignment: [TEAM_ALIAS] [detail] or CLEAR\n\n'
++ 'THESIS STATUS: [CONFIRMED|DEVELOPING|CONTESTED|DENIED|FLIPPED] — [note]\n'
++ 'FLIPPED = thesis was wrong AND the other team has emerged as the structural edge with a valid entry. Name the team.\n'
 + 'DIVERGENCE NOTES: [where your scores differ from dashboard and why]\n\n'
 + 'Be concise. 1 line per indicator. Decisive when clear. Passing is correct when it is not.';
 
@@ -404,6 +505,10 @@ exports.handler = async function(event) {
     // ── 3PT SUSTAINABILITY AUDIT (pre-computed) ──
     var audit = computeSustainabilityAudit(summaryData, trackingData, homeTeam, awayTeam);
     var sustainabilitySection = formatSustainabilityAudit(audit);
+
+    // ── LEAD COMPOSITION (pre-computed) ──
+    var leadComp = computeLeadComposition(summaryData, homeTeam, awayTeam);
+    var leadCompSection = formatLeadComposition(leadComp);
 
     // ── CLUTCH SECTION ──
     var clutchSection = '';
@@ -559,7 +664,7 @@ exports.handler = async function(event) {
     // ── BUILD PROMPT ──
     var userPrompt = awayTeam + ' @ ' + homeTeam + ' | ' + period + ' | ' + score + '\n\n'
       + (thesis ? 'THESIS:\n' + thesis + '\n' : 'No thesis.')
-      + '\n' + clutchSection + oddsSection + trackingSection + sustainabilitySection + pbpSection + edgeSection + narrativeSection
+      + '\n' + clutchSection + oddsSection + trackingSection + sustainabilitySection + leadCompSection + pbpSection + edgeSection + narrativeSection
       + '\nGAME DATA:\n' + JSON.stringify(summaryData);
 
     var controller = new AbortController();
@@ -593,7 +698,7 @@ exports.handler = async function(event) {
     return {
       statusCode: 200,
       headers: headers,
-      body: JSON.stringify({ analysis: analysis, usage: data.usage, sustainabilityAudit: audit }),
+      body: JSON.stringify({ analysis: analysis, usage: data.usage, sustainabilityAudit: audit, leadComposition: leadComp }),
     };
   } catch (err) {
     if (err.name === 'AbortError') {
