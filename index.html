@@ -920,29 +920,33 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
     const decision = parseSonnetDecision(data.analysis);
     if(decision){
       // ── CLIENT-SIDE EDGE OVERRIDE — COMPUTE BOTH TEAMS ──
+      // FWP source: Sonnet's game-state-aware output (primary). Control score is structural quality, NOT win probability.
       const od = cs.oddsData;
-      // Use control score as FWP source (more reliable than Sonnet's text-parsed FWP)
-      const fwpFromControl = parsed?.score ? parsed.score * 100 : null;
-      const fwpNum = fwpFromControl || parseFloat((decision.fwp||'').replace(/[%\s]/g,''));
+      const fwpNum = parseFloat((decision.fwp||'').replace(/[%\s]/g,''));
       if(od && !isNaN(fwpNum) && (od.homeML || od.awayML)){
-        if(!isNaN(fwpNum)){
           const mlToProb = (ml) => { const n=parseFloat(ml); if(isNaN(n)||n===0) return null; return n<0?Math.abs(n)/(Math.abs(n)+100):100/(n+100); };
           const rawH = mlToProb(od.homeML), rawA = mlToProb(od.awayML);
           if(rawH!==null && rawA!==null){
             const vigSum = rawH + rawA;
             const homeMIP = rawH/vigSum*100, awayMIP = rawA/vigSum*100;
-            // Determine which team Sonnet predicts to win — use controlTeam as primary signal
-            // predText.includes() is unreliable since prediction text typically mentions BOTH teams
+            // Team assignment: buyTeam from SIGNAL line > controlTeam from indicators
+            // predText.includes() is unreliable since prediction text mentions BOTH teams
             const controlTeam = (parsed?.controlTeam||'').toUpperCase();
             const buyTeam = (decision.buyTeam||'').toUpperCase();
-            // Priority: buyTeam from SIGNAL line > controlTeam from indicators > predText fallback
             const fwpTeam = buyTeam || controlTeam;
             const isHomeFWP = fwpTeam === hAlias.toUpperCase();
             const isAwayFWP = fwpTeam === aAlias.toUpperCase();
+            // Sanity guard: if Sonnet outputs FWP < 40% it likely reported the wrong team's probability
+            // In that case, the FWP team should get (100 - fwpNum) and the opponent gets fwpNum
+            let correctedFWP = fwpNum;
+            if(fwpNum < 40 && (isHomeFWP || isAwayFWP)){
+              console.log('FWP SANITY: Sonnet output '+fwpNum+'% for '+fwpTeam+' — likely wrong-team. Flipping.');
+              correctedFWP = 100 - fwpNum;
+            }
             let homeFWP, awayFWP;
-            if(isHomeFWP){ homeFWP=fwpNum; awayFWP=100-fwpNum; }
-            else if(isAwayFWP){ awayFWP=fwpNum; homeFWP=100-fwpNum; }
-            else { homeFWP=fwpNum>=50?fwpNum:100-fwpNum; awayFWP=100-homeFWP; }
+            if(isHomeFWP){ homeFWP=correctedFWP; awayFWP=100-correctedFWP; }
+            else if(isAwayFWP){ awayFWP=correctedFWP; homeFWP=100-correctedFWP; }
+            else { homeFWP=correctedFWP>=50?correctedFWP:100-correctedFWP; awayFWP=100-homeFWP; }
             // Two-sided value
             decision.homeValue = {team:hAlias, fwp:homeFWP, mip:homeMIP, edge:parseFloat((homeFWP-homeMIP).toFixed(1)), ml:od.homeML||'—', spread:od.homeSpread||'—'};
             var _aSprd = od.homeSpread ? parseFloat(od.homeSpread)*-1 : null;
@@ -954,10 +958,9 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
             decision.edge = (edge>=0?'+':'')+edge.toFixed(1)+'%';
             decision.edgeNum = parseFloat(edge.toFixed(1));
             decision.mip = winnerMIP.toFixed(1)+'%';
-            decision.fwp = fwpNum.toFixed(1)+'%';
-            console.log('Two-sided (FWP from '+(fwpFromControl?'control score':'Sonnet')+'):', hAlias, homeFWP.toFixed(1)+'%/'+homeMIP.toFixed(1)+'%', aAlias, awayFWP.toFixed(1)+'%/'+awayMIP.toFixed(1)+'%');
+            decision.fwp = correctedFWP.toFixed(1)+'%';
+            console.log('Two-sided (Sonnet FWP'+(correctedFWP!==fwpNum?' FLIPPED':'')+'): '+hAlias+' '+homeFWP.toFixed(1)+'%/'+homeMIP.toFixed(1)+'% '+aAlias+' '+awayFWP.toFixed(1)+'%/'+awayMIP.toFixed(1)+'%');
           }
-        }
       }
       cs.prediction = decision;
 
@@ -3286,11 +3289,17 @@ function renderConfidenceTable(){
     const entry = pred?.entry || null;
     const conviction = pred?.conviction || null;
     const thesisStatus = pred?.thesisStatus || null;
-    // Sustainability from audit
+    // Sustainability from audit (server-side)
     let sustHome = null, sustAway = null;
     const sa = cs?.sustainabilityAudit;
     if(sa){ sustHome = sa.homeTier || sa.home?.tier || null; sustAway = sa.awayTier || sa.away?.tier || null; }
     else if(pred?.sustainability){ sustHome = pred.sustainability; sustAway = null; }
+    // For LIVE games, prefer fresh client-computed sustainability
+    if(cs?.clientSustainability && state==='LIVE'){
+      const cS = cs.clientSustainability;
+      if(cS.home?.tier) sustHome = cS.home.tier;
+      if(cS.away?.tier) sustAway = cS.away.tier;
+    }
     // Live score
     const homeScore = g.homePoints, awayScore = g.awayPoints;
     const period = g.period||0, clock = g.clock||'';
@@ -3306,8 +3315,8 @@ function renderConfidenceTable(){
     fwpTeamEntry = csPred?.entry || null;
     const signal = csPred?.signalType || null;
     const row = {matchup, team, score, verdict, gameId:g.id, state, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, hA, aA, entryIf:p.entry||null, passIf:p.pass||null, fwpTeamAlias, fwpTeamEdge, fwpTeamFwp, fwpTeamEntry, signal};
-    // Persist live data to cache whenever we have analysis results
-    if(pred || si){
+    // Persist live data to cache whenever we have analysis results or fresh live sustainability
+    if(pred || si || (state==='LIVE' && (sustHome || sustAway))){
       persistConfRow(g.id, {team, score, verdict, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, state, fwpTeamAlias, fwpTeamEdge, fwpTeamFwp, fwpTeamEntry, signal:csPred?.signalType||null, ts:Date.now()});
     } else {
       // Fall back to cached data if no live cardState (e.g. page refresh, card not mounted)
@@ -3354,7 +3363,12 @@ function renderConfidenceTable(){
   const preCount = rows.filter(r=>r.state==='PRE').length;
   const finalCount = rows.filter(r=>r.state==='FINAL').length;
   const statsSummary = [liveCount?liveCount+' live':'', preCount?preCount+' pre':'', finalCount?finalCount+' final':''].filter(Boolean).join(' / ');
-  let html = '<div class="ct-hdr" onclick="confCollapsed=!confCollapsed;renderConfidenceTable()" style="cursor:pointer">CONFIDENCE TABLE <span class="arr" style="display:inline-block;transition:transform .2s;transform:rotate('+(confCollapsed?'0':'90')+'deg);margin-left:2px">&#9656;</span><span style="font-size:5px;color:var(--t3);margin-left:auto">'+rows.length+' '+(rows.length===1?'game':'games')+' &#183; '+statsSummary+'</span></div>';
+  let html = '<div class="ct-hdr" onclick="confCollapsed=!confCollapsed;renderConfidenceTable()" style="cursor:pointer">CONFIDENCE TABLE <span class="arr" style="display:inline-block;transition:transform .2s;transform:rotate('+(confCollapsed?'0':'90')+'deg);margin-left:2px">&#9656;</span><span style="font-size:5px;color:var(--t3);margin-left:auto">'+rows.length+' '+(rows.length===1?'game':'games')+' &#183; '+statsSummary+'</span>';
+  if(!confCollapsed && liveCount>0){
+    html += '<span style="margin-left:8px" onclick="event.stopPropagation();ctRefreshAll()" title="Force refresh all live games"><span style="font-size:6px;padding:2px 5px;border:1px solid var(--b1);border-radius:3px;color:var(--t2);cursor:pointer;letter-spacing:.5px">&#8635; REFRESH</span></span>';
+    html += '<span style="margin-left:4px" onclick="event.stopPropagation();ctAnalyzeAll()" title="Analyze all live games with thesis"><span style="font-size:6px;padding:2px 5px;border:1px solid var(--amber);border-radius:3px;color:var(--amber);cursor:pointer;letter-spacing:.5px">&#9889; ANALYZE ALL</span></span>';
+  }
+  html += '</div>';
   if(!confCollapsed){
   html += '<table><tr><th style="text-align:center">SCORE</th><th style="text-align:center">SUST</th><th style="text-align:center">FWP</th><th style="text-align:center">EDGE</th><th style="text-align:center">ENTRY</th><th>CTRL</th><th style="text-align:center">CTRL</th><th style="text-align:center">THESIS</th></tr>';
   for(const r of rows){
@@ -3375,14 +3389,16 @@ function renderConfidenceTable(){
     } else {
       scoreStr = '<span style="font-weight:600;font-size:7px;color:var(--t2)">'+esc(r.aA)+'</span><span style="color:var(--t3);margin:0 3px">@</span><span style="font-weight:600;font-size:7px;color:var(--t2)">'+esc(r.hA)+'</span>';
     }
-    // Sustainability — show both teams compact, pull client-side fallback
+    // Sustainability — already resolved (server audit or client-computed for LIVE games)
     let sustStr = '';
-    const csForSust = cardState[r.gameId];
     let effSustHome = r.sustHome, effSustAway = r.sustAway;
-    if(!effSustHome && csForSust?.clientSustainability){
-      const cS = csForSust.clientSustainability;
-      effSustHome = cS.home?.tier||null;
-      effSustAway = cS.away?.tier||null;
+    // Fallback to client sustainability for any state if row has none
+    if(!effSustHome){
+      const csForSust = cardState[r.gameId];
+      if(csForSust?.clientSustainability){
+        effSustHome = csForSust.clientSustainability.home?.tier||null;
+        effSustAway = csForSust.clientSustainability.away?.tier||null;
+      }
     }
     if(effSustHome || effSustAway){
       const shorten = (s) => {
@@ -3450,6 +3466,35 @@ function renderConfidenceTable(){
   } // end if(!confCollapsed)
   el.innerHTML = html;
   el.style.display = 'block';
+}
+
+// ── CONFIDENCE TABLE BATCH ACTIONS ──
+function ctRefreshAll(){
+  let count = 0;
+  for(const g of games){
+    if(selIds.has(g.id) && getState(g)==='LIVE'){
+      fetchSummary(g);
+      count++;
+    }
+  }
+  if(count) console.log('CT REFRESH: triggered '+count+' live games');
+}
+
+async function ctAnalyzeAll(){
+  const targets = [];
+  for(const g of games){
+    if(selIds.has(g.id) && getState(g)==='LIVE' && theses[g.id]){
+      const cs = cardState[g.id];
+      if(cs && !cs.analyzing) targets.push(g);
+    }
+  }
+  if(!targets.length) return;
+  console.log('CT ANALYZE ALL: queuing '+targets.length+' games');
+  // Stagger calls to avoid API flooding — 2s between each
+  for(let i=0; i<targets.length; i++){
+    triggerAnalysis(targets[i]);
+    if(i < targets.length-1) await new Promise(r=>setTimeout(r,2000));
+  }
 }
 
 function crossRef(parsed,ind){
@@ -3626,18 +3671,18 @@ function renderCard(game){
     const analyzeBtn = state==='LIVE' ? (cs.analyzing ? `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;opacity:.5;color:var(--t3);border-color:var(--t3);" disabled>⏳ ANALYZING</button>` : `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;" onclick="triggerAnalysis(games.find(g=>g.id==='${id}'))">⚡ ANALYZE</button>`) : '';
     const pred = cs.prediction;
 
-    // ── RECOMPUTE EDGE CLIENT-SIDE on every render (fixes stale Sonnet edge on refresh) ──
-    if(pred && cs.oddsData && ind){
+    // ── RECOMPUTE EDGE CLIENT-SIDE on every render (recomputes edge against current odds, preserves Sonnet's FWP) ──
+    if(pred && pred.fwp && cs.oddsData){
       const od = cs.oddsData;
       if(od.homeML || od.awayML){
-        // Derive FWP from control score (primary) or Sonnet text parse (fallback)
-        const fwpVal = ind.score ? ind.score * 100 : parseFloat((pred.fwp||'').replace(/[%\s]/g,''));
+        // Use Sonnet's persisted FWP (already corrected in post-analysis). Do NOT use control score.
+        const fwpVal = parseFloat((pred.fwp||'').replace(/[%\s]/g,''));
         if(!isNaN(fwpVal)){
           const _mlP = (ml) => { const n=parseFloat(ml); if(isNaN(n)||n===0) return null; return n<0?Math.abs(n)/(Math.abs(n)+100):100/(n+100); };
           const rH=_mlP(od.homeML), rA=_mlP(od.awayML);
           if(rH!==null && rA!==null){
             const vs=rH+rA, hMIP=rH/vs*100, aMIP=rA/vs*100;
-            const cTeam=(ind.controlTeam||'').toUpperCase();
+            const cTeam=(ind?.controlTeam||'').toUpperCase();
             const bTeam=(pred.buyTeam||'').toUpperCase();
             const fwpTeam = bTeam || cTeam;
             const isH = fwpTeam===hA.toUpperCase();
@@ -3655,7 +3700,6 @@ function renderCard(game){
             pred.edge=(edge>=0?'+':'')+edge.toFixed(1)+'%';
             pred.edgeNum=parseFloat(edge.toFixed(1));
             pred.mip=wMIP.toFixed(1)+'%';
-            pred.fwp=fwpVal.toFixed(1)+'%';
           }
         }
       }
