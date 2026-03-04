@@ -623,7 +623,7 @@ async function loadSchedule(){
       if(dcs){
         const dg = {id:DEMO_ID,status:'inprogress',scheduled:new Date().toISOString(),venue:'Demo Arena',
           home:{id:'demo-h',name:'Cleveland Cavaliers',alias:'CLE'},away:{id:'demo-a',name:'Milwaukee Bucks',alias:'MIL'},
-          homePoints:78,awayPoints:71,period:3,clock:'4:22',dataSource:'DEMO',summary:dcs._demoSummary||null};
+          homePoints:68,awayPoints:72,period:3,clock:'6:15',dataSource:'DEMO',summary:dcs._demoSummary||null};
         games.unshift(dg);
       }
     }
@@ -3791,6 +3791,56 @@ function renderCard(game){
       html+='</div>';
     }
 
+    // ─── LEAD COMPOSITION (where did the margin come from?) ───
+    var lc = cs.leadComposition;
+    if(lc && lc.absMargin > 2){
+      var lcStructColor = lc.structuralMargin > 0 ? 'var(--green)' : lc.structuralMargin < 0 ? 'var(--red)' : 'var(--t3)';
+      var lcVarColor = lc.varianceMargin > 0 ? 'var(--amber)' : lc.varianceMargin < 0 ? 'var(--green)' : 'var(--t3)';
+      var lcDurColor = lc.durability.includes('STRUCTURALLY SOURCED') ? 'var(--green)' : lc.durability.includes('VARIANCE SOURCED') ? 'var(--amber)' : 'var(--t2)';
+      html+='<div style="padding:6px 10px;border-top:1px solid var(--b1)">';
+      html+='<div style="font-size:6px;color:#a78bfa;letter-spacing:1.5px;margin-bottom:4px;font-family:inherit">LEAD COMPOSITION &#8212; WHERE DID THE MARGIN COME FROM?</div>';
+      // Team bars
+      [lc.away, lc.home].forEach(function(tm){
+        if(!tm) return;
+        var sPct = tm.structuralPct, vPct = tm.variancePct;
+        html+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">';
+        html+='<span style="font-size:7px;color:var(--t1);width:26px;text-align:right;font-weight:600">'+esc(tm.team)+'</span>';
+        html+='<span style="font-size:6px;color:var(--t2);width:18px;text-align:right">'+tm.total+'</span>';
+        // Stacked bar
+        html+='<div style="flex:1;display:flex;height:10px;border-radius:3px;overflow:hidden;background:var(--b2)">';
+        if(tm.paint>0) html+='<div style="width:'+(tm.paint/tm.total*100)+'%;background:#4caf50" title="Paint '+tm.paint+'"></div>';
+        if(tm.ft>0) html+='<div style="width:'+(tm.ft/tm.total*100)+'%;background:#66bb6a" title="FT '+tm.ft+'"></div>';
+        if(tm.transition>0) html+='<div style="width:'+(tm.transition/tm.total*100)+'%;background:#81c784" title="Trans '+tm.transition+'"></div>';
+        if(tm.three>0) html+='<div style="width:'+(tm.three/tm.total*100)+'%;background:#ff9800" title="3PT '+tm.three+'"></div>';
+        if(tm.midOther>0) html+='<div style="width:'+(tm.midOther/tm.total*100)+'%;background:#ffc107" title="Mid '+tm.midOther+'"></div>';
+        html+='</div>';
+        html+='<span style="font-size:5.5px;color:var(--t3);width:50px">S:'+sPct+'% V:'+vPct+'%</span>';
+        html+='</div>';
+      });
+      // Legend
+      html+='<div style="display:flex;gap:8px;margin:3px 0 3px 34px;font-size:5px;color:var(--t3)">';
+      html+='<span><span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:#4caf50;vertical-align:middle;margin-right:2px"></span>Paint</span>';
+      html+='<span><span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:#66bb6a;vertical-align:middle;margin-right:2px"></span>FT</span>';
+      html+='<span><span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:#81c784;vertical-align:middle;margin-right:2px"></span>Trans</span>';
+      html+='<span><span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:#ff9800;vertical-align:middle;margin-right:2px"></span>3PT</span>';
+      html+='<span><span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:#ffc107;vertical-align:middle;margin-right:2px"></span>Mid</span>';
+      html+='</div>';
+      // Margin summary
+      html+='<div style="display:flex;gap:10px;font-size:6px;margin-left:34px">';
+      html+='<span style="color:'+lcStructColor+'">Structural: '+(lc.structuralMargin>=0?lc.leadTeam:lc.trailTeam)+' +'+Math.abs(lc.structuralMargin)+'</span>';
+      html+='<span style="color:'+lcVarColor+'">Variance: '+(lc.varianceMargin>=0?lc.leadTeam:lc.trailTeam)+' +'+Math.abs(lc.varianceMargin)+'</span>';
+      html+='</div>';
+      html+='<div style="font-size:6px;color:'+lcDurColor+';margin:3px 0 0 34px;font-weight:500">'+esc(lc.durability)+'</div>';
+      html+='</div>';
+    } else if(pred && pred.leadSource) {
+      // Fallback: show Sonnet's Lead Source line when no server-side composition data
+      var lsColor = pred.leadSource==='STRUCTURAL'?'var(--green)':pred.leadSource==='VARIANCE'?'var(--amber)':pred.leadSource==='EVEN'?'var(--t3)':'var(--t2)';
+      html+='<div style="padding:4px 10px;border-top:1px solid var(--b1)">';
+      html+='<div style="font-size:6px"><span style="color:#a78bfa;letter-spacing:1px">LEAD:</span> <span style="color:'+lsColor+';font-weight:600">'+esc(pred.leadSource)+'</span>';
+      if(pred.leadSourceNote) html+=' <span style="color:var(--t3)">&#8212; '+esc(pred.leadSourceNote)+'</span>';
+      html+='</div></div>';
+    }
+
     // ─── VALUE READ (two-sided — primary decision interface) ───
     if(pred){
       var hv = pred.homeValue, av = pred.awayValue;
@@ -4247,57 +4297,57 @@ function toggleDemo(){
   demoActive = true;
   document.getElementById('btn-demo').style.background='rgba(255,180,50,.15)';
 
-  // ── Fake game object ──
+  // ── Fake game object — CLE trailing early, coming back structurally ──
   const demoGame = {
     id: DEMO_ID, status: 'inprogress',
     scheduled: new Date().toISOString(),
     venue: 'Demo Arena',
     home: {id:'demo-h', name:'Cleveland Cavaliers', alias:'CLE', sr_id:'demo-h'},
     away: {id:'demo-a', name:'Milwaukee Bucks', alias:'MIL', sr_id:'demo-a'},
-    homePoints: 78, awayPoints: 71, period: 3, clock: '4:22',
+    homePoints: 68, awayPoints: 72, period: 3, clock: '6:15',
     dataSource: 'DEMO',
     summary: {
-      status:'inprogress', quarter:3, clock:'4:22',
+      status:'inprogress', quarter:3, clock:'6:15',
       home:{
-        name:'Cavaliers', alias:'CLE', points:78, bonus:false,
+        name:'Cavaliers', alias:'CLE', points:68, bonus:false,
         statistics:{
-          assists:19, turnovers:8, steals:7, blocks:4, offensive_rebounds:9,
-          field_goals_made:31, field_goals_att:62, three_points_made:8, three_points_att:22,
-          free_throws_made:8, free_throws_att:10, points_in_the_paint:38,
-          fast_break_points:14, points_off_turnovers:16, second_chance_points:11,
-          biggest_lead:15, bench_points:22, possessions:65,
-          offensive_points_per_possession:1.20, defensive_points_per_possession:1.09,
-          field_goals_at_rim_made:14, field_goals_at_rim_att:18, fouls:12,
+          assists:17, turnovers:7, steals:8, blocks:5, offensive_rebounds:10,
+          field_goals_made:27, field_goals_att:54, three_points_made:5, three_points_att:16,
+          free_throws_made:9, free_throws_att:11, points_in_the_paint:36,
+          fast_break_points:15, points_off_turnovers:18, second_chance_points:12,
+          biggest_lead:4, bench_points:18, possessions:60,
+          offensive_points_per_possession:1.13, defensive_points_per_possession:1.20,
+          field_goals_at_rim_made:14, field_goals_at_rim_att:19, fouls:10,
         },
         players:[
-          {full_name:'Donovan Mitchell',on_court:true,starter:true,primary_position:'SG',average:{points:24.1,assists:4.5,rebounds:4.2,field_goals_made:8.5,field_goals_att:18.2,three_points_made:3.1,three_points_att:8.0,steals:1.4,usage_pct:29.5,minutes:33.5},statistics:{minutes:'28:11',points:24,assists:5,field_goals_made:9,field_goals_att:17,three_points_made:3,three_points_att:7,rebounds:4,turnovers:2,steals:2,plus_minus:9,personal_fouls:1}},
-          {full_name:'Darius Garland',on_court:true,starter:true,primary_position:'PG',average:{points:21.3,assists:6.8,rebounds:2.5,field_goals_made:7.6,field_goals_att:16.1,three_points_made:2.8,three_points_att:7.2,steals:1.1,usage_pct:26.8,minutes:32.0},statistics:{minutes:'26:44',points:16,assists:7,field_goals_made:6,field_goals_att:12,three_points_made:2,three_points_att:5,rebounds:2,turnovers:1,steals:1,plus_minus:7,personal_fouls:2}},
-          {full_name:'Evan Mobley',on_court:true,starter:true,primary_position:'PF',average:{points:18.2,assists:3.1,rebounds:9.4,field_goals_made:7.2,field_goals_att:13.5,three_points_made:0.8,three_points_att:2.2,steals:0.9,usage_pct:22.1,minutes:34.0},statistics:{minutes:'27:30',points:14,assists:2,field_goals_made:7,field_goals_att:11,three_points_made:0,three_points_att:1,rebounds:8,turnovers:2,steals:1,plus_minus:11,personal_fouls:2}},
-          {full_name:'Jarrett Allen',on_court:false,starter:true,primary_position:'C',average:{points:13.8,assists:1.5,rebounds:10.2,field_goals_made:5.8,field_goals_att:9.1,three_points_made:0.1,three_points_att:0.3,steals:0.5,usage_pct:16.2,minutes:30.0},statistics:{minutes:'22:15',points:10,assists:1,field_goals_made:5,field_goals_att:7,three_points_made:0,three_points_att:0,rebounds:9,turnovers:1,steals:0,plus_minus:5,personal_fouls:3}},
-          {full_name:'Max Strus',on_court:true,starter:true,primary_position:'SF',average:{points:11.5,assists:2.0,rebounds:3.8,field_goals_made:4.0,field_goals_att:9.5,three_points_made:2.2,three_points_att:6.1,steals:0.7,usage_pct:14.5,minutes:28.0},statistics:{minutes:'25:00',points:8,assists:2,field_goals_made:3,field_goals_att:8,three_points_made:2,three_points_att:6,rebounds:3,turnovers:0,steals:1,plus_minus:4,personal_fouls:1}},
-          {full_name:'Caris LeVert',on_court:false,starter:false,primary_position:'SG',average:{points:9.2,assists:2.5,rebounds:2.1,field_goals_made:3.4,field_goals_att:8.0,three_points_made:1.0,three_points_att:3.2,steals:0.6,usage_pct:18.0,minutes:20.0},statistics:{minutes:'14:20',points:6,assists:2,field_goals_made:2,field_goals_att:5,three_points_made:1,three_points_att:3,rebounds:1,turnovers:1,steals:1,plus_minus:3,personal_fouls:2}},
+          {full_name:'Donovan Mitchell',on_court:true,starter:true,primary_position:'SG',average:{points:24.1,assists:4.5,rebounds:4.2,field_goals_made:8.5,field_goals_att:18.2,three_points_made:3.1,three_points_att:8.0,steals:1.4,usage_pct:29.5,minutes:33.5},statistics:{minutes:'25:11',points:18,assists:4,field_goals_made:7,field_goals_att:15,three_points_made:2,three_points_att:5,rebounds:3,turnovers:2,steals:3,plus_minus:-2,personal_fouls:1}},
+          {full_name:'Darius Garland',on_court:true,starter:true,primary_position:'PG',average:{points:21.3,assists:6.8,rebounds:2.5,field_goals_made:7.6,field_goals_att:16.1,three_points_made:2.8,three_points_att:7.2,steals:1.1,usage_pct:26.8,minutes:32.0},statistics:{minutes:'24:44',points:14,assists:6,field_goals_made:5,field_goals_att:11,three_points_made:2,three_points_att:4,rebounds:2,turnovers:1,steals:1,plus_minus:-1,personal_fouls:2}},
+          {full_name:'Evan Mobley',on_court:true,starter:true,primary_position:'PF',average:{points:18.2,assists:3.1,rebounds:9.4,field_goals_made:7.2,field_goals_att:13.5,three_points_made:0.8,three_points_att:2.2,steals:0.9,usage_pct:22.1,minutes:34.0},statistics:{minutes:'25:30',points:16,assists:3,field_goals_made:8,field_goals_att:12,three_points_made:0,three_points_att:1,rebounds:9,turnovers:2,steals:2,plus_minus:1,personal_fouls:2}},
+          {full_name:'Jarrett Allen',on_court:false,starter:true,primary_position:'C',average:{points:13.8,assists:1.5,rebounds:10.2,field_goals_made:5.8,field_goals_att:9.1,three_points_made:0.1,three_points_att:0.3,steals:0.5,usage_pct:16.2,minutes:30.0},statistics:{minutes:'20:15',points:10,assists:1,field_goals_made:5,field_goals_att:8,three_points_made:0,three_points_att:0,rebounds:8,turnovers:1,steals:0,plus_minus:-3,personal_fouls:3}},
+          {full_name:'Max Strus',on_court:true,starter:true,primary_position:'SF',average:{points:11.5,assists:2.0,rebounds:3.8,field_goals_made:4.0,field_goals_att:9.5,three_points_made:2.2,three_points_att:6.1,steals:0.7,usage_pct:14.5,minutes:28.0},statistics:{minutes:'23:00',points:5,assists:2,field_goals_made:1,field_goals_att:5,three_points_made:1,three_points_att:5,rebounds:3,turnovers:0,steals:1,plus_minus:0,personal_fouls:1}},
+          {full_name:'Caris LeVert',on_court:false,starter:false,primary_position:'SG',average:{points:9.2,assists:2.5,rebounds:2.1,field_goals_made:3.4,field_goals_att:8.0,three_points_made:1.0,three_points_att:3.2,steals:0.6,usage_pct:18.0,minutes:20.0},statistics:{minutes:'12:20',points:5,assists:1,field_goals_made:1,field_goals_att:3,three_points_made:0,three_points_att:1,rebounds:1,turnovers:0,steals:1,plus_minus:1,personal_fouls:1}},
         ],
-        periods:[{number:1,scoring:{points:28}},{number:2,scoring:{points:26}},{number:3,scoring:{points:24}}],
+        periods:[{number:1,scoring:{points:18}},{number:2,scoring:{points:28}},{number:3,scoring:{points:22}}],
       },
       away:{
-        name:'Bucks', alias:'MIL', points:71, bonus:true,
+        name:'Bucks', alias:'MIL', points:72, bonus:true,
         statistics:{
-          assists:14, turnovers:13, steals:4, blocks:2, offensive_rebounds:5,
-          field_goals_made:27, field_goals_att:64, three_points_made:9, three_points_att:28,
-          free_throws_made:8, free_throws_att:11, points_in_the_paint:26,
-          fast_break_points:8, points_off_turnovers:10, second_chance_points:6,
-          biggest_lead:3, bench_points:16, possessions:66,
-          offensive_points_per_possession:1.08, defensive_points_per_possession:1.18,
-          field_goals_at_rim_made:8, field_goals_at_rim_att:13, fouls:14,
+          assists:12, turnovers:14, steals:4, blocks:1, offensive_rebounds:4,
+          field_goals_made:26, field_goals_att:61, three_points_made:12, three_points_att:30,
+          free_throws_made:8, free_throws_att:10, points_in_the_paint:22,
+          fast_break_points:6, points_off_turnovers:8, second_chance_points:4,
+          biggest_lead:14, bench_points:14, possessions:61,
+          offensive_points_per_possession:1.18, defensive_points_per_possession:1.11,
+          field_goals_at_rim_made:6, field_goals_at_rim_att:12, fouls:15,
         },
         players:[
-          {full_name:'Damian Lillard',on_court:true,starter:true,primary_position:'PG',average:{points:25.8,assists:7.2,rebounds:4.5,field_goals_made:8.8,field_goals_att:19.5,three_points_made:3.2,three_points_att:9.0,steals:0.9,usage_pct:31.2,minutes:35.5},statistics:{minutes:'28:00',points:22,assists:5,field_goals_made:8,field_goals_att:19,three_points_made:4,three_points_att:11,rebounds:3,turnovers:4,steals:1,plus_minus:-5,personal_fouls:2}},
-          {full_name:'Bobby Portis',on_court:true,starter:true,primary_position:'PF',average:{points:14.5,assists:1.8,rebounds:8.5,field_goals_made:5.5,field_goals_att:12.0,three_points_made:1.2,three_points_att:3.8,steals:0.6,usage_pct:18.5,minutes:26.0},statistics:{minutes:'26:30',points:16,assists:2,field_goals_made:7,field_goals_att:13,three_points_made:2,three_points_att:5,rebounds:7,turnovers:2,steals:1,plus_minus:-3,personal_fouls:3}},
-          {full_name:'Khris Middleton',on_court:false,starter:true,primary_position:'SF',average:{points:16.2,assists:4.1,rebounds:4.8,field_goals_made:6.0,field_goals_att:14.0,three_points_made:1.8,three_points_att:5.0,steals:0.7,usage_pct:24.5,minutes:29.0},statistics:{minutes:'24:00',points:12,assists:3,field_goals_made:5,field_goals_att:12,three_points_made:1,three_points_att:4,rebounds:3,turnovers:3,steals:0,plus_minus:-8,personal_fouls:2}},
-          {full_name:'Taurean Prince',on_court:true,starter:true,primary_position:'SF',average:{points:8.5,assists:1.2,rebounds:3.5,field_goals_made:3.1,field_goals_att:7.5,three_points_made:1.0,three_points_att:3.5,steals:0.5,usage_pct:12.0,minutes:22.0},statistics:{minutes:'22:00',points:9,assists:1,field_goals_made:3,field_goals_att:8,three_points_made:2,three_points_att:5,rebounds:4,turnovers:2,steals:1,plus_minus:-4,personal_fouls:3}},
-          {full_name:'Andre Jackson',on_court:true,starter:false,primary_position:'SG',average:{points:5.2,assists:1.5,rebounds:3.8,field_goals_made:2.0,field_goals_att:4.5,three_points_made:0.5,three_points_att:1.8,steals:0.8,usage_pct:8.5,minutes:18.0},statistics:{minutes:'18:00',points:7,assists:2,field_goals_made:3,field_goals_att:7,three_points_made:0,three_points_att:2,rebounds:5,turnovers:1,steals:1,plus_minus:-2,personal_fouls:2}},
+          {full_name:'Damian Lillard',on_court:true,starter:true,primary_position:'PG',average:{points:25.8,assists:7.2,rebounds:4.5,field_goals_made:8.8,field_goals_att:19.5,three_points_made:3.2,three_points_att:9.0,steals:0.9,usage_pct:31.2,minutes:35.5},statistics:{minutes:'26:00',points:28,assists:4,field_goals_made:9,field_goals_att:21,three_points_made:6,three_points_att:14,rebounds:3,turnovers:4,steals:1,plus_minus:6,personal_fouls:2}},
+          {full_name:'Bobby Portis',on_court:true,starter:true,primary_position:'PF',average:{points:14.5,assists:1.8,rebounds:8.5,field_goals_made:5.5,field_goals_att:12.0,three_points_made:1.2,three_points_att:3.8,steals:0.6,usage_pct:18.5,minutes:26.0},statistics:{minutes:'24:30',points:14,assists:2,field_goals_made:6,field_goals_att:12,three_points_made:2,three_points_att:5,rebounds:6,turnovers:3,steals:1,plus_minus:3,personal_fouls:4}},
+          {full_name:'Khris Middleton',on_court:false,starter:true,primary_position:'SF',average:{points:16.2,assists:4.1,rebounds:4.8,field_goals_made:6.0,field_goals_att:14.0,three_points_made:1.8,three_points_att:5.0,steals:0.7,usage_pct:24.5,minutes:29.0},statistics:{minutes:'22:00',points:10,assists:3,field_goals_made:4,field_goals_att:10,three_points_made:1,three_points_att:3,rebounds:3,turnovers:3,steals:0,plus_minus:2,personal_fouls:2}},
+          {full_name:'Taurean Prince',on_court:true,starter:true,primary_position:'SF',average:{points:8.5,assists:1.2,rebounds:3.5,field_goals_made:3.1,field_goals_att:7.5,three_points_made:1.0,three_points_att:3.5,steals:0.5,usage_pct:12.0,minutes:22.0},statistics:{minutes:'20:00',points:11,assists:1,field_goals_made:4,field_goals_att:9,three_points_made:2,three_points_att:5,rebounds:4,turnovers:2,steals:1,plus_minus:1,personal_fouls:4}},
+          {full_name:'Andre Jackson',on_court:true,starter:false,primary_position:'SG',average:{points:5.2,assists:1.5,rebounds:3.8,field_goals_made:2.0,field_goals_att:4.5,three_points_made:0.5,three_points_att:1.8,steals:0.8,usage_pct:8.5,minutes:18.0},statistics:{minutes:'16:00',points:9,assists:2,field_goals_made:3,field_goals_att:9,three_points_made:1,three_points_att:3,rebounds:4,turnovers:2,steals:1,plus_minus:-1,personal_fouls:3}},
         ],
-        periods:[{number:1,scoring:{points:25}},{number:2,scoring:{points:27}},{number:3,scoring:{points:19}}],
+        periods:[{number:1,scoring:{points:32}},{number:2,scoring:{points:24}},{number:3,scoring:{points:16}}],
       },
     },
   };
@@ -4362,12 +4412,12 @@ WATCH
   // ── Set up full cardState with mock data ──
   const cs = cardState[DEMO_ID];
 
-  cs.oddsData = {homeSpread:'-8.5', homeML:'-380', awayML:'+300', total:'221.5'};
+  cs.oddsData = {homeSpread:'-6.5', homeML:'-280', awayML:'+230', total:'222'};
   cs.enrichDone = true;
   cs.mktCollapsed = false;
   cs.oddsHistory = [
-    {homeSpread:'-7.5', homeML:'-320', awayML:'+260', total:'223', ts:Date.now()-3600000},
-    {homeSpread:'-8.5', homeML:'-380', awayML:'+300', total:'221.5', ts:Date.now()},
+    {homeSpread:'-8.5', homeML:'-380', awayML:'+300', total:'223', ts:Date.now()-7200000},
+    {homeSpread:'-6.5', homeML:'-280', awayML:'+230', total:'222', ts:Date.now()},
   ];
   cs._demoSummary = demoGame.summary; // preserve for re-injection after schedule refresh
   cs.clutchData = {
@@ -4382,56 +4432,66 @@ WATCH
   };
 
   cs.sonnetIndicators = {
-    I1:{score:0.85,leader:'CLE',detail:'Dominant 14 FBP, +5 TO margin, 7 steals forcing MIL chaos',sonnet:true,rawScore:0.85},
-    I2:{score:0.90,leader:'CLE',detail:'78% at-rim (14/18), 38 paint pts, MIL in bonus with 14 fouls',sonnet:true,rawScore:0.90},
-    I3:{score:0.70,leader:'CLE',detail:'50% FG, 19 AST on 31 FGM (61% assisted) vs MIL 42% shooting',sonnet:true,rawScore:0.70},
-    I4:{score:0.75,leader:'CLE',detail:'15-pt biggest lead, bench 22 pts, all 5 starters positive +/-',sonnet:true,rawScore:0.75},
-    I5:{score:0.65,leader:'CLE',detail:'1.20 vs 1.08 pts/poss — controlling pace at 65 possessions',sonnet:true,rawScore:0.65},
-    score: 0.82, controlTeam: 'CLE', dataQuality: 'SONNET',
+    I1:{score:0.90,leader:'CLE',detail:'CLE +7 TO margin (14 forced), 8 steals, 18 POT + 15 FBP — dominant generation + conversion',sonnet:true,rawScore:0.90},
+    I2:{score:0.85,leader:'CLE',detail:'CLE 36 paint (14/19 at-rim 74%) vs MIL 22 paint (6/12). CLE 9 FTA, MIL in bonus with 15 fouls',sonnet:true,rawScore:0.85},
+    I3:{score:0.55,leader:'CLE',detail:'CLE 63% assisted (17/27 FGM) but MIL eFG% higher on Lillard pull-ups. Creation quality CLE, efficiency MIL on variance',sonnet:true,rawScore:0.55},
+    I4:{score:0.65,leader:'CLE',detail:'MIL biggest lead 14 (Q1 heater) but CLE outscoring in Q2-Q3. CLE bench 18 vs MIL 14. Portis 4 fouls.',sonnet:true,rawScore:0.65},
+    I5:{score:0.60,leader:'CLE',detail:'CLE 1.13 vs MIL 1.18 pts/poss — MIL efficiency edge inflated by unsustainable 40% from three',sonnet:true,rawScore:0.60},
+    score: 0.77, controlTeam: 'CLE', dataQuality: 'SONNET',
     traj:{
       signals:[
-        {key:'T1',text:'Role Player Heater: CLEAR',color:'#3e3e48',team:null,w:0},
-        {key:'T2',text:'Star Process: [MIL] Lillard 42% FG (vs 45% szn) — process declining',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T3',text:'Quarter Delta: CLE winning Q3 24-19, extending lead',color:'var(--amber)',team:'CLE',w:2},
-        {key:'T4',text:'Foul Gate: [MIL] Portis 3 fouls in Q3 — CONSTRAINT',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T5',text:'Interior Trend: CLE at-rim rising (4→6→8 att per Q)',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T6',text:'Quarter Assist Ratio: CLEAR',color:'#3e3e48',team:null,w:0},
-        {key:'T7',text:'Closing Lineup: CLE closing 5/5 on floor (+12 combined) — sustained',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T8',text:'Shot Diet: MIL 32% 3PA rate — ALIGNED',color:'#3e3e48',team:null,w:0},
+        {key:'T1',text:'Role Player Heater: [MIL] Taurean Prince 2/5 from 3 (szn 28.6%) + Andre Jackson 1/3 (szn 27.8%) — 3 makes from NON-SHOOTERS',color:'var(--amber)',team:'CLE',w:1},
+        {key:'T2',text:'Star Process: [MIL] Lillard 6/14 from 3 (43%) vs szn 35.6% — hot but pull-up heavy (8/14 unassisted). Process declining Q2→Q3',color:'var(--amber)',team:'CLE',w:1},
+        {key:'T3',text:'Quarter Delta: CLE winning Q3 22-16 while trailing overall 68-72 — active comeback trajectory',color:'var(--green)',team:'CLE',w:2},
+        {key:'T4',text:'Foul Gate: [MIL] Portis 4 fouls in Q3 — CRISIS / resilience LOW. Prince 4 fouls — CRISIS',color:'var(--green)',team:'CLE',w:2},
+        {key:'T5',text:'Interior Trend: CLE at-rim RISING (5→6→8 att per Q) — MIL rim protection collapsing without Giannis',color:'var(--amber)',team:'CLE',w:1},
+        {key:'T6',text:'Quarter Assist Ratio: CLE Q3 ast ratio 71% vs cumulative 63% — ball movement improving',color:'var(--amber)',team:'CLE',w:1},
+        {key:'T7',text:'Closing Lineup: CLE closing 4/5 on floor — sustained edge. Allen resting but Mobley anchoring',color:'var(--amber)',team:'CLE',w:1},
+        {key:'T8',text:'Shot Diet: MIL 3PA/FGA 49% vs structural baseline 34% — MISALIGNED. Interior game abandoned.',color:'var(--green)',team:'CLE',w:2},
       ],
-      lean:'CLE', count:5, total:8, tooEarly:false,
+      lean:'CLE', count:8, total:8, tooEarly:false,
     },
     source:'sonnet',
   };
 
   cs.prediction = {
-    edge:'+6.2%', edgeNum:6.2, fwp:'83.7%', mip:'77.5%',
-    entry:'WINDOW CLOSING', conviction:'STRONG',
-    sustainability:'CLE: LOCKED IN | MIL: FRAGILE',
+    edge:'+5.8%', edgeNum:5.8, fwp:'79.2%', mip:'73.7%',
+    entry:'OPTIMAL WINDOW', conviction:'STRONG',
+    sustainability:'CLE: LOCKED IN | MIL: UNSUSTAINABLE',
+    leadSource:'VARIANCE', leadSourceNote:'MIL +4 lead built on +19 variance margin (36 3PT pts) while CLE holds +15 structural margin (45 Paint/FT)',
     thesisStatus:'CONFIRMED',
-    teamQuality:'CLE 44-16 full strength, top-3 East | MIL 32-28 missing Giannis, Middleton limited',
-    clutch:'CLEAR — both teams above -2.0 L15 NetRtg',
-    prediction:'Cleveland wins by 10-14. MIL 3PT production unsustainable (9/28 from non-shooters); CLE interior dominance compounds through Q4.',
-    signalType:'BUY CLE', signalNote:'CLE structural control accelerating — MIL 3PT FRAGILE + Portis foul trouble', buyTeam:'CLE',
-    spreadAnalysis:'CLE -8.5 looks accurate — interior dominance + MIL foul trouble projects 10-14pt win margin, spread may tighten if MIL makes run',
-    homeValue:{team:'CLE', fwp:83.7, mip:77.5, edge:6.2, ml:'-380', spread:'-8.5'},
-    awayValue:{team:'MIL', fwp:16.3, mip:22.5, edge:-6.2, ml:'+300', spread:'+8.5'},
+    teamQuality:'CLE 44-16 full strength, top-3 East | MIL 32-28 missing Giannis, Middleton limited — quality gap widens in Q4',
+    clutch:'CLEAR — CLE +8.2 L10 NetRtg vs MIL -3.5',
+    prediction:'Cleveland wins by 8-12. MIL 3PT production collapsing Q2→Q3 (8→6→2 3PM per Q). CLE structural margin (+15 Paint/FT) overtakes MIL variance lead as regression compounds.',
+    signalType:'BUY CLE', signalNote:'CLE structural control 0.77 while trailing — MIL lead VARIANCE SOURCED + 3PT UNSUSTAINABLE. Textbook entry.', buyTeam:'CLE',
+    spreadAnalysis:'CLE -6.5 looks soft — structural reads project CLE winning by 8-12 once MIL 3PT regression completes. Spread may have already moved from -8.5 on MIL Q1 run.',
+    homeValue:{team:'CLE', fwp:79.2, mip:73.7, edge:5.5, ml:'-280', spread:'-6.5'},
+    awayValue:{team:'MIL', fwp:20.8, mip:26.3, edge:-5.5, ml:'+230', spread:'+6.5'},
   };
   cs.sustainabilityAudit = {
-    home:{teamAlias:'CLE',live3PM:8,live3PA:22,live3Pct:'36.4',seasonPrior:'36.1',gotSeasonData:true,deviation:'0.3',personnelGrade:'N/A (at baseline)',personnelDetails:[],elitePct:'0',nonPct:'0',posteriorMean:'36.2',regressionPull:'0',regressionProb:25,regressionGrade:'MINIMAL',shotTypeGrade:'DURABLE',shotTypeNote:'High ast% (65%)',assistRatio:'65',composite:'0.00',tier:'LOCKED IN'},
-    away:{teamAlias:'MIL',live3PM:9,live3PA:28,live3Pct:'32.1',seasonPrior:'35.8',gotSeasonData:true,deviation:'-3.7',personnelGrade:'FRAGILE',personnelDetails:[{name:'Bobby Portis',live3m:3,live3a:7,livePct:'43',sznPct:31.2,sznVol:3.1,sznStr:'31.2% (3.1/gm)',tier:'non',tierLabel:'NON-SHOOTER',hot:true},{name:'Pat Connaughton',live3m:3,live3a:6,livePct:'50',sznPct:35.8,sznVol:4.2,sznStr:'35.8% (4.2/gm)',tier:'average',tierLabel:'AVERAGE',hot:true}],elitePct:'22',nonPct:'44',posteriorMean:'34.5',regressionPull:'45',regressionProb:62,regressionGrade:'MODERATE',shotTypeGrade:'FRAGILE',shotTypeNote:'Low ast% (42%) suggests pull-up/iso',assistRatio:'42',composite:'1.55',tier:'FRAGILE'},
+    home:{teamAlias:'CLE',live3PM:5,live3PA:16,live3Pct:'31.3',seasonPrior:'36.1',gotSeasonData:true,deviation:'-4.8',personnelGrade:'N/A (at baseline)',personnelDetails:[],elitePct:'0',nonPct:'0',posteriorMean:'34.9',regressionPull:'0',regressionProb:15,regressionGrade:'MINIMAL',shotTypeGrade:'DURABLE',shotTypeNote:'High ast% (63%)',assistRatio:'63',composite:'0.00',tier:'LOCKED IN'},
+    away:{teamAlias:'MIL',live3PM:12,live3PA:30,live3Pct:'40.0',seasonPrior:'35.2',gotSeasonData:true,deviation:'4.8',personnelGrade:'UNSUSTAINABLE',personnelDetails:[{name:'Damian Lillard',live3m:6,live3a:14,livePct:'43',sznPct:35.6,sznVol:9.0,sznStr:'35.6% (9.0/gm)',tier:'average',tierLabel:'AVERAGE',hot:true},{name:'Bobby Portis',live3m:2,live3a:5,livePct:'40',sznPct:31.2,sznVol:3.8,sznStr:'31.2% (3.8/gm)',tier:'non',tierLabel:'NON-SHOOTER',hot:true},{name:'Taurean Prince',live3m:2,live3a:5,livePct:'40',sznPct:28.6,sznVol:3.5,sznStr:'28.6% (3.5/gm)',tier:'non',tierLabel:'NON-SHOOTER',hot:true},{name:'Andre Jackson',live3m:1,live3a:3,livePct:'33',sznPct:27.8,sznVol:1.8,sznStr:'27.8% (1.8/gm)',tier:'non',tierLabel:'NON-SHOOTER',hot:false}],elitePct:'0',nonPct:'58',posteriorMean:'36.8',regressionPull:'52',regressionProb:78,regressionGrade:'HIGH',shotTypeGrade:'FRAGILE',shotTypeNote:'Low ast% (46%) + pull-up heavy — Lillard 8/14 unassisted',assistRatio:'46',composite:'1.75',tier:'UNSUSTAINABLE'},
+  };
+
+  // ── Lead Composition (matches game summary stats) ──
+  cs.leadComposition = {
+    home:{team:'CLE',total:68,paint:36,ft:9,three:15,midOther:8,transition:15,pot:18,secondChance:12,structural:45,variance:23,structuralPct:66,variancePct:34},
+    away:{team:'MIL',total:72,paint:22,ft:8,three:36,midOther:6,transition:6,pot:8,secondChance:4,structural:30,variance:42,structuralPct:42,variancePct:58},
+    margin:-4, absMargin:4, leadTeam:'MIL', trailTeam:'CLE',
+    structuralMargin:15, varianceMargin:-19,
+    durability:'MIL lead is VARIANCE SOURCED — variance production (+19) drives margin while structural favors CLE (+15)',
   };
 
   cs.edgeHistory = [
-    {time:'7:12 PM',period:1,edge:'+3.1%',edgeNum:3.1,fwp:'80.6%',control:'CLE',score:'MIL 18-CLE 20'},
-    {time:'7:28 PM',period:2,edge:'+4.8%',edgeNum:4.8,fwp:'82.3%',control:'CLE',score:'MIL 42-CLE 48'},
-    {time:'7:45 PM',period:3,edge:'+6.2%',edgeNum:6.2,fwp:'83.7%',control:'CLE',score:'MIL 71-CLE 78'},
+    {time:'7:05 PM',period:1,edge:'-2.1%',edgeNum:-2.1,fwp:'55.2%',control:'CLE',score:'MIL 32-CLE 18'},
+    {time:'7:25 PM',period:2,edge:'+1.8%',edgeNum:1.8,fwp:'72.4%',control:'CLE',score:'MIL 56-CLE 46'},
+    {time:'7:42 PM',period:3,edge:'+5.8%',edgeNum:5.8,fwp:'79.2%',control:'CLE',score:'MIL 72-CLE 68'},
   ];
 
   cs.analysisHistory = [
-    {time:'7:12 PM',period:'1',clock:'2:30',score:'MIL 18-CLE 20',controlTeam:'CLE',controlScore:0.68,verdict:'EARNED',entry:'WINDOW OPEN',conviction:'EARNED',signal:'BUY CLE',buyTeam:'CLE',leadTeam:'CLE',trailTeam:'MIL',leadSust:'LOCKED IN',trailSust:'MIXED',thesisStatus:'DEVELOPING',keyRead:'CLE interior asserting early, MIL 3PT variance building',fwp:'80.6%',edge:'+3.1%'},
-    {time:'7:28 PM',period:'2',clock:'5:15',score:'MIL 42-CLE 48',controlTeam:'CLE',controlScore:0.75,verdict:'STRONG',entry:'WINDOW OPEN',conviction:'STRONG',signal:'BUY CLE',buyTeam:'CLE',leadTeam:'CLE',trailTeam:'MIL',leadSust:'LOCKED IN',trailSust:'FRAGILE',thesisStatus:'CONFIRMED',keyRead:'MIL sustainability degraded MIXED to FRAGILE — Portis 3/7 from three as non-shooter',fwp:'82.3%',edge:'+4.8%'},
-    {time:'7:45 PM',period:'3',clock:'8:00',score:'MIL 71-CLE 78',controlTeam:'CLE',controlScore:0.84,verdict:'STRONG',entry:'WINDOW CLOSING',conviction:'STRONG',signal:'BUY CLE',buyTeam:'CLE',leadTeam:'CLE',trailTeam:'MIL',leadSust:'LOCKED IN',trailSust:'FRAGILE',thesisStatus:'CONFIRMED',keyRead:'Cleveland wins by 10-14. MIL 3PT unsustainable; CLE interior compounds Q4.',fwp:'83.7%',edge:'+6.2%'},
+    {time:'7:05 PM',period:'1',clock:'1:30',score:'MIL 32-CLE 18',controlTeam:'CLE',controlScore:0.58,verdict:'NO EDGE',entry:'NO WINDOW',conviction:'CONDITIONAL',signal:'PASS',buyTeam:null,leadTeam:'MIL',trailTeam:'CLE',leadSust:'FRAGILE',trailSust:'LOCKED IN',thesisStatus:'CONTESTED',keyRead:'MIL Q1 explosion on Lillard 4/6 from 3 + Prince/Portis heater. Divergence gate TRIGGERED — 2 VARIANCE flags.',fwp:'55.2%',edge:'-2.1%'},
+    {time:'7:25 PM',period:'2',clock:'3:45',score:'MIL 56-CLE 46',controlTeam:'CLE',controlScore:0.71,verdict:'EARNED',entry:'OPTIMAL WINDOW',conviction:'EARNED',signal:'BUY CLE',buyTeam:'CLE',leadTeam:'MIL',trailTeam:'CLE',leadSust:'UNSUSTAINABLE',trailSust:'LOCKED IN',thesisStatus:'DEVELOPING',keyRead:'CLE outscored MIL 28-24 in Q2. MIL 3PT cooled 8→4 makes. Lead composition: MIL +10 but structural margin already CLE +11.',fwp:'72.4%',edge:'+1.8%'},
+    {time:'7:42 PM',period:'3',clock:'6:15',score:'MIL 72-CLE 68',controlTeam:'CLE',controlScore:0.77,verdict:'STRONG',entry:'OPTIMAL WINDOW',conviction:'STRONG',signal:'BUY CLE',buyTeam:'CLE',leadTeam:'MIL',trailTeam:'CLE',leadSust:'UNSUSTAINABLE',trailSust:'LOCKED IN',thesisStatus:'CONFIRMED',keyRead:'MIL lead collapsed 14→4. Portis + Prince 4 fouls each. 8/8 trajectory signals lean CLE. MIL 3PT UNSUSTAINABLE, lead VARIANCE SOURCED.',fwp:'79.2%',edge:'+5.8%'},
   ];
 
   // Build baselines from demo player averages
