@@ -1274,7 +1274,16 @@ function parsePBP(pbpData, game){
       if(actionArea.includes('corner') || (coordY !== null && (coordY < 8 || coordY > 42))) zone = 'corner3';
       else zone = 'above3';
     } else {
-      if(actionArea.includes('restricted') || actionArea.includes('rim') || (coordX !== null && Math.abs(coordX - 25) < 5 && coordY !== null && Math.abs(coordY - 5.25) < 5)) zone = 'rim';
+      // Shot type for rim detection when action_area is missing
+      const shotTypeRaw = (stat.shot_type_desc || stat.shot_type || ev.shot_type_desc || ev.shot_type || '').toLowerCase();
+      const descRaw = (ev.description||'').toLowerCase();
+      const isRimShot = actionArea.includes('restricted') || actionArea.includes('rim')
+        || shotTypeRaw.includes('layup') || shotTypeRaw.includes('dunk') || shotTypeRaw.includes('tip')
+        || shotTypeRaw.includes('putback') || shotTypeRaw.includes('put-back') || shotTypeRaw.includes('alley')
+        || shotTypeRaw.includes('finger roll') || shotTypeRaw.includes('reverse')
+        || descRaw.includes('layup') || descRaw.includes('dunk') || descRaw.includes('tip shot') || descRaw.includes('alley oop')
+        || (coordX !== null && Math.abs(coordX - 25) < 5 && coordY !== null && Math.abs(coordY - 5.25) < 5);
+      if(isRimShot) zone = 'rim';
       else if(actionArea.includes('paint') || actionArea.includes('lane')) zone = 'paint';
       else zone = 'mid';
     }
