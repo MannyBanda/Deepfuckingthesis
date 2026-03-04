@@ -233,7 +233,7 @@ input,textarea,select{font-size:16px!important;}
 #conf-table{margin:0 11px 8px;padding:8px 10px;background:var(--c1);border:1px solid var(--b1);border-radius:6px;}
 #conf-table .ct-hdr{font-size:7px;letter-spacing:1.5px;color:var(--t2);text-transform:uppercase;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:nowrap;gap:6px;}
 #conf-table .ct-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;}
-#conf-table table{border-collapse:collapse;font-size:7px;min-width:700px;white-space:nowrap;}
+#conf-table table{border-collapse:collapse;font-size:7px;min-width:620px;white-space:nowrap;}
 #conf-table th{color:var(--t3);font-weight:400;text-align:left;padding:2px 6px;border-bottom:1px solid var(--b1);font-size:5.5px;letter-spacing:.5px;text-transform:uppercase;white-space:nowrap;}
 #conf-table td{padding:4px 6px;border-bottom:1px solid rgba(255,255,255,.03);vertical-align:middle;white-space:nowrap;}
 #conf-table tr:last-child td{border-bottom:none;}
@@ -2454,6 +2454,10 @@ function compute(game){
     cardState[game.id].clientSustainability = clientSust;
   }
 
+  // Client-side lead composition
+  const clientLC = computeLeadCompositionClient(game);
+  if(clientLC) cardState[game.id].clientLeadComposition = clientLC;
+
   // Trajectory
   const traj = buildTrajectory(game, hA, aA, hs, as, H, A, hS, aS, qDs, periods);
 
@@ -3010,6 +3014,65 @@ function computeSustainabilityClient(teamData, baselines, teamAlias, side, track
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// CLIENT-SIDE LEAD COMPOSITION — pure arithmetic on game summary fields
+// ══════════════════════════════════════════════════════════════════════════════
+function computeLeadCompositionClient(game){
+  const s = game.summary;
+  if(!s || !s.home || !s.away) return null;
+  const hS = s.home.statistics||{}, aS = s.away.statistics||{};
+  const hPts = s.home.points||0, aPts = s.away.points||0;
+  if(hPts===0 && aPts===0) return null;
+
+  function breakdown(stats, total){
+    const paint = stats.points_in_the_paint||0;
+    const ft = stats.free_throws_made||0;
+    const three = (stats.three_points_made||0)*3;
+    const transition = stats.fast_break_points||0;
+    const pot = stats.points_off_turnovers||0;
+    const sc = stats.second_chance_points||0;
+    const midOther = Math.max(0, total - paint - ft - three);
+    const structural = paint + ft;
+    const variance = three + midOther;
+    const sPct = total>0 ? Math.round(structural/total*100) : 0;
+    const vPct = total>0 ? Math.round(variance/total*100) : 0;
+    return {total, paint, ft, three, midOther, transition, pot, secondChance:sc, structural, variance, structuralPct:sPct, variancePct:vPct};
+  }
+
+  const hA = s.home.alias || game.home?.alias || '?';
+  const aA = s.away.alias || game.away?.alias || '?';
+  const hB = breakdown(hS, hPts);
+  const aB = breakdown(aS, aPts);
+  hB.team = hA; aB.team = aA;
+
+  const margin = hPts - aPts;
+  const absMargin = Math.abs(margin);
+  const leadTeam = margin>=0 ? hA : aA;
+  const trailTeam = margin>=0 ? aA : hA;
+  const structuralMargin = hB.structural - aB.structural; // positive = home structural edge
+  const varianceMargin = hB.variance - aB.variance;
+  // Express margins relative to lead team
+  const leadStructural = margin>=0 ? structuralMargin : -structuralMargin;
+  const leadVariance = margin>=0 ? varianceMargin : -varianceMargin;
+
+  let durability = '';
+  if(absMargin <= 2){
+    durability = 'EVEN — margin too small to classify';
+  } else if(leadStructural >= absMargin * 0.65){
+    durability = leadTeam+' lead is STRUCTURALLY SOURCED — paint/FT production drives margin';
+  } else if(leadVariance >= absMargin * 0.65){
+    durability = leadTeam+' lead is VARIANCE SOURCED — 3PT/mid production drives margin while structural favors '+(leadStructural<0?trailTeam:leadTeam)+' ('+(leadStructural<0?'+'+Math.abs(leadStructural):'+'+leadStructural)+')';
+  } else {
+    durability = 'MIXED — no single source dominates margin';
+  }
+
+  return {
+    home:hB, away:aB, margin, absMargin, leadTeam, trailTeam,
+    structuralMargin:leadStructural, varianceMargin:leadVariance,
+    durability
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // COMPUTE DISPATCH — routes to SR or BDL compute path
 // ══════════════════════════════════════════════════════════════════════════════
 function computeAny(game){
@@ -3393,20 +3456,20 @@ function renderConfidenceTable(){
   for(const r of rows){
     const isFinal = r.state==='FINAL';
     const rowClass = 'ct-row'+(isFinal?' ct-final':' '+entryClass(r.entry));
-    // State badge (folded into score cell)
+    // State badge (own line above score)
     let stateBadge = '';
     if(r.state==='LIVE'){
       const qStr = r.period ? 'Q'+r.period+(r.clock?' '+r.clock:'') : 'LIVE';
-      stateBadge = '<span class="ct-badge ct-live" style="margin-right:4px;vertical-align:middle">'+esc(qStr)+'</span>';
+      stateBadge = '<div><span class="ct-badge ct-live">'+esc(qStr)+'</span></div>';
     } else if(r.state==='FINAL'){
-      stateBadge = '<span class="ct-badge ct-done" style="margin-right:4px;vertical-align:middle">FIN</span>';
+      stateBadge = '<div><span class="ct-badge ct-done">FIN</span></div>';
     }
-    // Score display — always show team names, blank scores when pregame
+    // Score display — compact two-line: badge then score
     let scoreStr = '';
     if(r.homeScore!==null && r.homeScore!==undefined){
-      scoreStr = stateBadge+'<span style="font-weight:600;font-size:7px">'+esc(r.aA)+' '+r.awayScore+'</span><span style="color:var(--t3);margin:0 2px">-</span><span style="font-weight:600;font-size:7px">'+r.homeScore+' '+esc(r.hA)+'</span>';
+      scoreStr = stateBadge+'<div style="font-weight:600;font-size:7px">'+esc(r.aA)+' '+r.awayScore+'<span style="color:var(--t3)">-</span>'+r.homeScore+' '+esc(r.hA)+'</div>';
     } else {
-      scoreStr = '<span style="font-weight:600;font-size:7px;color:var(--t2)">'+esc(r.aA)+'</span><span style="color:var(--t3);margin:0 3px">@</span><span style="font-weight:600;font-size:7px;color:var(--t2)">'+esc(r.hA)+'</span>';
+      scoreStr = '<div style="font-weight:600;font-size:7px;color:var(--t2)">'+esc(r.aA)+' <span style="color:var(--t3)">@</span> '+esc(r.hA)+'</div>';
     }
     // Sustainability — already resolved (server audit or client-computed for LIVE games)
     let sustStr = '';
@@ -3441,7 +3504,7 @@ function renderConfidenceTable(){
         return 'var(--t3)';
       };
       if(effSustAway){
-        sustStr = '<span style="color:'+sustColor(effSustHome)+'">'+esc(r.hA)+':'+shorten(effSustHome)+'</span> <span style="color:'+sustColor(effSustAway)+'">'+esc(r.aA)+':'+shorten(effSustAway)+'</span>';
+        sustStr = '<div style="line-height:1.3"><div style="color:'+sustColor(effSustHome)+'">'+esc(r.hA)+':'+shorten(effSustHome)+'</div><div style="color:'+sustColor(effSustAway)+'">'+esc(r.aA)+':'+shorten(effSustAway)+'</div></div>';
       } else {
         sustStr = '<span style="color:'+sustColor(effSustHome)+'">'+esc(effSustHome||'')+'</span>';
       }
@@ -3793,13 +3856,14 @@ function renderCard(game){
     }
 
     // ─── LEAD COMPOSITION (where did the margin come from?) ───
-    var lc = cs.leadComposition;
+    var lc = cs.leadComposition || cs.clientLeadComposition;
+    var lcIsClient = !cs.leadComposition && !!cs.clientLeadComposition;
     if(lc && lc.absMargin > 2){
       var lcStructColor = lc.structuralMargin > 0 ? 'var(--green)' : lc.structuralMargin < 0 ? 'var(--red)' : 'var(--t3)';
       var lcVarColor = lc.varianceMargin > 0 ? 'var(--amber)' : lc.varianceMargin < 0 ? 'var(--green)' : 'var(--t3)';
       var lcDurColor = lc.durability.includes('STRUCTURALLY SOURCED') ? 'var(--green)' : lc.durability.includes('VARIANCE SOURCED') ? 'var(--amber)' : 'var(--t2)';
       html+='<div style="padding:6px 10px;border-top:1px solid var(--b1)">';
-      html+='<div style="font-size:6px;color:#a78bfa;letter-spacing:1.5px;margin-bottom:4px;font-family:inherit">LEAD COMPOSITION &#8212; WHERE DID THE MARGIN COME FROM?</div>';
+      html+='<div style="font-size:6px;color:#a78bfa;letter-spacing:1.5px;margin-bottom:4px;font-family:inherit">LEAD COMPOSITION &#8212; WHERE DID THE MARGIN COME FROM?'+(lcIsClient?' <span style="color:var(--t3);letter-spacing:0">(client-side)</span>':'')+'</div>';
       // Team bars
       [lc.away, lc.home].forEach(function(tm){
         if(!tm) return;
