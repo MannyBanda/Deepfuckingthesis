@@ -1913,7 +1913,7 @@ function parseSonnetDecision(text){
       d.edgeNum = isNaN(edgeNum) ? null : edgeNum;
     }
     // Parse ENTRY line
-    const entryMatch = text.match(/ENTRY:\s*(OPTIMAL WINDOW|WINDOW OPEN|WINDOW CLOSING|NO WINDOW|COUNTER-SIGNAL)/i);
+    const entryMatch = text.match(/ENTRY:\s*(OPTIMAL WINDOW|WINDOW OPEN|WINDOW CLOSING|NO WINDOW|OPPONENT WINDOW|FADE|COUNTER-SIGNAL)/i);
     d.entry = entryMatch ? entryMatch[1] : null;
     // Parse CONVICTION line
     const convMatch = text.match(/CONVICTION:\s*(DOMINANT|STRONG|EARNED|CONDITIONAL|NO ENTRY)/i);
@@ -3284,7 +3284,7 @@ function parseThesis(t){
 function renderConfidenceTable(){
   const el = document.getElementById('conf-table');
   if(!el) return;
-  const entryPriority = {'OPTIMAL WINDOW':0,'WINDOW OPEN':1,'WINDOW CLOSING':2,'NO WINDOW':3,'COUNTER-SIGNAL':4};
+  const entryPriority = {'OPTIMAL WINDOW':0,'OPPONENT WINDOW':0,'WINDOW OPEN':1,'WINDOW CLOSING':2,'NO WINDOW':3,'FADE':4,'COUNTER-SIGNAL':4};
   const rows = [];
   for(const g of games){
     const t = theses[g.id];
@@ -3411,10 +3411,10 @@ function renderConfidenceTable(){
     return lv.includes('dominant')?'var(--green)':lv.includes('strong')?'var(--g2)':lv.includes('earned')?'var(--yellow)':lv.includes('no edge')||lv.includes('wait')?'var(--red)':'var(--t2)';
   };
   const edgeStr = (e) => e===null||e===undefined?'':'<span style="color:'+(e>=5?'var(--green)':e>=1?'var(--yellow)':e>=0?'var(--t3)':'var(--red)')+'">'+(e>=0?'+':'')+e.toFixed(1)+'%</span>';
-  const entryColor = (e) => e==='OPTIMAL WINDOW'?'var(--green)':e==='WINDOW OPEN'?'var(--g2)':e==='WINDOW CLOSING'?'var(--yellow)':e==='COUNTER-SIGNAL'?'var(--red)':'var(--t3)';
+  const entryColor = (e) => e==='OPTIMAL WINDOW'?'var(--green)':e==='OPPONENT WINDOW'?'var(--green)':e==='WINDOW OPEN'?'var(--g2)':e==='WINDOW CLOSING'?'var(--yellow)':e==='FADE'?'var(--red)':e==='COUNTER-SIGNAL'?'var(--red)':'var(--t3)';
   const convColor = (c) => ({DOMINANT:'var(--green)',STRONG:'var(--g2)',EARNED:'var(--yellow)',CONDITIONAL:'var(--amber)'})[c]||'var(--t3)';
   const tsColor = (s) => s==='CONFIRMED'?'var(--green)':s==='DEVELOPING'?'var(--g2)':s==='CONTESTED'?'var(--amber)':s==='DENIED'?'var(--red)':'var(--t3)';
-  const entryClass = (e) => e==='OPTIMAL WINDOW'?'ct-optimal':e==='WINDOW OPEN'?'ct-window':e==='WINDOW CLOSING'?'ct-closing':e==='COUNTER-SIGNAL'?'ct-counter':'';
+  const entryClass = (e) => e==='OPTIMAL WINDOW'?'ct-optimal':e==='OPPONENT WINDOW'?'ct-optimal':e==='WINDOW OPEN'?'ct-window':e==='WINDOW CLOSING'?'ct-closing':e==='FADE'?'ct-counter':e==='COUNTER-SIGNAL'?'ct-counter':'';
   const liveCount = rows.filter(r=>r.state==='LIVE').length;
   const preCount = rows.filter(r=>r.state==='PRE').length;
   const finalCount = rows.filter(r=>r.state==='FINAL').length;
@@ -3492,10 +3492,10 @@ function renderConfidenceTable(){
     // Entry signal for highest FWP team
     let entryStr = '<span style="color:var(--t3)">&#8212;</span>';
     if(r.fwpTeamEntry){
-      const shortEntry = r.fwpTeamEntry.replace('WINDOW ','W/').replace('COUNTER-SIGNAL','COUNTER');
+      const shortEntry = r.fwpTeamEntry.replace('OPPONENT WINDOW','OPP W/').replace('WINDOW ','W/').replace('COUNTER-SIGNAL','FADE');
       entryStr = '<span style="color:'+entryColor(r.fwpTeamEntry)+'">'+esc(shortEntry)+'</span>';
     } else if(r.signal){
-      const sigCol = r.signal.startsWith('BUY')?'var(--green)':r.signal==='COUNTER'||r.signal==='COUNTER-SIGNAL'?'var(--red)':'var(--t3)';
+      const sigCol = r.signal.startsWith('BUY')?'var(--green)':r.signal==='FADE'||r.signal==='COUNTER'||r.signal==='COUNTER-SIGNAL'?'var(--red)':'var(--t3)';
       entryStr = '<span style="color:'+sigCol+'">'+esc(r.signal)+'</span>';
     }
     // Thesis status
@@ -3822,7 +3822,7 @@ function renderCard(game){
         if(hv.edge > av.edge && hv.edge >= 5){ bestTeam = hA; bestEdge = hv; }
         else if(av.edge > hv.edge && av.edge >= 5){ bestTeam = aA; bestEdge = av; }
       }
-      var entryColor = pred.entry==='OPTIMAL WINDOW'?'var(--green)':pred.entry==='WINDOW OPEN'?'var(--g2)':pred.entry==='WINDOW CLOSING'?'var(--yellow)':pred.entry==='COUNTER-SIGNAL'?'var(--red)':'var(--t3)';
+      var entryColor = pred.entry==='OPTIMAL WINDOW'?'var(--green)':pred.entry==='OPPONENT WINDOW'?'var(--green)':pred.entry==='WINDOW OPEN'?'var(--g2)':pred.entry==='WINDOW CLOSING'?'var(--yellow)':pred.entry==='FADE'?'var(--red)':pred.entry==='COUNTER-SIGNAL'?'var(--red)':'var(--t3)';
       var convColor = ({DOMINANT:'var(--green)',STRONG:'var(--g2)',EARNED:'var(--yellow)',CONDITIONAL:'var(--amber)'})[pred.conviction]||'var(--t3)';
       // Edge history
       var eh = cs.edgeHistory.filter(function(e){return e.edgeNum!==null&&e.edgeNum!==undefined;});
@@ -3876,7 +3876,7 @@ function renderCard(game){
       }
 
       // Signal bar (entry + conviction + buy team)
-      var sigType = pred.signalType || (pred.entry==='OPTIMAL WINDOW'||pred.entry==='WINDOW OPEN'?(bestTeam?'BUY '+bestTeam:'WINDOW'):pred.entry==='COUNTER-SIGNAL'?'COUNTER':pred.entry==='NO WINDOW'?'NO VALUE':'PASS');
+      var sigType = pred.signalType || (pred.entry==='OPTIMAL WINDOW'||pred.entry==='WINDOW OPEN'||pred.entry==='OPPONENT WINDOW'?(bestTeam?'BUY '+bestTeam:'WINDOW'):pred.entry==='FADE'||pred.entry==='COUNTER-SIGNAL'?'FADE':pred.entry==='NO WINDOW'?'NO VALUE':'PASS');
       var sigNote = pred.signalNote || pred.prediction || '';
       var sigIcon = sigType.startsWith('BUY')?'&#9889; ':sigType==='NO VALUE'?'&#9675; ':sigType==='COUNTER'?'&#10005; ':'&#9675; ';
       var sigCol = sigType.startsWith('BUY')?'var(--green)':sigType==='COUNTER'?'var(--red)':'var(--t3)';
@@ -3918,7 +3918,7 @@ function renderCard(game){
       for(var ni=0;ni<nh.length;ni++){
         var ne = nh[ni];
         var nCtrlCol = ne.controlScore>=0.75?'var(--green)':ne.controlScore>=0.60?'var(--g2)':ne.controlScore>=0.45?'var(--yellow)':'var(--t3)';
-        var nEntCol = ne.entry==='OPTIMAL WINDOW'?'var(--green)':ne.entry==='WINDOW OPEN'?'var(--g2)':ne.entry==='WINDOW CLOSING'?'var(--yellow)':ne.entry==='COUNTER-SIGNAL'?'var(--red)':'var(--t3)';
+        var nEntCol = ne.entry==='OPTIMAL WINDOW'?'var(--green)':ne.entry==='OPPONENT WINDOW'?'var(--green)':ne.entry==='WINDOW OPEN'?'var(--g2)':ne.entry==='WINDOW CLOSING'?'var(--yellow)':ne.entry==='FADE'?'var(--red)':ne.entry==='COUNTER-SIGNAL'?'var(--red)':'var(--t3)';
         var nLsCol = sustColor(ne.leadSust);
         var nTsCol = sustColor(ne.trailSust);
         var isLatest = ni===nh.length-1;
