@@ -4039,7 +4039,7 @@ function renderConfidenceTable(){
   }
   html += '</div>';
   if(!confCollapsed){
-  html += '<div class="ct-scroll"><table><tr><th style="text-align:center">SCORE</th><th style="text-align:center">SUST</th><th style="text-align:center">FWP</th><th style="text-align:center">EDGE</th><th style="text-align:center">ENTRY</th><th style="text-align:center">FLOOR</th><th style="text-align:center">WIN</th><th style="text-align:center">GAP</th><th style="text-align:center">THESIS</th></tr>';
+  html += '<div class="ct-scroll"><table><tr><th style="text-align:center;position:sticky;left:0;z-index:2;background:var(--c1);border-right:1px solid var(--b1)">SCORE</th><th style="text-align:center">SUST</th><th style="text-align:center">FWP</th><th style="text-align:center">EDGE</th><th style="text-align:center">ENTRY</th><th style="text-align:center">FLOOR</th><th style="text-align:center">WINDOW</th><th style="text-align:center">GAP</th><th style="text-align:center">THESIS</th></tr>';
   for(const r of rows){
     const isFinal = r.state==='FINAL';
     const rowClass = 'ct-row'+(isFinal?' ct-final':' '+entryClass(r.entry));
@@ -4121,7 +4121,7 @@ function renderConfidenceTable(){
     // Thesis status
     const tsStr = r.thesisStatus ? '<span style="color:'+tsColor(r.thesisStatus)+'">'+esc(r.thesisStatus)+'</span>' : '<span style="color:var(--t3)">&#8212;</span>';
     html += '<tr class="'+rowClass+'" style="cursor:pointer" onclick="document.getElementById(\'card-'+r.gameId+'\')?.scrollIntoView({behavior:\'smooth\',block:\'start\'})">'
-      + '<td style="text-align:center;white-space:nowrap;font-size:7px">'+scoreStr+'</td>'
+      + '<td style="text-align:center;white-space:nowrap;font-size:7px;position:sticky;left:0;z-index:1;background:var(--c1);border-right:1px solid var(--b1)">'+scoreStr+'</td>'
       + '<td style="font-size:5.5px;text-align:center;white-space:nowrap">'+sustStr+'</td>'
       + '<td style="font-size:7px;text-align:center;white-space:nowrap">'+fwpStr+'</td>'
       + '<td style="font-size:7px;text-align:center;white-space:nowrap">'+edgeDispStr+'</td>'
