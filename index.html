@@ -737,6 +737,11 @@ async function fetchSummary(game){
     // Capture quarter snapshot (rolling window infrastructure)
     captureSnapshot(game);
 
+    // Auto-fetch PBP silently on every poll (feeds shot zone data to sustainability)
+    if(getState(game)==='LIVE' && !cs.pbpLoading){
+      fetchPBPQuiet(game.id);
+    }
+
     // Check if data changed meaningfully
     const fp = fingerprint(data);
     const changed = fp !== cs.lastFingerprint;
@@ -833,15 +838,12 @@ function fingerprint(summary){
     h.turnovers, a.turnovers,
     h.steals, a.steals,
     h.offensive_rebounds, a.offensive_rebounds,
-    h.points_in_the_paint||h.points_in_paint, a.points_in_the_paint||a.points_in_paint,
+    h.points_in_the_paint, a.points_in_the_paint,
     h.free_throws_att, a.free_throws_att,
     h.blocks, a.blocks,
     h.field_goals_made, a.field_goals_made,
     h.assists, a.assists,
     summary.home?.bonus?1:0, summary.away?.bonus?1:0,
-    h.foulouts||0, a.foulouts||0,
-    summary.lead_changes||0,
-    h.most_unanswered?.points||0, a.most_unanswered?.points||0,
   ].join('|');
 }
 
@@ -868,13 +870,6 @@ async function triggerAnalysis(game){
       dashNote = `\n\nDASHBOARD COMPUTED SCORES (simplified math):
 I1:${dashInd.I1.score} (${dashInd.I1.leader}) I2:${dashInd.I2.score} (${dashInd.I2.leader}) I3:${dashInd.I3.score} (${dashInd.I3.leader}) I4:${dashInd.I4.score} (${dashInd.I4.leader}) I5:${dashInd.I5.score} (${dashInd.I5.leader})
 Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${dashInd.dataQuality}`;
-      if(dashInd.gameMeta){
-        const m = dashInd.gameMeta;
-        dashNote += `\nGAME META: LC:${m.leadChanges} TT:${m.timesTied} Foulouts:${m.hFoulouts}/${m.aFoulouts} TS:${m.hTS}/${m.aTS} A/TO:${m.hATO}/${m.aATO} EGS:${m.hEGS}/${m.aEGS}`;
-        if(m.hRun||m.aRun) dashNote += ` Runs:${m.hRun?.points||0}/${m.aRun?.points||0}`;
-        if(m.hTimeLead||m.aTimeLead) dashNote += ` TimeLead:${m.hTimeLead||'?'}/${m.aTimeLead||'?'}`;
-        if(m.hTimeouts!=null||m.aTimeouts!=null) dashNote += ` TOrem:${m.hTimeouts??'?'}/${m.aTimeouts??'?'}`;
-      }
     }
 
     const summaryPayload = isBDL ? game.bdlData : game.summary;
@@ -1285,6 +1280,27 @@ async function fetchPBP(gameId){
   }finally{
     cs.pbpLoading = false;
     renderCard(game);
+  }
+}
+
+// Silent PBP fetch — runs every poll, no UI flicker
+async function fetchPBPQuiet(gameId){
+  if(gameId === DEMO_ID) return;
+  const cs = cardState[gameId]; if(!cs) return;
+  const game = games.find(g=>g.id===gameId); if(!game) return;
+  if(cs.pbpLoading) return;
+  cs.pbpLoading = true;
+  try{
+    const data = await sr('pbp', {game_id: gameId});
+    const audit = parsePBP(data, game);
+    cs.pbpAudit = audit;
+    cs.pbpTime = new Date();
+    cs.pbpPeriod = game.period || 0;
+    persistDepth(gameId, cs);
+  }catch(e){
+    // Silent fail — PBP is optional enrichment
+  }finally{
+    cs.pbpLoading = false;
   }
 }
 
@@ -1947,10 +1963,12 @@ function parseSonnetDecision(text){
     // Parse Sustainability line
     const sustMatch = text.match(/Sustainability:\s*(.+)/i);
     d.sustainability = sustMatch ? sustMatch[1].trim() : null;
-    // Parse Lead Source line
-    const leadSrcMatch = text.match(/Lead Source:\s*(STRUCTURAL|VARIANCE|MIXED|EVEN)\s*(?:[—–-]\s*(.+))?/i);
-    d.leadSource = leadSrcMatch ? leadSrcMatch[1].toUpperCase() : null;
-    d.leadSourceNote = leadSrcMatch && leadSrcMatch[2] ? leadSrcMatch[2].trim() : null;
+    // Parse Scoring / Lead Source line (new: STRUCTURAL|IDENTITY|HOT|MIXED|VOLATILE|EVEN, old: STRUCTURAL|VARIANCE|MIXED|EVEN)
+    const scoringMatch = text.match(/(?:Scoring|Lead Source):\s*(STRUCTURAL|IDENTITY|HOT|MIXED|VOLATILE|VARIANCE|EVEN)\s*(?:[—–-]\s*(.+))?/i);
+    d.leadSource = scoringMatch ? scoringMatch[1].toUpperCase() : null;
+    d.leadSourceNote = scoringMatch && scoringMatch[2] ? scoringMatch[2].trim() : null;
+    // Map old VARIANCE to VOLATILE for consistency
+    if(d.leadSource === 'VARIANCE') d.leadSource = 'VOLATILE';
     // Parse Team Quality line
     const tqMatch = text.match(/Team Quality:\s*(.+)/i);
     d.teamQuality = tqMatch ? tqMatch[1].trim() : null;
@@ -2663,15 +2681,13 @@ function compute(game){
     detail:`${hA} ${hs.steals||0}stl ${hs.offensive_rebounds||0}or ${hs.turnovers||0}to | ${aA} ${as.steals||0}stl ${as.offensive_rebounds||0}or ${as.turnovers||0}to | Conv:${hConv}–${aConv}${chaosNote}`};
 
   // I2 — Rim Pressure & Foul
-  const hPaint = hs.points_in_the_paint||hs.points_in_paint||0, aPaint = as.points_in_the_paint||as.points_in_paint||0;
+  const hPaint = hs.points_in_the_paint||0, aPaint = as.points_in_the_paint||0;
   const hAtRim = hs.field_goals_at_rim_att||0, aAtRim = as.field_goals_at_rim_att||0;
   const hFTA = hs.free_throws_att||0, aFTA = as.free_throws_att||0;
   const hBlk = hs.blocks||0, aBlk = as.blocks||0;
-  const hFD = hs.fouls_drawn||0, aFD = as.fouls_drawn||0;
   const rimScore = (hPaint+hAtRim+hFTA+hBlk)-(aPaint+aAtRim+aFTA+aBlk);
-  const hBonusTag = H?.double_bonus?'⬤⬤':H?.bonus?'⬤':'', aBonusTag = A?.double_bonus?'⬤⬤':A?.bonus?'⬤':'';
   const I2={score:rimScore>10?1:rimScore<-10?0:.5, leader:rimScore>10?hA:rimScore<-10?aA:'EVEN',
-    detail:`Paint:${hPaint}–${aPaint} AtRim:${hs.field_goals_at_rim_made||0}/${hAtRim}–${as.field_goals_at_rim_made||0}/${aAtRim} FTA:${hFTA}–${aFTA} FD:${hFD}–${aFD} BLK:${hBlk}–${aBlk}${hBonusTag?' '+hA+hBonusTag:''}${aBonusTag?' '+aA+aBonusTag:''}`};
+    detail:`Paint:${hPaint}–${aPaint} AtRim:${hs.field_goals_at_rim_made||0}/${hAtRim}–${as.field_goals_at_rim_made||0}/${aAtRim} FTA:${hFTA}–${aFTA} BLK:${hBlk}–${aBlk}${H?.bonus?' '+hA+'⬤':''}${A?.bonus?' '+aA+'⬤':''}`};
 
   // I3 — Shot Quality & Creation (enhanced with PBP zone data)
   const hFGA=hs.field_goals_att||1, aFGA=as.field_goals_att||1;
@@ -2693,34 +2709,17 @@ function compute(game){
   const qDs = periods.map(p=>(p.home_points||0)-(p.away_points||0));
   const trend = qDs.length>=2 ? qDs[qDs.length-1]-qDs[0] : 0;
   const hBigLead = hs.biggest_lead||0, aBigLead = as.biggest_lead||0;
-  const hBench = hs.bench_points||0, aBench = as.bench_points||0;
-  const hRun = hs.most_unanswered?.points||0, aRun = as.most_unanswered?.points||0;
-  const hTimeLead = hs.time_leading||'', aTimeLead = as.time_leading||'';
-  const lc = s.lead_changes||0, tt = s.times_tied||0;
-  const hTO_rem = H?.remaining_timeouts, aTO_rem = A?.remaining_timeouts;
   const i4 = (hBigLead>aBigLead+4?1:hBigLead<aBigLead-4?-1:0)+(trend>2?1:trend<-2?-1:0);
-  let i4detail = `BigLead:${hBigLead}–${aBigLead} Bench:${hBench}–${aBench} Δ:${hS>aS?'+':''}${hS-aS} trend:${trend>0?'+':''}${trend} ${qDs.map((d,i)=>'Q'+(i+1)+':'+(d>0?'+':'')+d).join(' ')}`;
-  if(hRun||aRun) i4detail += ` | runs:${hA}${hRun} ${aA}${aRun}`;
-  if(hTimeLead||aTimeLead) i4detail += ` | lead:${hA}${hTimeLead} ${aA}${aTimeLead}`;
-  if(lc||tt) i4detail += ` | LC:${lc} TT:${tt}`;
-  if(hTO_rem!=null||aTO_rem!=null) i4detail += ` | TO:${hTO_rem!=null?hA+hTO_rem:'?'}/${aTO_rem!=null?aA+aTO_rem:'?'}`;
-  const I4={score:i4>0?1:i4===0?.5:0, leader:i4>0?hA:i4<0?aA:'EVEN', detail:i4detail};
+  const I4={score:i4>0?1:i4===0?.5:0, leader:i4>0?hA:i4<0?aA:'EVEN',
+    detail:`BigLead:${hBigLead}–${aBigLead} Δ:${hS>aS?'+':''}${hS-aS} trend:${trend>0?'+':''}${trend} ${qDs.map((d,i)=>'Q'+(i+1)+':'+(d>0?'+':'')+d).join(' ')}`};
 
   // I5 — Tempo & Efficiency
   const hOPPP = hs.offensive_points_per_possession||0, aOPPP = as.offensive_points_per_possession||0;
   const hDPPP = hs.defensive_points_per_possession||0, aDPPP = as.defensive_points_per_possession||0;
   const effD = (hOPPP-aDPPP)-(aOPPP-hDPPP);
   const hPoss = hs.possessions||0, aPoss = as.possessions||0;
-  const hTS = hs.true_shooting_pct||0, aTS = as.true_shooting_pct||0;
-  const hATO = hs.assists_turnover_ratio||0, aATO = as.assists_turnover_ratio||0;
-  const hTransO = hs.transition_offense, aTransO = as.transition_offense;
-  const hTransD = hs.transition_defense, aTransD = as.transition_defense;
-  const hEGS = hs.efficiency_game_score||0, aEGS = as.efficiency_game_score||0;
-  let i5detail = `OPPP:${hOPPP.toFixed(2)}–${aOPPP.toFixed(2)} DPPP:${hDPPP.toFixed(2)}–${aDPPP.toFixed(2)} NetΔ:${effD>0?'+':''}${effD.toFixed(3)} Poss:${hPoss}–${aPoss}`;
-  i5detail += ` TS:${hTS.toFixed?hTS.toFixed(1):hTS}–${aTS.toFixed?aTS.toFixed(1):aTS} A/TO:${hATO.toFixed?hATO.toFixed(1):hATO}–${aATO.toFixed?aATO.toFixed(1):aATO}`;
-  if(hEGS||aEGS) i5detail += ` EGS:${hEGS.toFixed?hEGS.toFixed(1):hEGS}–${aEGS.toFixed?aEGS.toFixed(1):aEGS}`;
-  if(hTransO!=null&&aTransO!=null) i5detail += ` TransO:${hTransO}–${aTransO} TransD:${hTransD||'?'}–${aTransD||'?'}`;
-  const I5={score:effD>0.08?1:effD<-0.08?0:.5, leader:effD>0.08?hA:effD<-0.08?aA:'EVEN', detail:i5detail};
+  const I5={score:effD>0.08?1:effD<-0.08?0:.5, leader:effD>0.08?hA:effD<-0.08?aA:'EVEN',
+    detail:`OPPP:${hOPPP.toFixed(2)}–${aOPPP.toFixed(2)} DPPP:${hDPPP.toFixed(2)}–${aDPPP.toFixed(2)} NetΔ:${effD>0?'+':''}${effD.toFixed(3)} Poss:${hPoss}–${aPoss}`};
 
   const raw = I1.score*W.I1 + I2.score*W.I2 + I3.score*W.I3 + I4.score*W.I4 + I5.score*W.I5;
   const controlHome = raw>=.5, cTeam = controlHome?hA:aA;
@@ -2743,14 +2742,15 @@ function compute(game){
   let clientSust = null;
   if(bl && bl.built){
     const tracking = cardState[game.id]?.trackingData;
-    const hSust = computeSustainabilityClient(H, bl, hA, 'home', tracking);
-    const aSust = computeSustainabilityClient(A, bl, aA, 'away', tracking);
+    const pbpA = cardState[game.id]?.pbpAudit;
+    const hSust = computeSustainabilityClient(H, bl, hA, 'home', tracking, pbpA);
+    const aSust = computeSustainabilityClient(A, bl, aA, 'away', tracking, pbpA);
     clientSust = {home:hSust, away:aSust};
     cardState[game.id].clientSustainability = clientSust;
   }
 
-  // Client-side lead composition
-  const clientLC = computeLeadCompositionClient(game);
+  // Client-side lead composition (cross-references sustainability)
+  const clientLC = computeLeadCompositionClient(game, clientSust);
   if(clientLC) cardState[game.id].clientLeadComposition = clientLC;
 
   // Rolling window
@@ -2779,19 +2779,7 @@ function compute(game){
   // Trajectory
   const traj = buildTrajectory(game, hA, aA, hs, as, H, A, hS, aS, qDs, periods);
 
-  // Game-level metadata for analysis consumers
-  const gameMeta = {
-    leadChanges:s.lead_changes||0, timesTied:s.times_tied||0,
-    hRun:hs.most_unanswered, aRun:as.most_unanswered,
-    hTimeLead:hs.time_leading, aTimeLead:as.time_leading,
-    hFoulouts:hs.foulouts||0, aFoulouts:as.foulouts||0,
-    hTS:hs.true_shooting_pct||0, aTS:as.true_shooting_pct||0,
-    hATO:hs.assists_turnover_ratio||0, aATO:as.assists_turnover_ratio||0,
-    hEGS:hs.efficiency_game_score||0, aEGS:as.efficiency_game_score||0,
-    hTimeouts:H?.remaining_timeouts, aTimeouts:A?.remaining_timeouts,
-  };
-
-  return {I1,I2,I3,I4,I5, score, controlTeam:cTeam, dataQuality:'FULL', traj, pythNote, clientSust, gameMeta};
+  return {I1,I2,I3,I4,I5, score, controlTeam:cTeam, dataQuality:'FULL', traj, pythNote, clientSust};
 }
 
 function buildTrajectory(game, hA, aA, hs, as, H, A, hS, aS, qDs, periods){
@@ -2883,32 +2871,20 @@ function buildTrajectory(game, hA, aA, hs, as, H, A, hS, aS, qDs, periods){
   // T4 — Foul Gate (now available via SR per-player data)
   let t4sig = {key:'T4',w:0,team:null,color:'#3e3e48',text:'No foul crisis detected'};
   if(H?.players && A?.players){
-    // Check actual foulouts first (hard structural shift)
-    const hFoulouts = (H.players||[]).filter(pl=>pl.fouled_out||pl.statistics?.personal_fouls>=6);
-    const aFoulouts = (A.players||[]).filter(pl=>pl.fouled_out||pl.statistics?.personal_fouls>=6);
-    if(hFoulouts.length>0){
-      const names = hFoulouts.map(pl=>pl.full_name||'?').join(', ');
-      t4sig={key:'T4',w:2,team:aA,color:'#ff6b6b',text:names+' FOULED OUT — '+hA+' lost rotation piece'+(hFoulouts.length>1?'s':'')};
-    } else if(aFoulouts.length>0){
-      const names = aFoulouts.map(pl=>pl.full_name||'?').join(', ');
-      t4sig={key:'T4',w:2,team:hA,color:'#ff6b6b',text:names+' FOULED OUT — '+aA+' lost rotation piece'+(aFoulouts.length>1?'s':'')};
-    } else {
-      // Check foul risk (existing logic)
-      const allPlayers = [...(H.players||[]).map(pl=>({...pl,team:hA})),...(A.players||[]).map(pl=>({...pl,team:aA}))];
-      for(const pl of allPlayers){
-        const pf = pl.statistics?.personal_fouls||0;
-        if((p<=1&&pf>=2)||(p===2&&pf>=3)||(p===3&&pf>=4)){
-          const level=p<=1?'WATCH':p===2?'CONSTRAINT':'CRISIS';
-          t4sig={key:'T4',w:1,team:pl.team===hA?aA:hA,color:'#ff6b6b',text:(pl.full_name||'?')+' '+pf+' fouls Q'+p+' — '+level};
-          break;
-        }
+    const allPlayers = [...(H.players||[]).map(pl=>({...pl,team:hA})),...(A.players||[]).map(pl=>({...pl,team:aA}))];
+    for(const pl of allPlayers){
+      const pf = pl.statistics?.personal_fouls||0;
+      if((p<=1&&pf>=2)||(p===2&&pf>=3)||(p===3&&pf>=4)){
+        const level=p<=1?'WATCH':p===2?'CONSTRAINT':'CRISIS';
+        t4sig={key:'T4',w:1,team:pl.team===hA?aA:hA,color:'#ff6b6b',text:(pl.full_name||'?')+' '+pf+' fouls Q'+p+' — '+level};
+        break;
       }
     }
   }
   sigs.push(t4sig);
 
   // T5 — Interior Trend (enhanced with PBP at-rim context)
-  const hPaint=hs.points_in_the_paint||hs.points_in_paint||0, aPaint=as.points_in_the_paint||as.points_in_paint||0;
+  const hPaint=hs.points_in_the_paint||0, aPaint=as.points_in_the_paint||0;
   if(Math.abs(hPaint-aPaint)>=8){
     const w=hPaint>aPaint?hA:aA;
     let t5detail=w+' paint +'+(Math.abs(hPaint-aPaint))+' ('+hPaint+'–'+aPaint+')';
@@ -2945,8 +2921,8 @@ function buildTrajectory(game, hA, aA, hs, as, H, A, hS, aS, qDs, periods){
       const hCloserCount = hOnCourt.filter(n=>hClosers.some(c=>n.includes(c)||c.includes(n))).length;
       const aCloserCount = aOnCourt.filter(n=>aClosers.some(c=>n.includes(c)||c.includes(n))).length;
       // Get combined +/- of on-court players
-      const hPM = (H.players||[]).filter(pl=>pl.on_court).reduce((s,pl)=>s+(pl.statistics?.pls_min||0),0);
-      const aPM = (A.players||[]).filter(pl=>pl.on_court).reduce((s,pl)=>s+(pl.statistics?.pls_min||0),0);
+      const hPM = (H.players||[]).filter(pl=>pl.on_court).reduce((s,pl)=>s+(pl.statistics?.plus_minus||0),0);
+      const aPM = (A.players||[]).filter(pl=>pl.on_court).reduce((s,pl)=>s+(pl.statistics?.plus_minus||0),0);
       if(hCloserCount>=4 && hPM>0){
         t7sig = {key:'T7',w:1,team:hA,color:'#a8ff78',text:hA+' closing '+hCloserCount+'/5 on floor (+'+ hPM+' combined) — sustained'};
       } else if(aCloserCount>=4 && aPM>0){
@@ -3246,7 +3222,7 @@ function extractStructuralContext(gameId){
 // ══════════════════════════════════════════════════════════════════════════════
 // CLIENT-SIDE SUSTAINABILITY AUDIT — Port of server-side analyze.js logic
 // ══════════════════════════════════════════════════════════════════════════════
-function computeSustainabilityClient(teamData, baselines, teamAlias, side, trackingData){
+function computeSustainabilityClient(teamData, baselines, teamAlias, side, trackingData, pbpAudit){
   if(!teamData || !baselines?.built) return null;
   const stats = teamData.statistics||{};
   const players = teamData.players||[];
@@ -3254,6 +3230,7 @@ function computeSustainabilityClient(teamData, baselines, teamAlias, side, track
   const teamFGA = stats.field_goals_att||1;
   const live3Pct = team3PA>0 ? (team3PM/team3PA*100) : 0;
   const seasonBaseline = baselines.teamSeason3Pct?.[side]||36.0;
+  console.log('SUST['+teamAlias+']:', 'team3PA='+team3PA, 'team3PM='+team3PM, 'FGA='+teamFGA, 'live3Pct='+live3Pct.toFixed(1), 'baseline='+seasonBaseline.toFixed(1), 'statsKeys='+Object.keys(stats).slice(0,8).join(','));
 
   // Auto-override: shooting at or below baseline → LOCKED
   if(live3Pct <= seasonBaseline+2) return {tier:'LOCKED', reason:'Shooting at/below baseline ('+live3Pct.toFixed(0)+'% vs '+seasonBaseline.toFixed(0)+'% szn)', personnel:'N/A', regression:'N/A', shotType:'N/A', autoLocked:true};
@@ -3308,30 +3285,67 @@ function computeSustainabilityClient(teamData, baselines, teamAlias, side, track
   else if(regressionProb>=35) regressionGrade='LOW';
   else regressionGrade='MINIMAL';
 
-  // Shot type proxy (25%)
+  // Shot quality layer (25%) — uses PBP zone data when available, falls back to assist-ratio proxy
   const teamAst = stats.assists||0, teamFGM = stats.field_goals_made||1;
   const assistRatio = teamAst/teamFGM*100;
   let shotTypeGrade = 'MIXED';
+  let shotTypeNote = '';
   const tracking = trackingData?.[side==='home'?'home':'away'] || trackingData;
-  if(tracking?.catchAndShoot){
+
+  // Check for PBP zone data (auto-fetched every poll)
+  const teamPbp = pbpAudit ? pbpAudit[side] : null;
+  if(teamPbp && teamPbp.threes && teamPbp.threes.att >= 5){
+    const cornerAtt = teamPbp.threes.corner?.att||0;
+    const aboveAtt = teamPbp.threes.above?.att||0;
+    const total3PA = teamPbp.threes.att||1;
+    const cornerPct = cornerAtt/total3PA*100;
+    const assisted = teamPbp.threes.assisted||0;
+    const assistedPct = teamPbp.threes.made>0 ? assisted/teamPbp.threes.made*100 : 0;
+    // Per-player unassisted above-break
+    const unassistedAbove = (teamPbp.threes.byPlayer||[]).reduce(function(acc, p){
+      return acc + ((p.att||0) - (p.assisted||0));
+    }, 0);
+    const unassistedAbovePct = total3PA > 0 ? unassistedAbove/total3PA*100 : 0;
+
+    if(cornerPct >= 35 && assistedPct >= 60){
+      shotTypeGrade = 'SCHEME'; // Most sustainable — high corner volume, scheme-driven
+      shotTypeNote = 'Corner '+cornerPct.toFixed(0)+'% of 3PA, '+assistedPct.toFixed(0)+'% assisted — scheme-driven';
+    } else if(assistedPct >= 60 && cornerPct >= 20){
+      shotTypeGrade = 'DURABLE'; // Good process, mix of zones
+      shotTypeNote = assistedPct.toFixed(0)+'% assisted, corner '+cornerPct.toFixed(0)+'% — structured creation';
+    } else if(cornerPct < 15 && unassistedAbovePct >= 35){
+      shotTypeGrade = 'FRAGILE'; // Pull-up heavy, above-break, unassisted
+      shotTypeNote = 'Above-break dominant, '+unassistedAbovePct.toFixed(0)+'% unassisted — pull-up heavy';
+    } else if(assistedPct >= 50){
+      shotTypeGrade = 'MIXED';
+      shotTypeNote = assistedPct.toFixed(0)+'% assisted, corner '+cornerPct.toFixed(0)+'% — moderate process';
+    } else {
+      shotTypeGrade = 'FRAGILE';
+      shotTypeNote = 'Low assisted ('+assistedPct.toFixed(0)+'%), corner only '+cornerPct.toFixed(0)+'%';
+    }
+  } else if(tracking?.catchAndShoot){
+    // Fallback: tracking baselines (pre-game data)
     const casEfg = tracking.catchAndShoot.efg||tracking.catchAndShoot.fg3pct||null;
     const puEfg = tracking.pullUp?.efg||tracking.pullUp?.fg3pct||null;
     if(casEfg!==null && puEfg!==null){
-      if(assistRatio>=60 && casEfg>=38) shotTypeGrade='DURABLE';
-      else if(assistRatio<45 && puEfg<35) shotTypeGrade='FRAGILE';
-      else if(assistRatio>=50) shotTypeGrade='MIXED';
-      else shotTypeGrade='FRAGILE';
+      if(assistRatio>=60 && casEfg>=38){ shotTypeGrade='DURABLE'; shotTypeNote='High ast% ('+assistRatio.toFixed(0)+'%) + C&S eFG '+casEfg+'%'; }
+      else if(assistRatio<45 && puEfg<35){ shotTypeGrade='FRAGILE'; shotTypeNote='Low ast% ('+assistRatio.toFixed(0)+'%) + weak pull-up ('+puEfg+'%)'; }
+      else if(assistRatio>=50){ shotTypeGrade='MIXED'; shotTypeNote='Moderate ast% ('+assistRatio.toFixed(0)+'%)'; }
+      else{ shotTypeGrade='FRAGILE'; shotTypeNote='Low ast% ('+assistRatio.toFixed(0)+'%)'; }
     } else {
-      if(assistRatio>=65) shotTypeGrade='DURABLE';
-      else if(assistRatio<45) shotTypeGrade='FRAGILE';
+      if(assistRatio>=65){ shotTypeGrade='DURABLE'; shotTypeNote='High ast% ('+assistRatio.toFixed(0)+'%)'; }
+      else if(assistRatio<45){ shotTypeGrade='FRAGILE'; shotTypeNote='Low ast% ('+assistRatio.toFixed(0)+'%)'; }
+      else{ shotTypeGrade='MIXED'; shotTypeNote='Moderate ast% ('+assistRatio.toFixed(0)+'%)'; }
     }
   } else {
-    if(assistRatio>=65) shotTypeGrade='DURABLE';
-    else if(assistRatio<45) shotTypeGrade='FRAGILE';
+    // Bare fallback: assist ratio only
+    if(assistRatio>=65){ shotTypeGrade='DURABLE'; shotTypeNote='High ast% ('+assistRatio.toFixed(0)+'%)'; }
+    else if(assistRatio<45){ shotTypeGrade='FRAGILE'; shotTypeNote='Low ast% ('+assistRatio.toFixed(0)+'%)'; }
+    else{ shotTypeGrade='MIXED'; shotTypeNote='Moderate ast% ('+assistRatio.toFixed(0)+'%)'; }
   }
 
   // Composite — 5 tiers
-  const tierMap = {'LOCKED':5,'DURABLE':4,'MIXED':3,'FRAGILE':2,'UNSUSTAINABLE':1,'HIGH':1,'MODERATE':2,'LOW':4,'MINIMAL':5};
+  const tierMap = {'LOCKED':5,'SCHEME':5,'DURABLE':4,'MIXED':3,'FRAGILE':2,'UNSUSTAINABLE':1,'HIGH':1,'MODERATE':2,'LOW':4,'MINIMAL':5};
   const pScore = tierMap[personnelGrade]||3;
   const rScore = tierMap[regressionGrade]||3;
   const sScore = tierMap[shotTypeGrade]||3;
@@ -3351,14 +3365,15 @@ function computeSustainabilityClient(teamData, baselines, teamAlias, side, track
   else if(regressionProb>=70) reason = 'High regression probability ('+regressionProb+'%) — small sample';
   else reason = 'P:'+personnelGrade+' R:'+regressionGrade+' S:'+shotTypeGrade;
 
-  return {tier, reason, personnel:personnelGrade, regression:regressionGrade, shotType:shotTypeGrade,
-    live3Pct:live3Pct.toFixed(1), seasonBaseline:seasonBaseline.toFixed(1), hotPlayers, autoLocked:false};
+  return {tier, reason, personnel:personnelGrade, regression:regressionGrade, shotType:shotTypeGrade, shotTypeNote:shotTypeNote||'',
+    live3Pct:live3Pct.toFixed(1), seasonBaseline:seasonBaseline.toFixed(1), hotPlayers, autoLocked:false,
+    _debug:{team3PA, team3PM, assistRatio:assistRatio.toFixed(0), composite:composite.toFixed(2), pScore, rScore, sScore}};
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
 // CLIENT-SIDE LEAD COMPOSITION — pure arithmetic on game summary fields
 // ══════════════════════════════════════════════════════════════════════════════
-function computeLeadCompositionClient(game){
+function computeLeadCompositionClient(game, sustData){
   const s = game.summary;
   if(!s || !s.home || !s.away) return null;
   const hS = s.home.statistics||{}, aS = s.away.statistics||{};
@@ -3367,7 +3382,6 @@ function computeLeadCompositionClient(game){
 
   function breakdown(stats, total){
     var rawPaint = stats.points_in_the_paint||0;
-    // SR sometimes delays points_in_the_paint population — use at-rim makes × 2 as floor proxy
     var atRimPts = (stats.field_goals_at_rim_made||0)*2;
     const paint = Math.max(rawPaint, atRimPts);
     const ft = stats.free_throws_made||0;
@@ -3393,27 +3407,54 @@ function computeLeadCompositionClient(game){
   const absMargin = Math.abs(margin);
   const leadTeam = margin>=0 ? hA : aA;
   const trailTeam = margin>=0 ? aA : hA;
-  const structuralMargin = hB.structural - aB.structural; // positive = home structural edge
+  const structuralMargin = hB.structural - aB.structural;
   const varianceMargin = hB.variance - aB.variance;
-  // Express margins relative to lead team
   const leadStructural = margin>=0 ? structuralMargin : -structuralMargin;
   const leadVariance = margin>=0 ? varianceMargin : -varianceMargin;
 
+  // Get lead team's sustainability tier
+  const leadIsHome = margin>=0;
+  const leadSust = sustData ? (leadIsHome ? sustData.home : sustData.away) : null;
+  const leadTier = (leadSust?.tier||'').toUpperCase();
+
+  // New 6-tier classification using sustainability cross-reference
+  let classification = 'MIXED';
   let durability = '';
+
   if(absMargin <= 2){
+    classification = 'EVEN';
     durability = 'EVEN — margin too small to classify';
-  } else if(leadStructural >= absMargin * 0.65){
-    durability = leadTeam+' lead is STRUCTURALLY SOURCED — paint/FT production drives margin';
-  } else if(leadVariance >= absMargin * 0.65){
-    durability = leadTeam+' lead is VARIANCE SOURCED — 3PT/mid production drives margin while structural favors '+(leadStructural<0?trailTeam:leadTeam)+' ('+(leadStructural<0?'+'+Math.abs(leadStructural):'+'+leadStructural)+')';
+  } else if(leadStructural >= absMargin * 0.6){
+    classification = 'STRUCTURAL';
+    durability = leadTeam+' lead is STRUCTURAL — paint/FT drives margin (+'+Math.abs(leadStructural)+')';
+  } else if(leadVariance >= absMargin * 0.6){
+    // 3PT/mid drives the margin — classification depends on sustainability
+    if(leadTier === 'LOCKED' || leadTier === 'LOCKED IN'){
+      classification = 'IDENTITY';
+      durability = leadTeam+' lead is IDENTITY — perimeter production at season baseline ('+leadTier+'). This is their offensive identity, not variance.';
+    } else if(leadTier === 'DURABLE'){
+      classification = 'HOT';
+      durability = leadTeam+' lead is HOT — above baseline but credible shooters with good process ('+leadTier+'). Elevated but sustainable.';
+    } else if(leadTier === 'MIXED'){
+      classification = 'MIXED';
+      durability = 'MIXED — 3PT/mid drives margin with uncertain sustainability. Structural favors '+(leadStructural<0?trailTeam:leadTeam)+' ('+(leadStructural<0?'+'+Math.abs(leadStructural):'+'+leadStructural)+')';
+    } else if(leadTier === 'FRAGILE' || leadTier === 'UNSUSTAINABLE'){
+      classification = 'VOLATILE';
+      durability = leadTeam+' lead is VOLATILE — perimeter production is '+leadTier+'. Structural favors '+(leadStructural<0?trailTeam:leadTeam)+' ('+(leadStructural<0?'+'+Math.abs(leadStructural):'+'+leadStructural)+'). Entry signal for trailing team.';
+    } else {
+      // TOO EARLY, empty, null, or unknown tier — default to MIXED not VOLATILE
+      classification = 'MIXED';
+      durability = 'MIXED — 3PT/mid drives margin but sustainability data insufficient'+(leadTier?' ('+leadTier+')':'')+'.';
+    }
   } else {
+    classification = 'MIXED';
     durability = 'MIXED — no single source dominates margin';
   }
 
   return {
     home:hB, away:aB, margin, absMargin, leadTeam, trailTeam,
     structuralMargin:leadStructural, varianceMargin:leadVariance,
-    durability
+    durability, classification
   };
 }
 
@@ -4907,7 +4948,8 @@ function renderCard(game){
     if(lc){
       var lcStructColor = lc.structuralMargin > 0 ? 'var(--green)' : lc.structuralMargin < 0 ? 'var(--red)' : 'var(--t3)';
       var lcVarColor = lc.varianceMargin > 0 ? 'var(--amber)' : lc.varianceMargin < 0 ? 'var(--green)' : 'var(--t3)';
-      var lcDurColor = lc.durability.includes('STRUCTURALLY SOURCED') ? 'var(--green)' : lc.durability.includes('VARIANCE SOURCED') ? 'var(--amber)' : 'var(--t2)';
+      var lcClass = lc.classification||'';
+      var lcDurColor = lcClass==='STRUCTURAL'?'var(--green)':lcClass==='IDENTITY'?'var(--green)':lcClass==='HOT'?'var(--g2)':lcClass==='VOLATILE'?'var(--red)':lcClass==='EVEN'?'var(--t3)':'var(--t2)';
       html+='<div style="padding:6px 10px;border-top:1px solid var(--b1)">';
       html+=_secHdr(id,'sc',cs,'SCORING COMPOSITION',(lcIsClient?' <span style="color:var(--t3);letter-spacing:0">(client-side)</span>':''));
       if(_secOpen(cs,'sc')){
@@ -4947,7 +4989,7 @@ function renderCard(game){
       html+='</div>';
     } else if(pred && pred.leadSource) {
       // Fallback: show Sonnet's Lead Source line when no server-side composition data
-      var lsColor = pred.leadSource==='STRUCTURAL'?'var(--green)':pred.leadSource==='VARIANCE'?'var(--amber)':pred.leadSource==='EVEN'?'var(--t3)':'var(--t2)';
+      var lsColor = pred.leadSource==='STRUCTURAL'?'var(--green)':pred.leadSource==='IDENTITY'?'var(--green)':pred.leadSource==='HOT'?'var(--g2)':pred.leadSource==='VOLATILE'?'var(--red)':pred.leadSource==='EVEN'?'var(--t3)':'var(--t2)';
       html+='<div style="padding:4px 10px;border-top:1px solid var(--b1)">';
       html+='<div style="font-size:6px"><span style="color:#a78bfa;letter-spacing:1px">LEAD:</span> <span style="color:'+lsColor+';font-weight:600">'+esc(pred.leadSource)+'</span>';
       if(pred.leadSourceNote) html+=' <span style="color:var(--t3)">&#8212; '+esc(pred.leadSourceNote)+'</span>';
@@ -5546,12 +5588,12 @@ function toggleDemo(){
           field_goals_at_rim_made:9, field_goals_at_rim_att:12, fouls:8,
         },
         players:[
-          {full_name:'Donovan Mitchell',on_court:true,starter:true,primary_position:'SG',average:{points:24.1,assists:4.5,rebounds:4.2,field_goals_made:8.5,field_goals_att:18.2,three_points_made:3.1,three_points_att:8.0,steals:1.4,usage_pct:29.5,minutes:33.5},statistics:{minutes:'18:11',points:14,assists:3,field_goals_made:5,field_goals_att:11,three_points_made:1,three_points_att:3,rebounds:2,turnovers:1,steals:2,pls_min:-5,personal_fouls:1}},
-          {full_name:'Darius Garland',on_court:true,starter:true,primary_position:'PG',average:{points:21.3,assists:6.8,rebounds:2.5,field_goals_made:7.6,field_goals_att:16.1,three_points_made:2.8,three_points_att:7.2,steals:1.1,usage_pct:26.8,minutes:32.0},statistics:{minutes:'17:44',points:10,assists:4,field_goals_made:4,field_goals_att:8,three_points_made:1,three_points_att:3,rebounds:1,turnovers:1,steals:1,pls_min:-4,personal_fouls:1}},
-          {full_name:'Evan Mobley',on_court:true,starter:true,primary_position:'PF',average:{points:18.2,assists:3.1,rebounds:9.4,field_goals_made:7.2,field_goals_att:13.5,three_points_made:0.8,three_points_att:2.2,steals:0.9,usage_pct:22.1,minutes:34.0},statistics:{minutes:'18:30',points:12,assists:2,field_goals_made:6,field_goals_att:9,three_points_made:0,three_points_att:1,rebounds:7,turnovers:1,steals:1,pls_min:-2,personal_fouls:2}},
-          {full_name:'Jarrett Allen',on_court:false,starter:true,primary_position:'C',average:{points:13.8,assists:1.5,rebounds:10.2,field_goals_made:5.8,field_goals_att:9.1,three_points_made:0.1,three_points_att:0.3,steals:0.5,usage_pct:16.2,minutes:30.0},statistics:{minutes:'14:15',points:6,assists:1,field_goals_made:3,field_goals_att:5,three_points_made:0,three_points_att:0,rebounds:5,turnovers:1,steals:0,pls_min:-6,personal_fouls:2}},
-          {full_name:'Max Strus',on_court:true,starter:true,primary_position:'SF',average:{points:11.5,assists:2.0,rebounds:3.8,field_goals_made:4.0,field_goals_att:9.5,three_points_made:2.2,three_points_att:6.1,steals:0.7,usage_pct:14.5,minutes:28.0},statistics:{minutes:'16:00',points:2,assists:1,field_goals_made:0,field_goals_att:2,three_points_made:1,three_points_att:3,rebounds:2,turnovers:0,steals:1,pls_min:-3,personal_fouls:1}},
-          {full_name:'Caris LeVert',on_court:false,starter:false,primary_position:'SG',average:{points:9.2,assists:2.5,rebounds:2.1,field_goals_made:3.4,field_goals_att:8.0,three_points_made:1.0,three_points_att:3.2,steals:0.6,usage_pct:18.0,minutes:20.0},statistics:{minutes:'8:20',points:2,assists:0,field_goals_made:0,field_goals_att:1,three_points_made:0,three_points_att:0,rebounds:1,turnovers:0,steals:0,pls_min:2,personal_fouls:1}},
+          {full_name:'Donovan Mitchell',on_court:true,starter:true,primary_position:'SG',average:{points:24.1,assists:4.5,rebounds:4.2,field_goals_made:8.5,field_goals_att:18.2,three_points_made:3.1,three_points_att:8.0,steals:1.4,usage_pct:29.5,minutes:33.5},statistics:{minutes:'18:11',points:14,assists:3,field_goals_made:5,field_goals_att:11,three_points_made:1,three_points_att:3,rebounds:2,turnovers:1,steals:2,plus_minus:-5,personal_fouls:1}},
+          {full_name:'Darius Garland',on_court:true,starter:true,primary_position:'PG',average:{points:21.3,assists:6.8,rebounds:2.5,field_goals_made:7.6,field_goals_att:16.1,three_points_made:2.8,three_points_att:7.2,steals:1.1,usage_pct:26.8,minutes:32.0},statistics:{minutes:'17:44',points:10,assists:4,field_goals_made:4,field_goals_att:8,three_points_made:1,three_points_att:3,rebounds:1,turnovers:1,steals:1,plus_minus:-4,personal_fouls:1}},
+          {full_name:'Evan Mobley',on_court:true,starter:true,primary_position:'PF',average:{points:18.2,assists:3.1,rebounds:9.4,field_goals_made:7.2,field_goals_att:13.5,three_points_made:0.8,three_points_att:2.2,steals:0.9,usage_pct:22.1,minutes:34.0},statistics:{minutes:'18:30',points:12,assists:2,field_goals_made:6,field_goals_att:9,three_points_made:0,three_points_att:1,rebounds:7,turnovers:1,steals:1,plus_minus:-2,personal_fouls:2}},
+          {full_name:'Jarrett Allen',on_court:false,starter:true,primary_position:'C',average:{points:13.8,assists:1.5,rebounds:10.2,field_goals_made:5.8,field_goals_att:9.1,three_points_made:0.1,three_points_att:0.3,steals:0.5,usage_pct:16.2,minutes:30.0},statistics:{minutes:'14:15',points:6,assists:1,field_goals_made:3,field_goals_att:5,three_points_made:0,three_points_att:0,rebounds:5,turnovers:1,steals:0,plus_minus:-6,personal_fouls:2}},
+          {full_name:'Max Strus',on_court:true,starter:true,primary_position:'SF',average:{points:11.5,assists:2.0,rebounds:3.8,field_goals_made:4.0,field_goals_att:9.5,three_points_made:2.2,three_points_att:6.1,steals:0.7,usage_pct:14.5,minutes:28.0},statistics:{minutes:'16:00',points:2,assists:1,field_goals_made:0,field_goals_att:2,three_points_made:1,three_points_att:3,rebounds:2,turnovers:0,steals:1,plus_minus:-3,personal_fouls:1}},
+          {full_name:'Caris LeVert',on_court:false,starter:false,primary_position:'SG',average:{points:9.2,assists:2.5,rebounds:2.1,field_goals_made:3.4,field_goals_att:8.0,three_points_made:1.0,three_points_att:3.2,steals:0.6,usage_pct:18.0,minutes:20.0},statistics:{minutes:'8:20',points:2,assists:0,field_goals_made:0,field_goals_att:1,three_points_made:0,three_points_att:0,rebounds:1,turnovers:0,steals:0,plus_minus:2,personal_fouls:1}},
         ],
         periods:[{number:1,scoring:{points:18}},{number:2,scoring:{points:28}}],
       },
@@ -5567,11 +5609,11 @@ function toggleDemo(){
           field_goals_at_rim_made:5, field_goals_at_rim_att:10, fouls:11,
         },
         players:[
-          {full_name:'Damian Lillard',on_court:true,starter:true,primary_position:'PG',average:{points:25.8,assists:7.2,rebounds:4.5,field_goals_made:8.8,field_goals_att:19.5,three_points_made:3.2,three_points_att:9.0,steals:0.9,usage_pct:31.2,minutes:35.5},statistics:{minutes:'19:00',points:22,assists:3,field_goals_made:7,field_goals_att:17,three_points_made:5,three_points_att:11,rebounds:2,turnovers:3,steals:1,pls_min:8,personal_fouls:1}},
-          {full_name:'Bobby Portis',on_court:true,starter:true,primary_position:'PF',average:{points:14.5,assists:1.8,rebounds:8.5,field_goals_made:5.5,field_goals_att:12.0,three_points_made:1.2,three_points_att:3.8,steals:0.6,usage_pct:18.5,minutes:26.0},statistics:{minutes:'17:30',points:12,assists:1,field_goals_made:5,field_goals_att:10,three_points_made:2,three_points_att:4,rebounds:5,turnovers:2,steals:1,pls_min:5,personal_fouls:3}},
-          {full_name:'Khris Middleton',on_court:false,starter:true,primary_position:'SF',average:{points:16.2,assists:4.1,rebounds:4.8,field_goals_made:6.0,field_goals_att:14.0,three_points_made:1.8,three_points_att:5.0,steals:0.7,usage_pct:24.5,minutes:29.0},statistics:{minutes:'16:00',points:8,assists:2,field_goals_made:3,field_goals_att:8,three_points_made:1,three_points_att:3,rebounds:2,turnovers:2,steals:0,pls_min:4,personal_fouls:2}},
-          {full_name:'Taurean Prince',on_court:true,starter:true,primary_position:'SF',average:{points:8.5,assists:1.2,rebounds:3.5,field_goals_made:3.1,field_goals_att:7.5,three_points_made:1.0,three_points_att:3.5,steals:0.5,usage_pct:12.0,minutes:22.0},statistics:{minutes:'15:00',points:8,assists:1,field_goals_made:3,field_goals_att:7,three_points_made:1,three_points_att:3,rebounds:3,turnovers:2,steals:1,pls_min:2,personal_fouls:2}},
-          {full_name:'Andre Jackson',on_court:true,starter:false,primary_position:'SG',average:{points:5.2,assists:1.5,rebounds:3.8,field_goals_made:2.0,field_goals_att:4.5,three_points_made:0.5,three_points_att:1.8,steals:0.8,usage_pct:8.5,minutes:18.0},statistics:{minutes:'12:00',points:6,assists:2,field_goals_made:3,field_goals_att:6,three_points_made:0,three_points_att:3,rebounds:3,turnovers:1,steals:0,pls_min:1,personal_fouls:3}},
+          {full_name:'Damian Lillard',on_court:true,starter:true,primary_position:'PG',average:{points:25.8,assists:7.2,rebounds:4.5,field_goals_made:8.8,field_goals_att:19.5,three_points_made:3.2,three_points_att:9.0,steals:0.9,usage_pct:31.2,minutes:35.5},statistics:{minutes:'19:00',points:22,assists:3,field_goals_made:7,field_goals_att:17,three_points_made:5,three_points_att:11,rebounds:2,turnovers:3,steals:1,plus_minus:8,personal_fouls:1}},
+          {full_name:'Bobby Portis',on_court:true,starter:true,primary_position:'PF',average:{points:14.5,assists:1.8,rebounds:8.5,field_goals_made:5.5,field_goals_att:12.0,three_points_made:1.2,three_points_att:3.8,steals:0.6,usage_pct:18.5,minutes:26.0},statistics:{minutes:'17:30',points:12,assists:1,field_goals_made:5,field_goals_att:10,three_points_made:2,three_points_att:4,rebounds:5,turnovers:2,steals:1,plus_minus:5,personal_fouls:3}},
+          {full_name:'Khris Middleton',on_court:false,starter:true,primary_position:'SF',average:{points:16.2,assists:4.1,rebounds:4.8,field_goals_made:6.0,field_goals_att:14.0,three_points_made:1.8,three_points_att:5.0,steals:0.7,usage_pct:24.5,minutes:29.0},statistics:{minutes:'16:00',points:8,assists:2,field_goals_made:3,field_goals_att:8,three_points_made:1,three_points_att:3,rebounds:2,turnovers:2,steals:0,plus_minus:4,personal_fouls:2}},
+          {full_name:'Taurean Prince',on_court:true,starter:true,primary_position:'SF',average:{points:8.5,assists:1.2,rebounds:3.5,field_goals_made:3.1,field_goals_att:7.5,three_points_made:1.0,three_points_att:3.5,steals:0.5,usage_pct:12.0,minutes:22.0},statistics:{minutes:'15:00',points:8,assists:1,field_goals_made:3,field_goals_att:7,three_points_made:1,three_points_att:3,rebounds:3,turnovers:2,steals:1,plus_minus:2,personal_fouls:2}},
+          {full_name:'Andre Jackson',on_court:true,starter:false,primary_position:'SG',average:{points:5.2,assists:1.5,rebounds:3.8,field_goals_made:2.0,field_goals_att:4.5,three_points_made:0.5,three_points_att:1.8,steals:0.8,usage_pct:8.5,minutes:18.0},statistics:{minutes:'12:00',points:6,assists:2,field_goals_made:3,field_goals_att:6,three_points_made:0,three_points_att:3,rebounds:3,turnovers:1,steals:0,plus_minus:1,personal_fouls:3}},
         ],
         periods:[{number:1,scoring:{points:32}},{number:2,scoring:{points:24}}],
       },
@@ -5705,7 +5747,8 @@ WATCH
     away:{team:'MIL',total:56,paint:18,ft:5,three:27,midOther:6,transition:5,pot:7,secondChance:3,structural:23,variance:33,structuralPct:41,variancePct:59},
     margin:-10, absMargin:10, leadTeam:'MIL', trailTeam:'CLE',
     structuralMargin:6, varianceMargin:-16,
-    durability:'MIL lead is VARIANCE SOURCED — 3PT variance (+16) drives margin while structural favors CLE (+6)',
+    durability:'MIL lead is VOLATILE — perimeter production FRAGILE. Structural favors CLE (+6). Entry signal for trailing team.',
+    classification:'VOLATILE',
   };
 
   cs.edgeHistory = [
