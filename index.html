@@ -2246,48 +2246,163 @@ async function generateThesis(gameId){
       standings: safe(()=>trimStandings(c.standings), 'standings'),
     };
 
-    // ── RETURNING PLAYER DETECTION (BDL injuries × SR profile — runs before availability) ──
-    const _returningByTeam = {}; // alias → [{name, injury, returnDate, position}]
+    // ── RECENT FORM + RETURNING DETECTION (BDL recent game box scores) ──
+    const _returningByTeam = {}; // alias → [{name, position}]
+    const _recentForm = {home:null, away:null};
     sections.returning = '';
+    sections.recentForm = '';
     try{
       const hBdlId = BDL_TEAM_IDS[homeAlias], aBdlId = BDL_TEAM_IDS[awayAlias];
       if(hBdlId && aBdlId){
-        const injResp = await bdl('player_injuries',{team_id:String(hBdlId), team_id2:String(aBdlId)});
-        const injData = injResp.data || injResp || [];
-        if(Array.isArray(injData) && injData.length > 0){
-          const activeNames = new Set();
-          [c.homeProfile, c.awayProfile].forEach(function(prof){
-            if(!prof||!prof.players) return;
-            prof.players.forEach(function(p){
-              if(p.status==='ACT') activeNames.add((p.full_name||'').toLowerCase().trim());
+        // Get yesterday's date as end_date, 10 days back as start_date
+        const today = new Date();
+        const yesterday = new Date(today.getTime() - 24*60*60*1000);
+        const tenDaysAgo = new Date(today.getTime() - 10*24*60*60*1000);
+        const fmtDate = (d) => d.toISOString().split('T')[0];
+
+        // Pull last 5 games per team (2 BDL calls)
+        await new Promise(r=>setTimeout(r,200));
+        const [hGamesResp, aGamesResp] = await Promise.all([
+          bdl('team_games',{team_id:String(hBdlId), per_page:'5', end_date:fmtDate(yesterday), start_date:fmtDate(tenDaysAgo)}),
+          bdl('team_games',{team_id:String(aBdlId), per_page:'5', end_date:fmtDate(yesterday), start_date:fmtDate(tenDaysAgo)}),
+        ]);
+        const hGames = (hGamesResp.data||[]).slice(0,3); // last 3
+        const aGames = (aGamesResp.data||[]).slice(0,3);
+        const hGameIds = hGames.map(g=>g.id).filter(Boolean);
+        const aGameIds = aGames.map(g=>g.id).filter(Boolean);
+
+        // Pull box scores for those games (2 BDL calls)
+        let hStats = [], aStats = [];
+        if(hGameIds.length > 0 || aGameIds.length > 0){
+          await new Promise(r=>setTimeout(r,200));
+          const [hStatsResp, aStatsResp] = await Promise.all([
+            hGameIds.length>0 ? bdl('multi_stats',{game_ids:hGameIds.join(',')}) : {data:[]},
+            aGameIds.length>0 ? bdl('multi_stats',{game_ids:aGameIds.join(',')}) : {data:[]},
+          ]);
+          hStats = hStatsResp.data||[];
+          aStats = aStatsResp.data||[];
+        }
+
+        // Process each team's recent form
+        function processTeamForm(stats, games, bdlTeamId, alias, profile){
+          if(!games.length) return null;
+          // Filter stats to this team's players
+          const teamStats = stats.filter(s => (s.team?.id||s.player?.team_id) == bdlTeamId);
+          // Group by game
+          const byGame = {};
+          teamStats.forEach(s => {
+            const gid = s.game?.id || s.game_id;
+            if(!gid) return;
+            if(!byGame[gid]) byGame[gid] = [];
+            byGame[gid].push(s);
+          });
+
+          // Players who appeared in recent games (had minutes)
+          const recentPlayerNames = new Set();
+          const playerGameStats = {}; // name → [{pts, min, fgm, fga, fg3m, fg3a, ...}]
+          Object.values(byGame).forEach(gamePlayers => {
+            gamePlayers.forEach(s => {
+              const mins = s.min ? parseInt(s.min) : 0;
+              if(mins < 1) return;
+              const name = ((s.player?.first_name||'')+' '+(s.player?.last_name||'')).trim();
+              const nameLower = name.toLowerCase();
+              recentPlayerNames.add(nameLower);
+              if(!playerGameStats[nameLower]) playerGameStats[nameLower] = {name, games:[]};
+              playerGameStats[nameLower].games.push({
+                pts:s.pts||0, min:mins, fgm:s.fgm||0, fga:s.fga||0,
+                fg3m:s.fg3m||0, fg3a:s.fg3a||0, ftm:s.ftm||0, fta:s.fta||0,
+                reb:s.reb||0, ast:s.ast||0, stl:s.stl||0, blk:s.blk||0, turnover:s.turnover||0,
+              });
             });
           });
-          const today = new Date();
-          const fiveDaysAgo = new Date(today.getTime() - 5*24*60*60*1000);
-          injData.forEach(function(inj){
-            if(!inj.return_date) return;
-            const retDate = new Date(inj.return_date);
-            if(isNaN(retDate.getTime())) return;
-            if(retDate >= fiveDaysAgo && retDate <= new Date(today.getTime() + 24*60*60*1000)){
-              const name = ((inj.player?.first_name||'')+' '+(inj.player?.last_name||'')).trim();
-              if(activeNames.has(name.toLowerCase())){
-                const team = (inj.player?.team?.abbreviation || '?').toUpperCase();
-                const desc = inj.description || inj.status || '?';
-                if(!_returningByTeam[team]) _returningByTeam[team] = [];
-                _returningByTeam[team].push({name, injury:desc, returnDate:inj.return_date, position:inj.player?.position||'?'});
+
+          // Detect RETURNING — on active roster but not in recent box scores
+          const returning = [];
+          if(profile && profile.players){
+            profile.players.forEach(pl => {
+              if(pl.status!=='ACT') return;
+              const name = pl.full_name||'';
+              const nameLower = name.toLowerCase().trim();
+              if(nameLower && !recentPlayerNames.has(nameLower)){
+                // Check this isn't someone with 0 season minutes (end-of-bench)
+                const avg = pl.average||{};
+                const sznMins = avg.minutes ? parseFloat(avg.minutes) : 0;
+                if(sznMins >= 10){ // only flag rotation players (10+ mpg)
+                  returning.push({name, position:pl.primary_position||pl.position||'?'});
+                }
+              }
+            });
+          }
+
+          // Compute per-player averages for hot/cold detection
+          const hot = [], cold = [], minsShift = [];
+          Object.values(playerGameStats).forEach(p => {
+            const gp = p.games.length;
+            if(gp < 2) return;
+            const avgPts = p.games.reduce((a,g)=>a+g.pts,0)/gp;
+            const avgMin = p.games.reduce((a,g)=>a+g.min,0)/gp;
+            const avgFga = p.games.reduce((a,g)=>a+g.fga,0)/gp;
+            const avgFgPct = avgFga>0 ? (p.games.reduce((a,g)=>a+g.fgm,0)/gp) / avgFga * 100 : 0;
+            // Look up season averages from SR profile
+            let sznPts = 0, sznMin = 0;
+            if(profile && profile.players){
+              const match = profile.players.find(pl => (pl.full_name||'').toLowerCase().trim() === p.name.toLowerCase().trim());
+              if(match && match.average){
+                sznPts = match.average.points||0;
+                sznMin = match.average.minutes ? parseFloat(match.average.minutes) : 0;
               }
             }
+            if(sznPts > 8 && avgPts > sznPts * 1.3) hot.push({name:p.name, avg:avgPts.toFixed(1), szn:sznPts.toFixed(1), fgPct:avgFgPct.toFixed(0)});
+            else if(sznPts > 8 && avgPts < sznPts * 0.7) cold.push({name:p.name, avg:avgPts.toFixed(1), szn:sznPts.toFixed(1), fgPct:avgFgPct.toFixed(0)});
+            if(sznMin > 12 && avgMin > sznMin + 6) minsShift.push({name:p.name, avg:avgMin.toFixed(1), szn:sznMin.toFixed(1)});
           });
-          const allRet = Object.values(_returningByTeam).flat();
-          if(allRet.length > 0){
-            sections.returning = '\nRETURNING PLAYERS NOTE: Evaluate returning players as structural upgrades. A star (20+ PPG or top-2 USG%) returning from absence means their team\'s structural baseline is higher than recent games suggest.\n';
-            addLog(gameId, '🔄 '+allRet.length+' returning player(s): '+allRet.map(function(r){return r.name;}).join(', '), true);
-          }
+
+          // Team record in recent games
+          const record = {w:0, l:0, avgPts:0};
+          games.forEach(g => {
+            const isHome = g.home_team?.id == bdlTeamId;
+            const tPts = isHome ? (g.home_team_score||0) : (g.visitor_team_score||0);
+            const oPts = isHome ? (g.visitor_team_score||0) : (g.home_team_score||0);
+            if(tPts > oPts) record.w++; else record.l++;
+            record.avgPts += tPts;
+          });
+          record.avgPts = games.length>0 ? (record.avgPts/games.length).toFixed(1) : 0;
+
+          return {returning, hot, cold, minsShift, record, gamesPlayed:games.length};
         }
+
+        _recentForm.home = processTeamForm(hStats, hGames, hBdlId, homeAlias, c.homeProfile);
+        _recentForm.away = processTeamForm(aStats, aGames, aBdlId, awayAlias, c.awayProfile);
+
+        // Build sections
+        function formatTeamForm(form, alias){
+          if(!form) return '';
+          let out = alias+' RECENT (last '+form.gamesPlayed+' games: '+form.record.w+'-'+form.record.l+', avg '+form.record.avgPts+' pts):\n';
+          if(form.returning.length) out += '  RETURNING: '+form.returning.map(r=>r.name+' ['+r.position+']').join(', ')+'\n';
+          if(form.hot.length) out += '  HOT: '+form.hot.map(h=>h.name+' '+h.avg+' PPG (szn '+h.szn+')').join(', ')+'\n';
+          if(form.cold.length) out += '  COLD: '+form.cold.map(h=>h.name+' '+h.avg+' PPG on '+h.fgPct+'% FG (szn '+h.szn+')').join(', ')+'\n';
+          if(form.minsShift.length) out += '  MINUTES SHIFT: '+form.minsShift.map(m=>m.name+' '+m.avg+' mpg (szn '+m.szn+')').join(', ')+'\n';
+          return out;
+        }
+        sections.recentForm = '\n=== RECENT FORM (last 3 games) ===\n' + formatTeamForm(_recentForm.away, awayAlias) + formatTeamForm(_recentForm.home, homeAlias);
+
+        // Populate _returningByTeam for availability builder
+        if(_recentForm.home && _recentForm.home.returning.length){
+          _returningByTeam[homeAlias.toUpperCase()] = _recentForm.home.returning;
+        }
+        if(_recentForm.away && _recentForm.away.returning.length){
+          _returningByTeam[awayAlias.toUpperCase()] = _recentForm.away.returning;
+        }
+        const allRet = [...(_recentForm.home?.returning||[]), ...(_recentForm.away?.returning||[])];
+        if(allRet.length > 0){
+          sections.returning = '\nRETURNING PLAYERS NOTE: Players listed as RETURNING were on the active roster but did NOT play in the team\'s last 3 games. Evaluate as structural upgrades — their team\'s recent performance was WITHOUT them.\n';
+          addLog(gameId, '🔄 '+allRet.length+' returning player(s): '+allRet.map(r=>r.name).join(', '), true);
+        }
+        addLog(gameId, '📊 Recent form computed ('+hGames.length+'H/'+aGames.length+'A games)', true);
       }
     }catch(e){
-      console.warn('BDL injuries pull failed (optional):', e.message);
-      addLog(gameId, '⚠ BDL injuries: '+e.message, false);
+      console.warn('Recent form pull failed (optional):', e.message);
+      addLog(gameId, '⚠ Recent form: '+e.message, false);
     }
 
     // ── PRE-COMPUTED AVAILABILITY (team-by-team, cross-referenced) ──
@@ -2330,7 +2445,7 @@ async function generateThesis(gameId){
         });
         // Build returning tag
         const ret = _returningByTeam[alias.toUpperCase()] || [];
-        const retStr = ret.length > 0 ? ' | 🔄 RETURNING: '+ret.map(function(r){return r.name+' (was: '+r.injury+')';}).join(', ') : '';
+        const retStr = ret.length > 0 ? ' | 🔄 RETURNING: '+ret.map(function(r){return r.name+' ['+r.position+']';}).join(', ') : '';
         let out = alias+': '+inPlayers.length+' players available'+retStr;
         if(outPlayers.length) out += '\n'+alias+' OUT: '+outPlayers.join(' | ');
         if(gtdPlayers.length) out += '\n'+alias+' GTD: '+gtdPlayers.join(' | ');
