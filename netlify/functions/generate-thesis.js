@@ -750,7 +750,7 @@ exports.handler = async function(event) {
       var legResp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 4000, system: body.systemPrompt, messages: [{ role: 'user', content: body.userPrompt }] }),
+        body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 2000, system: body.systemPrompt, messages: [{ role: 'user', content: body.userPrompt }] }),
       });
       if (!legResp.ok) {
         var e = await legResp.text(); return { statusCode: legResp.status, headers: headers, body: JSON.stringify({ error: 'Anthropic ' + legResp.status + ': ' + e.substring(0, 300) }) }; }
@@ -808,7 +808,7 @@ exports.handler = async function(event) {
     var resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 4000, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
+      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 2000, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
     });
 
     if (!resp.ok) {
