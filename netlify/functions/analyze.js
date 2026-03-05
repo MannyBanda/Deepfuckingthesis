@@ -272,7 +272,10 @@ function computeLeadComposition(summaryData, homeTeam, awayTeam) {
     var totalPts = stats.points || 0;
     if (totalPts === 0) return null;
 
-    var paintPts = stats.points_in_the_paint || 0;
+    var rawPaint = stats.points_in_the_paint || 0;
+    // SR sometimes delays points_in_the_paint — use at-rim makes × 2 as floor proxy
+    var atRimPts = (stats.field_goals_at_rim_made || 0) * 2;
+    var paintPts = Math.max(rawPaint, atRimPts);
     var ftPts = stats.free_throws_made || 0;
     var threePts = (stats.three_points_made || 0) * 3;
     var fbPts = stats.fast_break_points || 0;
