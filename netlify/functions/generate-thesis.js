@@ -686,9 +686,9 @@ function buildSystemPrompt() {
     'COMPACT THESIS \u2014 [AWAY] vs [HOME] | [Time] MST',
     '[Date] | [Venue]',
     '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
-    'AVAILABILITY',
-    '[TEAM] [Player] \u2705 IN | [Player] \u274C OUT | [Player] \u26A0\uFE0F GTD/QUESTIONABLE/DOUBTFUL',
-    '[TEAM] [Player] \u2705 IN | [Player] \u274C OUT | ...',
+    'AVAILABILITY (PRE-COMPUTED — copy exactly as provided, do NOT rearrange or mix players between teams)',
+    '[The server has pre-computed the availability section with correct team attribution. Reproduce it verbatim.]',
+    '[If RETURNING players are listed, include them with 🔄 tag after the team they belong to.]',
     '',
     'SIA (from pre-computed assessment):',
     '[Player] OUT \u2014 [stat line] \u2014 I1:[impact] I2:[impact] I3:[impact] I4:[impact] I5:[impact] [GP GATE: status]',
@@ -785,7 +785,8 @@ exports.handler = async function(event) {
       'DATE: ' + (matchup.date || '?') + ' | TIME: ' + (matchup.time || '?') + ' MST\n' +
       'VENUE: ' + (matchup.venue || 'TBD') + '\n\n' +
       preComputed + '\n\n' +
-      '=== INJURIES ===\n' + (sections.injuries || '(unavailable)') + '\n\n' +
+      '=== PRE-COMPUTED AVAILABILITY (use this exactly — do NOT mix players between teams) ===\n' + (sections.availability || '(unavailable)') + '\n\n' +
+      '=== INJURIES (raw report) ===\n' + (sections.injuries || '(unavailable)') + '\n\n' +
       (sections.returning || '') +
       '=== ' + homeAlias + ' ROSTER ===\n' + (sections.homeRoster || '(unavailable)') + '\n\n' +
       '=== ' + awayAlias + ' ROSTER ===\n' + (sections.awayRoster || '(unavailable)') + '\n\n' +
