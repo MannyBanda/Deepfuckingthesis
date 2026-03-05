@@ -3066,7 +3066,10 @@ function computeLeadCompositionClient(game){
   if(hPts===0 && aPts===0) return null;
 
   function breakdown(stats, total){
-    const paint = stats.points_in_the_paint||0;
+    var rawPaint = stats.points_in_the_paint||0;
+    // SR sometimes delays points_in_the_paint population — use at-rim makes × 2 as floor proxy
+    var atRimPts = (stats.field_goals_at_rim_made||0)*2;
+    const paint = Math.max(rawPaint, atRimPts);
     const ft = stats.free_throws_made||0;
     const three = (stats.three_points_made||0)*3;
     const transition = stats.fast_break_points||0;
@@ -3935,7 +3938,21 @@ function renderConfidenceTable(){
     }
     // Pull live data from cardState
     const si = cs?.sonnetIndicators;
-    if(si && si.score){ team=si.controlTeam; score=si.score; verdict=getVerdict(si.score)?.label||verdict; }
+    if(si && si.score){
+      var siTeam = si.controlTeam;
+      // If Sonnet said "Neither"/"EVEN", derive team from indicator leaders
+      if(!siTeam || siTeam==='Neither' || siTeam==='EVEN'){
+        var hVotes=0, aVotes=0;
+        [si.I1,si.I2,si.I3,si.I4,si.I5].forEach(function(d){
+          if(!d||d.leader==='EVEN') return;
+          var lUp = (d.leader||'').toUpperCase().substring(0,3);
+          if(lUp===hA.toUpperCase().substring(0,3)) hVotes++;
+          else aVotes++;
+        });
+        siTeam = hVotes>=aVotes ? hA : aA;
+      }
+      team=siTeam; score=si.score; verdict=getVerdict(si.score)?.label||verdict;
+    }
     // ── FLOOR ENFORCEMENT — SIA guarantees minimum score for healthy team ──
     if(cs?.floorScores && team){
       const teamUp = team.toUpperCase();
@@ -4330,7 +4347,10 @@ function renderCard(game){
   if(!el)return;
   const state=getState(game), rawInd=computeAny(game);
   // Prefer Sonnet indicators when available, fall back to compute()
-  const ind = cs.sonnetIndicators || rawInd;
+  var _indRaw = cs.sonnetIndicators || rawInd;
+  // If Sonnet said "Neither"/"EVEN", override controlTeam with client compute (non-mutating)
+  const ind = (_indRaw && rawInd && (!_indRaw.controlTeam || _indRaw.controlTeam==='Neither' || _indRaw.controlTeam==='EVEN') && rawInd.controlTeam && rawInd.controlTeam!=='Neither')
+    ? Object.assign({}, _indRaw, {controlTeam: rawInd.controlTeam}) : _indRaw;
   const v=ind?getVerdict(ind.score):null;
   // Count indicators where the leader matches the controlling team (0.75+ for Sonnet, 1.0 for compute)
   const indWon = ind ? [ind.I1,ind.I2,ind.I3,ind.I4,ind.I5].filter(d => {
@@ -4582,7 +4602,7 @@ function renderCard(game){
     // ─── 3. LEAD COMPOSITION (where did the margin come from?) ───
     var lc = cs.leadComposition || cs.clientLeadComposition;
     var lcIsClient = !cs.leadComposition && !!cs.clientLeadComposition;
-    if(lc && lc.absMargin > 2){
+    if(lc && lc.absMargin > 0){
       var lcStructColor = lc.structuralMargin > 0 ? 'var(--green)' : lc.structuralMargin < 0 ? 'var(--red)' : 'var(--t3)';
       var lcVarColor = lc.varianceMargin > 0 ? 'var(--amber)' : lc.varianceMargin < 0 ? 'var(--green)' : 'var(--t3)';
       var lcDurColor = lc.durability.includes('STRUCTURALLY SOURCED') ? 'var(--green)' : lc.durability.includes('VARIANCE SOURCED') ? 'var(--amber)' : 'var(--t2)';
@@ -4636,6 +4656,11 @@ function renderCard(game){
     var cRead = cs.combinedRead;
     var floorInd = cs.clientInd || cs.sonnetIndicators;
     var _vc = function(vrd){ return vrd==='DOMINANT'?'var(--green)':vrd==='STRONG'?'var(--g2)':vrd==='EARNED'?'var(--yellow)':vrd==='NO EDGE'?'var(--t3)':'var(--t3)'; };
+    // If Sonnet said "Neither"/"EVEN" as controlTeam, override with client-computed team
+    var _validTeam = function(t){ return t && t!=='Neither' && t!=='EVEN' && t!=='CONTESTED' && t!=='?' && t.length<=4; };
+    if(floorInd && !_validTeam(floorInd.controlTeam) && rawInd && _validTeam(rawInd.controlTeam)){
+      floorInd = Object.assign({}, floorInd, {controlTeam: rawInd.controlTeam});
+    }
     if(floorInd && floorInd.score){
       var fScore = floorInd.score, fTeam = floorInd.controlTeam||'?';
       var fVerdict = fScore>=0.90?'DOMINANT':fScore>=0.75?'STRONG':fScore>=0.60?'EARNED':fScore>=0.45?'NO EDGE':'WAIT';
@@ -4651,7 +4676,7 @@ function renderCard(game){
       if(rw && rw.available){
         var wVerdict = rw.score>=0.90?'DOMINANT':rw.score>=0.75?'STRONG':rw.score>=0.60?'EARNED':rw.score>=0.45?'NO EDGE':'WAIT';
         html+='<div style="font-size:9px;font-weight:700;color:'+_vc(wVerdict)+'">'+rw.controlTeam+' '+rw.score.toFixed(2)+'</div>';
-        html+='<div style="font-size:5.5px;color:var(--t3)">'+rw.windowQuarters.map(function(q){return 'Q'+q;}).join('+')+' ('+rw.windowPossessions+' poss)</div>';
+        html+='<div style="font-size:5.5px;color:var(--t3)">'+rw.windowQuarters.map(function(q){return 'Q'+q;}).join('+')+' ('+Math.round(rw.windowPossessions)+' poss)</div>';
       } else {
         html+='<div style="font-size:7px;color:var(--t3)">'+((rw&&rw.reason)||'Too early')+'</div>';
       }
