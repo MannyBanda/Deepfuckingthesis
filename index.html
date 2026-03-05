@@ -2246,6 +2246,54 @@ async function generateThesis(gameId){
       standings: safe(()=>trimStandings(c.standings), 'standings'),
     };
 
+    // ── PRE-COMPUTED AVAILABILITY (team-by-team, cross-referenced) ──
+    sections.availability = safe(()=>{
+      // Build injury lookup: player name → {status, desc}
+      const injMap = {};
+      if(c.injuries && c.injuries.teams){
+        c.injuries.teams.forEach(function(t){
+          (t.players||[]).forEach(function(p){
+            const injArr = Array.isArray(p.injuries)?p.injuries:[];
+            const li = injArr.length>0?injArr[0]:{};
+            const st = (li.status||p.status||'').toUpperCase();
+            injMap[(p.full_name||'').toLowerCase().trim()] = {
+              status: st, desc: li.desc||li.comment||p.desc||'', team: (t.alias||'').toUpperCase(),
+            };
+          });
+        });
+      }
+
+      function buildTeamAvail(profile, alias){
+        if(!profile||!profile.players) return alias+': (roster unavailable)';
+        const inPlayers = [], outPlayers = [], gtdPlayers = [];
+        profile.players.forEach(function(pl){
+          if(pl.status!=='ACT'&&pl.status!=='SUS'&&pl.status!=='NWT') return;
+          const name = pl.full_name||'?';
+          const pos = pl.primary_position||pl.position||'?';
+          const nameLower = name.toLowerCase().trim();
+          const inj = injMap[nameLower];
+          if(inj){
+            const st = inj.status;
+            if(st==='OUT'||st==='O'){
+              outPlayers.push(name+' ['+pos+'] ❌ OUT'+(inj.desc?' — '+inj.desc:''));
+            } else if(st==='DAY-TO-DAY'||st==='GTD'||st==='QUESTIONABLE'||st==='DOUBTFUL'||st==='D'){
+              gtdPlayers.push(name+' ['+pos+'] ⚠️ '+st+(inj.desc?' — '+inj.desc:''));
+            } else {
+              inPlayers.push(name+' ['+pos+'] ✅ IN');
+            }
+          } else {
+            inPlayers.push(name+' ['+pos+'] ✅ IN');
+          }
+        });
+        let out = alias+' IN: '+inPlayers.map(function(p){return p.split(']')[0]+']';}).join(' | ')+'\n';
+        if(outPlayers.length) out += alias+' OUT: '+outPlayers.join(' | ')+'\n';
+        if(gtdPlayers.length) out += alias+' GTD: '+gtdPlayers.join(' | ')+'\n';
+        return out;
+      }
+
+      return buildTeamAvail(c.awayProfile, awayAlias) + buildTeamAvail(c.homeProfile, homeAlias);
+    }, 'availability');
+
     // ── RETURNING PLAYER DETECTION (BDL injuries × SR profile cross-reference) ──
     sections.returning = '';
     try{
