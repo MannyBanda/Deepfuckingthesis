@@ -263,7 +263,7 @@ function formatSustainabilityAudit(audit) {
 // LEAD COMPOSITION ENGINE
 // ══════════════════════════════════════════════════════════════════════════════
 
-function computeLeadComposition(summaryData, homeTeam, awayTeam) {
+function computeLeadComposition(summaryData, homeTeam, awayTeam, audit) {
   if (!summaryData) return null;
 
   function composeTeam(teamData, alias) {
@@ -273,7 +273,6 @@ function computeLeadComposition(summaryData, homeTeam, awayTeam) {
     if (totalPts === 0) return null;
 
     var rawPaint = stats.points_in_the_paint || 0;
-    // SR sometimes delays points_in_the_paint — use at-rim makes × 2 as floor proxy
     var atRimPts = (stats.field_goals_at_rim_made || 0) * 2;
     var paintPts = Math.max(rawPaint, atRimPts);
     var ftPts = stats.free_throws_made || 0;
@@ -281,27 +280,14 @@ function computeLeadComposition(summaryData, homeTeam, awayTeam) {
     var fbPts = stats.fast_break_points || 0;
     var potPts = stats.points_off_turnovers || 0;
     var scPts = stats.second_chance_points || 0;
-
-    // Mid/Other = everything not paint, FT, or 3PT
     var midOther = Math.max(0, totalPts - paintPts - ftPts - threePts);
-
-    // Structural = paint + FT (scheme-driven, matchup-driven, contact-driven)
     var structural = paintPts + ftPts;
-    // Variance = 3PT + mid-range (shooting % fluctuates game-to-game)
     var variance = threePts + midOther;
 
     return {
-      team: alias,
-      total: totalPts,
-      paint: paintPts,
-      ft: ftPts,
-      three: threePts,
-      midOther: midOther,
-      transition: fbPts,
-      pot: potPts,
-      secondChance: scPts,
-      structural: structural,
-      variance: variance,
+      team: alias, total: totalPts, paint: paintPts, ft: ftPts, three: threePts,
+      midOther: midOther, transition: fbPts, pot: potPts, secondChance: scPts,
+      structural: structural, variance: variance,
       structuralPct: totalPts > 0 ? Math.round(structural / totalPts * 100) : 0,
       variancePct: totalPts > 0 ? Math.round(variance / totalPts * 100) : 0,
     };
@@ -311,35 +297,56 @@ function computeLeadComposition(summaryData, homeTeam, awayTeam) {
   var away = composeTeam(summaryData.away, awayTeam);
   if (!home || !away) return null;
 
-  // Margin analysis
   var margin = home.total - away.total;
+  var absMargin = Math.abs(margin);
   var leadTeam = margin >= 0 ? homeTeam : awayTeam;
   var trailTeam = margin >= 0 ? awayTeam : homeTeam;
-  var lead = margin >= 0 ? home : away;
-  var trail = margin >= 0 ? away : home;
+  var structuralMargin = (margin >= 0 ? 1 : -1) * (home.structural - away.structural);
+  var varianceMargin = (margin >= 0 ? 1 : -1) * (home.variance - away.variance);
 
-  var structuralMargin = lead.structural - trail.structural;
-  var varianceMargin = lead.variance - trail.variance;
+  // Get lead team sustainability tier
+  var leadIsHome = margin >= 0;
+  var leadSust = audit ? (leadIsHome ? audit.home : audit.away) : null;
+  var leadTier = (leadSust && leadSust.tier ? leadSust.tier : '').toUpperCase();
 
-  // Classify margin durability
+  var classification = 'MIXED';
   var durability;
-  if (Math.abs(margin) <= 2) {
+
+  if (absMargin <= 2) {
+    classification = 'EVEN';
     durability = 'EVEN — margin too small to classify';
-  } else if (structuralMargin >= Math.abs(margin) * 0.6) {
-    durability = leadTeam + ' lead is STRUCTURALLY SOURCED — structural margin (' + (structuralMargin >= 0 ? '+' : '') + structuralMargin + ') exceeds total margin (' + (margin >= 0 ? '+' : '') + margin + ')';
-  } else if (varianceMargin >= Math.abs(margin) * 0.6) {
-    durability = leadTeam + ' lead is VARIANCE SOURCED — variance production (' + (varianceMargin >= 0 ? '+' : '') + varianceMargin + ') drives margin while structural favors ' + (structuralMargin >= 0 ? leadTeam : trailTeam) + ' (' + (structuralMargin >= 0 ? '+' : '') + structuralMargin + ')';
+  } else if (structuralMargin >= absMargin * 0.6) {
+    classification = 'STRUCTURAL';
+    durability = leadTeam + ' lead is STRUCTURAL — paint/FT drives margin (+' + Math.abs(structuralMargin) + ')';
+  } else if (varianceMargin >= absMargin * 0.6) {
+    if (leadTier === 'LOCKED' || leadTier === 'LOCKED IN') {
+      classification = 'IDENTITY';
+      durability = leadTeam + ' lead is IDENTITY — perimeter production at season baseline (' + leadTier + '). Offensive identity, not variance.';
+    } else if (leadTier === 'DURABLE') {
+      classification = 'HOT';
+      durability = leadTeam + ' lead is HOT — above baseline but credible shooters (' + leadTier + '). Elevated but sustainable.';
+    } else if (leadTier === 'MIXED') {
+      classification = 'MIXED';
+      durability = 'MIXED — 3PT/mid drives margin with uncertain sustainability (' + leadTier + '). Structural favors ' + (structuralMargin < 0 ? trailTeam : leadTeam) + ' (' + (structuralMargin >= 0 ? '+' : '') + structuralMargin + ')';
+    } else if (leadTier === 'FRAGILE' || leadTier === 'UNSUSTAINABLE') {
+      classification = 'VOLATILE';
+      durability = leadTeam + ' lead is VOLATILE — perimeter production ' + leadTier + '. Structural favors ' + (structuralMargin < 0 ? trailTeam : leadTeam) + ' (' + (structuralMargin >= 0 ? '+' : '') + structuralMargin + '). Entry signal for trailing team.';
+    } else {
+      // TOO EARLY, empty, null — default to MIXED
+      classification = 'MIXED';
+      durability = 'MIXED — 3PT/mid drives margin but sustainability data insufficient' + (leadTier ? ' (' + leadTier + ')' : '') + '.';
+    }
   } else {
-    durability = 'MIXED — lead built from both structural (' + (structuralMargin >= 0 ? '+' : '') + structuralMargin + ') and variance (' + (varianceMargin >= 0 ? '+' : '') + varianceMargin + ') sources';
+    classification = 'MIXED';
+    durability = 'MIXED — no single source dominates margin';
   }
 
   return {
     home: home, away: away,
-    margin: margin, absMargin: Math.abs(margin),
+    margin: margin, absMargin: absMargin,
     leadTeam: leadTeam, trailTeam: trailTeam,
-    structuralMargin: structuralMargin,
-    varianceMargin: varianceMargin,
-    durability: durability,
+    structuralMargin: structuralMargin, varianceMargin: varianceMargin,
+    durability: durability, classification: classification,
   };
 }
 
@@ -378,9 +385,16 @@ var SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing real-time 
 + '   - BAYESIAN REGRESSION: Sample-size-aware posterior expected 3PT% and regression probability\n'
 + '   - SHOT TYPE: Assist ratio proxy — catch-and-shoot (durable) vs pull-up/isolation (fragile)\n'
 + '   - COMPOSITE TIER: LOCKED IN / DURABLE / MIXED / FRAGILE / UNSUSTAINABLE\n\n'
-+ '2. LEAD COMPOSITION (both teams):\n'
-+ '   - Structural points (Paint + FT) vs Variance points (3PT + Mid-range)\n'
-+ '   - MARGIN DURABILITY: is the lead structurally sourced, variance sourced, or mixed\n\n'
++ '2. SCORING COMPOSITION (both teams):\n'
++ '   - Structural points (Paint + FT) vs Perimeter points (3PT + Mid-range)\n'
++ '   - CLASSIFICATION (pre-computed, cross-references sustainability tier):\n'
++ '     STRUCTURAL = paint/FT drives margin. Most durable.\n'
++ '     IDENTITY = perimeter drives margin but sustainability LOCKED — this is the team\'s offensive identity executing. Durable.\n'
++ '     HOT = perimeter drives margin, sustainability DURABLE — above baseline but credible. Elevated but sustainable.\n'
++ '     MIXED = no clear dominance or uncertain sustainability.\n'
++ '     VOLATILE = perimeter drives margin, sustainability FRAGILE/UNSUSTAINABLE — regression coming. Entry signal for trailing team.\n'
++ '     EVEN = margin too small to classify.\n'
++ '   CRITICAL: IDENTITY and HOT leads should NOT trigger entry signals for the trailing team. Only VOLATILE leads indicate regression opportunity.\n\n'
 + '3. STRUCTURAL FLOOR (cumulative I1-I5):\n'
 + '   - Dashboard\'s client-side indicator scores on ALL game data from tip to now\n'
 + '   - This is "who has controlled this game overall"\n\n'
@@ -427,10 +441,10 @@ var SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing real-time 
 + '   Evaluate BOTH teams. Pre-game thesis is context, not permanent anchor.\n'
 + '   Core strategy: buy structural control when trailing on variance. Applies either direction.\n'
 + '   ENTRY SIGNALS:\n'
-+ '   OPTIMAL WINDOW = structurally dominant + TRAILING + opponent FRAGILE/UNSUSTAINABLE + variance-sourced lead + gap GROWING\n'
-+ '   WINDOW OPEN = structural edge + trailing or at value + opponent MIXED sustainability\n'
++ '   OPTIMAL WINDOW = structurally dominant + TRAILING + opponent scoring VOLATILE + gap GROWING\n'
++ '   WINDOW OPEN = structural edge + trailing or at value + opponent scoring MIXED or VOLATILE\n'
 + '   WINDOW CLOSING = structural edge team now LEADING + variance cooling\n'
-+ '   NO WINDOW = no structural edge, or dominant team at full price\n'
++ '   NO WINDOW = no structural edge, or opponent scoring IDENTITY/HOT/STRUCTURAL (no regression expected), or dominant team at full price\n'
 + '   FADE = structural read says do not buy either team\n\n'
 + '   CRITICAL: A team leading AND priced beyond -400 ML has NO VALUE regardless of structural control.\n\n'
 + 'FWP (Framework Win Probability) IS GAME-STATE-AWARE:\n'
@@ -450,7 +464,7 @@ var SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing real-time 
 + 'CONVICTION: [DOMINANT | STRONG | EARNED | CONDITIONAL | NO ENTRY]\n'
 + 'SIGNAL: [BUY TeamAlias | NO VALUE | PASS] — [1-line reason naming both teams]\n'
 + 'Sustainability: [TeamA]: [tier] | [TeamB]: [tier]\n'
-+ 'Lead Source: [STRUCTURAL | VARIANCE | MIXED | EVEN] — [1-line]\n'
++ 'Scoring: [STRUCTURAL | IDENTITY | HOT | MIXED | VOLATILE | EVEN] — [1-line]\n'
 + 'SPREAD ANALYSIS: [1-line]\n'
 + 'Team Quality: [context for both teams]\n'
 + 'Clutch: [Tier X] — [CLEAR|WATCH|FIRES|NEUTRALIZED]\n'
@@ -527,7 +541,7 @@ exports.handler = async function(event) {
     var sustainabilitySection = formatSustainabilityAudit(audit);
 
     // ── LEAD COMPOSITION (pre-computed) ──
-    var leadComp = computeLeadComposition(summaryData, homeTeam, awayTeam);
+    var leadComp = computeLeadComposition(summaryData, homeTeam, awayTeam, audit);
     var leadCompSection = formatLeadComposition(leadComp);
 
     // ── CLUTCH SECTION ──
