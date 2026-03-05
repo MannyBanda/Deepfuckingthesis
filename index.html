@@ -284,6 +284,7 @@ input,textarea,select{font-size:16px!important;}
     <button class="cbtn" onclick="clearTheses()">CLR THESIS</button>
     <button class="cbtn" onclick="clearMarketCache()">CLR MKT</button>
     <button class="cbtn" id="btn-demo" onclick="toggleDemo()" style="color:var(--amber);border-color:var(--amber)">DEMO</button>
+    <button class="cbtn" id="btn-ntfy" onclick="configNtfy()" style="color:var(--t3);border-color:var(--t3)">🔔 ALERTS</button>
     <span class="cml"><span id="game-count">0</span> games</span>
   </div>
 
@@ -1036,6 +1037,9 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
       });
       if(cs.analysisHistory.length > 15) cs.analysisHistory = cs.analysisHistory.slice(-15);
     }
+
+    // ── PUSH NOTIFICATION — fire if entry conditions met ──
+    if(decision) checkNtfyAlert(game, decision);
 
     persistAnalysis(game.id, cs);
     renderCard(game);
@@ -5068,6 +5072,92 @@ function saveThesisFromCard(cardId){
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!paused)refreshLiveCards();});
 
 // ══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+// NTFY PUSH NOTIFICATIONS
+// ══════════════════════════════════════════════════════════════════════════════
+let ntfyTopic = localStorage.getItem('nba4:ntfy:topic') || '';
+let ntfyEnabled = !!ntfyTopic;
+let ntfyMinEdge = parseFloat(localStorage.getItem('nba4:ntfy:minEdge')) || 3.0;
+// Restore UI state
+if(ntfyEnabled){
+  setTimeout(()=>{
+    const btn = document.getElementById('btn-ntfy');
+    if(btn){ btn.style.color='var(--green)'; btn.style.borderColor='var(--green)'; }
+  }, 100);
+}
+
+function configNtfy(){
+  const current = ntfyTopic || '(not set)';
+  const topic = prompt('ntfy.sh topic name for push alerts:\n\nCurrent: ' + current + '\nMin edge: ' + ntfyMinEdge + '%\n\nEnter topic (or "off" to disable, "edge:X" to change min edge):', ntfyTopic);
+  if(topic === null) return; // cancelled
+  const trimmed = topic.trim();
+  if(trimmed.toLowerCase() === 'off' || trimmed === ''){
+    ntfyTopic = ''; ntfyEnabled = false;
+    localStorage.removeItem('nba4:ntfy:topic');
+    document.getElementById('btn-ntfy').style.color='var(--t3)';
+    document.getElementById('btn-ntfy').style.borderColor='var(--t3)';
+    alert('Alerts disabled.');
+    return;
+  }
+  if(trimmed.toLowerCase().startsWith('edge:')){
+    const val = parseFloat(trimmed.substring(5));
+    if(!isNaN(val) && val >= 0){
+      ntfyMinEdge = val;
+      localStorage.setItem('nba4:ntfy:minEdge', String(val));
+      alert('Min edge set to ' + val + '%');
+    }
+    return;
+  }
+  ntfyTopic = trimmed;
+  ntfyEnabled = true;
+  localStorage.setItem('nba4:ntfy:topic', trimmed);
+  document.getElementById('btn-ntfy').style.color='var(--green)';
+  document.getElementById('btn-ntfy').style.borderColor='var(--green)';
+  // Send test notification
+  sendNtfyRaw('NBA Control — alerts active', 'Topic: ' + trimmed + ' | Min edge: ' + ntfyMinEdge + '%', 2);
+  alert('Alerts enabled! Check your ntfy app for a test notification.\n\nTopic: ' + trimmed + '\nMin edge: ' + ntfyMinEdge + '%');
+}
+
+function sendNtfyRaw(title, body, priority){
+  if(!ntfyTopic) return;
+  fetch('https://ntfy.sh/' + encodeURIComponent(ntfyTopic), {
+    method: 'POST',
+    headers: {'Title': title, 'Priority': String(priority || 3), 'Tags': 'basketball'},
+    body: body,
+  }).catch(function(e){ console.warn('ntfy send failed:', e.message); });
+}
+
+function checkNtfyAlert(game, decision){
+  if(!ntfyEnabled || !decision) return;
+  const entry = (decision.entry||'').toUpperCase();
+  const signal = decision.signalType||'';
+  const edge = decision.edgeNum;
+  const isBuy = signal.startsWith('BUY');
+  const isOptimal = entry === 'OPTIMAL WINDOW';
+  const isOpen = entry === 'WINDOW OPEN';
+
+  // Fire on: OPTIMAL WINDOW or WINDOW OPEN with a BUY signal and edge above threshold
+  if(!isBuy || (!isOptimal && !isOpen)) return;
+  if(edge !== null && edge < ntfyMinEdge) return;
+
+  const hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
+  const score = aA + ' ' + (game.awayPoints||0) + '-' + (game.homePoints||0) + ' ' + hA;
+  const qClock = game.period ? 'Q' + game.period + (game.clock ? ' ' + game.clock : '') : '';
+  const edgeStr = edge !== null ? '+' + edge.toFixed(1) + '%' : '';
+  const sust = decision.sustainability || '';
+  const conviction = decision.conviction || '';
+
+  const title = signal + ' — ' + entry;
+  const body = score + ' ' + qClock
+    + '\nEdge: ' + edgeStr + ' | ' + conviction
+    + '\n' + sust
+    + (decision.prediction ? '\n' + decision.prediction.substring(0, 100) : '');
+
+  const priority = isOptimal ? 5 : 4; // 5=urgent, 4=high
+  sendNtfyRaw(title, body, priority);
+  console.log('NTFY sent:', title, body);
+}
+
 // DEMO MODE — inject fake game for UI testing
 // ══════════════════════════════════════════════════════════════════════════
 const DEMO_ID = 'demo-game-001';
