@@ -5120,10 +5120,19 @@ function configNtfy(){
 
 function sendNtfyRaw(title, body, priority){
   if(!ntfyTopic) return;
-  fetch('https://ntfy.sh/' + encodeURIComponent(ntfyTopic), {
+  fetch('https://ntfy.sh', {
     method: 'POST',
-    headers: {'Title': title, 'Priority': String(priority || 3), 'Tags': 'basketball'},
-    body: body,
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      topic: ntfyTopic,
+      title: title,
+      message: body,
+      priority: priority || 3,
+      tags: ['basketball'],
+    }),
+  }).then(function(r){
+    if(!r.ok) console.warn('ntfy response:', r.status);
+    else console.log('ntfy sent OK');
   }).catch(function(e){ console.warn('ntfy send failed:', e.message); });
 }
 
