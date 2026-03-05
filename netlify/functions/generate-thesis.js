@@ -786,6 +786,7 @@ exports.handler = async function(event) {
       'VENUE: ' + (matchup.venue || 'TBD') + '\n\n' +
       preComputed + '\n\n' +
       '=== INJURIES ===\n' + (sections.injuries || '(unavailable)') + '\n\n' +
+      (sections.returning || '') +
       '=== ' + homeAlias + ' ROSTER ===\n' + (sections.homeRoster || '(unavailable)') + '\n\n' +
       '=== ' + awayAlias + ' ROSTER ===\n' + (sections.awayRoster || '(unavailable)') + '\n\n' +
       '=== ' + homeAlias + ' DEPTH CHART ===\n' + (sections.homeDepth || '(unavailable)') + '\n\n' +

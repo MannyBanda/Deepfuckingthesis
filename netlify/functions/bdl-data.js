@@ -48,11 +48,17 @@ exports.handler = async (event) => {
       url = `${BDL_BASE}/v2/stats/advanced?game_ids[]=${params.game_id}&per_page=100`;
       if (params.period) url += `&periods[]=${params.period}`;
       break;
+    case 'player_injuries':
+      // /v1/player_injuries?team_ids[]=ID&per_page=100
+      url = `${BDL_BASE}/v1/player_injuries?per_page=100`;
+      if (params.team_id) url += `&team_ids[]=${params.team_id}`;
+      if (params.team_id2) url += `&team_ids[]=${params.team_id2}`;
+      break;
     default:
       return {
         statusCode: 400,
         headers,
-        body: JSON.stringify({ error: 'Invalid type. Valid: games, game, stats, advanced' }),
+        body: JSON.stringify({ error: 'Invalid type. Valid: games, game, stats, advanced, player_injuries' }),
       };
   }
 
