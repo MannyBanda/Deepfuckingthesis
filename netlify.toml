@@ -4,6 +4,16 @@
 
 [functions]
   node_bundler = "esbuild"
+  external_node_modules = []
+
+[functions."generate-thesis"]
+  timeout = 60
+
+[functions."analyze"]
+  timeout = 60
+
+[functions."clutch-ocr"]
+  timeout = 60
 
 [[headers]]
   for = "/*"
