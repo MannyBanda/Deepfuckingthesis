@@ -4599,15 +4599,15 @@ function renderCard(game){
       html+='<div class="dv"><div class="dv-hdr">VALUE READ<span style="margin-left:auto">'+analyzeBtn+'</span></div><div style="font-size:6px;color:var(--t3);padding:2px 0">'+(cs.analysisError?'<span style="color:var(--red)">&#9888; '+esc(cs.analysisError)+'</span>':game.period<2?'Predictive layer activates Q2+ &#8212; press &#9889; to analyze':'Awaiting analysis &#8212; press &#9889; ANALYZE')+'</div></div>';
     }
 
-    // ─── 3. LEAD COMPOSITION (where did the margin come from?) ───
+    // ─── 3. SCORING COMPOSITION (how is each team scoring?) ───
     var lc = cs.leadComposition || cs.clientLeadComposition;
     var lcIsClient = !cs.leadComposition && !!cs.clientLeadComposition;
-    if(lc && lc.absMargin > 0){
+    if(lc){
       var lcStructColor = lc.structuralMargin > 0 ? 'var(--green)' : lc.structuralMargin < 0 ? 'var(--red)' : 'var(--t3)';
       var lcVarColor = lc.varianceMargin > 0 ? 'var(--amber)' : lc.varianceMargin < 0 ? 'var(--green)' : 'var(--t3)';
       var lcDurColor = lc.durability.includes('STRUCTURALLY SOURCED') ? 'var(--green)' : lc.durability.includes('VARIANCE SOURCED') ? 'var(--amber)' : 'var(--t2)';
       html+='<div style="padding:6px 10px;border-top:1px solid var(--b1)">';
-      html+='<div style="font-size:6px;color:#a78bfa;letter-spacing:1.5px;margin-bottom:4px;font-family:inherit">LEAD COMPOSITION &#8212; WHERE DID THE MARGIN COME FROM?'+(lcIsClient?' <span style="color:var(--t3);letter-spacing:0">(client-side)</span>':'')+'</div>';
+      html+='<div style="font-size:6px;color:#a78bfa;letter-spacing:1.5px;margin-bottom:4px;font-family:inherit">SCORING COMPOSITION'+(lcIsClient?' <span style="color:var(--t3);letter-spacing:0">(client-side)</span>':'')+'</div>';
       // Team bars
       [lc.away, lc.home].forEach(function(tm){
         if(!tm) return;
