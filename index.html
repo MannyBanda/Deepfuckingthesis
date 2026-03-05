@@ -465,6 +465,11 @@ const BDL_TEAM_MATCH = {
   NOP:'Pelicans',NYK:'Knicks',OKC:'Thunder',ORL:'Magic',PHI:'76ers',PHX:'Suns',
   POR:'Trail Blazers',SAC:'Kings',SAS:'Spurs',TOR:'Raptors',UTA:'Jazz',WAS:'Wizards',
 };
+const BDL_TEAM_IDS = {
+  ATL:1,BOS:2,BKN:3,CHA:4,CHI:5,CLE:6,DAL:7,DEN:8,DET:9,GSW:10,
+  HOU:11,IND:12,LAC:13,LAL:14,MEM:15,MIA:16,MIL:17,MIN:18,NOP:19,NYK:20,
+  OKC:21,ORL:22,PHI:23,PHX:24,POR:25,SAC:26,SAS:27,TOR:28,UTA:29,WAS:30,
+};
 
 async function buildBdlGameMap(dateStr){
   try{
@@ -1134,6 +1139,23 @@ function toggleEV(gameId){
   const toggle = document.getElementById('ev-toggle-'+gameId);
   if(body){ if(cs.evCollapsed){body.classList.add('collapsed');} else {body.classList.remove('collapsed');} }
   if(toggle){ if(cs.evCollapsed){toggle.classList.remove('open');} else {toggle.classList.add('open');} }
+}
+
+// Generic section collapse toggle
+function toggleSec(gameId, key){
+  const cs = cardState[gameId]; if(!cs) return;
+  if(!cs._sec) cs._sec = {};
+  cs._sec[key] = !_secOpen(cs, key);
+  const game = games.find(g=>g.id===gameId);
+  if(game) renderCard(game);
+}
+function _secOpen(cs, key){ return !(cs._sec && cs._sec[key] === false); }
+function _secHdr(id, key, cs, label, extra){
+  var open = _secOpen(cs, key);
+  var arrow = open ? '▾' : '▸';
+  return '<div style="font-size:6px;color:#a78bfa;letter-spacing:1.5px;margin-bottom:'+(open?'4':'0')+'px;font-family:inherit;cursor:pointer;display:flex;align-items:center;gap:4px" onclick="toggleSec(\''+id+'\',\''+key+'\')">'
+    + '<span style="font-size:7px;color:var(--t3)">'+arrow+'</span>'
+    + label + (extra||'') + '</div>';
 }
 
 // BDL Enrichment — auto-pull clutch + odds + tracking via bdl-enrich function
@@ -2223,6 +2245,58 @@ async function generateThesis(gameId){
       awaySplitsSchedule: safe(()=>trimSplits(c.awaySplitsSchedule), 'awaySplitsSchedule'),
       standings: safe(()=>trimStandings(c.standings), 'standings'),
     };
+
+    // ── RETURNING PLAYER DETECTION (BDL injuries × SR profile cross-reference) ──
+    sections.returning = '';
+    try{
+      const hBdlId = BDL_TEAM_IDS[homeAlias], aBdlId = BDL_TEAM_IDS[awayAlias];
+      if(hBdlId && aBdlId){
+        const injResp = await bdl('player_injuries',{team_id:String(hBdlId), team_id2:String(aBdlId)});
+        const injData = injResp.data || injResp || [];
+        if(Array.isArray(injData) && injData.length > 0){
+          // Get active players from SR profiles
+          const activeNames = new Set();
+          [c.homeProfile, c.awayProfile].forEach(function(prof){
+            if(!prof||!prof.players) return;
+            prof.players.forEach(function(p){
+              if(p.status==='ACT') activeNames.add((p.full_name||'').toLowerCase().trim());
+            });
+          });
+          // Check each BDL injury entry for recent return_date
+          const today = new Date();
+          const fiveDaysAgo = new Date(today.getTime() - 5*24*60*60*1000);
+          const returning = [];
+          injData.forEach(function(inj){
+            if(!inj.return_date) return;
+            const retDate = new Date(inj.return_date);
+            if(isNaN(retDate.getTime())) return;
+            // return_date is today or within last 5 days = recently cleared
+            if(retDate >= fiveDaysAgo && retDate <= new Date(today.getTime() + 24*60*60*1000)){
+              const name = ((inj.player?.first_name||'')+' '+(inj.player?.last_name||'')).trim();
+              const nameLower = name.toLowerCase();
+              // Player is currently active on SR roster = they returned
+              if(activeNames.has(nameLower)){
+                const team = inj.player?.team?.abbreviation || '?';
+                const desc = inj.description || inj.status || '?';
+                const retStr = inj.return_date;
+                returning.push({name, team, injury:desc, returnDate:retStr, position:inj.player?.position||'?'});
+              }
+            }
+          });
+          if(returning.length > 0){
+            sections.returning = '\n=== RETURNING PLAYERS (recently cleared — structural upgrade) ===\n';
+            returning.forEach(function(r){
+              sections.returning += '🔄 '+r.team+' '+r.name+' ['+r.position+'] — returned '+r.returnDate+' (was: '+r.injury+')\n';
+            });
+            sections.returning += 'NOTE: Evaluate returning players as structural upgrades. A star (20+ PPG or top-2 USG%) returning from absence shifts the matchup — their team\'s structural baseline is higher than recent games suggest.\n';
+            addLog(gameId, '🔄 '+returning.length+' returning player(s) detected: '+returning.map(function(r){return r.name;}).join(', '), true);
+          }
+        }
+      }
+    }catch(e){
+      console.warn('BDL injuries pull failed (optional):', e.message);
+      addLog(gameId, '⚠ BDL injuries: '+e.message, false);
+    }
 
     // Inject enrichment data into sections
     const od = cs.oddsData;
@@ -4481,7 +4555,8 @@ function renderCard(game){
     var showClientSust = !showSonnetSust && leadCSust;
     if(showSonnetSust || showClientSust || (pred && pred.sustainability)){
       html+='<div style="padding:6px 10px;border-top:1px solid var(--b1)">';
-      html+='<div style="font-size:6px;color:#a78bfa;letter-spacing:1.5px;margin-bottom:4px;font-family:inherit">SUSTAINABILITY &#8212; IS THE LEAD STRUCTURAL?'+(showClientSust?' <span style="color:var(--t3);letter-spacing:0">(client-side)</span>':'')+'</div>';
+      html+=_secHdr(id,'sust',cs,'SUSTAINABILITY &#8212; IS THE LEAD STRUCTURAL?',(showClientSust?' <span style="color:var(--t3);letter-spacing:0">(client-side)</span>':''));
+      if(_secOpen(cs,'sust')){
       if(showSonnetSust){
         html+='<div style="display:flex;align-items:center;gap:4px;margin-bottom:2px"><span style="font-size:7px;color:var(--t3);width:48px">LEADING</span><span class="dv-tag" style="color:'+sustColor(leadSA.tier)+';border-color:'+sustColor(leadSA.tier)+';font-size:6px;padding:0 4px">'+esc(leadSA.teamAlias||leadTeam)+' '+(leadSA.tier||'?')+'</span><span style="font-size:5.5px;color:var(--t3)">('+sustDetail(leadSA)+')</span></div>';
         if(leadSA.shotTypeNote) html+='<div style="font-size:6px;color:var(--t2);margin-left:52px;margin-bottom:3px">'+esc(leadSA.shotTypeNote)+'</div>';
@@ -4493,6 +4568,7 @@ function renderCard(game){
       } else if(pred && pred.sustainability){
         html+='<div style="font-size:6px;color:var(--t2)">'+esc(pred.sustainability)+'</div>';
       }
+      } // end _secOpen sust
       html+='</div>';
     }
 
@@ -4607,7 +4683,8 @@ function renderCard(game){
       var lcVarColor = lc.varianceMargin > 0 ? 'var(--amber)' : lc.varianceMargin < 0 ? 'var(--green)' : 'var(--t3)';
       var lcDurColor = lc.durability.includes('STRUCTURALLY SOURCED') ? 'var(--green)' : lc.durability.includes('VARIANCE SOURCED') ? 'var(--amber)' : 'var(--t2)';
       html+='<div style="padding:6px 10px;border-top:1px solid var(--b1)">';
-      html+='<div style="font-size:6px;color:#a78bfa;letter-spacing:1.5px;margin-bottom:4px;font-family:inherit">SCORING COMPOSITION'+(lcIsClient?' <span style="color:var(--t3);letter-spacing:0">(client-side)</span>':'')+'</div>';
+      html+=_secHdr(id,'sc',cs,'SCORING COMPOSITION',(lcIsClient?' <span style="color:var(--t3);letter-spacing:0">(client-side)</span>':''));
+      if(_secOpen(cs,'sc')){
       // Team bars
       [lc.away, lc.home].forEach(function(tm){
         if(!tm) return;
@@ -4640,6 +4717,7 @@ function renderCard(game){
       html+='<span style="color:'+lcVarColor+'">Variance: '+(lc.varianceMargin>=0?lc.leadTeam:lc.trailTeam)+' +'+Math.abs(lc.varianceMargin)+'</span>';
       html+='</div>';
       html+='<div style="font-size:6px;color:'+lcDurColor+';margin:3px 0 0 34px;font-weight:500">'+esc(lc.durability)+'</div>';
+      } // end _secOpen sc
       html+='</div>';
     } else if(pred && pred.leadSource) {
       // Fallback: show Sonnet's Lead Source line when no server-side composition data
@@ -4665,7 +4743,8 @@ function renderCard(game){
       var fScore = floorInd.score, fTeam = floorInd.controlTeam||'?';
       var fVerdict = fScore>=0.90?'DOMINANT':fScore>=0.75?'STRONG':fScore>=0.60?'EARNED':fScore>=0.45?'NO EDGE':'WAIT';
       html+='<div style="padding:6px 10px;border-top:1px solid var(--b1)">';
-      html+='<div style="font-size:6px;color:#a78bfa;letter-spacing:1.5px;margin-bottom:5px;font-family:inherit">CONTROL LAYERS</div>';
+      html+=_secHdr(id,'cl',cs,'CONTROL LAYERS');
+      if(_secOpen(cs,'cl')){
       html+='<div style="display:flex;gap:12px;align-items:flex-start">';
       // Floor
       html+='<div style="flex:1"><div style="font-size:5px;color:var(--t3);letter-spacing:.5px;margin-bottom:2px">STRUCTURAL FLOOR</div>';
@@ -4700,6 +4779,7 @@ function renderCard(game){
         var crColor = ({DOMINANT:'var(--green)',STRONG:'var(--g2)',EMERGING:'var(--green)',EARNED:'var(--yellow)',ERODING:'var(--amber)',FADING:'var(--amber)',COLLAPSING:'var(--red)',SHIFT:'#60a5fa',FLIPPED:'#a78bfa'})[cRead.read]||'var(--t3)';
         html+='<div style="margin-top:5px;display:flex;align-items:center;gap:6px"><span class="dv-tag" style="color:'+crColor+';border-color:'+crColor+';font-size:6px;padding:1px 6px;font-weight:600">'+esc(cRead.read)+'</span><span style="font-size:6px;color:var(--t2)">'+esc(cRead.note)+'</span></div>';
       }
+      } // end _secOpen cl
       html+='</div>';
     }
 
@@ -4717,7 +4797,8 @@ function renderCard(game){
       var _arrowSym = function(arrow){ return arrow==="RISING"?"▲":arrow==="FALLING"?"▼":"▬"; };
       var _vals = function(m){ if(!m||!m.values) return "—"; return m.values.map(function(v){return v!=null?((m.label&&(m.label.includes("%")||m.label.includes("ratio")))?v.toFixed(0)+"%":String(Math.round(v))):"?";}).join("→"); };
       html+='<div style="padding:5px 10px;border-top:1px solid var(--b1)">';
-      html+='<div style="font-size:6px;color:#a78bfa;letter-spacing:1.5px;margin-bottom:4px;font-family:inherit">DIRECTIONAL ARROWS</div>';
+      html+=_secHdr(id,'arr',cs,'DIRECTIONAL ARROWS');
+      if(_secOpen(cs,'arr')){
       // Table header
       html+='<table style="width:100%;border-collapse:collapse;font-size:6px">';
       html+='<tr><th style="text-align:left;color:var(--t3);font-weight:400;padding:1px 4px;border-bottom:1px solid var(--b1);font-size:5px;letter-spacing:.5px"></th>';
@@ -4755,6 +4836,7 @@ function renderCard(game){
         var adjColor2 = adj.signal==="INTERIOR PIVOT"?"var(--green)":adj.signal==="STRUCTURAL ACCEL"?"var(--green)":adj.signal==="STRUCTURAL EROSION"?"var(--red)":adj.signal==="VARIANCE SHIFT"?"var(--amber)":"var(--t3)";
         html+='<div style="margin-top:4px;font-size:6px;color:'+adjColor2+';font-weight:500">'+esc(adj.signal)+' <span style="font-weight:400;color:var(--t2)">&#8212; '+esc(adj.note)+'</span></div>';
       }
+      } // end _secOpen arr
       html+='</div>';
     }
 
@@ -4762,7 +4844,8 @@ function renderCard(game){
     var nh = cs.analysisHistory;
     if(nh && nh.length > 0){
       html+='<div style="padding:6px 10px;border-top:1px solid var(--b1)">';
-      html+='<div style="font-size:6px;color:#67e8f9;letter-spacing:1.5px;margin-bottom:5px;font-family:inherit">GAME NARRATIVE <span style="color:var(--t3);letter-spacing:0">('+nh.length+' read'+(nh.length>1?'s':'')+')</span></div>';
+      html+=_secHdr(id,'narr',cs,'GAME NARRATIVE','<span style="color:var(--t3);letter-spacing:0"> ('+nh.length+' read'+(nh.length>1?'s':'')+')</span>').replace('color:#a78bfa','color:#67e8f9');
+      if(_secOpen(cs,'narr')){
       html+='<div style="display:flex;gap:3px;overflow-x:auto;padding-bottom:3px;-webkit-overflow-scrolling:touch">';
       for(var ni=0;ni<nh.length;ni++){
         var ne = nh[ni];
@@ -4781,6 +4864,7 @@ function renderCard(game){
         html+='</div>';
       }
       html+='</div>';
+      } // end _secOpen narr
       html+='</div>';
     }
 
@@ -5010,12 +5094,13 @@ function renderCard(game){
   // Thesis block
   html+=`<div class="thesis" id="thesis-block-${id}">
     <div class="thdr">
-      PRE-GAME THESIS
+      <span style="cursor:pointer" onclick="toggleSec('${id}','thesis')"><span style="font-size:7px;color:var(--t3)">${_secOpen(cs,'thesis')?'▾':'▸'}</span> PRE-GAME THESIS</span>
       <div style="display:flex;gap:6px;align-items:center;">
         ${state==='PRE'&&!cs.generating?`<button class="tgen" onclick="generateThesis('${id}')">⚡ GENERATE</button>`:''}        <button class="tedit" onclick="startEdit('${id}')">EDIT</button>
       </div>
     </div>`;
 
+  if(_secOpen(cs,'thesis')){
   if(cs.generating){
     html+=`<div class="gen-progress" id="gen-progress-${id}">${(cs.genSteps||[]).map(s=>{
       const icon=s.status==='done'?'✓':s.status==='active'?'⟳':s.status==='err'?'✗':'·';
@@ -5037,6 +5122,7 @@ function renderCard(game){
   } else {
     html+=`<div class="tempty">No thesis — click GENERATE or EDIT</div>`;
   }
+  } // end _secOpen thesis
   html+=`</div>`;
 
   // Logs + footer
