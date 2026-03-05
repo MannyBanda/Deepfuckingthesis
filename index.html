@@ -2274,6 +2274,19 @@ async function generateThesis(gameId){
         const aGameIds = aGames.map(g=>g.id).filter(Boolean);
         addLog(gameId, '📊 Recent games: '+homeAlias+' '+hGameIds.length+' ('+hGames.map(g=>g.date||'?').join(',')+') | '+awayAlias+' '+aGameIds.length+' ('+aGames.map(g=>g.date||'?').join(',')+')', false);
 
+        // Build set of injured player names to exclude from NEW/RETURNING
+        const _injuredNames = new Set();
+        if(c.injuries && c.injuries.teams){
+          c.injuries.teams.forEach(function(t){
+            (t.players||[]).forEach(function(p){
+              const injArr = Array.isArray(p.injuries)?p.injuries:[];
+              const li = injArr.length>0?injArr[0]:{};
+              const st = (li.status||p.status||'').toUpperCase();
+              if(st==='OUT'||st==='O'||st.includes('OUT FOR SEASON')) _injuredNames.add((p.full_name||'').toLowerCase().trim());
+            });
+          });
+        }
+
         // Pull box scores for those games (2 BDL calls)
         let hStats = [], aStats = [];
         if(hGameIds.length > 0 || aGameIds.length > 0){
@@ -2287,7 +2300,7 @@ async function generateThesis(gameId){
         }
 
         // Process each team's recent form
-        function processTeamForm(stats, games, bdlTeamId, alias, profile){
+        function processTeamForm(stats, games, bdlTeamId, alias, profile, injuredNames){
           if(!games.length) return null;
           // Filter stats to this team's players
           const teamStats = stats.filter(s => (s.team?.id||s.player?.team_id) == bdlTeamId);
@@ -2319,7 +2332,8 @@ async function generateThesis(gameId){
             });
           });
 
-          // Detect RETURNING — on active roster but not in recent box scores
+          // Detect NEW/RETURNING — on active roster but not in recent box scores
+          // Could be returning from injury OR new acquisition making debut
           const returning = [];
           if(profile && profile.players){
             profile.players.forEach(pl => {
@@ -2327,13 +2341,10 @@ async function generateThesis(gameId){
               const name = pl.full_name||'';
               const nameLower = name.toLowerCase().trim();
               if(nameLower && !recentPlayerNames.has(nameLower)){
-                // Check this isn't someone with 0 season minutes (end-of-bench)
-                const avg = pl.average||{};
-                const sznMins = avg.minutes ? parseFloat(avg.minutes) : 0;
-                if(sznMins >= 10){ // only flag rotation players (10+ mpg)
-                  returning.push({name, position:pl.primary_position||pl.position||'?'});
-                  console.log('RETURNING detected:', name, alias, 'sznMins:', sznMins, '| not in recent box scores');
-                }
+                // Skip players already listed as OUT on injury report
+                if(injuredNames && injuredNames.has(nameLower)) return;
+                returning.push({name, position:pl.primary_position||pl.position||'?'});
+                console.log('NEW/RETURNING detected:', name, alias, '| not in recent box scores');
               }
             });
           }
@@ -2375,8 +2386,8 @@ async function generateThesis(gameId){
           return {returning, hot, cold, minsShift, record, gamesPlayed:games.length};
         }
 
-        _recentForm.home = processTeamForm(hStats, hGames, hBdlId, homeAlias, c.homeProfile);
-        _recentForm.away = processTeamForm(aStats, aGames, aBdlId, awayAlias, c.awayProfile);
+        _recentForm.home = processTeamForm(hStats, hGames, hBdlId, homeAlias, c.homeProfile, _injuredNames);
+        _recentForm.away = processTeamForm(aStats, aGames, aBdlId, awayAlias, c.awayProfile, _injuredNames);
 
         // Build sections
         function formatTeamForm(form, alias){
@@ -2399,7 +2410,7 @@ async function generateThesis(gameId){
         }
         const allRet = [...(_recentForm.home?.returning||[]), ...(_recentForm.away?.returning||[])];
         if(allRet.length > 0){
-          sections.returning = '\nRETURNING PLAYERS NOTE: Players listed as RETURNING were on the active roster but did NOT play in the team\'s last 3 games. Evaluate as structural upgrades — their team\'s recent performance was WITHOUT them.\n';
+          sections.returning = '\nNEW/RETURNING PLAYERS NOTE: Players listed as NEW/RETURNING are on the active roster but did NOT play in the team\'s last 3 games. This includes players returning from injury AND new acquisitions making their debut. Evaluate as structural upgrades — the team\'s recent performance was WITHOUT them.\n';
           addLog(gameId, '🔄 '+allRet.length+' returning player(s): '+allRet.map(r=>r.name).join(', '), true);
         }
         addLog(gameId, '📊 Recent form computed ('+hGames.length+'H/'+aGames.length+'A games)', true);
@@ -2449,7 +2460,7 @@ async function generateThesis(gameId){
         });
         // Build returning tag
         const ret = _returningByTeam[alias.toUpperCase()] || [];
-        const retStr = ret.length > 0 ? ' | 🔄 RETURNING: '+ret.map(function(r){return r.name+' ['+r.position+']';}).join(', ') : '';
+        const retStr = ret.length > 0 ? ' | 🔄 NEW/RETURNING: '+ret.map(function(r){return r.name+' ['+r.position+']';}).join(', ') : '';
         let out = alias+': '+inPlayers.length+' players available'+retStr;
         if(outPlayers.length) out += '\n'+alias+' OUT: '+outPlayers.join(' | ');
         if(gtdPlayers.length) out += '\n'+alias+' GTD: '+gtdPlayers.join(' | ');
