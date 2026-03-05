@@ -54,11 +54,24 @@ exports.handler = async (event) => {
       if (params.team_id) url += `&team_ids[]=${params.team_id}`;
       if (params.team_id2) url += `&team_ids[]=${params.team_id2}`;
       break;
+    case 'team_games':
+      // /v1/games?team_ids[]=ID&per_page=5&end_date=YYYY-MM-DD (recent games for a team)
+      url = `${BDL_BASE}/v1/games?team_ids[]=${params.team_id}&per_page=${params.per_page||5}`;
+      if (params.end_date) url += `&end_date=${params.end_date}`;
+      if (params.start_date) url += `&start_date=${params.start_date}`;
+      break;
+    case 'multi_stats':
+      // /v1/stats with multiple game_ids — pass as comma-separated, we expand to game_ids[]=X&game_ids[]=Y
+      url = `${BDL_BASE}/v1/stats?per_page=100`;
+      if (params.game_ids) {
+        params.game_ids.split(',').forEach(id => { url += `&game_ids[]=${id.trim()}`; });
+      }
+      break;
     default:
       return {
         statusCode: 400,
         headers,
-        body: JSON.stringify({ error: 'Invalid type. Valid: games, game, stats, advanced, player_injuries' }),
+        body: JSON.stringify({ error: 'Invalid type. Valid: games, game, stats, advanced, player_injuries, team_games, multi_stats' }),
       };
   }
 
