@@ -2246,9 +2246,52 @@ async function generateThesis(gameId){
       standings: safe(()=>trimStandings(c.standings), 'standings'),
     };
 
+    // ── RETURNING PLAYER DETECTION (BDL injuries × SR profile — runs before availability) ──
+    const _returningByTeam = {}; // alias → [{name, injury, returnDate, position}]
+    sections.returning = '';
+    try{
+      const hBdlId = BDL_TEAM_IDS[homeAlias], aBdlId = BDL_TEAM_IDS[awayAlias];
+      if(hBdlId && aBdlId){
+        const injResp = await bdl('player_injuries',{team_id:String(hBdlId), team_id2:String(aBdlId)});
+        const injData = injResp.data || injResp || [];
+        if(Array.isArray(injData) && injData.length > 0){
+          const activeNames = new Set();
+          [c.homeProfile, c.awayProfile].forEach(function(prof){
+            if(!prof||!prof.players) return;
+            prof.players.forEach(function(p){
+              if(p.status==='ACT') activeNames.add((p.full_name||'').toLowerCase().trim());
+            });
+          });
+          const today = new Date();
+          const fiveDaysAgo = new Date(today.getTime() - 5*24*60*60*1000);
+          injData.forEach(function(inj){
+            if(!inj.return_date) return;
+            const retDate = new Date(inj.return_date);
+            if(isNaN(retDate.getTime())) return;
+            if(retDate >= fiveDaysAgo && retDate <= new Date(today.getTime() + 24*60*60*1000)){
+              const name = ((inj.player?.first_name||'')+' '+(inj.player?.last_name||'')).trim();
+              if(activeNames.has(name.toLowerCase())){
+                const team = (inj.player?.team?.abbreviation || '?').toUpperCase();
+                const desc = inj.description || inj.status || '?';
+                if(!_returningByTeam[team]) _returningByTeam[team] = [];
+                _returningByTeam[team].push({name, injury:desc, returnDate:inj.return_date, position:inj.player?.position||'?'});
+              }
+            }
+          });
+          const allRet = Object.values(_returningByTeam).flat();
+          if(allRet.length > 0){
+            sections.returning = '\nRETURNING PLAYERS NOTE: Evaluate returning players as structural upgrades. A star (20+ PPG or top-2 USG%) returning from absence means their team\'s structural baseline is higher than recent games suggest.\n';
+            addLog(gameId, '🔄 '+allRet.length+' returning player(s): '+allRet.map(function(r){return r.name;}).join(', '), true);
+          }
+        }
+      }
+    }catch(e){
+      console.warn('BDL injuries pull failed (optional):', e.message);
+      addLog(gameId, '⚠ BDL injuries: '+e.message, false);
+    }
+
     // ── PRE-COMPUTED AVAILABILITY (team-by-team, cross-referenced) ──
     sections.availability = safe(()=>{
-      // Build injury lookup: player name → {status, desc}
       const injMap = {};
       if(c.injuries && c.injuries.teams){
         c.injuries.teams.forEach(function(t){
@@ -2279,72 +2322,24 @@ async function generateThesis(gameId){
             } else if(st==='DAY-TO-DAY'||st==='GTD'||st==='QUESTIONABLE'||st==='DOUBTFUL'||st==='D'){
               gtdPlayers.push(name+' ['+pos+'] ⚠️ '+st+(inj.desc?' — '+inj.desc:''));
             } else {
-              inPlayers.push(name+' ['+pos+'] ✅ IN');
+              inPlayers.push(name);
             }
           } else {
-            inPlayers.push(name+' ['+pos+'] ✅ IN');
+            inPlayers.push(name);
           }
         });
-        let out = alias+' IN: '+inPlayers.map(function(p){return p.split(']')[0]+']';}).join(' | ')+'\n';
-        if(outPlayers.length) out += alias+' OUT: '+outPlayers.join(' | ')+'\n';
-        if(gtdPlayers.length) out += alias+' GTD: '+gtdPlayers.join(' | ')+'\n';
-        return out;
+        // Build returning tag
+        const ret = _returningByTeam[alias.toUpperCase()] || [];
+        const retStr = ret.length > 0 ? ' | 🔄 RETURNING: '+ret.map(function(r){return r.name+' (was: '+r.injury+')';}).join(', ') : '';
+        let out = alias+': '+inPlayers.length+' players available'+retStr;
+        if(outPlayers.length) out += '\n'+alias+' OUT: '+outPlayers.join(' | ');
+        if(gtdPlayers.length) out += '\n'+alias+' GTD: '+gtdPlayers.join(' | ');
+        if(!outPlayers.length && !gtdPlayers.length && !ret.length) out += ' (full strength)';
+        return out+'\n';
       }
 
       return buildTeamAvail(c.awayProfile, awayAlias) + buildTeamAvail(c.homeProfile, homeAlias);
     }, 'availability');
-
-    // ── RETURNING PLAYER DETECTION (BDL injuries × SR profile cross-reference) ──
-    sections.returning = '';
-    try{
-      const hBdlId = BDL_TEAM_IDS[homeAlias], aBdlId = BDL_TEAM_IDS[awayAlias];
-      if(hBdlId && aBdlId){
-        const injResp = await bdl('player_injuries',{team_id:String(hBdlId), team_id2:String(aBdlId)});
-        const injData = injResp.data || injResp || [];
-        if(Array.isArray(injData) && injData.length > 0){
-          // Get active players from SR profiles
-          const activeNames = new Set();
-          [c.homeProfile, c.awayProfile].forEach(function(prof){
-            if(!prof||!prof.players) return;
-            prof.players.forEach(function(p){
-              if(p.status==='ACT') activeNames.add((p.full_name||'').toLowerCase().trim());
-            });
-          });
-          // Check each BDL injury entry for recent return_date
-          const today = new Date();
-          const fiveDaysAgo = new Date(today.getTime() - 5*24*60*60*1000);
-          const returning = [];
-          injData.forEach(function(inj){
-            if(!inj.return_date) return;
-            const retDate = new Date(inj.return_date);
-            if(isNaN(retDate.getTime())) return;
-            // return_date is today or within last 5 days = recently cleared
-            if(retDate >= fiveDaysAgo && retDate <= new Date(today.getTime() + 24*60*60*1000)){
-              const name = ((inj.player?.first_name||'')+' '+(inj.player?.last_name||'')).trim();
-              const nameLower = name.toLowerCase();
-              // Player is currently active on SR roster = they returned
-              if(activeNames.has(nameLower)){
-                const team = inj.player?.team?.abbreviation || '?';
-                const desc = inj.description || inj.status || '?';
-                const retStr = inj.return_date;
-                returning.push({name, team, injury:desc, returnDate:retStr, position:inj.player?.position||'?'});
-              }
-            }
-          });
-          if(returning.length > 0){
-            sections.returning = '\n=== RETURNING PLAYERS (recently cleared — structural upgrade) ===\n';
-            returning.forEach(function(r){
-              sections.returning += '🔄 '+r.team+' '+r.name+' ['+r.position+'] — returned '+r.returnDate+' (was: '+r.injury+')\n';
-            });
-            sections.returning += 'NOTE: Evaluate returning players as structural upgrades. A star (20+ PPG or top-2 USG%) returning from absence shifts the matchup — their team\'s structural baseline is higher than recent games suggest.\n';
-            addLog(gameId, '🔄 '+returning.length+' returning player(s) detected: '+returning.map(function(r){return r.name;}).join(', '), true);
-          }
-        }
-      }
-    }catch(e){
-      console.warn('BDL injuries pull failed (optional):', e.message);
-      addLog(gameId, '⚠ BDL injuries: '+e.message, false);
-    }
 
     // Inject enrichment data into sections
     const od = cs.oddsData;
