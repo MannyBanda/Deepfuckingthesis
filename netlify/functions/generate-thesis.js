@@ -688,7 +688,7 @@ function buildSystemPrompt() {
     '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
     'AVAILABILITY (PRE-COMPUTED — copy exactly as provided, do NOT rearrange or mix players between teams)',
     '[The server has pre-computed the availability section with correct team attribution. Reproduce it verbatim.]',
-    '[If RETURNING players are listed, include them with 🔄 tag after the team they belong to.]',
+    '[If NEW/RETURNING players are listed, include them with 🔄 tag after the team they belong to.]',
     '',
     'SIA (from pre-computed assessment):',
     '[Player] OUT \u2014 [stat line] \u2014 I1:[impact] I2:[impact] I3:[impact] I4:[impact] I5:[impact] [GP GATE: status]',
