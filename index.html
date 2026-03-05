@@ -2266,10 +2266,13 @@ async function generateThesis(gameId){
           bdl('team_games',{team_id:String(hBdlId), per_page:'5', end_date:fmtDate(yesterday), start_date:fmtDate(tenDaysAgo)}),
           bdl('team_games',{team_id:String(aBdlId), per_page:'5', end_date:fmtDate(yesterday), start_date:fmtDate(tenDaysAgo)}),
         ]);
-        const hGames = (hGamesResp.data||[]).slice(0,3); // last 3
-        const aGames = (aGamesResp.data||[]).slice(0,3);
+        // Sort by date descending (most recent first) then take last 3
+        const sortByDateDesc = (arr) => (arr||[]).sort((a,b) => new Date(b.date||0) - new Date(a.date||0));
+        const hGames = sortByDateDesc(hGamesResp.data).slice(0,3);
+        const aGames = sortByDateDesc(aGamesResp.data).slice(0,3);
         const hGameIds = hGames.map(g=>g.id).filter(Boolean);
         const aGameIds = aGames.map(g=>g.id).filter(Boolean);
+        addLog(gameId, '📊 Recent games: '+homeAlias+' '+hGameIds.length+' ('+hGames.map(g=>g.date||'?').join(',')+') | '+awayAlias+' '+aGameIds.length+' ('+aGames.map(g=>g.date||'?').join(',')+')', false);
 
         // Pull box scores for those games (2 BDL calls)
         let hStats = [], aStats = [];
@@ -2329,6 +2332,7 @@ async function generateThesis(gameId){
                 const sznMins = avg.minutes ? parseFloat(avg.minutes) : 0;
                 if(sznMins >= 10){ // only flag rotation players (10+ mpg)
                   returning.push({name, position:pl.primary_position||pl.position||'?'});
+                  console.log('RETURNING detected:', name, alias, 'sznMins:', sznMins, '| not in recent box scores');
                 }
               }
             });
@@ -2434,7 +2438,7 @@ async function generateThesis(gameId){
             const st = inj.status;
             if(st==='OUT'||st==='O'){
               outPlayers.push(name+' ['+pos+'] ❌ OUT'+(inj.desc?' — '+inj.desc:''));
-            } else if(st==='DAY-TO-DAY'||st==='GTD'||st==='QUESTIONABLE'||st==='DOUBTFUL'||st==='D'){
+            } else if(st==='DAY-TO-DAY'||st==='DAY TO DAY'||st==='GTD'||st==='QUESTIONABLE'||st==='DOUBTFUL'||st==='D'||st==='PROBABLE'){
               gtdPlayers.push(name+' ['+pos+'] ⚠️ '+st+(inj.desc?' — '+inj.desc:''));
             } else {
               inPlayers.push(name);
