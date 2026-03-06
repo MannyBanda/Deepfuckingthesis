@@ -375,9 +375,9 @@ const cachedClutch = JSON.parse(localStorage.getItem('nba4:clutch')||'{}');
 const cachedOdds = JSON.parse(localStorage.getItem('nba4:odds')||'{}');
 const cachedOddsHistory = JSON.parse(localStorage.getItem('nba4:oddsHist')||'{}');
 const confCache = JSON.parse(localStorage.getItem('nba4:confTable')||'{}');
-function persistClutch(id,cs){cachedClutch[id]={data:cs.clutchData,tier:cs.clutchTier};localStorage.setItem('nba4:clutch',JSON.stringify(cachedClutch));}
-function persistOdds(id,cs){cachedOdds[id]=cs.oddsData;cachedOddsHistory[id]=cs.oddsHistory;localStorage.setItem('nba4:odds',JSON.stringify(cachedOdds));localStorage.setItem('nba4:oddsHist',JSON.stringify(cachedOddsHistory));}
-function persistConfRow(gameId, rowData){confCache[gameId]=rowData;localStorage.setItem('nba4:confTable',JSON.stringify(confCache));}
+function persistClutch(id,cs){try{cachedClutch[id]={data:cs.clutchData,tier:cs.clutchTier};localStorage.setItem('nba4:clutch',JSON.stringify(cachedClutch));}catch(e){console.warn('Clutch persist failed:',e.message);}}
+function persistOdds(id,cs){try{cachedOdds[id]=cs.oddsData;cachedOddsHistory[id]=cs.oddsHistory;localStorage.setItem('nba4:odds',JSON.stringify(cachedOdds));localStorage.setItem('nba4:oddsHist',JSON.stringify(cachedOddsHistory));}catch(e){console.warn('Odds persist failed:',e.message);}}
+function persistConfRow(gameId, rowData){try{confCache[gameId]=rowData;localStorage.setItem('nba4:confTable',JSON.stringify(confCache));}catch(e){console.warn('ConfRow persist failed:',e.message);}}
 function persistTracking(id,cs){try{localStorage.setItem('nba4:tracking:'+id,JSON.stringify(cs.trackingData));}catch(e){console.warn('Tracking persist failed:',e.message);}}
 function persistStructural(id,cs){try{localStorage.setItem('nba4:structural:'+id,JSON.stringify(cs.structural));}catch(e){console.warn('Structural persist failed:',e.message);}}
 function persistAnalysis(id,cs){try{localStorage.setItem('nba4:analysis:'+id,JSON.stringify({analysis:cs.analysis,analysisTime:cs.analysisTime?cs.analysisTime.getTime():null,sonnetIndicators:cs.sonnetIndicators,prediction:cs.prediction,sustainabilityAudit:cs.sustainabilityAudit,analysisHistory:cs.analysisHistory||[],edgeHistory:cs.edgeHistory||[],clientIndAtAnalysis:cs.clientIndAtAnalysis}));}catch(e){console.warn('Analysis persist failed:',e.message);}}
@@ -644,6 +644,49 @@ async function loadSchedule(){
   }catch(e){ showErr(e.message); }
   finally{ showLoading(false); }
 }
+
+// ── LOCALSTORAGE CLEANUP — purge stale per-game data on boot ──
+(function cleanupStorage(){
+  try{
+    const now = Date.now();
+    const maxAge = 24*60*60*1000; // 24 hours
+    const prefixes = ['nba4:analysis:','nba4:depth:','nba4:tracking:','nba4:structural:','nba4:snap:','nba4:gap:','nba4:srCache:'];
+    const keysToRemove = [];
+    for(let i=0; i<localStorage.length; i++){
+      const key = localStorage.key(i);
+      if(!key) continue;
+      const isGameKey = prefixes.some(p => key.startsWith(p));
+      if(!isGameKey) continue;
+      // Try to parse and check for staleness
+      try{
+        const raw = localStorage.getItem(key);
+        if(!raw || raw.length < 5){ keysToRemove.push(key); continue; }
+        const val = JSON.parse(raw);
+        // Check for timestamp indicators
+        const ts = val.analysisTime || val.pbpTime || val.time || 0;
+        if(ts > 0 && (now - ts) > maxAge){ keysToRemove.push(key); continue; }
+        // srCache entries older than 6 hours
+        if(key.startsWith('nba4:srCache:') && raw.length > 100000){ keysToRemove.push(key); continue; }
+      }catch(e){ keysToRemove.push(key); } // corrupt data — remove
+    }
+    // Also clean up bulk caches if they have old game IDs
+    ['nba4:clutch','nba4:odds','nba4:oddsHist','nba4:confTable'].forEach(function(bulkKey){
+      try{
+        const raw = localStorage.getItem(bulkKey);
+        if(raw && raw.length > 500000) localStorage.removeItem(bulkKey); // over 500KB = stale
+      }catch(e){}
+    });
+    keysToRemove.forEach(function(k){ try{ localStorage.removeItem(k); }catch(e){} });
+    if(keysToRemove.length > 0) console.log('[CLEANUP] Removed '+keysToRemove.length+' stale localStorage entries');
+    // Log storage usage
+    let totalSize = 0;
+    for(let i=0; i<localStorage.length; i++){
+      const k = localStorage.key(i);
+      if(k) totalSize += (localStorage.getItem(k)||'').length;
+    }
+    console.log('[STORAGE] ~'+(totalSize/1024).toFixed(0)+'KB used across '+localStorage.length+' keys');
+  }catch(e){ console.warn('Storage cleanup failed:', e.message); }
+})();
 
 // Load on page ready
 loadSchedule();
@@ -1632,7 +1675,7 @@ async function handleClutchUpload(input){
 
     // Store globally
     globalClutchData = data;
-    localStorage.setItem('nba4:globalClutch', JSON.stringify(data));
+    try{ localStorage.setItem('nba4:globalClutch', JSON.stringify(data)); }catch(e){ console.warn('GlobalClutch persist failed:', e.message); }
     const count = Object.keys(data.teams).length;
     const extractedList = Object.keys(data.teams).join(', ');
 
@@ -2577,7 +2620,7 @@ async function generateThesis(gameId){
     }
     const data = await resp.json();
     theses[gameId] = (data.thesis||'').replace(/\*\*/g,'').replace(/^#{1,3}\s/gm,'');
-    localStorage.setItem('nba4:theses', JSON.stringify(theses));
+    try{ localStorage.setItem('nba4:theses', JSON.stringify(theses)); }catch(e){ console.warn('Thesis persist failed:', e.message); }
     // Log pre-computed SIA results if available
     if(data.preComputed){
       const pc = data.preComputed;
@@ -4220,7 +4263,7 @@ function renderGrid(){
 }
 
 // ── Thesis helpers ────────────────────────────────────────────────────────
-function saveThesis(gameId,text){theses[gameId]=text;localStorage.setItem('nba4:theses',JSON.stringify(theses));renderConfidenceTable();}
+function saveThesis(gameId,text){theses[gameId]=text;try{localStorage.setItem('nba4:theses',JSON.stringify(theses));}catch(e){console.warn('Thesis persist failed:',e.message);}renderConfidenceTable();}
 function clearTheses(){if(!confirm('Clear all theses?'))return;Object.keys(theses).forEach(k=>delete theses[k]);Object.keys(confCache).forEach(k=>delete confCache[k]);localStorage.removeItem('nba4:theses');localStorage.removeItem('nba4:confTable');games.filter(g=>selIds.includes(g.id)).forEach(g=>renderCard(g));renderConfidenceTable();}
 function clearMarketCache(){if(!confirm('Clear all cached clutch + odds data?'))return;Object.keys(cachedClutch).forEach(k=>delete cachedClutch[k]);Object.keys(cachedOdds).forEach(k=>delete cachedOdds[k]);Object.keys(cachedOddsHistory).forEach(k=>delete cachedOddsHistory[k]);globalClutchData=null;localStorage.removeItem('nba4:clutch');localStorage.removeItem('nba4:odds');localStorage.removeItem('nba4:oddsHist');localStorage.removeItem('nba4:globalClutch');for(const id of selIds){const cs=cardState[id];if(cs){cs.clutchData=null;cs.clutchTier=3;cs.oddsData=null;cs.oddsHistory=[];}}games.filter(g=>selIds.includes(g.id)).forEach(g=>renderCard(g));}
 function parseThesis(t){
