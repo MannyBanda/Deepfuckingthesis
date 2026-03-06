@@ -422,6 +422,7 @@ var SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing real-time 
 + '   - Trag3 (Foul Gate): key player in foul trouble — forward indicator degradation\n'
 + '   - Trag4 (Closing Lineup): who is on the floor generating the current read\n\n'
 + '8. DEPTH AUDIT (PBP, when available): 3PT assisted/unassisted, forced/unforced TOs, shot zones, scoring runs\n\n'
++ '9. GAME META (home/away): LC=lead changes, TT=times tied, TS=true shooting %, A/TO=assist-to-turnover ratio, EGS=efficiency game score, Runs=biggest unanswered run, TimeLead=time spent leading, TOrem=remaining timeouts, Foulouts=players fouled out. Use contextually — these matter most in close games and late-game scenarios.\n\n'
 + 'HOW TO USE THE LAYERS TOGETHER:\n'
 + '   The STRUCTURAL FLOOR answers "who should win." The ROLLING WINDOW answers "who is winning now." The GAP answers "is the edge compounding or fading."\n'
 + '   The ARROWS show HOW — is the team adjusting its approach (interior pivot, variance shift).\n'
