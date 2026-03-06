@@ -2609,11 +2609,34 @@ async function generateThesis(gameId){
       standings: payload.analytical.standings ? Object.keys(payload.analytical.standings).join(',') : 'EMPTY',
     });
 
-    const resp = await fetch(FN+'generate-thesis',{
+    // Thesis generation with auto-retry on timeout
+    // Netlify gateway kills idle connections at ~30s, so retry once on timeout/network error
+    async function fetchThesisWithRetry(url, opts, maxAttempts){
+      for(var attempt = 1; attempt <= maxAttempts; attempt++){
+        try{
+          var resp = await fetch(url, opts);
+          // Gateway timeout returns 502/504 — retry those too
+          if((resp.status === 502 || resp.status === 504) && attempt < maxAttempts){
+            addLog(gameId, '⏳ Thesis gen attempt '+attempt+' got '+resp.status+' — retrying...', false);
+            continue;
+          }
+          return resp;
+        }catch(e){
+          // Network error (gateway killed connection) — retry
+          if(attempt < maxAttempts){
+            addLog(gameId, '⏳ Thesis gen attempt '+attempt+' failed ('+e.message.substring(0,40)+') — retrying...', false);
+            continue;
+          }
+          throw e;
+        }
+      }
+    }
+
+    const resp = await fetchThesisWithRetry(FN+'generate-thesis',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify(payload),
-    });
+    }, 2);
     if(!resp.ok){
       const errData = await resp.json().catch(()=>({error:'Unknown error '+resp.status}));
       throw new Error(errData.error||'Thesis gen failed: '+resp.status);
