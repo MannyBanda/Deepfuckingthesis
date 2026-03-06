@@ -763,7 +763,7 @@ exports.handler = async function(event) {
       + '\nGAME DATA:\n' + JSON.stringify(summaryData);
 
     var controller = new AbortController();
-    var timeout = setTimeout(function() { controller.abort(); }, 25000);
+    var timeout = setTimeout(function() { controller.abort(); }, 55000);
 
     var resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -797,7 +797,7 @@ exports.handler = async function(event) {
     };
   } catch (err) {
     if (err.name === 'AbortError') {
-      return { statusCode: 504, headers: headers, body: JSON.stringify({ error: 'Analysis timed out (25s). Try again.' }) };
+      return { statusCode: 504, headers: headers, body: JSON.stringify({ error: 'Analysis timed out (55s). Try again.' }) };
     }
     return { statusCode: 500, headers: headers, body: JSON.stringify({ error: err.message }) };
   }
