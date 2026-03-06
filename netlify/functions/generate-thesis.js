@@ -728,24 +728,35 @@ function buildSystemPrompt() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// MAIN HANDLER
+// MAIN HANDLER — Netlify Functions v2 with streaming
 // ══════════════════════════════════════════════════════════════════════════════
 
-exports.handler = async function(event) {
-  var headers = {
+export default async function(request) {
+  var corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type',
-    'Content-Type': 'application/json'
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
   };
-  if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: headers, body: '' };
-  if (event.httpMethod !== 'POST') return { statusCode: 405, headers: headers, body: JSON.stringify({ error: 'POST only' }) };
+
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
+  if (request.method !== 'POST') {
+    return new Response(JSON.stringify({ error: 'POST only' }), {
+      status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    });
+  }
 
   try {
-    var body = JSON.parse(event.body || '{}');
+    var body = await request.json();
     var apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) return { statusCode: 500, headers: headers, body: JSON.stringify({ error: 'Missing ANTHROPIC_API_KEY' }) };
+    if (!apiKey) {
+      return new Response(JSON.stringify({ error: 'Missing ANTHROPIC_API_KEY' }), {
+        status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
 
-    // ── Legacy mode (backward compat) ──
+    // ── Legacy mode (backward compat — non-streaming) ──
     if (body.systemPrompt && body.userPrompt) {
       var legResp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -753,9 +764,16 @@ exports.handler = async function(event) {
         body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 2000, system: body.systemPrompt, messages: [{ role: 'user', content: body.userPrompt }] }),
       });
       if (!legResp.ok) {
-        var e = await legResp.text(); return { statusCode: legResp.status, headers: headers, body: JSON.stringify({ error: 'Anthropic ' + legResp.status + ': ' + e.substring(0, 300) }) }; }
+        var e = await legResp.text();
+        return new Response(JSON.stringify({ error: 'Anthropic ' + legResp.status + ': ' + e.substring(0, 300) }), {
+          status: legResp.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
       var legData = await legResp.json();
-      return { statusCode: 200, headers: headers, body: JSON.stringify({ thesis: legData.content.filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('\n'), usage: legData.usage }) };
+      return new Response(JSON.stringify({
+        thesis: legData.content.filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('\n'),
+        usage: legData.usage
+      }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     // ── Smart compute mode ──
@@ -765,7 +783,7 @@ exports.handler = async function(event) {
     var homeAlias = matchup.home || 'HOME';
     var awayAlias = matchup.away || 'AWAY';
 
-    // ── PRE-COMPUTE ──
+    // ── PRE-COMPUTE (fast, synchronous) ──
     var rosterAudit = computeRosterAudit(analytical, homeAlias, awayAlias);
     var sia = computeSIA(rosterAudit, analytical, homeAlias, awayAlias);
     var redistribution = computeRedistribution(rosterAudit, sia, analytical, homeAlias, awayAlias);
@@ -804,35 +822,107 @@ exports.handler = async function(event) {
       'IMPORTANT: The PRE-COMPUTED STRUCTURAL ASSESSMENT contains SIA context with GP gate status. Players marked GP GATE SUPPRESSED should NOT cause further indicator discounts \u2014 team stats already reflect their absence. Players marked FULL GP gate with degradation tiers inform your indicator scoring. Show SIA notation in AVAILABILITY. If a depletion gate ceiling is set, justify exceeding it if you do.\n\n' +
       'Output the compact thesis format.';
 
-    // ── CALL SONNET ──
-    var resp = await fetch('https://api.anthropic.com/v1/messages', {
+    // ── PRE-COMPUTED RESULT (sent before streaming) ──
+    var preComputedResult = {
+      rosterAudit: { homeOut: rosterAudit.out.home.length, awayOut: rosterAudit.out.away.length,
+        homeOutNames: rosterAudit.out.home.map(function(p) { return p.name; }),
+        awayOutNames: rosterAudit.out.away.map(function(p) { return p.name; }) },
+      siaCaps: { home: finalCaps.home.caps, away: finalCaps.away.caps },
+      depletion: depletion, pyth: pyth, bhv: bhv
+    };
+
+    // ── CALL SONNET (streaming) ──
+    var anthropicResp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 2000, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
+      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 2000, stream: true, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
     });
 
-    if (!resp.ok) {
-      var errText = await resp.text();
-      return { statusCode: resp.status, headers: headers, body: JSON.stringify({ error: 'Anthropic ' + resp.status + ': ' + errText.substring(0, 300) }) };
+    if (!anthropicResp.ok) {
+      var errText = await anthropicResp.text();
+      return new Response(JSON.stringify({ error: 'Anthropic ' + anthropicResp.status + ': ' + errText.substring(0, 300) }), {
+        status: anthropicResp.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
     }
 
-    var data = await resp.json();
-    var thesis = data.content.filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('\n');
+    // ── STREAM RESPONSE ──
+    var encoder = new TextEncoder();
+    var readable = new ReadableStream({
+      async start(controller) {
+        try {
+          // Send preComputed data as first event
+          controller.enqueue(encoder.encode('data: ' + JSON.stringify({ type: 'preComputed', data: preComputedResult }) + '\n\n'));
 
-    return {
-      statusCode: 200, headers: headers,
-      body: JSON.stringify({
-        thesis: thesis, usage: data.usage,
-        preComputed: {
-          rosterAudit: { homeOut: rosterAudit.out.home.length, awayOut: rosterAudit.out.away.length,
-            homeOutNames: rosterAudit.out.home.map(function(p) { return p.name; }),
-            awayOutNames: rosterAudit.out.away.map(function(p) { return p.name; }) },
-          siaCaps: { home: finalCaps.home.caps, away: finalCaps.away.caps },
-          depletion: depletion, pyth: pyth, bhv: bhv
+          // Read Anthropic SSE stream and forward text deltas
+          var reader = anthropicResp.body.getReader();
+          var decoder = new TextDecoder();
+          var buffer = '';
+          var fullText = '';
+          var usage = null;
+
+          while (true) {
+            var chunk = await reader.read();
+            if (chunk.done) break;
+            buffer += decoder.decode(chunk.value, { stream: true });
+
+            var lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (var i = 0; i < lines.length; i++) {
+              var line = lines[i].trim();
+              if (!line.startsWith('data: ')) continue;
+              var jsonStr = line.slice(6);
+              if (jsonStr === '[DONE]') continue;
+
+              try {
+                var evt = JSON.parse(jsonStr);
+                if (evt.type === 'content_block_delta' && evt.delta && evt.delta.text) {
+                  fullText += evt.delta.text;
+                  controller.enqueue(encoder.encode('data: ' + JSON.stringify({ type: 'delta', text: evt.delta.text }) + '\n\n'));
+                }
+                if (evt.type === 'message_delta' && evt.usage) {
+                  usage = evt.usage;
+                }
+                if (evt.type === 'message_start' && evt.message && evt.message.usage) {
+                  usage = evt.message.usage;
+                }
+              } catch (parseErr) {
+                // Skip unparseable lines
+              }
+            }
+          }
+
+          // Send final done event with complete thesis and usage
+          controller.enqueue(encoder.encode('data: ' + JSON.stringify({ type: 'done', thesis: fullText, usage: usage }) + '\n\n'));
+          controller.close();
+        } catch (streamErr) {
+          try {
+            controller.enqueue(encoder.encode('data: ' + JSON.stringify({ type: 'error', error: streamErr.message }) + '\n\n'));
+            controller.close();
+          } catch (e) {
+            controller.error(streamErr);
+          }
         }
-      })
-    };
+      }
+    });
+
+    return new Response(readable, {
+      status: 200,
+      headers: {
+        ...corsHeaders,
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      }
+    });
+
   } catch (err) {
-    return { statusCode: 500, headers: headers, body: JSON.stringify({ error: err.message }) };
+    return new Response(JSON.stringify({ error: err.message }), {
+      status: 500, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }
+    });
   }
+}
+
+export const config = {
+  path: '/.netlify/functions/generate-thesis'
 };
