@@ -738,8 +738,11 @@ async function fetchSummary(game){
     captureSnapshot(game);
 
     // Auto-fetch PBP silently on every poll (feeds shot zone data to sustainability)
+    // Stagger per game to avoid SR 1 req/sec rate limit (summary + PBP = 2 calls per game)
     if(getState(game)==='LIVE' && !cs.pbpLoading){
-      fetchPBPQuiet(game.id);
+      const gameIdx = games.filter(g=>getState(g)==='LIVE').findIndex(g=>g.id===game.id);
+      const pbpDelay = 2000 + (gameIdx * 3000); // 2s base + 3s per game
+      setTimeout(function(){ fetchPBPQuiet(game.id); }, pbpDelay);
     }
 
     // Check if data changed meaningfully
