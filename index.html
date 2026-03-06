@@ -2152,7 +2152,7 @@ async function generateThesis(gameId){
       cs.genSteps[i+1].error = e.message;
     }
     renderGenProgress(gameId);
-    if(i < calls.length-1) await new Promise(r=>setTimeout(r,1500));
+    if(i < calls.length-1) await new Promise(r=>setTimeout(r,1100));
   }
   // Cache for structural context extraction (used by extractStructuralContext)
   try{
@@ -5766,6 +5766,10 @@ function renderCard(game){
       const icon=s.status==='done'?'✓':s.status==='active'?'⟳':s.status==='err'?'✗':'·';
       return `<span class="gen-step ${s.status}">${icon} ${s.label}${s.error?' — '+s.error:''}</span>`;
     }).join('<br>')}</div>`;
+    // Show thesis text progressively as it streams in
+    if(thesis){
+      html+=`<div class="tbody" style="opacity:0.7;border-left:2px solid var(--green);padding-left:8px;margin-top:4px">${esc(thesis)}<span style="color:var(--green)">▌</span></div>`;
+    }
   } else if(cs.genError && !thesis){
     html+=`<div style="font-size:7px;color:var(--red);padding:4px 0;">⚠ Thesis generation failed: ${esc(cs.genError)}</div>`;
   } else if(thesis){
