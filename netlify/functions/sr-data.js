@@ -21,8 +21,8 @@ const ENDPOINTS = {
   summary: (p) => `games/${p.game_id}/summary.json`,
   pbp: (p) => `games/${p.game_id}/pbp.json`,
   hierarchy: () => `league/hierarchy.json`,
-  transfers: () => `league/transfers.json`,
-  changelog: () => `league/changelog.json`,
+  transfers: (p) => `league/${p.year}/${p.month}/${p.day}/transfers.json`,
+  changelog: (p) => `league/${p.year}/${p.month}/${p.day}/changes.json`,
 };
 
 exports.handler = async (event) => {
