@@ -3623,46 +3623,29 @@ function computeSpreadConviction(game){
 
   const hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
   const hPts = game.homePoints||0, aPts = game.awayPoints||0;
-  const margin = hPts - aPts; // positive = home leading
   const period = game.period||0;
   if(period < 1) return null;
 
-  // Parse spread (home perspective)
+  // Parse spreads
   const homeSpreadNum = parseFloat(od.homeSpread);
   if(isNaN(homeSpreadNum)) return null;
   const awaySpreadNum = -homeSpreadNum;
 
-  // Determine leading/trailing
-  const homeLeading = margin > 0;
-  const tied = margin === 0;
-  const absMargin = Math.abs(margin);
-  const leadAlias = homeLeading ? hA : aA;
-  const trailAlias = homeLeading ? aA : hA;
-  const leadSpread = homeLeading ? homeSpreadNum : awaySpreadNum;
-  const trailSpread = homeLeading ? awaySpreadNum : homeSpreadNum;
-
-  // Get FWP for both teams (from Sonnet analysis)
+  // Get FWP for both teams
   const hv = pred.homeValue, av = pred.awayValue;
   if(!hv || !av || hv.fwp==null || av.fwp==null) return null;
-  const homeFWP = hv.fwp, awayFWP = av.fwp;
-  const leadFWP = homeLeading ? homeFWP : awayFWP;
-  const trailFWP = homeLeading ? awayFWP : homeFWP;
 
-  // ── TIME REMAINING (approximate minutes) ──
+  // ── TIME REMAINING ──
   const clockParts = (game.clock||'').split(':');
   const clockMins = clockParts.length===2 ? parseInt(clockParts[0])+(parseInt(clockParts[1]||0)/60) : 12;
-  const quartersLeft = Math.max(0, 4 - period); // full quarters remaining after current
+  const quartersLeft = Math.max(0, 4 - period);
   const minsLeft = clockMins + (quartersLeft * 12);
-  const totalGameMins = 48;
-  const pctRemaining = Math.min(1, minsLeft / totalGameMins);
+  const pctRemaining = Math.min(1, minsLeft / 48);
 
   // ── STRUCTURAL SIGNALS ──
   const floorInd = cs.clientInd || cs.sonnetIndicators;
   const floorScore = floorInd?.score || 0.5;
   const floorTeam = floorInd?.controlTeam || '';
-  // Is the structural favorite the trailing team?
-  const trailHasStructure = floorTeam === trailAlias && floorScore >= 0.55;
-  const leadHasStructure = floorTeam === leadAlias && floorScore >= 0.55;
 
   const rw = cs.rollingWindow;
   const rwScore = rw?.available ? rw.score : null;
@@ -3673,107 +3656,120 @@ function computeSpreadConviction(game){
 
   const lc = cs.clientLeadComposition;
   const scoringClass = lc?.classification || 'MIXED';
+  const leadTeam = lc?.leadTeam || (hPts >= aPts ? hA : aA);
 
-  // ══ TRAILING TEAM SPREAD COVER PROBABILITY ══
-  // Floor: FWP (every win covers the + spread)
-  // Uplift: close-loss band (lose by less than spread)
-  var trailCover = trailFWP;
+  // ── EVALUATE EACH TEAM INDEPENDENTLY ──
+  function evalTeamSpread(alias, spread, fwp, pts, oppPts){
+    // Cover margin: how many points ahead/behind the spread this team is RIGHT NOW
+    // Team covers when: (teamPts - oppPts) + spread > 0 (for + spreads)
+    // Or equivalently: teamPts - oppPts > -spread
+    var actualMargin = pts - oppPts; // positive = this team leading
+    var coverMargin = actualMargin + spread;
+    // coverMargin > 0 means currently covering
+    // coverMargin < 0 means need to make up that many points
 
-  // Close-loss base: ~15% of games end within any given 4-5 point band
-  // Scale by spread size: larger spread = wider net for close losses
-  var absTrailSpread = Math.abs(trailSpread);
-  var closeLossBase = Math.min(20, absTrailSpread * 3.5); // ~3.5% per point of spread, cap 20%
+    var absSpread = Math.abs(spread);
+    var isFavorite = spread < 0; // negative spread = favorite
+    var isUnderdog = spread > 0;
 
-  // Structural edge modifier: trailing team controls structure → game tightens
-  var structMod = 0;
-  if(trailHasStructure){
-    structMod = (floorScore - 0.5) * 30; // 0.65 floor → +4.5%, 0.77 floor → +8.1%
-  } else if(leadHasStructure){
-    structMod = -(floorScore - 0.5) * 20; // leading team has structure → less tightening
+    // Base cover probability from FWP
+    var coverProb;
+    if(isUnderdog){
+      // Underdog: FWP (every win covers) + close-loss band
+      var closeLossBand = Math.min(20, absSpread * 3.5); // ~3.5% per point of spread cushion
+      coverProb = fwp + closeLossBand;
+    } else {
+      // Favorite: needs to win by more than spread
+      var closeWinErosion = Math.min(25, absSpread * 3.0); // ~3% per point they must cover
+      coverProb = fwp - closeWinErosion;
+    }
+
+    // ── STRUCTURAL MODIFIER ──
+    var structMod = 0;
+    var teamHasStructure = floorTeam === alias && floorScore >= 0.55;
+    var oppHasStructure = floorTeam !== alias && floorTeam && floorScore >= 0.55;
+    if(teamHasStructure) structMod = (floorScore - 0.5) * 25;
+    else if(oppHasStructure) structMod = -(floorScore - 0.5) * 20;
+
+    // ── GAP ACCELERATION ──
+    // If this team IS leading and gap growing → good for covering negative spread
+    // If this team IS trailing and gap eroding → game tightening → good for covering positive spread
+    var teamLeading = actualMargin > 0;
+    var accelMod = 0;
+    if(teamLeading){
+      // Leading: growing gap helps cover -spread, eroding hurts
+      if(accelDir === 'GROWING') accelMod = 5;
+      else if(accelDir === 'DECLINING' || accelDir === 'ERODING') accelMod = -5;
+      else if(accelDir === 'FLIPPED') accelMod = -8;
+    } else {
+      // Trailing: eroding gap helps cover +spread (game tightening)
+      if(accelDir === 'DECLINING' || accelDir === 'ERODING') accelMod = 5;
+      else if(accelDir === 'GROWING') accelMod = -5;
+      else if(accelDir === 'FLIPPED') accelMod = 8;
+    }
+
+    // ── SCORING CLASSIFICATION ──
+    // VOLATILE lead = lead will shrink → helps trailing team cover, hurts leading team
+    var scoringMod = 0;
+    var teamIsLeadTeam = alias === leadTeam;
+    if(teamIsLeadTeam){
+      // This team's lead classification
+      if(scoringClass === 'STRUCTURAL' || scoringClass === 'IDENTITY') scoringMod = 4;
+      else if(scoringClass === 'VOLATILE') scoringMod = -6;
+    } else {
+      // Opponent is leading — volatile opponent lead helps us
+      if(scoringClass === 'VOLATILE') scoringMod = 6;
+      else if(scoringClass === 'STRUCTURAL' || scoringClass === 'IDENTITY') scoringMod = -4;
+    }
+
+    // ── COVER MARGIN + TIME INTERACTION ──
+    var coverMarginMod = 0;
+    if(coverMargin > 0){
+      // Currently covering — more certain as time runs out
+      if(coverMargin >= 10) coverMarginMod = 10 * (1 - pctRemaining);
+      else if(coverMargin >= 5) coverMarginMod = 6 * (1 - pctRemaining);
+      else coverMarginMod = 3 * (1 - pctRemaining);
+    } else {
+      // Not covering — harder as time runs out
+      var deficit = Math.abs(coverMargin);
+      if(deficit > 12 && pctRemaining < 0.25) coverMarginMod = -15;
+      else if(deficit > 8 && pctRemaining < 0.15) coverMarginMod = -12;
+      else if(deficit > 5) coverMarginMod = -4;
+      else if(deficit <= 3 && pctRemaining > 0.30) coverMarginMod = 2; // small deficit, lots of time
+    }
+
+    // ── ROLLING WINDOW ──
+    var rwMod = 0;
+    if(rwScore !== null && rwTeam === alias && rwScore >= 0.60) rwMod = 3;
+    else if(rwScore !== null && rwTeam !== alias && rwTeam && rwScore >= 0.70) rwMod = -3;
+
+    // ── COMPOSITE ──
+    coverProb = coverProb + structMod + accelMod + scoringMod + coverMarginMod + rwMod;
+    coverProb = Math.max(5, Math.min(95, coverProb));
+
+    // Build reason
+    var parts = [];
+    parts.push('FWP '+fwp.toFixed(0)+'%');
+    if(coverMargin > 0) parts.push('covering by '+coverMargin.toFixed(1));
+    else if(coverMargin < 0) parts.push('need '+Math.abs(coverMargin).toFixed(1)+' pts');
+    if(teamHasStructure) parts.push('structural edge ('+floorScore.toFixed(2)+')');
+    if(accelDir !== 'STABLE' && accelDir !== 'TOO EARLY') parts.push('gap '+accelDir);
+    if(scoringClass !== 'MIXED' && scoringClass !== 'EVEN') parts.push('lead '+scoringClass);
+    if(minsLeft < 10) parts.push(minsLeft.toFixed(0)+'min left');
+
+    return {
+      team: alias,
+      spread: (spread > 0 ? '+' : '') + spread.toFixed(1),
+      coverProb: Math.round(coverProb),
+      coverMargin: coverMargin,
+      reason: parts.join(' + '),
+    };
   }
 
-  // Gap acceleration: ERODING/DECLINING → game tightening → boost trailing cover
-  var accelMod = 0;
-  if(accelDir === 'DECLINING' || accelDir === 'ERODING') accelMod = 6;
-  else if(accelDir === 'GROWING') accelMod = -5;
-  else if(accelDir === 'FLIPPED') accelMod = 8; // control just changed hands
-  else if(accelDir === 'STABLE') accelMod = 0;
+  var homeResult = evalTeamSpread(hA, homeSpreadNum, hv.fwp, hPts, aPts);
+  var awayResult = evalTeamSpread(aA, awaySpreadNum, av.fwp, aPts, hPts);
 
-  // Scoring classification: VOLATILE lead → will shrink, STRUCTURAL → will hold
-  var scoringMod = 0;
-  if(scoringClass === 'VOLATILE') scoringMod = 8;
-  else if(scoringClass === 'MIXED') scoringMod = 2;
-  else if(scoringClass === 'HOT') scoringMod = -2;
-  else if(scoringClass === 'IDENTITY') scoringMod = -5;
-  else if(scoringClass === 'STRUCTURAL') scoringMod = -6;
-
-  // Time-margin interaction: less time + close game → trajectory locked in
-  // More time → more variance → harder to predict
-  var timeMarginMod = 0;
-  var closingNeeded = absMargin - absTrailSpread; // points trailing team needs to close
-  if(closingNeeded <= 0){
-    // Already covering — probability boost scales with time remaining (less time = more certain)
-    timeMarginMod = 8 * (1 - pctRemaining);
-  } else if(closingNeeded <= 3 && pctRemaining < 0.25){
-    // Need to close 1-3 points with <12 mins left — achievable
-    timeMarginMod = 4 * (1 - pctRemaining);
-  } else if(closingNeeded > 8 && pctRemaining < 0.15){
-    // Need 8+ points with <7 mins — very hard
-    timeMarginMod = -10;
-  } else if(closingNeeded > 12){
-    // Blowout — spread probably doesn't cover
-    timeMarginMod = -15;
-  }
-
-  // Rolling window confirmation: if trailing team is gaining in recent window
-  var rwMod = 0;
-  if(rwScore !== null && rwTeam === trailAlias && rwScore >= 0.60) rwMod = 4;
-  else if(rwScore !== null && rwTeam === leadAlias && rwScore >= 0.70) rwMod = -4;
-
-  var totalUplift = closeLossBase + structMod + accelMod + scoringMod + timeMarginMod + rwMod;
-  totalUplift = Math.max(0, Math.min(35, totalUplift)); // cap close-loss band at 35%
-  trailCover = Math.min(95, trailFWP + totalUplift);
-
-  // ══ LEADING TEAM SPREAD COVER PROBABILITY ══
-  // They need to win by more than their spread
-  // Floor: FWP minus the portion of wins that are close wins
-  var leadCover = leadFWP;
-  var absLeadSpread = Math.abs(leadSpread);
-
-  // Close-win erosion: subtract wins that don't cover
-  // Larger spread = more wins don't cover
-  var closeWinErosion = Math.min(25, absLeadSpread * 3.0); // ~3% per point of spread
-
-  // Structural modifiers (inverted from trailing)
-  var leadStructMod = 0;
-  if(leadHasStructure) leadStructMod = (floorScore - 0.5) * 15; // structure helps hold lead
-  else if(trailHasStructure) leadStructMod = -(floorScore - 0.5) * 25; // opponent's structure erodes
-
-  var leadAccelMod = 0;
-  if(accelDir === 'GROWING') leadAccelMod = 5; // lead growing → covers
-  else if(accelDir === 'DECLINING' || accelDir === 'ERODING') leadAccelMod = -6;
-  else if(accelDir === 'FLIPPED') leadAccelMod = -8;
-
-  var leadScoringMod = 0;
-  if(scoringClass === 'STRUCTURAL' || scoringClass === 'IDENTITY') leadScoringMod = 5;
-  else if(scoringClass === 'VOLATILE') leadScoringMod = -8;
-
-  // Cushion: how much lead can shrink and still cover
-  var leadCushion = absMargin - absLeadSpread;
-  var leadCushionMod = 0;
-  if(leadCushion >= 8) leadCushionMod = 8; // huge cushion
-  else if(leadCushion >= 4) leadCushionMod = 4;
-  else if(leadCushion <= 0) leadCushionMod = -6; // need to extend lead
-  else if(leadCushion <= 2) leadCushionMod = -3;
-
-  var leadTimeMarginMod = 0;
-  if(pctRemaining < 0.15 && leadCushion >= 3) leadTimeMarginMod = 6; // close to end with cushion
-  else if(pctRemaining < 0.15 && leadCushion <= 0) leadTimeMarginMod = -5;
-
-  var totalLeadAdj = -closeWinErosion + leadStructMod + leadAccelMod + leadScoringMod + leadCushionMod + leadTimeMarginMod;
-  leadCover = Math.max(5, Math.min(95, leadFWP + totalLeadAdj));
-
-  // ── CONVICTION TIERS ──
+  // Conviction tiers
   function convictionTier(prob){
     if(prob >= 70) return 'STRONG COVER';
     if(prob >= 55) return 'LEAN COVER';
@@ -3782,45 +3778,19 @@ function computeSpreadConviction(game){
     return 'STRONG FADE';
   }
 
-  // ── BUILD REASON STRINGS ──
-  function buildReason(team, prob, isTrailing){
-    var parts = [];
-    var fwpVal = isTrailing ? trailFWP : leadFWP;
-    parts.push('FWP '+fwpVal.toFixed(0)+'%');
-    if(trailHasStructure && isTrailing) parts.push('structural edge ('+floorScore.toFixed(2)+')');
-    if(leadHasStructure && !isTrailing) parts.push('structural hold ('+floorScore.toFixed(2)+')');
-    if(accelDir!=='STABLE' && accelDir!=='TOO EARLY') parts.push('gap '+accelDir);
-    if(scoringClass!=='MIXED' && scoringClass!=='EVEN') parts.push('lead '+scoringClass);
-    if(isTrailing && closingNeeded <= 0) parts.push('already covering');
-    else if(isTrailing && closingNeeded > 0) parts.push('need '+closingNeeded.toFixed(1)+' pts');
-    if(!isTrailing && leadCushion > 0) parts.push('cushion +'+leadCushion.toFixed(0));
-    if(minsLeft < 10) parts.push(minsLeft.toFixed(0)+'min left');
-    return parts.join(' + ');
-  }
+  homeResult.conviction = convictionTier(homeResult.coverProb);
+  awayResult.conviction = convictionTier(awayResult.coverProb);
 
-  var trailConv = convictionTier(trailCover);
-  var leadConv = convictionTier(leadCover);
-  var recommendation = trailCover > leadCover ? 'trailing' : leadCover > trailCover ? 'leading' : 'neither';
+  // Determine which side is the better bet
+  var recommendation = homeResult.coverProb > awayResult.coverProb ? 'home' : awayResult.coverProb > homeResult.coverProb ? 'away' : 'neither';
 
   return {
-    trailing: {
-      team: trailAlias,
-      spread: (trailSpread > 0 ? '+' : '') + trailSpread.toFixed(1),
-      conviction: trailConv,
-      coverProb: Math.round(trailCover),
-      reason: buildReason(trailAlias, trailCover, true),
-    },
-    leading: {
-      team: leadAlias,
-      spread: (leadSpread > 0 ? '+' : '') + leadSpread.toFixed(1),
-      conviction: leadConv,
-      coverProb: Math.round(leadCover),
-      reason: buildReason(leadAlias, leadCover, false),
-    },
+    home: homeResult,
+    away: awayResult,
     recommendation: recommendation,
-    margin: absMargin,
+    margin: Math.abs(hPts - aPts),
     minsLeft: minsLeft.toFixed(0),
-    tied: tied,
+    tied: hPts === aPts,
   };
 }
 
@@ -5295,29 +5265,24 @@ function renderCard(game){
       // Spread conviction engine (client-side)
       var spConv = cs.spreadConviction;
       if(spConv && !spConv.tied){
-        var trC = spConv.trailing, leC = spConv.leading;
         var _scColor = function(conv){ return conv==='STRONG COVER'?'var(--green)':conv==='LEAN COVER'?'var(--g2)':conv==='NO EDGE'?'var(--t3)':conv==='LEAN FADE'?'var(--amber)':'var(--red)'; };
         var recSide = spConv.recommendation;
-        var recTag = recSide==='trailing'?trC:leC;
-        var recColor = _scColor(recTag.conviction);
+        var recResult = recSide==='home'?spConv.home:spConv.away;
+        // Show away team first (convention: away @ home)
+        var sides = [spConv.away, spConv.home];
         html+='<div style="margin-top:4px;padding:4px 6px;background:rgba(255,255,255,.03);border-radius:4px;border:1px solid var(--b1)">';
         html+='<div style="font-size:5.5px;color:var(--amber);letter-spacing:1px;margin-bottom:3px">SPREAD CONVICTION</div>';
-        // Trailing team line
-        html+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">';
-        html+='<span style="font-size:6px;font-weight:700;color:var(--t1);min-width:28px">'+esc(trC.team)+'</span>';
-        html+='<span style="font-size:6px;color:var(--t2)">'+esc(trC.spread)+'</span>';
-        html+='<span class="dv-tag" style="font-size:5.5px;padding:1px 5px;color:'+_scColor(trC.conviction)+';border-color:'+_scColor(trC.conviction)+'">'+esc(trC.conviction)+'</span>';
-        html+='<span style="font-size:6px;font-weight:600;color:'+_scColor(trC.conviction)+'">'+trC.coverProb+'%</span>';
-        html+='</div>';
-        // Leading team line
-        html+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">';
-        html+='<span style="font-size:6px;font-weight:700;color:var(--t1);min-width:28px">'+esc(leC.team)+'</span>';
-        html+='<span style="font-size:6px;color:var(--t2)">'+esc(leC.spread)+'</span>';
-        html+='<span class="dv-tag" style="font-size:5.5px;padding:1px 5px;color:'+_scColor(leC.conviction)+';border-color:'+_scColor(leC.conviction)+'">'+esc(leC.conviction)+'</span>';
-        html+='<span style="font-size:6px;font-weight:600;color:'+_scColor(leC.conviction)+'">'+leC.coverProb+'%</span>';
-        html+='</div>';
-        // Reason for higher conviction side
-        html+='<div style="font-size:5px;color:var(--t3);margin-top:1px">'+esc(recTag.reason)+'</div>';
+        sides.forEach(function(s){
+          html+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">';
+          html+='<span style="font-size:6px;font-weight:700;color:var(--t1);min-width:28px">'+esc(s.team)+'</span>';
+          html+='<span style="font-size:6px;color:var(--t2)">'+esc(s.spread)+'</span>';
+          html+='<span class="dv-tag" style="font-size:5.5px;padding:1px 5px;color:'+_scColor(s.conviction)+';border-color:'+_scColor(s.conviction)+'">'+esc(s.conviction)+'</span>';
+          html+='<span style="font-size:6px;font-weight:600;color:'+_scColor(s.conviction)+'">'+s.coverProb+'%</span>';
+          if(s.coverMargin > 0) html+='<span style="font-size:5px;color:var(--green)">covering</span>';
+          html+='</div>';
+        });
+        // Reason for recommended side
+        html+='<div style="font-size:5px;color:var(--t3);margin-top:1px">'+esc(recResult.reason)+'</div>';
         html+='</div>';
       }
 
