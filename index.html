@@ -697,6 +697,163 @@ window.__nbaBooted = true; // Boot canary — proves main script parsed successf
 console.log('[NBA CONTROL]', window.__nbaVersion, 'initialized —', new Date().toLocaleTimeString());
 
 // ══════════════════════════════════════════════════════════════════════════════
+// CALIBRATION LOG — tracks prediction accuracy across games for Sonnet self-correction
+// ══════════════════════════════════════════════════════════════════════════════
+function captureCalibration(game){
+  if(!game || getState(game) !== 'FINAL') return;
+  const cs = cardState[game.id]; if(!cs) return;
+  if(cs._calibrationCaptured) return; // only capture once per game
+  cs._calibrationCaptured = true;
+
+  const hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
+  const hPts = game.homePoints||0, aPts = game.awayPoints||0;
+  const winner = hPts > aPts ? hA : (aPts > hPts ? aA : 'TIE');
+  const margin = hPts - aPts; // positive = home won
+
+  // Get thesis direction
+  const thesis = theses[game.id] || '';
+  let thesisTeam = null;
+  const csMatch = thesis.match(/CONTROL SCORE:\s*(\w+)/i);
+  if(csMatch) thesisTeam = csMatch[1].toUpperCase();
+
+  // Get last Sonnet prediction
+  const pred = cs.prediction;
+  let fwpTeam = null, fwpValue = null, entrySignal = null, conviction = null;
+  if(pred){
+    entrySignal = pred.entry || null;
+    conviction = pred.conviction || null;
+    if(pred.homeValue && pred.awayValue){
+      if(pred.homeValue.fwp >= pred.awayValue.fwp){
+        fwpTeam = hA; fwpValue = pred.homeValue.fwp;
+      } else {
+        fwpTeam = aA; fwpValue = pred.awayValue.fwp;
+      }
+    }
+  }
+
+  // Get spread data
+  const od = cs.oddsData;
+  let homeSpread = null, spreadCovered = null;
+  if(od && od.homeSpread){
+    homeSpread = parseFloat(od.homeSpread);
+    if(!isNaN(homeSpread)){
+      // Home covers when: margin + spread > 0
+      spreadCovered = {
+        home: (margin + homeSpread) > 0,
+        away: (-margin + (-homeSpread)) > 0,
+      };
+    }
+  }
+
+  // Get sustainability and scoring classification from last analysis
+  const lc = cs.clientLeadComposition || cs.leadComposition;
+  const classification = lc?.classification || null;
+
+  const entry = {
+    gameId: game.id,
+    date: new Date().toISOString().split('T')[0],
+    matchup: aA + '@' + hA,
+    homePoints: hPts, awayPoints: aPts,
+    winner: winner, margin: Math.abs(margin),
+    thesisTeam: thesisTeam, thesisCorrect: thesisTeam ? thesisTeam === winner : null,
+    fwpTeam: fwpTeam, fwpValue: fwpValue, fwpCorrect: fwpTeam ? fwpTeam === winner : null,
+    entry: entrySignal, conviction: conviction,
+    homeSpread: homeSpread,
+    homeCovered: spreadCovered?.home ?? null,
+    awayCovered: spreadCovered?.away ?? null,
+    classification: classification,
+  };
+
+  // Load, append, trim to 30, save
+  let log = [];
+  try{ log = JSON.parse(localStorage.getItem('nba4:calibration')||'[]'); }catch(e){}
+  // Don't duplicate
+  if(log.some(function(l){ return l.gameId === game.id; })) return;
+  log.push(entry);
+  if(log.length > 30) log = log.slice(-30);
+  try{ localStorage.setItem('nba4:calibration', JSON.stringify(log)); }catch(e){ console.warn('Calibration persist failed:', e.message); }
+  console.log('[CALIBRATION] Captured:', entry.matchup, winner, 'by', entry.margin, '| Thesis:', thesisTeam, thesisTeam===winner?'✓':'✗', '| FWP:', fwpTeam, fwpValue, fwpTeam===winner?'✓':'✗');
+}
+
+function computeCalibrationStats(){
+  let log = [];
+  try{ log = JSON.parse(localStorage.getItem('nba4:calibration')||'[]'); }catch(e){}
+  if(log.length < 3) return null; // need minimum sample
+
+  const stats = {
+    games: log.length,
+    thesisRecord: {correct:0, total:0},
+    fwpBuckets: {'50-59':{correct:0,total:0}, '60-69':{correct:0,total:0}, '70-79':{correct:0,total:0}, '80+':{correct:0,total:0}},
+    spreadRecord: {covered:0, total:0},
+    avgMarginError: 0,
+    commonMisses: [],
+  };
+
+  let marginErrors = [];
+  log.forEach(function(g){
+    // Thesis accuracy
+    if(g.thesisCorrect !== null){
+      stats.thesisRecord.total++;
+      if(g.thesisCorrect) stats.thesisRecord.correct++;
+    }
+    // FWP bucket accuracy
+    if(g.fwpValue !== null && g.fwpCorrect !== null){
+      var bucket = g.fwpValue >= 80 ? '80+' : g.fwpValue >= 70 ? '70-79' : g.fwpValue >= 60 ? '60-69' : '50-59';
+      stats.fwpBuckets[bucket].total++;
+      if(g.fwpCorrect) stats.fwpBuckets[bucket].correct++;
+    }
+    // FWP margin error (predicted win prob vs binary outcome)
+    if(g.fwpValue !== null && g.fwpCorrect !== null){
+      var expected = g.fwpValue / 100;
+      var actual = g.fwpCorrect ? 1 : 0;
+      marginErrors.push(Math.abs(expected - actual));
+    }
+    // Spread accuracy
+    if(g.homeCovered !== null){
+      stats.spreadRecord.total += 2; // both sides evaluated
+      if(g.homeCovered) stats.spreadRecord.covered++;
+      if(g.awayCovered) stats.spreadRecord.covered++;
+    }
+    // Track misses for pattern detection
+    if(g.fwpCorrect === false && g.fwpValue >= 55){
+      stats.commonMisses.push(g.matchup + ' (FWP:' + g.fwpValue + '% → lost)');
+    }
+  });
+
+  stats.avgMarginError = marginErrors.length > 0 ? (marginErrors.reduce(function(a,b){return a+b;},0) / marginErrors.length * 100).toFixed(1) : 0;
+
+  return stats;
+}
+
+function formatCalibrationForPrompt(){
+  var stats = computeCalibrationStats();
+  if(!stats) return '';
+  var lines = ['CALIBRATION CONTEXT (last ' + stats.games + ' games):'];
+  // Thesis record
+  if(stats.thesisRecord.total > 0){
+    var pct = (stats.thesisRecord.correct / stats.thesisRecord.total * 100).toFixed(0);
+    lines.push('Thesis direction: ' + stats.thesisRecord.correct + '/' + stats.thesisRecord.total + ' correct (' + pct + '%)');
+  }
+  // FWP buckets
+  Object.keys(stats.fwpBuckets).forEach(function(bucket){
+    var b = stats.fwpBuckets[bucket];
+    if(b.total >= 2){
+      var pct = (b.correct / b.total * 100).toFixed(0);
+      lines.push('FWP ' + bucket + '%: ' + b.correct + '/' + b.total + ' correct (' + pct + '% actual win rate)');
+    }
+  });
+  // Avg margin error
+  if(stats.avgMarginError > 0){
+    lines.push('Avg FWP error: ' + stats.avgMarginError + '% ' + (parseFloat(stats.avgMarginError) > 20 ? '(over-confident — pull toward 50%)' : parseFloat(stats.avgMarginError) < 12 ? '(well-calibrated)' : '(moderate — review edge cases)'));
+  }
+  // Recent misses
+  if(stats.commonMisses.length > 0){
+    lines.push('Recent misses: ' + stats.commonMisses.slice(-3).join(', '));
+  }
+  return '\n' + lines.join('\n') + '\n';
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // REFRESH
 // ══════════════════════════════════════════════════════════════════════════════
 function refreshLiveCards(){
@@ -799,6 +956,7 @@ async function fetchSummary(game){
     renderCard(game);
     renderConfidenceTable();
     checkAlert(game);
+    captureCalibration(game);
 
     // Auto-analyze disabled — use manual ⚡ ANALYZE button to control token spend
     // if(changed && getState(game)==='LIVE' && game.period >= 2){
@@ -848,6 +1006,7 @@ async function fetchBdlFallback(game, reason){
     renderCard(game);
     renderConfidenceTable();
     checkAlert(game);
+    captureCalibration(game);
 
     // Auto-analyze disabled — use manual ⚡ ANALYZE button
     // if(changed && getState(game)==='LIVE' && game.period >= 2){
@@ -967,6 +1126,7 @@ async function triggerAnalysis(game){
         subMetricArrows: cs.subMetricArrows || null,
         adjustment: cs.adjustment || null,
         combinedRead: cs.combinedRead || null,
+        calibration: formatCalibrationForPrompt() || null,
       })
     });
     if(!resp.ok){
@@ -5416,7 +5576,7 @@ function renderCard(game){
     }
 
 
-    // ─── 5. DIRECTIONAL ARROWS (two-team table, grouped by indicator) ───
+    // ─── 5. DIRECTIONAL ARROWS (compact horizontal — teams as rows, metrics as columns) ───
     var arrows = cs.subMetricArrows;
     var adj = cs.adjustment;
     var floorInd2 = cs.clientInd || cs.sonnetIndicators;
@@ -5427,42 +5587,56 @@ function renderCard(game){
         return isVariance?"var(--green)":"var(--amber)";
       };
       var _arrowSym = function(arrow){ return arrow==="RISING"?"▲":arrow==="FALLING"?"▼":"▬"; };
-      var _vals = function(m){ if(!m||!m.values) return "—"; return m.values.map(function(v){return v!=null?((m.label&&(m.label.includes("%")||m.label.includes("ratio")))?v.toFixed(0)+"%":String(Math.round(v))):"?";}).join("→"); };
+      var _vals = function(m){ if(!m||!m.values) return "?"; var v=m.values; return v.length>1?(v[0]!=null?Math.round(v[0]):'?')+'→'+(v[v.length-1]!=null?Math.round(v[v.length-1]):'?'):'?'; };
       html+='<div style="padding:5px 10px;border-top:1px solid var(--b1)">';
       html+=_secHdr(id,'arr',cs,'DIRECTIONAL ARROWS');
       if(_secOpen(cs,'arr')){
-      // Table header
-      html+='<table style="width:100%;border-collapse:collapse;font-size:6px">';
-      html+='<tr><th style="text-align:left;color:var(--t3);font-weight:400;padding:1px 4px;border-bottom:1px solid var(--b1);font-size:5px;letter-spacing:.5px"></th>';
-      html+='<th style="text-align:center;color:var(--t1);font-weight:600;padding:1px 4px;border-bottom:1px solid var(--b1)">'+esc(hA)+'</th>';
-      html+='<th style="text-align:center;color:var(--t1);font-weight:600;padding:1px 4px;border-bottom:1px solid var(--b1)">'+esc(aA)+'</th></tr>';
-      // Rows grouped by indicator
-      var arrowGroups = [
-        {header:"I2 — RIM PRESSURE", keys:["paint","atRim","fta"]},
-        {header:"I1 — POSSESSION", keys:["steals","tos"]},
-        {header:"I3 — SHOT QUALITY", keys:["fg3aShare","astRatio"]},
-        {header:"I5 — TEMPO", keys:["poss"]},
+      // Column definitions: grouped by indicator
+      var cols = [
+        {key:"paint",hdr:"Paint",grp:"I2",isVar:false},
+        {key:"atRim",hdr:"AtRim",grp:"I2",isVar:false},
+        {key:"fta",hdr:"FTA",grp:"I2",isVar:false},
+        {key:"steals",hdr:"Stl",grp:"I1",isVar:false},
+        {key:"tos",hdr:"TOs",grp:"I1",isVar:true},
+        {key:"fg3aShare",hdr:"3PA%",grp:"I3",isVar:true},
+        {key:"astRatio",hdr:"Ast%",grp:"I3",isVar:false},
+        {key:"poss",hdr:"Poss",grp:"I5",isVar:false},
       ];
-      arrowGroups.forEach(function(grp){
-        html+='<tr><td colspan="3" style="font-size:5px;color:var(--t3);letter-spacing:.8px;padding:4px 4px 1px;border:none">'+grp.header+'</td></tr>';
-        grp.keys.forEach(function(key){
-          var hm = arrows.home[key], am = arrows.away[key];
-          var isVar = (key==="fg3aShare"||key==="tos");
-          var label = hm?hm.label:(am?am.label:key);
-          var hArrow = hm&&hm.arrow ? _arrowSym(hm.arrow) : "—";
-          var aArrow = am&&am.arrow ? _arrowSym(am.arrow) : "—";
-          var hCol = _arrowColor(hm&&hm.arrow, isVar);
-          var aCol = _arrowColor(am&&am.arrow, isVar);
-          var hVals = hm?_vals(hm):"—";
-          var aVals = am?_vals(am):"—";
-          html+='<tr>';
-          html+='<td style="padding:1px 4px;color:var(--t2);border:none">'+esc(label)+'</td>';
-          html+='<td style="text-align:center;padding:1px 4px;border:none"><span style="color:'+hCol+';font-weight:600">'+hArrow+'</span> <span style="font-size:5px;color:var(--t3)">'+esc(hVals)+'</span></td>';
-          html+='<td style="text-align:center;padding:1px 4px;border:none"><span style="color:'+aCol+';font-weight:600">'+aArrow+'</span> <span style="font-size:5px;color:var(--t3)">'+esc(aVals)+'</span></td>';
-          html+='</tr>';
-        });
+      // Group header row
+      var grpSpans = [];
+      var lastGrp = '';
+      cols.forEach(function(c){
+        if(c.grp !== lastGrp){ grpSpans.push({grp:c.grp, span:1}); lastGrp = c.grp; }
+        else { grpSpans[grpSpans.length-1].span++; }
       });
-      html+='</table>';
+      html+='<div style="overflow-x:auto;-webkit-overflow-scrolling:touch">';
+      html+='<table style="border-collapse:collapse;font-size:5.5px;min-width:340px">';
+      // Indicator group header
+      html+='<tr><td style="padding:0 3px;min-width:28px"></td>';
+      grpSpans.forEach(function(g){
+        html+='<td colspan="'+g.span+'" style="text-align:center;padding:0 2px 1px;color:var(--t3);font-size:4.5px;letter-spacing:.5px;border-bottom:1px solid var(--b1)">'+g.grp+'</td>';
+      });
+      html+='</tr>';
+      // Metric header row
+      html+='<tr><td style="padding:1px 3px;color:var(--t3);font-size:4.5px"></td>';
+      cols.forEach(function(c){
+        html+='<td style="text-align:center;padding:1px 3px;color:var(--t3);font-size:5px;font-weight:400">'+c.hdr+'</td>';
+      });
+      html+='</tr>';
+      // Team rows
+      [['away',aA,arrows.away],['home',hA,arrows.home]].forEach(function(t){
+        var alias=t[1], data=t[2];
+        html+='<tr><td style="padding:2px 3px;color:var(--t1);font-weight:600;font-size:6px">'+esc(alias)+'</td>';
+        cols.forEach(function(c){
+          var m = data[c.key];
+          var arrow = m&&m.arrow ? _arrowSym(m.arrow) : "—";
+          var col = _arrowColor(m&&m.arrow, c.isVar);
+          var vals = m ? _vals(m) : "?";
+          html+='<td style="text-align:center;padding:2px 3px;white-space:nowrap"><span style="color:'+col+';font-weight:600">'+arrow+'</span> <span style="font-size:4.5px;color:var(--t3)">'+esc(vals)+'</span></td>';
+        });
+        html+='</tr>';
+      });
+      html+='</table></div>';
       // Adjustment signal row
       if(adj && adj.signal && adj.signal!=="NO ADJUSTMENT" && adj.signal!=="NO DATA"){
         var adjColor2 = adj.signal==="INTERIOR PIVOT"?"var(--green)":adj.signal==="STRUCTURAL ACCEL"?"var(--green)":adj.signal==="STRUCTURAL EROSION"?"var(--red)":adj.signal==="VARIANCE SHIFT"?"var(--amber)":"var(--t3)";
