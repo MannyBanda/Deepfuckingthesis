@@ -539,6 +539,7 @@ exports.handler = async function(event) {
     var subMetricArrows = body.subMetricArrows;
     var adjustment = body.adjustment;
     var combinedRead = body.combinedRead;
+    var calibration = body.calibration || '';
 
     if (!summaryData) {
       return { statusCode: 400, headers: headers, body: JSON.stringify({ error: 'summaryData required' }) };
@@ -778,6 +779,7 @@ exports.handler = async function(event) {
       + '\n' + dashboardSection + clutchSection + oddsSection + trackingSection + sustainabilitySection + leadCompSection
       + windowSection + gapSection + combinedReadSection + arrowSection + adjustmentSection
       + pbpSection + edgeSection + narrativeSection
+      + (calibration ? '\n' + calibration : '')
       + '\nGAME DATA:\n' + JSON.stringify(summaryData);
 
     var controller = new AbortController();
