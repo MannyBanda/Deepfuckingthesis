@@ -5264,7 +5264,7 @@ function renderCard(game){
 
       // Spread conviction engine (client-side)
       var spConv = cs.spreadConviction;
-      if(spConv && !spConv.tied){
+      if(spConv){
         var _scColor = function(conv){ return conv==='STRONG COVER'?'var(--green)':conv==='LEAN COVER'?'var(--g2)':conv==='NO EDGE'?'var(--t3)':conv==='LEAN FADE'?'var(--amber)':'var(--red)'; };
         var recSide = spConv.recommendation;
         var recResult = recSide==='home'?spConv.home:spConv.away;
