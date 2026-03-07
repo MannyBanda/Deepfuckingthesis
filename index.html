@@ -919,9 +919,7 @@ async function triggerAnalysis(game){
     const dashInd = computeAny(game);
     let dashNote = '';
     if(dashInd){
-      dashNote = `\n\nDASHBOARD COMPUTED SCORES (simplified math):
-I1:${dashInd.I1.score} (${dashInd.I1.leader}) I2:${dashInd.I2.score} (${dashInd.I2.leader}) I3:${dashInd.I3.score} (${dashInd.I3.leader}) I4:${dashInd.I4.score} (${dashInd.I4.leader}) I5:${dashInd.I5.score} (${dashInd.I5.leader})
-Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${dashInd.dataQuality}`;
+      dashNote = '';
       if(dashInd.gameMeta){
         const m = dashInd.gameMeta;
         dashNote += `\nGAME META: LC:${m.leadChanges} TT:${m.timesTied} Foulouts:${m.hFoulouts}/${m.aFoulouts} TS:${m.hTS}/${m.aTS} A/TO:${m.hATO}/${m.aATO} EGS:${m.hEGS}/${m.aEGS}`;
@@ -952,6 +950,12 @@ Dashboard control: ${dashInd.controlTeam} ${dashInd.score.toFixed(2)} | Data: ${
         awayTeam: game.away?.alias||game.away?.name||'AWAY',
         period: periodLabel,
         score: score,
+        dashboardScores: dashInd ? {
+          controlTeam: dashInd.controlTeam, score: dashInd.score,
+          I1: dashInd.I1.score+' '+dashInd.I1.leader, I2: dashInd.I2.score+' '+dashInd.I2.leader,
+          I3: dashInd.I3.score+' '+dashInd.I3.leader, I4: dashInd.I4.score+' '+dashInd.I4.leader,
+          I5: dashInd.I5.score+' '+dashInd.I5.leader, dataQuality: dashInd.dataQuality,
+        } : null,
         clutchData: clutchPayload,
         oddsData: cs.oddsData || null,
         edgeHistory: cs.edgeHistory.length > 0 ? cs.edgeHistory : null,
