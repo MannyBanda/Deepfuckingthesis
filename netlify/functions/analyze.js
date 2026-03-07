@@ -490,6 +490,9 @@ var SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing real-time 
 + 'THESIS STATUS: [CONFIRMED|DEVELOPING|CONTESTED|DENIED|FLIPPED] — [note]\n'
 + 'FLIPPED = thesis was wrong AND the other team has emerged as the structural edge with a valid entry.\n'
 + 'DIVERGENCE NOTES: [where your scores differ from dashboard and why]\n\n'
++ 'DASHBOARD ANCHOR: You receive pre-computed dashboard indicator scores (I1-I5 + control). These are arithmetic computations on the same game data.\n'
++ 'Use them as a reference baseline. Your scores should be in the same ballpark unless you identify specific qualitative factors the arithmetic misses (e.g., lineup context, shot quality, closing patterns).\n'
++ 'If your control score differs by 0.20+ from the dashboard, explain the divergence in DIVERGENCE NOTES.\n\n'
 + 'Be concise. 1 line per indicator. Decisive when clear. Passing is correct when it is not.';
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -760,9 +763,19 @@ exports.handler = async function(event) {
     }
 
     // ── BUILD PROMPT ──
+    // Extract dashboard scores from thesis appendix into dedicated section
+    var dashboardSection = '';
+    if (body.dashboardScores) {
+      var ds = body.dashboardScores;
+      dashboardSection = '\nDASHBOARD REFERENCE (client-computed arithmetic on same game data):\n'
+        + 'Control: ' + (ds.controlTeam||'?') + ' ' + (ds.score ? ds.score.toFixed(2) : '?') + '\n'
+        + 'I1: ' + (ds.I1||'?') + ' I2: ' + (ds.I2||'?') + ' I3: ' + (ds.I3||'?') + ' I4: ' + (ds.I4||'?') + ' I5: ' + (ds.I5||'?') + '\n'
+        + 'Use as reference. Your analysis may differ — but if you diverge significantly, explain which data points justify the difference in DIVERGENCE NOTES.\n';
+    }
+
     var userPrompt = awayTeam + ' @ ' + homeTeam + ' | ' + period + ' | ' + score + '\n\n'
       + (thesis ? 'THESIS:\n' + thesis + '\n' : 'No thesis.')
-      + '\n' + clutchSection + oddsSection + trackingSection + sustainabilitySection + leadCompSection
+      + '\n' + dashboardSection + clutchSection + oddsSection + trackingSection + sustainabilitySection + leadCompSection
       + windowSection + gapSection + combinedReadSection + arrowSection + adjustmentSection
       + pbpSection + edgeSection + narrativeSection
       + '\nGAME DATA:\n' + JSON.stringify(summaryData);
