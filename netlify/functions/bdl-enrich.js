@@ -68,7 +68,7 @@ exports.handler = async function(event) {
 
     // ================================================================
     // CLUTCH STATS - 4 type pairings per team
-    // Path: /nba/v1/team_season_averages/clutch?team_ids[]=X&season=Y&season_type=regular&type=Z
+    // Path: /nba/v1/team_season_averages/clutch?team_id=X&season=Y&season_type=regular&type=Z
     // ================================================================
     if (pullSet.clutch && homeId && awayId) {
       result.clutch = { tier: 2, home: {}, away: {} };
@@ -76,8 +76,8 @@ exports.handler = async function(event) {
       // -- clutch/advanced: NetRtg, OffRtg, DefRtg, Pace, eFG%, TS%
       try {
         var clutchAdvResults = await Promise.all([
-          bdlFetch('/nba/v1/team_season_averages/clutch?team_ids[]=' + homeId + '&season=' + s + '&season_type=regular&type=advanced', apiKey),
-          bdlFetch('/nba/v1/team_season_averages/clutch?team_ids[]=' + awayId + '&season=' + s + '&season_type=regular&type=advanced', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + homeId + '&season=' + s + '&season_type=regular&type=advanced', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + awayId + '&season=' + s + '&season_type=regular&type=advanced', apiKey),
         ]);
         var hA = extractStats(clutchAdvResults[0]);
         var aA = extractStats(clutchAdvResults[1]);
@@ -113,8 +113,8 @@ exports.handler = async function(event) {
       // -- clutch/base: W, L, GP, PTS, AST, STL, BLK, TOV, +/-
       try {
         var clutchBaseResults = await Promise.all([
-          bdlFetch('/nba/v1/team_season_averages/clutch?team_ids[]=' + homeId + '&season=' + s + '&season_type=regular&type=base', apiKey),
-          bdlFetch('/nba/v1/team_season_averages/clutch?team_ids[]=' + awayId + '&season=' + s + '&season_type=regular&type=base', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + homeId + '&season=' + s + '&season_type=regular&type=base', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + awayId + '&season=' + s + '&season_type=regular&type=base', apiKey),
         ]);
         var hB = extractStats(clutchBaseResults[0]);
         var aB = extractStats(clutchBaseResults[1]);
@@ -156,8 +156,8 @@ exports.handler = async function(event) {
       // -- clutch/misc: FBP, POT, paint pts, SCP (+ opponent versions)
       try {
         var clutchMiscResults = await Promise.all([
-          bdlFetch('/nba/v1/team_season_averages/clutch?team_ids[]=' + homeId + '&season=' + s + '&season_type=regular&type=misc', apiKey),
-          bdlFetch('/nba/v1/team_season_averages/clutch?team_ids[]=' + awayId + '&season=' + s + '&season_type=regular&type=misc', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + homeId + '&season=' + s + '&season_type=regular&type=misc', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + awayId + '&season=' + s + '&season_type=regular&type=misc', apiKey),
         ]);
         var hM = extractStats(clutchMiscResults[0]);
         var aM = extractStats(clutchMiscResults[1]);
@@ -189,8 +189,8 @@ exports.handler = async function(event) {
       // -- clutch/scoring: shot distribution in clutch
       try {
         var clutchScoResults = await Promise.all([
-          bdlFetch('/nba/v1/team_season_averages/clutch?team_ids[]=' + homeId + '&season=' + s + '&season_type=regular&type=scoring', apiKey),
-          bdlFetch('/nba/v1/team_season_averages/clutch?team_ids[]=' + awayId + '&season=' + s + '&season_type=regular&type=scoring', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + homeId + '&season=' + s + '&season_type=regular&type=scoring', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + awayId + '&season=' + s + '&season_type=regular&type=scoring', apiKey),
         ]);
         var hS = extractStats(clutchScoResults[0]);
         var aS = extractStats(clutchScoResults[1]);
@@ -221,12 +221,25 @@ exports.handler = async function(event) {
     }
 
     // ================================================================
-    // ODDS - Multi-vendor via v2 endpoint
-    // Path: /nba/v2/odds?game_ids[]=X (array param format)
+    // ODDS - Multi-vendor
+    // NBA: /nba/v2/odds?game_ids[]=X
+    // NCAAMB: /ncaab/v1/odds?game_ids[]=X
     // ================================================================
     if (pullSet.odds && bdlGameId) {
       try {
-        var oddsResp = await bdlFetch('/nba/v2/odds?game_ids[]=' + bdlGameId, apiKey);
+        var league = body.league || 'nba';
+        var oddsPath;
+        if (league === 'ncaamb') {
+          oddsPath = '/ncaab/v1/odds?game_ids[]=' + bdlGameId;
+        } else if (league === 'wnba') {
+          // WNBA has no BDL odds endpoint — skip
+          oddsPath = null;
+        } else {
+          oddsPath = '/nba/v2/odds?game_ids[]=' + bdlGameId;
+        }
+
+        if (oddsPath) {
+        var oddsResp = await bdlFetch(oddsPath, apiKey);
         var odds = (oddsResp && oddsResp.data) || [];
 
         // Vendor preference: DK > FD > Caesars > BetMGM > BetRivers > first
@@ -266,8 +279,9 @@ exports.handler = async function(event) {
               updated: odds[oi].updated_at,
             });
           }
-          result.sources.push('odds/v2');
+          result.sources.push(league === 'nba' ? 'odds/v2' : 'odds/v1');
         }
+        } // end if(oddsPath)
       } catch (e) {
         result.errors.push('odds: ' + e.message);
       }
@@ -275,7 +289,7 @@ exports.handler = async function(event) {
 
     // ================================================================
     // TRACKING - Catch-and-shoot + Pull-up (sustainability baselines)
-    // Path: /nba/v1/team_season_averages/shotdashboard?team_ids[]=X&season=Y&season_type=regular&type=catch_and_shoot
+    // Path: /nba/v1/team_season_averages/shotdashboard?team_id=X&season=Y&season_type=regular&type=catch_and_shoot
     // Category is "shotdashboard", type is the specific dashboard view
     // ================================================================
     if (pullSet.tracking && homeId && awayId) {
@@ -284,8 +298,8 @@ exports.handler = async function(event) {
       // -- catch_and_shoot
       try {
         var casResults = await Promise.all([
-          bdlFetch('/nba/v1/team_season_averages/shotdashboard?team_ids[]=' + homeId + '&season=' + s + '&season_type=regular&type=catch_and_shoot', apiKey),
-          bdlFetch('/nba/v1/team_season_averages/shotdashboard?team_ids[]=' + awayId + '&season=' + s + '&season_type=regular&type=catch_and_shoot', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/shotdashboard?team_id=' + homeId + '&season=' + s + '&season_type=regular&type=catch_and_shoot', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/shotdashboard?team_id=' + awayId + '&season=' + s + '&season_type=regular&type=catch_and_shoot', apiKey),
         ]);
         var hCAS = extractStats(casResults[0]);
         var aCAS = extractStats(casResults[1]);
@@ -306,11 +320,11 @@ exports.handler = async function(event) {
         result.errors.push('catch_and_shoot: ' + e.message);
       }
 
-      // -- pullups (BDL shotdashboard type: "pullups")
+      // -- pull_up
       try {
         var puResults = await Promise.all([
-          bdlFetch('/nba/v1/team_season_averages/shotdashboard?team_ids[]=' + homeId + '&season=' + s + '&season_type=regular&type=pullups', apiKey),
-          bdlFetch('/nba/v1/team_season_averages/shotdashboard?team_ids[]=' + awayId + '&season=' + s + '&season_type=regular&type=pullups', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/shotdashboard?team_id=' + homeId + '&season=' + s + '&season_type=regular&type=pull_up', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/shotdashboard?team_id=' + awayId + '&season=' + s + '&season_type=regular&type=pull_up', apiKey),
         ]);
         var hPU = extractStats(puResults[0]);
         var aPU = extractStats(puResults[1]);
