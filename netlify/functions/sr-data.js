@@ -69,8 +69,8 @@ const ENDPOINTS = {
   hierarchy:       (p, cfg) => `league/hierarchy.json`,
 
   // === NCAAMB only ===
-  net_rankings:    (p, cfg) => `seasons/${cfg.season}/${p.season_type || cfg.seasonType}/rankings/NET.json`,
-  rpi:             (p, cfg) => `seasons/${cfg.season}/${p.season_type || cfg.seasonType}/rankings/RPI.json`,
+  net_rankings:    (p, cfg) => `seasons/${cfg.season}/${p.season_type || cfg.seasonType}/rankings/net.json`,
+  rpi:             (p, cfg) => `seasons/${cfg.season}/${p.season_type || cfg.seasonType}/rankings/rpi.json`,
   polls:           (p, cfg) => `seasons/${cfg.season}/${p.season_type || cfg.seasonType}/rankings.json`,
   bracket:         (p, cfg) => `tournaments/${p.tournament_id || 'NCAA'}/schedule.json`,
 

@@ -52,6 +52,7 @@ function getTeamGP(standings, alias) {
   if (!standings) return 0;
   var allTeams = [];
   (standings.conferences || []).forEach(function(conf) {
+    (conf.teams || []).forEach(function(t) { allTeams.push(t); });
     (conf.divisions || []).forEach(function(div) {
       (div.teams || []).forEach(function(t) { allTeams.push(t); });
     });
@@ -407,6 +408,7 @@ function computePythagorean(standings, homeAlias, awayAlias) {
 
   var allTeams = [];
   (standings.conferences || []).forEach(function(conf) {
+    (conf.teams || []).forEach(function(t) { allTeams.push(t); });
     (conf.divisions || []).forEach(function(div) {
       (div.teams || []).forEach(function(t) { allTeams.push(t); });
     });
@@ -728,6 +730,59 @@ function buildSystemPrompt() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// 11. NCAAMB SYSTEM PROMPT
+// ══════════════════════════════════════════════════════════════════════════════
+
+function buildNCAAMBSystemPrompt() {
+  return [
+    'You are an NCAA Men\'s Basketball pre-game structural analyst for March Madness and regular season betting.',
+    '',
+    'LEAGUE CONTEXT:',
+    '- Two 20-minute halves (not four quarters). 30-second shot clock. 5 personal fouls = disqualification.',
+    '- ~65-70 possessions per game (vs NBA ~100). Pace is slower, each possession matters more.',
+    '- Tournament games are neutral site \u2014 ignore home/away advantage for March Madness.',
+    '- 362 teams \u2014 roster depth and talent gaps vary enormously compared to NBA.',
+    '',
+    "The user's strategy: BET THE STRUCTURALLY DOMINANT TEAM WHEN TRAILING, because the opponent's lead is built on unsustainable variance. The thesis identifies WHICH team has real structural control.",
+    '',
+    'INDICATORS (weighted): I1 Possession & Transition (25%) \u2014 TO margin, steals, OREBs, POT, SCP, FBP. I2 Rim Pressure & Foul (25%) \u2014 paint pts, at-rim rates, FTA, blocks. I3 Shot Quality & Creation (20%) \u2014 assist ratio, eFG%, shot zones. I4 Lineup Integrity (20%) \u2014 depth, bench contribution, rotation quality. I5 Tempo & Efficiency (10%) \u2014 pace, pts/possession.',
+    '',
+    'Each scored 1.0 (clear edge), 0.5 (contested), 0.0 (opponent). Control: 0.90+ DOMINANT | 0.75-0.89 STRONG | 0.60-0.74 EARNED | 0.45-0.59 NO EDGE | <0.45 WAIT.',
+    '',
+    'NCAAMB-SPECIFIC ANALYSIS:',
+    '- NET RANKINGS are the primary strength-of-schedule metric. Weight NET rank + quad records (Q1-Q4 win-loss) heavily.',
+    '- Q1 wins (vs top-30 NET home / top-75 away) indicate elite-level competitiveness.',
+    '- No daily injury report \u2014 injuries come from team profile roster status only.',
+    '- No depth chart \u2014 derive rotation quality from minutes distribution in season stats.',
+    '- No splits, no clutch data, no tracking data.',
+    '',
+    'Compute from the data: Context-Adjusted Strength (using NET rank + quad records), Structural Identity, Shot Diet, Comeback Score (0-10), Lead-Keep Score (0-10).',
+    'Pythagorean is pre-computed \u2014 use provided values.',
+    '',
+    '3PT VULNERABILITY PROFILE (both teams): NON-SHOOTERS (<33% or <1.5 3PA/gm), VOLATILE (33-38% on 3+ att/gm). Name 2-3 per team.',
+    '',
+    'ML THRESHOLD (if odds provided): Convert control score to FWP. ML THRESHOLD = ML where MIP is 5%+ below FWP.',
+    '',
+    'OUTPUT FORMAT (PLAIN TEXT ONLY \u2014 no Markdown):',
+    'COMPACT THESIS \u2014 [AWAY] vs [HOME] | [Time] MST',
+    '[Date] | [Venue]',
+    '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
+    'NET RANKINGS',
+    '[AWAY]: NET #X (W-L) Q1:X-X Q2:X-X Q3:X-X Q4:X-X | SOS:#X | Conf: [conference] [conf record]',
+    '[HOME]: NET #X (W-L) Q1:X-X Q2:X-X Q3:X-X Q4:X-X | SOS:#X | Conf: [conference] [conf record]',
+    'MATCHUP QUALITY: [Quad X game for both teams]',
+    '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
+    'AVAILABILITY',
+    '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
+    'CONTROL SCORE: [Team] [X.XX] \u2014 [Verdict]',
+    '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
+    'I1-I5 scored with 1-line reasons',
+    '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
+    'SHOT DIET / 3PT HEATER WATCHLIST / KEY FLAGS / MARKET / ENTRY / PASS / WATCH',
+  ].join('\n');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // MAIN HANDLER — Netlify Functions v2 with streaming
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -782,54 +837,108 @@ export default async function(request) {
     var analytical = body.analytical || {};
     var homeAlias = matchup.home || 'HOME';
     var awayAlias = matchup.away || 'AWAY';
+    var league = analytical.league || 'nba';
 
-    // ── PRE-COMPUTE (fast, synchronous) ──
-    var rosterAudit = computeRosterAudit(analytical, homeAlias, awayAlias);
-    var sia = computeSIA(rosterAudit, analytical, homeAlias, awayAlias);
-    var redistribution = computeRedistribution(rosterAudit, sia, analytical, homeAlias, awayAlias);
-    var srm = computeSRM(rosterAudit, analytical);
-    var finalCaps = applyAdjustments(sia, redistribution, srm);
-    var depletion = computeDepletionGate(rosterAudit);
-    var pyth = computePythagorean(analytical.standings, homeAlias, awayAlias);
-    var bhv = computeBHV(analytical, homeAlias, awayAlias, rosterAudit);
+    var systemPrompt, userPrompt, preComputedResult;
 
-    var preComputed = formatPreComputed(homeAlias, awayAlias, rosterAudit, sia, finalCaps, redistribution, srm, depletion, pyth, bhv);
+    if (league === 'ncaamb') {
+      // ══════════════════════════════════════════════════════════════════
+      // NCAAMB PATH — simplified pre-compute
+      // ══════════════════════════════════════════════════════════════════
+      var pyth = computePythagorean(analytical.standings, homeAlias, awayAlias);
 
-    // ── BUILD PROMPTS ──
-    var systemPrompt = buildSystemPrompt();
+      var ncaaPre = '=== PRE-COMPUTED STRUCTURAL ASSESSMENT (NCAAMB) ===\n\nPYTHAGOREAN EXPECTATION:\n';
+      if (pyth.home) ncaaPre += homeAlias + ': ' + pyth.home.actual + '-' + pyth.home.losses + ' (expected ' + pyth.home.expected.toFixed(0) + '-' + (pyth.home.gp - pyth.home.expected).toFixed(0) + ', delta ' + (pyth.home.delta >= 0 ? '+' : '') + pyth.home.delta + ')' + (pyth.home.label ? ' \u2014 ' + pyth.home.label : '') + '\n';
+      else ncaaPre += homeAlias + ': (not found in standings)\n';
+      if (pyth.away) ncaaPre += awayAlias + ': ' + pyth.away.actual + '-' + pyth.away.losses + ' (expected ' + pyth.away.expected.toFixed(0) + '-' + (pyth.away.gp - pyth.away.expected).toFixed(0) + ', delta ' + (pyth.away.delta >= 0 ? '+' : '') + pyth.away.delta + ')' + (pyth.away.label ? ' \u2014 ' + pyth.away.label : '') + '\n';
+      else ncaaPre += awayAlias + ': (not found in standings)\n';
 
-    var userPrompt = 'Build a complete pre-game thesis for this NBA matchup.\n\n' +
-      'MATCHUP: ' + awayAlias + ' @ ' + homeAlias + '\n' +
-      'DATE: ' + (matchup.date || '?') + ' | TIME: ' + (matchup.time || '?') + ' MST\n' +
-      'VENUE: ' + (matchup.venue || 'TBD') + '\n\n' +
-      preComputed + '\n\n' +
-      '=== PRE-COMPUTED AVAILABILITY (use this exactly — do NOT mix players between teams) ===\n' + (sections.availability || '(unavailable)') + '\n\n' +
-      '=== INJURIES (raw report) ===\n' + (sections.injuries || '(unavailable)') + '\n\n' +
-      (sections.returning || '') +
-      '=== ' + homeAlias + ' ROSTER ===\n' + (sections.homeRoster || '(unavailable)') + '\n\n' +
-      '=== ' + awayAlias + ' ROSTER ===\n' + (sections.awayRoster || '(unavailable)') + '\n\n' +
-      '=== ' + homeAlias + ' DEPTH CHART ===\n' + (sections.homeDepth || '(unavailable)') + '\n\n' +
-      '=== ' + awayAlias + ' DEPTH CHART ===\n' + (sections.awayDepth || '(unavailable)') + '\n\n' +
-      '=== ' + homeAlias + ' SEASON STATS ===\n' + (sections.homeStats || '(unavailable)') + '\n\n' +
-      '=== ' + awayAlias + ' SEASON STATS ===\n' + (sections.awayStats || '(unavailable)') + '\n\n' +
-      '=== ' + homeAlias + ' SPLITS (Game) ===\n' + (sections.homeSplitsGame || '(unavailable)') + '\n\n' +
-      '=== ' + awayAlias + ' SPLITS (Game) ===\n' + (sections.awaySplitsGame || '(unavailable)') + '\n\n' +
-      '=== ' + homeAlias + ' SPLITS (Schedule) ===\n' + (sections.homeSplitsSchedule || '(unavailable)') + '\n\n' +
-      '=== ' + awayAlias + ' SPLITS (Schedule) ===\n' + (sections.awaySplitsSchedule || '(unavailable)') + '\n\n' +
-      '=== STANDINGS ===\n' + (sections.standings || '(unavailable)') + '\n' +
-      (sections.odds || '') + '\n' + (sections.tracking || '') + '\n' + (sections.clutch || '') + '\n' +
-      (sections.recentForm || '') + '\n\n' +
-      'IMPORTANT: The PRE-COMPUTED STRUCTURAL ASSESSMENT contains SIA context with GP gate status. Players marked GP GATE SUPPRESSED should NOT cause further indicator discounts \u2014 team stats already reflect their absence. Players marked FULL GP gate with degradation tiers inform your indicator scoring. Show SIA notation in AVAILABILITY. If a depletion gate ceiling is set, justify exceeding it if you do.\n\n' +
-      'Output the compact thesis format.';
+      ncaaPre += '\nAVAILABILITY (from team profiles):\n';
+      ['home', 'away'].forEach(function(side) {
+        var alias = side === 'home' ? homeAlias : awayAlias;
+        var profile = analytical[side + 'Profile'];
+        if (!profile || !profile.players) { ncaaPre += alias + ': (roster unavailable)\n'; return; }
+        var out = [], active = 0;
+        (profile.players || []).forEach(function(p) {
+          var st = (p.status || '').toUpperCase();
+          if (st === 'OUT' || st === 'INJ' || st === 'SUS' || st === 'NWT') {
+            out.push((p.full_name||'?') + ' [' + (p.primary_position||'?') + '] ' + st);
+          } else { active++; }
+        });
+        ncaaPre += alias + ': ' + active + ' players available\n';
+        if (out.length) ncaaPre += alias + ' OUT: ' + out.join(' | ') + '\n';
+        else ncaaPre += alias + ': FULL STRENGTH\n';
+      });
 
-    // ── PRE-COMPUTED RESULT (sent before streaming) ──
-    var preComputedResult = {
-      rosterAudit: { homeOut: rosterAudit.out.home.length, awayOut: rosterAudit.out.away.length,
-        homeOutNames: rosterAudit.out.home.map(function(p) { return p.name; }),
-        awayOutNames: rosterAudit.out.away.map(function(p) { return p.name; }) },
-      siaCaps: { home: finalCaps.home.caps, away: finalCaps.away.caps },
-      depletion: depletion, pyth: pyth, bhv: bhv
-    };
+      systemPrompt = buildNCAAMBSystemPrompt();
+      userPrompt = 'Build a complete pre-game thesis for this NCAAMB matchup.\n\n' +
+        'MATCHUP: ' + awayAlias + ' @ ' + homeAlias + '\n' +
+        'DATE: ' + (matchup.date || '?') + ' | TIME: ' + (matchup.time || '?') + ' MST\n' +
+        'VENUE: ' + (matchup.venue || 'TBD') + '\n\n' +
+        ncaaPre + '\n\n' +
+        (sections.netRankings ? '=== NET RANKINGS ===\n' + sections.netRankings + '\n\n' : '') +
+        '=== ' + homeAlias + ' ROSTER ===\n' + (sections.homeRoster || '(unavailable)') + '\n\n' +
+        '=== ' + awayAlias + ' ROSTER ===\n' + (sections.awayRoster || '(unavailable)') + '\n\n' +
+        '=== ' + homeAlias + ' SEASON STATS ===\n' + (sections.homeStats || '(unavailable)') + '\n\n' +
+        '=== ' + awayAlias + ' SEASON STATS ===\n' + (sections.awayStats || '(unavailable)') + '\n\n' +
+        '=== STANDINGS ===\n' + (sections.standings || '(unavailable)') + '\n' +
+        (sections.odds || '') + '\n\n' +
+        'NCAAMB CONTEXT: Two 20-min halves. 5 fouls. 30-sec shot clock. ~65-70 poss/game. No depth chart, splits, clutch, or tracking. NET rankings + quad records are the primary strength metric.\n\nOutput the compact thesis format.';
+
+      preComputedResult = {
+        rosterAudit: { homeOut: 0, awayOut: 0, homeOutNames: [], awayOutNames: [] },
+        siaCaps: { home: {}, away: {} },
+        depletion: { home: null, away: null },
+        pyth: pyth, league: 'ncaamb',
+      };
+
+    } else {
+      // ══════════════════════════════════════════════════════════════════
+      // NBA PATH — full SIA pre-compute pipeline
+      // ══════════════════════════════════════════════════════════════════
+      var rosterAudit = computeRosterAudit(analytical, homeAlias, awayAlias);
+      var sia = computeSIA(rosterAudit, analytical, homeAlias, awayAlias);
+      var redistribution = computeRedistribution(rosterAudit, sia, analytical, homeAlias, awayAlias);
+      var srm = computeSRM(rosterAudit, analytical);
+      var finalCaps = applyAdjustments(sia, redistribution, srm);
+      var depletion = computeDepletionGate(rosterAudit);
+      var pyth = computePythagorean(analytical.standings, homeAlias, awayAlias);
+      var bhv = computeBHV(analytical, homeAlias, awayAlias, rosterAudit);
+      var preComputed = formatPreComputed(homeAlias, awayAlias, rosterAudit, sia, finalCaps, redistribution, srm, depletion, pyth, bhv);
+
+      systemPrompt = buildSystemPrompt();
+      userPrompt = 'Build a complete pre-game thesis for this NBA matchup.\n\n' +
+        'MATCHUP: ' + awayAlias + ' @ ' + homeAlias + '\n' +
+        'DATE: ' + (matchup.date || '?') + ' | TIME: ' + (matchup.time || '?') + ' MST\n' +
+        'VENUE: ' + (matchup.venue || 'TBD') + '\n\n' +
+        preComputed + '\n\n' +
+        '=== PRE-COMPUTED AVAILABILITY (use this exactly \u2014 do NOT mix players between teams) ===\n' + (sections.availability || '(unavailable)') + '\n\n' +
+        '=== INJURIES (raw report) ===\n' + (sections.injuries || '(unavailable)') + '\n\n' +
+        (sections.returning || '') +
+        '=== ' + homeAlias + ' ROSTER ===\n' + (sections.homeRoster || '(unavailable)') + '\n\n' +
+        '=== ' + awayAlias + ' ROSTER ===\n' + (sections.awayRoster || '(unavailable)') + '\n\n' +
+        '=== ' + homeAlias + ' DEPTH CHART ===\n' + (sections.homeDepth || '(unavailable)') + '\n\n' +
+        '=== ' + awayAlias + ' DEPTH CHART ===\n' + (sections.awayDepth || '(unavailable)') + '\n\n' +
+        '=== ' + homeAlias + ' SEASON STATS ===\n' + (sections.homeStats || '(unavailable)') + '\n\n' +
+        '=== ' + awayAlias + ' SEASON STATS ===\n' + (sections.awayStats || '(unavailable)') + '\n\n' +
+        '=== ' + homeAlias + ' SPLITS (Game) ===\n' + (sections.homeSplitsGame || '(unavailable)') + '\n\n' +
+        '=== ' + awayAlias + ' SPLITS (Game) ===\n' + (sections.awaySplitsGame || '(unavailable)') + '\n\n' +
+        '=== ' + homeAlias + ' SPLITS (Schedule) ===\n' + (sections.homeSplitsSchedule || '(unavailable)') + '\n\n' +
+        '=== ' + awayAlias + ' SPLITS (Schedule) ===\n' + (sections.awaySplitsSchedule || '(unavailable)') + '\n\n' +
+        '=== STANDINGS ===\n' + (sections.standings || '(unavailable)') + '\n' +
+        (sections.odds || '') + '\n' + (sections.tracking || '') + '\n' + (sections.clutch || '') + '\n' +
+        (sections.recentForm || '') + '\n\n' +
+        'IMPORTANT: The PRE-COMPUTED STRUCTURAL ASSESSMENT contains SIA context with GP gate status. Players marked GP GATE SUPPRESSED should NOT cause further indicator discounts \u2014 team stats already reflect their absence. Players marked FULL GP gate with degradation tiers inform your indicator scoring. Show SIA notation in AVAILABILITY. If a depletion gate ceiling is set, justify exceeding it if you do.\n\n' +
+        'Output the compact thesis format.';
+
+      preComputedResult = {
+        rosterAudit: { homeOut: rosterAudit.out.home.length, awayOut: rosterAudit.out.away.length,
+          homeOutNames: rosterAudit.out.home.map(function(p) { return p.name; }),
+          awayOutNames: rosterAudit.out.away.map(function(p) { return p.name; }) },
+        siaCaps: { home: finalCaps.home.caps, away: finalCaps.away.caps },
+        depletion: depletion, pyth: pyth, bhv: bhv
+      };
+    }
 
     // ── CALL SONNET (streaming) ──
     var anthropicResp = await fetch('https://api.anthropic.com/v1/messages', {
