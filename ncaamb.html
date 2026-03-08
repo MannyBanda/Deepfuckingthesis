@@ -2643,6 +2643,9 @@ async function generateThesis(gameId){
     if(i < calls.length-1) await new Promise(r=>setTimeout(r,1100));
   }
   // Cache for structural context extraction (used by extractStructuralContext)
+  // Diagnostic: log stats response structure for debugging
+  if(collected.homeStats) console.log('[NCAAMB STATS DEBUG] homeStats keys:', Object.keys(collected.homeStats), 'own_record?', !!collected.homeStats.own_record, 'statistics?', !!(collected.homeStats.own_record?.statistics || collected.homeStats.statistics), 'players?', !!(collected.homeStats.own_record?.players || collected.homeStats.players));
+  if(collected.awayStats) console.log('[NCAAMB STATS DEBUG] awayStats keys:', Object.keys(collected.awayStats), 'own_record?', !!collected.awayStats.own_record, 'statistics?', !!(collected.awayStats.own_record?.statistics || collected.awayStats.statistics), 'players?', !!(collected.awayStats.own_record?.players || collected.awayStats.players));
   try{
     const cacheStr = JSON.stringify(collected);
     if(cacheStr.length < 3000000) localStorage.setItem(cacheKey, cacheStr);
@@ -2721,16 +2724,30 @@ async function generateThesis(gameId){
     const trimStats = (s) => {
       if(!s) return '(unavailable)';
       const own = s.own_record||s;
-      const teamStats = own.statistics||s.statistics||{};
-      const oppStats = (s.opponents||{}).statistics||{};
+      // SR statistics response may nest under averages/totals
+      let teamStats = own.statistics||s.statistics||{};
+      // Unwrap: if teamStats has averages/totals sub-objects, use averages for per-game numbers
+      if(teamStats.averages && typeof teamStats.averages === 'object') teamStats = teamStats.averages;
+      else if(teamStats.totals && typeof teamStats.totals === 'object') teamStats = teamStats.totals;
+      let oppStats = (s.opponents||{}).statistics||{};
+      if(oppStats.averages && typeof oppStats.averages === 'object') oppStats = oppStats.averages;
+      else if(oppStats.totals && typeof oppStats.totals === 'object') oppStats = oppStats.totals;
       const players = (own.players||s.players||[])
-        .sort((a,b)=>(b.average?.minutes||0)-(a.average?.minutes||0))
+        .sort((a,b)=>(b.average?.minutes||b.total?.minutes||0)-(a.average?.minutes||a.total?.minutes||0))
         .slice(0,10)
-        .map(pl=>`${pl.full_name} [${pl.primary_position||'?'}] ${pl.average?.minutes||0}mpg ${pl.average?.points||0}ppg ${pl.average?.assists||0}apg ${pl.average?.rebounds||0}rpg ${pl.average?.steals||0}spg ${pl.average?.turnovers||0}to FG:${pl.average?.field_goals_made||0}/${pl.average?.field_goals_att||0} 3P:${pl.average?.three_points_made||0}/${pl.average?.three_points_att||0} FT:${pl.average?.free_throws_made||0}/${pl.average?.free_throws_att||0} USG:${(pl.average?.usage_pct||0).toFixed(1)}%`);
+        .map(pl=>{
+          const avg = pl.average||pl.averages||pl.total||pl.totals||{};
+          return `${pl.full_name} [${pl.primary_position||'?'}] ${avg.minutes||0}mpg ${avg.points||0}ppg ${avg.assists||0}apg ${avg.rebounds||0}rpg ${avg.steals||0}spg ${avg.turnovers||0}to FG:${avg.field_goals_made||0}/${avg.field_goals_att||0} 3P:${avg.three_points_made||0}/${avg.three_points_att||0} FT:${avg.free_throws_made||0}/${avg.free_throws_att||0}`;
+        });
       const t = teamStats;
-      const teamLine = `Team: ${t.points||0}ppg ${t.assists||0}apg ${t.rebounds||0}rpg ${t.steals||0}spg ${t.blocks||0}bpg ${t.turnovers||0}to FBP:${t.fast_break_points||0} POT:${t.points_off_turnovers||0} SCP:${t.second_chance_points||0} Paint:${t.points_in_the_paint||0} OREB:${t.offensive_rebounds||0} FTA:${t.free_throws_att||0} eFG:${(((t.field_goals_made||0)+.5*(t.three_points_made||0))/(t.field_goals_att||1)*100).toFixed(1)}%`;
+      const teamLine = `Team: ${t.points||0}ppg ${t.assists||0}apg ${t.rebounds||0}rpg ${t.steals||0}spg ${t.blocks||0}bpg ${t.turnovers||0}to FBP:${t.fast_break_points||0} POT:${t.points_off_turnovers||0} SCP:${t.second_chance_points||0} Paint:${t.points_in_the_paint||t.points_in_paint||0} OREB:${t.offensive_rebounds||0} FTA:${t.free_throws_att||0} eFG:${(((t.field_goals_made||0)+.5*(t.three_points_made||0))/(t.field_goals_att||1)*100).toFixed(1)}%`;
       const opp = oppStats;
-      const oppLine = opp ? `Opp allowed: ${opp.points||0}ppg Paint:${opp.points_in_the_paint||0} FTA:${opp.free_throws_att||0} OREB:${opp.offensive_rebounds||0} Stl:${opp.steals||0}` : '';
+      const oppLine = opp && Object.keys(opp).length > 0 ? `Opp allowed: ${opp.points||0}ppg Paint:${opp.points_in_the_paint||opp.points_in_paint||0} FTA:${opp.free_throws_att||0} OREB:${opp.offensive_rebounds||0} Stl:${opp.steals||0}` : '';
+      // Debug: if all zeros, dump first-level keys so we can diagnose
+      if((t.points||0)===0 && (t.assists||0)===0 && (t.rebounds||0)===0){
+        const rawKeys = Object.keys(own.statistics||s.statistics||{}).join(',');
+        return '(STATS PARSE WARNING: team stats all zero. Raw keys: '+rawKeys+')\n' + JSON.stringify(own.statistics||s.statistics||{}).substring(0,2000);
+      }
       return teamLine + '\n' + oppLine + '\nTop players:\n' + players.join('\n');
     };
     const trimSplits = (s) => {
