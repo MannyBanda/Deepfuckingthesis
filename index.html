@@ -1067,6 +1067,31 @@ async function triggerAnalysis(game){
   cs.analyzing = true;
   renderCard(game);
   try{
+    // ── PRE-FLIGHT: ensure enrichment + PBP are current before building prompt ──
+    // Mirrors generateThesis Step 0 logic — don't send stale/null data to Sonnet
+    if(cs.enriching){
+      addLog(game.id, '⏳ Waiting for enrichment to finish…', true);
+      for(let w=0;w<24&&cs.enriching;w++) await new Promise(r=>setTimeout(r,500));
+    } else if(!cs.oddsData && !cs.enrichDone){
+      addLog(game.id, '⚡ Pre-analyze: pulling odds…', true);
+      try{ await enrichFromBDL(game.id); }catch(e){ addLog(game.id, '⚠ Pre-analyze enrich failed: '+e.message, false); }
+    }
+    // Refresh PBP if stale (>3 min old) or missing
+    if(!cs.pbpLoading && getState(game)==='LIVE'){
+      const pbpAge = cs.pbpTime ? (Date.now()-cs.pbpTime.getTime())/60000 : 999;
+      if(pbpAge > 3 || !cs.pbpAudit){
+        addLog(game.id, '⚡ Pre-analyze: refreshing PBP…', true);
+        try{
+          const pbpData = await sr('pbp', {game_id: game.id});
+          const audit = parsePBP(pbpData, game);
+          cs.pbpAudit = audit;
+          cs.pbpTime = new Date();
+          cs.pbpPeriod = game.period || 0;
+          persistDepth(game.id, cs);
+        }catch(e){ addLog(game.id, '⚠ Pre-analyze PBP failed: '+e.message, false); }
+      }
+    }
+
     const thesis = theses[game.id]||'';
     const periodLabel = game.period ? 'Q'+game.period : '';
     const score = (game.away?.alias||'AWAY')+' '+(game.awayPoints||0)+' - '+(game.home?.alias||'HOME')+' '+(game.homePoints||0);
@@ -1164,15 +1189,47 @@ async function triggerAnalysis(game){
     const decision = parseSonnetDecision(data.analysis);
     if(decision){
       // ── SONNET FWP — game-state-aware win probability ──
-      // Sonnet outputs FWP for control team. Derives two-sided values for value table.
-      const ind = parsed || cs.clientIndicators || cs.sonnetIndicators;
-      const ctrlTeam = ind?.controlTeam || '';
-      const sonnetFwpRaw = (decision.fwp||'').replace(/[%\s]/g,'');
-      const twoSided = deriveTwoSidedFWP(sonnetFwpRaw, ctrlTeam, hAlias);
-      const homeFWP = twoSided ? twoSided.homeFWP : 50;
-      const awayFWP = twoSided ? twoSided.awayFWP : 50;
-      // decision.fwp already set by parseSonnetDecision — preserve Sonnet's value
-      if(!twoSided) console.warn('FWP: Sonnet did not output parseable FWP — defaulting 50/50');
+      // Sonnet outputs labeled two-sided FWP: "MEM 72% / LAC 28%"
+      // Parse directly — no guessing which team Sonnet meant
+      let homeFWP = 50, awayFWP = 50;
+      if(decision.fwpLabeled && decision.fwpTeam1 && decision.fwpTeam2){
+        // Two-sided labeled — match team aliases to home/away
+        const hUp = hAlias.toUpperCase(), aUp = aAlias.toUpperCase();
+        const t1Up = decision.fwpTeam1, t2Up = decision.fwpTeam2;
+        if(t1Up === hUp || t1Up.startsWith(hUp.substring(0,3)) || hUp.startsWith(t1Up.substring(0,3))){
+          homeFWP = decision.fwpVal1; awayFWP = decision.fwpVal2;
+        } else if(t2Up === hUp || t2Up.startsWith(hUp.substring(0,3)) || hUp.startsWith(t2Up.substring(0,3))){
+          homeFWP = decision.fwpVal2; awayFWP = decision.fwpVal1;
+        } else if(t1Up === aUp || t1Up.startsWith(aUp.substring(0,3)) || aUp.startsWith(t1Up.substring(0,3))){
+          awayFWP = decision.fwpVal1; homeFWP = decision.fwpVal2;
+        } else {
+          // Couldn't match either team — use positional (first listed = away by convention)
+          awayFWP = decision.fwpVal1; homeFWP = decision.fwpVal2;
+          console.warn('FWP: Could not match teams '+t1Up+'/'+t2Up+' to '+hUp+'/'+aUp+' — using positional');
+        }
+        console.log('FWP (labeled): '+hAlias+' '+homeFWP.toFixed(1)+'% / '+aAlias+' '+awayFWP.toFixed(1)+'%');
+      } else if(decision.fwpSingleTeam){
+        // Single labeled value: "MEM 72%" — derive other side
+        const fwpVal = decision.fwpSingleVal;
+        const fwpTeamUp = decision.fwpSingleTeam;
+        const hUp = hAlias.toUpperCase(), aUp = aAlias.toUpperCase();
+        if(fwpTeamUp === hUp || fwpTeamUp.startsWith(hUp.substring(0,3)) || hUp.startsWith(fwpTeamUp.substring(0,3))){
+          homeFWP = fwpVal; awayFWP = 100 - fwpVal;
+        } else {
+          awayFWP = fwpVal; homeFWP = 100 - fwpVal;
+        }
+        console.log('FWP (single-labeled): '+hAlias+' '+homeFWP.toFixed(1)+'% / '+aAlias+' '+awayFWP.toFixed(1)+'%');
+      } else {
+        // Unlabeled fallback — use old derivation from control team (legacy compat)
+        const ind = parsed || cs.clientIndicators || cs.sonnetIndicators;
+        const ctrlTeam = ind?.controlTeam || '';
+        const sonnetFwpRaw = (decision.fwp||'').replace(/[%\s]/g,'');
+        const twoSided = deriveTwoSidedFWP(sonnetFwpRaw, ctrlTeam, hAlias);
+        homeFWP = twoSided ? twoSided.homeFWP : 50;
+        awayFWP = twoSided ? twoSided.awayFWP : 50;
+        if(!twoSided) console.warn('FWP: Sonnet did not output parseable FWP — defaulting 50/50');
+        else console.warn('FWP (UNLABELED FALLBACK): '+hAlias+' '+homeFWP.toFixed(1)+'% / '+aAlias+' '+awayFWP.toFixed(1)+'% — derived from control team '+ctrlTeam);
+      }
 
       const od = cs.oddsData;
       if(od && (od.homeML || od.awayML)){
@@ -2167,15 +2224,33 @@ function parseSonnetDecision(text){
   if(!text) return null;
   try{
     const d = {};
-    // Parse EDGE line: "EDGE: +11.3% | FWP: 72.4% | MIP: 61.1%"
+    // Parse EDGE line: "EDGE: +11.3% | FWP: MEM 72% / LAC 28% | MIP: 61.1%"
     const edgeMatch = text.match(/EDGE:\s*([^\|]+)\|\s*FWP:\s*([^\|]+)\|\s*MIP:\s*(.+)/i);
     if(edgeMatch){
       d.edge = edgeMatch[1].trim();
-      d.fwp = edgeMatch[2].trim();
+      d.fwpRaw = edgeMatch[2].trim();
       d.mip = edgeMatch[3].trim();
-      // Extract numeric edge
       const edgeNum = parseFloat(d.edge.replace(/[+%]/g,''));
       d.edgeNum = isNaN(edgeNum) ? null : edgeNum;
+      // Parse two-sided FWP: "MEM 72% / LAC 28%" or "MEM 72.4% / LAC 27.6%"
+      const twoSidedMatch = d.fwpRaw.match(/([A-Z]{2,4})\s+([\d.]+)%?\s*\/\s*([A-Z]{2,4})\s+([\d.]+)%?/i);
+      if(twoSidedMatch){
+        d.fwpTeam1 = twoSidedMatch[1].toUpperCase();
+        d.fwpVal1 = parseFloat(twoSidedMatch[2]);
+        d.fwpTeam2 = twoSidedMatch[3].toUpperCase();
+        d.fwpVal2 = parseFloat(twoSidedMatch[4]);
+        d.fwp = d.fwpRaw; // preserve full string for display
+        d.fwpLabeled = true;
+      } else {
+        // Fallback: single value "72%" — old format, try to extract team prefix
+        const singleMatch = d.fwpRaw.match(/([A-Z]{2,4})?\s*([\d.]+)%?/i);
+        if(singleMatch){
+          d.fwpSingleTeam = singleMatch[1] ? singleMatch[1].toUpperCase() : null;
+          d.fwpSingleVal = parseFloat(singleMatch[2]);
+        }
+        d.fwp = d.fwpRaw;
+        d.fwpLabeled = false;
+      }
     }
     // Parse ENTRY line
     const entryMatch = text.match(/ENTRY:\s*(OPTIMAL WINDOW|WINDOW OPEN|WINDOW CLOSING|NO WINDOW|FADE)/i);
@@ -3070,7 +3145,11 @@ function compute(game){
   const combinedRead = classifyCombinedRead(score, cTeam, windowResult, accelResult);
   cardState[game.id].combinedRead = combinedRead;
 
-  // Spread conviction
+  // Margin projection (feeds spread conviction)
+  const projection = computeProjection(game);
+  if(projection) cardState[game.id].projection = projection;
+
+  // Spread conviction (uses projection when available)
   const spreadConv = computeSpreadConviction(game);
   if(spreadConv) cardState[game.id].spreadConviction = spreadConv;
 
@@ -3778,147 +3857,238 @@ function computeLeadCompositionClient(game, sustData){
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SPREAD CONVICTION ENGINE — estimates cover probability for both sides
+// MARGIN PROJECTION ENGINE — pace-adjusted forward-looking margin forecast
+// ══════════════════════════════════════════════════════════════════════════════
+function computeProjection(game){
+  const cs = cardState[game.id]; if(!cs) return null;
+  const hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
+  const hPts = game.homePoints||0, aPts = game.awayPoints||0;
+  const period = game.period||0;
+  if(period < 1) return null;
+
+  const isBDL = game.dataSource === 'BDL';
+  const s = isBDL ? game.bdlData : game.summary;
+  if(!s) return null;
+
+  // ── TIME REMAINING (NBA: 4×12 min) ──
+  const GAME_MINUTES = 48;
+  const PERIOD_MINUTES = 12;
+  const clockParts = (game.clock||'').split(':');
+  const clockMins = clockParts.length===2 ? parseInt(clockParts[0])+(parseInt(clockParts[1]||0)/60) : PERIOD_MINUTES;
+  const quartersLeft = Math.max(0, 4 - period);
+  const minsLeft = clockMins + (quartersLeft * PERIOD_MINUTES);
+  const minsElapsed = Math.max(1, GAME_MINUTES - minsLeft);
+  const pctRemaining = Math.min(1, minsLeft / GAME_MINUTES);
+
+  if(minsElapsed < 4) return null; // need minimum sample
+
+  // ── POSSESSIONS & EFFICIENCY ──
+  const hs = isBDL ? (s.home||{}) : (s.home?.statistics||{});
+  const as = isBDL ? (s.away||{}) : (s.away?.statistics||{});
+  let hPoss = hs.possessions||0, aPoss = as.possessions||0;
+
+  // Estimate possessions if unavailable (FGA + 0.44*FTA - OREB + TO)
+  if(hPoss < 3){
+    hPoss = (hs.field_goals_att||0) + 0.44*(hs.free_throws_att||0) - (hs.offensive_rebounds||0) + (hs.turnovers||0);
+    aPoss = (as.field_goals_att||0) + 0.44*(as.free_throws_att||0) - (as.offensive_rebounds||0) + (as.turnovers||0);
+  }
+  const avgPoss = (hPoss + aPoss) / 2;
+  if(avgPoss < 5) return null;
+
+  const hPPP = hPoss > 0 ? hPts / hPoss : 1.0;
+  const aPPP = aPoss > 0 ? aPts / aPoss : 1.0;
+  const netEfficiency = hPPP - aPPP;
+
+  const possPerMin = avgPoss / minsElapsed;
+  const remainingPoss = possPerMin * minsLeft;
+
+  // ── RAW PROJECTED MARGIN ──
+  const currentMargin = hPts - aPts;
+  const projectedShift = remainingPoss * netEfficiency;
+  const rawProjectedMargin = currentMargin + projectedShift;
+
+  // ── GARBAGE TIME DETECTION ──
+  let garbageTime = null;
+  const absMargin = Math.abs(currentMargin);
+  const GARBAGE_MARGIN = 18; // NBA: 18+ points
+  const GARBAGE_MINUTES = 5;
+
+  if(absMargin >= GARBAGE_MARGIN && minsLeft <= GARBAGE_MINUTES){
+    let startersPulled = false;
+
+    const H = isBDL ? null : s.home;
+    const A = isBDL ? null : s.away;
+    const bl = cs.baselines;
+    const struct = cs.structural;
+    if(H?.players && A?.players){
+      const leadSide = currentMargin > 0 ? 'home' : 'away';
+      const leadPlayers = currentMargin > 0 ? H.players : A.players;
+      const leadClosers = struct?.closers?.[leadSide] || bl?.starters?.[leadSide] || [];
+      if(leadClosers.length >= 3){
+        const onCourt = leadPlayers.filter(pl => pl.on_court);
+        const closersOn = onCourt.filter(pl =>
+          leadClosers.some(c => (pl.full_name||'').toLowerCase().includes(c.toLowerCase()) || c.toLowerCase().includes((pl.full_name||'').toLowerCase()))
+        ).length;
+        if(closersOn <= 2) startersPulled = true;
+      }
+    }
+
+    const isGarbage = startersPulled || (absMargin >= GARBAGE_MARGIN + 8 && minsLeft <= 3);
+
+    if(isGarbage){
+      const freePoints = Math.round(minsLeft * 1.3);
+      const compressionPts = Math.min(freePoints, Math.round(absMargin * 0.30));
+      garbageTime = {
+        detected: true,
+        startersPulled,
+        compressionPts,
+        reason: startersPulled ? 'starters pulled, bench lineup' : 'blowout coast ('+absMargin+' pts, '+minsLeft.toFixed(0)+'min)',
+      };
+    }
+  }
+
+  // Apply garbage time compression
+  let projectedMargin = rawProjectedMargin;
+  if(garbageTime?.detected){
+    const sign = currentMargin > 0 ? -1 : 1;
+    projectedMargin = rawProjectedMargin + (garbageTime.compressionPts * sign);
+  }
+
+  // ── WIN PROBABILITY from projected margin ──
+  // Φ(z) ≈ 1/(1 + e^(-1.7*z)), std dev shrinks as game progresses
+  const fullStdDev = 11.0;
+  const remainingStdDev = Math.max(2.0, fullStdDev * Math.sqrt(pctRemaining));
+  const z = projectedMargin / remainingStdDev;
+  const homeWinProb = 1 / (1 + Math.exp(-1.7 * z));
+
+  const projTeam = projectedMargin >= 0 ? hA : aA;
+
+  return {
+    currentMargin,
+    projectedMargin: Math.round(projectedMargin * 10) / 10,
+    rawProjectedMargin: Math.round(rawProjectedMargin * 10) / 10,
+    projTeam,
+    homeWinProb: Math.round(homeWinProb * 1000) / 10,
+    awayWinProb: Math.round((1-homeWinProb) * 1000) / 10,
+    remainingPoss: Math.round(remainingPoss * 10) / 10,
+    minsLeft: Math.round(minsLeft * 10) / 10,
+    pctRemaining: Math.round(pctRemaining * 100),
+    netEfficiency: Math.round(netEfficiency * 1000) / 1000,
+    possPerMin: Math.round(possPerMin * 100) / 100,
+    hPPP: Math.round(hPPP * 1000) / 1000,
+    aPPP: Math.round(aPPP * 1000) / 1000,
+    garbageTime,
+    remainingStdDev: Math.round(remainingStdDev * 10) / 10,
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SPREAD CONVICTION ENGINE v2 — projection-backed cover probability
 // ══════════════════════════════════════════════════════════════════════════════
 function computeSpreadConviction(game){
   const cs = cardState[game.id]; if(!cs) return null;
   const pred = cs.prediction; if(!pred) return null;
   const od = cs.oddsData; if(!od || !od.homeSpread) return null;
+  const proj = cs.projection;
 
   const hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
   const hPts = game.homePoints||0, aPts = game.awayPoints||0;
   const period = game.period||0;
   if(period < 1) return null;
 
-  // Parse spreads
   const homeSpreadNum = parseFloat(od.homeSpread);
   if(isNaN(homeSpreadNum)) return null;
   const awaySpreadNum = -homeSpreadNum;
 
-  // Get FWP for both teams
   const hv = pred.homeValue, av = pred.awayValue;
   if(!hv || !av || hv.fwp==null || av.fwp==null) return null;
 
-  // ── TIME REMAINING ──
+  // ── TIME ──
   const clockParts = (game.clock||'').split(':');
   const clockMins = clockParts.length===2 ? parseInt(clockParts[0])+(parseInt(clockParts[1]||0)/60) : 12;
   const quartersLeft = Math.max(0, 4 - period);
   const minsLeft = clockMins + (quartersLeft * 12);
   const pctRemaining = Math.min(1, minsLeft / 48);
 
-  // ── STRUCTURAL SIGNALS ──
+  // ── STRUCTURAL CONTEXT ──
   const floorInd = cs.clientInd || cs.sonnetIndicators;
   const floorScore = floorInd?.score || 0.5;
   const floorTeam = floorInd?.controlTeam || '';
-
-  const rw = cs.rollingWindow;
-  const rwScore = rw?.available ? rw.score : null;
-  const rwTeam = rw?.controlTeam || '';
-
-  const accel = cs.acceleration;
-  const accelDir = accel?.accel || 'STABLE';
-
   const lc = cs.clientLeadComposition;
   const scoringClass = lc?.classification || 'MIXED';
   const leadTeam = lc?.leadTeam || (hPts >= aPts ? hA : aA);
 
-  // ── EVALUATE EACH TEAM INDEPENDENTLY ──
   function evalTeamSpread(alias, spread, fwp, pts, oppPts){
-    // Cover margin: how many points ahead/behind the spread this team is RIGHT NOW
-    // Team covers when: (teamPts - oppPts) + spread > 0 (for + spreads)
-    // Or equivalently: teamPts - oppPts > -spread
-    var actualMargin = pts - oppPts; // positive = this team leading
+    var actualMargin = pts - oppPts;
     var coverMargin = actualMargin + spread;
-    // coverMargin > 0 means currently covering
-    // coverMargin < 0 means need to make up that many points
-
     var absSpread = Math.abs(spread);
-    var isFavorite = spread < 0; // negative spread = favorite
+    var isFavorite = spread < 0;
     var isUnderdog = spread > 0;
 
-    // Base cover probability from FWP
+    // ── PRIMARY: Projection-based cover probability ──
     var coverProb;
-    if(isUnderdog){
-      // Underdog: FWP (every win covers) + close-loss band
-      var closeLossBand = Math.min(20, absSpread * 3.5); // ~3.5% per point of spread cushion
-      coverProb = fwp + closeLossBand;
+    var projBased = false;
+    if(proj && proj.remainingStdDev > 0){
+      var teamProjectedMargin = alias === hA ? proj.projectedMargin : -proj.projectedMargin;
+      var coverZ = (teamProjectedMargin + spread) / proj.remainingStdDev;
+      coverProb = (1 / (1 + Math.exp(-1.7 * coverZ))) * 100;
+      projBased = true;
     } else {
-      // Favorite: needs to win by more than spread
-      var closeWinErosion = Math.min(25, absSpread * 3.0); // ~3% per point they must cover
-      coverProb = fwp - closeWinErosion;
+      // Fallback: FWP-based heuristic
+      if(isUnderdog){
+        var closeLossBand = Math.min(20, absSpread * 3.5);
+        coverProb = fwp + closeLossBand;
+      } else {
+        var closeWinErosion = Math.min(25, absSpread * 3.0);
+        coverProb = fwp - closeWinErosion;
+      }
     }
 
-    // ── STRUCTURAL MODIFIER ──
+    // ── STRUCTURAL MODIFIER (halved when projection is primary) ──
+    var structWeight = projBased ? 0.5 : 1.0;
     var structMod = 0;
     var teamHasStructure = floorTeam === alias && floorScore >= 0.55;
     var oppHasStructure = floorTeam !== alias && floorTeam && floorScore >= 0.55;
-    if(teamHasStructure) structMod = (floorScore - 0.5) * 25;
-    else if(oppHasStructure) structMod = -(floorScore - 0.5) * 20;
+    if(teamHasStructure) structMod = (floorScore - 0.5) * 20 * structWeight;
+    else if(oppHasStructure) structMod = -(floorScore - 0.5) * 15 * structWeight;
 
-    // ── GAP ACCELERATION ──
-    // If this team IS leading and gap growing → good for covering negative spread
-    // If this team IS trailing and gap eroding → game tightening → good for covering positive spread
-    var teamLeading = actualMargin > 0;
-    var accelMod = 0;
-    if(teamLeading){
-      // Leading: growing gap helps cover -spread, eroding hurts
-      if(accelDir === 'GROWING') accelMod = 5;
-      else if(accelDir === 'DECLINING' || accelDir === 'ERODING') accelMod = -5;
-      else if(accelDir === 'FLIPPED') accelMod = -8;
-    } else {
-      // Trailing: eroding gap helps cover +spread (game tightening)
-      if(accelDir === 'DECLINING' || accelDir === 'ERODING') accelMod = 5;
-      else if(accelDir === 'GROWING') accelMod = -5;
-      else if(accelDir === 'FLIPPED') accelMod = 8;
-    }
-
-    // ── SCORING CLASSIFICATION ──
-    // VOLATILE lead = lead will shrink → helps trailing team cover, hurts leading team
+    // ── SCORING CLASSIFICATION MODIFIER ──
     var scoringMod = 0;
     var teamIsLeadTeam = alias === leadTeam;
     if(teamIsLeadTeam){
-      // This team's lead classification
-      if(scoringClass === 'STRUCTURAL' || scoringClass === 'IDENTITY') scoringMod = 4;
-      else if(scoringClass === 'VOLATILE') scoringMod = -6;
+      if(scoringClass === 'VOLATILE') scoringMod = -5 * structWeight;
+      else if(scoringClass === 'STRUCTURAL' || scoringClass === 'IDENTITY') scoringMod = 3 * structWeight;
     } else {
-      // Opponent is leading — volatile opponent lead helps us
-      if(scoringClass === 'VOLATILE') scoringMod = 6;
-      else if(scoringClass === 'STRUCTURAL' || scoringClass === 'IDENTITY') scoringMod = -4;
+      if(scoringClass === 'VOLATILE') scoringMod = 5 * structWeight;
+      else if(scoringClass === 'STRUCTURAL' || scoringClass === 'IDENTITY') scoringMod = -3 * structWeight;
     }
 
-    // ── COVER MARGIN + TIME INTERACTION ──
-    var coverMarginMod = 0;
-    if(coverMargin > 0){
-      // Currently covering — more certain as time runs out
-      if(coverMargin >= 10) coverMarginMod = 10 * (1 - pctRemaining);
-      else if(coverMargin >= 5) coverMarginMod = 6 * (1 - pctRemaining);
-      else coverMarginMod = 3 * (1 - pctRemaining);
-    } else {
-      // Not covering — harder as time runs out
-      var deficit = Math.abs(coverMargin);
-      if(deficit > 12 && pctRemaining < 0.25) coverMarginMod = -15;
-      else if(deficit > 8 && pctRemaining < 0.15) coverMarginMod = -12;
-      else if(deficit > 5) coverMarginMod = -4;
-      else if(deficit <= 3 && pctRemaining > 0.30) coverMarginMod = 2; // small deficit, lots of time
+    // ── GARBAGE TIME OVERRIDE ──
+    var garbageMod = 0;
+    if(proj?.garbageTime?.detected){
+      if(isFavorite && actualMargin > 0){
+        garbageMod = -Math.min(20, proj.garbageTime.compressionPts * 2.5);
+      } else if(isUnderdog && actualMargin < 0){
+        garbageMod = Math.min(15, proj.garbageTime.compressionPts * 2.0);
+      }
     }
 
-    // ── ROLLING WINDOW ──
-    var rwMod = 0;
-    if(rwScore !== null && rwTeam === alias && rwScore >= 0.60) rwMod = 3;
-    else if(rwScore !== null && rwTeam !== alias && rwTeam && rwScore >= 0.70) rwMod = -3;
-
-    // ── COMPOSITE ──
-    coverProb = coverProb + structMod + accelMod + scoringMod + coverMarginMod + rwMod;
+    coverProb = coverProb + structMod + scoringMod + garbageMod;
     coverProb = Math.max(5, Math.min(95, coverProb));
 
-    // Build reason
     var parts = [];
-    parts.push('FWP '+fwp.toFixed(0)+'%');
+    if(projBased){
+      var teamProjMargin = alias === hA ? proj.projectedMargin : -proj.projectedMargin;
+      parts.push('proj '+(teamProjMargin>=0?'+':'')+teamProjMargin.toFixed(1)+' margin');
+      parts.push(proj.remainingPoss.toFixed(0)+' poss left');
+    } else {
+      parts.push('FWP '+fwp.toFixed(0)+'%');
+    }
     if(coverMargin > 0) parts.push('covering by '+coverMargin.toFixed(1));
     else if(coverMargin < 0) parts.push('need '+Math.abs(coverMargin).toFixed(1)+' pts');
-    if(teamHasStructure) parts.push('structural edge ('+floorScore.toFixed(2)+')');
-    if(accelDir !== 'STABLE' && accelDir !== 'TOO EARLY') parts.push('gap '+accelDir);
-    if(scoringClass !== 'MIXED' && scoringClass !== 'EVEN') parts.push('lead '+scoringClass);
+    if(teamHasStructure) parts.push('structural ('+floorScore.toFixed(2)+')');
+    if(scoringClass === 'VOLATILE') parts.push('opp VOLATILE');
+    if(proj?.garbageTime?.detected) parts.push('GARBAGE TIME ('+proj.garbageTime.reason+')');
     if(minsLeft < 10) parts.push(minsLeft.toFixed(0)+'min left');
 
     return {
@@ -3926,6 +4096,7 @@ function computeSpreadConviction(game){
       spread: (spread > 0 ? '+' : '') + spread.toFixed(1),
       coverProb: Math.round(coverProb),
       coverMargin: coverMargin,
+      projBased: projBased,
       reason: parts.join(' + '),
     };
   }
@@ -3933,7 +4104,6 @@ function computeSpreadConviction(game){
   var homeResult = evalTeamSpread(hA, homeSpreadNum, hv.fwp, hPts, aPts);
   var awayResult = evalTeamSpread(aA, awaySpreadNum, av.fwp, aPts, hPts);
 
-  // Conviction tiers
   function convictionTier(prob){
     if(prob >= 70) return 'STRONG COVER';
     if(prob >= 55) return 'LEAN COVER';
@@ -3945,16 +4115,17 @@ function computeSpreadConviction(game){
   homeResult.conviction = convictionTier(homeResult.coverProb);
   awayResult.conviction = convictionTier(awayResult.coverProb);
 
-  // Determine which side is the better bet
   var recommendation = homeResult.coverProb > awayResult.coverProb ? 'home' : awayResult.coverProb > homeResult.coverProb ? 'away' : 'neither';
 
   return {
     home: homeResult,
     away: awayResult,
-    recommendation: recommendation,
+    recommendation,
     margin: Math.abs(hPts - aPts),
     minsLeft: minsLeft.toFixed(0),
     tied: hPts === aPts,
+    projectionAvailable: !!proj,
+    garbageTime: proj?.garbageTime || null,
   };
 }
 
