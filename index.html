@@ -1068,7 +1068,9 @@ async function triggerAnalysis(game){
   renderCard(game);
   try{
     // ── PRE-FLIGHT: ensure enrichment + PBP are current before building prompt ──
-    // Mirrors generateThesis Step 0 logic — don't send stale/null data to Sonnet
+    // Shows loading states on the button area so user sees progress
+    cs.preFlightStep = 'odds';
+    renderCard(game);
     if(cs.enriching){
       addLog(game.id, '⏳ Waiting for enrichment to finish…', true);
       for(let w=0;w<24&&cs.enriching;w++) await new Promise(r=>setTimeout(r,500));
@@ -1076,6 +1078,8 @@ async function triggerAnalysis(game){
       addLog(game.id, '⚡ Pre-analyze: pulling odds…', true);
       try{ await enrichFromBDL(game.id); }catch(e){ addLog(game.id, '⚠ Pre-analyze enrich failed: '+e.message, false); }
     }
+    cs.preFlightStep = 'depth';
+    renderCard(game);
     // Refresh PBP if stale (>3 min old) or missing
     if(!cs.pbpLoading && getState(game)==='LIVE'){
       const pbpAge = cs.pbpTime ? (Date.now()-cs.pbpTime.getTime())/60000 : 999;
@@ -1091,6 +1095,7 @@ async function triggerAnalysis(game){
         }catch(e){ addLog(game.id, '⚠ Pre-analyze PBP failed: '+e.message, false); }
       }
     }
+    cs.preFlightStep = null; // done — will show ⏳ ANALYZING next
 
     const thesis = theses[game.id]||'';
     const periodLabel = game.period ? 'Q'+game.period : '';
@@ -1507,7 +1512,8 @@ async function enrichFromBDL(gameId){
     addLog(gameId, '⚡ BDL enriched: '+srcList+(errList.length?' ⚠ '+errList.length+' errors':''), errList.length===0);
     if(errList.length) console.warn('BDL enrich partial errors:', errList);
     cs.enrichDone = true;
-    setTimeout(()=>{ cs.enrichDone = false; const g = games.find(x=>x.id===gameId); if(g) renderCard(g); }, 3000);
+    cs.enrichTime = new Date();
+    setTimeout(()=>{ cs.enrichDone = false; const g = games.find(x=>x.id===gameId); if(g) renderCard(g); }, 10000);
 
   }catch(e){
     console.error('BDL enrich error:', e);
@@ -4808,6 +4814,8 @@ function updateCounts(){
   document.getElementById('game-count').textContent=games.length;
 }
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/\x60/g,'&#96;').replace(/\$\{/g,'&#36;{');}
+function fmtTs(d){if(!d)return'';const h=d.getHours(),m=d.getMinutes();return(h%12||12)+':'+String(m).padStart(2,'0')+(h>=12?'p':'a');}
+function fmtAge(d){if(!d)return'';const s=Math.round((Date.now()-d.getTime())/1000);if(s<60)return s+'s';const m=Math.round(s/60);return m<60?m+'m':Math.round(m/60)+'h';}
 
 function setPaused(v){
   paused=v;
@@ -5245,7 +5253,7 @@ function mountCard(game){
   cardState[id]={logs:[],lastUp:null,editing:false,generating:false,analyzing:false,
     prevLvl:null,_countdown:null,lastFingerprint:'',analysis:_analysis,analysisTime:_analysisTime,genSteps:null,genError:null,
     lastScoreFP:'',lastStatsFP:'',staleCount:0,dataFreshness:'FRESH',sonnetIndicators:_sonnetIndicators,
-    prediction:_prediction, sustainabilityAudit:_sustainabilityAudit, clutchData:null, clutchTier:3, oddsData:null, oddsAll:null, oddsHistory:[], trackingData:null, enriching:false, enrichDone:false, evCollapsed:false, mktCollapsed:_mktCollapsed, edgeHistory:_edgeHistory, analysisHistory:_analysisHistory, pbpAudit:_pbpAudit, pbpTime:_pbpTime, pbpPeriod:_pbpPeriod, pbpLoading:false,
+    prediction:_prediction, sustainabilityAudit:_sustainabilityAudit, clutchData:null, clutchTier:3, oddsData:null, oddsAll:null, oddsHistory:[], trackingData:null, enriching:false, enrichDone:false, enrichTime:null, preFlightStep:null, evCollapsed:false, mktCollapsed:_mktCollapsed, edgeHistory:_edgeHistory, analysisHistory:_analysisHistory, pbpAudit:_pbpAudit, pbpTime:_pbpTime, pbpPeriod:_pbpPeriod, pbpLoading:false,
     quarterSnapshots:_quarterSnapshots, gapLog:_gapLog, rollingWindow:_rollingWindow,
     acceleration:_acceleration, subMetricArrows:_subMetricArrows, adjustment:_adjustment,
     combinedRead:_combinedRead, leadComposition:_leadComposition, clientLeadComposition:_clientLeadComposition};
@@ -5400,7 +5408,7 @@ function renderCard(game){
   }
 
   if(state!=='PRE'&&ind){
-    const analyzeBtn = state==='LIVE' ? (cs.analyzing ? `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;opacity:.5;color:var(--t3);border-color:var(--t3);" disabled>⏳ ANALYZING</button>` : `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;" onclick="triggerAnalysis(games.find(g=>g.id==='${id}'))">⚡ ANALYZE</button>`) : '';
+    const analyzeBtn = state==='LIVE' ? (cs.analyzing ? (cs.preFlightStep==='odds' ? `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;opacity:.8;color:var(--amber);border-color:var(--amber);" disabled>⏳ ODDS…</button>` : cs.preFlightStep==='depth' ? `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;opacity:.8;color:var(--amber);border-color:var(--amber);" disabled>⏳ DEPTH…</button>` : `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;opacity:.5;color:var(--t3);border-color:var(--t3);" disabled>⏳ ANALYZING</button>`) : `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;" onclick="triggerAnalysis(games.find(g=>g.id==='${id}'))">⚡ ANALYZE</button>`) : '';
     const pred = cs.prediction;
 
     // ── EDGE RECOMPUTE on render (preserves Sonnet FWP, updates edge if odds changed) ──
@@ -5547,7 +5555,7 @@ function renderCard(game){
       // Header
       html+='<div class="dv-hdr">VALUE READ<span style="display:flex;align-items:center;gap:6px;margin-left:auto">';
       if(thesisTeam && pred.thesisStatus) html+='<span style="font-size:5.5px;color:var(--t3);letter-spacing:.3px">THESIS '+esc(thesisTeam)+': <span style="color:'+tsCol+'">'+esc(pred.thesisStatus)+'</span></span>';
-      html+=analyzeBtn+'<span class="analysis-cost">'+(cs.analysisTime?cs.analysisTime.toLocaleTimeString():'')+'</span></span></div>';
+      html+=analyzeBtn+'<span class="analysis-cost">'+(cs.analysisTime?fmtTs(cs.analysisTime)+'('+fmtAge(cs.analysisTime)+')':'')+'</span></span></div>';
 
       if(hasValues){
         // Table header
@@ -5850,12 +5858,12 @@ function renderCard(game){
     // ─── MARKET & CLUTCH (read-only, collapsible) ───
     const mktHasData = od || cl || cs.trackingData;
     const mktCollapsed = cs.mktCollapsed === true; // default open
-    const mktStatus = (od?'<span style="color:var(--green)">✓ ODDS</span>':'<span style="color:var(--t3)">no odds</span>')+' · '+(cl?'<span style="color:var(--green)">✓ CLUTCH</span>':'<span style="color:var(--t3)">no clutch</span>')+(cs.trackingData?' · <span style="color:var(--green)">✓ TRK</span>':'');
+    const mktStatus = (od?'<span style="color:var(--green)">✓ ODDS</span>'+(cs.enrichTime?' <span style="color:var(--t3)">'+fmtTs(cs.enrichTime)+'</span>':''):'<span style="color:var(--t3)">no odds</span>')+' · '+(cl?'<span style="color:var(--green)">✓ CLUTCH</span>':'<span style="color:var(--t3)">no clutch</span>')+(cs.trackingData?' · <span style="color:var(--green)">✓ TRK</span>':'');
     html+=`<div class="data-inputs" style="padding:3px 11px">
       <div class="di-hdr" style="cursor:pointer;margin-bottom:${mktCollapsed?'0':'3px'}" onclick="cardState['${id}'].mktCollapsed=!cardState['${id}'].mktCollapsed;renderCard(games.find(g=>g.id==='${id}'))">
         <span>MARKET & CLUTCH</span><span style="font-size:4.5px;margin-left:4px">${mktStatus}</span>
         <span style="margin-left:auto;display:flex;align-items:center;gap:4px">
-          <button class="di-btn" style="background:${cs.enriching?'var(--b2)':cs.enrichDone?'rgba(0,255,136,.15)':'rgba(147,130,220,.15)'};color:${cs.enriching?'var(--t3)':cs.enrichDone?'var(--green)':'#9382dc'};padding:1px 5px" onclick="event.stopPropagation();enrichFromBDL('${id}')" ${cs.enriching?'disabled':''}>${cs.enriching?'⏳...':cs.enrichDone?'✓ ODDS':'⚡ ODDS'}</button>
+          <button class="di-btn" style="background:${cs.enriching?'var(--b2)':cs.enrichDone?'rgba(0,255,136,.15)':'rgba(147,130,220,.15)'};color:${cs.enriching?'var(--t3)':cs.enrichDone?'var(--green)':'#9382dc'};padding:1px 5px" onclick="event.stopPropagation();enrichFromBDL('${id}')" ${cs.enriching?'disabled':''}>${cs.enriching?'⏳ ODDS…':cs.enrichDone?'✓ ODDS':cs.oddsData?'✓ ODDS':'⚡ ODDS'}</button>${cs.enrichTime?`<span style="font-size:4px;color:var(--t3);margin-left:2px">${fmtTs(cs.enrichTime)} (${fmtAge(cs.enrichTime)})</span>`:''}
           <span style="font-size:6px;color:var(--t3);display:inline-block;transition:transform .2s;transform:rotate(${mktCollapsed?'0':'90'}deg)">&#9656;</span>
         </span>
       </div>`;
@@ -5919,8 +5927,8 @@ function renderCard(game){
     html+=`</div>`;
 
     // ─── EVIDENCE VIEW TOGGLE ───
-    const pbpTs = cs.pbpTime ? 'Q'+(cs.pbpPeriod||'?')+' '+cs.pbpTime.toLocaleTimeString() : '';
-    const depthBtn = `<button class="di-btn" style="background:${cs.pbpLoading?'var(--b2)':cs.pbpAudit?'rgba(0,255,136,.15)':'rgba(147,130,220,.15)'};color:${cs.pbpLoading?'var(--t3)':cs.pbpAudit?'var(--green)':'#9382dc'};font-size:6px;padding:1px 5px;margin-left:4px" onclick="event.stopPropagation();fetchPBP('${id}')" ${cs.pbpLoading?'disabled':''}>${cs.pbpLoading?'⏳ DEPTH...':cs.pbpAudit?'✓ DEPTH':'⚡ DEPTH'}</button>`;
+    const pbpTs = cs.pbpTime ? 'Q'+(cs.pbpPeriod||'?')+' '+fmtTs(cs.pbpTime)+' ('+fmtAge(cs.pbpTime)+')' : '';
+    const depthBtn = `<button class="di-btn" style="background:${cs.pbpLoading?'var(--b2)':cs.pbpAudit?'rgba(0,255,136,.15)':'rgba(147,130,220,.15)'};color:${cs.pbpLoading?'var(--t3)':cs.pbpAudit?'var(--green)':'#9382dc'};font-size:6px;padding:1px 5px;margin-left:4px" onclick="event.stopPropagation();fetchPBP('${id}')" ${cs.pbpLoading?'disabled':''}>${cs.pbpLoading?'⏳ DEPTH…':cs.pbpAudit?'✓ DEPTH':'⚡ DEPTH'}</button>${pbpTs?`<span style="font-size:4px;color:var(--t3);margin-left:2px">${pbpTs}</span>`:''}`;
     html+=`<div class="ev-toggle ${cs.evCollapsed?'':'open'}" id="ev-toggle-${id}" onclick="toggleEV('${id}')">
       EVIDENCE<span style="font-size:5px;color:var(--t3);margin-left:1px">▾</span> <span class="arr">▸</span>
       <span style="margin-left:auto;display:flex;align-items:center;gap:6px">
@@ -6055,7 +6063,7 @@ function renderCard(game){
     if(cs.analysis){
       const usage=cs.analysisUsage;
       const cost=usage?((usage.input_tokens*3+usage.output_tokens*15)/1000000).toFixed(4):'?';
-      html+=`<div class="analysis-hdr">FULL ANALYSIS<span class="analysis-cost">~$${cost} · ${cs.analysisTime?.toLocaleTimeString()||''}</span></div><div class="analysis-body">${esc(cs.analysis)}</div>`;
+      html+=`<div class="analysis-hdr">FULL ANALYSIS<span class="analysis-cost">~$${cost} · ${cs.analysisTime?fmtTs(cs.analysisTime)+' ('+fmtAge(cs.analysisTime)+')':''}</span></div><div class="analysis-body">${esc(cs.analysis)}</div>`;
     } else if(cs.analyzing){
       html+=`<div class="analysis-loading"><div class="spin"></div> Analyzing…</div>`;
     } else {
