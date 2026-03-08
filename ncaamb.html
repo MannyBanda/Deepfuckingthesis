@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0a0a14">
-<title>NBA Control v5.1</title>
+<title>NCAAMB Control v1.0</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
@@ -266,9 +266,9 @@ input,textarea,select{font-size:16px!important;}
 <div class="app">
   <div class="hdr">
     <div style="display:flex;align-items:center;min-width:0;">
-      <span class="logo">NBA Control</span>
+      <span class="logo">NCAAMB Control</span>
       <div class="pulse" id="pulse"></div>
-      <span class="hdr-sub" id="hdr-sub">LIVE · SR via Netlify · v5.1 · FULL</span>
+      <span class="hdr-sub" id="hdr-sub">LIVE · SR via Netlify · NCAAMB v1.0 · FULL</span>
     </div>
     <div class="hdr-r"><span id="live-count">0</span> live · <span id="sel-count">0</span>/5</div>
   </div>
@@ -286,21 +286,8 @@ input,textarea,select{font-size:16px!important;}
     </div>
     <button class="cbtn" onclick="clearTheses()">CLR THESIS</button>
     <button class="cbtn" onclick="clearMarketCache()">CLR MKT</button>
-    <button class="cbtn" id="btn-demo" onclick="toggleDemo()" style="color:var(--amber);border-color:var(--amber)">DEMO</button>
     <button class="cbtn" id="btn-ntfy" onclick="configNtfy()" style="color:var(--t3);border-color:var(--t3)">🔔 ALERTS</button>
     <span class="cml"><span id="game-count">0</span> games</span>
-  </div>
-
-  <!-- Clutch Upload Zone -->
-  <div class="clutch-upload" id="clutch-zone">
-    <input type="file" id="clutch-file" accept="image/*" style="display:none" onchange="handleClutchUpload(this)">
-    <button class="cu-btn" id="cu-btn" onclick="document.getElementById('clutch-file').click()">📋 UPLOAD L15 CLUTCH</button>
-    <select id="cu-segment" style="font-size:7px;font-family:var(--mono);background:var(--s2);border:1px solid var(--b2);color:var(--t2);padding:5px;-webkit-appearance:none;border-radius:0;min-height:28px;">
-      <option value="L15">Last 15</option>
-      <option value="L10">Last 10</option>
-    </select>
-    <span class="cu-status" id="cu-status"></span>
-    <span id="cu-badge" style="display:none"></span>
   </div>
 
   <div id="loading" class="loading" style="display:none;"><div class="spin"></div> Loading schedule…</div>
@@ -317,8 +304,8 @@ input,textarea,select{font-size:16px!important;}
 // BOOT DIAGNOSTICS — catches parse/runtime failures in main script
 // This runs in its own <script> tag so it survives main script parse errors
 // ══════════════════════════════════════════════════════════════════════════════
-window.__nbaBooted = false;
-window.__nbaVersion = 'v5.1';
+window.__ncaambBooted = false;
+window.__ncaambVersion = 'NCAAMB v1.0';
 window.__bootErrors = [];
 
 window.onerror = function(msg, src, line, col, err) {
@@ -327,23 +314,23 @@ window.onerror = function(msg, src, line, col, err) {
   if(el){
     el.style.display = 'block';
     el.style.whiteSpace = 'pre-wrap';
-    el.innerHTML = '<span style="color:#ff6b6b;font-weight:600">⚠ JS ERROR</span> ' + window.__nbaVersion + '\n'
+    el.innerHTML = '<span style="color:#ff6b6b;font-weight:600">⚠ JS ERROR</span> ' + window.__ncaambVersion + '\n'
       + String(msg) + '\nLine ' + line + (col ? ':' + col : '') + '\n'
       + '<span style="color:#888;font-size:5px">Check console for full trace. This usually means a syntax error in index.html.</span>';
   }
-  console.error('[NBA CONTROL BOOT ERROR]', msg, 'at line', line, col, err);
+  console.error('[NCAAMB CONTROL BOOT ERROR]', msg, 'at line', line, col, err);
 };
 
 window.addEventListener('unhandledrejection', function(e) {
   var msg = e.reason ? (e.reason.message || String(e.reason)) : 'Unknown async error';
   window.__bootErrors.push({msg:msg, async:true});
-  console.error('[NBA CONTROL ASYNC ERROR]', msg, e.reason);
+  console.error('[NCAAMB CONTROL ASYNC ERROR]', msg, e.reason);
 });
 
 // Boot canary — fires 4s after page load. If main script parsed and ran,
-// window.__nbaBooted will be true. If not, something broke silently.
+// window.__ncaambBooted will be true. If not, something broke silently.
 setTimeout(function(){
-  if(!window.__nbaBooted){
+  if(!window.__ncaambBooted){
     var el = document.getElementById('err');
     if(el){
       el.style.display = 'block';
@@ -351,7 +338,7 @@ setTimeout(function(){
       var detail = window.__bootErrors.length > 0
         ? '\nCaptured errors:\n' + window.__bootErrors.map(function(e){return '  ' + e.msg + (e.line ? ' (L'+e.line+')' : '');}).join('\n')
         : '\nNo errors captured — main script likely failed to parse entirely.';
-      el.innerHTML = '<span style="color:#ff6b6b;font-weight:600">⚠ BOOT FAILURE</span> ' + window.__nbaVersion + '\n'
+      el.innerHTML = '<span style="color:#ff6b6b;font-weight:600">⚠ BOOT FAILURE</span> ' + window.__ncaambVersion + '\n'
         + 'Dashboard JS did not initialize.' + detail + '\n'
         + '<span style="color:#888;font-size:5px">This usually means a syntax error was introduced in the last deployment.\n'
         + 'Open browser DevTools → Console to see the parse error.\n'
@@ -359,7 +346,7 @@ setTimeout(function(){
     }
     // Also make it obvious in the header
     var hdr = document.getElementById('hdr-sub');
-    if(hdr) hdr.textContent = 'BOOT FAILURE · JS did not initialize · ' + window.__nbaVersion;
+    if(hdr) hdr.textContent = 'BOOT FAILURE · JS did not initialize · ' + window.__ncaambVersion;
   }
 }, 4000);
 </script>
@@ -373,50 +360,195 @@ const FN = '/.netlify/functions/';
 
 let games = [], selIds = [], paused = false, pollTimer = null, alertTimer = null, confCollapsed = false;
 let pollInterval = 90000; // default 90s
-const theses = JSON.parse(localStorage.getItem('nba4:theses')||'{}');
-const cachedClutch = JSON.parse(localStorage.getItem('nba4:clutch')||'{}');
-const cachedOdds = JSON.parse(localStorage.getItem('nba4:odds')||'{}');
-const cachedOddsHistory = JSON.parse(localStorage.getItem('nba4:oddsHist')||'{}');
-const confCache = JSON.parse(localStorage.getItem('nba4:confTable')||'{}');
-function persistClutch(id,cs){try{cachedClutch[id]={data:cs.clutchData,tier:cs.clutchTier};localStorage.setItem('nba4:clutch',JSON.stringify(cachedClutch));}catch(e){console.warn('Clutch persist failed:',e.message);}}
-function persistOdds(id,cs){try{cachedOdds[id]=cs.oddsData;cachedOddsHistory[id]=cs.oddsHistory;localStorage.setItem('nba4:odds',JSON.stringify(cachedOdds));localStorage.setItem('nba4:oddsHist',JSON.stringify(cachedOddsHistory));}catch(e){console.warn('Odds persist failed:',e.message);}}
-function persistConfRow(gameId, rowData){try{confCache[gameId]=rowData;localStorage.setItem('nba4:confTable',JSON.stringify(confCache));}catch(e){console.warn('ConfRow persist failed:',e.message);}}
-function persistTracking(id,cs){try{localStorage.setItem('nba4:tracking:'+id,JSON.stringify(cs.trackingData));}catch(e){console.warn('Tracking persist failed:',e.message);}}
-function persistStructural(id,cs){try{localStorage.setItem('nba4:structural:'+id,JSON.stringify(cs.structural));}catch(e){console.warn('Structural persist failed:',e.message);}}
-function persistAnalysis(id,cs){try{localStorage.setItem('nba4:analysis:'+id,JSON.stringify({analysis:cs.analysis,analysisTime:cs.analysisTime?cs.analysisTime.getTime():null,sonnetIndicators:cs.sonnetIndicators,prediction:cs.prediction,sustainabilityAudit:cs.sustainabilityAudit,analysisHistory:cs.analysisHistory||[],edgeHistory:cs.edgeHistory||[],clientIndAtAnalysis:cs.clientIndAtAnalysis}));}catch(e){console.warn('Analysis persist failed:',e.message);}}
-function persistDepth(id,cs){try{localStorage.setItem('nba4:depth:'+id,JSON.stringify({pbpAudit:cs.pbpAudit,pbpTime:cs.pbpTime?cs.pbpTime.getTime():null,pbpPeriod:cs.pbpPeriod}));}catch(e){console.warn('Depth persist failed:',e.message);}}
+const theses = JSON.parse(localStorage.getItem('ncaamb:theses')||'{}');
+const cachedClutch = JSON.parse(localStorage.getItem('ncaamb:clutch')||'{}');
+const cachedOdds = JSON.parse(localStorage.getItem('ncaamb:odds')||'{}');
+const cachedOddsHistory = JSON.parse(localStorage.getItem('ncaamb:oddsHist')||'{}');
+const confCache = JSON.parse(localStorage.getItem('ncaamb:confTable')||'{}');
+function persistClutch(id,cs){try{cachedClutch[id]={data:cs.clutchData,tier:cs.clutchTier};localStorage.setItem('ncaamb:clutch',JSON.stringify(cachedClutch));}catch(e){console.warn('Clutch persist failed:',e.message);}}
+function persistOdds(id,cs){try{cachedOdds[id]=cs.oddsData;cachedOddsHistory[id]=cs.oddsHistory;localStorage.setItem('ncaamb:odds',JSON.stringify(cachedOdds));localStorage.setItem('ncaamb:oddsHist',JSON.stringify(cachedOddsHistory));}catch(e){console.warn('Odds persist failed:',e.message);}}
+function persistConfRow(gameId, rowData){try{confCache[gameId]=rowData;localStorage.setItem('ncaamb:confTable',JSON.stringify(confCache));}catch(e){console.warn('ConfRow persist failed:',e.message);}}
+function persistTracking(id,cs){try{localStorage.setItem('ncaamb:tracking:'+id,JSON.stringify(cs.trackingData));}catch(e){console.warn('Tracking persist failed:',e.message);}}
+function persistStructural(id,cs){try{localStorage.setItem('ncaamb:structural:'+id,JSON.stringify(cs.structural));}catch(e){console.warn('Structural persist failed:',e.message);}}
+function persistAnalysis(id,cs){try{localStorage.setItem('ncaamb:analysis:'+id,JSON.stringify({analysis:cs.analysis,analysisTime:cs.analysisTime?cs.analysisTime.getTime():null,sonnetIndicators:cs.sonnetIndicators,prediction:cs.prediction,sustainabilityAudit:cs.sustainabilityAudit,analysisHistory:cs.analysisHistory||[],edgeHistory:cs.edgeHistory||[],clientIndAtAnalysis:cs.clientIndAtAnalysis}));}catch(e){console.warn('Analysis persist failed:',e.message);}}
+function persistDepth(id,cs){try{localStorage.setItem('ncaamb:depth:'+id,JSON.stringify({pbpAudit:cs.pbpAudit,pbpTime:cs.pbpTime?cs.pbpTime.getTime():null,pbpPeriod:cs.pbpPeriod}));}catch(e){console.warn('Depth persist failed:',e.message);}}
 const cardState = {};
 
 // BDL fallback state
 const bdlGameMap = {}; // SR game ID → BDL game ID
-let globalClutchData = JSON.parse(localStorage.getItem('nba4:globalClutch')||'null'); // { segment, teams: { "BOS": { netRtg, offRtg, ... }, ... }, teamCount }
+let globalClutchData = JSON.parse(localStorage.getItem('ncaamb:globalClutch')||'null'); // { segment, teams: { "BOS": { netRtg, offRtg, ... }, ... }, teamCount }
 let srExhausted = false; // true when daily limit suspected
 let sr429Count = 0; // consecutive 429s across games
 
-// Known team IDs for thesis generation
-const TEAM_IDS = {
-  ATL:'583ecb8f-fb46-11e1-82cb-f4ce4684ea4c',BOS:'583eccfa-fb46-11e1-82cb-f4ce4684ea4c',
-  BKN:'583ec9d6-fb46-11e1-82cb-f4ce4684ea4c',CHA:'583ec97e-fb46-11e1-82cb-f4ce4684ea4c',
-  CHI:'583ec5fd-fb46-11e1-82cb-f4ce4684ea4c',CLE:'583ec773-fb46-11e1-82cb-f4ce4684ea4c',
-  DAL:'583ecf50-fb46-11e1-82cb-f4ce4684ea4c',DEN:'583ed102-fb46-11e1-82cb-f4ce4684ea4c',
-  DET:'583ec928-fb46-11e1-82cb-f4ce4684ea4c',GSW:'583ec825-fb46-11e1-82cb-f4ce4684ea4c',
-  HOU:'583ecb3a-fb46-11e1-82cb-f4ce4684ea4c',IND:'583ec7cd-fb46-11e1-82cb-f4ce4684ea4c',
-  LAC:'583ecdfb-fb46-11e1-82cb-f4ce4684ea4c',LAL:'583ecae2-fb46-11e1-82cb-f4ce4684ea4c',
-  MEM:'583eca88-fb46-11e1-82cb-f4ce4684ea4c',MIA:'583ecea6-fb46-11e1-82cb-f4ce4684ea4c',
-  MIL:'583ecefd-fb46-11e1-82cb-f4ce4684ea4c',MIN:'583eca2f-fb46-11e1-82cb-f4ce4684ea4c',
-  NOP:'583ecc9a-fb46-11e1-82cb-f4ce4684ea4c',NYK:'583ec70e-fb46-11e1-82cb-f4ce4684ea4c',
-  OKC:'583ecfff-fb46-11e1-82cb-f4ce4684ea4c',ORL:'583ed157-fb46-11e1-82cb-f4ce4684ea4c',
-  PHI:'583ec87d-fb46-11e1-82cb-f4ce4684ea4c',PHX:'583ecfa8-fb46-11e1-82cb-f4ce4684ea4c',
-  POR:'583ed056-fb46-11e1-82cb-f4ce4684ea4c',SAC:'583ed0ac-fb46-11e1-82cb-f4ce4684ea4c',
-  SAS:'583ecd4f-fb46-11e1-82cb-f4ce4684ea4c',TOR:'583ecda6-fb46-11e1-82cb-f4ce4684ea4c',
-  UTA:'583ece50-fb46-11e1-82cb-f4ce4684ea4c',WAS:'583ec8d4-fb46-11e1-82cb-f4ce4684ea4c',
-};
+// NCAAMB Team IDs — loaded dynamically from SR hierarchy, cached in localStorage
+let TEAM_IDS = {};
+let TEAM_HIERARCHY = null; // full conference structure for standings context
+
+async function loadTeamIds(){
+  // Check cache first
+  try{
+    const cached = localStorage.getItem('ncaamb:teamIds');
+    const cachedHier = localStorage.getItem('ncaamb:hierarchy');
+    if(cached){
+      const parsed = JSON.parse(cached);
+      if(parsed._fetchedAt && (Date.now() - parsed._fetchedAt) < 7*24*60*60*1000){
+        TEAM_IDS = parsed;
+        if(cachedHier) TEAM_HIERARCHY = JSON.parse(cachedHier);
+        console.log('[NCAAMB] Team IDs restored from cache:', Object.keys(TEAM_IDS).length-1, 'teams');
+        return;
+      }
+    }
+  }catch(e){ console.warn('Team ID cache read failed:', e.message); }
+
+  // Fetch from SR hierarchy
+  try{
+    console.log('[NCAAMB] Fetching team hierarchy from SR...');
+    const data = await sr('hierarchy');
+    const ids = {};
+    const hier = [];
+    (data.conferences||data.divisions||[]).forEach(conf=>{
+      const confObj = {id:conf.id, name:conf.name||conf.alias||'?', alias:conf.alias||'', teams:[]};
+      // NCAAMB: conferences contain teams directly (no division layer)
+      const teams = conf.teams || [];
+      // Also check for divisions within conferences (some SR responses nest differently)
+      if(conf.divisions){
+        conf.divisions.forEach(div=>{
+          (div.teams||[]).forEach(t=>teams.push(t));
+        });
+      }
+      teams.forEach(t=>{
+        const alias = (t.alias||t.abbr_name||t.abbreviation||'').toUpperCase();
+        const id = t.id || t.sr_id;
+        if(alias && id){
+          ids[alias] = id;
+          confObj.teams.push({id, alias, name:t.name||t.market||alias, market:t.market||''});
+        }
+      });
+      if(confObj.teams.length > 0) hier.push(confObj);
+    });
+    ids._fetchedAt = Date.now();
+    TEAM_IDS = ids;
+    TEAM_HIERARCHY = hier;
+    try{
+      localStorage.setItem('ncaamb:teamIds', JSON.stringify(ids));
+      localStorage.setItem('ncaamb:hierarchy', JSON.stringify(hier));
+    }catch(e){ console.warn('Team ID cache write failed:', e.message); }
+    console.log('[NCAAMB] Team IDs loaded:', Object.keys(ids).length-1, 'teams across', hier.length, 'conferences');
+  }catch(e){
+    console.error('[NCAAMB] Hierarchy fetch failed:', e.message);
+    // Try to use stale cache as fallback
+    try{
+      const stale = localStorage.getItem('ncaamb:teamIds');
+      if(stale){ TEAM_IDS = JSON.parse(stale); console.warn('[NCAAMB] Using stale team ID cache'); }
+    }catch(e2){}
+  }
+}
+
+// Resolve team ID from alias — checks TEAM_IDS map, also tries SR game data
+function resolveTeamId(alias){
+  if(!alias) return null;
+  const up = alias.toUpperCase();
+  if(TEAM_IDS[up]) return TEAM_IDS[up];
+  for(const key of Object.keys(TEAM_IDS)){
+    if(key === '_fetchedAt') continue;
+    if(key.startsWith(up) || up.startsWith(key)) return TEAM_IDS[key];
+  }
+  return null;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// NET RANKINGS — NCAAMB-specific strength-of-schedule metric
+// ══════════════════════════════════════════════════════════════════════════════
+let netRankingsCache = null; // { teams: { ALIAS: { rank, quadRecords, sos, ... } }, _fetchedAt }
+
+async function loadNetRankings(){
+  // Check cache (refresh every 12 hours)
+  try{
+    const cached = localStorage.getItem('ncaamb:netRankings');
+    if(cached){
+      const parsed = JSON.parse(cached);
+      if(parsed._fetchedAt && (Date.now() - parsed._fetchedAt) < 12*60*60*1000){
+        netRankingsCache = parsed;
+        console.log('[NCAAMB] NET rankings restored from cache:', Object.keys(parsed.teams||{}).length, 'teams');
+        return;
+      }
+    }
+  }catch(e){}
+
+  try{
+    console.log('[NCAAMB] Fetching NET rankings from SR...');
+    const data = await sr('net_rankings');
+    const teams = {};
+    // Parse rankings response — structure varies by SR version
+    const entries = data.rankings || data.entries || data.teams || [];
+    const rankArray = Array.isArray(entries) ? entries : (entries.teams || entries.entries || []);
+    rankArray.forEach(t => {
+      // Try multiple field patterns
+      const team = t.team || t;
+      const alias = (team.alias || team.abbreviation || team.abbr_name || '').toUpperCase();
+      if(!alias) return;
+      const rank = t.rank || t.net_rank || t.ranking || null;
+      // Quad records
+      const quads = {};
+      if(t.records){
+        // Array of record objects with record_type
+        (Array.isArray(t.records) ? t.records : []).forEach(r => {
+          const rt = (r.record_type||r.type||'').toLowerCase();
+          if(rt.includes('q1') || rt.includes('quad1') || rt === 'quadrant_1') quads.q1 = (r.wins||0)+'-'+(r.losses||0);
+          else if(rt.includes('q2') || rt.includes('quad2') || rt === 'quadrant_2') quads.q2 = (r.wins||0)+'-'+(r.losses||0);
+          else if(rt.includes('q3') || rt.includes('quad3') || rt === 'quadrant_3') quads.q3 = (r.wins||0)+'-'+(r.losses||0);
+          else if(rt.includes('q4') || rt.includes('quad4') || rt === 'quadrant_4') quads.q4 = (r.wins||0)+'-'+(r.losses||0);
+          else if(rt.includes('conf')) quads.conf = (r.wins||0)+'-'+(r.losses||0);
+          else if(rt === 'overall' || rt === 'total') quads.overall = (r.wins||0)+'-'+(r.losses||0);
+        });
+      }
+      // Also check for direct quad fields
+      if(t.quad_1_record) quads.q1 = t.quad_1_record;
+      if(t.quad_2_record) quads.q2 = t.quad_2_record;
+      if(t.quad_3_record) quads.q3 = t.quad_3_record;
+      if(t.quad_4_record) quads.q4 = t.quad_4_record;
+
+      teams[alias] = {
+        rank: rank,
+        name: team.name || team.market || alias,
+        market: team.market || '',
+        quads: quads,
+        sos: t.strength_of_schedule || t.sos || t.sos_rank || null,
+        sosRank: t.sos_rank || null,
+        confRecord: quads.conf || null,
+        overallRecord: quads.overall || (t.wins!=null ? t.wins+'-'+t.losses : null),
+      };
+    });
+    netRankingsCache = { teams, _fetchedAt: Date.now() };
+    try{ localStorage.setItem('ncaamb:netRankings', JSON.stringify(netRankingsCache)); }catch(e){}
+    console.log('[NCAAMB] NET rankings loaded:', Object.keys(teams).length, 'teams');
+  }catch(e){
+    console.warn('[NCAAMB] NET rankings fetch failed:', e.message);
+    // Try stale cache
+    try{
+      const stale = localStorage.getItem('ncaamb:netRankings');
+      if(stale){ netRankingsCache = JSON.parse(stale); console.warn('[NCAAMB] Using stale NET rankings cache'); }
+    }catch(e2){}
+  }
+}
+
+// Look up NET ranking for a team alias
+function getNetRanking(alias){
+  if(!netRankingsCache?.teams || !alias) return null;
+  const up = alias.toUpperCase();
+  if(netRankingsCache.teams[up]) return netRankingsCache.teams[up];
+  // Fuzzy match
+  for(const key of Object.keys(netRankingsCache.teams)){
+    if(key.startsWith(up) || up.startsWith(key)) return netRankingsCache.teams[key];
+  }
+  return null;
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // SR DATA PROXY
 // ══════════════════════════════════════════════════════════════════════════════
 async function sr(type, params={}){
-  const qs = new URLSearchParams({type, ...params}).toString();
+  const qs = new URLSearchParams({type, league:'ncaamb', ...params}).toString();
   const r = await fetch(FN+'sr-data?'+qs);
   if(r.status===429) throw new Error('SR rate limited — retry in 1s');
   if(!r.ok){
@@ -451,7 +583,7 @@ async function srSequential(calls, delayMs=1100){
 // BDL FALLBACK — DATA PROXY & GAME MAPPING
 // ══════════════════════════════════════════════════════════════════════════════
 async function bdl(type, params={}){
-  const qs = new URLSearchParams({type, ...params}).toString();
+  const qs = new URLSearchParams({type, league:'ncaamb', ...params}).toString();
   const r = await fetch(FN+'bdl-data?'+qs);
   if(!r.ok){
     const d = await r.json().catch(()=>({error:r.statusText}));
@@ -460,32 +592,33 @@ async function bdl(type, params={}){
   return r.json();
 }
 
-// BDL team name normalization — maps SR alias to BDL matching patterns
-const BDL_TEAM_MATCH = {
-  ATL:'Hawks',BOS:'Celtics',BKN:'Nets',CHA:'Hornets',CHI:'Bulls',CLE:'Cavaliers',
-  DAL:'Mavericks',DEN:'Nuggets',DET:'Pistons',GSW:'Warriors',HOU:'Rockets',IND:'Pacers',
-  LAC:'Clippers',LAL:'Lakers',MEM:'Grizzlies',MIA:'Heat',MIL:'Bucks',MIN:'Timberwolves',
-  NOP:'Pelicans',NYK:'Knicks',OKC:'Thunder',ORL:'Magic',PHI:'76ers',PHX:'Suns',
-  POR:'Trail Blazers',SAC:'Kings',SAS:'Spurs',TOR:'Raptors',UTA:'Jazz',WAS:'Wizards',
-};
-const BDL_TEAM_IDS = {
-  ATL:1,BOS:2,BKN:3,CHA:4,CHI:5,CLE:6,DAL:7,DEN:8,DET:9,GSW:10,
-  HOU:11,IND:12,LAC:13,LAL:14,MEM:15,MIA:16,MIL:17,MIN:18,NOP:19,NYK:20,
-  OKC:21,ORL:22,PHI:23,PHX:24,POR:25,SAC:26,SAS:27,TOR:28,UTA:29,WAS:30,
-};
+// BDL game matching for NCAAMB — uses team name/alias from game objects
+// No hardcoded map needed; NCAAMB has 362 teams
 
 async function buildBdlGameMap(dateStr){
   try{
     const data = await bdl('games',{date:dateStr});
     const bdlGames = data.data||[];
-    // Match each SR game to a BDL game by team names
+    // Match each SR game to a BDL game by team name fuzzy matching
+    // NCAAMB: BDL has school/name fields; SR has name/market/alias
     for(const game of games){
-      const hAlias = game.home?.alias, aAlias = game.away?.alias;
-      if(!hAlias||!aAlias) continue;
-      const hMatch = BDL_TEAM_MATCH[hAlias], aMatch = BDL_TEAM_MATCH[aAlias];
-      const match = bdlGames.find(bg =>
-        bg.home_team?.full_name?.includes(hMatch) && bg.visitor_team?.full_name?.includes(aMatch)
-      );
+      const hName = (game.home?.name||'').toLowerCase();
+      const aName = (game.away?.name||'').toLowerCase();
+      const hAlias = (game.home?.alias||'').toLowerCase();
+      const aAlias = (game.away?.alias||'').toLowerCase();
+      const hMarket = (game.home?.market||'').toLowerCase();
+      const aMarket = (game.away?.market||'').toLowerCase();
+      if(!hName&&!hAlias) continue;
+      const match = bdlGames.find(bg => {
+        const bh = (bg.home_team?.school||bg.home_team?.full_name||bg.home_team?.name||'').toLowerCase();
+        const ba = (bg.visitor_team?.school||bg.visitor_team?.full_name||bg.visitor_team?.name||'').toLowerCase();
+        const bhAbbr = (bg.home_team?.abbreviation||bg.home_team?.alias||'').toLowerCase();
+        const baAbbr = (bg.visitor_team?.abbreviation||bg.visitor_team?.alias||'').toLowerCase();
+        // Try alias match first (most reliable), then name substring match
+        const homeMatch = (hAlias && bhAbbr && hAlias===bhAbbr) || bh.includes(hName) || hName.includes(bh) || (hMarket && bh.includes(hMarket));
+        const awayMatch = (aAlias && baAbbr && aAlias===baAbbr) || ba.includes(aName) || aName.includes(ba) || (aMarket && ba.includes(aMarket));
+        return homeMatch && awayMatch;
+      });
       if(match) bdlGameMap[game.id] = match.id;
     }
     console.log('BDL game map built:', Object.keys(bdlGameMap).length, 'games mapped');
@@ -495,21 +628,20 @@ async function buildBdlGameMap(dateStr){
 }
 
 // Fetch BDL data for a game — returns aggregated team stats
+// NCAAMB: no advanced stats (paint, FBP, POT, possessions unavailable via BDL)
 async function fetchBdlSummary(game){
   const bdlId = bdlGameMap[game.id];
   if(!bdlId) throw new Error('No BDL game ID mapped for '+game.id);
 
-  // Fetch game info (scores, quarters, bonus) + basic stats + advanced stats in parallel
-  const [gameInfo, statsData, advData] = await Promise.all([
+  // Fetch game info + basic stats only (no advanced for NCAAMB)
+  const [gameInfo, statsData] = await Promise.all([
     bdl('game',{game_id:bdlId}),
     bdl('stats',{game_id:bdlId}),
-    bdl('advanced',{game_id:bdlId}),
   ]);
 
-  const g = gameInfo; // or gameInfo.data depending on BDL response
+  const g = gameInfo;
   const gd = g.data || g;
   const stats = (statsData.data||[]).filter(s=>s.min && s.min!=='00'&&s.min!=='0:00');
-  const adv = (advData.data||[]).filter(s=>s.possessions>0);
 
   // Determine home/away team IDs
   const homeTeamId = gd.home_team?.id;
@@ -531,40 +663,39 @@ async function fetchBdlSummary(game){
       free_throws_att: pl.reduce((a,s)=>a+(s.fta||0),0),
       free_throws_made: pl.reduce((a,s)=>a+(s.ftm||0),0),
       personal_fouls: pl.reduce((a,s)=>a+(s.pf||0),0),
-      players: pl, // keep individual player stats
-    };
-  }
-
-  // Aggregate advanced stats by team
-  function aggAdvanced(teamId){
-    const pl = adv.filter(s=>(s.team?.id||s.player?.team_id)===teamId);
-    const totalPoss = pl.reduce((a,s)=>a+(s.possessions||0),0);
-    return {
-      fast_break_points: pl.reduce((a,s)=>a+(s.points_fast_break||0),0),
-      points_off_turnovers: pl.reduce((a,s)=>a+(s.points_off_turnovers||0),0),
-      second_chance_points: pl.reduce((a,s)=>a+(s.points_second_chance||0),0),
-      points_in_the_paint: pl.reduce((a,s)=>a+(s.points_paint||0),0),
-      possessions: totalPoss,
-      // Weighted average for ratings
-      offensive_rating: totalPoss>0 ? pl.reduce((a,s)=>a+(s.offensive_rating||0)*(s.possessions||0),0)/totalPoss : 0,
-      defensive_rating: totalPoss>0 ? pl.reduce((a,s)=>a+(s.defensive_rating||0)*(s.possessions||0),0)/totalPoss : 0,
-      assist_ratio: totalPoss>0 ? pl.reduce((a,s)=>a+(s.assist_ratio||0)*(s.possessions||0),0)/totalPoss : 0,
+      players: pl,
+      // Advanced fields unavailable via BDL for NCAAMB — zero them
+      fast_break_points: 0,
+      points_off_turnovers: 0,
+      second_chance_points: 0,
+      points_in_the_paint: 0,
+      possessions: 0,
+      offensive_rating: 0,
+      defensive_rating: 0,
     };
   }
 
   const hBasic = aggBasic(homeTeamId);
   const aBasic = aggBasic(awayTeamId);
-  const hAdv = aggAdvanced(homeTeamId);
-  const aAdv = aggAdvanced(awayTeamId);
 
-  // Build quarter scores from game info
-  const quarters = [];
-  for(let q=1; q<=4; q++){
-    const hq = gd['home_q'+q], aq = gd['visitor_q'+q];
-    if(hq!=null) quarters.push({quarter:q, home_points:hq, away_points:aq});
+  // Build half scores from game info (NCAAMB uses halves, not quarters)
+  const periods = [];
+  // Try half fields first (h1/h2), fall back to quarter fields
+  if(gd.home_h1!=null || gd.home_period_1!=null){
+    for(let h=1; h<=2; h++){
+      const hh = gd['home_h'+h] || gd['home_period_'+h];
+      const ah = gd['visitor_h'+h] || gd['away_h'+h] || gd['visitor_period_'+h];
+      if(hh!=null) periods.push({number:h, type:'half', home_points:hh, away_points:ah||0});
+    }
+  } else {
+    // Fallback: try q1-q4 fields (some BDL responses still use quarter naming)
+    for(let q=1; q<=4; q++){
+      const hq = gd['home_q'+q], aq = gd['visitor_q'+q];
+      if(hq!=null) periods.push({number:q, home_points:hq, away_points:aq||0});
+    }
   }
   // OT
-  if(gd.home_ot1!=null) quarters.push({quarter:5, home_points:gd.home_ot1, away_points:gd.visitor_ot1});
+  if(gd.home_ot1!=null) periods.push({number:periods.length+1, home_points:gd.home_ot1, away_points:gd.visitor_ot1||0});
 
   return {
     source: 'BDL',
@@ -572,13 +703,13 @@ async function fetchBdlSummary(game){
     homePoints: gd.home_team_score || 0,
     awayPoints: gd.visitor_team_score || 0,
     status: gd.status,
-    period: gd.period || quarters.length,
+    period: gd.period || periods.length,
     time: gd.time || '',
     homeBonus: gd.home_in_bonus || false,
     awayBonus: gd.visitor_in_bonus || false,
-    quarters,
-    home: {...hBasic, ...hAdv, alias: game.home?.alias||'HOME', name: game.home?.name||'HOME'},
-    away: {...aBasic, ...aAdv, alias: game.away?.alias||'AWAY', name: game.away?.name||'AWAY'},
+    quarters: periods, // kept as 'quarters' key for compat with existing code paths
+    home: {...hBasic, alias: game.home?.alias||'HOME', name: game.home?.name||'HOME'},
+    away: {...aBasic, alias: game.away?.alias||'AWAY', name: game.away?.name||'AWAY'},
   };
 }
 
@@ -603,6 +734,10 @@ function getSlateDate(offset=0){
 async function loadSchedule(){
   showLoading(true); showErr(null);
   try{
+    // Ensure NCAAMB team IDs are loaded (cached after first fetch)
+    await loadTeamIds();
+    // Fetch NET rankings (cached 12h, non-blocking if fails)
+    await loadNetRankings().catch(e => console.warn('NET rankings load failed:', e.message));
     const d = getSlateDate(0);
     const data = await sr('schedule',{year:d.year, month:d.month, day:d.day});
     games = (data.games||[]).map(g=>({
@@ -627,17 +762,7 @@ async function loadSchedule(){
       if(oa!==ob) return oa-ob;
       return new Date(a.scheduled)-new Date(b.scheduled);
     });
-    // Re-inject demo game if active
-    if(demoActive && !games.find(g=>g.id===DEMO_ID)){
-      const dcs = cardState[DEMO_ID];
-      if(dcs){
-        const dg = {id:DEMO_ID,status:'inprogress',scheduled:new Date().toISOString(),venue:'Demo Arena',
-          home:{id:'demo-h',name:'Cleveland Cavaliers',alias:'CLE'},away:{id:'demo-a',name:'Milwaukee Bucks',alias:'MIL'},
-          homePoints:46,awayPoints:56,period:2,clock:'3:20',dataSource:'DEMO',summary:dcs._demoSummary||null};
-        games.unshift(dg);
-      }
-    }
-    document.getElementById('date-lbl').innerHTML = 'Schedule for <span>'+d.str+'</span> (times MST)';
+    document.getElementById('date-lbl').innerHTML = 'Schedule for <span>'+d.str+'</span> (times MST) · <span>'+games.length+' NCAAMB games</span>';
     renderPills(); updateCounts(); renderConfidenceTable();
     // Build BDL game map for fallback (await so enrich has IDs ready)
     await buildBdlGameMap(d.str);
@@ -653,7 +778,7 @@ async function loadSchedule(){
   try{
     const now = Date.now();
     const maxAge = 24*60*60*1000; // 24 hours
-    const prefixes = ['nba4:analysis:','nba4:depth:','nba4:tracking:','nba4:structural:','nba4:snap:','nba4:gap:','nba4:srCache:'];
+    const prefixes = ['ncaamb:analysis:','ncaamb:depth:','ncaamb:tracking:','ncaamb:structural:','ncaamb:snap:','ncaamb:gap:','ncaamb:srCache:'];
     const keysToRemove = [];
     for(let i=0; i<localStorage.length; i++){
       const key = localStorage.key(i);
@@ -669,11 +794,11 @@ async function loadSchedule(){
         const ts = val.analysisTime || val.pbpTime || val.time || 0;
         if(ts > 0 && (now - ts) > maxAge){ keysToRemove.push(key); continue; }
         // srCache entries older than 6 hours
-        if(key.startsWith('nba4:srCache:') && raw.length > 100000){ keysToRemove.push(key); continue; }
+        if(key.startsWith('ncaamb:srCache:') && raw.length > 100000){ keysToRemove.push(key); continue; }
       }catch(e){ keysToRemove.push(key); } // corrupt data — remove
     }
     // Also clean up bulk caches if they have old game IDs
-    ['nba4:clutch','nba4:odds','nba4:oddsHist','nba4:confTable'].forEach(function(bulkKey){
+    ['ncaamb:clutch','ncaamb:odds','ncaamb:oddsHist','ncaamb:confTable'].forEach(function(bulkKey){
       try{
         const raw = localStorage.getItem(bulkKey);
         if(raw && raw.length > 500000) localStorage.removeItem(bulkKey); // over 500KB = stale
@@ -693,8 +818,8 @@ async function loadSchedule(){
 
 // Load on page ready
 loadSchedule();
-window.__nbaBooted = true; // Boot canary — proves main script parsed successfully
-console.log('[NBA CONTROL]', window.__nbaVersion, 'initialized —', new Date().toLocaleTimeString());
+window.__ncaambBooted = true; // Boot canary — proves main script parsed successfully
+console.log('[NCAAMB CONTROL]', window.__ncaambVersion, 'initialized —', new Date().toLocaleTimeString());
 
 // ══════════════════════════════════════════════════════════════════════════════
 // CALIBRATION LOG — tracks prediction accuracy across games for Sonnet self-correction
@@ -766,18 +891,18 @@ function captureCalibration(game){
 
   // Load, append, trim to 30, save
   let log = [];
-  try{ log = JSON.parse(localStorage.getItem('nba4:calibration')||'[]'); }catch(e){}
+  try{ log = JSON.parse(localStorage.getItem('ncaamb:calibration')||'[]'); }catch(e){}
   // Don't duplicate
   if(log.some(function(l){ return l.gameId === game.id; })) return;
   log.push(entry);
   if(log.length > 30) log = log.slice(-30);
-  try{ localStorage.setItem('nba4:calibration', JSON.stringify(log)); }catch(e){ console.warn('Calibration persist failed:', e.message); }
+  try{ localStorage.setItem('ncaamb:calibration', JSON.stringify(log)); }catch(e){ console.warn('Calibration persist failed:', e.message); }
   console.log('[CALIBRATION] Captured:', entry.matchup, winner, 'by', entry.margin, '| Thesis:', thesisTeam, thesisTeam===winner?'✓':'✗', '| FWP:', fwpTeam, fwpValue, fwpTeam===winner?'✓':'✗');
 }
 
 function computeCalibrationStats(){
   let log = [];
-  try{ log = JSON.parse(localStorage.getItem('nba4:calibration')||'[]'); }catch(e){}
+  try{ log = JSON.parse(localStorage.getItem('ncaamb:calibration')||'[]'); }catch(e){}
   if(log.length < 3) return null; // need minimum sample
 
   const stats = {
@@ -864,7 +989,6 @@ function refreshLiveCards(){
 }
 
 async function fetchSummary(game){
-  if(game.id === DEMO_ID) return; // Demo game — no API calls
   const cs = cardState[game.id];
   if(!cs || cs.editing || cs.generating) return;
 
@@ -970,7 +1094,7 @@ async function fetchSummary(game){
       if(sr429Count >= 3){
         srExhausted = true;
         addLog(game.id,'⚠ SR DAILY LIMIT — switching to BDL for session',false);
-        document.getElementById('hdr-sub').textContent = 'LIVE · BDL FALLBACK · v5.1 · PARTIAL';
+        document.getElementById('hdr-sub').textContent = 'LIVE · BDL FALLBACK · NCAAMB v1.0 · PARTIAL';
       }
       return fetchBdlFallback(game, e.message);
     }
@@ -1068,7 +1192,6 @@ async function triggerAnalysis(game){
   renderCard(game);
   try{
     // ── PRE-FLIGHT: ensure enrichment + PBP are current before building prompt ──
-    // Shows loading states on the button area so user sees progress
     cs.preFlightStep = 'odds';
     renderCard(game);
     if(cs.enriching){
@@ -1080,7 +1203,6 @@ async function triggerAnalysis(game){
     }
     cs.preFlightStep = 'depth';
     renderCard(game);
-    // Refresh PBP if stale (>3 min old) or missing
     if(!cs.pbpLoading && getState(game)==='LIVE'){
       const pbpAge = cs.pbpTime ? (Date.now()-cs.pbpTime.getTime())/60000 : 999;
       if(pbpAge > 3 || !cs.pbpAudit){
@@ -1095,10 +1217,10 @@ async function triggerAnalysis(game){
         }catch(e){ addLog(game.id, '⚠ Pre-analyze PBP failed: '+e.message, false); }
       }
     }
-    cs.preFlightStep = null; // done — will show ⏳ ANALYZING next
+    cs.preFlightStep = null;
 
     const thesis = theses[game.id]||'';
-    const periodLabel = game.period ? 'Q'+game.period : '';
+    const periodLabel = game.period ? 'H'+game.period : '';
     const score = (game.away?.alias||'AWAY')+' '+(game.awayPoints||0)+' - '+(game.home?.alias||'HOME')+' '+(game.homePoints||0);
     const isBDL = game.dataSource==='BDL';
     const dataSourceNote = isBDL ? '\n\nDATA SOURCE: BDL FALLBACK (PARTIAL)\nUnavailable: T4 Foul Gate | T7 Closing Lineup | I1 chaos layer | at-rim splits\nAll five indicators computable but with reduced sub-layer coverage.' : '';
@@ -1156,7 +1278,33 @@ async function triggerAnalysis(game){
         subMetricArrows: cs.subMetricArrows || null,
         adjustment: cs.adjustment || null,
         combinedRead: cs.combinedRead || null,
+        projection: cs.projection ? {
+          projectedMargin: cs.projection.projectedMargin,
+          projTeam: cs.projection.projTeam,
+          homeWinProb: cs.projection.homeWinProb,
+          awayWinProb: cs.projection.awayWinProb,
+          remainingPoss: cs.projection.remainingPoss,
+          minsLeft: cs.projection.minsLeft,
+          netEfficiency: cs.projection.netEfficiency,
+          hPPP: cs.projection.hPPP,
+          aPPP: cs.projection.aPPP,
+          garbageTime: cs.projection.garbageTime,
+        } : null,
         calibration: formatCalibrationForPrompt() || null,
+        leagueContext: {
+          league: 'ncaamb',
+          periodType: 'half',
+          periodCount: 2,
+          periodMinutes: 20,
+          foulLimit: 5,
+          shotClock: 30,
+          noClutchData: true,
+          noDepthChart: true,
+          noSplits: true,
+          noDailyInjuries: true,
+          noTrackingData: true,
+          hasNetRankings: true,
+        },
       })
     });
     if(!resp.ok){
@@ -1195,10 +1343,8 @@ async function triggerAnalysis(game){
     if(decision){
       // ── SONNET FWP — game-state-aware win probability ──
       // Sonnet outputs labeled two-sided FWP: "MEM 72% / LAC 28%"
-      // Parse directly — no guessing which team Sonnet meant
       let homeFWP = 50, awayFWP = 50;
       if(decision.fwpLabeled && decision.fwpTeam1 && decision.fwpTeam2){
-        // Two-sided labeled — match team aliases to home/away
         const hUp = hAlias.toUpperCase(), aUp = aAlias.toUpperCase();
         const t1Up = decision.fwpTeam1, t2Up = decision.fwpTeam2;
         if(t1Up === hUp || t1Up.startsWith(hUp.substring(0,3)) || hUp.startsWith(t1Up.substring(0,3))){
@@ -1208,13 +1354,11 @@ async function triggerAnalysis(game){
         } else if(t1Up === aUp || t1Up.startsWith(aUp.substring(0,3)) || aUp.startsWith(t1Up.substring(0,3))){
           awayFWP = decision.fwpVal1; homeFWP = decision.fwpVal2;
         } else {
-          // Couldn't match either team — use positional (first listed = away by convention)
           awayFWP = decision.fwpVal1; homeFWP = decision.fwpVal2;
           console.warn('FWP: Could not match teams '+t1Up+'/'+t2Up+' to '+hUp+'/'+aUp+' — using positional');
         }
         console.log('FWP (labeled): '+hAlias+' '+homeFWP.toFixed(1)+'% / '+aAlias+' '+awayFWP.toFixed(1)+'%');
       } else if(decision.fwpSingleTeam){
-        // Single labeled value: "MEM 72%" — derive other side
         const fwpVal = decision.fwpSingleVal;
         const fwpTeamUp = decision.fwpSingleTeam;
         const hUp = hAlias.toUpperCase(), aUp = aAlias.toUpperCase();
@@ -1225,7 +1369,6 @@ async function triggerAnalysis(game){
         }
         console.log('FWP (single-labeled): '+hAlias+' '+homeFWP.toFixed(1)+'% / '+aAlias+' '+awayFWP.toFixed(1)+'%');
       } else {
-        // Unlabeled fallback — use old derivation from control team (legacy compat)
         const ind = parsed || cs.clientIndicators || cs.sonnetIndicators;
         const ctrlTeam = ind?.controlTeam || '';
         const sonnetFwpRaw = (decision.fwp||'').replace(/[%\s]/g,'');
@@ -1450,7 +1593,6 @@ function _secHdr(id, key, cs, label, extra){
 
 // BDL Enrichment — auto-pull clutch + odds + tracking via bdl-enrich function
 async function enrichFromBDL(gameId){
-  if(gameId === DEMO_ID) return; // Demo mode — no real data
   const cs = cardState[gameId]; if(!cs) return;
   const game = games.find(g=>g.id===gameId); if(!game) return;
   const hA = game.home?.alias||'', aA = game.away?.alias||'';
@@ -1469,7 +1611,8 @@ async function enrichFromBDL(gameId){
         awayTeam: aA,
         bdlGameId: bdlGid,
         season: 2025,
-        pulls: ['clutch','odds','tracking'],
+        league: 'ncaamb',
+        pulls: ['odds'], // NCAAMB: no clutch or tracking via BDL
       })
     });
     if(!resp.ok) throw new Error('BDL enrich failed: '+resp.status);
@@ -1547,7 +1690,6 @@ function deriveTwoSidedFWP(sonnetFWP, controlTeam, homeAlias){
 // ══════════════════════════════════════════════════════════════════════════════
 
 async function fetchPBP(gameId){
-  if(gameId === DEMO_ID) return;
   const cs = cardState[gameId]; if(!cs) return;
   const game = games.find(g=>g.id===gameId); if(!game) return;
   cs.pbpLoading = true;
@@ -1560,7 +1702,7 @@ async function fetchPBP(gameId){
     cs.pbpTime = new Date();
     cs.pbpPeriod = game.period || 0;
     persistDepth(gameId, cs);
-    addLog(gameId, '✓ DEPTH loaded — '+audit.totalShots+' shots, '+audit.totalTOs+' TOs, '+audit.runs.length+' runs parsed (Q'+cs.pbpPeriod+')', true);
+    addLog(gameId, '✓ DEPTH loaded — '+audit.totalShots+' shots, '+audit.totalTOs+' TOs, '+audit.runs.length+' runs parsed (H'+cs.pbpPeriod+')'+(audit.syntheticQuarters?' | '+audit.syntheticQuarters.length+' synQ built':''), true);
   }catch(e){
     addLog(gameId, 'PBP failed: '+e.message, false);
   }finally{
@@ -1571,7 +1713,6 @@ async function fetchPBP(gameId){
 
 // Silent PBP fetch — runs every poll, no UI flicker
 async function fetchPBPQuiet(gameId){
-  if(gameId === DEMO_ID) return;
   const cs = cardState[gameId]; if(!cs) return;
   const game = games.find(g=>g.id===gameId); if(!game) return;
   if(cs.pbpLoading) return;
@@ -1809,11 +1950,123 @@ function parsePBP(pbpData, game){
   const home = aggTeam(hA);
   const away = aggTeam(aA);
 
+  // ── SYNTHETIC QUARTERS (NCAAMB: split 20-min halves at 10:00 mark) ──
+  // Creates 4 virtual quarters from 2 halves using PBP clock data.
+  // H1 20:00-10:01 → synQ1 | H1 10:00-0:00 → synQ2
+  // H2 20:00-10:01 → synQ3 | H2 10:00-0:00 → synQ4
+  const syntheticQuarters = [];
+  try {
+    // Collect all events with clock + score data
+    const scored = []; // {period, clockMin, hPts, aPts}
+    let runH = 0, runA = 0;
+    allEvents.forEach(ev => {
+      // Parse clock: "15:30" → 15.5 minutes remaining
+      const clockStr = ev.clock || ev.game_clock || '';
+      const cParts = clockStr.split(':');
+      const clockMin = (parseInt(cParts[0])||0) + (parseInt(cParts[1])||0)/60;
+
+      // Check if scoring event
+      const et = (ev.event_type||'').toLowerCase().replace(/[\s_-]/g,'');
+      let pts = 0;
+      if(et.includes('made')){
+        if(et.includes('threepoint') || et.includes('3pt')) pts = 3;
+        else if(et.includes('freethrow') || et.includes('ft')) pts = 1;
+        else if(et.includes('twopoint') || et.includes('2pt')) pts = 2;
+      }
+      if(pts === 0) return;
+      const attrId = ev.attribution?.id || (ev.statistics||[])[0]?.team?.id || '';
+      const team = attrId === hId ? 'home' : attrId === aId ? 'away' : '?';
+      if(team === 'home') runH += pts; else if(team === 'away') runA += pts;
+
+      // Prefer native running score if available, else use manual
+      const hCum = ev.home_points != null ? ev.home_points : runH;
+      const aCum = ev.away_points != null ? ev.away_points : runA;
+
+      scored.push({
+        period: ev._quarter || 0,
+        clockMin: clockMin,
+        hCum: hCum,
+        aCum: aCum,
+      });
+    });
+
+    if(scored.length > 0){
+      // Assign synthetic quarter: period 1 + clock>=10 → synQ1, period 1 + clock<10 → synQ2, etc.
+      function synQ(period, clockMin){
+        if(period === 1) return clockMin >= 10 ? 0 : 1;
+        if(period === 2) return clockMin >= 10 ? 2 : 3;
+        return 3; // OT → last bucket
+      }
+
+      // Track cumulative score at start and end of each synthetic quarter
+      const buckets = [{hPts:0,aPts:0,events:0},{hPts:0,aPts:0,events:0},{hPts:0,aPts:0,events:0},{hPts:0,aPts:0,events:0}];
+      let prevHCum = 0, prevACum = 0;
+
+      // Find the last cumulative score before each bucket transition
+      // Sort by period then clock descending (within period, higher clock = earlier)
+      const sorted = scored.slice().sort((a,b) => {
+        if(a.period !== b.period) return a.period - b.period;
+        return b.clockMin - a.clockMin; // higher clock = earlier in period
+      });
+
+      // Track boundary scores: the cumulative score at each synthetic quarter boundary
+      // Boundaries: game start (0,0), synQ1→2 (H1 at 10:00), synQ2→3 (halftime), synQ3→4 (H2 at 10:00), end
+      const boundaryScores = [
+        {h:0, a:0}, // game start
+        null, // H1 10:00 mark
+        null, // halftime
+        null, // H2 10:00 mark
+        null, // game end
+      ];
+
+      // Find last event in each boundary zone
+      for(const ev of sorted){
+        const sq = synQ(ev.period, ev.clockMin);
+        buckets[sq].events++;
+        // Track last event per synthetic quarter (last chronologically = lowest clock in that bucket)
+        // The boundary between synQn and synQn+1 is the last score in synQn
+      }
+
+      // Simpler approach: group events by synthetic quarter, find max cumulative in each
+      const byBucket = [[],[],[],[]];
+      sorted.forEach(ev => byBucket[synQ(ev.period, ev.clockMin)].push(ev));
+
+      // Each bucket: points = (max cumulative at end) - (max cumulative at end of previous bucket)
+      let lastH = 0, lastA = 0;
+      for(let i = 0; i < 4; i++){
+        const bk = byBucket[i];
+        if(bk.length === 0){
+          syntheticQuarters.push({home_points:0, away_points:0, events:0, complete:false, partial:false});
+          continue;
+        }
+        // End of this bucket = event with lowest clock (most recent)
+        const endEvent = bk.reduce((best, ev) => ev.clockMin < best.clockMin ? ev : best, bk[0]);
+        const bucketH = endEvent.hCum - lastH;
+        const bucketA = endEvent.aCum - lastA;
+        syntheticQuarters.push({
+          home_points: bucketH,
+          away_points: bucketA,
+          events: bk.length,
+          complete: i < 3 || (bk.some(ev => ev.clockMin < 1)), // last bucket complete if clock near 0
+          partial: true,
+        });
+        lastH = endEvent.hCum;
+        lastA = endEvent.aCum;
+      }
+
+      console.log('[SYNQ] Built synthetic quarters from', scored.length, 'scoring events:',
+        syntheticQuarters.map((q,i) => 'sQ'+(i+1)+':'+q.home_points+'-'+q.away_points+' ('+q.events+'ev)').join(' | '));
+    }
+  } catch(e) {
+    console.warn('[SYNQ] Synthetic quarter build failed:', e.message);
+  }
+
   return {
     home, away, homeAlias:hA, awayAlias:aA,
     totalShots: shots.length, totalTOs: turnovers.length,
     runs: topRuns,
-    raw: {shots, turnovers}, // keep raw for potential deep dives
+    syntheticQuarters: syntheticQuarters.length >= 2 ? syntheticQuarters : null,
+    raw: {shots, turnovers},
   };
 }
 
@@ -1915,7 +2168,7 @@ async function handleClutchUpload(input){
 
     // Store globally
     globalClutchData = data;
-    try{ localStorage.setItem('nba4:globalClutch', JSON.stringify(data)); }catch(e){ console.warn('GlobalClutch persist failed:', e.message); }
+    try{ localStorage.setItem('ncaamb:globalClutch', JSON.stringify(data)); }catch(e){ console.warn('GlobalClutch persist failed:', e.message); }
     const count = Object.keys(data.teams).length;
     const extractedList = Object.keys(data.teams).join(', ');
 
@@ -2238,17 +2491,15 @@ function parseSonnetDecision(text){
       d.mip = edgeMatch[3].trim();
       const edgeNum = parseFloat(d.edge.replace(/[+%]/g,''));
       d.edgeNum = isNaN(edgeNum) ? null : edgeNum;
-      // Parse two-sided FWP: "MEM 72% / LAC 28%" or "MEM 72.4% / LAC 27.6%"
       const twoSidedMatch = d.fwpRaw.match(/([A-Z]{2,4})\s+([\d.]+)%?\s*\/\s*([A-Z]{2,4})\s+([\d.]+)%?/i);
       if(twoSidedMatch){
         d.fwpTeam1 = twoSidedMatch[1].toUpperCase();
         d.fwpVal1 = parseFloat(twoSidedMatch[2]);
         d.fwpTeam2 = twoSidedMatch[3].toUpperCase();
         d.fwpVal2 = parseFloat(twoSidedMatch[4]);
-        d.fwp = d.fwpRaw; // preserve full string for display
+        d.fwp = d.fwpRaw;
         d.fwpLabeled = true;
       } else {
-        // Fallback: single value "72%" — old format, try to extract team prefix
         const singleMatch = d.fwpRaw.match(/([A-Z]{2,4})?\s*([\d.]+)%?/i);
         if(singleMatch){
           d.fwpSingleTeam = singleMatch[1] ? singleMatch[1].toUpperCase() : null;
@@ -2322,69 +2573,58 @@ async function generateThesis(gameId){
   paused = true; // Pause polling during generation to avoid SR rate limit conflicts
   const homeAlias = game.home?.alias||'';
   const awayAlias = game.away?.alias||'';
-  const homeId = TEAM_IDS[homeAlias];
-  const awayId = TEAM_IDS[awayAlias];
+  // NCAAMB: try game object IDs first (SR schedule includes them), then hierarchy cache
+  const homeId = game.home?.id || game.home?.sr_id || resolveTeamId(homeAlias);
+  const awayId = game.away?.id || game.away?.sr_id || resolveTeamId(awayAlias);
   if(!homeId||!awayId){
-    cs.genError = 'Unknown team alias: '+(homeId?'':homeAlias)+' '+(awayId?'':awayAlias);
+    cs.genError = 'Unknown team ID: '+(homeId?'':homeAlias)+' '+(awayId?'':awayAlias)+' — try refreshing schedule';
     cs.generating=false; renderCard(game); return;
   }
 
+  // NCAAMB thesis pipeline: no depth chart, no splits, no daily injuries
   cs.genSteps = [
     {label:'BDL Enrich',status:'pending'},
-    {label:'Injuries',status:'pending'},
     {label:'Standings',status:'pending'},
     {label:homeAlias+' Profile',status:'pending'},
     {label:awayAlias+' Profile',status:'pending'},
-    {label:homeAlias+' Depth',status:'pending'},
-    {label:awayAlias+' Depth',status:'pending'},
     {label:homeAlias+' Stats',status:'pending'},
     {label:awayAlias+' Stats',status:'pending'},
-    {label:homeAlias+' Splits(G)',status:'pending'},
-    {label:awayAlias+' Splits(G)',status:'pending'},
-    {label:homeAlias+' Splits(S)',status:'pending'},
-    {label:awayAlias+' Splits(S)',status:'pending'},
+    {label:'NET Rankings',status:'pending'},
     {label:'BDL Odds',status:'pending'},
     {label:'Sonnet Thesis',status:'pending'},
   ];
   renderGenProgress(gameId);
 
-  // ── STEP 0: Ensure BDL enrichment is complete (odds, clutch, tracking) ──
+  // ── STEP 0: Ensure BDL enrichment is complete (odds only for NCAAMB) ──
   cs.genSteps[0].status = 'active';
   renderGenProgress(gameId);
   try{
     if(cs.enriching){
-      // Enrichment already in progress — wait for it (up to 12s)
       addLog(gameId, 'Waiting for BDL enrichment to finish…', true);
       for(let w=0;w<24&&cs.enriching;w++) await new Promise(r=>setTimeout(r,500));
-    } else if(!cs.enrichDone && !cs.oddsData && !cs.trackingData){
-      // Not started yet — trigger and wait
+    } else if(!cs.enrichDone && !cs.oddsData){
       addLog(gameId, 'Triggering BDL enrichment for thesis…', true);
       await enrichFromBDL(gameId);
     }
-    cs.genSteps[0].status = (cs.oddsData||cs.clutchData||cs.trackingData)?'done':'err';
-    if(cs.genSteps[0].status==='err') cs.genSteps[0].error = 'No data (optional)';
+    cs.genSteps[0].status = cs.oddsData?'done':'err';
+    if(cs.genSteps[0].status==='err') cs.genSteps[0].error = 'No odds (optional)';
   }catch(e){
     cs.genSteps[0].status = 'err';
     cs.genSteps[0].error = 'optional';
   }
   renderGenProgress(gameId);
 
+  // NCAAMB pipeline: standings + profiles + stats + NET rankings (no injuries, depth, splits)
   const calls = [
-    {key:'injuries', type:'injuries', params:{}},
     {key:'standings', type:'standings', params:{}},
     {key:'homeProfile', type:'profile', params:{team_id:homeId}},
     {key:'awayProfile', type:'profile', params:{team_id:awayId}},
-    {key:'homeDepth', type:'depth_chart', params:{team_id:homeId}},
-    {key:'awayDepth', type:'depth_chart', params:{team_id:awayId}},
     {key:'homeStats', type:'statistics', params:{team_id:homeId}},
     {key:'awayStats', type:'statistics', params:{team_id:awayId}},
-    {key:'homeSplitsGame', type:'splits_game', params:{team_id:homeId}},
-    {key:'awaySplitsGame', type:'splits_game', params:{team_id:awayId}},
-    {key:'homeSplitsSchedule', type:'splits_schedule', params:{team_id:homeId}},
-    {key:'awaySplitsSchedule', type:'splits_schedule', params:{team_id:awayId}},
+    {key:'netRankings', type:'net_rankings', params:{}},
   ];
 
-  const cacheKey = 'nba4:srCache:'+gameId;
+  const cacheKey = 'ncaamb:srCache:'+gameId;
   let collected = {};
 
   // Always fetch fresh SR data — show every API call in progress UI
@@ -2421,10 +2661,10 @@ async function generateThesis(gameId){
 
   // BDL Odds — skip if already populated by step 0 enrich
   if(cs.oddsData && cs.oddsData.homeML){
-    cs.genSteps[13].status = 'done';
+    cs.genSteps[7].status = 'done';
     renderGenProgress(gameId);
   } else {
-  cs.genSteps[13].status = 'active';
+  cs.genSteps[7].status = 'active';
   renderGenProgress(gameId);
   try{
     const bdlId = bdlGameMap[game.id];
@@ -2456,16 +2696,16 @@ async function generateThesis(gameId){
     } else {
       console.log('No BDL game ID — odds not auto-populated');
     }
-    cs.genSteps[13].status = 'done';
+    cs.genSteps[7].status = 'done';
   }catch(e){
-    cs.genSteps[13].status = 'err';
-    cs.genSteps[13].error = 'optional';
+    cs.genSteps[7].status = 'err';
+    cs.genSteps[7].error = 'optional';
   }
   } // end skip-if-already-populated
   renderGenProgress(gameId);
 
   // Now send to Sonnet via smart compute layer — server pre-computes SIA, redistribution, Pythagorean, BHV
-  cs.genSteps[14].status = 'active';
+  cs.genSteps[8].status = 'active';
   renderGenProgress(gameId);
   try{
     const tipTime = new Date(game.scheduled).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/Phoenix'});
@@ -2540,9 +2780,16 @@ async function generateThesis(gameId){
       if(!s) return '(unavailable)';
       const teams = [];
       (s.conferences||[]).forEach(conf=>{
+        // NCAAMB: teams directly under conference (no division layer)
+        // NBA: teams under conference > division
+        const confTeams = conf.teams || [];
+        confTeams.forEach(t=>{
+          teams.push(`${t.name||t.market||'?'} ${t.wins||0}-${t.losses||0} (${(t.win_pct||0).toFixed(3)}) Conf:${conf.alias||conf.name||'?'}`);
+        });
+        // Also check for division layer (NBA compat)
         (conf.divisions||[]).forEach(div=>{
           (div.teams||[]).forEach(t=>{
-            teams.push(`${t.name} ${t.wins}-${t.losses} (${(t.win_pct||0).toFixed(3)}) PF:${t.calc_points?.for||'?'} PA:${t.calc_points?.against||'?'}`);
+            teams.push(`${t.name||t.market||'?'} ${t.wins||0}-${t.losses||0} (${(t.win_pct||0).toFixed(3)}) PF:${t.calc_points?.for||'?'} PA:${t.calc_points?.against||'?'}`);
           });
         });
       });
@@ -2563,194 +2810,65 @@ async function generateThesis(gameId){
     const safe = (fn, label) => { try{ return fn(); }catch(e){ console.error('TRIM CRASH in '+label+':', e.message, e.stack); return '(ERROR: '+label+' — '+e.message+')'; } };
 
     // Build text sections for Sonnet context
+    // NCAAMB: no daily injuries endpoint, no depth chart, no splits
+    // Injuries come from team profiles (embedded in roster data)
     const sections = {
-      injuries: safe(()=>trimInjuries(c.injuries), 'injuries'),
+      injuries: '(NCAAMB: no daily injuries endpoint — see team profiles for injury info)',
       homeRoster: safe(()=>trimProfile(c.homeProfile), 'homeProfile'),
       awayRoster: safe(()=>trimProfile(c.awayProfile), 'awayProfile'),
-      homeDepth: safe(()=>trimDepth(c.homeDepth), 'homeDepth'),
-      awayDepth: safe(()=>trimDepth(c.awayDepth), 'awayDepth'),
+      homeDepth: '(NCAAMB: no depth chart endpoint — derive rotation from minutes distribution in stats)',
+      awayDepth: '(NCAAMB: no depth chart endpoint — derive rotation from minutes distribution in stats)',
       homeStats: safe(()=>trimStats(c.homeStats), 'homeStats'),
       awayStats: safe(()=>trimStats(c.awayStats), 'awayStats'),
-      homeSplitsGame: safe(()=>trimSplits(c.homeSplitsGame), 'homeSplitsGame'),
-      awaySplitsGame: safe(()=>trimSplits(c.awaySplitsGame), 'awaySplitsGame'),
-      homeSplitsSchedule: safe(()=>trimSplits(c.homeSplitsSchedule), 'homeSplitsSchedule'),
-      awaySplitsSchedule: safe(()=>trimSplits(c.awaySplitsSchedule), 'awaySplitsSchedule'),
+      homeSplitsGame: '(NCAAMB: no splits available — season averages only)',
+      awaySplitsGame: '(NCAAMB: no splits available — season averages only)',
+      homeSplitsSchedule: '(unavailable)',
+      awaySplitsSchedule: '(unavailable)',
       standings: safe(()=>trimStandings(c.standings), 'standings'),
     };
 
-    // ── RECENT FORM + RETURNING DETECTION (BDL recent game box scores) ──
-    const _returningByTeam = {}; // alias → [{name, position}]
+    // NET Rankings section (NCAAMB-specific)
+    if(c.netRankings){
+      try{
+        const rankings = c.netRankings.rankings || c.netRankings;
+        let netSection = '\n=== NET RANKINGS ===\n';
+        // Find both teams in the rankings
+        const findTeam = (alias) => {
+          const all = Array.isArray(rankings) ? rankings : (rankings.teams || rankings.entries || []);
+          return all.find(t => {
+            const a = (t.alias||t.abbreviation||t.team?.alias||'').toUpperCase();
+            const n = (t.name||t.team?.name||t.market||'').toLowerCase();
+            return a === alias.toUpperCase() || n.includes(alias.toLowerCase());
+          });
+        };
+        [awayAlias, homeAlias].forEach(alias => {
+          const t = findTeam(alias);
+          if(t){
+            netSection += alias + ': NET #' + (t.rank||t.net_rank||'?');
+            if(t.record) netSection += ' (' + (t.record.wins||'?') + '-' + (t.record.losses||'?') + ')';
+            // Quad records if available
+            const quads = t.quad_records || t.quads || {};
+            if(quads.q1 || quads.quad1) netSection += ' Q1:' + (quads.q1||quads.quad1||'?') + ' Q2:' + (quads.q2||quads.quad2||'?') + ' Q3:' + (quads.q3||quads.quad3||'?') + ' Q4:' + (quads.q4||quads.quad4||'?');
+            if(t.sos_rank) netSection += ' SOS:#' + t.sos_rank;
+            if(t.conf_record) netSection += ' Conf:' + t.conf_record;
+            netSection += '\n';
+          } else {
+            netSection += alias + ': not found in NET rankings\n';
+          }
+        });
+        sections.netRankings = netSection;
+      }catch(e){
+        sections.netRankings = '(NET rankings parse error: ' + e.message + ')';
+      }
+    } else {
+      sections.netRankings = '(NET rankings unavailable)';
+    }
+
+    // ── RECENT FORM — skipped for NCAAMB (BDL team IDs not mapped for 362 teams) ──
+    const _returningByTeam = {};
     const _recentForm = {home:null, away:null};
     sections.returning = '';
-    sections.recentForm = '';
-    try{
-      const hBdlId = BDL_TEAM_IDS[homeAlias], aBdlId = BDL_TEAM_IDS[awayAlias];
-      if(hBdlId && aBdlId){
-        // Get yesterday's date as end_date, 10 days back as start_date
-        const today = new Date();
-        const yesterday = new Date(today.getTime() - 24*60*60*1000);
-        const tenDaysAgo = new Date(today.getTime() - 10*24*60*60*1000);
-        const fmtDate = (d) => d.toISOString().split('T')[0];
-
-        // Pull last 5 games per team (2 BDL calls)
-        await new Promise(r=>setTimeout(r,200));
-        const [hGamesResp, aGamesResp] = await Promise.all([
-          bdl('team_games',{team_id:String(hBdlId), per_page:'5', end_date:fmtDate(yesterday), start_date:fmtDate(tenDaysAgo)}),
-          bdl('team_games',{team_id:String(aBdlId), per_page:'5', end_date:fmtDate(yesterday), start_date:fmtDate(tenDaysAgo)}),
-        ]);
-        // Sort by date descending (most recent first) then take last 3
-        const sortByDateDesc = (arr) => (arr||[]).sort((a,b) => new Date(b.date||0) - new Date(a.date||0));
-        const hGames = sortByDateDesc(hGamesResp.data).slice(0,3);
-        const aGames = sortByDateDesc(aGamesResp.data).slice(0,3);
-        const hGameIds = hGames.map(g=>g.id).filter(Boolean);
-        const aGameIds = aGames.map(g=>g.id).filter(Boolean);
-        addLog(gameId, '📊 Recent games: '+homeAlias+' '+hGameIds.length+' ('+hGames.map(g=>g.date||'?').join(',')+') | '+awayAlias+' '+aGameIds.length+' ('+aGames.map(g=>g.date||'?').join(',')+')', false);
-
-        // Build set of injured player names to exclude from NEW/RETURNING
-        const _injuredNames = new Set();
-        if(c.injuries && c.injuries.teams){
-          c.injuries.teams.forEach(function(t){
-            (t.players||[]).forEach(function(p){
-              const injArr = Array.isArray(p.injuries)?p.injuries:[];
-              const li = injArr.length>0?injArr[0]:{};
-              const st = (li.status||p.status||'').toUpperCase();
-              if(st==='OUT'||st==='O'||st.includes('OUT FOR SEASON')) _injuredNames.add((p.full_name||'').toLowerCase().trim());
-            });
-          });
-        }
-
-        // Pull box scores for those games (2 BDL calls)
-        let hStats = [], aStats = [];
-        if(hGameIds.length > 0 || aGameIds.length > 0){
-          await new Promise(r=>setTimeout(r,200));
-          const [hStatsResp, aStatsResp] = await Promise.all([
-            hGameIds.length>0 ? bdl('multi_stats',{game_ids:hGameIds.join(',')}) : {data:[]},
-            aGameIds.length>0 ? bdl('multi_stats',{game_ids:aGameIds.join(',')}) : {data:[]},
-          ]);
-          hStats = hStatsResp.data||[];
-          aStats = aStatsResp.data||[];
-        }
-
-        // Process each team's recent form
-        function processTeamForm(stats, games, bdlTeamId, alias, profile, injuredNames){
-          if(!games.length) return null;
-          // Filter stats to this team's players
-          const teamStats = stats.filter(s => (s.team?.id||s.player?.team_id) == bdlTeamId);
-          // Group by game
-          const byGame = {};
-          teamStats.forEach(s => {
-            const gid = s.game?.id || s.game_id;
-            if(!gid) return;
-            if(!byGame[gid]) byGame[gid] = [];
-            byGame[gid].push(s);
-          });
-
-          // Players who appeared in recent games (had minutes)
-          const recentPlayerNames = new Set();
-          const playerGameStats = {}; // name → [{pts, min, fgm, fga, fg3m, fg3a, ...}]
-          Object.values(byGame).forEach(gamePlayers => {
-            gamePlayers.forEach(s => {
-              const mins = s.min ? parseInt(s.min) : 0;
-              if(mins < 1) return;
-              const name = ((s.player?.first_name||'')+' '+(s.player?.last_name||'')).trim();
-              const nameLower = name.toLowerCase();
-              recentPlayerNames.add(nameLower);
-              if(!playerGameStats[nameLower]) playerGameStats[nameLower] = {name, games:[]};
-              playerGameStats[nameLower].games.push({
-                pts:s.pts||0, min:mins, fgm:s.fgm||0, fga:s.fga||0,
-                fg3m:s.fg3m||0, fg3a:s.fg3a||0, ftm:s.ftm||0, fta:s.fta||0,
-                reb:s.reb||0, ast:s.ast||0, stl:s.stl||0, blk:s.blk||0, turnover:s.turnover||0,
-              });
-            });
-          });
-
-          // Detect NEW/RETURNING — on active roster but not in recent box scores
-          // Could be returning from injury OR new acquisition making debut
-          const returning = [];
-          if(profile && profile.players){
-            profile.players.forEach(pl => {
-              if(pl.status!=='ACT') return;
-              const name = pl.full_name||'';
-              const nameLower = name.toLowerCase().trim();
-              if(nameLower && !recentPlayerNames.has(nameLower)){
-                // Skip players already listed as OUT on injury report
-                if(injuredNames && injuredNames.has(nameLower)) return;
-                returning.push({name, position:pl.primary_position||pl.position||'?'});
-                console.log('NEW/RETURNING detected:', name, alias, '| not in recent box scores');
-              }
-            });
-          }
-
-          // Compute per-player averages for hot/cold detection
-          const hot = [], cold = [], minsShift = [];
-          Object.values(playerGameStats).forEach(p => {
-            const gp = p.games.length;
-            if(gp < 2) return;
-            const avgPts = p.games.reduce((a,g)=>a+g.pts,0)/gp;
-            const avgMin = p.games.reduce((a,g)=>a+g.min,0)/gp;
-            const avgFga = p.games.reduce((a,g)=>a+g.fga,0)/gp;
-            const avgFgPct = avgFga>0 ? (p.games.reduce((a,g)=>a+g.fgm,0)/gp) / avgFga * 100 : 0;
-            // Look up season averages from SR profile
-            let sznPts = 0, sznMin = 0;
-            if(profile && profile.players){
-              const match = profile.players.find(pl => (pl.full_name||'').toLowerCase().trim() === p.name.toLowerCase().trim());
-              if(match && match.average){
-                sznPts = match.average.points||0;
-                sznMin = match.average.minutes ? parseFloat(match.average.minutes) : 0;
-              }
-            }
-            if(sznPts > 8 && avgPts > sznPts * 1.3) hot.push({name:p.name, avg:avgPts.toFixed(1), szn:sznPts.toFixed(1), fgPct:avgFgPct.toFixed(0)});
-            else if(sznPts > 8 && avgPts < sznPts * 0.7) cold.push({name:p.name, avg:avgPts.toFixed(1), szn:sznPts.toFixed(1), fgPct:avgFgPct.toFixed(0)});
-            if(sznMin > 12 && avgMin > sznMin + 6) minsShift.push({name:p.name, avg:avgMin.toFixed(1), szn:sznMin.toFixed(1)});
-          });
-
-          // Team record in recent games
-          const record = {w:0, l:0, avgPts:0};
-          games.forEach(g => {
-            const isHome = g.home_team?.id == bdlTeamId;
-            const tPts = isHome ? (g.home_team_score||0) : (g.visitor_team_score||0);
-            const oPts = isHome ? (g.visitor_team_score||0) : (g.home_team_score||0);
-            if(tPts > oPts) record.w++; else record.l++;
-            record.avgPts += tPts;
-          });
-          record.avgPts = games.length>0 ? (record.avgPts/games.length).toFixed(1) : 0;
-
-          return {returning, hot, cold, minsShift, record, gamesPlayed:games.length};
-        }
-
-        _recentForm.home = processTeamForm(hStats, hGames, hBdlId, homeAlias, c.homeProfile, _injuredNames);
-        _recentForm.away = processTeamForm(aStats, aGames, aBdlId, awayAlias, c.awayProfile, _injuredNames);
-
-        // Build sections
-        function formatTeamForm(form, alias){
-          if(!form) return '';
-          let out = alias+' RECENT (last '+form.gamesPlayed+' games: '+form.record.w+'-'+form.record.l+', avg '+form.record.avgPts+' pts):\n';
-          if(form.returning.length) out += '  RETURNING: '+form.returning.map(r=>r.name+' ['+r.position+']').join(', ')+'\n';
-          if(form.hot.length) out += '  HOT: '+form.hot.map(h=>h.name+' '+h.avg+' PPG (szn '+h.szn+')').join(', ')+'\n';
-          if(form.cold.length) out += '  COLD: '+form.cold.map(h=>h.name+' '+h.avg+' PPG on '+h.fgPct+'% FG (szn '+h.szn+')').join(', ')+'\n';
-          if(form.minsShift.length) out += '  MINUTES SHIFT: '+form.minsShift.map(m=>m.name+' '+m.avg+' mpg (szn '+m.szn+')').join(', ')+'\n';
-          return out;
-        }
-        sections.recentForm = '\n=== RECENT FORM (last 3 games) ===\n' + formatTeamForm(_recentForm.away, awayAlias) + formatTeamForm(_recentForm.home, homeAlias);
-
-        // Populate _returningByTeam for availability builder
-        if(_recentForm.home && _recentForm.home.returning.length){
-          _returningByTeam[homeAlias.toUpperCase()] = _recentForm.home.returning;
-        }
-        if(_recentForm.away && _recentForm.away.returning.length){
-          _returningByTeam[awayAlias.toUpperCase()] = _recentForm.away.returning;
-        }
-        const allRet = [...(_recentForm.home?.returning||[]), ...(_recentForm.away?.returning||[])];
-        if(allRet.length > 0){
-          sections.returning = '\nNEW/RETURNING PLAYERS NOTE: Players listed as NEW/RETURNING are on the active roster but did NOT play in the team\'s last 3 games. This includes players returning from injury AND new acquisitions making their debut. Evaluate as structural upgrades — the team\'s recent performance was WITHOUT them.\n';
-          addLog(gameId, '🔄 '+allRet.length+' returning player(s): '+allRet.map(r=>r.name).join(', '), true);
-        }
-        addLog(gameId, '📊 Recent form computed ('+hGames.length+'H/'+aGames.length+'A games)', true);
-      }
-    }catch(e){
-      console.warn('Recent form pull failed (optional):', e.message);
-      addLog(gameId, '⚠ Recent form: '+e.message, false);
-    }
+    sections.recentForm = '(NCAAMB: recent form detection not yet implemented for 362-team league)';
 
     // ── PRE-COMPUTED AVAILABILITY (team-by-team, cross-referenced) ──
     sections.availability = safe(()=>{
@@ -2828,15 +2946,18 @@ async function generateThesis(gameId){
     } else { sections.clutch = ''; }
 
     // Build analytical payload — raw structured data for server-side SIA computation
+    // NCAAMB: no separate injuries endpoint, no depth chart. Injuries embedded in profiles.
     const analytical = {
-      injuries: c.injuries || {},
+      injuries: {}, // NCAAMB has no daily injuries endpoint — profile injuries used instead
       homeProfile: c.homeProfile || {},
       awayProfile: c.awayProfile || {},
       homeStats: c.homeStats || {},
       awayStats: c.awayStats || {},
-      homeDepth: c.homeDepth || {},
-      awayDepth: c.awayDepth || {},
+      homeDepth: {}, // NCAAMB has no depth chart endpoint
+      awayDepth: {}, // derive rotation from minutes in stats
       standings: c.standings || {},
+      netRankings: c.netRankings || {}, // NCAAMB-specific
+      league: 'ncaamb',
     };
 
     const payload = {
@@ -2885,7 +3006,7 @@ async function generateThesis(gameId){
       }
       const data = await resp.json();
       theses[gameId] = (data.thesis||'').replace(/\*\*/g,'').replace(/^#{1,3}\s/gm,'');
-      try{ localStorage.setItem('nba4:theses', JSON.stringify(theses)); }catch(e){ console.warn('Thesis persist failed:', e.message); }
+      try{ localStorage.setItem('ncaamb:theses', JSON.stringify(theses)); }catch(e){ console.warn('Thesis persist failed:', e.message); }
       if(data.preComputed) processPreComputed(data.preComputed);
     } else {
       // SSE stream reader
@@ -2921,7 +3042,7 @@ async function generateThesis(gameId){
               } else if(parsed.type === 'done'){
                 streamedThesis = parsed.thesis || streamedThesis;
                 theses[gameId] = streamedThesis.replace(/\*\*/g,'').replace(/^#{1,3}\s/gm,'');
-                try{ localStorage.setItem('nba4:theses', JSON.stringify(theses)); }catch(e){ console.warn('Thesis persist failed:', e.message); }
+                try{ localStorage.setItem('ncaamb:theses', JSON.stringify(theses)); }catch(e){ console.warn('Thesis persist failed:', e.message); }
                 if(parsed.usage) addLog(gameId, '📊 Tokens: in='+((parsed.usage.input_tokens||0))+' out='+((parsed.usage.output_tokens||0)), true);
               } else if(parsed.type === 'error'){
                 throw new Error(parsed.error||'Stream error');
@@ -2978,15 +3099,15 @@ async function generateThesis(gameId){
         });
       }
     }
-    cs.genSteps[14].status = 'done';
+    cs.genSteps[8].status = 'done';
   }catch(e){
-    cs.genSteps[14].status = 'err';
-    cs.genSteps[14].error = e.message;
+    cs.genSteps[8].status = 'err';
+    cs.genSteps[8].error = e.message;
     console.error('Thesis generation failed at step 14:', e.message, e.stack);
   }
   cs.generating = false;
   renderConfidenceTable();
-  cs.genError = cs.genSteps[14]?.status==='err' ? cs.genSteps[14].error : null;
+  cs.genError = cs.genSteps[8]?.status==='err' ? cs.genSteps[8].error : null;
   paused = wasPaused; // Resume polling state
   renderCard(game);
 }
@@ -3063,7 +3184,12 @@ function compute(game){
 
   // I4 — Lineup Integrity
   const periods = s.periods||[];
-  const qDs = periods.map(p=>(p.home_points||0)-(p.away_points||0));
+  let qDs = periods.map(p=>(p.home_points||0)-(p.away_points||0));
+  // NCAAMB: override with synthetic quarters from PBP when available (4 virtual quarters from 2 halves)
+  const synQ = cardState[game.id]?.pbpAudit?.syntheticQuarters;
+  if(synQ && synQ.length >= 2){
+    qDs = synQ.map(q => (q.home_points||0) - (q.away_points||0));
+  }
   const trend = qDs.length>=2 ? qDs[qDs.length-1]-qDs[0] : 0;
   const hBigLead = hs.biggest_lead||0, aBigLead = as.biggest_lead||0;
   const hBench = hs.bench_points||0, aBench = as.bench_points||0;
@@ -3073,7 +3199,8 @@ function compute(game){
   const hTO_rem = H?.remaining_timeouts, aTO_rem = A?.remaining_timeouts;
   const benchD = hBench - aBench;
   const i4 = (hBigLead>aBigLead+4?1:hBigLead<aBigLead-4?-1:0)+(trend>2?1:trend<-2?-1:0)+(benchD>10?1:benchD<-10?-1:0);
-  let i4detail = `BigLead:${hBigLead}–${aBigLead} Bench:${hBench}–${aBench} Δ:${hS>aS?'+':''}${hS-aS} trend:${trend>0?'+':''}${trend} ${qDs.map((d,i)=>'Q'+(i+1)+':'+(d>0?'+':'')+d).join(' ')}`;
+  const periodPrefix = synQ ? 'sQ' : 'H';
+  let i4detail = `BigLead:${hBigLead}–${aBigLead} Bench:${hBench}–${aBench} Δ:${hS>aS?'+':''}${hS-aS} trend:${trend>0?'+':''}${trend} ${qDs.map((d,i)=>periodPrefix+(i+1)+':'+(d>0?'+':'')+d).join(' ')}`;
   if(hRun||aRun) i4detail += ` | runs:${hA}${hRun} ${aA}${aRun}`;
   if(hTimeLead||aTimeLead) i4detail += ` | lead:${hA}${hTimeLead} ${aA}${aTimeLead}`;
   if(lc||tt) i4detail += ` | LC:${lc} TT:${tt}`;
@@ -3151,7 +3278,7 @@ function compute(game){
   const combinedRead = classifyCombinedRead(score, cTeam, windowResult, accelResult);
   cardState[game.id].combinedRead = combinedRead;
 
-  // Margin projection (feeds spread conviction)
+  // Margin projection (feeds spread conviction + Sonnet FWP anchor)
   const projection = computeProjection(game);
   if(projection) cardState[game.id].projection = projection;
 
@@ -3178,7 +3305,11 @@ function compute(game){
 
 function buildTrajectory(game, hA, aA, hs, as, H, A, hS, aS, qDs, periods){
   const p = game.period||0;
-  if(p<2) return {signals:[], lean:'NEUTRAL', count:0, total:0, tooEarly:true};
+  // NCAAMB: use synthetic quarter count for resolution check
+  // With synthetic quarters, we have up to 4 data points even with only 2 halves
+  const synQ = cardState[game.id]?.pbpAudit?.syntheticQuarters;
+  const effectivePeriods = synQ ? synQ.filter(q => q.events > 0).length : p;
+  if(effectivePeriods<2) return {signals:[], lean:'NEUTRAL', count:0, total:0, tooEarly:true};
   const sigs = [], overall=hS-aS, currQ=qDs.length>0?qDs[qDs.length-1]:null;
 
   // T1 — Role Player Heater (real player-level detection when baselines available)
@@ -3258,15 +3389,20 @@ function buildTrajectory(game, hA, aA, hs, as, H, A, hS, aS, qDs, periods){
     sigs.push({key:'T2*',w:0,team:null,color:'#3e3e48',text:'No baseline data'});
   }
 
-  // T3 — Quarter Delta (highest weight)
-  if(currQ!=null&&Math.abs(currQ)>=6){const w=currQ>0?hA:aA,tr=(currQ>0&&overall<0)||(currQ<0&&overall>0);sigs.push({key:'T3',w:2,team:w,color:'#00ff88',text:w+' winning Q'+p+' by '+Math.abs(currQ)+(tr?' (trailing—comeback)':'')});}
-  else sigs.push({key:'T3',w:0,team:null,color:'#3e3e48',text:'Q delta <6 — neutral'});
+  // T3 — Period Delta (highest weight)
+  // With synthetic quarters (10-min): threshold >=6 (NBA-equivalent), labeled sQN
+  // With raw halves (20-min): threshold >=10, labeled HN
+  const t3Threshold = synQ ? 6 : 10;
+  const t3Label = synQ ? 'sQ'+qDs.length : 'H'+p;
+  const t3NeutralLabel = synQ ? 'sQ delta <6' : 'H delta <10';
+  if(currQ!=null&&Math.abs(currQ)>=t3Threshold){const w=currQ>0?hA:aA,tr=(currQ>0&&overall<0)||(currQ<0&&overall>0);sigs.push({key:'T3',w:2,team:w,color:'#00ff88',text:w+' winning '+t3Label+' by '+Math.abs(currQ)+(tr?' (trailing—comeback)':'')});}
+  else sigs.push({key:'T3',w:0,team:null,color:'#3e3e48',text:t3NeutralLabel+' — neutral'});
 
-  // T4 — Foul Gate (now available via SR per-player data)
+  // T4 — Foul Gate (NCAAMB: 5 personal fouls = disqualification)
   let t4sig = {key:'T4',w:0,team:null,color:'#3e3e48',text:'No foul crisis detected'};
   if(H?.players && A?.players){
-    const hFoulouts = (H.players||[]).filter(pl=>pl.fouled_out||pl.statistics?.personal_fouls>=6);
-    const aFoulouts = (A.players||[]).filter(pl=>pl.fouled_out||pl.statistics?.personal_fouls>=6);
+    const hFoulouts = (H.players||[]).filter(pl=>pl.fouled_out||pl.statistics?.personal_fouls>=5);
+    const aFoulouts = (A.players||[]).filter(pl=>pl.fouled_out||pl.statistics?.personal_fouls>=5);
     if(hFoulouts.length>0){
       const names = hFoulouts.map(pl=>pl.full_name||'?').join(', ');
       t4sig={key:'T4',w:2,team:aA,color:'#ff6b6b',text:names+' FOULED OUT — '+hA+' lost rotation piece'+(hFoulouts.length>1?'s':'')};
@@ -3277,9 +3413,10 @@ function buildTrajectory(game, hA, aA, hs, as, H, A, hS, aS, qDs, periods){
       const allPlayers = [...(H.players||[]).map(pl=>({...pl,team:hA})),...(A.players||[]).map(pl=>({...pl,team:aA}))];
       for(const pl of allPlayers){
         const pf = pl.statistics?.personal_fouls||0;
-        if((p<=1&&pf>=2)||(p===2&&pf>=3)||(p===3&&pf>=4)){
-          const level=p<=1?'WATCH':p===2?'CONSTRAINT':'CRISIS';
-          t4sig={key:'T4',w:1,team:pl.team===hA?aA:hA,color:'#ff6b6b',text:(pl.full_name||'?')+' '+pf+' fouls Q'+p+' — '+level};
+        // NCAAMB: 5 fouls out. H1 with 2+ = watch, H1 with 3+ = constraint, H2 with 4 = crisis
+        if((p===1&&pf>=2)||(p>=2&&pf>=4)){
+          const level=p===1&&pf>=3?'CONSTRAINT':p===1?'WATCH':'CRISIS';
+          t4sig={key:'T4',w:1,team:pl.team===hA?aA:hA,color:'#ff6b6b',text:(pl.full_name||'?')+' '+pf+' fouls H'+p+' — '+level+' (5 fouls out)'};
           break;
         }
       }
@@ -3469,7 +3606,7 @@ function buildPlayerBaselines(game){
 // ══════════════════════════════════════════════════════════════════════════════
 function extractStructuralContext(gameId){
   try{
-    const cached = localStorage.getItem('nba4:srCache:'+gameId);
+    const cached = localStorage.getItem('ncaamb:srCache:'+gameId);
     if(!cached) return null;
     const c = JSON.parse(cached);
     const game = games.find(g=>g.id===gameId);
@@ -3539,6 +3676,9 @@ function extractStructuralContext(gameId){
     if(c.standings){
       const allTeams = [];
       (c.standings.conferences||[]).forEach(conf=>{
+        // NCAAMB: teams directly under conference
+        (conf.teams||[]).forEach(t=>allTeams.push(t));
+        // NBA: teams under divisions
         (conf.divisions||[]).forEach(div=>{
           (div.teams||[]).forEach(t=>allTeams.push(t));
         });
@@ -3864,6 +4004,7 @@ function computeLeadCompositionClient(game, sustData){
 
 // ══════════════════════════════════════════════════════════════════════════════
 // MARGIN PROJECTION ENGINE — pace-adjusted forward-looking margin forecast
+// Feeds: spread conviction + Sonnet FWP anchor
 // ══════════════════════════════════════════════════════════════════════════════
 function computeProjection(game){
   const cs = cardState[game.id]; if(!cs) return null;
@@ -3872,17 +4013,18 @@ function computeProjection(game){
   const period = game.period||0;
   if(period < 1) return null;
 
+  // Get stats source
   const isBDL = game.dataSource === 'BDL';
   const s = isBDL ? game.bdlData : game.summary;
   if(!s) return null;
 
-  // ── TIME REMAINING (NBA: 4×12 min) ──
-  const GAME_MINUTES = 48;
-  const PERIOD_MINUTES = 12;
+  // ── TIME REMAINING (NCAAMB: 2×20 min halves) ──
+  const GAME_MINUTES = 40;
+  const PERIOD_MINUTES = 20;
   const clockParts = (game.clock||'').split(':');
   const clockMins = clockParts.length===2 ? parseInt(clockParts[0])+(parseInt(clockParts[1]||0)/60) : PERIOD_MINUTES;
-  const quartersLeft = Math.max(0, 4 - period);
-  const minsLeft = clockMins + (quartersLeft * PERIOD_MINUTES);
+  const periodsLeft = Math.max(0, 2 - period);
+  const minsLeft = clockMins + (periodsLeft * PERIOD_MINUTES);
   const minsElapsed = Math.max(1, GAME_MINUTES - minsLeft);
   const pctRemaining = Math.min(1, minsLeft / GAME_MINUTES);
 
@@ -3901,27 +4043,32 @@ function computeProjection(game){
   const avgPoss = (hPoss + aPoss) / 2;
   if(avgPoss < 5) return null;
 
+  // Points per possession
   const hPPP = hPoss > 0 ? hPts / hPoss : 1.0;
   const aPPP = aPoss > 0 ? aPts / aPoss : 1.0;
-  const netEfficiency = hPPP - aPPP;
+  const netEfficiency = hPPP - aPPP; // positive = home more efficient
 
+  // Remaining possessions (per team)
   const possPerMin = avgPoss / minsElapsed;
   const remainingPoss = possPerMin * minsLeft;
 
   // ── RAW PROJECTED MARGIN ──
-  const currentMargin = hPts - aPts;
+  const currentMargin = hPts - aPts; // positive = home leading
   const projectedShift = remainingPoss * netEfficiency;
   const rawProjectedMargin = currentMargin + projectedShift;
 
   // ── GARBAGE TIME DETECTION ──
+  // When a team has a commanding lead late, they pull starters and the trailing
+  // team scores easy points against bench. Compresses the final margin.
   let garbageTime = null;
   const absMargin = Math.abs(currentMargin);
-  const GARBAGE_MARGIN = 18; // NBA: 18+ points
+  const GARBAGE_MARGIN = 15; // NCAAMB: 15+ points (NBA would use 18+)
   const GARBAGE_MINUTES = 5;
 
   if(absMargin >= GARBAGE_MARGIN && minsLeft <= GARBAGE_MINUTES){
     let startersPulled = false;
 
+    // Check lineup data — are closers/starters still on the floor?
     const H = isBDL ? null : s.home;
     const A = isBDL ? null : s.away;
     const bl = cs.baselines;
@@ -3939,9 +4086,12 @@ function computeProjection(game){
       }
     }
 
+    // Also trigger on extreme margin + very little time (even without lineup data)
     const isGarbage = startersPulled || (absMargin >= GARBAGE_MARGIN + 8 && minsLeft <= 3);
 
     if(isGarbage){
+      // Margin compression model: leading team coasts, trailing team scores ~1.3 pts/min
+      // against bench (vs ~0.8 pts/min normal scoring pace)
       const freePoints = Math.round(minsLeft * 1.3);
       const compressionPts = Math.min(freePoints, Math.round(absMargin * 0.30));
       garbageTime = {
@@ -3956,18 +4106,23 @@ function computeProjection(game){
   // Apply garbage time compression
   let projectedMargin = rawProjectedMargin;
   if(garbageTime?.detected){
+    // Compression pushes margin toward zero (favors underdog spread, hurts favorite spread)
     const sign = currentMargin > 0 ? -1 : 1;
     projectedMargin = rawProjectedMargin + (garbageTime.compressionPts * sign);
   }
 
   // ── WIN PROBABILITY from projected margin ──
-  // Φ(z) ≈ 1/(1 + e^(-1.7*z)), std dev shrinks as game progresses
+  // Normal CDF approximation: Φ(z) ≈ 1/(1 + e^(-1.7*z))
+  // Std dev of remaining margin decreases as game progresses
+  // Full game std dev ≈ 11 pts; remaining std dev = 11 * sqrt(pctRemaining)
   const fullStdDev = 11.0;
   const remainingStdDev = Math.max(2.0, fullStdDev * Math.sqrt(pctRemaining));
   const z = projectedMargin / remainingStdDev;
   const homeWinProb = 1 / (1 + Math.exp(-1.7 * z));
+  const awayWinProb = 1 - homeWinProb;
 
   const projTeam = projectedMargin >= 0 ? hA : aA;
+  const projWinProb = Math.max(homeWinProb, awayWinProb) * 100;
 
   return {
     currentMargin,
@@ -3975,7 +4130,8 @@ function computeProjection(game){
     rawProjectedMargin: Math.round(rawProjectedMargin * 10) / 10,
     projTeam,
     homeWinProb: Math.round(homeWinProb * 1000) / 10,
-    awayWinProb: Math.round((1-homeWinProb) * 1000) / 10,
+    awayWinProb: Math.round(awayWinProb * 1000) / 10,
+    projWinProb: Math.round(projWinProb * 10) / 10,
     remainingPoss: Math.round(remainingPoss * 10) / 10,
     minsLeft: Math.round(minsLeft * 10) / 10,
     pctRemaining: Math.round(pctRemaining * 100),
@@ -3990,12 +4146,13 @@ function computeProjection(game){
 
 // ══════════════════════════════════════════════════════════════════════════════
 // SPREAD CONVICTION ENGINE v2 — projection-backed cover probability
+// Uses margin projection as backbone, structural signals as modifiers
 // ══════════════════════════════════════════════════════════════════════════════
 function computeSpreadConviction(game){
   const cs = cardState[game.id]; if(!cs) return null;
   const pred = cs.prediction; if(!pred) return null;
   const od = cs.oddsData; if(!od || !od.homeSpread) return null;
-  const proj = cs.projection;
+  const proj = cs.projection; // from computeProjection()
 
   const hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
   const hPts = game.homePoints||0, aPts = game.awayPoints||0;
@@ -4011,12 +4168,12 @@ function computeSpreadConviction(game){
 
   // ── TIME ──
   const clockParts = (game.clock||'').split(':');
-  const clockMins = clockParts.length===2 ? parseInt(clockParts[0])+(parseInt(clockParts[1]||0)/60) : 12;
-  const quartersLeft = Math.max(0, 4 - period);
-  const minsLeft = clockMins + (quartersLeft * 12);
-  const pctRemaining = Math.min(1, minsLeft / 48);
+  const clockMins = clockParts.length===2 ? parseInt(clockParts[0])+(parseInt(clockParts[1]||0)/60) : 20;
+  const periodsLeft = Math.max(0, 2 - period);
+  const minsLeft = clockMins + (periodsLeft * 20);
+  const pctRemaining = Math.min(1, minsLeft / 40);
 
-  // ── STRUCTURAL CONTEXT ──
+  // ── STRUCTURAL CONTEXT (kept as modifiers) ──
   const floorInd = cs.clientInd || cs.sonnetIndicators;
   const floorScore = floorInd?.score || 0.5;
   const floorTeam = floorInd?.controlTeam || '';
@@ -4031,16 +4188,18 @@ function computeSpreadConviction(game){
     var isFavorite = spread < 0;
     var isUnderdog = spread > 0;
 
-    // ── PRIMARY: Projection-based cover probability ──
+    // ── PRIMARY: Projection-based cover probability (when available) ──
     var coverProb;
     var projBased = false;
     if(proj && proj.remainingStdDev > 0){
+      // Projected final margin from this team's perspective
       var teamProjectedMargin = alias === hA ? proj.projectedMargin : -proj.projectedMargin;
+      // P(cover) = P(finalMargin > -spread) = Φ((projectedMargin + spread) / remainingStdDev)
       var coverZ = (teamProjectedMargin + spread) / proj.remainingStdDev;
       coverProb = (1 / (1 + Math.exp(-1.7 * coverZ))) * 100;
       projBased = true;
     } else {
-      // Fallback: FWP-based heuristic
+      // Fallback: FWP-based heuristic (original approach)
       if(isUnderdog){
         var closeLossBand = Math.min(20, absSpread * 3.5);
         coverProb = fwp + closeLossBand;
@@ -4050,8 +4209,8 @@ function computeSpreadConviction(game){
       }
     }
 
-    // ── STRUCTURAL MODIFIER (halved when projection is primary) ──
-    var structWeight = projBased ? 0.5 : 1.0;
+    // ── STRUCTURAL MODIFIER (smaller when projection available) ──
+    var structWeight = projBased ? 0.5 : 1.0; // halve structural mods when projection is primary
     var structMod = 0;
     var teamHasStructure = floorTeam === alias && floorScore >= 0.55;
     var oppHasStructure = floorTeam !== alias && floorTeam && floorScore >= 0.55;
@@ -4073,8 +4232,10 @@ function computeSpreadConviction(game){
     var garbageMod = 0;
     if(proj?.garbageTime?.detected){
       if(isFavorite && actualMargin > 0){
+        // Favorite leading in garbage time — margin will compress, hurts cover
         garbageMod = -Math.min(20, proj.garbageTime.compressionPts * 2.5);
       } else if(isUnderdog && actualMargin < 0){
+        // Underdog trailing in garbage time — will get free points, helps cover
         garbageMod = Math.min(15, proj.garbageTime.compressionPts * 2.0);
       }
     }
@@ -4082,6 +4243,7 @@ function computeSpreadConviction(game){
     coverProb = coverProb + structMod + scoringMod + garbageMod;
     coverProb = Math.max(5, Math.min(95, coverProb));
 
+    // Build reason
     var parts = [];
     if(projBased){
       var teamProjMargin = alias === hA ? proj.projectedMargin : -proj.projectedMargin;
@@ -4095,7 +4257,7 @@ function computeSpreadConviction(game){
     if(teamHasStructure) parts.push('structural ('+floorScore.toFixed(2)+')');
     if(scoringClass === 'VOLATILE') parts.push('opp VOLATILE');
     if(proj?.garbageTime?.detected) parts.push('GARBAGE TIME ('+proj.garbageTime.reason+')');
-    if(minsLeft < 10) parts.push(minsLeft.toFixed(0)+'min left');
+    if(minsLeft < 8) parts.push(minsLeft.toFixed(0)+'min left');
 
     return {
       team: alias,
@@ -4161,7 +4323,7 @@ function captureSnapshot(game){
       backfillNeeded: [],
       backfillDone: false,
     };
-    addLog(game.id, '📸 Snapshot baseline captured (Q'+currentPeriod+')', true);
+    addLog(game.id, '📸 Snapshot baseline captured (H'+currentPeriod+')', true);
     return;
   }
 
@@ -4191,12 +4353,12 @@ function captureSnapshot(game){
       };
       computeQuarterDelta(qs, missed[0]);
       qs.lastSnapshotPeriod = missed[0];
-      addLog(game.id, '📸 Q'+missed[0]+' boundary captured', true);
+      addLog(game.id, '📸 H'+missed[0]+' boundary captured', true);
     } else if(missed.length > 1){
       // Missed boundaries — phone asleep etc.
       qs.backfillNeeded = missed.filter(q => !qs.boundaries[q]);
       qs.lastSnapshotPeriod = currentPeriod - 1;
-      addLog(game.id, '⚠ Missed Q'+missed.join(',')+' boundaries — BDL backfill queued', false);
+      addLog(game.id, '⚠ Missed H'+missed.join(',')+' boundaries — BDL backfill queued', false);
       // Trigger async backfill
       if(qs.backfillNeeded.length > 0 && !qs._backfilling){
         backfillMissingQuarters(game);
@@ -4214,7 +4376,7 @@ function captureSnapshot(game){
       };
       computeQuarterDelta(qs, q);
       qs.lastSnapshotPeriod = q;
-      addLog(game.id, '📸 Q'+q+' boundary captured', true);
+      addLog(game.id, '📸 H'+q+' boundary captured', true);
     }
   }
 
@@ -4236,7 +4398,7 @@ function captureSnapshot(game){
   };
 
   // Persist snapshots
-  try { localStorage.setItem('nba4:snap:'+game.id, JSON.stringify({
+  try { localStorage.setItem('ncaamb:snap:'+game.id, JSON.stringify({
     boundaries: qs.boundaries, quarters: qs.quarters,
     lastSnapshotPeriod: qs.lastSnapshotPeriod,
   })); } catch(e){}
@@ -4356,15 +4518,15 @@ async function backfillMissingQuarters(game){
       });
 
       qs.backfillNeeded = qs.backfillNeeded.filter(x=>x!==q);
-      addLog(game.id,'✓ Q'+q+' backfilled from BDL (at-rim N/A)',true);
+      addLog(game.id,'✓ H'+q+' backfilled from BDL (at-rim N/A)',true);
     }catch(e){
-      addLog(game.id,'⚠ Q'+q+' backfill failed: '+e.message,false);
+      addLog(game.id,'⚠ H'+q+' backfill failed: '+e.message,false);
     }
   }
   qs._backfilling = false;
   qs.backfillDone = true;
   // Persist
-  try { localStorage.setItem('nba4:snap:'+game.id, JSON.stringify({
+  try { localStorage.setItem('ncaamb:snap:'+game.id, JSON.stringify({
     boundaries: qs.boundaries, quarters: qs.quarters,
     lastSnapshotPeriod: qs.lastSnapshotPeriod,
   })); } catch(e){}
@@ -4373,7 +4535,7 @@ async function backfillMissingQuarters(game){
 // ── Restore snapshots from localStorage ──────────────────────────────────────
 function restoreSnapshots(gameId){
   try{
-    const raw = localStorage.getItem('nba4:snap:'+gameId);
+    const raw = localStorage.getItem('ncaamb:snap:'+gameId);
     if(!raw) return null;
     return JSON.parse(raw);
   }catch(e){ return null; }
@@ -4396,7 +4558,7 @@ function computeRollingWindow(game){
   const available = windowQs.every(q => qs.quarters[q]);
   if(!available){
     const missing = windowQs.filter(q => !qs.quarters[q]);
-    return { available:false, reason:'Missing Q'+missing.join(','), windowQuarters:windowQs };
+    return { available:false, reason:'Missing H'+missing.join(','), windowQuarters:windowQs };
   }
 
   // Aggregate stats across window quarters (weighted by natural volume)
@@ -4523,7 +4685,7 @@ function updateGapLog(gameId, floorScore, floorTeam, windowResult, game){
   if(cs.gapLog.length > 50) cs.gapLog = cs.gapLog.slice(-50);
 
   // Persist
-  try{ localStorage.setItem('nba4:gap:'+gameId, JSON.stringify(cs.gapLog)); }catch(e){}
+  try{ localStorage.setItem('ncaamb:gap:'+gameId, JSON.stringify(cs.gapLog)); }catch(e){}
 }
 
 function computeAcceleration(gapLog){
@@ -4728,7 +4890,7 @@ function computeBDL(game){
   const scoreDiff = Math.abs(hS-aS);
   const i4 = (scoreDiff>8&&hS>aS?1:scoreDiff>8&&aS>hS?-1:0)+(trend>2?1:trend<-2?-1:0);
   const I4={score:i4>0?1:i4===0?.5:0, leader:i4>0?hA:i4<0?aA:'EVEN',
-    detail:`Δ:${hS>aS?'+':''}${hS-aS} trend:${trend>0?'+':''}${trend} ${qDs.map((dd,i)=>'Q'+(i+1)+':'+(dd>0?'+':'')+dd).join(' ')} [no lineup/bench split]`};
+    detail:`Δ:${hS>aS?'+':''}${hS-aS} trend:${trend>0?'+':''}${trend} ${qDs.map((dd,i)=>'H'+(i+1)+':'+(dd>0?'+':'')+dd).join(' ')} [no lineup/bench split]`};
 
   // I5 — Tempo & Efficiency (derived from BDL offensive/defensive rating)
   const hOPPP = (hs.offensive_rating||0)/100, aOPPP = (as.offensive_rating||0)/100;
@@ -4761,9 +4923,9 @@ function buildTrajectoryBDL(game, hA, aA, hs, as, hS, aS, qDs, d){
   // T2 — BDL: no per-player live stats for star process check
   sigs.push({key:'T2*',w:0,team:null,color:'#555',text:'⊘ Unavailable (BDL — no per-player live stats)'});
 
-  // T3 — Quarter Delta (available from BDL quarter scores)
-  if(currQ!=null&&Math.abs(currQ)>=6){const w=currQ>0?hA:aA,tr=(currQ>0&&overall<0)||(currQ<0&&overall>0);sigs.push({key:'T3',w:2,team:w,color:'#00ff88',text:w+' winning Q'+p+' by '+Math.abs(currQ)+(tr?' (trailing—comeback)':'')});}
-  else sigs.push({key:'T3',w:0,team:null,color:'#3e3e48',text:'Q delta <6 — neutral'});
+  // T3 — Half Delta (NCAAMB halves, threshold scaled)
+  if(currQ!=null&&Math.abs(currQ)>=10){const w=currQ>0?hA:aA,tr=(currQ>0&&overall<0)||(currQ<0&&overall>0);sigs.push({key:'T3',w:2,team:w,color:'#00ff88',text:w+' winning H'+p+' by '+Math.abs(currQ)+(tr?' (trailing—comeback)':'')});}
+  else sigs.push({key:'T3',w:0,team:null,color:'#3e3e48',text:'H delta <10 — neutral'});
 
   // T4 — UNAVAILABLE in BDL (no per-player per-quarter fouls)
   sigs.push({key:'T4',w:0,team:null,color:'#555',text:'⊘ Unavailable (BDL — no per-player fouls)'});
@@ -4822,7 +4984,7 @@ function setPaused(v){
   document.getElementById('btn-live').classList.toggle('on',!v);
   document.getElementById('btn-pause').classList.toggle('on',v);
   document.getElementById('pulse').classList.toggle('off',v);
-  document.getElementById('hdr-sub').textContent=(v?'PAUSED':'LIVE')+' · SR via Netlify · v5.1 · FULL';
+  document.getElementById('hdr-sub').textContent=(v?'PAUSED':'LIVE')+' · SR via Netlify · NCAAMB v1.0 · FULL';
 }
 
 function setFreq(sec){
@@ -4866,7 +5028,7 @@ function renderPills(){
     const gs=getState(g),sel=selIds.includes(g.id);
     const cls='pill'+(sel?' sel':gs==='LIVE'?' live':gs==='FINAL'?' done':'');
     let label=(g.away?.alias||'?')+'@'+(g.home?.alias||'?');
-    if(gs==='LIVE') label+=' Q'+(g.period||'?');
+    if(gs==='LIVE') label+=' H'+(g.period||'?');
     else if(gs==='FINAL') label+=' F';
     else try{label+=' '+new Date(g.scheduled).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/Phoenix'});}catch(e){}
     return`<button class="${cls}" onclick="toggleGame('${g.id}')">${label}</button>`;
@@ -4896,9 +5058,9 @@ function renderGrid(){
 }
 
 // ── Thesis helpers ────────────────────────────────────────────────────────
-function saveThesis(gameId,text){theses[gameId]=text;try{localStorage.setItem('nba4:theses',JSON.stringify(theses));}catch(e){console.warn('Thesis persist failed:',e.message);}renderConfidenceTable();}
-function clearTheses(){if(!confirm('Clear all theses?'))return;Object.keys(theses).forEach(k=>delete theses[k]);Object.keys(confCache).forEach(k=>delete confCache[k]);localStorage.removeItem('nba4:theses');localStorage.removeItem('nba4:confTable');games.filter(g=>selIds.includes(g.id)).forEach(g=>renderCard(g));renderConfidenceTable();}
-function clearMarketCache(){if(!confirm('Clear all cached clutch + odds data?'))return;Object.keys(cachedClutch).forEach(k=>delete cachedClutch[k]);Object.keys(cachedOdds).forEach(k=>delete cachedOdds[k]);Object.keys(cachedOddsHistory).forEach(k=>delete cachedOddsHistory[k]);globalClutchData=null;localStorage.removeItem('nba4:clutch');localStorage.removeItem('nba4:odds');localStorage.removeItem('nba4:oddsHist');localStorage.removeItem('nba4:globalClutch');for(const id of selIds){const cs=cardState[id];if(cs){cs.clutchData=null;cs.clutchTier=3;cs.oddsData=null;cs.oddsHistory=[];}}games.filter(g=>selIds.includes(g.id)).forEach(g=>renderCard(g));}
+function saveThesis(gameId,text){theses[gameId]=text;try{localStorage.setItem('ncaamb:theses',JSON.stringify(theses));}catch(e){console.warn('Thesis persist failed:',e.message);}renderConfidenceTable();}
+function clearTheses(){if(!confirm('Clear all theses?'))return;Object.keys(theses).forEach(k=>delete theses[k]);Object.keys(confCache).forEach(k=>delete confCache[k]);localStorage.removeItem('ncaamb:theses');localStorage.removeItem('ncaamb:confTable');games.filter(g=>selIds.includes(g.id)).forEach(g=>renderCard(g));renderConfidenceTable();}
+function clearMarketCache(){if(!confirm('Clear all cached clutch + odds data?'))return;Object.keys(cachedClutch).forEach(k=>delete cachedClutch[k]);Object.keys(cachedOdds).forEach(k=>delete cachedOdds[k]);Object.keys(cachedOddsHistory).forEach(k=>delete cachedOddsHistory[k]);globalClutchData=null;localStorage.removeItem('ncaamb:clutch');localStorage.removeItem('ncaamb:odds');localStorage.removeItem('ncaamb:oddsHist');localStorage.removeItem('ncaamb:globalClutch');for(const id of selIds){const cs=cardState[id];if(cs){cs.clutchData=null;cs.clutchTier=3;cs.oddsData=null;cs.oddsHistory=[];}}games.filter(g=>selIds.includes(g.id)).forEach(g=>renderCard(g));}
 function parseThesis(t){
   if(!t)return{lean:null,entry:null,pass:null,mlThreshold:null,watches:[],flags:[],shotDiet:null,heaterWatch:null,clutchGate:null};
   const r={lean:null,entry:null,pass:null,mlThreshold:null,watches:[],flags:[],shotDiet:null,heaterWatch:null,clutchGate:null};
@@ -5087,7 +5249,7 @@ function renderConfidenceTable(){
     // State badge (own line above score)
     let stateBadge = '';
     if(r.state==='LIVE'){
-      const qStr = r.period ? 'Q'+r.period+(r.clock?' '+r.clock:'') : 'LIVE';
+      const qStr = r.period ? 'H'+r.period+(r.clock?' '+r.clock:'') : 'LIVE';
       stateBadge = '<div><span class="ct-badge ct-live">'+esc(qStr)+'</span></div>';
     } else if(r.state==='FINAL'){
       stateBadge = '<div><span class="ct-badge ct-done">FIN</span></div>';
@@ -5272,32 +5434,32 @@ function mountCard(game){
   }
   // Restore structural context from localStorage
   try{
-    const savedStructural = localStorage.getItem('nba4:structural:'+id);
+    const savedStructural = localStorage.getItem('ncaamb:structural:'+id);
     if(savedStructural){ cardState[id].structural = JSON.parse(savedStructural); addLog(id, '📋 Structural context restored', true); }
   }catch(e){}
   // Restore tracking data from localStorage
   try{
-    const savedTracking = localStorage.getItem('nba4:tracking:'+id);
+    const savedTracking = localStorage.getItem('ncaamb:tracking:'+id);
     if(savedTracking){ cardState[id].trackingData = JSON.parse(savedTracking); addLog(id, '📋 Tracking baselines restored', true); }
   }catch(e){}
   // Restore quarter snapshots from localStorage
   if(!cardState[id].quarterSnapshots){
     try{
-      const savedSnap = localStorage.getItem('nba4:snap:'+id);
-      if(savedSnap){ cardState[id].quarterSnapshots = JSON.parse(savedSnap); addLog(id, '📸 Snapshots restored (Q'+Object.keys(cardState[id].quarterSnapshots.quarters||{}).join(',')+')', true); }
+      const savedSnap = localStorage.getItem('ncaamb:snap:'+id);
+      if(savedSnap){ cardState[id].quarterSnapshots = JSON.parse(savedSnap); addLog(id, '📸 Snapshots restored (H'+Object.keys(cardState[id].quarterSnapshots.quarters||{}).join(',')+')', true); }
     }catch(e){}
   }
   // Restore gap log from localStorage
   if(!cardState[id].gapLog){
     try{
-      const savedGap = localStorage.getItem('nba4:gap:'+id);
+      const savedGap = localStorage.getItem('ncaamb:gap:'+id);
       if(savedGap){ cardState[id].gapLog = JSON.parse(savedGap); }
     }catch(e){}
   }
   // Restore analysis data from localStorage (fallback when in-memory prev was deleted on deselect or browser refresh)
   if(!cardState[id].analysis){
     try{
-      const savedAnalysis = localStorage.getItem('nba4:analysis:'+id);
+      const savedAnalysis = localStorage.getItem('ncaamb:analysis:'+id);
       if(savedAnalysis){
         const sa = JSON.parse(savedAnalysis);
         cardState[id].analysis = sa.analysis;
@@ -5315,7 +5477,7 @@ function mountCard(game){
   // Restore depth audit from localStorage
   if(!cardState[id].pbpAudit){
     try{
-      const savedDepth = localStorage.getItem('nba4:depth:'+id);
+      const savedDepth = localStorage.getItem('ncaamb:depth:'+id);
       if(savedDepth){
         const sd = JSON.parse(savedDepth);
         cardState[id].pbpAudit = sd.pbpAudit;
@@ -5382,7 +5544,7 @@ function renderCard(game){
   const thesis=theses[id]||'', p=parseThesis(thesis);
   const xrefs=ind&&state!=='PRE'?crossRef(p,ind):[];
   const hA=game.home?.alias||'HOME', aA=game.away?.alias||'AWAY';
-  const periodLabel=state==='PRE'?'PRE':state==='FINAL'?'FINAL':({1:'1ST',2:'2ND',3:'3RD',4:'4TH',5:'OT',6:'2OT'}[game.period]||'Q'+game.period);
+  const periodLabel=state==='PRE'?'PRE':state==='FINAL'?'FINAL':({1:'1ST HALF',2:'2ND HALF',3:'OT',4:'2OT'}[game.period]||'H'+game.period);
   el.className='card'+(v?.lvl==='entry'?' ce':v?.lvl==='watch'?' cw':'');
 
   let html=`
@@ -5398,6 +5560,40 @@ function renderCard(game){
     <div style="text-align:right"><div class="srt">${esc(hA)}</div>
     <div>${game.summary?.home?.bonus?'<span class="bonus-tag">BONUS</span>':''}<span class="srs">${state==='PRE'?'—':game.homePoints??'—'}</span></div></div>
   </div>`;
+
+  // ── NET RANKINGS STRIP (NCAAMB-specific) ──
+  const aNet = getNetRanking(aA);
+  const hNet = getNetRanking(hA);
+  if(aNet || hNet){
+    const rankColor = (r) => !r ? 'var(--t3)' : r <= 25 ? 'var(--green)' : r <= 50 ? 'var(--g2)' : r <= 100 ? 'var(--yellow)' : r <= 200 ? 'var(--t2)' : 'var(--t3)';
+    const quadStr = (q) => {
+      if(!q || (!q.q1 && !q.q2)) return '';
+      return ' Q1:'+esc(q.q1||'?')+' Q2:'+esc(q.q2||'?')+' Q3:'+esc(q.q3||'?')+' Q4:'+esc(q.q4||'?');
+    };
+    html+=`<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 11px;border-bottom:1px solid var(--b1);background:rgba(147,120,230,.04)">`;
+    // Away team
+    html+=`<div style="flex:1"><span style="font-size:7px;font-weight:600;color:var(--t1)">${esc(aA)}</span> `;
+    if(aNet){
+      html+=`<span style="font-size:8px;font-weight:700;color:${rankColor(aNet.rank)}">NET #${aNet.rank||'?'}</span>`;
+      html+=`<span style="font-size:5.5px;color:var(--t3);margin-left:4px">${aNet.overallRecord||''}</span>`;
+      html+=`<span style="font-size:5px;color:var(--t3);margin-left:4px">${quadStr(aNet.quads)}</span>`;
+      if(aNet.sosRank) html+=`<span style="font-size:5px;color:var(--t3);margin-left:4px">SOS:#${aNet.sosRank}</span>`;
+    } else {
+      html+=`<span style="font-size:6px;color:var(--t3)">NET: unranked</span>`;
+    }
+    html+=`</div>`;
+    // Home team
+    html+=`<div style="flex:1;text-align:right"><span style="font-size:7px;font-weight:600;color:var(--t1)">${esc(hA)}</span> `;
+    if(hNet){
+      html+=`<span style="font-size:8px;font-weight:700;color:${rankColor(hNet.rank)}">NET #${hNet.rank||'?'}</span>`;
+      html+=`<span style="font-size:5.5px;color:var(--t3);margin-left:4px">${hNet.overallRecord||''}</span>`;
+      html+=`<span style="font-size:5px;color:var(--t3);margin-left:4px">${quadStr(hNet.quads)}</span>`;
+      if(hNet.sosRank) html+=`<span style="font-size:5px;color:var(--t3);margin-left:4px">SOS:#${hNet.sosRank}</span>`;
+    } else {
+      html+=`<span style="font-size:6px;color:var(--t3)">NET: unranked</span>`;
+    }
+    html+=`</div></div>`;
+  }
 
   if(state==='PRE'){
     const ms=new Date(game.scheduled)-new Date();
@@ -5726,7 +5922,7 @@ function renderCard(game){
       if(rw && rw.available){
         var wVerdict = rw.score>=0.90?'DOMINANT':rw.score>=0.75?'STRONG':rw.score>=0.60?'EARNED':rw.score>=0.45?'NO EDGE':'WAIT';
         html+='<div style="font-size:9px;font-weight:700;color:'+_vc(wVerdict)+'">'+rw.controlTeam+' '+rw.score.toFixed(2)+'</div>';
-        html+='<div style="font-size:5.5px;color:var(--t3)">'+rw.windowQuarters.map(function(q){return 'Q'+q;}).join('+')+' ('+Math.round(rw.windowPossessions)+' poss)</div>';
+        html+='<div style="font-size:5.5px;color:var(--t3)">'+rw.windowQuarters.map(function(q){return 'H'+q;}).join('+')+' ('+Math.round(rw.windowPossessions)+' poss)</div>';
       } else {
         html+='<div style="font-size:7px;color:var(--t3)">'+((rw&&rw.reason)||'Too early')+'</div>';
       }
@@ -5927,7 +6123,7 @@ function renderCard(game){
     html+=`</div>`;
 
     // ─── EVIDENCE VIEW TOGGLE ───
-    const pbpTs = cs.pbpTime ? 'Q'+(cs.pbpPeriod||'?')+' '+fmtTs(cs.pbpTime)+' ('+fmtAge(cs.pbpTime)+')' : '';
+    const pbpTs = cs.pbpTime ? 'H'+(cs.pbpPeriod||'?')+' '+fmtTs(cs.pbpTime)+' ('+fmtAge(cs.pbpTime)+')' : '';
     const depthBtn = `<button class="di-btn" style="background:${cs.pbpLoading?'var(--b2)':cs.pbpAudit?'rgba(0,255,136,.15)':'rgba(147,130,220,.15)'};color:${cs.pbpLoading?'var(--t3)':cs.pbpAudit?'var(--green)':'#9382dc'};font-size:6px;padding:1px 5px;margin-left:4px" onclick="event.stopPropagation();fetchPBP('${id}')" ${cs.pbpLoading?'disabled':''}>${cs.pbpLoading?'⏳ DEPTH…':cs.pbpAudit?'✓ DEPTH':'⚡ DEPTH'}</button>${pbpTs?`<span style="font-size:4px;color:var(--t3);margin-left:2px">${pbpTs}</span>`:''}`;
     html+=`<div class="ev-toggle ${cs.evCollapsed?'':'open'}" id="ev-toggle-${id}" onclick="toggleEV('${id}')">
       EVIDENCE<span style="font-size:5px;color:var(--t3);margin-left:1px">▾</span> <span class="arr">▸</span>
@@ -6193,9 +6389,9 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!paused)r
 // ══════════════════════════════════════════════════════════════════════════════
 // NTFY PUSH NOTIFICATIONS
 // ══════════════════════════════════════════════════════════════════════════════
-let ntfyTopic = localStorage.getItem('nba4:ntfy:topic') || '';
+let ntfyTopic = localStorage.getItem('ncaamb:ntfy:topic') || '';
 let ntfyEnabled = !!ntfyTopic;
-let ntfyMinEdge = parseFloat(localStorage.getItem('nba4:ntfy:minEdge')) || 3.0;
+let ntfyMinEdge = parseFloat(localStorage.getItem('ncaamb:ntfy:minEdge')) || 3.0;
 // Restore UI state
 if(ntfyEnabled){
   setTimeout(()=>{
@@ -6211,7 +6407,7 @@ function configNtfy(){
   const trimmed = topic.trim();
   if(trimmed.toLowerCase() === 'off' || trimmed === ''){
     ntfyTopic = ''; ntfyEnabled = false;
-    localStorage.removeItem('nba4:ntfy:topic');
+    localStorage.removeItem('ncaamb:ntfy:topic');
     document.getElementById('btn-ntfy').style.color='var(--t3)';
     document.getElementById('btn-ntfy').style.borderColor='var(--t3)';
     alert('Alerts disabled.');
@@ -6221,14 +6417,14 @@ function configNtfy(){
     const val = parseFloat(trimmed.substring(5));
     if(!isNaN(val) && val >= 0){
       ntfyMinEdge = val;
-      localStorage.setItem('nba4:ntfy:minEdge', String(val));
+      localStorage.setItem('ncaamb:ntfy:minEdge', String(val));
       alert('Min edge set to ' + val + '%');
     }
     return;
   }
   ntfyTopic = trimmed;
   ntfyEnabled = true;
-  localStorage.setItem('nba4:ntfy:topic', trimmed);
+  localStorage.setItem('ncaamb:ntfy:topic', trimmed);
   document.getElementById('btn-ntfy').style.color='var(--green)';
   document.getElementById('btn-ntfy').style.borderColor='var(--green)';
   // Send test notification
@@ -6269,7 +6465,7 @@ function checkNtfyAlert(game, decision){
 
   const hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
   const score = aA + ' ' + (game.awayPoints||0) + '-' + (game.homePoints||0) + ' ' + hA;
-  const qClock = game.period ? 'Q' + game.period + (game.clock ? ' ' + game.clock : '') : '';
+  const qClock = game.period ? 'H' + game.period + (game.clock ? ' ' + game.clock : '') : '';
   const edgeStr = edge !== null ? '+' + edge.toFixed(1) + '%' : '';
   const sust = decision.sustainability || '';
   const conviction = decision.conviction || '';
@@ -6285,282 +6481,6 @@ function checkNtfyAlert(game, decision){
   console.log('NTFY sent:', title, body);
 }
 
-// DEMO MODE — inject fake game for UI testing
-// ══════════════════════════════════════════════════════════════════════════
-const DEMO_ID = 'demo-game-001';
-let demoActive = false;
-
-function toggleDemo(){
-  if(demoActive){
-    // Remove demo game
-    games = games.filter(g=>g.id!==DEMO_ID);
-    delete cardState[DEMO_ID];
-    delete theses[DEMO_ID];
-    demoActive = false;
-    document.getElementById('btn-demo').style.background='transparent';
-    renderPills(); updateCounts(); renderConfidenceTable();
-    return;
-  }
-  demoActive = true;
-  document.getElementById('btn-demo').style.background='rgba(255,180,50,.15)';
-
-  // ── Fake game object — CLE trailing early, coming back structurally ──
-  const demoGame = {
-    id: DEMO_ID, status: 'inprogress',
-    scheduled: new Date().toISOString(),
-    venue: 'Demo Arena',
-    home: {id:'demo-h', name:'Cleveland Cavaliers', alias:'CLE', sr_id:'demo-h'},
-    away: {id:'demo-a', name:'Milwaukee Bucks', alias:'MIL', sr_id:'demo-a'},
-    homePoints: 46, awayPoints: 56, period: 2, clock: '3:20',
-    dataSource: 'DEMO',
-    summary: {
-      status:'inprogress', quarter:2, clock:'3:20',
-      home:{
-        name:'Cavaliers', alias:'CLE', points:46, bonus:false,
-        statistics:{
-          assists:11, turnovers:5, steals:5, blocks:3, offensive_rebounds:7,
-          field_goals_made:18, field_goals_att:36, three_points_made:3, three_points_att:10,
-          free_throws_made:7, free_throws_att:8, points_in_the_paint:22,
-          fast_break_points:9, points_off_turnovers:12, second_chance_points:7,
-          biggest_lead:2, bench_points:12, possessions:44,
-          offensive_points_per_possession:1.05, defensive_points_per_possession:1.27,
-          field_goals_at_rim_made:9, field_goals_at_rim_att:12, fouls:8,
-        },
-        players:[
-          {full_name:'Donovan Mitchell',on_court:true,starter:true,primary_position:'SG',average:{points:24.1,assists:4.5,rebounds:4.2,field_goals_made:8.5,field_goals_att:18.2,three_points_made:3.1,three_points_att:8.0,steals:1.4,usage_pct:29.5,minutes:33.5},statistics:{minutes:'18:11',points:14,assists:3,field_goals_made:5,field_goals_att:11,three_points_made:1,three_points_att:3,rebounds:2,turnovers:1,steals:2,pls_min:-5,personal_fouls:1}},
-          {full_name:'Darius Garland',on_court:true,starter:true,primary_position:'PG',average:{points:21.3,assists:6.8,rebounds:2.5,field_goals_made:7.6,field_goals_att:16.1,three_points_made:2.8,three_points_att:7.2,steals:1.1,usage_pct:26.8,minutes:32.0},statistics:{minutes:'17:44',points:10,assists:4,field_goals_made:4,field_goals_att:8,three_points_made:1,three_points_att:3,rebounds:1,turnovers:1,steals:1,pls_min:-4,personal_fouls:1}},
-          {full_name:'Evan Mobley',on_court:true,starter:true,primary_position:'PF',average:{points:18.2,assists:3.1,rebounds:9.4,field_goals_made:7.2,field_goals_att:13.5,three_points_made:0.8,three_points_att:2.2,steals:0.9,usage_pct:22.1,minutes:34.0},statistics:{minutes:'18:30',points:12,assists:2,field_goals_made:6,field_goals_att:9,three_points_made:0,three_points_att:1,rebounds:7,turnovers:1,steals:1,pls_min:-2,personal_fouls:2}},
-          {full_name:'Jarrett Allen',on_court:false,starter:true,primary_position:'C',average:{points:13.8,assists:1.5,rebounds:10.2,field_goals_made:5.8,field_goals_att:9.1,three_points_made:0.1,three_points_att:0.3,steals:0.5,usage_pct:16.2,minutes:30.0},statistics:{minutes:'14:15',points:6,assists:1,field_goals_made:3,field_goals_att:5,three_points_made:0,three_points_att:0,rebounds:5,turnovers:1,steals:0,pls_min:-6,personal_fouls:2}},
-          {full_name:'Max Strus',on_court:true,starter:true,primary_position:'SF',average:{points:11.5,assists:2.0,rebounds:3.8,field_goals_made:4.0,field_goals_att:9.5,three_points_made:2.2,three_points_att:6.1,steals:0.7,usage_pct:14.5,minutes:28.0},statistics:{minutes:'16:00',points:2,assists:1,field_goals_made:0,field_goals_att:2,three_points_made:1,three_points_att:3,rebounds:2,turnovers:0,steals:1,pls_min:-3,personal_fouls:1}},
-          {full_name:'Caris LeVert',on_court:false,starter:false,primary_position:'SG',average:{points:9.2,assists:2.5,rebounds:2.1,field_goals_made:3.4,field_goals_att:8.0,three_points_made:1.0,three_points_att:3.2,steals:0.6,usage_pct:18.0,minutes:20.0},statistics:{minutes:'8:20',points:2,assists:0,field_goals_made:0,field_goals_att:1,three_points_made:0,three_points_att:0,rebounds:1,turnovers:0,steals:0,pls_min:2,personal_fouls:1}},
-        ],
-        periods:[{number:1,scoring:{points:18}},{number:2,scoring:{points:28}}],
-      },
-      away:{
-        name:'Bucks', alias:'MIL', points:56, bonus:true,
-        statistics:{
-          assists:9, turnovers:10, steals:3, blocks:1, offensive_rebounds:3,
-          field_goals_made:21, field_goals_att:48, three_points_made:9, three_points_att:24,
-          free_throws_made:5, free_throws_att:7, points_in_the_paint:18,
-          fast_break_points:5, points_off_turnovers:7, second_chance_points:3,
-          biggest_lead:14, bench_points:10, possessions:44,
-          offensive_points_per_possession:1.27, defensive_points_per_possession:1.05,
-          field_goals_at_rim_made:5, field_goals_at_rim_att:10, fouls:11,
-        },
-        players:[
-          {full_name:'Damian Lillard',on_court:true,starter:true,primary_position:'PG',average:{points:25.8,assists:7.2,rebounds:4.5,field_goals_made:8.8,field_goals_att:19.5,three_points_made:3.2,three_points_att:9.0,steals:0.9,usage_pct:31.2,minutes:35.5},statistics:{minutes:'19:00',points:22,assists:3,field_goals_made:7,field_goals_att:17,three_points_made:5,three_points_att:11,rebounds:2,turnovers:3,steals:1,pls_min:8,personal_fouls:1}},
-          {full_name:'Bobby Portis',on_court:true,starter:true,primary_position:'PF',average:{points:14.5,assists:1.8,rebounds:8.5,field_goals_made:5.5,field_goals_att:12.0,three_points_made:1.2,three_points_att:3.8,steals:0.6,usage_pct:18.5,minutes:26.0},statistics:{minutes:'17:30',points:12,assists:1,field_goals_made:5,field_goals_att:10,three_points_made:2,three_points_att:4,rebounds:5,turnovers:2,steals:1,pls_min:5,personal_fouls:3}},
-          {full_name:'Khris Middleton',on_court:false,starter:true,primary_position:'SF',average:{points:16.2,assists:4.1,rebounds:4.8,field_goals_made:6.0,field_goals_att:14.0,three_points_made:1.8,three_points_att:5.0,steals:0.7,usage_pct:24.5,minutes:29.0},statistics:{minutes:'16:00',points:8,assists:2,field_goals_made:3,field_goals_att:8,three_points_made:1,three_points_att:3,rebounds:2,turnovers:2,steals:0,pls_min:4,personal_fouls:2}},
-          {full_name:'Taurean Prince',on_court:true,starter:true,primary_position:'SF',average:{points:8.5,assists:1.2,rebounds:3.5,field_goals_made:3.1,field_goals_att:7.5,three_points_made:1.0,three_points_att:3.5,steals:0.5,usage_pct:12.0,minutes:22.0},statistics:{minutes:'15:00',points:8,assists:1,field_goals_made:3,field_goals_att:7,three_points_made:1,three_points_att:3,rebounds:3,turnovers:2,steals:1,pls_min:2,personal_fouls:2}},
-          {full_name:'Andre Jackson',on_court:true,starter:false,primary_position:'SG',average:{points:5.2,assists:1.5,rebounds:3.8,field_goals_made:2.0,field_goals_att:4.5,three_points_made:0.5,three_points_att:1.8,steals:0.8,usage_pct:8.5,minutes:18.0},statistics:{minutes:'12:00',points:6,assists:2,field_goals_made:3,field_goals_att:6,three_points_made:0,three_points_att:3,rebounds:3,turnovers:1,steals:0,pls_min:1,personal_fouls:3}},
-        ],
-        periods:[{number:1,scoring:{points:32}},{number:2,scoring:{points:24}}],
-      },
-    },
-  };
-
-  // ── Fake thesis ──
-  theses[DEMO_ID] = `COMPACT THESIS — MIL vs CLE | 7:00 PM ET
-Feb 28 2026 | Rocket Mortgage FieldHouse
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-AVAILABILITY
-CLE  Mitchell ✅ IN | Garland ✅ IN | Mobley ✅ IN | Allen ✅ IN
-MIL  Giannis ❌ OUT | Lillard ✅ IN | Middleton ⚠️ GTD (knee)
-
-REST   CLE 2 day | MIL 1 day
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CONTROL SCORE: CLE 0.78 — Strong
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-I1  Possession & Transition  (25%)   CLE 1.0
-CLE top-5 steals + transition, MIL TO-prone without Giannis
-
-I2  Rim Pressure & Foul      (25%)   CLE 1.0
-CLE elite interior with Mobley+Allen vs MIL missing Giannis rim protection
-
-I3  Shot Quality & Creation  (20%)   CLE 0.5
-Both teams efficient creators, but MIL has Lillard pulling up from deep
-
-I4  Lineup Integrity         (20%)   CLE 1.0
-CLE full strength + deep bench vs MIL missing Giannis + Middleton limited
-
-I5  Tempo & Efficiency       (10%)   CONTESTED 0.5
-Similar pace profiles, efficiency TBD
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SHOT DIET
-CLE: Interior/Transition — season 3PT% 36.1% on 33.2 3PA/gm
-MIL: Perimeter/Creation — season 3PT% 35.8% on 37.4 3PA/gm
-
-3PT HEATER WATCHLIST
-MIL: Bobby Portis (31.2% on 3.1/gm) NON-SHOOTER, Pat Connaughton (35.8% on 4.2/gm) VOLATILE, AJ Green (36.5% on 3.8/gm) VOLATILE
-CLE: Caris LeVert (33.1% on 2.1/gm) VOLATILE, Craig Porter Jr (29.8% on 1.2/gm) NON-SHOOTER
-
-KEY FLAGS
-⚠ Giannis OUT — MIL structural ceiling severely capped
-⚠ Middleton knee — may be limited or pulled early
-✓ CLE full strength with 2 days rest
-
-MARKET: Spread CLE -8.5 | ML CLE -380 / MIL +300 | O/U 221.5
-ML THRESHOLD: CLE below -250 (71.4% MIP vs 78% FWP = 6.6%+ edge)
-
-ENTRY      CLE trails by 5+ on MIL unsustainable 3PT | OR CLE ML above -250
-PASS       MIL lead structural (LOCKED IN/DURABLE 3PT from Lillard/Middleton at normal rates) — do NOT fade
-
-CLUTCH GATE: CLE season NetRtg +0.5, L10 +44.7 (4GP 3-1) vs MIL +38.0 (4GP 4-0) contaminated — gate unlikely to fire
-
-WATCH
-1. MIL 3PT sustainability — confirms entry if MIL shooting 40%+ from 3 with 40%+ makes from Portis/Connaughton/non-shooters; denies if Lillard hitting at normal career rates
-2. CLE interior structural — confirms if Mobley+Allen paint pts + FTA on pace with 48+/16+ season norms; denies if MIL small-ball forces CLE to perimeter
-3. MIL turnover rate — confirms if MIL TO count exceeds 8 at half (season avg 14.2 w/ Giannis); denies if Lillard stabilizes ball handling below 12 pace`;
-
-  // ── Inject into games array + mount ──
-  games.unshift(demoGame);
-  mountCard(demoGame);
-
-  // ── Set up full cardState with mock data ──
-  const cs = cardState[DEMO_ID];
-
-  cs.oddsData = {homeSpread:'-6.5', homeML:'-280', awayML:'+230', total:'222'};
-  cs.enrichDone = true;
-  cs.mktCollapsed = false;
-  cs.oddsHistory = [
-    {homeSpread:'-8.5', homeML:'-380', awayML:'+300', total:'223', ts:Date.now()-7200000},
-    {homeSpread:'-6.5', homeML:'-280', awayML:'+230', total:'222', ts:Date.now()},
-  ];
-  cs._demoSummary = demoGame.summary; // preserve for re-injection after schedule refresh
-  cs.clutchData = {
-    tier:2,
-    home:{netRtg:8.2, offRtg:118.5, defRtg:110.3, gp:12, wl:'8-4', efg:54.2, ts:58.1, tovPct:11.2, pace:98.5},
-    away:{netRtg:-3.5, offRtg:108.0, defRtg:111.5, gp:10, wl:'4-6', efg:48.8, ts:52.4, tovPct:14.8, pace:100.2},
-  };
-  cs.clutchTier = 2;
-  cs.trackingData = {
-    home:{catchAndShoot:{efg:58.2,fg3pct:39.1},pullUp:{efg:48.5,fg3pct:34.2}},
-    away:{catchAndShoot:{efg:52.1,fg3pct:35.8},pullUp:{efg:44.3,fg3pct:31.5}},
-  };
-
-  cs.sonnetIndicators = {
-    I1:{score:0.80,leader:'CLE',detail:'CLE +5 TO margin, 5 steals, 12 POT + 9 FBP — generation + conversion building',sonnet:true,rawScore:0.80},
-    I2:{score:0.75,leader:'CLE',detail:'CLE 22 paint (9/12 at-rim 75%) vs MIL 18 paint (5/10). CLE 8 FTA, MIL 11 fouls',sonnet:true,rawScore:0.75},
-    I3:{score:0.50,leader:'EVEN',detail:'CLE 63% assisted (11/18 FGM) but MIL eFG% higher on Lillard pull-ups. Contested.',sonnet:true,rawScore:0.50},
-    I4:{score:0.55,leader:'CLE',detail:'MIL biggest lead 14 (Q1 heater) but CLE outscoring Q2 28-24. CLE bench 12 vs MIL 10.',sonnet:true,rawScore:0.55},
-    I5:{score:0.50,leader:'EVEN',detail:'CLE 1.05 vs MIL 1.27 pts/poss — MIL efficiency edge still holds from Q1 run',sonnet:true,rawScore:0.50},
-    score: 0.68, controlTeam: 'CLE', dataQuality: 'SONNET',
-    traj:{
-      signals:[
-        {key:'T1',text:'Role Player Heater: [MIL] Portis 2/4 from 3 (szn 31.2%) — NON-SHOOTER hot',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T2',text:'Star Process: Lillard 5/11 from 3 (43%) vs szn 35.6% — hot but pull-up heavy',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T3',text:'Quarter Delta: CLE winning Q2 28-24 while trailing overall — comeback developing',color:'var(--green)',team:'CLE',w:2},
-        {key:'T4',text:'Foul Gate: [MIL] Portis 3 fouls Q2 — CONSTRAINT / resilience LOW',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T5',text:'Interior Trend: CLE at-rim rising (5→7 att Q1→Q2)',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T6',text:'Quarter Assist Ratio: CLE Q2 ast ratio 64% vs Q1 57% — improving',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T7',text:'Closing Lineup: CLE starters 4/5 on floor',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T8',text:'Shot Diet: MIL 3PA/FGA 50% vs structural baseline 34% — MISALIGNED',color:'var(--green)',team:'CLE',w:2},
-      ],
-      lean:'CLE', count:8, total:8, tooEarly:false,
-    },
-    source:'sonnet',
-  };
-
-  cs.prediction = {
-    edge:'+1.8%', edgeNum:1.8, fwp:'72.4%', mip:'70.6%',
-    entry:'WINDOW OPEN', conviction:'EARNED',
-    sustainability:'CLE: LOCKED IN | MIL: FRAGILE',
-    leadSource:'VARIANCE', leadSourceNote:'MIL +10 lead built on 3PT variance (27 3PT pts) while CLE holds +7 structural margin (29 Paint/FT vs 23)',
-    thesisStatus:'DEVELOPING',
-    teamQuality:'CLE 44-16 full strength, top-3 East | MIL 32-28 missing Giannis, Middleton limited',
-    clutch:'CLEAR — CLE +8.2 L10 NetRtg vs MIL -3.5',
-    prediction:'CLE structural edge building. MIL Q1 lead variance-sourced — Lillard 5/11 from 3 + Portis 2/4 as non-shooter. CLE Q2 interior pivot underway. Monitor Q3 for confirmation.',
-    signalType:'BUY CLE', signalNote:'CLE structural floor 0.68 + arrows show INTERIOR PIVOT developing — early window on MIL variance lead', buyTeam:'CLE',
-    spreadAnalysis:'CLE -6.5 moved from -8.5 on MIL Q1 run — value emerging if structural trend holds through halftime',
-    homeValue:{team:'CLE', fwp:72.4, mip:70.6, edge:1.8, ml:'-280', spread:'-6.5'},
-    awayValue:{team:'MIL', fwp:27.6, mip:29.4, edge:-1.8, ml:'+230', spread:'+6.5'},
-  };
-  cs.sustainabilityAudit = {
-    home:{teamAlias:'CLE',live3PM:3,live3PA:10,live3Pct:'30.0',seasonPrior:'36.1',gotSeasonData:true,deviation:'-6.1',personnelGrade:'N/A (below baseline)',personnelDetails:[],elitePct:'0',nonPct:'0',posteriorMean:'34.5',regressionPull:'0',regressionProb:10,regressionGrade:'MINIMAL',shotTypeGrade:'DURABLE',shotTypeNote:'High ast% (61%)',assistRatio:'61',composite:'0.00',tier:'LOCKED IN'},
-    away:{teamAlias:'MIL',live3PM:9,live3PA:24,live3Pct:'37.5',seasonPrior:'35.2',gotSeasonData:true,deviation:'2.3',personnelGrade:'FRAGILE',personnelDetails:[{name:'Damian Lillard',live3m:5,live3a:11,livePct:'45',sznPct:35.6,sznVol:9.0,sznStr:'35.6% (9.0/gm)',tier:'average',tierLabel:'AVERAGE',hot:true},{name:'Bobby Portis',live3m:2,live3a:4,livePct:'50',sznPct:31.2,sznVol:3.8,sznStr:'31.2% (3.8/gm)',tier:'non',tierLabel:'NON-SHOOTER',hot:true}],elitePct:'0',nonPct:'33',posteriorMean:'35.8',regressionPull:'38',regressionProb:55,regressionGrade:'MODERATE',shotTypeGrade:'FRAGILE',shotTypeNote:'Low ast% (43%) + Lillard pull-up heavy',assistRatio:'43',composite:'1.35',tier:'FRAGILE'},
-  };
-
-  // ── Lead Composition (matches Q2 game summary stats) ──
-  cs.leadComposition = {
-    home:{team:'CLE',total:46,paint:22,ft:7,three:9,midOther:8,transition:9,pot:12,secondChance:7,structural:29,variance:17,structuralPct:63,variancePct:37},
-    away:{team:'MIL',total:56,paint:18,ft:5,three:27,midOther:6,transition:5,pot:7,secondChance:3,structural:23,variance:33,structuralPct:41,variancePct:59},
-    margin:-10, absMargin:10, leadTeam:'MIL', trailTeam:'CLE',
-    structuralMargin:6, varianceMargin:-16,
-    durability:'MIL lead is VOLATILE — perimeter production FRAGILE. Structural favors CLE (+6). Entry signal for trailing team.',
-    classification:'VOLATILE',
-  };
-
-  cs.edgeHistory = [
-    {time:'7:05 PM',period:1,edge:'-2.1%',edgeNum:-2.1,fwp:'55.2%',control:'CLE',score:'MIL 32-CLE 18'},
-    {time:'7:20 PM',period:2,edge:'+1.8%',edgeNum:1.8,fwp:'72.4%',control:'CLE',score:'MIL 56-CLE 46'},
-  ];
-
-  cs.analysisHistory = [
-    {time:'7:05 PM',period:'1',clock:'1:30',score:'MIL 32-CLE 18',controlTeam:'CLE',controlScore:0.55,verdict:'NO EDGE',entry:'NO WINDOW',conviction:'CONDITIONAL',signal:'PASS',buyTeam:null,leadTeam:'MIL',trailTeam:'CLE',leadSust:'MIXED',trailSust:'LOCKED IN',thesisStatus:'CONTESTED',keyRead:'MIL Q1 explosion on Lillard 5/6 from 3 + Portis heater. Divergence gate TRIGGERED.',fwp:'55.2%',edge:'-2.1%'},
-    {time:'7:20 PM',period:'2',clock:'3:20',score:'MIL 56-CLE 46',controlTeam:'CLE',controlScore:0.68,verdict:'EARNED',entry:'WINDOW OPEN',conviction:'EARNED',signal:'BUY CLE',buyTeam:'CLE',leadTeam:'MIL',trailTeam:'CLE',leadSust:'FRAGILE',trailSust:'LOCKED IN',thesisStatus:'DEVELOPING',keyRead:'CLE outscoring MIL 28-24 in Q2. Arrows: INTERIOR PIVOT (paint ▲ at-rim ▲ FTA ▲ 3PA% ▼). MIL lead VARIANCE SOURCED.',fwp:'72.4%',edge:'+1.8%'},
-  ];
-
-  // Build baselines from demo player averages
-  const bl = buildPlayerBaselines(demoGame);
-  if(bl){ cs.baselines = bl; console.log('DEMO baselines:', bl.built, 'stars:', bl.stars); }
-  cs.divergences = [];
-  cs.clientInd = null;
-  cs.clientIndAtAnalysis = computeAny(demoGame);
-  cs.analysisTime = new Date();
-
-  // ── Demo rolling window architecture data (Q2 — early read) ──
-  cs.quarterSnapshots = {
-    boundaries: {
-      0: {ts:Date.now()-3600000, home:{points_in_the_paint:0,fast_break_points:0,points_off_turnovers:0,second_chance_points:0,possessions:0,field_goals_at_rim_att:0,field_goals_at_rim_made:0,steals:0,turnovers:0,free_throws_att:0,assists:0,field_goals_made:0,field_goals_att:0,three_points_made:0,three_points_att:0}, away:{points_in_the_paint:0,fast_break_points:0,points_off_turnovers:0,second_chance_points:0,possessions:0,field_goals_at_rim_att:0,field_goals_at_rim_made:0,steals:0,turnovers:0,free_throws_att:0,assists:0,field_goals_made:0,field_goals_att:0,three_points_made:0,three_points_att:0}},
-      1: {ts:Date.now()-1800000, home:{points_in_the_paint:8,fast_break_points:3,points_off_turnovers:4,second_chance_points:2,possessions:22,field_goals_at_rim_att:5,field_goals_at_rim_made:3,steals:2,turnovers:3,free_throws_att:2,assists:4,field_goals_made:7,field_goals_att:18,three_points_made:2,three_points_att:6,points:18}, away:{points_in_the_paint:10,fast_break_points:4,points_off_turnovers:5,second_chance_points:2,possessions:23,field_goals_at_rim_att:5,field_goals_at_rim_made:3,steals:3,turnovers:4,free_throws_att:3,assists:5,field_goals_made:12,field_goals_att:22,three_points_made:5,three_points_att:12,points:32}},
-    },
-    quarters: {
-      1: {home:{points_in_the_paint:8,fast_break_points:3,points_off_turnovers:4,second_chance_points:2,possessions:22,field_goals_at_rim_att:5,field_goals_at_rim_made:3,steals:2,turnovers:3,free_throws_att:2,assists:4,field_goals_made:7,field_goals_att:18,three_points_made:2,three_points_att:6,points:18,efg:0.444,assist_ratio:57.1,fg3a_share:33.3}, away:{points_in_the_paint:10,fast_break_points:4,points_off_turnovers:5,second_chance_points:2,possessions:23,field_goals_at_rim_att:5,field_goals_at_rim_made:3,steals:3,turnovers:4,free_throws_att:3,assists:5,field_goals_made:12,field_goals_att:22,three_points_made:5,three_points_att:12,points:32,efg:0.659,assist_ratio:41.7,fg3a_share:54.5}, source:'snapshot',partial:false},
-      2: {home:{points_in_the_paint:14,fast_break_points:6,points_off_turnovers:8,second_chance_points:5,possessions:22,field_goals_at_rim_att:7,field_goals_at_rim_made:6,steals:3,turnovers:2,free_throws_att:6,assists:7,field_goals_made:11,field_goals_att:18,three_points_made:1,three_points_att:4,points:28,efg:0.639,assist_ratio:63.6,fg3a_share:22.2}, away:{points_in_the_paint:8,fast_break_points:1,points_off_turnovers:2,second_chance_points:1,possessions:21,field_goals_at_rim_att:5,field_goals_at_rim_made:2,steals:0,turnovers:6,free_throws_att:4,assists:4,field_goals_made:9,field_goals_att:26,three_points_made:4,three_points_att:12,points:24,efg:0.423,assist_ratio:44.4,fg3a_share:46.2}, source:'snapshot',partial:true},
-    },
-    lastSnapshotPeriod: 1, backfillNeeded: [], backfillDone: false,
-  };
-
-  // Window TOO EARLY in Q2
-  cs.rollingWindow = { available:false, reason:'TOO EARLY' };
-
-  // No gap log yet (window not active)
-  cs.gapLog = [];
-  cs.acceleration = {accel:'TOO EARLY',entries:[],consecutive:0};
-
-  // Arrows fire with Q1 + partial Q2 data (2 data points)
-  cs.subMetricArrows = {
-    home:{
-      paint:{arrow:'RISING',values:[8,14],display:'▲ (8→14)',label:'Paint pts',indicator:'I2',structural:true},
-      atRim:{arrow:'RISING',values:[5,7],display:'▲ (5→7)',label:'At-rim att',indicator:'I2',structural:true},
-      fta:{arrow:'RISING',values:[2,6],display:'▲ (2→6)',label:'FTA',indicator:'I2',structural:true},
-      steals:{arrow:'RISING',values:[2,3],display:'▲ (2→3)',label:'Steals',indicator:'I1',structural:true},
-      tos:{arrow:'FALLING',values:[3,2],display:'▼ (3→2)',label:'TOs',indicator:'I1',structural:false},
-      fg3aShare:{arrow:'FALLING',values:[33,22],display:'▼ (33%→22%)',label:'3PA%',indicator:'I3',structural:false},
-      astRatio:{arrow:'RISING',values:[57,64],display:'▲ (57%→64%)',label:'Ast ratio',indicator:'I3',structural:true},
-      poss:{arrow:'FLAT',values:[22,22],display:'▬ (22→22)',label:'Poss',indicator:'I5',structural:true},
-    },
-    away:{
-      paint:{arrow:'FALLING',values:[10,8],display:'▼ (10→8)',label:'Paint pts',indicator:'I2',structural:true},
-      atRim:{arrow:'FLAT',values:[5,5],display:'▬ (5→5)',label:'At-rim att',indicator:'I2',structural:true},
-      fta:{arrow:'FLAT',values:[3,4],display:'▬ (3→4)',label:'FTA',indicator:'I2',structural:true},
-      steals:{arrow:'FALLING',values:[3,0],display:'▼ (3→0)',label:'Steals',indicator:'I1',structural:true},
-      tos:{arrow:'RISING',values:[4,6],display:'▲ (4→6)',label:'TOs',indicator:'I1',structural:false},
-      fg3aShare:{arrow:'FLAT',values:[55,46],display:'▬ (55%→46%)',label:'3PA%',indicator:'I3',structural:false},
-      astRatio:{arrow:'FLAT',values:[42,44],display:'▬ (42%→44%)',label:'Ast ratio',indicator:'I3',structural:true},
-      poss:{arrow:'FLAT',values:[23,21],display:'▬ (23→21)',label:'Poss',indicator:'I5',structural:true},
-    },
-  };
-  cs.adjustment = {signal:'INTERIOR PIVOT',note:'CLE progressive rim pressure + falling 3PA share (Q1→Q2 early)',risingStructural:3,fallingVariance:1,team:'CLE'};
-  cs.combinedRead = {read:'TOO EARLY',note:'Window activates Q3 — arrows show early directional reads'};
-
-  renderPills(); updateCounts();
-  // Select the demo pill
-  selIds = [DEMO_ID];
-  renderPills();
-  renderCard(demoGame);
-  renderConfidenceTable();
-}
 
 </script>
 </body>
