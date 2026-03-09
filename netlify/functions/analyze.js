@@ -689,12 +689,18 @@ exports.handler = async function(event) {
     var windowSection = '';
     if (rollingWindow) {
       if (rollingWindow.available) {
-        windowSection = '\nROLLING WINDOW (' + rollingWindow.windowQuarters.map(function(q){return 'Q'+q;}).join('+') + ', ' + (rollingWindow.windowPossessions||'?') + ' poss):\n';
+        var windowLabel = rollingWindow.possessionBased
+          ? 'Last ' + rollingWindow.windowPossessions + ' possessions, ' + (rollingWindow.timeSpanMin||0).toFixed(1) + ' min'
+          : rollingWindow.windowQuarters.map(function(q){return 'Q'+q;}).join('+') + ', ' + (rollingWindow.windowPossessions||'?') + ' poss';
+        windowSection = '\nROLLING WINDOW (' + windowLabel + '):\n';
         windowSection += 'Control: ' + rollingWindow.controlTeam + ' ' + rollingWindow.score.toFixed(2) + '\n';
         ['I1','I2','I3','I4','I5'].forEach(function(k) {
           var ind = rollingWindow[k];
-          if (ind) windowSection += '  ' + k + ': ' + ind.score.toFixed(1) + ' — ' + (ind.detail||'') + '\n';
+          if (ind) windowSection += '  ' + k + ': ' + ind.score.toFixed(1) + ' \u2014 ' + (ind.detail||'') + '\n';
         });
+        if (rollingWindow.possessionBased && rollingWindow.enrichSummary) {
+          windowSection += '\nWINDOW INSIGHTS:\n' + rollingWindow.enrichSummary;
+        }
         windowSection += 'Data quality: ' + (rollingWindow.dataQuality||'?') + (rollingWindow.missingFields && rollingWindow.missingFields.length > 0 ? ' (missing: ' + rollingWindow.missingFields.join(', ') + ')' : '') + '\n';
       } else {
         windowSection = '\nROLLING WINDOW: ' + (rollingWindow.reason || 'TOO EARLY') + '\n';
