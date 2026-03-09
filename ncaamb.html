@@ -1273,7 +1273,12 @@ async function triggerAnalysis(game){
         analysisHistory: cs.analysisHistory && cs.analysisHistory.length > 0 ? cs.analysisHistory : null,
         trackingData: cs.trackingData || null,
         pbpAudit: cs.pbpAudit ? {home:cs.pbpAudit.home, away:cs.pbpAudit.away, homeAlias:cs.pbpAudit.homeAlias, awayAlias:cs.pbpAudit.awayAlias, runs:cs.pbpAudit.runs, pbpPeriod:cs.pbpPeriod, pbpAge:cs.pbpTime?Math.round((Date.now()-cs.pbpTime.getTime())/60000):null} : null,
-        rollingWindow: cs.rollingWindow || null,
+        rollingWindow: cs.rollingWindow ? (function(rw){
+          var slim = {available:rw.available, score:rw.score, controlTeam:rw.controlTeam, windowQuarters:rw.windowQuarters, windowPossessions:rw.windowPossessions, dataQuality:rw.dataQuality, missingFields:rw.missingFields, possessionBased:rw.possessionBased, timeSpanMin:rw.timeSpanMin, pace:rw.pace, hPPP:rw.hPPP, aPPP:rw.aPPP};
+          if(rw.I1) slim.I1=rw.I1; if(rw.I2) slim.I2=rw.I2; if(rw.I3) slim.I3=rw.I3; if(rw.I4) slim.I4=rw.I4; if(rw.I5) slim.I5=rw.I5;
+          if(rw.enrichSummary) slim.enrichSummary=rw.enrichSummary;
+          return slim;
+        })(cs.rollingWindow) : null,
         acceleration: cs.acceleration || null,
         subMetricArrows: cs.subMetricArrows || null,
         adjustment: cs.adjustment || null,
@@ -5835,7 +5840,7 @@ function renderCard(game){
           html+='<div style="display:grid;grid-template-columns:42px 1fr 1fr 1fr 52px 52px;gap:2px;padding:3px 2px;border-radius:3px;margin-bottom:1px;'+(isHigherFwp?'background:rgba(0,200,83,.08);border-left:2px solid var(--green)':'border-left:2px solid transparent')+'">';
           html+='<span style="font-size:9px;font-weight:700;color:'+(isHigherFwp?'var(--t1)':'var(--t3)')+'">'+esc(rv.team)+'</span>';
           html+='<span style="font-size:10px;font-weight:600;color:'+tColor+';text-align:center">'+rv.fwp.toFixed(0)+'%</span>';
-          html+='<span style="font-size:10px;color:'+(isHigherFwp?'var(--t2)':'var(--t3)')+';text-align:center">'+rv.mip.toFixed(1)+'%</span>';
+          html+='<span style="font-size:10px;color:'+(isHigherFwp?'var(--t2)':'var(--t3)')+';text-align:center">'+(rv.mip!=null?rv.mip.toFixed(1)+'%':'N/A')+'</span>';
           html+='<span style="font-size:10px;font-weight:700;color:'+eColor+';text-align:center">'+(rv.edge>=0?'+':'')+rv.edge.toFixed(1)+'%</span>';
           html+='<span style="font-size:9px;color:'+(isHigherFwp?'var(--t2)':'var(--t3)')+';text-align:center">'+esc(String(rv.ml))+'</span>';
           html+='<span style="font-size:9px;color:'+(isHigherFwp?'var(--t2)':'var(--t3)')+';text-align:center">'+esc(String(rv.spread))+'</span>';
