@@ -1987,6 +1987,110 @@ function buildPossessionLog(timeline, hA, aA){
   return log;
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// POSSESSION-BASED ROLLING WINDOW (Phase 2 — NCAAMB: 17 poss, halves clock)
+// ══════════════════════════════════════════════════════════════════════════════
+function computePossessionWindow(game, windowSize){
+  var cs = cardState[game.id]; if(!cs) return null;
+  var possLog = cs.pbpAudit?.possessionLog;
+  if(!possLog || possLog.length < windowSize) return {available:false, reason: possLog ? 'TOO EARLY ('+possLog.length+'/'+windowSize+' poss)' : 'No PBP data'};
+  var hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
+  var win = possLog.slice(-windowSize);
+  var hP = win.filter(function(p){return p.team===hA;}), aP = win.filter(function(p){return p.team===aA;});
+
+  var hTO=0,aTO=0,hStl=0,aStl=0,hOreb=0,aOreb=0,hTrans=0,aTrans=0;
+  hP.forEach(function(p){hTO+=p.turnovers.length;hStl+=p.steals;p.rebounds.forEach(function(r){if(r.type==='offensive')hOreb++;});p.shots.forEach(function(s){if(s.context==='transition')hTrans++;});});
+  aP.forEach(function(p){aTO+=p.turnovers.length;aStl+=p.steals;p.rebounds.forEach(function(r){if(r.type==='offensive')aOreb++;});p.shots.forEach(function(s){if(s.context==='transition')aTrans++;});});
+  var hGen=hStl+hOreb-hTO, aGen=aStl+aOreb-aTO;
+  var i1=(hGen>aGen?1:hGen<aGen?-1:0); if(hTrans>0||aTrans>0) i1+=(hTrans>aTrans?1:hTrans<aTrans?-1:0);
+  var wI1={score:i1>0?1:i1===0?.5:0, detail:'Gen:'+hGen+'\u2013'+aGen+' Stl:'+hStl+'\u2013'+aStl+' TO:'+hTO+'\u2013'+aTO+' Trans:'+hTrans+'\u2013'+aTrans};
+
+  var hFTA=0,aFTA=0,hBlk=0,aBlk=0,hPaintT=0,aPaintT=0,hRimS=0,aRimS=0,hFouls=0,aFouls=0;
+  hP.forEach(function(p){hFTA+=p.ftAttempts;hBlk+=p.blocks;if(p.paintTouch)hPaintT++;p.fouls.forEach(function(f){if(f.type==='personal')aFouls++;});});
+  aP.forEach(function(p){aFTA+=p.ftAttempts;aBlk+=p.blocks;if(p.paintTouch)aPaintT++;p.fouls.forEach(function(f){if(f.type==='personal')hFouls++;});});
+  hP.forEach(function(p){p.shots.forEach(function(s){if(s.zone==='rim'||s.zone==='paint')hRimS++;});});
+  aP.forEach(function(p){p.shots.forEach(function(s){if(s.zone==='rim'||s.zone==='paint')aRimS++;});});
+  var rimScore=(hPaintT+hFTA+hBlk)-(aPaintT+aFTA+aBlk);
+  var wI2={score:rimScore>3?1:rimScore<-3?0:.5, detail:'PntTch:'+hPaintT+'\u2013'+aPaintT+' FTA:'+hFTA+'\u2013'+aFTA+' Blk:'+hBlk+'\u2013'+aBlk+' Rim:'+hRimS+'\u2013'+aRimS};
+
+  var hFGM=0,aFGM=0,hFGA=0,aFGA=0,h3PM=0,a3PM=0,h3PA=0,a3PA=0,hAst=0,aAst=0;
+  hP.forEach(function(p){hAst+=p.assists;p.shots.forEach(function(s){hFGA++;if(s.made)hFGM++;if(s.is3){h3PA++;if(s.made)h3PM++;}});});
+  aP.forEach(function(p){aAst+=p.assists;p.shots.forEach(function(s){aFGA++;if(s.made)aFGM++;if(s.is3){a3PA++;if(s.made)a3PM++;}});});
+  var hEFG=hFGA>0?(hFGM+0.5*h3PM)/hFGA:0, aEFG=aFGA>0?(aFGM+0.5*a3PM)/aFGA:0;
+  var hAR=hFGM>0?(hAst/hFGM)*100:0, aAR=aFGM>0?(aAst/aFGM)*100:0;
+  var i3=(hEFG>aEFG+.03?1:hEFG<aEFG-.03?-1:0)+(hAR>aAR+8?1:hAR<aAR-8?-1:0);
+  var wI3={score:i3>0?1:i3===0?.5:0, detail:'eFG:'+(hEFG*100).toFixed(0)+'\u2013'+(aEFG*100).toFixed(0)+' AR:'+hAR.toFixed(0)+'\u2013'+aAR.toFixed(0)+' Ast:'+hAst+'\u2013'+aAst};
+
+  var hPts=0,aPts=0; hP.forEach(function(p){hPts+=p.points;}); aP.forEach(function(p){aPts+=p.points;});
+  var pDiff=hPts-aPts;
+  var hLU={},aLU={}; win.forEach(function(p){if(p.onCourt){var hk=(p.onCourt.home||[]).slice().sort().join(',');var ak=(p.onCourt.away||[]).slice().sort().join(',');if(hk)hLU[hk]=1;if(ak)aLU[ak]=1;}});
+  var hLineups=Object.keys(hLU).length, aLineups=Object.keys(aLU).length;
+  var i4=(Math.abs(pDiff)>3?(pDiff>0?1:-1):0);
+  if(hLineups>0&&aLineups>0) i4+=(hLineups<aLineups-1?0.5:hLineups>aLineups+1?-0.5:0);
+  var wI4={score:i4>0?1:i4===0?.5:0, detail:'Window \u0394:'+(pDiff>0?'+':'')+pDiff+' Lineups:'+hLineups+'\u2013'+aLineups};
+
+  var hPPP=hP.length>0?hPts/hP.length:0, aPPP=aP.length>0?aPts/aP.length:0, effD=hPPP-aPPP;
+  var timeSpanMin=0;
+  if(win.length>=2&&win[0].startClock&&win[win.length-1].endClock){
+    // NCAAMB: 2×20 min halves
+    var pc=function(c,q){if(!c)return 0;var p=c.split(':');var m=(parseInt(p[0])||0)+(parseInt(p[1])||0)/60;return(q-1)*20+(20-m);};
+    timeSpanMin=Math.max(0.5,pc(win[win.length-1].endClock,win[win.length-1].quarter)-pc(win[0].startClock,win[0].quarter));
+  }
+  var pace=timeSpanMin>0?(windowSize/timeSpanMin)*40:0; // per 40 min (NCAAMB game length)
+  var wI5={score:effD>.05?1:effD<-.05?0:.5, detail:'PPP:'+hPPP.toFixed(2)+'\u2013'+aPPP.toFixed(2)+' Pace:'+pace.toFixed(0)+' ('+timeSpanMin.toFixed(1)+'min)'};
+
+  var W={I1:.25,I2:.25,I3:.20,I4:.20,I5:.10};
+  var raw=wI1.score*W.I1+wI2.score*W.I2+wI3.score*W.I3+wI4.score*W.I4+wI5.score*W.I5;
+  var controlHome=raw>=0.5, score=controlHome?raw:1-raw, controlTeam=controlHome?hA:aA;
+
+  // ── PHASE 3 ENRICHMENTS ──
+  var hResults={made_2pt:0,made_3pt:0,made_ft:0,miss:0,turnover:0}, aResults={made_2pt:0,made_3pt:0,made_ft:0,miss:0,turnover:0};
+  win.forEach(function(p){ var b=p.team===hA?hResults:aResults; if(p.result&&b[p.result]!==undefined) b[p.result]++; });
+  var hSR=hP.length>0?((hResults.made_2pt+hResults.made_3pt+hResults.made_ft)/hP.length*100).toFixed(0):'0';
+  var aSR=aP.length>0?((aResults.made_2pt+aResults.made_3pt+aResults.made_ft)/aP.length*100).toFixed(0):'0';
+  var stealVictims={}; win.forEach(function(p){ if(p.result!=='turnover')return; var toP=null,stP=null;
+    p.events.forEach(function(ev){if(ev.type==='turnover')toP=ev.player;if(ev.type==='steal')stP=ev.steal?.stealer||ev.player;});
+    if(toP&&toP!=='?'){if(!stealVictims[toP])stealVictims[toP]={count:0,stealers:[],team:null};stealVictims[toP].count++;if(stP)stealVictims[toP].stealers.push(stP);
+    p.events.forEach(function(ev){if(ev.type==='turnover')stealVictims[toP].team=ev.team;});}
+  });
+  var repeatedVictims=[]; Object.keys(stealVictims).forEach(function(n){var v=stealVictims[n];if(v.count>=2)repeatedVictims.push({player:n,team:v.team,count:v.count,stealers:v.stealers});});
+  repeatedVictims.sort(function(a,b){return b.count-a.count;});
+  var playerFouls={}; win.forEach(function(p){p.fouls.forEach(function(f){var n=f.player||'?';if(!playerFouls[n])playerFouls[n]={count:0,team:null};playerFouls[n].count++;
+    playerFouls[n].team=f.type==='offensive'?p.team:(p.team===hA?aA:hA);});});
+  var foulTrouble=[]; Object.keys(playerFouls).forEach(function(n){var pf=playerFouls[n];if(pf.count>=2)foulTrouble.push({player:n,team:pf.team,count:pf.count});});
+  foulTrouble.sort(function(a,b){return b.count-a.count;});
+  var luStats={}; win.forEach(function(p){if(!p.onCourt)return;var side=p.team===hA?'home':'away';var pl=(p.onCourt[side]||[]).slice().sort();if(pl.length<5)return;var k=pl.join(',');
+    if(!luStats[k])luStats[k]={team:p.team,players:pl,poss:0,pts:0,ptsA:0};luStats[k].poss++;luStats[k].pts+=p.points;});
+  win.forEach(function(p){if(!p.onCourt)return;var dSide=p.team===hA?'away':'home';var dp=(p.onCourt[dSide]||[]).slice().sort();if(dp.length<5)return;var k=dp.join(',');if(luStats[k])luStats[k].ptsA+=p.points;});
+  var lineupRatings=[]; Object.keys(luStats).forEach(function(k){var lu=luStats[k];if(lu.poss<3)return;var net=((lu.pts-lu.ptsA)/lu.poss)*100;
+    var short=lu.players.map(function(n){var s=n.split(' ');return s.length>1?s[s.length-1]:n;});
+    lineupRatings.push({team:lu.team,players:short,poss:lu.poss,netRtg:net});});
+  lineupRatings.sort(function(a,b){return b.netRtg-a.netRtg;});
+  var shotCtx={home:{},away:{}}; win.forEach(function(p){var s=p.team===hA?'home':'away';p.shots.forEach(function(sh){var c=sh.context||'halfcourt';if(!shotCtx[s][c])shotCtx[s][c]={att:0,made:0};shotCtx[s][c].att++;if(sh.made)shotCtx[s][c].made++;});});
+  var hPaintRate=hP.length>0?(hPaintT/hP.length*100).toFixed(0):'0', aPaintRate=aP.length>0?(aPaintT/aP.length*100).toFixed(0):'0';
+  var enrichSummary='Scoring rate: '+hA+' '+hSR+'% / '+aA+' '+aSR+'%\n';
+  enrichSummary+='Paint touch rate: '+hA+' '+hPaintRate+'% / '+aA+' '+aPaintRate+'%\n';
+  enrichSummary+='Results '+hA+': 2pt='+hResults.made_2pt+' 3pt='+hResults.made_3pt+' FT='+hResults.made_ft+' miss='+hResults.miss+' TO='+hResults.turnover+'\n';
+  enrichSummary+='Results '+aA+': 2pt='+aResults.made_2pt+' 3pt='+aResults.made_3pt+' FT='+aResults.made_ft+' miss='+aResults.miss+' TO='+aResults.turnover+'\n';
+  if(repeatedVictims.length>0){enrichSummary+='TO VICTIMS: ';repeatedVictims.forEach(function(v){enrichSummary+=v.player+'('+v.team+') '+v.count+'x ';});enrichSummary+='\n';}
+  if(foulTrouble.length>0){enrichSummary+='FOUL TROUBLE: ';foulTrouble.forEach(function(f){enrichSummary+=f.player+'('+f.team+') '+f.count+'f ';});enrichSummary+='\n';}
+  if(lineupRatings.length>0){enrichSummary+='LINEUP NET RTG: ';lineupRatings.slice(0,3).forEach(function(lu){enrichSummary+=lu.team+' ['+lu.players.join('/')+'] '+(lu.netRtg>=0?'+':'')+lu.netRtg.toFixed(0)+'/100('+lu.poss+'p) ';});enrichSummary+='\n';}
+
+  return {
+    available:true, windowQuarters:['P'+windowSize], windowPossessions:windowSize,
+    home:{points:hPts,fga:hFGA,fgm:hFGM,three_att:h3PA,three_made:h3PM,fta:hFTA,assists:hAst,turnovers:hTO,steals:hStl,blocks:hBlk,oreb:hOreb,fouls:hFouls,paintTouch:hPaintT,possCount:hP.length},
+    away:{points:aPts,fga:aFGA,fgm:aFGM,three_att:a3PA,three_made:a3PM,fta:aFTA,assists:aAst,turnovers:aTO,steals:aStl,blocks:aBlk,oreb:aOreb,fouls:aFouls,paintTouch:aPaintT,possCount:aP.length},
+    I1:wI1, I2:wI2, I3:wI3, I4:wI4, I5:wI5,
+    score:score, controlTeam:controlTeam,
+    dataQuality:'PBP', missingFields:[], possessionBased:true,
+    timeSpanMin:timeSpanMin, pace:pace, hPPP:hPPP, aPPP:aPPP,
+    possResults:{home:hResults,away:aResults}, scoringRate:{home:hSR,away:aSR},
+    paintTouchRate:{home:hPaintRate,away:aPaintRate}, repeatedVictims:repeatedVictims,
+    foulTrouble:foulTrouble, lineupRatings:lineupRatings.slice(0,5),
+    shotContexts:shotCtx, enrichSummary:enrichSummary,
+  };
+}
+
 // Convert any image (including HEIC) to compressed JPEG for Sonnet vision
 function compressImage(file, maxW, quality){
   return new Promise((res, rej) => {
@@ -3191,7 +3295,11 @@ function compute(game){
   if(clientLC) cardState[game.id].clientLeadComposition = clientLC;
 
   // Rolling window
-  const windowResult = computeRollingWindow(game);
+  // Rolling window — possession-based primary (17 poss for NCAAMB), quarter-based fallback
+  var windowResult = computePossessionWindow(game, 17);
+  if(!windowResult || !windowResult.available){
+    windowResult = computeRollingWindow(game);
+  }
   cardState[game.id].rollingWindow = windowResult;
 
   // Gap acceleration
@@ -5879,7 +5987,7 @@ function renderCard(game){
       if(rw && rw.available){
         var wVerdict = rw.score>=0.90?'DOMINANT':rw.score>=0.75?'STRONG':rw.score>=0.60?'EARNED':rw.score>=0.45?'NO EDGE':'WAIT';
         html+='<div style="font-size:9px;font-weight:700;color:'+_vc(wVerdict)+'">'+rw.controlTeam+' '+rw.score.toFixed(2)+'</div>';
-        html+='<div style="font-size:5.5px;color:var(--t3)">'+rw.windowQuarters.map(function(q){return 'H'+q;}).join('+')+' ('+Math.round(rw.windowPossessions)+' poss)</div>';
+        html+='<div style="font-size:5.5px;color:var(--t3)">'+(rw.possessionBased ? 'Last '+rw.windowPossessions+' poss'+(rw.timeSpanMin?' ('+rw.timeSpanMin.toFixed(1)+'min)':'') : rw.windowQuarters.map(function(q){return 'H'+q;}).join('+')+' ('+Math.round(rw.windowPossessions)+' poss)')+'</div>';
       } else {
         html+='<div style="font-size:7px;color:var(--t3)">'+((rw&&rw.reason)||'Too early')+'</div>';
       }
