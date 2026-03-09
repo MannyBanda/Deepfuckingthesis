@@ -323,8 +323,8 @@ exports.handler = async function(event) {
       // -- pull_up
       try {
         var puResults = await Promise.all([
-          bdlFetch('/nba/v1/team_season_averages/shotdashboard?team_id=' + homeId + '&season=' + s + '&season_type=regular&type=pull_up', apiKey),
-          bdlFetch('/nba/v1/team_season_averages/shotdashboard?team_id=' + awayId + '&season=' + s + '&season_type=regular&type=pull_up', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/shotdashboard?team_id=' + homeId + '&season=' + s + '&season_type=regular&type=pullups', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/shotdashboard?team_id=' + awayId + '&season=' + s + '&season_type=regular&type=pullups', apiKey),
         ]);
         var hPU = extractStats(puResults[0]);
         var aPU = extractStats(puResults[1]);
