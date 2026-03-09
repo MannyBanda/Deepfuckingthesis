@@ -384,7 +384,7 @@ function persistConfRow(gameId, rowData){try{confCache[gameId]=rowData;localStor
 function persistTracking(id,cs){try{localStorage.setItem('nba4:tracking:'+id,JSON.stringify(cs.trackingData));}catch(e){console.warn('Tracking persist failed:',e.message);}}
 function persistStructural(id,cs){try{localStorage.setItem('nba4:structural:'+id,JSON.stringify(cs.structural));}catch(e){console.warn('Structural persist failed:',e.message);}}
 function persistAnalysis(id,cs){try{localStorage.setItem('nba4:analysis:'+id,JSON.stringify({analysis:cs.analysis,analysisTime:cs.analysisTime?cs.analysisTime.getTime():null,sonnetIndicators:cs.sonnetIndicators,prediction:cs.prediction,sustainabilityAudit:cs.sustainabilityAudit,analysisHistory:cs.analysisHistory||[],edgeHistory:cs.edgeHistory||[],clientIndAtAnalysis:cs.clientIndAtAnalysis}));}catch(e){console.warn('Analysis persist failed:',e.message);}}
-function persistDepth(id,cs){try{localStorage.setItem('nba4:depth:'+id,JSON.stringify({pbpAudit:cs.pbpAudit,pbpTime:cs.pbpTime?cs.pbpTime.getTime():null,pbpPeriod:cs.pbpPeriod}));}catch(e){console.warn('Depth persist failed:',e.message);}}
+function persistDepth(id,cs){try{var _audit=cs.pbpAudit;if(_audit){var _slim={home:_audit.home,away:_audit.away,homeAlias:_audit.homeAlias,awayAlias:_audit.awayAlias,totalShots:_audit.totalShots,totalTOs:_audit.totalTOs,runs:_audit.runs,syntheticQuarters:_audit.syntheticQuarters||null};localStorage.setItem('nba4:depth:'+id,JSON.stringify({pbpAudit:_slim,pbpTime:cs.pbpTime?cs.pbpTime.getTime():null,pbpPeriod:cs.pbpPeriod}));}else{localStorage.setItem('nba4:depth:'+id,JSON.stringify({pbpAudit:null,pbpTime:cs.pbpTime?cs.pbpTime.getTime():null,pbpPeriod:cs.pbpPeriod}));}}catch(e){console.warn('Depth persist failed:',e.message);}}
 const cardState = {};
 
 // BDL fallback state
@@ -1415,6 +1415,7 @@ function saveOdds(gameId){
   const total = g('od-tot-'+gameId)||'';
   if(!hML && !hSpread){cs.oddsData=null;} else {
     cs.oddsData = {homeSpread:hSpread, homeML:hML, awayML:aML, total:total};
+    if(!cs.openingOdds) cs.openingOdds = {...cs.oddsData};
   }
   persistOdds(gameId, cs);
   const game = games.find(g=>g.id===gameId);
@@ -1500,6 +1501,7 @@ async function enrichFromBDL(gameId){
         if(cs.oddsHistory.length > 20) cs.oddsHistory = cs.oddsHistory.slice(-20);
       }
       cs.oddsData = newOdds;
+      if(!cs.openingOdds) cs.openingOdds = {...newOdds};
       if(data.oddsAll) cs.oddsAll = data.oddsAll;
       persistOdds(gameId, cs);
     }
@@ -1593,228 +1595,218 @@ async function fetchPBPQuiet(gameId){
 function parsePBP(pbpData, game){
   const hId = game.home?.id||'', aId = game.away?.id||'';
   const hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
-
-  // Collect all events across periods
   const allEvents = [];
   const periods = pbpData?.periods || [];
-  periods.forEach(per => {
-    const q = per.number || per.sequence || 0;
-    (per.events || []).forEach(ev => {
-      ev._quarter = q;
-      allEvents.push(ev);
-    });
-  });
+  periods.forEach(per => { const q = per.number || per.sequence || 0; (per.events || []).forEach(ev => { ev._quarter = q; allEvents.push(ev); }); });
 
-  // ── SHOT MAP (3PT + at-rim + mid-range: player-level makes AND misses) ──
-  const shots = [];
-  allEvents.forEach(ev => {
-    const et = (ev.event_type||'').toLowerCase().replace(/[\s_-]/g,'');
-    const isThree = et.includes('threepoint') || et.includes('3pt');
-    const isTwo = et.includes('twopoint') || et.includes('2pt');
-    if(!isThree && !isTwo) return;
-    const made = et.includes('made');
+  // ── HELPERS ──
+  function resolveTeam(ev, stat){ const attrId = ev.attribution?.id || stat?.team?.id || ''; if(attrId===hId) return hA; if(attrId===aId) return aA; return ev.attribution?.market||'?'; }
+  function resolvePlayer(ev, stat){ const player = stat?.player || ev.player || {}; return player.full_name || player.name || '?'; }
+  function classifyZone(ev, stat, isThree){
+    const loc = ev.location||{}; const actionArea = (loc.action_area||ev.action_area||stat.action_area||'').toLowerCase();
+    const coordX = loc.coord_x ?? ev.coord_x ?? null; const coordY = loc.coord_y ?? ev.coord_y ?? null;
+    const shotDist = stat.shot_distance ?? ev.shot_distance ?? null;
+    if(isThree){ if(actionArea.includes('corner') || (coordY!==null && (coordY<8||coordY>42))) return 'corner3'; return 'above3'; }
+    if(shotDist!==null && shotDist<=4) return 'rim';
+    const shotTypeRaw = (stat.shot_type_desc||stat.shot_type||ev.shot_type_desc||ev.shot_type||'').toLowerCase();
+    const descRaw = (ev.description||'').toLowerCase();
+    const isRimShot = actionArea.includes('restricted')||actionArea.includes('rim')
+      ||shotTypeRaw.includes('layup')||shotTypeRaw.includes('dunk')||shotTypeRaw.includes('tip')
+      ||shotTypeRaw.includes('putback')||shotTypeRaw.includes('put-back')||shotTypeRaw.includes('alley')
+      ||shotTypeRaw.includes('finger roll')||shotTypeRaw.includes('reverse')
+      ||descRaw.includes('layup')||descRaw.includes('dunk')||descRaw.includes('tip shot')||descRaw.includes('alley oop')
+      ||(coordX!==null&&Math.abs(coordX-25)<5&&coordY!==null&&Math.abs(coordY-5.25)<5);
+    if(isRimShot) return 'rim'; if(actionArea.includes('paint')||actionArea.includes('lane')) return 'paint'; return 'mid';
+  }
+  function classifyContext(stat, ev, assisted, isThree){
+    const shotType = (stat.shot_type_desc||stat.shot_type||ev.shot_type_desc||ev.shot_type||'').toLowerCase();
+    if(shotType.includes('driving')||shotType.includes('drive')||shotType.includes('layup')||shotType.includes('dunk')) return 'drive';
+    if(shotType.includes('pullup')||shotType.includes('pull-up')||shotType.includes('pull up')||shotType.includes('step back')||shotType.includes('stepback')||shotType.includes('fadeaway')) return 'pullup';
+    if(shotType.includes('putback')||shotType.includes('tip')||shotType.includes('put-back')) return 'putback';
+    if(shotType.includes('cutting')||shotType.includes('cut')||shotType.includes('alley')) return 'cut';
+    if(shotType.includes('fast')||shotType.includes('transition')||shotType.includes('break')) return 'transition';
+    if(shotType.includes('hook')||shotType.includes('float')||shotType.includes('runner')) return 'floater';
+    if(assisted&&isThree) return 'catch-shoot'; return 'halfcourt';
+  }
+  function classifyTO(stat, ev){
+    const toType = (stat.turnover_type||ev.turnover_type||'').toLowerCase(); const desc = (ev.description||'').toLowerCase();
+    if(toType.includes('steal')||toType.includes('forced')||toType.includes('bad pass')||desc.includes('steal')) return true;
+    if(toType.includes('lost ball')||toType.includes('out of bounds')||toType.includes('travel')||toType.includes('violation')||toType.includes('offensive foul')||toType.includes('backcourt')||toType.includes('3 sec')||toType.includes('5 sec')||toType.includes('shot clock')) return false;
+    if(desc.includes('steal')||desc.includes('strip')) return true;
+    if(desc.includes('lost ball')||desc.includes('out of bounds')||desc.includes('travel')||desc.includes('violation')) return false;
+    return null;
+  }
 
-    // Get player info — check multiple possible locations
-    const stat = (ev.statistics||[])[0] || {};
-    const player = stat.player || ev.player || {};
-    const playerName = player.full_name || player.name || '?';
-
-    // Team attribution
-    const attrId = ev.attribution?.id || stat.team?.id || '';
-    const team = attrId === hId ? hA : attrId === aId ? aA : (ev.attribution?.market||'?');
-
-    // Shot location / zone
-    const loc = ev.location || {};
-    const actionArea = (loc.action_area || ev.action_area || stat.action_area || '').toLowerCase();
-    const coordX = loc.coord_x ?? ev.coord_x ?? null;
-    const coordY = loc.coord_y ?? ev.coord_y ?? null;
-
-    // Classify zone
-    let zone;
-    if(isThree){
-      if(actionArea.includes('corner') || (coordY !== null && (coordY < 8 || coordY > 42))) zone = 'corner3';
-      else zone = 'above3';
-    } else {
-      // Shot type for rim detection when action_area is missing
-      const shotTypeRaw = (stat.shot_type_desc || stat.shot_type || ev.shot_type_desc || ev.shot_type || '').toLowerCase();
-      const descRaw = (ev.description||'').toLowerCase();
-      const isRimShot = actionArea.includes('restricted') || actionArea.includes('rim')
-        || shotTypeRaw.includes('layup') || shotTypeRaw.includes('dunk') || shotTypeRaw.includes('tip')
-        || shotTypeRaw.includes('putback') || shotTypeRaw.includes('put-back') || shotTypeRaw.includes('alley')
-        || shotTypeRaw.includes('finger roll') || shotTypeRaw.includes('reverse')
-        || descRaw.includes('layup') || descRaw.includes('dunk') || descRaw.includes('tip shot') || descRaw.includes('alley oop')
-        || (coordX !== null && Math.abs(coordX - 25) < 5 && coordY !== null && Math.abs(coordY - 5.25) < 5);
-      if(isRimShot) zone = 'rim';
-      else if(actionArea.includes('paint') || actionArea.includes('lane')) zone = 'paint';
-      else zone = 'mid';
-    }
-
-    // Assisted check — look for assist event immediately before this made shot
-    let assisted = false;
-    if(made){
-      const shotDesc = (ev.description||'').toLowerCase();
-      if(shotDesc.includes('assist')) assisted = true;
-      // Also check statistics array for assist linkage
-      (ev.statistics||[]).forEach(s => { if((s.type||'').toLowerCase().includes('assist')) assisted = true; });
-    }
-
-    // Shot type context (drive, catch-and-shoot, pull-up, putback, cut, transition)
-    const shotType = (stat.shot_type_desc || stat.shot_type || ev.shot_type_desc || ev.shot_type || '').toLowerCase();
-    let context = 'halfcourt';
-    if(shotType.includes('driving') || shotType.includes('drive') || shotType.includes('layup') || shotType.includes('dunk')) context = 'drive';
-    else if(shotType.includes('pullup') || shotType.includes('pull-up') || shotType.includes('pull up') || shotType.includes('step back') || shotType.includes('stepback') || shotType.includes('fadeaway')) context = 'pullup';
-    else if(shotType.includes('putback') || shotType.includes('tip') || shotType.includes('put-back')) context = 'putback';
-    else if(shotType.includes('cutting') || shotType.includes('cut') || shotType.includes('alley')) context = 'cut';
-    else if(shotType.includes('fast') || shotType.includes('transition') || shotType.includes('break')) context = 'transition';
-    else if(shotType.includes('hook') || shotType.includes('float') || shotType.includes('runner')) context = 'floater';
-    else if(assisted && isThree) context = 'catch-shoot';
-
-    shots.push({p:playerName, tm:team, z:zone, m:made, a:assisted, q:ev._quarter, ctx:context, is3:isThree});
-  });
-
-  // ── TURNOVER LOG ──
-  const turnovers = [];
-  allEvents.forEach(ev => {
-    const et = (ev.event_type||'').toLowerCase().replace(/[\s_-]/g,'');
-    if(!et.includes('turnover')) return;
-    const stat = (ev.statistics||[])[0] || {};
-    const player = stat.player || ev.player || {};
-    const playerName = player.full_name || player.name || '?';
-    const attrId = ev.attribution?.id || stat.team?.id || '';
-    const team = attrId === hId ? hA : attrId === aId ? aA : '?';
-
-    // Forced vs unforced — check multiple field locations
-    const toType = (stat.turnover_type || ev.turnover_type || '').toLowerCase();
-    const desc = (ev.description||'').toLowerCase();
-    let forced = null;
-    if(toType.includes('steal') || toType.includes('forced') || toType.includes('bad pass') || desc.includes('steal')) forced = true;
-    else if(toType.includes('lost ball') || toType.includes('out of bounds') || toType.includes('travel') || toType.includes('violation') || toType.includes('offensive foul') || toType.includes('backcourt') || toType.includes('3 sec') || toType.includes('5 sec') || toType.includes('shot clock')) forced = false;
-    // If unclear, attempt from description
-    if(forced === null){
-      if(desc.includes('steal') || desc.includes('strip')) forced = true;
-      else if(desc.includes('lost ball') || desc.includes('out of bounds') || desc.includes('travel') || desc.includes('violation')) forced = false;
-    }
-
-    turnovers.push({p:playerName, tm:team, q:ev._quarter, forced:forced, type:toType||desc.substring(0,40)});
-  });
-
-  // ── SCORING RUNS ──
-  // Track score progression and find biggest runs
+  // ── SINGLE ENRICHED PASS ──
+  const shots = [], turnovers = [], scoreLog = [], timeline = [];
   let hScore = 0, aScore = 0;
-  const scoreLog = [];
-  allEvents.forEach(ev => {
+
+  allEvents.forEach((ev, idx) => {
+    if(ev.rescinded) return;
     const et = (ev.event_type||'').toLowerCase().replace(/[\s_-]/g,'');
-    let pts = 0;
-    if(et.includes('made')){
-      if(et.includes('threepoint') || et.includes('3pt')) pts = 3;
-      else if(et.includes('freethrow') || et.includes('ft')) pts = 1;
-      else if(et.includes('twopoint') || et.includes('2pt')) pts = 2;
+    const stat = (ev.statistics||[])[0]||{};
+    const team = resolveTeam(ev,stat); const player = resolvePlayer(ev,stat);
+    const clock = ev.clock||null; const quarter = ev._quarter;
+    const homeScore = ev.home_points??null; const awayScore = ev.away_points??null;
+    const possTeamId = ev.possession?.id||'';
+    const possTeam = possTeamId===hId?hA:possTeamId===aId?aA:null;
+    const onCourt = {home:(ev.on_court?.home?.players||[]).map(p=>p.full_name||p.name||'?'), away:(ev.on_court?.away?.players||[]).map(p=>p.full_name||p.name||'?')};
+    const enriched = {idx, type:'other', team, player, clock, quarter, homeScore, awayScore, possTeam, onCourt, shot:null, turnover:null, rebound:null, foul:null, freeThrow:null, block:null, steal:null};
+
+    const isThree = et.includes('threepoint')||et.includes('3pt');
+    const isTwo = et.includes('twopoint')||et.includes('2pt');
+    if(isThree||isTwo){
+      const made = et.includes('made'); const zone = classifyZone(ev,stat,isThree);
+      const shotDist = stat.shot_distance??ev.shot_distance??null;
+      let assisted = false;
+      if(made){ const d=(ev.description||'').toLowerCase(); if(d.includes('assist')) assisted=true; (ev.statistics||[]).forEach(s=>{if((s.type||'').toLowerCase().includes('assist')) assisted=true;}); }
+      const context = classifyContext(stat,ev,assisted,isThree);
+      const pts = made?(isThree?3:2):0;
+      enriched.type = made?'shot_made':'shot_miss';
+      enriched.shot = {zone, made, assisted, is3:isThree, context, shotDistance:shotDist, points:pts};
+      shots.push({p:player, tm:team, z:zone, m:made, a:assisted, q:quarter, ctx:context, is3:isThree});
+      if(made){ if(team===hA) hScore+=pts; else aScore+=pts; scoreLog.push({team,pts,hScore,aScore,q:quarter,lineup:team===hA?onCourt.home:onCourt.away}); }
+    } else if(et.includes('turnover')){
+      const forced = classifyTO(stat,ev);
+      const toType = (stat.turnover_type||ev.turnover_type||'').toLowerCase()||(ev.description||'').substring(0,40).toLowerCase();
+      enriched.type='turnover'; enriched.turnover={forced,type:toType};
+      turnovers.push({p:player, tm:team, q:quarter, forced, type:toType});
+    } else if(et.includes('freethrow')||(et.includes('free')&&et.includes('throw'))){
+      const made = et.includes('made'); const ftType = stat.free_throw_type||ev.free_throw_type||''; const pts=made?1:0;
+      enriched.type=made?'ft_made':'ft_miss'; enriched.freeThrow={made,ftType,points:pts};
+      if(made){ if(team===hA) hScore+=pts; else aScore+=pts; scoreLog.push({team,pts,hScore,aScore,q:quarter,lineup:team===hA?onCourt.home:onCourt.away}); }
+    } else if(et.includes('rebound')){
+      const rebType=(stat.rebound_type||ev.rebound_type||'').toLowerCase();
+      enriched.type='rebound'; enriched.rebound={type:rebType.includes('offensive')||rebType.includes('off')?'offensive':'defensive'};
+    } else if(et.includes('steal')&&!et.includes('turnover')){
+      enriched.type='steal'; enriched.steal={stealer:player};
+    } else if(et.includes('block')&&!et.includes('attempt')){
+      enriched.type='block'; enriched.block={blocker:player};
+    } else if(et.includes('foul')){
+      let foulType='personal'; if(et.includes('offensive')) foulType='offensive'; else if(et.includes('flagrant')) foulType='flagrant'; else if(et.includes('technical')) foulType='technical';
+      enriched.type='foul'; enriched.foul={type:foulType, player};
+      (ev.statistics||[]).forEach(s=>{if((s.type||'').toLowerCase().includes('fouldrawn')) enriched.foul.drawnBy=s.player?.full_name||s.player?.name||null;});
     }
-    if(pts === 0) return;
-    const attrId = ev.attribution?.id || (ev.statistics||[])[0]?.team?.id || '';
-    const team = attrId === hId ? hA : attrId === aId ? aA : '?';
-    if(team === hA) hScore += pts; else aScore += pts;
-
-    // Get on_court lineup for run attribution
-    const onCourt = ev.on_court || {};
-    const homePlayers = (onCourt.home?.players || []).map(p => p.full_name || p.name || '?');
-    const awayPlayers = (onCourt.away?.players || []).map(p => p.full_name || p.name || '?');
-
-    scoreLog.push({team, pts, hScore, aScore, q:ev._quarter, lineup: team===hA ? homePlayers : awayPlayers});
+    timeline.push(enriched);
   });
 
-  // Find runs: consecutive scoring by same team (3+ scores or 8+ pts)
+  // ── SCORING RUNS (unchanged) ──
   const runs = [];
-  let runTeam = null, runPts = 0, runStart = 0, runCount = 0, runLineup = [], runShotTypes = [];
-  for(let i = 0; i < scoreLog.length; i++){
-    const s = scoreLog[i];
-    if(s.team === runTeam){
-      runPts += s.pts; runCount++;
-      if(s.lineup.length > 0) runLineup = s.lineup;
-      runShotTypes.push(s.pts === 3 ? '3PT' : s.pts === 1 ? 'FT' : '2PT');
-    } else {
-      if(runPts >= 8 || runCount >= 3){
-        runs.push({team:runTeam, pts:runPts, count:runCount, q:scoreLog[runStart]?.q, lineup:runLineup, mechanism:runShotTypes.slice()});
-      }
-      runTeam = s.team; runPts = s.pts; runStart = i; runCount = 1;
-      runLineup = s.lineup; runShotTypes = [s.pts === 3 ? '3PT' : s.pts === 1 ? 'FT' : '2PT'];
-    }
+  let runTeam=null, runPts=0, runStart=0, runCount=0, runLineup=[], runShotTypes=[];
+  for(let i=0;i<scoreLog.length;i++){
+    const s=scoreLog[i];
+    if(s.team===runTeam){ runPts+=s.pts; runCount++; if(s.lineup.length>0) runLineup=s.lineup; runShotTypes.push(s.pts===3?'3PT':s.pts===1?'FT':'2PT'); }
+    else { if(runPts>=8||runCount>=3) runs.push({team:runTeam,pts:runPts,count:runCount,q:scoreLog[runStart]?.q,lineup:runLineup,mechanism:runShotTypes.slice()}); runTeam=s.team; runPts=s.pts; runStart=i; runCount=1; runLineup=s.lineup; runShotTypes=[s.pts===3?'3PT':s.pts===1?'FT':'2PT']; }
   }
-  if(runPts >= 8 || runCount >= 3){
-    runs.push({team:runTeam, pts:runPts, count:runCount, q:scoreLog[runStart]?.q, lineup:runLineup, mechanism:runShotTypes.slice()});
-  }
-  // Keep top 5 biggest runs
-  runs.sort((a,b) => b.pts - a.pts);
-  const topRuns = runs.slice(0, 5);
+  if(runPts>=8||runCount>=3) runs.push({team:runTeam,pts:runPts,count:runCount,q:scoreLog[runStart]?.q,lineup:runLineup,mechanism:runShotTypes.slice()});
+  runs.sort((a,b)=>b.pts-a.pts);
+  const topRuns = runs.slice(0,5);
 
-  // ── AGGREGATE SUMMARIES ──
-  function teamShots(tm){ return shots.filter(s => s.tm === tm); }
+  // ── AGGREGATE SUMMARIES (unchanged) ──
+  function teamShots(tm){ return shots.filter(s=>s.tm===tm); }
   function aggTeam(tm){
-    const s = teamShots(tm);
-    const threes = s.filter(x => x.is3);
-    const rim = s.filter(x => x.z === 'rim');
-    const mid = s.filter(x => x.z === 'mid');
-    const threeMade = threes.filter(x => x.m);
-    const rimMade = rim.filter(x => x.m);
-    const midMade = mid.filter(x => x.m);
-    const assistedThrees = threeMade.filter(x => x.a).length;
-    const assistedRim = rimMade.filter(x => x.m && x.a).length;
-
-    // Per-player 3PT detail
-    const playerThrees = {};
-    threes.forEach(x => {
-      if(!playerThrees[x.p]) playerThrees[x.p] = {name:x.p, made:0, att:0, assisted:0, zones:{corner3:0,above3:0}, contexts:{}};
-      playerThrees[x.p].att++;
-      if(x.m){ playerThrees[x.p].made++; if(x.a) playerThrees[x.p].assisted++; playerThrees[x.p].zones[x.z] = (playerThrees[x.p].zones[x.z]||0)+1; }
-      playerThrees[x.p].contexts[x.ctx] = (playerThrees[x.p].contexts[x.ctx]||0)+1;
-    });
-
-    // Per-player at-rim detail
-    const playerRim = {};
-    rim.forEach(x => {
-      if(!playerRim[x.p]) playerRim[x.p] = {name:x.p, made:0, att:0, contexts:{}};
-      playerRim[x.p].att++;
-      if(x.m) playerRim[x.p].made++;
-      playerRim[x.p].contexts[x.ctx] = (playerRim[x.p].contexts[x.ctx]||0)+1;
-    });
-
-    // Per-player mid-range detail
-    const playerMid = {};
-    mid.forEach(x => {
-      if(!playerMid[x.p]) playerMid[x.p] = {name:x.p, made:0, att:0, assisted:0};
-      playerMid[x.p].att++;
-      if(x.m){ playerMid[x.p].made++; if(x.a) playerMid[x.p].assisted++; }
-    });
-
-    // TO breakdown
-    const tms = turnovers.filter(t => t.tm === tm);
-    const forced = tms.filter(t => t.forced === true).length;
-    const unforced = tms.filter(t => t.forced === false).length;
-    const unknown = tms.filter(t => t.forced === null).length;
-
+    const s=teamShots(tm); const threes=s.filter(x=>x.is3); const rim=s.filter(x=>x.z==='rim'); const mid=s.filter(x=>x.z==='mid');
+    const threeMade=threes.filter(x=>x.m); const rimMade=rim.filter(x=>x.m); const midMade=mid.filter(x=>x.m);
+    const assistedThrees=threeMade.filter(x=>x.a).length; const assistedRim=rimMade.filter(x=>x.m&&x.a).length;
+    const playerThrees={}; threes.forEach(x=>{if(!playerThrees[x.p]) playerThrees[x.p]={name:x.p,made:0,att:0,assisted:0,zones:{corner3:0,above3:0},contexts:{}}; playerThrees[x.p].att++; if(x.m){playerThrees[x.p].made++;if(x.a) playerThrees[x.p].assisted++;playerThrees[x.p].zones[x.z]=(playerThrees[x.p].zones[x.z]||0)+1;} playerThrees[x.p].contexts[x.ctx]=(playerThrees[x.p].contexts[x.ctx]||0)+1;});
+    const playerRim={}; rim.forEach(x=>{if(!playerRim[x.p]) playerRim[x.p]={name:x.p,made:0,att:0,contexts:{}}; playerRim[x.p].att++; if(x.m) playerRim[x.p].made++; playerRim[x.p].contexts[x.ctx]=(playerRim[x.p].contexts[x.ctx]||0)+1;});
+    const playerMid={}; mid.forEach(x=>{if(!playerMid[x.p]) playerMid[x.p]={name:x.p,made:0,att:0,assisted:0}; playerMid[x.p].att++; if(x.m){playerMid[x.p].made++;if(x.a) playerMid[x.p].assisted++;}});
+    const tms=turnovers.filter(t=>t.tm===tm); const forced=tms.filter(t=>t.forced===true).length; const unforced=tms.filter(t=>t.forced===false).length; const unknown=tms.filter(t=>t.forced===null).length;
     return {
-      threes:{made:threeMade.length, att:threes.length, assisted:assistedThrees, pct:threes.length>0?(threeMade.length/threes.length*100).toFixed(1):'0',
-        corner:{made:threeMade.filter(x=>x.z==='corner3').length, att:threes.filter(x=>x.z==='corner3').length},
-        above:{made:threeMade.filter(x=>x.z==='above3').length, att:threes.filter(x=>x.z==='above3').length},
-        byPlayer:Object.values(playerThrees).filter(x=>x.att>=1).sort((a,b)=>b.att-a.att)},
-      rim:{made:rimMade.length, att:rim.length, assisted:assistedRim, pct:rim.length>0?(rimMade.length/rim.length*100).toFixed(1):'0',
-        byPlayer:Object.values(playerRim).filter(x=>x.att>=1).sort((a,b)=>b.att-a.att)},
-      mid:{made:midMade.length, att:mid.length, assisted:midMade.filter(x=>x.a).length, pct:mid.length>0?(midMade.length/mid.length*100).toFixed(1):'0',
-        byPlayer:Object.values(playerMid).filter(x=>x.att>=1).sort((a,b)=>b.att-a.att)},
-      tos:{total:tms.length, forced, unforced, unknown, byPlayer:tms},
-      shotDiet:{total:s.length, threePct:s.length>0?(threes.length/s.length*100).toFixed(1):'0', rimPct:s.length>0?(rim.length/s.length*100).toFixed(1):'0', midPct:s.length>0?(mid.length/s.length*100).toFixed(1):'0'},
+      threes:{made:threeMade.length,att:threes.length,assisted:assistedThrees,pct:threes.length>0?(threeMade.length/threes.length*100).toFixed(1):'0',corner:{made:threeMade.filter(x=>x.z==='corner3').length,att:threes.filter(x=>x.z==='corner3').length},above:{made:threeMade.filter(x=>x.z==='above3').length,att:threes.filter(x=>x.z==='above3').length},byPlayer:Object.values(playerThrees).filter(x=>x.att>=1).sort((a,b)=>b.att-a.att)},
+      rim:{made:rimMade.length,att:rim.length,assisted:assistedRim,pct:rim.length>0?(rimMade.length/rim.length*100).toFixed(1):'0',byPlayer:Object.values(playerRim).filter(x=>x.att>=1).sort((a,b)=>b.att-a.att)},
+      mid:{made:midMade.length,att:mid.length,assisted:midMade.filter(x=>x.a).length,pct:mid.length>0?(midMade.length/mid.length*100).toFixed(1):'0',byPlayer:Object.values(playerMid).filter(x=>x.att>=1).sort((a,b)=>b.att-a.att)},
+      tos:{total:tms.length,forced,unforced,unknown,byPlayer:tms},
+      shotDiet:{total:s.length,threePct:s.length>0?(threes.length/s.length*100).toFixed(1):'0',rimPct:s.length>0?(rim.length/s.length*100).toFixed(1):'0',midPct:s.length>0?(mid.length/s.length*100).toFixed(1):'0'},
     };
   }
+  const home = aggTeam(hA), away = aggTeam(aA);
 
-  const home = aggTeam(hA);
-  const away = aggTeam(aA);
+  // ── BUILD POSSESSION LOG ──
+  const possessionLog = buildPossessionLog(timeline, hA, aA);
+  console.log('[PBP] Enriched parse: '+timeline.length+' events, '+shots.length+' shots, '+turnovers.length+' TOs, '+possessionLog.length+' possessions');
 
   return {
     home, away, homeAlias:hA, awayAlias:aA,
     totalShots: shots.length, totalTOs: turnovers.length,
     runs: topRuns,
-    raw: {shots, turnovers}, // keep raw for potential deep dives
+    raw: {shots, turnovers},
+    possessionLog: possessionLog,
+    timeline: timeline,
   };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// POSSESSION LOG BUILDER — segments enriched timeline into possession objects
+// ══════════════════════════════════════════════════════════════════════════════
+function buildPossessionLog(timeline, hA, aA){
+  var log = [];
+  var currentPoss = null;
+  function newPoss(team, startClock, quarter){
+    return {team:team, events:[], startClock:startClock, endClock:null, quarter:quarter, result:null, points:0, shots:[], turnovers:[], fouls:[], rebounds:[], assists:0, blocks:0, steals:0, ftAttempts:0, ftMade:0, onCourt:null, paintTouch:false};
+  }
+  function closePoss(result, endClock){
+    if(!currentPoss) return;
+    currentPoss.result = result; currentPoss.endClock = endClock;
+    if(currentPoss.events.length > 0) log.push(currentPoss);
+    currentPoss = null;
+  }
+  var lastQuarter = 0;
+  for(var i = 0; i < timeline.length; i++){
+    var ev = timeline[i];
+    // Period boundary
+    if(ev.quarter !== lastQuarter && lastQuarter > 0 && currentPoss) closePoss('end_period', ev.clock);
+    lastQuarter = ev.quarter;
+    // Start new possession if none active
+    if(!currentPoss){
+      var possTeam = ev.possTeam;
+      if(!possTeam || possTeam === '?'){
+        if(ev.type==='shot_made'||ev.type==='shot_miss'||ev.type==='turnover'||ev.type==='ft_made'||ev.type==='ft_miss') possTeam = ev.team;
+        else if(ev.type==='rebound'&&ev.rebound?.type==='defensive') possTeam = ev.team;
+      }
+      if(possTeam && possTeam !== '?') currentPoss = newPoss(possTeam, ev.clock, ev.quarter);
+      else continue;
+    }
+    // Track lineup
+    if(ev.onCourt && (ev.onCourt.home.length >= 5 || ev.onCourt.away.length >= 5)) currentPoss.onCourt = ev.onCourt;
+    currentPoss.events.push(ev);
+    // ── BOUNDARIES ──
+    if(ev.type === 'shot_made'){
+      currentPoss.points += ev.shot.points; currentPoss.shots.push(ev.shot);
+      if(ev.shot.zone==='rim'||ev.shot.zone==='paint') currentPoss.paintTouch = true;
+      if(ev.shot.assisted) currentPoss.assists++;
+      closePoss('made_'+(ev.shot.is3?'3pt':'2pt'), ev.clock); continue;
+    }
+    if(ev.type === 'shot_miss'){
+      currentPoss.shots.push(ev.shot);
+      if(ev.shot.zone==='rim'||ev.shot.zone==='paint') currentPoss.paintTouch = true;
+      continue;
+    }
+    if(ev.type === 'turnover'){ currentPoss.turnovers.push(ev.turnover); closePoss('turnover', ev.clock); continue; }
+    if(ev.type === 'rebound' && ev.rebound){
+      currentPoss.rebounds.push(ev.rebound);
+      if(ev.rebound.type === 'defensive'){ closePoss('miss', ev.clock); continue; }
+      continue;
+    }
+    if(ev.type === 'ft_made' || ev.type === 'ft_miss'){
+      currentPoss.ftAttempts++; if(ev.freeThrow.made){ currentPoss.ftMade++; currentPoss.points += 1; }
+      var ftType = (ev.freeThrow.ftType||'').toLowerCase();
+      var ftMatch = ftType.match(/(\d+)\s*of\s*(\d+)/);
+      var isLastFT = ftMatch && ftMatch[1] === ftMatch[2];
+      var isTechnical = ftType.includes('technical');
+      if(isLastFT && !isTechnical && ev.freeThrow.made) closePoss('made_ft', ev.clock);
+      continue;
+    }
+    if(ev.type === 'block'){ currentPoss.blocks++; continue; }
+    if(ev.type === 'steal'){ currentPoss.steals++; continue; }
+    if(ev.type === 'foul'){
+      currentPoss.fouls.push(ev.foul);
+      if(ev.foul.type === 'offensive') closePoss('turnover', ev.clock);
+      continue;
+    }
+  }
+  if(currentPoss && currentPoss.events.length > 0) closePoss('end_period', currentPoss.events[currentPoss.events.length-1]?.clock || null);
+  return log;
 }
 
 // Convert any image (including HEIC) to compressed JPEG for Sonnet vision
@@ -2447,6 +2439,7 @@ async function generateThesis(gameId){
                 if(cs.oddsHistory.length > 20) cs.oddsHistory = cs.oddsHistory.slice(-20);
               }
               cs.oddsData = {homeSpread:String(spread), homeML:String(hML), awayML:String(aML), total:String(total), time:new Date().toLocaleTimeString()};
+              if(!cs.openingOdds) cs.openingOdds = {...cs.oddsData};
               persistOdds(gameId, cs);
               console.log('BDL odds auto-populated:', cs.oddsData);
             }
@@ -4014,7 +4007,6 @@ function computeSpreadConviction(game){
   const clockMins = clockParts.length===2 ? parseInt(clockParts[0])+(parseInt(clockParts[1]||0)/60) : 12;
   const quartersLeft = Math.max(0, 4 - period);
   const minsLeft = clockMins + (quartersLeft * 12);
-  const pctRemaining = Math.min(1, minsLeft / 48);
 
   // ── STRUCTURAL CONTEXT ──
   const floorInd = cs.clientInd || cs.sonnetIndicators;
@@ -4024,6 +4016,69 @@ function computeSpreadConviction(game){
   const scoringClass = lc?.classification || 'MIXED';
   const leadTeam = lc?.leadTeam || (hPts >= aPts ? hA : aA);
 
+  // ── GUARDRAIL 1: INFLATION DAMPENER ──
+  // Compare current spread to opening spread. Larger moves = less conviction on inflated side.
+  var openSpread = cs.openingOdds ? parseFloat(cs.openingOdds.homeSpread) : NaN;
+  var spreadMovement = !isNaN(openSpread) ? Math.abs(homeSpreadNum - openSpread) : 0;
+  // Detect regime change: did the favorite flip?
+  var regimeChange = !isNaN(openSpread) && ((openSpread > 0 && homeSpreadNum < 0) || (openSpread < 0 && homeSpreadNum > 0));
+  // Scale thresholds tighter if opening was small (pick'em)
+  var openMag = !isNaN(openSpread) ? Math.abs(openSpread) : 10;
+  var tierShift = openMag <= 3 ? -1 : openMag >= 15 ? 1 : 0; // -1 = tighter caps, +1 = looser
+
+  function getInflationCap(movement, isRegimeChange, tierAdj){
+    if(isRegimeChange) return 95; // regime changes bypass dampener
+    var tiers = [
+      {min:15, cap:65}, {min:10, cap:72}, {min:5, cap:82}, {min:0, cap:95}
+    ];
+    // Apply tier shift
+    var adjMovement = movement - (tierAdj * 3); // shift by ~3 pts per tier
+    for(var t=0;t<tiers.length;t++){
+      if(adjMovement >= tiers[t].min) return tiers[t].cap;
+    }
+    return 95;
+  }
+  var inflationCap = getInflationCap(spreadMovement, regimeChange, tierShift);
+  var inflationFloor = 100 - inflationCap; // underdog floor mirrors cap
+
+  // ── GUARDRAIL 2: ROLLING WINDOW HEALTH (Position × Direction) ──
+  // Position = where rolling window IS (from floor team's perspective)
+  // Direction = is it getting better or worse
+  var rw = cs.rollingWindow;
+  var cRead = cs.combinedRead;
+  var rwPositionMod = 0; // applied to favorite of the floor team
+  var rwDirectionMod = 0;
+  var rwLabel = '';
+  var isGarbageTime = proj?.garbageTime?.detected || false;
+
+  if(rw && rw.available && !isGarbageTime){
+    // Normalize rolling window to floor team's perspective
+    var rwScoreFloorPerspective;
+    if(rw.controlTeam === floorTeam){
+      rwScoreFloorPerspective = rw.score;
+    } else {
+      rwScoreFloorPerspective = 1 - rw.score;
+    }
+
+    // Position modifier (where the floor team stands NOW)
+    if(rwScoreFloorPerspective > 0.75){ rwPositionMod = 5; rwLabel = 'STRONG'; }
+    else if(rwScoreFloorPerspective >= 0.60){ rwPositionMod = 0; rwLabel = 'EARNED'; }
+    else if(rwScoreFloorPerspective >= 0.45){ rwPositionMod = -7; rwLabel = 'CONTESTED'; }
+    else if(rwScoreFloorPerspective >= 0.30){ rwPositionMod = -10; rwLabel = 'LOSING'; }
+    else { rwPositionMod = -14; rwLabel = 'FLIPPED'; }
+
+    // Direction modifier from combined read acceleration
+    var accel = cs.acceleration?.accel || 'STABLE';
+    var cReadState = cRead?.read || '';
+    if(accel === 'GROWING' || cReadState === 'DOMINANT' || cReadState === 'EMERGING'){
+      rwDirectionMod = 3; // floor team gaining
+    } else if(accel === 'DECLINING' || cReadState === 'ERODING' || cReadState === 'FADING'){
+      rwDirectionMod = -3; // floor team fading
+    } else if(cReadState === 'COLLAPSING' || cReadState === 'FLIPPED'){
+      rwDirectionMod = -3; // already captured in position, but reinforce direction
+    }
+  }
+
   function evalTeamSpread(alias, spread, fwp, pts, oppPts){
     var actualMargin = pts - oppPts;
     var coverMargin = actualMargin + spread;
@@ -4031,7 +4086,7 @@ function computeSpreadConviction(game){
     var isFavorite = spread < 0;
     var isUnderdog = spread > 0;
 
-    // ── PRIMARY: Projection-based cover probability ──
+    // ── PRIMARY: Projection-based cover probability (unchanged) ──
     var coverProb;
     var projBased = false;
     if(proj && proj.remainingStdDev > 0){
@@ -4040,7 +4095,6 @@ function computeSpreadConviction(game){
       coverProb = (1 / (1 + Math.exp(-1.7 * coverZ))) * 100;
       projBased = true;
     } else {
-      // Fallback: FWP-based heuristic
       if(isUnderdog){
         var closeLossBand = Math.min(20, absSpread * 3.5);
         coverProb = fwp + closeLossBand;
@@ -4050,26 +4104,36 @@ function computeSpreadConviction(game){
       }
     }
 
-    // ── STRUCTURAL MODIFIER (halved when projection is primary) ──
-    var structWeight = projBased ? 0.5 : 1.0;
+    // ── STRUCTURAL MODIFIER (kept, full weight) ──
     var structMod = 0;
     var teamHasStructure = floorTeam === alias && floorScore >= 0.55;
     var oppHasStructure = floorTeam !== alias && floorTeam && floorScore >= 0.55;
-    if(teamHasStructure) structMod = (floorScore - 0.5) * 20 * structWeight;
-    else if(oppHasStructure) structMod = -(floorScore - 0.5) * 15 * structWeight;
+    if(teamHasStructure) structMod = (floorScore - 0.5) * 20;
+    else if(oppHasStructure) structMod = -(floorScore - 0.5) * 15;
 
     // ── SCORING CLASSIFICATION MODIFIER ──
     var scoringMod = 0;
     var teamIsLeadTeam = alias === leadTeam;
     if(teamIsLeadTeam){
-      if(scoringClass === 'VOLATILE') scoringMod = -5 * structWeight;
-      else if(scoringClass === 'STRUCTURAL' || scoringClass === 'IDENTITY') scoringMod = 3 * structWeight;
+      if(scoringClass === 'VOLATILE') scoringMod = -5;
+      else if(scoringClass === 'STRUCTURAL' || scoringClass === 'IDENTITY') scoringMod = 3;
     } else {
-      if(scoringClass === 'VOLATILE') scoringMod = 5 * structWeight;
-      else if(scoringClass === 'STRUCTURAL' || scoringClass === 'IDENTITY') scoringMod = -3 * structWeight;
+      if(scoringClass === 'VOLATILE') scoringMod = 5;
+      else if(scoringClass === 'STRUCTURAL' || scoringClass === 'IDENTITY') scoringMod = -3;
     }
 
-    // ── GARBAGE TIME OVERRIDE ──
+    // ── GUARDRAIL 2: ROLLING WINDOW HEALTH ──
+    var rwMod = 0;
+    if(rw && rw.available && !isGarbageTime){
+      // Apply from floor team's perspective
+      if(teamHasStructure || alias === floorTeam){
+        rwMod = rwPositionMod + rwDirectionMod; // positive helps floor team
+      } else {
+        rwMod = -(rwPositionMod + rwDirectionMod); // inverted for opponent
+      }
+    }
+
+    // ── GARBAGE TIME OVERRIDE (unchanged) ──
     var garbageMod = 0;
     if(proj?.garbageTime?.detected){
       if(isFavorite && actualMargin > 0){
@@ -4079,9 +4143,15 @@ function computeSpreadConviction(game){
       }
     }
 
-    coverProb = coverProb + structMod + scoringMod + garbageMod;
+    coverProb = coverProb + structMod + scoringMod + rwMod + garbageMod;
+
+    // ── GUARDRAIL 1: INFLATION DAMPENER (apply cap/floor) ──
+    if(isFavorite && coverProb > inflationCap) coverProb = inflationCap;
+    if(isUnderdog && coverProb < inflationFloor) coverProb = inflationFloor;
+
     coverProb = Math.max(5, Math.min(95, coverProb));
 
+    // ── REASON STRING ──
     var parts = [];
     if(projBased){
       var teamProjMargin = alias === hA ? proj.projectedMargin : -proj.projectedMargin;
@@ -4093,8 +4163,11 @@ function computeSpreadConviction(game){
     if(coverMargin > 0) parts.push('covering by '+coverMargin.toFixed(1));
     else if(coverMargin < 0) parts.push('need '+Math.abs(coverMargin).toFixed(1)+' pts');
     if(teamHasStructure) parts.push('structural ('+floorScore.toFixed(2)+')');
-    if(scoringClass === 'VOLATILE') parts.push('opp VOLATILE');
-    if(proj?.garbageTime?.detected) parts.push('GARBAGE TIME ('+proj.garbageTime.reason+')');
+    if(rwMod !== 0) parts.push('RW:'+rwLabel+'('+(rwMod>=0?'+':'')+rwMod+')');
+    if(spreadMovement >= 5 && !regimeChange) parts.push('inflated '+spreadMovement.toFixed(0)+'pts(cap'+inflationCap+')');
+    if(regimeChange) parts.push('REGIME FLIP');
+    if(scoringClass === 'VOLATILE' && teamIsLeadTeam) parts.push('VOLATILE lead');
+    if(proj?.garbageTime?.detected) parts.push('GARBAGE('+proj.garbageTime.reason+')');
     if(minsLeft < 10) parts.push(minsLeft.toFixed(0)+'min left');
 
     return {
@@ -4132,6 +4205,10 @@ function computeSpreadConviction(game){
     tied: hPts === aPts,
     projectionAvailable: !!proj,
     garbageTime: proj?.garbageTime || null,
+    inflationCap: inflationCap,
+    spreadMovement: spreadMovement.toFixed(1),
+    regimeChange: regimeChange,
+    rwLabel: rwLabel,
   };
 }
 
@@ -5253,7 +5330,7 @@ function mountCard(game){
   cardState[id]={logs:[],lastUp:null,editing:false,generating:false,analyzing:false,
     prevLvl:null,_countdown:null,lastFingerprint:'',analysis:_analysis,analysisTime:_analysisTime,genSteps:null,genError:null,
     lastScoreFP:'',lastStatsFP:'',staleCount:0,dataFreshness:'FRESH',sonnetIndicators:_sonnetIndicators,
-    prediction:_prediction, sustainabilityAudit:_sustainabilityAudit, clutchData:null, clutchTier:3, oddsData:null, oddsAll:null, oddsHistory:[], trackingData:null, enriching:false, enrichDone:false, enrichTime:null, preFlightStep:null, evCollapsed:false, mktCollapsed:_mktCollapsed, edgeHistory:_edgeHistory, analysisHistory:_analysisHistory, pbpAudit:_pbpAudit, pbpTime:_pbpTime, pbpPeriod:_pbpPeriod, pbpLoading:false,
+    prediction:_prediction, sustainabilityAudit:_sustainabilityAudit, clutchData:null, clutchTier:3, oddsData:null, oddsAll:null, oddsHistory:[], openingOdds:null, trackingData:null, enriching:false, enrichDone:false, enrichTime:null, preFlightStep:null, evCollapsed:false, mktCollapsed:_mktCollapsed, edgeHistory:_edgeHistory, analysisHistory:_analysisHistory, pbpAudit:_pbpAudit, pbpTime:_pbpTime, pbpPeriod:_pbpPeriod, pbpLoading:false,
     quarterSnapshots:_quarterSnapshots, gapLog:_gapLog, rollingWindow:_rollingWindow,
     acceleration:_acceleration, subMetricArrows:_subMetricArrows, adjustment:_adjustment,
     combinedRead:_combinedRead, leadComposition:_leadComposition, clientLeadComposition:_clientLeadComposition};
