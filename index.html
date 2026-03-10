@@ -3292,12 +3292,9 @@ function compute(game){
   const clientLC = computeLeadCompositionClient(game, clientSust);
   if(clientLC) cardState[game.id].clientLeadComposition = clientLC;
 
-  // Rolling window
-  // Rolling window — possession-based primary (25 poss), quarter-based fallback
-  var windowResult = computePossessionWindow(game, 37);
-  if(!windowResult || !windowResult.available){
-    windowResult = computeRollingWindow(game); // fallback to quarter-based
-  }
+  // Rolling window — quarter-based primary (possession window needs live debugging)
+  // Test from console: computePossessionWindow(games.find(g=>g.id==='GAME_ID'), 37)
+  var windowResult = computeRollingWindow(game);
   cardState[game.id].rollingWindow = windowResult;
 
   // Gap acceleration
@@ -6804,7 +6801,7 @@ WATCH
     },
   };
   cs.adjustment = {signal:'INTERIOR PIVOT',note:'CLE progressive rim pressure + falling 3PA share (Q1→Q2 early)',risingStructural:3,fallingVariance:1,team:'CLE'};
-  cs.combinedRead = {read:'TOO EARLY',note:'Window activates after 37 possessions — arrows show early directional reads'};
+  cs.combinedRead = {read:'TOO EARLY',note:'Window activates Q3 — arrows show early directional reads'};
 
   renderPills(); updateCounts();
   // Select the demo pill

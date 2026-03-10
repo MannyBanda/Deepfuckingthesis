@@ -3302,12 +3302,9 @@ function compute(game){
   const clientLC = computeLeadCompositionClient(game, clientSust);
   if(clientLC) cardState[game.id].clientLeadComposition = clientLC;
 
-  // Rolling window
-  // Rolling window — possession-based primary (17 poss for NCAAMB), quarter-based fallback
-  var windowResult = computePossessionWindow(game, 25);
-  if(!windowResult || !windowResult.available){
-    windowResult = computeRollingWindow(game);
-  }
+  // Rolling window — quarter-based primary (possession window needs live debugging)
+  // Test from console: computePossessionWindow(games.find(g=>g.id==='GAME_ID'), 25)
+  var windowResult = computeRollingWindow(game);
   cardState[game.id].rollingWindow = windowResult;
 
   // Gap acceleration
