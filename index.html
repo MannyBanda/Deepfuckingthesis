@@ -428,7 +428,7 @@ async function sr(type, params={}){
 }
 
 // Rate-limited sequential fetch with delay
-async function srSequential(calls, delayMs=1100){
+async function srSequential(calls, delayMs=1400){
   const results = [];
   for(const call of calls){
     try{
@@ -2563,7 +2563,7 @@ async function generateThesis(gameId){
       cs.genSteps[i+1].error = e.message;
     }
     renderGenProgress(gameId);
-    if(i < calls.length-1) await new Promise(r=>setTimeout(r,1100));
+    if(i < calls.length-1) await new Promise(r=>setTimeout(r,1400));
   }
   // Cache for structural context extraction (used by extractStructuralContext)
   try{
