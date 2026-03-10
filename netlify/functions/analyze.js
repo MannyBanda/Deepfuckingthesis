@@ -691,7 +691,7 @@ exports.handler = async function(event) {
       if (rollingWindow.available) {
         var windowLabel = rollingWindow.possessionBased
           ? 'Last ' + rollingWindow.windowPossessions + ' possessions, ' + (rollingWindow.timeSpanMin||0).toFixed(1) + ' min'
-          : rollingWindow.windowQuarters.map(function(q){return 'Q'+q;}).join('+') + ', ' + (rollingWindow.windowPossessions||'?') + ' poss';
+          : (rollingWindow.crossFade ? rollingWindow.windowQuarters.join('+') : rollingWindow.windowQuarters.map(function(q){return 'Q'+q;}).join('+')) + ', ' + (rollingWindow.windowPossessions||'?') + ' poss';
         windowSection = '\nROLLING WINDOW (' + windowLabel + '):\n';
         windowSection += 'Control: ' + rollingWindow.controlTeam + ' ' + rollingWindow.score.toFixed(2) + '\n';
         ['I1','I2','I3','I4','I5'].forEach(function(k) {
