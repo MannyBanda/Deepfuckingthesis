@@ -2388,32 +2388,37 @@ function parseSonnetDecision(text){
   if(!text) return null;
   try{
     const d = {};
-    // Parse EDGE line: "EDGE: +11.3% | FWP: MEM 72% / LAC 28% | MIP: 61.1%"
-    const edgeMatch = text.match(/EDGE:\s*([^\|]+)\|\s*FWP:\s*([^\|]+)\|\s*MIP:\s*(.+)/i);
-    if(edgeMatch){
-      d.edge = edgeMatch[1].trim();
-      d.fwpRaw = edgeMatch[2].trim();
-      d.mip = edgeMatch[3].trim();
-      const edgeNum = parseFloat(d.edge.replace(/[+%]/g,''));
-      d.edgeNum = isNaN(edgeNum) ? null : edgeNum;
-      // Parse two-sided FWP: "MEM 72% / LAC 28%" or "MEM 72.4% / LAC 27.6%"
-      const twoSidedMatch = d.fwpRaw.match(/([A-Z]{2,4})\s+([\d.]+)%?\s*\/\s*([A-Z]{2,4})\s+([\d.]+)%?/i);
-      if(twoSidedMatch){
-        d.fwpTeam1 = twoSidedMatch[1].toUpperCase();
-        d.fwpVal1 = parseFloat(twoSidedMatch[2]);
-        d.fwpTeam2 = twoSidedMatch[3].toUpperCase();
-        d.fwpVal2 = parseFloat(twoSidedMatch[4]);
-        d.fwp = d.fwpRaw; // preserve full string for display
-        d.fwpLabeled = true;
-      } else {
-        // Fallback: single value "72%" — old format, try to extract team prefix
-        const singleMatch = d.fwpRaw.match(/([A-Z]{2,4})?\s*([\d.]+)%?/i);
-        if(singleMatch){
-          d.fwpSingleTeam = singleMatch[1] ? singleMatch[1].toUpperCase() : null;
-          d.fwpSingleVal = parseFloat(singleMatch[2]);
+    // Parse EDGE line — extract fields independently (FWP and MIP can appear in any order)
+    const edgeLine = (text.match(/EDGE:\s*(.+)/i)||[])[1]||'';
+    if(edgeLine){
+      // Extract FWP block: "FWP: PHI 25% / CLE 75%" or "FWP: 72%"
+      const fwpMatch = edgeLine.match(/FWP:\s*([^|]+)/i);
+      if(fwpMatch) d.fwpRaw = fwpMatch[1].trim().replace(/\|.*$/,'').trim();
+      // Extract MIP block: "MIP: 26%" or "MIP: N/A"
+      const mipMatch = edgeLine.match(/MIP:\s*([^|]+)/i);
+      if(mipMatch) d.mip = mipMatch[1].trim().replace(/\|.*$/,'').trim();
+      // Extract EDGE value: everything before first | or FWP/MIP keyword
+      const edgeVal = edgeLine.replace(/\|?\s*(FWP|MIP):.*/i,'').replace(/\|.*$/,'').trim();
+      if(edgeVal){ d.edge = edgeVal; const en = parseFloat(edgeVal.replace(/[+%]/g,'')); d.edgeNum = isNaN(en)?null:en; }
+      // Parse two-sided FWP: "MEM 72% / LAC 28%" or "PHI 25% / CLE 75%"
+      if(d.fwpRaw){
+        const twoSidedMatch = d.fwpRaw.match(/([A-Z]{2,4})\s+([\d.]+)%?\s*\/\s*([A-Z]{2,4})\s+([\d.]+)%?/i);
+        if(twoSidedMatch){
+          d.fwpTeam1 = twoSidedMatch[1].toUpperCase();
+          d.fwpVal1 = parseFloat(twoSidedMatch[2]);
+          d.fwpTeam2 = twoSidedMatch[3].toUpperCase();
+          d.fwpVal2 = parseFloat(twoSidedMatch[4]);
+          d.fwp = d.fwpRaw;
+          d.fwpLabeled = true;
+        } else {
+          const singleMatch = d.fwpRaw.match(/([A-Z]{2,4})?\s*([\d.]+)%?/i);
+          if(singleMatch){
+            d.fwpSingleTeam = singleMatch[1] ? singleMatch[1].toUpperCase() : null;
+            d.fwpSingleVal = parseFloat(singleMatch[2]);
+          }
+          d.fwp = d.fwpRaw;
+          d.fwpLabeled = false;
         }
-        d.fwp = d.fwpRaw;
-        d.fwpLabeled = false;
       }
     }
     // Parse ENTRY line
@@ -3289,7 +3294,7 @@ function compute(game){
 
   // Rolling window
   // Rolling window — possession-based primary (25 poss), quarter-based fallback
-  var windowResult = computePossessionWindow(game, 25);
+  var windowResult = computePossessionWindow(game, 37);
   if(!windowResult || !windowResult.available){
     windowResult = computeRollingWindow(game); // fallback to quarter-based
   }
@@ -6799,7 +6804,7 @@ WATCH
     },
   };
   cs.adjustment = {signal:'INTERIOR PIVOT',note:'CLE progressive rim pressure + falling 3PA share (Q1→Q2 early)',risingStructural:3,fallingVariance:1,team:'CLE'};
-  cs.combinedRead = {read:'TOO EARLY',note:'Window activates after 25 possessions — arrows show early directional reads'};
+  cs.combinedRead = {read:'TOO EARLY',note:'Window activates after 37 possessions — arrows show early directional reads'};
 
   renderPills(); updateCounts();
   // Select the demo pill

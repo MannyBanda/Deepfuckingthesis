@@ -2509,30 +2509,33 @@ function parseSonnetDecision(text){
   if(!text) return null;
   try{
     const d = {};
-    // Parse EDGE line: "EDGE: +11.3% | FWP: MEM 72% / LAC 28% | MIP: 61.1%"
-    const edgeMatch = text.match(/EDGE:\s*([^\|]+)\|\s*FWP:\s*([^\|]+)\|\s*MIP:\s*(.+)/i);
-    if(edgeMatch){
-      d.edge = edgeMatch[1].trim();
-      d.fwpRaw = edgeMatch[2].trim();
-      d.mip = edgeMatch[3].trim();
-      const edgeNum = parseFloat(d.edge.replace(/[+%]/g,''));
-      d.edgeNum = isNaN(edgeNum) ? null : edgeNum;
-      const twoSidedMatch = d.fwpRaw.match(/([A-Z]{2,4})\s+([\d.]+)%?\s*\/\s*([A-Z]{2,4})\s+([\d.]+)%?/i);
-      if(twoSidedMatch){
-        d.fwpTeam1 = twoSidedMatch[1].toUpperCase();
-        d.fwpVal1 = parseFloat(twoSidedMatch[2]);
-        d.fwpTeam2 = twoSidedMatch[3].toUpperCase();
-        d.fwpVal2 = parseFloat(twoSidedMatch[4]);
-        d.fwp = d.fwpRaw;
-        d.fwpLabeled = true;
-      } else {
-        const singleMatch = d.fwpRaw.match(/([A-Z]{2,4})?\s*([\d.]+)%?/i);
-        if(singleMatch){
-          d.fwpSingleTeam = singleMatch[1] ? singleMatch[1].toUpperCase() : null;
-          d.fwpSingleVal = parseFloat(singleMatch[2]);
+    // Parse EDGE line — extract fields independently (FWP and MIP can appear in any order)
+    const edgeLine = (text.match(/EDGE:\s*(.+)/i)||[])[1]||'';
+    if(edgeLine){
+      const fwpMatch = edgeLine.match(/FWP:\s*([^|]+)/i);
+      if(fwpMatch) d.fwpRaw = fwpMatch[1].trim().replace(/\|.*$/,'').trim();
+      const mipMatch = edgeLine.match(/MIP:\s*([^|]+)/i);
+      if(mipMatch) d.mip = mipMatch[1].trim().replace(/\|.*$/,'').trim();
+      const edgeVal = edgeLine.replace(/\|?\s*(FWP|MIP):.*/i,'').replace(/\|.*$/,'').trim();
+      if(edgeVal){ d.edge = edgeVal; const en = parseFloat(edgeVal.replace(/[+%]/g,'')); d.edgeNum = isNaN(en)?null:en; }
+      if(d.fwpRaw){
+        const twoSidedMatch = d.fwpRaw.match(/([A-Z]{2,4})\s+([\d.]+)%?\s*\/\s*([A-Z]{2,4})\s+([\d.]+)%?/i);
+        if(twoSidedMatch){
+          d.fwpTeam1 = twoSidedMatch[1].toUpperCase();
+          d.fwpVal1 = parseFloat(twoSidedMatch[2]);
+          d.fwpTeam2 = twoSidedMatch[3].toUpperCase();
+          d.fwpVal2 = parseFloat(twoSidedMatch[4]);
+          d.fwp = d.fwpRaw;
+          d.fwpLabeled = true;
+        } else {
+          const singleMatch = d.fwpRaw.match(/([A-Z]{2,4})?\s*([\d.]+)%?/i);
+          if(singleMatch){
+            d.fwpSingleTeam = singleMatch[1] ? singleMatch[1].toUpperCase() : null;
+            d.fwpSingleVal = parseFloat(singleMatch[2]);
+          }
+          d.fwp = d.fwpRaw;
+          d.fwpLabeled = false;
         }
-        d.fwp = d.fwpRaw;
-        d.fwpLabeled = false;
       }
     }
     // Parse ENTRY line
@@ -3301,7 +3304,7 @@ function compute(game){
 
   // Rolling window
   // Rolling window — possession-based primary (17 poss for NCAAMB), quarter-based fallback
-  var windowResult = computePossessionWindow(game, 17);
+  var windowResult = computePossessionWindow(game, 25);
   if(!windowResult || !windowResult.available){
     windowResult = computeRollingWindow(game);
   }
