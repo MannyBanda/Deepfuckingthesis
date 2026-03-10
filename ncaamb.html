@@ -4612,26 +4612,41 @@ function restoreSnapshots(gameId){
 }
 
 // ── Rolling Window ───────────────────────────────────────────────────────────
+// ── Rolling Window (Cross-fade, NCAAMB halves) ──────────────────────────────
+// H2: H1(fading as H2 builds) + H2(partial)
+// OT: H2(fading) + OT(partial)
 function computeRollingWindow(game){
   const cs = cardState[game.id]; if(!cs) return null;
   const qs = cs.quarterSnapshots; if(!qs) return null;
   const p = game.period||0;
-  if(p < 3) return { available:false, reason:'TOO EARLY' };
+  if(p < 2) return { available:false, reason:'TOO EARLY' };
 
-  // Determine window quarters
-  let windowQs = [];
-  if(p===3){ windowQs = [2,3]; }
-  else if(p===4){ windowQs = [2,3]; }
-  else if(p>=5){ windowQs = [3,4]; } // OT: Q3+Q4
+  // Clock → completion fraction of current period (0.0 = just started, 1.0 = period over)
+  const clockParts = (game.clock||'').split(':');
+  const clockMins = clockParts.length===2 ? parseInt(clockParts[0])+(parseInt(clockParts[1]||0)/60) : 20;
+  const periodLength = p <= 2 ? 20 : 5; // 20-min halves, 5-min OT
+  const completion = Math.max(0, Math.min(1, (periodLength - clockMins) / periodLength));
 
-  // Check availability
-  const available = windowQs.every(q => qs.quarters[q]);
-  if(!available){
-    const missing = windowQs.filter(q => !qs.quarters[q]);
-    return { available:false, reason:'Missing H'+missing.join(','), windowQuarters:windowQs };
+  var weightedQs = {};
+  var windowLabel = [];
+
+  if(p === 2){
+    // H2: H1(fading) + H2(partial, building)
+    if(qs.quarters[1] && completion < 1) weightedQs[1] = Math.max(0, 1.0 - completion);
+    if(qs.quarters[2]) weightedQs[2] = 1.0;
+    windowLabel = completion > 0.95 ? ['H2*'] : ['H1('+Math.round((1-completion)*100)+'%)','H2*'];
+  } else if(p >= 3){
+    // OT: H2(fading) + OT(partial)
+    if(qs.quarters[2] && completion < 1) weightedQs[2] = Math.max(0, 1.0 - completion);
+    if(qs.quarters[p]) weightedQs[p] = 1.0;
+    windowLabel = ['H2','OT*'];
   }
 
-  // Aggregate stats across window quarters (weighted by natural volume)
+  const activeQs = Object.keys(weightedQs).filter(q => weightedQs[q] > 0);
+  if(activeQs.length === 0){
+    return { available:false, reason:'No half data yet', windowQuarters:windowLabel };
+  }
+
   function aggWindow(side){
     const agg = {};
     const sumKeys = ['points_in_the_paint','fast_break_points','points_off_turnovers',
@@ -4640,10 +4655,9 @@ function computeRollingWindow(game){
       'free_throws_made','free_throws_att','assists','turnovers','steals','blocks',
       'offensive_rebounds','personal_fouls','points','bench_points'];
     sumKeys.forEach(k=>{ agg[k]=0; let hasAny=false;
-      windowQs.forEach(q=>{ const v=qs.quarters[q]?.[side]?.[k]; if(v!=null){agg[k]+=v;hasAny=true;} });
+      activeQs.forEach(q=>{ const v=qs.quarters[q]?.[side]?.[k]; if(v!=null){agg[k]+=v*weightedQs[q];hasAny=true;} });
       if(!hasAny) agg[k]=null;
     });
-    // Derived
     const fga=agg.field_goals_att||1;
     agg.efg=fga>0?((agg.field_goals_made||0)+0.5*(agg.three_points_made||0))/fga:null;
     agg.assist_ratio=(agg.field_goals_made||0)>0?((agg.assists||0)/(agg.field_goals_made||1))*100:null;
@@ -4653,11 +4667,8 @@ function computeRollingWindow(game){
 
   const hW = aggWindow('home'), aW = aggWindow('away');
   const hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
-
-  // Score indicators on window data
   const W = {I1:.25,I2:.25,I3:.20,I4:.20,I5:.10};
 
-  // I1 window
   const hGen=(hW.steals||0)+(hW.offensive_rebounds||0)-(hW.turnovers||0);
   const aGen=(aW.steals||0)+(aW.offensive_rebounds||0)-(aW.turnovers||0);
   const hConv=(hW.fast_break_points||0)+(hW.points_off_turnovers||0)+(hW.second_chance_points||0);
@@ -4665,48 +4676,42 @@ function computeRollingWindow(game){
   const convAvail = hConv>0||aConv>0;
   let i1 = (hGen>aGen?1:hGen<aGen?-1:0);
   if(convAvail) i1 += (hConv>aConv?1:hConv<aConv?-1:0);
-  const wI1 = {score:i1>0?1:i1===0?.5:0, detail:'Gen:'+hGen+'–'+aGen+(convAvail?' Conv:'+hConv+'–'+aConv:' (conv N/A)')};
+  const wI1 = {score:i1>0?1:i1===0?.5:0, detail:'Gen:'+hGen.toFixed(0)+'\u2013'+aGen.toFixed(0)+(convAvail?' Conv:'+hConv.toFixed(0)+'\u2013'+aConv.toFixed(0):' (conv N/A)')};
 
-  // I2 window
   const hPaint=hW.points_in_the_paint||0, aPaint=aW.points_in_the_paint||0;
   const hFTA=hW.free_throws_att||0, aFTA=aW.free_throws_att||0;
   const hBlk=hW.blocks||0, aBlk=aW.blocks||0;
-  const hFouls=hW.personal_fouls||0, aFouls=aW.personal_fouls||0;
   const hAtRim=hW.field_goals_at_rim_att, aAtRim=aW.field_goals_at_rim_att;
   let rim = (hPaint+hFTA+hBlk)-(aPaint+aFTA+aBlk);
   if(hAtRim!=null&&aAtRim!=null) rim += (hAtRim-aAtRim);
-  const rimThresh = (hAtRim!=null)?10:6; // lower threshold without at-rim
-  const wI2 = {score:rim>rimThresh?1:rim<-rimThresh?0:.5, detail:'Paint:'+hPaint+'–'+aPaint+' FTA:'+hFTA+'–'+aFTA+(hAtRim!=null?' Rim:'+hAtRim+'–'+aAtRim:'')};
+  const rimThresh = (hAtRim!=null)?10:6;
+  const wI2 = {score:rim>rimThresh?1:rim<-rimThresh?0:.5, detail:'Paint:'+hPaint.toFixed(0)+'\u2013'+aPaint.toFixed(0)+' FTA:'+hFTA.toFixed(0)+'\u2013'+aFTA.toFixed(0)+(hAtRim!=null?' Rim:'+hAtRim.toFixed(0)+'\u2013'+aAtRim.toFixed(0):'')};
 
-  // I3 window
   const hEFG=hW.efg, aEFG=aW.efg;
   const hAR=hW.assist_ratio||0, aAR=aW.assist_ratio||0;
   let i3=0;
   if(hEFG!=null&&aEFG!=null) i3+=(hEFG>aEFG+.02?1:hEFG<aEFG-.02?-1:0);
   i3+=(hAR>aAR+5?1:hAR<aAR-5?-1:0);
-  const wI3 = {score:i3>0?1:i3===0?.5:0, detail:'eFG:'+(hEFG!=null?(hEFG*100).toFixed(0):'?')+'–'+(aEFG!=null?(aEFG*100).toFixed(0):'?')+' AR:'+hAR.toFixed(0)+'–'+aAR.toFixed(0)};
+  const wI3 = {score:i3>0?1:i3===0?.5:0, detail:'eFG:'+(hEFG!=null?(hEFG*100).toFixed(0):'?')+'\u2013'+(aEFG!=null?(aEFG*100).toFixed(0):'?')+' AR:'+hAR.toFixed(0)+'\u2013'+aAR.toFixed(0)};
 
-  // I4 window — use point differential + bench in window
   const hPts=hW.points||0, aPts=aW.points||0;
   const pDiff=hPts-aPts;
   const hBench=hW.bench_points||0, aBench=aW.bench_points||0;
   let i4=(Math.abs(pDiff)>4?(pDiff>0?1:-1):0);
   if(hBench>0||aBench>0) i4+=(hBench>aBench+4?1:hBench<aBench-4?-1:0);
-  const wI4 = {score:i4>0?1:i4===0?.5:0, detail:'Window Δ:'+pDiff+' Bench:'+hBench+'–'+aBench};
+  const wI4 = {score:i4>0?1:i4===0?.5:0, detail:'Window \u0394:'+pDiff.toFixed(0)+' Bench:'+hBench.toFixed(0)+'\u2013'+aBench.toFixed(0)};
 
-  // I5 window — efficiency from per-possession if available, else from raw
   const hPoss=hW.possessions||0, aPoss=aW.possessions||0;
   let hEff=0,aEff=0;
   if(hPoss>0&&aPoss>0){ hEff=hPts/hPoss; aEff=aPts/aPoss; }
   const effD=hEff-aEff;
-  const wI5 = {score:effD>0.06?1:effD<-0.06?0:.5, detail:'Eff:'+hEff.toFixed(2)+'–'+aEff.toFixed(2)+' Poss:'+hPoss+'–'+aPoss};
+  const wI5 = {score:effD>0.06?1:effD<-0.06?0:.5, detail:'Eff:'+hEff.toFixed(2)+'\u2013'+aEff.toFixed(2)+' Poss:'+hPoss.toFixed(0)+'\u2013'+aPoss.toFixed(0)};
 
   const raw = wI1.score*W.I1 + wI2.score*W.I2 + wI3.score*W.I3 + wI4.score*W.I4 + wI5.score*W.I5;
   const controlHome = raw>=0.5;
   const score = controlHome?raw:1-raw;
   const controlTeam = controlHome?hA:aA;
 
-  // Data quality
   const missingFields = [];
   if(hW.points_in_the_paint===null) missingFields.push('paint');
   if(hW.field_goals_at_rim_att===null) missingFields.push('at_rim');
@@ -4715,13 +4720,15 @@ function computeRollingWindow(game){
 
   return {
     available: true,
-    windowQuarters: windowQs,
+    windowQuarters: windowLabel,
     windowPossessions: (hPoss||0)+(aPoss||0),
     home: hW, away: aW,
     I1:wI1, I2:wI2, I3:wI3, I4:wI4, I5:wI5,
     score, controlTeam,
     dataQuality: missingFields.length>0?'PARTIAL':'FULL',
     missingFields,
+    crossFade: true,
+    completion: completion,
   };
 }
 
@@ -5992,7 +5999,7 @@ function renderCard(game){
       if(rw && rw.available){
         var wVerdict = rw.score>=0.90?'DOMINANT':rw.score>=0.75?'STRONG':rw.score>=0.60?'EARNED':rw.score>=0.45?'NO EDGE':'WAIT';
         html+='<div style="font-size:9px;font-weight:700;color:'+_vc(wVerdict)+'">'+rw.controlTeam+' '+rw.score.toFixed(2)+'</div>';
-        html+='<div style="font-size:5.5px;color:var(--t3)">'+(rw.possessionBased ? 'Last '+rw.windowPossessions+' poss'+(rw.timeSpanMin?' ('+rw.timeSpanMin.toFixed(1)+'min)':'') : rw.windowQuarters.map(function(q){return 'H'+q;}).join('+')+' ('+Math.round(rw.windowPossessions)+' poss)')+'</div>';
+        html+='<div style="font-size:5.5px;color:var(--t3)">'+(rw.possessionBased ? 'Last '+rw.windowPossessions+' poss'+(rw.timeSpanMin?' ('+rw.timeSpanMin.toFixed(1)+'min)':'') : rw.windowQuarters.join('+')+' ('+Math.round(rw.windowPossessions)+' poss)')+'</div>';
       } else {
         html+='<div style="font-size:7px;color:var(--t3)">'+((rw&&rw.reason)||'Too early')+'</div>';
       }
