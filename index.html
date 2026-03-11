@@ -988,6 +988,7 @@ async function fetchSummary(game){
     renderCard(game);
     renderConfidenceTable();
     checkAlert(game);
+    checkStructuralAlert(game);
     captureCalibration(game);
 
     // Auto-analyze disabled — use manual ⚡ ANALYZE button to control token spend
@@ -1038,6 +1039,7 @@ async function fetchBdlFallback(game, reason){
     renderCard(game);
     renderConfidenceTable();
     checkAlert(game);
+    checkStructuralAlert(game);
     captureCalibration(game);
 
     // Auto-analyze disabled — use manual ⚡ ANALYZE button
@@ -1868,6 +1870,18 @@ function buildPossessionLog(timeline, hA, aA){
 // Replaces quarter-based window with last-N-possessions analysis
 // Returns same shape for downstream compat (gap log, acceleration, combined read)
 // ══════════════════════════════════════════════════════════════════════════════
+// Progressive possession window sizing — grows with the game
+// Covers ~35-38% of total possessions, minimum 25
+function getPossWindowSize(game){
+  var cs = cardState[game.id]; if(!cs) return 25;
+  var pl = cs.pbpAudit?.possessionLog;
+  if(!pl || pl.length === 0) return 25;
+  var total = pl.length;
+  var p = game.period || 1;
+  var frac = p <= 4 ? 0.35 : 0.38;
+  return Math.max(25, Math.round(total * frac));
+}
+
 function computePossessionWindow(game, windowSize){
   var cs = cardState[game.id]; if(!cs) return null;
   var possLog = cs.pbpAudit?.possessionLog;
@@ -3369,9 +3383,10 @@ function compute(game){
   // Rolling window — quarter-based
   var windowResult = computeRollingWindow(game);
   cardState[game.id].rollingWindow = windowResult;
-  var pbpWindow = computePossessionWindow(game, 37);
+  var _pwSize = getPossWindowSize(game);
+  var pbpWindow = computePossessionWindow(game, _pwSize);
   cardState[game.id].pbpWindow = pbpWindow;
-  var pbpWindowEnriched = computePossessionWindowEnriched(game, 37);
+  var pbpWindowEnriched = computePossessionWindowEnriched(game, _pwSize);
   cardState[game.id].pbpWindowEnriched = pbpWindowEnriched;
 
   // Gap acceleration
@@ -3500,9 +3515,26 @@ function buildTrajectory(game, hA, aA, hs, as, H, A, hS, aS, qDs, periods){
     sigs.push({key:'T2*',w:0,team:null,color:'#3e3e48',text:'No baseline data'});
   }
 
-  // T3 — Quarter Delta (highest weight)
-  if(currQ!=null&&Math.abs(currQ)>=6){const w=currQ>0?hA:aA,tr=(currQ>0&&overall<0)||(currQ<0&&overall>0);sigs.push({key:'T3',w:2,team:w,color:'#00ff88',text:w+' winning Q'+p+' by '+Math.abs(currQ)+(tr?' (trailing—comeback)':'')});}
-  else sigs.push({key:'T3',w:0,team:null,color:'#3e3e48',text:'Q delta <6 — neutral'});
+  // T3 — Possession Window Delta (highest weight)
+  // PBP-powered: uses last N possessions point differential instead of period boundaries
+  // Fallback to quarter/half delta if PBP window unavailable
+  var _pw = cardState[game.id]?.pbpWindow || cardState[game.id]?.pbpWindowEnriched;
+  var _t3fired = false;
+  if(_pw && _pw.available && _pw._raw){
+    var _wDelta = _pw._raw.hPts - _pw._raw.aPts;
+    var _wSize = _pw.windowPossessions || 25;
+    var _t3thresh = Math.max(5, Math.round(_wSize * 0.16));
+    if(Math.abs(_wDelta) >= _t3thresh){
+      var _t3w = _wDelta>0 ? hA : aA;
+      var _t3tr = (_wDelta>0 && overall<0) || (_wDelta<0 && overall>0);
+      sigs.push({key:'T3',w:2,team:_t3w,color:'#00ff88',text:_t3w+' +'+Math.abs(_wDelta)+' in last '+_wSize+' poss'+(_t3tr?' (trailing\u2014comeback)':'')});
+      _t3fired = true;
+    }
+  }
+  if(!_t3fired){
+    if(currQ!=null&&Math.abs(currQ)>=6){var _t3w2=currQ>0?hA:aA,_t3tr2=(currQ>0&&overall<0)||(currQ<0&&overall>0);sigs.push({key:'T3*',w:2,team:_t3w2,color:'#00ff88',text:_t3w2+' winning period by '+Math.abs(currQ)+(_t3tr2?' (trailing\u2014comeback)':'')+' [fallback]'});}
+    else sigs.push({key:'T3',w:0,team:null,color:'#3e3e48',text:'Window delta <threshold \u2014 neutral'});
+  }
 
   // T4 — Foul Gate (now available via SR per-player data)
   let t4sig = {key:'T4',w:0,team:null,color:'#3e3e48',text:'No foul crisis detected'};
@@ -5206,6 +5238,105 @@ function checkAlert(game){
     showAlert(v.lvl,ind.controlTeam+' '+v.label+' — '+(game.away?.alias||'')+'@'+(game.home?.alias||''));
   cs.prevLvl=v.lvl;
 }
+// ══════════════════════════════════════════════════════════════════════════════
+// STRUCTURAL ALERT — client-side, no Sonnet dependency
+// Fires when structurally dominant team is trailing within a buyable range
+// ══════════════════════════════════════════════════════════════════════════════
+function checkStructuralAlert(game){
+  var cs = cardState[game.id]; if(!cs) return;
+  if(getState(game) !== 'LIVE') return;
+  var p = game.period || 0;
+  if(p < 2) return; // too early
+
+  var floor = cs.clientInd;
+  var win = cs.pbpWindow || cs.pbpWindowEnriched || cs.rollingWindow;
+  if(!floor || !floor.score) return;
+
+  var hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
+  var hS = game.homePoints || game.summary?.home?.points || 0;
+  var aS = game.awayPoints || game.summary?.away?.points || 0;
+  var fTeam = floor.controlTeam;
+  var fScore = floor.score;
+
+  // ── COMPOUND TRIGGER ──
+  // 1. Floor must show real control
+  if(fScore < 0.60) return;
+
+  // 2. Control team must be trailing
+  var ctrlIsHome = fTeam === hA;
+  var ctrlPts = ctrlIsHome ? hS : aS;
+  var oppPts = ctrlIsHome ? aS : hS;
+  var deficit = oppPts - ctrlPts;
+  if(deficit < 4) return;  // not meaningfully trailing
+  if(deficit > 20) return; // garbage time
+
+  // 3. Window agreement (if available)
+  var wTeam = win && win.available ? win.controlTeam : null;
+  var wScore = win && win.available ? win.score : null;
+  var windowAgreement = wTeam === fTeam;
+  var gap = (win && win.available && windowAgreement) ? (wScore - fScore) : 0;
+
+  // 4. Determine alert level
+  var level = null;
+  if(windowAgreement && gap > 0.05 && fScore >= 0.70) level = 'STRONG';
+  else if(windowAgreement && gap > 0 && fScore >= 0.65) level = 'MODERATE';
+  else if(fScore >= 0.60 && (!win || !win.available || windowAgreement)) level = 'WATCH';
+  else if(!windowAgreement && win && win.available) return; // floor/window disagree — skip
+
+  if(!level) return;
+
+  // 5. Hysteresis — 5 min cooldown per game per level
+  if(!cs._structAlert) cs._structAlert = {};
+  var cooldown = 5 * 60 * 1000; // 5 minutes
+  var lastFire = cs._structAlert[level];
+  if(lastFire && (Date.now() - lastFire) < cooldown) return;
+
+  // ── BUILD ALERT ──
+  var clock = game.clock || '';
+  var qClock = 'Q' + p + (clock ? ' ' + clock : '');
+  var score = aA + ' ' + aS + '-' + hS + ' ' + hA;
+
+  // Spread info
+  var spreadStr = '';
+  var od = cs.oddsData || cachedOdds?.[game.id];
+  if(od){
+    var sp = ctrlIsHome ? od.homeSpread : od.awaySpread;
+    if(sp != null) spreadStr = fTeam + ' ' + (sp > 0 ? '+' : '') + sp;
+  }
+
+  // Sustainability of leading team
+  var sustStr = '';
+  var sust = cs.clientSustainability;
+  if(sust){
+    var leadSide = ctrlIsHome ? 'away' : 'home';
+    var leadSust = sust[leadSide];
+    if(leadSust && leadSust.tier) sustStr = 'Lead sust: ' + leadSust.tier;
+  }
+
+  // Gap acceleration
+  var accelStr = '';
+  var accel = cs.acceleration;
+  if(accel && accel.accel) accelStr = 'Accel: ' + accel.accel;
+
+  var title = 'STRUCTURAL ' + level + ' — ' + fTeam + ' trailing by ' + deficit;
+  var body = score + ' ' + qClock
+    + '\nFloor: ' + fTeam + ' ' + fScore.toFixed(2)
+    + (wScore ? ' | Window: ' + (wTeam||'?') + ' ' + wScore.toFixed(2) + ' (gap ' + (gap>=0?'+':'') + gap.toFixed(2) + ')' : '')
+    + (spreadStr ? '\nSpread: ' + spreadStr : '')
+    + (sustStr ? ' | ' + sustStr : '')
+    + (accelStr ? ' | ' + accelStr : '');
+
+  var priority = level === 'STRONG' ? 5 : level === 'MODERATE' ? 4 : 3;
+
+  // Fire
+  cs._structAlert[level] = Date.now();
+  showAlert('entry', fTeam + ' structural ' + level + ' — trailing ' + deficit + ' ' + qClock);
+  sendNtfyRaw(title, body, priority);
+  console.log('%c🔔 STRUCTURAL ALERT: ' + title, 'color:#f5a62a;font-weight:bold');
+  console.log(body);
+}
+
+
 
 // ── Pills ─────────────────────────────────────────────────────────────────
 function renderPills(){
