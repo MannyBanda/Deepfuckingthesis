@@ -1978,7 +1978,7 @@ function buildPossessionLog(timeline, hA, aA){
       if(ev.shot.zone==='rim'||ev.shot.zone==='paint') currentPoss.paintTouch = true;
       continue;
     }
-    if(ev.type === 'turnover'){ currentPoss.turnovers.push(ev.turnover); closePoss('turnover', ev.clock); continue; }
+    if(ev.type === 'turnover'){ currentPoss.turnovers.push(ev.turnover); if(ev.turnover && ev.turnover.forced) currentPoss.steals++; closePoss('turnover', ev.clock); continue; }
     if(ev.type === 'rebound' && ev.rebound){
       currentPoss.rebounds.push(ev.rebound);
       if(ev.rebound.type === 'defensive'){ closePoss('miss', ev.clock); continue; }
