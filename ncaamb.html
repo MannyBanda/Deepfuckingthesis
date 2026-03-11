@@ -1995,7 +1995,11 @@ function buildPossessionLog(timeline, hA, aA){
       continue;
     }
     if(ev.type === 'block'){ currentPoss.blocks++; continue; }
-    if(ev.type === 'steal'){ currentPoss.steals++; continue; }
+    if(ev.type === 'steal'){
+      if(currentPoss){ currentPoss.steals++; }
+      else if(log.length > 0 && log[log.length-1].result === 'turnover'){ log[log.length-1].steals++; }
+      continue;
+    }
     if(ev.type === 'foul'){
       currentPoss.fouls.push(ev.foul);
       if(ev.foul.type === 'offensive') closePoss('turnover', ev.clock);
