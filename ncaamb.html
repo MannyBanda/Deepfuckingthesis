@@ -5848,10 +5848,11 @@ function renderCard(game){
         divergences.push('Control team flipped: '+baseInd.controlTeam+' → '+rawInd.controlTeam);
       }
       cs.divergences = divergences;
-      cs.clientInd = rawInd;
     } else {
       cs.divergences = [];
     }
+    // Always set clientInd so control layers + arrows render without analysis
+    if(rawInd) cs.clientInd = rawInd;
 
     if(cs.divergences && cs.divergences.length>0){
       var minsAgo = cs.analysisTime ? Math.round((Date.now()-cs.analysisTime.getTime())/60000) : '?';
