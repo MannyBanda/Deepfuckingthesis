@@ -384,10 +384,10 @@ var SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing real-time 
 + '3. STRUCTURAL FLOOR (cumulative I1-I5):\n'
 + '   - Dashboard\'s client-side indicator scores on ALL game data from tip to now\n'
 + '   - This is "who has controlled this game overall"\n\n'
-+ '4. ROLLING WINDOW (when available, Q3+):\n'
-+ '   - I1-I5 scored on the two most recent quarters (Q2+Q3, or Q3+Q4)\n'
-+ '   - This is "who is controlling the game RIGHT NOW"\n'
-+ '   - In Q2: window is TOO EARLY (not enough data), but directional arrows still fire\n\n'
++ '4. ROLLING WINDOW (cross-fade, activates Q2+):\n'
++ '   - I1-I5 scored on a sliding ~2-quarter window with cross-fade weighting\n'
++ '   - The oldest quarter fades out as the current quarter builds in (e.g. Q4: Q2 fading + Q3 anchor + Q4 live)\n'
++ '   - This is "who is controlling the game RIGHT NOW" — never stale\n\n'
 + '5. GAP ACCELERATION (when window available):\n'
 + '   - Gap = window score minus floor score. Positive = window stronger than cumulative (edge compounding)\n'
 + '   - Tracked across check-ins. Classification:\n'
@@ -408,6 +408,12 @@ var SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing real-time 
 + '   - Trag3 (Foul Gate): key player in foul trouble — forward indicator degradation\n'
 + '   - Trag4 (Closing Lineup): who is on the floor generating the current read\n\n'
 + '8. DEPTH AUDIT (PBP, when available): 3PT assisted/unassisted, forced/unforced TOs, shot zones, scoring runs\n\n'
++ '9. BONUS STATUS RULE:\n'
++ '   - When ONE team is in the bonus before the 4:00 mark of any quarter, treat as STRUCTURAL I2 MULTIPLIER.\n'
++ '     Every drive and paint touch generates free throws. This compounds every possession and cannot be undone.\n'
++ '     Elevate I2 weight and factor this into FWP — the team in the bonus has guaranteed foul leverage.\n'
++ '   - When BOTH teams are in the bonus, the advantage NEUTRALIZES — both sides benefit equally from foul calls.\n'
++ '   - This is especially critical in Q4 where foul leverage directly impacts closing possessions.\n\n'
 + 'HOW TO USE THE LAYERS TOGETHER:\n'
 + '   The STRUCTURAL FLOOR answers "who should win." The ROLLING WINDOW answers "who is winning now." The GAP answers "is the edge compounding or fading."\n'
 + '   The ARROWS show HOW — is the team adjusting its approach (interior pivot, variance shift).\n'
@@ -582,6 +588,38 @@ exports.handler = async function(event) {
       oddsSection = '\nMARKET: No odds.\n';
     }
 
+    // ── BONUS STATUS ──
+    var bonusSection = '';
+    var bonusStatus = body.bonusStatus;
+    var gameClock = body.gameClock;
+    var gamePeriod = body.gamePeriod || 0;
+    if (bonusStatus && gamePeriod >= 1) {
+      var clockMins = 12;
+      if (gameClock) {
+        var cp = gameClock.split(':');
+        clockMins = (parseInt(cp[0]) || 0) + (parseInt(cp[1] || 0) / 60);
+      }
+      var homeInBonus = bonusStatus.home || false;
+      var awayInBonus = bonusStatus.away || false;
+      var homeDouble = bonusStatus.homeDouble || false;
+      var awayDouble = bonusStatus.awayDouble || false;
+      if (homeInBonus || awayInBonus) {
+        var bothInBonus = homeInBonus && awayInBonus;
+        bonusSection = '\nBONUS STATUS: ';
+        if (bothInBonus) {
+          bonusSection += 'BOTH teams in bonus — advantage NEUTRALIZED\n';
+        } else {
+          var bonusTeam = homeInBonus ? homeTeam : awayTeam;
+          bonusSection += bonusTeam + ' IN BONUS';
+          if (clockMins >= 4.0) {
+            bonusSection += ' with ' + clockMins.toFixed(1) + ' min remaining — STRUCTURAL I2 MULTIPLIER. Every paint touch = free throws.\n';
+          } else {
+            bonusSection += ' with ' + clockMins.toFixed(1) + ' min remaining\n';
+          }
+        }
+      }
+    }
+
     // ── TRACKING BASELINES ──
     var trackingSection = '';
     if (trackingData) {
@@ -753,7 +791,7 @@ exports.handler = async function(event) {
     // ── BUILD PROMPT ──
     var userPrompt = awayTeam + ' @ ' + homeTeam + ' | ' + period + ' | ' + score + '\n\n'
       + (thesis ? 'THESIS:\n' + thesis + '\n' : 'No thesis.')
-      + '\n' + clutchSection + oddsSection + trackingSection + sustainabilitySection + leadCompSection
+      + '\n' + clutchSection + oddsSection + bonusSection + trackingSection + sustainabilitySection + leadCompSection
       + windowSection + gapSection + combinedReadSection + arrowSection + adjustmentSection
       + pbpSection + edgeSection + narrativeSection
       + '\nGAME DATA:\n' + JSON.stringify(summaryData);
