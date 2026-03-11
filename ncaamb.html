@@ -1960,6 +1960,11 @@ function buildPossessionLog(timeline, hA, aA){
       if(possTeam && possTeam !== '?') currentPoss = newPoss(possTeam, ev.clock, ev.quarter);
       else continue;
     }
+    // Safety valve: if scoring event from OTHER team, force-close stale possession
+    if(ev.team !== '?' && ev.team !== currentPoss.team && (ev.type==='shot_made'||ev.type==='shot_miss'||ev.type==='turnover'||ev.type==='ft_made'||ev.type==='ft_miss')){
+      closePoss('forced_close', ev.clock);
+      currentPoss = newPoss(ev.team, ev.clock, ev.quarter);
+    }
     if(ev.onCourt && (ev.onCourt.home.length >= 5 || ev.onCourt.away.length >= 5)) currentPoss.onCourt = ev.onCourt;
     currentPoss.events.push(ev);
     if(ev.type === 'shot_made'){
@@ -1983,6 +1988,7 @@ function buildPossessionLog(timeline, hA, aA){
       currentPoss.ftAttempts++; if(ev.freeThrow.made){ currentPoss.ftMade++; currentPoss.points += 1; }
       var ftType = (ev.freeThrow.ftType||'').toLowerCase();
       var ftMatch = ftType.match(/(\d+)\s*of\s*(\d+)/);
+      if(!ftMatch) ftMatch = ftType.match(/(\d+)(?:st|nd|rd|th)\s*of\s*(\d+)/);
       var isLastFT = ftMatch && ftMatch[1] === ftMatch[2];
       var isTechnical = ftType.includes('technical');
       if(isLastFT && !isTechnical && ev.freeThrow.made) closePoss('made_ft', ev.clock);
@@ -2011,16 +2017,22 @@ function computePossessionWindow(game, windowSize){
   var win = possLog.slice(-windowSize);
   var hP = win.filter(function(p){return p.team===hA;}), aP = win.filter(function(p){return p.team===aA;});
 
+  // Attribution: TOs, OREBs, transition shots belong to possessing team.
+  // Steals are DEFENSIVE — home steals happen during AWAY possessions.
   var hTO=0,aTO=0,hStl=0,aStl=0,hOreb=0,aOreb=0,hTrans=0,aTrans=0;
-  hP.forEach(function(p){hTO+=p.turnovers.length;hStl+=p.steals;p.rebounds.forEach(function(r){if(r.type==='offensive')hOreb++;});p.shots.forEach(function(s){if(s.context==='transition')hTrans++;});});
-  aP.forEach(function(p){aTO+=p.turnovers.length;aStl+=p.steals;p.rebounds.forEach(function(r){if(r.type==='offensive')aOreb++;});p.shots.forEach(function(s){if(s.context==='transition')aTrans++;});});
+  hP.forEach(function(p){hTO+=p.turnovers.length;p.rebounds.forEach(function(r){if(r.type==='offensive')hOreb++;});p.shots.forEach(function(s){if(s.context==='transition')hTrans++;});});
+  aP.forEach(function(p){aTO+=p.turnovers.length;p.rebounds.forEach(function(r){if(r.type==='offensive')aOreb++;});p.shots.forEach(function(s){if(s.context==='transition')aTrans++;});});
+  aP.forEach(function(p){hStl+=p.steals;}); hP.forEach(function(p){aStl+=p.steals;});
   var hGen=hStl+hOreb-hTO, aGen=aStl+aOreb-aTO;
   var i1=(hGen>aGen?1:hGen<aGen?-1:0); if(hTrans>0||aTrans>0) i1+=(hTrans>aTrans?1:hTrans<aTrans?-1:0);
   var wI1={score:i1>0?1:i1===0?.5:0, detail:'Gen:'+hGen+'\u2013'+aGen+' Stl:'+hStl+'\u2013'+aStl+' TO:'+hTO+'\u2013'+aTO+' Trans:'+hTrans+'\u2013'+aTrans};
 
+  // Attribution: FTA, paint touches belong to possessing team. Fouls already swapped (defensive).
+  // Blocks are DEFENSIVE — home blocks happen during AWAY possessions.
   var hFTA=0,aFTA=0,hBlk=0,aBlk=0,hPaintT=0,aPaintT=0,hRimS=0,aRimS=0,hFouls=0,aFouls=0;
-  hP.forEach(function(p){hFTA+=p.ftAttempts;hBlk+=p.blocks;if(p.paintTouch)hPaintT++;p.fouls.forEach(function(f){if(f.type==='personal')aFouls++;});});
-  aP.forEach(function(p){aFTA+=p.ftAttempts;aBlk+=p.blocks;if(p.paintTouch)aPaintT++;p.fouls.forEach(function(f){if(f.type==='personal')hFouls++;});});
+  hP.forEach(function(p){hFTA+=p.ftAttempts;if(p.paintTouch)hPaintT++;p.fouls.forEach(function(f){if(f.type==='personal')aFouls++;});});
+  aP.forEach(function(p){aFTA+=p.ftAttempts;if(p.paintTouch)aPaintT++;p.fouls.forEach(function(f){if(f.type==='personal')hFouls++;});});
+  aP.forEach(function(p){hBlk+=p.blocks;}); hP.forEach(function(p){aBlk+=p.blocks;});
   hP.forEach(function(p){p.shots.forEach(function(s){if(s.zone==='rim'||s.zone==='paint')hRimS++;});});
   aP.forEach(function(p){p.shots.forEach(function(s){if(s.zone==='rim'||s.zone==='paint')aRimS++;});});
   var rimScore=(hPaintT+hFTA+hBlk)-(aPaintT+aFTA+aBlk);
@@ -2040,13 +2052,14 @@ function computePossessionWindow(game, windowSize){
   var hLineups=Object.keys(hLU).length, aLineups=Object.keys(aLU).length;
   var i4=(Math.abs(pDiff)>3?(pDiff>0?1:-1):0);
   if(hLineups>0&&aLineups>0) i4+=(hLineups<aLineups-1?0.5:hLineups>aLineups+1?-0.5:0);
-  var wI4={score:i4>0?1:i4===0?.5:0, detail:'Window \u0394:'+(pDiff>0?'+':'')+pDiff+' Lineups:'+hLineups+'\u2013'+aLineups};
+  var luLabel = (hLineups>0||aLineups>0) ? hLineups+'\u2013'+aLineups : 'N/A';
+  var wI4={score:i4>0?1:i4===0?.5:0, detail:'Window \u0394:'+(pDiff>0?'+':'')+pDiff+' Lineups:'+luLabel};
 
   var hPPP=hP.length>0?hPts/hP.length:0, aPPP=aP.length>0?aPts/aP.length:0, effD=hPPP-aPPP;
   var timeSpanMin=0;
   if(win.length>=2&&win[0].startClock&&win[win.length-1].endClock){
-    // NCAAMB: 2×20 min halves
-    var pc=function(c,q){if(!c)return 0;var p=c.split(':');var m=(parseInt(p[0])||0)+(parseInt(p[1])||0)/60;return(q-1)*20+(20-m);};
+    // NCAAMB: H1-H2=20min, OT=5min
+    var pc=function(c,q){if(!c)return 0;var pts=c.split(':');var m=(parseInt(pts[0])||0)+(parseInt(pts[1])||0)/60;var el=0;for(var i=1;i<q;i++)el+=(i<=2?20:5);return el+((q<=2?20:5)-m);};
     timeSpanMin=Math.max(0.5,pc(win[win.length-1].endClock,win[win.length-1].quarter)-pc(win[0].startClock,win[0].quarter));
   }
   var pace=timeSpanMin>0?(windowSize/timeSpanMin)*40:0; // per 40 min (NCAAMB game length)
@@ -2097,10 +2110,85 @@ function computePossessionWindow(game, windowSize){
     score:score, controlTeam:controlTeam,
     dataQuality:'PBP', missingFields:[], possessionBased:true,
     timeSpanMin:timeSpanMin, pace:pace, hPPP:hPPP, aPPP:aPPP,
+    _raw:{hTO:hTO,aTO:aTO,hStl:hStl,aStl:aStl,hOreb:hOreb,aOreb:aOreb,hTrans:hTrans,aTrans:aTrans,
+      hFTA:hFTA,aFTA:aFTA,hBlk:hBlk,aBlk:aBlk,hPaintT:hPaintT,aPaintT:aPaintT,hRimS:hRimS,aRimS:aRimS,hFouls:hFouls,aFouls:aFouls,
+      hFGM:hFGM,aFGM:aFGM,hFGA:hFGA,aFGA:aFGA,h3PM:h3PM,a3PM:a3PM,h3PA:h3PA,a3PA:a3PA,hAst:hAst,aAst:aAst,
+      hPts:hPts,aPts:aPts,hLineups:hLineups,aLineups:aLineups,hEFG:hEFG,aEFG:aEFG,hAR:hAR,aAR:aAR},
     possResults:{home:hResults,away:aResults}, scoringRate:{home:hSR,away:aSR},
     paintTouchRate:{home:hPaintRate,away:aPaintRate}, repeatedVictims:repeatedVictims,
     foulTrouble:foulTrouble, lineupRatings:lineupRatings.slice(0,5),
     shotContexts:shotCtx, enrichSummary:enrichSummary,
+  };
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ENRICHED POSSESSION WINDOW — PBP exact + pro-rated box score (NCAAMB)
+// ══════════════════════════════════════════════════════════════════════════════
+function computePossessionWindowEnriched(game, windowSize){
+  var base = computePossessionWindow(game, windowSize);
+  if(!base || !base.available) return base;
+  var s = game.summary;
+  if(!s || !s.home || !s.away){ base.dataQuality='PBP_ONLY'; return base; }
+  var H = s.home, A = s.away;
+  var hs = H?.statistics||H||{}, as = A?.statistics||A||{};
+  var cs = cardState[game.id];
+  var totalPoss = cs.pbpAudit?.possessionLog?.length || windowSize;
+  var frac = Math.min(1, windowSize / totalPoss);
+  var r = base._raw; if(!r) return base;
+  var hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
+
+  var hFBP = (hs.fast_break_points||0)*frac, aFBP = (as.fast_break_points||0)*frac;
+  var hPOT = (hs.points_off_turnovers||0)*frac, aPOT = (as.points_off_turnovers||0)*frac;
+  var hSCP = (hs.second_chance_points||0)*frac, aSCP = (as.second_chance_points||0)*frac;
+  var hPaintPts = (hs.points_in_the_paint||hs.points_in_paint||0)*frac;
+  var aPaintPts = (as.points_in_the_paint||as.points_in_paint||0)*frac;
+  var hAtRim = (hs.field_goals_at_rim_att||0)*frac, aAtRim = (as.field_goals_at_rim_att||0)*frac;
+  var hBench = (hs.bench_points||0)*frac, aBench = (as.bench_points||0)*frac;
+  var hFD = (hs.fouls_drawn||0)*frac, aFD = (as.fouls_drawn||0)*frac;
+
+  // I1: PBP generation + box score conversion
+  var hGen = r.hStl + r.hOreb - r.hTO, aGen = r.aStl + r.aOreb - r.aTO;
+  var hConv = hFBP + hPOT + hSCP, aConv = aFBP + aPOT + aSCP;
+  var convAvail = hConv > 0 || aConv > 0;
+  var i1 = (hGen>aGen?1:hGen<aGen?-1:0);
+  if(convAvail) i1 += (hConv>aConv?1:hConv<aConv?-1:0);
+  if(r.hTrans>0||r.aTrans>0) i1 += (r.hTrans>r.aTrans?1:r.hTrans<r.aTrans?-1:0);
+  var eI1 = {score:i1>0?1:i1===0?.5:0, detail:'Gen:'+hGen+'\u2013'+aGen+(convAvail?' Conv:'+hConv.toFixed(0)+'\u2013'+aConv.toFixed(0):'')+' Stl:'+r.hStl+'\u2013'+r.aStl+' TO:'+r.hTO+'\u2013'+r.aTO};
+
+  // I2: box score paint + PBP FTA/blocks
+  var rim = (hPaintPts+r.hFTA+r.hBlk+hAtRim+Math.round(hFD*.5))-(aPaintPts+r.aFTA+r.aBlk+aAtRim+Math.round(aFD*.5));
+  var eI2 = {score:rim>8?1:rim<-8?0:.5, detail:'Paint:'+hPaintPts.toFixed(0)+'\u2013'+aPaintPts.toFixed(0)+' FTA:'+r.hFTA+'\u2013'+r.aFTA+' BLK:'+r.hBlk+'\u2013'+r.aBlk+' AtRim:'+hAtRim.toFixed(0)+'\u2013'+aAtRim.toFixed(0)};
+
+  var eI3 = base.I3;
+
+  // I4: PBP window delta + box score bench
+  var pDiff = r.hPts - r.aPts;
+  var benchD = hBench - aBench;
+  var i4 = (Math.abs(pDiff)>3?(pDiff>0?1:-1):0);
+  if(hBench>0||aBench>0) i4 += (benchD>4?1:benchD<-4?-1:0);
+  var luLabel = (r.hLineups>0||r.aLineups>0) ? r.hLineups+'\u2013'+r.aLineups : 'N/A';
+  var eI4 = {score:i4>0?1:i4===0?.5:0, detail:'Window \u0394:'+(pDiff>0?'+':'')+pDiff+' Bench:'+hBench.toFixed(0)+'\u2013'+aBench.toFixed(0)+' LU:'+luLabel};
+
+  var eI5 = base.I5;
+
+  var W = {I1:.25, I2:.25, I3:.20, I4:.20, I5:.10};
+  var raw = eI1.score*W.I1 + eI2.score*W.I2 + eI3.score*W.I3 + eI4.score*W.I4 + eI5.score*W.I5;
+  var controlHome = raw >= 0.5, eScore = controlHome ? raw : 1 - raw;
+  var eControlTeam = controlHome ? hA : aA;
+
+  return {
+    available:true, windowQuarters:base.windowQuarters, windowPossessions:windowSize,
+    home:base.home, away:base.away,
+    I1:eI1, I2:eI2, I3:eI3, I4:eI4, I5:eI5,
+    score:eScore, controlTeam:eControlTeam,
+    dataQuality:'PBP_ENRICHED', missingFields:[], possessionBased:true,
+    timeSpanMin:base.timeSpanMin, pace:base.pace, hPPP:base.hPPP, aPPP:base.aPPP,
+    enrichFrac:frac,
+    possResults:base.possResults, scoringRate:base.scoringRate,
+    paintTouchRate:base.paintTouchRate, repeatedVictims:base.repeatedVictims,
+    foulTrouble:base.foulTrouble, lineupRatings:base.lineupRatings,
+    shotContexts:base.shotContexts, enrichSummary:base.enrichSummary,
   };
 }
 
@@ -3310,12 +3398,17 @@ function compute(game){
   const clientLC = computeLeadCompositionClient(game, clientSust);
   if(clientLC) cardState[game.id].clientLeadComposition = clientLC;
 
-  // Rolling window — quarter-based primary (possession window needs live debugging)
-  // Test from console: computePossessionWindow(games.find(g=>g.id==='GAME_ID'), 25)
+  // Rolling window — quarter-based
   var windowResult = computeRollingWindow(game);
   cardState[game.id].rollingWindow = windowResult;
 
-  // Gap acceleration
+  // Possession windows — PBP pure + enriched (parallel comparison)
+  var pbpWindow = computePossessionWindow(game, 25);
+  cardState[game.id].pbpWindow = pbpWindow;
+  var pbpWindowEnriched = computePossessionWindowEnriched(game, 25);
+  cardState[game.id].pbpWindowEnriched = pbpWindowEnriched;
+
+  // Gap acceleration (uses quarter window for existing gap log)
   if(windowResult && windowResult.available){
     updateGapLog(game.id, score, cTeam, windowResult, game);
   }
@@ -5980,13 +6073,14 @@ function renderCard(game){
       html+='</div></div>';
     }
 
-    // ─── 4. CONTROL LAYERS (floor + window + gap + acceleration) ───
+    // ─── 4. CONTROL LAYERS (floor + multi-window comparison) ───
     var rw = cs.rollingWindow;
+    var pbpW = cs.pbpWindow;
+    var pbpWE = cs.pbpWindowEnriched;
     var accel = cs.acceleration;
     var cRead = cs.combinedRead;
     var floorInd = cs.clientInd || cs.sonnetIndicators;
     var _vc = function(vrd){ return vrd==='DOMINANT'?'var(--green)':vrd==='STRONG'?'var(--g2)':vrd==='EARNED'?'var(--yellow)':vrd==='NO EDGE'?'var(--t3)':'var(--t3)'; };
-    // If Sonnet said "Neither"/"EVEN" as controlTeam, override with client-computed team
     var _validTeam = function(t){ return t && t!=='Neither' && t!=='EVEN' && t!=='CONTESTED' && t!=='?' && t.length<=4; };
     if(floorInd && !_validTeam(floorInd.controlTeam) && rawInd && _validTeam(rawInd.controlTeam)){
       floorInd = Object.assign({}, floorInd, {controlTeam: rawInd.controlTeam});
@@ -5997,36 +6091,70 @@ function renderCard(game){
       html+='<div style="padding:6px 10px;border-top:1px solid var(--b1)">';
       html+=_secHdr(id,'cl',cs,'CONTROL LAYERS');
       if(_secOpen(cs,'cl')){
-      html+='<div style="display:flex;gap:12px;align-items:flex-start">';
-      // Floor
-      html+='<div style="flex:1"><div style="font-size:5px;color:var(--t3);letter-spacing:.5px;margin-bottom:2px">STRUCTURAL FLOOR</div>';
-      html+='<div style="font-size:9px;font-weight:700;color:'+_vc(fVerdict)+'">'+fTeam+' '+fScore.toFixed(2)+'</div>';
-      html+='<div style="font-size:5.5px;color:'+_vc(fVerdict)+'">'+fVerdict+'</div></div>';
-      // Window
-      html+='<div style="flex:1"><div style="font-size:5px;color:var(--t3);letter-spacing:.5px;margin-bottom:2px">ROLLING WINDOW</div>';
-      if(rw && rw.available){
-        var wVerdict = rw.score>=0.90?'DOMINANT':rw.score>=0.75?'STRONG':rw.score>=0.60?'EARNED':rw.score>=0.45?'NO EDGE':'WAIT';
-        html+='<div style="font-size:9px;font-weight:700;color:'+_vc(wVerdict)+'">'+rw.controlTeam+' '+rw.score.toFixed(2)+'</div>';
-        html+='<div style="font-size:5.5px;color:var(--t3)">'+(rw.possessionBased ? 'Last '+rw.windowPossessions+' poss'+(rw.timeSpanMin?' ('+rw.timeSpanMin.toFixed(1)+'min)':'') : rw.windowQuarters.join('+')+' ('+Math.round(rw.windowPossessions)+' poss)')+'</div>';
-      } else {
-        html+='<div style="font-size:7px;color:var(--t3)">'+((rw&&rw.reason)||'Too early')+'</div>';
+
+      var flI1=floorInd.I1,flI2=floorInd.I2,flI3=floorInd.I3,flI4=floorInd.I4,flI5=floorInd.I5;
+      html+='<div style="margin-bottom:6px">';
+      html+='<div style="font-size:5px;color:var(--t3);letter-spacing:.5px;margin-bottom:2px">STRUCTURAL FLOOR</div>';
+      html+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
+      html+='<span style="font-size:9px;font-weight:700;color:'+_vc(fVerdict)+'">'+fTeam+' '+fScore.toFixed(2)+'</span>';
+      html+='<span style="font-size:5.5px;color:'+_vc(fVerdict)+';font-weight:600">'+fVerdict+'</span>';
+      if(flI1&&flI2&&flI3&&flI4&&flI5){
+        html+='<span style="font-size:5.5px;color:var(--t3);font-family:var(--mono)">I1:'+flI1.score.toFixed(1)+' I2:'+flI2.score.toFixed(1)+' I3:'+flI3.score.toFixed(1)+' I4:'+flI4.score.toFixed(1)+' I5:'+flI5.score.toFixed(1)+'</span>';
       }
-      html+='</div>';
-      // Gap + Acceleration
-      html+='<div style="flex:1"><div style="font-size:5px;color:var(--t3);letter-spacing:.5px;margin-bottom:2px">GAP</div>';
+      html+='</div></div>';
+
+      html+='<div style="font-size:5px;color:var(--t3);letter-spacing:.5px;margin-bottom:3px">WINDOWS</div>';
+
+      var _wRow = function(label, w, floorScore, floorTeam, extraInfo){
+        var row = '';
+        if(!w || !w.available){
+          row+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;padding:3px 6px;background:var(--glass);border-radius:var(--radius-xs)">';
+          row+='<span style="font-size:5.5px;color:var(--t3);font-weight:600;width:30px">'+label+'</span>';
+          row+='<span style="font-size:5.5px;color:var(--t3)">'+((w&&w.reason)||'Too early')+'</span>';
+          row+='</div>';
+          return row;
+        }
+        var wV = w.score>=0.90?'DOMINANT':w.score>=0.75?'STRONG':w.score>=0.60?'EARNED':w.score>=0.45?'NO EDGE':'WAIT';
+        var aligned = w.controlTeam === floorTeam;
+        var gap = aligned ? (w.score - floorScore) : -(w.score);
+        var gapStr = (gap>=0?'+':'')+gap.toFixed(2);
+        var gapCol = gap>0.03?'var(--green)':gap<-0.03?'var(--amber)':'var(--t2)';
+        row+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;padding:3px 6px;background:var(--glass);border-radius:var(--radius-xs);flex-wrap:wrap">';
+        row+='<span style="font-size:5.5px;color:var(--amber);font-weight:600;width:30px">'+label+'</span>';
+        row+='<span style="font-size:8px;font-weight:700;color:'+_vc(wV)+'">'+w.controlTeam+' '+w.score.toFixed(2)+'</span>';
+        row+='<span style="font-size:5.5px;color:'+_vc(wV)+';font-weight:500;width:48px">'+wV+'</span>';
+        row+='<span style="font-size:7px;font-weight:700;color:'+gapCol+';width:36px">'+gapStr+'</span>';
+        if(w.I1&&w.I2&&w.I3&&w.I4&&w.I5){
+          var _ic = function(wi,fi){ if(!fi) return 'var(--t3)'; return Math.abs(wi.score-fi.score)>=0.5?'var(--amber)':'var(--t3)'; };
+          row+='<span style="font-size:5px;font-family:var(--mono)">';
+          row+='<span style="color:'+_ic(w.I1,flI1)+'">I1:'+w.I1.score.toFixed(1)+'</span> ';
+          row+='<span style="color:'+_ic(w.I2,flI2)+'">I2:'+w.I2.score.toFixed(1)+'</span> ';
+          row+='<span style="color:'+_ic(w.I3,flI3)+'">I3:'+w.I3.score.toFixed(1)+'</span> ';
+          row+='<span style="color:'+_ic(w.I4,flI4)+'">I4:'+w.I4.score.toFixed(1)+'</span> ';
+          row+='<span style="color:'+_ic(w.I5,flI5)+'">I5:'+w.I5.score.toFixed(1)+'</span>';
+          row+='</span>';
+        }
+        if(extraInfo){
+          row+='<span style="font-size:5px;color:var(--t3);width:100%">'+extraInfo+'</span>';
+        }
+        row+='</div>';
+        return row;
+      };
+
+      var qInfo = rw&&rw.available ? (rw.possessionBased?'Last '+rw.windowPossessions+' poss':rw.windowQuarters.join('+')+' ('+Math.round(rw.windowPossessions)+' poss)') : '';
+      html += _wRow('QTR', rw, fScore, fTeam, qInfo);
+      var pbpInfo = pbpW&&pbpW.available ? 'Last '+pbpW.windowPossessions+' poss'+(pbpW.timeSpanMin?' ('+pbpW.timeSpanMin.toFixed(1)+'min)':'') : '';
+      html += _wRow('PBP', pbpW, fScore, fTeam, pbpInfo);
+      var pbpEInfo = pbpWE&&pbpWE.available ? 'Last '+pbpWE.windowPossessions+' poss + box (frac:'+(pbpWE.enrichFrac?pbpWE.enrichFrac.toFixed(2):'?')+')' : '';
+      html += _wRow('PBP+', pbpWE, fScore, fTeam, pbpEInfo);
+
       if(accel && accel.entries && accel.entries.length>0){
         var lastGap = accel.entries[accel.entries.length-1]?.gap||0;
         var accelLabel = accel.accel;
         var accelColor = accelLabel==='GROWING'?'var(--green)':accelLabel==='DECLINING'?'var(--amber)':accelLabel==='FLIPPED'?'var(--red)':accelLabel==='NEW_PHASE'?'#60a5fa':'var(--t3)';
-        var accelIcon = accelLabel==='GROWING'?'▲':accelLabel==='DECLINING'?'▼':accelLabel==='FLIPPED'?'⟳':accelLabel==='NEW_PHASE'?'◆':'▬';
-        html+='<div style="font-size:9px;font-weight:700;color:'+(lastGap>0.03?'var(--green)':lastGap<-0.03?'var(--amber)':'var(--t2)')+'">'+(lastGap>=0?'+':'')+lastGap.toFixed(2)+'</div>';
-        html+='<div style="font-size:5.5px;color:'+accelColor+'">'+accelIcon+' '+accelLabel+'</div>';
-      } else {
-        html+='<div style="font-size:7px;color:var(--t3)">Too early</div>';
+        var accelIcon = accelLabel==='GROWING'?'\u25b2':accelLabel==='DECLINING'?'\u25bc':accelLabel==='FLIPPED'?'\u27f3':accelLabel==='NEW_PHASE'?'\u25c6':'\u25ac';
+        html+='<div style="margin-top:3px;font-size:5.5px;color:'+accelColor+'">'+accelIcon+' ACCEL: '+accelLabel+' (QTR gap: '+(lastGap>=0?'+':'')+lastGap.toFixed(2)+')</div>';
       }
-      html+='</div>';
-      html+='</div>'; // end flex row
-      // Combined read badge
       if(cRead && cRead.read && cRead.read!=='TOO EARLY'){
         var crColor = ({DOMINANT:'var(--green)',STRONG:'var(--g2)',EMERGING:'var(--green)',EARNED:'var(--yellow)',ERODING:'var(--amber)',FADING:'var(--amber)',COLLAPSING:'var(--red)',SHIFT:'#60a5fa',FLIPPED:'#a78bfa'})[cRead.read]||'var(--t3)';
         html+='<div style="margin-top:5px;display:flex;align-items:center;gap:6px"><span class="dv-tag" style="color:'+crColor+';border-color:'+crColor+';font-size:6px;padding:1px 6px;font-weight:600">'+esc(cRead.read)+'</span><span style="font-size:6px;color:var(--t2)">'+esc(cRead.note)+'</span></div>';
@@ -6034,6 +6162,7 @@ function renderCard(game){
       } // end _secOpen cl
       html+='</div>';
     }
+
 
 
     // ─── 5. DIRECTIONAL ARROWS (compact horizontal — teams as rows, metrics as columns) ───
