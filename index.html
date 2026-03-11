@@ -1171,6 +1171,14 @@ async function triggerAnalysis(game){
         awayTeam: game.away?.alias||game.away?.name||'AWAY',
         period: periodLabel,
         score: score,
+        gameClock: game.clock || null,
+        gamePeriod: game.period || 0,
+        bonusStatus: {
+          home: game.summary?.home?.bonus || false,
+          away: game.summary?.away?.bonus || false,
+          homeDouble: game.summary?.home?.double_bonus || false,
+          awayDouble: game.summary?.away?.double_bonus || false,
+        },
         dashboardScores: dashInd ? {
           controlTeam: dashInd.controlTeam, score: dashInd.score,
           I1: dashInd.I1.score+' '+dashInd.I1.leader, I2: dashInd.I2.score+' '+dashInd.I2.leader,
