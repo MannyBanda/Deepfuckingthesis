@@ -130,6 +130,42 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS prediction_json JSONB`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS indicators_json JSONB`; } catch(e) {}
 
+      // Clutch data — persists OCR uploads keyed by team
+      await sql`
+        CREATE TABLE IF NOT EXISTS clutch (
+          id SERIAL PRIMARY KEY,
+          team_alias TEXT NOT NULL,
+          league TEXT DEFAULT 'nba',
+          tier INTEGER DEFAULT 3,
+          net_rtg REAL,
+          off_rtg REAL,
+          def_rtg REAL,
+          wl TEXT,
+          efg REAL,
+          pace REAL,
+          pie REAL,
+          source TEXT,
+          data_json JSONB,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `;
+      await sql`CREATE INDEX IF NOT EXISTS idx_clutch_team ON clutch(team_alias, league)`;
+
+      // Odds history — tracks line movement over time
+      await sql`
+        CREATE TABLE IF NOT EXISTS odds_history (
+          id SERIAL PRIMARY KEY,
+          game_id TEXT,
+          ts TIMESTAMPTZ DEFAULT NOW(),
+          home_spread REAL,
+          home_ml INTEGER,
+          away_ml INTEGER,
+          total REAL,
+          source TEXT DEFAULT 'bdl'
+        )
+      `;
+      await sql`CREATE INDEX IF NOT EXISTS idx_odds_game ON odds_history(game_id)`;
+
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'Schema initialized' }) };
     }
 
@@ -419,6 +455,86 @@ exports.handler = async (event) => {
       `;
 
       return { statusCode: 200, headers, body: JSON.stringify({ analyses: rows }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // SAVE_CLUTCH — persist clutch OCR data per team
+    // ═══════════════════════════════════════════════════════
+    if (action === 'save_clutch' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      const teams = body.teams || [];
+      for (const t of teams) {
+        // Upsert: delete old entry for this team/league, insert fresh
+        await sql`DELETE FROM clutch WHERE team_alias = ${t.alias} AND league = ${body.league || 'nba'}`;
+        await sql`
+          INSERT INTO clutch (team_alias, league, tier, net_rtg, off_rtg, def_rtg, wl, efg, pace, pie, source, data_json)
+          VALUES (${t.alias}, ${body.league || 'nba'}, ${t.tier || 3}, ${t.netRtg || null}, ${t.offRtg || null},
+            ${t.defRtg || null}, ${t.wl || null}, ${t.efg || null}, ${t.pace || null}, ${t.pie || null},
+            ${t.source || 'ocr'}, ${t.data ? JSON.stringify(t.data) : null})
+        `;
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, saved: teams.length }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_CLUTCH — fetch clutch data for teams
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_clutch') {
+      const teams = params.teams ? params.teams.split(',') : [];
+      const league = params.league || 'nba';
+
+      let rows;
+      if (teams.length > 0) {
+        rows = await sql`
+          SELECT DISTINCT ON (team_alias) team_alias, tier, net_rtg, off_rtg, def_rtg, wl, efg, pace, pie, source, data_json, created_at
+          FROM clutch WHERE team_alias = ANY(${teams}) AND league = ${league}
+          ORDER BY team_alias, created_at DESC
+        `;
+      } else {
+        rows = await sql`
+          SELECT DISTINCT ON (team_alias) team_alias, tier, net_rtg, off_rtg, def_rtg, wl, efg, pace, pie, source, data_json, created_at
+          FROM clutch WHERE league = ${league}
+          ORDER BY team_alias, created_at DESC
+        `;
+      }
+
+      const result = {};
+      rows.forEach(r => {
+        result[r.team_alias] = {
+          tier: r.tier, netRtg: r.net_rtg, offRtg: r.off_rtg, defRtg: r.def_rtg,
+          wl: r.wl, efg: r.efg, pace: r.pace, pie: r.pie, source: r.source,
+          data: r.data_json, updated: r.created_at,
+        };
+      });
+      return { statusCode: 200, headers, body: JSON.stringify({ clutch: result }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // SAVE_ODDS — persist odds snapshot for a game
+    // ═══════════════════════════════════════════════════════
+    if (action === 'save_odds' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      await sql`
+        INSERT INTO odds_history (game_id, home_spread, home_ml, away_ml, total, source)
+        VALUES (${body.game_id}, ${body.home_spread || null}, ${body.home_ml || null},
+          ${body.away_ml || null}, ${body.total || null}, ${body.source || 'bdl'})
+      `;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_ODDS — fetch odds history for a game
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_odds') {
+      const gameId = params.game_id;
+      if (!gameId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id required' }) };
+
+      const rows = await sql`
+        SELECT ts, home_spread, home_ml, away_ml, total, source
+        FROM odds_history WHERE game_id = ${gameId}
+        ORDER BY ts ASC
+      `;
+      return { statusCode: 200, headers, body: JSON.stringify({ odds: rows }) };
     }
 
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Unknown action: ' + action }) };
