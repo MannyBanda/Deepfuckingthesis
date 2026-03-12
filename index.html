@@ -560,6 +560,75 @@ async function syncAnalysesFromDB(){
   }catch(e){ console.warn('[DB] Analysis sync failed:', e.message); }
 }
 
+// Save clutch data to DB (keyed by team alias — persists across games)
+function saveClutchDB(gameId){
+  if(!dbReady) return;
+  var cs = cardState[gameId]; if(!cs || !cs.clutchData) return;
+  var g = games.find(function(x){return x.id===gameId;});
+  if(!g) return;
+  var hA = g.home?.alias||'', aA = g.away?.alias||'';
+  var teams = [];
+  if(cs.clutchData.home && hA){
+    var h = cs.clutchData.home;
+    teams.push({alias:hA, tier:cs.clutchTier||3, netRtg:h.netRtg, offRtg:h.offRtg, defRtg:h.defRtg, wl:h.wl, efg:h.efg, pace:h.pace, pie:h.pie, source:cs.clutchTier===1?'ocr':'bdl', data:h});
+  }
+  if(cs.clutchData.away && aA){
+    var a = cs.clutchData.away;
+    teams.push({alias:aA, tier:cs.clutchTier||3, netRtg:a.netRtg, offRtg:a.offRtg, defRtg:a.defRtg, wl:a.wl, efg:a.efg, pace:a.pace, pie:a.pie, source:cs.clutchTier===1?'ocr':'bdl', data:a});
+  }
+  if(teams.length===0) return;
+  fetch(FN+'db-api?action=save_clutch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({league:'nba',teams:teams})}).catch(function(){});
+}
+
+// Save odds snapshot to DB
+function saveOddsDB(gameId){
+  if(!dbReady) return;
+  var cs = cardState[gameId]; if(!cs || !cs.oddsData) return;
+  var od = cs.oddsData;
+  fetch(FN+'db-api?action=save_odds',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({game_id:gameId,home_spread:od.homeSpread||null,home_ml:od.homeML||null,away_ml:od.awayML||null,total:od.total||null})}).catch(function(){});
+}
+
+// Sync clutch from DB — loads by team alias, applies to any game featuring that team
+async function syncClutchFromDB(){
+  if(!dbReady) return;
+  try{
+    var teamSet = {};
+    games.forEach(function(g){
+      if(g.home?.alias) teamSet[g.home.alias]=true;
+      if(g.away?.alias) teamSet[g.away.alias]=true;
+    });
+    var teamList = Object.keys(teamSet).join(',');
+    if(!teamList) return;
+    var r = await fetch(FN+'db-api?action=get_clutch&league=nba&teams='+encodeURIComponent(teamList));
+    if(!r.ok) return;
+    var data = await r.json();
+    var dbClutch = data.clutch || {};
+    var synced = 0;
+    games.forEach(function(g){
+      var cs = cardState[g.id]; if(!cs) return;
+      // Only sync if no local clutch data (don't overwrite fresher local OCR)
+      if(cs.clutchData && cs.clutchTier === 1) return;
+      var hA = g.home?.alias||'', aA = g.away?.alias||'';
+      var hDB = dbClutch[hA], aDB = dbClutch[aA];
+      if(!hDB && !aDB) return;
+      // Only upgrade tier (DB tier 1 OCR > local tier 2 BDL)
+      var dbTier = Math.min(hDB?.tier||99, aDB?.tier||99);
+      if(cs.clutchData && cs.clutchTier <= dbTier) return;
+      cs.clutchData = {
+        tier: dbTier,
+        home: hDB ? {netRtg:hDB.netRtg, offRtg:hDB.offRtg, defRtg:hDB.defRtg, wl:hDB.wl, efg:hDB.efg, pace:hDB.pace, pie:hDB.pie} : cs.clutchData?.home || null,
+        away: aDB ? {netRtg:aDB.netRtg, offRtg:aDB.offRtg, defRtg:aDB.defRtg, wl:aDB.wl, efg:aDB.efg, pace:aDB.pace, pie:aDB.pie} : cs.clutchData?.away || null,
+      };
+      cs.clutchTier = dbTier;
+      synced++;
+    });
+    if(synced > 0){
+      console.log('[DB] Synced clutch for '+synced+' games from DB');
+      games.filter(function(g){return selIds.includes(g.id);}).forEach(function(g){renderCard(g);});
+    }
+  }catch(e){ console.warn('[DB] Clutch sync failed:', e.message); }
+}
+
 // Sync theses from DB on load — enables cross-device access
 async function syncThesesFromDB(){
   if(!dbReady) return;
@@ -656,8 +725,8 @@ const cachedClutch = JSON.parse(localStorage.getItem('nba4:clutch')||'{}');
 const cachedOdds = JSON.parse(localStorage.getItem('nba4:odds')||'{}');
 const cachedOddsHistory = JSON.parse(localStorage.getItem('nba4:oddsHist')||'{}');
 const confCache = JSON.parse(localStorage.getItem('nba4:confTable')||'{}');
-function persistClutch(id,cs){try{cachedClutch[id]={data:cs.clutchData,tier:cs.clutchTier};localStorage.setItem('nba4:clutch',JSON.stringify(cachedClutch));}catch(e){console.warn('Clutch persist failed:',e.message);}}
-function persistOdds(id,cs){try{cachedOdds[id]=cs.oddsData;cachedOddsHistory[id]=cs.oddsHistory;localStorage.setItem('nba4:odds',JSON.stringify(cachedOdds));localStorage.setItem('nba4:oddsHist',JSON.stringify(cachedOddsHistory));}catch(e){console.warn('Odds persist failed:',e.message);}}
+function persistClutch(id,cs){saveClutchDB(id);try{cachedClutch[id]={data:cs.clutchData,tier:cs.clutchTier};localStorage.setItem('nba4:clutch',JSON.stringify(cachedClutch));}catch(e){console.warn('Clutch persist failed:',e.message);}}
+function persistOdds(id,cs){saveOddsDB(id);try{cachedOdds[id]=cs.oddsData;cachedOddsHistory[id]=cs.oddsHistory;localStorage.setItem('nba4:odds',JSON.stringify(cachedOdds));localStorage.setItem('nba4:oddsHist',JSON.stringify(cachedOddsHistory));}catch(e){console.warn('Odds persist failed:',e.message);}}
 function persistConfRow(gameId, rowData){try{confCache[gameId]=rowData;localStorage.setItem('nba4:confTable',JSON.stringify(confCache));}catch(e){console.warn('ConfRow persist failed:',e.message);}}
 function persistTracking(id,cs){try{localStorage.setItem('nba4:tracking:'+id,JSON.stringify(cs.trackingData));}catch(e){console.warn('Tracking persist failed:',e.message);}}
 function persistStructural(id,cs){try{localStorage.setItem('nba4:structural:'+id,JSON.stringify(cs.structural));}catch(e){console.warn('Structural persist failed:',e.message);}}
@@ -921,9 +990,10 @@ async function loadSchedule(){
     await buildBdlGameMap(d.str);
     // Fetch ESPN scoreboard for win probability ID mapping
     fetchEspnScoreboard();
-    // Sync theses and analyses from DB (cross-device)
+    // Sync theses, analyses, and clutch from DB (cross-device)
     syncThesesFromDB();
     syncAnalysesFromDB();
+    syncClutchFromDB();
     // Start polling
     clearInterval(pollTimer);
     pollTimer = setInterval(()=>{ if(!paused) refreshLiveCards(); }, pollInterval);
