@@ -372,6 +372,69 @@ setTimeout(function(){
 const W = {I1:.25, I2:.25, I3:.20, I4:.20, I5:.10};
 const FN = '/.netlify/functions/';
 
+// ── ESPN Win Probability Integration ──
+const ESPN_ALIAS_MAP = {NOP:'NO',GSW:'GS',NYK:'NY',SAS:'SA',PHX:'PHO',BKN:'BKN'};
+var espnGameMap = {}; // {srGameId: espnEventId}
+async function fetchEspnScoreboard(){
+  try{
+    var d = getSlateDate(0);
+    var dateStr = String(d.year)+String(d.month).padStart(2,'0')+String(d.day).padStart(2,'0');
+    var r = await fetch(FN+'espn-data?type=scoreboard&league=nba&date='+dateStr);
+    if(!r.ok) return;
+    var data = await r.json();
+    var espnGames = data.games || [];
+    // Build mapping: match SR games to ESPN events by team abbreviations
+    games.forEach(function(g){
+      var hA = g.home?.alias||'', aA = g.away?.alias||'';
+      var hE = ESPN_ALIAS_MAP[hA]||hA, aE = ESPN_ALIAS_MAP[aA]||aA;
+      var match = espnGames.find(function(eg){
+        return (eg.homeAbbr===hA||eg.homeAbbr===hE) && (eg.awayAbbr===aA||eg.awayAbbr===aE);
+      });
+      if(!match){
+        // Try name-based matching for NCAAMB
+        match = espnGames.find(function(eg){
+          var hName = (g.home?.name||'').toLowerCase(), aName = (g.away?.name||'').toLowerCase();
+          return eg.homeName.toLowerCase().includes(hName) || eg.awayName.toLowerCase().includes(aName);
+        });
+      }
+      if(match){
+        espnGameMap[g.id] = match.espnId;
+      }
+    });
+    console.log('[ESPN] Mapped '+Object.keys(espnGameMap).length+'/'+games.length+' games to ESPN event IDs');
+  }catch(e){ console.warn('[ESPN] Scoreboard fetch failed:', e.message); }
+}
+
+async function fetchEspnWinProb(gameId){
+  var espnId = espnGameMap[gameId];
+  if(!espnId) return;
+  var cs = cardState[gameId]; if(!cs) return;
+  if(cs._espnLoading) return;
+  cs._espnLoading = true;
+  try{
+    var r = await fetch(FN+'espn-data?type=winprob&league=nba&event_id='+espnId);
+    if(!r.ok) return;
+    var data = await r.json();
+    if(data.current && data.current.homeWinPct != null){
+      var g = games.find(function(x){return x.id===gameId;});
+      var hA = g?.home?.alias||'HOME';
+      var homeWP = Math.round(data.current.homeWinPct * 100);
+      var awayWP = 100 - homeWP;
+      var openHomeWP = data.opening ? Math.round(data.opening.homeWinPct * 100) : null;
+      cs.espnWP = {
+        home: homeWP, away: awayWP,
+        homeAlias: data.homeAbbr || hA,
+        awayAlias: data.awayAbbr || '',
+        opening: openHomeWP,
+        dataPoints: data.dataPoints || 0,
+        time: new Date()
+      };
+    }
+  }catch(e){ /* silent */ }
+  finally{ cs._espnLoading = false; }
+}
+
+
 let games = [], selIds = [], paused = false, pollTimer = null, alertTimer = null, confCollapsed = false;
 let pollInterval = 90000; // default 90s
 const theses = JSON.parse(localStorage.getItem('nba4:theses')||'{}');
@@ -642,6 +705,8 @@ async function loadSchedule(){
     renderPills(); updateCounts(); renderConfidenceTable();
     // Build BDL game map for fallback (await so enrich has IDs ready)
     await buildBdlGameMap(d.str);
+    // Fetch ESPN scoreboard for win probability ID mapping
+    fetchEspnScoreboard();
     // Start polling
     clearInterval(pollTimer);
     pollTimer = setInterval(()=>{ if(!paused) refreshLiveCards(); }, pollInterval);
@@ -978,6 +1043,12 @@ async function fetchSummary(game){
       const gameIdx = games.filter(g=>getState(g)==='LIVE').findIndex(g=>g.id===game.id);
       const pbpDelay = 2000 + (gameIdx * 3000); // 2s base + 3s per game
       setTimeout(function(){ fetchPBPQuiet(game.id); }, pbpDelay);
+    }
+
+    // Auto-fetch ESPN win probability (every 2nd poll, staggered after PBP)
+    if(getState(game)==='LIVE' && espnGameMap[game.id] && (!cs.espnWP || (Date.now() - (cs.espnWP.time?.getTime()||0)) > pollInterval * 1.5)){
+      const espnDelay = 4000 + (games.filter(g=>getState(g)==='LIVE').findIndex(g=>g.id===game.id) * 2000);
+      setTimeout(function(){ fetchEspnWinProb(game.id); }, espnDelay);
     }
 
     // Check if data changed meaningfully
@@ -1711,6 +1782,9 @@ function parsePBP(pbpData, game){
       const pts = made?(isThree?3:2):0;
       enriched.type = made?'shot_made':'shot_miss';
       enriched.shot = {zone, made, assisted, is3:isThree, context, shotDistance:shotDist, points:pts};
+      // Check for block embedded in shot statistics (NCAAMB doesn't emit standalone block events)
+      if(!made){ (ev.statistics||[]).forEach(s=>{ var st=(s.type||'').toLowerCase(); if(st.includes('block')&&!st.includes('attempt')){ enriched.block={blocker:s.player?.full_name||s.player?.name||'?'}; } }); }
+      if(!made && !enriched.block){ var desc=(ev.description||'').toLowerCase(); if(desc.includes('block')) enriched.block={blocker:'?'}; }
       shots.push({p:player, tm:team, z:zone, m:made, a:assisted, q:quarter, ctx:context, is3:isThree});
       if(made){ if(team===hA) hScore+=pts; else aScore+=pts; scoreLog.push({team,pts,hScore,aScore,q:quarter,lineup:team===hA?onCourt.home:onCourt.away}); }
     } else if(et.includes('turnover')){
@@ -1831,6 +1905,7 @@ function buildPossessionLog(timeline, hA, aA){
     if(ev.type === 'shot_miss'){
       currentPoss.shots.push(ev.shot);
       if(ev.shot.zone==='rim'||ev.shot.zone==='paint') currentPoss.paintTouch = true;
+      if(ev.block) currentPoss.blocks++; // blocks embedded in shot events
       continue;
     }
     if(ev.type === 'turnover'){ currentPoss.turnovers.push(ev.turnover); if(ev.turnover && ev.turnover.forced) currentPoss.steals++; closePoss('turnover', ev.clock); continue; }
@@ -3070,6 +3145,13 @@ async function generateThesis(gameId){
       if(at.pullUp || ht.pullUp) trk += 'Pull-up eFG%: '+awayAlias+' '+(at.pullUp?at.pullUp.efg||'?':'?')+'% | '+homeAlias+' '+(ht.pullUp?ht.pullUp.efg||'?':'?')+'%\n';
       sections.tracking = trk;
     } else { sections.tracking = ''; }
+    // ESPN Win Probability context for Sonnet
+    var ewp = cs.espnWP;
+    if(ewp){
+      var wpTeam = ewp.home >= ewp.away ? (ewp.homeAlias||homeAlias) : (ewp.awayAlias||awayAlias);
+      var wpPct = Math.max(ewp.home, ewp.away);
+      sections.espnWP = '\n=== ESPN WIN PROBABILITY ===\n'+wpTeam+' '+wpPct+'% (home:'+ewp.home+'% away:'+ewp.away+'%)'+(ewp.opening!=null?' | Opening: home '+ewp.opening+'%':'')+' | '+ewp.dataPoints+' data points\n';
+    } else { sections.espnWP = ''; }
     const cd = cs.clutchData;
     if(cd){
       const tierLabel = cd.tier===1?'L15 NBA.com (Tier 1)':cd.tier===2?'Season BDL (Tier 2)':'Proxy (Tier 3)';
@@ -3386,12 +3468,12 @@ function compute(game){
   var _pwSize = getPossWindowSize(game);
   var pbpWindow = computePossessionWindow(game, _pwSize);
   cardState[game.id].pbpWindow = pbpWindow;
-  var pbpWindowEnriched = computePossessionWindowEnriched(game, _pwSize);
-  cardState[game.id].pbpWindowEnriched = pbpWindowEnriched;
 
-  // Gap acceleration
-  if(windowResult && windowResult.available){
-    updateGapLog(game.id, score, cTeam, windowResult, game);
+
+  // Gap acceleration — uses PBP window (falls back to QTR)
+  var _gapWindow = (pbpWindow && pbpWindow.available) ? pbpWindow : windowResult;
+  if(_gapWindow && _gapWindow.available){
+    updateGapLog(game.id, score, cTeam, _gapWindow, game);
   }
   const accelResult = computeAcceleration(cardState[game.id].gapLog);
   cardState[game.id].acceleration = accelResult;
@@ -3405,7 +3487,7 @@ function compute(game){
   cardState[game.id].adjustment = adjustment;
 
   // Combined read
-  const combinedRead = classifyCombinedRead(score, cTeam, windowResult, accelResult);
+  const combinedRead = classifyCombinedRead(score, cTeam, _gapWindow, accelResult);
   cardState[game.id].combinedRead = combinedRead;
 
   // Margin projection (feeds spread conviction)
@@ -3518,7 +3600,7 @@ function buildTrajectory(game, hA, aA, hs, as, H, A, hS, aS, qDs, periods){
   // T3 — Possession Window Delta (highest weight)
   // PBP-powered: uses last N possessions point differential instead of period boundaries
   // Fallback to quarter/half delta if PBP window unavailable
-  var _pw = cardState[game.id]?.pbpWindow || cardState[game.id]?.pbpWindowEnriched;
+  var _pw = cardState[game.id]?.pbpWindow;
   var _t3fired = false;
   if(_pw && _pw.available && _pw._raw){
     var _wDelta = _pw._raw.hPts - _pw._raw.aPts;
@@ -5249,7 +5331,7 @@ function checkStructuralAlert(game){
   if(p < 2) return; // too early
 
   var floor = cs.clientInd;
-  var win = cs.pbpWindow || cs.pbpWindowEnriched || cs.rollingWindow;
+  var win = cs.pbpWindow || cs.rollingWindow;
   if(!floor || !floor.score) return;
 
   var hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
@@ -6186,7 +6268,6 @@ function renderCard(game){
     // ─── 4. CONTROL LAYERS (floor + multi-window comparison) ───
     var rw = cs.rollingWindow;
     var pbpW = cs.pbpWindow;
-    var pbpWE = cs.pbpWindowEnriched;
     var accel = cs.acceleration;
     var cRead = cs.combinedRead;
     var floorInd = cs.clientInd || cs.sonnetIndicators;
@@ -6249,14 +6330,13 @@ function renderCard(game){
       html += _wRow('QTR', rw, fScore, fTeam, qInfo);
       var pbpInfo = pbpW&&pbpW.available ? 'Last '+pbpW.windowPossessions+' poss'+(pbpW.timeSpanMin?' ('+pbpW.timeSpanMin.toFixed(1)+'min)':'') : '';
       html += _wRow('PBP', pbpW, fScore, fTeam, pbpInfo);
-      var pbpEInfo = pbpWE&&pbpWE.available ? 'Last '+pbpWE.windowPossessions+' poss + box (frac:'+(pbpWE.enrichFrac?pbpWE.enrichFrac.toFixed(2):'?')+')' : '';
-      html += _wRow('PBP+', pbpWE, fScore, fTeam, pbpEInfo);
+
       if(accel && accel.entries && accel.entries.length>0){
         var lastGap = accel.entries[accel.entries.length-1]?.gap||0;
         var accelLabel = accel.accel;
         var accelColor = accelLabel==='GROWING'?'var(--green)':accelLabel==='DECLINING'?'var(--amber)':accelLabel==='FLIPPED'?'var(--red)':accelLabel==='NEW_PHASE'?'#60a5fa':'var(--t3)';
         var accelIcon = accelLabel==='GROWING'?'\u25b2':accelLabel==='DECLINING'?'\u25bc':accelLabel==='FLIPPED'?'\u27f3':accelLabel==='NEW_PHASE'?'\u25c6':'\u25ac';
-        html+='<div style="margin-top:3px;font-size:5.5px;color:'+accelColor+'">'+accelIcon+' ACCEL: '+accelLabel+' (QTR gap: '+(lastGap>=0?'+':'')+lastGap.toFixed(2)+')</div>';
+        html+='<div style="margin-top:3px;font-size:5.5px;color:'+accelColor+'">'+accelIcon+' ACCEL: '+accelLabel+' (PBP gap: '+(lastGap>=0?'+':'')+lastGap.toFixed(2)+')</div>';
       }
       if(cRead && cRead.read && cRead.read!=='TOO EARLY'){
         var crColor = ({DOMINANT:'var(--green)',STRONG:'var(--g2)',EMERGING:'var(--green)',EARNED:'var(--yellow)',ERODING:'var(--amber)',FADING:'var(--amber)',COLLAPSING:'var(--red)',SHIFT:'#60a5fa',FLIPPED:'#a78bfa'})[cRead.read]||'var(--t3)';
@@ -7190,7 +7270,6 @@ function runQA(gameId){
   var windows = [
     {label:'QTR', w:cs.rollingWindow},
     {label:'PBP', w:cs.pbpWindow},
-    {label:'PBP+', w:cs.pbpWindowEnriched}
   ];
   windows.forEach(function(ww){
     var w = ww.w;
@@ -7212,14 +7291,7 @@ function runQA(gameId){
     else bad('WIN:'+ww.label+':team', 'Invalid: '+w.controlTeam);
   });
 
-  // ── 6. PBP ENRICHMENT VALIDATION ──
-  var we = cs.pbpWindowEnriched;
-  if(we && we.available && we.enrichFrac!=null){
-    if(we.enrichFrac>0 && we.enrichFrac<=1) ok('ENRICH:frac', we.enrichFrac.toFixed(2));
-    else bad('ENRICH:frac', 'Fraction '+we.enrichFrac+' out of (0,1]');
-    if(we.dataQuality==='PBP_ENRICHED') ok('ENRICH:quality', we.dataQuality);
-    else meh('ENRICH:quality', 'Expected PBP_ENRICHED, got '+we.dataQuality);
-  }
+
 
   // ── 7. CROSS-WINDOW CONSISTENCY ──
   var pw = cs.pbpWindow, qw = cs.rollingWindow;
