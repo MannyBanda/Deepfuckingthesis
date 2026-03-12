@@ -116,13 +116,19 @@ exports.handler = async (event) => {
           signal TEXT,
           sustainability TEXT,
           lead_source TEXT,
-          raw_text TEXT
+          raw_text TEXT,
+          prediction_json JSONB,
+          indicators_json JSONB
         )
       `;
 
       await sql`CREATE INDEX IF NOT EXISTS idx_snapshots_game ON snapshots(game_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_snapshots_period ON snapshots(period)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_analyses_game ON analyses(game_id)`;
+
+      // Migrations — add columns if they don't exist (safe to re-run)
+      try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS prediction_json JSONB`; } catch(e) {}
+      try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS indicators_json JSONB`; } catch(e) {}
 
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'Schema initialized' }) };
     }
@@ -209,10 +215,12 @@ exports.handler = async (event) => {
       const a = body;
       await sql`
         INSERT INTO analyses (game_id, period, clock, control_team, control_score,
-          fwp, edge, entry, conviction, signal, sustainability, lead_source, raw_text)
+          fwp, edge, entry, conviction, signal, sustainability, lead_source, raw_text,
+          prediction_json, indicators_json)
         VALUES (${a.game_id}, ${a.period}, ${a.clock}, ${a.control_team}, ${a.control_score},
           ${a.fwp}, ${a.edge}, ${a.entry}, ${a.conviction}, ${a.signal},
-          ${a.sustainability}, ${a.lead_source}, ${a.raw_text})
+          ${a.sustainability}, ${a.lead_source}, ${a.raw_text},
+          ${a.prediction_json || null}, ${a.indicators_json || null})
       `;
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
     }
@@ -363,6 +371,54 @@ exports.handler = async (event) => {
         statusCode: 200, headers,
         body: JSON.stringify({ games: games[0], snapshots: snapshots[0] }),
       };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_THESES — fetch theses for given game IDs or all today
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_theses') {
+      const gameIds = params.game_ids ? params.game_ids.split(',') : [];
+      const date = params.date || null;
+      const league = params.league || 'nba';
+
+      let rows;
+      if (gameIds.length > 0) {
+        rows = await sql`SELECT game_id, text, created_at FROM theses WHERE game_id = ANY(${gameIds})`;
+      } else if (date) {
+        rows = await sql`
+          SELECT t.game_id, t.text, t.created_at FROM theses t
+          JOIN games g ON t.game_id = g.id
+          WHERE g.date = ${date} AND g.league = ${league}
+        `;
+      } else {
+        rows = await sql`SELECT game_id, text, created_at FROM theses WHERE league = ${league} ORDER BY created_at DESC LIMIT 50`;
+      }
+
+      const result = {};
+      rows.forEach(r => { result[r.game_id] = r.text; });
+      return { statusCode: 200, headers, body: JSON.stringify({ theses: result }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_ANALYSES — fetch latest analysis per game
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_analyses') {
+      const gameIds = params.game_ids ? params.game_ids.split(',') : [];
+
+      if (gameIds.length === 0) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_ids required' }) };
+      }
+
+      const rows = await sql`
+        SELECT DISTINCT ON (game_id) game_id, ts, period, clock,
+          control_team, control_score, fwp, edge, entry, conviction, signal,
+          sustainability, lead_source, prediction_json, indicators_json
+        FROM analyses
+        WHERE game_id = ANY(${gameIds})
+        ORDER BY game_id, ts DESC
+      `;
+
+      return { statusCode: 200, headers, body: JSON.stringify({ analyses: rows }) };
     }
 
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Unknown action: ' + action }) };
