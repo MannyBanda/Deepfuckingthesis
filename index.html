@@ -522,6 +522,70 @@ async function fetchCalibrationMatchFromDB(floorScore, period, trailing, deficit
 }
 
 
+
+// Sync analyses from DB on load — enables cross-device Value Read
+async function syncAnalysesFromDB(){
+  if(!dbReady) return;
+  try{
+    var ids = games.filter(function(g){return selIds.includes(g.id);}).map(function(g){return g.id;}).join(',');
+    if(!ids) return;
+    var r = await fetch(FN+'db-api?action=get_analyses&game_ids='+encodeURIComponent(ids));
+    if(!r.ok) return;
+    var data = await r.json();
+    var rows = data.analyses || [];
+    var synced = 0;
+    rows.forEach(function(row){
+      var cs = cardState[row.game_id];
+      if(!cs) return;
+      // Only sync if this device hasn't analyzed yet
+      if(cs.prediction && cs.analysisTime) return;
+      if(row.prediction_json){
+        try{
+          cs.prediction = typeof row.prediction_json === 'string' ? JSON.parse(row.prediction_json) : row.prediction_json;
+        }catch(e){}
+      }
+      if(row.indicators_json){
+        try{
+          cs.sonnetIndicators = typeof row.indicators_json === 'string' ? JSON.parse(row.indicators_json) : row.indicators_json;
+        }catch(e){}
+      }
+      if(row.ts) cs.analysisTime = new Date(row.ts);
+      cs.analysis = '(synced from DB)';
+      synced++;
+    });
+    if(synced > 0){
+      console.log('[DB] Synced '+synced+' analyses from DB');
+      games.filter(function(g){return selIds.includes(g.id);}).forEach(function(g){renderCard(g);});
+    }
+  }catch(e){ console.warn('[DB] Analysis sync failed:', e.message); }
+}
+
+// Sync theses from DB on load — enables cross-device access
+async function syncThesesFromDB(){
+  if(!dbReady) return;
+  try{
+    var ids = games.map(function(g){return g.id;}).join(',');
+    if(!ids) return;
+    var r = await fetch(FN+'db-api?action=get_theses&game_ids='+encodeURIComponent(ids));
+    if(!r.ok) return;
+    var data = await r.json();
+    var dbTheses = data.theses || {};
+    var synced = 0;
+    Object.keys(dbTheses).forEach(function(gid){
+      if(!theses[gid] || theses[gid] !== dbTheses[gid]){
+        theses[gid] = dbTheses[gid];
+        synced++;
+      }
+    });
+    if(synced > 0){
+      try{ localStorage.setItem('nba4:theses', JSON.stringify(theses)); }catch(e){}
+      console.log('[DB] Synced '+synced+' theses from DB');
+      games.filter(function(g){return selIds.includes(g.id);}).forEach(function(g){renderCard(g);});
+      renderConfidenceTable();
+    }
+  }catch(e){ console.warn('[DB] Thesis sync failed:', e.message); }
+}
+
 // ── ESPN Win Probability Integration ──
 const ESPN_ALIAS_MAP = {NOP:'NO',GSW:'GS',NYK:'NY',SAS:'SA',PHX:'PHO',BKN:'BKN'};
 var espnGameMap = {}; // {srGameId: espnEventId}
@@ -857,6 +921,9 @@ async function loadSchedule(){
     await buildBdlGameMap(d.str);
     // Fetch ESPN scoreboard for win probability ID mapping
     fetchEspnScoreboard();
+    // Sync theses and analyses from DB (cross-device)
+    syncThesesFromDB();
+    syncAnalysesFromDB();
     // Start polling
     clearInterval(pollTimer);
     pollTimer = setInterval(()=>{ if(!paused) refreshLiveCards(); }, pollInterval);
@@ -1624,6 +1691,27 @@ async function triggerAnalysis(game){
 
     // ── PUSH NOTIFICATION — fire if entry conditions met ──
     if(decision) checkNtfyAlert(game, decision);
+
+    // Save analysis snapshot to DB (includes full prediction + indicators for cross-device sync)
+    if(dbReady && parsed){
+      var _predSafe = null;
+      try{ _predSafe = decision ? JSON.stringify(decision) : null; }catch(e){}
+      var _indSafe = null;
+      try{ _indSafe = parsed ? JSON.stringify({I1:parsed.I1,I2:parsed.I2,I3:parsed.I3,I4:parsed.I4,I5:parsed.I5,score:parsed.score,controlTeam:parsed.controlTeam}) : null; }catch(e){}
+      var _aSnap = {
+        game_id: game.id, period: game.period||0, clock: game.clock||'',
+        control_team: parsed.controlTeam||null, control_score: parsed.score||null,
+        fwp: decision?.fwp||null, edge: decision?.edge||null,
+        entry: decision?.entry||null, conviction: decision?.conviction||null,
+        signal: decision?.signalType||null,
+        sustainability: (decision?.sustainability||'').substring(0,200),
+        lead_source: decision?.leadSource||null,
+        raw_text: (data.analysis||'').substring(0,2000),
+        prediction_json: _predSafe,
+        indicators_json: _indSafe,
+      };
+      fetch(FN+'db-api?action=save_analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(_aSnap)}).catch(function(){});
+    }
 
     persistAnalysis(game.id, cs);
     renderCard(game);
@@ -5632,7 +5720,7 @@ function renderGrid(){
 }
 
 // ── Thesis helpers ────────────────────────────────────────────────────────
-function saveThesis(gameId,text){theses[gameId]=text;try{localStorage.setItem('nba4:theses',JSON.stringify(theses));}catch(e){console.warn('Thesis persist failed:',e.message);}renderConfidenceTable();}
+function saveThesis(gameId,text){theses[gameId]=text;if(dbReady)fetch(FN+'db-api?action=save_thesis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({game_id:gameId,league:'nba',text:text})}).catch(function(){});try{localStorage.setItem('nba4:theses',JSON.stringify(theses));}catch(e){console.warn('Thesis persist failed:',e.message);}renderConfidenceTable();}
 function clearTheses(){if(!confirm('Clear all theses?'))return;Object.keys(theses).forEach(k=>delete theses[k]);Object.keys(confCache).forEach(k=>delete confCache[k]);localStorage.removeItem('nba4:theses');localStorage.removeItem('nba4:confTable');games.filter(g=>selIds.includes(g.id)).forEach(g=>renderCard(g));renderConfidenceTable();}
 function clearMarketCache(){if(!confirm('Clear all cached clutch + odds data?'))return;Object.keys(cachedClutch).forEach(k=>delete cachedClutch[k]);Object.keys(cachedOdds).forEach(k=>delete cachedOdds[k]);Object.keys(cachedOddsHistory).forEach(k=>delete cachedOddsHistory[k]);globalClutchData=null;localStorage.removeItem('nba4:clutch');localStorage.removeItem('nba4:odds');localStorage.removeItem('nba4:oddsHist');localStorage.removeItem('nba4:globalClutch');for(const id of selIds){const cs=cardState[id];if(cs){cs.clutchData=null;cs.clutchTier=3;cs.oddsData=null;cs.oddsHistory=[];}}games.filter(g=>selIds.includes(g.id)).forEach(g=>renderCard(g));}
 function parseThesis(t){
