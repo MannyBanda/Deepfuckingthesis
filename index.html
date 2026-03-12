@@ -372,6 +372,156 @@ setTimeout(function(){
 const W = {I1:.25, I2:.25, I3:.20, I4:.20, I5:.10};
 const FN = '/.netlify/functions/';
 
+
+// ── Netlify DB (Neon Postgres) — persistent calibration ──
+var dbReady = false;
+async function initDB(){
+  try{
+    var r = await fetch(FN+'db-api?action=init');
+    if(r.ok){ dbReady=true; console.log('[DB] Schema initialized'); }
+    else { console.warn('[DB] Init failed:', r.status); }
+  }catch(e){ console.warn('[DB] Init error:', e.message); }
+}
+
+async function saveSnapshotDB(game){
+  if(!dbReady) return;
+  var cs = cardState[game.id]; if(!cs) return;
+  var floor = cs.clientInd; if(!floor || !floor.score) return;
+  var pbp = cs.pbpWindow;
+  var qtr = cs.rollingWindow;
+  var ewp = cs.espnWP;
+  var od = cs.oddsData;
+  var accel = cs.acceleration;
+  var sust = cs.clientSustainability;
+  var hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
+  var hS = game.homePoints||0, aS = game.awayPoints||0;
+  var ctrlIsHome = floor.controlTeam === hA;
+  var ctrlPts = ctrlIsHome ? hS : aS;
+  var oppPts = ctrlIsHome ? aS : hS;
+  var deficit = oppPts - ctrlPts; // positive = trailing
+  var trailingTeam = deficit > 0 ? floor.controlTeam : (deficit < 0 ? (ctrlIsHome?aA:hA) : null);
+  var leadSide = hS > aS ? 'home' : 'away';
+  var leadSust = sust?.[leadSide]?.tier || null;
+  var gapVal = (pbp && pbp.available && pbp.controlTeam === floor.controlTeam) ? (pbp.score - floor.score) : null;
+
+  var snapshot = {
+    game_id: game.id,
+    date: new Date().toISOString().split('T')[0],
+    league: 'nba',
+    matchup: aA+'@'+hA,
+    home_alias: hA, away_alias: aA,
+    period: game.period||0,
+    clock: game.clock||'',
+    home_pts: hS, away_pts: aS,
+    floor_score: floor.score, floor_team: floor.controlTeam,
+    pbp_score: pbp&&pbp.available ? pbp.score : null,
+    pbp_team: pbp&&pbp.available ? pbp.controlTeam : null,
+    pbp_window_size: pbp&&pbp.available ? pbp.windowPossessions : null,
+    qtr_score: qtr&&qtr.available ? qtr.score : null,
+    qtr_team: qtr&&qtr.available ? qtr.controlTeam : null,
+    espn_wp_home: ewp ? ewp.home : null,
+    espn_wp_away: ewp ? ewp.away : null,
+    spread: od ? parseFloat(od.homeSpread)||null : null,
+    deficit: Math.max(0, deficit),
+    trailing_team: trailingTeam,
+    lead_sust: leadSust,
+    gap: gapVal,
+    accel: accel?.accel||null,
+    i1: floor.I1?.score, i2: floor.I2?.score, i3: floor.I3?.score, i4: floor.I4?.score, i5: floor.I5?.score,
+  };
+
+  try{
+    await fetch(FN+'db-api?action=snapshot', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(snapshot)
+    });
+  }catch(e){ /* silent */ }
+}
+
+async function finalizeGameDB(game){
+  if(!dbReady) return;
+  var cs = cardState[game.id]; if(!cs) return;
+  var hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
+  var hPts = game.homePoints||0, aPts = game.awayPoints||0;
+  var winner = hPts > aPts ? hA : (aPts > hPts ? aA : 'TIE');
+  var margin = Math.abs(hPts - aPts);
+  var thesis = theses[game.id]||'';
+  var csMatch = thesis.match(/CONTROL SCORE:\s*(\w+)/i);
+  var thesisTeam = csMatch ? csMatch[1].toUpperCase() : null;
+  var pred = cs.prediction;
+  var fwpTeam = null, fwpValue = null;
+  if(pred && pred.homeValue && pred.awayValue){
+    if(pred.homeValue.fwp >= pred.awayValue.fwp){ fwpTeam=hA; fwpValue=pred.homeValue.fwp; }
+    else { fwpTeam=aA; fwpValue=pred.awayValue.fwp; }
+  }
+  var od = cs.oddsData;
+  var homeSpread = od ? parseFloat(od.homeSpread) : null;
+  var homeCovered = null, awayCovered = null;
+  if(homeSpread != null && !isNaN(homeSpread)){
+    var m = hPts - aPts;
+    homeCovered = (m + homeSpread) > 0;
+    awayCovered = (-m + (-homeSpread)) > 0;
+  }
+  var lc = cs.clientLeadComposition || cs.leadComposition;
+
+  try{
+    await fetch(FN+'db-api?action=finalize', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        game_id: game.id,
+        home_pts: hPts, away_pts: aPts,
+        winner: winner, margin: margin,
+        spread: homeSpread, home_covered: homeCovered, away_covered: awayCovered,
+        thesis_team: thesisTeam, thesis_correct: thesisTeam ? thesisTeam===winner : null,
+        fwp_team: fwpTeam, fwp_value: fwpValue, fwp_correct: fwpTeam ? fwpTeam===winner : null,
+        conviction: pred?.conviction||null, entry_signal: pred?.entry||null,
+        classification: lc?.classification||null,
+      })
+    });
+    console.log('[DB] Game finalized:', game.id, winner, 'by', margin);
+  }catch(e){ console.warn('[DB] Finalize failed:', e.message); }
+}
+
+async function fetchCalibrationFromDB(){
+  if(!dbReady) return null;
+  try{
+    var r = await fetch(FN+'db-api?action=calibration&league=nba');
+    if(!r.ok) return null;
+    var data = await r.json();
+    var gs = data.gameStats||{};
+    if(!gs.total_games || gs.total_games < 3) return null;
+    var lines = ['CALIBRATION CONTEXT ('+gs.total_games+' games from DB):'];
+    if(gs.thesis_total > 0) lines.push('Thesis direction: '+gs.thesis_correct+'/'+gs.thesis_total+' correct ('+(gs.thesis_correct/gs.thesis_total*100).toFixed(0)+'%)');
+    (data.fwpBuckets||[]).forEach(function(b){
+      if(b.total >= 2) lines.push('FWP '+b.bucket+': '+b.correct+'/'+b.total+' ('+(b.correct/b.total*100).toFixed(0)+'% win rate)');
+    });
+    if(gs.spread_total > 0) lines.push('Spread: '+gs.spread_covered+'/'+gs.spread_total+' sides covered ('+(gs.spread_covered/gs.spread_total*100).toFixed(0)+'%)');
+    var misses = (data.recentMisses||[]).map(function(m){ return m.matchup+' (FWP:'+m.fwp_value+'% '+m.fwp_team+' lost to '+m.winner+')'; });
+    if(misses.length > 0) lines.push('Recent misses: '+misses.join(', '));
+    return '\n'+lines.join('\n')+'\n';
+  }catch(e){ return null; }
+}
+
+async function fetchCalibrationMatchFromDB(floorScore, period, trailing, deficit){
+  if(!dbReady) return null;
+  try{
+    var params = 'action=match&league=nba&floor_min='+(floorScore-0.1).toFixed(2)+'&floor_max='+(floorScore+0.1).toFixed(2);
+    if(period > 0) params += '&period='+period;
+    if(trailing) params += '&trailing=true&deficit_min='+Math.max(0,deficit-4)+'&deficit_max='+(deficit+8);
+    var r = await fetch(FN+'db-api?'+params);
+    if(!r.ok) return null;
+    var data = await r.json();
+    if(!data.total || data.total < 3) return null;
+    var lines = ['HISTORICAL MATCH ('+data.total+' similar snapshots):'];
+    lines.push('Structural team win rate: '+data.winRate+'%');
+    if(data.coverRate) lines.push('Cover rate: '+data.coverRate+'%');
+    if(data.pbpAgreedCount >= 2) lines.push('When PBP agreed: '+data.pbpAgreedWinRate+'% win ('+data.pbpAgreedCount+' games)');
+    if(data.pbpDisagreedCount >= 2) lines.push('When PBP disagreed: '+data.pbpDisagreedWinRate+'% win ('+data.pbpDisagreedCount+' games)');
+    return '\n'+lines.join('\n')+'\n';
+  }catch(e){ return null; }
+}
+
+
 // ── ESPN Win Probability Integration ──
 const ESPN_ALIAS_MAP = {NOP:'NO',GSW:'GS',NYK:'NY',SAS:'SA',PHX:'PHO',BKN:'BKN'};
 var espnGameMap = {}; // {srGameId: espnEventId}
@@ -758,6 +908,7 @@ async function loadSchedule(){
 })();
 
 // Load on page ready
+initDB();
 loadSchedule();
 window.__nbaBooted = true; // Boot canary — proves main script parsed successfully
 console.log('[NBA CONTROL]', window.__nbaVersion, 'initialized —', new Date().toLocaleTimeString());
@@ -1061,6 +1212,17 @@ async function fetchSummary(game){
     checkAlert(game);
     checkStructuralAlert(game);
     captureCalibration(game);
+    // Save snapshot to DB (throttled: every 3rd poll when period >= 2)
+    if(getState(game)==='LIVE' && game.period >= 2){
+      if(!cs._dbPollCount) cs._dbPollCount = 0;
+      cs._dbPollCount++;
+      if(cs._dbPollCount % 3 === 0) saveSnapshotDB(game);
+    }
+    // Finalize to DB when game ends
+    if(getState(game)==='FINAL' && !cs._dbFinalized){
+      cs._dbFinalized = true;
+      finalizeGameDB(game);
+    }
 
     // Auto-analyze disabled — use manual ⚡ ANALYZE button to control token spend
     // if(changed && getState(game)==='LIVE' && game.period >= 2){
@@ -1112,6 +1274,15 @@ async function fetchBdlFallback(game, reason){
     checkAlert(game);
     checkStructuralAlert(game);
     captureCalibration(game);
+    if(getState(game)==='LIVE' && game.period >= 2){
+      if(!cs._dbPollCount) cs._dbPollCount = 0;
+      cs._dbPollCount++;
+      if(cs._dbPollCount % 3 === 0) saveSnapshotDB(game);
+    }
+    if(getState(game)==='FINAL' && !cs._dbFinalized){
+      cs._dbFinalized = true;
+      finalizeGameDB(game);
+    }
 
     // Auto-analyze disabled — use manual ⚡ ANALYZE button
     // if(changed && getState(game)==='LIVE' && game.period >= 2){
