@@ -3552,6 +3552,7 @@ async function generateThesis(gameId){
       const data = await resp.json();
       theses[gameId] = (data.thesis||'').replace(/\*\*/g,'').replace(/^#{1,3}\s/gm,'');
       try{ localStorage.setItem('nba4:theses', JSON.stringify(theses)); }catch(e){ console.warn('Thesis persist failed:', e.message); }
+      if(dbReady) fetch(FN+'db-api?action=save_thesis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({game_id:gameId,league:'nba',text:theses[gameId]})}).catch(function(){});
       if(data.preComputed) processPreComputed(data.preComputed);
     } else {
       // SSE stream reader
@@ -3588,6 +3589,7 @@ async function generateThesis(gameId){
                 streamedThesis = parsed.thesis || streamedThesis;
                 theses[gameId] = streamedThesis.replace(/\*\*/g,'').replace(/^#{1,3}\s/gm,'');
                 try{ localStorage.setItem('nba4:theses', JSON.stringify(theses)); }catch(e){ console.warn('Thesis persist failed:', e.message); }
+                if(dbReady) fetch(FN+'db-api?action=save_thesis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({game_id:gameId,league:'nba',text:theses[gameId]})}).catch(function(){});
                 if(parsed.usage) addLog(gameId, '📊 Tokens: in='+((parsed.usage.input_tokens||0))+' out='+((parsed.usage.output_tokens||0)), true);
               } else if(parsed.type === 'error'){
                 throw new Error(parsed.error||'Stream error');
@@ -3599,6 +3601,13 @@ async function generateThesis(gameId){
           }
         }
       }
+    }
+
+    // Fallback: if SSE ended without a 'done' event, persist anyway
+    if(theses[gameId] && theses[gameId].length > 50){
+      try{ localStorage.setItem('nba4:theses', JSON.stringify(theses)); }catch(e){}
+      if(dbReady) fetch(FN+'db-api?action=save_thesis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({game_id:gameId,league:'nba',text:theses[gameId]})}).catch(function(){});
+      addLog(gameId, '✅ Thesis saved ('+theses[gameId].length+' chars)', true);
     }
 
     // Process preComputed data (shared by both streaming and fallback paths)
