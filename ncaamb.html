@@ -4170,12 +4170,14 @@ function synthesize(game){
   var qtrAgrees = qtrAvail && qtr.controlTeam === fTeam;
 
   // ── SUSTAINABILITY ──
+  // Check both client sustainability and Sonnet's sustainability audit
+  var sa = cs.sustainabilityAudit;
   var leadSide = hPts >= aPts ? 'home' : 'away';
   var trailSide = leadSide === 'home' ? 'away' : 'home';
-  var leadSust = sust?.[leadSide]?.tier || null;
-  var trailSust = sust?.[trailSide]?.tier || null;
-  var ctrlSust = ctrlIsHome ? sust?.home?.tier : sust?.away?.tier;
-  var oppSust = ctrlIsHome ? sust?.away?.tier : sust?.home?.tier;
+  var leadSust = sust?.[leadSide]?.tier || sa?.[leadSide]?.tier || null;
+  var trailSust = sust?.[trailSide]?.tier || sa?.[trailSide]?.tier || null;
+  var ctrlSust = (ctrlIsHome ? sust?.home?.tier : sust?.away?.tier) || (ctrlIsHome ? sa?.home?.tier : sa?.away?.tier) || null;
+  var oppSust = (ctrlIsHome ? sust?.away?.tier : sust?.home?.tier) || (ctrlIsHome ? sa?.away?.tier : sa?.home?.tier) || null;
 
   // ── ESPN WP ──
   var espnPct = null, espnTeam = null;
@@ -4189,7 +4191,7 @@ function synthesize(game){
   if(!pbpAvail) missing.push('PBP');
   if(!ewp) missing.push('ESPN');
   if(!od) missing.push('ODDS');
-  if(!sust) missing.push('SUST');
+  if(!sust && !sa) missing.push('SUST');
 
   // ── RESOLVE: Build the synthesis ──
   var control = fTeam + ' ' + fScore.toFixed(2) + ' ' + fVerdict;
@@ -4285,6 +4287,11 @@ function synthesize(game){
     triggers.push('Floor strengthens past 0.70');
   } else {
     action = 'NO EDGE'; actionColor = 'var(--t3)';
+    // Note favorable sustainability pattern even without floor edge
+    if(trailing && oppSust && (oppSust === 'FRAGILE' || oppSust === 'UNSUSTAINABLE') && ctrlSust && (ctrlSust === 'LOCKED' || ctrlSust === 'DURABLE')){
+      lines.push('Sustainability favors ' + fTeam + ' (' + oppTeam + ' ' + oppSust + ', ' + fTeam + ' ' + ctrlSust + ') but floor too low to act.');
+      triggers.push('Floor reaches 0.60+');
+    }
   }
 
   // ── BET TYPE RECOMMENDATION (ML vs Spread) ──
@@ -5954,9 +5961,11 @@ function checkStructuralAlert(game){
   // Sustainability of leading team
   var sustStr = '';
   var sust = cs.clientSustainability;
-  if(sust){
+  var _sa = cs.sustainabilityAudit;
+  var _sustSource = sust || _sa;
+  if(_sustSource){
     var leadSide = ctrlIsHome ? 'away' : 'home';
-    var leadSust = sust[leadSide];
+    var leadSust = _sustSource[leadSide];
     if(leadSust && leadSust.tier) sustStr = 'Lead sust: ' + leadSust.tier;
   }
 
@@ -6125,8 +6134,8 @@ function renderConfidenceTable(){
     const sa = cs?.sustainabilityAudit;
     if(sa){ sustHome = sa.homeTier || sa.home?.tier || null; sustAway = sa.awayTier || sa.away?.tier || null; }
     else if(pred?.sustainability){ sustHome = pred.sustainability; sustAway = null; }
-    // For LIVE games, prefer fresh client-computed sustainability
-    if(cs?.clientSustainability && state==='LIVE'){
+    // Prefer fresh client-computed sustainability for any state
+    if(cs?.clientSustainability){
       const cS = cs.clientSustainability;
       if(cS.home?.tier) sustHome = cS.home.tier;
       if(cS.away?.tier) sustAway = cS.away.tier;
@@ -6238,6 +6247,9 @@ function renderConfidenceTable(){
       if(csForSust?.clientSustainability){
         effSustHome = csForSust.clientSustainability.home?.tier||null;
         effSustAway = csForSust.clientSustainability.away?.tier||null;
+      } else if(csForSust?.sustainabilityAudit){
+        effSustHome = csForSust.sustainabilityAudit.home?.tier||null;
+        effSustAway = csForSust.sustainabilityAudit.away?.tier||null;
       }
     }
     if(effSustHome || effSustAway){
