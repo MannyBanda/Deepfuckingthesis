@@ -698,6 +698,8 @@ async function fetchEspnWinProb(gameId){
         dataPoints: data.dataPoints || 0,
         time: new Date()
       };
+      // Re-render to show ESPN WP on card
+      if(g) renderCard(g);
     }
   }catch(e){ /* silent */ }
   finally{ cs._espnLoading = false; }
@@ -1426,7 +1428,8 @@ async function fetchSummary(game){
     }
 
     // Auto-fetch ESPN win probability (every 2nd poll, staggered after PBP)
-    if(getState(game)==='LIVE' && espnGameMap[game.id] && (!cs.espnWP || (Date.now() - (cs.espnWP.time?.getTime()||0)) > pollInterval * 1.5)){
+    var _espnSt = getState(game);
+    if((_espnSt==='LIVE'||(_espnSt==='FINAL'&&!cs.espnWP)) && espnGameMap[game.id] && (!cs.espnWP || (Date.now() - (cs.espnWP.time?.getTime()||0)) > pollInterval * 1.5)){
       const espnDelay = 4000 + (games.filter(g=>getState(g)==='LIVE').findIndex(g=>g.id===game.id) * 2000);
       setTimeout(function(){ fetchEspnWinProb(game.id); }, espnDelay);
     }
@@ -4110,6 +4113,243 @@ function buildTrajectory(game, hA, aA, hs, as, H, A, hS, aS, qDs, periods){
   return {signals:sigs, lean, count, total, tooEarly:false};
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// DECISION SYNTHESIZER — resolves all signals into one actionable read
+// ══════════════════════════════════════════════════════════════════════════════
+function synthesize(game){
+  var cs = cardState[game.id]; if(!cs) return null;
+  var hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
+  var hPts = game.homePoints||0, aPts = game.awayPoints||0;
+  var state = getState(game);
+  if(state==='PRE') return null;
+
+  // ── GATHER INPUTS ──
+  var floor = cs.clientInd;
+  var pbp = cs.pbpWindow;
+  var qtr = cs.rollingWindow;
+  var ewp = cs.espnWP;
+  var sust = cs.clientSustainability;
+  var od = cs.oddsData;
+  var accel = cs.acceleration;
+  var period = game.period || 1;
+
+  // Need at minimum a floor read
+  if(!floor || !floor.score) return null;
+
+  var fScore = floor.score;
+  var fTeam = floor.controlTeam;
+  var fVerdict = fScore>=0.90?'DOMINANT':fScore>=0.75?'STRONG':fScore>=0.60?'EARNED':'WEAK';
+  var oppTeam = fTeam === hA ? aA : hA;
+
+  // Score state
+  var ctrlIsHome = fTeam === hA;
+  var ctrlPts = ctrlIsHome ? hPts : aPts;
+  var oppPts = ctrlIsHome ? aPts : hPts;
+  var margin = ctrlPts - oppPts; // positive = structural team leading
+  var trailing = margin < 0;
+  var deficit = Math.abs(margin);
+
+  // ── PBP AGREEMENT ──
+  var pbpAvail = pbp && pbp.available && pbp.score;
+  var pbpAgrees = pbpAvail && pbp.controlTeam === fTeam;
+  var pbpDisagrees = pbpAvail && pbp.controlTeam !== fTeam;
+  var pbpScore = pbpAvail ? pbp.score : null;
+  var pbpGap = pbpAvail && pbpAgrees ? (pbp.score - fScore) : pbpAvail ? -(pbp.score) : null;
+
+  // ── QTR CONTEXT ──
+  var qtrAvail = qtr && qtr.available && qtr.score;
+  var qtrAgrees = qtrAvail && qtr.controlTeam === fTeam;
+
+  // ── SUSTAINABILITY ──
+  var leadSide = hPts >= aPts ? 'home' : 'away';
+  var trailSide = leadSide === 'home' ? 'away' : 'home';
+  var leadSust = sust?.[leadSide]?.tier || null;
+  var trailSust = sust?.[trailSide]?.tier || null;
+  var ctrlSust = ctrlIsHome ? sust?.home?.tier : sust?.away?.tier;
+  var oppSust = ctrlIsHome ? sust?.away?.tier : sust?.home?.tier;
+
+  // ── ESPN WP ──
+  var espnPct = null, espnTeam = null;
+  if(ewp){
+    espnTeam = ewp.home >= ewp.away ? hA : aA;
+    espnPct = Math.max(ewp.home, ewp.away);
+  }
+
+  // ── MISSING DATA ──
+  var missing = [];
+  if(!pbpAvail) missing.push('PBP');
+  if(!ewp) missing.push('ESPN');
+  if(!od) missing.push('ODDS');
+  if(!sust) missing.push('SUST');
+
+  // ── RESOLVE: Build the synthesis ──
+  var control = fTeam + ' ' + fScore.toFixed(2) + ' ' + fVerdict;
+  var lines = [];
+  var action = null;
+  var actionColor = 'var(--t3)';
+  var triggers = [];
+
+  // Confidence based on agreement
+  var confidence = 'LOW';
+  if(fScore >= 0.70 && pbpAgrees) confidence = 'HIGH';
+  else if(fScore >= 0.70 && !pbpAvail) confidence = 'MODERATE';
+  else if(fScore >= 0.60 && pbpAgrees) confidence = 'MODERATE';
+  else if(fScore >= 0.60) confidence = 'LOW';
+
+  // Lead quality
+  var leadQuality = null;
+  if(trailing){
+    lines.push(fTeam + ' trailing by ' + deficit + (period >= 3 ? ' in ' + ({3:'Q3',4:'Q4',5:'OT'}[period]||'Q'+period) : '') + '.');
+  } else if(deficit === 0){
+    lines.push('Game tied.');
+  } else {
+    var sustNote = '';
+    if(leadSust === 'LOCKED' || leadSust === 'DURABLE') sustNote = 'Lead is STRUCTURAL.';
+    else if(leadSust === 'FRAGILE' || leadSust === 'UNSUSTAINABLE') sustNote = 'Lead is FRAGILE — variance-driven.';
+    else if(leadSust === 'MIXED') sustNote = 'Lead is MIXED source.';
+    else sustNote = 'Lead source unclear.';
+    lines.push(fTeam + ' leads by ' + deficit + '. ' + sustNote);
+  }
+
+  // Window agreement narrative
+  if(pbpAgrees && pbpScore >= 0.65){
+    lines.push('PBP window confirms momentum (' + pbp.controlTeam + ' ' + pbpScore.toFixed(2) + ').');
+  } else if(pbpDisagrees){
+    lines.push('PBP window disagrees — ' + pbp.controlTeam + ' ' + pbpScore.toFixed(2) + ' in recent possessions.');
+  } else if(!pbpAvail && period >= 2){
+    lines.push('PBP window unavailable — waiting for data.');
+  }
+
+  // Opponent profile
+  if(trailing){
+    var oppProfile = oppSust ? (oppSust === 'FRAGILE' || oppSust === 'UNSUSTAINABLE' ? oppTeam + ' lead is ' + oppSust + ' — regression likely.' : oppSust === 'LOCKED' || oppSust === 'DURABLE' ? oppTeam + ' lead looks ' + oppSust + ' — caution.' : '') : '';
+    if(oppProfile) lines.push(oppProfile);
+  }
+
+  // ESPN alignment
+  if(ewp && espnPct){
+    if(espnTeam === fTeam && espnPct >= 70){
+      lines.push('ESPN model agrees (' + espnPct + '%).');
+    } else if(espnTeam !== fTeam && espnPct >= 60){
+      lines.push('ESPN model favors ' + espnTeam + ' (' + espnPct + '%) — our structural read diverges.');
+    }
+  }
+
+  // ── DECISION TREE ──
+  var sustFragile = oppSust === 'FRAGILE' || oppSust === 'UNSUSTAINABLE';
+  var sustLocked = oppSust === 'LOCKED' || oppSust === 'DURABLE';
+  var inBuyRange = deficit >= 4 && deficit <= 15;
+
+  if(fScore >= 0.70 && pbpAgrees && trailing && inBuyRange && sustFragile){
+    action = 'BUY'; actionColor = 'var(--green)';
+    lines.push(fTeam + ' structural edge + opponent variance = entry signal.');
+  } else if(fScore >= 0.70 && pbpAgrees && trailing && inBuyRange && !sustFragile && !sustLocked){
+    action = 'LEAN BUY'; actionColor = 'var(--g2)';
+    triggers.push(oppTeam + ' sustainability degrades to FRAGILE');
+  } else if(fScore >= 0.70 && pbpAgrees && trailing && inBuyRange && sustLocked){
+    action = 'CAUTION'; actionColor = 'var(--amber)';
+    lines.push(oppTeam + ' lead is structurally sound — risky entry.');
+    triggers.push(oppTeam + ' sustainability degrades');
+    triggers.push('Deficit narrows below 4');
+  } else if(fScore >= 0.70 && trailing && deficit > 15){
+    action = 'TOO DEEP'; actionColor = 'var(--red)';
+    lines.push('Deficit exceeds structural recovery range.');
+    triggers.push('Deficit narrows to 10-15');
+  } else if(fScore >= 0.70 && !trailing && deficit > 3){
+    action = 'NO VALUE'; actionColor = 'var(--t2)';
+    lines.push('Market already prices ' + fTeam + ' advantage.');
+  } else if(fScore >= 0.70 && pbpDisagrees){
+    action = 'WAIT'; actionColor = 'var(--yellow)';
+    lines.push('Floor and window disagree — momentum shifting.');
+    triggers.push('PBP flips to agree with floor');
+    triggers.push('PBP sustains ' + pbp.controlTeam + ' control for 10+ possessions');
+  } else if(fScore >= 0.70 && !pbpAvail){
+    action = 'DEVELOPING'; actionColor = 'var(--yellow)';
+    triggers.push('PBP data arrives and confirms floor');
+  } else if(fScore >= 0.60 && pbpAgrees && trailing && inBuyRange){
+    action = 'WATCH'; actionColor = 'var(--amber)';
+    lines.push('Floor building but not yet decisive.');
+    triggers.push('Floor reaches 0.70+');
+    triggers.push(fTeam + ' wins I1 or I2');
+  } else if(fScore >= 0.60){
+    action = 'DEVELOPING'; actionColor = 'var(--yellow)';
+    triggers.push('Floor strengthens past 0.70');
+  } else {
+    action = 'NO EDGE'; actionColor = 'var(--t3)';
+  }
+
+  // ── BET TYPE RECOMMENDATION (ML vs Spread) ──
+  var betType = null;
+  var betDetail = null;
+  if(od && (action === 'BUY' || action === 'LEAN BUY')){
+    var spConv = cs.spreadConviction;
+    var spread = parseFloat(od.homeSpread);
+    var ctrlSpread = (!isNaN(spread)) ? (ctrlIsHome ? spread : -spread) : null;
+
+    // ML value: compare floor score (proxy for win prob) against ML implied prob
+    var ctrlML = ctrlIsHome ? od.homeML : od.awayML;
+    var mlNum = parseFloat(ctrlML);
+    var mlImplied = null;
+    if(!isNaN(mlNum) && mlNum !== 0){
+      mlImplied = mlNum < 0 ? Math.abs(mlNum) / (Math.abs(mlNum) + 100) * 100 : 100 / (mlNum + 100) * 100;
+    }
+    var mlEdge = mlImplied != null ? (fScore * 100) - mlImplied : null;
+
+    // Spread value: from spread conviction engine
+    var ctrlCoverProb = null;
+    if(spConv){
+      var spTeam = ctrlIsHome ? spConv.home : spConv.away;
+      if(spTeam) ctrlCoverProb = spTeam.coverProb;
+    }
+
+    // Decision
+    var mlHasValue = mlEdge != null && mlEdge >= 10;
+    var spreadHasValue = ctrlCoverProb != null && ctrlCoverProb >= 60;
+
+    if(mlHasValue && spreadHasValue){
+      // Both have value — recommend the stronger edge
+      if(mlEdge > (ctrlCoverProb - 50)){
+        betType = 'ML'; betDetail = fTeam + ' ML ' + ctrlML + ' (implied ' + mlImplied.toFixed(0) + '%, our read ' + (fScore*100).toFixed(0) + '% = +' + mlEdge.toFixed(0) + '% edge). Spread also viable at ' + ctrlCoverProb + '% cover.';
+      } else {
+        betType = 'SPREAD'; betDetail = fTeam + ' ' + (ctrlSpread>0?'+':'') + ctrlSpread.toFixed(1) + ' (' + ctrlCoverProb + '% cover prob). ML also has value at +' + mlEdge.toFixed(0) + '% edge.';
+      }
+    } else if(mlHasValue){
+      betType = 'ML'; betDetail = fTeam + ' ML ' + ctrlML + ' (implied ' + mlImplied.toFixed(0) + '%, our read ' + (fScore*100).toFixed(0) + '% = +' + mlEdge.toFixed(0) + '% edge).';
+    } else if(spreadHasValue){
+      betType = 'SPREAD'; betDetail = fTeam + ' ' + (ctrlSpread!=null?(ctrlSpread>0?'+':'')+ctrlSpread.toFixed(1):'?') + ' (' + ctrlCoverProb + '% cover prob).';
+    } else if(ctrlSpread != null && trailing){
+      // No strong conviction either way — note the spread for context
+      betDetail = 'Spread ' + fTeam + ' ' + (ctrlSpread>0?'+':'') + ctrlSpread.toFixed(1) + ' — waiting for conviction.';
+    }
+
+    if(betDetail) lines.push(betDetail);
+  } else if(od && od.homeSpread && action !== 'NO EDGE'){
+    // Non-buy actions — just note spread context
+    var spread2 = parseFloat(od.homeSpread);
+    if(!isNaN(spread2)){
+      var ctrlSpread2 = ctrlIsHome ? spread2 : -spread2;
+      if(trailing && ctrlSpread2 > 0){
+        lines.push('Spread ' + fTeam + ' ' + (ctrlSpread2>0?'+':'') + ctrlSpread2.toFixed(1) + ' — getting points.');
+      }
+    }
+  }
+
+  return {
+    action: action,
+    actionColor: actionColor,
+    control: control,
+    narrative: lines.join(' '),
+    triggers: triggers,
+    confidence: confidence,
+    missing: missing,
+    fTeam: fTeam,
+    fScore: fScore,
+    trailing: trailing,
+    deficit: deficit,
+    betType: betType,
+  };
+}
+
 function getVerdict(s){
   if(s>=.90) return {label:'DOMINANT',color:'#00ff88',bg:'rgba(0,255,136,.10)',lvl:'entry'};
   if(s>=.75) return {label:'STRONG',color:'#a8ff78',bg:'rgba(168,255,120,.08)',lvl:'entry'};
@@ -5832,7 +6072,7 @@ function renderConfidenceTable(){
         const tTeam = tHome ? hA : aA;
         // Use Sonnet's team call but client-computed weighted sum
         if(Math.abs(tScore - score) >= 0.03){
-          console.log('THESIS RECOMPUTE: Sonnet stated ' + team + ' ' + score.toFixed(2) + ' | Client computed ' + tTeam + ' ' + tScore.toFixed(3));
+          if(!cs._thesisRecomputeLogged){ cs._thesisRecomputeLogged=true; console.log('THESIS RECOMPUTE: Sonnet stated ' + team + ' ' + score.toFixed(2) + ' | Client computed ' + tTeam + ' ' + tScore.toFixed(3)); }
           team = tTeam; score = tScore; verdict = getVerdict(score)?.label || verdict;
         }
       }
@@ -6322,6 +6562,49 @@ function renderCard(game){
     <div class="prediv"></div><div style="font-size:6px;color:var(--t3)">Indicators activate at tip · Generate or paste thesis below</div></div>`;
   }
 
+    // ─── ESPN WIN PROBABILITY (always visible — not gated by indicators) ───
+    var _ewp = cs.espnWP;
+    if(_ewp && state!=='PRE'){
+      var _wpLead = _ewp.home >= _ewp.away ? (game.home?.alias||'HOME') : (game.away?.alias||'AWAY');
+      var _wpPct = Math.max(_ewp.home, _ewp.away);
+      var _wpOpenPct = _ewp.opening != null ? (_ewp.home >= _ewp.away ? _ewp.opening : 100 - _ewp.opening) : null;
+      var _wpDir = _wpOpenPct != null ? (_wpPct > _wpOpenPct + 5 ? '\u25b2' : _wpPct < _wpOpenPct - 5 ? '\u25bc' : '\u25ac') : '';
+      var _wpCol = _wpPct >= 80 ? 'var(--green)' : _wpPct >= 60 ? 'var(--g2)' : 'var(--t2)';
+      var _wpAge = _ewp.time ? Math.round((Date.now() - _ewp.time.getTime()) / 60000) : '?';
+      html+='<div style="display:flex;align-items:center;gap:6px;padding:4px 10px;background:rgba(96,165,250,.06);border-top:1px solid rgba(96,165,250,.15)">';
+      html+='<span style="font-size:6px;color:#60a5fa;font-weight:700;letter-spacing:.5px">ESPN WP</span>';
+      html+='<span style="font-size:9px;font-weight:700;color:'+_wpCol+'">'+esc(_wpLead)+' '+_wpPct+'%</span>';
+      if(_wpDir) html+='<span style="font-size:7px;color:var(--t3);margin-left:2px">'+_wpDir+'</span>';
+      if(_wpOpenPct != null) html+='<span style="font-size:5.5px;color:var(--t3);margin-left:4px">open: '+_wpOpenPct+'%</span>';
+      html+='<span style="font-size:4.5px;color:var(--t3);margin-left:auto">'+_wpAge+'m ago</span>';
+      html+='</div>';
+    }
+
+  // ─── DECISION SYNTHESIZER (always visible when data exists) ───
+    var synth = synthesize(game);
+    if(synth){
+      var _sBorder = synth.action==='BUY'?'var(--green)':synth.action==='LEAN BUY'?'var(--g2)':synth.action==='WAIT'||synth.action==='DEVELOPING'?'var(--yellow)':synth.action==='CAUTION'?'var(--amber)':synth.action==='NO VALUE'||synth.action==='TOO DEEP'?'var(--red)':'var(--b1)';
+      html+='<div style="padding:8px 10px;border-top:2px solid '+_sBorder+';background:rgba(255,255,255,.02)">';
+      // Action badge + control
+      html+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">';
+      html+='<span style="font-size:8px;font-weight:700;color:'+synth.actionColor+';letter-spacing:1px;padding:2px 8px;border:1px solid '+synth.actionColor+';border-radius:3px">'+esc(synth.action)+'</span>';
+      html+='<span style="font-size:7px;color:var(--t1);font-weight:600">'+esc(synth.fTeam)+' '+synth.fScore.toFixed(2)+'</span>';
+      html+='<span style="font-size:5px;color:var(--t3);letter-spacing:.3px">CONF: '+synth.confidence+'</span>';
+      if(synth.betType) html+='<span style="font-size:6px;font-weight:700;color:var(--green);padding:1px 5px;border:1px solid var(--green);border-radius:2px;letter-spacing:.5px">'+esc(synth.betType)+'</span>';
+      if(synth.missing.length > 0) html+='<span style="font-size:5px;color:var(--amber)">missing: '+synth.missing.join(', ')+'</span>';
+      html+='</div>';
+      // Narrative
+      html+='<div style="font-size:6.5px;color:var(--t1);line-height:1.5;margin-bottom:4px">'+esc(synth.narrative)+'</div>';
+      // Triggers
+      if(synth.triggers.length > 0){
+        html+='<div style="font-size:5.5px;color:var(--t3)">';
+        html+='<span style="color:var(--amber);font-weight:600">TRIGGERS:</span> ';
+        html+=synth.triggers.map(function(t){return esc(t);}).join(' · ');
+        html+='</div>';
+      }
+      html+='</div>';
+    }
+
   if(state!=='PRE'&&ind){
     const analyzeBtn = state==='LIVE' ? (cs.analyzing ? (cs.preFlightStep==='odds' ? `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;opacity:.8;color:var(--amber);border-color:var(--amber);" disabled>⏳ ODDS…</button>` : cs.preFlightStep==='depth' ? `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;opacity:.8;color:var(--amber);border-color:var(--amber);" disabled>⏳ DEPTH…</button>` : `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;opacity:.5;color:var(--t3);border-color:var(--t3);" disabled>⏳ ANALYZING</button>`) : `<button class="tgen" style="font-size:6px;padding:1px 6px;margin-left:4px;" onclick="triggerAnalysis(games.find(g=>g.id==='${id}'))">⚡ ANALYZE</button>`) : '';
     const pred = cs.prediction;
@@ -6687,6 +6970,7 @@ function renderCard(game){
       var pbpInfo = pbpW&&pbpW.available ? 'Last '+pbpW.windowPossessions+' poss'+(pbpW.timeSpanMin?' ('+pbpW.timeSpanMin.toFixed(1)+'min)':'') : '';
       html += _wRow('PBP', pbpW, fScore, fTeam, pbpInfo);
 
+      // ESPN WP moved above Sustainability section
 
       if(accel && accel.entries && accel.entries.length>0){
         var lastGap = accel.entries[accel.entries.length-1]?.gap||0;
