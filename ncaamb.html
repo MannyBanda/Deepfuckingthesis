@@ -509,39 +509,67 @@ async function fetchCalibrationMatchFromDB(floorScore, period, trailing, deficit
 
 
 
-// Sync analyses from DB on load — enables cross-device Value Read
+// Sync analyses from DB on load — enables cross-device restore
+// Fetches for ALL today's games (not just selected) and caches results.
+// mountCard then reads from dbAnalysisCache as a cross-device fallback.
 async function syncAnalysesFromDB(){
   if(!dbReady) return;
   try{
-    var ids = games.filter(function(g){return selIds.includes(g.id);}).map(function(g){return g.id;}).join(',');
+    // Fetch for ALL games on today's slate — one DB call covers everything
+    var ids = games.map(function(g){return g.id;}).join(',');
     if(!ids) return;
     var r = await fetch(FN+'db-api?action=get_analyses&game_ids='+encodeURIComponent(ids));
     if(!r.ok) return;
     var data = await r.json();
     var rows = data.analyses || [];
-    var synced = 0;
+    // Build cache keyed by game_id
     rows.forEach(function(row){
-      var cs = cardState[row.game_id];
-      if(!cs) return;
-      // Only sync if this device hasn't analyzed yet
-      if(cs.prediction && cs.analysisTime) return;
+      var pred = null, ind = null;
       if(row.prediction_json){
-        try{
-          cs.prediction = typeof row.prediction_json === 'string' ? JSON.parse(row.prediction_json) : row.prediction_json;
-        }catch(e){}
+        try{ pred = typeof row.prediction_json === 'string' ? JSON.parse(row.prediction_json) : row.prediction_json; }catch(e){}
       }
       if(row.indicators_json){
-        try{
-          cs.sonnetIndicators = typeof row.indicators_json === 'string' ? JSON.parse(row.indicators_json) : row.indicators_json;
-        }catch(e){}
+        try{ ind = typeof row.indicators_json === 'string' ? JSON.parse(row.indicators_json) : row.indicators_json; }catch(e){}
       }
-      if(row.ts) cs.analysisTime = new Date(row.ts);
-      cs.analysis = '(synced from DB)';
+      dbAnalysisCache[row.game_id] = {
+        prediction: pred,
+        sonnetIndicators: ind,
+        analysisTime: row.ts ? new Date(row.ts).getTime() : 0,
+        analysis: row.raw_text || '(synced from DB)',
+        control_team: row.control_team,
+        control_score: row.control_score,
+        entry: row.entry,
+        conviction: row.conviction,
+        fwp: row.fwp,
+        edge: row.edge,
+        signal: row.signal,
+        sustainability: row.sustainability,
+        lead_source: row.lead_source,
+      };
+    });
+    if(rows.length > 0) console.log('[DB] Cached '+rows.length+' analyses from DB');
+
+    // Apply to any already-mounted cards (cards selected before DB responded)
+    var synced = 0;
+    Object.keys(dbAnalysisCache).forEach(function(gid){
+      var cs = cardState[gid];
+      if(!cs) return;
+      var cached = dbAnalysisCache[gid];
+      var localTime = cs.analysisTime ? cs.analysisTime.getTime() : 0;
+      var dbTime = cached.analysisTime || 0;
+      // Skip if local is newer or same
+      if(localTime >= dbTime && cs.prediction) return;
+      if(cached.prediction) cs.prediction = cached.prediction;
+      if(cached.sonnetIndicators) cs.sonnetIndicators = cached.sonnetIndicators;
+      if(dbTime) cs.analysisTime = new Date(dbTime);
+      cs.analysis = cached.analysis || cs.analysis;
+      persistAnalysis(gid, cs);
       synced++;
     });
     if(synced > 0){
-      console.log('[DB] Synced '+synced+' analyses from DB');
+      console.log('[DB] Applied '+synced+' DB analyses to mounted cards');
       games.filter(function(g){return selIds.includes(g.id);}).forEach(function(g){renderCard(g);});
+      renderConfidenceTable();
     }
   }catch(e){ console.warn('[DB] Analysis sync failed:', e.message); }
 }
@@ -721,6 +749,10 @@ function persistStructural(id,cs){try{localStorage.setItem('ncaamb:structural:'+
 function persistAnalysis(id,cs){try{localStorage.setItem('ncaamb:analysis:'+id,JSON.stringify({analysis:cs.analysis,analysisTime:cs.analysisTime?cs.analysisTime.getTime():null,sonnetIndicators:cs.sonnetIndicators,prediction:cs.prediction,sustainabilityAudit:cs.sustainabilityAudit,analysisHistory:cs.analysisHistory||[],edgeHistory:cs.edgeHistory||[],clientIndAtAnalysis:cs.clientIndAtAnalysis}));}catch(e){console.warn('Analysis persist failed:',e.message);}}
 function persistDepth(id,cs){try{var _audit=cs.pbpAudit;if(_audit){var _slim={home:_audit.home,away:_audit.away,homeAlias:_audit.homeAlias,awayAlias:_audit.awayAlias,totalShots:_audit.totalShots,totalTOs:_audit.totalTOs,runs:_audit.runs,syntheticQuarters:_audit.syntheticQuarters||null};localStorage.setItem('ncaamb:depth:'+id,JSON.stringify({pbpAudit:_slim,pbpTime:cs.pbpTime?cs.pbpTime.getTime():null,pbpPeriod:cs.pbpPeriod}));}else{localStorage.setItem('ncaamb:depth:'+id,JSON.stringify({pbpAudit:null,pbpTime:cs.pbpTime?cs.pbpTime.getTime():null,pbpPeriod:cs.pbpPeriod}));}}catch(e){console.warn('Depth persist failed:',e.message);}}
 const cardState = {};
+
+// DB analysis cache — populated once on schedule load, used by mountCard for cross-device restore
+var dbAnalysisCache = {}; // {gameId: {prediction, sonnetIndicators, analysisTime, analysis, ...}}
+var _lastThesisRecomputeLog = 0; // global throttle for THESIS RECOMPUTE logs
 
 // BDL fallback state
 const bdlGameMap = {}; // SR game ID → BDL game ID
@@ -6112,7 +6144,7 @@ function renderConfidenceTable(){
         const tTeam = tHome ? hA : aA;
         // Use Sonnet's team call but client-computed weighted sum
         if(Math.abs(tScore - score) >= 0.03){
-          if(!cs._thesisRecomputeLogged){ cs._thesisRecomputeLogged=true; console.log('THESIS RECOMPUTE: Sonnet stated ' + team + ' ' + score.toFixed(2) + ' | Client computed ' + tTeam + ' ' + tScore.toFixed(3)); }
+          if(!cs._thesisRecomputeLogged && Date.now() - _lastThesisRecomputeLog > 30000){ cs._thesisRecomputeLogged=true; _lastThesisRecomputeLog = Date.now(); console.log('THESIS RECOMPUTE: Sonnet stated ' + team + ' ' + score.toFixed(2) + ' | Client computed ' + tTeam + ' ' + tScore.toFixed(3)); }
           team = tTeam; score = tScore; verdict = getVerdict(score)?.label || verdict;
         }
       }
@@ -6205,6 +6237,24 @@ function renderConfidenceTable(){
         if(row.homeScore===null && cached.homeScore!==null){ row.homeScore=cached.homeScore; row.awayScore=cached.awayScore; row.period=cached.period; row.clock=cached.clock; }
         if(cached.state==='FINAL' && row.state==='PRE') row.state = cached.state;
         if(cached.team && !si) { row.team=cached.team; row.score=cached.score; row.verdict=cached.verdict; }
+      }
+      // DB analysis cache — cross-device fallback (fills gaps confCache didn't cover)
+      const dbCached = dbAnalysisCache[g.id];
+      if(dbCached){
+        if(!row.entry && dbCached.entry) row.entry = dbCached.entry;
+        if(!row.conviction && dbCached.conviction) row.conviction = dbCached.conviction;
+        if(!row.fwp && dbCached.fwp) row.fwp = dbCached.fwp;
+        if(!row.signal && dbCached.signal) row.signal = dbCached.signal;
+        if(!row.sustHome && dbCached.sustainability) row.sustHome = dbCached.sustainability;
+        if(row.score===0 && dbCached.control_score){ row.score = dbCached.control_score; row.team = dbCached.control_team; row.verdict = getVerdict(dbCached.control_score)?.label||''; }
+        // Restore FWP team from prediction_json
+        if(!row.fwpTeamAlias && dbCached.prediction){
+          var dp = dbCached.prediction;
+          if(dp.homeValue && dp.awayValue){
+            if(dp.homeValue.fwp >= dp.awayValue.fwp){ row.fwpTeamAlias=dp.homeValue.team; row.fwpTeamFwp=dp.homeValue.fwp; row.fwpTeamEdge=dp.homeValue.edge; row.fwpTeamEntry=dp.entry||null; }
+            else { row.fwpTeamAlias=dp.awayValue.team; row.fwpTeamFwp=dp.awayValue.fwp; row.fwpTeamEdge=dp.awayValue.edge; row.fwpTeamEntry=dp.entry||null; }
+          }
+        }
       }
     }
     rows.push(row);
@@ -6475,6 +6525,22 @@ function mountCard(game){
         addLog(id, '📋 Analysis restored from cache ('+((sa.analysisHistory||[]).length)+' reads)', true);
       }
     }catch(e){ console.warn('Analysis restore failed:', e.message); }
+  }
+  // Restore from DB analysis cache (cross-device — overrides localStorage if DB is newer)
+  if(dbAnalysisCache[id]){
+    var dbData = dbAnalysisCache[id];
+    var dbTime = dbData.analysisTime || 0;
+    var localTime = cardState[id].analysisTime ? cardState[id].analysisTime.getTime() : 0;
+    if(dbTime > localTime || !cardState[id].prediction){
+      if(dbData.prediction) cardState[id].prediction = dbData.prediction;
+      if(dbData.sonnetIndicators) cardState[id].sonnetIndicators = dbData.sonnetIndicators;
+      if(dbTime) cardState[id].analysisTime = new Date(dbTime);
+      if(dbData.analysis && dbData.analysis !== '(synced from DB)') cardState[id].analysis = dbData.analysis;
+      else if(!cardState[id].analysis) cardState[id].analysis = '(synced from DB)';
+      // Persist to localStorage so next same-device refresh is instant
+      persistAnalysis(id, cardState[id]);
+      addLog(id, '📡 Analysis restored from DB'+(dbTime > localTime ? ' (newer than local)' : ' (no local cache)'), true);
+    }
   }
   // Restore depth audit from localStorage
   if(!cardState[id].pbpAudit){
@@ -7726,3 +7792,4 @@ function runQA(gameId){
 </script>
 </body>
 </html>
+All 4 patches applied successfully
