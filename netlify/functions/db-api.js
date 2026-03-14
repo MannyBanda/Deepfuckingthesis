@@ -440,19 +440,32 @@ exports.handler = async (event) => {
     // ═══════════════════════════════════════════════════════
     if (action === 'get_analyses') {
       const gameIds = params.game_ids ? params.game_ids.split(',') : [];
+      const league = params.league || 'nba';
 
-      if (gameIds.length === 0) {
-        return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_ids required' }) };
+      let rows;
+      if (gameIds.length > 0) {
+        rows = await sql`
+          SELECT DISTINCT ON (game_id) game_id, ts, period, clock,
+            control_team, control_score, fwp, edge, entry, conviction, signal,
+            sustainability, lead_source, prediction_json, indicators_json
+          FROM analyses
+          WHERE game_id = ANY(${gameIds})
+          ORDER BY game_id, ts DESC
+        `;
+      } else {
+        // Return most recent analyses across all games for this league
+        rows = await sql`
+          SELECT DISTINCT ON (a.game_id) a.game_id, a.ts, a.period, a.clock,
+            a.control_team, a.control_score, a.fwp, a.edge, a.entry, a.conviction, a.signal,
+            a.sustainability, a.lead_source, a.prediction_json, a.indicators_json,
+            g.matchup
+          FROM analyses a
+          LEFT JOIN games g ON a.game_id = g.id
+          WHERE (g.league = ${league} OR g.league IS NULL)
+          ORDER BY a.game_id, a.ts DESC
+          LIMIT 50
+        `;
       }
-
-      const rows = await sql`
-        SELECT DISTINCT ON (game_id) game_id, ts, period, clock,
-          control_team, control_score, fwp, edge, entry, conviction, signal,
-          sustainability, lead_source, prediction_json, indicators_json
-        FROM analyses
-        WHERE game_id = ANY(${gameIds})
-        ORDER BY game_id, ts DESC
-      `;
 
       return { statusCode: 200, headers, body: JSON.stringify({ analyses: rows }) };
     }
