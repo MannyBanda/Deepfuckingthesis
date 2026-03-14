@@ -4231,10 +4231,18 @@ function synthesize(game){
     lines.push('PBP window unavailable — waiting for data.');
   }
 
-  // Opponent profile
+  // Opponent + trailing team profiles
   if(trailing){
     var oppProfile = oppSust ? (oppSust === 'FRAGILE' || oppSust === 'UNSUSTAINABLE' ? oppTeam + ' lead is ' + oppSust + ' — regression likely.' : oppSust === 'LOCKED' || oppSust === 'DURABLE' ? oppTeam + ' lead looks ' + oppSust + ' — caution.' : '') : '';
     if(oppProfile) lines.push(oppProfile);
+    // Trailing team's own sustainability — can they actually come back?
+    if(ctrlSust){
+      if(ctrlSust === 'UNSUSTAINABLE' || ctrlSust === 'FRAGILE'){
+        lines.push(fTeam + ' own shooting is ' + ctrlSust + ' — comeback capacity limited.');
+      } else if(ctrlSust === 'LOCKED' || ctrlSust === 'DURABLE'){
+        lines.push(fTeam + ' shooting ' + ctrlSust + ' — has the fuel to close gap.');
+      }
+    }
   }
 
   // ESPN alignment
@@ -4251,12 +4259,26 @@ function synthesize(game){
   var sustLocked = oppSust === 'LOCKED' || oppSust === 'DURABLE';
   var inBuyRange = deficit >= 4 && deficit <= 15;
 
-  if(fScore >= 0.70 && pbpAgrees && trailing && inBuyRange && sustFragile){
+  // Check if trailing (structural) team's own shooting is sustainable enough to mount comeback
+  var ctrlFragile = ctrlSust === 'FRAGILE' || ctrlSust === 'UNSUSTAINABLE';
+  var ctrlLocked = ctrlSust === 'LOCKED' || ctrlSust === 'DURABLE';
+
+  if(fScore >= 0.70 && pbpAgrees && trailing && inBuyRange && sustFragile && !ctrlFragile){
     action = 'BUY'; actionColor = 'var(--green)';
-    lines.push(fTeam + ' structural edge + opponent variance = entry signal.');
-  } else if(fScore >= 0.70 && pbpAgrees && trailing && inBuyRange && !sustFragile && !sustLocked){
+    lines.push(fTeam + ' structural edge + opponent variance = entry signal.' + (ctrlLocked ? ' ' + fTeam + ' shooting ' + ctrlSust + '.' : ''));
+  } else if(fScore >= 0.70 && pbpAgrees && trailing && inBuyRange && sustFragile && ctrlFragile){
+    action = 'CAUTION'; actionColor = 'var(--amber)';
+    lines.push('Both teams shooting unsustainably — ' + oppTeam + ' ' + (oppSust||'FRAGILE') + ', ' + fTeam + ' ' + (ctrlSust||'FRAGILE') + '. Mutual regression risk.');
+    triggers.push(fTeam + ' sustainability upgrades');
+    triggers.push('Deficit narrows below 4');
+  } else if(fScore >= 0.70 && pbpAgrees && trailing && inBuyRange && !sustFragile && !sustLocked && !ctrlFragile){
     action = 'LEAN BUY'; actionColor = 'var(--g2)';
     triggers.push(oppTeam + ' sustainability degrades to FRAGILE');
+  } else if(fScore >= 0.70 && pbpAgrees && trailing && inBuyRange && !sustFragile && !sustLocked && ctrlFragile){
+    action = 'WATCH'; actionColor = 'var(--amber)';
+    lines.push(fTeam + ' controls structurally but own shooting is ' + (ctrlSust||'FRAGILE') + ' — comeback fuel questionable.');
+    triggers.push(fTeam + ' sustainability upgrades');
+    triggers.push(oppTeam + ' sustainability degrades');
   } else if(fScore >= 0.70 && pbpAgrees && trailing && inBuyRange && sustLocked){
     action = 'CAUTION'; actionColor = 'var(--amber)';
     lines.push(oppTeam + ' lead is structurally sound — risky entry.');
