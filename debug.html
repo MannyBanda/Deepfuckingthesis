@@ -37,6 +37,7 @@ button:active{background:#334155;}
   <button onclick="checkOdds()">💰 Odds</button>
   <button onclick="checkClutch()">🏀 Clutch</button>
   <button onclick="testWrite()">✏️ Test Write</button>
+  <button onclick="bulkSaveAnalyses()">📤 Bulk Save Analyses</button>
   <button onclick="clearLog()">🗑 Clear</button>
 </div>
 
@@ -277,6 +278,60 @@ async function runAll(){
   await checkDB();
   await checkTheses();
   log('Done!', 'log-ok');
+}
+
+// ── Bulk Save Analyses from localStorage to DB ──
+async function bulkSaveAnalyses(){
+  log('Scanning localStorage for analyses...', 'log-info');
+  var saved = 0, skipped = 0, failed = 0;
+  var prefixes = ['nba4:analysis:', 'ncaamb:analysis:'];
+  
+  for(var i = 0; i < localStorage.length; i++){
+    var key = localStorage.key(i);
+    if(!key) continue;
+    var matchedPrefix = prefixes.find(function(p){ return key.startsWith(p); });
+    if(!matchedPrefix) continue;
+    
+    var gameId = key.replace(matchedPrefix, '');
+    var league = matchedPrefix.startsWith('nba') ? 'nba' : 'ncaamb';
+    
+    try{
+      var raw = JSON.parse(localStorage.getItem(key));
+      if(!raw) continue;
+      
+      var pred = raw.prediction;
+      var si = raw.sonnetIndicators;
+      
+      if(!pred && !si){ skipped++; continue; }
+      
+      var payload = {
+        game_id: gameId,
+        period: pred?.period || 0,
+        clock: '',
+        control_team: si?.controlTeam || pred?.buyTeam || null,
+        control_score: si?.score || null,
+        fwp: pred?.fwp || null,
+        edge: pred?.edge || null,
+        entry: pred?.entry || null,
+        conviction: pred?.conviction || null,
+        signal: pred?.signalType || null,
+        sustainability: (pred?.sustainability || '').substring(0, 200),
+        lead_source: pred?.leadSource || null,
+        raw_text: (raw.analysis || '').substring(0, 2000),
+        prediction_json: pred ? JSON.stringify(pred) : null,
+        indicators_json: si ? JSON.stringify({I1:si.I1, I2:si.I2, I3:si.I3, I4:si.I4, I5:si.I5, score:si.score, controlTeam:si.controlTeam}) : null,
+      };
+      
+      var result = await postJSON(FN + 'db-api?action=save_analysis', payload);
+      if(result && result.ok){ saved++; }
+      else { failed++; log('Failed: ' + gameId.substring(0,8) + ' — ' + JSON.stringify(result), 'log-err'); }
+    }catch(e){
+      failed++;
+      log('Error parsing ' + gameId.substring(0,8) + ': ' + e.message, 'log-err');
+    }
+  }
+  
+  log('Bulk save complete — saved:' + saved + ' skipped:' + skipped + ' failed:' + failed, saved > 0 ? 'log-ok' : 'log-warn');
 }
 
 function escH(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }

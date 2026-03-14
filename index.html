@@ -1766,14 +1766,14 @@ async function triggerAnalysis(game){
     if(decision) checkNtfyAlert(game, decision);
 
     // Save analysis snapshot to DB (includes full prediction + indicators for cross-device sync)
-    if(dbReady && parsed){
+    if(dbReady && (parsed || decision)){
       var _predSafe = null;
       try{ _predSafe = decision ? JSON.stringify(decision) : null; }catch(e){}
       var _indSafe = null;
       try{ _indSafe = parsed ? JSON.stringify({I1:parsed.I1,I2:parsed.I2,I3:parsed.I3,I4:parsed.I4,I5:parsed.I5,score:parsed.score,controlTeam:parsed.controlTeam}) : null; }catch(e){}
       var _aSnap = {
         game_id: game.id, period: game.period||0, clock: game.clock||'',
-        control_team: parsed.controlTeam||null, control_score: parsed.score||null,
+        control_team: parsed?.controlTeam||decision?.buyTeam||null, control_score: parsed?.score||null,
         fwp: decision?.fwp||null, edge: decision?.edge||null,
         entry: decision?.entry||null, conviction: decision?.conviction||null,
         signal: decision?.signalType||null,
