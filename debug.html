@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DFT Debug</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#0a0e17;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:12px;font-size:14px;}
+h1{font-size:16px;color:#60a5fa;margin-bottom:12px;letter-spacing:1px;}
+h2{font-size:13px;color:#a78bfa;margin:16px 0 8px;letter-spacing:.5px;border-bottom:1px solid #1e293b;padding-bottom:4px;}
+.card{background:#111827;border:1px solid #1e293b;border-radius:8px;padding:10px;margin-bottom:10px;}
+.row{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e293b11;font-size:12px;}
+.row:last-child{border:none;}
+.label{color:#94a3b8;}
+.val{color:#e2e8f0;font-weight:600;text-align:right;max-width:60%;word-break:break-all;}
+.val.green{color:#00ff88;} .val.red{color:#ff5252;} .val.yellow{color:#ffd166;} .val.blue{color:#60a5fa;}
+button{background:#1e293b;color:#60a5fa;border:1px solid #334155;border-radius:6px;padding:8px 14px;font-size:12px;font-weight:600;cursor:pointer;margin:4px;letter-spacing:.5px;}
+button:active{background:#334155;}
+.btn-row{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0;}
+#log{background:#0f172a;border:1px solid #1e293b;border-radius:6px;padding:8px;font-family:monospace;font-size:10px;line-height:1.6;max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;}
+.log-ok{color:#00ff88;} .log-err{color:#ff5252;} .log-warn{color:#ffd166;} .log-info{color:#60a5fa;}
+.thesis-box{background:#0f172a;border:1px solid #1e293b;border-radius:4px;padding:6px;margin:4px 0;font-size:10px;max-height:120px;overflow-y:auto;white-space:pre-wrap;}
+.analysis-box{background:#0f172a;border-left:2px solid #a78bfa;padding:6px;margin:4px 0;font-size:10px;}
+.ts{font-size:9px;color:#64748b;}
+</style>
+</head>
+<body>
+<h1>🔧 DFT DEBUG CONSOLE</h1>
+
+<div class="btn-row">
+  <button onclick="runAll()">▶ RUN ALL</button>
+  <button onclick="checkDB()">📊 DB Stats</button>
+  <button onclick="checkTheses()">📝 Theses</button>
+  <button onclick="checkAnalyses()">🧠 Analyses</button>
+  <button onclick="checkSnapshots()">📸 Snapshots</button>
+  <button onclick="checkOdds()">💰 Odds</button>
+  <button onclick="checkClutch()">🏀 Clutch</button>
+  <button onclick="testWrite()">✏️ Test Write</button>
+  <button onclick="clearLog()">🗑 Clear</button>
+</div>
+
+<div id="stats" class="card" style="display:none"></div>
+<div id="content"></div>
+
+<h2>LOG</h2>
+<div id="log"></div>
+
+<script>
+const FN = '/.netlify/functions/';
+const logEl = document.getElementById('log');
+const statsEl = document.getElementById('stats');
+const contentEl = document.getElementById('content');
+
+function log(msg, cls){
+  const line = document.createElement('div');
+  line.className = cls || '';
+  line.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function clearLog(){ logEl.innerHTML = ''; contentEl.innerHTML = ''; statsEl.style.display = 'none'; }
+
+async function fetchJSON(url){
+  try{
+    const r = await fetch(url);
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  }catch(e){
+    log('FETCH FAILED: ' + url + ' — ' + e.message, 'log-err');
+    return null;
+  }
+}
+
+async function postJSON(url, body){
+  try{
+    const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  }catch(e){
+    log('POST FAILED: ' + url + ' — ' + e.message, 'log-err');
+    return null;
+  }
+}
+
+// ── DB Stats ──
+async function checkDB(){
+  log('Checking DB stats...', 'log-info');
+  const nba = await fetchJSON(FN + 'db-api?action=stats&league=nba');
+  const ncaa = await fetchJSON(FN + 'db-api?action=stats&league=ncaamb');
+
+  if(!nba && !ncaa){ log('DB unreachable', 'log-err'); return; }
+
+  var html = '<h2>DATABASE</h2>';
+  if(nba){
+    html += '<div class="row"><span class="label">NBA Games</span><span class="val">' + (nba.games?.total||0) + ' (' + (nba.games?.finalized||0) + ' finalized)</span></div>';
+    html += '<div class="row"><span class="label">NBA Snapshots</span><span class="val">' + (nba.snapshots?.total||0) + '</span></div>';
+  }
+  if(ncaa){
+    html += '<div class="row"><span class="label">NCAAMB Games</span><span class="val">' + (ncaa.games?.total||0) + ' (' + (ncaa.games?.finalized||0) + ' finalized)</span></div>';
+    html += '<div class="row"><span class="label">NCAAMB Snapshots</span><span class="val">' + (ncaa.snapshots?.total||0) + '</span></div>';
+  }
+  statsEl.innerHTML = html;
+  statsEl.style.display = 'block';
+  log('DB stats loaded — NBA: ' + (nba?.games?.total||0) + ' games, ' + (nba?.snapshots?.total||0) + ' snapshots', 'log-ok');
+}
+
+// ── Theses ──
+async function checkTheses(){
+  log('Fetching theses...', 'log-info');
+  const nba = await fetchJSON(FN + 'db-api?action=get_theses&league=nba');
+  const ncaa = await fetchJSON(FN + 'db-api?action=get_theses&league=ncaamb');
+
+  var theses = Object.assign({}, nba?.theses||{}, ncaa?.theses||{});
+  var keys = Object.keys(theses);
+  log('Found ' + keys.length + ' theses in DB', keys.length > 0 ? 'log-ok' : 'log-warn');
+
+  var html = '<h2>THESES (' + keys.length + ')</h2>';
+  if(keys.length === 0){
+    html += '<div class="card" style="color:#94a3b8;font-size:11px">No theses in DB yet. Generate a thesis on the main dashboard.</div>';
+  }
+  keys.forEach(function(gid){
+    var text = theses[gid] || '';
+    var preview = text.substring(0, 200) + (text.length > 200 ? '...' : '');
+    // Extract matchup from thesis text
+    var matchup = '';
+    var m = text.match(/COMPACT THESIS\s*[—–-]\s*(.+?)[\|\n]/);
+    if(m) matchup = m[1].trim();
+    html += '<div class="card">';
+    html += '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:11px;color:#60a5fa;font-weight:600">' + (matchup || gid.substring(0,12) + '...') + '</span><span class="ts">' + gid.substring(0,8) + '</span></div>';
+    html += '<div class="thesis-box">' + escH(preview) + '</div>';
+    html += '</div>';
+  });
+  contentEl.innerHTML = html;
+}
+
+// ── Analyses ──
+async function checkAnalyses(){
+  log('Fetching analyses...', 'log-info');
+  // Get all game IDs first
+  const stats = await fetchJSON(FN + 'db-api?action=stats&league=nba');
+  if(!stats){ log('Cannot fetch game IDs', 'log-err'); return; }
+
+  // Try to get recent game analyses — use calibration endpoint to get game IDs
+  const cal = await fetchJSON(FN + 'db-api?action=calibration&league=nba');
+
+  // Also try getting all theses to get game IDs
+  const theses = await fetchJSON(FN + 'db-api?action=get_theses&league=nba');
+  var gameIds = Object.keys(theses?.theses || {});
+
+  if(gameIds.length === 0){
+    log('No game IDs to query analyses for', 'log-warn');
+    contentEl.innerHTML = '<h2>ANALYSES</h2><div class="card" style="color:#94a3b8;font-size:11px">No game IDs found. Analyses are queried by game ID.</div>';
+    return;
+  }
+
+  const data = await fetchJSON(FN + 'db-api?action=get_analyses&game_ids=' + encodeURIComponent(gameIds.join(',')));
+  var analyses = data?.analyses || [];
+  log('Found ' + analyses.length + ' analyses in DB', analyses.length > 0 ? 'log-ok' : 'log-warn');
+
+  var html = '<h2>ANALYSES (' + analyses.length + ')</h2>';
+  if(analyses.length === 0){
+    html += '<div class="card" style="color:#94a3b8;font-size:11px">No analyses saved yet. Run ⚡ ANALYZE on a live game.</div>';
+  }
+  analyses.forEach(function(a){
+    html += '<div class="card">';
+    html += '<div style="display:flex;justify-content:space-between;margin-bottom:4px">';
+    html += '<span style="font-size:11px;color:#a78bfa;font-weight:600">' + escH(a.control_team||'?') + ' ' + (a.control_score||0).toFixed(2) + '</span>';
+    html += '<span class="ts">Q' + (a.period||'?') + ' ' + (a.clock||'') + '</span>';
+    html += '</div>';
+    html += '<div class="analysis-box">';
+    html += '<div class="row"><span class="label">Entry</span><span class="val">' + escH(a.entry||'—') + '</span></div>';
+    html += '<div class="row"><span class="label">Conviction</span><span class="val">' + escH(a.conviction||'—') + '</span></div>';
+    html += '<div class="row"><span class="label">FWP</span><span class="val">' + escH(a.fwp||'—') + '</span></div>';
+    html += '<div class="row"><span class="label">Edge</span><span class="val">' + escH(a.edge||'—') + '</span></div>';
+    html += '<div class="row"><span class="label">Signal</span><span class="val">' + escH(a.signal||'—') + '</span></div>';
+    html += '<div class="row"><span class="label">Sustainability</span><span class="val">' + escH(a.sustainability||'—') + '</span></div>';
+    if(a.prediction_json){
+      var pj = typeof a.prediction_json === 'string' ? JSON.parse(a.prediction_json) : a.prediction_json;
+      if(pj.homeValue) html += '<div class="row"><span class="label">Home FWP</span><span class="val">' + (pj.homeValue.fwp||'?') + '% edge:' + (pj.homeValue.edge||'?') + '</span></div>';
+      if(pj.awayValue) html += '<div class="row"><span class="label">Away FWP</span><span class="val">' + (pj.awayValue.fwp||'?') + '% edge:' + (pj.awayValue.edge||'?') + '</span></div>';
+    }
+    html += '</div></div>';
+  });
+  contentEl.innerHTML = html;
+}
+
+// ── Snapshots ──
+async function checkSnapshots(){
+  log('Fetching recent snapshots...', 'log-info');
+  // Get theses to find game IDs
+  const theses = await fetchJSON(FN + 'db-api?action=get_theses&league=nba');
+  var gameIds = Object.keys(theses?.theses || {});
+  if(gameIds.length === 0){
+    log('No game IDs for snapshot lookup', 'log-warn');
+    contentEl.innerHTML = '<h2>SNAPSHOTS</h2><div class="card" style="color:#94a3b8;font-size:11px">No game IDs found.</div>';
+    return;
+  }
+
+  // Get history for the first game
+  var gid = gameIds[0];
+  const data = await fetchJSON(FN + 'db-api?action=history&game_id=' + encodeURIComponent(gid));
+  var snaps = data?.snapshots || [];
+  log('Found ' + snaps.length + ' snapshots for game ' + gid.substring(0,8), snaps.length > 0 ? 'log-ok' : 'log-warn');
+
+  var html = '<h2>SNAPSHOTS — ' + gid.substring(0,12) + '... (' + snaps.length + ')</h2>';
+  // Show last 15
+  var recent = snaps.slice(-15);
+  recent.forEach(function(s){
+    var ts = s.ts ? new Date(s.ts).toLocaleTimeString() : '?';
+    html += '<div class="card" style="padding:6px">';
+    html += '<div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:3px"><span class="ts">Q' + (s.period||'?') + ' ' + (s.clock||'') + ' — ' + ts + '</span><span>' + (s.home_pts||0) + '-' + (s.away_pts||0) + '</span></div>';
+    html += '<div style="font-size:10px;display:flex;gap:8px;flex-wrap:wrap">';
+    if(s.floor_score) html += '<span>Floor: <b style="color:#00ff88">' + s.floor_team + ' ' + s.floor_score.toFixed(2) + '</b></span>';
+    if(s.pbp_score) html += '<span>PBP: <b style="color:#60a5fa">' + s.pbp_team + ' ' + s.pbp_score.toFixed(2) + '</b></span>';
+    if(s.qtr_score) html += '<span>QTR: ' + s.qtr_team + ' ' + s.qtr_score.toFixed(2) + '</span>';
+    if(s.espn_wp_home) html += '<span>ESPN: ' + s.espn_wp_home + '%/' + s.espn_wp_away + '%</span>';
+    if(s.gap != null) html += '<span>Gap: ' + (s.gap>=0?'+':'') + s.gap.toFixed(2) + '</span>';
+    if(s.deficit) html += '<span>Def: ' + s.deficit + '</span>';
+    if(s.lead_sust) html += '<span>Sust: ' + s.lead_sust + '</span>';
+    html += '</div></div>';
+  });
+  contentEl.innerHTML = html;
+}
+
+// ── Odds ──
+async function checkOdds(){
+  log('Fetching odds...', 'log-info');
+  const theses = await fetchJSON(FN + 'db-api?action=get_theses&league=nba');
+  var gameIds = Object.keys(theses?.theses || {});
+  if(gameIds.length === 0){ log('No game IDs', 'log-warn'); return; }
+
+  var gid = gameIds[0];
+  const data = await fetchJSON(FN + 'db-api?action=get_odds&game_id=' + encodeURIComponent(gid));
+  var odds = data?.odds || [];
+  log('Found ' + odds.length + ' odds snapshots for ' + gid.substring(0,8), odds.length > 0 ? 'log-ok' : 'log-warn');
+
+  var html = '<h2>ODDS HISTORY — ' + gid.substring(0,12) + '... (' + odds.length + ')</h2>';
+  odds.forEach(function(o){
+    var ts = o.ts ? new Date(o.ts).toLocaleTimeString() : '?';
+    html += '<div class="row"><span class="label">' + ts + '</span><span class="val">Sprd:' + (o.home_spread||'?') + ' ML:' + (o.home_ml||'?') + '/' + (o.away_ml||'?') + ' O/U:' + (o.total||'?') + '</span></div>';
+  });
+  contentEl.innerHTML = '<div class="card">' + html + '</div>';
+}
+
+// ── Clutch ──
+async function checkClutch(){
+  log('Fetching clutch data...', 'log-info');
+  const data = await fetchJSON(FN + 'db-api?action=get_clutch&league=nba');
+  var clutch = data?.clutch || {};
+  var teams = Object.keys(clutch);
+  log('Found clutch for ' + teams.length + ' teams', teams.length > 0 ? 'log-ok' : 'log-warn');
+
+  var html = '<h2>CLUTCH DATA (' + teams.length + ' teams)</h2>';
+  teams.sort().forEach(function(t){
+    var c = clutch[t];
+    html += '<div class="row"><span class="label">' + t + ' (T' + (c.tier||'?') + ')</span><span class="val">Net:' + (c.netRtg||'?') + ' Off:' + (c.offRtg||'?') + ' Def:' + (c.defRtg||'?') + ' ' + (c.wl||'') + '</span></div>';
+  });
+  contentEl.innerHTML = '<div class="card">' + html + '</div>';
+}
+
+// ── Test Write ──
+async function testWrite(){
+  log('Testing DB write...', 'log-info');
+  var result = await postJSON(FN + 'db-api?action=save_thesis', {game_id:'debug-test-' + Date.now(), league:'nba', text:'Debug test at ' + new Date().toISOString()});
+  if(result && result.ok){
+    log('Write OK — DB is accepting writes', 'log-ok');
+  } else {
+    log('Write FAILED: ' + JSON.stringify(result), 'log-err');
+  }
+}
+
+// ── Run All ──
+async function runAll(){
+  clearLog();
+  log('Running full diagnostics...', 'log-info');
+  await checkDB();
+  await checkTheses();
+  log('Done!', 'log-ok');
+}
+
+function escH(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// Auto-run on load
+checkDB();
+</script>
+</body>
+</html>
