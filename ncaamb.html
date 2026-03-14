@@ -6144,7 +6144,7 @@ function renderConfidenceTable(){
         const tTeam = tHome ? hA : aA;
         // Use Sonnet's team call but client-computed weighted sum
         if(Math.abs(tScore - score) >= 0.03){
-          if(!cs._thesisRecomputeLogged && Date.now() - _lastThesisRecomputeLog > 30000){ cs._thesisRecomputeLogged=true; _lastThesisRecomputeLog = Date.now(); console.log('THESIS RECOMPUTE: Sonnet stated ' + team + ' ' + score.toFixed(2) + ' | Client computed ' + tTeam + ' ' + tScore.toFixed(3)); }
+          if(cs && !cs._thesisRecomputeLogged && Date.now() - _lastThesisRecomputeLog > 30000){ cs._thesisRecomputeLogged=true; _lastThesisRecomputeLog = Date.now(); console.log('THESIS RECOMPUTE: Sonnet stated ' + team + ' ' + score.toFixed(2) + ' | Client computed ' + tTeam + ' ' + tScore.toFixed(3)); }
           team = tTeam; score = tScore; verdict = getVerdict(score)?.label || verdict;
         }
       }
