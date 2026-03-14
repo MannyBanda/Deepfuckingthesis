@@ -138,25 +138,11 @@ async function checkTheses(){
 // ── Analyses ──
 async function checkAnalyses(){
   log('Fetching analyses...', 'log-info');
-  // Get all game IDs first
-  const stats = await fetchJSON(FN + 'db-api?action=stats&league=nba');
-  if(!stats){ log('Cannot fetch game IDs', 'log-err'); return; }
 
-  // Try to get recent game analyses — use calibration endpoint to get game IDs
-  const cal = await fetchJSON(FN + 'db-api?action=calibration&league=nba');
+  const nba = await fetchJSON(FN + 'db-api?action=get_analyses&league=nba');
+  const ncaa = await fetchJSON(FN + 'db-api?action=get_analyses&league=ncaamb');
 
-  // Also try getting all theses to get game IDs
-  const theses = await fetchJSON(FN + 'db-api?action=get_theses&league=nba');
-  var gameIds = Object.keys(theses?.theses || {});
-
-  if(gameIds.length === 0){
-    log('No game IDs to query analyses for', 'log-warn');
-    contentEl.innerHTML = '<h2>ANALYSES</h2><div class="card" style="color:#94a3b8;font-size:11px">No game IDs found. Analyses are queried by game ID.</div>';
-    return;
-  }
-
-  const data = await fetchJSON(FN + 'db-api?action=get_analyses&game_ids=' + encodeURIComponent(gameIds.join(',')));
-  var analyses = data?.analyses || [];
+  var analyses = [].concat(nba?.analyses||[], ncaa?.analyses||[]);
   log('Found ' + analyses.length + ' analyses in DB', analyses.length > 0 ? 'log-ok' : 'log-warn');
 
   var html = '<h2>ANALYSES (' + analyses.length + ')</h2>';
@@ -164,10 +150,12 @@ async function checkAnalyses(){
     html += '<div class="card" style="color:#94a3b8;font-size:11px">No analyses saved yet. Run ⚡ ANALYZE on a live game.</div>';
   }
   analyses.forEach(function(a){
+    var ts = a.ts ? new Date(a.ts).toLocaleTimeString() : '?';
     html += '<div class="card">';
     html += '<div style="display:flex;justify-content:space-between;margin-bottom:4px">';
-    html += '<span style="font-size:11px;color:#a78bfa;font-weight:600">' + escH(a.control_team||'?') + ' ' + (a.control_score||0).toFixed(2) + '</span>';
-    html += '<span class="ts">Q' + (a.period||'?') + ' ' + (a.clock||'') + '</span>';
+    html += '<span style="font-size:11px;color:#a78bfa;font-weight:600">' + escH(a.matchup || a.game_id?.substring(0,12) || '?') + '</span>';
+    html += '<span style="font-size:11px;color:#60a5fa;font-weight:600">' + escH(a.control_team||'?') + ' ' + (a.control_score ? a.control_score.toFixed(2) : '?') + '</span>';
+    html += '<span class="ts">Q' + (a.period||'?') + ' ' + (a.clock||'') + ' · ' + ts + '</span>';
     html += '</div>';
     html += '<div class="analysis-box">';
     html += '<div class="row"><span class="label">Entry</span><span class="val">' + escH(a.entry||'—') + '</span></div>';
@@ -177,9 +165,11 @@ async function checkAnalyses(){
     html += '<div class="row"><span class="label">Signal</span><span class="val">' + escH(a.signal||'—') + '</span></div>';
     html += '<div class="row"><span class="label">Sustainability</span><span class="val">' + escH(a.sustainability||'—') + '</span></div>';
     if(a.prediction_json){
-      var pj = typeof a.prediction_json === 'string' ? JSON.parse(a.prediction_json) : a.prediction_json;
-      if(pj.homeValue) html += '<div class="row"><span class="label">Home FWP</span><span class="val">' + (pj.homeValue.fwp||'?') + '% edge:' + (pj.homeValue.edge||'?') + '</span></div>';
-      if(pj.awayValue) html += '<div class="row"><span class="label">Away FWP</span><span class="val">' + (pj.awayValue.fwp||'?') + '% edge:' + (pj.awayValue.edge||'?') + '</span></div>';
+      try{
+        var pj = typeof a.prediction_json === 'string' ? JSON.parse(a.prediction_json) : a.prediction_json;
+        if(pj.homeValue) html += '<div class="row"><span class="label">Home FWP</span><span class="val">' + (pj.homeValue.team||'?') + ' ' + (pj.homeValue.fwp||'?') + '% edge:' + (pj.homeValue.edge||'?') + '</span></div>';
+        if(pj.awayValue) html += '<div class="row"><span class="label">Away FWP</span><span class="val">' + (pj.awayValue.team||'?') + ' ' + (pj.awayValue.fwp||'?') + '% edge:' + (pj.awayValue.edge||'?') + '</span></div>';
+      }catch(e){}
     }
     html += '</div></div>';
   });
