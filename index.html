@@ -1802,7 +1802,7 @@ async function triggerAnalysis(game){
       var _predSafe = null;
       try{ _predSafe = decision ? JSON.stringify(decision) : null; }catch(e){}
       var _indSafe = null;
-      try{ _indSafe = parsed ? JSON.stringify({I1:parsed.I1,I2:parsed.I2,I3:parsed.I3,I4:parsed.I4,I5:parsed.I5,score:parsed.score,controlTeam:parsed.controlTeam}) : null; }catch(e){}
+      try{ _indSafe = parsed ? JSON.stringify({I1:parsed.I1,I2:parsed.I2,I3:parsed.I3,I4:parsed.I4,I5:parsed.I5,score:parsed.score,controlTeam:parsed.controlTeam,traj:parsed.traj||null}) : null; }catch(e){}
       var _aSnap = {
         game_id: game.id, period: game.period||0, clock: game.clock||'',
         control_team: parsed?.controlTeam||decision?.buyTeam||null, control_score: parsed?.score||null,
@@ -7250,7 +7250,7 @@ function renderCard(game){
       <span style="margin-left:auto;display:flex;align-items:center;gap:6px">
         <span style="font-size:7px;color:${v.color};letter-spacing:.5px">CONTROL <span style="font-size:9px;font-weight:600">${esc(ind.controlTeam)}</span> <span style="font-size:9px">${ind.score.toFixed(2)}</span></span>
         <span style="font-size:6px;color:var(--t3)">·</span>
-        <span style="font-size:7px;color:${ind.traj.lean!=='NEUTRAL'&&!ind.traj.tooEarly?'var(--amber)':'var(--t3)'}">FLAGS ${ind.traj.tooEarly?'Q1':esc(ind.traj.lean)+' '+_tragActive2+'/'+_filtSigs2.length}</span>
+        <span style="font-size:7px;color:${ind.traj&&ind.traj.lean!=='NEUTRAL'&&!ind.traj.tooEarly?'var(--amber)':'var(--t3)'}">FLAGS ${!ind.traj||ind.traj.tooEarly?'Q1':esc(ind.traj.lean)+' '+_tragActive2+'/'+_filtSigs2.length}</span>
         ${depthBtn}
       </span>
     </div>`;
@@ -7292,9 +7292,9 @@ function renderCard(game){
     filtSigs.forEach(function(s){ if(s.team && s.w>0) tragTeam = s.team; });
     html+=`<div class="traj">
       <div class="th">EVENT FLAGS
-        ${filtSigs.length>0&&!ind.traj.tooEarly?`<span class="tl" style="color:${tragTeam?'var(--amber)':'var(--t3)'};border-color:${tragTeam?'var(--amber)':'var(--b2)'}">${esc(tragTeam||'EVEN')} ${tragCount}/${filtSigs.length}</span>`:''}
+        ${filtSigs.length>0&&ind.traj&&!ind.traj.tooEarly?`<span class="tl" style="color:${tragTeam?'var(--amber)':'var(--t3)'};border-color:${tragTeam?'var(--amber)':'var(--b2)'}">${esc(tragTeam||'EVEN')} ${tragCount}/${filtSigs.length}</span>`:''}
       </div>
-      ${ind.traj.tooEarly
+      ${!ind.traj||ind.traj.tooEarly
         ?'<div style="font-size:6px;color:var(--t3)">Q1 — event flags activate Q2</div>'
         :filtSigs.length>0
           ?filtSigs.map(s=>`<div class="ts"><span class="tk" style="color:${s.color}">${tragMap[s.key]||s.key}</span><span class="tt" style="color:${s.color==='#3e3e48'?'var(--t3)':s.color}">${esc(s.text)}</span></div>`).join('')
