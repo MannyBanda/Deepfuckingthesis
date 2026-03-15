@@ -372,7 +372,7 @@ async function initDB(){
 async function saveSnapshotDB(game){
   if(!dbReady) return;
   var cs = cardState[game.id]; if(!cs) return;
-  var floor = cs.clientInd; if(!floor || !floor.score) return;
+  var floor = cs.sonnetIndicators || cs.clientInd; if(!floor || !floor.score) return;
   var pbp = cs.pbpWindow;
   var qtr = cs.rollingWindow;
   var ewp = cs.espnWP;
@@ -3773,7 +3773,12 @@ function compute(game){
     detail:`${hA} ${hs.steals||0}stl ${hs.offensive_rebounds||0}or ${hs.turnovers||hs.total_turnovers||0}to | ${aA} ${as.steals||0}stl ${as.offensive_rebounds||0}or ${as.turnovers||as.total_turnovers||0}to | Conv:${hConv}–${aConv}${chaosNote}`};
 
   // I2 — Rim Pressure & Foul
-  const hPaint = hs.points_in_the_paint||hs.points_in_paint||0, aPaint = as.points_in_the_paint||as.points_in_paint||0;
+  var hPaint = hs.points_in_the_paint||hs.points_in_paint||0, aPaint = as.points_in_the_paint||as.points_in_paint||0;
+  // SR often delays points_in_the_paint — use PBP at-rim makes × 2 as floor proxy
+  if(pbp){
+    if(!hPaint && pbp.home?.rim?.made) hPaint = pbp.home.rim.made * 2;
+    if(!aPaint && pbp.away?.rim?.made) aPaint = pbp.away.rim.made * 2;
+  }
   const hAtRim = hs.field_goals_at_rim_att||0, aAtRim = as.field_goals_at_rim_att||0;
   const hFTA = hs.free_throws_att||0, aFTA = as.free_throws_att||0;
   const hBlk = hs.blocks||0, aBlk = as.blocks||0;
@@ -3882,9 +3887,13 @@ function compute(game){
 
 
   // Gap acceleration — uses PBP window (falls back to QTR)
+  // Floor reference: prefer Sonnet's structural read when available (smarter), fall back to client compute
+  var _cs = cardState[game.id];
+  var _floorScore = (_cs.sonnetIndicators ? _cs.sonnetIndicators.score : score);
+  var _floorTeam = (_cs.sonnetIndicators ? _cs.sonnetIndicators.controlTeam : cTeam);
   var _gapWindow = (pbpWindow && pbpWindow.available) ? pbpWindow : windowResult;
   if(_gapWindow && _gapWindow.available){
-    updateGapLog(game.id, score, cTeam, _gapWindow, game);
+    updateGapLog(game.id, _floorScore, _floorTeam, _gapWindow, game);
   }
   const accelResult = computeAcceleration(cardState[game.id].gapLog);
   cardState[game.id].acceleration = accelResult;
@@ -3894,11 +3903,11 @@ function compute(game){
   cardState[game.id].subMetricArrows = arrows;
 
   // Adjustment signal
-  const adjustment = classifyAdjustment(arrows, cTeam, hA, aA);
+  const adjustment = classifyAdjustment(arrows, _floorTeam, hA, aA);
   cardState[game.id].adjustment = adjustment;
 
   // Combined read
-  const combinedRead = classifyCombinedRead(score, cTeam, _gapWindow, accelResult);
+  const combinedRead = classifyCombinedRead(_floorScore, _floorTeam, _gapWindow, accelResult);
   cardState[game.id].combinedRead = combinedRead;
 
   // Margin projection (feeds spread conviction + Sonnet FWP anchor)
@@ -4165,7 +4174,7 @@ function synthesize(game){
   if(state==='PRE') return null;
 
   // ── GATHER INPUTS ──
-  var floor = cs.clientInd;
+  var floor = cs.sonnetIndicators || cs.clientInd;
   var pbp = cs.pbpWindow;
   var qtr = cs.rollingWindow;
   var ewp = cs.espnWP;
@@ -4834,10 +4843,11 @@ function computeLeadCompositionClient(game, sustData){
   const hPts = s.home.points||0, aPts = s.away.points||0;
   if(hPts===0 && aPts===0) return null;
 
-  function breakdown(stats, total){
+  function breakdown(stats, total, pbpRim){
     var rawPaint = stats.points_in_the_paint||0;
     var atRimPts = (stats.field_goals_at_rim_made||0)*2;
-    const paint = Math.max(rawPaint, atRimPts);
+    var pbpRimPts = pbpRim ? (pbpRim.made||0) * 2 : 0;
+    const paint = Math.max(rawPaint, atRimPts, pbpRimPts);
     const ft = stats.free_throws_made||0;
     const three = (stats.three_points_made||0)*3;
     const transition = stats.fast_break_points||0;
@@ -4853,8 +4863,9 @@ function computeLeadCompositionClient(game, sustData){
 
   const hA = s.home.alias || game.home?.alias || '?';
   const aA = s.away.alias || game.away?.alias || '?';
-  const hB = breakdown(hS, hPts);
-  const aB = breakdown(aS, aPts);
+  const _pbpLC = cardState[game.id]?.pbpAudit;
+  const hB = breakdown(hS, hPts, _pbpLC?.home?.rim);
+  const aB = breakdown(aS, aPts, _pbpLC?.away?.rim);
   hB.team = hA; aB.team = aA;
 
   const margin = hPts - aPts;
@@ -5084,7 +5095,7 @@ function computeSpreadConviction(game){
   const minsLeft = clockMins + (periodsLeft * 20);
 
   // ── STRUCTURAL CONTEXT ──
-  const floorInd = cs.clientInd || cs.sonnetIndicators;
+  const floorInd = cs.sonnetIndicators || cs.clientInd;
   const floorScore = floorInd?.score || 0.5;
   const floorTeam = floorInd?.controlTeam || '';
   const lc = cs.clientLeadComposition;
@@ -5804,7 +5815,13 @@ function computeBDL(game){
     detail:`${hA} ${hs.steals||0}stl ${hs.offensive_rebounds||0}or ${hs.turnovers||hs.total_turnovers||0}to | ${aA} ${as.steals||0}stl ${as.offensive_rebounds||0}or ${as.turnovers||as.total_turnovers||0}to | Conv:${hConv}–${aConv} [no chaos layer]`};
 
   // I2 — Rim Pressure & Foul (paint + FTA + bonus from BDL — no at-rim splits)
-  const hPaint = hs.points_in_the_paint||0, aPaint = as.points_in_the_paint||0;
+  var hPaint = hs.points_in_the_paint||0, aPaint = as.points_in_the_paint||0;
+  // PBP at-rim fallback when paint delayed
+  var _pbpBdl = cardState[game.id]?.pbpAudit;
+  if(_pbpBdl){
+    if(!hPaint && _pbpBdl.home?.rim?.made) hPaint = _pbpBdl.home.rim.made * 2;
+    if(!aPaint && _pbpBdl.away?.rim?.made) aPaint = _pbpBdl.away.rim.made * 2;
+  }
   const hFTA = hs.free_throws_att||0, aFTA = as.free_throws_att||0;
   const hBlk = hs.blocks||0, aBlk = as.blocks||0;
   const rimScore = (hPaint+hFTA+hBlk)-(aPaint+aFTA+aBlk);
@@ -5965,7 +5982,7 @@ function checkStructuralAlert(game){
   var p = game.period || 0;
   if(p < 2) return; // too early
 
-  var floor = cs.clientInd;
+  var floor = cs.sonnetIndicators || cs.clientInd;
   var win = cs.pbpWindow || cs.rollingWindow;
   if(!floor || !floor.score) return;
 
@@ -7019,7 +7036,7 @@ function renderCard(game){
     var pbpW = cs.pbpWindow;
     var accel = cs.acceleration;
     var cRead = cs.combinedRead;
-    var floorInd = cs.clientInd || cs.sonnetIndicators;
+    var floorInd = cs.sonnetIndicators || cs.clientInd;
     var _vc = function(vrd){ return vrd==='DOMINANT'?'var(--green)':vrd==='STRONG'?'var(--g2)':vrd==='EARNED'?'var(--yellow)':vrd==='NO EDGE'?'var(--t3)':'var(--t3)'; };
     var _validTeam = function(t){ return t && t!=='Neither' && t!=='EVEN' && t!=='CONTESTED' && t!=='?' && t.length<=4; };
     if(floorInd && !_validTeam(floorInd.controlTeam) && rawInd && _validTeam(rawInd.controlTeam)){
@@ -7034,7 +7051,8 @@ function renderCard(game){
 
       var flI1=floorInd.I1,flI2=floorInd.I2,flI3=floorInd.I3,flI4=floorInd.I4,flI5=floorInd.I5;
       html+='<div style="margin-bottom:6px">';
-      html+='<div style="font-size:5px;color:var(--t3);letter-spacing:.5px;margin-bottom:2px">STRUCTURAL FLOOR</div>';
+      var _floorLabel = cs.sonnetIndicators ? 'STRUCTURAL FLOOR <span style="color:var(--amber)">(SONNET)</span>' : 'STRUCTURAL FLOOR <span style="color:var(--t3)">(CLIENT)</span>';
+      html+='<div style="font-size:5px;color:var(--t3);letter-spacing:.5px;margin-bottom:2px">'+_floorLabel+'</div>';
       html+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
       html+='<span style="font-size:9px;font-weight:700;color:'+_vc(fVerdict)+'">'+fTeam+' '+fScore.toFixed(2)+'</span>';
       html+='<span style="font-size:5.5px;color:'+_vc(fVerdict)+';font-weight:600">'+fVerdict+'</span>';
@@ -7108,7 +7126,7 @@ function renderCard(game){
     // ─── 5. DIRECTIONAL ARROWS (compact horizontal — teams as rows, metrics as columns) ───
     var arrows = cs.subMetricArrows;
     var adj = cs.adjustment;
-    var floorInd2 = cs.clientInd || cs.sonnetIndicators;
+    var floorInd2 = cs.sonnetIndicators || cs.clientInd;
     if(arrows && arrows.home && arrows.away){
       var _arrowColor = function(arrow, isVariance){
         if(!arrow||arrow==="FLAT") return "var(--t3)";
