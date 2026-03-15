@@ -4204,7 +4204,16 @@ function synthesize(game){
     lines.push('Game tied.');
   } else {
     var sustNote = '';
-    if(leadSust === 'LOCKED' || leadSust === 'DURABLE') sustNote = 'Lead is STRUCTURAL.';
+    var lc = cs.clientLeadComposition || cs.leadComposition;
+    if(lc && lc.classification){
+      var cls = lc.classification;
+      if(cls === 'STRUCTURAL') sustNote = 'Lead is STRUCTURAL — paint/FT driven.';
+      else if(cls === 'IDENTITY') sustNote = 'Lead is IDENTITY scoring — sustainable perimeter.';
+      else if(cls === 'HOT') sustNote = 'Lead is elevated but credible shooting.';
+      else if(cls === 'VOLATILE') sustNote = 'Lead is VOLATILE — variance-driven, regression likely.';
+      else if(cls === 'EVEN') sustNote = 'Margin too small to classify.';
+      else sustNote = 'Lead is MIXED source.';
+    } else if(leadSust === 'LOCKED' || leadSust === 'DURABLE') sustNote = 'Lead shooting is sustainable.';
     else if(leadSust === 'FRAGILE' || leadSust === 'UNSUSTAINABLE') sustNote = 'Lead is FRAGILE — variance-driven.';
     else if(leadSust === 'MIXED') sustNote = 'Lead is MIXED source.';
     else sustNote = 'Lead source unclear.';
@@ -6136,13 +6145,12 @@ function renderConfidenceTable(){
   const rows = [];
   for(const g of games){
     const t = theses[g.id];
-    if(!t) continue;
     const hA = g.home?.alias||'HOME', aA = g.away?.alias||'AWAY';
     const matchup = aA + ' @ ' + hA;
     const state = getState(g);
     // Parse thesis baseline
     let team='', score=0, verdict='';
-    const csMatch = t.match(/CONTROL\s+SCORE:\s*(\w+)\s+([\d.]+)\s*[—–-]\s*(\w+)/i);
+    const csMatch = t ? t.match(/CONTROL\s+SCORE:\s*(\w+)\s+([\d.]+)\s*[—–-]\s*(\w+)/i) : null;
     if(csMatch){ team=csMatch[1]; score=parseFloat(csMatch[2]); verdict=csMatch[3]; }
     const p = parseThesis(t);
     // ── THESIS SCORE RECOMPUTE — parse I1-I5 from thesis text, recompute weighted sum (score authority) ──
@@ -6210,7 +6218,6 @@ function renderConfidenceTable(){
     // Live score
     const homeScore = g.homePoints, awayScore = g.awayPoints;
     const period = g.period||0, clock = g.clock||'';
-    if(!team && !score) continue;
     // Highest FWP team edge (replaces best edge)
     let fwpTeamAlias = null, fwpTeamEdge = null, fwpTeamFwp = null, fwpTeamEntry = null;
     const csPred = cs?.prediction;
