@@ -817,12 +817,8 @@ exports.handler = async function(event) {
       + pbpSection + edgeSection + narrativeSection
       + '\nGAME DATA:\n' + JSON.stringify(summaryData);
 
-    var controller = new AbortController();
-    var timeout = setTimeout(function() { controller.abort(); }, 25000);
-
     var resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': apiKey,
@@ -835,7 +831,6 @@ exports.handler = async function(event) {
         messages: [{ role: 'user', content: userPrompt }],
       }),
     });
-    clearTimeout(timeout);
 
     if (!resp.ok) {
       var errText = await resp.text();
@@ -851,9 +846,6 @@ exports.handler = async function(event) {
       body: JSON.stringify({ analysis: analysis, usage: data.usage, sustainabilityAudit: audit, leadComposition: leadComp }),
     };
   } catch (err) {
-    if (err.name === 'AbortError') {
-      return { statusCode: 504, headers: headers, body: JSON.stringify({ error: 'Analysis timed out (25s). Try again.' }) };
-    }
     return { statusCode: 500, headers: headers, body: JSON.stringify({ error: err.message }) };
   }
 };
