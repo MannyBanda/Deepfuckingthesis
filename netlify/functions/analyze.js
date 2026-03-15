@@ -417,6 +417,9 @@ var SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing real-time 
 + '   3. Raw JSON `points_in_the_paint` — only trust when non-zero\n'
 + '   A team shooting 78% at the rim on 19 attempts is dominating I2 regardless of what the JSON paint field says.\n\n'
 + '9. BONUS STATUS RULE:\n'
++ '   - "TeamX IN BONUS" means TeamX BENEFITS — they get free throws on every foul. This is PURE UPSIDE for TeamX.\n'
++ '   - The OPPONENT is penalized: they cannot play physical defense, their players risk fouling out, their interior defense is compromised.\n'
++ '   - The bonus is NEVER a "trap" or disadvantage for the team that has it. Do not describe it as risky for the team in the bonus.\n'
 + '   - When ONE team is in the bonus before the 4:00 mark of any quarter, treat as STRUCTURAL I2 MULTIPLIER.\n'
 + '     Every drive and paint touch generates free throws. This compounds every possession and cannot be undone.\n'
 + '     Elevate I2 weight and factor this into FWP — the team in the bonus has guaranteed foul leverage.\n'
@@ -625,9 +628,12 @@ exports.handler = async function(event) {
           bonusSection += 'BOTH teams in bonus — advantage NEUTRALIZED\n';
         } else {
           var bonusTeam = homeInBonus ? homeTeam : awayTeam;
-          bonusSection += bonusTeam + ' IN BONUS';
+          var penalizedTeam = homeInBonus ? awayTeam : homeTeam;
+          bonusSection += bonusTeam + ' IN BONUS (BENEFITS ' + bonusTeam + ', PENALIZES ' + penalizedTeam + ')';
           if (clockMins >= 4.0) {
-            bonusSection += ' with ' + clockMins.toFixed(1) + ' min remaining — STRUCTURAL I2 MULTIPLIER. Every paint touch = free throws.\n';
+            bonusSection += ' with ' + clockMins.toFixed(1) + ' min remaining — STRUCTURAL I2 MULTIPLIER.\n';
+            bonusSection += '  ' + bonusTeam + ' GAINS: Every drive/paint touch = automatic free throws. Compounds every possession.\n';
+            bonusSection += '  ' + penalizedTeam + ' LOSES: Cannot play physical defense. Their players risk fouling out. Interior defense compromised.\n';
           } else {
             bonusSection += ' with ' + clockMins.toFixed(1) + ' min remaining\n';
           }
