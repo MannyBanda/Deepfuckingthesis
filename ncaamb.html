@@ -7068,15 +7068,47 @@ function renderCard(game){
 
       var flI1=floorInd.I1,flI2=floorInd.I2,flI3=floorInd.I3,flI4=floorInd.I4,flI5=floorInd.I5;
       html+='<div style="margin-bottom:6px">';
-      var _floorLabel = cs.sonnetIndicators ? 'STRUCTURAL FLOOR <span style="color:var(--amber)">(SONNET)</span>' : 'STRUCTURAL FLOOR <span style="color:var(--t3)">(CLIENT)</span>';
-      html+='<div style="font-size:5px;color:var(--t3);letter-spacing:.5px;margin-bottom:2px">'+_floorLabel+'</div>';
-      html+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
-      html+='<span style="font-size:9px;font-weight:700;color:'+_vc(fVerdict)+'">'+fTeam+' '+fScore.toFixed(2)+'</span>';
-      html+='<span style="font-size:5.5px;color:'+_vc(fVerdict)+';font-weight:600">'+fVerdict+'</span>';
-      if(flI1&&flI2&&flI3&&flI4&&flI5){
-        html+='<span style="font-size:5.5px;color:var(--t3);font-family:var(--mono)">I1:'+flI1.score.toFixed(1)+' I2:'+flI2.score.toFixed(1)+' I3:'+flI3.score.toFixed(1)+' I4:'+flI4.score.toFixed(1)+' I5:'+flI5.score.toFixed(1)+'</span>';
+      // ── DUAL FLOOR DISPLAY: Sonnet (authority when available) + Client (live every 90s) ──
+      var _sonnet = cs.sonnetIndicators;
+      var _client = rawInd; // freshest client compute from this render cycle
+      var _hasBoth = _sonnet && _client && _client.score;
+      var _sonnetV = _sonnet ? (_sonnet.score>=0.90?'DOMINANT':_sonnet.score>=0.75?'STRONG':_sonnet.score>=0.60?'EARNED':_sonnet.score>=0.45?'NO EDGE':'WAIT') : '';
+      var _clientV = _client && _client.score ? (_client.score>=0.90?'DOMINANT':_client.score>=0.75?'STRONG':_client.score>=0.60?'EARNED':_client.score>=0.45?'NO EDGE':'WAIT') : '';
+      var _divAmt = _hasBoth ? Math.abs(_sonnet.score - _client.score) : 0;
+      var _divColor = _divAmt >= 0.20 ? 'var(--red)' : _divAmt >= 0.10 ? 'var(--amber)' : 'var(--t3)';
+      if(_sonnet){
+        html+='<div style="font-size:5px;color:var(--t3);letter-spacing:.5px;margin-bottom:2px">STRUCTURAL FLOOR <span style="color:var(--amber)">(SONNET)</span>'+(cs.analysisTime?' <span style="color:var(--t3)">'+fmtAge(cs.analysisTime)+'</span>':'')+'</div>';
+        html+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
+        html+='<span style="font-size:9px;font-weight:700;color:'+_vc(_sonnetV)+'">'+(_sonnet.controlTeam||'?')+' '+_sonnet.score.toFixed(2)+'</span>';
+        html+='<span style="font-size:5.5px;color:'+_vc(_sonnetV)+';font-weight:600">'+_sonnetV+'</span>';
+        if(_sonnet.I1&&_sonnet.I2&&_sonnet.I3&&_sonnet.I4&&_sonnet.I5){
+          html+='<span style="font-size:5.5px;color:var(--t3);font-family:var(--mono)">I1:'+_sonnet.I1.score.toFixed(1)+' I2:'+_sonnet.I2.score.toFixed(1)+' I3:'+_sonnet.I3.score.toFixed(1)+' I4:'+_sonnet.I4.score.toFixed(1)+' I5:'+_sonnet.I5.score.toFixed(1)+'</span>';
+        }
+        html+='</div>';
+        if(_hasBoth){
+          html+='<div style="display:flex;align-items:center;gap:6px;margin-top:3px;padding:2px 6px;background:var(--glass);border-radius:var(--radius-xs)">';
+          html+='<span style="font-size:5px;color:var(--t3);letter-spacing:.5px;width:42px">CLIENT (live)</span>';
+          html+='<span style="font-size:7px;font-weight:600;color:'+_vc(_clientV)+'">'+(_client.controlTeam||'?')+' '+_client.score.toFixed(2)+'</span>';
+          html+='<span style="font-size:5px;color:'+_vc(_clientV)+'">'+_clientV+'</span>';
+          if(_divAmt >= 0.05){
+            html+='<span style="font-size:5px;color:'+_divColor+';font-weight:600">\u0394 '+_divAmt.toFixed(2)+'</span>';
+          }
+          if(_client.I1&&_client.I2&&_client.I3&&_client.I4&&_client.I5){
+            html+='<span style="font-size:4.5px;color:var(--t3);font-family:var(--mono)">I1:'+_client.I1.score.toFixed(1)+' I2:'+_client.I2.score.toFixed(1)+' I3:'+_client.I3.score.toFixed(1)+' I4:'+_client.I4.score.toFixed(1)+' I5:'+_client.I5.score.toFixed(1)+'</span>';
+          }
+          html+='</div>';
+        }
+      } else {
+        html+='<div style="font-size:5px;color:var(--t3);letter-spacing:.5px;margin-bottom:2px">STRUCTURAL FLOOR <span style="color:var(--t3)">(CLIENT)</span></div>';
+        html+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
+        html+='<span style="font-size:9px;font-weight:700;color:'+_vc(fVerdict)+'">'+fTeam+' '+fScore.toFixed(2)+'</span>';
+        html+='<span style="font-size:5.5px;color:'+_vc(fVerdict)+';font-weight:600">'+fVerdict+'</span>';
+        if(flI1&&flI2&&flI3&&flI4&&flI5){
+          html+='<span style="font-size:5.5px;color:var(--t3);font-family:var(--mono)">I1:'+flI1.score.toFixed(1)+' I2:'+flI2.score.toFixed(1)+' I3:'+flI3.score.toFixed(1)+' I4:'+flI4.score.toFixed(1)+' I5:'+flI5.score.toFixed(1)+'</span>';
+        }
+        html+='</div>';
       }
-      html+='</div></div>';
+      html+='</div>';
 
       html+='<div style="font-size:5px;color:var(--t3);letter-spacing:.5px;margin-bottom:3px">WINDOWS</div>';
 
