@@ -746,7 +746,7 @@ function persistOdds(id,cs){saveOddsDB(id);try{cachedOdds[id]=cs.oddsData;cached
 function persistConfRow(gameId, rowData){try{confCache[gameId]=rowData;localStorage.setItem('ncaamb:confTable',JSON.stringify(confCache));}catch(e){console.warn('ConfRow persist failed:',e.message);}}
 function persistTracking(id,cs){try{localStorage.setItem('ncaamb:tracking:'+id,JSON.stringify(cs.trackingData));}catch(e){console.warn('Tracking persist failed:',e.message);}}
 function persistStructural(id,cs){try{localStorage.setItem('ncaamb:structural:'+id,JSON.stringify(cs.structural));}catch(e){console.warn('Structural persist failed:',e.message);}}
-function persistAnalysis(id,cs){try{localStorage.setItem('ncaamb:analysis:'+id,JSON.stringify({analysis:cs.analysis,analysisTime:cs.analysisTime?cs.analysisTime.getTime():null,sonnetIndicators:cs.sonnetIndicators,prediction:cs.prediction,sustainabilityAudit:cs.sustainabilityAudit,analysisHistory:cs.analysisHistory||[],edgeHistory:cs.edgeHistory||[],clientIndAtAnalysis:cs.clientIndAtAnalysis}));}catch(e){console.warn('Analysis persist failed:',e.message);}}
+function persistAnalysis(id,cs){try{localStorage.setItem('ncaamb:analysis:'+id,JSON.stringify({analysis:cs.analysis,analysisTime:cs.analysisTime?cs.analysisTime.getTime():null,sonnetIndicators:cs.sonnetIndicators,prediction:cs.prediction,sustainabilityAudit:cs.sustainabilityAudit,clientSustainability:cs.clientSustainability||null,leadComposition:cs.leadComposition||null,clientLeadComposition:cs.clientLeadComposition||null,analysisHistory:cs.analysisHistory||[],edgeHistory:cs.edgeHistory||[],clientIndAtAnalysis:cs.clientIndAtAnalysis}));}catch(e){console.warn('Analysis persist failed:',e.message);}}
 function persistDepth(id,cs){try{var _audit=cs.pbpAudit;if(_audit){var _slim={home:_audit.home,away:_audit.away,homeAlias:_audit.homeAlias,awayAlias:_audit.awayAlias,totalShots:_audit.totalShots,totalTOs:_audit.totalTOs,runs:_audit.runs,syntheticQuarters:_audit.syntheticQuarters||null};localStorage.setItem('ncaamb:depth:'+id,JSON.stringify({pbpAudit:_slim,pbpTime:cs.pbpTime?cs.pbpTime.getTime():null,pbpPeriod:cs.pbpPeriod}));}else{localStorage.setItem('ncaamb:depth:'+id,JSON.stringify({pbpAudit:null,pbpTime:cs.pbpTime?cs.pbpTime.getTime():null,pbpPeriod:cs.pbpPeriod}));}}catch(e){console.warn('Depth persist failed:',e.message);}}
 const cardState = {};
 
@@ -1922,7 +1922,7 @@ async function triggerAnalysis(game){
         signal: decision?.signalType||null,
         sustainability: (decision?.sustainability||'').substring(0,200),
         lead_source: decision?.leadSource||null,
-        raw_text: (data.analysis||'').substring(0,2000),
+        raw_text: (data.analysis||'').substring(0,8000),
         prediction_json: _predSafe,
         indicators_json: _indSafe,
       };
@@ -3875,6 +3875,8 @@ function compute(game){
   // Client-side lead composition (cross-references sustainability)
   const clientLC = computeLeadCompositionClient(game, clientSust);
   if(clientLC) cardState[game.id].clientLeadComposition = clientLC;
+  // Persist updated sustainability + lead comp so they survive refresh
+  if(cardState[game.id].analysis) persistAnalysis(game.id, cardState[game.id]);
 
   // Rolling window — quarter-based
   var windowResult = computeRollingWindow(game);
@@ -6543,6 +6545,9 @@ function mountCard(game){
         cardState[id].sonnetIndicators = sa.sonnetIndicators;
         cardState[id].prediction = sa.prediction;
         cardState[id].sustainabilityAudit = sa.sustainabilityAudit;
+        cardState[id].clientSustainability = sa.clientSustainability || null;
+        cardState[id].leadComposition = sa.leadComposition || null;
+        cardState[id].clientLeadComposition = sa.clientLeadComposition || null;
         cardState[id].analysisHistory = sa.analysisHistory || [];
         cardState[id].edgeHistory = sa.edgeHistory || [];
         cardState[id].clientIndAtAnalysis = sa.clientIndAtAnalysis || null;
