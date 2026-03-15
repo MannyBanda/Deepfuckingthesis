@@ -1511,8 +1511,15 @@ function fingerprint(summary){
 // ══════════════════════════════════════════════════════════════════════════════
 async function triggerAnalysis(game){
   const cs = cardState[game.id];
-  if(!cs || cs.analyzing) return;
+  if(!cs) return;
+  // Stuck-flag recovery: if analyzing has been true for >60s, something hung — reset it
+  if(cs.analyzing && cs._analyzeStart && (Date.now() - cs._analyzeStart > 60000)){
+    console.warn('Analysis stuck for >60s — resetting');
+    cs.analyzing = false;
+  }
+  if(cs.analyzing) return;
   cs.analyzing = true;
+  cs._analyzeStart = Date.now();
   renderCard(game);
   try{
     // ── PRE-FLIGHT: ensure enrichment + PBP are current before building prompt ──
@@ -1577,8 +1584,12 @@ async function triggerAnalysis(game){
       if(proxyClutch){ clutchPayload = proxyClutch; cs.clutchTier = 2; }
     }
 
+    // Client-side timeout: prevent fetch from hanging forever (AbortController is safe in browsers)
+    const _ac = new AbortController();
+    const _acTimer = setTimeout(function(){ _ac.abort(); }, 35000);
     const resp = await fetch(FN+'analyze',{
       method:'POST',
+      signal: _ac.signal,
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
         summaryData: summaryPayload,
@@ -1620,6 +1631,7 @@ async function triggerAnalysis(game){
         calibration: formatCalibrationForPrompt() || null,
       })
     });
+    clearTimeout(_acTimer);
     if(!resp.ok){
       const errData = await resp.json().catch(()=>({error:'HTTP '+resp.status}));
       throw new Error(errData.error || 'Analysis failed: '+resp.status);
