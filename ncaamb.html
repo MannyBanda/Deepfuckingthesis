@@ -6122,7 +6122,7 @@ function renderGrid(){
     const id=el.id.replace('card-','');
     if(!selIds.includes(id)){
       if(cardState[id]?._countdown)clearInterval(cardState[id]._countdown);
-      delete cardState[id];
+      // Preserve cardState in memory — mountCard will pick it up via prev
       el.remove();
     }
   });
