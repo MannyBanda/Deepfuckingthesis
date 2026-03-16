@@ -262,6 +262,19 @@ input,textarea,select{font-size:16px!important;}
   <span id="abar-msg"></span>
   <span class="ax" onclick="hideAlert()">✕</span>
 </div>
+<!-- WP Profiles Overlay -->
+<div id="wp-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:999;background:rgba(0,0,0,.9);overflow-y:auto;-webkit-overflow-scrolling:touch">
+  <div style="max-width:600px;margin:0 auto;padding:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <span style="font-size:12px;font-weight:700;letter-spacing:2px;color:#60a5fa">WP TEAM PROFILES</span>
+      <div style="display:flex;gap:8px">
+        <button class="cbtn" onclick="buildWPProfiles()" style="font-size:7px;color:#60a5fa;border-color:#60a5fa">⚡ REBUILD</button>
+        <button class="cbtn" onclick="document.getElementById('wp-overlay').style.display='none'" style="font-size:7px">✕ CLOSE</button>
+      </div>
+    </div>
+    <div id="wp-profiles-body" style="font-size:7px;color:var(--t2)">Loading…</div>
+  </div>
+</div>
 
 <div class="app">
   <div class="hdr">
@@ -287,6 +300,7 @@ input,textarea,select{font-size:16px!important;}
     <button class="cbtn" onclick="clearTheses()">CLR THESIS</button>
     <button class="cbtn" onclick="clearMarketCache()">CLR MKT</button>
     <button class="cbtn" onclick="exportCalibrationCSV()" style="color:#a78bfa;border-color:#a78bfa">📊 CAL</button>
+    <button class="cbtn" id="btn-wp" onclick="showWPProfiles()" style="color:#60a5fa;border-color:#60a5fa">📈 WP</button>
     <button class="cbtn" id="btn-demo" onclick="toggleDemo()" style="color:var(--amber);border-color:var(--amber)">DEMO</button>
     <button class="cbtn" id="btn-ntfy" onclick="configNtfy()" style="color:var(--t3);border-color:var(--t3)">🔔 ALERTS</button>
     <span class="cml"><span id="game-count">0</span> games</span>
@@ -1255,6 +1269,322 @@ function formatCalibrationForPrompt(){
   return '\n' + lines.join('\n') + '\n';
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// WP PROFILE BUILDER — batch fetch ESPN WP histories, compute team identity profiles
+// Run weekly from toolbar. Results saved to DB, pulled during analysis.
+// ══════════════════════════════════════════════════════════════════════════════
+var _wpBuildRunning = false;
+
+async function showWPProfiles(){
+  var overlay = document.getElementById('wp-overlay');
+  var body = document.getElementById('wp-profiles-body');
+  overlay.style.display = 'block';
+  body.innerHTML = '<div style="color:var(--t3)">Loading from DB…</div>';
+  try{
+    var r = await fetch(FN+'db-api?action=get_wp_profiles&league=nba&season=2025-26');
+    if(!r.ok) throw new Error('DB fetch failed: ' + r.status);
+    var data = await r.json();
+    var profiles = data.profiles || [];
+    if(profiles.length === 0){
+      body.innerHTML = '<div style="color:var(--amber);font-size:8px;padding:20px 0">No profiles found. Press ⚡ REBUILD to generate.</div>';
+      return;
+    }
+    // Sort by identity cluster then by comeback rate
+    profiles.sort(function(a,b){
+      var ap = typeof a.profile_json === 'string' ? JSON.parse(a.profile_json) : a.profile_json;
+      var bp = typeof b.profile_json === 'string' ? JSON.parse(b.profile_json) : b.profile_json;
+      if(ap.wpShapeCluster !== bp.wpShapeCluster) return (ap.wpShapeCluster||'').localeCompare(bp.wpShapeCluster||'');
+      return (bp.comebackIndex?.trailed10?.rate||0) - (ap.comebackIndex?.trailed10?.rate||0);
+    });
+    var html = '<div style="font-size:5.5px;color:var(--t3);margin-bottom:8px">'+profiles.length+' teams · Updated: '+(profiles[0].updated_at?new Date(profiles[0].updated_at).toLocaleDateString():'?')+'</div>';
+    var _idColor = function(id){ return id==='COMEBACK'?'var(--green)':id==='FRONTRUNNER'?'var(--g2)':id==='CLOSER'?'var(--yellow)':id==='VOLATILE'?'var(--amber)':'var(--t2)'; };
+    var _surgeColor = function(v){ return v>=5?'var(--green)':v>=2?'var(--g2)':v<=-5?'var(--red)':v<=-2?'var(--amber)':'var(--t3)'; };
+    for(var i=0;i<profiles.length;i++){
+      var row = profiles[i];
+      var p = typeof row.profile_json === 'string' ? JSON.parse(row.profile_json) : row.profile_json;
+      if(!p) continue;
+      html+='<div style="padding:8px;margin-bottom:6px;background:var(--glass);border-radius:var(--radius-xs);border-left:2px solid '+_idColor(p.wpShapeCluster)+'">';
+      html+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">';
+      html+='<span style="font-size:10px;font-weight:700;color:var(--t1);width:36px">'+esc(row.team_alias)+'</span>';
+      html+='<span style="font-size:7px;font-weight:600;color:'+_idColor(p.wpShapeCluster)+';padding:1px 6px;border:1px solid '+_idColor(p.wpShapeCluster)+';border-radius:2px">'+esc(p.wpShapeCluster)+'</span>';
+      html+='<span style="font-size:6px;color:var(--t3)">'+esc(p.record)+' · '+p.gamesAnalyzed+' games</span>';
+      html+='</div>';
+      // Quarter surges row
+      html+='<div style="display:flex;gap:12px;margin-bottom:3px">';
+      ['q1','q2','q3','q4'].forEach(function(q,qi){
+        var qs = p.quarterSurges[q];
+        html+='<span style="font-size:6px"><span style="color:var(--t3)">Q'+(qi+1)+':</span> <span style="color:'+_surgeColor(qs.avgWPChange)+'">'+(qs.avgWPChange>=0?'+':'')+qs.avgWPChange+'</span>';
+        if(qs.surgeRate>0) html+=' <span style="color:var(--t3)">('+qs.surgeRate+'%⚡)</span>';
+        html+='</span>';
+      });
+      html+='</div>';
+      // Comeback + collapse + closing
+      html+='<div style="display:flex;gap:10px;flex-wrap:wrap">';
+      if(p.comebackIndex.trailed10.games>0) html+='<span style="font-size:5.5px;color:var(--t2)">Trail 10+: <span style="color:'+(p.comebackIndex.trailed10.rate>=50?'var(--green)':'var(--t3)')+'">'+p.comebackIndex.trailed10.won+'/'+p.comebackIndex.trailed10.games+' ('+p.comebackIndex.trailed10.rate+'%)</span></span>';
+      if(p.comebackIndex.trailed15.games>0) html+='<span style="font-size:5.5px;color:var(--t2)">Trail 15+: <span style="color:'+(p.comebackIndex.trailed15.rate>=50?'var(--green)':'var(--amber)')+'">'+p.comebackIndex.trailed15.won+'/'+p.comebackIndex.trailed15.games+' ('+p.comebackIndex.trailed15.rate+'%)</span></span>';
+      if(p.collapseRate.led10>0) html+='<span style="font-size:5.5px;color:var(--t2)">Collapse: <span style="color:'+(p.collapseRate.rate>=20?'var(--red)':'var(--t3)')+'">'+p.collapseRate.lost+'/'+p.collapseRate.led10+' ('+p.collapseRate.rate+'%)</span></span>';
+      html+='<span style="font-size:5.5px;color:var(--t2)">Close: <span style="color:'+(p.closingProfile.avgWPChange>=0?'var(--g2)':'var(--amber)')+'">'+(p.closingProfile.avgWPChange>=0?'+':'')+p.closingProfile.avgWPChange+'</span> hold:'+p.closingProfile.holdRate+'%</span>';
+      html+='<span style="font-size:5.5px;color:var(--t2)">Vol: <span style="color:'+(p.volatility>0.025?'var(--amber)':'var(--t3)')+'">'+p.volatility.toFixed(3)+'</span></span>';
+      html+='</div>';
+      html+='</div>';
+    }
+    body.innerHTML = html;
+  }catch(e){
+    body.innerHTML = '<div style="color:var(--red)">Error: '+esc(e.message)+'</div>';
+  }
+}
+
+// Format WP profiles for Sonnet prompt — called during triggerAnalysis
+async function fetchWPProfilesForGame(homeAlias, awayAlias){
+  if(!dbReady) return null;
+  try{
+    var r = await fetch(FN+'db-api?action=get_wp_profiles&league=nba&season=2025-26&teams='+homeAlias+','+awayAlias);
+    if(!r.ok) return null;
+    var data = await r.json();
+    var profiles = data.profiles || [];
+    if(profiles.length === 0) return null;
+    var lines = ['TEAM WP IDENTITY PROFILES (last 20 games):'];
+    profiles.forEach(function(row){
+      var p = typeof row.profile_json === 'string' ? JSON.parse(row.profile_json) : row.profile_json;
+      if(!p) return;
+      var line = row.team_alias + ': ' + p.wpShapeCluster + ' (' + p.record + ', ' + p.gamesAnalyzed + ' games)';
+      // Best surge quarter
+      line += ' | Best surge: ' + p.bestSurgeQuarter + ' avg ' + (p.bestSurgeAvg>=0?'+':'') + p.bestSurgeAvg;
+      // Comeback data
+      if(p.comebackIndex.trailed10.games >= 2){
+        line += ' | Comeback (trail 10+): ' + p.comebackIndex.trailed10.won + '/' + p.comebackIndex.trailed10.games + ' (' + p.comebackIndex.trailed10.rate + '%)';
+      }
+      if(p.comebackIndex.trailed15.games >= 2){
+        line += ' Trail 15+: ' + p.comebackIndex.trailed15.won + '/' + p.comebackIndex.trailed15.games + ' (' + p.comebackIndex.trailed15.rate + '%)';
+      }
+      // Collapse
+      if(p.collapseRate.led10 >= 3){
+        line += ' | Collapse (led 10+): ' + p.collapseRate.lost + '/' + p.collapseRate.led10 + ' (' + p.collapseRate.rate + '%)';
+      }
+      // Closing
+      line += ' | Close: ' + (p.closingProfile.avgWPChange>=0?'+':'') + p.closingProfile.avgWPChange + ' hold ' + p.closingProfile.holdRate + '%';
+      // Volatility
+      line += ' | Vol: ' + p.volatility.toFixed(3);
+      lines.push(line);
+    });
+    return '\n' + lines.join('\n') + '\n';
+  }catch(e){ return null; }
+}
+
+async function buildWPProfiles(){
+  if(_wpBuildRunning){ alert('WP profile build already running'); return; }
+  if(!confirm('Build WP profiles for all NBA teams (last 20 games each)?\nThis takes ~3-5 minutes and fetches from ESPN.')) return;
+  _wpBuildRunning = true;
+  var btn = document.getElementById('btn-wp');
+  if(btn) btn.textContent = '⏳ WP…';
+  var log = function(msg){ console.log('[WP] ' + msg); showAlert('info', msg); };
+  try{
+    // 1. Fetch all ESPN team IDs
+    log('Fetching ESPN team list…');
+    var teamsResp = await fetch(FN+'espn-data?type=teams&league=nba');
+    if(!teamsResp.ok) throw new Error('ESPN teams fetch failed: ' + teamsResp.status);
+    var teamsData = await teamsResp.json();
+    var teams = teamsData.teams || [];
+    if(teams.length === 0) throw new Error('No teams returned from ESPN');
+    log('Found ' + teams.length + ' teams');
+
+    // 2. For each team, fetch schedule → last 20 completed games
+    var teamGameMap = {}; // {abbr: [{eventId, date, homeAbbr, awayAbbr, homeScore, awayScore, homeWon}]}
+    var allEventIds = {}; // {eventId: true} for dedup
+    var schedulesFetched = 0;
+    for(var ti = 0; ti < teams.length; ti++){
+      var t = teams[ti];
+      await new Promise(function(r){ setTimeout(r, 400); }); // stagger
+      try{
+        var schResp = await fetch(FN+'espn-data?type=team_schedule&league=nba&team_id='+t.espnId+'&limit=20');
+        if(!schResp.ok){ log('⚠ Schedule failed for ' + t.abbr); continue; }
+        var schData = await schResp.json();
+        teamGameMap[t.abbr] = schData.games || [];
+        (schData.games || []).forEach(function(g){ allEventIds[g.eventId] = true; });
+        schedulesFetched++;
+        if(schedulesFetched % 5 === 0) log('Schedules: ' + schedulesFetched + '/' + teams.length);
+      }catch(e){ log('⚠ Schedule error ' + t.abbr + ': ' + e.message); }
+    }
+    var uniqueEvents = Object.keys(allEventIds);
+    log('Schedules done. ' + uniqueEvents.length + ' unique games to fetch WP for');
+
+    // 3. Batch fetch WP histories for all unique games
+    var wpCache = {}; // {eventId: [{homeWP, secondsLeft, seq}]}
+    var wpFetched = 0;
+    for(var ei = 0; ei < uniqueEvents.length; ei++){
+      var eid = uniqueEvents[ei];
+      await new Promise(function(r){ setTimeout(r, 500); }); // 500ms stagger
+      try{
+        var wpResp = await fetch(FN+'espn-data?type=winprob&league=nba&event_id='+eid);
+        if(!wpResp.ok){ continue; }
+        var wpData = await wpResp.json();
+        if(wpData.wpHistory && wpData.wpHistory.length > 10){
+          wpCache[eid] = {
+            history: wpData.wpHistory,
+            homeAbbr: wpData.homeAbbr,
+            awayAbbr: wpData.awayAbbr,
+          };
+        }
+        wpFetched++;
+        if(wpFetched % 20 === 0) log('WP histories: ' + wpFetched + '/' + uniqueEvents.length);
+      }catch(e){ /* silent — individual game failure OK */ }
+    }
+    log('WP fetch done. Got ' + Object.keys(wpCache).length + ' game histories');
+
+    // 4. Compute profiles per team
+    var profiles = [];
+    var teamAbbrs = Object.keys(teamGameMap);
+    for(var ai = 0; ai < teamAbbrs.length; ai++){
+      var abbr = teamAbbrs[ai];
+      var teamGames = teamGameMap[abbr];
+      var profile = computeWPProfile(abbr, teamGames, wpCache);
+      if(profile){
+        profiles.push({ team_alias: abbr, games_analyzed: profile.gamesAnalyzed, profile: profile });
+      }
+    }
+    log('Computed ' + profiles.length + ' team profiles');
+
+    // 5. Save to DB
+    if(profiles.length > 0 && dbReady){
+      var saveResp = await fetch(FN+'db-api?action=save_wp_profile', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ profiles: profiles, league: 'nba', season: '2025-26' })
+      });
+      var saveData = await saveResp.json();
+      log('Saved ' + (saveData.saved||0) + ' profiles to DB');
+    } else if(!dbReady){
+      log('⚠ DB not ready — profiles computed but not saved');
+    }
+
+    log('✅ WP profile build complete! ' + profiles.length + ' teams profiled');
+  }catch(e){
+    log('❌ WP build error: ' + e.message);
+    console.error('[WP] Build failed:', e);
+  }finally{
+    _wpBuildRunning = false;
+    if(btn) btn.textContent = '📈 WP';
+  }
+}
+
+function computeWPProfile(teamAbbr, teamGames, wpCache){
+  if(!teamGames || teamGames.length === 0) return null;
+
+  var analyzed = 0;
+  var wins = 0, losses = 0;
+  var trailed10 = {games:0, won:0};
+  var trailed15 = {games:0, won:0};
+  var trailed20 = {games:0, won:0};
+  var led10 = {games:0, lost:0};
+  var qSurges = {1:{total:0,sum:0,surges:0}, 2:{total:0,sum:0,surges:0}, 3:{total:0,sum:0,surges:0}, 4:{total:0,sum:0,surges:0}};
+  var closingChanges = []; // WP change in last ~10% of game
+  var allVolatility = []; // WP standard deviations per game
+  var blowouts = 0; // games where WP reached 95%+ for this team
+
+  for(var gi = 0; gi < teamGames.length; gi++){
+    var g = teamGames[gi];
+    var wp = wpCache[g.eventId];
+    if(!wp || !wp.history || wp.history.length < 10) continue;
+
+    var isHome = wp.homeAbbr === teamAbbr;
+    var teamWon = isHome ? g.homeWon : !g.homeWon;
+    var history = wp.history.map(function(p){ return isHome ? p.homeWP : (1 - p.homeWP); });
+
+    analyzed++;
+    if(teamWon) wins++; else losses++;
+
+    // Comeback analysis
+    var minWP = Math.min.apply(null, history);
+    var maxWP = Math.max.apply(null, history);
+    if(minWP < 0.25){ trailed10.games++; if(teamWon) trailed10.won++; }
+    if(minWP < 0.15){ trailed15.games++; if(teamWon) trailed15.won++; }
+    if(minWP < 0.08){ trailed20.games++; if(teamWon) trailed20.won++; }
+
+    // Collapse analysis
+    if(maxWP > 0.85){ led10.games++; if(!teamWon) led10.lost++; }
+
+    // Blowout check
+    if(maxWP >= 0.95) blowouts++;
+
+    // Quarter surge analysis (split history into 4 equal chunks)
+    var chunkSize = Math.floor(history.length / 4);
+    if(chunkSize >= 3){
+      for(var qi = 0; qi < 4; qi++){
+        var qStart = qi * chunkSize;
+        var qEnd = qi === 3 ? history.length : (qi+1) * chunkSize;
+        var wpStart = history[qStart];
+        var wpEnd = history[Math.min(qEnd-1, history.length-1)];
+        var change = (wpEnd - wpStart) * 100; // in percentage points
+        qSurges[qi+1].total++;
+        qSurges[qi+1].sum += change;
+        if(change >= 15) qSurges[qi+1].surges++;
+      }
+    }
+
+    // Closing profile (last 10% of data points)
+    var closeStart = Math.floor(history.length * 0.9);
+    if(closeStart > 0 && closeStart < history.length){
+      var closeChange = (history[history.length-1] - history[closeStart]) * 100;
+      closingChanges.push(closeChange);
+    }
+
+    // Volatility: standard deviation of WP changes between consecutive points
+    var changes = [];
+    for(var vi = 1; vi < history.length; vi++){
+      changes.push(Math.abs(history[vi] - history[vi-1]));
+    }
+    if(changes.length > 0){
+      var mean = changes.reduce(function(a,b){return a+b;},0) / changes.length;
+      var variance = changes.reduce(function(a,b){return a+(b-mean)*(b-mean);},0) / changes.length;
+      allVolatility.push(Math.sqrt(variance));
+    }
+  }
+
+  if(analyzed < 5) return null;
+
+  // Aggregate
+  var avgVolatility = allVolatility.length > 0 ? allVolatility.reduce(function(a,b){return a+b;},0) / allVolatility.length : 0;
+  var avgClosing = closingChanges.length > 0 ? closingChanges.reduce(function(a,b){return a+b;},0) / closingChanges.length : 0;
+  var holdRate = closingChanges.length > 0 ? Math.round(closingChanges.filter(function(c){return c >= -2;}).length / closingChanges.length * 100) : 0;
+
+  // Classify team identity
+  var identity = 'STEADY';
+  if(trailed15.games >= 3 && trailed15.won / Math.max(1, trailed15.games) >= 0.5) identity = 'COMEBACK';
+  else if(led10.games >= 5 && led10.lost / Math.max(1, led10.games) <= 0.10) identity = 'FRONTRUNNER';
+  else if(avgVolatility > 0.025) identity = 'VOLATILE';
+  else if(avgClosing >= 3) identity = 'CLOSER';
+
+  var bestSurgeQ = 1;
+  var bestSurgeAvg = -999;
+  for(var sq = 1; sq <= 4; sq++){
+    var avg = qSurges[sq].total > 0 ? qSurges[sq].sum / qSurges[sq].total : 0;
+    if(avg > bestSurgeAvg){ bestSurgeAvg = avg; bestSurgeQ = sq; }
+  }
+
+  return {
+    gamesAnalyzed: analyzed,
+    record: wins + '-' + losses,
+    comebackIndex: {
+      trailed10: {games:trailed10.games, won:trailed10.won, rate:trailed10.games>0?Math.round(trailed10.won/trailed10.games*100):0},
+      trailed15: {games:trailed15.games, won:trailed15.won, rate:trailed15.games>0?Math.round(trailed15.won/trailed15.games*100):0},
+      trailed20: {games:trailed20.games, won:trailed20.won, rate:trailed20.games>0?Math.round(trailed20.won/trailed20.games*100):0},
+    },
+    quarterSurges: {
+      q1: {avgWPChange:qSurges[1].total>0?+(qSurges[1].sum/qSurges[1].total).toFixed(1):0, surgeRate:qSurges[1].total>0?Math.round(qSurges[1].surges/qSurges[1].total*100):0},
+      q2: {avgWPChange:qSurges[2].total>0?+(qSurges[2].sum/qSurges[2].total).toFixed(1):0, surgeRate:qSurges[2].total>0?Math.round(qSurges[2].surges/qSurges[2].total*100):0},
+      q3: {avgWPChange:qSurges[3].total>0?+(qSurges[3].sum/qSurges[3].total).toFixed(1):0, surgeRate:qSurges[3].total>0?Math.round(qSurges[3].surges/qSurges[3].total*100):0},
+      q4: {avgWPChange:qSurges[4].total>0?+(qSurges[4].sum/qSurges[4].total).toFixed(1):0, surgeRate:qSurges[4].total>0?Math.round(qSurges[4].surges/qSurges[4].total*100):0},
+    },
+    collapseRate: {led10:led10.games, lost:led10.lost, rate:led10.games>0?Math.round(led10.lost/led10.games*100):0},
+    closingProfile: {avgWPChange:+avgClosing.toFixed(1), holdRate:holdRate},
+    volatility: +avgVolatility.toFixed(4),
+    wpShapeCluster: identity,
+    blowoutRate: analyzed>0?Math.round(blowouts/analyzed*100):0,
+    bestSurgeQuarter: 'Q'+bestSurgeQ,
+    bestSurgeAvg: +bestSurgeAvg.toFixed(1),
+  };
+}
+
 function exportCalibrationCSV(){
   var log = [];
   try{ log = JSON.parse(localStorage.getItem('nba4:calibration')||'[]'); }catch(e){}
@@ -1566,6 +1896,10 @@ async function triggerAnalysis(game){
     }
     cs.preFlightStep = null; // done — will show ⏳ ANALYZING next
 
+    // Fetch WP identity profiles for both teams (from DB — near-instant)
+    var _wpProfileText = null;
+    try{ _wpProfileText = await fetchWPProfilesForGame(game.home?.alias||'', game.away?.alias||''); }catch(e){}
+
     const thesis = theses[game.id]||'';
     const periodLabel = game.period ? 'Q'+game.period : '';
     const score = (game.away?.alias||'AWAY')+' '+(game.awayPoints||0)+' - '+(game.home?.alias||'HOME')+' '+(game.homePoints||0);
@@ -1643,6 +1977,7 @@ async function triggerAnalysis(game){
         adjustment: cs.adjustment || null,
         combinedRead: cs.combinedRead || null,
         calibration: formatCalibrationForPrompt() || null,
+        wpProfiles: _wpProfileText || null,
       })
     });
     clearTimeout(_acTimer);
