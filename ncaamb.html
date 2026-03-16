@@ -531,11 +531,17 @@ async function syncAnalysesFromDB(){
       if(row.indicators_json){
         try{ ind = typeof row.indicators_json === 'string' ? JSON.parse(row.indicators_json) : row.indicators_json; }catch(e){}
       }
+      var narrative = null;
+      if(row.narrative_json){
+        try{ narrative = typeof row.narrative_json === 'string' ? JSON.parse(row.narrative_json) : row.narrative_json; }catch(e){}
+      }
       dbAnalysisCache[row.game_id] = {
         prediction: pred,
         sonnetIndicators: ind,
         analysisTime: row.ts ? new Date(row.ts).getTime() : 0,
         analysis: row.raw_text || '(synced from DB)',
+        analysisHistory: narrative?.analysisHistory || [],
+        edgeHistory: narrative?.edgeHistory || [],
         control_team: row.control_team,
         control_score: row.control_score,
         entry: row.entry,
@@ -726,6 +732,14 @@ async function fetchEspnWinProb(gameId){
         dataPoints: data.dataPoints || 0,
         time: new Date()
       };
+      // Store WP history for chart
+      if(data.wpHistory && data.wpHistory.length > 0){
+        cs.espnWPHistory = data.wpHistory;
+      }
+      // Store predictor + officials (not wired to UI yet — future use)
+      if(data.predictor) cs.espnPredictor = data.predictor;
+      if(data.officials) cs.espnOfficials = data.officials;
+      if(data.seasonseries) cs.espnSeasonSeries = data.seasonseries;
       // Re-render to show ESPN WP on card
       if(g) renderCard(g);
     }
@@ -1926,6 +1940,8 @@ async function triggerAnalysis(game){
       try{ _predSafe = decision ? JSON.stringify(decision) : null; }catch(e){}
       var _indSafe = null;
       try{ _indSafe = parsed ? JSON.stringify({I1:parsed.I1,I2:parsed.I2,I3:parsed.I3,I4:parsed.I4,I5:parsed.I5,score:parsed.score,controlTeam:parsed.controlTeam,traj:parsed.traj||null}) : null; }catch(e){}
+      var _narrativeSafe = null;
+      try{ _narrativeSafe = JSON.stringify({analysisHistory:cs.analysisHistory||[],edgeHistory:cs.edgeHistory||[]}); }catch(e){}
       var _aSnap = {
         game_id: game.id, period: game.period||0, clock: game.clock||'',
         control_team: parsed?.controlTeam||decision?.buyTeam||null, control_score: parsed?.score||null,
@@ -1937,6 +1953,7 @@ async function triggerAnalysis(game){
         raw_text: (data.analysis||'').substring(0,8000),
         prediction_json: _predSafe,
         indicators_json: _indSafe,
+        narrative_json: _narrativeSafe,
       };
       fetch(FN+'db-api?action=save_analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(_aSnap)}).catch(function(){});
     }
@@ -5354,10 +5371,14 @@ function captureSnapshot(game){
     away: Object.assign({}, s.away.statistics||{}),
   };
 
-  // Persist snapshots
+  // Persist snapshots (including latest cumulative for partial period recovery)
   try { localStorage.setItem('ncaamb:snap:'+game.id, JSON.stringify({
     boundaries: qs.boundaries, quarters: qs.quarters,
     lastSnapshotPeriod: qs.lastSnapshotPeriod,
+    _latestCumulative: qs._latestCumulative||null,
+    _prevCumulative: qs._prevCumulative||null,
+    backfillNeeded: qs.backfillNeeded||[],
+    backfillDone: qs.backfillDone||false,
   })); } catch(e){}
 }
 
@@ -5486,6 +5507,10 @@ async function backfillMissingQuarters(game){
   try { localStorage.setItem('ncaamb:snap:'+game.id, JSON.stringify({
     boundaries: qs.boundaries, quarters: qs.quarters,
     lastSnapshotPeriod: qs.lastSnapshotPeriod,
+    _latestCumulative: qs._latestCumulative||null,
+    _prevCumulative: qs._prevCumulative||null,
+    backfillNeeded: qs.backfillNeeded||[],
+    backfillDone: qs.backfillDone||false,
   })); } catch(e){}
 }
 
@@ -6578,6 +6603,8 @@ function mountCard(game){
       if(dbTime) cardState[id].analysisTime = new Date(dbTime);
       if(dbData.analysis && dbData.analysis !== '(synced from DB)') cardState[id].analysis = dbData.analysis;
       else if(!cardState[id].analysis) cardState[id].analysis = '(synced from DB)';
+      if(dbData.analysisHistory && dbData.analysisHistory.length > 0 && (!cardState[id].analysisHistory || cardState[id].analysisHistory.length === 0)) cardState[id].analysisHistory = dbData.analysisHistory;
+      if(dbData.edgeHistory && dbData.edgeHistory.length > 0 && (!cardState[id].edgeHistory || cardState[id].edgeHistory.length === 0)) cardState[id].edgeHistory = dbData.edgeHistory;
       // Persist to localStorage so next same-device refresh is instant
       persistAnalysis(id, cardState[id]);
       addLog(id, '📡 Analysis restored from DB'+(dbTime > localTime ? ' (newer than local)' : ' (no local cache)'), true);
@@ -6728,6 +6755,49 @@ function renderCard(game){
       if(_wpOpenPct != null) html+='<span style="font-size:5.5px;color:var(--t3);margin-left:4px">open: '+_wpOpenPct+'%</span>';
       html+='<span style="font-size:4.5px;color:var(--t3);margin-left:auto">'+_wpAge+'m ago</span>';
       html+='</div>';
+      // ─── ESPN WP CHART (SVG — play-level resolution) ───
+      var _wpH = cs.espnWPHistory;
+      if(_wpH && _wpH.length > 5){
+        var _cW = 400, _cH = 70;
+        var _hAlias = game.home?.alias||'HOME', _aAlias = game.away?.alias||'AWAY';
+        var _pts = _wpH.filter(function(p){return p.homeWP != null;});
+        if(_pts.length > 3){
+          var _pathD = '';
+          var _fillAbove = 'M0,' + (_cH/2);
+          var _fillBelow = 'M0,' + (_cH/2);
+          for(var _pi=0;_pi<_pts.length;_pi++){
+            var _px = (_pi / (_pts.length-1)) * _cW;
+            var _py = (1 - _pts[_pi].homeWP) * _cH;
+            if(_pi===0) _pathD += 'M'+_px.toFixed(1)+','+_py.toFixed(1);
+            else _pathD += 'L'+_px.toFixed(1)+','+_py.toFixed(1);
+            _fillAbove += 'L'+_px.toFixed(1)+','+Math.min(_py, _cH/2).toFixed(1);
+            _fillBelow += 'L'+_px.toFixed(1)+','+Math.max(_py, _cH/2).toFixed(1);
+          }
+          _fillAbove += 'L'+_cW+','+(_cH/2)+'Z';
+          _fillBelow += 'L'+_cW+','+(_cH/2)+'Z';
+          // Period marker at halftime (50%)
+          var _pMarks = '<line x1="'+(_cW/2)+'" y1="0" x2="'+(_cW/2)+'" y2="'+_cH+'" stroke="rgba(255,255,255,.08)" stroke-width="0.5" stroke-dasharray="2,2"/>';
+          // Current WP dot
+          var _lastPt = _pts[_pts.length-1];
+          var _lastX = _cW;
+          var _lastY = (1 - _lastPt.homeWP) * _cH;
+          var _dotCol = _lastPt.homeWP >= 0.5 ? 'var(--green)' : 'var(--amber)';
+          var _homeLbl = '<text x="4" y="10" font-size="7" fill="rgba(255,255,255,.3)" font-family="var(--mono)">'+esc(_hAlias)+'</text>';
+          var _awayLbl = '<text x="4" y="'+(_cH-4)+'" font-size="7" fill="rgba(255,255,255,.3)" font-family="var(--mono)">'+esc(_aAlias)+'</text>';
+          var _pLabels = '<text x="'+(_cW/4).toFixed(0)+'" y="'+(_cH-2)+'" font-size="5" fill="rgba(255,255,255,.12)" text-anchor="middle" font-family="var(--mono)">1st</text>';
+          _pLabels += '<text x="'+(3*_cW/4).toFixed(0)+'" y="'+(_cH-2)+'" font-size="5" fill="rgba(255,255,255,.12)" text-anchor="middle" font-family="var(--mono)">2nd</text>';
+          html+='<div style="padding:0 10px 4px;background:rgba(96,165,250,.03)">';
+          html+='<svg viewBox="0 0 '+_cW+' '+_cH+'" preserveAspectRatio="none" style="width:100%;height:56px;display:block">';
+          html+='<line x1="0" y1="'+(_cH/2)+'" x2="'+_cW+'" y2="'+(_cH/2)+'" stroke="rgba(255,255,255,.15)" stroke-width="0.5"/>';
+          html+=_pMarks;
+          html+='<path d="'+_fillAbove+'" fill="rgba(0,255,136,.08)"/>';
+          html+='<path d="'+_fillBelow+'" fill="rgba(255,170,0,.08)"/>';
+          html+='<path d="'+_pathD+'" fill="none" stroke="rgba(96,165,250,.6)" stroke-width="1"/>';
+          html+='<circle cx="'+_lastX.toFixed(1)+'" cy="'+_lastY.toFixed(1)+'" r="2.5" fill="'+_dotCol+'"/>';
+          html+=_homeLbl+_awayLbl+_pLabels;
+          html+='</svg></div>';
+        }
+      }
     }
 
   // ─── DECISION SYNTHESIZER (always visible when data exists) ───
