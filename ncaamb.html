@@ -2059,6 +2059,7 @@ function toggleSec(gameId, key){
   const cs = cardState[gameId]; if(!cs) return;
   if(!cs._sec) cs._sec = {};
   cs._sec[key] = !_secOpen(cs, key);
+  if(key === 'thesis') cs._thesisUserToggled = true;
   const game = games.find(g=>g.id===gameId);
   if(game) renderCard(game);
 }
@@ -7567,7 +7568,11 @@ function renderCard(game){
     html+=`<div class="xref"><div class="xh">THESIS × LIVE</div>${xrefs.map(r=>`<div class="xr ${r.level}">${esc(r.msg)}</div>`).join('')}</div>`;
   }
 
-  // Thesis block
+  // Thesis block — auto-collapse once game tips off (user can still toggle open manually)
+  if(state!=='PRE' && !cs._thesisUserToggled){
+    if(!cs._sec) cs._sec = {};
+    cs._sec.thesis = false;
+  }
   html+=`<div class="thesis" id="thesis-block-${id}">
     <div class="thdr">
       <span style="cursor:pointer" onclick="toggleSec('${id}','thesis')"><span style="font-size:7px;color:var(--t3)">${_secOpen(cs,'thesis')?'▾':'▸'}</span> PRE-GAME THESIS</span>
