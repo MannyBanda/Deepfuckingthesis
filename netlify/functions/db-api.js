@@ -129,6 +129,7 @@ exports.handler = async (event) => {
       // Migrations — add columns if they don't exist (safe to re-run)
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS prediction_json JSONB`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS indicators_json JSONB`; } catch(e) {}
+      try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS narrative_json JSONB`; } catch(e) {}
 
       // Clutch data — persists OCR uploads keyed by team
       await sql`
@@ -252,11 +253,11 @@ exports.handler = async (event) => {
       await sql`
         INSERT INTO analyses (game_id, period, clock, control_team, control_score,
           fwp, edge, entry, conviction, signal, sustainability, lead_source, raw_text,
-          prediction_json, indicators_json)
+          prediction_json, indicators_json, narrative_json)
         VALUES (${a.game_id}, ${a.period}, ${a.clock}, ${a.control_team}, ${a.control_score},
           ${a.fwp}, ${a.edge}, ${a.entry}, ${a.conviction}, ${a.signal},
           ${a.sustainability}, ${a.lead_source}, ${a.raw_text},
-          ${a.prediction_json || null}, ${a.indicators_json || null})
+          ${a.prediction_json || null}, ${a.indicators_json || null}, ${a.narrative_json || null})
       `;
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
     }
@@ -447,7 +448,7 @@ exports.handler = async (event) => {
         rows = await sql`
           SELECT DISTINCT ON (game_id) game_id, ts, period, clock,
             control_team, control_score, fwp, edge, entry, conviction, signal,
-            sustainability, lead_source, prediction_json, indicators_json, raw_text
+            sustainability, lead_source, prediction_json, indicators_json, raw_text, narrative_json
           FROM analyses
           WHERE game_id = ANY(${gameIds})
           ORDER BY game_id, ts DESC
@@ -457,7 +458,7 @@ exports.handler = async (event) => {
         rows = await sql`
           SELECT DISTINCT ON (a.game_id) a.game_id, a.ts, a.period, a.clock,
             a.control_team, a.control_score, a.fwp, a.edge, a.entry, a.conviction, a.signal,
-            a.sustainability, a.lead_source, a.prediction_json, a.indicators_json, a.raw_text,
+            a.sustainability, a.lead_source, a.prediction_json, a.indicators_json, a.raw_text, a.narrative_json,
             g.matchup
           FROM analyses a
           LEFT JOIN games g ON a.game_id = g.id

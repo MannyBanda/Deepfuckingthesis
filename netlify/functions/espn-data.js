@@ -1,4 +1,4 @@
-// ESPN Data Proxy — Win Probability + Scoreboard
+// ESPN Data Proxy — Win Probability + Scoreboard + Probabilities History
 // No API key needed — ESPN's public undocumented API
 // Proxied through Netlify to avoid CORS
 
@@ -6,6 +6,12 @@ const ESPN_BASE = {
   nba: 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/',
   ncaamb: 'https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/',
   wnba: 'https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/',
+};
+
+const ESPN_LEAGUE_SLUG = {
+  nba: 'nba',
+  ncaamb: 'mens-college-basketball',
+  wnba: 'wnba',
 };
 
 exports.handler = async (event) => {
@@ -29,8 +35,8 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid league: ' + league }) };
   }
 
-  if (!type || !['scoreboard', 'winprob'].includes(type)) {
-    return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid type. Valid: scoreboard, winprob' }) };
+  if (!type || !['scoreboard', 'winprob', 'probabilities'].includes(type)) {
+    return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid type. Valid: scoreboard, winprob, probabilities' }) };
   }
 
   try {
@@ -68,10 +74,9 @@ exports.handler = async (event) => {
         return { statusCode: 400, headers, body: JSON.stringify({ error: 'event_id required for winprob' }) };
       }
 
-      // Use site.web.api for summary (includes winprobability)
-      const url = 'https://site.web.api.espn.com/apis/site/v2/sports/basketball/' +
-        (league === 'nba' ? 'nba' : league === 'ncaamb' ? 'mens-college-basketball' : 'wnba') +
-        '/summary?event=' + eventId;
+      // Use site.web.api for summary (includes winprobability, predictor, officials)
+      const slug = ESPN_LEAGUE_SLUG[league] || 'nba';
+      const url = 'https://site.web.api.espn.com/apis/site/v2/sports/basketball/' + slug + '/summary?event=' + eventId;
       const resp = await fetch(url);
       if (!resp.ok) {
         return { statusCode: resp.status, headers, body: JSON.stringify({ error: 'ESPN summary: ' + resp.status }) };
@@ -88,6 +93,64 @@ exports.handler = async (event) => {
       const homeTeam = comp.competitors?.find(c => c.homeAway === 'home');
       const awayTeam = comp.competitors?.find(c => c.homeAway === 'away');
 
+      // ── FULL WP HISTORY for chart ──
+      // Downsample if > 300 points to keep payload reasonable
+      var wpHistory = wp.map(function(p) {
+        return {
+          homeWP: p.homeWinPercentage != null ? Math.round(p.homeWinPercentage * 1000) / 1000 : null,
+          secondsLeft: p.secondsLeft != null ? p.secondsLeft : null,
+          seq: p.sequenceNumber || null,
+        };
+      });
+      if (wpHistory.length > 300) {
+        // Keep every Nth point + always keep first and last
+        var step = Math.ceil(wpHistory.length / 300);
+        var sampled = [wpHistory[0]];
+        for (var i = step; i < wpHistory.length - 1; i += step) {
+          sampled.push(wpHistory[i]);
+        }
+        sampled.push(wpHistory[wpHistory.length - 1]);
+        wpHistory = sampled;
+      }
+
+      // ── PREDICTOR (pre-game model) ──
+      var predictor = null;
+      if (data.predictor) {
+        var pred = data.predictor;
+        predictor = {
+          homeProjection: pred.homeTeam?.gameProjection || null,
+          awayProjection: pred.awayTeam?.gameProjection || null,
+          homeTeamChanceLoss: pred.homeTeam?.teamChanceLoss || null,
+          awayTeamChanceLoss: pred.awayTeam?.teamChanceLoss || null,
+        };
+      }
+
+      // ── OFFICIALS (referee assignments) ──
+      var officials = null;
+      var gameInfo = data.gameInfo || {};
+      if (gameInfo.officials && gameInfo.officials.length > 0) {
+        officials = gameInfo.officials.map(function(o) {
+          return {
+            name: o.displayName || o.fullName || '',
+            position: o.position?.displayName || '',
+            order: o.order || 0,
+          };
+        });
+      }
+
+      // ── SEASON SERIES ──
+      var seasonseries = null;
+      if (data.seasonseries && data.seasonseries.length > 0) {
+        seasonseries = data.seasonseries.map(function(g) {
+          return {
+            date: g.date || '',
+            homeScore: g.homeScore || null,
+            awayScore: g.awayScore || null,
+            homeWinner: g.homeWinner || false,
+          };
+        });
+      }
+
       return {
         statusCode: 200,
         headers,
@@ -103,6 +166,45 @@ exports.handler = async (event) => {
             homeWinPct: first.homeWinPercentage,
           } : null,
           dataPoints: wp.length,
+          wpHistory: wpHistory,
+          predictor: predictor,
+          officials: officials,
+          seasonseries: seasonseries,
+        }),
+      };
+    }
+
+    if (type === 'probabilities') {
+      // Dedicated probabilities endpoint — play-level WP history
+      // Alternative to winprob when you only need the chart data (lighter payload)
+      const eventId = params.event_id;
+      if (!eventId) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: 'event_id required for probabilities' }) };
+      }
+
+      const slug = ESPN_LEAGUE_SLUG[league] || 'nba';
+      const url = 'https://sports.core.api.espn.com/v2/sports/basketball/leagues/' + slug +
+        '/events/' + eventId + '/competitions/' + eventId + '/probabilities?limit=500';
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        return { statusCode: resp.status, headers, body: JSON.stringify({ error: 'ESPN probabilities: ' + resp.status }) };
+      }
+      const data = await resp.json();
+
+      var items = (data.items || []).map(function(p) {
+        return {
+          homeWP: p.homeWinPercentage != null ? Math.round(p.homeWinPercentage * 1000) / 1000 : null,
+          secondsLeft: p.secondsLeft != null ? p.secondsLeft : null,
+          seq: p.sequenceNumber || null,
+        };
+      });
+
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({
+          count: data.count || items.length,
+          history: items,
         }),
       };
     }
