@@ -425,6 +425,17 @@ var SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing real-time 
 + '     Elevate I2 weight and factor this into FWP — the team in the bonus has guaranteed foul leverage.\n'
 + '   - When BOTH teams are in the bonus, the advantage NEUTRALIZES — both sides benefit equally from foul calls.\n'
 + '   - This is especially critical in Q4 where foul leverage directly impacts closing possessions.\n\n'
++ '10. TEAM WP IDENTITY PROFILES (when provided):\n'
++ '   - Historical win probability curve analysis from last 20 games per team.\n'
++ '   - IDENTITY TYPES: COMEBACK (routinely recovers from large deficits), FRONTRUNNER (dominates from ahead, rarely collapses),\n'
++ '     VOLATILE (wild WP swings — capable of both comebacks and collapses), CLOSER (strong finishing),\n'
++ '     STEADY (consistent, predictable WP curves).\n'
++ '   - USE FOR FWP: A COMEBACK team trailing by 12 has higher FWP than a STEADY team in the same position.\n'
++ '     A FRONTRUNNER leading by 10 has higher FWP than a VOLATILE team with the same lead.\n'
++ '   - USE FOR ENTRY: A COMEBACK team trailing on variance is a STRONGER buy signal than their current score suggests.\n'
++ '     A team with high collapse rate protecting a variance-sourced lead is a WEAKER hold.\n'
++ '   - QUARTER SURGES: If a team\'s best surge quarter is Q3 and you\'re evaluating in Q2, factor in the likely Q3 push.\n'
++ '   - DO NOT override structural control reads with identity alone — identity modifies conviction and FWP, not indicators.\n\n'
 + 'HOW TO USE THE LAYERS TOGETHER:\n'
 + '   The STRUCTURAL FLOOR answers "who should win." The ROLLING WINDOW answers "who is winning now." The GAP answers "is the edge compounding or fading."\n'
 + '   The ARROWS show HOW — is the team adjusting its approach (interior pivot, variance shift).\n'
@@ -545,6 +556,7 @@ exports.handler = async function(event) {
     var subMetricArrows = body.subMetricArrows;
     var adjustment = body.adjustment;
     var combinedRead = body.combinedRead;
+    var wpProfiles = body.wpProfiles || null;
 
     if (!summaryData) {
       return { statusCode: 400, headers: headers, body: JSON.stringify({ error: 'summaryData required' }) };
@@ -809,12 +821,18 @@ exports.handler = async function(event) {
       combinedReadSection = '\nCOMBINED READ: ' + combinedRead.read + ' — ' + (combinedRead.note || '') + '\n';
     }
 
+    // ── WP IDENTITY PROFILES (from DB — weekly batch) ──
+    var wpSection = '';
+    if (wpProfiles) {
+      wpSection = '\n' + wpProfiles + '\n';
+    }
+
     // ── BUILD PROMPT ──
     var userPrompt = awayTeam + ' @ ' + homeTeam + ' | ' + period + ' | ' + score + '\n\n'
       + (thesis ? 'THESIS:\n' + thesis + '\n' : 'No thesis.')
       + '\n' + clutchSection + oddsSection + bonusSection + trackingSection + sustainabilitySection + leadCompSection
       + windowSection + gapSection + combinedReadSection + arrowSection + adjustmentSection
-      + pbpSection + edgeSection + narrativeSection
+      + pbpSection + edgeSection + narrativeSection + wpSection
       + '\nGAME DATA:\n' + JSON.stringify(summaryData);
 
     var resp = await fetch('https://api.anthropic.com/v1/messages', {

@@ -35,8 +35,8 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid league: ' + league }) };
   }
 
-  if (!type || !['scoreboard', 'winprob', 'probabilities'].includes(type)) {
-    return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid type. Valid: scoreboard, winprob, probabilities' }) };
+  if (!type || !['scoreboard', 'winprob', 'probabilities', 'teams', 'team_schedule'].includes(type)) {
+    return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid type. Valid: scoreboard, winprob, probabilities, teams, team_schedule' }) };
   }
 
   try {
@@ -205,6 +205,84 @@ exports.handler = async (event) => {
         body: JSON.stringify({
           count: data.count || items.length,
           history: items,
+        }),
+      };
+    }
+
+    if (type === 'teams') {
+      // Get all teams with ESPN IDs
+      const url = base + 'teams?limit=50';
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        return { statusCode: resp.status, headers, body: JSON.stringify({ error: 'ESPN teams: ' + resp.status }) };
+      }
+      const data = await resp.json();
+      var teams = [];
+      (data.sports || []).forEach(function(sport) {
+        (sport.leagues || []).forEach(function(lg) {
+          (lg.teams || []).forEach(function(t) {
+            var team = t.team || t;
+            teams.push({
+              espnId: team.id,
+              abbr: team.abbreviation || '',
+              name: team.displayName || '',
+              shortName: team.shortDisplayName || '',
+            });
+          });
+        });
+      });
+      return { statusCode: 200, headers, body: JSON.stringify({ teams }) };
+    }
+
+    if (type === 'team_schedule') {
+      // Get recent completed games for a team
+      const teamId = params.team_id;
+      if (!teamId) {
+        return { statusCode: 400, headers, body: JSON.stringify({ error: 'team_id required for team_schedule' }) };
+      }
+      const limit = parseInt(params.limit) || 20;
+      const slug = ESPN_LEAGUE_SLUG[league] || 'nba';
+
+      // ESPN team schedule endpoint
+      const url = 'https://site.api.espn.com/apis/site/v2/sports/basketball/' + slug + '/teams/' + teamId + '/schedule';
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        return { statusCode: resp.status, headers, body: JSON.stringify({ error: 'ESPN team schedule: ' + resp.status }) };
+      }
+      const data = await resp.json();
+
+      // Filter completed games, take most recent N
+      var completed = [];
+      (data.events || []).forEach(function(ev) {
+        var status = ev.competitions?.[0]?.status?.type?.name || '';
+        if (status !== 'STATUS_FINAL') return;
+        var comp = ev.competitions?.[0] || {};
+        var home = comp.competitors?.find(function(c) { return c.homeAway === 'home'; });
+        var away = comp.competitors?.find(function(c) { return c.homeAway === 'away'; });
+        var homeWon = home?.winner || false;
+        completed.push({
+          eventId: ev.id,
+          date: ev.date || '',
+          homeAbbr: home?.team?.abbreviation || '',
+          awayAbbr: away?.team?.abbreviation || '',
+          homeScore: parseInt(home?.score || 0),
+          awayScore: parseInt(away?.score || 0),
+          homeWon: homeWon,
+        });
+      });
+
+      // Sort by date descending, take last N
+      completed.sort(function(a, b) { return new Date(b.date) - new Date(a.date); });
+      var recent = completed.slice(0, limit);
+
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({
+          teamId: teamId,
+          total: completed.length,
+          returned: recent.length,
+          games: recent,
         }),
       };
     }

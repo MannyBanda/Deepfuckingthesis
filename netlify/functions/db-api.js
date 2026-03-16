@@ -131,6 +131,19 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS indicators_json JSONB`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS narrative_json JSONB`; } catch(e) {}
 
+      // WP profile table — team-level win probability curve analysis
+      await sql`
+        CREATE TABLE IF NOT EXISTS wp_profiles (
+          team_alias TEXT NOT NULL,
+          league TEXT DEFAULT 'nba',
+          season TEXT DEFAULT '2025-26',
+          games_analyzed INTEGER DEFAULT 0,
+          profile_json JSONB,
+          updated_at TIMESTAMPTZ DEFAULT NOW(),
+          PRIMARY KEY (team_alias, league, season)
+        )
+      `;
+
       // Clutch data — persists OCR uploads keyed by team
       await sql`
         CREATE TABLE IF NOT EXISTS clutch (
@@ -549,6 +562,54 @@ exports.handler = async (event) => {
         ORDER BY ts ASC
       `;
       return { statusCode: 200, headers, body: JSON.stringify({ odds: rows }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // SAVE_WP_PROFILE — persist team WP curve profile
+    // ═══════════════════════════════════════════════════════
+    if (action === 'save_wp_profile' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      const profiles = body.profiles || [];
+      const league = body.league || 'nba';
+      const season = body.season || '2025-26';
+      let saved = 0;
+      for (const p of profiles) {
+        if (!p.team_alias) continue;
+        await sql`
+          INSERT INTO wp_profiles (team_alias, league, season, games_analyzed, profile_json, updated_at)
+          VALUES (${p.team_alias}, ${league}, ${season}, ${p.games_analyzed || 0}, ${JSON.stringify(p.profile)}, NOW())
+          ON CONFLICT (team_alias, league, season)
+          DO UPDATE SET games_analyzed = ${p.games_analyzed || 0}, profile_json = ${JSON.stringify(p.profile)}, updated_at = NOW()
+        `;
+        saved++;
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, saved }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_WP_PROFILES — retrieve team WP profiles
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_wp_profiles') {
+      const league = params.league || 'nba';
+      const season = params.season || '2025-26';
+      const teams = params.teams ? params.teams.split(',') : null;
+
+      let rows;
+      if (teams && teams.length > 0) {
+        rows = await sql`
+          SELECT team_alias, games_analyzed, profile_json, updated_at
+          FROM wp_profiles
+          WHERE league = ${league} AND season = ${season} AND team_alias = ANY(${teams})
+        `;
+      } else {
+        rows = await sql`
+          SELECT team_alias, games_analyzed, profile_json, updated_at
+          FROM wp_profiles
+          WHERE league = ${league} AND season = ${season}
+          ORDER BY team_alias
+        `;
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ profiles: rows }) };
     }
 
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Unknown action: ' + action }) };
