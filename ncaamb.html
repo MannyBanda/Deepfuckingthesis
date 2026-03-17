@@ -7066,8 +7066,8 @@ function renderCard(game){
     }
 
     // ─── 3. SCORING COMPOSITION (how is each team scoring?) ───
-    var lc = cs.leadComposition || cs.clientLeadComposition;
-    var lcIsClient = !cs.leadComposition && !!cs.clientLeadComposition;
+    var lc = cs.clientLeadComposition || cs.leadComposition;
+    var lcIsClient = !!cs.clientLeadComposition;
     if(lc){
       var lcStructColor = lc.structuralMargin > 0 ? 'var(--green)' : lc.structuralMargin < 0 ? 'var(--red)' : 'var(--t3)';
       var lcVarColor = lc.varianceMargin > 0 ? 'var(--amber)' : lc.varianceMargin < 0 ? 'var(--green)' : 'var(--t3)';
