@@ -131,6 +131,10 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS indicators_json JSONB`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS narrative_json JSONB`; } catch(e) {}
 
+      // Snapshot enrichment columns (server-side polling)
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'client'`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS lead_class TEXT`; } catch(e) {}
+
       // WP profile table — team-level win probability curve analysis
       await sql`
         CREATE TABLE IF NOT EXISTS wp_profiles (

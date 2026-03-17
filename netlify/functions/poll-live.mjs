@@ -21,11 +21,15 @@ const LEAGUES = {
     espnSlug: 'nba',
     espnBase: 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/',
     espnSummaryBase: 'https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba/summary',
+    bdlPrefix: '/nba',
+    bdlHasSeasonStats: true,
     season: '2025',
     aliasMap: { NOP: 'NO', GSW: 'GS', NYK: 'NY', SAS: 'SA', PHX: 'PHO', BKN: 'BKN' },
   },
   // ncaamb: { ... } — add when ready
 };
+
+const BDL_BASE = 'https://api.balldontlie.io';
 
 const W = { I1: 0.25, I2: 0.25, I3: 0.20, I4: 0.20, I5: 0.10 };
 
@@ -112,6 +116,101 @@ async function espnWinProb(league, espnEventId) {
   }
 }
 
+// ── BDL FETCH ───────────────────────────────────────────────────────────────
+
+async function bdlFetch(path) {
+  const apiKey = process.env.BDL_API_KEY;
+  if (!apiKey) return null;
+  const url = `${BDL_BASE}${path}`;
+  try {
+    const resp = await fetch(url, { headers: { 'Authorization': apiKey } });
+    if (!resp.ok) {
+      log(`BDL ${resp.status}: ${path}`);
+      return null;
+    }
+    return await resp.json();
+  } catch (e) {
+    log(`BDL error: ${e.message}`);
+    return null;
+  }
+}
+
+// Fetch today's BDL games → build abbreviation → BDL team_id map
+async function bdlTeamIdMap(league, dateStr) {
+  const cfg = LEAGUES[league];
+  if (!cfg.bdlHasSeasonStats) return {};
+  // dateStr format: YYYY-MM-DD
+  const data = await bdlFetch(`${cfg.bdlPrefix}/v1/games?dates[]=${dateStr}&per_page=25`);
+  if (!data || !data.data) return {};
+  const map = {}; // { 'LAL': 14, 'HOU': 11, ... }
+  for (const g of data.data) {
+    if (g.home_team?.abbreviation && g.home_team?.id) {
+      map[g.home_team.abbreviation] = g.home_team.id;
+    }
+    if (g.visitor_team?.abbreviation && g.visitor_team?.id) {
+      map[g.visitor_team.abbreviation] = g.visitor_team.id;
+    }
+  }
+  return map;
+}
+
+// Fetch player season stats for a team (returns array of player stat objects)
+async function bdlSeasonStats(league, bdlTeamId, season) {
+  const cfg = LEAGUES[league];
+  const data = await bdlFetch(`${cfg.bdlPrefix}/v1/player_season_stats?season=${season}&team_id=${bdlTeamId}&per_page=100`);
+  if (!data || !data.data) return [];
+  return data.data;
+}
+
+// Normalize player name for fuzzy matching (lowercase, strip Jr./Sr./III/II/IV, trim)
+function normName(name) {
+  if (!name) return '';
+  return name.toLowerCase()
+    .replace(/\s+(jr|sr|ii|iii|iv|v)\.?$/i, '')
+    .replace(/[.']/g, '')
+    .trim();
+}
+
+// Merge BDL season averages onto SR summary players
+// Attaches .average = { three_points_made, three_points_att, field_goals_made, field_goals_att }
+// so the sustainability audit's player loop picks them up
+function mergeBdlSeasonData(summary, bdlHomeSeason, bdlAwaySeason) {
+  function mergeTeam(teamData, bdlStats) {
+    if (!teamData?.players || !bdlStats || bdlStats.length === 0) return;
+    // Build lookup by normalized name
+    const bdlMap = {};
+    for (const ps of bdlStats) {
+      const pName = ps.player?.first_name && ps.player?.last_name
+        ? `${ps.player.first_name} ${ps.player.last_name}`
+        : '';
+      const key = normName(pName);
+      if (key) bdlMap[key] = ps;
+    }
+
+    for (const player of teamData.players) {
+      const srName = player.full_name || player.name || '';
+      const key = normName(srName);
+      const bdl = bdlMap[key];
+      if (!bdl) continue;
+
+      // Attach season averages so sustainability audit reads them
+      // BDL player_season_stats returns per-game averages
+      player.average = {
+        three_points_made: bdl.fg3m || 0,
+        three_points_att: bdl.fg3a || 0,
+        field_goals_made: bdl.fgm || 0,
+        field_goals_att: bdl.fga || 0,
+        points: bdl.pts || 0,
+        rebounds: bdl.reb || 0,
+        assists: bdl.ast || 0,
+      };
+    }
+  }
+
+  mergeTeam(summary.home, bdlHomeSeason);
+  mergeTeam(summary.away, bdlAwaySeason);
+}
+
 // ── SERVER-SIDE COMPUTE (I1–I5) ─────────────────────────────────────────────
 // Pure function. No cardState, no DOM, no PBP, no baselines.
 // Input: SR game summary JSON. Output: indicator scores + composite.
@@ -193,6 +292,199 @@ function computeServer(summary) {
   };
 }
 
+// ── SERVER-SIDE SUSTAINABILITY AUDIT ─────────────────────────────────────────
+// Ported from analyze.js. Pure function of SR summary data.
+// No tracking data server-side — degrades gracefully (uses assist ratio only).
+
+function computeSustainability(summary) {
+  if (!summary) return null;
+
+  function auditTeam(teamData, teamAlias) {
+    if (!teamData) return null;
+    var stats = teamData.statistics || {};
+    var players = teamData.players || [];
+
+    var team3PM = stats.three_points_made || 0;
+    var team3PA = stats.three_points_att || 0;
+    var teamFGA = stats.field_goals_att || 1;
+    var live3Pct = team3PA > 0 ? (team3PM / team3PA * 100) : 0;
+
+    // Season prior from player averages (SR summary may include .average)
+    var seasonPrior3Pct = 36.0; // NBA average fallback
+    var gotSeasonData = false;
+    var seasonTot3PM = 0, seasonTot3PA = 0;
+    players.forEach(function(p) {
+      var avg = p.average || p.season || {};
+      var m = avg.three_points_made || avg.fg3m || 0;
+      var a = avg.three_points_att || avg.fg3a || 0;
+      seasonTot3PM += m;
+      seasonTot3PA += a;
+    });
+    if (seasonTot3PA >= 5) {
+      seasonPrior3Pct = seasonTot3PM / seasonTot3PA * 100;
+      gotSeasonData = true;
+    }
+
+    // Personnel audit
+    var makesByTier = { elite: 0, average: 0, non: 0 };
+    players.forEach(function(p) {
+      var live = p.statistics || {};
+      var avg = p.average || p.season || {};
+      var live3m = live.three_points_made || 0;
+      var live3a = live.three_points_att || 0;
+      if (live3a < 2) return;
+
+      var szn3m = avg.three_points_made || avg.fg3m || 0;
+      var szn3a = avg.three_points_att || avg.fg3a || 0;
+      var sznPct = szn3a >= 1.0 ? (szn3m / szn3a * 100) : null;
+      var sznVol = szn3a;
+
+      var tier;
+      if (sznPct === null) tier = 'non';
+      else if (sznPct >= 38.0 && sznVol >= 2.0) tier = 'elite';
+      else if (sznPct >= 33.0 || (sznPct >= 30.0 && sznVol >= 3.0)) tier = 'average';
+      else tier = 'non';
+
+      if (sznVol < 1.5 && tier === 'elite') tier = 'average';
+      if (sznVol < 0.8 && tier !== 'non') tier = 'non';
+
+      makesByTier[tier] += live3m;
+    });
+
+    var totalMakes = team3PM || 1;
+    var elitePct = makesByTier.elite / totalMakes * 100;
+    var nonPct = makesByTier.non / totalMakes * 100;
+
+    var personnelGrade;
+    if (elitePct >= 70) personnelGrade = 'LOCKED IN';
+    else if (elitePct >= 50 && nonPct <= 20) personnelGrade = 'DURABLE';
+    else if (nonPct >= 50) personnelGrade = 'UNSUSTAINABLE';
+    else if (nonPct >= 35) personnelGrade = 'FRAGILE';
+    else personnelGrade = 'MIXED';
+
+    // Bayesian regression
+    var priorStrength = 30;
+    var priorAlpha = seasonPrior3Pct / 100 * priorStrength;
+    var priorBeta = (1 - seasonPrior3Pct / 100) * priorStrength;
+    var posteriorAlpha = priorAlpha + team3PM;
+    var posteriorBeta = priorBeta + (team3PA - team3PM);
+    var posteriorMean = posteriorAlpha / (posteriorAlpha + posteriorBeta) * 100;
+    var deviation = live3Pct - seasonPrior3Pct;
+
+    var regressionProb;
+    if (team3PA <= 8) regressionProb = 85;
+    else if (team3PA <= 14) regressionProb = 70;
+    else if (team3PA <= 20) regressionProb = 55;
+    else if (team3PA <= 28) regressionProb = 40;
+    else regressionProb = 25;
+
+    if (deviation > 15) regressionProb = Math.min(95, regressionProb + 15);
+    else if (deviation > 8) regressionProb = Math.min(95, regressionProb + 8);
+    else if (deviation > 3) regressionProb = Math.min(95, regressionProb + 3);
+    else if (deviation < -8) regressionProb = Math.max(5, regressionProb - 15);
+    else if (deviation < -3) regressionProb = Math.max(5, regressionProb - 8);
+
+    var regressionGrade;
+    if (regressionProb >= 75) regressionGrade = 'HIGH';
+    else if (regressionProb >= 55) regressionGrade = 'MODERATE';
+    else if (regressionProb >= 35) regressionGrade = 'LOW';
+    else regressionGrade = 'MINIMAL';
+
+    // Shot type context (no tracking data server-side — assist ratio only)
+    var teamAssists = stats.assists || 0;
+    var teamFGM = stats.field_goals_made || 1;
+    var assistRatio = teamAssists / teamFGM * 100;
+
+    var shotTypeGrade;
+    if (assistRatio >= 65) shotTypeGrade = 'DURABLE';
+    else if (assistRatio < 45) shotTypeGrade = 'FRAGILE';
+    else shotTypeGrade = 'MIXED';
+
+    // Composite tier: personnel 40%, regression 35%, shot type 25%
+    var scores = { personnel: 0, regression: 0, shotType: 0 };
+    if (personnelGrade === 'LOCKED IN') scores.personnel = 0;
+    else if (personnelGrade === 'DURABLE') scores.personnel = 0.5;
+    else if (personnelGrade === 'MIXED') scores.personnel = 1;
+    else if (personnelGrade === 'FRAGILE') scores.personnel = 1.5;
+    else scores.personnel = 2;
+
+    if (regressionGrade === 'MINIMAL') scores.regression = 0;
+    else if (regressionGrade === 'LOW') scores.regression = 0.5;
+    else if (regressionGrade === 'MODERATE') scores.regression = 1;
+    else scores.regression = 2;
+
+    if (shotTypeGrade === 'DURABLE') scores.shotType = 0;
+    else if (shotTypeGrade === 'MIXED') scores.shotType = 1;
+    else scores.shotType = 2;
+
+    var composite = scores.personnel * 0.40 + scores.regression * 0.35 + scores.shotType * 0.25;
+
+    var tier;
+    if (composite <= 0.3) tier = 'LOCKED IN';
+    else if (composite <= 0.7) tier = 'DURABLE';
+    else if (composite <= 1.1) tier = 'MIXED';
+    else if (composite <= 1.5) tier = 'FRAGILE';
+    else tier = 'UNSUSTAINABLE';
+
+    // Override: at/below season norm
+    if (live3Pct <= seasonPrior3Pct + 2) {
+      tier = 'LOCKED IN';
+    }
+    // Override: too few attempts
+    if (team3PA < 5) tier = 'TOO EARLY';
+
+    return { tier, composite: parseFloat(composite.toFixed(2)) };
+  }
+
+  return {
+    home: auditTeam(summary.home, summary.home?.alias || 'HOME'),
+    away: auditTeam(summary.away, summary.away?.alias || 'AWAY'),
+  };
+}
+
+// ── SERVER-SIDE LEAD COMPOSITION ────────────────────────────────────────────
+// Ported from analyze.js. Pure function of SR summary data.
+
+function computeLeadComposition(summary) {
+  if (!summary) return null;
+  const H = summary.home, A = summary.away;
+  if (!H || !A) return null;
+  const hs = H.statistics || {}, as = A.statistics || {};
+  const hPts = H.points || 0, aPts = A.points || 0;
+  if (hPts === 0 && aPts === 0) return null;
+  const hA = H.alias || 'HOME', aA = A.alias || 'AWAY';
+
+  function breakdown(stats, total) {
+    var paint = stats.points_in_the_paint || stats.points_in_paint || 0;
+    var atRimPts = (stats.field_goals_at_rim_made || 0) * 2;
+    paint = Math.max(paint, atRimPts);
+    var ft = stats.free_throws_made || 0;
+    var three = (stats.three_points_made || 0) * 3;
+    var midOther = Math.max(0, total - paint - ft - three);
+    var structural = paint + ft;
+    var variance = three + midOther;
+    return { total, paint, ft, three, midOther, structural, variance };
+  }
+
+  var hB = breakdown(hs, hPts);
+  var aB = breakdown(as, aPts);
+
+  var margin = hPts - aPts;
+  var absMargin = Math.abs(margin);
+  var leadTeam = margin >= 0 ? hA : aA;
+  var trailTeam = margin >= 0 ? aA : hA;
+  var leadStruct = margin >= 0 ? (hB.structural - aB.structural) : (aB.structural - hB.structural);
+  var leadVar = margin >= 0 ? (hB.variance - aB.variance) : (aB.variance - hB.variance);
+
+  var classification;
+  if (absMargin <= 2) classification = 'EVEN';
+  else if (leadStruct >= absMargin * 0.6) classification = 'STRUCTURAL';
+  else if (leadVar >= absMargin * 0.6) classification = 'VOLATILE'; // simplified — no sustainability cross-ref server-side
+  else classification = 'MIXED';
+
+  return { classification, leadTeam, structuralMargin: leadStruct, varianceMargin: leadVar };
+}
+
 // ── MAIN HANDLER ────────────────────────────────────────────────────────────
 
 export default async function(req) {
@@ -255,6 +547,35 @@ export default async function(req) {
       }
       log(`ESPN mapped: ${Object.keys(espnMap).length}/${liveGames.length}`);
 
+      // ── 2b. Fetch BDL team IDs + season stats (parallel) ──
+      const bdlDateStr = `${d.year}-${pad(d.month)}-${pad(d.day)}`;
+      const bdlTeamIds = await bdlTeamIdMap(league, bdlDateStr);
+      log(`BDL team IDs: ${Object.keys(bdlTeamIds).length} teams`);
+
+      // Collect unique team abbreviations from live games
+      const teamAbbrs = new Set();
+      for (const g of liveGames) {
+        if (g.home?.alias) teamAbbrs.add(g.home.alias);
+        if (g.away?.alias) teamAbbrs.add(g.away.alias);
+      }
+
+      // Fetch season stats for all teams in parallel (BDL has no 1/sec limit)
+      const bdlSeasonCache = {}; // { 'LAL': [...playerStats], 'HOU': [...] }
+      const seasonFetches = [];
+      for (const abbr of teamAbbrs) {
+        const bdlId = bdlTeamIds[abbr];
+        if (!bdlId) continue;
+        seasonFetches.push(
+          bdlSeasonStats(league, bdlId, cfg.season)
+            .then(stats => { bdlSeasonCache[abbr] = stats; })
+            .catch(e => { log(`BDL season stats ${abbr}: ${e.message}`); })
+        );
+      }
+      if (seasonFetches.length > 0) {
+        await Promise.all(seasonFetches);
+        log(`BDL season stats: ${Object.keys(bdlSeasonCache).length}/${teamAbbrs.size} teams loaded`);
+      }
+
       // ── 3. Process each live game sequentially (SR rate limit) ──
       for (const game of liveGames) {
         const hA = game.home?.alias || 'HOME';
@@ -293,9 +614,23 @@ export default async function(req) {
                              : ctrlPts > oppPts ? (ctrlIsHome ? aA : hA)
                              : null;
 
-          // Determine lead team sustainability placeholder
-          // (Server doesn't have baselines yet — null is fine, client fills in)
-          const leadSust = null;
+          // Merge BDL season averages onto SR summary players (enriches sustainability audit)
+          const homeBdl = bdlSeasonCache[hA] || [];
+          const awayBdl = bdlSeasonCache[aA] || [];
+          if (homeBdl.length > 0 || awayBdl.length > 0) {
+            mergeBdlSeasonData(summary, homeBdl, awayBdl);
+          }
+
+          // Compute sustainability + lead composition
+          const sust = computeSustainability(summary);
+          const leadComp = computeLeadComposition(summary);
+
+          // Lead team sustainability tier
+          const leadSide = ind.homePts > ind.awayPts ? 'home'
+                         : ind.awayPts > ind.homePts ? 'away'
+                         : 'home'; // tie → home default
+          const leadSust = sust?.[leadSide]?.tier || null;
+          const leadClass = leadComp?.classification || null;
 
           // ── 4. Save to DB ──
           // Ensure game row exists
@@ -305,24 +640,26 @@ export default async function(req) {
             ON CONFLICT (id) DO NOTHING
           `;
 
-          // Insert snapshot
+          // Insert snapshot (source = 'server' to distinguish from client)
           await sql`
             INSERT INTO snapshots (game_id, period, clock, home_pts, away_pts,
               floor_score, floor_team, pbp_score, pbp_team, pbp_window_size,
               qtr_score, qtr_team, espn_wp_home, espn_wp_away,
               spread, deficit, trailing_team, lead_sust, gap, accel,
-              i1, i2, i3, i4, i5)
+              i1, i2, i3, i4, i5, source, lead_class)
             VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
               ${ind.score}, ${ind.controlTeam}, ${null}, ${null}, ${null},
               ${null}, ${null}, ${espnWP?.home || null}, ${espnWP?.away || null},
               ${null}, ${deficit}, ${trailingTeam}, ${leadSust}, ${null}, ${null},
-              ${ind.I1.score}, ${ind.I2.score}, ${ind.I3.score}, ${ind.I4.score}, ${ind.I5.score})
+              ${ind.I1.score}, ${ind.I2.score}, ${ind.I3.score}, ${ind.I4.score}, ${ind.I5.score},
+              ${'server'}, ${leadClass})
           `;
 
           results.snapshots++;
           if (espnWP) results.espn++;
 
-          log(`${matchup} Q${currentPeriod} ${clock} | ${ind.homePts}-${ind.awayPts} | ${ind.controlTeam} ${ind.score} | I:${ind.I1.score}/${ind.I2.score}/${ind.I3.score}/${ind.I4.score}/${ind.I5.score}${espnWP ? ` | WP:${espnWP.home}%` : ''}`);
+          const bdlEnriched = (homeBdl.length > 0 || awayBdl.length > 0);
+          log(`${matchup} Q${currentPeriod} ${clock} | ${ind.homePts}-${ind.awayPts} | ${ind.controlTeam} ${ind.score} | I:${ind.I1.score}/${ind.I2.score}/${ind.I3.score}/${ind.I4.score}/${ind.I5.score} | sust:${leadSust || '?'} class:${leadClass || '?'}${bdlEnriched ? ' BDL✓' : ''}${espnWP ? ` | WP:${espnWP.home}%` : ''}`);
 
         } catch (e) {
           results.errors.push(`${matchup}: ${e.message}`);
