@@ -424,6 +424,57 @@ async function saveSnapshotDB(game){
   }catch(e){ /* silent */ }
 }
 
+// Hydrate card from server snapshots — fills gap log + floor baseline when client was inactive
+async function hydrateFromServerSnapshots(gameId){
+  if(!dbReady) return;
+  var cs = cardState[gameId]; if(!cs) return;
+  if(cs.gapLog && cs.gapLog.length > 2) return;
+  try{
+    var resp = await fetch(FN+'db-api?action=history&game_id='+gameId);
+    if(!resp.ok) return;
+    var data = await resp.json();
+    var snaps = data.snapshots || [];
+    if(snaps.length === 0) return;
+
+    var serverSnaps = snaps.filter(function(s){ return s.source === 'server'; });
+    if(serverSnaps.length === 0) return;
+
+    if(!cs.gapLog || cs.gapLog.length < 2){
+      cs.gapLog = serverSnaps.filter(function(s){ return s.floor_score != null; }).map(function(s){
+        return {
+          ts: new Date(s.ts).getTime(),
+          floor: s.floor_score,
+          floorTeam: s.floor_team,
+          window: s.qtr_score || s.pbp_score || null,
+          windowTeam: s.qtr_team || s.pbp_team || null,
+          period: s.period,
+          clock: s.clock,
+          homePts: s.home_pts,
+          awayPts: s.away_pts,
+          source: 'server',
+        };
+      });
+      try{ localStorage.setItem('ncaamb:gap:'+gameId, JSON.stringify(cs.gapLog)); }catch(e){}
+    }
+
+    var latest = serverSnaps[serverSnaps.length - 1];
+    if(!cs.clientInd && !cs.sonnetIndicators && latest.floor_score != null){
+      cs._serverFloor = {
+        score: latest.floor_score,
+        controlTeam: latest.floor_team,
+        I1: {score: latest.i1}, I2: {score: latest.i2},
+        I3: {score: latest.i3}, I4: {score: latest.i4}, I5: {score: latest.i5},
+        source: 'server',
+      };
+    }
+
+    addLog(gameId, '📡 Server snapshots: '+serverSnaps.length+' entries hydrated'+(cs._serverFloor?' (floor: '+cs._serverFloor.controlTeam+' '+cs._serverFloor.score+')':''), true);
+
+  }catch(e){
+    console.warn('Server snapshot hydration failed:', e.message);
+  }
+}
+
 async function finalizeGameDB(game){
   if(!dbReady) return;
   var cs = cardState[game.id]; if(!cs) return;
@@ -1383,6 +1434,12 @@ function formatCalibrationForPrompt(){
 // REFRESH
 // ══════════════════════════════════════════════════════════════════════════════
 function refreshLiveCards(){
+  // Signal server that client is actively polling (fire-and-forget)
+  if(dbReady){
+    fetch(FN+'db-api?action=heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({league:'ncaamb',device:navigator.userAgent.includes('iPad')?'ipad':navigator.userAgent.includes('iPhone')?'iphone':'browser'})
+    }).catch(function(){});
+  }
   selIds.forEach(id=>{
     const g = games.find(x=>x.id===id);
     if(g && getState(g)==='LIVE') fetchSummary(g);
@@ -6653,6 +6710,8 @@ function mountCard(game){
   document.getElementById('grid').appendChild(div);
   renderCard(game);
   if(getState(game)==='LIVE'||getState(game)==='FINAL') fetchSummary(game);
+  // Hydrate from server snapshots (fills gap log when device was sleeping)
+  if(getState(game)==='LIVE') hydrateFromServerSnapshots(id);
   // Auto-enrich from BDL if not already done
   if(!cardState[id].enrichDone && !cardState[id].enriching) enrichFromBDL(id);
 }
