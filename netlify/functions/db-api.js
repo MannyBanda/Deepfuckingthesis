@@ -184,6 +184,15 @@ exports.handler = async (event) => {
       `;
       await sql`CREATE INDEX IF NOT EXISTS idx_odds_game ON odds_history(game_id)`;
 
+      // Poll heartbeat — client writes to signal it's active, server checks before polling
+      await sql`
+        CREATE TABLE IF NOT EXISTS poll_heartbeats (
+          league TEXT PRIMARY KEY,
+          last_poll TIMESTAMPTZ DEFAULT NOW(),
+          device TEXT
+        )
+      `;
+
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'Schema initialized' }) };
     }
 
@@ -216,6 +225,48 @@ exports.handler = async (event) => {
       `;
 
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // HEARTBEAT — client signals it's actively polling
+    // ═══════════════════════════════════════════════════════
+    if (action === 'heartbeat' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      const league = body.league || 'nba';
+      const device = body.device || 'unknown';
+
+      await sql`
+        INSERT INTO poll_heartbeats (league, last_poll, device)
+        VALUES (${league}, NOW(), ${device})
+        ON CONFLICT (league) DO UPDATE SET last_poll = NOW(), device = ${device}
+      `;
+
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
+    }
+
+    // HEARTBEAT_CHECK — server checks if client is active
+    if (action === 'heartbeat_check') {
+      const league = params.league || 'nba';
+      const staleMinutes = parseInt(params.stale_minutes) || 3;
+
+      const rows = await sql`
+        SELECT last_poll, device,
+          EXTRACT(EPOCH FROM (NOW() - last_poll)) / 60 AS age_minutes
+        FROM poll_heartbeats WHERE league = ${league}
+      `;
+
+      const hb = rows.length > 0 ? rows[0] : null;
+      const clientActive = hb && hb.age_minutes < staleMinutes;
+
+      return {
+        statusCode: 200, headers,
+        body: JSON.stringify({
+          clientActive,
+          lastPoll: hb?.last_poll || null,
+          ageMinutes: hb ? Math.round(hb.age_minutes * 10) / 10 : null,
+          device: hb?.device || null,
+        }),
+      };
     }
 
     // ═══════════════════════════════════════════════════════

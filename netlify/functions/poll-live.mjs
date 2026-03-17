@@ -510,9 +510,24 @@ export default async function(req) {
     }
 
     try {
-      // ── 1. Fetch today's schedule ──
+      // ── 0. Check client heartbeat — skip if client is actively polling ──
       const d = today();
       const pad = n => String(n).padStart(2, '0');
+      try {
+        const hbRows = await sql`
+          SELECT EXTRACT(EPOCH FROM (NOW() - last_poll)) / 60 AS age_minutes, device
+          FROM poll_heartbeats WHERE league = ${league}
+        `;
+        if (hbRows.length > 0 && hbRows[0].age_minutes < 3) {
+          log(`${league.toUpperCase()}: client active (${hbRows[0].device}, ${Math.round(hbRows[0].age_minutes * 10) / 10}m ago) — skipping`);
+          continue;
+        }
+      } catch (e) {
+        // Heartbeat table may not exist yet — proceed with polling
+        log(`Heartbeat check failed (${e.message}) — proceeding`);
+      }
+
+      // ── 1. Fetch today's schedule ──
       const schedule = await srFetch(league, `games/${d.year}/${pad(d.month)}/${pad(d.day)}/schedule.json`);
       const allGames = schedule.games || [];
 
