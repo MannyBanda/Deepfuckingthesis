@@ -600,12 +600,17 @@ async function hydrateFromServerSnapshots(gameId){
 
     // ── Hydrate sustainability from server snapshot ──
     if(!cs.clientSustainability && !cs.sustainabilityAudit){
-      // Prefer full sust_json (both teams, tier + composite) from server polling
+      // Prefer full sust_json (both teams, full audit with personnel/regression/shot type)
       var _sustJson = latest.sust_json;
       if(_sustJson){
         try{
           var parsed = typeof _sustJson === 'string' ? JSON.parse(_sustJson) : _sustJson;
           if(parsed && (parsed.home || parsed.away)){
+            // If it has personnelGrade, it's a full audit — set sustainabilityAudit for rich display
+            if(parsed.home?.personnelGrade || parsed.away?.personnelGrade){
+              cs.sustainabilityAudit = parsed;
+            }
+            // Always set clientSustainability (tier is enough for composition/synthesizer)
             cs.clientSustainability = parsed;
           }
         }catch(e){}
