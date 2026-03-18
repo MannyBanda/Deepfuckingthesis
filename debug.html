@@ -18,11 +18,17 @@ h2{font-size:13px;color:#a78bfa;margin:16px 0 8px;letter-spacing:.5px;border-bot
 button{background:#1e293b;color:#60a5fa;border:1px solid #334155;border-radius:6px;padding:8px 14px;font-size:12px;font-weight:600;cursor:pointer;margin:4px;letter-spacing:.5px;}
 button:active{background:#334155;}
 .btn-row{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0;}
+select{background:#1e293b;color:#e0e0e0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:12px;width:100%;margin:6px 0;}
 #log{background:#0f172a;border:1px solid #1e293b;border-radius:6px;padding:8px;font-family:monospace;font-size:10px;line-height:1.6;max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;}
 .log-ok{color:#00ff88;} .log-err{color:#ff5252;} .log-warn{color:#ffd166;} .log-info{color:#60a5fa;}
 .thesis-box{background:#0f172a;border:1px solid #1e293b;border-radius:4px;padding:6px;margin:4px 0;font-size:10px;max-height:120px;overflow-y:auto;white-space:pre-wrap;}
 .analysis-box{background:#0f172a;border-left:2px solid #a78bfa;padding:6px;margin:4px 0;font-size:10px;}
 .ts{font-size:9px;color:#64748b;}
+.tag{display:inline-block;font-size:9px;padding:1px 5px;border-radius:3px;font-weight:600;letter-spacing:.3px;}
+.tag-server{background:rgba(96,165,250,.15);color:#60a5fa;border:1px solid rgba(96,165,250,.3);}
+.tag-client{background:rgba(0,255,136,.1);color:#00ff88;border:1px solid rgba(0,255,136,.2);}
+.tag-final{background:rgba(167,139,250,.1);color:#a78bfa;border:1px solid rgba(167,139,250,.2);}
+.tag-live{background:rgba(0,255,136,.15);color:#00ff88;border:1px solid rgba(0,255,136,.3);}
 </style>
 </head>
 <body>
@@ -33,12 +39,29 @@ button:active{background:#334155;}
   <button onclick="checkDB()">📊 DB Stats</button>
   <button onclick="checkTheses()">📝 Theses</button>
   <button onclick="checkAnalyses()">🧠 Analyses</button>
-  <button onclick="checkSnapshots()">📸 Snapshots</button>
-  <button onclick="checkOdds()">💰 Odds</button>
+  <button onclick="checkPollState()">⏱ Poll State</button>
   <button onclick="checkClutch()">🏀 Clutch</button>
   <button onclick="testWrite()">✏️ Test Write</button>
   <button onclick="bulkSaveAnalyses()">📤 Bulk Save Analyses</button>
   <button onclick="clearLog()">🗑 Clear</button>
+</div>
+
+<!-- Game selector for snapshots/odds -->
+<div class="card" id="game-selector-card" style="display:none">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+    <span style="font-size:11px;color:#a78bfa;font-weight:600;letter-spacing:.5px">SELECT GAME</span>
+    <span id="game-count" style="font-size:10px;color:#64748b"></span>
+  </div>
+  <select id="game-select" onchange="onGameSelect()">
+    <option value="">— load games first —</option>
+  </select>
+  <div class="btn-row" style="margin-top:6px">
+    <button onclick="loadGames('nba')">🏀 NBA Games</button>
+    <button onclick="loadGames('ncaamb')">🎓 NCAAMB Games</button>
+    <button onclick="viewSnapshots()">📸 Snapshots</button>
+    <button onclick="viewOdds()">💰 Odds</button>
+    <button onclick="viewSustainability()">🧬 Sustainability</button>
+  </div>
 </div>
 
 <div id="stats" class="card" style="display:none"></div>
@@ -48,13 +71,16 @@ button:active{background:#334155;}
 <div id="log"></div>
 
 <script>
-const FN = '/.netlify/functions/';
-const logEl = document.getElementById('log');
-const statsEl = document.getElementById('stats');
-const contentEl = document.getElementById('content');
+var FN = '/.netlify/functions/';
+var logEl = document.getElementById('log');
+var statsEl = document.getElementById('stats');
+var contentEl = document.getElementById('content');
+var gameSelectEl = document.getElementById('game-select');
+var gameCountEl = document.getElementById('game-count');
+var allGames = []; // cached list from DB
 
 function log(msg, cls){
-  const line = document.createElement('div');
+  var line = document.createElement('div');
   line.className = cls || '';
   line.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
   logEl.appendChild(line);
@@ -64,7 +90,7 @@ function clearLog(){ logEl.innerHTML = ''; contentEl.innerHTML = ''; statsEl.sty
 
 async function fetchJSON(url){
   try{
-    const r = await fetch(url);
+    var r = await fetch(url);
     if(!r.ok) throw new Error('HTTP ' + r.status);
     return await r.json();
   }catch(e){
@@ -75,7 +101,7 @@ async function fetchJSON(url){
 
 async function postJSON(url, body){
   try{
-    const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    var r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
     if(!r.ok) throw new Error('HTTP ' + r.status);
     return await r.json();
   }catch(e){
@@ -84,11 +110,208 @@ async function postJSON(url, body){
   }
 }
 
+// ── Load Games into selector ──
+async function loadGames(league){
+  log('Loading ' + league.toUpperCase() + ' games from DB...', 'log-info');
+  document.getElementById('game-selector-card').style.display = 'block';
+
+  // Fetch all games for this league from the games table
+  var data = await fetchJSON(FN + 'db-api?action=get_games&league=' + league);
+  if(!data || !data.games){
+    log('No games found for ' + league, 'log-warn');
+    return;
+  }
+
+  allGames = data.games;
+  // Sort: most recent first
+  allGames.sort(function(a, b){ return (b.date || '').localeCompare(a.date || ''); });
+
+  gameSelectEl.innerHTML = '<option value="">— select a game —</option>';
+  allGames.forEach(function(g){
+    var opt = document.createElement('option');
+    opt.value = g.id;
+    var status = g.winner ? 'FINAL' : '';
+    var label = (g.date || '?') + ' · ' + (g.matchup || g.away_alias + '@' + g.home_alias || g.id.substring(0,12));
+    if(g.home_pts && g.away_pts) label += ' · ' + g.away_pts + '-' + g.home_pts;
+    if(status) label += ' · ' + status;
+    opt.textContent = label;
+    gameSelectEl.appendChild(opt);
+  });
+  gameCountEl.textContent = allGames.length + ' games';
+  log('Loaded ' + allGames.length + ' ' + league.toUpperCase() + ' games', 'log-ok');
+}
+
+function onGameSelect(){
+  var gid = gameSelectEl.value;
+  if(!gid) return;
+  log('Selected game: ' + gid.substring(0,12) + '...', 'log-info');
+}
+
+function getSelectedGame(){
+  var gid = gameSelectEl.value;
+  if(!gid){ log('No game selected — pick one from the dropdown', 'log-warn'); return null; }
+  return gid;
+}
+
+// ── Snapshots for selected game ──
+async function viewSnapshots(){
+  var gid = getSelectedGame();
+  if(!gid) return;
+
+  log('Fetching snapshots for ' + gid.substring(0,8) + '...', 'log-info');
+  var data = await fetchJSON(FN + 'db-api?action=history&game_id=' + encodeURIComponent(gid));
+  var snaps = data?.snapshots || [];
+  log('Found ' + snaps.length + ' snapshots', snaps.length > 0 ? 'log-ok' : 'log-warn');
+
+  // Find game info
+  var game = allGames.find(function(g){ return g.id === gid; });
+  var title = game ? (game.matchup || game.id.substring(0,12)) : gid.substring(0,12);
+
+  var html = '<h2>📸 SNAPSHOTS — ' + escH(title) + ' (' + snaps.length + ')</h2>';
+  if(snaps.length === 0){
+    html += '<div class="card" style="color:#94a3b8;font-size:11px">No snapshots for this game. Server polling may not have been active.</div>';
+  }
+
+  // Summary stats
+  var serverCount = snaps.filter(function(s){ return s.source === 'server'; }).length;
+  var clientCount = snaps.length - serverCount;
+  if(snaps.length > 0){
+    html += '<div class="card" style="font-size:11px">';
+    html += '<div class="row"><span class="label">Total</span><span class="val">' + snaps.length + '</span></div>';
+    html += '<div class="row"><span class="label">Server</span><span class="val blue">' + serverCount + '</span></div>';
+    html += '<div class="row"><span class="label">Client</span><span class="val green">' + clientCount + '</span></div>';
+    var first = snaps[0], last = snaps[snaps.length-1];
+    html += '<div class="row"><span class="label">First</span><span class="val">' + new Date(first.ts).toLocaleString() + '</span></div>';
+    html += '<div class="row"><span class="label">Last</span><span class="val">' + new Date(last.ts).toLocaleString() + '</span></div>';
+    html += '</div>';
+  }
+
+  // Show last 20
+  var recent = snaps.slice(-20);
+  recent.forEach(function(s){
+    var ts = s.ts ? new Date(s.ts).toLocaleTimeString() : '?';
+    var srcTag = s.source === 'server' ? '<span class="tag tag-server">SERVER</span>' : '<span class="tag tag-client">CLIENT</span>';
+    html += '<div class="card" style="padding:6px">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;margin-bottom:3px"><span class="ts">Q' + (s.period||'?') + ' ' + (s.clock||'') + ' — ' + ts + '</span>' + srcTag + '<span style="font-weight:600">' + (s.away_pts||0) + '-' + (s.home_pts||0) + '</span></div>';
+    html += '<div style="font-size:10px;display:flex;gap:8px;flex-wrap:wrap">';
+    if(s.floor_score != null) html += '<span>Floor: <b style="color:#00ff88">' + (s.floor_team||'?') + ' ' + s.floor_score.toFixed(2) + '</b></span>';
+    if(s.pbp_score != null) html += '<span>PBP: <b style="color:#60a5fa">' + (s.pbp_team||'?') + ' ' + s.pbp_score.toFixed(2) + '</b></span>';
+    if(s.qtr_score != null) html += '<span>QTR: ' + (s.qtr_team||'?') + ' ' + s.qtr_score.toFixed(2) + '</span>';
+    if(s.espn_wp_home != null) html += '<span>ESPN: ' + s.espn_wp_home + '%/' + (s.espn_wp_away||'?') + '%</span>';
+    if(s.spread != null) html += '<span>Sprd: ' + s.spread + '</span>';
+    if(s.gap != null) html += '<span>Gap: ' + (s.gap>=0?'+':'') + s.gap.toFixed(2) + '</span>';
+    if(s.deficit) html += '<span>Def: ' + s.deficit + '</span>';
+    if(s.lead_sust) html += '<span>Sust: <b style="color:#ffd166">' + s.lead_sust + '</b></span>';
+    if(s.lead_class) html += '<span>Class: ' + s.lead_class + '</span>';
+    html += '</div>';
+    // I1-I5
+    if(s.i1 != null) html += '<div style="font-size:9px;color:#64748b;margin-top:2px">I1:' + s.i1 + ' I2:' + s.i2 + ' I3:' + s.i3 + ' I4:' + s.i4 + ' I5:' + s.i5 + '</div>';
+    html += '</div>';
+  });
+  if(snaps.length > 20) html += '<div style="font-size:10px;color:#64748b;text-align:center;padding:4px">Showing last 20 of ' + snaps.length + '</div>';
+  contentEl.innerHTML = html;
+}
+
+// ── Odds for selected game ──
+async function viewOdds(){
+  var gid = getSelectedGame();
+  if(!gid) return;
+
+  log('Fetching odds for ' + gid.substring(0,8) + '...', 'log-info');
+  var data = await fetchJSON(FN + 'db-api?action=get_odds&game_id=' + encodeURIComponent(gid));
+  var odds = data?.odds || [];
+  log('Found ' + odds.length + ' odds entries', odds.length > 0 ? 'log-ok' : 'log-warn');
+
+  var game = allGames.find(function(g){ return g.id === gid; });
+  var title = game ? (game.matchup || gid.substring(0,12)) : gid.substring(0,12);
+
+  var html = '<h2>💰 ODDS HISTORY — ' + escH(title) + ' (' + odds.length + ')</h2>';
+  if(odds.length === 0){
+    html += '<div class="card" style="color:#94a3b8;font-size:11px">No odds history for this game.</div>';
+  } else {
+    html += '<div class="card">';
+    odds.forEach(function(o){
+      var ts = o.ts ? new Date(o.ts).toLocaleTimeString() : '?';
+      var srcTag = o.source === 'server' ? ' <span class="tag tag-server">SVR</span>' : '';
+      html += '<div class="row"><span class="label">' + ts + srcTag + '</span><span class="val">Sprd:' + (o.home_spread||'?') + ' ML:' + (o.home_ml||'?') + '/' + (o.away_ml||'?') + ' O/U:' + (o.total||'?') + '</span></div>';
+    });
+    html += '</div>';
+  }
+  contentEl.innerHTML = html;
+}
+
+// ── Sustainability from latest snapshot ──
+async function viewSustainability(){
+  var gid = getSelectedGame();
+  if(!gid) return;
+
+  log('Fetching sustainability for ' + gid.substring(0,8) + '...', 'log-info');
+  var data = await fetchJSON(FN + 'db-api?action=get_latest_snapshots&game_ids=' + encodeURIComponent(gid));
+  var snaps = data?.snapshots || {};
+  var snap = snaps[gid];
+
+  var game = allGames.find(function(g){ return g.id === gid; });
+  var title = game ? (game.matchup || gid.substring(0,12)) : gid.substring(0,12);
+
+  var html = '<h2>🧬 SUSTAINABILITY — ' + escH(title) + '</h2>';
+  if(!snap){
+    html += '<div class="card" style="color:#94a3b8;font-size:11px">No snapshot data for this game.</div>';
+    contentEl.innerHTML = html;
+    return;
+  }
+
+  // Basic snapshot info
+  html += '<div class="card" style="font-size:11px">';
+  html += '<div class="row"><span class="label">Score</span><span class="val">' + (snap.away_pts||0) + '-' + (snap.home_pts||0) + ' Q' + (snap.period||'?') + '</span></div>';
+  html += '<div class="row"><span class="label">Floor</span><span class="val green">' + (snap.floor_team||'?') + ' ' + (snap.floor_score ? snap.floor_score.toFixed(2) : '?') + '</span></div>';
+  html += '<div class="row"><span class="label">Lead Sust</span><span class="val yellow">' + (snap.lead_sust||'—') + '</span></div>';
+  html += '<div class="row"><span class="label">Lead Class</span><span class="val">' + (snap.lead_class||'—') + '</span></div>';
+  html += '<div class="row"><span class="label">Source</span><span class="val">' + (snap.source||'?') + '</span></div>';
+  html += '</div>';
+
+  // Full sust_json if available
+  if(snap.sust_json){
+    var sust = typeof snap.sust_json === 'string' ? JSON.parse(snap.sust_json) : snap.sust_json;
+    ['home','away'].forEach(function(side){
+      var t = sust[side];
+      if(!t) return;
+      var tierColor = (t.tier||'').includes('LOCKED') ? '#00ff88' : (t.tier||'').includes('DURABLE') ? '#66bb6a' : (t.tier||'').includes('MIXED') ? '#ffd166' : (t.tier||'').includes('FRAGILE') ? '#ff9800' : (t.tier||'').includes('UNSUST') ? '#ff5252' : '#94a3b8';
+      html += '<div class="card">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:12px;font-weight:700;color:#e0e0e0">' + escH(t.teamAlias || side.toUpperCase()) + '</span><span style="font-size:12px;font-weight:700;color:' + tierColor + '">' + escH(t.tier||'?') + '</span></div>';
+      html += '<div class="row"><span class="label">Live 3PT</span><span class="val">' + (t.live3PM||0) + '/' + (t.live3PA||0) + ' (' + (t.live3Pct||'?') + '%)</span></div>';
+      html += '<div class="row"><span class="label">Season Prior</span><span class="val">' + (t.seasonPrior||'?') + '%' + (t.gotSeasonData ? '' : ' [fallback]') + '</span></div>';
+      html += '<div class="row"><span class="label">Deviation</span><span class="val">' + (t.deviation||'?') + '%</span></div>';
+      html += '<div class="row"><span class="label">Personnel</span><span class="val">' + escH(t.personnelGrade||'?') + '</span></div>';
+      html += '<div class="row"><span class="label">Elite/Non %</span><span class="val">' + (t.elitePct||0) + '% / ' + (t.nonPct||0) + '%</span></div>';
+      html += '<div class="row"><span class="label">Regression</span><span class="val">' + escH(t.regressionGrade||'?') + ' (' + (t.regressionProb||'?') + '%)</span></div>';
+      html += '<div class="row"><span class="label">Posterior</span><span class="val">' + (t.posteriorMean||'?') + '% (pull: ' + (t.regressionPull||'?') + '%)</span></div>';
+      html += '<div class="row"><span class="label">Shot Type</span><span class="val">' + escH(t.shotTypeGrade||'?') + '</span></div>';
+      html += '<div class="row"><span class="label">Shot Note</span><span class="val" style="font-size:10px">' + escH(t.shotTypeNote||'—') + '</span></div>';
+      html += '<div class="row"><span class="label">Assist Ratio</span><span class="val">' + (t.assistRatio||'?') + '%</span></div>';
+      html += '<div class="row"><span class="label">Composite</span><span class="val">' + (t.composite||'?') + '</span></div>';
+      // Personnel details
+      if(t.personnelDetails && t.personnelDetails.length > 0){
+        html += '<div style="margin-top:6px;font-size:10px;color:#a78bfa;font-weight:600">SHOOTERS</div>';
+        t.personnelDetails.forEach(function(p){
+          var hotTag = p.hot ? ' <span style="color:#ff5252;font-weight:700">HOT</span>' : '';
+          html += '<div class="row"><span class="label">' + escH(p.name) + ' [' + escH(p.tierLabel) + ']</span><span class="val">' + p.live3m + '/' + p.live3a + ' (' + p.livePct + '%) vs ' + escH(p.sznStr) + hotTag + '</span></div>';
+        });
+      }
+      html += '</div>';
+    });
+  } else {
+    html += '<div class="card" style="color:#94a3b8;font-size:11px">No sust_json in snapshot — server may not have had BDL season data for this game.</div>';
+  }
+
+  contentEl.innerHTML = html;
+  log('Sustainability loaded', 'log-ok');
+}
+
 // ── DB Stats ──
 async function checkDB(){
   log('Checking DB stats...', 'log-info');
-  const nba = await fetchJSON(FN + 'db-api?action=stats&league=nba');
-  const ncaa = await fetchJSON(FN + 'db-api?action=stats&league=ncaamb');
+  var nba = await fetchJSON(FN + 'db-api?action=stats&league=nba');
+  var ncaa = await fetchJSON(FN + 'db-api?action=stats&league=ncaamb');
 
   if(!nba && !ncaa){ log('DB unreachable', 'log-err'); return; }
 
@@ -106,11 +329,47 @@ async function checkDB(){
   log('DB stats loaded — NBA: ' + (nba?.games?.total||0) + ' games, ' + (nba?.snapshots?.total||0) + ' snapshots', 'log-ok');
 }
 
+// ── Poll State ──
+async function checkPollState(){
+  log('Checking poll state...', 'log-info');
+  var html = '<h2>⏱ POLL STATE</h2>';
+  var found = false;
+  for(var lg of ['nba','ncaamb']){
+    var data = await fetchJSON(FN + 'db-api?action=get_poll_state&league=' + lg);
+    if(!data || !data.state) continue;
+    found = true;
+    var s = data.state;
+    html += '<div class="card">';
+    html += '<div style="font-size:12px;font-weight:700;color:#60a5fa;margin-bottom:6px">' + lg.toUpperCase() + ' — ' + (s.date||'?') + '</div>';
+    html += '<div class="row"><span class="label">Games</span><span class="val">' + (s.game_count||0) + '</span></div>';
+    html += '<div class="row"><span class="label">All Final</span><span class="val ' + (s.all_final ? 'green' : 'yellow') + '">' + (s.all_final ? 'YES' : 'NO') + '</span></div>';
+    if(s.first_tip) html += '<div class="row"><span class="label">First Tip</span><span class="val">' + new Date(s.first_tip).toLocaleString() + '</span></div>';
+    if(s.last_tip) html += '<div class="row"><span class="label">Last Tip</span><span class="val">' + new Date(s.last_tip).toLocaleString() + '</span></div>';
+    if(s.fetched_at) html += '<div class="row"><span class="label">Fetched</span><span class="val">' + new Date(s.fetched_at).toLocaleString() + '</span></div>';
+    if(s.schedule_json){
+      var sched = typeof s.schedule_json === 'string' ? JSON.parse(s.schedule_json) : s.schedule_json;
+      var live = sched.filter(function(g){ return g.status === 'inprogress' || g.status === 'halftime'; }).length;
+      var final = sched.filter(function(g){ return g.status === 'closed' || g.status === 'complete'; }).length;
+      var pre = sched.length - live - final;
+      html += '<div class="row"><span class="label">Schedule</span><span class="val">' + pre + ' pre / ' + live + ' live / ' + final + ' final</span></div>';
+      sched.forEach(function(g){
+        var stColor = g.status === 'inprogress' ? '#00ff88' : g.status === 'closed' || g.status === 'complete' ? '#a78bfa' : '#94a3b8';
+        var tip = g.scheduled ? new Date(g.scheduled).toLocaleTimeString() : '?';
+        html += '<div class="row"><span class="label" style="font-size:10px">' + (g.away_alias||'?') + '@' + (g.home_alias||'?') + ' · ' + tip + '</span><span class="val" style="color:' + stColor + ';font-size:10px">' + (g.status||'?') + '</span></div>';
+      });
+    }
+    html += '</div>';
+  }
+  if(!found) html += '<div class="card" style="color:#94a3b8;font-size:11px">No poll state found. Server polling may not have run yet — check Netlify function logs.</div>';
+  contentEl.innerHTML = html;
+  log('Poll state check complete', found ? 'log-ok' : 'log-warn');
+}
+
 // ── Theses ──
 async function checkTheses(){
   log('Fetching theses...', 'log-info');
-  const nba = await fetchJSON(FN + 'db-api?action=get_theses&league=nba');
-  const ncaa = await fetchJSON(FN + 'db-api?action=get_theses&league=ncaamb');
+  var nba = await fetchJSON(FN + 'db-api?action=get_theses&league=nba');
+  var ncaa = await fetchJSON(FN + 'db-api?action=get_theses&league=ncaamb');
 
   var theses = Object.assign({}, nba?.theses||{}, ncaa?.theses||{});
   var keys = Object.keys(theses);
@@ -123,7 +382,6 @@ async function checkTheses(){
   keys.forEach(function(gid){
     var text = theses[gid] || '';
     var preview = text.substring(0, 200) + (text.length > 200 ? '...' : '');
-    // Extract matchup from thesis text
     var matchup = '';
     var m = text.match(/COMPACT THESIS\s*[—–-]\s*(.+?)[\|\n]/);
     if(m) matchup = m[1].trim();
@@ -138,9 +396,8 @@ async function checkTheses(){
 // ── Analyses ──
 async function checkAnalyses(){
   log('Fetching analyses...', 'log-info');
-
-  const nba = await fetchJSON(FN + 'db-api?action=get_analyses&league=nba');
-  const ncaa = await fetchJSON(FN + 'db-api?action=get_analyses&league=ncaamb');
+  var nba = await fetchJSON(FN + 'db-api?action=get_analyses&league=nba');
+  var ncaa = await fetchJSON(FN + 'db-api?action=get_analyses&league=ncaamb');
 
   var analyses = [].concat(nba?.analyses||[], ncaa?.analyses||[]);
   log('Found ' + analyses.length + ' analyses in DB', analyses.length > 0 ? 'log-ok' : 'log-warn');
@@ -176,68 +433,10 @@ async function checkAnalyses(){
   contentEl.innerHTML = html;
 }
 
-// ── Snapshots ──
-async function checkSnapshots(){
-  log('Fetching recent snapshots...', 'log-info');
-  // Get theses to find game IDs
-  const theses = await fetchJSON(FN + 'db-api?action=get_theses&league=nba');
-  var gameIds = Object.keys(theses?.theses || {});
-  if(gameIds.length === 0){
-    log('No game IDs for snapshot lookup', 'log-warn');
-    contentEl.innerHTML = '<h2>SNAPSHOTS</h2><div class="card" style="color:#94a3b8;font-size:11px">No game IDs found.</div>';
-    return;
-  }
-
-  // Get history for the first game
-  var gid = gameIds[0];
-  const data = await fetchJSON(FN + 'db-api?action=history&game_id=' + encodeURIComponent(gid));
-  var snaps = data?.snapshots || [];
-  log('Found ' + snaps.length + ' snapshots for game ' + gid.substring(0,8), snaps.length > 0 ? 'log-ok' : 'log-warn');
-
-  var html = '<h2>SNAPSHOTS — ' + gid.substring(0,12) + '... (' + snaps.length + ')</h2>';
-  // Show last 15
-  var recent = snaps.slice(-15);
-  recent.forEach(function(s){
-    var ts = s.ts ? new Date(s.ts).toLocaleTimeString() : '?';
-    html += '<div class="card" style="padding:6px">';
-    html += '<div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:3px"><span class="ts">Q' + (s.period||'?') + ' ' + (s.clock||'') + ' — ' + ts + '</span><span>' + (s.home_pts||0) + '-' + (s.away_pts||0) + '</span></div>';
-    html += '<div style="font-size:10px;display:flex;gap:8px;flex-wrap:wrap">';
-    if(s.floor_score) html += '<span>Floor: <b style="color:#00ff88">' + s.floor_team + ' ' + s.floor_score.toFixed(2) + '</b></span>';
-    if(s.pbp_score) html += '<span>PBP: <b style="color:#60a5fa">' + s.pbp_team + ' ' + s.pbp_score.toFixed(2) + '</b></span>';
-    if(s.qtr_score) html += '<span>QTR: ' + s.qtr_team + ' ' + s.qtr_score.toFixed(2) + '</span>';
-    if(s.espn_wp_home) html += '<span>ESPN: ' + s.espn_wp_home + '%/' + s.espn_wp_away + '%</span>';
-    if(s.gap != null) html += '<span>Gap: ' + (s.gap>=0?'+':'') + s.gap.toFixed(2) + '</span>';
-    if(s.deficit) html += '<span>Def: ' + s.deficit + '</span>';
-    if(s.lead_sust) html += '<span>Sust: ' + s.lead_sust + '</span>';
-    html += '</div></div>';
-  });
-  contentEl.innerHTML = html;
-}
-
-// ── Odds ──
-async function checkOdds(){
-  log('Fetching odds...', 'log-info');
-  const theses = await fetchJSON(FN + 'db-api?action=get_theses&league=nba');
-  var gameIds = Object.keys(theses?.theses || {});
-  if(gameIds.length === 0){ log('No game IDs', 'log-warn'); return; }
-
-  var gid = gameIds[0];
-  const data = await fetchJSON(FN + 'db-api?action=get_odds&game_id=' + encodeURIComponent(gid));
-  var odds = data?.odds || [];
-  log('Found ' + odds.length + ' odds snapshots for ' + gid.substring(0,8), odds.length > 0 ? 'log-ok' : 'log-warn');
-
-  var html = '<h2>ODDS HISTORY — ' + gid.substring(0,12) + '... (' + odds.length + ')</h2>';
-  odds.forEach(function(o){
-    var ts = o.ts ? new Date(o.ts).toLocaleTimeString() : '?';
-    html += '<div class="row"><span class="label">' + ts + '</span><span class="val">Sprd:' + (o.home_spread||'?') + ' ML:' + (o.home_ml||'?') + '/' + (o.away_ml||'?') + ' O/U:' + (o.total||'?') + '</span></div>';
-  });
-  contentEl.innerHTML = '<div class="card">' + html + '</div>';
-}
-
 // ── Clutch ──
 async function checkClutch(){
   log('Fetching clutch data...', 'log-info');
-  const data = await fetchJSON(FN + 'db-api?action=get_clutch&league=nba');
+  var data = await fetchJSON(FN + 'db-api?action=get_clutch&league=nba');
   var clutch = data?.clutch || {};
   var teams = Object.keys(clutch);
   log('Found clutch for ' + teams.length + ' teams', teams.length > 0 ? 'log-ok' : 'log-warn');
@@ -266,6 +465,7 @@ async function runAll(){
   clearLog();
   log('Running full diagnostics...', 'log-info');
   await checkDB();
+  await checkPollState();
   await checkTheses();
   log('Done!', 'log-ok');
 }
@@ -326,7 +526,8 @@ async function bulkSaveAnalyses(){
 
 function escH(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
-// Auto-run on load
+// Show game selector on load
+document.getElementById('game-selector-card').style.display = 'block';
 checkDB();
 </script>
 </body>
