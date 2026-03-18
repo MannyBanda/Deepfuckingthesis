@@ -620,6 +620,44 @@ exports.handler = async (event) => {
     }
 
     // ═══════════════════════════════════════════════════════
+    // GET_LATEST_SNAPSHOTS — latest snapshot per game (batch)
+    // Used by confidence table to show floor/window/gap for unmounted games
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_latest_snapshots') {
+      const gameIds = (params.game_ids || '').split(',').filter(Boolean);
+      if (gameIds.length === 0) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_ids required' }) };
+
+      // Get latest snapshot per game using DISTINCT ON
+      const rows = await sql`
+        SELECT DISTINCT ON (game_id) game_id, ts, period, clock, home_pts, away_pts,
+          floor_score, floor_team, espn_wp_home, espn_wp_away,
+          spread, deficit, trailing_team, lead_sust, lead_class,
+          i1, i2, i3, i4, i5, source
+        FROM snapshots
+        WHERE game_id = ANY(${gameIds})
+        ORDER BY game_id, ts DESC
+      `;
+      // Also fetch latest odds per game
+      const oddsRows = await sql`
+        SELECT DISTINCT ON (game_id) game_id, home_spread, home_ml, away_ml, total
+        FROM odds_history
+        WHERE game_id = ANY(${gameIds})
+        ORDER BY game_id, ts DESC
+      `;
+      const oddsMap = {};
+      for (const o of oddsRows) { oddsMap[o.game_id] = o; }
+
+      const result = {};
+      for (const r of rows) {
+        result[r.game_id] = {
+          ...r,
+          odds: oddsMap[r.game_id] || null,
+        };
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ snapshots: result }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
     // SAVE_WP_PROFILE — persist team WP curve profile
     // ═══════════════════════════════════════════════════════
     if (action === 'save_wp_profile' && event.httpMethod === 'POST') {

@@ -135,23 +135,23 @@ async function bdlFetch(path) {
   }
 }
 
-// Fetch today's BDL games → build abbreviation → BDL team_id map
-async function bdlTeamIdMap(league, dateStr) {
+// Fetch today's BDL games → build team ID map + game ID map (for odds)
+async function bdlGameData(league, dateStr) {
   const cfg = LEAGUES[league];
-  if (!cfg.bdlHasSeasonStats) return {};
+  if (!cfg.bdlHasSeasonStats) return { teamIds: {}, gameIds: {} };
   // dateStr format: YYYY-MM-DD
   const data = await bdlFetch(`${cfg.bdlPrefix}/v1/games?dates[]=${dateStr}&per_page=25`);
-  if (!data || !data.data) return {};
-  const map = {}; // { 'LAL': 14, 'HOU': 11, ... }
+  if (!data || !data.data) return { teamIds: {}, gameIds: {} };
+  const teamIds = {}; // { 'LAL': 14, 'HOU': 11, ... }
+  const gameIds = {}; // { 'HOU@LAL': 54321, ... } — keyed by matchup for SR→BDL mapping
   for (const g of data.data) {
-    if (g.home_team?.abbreviation && g.home_team?.id) {
-      map[g.home_team.abbreviation] = g.home_team.id;
-    }
-    if (g.visitor_team?.abbreviation && g.visitor_team?.id) {
-      map[g.visitor_team.abbreviation] = g.visitor_team.id;
-    }
+    const hAbbr = g.home_team?.abbreviation;
+    const aAbbr = g.visitor_team?.abbreviation;
+    if (hAbbr && g.home_team?.id) teamIds[hAbbr] = g.home_team.id;
+    if (aAbbr && g.visitor_team?.id) teamIds[aAbbr] = g.visitor_team.id;
+    if (hAbbr && aAbbr && g.id) gameIds[`${aAbbr}@${hAbbr}`] = g.id;
   }
-  return map;
+  return { teamIds, gameIds };
 }
 
 // Fetch player season stats for a team (returns array of player stat objects)
@@ -160,6 +160,38 @@ async function bdlSeasonStats(league, bdlTeamId, season) {
   const data = await bdlFetch(`${cfg.bdlPrefix}/v1/player_season_stats?season=${season}&team_id=${bdlTeamId}&per_page=100`);
   if (!data || !data.data) return [];
   return data.data;
+}
+
+// Fetch odds for a game → returns { homeSpread, homeML, awayML, total } or null
+async function bdlOdds(league, bdlGameId) {
+  const cfg = LEAGUES[league];
+  // NBA uses /v2/odds, NCAAMB uses /v1/odds with array param
+  let path;
+  if (league === 'nba') {
+    path = `/v2/odds?game_id=${bdlGameId}`;
+  } else {
+    path = `${cfg.bdlPrefix}/v1/odds?game_ids[]=${bdlGameId}`;
+  }
+  const data = await bdlFetch(path);
+  if (!data || !data.data || data.data.length === 0) return null;
+
+  // BDL NBA v2 odds are flat per-vendor objects:
+  //   { vendor, spread_home_value, spread_away_value, moneyline_home_odds, moneyline_away_odds, total_value, ... }
+  // Prefer FanDuel or DraftKings
+  const odds = data.data;
+  const preferred = odds.find(o =>
+    o.vendor?.toLowerCase().includes('fanduel') || o.vendor?.toLowerCase().includes('draftkings')
+  ) || odds[0];
+
+  if (!preferred) return null;
+
+  const homeSpread = preferred.spread_home_value != null ? parseFloat(preferred.spread_home_value) : null;
+  const homeML = preferred.moneyline_home_odds != null ? parseInt(preferred.moneyline_home_odds) : null;
+  const awayML = preferred.moneyline_away_odds != null ? parseInt(preferred.moneyline_away_odds) : null;
+  const total = preferred.total_value != null ? parseFloat(preferred.total_value) : null;
+
+  if (homeSpread == null && homeML == null) return null;
+  return { homeSpread, homeML, awayML, total };
 }
 
 // Normalize player name for fuzzy matching (lowercase, strip Jr./Sr./III/II/IV, trim)
@@ -499,7 +531,7 @@ export default async function(req) {
   }
   const sql = neon(dbUrl);
 
-  const results = { games: 0, snapshots: 0, espn: 0, errors: [] };
+  const results = { games: 0, snapshots: 0, espn: 0, odds: 0, errors: [] };
 
   for (const league of Object.keys(LEAGUES)) {
     const cfg = LEAGUES[league];
@@ -564,8 +596,10 @@ export default async function(req) {
 
       // ── 2b. Fetch BDL team IDs + season stats (parallel) ──
       const bdlDateStr = `${d.year}-${pad(d.month)}-${pad(d.day)}`;
-      const bdlTeamIds = await bdlTeamIdMap(league, bdlDateStr);
-      log(`BDL team IDs: ${Object.keys(bdlTeamIds).length} teams`);
+      const bdlData = await bdlGameData(league, bdlDateStr);
+      const bdlTeamIds = bdlData.teamIds;
+      const bdlGameIds = bdlData.gameIds; // { 'HOU@LAL': 54321, ... }
+      log(`BDL: ${Object.keys(bdlTeamIds).length} teams, ${Object.keys(bdlGameIds).length} games mapped`);
 
       // Collect unique team abbreviations from live games
       const teamAbbrs = new Set();
@@ -647,6 +681,14 @@ export default async function(req) {
           const leadSust = sust?.[leadSide]?.tier || null;
           const leadClass = leadComp?.classification || null;
 
+          // Fetch BDL odds (no rate limit, fast)
+          let odds = null;
+          const bdlGid = bdlGameIds[matchup];
+          if (bdlGid) {
+            odds = await bdlOdds(league, bdlGid);
+          }
+          const spreadVal = odds?.homeSpread != null ? parseFloat(odds.homeSpread) : null;
+
           // ── 4. Save to DB ──
           // Ensure game row exists
           await sql`
@@ -665,16 +707,27 @@ export default async function(req) {
             VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
               ${ind.score}, ${ind.controlTeam}, ${null}, ${null}, ${null},
               ${null}, ${null}, ${espnWP?.home || null}, ${espnWP?.away || null},
-              ${null}, ${deficit}, ${trailingTeam}, ${leadSust}, ${null}, ${null},
+              ${spreadVal}, ${deficit}, ${trailingTeam}, ${leadSust}, ${null}, ${null},
               ${ind.I1.score}, ${ind.I2.score}, ${ind.I3.score}, ${ind.I4.score}, ${ind.I5.score},
               ${'server'}, ${leadClass})
           `;
 
+          // Save odds to odds_history table if we got data
+          if (odds) {
+            try {
+              await sql`
+                INSERT INTO odds_history (game_id, home_spread, home_ml, away_ml, total, source)
+                VALUES (${game.id}, ${odds.homeSpread != null ? parseFloat(odds.homeSpread) : null}, ${odds.homeML != null ? parseInt(odds.homeML) : null}, ${odds.awayML != null ? parseInt(odds.awayML) : null}, ${odds.total != null ? parseFloat(odds.total) : null}, ${'server'})
+              `;
+            } catch (e) { /* odds_history table may not exist — non-fatal */ }
+          }
+
           results.snapshots++;
           if (espnWP) results.espn++;
+          if (odds) results.odds++;
 
           const bdlEnriched = (homeBdl.length > 0 || awayBdl.length > 0);
-          log(`${matchup} Q${currentPeriod} ${clock} | ${ind.homePts}-${ind.awayPts} | ${ind.controlTeam} ${ind.score} | I:${ind.I1.score}/${ind.I2.score}/${ind.I3.score}/${ind.I4.score}/${ind.I5.score} | sust:${leadSust || '?'} class:${leadClass || '?'}${bdlEnriched ? ' BDL✓' : ''}${espnWP ? ` | WP:${espnWP.home}%` : ''}`);
+          log(`${matchup} Q${currentPeriod} ${clock} | ${ind.homePts}-${ind.awayPts} | ${ind.controlTeam} ${ind.score} | I:${ind.I1.score}/${ind.I2.score}/${ind.I3.score}/${ind.I4.score}/${ind.I5.score} | sust:${leadSust || '?'} class:${leadClass || '?'}${bdlEnriched ? ' BDL✓' : ''}${spreadVal != null ? ` spd:${spreadVal}` : ''}${espnWP ? ` | WP:${espnWP.home}%` : ''}`);
 
         } catch (e) {
           results.errors.push(`${matchup}: ${e.message}`);
@@ -689,7 +742,7 @@ export default async function(req) {
   }
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-  log(`=== Done in ${elapsed}s | ${results.snapshots} snapshots, ${results.espn} ESPN WP, ${results.errors.length} errors ===`);
+  log(`=== Done in ${elapsed}s | ${results.snapshots} snapshots, ${results.espn} ESPN WP, ${results.odds} odds, ${results.errors.length} errors ===`);
 
   return new Response(JSON.stringify(results), {
     headers: { 'Content-Type': 'application/json' },
