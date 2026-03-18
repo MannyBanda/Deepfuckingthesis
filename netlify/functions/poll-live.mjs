@@ -698,18 +698,19 @@ export default async function(req) {
           `;
 
           // Insert snapshot (source = 'server' to distinguish from client)
+          const sustJson = sust ? JSON.stringify(sust) : null;
           await sql`
             INSERT INTO snapshots (game_id, period, clock, home_pts, away_pts,
               floor_score, floor_team, pbp_score, pbp_team, pbp_window_size,
               qtr_score, qtr_team, espn_wp_home, espn_wp_away,
               spread, deficit, trailing_team, lead_sust, gap, accel,
-              i1, i2, i3, i4, i5, source, lead_class)
+              i1, i2, i3, i4, i5, source, lead_class, sust_json)
             VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
               ${ind.score}, ${ind.controlTeam}, ${null}, ${null}, ${null},
               ${null}, ${null}, ${espnWP?.home || null}, ${espnWP?.away || null},
               ${spreadVal}, ${deficit}, ${trailingTeam}, ${leadSust}, ${null}, ${null},
               ${ind.I1.score}, ${ind.I2.score}, ${ind.I3.score}, ${ind.I4.score}, ${ind.I5.score},
-              ${'server'}, ${leadClass})
+              ${'server'}, ${leadClass}, ${sustJson})
           `;
 
           // Save odds to odds_history table if we got data

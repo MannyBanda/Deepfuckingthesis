@@ -134,6 +134,7 @@ exports.handler = async (event) => {
       // Snapshot enrichment columns (server-side polling)
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'client'`; } catch(e) {}
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS lead_class TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS sust_json JSONB`; } catch(e) {}
 
       // WP profile table — team-level win probability curve analysis
       await sql`
@@ -632,7 +633,7 @@ exports.handler = async (event) => {
         SELECT DISTINCT ON (game_id) game_id, ts, period, clock, home_pts, away_pts,
           floor_score, floor_team, espn_wp_home, espn_wp_away,
           spread, deficit, trailing_team, lead_sust, lead_class,
-          i1, i2, i3, i4, i5, source
+          i1, i2, i3, i4, i5, source, sust_json
         FROM snapshots
         WHERE game_id = ANY(${gameIds})
         ORDER BY game_id, ts DESC
