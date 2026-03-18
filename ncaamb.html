@@ -2880,20 +2880,26 @@ async function handleClutchUpload(input){
       throw new Error('No teams extracted from screenshot');
     }
 
-    // Store globally
-    globalClutchData = data;
-    try{ localStorage.setItem('ncaamb:globalClutch', JSON.stringify(data)); }catch(e){ console.warn('GlobalClutch persist failed:', e.message); }
+    // Store globally — MERGE new teams into existing data (don't overwrite previous uploads)
+    if(globalClutchData && globalClutchData.teams){
+      var merged = Object.assign({}, globalClutchData.teams, data.teams);
+      globalClutchData = {segment: data.segment || globalClutchData.segment, teams: merged, teamCount: Object.keys(merged).length};
+    } else {
+      globalClutchData = data;
+    }
+    try{ localStorage.setItem('ncaamb:globalClutch', JSON.stringify(globalClutchData)); }catch(e){ console.warn('GlobalClutch persist failed:', e.message); }
     const count = Object.keys(data.teams).length;
+    const totalCount = Object.keys(globalClutchData.teams).length;
     const extractedList = Object.keys(data.teams).join(', ');
 
     // Distribute to all active game cards
     distributeClutchToCards();
 
-    status.textContent = `✓ ${count} teams: ${extractedList}`;
+    status.textContent = `✓ ${count} teams extracted` + (totalCount > count ? ` (${totalCount} total)` : '');
     status.className = 'cu-status ok';
     badge.style.display = 'inline-flex';
     badge.className = 'cu-badge';
-    badge.textContent = `✓ ${segment} CLUTCH · ${count} teams`;
+    badge.textContent = `✓ ${segment} CLUTCH · ${totalCount} teams`;
 
     const tokens = data.usage ? `${data.usage.input||0}+${data.usage.output||0} tokens` : '';
     console.log('Clutch OCR complete:', count, 'teams:', extractedList, tokens, data.teams);
@@ -2917,7 +2923,6 @@ function distributeClutchToCards(){
   const extractedKeys = Object.keys(teams);
   let distributed = 0;
 
-  // Debug: show what was extracted vs what games need
   const neededAliases = [];
   for(const game of games){
     if(game.home?.alias) neededAliases.push(game.home.alias);
@@ -2926,62 +2931,59 @@ function distributeClutchToCards(){
   console.log('Clutch distribute: extracted=', extractedKeys, 'needed=', neededAliases, 
     'missing=', neededAliases.filter(a => !teams[a]));
 
+  // Save ALL extracted teams directly to DB in one batch call
+  if(dbReady){
+    var dbTeams = extractedKeys.map(function(alias){
+      var t = teams[alias];
+      return {alias:alias, tier:1, netRtg:t.netRtg, offRtg:t.offRtg, defRtg:t.defRtg, wl:t.wl, efg:t.efg, pace:t.pace, pie:t.pie, source:'ocr', data:t};
+    });
+    if(dbTeams.length > 0){
+      fetch(FN+'db-api?action=save_clutch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({league:'ncaamb',teams:dbTeams})}).catch(function(){});
+      console.log('Clutch batch saved to DB:', dbTeams.length, 'teams');
+    }
+  }
+
   for(const game of games){
-    const cs = cardState[game.id];
-    if(!cs) continue;
     const hA = game.home?.alias||'';
     const aA = game.away?.alias||'';
     const hClutch = teams[hA];
     const aClutch = teams[aA];
 
     if(hClutch || aClutch){
-      // Only upgrade if not already Tier 1 from manual entry
-      // Screenshot data IS Tier 1 (it's L15 from NBA.com)
-      cs.clutchData = {
+      var clutchObj = {
         tier: 1,
         home: hClutch ? {
-          netRtg: hClutch.netRtg,
-          offRtg: hClutch.offRtg,
-          defRtg: hClutch.defRtg,
-          gp: hClutch.gp,
-          w: hClutch.w,
-          l: hClutch.l,
+          netRtg: hClutch.netRtg, offRtg: hClutch.offRtg, defRtg: hClutch.defRtg,
+          gp: hClutch.gp, w: hClutch.w, l: hClutch.l,
           wl: hClutch.wl || (hClutch.w!=null&&hClutch.l!=null ? hClutch.w+'-'+hClutch.l : null),
-          efg: hClutch.efg,
-          ts: hClutch.ts,
-          pace: hClutch.pace,
-          pie: hClutch.pie,
-          tovPct: hClutch.tovPct,
-          orebPct: hClutch.orebPct,
-          drebPct: hClutch.drebPct,
-          astRatio: hClutch.astRatio,
-        } : (cs.clutchData?.home || {}),
+          efg: hClutch.efg, ts: hClutch.ts, pace: hClutch.pace, pie: hClutch.pie,
+          tovPct: hClutch.tovPct, orebPct: hClutch.orebPct, drebPct: hClutch.drebPct, astRatio: hClutch.astRatio,
+        } : null,
         away: aClutch ? {
-          netRtg: aClutch.netRtg,
-          offRtg: aClutch.offRtg,
-          defRtg: aClutch.defRtg,
-          gp: aClutch.gp,
-          w: aClutch.w,
-          l: aClutch.l,
+          netRtg: aClutch.netRtg, offRtg: aClutch.offRtg, defRtg: aClutch.defRtg,
+          gp: aClutch.gp, w: aClutch.w, l: aClutch.l,
           wl: aClutch.wl || (aClutch.w!=null&&aClutch.l!=null ? aClutch.w+'-'+aClutch.l : null),
-          efg: aClutch.efg,
-          ts: aClutch.ts,
-          pace: aClutch.pace,
-          pie: aClutch.pie,
-          tovPct: aClutch.tovPct,
-          orebPct: aClutch.orebPct,
-          drebPct: aClutch.drebPct,
-          astRatio: aClutch.astRatio,
-        } : (cs.clutchData?.away || {}),
+          efg: aClutch.efg, ts: aClutch.ts, pace: aClutch.pace, pie: aClutch.pie,
+          tovPct: aClutch.tovPct, orebPct: aClutch.orebPct, drebPct: aClutch.drebPct, astRatio: aClutch.astRatio,
+        } : null,
       };
-      cs.clutchTier = 1;
-      persistClutch(game.id, cs);
+
+      cachedClutch[game.id] = {data:clutchObj, tier:1};
+
+      const cs = cardState[game.id];
+      if(cs){
+        if(!clutchObj.home && cs.clutchData?.home) clutchObj.home = cs.clutchData.home;
+        if(!clutchObj.away && cs.clutchData?.away) clutchObj.away = cs.clutchData.away;
+        cs.clutchData = clutchObj;
+        cs.clutchTier = 1;
+        addLog(game.id, `📋 L15 clutch loaded: ${hClutch?hA+' NetRtg '+hClutch.netRtg:''}${hClutch&&aClutch?' / ':''}${aClutch?aA+' NetRtg '+aClutch.netRtg:''}`, true);
+      }
       distributed++;
-      addLog(game.id, `📋 L15 clutch loaded: ${hClutch?hA+' NetRtg '+hClutch.netRtg:''}${hClutch&&aClutch?' / ':''}${aClutch?aA+' NetRtg '+aClutch.netRtg:''}`, true);
     }
   }
 
-  console.log('Clutch distributed to', distributed, 'game cards');
+  try{ localStorage.setItem('ncaamb:clutch', JSON.stringify(cachedClutch)); }catch(e){}
+  console.log('Clutch distributed to', distributed, 'games (' + Object.keys(cachedClutch).length + ' cached)');
 
   // Re-render all visible cards
   for(const game of games){
