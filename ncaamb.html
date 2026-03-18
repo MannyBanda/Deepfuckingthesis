@@ -6758,8 +6758,8 @@ function mountCard(game){
   document.getElementById('grid').appendChild(div);
   renderCard(game);
   if(getState(game)==='LIVE'||getState(game)==='FINAL') fetchSummary(game);
-  // Hydrate from server snapshots (fills gap log when device was sleeping)
-  if(getState(game)==='LIVE') hydrateFromServerSnapshots(id);
+  // Hydrate from server snapshots (fills gap log when device was sleeping, or for FINAL games never opened)
+  if(getState(game)==='LIVE'||getState(game)==='FINAL') hydrateFromServerSnapshots(id);
   // Auto-enrich from BDL if not already done
   if(!cardState[id].enrichDone && !cardState[id].enriching) enrichFromBDL(id);
 }

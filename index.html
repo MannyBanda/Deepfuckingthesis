@@ -531,6 +531,99 @@ async function hydrateFromServerSnapshots(gameId){
       }
     }
 
+    // ── Synthesize rolling window from period-grouped server snapshots ──
+    // Groups snapshots by period, takes last i1-i5 per period, computes cross-fade weighted score
+    if(!cs.rollingWindow || !cs.rollingWindow.available){
+      var byPeriod = {};
+      for(var si=0; si<usable.length; si++){
+        var snap = usable[si];
+        var sp = snap.period || 0;
+        if(sp < 1) continue;
+        byPeriod[sp] = snap; // last snapshot per period wins
+      }
+      var periodKeys = Object.keys(byPeriod).map(Number).sort(function(a,b){return a-b;});
+      if(periodKeys.length >= 2){
+        // Use same cross-fade logic as client: recent periods weighted more
+        var maxPer = periodKeys[periodKeys.length - 1];
+        var wI1=0,wI2=0,wI3=0,wI4=0,wI5=0,wSum=0;
+        for(var pi=0; pi<periodKeys.length; pi++){
+          var pk = periodKeys[pi];
+          var sn = byPeriod[pk];
+          // Weight: older periods fade, recent ones full
+          var weight = (pk === maxPer) ? 1.0 : (pk >= maxPer - 1) ? 1.0 : 0.5;
+          wI1 += (sn.i1||0.5) * weight;
+          wI2 += (sn.i2||0.5) * weight;
+          wI3 += (sn.i3||0.5) * weight;
+          wI4 += (sn.i4||0.5) * weight;
+          wI5 += (sn.i5||0.5) * weight;
+          wSum += weight;
+        }
+        if(wSum > 0){
+          var Ww = {I1:0.25, I2:0.25, I3:0.20, I4:0.20, I5:0.10};
+          var nI1=wI1/wSum, nI2=wI2/wSum, nI3=wI3/wSum, nI4=wI4/wSum, nI5=wI5/wSum;
+          var rawW = nI1*Ww.I1 + nI2*Ww.I2 + nI3*Ww.I3 + nI4*Ww.I4 + nI5*Ww.I5;
+          var ctrlHomeW = rawW >= 0.5;
+          var gObj = games.find(function(x){return x.id===gameId;});
+          var hAw = gObj?.home?.alias||'HOME', aAw = gObj?.away?.alias||'AWAY';
+          var wTeam = ctrlHomeW ? hAw : aAw;
+          var wScore = ctrlHomeW ? rawW : 1 - rawW;
+          cs.rollingWindow = {
+            available: true,
+            score: Math.round(wScore*100)/100,
+            controlTeam: wTeam,
+            windowQuarters: periodKeys.map(function(q){return 'Q'+q;}),
+            dataQuality: 'SERVER',
+            source: 'server',
+            I1:{score:Math.round(nI1*10)/10}, I2:{score:Math.round(nI2*10)/10},
+            I3:{score:Math.round(nI3*10)/10}, I4:{score:Math.round(nI4*10)/10},
+            I5:{score:Math.round(nI5*10)/10},
+          };
+          // Re-compute combined read now that we have a window
+          if(cs.acceleration){
+            var flr = cs._serverFloor || cs.sonnetIndicators || cs.clientInd;
+            if(flr && flr.score){
+              cs.combinedRead = classifyCombinedRead(flr.score, flr.controlTeam, cs.rollingWindow, cs.acceleration);
+            }
+          }
+        }
+      }
+    }
+
+    // ── Hydrate odds from latest server snapshot ──
+    if(!cs.oddsData && latest.spread != null){
+      cs.oddsData = {
+        homeSpread: String(latest.spread),
+        homeML: null, awayML: null, total: null,
+        source: 'server',
+      };
+    }
+
+    // ── Hydrate sustainability tier from latest server snapshot ──
+    if(!cs.clientSustainability && latest.lead_sust){
+      var gForSust = games.find(function(x){return x.id===gameId;});
+      var leadIsHome = (latest.home_pts||0) >= (latest.away_pts||0);
+      var sustObj = {home:{tier:null}, away:{tier:null}};
+      if(leadIsHome) sustObj.home.tier = latest.lead_sust;
+      else sustObj.away.tier = latest.lead_sust;
+      cs.clientSustainability = sustObj;
+    }
+
+    // ── Hydrate lead composition classification from latest server snapshot ──
+    if(!cs.clientLeadComposition && latest.lead_class){
+      var gForLC = games.find(function(x){return x.id===gameId;});
+      var hALC = gForLC?.home?.alias||'HOME', aALC = gForLC?.away?.alias||'AWAY';
+      var lcMargin = (latest.home_pts||0) - (latest.away_pts||0);
+      cs.clientLeadComposition = {
+        classification: latest.lead_class,
+        leadTeam: lcMargin >= 0 ? hALC : aALC,
+        trailTeam: lcMargin >= 0 ? aALC : hALC,
+        structuralMargin: 0, varianceMargin: 0,
+        durability: latest.lead_class + ' (from server snapshot)',
+        home: {team:hALC, total:latest.home_pts||0, structuralPct:0, variancePct:0},
+        away: {team:aALC, total:latest.away_pts||0, structuralPct:0, variancePct:0},
+      };
+    }
+
     // Count sources
     var serverCount = snaps.filter(function(s){ return s.source === 'server'; }).length;
     var clientCount = usable.length - serverCount;
@@ -705,6 +798,28 @@ async function syncAnalysesFromDB(){
       renderConfidenceTable();
     }
   }catch(e){ console.warn('[DB] Analysis sync failed:', e.message); }
+}
+
+// Fetch latest server snapshot per game (batch) — populates dbSnapshotCache for confidence table
+async function syncLatestSnapshotsFromDB(){
+  if(!dbReady) return;
+  try{
+    var ids = games.map(function(g){return g.id;}).join(',');
+    if(!ids) return;
+    var r = await fetch(FN+'db-api?action=get_latest_snapshots&game_ids='+encodeURIComponent(ids));
+    if(!r.ok) return;
+    var data = await r.json();
+    var snaps = data.snapshots || {};
+    var count = 0;
+    Object.keys(snaps).forEach(function(gid){
+      dbSnapshotCache[gid] = snaps[gid];
+      count++;
+    });
+    if(count > 0){
+      console.log('[DB] Cached latest snapshots for '+count+' games');
+      renderConfidenceTable();
+    }
+  }catch(e){ console.warn('[DB] Snapshot sync failed:', e.message); }
 }
 
 // Save clutch data to DB (keyed by team alias — persists across games)
@@ -893,6 +1008,7 @@ const cardState = {};
 
 // DB analysis cache — populated once on schedule load, used by mountCard for cross-device restore
 var dbAnalysisCache = {}; // {gameId: {prediction, sonnetIndicators, analysisTime, analysis, ...}}
+var dbSnapshotCache = {}; // {gameId: {floor_score, floor_team, spread, lead_sust, lead_class, ...}} — latest server snapshot per game
 var _lastThesisRecomputeLog = 0; // global throttle for THESIS RECOMPUTE logs
 
 // BDL fallback state
@@ -1154,6 +1270,7 @@ async function loadSchedule(){
     // Sync theses, analyses, and clutch from DB (cross-device)
     syncThesesFromDB();
     syncAnalysesFromDB();
+    syncLatestSnapshotsFromDB();
     syncClutchFromDB();
     // Start polling
     clearInterval(pollTimer);
@@ -6773,6 +6890,21 @@ function renderConfidenceTable(){
           }
         }
       }
+      // DB snapshot cache — fills floor/window/spread/sust for games never mounted (server polling data)
+      const dbSnap = dbSnapshotCache[g.id];
+      if(dbSnap){
+        if(row.score===0 && dbSnap.floor_score){ row.score = dbSnap.floor_score; row.team = dbSnap.floor_team; row.verdict = getVerdict(dbSnap.floor_score)?.label||''; }
+        if(row.homeScore===null && dbSnap.home_pts!=null){ row.homeScore=dbSnap.home_pts; row.awayScore=dbSnap.away_pts; row.period=dbSnap.period; row.clock=dbSnap.clock||''; }
+        if(!row.sustHome && dbSnap.lead_sust){
+          var snapLeadIsHome = (dbSnap.home_pts||0) >= (dbSnap.away_pts||0);
+          if(snapLeadIsHome) row.sustHome = dbSnap.lead_sust;
+          else row.sustAway = dbSnap.lead_sust;
+        }
+        if(row.windowScore===null && dbSnap.floor_score){ row.windowScore = dbSnap.floor_score; row.windowTeam = dbSnap.floor_team; }
+        if(dbSnap.odds && !row.fwpTeamEdge){
+          // Can't compute FWP from odds alone, but we can show spread exists
+        }
+      }
     }
     rows.push(row);
   }
@@ -7106,8 +7238,8 @@ function mountCard(game){
   document.getElementById('grid').appendChild(div);
   renderCard(game);
   if(getState(game)==='LIVE'||getState(game)==='FINAL') fetchSummary(game);
-  // Hydrate from server snapshots (fills gap log when device was sleeping)
-  if(getState(game)==='LIVE') hydrateFromServerSnapshots(id);
+  // Hydrate from server snapshots (fills gap log when device was sleeping, or for FINAL games never opened)
+  if(getState(game)==='LIVE'||getState(game)==='FINAL') hydrateFromServerSnapshots(id);
   // Auto-enrich from BDL if not already done
   if(!cardState[id].enrichDone && !cardState[id].enriching) enrichFromBDL(id);
 }
