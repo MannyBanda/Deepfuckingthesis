@@ -621,6 +621,36 @@ exports.handler = async (event) => {
     }
 
     // ═══════════════════════════════════════════════════════
+    // GET_GAMES — list all games for a league
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_games') {
+      const league = params.league || 'nba';
+      const rows = await sql`
+        SELECT id, date, league, matchup, home_alias, away_alias, home_pts, away_pts, winner, margin
+        FROM games WHERE league = ${league}
+        ORDER BY date DESC, matchup ASC
+      `;
+      return { statusCode: 200, headers, body: JSON.stringify({ games: rows }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_POLL_STATE — check server polling state for a league
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_poll_state') {
+      const league = params.league || 'nba';
+      try {
+        const rows = await sql`
+          SELECT league, date, first_tip, last_tip, game_count, all_final, schedule_json, fetched_at
+          FROM poll_state WHERE league = ${league}
+          ORDER BY date DESC LIMIT 1
+        `;
+        return { statusCode: 200, headers, body: JSON.stringify({ state: rows.length > 0 ? rows[0] : null }) };
+      } catch (e) {
+        return { statusCode: 200, headers, body: JSON.stringify({ state: null, error: 'poll_state table may not exist: ' + e.message }) };
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════
     // GET_ODDS — fetch odds history for a game
     // ═══════════════════════════════════════════════════════
     if (action === 'get_odds') {
