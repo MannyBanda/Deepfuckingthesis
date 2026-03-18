@@ -5401,7 +5401,19 @@ function computeLeadCompositionClient(game, sustData){
     const variance = three + midOther;
     const sPct = total>0 ? Math.round(structural/total*100) : 0;
     const vPct = total>0 ? Math.round(variance/total*100) : 0;
-    return {total, paint, ft, three, midOther, transition, pot, secondChance:sc, structural, variance, structuralPct:sPct, variancePct:vPct};
+    // Attempt counts for efficiency display
+    const rimMade = stats.field_goals_at_rim_made||0;
+    const rimAtt = stats.field_goals_at_rim_att||0;
+    const ftMade = stats.free_throws_made||0;
+    const ftAtt = stats.free_throws_att||0;
+    const threeMade = stats.three_points_made||0;
+    const threeAtt = stats.three_points_att||0;
+    const fgMade = stats.field_goals_made||0;
+    const fgAtt = stats.field_goals_att||0;
+    const midMade = Math.max(0, fgMade - threeMade - rimMade);
+    const midAtt = Math.max(0, fgAtt - threeAtt - rimAtt);
+    return {total, paint, ft, three, midOther, transition, pot, secondChance:sc, structural, variance, structuralPct:sPct, variancePct:vPct,
+      _rimMade:rimMade, _rimAtt:rimAtt, _ftMade:ftMade, _ftAtt:ftAtt, _threeMade:threeMade, _threeAtt:threeAtt, _midMade:midMade, _midAtt:midAtt};
   }
 
   const hA = s.home.alias || game.home?.alias || '?';
@@ -7645,38 +7657,69 @@ function renderCard(game){
       html+='<div style="padding:6px 10px;border-top:1px solid var(--b1)">';
       html+=_secHdr(id,'sc',cs,'SCORING COMPOSITION',(lcIsClient?' <span style="color:var(--t3);letter-spacing:0">(client-side)</span>':''));
       if(_secOpen(cs,'sc')){
-      // Team bars
+      // Team bars — dual shade: darker = made pts, lighter = missed potential pts
       [lc.away, lc.home].forEach(function(tm){
         if(!tm) return;
         var sPct = tm.structuralPct, vPct = tm.variancePct;
+        // Build segments with made + miss potential
+        var segs = [
+          {label:'Paint', madePts:tm.paint, att:tm._rimAtt||0, made:tm._rimMade||0, ptsPer:2, cMake:'#3d8c40', cMiss:'#5cb860'},
+          {label:'FT', madePts:tm.ft, att:tm._ftAtt||0, made:tm._ftMade||0, ptsPer:1, cMake:'#519e54', cMiss:'#7ecb82'},
+          {label:'3PT', madePts:tm.three, att:tm._threeAtt||0, made:tm._threeMade||0, ptsPer:3, cMake:'#d98200', cMiss:'#ffb74d'},
+          {label:'Mid', madePts:tm.midOther, att:tm._midAtt||0, made:tm._midMade||0, ptsPer:2, cMake:'#d9a800', cMiss:'#ffd54f'},
+        ];
+        // Calculate miss potential per segment
+        segs.forEach(function(sg){ sg.missPts = Math.max(0, (sg.att - sg.made) * sg.ptsPer); sg.totalPts = sg.madePts + sg.missPts; });
+        var totalPotential = 0;
+        segs.forEach(function(sg){ totalPotential += sg.totalPts; });
+        if(totalPotential < 1) totalPotential = tm.total || 1;
         html+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">';
         html+='<span style="font-size:7px;color:var(--t1);width:26px;text-align:right;font-weight:600">'+esc(tm.team)+'</span>';
         html+='<span style="font-size:6px;color:var(--t2);width:18px;text-align:right">'+tm.total+'</span>';
-        // Stacked bar
+        // Stacked bar with dual shading
         html+='<div style="flex:1;display:flex;height:10px;border-radius:3px;overflow:hidden;background:var(--b2)">';
-        if(tm.paint>0) html+='<div style="width:'+(tm.paint/tm.total*100)+'%;background:#4caf50" title="Paint '+tm.paint+'"></div>';
-        if(tm.ft>0) html+='<div style="width:'+(tm.ft/tm.total*100)+'%;background:#66bb6a" title="FT '+tm.ft+'"></div>';
-        if(tm.transition>0) html+='<div style="width:'+(tm.transition/tm.total*100)+'%;background:#81c784" title="Trans '+tm.transition+'"></div>';
-        if(tm.three>0) html+='<div style="width:'+(tm.three/tm.total*100)+'%;background:#ff9800" title="3PT '+tm.three+'"></div>';
-        if(tm.midOther>0) html+='<div style="width:'+(tm.midOther/tm.total*100)+'%;background:#ffc107" title="Mid '+tm.midOther+'"></div>';
+        segs.forEach(function(sg){
+          if(sg.totalPts <= 0) return;
+          var segW = (sg.totalPts / totalPotential * 100);
+          var madeRatio = sg.totalPts > 0 ? sg.madePts / sg.totalPts : 0;
+          var pct = sg.att > 0 ? Math.round(sg.made / sg.att * 100) : (sg.madePts > 0 ? 100 : 0);
+          var showLabel = segW > 10;
+          html+='<div style="display:flex;width:'+segW+'%;position:relative">';
+          // Made portion (darker)
+          if(sg.madePts > 0) html+='<div style="width:'+(madeRatio*100)+'%;background:'+sg.cMake+';height:100%"></div>';
+          // Miss portion (lighter, reduced opacity)
+          if(sg.missPts > 0) html+='<div style="width:'+((1-madeRatio)*100)+'%;background:'+sg.cMiss+';height:100%;opacity:.45"></div>';
+          // Pct label anchored left inside makes
+          if(showLabel) html+='<span style="position:absolute;left:2px;top:50%;transform:translateY(-50%);font-size:5.5px;font-weight:700;font-family:var(--mono);color:'+(sg.madePts>0?'rgba(0,0,0,.7)':'rgba(255,255,255,.5)')+';white-space:nowrap;line-height:1">'+pct+'%</span>';
+          html+='</div>';
+        });
         html+='</div>';
         html+='<span style="font-size:5.5px;color:var(--t3);width:50px">S:'+sPct+'% V:'+vPct+'%</span>';
         html+='</div>';
+        // Efficiency volume line
+        html+='<div style="display:flex;gap:6px;margin:0 0 2px 52px;font-size:5px;font-family:var(--mono);color:var(--t3)">';
+        segs.forEach(function(sg){
+          if(sg.att <= 0 && sg.madePts <= 0) return;
+          var pct = sg.att > 0 ? Math.round(sg.made / sg.att * 100) : 100;
+          var pctCol = pct === 0 ? 'var(--red)' : pct >= 50 ? '#4caf50' : pct >= 33 ? '#ffc107' : '#ff8a65';
+          html+='<span><span style="color:'+sg.cMake+'">'+sg.label+'</span> <span style="color:'+pctCol+'">'+sg.made+'/'+sg.att+'</span></span>';
+        });
+        html+='</div>';
       });
       // Legend
-      html+='<div style="display:flex;gap:8px;margin:3px 0 3px 34px;font-size:5px;color:var(--t3)">';
-      html+='<span><span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:#4caf50;vertical-align:middle;margin-right:2px"></span>Paint</span>';
-      html+='<span><span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:#66bb6a;vertical-align:middle;margin-right:2px"></span>FT</span>';
-      html+='<span><span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:#81c784;vertical-align:middle;margin-right:2px"></span>Trans</span>';
-      html+='<span><span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:#ff9800;vertical-align:middle;margin-right:2px"></span>3PT</span>';
-      html+='<span><span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:#ffc107;vertical-align:middle;margin-right:2px"></span>Mid</span>';
+      html+='<div style="display:flex;gap:8px;margin:3px 0 3px 52px;font-size:5px;color:var(--t3)">';
+      html+='<span><span style="display:inline-block;width:5px;height:5px;border-radius:1px;background:#3d8c40;vertical-align:middle;margin-right:1px"></span><span style="display:inline-block;width:5px;height:5px;border-radius:1px;background:#5cb860;opacity:.45;vertical-align:middle;margin-right:2px"></span>Paint</span>';
+      html+='<span><span style="display:inline-block;width:5px;height:5px;border-radius:1px;background:#519e54;vertical-align:middle;margin-right:1px"></span><span style="display:inline-block;width:5px;height:5px;border-radius:1px;background:#7ecb82;opacity:.45;vertical-align:middle;margin-right:2px"></span>FT</span>';
+      html+='<span><span style="display:inline-block;width:5px;height:5px;border-radius:1px;background:#d98200;vertical-align:middle;margin-right:1px"></span><span style="display:inline-block;width:5px;height:5px;border-radius:1px;background:#ffb74d;opacity:.45;vertical-align:middle;margin-right:2px"></span>3PT</span>';
+      html+='<span><span style="display:inline-block;width:5px;height:5px;border-radius:1px;background:#d9a800;vertical-align:middle;margin-right:1px"></span><span style="display:inline-block;width:5px;height:5px;border-radius:1px;background:#ffd54f;opacity:.45;vertical-align:middle;margin-right:2px"></span>Mid</span>';
+      html+='<span style="margin-left:4px"><span style="display:inline-block;width:5px;height:5px;border-radius:1px;background:#888;vertical-align:middle;margin-right:1px"></span>made <span style="display:inline-block;width:5px;height:5px;border-radius:1px;background:#888;opacity:.45;vertical-align:middle;margin-right:1px"></span>miss</span>';
       html+='</div>';
       // Margin summary
-      html+='<div style="display:flex;gap:10px;font-size:6px;margin-left:34px">';
+      html+='<div style="display:flex;gap:10px;font-size:6px;margin-left:52px">';
       html+='<span style="color:'+lcStructColor+'">Structural: '+(lc.structuralMargin>=0?lc.leadTeam:lc.trailTeam)+' +'+Math.abs(lc.structuralMargin)+'</span>';
       html+='<span style="color:'+lcVarColor+'">Variance: '+(lc.varianceMargin>=0?lc.leadTeam:lc.trailTeam)+' +'+Math.abs(lc.varianceMargin)+'</span>';
       html+='</div>';
-      html+='<div style="font-size:6px;color:'+lcDurColor+';margin:3px 0 0 34px;font-weight:500">'+esc(lc.durability)+'</div>';
+      html+='<div style="font-size:6px;color:'+lcDurColor+';margin:3px 0 0 52px;font-weight:500">'+esc(lc.durability)+'</div>';
       } // end _secOpen sc
       html+='</div>';
     } else if(pred && pred.leadSource) {
