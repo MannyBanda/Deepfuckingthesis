@@ -598,14 +598,26 @@ async function hydrateFromServerSnapshots(gameId){
       };
     }
 
-    // ── Hydrate sustainability tier from latest server snapshot ──
-    if(!cs.clientSustainability && latest.lead_sust){
-      var gForSust = games.find(function(x){return x.id===gameId;});
-      var leadIsHome = (latest.home_pts||0) >= (latest.away_pts||0);
-      var sustObj = {home:{tier:null}, away:{tier:null}};
-      if(leadIsHome) sustObj.home.tier = latest.lead_sust;
-      else sustObj.away.tier = latest.lead_sust;
-      cs.clientSustainability = sustObj;
+    // ── Hydrate sustainability from server snapshot ──
+    if(!cs.clientSustainability && !cs.sustainabilityAudit){
+      // Prefer full sust_json (both teams, tier + composite) from server polling
+      var _sustJson = latest.sust_json;
+      if(_sustJson){
+        try{
+          var parsed = typeof _sustJson === 'string' ? JSON.parse(_sustJson) : _sustJson;
+          if(parsed && (parsed.home || parsed.away)){
+            cs.clientSustainability = parsed;
+          }
+        }catch(e){}
+      }
+      // Fallback: reconstruct from lead_sust (one team only, older snapshots)
+      if(!cs.clientSustainability && latest.lead_sust){
+        var leadIsHome = (latest.home_pts||0) >= (latest.away_pts||0);
+        var sustObj = {home:{tier:null}, away:{tier:null}};
+        if(leadIsHome) sustObj.home.tier = latest.lead_sust;
+        else sustObj.away.tier = latest.lead_sust;
+        cs.clientSustainability = sustObj;
+      }
     }
 
     // ── Hydrate lead composition classification from latest server snapshot ──
@@ -4422,6 +4434,26 @@ function compute(game){
     clientSust = {home:hSust, away:aSust};
     cardState[game.id].clientSustainability = clientSust;
   }
+  // Fallback: use Sonnet audit or previously stored client sustainability when baselines unavailable
+  if(!clientSust){
+    clientSust = cardState[game.id]?.clientSustainability || cardState[game.id]?.sustainabilityAudit || null;
+  }
+  // Final fallback: parse tiers from prediction sustainability text (e.g. "MIA: LOCKED IN | CHA: LOCKED IN")
+  if(!clientSust){
+    var _pred = cardState[game.id]?.prediction;
+    if(_pred && _pred.sustainability){
+      var _sustText = _pred.sustainability;
+      var _parsedSust = {home:{tier:null}, away:{tier:null}};
+      var _tiers = ['LOCKED IN','LOCKED','DURABLE','MIXED','FRAGILE','UNSUSTAINABLE','TOO EARLY'];
+      _tiers.forEach(function(t){
+        var hPat = new RegExp(hA+'[:\\s]+'+t,'i');
+        var aPat = new RegExp(aA+'[:\\s]+'+t,'i');
+        if(hPat.test(_sustText)) _parsedSust.home.tier = t;
+        if(aPat.test(_sustText)) _parsedSust.away.tier = t;
+      });
+      if(_parsedSust.home.tier || _parsedSust.away.tier) clientSust = _parsedSust;
+    }
+  }
 
   // Client-side lead composition (cross-references sustainability)
   const clientLC = computeLeadCompositionClient(game, clientSust);
@@ -6907,6 +6939,11 @@ function renderConfidenceTable(){
       if(dbSnap){
         if(row.score===0 && dbSnap.floor_score){ row.score = dbSnap.floor_score; row.team = dbSnap.floor_team; row.verdict = getVerdict(dbSnap.floor_score)?.label||''; }
         if(row.homeScore===null && dbSnap.home_pts!=null){ row.homeScore=dbSnap.home_pts; row.awayScore=dbSnap.away_pts; row.period=dbSnap.period; row.clock=dbSnap.clock||''; }
+        if(!row.sustHome && dbSnap.sust_json){
+          var _sj = typeof dbSnap.sust_json === 'string' ? JSON.parse(dbSnap.sust_json) : dbSnap.sust_json;
+          if(_sj?.home?.tier) row.sustHome = _sj.home.tier;
+          if(_sj?.away?.tier) row.sustAway = _sj.away.tier;
+        }
         if(!row.sustHome && dbSnap.lead_sust){
           var snapLeadIsHome = (dbSnap.home_pts||0) >= (dbSnap.away_pts||0);
           if(snapLeadIsHome) row.sustHome = dbSnap.lead_sust;

@@ -4006,6 +4006,26 @@ function compute(game){
     clientSust = {home:hSust, away:aSust};
     cardState[game.id].clientSustainability = clientSust;
   }
+  // Fallback: use Sonnet audit or previously stored client sustainability when baselines unavailable
+  if(!clientSust){
+    clientSust = cardState[game.id]?.clientSustainability || cardState[game.id]?.sustainabilityAudit || null;
+  }
+  // Final fallback: parse tiers from prediction sustainability text
+  if(!clientSust){
+    var _pred = cardState[game.id]?.prediction;
+    if(_pred && _pred.sustainability){
+      var _sustText = _pred.sustainability;
+      var _parsedSust = {home:{tier:null}, away:{tier:null}};
+      var _tiers = ['LOCKED IN','LOCKED','DURABLE','MIXED','FRAGILE','UNSUSTAINABLE','TOO EARLY'];
+      _tiers.forEach(function(t){
+        var hPat = new RegExp(hA+'[:\\s]+'+t,'i');
+        var aPat = new RegExp(aA+'[:\\s]+'+t,'i');
+        if(hPat.test(_sustText)) _parsedSust.home.tier = t;
+        if(aPat.test(_sustText)) _parsedSust.away.tier = t;
+      });
+      if(_parsedSust.home.tier || _parsedSust.away.tier) clientSust = _parsedSust;
+    }
+  }
 
   // Client-side lead composition (cross-references sustainability)
   const clientLC = computeLeadCompositionClient(game, clientSust);
