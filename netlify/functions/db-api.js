@@ -194,6 +194,21 @@ exports.handler = async (event) => {
         )
       `;
 
+      // Poll state — tracks daily schedule + game window to minimize SR API calls
+      await sql`
+        CREATE TABLE IF NOT EXISTS poll_state (
+          league TEXT NOT NULL,
+          date TEXT NOT NULL,
+          first_tip TIMESTAMPTZ,
+          last_tip TIMESTAMPTZ,
+          game_count INTEGER DEFAULT 0,
+          all_final BOOLEAN DEFAULT FALSE,
+          schedule_json JSONB,
+          fetched_at TIMESTAMPTZ DEFAULT NOW(),
+          PRIMARY KEY (league, date)
+        )
+      `;
+
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'Schema initialized' }) };
     }
 

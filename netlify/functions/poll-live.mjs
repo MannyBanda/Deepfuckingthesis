@@ -26,7 +26,17 @@ const LEAGUES = {
     season: '2025',
     aliasMap: { NOP: 'NO', GSW: 'GS', NYK: 'NY', SAS: 'SA', PHX: 'PHO', BKN: 'BKN' },
   },
-  // ncaamb: { ... } — add when ready
+  ncaamb: {
+    srBase: 'https://api.sportradar.com/ncaamb/trial/v8/en/',
+    srKeyEnv: 'SR_NCAAMB_KEY',
+    espnSlug: 'mens-college-basketball',
+    espnBase: 'https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/',
+    espnSummaryBase: 'https://site.web.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/summary',
+    bdlPrefix: '/ncaab',
+    bdlHasSeasonStats: true,
+    season: '2025',
+    aliasMap: {},  // NCAAMB uses name-based ESPN matching, no alias overrides needed
+  },
 };
 
 const BDL_BASE = 'https://api.balldontlie.io';
@@ -77,7 +87,9 @@ async function srFetch(league, path) {
 
 async function espnScoreboard(league, dateStr) {
   const cfg = LEAGUES[league];
-  const url = `${cfg.espnBase}scoreboard?dates=${dateStr}`;
+  let url = `${cfg.espnBase}scoreboard?dates=${dateStr}`;
+  // NCAAMB needs groups=100&limit=200 to get all games
+  if (league === 'ncaamb') url += '&groups=100&limit=200';
   const resp = await fetch(url);
   if (!resp.ok) return [];
   const data = await resp.json();
@@ -89,6 +101,8 @@ async function espnScoreboard(league, dateStr) {
       espnId: ev.id,
       homeAbbr: home?.team?.abbreviation || '',
       awayAbbr: away?.team?.abbreviation || '',
+      homeName: (home?.team?.displayName || '').toLowerCase(),
+      awayName: (away?.team?.displayName || '').toLowerCase(),
       status: ev.status?.type?.name || '',
     };
   });
@@ -140,7 +154,7 @@ async function bdlGameData(league, dateStr) {
   const cfg = LEAGUES[league];
   if (!cfg.bdlHasSeasonStats) return { teamIds: {}, gameIds: {} };
   // dateStr format: YYYY-MM-DD
-  const data = await bdlFetch(`${cfg.bdlPrefix}/v1/games?dates[]=${dateStr}&per_page=25`);
+  const data = await bdlFetch(`${cfg.bdlPrefix}/v1/games?dates[]=${dateStr}&per_page=50`);
   if (!data || !data.data) return { teamIds: {}, gameIds: {} };
   const teamIds = {}; // { 'LAL': 14, 'HOU': 11, ... }
   const gameIds = {}; // { 'HOU@LAL': 54321, ... } — keyed by matchup for SR→BDL mapping
@@ -359,6 +373,7 @@ function computeSustainability(summary) {
 
     // Personnel audit
     var makesByTier = { elite: 0, average: 0, non: 0 };
+    var personnelDetails = [];
     players.forEach(function(p) {
       var live = p.statistics || {};
       var avg = p.average || p.season || {};
@@ -371,16 +386,27 @@ function computeSustainability(summary) {
       var sznPct = szn3a >= 1.0 ? (szn3m / szn3a * 100) : null;
       var sznVol = szn3a;
 
-      var tier;
-      if (sznPct === null) tier = 'non';
-      else if (sznPct >= 38.0 && sznVol >= 2.0) tier = 'elite';
-      else if (sznPct >= 33.0 || (sznPct >= 30.0 && sznVol >= 3.0)) tier = 'average';
-      else tier = 'non';
+      var tier, tierLabel;
+      if (sznPct === null) { tier = 'non'; tierLabel = 'UNKNOWN'; }
+      else if (sznPct >= 38.0 && sznVol >= 2.0) { tier = 'elite'; tierLabel = 'ELITE'; }
+      else if (sznPct >= 33.0 || (sznPct >= 30.0 && sznVol >= 3.0)) { tier = 'average'; tierLabel = 'AVERAGE'; }
+      else { tier = 'non'; tierLabel = 'NON-SHOOTER'; }
 
-      if (sznVol < 1.5 && tier === 'elite') tier = 'average';
-      if (sznVol < 0.8 && tier !== 'non') tier = 'non';
+      if (sznVol < 1.5 && tier === 'elite') { tier = 'average'; tierLabel = 'AVG (low vol)'; }
+      if (sznVol < 0.8 && tier !== 'non') { tier = 'non'; tierLabel = 'NON-SHOOTER (rare)'; }
 
       makesByTier[tier] += live3m;
+
+      var livePct = (live3m / live3a * 100).toFixed(0);
+      var sznStr = sznPct !== null ? sznPct.toFixed(1) + '% (' + sznVol.toFixed(1) + '/gm)' : 'N/A';
+      var hot = sznPct !== null && (live3m / live3a * 100) > sznPct + 12;
+
+      personnelDetails.push({
+        name: p.full_name || p.name || '?',
+        live3m: live3m, live3a: live3a, livePct: livePct,
+        sznPct: sznPct, sznVol: sznVol, sznStr: sznStr,
+        tier: tier, tierLabel: tierLabel, hot: hot,
+      });
     });
 
     var totalMakes = team3PM || 1;
@@ -416,6 +442,12 @@ function computeSustainability(summary) {
     else if (deviation < -8) regressionProb = Math.max(5, regressionProb - 15);
     else if (deviation < -3) regressionProb = Math.max(5, regressionProb - 8);
 
+    var regressionPull = 0;
+    if (team3PA > 0 && Math.abs(live3Pct - seasonPrior3Pct) > 0.5) {
+      regressionPull = Math.abs(posteriorMean - live3Pct) / Math.abs(live3Pct - seasonPrior3Pct) * 100;
+    }
+    regressionPull = Math.min(100, Math.max(0, regressionPull));
+
     var regressionGrade;
     if (regressionProb >= 75) regressionGrade = 'HIGH';
     else if (regressionProb >= 55) regressionGrade = 'MODERATE';
@@ -427,10 +459,10 @@ function computeSustainability(summary) {
     var teamFGM = stats.field_goals_made || 1;
     var assistRatio = teamAssists / teamFGM * 100;
 
-    var shotTypeGrade;
-    if (assistRatio >= 65) shotTypeGrade = 'DURABLE';
-    else if (assistRatio < 45) shotTypeGrade = 'FRAGILE';
-    else shotTypeGrade = 'MIXED';
+    var shotTypeGrade, shotTypeNote;
+    if (assistRatio >= 65) { shotTypeGrade = 'DURABLE'; shotTypeNote = 'High ast% (' + assistRatio.toFixed(0) + '%)'; }
+    else if (assistRatio < 45) { shotTypeGrade = 'FRAGILE'; shotTypeNote = 'Low ast% (' + assistRatio.toFixed(0) + '%)'; }
+    else { shotTypeGrade = 'MIXED'; shotTypeNote = 'Moderate ast% (' + assistRatio.toFixed(0) + '%)'; }
 
     // Composite tier: personnel 40%, regression 35%, shot type 25%
     var scores = { personnel: 0, regression: 0, shotType: 0 };
@@ -461,11 +493,27 @@ function computeSustainability(summary) {
     // Override: at/below season norm
     if (live3Pct <= seasonPrior3Pct + 2) {
       tier = 'LOCKED IN';
+      regressionGrade = 'MINIMAL';
+      personnelGrade = 'N/A (at baseline)';
     }
     // Override: too few attempts
     if (team3PA < 5) tier = 'TOO EARLY';
 
-    return { tier, composite: parseFloat(composite.toFixed(2)) };
+    return {
+      teamAlias: teamAlias,
+      live3PM: team3PM, live3PA: team3PA,
+      live3Pct: live3Pct.toFixed(1), live3Rate: (team3PA / teamFGA * 100).toFixed(1),
+      seasonPrior: seasonPrior3Pct.toFixed(1), gotSeasonData: gotSeasonData,
+      deviation: deviation.toFixed(1),
+      personnelGrade: personnelGrade, personnelDetails: personnelDetails,
+      elitePct: elitePct.toFixed(0), nonPct: nonPct.toFixed(0),
+      posteriorMean: posteriorMean.toFixed(1),
+      regressionPull: regressionPull.toFixed(0),
+      regressionProb: regressionProb, regressionGrade: regressionGrade,
+      shotTypeGrade: shotTypeGrade, shotTypeNote: shotTypeNote,
+      assistRatio: assistRatio.toFixed(0),
+      composite: composite.toFixed(2), tier: tier,
+    };
   }
 
   return {
@@ -521,7 +569,6 @@ function computeLeadComposition(summary) {
 
 export default async function(req) {
   const startTime = Date.now();
-  log('=== Poll cycle starting ===');
 
   // Get DB connection
   const dbUrl = process.env.DATABASE_URL;
@@ -531,20 +578,61 @@ export default async function(req) {
   }
   const sql = neon(dbUrl);
 
-  const results = { games: 0, snapshots: 0, espn: 0, odds: 0, errors: [] };
+  const results = { games: 0, snapshots: 0, espn: 0, odds: 0, errors: [], skipped: null };
 
   for (const league of Object.keys(LEAGUES)) {
     const cfg = LEAGUES[league];
     const apiKey = process.env[cfg.srKeyEnv];
     if (!apiKey) {
-      log(`Skipping ${league}: ${cfg.srKeyEnv} not set`);
       continue;
     }
 
+    const d = today();
+    const pad = n => String(n).padStart(2, '0');
+    const dateKey = `${d.year}-${pad(d.month)}-${pad(d.day)}`;
+
     try {
-      // ── 0. Check client heartbeat — skip if client is actively polling ──
-      const d = today();
-      const pad = n => String(n).padStart(2, '0');
+      // ── 0. Load poll_state from DB — do we even need to be awake? ──
+      let pollState = null;
+      try {
+        const psRows = await sql`
+          SELECT first_tip, last_tip, game_count, all_final, schedule_json
+          FROM poll_state WHERE league = ${league} AND date = ${dateKey}
+        `;
+        if (psRows.length > 0) pollState = psRows[0];
+      } catch (e) {
+        // Table may not exist yet — proceed to fetch schedule
+      }
+
+      // ── 0a. Quick exits from cached state ──
+      if (pollState) {
+        if (pollState.all_final) {
+          log(`${league.toUpperCase()}: all games FINAL — sleeping`);
+          results.skipped = 'all_final';
+          continue;
+        }
+        if (pollState.game_count === 0) {
+          log(`${league.toUpperCase()}: no games today — sleeping`);
+          results.skipped = 'no_games';
+          continue;
+        }
+        const now = new Date();
+        const windowStart = new Date(new Date(pollState.first_tip).getTime() - 15 * 60 * 1000);
+        const windowEnd = new Date(new Date(pollState.last_tip).getTime() + 3 * 60 * 60 * 1000);
+        if (now < windowStart) {
+          log(`${league.toUpperCase()}: before game window (first tip ${new Date(pollState.first_tip).toLocaleTimeString('en-US', {timeZone:'America/New_York'})} ET) — sleeping`);
+          results.skipped = 'before_window';
+          continue;
+        }
+        if (now > windowEnd) {
+          log(`${league.toUpperCase()}: past game window — marking all_final`);
+          try { await sql`UPDATE poll_state SET all_final = TRUE WHERE league = ${league} AND date = ${dateKey}`; } catch(e) {}
+          results.skipped = 'past_window';
+          continue;
+        }
+      }
+
+      // ── 0b. Check client heartbeat — skip if client is actively polling ──
       try {
         const hbRows = await sql`
           SELECT EXTRACT(EPOCH FROM (NOW() - last_poll)) / 60 AS age_minutes, device
@@ -555,61 +643,144 @@ export default async function(req) {
           continue;
         }
       } catch (e) {
-        // Heartbeat table may not exist yet — proceed with polling
-        log(`Heartbeat check failed (${e.message}) — proceeding`);
+        // Heartbeat table may not exist yet
       }
 
-      // ── 1. Fetch today's schedule ──
-      const schedule = await srFetch(league, `games/${d.year}/${pad(d.month)}/${pad(d.day)}/schedule.json`);
-      const allGames = schedule.games || [];
+      // ── 1. Get game list — from cache OR one-time SR schedule fetch ──
+      let cachedGames = null; // [{id, scheduled, home_alias, away_alias, status}]
 
-      // Filter to live games only
-      const liveGames = allGames.filter(g => {
-        const st = (g.status || '').toLowerCase();
-        return st === 'inprogress' || st === 'halftime';
+      if (pollState && pollState.schedule_json) {
+        // Use cached schedule — NO SR call
+        cachedGames = typeof pollState.schedule_json === 'string'
+          ? JSON.parse(pollState.schedule_json)
+          : pollState.schedule_json;
+        log(`${league.toUpperCase()}: using cached schedule (${cachedGames.length} games)`);
+      } else {
+        // First fetch today — single SR schedule call, cache to DB
+        log(`${league.toUpperCase()}: fetching schedule (first call today)...`);
+        const schedule = await srFetch(league, `games/${d.year}/${pad(d.month)}/${pad(d.day)}/schedule.json`);
+        const allGames = schedule.games || [];
+
+        // Build minimal cache: only the fields we need per cycle
+        cachedGames = allGames.map(g => ({
+          id: g.id,
+          scheduled: g.scheduled || null,
+          home_alias: g.home?.alias || '',
+          away_alias: g.away?.alias || '',
+          home_name: g.home?.name || '',
+          away_name: g.away?.name || '',
+          status: (g.status || 'scheduled').toLowerCase(),
+        }));
+
+        // Extract tip times
+        const tips = cachedGames
+          .filter(g => g.scheduled)
+          .map(g => new Date(g.scheduled))
+          .sort((a, b) => a - b);
+        const firstTip = tips.length > 0 ? tips[0].toISOString() : null;
+        const lastTip = tips.length > 0 ? tips[tips.length - 1].toISOString() : null;
+
+        // Save to DB
+        try {
+          await sql`
+            INSERT INTO poll_state (league, date, first_tip, last_tip, game_count, all_final, schedule_json)
+            VALUES (${league}, ${dateKey}, ${firstTip}, ${lastTip}, ${cachedGames.length}, ${false}, ${JSON.stringify(cachedGames)})
+            ON CONFLICT (league, date) DO UPDATE SET
+              first_tip = ${firstTip}, last_tip = ${lastTip},
+              game_count = ${cachedGames.length}, schedule_json = ${JSON.stringify(cachedGames)}, fetched_at = NOW()
+          `;
+        } catch (e) {
+          log(`poll_state save failed: ${e.message}`);
+        }
+
+        if (cachedGames.length === 0) {
+          log(`${league.toUpperCase()}: no games today — stored & sleeping`);
+          continue;
+        }
+        log(`${league.toUpperCase()}: schedule cached — ${cachedGames.length} games, first tip ${firstTip ? new Date(firstTip).toLocaleTimeString('en-US', {timeZone:'America/New_York'}) : '?'} ET`);
+
+        // Check if before window (just fetched, might be too early)
+        if (firstTip) {
+          const now = new Date();
+          const windowStart = new Date(new Date(firstTip).getTime() - 15 * 60 * 1000);
+          if (now < windowStart) {
+            log(`${league.toUpperCase()}: before game window — sleeping until ${windowStart.toLocaleTimeString('en-US', {timeZone:'America/New_York'})} ET`);
+            results.skipped = 'before_window';
+            continue;
+          }
+        }
+      }
+
+      // ── 2. Determine which games need summary fetches ──
+      // A game needs a fetch if: tip time has passed AND not already marked final in cache
+      const now = new Date();
+      const potentiallyLive = cachedGames.filter(g => {
+        if (g.status === 'closed' || g.status === 'complete') return false;
+        if (!g.scheduled) return true; // no tip time, assume could be live
+        return new Date(g.scheduled) <= now;
       });
 
-      log(`${league.toUpperCase()}: ${allGames.length} total, ${liveGames.length} live`);
-      if (liveGames.length === 0) continue;
+      if (potentiallyLive.length === 0) {
+        // All games either haven't started or already final
+        const allDone = cachedGames.every(g => g.status === 'closed' || g.status === 'complete');
+        if (allDone && cachedGames.length > 0) {
+          log(`${league.toUpperCase()}: all ${cachedGames.length} games FINAL — marking done`);
+          try { await sql`UPDATE poll_state SET all_final = TRUE WHERE league = ${league} AND date = ${dateKey}`; } catch(e) {}
+        } else {
+          log(`${league.toUpperCase()}: no games tipped yet — waiting`);
+        }
+        continue;
+      }
 
-      results.games += liveGames.length;
+      log(`${league.toUpperCase()}: ${cachedGames.length} total, ${potentiallyLive.length} potentially live`);
+      results.games += potentiallyLive.length;
 
-      // ── 2. Fetch ESPN scoreboard for ID mapping ──
+      // ── 3. Fetch ESPN scoreboard for ID mapping ──
       const dateStr = `${d.year}${pad(d.month)}${pad(d.day)}`;
       const espnGames = await espnScoreboard(league, dateStr);
       log(`ESPN scoreboard: ${espnGames.length} events`);
 
       // Build ESPN mapping: SR alias → ESPN event ID
       const espnMap = {};
-      for (const g of liveGames) {
-        const hA = g.home?.alias || '';
-        const aA = g.away?.alias || '';
+      for (const g of potentiallyLive) {
+        const hA = g.home_alias || '';
+        const aA = g.away_alias || '';
         const hE = cfg.aliasMap[hA] || hA;
         const aE = cfg.aliasMap[aA] || aA;
-        const match = espnGames.find(eg =>
+        // Try abbreviation match first
+        let match = espnGames.find(eg =>
           (eg.homeAbbr === hA || eg.homeAbbr === hE) &&
           (eg.awayAbbr === aA || eg.awayAbbr === aE)
         );
+        // Fallback: name-based matching (critical for NCAAMB where abbreviations diverge)
+        if (!match && (g.home_name || g.away_name)) {
+          const hName = (g.home_name || '').toLowerCase();
+          const aName = (g.away_name || '').toLowerCase();
+          match = espnGames.find(eg =>
+            (hName && eg.homeName && (eg.homeName.includes(hName) || hName.includes(eg.homeName))) &&
+            (aName && eg.awayName && (eg.awayName.includes(aName) || aName.includes(eg.awayName)))
+          );
+        }
         if (match) espnMap[g.id] = match.espnId;
       }
-      log(`ESPN mapped: ${Object.keys(espnMap).length}/${liveGames.length}`);
+      log(`ESPN mapped: ${Object.keys(espnMap).length}/${potentiallyLive.length}`);
 
-      // ── 2b. Fetch BDL team IDs + season stats (parallel) ──
+      // ── 3b. Fetch BDL team IDs + season stats (parallel) ──
       const bdlDateStr = `${d.year}-${pad(d.month)}-${pad(d.day)}`;
       const bdlData = await bdlGameData(league, bdlDateStr);
       const bdlTeamIds = bdlData.teamIds;
-      const bdlGameIds = bdlData.gameIds; // { 'HOU@LAL': 54321, ... }
+      const bdlGameIds = bdlData.gameIds;
       log(`BDL: ${Object.keys(bdlTeamIds).length} teams, ${Object.keys(bdlGameIds).length} games mapped`);
 
-      // Collect unique team abbreviations from live games
+      // Collect unique team abbreviations from potentially live games
       const teamAbbrs = new Set();
-      for (const g of liveGames) {
-        if (g.home?.alias) teamAbbrs.add(g.home.alias);
-        if (g.away?.alias) teamAbbrs.add(g.away.alias);
+      for (const g of potentiallyLive) {
+        if (g.home_alias) teamAbbrs.add(g.home_alias);
+        if (g.away_alias) teamAbbrs.add(g.away_alias);
       }
 
       // Fetch season stats for all teams in parallel (BDL has no 1/sec limit)
-      const bdlSeasonCache = {}; // { 'LAL': [...playerStats], 'HOU': [...] }
+      const bdlSeasonCache = {};
       const seasonFetches = [];
       for (const abbr of teamAbbrs) {
         const bdlId = bdlTeamIds[abbr];
@@ -625,16 +796,41 @@ export default async function(req) {
         log(`BDL season stats: ${Object.keys(bdlSeasonCache).length}/${teamAbbrs.size} teams loaded`);
       }
 
-      // ── 3. Process each live game sequentially (SR rate limit) ──
-      for (const game of liveGames) {
-        const hA = game.home?.alias || 'HOME';
-        const aA = game.away?.alias || 'AWAY';
+      // Track which cached games got updated this cycle
+      let cacheUpdated = false;
+      let liveCount = 0;
+
+      // ── 4. Process each potentially live game — summary fetch is the ONLY SR call ──
+      for (const game of potentiallyLive) {
+        const hA = game.home_alias || 'HOME';
+        const aA = game.away_alias || 'AWAY';
         const matchup = `${aA}@${hA}`;
 
         try {
-          // Fetch summary
+          // Fetch summary — this is the ONLY SR API call per game per cycle
           await sleep(SR_DELAY_MS);
           const summary = await srFetch(league, `games/${game.id}/summary.json`);
+
+          // Check game status from summary
+          const gameStatus = (summary.status || '').toLowerCase();
+          if (gameStatus === 'closed' || gameStatus === 'complete') {
+            // Game finished — update cache so we skip it next cycle
+            game.status = gameStatus;
+            cacheUpdated = true;
+            log(`${matchup}: FINAL — removed from active polling`);
+            // Fetch one last ESPN WP for the final state
+            if (espnMap[game.id]) {
+              var finalWP = await espnWinProb(league, espnMap[game.id]);
+            }
+            continue;
+          }
+          if (gameStatus === 'scheduled' || gameStatus === 'created') {
+            // Game hasn't tipped yet
+            log(`${matchup}: not started yet (${gameStatus})`);
+            continue;
+          }
+
+          liveCount++;
 
           // Compute indicators
           const ind = computeServer(summary);
@@ -736,6 +932,28 @@ export default async function(req) {
         }
       }
 
+      // ── 5. Update cached schedule if any game status changed ──
+      if (cacheUpdated) {
+        try {
+          // Check if all games are now final
+          const allDone = cachedGames.every(g => g.status === 'closed' || g.status === 'complete');
+          await sql`
+            UPDATE poll_state SET schedule_json = ${JSON.stringify(cachedGames)},
+              all_final = ${allDone}
+            WHERE league = ${league} AND date = ${dateKey}
+          `;
+          if (allDone) {
+            log(`${league.toUpperCase()}: ALL GAMES FINAL — server going to sleep`);
+          }
+        } catch (e) {
+          log(`Cache update failed: ${e.message}`);
+        }
+      }
+
+      if (liveCount === 0 && potentiallyLive.length > 0) {
+        log(`${league.toUpperCase()}: ${potentiallyLive.length} games checked, none currently live`);
+      }
+
     } catch (e) {
       results.errors.push(`${league}: ${e.message}`);
       log(`ERROR ${league}: ${e.message}`);
@@ -743,7 +961,11 @@ export default async function(req) {
   }
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-  log(`=== Done in ${elapsed}s | ${results.snapshots} snapshots, ${results.espn} ESPN WP, ${results.odds} odds, ${results.errors.length} errors ===`);
+  if (results.snapshots > 0 || results.errors.length > 0) {
+    log(`=== Done in ${elapsed}s | ${results.snapshots} snapshots, ${results.espn} ESPN WP, ${results.odds} odds, ${results.errors.length} errors ===`);
+  } else if (results.skipped) {
+    log(`=== Done in ${elapsed}s | skipped: ${results.skipped} ===`);
+  }
 
   return new Response(JSON.stringify(results), {
     headers: { 'Content-Type': 'application/json' },
@@ -753,5 +975,5 @@ export default async function(req) {
 // ── SCHEDULE CONFIG ─────────────────────────────────────────────────────────
 
 export const config = {
-  schedule: "*/2 * * * *",
+  schedule: "*/3 * * * *",
 };
