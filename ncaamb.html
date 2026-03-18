@@ -372,7 +372,7 @@ async function initDB(){
 async function saveSnapshotDB(game){
   if(!dbReady) return;
   var cs = cardState[game.id]; if(!cs) return;
-  var floor = cs.sonnetIndicators || cs.clientInd; if(!floor || !floor.score) return;
+  var floor = cs.sonnetIndicators || cs.clientInd || cs._serverFloor; if(!floor || !floor.score) return;
   var pbp = cs.pbpWindow;
   var qtr = cs.rollingWindow;
   var ewp = cs.espnWP;
@@ -428,6 +428,7 @@ async function saveSnapshotDB(game){
 async function hydrateFromServerSnapshots(gameId){
   if(!dbReady) return;
   var cs = cardState[gameId]; if(!cs) return;
+  // Only hydrate if we have no gap log yet (fresh mount, device was sleeping)
   if(cs.gapLog && cs.gapLog.length > 2) return;
   try{
     var resp = await fetch(FN+'db-api?action=history&game_id='+gameId);
@@ -436,11 +437,13 @@ async function hydrateFromServerSnapshots(gameId){
     var snaps = data.snapshots || [];
     if(snaps.length === 0) return;
 
-    var serverSnaps = snaps.filter(function(s){ return s.source === 'server'; });
-    if(serverSnaps.length === 0) return;
+    // Use ALL snapshots (server + any client) for backfill — sorted by ts ascending
+    var usable = snaps.filter(function(s){ return s.floor_score != null; });
+    if(usable.length === 0) return;
 
+    // Build gap log entries from DB snapshots
     if(!cs.gapLog || cs.gapLog.length < 2){
-      cs.gapLog = serverSnaps.filter(function(s){ return s.floor_score != null; }).map(function(s){
+      cs.gapLog = usable.map(function(s){
         return {
           ts: new Date(s.ts).getTime(),
           floor: s.floor_score,
@@ -451,24 +454,69 @@ async function hydrateFromServerSnapshots(gameId){
           clock: s.clock,
           homePts: s.home_pts,
           awayPts: s.away_pts,
-          source: 'server',
+          source: s.source || 'db',
         };
       });
       try{ localStorage.setItem('ncaamb:gap:'+gameId, JSON.stringify(cs.gapLog)); }catch(e){}
     }
 
-    var latest = serverSnaps[serverSnaps.length - 1];
+    // Set initial floor score from latest snapshot if no client compute yet
+    var latest = usable[usable.length - 1];
     if(!cs.clientInd && !cs.sonnetIndicators && latest.floor_score != null){
       cs._serverFloor = {
         score: latest.floor_score,
         controlTeam: latest.floor_team,
-        I1: {score: latest.i1}, I2: {score: latest.i2},
-        I3: {score: latest.i3}, I4: {score: latest.i4}, I5: {score: latest.i5},
+        I1: {score: latest.i1, leader: latest.floor_team},
+        I2: {score: latest.i2, leader: latest.floor_team},
+        I3: {score: latest.i3, leader: latest.floor_team},
+        I4: {score: latest.i4, leader: latest.floor_team},
+        I5: {score: latest.i5, leader: latest.floor_team},
         source: 'server',
       };
     }
 
-    addLog(gameId, '📡 Server snapshots: '+serverSnaps.length+' entries hydrated'+(cs._serverFloor?' (floor: '+cs._serverFloor.controlTeam+' '+cs._serverFloor.score+')':''), true);
+    // Set ESPN WP from latest snapshot if client hasn't fetched it yet
+    if(!cs.espnWP && latest.espn_wp_home != null){
+      var g = games.find(function(x){ return x.id === gameId; });
+      cs.espnWP = {
+        home: latest.espn_wp_home,
+        away: latest.espn_wp_away || (100 - latest.espn_wp_home),
+        homeAlias: g?.home?.alias || '',
+        awayAlias: g?.away?.alias || '',
+        opening: null,
+        dataPoints: 0,
+        time: new Date(latest.ts),
+        source: 'server',
+      };
+    }
+
+    // Compute acceleration from hydrated gap log (needs 3+ entries)
+    if(cs.gapLog && cs.gapLog.length >= 3){
+      var accelResult = computeAcceleration(cs.gapLog);
+      cs.acceleration = accelResult;
+
+      // Compute combined read if we have a floor
+      var floor = cs._serverFloor || cs.sonnetIndicators || cs.clientInd;
+      if(floor && floor.score){
+        var windowResult = cs.rollingWindow || cs.pbpWindow || null;
+        cs.combinedRead = classifyCombinedRead(floor.score, floor.controlTeam, windowResult, accelResult);
+      }
+    }
+
+    // Count sources
+    var serverCount = snaps.filter(function(s){ return s.source === 'server'; }).length;
+    var clientCount = usable.length - serverCount;
+    var srcLabel = serverCount > 0 && clientCount > 0
+      ? serverCount+' server + '+clientCount+' client'
+      : serverCount > 0 ? serverCount+' server' : clientCount+' client';
+
+    addLog(gameId, '📡 DB snapshots hydrated: '+usable.length+' entries ('+srcLabel+')'
+      +(cs._serverFloor ? ' | floor: '+cs._serverFloor.controlTeam+' '+cs._serverFloor.score : '')
+      +(cs.acceleration?.accel ? ' | accel: '+cs.acceleration.accel : ''), true);
+
+    // Re-render with hydrated data
+    var g = games.find(function(x){ return x.id === gameId; });
+    if(g) renderCard(g);
 
   }catch(e){
     console.warn('Server snapshot hydration failed:', e.message);
@@ -4263,7 +4311,7 @@ function synthesize(game){
   if(state==='PRE') return null;
 
   // ── GATHER INPUTS ──
-  var floor = cs.sonnetIndicators || cs.clientInd;
+  var floor = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
   var pbp = cs.pbpWindow;
   var qtr = cs.rollingWindow;
   var ewp = cs.espnWP;
@@ -5184,7 +5232,7 @@ function computeSpreadConviction(game){
   const minsLeft = clockMins + (periodsLeft * 20);
 
   // ── STRUCTURAL CONTEXT ──
-  const floorInd = cs.sonnetIndicators || cs.clientInd;
+  const floorInd = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
   const floorScore = floorInd?.score || 0.5;
   const floorTeam = floorInd?.controlTeam || '';
   const lc = cs.clientLeadComposition;
@@ -6079,7 +6127,7 @@ function checkStructuralAlert(game){
   var p = game.period || 0;
   if(p < 2) return; // too early
 
-  var floor = cs.sonnetIndicators || cs.clientInd;
+  var floor = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
   var win = cs.pbpWindow || cs.rollingWindow;
   if(!floor || !floor.score) return;
 
@@ -7183,7 +7231,7 @@ function renderCard(game){
     var pbpW = cs.pbpWindow;
     var accel = cs.acceleration;
     var cRead = cs.combinedRead;
-    var floorInd = cs.sonnetIndicators || cs.clientInd;
+    var floorInd = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
     var _vc = function(vrd){ return vrd==='DOMINANT'?'var(--green)':vrd==='STRONG'?'var(--g2)':vrd==='EARNED'?'var(--yellow)':vrd==='NO EDGE'?'var(--t3)':'var(--t3)'; };
     var _validTeam = function(t){ return t && t!=='Neither' && t!=='EVEN' && t!=='CONTESTED' && t!=='?' && t.length<=4; };
     if(floorInd && !_validTeam(floorInd.controlTeam) && rawInd && _validTeam(rawInd.controlTeam)){
@@ -7305,7 +7353,7 @@ function renderCard(game){
     // ─── 5. DIRECTIONAL ARROWS (compact horizontal — teams as rows, metrics as columns) ───
     var arrows = cs.subMetricArrows;
     var adj = cs.adjustment;
-    var floorInd2 = cs.sonnetIndicators || cs.clientInd;
+    var floorInd2 = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
     if(arrows && arrows.home && arrows.away){
       var _arrowColor = function(arrow, isVariance){
         if(!arrow||arrow==="FLAT") return "var(--t3)";
