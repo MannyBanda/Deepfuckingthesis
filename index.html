@@ -4019,7 +4019,7 @@ async function generateThesis(gameId){
           });
           record.avgPts = games.length>0 ? (record.avgPts/games.length).toFixed(1) : 0;
 
-          return {returning, hot, cold, minsShift, record, gamesPlayed:games.length};
+          return {returning, hot, cold, minsShift, record, gamesPlayed:games.length, recentPlayerNames};
         }
 
         _recentForm.home = processTeamForm(hStats, hGames, hBdlId, homeAlias, c.homeProfile, _injuredNames);
@@ -4050,6 +4050,41 @@ async function generateThesis(gameId){
           addLog(gameId, '🔄 '+allRet.length+' returning player(s): '+allRet.map(r=>r.name).join(', '), true);
         }
         addLog(gameId, '📊 Recent form computed ('+hGames.length+'H/'+aGames.length+'A games)', true);
+
+        // ── TRADED PLAYER FILTER — strip players from roster/stats who didn't play recently and aren't injured ──
+        // This catches players SR still lists on a roster after a trade (stale profile data)
+        function filterSectionByActivePlayers(sectionText, recentNames, injNames){
+          if(!sectionText || !recentNames || recentNames.size === 0) return sectionText;
+          return sectionText.split('\n').filter(function(line){
+            // Keep non-player lines (Team:, Opp allowed:, Top players:, headers, empty)
+            if(!line.trim() || line.startsWith('Team:') || line.startsWith('Opp ') || line.startsWith('Top ') || line.startsWith('(')) return true;
+            // Extract player name (first part before [ bracket)
+            var nameMatch = line.match(/^([A-Za-z'. -]+)\s*\[/);
+            if(!nameMatch) return true; // not a player line, keep it
+            var name = nameMatch[1].trim().toLowerCase();
+            // Keep if player appeared in recent games OR is on injury report
+            if(recentNames.has(name)) return true;
+            if(injNames && injNames.has(name)) return true;
+            // Removed — likely traded
+            console.log('TRADE FILTER: stripped "'+nameMatch[1].trim()+'" from section (not in recent games, not injured)');
+            return false;
+          }).join('\n');
+        }
+
+        var homeRecent = _recentForm.home?.recentPlayerNames;
+        var awayRecent = _recentForm.away?.recentPlayerNames;
+        if(homeRecent && homeRecent.size > 0){
+          var prevHomeRoster = sections.homeRoster;
+          sections.homeRoster = filterSectionByActivePlayers(sections.homeRoster, homeRecent, _injuredNames);
+          sections.homeStats = filterSectionByActivePlayers(sections.homeStats, homeRecent, _injuredNames);
+          if(sections.homeRoster !== prevHomeRoster) addLog(gameId, '🔀 Trade filter applied to '+homeAlias+' roster', true);
+        }
+        if(awayRecent && awayRecent.size > 0){
+          var prevAwayRoster = sections.awayRoster;
+          sections.awayRoster = filterSectionByActivePlayers(sections.awayRoster, awayRecent, _injuredNames);
+          sections.awayStats = filterSectionByActivePlayers(sections.awayStats, awayRecent, _injuredNames);
+          if(sections.awayRoster !== prevAwayRoster) addLog(gameId, '🔀 Trade filter applied to '+awayAlias+' roster', true);
+        }
       }
     }catch(e){
       console.warn('Recent form pull failed (optional):', e.message);
