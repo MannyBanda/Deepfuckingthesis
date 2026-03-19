@@ -61,6 +61,8 @@ select{background:#1e293b;color:#e0e0e0;border:1px solid #334155;border-radius:6
     <button onclick="viewSnapshots()">📸 Snapshots</button>
     <button onclick="viewOdds()">💰 Odds</button>
     <button onclick="viewSustainability()">🧬 Sustainability</button>
+    <button onclick="viewSeasonCache('nba')">📈 NBA Cache</button>
+    <button onclick="viewSeasonCache('ncaamb')">📈 NCAA Cache</button>
   </div>
 </div>
 
@@ -305,6 +307,70 @@ async function viewSustainability(){
 
   contentEl.innerHTML = html;
   log('Sustainability loaded', 'log-ok');
+}
+
+// ── Season Cache viewer ──
+async function viewSeasonCache(league){
+  log('Loading season cache for ' + league.toUpperCase() + '...', 'log-info');
+  var data = await fetchJSON(FN + 'db-api?action=get_season_cache&league=' + league + '&season=2025');
+  if(!data || !data.cache){
+    log('No season cache found', 'log-warn');
+    contentEl.innerHTML = '<h2>📈 SEASON CACHE — ' + league.toUpperCase() + '</h2><div class="card" style="color:#94a3b8;font-size:11px">No cached season data. Cache populates when server polling runs for the first time with stale/missing teams.</div>';
+    return;
+  }
+
+  var teams = Object.keys(data.cache).sort();
+  log('Found ' + teams.length + ' cached teams', 'log-ok');
+
+  var staleCount = 0;
+  var html = '<h2>📈 SEASON CACHE — ' + league.toUpperCase() + ' (' + teams.length + ' teams)</h2>';
+  html += '<div class="btn-row"><button onclick="invalidateSeasonCache(\'' + league + '\')">🔄 Invalidate All (force refresh)</button></div>';
+
+  html += '<div class="card">';
+  teams.forEach(function(alias){
+    var t = data.cache[alias];
+    var updated = t.updatedAt ? new Date(t.updatedAt) : null;
+    var ageDays = updated ? ((Date.now() - updated.getTime()) / (1000*60*60*24)).toFixed(1) : '?';
+    var fresh = updated && (Date.now() - updated.getTime()) < 7*24*60*60*1000;
+    if(!fresh) staleCount++;
+    var ageColor = fresh ? '#00ff88' : '#ff5252';
+    html += '<div class="row"><span class="label">' + alias + ' (' + (t.playerCount||0) + ' players)</span><span class="val" style="color:' + ageColor + '">' + ageDays + 'd ago' + (fresh ? '' : ' STALE') + '</span></div>';
+  });
+  html += '</div>';
+
+  if(staleCount > 0){
+    html += '<div style="font-size:10px;color:#ffd166;padding:4px">⚠ ' + staleCount + ' stale teams will refresh on next poll-live cycle</div>';
+  }
+
+  // Show player detail for each team
+  teams.forEach(function(alias){
+    var t = data.cache[alias];
+    if(!t.players || t.players.length === 0) return;
+    html += '<div class="card">';
+    html += '<div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:4px">' + alias + ' — ' + t.players.length + ' players</div>';
+    // Sort by pts descending
+    var sorted = t.players.slice().sort(function(a,b){ return (b.pts||0)-(a.pts||0); });
+    sorted.slice(0, 8).forEach(function(p){
+      var name = p.player ? (p.player.first_name + ' ' + p.player.last_name) : (p.name || '?');
+      var fg3pct = p.fg3a > 0 ? (p.fg3m / p.fg3a * 100).toFixed(1) + '%' : 'N/A';
+      html += '<div class="row"><span class="label" style="font-size:10px">' + escH(name) + '</span><span class="val" style="font-size:10px">' + (p.pts||0).toFixed(1) + 'p ' + (p.ast||0).toFixed(1) + 'a ' + (p.reb||0).toFixed(1) + 'r | 3P:' + (p.fg3m||0).toFixed(1) + '/' + (p.fg3a||0).toFixed(1) + ' (' + fg3pct + ')</span></div>';
+    });
+    html += '</div>';
+  });
+
+  contentEl.innerHTML = html;
+}
+
+async function invalidateSeasonCache(league){
+  if(!confirm('Invalidate all ' + league.toUpperCase() + ' season cache? Next poll cycle will refresh from BDL.')) return;
+  log('Invalidating season cache for ' + league + '...', 'log-info');
+  var data = await fetchJSON(FN + 'db-api?action=invalidate_season_cache&league=' + league);
+  if(data && data.ok){
+    log('Season cache invalidated — will refresh on next poll-live cycle', 'log-ok');
+    viewSeasonCache(league);
+  } else {
+    log('Invalidation failed: ' + JSON.stringify(data), 'log-err');
+  }
 }
 
 // ── DB Stats ──
