@@ -227,6 +227,140 @@ exports.handler = async (event) => {
     }
 
     // ═══════════════════════════════════════════════════════
+    // BUILD_SEASON_CACHE — fetch BDL season data and save to DB
+    // ═══════════════════════════════════════════════════════
+    if (action === 'build_season_cache' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      const league = body.league || 'nba';
+      const season = body.season || '2025';
+      const forceTeams = body.teams || []; // optional: specific team aliases to refresh
+      const bdlKey = process.env.BDL_API_KEY;
+      if (!bdlKey) return { statusCode: 500, headers, body: JSON.stringify({ error: 'BDL_API_KEY not set' }) };
+
+      const BDL = 'https://api.balldontlie.io';
+      const bdlPrefix = league === 'ncaamb' ? '/ncaab' : league === 'wnba' ? '/wnba' : '/nba';
+
+      async function bdl(path) {
+        const r = await fetch(`${BDL}${path}`, { headers: { 'Authorization': bdlKey } });
+        if (!r.ok) return null;
+        return await r.json();
+      }
+
+      // Step 1: Get today's games to discover team IDs (or use forceTeams)
+      const today = new Date().toISOString().split('T')[0];
+      const gamesData = await bdl(`${bdlPrefix}/v1/games?dates[]=${today}&per_page=50`);
+      const teamIds = {}; // { 'BOS': 2, ... }
+      if (gamesData?.data) {
+        for (const g of gamesData.data) {
+          if (g.home_team?.abbreviation) teamIds[g.home_team.abbreviation] = g.home_team.id;
+          if (g.visitor_team?.abbreviation) teamIds[g.visitor_team.abbreviation] = g.visitor_team.id;
+        }
+      }
+
+      // If no games today, try yesterday
+      if (Object.keys(teamIds).length === 0) {
+        const yest = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+        const yData = await bdl(`${bdlPrefix}/v1/games?dates[]=${yest}&per_page=50`);
+        if (yData?.data) {
+          for (const g of yData.data) {
+            if (g.home_team?.abbreviation) teamIds[g.home_team.abbreviation] = g.home_team.id;
+            if (g.visitor_team?.abbreviation) teamIds[g.visitor_team.abbreviation] = g.visitor_team.id;
+          }
+        }
+      }
+
+      // Determine which teams to fetch
+      let targetTeams = forceTeams.length > 0 ? forceTeams : Object.keys(teamIds);
+
+      // Check existing cache — skip fresh teams unless forced
+      if (forceTeams.length === 0 && targetTeams.length > 0) {
+        try {
+          const existing = await sql`
+            SELECT team_alias, updated_at FROM season_cache
+            WHERE league = ${league} AND season = ${season} AND team_alias = ANY(${targetTeams})
+          `;
+          const freshSet = new Set();
+          for (const r of existing) {
+            const age = (Date.now() - new Date(r.updated_at).getTime()) / (1000 * 60 * 60 * 24);
+            if (age < 7) freshSet.add(r.team_alias);
+          }
+          const before = targetTeams.length;
+          targetTeams = targetTeams.filter(t => !freshSet.has(t));
+          if (before !== targetTeams.length) {
+            // Some teams are fresh, skip them
+          }
+        } catch (e) { /* table may not exist */ }
+      }
+
+      if (targetTeams.length === 0) {
+        return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'All teams fresh', teams: 0 }) };
+      }
+
+      // Step 2: Fetch season averages per team
+      let saved = 0, failed = 0;
+      const results = {};
+
+      for (const abbr of targetTeams) {
+        const bdlId = teamIds[abbr];
+        if (!bdlId) { failed++; continue; }
+
+        try {
+          let players = [];
+
+          if (league === 'nba') {
+            // NBA: per-player fetch. Get recent game box score for player IDs
+            const recentGames = await bdl(`/nba/v1/games?team_ids[]=${bdlId}&per_page=3`);
+            if (!recentGames?.data?.length) { failed++; continue; }
+            const gameId = recentGames.data[0].id;
+            const boxScore = await bdl(`/nba/v1/stats?game_ids[]=${gameId}&per_page=50`);
+            if (!boxScore?.data?.length) { failed++; continue; }
+
+            const teamPlayers = boxScore.data.filter(s => {
+              const mins = s.min ? parseInt(s.min) : 0;
+              return s.player?.id && s.team?.id === bdlId && mins >= 5;
+            });
+
+            // Fetch each player's season averages in parallel
+            const fetches = teamPlayers.map(async (s) => {
+              const data = await bdl(`/nba/v1/season_averages?season=${season}&player_id=${s.player.id}`);
+              if (data?.data?.length) {
+                const avg = data.data[0];
+                players.push({
+                  player: { id: s.player.id, first_name: s.player.first_name, last_name: s.player.last_name },
+                  fg3m: avg.fg3m || 0, fg3a: avg.fg3a || 0,
+                  fgm: avg.fgm || 0, fga: avg.fga || 0,
+                  pts: avg.pts || 0, reb: avg.reb || 0, ast: avg.ast || 0,
+                  stl: avg.stl || 0, blk: avg.blk || 0, turnover: avg.turnover || 0,
+                  min: avg.min || '0', games_played: avg.games_played || 0,
+                });
+              }
+            });
+            await Promise.all(fetches);
+          } else {
+            // NCAAMB/WNBA: batch endpoint
+            const data = await bdl(`${bdlPrefix}/v1/player_season_stats?season=${season}&team_id=${bdlId}&per_page=100`);
+            if (data?.data) players = data.data;
+          }
+
+          if (players.length > 0) {
+            await sql`
+              INSERT INTO season_cache (team_alias, league, season, players_json, player_count, updated_at)
+              VALUES (${abbr}, ${league}, ${season}, ${JSON.stringify(players)}, ${players.length}, NOW())
+              ON CONFLICT (team_alias, league, season) DO UPDATE SET
+                players_json = ${JSON.stringify(players)}, player_count = ${players.length}, updated_at = NOW()
+            `;
+            results[abbr] = players.length;
+            saved++;
+          } else { failed++; }
+        } catch (e) {
+          failed++;
+        }
+      }
+
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, saved, failed, teams: results }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
     // GET_SEASON_CACHE — fetch cached season averages for teams
     // ═══════════════════════════════════════════════════════
     if (action === 'get_season_cache') {
