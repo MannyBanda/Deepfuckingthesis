@@ -453,7 +453,135 @@ async function saveSnapshotDB(game){
   }catch(e){ /* silent */ }
 }
 
-// Hydrate card from server snapshots — fills gap log + floor baseline when client was inactive
+// Push rich client-computed context to DB at quarter boundaries
+// Server reads this before firing auto calibration analyses — fills the 9-layer gap
+function pushContextToDB(game){
+  if(!dbReady) return;
+  var cs = cardState[game.id]; if(!cs) return;
+  var period = game.period || 0;
+  if(period < 1) return;
+  var hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
+
+  // Collect all client-computed layers the server can't produce
+  var context = {};
+
+  // Rolling window (cross-fade weighted recent-quarter I1-I5)
+  if(cs.rollingWindow && cs.rollingWindow.available){
+    context.rollingWindow = {
+      available: true,
+      score: cs.rollingWindow.score,
+      controlTeam: cs.rollingWindow.controlTeam,
+      windowQuarters: cs.rollingWindow.windowQuarters,
+      windowPossessions: cs.rollingWindow.windowPossessions || 0,
+      possessionBased: cs.rollingWindow.possessionBased || false,
+      crossFade: cs.rollingWindow.crossFade || false,
+      dataQuality: cs.rollingWindow.dataQuality || '?',
+      I1: cs.rollingWindow.I1, I2: cs.rollingWindow.I2,
+      I3: cs.rollingWindow.I3, I4: cs.rollingWindow.I4,
+      I5: cs.rollingWindow.I5,
+      enrichSummary: cs.rollingWindow.enrichSummary || null,
+    };
+  }
+
+  // Acceleration (gap trajectory)
+  if(cs.acceleration){
+    context.acceleration = {
+      accel: cs.acceleration.accel,
+      consecutive: cs.acceleration.consecutive,
+      entries: (cs.acceleration.entries || []).slice(-5).map(function(e){
+        return {gap: e.gap, score: e.score};
+      }),
+    };
+  }
+
+  // Combined read
+  if(cs.combinedRead){
+    context.combinedRead = {
+      read: cs.combinedRead.read,
+      note: cs.combinedRead.note || '',
+    };
+  }
+
+  // Sub-metric arrows (per-quarter directional trends)
+  if(cs.subMetricArrows && (cs.subMetricArrows.home || cs.subMetricArrows.away)){
+    context.subMetricArrows = cs.subMetricArrows;
+  }
+
+  // Adjustment signal
+  if(cs.adjustment && cs.adjustment.signal && cs.adjustment.signal !== 'NO ADJUSTMENT' && cs.adjustment.signal !== 'NO DATA'){
+    context.adjustment = {
+      signal: cs.adjustment.signal,
+      team: cs.adjustment.team,
+      note: cs.adjustment.note,
+    };
+  }
+
+  // PBP audit (3PT zones, shot diet, scoring runs, forced/unforced TOs)
+  if(cs.pbpAudit && (cs.pbpAudit.home || cs.pbpAudit.away)){
+    // Trim to essential fields — full pbpAudit can be large
+    var pbp = {pbpAge: cs.pbpAudit.pbpAge, pbpPeriod: cs.pbpAudit.pbpPeriod,
+      homeAlias: cs.pbpAudit.homeAlias, awayAlias: cs.pbpAudit.awayAlias};
+    ['home','away'].forEach(function(side){
+      var tm = cs.pbpAudit[side]; if(!tm) return;
+      pbp[side] = {
+        threes: tm.threes || null, rim: tm.rim || null, mid: tm.mid || null,
+        shotDiet: tm.shotDiet || null, tos: tm.tos || null,
+      };
+    });
+    if(cs.pbpAudit.runs) pbp.runs = cs.pbpAudit.runs;
+    context.pbpAudit = pbp;
+  }
+
+  // Tracking baselines (catch-and-shoot / pull-up)
+  if(cs.trackingData){
+    context.trackingData = cs.trackingData;
+  }
+
+  // Edge history (entry timing progression)
+  if(cs.edgeHistory && cs.edgeHistory.length > 0){
+    context.edgeHistory = cs.edgeHistory.slice(-10);
+  }
+
+  // Bonus status
+  var homeBonus = game.summary?.home?.bonus || false;
+  var awayBonus = game.summary?.away?.bonus || false;
+  var homeDouble = game.summary?.home?.double_bonus || false;
+  var awayDouble = game.summary?.away?.double_bonus || false;
+  if(homeBonus || awayBonus){
+    context.bonusStatus = {
+      home: homeBonus, away: awayBonus,
+      homeDouble: homeDouble, awayDouble: awayDouble,
+    };
+  }
+
+  // ESPN WP (current + opening)
+  if(cs.espnWP){
+    context.espnWP = {
+      home: cs.espnWP.home,
+      away: cs.espnWP.away,
+      opening: cs.espnWP.opening || null,
+      dataPoints: cs.espnWP.dataPoints || 0,
+    };
+  }
+
+  // Game clock context for prompt
+  context.gamePeriod = period;
+  context.gameClock = game.clock || '';
+  context.homePts = game.homePoints || 0;
+  context.awayPts = game.awayPoints || 0;
+
+  // Skip if context is nearly empty (no meaningful layers)
+  var layerCount = Object.keys(context).filter(function(k){
+    return !['gamePeriod','gameClock','homePts','awayPts'].includes(k);
+  }).length;
+  if(layerCount === 0) return;
+
+  fetch(FN+'db-api?action=save_context',{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({game_id: game.id, league: 'nba', period: period, context: context})
+  }).catch(function(){});
+  console.log('[CTX] Pushed '+layerCount+' layers for Q'+period+' — '+hA+'v'+aA);
+}
 async function hydrateFromServerSnapshots(gameId){
   if(!dbReady) return;
   var cs = cardState[gameId]; if(!cs) return;
@@ -664,7 +792,128 @@ async function hydrateFromServerSnapshots(gameId){
   }
 }
 
-async function finalizeGameDB(game){
+// Hydrate rich computed context from server's quarter-boundary captures.
+// Fills: rollingWindow, acceleration, combinedRead, pbpAudit, subMetricArrows,
+// adjustment, bonusStatus, espnWP, edgeHistory — layers the server computes
+// at every Q1/Q2/Q3 transition even when the client was asleep.
+async function hydrateFromServerContext(gameId){
+  if(!dbReady) return;
+  var cs = cardState[gameId]; if(!cs) return;
+
+  try{
+    var r = await fetch(FN+'db-api?action=get_context&game_id='+encodeURIComponent(gameId));
+    if(!r.ok) return;
+    var data = await r.json();
+    if(!data.context) return;
+    var ctx = data.context;
+    var ctxPeriod = data.period || 0;
+    var hydrated = [];
+
+    // Rolling window — only fill if client doesn't have one or server is from a later period
+    if(ctx.rollingWindow && ctx.rollingWindow.available){
+      if(!cs.rollingWindow || !cs.rollingWindow.available || (cs.rollingWindow.source === 'server' && ctxPeriod > (cs._ctxHydratedPeriod || 0))){
+        cs.rollingWindow = ctx.rollingWindow;
+        cs.rollingWindow.source = 'server-ctx';
+        hydrated.push('window');
+      }
+    }
+
+    // Acceleration
+    if(ctx.acceleration && ctx.acceleration.accel){
+      if(!cs.acceleration || cs.acceleration.accel === 'TOO EARLY'){
+        cs.acceleration = ctx.acceleration;
+        hydrated.push('accel:'+ctx.acceleration.accel);
+      }
+    }
+
+    // Combined read
+    if(ctx.combinedRead && ctx.combinedRead.read){
+      if(!cs.combinedRead || cs.combinedRead.read === 'TOO EARLY'){
+        cs.combinedRead = ctx.combinedRead;
+        hydrated.push('read:'+ctx.combinedRead.read);
+      }
+    }
+
+    // PBP audit — only if client has no PBP or server's is from a later period
+    if(ctx.pbpAudit && (ctx.pbpAudit.home || ctx.pbpAudit.away)){
+      if(!cs.pbpAudit || (ctxPeriod > (cs.pbpPeriod || 0))){
+        cs.pbpAudit = ctx.pbpAudit;
+        cs.pbpPeriod = ctx.pbpAudit.pbpPeriod || ctxPeriod;
+        cs.pbpTime = new Date(data.updated_at || Date.now());
+        hydrated.push('pbp');
+      }
+    }
+
+    // Sub-metric arrows
+    if(ctx.subMetricArrows && (ctx.subMetricArrows.home || ctx.subMetricArrows.away)){
+      if(!cs.subMetricArrows){
+        cs.subMetricArrows = ctx.subMetricArrows;
+        hydrated.push('arrows');
+      }
+    }
+
+    // Adjustment
+    if(ctx.adjustment && ctx.adjustment.signal && ctx.adjustment.signal !== 'NO ADJUSTMENT' && ctx.adjustment.signal !== 'NO DATA'){
+      if(!cs.adjustment || cs.adjustment.signal === 'NO DATA' || cs.adjustment.signal === 'NO ADJUSTMENT'){
+        cs.adjustment = ctx.adjustment;
+        hydrated.push('adj:'+ctx.adjustment.signal);
+      }
+    }
+
+    // Bonus status
+    if(ctx.bonusStatus && (ctx.bonusStatus.home || ctx.bonusStatus.away)){
+      // Bonus is momentary — always prefer fresher data, but useful for initial hydration
+      if(!cs._bonusHydrated){
+        // Don't overwrite since bonus status changes within quarters
+        // Just note it for the initial render
+        cs._bonusHydrated = true;
+      }
+    }
+
+    // ESPN WP
+    if(ctx.espnWP && ctx.espnWP.home != null){
+      if(!cs.espnWP){
+        var g = games.find(function(x){ return x.id === gameId; });
+        cs.espnWP = {
+          home: ctx.espnWP.home, away: ctx.espnWP.away,
+          homeAlias: ctx.espnWP.homeAlias || g?.home?.alias || '',
+          awayAlias: ctx.espnWP.awayAlias || g?.away?.alias || '',
+          opening: ctx.espnWP.opening || null,
+          dataPoints: ctx.espnWP.dataPoints || 0,
+          time: new Date(data.updated_at || Date.now()),
+          source: 'server-ctx',
+        };
+        hydrated.push('espnWP:'+ctx.espnWP.home+'%');
+      }
+    }
+
+    // Edge history — merge server entries the client doesn't have
+    if(ctx.edgeHistory && ctx.edgeHistory.length > 0){
+      if(!cs.edgeHistory) cs.edgeHistory = [];
+      var existingCount = cs.edgeHistory.length;
+      // Only add server entries if client has fewer
+      if(existingCount < ctx.edgeHistory.length){
+        // Prepend server entries that predate client entries
+        var clientFirst = cs.edgeHistory.length > 0 ? cs.edgeHistory[0].time : 'zzz';
+        var serverOnly = ctx.edgeHistory.filter(function(e){ return e.time < clientFirst; });
+        if(serverOnly.length > 0){
+          cs.edgeHistory = serverOnly.concat(cs.edgeHistory);
+          hydrated.push('edges:+'+serverOnly.length);
+        }
+      }
+    }
+
+    cs._ctxHydratedPeriod = ctxPeriod;
+
+    if(hydrated.length > 0){
+      addLog(gameId, '📡 Server context hydrated (Q'+ctxPeriod+'): '+hydrated.join(', '), true);
+      var g = games.find(function(x){ return x.id === gameId; });
+      if(g) renderCard(g);
+    }
+  }catch(e){
+    console.warn('Server context hydration failed:', e.message);
+  }
+}
   if(!dbReady) return;
   var cs = cardState[game.id]; if(!cs) return;
   var hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
@@ -2168,6 +2417,8 @@ async function fetchSummary(game){
       var prevPer = cs._lastHydratedPeriod || 0;
       if(game.period > prevPer){
         cs._lastHydratedPeriod = game.period;
+        // Push rich client context to DB FIRST — server reads this before firing auto analysis
+        pushContextToDB(game);
         // Async fetch — non-blocking, updates card when ready
         (async function(gid){
           try{
@@ -2182,6 +2433,11 @@ async function fetchSummary(game){
                 applyAutoAnalysesToCards();
                 console.log('[AUTO] Q'+game.period+' new auto analyses for '+gid.substring(0,8)+': '+grouped[gid].length+' total (was '+prev+')');
               }
+            }
+            // Re-hydrate server context if client is missing key layers
+            var _cs = cardState[gid];
+            if(_cs && (!_cs.pbpAudit || !_cs.subMetricArrows || !_cs.combinedRead)){
+              hydrateFromServerContext(gid);
             }
           }catch(e){}
         })(game.id);
@@ -2254,6 +2510,7 @@ async function fetchBdlFallback(game, reason){
       var prevPer = cs._lastHydratedPeriod || 0;
       if(game.period > prevPer){
         cs._lastHydratedPeriod = game.period;
+        pushContextToDB(game);
         (async function(gid){
           try{
             var r = await fetch(FN+'db-api?action=get_auto_analyses&game_ids='+encodeURIComponent(gid));
@@ -2264,6 +2521,11 @@ async function fetchBdlFallback(game, reason){
               var prev = autoAnalysisCache[gid] ? autoAnalysisCache[gid].length : 0;
               autoAnalysisCache[gid] = grouped[gid];
               if(grouped[gid].length > prev) applyAutoAnalysesToCards();
+            }
+            // Re-hydrate server context if client is missing key layers
+            var _cs = cardState[gid];
+            if(_cs && (!_cs.pbpAudit || !_cs.subMetricArrows || !_cs.combinedRead)){
+              hydrateFromServerContext(gid);
             }
           }catch(e){}
         })(game.id);
@@ -2457,6 +2719,12 @@ async function triggerAnalysis(game){
         combinedRead: cs.combinedRead || null,
         calibration: formatCalibrationForPrompt() || null,
         wpProfiles: _wpProfileText || null,
+        espnWP: cs.espnWP ? {
+          home: cs.espnWP.home, away: cs.espnWP.away,
+          opening: cs.espnWP.opening || null,
+          dataPoints: cs.espnWP.dataPoints || 0,
+          homeAlias: cs.espnWP.homeAlias || '', awayAlias: cs.espnWP.awayAlias || '',
+        } : null,
       })
     });
     clearTimeout(_acTimer);
@@ -7800,6 +8068,8 @@ function mountCard(game){
   if(getState(game)==='LIVE'||getState(game)==='FINAL') fetchSummary(game);
   // Hydrate from server snapshots (fills gap log when device was sleeping, or for FINAL games never opened)
   if(getState(game)==='LIVE'||getState(game)==='FINAL') hydrateFromServerSnapshots(id);
+  // Hydrate rich computed context from server quarter-boundary captures (PBP, arrows, combined read, etc.)
+  if(getState(game)==='LIVE'||getState(game)==='FINAL') hydrateFromServerContext(id);
   // Auto-enrich from BDL if not already done
   if(!cardState[id].enrichDone && !cardState[id].enriching) enrichFromBDL(id);
 }
