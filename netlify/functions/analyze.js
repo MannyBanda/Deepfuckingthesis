@@ -562,6 +562,7 @@ exports.handler = async function(event) {
     var adjustment = body.adjustment;
     var combinedRead = body.combinedRead;
     var wpProfiles = body.wpProfiles || null;
+    var espnWP = body.espnWP || null;
 
     if (!summaryData) {
       return { statusCode: 400, headers: headers, body: JSON.stringify({ error: 'summaryData required' }) };
@@ -832,12 +833,30 @@ exports.handler = async function(event) {
       wpSection = '\n' + wpProfiles + '\n';
     }
 
+    // ── ESPN WIN PROBABILITY (live model) ──
+    var espnWPSection = '';
+    if (espnWP && (espnWP.home != null || espnWP.away != null)) {
+      var wpHome = espnWP.home != null ? espnWP.home : '?';
+      var wpAway = espnWP.away != null ? espnWP.away : '?';
+      var wpHomeAlias = espnWP.homeAlias || homeTeam;
+      var wpAwayAlias = espnWP.awayAlias || awayTeam;
+      espnWPSection = '\nESPN WIN PROBABILITY (live model):\n';
+      espnWPSection += wpHomeAlias + ' ' + wpHome + '% / ' + wpAwayAlias + ' ' + wpAway + '%';
+      if (espnWP.opening != null) {
+        espnWPSection += ' | Opening: ' + wpHomeAlias + ' ' + espnWP.opening + '%';
+      }
+      espnWPSection += ' (' + (espnWP.dataPoints || 0) + ' data points)\n';
+      espnWPSection += 'NOTE: ESPN WP is a reference model, not ground truth. It uses play-by-play and score context.\n';
+      espnWPSection += 'DIVERGENCE CHECK: If your FWP diverges >15% from ESPN WP, explain WHY in your analysis.\n';
+      espnWPSection += 'Common valid divergences: sustainability concern ESPN misses, structural control not reflected in score, foul trouble.\n';
+    }
+
     // ── BUILD PROMPT ──
     var userPrompt = awayTeam + ' @ ' + homeTeam + ' | ' + period + ' | ' + score + '\n\n'
       + (thesis ? 'THESIS:\n' + thesis + '\n' : 'No thesis.')
       + '\n' + clutchSection + oddsSection + bonusSection + trackingSection + sustainabilitySection + leadCompSection
       + windowSection + gapSection + combinedReadSection + arrowSection + adjustmentSection
-      + pbpSection + edgeSection + narrativeSection + wpSection
+      + pbpSection + edgeSection + narrativeSection + wpSection + espnWPSection
       + '\nGAME DATA:\n' + JSON.stringify(summaryData);
 
     var resp = await fetch('https://api.anthropic.com/v1/messages', {

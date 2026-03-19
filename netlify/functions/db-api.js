@@ -224,7 +224,64 @@ exports.handler = async (event) => {
       `;
       await sql`CREATE INDEX IF NOT EXISTS idx_season_cache_league ON season_cache(league, season)`;
 
+      // Game context — client pushes rich computed state at quarter boundaries
+      // Server reads this before firing auto calibration analyses
+      await sql`
+        CREATE TABLE IF NOT EXISTS game_context (
+          game_id TEXT NOT NULL,
+          league TEXT DEFAULT 'nba',
+          period INTEGER NOT NULL,
+          context_json JSONB,
+          updated_at TIMESTAMPTZ DEFAULT NOW(),
+          PRIMARY KEY (game_id, period)
+        )
+      `;
+
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'Schema initialized' }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // SAVE_CONTEXT — client pushes rich computed state at quarter boundaries
+    // ═══════════════════════════════════════════════════════
+    if (action === 'save_context' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      if (!body.game_id || !body.period) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id and period required' }) };
+      await sql`
+        INSERT INTO game_context (game_id, league, period, context_json, updated_at)
+        VALUES (${body.game_id}, ${body.league || 'nba'}, ${body.period}, ${JSON.stringify(body.context)}, NOW())
+        ON CONFLICT (game_id, period) DO UPDATE SET
+          context_json = ${JSON.stringify(body.context)}, updated_at = NOW()
+      `;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_CONTEXT — server reads client-pushed context before auto analysis
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_context') {
+      const gameId = params.game_id;
+      if (!gameId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id required' }) };
+      const period = params.period ? parseInt(params.period) : null;
+
+      let rows;
+      if (period) {
+        rows = await sql`
+          SELECT period, context_json, updated_at FROM game_context
+          WHERE game_id = ${gameId} AND period = ${period}
+        `;
+      } else {
+        // Return latest context (highest period)
+        rows = await sql`
+          SELECT period, context_json, updated_at FROM game_context
+          WHERE game_id = ${gameId}
+          ORDER BY period DESC LIMIT 1
+        `;
+      }
+
+      if (rows.length === 0) return { statusCode: 200, headers, body: JSON.stringify({ context: null }) };
+      const r = rows[0];
+      const ctx = typeof r.context_json === 'string' ? JSON.parse(r.context_json) : r.context_json;
+      return { statusCode: 200, headers, body: JSON.stringify({ context: ctx, period: r.period, updated_at: r.updated_at }) };
     }
 
     // ═══════════════════════════════════════════════════════

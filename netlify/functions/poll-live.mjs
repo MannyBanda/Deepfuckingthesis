@@ -693,6 +693,501 @@ function computeLeadComposition(summary) {
   return { classification, leadTeam, structuralMargin: leadStruct, varianceMargin: leadVar };
 }
 
+// ── SERVER-SIDE CONTEXT COMPUTATION ─────────────────────────────────────────
+// Computes the 9 data layers that are normally client-only.
+// Used as fallback when client hasn't pushed context to DB.
+// Priority: client-pushed context > server-computed context > null.
+
+// Classify combined read — ported from client
+function classifyCombinedReadServer(floorScore, floorTeam, windowResult, accelResult) {
+  if (!windowResult || !windowResult.available) return { read: 'TOO EARLY', note: 'Window not yet available' };
+  const wScore = windowResult.score;
+  const wTeam = windowResult.controlTeam;
+  const accel = accelResult?.accel || 'STABLE';
+
+  if (floorTeam !== wTeam) {
+    if (accel === 'FLIPPED') return { read: 'FLIPPED', note: wTeam + ' taking control from ' + floorTeam };
+    return { read: 'SHIFT', note: 'Floor: ' + floorTeam + ' / Window: ' + wTeam + ' — control contested' };
+  }
+  if (floorScore >= 0.75 && wScore >= 0.80 && (accel === 'GROWING' || accel === 'STABLE'))
+    return { read: 'DOMINANT', note: 'Structural edge compounding' };
+  if (floorScore >= 0.75 && wScore >= 0.75)
+    return { read: 'STRONG', note: 'Structural edge holding' };
+  if (floorScore >= 0.75 && wScore >= 0.60 && wScore < 0.75 && (accel === 'DECLINING' || accel === 'STABLE'))
+    return { read: 'ERODING', note: 'Structure holds but momentum lost' };
+  if (floorScore >= 0.75 && wScore < 0.60)
+    return { read: 'COLLAPSING', note: 'Structural edge breaking down' };
+  if (floorScore >= 0.60 && floorScore < 0.75 && wScore >= 0.75 && accel === 'GROWING')
+    return { read: 'EMERGING', note: 'Edge strengthening toward confirmation' };
+  if (floorScore >= 0.60 && floorScore < 0.75 && wScore >= 0.60)
+    return { read: 'EARNED', note: 'Modest edge, steady' };
+  if (floorScore >= 0.60 && floorScore < 0.75 && wScore < 0.60)
+    return { read: 'FADING', note: 'Edge was real but dissipating' };
+  if (floorScore < 0.60 && wScore >= 0.65 && accel === 'GROWING')
+    return { read: 'SHIFT', note: 'No cumulative edge but recent control emerging' };
+  return { read: 'NO EDGE', note: 'Insufficient signal' };
+}
+
+// Compute acceleration from gap entries — ported from client
+function computeAccelerationServer(entries) {
+  if (!entries || entries.length < 2) return { accel: 'TOO EARLY', entries: entries || [], consecutive: 0 };
+
+  const recent = entries.slice(-4);
+  const deltas = [];
+  for (let i = 1; i < recent.length; i++) deltas.push(recent[i].gap - recent[i - 1].gap);
+
+  // Check gap sign flip
+  const lastTwo = entries.slice(-2);
+  if ((lastTwo[0].gap > 0.02 && lastTwo[1].gap < -0.02) || (lastTwo[0].gap < -0.02 && lastTwo[1].gap > 0.02)) {
+    return { accel: 'FLIPPED', entries: entries.slice(-5), consecutive: 1 };
+  }
+
+  const threshold = 0.015;
+  let growing = 0, declining = 0;
+  for (let i = deltas.length - 1; i >= 0; i--) {
+    if (deltas[i] > threshold) growing++;
+    else if (deltas[i] < -threshold) declining++;
+    else break;
+  }
+
+  if (growing >= 2) return { accel: 'GROWING', entries: entries.slice(-5), consecutive: growing };
+  if (declining >= 2) return { accel: 'DECLINING', entries: entries.slice(-5), consecutive: declining };
+  return { accel: 'STABLE', entries: entries.slice(-5), consecutive: 0 };
+}
+
+// Classify adjustment from arrows — ported from client
+function classifyAdjustmentServer(arrows, controlTeam, hA, aA) {
+  if (!arrows) return { signal: 'NO DATA', note: 'Arrows unavailable' };
+  const side = controlTeam === hA ? 'home' : 'away';
+  const a = arrows[side];
+  if (!a) return { signal: 'NO DATA', note: 'No arrow data for control team' };
+  const risingStructural = ['paint', 'atRim', 'fta', 'steals'].filter(k => a[k]?.arrow === 'RISING').length;
+  const fallingVariance = ['fg3aShare', 'tos'].filter(k => a[k]?.arrow === 'FALLING').length;
+  const fallingStructural = ['paint', 'atRim', 'fta'].filter(k => a[k]?.arrow === 'FALLING').length;
+  const risingVariance = ['fg3aShare', 'tos'].filter(k => a[k]?.arrow === 'RISING').length;
+
+  if (risingStructural >= 2 && fallingVariance >= 1)
+    return { signal: 'INTERIOR PIVOT', note: 'Progressive rim pressure replacing perimeter variance', team: controlTeam };
+  if (fallingStructural >= 2)
+    return { signal: 'STRUCTURAL EROSION', note: 'Interior game fading — structural edge at risk', team: controlTeam };
+  if (risingVariance >= 1 && fallingStructural >= 1)
+    return { signal: 'VARIANCE SHIFT', note: 'Shifting to perimeter — production becoming less durable', team: controlTeam };
+  if (risingStructural >= 2)
+    return { signal: 'STRUCTURAL ACCEL', note: 'Multiple structural inputs compounding', team: controlTeam };
+  return { signal: 'NO ADJUSTMENT', note: 'Shot diet stable', team: controlTeam };
+}
+
+// Parse PBP into audit — simplified server-side port (no possession log, no timeline)
+function parsePBPServer(pbpData, hId, aId, hA, aA) {
+  const allEvents = [];
+  const periods = pbpData?.periods || [];
+  periods.forEach(per => {
+    const q = per.number || per.sequence || 0;
+    (per.events || []).forEach(ev => { ev._quarter = q; allEvents.push(ev); });
+  });
+
+  function resolveTeam(ev, stat) {
+    const attrId = ev.attribution?.id || stat?.team?.id || '';
+    if (attrId === hId) return hA;
+    if (attrId === aId) return aA;
+    return ev.attribution?.market || '?';
+  }
+
+  function classifyZone(ev, stat, isThree) {
+    const loc = ev.location || {};
+    const actionArea = (loc.action_area || ev.action_area || stat.action_area || '').toLowerCase();
+    const coordY = loc.coord_y ?? ev.coord_y ?? null;
+    const shotDist = stat.shot_distance ?? ev.shot_distance ?? null;
+    if (isThree) {
+      if (actionArea.includes('corner') || (coordY !== null && (coordY < 8 || coordY > 42))) return 'corner3';
+      return 'above3';
+    }
+    if (shotDist !== null && shotDist <= 4) return 'rim';
+    const shotTypeRaw = (stat.shot_type_desc || stat.shot_type || '').toLowerCase();
+    const descRaw = (ev.description || '').toLowerCase();
+    if (actionArea.includes('restricted') || actionArea.includes('rim')
+      || shotTypeRaw.includes('layup') || shotTypeRaw.includes('dunk') || shotTypeRaw.includes('tip')
+      || descRaw.includes('layup') || descRaw.includes('dunk')) return 'rim';
+    if (actionArea.includes('paint') || actionArea.includes('lane')) return 'paint';
+    return 'mid';
+  }
+
+  function classifyTO(stat, ev) {
+    const toType = (stat.turnover_type || ev.turnover_type || '').toLowerCase();
+    const desc = (ev.description || '').toLowerCase();
+    if (toType.includes('steal') || toType.includes('bad pass') || desc.includes('steal')) return true;
+    if (toType.includes('lost ball') || toType.includes('out of bounds') || toType.includes('travel') || toType.includes('violation')) return false;
+    return null;
+  }
+
+  const shots = [], turnovers = [], scoreLog = [];
+  let hScore = 0, aScore = 0;
+
+  allEvents.forEach(ev => {
+    if (ev.rescinded) return;
+    const et = (ev.event_type || '').toLowerCase().replace(/[\s_-]/g, '');
+    const stat = (ev.statistics || [])[0] || {};
+    const team = resolveTeam(ev, stat);
+    const player = stat?.player?.full_name || stat?.player?.name || ev.player?.full_name || '?';
+    const quarter = ev._quarter;
+
+    const isThree = et.includes('threepoint') || et.includes('3pt');
+    const isTwo = et.includes('twopoint') || et.includes('2pt');
+    if (isThree || isTwo) {
+      const made = et.includes('made');
+      const zone = classifyZone(ev, stat, isThree);
+      let assisted = false;
+      if (made) {
+        const d = (ev.description || '').toLowerCase();
+        if (d.includes('assist')) assisted = true;
+        (ev.statistics || []).forEach(s => { if ((s.type || '').toLowerCase().includes('assist')) assisted = true; });
+      }
+      const pts = made ? (isThree ? 3 : 2) : 0;
+      shots.push({ p: player, tm: team, z: zone, m: made, a: assisted, q: quarter, is3: isThree });
+      if (made) {
+        if (team === hA) hScore += pts; else aScore += pts;
+        scoreLog.push({ team, pts, hScore, aScore, q: quarter });
+      }
+    } else if (et.includes('turnover')) {
+      const forced = classifyTO(stat, ev);
+      const toType = (stat.turnover_type || ev.turnover_type || '').substring(0, 40);
+      turnovers.push({ p: player, tm: team, q: quarter, forced, type: toType });
+    }
+  });
+
+  // Scoring runs
+  const runs = [];
+  let runTeam = null, runPts = 0, runStart = 0, runCount = 0, runShotTypes = [];
+  for (let i = 0; i < scoreLog.length; i++) {
+    const s = scoreLog[i];
+    if (s.team === runTeam) {
+      runPts += s.pts; runCount++;
+      runShotTypes.push(s.pts === 3 ? '3PT' : s.pts === 1 ? 'FT' : '2PT');
+    } else {
+      if (runPts >= 8 || runCount >= 3) runs.push({ team: runTeam, pts: runPts, count: runCount, q: scoreLog[runStart]?.q, mechanism: runShotTypes.slice() });
+      runTeam = s.team; runPts = s.pts; runStart = i; runCount = 1; runShotTypes = [s.pts === 3 ? '3PT' : s.pts === 1 ? 'FT' : '2PT'];
+    }
+  }
+  if (runPts >= 8 || runCount >= 3) runs.push({ team: runTeam, pts: runPts, count: runCount, q: scoreLog[runStart]?.q, mechanism: runShotTypes.slice() });
+  runs.sort((a, b) => b.pts - a.pts);
+
+  // Per-team aggregation
+  function aggTeam(tm) {
+    const s = shots.filter(x => x.tm === tm);
+    const threes = s.filter(x => x.is3), rim = s.filter(x => x.z === 'rim'), mid = s.filter(x => x.z === 'mid');
+    const threeMade = threes.filter(x => x.m), rimMade = rim.filter(x => x.m), midMade = mid.filter(x => x.m);
+    const assistedThrees = threeMade.filter(x => x.a).length;
+    const assistedMid = midMade.filter(x => x.a).length;
+
+    // Per-player 3PT
+    const playerThrees = {};
+    threes.forEach(x => {
+      if (!playerThrees[x.p]) playerThrees[x.p] = { name: x.p, made: 0, att: 0, assisted: 0, contexts: {} };
+      playerThrees[x.p].att++;
+      if (x.m) { playerThrees[x.p].made++; if (x.a) playerThrees[x.p].assisted++; }
+    });
+    // Per-player rim
+    const playerRim = {};
+    rim.forEach(x => {
+      if (!playerRim[x.p]) playerRim[x.p] = { name: x.p, made: 0, att: 0, contexts: {} };
+      playerRim[x.p].att++; if (x.m) playerRim[x.p].made++;
+    });
+    // Per-player mid
+    const playerMid = {};
+    mid.forEach(x => {
+      if (!playerMid[x.p]) playerMid[x.p] = { name: x.p, made: 0, att: 0, assisted: 0 };
+      playerMid[x.p].att++; if (x.m) { playerMid[x.p].made++; if (x.a) playerMid[x.p].assisted++; }
+    });
+    // TOs
+    const tms = turnovers.filter(t => t.tm === tm);
+    const forced = tms.filter(t => t.forced === true).length;
+    const unforced = tms.filter(t => t.forced === false).length;
+    const unknown = tms.filter(t => t.forced === null).length;
+
+    return {
+      threes: { made: threeMade.length, att: threes.length, assisted: assistedThrees, pct: threes.length > 0 ? (threeMade.length / threes.length * 100).toFixed(1) : '0',
+        corner: { made: threeMade.filter(x => x.z === 'corner3').length, att: threes.filter(x => x.z === 'corner3').length },
+        above: { made: threeMade.filter(x => x.z === 'above3').length, att: threes.filter(x => x.z === 'above3').length },
+        byPlayer: Object.values(playerThrees).filter(x => x.att >= 1).sort((a, b) => b.att - a.att) },
+      rim: { made: rimMade.length, att: rim.length, pct: rim.length > 0 ? (rimMade.length / rim.length * 100).toFixed(1) : '0',
+        byPlayer: Object.values(playerRim).filter(x => x.att >= 1).sort((a, b) => b.att - a.att) },
+      mid: { made: midMade.length, att: mid.length, assisted: assistedMid, pct: mid.length > 0 ? (midMade.length / mid.length * 100).toFixed(1) : '0',
+        byPlayer: Object.values(playerMid).filter(x => x.att >= 1).sort((a, b) => b.att - a.att) },
+      tos: { total: tms.length, forced, unforced, unknown, byPlayer: tms },
+      shotDiet: { total: s.length, threePct: s.length > 0 ? (threes.length / s.length * 100).toFixed(1) : '0', rimPct: s.length > 0 ? (rim.length / s.length * 100).toFixed(1) : '0', midPct: s.length > 0 ? (mid.length / s.length * 100).toFixed(1) : '0' },
+    };
+  }
+
+  return {
+    home: aggTeam(hA), away: aggTeam(aA),
+    homeAlias: hA, awayAlias: aA,
+    totalShots: shots.length, totalTOs: turnovers.length,
+    runs: runs.slice(0, 5),
+    // Per-quarter sub-metric aggregation for arrows
+    perQuarter: buildPerQuarterMetrics(shots, turnovers, hA, aA),
+    pbpPeriod: periods.length,
+    pbpAge: 0,
+  };
+}
+
+// Build per-quarter sub-metrics from PBP for arrow computation
+function buildPerQuarterMetrics(shots, turnovers, hA, aA) {
+  const quarters = {};
+  // Get all quarter numbers
+  const allQ = new Set();
+  shots.forEach(s => allQ.add(s.q));
+  turnovers.forEach(t => allQ.add(t.q));
+
+  for (const q of allQ) {
+    const qShots = shots.filter(s => s.q === q);
+    const qTOs = turnovers.filter(t => t.q === q);
+
+    function teamMetrics(tm) {
+      const s = qShots.filter(x => x.tm === tm);
+      const threes = s.filter(x => x.is3);
+      const rim = s.filter(x => x.z === 'rim');
+      const rimMade = rim.filter(x => x.m);
+      const threeMade = threes.filter(x => x.m);
+      const allMade = s.filter(x => x.m);
+      const assisted = allMade.filter(x => x.a).length;
+      const tms = qTOs.filter(t => t.tm === tm);
+      const stls = qTOs.filter(t => t.tm !== tm && t.forced === true).length; // opponent's forced TOs = our steals
+
+      return {
+        points_in_the_paint: rimMade.length * 2, // proxy
+        field_goals_at_rim_att: rim.length,
+        free_throws_att: 0, // can't extract from shot PBP alone — would need FT events
+        steals: stls,
+        turnovers: tms.length,
+        fg3a_share: s.length > 0 ? (threes.length / s.length * 100) : 0,
+        assist_ratio: allMade.length > 0 ? (assisted / allMade.length * 100) : 0,
+        possessions: s.length + tms.length, // rough proxy
+      };
+    }
+
+    quarters[q] = {
+      home: teamMetrics(hA),
+      away: teamMetrics(aA),
+    };
+  }
+  return quarters;
+}
+
+// Compute sub-metric arrows from per-quarter PBP metrics
+function computeSubMetricArrowsServer(perQuarter, hA, aA) {
+  if (!perQuarter) return null;
+  const qNums = Object.keys(perQuarter).map(Number).sort((a, b) => a - b);
+  if (qNums.length < 2) return null;
+
+  const metrics = [
+    { key: 'paint', field: 'points_in_the_paint', label: 'Paint pts', threshold: 3 },
+    { key: 'atRim', field: 'field_goals_at_rim_att', label: 'At-rim att', threshold: 2 },
+    { key: 'fta', field: 'free_throws_att', label: 'FTA', threshold: 2 },
+    { key: 'steals', field: 'steals', label: 'Steals', threshold: 1 },
+    { key: 'tos', field: 'turnovers', label: 'TOs', threshold: 1 },
+    { key: 'fg3aShare', field: 'fg3a_share', label: '3PA%', threshold: 5 },
+    { key: 'astRatio', field: 'assist_ratio', label: 'Ast ratio', threshold: 8 },
+    { key: 'poss', field: 'possessions', label: 'Poss', threshold: 2 },
+  ];
+
+  function computeArrow(values, threshold) {
+    const valid = values.filter(v => v != null);
+    if (valid.length < 2) return { arrow: null, values };
+    const last3 = valid.slice(-3);
+    if (last3.length < 2) return { arrow: null, values: last3 };
+    const first = last3[0], last = last3[last3.length - 1];
+    const diff = last - first;
+    let rising = true, falling = true;
+    for (let i = 1; i < last3.length; i++) {
+      if (last3[i] < last3[i - 1]) rising = false;
+      if (last3[i] > last3[i - 1]) falling = false;
+    }
+    if (rising && diff > threshold) return { arrow: 'RISING', values: last3 };
+    if (falling && Math.abs(diff) > threshold) return { arrow: 'FALLING', values: last3 };
+    if (last3.length >= 3) {
+      if (last3[1] > first + threshold && last > first + threshold) return { arrow: 'RISING', values: last3 };
+      if (last3[1] < first - threshold && last < first - threshold) return { arrow: 'FALLING', values: last3 };
+    }
+    return { arrow: 'FLAT', values: last3 };
+  }
+
+  const result = { home: {}, away: {} };
+  ['home', 'away'].forEach(side => {
+    metrics.forEach(m => {
+      const vals = qNums.map(q => perQuarter[q]?.[side]?.[m.field] ?? null);
+      const { arrow, values } = computeArrow(vals, m.threshold);
+      const display = arrow ? (arrow === 'RISING' ? '▲' : arrow === 'FALLING' ? '▼' : '▬') : '—';
+      const valStr = values.map(v => v != null ? (m.field.includes('share') || m.field.includes('ratio') ? v.toFixed(0) + '%' : String(Math.round(v))) : '?').join('→');
+      result[side][m.key] = { arrow, values, display: display + ' (' + valStr + ')', label: m.label };
+    });
+  });
+
+  return result;
+}
+
+// Main server context computation — called when client hasn't pushed context
+async function computeServerContext(sql, game, league, summary, ind, espnWP, hA, aA, period, clock, matchup) {
+  const ctx = {};
+  const W = { I1: 0.25, I2: 0.25, I3: 0.20, I4: 0.20, I5: 0.10 };
+
+  // ── 1. BONUS STATUS (from SR summary — trivial) ──
+  if (summary.home?.bonus || summary.away?.bonus) {
+    ctx.bonusStatus = {
+      home: summary.home?.bonus || false,
+      away: summary.away?.bonus || false,
+      homeDouble: summary.home?.double_bonus || false,
+      awayDouble: summary.away?.double_bonus || false,
+    };
+  }
+
+  // ── 2. ESPN WP ──
+  if (espnWP) {
+    ctx.espnWP = {
+      home: espnWP.home, away: espnWP.away,
+      homeAlias: hA, awayAlias: aA,
+      opening: null, dataPoints: 0,
+    };
+  }
+
+  // ── 3. EDGE HISTORY (from prior analyses in DB) ──
+  try {
+    const rows = await sql`
+      SELECT control_team, control_score, fwp, edge, ts, period, clock
+      FROM analyses WHERE game_id = ${game.id}
+      ORDER BY ts ASC LIMIT 10
+    `;
+    if (rows.length > 0) {
+      ctx.edgeHistory = rows.map(r => ({
+        time: r.ts ? new Date(r.ts).toLocaleTimeString('en-US', { timeZone: 'America/New_York' }) : '?',
+        period: 'Q' + (r.period || '?'),
+        edge: r.edge || '?',
+        fwp: r.fwp || '?',
+        control: (r.control_team || '?') + ' ' + (r.control_score != null ? r.control_score.toFixed(2) : '?'),
+        score: '',
+      }));
+    }
+  } catch (e) { /* no prior analyses */ }
+
+  // ── 4. ROLLING WINDOW + ACCELERATION (from DB snapshots) ──
+  try {
+    const snaps = await sql`
+      SELECT period, floor_score, floor_team, i1, i2, i3, i4, i5, ts
+      FROM snapshots WHERE game_id = ${game.id} AND floor_score IS NOT NULL
+      ORDER BY ts ASC
+    `;
+
+    if (snaps.length >= 2) {
+      // Rolling window: group by period, cross-fade weighted
+      const byPeriod = {};
+      for (const s of snaps) {
+        if (s.period >= 1) byPeriod[s.period] = s; // last snapshot per period
+      }
+      const periodKeys = Object.keys(byPeriod).map(Number).sort((a, b) => a - b);
+
+      if (periodKeys.length >= 2) {
+        const maxPer = periodKeys[periodKeys.length - 1];
+        let wI1 = 0, wI2 = 0, wI3 = 0, wI4 = 0, wI5 = 0, wSum = 0;
+        for (const pk of periodKeys) {
+          const sn = byPeriod[pk];
+          const weight = (pk === maxPer) ? 1.0 : (pk >= maxPer - 1) ? 1.0 : 0.5;
+          wI1 += (sn.i1 ?? 0.5) * weight;
+          wI2 += (sn.i2 ?? 0.5) * weight;
+          wI3 += (sn.i3 ?? 0.5) * weight;
+          wI4 += (sn.i4 ?? 0.5) * weight;
+          wI5 += (sn.i5 ?? 0.5) * weight;
+          wSum += weight;
+        }
+        if (wSum > 0) {
+          const nI1 = wI1 / wSum, nI2 = wI2 / wSum, nI3 = wI3 / wSum, nI4 = wI4 / wSum, nI5 = wI5 / wSum;
+          const rawW = nI1 * W.I1 + nI2 * W.I2 + nI3 * W.I3 + nI4 * W.I4 + nI5 * W.I5;
+          const ctrlHomeW = rawW >= 0.5;
+          const wTeam = ctrlHomeW ? hA : aA;
+          const wScore = ctrlHomeW ? rawW : 1 - rawW;
+          ctx.rollingWindow = {
+            available: true,
+            score: Math.round(wScore * 100) / 100,
+            controlTeam: wTeam,
+            windowQuarters: periodKeys.map(q => 'Q' + q),
+            windowPossessions: 0,
+            possessionBased: false,
+            dataQuality: 'SERVER',
+            I1: { score: Math.round(nI1 * 10) / 10 }, I2: { score: Math.round(nI2 * 10) / 10 },
+            I3: { score: Math.round(nI3 * 10) / 10 }, I4: { score: Math.round(nI4 * 10) / 10 },
+            I5: { score: Math.round(nI5 * 10) / 10 },
+          };
+        }
+      }
+
+      // Acceleration: compute gap (window - floor) across snapshots
+      if (ctx.rollingWindow && snaps.length >= 3) {
+        const gapEntries = [];
+        // Use one entry per period boundary from snapshots
+        for (const pk of periodKeys) {
+          const sn = byPeriod[pk];
+          if (sn.floor_score != null && ctx.rollingWindow.score != null) {
+            // Approximate gap at each period
+            const periodRaw = (sn.i1 ?? 0.5) * W.I1 + (sn.i2 ?? 0.5) * W.I2 + (sn.i3 ?? 0.5) * W.I3 + (sn.i4 ?? 0.5) * W.I4 + (sn.i5 ?? 0.5) * W.I5;
+            const periodScore = periodRaw >= 0.5 ? periodRaw : 1 - periodRaw;
+            const gap = periodScore - sn.floor_score;
+            gapEntries.push({ gap, score: sn.floor_score, period: pk });
+          }
+        }
+        if (gapEntries.length >= 2) {
+          ctx.acceleration = computeAccelerationServer(gapEntries);
+        }
+      }
+
+      // Combined read
+      if (ctx.rollingWindow) {
+        ctx.combinedRead = classifyCombinedReadServer(ind.score, ind.controlTeam, ctx.rollingWindow, ctx.acceleration);
+      }
+    }
+  } catch (e) {
+    log(`${matchup}: server context — snapshot query failed: ${e.message}`);
+  }
+
+  // ── 5. PBP AUDIT + SUB-METRIC ARROWS (one SR API call) ──
+  try {
+    const cfg = LEAGUES[league];
+    const apiKey = process.env[cfg.srKeyEnv];
+    if (apiKey) {
+      await sleep(SR_DELAY_MS);
+      const pbpData = await srFetch(league, `games/${game.id}/pbp.json`);
+      if (pbpData) {
+        const hId = summary.home?.id || '';
+        const aId = summary.away?.id || '';
+        const pbpResult = parsePBPServer(pbpData, hId, aId, hA, aA);
+        if (pbpResult) {
+          ctx.pbpAudit = {
+            home: pbpResult.home, away: pbpResult.away,
+            homeAlias: hA, awayAlias: aA,
+            runs: pbpResult.runs,
+            pbpPeriod: pbpResult.pbpPeriod, pbpAge: 0,
+          };
+
+          // Sub-metric arrows from PBP per-quarter data
+          if (pbpResult.perQuarter) {
+            ctx.subMetricArrows = computeSubMetricArrowsServer(pbpResult.perQuarter, hA, aA);
+            // Adjustment signal from arrows
+            if (ctx.subMetricArrows && ind.controlTeam) {
+              ctx.adjustment = classifyAdjustmentServer(ctx.subMetricArrows, ind.controlTeam, hA, aA);
+            }
+          }
+        }
+        log(`${matchup}: server PBP parsed — ${pbpResult?.totalShots || 0} shots, ${pbpResult?.totalTOs || 0} TOs, ${Object.keys(pbpResult?.perQuarter || {}).length}Q arrows`);
+      }
+    }
+  } catch (e) {
+    log(`${matchup}: server PBP fetch failed: ${e.message}`);
+  }
+
+  const layerCount = Object.keys(ctx).length;
+  if (layerCount > 0) {
+    log(`${matchup}: server context computed — ${layerCount} layers: ${Object.keys(ctx).join(', ')}`);
+  }
+  return layerCount > 0 ? ctx : null;
+}
+
 // ── Q3-END CALIBRATION: PARSE SONNET RESPONSE ──────────────────────────────
 // Extracts structured fields from Sonnet's analysis text for DB storage.
 
@@ -855,6 +1350,33 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
     const scoreLine = `${aA} ${ind.awayPts} — ${hA} ${ind.homePts}`;
     const periodStr = `Q${period} ${clock}`;
 
+    // ── 6. Read client-pushed context from DB (rich layers only client can compute) ──
+    let clientCtx = null;
+    let ctxSource = 'none';
+    try {
+      const ctxRows = await sql`
+        SELECT context_json, period, updated_at FROM game_context
+        WHERE game_id = ${game.id}
+        ORDER BY period DESC LIMIT 1
+      `;
+      if (ctxRows.length > 0) {
+        clientCtx = typeof ctxRows[0].context_json === 'string'
+          ? JSON.parse(ctxRows[0].context_json)
+          : ctxRows[0].context_json;
+        const ctxAge = (Date.now() - new Date(ctxRows[0].updated_at).getTime()) / 60000;
+        const ctxLayers = clientCtx ? Object.keys(clientCtx).filter(k => !['gamePeriod','gameClock','homePts','awayPts'].includes(k)).length : 0;
+        log(`${matchup}: ${triggerTag} CAL — client context found (Q${ctxRows[0].period}, ${ctxAge.toFixed(0)}m ago, ${ctxLayers} layers)`);
+        ctxSource = 'client';
+      }
+    } catch (e) { /* game_context table may not exist yet */ }
+
+    // ── 6b. Server fallback — compute context when client is asleep ──
+    if (!clientCtx) {
+      log(`${matchup}: ${triggerTag} CAL — no client context, computing server-side fallback`);
+      clientCtx = await computeServerContext(sql, game, league, summary, ind, espnWP, hA, aA, period, clock, matchup);
+      if (clientCtx) ctxSource = 'server';
+    }
+
     const payload = {
       summaryData: summary,
       thesis: thesis ? thesis + (calibrationNote ? '\n\n' + calibrationNote : '') : calibrationNote || null,
@@ -869,19 +1391,29 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       } : null,
       wpProfiles: wpProfiles,
       analysisHistory: analysisHistory,
-      // Not available server-side — null is safe, analyze.js gracefully skips
-      edgeHistory: null,
-      trackingData: null,
-      pbpAudit: null,
-      rollingWindow: null,
-      acceleration: null,
-      subMetricArrows: null,
-      adjustment: null,
-      combinedRead: null,
+      // Client-pushed context — fills the 9-layer gap when client is active
+      edgeHistory: clientCtx?.edgeHistory || null,
+      trackingData: clientCtx?.trackingData || null,
+      pbpAudit: clientCtx?.pbpAudit || null,
+      rollingWindow: clientCtx?.rollingWindow || null,
+      acceleration: clientCtx?.acceleration || null,
+      subMetricArrows: clientCtx?.subMetricArrows || null,
+      adjustment: clientCtx?.adjustment || null,
+      combinedRead: clientCtx?.combinedRead || null,
+      bonusStatus: clientCtx?.bonusStatus || null,
+      gameClock: clientCtx?.gameClock || clock,
+      gamePeriod: period,
+      // ESPN WP: prefer server's fresh fetch, fall back to client-pushed
+      espnWP: espnWP ? {
+        home: espnWP.home, away: espnWP.away,
+        homeAlias: hA, awayAlias: aA,
+        opening: null, dataPoints: 0,
+      } : clientCtx?.espnWP || null,
     };
 
     // ── 7. Call analyze function ──
-    log(`${matchup}: ${triggerTag} CAL — firing Sonnet analysis (thesis:${thesis ? 'yes' : 'no'} clutch:${clutchData ? 'yes' : 'no'} odds:${odds ? 'yes' : 'no'} wp:${wpProfiles ? 'yes' : 'no'})`);
+    const ctxStatus = ctxSource === 'client' ? 'client✓' : ctxSource === 'server' ? 'server-computed' : 'no-context';
+    log(`${matchup}: ${triggerTag} CAL — firing Sonnet analysis (${ctxStatus} thesis:${thesis ? 'yes' : 'no'} clutch:${clutchData ? 'yes' : 'no'} odds:${odds ? 'yes' : 'no'} wp:${wpProfiles ? 'yes' : 'no'})`);
 
     const resp = await fetch(`${siteUrl}/.netlify/functions/analyze`, {
       method: 'POST',
