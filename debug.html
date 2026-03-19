@@ -40,6 +40,7 @@ select{background:#1e293b;color:#e0e0e0;border:1px solid #334155;border-radius:6
   <button onclick="checkTheses()">📝 Theses</button>
   <button onclick="checkAnalyses()">🧠 Analyses</button>
   <button onclick="checkPollState()">⏱ Poll State</button>
+  <button onclick="viewCalibration('nba')">📐 Calibration</button>
   <button onclick="checkClutch()">🏀 Clutch</button>
   <button onclick="testWrite()">✏️ Test Write</button>
   <button onclick="bulkSaveAnalyses()">📤 Bulk Save Analyses</button>
@@ -307,6 +308,197 @@ async function viewSustainability(){
 
   contentEl.innerHTML = html;
   log('Sustainability loaded', 'log-ok');
+}
+
+// ── Calibration Dashboard ──
+async function viewCalibration(league){
+  log('Loading calibration data for ' + league.toUpperCase() + '...', 'log-info');
+  var data = await fetchJSON(FN + 'db-api?action=get_calibration&league=' + league);
+  if(!data || !data.games || data.games.length === 0){
+    log('No finalized games with data', 'log-warn');
+    contentEl.innerHTML = '<h2>📐 CALIBRATION — ' + league.toUpperCase() + '</h2><div class="card" style="color:#94a3b8;font-size:11px">No finalized games found. Need games with winner + snapshot data.</div>';
+    return;
+  }
+
+  var games = data.games;
+  log('Loaded ' + games.length + ' finalized games', 'log-ok');
+
+  // ── 1. Floor Score → Win Rate ──
+  var floorBuckets = {'0.50-0.59':{w:0,l:0}, '0.60-0.69':{w:0,l:0}, '0.70-0.79':{w:0,l:0}, '0.80+':{w:0,l:0}};
+  var floorTotal = {w:0, l:0};
+  games.forEach(function(g){
+    if(!g.floor_score || !g.floor_team || !g.winner) return;
+    var floorTeamWon = g.floor_team === g.winner;
+    var s = g.floor_score;
+    var bucket = s >= 0.80 ? '0.80+' : s >= 0.70 ? '0.70-0.79' : s >= 0.60 ? '0.60-0.69' : '0.50-0.59';
+    if(floorTeamWon){ floorBuckets[bucket].w++; floorTotal.w++; }
+    else { floorBuckets[bucket].l++; floorTotal.l++; }
+  });
+
+  // ── 2. Sustainability Accuracy ──
+  var sustBuckets = {};
+  games.forEach(function(g){
+    if(!g.lead_sust || !g.winner || !g.floor_team) return;
+    var tier = g.lead_sust;
+    if(!sustBuckets[tier]) sustBuckets[tier] = {held:0, lost:0};
+    // "held" = leading team at snapshot time won the game
+    var leadingTeam = g.floor_team; // floor team was leading structurally
+    if(leadingTeam === g.winner) sustBuckets[tier].held++;
+    else sustBuckets[tier].lost++;
+  });
+
+  // ── 3. Signal Accuracy (from analyses) ──
+  var signalBuckets = {BUY:{w:0,l:0}, PASS:{correct:0,wrong:0}, 'NO VALUE':{w:0,l:0}};
+  games.forEach(function(g){
+    if(!g.a_signal || !g.winner) return;
+    var sig = g.a_signal.toUpperCase();
+    if(sig.startsWith('BUY')){
+      // Extract team from "BUY LAL" etc
+      var buyTeam = sig.replace('BUY','').trim().split(' ')[0];
+      if(buyTeam === g.winner) signalBuckets.BUY.w++;
+      else signalBuckets.BUY.l++;
+    } else if(sig.startsWith('PASS')){
+      // PASS is "correct" if no clear structural winner (margin < 6)
+      var margin = Math.abs((g.home_pts||0) - (g.away_pts||0));
+      if(margin <= 5) signalBuckets.PASS.correct++;
+      else signalBuckets.PASS.wrong++;
+    } else if(sig.startsWith('NO VALUE')){
+      signalBuckets['NO VALUE'].w++;
+    }
+  });
+
+  // ── 4. FWP Accuracy ──
+  var fwpBuckets = {'50-59%':{w:0,l:0}, '60-69%':{w:0,l:0}, '70-79%':{w:0,l:0}, '80%+':{w:0,l:0}};
+  games.forEach(function(g){
+    if(!g.a_fwp || !g.a_control || !g.winner) return;
+    var fwp = parseFloat(g.a_fwp);
+    if(isNaN(fwp) || fwp < 50) return;
+    var bucket = fwp >= 80 ? '80%+' : fwp >= 70 ? '70-79%' : fwp >= 60 ? '60-69%' : '50-59%';
+    var ctrlWon = g.a_control === g.winner;
+    if(ctrlWon) fwpBuckets[bucket].w++;
+    else fwpBuckets[bucket].l++;
+  });
+
+  // ── 5. Spread Cover Rate ──
+  var spreadBuckets = {covered:0, pushed:0, missed:0, noData:0};
+  games.forEach(function(g){
+    if(!g.final_spread || !g.home_pts || !g.away_pts) { spreadBuckets.noData++; return; }
+    var spread = parseFloat(g.final_spread);
+    if(isNaN(spread)){ spreadBuckets.noData++; return; }
+    // Spread is home spread. Home actual margin = home_pts - away_pts
+    var margin = g.home_pts - g.away_pts;
+    var coverMargin = margin + spread; // positive = home covered
+    if(Math.abs(coverMargin) < 0.5) spreadBuckets.pushed++;
+    else if(coverMargin > 0) spreadBuckets.covered++;
+    else spreadBuckets.missed++;
+  });
+
+  // ── 6. Conviction → Outcome ──
+  var convBuckets = {};
+  games.forEach(function(g){
+    if(!g.a_conviction || !g.a_control || !g.winner) return;
+    var conv = g.a_conviction.toUpperCase();
+    if(!convBuckets[conv]) convBuckets[conv] = {w:0, l:0};
+    if(g.a_control === g.winner) convBuckets[conv].w++;
+    else convBuckets[conv].l++;
+  });
+
+  // ── 7. Lead Composition → Outcome ──
+  var classBuckets = {};
+  games.forEach(function(g){
+    if(!g.lead_class || !g.floor_team || !g.winner) return;
+    var cls = g.lead_class;
+    if(!classBuckets[cls]) classBuckets[cls] = {held:0, lost:0};
+    if(g.floor_team === g.winner) classBuckets[cls].held++;
+    else classBuckets[cls].lost++;
+  });
+
+  // ── RENDER ──
+  function pct(w, total){ return total > 0 ? (w/total*100).toFixed(0) + '%' : '—'; }
+  function winColor(rate){ var r = parseFloat(rate); return r >= 70 ? '#00ff88' : r >= 55 ? '#ffd166' : r >= 0 ? '#ff5252' : '#94a3b8'; }
+
+  var html = '<h2>📐 CALIBRATION — ' + league.toUpperCase() + ' (' + games.length + ' games)</h2>';
+
+  // Floor Score
+  html += '<div class="card"><div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:6px">FLOOR SCORE → WIN RATE</div>';
+  html += '<div style="font-size:9px;color:#64748b;margin-bottom:4px">When the floor team had score X, how often did they win?</div>';
+  ['0.50-0.59','0.60-0.69','0.70-0.79','0.80+'].forEach(function(b){
+    var d = floorBuckets[b]; var t = d.w + d.l; var rate = pct(d.w, t);
+    html += '<div class="row"><span class="label">Floor ' + b + '</span><span class="val" style="color:' + winColor(rate) + '">' + d.w + '-' + d.l + ' (' + rate + ')' + (t === 0 ? ' no data' : '') + '</span></div>';
+  });
+  var ft = floorTotal.w + floorTotal.l;
+  html += '<div class="row" style="border-top:1px solid #334155;margin-top:4px;padding-top:4px"><span class="label" style="font-weight:700">TOTAL</span><span class="val" style="font-weight:700;color:' + winColor(pct(floorTotal.w, ft)) + '">' + floorTotal.w + '-' + floorTotal.l + ' (' + pct(floorTotal.w, ft) + ')</span></div>';
+  html += '</div>';
+
+  // Sustainability
+  html += '<div class="card"><div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:6px">SUSTAINABILITY → OUTCOME</div>';
+  html += '<div style="font-size:9px;color:#64748b;margin-bottom:4px">When leading team\'s sustainability was X, did they hold the win?</div>';
+  var sustOrder = ['LOCKED IN','DURABLE','MIXED','FRAGILE','UNSUSTAINABLE','TOO EARLY'];
+  sustOrder.forEach(function(tier){
+    var d = sustBuckets[tier]; if(!d) return;
+    var t = d.held + d.lost; var rate = pct(d.held, t);
+    html += '<div class="row"><span class="label">' + tier + '</span><span class="val" style="color:' + winColor(rate) + '">' + d.held + '-' + d.lost + ' (' + rate + ' held)</span></div>';
+  });
+  html += '</div>';
+
+  // Signal Accuracy
+  html += '<div class="card"><div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:6px">SIGNAL → OUTCOME</div>';
+  var buyT = signalBuckets.BUY.w + signalBuckets.BUY.l;
+  html += '<div class="row"><span class="label">BUY signals</span><span class="val" style="color:' + winColor(pct(signalBuckets.BUY.w, buyT)) + '">' + signalBuckets.BUY.w + '-' + signalBuckets.BUY.l + ' (' + pct(signalBuckets.BUY.w, buyT) + ')</span></div>';
+  var passT = signalBuckets.PASS.correct + signalBuckets.PASS.wrong;
+  html += '<div class="row"><span class="label">PASS signals (close game ≤5)</span><span class="val">' + signalBuckets.PASS.correct + '/' + passT + ' correct</span></div>';
+  html += '</div>';
+
+  // FWP Accuracy
+  html += '<div class="card"><div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:6px">FWP → ACTUAL WIN RATE</div>';
+  html += '<div style="font-size:9px;color:#64748b;margin-bottom:4px">When Sonnet predicted X% FWP for control team, how often did they win?</div>';
+  ['50-59%','60-69%','70-79%','80%+'].forEach(function(b){
+    var d = fwpBuckets[b]; var t = d.w + d.l; var rate = pct(d.w, t);
+    html += '<div class="row"><span class="label">FWP ' + b + '</span><span class="val" style="color:' + winColor(rate) + '">' + d.w + '-' + d.l + ' (' + rate + ')' + (t === 0 ? ' no data' : '') + '</span></div>';
+  });
+  html += '</div>';
+
+  // Conviction
+  var convKeys = Object.keys(convBuckets).sort();
+  if(convKeys.length > 0){
+    html += '<div class="card"><div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:6px">CONVICTION → CONTROL TEAM WIN RATE</div>';
+    convKeys.forEach(function(conv){
+      var d = convBuckets[conv]; var t = d.w + d.l; var rate = pct(d.w, t);
+      html += '<div class="row"><span class="label">' + conv + '</span><span class="val" style="color:' + winColor(rate) + '">' + d.w + '-' + d.l + ' (' + rate + ')</span></div>';
+    });
+    html += '</div>';
+  }
+
+  // Lead Composition
+  var classKeys = Object.keys(classBuckets).sort();
+  if(classKeys.length > 0){
+    html += '<div class="card"><div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:6px">LEAD COMPOSITION → HELD WIN</div>';
+    html += '<div style="font-size:9px;color:#64748b;margin-bottom:4px">When lead was classified as X, did the leading team win?</div>';
+    classKeys.forEach(function(cls){
+      var d = classBuckets[cls]; var t = d.held + d.lost; var rate = pct(d.held, t);
+      html += '<div class="row"><span class="label">' + cls + '</span><span class="val" style="color:' + winColor(rate) + '">' + d.held + '-' + d.lost + ' (' + rate + ' held)</span></div>';
+    });
+    html += '</div>';
+  }
+
+  // Per-game detail table
+  html += '<div class="card"><div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:6px">GAME DETAIL (' + games.length + ')</div>';
+  games.forEach(function(g){
+    var floorCorrect = g.floor_team && g.winner && g.floor_team === g.winner;
+    var icon = floorCorrect ? '✅' : g.floor_team ? '❌' : '—';
+    var signalText = g.a_signal ? g.a_signal.substring(0,20) : '—';
+    var fwpText = g.a_fwp ? g.a_fwp + '%' : '—';
+    html += '<div class="row"><span class="label" style="font-size:9px">' + icon + ' ' + (g.date||'?') + ' ' + escH(g.matchup||'?') + '</span>';
+    html += '<span class="val" style="font-size:9px">';
+    if(g.floor_score) html += 'F:' + g.floor_team + ' ' + g.floor_score.toFixed(2);
+    if(g.a_fwp) html += ' FWP:' + fwpText;
+    html += ' → ' + (g.winner||'?') + ' ' + (g.away_pts||0) + '-' + (g.home_pts||0);
+    html += '</span></div>';
+  });
+  html += '</div>';
+
+  contentEl.innerHTML = html;
+  log('Calibration loaded — ' + games.length + ' games', 'log-ok');
 }
 
 // ── Season Cache viewer ──
