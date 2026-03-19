@@ -181,18 +181,18 @@ async function bdlSeasonStatsNCAAMB(league, bdlTeamId, season) {
 // Step 2: Call /nba/v1/season_averages per player
 async function bdlSeasonStatsNBA(bdlTeamId, season) {
   // Find a recent game for this team to get player IDs
-  const gamesData = await bdlFetch(`/nba/v1/games?team_ids[]=${bdlTeamId}&per_page=3`);
+  const gamesData = await bdlFetch(`/nba/v1/games?team_ids[]=${bdlTeamId}&seasons[]=${season}&per_page=5`);
   if (!gamesData?.data?.length) return [];
 
-  // Get the most recent game's box score for player IDs
-  const recentGameId = gamesData.data[0].id;
+  // Get the most recent game's box score for player IDs (BDL returns oldest first)
+  const recentGameId = gamesData.data[gamesData.data.length - 1].id;
   const statsData = await bdlFetch(`/nba/v1/stats?game_ids[]=${recentGameId}&per_page=50`);
   if (!statsData?.data?.length) return [];
 
   // Filter to players on this team who played meaningful minutes
   const teamPlayers = statsData.data.filter(s => {
     const mins = s.min ? parseInt(s.min) : 0;
-    return s.player?.id && (s.team?.id === bdlTeamId) && mins >= 5;
+    return s.player?.id && s.team?.id == bdlTeamId && mins >= 5;
   });
 
   // Fetch season averages for each player in parallel

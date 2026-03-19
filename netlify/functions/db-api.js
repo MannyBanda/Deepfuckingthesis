@@ -299,26 +299,31 @@ exports.handler = async (event) => {
       // Step 2: Fetch season averages per team
       let saved = 0, failed = 0;
       const results = {};
+      const errors = [];
 
       for (const abbr of targetTeams) {
         const bdlId = teamIds[abbr];
-        if (!bdlId) { failed++; continue; }
+        if (!bdlId) { failed++; errors.push(abbr + ': no BDL ID'); continue; }
 
         try {
           let players = [];
 
           if (league === 'nba') {
             // NBA: per-player fetch. Get recent game box score for player IDs
-            const recentGames = await bdl(`/nba/v1/games?team_ids[]=${bdlId}&per_page=3`);
-            if (!recentGames?.data?.length) { failed++; continue; }
-            const gameId = recentGames.data[0].id;
+            const recentGames = await bdl(`/nba/v1/games?team_ids[]=${bdlId}&seasons[]=${season}&per_page=5`);
+            if (!recentGames?.data?.length) { failed++; errors.push(abbr + ': no recent games (bdlId=' + bdlId + ')'); continue; }
+            // Use the most recent game (last in the array — BDL returns oldest first)
+            const gameId = recentGames.data[recentGames.data.length - 1].id;
             const boxScore = await bdl(`/nba/v1/stats?game_ids[]=${gameId}&per_page=50`);
-            if (!boxScore?.data?.length) { failed++; continue; }
+            if (!boxScore?.data?.length) { failed++; errors.push(abbr + ': no box score for game ' + gameId); continue; }
 
             const teamPlayers = boxScore.data.filter(s => {
               const mins = s.min ? parseInt(s.min) : 0;
-              return s.player?.id && s.team?.id === bdlId && mins >= 5;
+              // Use loose equality for ID comparison (BDL may return string or int)
+              return s.player?.id && s.team?.id == bdlId && mins >= 5;
             });
+
+            if (teamPlayers.length === 0) { failed++; errors.push(abbr + ': 0 players matched (boxScore=' + boxScore.data.length + ' rows, bdlId=' + bdlId + ', first team_id=' + (boxScore.data[0]?.team?.id || '?') + ')'); continue; }
 
             // Fetch each player's season averages in parallel
             const fetches = teamPlayers.map(async (s) => {
@@ -351,13 +356,14 @@ exports.handler = async (event) => {
             `;
             results[abbr] = players.length;
             saved++;
-          } else { failed++; }
+          } else { failed++; errors.push(abbr + ': 0 players after fetch'); }
         } catch (e) {
           failed++;
+          errors.push(abbr + ': ' + e.message);
         }
       }
 
-      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, saved, failed, teams: results }) };
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, saved, failed, teams: results, errors }) };
     }
 
     // ═══════════════════════════════════════════════════════
