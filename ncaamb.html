@@ -523,7 +523,96 @@ async function hydrateFromServerSnapshots(gameId){
   }
 }
 
-async function finalizeGameDB(game){
+// Push rich client-computed context to DB at period/half changes
+// Server reads this when computing calibration context for NCAAMB games
+async function pushContextToDB(game){
+  if(!dbReady) return;
+  var cs = cardState[game.id]; if(!cs) return;
+  var period = game.period || 0;
+  if(period < 1) return;
+  var hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
+
+  // Ensure PBP is fresh before pushing
+  var pbpAge = cs.pbpTime ? (Date.now() - cs.pbpTime.getTime()) / 60000 : 999;
+  if((pbpAge > 3 || !cs.pbpAudit) && getState(game) === 'LIVE' && !cs.pbpLoading){
+    try{
+      var pbpData = await sr('pbp', {game_id: game.id});
+      var audit = parsePBP(pbpData, game);
+      cs.pbpAudit = audit;
+      cs.pbpTime = new Date();
+      cs.pbpPeriod = period;
+      persistDepth(game.id, cs);
+    }catch(e){}
+  }
+
+  var context = {};
+  if(cs.rollingWindow && cs.rollingWindow.available){
+    context.rollingWindow = {available:true, score:cs.rollingWindow.score, controlTeam:cs.rollingWindow.controlTeam, windowQuarters:cs.rollingWindow.windowQuarters, dataQuality:cs.rollingWindow.dataQuality||'?', I1:cs.rollingWindow.I1, I2:cs.rollingWindow.I2, I3:cs.rollingWindow.I3, I4:cs.rollingWindow.I4, I5:cs.rollingWindow.I5};
+  }
+  if(cs.acceleration && cs.acceleration.accel) context.acceleration = {accel:cs.acceleration.accel, consecutive:cs.acceleration.consecutive, entries:(cs.acceleration.entries||[]).slice(-5)};
+  if(cs.combinedRead && cs.combinedRead.read) context.combinedRead = {read:cs.combinedRead.read, note:cs.combinedRead.note||''};
+  if(cs.subMetricArrows) context.subMetricArrows = cs.subMetricArrows;
+  if(cs.adjustment && cs.adjustment.signal && cs.adjustment.signal !== 'NO ADJUSTMENT' && cs.adjustment.signal !== 'NO DATA') context.adjustment = {signal:cs.adjustment.signal, team:cs.adjustment.team, note:cs.adjustment.note};
+  if(cs.pbpAudit && (cs.pbpAudit.home || cs.pbpAudit.away)){
+    var pbp = {pbpPeriod:cs.pbpAudit.pbpPeriod, homeAlias:cs.pbpAudit.homeAlias, awayAlias:cs.pbpAudit.awayAlias};
+    ['home','away'].forEach(function(side){ var tm=cs.pbpAudit[side]; if(tm) pbp[side]={threes:tm.threes, rim:tm.rim, mid:tm.mid, shotDiet:tm.shotDiet, tos:tm.tos}; });
+    if(cs.pbpAudit.runs) pbp.runs = cs.pbpAudit.runs;
+    context.pbpAudit = pbp;
+  }
+  if(cs.edgeHistory && cs.edgeHistory.length > 0) context.edgeHistory = cs.edgeHistory.slice(-10);
+  if(cs.espnWP) context.espnWP = {home:cs.espnWP.home, away:cs.espnWP.away, opening:cs.espnWP.opening||null};
+  context.gamePeriod = period;
+  context.gameClock = game.clock || '';
+
+  var layerCount = Object.keys(context).filter(function(k){ return !['gamePeriod','gameClock'].includes(k); }).length;
+  if(layerCount === 0) return;
+  fetch(FN+'db-api?action=save_context',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({game_id:game.id, league:'ncaamb', period:period, context:context})}).catch(function(){});
+  console.log('[CTX] NCAAMB pushed '+layerCount+' layers for H'+period+' — '+hA+'v'+aA);
+}
+
+// Hydrate rich server-computed context on mount or period change
+async function hydrateFromServerContext(gameId){
+  if(!dbReady) return;
+  var cs = cardState[gameId]; if(!cs) return;
+  try{
+    var r = await fetch(FN+'db-api?action=get_context&game_id='+encodeURIComponent(gameId));
+    if(!r.ok) return;
+    var data = await r.json();
+    if(!data.context) return;
+    var ctx = data.context;
+    var ctxPeriod = data.period || 0;
+    var hydrated = [];
+
+    if(ctx.rollingWindow && ctx.rollingWindow.available && (!cs.rollingWindow || !cs.rollingWindow.available)){
+      cs.rollingWindow = ctx.rollingWindow; cs.rollingWindow.source = 'server-ctx'; hydrated.push('window');
+    }
+    if(ctx.acceleration && ctx.acceleration.accel && (!cs.acceleration || cs.acceleration.accel === 'TOO EARLY')){
+      cs.acceleration = ctx.acceleration; hydrated.push('accel:'+ctx.acceleration.accel);
+    }
+    if(ctx.combinedRead && ctx.combinedRead.read && (!cs.combinedRead || cs.combinedRead.read === 'TOO EARLY')){
+      cs.combinedRead = ctx.combinedRead; hydrated.push('read:'+ctx.combinedRead.read);
+    }
+    if(ctx.pbpAudit && (ctx.pbpAudit.home || ctx.pbpAudit.away) && (!cs.pbpAudit || ctxPeriod > (cs.pbpPeriod||0))){
+      cs.pbpAudit = ctx.pbpAudit; cs.pbpPeriod = ctx.pbpAudit.pbpPeriod || ctxPeriod; cs.pbpTime = new Date(data.updated_at||Date.now()); hydrated.push('pbp');
+    }
+    if(ctx.subMetricArrows && !cs.subMetricArrows){ cs.subMetricArrows = ctx.subMetricArrows; hydrated.push('arrows'); }
+    if(ctx.adjustment && ctx.adjustment.signal && ctx.adjustment.signal !== 'NO ADJUSTMENT' && (!cs.adjustment || cs.adjustment.signal === 'NO DATA')){ cs.adjustment = ctx.adjustment; hydrated.push('adj:'+ctx.adjustment.signal); }
+    if(ctx.espnWP && ctx.espnWP.home != null && !cs.espnWP){
+      var g = games.find(function(x){return x.id===gameId;});
+      cs.espnWP = {home:ctx.espnWP.home, away:ctx.espnWP.away, homeAlias:g?.home?.alias||'', awayAlias:g?.away?.alias||'', opening:ctx.espnWP.opening||null, dataPoints:0, time:new Date(data.updated_at||Date.now()), source:'server-ctx'};
+      hydrated.push('espnWP:'+ctx.espnWP.home+'%');
+    }
+    if(ctx.edgeHistory && ctx.edgeHistory.length > 0 && (!cs.edgeHistory || cs.edgeHistory.length === 0)){
+      cs.edgeHistory = ctx.edgeHistory; hydrated.push('edges:'+ctx.edgeHistory.length);
+    }
+
+    if(hydrated.length > 0){
+      addLog(gameId, '📡 Server context hydrated (H'+ctxPeriod+'): '+hydrated.join(', '), true);
+      var g = games.find(function(x){return x.id===gameId;});
+      if(g) renderCard(g);
+    }
+  }catch(e){ console.warn('Server context hydration failed:', e.message); }
+}
   if(!dbReady) return;
   var cs = cardState[game.id]; if(!cs) return;
   var hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
@@ -1595,6 +1684,23 @@ async function fetchSummary(game){
     checkAlert(game);
     checkStructuralAlert(game);
     captureCalibration(game);
+    // ── Period/half change → push context to DB + hydrate from server ──
+    if(getState(game)==='LIVE' && game.period >= 1){
+      var prevPer = cs._lastHydratedPeriod || 0;
+      if(game.period > prevPer){
+        cs._lastHydratedPeriod = game.period;
+        pushContextToDB(game);
+        // Re-hydrate from server if client is missing key layers
+        (async function(gid){
+          try{
+            var _cs = cardState[gid];
+            if(_cs && (!_cs.pbpAudit || !_cs.subMetricArrows || !_cs.combinedRead)){
+              hydrateFromServerContext(gid);
+            }
+          }catch(e){}
+        })(game.id);
+      }
+    }
     // Save snapshot to DB (throttled: every 3rd poll when period >= 2)
     if(getState(game)==='LIVE' && game.period >= 2){
       if(!cs._dbPollCount) cs._dbPollCount = 0;
@@ -1657,6 +1763,22 @@ async function fetchBdlFallback(game, reason){
     checkAlert(game);
     checkStructuralAlert(game);
     captureCalibration(game);
+    // ── Period/half change → push context + hydrate (same as SR path) ──
+    if(getState(game)==='LIVE' && game.period >= 1){
+      var prevPer = cs._lastHydratedPeriod || 0;
+      if(game.period > prevPer){
+        cs._lastHydratedPeriod = game.period;
+        pushContextToDB(game);
+        (async function(gid){
+          try{
+            var _cs = cardState[gid];
+            if(_cs && (!_cs.pbpAudit || !_cs.subMetricArrows || !_cs.combinedRead)){
+              hydrateFromServerContext(gid);
+            }
+          }catch(e){}
+        })(game.id);
+      }
+    }
     if(getState(game)==='LIVE' && game.period >= 2){
       if(!cs._dbPollCount) cs._dbPollCount = 0;
       cs._dbPollCount++;
@@ -6793,6 +6915,8 @@ function mountCard(game){
   if(getState(game)==='LIVE'||getState(game)==='FINAL') fetchSummary(game);
   // Hydrate from server snapshots (fills gap log when device was sleeping, or for FINAL games never opened)
   if(getState(game)==='LIVE'||getState(game)==='FINAL') hydrateFromServerSnapshots(id);
+  // Hydrate server-computed context (PBP, arrows, combined read, etc.)
+  if(getState(game)==='LIVE'||getState(game)==='FINAL') hydrateFromServerContext(id);
   // Auto-enrich from BDL if not already done
   if(!cardState[id].enrichDone && !cardState[id].enriching) enrichFromBDL(id);
 }
