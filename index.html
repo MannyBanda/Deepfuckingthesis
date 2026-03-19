@@ -573,6 +573,8 @@ async function hydrateFromServerSnapshots(gameId){
             score: Math.round(wScore*100)/100,
             controlTeam: wTeam,
             windowQuarters: periodKeys.map(function(q){return 'Q'+q;}),
+            windowPossessions: 0, // server snapshots don't have per-period possessions
+            possessionBased: false,
             dataQuality: 'SERVER',
             source: 'server',
             I1:{score:Math.round(nI1*10)/10}, I2:{score:Math.round(nI2*10)/10},
@@ -4546,9 +4548,13 @@ function compute(game){
   // Persist updated sustainability + lead comp so they survive refresh
   if(cardState[game.id].analysis) persistAnalysis(game.id, cardState[game.id]);
 
-  // Rolling window — quarter-based
+  // Rolling window — quarter-based (don't overwrite server-hydrated window with empty result)
   var windowResult = computeRollingWindow(game);
-  cardState[game.id].rollingWindow = windowResult;
+  if(windowResult && windowResult.available){
+    cardState[game.id].rollingWindow = windowResult;
+  } else if(!cardState[game.id].rollingWindow || !cardState[game.id].rollingWindow.available){
+    cardState[game.id].rollingWindow = windowResult;
+  }
   var _pwSize = getPossWindowSize(game);
   var pbpWindow = computePossessionWindow(game, _pwSize);
   cardState[game.id].pbpWindow = pbpWindow;
@@ -8155,7 +8161,7 @@ function renderCard(game){
         row+='</div>';
         return row;
       };
-      var qInfo = rw&&rw.available ? (rw.possessionBased?'Last '+rw.windowPossessions+' poss':rw.windowQuarters.join('+')+' ('+Math.round(rw.windowPossessions)+' poss)') : '';
+      var qInfo = rw&&rw.available ? (rw.source==='server' ? rw.windowQuarters.join('+')+'+ (server)' : rw.possessionBased?'Last '+rw.windowPossessions+' poss':rw.windowQuarters.join('+')+' ('+Math.round(rw.windowPossessions)+' poss)') : '';
       html += _wRow('QTR', rw, fScore, fTeam, qInfo);
       var pbpInfo = pbpW&&pbpW.available ? 'Last '+pbpW.windowPossessions+' poss'+(pbpW.timeSpanMin?' ('+pbpW.timeSpanMin.toFixed(1)+'min)':'') : '';
       html += _wRow('PBP', pbpW, fScore, fTeam, pbpInfo);
