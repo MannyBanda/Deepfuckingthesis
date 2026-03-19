@@ -389,6 +389,7 @@ const FN = '/.netlify/functions/';
 
 // ── Netlify DB (Neon Postgres) — persistent calibration ──
 var dbReady = false;
+var bdlSeasonPriors = {}; // { 'BOS': [{player:{first_name,last_name}, fg3m, fg3a, ...}], ... } — from season_cache DB
 async function initDB(){
   try{
     var r = await fetch(FN+'db-api?action=init');
@@ -909,6 +910,24 @@ async function syncClutchFromDB(){
 }
 
 // Sync theses from DB on load — enables cross-device access
+async function syncSeasonCacheFromDB(){
+  if(!dbReady) return;
+  try{
+    var r = await fetch(FN+'db-api?action=get_season_cache&league=nba&season=2025');
+    if(!r.ok) return;
+    var data = await r.json();
+    var cache = data.cache || {};
+    var count = 0;
+    Object.keys(cache).forEach(function(alias){
+      if(cache[alias].players && cache[alias].players.length > 0){
+        bdlSeasonPriors[alias] = cache[alias].players;
+        count++;
+      }
+    });
+    if(count > 0) console.log('[DB] Season cache loaded — '+count+' teams');
+  }catch(e){ console.warn('[DB] Season cache sync failed:', e.message); }
+}
+
 async function syncThesesFromDB(){
   if(!dbReady) return;
   try{
@@ -1289,6 +1308,7 @@ async function loadSchedule(){
     syncAnalysesFromDB();
     syncLatestSnapshotsFromDB();
     syncClutchFromDB();
+    syncSeasonCacheFromDB();
     // Start polling
     clearInterval(pollTimer);
     pollTimer = setInterval(()=>{ if(!paused) refreshLiveCards(); }, pollInterval);
@@ -1933,6 +1953,8 @@ async function fetchSummary(game){
     addLog(game.id,'OK — SR summary loaded'+(cs.dataFreshness==='WATCH'?' [stats lag]':''),true);
 
     // Build player baselines from p.average (season data in every summary)
+    // First: merge BDL season priors from DB cache onto players missing SR averages
+    mergeBdlSeasonPriors(data);
     const bl = buildPlayerBaselines(game);
     if(bl){
       cs.baselines = bl;
@@ -5089,6 +5111,63 @@ function getVerdict(s){
 // ══════════════════════════════════════════════════════════════════════════════
 // PLAYER BASELINES — Built from p.average on every SR summary refresh
 // ══════════════════════════════════════════════════════════════════════════════
+// Merge BDL season priors from DB cache onto SR summary players
+// Fills player.average for players missing season data, enabling baselines + sustainability
+function mergeBdlSeasonPriors(summary){
+  if(!summary || Object.keys(bdlSeasonPriors).length === 0) return;
+
+  function normName(n){
+    if(!n) return '';
+    return n.toLowerCase().replace(/\s+(jr|sr|ii|iii|iv|v)\.?$/i,'').replace(/[.']/g,'').trim();
+  }
+
+  function mergeTeam(teamData){
+    if(!teamData?.players) return;
+    var alias = teamData.alias || teamData.name || '';
+    var bdlPlayers = bdlSeasonPriors[alias];
+    if(!bdlPlayers || bdlPlayers.length === 0) return;
+
+    // Build lookup by normalized name
+    var bdlMap = {};
+    bdlPlayers.forEach(function(ps){
+      var name = ps.player ? (ps.player.first_name+' '+ps.player.last_name) : (ps.name||'');
+      var key = normName(name);
+      if(key) bdlMap[key] = ps;
+    });
+
+    var merged = 0;
+    teamData.players.forEach(function(p){
+      // Skip if already has season averages from SR
+      if(p.average && (p.average.three_points_att > 0 || p.average.field_goals_att > 0)) return;
+
+      var srName = p.full_name || p.name || '';
+      var key = normName(srName);
+      var bdl = bdlMap[key];
+      if(!bdl) return;
+
+      // Attach BDL season averages in SR-compatible format
+      p.average = {
+        three_points_made: bdl.fg3m || 0,
+        three_points_att: bdl.fg3a || 0,
+        field_goals_made: bdl.fgm || 0,
+        field_goals_att: bdl.fga || 0,
+        points: bdl.pts || 0,
+        rebounds: bdl.reb || 0,
+        assists: bdl.ast || 0,
+        steals: bdl.stl || 0,
+        turnovers: bdl.turnover || 0,
+        minutes: bdl.min || '0',
+        usage_pct: 0, // BDL basic doesn't have usage
+      };
+      merged++;
+    });
+    if(merged > 0) console.log('[Season] Merged '+merged+' BDL priors onto '+alias+' players');
+  }
+
+  mergeTeam(summary.home);
+  mergeTeam(summary.away);
+}
+
 function buildPlayerBaselines(game){
   const s = game.summary;
   if(!s || !s.home?.players || !s.away?.players) return null;
