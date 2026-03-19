@@ -1954,7 +1954,8 @@ async function fetchSummary(game){
 
     // Build player baselines from p.average (season data in every summary)
     // First: merge BDL season priors from DB cache onto players missing SR averages
-    mergeBdlSeasonPriors(data);
+    var _mergeCount = mergeBdlSeasonPriors(data);
+    if(_mergeCount > 0) addLog(game.id, '📈 BDL season priors merged — '+_mergeCount+' players', true);
     const bl = buildPlayerBaselines(game);
     if(bl){
       cs.baselines = bl;
@@ -5162,10 +5163,12 @@ function mergeBdlSeasonPriors(summary){
       merged++;
     });
     if(merged > 0) console.log('[Season] Merged '+merged+' BDL priors onto '+alias+' players');
+    return merged;
   }
 
-  mergeTeam(summary.home);
-  mergeTeam(summary.away);
+  var hMerged = mergeTeam(summary.home) || 0;
+  var aMerged = mergeTeam(summary.away) || 0;
+  return hMerged + aMerged;
 }
 
 function buildPlayerBaselines(game){
