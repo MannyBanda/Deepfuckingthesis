@@ -613,6 +613,8 @@ async function hydrateFromServerContext(gameId){
     }
   }catch(e){ console.warn('Server context hydration failed:', e.message); }
 }
+
+async function finalizeGameDB(game){
   if(!dbReady) return;
   var cs = cardState[game.id]; if(!cs) return;
   var hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
