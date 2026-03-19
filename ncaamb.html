@@ -1604,7 +1604,9 @@ async function fetchSummary(game){
     game.homePoints = data.home?.points ?? 0;
     game.awayPoints = data.away?.points ?? 0;
     game.status = data.status;
-    game.period = data.quarter || (data.home?.periods||[]).length || 0;
+    game.period = data.quarter || data.half || (data.home?.periods||[]).length || 0;
+    // NCAAMB: if game is live and period is still 0, infer from clock/status
+    if(game.period === 0 && (data.status === 'inprogress' || data.status === 'halftime')) game.period = 1;
     game.clock = data.clock || '';
     // Build merged periods array for indicator use (SR nests under home/away)
     if(!data.periods && data.home?.periods){
