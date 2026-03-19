@@ -455,12 +455,41 @@ async function saveSnapshotDB(game){
 
 // Push rich client-computed context to DB at quarter boundaries
 // Server reads this before firing auto calibration analyses — fills the 9-layer gap
-function pushContextToDB(game){
+async function pushContextToDB(game){
   if(!dbReady) return;
   var cs = cardState[game.id]; if(!cs) return;
   var period = game.period || 0;
   if(period < 1) return;
   var hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
+
+  // ── Ensure PBP is fresh before pushing context ──
+  // PBP is the foundation for arrows + shot quality — stale PBP undermines the whole context
+  var pbpAge = cs.pbpTime ? (Date.now() - cs.pbpTime.getTime()) / 60000 : 999;
+  if((pbpAge > 3 || !cs.pbpAudit) && getState(game) === 'LIVE' && !cs.pbpLoading){
+    try{
+      var pbpData = await sr('pbp', {game_id: game.id});
+      var audit = parsePBP(pbpData, game);
+      cs.pbpAudit = audit;
+      cs.pbpTime = new Date();
+      cs.pbpPeriod = period;
+      persistDepth(game.id, cs);
+      addLog(game.id, '📡 PBP refreshed for context push (was '+pbpAge.toFixed(0)+'m stale)', true);
+    }catch(e){
+      // Non-fatal — push whatever PBP we have
+      addLog(game.id, '⚠ PBP refresh failed for context push: '+e.message, false);
+    }
+  }
+
+  // ── Re-compute arrows from PBP if we just refreshed ──
+  // Ensures arrows sent to server reflect fresh PBP, not stale quarterSnapshot boundaries
+  if(cs.pbpAudit && cs.pbpAudit.raw && cs.pbpAudit.raw.shots){
+    var freshArrows = computeSubMetricArrows(game.id);
+    if(freshArrows){ cs.subMetricArrows = freshArrows; }
+    var floorInd = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
+    if(freshArrows && floorInd){
+      cs.adjustment = classifyAdjustment(freshArrows, floorInd.controlTeam || hA, hA, aA);
+    }
+  }
 
   // Collect all client-computed layers the server can't produce
   var context = {};
@@ -607,6 +636,7 @@ async function hydrateFromServerSnapshots(gameId){
           floorTeam: s.floor_team,
           window: s.qtr_score || s.pbp_score || null,
           windowTeam: s.qtr_team || s.pbp_team || null,
+          windowSize: 'server',
           period: s.period,
           clock: s.clock,
           homePts: s.home_pts,
@@ -2717,7 +2747,6 @@ async function triggerAnalysis(game){
         subMetricArrows: cs.subMetricArrows || null,
         adjustment: cs.adjustment || null,
         combinedRead: cs.combinedRead || null,
-        calibration: formatCalibrationForPrompt() || null,
         wpProfiles: _wpProfileText || null,
         espnWP: cs.espnWP ? {
           home: cs.espnWP.home, away: cs.espnWP.away,
@@ -7113,19 +7142,35 @@ function computeAcceleration(gapLog){
 // ── Sub-Metric Arrows ────────────────────────────────────────────────────────
 function computeSubMetricArrows(gameId){
   const cs = cardState[gameId]; if(!cs) return null;
-  const qs = cs.quarterSnapshots; if(!qs) return null;
 
-  // Get ordered quarter numbers with data
-  const qNums = Object.keys(qs.quarters).map(Number).sort((a,b)=>a-b);
-  if(qNums.length<2) return null;
+  // ── Prefer PBP-derived per-quarter metrics (more reliable than captured boundaries) ──
+  // PBP contains the full game history — no missed boundaries possible.
+  var perQuarter = null;
+  if(cs.pbpAudit && cs.pbpAudit.raw && cs.pbpAudit.raw.shots){
+    perQuarter = buildPerQuarterMetricsClient(cs.pbpAudit.raw, cs.pbpAudit.homeAlias || '', cs.pbpAudit.awayAlias || '');
+  }
+
+  // Determine quarter numbers and data source
+  var qNums, getVal;
+  if(perQuarter && Object.keys(perQuarter).length >= 2){
+    qNums = Object.keys(perQuarter).map(Number).sort((a,b)=>a-b);
+    getVal = function(q, side, field){ return perQuarter[q]?.[side]?.[field] ?? null; };
+  } else {
+    // Fall back to quarterSnapshots (captured boundaries)
+    const qs = cs.quarterSnapshots; if(!qs) return null;
+    qNums = Object.keys(qs.quarters).map(Number).sort((a,b)=>a-b);
+    if(qNums.length<2) return null;
+    getVal = function(q, side, field){ return qs.quarters[q]?.[side]?.[field] ?? null; };
+  }
+  if(qNums.length < 2) return null;
 
   const metrics = [
     {key:'paint', field:'points_in_the_paint', label:'Paint pts', indicator:'I2', threshold:3, structural:true},
     {key:'atRim', field:'field_goals_at_rim_att', label:'At-rim att', indicator:'I2', threshold:2, structural:true},
     {key:'fta', field:'free_throws_att', label:'FTA', indicator:'I2', threshold:2, structural:true},
     {key:'steals', field:'steals', label:'Steals', indicator:'I1', threshold:1, structural:true},
-    {key:'tos', field:'turnovers', label:'TOs', indicator:'I1', threshold:1, structural:false}, // lower is better
-    {key:'fg3aShare', field:'fg3a_share', label:'3PA%', indicator:'I3', threshold:5, structural:false}, // lower = less variance
+    {key:'tos', field:'turnovers', label:'TOs', indicator:'I1', threshold:1, structural:false},
+    {key:'fg3aShare', field:'fg3a_share', label:'3PA%', indicator:'I3', threshold:5, structural:false},
     {key:'astRatio', field:'assist_ratio', label:'Ast ratio', indicator:'I3', threshold:8, structural:true},
     {key:'poss', field:'possessions', label:'Poss', indicator:'I5', threshold:2, structural:true},
   ];
@@ -7137,7 +7182,6 @@ function computeSubMetricArrows(gameId){
     if(last3.length<2) return {arrow:null, values:last3};
     const first=last3[0], last=last3[last3.length-1];
     const diff=last-first;
-    // Monotonically rising
     let rising=true,falling=true;
     for(let i=1;i<last3.length;i++){
       if(last3[i]<last3[i-1]) rising=false;
@@ -7145,7 +7189,6 @@ function computeSubMetricArrows(gameId){
     }
     if(rising && diff>threshold) return {arrow:'RISING', values:last3};
     if(falling && Math.abs(diff)>threshold) return {arrow:'FALLING', values:last3};
-    // Non-monotonic but directional
     if(last3.length>=3){
       if(last3[1]>first+threshold && last>first+threshold) return {arrow:'RISING', values:last3};
       if(last3[1]<first-threshold && last<first-threshold) return {arrow:'FALLING', values:last3};
@@ -7156,7 +7199,7 @@ function computeSubMetricArrows(gameId){
   const result = {home:{}, away:{}};
   ['home','away'].forEach(side=>{
     metrics.forEach(m=>{
-      const vals = qNums.map(q=>qs.quarters[q]?.[side]?.[m.field]??null);
+      const vals = qNums.map(q=>getVal(q, side, m.field));
       const {arrow,values} = computeArrow(vals, m.threshold);
       const display = arrow ? (arrow==='RISING'?'▲':arrow==='FALLING'?'▼':'▬') : '—';
       const valStr = values.map(v=>v!=null?(m.field.includes('share')||m.field.includes('ratio')?v.toFixed(0)+'%':String(Math.round(v))):'?').join('→');
@@ -7165,6 +7208,48 @@ function computeSubMetricArrows(gameId){
   });
 
   return result;
+}
+
+// Build per-quarter sub-metrics from PBP raw data for arrow computation.
+// Same logic as server's buildPerQuarterMetrics — derives per-quarter stats
+// directly from play-by-play events, no boundary capture needed.
+function buildPerQuarterMetricsClient(raw, hA, aA){
+  if(!raw || !raw.shots) return null;
+  var shots = raw.shots || [];
+  var turnovers = raw.turnovers || [];
+  var quarters = {};
+  var allQ = {};
+  shots.forEach(function(s){ allQ[s.q] = true; });
+  turnovers.forEach(function(t){ allQ[t.q] = true; });
+
+  Object.keys(allQ).forEach(function(qStr){
+    var q = parseInt(qStr);
+    var qShots = shots.filter(function(s){ return s.q === q; });
+    var qTOs = turnovers.filter(function(t){ return t.q === q; });
+
+    function teamMetrics(tm){
+      var s = qShots.filter(function(x){ return x.tm === tm; });
+      var threes = s.filter(function(x){ return x.is3; });
+      var rim = s.filter(function(x){ return x.z === 'rim'; });
+      var rimMade = rim.filter(function(x){ return x.m; });
+      var allMade = s.filter(function(x){ return x.m; });
+      var assisted = allMade.filter(function(x){ return x.a; }).length;
+      var tms = qTOs.filter(function(t){ return t.tm === tm; });
+      var stls = qTOs.filter(function(t){ return t.tm !== tm && t.forced === true; }).length;
+      return {
+        points_in_the_paint: rimMade.length * 2,
+        field_goals_at_rim_att: rim.length,
+        free_throws_att: 0,
+        steals: stls,
+        turnovers: tms.length,
+        fg3a_share: s.length > 0 ? (threes.length / s.length * 100) : 0,
+        assist_ratio: allMade.length > 0 ? (assisted / allMade.length * 100) : 0,
+        possessions: s.length + tms.length,
+      };
+    }
+    quarters[q] = { home: teamMetrics(hA), away: teamMetrics(aA) };
+  });
+  return Object.keys(quarters).length >= 2 ? quarters : null;
 }
 
 function classifyAdjustment(arrows, controlTeam, hA, aA){
