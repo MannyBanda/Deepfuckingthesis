@@ -130,6 +130,7 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS prediction_json JSONB`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS indicators_json JSONB`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS narrative_json JSONB`; } catch(e) {}
+      try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS "trigger" TEXT DEFAULT 'manual'`; } catch(e) {}
 
       // Snapshot enrichment columns (server-side polling)
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'client'`; } catch(e) {}
@@ -538,11 +539,12 @@ exports.handler = async (event) => {
       await sql`
         INSERT INTO analyses (game_id, period, clock, control_team, control_score,
           fwp, edge, entry, conviction, signal, sustainability, lead_source, raw_text,
-          prediction_json, indicators_json, narrative_json)
+          prediction_json, indicators_json, narrative_json, "trigger")
         VALUES (${a.game_id}, ${a.period}, ${a.clock}, ${a.control_team}, ${a.control_score},
           ${a.fwp}, ${a.edge}, ${a.entry}, ${a.conviction}, ${a.signal},
           ${a.sustainability}, ${a.lead_source}, ${a.raw_text},
-          ${a.prediction_json || null}, ${a.indicators_json || null}, ${a.narrative_json || null})
+          ${a.prediction_json || null}, ${a.indicators_json || null}, ${a.narrative_json || null},
+          ${a.trigger || 'manual'})
       `;
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
     }
@@ -733,7 +735,8 @@ exports.handler = async (event) => {
         rows = await sql`
           SELECT DISTINCT ON (game_id) game_id, ts, period, clock,
             control_team, control_score, fwp, edge, entry, conviction, signal,
-            sustainability, lead_source, prediction_json, indicators_json, raw_text, narrative_json
+            sustainability, lead_source, prediction_json, indicators_json, raw_text, narrative_json,
+            "trigger"
           FROM analyses
           WHERE game_id = ANY(${gameIds})
           ORDER BY game_id, ts DESC
@@ -744,6 +747,7 @@ exports.handler = async (event) => {
           SELECT DISTINCT ON (a.game_id) a.game_id, a.ts, a.period, a.clock,
             a.control_team, a.control_score, a.fwp, a.edge, a.entry, a.conviction, a.signal,
             a.sustainability, a.lead_source, a.prediction_json, a.indicators_json, a.raw_text, a.narrative_json,
+            a."trigger",
             g.matchup
           FROM analyses a
           LEFT JOIN games g ON a.game_id = g.id
@@ -754,6 +758,34 @@ exports.handler = async (event) => {
       }
 
       return { statusCode: 200, headers, body: JSON.stringify({ analyses: rows }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_AUTO_ANALYSES — all auto quarter-boundary analyses for given games
+    // Returns ALL auto_q1/q2/q3 analyses (not just latest), sorted chronologically.
+    // Client uses this to hydrate analysisHistory + prediction from server-generated analyses.
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_auto_analyses') {
+      const gameIds = (params.game_ids || '').split(',').filter(Boolean);
+      if (gameIds.length === 0) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_ids required' }) };
+
+      const rows = await sql`
+        SELECT game_id, ts, period, clock,
+          control_team, control_score, fwp, edge, entry, conviction, signal,
+          sustainability, lead_source, prediction_json, indicators_json, raw_text,
+          "trigger"
+        FROM analyses
+        WHERE game_id = ANY(${gameIds}) AND "trigger" LIKE 'auto_q%'
+        ORDER BY game_id, ts ASC
+      `;
+
+      // Group by game_id
+      const grouped = {};
+      for (const r of rows) {
+        if (!grouped[r.game_id]) grouped[r.game_id] = [];
+        grouped[r.game_id].push(r);
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ analyses: grouped, total: rows.length }) };
     }
 
     // ═══════════════════════════════════════════════════════
@@ -908,6 +940,129 @@ exports.handler = async (event) => {
         return { statusCode: 200, headers, body: JSON.stringify({ games: rows, count: rows.length }) };
       } catch (e) {
         return { statusCode: 200, headers, body: JSON.stringify({ games: [], error: e.message }) };
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_CALIBRATION_Q3 — quarter-end calibration snapshots vs outcomes
+    // Accepts ?quarter=1|2|3 (default 3 for gold standard Q3-end).
+    // Joins calibration-tagged snapshots + auto analyses with final results.
+    // Unlike get_calibration (which uses last snapshot, skewed toward decided games),
+    // this uses quarter-boundary snapshots when the game is still contested.
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_calibration_q3') {
+      const league = params.league || 'nba';
+      const quarter = parseInt(params.quarter) || 3;
+      const sourceTag = `calibration_q${quarter}`;
+      const triggerTag = `auto_q${quarter}`;
+      const qLabel = `Q${quarter}`;
+      try {
+        const rows = await sql`
+          SELECT
+            g.id, g.date, g.matchup, g.home_alias, g.away_alias,
+            g.home_pts, g.away_pts, g.winner, g.margin,
+            g.thesis_team, g.thesis_correct,
+            -- Quarter-end calibration snapshot
+            s.floor_score AS q3_floor, s.floor_team AS q3_floor_team,
+            s.i1 AS q3_i1, s.i2 AS q3_i2, s.i3 AS q3_i3, s.i4 AS q3_i4, s.i5 AS q3_i5,
+            s.espn_wp_home AS q3_wp_home, s.espn_wp_away AS q3_wp_away,
+            s.spread AS q3_spread, s.deficit AS q3_deficit, s.trailing_team AS q3_trailing,
+            s.lead_sust AS q3_lead_sust, s.lead_class AS q3_lead_class,
+            s.home_pts AS q3_home_pts, s.away_pts AS q3_away_pts,
+            s.period AS q3_period, s.clock AS q3_clock, s.ts AS q3_ts,
+            s.sust_json AS q3_sust_json,
+            -- Quarter-end Sonnet analysis
+            a.control_team AS q3a_control, a.control_score AS q3a_score,
+            a.fwp AS q3a_fwp, a.edge AS q3a_edge, a.entry AS q3a_entry,
+            a.conviction AS q3a_conviction, a.signal AS q3a_signal,
+            a.sustainability AS q3a_sust, a.lead_source AS q3a_lead_source,
+            a.prediction_json AS q3a_pred,
+            -- Latest odds near snapshot time
+            o.home_spread AS q3_final_spread, o.home_ml AS q3_home_ml, o.away_ml AS q3_away_ml
+          FROM games g
+          INNER JOIN LATERAL (
+            SELECT * FROM snapshots
+            WHERE game_id = g.id AND source = ${sourceTag}
+            ORDER BY ts DESC LIMIT 1
+          ) s ON true
+          LEFT JOIN LATERAL (
+            SELECT * FROM analyses
+            WHERE game_id = g.id AND "trigger" = ${triggerTag}
+            ORDER BY ts DESC LIMIT 1
+          ) a ON true
+          LEFT JOIN LATERAL (
+            SELECT * FROM odds_history
+            WHERE game_id = g.id AND ts <= s.ts + INTERVAL '5 minutes'
+            ORDER BY ts DESC LIMIT 1
+          ) o ON true
+          WHERE g.league = ${league} AND g.winner IS NOT NULL
+          ORDER BY g.date DESC
+        `;
+
+        // Compute derived calibration metrics
+        const metrics = {
+          total: rows.length,
+          floorCorrect: 0, floorTotal: 0,
+          fwpBuckets: { '50-59': { correct: 0, total: 0 }, '60-69': { correct: 0, total: 0 }, '70-79': { correct: 0, total: 0 }, '80+': { correct: 0, total: 0 } },
+          analysisCount: 0,
+          signalBuy: { correct: 0, total: 0 },
+          signalPass: { correct: 0, total: 0 },
+          sustHeld: 0, sustTotal: 0,
+          wpCalibration: [],
+        };
+
+        for (const r of rows) {
+          // Floor score → winner
+          if (r.q3_floor_team) {
+            metrics.floorTotal++;
+            if (r.q3_floor_team === r.winner) metrics.floorCorrect++;
+          }
+
+          // FWP from auto_q3 analysis → winner
+          if (r.q3a_pred) {
+            const pred = typeof r.q3a_pred === 'string' ? JSON.parse(r.q3a_pred) : r.q3a_pred;
+            const homeFwp = pred?.homeValue?.fwp || 0;
+            const awayFwp = pred?.awayValue?.fwp || 0;
+            const fwpTeam = homeFwp >= awayFwp ? r.home_alias : r.away_alias;
+            const fwpVal = Math.max(homeFwp, awayFwp);
+            const fwpCorrect = fwpTeam === r.winner;
+            metrics.analysisCount++;
+
+            const bucket = fwpVal >= 80 ? '80+' : fwpVal >= 70 ? '70-79' : fwpVal >= 60 ? '60-69' : '50-59';
+            metrics.fwpBuckets[bucket].total++;
+            if (fwpCorrect) metrics.fwpBuckets[bucket].correct++;
+
+            // WP calibration point
+            metrics.wpCalibration.push({ predicted: fwpVal, actual: fwpCorrect ? 1 : 0 });
+          }
+
+          // Signal accuracy
+          if (r.q3a_signal) {
+            const buyMatch = r.q3a_signal.match(/BUY\s+(\w+)/);
+            if (buyMatch) {
+              metrics.signalBuy.total++;
+              if (buyMatch[1] === r.winner) metrics.signalBuy.correct++;
+            } else if (r.q3a_signal.includes('PASS') || r.q3a_signal.includes('NO VALUE')) {
+              metrics.signalPass.total++;
+              // PASS is "correct" if the game was close (margin <= 5) — debatable, track both
+              if (r.margin <= 5) metrics.signalPass.correct++;
+            }
+          }
+
+          // Sustainability tier at Q3 → held through to outcome
+          if (r.q3_lead_sust && r.q3_floor_team) {
+            metrics.sustTotal++;
+            const sustainableTiers = ['LOCKED IN', 'DURABLE'];
+            const wasSustainable = sustainableTiers.includes(r.q3_lead_sust);
+            const leadHeld = r.q3_floor_team === r.winner;
+            if (wasSustainable && leadHeld) metrics.sustHeld++;
+            else if (!wasSustainable && !leadHeld) metrics.sustHeld++;
+          }
+        }
+
+        return { statusCode: 200, headers, body: JSON.stringify({ games: rows, count: rows.length, metrics, quarter, label: qLabel }) };
+      } catch (e) {
+        return { statusCode: 200, headers, body: JSON.stringify({ games: [], count: 0, metrics: null, quarter, label: `Q${quarter}`, error: e.message }) };
       }
     }
 

@@ -693,6 +693,241 @@ function computeLeadComposition(summary) {
   return { classification, leadTeam, structuralMargin: leadStruct, varianceMargin: leadVar };
 }
 
+// ── Q3-END CALIBRATION: PARSE SONNET RESPONSE ──────────────────────────────
+// Extracts structured fields from Sonnet's analysis text for DB storage.
+
+function parseAnalysisText(text, homeAlias, awayAlias) {
+  const result = {
+    controlTeam: null, controlScore: null,
+    fwp: null, edge: null, entry: null,
+    conviction: null, signal: null,
+    sustainability: null, leadSource: null,
+    predictionJson: null, indicatorsJson: null,
+  };
+  if (!text) return result;
+
+  // CONTROL: Team 0.XX — LEVEL
+  const controlMatch = text.match(/CONTROL:\s*(\w+)\s+([\d.]+)/);
+  if (controlMatch) {
+    result.controlTeam = controlMatch[1];
+    result.controlScore = parseFloat(controlMatch[2]);
+  }
+
+  // FWP: AWAY XX% / HOME YY%
+  const fwpMatch = text.match(/FWP:\s*(\w+)\s+([\d.]+)%\s*\/\s*(\w+)\s+([\d.]+)%/);
+  if (fwpMatch) {
+    result.fwp = `${fwpMatch[1]} ${fwpMatch[2]}% / ${fwpMatch[3]} ${fwpMatch[4]}%`;
+    const t1 = fwpMatch[1], v1 = parseFloat(fwpMatch[2]);
+    const t3 = fwpMatch[3], v3 = parseFloat(fwpMatch[4]);
+    result.predictionJson = {
+      homeValue: { fwp: t1 === homeAlias ? v1 : v3 },
+      awayValue: { fwp: t1 === awayAlias ? v1 : v3 },
+    };
+  }
+
+  // EDGE
+  const edgeMatch = text.match(/EDGE:\s*([^\n|]+)/);
+  if (edgeMatch) result.edge = edgeMatch[1].trim();
+
+  // ENTRY
+  const entryMatch = text.match(/ENTRY:\s*(OPTIMAL WINDOW|WINDOW OPEN|WINDOW CLOSING|NO WINDOW|FADE)/);
+  if (entryMatch) result.entry = entryMatch[1];
+
+  // CONVICTION
+  const convMatch = text.match(/CONVICTION:\s*(DOMINANT|STRONG|EARNED|CONDITIONAL|NO ENTRY)/);
+  if (convMatch) result.conviction = convMatch[1];
+
+  // SIGNAL (full line)
+  const sigMatch = text.match(/SIGNAL:\s*(.+?)(?:\n|$)/);
+  if (sigMatch) result.signal = sigMatch[1].trim();
+
+  // Sustainability
+  const sustMatch = text.match(/Sustainability:\s*(.+?)(?:\n|$)/);
+  if (sustMatch) result.sustainability = sustMatch[1].trim();
+
+  // Lead Source
+  const leadMatch = text.match(/Lead Source:\s*(.+?)(?:\n|$)/);
+  if (leadMatch) result.leadSource = leadMatch[1].trim();
+
+  // Per-indicator scores
+  const indicators = {};
+  const indRe = /I(\d)\s+[^:]+:\s*(\w+)\s+([\d.]+)\s*—\s*(.+?)(?:\n|$)/g;
+  let m;
+  while ((m = indRe.exec(text)) !== null) {
+    indicators['I' + m[1]] = { leader: m[2], score: parseFloat(m[3]), detail: m[4].trim() };
+  }
+  if (Object.keys(indicators).length > 0) result.indicatorsJson = indicators;
+
+  return result;
+}
+
+// ── Q3-END CALIBRATION: FIRE SONNET ANALYSIS ───────────────────────────────
+// Called once per game at the Q3→Q4 transition. Gathers all available context
+// from DB (thesis, clutch, WP profiles, calibration stats) and calls the
+// analyze function with the full SR summary + server-computed layers.
+// Result is saved as a tagged 'auto_q3' analysis row — gold standard metric.
+
+async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, leadComp, espnWP, odds, matchup, hA, aA, period, clock, trigger) {
+  const triggerTag = trigger || 'auto_q3';
+  const siteUrl = process.env.URL || '';
+  if (!siteUrl) { log(`${matchup}: ${triggerTag} CAL — no URL env, skipping analysis`); return; }
+
+  try {
+    // ── 1. Fetch thesis from DB ──
+    let thesis = null;
+    try {
+      const rows = await sql`SELECT text FROM theses WHERE game_id = ${game.id}`;
+      if (rows.length > 0) thesis = rows[0].text;
+    } catch (e) { /* no thesis — proceed without */ }
+
+    // ── 2. Fetch clutch data from DB ──
+    let clutchData = null;
+    try {
+      const rows = await sql`
+        SELECT DISTINCT ON (team_alias) team_alias, tier, net_rtg, off_rtg, def_rtg, wl, efg, pace, pie
+        FROM clutch WHERE team_alias = ANY(${[hA, aA]}) AND league = ${league}
+        ORDER BY team_alias, created_at DESC
+      `;
+      if (rows.length > 0) {
+        clutchData = { tier: 3 };
+        for (const r of rows) {
+          const side = r.team_alias === hA ? 'home' : 'away';
+          clutchData[side] = { netRtg: r.net_rtg, offRtg: r.off_rtg, defRtg: r.def_rtg, wl: r.wl, efg: r.efg, pace: r.pace, pie: r.pie };
+          if (r.tier && r.tier < clutchData.tier) clutchData.tier = r.tier;
+        }
+      }
+    } catch (e) { /* no clutch data */ }
+
+    // ── 3. Fetch WP identity profiles from DB ──
+    let wpProfiles = null;
+    try {
+      const rows = await sql`
+        SELECT team_alias, profile_json FROM wp_profiles
+        WHERE team_alias = ANY(${[hA, aA]}) AND league = ${league}
+      `;
+      if (rows.length > 0) {
+        let wpText = 'WP IDENTITY PROFILES:\n';
+        for (const r of rows) {
+          const p = typeof r.profile_json === 'string' ? JSON.parse(r.profile_json) : r.profile_json;
+          if (p) wpText += `${r.team_alias}: ${p.identity || '?'} — comeback ${p.comebackRate || '?'}%, collapse ${p.collapseRate || '?'}%, avg swing ${p.avgSwing || '?'}\n`;
+        }
+        wpProfiles = wpText;
+      }
+    } catch (e) { /* no WP profiles */ }
+
+    // ── 4. Fetch prior analyses for this game (narrative history) ──
+    let analysisHistory = null;
+    try {
+      const rows = await sql`
+        SELECT period, clock, control_team, control_score, fwp, entry, conviction, signal, sustainability
+        FROM analyses WHERE game_id = ${game.id}
+        ORDER BY ts ASC LIMIT 5
+      `;
+      if (rows.length > 0) {
+        analysisHistory = rows.map(r => ({
+          period: r.period, clock: r.clock,
+          controlTeam: r.control_team, controlScore: r.control_score,
+          entry: r.entry, conviction: r.conviction,
+          signal: r.signal, verdict: '',
+          leadSust: '', trailSust: '',
+        }));
+      }
+    } catch (e) { /* no history */ }
+
+    // ── 5. Fetch calibration context for prompt ──
+    let calibrationNote = null;
+    try {
+      const gs = await sql`
+        SELECT COUNT(*) as total,
+          COUNT(CASE WHEN fwp_correct = true THEN 1 END) as fwp_ok,
+          COUNT(CASE WHEN fwp_team IS NOT NULL THEN 1 END) as fwp_total,
+          COUNT(CASE WHEN thesis_correct = true THEN 1 END) as thesis_ok,
+          COUNT(CASE WHEN thesis_team IS NOT NULL THEN 1 END) as thesis_total
+        FROM games WHERE league = ${league} AND winner IS NOT NULL
+      `;
+      const s = gs[0];
+      if (s && s.total >= 3) {
+        calibrationNote = `CALIBRATION (${s.total} games): FWP ${s.fwp_ok}/${s.fwp_total} (${s.fwp_total > 0 ? (s.fwp_ok/s.fwp_total*100).toFixed(0) : '?'}%), thesis ${s.thesis_ok}/${s.thesis_total}`;
+      }
+    } catch (e) { /* no calibration */ }
+
+    // ── 6. Build analyze payload ──
+    const scoreLine = `${aA} ${ind.awayPts} — ${hA} ${ind.homePts}`;
+    const periodStr = `Q${period} ${clock}`;
+
+    const payload = {
+      summaryData: summary,
+      thesis: thesis ? thesis + (calibrationNote ? '\n\n' + calibrationNote : '') : calibrationNote || null,
+      homeTeam: hA,
+      awayTeam: aA,
+      period: periodStr,
+      score: scoreLine,
+      clutchData: clutchData,
+      oddsData: odds ? {
+        homeSpread: odds.homeSpread, homeML: odds.homeML,
+        awayML: odds.awayML, total: odds.total,
+      } : null,
+      wpProfiles: wpProfiles,
+      analysisHistory: analysisHistory,
+      // Not available server-side — null is safe, analyze.js gracefully skips
+      edgeHistory: null,
+      trackingData: null,
+      pbpAudit: null,
+      rollingWindow: null,
+      acceleration: null,
+      subMetricArrows: null,
+      adjustment: null,
+      combinedRead: null,
+    };
+
+    // ── 7. Call analyze function ──
+    log(`${matchup}: ${triggerTag} CAL — firing Sonnet analysis (thesis:${thesis ? 'yes' : 'no'} clutch:${clutchData ? 'yes' : 'no'} odds:${odds ? 'yes' : 'no'} wp:${wpProfiles ? 'yes' : 'no'})`);
+
+    const resp = await fetch(`${siteUrl}/.netlify/functions/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text();
+      log(`${matchup}: ${triggerTag} CAL — analyze HTTP ${resp.status}: ${errText.substring(0, 200)}`);
+      return;
+    }
+
+    const result = await resp.json();
+    if (!result.analysis) {
+      log(`${matchup}: ${triggerTag} CAL — analyze returned no text`);
+      return;
+    }
+
+    // ── 8. Parse structured fields from Sonnet response ──
+    const parsed = parseAnalysisText(result.analysis, hA, aA);
+
+    // ── 9. Save analysis to DB with trigger tag ──
+    try {
+      await sql`
+        INSERT INTO analyses (game_id, period, clock, control_team, control_score,
+          fwp, edge, entry, conviction, signal, sustainability, lead_source, raw_text,
+          prediction_json, indicators_json, "trigger")
+        VALUES (${game.id}, ${period}, ${clock}, ${parsed.controlTeam}, ${parsed.controlScore},
+          ${parsed.fwp}, ${parsed.edge}, ${parsed.entry}, ${parsed.conviction}, ${parsed.signal},
+          ${parsed.sustainability}, ${parsed.leadSource}, ${result.analysis},
+          ${parsed.predictionJson ? JSON.stringify(parsed.predictionJson) : null},
+          ${parsed.indicatorsJson ? JSON.stringify(parsed.indicatorsJson) : null},
+          ${triggerTag})
+      `;
+    } catch (e) {
+      log(`${matchup}: ${triggerTag} CAL — analysis save failed: ${e.message}`);
+    }
+
+    log(`${matchup}: ★ ${triggerTag.toUpperCase()} CALIBRATION COMPLETE — ${parsed.controlTeam || '?'} ${parsed.controlScore || '?'} | ${parsed.signal || '?'} | FWP: ${parsed.fwp || '?'}`);
+
+  } catch (e) {
+    log(`${matchup}: ${triggerTag} CAL ERROR — ${e.message}`);
+  }
+}
+
 // ── MAIN HANDLER ────────────────────────────────────────────────────────────
 
 export default async function(req) {
@@ -1039,6 +1274,56 @@ export default async function(req) {
 
           const bdlEnriched = (homeBdl.length > 0 || awayBdl.length > 0);
           log(`${matchup} Q${currentPeriod} ${clock} | ${ind.homePts}-${ind.awayPts} | ${ind.controlTeam} ${ind.score} | I:${ind.I1.score}/${ind.I2.score}/${ind.I3.score}/${ind.I4.score}/${ind.I5.score} | sust:${leadSust || '?'} class:${leadClass || '?'}${bdlEnriched ? ' BDL✓' : ''}${spreadVal != null ? ` spd:${spreadVal}` : ''}${espnWP ? ` | WP:${espnWP.home}%` : ''}`);
+
+          // ── QUARTER-BOUNDARY CALIBRATION SNAPSHOTS ─────────────────
+          // Detect Q1→Q2, Q2→Q3, Q3→Q4 transitions. Fire ONCE each per game:
+          //   1. Save calibration-tagged snapshot (all data layers fresh from this cycle)
+          //   2. Fire async Sonnet analysis with full context from DB
+          // Q3→Q4 is the GOLD STANDARD (game still contested).
+          // Q1→Q2 and Q2→Q3 track framework accuracy at earlier stages.
+          if (league === 'nba') {
+            const prevPeriod = game.last_period || 0;
+            if (!game.cal_captured) game.cal_captured = {};
+
+            const transitions = [
+              { from: 1, to: 2, tag: 'calibration_q1', trigger: 'auto_q1', label: 'Q1' },
+              { from: 2, to: 3, tag: 'calibration_q2', trigger: 'auto_q2', label: 'Q2' },
+              { from: 3, to: 4, tag: 'calibration_q3', trigger: 'auto_q3', label: 'Q3' },
+            ];
+
+            for (const t of transitions) {
+              if (currentPeriod >= t.to && prevPeriod < t.to && !game.cal_captured[t.tag]) {
+                game.cal_captured[t.tag] = true;
+                cacheUpdated = true;
+
+                log(`${matchup}: ★ ${t.label}→Q${t.to} TRANSITION — capturing calibration snapshot`);
+
+                // Save calibration-tagged snapshot
+                try {
+                  await sql`
+                    INSERT INTO snapshots (game_id, period, clock, home_pts, away_pts,
+                      floor_score, floor_team, espn_wp_home, espn_wp_away,
+                      spread, deficit, trailing_team, lead_sust, lead_class,
+                      i1, i2, i3, i4, i5, source, sust_json)
+                    VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
+                      ${ind.score}, ${ind.controlTeam}, ${espnWP?.home || null}, ${espnWP?.away || null},
+                      ${spreadVal}, ${deficit}, ${trailingTeam}, ${leadSust}, ${leadClass},
+                      ${ind.I1.score}, ${ind.I2.score}, ${ind.I3.score}, ${ind.I4.score}, ${ind.I5.score},
+                      ${t.tag}, ${sustJson})
+                  `;
+                  log(`${matchup}: ${t.label} CAL snapshot saved — floor ${ind.controlTeam} ${ind.score} | sust:${leadSust || '?'} class:${leadClass || '?'} | WP:${espnWP?.home || '?'}% | spd:${spreadVal != null ? spreadVal : 'N/A'}`);
+                } catch (e) {
+                  log(`${matchup}: ${t.label} CAL snapshot save failed: ${e.message}`);
+                }
+
+                // Fire Sonnet analysis async — don't block the poll cycle
+                fireCalibrationAnalysis(sql, game, league, summary, ind, sust, leadComp, espnWP, odds, matchup, hA, aA, currentPeriod, clock, t.trigger)
+                  .catch(e => log(`${matchup}: ${t.label} CAL analysis async error: ${e.message}`));
+              }
+            }
+          }
+          // Always track period for transition detection across cycles
+          game.last_period = currentPeriod;
 
         } catch (e) {
           results.errors.push(`${matchup}: ${e.message}`);
