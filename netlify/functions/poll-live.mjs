@@ -1813,22 +1813,58 @@ export default async function(req) {
           //   2. Fire async Sonnet analysis with full context from DB
           // Q3→Q4 is the GOLD STANDARD (game still contested).
           // Q1→Q2 and Q2→Q3 track framework accuracy at earlier stages.
-          if (league === 'nba') {
+          // ── QUARTER-BOUNDARY CALIBRATION SNAPSHOTS ─────────────────
+          // NBA: Q1→Q2, Q2→Q3, Q3→Q4 transitions (from period tracking)
+          // NCAAMB: Synthetic quarters — sQ1 (H1 >10:00), sQ2 (halftime), sQ3 (H2 >10:00)
+          //   detected via clock crossing 10:00 within a half + period transition
+          // Saves calibration snapshot + computes server context at each boundary.
+          // NBA fires Sonnet auto-analysis. NCAAMB saves snapshot + context only (no Sonnet).
+          {
             const prevPeriod = game.last_period || 0;
             if (!game.cal_captured) game.cal_captured = {};
 
-            const transitions = [
-              { from: 1, to: 2, tag: 'calibration_q1', trigger: 'auto_q1', label: 'Q1' },
-              { from: 2, to: 3, tag: 'calibration_q2', trigger: 'auto_q2', label: 'Q2' },
-              { from: 3, to: 4, tag: 'calibration_q3', trigger: 'auto_q3', label: 'Q3' },
-            ];
+            // Parse clock minutes for NCAAMB mid-half detection
+            let clockMin = null;
+            if (clock) {
+              const cp = clock.split(':');
+              clockMin = (parseInt(cp[0]) || 0) + (parseInt(cp[1] || 0) / 60);
+            }
+
+            let transitions = [];
+
+            if (league === 'nba') {
+              transitions = [
+                { from: 1, to: 2, tag: 'calibration_q1', trigger: 'auto_q1', label: 'Q1', sonnet: true },
+                { from: 2, to: 3, tag: 'calibration_q2', trigger: 'auto_q2', label: 'Q2', sonnet: true },
+                { from: 3, to: 4, tag: 'calibration_q3', trigger: 'auto_q3', label: 'Q3', sonnet: true },
+              ];
+            } else if (league === 'ncaamb') {
+              // Period-based: halftime (period 1→2)
+              transitions.push({ from: 1, to: 2, tag: 'calibration_sq2', trigger: 'auto_sq2', label: 'sQ2(half)', sonnet: false });
+
+              // Clock-based: mid-half at 10:00 mark
+              const prevClockMin = game.last_clock_min;
+              // sQ1 end: H1, clock crosses below 10:00 (was >10, now ≤10)
+              if (currentPeriod === 1 && clockMin != null && clockMin <= 10.0 && prevClockMin != null && prevClockMin > 10.0) {
+                transitions.push({ from: 0, to: 1, tag: 'calibration_sq1', trigger: 'auto_sq1', label: 'sQ1(H1@10)', sonnet: false, clockBased: true });
+              }
+              // sQ3 end: H2, clock crosses below 10:00
+              if (currentPeriod === 2 && clockMin != null && clockMin <= 10.0 && prevClockMin != null && prevClockMin > 10.0) {
+                transitions.push({ from: 0, to: 1, tag: 'calibration_sq3', trigger: 'auto_sq3', label: 'sQ3(H2@10)', sonnet: false, clockBased: true });
+              }
+            }
 
             for (const t of transitions) {
-              if (currentPeriod >= t.to && prevPeriod < t.to && !game.cal_captured[t.tag]) {
+              // Period-based transitions: standard detection
+              const triggered = t.clockBased
+                ? !game.cal_captured[t.tag]  // clock-based: already validated above
+                : (currentPeriod >= t.to && prevPeriod < t.to && !game.cal_captured[t.tag]);
+
+              if (triggered) {
                 game.cal_captured[t.tag] = true;
                 cacheUpdated = true;
 
-                log(`${matchup}: ★ ${t.label}→Q${t.to} TRANSITION — capturing calibration snapshot`);
+                log(`${matchup}: ★ ${t.label} TRANSITION — capturing calibration snapshot`);
 
                 // Save calibration-tagged snapshot
                 try {
@@ -1848,10 +1884,33 @@ export default async function(req) {
                   log(`${matchup}: ${t.label} CAL snapshot save failed: ${e.message}`);
                 }
 
-                // Fire Sonnet analysis async — don't block the poll cycle
-                fireCalibrationAnalysis(sql, game, league, summary, ind, sust, leadComp, espnWP, odds, matchup, hA, aA, currentPeriod, clock, t.trigger)
-                  .catch(e => log(`${matchup}: ${t.label} CAL analysis async error: ${e.message}`));
+                // Compute + save server context (PBP, arrows, window, etc.)
+                // Uses DO NOTHING on conflict — client-pushed context is richer, don't overwrite
+                const serverCtx = await computeServerContext(sql, game, league, summary, ind, espnWP, hA, aA, currentPeriod, clock, matchup);
+                if (serverCtx) {
+                  try {
+                    await sql`
+                      INSERT INTO game_context (game_id, league, period, context_json, updated_at)
+                      VALUES (${game.id}, ${league}, ${currentPeriod}, ${JSON.stringify(serverCtx)}, NOW())
+                      ON CONFLICT (game_id, period) DO NOTHING
+                    `;
+                    log(`${matchup}: ${t.label} server context saved — ${Object.keys(serverCtx).length} layers`);
+                  } catch (e) {
+                    log(`${matchup}: ${t.label} server context save failed: ${e.message}`);
+                  }
+                }
+
+                // Fire Sonnet analysis only for NBA (NCAAMB: snapshot + context only)
+                if (t.sonnet) {
+                  fireCalibrationAnalysis(sql, game, league, summary, ind, sust, leadComp, espnWP, odds, matchup, hA, aA, currentPeriod, clock, t.trigger)
+                    .catch(e => log(`${matchup}: ${t.label} CAL analysis async error: ${e.message}`));
+                }
               }
+            }
+
+            // Track period + clock for transition detection across cycles
+            if (league === 'ncaamb' && clockMin != null) {
+              game.last_clock_min = clockMin;
             }
           }
           // Always track period for transition detection across cycles
