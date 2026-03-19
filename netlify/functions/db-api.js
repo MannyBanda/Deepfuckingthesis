@@ -868,6 +868,50 @@ exports.handler = async (event) => {
     }
 
     // ═══════════════════════════════════════════════════════
+    // GET_CALIBRATION — aggregate game outcomes vs framework predictions
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_calibration') {
+      const league = params.league || 'nba';
+      try {
+        // Get all finalized games with their final snapshot + latest analysis
+        const rows = await sql`
+          SELECT
+            g.id, g.date, g.matchup, g.home_alias, g.away_alias,
+            g.home_pts, g.away_pts, g.winner, g.margin,
+            s.floor_score, s.floor_team, s.lead_sust, s.lead_class,
+            s.i1, s.i2, s.i3, s.i4, s.i5, s.espn_wp_home, s.spread,
+            s.period, s.sust_json,
+            a.control_team AS a_control, a.control_score AS a_score,
+            a.fwp AS a_fwp, a.edge AS a_edge, a.entry AS a_entry,
+            a.conviction AS a_conviction, a.signal AS a_signal,
+            a.sustainability AS a_sust, a.prediction_json AS a_pred,
+            o.home_spread AS final_spread, o.home_ml, o.away_ml
+          FROM games g
+          LEFT JOIN LATERAL (
+            SELECT * FROM snapshots
+            WHERE game_id = g.id
+            ORDER BY ts DESC LIMIT 1
+          ) s ON true
+          LEFT JOIN LATERAL (
+            SELECT * FROM analyses
+            WHERE game_id = g.id
+            ORDER BY ts DESC LIMIT 1
+          ) a ON true
+          LEFT JOIN LATERAL (
+            SELECT * FROM odds_history
+            WHERE game_id = g.id
+            ORDER BY ts DESC LIMIT 1
+          ) o ON true
+          WHERE g.league = ${league} AND g.winner IS NOT NULL
+          ORDER BY g.date DESC
+        `;
+        return { statusCode: 200, headers, body: JSON.stringify({ games: rows, count: rows.length }) };
+      } catch (e) {
+        return { statusCode: 200, headers, body: JSON.stringify({ games: [], error: e.message }) };
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════
     // GET_ODDS — fetch odds history for a game
     // ═══════════════════════════════════════════════════════
     if (action === 'get_odds') {
