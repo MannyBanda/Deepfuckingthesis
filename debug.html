@@ -324,7 +324,7 @@ async function viewSeasonCache(league){
 
   var staleCount = 0;
   var html = '<h2>📈 SEASON CACHE — ' + league.toUpperCase() + ' (' + teams.length + ' teams)</h2>';
-  html += '<div class="btn-row"><button onclick="invalidateSeasonCache(\'' + league + '\')">🔄 Invalidate All (force refresh)</button></div>';
+  html += '<div class="btn-row"><button onclick="buildSeasonCache(\'' + league + '\')">🔨 Build Cache Now</button><button onclick="invalidateSeasonCache(\'' + league + '\')">🔄 Invalidate All</button></div>';
 
   html += '<div class="card">';
   teams.forEach(function(alias){
@@ -359,6 +359,28 @@ async function viewSeasonCache(league){
   });
 
   contentEl.innerHTML = html;
+}
+
+async function buildSeasonCache(league){
+  log('Building season cache for ' + league.toUpperCase() + ' — this may take 30-60s...', 'log-info');
+  try{
+    var r = await fetch(FN + 'db-api?action=build_season_cache', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({league: league, season: '2025'})
+    });
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    var data = await r.json();
+    if(data.ok){
+      var teamList = data.teams ? Object.entries(data.teams).map(function(e){ return e[0] + ':' + e[1] + 'p'; }).join(', ') : '';
+      log('Season cache built! Saved: ' + (data.saved||0) + ' teams, failed: ' + (data.failed||0) + (teamList ? ' — ' + teamList : ''), 'log-ok');
+      viewSeasonCache(league);
+    } else {
+      log('Build failed: ' + JSON.stringify(data), 'log-err');
+    }
+  }catch(e){
+    log('Build error: ' + e.message, 'log-err');
+  }
 }
 
 async function invalidateSeasonCache(league){
