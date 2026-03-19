@@ -246,27 +246,17 @@ exports.handler = async (event) => {
         return await r.json();
       }
 
-      // Step 1: Get today's games to discover team IDs (or use forceTeams)
-      const today = new Date().toISOString().split('T')[0];
-      const gamesData = await bdl(`${bdlPrefix}/v1/games?dates[]=${today}&per_page=50`);
+      // Step 1: Get ALL teams from BDL (not just today's games)
+      const teamsData = await bdl(`${bdlPrefix}/v1/teams`);
       const teamIds = {}; // { 'BOS': 2, ... }
-      if (gamesData?.data) {
-        for (const g of gamesData.data) {
-          if (g.home_team?.abbreviation) teamIds[g.home_team.abbreviation] = g.home_team.id;
-          if (g.visitor_team?.abbreviation) teamIds[g.visitor_team.abbreviation] = g.visitor_team.id;
+      if (teamsData?.data) {
+        for (const t of teamsData.data) {
+          if (t.abbreviation && t.id) teamIds[t.abbreviation] = t.id;
         }
       }
 
-      // If no games today, try yesterday
       if (Object.keys(teamIds).length === 0) {
-        const yest = new Date(Date.now() - 86400000).toISOString().split('T')[0];
-        const yData = await bdl(`${bdlPrefix}/v1/games?dates[]=${yest}&per_page=50`);
-        if (yData?.data) {
-          for (const g of yData.data) {
-            if (g.home_team?.abbreviation) teamIds[g.home_team.abbreviation] = g.home_team.id;
-            if (g.visitor_team?.abbreviation) teamIds[g.visitor_team.abbreviation] = g.visitor_team.id;
-          }
-        }
+        return { statusCode: 200, headers, body: JSON.stringify({ ok: false, error: 'BDL teams endpoint returned empty' }) };
       }
 
       // Determine which teams to fetch
@@ -296,36 +286,32 @@ exports.handler = async (event) => {
         return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'All teams fresh', teams: 0 }) };
       }
 
-      // Step 2: Fetch season averages per team
+      // Step 2: Fetch season averages per team (batches of 3 in parallel to stay within timeout)
       let saved = 0, failed = 0;
       const results = {};
       const errors = [];
 
-      for (const abbr of targetTeams) {
+      async function processTeam(abbr) {
         const bdlId = teamIds[abbr];
-        if (!bdlId) { failed++; errors.push(abbr + ': no BDL ID'); continue; }
+        if (!bdlId) { failed++; errors.push(abbr + ': no BDL ID'); return; }
 
         try {
           let players = [];
 
           if (league === 'nba') {
-            // NBA: per-player fetch. Get recent game box score for player IDs
             const recentGames = await bdl(`/nba/v1/games?team_ids[]=${bdlId}&seasons[]=${season}&per_page=5`);
-            if (!recentGames?.data?.length) { failed++; errors.push(abbr + ': no recent games (bdlId=' + bdlId + ')'); continue; }
-            // Use the most recent game (last in the array — BDL returns oldest first)
+            if (!recentGames?.data?.length) { failed++; errors.push(abbr + ': no recent games (bdlId=' + bdlId + ')'); return; }
             const gameId = recentGames.data[recentGames.data.length - 1].id;
             const boxScore = await bdl(`/nba/v1/stats?game_ids[]=${gameId}&per_page=50`);
-            if (!boxScore?.data?.length) { failed++; errors.push(abbr + ': no box score for game ' + gameId); continue; }
+            if (!boxScore?.data?.length) { failed++; errors.push(abbr + ': no box score for game ' + gameId); return; }
 
             const teamPlayers = boxScore.data.filter(s => {
               const mins = s.min ? parseInt(s.min) : 0;
-              // Use loose equality for ID comparison (BDL may return string or int)
               return s.player?.id && s.team?.id == bdlId && mins >= 5;
             });
 
-            if (teamPlayers.length === 0) { failed++; errors.push(abbr + ': 0 players matched (boxScore=' + boxScore.data.length + ' rows, bdlId=' + bdlId + ', first team_id=' + (boxScore.data[0]?.team?.id || '?') + ')'); continue; }
+            if (teamPlayers.length === 0) { failed++; errors.push(abbr + ': 0 players matched'); return; }
 
-            // Fetch each player's season averages in parallel
             const fetches = teamPlayers.map(async (s) => {
               const data = await bdl(`/nba/v1/season_averages?season=${season}&player_id=${s.player.id}`);
               if (data?.data?.length) {
@@ -342,7 +328,6 @@ exports.handler = async (event) => {
             });
             await Promise.all(fetches);
           } else {
-            // NCAAMB/WNBA: batch endpoint
             const data = await bdl(`${bdlPrefix}/v1/player_season_stats?season=${season}&team_id=${bdlId}&per_page=100`);
             if (data?.data) players = data.data;
           }
@@ -361,6 +346,12 @@ exports.handler = async (event) => {
           failed++;
           errors.push(abbr + ': ' + e.message);
         }
+      }
+
+      // Process in batches of 3 teams at a time
+      for (let i = 0; i < targetTeams.length; i += 3) {
+        const batch = targetTeams.slice(i, i + 3);
+        await Promise.all(batch.map(processTeam));
       }
 
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, saved, failed, teams: results, errors }) };
