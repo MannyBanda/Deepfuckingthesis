@@ -29,6 +29,8 @@ select{background:#1e293b;color:#e0e0e0;border:1px solid #334155;border-radius:6
 .tag-client{background:rgba(0,255,136,.1);color:#00ff88;border:1px solid rgba(0,255,136,.2);}
 .tag-final{background:rgba(167,139,250,.1);color:#a78bfa;border:1px solid rgba(167,139,250,.2);}
 .tag-live{background:rgba(0,255,136,.15);color:#00ff88;border:1px solid rgba(0,255,136,.3);}
+.tag-cal{background:rgba(255,209,102,.15);color:#ffd166;border:1px solid rgba(255,209,102,.3);}
+.tag-q3{background:rgba(255,152,0,.15);color:#ff9800;border:1px solid rgba(255,152,0,.3);}
 </style>
 </head>
 <body>
@@ -41,6 +43,10 @@ select{background:#1e293b;color:#e0e0e0;border:1px solid #334155;border-radius:6
   <button onclick="checkAnalyses()">🧠 Analyses</button>
   <button onclick="checkPollState()">⏱ Poll State</button>
   <button onclick="viewCalibration('nba')">📐 Calibration</button>
+  <button onclick="viewCalibrationQ3('nba',1)">★ Q1</button>
+  <button onclick="viewCalibrationQ3('nba',2)">★ Q2</button>
+  <button onclick="viewCalibrationQ3('nba',3)">★ Q3</button>
+  <button onclick="viewCalibrationAll('nba')">★ All Q</button>
   <button onclick="checkClutch()">🏀 Clutch</button>
   <button onclick="testWrite()">✏️ Test Write</button>
   <button onclick="bulkSaveAnalyses()">📤 Bulk Save Analyses</button>
@@ -193,7 +199,7 @@ async function viewSnapshots(){
   var recent = snaps.slice(-20);
   recent.forEach(function(s){
     var ts = s.ts ? new Date(s.ts).toLocaleTimeString() : '?';
-    var srcTag = s.source === 'server' ? '<span class="tag tag-server">SERVER</span>' : '<span class="tag tag-client">CLIENT</span>';
+    var srcTag = s.source === 'server' ? '<span class="tag tag-server">SERVER</span>' : s.source && s.source.startsWith('calibration_q') ? '<span class="tag tag-cal">★ ' + s.source.replace('calibration_','').toUpperCase() + ' CAL</span>' : '<span class="tag tag-client">CLIENT</span>';
     html += '<div class="card" style="padding:6px">';
     html += '<div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;margin-bottom:3px"><span class="ts">Q' + (s.period||'?') + ' ' + (s.clock||'') + ' — ' + ts + '</span>' + srcTag + '<span style="font-weight:600">' + (s.away_pts||0) + '-' + (s.home_pts||0) + '</span></div>';
     html += '<div style="font-size:10px;display:flex;gap:8px;flex-wrap:wrap">';
@@ -370,9 +376,34 @@ async function viewCalibration(league){
   // ── 4. FWP Accuracy ──
   var fwpBuckets = {'50-59%':{w:0,l:0}, '60-69%':{w:0,l:0}, '70-79%':{w:0,l:0}, '80%+':{w:0,l:0}};
   games.forEach(function(g){
-    if(!g.a_fwp || !g.a_control || !g.winner) return;
-    var fwp = parseFloat(g.a_fwp);
-    if(isNaN(fwp) || fwp < 50) return;
+    if(!g.a_control || !g.winner) return;
+    // FWP might be stored as "LAL 75% / HOU 25%" or just "75" — extract control team's percentage
+    var fwp = null;
+    if(g.a_fwp){
+      var fwpStr = String(g.a_fwp);
+      // Try to find control team's FWP in the string
+      var ctrlPat = new RegExp(g.a_control + '\\s*(\\d+\\.?\\d*)%?', 'i');
+      var m = fwpStr.match(ctrlPat);
+      if(m) fwp = parseFloat(m[1]);
+      // Fallback: just grab first number
+      if(fwp === null || isNaN(fwp)){
+        var numM = fwpStr.match(/(\d+\.?\d*)/);
+        if(numM) fwp = parseFloat(numM[1]);
+      }
+    }
+    // Also try prediction_json
+    if((fwp === null || isNaN(fwp)) && g.a_pred){
+      try{
+        var pj = typeof g.a_pred === 'string' ? JSON.parse(g.a_pred) : g.a_pred;
+        if(pj.homeValue && pj.awayValue){
+          var ctrlIsHome = g.a_control === g.home_alias;
+          fwp = parseFloat(ctrlIsHome ? pj.homeValue.fwp : pj.awayValue.fwp);
+        } else if(pj.fwp){
+          fwp = parseFloat(pj.fwp);
+        }
+      }catch(e){}
+    }
+    if(!fwp || isNaN(fwp) || fwp < 50) return;
     var bucket = fwp >= 80 ? '80%+' : fwp >= 70 ? '70-79%' : fwp >= 60 ? '60-69%' : '50-59%';
     var ctrlWon = g.a_control === g.winner;
     if(ctrlWon) fwpBuckets[bucket].w++;
@@ -487,7 +518,7 @@ async function viewCalibration(league){
     var floorCorrect = g.floor_team && g.winner && g.floor_team === g.winner;
     var icon = floorCorrect ? '✅' : g.floor_team ? '❌' : '—';
     var signalText = g.a_signal ? g.a_signal.substring(0,20) : '—';
-    var fwpText = g.a_fwp ? g.a_fwp + '%' : '—';
+    var fwpText = g.a_fwp ? String(g.a_fwp) : '—';
     html += '<div class="row"><span class="label" style="font-size:9px">' + icon + ' ' + (g.date||'?') + ' ' + escH(g.matchup||'?') + '</span>';
     html += '<span class="val" style="font-size:9px">';
     if(g.floor_score) html += 'F:' + g.floor_team + ' ' + g.floor_score.toFixed(2);
@@ -696,6 +727,7 @@ async function checkAnalyses(){
     html += '<span style="font-size:11px;color:#a78bfa;font-weight:600">' + escH(a.matchup || a.game_id?.substring(0,12) || '?') + '</span>';
     html += '<span style="font-size:11px;color:#60a5fa;font-weight:600">' + escH(a.control_team||'?') + ' ' + (a.control_score ? a.control_score.toFixed(2) : '?') + '</span>';
     html += '<span class="ts">Q' + (a.period||'?') + ' ' + (a.clock||'') + ' · ' + ts + '</span>';
+    if(a.trigger && a.trigger.startsWith('auto_q')) html += ' <span class="tag tag-cal">★ ' + a.trigger.replace('auto_','').toUpperCase() + ' AUTO</span>';
     html += '</div>';
     html += '<div class="analysis-box">';
     html += '<div class="row"><span class="label">Entry</span><span class="val">' + escH(a.entry||'—') + '</span></div>';
@@ -805,6 +837,207 @@ async function bulkSaveAnalyses(){
   }
   
   log('Bulk save complete — saved:' + saved + ' skipped:' + skipped + ' failed:' + failed, saved > 0 ? 'log-ok' : 'log-warn');
+}
+
+// ── Quarter-End Calibration Dashboard ──
+async function viewCalibrationQ3(league, quarter){
+  quarter = quarter || 3;
+  var qLabel = 'Q' + quarter;
+  log('Loading ' + qLabel + ' calibration for ' + league.toUpperCase() + '...', 'log-info');
+  var data = await fetchJSON(FN + 'db-api?action=get_calibration_q3&league=' + league + '&quarter=' + quarter);
+  if(!data || !data.games || data.games.length === 0){
+    log('No ' + qLabel + ' calibration data yet — games need to pass ' + qLabel + '→Q' + (quarter+1) + ' transition with server polling active', 'log-warn');
+    contentEl.innerHTML = '<h2>★ ' + qLabel + ' CALIBRATION — ' + league.toUpperCase() + '</h2><div class="card" style="color:#94a3b8;font-size:11px">No ' + qLabel + ' calibration snapshots found. Server polling captures these automatically at quarter transitions. Ensure poll-live is active during games.</div>';
+    return;
+  }
+
+  var games = data.games;
+  var m = data.metrics || {};
+  log('Loaded ' + games.length + ' ' + qLabel + '-calibrated games' + (m.analysisCount ? ' (' + m.analysisCount + ' with Sonnet analysis)' : ''), 'log-ok');
+
+  function pct(w, total){ return total > 0 ? (w/total*100).toFixed(0) + '%' : '—'; }
+  function winColor(rate){ var r = parseFloat(rate); return r >= 70 ? '#00ff88' : r >= 55 ? '#ffd166' : r >= 0 ? '#ff5252' : '#94a3b8'; }
+
+  var isGold = quarter === 3;
+  var accentColor = isGold ? '#ff9800' : quarter === 2 ? '#a78bfa' : '#60a5fa';
+
+  var html = '<h2>★ ' + qLabel + (isGold ? ' GOLD STANDARD' : ' CALIBRATION') + ' — ' + league.toUpperCase() + ' (' + games.length + ' games)</h2>';
+  if(isGold) html += '<div class="card" style="font-size:10px;color:#ffd166;border-color:#ffd166">Gold standard: Snapshot captured at Q3→Q4 transition when the game is still contested, NOT at final buzzer.</div>';
+  else html += '<div class="card" style="font-size:10px;color:' + accentColor + ';border-color:' + accentColor + '">' + qLabel + '-end snapshot: How predictive is structural control after ' + quarter + ' quarter' + (quarter>1?'s':'') + '?</div>';
+
+  // ── Floor Score → Win Rate ──
+  var floorBuckets = {'0.50-0.59':{w:0,l:0}, '0.60-0.69':{w:0,l:0}, '0.70-0.79':{w:0,l:0}, '0.80+':{w:0,l:0}};
+  var floorTotal = {w:0, l:0};
+  games.forEach(function(g){
+    if(!g.q3_floor || !g.q3_floor_team || !g.winner) return;
+    var won = g.q3_floor_team === g.winner;
+    var s = g.q3_floor;
+    var bucket = s >= 0.80 ? '0.80+' : s >= 0.70 ? '0.70-0.79' : s >= 0.60 ? '0.60-0.69' : '0.50-0.59';
+    if(won){ floorBuckets[bucket].w++; floorTotal.w++; }
+    else { floorBuckets[bucket].l++; floorTotal.l++; }
+  });
+
+  html += '<div class="card"><div style="font-size:11px;font-weight:700;color:' + accentColor + ';margin-bottom:6px">★ ' + qLabel + ' FLOOR SCORE → WIN RATE</div>';
+  html += '<div style="font-size:9px;color:#64748b;margin-bottom:4px">Floor score at end of ' + qLabel + ' → did that team win?</div>';
+  ['0.50-0.59','0.60-0.69','0.70-0.79','0.80+'].forEach(function(b){
+    var d = floorBuckets[b]; var t = d.w + d.l; var rate = pct(d.w, t);
+    html += '<div class="row"><span class="label">Floor ' + b + '</span><span class="val" style="color:' + winColor(rate) + '">' + d.w + '-' + d.l + ' (' + rate + ')' + (t === 0 ? ' no data' : '') + '</span></div>';
+  });
+  var ft = floorTotal.w + floorTotal.l;
+  html += '<div class="row" style="border-top:1px solid #334155;margin-top:4px;padding-top:4px"><span class="label" style="font-weight:700">TOTAL</span><span class="val" style="font-weight:700;color:' + winColor(pct(floorTotal.w, ft)) + '">' + floorTotal.w + '-' + floorTotal.l + ' (' + pct(floorTotal.w, ft) + ')</span></div>';
+  html += '</div>';
+
+  // ── Sonnet FWP → Winner ──
+  if(m.analysisCount > 0){
+    html += '<div class="card"><div style="font-size:11px;font-weight:700;color:' + accentColor + ';margin-bottom:6px">★ ' + qLabel + ' SONNET FWP → ACTUAL WIN RATE</div>';
+    html += '<div style="font-size:9px;color:#64748b;margin-bottom:4px">FWP from automated ' + qLabel + '-end Sonnet analysis → did that team win?</div>';
+    ['50-59','60-69','70-79','80+'].forEach(function(b){
+      var d = m.fwpBuckets[b]; if(!d) return;
+      var t = d.total; var rate = pct(d.correct, t);
+      html += '<div class="row"><span class="label">FWP ' + b + '%</span><span class="val" style="color:' + winColor(rate) + '">' + d.correct + '-' + (t - d.correct) + ' (' + rate + ')' + (t === 0 ? ' no data' : '') + '</span></div>';
+    });
+    html += '</div>';
+
+    // ── BUY Signal → Winner ──
+    if(m.signalBuy.total > 0 || m.signalPass.total > 0){
+      html += '<div class="card"><div style="font-size:11px;font-weight:700;color:' + accentColor + ';margin-bottom:6px">★ ' + qLabel + ' SIGNAL → OUTCOME</div>';
+      var buyT = m.signalBuy.total;
+      html += '<div class="row"><span class="label">BUY signals</span><span class="val" style="color:' + winColor(pct(m.signalBuy.correct, buyT)) + '">' + m.signalBuy.correct + '-' + (buyT - m.signalBuy.correct) + ' (' + pct(m.signalBuy.correct, buyT) + ')</span></div>';
+      var passT = m.signalPass.total;
+      html += '<div class="row"><span class="label">PASS (close ≤5)</span><span class="val">' + m.signalPass.correct + '/' + passT + '</span></div>';
+      html += '</div>';
+    }
+  }
+
+  // ── Sustainability → Held ──
+  var sustBuckets = {};
+  games.forEach(function(g){
+    if(!g.q3_lead_sust || !g.q3_floor_team || !g.winner) return;
+    var tier = g.q3_lead_sust;
+    if(!sustBuckets[tier]) sustBuckets[tier] = {held:0, lost:0};
+    if(g.q3_floor_team === g.winner) sustBuckets[tier].held++;
+    else sustBuckets[tier].lost++;
+  });
+  var sustKeys = Object.keys(sustBuckets);
+  if(sustKeys.length > 0){
+    html += '<div class="card"><div style="font-size:11px;font-weight:700;color:' + accentColor + ';margin-bottom:6px">★ ' + qLabel + ' SUSTAINABILITY → OUTCOME</div>';
+    var sustOrder = ['LOCKED IN','DURABLE','MIXED','FRAGILE','UNSUSTAINABLE','TOO EARLY'];
+    sustOrder.forEach(function(tier){
+      var d = sustBuckets[tier]; if(!d) return;
+      var t = d.held + d.lost; var rate = pct(d.held, t);
+      html += '<div class="row"><span class="label">' + tier + '</span><span class="val" style="color:' + winColor(rate) + '">' + d.held + '-' + d.lost + ' (' + rate + ' held)</span></div>';
+    });
+    html += '</div>';
+  }
+
+  // ── Lead Composition → Held ──
+  var classBuckets = {};
+  games.forEach(function(g){
+    if(!g.q3_lead_class || !g.q3_floor_team || !g.winner) return;
+    var cls = g.q3_lead_class;
+    if(!classBuckets[cls]) classBuckets[cls] = {held:0, lost:0};
+    if(g.q3_floor_team === g.winner) classBuckets[cls].held++;
+    else classBuckets[cls].lost++;
+  });
+  var classKeys = Object.keys(classBuckets);
+  if(classKeys.length > 0){
+    html += '<div class="card"><div style="font-size:11px;font-weight:700;color:' + accentColor + ';margin-bottom:6px">★ ' + qLabel + ' LEAD COMPOSITION → HELD WIN</div>';
+    classKeys.forEach(function(cls){
+      var d = classBuckets[cls]; var t = d.held + d.lost; var rate = pct(d.held, t);
+      html += '<div class="row"><span class="label">' + cls + '</span><span class="val" style="color:' + winColor(rate) + '">' + d.held + '-' + d.lost + ' (' + rate + ' held)</span></div>';
+    });
+    html += '</div>';
+  }
+
+  // ── Per-game detail ──
+  html += '<div class="card"><div style="font-size:11px;font-weight:700;color:' + accentColor + ';margin-bottom:6px">★ ' + qLabel + ' GAME DETAIL</div>';
+  games.forEach(function(g){
+    var floorCorrect = g.q3_floor_team && g.winner && g.q3_floor_team === g.winner;
+    var icon = floorCorrect ? '✅' : g.q3_floor_team ? '❌' : '—';
+    html += '<div class="row"><span class="label" style="font-size:9px">' + icon + ' ' + (g.date||'?') + ' ' + escH(g.matchup||'?') + '</span>';
+    html += '<span class="val" style="font-size:9px">';
+    html += qLabel + ':' + (g.q3_away_pts||0) + '-' + (g.q3_home_pts||0);
+    if(g.q3_floor) html += ' F:' + g.q3_floor_team + ' ' + g.q3_floor.toFixed(2);
+    if(g.q3_lead_sust) html += ' S:' + g.q3_lead_sust;
+    if(g.q3a_fwp) html += ' FWP:' + g.q3a_fwp;
+    if(g.q3a_signal) html += ' Sig:' + escH(String(g.q3a_signal).substring(0,15));
+    html += ' → ' + (g.winner||'?') + ' ' + (g.away_pts||0) + '-' + (g.home_pts||0);
+    html += '</span></div>';
+  });
+  html += '</div>';
+
+  contentEl.innerHTML = html;
+  log(qLabel + ' calibration loaded — ' + games.length + ' games, ' + (m.analysisCount||0) + ' with Sonnet analysis', 'log-ok');
+}
+
+// ── All Quarters Comparison ──
+async function viewCalibrationAll(league){
+  log('Loading all-quarter calibration comparison...', 'log-info');
+  var results = {};
+  for(var q = 1; q <= 3; q++){
+    var data = await fetchJSON(FN + 'db-api?action=get_calibration_q3&league=' + league + '&quarter=' + q);
+    results['Q' + q] = data;
+  }
+
+  function pct(w, total){ return total > 0 ? (w/total*100).toFixed(0) + '%' : '—'; }
+  function winColor(rate){ var r = parseFloat(rate); return r >= 70 ? '#00ff88' : r >= 55 ? '#ffd166' : r >= 0 ? '#ff5252' : '#94a3b8'; }
+
+  var html = '<h2>★ ALL QUARTERS COMPARISON — ' + league.toUpperCase() + '</h2>';
+  html += '<div class="card" style="font-size:10px;color:#a78bfa;border-color:#a78bfa">Side-by-side: how predictive is each metric at Q1, Q2, and Q3?</div>';
+
+  // Floor score comparison
+  html += '<div class="card"><div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:6px">FLOOR SCORE → WIN RATE BY QUARTER</div>';
+  html += '<div class="row" style="font-weight:700;font-size:10px"><span class="label">Bucket</span><span class="val" style="display:flex;gap:16px"><span style="color:#60a5fa;width:60px">Q1</span><span style="color:#a78bfa;width:60px">Q2</span><span style="color:#ff9800;width:60px">Q3★</span></span></div>';
+  ['0.50-0.59','0.60-0.69','0.70-0.79','0.80+','TOTAL'].forEach(function(b){
+    html += '<div class="row"><span class="label" style="font-size:10px">' + b + '</span><span class="val" style="display:flex;gap:16px;font-size:10px">';
+    [1,2,3].forEach(function(q){
+      var d = results['Q' + q];
+      if(!d || !d.games || d.games.length === 0){ html += '<span style="width:60px;color:#64748b">—</span>'; return; }
+      // Compute bucket for this quarter
+      var w = 0, l = 0;
+      if(b === 'TOTAL'){
+        d.games.forEach(function(g){ if(g.q3_floor_team && g.winner){ if(g.q3_floor_team === g.winner) w++; else l++; }});
+      } else {
+        d.games.forEach(function(g){
+          if(!g.q3_floor || !g.q3_floor_team || !g.winner) return;
+          var s = g.q3_floor;
+          var gb = s >= 0.80 ? '0.80+' : s >= 0.70 ? '0.70-0.79' : s >= 0.60 ? '0.60-0.69' : '0.50-0.59';
+          if(gb !== b) return;
+          if(g.q3_floor_team === g.winner) w++; else l++;
+        });
+      }
+      var t = w + l; var rate = pct(w, t);
+      html += '<span style="width:60px;color:' + winColor(rate) + '">' + (t > 0 ? w + '-' + l + ' ' + rate : '—') + '</span>';
+    });
+    html += '</span></div>';
+  });
+  html += '</div>';
+
+  // FWP comparison
+  html += '<div class="card"><div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:6px">SONNET FWP ACCURACY BY QUARTER</div>';
+  html += '<div class="row" style="font-weight:700;font-size:10px"><span class="label">Metric</span><span class="val" style="display:flex;gap:16px"><span style="color:#60a5fa;width:60px">Q1</span><span style="color:#a78bfa;width:60px">Q2</span><span style="color:#ff9800;width:60px">Q3★</span></span></div>';
+  ['Games','Analyses','BUY Win%'].forEach(function(label){
+    html += '<div class="row"><span class="label" style="font-size:10px">' + label + '</span><span class="val" style="display:flex;gap:16px;font-size:10px">';
+    [1,2,3].forEach(function(q){
+      var d = results['Q' + q];
+      var m = d?.metrics;
+      var val = '—';
+      if(label === 'Games') val = d?.count || 0;
+      else if(label === 'Analyses') val = m?.analysisCount || 0;
+      else if(label === 'BUY Win%' && m && m.signalBuy.total > 0){
+        var rate = pct(m.signalBuy.correct, m.signalBuy.total);
+        val = m.signalBuy.correct + '/' + m.signalBuy.total + ' ' + rate;
+        html += '<span style="width:60px;color:' + winColor(rate) + '">' + val + '</span>';
+        return;
+      }
+      html += '<span style="width:60px">' + val + '</span>';
+    });
+    html += '</span></div>';
+  });
+  html += '</div>';
+
+  contentEl.innerHTML = html;
+  log('All-quarter comparison loaded', 'log-ok');
 }
 
 function escH(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }

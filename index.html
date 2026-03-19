@@ -842,6 +842,173 @@ async function syncLatestSnapshotsFromDB(){
   }catch(e){ console.warn('[DB] Snapshot sync failed:', e.message); }
 }
 
+// Sync server-generated quarter-boundary analyses from DB
+// Populates autoAnalysisCache with ALL auto_q1/q2/q3 analyses per game.
+// mountCard then hydrates prediction + analysisHistory from these.
+async function syncCalibrationAnalyses(){
+  if(!dbReady) return;
+  try{
+    var ids = games.map(function(g){return g.id;}).join(',');
+    if(!ids) return;
+    var r = await fetch(FN+'db-api?action=get_auto_analyses&game_ids='+encodeURIComponent(ids));
+    if(!r.ok) return;
+    var data = await r.json();
+    var grouped = data.analyses || {};
+    var gameCount = 0, totalCount = data.total || 0;
+    Object.keys(grouped).forEach(function(gid){
+      autoAnalysisCache[gid] = grouped[gid];
+      gameCount++;
+    });
+    if(gameCount > 0){
+      console.log('[DB] Cached '+totalCount+' auto quarter-boundary analyses for '+gameCount+' games');
+      // Apply to already-mounted cards
+      applyAutoAnalysesToCards();
+    }
+  }catch(e){ console.warn('[DB] Auto analysis sync failed:', e.message); }
+}
+
+// Apply auto analyses to mounted cards — called after sync and also usable mid-game
+function applyAutoAnalysesToCards(){
+  var applied = 0;
+  Object.keys(autoAnalysisCache).forEach(function(gid){
+    var cs = cardState[gid]; if(!cs) return;
+    var autos = autoAnalysisCache[gid]; if(!autos || autos.length === 0) return;
+
+    // Sort by ts ascending (should already be, but ensure)
+    autos.sort(function(a,b){ return new Date(a.ts) - new Date(b.ts); });
+
+    var latest = autos[autos.length - 1];
+    var latestTime = new Date(latest.ts).getTime();
+    var localTime = cs.analysisTime ? cs.analysisTime.getTime() : 0;
+
+    // Build analysisHistory from auto analyses (consistent quarter boundaries)
+    // Only backfill if client has fewer history entries than auto analyses
+    var autoHistory = autos.map(function(a){
+      var sustText = a.sustainability || '';
+      // Extract lead/trail sustainability from "TEAM: TIER | TEAM: TIER" format
+      var sustParts = sustText.split('|').map(function(s){return s.trim();});
+      var leadSust = sustParts[0] || '';
+      var trailSust = sustParts[1] || '';
+      return {
+        time: a.ts ? new Date(a.ts).toLocaleTimeString() : '?',
+        period: a.period || '?',
+        clock: a.clock || '',
+        controlTeam: a.control_team || '?',
+        controlScore: a.control_score || null,
+        verdict: '',
+        entry: a.entry || '—',
+        conviction: a.conviction || '—',
+        signal: a.signal || '—',
+        leadTeam: '', trailTeam: '',
+        leadSust: leadSust, trailSust: trailSust,
+        thesisStatus: '',
+        keyRead: a.signal || '',
+        source: 'auto_' + (a.trigger || 'q?'),
+        score: '',
+      };
+    });
+
+    // Merge: auto analyses form the backbone, client manual analyses interleave by time
+    if(!cs.analysisHistory) cs.analysisHistory = [];
+    var existingManual = cs.analysisHistory.filter(function(h){ return !h.source || !h.source.startsWith('auto_'); });
+    // Only inject auto entries that aren't already present (by trigger tag)
+    var existingAutoTriggers = {};
+    cs.analysisHistory.forEach(function(h){ if(h.source && h.source.startsWith('auto_')) existingAutoTriggers[h.source] = true; });
+    var newAutos = autoHistory.filter(function(h){ return !existingAutoTriggers[h.source]; });
+
+    if(newAutos.length > 0){
+      // Merge all entries and sort by time
+      var merged = cs.analysisHistory.concat(newAutos);
+      merged.sort(function(a,b){
+        var tA = a.time || '', tB = b.time || '';
+        return tA.localeCompare(tB);
+      });
+      cs.analysisHistory = merged;
+    }
+
+    // Hydrate prediction from latest auto analysis if client has no prediction or auto is newer
+    if(latestTime > localTime || !cs.prediction){
+      // Parse prediction_json
+      var pred = null;
+      if(latest.prediction_json){
+        try{ pred = typeof latest.prediction_json === 'string' ? JSON.parse(latest.prediction_json) : latest.prediction_json; }catch(e){}
+      }
+
+      // Parse indicators_json
+      var ind = null;
+      if(latest.indicators_json){
+        try{ ind = typeof latest.indicators_json === 'string' ? JSON.parse(latest.indicators_json) : latest.indicators_json; }catch(e){}
+      }
+
+      // Build a decision-like object from the structured fields
+      // This matches the shape parseSonnetDecision produces
+      var autoDecision = {
+        entry: latest.entry || null,
+        conviction: latest.conviction || null,
+        signal: latest.signal || null,
+        signalType: latest.signal || null,
+        sustainability: latest.sustainability || null,
+        leadSource: latest.lead_source || null,
+        fwp: latest.fwp || null,
+        edge: latest.edge || null,
+        prediction: null, // will be extracted from raw text below
+        homeValue: pred ? pred.homeValue : null,
+        awayValue: pred ? pred.awayValue : null,
+        source: 'auto',
+      };
+
+      // Extract prediction line from raw text
+      if(latest.raw_text){
+        var predLine = latest.raw_text.match(/Prediction:\s*(.+)/i);
+        if(predLine) autoDecision.prediction = predLine[1].trim();
+        // Extract signal note
+        var sigLine = latest.raw_text.match(/SIGNAL:\s*(BUY\s+\w+|NO VALUE|PASS)\s*(?:[—–-]\s*(.+))?/i);
+        if(sigLine){
+          autoDecision.signalType = sigLine[1].trim().toUpperCase();
+          autoDecision.signalNote = sigLine[2] ? sigLine[2].trim() : '';
+          var buyM = autoDecision.signalType.match(/BUY\s+(\w+)/i);
+          autoDecision.buyTeam = buyM ? buyM[1].toUpperCase() : null;
+        }
+        // Extract combined read
+        var crLine = latest.raw_text.match(/COMBINED\s*READ:\s*(DOMINANT|STRONG|EMERGING|EARNED|ERODING|FADING|COLLAPSING|SHIFT|NO EDGE)/i);
+        if(crLine) autoDecision.combinedRead = crLine[1].toUpperCase();
+        // Extract thesis status
+        var tsLine = latest.raw_text.match(/THESIS\s*STATUS:\s*(CONFIRMED|DEVELOPING|CONTESTED|DENIED|FLIPPED)/i);
+        if(tsLine) autoDecision.thesisStatus = tsLine[1].toUpperCase();
+        // Extract spread analysis
+        var spLine = latest.raw_text.match(/SPREAD\s*ANALYSIS:\s*(.+)/i);
+        if(spLine) autoDecision.spreadAnalysis = spLine[1].trim();
+      }
+
+      // Only set if we got meaningful data
+      if(autoDecision.conviction || autoDecision.prediction || (autoDecision.homeValue && autoDecision.awayValue)){
+        cs.prediction = autoDecision;
+        cs.analysisTime = new Date(latestTime);
+        if(latest.raw_text && latest.raw_text.length > 20){
+          cs.analysis = latest.raw_text;
+        }
+        if(ind){
+          cs.sonnetIndicators = ind;
+        }
+        persistAnalysis(gid, cs);
+        applied++;
+        addLog(gid, '📡 Auto '+((latest.trigger||'q?').replace('auto_','').toUpperCase())+' analysis hydrated — '
+          +(autoDecision.conviction||'?')+' '+(autoDecision.signalType||'?')
+          +' ('+autos.length+' quarter checkpoints)', true);
+      }
+    } else if(newAutos.length > 0){
+      // Even if we didn't override the prediction, we added history entries
+      applied++;
+      addLog(gid, '📡 '+newAutos.length+' auto quarter analyses added to history', true);
+    }
+  });
+
+  if(applied > 0){
+    games.filter(function(g){return selIds.includes(g.id);}).forEach(function(g){renderCard(g);});
+    renderConfidenceTable();
+  }
+}
+
 // Save clutch data to DB (keyed by team alias — persists across games)
 function saveClutchDB(gameId){
   if(!dbReady) return;
@@ -1046,6 +1213,7 @@ const cardState = {};
 
 // DB analysis cache — populated once on schedule load, used by mountCard for cross-device restore
 var dbAnalysisCache = {}; // {gameId: {prediction, sonnetIndicators, analysisTime, analysis, ...}}
+var autoAnalysisCache = {}; // {gameId: [{trigger, period, clock, control_team, ...}]} — all auto_q* analyses per game
 var dbSnapshotCache = {}; // {gameId: {floor_score, floor_team, spread, lead_sust, lead_class, ...}} — latest server snapshot per game
 var _lastThesisRecomputeLog = 0; // global throttle for THESIS RECOMPUTE logs
 
@@ -1308,6 +1476,7 @@ async function loadSchedule(){
     // Sync theses, analyses, and clutch from DB (cross-device)
     syncThesesFromDB();
     syncAnalysesFromDB();
+    syncCalibrationAnalyses();
     syncLatestSnapshotsFromDB();
     syncClutchFromDB();
     syncSeasonCacheFromDB();
@@ -1992,6 +2161,32 @@ async function fetchSummary(game){
     checkAlert(game);
     checkStructuralAlert(game);
     captureCalibration(game);
+    // ── Detect quarter-boundary transition → fetch fresh auto analyses from server ──
+    // Server fires calibration analysis at Q1→Q2, Q2→Q3, Q3→Q4. Client picks up
+    // the result on the next period change detection (~30s after server completes).
+    if(getState(game)==='LIVE' && game.period >= 2){
+      var prevPer = cs._lastHydratedPeriod || 0;
+      if(game.period > prevPer){
+        cs._lastHydratedPeriod = game.period;
+        // Async fetch — non-blocking, updates card when ready
+        (async function(gid){
+          try{
+            var r = await fetch(FN+'db-api?action=get_auto_analyses&game_ids='+encodeURIComponent(gid));
+            if(!r.ok) return;
+            var data = await r.json();
+            var grouped = data.analyses || {};
+            if(grouped[gid] && grouped[gid].length > 0){
+              var prev = autoAnalysisCache[gid] ? autoAnalysisCache[gid].length : 0;
+              autoAnalysisCache[gid] = grouped[gid];
+              if(grouped[gid].length > prev){
+                applyAutoAnalysesToCards();
+                console.log('[AUTO] Q'+game.period+' new auto analyses for '+gid.substring(0,8)+': '+grouped[gid].length+' total (was '+prev+')');
+              }
+            }
+          }catch(e){}
+        })(game.id);
+      }
+    }
     // Save snapshot to DB (throttled: every 3rd poll when period >= 2)
     if(getState(game)==='LIVE' && game.period >= 2){
       if(!cs._dbPollCount) cs._dbPollCount = 0;
@@ -2054,6 +2249,26 @@ async function fetchBdlFallback(game, reason){
     checkAlert(game);
     checkStructuralAlert(game);
     captureCalibration(game);
+    // ── Period-change → fetch auto analyses (same as SR path) ──
+    if(getState(game)==='LIVE' && game.period >= 2){
+      var prevPer = cs._lastHydratedPeriod || 0;
+      if(game.period > prevPer){
+        cs._lastHydratedPeriod = game.period;
+        (async function(gid){
+          try{
+            var r = await fetch(FN+'db-api?action=get_auto_analyses&game_ids='+encodeURIComponent(gid));
+            if(!r.ok) return;
+            var data = await r.json();
+            var grouped = data.analyses || {};
+            if(grouped[gid] && grouped[gid].length > 0){
+              var prev = autoAnalysisCache[gid] ? autoAnalysisCache[gid].length : 0;
+              autoAnalysisCache[gid] = grouped[gid];
+              if(grouped[gid].length > prev) applyAutoAnalysesToCards();
+            }
+          }catch(e){}
+        })(game.id);
+      }
+    }
     if(getState(game)==='LIVE' && game.period >= 2){
       if(!cs._dbPollCount) cs._dbPollCount = 0;
       cs._dbPollCount++;
@@ -2442,6 +2657,7 @@ async function triggerAnalysis(game){
         prediction_json: _predSafe,
         indicators_json: _indSafe,
         narrative_json: _narrativeSafe,
+        trigger: 'manual',
       };
       fetch(FN+'db-api?action=save_analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(_aSnap)}).catch(function(){});
     }
@@ -8493,7 +8709,8 @@ function renderCard(game){
     if(cs.analysis){
       const usage=cs.analysisUsage;
       const cost=usage?((usage.input_tokens*3+usage.output_tokens*15)/1000000).toFixed(4):'?';
-      html+=`<div class="analysis-hdr">FULL ANALYSIS<span class="analysis-cost">~$${cost} · ${cs.analysisTime?fmtTs(cs.analysisTime)+' ('+fmtAge(cs.analysisTime)+')':''}</span></div><div class="analysis-body">${esc(cs.analysis)}</div>`;
+      var _srcTag = cs.prediction?.source === 'auto' ? ' <span style="color:var(--yellow);font-size:5px;letter-spacing:0.5px">★ AUTO</span>' : '';
+      html+=`<div class="analysis-hdr">FULL ANALYSIS${_srcTag}<span class="analysis-cost">~$${cost} · ${cs.analysisTime?fmtTs(cs.analysisTime)+' ('+fmtAge(cs.analysisTime)+')':''}</span></div><div class="analysis-body">${esc(cs.analysis)}</div>`;
     } else if(cs.analyzing){
       html+=`<div class="analysis-loading"><div class="spin"></div> Analyzing…</div>`;
     } else {
