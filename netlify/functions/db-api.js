@@ -209,7 +209,77 @@ exports.handler = async (event) => {
         )
       `;
 
+      // Season cache — weekly-refreshed player season averages per team
+      await sql`
+        CREATE TABLE IF NOT EXISTS season_cache (
+          team_alias TEXT NOT NULL,
+          league TEXT NOT NULL DEFAULT 'nba',
+          season TEXT NOT NULL DEFAULT '2025',
+          players_json JSONB,
+          player_count INTEGER DEFAULT 0,
+          updated_at TIMESTAMPTZ DEFAULT NOW(),
+          PRIMARY KEY (team_alias, league, season)
+        )
+      `;
+      await sql`CREATE INDEX IF NOT EXISTS idx_season_cache_league ON season_cache(league, season)`;
+
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'Schema initialized' }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_SEASON_CACHE — fetch cached season averages for teams
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_season_cache') {
+      const league = params.league || 'nba';
+      const season = params.season || '2025';
+      const teams = params.teams ? params.teams.split(',').filter(Boolean) : [];
+
+      let rows;
+      if (teams.length > 0) {
+        rows = await sql`
+          SELECT team_alias, players_json, player_count, updated_at
+          FROM season_cache
+          WHERE league = ${league} AND season = ${season} AND team_alias = ANY(${teams})
+        `;
+      } else {
+        rows = await sql`
+          SELECT team_alias, players_json, player_count, updated_at
+          FROM season_cache
+          WHERE league = ${league} AND season = ${season}
+        `;
+      }
+      const cache = {};
+      for (const r of rows) {
+        cache[r.team_alias] = {
+          players: typeof r.players_json === 'string' ? JSON.parse(r.players_json) : r.players_json,
+          playerCount: r.player_count,
+          updatedAt: r.updated_at,
+        };
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ cache, count: rows.length }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // SAVE_SEASON_CACHE — upsert season averages for a team
+    // ═══════════════════════════════════════════════════════
+    if (action === 'save_season_cache' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      const teams = body.teams || [];
+      const league = body.league || 'nba';
+      const season = body.season || '2025';
+      let saved = 0;
+
+      for (const t of teams) {
+        if (!t.alias || !t.players) continue;
+        await sql`
+          INSERT INTO season_cache (team_alias, league, season, players_json, player_count, updated_at)
+          VALUES (${t.alias}, ${league}, ${season}, ${JSON.stringify(t.players)}, ${t.players.length}, NOW())
+          ON CONFLICT (team_alias, league, season) DO UPDATE SET
+            players_json = ${JSON.stringify(t.players)}, player_count = ${t.players.length}, updated_at = NOW()
+        `;
+        saved++;
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, saved }) };
     }
 
     // ═══════════════════════════════════════════════════════
@@ -618,6 +688,22 @@ exports.handler = async (event) => {
           ${body.away_ml || null}, ${body.total || null}, ${body.source || 'bdl'})
       `;
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // INVALIDATE_SEASON_CACHE — force refresh on next poll cycle
+    // ═══════════════════════════════════════════════════════
+    if (action === 'invalidate_season_cache') {
+      const league = params.league || 'nba';
+      const season = params.season || '2025';
+      const team = params.team; // optional — single team, or all if omitted
+      let result;
+      if (team) {
+        result = await sql`UPDATE season_cache SET updated_at = NOW() - INTERVAL '8 days' WHERE league = ${league} AND season = ${season} AND team_alias = ${team}`;
+      } else {
+        result = await sql`UPDATE season_cache SET updated_at = NOW() - INTERVAL '8 days' WHERE league = ${league} AND season = ${season}`;
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, invalidated: team || 'all', league }) };
     }
 
     // ═══════════════════════════════════════════════════════

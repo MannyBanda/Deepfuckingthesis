@@ -168,12 +168,140 @@ async function bdlGameData(league, dateStr) {
   return { teamIds, gameIds };
 }
 
-// Fetch player season stats for a team (returns array of player stat objects)
-async function bdlSeasonStats(league, bdlTeamId, season) {
+// Fetch player season stats for a team — NCAAMB batch endpoint (works as-is)
+async function bdlSeasonStatsNCAAMB(league, bdlTeamId, season) {
   const cfg = LEAGUES[league];
   const data = await bdlFetch(`${cfg.bdlPrefix}/v1/player_season_stats?season=${season}&team_id=${bdlTeamId}&per_page=100`);
   if (!data || !data.data) return [];
   return data.data;
+}
+
+// Fetch NBA season averages — per-player (BDL has no batch-by-team for NBA)
+// Step 1: Get player IDs from a recent game's box score
+// Step 2: Call /nba/v1/season_averages per player
+async function bdlSeasonStatsNBA(bdlTeamId, season) {
+  // Find a recent game for this team to get player IDs
+  const gamesData = await bdlFetch(`/nba/v1/games?team_ids[]=${bdlTeamId}&per_page=3`);
+  if (!gamesData?.data?.length) return [];
+
+  // Get the most recent game's box score for player IDs
+  const recentGameId = gamesData.data[0].id;
+  const statsData = await bdlFetch(`/nba/v1/stats?game_ids[]=${recentGameId}&per_page=50`);
+  if (!statsData?.data?.length) return [];
+
+  // Filter to players on this team who played meaningful minutes
+  const teamPlayers = statsData.data.filter(s => {
+    const mins = s.min ? parseInt(s.min) : 0;
+    return s.player?.id && (s.team?.id === bdlTeamId) && mins >= 5;
+  });
+
+  // Fetch season averages for each player in parallel
+  const results = [];
+  const fetches = teamPlayers.map(async (s) => {
+    const pid = s.player.id;
+    const data = await bdlFetch(`/nba/v1/season_averages?season=${season}&player_id=${pid}`);
+    if (data?.data?.length) {
+      const avg = data.data[0];
+      results.push({
+        player: { id: pid, first_name: s.player.first_name, last_name: s.player.last_name },
+        fg3m: avg.fg3m || 0, fg3a: avg.fg3a || 0,
+        fgm: avg.fgm || 0, fga: avg.fga || 0,
+        pts: avg.pts || 0, reb: avg.reb || 0, ast: avg.ast || 0,
+        stl: avg.stl || 0, blk: avg.blk || 0, turnover: avg.turnover || 0,
+        min: avg.min || '0', games_played: avg.games_played || 0,
+      });
+    }
+  });
+  await Promise.all(fetches);
+  return results;
+}
+
+// Load season cache from DB for given teams
+async function loadSeasonCache(sql, league, season, teamAbbrs) {
+  if (teamAbbrs.length === 0) return {};
+  try {
+    const rows = await sql`
+      SELECT team_alias, players_json, updated_at
+      FROM season_cache
+      WHERE league = ${league} AND season = ${season} AND team_alias = ANY(${teamAbbrs})
+    `;
+    const cache = {};
+    for (const r of rows) {
+      const age = (Date.now() - new Date(r.updated_at).getTime()) / (1000 * 60 * 60 * 24);
+      cache[r.team_alias] = {
+        players: typeof r.players_json === 'string' ? JSON.parse(r.players_json) : r.players_json,
+        ageDays: Math.round(age * 10) / 10,
+        fresh: age < 7, // fresh if under 7 days old
+      };
+    }
+    return cache;
+  } catch (e) {
+    log(`Season cache load failed: ${e.message}`);
+    return {};
+  }
+}
+
+// Save season cache to DB
+async function saveSeasonCache(sql, league, season, teamAlias, players) {
+  try {
+    await sql`
+      INSERT INTO season_cache (team_alias, league, season, players_json, player_count, updated_at)
+      VALUES (${teamAlias}, ${league}, ${season}, ${JSON.stringify(players)}, ${players.length}, NOW())
+      ON CONFLICT (team_alias, league, season) DO UPDATE SET
+        players_json = ${JSON.stringify(players)}, player_count = ${players.length}, updated_at = NOW()
+    `;
+  } catch (e) {
+    log(`Season cache save failed for ${teamAlias}: ${e.message}`);
+  }
+}
+
+// Get season stats for teams — cache-first, fetch stale/missing
+async function getSeasonStatsForTeams(sql, league, season, teamAbbrs, bdlTeamIds) {
+  const abbrArr = Array.from(teamAbbrs);
+  const cache = await loadSeasonCache(sql, league, season, abbrArr);
+  const result = {}; // { 'BOS': [...playerStats], ... }
+  const stale = []; // teams that need refresh
+
+  for (const abbr of abbrArr) {
+    if (cache[abbr]?.fresh) {
+      result[abbr] = cache[abbr].players;
+    } else {
+      stale.push(abbr);
+    }
+  }
+
+  const freshCount = abbrArr.length - stale.length;
+  if (freshCount > 0) log(`Season cache: ${freshCount} teams from cache`);
+
+  if (stale.length > 0) {
+    log(`Season cache: ${stale.length} teams stale/missing — refreshing: ${stale.join(', ')}`);
+
+    const fetches = stale.map(async (abbr) => {
+      const bdlId = bdlTeamIds[abbr];
+      if (!bdlId) return;
+
+      try {
+        let players;
+        if (league === 'nba') {
+          players = await bdlSeasonStatsNBA(bdlId, season);
+        } else {
+          players = await bdlSeasonStatsNCAAMB(league, bdlId, season);
+        }
+
+        if (players.length > 0) {
+          result[abbr] = players;
+          await saveSeasonCache(sql, league, season, abbr, players);
+          log(`Season cache: ${abbr} refreshed — ${players.length} players`);
+        }
+      } catch (e) {
+        log(`Season fetch ${abbr}: ${e.message}`);
+      }
+    });
+
+    await Promise.all(fetches);
+  }
+
+  return result;
 }
 
 // Fetch odds for a game → returns { homeSpread, homeML, awayML, total } or null
@@ -779,22 +907,8 @@ export default async function(req) {
         if (g.away_alias) teamAbbrs.add(g.away_alias);
       }
 
-      // Fetch season stats for all teams in parallel (BDL has no 1/sec limit)
-      const bdlSeasonCache = {};
-      const seasonFetches = [];
-      for (const abbr of teamAbbrs) {
-        const bdlId = bdlTeamIds[abbr];
-        if (!bdlId) continue;
-        seasonFetches.push(
-          bdlSeasonStats(league, bdlId, cfg.season)
-            .then(stats => { bdlSeasonCache[abbr] = stats; })
-            .catch(e => { log(`BDL season stats ${abbr}: ${e.message}`); })
-        );
-      }
-      if (seasonFetches.length > 0) {
-        await Promise.all(seasonFetches);
-        log(`BDL season stats: ${Object.keys(bdlSeasonCache).length}/${teamAbbrs.size} teams loaded`);
-      }
+      // Load season stats — cache-first (DB), fetch stale/missing from BDL
+      const bdlSeasonCache = await getSeasonStatsForTeams(sql, league, cfg.season, teamAbbrs, bdlTeamIds);
 
       // Track which cached games got updated this cycle
       let cacheUpdated = false;
