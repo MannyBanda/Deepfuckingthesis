@@ -373,7 +373,10 @@ async function buildSeasonCache(league){
     var data = await r.json();
     if(data.ok){
       var teamList = data.teams ? Object.entries(data.teams).map(function(e){ return e[0] + ':' + e[1] + 'p'; }).join(', ') : '';
-      log('Season cache built! Saved: ' + (data.saved||0) + ' teams, failed: ' + (data.failed||0) + (teamList ? ' — ' + teamList : ''), 'log-ok');
+      log('Season cache built! Saved: ' + (data.saved||0) + ' teams, failed: ' + (data.failed||0) + (teamList ? ' — ' + teamList : ''), data.saved > 0 ? 'log-ok' : 'log-warn');
+      if(data.errors && data.errors.length > 0){
+        data.errors.forEach(function(e){ log('  ✗ ' + e, 'log-err'); });
+      }
       viewSeasonCache(league);
     } else {
       log('Build failed: ' + JSON.stringify(data), 'log-err');
