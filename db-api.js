@@ -1,0 +1,1283 @@
+// Database API — Neon Postgres via Netlify DB
+// Handles: schema init, snapshot capture, game finalization, calibration queries
+// Uses @neondatabase/serverless HTTP transport (no TCP needed)
+
+const { neon } = require('@neondatabase/serverless');
+
+function getSQL() {
+  const url = process.env.DATABASE_URL;
+  if (!url) throw new Error('DATABASE_URL not configured — set up Netlify DB first');
+  return neon(url);
+}
+
+exports.handler = async (event) => {
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Content-Type': 'application/json',
+  };
+
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 204, headers, body: '' };
+  }
+
+  const params = event.queryStringParameters || {};
+  const action = params.action;
+
+  if (!action) {
+    return { statusCode: 400, headers, body: JSON.stringify({ error: 'action required' }) };
+  }
+
+  try {
+    const sql = getSQL();
+
+    // ═══════════════════════════════════════════════════════
+    // INIT — create tables (idempotent)
+    // ═══════════════════════════════════════════════════════
+    if (action === 'init') {
+      await sql`
+        CREATE TABLE IF NOT EXISTS games (
+          id TEXT PRIMARY KEY,
+          date TEXT,
+          league TEXT DEFAULT 'nba',
+          matchup TEXT,
+          home_alias TEXT,
+          away_alias TEXT,
+          home_pts INTEGER,
+          away_pts INTEGER,
+          winner TEXT,
+          margin INTEGER,
+          spread REAL,
+          home_covered BOOLEAN,
+          away_covered BOOLEAN,
+          thesis_team TEXT,
+          thesis_correct BOOLEAN,
+          fwp_team TEXT,
+          fwp_value REAL,
+          fwp_correct BOOLEAN,
+          conviction TEXT,
+          entry_signal TEXT,
+          classification TEXT,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `;
+
+      await sql`
+        CREATE TABLE IF NOT EXISTS snapshots (
+          id SERIAL PRIMARY KEY,
+          game_id TEXT REFERENCES games(id),
+          ts TIMESTAMPTZ DEFAULT NOW(),
+          period INTEGER,
+          clock TEXT,
+          home_pts INTEGER,
+          away_pts INTEGER,
+          floor_score REAL,
+          floor_team TEXT,
+          pbp_score REAL,
+          pbp_team TEXT,
+          pbp_window_size INTEGER,
+          qtr_score REAL,
+          qtr_team TEXT,
+          espn_wp_home REAL,
+          espn_wp_away REAL,
+          spread REAL,
+          deficit INTEGER,
+          trailing_team TEXT,
+          lead_sust TEXT,
+          gap REAL,
+          accel TEXT,
+          i1 REAL, i2 REAL, i3 REAL, i4 REAL, i5 REAL
+        )
+      `;
+
+      await sql`
+        CREATE TABLE IF NOT EXISTS theses (
+          game_id TEXT PRIMARY KEY,
+          league TEXT DEFAULT 'nba',
+          text TEXT,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `;
+
+      await sql`
+        CREATE TABLE IF NOT EXISTS analyses (
+          id SERIAL PRIMARY KEY,
+          game_id TEXT,
+          ts TIMESTAMPTZ DEFAULT NOW(),
+          period INTEGER,
+          clock TEXT,
+          control_team TEXT,
+          control_score REAL,
+          fwp TEXT,
+          edge TEXT,
+          entry TEXT,
+          conviction TEXT,
+          signal TEXT,
+          sustainability TEXT,
+          lead_source TEXT,
+          raw_text TEXT,
+          prediction_json JSONB,
+          indicators_json JSONB
+        )
+      `;
+
+      await sql`CREATE INDEX IF NOT EXISTS idx_snapshots_game ON snapshots(game_id)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_snapshots_period ON snapshots(period)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_analyses_game ON analyses(game_id)`;
+
+      // Migrations — add columns if they don't exist (safe to re-run)
+      try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS prediction_json JSONB`; } catch(e) {}
+      try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS indicators_json JSONB`; } catch(e) {}
+      try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS narrative_json JSONB`; } catch(e) {}
+      try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS "trigger" TEXT DEFAULT 'manual'`; } catch(e) {}
+
+      // Snapshot enrichment columns (server-side polling)
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'client'`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS lead_class TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS sust_json JSONB`; } catch(e) {}
+
+      // WP profile table — team-level win probability curve analysis
+      await sql`
+        CREATE TABLE IF NOT EXISTS wp_profiles (
+          team_alias TEXT NOT NULL,
+          league TEXT DEFAULT 'nba',
+          season TEXT DEFAULT '2025-26',
+          games_analyzed INTEGER DEFAULT 0,
+          profile_json JSONB,
+          updated_at TIMESTAMPTZ DEFAULT NOW(),
+          PRIMARY KEY (team_alias, league, season)
+        )
+      `;
+
+      // Clutch data — persists OCR uploads keyed by team
+      await sql`
+        CREATE TABLE IF NOT EXISTS clutch (
+          id SERIAL PRIMARY KEY,
+          team_alias TEXT NOT NULL,
+          league TEXT DEFAULT 'nba',
+          tier INTEGER DEFAULT 3,
+          net_rtg REAL,
+          off_rtg REAL,
+          def_rtg REAL,
+          wl TEXT,
+          efg REAL,
+          pace REAL,
+          pie REAL,
+          source TEXT,
+          data_json JSONB,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `;
+      await sql`CREATE INDEX IF NOT EXISTS idx_clutch_team ON clutch(team_alias, league)`;
+
+      // Odds history — tracks line movement over time
+      await sql`
+        CREATE TABLE IF NOT EXISTS odds_history (
+          id SERIAL PRIMARY KEY,
+          game_id TEXT,
+          ts TIMESTAMPTZ DEFAULT NOW(),
+          home_spread REAL,
+          home_ml INTEGER,
+          away_ml INTEGER,
+          total REAL,
+          source TEXT DEFAULT 'bdl'
+        )
+      `;
+      await sql`CREATE INDEX IF NOT EXISTS idx_odds_game ON odds_history(game_id)`;
+
+      // Poll heartbeat — client writes to signal it's active, server checks before polling
+      await sql`
+        CREATE TABLE IF NOT EXISTS poll_heartbeats (
+          league TEXT PRIMARY KEY,
+          last_poll TIMESTAMPTZ DEFAULT NOW(),
+          device TEXT
+        )
+      `;
+
+      // Poll state — tracks daily schedule + game window to minimize SR API calls
+      await sql`
+        CREATE TABLE IF NOT EXISTS poll_state (
+          league TEXT NOT NULL,
+          date TEXT NOT NULL,
+          first_tip TIMESTAMPTZ,
+          last_tip TIMESTAMPTZ,
+          game_count INTEGER DEFAULT 0,
+          all_final BOOLEAN DEFAULT FALSE,
+          schedule_json JSONB,
+          fetched_at TIMESTAMPTZ DEFAULT NOW(),
+          PRIMARY KEY (league, date)
+        )
+      `;
+
+      // Season cache — weekly-refreshed player season averages per team
+      await sql`
+        CREATE TABLE IF NOT EXISTS season_cache (
+          team_alias TEXT NOT NULL,
+          league TEXT NOT NULL DEFAULT 'nba',
+          season TEXT NOT NULL DEFAULT '2025',
+          players_json JSONB,
+          player_count INTEGER DEFAULT 0,
+          updated_at TIMESTAMPTZ DEFAULT NOW(),
+          PRIMARY KEY (team_alias, league, season)
+        )
+      `;
+      await sql`CREATE INDEX IF NOT EXISTS idx_season_cache_league ON season_cache(league, season)`;
+
+      // Game context — client pushes rich computed state at quarter boundaries
+      // Server reads this before firing auto calibration analyses
+      await sql`
+        CREATE TABLE IF NOT EXISTS game_context (
+          game_id TEXT NOT NULL,
+          league TEXT DEFAULT 'nba',
+          period INTEGER NOT NULL,
+          context_json JSONB,
+          updated_at TIMESTAMPTZ DEFAULT NOW(),
+          PRIMARY KEY (game_id, period)
+        )
+      `;
+
+      // Game PBP — parsed play-by-play audit persisted at finalization
+      // Client checks this before burning an SR PBP API call
+      await sql`
+        CREATE TABLE IF NOT EXISTS game_pbp (
+          game_id TEXT PRIMARY KEY,
+          league TEXT DEFAULT 'nba',
+          home_alias TEXT,
+          away_alias TEXT,
+          total_shots INTEGER,
+          total_tos INTEGER,
+          pbp_json JSONB,
+          saved_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `;
+
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'Schema initialized' }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // SAVE_PBP — persist parsed PBP audit at game finalization
+    // ═══════════════════════════════════════════════════════
+    if (action === 'save_pbp' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      const { game_id, league, home_alias, away_alias, pbp } = body;
+      if (!game_id || !pbp) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id and pbp required' }) };
+
+      await sql`
+        INSERT INTO game_pbp (game_id, league, home_alias, away_alias, total_shots, total_tos, pbp_json, saved_at)
+        VALUES (${game_id}, ${league || 'nba'}, ${home_alias || null}, ${away_alias || null},
+          ${pbp.totalShots || 0}, ${pbp.totalTOs || 0}, ${JSON.stringify(pbp)}, NOW())
+        ON CONFLICT (game_id) DO UPDATE SET
+          pbp_json = ${JSON.stringify(pbp)}, total_shots = ${pbp.totalShots || 0},
+          total_tos = ${pbp.totalTOs || 0}, saved_at = NOW()
+      `;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, game_id }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_PBP — fetch persisted PBP audit (avoids SR API call)
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_pbp') {
+      const game_id = params.game_id;
+      if (!game_id) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id required' }) };
+
+      const rows = await sql`
+        SELECT pbp_json, saved_at FROM game_pbp WHERE game_id = ${game_id} LIMIT 1
+      `;
+      if (rows.length === 0) return { statusCode: 200, headers, body: JSON.stringify({ pbp: null }) };
+
+      const pbp = typeof rows[0].pbp_json === 'string' ? JSON.parse(rows[0].pbp_json) : rows[0].pbp_json;
+      return { statusCode: 200, headers, body: JSON.stringify({ pbp, saved_at: rows[0].saved_at }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // SAVE_CONTEXT — client pushes rich computed state at quarter boundaries
+    // ═══════════════════════════════════════════════════════
+    if (action === 'save_context' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      if (!body.game_id || !body.period) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id and period required' }) };
+      await sql`
+        INSERT INTO game_context (game_id, league, period, context_json, updated_at)
+        VALUES (${body.game_id}, ${body.league || 'nba'}, ${body.period}, ${JSON.stringify(body.context)}, NOW())
+        ON CONFLICT (game_id, period) DO UPDATE SET
+          context_json = ${JSON.stringify(body.context)}, updated_at = NOW()
+      `;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_CONTEXT — server reads client-pushed context before auto analysis
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_context') {
+      const gameId = params.game_id;
+      if (!gameId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id required' }) };
+      const period = params.period ? parseInt(params.period) : null;
+
+      let rows;
+      if (period) {
+        rows = await sql`
+          SELECT period, context_json, updated_at FROM game_context
+          WHERE game_id = ${gameId} AND period = ${period}
+        `;
+      } else {
+        // Return latest context (highest period)
+        rows = await sql`
+          SELECT period, context_json, updated_at FROM game_context
+          WHERE game_id = ${gameId}
+          ORDER BY period DESC LIMIT 1
+        `;
+      }
+
+      if (rows.length === 0) return { statusCode: 200, headers, body: JSON.stringify({ context: null }) };
+      const r = rows[0];
+      const ctx = typeof r.context_json === 'string' ? JSON.parse(r.context_json) : r.context_json;
+      return { statusCode: 200, headers, body: JSON.stringify({ context: ctx, period: r.period, updated_at: r.updated_at }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // BUILD_SEASON_CACHE — fetch BDL season data and save to DB
+    // ═══════════════════════════════════════════════════════
+    if (action === 'build_season_cache' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      const league = body.league || 'nba';
+      const season = body.season || '2025';
+      const forceTeams = body.teams || []; // optional: specific team aliases to refresh
+      const bdlKey = process.env.BDL_API_KEY;
+      if (!bdlKey) return { statusCode: 500, headers, body: JSON.stringify({ error: 'BDL_API_KEY not set' }) };
+
+      const BDL = 'https://api.balldontlie.io';
+      const bdlPrefix = league === 'ncaamb' ? '/ncaab' : league === 'wnba' ? '/wnba' : '/nba';
+
+      async function bdl(path) {
+        const r = await fetch(`${BDL}${path}`, { headers: { 'Authorization': bdlKey } });
+        if (!r.ok) return null;
+        return await r.json();
+      }
+
+      // Step 1: Get ALL teams from BDL (not just today's games)
+      const teamsData = await bdl(`${bdlPrefix}/v1/teams`);
+      const teamIds = {}; // { 'BOS': 2, ... }
+      if (teamsData?.data) {
+        for (const t of teamsData.data) {
+          if (t.abbreviation && t.id) teamIds[t.abbreviation] = t.id;
+        }
+      }
+
+      if (Object.keys(teamIds).length === 0) {
+        return { statusCode: 200, headers, body: JSON.stringify({ ok: false, error: 'BDL teams endpoint returned empty' }) };
+      }
+
+      // Determine which teams to fetch
+      let targetTeams = forceTeams.length > 0 ? forceTeams : Object.keys(teamIds);
+
+      // Check existing cache — skip fresh teams unless forced
+      if (forceTeams.length === 0 && targetTeams.length > 0) {
+        try {
+          const existing = await sql`
+            SELECT team_alias, updated_at FROM season_cache
+            WHERE league = ${league} AND season = ${season} AND team_alias = ANY(${targetTeams})
+          `;
+          const freshSet = new Set();
+          for (const r of existing) {
+            const age = (Date.now() - new Date(r.updated_at).getTime()) / (1000 * 60 * 60 * 24);
+            if (age < 7) freshSet.add(r.team_alias);
+          }
+          const before = targetTeams.length;
+          targetTeams = targetTeams.filter(t => !freshSet.has(t));
+          if (before !== targetTeams.length) {
+            // Some teams are fresh, skip them
+          }
+        } catch (e) { /* table may not exist */ }
+      }
+
+      if (targetTeams.length === 0) {
+        return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'All teams fresh', teams: 0 }) };
+      }
+
+      // Step 2: Fetch season averages per team (batches of 3 in parallel to stay within timeout)
+      let saved = 0, failed = 0;
+      const results = {};
+      const errors = [];
+
+      async function processTeam(abbr) {
+        const bdlId = teamIds[abbr];
+        if (!bdlId) { failed++; errors.push(abbr + ': no BDL ID'); return; }
+
+        try {
+          let players = [];
+
+          if (league === 'nba') {
+            const recentGames = await bdl(`/nba/v1/games?team_ids[]=${bdlId}&seasons[]=${season}&per_page=5`);
+            if (!recentGames?.data?.length) { failed++; errors.push(abbr + ': no recent games (bdlId=' + bdlId + ')'); return; }
+            const gameId = recentGames.data[recentGames.data.length - 1].id;
+            const boxScore = await bdl(`/nba/v1/stats?game_ids[]=${gameId}&per_page=50`);
+            if (!boxScore?.data?.length) { failed++; errors.push(abbr + ': no box score for game ' + gameId); return; }
+
+            const teamPlayers = boxScore.data.filter(s => {
+              const mins = s.min ? parseInt(s.min) : 0;
+              return s.player?.id && s.team?.id == bdlId && mins >= 5;
+            });
+
+            if (teamPlayers.length === 0) { failed++; errors.push(abbr + ': 0 players matched'); return; }
+
+            const fetches = teamPlayers.map(async (s) => {
+              const data = await bdl(`/nba/v1/season_averages?season=${season}&player_id=${s.player.id}`);
+              if (data?.data?.length) {
+                const avg = data.data[0];
+                players.push({
+                  player: { id: s.player.id, first_name: s.player.first_name, last_name: s.player.last_name },
+                  fg3m: avg.fg3m || 0, fg3a: avg.fg3a || 0,
+                  fgm: avg.fgm || 0, fga: avg.fga || 0,
+                  pts: avg.pts || 0, reb: avg.reb || 0, ast: avg.ast || 0,
+                  stl: avg.stl || 0, blk: avg.blk || 0, turnover: avg.turnover || 0,
+                  min: avg.min || '0', games_played: avg.games_played || 0,
+                });
+              }
+            });
+            await Promise.all(fetches);
+          } else {
+            const data = await bdl(`${bdlPrefix}/v1/player_season_stats?season=${season}&team_id=${bdlId}&per_page=100`);
+            if (data?.data) players = data.data;
+          }
+
+          if (players.length > 0) {
+            await sql`
+              INSERT INTO season_cache (team_alias, league, season, players_json, player_count, updated_at)
+              VALUES (${abbr}, ${league}, ${season}, ${JSON.stringify(players)}, ${players.length}, NOW())
+              ON CONFLICT (team_alias, league, season) DO UPDATE SET
+                players_json = ${JSON.stringify(players)}, player_count = ${players.length}, updated_at = NOW()
+            `;
+            results[abbr] = players.length;
+            saved++;
+          } else { failed++; errors.push(abbr + ': 0 players after fetch'); }
+        } catch (e) {
+          failed++;
+          errors.push(abbr + ': ' + e.message);
+        }
+      }
+
+      // Process in batches of 3 teams at a time
+      for (let i = 0; i < targetTeams.length; i += 3) {
+        const batch = targetTeams.slice(i, i + 3);
+        await Promise.all(batch.map(processTeam));
+      }
+
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, saved, failed, teams: results, errors }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_SEASON_CACHE — fetch cached season averages for teams
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_season_cache') {
+      const league = params.league || 'nba';
+      const season = params.season || '2025';
+      const teams = params.teams ? params.teams.split(',').filter(Boolean) : [];
+
+      let rows;
+      if (teams.length > 0) {
+        rows = await sql`
+          SELECT team_alias, players_json, player_count, updated_at
+          FROM season_cache
+          WHERE league = ${league} AND season = ${season} AND team_alias = ANY(${teams})
+        `;
+      } else {
+        rows = await sql`
+          SELECT team_alias, players_json, player_count, updated_at
+          FROM season_cache
+          WHERE league = ${league} AND season = ${season}
+        `;
+      }
+      const cache = {};
+      for (const r of rows) {
+        cache[r.team_alias] = {
+          players: typeof r.players_json === 'string' ? JSON.parse(r.players_json) : r.players_json,
+          playerCount: r.player_count,
+          updatedAt: r.updated_at,
+        };
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ cache, count: rows.length }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // SAVE_SEASON_CACHE — upsert season averages for a team
+    // ═══════════════════════════════════════════════════════
+    if (action === 'save_season_cache' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      const teams = body.teams || [];
+      const league = body.league || 'nba';
+      const season = body.season || '2025';
+      let saved = 0;
+
+      for (const t of teams) {
+        if (!t.alias || !t.players) continue;
+        await sql`
+          INSERT INTO season_cache (team_alias, league, season, players_json, player_count, updated_at)
+          VALUES (${t.alias}, ${league}, ${season}, ${JSON.stringify(t.players)}, ${t.players.length}, NOW())
+          ON CONFLICT (team_alias, league, season) DO UPDATE SET
+            players_json = ${JSON.stringify(t.players)}, player_count = ${t.players.length}, updated_at = NOW()
+        `;
+        saved++;
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, saved }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // SNAPSHOT — save periodic game state
+    // ═══════════════════════════════════════════════════════
+    if (action === 'snapshot' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      const s = body;
+
+      // Upsert game row (create if not exists)
+      await sql`
+        INSERT INTO games (id, date, league, matchup, home_alias, away_alias)
+        VALUES (${s.game_id}, ${s.date || null}, ${s.league || 'nba'}, ${s.matchup || null}, ${s.home_alias || null}, ${s.away_alias || null})
+        ON CONFLICT (id) DO NOTHING
+      `;
+
+      // Insert snapshot
+      await sql`
+        INSERT INTO snapshots (game_id, period, clock, home_pts, away_pts,
+          floor_score, floor_team, pbp_score, pbp_team, pbp_window_size,
+          qtr_score, qtr_team, espn_wp_home, espn_wp_away,
+          spread, deficit, trailing_team, lead_sust, gap, accel,
+          i1, i2, i3, i4, i5)
+        VALUES (${s.game_id}, ${s.period}, ${s.clock}, ${s.home_pts}, ${s.away_pts},
+          ${s.floor_score}, ${s.floor_team}, ${s.pbp_score}, ${s.pbp_team}, ${s.pbp_window_size},
+          ${s.qtr_score}, ${s.qtr_team}, ${s.espn_wp_home}, ${s.espn_wp_away},
+          ${s.spread}, ${s.deficit}, ${s.trailing_team}, ${s.lead_sust}, ${s.gap}, ${s.accel},
+          ${s.i1}, ${s.i2}, ${s.i3}, ${s.i4}, ${s.i5})
+      `;
+
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // HEARTBEAT — client signals it's actively polling
+    // ═══════════════════════════════════════════════════════
+    if (action === 'heartbeat' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      const league = body.league || 'nba';
+      const device = body.device || 'unknown';
+
+      await sql`
+        INSERT INTO poll_heartbeats (league, last_poll, device)
+        VALUES (${league}, NOW(), ${device})
+        ON CONFLICT (league) DO UPDATE SET last_poll = NOW(), device = ${device}
+      `;
+
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
+    }
+
+    // HEARTBEAT_CHECK — server checks if client is active
+    if (action === 'heartbeat_check') {
+      const league = params.league || 'nba';
+      const staleMinutes = parseInt(params.stale_minutes) || 3;
+
+      const rows = await sql`
+        SELECT last_poll, device,
+          EXTRACT(EPOCH FROM (NOW() - last_poll)) / 60 AS age_minutes
+        FROM poll_heartbeats WHERE league = ${league}
+      `;
+
+      const hb = rows.length > 0 ? rows[0] : null;
+      const clientActive = hb && hb.age_minutes < staleMinutes;
+
+      return {
+        statusCode: 200, headers,
+        body: JSON.stringify({
+          clientActive,
+          lastPoll: hb?.last_poll || null,
+          ageMinutes: hb ? Math.round(hb.age_minutes * 10) / 10 : null,
+          device: hb?.device || null,
+        }),
+      };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // FINALIZE — record game outcome
+    // ═══════════════════════════════════════════════════════
+    if (action === 'finalize' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      const g = body;
+
+      await sql`
+        UPDATE games SET
+          home_pts = ${g.home_pts},
+          away_pts = ${g.away_pts},
+          winner = ${g.winner},
+          margin = ${g.margin},
+          spread = ${g.spread},
+          home_covered = ${g.home_covered},
+          away_covered = ${g.away_covered},
+          thesis_team = ${g.thesis_team},
+          thesis_correct = ${g.thesis_correct},
+          fwp_team = ${g.fwp_team},
+          fwp_value = ${g.fwp_value},
+          fwp_correct = ${g.fwp_correct},
+          conviction = ${g.conviction},
+          entry_signal = ${g.entry_signal},
+          classification = ${g.classification}
+        WHERE id = ${g.game_id}
+      `;
+
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // THESIS — save/get pre-game thesis
+    // ═══════════════════════════════════════════════════════
+    if (action === 'save_thesis' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      await sql`
+        INSERT INTO theses (game_id, league, text)
+        VALUES (${body.game_id}, ${body.league || 'nba'}, ${body.text})
+        ON CONFLICT (game_id) DO UPDATE SET text = ${body.text}, created_at = NOW()
+      `;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // ANALYSIS — save Sonnet analysis snapshot
+    // ═══════════════════════════════════════════════════════
+    if (action === 'save_analysis' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      const a = body;
+      await sql`
+        INSERT INTO analyses (game_id, period, clock, control_team, control_score,
+          fwp, edge, entry, conviction, signal, sustainability, lead_source, raw_text,
+          prediction_json, indicators_json, narrative_json, "trigger")
+        VALUES (${a.game_id}, ${a.period}, ${a.clock}, ${a.control_team}, ${a.control_score},
+          ${a.fwp}, ${a.edge}, ${a.entry}, ${a.conviction}, ${a.signal},
+          ${a.sustainability}, ${a.lead_source}, ${a.raw_text},
+          ${a.prediction_json || null}, ${a.indicators_json || null}, ${a.narrative_json || null},
+          ${a.trigger || 'manual'})
+      `;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // CALIBRATION — aggregate stats for Sonnet prompt
+    // ═══════════════════════════════════════════════════════
+    if (action === 'calibration') {
+      const league = params.league || 'nba';
+
+      // Overall stats from finalized games
+      const gameStats = await sql`
+        SELECT
+          COUNT(*) as total_games,
+          COUNT(CASE WHEN thesis_correct = true THEN 1 END) as thesis_correct,
+          COUNT(CASE WHEN thesis_team IS NOT NULL THEN 1 END) as thesis_total,
+          COUNT(CASE WHEN fwp_correct = true THEN 1 END) as fwp_correct,
+          COUNT(CASE WHEN fwp_team IS NOT NULL THEN 1 END) as fwp_total,
+          COUNT(CASE WHEN home_covered = true THEN 1 END) + COUNT(CASE WHEN away_covered = true THEN 1 END) as spread_covered,
+          COUNT(CASE WHEN spread IS NOT NULL THEN 1 END) * 2 as spread_total
+        FROM games
+        WHERE league = ${league} AND winner IS NOT NULL
+      `;
+
+      // FWP bucket accuracy
+      const fwpBuckets = await sql`
+        SELECT
+          CASE
+            WHEN fwp_value >= 80 THEN '80+'
+            WHEN fwp_value >= 70 THEN '70-79'
+            WHEN fwp_value >= 60 THEN '60-69'
+            WHEN fwp_value >= 50 THEN '50-59'
+            ELSE 'under50'
+          END as bucket,
+          COUNT(*) as total,
+          COUNT(CASE WHEN fwp_correct = true THEN 1 END) as correct
+        FROM games
+        WHERE league = ${league} AND fwp_value IS NOT NULL AND winner IS NOT NULL
+        GROUP BY bucket
+      `;
+
+      // Recent misses
+      const recentMisses = await sql`
+        SELECT matchup, fwp_value, fwp_team, winner
+        FROM games
+        WHERE league = ${league} AND fwp_correct = false AND fwp_value >= 55 AND winner IS NOT NULL
+        ORDER BY created_at DESC
+        LIMIT 5
+      `;
+
+      return {
+        statusCode: 200, headers,
+        body: JSON.stringify({ gameStats: gameStats[0] || {}, fwpBuckets, recentMisses }),
+      };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // MATCH — find historical snapshots matching current state
+    // ═══════════════════════════════════════════════════════
+    if (action === 'match') {
+      const floor_min = parseFloat(params.floor_min || '0.60');
+      const floor_max = parseFloat(params.floor_max || '1.0');
+      const period = parseInt(params.period || '0');
+      const trailing = params.trailing === 'true';
+      const deficit_min = parseInt(params.deficit_min || '0');
+      const deficit_max = parseInt(params.deficit_max || '99');
+      const league = params.league || 'nba';
+
+      const matches = await sql`
+        SELECT
+          s.game_id, s.period, s.floor_score, s.floor_team, s.pbp_score, s.pbp_team,
+          s.espn_wp_home, s.deficit, s.gap, s.spread,
+          g.winner, g.margin, g.home_covered, g.away_covered, g.matchup,
+          CASE WHEN s.floor_team = g.winner THEN true ELSE false END as structural_won,
+          CASE WHEN s.floor_team = g.home_alias AND g.home_covered = true THEN true
+               WHEN s.floor_team = g.away_alias AND g.away_covered = true THEN true
+               ELSE false END as structural_covered
+        FROM snapshots s
+        JOIN games g ON s.game_id = g.id
+        WHERE g.league = ${league}
+          AND g.winner IS NOT NULL
+          AND s.floor_score >= ${floor_min}
+          AND s.floor_score <= ${floor_max}
+          AND (${period} = 0 OR s.period = ${period})
+          AND (${!trailing} OR s.deficit >= ${deficit_min})
+          AND s.deficit <= ${deficit_max}
+        ORDER BY s.ts DESC
+        LIMIT 100
+      `;
+
+      // Aggregate
+      const total = matches.length;
+      const won = matches.filter(m => m.structural_won).length;
+      const covered = matches.filter(m => m.structural_covered).length;
+      const coveredTotal = matches.filter(m => m.spread !== null).length;
+      const pbpAgreed = matches.filter(m => m.pbp_team === m.floor_team);
+      const pbpAgreedWon = pbpAgreed.filter(m => m.structural_won).length;
+      const pbpDisagreed = matches.filter(m => m.pbp_team !== m.floor_team && m.pbp_team);
+      const pbpDisagreedWon = pbpDisagreed.filter(m => m.structural_won).length;
+
+      return {
+        statusCode: 200, headers,
+        body: JSON.stringify({
+          total,
+          winRate: total > 0 ? (won / total * 100).toFixed(1) : null,
+          coverRate: coveredTotal > 0 ? (covered / coveredTotal * 100).toFixed(1) : null,
+          pbpAgreedWinRate: pbpAgreed.length > 0 ? (pbpAgreedWon / pbpAgreed.length * 100).toFixed(1) : null,
+          pbpAgreedCount: pbpAgreed.length,
+          pbpDisagreedWinRate: pbpDisagreed.length > 0 ? (pbpDisagreedWon / pbpDisagreed.length * 100).toFixed(1) : null,
+          pbpDisagreedCount: pbpDisagreed.length,
+          samples: matches.slice(0, 10).map(m => ({
+            matchup: m.matchup, period: m.period,
+            floor: m.floor_score, pbp: m.pbp_score,
+            deficit: m.deficit, won: m.structural_won, covered: m.structural_covered,
+          })),
+        }),
+      };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // HISTORY — get snapshots for a specific game
+    // ═══════════════════════════════════════════════════════
+    if (action === 'history') {
+      const gameId = params.game_id;
+      if (!gameId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id required' }) };
+
+      const snapshots = await sql`
+        SELECT * FROM snapshots WHERE game_id = ${gameId} ORDER BY ts ASC
+      `;
+
+      return { statusCode: 200, headers, body: JSON.stringify({ snapshots }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // STATS — dashboard-level aggregate stats
+    // ═══════════════════════════════════════════════════════
+    if (action === 'stats') {
+      const league = params.league || 'nba';
+      const games = await sql`
+        SELECT COUNT(*) as total, COUNT(CASE WHEN winner IS NOT NULL THEN 1 END) as finalized
+        FROM games WHERE league = ${league}
+      `;
+      const snapshots = await sql`
+        SELECT COUNT(*) as total FROM snapshots s
+        JOIN games g ON s.game_id = g.id WHERE g.league = ${league}
+      `;
+      return {
+        statusCode: 200, headers,
+        body: JSON.stringify({ games: games[0], snapshots: snapshots[0] }),
+      };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_THESES — fetch theses for given game IDs or all today
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_theses') {
+      const gameIds = params.game_ids ? params.game_ids.split(',') : [];
+      const date = params.date || null;
+      const league = params.league || 'nba';
+
+      let rows;
+      if (gameIds.length > 0) {
+        rows = await sql`SELECT game_id, text, created_at FROM theses WHERE game_id = ANY(${gameIds})`;
+      } else if (date) {
+        rows = await sql`
+          SELECT t.game_id, t.text, t.created_at FROM theses t
+          JOIN games g ON t.game_id = g.id
+          WHERE g.date = ${date} AND g.league = ${league}
+        `;
+      } else {
+        rows = await sql`SELECT game_id, text, created_at FROM theses WHERE league = ${league} ORDER BY created_at DESC LIMIT 50`;
+      }
+
+      const result = {};
+      rows.forEach(r => { result[r.game_id] = r.text; });
+      return { statusCode: 200, headers, body: JSON.stringify({ theses: result }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_ANALYSES — fetch latest analysis per game
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_analyses') {
+      const gameIds = params.game_ids ? params.game_ids.split(',') : [];
+      const league = params.league || 'nba';
+
+      let rows;
+      if (gameIds.length > 0) {
+        rows = await sql`
+          SELECT DISTINCT ON (game_id) game_id, ts, period, clock,
+            control_team, control_score, fwp, edge, entry, conviction, signal,
+            sustainability, lead_source, prediction_json, indicators_json, raw_text, narrative_json,
+            "trigger"
+          FROM analyses
+          WHERE game_id = ANY(${gameIds})
+          ORDER BY game_id, ts DESC
+        `;
+      } else {
+        // Return most recent analyses across all games for this league
+        rows = await sql`
+          SELECT DISTINCT ON (a.game_id) a.game_id, a.ts, a.period, a.clock,
+            a.control_team, a.control_score, a.fwp, a.edge, a.entry, a.conviction, a.signal,
+            a.sustainability, a.lead_source, a.prediction_json, a.indicators_json, a.raw_text, a.narrative_json,
+            a."trigger",
+            g.matchup
+          FROM analyses a
+          LEFT JOIN games g ON a.game_id = g.id
+          WHERE (g.league = ${league} OR g.league IS NULL)
+          ORDER BY a.game_id, a.ts DESC
+          LIMIT 50
+        `;
+      }
+
+      return { statusCode: 200, headers, body: JSON.stringify({ analyses: rows }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_AUTO_ANALYSES — all auto quarter-boundary analyses for given games
+    // Returns ALL auto_q1/q2/q3 analyses (not just latest), sorted chronologically.
+    // Client uses this to hydrate analysisHistory + prediction from server-generated analyses.
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_auto_analyses') {
+      const gameIds = (params.game_ids || '').split(',').filter(Boolean);
+      if (gameIds.length === 0) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_ids required' }) };
+
+      const rows = await sql`
+        SELECT game_id, ts, period, clock,
+          control_team, control_score, fwp, edge, entry, conviction, signal,
+          sustainability, lead_source, prediction_json, indicators_json, raw_text,
+          "trigger"
+        FROM analyses
+        WHERE game_id = ANY(${gameIds}) AND "trigger" LIKE 'auto_q%'
+        ORDER BY game_id, ts ASC
+      `;
+
+      // Group by game_id
+      const grouped = {};
+      for (const r of rows) {
+        if (!grouped[r.game_id]) grouped[r.game_id] = [];
+        grouped[r.game_id].push(r);
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ analyses: grouped, total: rows.length }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // SAVE_CLUTCH — persist clutch OCR data per team
+    // ═══════════════════════════════════════════════════════
+    if (action === 'save_clutch' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      const teams = body.teams || [];
+      for (const t of teams) {
+        // Upsert: delete old entry for this team/league, insert fresh
+        await sql`DELETE FROM clutch WHERE team_alias = ${t.alias} AND league = ${body.league || 'nba'}`;
+        await sql`
+          INSERT INTO clutch (team_alias, league, tier, net_rtg, off_rtg, def_rtg, wl, efg, pace, pie, source, data_json)
+          VALUES (${t.alias}, ${body.league || 'nba'}, ${t.tier || 3}, ${t.netRtg || null}, ${t.offRtg || null},
+            ${t.defRtg || null}, ${t.wl || null}, ${t.efg || null}, ${t.pace || null}, ${t.pie || null},
+            ${t.source || 'ocr'}, ${t.data ? JSON.stringify(t.data) : null})
+        `;
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, saved: teams.length }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_CLUTCH — fetch clutch data for teams
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_clutch') {
+      const teams = params.teams ? params.teams.split(',') : [];
+      const league = params.league || 'nba';
+
+      let rows;
+      if (teams.length > 0) {
+        rows = await sql`
+          SELECT DISTINCT ON (team_alias) team_alias, tier, net_rtg, off_rtg, def_rtg, wl, efg, pace, pie, source, data_json, created_at
+          FROM clutch WHERE team_alias = ANY(${teams}) AND league = ${league}
+          ORDER BY team_alias, created_at DESC
+        `;
+      } else {
+        rows = await sql`
+          SELECT DISTINCT ON (team_alias) team_alias, tier, net_rtg, off_rtg, def_rtg, wl, efg, pace, pie, source, data_json, created_at
+          FROM clutch WHERE league = ${league}
+          ORDER BY team_alias, created_at DESC
+        `;
+      }
+
+      const result = {};
+      rows.forEach(r => {
+        result[r.team_alias] = {
+          tier: r.tier, netRtg: r.net_rtg, offRtg: r.off_rtg, defRtg: r.def_rtg,
+          wl: r.wl, efg: r.efg, pace: r.pace, pie: r.pie, source: r.source,
+          data: r.data_json, updated: r.created_at,
+        };
+      });
+      return { statusCode: 200, headers, body: JSON.stringify({ clutch: result }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // SAVE_ODDS — persist odds snapshot for a game
+    // ═══════════════════════════════════════════════════════
+    if (action === 'save_odds' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      await sql`
+        INSERT INTO odds_history (game_id, home_spread, home_ml, away_ml, total, source)
+        VALUES (${body.game_id}, ${body.home_spread || null}, ${body.home_ml || null},
+          ${body.away_ml || null}, ${body.total || null}, ${body.source || 'bdl'})
+      `;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // INVALIDATE_SEASON_CACHE — force refresh on next poll cycle
+    // ═══════════════════════════════════════════════════════
+    if (action === 'invalidate_season_cache') {
+      const league = params.league || 'nba';
+      const season = params.season || '2025';
+      const team = params.team; // optional — single team, or all if omitted
+      let result;
+      if (team) {
+        result = await sql`UPDATE season_cache SET updated_at = NOW() - INTERVAL '8 days' WHERE league = ${league} AND season = ${season} AND team_alias = ${team}`;
+      } else {
+        result = await sql`UPDATE season_cache SET updated_at = NOW() - INTERVAL '8 days' WHERE league = ${league} AND season = ${season}`;
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, invalidated: team || 'all', league }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_GAMES — list all games for a league
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_games') {
+      const league = params.league || 'nba';
+      const rows = await sql`
+        SELECT id, date, league, matchup, home_alias, away_alias, home_pts, away_pts, winner, margin
+        FROM games WHERE league = ${league}
+        ORDER BY date DESC, matchup ASC
+      `;
+      return { statusCode: 200, headers, body: JSON.stringify({ games: rows }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_POLL_STATE — check server polling state for a league
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_poll_state') {
+      const league = params.league || 'nba';
+      try {
+        const rows = await sql`
+          SELECT league, date, first_tip, last_tip, game_count, all_final, schedule_json, fetched_at
+          FROM poll_state WHERE league = ${league}
+          ORDER BY date DESC LIMIT 1
+        `;
+        return { statusCode: 200, headers, body: JSON.stringify({ state: rows.length > 0 ? rows[0] : null }) };
+      } catch (e) {
+        return { statusCode: 200, headers, body: JSON.stringify({ state: null, error: 'poll_state table may not exist: ' + e.message }) };
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_CALIBRATION — aggregate game outcomes vs framework predictions
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_calibration') {
+      const league = params.league || 'nba';
+      try {
+        // Get all finalized games with their final snapshot + latest analysis
+        const rows = await sql`
+          SELECT
+            g.id, g.date, g.matchup, g.home_alias, g.away_alias,
+            g.home_pts, g.away_pts, g.winner, g.margin,
+            s.floor_score, s.floor_team, s.lead_sust, s.lead_class,
+            s.i1, s.i2, s.i3, s.i4, s.i5, s.espn_wp_home, s.spread,
+            s.period, s.sust_json,
+            a.control_team AS a_control, a.control_score AS a_score,
+            a.fwp AS a_fwp, a.edge AS a_edge, a.entry AS a_entry,
+            a.conviction AS a_conviction, a.signal AS a_signal,
+            a.sustainability AS a_sust, a.prediction_json AS a_pred,
+            o.home_spread AS final_spread, o.home_ml, o.away_ml
+          FROM games g
+          LEFT JOIN LATERAL (
+            SELECT * FROM snapshots
+            WHERE game_id = g.id
+            ORDER BY ts DESC LIMIT 1
+          ) s ON true
+          LEFT JOIN LATERAL (
+            SELECT * FROM analyses
+            WHERE game_id = g.id
+            ORDER BY ts DESC LIMIT 1
+          ) a ON true
+          LEFT JOIN LATERAL (
+            SELECT * FROM odds_history
+            WHERE game_id = g.id
+            ORDER BY ts DESC LIMIT 1
+          ) o ON true
+          WHERE g.league = ${league} AND g.winner IS NOT NULL
+          ORDER BY g.date DESC
+        `;
+        return { statusCode: 200, headers, body: JSON.stringify({ games: rows, count: rows.length }) };
+      } catch (e) {
+        return { statusCode: 200, headers, body: JSON.stringify({ games: [], error: e.message }) };
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_CALIBRATION_Q3 — quarter-end calibration snapshots vs outcomes
+    // Accepts ?quarter=1|2|3 (default 3 for gold standard Q3-end).
+    // Joins calibration-tagged snapshots + auto analyses with final results.
+    // Unlike get_calibration (which uses last snapshot, skewed toward decided games),
+    // this uses quarter-boundary snapshots when the game is still contested.
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_calibration_q3') {
+      const league = params.league || 'nba';
+      const quarter = parseInt(params.quarter) || 3;
+      const sourceTag = `calibration_q${quarter}`;
+      const triggerTag = `auto_q${quarter}`;
+      const qLabel = `Q${quarter}`;
+      try {
+        const rows = await sql`
+          SELECT
+            g.id, g.date, g.matchup, g.home_alias, g.away_alias,
+            g.home_pts, g.away_pts, g.winner, g.margin,
+            g.thesis_team, g.thesis_correct,
+            -- Quarter-end calibration snapshot
+            s.floor_score AS q3_floor, s.floor_team AS q3_floor_team,
+            s.i1 AS q3_i1, s.i2 AS q3_i2, s.i3 AS q3_i3, s.i4 AS q3_i4, s.i5 AS q3_i5,
+            s.espn_wp_home AS q3_wp_home, s.espn_wp_away AS q3_wp_away,
+            s.spread AS q3_spread, s.deficit AS q3_deficit, s.trailing_team AS q3_trailing,
+            s.lead_sust AS q3_lead_sust, s.lead_class AS q3_lead_class,
+            s.home_pts AS q3_home_pts, s.away_pts AS q3_away_pts,
+            s.period AS q3_period, s.clock AS q3_clock, s.ts AS q3_ts,
+            s.sust_json AS q3_sust_json,
+            -- Quarter-end Sonnet analysis
+            a.control_team AS q3a_control, a.control_score AS q3a_score,
+            a.fwp AS q3a_fwp, a.edge AS q3a_edge, a.entry AS q3a_entry,
+            a.conviction AS q3a_conviction, a.signal AS q3a_signal,
+            a.sustainability AS q3a_sust, a.lead_source AS q3a_lead_source,
+            a.prediction_json AS q3a_pred,
+            -- Latest odds near snapshot time
+            o.home_spread AS q3_final_spread, o.home_ml AS q3_home_ml, o.away_ml AS q3_away_ml
+          FROM games g
+          INNER JOIN LATERAL (
+            SELECT * FROM snapshots
+            WHERE game_id = g.id AND source = ${sourceTag}
+            ORDER BY ts DESC LIMIT 1
+          ) s ON true
+          LEFT JOIN LATERAL (
+            SELECT * FROM analyses
+            WHERE game_id = g.id AND "trigger" = ${triggerTag}
+            ORDER BY ts DESC LIMIT 1
+          ) a ON true
+          LEFT JOIN LATERAL (
+            SELECT * FROM odds_history
+            WHERE game_id = g.id AND ts <= s.ts + INTERVAL '5 minutes'
+            ORDER BY ts DESC LIMIT 1
+          ) o ON true
+          WHERE g.league = ${league} AND g.winner IS NOT NULL
+          ORDER BY g.date DESC
+        `;
+
+        // Compute derived calibration metrics
+        const metrics = {
+          total: rows.length,
+          floorCorrect: 0, floorTotal: 0,
+          fwpBuckets: { '50-59': { correct: 0, total: 0 }, '60-69': { correct: 0, total: 0 }, '70-79': { correct: 0, total: 0 }, '80+': { correct: 0, total: 0 } },
+          analysisCount: 0,
+          signalBuy: { correct: 0, total: 0 },
+          signalPass: { correct: 0, total: 0 },
+          sustHeld: 0, sustTotal: 0,
+          wpCalibration: [],
+        };
+
+        for (const r of rows) {
+          // Floor score → winner
+          if (r.q3_floor_team) {
+            metrics.floorTotal++;
+            if (r.q3_floor_team === r.winner) metrics.floorCorrect++;
+          }
+
+          // FWP from auto_q3 analysis → winner
+          if (r.q3a_pred) {
+            const pred = typeof r.q3a_pred === 'string' ? JSON.parse(r.q3a_pred) : r.q3a_pred;
+            const homeFwp = pred?.homeValue?.fwp || 0;
+            const awayFwp = pred?.awayValue?.fwp || 0;
+            const fwpTeam = homeFwp >= awayFwp ? r.home_alias : r.away_alias;
+            const fwpVal = Math.max(homeFwp, awayFwp);
+            const fwpCorrect = fwpTeam === r.winner;
+            metrics.analysisCount++;
+
+            const bucket = fwpVal >= 80 ? '80+' : fwpVal >= 70 ? '70-79' : fwpVal >= 60 ? '60-69' : '50-59';
+            metrics.fwpBuckets[bucket].total++;
+            if (fwpCorrect) metrics.fwpBuckets[bucket].correct++;
+
+            // WP calibration point
+            metrics.wpCalibration.push({ predicted: fwpVal, actual: fwpCorrect ? 1 : 0 });
+          }
+
+          // Signal accuracy
+          if (r.q3a_signal) {
+            const buyMatch = r.q3a_signal.match(/BUY\s+(\w+)/);
+            if (buyMatch) {
+              metrics.signalBuy.total++;
+              if (buyMatch[1] === r.winner) metrics.signalBuy.correct++;
+            } else if (r.q3a_signal.includes('PASS') || r.q3a_signal.includes('NO VALUE')) {
+              metrics.signalPass.total++;
+              // PASS is "correct" if the game was close (margin <= 5) — debatable, track both
+              if (r.margin <= 5) metrics.signalPass.correct++;
+            }
+          }
+
+          // Sustainability tier at Q3 → held through to outcome
+          if (r.q3_lead_sust && r.q3_floor_team) {
+            metrics.sustTotal++;
+            const sustainableTiers = ['LOCKED IN', 'DURABLE'];
+            const wasSustainable = sustainableTiers.includes(r.q3_lead_sust);
+            const leadHeld = r.q3_floor_team === r.winner;
+            if (wasSustainable && leadHeld) metrics.sustHeld++;
+            else if (!wasSustainable && !leadHeld) metrics.sustHeld++;
+          }
+        }
+
+        return { statusCode: 200, headers, body: JSON.stringify({ games: rows, count: rows.length, metrics, quarter, label: qLabel }) };
+      } catch (e) {
+        return { statusCode: 200, headers, body: JSON.stringify({ games: [], count: 0, metrics: null, quarter, label: `Q${quarter}`, error: e.message }) };
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_ODDS — fetch odds history for a game
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_odds') {
+      const gameId = params.game_id;
+      if (!gameId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id required' }) };
+
+      const rows = await sql`
+        SELECT ts, home_spread, home_ml, away_ml, total, source
+        FROM odds_history WHERE game_id = ${gameId}
+        ORDER BY ts ASC
+      `;
+      return { statusCode: 200, headers, body: JSON.stringify({ odds: rows }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_LATEST_SNAPSHOTS — latest snapshot per game (batch)
+    // Used by confidence table to show floor/window/gap for unmounted games
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_latest_snapshots') {
+      const gameIds = (params.game_ids || '').split(',').filter(Boolean);
+      if (gameIds.length === 0) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_ids required' }) };
+
+      // Get latest snapshot per game using DISTINCT ON
+      const rows = await sql`
+        SELECT DISTINCT ON (game_id) game_id, ts, period, clock, home_pts, away_pts,
+          floor_score, floor_team, espn_wp_home, espn_wp_away,
+          spread, deficit, trailing_team, lead_sust, lead_class,
+          i1, i2, i3, i4, i5, source, sust_json
+        FROM snapshots
+        WHERE game_id = ANY(${gameIds})
+        ORDER BY game_id, ts DESC
+      `;
+      // Also fetch latest odds per game
+      const oddsRows = await sql`
+        SELECT DISTINCT ON (game_id) game_id, home_spread, home_ml, away_ml, total
+        FROM odds_history
+        WHERE game_id = ANY(${gameIds})
+        ORDER BY game_id, ts DESC
+      `;
+      const oddsMap = {};
+      for (const o of oddsRows) { oddsMap[o.game_id] = o; }
+
+      const result = {};
+      for (const r of rows) {
+        result[r.game_id] = {
+          ...r,
+          odds: oddsMap[r.game_id] || null,
+        };
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ snapshots: result }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // SAVE_WP_PROFILE — persist team WP curve profile
+    // ═══════════════════════════════════════════════════════
+    if (action === 'save_wp_profile' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      const profiles = body.profiles || [];
+      const league = body.league || 'nba';
+      const season = body.season || '2025-26';
+      let saved = 0;
+      for (const p of profiles) {
+        if (!p.team_alias) continue;
+        await sql`
+          INSERT INTO wp_profiles (team_alias, league, season, games_analyzed, profile_json, updated_at)
+          VALUES (${p.team_alias}, ${league}, ${season}, ${p.games_analyzed || 0}, ${JSON.stringify(p.profile)}, NOW())
+          ON CONFLICT (team_alias, league, season)
+          DO UPDATE SET games_analyzed = ${p.games_analyzed || 0}, profile_json = ${JSON.stringify(p.profile)}, updated_at = NOW()
+        `;
+        saved++;
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, saved }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_WP_PROFILES — retrieve team WP profiles
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_wp_profiles') {
+      const league = params.league || 'nba';
+      const season = params.season || '2025-26';
+      const teams = params.teams ? params.teams.split(',') : null;
+
+      let rows;
+      if (teams && teams.length > 0) {
+        rows = await sql`
+          SELECT team_alias, games_analyzed, profile_json, updated_at
+          FROM wp_profiles
+          WHERE league = ${league} AND season = ${season} AND team_alias = ANY(${teams})
+        `;
+      } else {
+        rows = await sql`
+          SELECT team_alias, games_analyzed, profile_json, updated_at
+          FROM wp_profiles
+          WHERE league = ${league} AND season = ${season}
+          ORDER BY team_alias
+        `;
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ profiles: rows }) };
+    }
+
+    return { statusCode: 400, headers, body: JSON.stringify({ error: 'Unknown action: ' + action }) };
+
+  } catch (err) {
+    console.error('DB API error:', err);
+    return { statusCode: 500, headers, body: JSON.stringify({ error: err.message }) };
+  }
+};
