@@ -52,6 +52,12 @@ select{background:#1e293b;color:#e0e0e0;border:1px solid #334155;border-radius:6
   <button onclick="bulkSaveAnalyses()">📤 Bulk Save Analyses</button>
   <button onclick="clearLog()">🗑 Clear</button>
 </div>
+<div class="btn-row">
+  <button onclick="viewTeamShots('nba')" style="background:rgba(245,166,42,.15);border-color:rgba(245,166,42,.3);color:#f5a62a">🎯 Team Shot Profiles</button>
+  <button onclick="viewPlayerZones('nba')" style="background:rgba(0,255,136,.1);border-color:rgba(0,255,136,.2);color:#00ff88">👤 Player Baselines</button>
+  <button onclick="viewRunPatterns('nba')" style="background:rgba(96,165,250,.15);border-color:rgba(96,165,250,.3);color:#60a5fa">📊 Run Patterns</button>
+  <button onclick="viewPbpStats()" style="background:rgba(167,139,250,.1);border-color:rgba(167,139,250,.2);color:#a78bfa">📦 PBP DB Stats</button>
+</div>
 
 <!-- Game selector for snapshots/odds -->
 <div class="card" id="game-selector-card" style="display:none">
@@ -1041,6 +1047,279 @@ async function viewCalibrationAll(league){
 }
 
 function escH(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ═══════════════════════════════════════════════════════════════════
+// PBP ANALYTICS — Team Shot Profiles, Player Baselines, Run Patterns
+// ═══════════════════════════════════════════════════════════════════
+
+async function viewPbpStats(){
+  log('Checking PBP DB stats...', 'log-info');
+  var nba = await fetchJSON(FN+'db-api?action=get_pbp_all&league=nba');
+  var ncaa = await fetchJSON(FN+'db-api?action=get_pbp_all&league=ncaamb');
+  var nbaCount = nba ? nba.total : 0;
+  var ncaaCount = ncaa ? ncaa.total : 0;
+  var nbaShots = 0, nbaTos = 0, ncaaShots = 0, ncaaTos = 0;
+  if(nba && nba.games) nba.games.forEach(function(g){ nbaShots += g.shots||0; nbaTos += g.tos||0; });
+  if(ncaa && ncaa.games) ncaa.games.forEach(function(g){ ncaaShots += g.shots||0; ncaaTos += g.tos||0; });
+  // Unique teams
+  var nbaTeams = {};
+  if(nba && nba.games) nba.games.forEach(function(g){ nbaTeams[g.home]=true; nbaTeams[g.away]=true; });
+  var ncaaTeams = {};
+  if(ncaa && ncaa.games) ncaa.games.forEach(function(g){ ncaaTeams[g.home]=true; ncaaTeams[g.away]=true; });
+
+  var h = '<h2>📦 PBP DATABASE STATS</h2><div class="card">';
+  h += '<div class="row"><span class="label">NBA Games</span><span class="val blue">'+nbaCount+'</span></div>';
+  h += '<div class="row"><span class="label">NBA Teams</span><span class="val">'+Object.keys(nbaTeams).length+'</span></div>';
+  h += '<div class="row"><span class="label">NBA Total Shots</span><span class="val">'+nbaShots.toLocaleString()+'</span></div>';
+  h += '<div class="row"><span class="label">NBA Total TOs</span><span class="val">'+nbaTos.toLocaleString()+'</span></div>';
+  h += '<div class="row"><span class="label">NCAAMB Games</span><span class="val blue">'+ncaaCount+'</span></div>';
+  h += '<div class="row"><span class="label">NCAAMB Teams</span><span class="val">'+Object.keys(ncaaTeams).length+'</span></div>';
+  h += '<div class="row"><span class="label">NCAAMB Total Shots</span><span class="val">'+ncaaShots.toLocaleString()+'</span></div>';
+  h += '</div>';
+  contentEl.innerHTML = h;
+  log('PBP DB: NBA '+nbaCount+' games ('+nbaShots+' shots), NCAAMB '+ncaaCount+' games ('+ncaaShots+' shots)', 'log-ok');
+}
+
+async function viewTeamShots(league){
+  log('Loading team shot profiles for '+league.toUpperCase()+'...', 'log-info');
+  var data = await fetchJSON(FN+'db-api?action=get_pbp_all&league='+league);
+  if(!data || !data.games || data.games.length === 0){ log('No PBP data yet for '+league, 'log-warn'); return; }
+
+  // Aggregate per-team zone data
+  var teams = {};
+  data.games.forEach(function(g){
+    if(!g.pbp) return;
+    ['home','away'].forEach(function(side){
+      var alias = side === 'home' ? g.home : g.away;
+      var tm = g.pbp[side]; if(!tm) return;
+      if(!teams[alias]) teams[alias] = {gp:0, threes:{m:0,a:0,corner:{m:0,a:0},above:{m:0,a:0}}, rim:{m:0,a:0}, mid:{m:0,a:0}, tos:{total:0,forced:0,unforced:0}, shotDiet:{total:0,three:0,rim:0,mid:0}};
+      var t = teams[alias]; t.gp++;
+      if(tm.threes){ t.threes.m+=tm.threes.made||0; t.threes.a+=tm.threes.att||0; if(tm.threes.corner){t.threes.corner.m+=tm.threes.corner.made||0; t.threes.corner.a+=tm.threes.corner.att||0;} if(tm.threes.above){t.threes.above.m+=tm.threes.above.made||0; t.threes.above.a+=tm.threes.above.att||0;} }
+      if(tm.rim){ t.rim.m+=tm.rim.made||0; t.rim.a+=tm.rim.att||0; }
+      if(tm.mid){ t.mid.m+=tm.mid.made||0; t.mid.a+=tm.mid.att||0; }
+      if(tm.tos){ t.tos.total+=tm.tos.total||0; t.tos.forced+=tm.tos.forced||0; t.tos.unforced+=tm.tos.unforced||0; }
+      if(tm.shotDiet){ var sd=tm.shotDiet; t.shotDiet.total+=parseInt(sd.total)||0; }
+    });
+  });
+
+  // Sort by games played
+  var sorted = Object.entries(teams).sort(function(a,b){ return b[1].gp - a[1].gp; });
+
+  var h = '<h2>🎯 TEAM SHOT PROFILES — '+league.toUpperCase()+' ('+data.total+' games)</h2>';
+  h += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px;font-family:monospace">';
+  h += '<tr style="border-bottom:1px solid #334155;color:#94a3b8"><th style="text-align:left;padding:4px">Team</th><th>GP</th><th>3PT%</th><th>Corner</th><th>Above</th><th>Rim%</th><th>Mid%</th><th>TOs/g</th><th>F%</th><th>Diet</th></tr>';
+
+  sorted.forEach(function(entry){
+    var a = entry[0], t = entry[1];
+    var t3p = t.threes.a>0 ? (t.threes.m/t.threes.a*100).toFixed(1) : '—';
+    var c3p = t.threes.corner.a>0 ? (t.threes.corner.m/t.threes.corner.a*100).toFixed(1) : '—';
+    var a3p = t.threes.above.a>0 ? (t.threes.above.m/t.threes.above.a*100).toFixed(1) : '—';
+    var rp = t.rim.a>0 ? (t.rim.m/t.rim.a*100).toFixed(1) : '—';
+    var mp = t.mid.a>0 ? (t.mid.m/t.mid.a*100).toFixed(1) : '—';
+    var tpg = t.gp>0 ? (t.tos.total/t.gp).toFixed(1) : '—';
+    var fp = t.tos.total>0 ? (t.tos.forced/t.tos.total*100).toFixed(0)+'%' : '—';
+    // Diet: ratio of rim+mid vs 3PT attempts
+    var totalFGA = t.threes.a + t.rim.a + t.mid.a;
+    var rimShare = totalFGA>0 ? (t.rim.a/totalFGA*100).toFixed(0) : '?';
+    var threeShare = totalFGA>0 ? (t.threes.a/totalFGA*100).toFixed(0) : '?';
+    var diet = parseInt(rimShare)>=35 ? 'INTERIOR' : parseInt(threeShare)>=40 ? 'PERIMETER' : 'BALANCED';
+    var dCol = diet==='INTERIOR' ? '#00ff88' : diet==='PERIMETER' ? '#ff9800' : '#ffd166';
+
+    var t3col = parseFloat(t3p)>=38 ? '#00ff88' : parseFloat(t3p)>=34 ? '#ffd166' : '#ff5252';
+    var rcol = parseFloat(rp)>=60 ? '#00ff88' : parseFloat(rp)>=50 ? '#ffd166' : '#ff5252';
+
+    h += '<tr style="border-bottom:1px solid #1e293b">';
+    h += '<td style="padding:3px 4px;color:#e2e8f0;font-weight:600">'+escH(a)+'</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+t.gp+'</td>';
+    h += '<td style="text-align:center;color:'+t3col+'">'+t3p+'%<span style="color:#64748b;font-size:8px"> ('+t.threes.m+'/'+t.threes.a+')</span></td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+c3p+'%</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+a3p+'%</td>';
+    h += '<td style="text-align:center;color:'+rcol+'">'+rp+'%<span style="color:#64748b;font-size:8px"> ('+t.rim.m+'/'+t.rim.a+')</span></td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+mp+'%</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+tpg+'</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+fp+'</td>';
+    h += '<td style="text-align:center;color:'+dCol+';font-weight:600;font-size:9px">'+diet+'</td>';
+    h += '</tr>';
+  });
+  h += '</table></div>';
+  contentEl.innerHTML = h;
+  log('Team shot profiles loaded: '+sorted.length+' teams from '+data.total+' games', 'log-ok');
+}
+
+async function viewPlayerZones(league){
+  log('Loading player zone baselines for '+league.toUpperCase()+'...', 'log-info');
+  var data = await fetchJSON(FN+'db-api?action=get_pbp_all&league='+league);
+  if(!data || !data.games || data.games.length === 0){ log('No PBP data yet for '+league, 'log-warn'); return; }
+
+  // Aggregate per-player zone data
+  var players = {};
+  data.games.forEach(function(g){
+    if(!g.pbp) return;
+    ['home','away'].forEach(function(side){
+      var alias = side === 'home' ? g.home : g.away;
+      var tm = g.pbp[side]; if(!tm) return;
+      // 3PT by player
+      if(tm.threes && tm.threes.byPlayer) tm.threes.byPlayer.forEach(function(p){
+        var key = p.name+'|'+alias;
+        if(!players[key]) players[key] = {name:p.name, team:alias, gp:0, three:{m:0,a:0}, rim:{m:0,a:0}, mid:{m:0,a:0}};
+        players[key].three.m += p.made||0; players[key].three.a += p.att||0;
+      });
+      // Rim by player
+      if(tm.rim && tm.rim.byPlayer) tm.rim.byPlayer.forEach(function(p){
+        var key = p.name+'|'+alias;
+        if(!players[key]) players[key] = {name:p.name, team:alias, gp:0, three:{m:0,a:0}, rim:{m:0,a:0}, mid:{m:0,a:0}};
+        players[key].rim.m += p.made||0; players[key].rim.a += p.att||0;
+      });
+      // Mid by player
+      if(tm.mid && tm.mid.byPlayer) tm.mid.byPlayer.forEach(function(p){
+        var key = p.name+'|'+alias;
+        if(!players[key]) players[key] = {name:p.name, team:alias, gp:0, three:{m:0,a:0}, rim:{m:0,a:0}, mid:{m:0,a:0}};
+        players[key].mid.m += p.made||0; players[key].mid.a += p.att||0;
+      });
+      // Track games
+      var seenPlayers = {};
+      ['threes','rim','mid'].forEach(function(z){ if(tm[z] && tm[z].byPlayer) tm[z].byPlayer.forEach(function(p){
+        var key = p.name+'|'+alias;
+        if(!seenPlayers[key]){ seenPlayers[key]=true; if(players[key]) players[key].gp++; }
+      }); });
+    });
+  });
+
+  // Sort by total attempts
+  var sorted = Object.values(players).filter(function(p){ return (p.three.a+p.rim.a+p.mid.a)>=10; })
+    .sort(function(a,b){ return (b.three.a+b.rim.a+b.mid.a)-(a.three.a+a.rim.a+a.mid.a); });
+
+  var h = '<h2>👤 PLAYER ZONE BASELINES — '+league.toUpperCase()+' ('+data.total+' games, '+sorted.length+' players with 10+ att)</h2>';
+  h += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px;font-family:monospace">';
+  h += '<tr style="border-bottom:1px solid #334155;color:#94a3b8"><th style="text-align:left;padding:4px">Player</th><th>Team</th><th>GP</th><th>3PT</th><th>3PT%</th><th>Rim</th><th>Rim%</th><th>Mid</th><th>Mid%</th><th>Profile</th></tr>';
+
+  sorted.slice(0,100).forEach(function(p){
+    var t3p = p.three.a>0 ? (p.three.m/p.three.a*100).toFixed(1) : '—';
+    var rp = p.rim.a>0 ? (p.rim.m/p.rim.a*100).toFixed(1) : '—';
+    var mp = p.mid.a>0 ? (p.mid.m/p.mid.a*100).toFixed(1) : '—';
+    var total = p.three.a + p.rim.a + p.mid.a;
+    var profile = '';
+    if(p.rim.a/total >= 0.5) profile = 'RIM';
+    else if(p.three.a/total >= 0.5) profile = 'SHOOTER';
+    else if(p.mid.a/total >= 0.3) profile = 'MID';
+    else profile = 'BALANCED';
+    var pCol = profile==='RIM'?'#00ff88':profile==='SHOOTER'?'#ff9800':profile==='MID'?'#ffd166':'#94a3b8';
+
+    h += '<tr style="border-bottom:1px solid #1e293b">';
+    h += '<td style="padding:3px 4px;color:#e2e8f0;font-weight:600;white-space:nowrap">'+escH(p.name)+'</td>';
+    h += '<td style="text-align:center;color:#94a3b8;font-size:9px">'+escH(p.team)+'</td>';
+    h += '<td style="text-align:center;color:#64748b">'+p.gp+'</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+p.three.m+'/'+p.three.a+'</td>';
+    h += '<td style="text-align:center;color:'+(parseFloat(t3p)>=38?'#00ff88':parseFloat(t3p)>=34?'#ffd166':'#ff5252')+'">'+t3p+'%</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+p.rim.m+'/'+p.rim.a+'</td>';
+    h += '<td style="text-align:center;color:'+(parseFloat(rp)>=60?'#00ff88':parseFloat(rp)>=50?'#ffd166':'#ff5252')+'">'+rp+'%</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+p.mid.m+'/'+p.mid.a+'</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+mp+'%</td>';
+    h += '<td style="text-align:center;color:'+pCol+';font-weight:600;font-size:9px">'+profile+'</td>';
+    h += '</tr>';
+  });
+  h += '</table></div>';
+  contentEl.innerHTML = h;
+  log('Player baselines loaded: '+sorted.length+' players from '+data.total+' games', 'log-ok');
+}
+
+async function viewRunPatterns(league){
+  log('Loading run pattern analysis for '+league.toUpperCase()+'...', 'log-info');
+  var data = await fetchJSON(FN+'db-api?action=get_pbp_all&league='+league);
+  if(!data || !data.games || data.games.length === 0){ log('No PBP data yet for '+league, 'log-warn'); return; }
+
+  // Analyze all runs across all games
+  var allRuns = [];
+  var teamRuns = {};
+  data.games.forEach(function(g){
+    if(!g.pbp || !g.pbp.runs) return;
+    g.pbp.runs.forEach(function(run){
+      var mc = {}; (run.mechanism||[]).forEach(function(m){ mc[m]=(mc[m]||0)+1; });
+      var total = (run.mechanism||[]).length || 1;
+      var structPts = (mc['2PT']||0)*2 + (mc['FT']||0)*1;
+      var varPts = (mc['3PT']||0)*3;
+      var totalPts = structPts + varPts;
+      var structPct = totalPts > 0 ? Math.round(structPts/totalPts*100) : 0;
+      var type = structPct >= 60 ? 'STRUCTURAL' : structPct >= 40 ? 'MIXED' : 'VARIANCE';
+      var entry = {team:run.team, pts:run.pts, q:run.q, structPct:structPct, type:type, mc:mc, game_id:g.game_id, opp:run.team===g.home?g.away:g.home};
+      allRuns.push(entry);
+      if(!teamRuns[run.team]) teamRuns[run.team] = [];
+      teamRuns[run.team].push(entry);
+    });
+  });
+
+  // Summary stats
+  var structural = allRuns.filter(function(r){return r.type==='STRUCTURAL';});
+  var mixed = allRuns.filter(function(r){return r.type==='MIXED';});
+  var variance = allRuns.filter(function(r){return r.type==='VARIANCE';});
+  var bigRuns = allRuns.filter(function(r){return r.pts>=10;});
+  var q4Runs = allRuns.filter(function(r){return r.q>=4 || (r.q+'').includes('4');});
+  var q1Runs = allRuns.filter(function(r){return r.q===1 || r.q==='1';});
+
+  var h = '<h2>📊 RUN PATTERN ANALYSIS — '+league.toUpperCase()+' ('+data.total+' games, '+allRuns.length+' total runs)</h2>';
+
+  // Summary card
+  h += '<div class="card"><div style="font-size:11px;color:#f5a62a;font-weight:600;margin-bottom:6px">OVERVIEW</div>';
+  h += '<div class="row"><span class="label">Total Runs</span><span class="val">'+allRuns.length+'</span></div>';
+  h += '<div class="row"><span class="label">Avg per game</span><span class="val">'+(data.total>0?(allRuns.length/data.total).toFixed(1):'—')+'</span></div>';
+  h += '<div class="row"><span class="label">Structural (≥60% paint/FT)</span><span class="val green">'+structural.length+' ('+(allRuns.length>0?(structural.length/allRuns.length*100).toFixed(0):'0')+'%)</span></div>';
+  h += '<div class="row"><span class="label">Mixed (40-59%)</span><span class="val yellow">'+mixed.length+' ('+(allRuns.length>0?(mixed.length/allRuns.length*100).toFixed(0):'0')+'%)</span></div>';
+  h += '<div class="row"><span class="label">Variance (≥60% 3PT)</span><span class="val red">'+variance.length+' ('+(allRuns.length>0?(variance.length/allRuns.length*100).toFixed(0):'0')+'%)</span></div>';
+  h += '<div class="row"><span class="label">Big runs (10+ pts)</span><span class="val blue">'+bigRuns.length+'</span></div>';
+  h += '<div class="row"><span class="label">Q4 runs</span><span class="val">'+q4Runs.length+'</span></div>';
+  h += '<div class="row"><span class="label">Avg run size</span><span class="val">'+(allRuns.length>0?(allRuns.reduce(function(s,r){return s+r.pts;},0)/allRuns.length).toFixed(1):'—')+' pts</span></div>';
+  h += '</div>';
+
+  // Big runs breakdown
+  if(bigRuns.length > 0){
+    h += '<div class="card"><div style="font-size:11px;color:#60a5fa;font-weight:600;margin-bottom:6px">BIG RUNS (10+ PTS) — '+bigRuns.length+' total</div>';
+    var bigStruct = bigRuns.filter(function(r){return r.type==='STRUCTURAL';}).length;
+    var bigVar = bigRuns.filter(function(r){return r.type==='VARIANCE';}).length;
+    h += '<div class="row"><span class="label">Structural big runs</span><span class="val green">'+bigStruct+' ('+(bigRuns.length>0?(bigStruct/bigRuns.length*100).toFixed(0):'0')+'%)</span></div>';
+    h += '<div class="row"><span class="label">Variance big runs</span><span class="val red">'+bigVar+' ('+(bigRuns.length>0?(bigVar/bigRuns.length*100).toFixed(0):'0')+'%)</span></div>';
+    h += '</div>';
+  }
+
+  // Per-team run profiles — sorted by structural %
+  var teamSorted = Object.entries(teamRuns).sort(function(a,b){
+    var aS = a[1].filter(function(r){return r.type==='STRUCTURAL';}).length / a[1].length;
+    var bS = b[1].filter(function(r){return r.type==='STRUCTURAL';}).length / b[1].length;
+    return bS - aS;
+  });
+
+  h += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px;font-family:monospace">';
+  h += '<tr style="border-bottom:1px solid #334155;color:#94a3b8"><th style="text-align:left;padding:4px">Team</th><th>Runs</th><th>Avg Pts</th><th>Struct%</th><th>Mixed%</th><th>Var%</th><th>Big</th><th>Q4</th><th>Profile</th></tr>';
+
+  teamSorted.forEach(function(entry){
+    var a = entry[0], runs = entry[1];
+    var s = runs.filter(function(r){return r.type==='STRUCTURAL';}).length;
+    var m = runs.filter(function(r){return r.type==='MIXED';}).length;
+    var v = runs.filter(function(r){return r.type==='VARIANCE';}).length;
+    var big = runs.filter(function(r){return r.pts>=10;}).length;
+    var q4 = runs.filter(function(r){return r.q>=4||(r.q+'').includes('4');}).length;
+    var avgPts = (runs.reduce(function(sum,r){return sum+r.pts;},0)/runs.length).toFixed(1);
+    var sPct = (s/runs.length*100).toFixed(0);
+    var mPct = (m/runs.length*100).toFixed(0);
+    var vPct = (v/runs.length*100).toFixed(0);
+    var profile = parseInt(sPct)>=50 ? 'PAINT' : parseInt(vPct)>=40 ? '3PT-DEP' : 'BALANCED';
+    var pCol = profile==='PAINT'?'#00ff88':profile==='3PT-DEP'?'#ff9800':'#ffd166';
+
+    h += '<tr style="border-bottom:1px solid #1e293b">';
+    h += '<td style="padding:3px 4px;color:#e2e8f0;font-weight:600">'+escH(a)+'</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+runs.length+'</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+avgPts+'</td>';
+    h += '<td style="text-align:center;color:#00ff88">'+sPct+'%</td>';
+    h += '<td style="text-align:center;color:#ffd166">'+mPct+'%</td>';
+    h += '<td style="text-align:center;color:#ff9800">'+vPct+'%</td>';
+    h += '<td style="text-align:center;color:#60a5fa">'+big+'</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+q4+'</td>';
+    h += '<td style="text-align:center;color:'+pCol+';font-weight:600;font-size:9px">'+profile+'</td>';
+    h += '</tr>';
+  });
+  h += '</table></div>';
+  contentEl.innerHTML = h;
+  log('Run patterns loaded: '+allRuns.length+' runs across '+Object.keys(teamRuns).length+' teams from '+data.total+' games', 'log-ok');
+}
 
 // Show game selector on load
 document.getElementById('game-selector-card').style.display = 'block';
