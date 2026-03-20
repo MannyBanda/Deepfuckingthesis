@@ -5094,11 +5094,19 @@ function compute(game){
   // Persist updated sustainability + lead comp so they survive refresh
   if(cardState[game.id].analysis) persistAnalysis(game.id, cardState[game.id]);
 
-  // Rolling window — quarter-based (don't overwrite server-hydrated window with empty result)
+  // Rolling window — quarter-based
+  // Don't overwrite server-hydrated window with sparse client data
   var windowResult = computeRollingWindow(game);
+  var _existingRW = cardState[game.id].rollingWindow;
   if(windowResult && windowResult.available){
-    cardState[game.id].rollingWindow = windowResult;
-  } else if(!cardState[game.id].rollingWindow || !cardState[game.id].rollingWindow.available){
+    // If existing window is from server with multi-quarter data, only overwrite
+    // once client has built up comparable quarter coverage
+    var _serverRicher = _existingRW && _existingRW.available && _existingRW.source === 'server-ctx'
+      && (_existingRW.windowQuarters||[]).length > (windowResult.windowQuarters||[]).length;
+    if(!_serverRicher){
+      cardState[game.id].rollingWindow = windowResult;
+    }
+  } else if(!_existingRW || !_existingRW.available){
     cardState[game.id].rollingWindow = windowResult;
   }
   var _pwSize = getPossWindowSize(game);

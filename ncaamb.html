@@ -4171,8 +4171,18 @@ function compute(game){
   if(cardState[game.id].analysis) persistAnalysis(game.id, cardState[game.id]);
 
   // Rolling window — quarter-based
+  // Don't overwrite server-hydrated window with sparse client data
   var windowResult = computeRollingWindow(game);
-  cardState[game.id].rollingWindow = windowResult;
+  var _existingRW = cardState[game.id].rollingWindow;
+  if(windowResult && windowResult.available){
+    var _serverRicher = _existingRW && _existingRW.available && _existingRW.source === 'server-ctx'
+      && (_existingRW.windowQuarters||[]).length > (windowResult.windowQuarters||[]).length;
+    if(!_serverRicher){
+      cardState[game.id].rollingWindow = windowResult;
+    }
+  } else if(!_existingRW || !_existingRW.available){
+    cardState[game.id].rollingWindow = windowResult;
+  }
 
   // Possession windows — PBP pure + enriched (parallel comparison)
   var _pwSize = getPossWindowSize(game);
