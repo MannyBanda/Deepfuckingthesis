@@ -3430,8 +3430,8 @@ function parsePBP(pbpData, game){
   // ── AGGREGATE SUMMARIES (unchanged) ──
   function teamShots(tm){ return shots.filter(s=>s.tm===tm); }
   function aggTeam(tm){
-    const s=teamShots(tm); const threes=s.filter(x=>x.is3); const rim=s.filter(x=>x.z==='rim'); const mid=s.filter(x=>x.z==='mid');
-    const threeMade=threes.filter(x=>x.m); const rimMade=rim.filter(x=>x.m); const midMade=mid.filter(x=>x.m);
+    const s=teamShots(tm); const threes=s.filter(x=>x.is3); const rim=s.filter(x=>x.z==='rim'); const paint=s.filter(x=>x.z==='paint'); const mid=s.filter(x=>x.z==='mid');
+    const threeMade=threes.filter(x=>x.m); const rimMade=rim.filter(x=>x.m); const paintMade=paint.filter(x=>x.m); const midMade=mid.filter(x=>x.m);
     const assistedThrees=threeMade.filter(x=>x.a).length; const assistedRim=rimMade.filter(x=>x.m&&x.a).length;
     const playerThrees={}; threes.forEach(x=>{if(!playerThrees[x.p]) playerThrees[x.p]={name:x.p,made:0,att:0,assisted:0,zones:{corner3:0,above3:0},contexts:{}}; playerThrees[x.p].att++; if(x.m){playerThrees[x.p].made++;if(x.a) playerThrees[x.p].assisted++;playerThrees[x.p].zones[x.z]=(playerThrees[x.p].zones[x.z]||0)+1;} playerThrees[x.p].contexts[x.ctx]=(playerThrees[x.p].contexts[x.ctx]||0)+1;});
     const playerRim={}; rim.forEach(x=>{if(!playerRim[x.p]) playerRim[x.p]={name:x.p,made:0,att:0,contexts:{}}; playerRim[x.p].att++; if(x.m) playerRim[x.p].made++; playerRim[x.p].contexts[x.ctx]=(playerRim[x.p].contexts[x.ctx]||0)+1;});
@@ -3440,6 +3440,7 @@ function parsePBP(pbpData, game){
     return {
       threes:{made:threeMade.length,att:threes.length,assisted:assistedThrees,pct:threes.length>0?(threeMade.length/threes.length*100).toFixed(1):'0',corner:{made:threeMade.filter(x=>x.z==='corner3').length,att:threes.filter(x=>x.z==='corner3').length},above:{made:threeMade.filter(x=>x.z==='above3').length,att:threes.filter(x=>x.z==='above3').length},byPlayer:Object.values(playerThrees).filter(x=>x.att>=1).sort((a,b)=>b.att-a.att)},
       rim:{made:rimMade.length,att:rim.length,assisted:assistedRim,pct:rim.length>0?(rimMade.length/rim.length*100).toFixed(1):'0',byPlayer:Object.values(playerRim).filter(x=>x.att>=1).sort((a,b)=>b.att-a.att)},
+      paint:{made:paintMade.length,att:paint.length,pct:paint.length>0?(paintMade.length/paint.length*100).toFixed(1):'0'},
       mid:{made:midMade.length,att:mid.length,assisted:midMade.filter(x=>x.a).length,pct:mid.length>0?(midMade.length/mid.length*100).toFixed(1):'0',byPlayer:Object.values(playerMid).filter(x=>x.att>=1).sort((a,b)=>b.att-a.att)},
       tos:{total:tms.length,forced,unforced,unknown,byPlayer:tms},
       shotDiet:{total:s.length,threePct:s.length>0?(threes.length/s.length*100).toFixed(1):'0',rimPct:s.length>0?(rim.length/s.length*100).toFixed(1):'0',midPct:s.length>0?(mid.length/s.length*100).toFixed(1):'0'},
@@ -6325,11 +6326,18 @@ function computeLeadCompositionClient(game, sustData){
   const hPts = s.home.points||0, aPts = s.away.points||0;
   if(hPts===0 && aPts===0) return null;
 
-  function breakdown(stats, total, pbpRim){
+  function breakdown(stats, total, pbpRim, pbpPaint){
     var rawPaint = stats.points_in_the_paint||0;
+    // Interior = rim + paint zones from PBP (both are structural — player penetrated the defense)
+    var pbpRimMade = pbpRim ? (pbpRim.made||0) : 0;
+    var pbpRimAtt = pbpRim ? (pbpRim.att||0) : 0;
+    var pbpPaintMade = pbpPaint ? (pbpPaint.made||0) : 0;
+    var pbpPaintAtt = pbpPaint ? (pbpPaint.att||0) : 0;
+    var interiorMade = pbpRimMade + pbpPaintMade;
+    var interiorAtt = pbpRimAtt + pbpPaintAtt;
     var atRimPts = (stats.field_goals_at_rim_made||0)*2;
-    var pbpRimPts = pbpRim ? (pbpRim.made||0) * 2 : 0;
-    const paint = Math.max(rawPaint, atRimPts, pbpRimPts);
+    var pbpInteriorPts = interiorMade * 2;
+    const paint = Math.max(rawPaint, atRimPts, pbpInteriorPts);
     const ft = stats.free_throws_made||0;
     const three = (stats.three_points_made||0)*3;
     const transition = stats.fast_break_points||0;
@@ -6340,9 +6348,9 @@ function computeLeadCompositionClient(game, sustData){
     const variance = three + midOther;
     const sPct = total>0 ? Math.round(structural/total*100) : 0;
     const vPct = total>0 ? Math.round(variance/total*100) : 0;
-    // Attempt counts for efficiency display
-    const rimMade = stats.field_goals_at_rim_made||0;
-    const rimAtt = stats.field_goals_at_rim_att||0;
+    // Use combined interior (rim+paint) for made/att display
+    const rimMade = interiorAtt > 0 ? interiorMade : (stats.field_goals_at_rim_made||0);
+    const rimAtt = interiorAtt > 0 ? interiorAtt : (stats.field_goals_at_rim_att||0);
     const ftMade = stats.free_throws_made||0;
     const ftAtt = stats.free_throws_att||0;
     const threeMade = stats.three_points_made||0;
@@ -6358,8 +6366,8 @@ function computeLeadCompositionClient(game, sustData){
   const hA = s.home.alias || game.home?.alias || '?';
   const aA = s.away.alias || game.away?.alias || '?';
   const _pbpLC = cardState[game.id]?.pbpAudit;
-  const hB = breakdown(hS, hPts, _pbpLC?.home?.rim);
-  const aB = breakdown(aS, aPts, _pbpLC?.away?.rim);
+  const hB = breakdown(hS, hPts, _pbpLC?.home?.rim, _pbpLC?.home?.paint);
+  const aB = breakdown(aS, aPts, _pbpLC?.away?.rim, _pbpLC?.away?.paint);
   hB.team = hA; aB.team = aA;
 
   const margin = hPts - aPts;
