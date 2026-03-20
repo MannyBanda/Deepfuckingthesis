@@ -839,12 +839,27 @@ async function hydrateFromServerContext(gameId){
     var ctxPeriod = data.period || 0;
     var hydrated = [];
 
-    // Rolling window — only fill if client doesn't have one or server is from a later period
+    // Rolling window + per-period scores — always adopt if server has more periods than client
     if(ctx.rollingWindow && ctx.rollingWindow.available){
-      if(!cs.rollingWindow || !cs.rollingWindow.available || (cs.rollingWindow.source === 'server' && ctxPeriod > (cs._ctxHydratedPeriod || 0))){
+      var serverPeriodCount = (ctx.rollingWindow.windowQuarters||[]).length;
+      var clientPeriodCount = cs._serverPeriodScores ? Object.keys(cs._serverPeriodScores).length : 0;
+      // Also count client's own captured quarterSnapshot periods
+      var clientQSCount = cs.quarterSnapshots ? Object.keys(cs.quarterSnapshots.quarters||{}).length : 0;
+      var clientTotal = Math.max(clientPeriodCount, clientQSCount);
+
+      if(!cs.rollingWindow || !cs.rollingWindow.available || serverPeriodCount > clientTotal){
         cs.rollingWindow = ctx.rollingWindow;
         cs.rollingWindow.source = 'server-ctx';
-        hydrated.push('window');
+        hydrated.push('window(Q'+serverPeriodCount+')');
+      }
+    }
+    // Per-period I1-I5 seeds — client uses these for cross-fade when its own snapshots are sparse
+    if(ctx.perPeriodScores){
+      var serverPKeys = Object.keys(ctx.perPeriodScores);
+      var existingPKeys = cs._serverPeriodScores ? Object.keys(cs._serverPeriodScores) : [];
+      if(serverPKeys.length > existingPKeys.length){
+        cs._serverPeriodScores = ctx.perPeriodScores;
+        hydrated.push('periods:'+serverPKeys.length);
       }
     }
 
@@ -3359,7 +3374,6 @@ function parsePBP(pbpData, game){
   }
   if(runPts>=8||runCount>=3) runs.push({team:runTeam,pts:runPts,count:runCount,q:scoreLog[runStart]?.q,lineup:runLineup,mechanism:runShotTypes.slice(),si:runStart,ei:scoreLog.length-1});
   runs.sort((a,b)=>b.ei-a.ei); // most recent first
-  const topRuns = runs.slice(0,5);
 
   // ── AGGREGATE SUMMARIES (unchanged) ──
   function teamShots(tm){ return shots.filter(s=>s.tm===tm); }
@@ -3388,7 +3402,7 @@ function parsePBP(pbpData, game){
   return {
     home, away, homeAlias:hA, awayAlias:aA,
     totalShots: shots.length, totalTOs: turnovers.length,
-    runs: topRuns,
+    runs: runs,
     raw: {shots, turnovers},
     scoringEvents: scoringEvents,
     possessionLog: possessionLog,
@@ -5094,19 +5108,11 @@ function compute(game){
   // Persist updated sustainability + lead comp so they survive refresh
   if(cardState[game.id].analysis) persistAnalysis(game.id, cardState[game.id]);
 
-  // Rolling window — quarter-based
-  // Don't overwrite server-hydrated window with sparse client data
+  // Rolling window — quarter-based, merges server-seeded periods with client-captured ones
   var windowResult = computeRollingWindow(game);
-  var _existingRW = cardState[game.id].rollingWindow;
   if(windowResult && windowResult.available){
-    // If existing window is from server with multi-quarter data, only overwrite
-    // once client has built up comparable quarter coverage
-    var _serverRicher = _existingRW && _existingRW.available && _existingRW.source === 'server-ctx'
-      && (_existingRW.windowQuarters||[]).length > (windowResult.windowQuarters||[]).length;
-    if(!_serverRicher){
-      cardState[game.id].rollingWindow = windowResult;
-    }
-  } else if(!_existingRW || !_existingRW.available){
+    cardState[game.id].rollingWindow = windowResult;
+  } else if(!cardState[game.id].rollingWindow || !cardState[game.id].rollingWindow.available){
     cardState[game.id].rollingWindow = windowResult;
   }
   var _pwSize = getPossWindowSize(game);
@@ -7014,13 +7020,14 @@ function computeRollingWindow(game){
     windowLabel = ['Q4','OT*'];
   }
 
-  // Check we have at least one quarter of data
-  const activeQs = Object.keys(weightedQs).filter(q => weightedQs[q] > 0);
+  // Check we have at least one quarter of data (client or server-seeded)
+  const serverPeriods = cs._serverPeriodScores || {};
+  const activeQs = Object.keys(weightedQs).filter(q => weightedQs[q] > 0 && (qs.quarters[q] || serverPeriods[q]));
   if(activeQs.length === 0){
     return { available:false, reason:'No quarter data yet', windowQuarters:windowLabel };
   }
 
-  // Aggregate stats with cross-fade weights
+  // Aggregate stats with cross-fade weights (client quarters only — these have raw stats)
   function aggWindow(side){
     const agg = {};
     const sumKeys = ['points_in_the_paint','fast_break_points','points_off_turnovers',
@@ -7029,7 +7036,7 @@ function computeRollingWindow(game){
       'free_throws_made','free_throws_att','assists','turnovers','steals','blocks',
       'offensive_rebounds','personal_fouls','points','bench_points'];
     sumKeys.forEach(k=>{ agg[k]=0; let hasAny=false;
-      activeQs.forEach(q=>{ const v=qs.quarters[q]?.[side]?.[k]; if(v!=null){agg[k]+=v*weightedQs[q];hasAny=true;} });
+      clientQs.forEach(q=>{ const v=qs.quarters[q]?.[side]?.[k]; if(v!=null){agg[k]+=v*weightedQs[q];hasAny=true;} });
       if(!hasAny) agg[k]=null;
     });
     const fga=agg.field_goals_att||1;
@@ -7083,7 +7090,51 @@ function computeRollingWindow(game){
   const effD=hEff-aEff;
   const wI5 = {score:effD>0.06?1:effD<-0.06?0:.5, detail:'Eff:'+hEff.toFixed(2)+'–'+aEff.toFixed(2)+' Poss:'+hPoss.toFixed(0)+'–'+aPoss.toFixed(0)};
 
-  const raw = wI1.score*W.I1 + wI2.score*W.I2 + wI3.score*W.I3 + wI4.score*W.I4 + wI5.score*W.I5;
+  const raw_pre = wI1.score*W.I1 + wI2.score*W.I2 + wI3.score*W.I3 + wI4.score*W.I4 + wI5.score*W.I5;
+
+  // Blend server-only quarter I1-I5 if client is missing some quarters
+  const serverOnlyQs = activeQs.filter(q => !qs.quarters[q] && serverPeriods[q]);
+  var raw = raw_pre;
+  if(serverOnlyQs.length > 0 && clientQs.length > 0){
+    // Compute weight totals
+    var cW = 0, sW = 0;
+    clientQs.forEach(function(q){ cW += weightedQs[q]; });
+    serverOnlyQs.forEach(function(q){ sW += weightedQs[q]; });
+    var tW = cW + sW;
+    if(tW > 0 && sW > 0){
+      // Server-only quarters: weighted average of pre-computed I1-I5
+      var sI1=0,sI2=0,sI3=0,sI4=0,sI5=0;
+      serverOnlyQs.forEach(function(q){
+        var sp = serverPeriods[q];
+        var w = weightedQs[q];
+        sI1+=sp.i1*w; sI2+=sp.i2*w; sI3+=sp.i3*w; sI4+=sp.i4*w; sI5+=sp.i5*w;
+      });
+      // Normalize server scores by server weight total
+      sI1/=sW; sI2/=sW; sI3/=sW; sI4/=sW; sI5/=sW;
+      // Server's raw composite
+      var sRaw = sI1*W.I1 + sI2*W.I2 + sI3*W.I3 + sI4*W.I4 + sI5*W.I5;
+      // Blend: client raw weighted by client's quarters, server raw by server's quarters
+      raw = (raw_pre * cW + sRaw * sW) / tW;
+      // Also blend individual indicator scores for display
+      wI1.score = (wI1.score * cW + sI1 * sW) / tW;
+      wI2.score = (wI2.score * cW + sI2 * sW) / tW;
+      wI3.score = (wI3.score * cW + sI3 * sW) / tW;
+      wI4.score = (wI4.score * cW + sI4 * sW) / tW;
+      wI5.score = (wI5.score * cW + sI5 * sW) / tW;
+      windowLabel = activeQs.map(function(q){ return 'Q'+q+(serverOnlyQs.indexOf(q)>=0?'s':'')+(q==p?'*':''); });
+    }
+  } else if(serverOnlyQs.length > 0 && clientQs.length === 0){
+    // All quarters from server — compute directly from server I1-I5
+    var sI1=0,sI2=0,sI3=0,sI4=0,sI5=0,sWt=0;
+    serverOnlyQs.forEach(function(q){
+      var sp = serverPeriods[q]; var w = weightedQs[q];
+      sI1+=sp.i1*w; sI2+=sp.i2*w; sI3+=sp.i3*w; sI4+=sp.i4*w; sI5+=sp.i5*w; sWt+=w;
+    });
+    if(sWt>0){ sI1/=sWt; sI2/=sWt; sI3/=sWt; sI4/=sWt; sI5/=sWt; }
+    wI1.score=sI1; wI2.score=sI2; wI3.score=sI3; wI4.score=sI4; wI5.score=sI5;
+    raw = sI1*W.I1 + sI2*W.I2 + sI3*W.I3 + sI4*W.I4 + sI5*W.I5;
+    windowLabel = serverOnlyQs.map(function(q){ return 'Q'+q+'s'+(q==p?'*':''); });
+  }
   const controlHome = raw>=0.5;
   const score = controlHome?raw:1-raw;
   const controlTeam = controlHome?hA:aA;
@@ -8258,8 +8309,8 @@ function renderDepthAuditVisual(id, cs, hA, aA){
   if(hZones && aZones){
     // Zone positions: home (rim at bottom), away reflected (rim at top)
     var zPos={
-      home:[{k:'rim',cx:150,cy:178},{k:'paint',cx:90,cy:130},{k:'mid',cx:230,cy:115},{k:'corner3',cx:25,cy:180},{k:'above3',cx:150,cy:10}],
-      away:[{k:'rim',cx:150,cy:40},{k:'paint',cx:210,cy:88},{k:'mid',cx:70,cy:103},{k:'corner3',cx:275,cy:38},{k:'above3',cx:150,cy:208}]
+      home:[{k:'rim',cx:150,cy:178},{k:'paint',cx:90,cy:130},{k:'mid',cx:230,cy:120},{k:'corner3',cx:32,cy:185},{k:'above3',cx:150,cy:30}],
+      away:[{k:'rim',cx:150,cy:40},{k:'paint',cx:210,cy:88},{k:'mid',cx:70,cy:98},{k:'corner3',cx:268,cy:33},{k:'above3',cx:150,cy:188}]
     };
 
     function courtSVG(side, zones, alias, teamColor){
@@ -8273,7 +8324,7 @@ function renderDepthAuditVisual(id, cs, hA, aA){
         s+='<circle cx="150" cy="128" r="35" fill="none" stroke="#2a3a4f" stroke-width="0.8" stroke-dasharray="2,3"/>';
         s+='<circle cx="150" cy="194" r="7" fill="none" stroke="#445566" stroke-width="1.2"/>';
         s+='<line x1="136" y1="204" x2="164" y2="204" stroke="#445566" stroke-width="1.5"/>';
-        s+='<path d="M28 211 L28 136 Q28 16 150 16 Q272 16 272 136 L272 211" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="1.2"/>';
+        s+='<path d="M48 211 L48 148 Q48 48 150 48 Q252 48 252 148 L252 211" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="1.2"/>';
       } else {
         // Away court — reflected, rim at top
         s+='<rect x="18" y="7" width="264" height="195" fill="none" stroke="#2a3a4f" stroke-width="1.2"/>';
@@ -8281,7 +8332,7 @@ function renderDepthAuditVisual(id, cs, hA, aA){
         s+='<circle cx="150" cy="90" r="35" fill="none" stroke="#2a3a4f" stroke-width="0.8" stroke-dasharray="2,3"/>';
         s+='<circle cx="150" cy="24" r="7" fill="none" stroke="#445566" stroke-width="1.2"/>';
         s+='<line x1="136" y1="14" x2="164" y2="14" stroke="#445566" stroke-width="1.5"/>';
-        s+='<path d="M28 7 L28 82 Q28 202 150 202 Q272 202 272 82 L272 7" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="1.2"/>';
+        s+='<path d="M48 7 L48 70 Q48 170 150 170 Q252 170 252 70 L252 7" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="1.2"/>';
       }
       // Zone bubbles
       var positions=zPos[side];
