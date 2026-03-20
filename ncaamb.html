@@ -5192,7 +5192,7 @@ function computeLeadCompositionClient(game, sustData){
   if(hPts===0 && aPts===0) return null;
 
   function breakdown(stats, total, pbpRim){
-    var rawPaint = stats.points_in_the_paint||0;
+    var rawPaint = stats.points_in_the_paint||stats.points_in_paint||0;
     var atRimPts = (stats.field_goals_at_rim_made||0)*2;
     var pbpRimPts = pbpRim ? (pbpRim.made||0) * 2 : 0;
     const paint = Math.max(rawPaint, atRimPts, pbpRimPts);
@@ -5206,8 +5206,9 @@ function computeLeadCompositionClient(game, sustData){
     const variance = three + midOther;
     const sPct = total>0 ? Math.round(structural/total*100) : 0;
     const vPct = total>0 ? Math.round(variance/total*100) : 0;
-    const rimMade = stats.field_goals_at_rim_made||0;
-    const rimAtt = stats.field_goals_at_rim_att||0;
+    // Prefer PBP rim data over SR summary (NCAAMB SR often lacks at-rim stats)
+    const rimMade = pbpRim ? (pbpRim.made||0) : (stats.field_goals_at_rim_made||0);
+    const rimAtt = pbpRim ? (pbpRim.att||0) : (stats.field_goals_at_rim_att||0);
     const ftMade = stats.free_throws_made||0;
     const ftAtt = stats.free_throws_att||0;
     const threeMade = stats.three_points_made||0;
