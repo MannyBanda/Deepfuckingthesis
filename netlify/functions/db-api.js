@@ -237,7 +237,89 @@ exports.handler = async (event) => {
         )
       `;
 
+      // Game PBP — parsed play-by-play audit persisted at finalization
+      // Client checks this before burning an SR PBP API call
+      await sql`
+        CREATE TABLE IF NOT EXISTS game_pbp (
+          game_id TEXT PRIMARY KEY,
+          league TEXT DEFAULT 'nba',
+          home_alias TEXT,
+          away_alias TEXT,
+          total_shots INTEGER,
+          total_tos INTEGER,
+          pbp_json JSONB,
+          saved_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `;
+
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'Schema initialized' }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // SAVE_PBP — persist parsed PBP audit at game finalization
+    // ═══════════════════════════════════════════════════════
+    if (action === 'save_pbp' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      const { game_id, league, home_alias, away_alias, pbp } = body;
+      if (!game_id || !pbp) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id and pbp required' }) };
+
+      await sql`
+        INSERT INTO game_pbp (game_id, league, home_alias, away_alias, total_shots, total_tos, pbp_json, saved_at)
+        VALUES (${game_id}, ${league || 'nba'}, ${home_alias || null}, ${away_alias || null},
+          ${pbp.totalShots || 0}, ${pbp.totalTOs || 0}, ${JSON.stringify(pbp)}, NOW())
+        ON CONFLICT (game_id) DO UPDATE SET
+          pbp_json = ${JSON.stringify(pbp)}, total_shots = ${pbp.totalShots || 0},
+          total_tos = ${pbp.totalTOs || 0}, saved_at = NOW()
+      `;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, game_id }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_PBP — fetch persisted PBP audit (avoids SR API call)
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_pbp') {
+      const game_id = params.game_id;
+      if (!game_id) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id required' }) };
+
+      const rows = await sql`
+        SELECT pbp_json, saved_at FROM game_pbp WHERE game_id = ${game_id} LIMIT 1
+      `;
+      if (rows.length === 0) return { statusCode: 200, headers, body: JSON.stringify({ pbp: null }) };
+
+      const pbp = typeof rows[0].pbp_json === 'string' ? JSON.parse(rows[0].pbp_json) : rows[0].pbp_json;
+      return { statusCode: 200, headers, body: JSON.stringify({ pbp, saved_at: rows[0].saved_at }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_PBP_ALL — bulk fetch all PBP for debug/analytics
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_pbp_all') {
+      const league = params.league || 'nba';
+      const team = params.team || null;
+
+      let rows;
+      if (team) {
+        rows = await sql`
+          SELECT game_id, home_alias, away_alias, total_shots, total_tos, pbp_json, saved_at
+          FROM game_pbp WHERE league = ${league} AND (home_alias = ${team} OR away_alias = ${team})
+          ORDER BY saved_at DESC
+        `;
+      } else {
+        rows = await sql`
+          SELECT game_id, home_alias, away_alias, total_shots, total_tos, pbp_json, saved_at
+          FROM game_pbp WHERE league = ${league}
+          ORDER BY saved_at DESC
+        `;
+      }
+
+      const games = rows.map(r => ({
+        game_id: r.game_id,
+        home: r.home_alias, away: r.away_alias,
+        shots: r.total_shots, tos: r.total_tos,
+        saved: r.saved_at,
+        pbp: typeof r.pbp_json === 'string' ? JSON.parse(r.pbp_json) : r.pbp_json,
+      }));
+      return { statusCode: 200, headers, body: JSON.stringify({ games, total: games.length }) };
     }
 
     // ═══════════════════════════════════════════════════════
