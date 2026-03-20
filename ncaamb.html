@@ -677,6 +677,25 @@ async function finalizeGameDB(game){
     });
     console.log('[DB] Game finalized:', game.id, winner, 'by', margin);
   }catch(e){ console.warn('[DB] Finalize failed:', e.message); }
+
+  // Save PBP audit to DB
+  if(cs.pbpAudit && cs.pbpAudit.home && cs.pbpAudit.away){
+    try{
+      var pbpSave = {
+        home: cs.pbpAudit.home, away: cs.pbpAudit.away,
+        homeAlias: cs.pbpAudit.homeAlias, awayAlias: cs.pbpAudit.awayAlias,
+        totalShots: cs.pbpAudit.totalShots, totalTOs: cs.pbpAudit.totalTOs,
+        runs: cs.pbpAudit.runs,
+        scoringEvents: cs.pbpAudit.scoringEvents,
+        raw: cs.pbpAudit.raw,
+      };
+      await fetch(FN+'db-api?action=save_pbp', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({game_id: game.id, league:'ncaamb', home_alias:hA, away_alias:aA, pbp:pbpSave})
+      });
+      console.log('[DB] PBP audit saved:', game.id, pbpSave.totalShots, 'shots');
+    }catch(e){ console.warn('[DB] PBP save failed:', e.message); }
+  }
 }
 
 async function fetchCalibrationFromDB(){
@@ -2429,6 +2448,25 @@ async function fetchPBP(gameId){
   cs.pbpLoading = true;
   renderCard(game);
   try{
+    // Check DB first — avoids burning SR API call
+    if(dbReady){
+      try{
+        var dbR = await fetch(FN+'db-api?action=get_pbp&game_id='+encodeURIComponent(gameId));
+        if(dbR.ok){
+          var dbData = await dbR.json();
+          if(dbData.pbp && dbData.pbp.home && dbData.pbp.away){
+            cs.pbpAudit = dbData.pbp;
+            cs.pbpTime = new Date(dbData.saved_at || Date.now());
+            cs.pbpPeriod = game.period || 2;
+            persistDepth(gameId, cs);
+            addLog(gameId, '✓ DEPTH loaded from DB — '+dbData.pbp.totalShots+' shots, '+dbData.pbp.totalTOs+' TOs (no SR call)', true);
+            cs.pbpLoading = false;
+            renderCard(game);
+            return;
+          }
+        }
+      }catch(e){}
+    }
     addLog(gameId, '⚡ Pulling PBP data...', true);
     const data = await sr('pbp', {game_id: gameId});
     const audit = parsePBP(data, game);
@@ -6947,9 +6985,28 @@ function mountCard(game){
         cardState[id].pbpAudit = sd.pbpAudit;
         cardState[id].pbpTime = sd.pbpTime ? new Date(sd.pbpTime) : null;
         cardState[id].pbpPeriod = sd.pbpPeriod;
-        addLog(id, '📋 Depth audit restored from cache (Q'+(sd.pbpPeriod||'?')+')', true);
+        addLog(id, '📋 Depth audit restored from cache (H'+(sd.pbpPeriod||'?')+')', true);
       }
     }catch(e){ console.warn('Depth restore failed:', e.message); }
+  }
+  // DB fallback — for FINAL games or when localStorage is empty
+  if(!cardState[id].pbpAudit && dbReady){
+    (async function(gid){
+      try{
+        var r = await fetch(FN+'db-api?action=get_pbp&game_id='+encodeURIComponent(gid));
+        if(!r.ok) return;
+        var data = await r.json();
+        if(data.pbp && data.pbp.home && data.pbp.away){
+          cardState[gid].pbpAudit = data.pbp;
+          cardState[gid].pbpTime = new Date(data.saved_at || Date.now());
+          cardState[gid].pbpPeriod = 2;
+          persistDepth(gid, cardState[gid]);
+          addLog(gid, '📡 Depth audit loaded from DB — '+data.pbp.totalShots+' shots (no SR call)', true);
+          var g = games.find(function(x){return x.id===gid;});
+          if(g) renderCard(g);
+        }
+      }catch(e){}
+    })(id);
   }
   // Initialize new fields
   cardState[id].baselines = null;
@@ -7140,7 +7197,7 @@ function renderDepthAuditVisual(id, cs, hA, aA){
       var brd=r.active?(r.isA?DA_AWAY:DA_HOME):(r.isA?DA_ABR:DA_HBR);
       svg+='<g onclick="window._daSel(\''+id+'\','+r.ri+')" style="cursor:pointer">';
       svg+='<rect x="'+r.x1+'" y="'+(PT-3)+'" width="'+Math.max(r.x2-r.x1,8)+'" height="'+(H-PT-PB+6)+'" fill="'+bg+'" stroke="'+brd+'" stroke-width="'+(r.active?'1.2':'0.5')+'" rx="2"/>';
-      svg+='<text x="'+((r.x1+r.x2)/2)+'" y="'+(H-PB+1)+'" text-anchor="middle" fill="'+(r.active?(r.isA?DA_AWAY:DA_HOME):brd)+'" font-size="5.5" font-weight="600" font-family="monospace">'+r.tm+' '+r.pts+'-'+r.opp+'</text>';
+      if(r.active) svg+='<text x="'+((r.x1+r.x2)/2)+'" y="'+(H-PB+1)+'" text-anchor="middle" fill="'+(r.isA?DA_AWAY:DA_HOME)+'" font-size="5.5" font-weight="600" font-family="monospace">'+r.tm+' '+r.pts+'-'+r.opp+'</text>';
       svg+='</g>';
     });
     qDivs.forEach(function(q){
