@@ -940,6 +940,14 @@ async function hydrateFromServerContext(gameId){
       var g = games.find(function(x){ return x.id === gameId; });
       if(g) renderCard(g);
     }
+
+    // Schedule one-shot retry if key layers still missing (server may not have had enough data yet)
+    var _stillMissing = !cs.rollingWindow || !cs.rollingWindow.available || !cs.combinedRead || cs.combinedRead.read === 'TOO EARLY';
+    if(_stillMissing && !cs._ctxRetried){
+      cs._ctxRetried = true;
+      setTimeout(function(){ hydrateFromServerContext(gameId); }, 60000);
+      addLog(gameId, '📡 Context incomplete — retry scheduled in 60s', true);
+    }
   }catch(e){
     console.warn('Server context hydration failed:', e.message);
   }
@@ -2481,6 +2489,28 @@ async function fetchSummary(game){
       cs._dbPollCount++;
       if(cs._dbPollCount % 3 === 0) saveSnapshotDB(game);
     }
+    // Periodic auto-analysis re-fetch (~every 3min when Q2+ and no auto analyses cached)
+    // Catches server Sonnet that fires 30s after boundary when client mount fetch was too early
+    if(getState(game)==='LIVE' && game.period >= 2){
+      if(!cs._autoFetchCount) cs._autoFetchCount = 0;
+      cs._autoFetchCount++;
+      var hasAutoAnalyses = autoAnalysisCache[game.id] && autoAnalysisCache[game.id].length > 0;
+      if(!hasAutoAnalyses && cs._autoFetchCount % 2 === 0){
+        (async function(gid){
+          try{
+            var r = await fetch(FN+'db-api?action=get_auto_analyses&game_ids='+encodeURIComponent(gid));
+            if(!r.ok) return;
+            var data = await r.json();
+            var grouped = data.analyses || {};
+            if(grouped[gid] && grouped[gid].length > 0){
+              autoAnalysisCache[gid] = grouped[gid];
+              applyAutoAnalysesToCards();
+              addLog(gid, '★ Auto analyses fetched (periodic): '+grouped[gid].length+' entries', true);
+            }
+          }catch(e){}
+        })(game.id);
+      }
+    }
     // Finalize to DB when game ends
     if(getState(game)==='FINAL' && !cs._dbFinalized){
       cs._dbFinalized = true;
@@ -3319,16 +3349,16 @@ function parsePBP(pbpData, game){
     timeline.push(enriched);
   });
 
-  // ── SCORING RUNS (unchanged) ──
+  // ── SCORING RUNS — store scoreLog indices for precise margin flow alignment ──
   const runs = [];
   let runTeam=null, runPts=0, runStart=0, runCount=0, runLineup=[], runShotTypes=[];
   for(let i=0;i<scoreLog.length;i++){
     const s=scoreLog[i];
     if(s.team===runTeam){ runPts+=s.pts; runCount++; if(s.lineup.length>0) runLineup=s.lineup; runShotTypes.push(s.pts===3?'3PT':s.pts===1?'FT':'2PT'); }
-    else { if(runPts>=8||runCount>=3) runs.push({team:runTeam,pts:runPts,count:runCount,q:scoreLog[runStart]?.q,lineup:runLineup,mechanism:runShotTypes.slice()}); runTeam=s.team; runPts=s.pts; runStart=i; runCount=1; runLineup=s.lineup; runShotTypes=[s.pts===3?'3PT':s.pts===1?'FT':'2PT']; }
+    else { if(runPts>=8||runCount>=3) runs.push({team:runTeam,pts:runPts,count:runCount,q:scoreLog[runStart]?.q,lineup:runLineup,mechanism:runShotTypes.slice(),si:runStart,ei:i-1}); runTeam=s.team; runPts=s.pts; runStart=i; runCount=1; runLineup=s.lineup; runShotTypes=[s.pts===3?'3PT':s.pts===1?'FT':'2PT']; }
   }
-  if(runPts>=8||runCount>=3) runs.push({team:runTeam,pts:runPts,count:runCount,q:scoreLog[runStart]?.q,lineup:runLineup,mechanism:runShotTypes.slice()});
-  runs.sort((a,b)=>b.pts-a.pts);
+  if(runPts>=8||runCount>=3) runs.push({team:runTeam,pts:runPts,count:runCount,q:scoreLog[runStart]?.q,lineup:runLineup,mechanism:runShotTypes.slice(),si:runStart,ei:scoreLog.length-1});
+  runs.sort((a,b)=>b.ei-a.ei); // most recent first
   const topRuns = runs.slice(0,5);
 
   // ── AGGREGATE SUMMARIES (unchanged) ──
@@ -8220,8 +8250,8 @@ function renderDepthAuditVisual(id, cs, hA, aA){
   if(hZones && aZones){
     // Zone positions: home (rim at bottom), away reflected (rim at top)
     var zPos={
-      home:[{k:'rim',cx:150,cy:175},{k:'paint',cx:90,cy:130},{k:'mid',cx:225,cy:110},{k:'corner3',cx:42,cy:192},{k:'above3',cx:150,cy:40}],
-      away:[{k:'rim',cx:150,cy:43},{k:'paint',cx:210,cy:88},{k:'mid',cx:75,cy:108},{k:'corner3',cx:258,cy:26},{k:'above3',cx:150,cy:178}]
+      home:[{k:'rim',cx:150,cy:178},{k:'paint',cx:90,cy:130},{k:'mid',cx:230,cy:115},{k:'corner3',cx:25,cy:180},{k:'above3',cx:150,cy:10}],
+      away:[{k:'rim',cx:150,cy:40},{k:'paint',cx:210,cy:88},{k:'mid',cx:70,cy:103},{k:'corner3',cx:275,cy:38},{k:'above3',cx:150,cy:208}]
     };
 
     function courtSVG(side, zones, alias, teamColor){
@@ -8230,20 +8260,20 @@ function renderDepthAuditVisual(id, cs, hA, aA){
       s+='<rect width="300" height="218" rx="4" fill="#0a0e17"/>';
       if(isHome){
         // Home court — rim at bottom
-        s+='<rect x="18" y="16" width="264" height="195" fill="none" stroke="#1e293b" stroke-width="0.6"/>';
-        s+='<rect x="88" y="128" width="124" height="83" fill="none" stroke="#1e293b" stroke-width="0.5"/>';
-        s+='<circle cx="150" cy="128" r="35" fill="none" stroke="#1e293b" stroke-width="0.4" stroke-dasharray="2,3"/>';
-        s+='<circle cx="150" cy="194" r="7" fill="none" stroke="#334155" stroke-width="0.7"/>';
-        s+='<line x1="136" y1="204" x2="164" y2="204" stroke="#334155" stroke-width="1"/>';
-        s+='<path d="M28 211 L28 136 Q28 16 150 16 Q272 16 272 136 L272 211" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="0.6"/>';
+        s+='<rect x="18" y="16" width="264" height="195" fill="none" stroke="#2a3a4f" stroke-width="1.2"/>';
+        s+='<rect x="88" y="128" width="124" height="83" fill="none" stroke="#2a3a4f" stroke-width="1.0"/>';
+        s+='<circle cx="150" cy="128" r="35" fill="none" stroke="#2a3a4f" stroke-width="0.8" stroke-dasharray="2,3"/>';
+        s+='<circle cx="150" cy="194" r="7" fill="none" stroke="#445566" stroke-width="1.2"/>';
+        s+='<line x1="136" y1="204" x2="164" y2="204" stroke="#445566" stroke-width="1.5"/>';
+        s+='<path d="M28 211 L28 136 Q28 16 150 16 Q272 16 272 136 L272 211" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="1.2"/>';
       } else {
         // Away court — reflected, rim at top
-        s+='<rect x="18" y="7" width="264" height="195" fill="none" stroke="#1e293b" stroke-width="0.6"/>';
-        s+='<rect x="88" y="7" width="124" height="83" fill="none" stroke="#1e293b" stroke-width="0.5"/>';
-        s+='<circle cx="150" cy="90" r="35" fill="none" stroke="#1e293b" stroke-width="0.4" stroke-dasharray="2,3"/>';
-        s+='<circle cx="150" cy="24" r="7" fill="none" stroke="#334155" stroke-width="0.7"/>';
-        s+='<line x1="136" y1="14" x2="164" y2="14" stroke="#334155" stroke-width="1"/>';
-        s+='<path d="M28 7 L28 82 Q28 202 150 202 Q272 202 272 82 L272 7" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="0.6"/>';
+        s+='<rect x="18" y="7" width="264" height="195" fill="none" stroke="#2a3a4f" stroke-width="1.2"/>';
+        s+='<rect x="88" y="7" width="124" height="83" fill="none" stroke="#2a3a4f" stroke-width="1.0"/>';
+        s+='<circle cx="150" cy="90" r="35" fill="none" stroke="#2a3a4f" stroke-width="0.8" stroke-dasharray="2,3"/>';
+        s+='<circle cx="150" cy="24" r="7" fill="none" stroke="#445566" stroke-width="1.2"/>';
+        s+='<line x1="136" y1="14" x2="164" y2="14" stroke="#445566" stroke-width="1.5"/>';
+        s+='<path d="M28 7 L28 82 Q28 202 150 202 Q272 202 272 82 L272 7" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="1.2"/>';
       }
       // Zone bubbles
       var positions=zPos[side];
@@ -8330,26 +8360,18 @@ function renderDepthAuditVisual(id, cs, hA, aA){
     var xs=(W-PL-PR)/Math.max(sEvts.length-1,1);
     var ys=((H-PT-PB)/2)/maxAbs;
     // Path
-    var pathD=sEvts.map(function(e,i){return(i===0?'M':'L')+(PL+i*xs)+','+(mid-e.m*ys);}).join(' ');
+    var pathD=sEvts.map(function(e,i){return(i===0?'M':'L')+(PL+i*xs)+','+(mid+e.m*ys);}).join(' ');
     var areaD=pathD+' L'+(PL+(sEvts.length-1)*xs)+','+mid+' L'+PL+','+mid+' Z';
     // Quarter dividers
     var qDivs=[];
     for(var qi=1;qi<sEvts.length;qi++){if(sEvts[qi].q!==sEvts[qi-1].q)qDivs.push({x:PL+(qi-0.5)*xs,label:'Q'+sEvts[qi].q});}
-    // Run regions — map runs to event index ranges
+    // Run regions — use exact scoreLog indices (si/ei) stored on each run
     var runRegions=runs.map(function(run,ri){
-      var rq=parseInt((run.q||'').toString().replace(/\D/g,''))||0;
-      var fi=-1,li=-1;
-      for(var ei=0;ei<sEvts.length;ei++){
-        var ev=sEvts[ei];
-        if(ev.tm===run.team && ev.q>=rq){
-          var evMin=parseFloat((ev.ck||'0').split(':')[0])||0;
-          var sMin=parseFloat((run.startClock||'0').split(':')[0])||0;
-          var eMin=parseFloat((run.endClock||'0').split(':')[0])||0;
-          if(ev.q===rq && evMin<=sMin && evMin>=eMin){if(fi===-1)fi=ei;li=ei;}
-          else if(ev.q>rq && (run.q||'').toString().includes('-')){if(fi===-1)fi=ei;li=ei;}
-        }
-      }
-      if(fi===-1){fi=Math.round(ri/runs.length*sEvts.length*0.7);li=Math.min(fi+(run.mechanism?run.mechanism.length:3),sEvts.length-1);}
+      var fi=run.si!=null?run.si:0;
+      var li=run.ei!=null?run.ei:fi;
+      // Clamp to scoringEvents length
+      if(fi>=sEvts.length) fi=sEvts.length-1;
+      if(li>=sEvts.length) li=sEvts.length-1;
       var x1=PL+Math.max(0,fi-0.5)*xs;
       var x2=PL+Math.min(sEvts.length-1,li+0.5)*xs;
       var isA=run.team===aA;
@@ -8377,20 +8399,20 @@ function renderDepthAuditVisual(id, cs, hA, aA){
     // Zero line
     svg+='<line x1="'+PL+'" y1="'+mid+'" x2="'+(W-PR)+'" y2="'+mid+'" stroke="#1e293b" stroke-width="0.4"/>';
     // Side labels
-    svg+='<text x="3" y="'+(PT+3)+'" fill="'+DA_AWAY+'" font-size="6" font-weight="700" font-family="monospace" opacity="0.45">'+esc(aA)+'</text>';
-    svg+='<text x="3" y="'+(H-PB+9)+'" fill="'+DA_HOME+'" font-size="6" font-weight="700" font-family="monospace" opacity="0.45">'+esc(hA)+'</text>';
-    // Area gradient
+    svg+='<text x="3" y="'+(PT+3)+'" fill="'+DA_HOME+'" font-size="6" font-weight="700" font-family="monospace" opacity="0.45">'+esc(hA)+'</text>';
+    svg+='<text x="3" y="'+(H-PB+9)+'" fill="'+DA_AWAY+'" font-size="6" font-weight="700" font-family="monospace" opacity="0.45">'+esc(aA)+'</text>';
+    // Area gradient — home at top, away at bottom
     svg+='<defs><linearGradient id="mg'+id.substring(0,6)+'" x1="0" y1="0" x2="0" y2="1">';
-    svg+='<stop offset="0%" stop-color="'+DA_AWAY+'" stop-opacity="0.1"/>';
+    svg+='<stop offset="0%" stop-color="'+DA_HOME+'" stop-opacity="0.1"/>';
     svg+='<stop offset="50%" stop-color="#07070a" stop-opacity="0"/>';
-    svg+='<stop offset="100%" stop-color="'+DA_HOME+'" stop-opacity="0.1"/>';
+    svg+='<stop offset="100%" stop-color="'+DA_AWAY+'" stop-opacity="0.1"/>';
     svg+='</linearGradient></defs>';
     svg+='<path d="'+areaD+'" fill="url(#mg'+id.substring(0,6)+')"/>';
     // Margin line
     svg+='<path d="'+pathD+'" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="0.8"/>';
     // Scoring event dots
     sEvts.forEach(function(ev,i){
-      var x=PL+i*xs, y=mid-ev.m*ys;
+      var x=PL+i*xs, y=mid+ev.m*ys;
       var isA=ev.tm===aA;
       var c=isA?DA_AWAY:DA_HOME;
       if(ev.type==='3PT'){
@@ -8411,8 +8433,8 @@ function renderDepthAuditVisual(id, cs, hA, aA){
     if(sEvts.length>0){
       var last=sEvts[sEvts.length-1];
       var lx=PL+(sEvts.length-1)*xs;
-      var ly=mid-last.m*ys;
-      svg+='<text x="'+(lx-10)+'" y="'+(ly-7)+'" text-anchor="middle" fill="#e2e2ee" font-size="8" font-weight="700" font-family="monospace">'+(last.m>0?'+':'')+last.m+'</text>';
+      var ly=mid+last.m*ys;
+      svg+='<text x="'+(lx-10)+'" y="'+(ly+(last.m>0?12:-7))+'" text-anchor="middle" fill="#e2e2ee" font-size="8" font-weight="700" font-family="monospace">'+(last.m>0?'+':'')+last.m+'</text>';
     }
     svg+='</svg>';
     h+=svg;
