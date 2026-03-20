@@ -1076,7 +1076,7 @@ async function computeServerContext(sql, game, league, summary, ind, espnWP, hA,
       ORDER BY ts ASC
     `;
 
-    if (snaps.length >= 2) {
+    if (snaps.length >= 1) {
       // Rolling window: group by period, cross-fade weighted
       const byPeriod = {};
       for (const s of snaps) {
@@ -1084,7 +1084,7 @@ async function computeServerContext(sql, game, league, summary, ind, espnWP, hA,
       }
       const periodKeys = Object.keys(byPeriod).map(Number).sort((a, b) => a - b);
 
-      if (periodKeys.length >= 2) {
+      if (periodKeys.length >= 1) {
         const maxPer = periodKeys[periodKeys.length - 1];
         let wI1 = 0, wI2 = 0, wI3 = 0, wI4 = 0, wI5 = 0, wSum = 0;
         for (const pk of periodKeys) {
@@ -1727,8 +1727,12 @@ export default async function(req) {
           }
 
           // Determine period + clock from summary
-          const periods = summary.periods || [];
-          const currentPeriod = periods.length || 0;
+          // SR NBA has summary.quarter, NCAAMB has summary.half
+          // Periods may be nested under home/away, not top-level
+          const currentPeriod = summary.quarter || summary.half
+            || (summary.periods || []).length
+            || (summary.home?.periods || []).length
+            || 0;
           const clock = summary.clock || '';
 
           // Compute deficit relative to control team
@@ -1842,23 +1846,30 @@ export default async function(req) {
               // Period-based: halftime (period 1→2)
               transitions.push({ from: 1, to: 2, tag: 'calibration_sq2', trigger: 'auto_sq2', label: 'sQ2(half)', sonnet: false });
 
-              // Clock-based: mid-half at 10:00 mark
-              const prevClockMin = game.last_clock_min;
-              // sQ1 end: H1, clock crosses below 10:00 (was >10, now ≤10)
-              if (currentPeriod === 1 && clockMin != null && clockMin <= 10.0 && prevClockMin != null && prevClockMin > 10.0) {
+              // State-based: if we're past the 10:00 mark, the synthetic quarter boundary should exist
+              // DB dedup prevents re-firing on every poll
+              if (currentPeriod === 1 && clockMin != null && clockMin <= 10.0) {
                 transitions.push({ from: 0, to: 1, tag: 'calibration_sq1', trigger: 'auto_sq1', label: 'sQ1(H1@10)', sonnet: false, clockBased: true });
               }
-              // sQ3 end: H2, clock crosses below 10:00
-              if (currentPeriod === 2 && clockMin != null && clockMin <= 10.0 && prevClockMin != null && prevClockMin > 10.0) {
+              if (currentPeriod === 2 && clockMin != null && clockMin <= 10.0) {
                 transitions.push({ from: 0, to: 1, tag: 'calibration_sq3', trigger: 'auto_sq3', label: 'sQ3(H2@10)', sonnet: false, clockBased: true });
               }
             }
 
             for (const t of transitions) {
+              // DB-based dedup — check if calibration snapshot already exists for this game+tag
+              // In-memory cal_captured doesn't persist across serverless invocations
+              try {
+                const existing = await sql`
+                  SELECT 1 FROM snapshots WHERE game_id = ${game.id} AND source = ${t.tag} LIMIT 1
+                `;
+                if (existing.length > 0) continue; // already captured in a prior invocation
+              } catch (e) { /* table may not exist yet, proceed */ }
+
               // Period-based transitions: standard detection
               const triggered = t.clockBased
-                ? !game.cal_captured[t.tag]  // clock-based: already validated above
-                : (currentPeriod >= t.to && prevPeriod < t.to && !game.cal_captured[t.tag]);
+                ? true  // clock-based: already validated above
+                : (currentPeriod >= t.to);
 
               if (triggered) {
                 game.cal_captured[t.tag] = true;
