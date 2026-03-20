@@ -1115,6 +1115,16 @@ async function computeServerContext(sql, game, league, summary, ind, espnWP, hA,
             I3: { score: Math.round(nI3 * 10) / 10 }, I4: { score: Math.round(nI4 * 10) / 10 },
             I5: { score: Math.round(nI5 * 10) / 10 },
           };
+          // Per-period I1-I5 scores — client uses these as seed data for cross-fade
+          ctx.perPeriodScores = {};
+          for (const pk of periodKeys) {
+            const sn = byPeriod[pk];
+            ctx.perPeriodScores[pk] = {
+              i1: sn.i1 ?? 0.5, i2: sn.i2 ?? 0.5, i3: sn.i3 ?? 0.5,
+              i4: sn.i4 ?? 0.5, i5: sn.i5 ?? 0.5,
+              floor_score: sn.floor_score, floor_team: sn.floor_team,
+            };
+          }
         }
       }
 
