@@ -1625,6 +1625,8 @@ function formatCalibrationForPrompt(){
 // REFRESH
 // ══════════════════════════════════════════════════════════════════════════════
 var _bdlGamesCache = { data: null, time: 0, date: '' };
+var autoAnalysisCache = {};
+function applyAutoAnalysesToCards(){ /* stub — auto analyses render on next card render cycle */ }
 
 async function refreshLiveCards(){
   if(dbReady){
