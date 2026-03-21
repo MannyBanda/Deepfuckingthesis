@@ -1,0 +1,1850 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DFT Debug</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#0a0e17;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:12px;font-size:14px;}
+h1{font-size:16px;color:#60a5fa;margin-bottom:12px;letter-spacing:1px;}
+h2{font-size:13px;color:#a78bfa;margin:16px 0 8px;letter-spacing:.5px;border-bottom:1px solid #1e293b;padding-bottom:4px;}
+.card{background:#111827;border:1px solid #1e293b;border-radius:8px;padding:10px;margin-bottom:10px;}
+.row{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e293b11;font-size:12px;}
+.row:last-child{border:none;}
+.label{color:#94a3b8;}
+.val{color:#e2e8f0;font-weight:600;text-align:right;max-width:60%;word-break:break-all;}
+.val.green{color:#00ff88;} .val.red{color:#ff5252;} .val.yellow{color:#ffd166;} .val.blue{color:#60a5fa;}
+button{background:#1e293b;color:#60a5fa;border:1px solid #334155;border-radius:6px;padding:8px 14px;font-size:12px;font-weight:600;cursor:pointer;margin:4px;letter-spacing:.5px;}
+button:active{background:#334155;}
+.btn-row{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0;}
+select{background:#1e293b;color:#e0e0e0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:12px;width:100%;margin:6px 0;}
+#log{background:#0f172a;border:1px solid #1e293b;border-radius:6px;padding:8px;font-family:monospace;font-size:10px;line-height:1.6;max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;}
+.log-ok{color:#00ff88;} .log-err{color:#ff5252;} .log-warn{color:#ffd166;} .log-info{color:#60a5fa;}
+.thesis-box{background:#0f172a;border:1px solid #1e293b;border-radius:4px;padding:6px;margin:4px 0;font-size:10px;max-height:120px;overflow-y:auto;white-space:pre-wrap;}
+.analysis-box{background:#0f172a;border-left:2px solid #a78bfa;padding:6px;margin:4px 0;font-size:10px;}
+.ts{font-size:9px;color:#64748b;}
+.tag{display:inline-block;font-size:9px;padding:1px 5px;border-radius:3px;font-weight:600;letter-spacing:.3px;}
+.tag-server{background:rgba(96,165,250,.15);color:#60a5fa;border:1px solid rgba(96,165,250,.3);}
+.tag-client{background:rgba(0,255,136,.1);color:#00ff88;border:1px solid rgba(0,255,136,.2);}
+.tag-final{background:rgba(167,139,250,.1);color:#a78bfa;border:1px solid rgba(167,139,250,.2);}
+.tag-live{background:rgba(0,255,136,.15);color:#00ff88;border:1px solid rgba(0,255,136,.3);}
+.tag-cal{background:rgba(255,209,102,.15);color:#ffd166;border:1px solid rgba(255,209,102,.3);}
+.tag-q3{background:rgba(255,152,0,.15);color:#ff9800;border:1px solid rgba(255,152,0,.3);}
+</style>
+</head>
+<body>
+<h1>🔧 DFT DEBUG CONSOLE</h1>
+
+<div class="btn-row">
+  <button onclick="runAll()">▶ RUN ALL</button>
+  <button onclick="checkDB()">📊 DB Stats</button>
+  <button onclick="checkTheses()">📝 Theses</button>
+  <button onclick="checkAnalyses()">🧠 Analyses</button>
+  <button onclick="checkPollState()">⏱ Poll State</button>
+  <button onclick="viewCalibration('nba')">📐 Calibration</button>
+  <button onclick="viewCalibrationQ3('nba',1)">★ Q1</button>
+  <button onclick="viewCalibrationQ3('nba',2)">★ Q2</button>
+  <button onclick="viewCalibrationQ3('nba',3)">★ Q3</button>
+  <button onclick="viewCalibrationAll('nba')">★ All Q</button>
+  <button onclick="checkClutch()">🏀 Clutch</button>
+  <button onclick="testWrite()">✏️ Test Write</button>
+  <button onclick="bulkSaveAnalyses()">📤 Bulk Save Analyses</button>
+  <button onclick="clearLog()">🗑 Clear</button>
+</div>
+<div class="btn-row">
+  <button onclick="viewTeamShots('nba')" style="background:rgba(245,166,42,.15);border-color:rgba(245,166,42,.3);color:#f5a62a">🎯 Team Shot Profiles</button>
+  <button onclick="viewPlayerZones('nba')" style="background:rgba(0,255,136,.1);border-color:rgba(0,255,136,.2);color:#00ff88">👤 Player Baselines</button>
+  <button onclick="viewRunPatterns('nba')" style="background:rgba(96,165,250,.15);border-color:rgba(96,165,250,.3);color:#60a5fa">📊 Run Patterns</button>
+  <button onclick="viewPbpStats()" style="background:rgba(167,139,250,.1);border-color:rgba(167,139,250,.2);color:#a78bfa">📦 PBP DB Stats</button>
+</div>
+<div class="btn-row">
+  <button onclick="bdlProbe('nba','all')" style="background:rgba(251,191,36,.12);border-color:rgba(251,191,36,.3);color:#fbbf24">🔬 BDL Probe NBA</button>
+  <button onclick="bdlProbe('ncaamb','all')" style="background:rgba(251,191,36,.12);border-color:rgba(251,191,36,.3);color:#fbbf24">🔬 BDL Probe NCAAMB</button>
+  <button onclick="bdlProbe('nba','plays')" style="background:rgba(251,191,36,.08);border-color:rgba(251,191,36,.2);color:#d4a017">▶ Plays</button>
+  <button onclick="bdlProbe('nba','stats')" style="background:rgba(251,191,36,.08);border-color:rgba(251,191,36,.2);color:#d4a017">▶ Stats</button>
+  <button onclick="bdlProbe('nba','box_scores')" style="background:rgba(251,191,36,.08);border-color:rgba(251,191,36,.2);color:#d4a017">▶ Box</button>
+  <button onclick="bdlProbe('nba','lineups')" style="background:rgba(251,191,36,.08);border-color:rgba(251,191,36,.2);color:#d4a017">▶ Lineups</button>
+  <button onclick="bdlProbe('nba','advanced')" style="background:rgba(251,191,36,.08);border-color:rgba(251,191,36,.2);color:#d4a017">▶ Adv</button>
+  <button onclick="bdlParseTest('nba')" style="background:rgba(0,255,136,.12);border-color:rgba(0,255,136,.3);color:#00ff88;font-weight:700">⚡ Parse Test NBA</button>
+  <button onclick="bdlParseTest('ncaamb')" style="background:rgba(0,255,136,.08);border-color:rgba(0,255,136,.2);color:#00cc66">⚡ Parse NCAAMB</button>
+</div>
+
+<!-- Game selector for snapshots/odds -->
+<div class="card" id="game-selector-card" style="display:none">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+    <span style="font-size:11px;color:#a78bfa;font-weight:600;letter-spacing:.5px">SELECT GAME</span>
+    <span id="game-count" style="font-size:10px;color:#64748b"></span>
+  </div>
+  <select id="game-select" onchange="onGameSelect()">
+    <option value="">— load games first —</option>
+  </select>
+  <div class="btn-row" style="margin-top:6px">
+    <button onclick="loadGames('nba')">🏀 NBA Games</button>
+    <button onclick="loadGames('ncaamb')">🎓 NCAAMB Games</button>
+    <button onclick="viewSnapshots()">📸 Snapshots</button>
+    <button onclick="viewOdds()">💰 Odds</button>
+    <button onclick="viewSustainability()">🧬 Sustainability</button>
+    <button onclick="viewSeasonCache('nba')">📈 NBA Cache</button>
+    <button onclick="viewSeasonCache('ncaamb')">📈 NCAA Cache</button>
+  </div>
+</div>
+
+<div id="stats" class="card" style="display:none"></div>
+<div id="content"></div>
+
+<h2>LOG</h2>
+<div id="log"></div>
+
+<script>
+var FN = '/.netlify/functions/';
+var logEl = document.getElementById('log');
+var statsEl = document.getElementById('stats');
+var contentEl = document.getElementById('content');
+var gameSelectEl = document.getElementById('game-select');
+var gameCountEl = document.getElementById('game-count');
+var allGames = []; // cached list from DB
+
+function log(msg, cls){
+  var line = document.createElement('div');
+  line.className = cls || '';
+  line.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function clearLog(){ logEl.innerHTML = ''; contentEl.innerHTML = ''; statsEl.style.display = 'none'; }
+
+async function fetchJSON(url){
+  try{
+    var r = await fetch(url);
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  }catch(e){
+    log('FETCH FAILED: ' + url + ' — ' + e.message, 'log-err');
+    return null;
+  }
+}
+
+async function postJSON(url, body){
+  try{
+    var r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  }catch(e){
+    log('POST FAILED: ' + url + ' — ' + e.message, 'log-err');
+    return null;
+  }
+}
+
+// ── Load Games into selector ──
+async function loadGames(league){
+  log('Loading ' + league.toUpperCase() + ' games from DB...', 'log-info');
+  document.getElementById('game-selector-card').style.display = 'block';
+
+  // Fetch all games for this league from the games table
+  var data = await fetchJSON(FN + 'db-api?action=get_games&league=' + league);
+  if(!data || !data.games){
+    log('No games found for ' + league, 'log-warn');
+    return;
+  }
+
+  allGames = data.games;
+  // Sort: most recent first
+  allGames.sort(function(a, b){ return (b.date || '').localeCompare(a.date || ''); });
+
+  gameSelectEl.innerHTML = '<option value="">— select a game —</option>';
+  allGames.forEach(function(g){
+    var opt = document.createElement('option');
+    opt.value = g.id;
+    var status = g.winner ? 'FINAL' : '';
+    var label = (g.date || '?') + ' · ' + (g.matchup || g.away_alias + '@' + g.home_alias || g.id.substring(0,12));
+    if(g.home_pts && g.away_pts) label += ' · ' + g.away_pts + '-' + g.home_pts;
+    if(status) label += ' · ' + status;
+    opt.textContent = label;
+    gameSelectEl.appendChild(opt);
+  });
+  gameCountEl.textContent = allGames.length + ' games';
+  log('Loaded ' + allGames.length + ' ' + league.toUpperCase() + ' games', 'log-ok');
+}
+
+function onGameSelect(){
+  var gid = gameSelectEl.value;
+  if(!gid) return;
+  log('Selected game: ' + gid.substring(0,12) + '...', 'log-info');
+}
+
+function getSelectedGame(){
+  var gid = gameSelectEl.value;
+  if(!gid){ log('No game selected — pick one from the dropdown', 'log-warn'); return null; }
+  return gid;
+}
+
+// ── Snapshots for selected game ──
+async function viewSnapshots(){
+  var gid = getSelectedGame();
+  if(!gid) return;
+
+  log('Fetching snapshots for ' + gid.substring(0,8) + '...', 'log-info');
+  var data = await fetchJSON(FN + 'db-api?action=history&game_id=' + encodeURIComponent(gid));
+  var snaps = data?.snapshots || [];
+  log('Found ' + snaps.length + ' snapshots', snaps.length > 0 ? 'log-ok' : 'log-warn');
+
+  // Find game info
+  var game = allGames.find(function(g){ return g.id === gid; });
+  var title = game ? (game.matchup || game.id.substring(0,12)) : gid.substring(0,12);
+
+  var html = '<h2>📸 SNAPSHOTS — ' + escH(title) + ' (' + snaps.length + ')</h2>';
+  if(snaps.length === 0){
+    html += '<div class="card" style="color:#94a3b8;font-size:11px">No snapshots for this game. Server polling may not have been active.</div>';
+  }
+
+  // Summary stats
+  var serverCount = snaps.filter(function(s){ return s.source === 'server'; }).length;
+  var clientCount = snaps.length - serverCount;
+  if(snaps.length > 0){
+    html += '<div class="card" style="font-size:11px">';
+    html += '<div class="row"><span class="label">Total</span><span class="val">' + snaps.length + '</span></div>';
+    html += '<div class="row"><span class="label">Server</span><span class="val blue">' + serverCount + '</span></div>';
+    html += '<div class="row"><span class="label">Client</span><span class="val green">' + clientCount + '</span></div>';
+    var first = snaps[0], last = snaps[snaps.length-1];
+    html += '<div class="row"><span class="label">First</span><span class="val">' + new Date(first.ts).toLocaleString() + '</span></div>';
+    html += '<div class="row"><span class="label">Last</span><span class="val">' + new Date(last.ts).toLocaleString() + '</span></div>';
+    html += '</div>';
+  }
+
+  // Show last 20
+  var recent = snaps.slice(-20);
+  recent.forEach(function(s){
+    var ts = s.ts ? new Date(s.ts).toLocaleTimeString() : '?';
+    var srcTag = s.source === 'server' ? '<span class="tag tag-server">SERVER</span>' : s.source && s.source.startsWith('calibration_q') ? '<span class="tag tag-cal">★ ' + s.source.replace('calibration_','').toUpperCase() + ' CAL</span>' : '<span class="tag tag-client">CLIENT</span>';
+    html += '<div class="card" style="padding:6px">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;margin-bottom:3px"><span class="ts">Q' + (s.period||'?') + ' ' + (s.clock||'') + ' — ' + ts + '</span>' + srcTag + '<span style="font-weight:600">' + (s.away_pts||0) + '-' + (s.home_pts||0) + '</span></div>';
+    html += '<div style="font-size:10px;display:flex;gap:8px;flex-wrap:wrap">';
+    if(s.floor_score != null) html += '<span>Floor: <b style="color:#00ff88">' + (s.floor_team||'?') + ' ' + s.floor_score.toFixed(2) + '</b></span>';
+    if(s.pbp_score != null) html += '<span>PBP: <b style="color:#60a5fa">' + (s.pbp_team||'?') + ' ' + s.pbp_score.toFixed(2) + '</b></span>';
+    if(s.qtr_score != null) html += '<span>QTR: ' + (s.qtr_team||'?') + ' ' + s.qtr_score.toFixed(2) + '</span>';
+    if(s.espn_wp_home != null) html += '<span>ESPN: ' + s.espn_wp_home + '%/' + (s.espn_wp_away||'?') + '%</span>';
+    if(s.spread != null) html += '<span>Sprd: ' + s.spread + '</span>';
+    if(s.gap != null) html += '<span>Gap: ' + (s.gap>=0?'+':'') + s.gap.toFixed(2) + '</span>';
+    if(s.deficit) html += '<span>Def: ' + s.deficit + '</span>';
+    if(s.lead_sust) html += '<span>Sust: <b style="color:#ffd166">' + s.lead_sust + '</b></span>';
+    if(s.lead_class) html += '<span>Class: ' + s.lead_class + '</span>';
+    html += '</div>';
+    // I1-I5
+    if(s.i1 != null) html += '<div style="font-size:9px;color:#64748b;margin-top:2px">I1:' + s.i1 + ' I2:' + s.i2 + ' I3:' + s.i3 + ' I4:' + s.i4 + ' I5:' + s.i5 + '</div>';
+    html += '</div>';
+  });
+  if(snaps.length > 20) html += '<div style="font-size:10px;color:#64748b;text-align:center;padding:4px">Showing last 20 of ' + snaps.length + '</div>';
+  contentEl.innerHTML = html;
+}
+
+// ── Odds for selected game ──
+async function viewOdds(){
+  var gid = getSelectedGame();
+  if(!gid) return;
+
+  log('Fetching odds for ' + gid.substring(0,8) + '...', 'log-info');
+  var data = await fetchJSON(FN + 'db-api?action=get_odds&game_id=' + encodeURIComponent(gid));
+  var odds = data?.odds || [];
+  log('Found ' + odds.length + ' odds entries', odds.length > 0 ? 'log-ok' : 'log-warn');
+
+  var game = allGames.find(function(g){ return g.id === gid; });
+  var title = game ? (game.matchup || gid.substring(0,12)) : gid.substring(0,12);
+
+  var html = '<h2>💰 ODDS HISTORY — ' + escH(title) + ' (' + odds.length + ')</h2>';
+  if(odds.length === 0){
+    html += '<div class="card" style="color:#94a3b8;font-size:11px">No odds history for this game.</div>';
+  } else {
+    html += '<div class="card">';
+    odds.forEach(function(o){
+      var ts = o.ts ? new Date(o.ts).toLocaleTimeString() : '?';
+      var srcTag = o.source === 'server' ? ' <span class="tag tag-server">SVR</span>' : '';
+      html += '<div class="row"><span class="label">' + ts + srcTag + '</span><span class="val">Sprd:' + (o.home_spread||'?') + ' ML:' + (o.home_ml||'?') + '/' + (o.away_ml||'?') + ' O/U:' + (o.total||'?') + '</span></div>';
+    });
+    html += '</div>';
+  }
+  contentEl.innerHTML = html;
+}
+
+// ── Sustainability from latest snapshot ──
+async function viewSustainability(){
+  var gid = getSelectedGame();
+  if(!gid) return;
+
+  log('Fetching sustainability for ' + gid.substring(0,8) + '...', 'log-info');
+  var data = await fetchJSON(FN + 'db-api?action=get_latest_snapshots&game_ids=' + encodeURIComponent(gid));
+  var snaps = data?.snapshots || {};
+  var snap = snaps[gid];
+
+  var game = allGames.find(function(g){ return g.id === gid; });
+  var title = game ? (game.matchup || gid.substring(0,12)) : gid.substring(0,12);
+
+  var html = '<h2>🧬 SUSTAINABILITY — ' + escH(title) + '</h2>';
+  if(!snap){
+    html += '<div class="card" style="color:#94a3b8;font-size:11px">No snapshot data for this game.</div>';
+    contentEl.innerHTML = html;
+    return;
+  }
+
+  // Basic snapshot info
+  html += '<div class="card" style="font-size:11px">';
+  html += '<div class="row"><span class="label">Score</span><span class="val">' + (snap.away_pts||0) + '-' + (snap.home_pts||0) + ' Q' + (snap.period||'?') + '</span></div>';
+  html += '<div class="row"><span class="label">Floor</span><span class="val green">' + (snap.floor_team||'?') + ' ' + (snap.floor_score ? snap.floor_score.toFixed(2) : '?') + '</span></div>';
+  html += '<div class="row"><span class="label">Lead Sust</span><span class="val yellow">' + (snap.lead_sust||'—') + '</span></div>';
+  html += '<div class="row"><span class="label">Lead Class</span><span class="val">' + (snap.lead_class||'—') + '</span></div>';
+  html += '<div class="row"><span class="label">Source</span><span class="val">' + (snap.source||'?') + '</span></div>';
+  html += '</div>';
+
+  // Full sust_json if available
+  if(snap.sust_json){
+    var sust = typeof snap.sust_json === 'string' ? JSON.parse(snap.sust_json) : snap.sust_json;
+    ['home','away'].forEach(function(side){
+      var t = sust[side];
+      if(!t) return;
+      var tierColor = (t.tier||'').includes('LOCKED') ? '#00ff88' : (t.tier||'').includes('DURABLE') ? '#66bb6a' : (t.tier||'').includes('MIXED') ? '#ffd166' : (t.tier||'').includes('FRAGILE') ? '#ff9800' : (t.tier||'').includes('UNSUST') ? '#ff5252' : '#94a3b8';
+      html += '<div class="card">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:12px;font-weight:700;color:#e0e0e0">' + escH(t.teamAlias || side.toUpperCase()) + '</span><span style="font-size:12px;font-weight:700;color:' + tierColor + '">' + escH(t.tier||'?') + '</span></div>';
+      html += '<div class="row"><span class="label">Live 3PT</span><span class="val">' + (t.live3PM||0) + '/' + (t.live3PA||0) + ' (' + (t.live3Pct||'?') + '%)</span></div>';
+      html += '<div class="row"><span class="label">Season Prior</span><span class="val">' + (t.seasonPrior||'?') + '%' + (t.gotSeasonData ? '' : ' [fallback]') + '</span></div>';
+      html += '<div class="row"><span class="label">Deviation</span><span class="val">' + (t.deviation||'?') + '%</span></div>';
+      html += '<div class="row"><span class="label">Personnel</span><span class="val">' + escH(t.personnelGrade||'?') + '</span></div>';
+      html += '<div class="row"><span class="label">Elite/Non %</span><span class="val">' + (t.elitePct||0) + '% / ' + (t.nonPct||0) + '%</span></div>';
+      html += '<div class="row"><span class="label">Regression</span><span class="val">' + escH(t.regressionGrade||'?') + ' (' + (t.regressionProb||'?') + '%)</span></div>';
+      html += '<div class="row"><span class="label">Posterior</span><span class="val">' + (t.posteriorMean||'?') + '% (pull: ' + (t.regressionPull||'?') + '%)</span></div>';
+      html += '<div class="row"><span class="label">Shot Type</span><span class="val">' + escH(t.shotTypeGrade||'?') + '</span></div>';
+      html += '<div class="row"><span class="label">Shot Note</span><span class="val" style="font-size:10px">' + escH(t.shotTypeNote||'—') + '</span></div>';
+      html += '<div class="row"><span class="label">Assist Ratio</span><span class="val">' + (t.assistRatio||'?') + '%</span></div>';
+      html += '<div class="row"><span class="label">Composite</span><span class="val">' + (t.composite||'?') + '</span></div>';
+      // Personnel details
+      if(t.personnelDetails && t.personnelDetails.length > 0){
+        html += '<div style="margin-top:6px;font-size:10px;color:#a78bfa;font-weight:600">SHOOTERS</div>';
+        t.personnelDetails.forEach(function(p){
+          var hotTag = p.hot ? ' <span style="color:#ff5252;font-weight:700">HOT</span>' : '';
+          html += '<div class="row"><span class="label">' + escH(p.name) + ' [' + escH(p.tierLabel) + ']</span><span class="val">' + p.live3m + '/' + p.live3a + ' (' + p.livePct + '%) vs ' + escH(p.sznStr) + hotTag + '</span></div>';
+        });
+      }
+      html += '</div>';
+    });
+  } else {
+    html += '<div class="card" style="color:#94a3b8;font-size:11px">No sust_json in snapshot — server may not have had BDL season data for this game.</div>';
+  }
+
+  contentEl.innerHTML = html;
+  log('Sustainability loaded', 'log-ok');
+}
+
+// ── Calibration Dashboard ──
+async function viewCalibration(league){
+  log('Loading calibration data for ' + league.toUpperCase() + '...', 'log-info');
+  var data = await fetchJSON(FN + 'db-api?action=get_calibration&league=' + league);
+  if(!data || !data.games || data.games.length === 0){
+    log('No finalized games with data', 'log-warn');
+    contentEl.innerHTML = '<h2>📐 CALIBRATION — ' + league.toUpperCase() + '</h2><div class="card" style="color:#94a3b8;font-size:11px">No finalized games found. Need games with winner + snapshot data.</div>';
+    return;
+  }
+
+  var games = data.games;
+  log('Loaded ' + games.length + ' finalized games', 'log-ok');
+
+  // ── 1. Floor Score → Win Rate ──
+  var floorBuckets = {'0.50-0.59':{w:0,l:0}, '0.60-0.69':{w:0,l:0}, '0.70-0.79':{w:0,l:0}, '0.80+':{w:0,l:0}};
+  var floorTotal = {w:0, l:0};
+  games.forEach(function(g){
+    if(!g.floor_score || !g.floor_team || !g.winner) return;
+    var floorTeamWon = g.floor_team === g.winner;
+    var s = g.floor_score;
+    var bucket = s >= 0.80 ? '0.80+' : s >= 0.70 ? '0.70-0.79' : s >= 0.60 ? '0.60-0.69' : '0.50-0.59';
+    if(floorTeamWon){ floorBuckets[bucket].w++; floorTotal.w++; }
+    else { floorBuckets[bucket].l++; floorTotal.l++; }
+  });
+
+  // ── 2. Sustainability Accuracy ──
+  var sustBuckets = {};
+  games.forEach(function(g){
+    if(!g.lead_sust || !g.winner || !g.floor_team) return;
+    var tier = g.lead_sust;
+    if(!sustBuckets[tier]) sustBuckets[tier] = {held:0, lost:0};
+    // "held" = leading team at snapshot time won the game
+    var leadingTeam = g.floor_team; // floor team was leading structurally
+    if(leadingTeam === g.winner) sustBuckets[tier].held++;
+    else sustBuckets[tier].lost++;
+  });
+
+  // ── 3. Signal Accuracy (from analyses) ──
+  var signalBuckets = {BUY:{w:0,l:0}, PASS:{correct:0,wrong:0}, 'NO VALUE':{w:0,l:0}};
+  games.forEach(function(g){
+    if(!g.a_signal || !g.winner) return;
+    var sig = g.a_signal.toUpperCase();
+    if(sig.startsWith('BUY')){
+      // Extract team from "BUY LAL" etc
+      var buyTeam = sig.replace('BUY','').trim().split(' ')[0];
+      if(buyTeam === g.winner) signalBuckets.BUY.w++;
+      else signalBuckets.BUY.l++;
+    } else if(sig.startsWith('PASS')){
+      // PASS is "correct" if no clear structural winner (margin < 6)
+      var margin = Math.abs((g.home_pts||0) - (g.away_pts||0));
+      if(margin <= 5) signalBuckets.PASS.correct++;
+      else signalBuckets.PASS.wrong++;
+    } else if(sig.startsWith('NO VALUE')){
+      signalBuckets['NO VALUE'].w++;
+    }
+  });
+
+  // ── 4. FWP Accuracy ──
+  var fwpBuckets = {'50-59%':{w:0,l:0}, '60-69%':{w:0,l:0}, '70-79%':{w:0,l:0}, '80%+':{w:0,l:0}};
+  games.forEach(function(g){
+    if(!g.a_control || !g.winner) return;
+    // FWP might be stored as "LAL 75% / HOU 25%" or just "75" — extract control team's percentage
+    var fwp = null;
+    if(g.a_fwp){
+      var fwpStr = String(g.a_fwp);
+      // Try to find control team's FWP in the string
+      var ctrlPat = new RegExp(g.a_control + '\\s*(\\d+\\.?\\d*)%?', 'i');
+      var m = fwpStr.match(ctrlPat);
+      if(m) fwp = parseFloat(m[1]);
+      // Fallback: just grab first number
+      if(fwp === null || isNaN(fwp)){
+        var numM = fwpStr.match(/(\d+\.?\d*)/);
+        if(numM) fwp = parseFloat(numM[1]);
+      }
+    }
+    // Also try prediction_json
+    if((fwp === null || isNaN(fwp)) && g.a_pred){
+      try{
+        var pj = typeof g.a_pred === 'string' ? JSON.parse(g.a_pred) : g.a_pred;
+        if(pj.homeValue && pj.awayValue){
+          var ctrlIsHome = g.a_control === g.home_alias;
+          fwp = parseFloat(ctrlIsHome ? pj.homeValue.fwp : pj.awayValue.fwp);
+        } else if(pj.fwp){
+          fwp = parseFloat(pj.fwp);
+        }
+      }catch(e){}
+    }
+    if(!fwp || isNaN(fwp) || fwp < 50) return;
+    var bucket = fwp >= 80 ? '80%+' : fwp >= 70 ? '70-79%' : fwp >= 60 ? '60-69%' : '50-59%';
+    var ctrlWon = g.a_control === g.winner;
+    if(ctrlWon) fwpBuckets[bucket].w++;
+    else fwpBuckets[bucket].l++;
+  });
+
+  // ── 5. Spread Cover Rate ──
+  var spreadBuckets = {covered:0, pushed:0, missed:0, noData:0};
+  games.forEach(function(g){
+    if(!g.final_spread || !g.home_pts || !g.away_pts) { spreadBuckets.noData++; return; }
+    var spread = parseFloat(g.final_spread);
+    if(isNaN(spread)){ spreadBuckets.noData++; return; }
+    // Spread is home spread. Home actual margin = home_pts - away_pts
+    var margin = g.home_pts - g.away_pts;
+    var coverMargin = margin + spread; // positive = home covered
+    if(Math.abs(coverMargin) < 0.5) spreadBuckets.pushed++;
+    else if(coverMargin > 0) spreadBuckets.covered++;
+    else spreadBuckets.missed++;
+  });
+
+  // ── 6. Conviction → Outcome ──
+  var convBuckets = {};
+  games.forEach(function(g){
+    if(!g.a_conviction || !g.a_control || !g.winner) return;
+    var conv = g.a_conviction.toUpperCase();
+    if(!convBuckets[conv]) convBuckets[conv] = {w:0, l:0};
+    if(g.a_control === g.winner) convBuckets[conv].w++;
+    else convBuckets[conv].l++;
+  });
+
+  // ── 7. Lead Composition → Outcome ──
+  var classBuckets = {};
+  games.forEach(function(g){
+    if(!g.lead_class || !g.floor_team || !g.winner) return;
+    var cls = g.lead_class;
+    if(!classBuckets[cls]) classBuckets[cls] = {held:0, lost:0};
+    if(g.floor_team === g.winner) classBuckets[cls].held++;
+    else classBuckets[cls].lost++;
+  });
+
+  // ── RENDER ──
+  function pct(w, total){ return total > 0 ? (w/total*100).toFixed(0) + '%' : '—'; }
+  function winColor(rate){ var r = parseFloat(rate); return r >= 70 ? '#00ff88' : r >= 55 ? '#ffd166' : r >= 0 ? '#ff5252' : '#94a3b8'; }
+
+  var html = '<h2>📐 CALIBRATION — ' + league.toUpperCase() + ' (' + games.length + ' games)</h2>';
+
+  // Floor Score
+  html += '<div class="card"><div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:6px">FLOOR SCORE → WIN RATE</div>';
+  html += '<div style="font-size:9px;color:#64748b;margin-bottom:4px">When the floor team had score X, how often did they win?</div>';
+  ['0.50-0.59','0.60-0.69','0.70-0.79','0.80+'].forEach(function(b){
+    var d = floorBuckets[b]; var t = d.w + d.l; var rate = pct(d.w, t);
+    html += '<div class="row"><span class="label">Floor ' + b + '</span><span class="val" style="color:' + winColor(rate) + '">' + d.w + '-' + d.l + ' (' + rate + ')' + (t === 0 ? ' no data' : '') + '</span></div>';
+  });
+  var ft = floorTotal.w + floorTotal.l;
+  html += '<div class="row" style="border-top:1px solid #334155;margin-top:4px;padding-top:4px"><span class="label" style="font-weight:700">TOTAL</span><span class="val" style="font-weight:700;color:' + winColor(pct(floorTotal.w, ft)) + '">' + floorTotal.w + '-' + floorTotal.l + ' (' + pct(floorTotal.w, ft) + ')</span></div>';
+  html += '</div>';
+
+  // Sustainability
+  html += '<div class="card"><div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:6px">SUSTAINABILITY → OUTCOME</div>';
+  html += '<div style="font-size:9px;color:#64748b;margin-bottom:4px">When leading team\'s sustainability was X, did they hold the win?</div>';
+  var sustOrder = ['LOCKED IN','DURABLE','MIXED','FRAGILE','UNSUSTAINABLE','TOO EARLY'];
+  sustOrder.forEach(function(tier){
+    var d = sustBuckets[tier]; if(!d) return;
+    var t = d.held + d.lost; var rate = pct(d.held, t);
+    html += '<div class="row"><span class="label">' + tier + '</span><span class="val" style="color:' + winColor(rate) + '">' + d.held + '-' + d.lost + ' (' + rate + ' held)</span></div>';
+  });
+  html += '</div>';
+
+  // Signal Accuracy
+  html += '<div class="card"><div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:6px">SIGNAL → OUTCOME</div>';
+  var buyT = signalBuckets.BUY.w + signalBuckets.BUY.l;
+  html += '<div class="row"><span class="label">BUY signals</span><span class="val" style="color:' + winColor(pct(signalBuckets.BUY.w, buyT)) + '">' + signalBuckets.BUY.w + '-' + signalBuckets.BUY.l + ' (' + pct(signalBuckets.BUY.w, buyT) + ')</span></div>';
+  var passT = signalBuckets.PASS.correct + signalBuckets.PASS.wrong;
+  html += '<div class="row"><span class="label">PASS signals (close game ≤5)</span><span class="val">' + signalBuckets.PASS.correct + '/' + passT + ' correct</span></div>';
+  html += '</div>';
+
+  // FWP Accuracy
+  html += '<div class="card"><div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:6px">FWP → ACTUAL WIN RATE</div>';
+  html += '<div style="font-size:9px;color:#64748b;margin-bottom:4px">When Sonnet predicted X% FWP for control team, how often did they win?</div>';
+  ['50-59%','60-69%','70-79%','80%+'].forEach(function(b){
+    var d = fwpBuckets[b]; var t = d.w + d.l; var rate = pct(d.w, t);
+    html += '<div class="row"><span class="label">FWP ' + b + '</span><span class="val" style="color:' + winColor(rate) + '">' + d.w + '-' + d.l + ' (' + rate + ')' + (t === 0 ? ' no data' : '') + '</span></div>';
+  });
+  html += '</div>';
+
+  // Conviction
+  var convKeys = Object.keys(convBuckets).sort();
+  if(convKeys.length > 0){
+    html += '<div class="card"><div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:6px">CONVICTION → CONTROL TEAM WIN RATE</div>';
+    convKeys.forEach(function(conv){
+      var d = convBuckets[conv]; var t = d.w + d.l; var rate = pct(d.w, t);
+      html += '<div class="row"><span class="label">' + conv + '</span><span class="val" style="color:' + winColor(rate) + '">' + d.w + '-' + d.l + ' (' + rate + ')</span></div>';
+    });
+    html += '</div>';
+  }
+
+  // Lead Composition
+  var classKeys = Object.keys(classBuckets).sort();
+  if(classKeys.length > 0){
+    html += '<div class="card"><div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:6px">LEAD COMPOSITION → HELD WIN</div>';
+    html += '<div style="font-size:9px;color:#64748b;margin-bottom:4px">When lead was classified as X, did the leading team win?</div>';
+    classKeys.forEach(function(cls){
+      var d = classBuckets[cls]; var t = d.held + d.lost; var rate = pct(d.held, t);
+      html += '<div class="row"><span class="label">' + cls + '</span><span class="val" style="color:' + winColor(rate) + '">' + d.held + '-' + d.lost + ' (' + rate + ' held)</span></div>';
+    });
+    html += '</div>';
+  }
+
+  // Per-game detail table
+  html += '<div class="card"><div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:6px">GAME DETAIL (' + games.length + ')</div>';
+  games.forEach(function(g){
+    var floorCorrect = g.floor_team && g.winner && g.floor_team === g.winner;
+    var icon = floorCorrect ? '✅' : g.floor_team ? '❌' : '—';
+    var signalText = g.a_signal ? g.a_signal.substring(0,20) : '—';
+    var fwpText = g.a_fwp ? String(g.a_fwp) : '—';
+    html += '<div class="row"><span class="label" style="font-size:9px">' + icon + ' ' + (g.date||'?') + ' ' + escH(g.matchup||'?') + '</span>';
+    html += '<span class="val" style="font-size:9px">';
+    if(g.floor_score) html += 'F:' + g.floor_team + ' ' + g.floor_score.toFixed(2);
+    if(g.a_fwp) html += ' FWP:' + fwpText;
+    html += ' → ' + (g.winner||'?') + ' ' + (g.away_pts||0) + '-' + (g.home_pts||0);
+    html += '</span></div>';
+  });
+  html += '</div>';
+
+  contentEl.innerHTML = html;
+  log('Calibration loaded — ' + games.length + ' games', 'log-ok');
+}
+
+// ── Season Cache viewer ──
+async function viewSeasonCache(league){
+  log('Loading season cache for ' + league.toUpperCase() + '...', 'log-info');
+  var data = await fetchJSON(FN + 'db-api?action=get_season_cache&league=' + league + '&season=2025');
+  if(!data || !data.cache){
+    log('No season cache found', 'log-warn');
+    contentEl.innerHTML = '<h2>📈 SEASON CACHE — ' + league.toUpperCase() + '</h2><div class="card" style="color:#94a3b8;font-size:11px">No cached season data. Cache populates when server polling runs for the first time with stale/missing teams.</div>';
+    return;
+  }
+
+  var teams = Object.keys(data.cache).sort();
+  log('Found ' + teams.length + ' cached teams', 'log-ok');
+
+  var staleCount = 0;
+  var html = '<h2>📈 SEASON CACHE — ' + league.toUpperCase() + ' (' + teams.length + ' teams)</h2>';
+  html += '<div class="btn-row"><button onclick="buildSeasonCache(\'' + league + '\')">🔨 Build Cache Now</button><button onclick="invalidateSeasonCache(\'' + league + '\')">🔄 Invalidate All</button></div>';
+
+  html += '<div class="card">';
+  teams.forEach(function(alias){
+    var t = data.cache[alias];
+    var updated = t.updatedAt ? new Date(t.updatedAt) : null;
+    var ageDays = updated ? ((Date.now() - updated.getTime()) / (1000*60*60*24)).toFixed(1) : '?';
+    var fresh = updated && (Date.now() - updated.getTime()) < 7*24*60*60*1000;
+    if(!fresh) staleCount++;
+    var ageColor = fresh ? '#00ff88' : '#ff5252';
+    html += '<div class="row"><span class="label">' + alias + ' (' + (t.playerCount||0) + ' players)</span><span class="val" style="color:' + ageColor + '">' + ageDays + 'd ago' + (fresh ? '' : ' STALE') + '</span></div>';
+  });
+  html += '</div>';
+
+  if(staleCount > 0){
+    html += '<div style="font-size:10px;color:#ffd166;padding:4px">⚠ ' + staleCount + ' stale teams will refresh on next poll-live cycle</div>';
+  }
+
+  // Show player detail for each team
+  teams.forEach(function(alias){
+    var t = data.cache[alias];
+    if(!t.players || t.players.length === 0) return;
+    html += '<div class="card">';
+    html += '<div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:4px">' + alias + ' — ' + t.players.length + ' players</div>';
+    // Sort by pts descending
+    var sorted = t.players.slice().sort(function(a,b){ return (b.pts||0)-(a.pts||0); });
+    sorted.slice(0, 8).forEach(function(p){
+      var name = p.player ? (p.player.first_name + ' ' + p.player.last_name) : (p.name || '?');
+      var fg3pct = p.fg3a > 0 ? (p.fg3m / p.fg3a * 100).toFixed(1) + '%' : 'N/A';
+      html += '<div class="row"><span class="label" style="font-size:10px">' + escH(name) + '</span><span class="val" style="font-size:10px">' + (p.pts||0).toFixed(1) + 'p ' + (p.ast||0).toFixed(1) + 'a ' + (p.reb||0).toFixed(1) + 'r | 3P:' + (p.fg3m||0).toFixed(1) + '/' + (p.fg3a||0).toFixed(1) + ' (' + fg3pct + ')</span></div>';
+    });
+    html += '</div>';
+  });
+
+  contentEl.innerHTML = html;
+}
+
+async function buildSeasonCache(league){
+  log('Building season cache for ' + league.toUpperCase() + ' — this may take 30-60s...', 'log-info');
+  try{
+    var r = await fetch(FN + 'db-api?action=build_season_cache', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({league: league, season: '2025'})
+    });
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    var data = await r.json();
+    if(data.ok){
+      var teamList = data.teams ? Object.entries(data.teams).map(function(e){ return e[0] + ':' + e[1] + 'p'; }).join(', ') : '';
+      log('Season cache built! Saved: ' + (data.saved||0) + ' teams, failed: ' + (data.failed||0) + (teamList ? ' — ' + teamList : ''), data.saved > 0 ? 'log-ok' : 'log-warn');
+      if(data.errors && data.errors.length > 0){
+        data.errors.forEach(function(e){ log('  ✗ ' + e, 'log-err'); });
+      }
+      viewSeasonCache(league);
+    } else {
+      log('Build failed: ' + JSON.stringify(data), 'log-err');
+    }
+  }catch(e){
+    log('Build error: ' + e.message, 'log-err');
+  }
+}
+
+async function invalidateSeasonCache(league){
+  if(!confirm('Invalidate all ' + league.toUpperCase() + ' season cache? Next poll cycle will refresh from BDL.')) return;
+  log('Invalidating season cache for ' + league + '...', 'log-info');
+  var data = await fetchJSON(FN + 'db-api?action=invalidate_season_cache&league=' + league);
+  if(data && data.ok){
+    log('Season cache invalidated — will refresh on next poll-live cycle', 'log-ok');
+    viewSeasonCache(league);
+  } else {
+    log('Invalidation failed: ' + JSON.stringify(data), 'log-err');
+  }
+}
+
+// ── DB Stats ──
+async function checkDB(){
+  log('Checking DB stats...', 'log-info');
+  var nba = await fetchJSON(FN + 'db-api?action=stats&league=nba');
+  var ncaa = await fetchJSON(FN + 'db-api?action=stats&league=ncaamb');
+
+  if(!nba && !ncaa){ log('DB unreachable', 'log-err'); return; }
+
+  var html = '<h2>DATABASE</h2>';
+  if(nba){
+    html += '<div class="row"><span class="label">NBA Games</span><span class="val">' + (nba.games?.total||0) + ' (' + (nba.games?.finalized||0) + ' finalized)</span></div>';
+    html += '<div class="row"><span class="label">NBA Snapshots</span><span class="val">' + (nba.snapshots?.total||0) + '</span></div>';
+  }
+  if(ncaa){
+    html += '<div class="row"><span class="label">NCAAMB Games</span><span class="val">' + (ncaa.games?.total||0) + ' (' + (ncaa.games?.finalized||0) + ' finalized)</span></div>';
+    html += '<div class="row"><span class="label">NCAAMB Snapshots</span><span class="val">' + (ncaa.snapshots?.total||0) + '</span></div>';
+  }
+  statsEl.innerHTML = html;
+  statsEl.style.display = 'block';
+  log('DB stats loaded — NBA: ' + (nba?.games?.total||0) + ' games, ' + (nba?.snapshots?.total||0) + ' snapshots', 'log-ok');
+}
+
+// ── Poll State ──
+async function checkPollState(){
+  log('Checking poll state...', 'log-info');
+  var html = '<h2>⏱ POLL STATE</h2>';
+  var found = false;
+  for(var lg of ['nba','ncaamb']){
+    var data = await fetchJSON(FN + 'db-api?action=get_poll_state&league=' + lg);
+    if(!data || !data.state) continue;
+    found = true;
+    var s = data.state;
+    html += '<div class="card">';
+    html += '<div style="font-size:12px;font-weight:700;color:#60a5fa;margin-bottom:6px">' + lg.toUpperCase() + ' — ' + (s.date||'?') + '</div>';
+    html += '<div class="row"><span class="label">Games</span><span class="val">' + (s.game_count||0) + '</span></div>';
+    html += '<div class="row"><span class="label">All Final</span><span class="val ' + (s.all_final ? 'green' : 'yellow') + '">' + (s.all_final ? 'YES' : 'NO') + '</span></div>';
+    if(s.first_tip) html += '<div class="row"><span class="label">First Tip</span><span class="val">' + new Date(s.first_tip).toLocaleString() + '</span></div>';
+    if(s.last_tip) html += '<div class="row"><span class="label">Last Tip</span><span class="val">' + new Date(s.last_tip).toLocaleString() + '</span></div>';
+    if(s.fetched_at) html += '<div class="row"><span class="label">Fetched</span><span class="val">' + new Date(s.fetched_at).toLocaleString() + '</span></div>';
+    if(s.schedule_json){
+      var sched = typeof s.schedule_json === 'string' ? JSON.parse(s.schedule_json) : s.schedule_json;
+      var live = sched.filter(function(g){ return g.status === 'inprogress' || g.status === 'halftime'; }).length;
+      var final = sched.filter(function(g){ return g.status === 'closed' || g.status === 'complete'; }).length;
+      var pre = sched.length - live - final;
+      html += '<div class="row"><span class="label">Schedule</span><span class="val">' + pre + ' pre / ' + live + ' live / ' + final + ' final</span></div>';
+      sched.forEach(function(g){
+        var stColor = g.status === 'inprogress' ? '#00ff88' : g.status === 'closed' || g.status === 'complete' ? '#a78bfa' : '#94a3b8';
+        var tip = g.scheduled ? new Date(g.scheduled).toLocaleTimeString() : '?';
+        html += '<div class="row"><span class="label" style="font-size:10px">' + (g.away_alias||'?') + '@' + (g.home_alias||'?') + ' · ' + tip + '</span><span class="val" style="color:' + stColor + ';font-size:10px">' + (g.status||'?') + '</span></div>';
+      });
+    }
+    html += '</div>';
+  }
+  if(!found) html += '<div class="card" style="color:#94a3b8;font-size:11px">No poll state found. Server polling may not have run yet — check Netlify function logs.</div>';
+  contentEl.innerHTML = html;
+  log('Poll state check complete', found ? 'log-ok' : 'log-warn');
+}
+
+// ── Theses ──
+async function checkTheses(){
+  log('Fetching theses...', 'log-info');
+  var nba = await fetchJSON(FN + 'db-api?action=get_theses&league=nba');
+  var ncaa = await fetchJSON(FN + 'db-api?action=get_theses&league=ncaamb');
+
+  var theses = Object.assign({}, nba?.theses||{}, ncaa?.theses||{});
+  var keys = Object.keys(theses);
+  log('Found ' + keys.length + ' theses in DB', keys.length > 0 ? 'log-ok' : 'log-warn');
+
+  var html = '<h2>THESES (' + keys.length + ')</h2>';
+  if(keys.length === 0){
+    html += '<div class="card" style="color:#94a3b8;font-size:11px">No theses in DB yet. Generate a thesis on the main dashboard.</div>';
+  }
+  keys.forEach(function(gid){
+    var text = theses[gid] || '';
+    var preview = text.substring(0, 200) + (text.length > 200 ? '...' : '');
+    var matchup = '';
+    var m = text.match(/COMPACT THESIS\s*[—–-]\s*(.+?)[\|\n]/);
+    if(m) matchup = m[1].trim();
+    html += '<div class="card">';
+    html += '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:11px;color:#60a5fa;font-weight:600">' + (matchup || gid.substring(0,12) + '...') + '</span><span class="ts">' + gid.substring(0,8) + '</span></div>';
+    html += '<div class="thesis-box">' + escH(preview) + '</div>';
+    html += '</div>';
+  });
+  contentEl.innerHTML = html;
+}
+
+// ── Analyses ──
+async function checkAnalyses(){
+  log('Fetching analyses...', 'log-info');
+  var nba = await fetchJSON(FN + 'db-api?action=get_analyses&league=nba');
+  var ncaa = await fetchJSON(FN + 'db-api?action=get_analyses&league=ncaamb');
+
+  var analyses = [].concat(nba?.analyses||[], ncaa?.analyses||[]);
+  log('Found ' + analyses.length + ' analyses in DB', analyses.length > 0 ? 'log-ok' : 'log-warn');
+
+  var html = '<h2>ANALYSES (' + analyses.length + ')</h2>';
+  if(analyses.length === 0){
+    html += '<div class="card" style="color:#94a3b8;font-size:11px">No analyses saved yet. Run ⚡ ANALYZE on a live game.</div>';
+  }
+  analyses.forEach(function(a){
+    var ts = a.ts ? new Date(a.ts).toLocaleTimeString() : '?';
+    html += '<div class="card">';
+    html += '<div style="display:flex;justify-content:space-between;margin-bottom:4px">';
+    html += '<span style="font-size:11px;color:#a78bfa;font-weight:600">' + escH(a.matchup || a.game_id?.substring(0,12) || '?') + '</span>';
+    html += '<span style="font-size:11px;color:#60a5fa;font-weight:600">' + escH(a.control_team||'?') + ' ' + (a.control_score ? a.control_score.toFixed(2) : '?') + '</span>';
+    html += '<span class="ts">Q' + (a.period||'?') + ' ' + (a.clock||'') + ' · ' + ts + '</span>';
+    if(a.trigger && a.trigger.startsWith('auto_q')) html += ' <span class="tag tag-cal">★ ' + a.trigger.replace('auto_','').toUpperCase() + ' AUTO</span>';
+    html += '</div>';
+    html += '<div class="analysis-box">';
+    html += '<div class="row"><span class="label">Entry</span><span class="val">' + escH(a.entry||'—') + '</span></div>';
+    html += '<div class="row"><span class="label">Conviction</span><span class="val">' + escH(a.conviction||'—') + '</span></div>';
+    html += '<div class="row"><span class="label">FWP</span><span class="val">' + escH(a.fwp||'—') + '</span></div>';
+    html += '<div class="row"><span class="label">Edge</span><span class="val">' + escH(a.edge||'—') + '</span></div>';
+    html += '<div class="row"><span class="label">Signal</span><span class="val">' + escH(a.signal||'—') + '</span></div>';
+    html += '<div class="row"><span class="label">Sustainability</span><span class="val">' + escH(a.sustainability||'—') + '</span></div>';
+    if(a.prediction_json){
+      try{
+        var pj = typeof a.prediction_json === 'string' ? JSON.parse(a.prediction_json) : a.prediction_json;
+        if(pj.homeValue) html += '<div class="row"><span class="label">Home FWP</span><span class="val">' + (pj.homeValue.team||'?') + ' ' + (pj.homeValue.fwp||'?') + '% edge:' + (pj.homeValue.edge||'?') + '</span></div>';
+        if(pj.awayValue) html += '<div class="row"><span class="label">Away FWP</span><span class="val">' + (pj.awayValue.team||'?') + ' ' + (pj.awayValue.fwp||'?') + '% edge:' + (pj.awayValue.edge||'?') + '</span></div>';
+      }catch(e){}
+    }
+    html += '</div></div>';
+  });
+  contentEl.innerHTML = html;
+}
+
+// ── Clutch ──
+async function checkClutch(){
+  log('Fetching clutch data...', 'log-info');
+  var data = await fetchJSON(FN + 'db-api?action=get_clutch&league=nba');
+  var clutch = data?.clutch || {};
+  var teams = Object.keys(clutch);
+  log('Found clutch for ' + teams.length + ' teams', teams.length > 0 ? 'log-ok' : 'log-warn');
+
+  var html = '<h2>CLUTCH DATA (' + teams.length + ' teams)</h2>';
+  teams.sort().forEach(function(t){
+    var c = clutch[t];
+    html += '<div class="row"><span class="label">' + t + ' (T' + (c.tier||'?') + ')</span><span class="val">Net:' + (c.netRtg||'?') + ' Off:' + (c.offRtg||'?') + ' Def:' + (c.defRtg||'?') + ' ' + (c.wl||'') + '</span></div>';
+  });
+  contentEl.innerHTML = '<div class="card">' + html + '</div>';
+}
+
+// ── Test Write ──
+async function testWrite(){
+  log('Testing DB write...', 'log-info');
+  var result = await postJSON(FN + 'db-api?action=save_thesis', {game_id:'debug-test-' + Date.now(), league:'nba', text:'Debug test at ' + new Date().toISOString()});
+  if(result && result.ok){
+    log('Write OK — DB is accepting writes', 'log-ok');
+  } else {
+    log('Write FAILED: ' + JSON.stringify(result), 'log-err');
+  }
+}
+
+// ── Run All ──
+async function runAll(){
+  clearLog();
+  log('Running full diagnostics...', 'log-info');
+  await checkDB();
+  await checkPollState();
+  await checkTheses();
+  log('Done!', 'log-ok');
+}
+
+// ── Bulk Save Analyses from localStorage to DB ──
+async function bulkSaveAnalyses(){
+  log('Scanning localStorage for analyses...', 'log-info');
+  var saved = 0, skipped = 0, failed = 0;
+  var prefixes = ['nba4:analysis:', 'ncaamb:analysis:'];
+  
+  for(var i = 0; i < localStorage.length; i++){
+    var key = localStorage.key(i);
+    if(!key) continue;
+    var matchedPrefix = prefixes.find(function(p){ return key.startsWith(p); });
+    if(!matchedPrefix) continue;
+    
+    var gameId = key.replace(matchedPrefix, '');
+    var league = matchedPrefix.startsWith('nba') ? 'nba' : 'ncaamb';
+    
+    try{
+      var raw = JSON.parse(localStorage.getItem(key));
+      if(!raw) continue;
+      
+      var pred = raw.prediction;
+      var si = raw.sonnetIndicators;
+      
+      if(!pred && !si){ skipped++; continue; }
+      
+      var payload = {
+        game_id: gameId,
+        period: pred?.period || 0,
+        clock: '',
+        control_team: si?.controlTeam || pred?.buyTeam || null,
+        control_score: si?.score || null,
+        fwp: pred?.fwp || null,
+        edge: pred?.edge || null,
+        entry: pred?.entry || null,
+        conviction: pred?.conviction || null,
+        signal: pred?.signalType || null,
+        sustainability: (pred?.sustainability || '').substring(0, 200),
+        lead_source: pred?.leadSource || null,
+        raw_text: (raw.analysis || '').substring(0, 2000),
+        prediction_json: pred ? JSON.stringify(pred) : null,
+        indicators_json: si ? JSON.stringify({I1:si.I1, I2:si.I2, I3:si.I3, I4:si.I4, I5:si.I5, score:si.score, controlTeam:si.controlTeam}) : null,
+      };
+      
+      var result = await postJSON(FN + 'db-api?action=save_analysis', payload);
+      if(result && result.ok){ saved++; }
+      else { failed++; log('Failed: ' + gameId.substring(0,8) + ' — ' + JSON.stringify(result), 'log-err'); }
+    }catch(e){
+      failed++;
+      log('Error parsing ' + gameId.substring(0,8) + ': ' + e.message, 'log-err');
+    }
+  }
+  
+  log('Bulk save complete — saved:' + saved + ' skipped:' + skipped + ' failed:' + failed, saved > 0 ? 'log-ok' : 'log-warn');
+}
+
+// ── Quarter-End Calibration Dashboard ──
+async function viewCalibrationQ3(league, quarter){
+  quarter = quarter || 3;
+  var qLabel = 'Q' + quarter;
+  log('Loading ' + qLabel + ' calibration for ' + league.toUpperCase() + '...', 'log-info');
+  var data = await fetchJSON(FN + 'db-api?action=get_calibration_q3&league=' + league + '&quarter=' + quarter);
+  if(!data || !data.games || data.games.length === 0){
+    log('No ' + qLabel + ' calibration data yet — games need to pass ' + qLabel + '→Q' + (quarter+1) + ' transition with server polling active', 'log-warn');
+    contentEl.innerHTML = '<h2>★ ' + qLabel + ' CALIBRATION — ' + league.toUpperCase() + '</h2><div class="card" style="color:#94a3b8;font-size:11px">No ' + qLabel + ' calibration snapshots found. Server polling captures these automatically at quarter transitions. Ensure poll-live is active during games.</div>';
+    return;
+  }
+
+  var games = data.games;
+  var m = data.metrics || {};
+  log('Loaded ' + games.length + ' ' + qLabel + '-calibrated games' + (m.analysisCount ? ' (' + m.analysisCount + ' with Sonnet analysis)' : ''), 'log-ok');
+
+  function pct(w, total){ return total > 0 ? (w/total*100).toFixed(0) + '%' : '—'; }
+  function winColor(rate){ var r = parseFloat(rate); return r >= 70 ? '#00ff88' : r >= 55 ? '#ffd166' : r >= 0 ? '#ff5252' : '#94a3b8'; }
+
+  var isGold = quarter === 3;
+  var accentColor = isGold ? '#ff9800' : quarter === 2 ? '#a78bfa' : '#60a5fa';
+
+  var html = '<h2>★ ' + qLabel + (isGold ? ' GOLD STANDARD' : ' CALIBRATION') + ' — ' + league.toUpperCase() + ' (' + games.length + ' games)</h2>';
+  if(isGold) html += '<div class="card" style="font-size:10px;color:#ffd166;border-color:#ffd166">Gold standard: Snapshot captured at Q3→Q4 transition when the game is still contested, NOT at final buzzer.</div>';
+  else html += '<div class="card" style="font-size:10px;color:' + accentColor + ';border-color:' + accentColor + '">' + qLabel + '-end snapshot: How predictive is structural control after ' + quarter + ' quarter' + (quarter>1?'s':'') + '?</div>';
+
+  // ── Floor Score → Win Rate ──
+  var floorBuckets = {'0.50-0.59':{w:0,l:0}, '0.60-0.69':{w:0,l:0}, '0.70-0.79':{w:0,l:0}, '0.80+':{w:0,l:0}};
+  var floorTotal = {w:0, l:0};
+  games.forEach(function(g){
+    if(!g.q3_floor || !g.q3_floor_team || !g.winner) return;
+    var won = g.q3_floor_team === g.winner;
+    var s = g.q3_floor;
+    var bucket = s >= 0.80 ? '0.80+' : s >= 0.70 ? '0.70-0.79' : s >= 0.60 ? '0.60-0.69' : '0.50-0.59';
+    if(won){ floorBuckets[bucket].w++; floorTotal.w++; }
+    else { floorBuckets[bucket].l++; floorTotal.l++; }
+  });
+
+  html += '<div class="card"><div style="font-size:11px;font-weight:700;color:' + accentColor + ';margin-bottom:6px">★ ' + qLabel + ' FLOOR SCORE → WIN RATE</div>';
+  html += '<div style="font-size:9px;color:#64748b;margin-bottom:4px">Floor score at end of ' + qLabel + ' → did that team win?</div>';
+  ['0.50-0.59','0.60-0.69','0.70-0.79','0.80+'].forEach(function(b){
+    var d = floorBuckets[b]; var t = d.w + d.l; var rate = pct(d.w, t);
+    html += '<div class="row"><span class="label">Floor ' + b + '</span><span class="val" style="color:' + winColor(rate) + '">' + d.w + '-' + d.l + ' (' + rate + ')' + (t === 0 ? ' no data' : '') + '</span></div>';
+  });
+  var ft = floorTotal.w + floorTotal.l;
+  html += '<div class="row" style="border-top:1px solid #334155;margin-top:4px;padding-top:4px"><span class="label" style="font-weight:700">TOTAL</span><span class="val" style="font-weight:700;color:' + winColor(pct(floorTotal.w, ft)) + '">' + floorTotal.w + '-' + floorTotal.l + ' (' + pct(floorTotal.w, ft) + ')</span></div>';
+  html += '</div>';
+
+  // ── Sonnet FWP → Winner ──
+  if(m.analysisCount > 0){
+    html += '<div class="card"><div style="font-size:11px;font-weight:700;color:' + accentColor + ';margin-bottom:6px">★ ' + qLabel + ' SONNET FWP → ACTUAL WIN RATE</div>';
+    html += '<div style="font-size:9px;color:#64748b;margin-bottom:4px">FWP from automated ' + qLabel + '-end Sonnet analysis → did that team win?</div>';
+    ['50-59','60-69','70-79','80+'].forEach(function(b){
+      var d = m.fwpBuckets[b]; if(!d) return;
+      var t = d.total; var rate = pct(d.correct, t);
+      html += '<div class="row"><span class="label">FWP ' + b + '%</span><span class="val" style="color:' + winColor(rate) + '">' + d.correct + '-' + (t - d.correct) + ' (' + rate + ')' + (t === 0 ? ' no data' : '') + '</span></div>';
+    });
+    html += '</div>';
+
+    // ── BUY Signal → Winner ──
+    if(m.signalBuy.total > 0 || m.signalPass.total > 0){
+      html += '<div class="card"><div style="font-size:11px;font-weight:700;color:' + accentColor + ';margin-bottom:6px">★ ' + qLabel + ' SIGNAL → OUTCOME</div>';
+      var buyT = m.signalBuy.total;
+      html += '<div class="row"><span class="label">BUY signals</span><span class="val" style="color:' + winColor(pct(m.signalBuy.correct, buyT)) + '">' + m.signalBuy.correct + '-' + (buyT - m.signalBuy.correct) + ' (' + pct(m.signalBuy.correct, buyT) + ')</span></div>';
+      var passT = m.signalPass.total;
+      html += '<div class="row"><span class="label">PASS (close ≤5)</span><span class="val">' + m.signalPass.correct + '/' + passT + '</span></div>';
+      html += '</div>';
+    }
+  }
+
+  // ── Sustainability → Held ──
+  var sustBuckets = {};
+  games.forEach(function(g){
+    if(!g.q3_lead_sust || !g.q3_floor_team || !g.winner) return;
+    var tier = g.q3_lead_sust;
+    if(!sustBuckets[tier]) sustBuckets[tier] = {held:0, lost:0};
+    if(g.q3_floor_team === g.winner) sustBuckets[tier].held++;
+    else sustBuckets[tier].lost++;
+  });
+  var sustKeys = Object.keys(sustBuckets);
+  if(sustKeys.length > 0){
+    html += '<div class="card"><div style="font-size:11px;font-weight:700;color:' + accentColor + ';margin-bottom:6px">★ ' + qLabel + ' SUSTAINABILITY → OUTCOME</div>';
+    var sustOrder = ['LOCKED IN','DURABLE','MIXED','FRAGILE','UNSUSTAINABLE','TOO EARLY'];
+    sustOrder.forEach(function(tier){
+      var d = sustBuckets[tier]; if(!d) return;
+      var t = d.held + d.lost; var rate = pct(d.held, t);
+      html += '<div class="row"><span class="label">' + tier + '</span><span class="val" style="color:' + winColor(rate) + '">' + d.held + '-' + d.lost + ' (' + rate + ' held)</span></div>';
+    });
+    html += '</div>';
+  }
+
+  // ── Lead Composition → Held ──
+  var classBuckets = {};
+  games.forEach(function(g){
+    if(!g.q3_lead_class || !g.q3_floor_team || !g.winner) return;
+    var cls = g.q3_lead_class;
+    if(!classBuckets[cls]) classBuckets[cls] = {held:0, lost:0};
+    if(g.q3_floor_team === g.winner) classBuckets[cls].held++;
+    else classBuckets[cls].lost++;
+  });
+  var classKeys = Object.keys(classBuckets);
+  if(classKeys.length > 0){
+    html += '<div class="card"><div style="font-size:11px;font-weight:700;color:' + accentColor + ';margin-bottom:6px">★ ' + qLabel + ' LEAD COMPOSITION → HELD WIN</div>';
+    classKeys.forEach(function(cls){
+      var d = classBuckets[cls]; var t = d.held + d.lost; var rate = pct(d.held, t);
+      html += '<div class="row"><span class="label">' + cls + '</span><span class="val" style="color:' + winColor(rate) + '">' + d.held + '-' + d.lost + ' (' + rate + ' held)</span></div>';
+    });
+    html += '</div>';
+  }
+
+  // ── Per-game detail ──
+  html += '<div class="card"><div style="font-size:11px;font-weight:700;color:' + accentColor + ';margin-bottom:6px">★ ' + qLabel + ' GAME DETAIL</div>';
+  games.forEach(function(g){
+    var floorCorrect = g.q3_floor_team && g.winner && g.q3_floor_team === g.winner;
+    var icon = floorCorrect ? '✅' : g.q3_floor_team ? '❌' : '—';
+    html += '<div class="row"><span class="label" style="font-size:9px">' + icon + ' ' + (g.date||'?') + ' ' + escH(g.matchup||'?') + '</span>';
+    html += '<span class="val" style="font-size:9px">';
+    html += qLabel + ':' + (g.q3_away_pts||0) + '-' + (g.q3_home_pts||0);
+    if(g.q3_floor) html += ' F:' + g.q3_floor_team + ' ' + g.q3_floor.toFixed(2);
+    if(g.q3_lead_sust) html += ' S:' + g.q3_lead_sust;
+    if(g.q3a_fwp) html += ' FWP:' + g.q3a_fwp;
+    if(g.q3a_signal) html += ' Sig:' + escH(String(g.q3a_signal).substring(0,15));
+    html += ' → ' + (g.winner||'?') + ' ' + (g.away_pts||0) + '-' + (g.home_pts||0);
+    html += '</span></div>';
+  });
+  html += '</div>';
+
+  contentEl.innerHTML = html;
+  log(qLabel + ' calibration loaded — ' + games.length + ' games, ' + (m.analysisCount||0) + ' with Sonnet analysis', 'log-ok');
+}
+
+// ── All Quarters Comparison ──
+async function viewCalibrationAll(league){
+  log('Loading all-quarter calibration comparison...', 'log-info');
+  var results = {};
+  for(var q = 1; q <= 3; q++){
+    var data = await fetchJSON(FN + 'db-api?action=get_calibration_q3&league=' + league + '&quarter=' + q);
+    results['Q' + q] = data;
+  }
+
+  function pct(w, total){ return total > 0 ? (w/total*100).toFixed(0) + '%' : '—'; }
+  function winColor(rate){ var r = parseFloat(rate); return r >= 70 ? '#00ff88' : r >= 55 ? '#ffd166' : r >= 0 ? '#ff5252' : '#94a3b8'; }
+
+  var html = '<h2>★ ALL QUARTERS COMPARISON — ' + league.toUpperCase() + '</h2>';
+  html += '<div class="card" style="font-size:10px;color:#a78bfa;border-color:#a78bfa">Side-by-side: how predictive is each metric at Q1, Q2, and Q3?</div>';
+
+  // Floor score comparison
+  html += '<div class="card"><div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:6px">FLOOR SCORE → WIN RATE BY QUARTER</div>';
+  html += '<div class="row" style="font-weight:700;font-size:10px"><span class="label">Bucket</span><span class="val" style="display:flex;gap:16px"><span style="color:#60a5fa;width:60px">Q1</span><span style="color:#a78bfa;width:60px">Q2</span><span style="color:#ff9800;width:60px">Q3★</span></span></div>';
+  ['0.50-0.59','0.60-0.69','0.70-0.79','0.80+','TOTAL'].forEach(function(b){
+    html += '<div class="row"><span class="label" style="font-size:10px">' + b + '</span><span class="val" style="display:flex;gap:16px;font-size:10px">';
+    [1,2,3].forEach(function(q){
+      var d = results['Q' + q];
+      if(!d || !d.games || d.games.length === 0){ html += '<span style="width:60px;color:#64748b">—</span>'; return; }
+      // Compute bucket for this quarter
+      var w = 0, l = 0;
+      if(b === 'TOTAL'){
+        d.games.forEach(function(g){ if(g.q3_floor_team && g.winner){ if(g.q3_floor_team === g.winner) w++; else l++; }});
+      } else {
+        d.games.forEach(function(g){
+          if(!g.q3_floor || !g.q3_floor_team || !g.winner) return;
+          var s = g.q3_floor;
+          var gb = s >= 0.80 ? '0.80+' : s >= 0.70 ? '0.70-0.79' : s >= 0.60 ? '0.60-0.69' : '0.50-0.59';
+          if(gb !== b) return;
+          if(g.q3_floor_team === g.winner) w++; else l++;
+        });
+      }
+      var t = w + l; var rate = pct(w, t);
+      html += '<span style="width:60px;color:' + winColor(rate) + '">' + (t > 0 ? w + '-' + l + ' ' + rate : '—') + '</span>';
+    });
+    html += '</span></div>';
+  });
+  html += '</div>';
+
+  // FWP comparison
+  html += '<div class="card"><div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:6px">SONNET FWP ACCURACY BY QUARTER</div>';
+  html += '<div class="row" style="font-weight:700;font-size:10px"><span class="label">Metric</span><span class="val" style="display:flex;gap:16px"><span style="color:#60a5fa;width:60px">Q1</span><span style="color:#a78bfa;width:60px">Q2</span><span style="color:#ff9800;width:60px">Q3★</span></span></div>';
+  ['Games','Analyses','BUY Win%'].forEach(function(label){
+    html += '<div class="row"><span class="label" style="font-size:10px">' + label + '</span><span class="val" style="display:flex;gap:16px;font-size:10px">';
+    [1,2,3].forEach(function(q){
+      var d = results['Q' + q];
+      var m = d?.metrics;
+      var val = '—';
+      if(label === 'Games') val = d?.count || 0;
+      else if(label === 'Analyses') val = m?.analysisCount || 0;
+      else if(label === 'BUY Win%' && m && m.signalBuy.total > 0){
+        var rate = pct(m.signalBuy.correct, m.signalBuy.total);
+        val = m.signalBuy.correct + '/' + m.signalBuy.total + ' ' + rate;
+        html += '<span style="width:60px;color:' + winColor(rate) + '">' + val + '</span>';
+        return;
+      }
+      html += '<span style="width:60px">' + val + '</span>';
+    });
+    html += '</span></div>';
+  });
+  html += '</div>';
+
+  contentEl.innerHTML = html;
+  log('All-quarter comparison loaded', 'log-ok');
+}
+
+function escH(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ═══════════════════════════════════════════════════════════════════
+// PBP ANALYTICS — Team Shot Profiles, Player Baselines, Run Patterns
+// ═══════════════════════════════════════════════════════════════════
+
+async function viewPbpStats(){
+  log('Checking PBP DB stats...', 'log-info');
+  var nba = await fetchJSON(FN+'db-api?action=get_pbp_all&league=nba');
+  var ncaa = await fetchJSON(FN+'db-api?action=get_pbp_all&league=ncaamb');
+  var nbaCount = nba ? nba.total : 0;
+  var ncaaCount = ncaa ? ncaa.total : 0;
+  var nbaShots = 0, nbaTos = 0, ncaaShots = 0, ncaaTos = 0;
+  if(nba && nba.games) nba.games.forEach(function(g){ nbaShots += g.shots||0; nbaTos += g.tos||0; });
+  if(ncaa && ncaa.games) ncaa.games.forEach(function(g){ ncaaShots += g.shots||0; ncaaTos += g.tos||0; });
+  // Unique teams
+  var nbaTeams = {};
+  if(nba && nba.games) nba.games.forEach(function(g){ nbaTeams[g.home]=true; nbaTeams[g.away]=true; });
+  var ncaaTeams = {};
+  if(ncaa && ncaa.games) ncaa.games.forEach(function(g){ ncaaTeams[g.home]=true; ncaaTeams[g.away]=true; });
+
+  var h = '<h2>📦 PBP DATABASE STATS</h2><div class="card">';
+  h += '<div class="row"><span class="label">NBA Games</span><span class="val blue">'+nbaCount+'</span></div>';
+  h += '<div class="row"><span class="label">NBA Teams</span><span class="val">'+Object.keys(nbaTeams).length+'</span></div>';
+  h += '<div class="row"><span class="label">NBA Total Shots</span><span class="val">'+nbaShots.toLocaleString()+'</span></div>';
+  h += '<div class="row"><span class="label">NBA Total TOs</span><span class="val">'+nbaTos.toLocaleString()+'</span></div>';
+  h += '<div class="row"><span class="label">NCAAMB Games</span><span class="val blue">'+ncaaCount+'</span></div>';
+  h += '<div class="row"><span class="label">NCAAMB Teams</span><span class="val">'+Object.keys(ncaaTeams).length+'</span></div>';
+  h += '<div class="row"><span class="label">NCAAMB Total Shots</span><span class="val">'+ncaaShots.toLocaleString()+'</span></div>';
+  h += '</div>';
+  contentEl.innerHTML = h;
+  log('PBP DB: NBA '+nbaCount+' games ('+nbaShots+' shots), NCAAMB '+ncaaCount+' games ('+ncaaShots+' shots)', 'log-ok');
+}
+
+async function viewTeamShots(league){
+  log('Loading team shot profiles for '+league.toUpperCase()+'...', 'log-info');
+  var data = await fetchJSON(FN+'db-api?action=get_pbp_all&league='+league);
+  if(!data || !data.games || data.games.length === 0){ log('No PBP data yet for '+league, 'log-warn'); return; }
+
+  // Aggregate per-team zone data
+  var teams = {};
+  data.games.forEach(function(g){
+    if(!g.pbp) return;
+    ['home','away'].forEach(function(side){
+      var alias = side === 'home' ? g.home : g.away;
+      var tm = g.pbp[side]; if(!tm) return;
+      if(!teams[alias]) teams[alias] = {gp:0, threes:{m:0,a:0,corner:{m:0,a:0},above:{m:0,a:0}}, rim:{m:0,a:0}, mid:{m:0,a:0}, tos:{total:0,forced:0,unforced:0}, shotDiet:{total:0,three:0,rim:0,mid:0}};
+      var t = teams[alias]; t.gp++;
+      if(tm.threes){ t.threes.m+=tm.threes.made||0; t.threes.a+=tm.threes.att||0; if(tm.threes.corner){t.threes.corner.m+=tm.threes.corner.made||0; t.threes.corner.a+=tm.threes.corner.att||0;} if(tm.threes.above){t.threes.above.m+=tm.threes.above.made||0; t.threes.above.a+=tm.threes.above.att||0;} }
+      if(tm.rim){ t.rim.m+=tm.rim.made||0; t.rim.a+=tm.rim.att||0; }
+      if(tm.mid){ t.mid.m+=tm.mid.made||0; t.mid.a+=tm.mid.att||0; }
+      if(tm.tos){ t.tos.total+=tm.tos.total||0; t.tos.forced+=tm.tos.forced||0; t.tos.unforced+=tm.tos.unforced||0; }
+      if(tm.shotDiet){ var sd=tm.shotDiet; t.shotDiet.total+=parseInt(sd.total)||0; }
+    });
+  });
+
+  // Sort by games played
+  var sorted = Object.entries(teams).sort(function(a,b){ return b[1].gp - a[1].gp; });
+
+  var h = '<h2>🎯 TEAM SHOT PROFILES — '+league.toUpperCase()+' ('+data.total+' games)</h2>';
+  h += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px;font-family:monospace">';
+  h += '<tr style="border-bottom:1px solid #334155;color:#94a3b8"><th style="text-align:left;padding:4px">Team</th><th>GP</th><th>3PT%</th><th>Corner</th><th>Above</th><th>Rim%</th><th>Mid%</th><th>TOs/g</th><th>F%</th><th>Diet</th></tr>';
+
+  sorted.forEach(function(entry){
+    var a = entry[0], t = entry[1];
+    var t3p = t.threes.a>0 ? (t.threes.m/t.threes.a*100).toFixed(1) : '—';
+    var c3p = t.threes.corner.a>0 ? (t.threes.corner.m/t.threes.corner.a*100).toFixed(1) : '—';
+    var a3p = t.threes.above.a>0 ? (t.threes.above.m/t.threes.above.a*100).toFixed(1) : '—';
+    var rp = t.rim.a>0 ? (t.rim.m/t.rim.a*100).toFixed(1) : '—';
+    var mp = t.mid.a>0 ? (t.mid.m/t.mid.a*100).toFixed(1) : '—';
+    var tpg = t.gp>0 ? (t.tos.total/t.gp).toFixed(1) : '—';
+    var fp = t.tos.total>0 ? (t.tos.forced/t.tos.total*100).toFixed(0)+'%' : '—';
+    // Diet: ratio of rim+mid vs 3PT attempts
+    var totalFGA = t.threes.a + t.rim.a + t.mid.a;
+    var rimShare = totalFGA>0 ? (t.rim.a/totalFGA*100).toFixed(0) : '?';
+    var threeShare = totalFGA>0 ? (t.threes.a/totalFGA*100).toFixed(0) : '?';
+    var diet = parseInt(rimShare)>=35 ? 'INTERIOR' : parseInt(threeShare)>=40 ? 'PERIMETER' : 'BALANCED';
+    var dCol = diet==='INTERIOR' ? '#00ff88' : diet==='PERIMETER' ? '#ff9800' : '#ffd166';
+
+    var t3col = parseFloat(t3p)>=38 ? '#00ff88' : parseFloat(t3p)>=34 ? '#ffd166' : '#ff5252';
+    var rcol = parseFloat(rp)>=60 ? '#00ff88' : parseFloat(rp)>=50 ? '#ffd166' : '#ff5252';
+
+    h += '<tr style="border-bottom:1px solid #1e293b">';
+    h += '<td style="padding:3px 4px;color:#e2e8f0;font-weight:600">'+escH(a)+'</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+t.gp+'</td>';
+    h += '<td style="text-align:center;color:'+t3col+'">'+t3p+'%<span style="color:#64748b;font-size:8px"> ('+t.threes.m+'/'+t.threes.a+')</span></td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+c3p+'%</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+a3p+'%</td>';
+    h += '<td style="text-align:center;color:'+rcol+'">'+rp+'%<span style="color:#64748b;font-size:8px"> ('+t.rim.m+'/'+t.rim.a+')</span></td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+mp+'%</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+tpg+'</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+fp+'</td>';
+    h += '<td style="text-align:center;color:'+dCol+';font-weight:600;font-size:9px">'+diet+'</td>';
+    h += '</tr>';
+  });
+  h += '</table></div>';
+  contentEl.innerHTML = h;
+  log('Team shot profiles loaded: '+sorted.length+' teams from '+data.total+' games', 'log-ok');
+}
+
+async function viewPlayerZones(league){
+  log('Loading player zone baselines for '+league.toUpperCase()+'...', 'log-info');
+  var data = await fetchJSON(FN+'db-api?action=get_pbp_all&league='+league);
+  if(!data || !data.games || data.games.length === 0){ log('No PBP data yet for '+league, 'log-warn'); return; }
+
+  // Aggregate per-player zone data
+  var players = {};
+  data.games.forEach(function(g){
+    if(!g.pbp) return;
+    ['home','away'].forEach(function(side){
+      var alias = side === 'home' ? g.home : g.away;
+      var tm = g.pbp[side]; if(!tm) return;
+      // 3PT by player
+      if(tm.threes && tm.threes.byPlayer) tm.threes.byPlayer.forEach(function(p){
+        var key = p.name+'|'+alias;
+        if(!players[key]) players[key] = {name:p.name, team:alias, gp:0, three:{m:0,a:0}, rim:{m:0,a:0}, mid:{m:0,a:0}};
+        players[key].three.m += p.made||0; players[key].three.a += p.att||0;
+      });
+      // Rim by player
+      if(tm.rim && tm.rim.byPlayer) tm.rim.byPlayer.forEach(function(p){
+        var key = p.name+'|'+alias;
+        if(!players[key]) players[key] = {name:p.name, team:alias, gp:0, three:{m:0,a:0}, rim:{m:0,a:0}, mid:{m:0,a:0}};
+        players[key].rim.m += p.made||0; players[key].rim.a += p.att||0;
+      });
+      // Mid by player
+      if(tm.mid && tm.mid.byPlayer) tm.mid.byPlayer.forEach(function(p){
+        var key = p.name+'|'+alias;
+        if(!players[key]) players[key] = {name:p.name, team:alias, gp:0, three:{m:0,a:0}, rim:{m:0,a:0}, mid:{m:0,a:0}};
+        players[key].mid.m += p.made||0; players[key].mid.a += p.att||0;
+      });
+      // Track games
+      var seenPlayers = {};
+      ['threes','rim','mid'].forEach(function(z){ if(tm[z] && tm[z].byPlayer) tm[z].byPlayer.forEach(function(p){
+        var key = p.name+'|'+alias;
+        if(!seenPlayers[key]){ seenPlayers[key]=true; if(players[key]) players[key].gp++; }
+      }); });
+    });
+  });
+
+  // Sort by total attempts
+  var sorted = Object.values(players).filter(function(p){ return (p.three.a+p.rim.a+p.mid.a)>=10; })
+    .sort(function(a,b){ return (b.three.a+b.rim.a+b.mid.a)-(a.three.a+a.rim.a+a.mid.a); });
+
+  var h = '<h2>👤 PLAYER ZONE BASELINES — '+league.toUpperCase()+' ('+data.total+' games, '+sorted.length+' players with 10+ att)</h2>';
+  h += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px;font-family:monospace">';
+  h += '<tr style="border-bottom:1px solid #334155;color:#94a3b8"><th style="text-align:left;padding:4px">Player</th><th>Team</th><th>GP</th><th>3PT</th><th>3PT%</th><th>Rim</th><th>Rim%</th><th>Mid</th><th>Mid%</th><th>Profile</th></tr>';
+
+  sorted.slice(0,100).forEach(function(p){
+    var t3p = p.three.a>0 ? (p.three.m/p.three.a*100).toFixed(1) : '—';
+    var rp = p.rim.a>0 ? (p.rim.m/p.rim.a*100).toFixed(1) : '—';
+    var mp = p.mid.a>0 ? (p.mid.m/p.mid.a*100).toFixed(1) : '—';
+    var total = p.three.a + p.rim.a + p.mid.a;
+    var profile = '';
+    if(p.rim.a/total >= 0.5) profile = 'RIM';
+    else if(p.three.a/total >= 0.5) profile = 'SHOOTER';
+    else if(p.mid.a/total >= 0.3) profile = 'MID';
+    else profile = 'BALANCED';
+    var pCol = profile==='RIM'?'#00ff88':profile==='SHOOTER'?'#ff9800':profile==='MID'?'#ffd166':'#94a3b8';
+
+    h += '<tr style="border-bottom:1px solid #1e293b">';
+    h += '<td style="padding:3px 4px;color:#e2e8f0;font-weight:600;white-space:nowrap">'+escH(p.name)+'</td>';
+    h += '<td style="text-align:center;color:#94a3b8;font-size:9px">'+escH(p.team)+'</td>';
+    h += '<td style="text-align:center;color:#64748b">'+p.gp+'</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+p.three.m+'/'+p.three.a+'</td>';
+    h += '<td style="text-align:center;color:'+(parseFloat(t3p)>=38?'#00ff88':parseFloat(t3p)>=34?'#ffd166':'#ff5252')+'">'+t3p+'%</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+p.rim.m+'/'+p.rim.a+'</td>';
+    h += '<td style="text-align:center;color:'+(parseFloat(rp)>=60?'#00ff88':parseFloat(rp)>=50?'#ffd166':'#ff5252')+'">'+rp+'%</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+p.mid.m+'/'+p.mid.a+'</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+mp+'%</td>';
+    h += '<td style="text-align:center;color:'+pCol+';font-weight:600;font-size:9px">'+profile+'</td>';
+    h += '</tr>';
+  });
+  h += '</table></div>';
+  contentEl.innerHTML = h;
+  log('Player baselines loaded: '+sorted.length+' players from '+data.total+' games', 'log-ok');
+}
+
+async function viewRunPatterns(league){
+  log('Loading run pattern analysis for '+league.toUpperCase()+'...', 'log-info');
+  var data = await fetchJSON(FN+'db-api?action=get_pbp_all&league='+league);
+  if(!data || !data.games || data.games.length === 0){ log('No PBP data yet for '+league, 'log-warn'); return; }
+
+  // Analyze all runs across all games
+  var allRuns = [];
+  var teamRuns = {};
+  data.games.forEach(function(g){
+    if(!g.pbp || !g.pbp.runs) return;
+    g.pbp.runs.forEach(function(run){
+      var mc = {}; (run.mechanism||[]).forEach(function(m){ mc[m]=(mc[m]||0)+1; });
+      var total = (run.mechanism||[]).length || 1;
+      var structPts = (mc['2PT']||0)*2 + (mc['FT']||0)*1;
+      var varPts = (mc['3PT']||0)*3;
+      var totalPts = structPts + varPts;
+      var structPct = totalPts > 0 ? Math.round(structPts/totalPts*100) : 0;
+      var type = structPct >= 60 ? 'STRUCTURAL' : structPct >= 40 ? 'MIXED' : 'VARIANCE';
+      var entry = {team:run.team, pts:run.pts, q:run.q, structPct:structPct, type:type, mc:mc, game_id:g.game_id, opp:run.team===g.home?g.away:g.home};
+      allRuns.push(entry);
+      if(!teamRuns[run.team]) teamRuns[run.team] = [];
+      teamRuns[run.team].push(entry);
+    });
+  });
+
+  // Summary stats
+  var structural = allRuns.filter(function(r){return r.type==='STRUCTURAL';});
+  var mixed = allRuns.filter(function(r){return r.type==='MIXED';});
+  var variance = allRuns.filter(function(r){return r.type==='VARIANCE';});
+  var bigRuns = allRuns.filter(function(r){return r.pts>=10;});
+  var q4Runs = allRuns.filter(function(r){return r.q>=4 || (r.q+'').includes('4');});
+  var q1Runs = allRuns.filter(function(r){return r.q===1 || r.q==='1';});
+
+  var h = '<h2>📊 RUN PATTERN ANALYSIS — '+league.toUpperCase()+' ('+data.total+' games, '+allRuns.length+' total runs)</h2>';
+
+  // Summary card
+  h += '<div class="card"><div style="font-size:11px;color:#f5a62a;font-weight:600;margin-bottom:6px">OVERVIEW</div>';
+  h += '<div class="row"><span class="label">Total Runs</span><span class="val">'+allRuns.length+'</span></div>';
+  h += '<div class="row"><span class="label">Avg per game</span><span class="val">'+(data.total>0?(allRuns.length/data.total).toFixed(1):'—')+'</span></div>';
+  h += '<div class="row"><span class="label">Structural (≥60% paint/FT)</span><span class="val green">'+structural.length+' ('+(allRuns.length>0?(structural.length/allRuns.length*100).toFixed(0):'0')+'%)</span></div>';
+  h += '<div class="row"><span class="label">Mixed (40-59%)</span><span class="val yellow">'+mixed.length+' ('+(allRuns.length>0?(mixed.length/allRuns.length*100).toFixed(0):'0')+'%)</span></div>';
+  h += '<div class="row"><span class="label">Variance (≥60% 3PT)</span><span class="val red">'+variance.length+' ('+(allRuns.length>0?(variance.length/allRuns.length*100).toFixed(0):'0')+'%)</span></div>';
+  h += '<div class="row"><span class="label">Big runs (10+ pts)</span><span class="val blue">'+bigRuns.length+'</span></div>';
+  h += '<div class="row"><span class="label">Q4 runs</span><span class="val">'+q4Runs.length+'</span></div>';
+  h += '<div class="row"><span class="label">Avg run size</span><span class="val">'+(allRuns.length>0?(allRuns.reduce(function(s,r){return s+r.pts;},0)/allRuns.length).toFixed(1):'—')+' pts</span></div>';
+  h += '</div>';
+
+  // Big runs breakdown
+  if(bigRuns.length > 0){
+    h += '<div class="card"><div style="font-size:11px;color:#60a5fa;font-weight:600;margin-bottom:6px">BIG RUNS (10+ PTS) — '+bigRuns.length+' total</div>';
+    var bigStruct = bigRuns.filter(function(r){return r.type==='STRUCTURAL';}).length;
+    var bigVar = bigRuns.filter(function(r){return r.type==='VARIANCE';}).length;
+    h += '<div class="row"><span class="label">Structural big runs</span><span class="val green">'+bigStruct+' ('+(bigRuns.length>0?(bigStruct/bigRuns.length*100).toFixed(0):'0')+'%)</span></div>';
+    h += '<div class="row"><span class="label">Variance big runs</span><span class="val red">'+bigVar+' ('+(bigRuns.length>0?(bigVar/bigRuns.length*100).toFixed(0):'0')+'%)</span></div>';
+    h += '</div>';
+  }
+
+  // Per-team run profiles — sorted by structural %
+  var teamSorted = Object.entries(teamRuns).sort(function(a,b){
+    var aS = a[1].filter(function(r){return r.type==='STRUCTURAL';}).length / a[1].length;
+    var bS = b[1].filter(function(r){return r.type==='STRUCTURAL';}).length / b[1].length;
+    return bS - aS;
+  });
+
+  h += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px;font-family:monospace">';
+  h += '<tr style="border-bottom:1px solid #334155;color:#94a3b8"><th style="text-align:left;padding:4px">Team</th><th>Runs</th><th>Avg Pts</th><th>Struct%</th><th>Mixed%</th><th>Var%</th><th>Big</th><th>Q4</th><th>Profile</th></tr>';
+
+  teamSorted.forEach(function(entry){
+    var a = entry[0], runs = entry[1];
+    var s = runs.filter(function(r){return r.type==='STRUCTURAL';}).length;
+    var m = runs.filter(function(r){return r.type==='MIXED';}).length;
+    var v = runs.filter(function(r){return r.type==='VARIANCE';}).length;
+    var big = runs.filter(function(r){return r.pts>=10;}).length;
+    var q4 = runs.filter(function(r){return r.q>=4||(r.q+'').includes('4');}).length;
+    var avgPts = (runs.reduce(function(sum,r){return sum+r.pts;},0)/runs.length).toFixed(1);
+    var sPct = (s/runs.length*100).toFixed(0);
+    var mPct = (m/runs.length*100).toFixed(0);
+    var vPct = (v/runs.length*100).toFixed(0);
+    var profile = parseInt(sPct)>=50 ? 'PAINT' : parseInt(vPct)>=40 ? '3PT-DEP' : 'BALANCED';
+    var pCol = profile==='PAINT'?'#00ff88':profile==='3PT-DEP'?'#ff9800':'#ffd166';
+
+    h += '<tr style="border-bottom:1px solid #1e293b">';
+    h += '<td style="padding:3px 4px;color:#e2e8f0;font-weight:600">'+escH(a)+'</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+runs.length+'</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+avgPts+'</td>';
+    h += '<td style="text-align:center;color:#00ff88">'+sPct+'%</td>';
+    h += '<td style="text-align:center;color:#ffd166">'+mPct+'%</td>';
+    h += '<td style="text-align:center;color:#ff9800">'+vPct+'%</td>';
+    h += '<td style="text-align:center;color:#60a5fa">'+big+'</td>';
+    h += '<td style="text-align:center;color:#94a3b8">'+q4+'</td>';
+    h += '<td style="text-align:center;color:'+pCol+';font-weight:600;font-size:9px">'+profile+'</td>';
+    h += '</tr>';
+  });
+  h += '</table></div>';
+  contentEl.innerHTML = h;
+  log('Run patterns loaded: '+allRuns.length+' runs across '+Object.keys(teamRuns).length+' teams from '+data.total+' games', 'log-ok');
+}
+
+// ── BDL Endpoint Probe ──
+async function bdlProbe(league, test) {
+  log('🔬 BDL Probe: league=' + league + ' test=' + test + ' ...', 'log-warn');
+  var url = FN + 'test-bdl?league=' + league;
+  if (test && test !== 'all') url += '&test=' + test;
+
+  try {
+    var start = Date.now();
+    var data = await fetchJSON(url);
+    var elapsed = Date.now() - start;
+
+    if (data.error) {
+      log('❌ Probe error: ' + data.error, 'log-err');
+      return;
+    }
+
+    log('✅ Probe complete in ' + elapsed + 'ms (' + (data._summary?.testsRun || '?') + ' tests, server: ' + (data._summary?.totalElapsed || '?') + ')', 'log-ok');
+
+    // Render results
+    var h = '<h2 style="color:#fbbf24">🔬 BDL PROBE — ' + league.toUpperCase() + '</h2>';
+
+    // Game info
+    if (data._game) {
+      var g = data._game;
+      h += '<div class="card" style="border-color:rgba(251,191,36,.3)">';
+      h += '<div style="color:#fbbf24;font-weight:600;font-size:12px;margin-bottom:4px">TEST GAME</div>';
+      h += '<div style="color:#e2e8f0;font-size:13px">' + escH(g.away || '?') + ' @ ' + escH(g.home || '?') + '  <span style="color:#94a3b8">' + escH(g.score || '') + '  ' + escH(g.status || '') + '</span></div>';
+      h += '<div style="color:#64748b;font-size:10px;margin-top:2px">ID: ' + g.id + '  |  Date: ' + escH(g.date || '') + '  |  HomeID: ' + (g.homeId || '?') + '  AwayID: ' + (g.awayId || '?') + '</div>';
+      h += '</div>';
+    }
+
+    // Render each test section
+    var sections = Object.keys(data).filter(function(k) { return k !== '_game' && k !== '_summary'; });
+    sections.forEach(function(sec) {
+      h += renderProbeSection(sec, data[sec]);
+    });
+
+    // Summary
+    if (data._summary) {
+      h += '<div class="card" style="border-color:rgba(251,191,36,.2)">';
+      h += '<div style="color:#fbbf24;font-size:10px;font-weight:600">SUMMARY</div>';
+      h += '<pre style="color:#94a3b8;font-size:10px;white-space:pre-wrap;margin:4px 0 0 0">' + escH(JSON.stringify(data._summary, null, 2)) + '</pre>';
+      h += '</div>';
+    }
+
+    contentEl.innerHTML = h;
+  } catch (e) {
+    log('❌ Probe failed: ' + e.message, 'log-err');
+  }
+}
+
+function renderProbeSection(name, data) {
+  if (!data) return '';
+  var h = '<div class="card" style="border-color:rgba(251,191,36,.15)">';
+  var icon = name === 'plays' ? '🎬' : name === 'stats' ? '📊' : name === 'box_scores' ? '📦' :
+             name === 'lineups' ? '👥' : name === 'advanced' ? '🔬' : name === 'game_detail' ? '🎮' :
+             name === 'games_list' ? '📅' : name === 'ncaamb_specific' ? '🎓' : '📋';
+  h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
+  h += '<span style="color:#fbbf24;font-weight:700;font-size:12px;letter-spacing:.5px">' + icon + ' ' + escH(name.toUpperCase()) + '</span>';
+  if (data.elapsed) h += '<span style="color:#64748b;font-size:10px">' + escH(data.elapsed) + '</span>';
+  h += '</div>';
+
+  // Error state
+  if (data.error) {
+    h += '<div style="color:#ff5252;font-size:11px">ERROR: ' + escH(String(data.error)) + '</div>';
+    h += '</div>';
+    return h;
+  }
+
+  // Field inventory (the most important part)
+  if (data.fieldInventory && data.fieldInventory.fields) {
+    var fi = data.fieldInventory;
+    h += '<div style="color:#00ff88;font-size:11px;margin-bottom:4px">' + fi.count + ' records, ' + fi.fieldCount + ' fields</div>';
+    h += '<div style="background:rgba(0,0,0,.3);border-radius:4px;padding:6px;margin:4px 0">';
+    h += '<table style="width:100%;font-size:10px;border-collapse:collapse">';
+    h += '<tr style="color:#64748b"><th style="text-align:left;padding:1px 4px">Field</th><th style="text-align:left;padding:1px 4px">Type</th><th style="text-align:left;padding:1px 4px">Sample</th></tr>';
+    Object.keys(fi.fields).forEach(function(f) {
+      var fld = fi.fields[f];
+      var typeCol = fld.type === 'number' ? '#60a5fa' : fld.type === 'string' ? '#fbbf24' :
+                    fld.type === 'boolean' ? '#00ff88' : fld.type === 'null' ? '#ff5252' : '#a78bfa';
+      h += '<tr style="border-top:1px solid rgba(255,255,255,.04)">';
+      h += '<td style="padding:2px 4px;color:#e2e8f0;font-family:monospace">' + escH(f) + '</td>';
+      h += '<td style="padding:2px 4px;color:' + typeCol + '">' + escH(fld.type) + '</td>';
+      h += '<td style="padding:2px 4px;color:#94a3b8;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escH(String(fld.sample ?? '')) + '</td>';
+      h += '</tr>';
+    });
+    h += '</table></div>';
+  }
+
+  // Event types (for plays)
+  if (data.eventTypes) {
+    h += '<div style="color:#a78bfa;font-size:11px;font-weight:600;margin-top:6px">EVENT TYPES</div>';
+    var types = Object.entries(data.eventTypes).sort(function(a,b){ return b[1]-a[1]; });
+    h += '<div style="display:flex;flex-wrap:wrap;gap:3px;margin:4px 0">';
+    types.forEach(function(t) {
+      h += '<span style="background:rgba(167,139,250,.12);border:1px solid rgba(167,139,250,.2);border-radius:3px;padding:1px 5px;font-size:9px;color:#c4b5fd">' + escH(t[0]) + ' <b style="color:#e2e8f0">' + t[1] + '</b></span>';
+    });
+    h += '</div>';
+  }
+
+  // Coordinate analysis (for plays)
+  if (data.coordinateAnalysis) {
+    var ca = data.coordinateAnalysis;
+    h += '<div style="color:#60a5fa;font-size:11px;font-weight:600;margin-top:6px">COORDINATES</div>';
+    if (!ca.hasCoordinates) {
+      h += '<div style="color:#ff5252;font-size:10px">❌ No coordinates in PBP data</div>';
+    } else {
+      h += '<div style="font-size:10px;color:#94a3b8;margin:2px 0">';
+      h += ca.withCoords + '/' + ca.totalEvents + ' events have coords | ';
+      h += ca.shootingWithCoords + ' shooting events | ';
+      h += 'X: ' + ca.x.min + '–' + ca.x.max + ' (μ' + ca.x.mean + ') | ';
+      h += 'Y: ' + ca.y.min + '–' + ca.y.max + ' (μ' + ca.y.mean + ')';
+      h += '</div>';
+      if (ca.yDistribution) {
+        h += '<div style="font-size:10px;color:#94a3b8">Y dist: <15=' + ca.yDistribution.y_lt_15 + ' | 15-35=' + ca.yDistribution.y_15_to_35 + ' | >35=' + ca.yDistribution.y_gt_35 + '</div>';
+      }
+      if (ca.rimShotCoords) {
+        h += '<div style="color:#00ff88;font-size:10px;margin-top:3px">RIM SHOTS (basket location):</div>';
+        ca.rimShotCoords.forEach(function(s) {
+          h += '<div style="font-size:9px;color:#94a3b8;margin-left:8px">(' + s.x + ', ' + s.y + ') ' + escH(s.team) + ' ' + escH(s.type || '') + '</div>';
+        });
+      }
+      if (ca.threePointCoords) {
+        h += '<div style="color:#fbbf24;font-size:10px;margin-top:3px">3PT SHOTS (' + ca.threePointCoords.sampleCount + ' total):</div>';
+        ca.threePointCoords.samples.forEach(function(s) {
+          h += '<div style="font-size:9px;color:#94a3b8;margin-left:8px">(' + s.x + ', ' + s.y + ') ' + escH(s.team) + ' ' + escH(s.type || '') + '</div>';
+        });
+      }
+    }
+  }
+
+  // Pagination (for plays)
+  if (data.paginationTest) {
+    var pt = data.paginationTest;
+    h += '<div style="color:#ffd166;font-size:11px;font-weight:600;margin-top:6px">PAGINATION</div>';
+    h += '<div style="font-size:10px;color:#94a3b8">';
+    h += 'First page: ' + pt.firstPageCount + ' events | ';
+    h += 'Has next_cursor: ' + (pt.hasNextCursor ? '✅ YES' : '❌ NO') + ' | ';
+    if (pt.secondPageCount != null) h += 'Second page: ' + pt.secondPageCount + ' events';
+    h += '</div>';
+    if (pt.meta) h += '<div style="font-size:9px;color:#64748b">meta: ' + escH(JSON.stringify(pt.meta)) + '</div>';
+  }
+
+  // Per-page comparison (for plays)
+  ['per_page_100', 'per_page_250', 'per_page_500'].forEach(function(k) {
+    if (data[k]) {
+      var pp = data[k];
+      var col = pp.error ? '#ff5252' : '#94a3b8';
+      h += '<div style="font-size:10px;color:' + col + '">' + escH(k) + ': ' + (pp.error ? 'ERROR ' + pp.status : pp.returned + ' events') + (pp.elapsed ? ' (' + pp.elapsed + ')' : '') + '</div>';
+    }
+  });
+
+  // Team breakdown (for stats)
+  if (data.teamBreakdown) {
+    h += '<div style="color:#60a5fa;font-size:11px;font-weight:600;margin-top:6px">TEAM TOTALS</div>';
+    h += '<table style="width:100%;font-size:10px;border-collapse:collapse;margin:4px 0">';
+    h += '<tr style="color:#64748b"><th style="text-align:left;padding:1px 3px">Team</th><th>P</th><th>PTS</th><th>FGM</th><th>FGA</th><th>3M</th><th>3A</th><th>FTM</th><th>FTA</th><th>AST</th><th>STL</th><th>BLK</th><th>TOV</th><th>OREB</th></tr>';
+    Object.keys(data.teamBreakdown).forEach(function(tm) {
+      var t = data.teamBreakdown[tm];
+      h += '<tr style="border-top:1px solid rgba(255,255,255,.04);color:#e2e8f0">';
+      h += '<td style="padding:2px 3px;font-weight:600">' + escH(tm) + '</td>';
+      h += '<td style="text-align:center">' + t.players + '</td>';
+      h += '<td style="text-align:center;color:#00ff88">' + t.totalPts + '</td>';
+      h += '<td style="text-align:center">' + t.totalFgm + '</td>';
+      h += '<td style="text-align:center">' + t.totalFga + '</td>';
+      h += '<td style="text-align:center">' + (t.totalFg3m||0) + '</td>';
+      h += '<td style="text-align:center">' + (t.totalFg3a||0) + '</td>';
+      h += '<td style="text-align:center">' + (t.totalFtm||0) + '</td>';
+      h += '<td style="text-align:center">' + (t.totalFta||0) + '</td>';
+      h += '<td style="text-align:center">' + (t.totalAst||0) + '</td>';
+      h += '<td style="text-align:center">' + (t.totalStl||0) + '</td>';
+      h += '<td style="text-align:center">' + (t.totalBlk||0) + '</td>';
+      h += '<td style="text-align:center">' + (t.totalTov||0) + '</td>';
+      h += '<td style="text-align:center">' + (t.totalOreb||0) + '</td>';
+      h += '</tr>';
+    });
+    h += '</table>';
+  }
+
+  // Score tracking (for plays)
+  if (data.scoreTracking) {
+    var st = data.scoreTracking;
+    h += '<div style="font-size:10px;color:#94a3b8;margin-top:4px">Score tracking: ' + st.eventsWithScores + '/' + st.totalEvents + ' events have running score</div>';
+  }
+
+  // Participants (for plays)
+  if (data.participantsAnalysis) {
+    var pa = data.participantsAnalysis;
+    h += '<div style="font-size:10px;color:#94a3b8">Participants: ' + pa.eventsWithParticipants + '/' + pa.totalEvents + ' events</div>';
+  }
+
+  // Targeted samples (for plays) — collapsible
+  if (data.targetedSamples) {
+    h += '<details style="margin-top:6px"><summary style="color:#fbbf24;font-size:11px;cursor:pointer;font-weight:600">TARGETED EVENT SAMPLES</summary>';
+    h += '<div style="background:rgba(0,0,0,.3);border-radius:4px;padding:6px;margin-top:4px">';
+    Object.keys(data.targetedSamples).forEach(function(k) {
+      var s = data.targetedSamples[k];
+      var found = s !== null;
+      h += '<div style="margin-bottom:4px">';
+      h += '<span style="color:' + (found ? '#00ff88' : '#ff5252') + ';font-size:10px;font-weight:600">' + (found ? '✅' : '❌') + ' ' + escH(k) + '</span>';
+      if (found) {
+        h += '<pre style="color:#94a3b8;font-size:9px;white-space:pre-wrap;margin:2px 0 0 8px;max-height:60px;overflow:auto">' + escH(JSON.stringify(s, null, 1)) + '</pre>';
+      }
+      h += '</div>';
+    });
+    h += '</div></details>';
+  }
+
+  // Text samples (for plays)
+  if (data.textSamples && data.textSamples.length > 0) {
+    h += '<details style="margin-top:4px"><summary style="color:#a78bfa;font-size:11px;cursor:pointer;font-weight:600">TEXT SAMPLES</summary>';
+    data.textSamples.forEach(function(t) {
+      h += '<div style="font-size:10px;color:#94a3b8;margin:2px 0 2px 8px;font-style:italic">"' + escH(t) + '"</div>';
+    });
+    h += '</details>';
+  }
+
+  // Sample records (first3, last3, samplePlayer, etc) — collapsible
+  var sampleKeys = ['first3', 'last3', 'samplePlayer', 'sampleHomePlayer', 'sampleVisitorPlayer', 'samples', 'sampleGame', 'fullData'];
+  sampleKeys.forEach(function(sk) {
+    if (data[sk]) {
+      h += '<details style="margin-top:4px"><summary style="color:#64748b;font-size:10px;cursor:pointer">' + escH(sk) + '</summary>';
+      h += '<pre style="color:#94a3b8;font-size:9px;white-space:pre-wrap;max-height:200px;overflow:auto;margin:4px 0 0 0">' + escH(JSON.stringify(data[sk], null, 2)) + '</pre>';
+      h += '</details>';
+    }
+  });
+
+  // Box score game shape
+  if (data.gameShape) {
+    h += '<div style="color:#60a5fa;font-size:11px;font-weight:600;margin-top:6px">GAME SHAPE</div>';
+    h += '<pre style="color:#94a3b8;font-size:9px;white-space:pre-wrap;margin:2px 0">' + escH(JSON.stringify(data.gameShape, null, 2)) + '</pre>';
+  }
+  if (data.gameMetadata) {
+    h += '<pre style="color:#94a3b8;font-size:9px;white-space:pre-wrap;margin:2px 0">' + escH(JSON.stringify(data.gameMetadata, null, 2)) + '</pre>';
+  }
+
+  // Live box scores
+  if (data.live) {
+    h += '<div style="color:#ffd166;font-size:11px;font-weight:600;margin-top:6px">LIVE (' + (data.live.gamesReturned || 0) + ' games)</div>';
+    if (data.live.games && data.live.games.length > 0) {
+      data.live.games.forEach(function(g) {
+        h += '<div style="font-size:10px;color:#e2e8f0">' + escH(g.away||'?') + ' @ ' + escH(g.home||'?') + ' ' + escH(g.score) + ' <span style="color:#64748b">' + escH(g.status||'') + ' P' + (g.period||0) + ' ' + escH(g.time||'') + '</span></div>';
+      });
+    } else {
+      h += '<div style="font-size:10px;color:#64748b">No live games</div>';
+    }
+  }
+
+  // Period test
+  if (data.period1Test) {
+    h += '<div style="font-size:10px;color:#94a3b8;margin-top:4px">Period 1 filter: ' + (data.period1Test.error ? '❌ ' + data.period1Test.error : '✅ ' + data.period1Test.count + ' players') + '</div>';
+  }
+
+  // NCAAMB specific subsections
+  if (data.team_stats) h += renderProbeSection('team_stats', data.team_stats);
+  if (data.rankings) h += renderProbeSection('rankings', data.rankings);
+  if (data.bracket) {
+    h += '<div style="color:#a78bfa;font-size:11px;font-weight:600;margin-top:6px">BRACKET</div>';
+    h += '<pre style="color:#94a3b8;font-size:9px;white-space:pre-wrap;max-height:150px;overflow:auto">' + escH(data.bracket.sample || JSON.stringify(data.bracket)) + '</pre>';
+  }
+
+  h += '</div>';
+  return h;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// BDL PBP ADAPTER (inline for debug testing)
+// ══════════════════════════════════════════════════════════════════════════════
+var BDL_BASKET_X=25,BDL_BASKET_Y=1.5,BDL_RIM_RADIUS=4,BDL_PAINT_RADIUS=9,BDL_THREE_RADIUS=22,BDL_CORNER_Y_MAX=9;
+function bdlCoordsValid(x,y){return x!=null&&y!=null&&x>-1000&&y>-1000&&x<1000&&y<1000;}
+function bdlDistFromBasket(x,y){return Math.sqrt(Math.pow(x-BDL_BASKET_X,2)+Math.pow(y-BDL_BASKET_Y,2));}
+var BDL_RIM_TYPES=['layup shot','driving layup shot','running layup shot','cutting layup shot','reverse layup shot','finger roll layup','layup shot putback','putback layup shot','driving reverse layup shot','running reverse layup shot','dunk shot','driving dunk shot','running dunk shot','cutting dunk shot','alley oop dunk shot','putback dunk shot','running alley oop dunk shot','tip shot','tip dunk shot'];
+var BDL_PAINT_TYPES=['driving floating jump shot','floating jump shot','driving hook shot','hook shot','running hook shot','driving finger roll layup','turnaround hook shot'];
+var BDL_RIM_SET=null,BDL_PAINT_SET=null;
+function ensureTypeSets(){if(!BDL_RIM_SET){BDL_RIM_SET=new Set(BDL_RIM_TYPES);BDL_PAINT_SET=new Set(BDL_PAINT_TYPES);}}
+function coordinateToZone(x,y,shotType,text,scoreValue){
+  ensureTypeSets();var tl=(shotType||'').toLowerCase().trim();var tx=(text||'').toLowerCase();var is3=scoreValue===3||tx.includes('three point');
+  if(BDL_RIM_SET.has(tl))return'rim';if(BDL_PAINT_SET.has(tl))return'paint';
+  if(is3){if(bdlCoordsValid(x,y)&&y<BDL_CORNER_Y_MAX)return'corner3';return'above3';}
+  if(bdlCoordsValid(x,y)){var d=bdlDistFromBasket(x,y);if(d<BDL_RIM_RADIUS)return'rim';if(d<BDL_PAINT_RADIUS)return'paint';if(d>=BDL_THREE_RADIUS){return y<BDL_CORNER_Y_MAX?'corner3':'above3';}return'mid';}
+  var dm=tx.match(/(\d+)-foot/);if(dm){var dd=parseInt(dm[1]);if(dd<=4)return'rim';if(dd<=9)return'paint';if(dd>=22)return'above3';return'mid';}
+  if(tl.includes('layup')||tl.includes('dunk')||tl.includes('tip'))return'rim';if(tl.includes('hook')||tl.includes('float'))return'paint';return'mid';
+}
+function bdlExtractPlayer(t){if(!t)return'?';var c=t.replace(/\n/g,' ').trim();var m=c.match(/^([A-Z][a-zA-Z'.]+(?:[\s-][A-Z][a-zA-Z'.]+)*(?:\s+(?:Jr\.|Sr\.|III|II|IV))?)\s+(?:makes|misses|personal|shooting|loose|bad|offensive|defensive|lost|out|traveling|turnover|flagrant|double|blocks|steals|enters|steps|kicked)/i);if(m)return m[1].trim();var m2=c.match(/^(.+?)\s+(?:makes|misses|personal|shooting|offensive|defensive|bad|loose|lost|blocks|steals)/i);if(m2)return m2[1].trim();return c.split(/\s+/).slice(0,2).join(' ');}
+function bdlExtractAssist(t){if(!t)return null;var m=t.match(/\(([^)]+?)\s+assists?\)/i);return m?m[1].trim():null;}
+function bdlExtractBlock(t){if(!t)return null;var m=t.match(/\(([^)]+?)\s+blocks?\)/i);if(m)return m[1].trim();var m2=t.match(/([A-Z][a-zA-Z'.]+(?:[\s-][A-Z][a-zA-Z'.]+)*)\s+blocks\s/i);return m2?m2[1].trim():null;}
+function bdlExtractSteal(t){if(!t)return null;var m=t.match(/\(([^)]+?)\s+steals?\)/i);return m?m[1].trim():null;}
+function bdlExtractDistance(t){if(!t)return null;var m=t.match(/(\d+)-foot/i);return m?parseInt(m[1]):null;}
+function bdlClassifyContext(type,assisted,isThree){var t=(type||'').toLowerCase();if(t.includes('driving')||t.includes('layup')||t.includes('dunk'))return'drive';if(t.includes('pullup')||t.includes('pull-up')||t.includes('step back')||t.includes('fadeaway')||t.includes('fade away'))return'pullup';if(t.includes('putback')||t.includes('tip'))return'putback';if(t.includes('cutting')||t.includes('alley'))return'cut';if(t.includes('hook')||t.includes('float')||t.includes('runner'))return'floater';if(t.includes('running')&&!t.includes('pullup'))return'transition';if(assisted&&isThree)return'catch-shoot';return'halfcourt';}
+function bdlClassifyTO(type,text){var t=(type||'').toLowerCase();var tx=(text||'').toLowerCase();if(tx.includes('steal'))return{forced:true,type:t};if(t.includes('bad pass'))return{forced:true,type:t};if(t.includes('traveling')||t.includes('out of bounds')||t.includes('3-second')||t.includes('shot clock')||t.includes('offensive foul')||t.includes('double dribble')||t.includes('backcourt')||t.includes('5-second')||t.includes('kicked ball'))return{forced:false,type:t};if(t.includes('lost ball'))return{forced:null,type:t};return{forced:null,type:t};}
+function createLineupTracker(starters,hA,aA){var h5=[],a5=[];if(starters&&starters.length>0){starters.forEach(function(s){if(!s.starter)return;var n=((s.player?.first_name||'')+' '+(s.player?.last_name||'')).trim()||'?';var ab=s.team?.abbreviation||'';if(ab===hA)h5.push(n);else if(ab===aA)a5.push(n);});}return{home:h5.slice(),away:a5.slice(),processSub:function(text,tm){if(!text)return;var m=text.match(/^(.+?)\s+enters\s+(?:the\s+game\s+)?for\s+(.+?)$/i);if(!m)return;var entering=m[1].trim(),leaving=m[2].trim();var r=tm===hA?this.home:this.away;var i=r.indexOf(leaving);if(i>=0)r.splice(i,1);if(r.indexOf(entering)<0)r.push(entering);if(r.length>5)r.splice(0,r.length-5);},getOnCourt:function(){return{home:this.home.slice(),away:this.away.slice()};}};}
+function parseBDLPBP(plays,homeAbbr,awayAbbr,starters){
+  if(!plays||!Array.isArray(plays)||plays.length===0)return{home:null,away:null,homeAlias:homeAbbr,awayAlias:awayAbbr,totalShots:0,totalTOs:0,runs:[],raw:{shots:[],turnovers:[]},scoringEvents:[],possessionLog:[],timeline:[]};
+  var hA=homeAbbr,aA=awayAbbr;var lineups=createLineupTracker(starters||[],hA,aA);
+  var shots=[],turnovers=[],scoreLog=[],scoringEvents=[],timeline=[];var hScore=0,aScore=0;var bigH=0,bigA=0;
+  var pendPOT=null,pendOREB=null,potH=0,potA=0,scpH=0,scpA=0,lastP=0;
+  var sorted=plays.slice().sort(function(a,b){return(a.order||0)-(b.order||0);});
+  sorted.forEach(function(ev,idx){
+    var type=(ev.type||'').trim(),tl=type.toLowerCase(),text=(ev.text||'').replace(/\n/g,' ').trim(),tx=text.toLowerCase();
+    var tAbbr=ev.team?.abbreviation||'',team=tAbbr===hA?hA:tAbbr===aA?aA:tAbbr||'?';
+    var player=bdlExtractPlayer(text),clock=ev.clock||null,quarter=ev.period||0;
+    var hs=ev.home_score??null,as=ev.away_score??null;
+    if(quarter!==lastP&&lastP>0){pendPOT=null;pendOREB=null;}lastP=quarter;
+    if(hs!=null&&as!=null){var mg=hs-as;if(mg>bigH)bigH=mg;if(-mg>bigA)bigA=-mg;}
+    if(tl.includes('substitution')||tx.includes('enters the game for')){lineups.processSub(text,team);return;}
+    var onCourt=lineups.getOnCourt();
+    var enriched={idx:idx,type:'other',team:team,player:player,clock:clock,quarter:quarter,homeScore:hs,awayScore:as,possTeam:team!=='?'?team:null,onCourt:onCourt,shot:null,turnover:null,rebound:null,foul:null,freeThrow:null,block:null,steal:null};
+    if(ev.shooting_play){
+      var made=ev.scoring_play||false,is3=ev.score_value===3||tx.includes('three point'),pts=made?(ev.score_value||(is3?3:2)):0;
+      var zone=coordinateToZone(ev.coordinate_x,ev.coordinate_y,type,text,ev.score_value);
+      if(tl.includes('free throw')){
+        pts=made?1:0;enriched.type=made?'ft_made':'ft_miss';enriched.freeThrow={made:made,ftType:type,points:pts};
+        if(made){if(team===hA)hScore+=1;else aScore+=1;scoreLog.push({team:team,pts:1,hScore:hScore,aScore:aScore,q:quarter,lineup:team===hA?onCourt.home:onCourt.away});scoringEvents.push({tm:team,p:player,pts:1,type:'FT',ck:clock,q:quarter,m:aScore-hScore});if(pendOREB===team){if(team===hA)scpH+=1;else scpA+=1;}if(pendPOT===team){if(team===hA)potH+=1;else potA+=1;}}
+        var ftM=type.match(/(\d+)\s*of\s*(\d+)/i);if(ftM&&ftM[1]===ftM[2]&&made){pendOREB=null;pendPOT=null;}
+        timeline.push(enriched);return;
+      }
+      var shotDist=bdlExtractDistance(text),assisted=false,assistPlayer=null;if(made){assistPlayer=bdlExtractAssist(text);if(assistPlayer)assisted=true;}
+      var context=bdlClassifyContext(type,assisted,is3);enriched.type=made?'shot_made':'shot_miss';enriched.shot={zone:zone,made:made,assisted:assisted,is3:is3,context:context,shotDistance:shotDist,points:pts};
+      if(!made){var blocker=bdlExtractBlock(text);if(blocker)enriched.block={blocker:blocker};}
+      shots.push({p:player,tm:team,z:zone,m:made,a:assisted,q:quarter,ctx:context,is3:is3});
+      if(made){if(team===hA)hScore+=pts;else aScore+=pts;scoreLog.push({team:team,pts:pts,hScore:hScore,aScore:aScore,q:quarter,lineup:team===hA?onCourt.home:onCourt.away});scoringEvents.push({tm:team,p:player,pts:pts,type:is3?'3PT':'2PT',ck:clock,q:quarter,m:aScore-hScore});if(pendOREB===team){if(team===hA)scpH+=pts;else scpA+=pts;}if(pendPOT===team){if(team===hA)potH+=pts;else potA+=pts;}pendOREB=null;pendPOT=null;}
+      timeline.push(enriched);return;
+    }
+    if(tl.includes('turnover')){var tc=bdlClassifyTO(type,text);enriched.type='turnover';enriched.turnover={forced:tc.forced,type:tc.type};var stealer=bdlExtractSteal(text);if(stealer)enriched.steal={stealer:stealer};turnovers.push({p:player,tm:team,q:quarter,forced:tc.forced,type:tc.type});pendOREB=null;pendPOT=team===hA?aA:hA;timeline.push(enriched);return;}
+    if(tl.includes('rebound')){var isOff=tl.includes('offensive');enriched.type='rebound';enriched.rebound={type:isOff?'offensive':'defensive'};if(isOff)pendOREB=team;else{pendOREB=null;pendPOT=null;}timeline.push(enriched);return;}
+    if(tl.includes('foul')){var ft='personal';if(tl.includes('offensive'))ft='offensive';else if(tl.includes('flagrant'))ft='flagrant';else if(tl.includes('technical'))ft='technical';else if(tl.includes('shooting'))ft='shooting';enriched.type='foul';enriched.foul={type:ft,player:player};if(ft==='offensive'){pendOREB=null;pendPOT=team===hA?aA:hA;}timeline.push(enriched);return;}
+    if(tl.includes('end period')||tl.includes('end game')){pendPOT=null;pendOREB=null;return;}
+    timeline.push(enriched);
+  });
+  var runs=[],rTm=null,rPts=0,rSt=0,rCt=0,rLu=[],rST=[];
+  for(var i=0;i<scoreLog.length;i++){var s=scoreLog[i];if(s.team===rTm){rPts+=s.pts;rCt++;if(s.lineup&&s.lineup.length>0)rLu=s.lineup;rST.push(s.pts===3?'3PT':s.pts===1?'FT':'2PT');}else{if(rPts>=8||rCt>=3)runs.push({team:rTm,pts:rPts,count:rCt,q:scoreLog[rSt]?.q,lineup:rLu,mechanism:rST.slice(),si:rSt,ei:i-1});rTm=s.team;rPts=s.pts;rSt=i;rCt=1;rLu=s.lineup||[];rST=[s.pts===3?'3PT':s.pts===1?'FT':'2PT'];}}
+  if(rPts>=8||rCt>=3)runs.push({team:rTm,pts:rPts,count:rCt,q:scoreLog[rSt]?.q,lineup:rLu,mechanism:rST.slice(),si:rSt,ei:scoreLog.length-1});
+  runs.sort(function(a,b){return b.ei-a.ei;});
+  function teamShots(tm){return shots.filter(function(s){return s.tm===tm;});}
+  function aggTeam(tm){var s=teamShots(tm);var th=s.filter(function(x){return x.is3;}),ri=s.filter(function(x){return x.z==='rim';}),pa=s.filter(function(x){return x.z==='paint';}),mi=s.filter(function(x){return x.z==='mid';});var thM=th.filter(function(x){return x.m;}),riM=ri.filter(function(x){return x.m;}),paM=pa.filter(function(x){return x.m;}),miM=mi.filter(function(x){return x.m;});
+  var pTh={};th.forEach(function(x){if(!pTh[x.p])pTh[x.p]={name:x.p,made:0,att:0,assisted:0,zones:{corner3:0,above3:0},contexts:{}};pTh[x.p].att++;if(x.m){pTh[x.p].made++;if(x.a)pTh[x.p].assisted++;pTh[x.p].zones[x.z]=(pTh[x.p].zones[x.z]||0)+1;}pTh[x.p].contexts[x.ctx]=(pTh[x.p].contexts[x.ctx]||0)+1;});
+  var pRi={};ri.forEach(function(x){if(!pRi[x.p])pRi[x.p]={name:x.p,made:0,att:0,contexts:{}};pRi[x.p].att++;if(x.m)pRi[x.p].made++;pRi[x.p].contexts[x.ctx]=(pRi[x.p].contexts[x.ctx]||0)+1;});
+  var pMi={};mi.forEach(function(x){if(!pMi[x.p])pMi[x.p]={name:x.p,made:0,att:0,assisted:0};pMi[x.p].att++;if(x.m){pMi[x.p].made++;if(x.a)pMi[x.p].assisted++;}});
+  var tms=turnovers.filter(function(t){return t.tm===tm;}),fo=tms.filter(function(t){return t.forced===true;}).length,uf=tms.filter(function(t){return t.forced===false;}).length,uk=tms.filter(function(t){return t.forced===null;}).length;
+  return{threes:{made:thM.length,att:th.length,assisted:thM.filter(function(x){return x.a;}).length,pct:th.length>0?(thM.length/th.length*100).toFixed(1):'0',corner:{made:thM.filter(function(x){return x.z==='corner3';}).length,att:th.filter(function(x){return x.z==='corner3';}).length},above:{made:thM.filter(function(x){return x.z==='above3';}).length,att:th.filter(function(x){return x.z==='above3';}).length},byPlayer:Object.values(pTh).filter(function(x){return x.att>=1;}).sort(function(a,b){return b.att-a.att;})},rim:{made:riM.length,att:ri.length,assisted:riM.filter(function(x){return x.a;}).length,pct:ri.length>0?(riM.length/ri.length*100).toFixed(1):'0',byPlayer:Object.values(pRi).filter(function(x){return x.att>=1;}).sort(function(a,b){return b.att-a.att;})},paint:{made:paM.length,att:pa.length,pct:pa.length>0?(paM.length/pa.length*100).toFixed(1):'0'},mid:{made:miM.length,att:mi.length,assisted:miM.filter(function(x){return x.a;}).length,pct:mi.length>0?(miM.length/mi.length*100).toFixed(1):'0',byPlayer:Object.values(pMi).filter(function(x){return x.att>=1;}).sort(function(a,b){return b.att-a.att;})},tos:{total:tms.length,forced:fo,unforced:uf,unknown:uk,byPlayer:tms},shotDiet:{total:s.length,threePct:s.length>0?(th.length/s.length*100).toFixed(1):'0',rimPct:s.length>0?(ri.length/s.length*100).toFixed(1):'0',midPct:s.length>0?(mi.length/s.length*100).toFixed(1):'0'}};}
+  var home=aggTeam(hA),away=aggTeam(aA);
+  return{home:home,away:away,homeAlias:hA,awayAlias:aA,totalShots:shots.length,totalTOs:turnovers.length,runs:runs,raw:{shots:shots,turnovers:turnovers},scoringEvents:scoringEvents,possessionLog:[],timeline:timeline,_bdl:{potHome:potH,potAway:potA,scpHome:scpH,scpAway:scpA,biggestLeadHome:bigH,biggestLeadAway:bigA,scoreLog:scoreLog}};
+}
+
+// ── BDL PARSE TEST — fetches plays+lineups, runs parser, renders comparison ──
+async function bdlParseTest(league) {
+  log('⚡ BDL Parse Test: ' + league + ' ...', 'log-warn');
+  var pfx = league === 'ncaamb' ? 'ncaab' : 'nba';
+  // Step 1: find a recent final game
+  var today = new Date();
+  var game = null, gameDate = null;
+  for (var d = 0; d <= 5; d++) {
+    var dt = new Date(today - d * 86400000).toISOString().split('T')[0];
+    try {
+      var gData = await fetchJSON(FN + 'bdl-data?type=games&league=' + league + '&date=' + dt);
+      if (gData.data && gData.data.length > 0) {
+        var final = gData.data.find(function(g) { return g.status === 'Final'; });
+        if (final) { game = final; gameDate = dt; break; }
+        if (!game) { game = gData.data[0]; gameDate = dt; }
+      }
+    } catch (e) { }
+  }
+  if (!game) { log('❌ No games found', 'log-err'); return; }
+
+  var hA = game.home_team?.abbreviation || '?';
+  var aA = game.visitor_team?.abbreviation || '?';
+  log('Found: ' + aA + ' @ ' + hA + ' (ID:' + game.id + ') ' + game.status, 'log-info');
+
+  // Step 2: fetch plays + lineups in parallel
+  var [playsData, lineupsData] = await Promise.all([
+    fetchJSON(FN + 'bdl-data?type=plays&league=' + league + '&game_id=' + game.id).catch(function(e) { return { data: [] }; }),
+    fetchJSON(FN + 'bdl-data?type=lineups&league=' + league + '&game_id=' + game.id).catch(function(e) { return { data: [] }; }),
+  ]);
+
+  var plays = playsData.data || [];
+  var starters = lineupsData.data || [];
+  log('Fetched: ' + plays.length + ' plays, ' + starters.length + ' lineup records', 'log-info');
+
+  if (plays.length === 0) { log('❌ No plays returned', 'log-err'); return; }
+
+  // Step 3: run parser
+  var start = Date.now();
+  var result = parseBDLPBP(plays, hA, aA, starters);
+  var elapsed = Date.now() - start;
+  log('✅ Parsed in ' + elapsed + 'ms: ' + result.totalShots + ' shots, ' + result.totalTOs + ' TOs, ' + result.runs.length + ' runs', 'log-ok');
+
+  // Step 4: render results
+  try {
+  var h = '<h2 style="color:#00ff88">⚡ BDL PARSE TEST — ' + escH(aA) + ' @ ' + escH(hA) + '</h2>';
+  h += '<div style="color:#64748b;font-size:10px;margin:-8px 0 8px 0">' + escH(gameDate) + ' | Game ID: ' + game.id + ' | ' + escH(game.status) + ' | Parsed in ' + elapsed + 'ms</div>';
+
+  // Starters
+  var hStarters = starters.filter(function(s) { return s.starter && s.team?.abbreviation === hA; });
+  var aStarters = starters.filter(function(s) { return s.starter && s.team?.abbreviation === aA; });
+  h += '<div class="card" style="border-color:rgba(0,255,136,.2)">';
+  h += '<div style="color:#00ff88;font-size:11px;font-weight:600">STARTERS</div>';
+  h += '<div style="font-size:10px;color:#60a5fa;margin-top:2px">' + escH(hA) + ': ' + hStarters.map(function(s) { return escH((s.player?.first_name||'')+' '+(s.player?.last_name||'')); }).join(', ') + '</div>';
+  h += '<div style="font-size:10px;color:#f5a62a">' + escH(aA) + ': ' + aStarters.map(function(s) { return escH((s.player?.first_name||'')+' '+(s.player?.last_name||'')); }).join(', ') + '</div>';
+  h += '</div>';
+
+  // Zone breakdown per team
+  function zoneCard(label, team, color) {
+    if (!team) return '<div class="card" style="color:#ff5252">No data for ' + escH(label) + '</div>';
+    var c = '<div class="card" style="border-color:' + color + '30">';
+    c += '<div style="color:' + color + ';font-size:12px;font-weight:700">' + escH(label) + '</div>';
+    c += '<table style="width:100%;font-size:10px;border-collapse:collapse;margin-top:4px">';
+    c += '<tr style="color:#64748b"><th style="text-align:left">Zone</th><th>Made</th><th>Att</th><th>%</th><th>Ast</th></tr>';
+    var zones = [
+      { name: 'Rim', z: team.rim },
+      { name: 'Paint', z: team.paint },
+      { name: 'Mid', z: team.mid },
+      { name: '3PT Corner', z: team.threes.corner },
+      { name: '3PT Above', z: team.threes.above },
+      { name: '3PT Total', z: team.threes },
+    ];
+    zones.forEach(function(row) {
+      var z = row.z;
+      var pct = z.att > 0 ? (z.made / z.att * 100).toFixed(1) + '%' : '—';
+      c += '<tr style="border-top:1px solid rgba(255,255,255,.04);color:#e2e8f0">';
+      c += '<td style="padding:2px 3px">' + escH(row.name) + '</td>';
+      c += '<td style="text-align:center">' + (z.made||0) + '</td>';
+      c += '<td style="text-align:center">' + (z.att||0) + '</td>';
+      c += '<td style="text-align:center;color:#00ff88">' + pct + '</td>';
+      c += '<td style="text-align:center;color:#fbbf24">' + (z.assisted||'—') + '</td>';
+      c += '</tr>';
+    });
+    c += '</table>';
+    // Shot diet
+    c += '<div style="margin-top:4px;font-size:10px;color:#94a3b8">Diet: ' + team.shotDiet.total + ' shots — 3PT ' + team.shotDiet.threePct + '% | Rim ' + team.shotDiet.rimPct + '% | Mid ' + team.shotDiet.midPct + '%</div>';
+    // TOs
+    c += '<div style="font-size:10px;color:#94a3b8">TOs: ' + team.tos.total + ' (forced: ' + team.tos.forced + ', unforced: ' + team.tos.unforced + ', unknown: ' + team.tos.unknown + ')</div>';
+    c += '</div>';
+    return c;
+  }
+  h += zoneCard(hA + ' (HOME)', result.home, '#60a5fa');
+  h += zoneCard(aA + ' (AWAY)', result.away, '#f5a62a');
+
+  // POT / SCP
+  if (result._bdl) {
+    h += '<div class="card" style="border-color:rgba(167,139,250,.2)">';
+    h += '<div style="color:#a78bfa;font-size:11px;font-weight:600">DERIVED STATS</div>';
+    h += '<table style="width:100%;font-size:10px;border-collapse:collapse;margin-top:4px">';
+    h += '<tr style="color:#64748b"><th style="text-align:left">Stat</th><th>' + escH(hA) + '</th><th>' + escH(aA) + '</th></tr>';
+    h += '<tr style="color:#e2e8f0"><td>Points Off Turnovers</td><td style="text-align:center">' + result._bdl.potHome + '</td><td style="text-align:center">' + result._bdl.potAway + '</td></tr>';
+    h += '<tr style="color:#e2e8f0"><td>Second Chance Points</td><td style="text-align:center">' + result._bdl.scpHome + '</td><td style="text-align:center">' + result._bdl.scpAway + '</td></tr>';
+    h += '<tr style="color:#e2e8f0"><td>Biggest Lead</td><td style="text-align:center">' + result._bdl.biggestLeadHome + '</td><td style="text-align:center">' + result._bdl.biggestLeadAway + '</td></tr>';
+    h += '</table></div>';
+  }
+
+  // Runs
+  h += '<div class="card" style="border-color:rgba(96,165,250,.2)">';
+  h += '<div style="color:#60a5fa;font-size:11px;font-weight:600">SCORING RUNS (' + result.runs.length + ')</div>';
+  if (result.runs.length > 0) {
+    result.runs.slice(0, 10).forEach(function(r) {
+      var col = r.team === hA ? '#60a5fa' : '#f5a62a';
+      var mech = r.mechanism.join(', ');
+      var lu = r.lineup && r.lineup.length > 0 ? ' | ' + r.lineup.map(function(n) { return n.split(' ').pop(); }).join(', ') : '';
+      h += '<div style="font-size:10px;color:' + col + ';margin:2px 0">' + escH(r.team) + ' ' + r.pts + '-0 (' + r.count + ' scores, Q' + r.q + ') [' + escH(mech) + ']' + escH(lu) + '</div>';
+    });
+  } else {
+    h += '<div style="font-size:10px;color:#64748b">No runs detected</div>';
+  }
+  h += '</div>';
+
+  // Player breakdowns (collapsible)
+  function playerTable(label, players) {
+    if (!players || players.length === 0) return '';
+    var c = '<details style="margin-top:4px"><summary style="color:#fbbf24;font-size:10px;cursor:pointer">' + escH(label) + ' (' + players.length + ' players)</summary>';
+    c += '<table style="width:100%;font-size:9px;border-collapse:collapse;margin-top:2px">';
+    c += '<tr style="color:#64748b"><th style="text-align:left">Player</th><th>Made</th><th>Att</th><th>%</th></tr>';
+    players.forEach(function(p) {
+      var pct = p.att > 0 ? (p.made / p.att * 100).toFixed(0) + '%' : '—';
+      c += '<tr style="color:#94a3b8;border-top:1px solid rgba(255,255,255,.03)"><td>' + escH(p.name) + '</td><td style="text-align:center">' + p.made + '</td><td style="text-align:center">' + p.att + '</td><td style="text-align:center">' + pct + '</td></tr>';
+    });
+    c += '</table></details>';
+    return c;
+  }
+  h += '<div class="card" style="border-color:rgba(251,191,36,.15)">';
+  h += '<div style="color:#fbbf24;font-size:11px;font-weight:600">PLAYER BREAKDOWNS</div>';
+  if (result.home) {
+    h += playerTable(hA + ' 3PT', result.home.threes.byPlayer);
+    h += playerTable(hA + ' Rim', result.home.rim.byPlayer);
+    h += playerTable(hA + ' Mid', result.home.mid.byPlayer);
+  }
+  if (result.away) {
+    h += playerTable(aA + ' 3PT', result.away.threes.byPlayer);
+    h += playerTable(aA + ' Rim', result.away.rim.byPlayer);
+    h += playerTable(aA + ' Mid', result.away.mid.byPlayer);
+  }
+  h += '</div>';
+
+  // Timeline summary
+  h += '<div class="card" style="border-color:rgba(255,255,255,.05)">';
+  h += '<div style="color:#94a3b8;font-size:11px;font-weight:600">TIMELINE SUMMARY</div>';
+  var typeCounts = {};
+  result.timeline.forEach(function(e) { typeCounts[e.type] = (typeCounts[e.type] || 0) + 1; });
+  h += '<div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:4px">';
+  Object.entries(typeCounts).sort(function(a,b){return b[1]-a[1];}).forEach(function(t) {
+    h += '<span style="background:rgba(255,255,255,.06);border-radius:3px;padding:1px 5px;font-size:9px;color:#94a3b8">' + escH(t[0]) + ' <b style="color:#e2e8f0">' + t[1] + '</b></span>';
+  });
+  h += '</div>';
+  h += '<div style="font-size:10px;color:#64748b;margin-top:4px">Score: ' + escH(hA) + ' ' + (game.home_team_score||0) + ' — ' + escH(aA) + ' ' + (game.visitor_team_score||0) + '</div>';
+  h += '</div>';
+
+  contentEl.innerHTML = h;
+  } catch (renderErr) {
+    log('❌ Render error: ' + renderErr.message + ' at line ' + (renderErr.stack || '').substring(0, 200), 'log-err');
+  }
+}
+
+// Show game selector on load
+document.getElementById('game-selector-card').style.display = 'block';
+checkDB();
+</script>
+</body>
+</html>
