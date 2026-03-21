@@ -119,7 +119,7 @@ exports.handler = async (event) => {
       // NBA:    /nba/v1/stats?game_ids[]=ID
       // NCAAMB: /ncaab/v1/player_stats?game_id=ID  (different param name!)
       if (league === 'ncaamb') {
-        url = `${BDL_BASE}${pfx}/v1/player_stats?game_id=${params.game_id}&per_page=100`;
+        url = `${BDL_BASE}${pfx}/v1/player_stats?game_ids[]=${params.game_id}&per_page=100`;
       } else {
         url = `${BDL_BASE}${pfx}/v1/stats?game_ids[]=${params.game_id}&per_page=100`;
         if (params.period) url += `&periods[]=${params.period}`;
@@ -128,7 +128,7 @@ exports.handler = async (event) => {
 
     case 'team_stats':
       // NCAAMB/WNBA team stats
-      url = `${BDL_BASE}${pfx}/v1/team_stats?game_id=${params.game_id}&per_page=50`;
+      url = `${BDL_BASE}${pfx}/v1/team_stats?game_ids[]=${params.game_id}&per_page=50`;
       break;
 
     case 'advanced':
