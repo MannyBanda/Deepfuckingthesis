@@ -68,6 +68,7 @@ select{background:#1e293b;color:#e0e0e0;border:1px solid #334155;border-radius:6
   <button onclick="bdlProbe('nba','advanced')" style="background:rgba(251,191,36,.08);border-color:rgba(251,191,36,.2);color:#d4a017">▶ Adv</button>
   <button onclick="bdlParseTest('nba')" style="background:rgba(0,255,136,.12);border-color:rgba(0,255,136,.3);color:#00ff88;font-weight:700">⚡ Parse Test NBA</button>
   <button onclick="bdlParseTest('ncaamb')" style="background:rgba(0,255,136,.08);border-color:rgba(0,255,136,.2);color:#00cc66">⚡ Parse NCAAMB</button>
+  <button onclick="bdlSummaryTest('nba')" style="background:rgba(96,165,250,.15);border-color:rgba(96,165,250,.3);color:#60a5fa;font-weight:700">🔧 Summary Test NBA</button>
 </div>
 
 <!-- Game selector for snapshots/odds -->
@@ -1839,6 +1840,187 @@ async function bdlParseTest(league) {
   contentEl.innerHTML = h;
   } catch (renderErr) {
     log('❌ Render error: ' + renderErr.message + ' at line ' + (renderErr.stack || '').substring(0, 200), 'log-err');
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// buildSummaryFromBDL — SR Summary Shape Adapter (inline for debug testing)
+// ══════════════════════════════════════════════════════════════════════════════
+function buildSummaryFromBDL(boxScore, pbpResult, lineups, gameDetail) {
+  var game = gameDetail || boxScore || {};
+  var bdl = pbpResult?._bdl || {};
+  var homeTeam = boxScore?.home_team?.team || boxScore?.home_team || game.home_team || {};
+  var awayTeam = boxScore?.visitor_team?.team || boxScore?.visitor_team || game.visitor_team || {};
+  var hA = homeTeam.abbreviation || 'HOME', aA = awayTeam.abbreviation || 'AWAY';
+  var homePlayers = boxScore?.home_team?.players || [];
+  var awayPlayers = boxScore?.visitor_team?.players || [];
+  var hStarterIds = new Set(), aStarterIds = new Set();
+  if (lineups && lineups.length > 0) { lineups.forEach(function(l) { if (!l.starter) return; var ab = l.team?.abbreviation || ''; if (ab === hA) hStarterIds.add(l.player?.id); else if (ab === aA) aStarterIds.add(l.player?.id); }); }
+
+  function buildTeamStats(players, starterIds, side) {
+    var s = {field_goals_made:0,field_goals_att:0,three_points_made:0,three_points_att:0,two_points_made:0,two_points_att:0,free_throws_made:0,free_throws_att:0,assists:0,steals:0,blocks:0,offensive_rebounds:0,defensive_rebounds:0,rebounds:0,turnovers:0,total_turnovers:0,personal_fouls:0,points:0,bench_points:0};
+    var starterPts = 0;
+    players.forEach(function(p) {
+      s.field_goals_made+=p.fgm||0;s.field_goals_att+=p.fga||0;s.three_points_made+=p.fg3m||0;s.three_points_att+=p.fg3a||0;s.free_throws_made+=p.ftm||0;s.free_throws_att+=p.fta||0;s.assists+=p.ast||0;s.steals+=p.stl||0;s.blocks+=p.blk||0;s.offensive_rebounds+=p.oreb||0;s.defensive_rebounds+=p.dreb||0;s.rebounds+=p.reb||0;s.turnovers+=p.turnover||0;s.personal_fouls+=p.pf||0;s.points+=p.pts||0;
+      if (starterIds.has(p.player?.id || p.id)) starterPts += p.pts || 0;
+    });
+    s.total_turnovers=s.turnovers;s.two_points_made=s.field_goals_made-s.three_points_made;s.two_points_att=s.field_goals_att-s.three_points_att;s.bench_points=Math.max(0,s.points-starterPts);
+    var fga=s.field_goals_att||1;
+    s.field_goals_pct=+(s.field_goals_made/fga*100).toFixed(1);s.three_points_pct=s.three_points_att>0?+(s.three_points_made/s.three_points_att*100).toFixed(1):0;s.two_points_pct=s.two_points_att>0?+(s.two_points_made/s.two_points_att*100).toFixed(1):0;s.free_throws_pct=s.free_throws_att>0?+(s.free_throws_made/s.free_throws_att*100).toFixed(1):0;
+    s.effective_fg_pct=+((s.field_goals_made+0.5*s.three_points_made)/fga*100).toFixed(1);
+    s.true_shooting_att=+(fga+0.44*s.free_throws_att).toFixed(1);s.true_shooting_pct=s.true_shooting_att>0?+(s.points/(2*s.true_shooting_att)*100).toFixed(1):0;
+    s.assists_turnover_ratio=s.turnovers>0?+(s.assists/s.turnovers).toFixed(2):s.assists;
+    s.possessions=+(fga-s.offensive_rebounds+s.turnovers+0.4*s.free_throws_att).toFixed(1);
+    s.offensive_points_per_possession=s.possessions>0?+(s.points/s.possessions).toFixed(2):0;
+    var pbpSide=side==='home'?pbpResult?.home:pbpResult?.away;var isHome=side==='home';
+    if(pbpSide){var rimM=pbpSide.rim?.made||0,rimA=pbpSide.rim?.att||0,paM=pbpSide.paint?.made||0,paA=pbpSide.paint?.att||0;s.points_in_paint_made=rimM+paM;s.points_in_paint_att=rimA+paA;s.points_in_paint=s.points_in_paint_made*2;s.points_in_the_paint=s.points_in_paint;s.points_in_paint_pct=s.points_in_paint_att>0?+(s.points_in_paint_made/s.points_in_paint_att*100).toFixed(1):0;s.field_goals_at_rim_made=rimM;s.field_goals_at_rim_att=rimA;s.field_goals_at_rim_pct=rimA>0?+(rimM/rimA*100).toFixed(1):0;}
+    s.points_off_turnovers=isHome?(bdl.potHome||0):(bdl.potAway||0);s.second_chance_pts=isHome?(bdl.scpHome||0):(bdl.scpAway||0);s.second_chance_points=s.second_chance_pts;
+    s.biggest_lead=isHome?(bdl.biggestLeadHome||0):(bdl.biggestLeadAway||0);
+    s.fast_break_pts=0;s.fast_break_points=0;s.most_unanswered={points:0};
+    if(pbpResult?.runs){var tr=pbpResult.runs.filter(function(r){return r.team===(isHome?hA:aA);});if(tr.length>0){s.most_unanswered.points=tr.reduce(function(m,r){return r.pts>m?r.pts:m;},0);}}
+    s.fouls_drawn=0;s.defensive_points_per_possession=0;s.offensive_rating=0;s.defensive_rating=0;s.points_against=0;
+    return s;
+  }
+  var homeStats=buildTeamStats(homePlayers,hStarterIds,'home');var awayStats=buildTeamStats(awayPlayers,aStarterIds,'away');
+  homeStats.points_against=awayStats.points;awayStats.points_against=homeStats.points;
+  homeStats.defensive_points_per_possession=homeStats.possessions>0?+(awayStats.points/homeStats.possessions).toFixed(2):0;awayStats.defensive_points_per_possession=awayStats.possessions>0?+(homeStats.points/awayStats.possessions).toFixed(2):0;
+  homeStats.offensive_rating=homeStats.possessions>0?+(homeStats.points/homeStats.possessions*100).toFixed(1):0;homeStats.defensive_rating=homeStats.possessions>0?+(awayStats.points/homeStats.possessions*100).toFixed(1):0;
+  awayStats.offensive_rating=awayStats.possessions>0?+(awayStats.points/awayStats.possessions*100).toFixed(1):0;awayStats.defensive_rating=awayStats.possessions>0?+(homeStats.points/awayStats.possessions*100).toFixed(1):0;
+  var periods=[];for(var q=1;q<=4;q++){var hP=game['home_q'+q]??null,aP=game['visitor_q'+q]??null;if(hP!=null||aP!=null)periods.push({number:q,home_points:hP||0,away_points:aP||0});}
+  for(var ot=1;ot<=3;ot++){var hOT=game['home_ot'+ot]??null,aOT=game['visitor_ot'+ot]??null;if(hOT!=null||aOT!=null)periods.push({number:4+ot,home_points:hOT||0,away_points:aOT||0});}
+  var hScoring=periods.map(function(p){return{type:'quarter',number:p.number,sequence:p.number,points:p.home_points};});var aScoring=periods.map(function(p){return{type:'quarter',number:p.number,sequence:p.number,points:p.away_points};});
+  var lc=0,tt=0;if(bdl.scoreLog&&bdl.scoreLog.length>0){var prev=null;bdl.scoreLog.forEach(function(s){var mg=s.hScore-s.aScore;var ld=mg>0?'h':mg<0?'a':'t';if(ld==='t')tt++;else if(prev&&prev!=='t'&&ld!==prev)lc++;prev=ld;});}
+  function buildPlayerArr(bPlayers,starterIds){return bPlayers.map(function(p){var pl=p.player||{};var pid=pl.id||p.id;return{id:pid,full_name:((pl.first_name||'')+' '+(pl.last_name||'')).trim(),jersey_number:pl.jersey_number||'',position:pl.position||'',primary_position:pl.position||'',played:(p.min&&p.min!=='0')||(p.pts>0),active:true,starter:starterIds.has(pid),on_court:false,statistics:{minutes:p.min||'0',field_goals_made:p.fgm||0,field_goals_att:p.fga||0,three_points_made:p.fg3m||0,three_points_att:p.fg3a||0,free_throws_made:p.ftm||0,free_throws_att:p.fta||0,offensive_rebounds:p.oreb||0,defensive_rebounds:p.dreb||0,rebounds:p.reb||0,assists:p.ast||0,steals:p.stl||0,blocks:p.blk||0,turnovers:p.turnover||0,personal_fouls:p.pf||0,points:p.pts||0,pls_min:p.plus_minus||0}};});}
+  var status=game.status||'';var srSt=status==='Final'?'closed':status;
+  return{id:game.id,status:srSt,quarter:game.period||periods.length||0,clock:game.time||'',lead_changes:lc,times_tied:tt,_dataSource:'BDL',
+    home:{name:homeTeam.name||'',alias:hA,market:homeTeam.city||'',id:homeTeam.id||'',points:game.home_team_score||homeStats.points,bonus:game.home_in_bonus||false,double_bonus:false,remaining_timeouts:game.home_timeouts_remaining??null,scoring:hScoring,statistics:homeStats,players:buildPlayerArr(homePlayers,hStarterIds)},
+    away:{name:awayTeam.name||'',alias:aA,market:awayTeam.city||'',id:awayTeam.id||'',points:game.visitor_team_score||awayStats.points,bonus:game.visitor_in_bonus||false,double_bonus:false,remaining_timeouts:game.visitor_timeouts_remaining??null,scoring:aScoring,statistics:awayStats,players:buildPlayerArr(awayPlayers,aStarterIds)},
+    periods:periods};
+}
+
+// ── Summary Test — full BDL→SR pipeline comparison ──
+async function bdlSummaryTest(league) {
+  log('🔧 Summary Test: ' + league + ' ...', 'log-warn');
+  var today = new Date();
+  var game = null, gameDate = null;
+  for (var d = 0; d <= 5; d++) {
+    var dt = new Date(today - d * 86400000).toISOString().split('T')[0];
+    try {
+      var gData = await fetchJSON(FN + 'bdl-data?type=games&league=' + league + '&date=' + dt);
+      if (gData.data && gData.data.length > 0) {
+        var final = gData.data.find(function(g) { return g.status === 'Final'; });
+        if (final) { game = final; gameDate = dt; break; }
+        if (!game) { game = gData.data[0]; gameDate = dt; }
+      }
+    } catch (e) {}
+  }
+  if (!game) { log('❌ No games found', 'log-err'); return; }
+  var hA = game.home_team?.abbreviation || '?', aA = game.visitor_team?.abbreviation || '?';
+  log('Found: ' + aA + ' @ ' + hA + ' (ID:' + game.id + ')', 'log-info');
+
+  // Fetch box scores + plays + lineups in parallel
+  var [boxData, playsData, lineupsData] = await Promise.all([
+    fetchJSON(FN + 'bdl-data?type=box_scores&league=' + league + '&date=' + gameDate).catch(function() { return { data: [] }; }),
+    fetchJSON(FN + 'bdl-data?type=plays&league=' + league + '&game_id=' + game.id).catch(function() { return { data: [] }; }),
+    fetchJSON(FN + 'bdl-data?type=lineups&league=' + league + '&game_id=' + game.id).catch(function() { return { data: [] }; }),
+  ]);
+
+  var boxScore = (boxData.data || []).find(function(g) { return g.id === game.id; }) || boxData.data?.[0];
+  var plays = playsData.data || [];
+  var starters = lineupsData.data || [];
+  log('Fetched: box=' + (boxScore ? 'YES' : 'NO') + ' plays=' + plays.length + ' lineups=' + starters.length, 'log-info');
+
+  if (!boxScore) { log('❌ No box score found', 'log-err'); return; }
+
+  // Run full pipeline
+  try {
+    var pbpResult = parseBDLPBP(plays, hA, aA, starters);
+    var summary = buildSummaryFromBDL(boxScore, pbpResult, starters, game);
+    log('✅ Summary built. Rendering comparison...', 'log-ok');
+
+    var hs = summary.home.statistics, as = summary.away.statistics;
+
+    // SR reference values (hardcoded from the NYK@BKN game we validated)
+    var srRef = null;
+    if (hA === 'BKN' && aA === 'NYK' && gameDate === '2026-03-20') {
+      srRef = {
+        home: { points_in_paint: 40, points_off_turnovers: 23, second_chance_pts: 15, biggest_lead: 13, total_turnovers: 15, field_goals_at_rim_made: 16, field_goals_at_rim_att: 30, bench_points: 46, possessions: 97.4, fgm: 34, fga: 86, fg3m: 14, fg3a: 38, ftm: 10, fta: 10, ast: 28, stl: 8, blk: 6, oreb: 8 },
+        away: {} // could add if needed
+      };
+    }
+
+    var h = '<h2 style="color:#60a5fa">🔧 SUMMARY TEST — ' + escH(aA) + ' @ ' + escH(hA) + '</h2>';
+    h += '<div style="color:#64748b;font-size:10px;margin:-8px 0 8px 0">' + escH(gameDate) + ' | Source: BDL | Periods: ' + summary.periods.length + ' | LC:' + summary.lead_changes + ' TT:' + summary.times_tied + '</div>';
+
+    // Per-quarter scores
+    h += '<div class="card" style="border-color:rgba(96,165,250,.2)">';
+    h += '<div style="color:#60a5fa;font-size:11px;font-weight:600">PER-QUARTER SCORES</div>';
+    h += '<table style="width:100%;font-size:10px;border-collapse:collapse;margin-top:4px">';
+    h += '<tr style="color:#64748b"><th style="text-align:left">Team</th>';
+    summary.periods.forEach(function(p) { h += '<th>Q' + p.number + '</th>'; });
+    h += '<th>Total</th></tr>';
+    h += '<tr style="color:#60a5fa"><td>' + escH(hA) + '</td>';
+    summary.periods.forEach(function(p) { h += '<td style="text-align:center">' + p.home_points + '</td>'; });
+    h += '<td style="text-align:center;font-weight:700">' + summary.home.points + '</td></tr>';
+    h += '<tr style="color:#f5a62a"><td>' + escH(aA) + '</td>';
+    summary.periods.forEach(function(p) { h += '<td style="text-align:center">' + p.away_points + '</td>'; });
+    h += '<td style="text-align:center;font-weight:700">' + summary.away.points + '</td></tr>';
+    h += '</table></div>';
+
+    // Key stats comparison
+    function statRow(label, bdlH, bdlA, srH) {
+      var match = srH != null ? (bdlH === srH ? '✅' : '⚠️ SR:' + srH) : '';
+      return '<tr style="border-top:1px solid rgba(255,255,255,.04);color:#e2e8f0"><td style="padding:2px 4px">' + escH(label) + '</td><td style="text-align:center">' + bdlH + '</td><td style="text-align:center">' + bdlA + '</td><td style="text-align:center;font-size:9px;color:' + (match.startsWith('✅') ? '#00ff88' : '#ff9800') + '">' + match + '</td></tr>';
+    }
+    h += '<div class="card" style="border-color:rgba(96,165,250,.2)">';
+    h += '<div style="color:#60a5fa;font-size:11px;font-weight:600">KEY STATS (BDL' + (srRef ? ' vs SR' : '') + ')</div>';
+    h += '<table style="width:100%;font-size:10px;border-collapse:collapse;margin-top:4px">';
+    h += '<tr style="color:#64748b"><th style="text-align:left">Stat</th><th>' + escH(hA) + '</th><th>' + escH(aA) + '</th><th>SR?</th></tr>';
+    h += statRow('FGM/FGA', hs.field_goals_made+'/'+hs.field_goals_att, as.field_goals_made+'/'+as.field_goals_att, srRef?srRef.home.fgm+'/'+srRef.home.fga:null);
+    h += statRow('3PM/3PA', hs.three_points_made+'/'+hs.three_points_att, as.three_points_made+'/'+as.three_points_att, srRef?srRef.home.fg3m+'/'+srRef.home.fg3a:null);
+    h += statRow('FTM/FTA', hs.free_throws_made+'/'+hs.free_throws_att, as.free_throws_made+'/'+as.free_throws_att, srRef?srRef.home.ftm+'/'+srRef.home.fta:null);
+    h += statRow('Points', hs.points, as.points, null);
+    h += statRow('Assists', hs.assists, as.assists, srRef?srRef.home.ast:null);
+    h += statRow('Steals', hs.steals, as.steals, srRef?srRef.home.stl:null);
+    h += statRow('Blocks', hs.blocks, as.blocks, srRef?srRef.home.blk:null);
+    h += statRow('OREB', hs.offensive_rebounds, as.offensive_rebounds, srRef?srRef.home.oreb:null);
+    h += statRow('Turnovers', hs.total_turnovers, as.total_turnovers, srRef?srRef.home.total_turnovers:null);
+    h += statRow('Points in Paint', hs.points_in_paint, as.points_in_paint, srRef?srRef.home.points_in_paint:null);
+    h += statRow('At Rim M/A', (hs.field_goals_at_rim_made||0)+'/'+(hs.field_goals_at_rim_att||0), (as.field_goals_at_rim_made||0)+'/'+(as.field_goals_at_rim_att||0), srRef?srRef.home.field_goals_at_rim_made+'/'+srRef.home.field_goals_at_rim_att:null);
+    h += statRow('POT', hs.points_off_turnovers, as.points_off_turnovers, srRef?srRef.home.points_off_turnovers:null);
+    h += statRow('SCP', hs.second_chance_pts, as.second_chance_pts, srRef?srRef.home.second_chance_pts:null);
+    h += statRow('Biggest Lead', hs.biggest_lead, as.biggest_lead, srRef?srRef.home.biggest_lead:null);
+    h += statRow('Bench Pts', hs.bench_points, as.bench_points, srRef?srRef.home.bench_points:null);
+    h += statRow('Possessions', hs.possessions, as.possessions, srRef?srRef.home.possessions:null);
+    h += statRow('eFG%', hs.effective_fg_pct+'%', as.effective_fg_pct+'%', null);
+    h += statRow('TS%', hs.true_shooting_pct+'%', as.true_shooting_pct+'%', null);
+    h += statRow('OPPP', hs.offensive_points_per_possession, as.offensive_points_per_possession, null);
+    h += statRow('DPPP', hs.defensive_points_per_possession, as.defensive_points_per_possession, null);
+    h += statRow('ORtg', hs.offensive_rating, as.offensive_rating, null);
+    h += statRow('DRtg', hs.defensive_rating, as.defensive_rating, null);
+    h += statRow('Biggest Run', (hs.most_unanswered?.points||0), (as.most_unanswered?.points||0), null);
+    h += '</table></div>';
+
+    // Players with starters flagged
+    function playerCard(label, players, color) {
+      var c = '<details style="margin-top:4px"><summary style="color:' + color + ';font-size:11px;cursor:pointer;font-weight:600">' + escH(label) + ' (' + players.length + ' players, ' + players.filter(function(p){return p.starter;}).length + ' starters)</summary>';
+      c += '<table style="width:100%;font-size:9px;border-collapse:collapse;margin-top:2px">';
+      c += '<tr style="color:#64748b"><th style="text-align:left">Player</th><th>MIN</th><th>PTS</th><th>FG</th><th>3P</th><th>AST</th><th>REB</th><th>+/-</th><th>S?</th></tr>';
+      players.filter(function(p){return p.played;}).sort(function(a,b){return(b.statistics?.points||0)-(a.statistics?.points||0);}).forEach(function(p) {
+        var st = p.statistics || {};
+        c += '<tr style="color:#e2e8f0;border-top:1px solid rgba(255,255,255,.03)"><td>' + escH(p.full_name) + '</td><td style="text-align:center">' + (st.minutes||0) + '</td><td style="text-align:center;color:#00ff88">' + (st.points||0) + '</td><td style="text-align:center">' + (st.field_goals_made||0) + '/' + (st.field_goals_att||0) + '</td><td style="text-align:center">' + (st.three_points_made||0) + '/' + (st.three_points_att||0) + '</td><td style="text-align:center">' + (st.assists||0) + '</td><td style="text-align:center">' + (st.rebounds||0) + '</td><td style="text-align:center">' + (st.pls_min||0) + '</td><td style="text-align:center;color:' + (p.starter?'#fbbf24':'#64748b') + '">' + (p.starter?'★':'') + '</td></tr>';
+      });
+      c += '</table></details>';
+      return c;
+    }
+    h += '<div class="card" style="border-color:rgba(96,165,250,.15)">';
+    h += playerCard(hA + ' Players', summary.home.players, '#60a5fa');
+    h += playerCard(aA + ' Players', summary.away.players, '#f5a62a');
+    h += '</div>';
+
+    contentEl.innerHTML = h;
+  } catch (err) {
+    log('❌ Summary test error: ' + err.message, 'log-err');
   }
 }
 
