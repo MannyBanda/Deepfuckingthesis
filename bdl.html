@@ -7305,6 +7305,7 @@ function computeRollingWindow(game){
   // Check we have at least one quarter of data (client or server-seeded)
   const serverPeriods = cs._serverPeriodScores || {};
   const activeQs = Object.keys(weightedQs).filter(q => weightedQs[q] > 0 && (qs.quarters[q] || serverPeriods[q]));
+  const clientQs = activeQs.filter(q => qs.quarters[q]);
   if(activeQs.length === 0){
     return { available:false, reason:'No quarter data yet', windowQuarters:windowLabel };
   }
