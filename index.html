@@ -9037,7 +9037,10 @@ function renderCard(game){
     }
 
     // ─── 3. SCORING COMPOSITION (how is each team scoring?) ───
-    var lc = cs.clientLeadComposition || cs.leadComposition;
+    var _serverLC = cs.leadComposition;
+    // Don't use server lead composition if breakdown is empty (all zeros from server snapshot)
+    if(_serverLC && _serverLC.home && _serverLC.away && (_serverLC.home.total||0) + (_serverLC.away.total||0) === 0) _serverLC = null;
+    var lc = cs.clientLeadComposition || _serverLC;
     var lcIsClient = !!cs.clientLeadComposition;
     if(lc){
       var lcStructColor = lc.structuralMargin > 0 ? 'var(--green)' : lc.structuralMargin < 0 ? 'var(--red)' : 'var(--t3)';
