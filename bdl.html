@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -26,36 +27,36 @@ input,textarea,select{font-size:16px!important;}
 .app{padding:12px;max-width:1400px;margin:0 auto;padding-bottom:env(safe-area-inset-bottom,12px);}
 
 /* Header */
-.hdr{display:flex;align-items:center;justify-content:space-between;padding:7px 0 10px;border-bottom:1px solid var(--b1);margin-bottom:9px;gap:6px;}
-.logo{font-size:8px;font-weight:600;letter-spacing:4px;color:var(--amber);text-transform:uppercase;white-space:nowrap;}
-.pulse{width:5px;height:5px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);animation:blink 2s ease-in-out infinite;margin:0 7px;flex-shrink:0;}
-.pulse.off{background:var(--t3);box-shadow:none;animation:none;}
-.hdr-sub{font-size:7px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.hdr-r{font-size:7px;color:var(--t3);white-space:nowrap;flex-shrink:0;}
-.hdr-r span{color:var(--amber);}
+.hdr{display:flex;align-items:center;justify-content:space-between;padding:7px 0 10px;border-bottom:1px solid var(–b1);margin-bottom:9px;gap:6px;}
+.logo{font-size:8px;font-weight:600;letter-spacing:4px;color:var(–amber);text-transform:uppercase;white-space:nowrap;}
+.pulse{width:5px;height:5px;border-radius:50%;background:var(–green);box-shadow:0 0 6px var(–green);animation:blink 2s ease-in-out infinite;margin:0 7px;flex-shrink:0;}
+.pulse.off{background:var(–t3);box-shadow:none;animation:none;}
+.hdr-sub{font-size:7px;color:var(–t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.hdr-r{font-size:7px;color:var(–t3);white-space:nowrap;flex-shrink:0;}
+.hdr-r span{color:var(–amber);}
 
 /* Controls */
 .ctrls{display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-bottom:9px;}
-.cbtn{font-size:7px;letter-spacing:1.5px;text-transform:uppercase;background:var(--glass);border:1px solid var(--glass-border);color:var(--t2);font-family:var(--mono);padding:7px 10px;cursor:pointer;transition:all .15s;white-space:nowrap;-webkit-appearance:none;border-radius:var(--radius-sm);min-height:32px;backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);}
-.cbtn:hover,.cbtn.on{border-color:var(--amber);color:var(--amber);background:rgba(245,166,42,.08);}
+.cbtn{font-size:7px;letter-spacing:1.5px;text-transform:uppercase;background:var(–glass);border:1px solid var(–glass-border);color:var(–t2);font-family:var(–mono);padding:7px 10px;cursor:pointer;transition:all .15s;white-space:nowrap;-webkit-appearance:none;border-radius:var(–radius-sm);min-height:32px;backdrop-filter:var(–blur);-webkit-backdrop-filter:var(–blur);}
+.cbtn:hover,.cbtn.on{border-color:var(–amber);color:var(–amber);background:rgba(245,166,42,.08);}
 .cbtn:active{opacity:.7;}
 .cbtn.freq{font-size:6px;padding:5px 7px;min-height:28px;}
-.cbtn.freq.on{border-color:var(--green);color:var(--green);background:rgba(0,255,136,.08);}
-.cbtn.freq.warn{border-color:var(--red);color:var(--red);}
-.ci{background:var(--glass);border:1px solid var(--glass-border);color:var(--t1);font-family:var(--mono);padding:7px 8px;outline:none;width:120px;-webkit-appearance:none;border-radius:var(--radius-xs);min-height:32px;backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);}
-.ci:focus{border-color:var(--amber);}
-.ci::placeholder{color:var(--t3);}
-.cml{margin-left:auto;font-size:7px;color:var(--t3);white-space:nowrap;}
-.cml span{color:var(--amber);}
+.cbtn.freq.on{border-color:var(–green);color:var(–green);background:rgba(0,255,136,.08);}
+.cbtn.freq.warn{border-color:var(–red);color:var(–red);}
+.ci{background:var(–glass);border:1px solid var(–glass-border);color:var(–t1);font-family:var(–mono);padding:7px 8px;outline:none;width:120px;-webkit-appearance:none;border-radius:var(–radius-xs);min-height:32px;backdrop-filter:var(–blur);-webkit-backdrop-filter:var(–blur);}
+.ci:focus{border-color:var(–amber);}
+.ci::placeholder{color:var(–t3);}
+.cml{margin-left:auto;font-size:7px;color:var(–t3);white-space:nowrap;}
+.cml span{color:var(–amber);}
 .freq-group{display:flex;align-items:center;gap:2px;margin-left:4px;}
-.freq-lbl{font-size:6px;color:var(--t3);letter-spacing:1px;margin-right:2px;}
+.freq-lbl{font-size:6px;color:var(–t3);letter-spacing:1px;margin-right:2px;}
 
 /* Pills */
 .pills{display:flex;flex-wrap:wrap;gap:3px;margin-bottom:9px;}
-.pill{font-size:7px;letter-spacing:.8px;padding:6px 10px;border:1px solid var(--glass-border);cursor:pointer;font-family:var(--mono);color:var(--t2);background:var(--glass);transition:all .15s;-webkit-appearance:none;border-radius:var(--radius-sm);min-height:30px;backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);}
-.pill:hover,.pill.sel{border-color:var(--green);color:var(--green);background:rgba(0,255,136,.06);}
-.pill.live{border-color:var(--yellow);color:var(--yellow);background:rgba(255,209,102,.06);}
-.pill.done{color:var(--t3);border-color:var(--glass-border);}
+.pill{font-size:7px;letter-spacing:.8px;padding:6px 10px;border:1px solid var(–glass-border);cursor:pointer;font-family:var(–mono);color:var(–t2);background:var(–glass);transition:all .15s;-webkit-appearance:none;border-radius:var(–radius-sm);min-height:30px;backdrop-filter:var(–blur);-webkit-backdrop-filter:var(–blur);}
+.pill:hover,.pill.sel{border-color:var(–green);color:var(–green);background:rgba(0,255,136,.06);}
+.pill.live{border-color:var(–yellow);color:var(–yellow);background:rgba(255,209,102,.06);}
+.pill.done{color:var(–t3);border-color:var(–glass-border);}
 
 /* Grid */
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:8px;}
@@ -63,198 +64,199 @@ input,textarea,select{font-size:16px!important;}
 /* Card */
 @keyframes fu{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
 @keyframes cg{0%,100%{box-shadow:0 0 0 0 rgba(0,255,136,.12)}50%{box-shadow:0 0 0 8px rgba(0,255,136,0)}}
-.card{background:var(--s1);border:1px solid var(--glass-border);animation:fu .2s ease;overflow:hidden;position:relative;border-radius:var(--radius);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);}
+.card{background:var(–s1);border:1px solid var(–glass-border);animation:fu .2s ease;overflow:hidden;position:relative;border-radius:var(–radius);backdrop-filter:var(–blur);-webkit-backdrop-filter:var(–blur);}
 .card.ce{border-color:rgba(0,255,136,.3);animation:fu .2s ease,cg 2.5s ease-in-out infinite;}
 .card.cw{border-color:rgba(255,209,102,.3);}
-.card.ce::before,.card.cw::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;border-radius:var(--radius) var(--radius) 0 0;}
-.card.ce::before{background:var(--green);box-shadow:0 0 8px var(--green);}
-.card.cw::before{background:var(--yellow);}
+.card.ce::before,.card.cw::before{content:’’;position:absolute;top:0;left:0;right:0;height:2px;border-radius:var(–radius) var(–radius) 0 0;}
+.card.ce::before{background:var(–green);box-shadow:0 0 8px var(–green);}
+.card.cw::before{background:var(–yellow);}
 
-.ch{display:flex;align-items:center;justify-content:space-between;padding:8px 11px;background:rgba(255,255,255,.02);border-bottom:1px solid var(--b1);border-radius:var(--radius) var(--radius) 0 0;}
+.ch{display:flex;align-items:center;justify-content:space-between;padding:8px 11px;background:rgba(255,255,255,.02);border-bottom:1px solid var(–b1);border-radius:var(–radius) var(–radius) 0 0;}
 .mup{font-size:12px;font-weight:500;}
-.sub{font-size:6px;color:var(--t3);margin-top:1px;}
+.sub{font-size:6px;color:var(–t3);margin-top:1px;}
 .chr{display:flex;align-items:center;gap:5px;}
-.pb{font-size:7px;letter-spacing:1px;padding:2px 6px;border:1px solid var(--glass-border);color:var(--amber);border-radius:var(--radius-xs);background:rgba(245,166,42,.06);}
-.ld{width:5px;height:5px;border-radius:50%;background:var(--green);box-shadow:0 0 5px var(--green);animation:blink 1.5s ease-in-out infinite;flex-shrink:0;}
+.pb{font-size:7px;letter-spacing:1px;padding:2px 6px;border:1px solid var(–glass-border);color:var(–amber);border-radius:var(–radius-xs);background:rgba(245,166,42,.06);}
+.ld{width:5px;height:5px;border-radius:50%;background:var(–green);box-shadow:0 0 5px var(–green);animation:blink 1.5s ease-in-out infinite;flex-shrink:0;}
 
-.sr{display:flex;align-items:center;justify-content:space-between;padding:10px 11px;border-bottom:1px solid var(--b1);}
-.srt{font-size:7px;color:var(--t2);letter-spacing:1px;margin-bottom:2px;}
+.sr{display:flex;align-items:center;justify-content:space-between;padding:10px 11px;border-bottom:1px solid var(–b1);}
+.srt{font-size:7px;color:var(–t2);letter-spacing:1px;margin-bottom:2px;}
 .srs{font-size:26px;font-weight:600;letter-spacing:-1px;line-height:1;}
-.bonus-tag{font-size:6px;color:var(--red);border:1px solid var(--red);padding:1px 3px;margin-left:3px;vertical-align:middle;border-radius:3px;}
-.sr-sep{font-size:13px;color:var(--t3);}
+.bonus-tag{font-size:6px;color:var(–red);border:1px solid var(–red);padding:1px 3px;margin-left:3px;vertical-align:middle;border-radius:3px;}
+.sr-sep{font-size:13px;color:var(–t3);}
 
 .pre{padding:16px 11px;text-align:center;}
-.prelbl{font-size:7px;color:var(--t2);letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;}
-.prediv{height:1px;background:var(--b1);margin:14px 0;}
-.countdown{color:var(--amber);font-size:22px;font-weight:600;}
+.prelbl{font-size:7px;color:var(–t2);letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;}
+.prediv{height:1px;background:var(–b1);margin:14px 0;}
+.countdown{color:var(–amber);font-size:22px;font-weight:600;}
 
-.ctrl-bar{display:flex;align-items:center;gap:7px;padding:8px 11px;border-bottom:1px solid var(--b1);flex-wrap:wrap;}
-.vrd{font-size:7px;font-weight:600;letter-spacing:2px;padding:2px 7px;border:1px solid;text-transform:uppercase;white-space:nowrap;flex-shrink:0;border-radius:var(--radius-xs);}
-.cl{font-size:6px;color:var(--t3);letter-spacing:1px;}
+.ctrl-bar{display:flex;align-items:center;gap:7px;padding:8px 11px;border-bottom:1px solid var(–b1);flex-wrap:wrap;}
+.vrd{font-size:7px;font-weight:600;letter-spacing:2px;padding:2px 7px;border:1px solid;text-transform:uppercase;white-space:nowrap;flex-shrink:0;border-radius:var(–radius-xs);}
+.cl{font-size:6px;color:var(–t3);letter-spacing:1px;}
 .ct{font-size:12px;font-weight:600;}
 .bw{flex:1;min-width:60px;padding:0 3px;}
-.bt2{height:2px;background:var(--b2);border-radius:1px;}
+.bt2{height:2px;background:var(–b2);border-radius:1px;}
 .bf{height:100%;transition:width .6s ease;border-radius:1px;}
 .cn{font-size:17px;font-weight:600;letter-spacing:-1px;flex-shrink:0;}
-.dq{font-size:6px;letter-spacing:1px;padding:1px 4px;border:1px solid;color:var(--green);border-color:var(--green);border-radius:var(--radius-xs);}
+.dq{font-size:6px;letter-spacing:1px;padding:1px 4px;border:1px solid;color:var(–green);border-color:var(–green);border-radius:var(–radius-xs);}
 
-.inds{padding:6px 11px;border-bottom:1px solid var(--b1);}
-.ind{display:flex;align-items:center;gap:4px;padding:2px 0;border-bottom:1px solid var(--b1);}
+.inds{padding:6px 11px;border-bottom:1px solid var(–b1);}
+.ind{display:flex;align-items:center;gap:4px;padding:2px 0;border-bottom:1px solid var(–b1);}
 .ind:last-child{border:none;}
-.ii{font-size:6px;color:var(--t3);width:14px;flex-shrink:0;}
-.in{font-size:6px;color:var(--t2);width:78px;flex-shrink:0;}
-.iw{font-size:6px;color:var(--t3);width:18px;flex-shrink:0;}
+.ii{font-size:6px;color:var(–t3);width:14px;flex-shrink:0;}
+.in{font-size:6px;color:var(–t2);width:78px;flex-shrink:0;}
+.iw{font-size:6px;color:var(–t3);width:18px;flex-shrink:0;}
 .pip{width:5px;height:5px;border-radius:1px;flex-shrink:0;}
-.pw{background:#00ff88;}.plw{background:#a8ff78;}.pd{background:var(--yellow);}.pll{background:#ff8c42;}.pl{background:var(--red);}
+.pw{background:#00ff88;}.plw{background:#a8ff78;}.pd{background:var(–yellow);}.pll{background:#ff8c42;}.pl{background:var(–red);}
 .il{font-size:7px;font-weight:600;width:26px;flex-shrink:0;}
-.id{font-size:6px;color:var(--t2);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.id{font-size:6px;color:var(–t2);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 
-.traj{padding:6px 11px;border-bottom:1px solid var(--b1);}
-.th{font-size:6px;color:var(--t2);letter-spacing:1.5px;text-transform:uppercase;display:flex;align-items:center;margin-bottom:3px;gap:4px;flex-wrap:wrap;}
+.traj{padding:6px 11px;border-bottom:1px solid var(–b1);}
+.th{font-size:6px;color:var(–t2);letter-spacing:1.5px;text-transform:uppercase;display:flex;align-items:center;margin-bottom:3px;gap:4px;flex-wrap:wrap;}
 .tl{font-size:6px;font-weight:600;letter-spacing:1px;padding:1px 5px;border:1px solid;margin-left:auto;}
 .ts{display:flex;align-items:flex-start;gap:3px;padding:2px 0;}
 .tk{font-size:6px;font-weight:600;width:16px;flex-shrink:0;padding-top:1px;}
 .tt{font-size:6px;flex:1;line-height:1.5;}
 
 /* Sonnet Analysis */
-.analysis{padding:8px 11px;border-bottom:1px solid var(--b1);background:rgba(0,255,136,.03);}
-.analysis-hdr{font-size:6px;color:var(--green);letter-spacing:1.5px;text-transform:uppercase;display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;}
-.analysis-body{font-size:7px;color:var(--t2);line-height:1.7;font-family:var(--sans);white-space:pre-wrap;word-break:break-word;}
-.analysis-loading{font-size:7px;color:var(--t3);display:flex;align-items:center;gap:6px;}
-.analysis-cost{font-size:5px;color:var(--t2);}
+.analysis{padding:8px 11px;border-bottom:1px solid var(–b1);background:rgba(0,255,136,.03);}
+.analysis-hdr{font-size:6px;color:var(–green);letter-spacing:1.5px;text-transform:uppercase;display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;}
+.analysis-body{font-size:7px;color:var(–t2);line-height:1.7;font-family:var(–sans);white-space:pre-wrap;word-break:break-word;}
+.analysis-loading{font-size:7px;color:var(–t3);display:flex;align-items:center;gap:6px;}
+.analysis-cost{font-size:5px;color:var(–t2);}
 
 /* Decision View */
-.dv{padding:8px 11px;border-bottom:1px solid var(--b1);background:rgba(147,120,230,.04);}
+.dv{padding:8px 11px;border-bottom:1px solid var(–b1);background:rgba(147,120,230,.04);}
 .dv-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px;}
 .dv-row:last-child{margin-bottom:0;}
-.dv-label{font-size:5px;color:var(--t2);letter-spacing:1.5px;text-transform:uppercase;width:56px;flex-shrink:0;}
+.dv-label{font-size:5px;color:var(–t2);letter-spacing:1.5px;text-transform:uppercase;width:56px;flex-shrink:0;}
 .dv-val{font-size:9px;font-weight:600;}
-.dv-sub{font-size:6px;color:var(--t2);}
-.dv-tag{font-size:6px;letter-spacing:1px;padding:1px 5px;border:1px solid;white-space:nowrap;border-radius:var(--radius-xs);}
-.dv-pred{font-size:7px;color:var(--t1);font-family:var(--sans);line-height:1.5;padding:4px 0 0;}
+.dv-sub{font-size:6px;color:var(–t2);}
+.dv-tag{font-size:6px;letter-spacing:1px;padding:1px 5px;border:1px solid;white-space:nowrap;border-radius:var(–radius-xs);}
+.dv-pred{font-size:7px;color:var(–t1);font-family:var(–sans);line-height:1.5;padding:4px 0 0;}
 .dv-hdr{font-size:6px;color:#a78bfa;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:5px;display:flex;align-items:center;justify-content:space-between;}
 
 /* Evidence toggle */
-.ev-toggle{font-size:6px;color:var(--t2);letter-spacing:1.5px;text-transform:uppercase;padding:7px 11px;border-bottom:1px solid var(--b1);border-top:1px solid var(--b1);cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none;-webkit-user-select:none;background:rgba(255,255,255,.02);}
-.ev-toggle:hover{color:var(--t2);background:rgba(255,255,255,.04);}
+.ev-toggle{font-size:6px;color:var(–t2);letter-spacing:1.5px;text-transform:uppercase;padding:7px 11px;border-bottom:1px solid var(–b1);border-top:1px solid var(–b1);cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none;-webkit-user-select:none;background:rgba(255,255,255,.02);}
+.ev-toggle:hover{color:var(–t2);background:rgba(255,255,255,.04);}
 .ev-toggle .arr{transition:transform .2s;display:inline-block;}
 .ev-toggle.open .arr{transform:rotate(90deg);}
 .ev-body{overflow:hidden;transition:max-height .3s ease;}
 .ev-body.collapsed{max-height:0!important;overflow:hidden;}
 
 /* Data inputs (clutch + odds) */
-.data-inputs{padding:4px 11px;border-bottom:1px solid var(--b1);background:rgba(245,166,42,.03);}
-.di-hdr{font-size:5.5px;color:var(--amber);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:3px;display:flex;align-items:center;justify-content:space-between;opacity:.8;}
+.data-inputs{padding:4px 11px;border-bottom:1px solid var(–b1);background:rgba(245,166,42,.03);}
+.di-hdr{font-size:5.5px;color:var(–amber);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:3px;display:flex;align-items:center;justify-content:space-between;opacity:.8;}
 .di-row{display:flex;align-items:center;gap:3px;margin-bottom:2px;flex-wrap:wrap;}
-.di-lbl{font-size:5px;color:var(--t3);width:42px;flex-shrink:0;}
-.di-input{background:rgba(255,255,255,.04);border:1px solid var(--glass-border);color:var(--t2);font-family:var(--mono);font-size:5px;padding:1px 2px;width:44px;outline:none;-webkit-appearance:none;border-radius:var(--radius-xs);text-align:center;}
-.di-input:focus{border-color:var(--amber);}
+.di-lbl{font-size:5px;color:var(–t3);width:42px;flex-shrink:0;}
+.di-input{background:rgba(255,255,255,.04);border:1px solid var(–glass-border);color:var(–t2);font-family:var(–mono);font-size:5px;padding:1px 2px;width:44px;outline:none;-webkit-appearance:none;border-radius:var(–radius-xs);text-align:center;}
+.di-input:focus{border-color:var(–amber);}
 .di-input.di-sm{font-size:5px;padding:1px 2px;}
-.di-input::placeholder{color:var(--t3);font-size:4.5px;}
-.di-btn{font-size:5px;letter-spacing:1px;background:var(--glass);border:1px solid var(--glass-border);color:var(--t2);font-family:var(--mono);padding:2px 6px;cursor:pointer;-webkit-appearance:none;border-radius:var(--radius-xs);}
-.di-btn:hover{border-color:var(--amber);color:var(--amber);background:rgba(245,166,42,.08);}
-.di-saved{font-size:5px;color:var(--green);margin-left:4px;}
+.di-input::placeholder{color:var(–t3);font-size:4.5px;}
+.di-btn{font-size:5px;letter-spacing:1px;background:var(–glass);border:1px solid var(–glass-border);color:var(–t2);font-family:var(–mono);padding:2px 6px;cursor:pointer;-webkit-appearance:none;border-radius:var(–radius-xs);}
+.di-btn:hover{border-color:var(–amber);color:var(–amber);background:rgba(245,166,42,.08);}
+.di-saved{font-size:5px;color:var(–green);margin-left:4px;}
 
 /* Clutch Upload Zone */
 .clutch-upload{display:flex;align-items:center;gap:6px;padding:6px 0;flex-wrap:wrap;}
-.cu-btn{font-size:7px;letter-spacing:1px;text-transform:uppercase;background:rgba(147,130,220,.06);border:1px dashed rgba(147,130,220,.25);color:#9382dc;font-family:var(--mono);padding:7px 12px;cursor:pointer;-webkit-appearance:none;border-radius:var(--radius-sm);min-height:32px;transition:all .15s;}
+.cu-btn{font-size:7px;letter-spacing:1px;text-transform:uppercase;background:rgba(147,130,220,.06);border:1px dashed rgba(147,130,220,.25);color:#9382dc;font-family:var(–mono);padding:7px 12px;cursor:pointer;-webkit-appearance:none;border-radius:var(–radius-sm);min-height:32px;transition:all .15s;}
 .cu-btn:hover{border-color:#9382dc;background:rgba(147,130,220,.12);}
-.cu-btn.active{border-color:var(--amber);color:var(--amber);background:rgba(245,166,42,.06);border-style:solid;}
-.cu-status{font-size:7px;color:var(--t3);font-family:var(--mono);}
-.cu-status.ok{color:var(--green);}
-.cu-status.err{color:var(--red);}
-.cu-badge{display:inline-flex;align-items:center;gap:3px;font-size:6px;letter-spacing:.5px;background:rgba(0,255,136,.06);border:1px solid rgba(0,255,136,.15);color:var(--green);padding:3px 8px;font-family:var(--mono);border-radius:var(--radius-xs);}
+.cu-btn.active{border-color:var(–amber);color:var(–amber);background:rgba(245,166,42,.06);border-style:solid;}
+.cu-status{font-size:7px;color:var(–t3);font-family:var(–mono);}
+.cu-status.ok{color:var(–green);}
+.cu-status.err{color:var(–red);}
+.cu-badge{display:inline-flex;align-items:center;gap:3px;font-size:6px;letter-spacing:.5px;background:rgba(0,255,136,.06);border:1px solid rgba(0,255,136,.15);color:var(–green);padding:3px 8px;font-family:var(–mono);border-radius:var(–radius-xs);}
 
 /* Thesis xref */
-.xref{padding:6px 11px;border-bottom:1px solid var(--b1);background:rgba(245,166,42,.03);}
-.xh{font-size:6px;color:var(--amber);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:3px;}
+.xref{padding:6px 11px;border-bottom:1px solid var(–b1);background:rgba(245,166,42,.03);}
+.xh{font-size:6px;color:var(–amber);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:3px;}
 .xr{font-size:6px;padding:1px 0;}
-.xr.ok{color:var(--g2);}.xr.warn{color:var(--yellow);}.xr.info{color:var(--t2);}
+.xr.ok{color:var(–g2);}.xr.warn{color:var(–yellow);}.xr.info{color:var(–t2);}
 
 /* Thesis */
 .thesis{padding:7px 11px;}
-.thdr{font-size:6px;color:var(--t3);letter-spacing:1.5px;text-transform:uppercase;display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;gap:4px;}
-.tedit,.tgen{font-size:7px;color:var(--amber);background:none;border:none;cursor:pointer;font-family:var(--mono);letter-spacing:1px;padding:6px 4px;min-height:28px;}
-.tgen{color:var(--green);border:1px solid var(--green);padding:6px 10px;border-radius:var(--radius-sm);}
+.thdr{font-size:6px;color:var(–t3);letter-spacing:1.5px;text-transform:uppercase;display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;gap:4px;}
+.tedit,.tgen{font-size:7px;color:var(–amber);background:none;border:none;cursor:pointer;font-family:var(–mono);letter-spacing:1px;padding:6px 4px;min-height:28px;}
+.tgen{color:var(–green);border:1px solid var(–green);padding:6px 10px;border-radius:var(–radius-sm);}
 .tgen:active{background:rgba(0,255,136,.1);}
 .tgen:disabled{opacity:.4;cursor:default;}
-.tbody{font-size:7px;color:var(--t2);line-height:1.7;font-family:var(--sans);white-space:pre-wrap;word-break:break-word;}
-.tpr{margin-top:5px;padding-top:5px;border-top:1px solid var(--b1);}
-.trow{font-size:6px;color:var(--t3);padding:1px 0;}
-.trow span{color:var(--t1);}
-.tempty{font-size:7px;color:var(--t3);font-style:italic;}
-.ta{width:100%;background:var(--glass);border:1px solid var(--glass-border);color:var(--t1);font-family:var(--sans);padding:10px;resize:vertical;min-height:120px;outline:none;line-height:1.6;border-radius:var(--radius-xs);-webkit-appearance:none;touch-action:manipulation;}
-.ta:focus{border-color:var(--amber);}
-.thint{font-size:6px;color:var(--t3);margin-top:3px;line-height:1.7;white-space:pre-line;}
+.tbody{font-size:7px;color:var(–t2);line-height:1.7;font-family:var(–sans);white-space:pre-wrap;word-break:break-word;}
+.tpr{margin-top:5px;padding-top:5px;border-top:1px solid var(–b1);}
+.trow{font-size:6px;color:var(–t3);padding:1px 0;}
+.trow span{color:var(–t1);}
+.tempty{font-size:7px;color:var(–t3);font-style:italic;}
+.ta{width:100%;background:var(–glass);border:1px solid var(–glass-border);color:var(–t1);font-family:var(–sans);padding:10px;resize:vertical;min-height:120px;outline:none;line-height:1.6;border-radius:var(–radius-xs);-webkit-appearance:none;touch-action:manipulation;}
+.ta:focus{border-color:var(–amber);}
+.thint{font-size:6px;color:var(–t3);margin-top:3px;line-height:1.7;white-space:pre-line;}
 .tbtn-row{display:flex;gap:6px;margin-top:6px;}
-.tsave,.tcancel{font-size:7px;background:none;font-family:var(--mono);padding:7px 14px;cursor:pointer;letter-spacing:1px;-webkit-appearance:none;border-radius:var(--radius-sm);min-height:32px;}
-.tsave{border:1px solid var(--amber);color:var(--amber);}
+.tsave,.tcancel{font-size:7px;background:none;font-family:var(–mono);padding:7px 14px;cursor:pointer;letter-spacing:1px;-webkit-appearance:none;border-radius:var(–radius-sm);min-height:32px;}
+.tsave{border:1px solid var(–amber);color:var(–amber);}
 .tsave:active{background:rgba(245,166,42,.15);}
-.tcancel{border:1px solid var(--glass-border);color:var(--t2);}
+.tcancel{border:1px solid var(–glass-border);color:var(–t2);}
 
 /* Gen progress */
-.gen-progress{font-size:7px;color:var(--t2);padding:6px 0;line-height:1.7;}
-.gen-step{color:var(--t3);}
-.gen-step.done{color:var(--green);}
-.gen-step.active{color:var(--amber);}
-.gen-step.err{color:var(--red);}
+.gen-progress{font-size:7px;color:var(–t2);padding:6px 0;line-height:1.7;}
+.gen-step{color:var(–t3);}
+.gen-step.done{color:var(–green);}
+.gen-step.active{color:var(–amber);}
+.gen-step.err{color:var(–red);}
 
-.log{background:rgba(20,20,28,.5);border-top:1px solid var(--b1);padding:4px 11px;font-size:6px;color:var(--t3);max-height:200px;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;}
-.log .ok{color:#3d9970;}.log .er{color:var(--red);}
-.foot{font-size:6px;color:var(--t3);padding:3px 11px 6px;}
+.log{background:rgba(20,20,28,.5);border-top:1px solid var(–b1);padding:4px 11px;font-size:6px;color:var(–t3);max-height:200px;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;}
+.log .ok{color:#3d9970;}.log .er{color:var(–red);}
+.foot{font-size:6px;color:var(–t3);padding:3px 11px 6px;}
 
-.loading{display:flex;align-items:center;gap:6px;padding:11px;font-size:7px;color:var(--t3);}
-.err-msg{font-size:7px;color:var(--red);padding:6px 11px;}
-.empty{padding:44px;text-align:center;color:var(--t3);font-size:8px;letter-spacing:2px;}
-.date-label{font-size:7px;color:var(--t2);letter-spacing:1px;margin-bottom:6px;padding:4px 0;}
-.date-label span{color:var(--amber);}
+.loading{display:flex;align-items:center;gap:6px;padding:11px;font-size:7px;color:var(–t3);}
+.err-msg{font-size:7px;color:var(–red);padding:6px 11px;}
+.empty{padding:44px;text-align:center;color:var(–t3);font-size:8px;letter-spacing:2px;}
+.date-label{font-size:7px;color:var(–t2);letter-spacing:1px;margin-bottom:6px;padding:4px 0;}
+.date-label span{color:var(–amber);}
 
 /* Alert bar */
-.abar{position:fixed;top:0;left:0;right:0;z-index:200;display:flex;align-items:center;gap:9px;padding:10px 14px;font-size:8px;letter-spacing:1px;transform:translateY(-100%);transition:transform .3s ease;padding-top:max(10px,env(safe-area-inset-top));backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);border-radius:0 0 var(--radius) var(--radius);}
+.abar{position:fixed;top:0;left:0;right:0;z-index:200;display:flex;align-items:center;gap:9px;padding:10px 14px;font-size:8px;letter-spacing:1px;transform:translateY(-100%);transition:transform .3s ease;padding-top:max(10px,env(safe-area-inset-top));backdrop-filter:var(–blur);-webkit-backdrop-filter:var(–blur);border-radius:0 0 var(–radius) var(–radius);}
 .abar.show{transform:translateY(0);}
-.abar.entry{background:rgba(0,255,136,.1);border-bottom:1px solid rgba(0,255,136,.3);color:var(--green);}
-.abar.watch{background:rgba(255,209,102,.08);border-bottom:1px solid rgba(255,209,102,.3);color:var(--yellow);}
+.abar.entry{background:rgba(0,255,136,.1);border-bottom:1px solid rgba(0,255,136,.3);color:var(–green);}
+.abar.watch{background:rgba(255,209,102,.08);border-bottom:1px solid rgba(255,209,102,.3);color:var(–yellow);}
 .ax{margin-left:auto;cursor:pointer;opacity:.5;font-size:14px;padding:6px;min-width:28px;text-align:center;}
 
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
 @keyframes spin{to{transform:rotate(360deg)}}
-.spin{width:8px;height:8px;border:1px solid var(--b2);border-top-color:var(--amber);border-radius:50%;animation:spin .7s linear infinite;display:inline-block;}
+.spin{width:8px;height:8px;border:1px solid var(–b2);border-top-color:var(–amber);border-radius:50%;animation:spin .7s linear infinite;display:inline-block;}
 
 @media(max-width:600px){
-  .app{padding:8px;padding-bottom:max(8px,env(safe-area-inset-bottom));}
-  .grid{grid-template-columns:1fr;}
-  .ctrls{gap:3px;}
-  .cbtn{font-size:7px;padding:7px 8px;}
-  .ci{width:100px;}
-  .cml{display:none;}
-  .mup{font-size:11px;}
-  .srs{font-size:22px;}
-  .cn{font-size:15px;}
-  .in{width:68px;}
-  .id{font-size:5px;}
+.app{padding:8px;padding-bottom:max(8px,env(safe-area-inset-bottom));}
+.grid{grid-template-columns:1fr;}
+.ctrls{gap:3px;}
+.cbtn{font-size:7px;padding:7px 8px;}
+.ci{width:100px;}
+.cml{display:none;}
+.mup{font-size:11px;}
+.srs{font-size:22px;}
+.cn{font-size:15px;}
+.in{width:68px;}
+.id{font-size:5px;}
 }
-#conf-table{margin:0 11px 8px;padding:8px 10px;background:var(--glass);border:1px solid var(--glass-border);border-radius:var(--radius);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);}
-#conf-table .ct-hdr{font-size:7px;letter-spacing:1.5px;color:var(--t2);text-transform:uppercase;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:nowrap;gap:6px;}
+#conf-table{margin:0 11px 8px;padding:8px 10px;background:var(–glass);border:1px solid var(–glass-border);border-radius:var(–radius);backdrop-filter:var(–blur);-webkit-backdrop-filter:var(–blur);}
+#conf-table .ct-hdr{font-size:7px;letter-spacing:1.5px;color:var(–t2);text-transform:uppercase;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:nowrap;gap:6px;}
 #conf-table .ct-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;}
 #conf-table table{border-collapse:collapse;font-size:7px;min-width:620px;white-space:nowrap;}
-#conf-table th{color:var(--t3);font-weight:400;text-align:left;padding:2px 6px;border-bottom:1px solid var(--b1);font-size:5.5px;letter-spacing:.5px;text-transform:uppercase;white-space:nowrap;}
+#conf-table th{color:var(–t3);font-weight:400;text-align:left;padding:2px 6px;border-bottom:1px solid var(–b1);font-size:5.5px;letter-spacing:.5px;text-transform:uppercase;white-space:nowrap;}
 #conf-table td{padding:4px 6px;border-bottom:1px solid rgba(255,255,255,.03);vertical-align:middle;white-space:nowrap;}
 #conf-table tr:last-child td{border-bottom:none;}
 #conf-table .ct-score{font-weight:600;font-size:8px;text-align:center;}
 #conf-table .ct-verdict{font-size:5.5px;letter-spacing:.5px;text-align:center;}
-#conf-table .ct-cond{color:var(--t2);font-size:6px;line-height:1.4;max-width:180px;}
-#conf-table tr.ct-final td{color:var(--t3) !important;opacity:.5;}
+#conf-table .ct-cond{color:var(–t2);font-size:6px;line-height:1.4;max-width:180px;}
+#conf-table tr.ct-final td{color:var(–t3) !important;opacity:.5;}
 #conf-table tr.ct-row{border-left:2px solid transparent;}
-#conf-table tr.ct-optimal{border-left:2px solid var(--green);background:rgba(0,200,83,.04);}
-#conf-table tr.ct-window{border-left:2px solid var(--amber);background:rgba(255,160,0,.03);}
-#conf-table tr.ct-closing{border-left:2px solid var(--yellow);background:rgba(255,235,59,.02);}
-#conf-table tr.ct-counter{border-left:2px solid var(--red);background:rgba(255,82,82,.03);}
-#conf-table .ct-badge{font-size:5px;letter-spacing:.5px;padding:1px 4px;border-radius:var(--radius-xs);font-weight:600;display:inline-block;text-transform:uppercase;}
-#conf-table .ct-live{background:rgba(0,200,83,.12);color:var(--green);}
-#conf-table .ct-pre{background:rgba(255,255,255,.05);color:var(--t3);}
-#conf-table .ct-done{background:rgba(255,255,255,.03);color:var(--t3);}
+#conf-table tr.ct-optimal{border-left:2px solid var(–green);background:rgba(0,200,83,.04);}
+#conf-table tr.ct-window{border-left:2px solid var(–amber);background:rgba(255,160,0,.03);}
+#conf-table tr.ct-closing{border-left:2px solid var(–yellow);background:rgba(255,235,59,.02);}
+#conf-table tr.ct-counter{border-left:2px solid var(–red);background:rgba(255,82,82,.03);}
+#conf-table .ct-badge{font-size:5px;letter-spacing:.5px;padding:1px 4px;border-radius:var(–radius-xs);font-weight:600;display:inline-block;text-transform:uppercase;}
+#conf-table .ct-live{background:rgba(0,200,83,.12);color:var(–green);}
+#conf-table .ct-pre{background:rgba(255,255,255,.05);color:var(–t3);}
+#conf-table .ct-done{background:rgba(255,255,255,.03);color:var(–t3);}
 @media(max-width:600px){#conf-table .ct-cond{max-width:120px;font-size:5.5px;}#conf-table table{min-width:600px;font-size:6px;}}
 </style>
+
 </head>
 <body>
 
@@ -307,6 +309,7 @@ input,textarea,select{font-size:16px!important;}
   </div>
 
   <!-- Clutch Upload Zone -->
+
   <div class="clutch-upload" id="clutch-zone">
     <input type="file" id="clutch-file" accept="image/*" style="display:none" onchange="handleClutchUpload(this)">
     <button class="cu-btn" id="cu-btn" onclick="document.getElementById('clutch-file').click()">📋 UPLOAD L15 CLUTCH</button>
@@ -2803,7 +2806,7 @@ async function triggerAnalysis(game){
       }
     }
 
-    const summaryPayload = isBDL ? game.bdlData : game.summary;
+    const summaryPayload = game.summary;
 
     // Build clutch data with tier info
     let clutchPayload = cs.clutchData || null;
@@ -6658,7 +6661,7 @@ function computeProjection(game){
   if(period < 1) return null;
 
   const isBDL = game.dataSource === 'BDL';
-  const s = isBDL ? game.bdlData : game.summary;
+  const s = game.summary;
   if(!s) return null;
 
   // ── TIME REMAINING (NBA: 4×12 min) ──
@@ -7684,7 +7687,7 @@ function classifyCombinedRead(floorScore, floorTeam, windowResult, accelResult){
 // COMPUTE DISPATCH — routes to SR or BDL compute path
 // ══════════════════════════════════════════════════════════════════════════════
 function computeAny(game){
-  if(game.dataSource==='BDL' && game.bdlData) return computeBDL(game);
+  // BDL builds SR-shaped summary — same compute() path works for both
   return compute(game);
 }
 
@@ -9821,197 +9824,198 @@ function startEdit(cardId){
   const currentThesis=theses[cardId]||'';
   var h='<div class="thdr">PRE-GAME THESIS<span style="font-size:6px;color:var(--amber);letter-spacing:1px;">EDITING</span></div>';
   h+='<textarea class="ta" id="ta-'+cardId+'" autocomplete="off" autocorrect="on" spellcheck="true">'+esc(currentThesis)+'</textarea>';
-  h+='<div class="thint">Lean: [team]\nEntry: [trigger]\nPass: [condition]\nWatch: [signal]\nFlag: [risk]</div>';
-  h+='<div class="tbtn-row">';
-  h+='<button class="tsave" onclick="saveThesisFromCard(\''+cardId+'\')">SAVE</button>';
-  h+='<button class="tcancel" onclick="cancelEdit(\''+cardId+'\')">CANCEL</button>';
-  h+='</div>';
-  tb.innerHTML=h;
-  setTimeout(function(){var ta=document.getElementById('ta-'+cardId);if(ta){ta.focus();ta.setSelectionRange(ta.value.length,ta.value.length);}},50);
+
+h+=’<div class="thint">Lean: [team]\nEntry: [trigger]\nPass: [condition]\nWatch: [signal]\nFlag: [risk]</div>’;
+h+=’<div class="tbtn-row">’;
+h+=’<button class="tsave" onclick="saveThesisFromCard(\''+cardId+'\')">SAVE</button>’;
+h+=’<button class="tcancel" onclick="cancelEdit(\''+cardId+'\')">CANCEL</button>’;
+h+=’</div>’;
+tb.innerHTML=h;
+setTimeout(function(){var ta=document.getElementById(‘ta-’+cardId);if(ta){ta.focus();ta.setSelectionRange(ta.value.length,ta.value.length);}},50);
 }
 function cancelEdit(cardId){const cs=cardState[cardId];if(!cs)return;cs.editing=false;const g=games.find(x=>x.id===cardId);if(g)renderCard(g);}
 function saveThesisFromCard(cardId){
-  const ta=document.getElementById('ta-'+cardId);if(!ta)return;
-  saveThesis(cardId,ta.value);
-  const cs=cardState[cardId];if(cs)cs.editing=false;
-  const g=games.find(x=>x.id===cardId);if(g)renderCard(g);
+const ta=document.getElementById(‘ta-’+cardId);if(!ta)return;
+saveThesis(cardId,ta.value);
+const cs=cardState[cardId];if(cs)cs.editing=false;
+const g=games.find(x=>x.id===cardId);if(g)renderCard(g);
 }
 
 // ── Visibility API ────────────────────────────────────────────────────────
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!paused)refreshLiveCards();});
+document.addEventListener(‘visibilitychange’,()=>{if(!document.hidden&&!paused)refreshLiveCards();});
 
 // ══════════════════════════════════════════════════════════════════════════
 // ══════════════════════════════════════════════════════════════════════════════
 // NTFY PUSH NOTIFICATIONS
 // ══════════════════════════════════════════════════════════════════════════════
-let ntfyTopic = localStorage.getItem('nba4:ntfy:topic') || '';
+let ntfyTopic = localStorage.getItem(‘nba4:ntfy:topic’) || ‘’;
 let ntfyEnabled = !!ntfyTopic;
-let ntfyMinEdge = parseFloat(localStorage.getItem('nba4:ntfy:minEdge')) || 3.0;
+let ntfyMinEdge = parseFloat(localStorage.getItem(‘nba4:ntfy:minEdge’)) || 3.0;
 // Restore UI state
 if(ntfyEnabled){
-  setTimeout(()=>{
-    const btn = document.getElementById('btn-ntfy');
-    if(btn){ btn.style.color='var(--green)'; btn.style.borderColor='var(--green)'; }
-  }, 100);
+setTimeout(()=>{
+const btn = document.getElementById(‘btn-ntfy’);
+if(btn){ btn.style.color=‘var(–green)’; btn.style.borderColor=‘var(–green)’; }
+}, 100);
 }
 
 function configNtfy(){
-  const current = ntfyTopic || '(not set)';
-  const topic = prompt('ntfy.sh topic name for push alerts:\n\nCurrent: ' + current + '\nMin edge: ' + ntfyMinEdge + '%\n\nEnter topic (or "off" to disable, "edge:X" to change min edge):', ntfyTopic);
-  if(topic === null) return; // cancelled
-  const trimmed = topic.trim();
-  if(trimmed.toLowerCase() === 'off' || trimmed === ''){
-    ntfyTopic = ''; ntfyEnabled = false;
-    localStorage.removeItem('nba4:ntfy:topic');
-    document.getElementById('btn-ntfy').style.color='var(--t3)';
-    document.getElementById('btn-ntfy').style.borderColor='var(--t3)';
-    alert('Alerts disabled.');
-    return;
-  }
-  if(trimmed.toLowerCase().startsWith('edge:')){
-    const val = parseFloat(trimmed.substring(5));
-    if(!isNaN(val) && val >= 0){
-      ntfyMinEdge = val;
-      localStorage.setItem('nba4:ntfy:minEdge', String(val));
-      alert('Min edge set to ' + val + '%');
-    }
-    return;
-  }
-  ntfyTopic = trimmed;
-  ntfyEnabled = true;
-  localStorage.setItem('nba4:ntfy:topic', trimmed);
-  document.getElementById('btn-ntfy').style.color='var(--green)';
-  document.getElementById('btn-ntfy').style.borderColor='var(--green)';
-  // Send test notification
-  sendNtfyRaw('NBA Control — alerts active', 'Topic: ' + trimmed + ' | Min edge: ' + ntfyMinEdge + '%', 2);
-  alert('Alerts enabled! Check your ntfy app for a test notification.\n\nTopic: ' + trimmed + '\nMin edge: ' + ntfyMinEdge + '%');
+const current = ntfyTopic || ‘(not set)’;
+const topic = prompt(’ntfy.sh topic name for push alerts:\n\nCurrent: ’ + current + ’\nMin edge: ’ + ntfyMinEdge + ‘%\n\nEnter topic (or “off” to disable, “edge:X” to change min edge):’, ntfyTopic);
+if(topic === null) return; // cancelled
+const trimmed = topic.trim();
+if(trimmed.toLowerCase() === ‘off’ || trimmed === ‘’){
+ntfyTopic = ‘’; ntfyEnabled = false;
+localStorage.removeItem(‘nba4:ntfy:topic’);
+document.getElementById(‘btn-ntfy’).style.color=‘var(–t3)’;
+document.getElementById(‘btn-ntfy’).style.borderColor=‘var(–t3)’;
+alert(‘Alerts disabled.’);
+return;
+}
+if(trimmed.toLowerCase().startsWith(‘edge:’)){
+const val = parseFloat(trimmed.substring(5));
+if(!isNaN(val) && val >= 0){
+ntfyMinEdge = val;
+localStorage.setItem(‘nba4:ntfy:minEdge’, String(val));
+alert(’Min edge set to ’ + val + ‘%’);
+}
+return;
+}
+ntfyTopic = trimmed;
+ntfyEnabled = true;
+localStorage.setItem(‘nba4:ntfy:topic’, trimmed);
+document.getElementById(‘btn-ntfy’).style.color=‘var(–green)’;
+document.getElementById(‘btn-ntfy’).style.borderColor=‘var(–green)’;
+// Send test notification
+sendNtfyRaw(‘NBA Control — alerts active’, ’Topic: ’ + trimmed + ’ | Min edge: ’ + ntfyMinEdge + ‘%’, 2);
+alert(’Alerts enabled! Check your ntfy app for a test notification.\n\nTopic: ’ + trimmed + ’\nMin edge: ’ + ntfyMinEdge + ‘%’);
 }
 
 function sendNtfyRaw(title, body, priority){
-  if(!ntfyTopic) return;
-  fetch('https://ntfy.sh', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      topic: ntfyTopic,
-      title: title,
-      message: body,
-      priority: priority || 3,
-      tags: ['basketball'],
-    }),
-  }).then(function(r){
-    if(!r.ok) console.warn('ntfy response:', r.status);
-    else console.log('ntfy sent OK');
-  }).catch(function(e){ console.warn('ntfy send failed:', e.message); });
+if(!ntfyTopic) return;
+fetch(‘https://ntfy.sh’, {
+method: ‘POST’,
+headers: {‘Content-Type’: ‘application/json’},
+body: JSON.stringify({
+topic: ntfyTopic,
+title: title,
+message: body,
+priority: priority || 3,
+tags: [‘basketball’],
+}),
+}).then(function(r){
+if(!r.ok) console.warn(‘ntfy response:’, r.status);
+else console.log(‘ntfy sent OK’);
+}).catch(function(e){ console.warn(‘ntfy send failed:’, e.message); });
 }
 
 function checkNtfyAlert(game, decision){
-  if(!ntfyEnabled || !decision) return;
-  const entry = (decision.entry||'').toUpperCase();
-  const signal = decision.signalType||'';
-  const edge = decision.edgeNum;
-  const isBuy = signal.startsWith('BUY');
-  const isOptimal = entry === 'OPTIMAL WINDOW';
-  const isOpen = entry === 'WINDOW OPEN';
+if(!ntfyEnabled || !decision) return;
+const entry = (decision.entry||’’).toUpperCase();
+const signal = decision.signalType||’’;
+const edge = decision.edgeNum;
+const isBuy = signal.startsWith(‘BUY’);
+const isOptimal = entry === ‘OPTIMAL WINDOW’;
+const isOpen = entry === ‘WINDOW OPEN’;
 
-  // Fire on: OPTIMAL WINDOW or WINDOW OPEN with a BUY signal and edge above threshold
-  if(!isBuy || (!isOptimal && !isOpen)) return;
-  if(edge !== null && edge < ntfyMinEdge) return;
+// Fire on: OPTIMAL WINDOW or WINDOW OPEN with a BUY signal and edge above threshold
+if(!isBuy || (!isOptimal && !isOpen)) return;
+if(edge !== null && edge < ntfyMinEdge) return;
 
-  const hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
-  const score = aA + ' ' + (game.awayPoints||0) + '-' + (game.homePoints||0) + ' ' + hA;
-  const qClock = game.period ? 'Q' + game.period + (game.clock ? ' ' + game.clock : '') : '';
-  const edgeStr = edge !== null ? '+' + edge.toFixed(1) + '%' : '';
-  const sust = decision.sustainability || '';
-  const conviction = decision.conviction || '';
+const hA = game.home?.alias||‘HOME’, aA = game.away?.alias||‘AWAY’;
+const score = aA + ’ ’ + (game.awayPoints||0) + ‘-’ + (game.homePoints||0) + ’ ’ + hA;
+const qClock = game.period ? ‘Q’ + game.period + (game.clock ? ’ ’ + game.clock : ‘’) : ‘’;
+const edgeStr = edge !== null ? ‘+’ + edge.toFixed(1) + ‘%’ : ‘’;
+const sust = decision.sustainability || ‘’;
+const conviction = decision.conviction || ‘’;
 
-  const title = signal + ' — ' + entry;
-  const body = score + ' ' + qClock
-    + '\nEdge: ' + edgeStr + ' | ' + conviction
-    + '\n' + sust
-    + (decision.prediction ? '\n' + decision.prediction.substring(0, 100) : '');
+const title = signal + ’ — ’ + entry;
+const body = score + ’ ’ + qClock
++ ’\nEdge: ’ + edgeStr + ’ | ’ + conviction
++ ‘\n’ + sust
++ (decision.prediction ? ‘\n’ + decision.prediction.substring(0, 100) : ‘’);
 
-  const priority = isOptimal ? 5 : 4; // 5=urgent, 4=high
-  sendNtfyRaw(title, body, priority);
-  console.log('NTFY sent:', title, body);
+const priority = isOptimal ? 5 : 4; // 5=urgent, 4=high
+sendNtfyRaw(title, body, priority);
+console.log(‘NTFY sent:’, title, body);
 }
 
 // DEMO MODE — inject fake game for UI testing
 // ══════════════════════════════════════════════════════════════════════════
-const DEMO_ID = 'demo-game-001';
+const DEMO_ID = ‘demo-game-001’;
 let demoActive = false;
 
 function toggleDemo(){
-  if(demoActive){
-    // Remove demo game
-    games = games.filter(g=>g.id!==DEMO_ID);
-    delete cardState[DEMO_ID];
-    delete theses[DEMO_ID];
-    demoActive = false;
-    document.getElementById('btn-demo').style.background='transparent';
-    renderPills(); updateCounts(); renderConfidenceTable();
-    return;
-  }
-  demoActive = true;
-  document.getElementById('btn-demo').style.background='rgba(255,180,50,.15)';
+if(demoActive){
+// Remove demo game
+games = games.filter(g=>g.id!==DEMO_ID);
+delete cardState[DEMO_ID];
+delete theses[DEMO_ID];
+demoActive = false;
+document.getElementById(‘btn-demo’).style.background=‘transparent’;
+renderPills(); updateCounts(); renderConfidenceTable();
+return;
+}
+demoActive = true;
+document.getElementById(‘btn-demo’).style.background=‘rgba(255,180,50,.15)’;
 
-  // ── Fake game object — CLE trailing early, coming back structurally ──
-  const demoGame = {
-    id: DEMO_ID, status: 'inprogress',
-    scheduled: new Date().toISOString(),
-    venue: 'Demo Arena',
-    home: {id:'demo-h', name:'Cleveland Cavaliers', alias:'CLE', sr_id:'demo-h'},
-    away: {id:'demo-a', name:'Milwaukee Bucks', alias:'MIL', sr_id:'demo-a'},
-    homePoints: 46, awayPoints: 56, period: 2, clock: '3:20',
-    dataSource: 'DEMO',
-    summary: {
-      status:'inprogress', quarter:2, clock:'3:20',
-      home:{
-        name:'Cavaliers', alias:'CLE', points:46, bonus:false,
-        statistics:{
-          assists:11, turnovers:5, steals:5, blocks:3, offensive_rebounds:7,
-          field_goals_made:18, field_goals_att:36, three_points_made:3, three_points_att:10,
-          free_throws_made:7, free_throws_att:8, points_in_the_paint:22,
-          fast_break_points:9, points_off_turnovers:12, second_chance_points:7,
-          biggest_lead:2, bench_points:12, possessions:44,
-          offensive_points_per_possession:1.05, defensive_points_per_possession:1.27,
-          field_goals_at_rim_made:9, field_goals_at_rim_att:12, fouls:8,
-        },
-        players:[
-          {full_name:'Donovan Mitchell',on_court:true,starter:true,primary_position:'SG',average:{points:24.1,assists:4.5,rebounds:4.2,field_goals_made:8.5,field_goals_att:18.2,three_points_made:3.1,three_points_att:8.0,steals:1.4,usage_pct:29.5,minutes:33.5},statistics:{minutes:'18:11',points:14,assists:3,field_goals_made:5,field_goals_att:11,three_points_made:1,three_points_att:3,rebounds:2,turnovers:1,steals:2,pls_min:-5,personal_fouls:1}},
-          {full_name:'Darius Garland',on_court:true,starter:true,primary_position:'PG',average:{points:21.3,assists:6.8,rebounds:2.5,field_goals_made:7.6,field_goals_att:16.1,three_points_made:2.8,three_points_att:7.2,steals:1.1,usage_pct:26.8,minutes:32.0},statistics:{minutes:'17:44',points:10,assists:4,field_goals_made:4,field_goals_att:8,three_points_made:1,three_points_att:3,rebounds:1,turnovers:1,steals:1,pls_min:-4,personal_fouls:1}},
-          {full_name:'Evan Mobley',on_court:true,starter:true,primary_position:'PF',average:{points:18.2,assists:3.1,rebounds:9.4,field_goals_made:7.2,field_goals_att:13.5,three_points_made:0.8,three_points_att:2.2,steals:0.9,usage_pct:22.1,minutes:34.0},statistics:{minutes:'18:30',points:12,assists:2,field_goals_made:6,field_goals_att:9,three_points_made:0,three_points_att:1,rebounds:7,turnovers:1,steals:1,pls_min:-2,personal_fouls:2}},
-          {full_name:'Jarrett Allen',on_court:false,starter:true,primary_position:'C',average:{points:13.8,assists:1.5,rebounds:10.2,field_goals_made:5.8,field_goals_att:9.1,three_points_made:0.1,three_points_att:0.3,steals:0.5,usage_pct:16.2,minutes:30.0},statistics:{minutes:'14:15',points:6,assists:1,field_goals_made:3,field_goals_att:5,three_points_made:0,three_points_att:0,rebounds:5,turnovers:1,steals:0,pls_min:-6,personal_fouls:2}},
-          {full_name:'Max Strus',on_court:true,starter:true,primary_position:'SF',average:{points:11.5,assists:2.0,rebounds:3.8,field_goals_made:4.0,field_goals_att:9.5,three_points_made:2.2,three_points_att:6.1,steals:0.7,usage_pct:14.5,minutes:28.0},statistics:{minutes:'16:00',points:2,assists:1,field_goals_made:0,field_goals_att:2,three_points_made:1,three_points_att:3,rebounds:2,turnovers:0,steals:1,pls_min:-3,personal_fouls:1}},
-          {full_name:'Caris LeVert',on_court:false,starter:false,primary_position:'SG',average:{points:9.2,assists:2.5,rebounds:2.1,field_goals_made:3.4,field_goals_att:8.0,three_points_made:1.0,three_points_att:3.2,steals:0.6,usage_pct:18.0,minutes:20.0},statistics:{minutes:'8:20',points:2,assists:0,field_goals_made:0,field_goals_att:1,three_points_made:0,three_points_att:0,rebounds:1,turnovers:0,steals:0,pls_min:2,personal_fouls:1}},
-        ],
-        periods:[{number:1,scoring:{points:18}},{number:2,scoring:{points:28}}],
-      },
-      away:{
-        name:'Bucks', alias:'MIL', points:56, bonus:true,
-        statistics:{
-          assists:9, turnovers:10, steals:3, blocks:1, offensive_rebounds:3,
-          field_goals_made:21, field_goals_att:48, three_points_made:9, three_points_att:24,
-          free_throws_made:5, free_throws_att:7, points_in_the_paint:18,
-          fast_break_points:5, points_off_turnovers:7, second_chance_points:3,
-          biggest_lead:14, bench_points:10, possessions:44,
-          offensive_points_per_possession:1.27, defensive_points_per_possession:1.05,
-          field_goals_at_rim_made:5, field_goals_at_rim_att:10, fouls:11,
-        },
-        players:[
-          {full_name:'Damian Lillard',on_court:true,starter:true,primary_position:'PG',average:{points:25.8,assists:7.2,rebounds:4.5,field_goals_made:8.8,field_goals_att:19.5,three_points_made:3.2,three_points_att:9.0,steals:0.9,usage_pct:31.2,minutes:35.5},statistics:{minutes:'19:00',points:22,assists:3,field_goals_made:7,field_goals_att:17,three_points_made:5,three_points_att:11,rebounds:2,turnovers:3,steals:1,pls_min:8,personal_fouls:1}},
-          {full_name:'Bobby Portis',on_court:true,starter:true,primary_position:'PF',average:{points:14.5,assists:1.8,rebounds:8.5,field_goals_made:5.5,field_goals_att:12.0,three_points_made:1.2,three_points_att:3.8,steals:0.6,usage_pct:18.5,minutes:26.0},statistics:{minutes:'17:30',points:12,assists:1,field_goals_made:5,field_goals_att:10,three_points_made:2,three_points_att:4,rebounds:5,turnovers:2,steals:1,pls_min:5,personal_fouls:3}},
-          {full_name:'Khris Middleton',on_court:false,starter:true,primary_position:'SF',average:{points:16.2,assists:4.1,rebounds:4.8,field_goals_made:6.0,field_goals_att:14.0,three_points_made:1.8,three_points_att:5.0,steals:0.7,usage_pct:24.5,minutes:29.0},statistics:{minutes:'16:00',points:8,assists:2,field_goals_made:3,field_goals_att:8,three_points_made:1,three_points_att:3,rebounds:2,turnovers:2,steals:0,pls_min:4,personal_fouls:2}},
-          {full_name:'Taurean Prince',on_court:true,starter:true,primary_position:'SF',average:{points:8.5,assists:1.2,rebounds:3.5,field_goals_made:3.1,field_goals_att:7.5,three_points_made:1.0,three_points_att:3.5,steals:0.5,usage_pct:12.0,minutes:22.0},statistics:{minutes:'15:00',points:8,assists:1,field_goals_made:3,field_goals_att:7,three_points_made:1,three_points_att:3,rebounds:3,turnovers:2,steals:1,pls_min:2,personal_fouls:2}},
-          {full_name:'Andre Jackson',on_court:true,starter:false,primary_position:'SG',average:{points:5.2,assists:1.5,rebounds:3.8,field_goals_made:2.0,field_goals_att:4.5,three_points_made:0.5,three_points_att:1.8,steals:0.8,usage_pct:8.5,minutes:18.0},statistics:{minutes:'12:00',points:6,assists:2,field_goals_made:3,field_goals_att:6,three_points_made:0,three_points_att:3,rebounds:3,turnovers:1,steals:0,pls_min:1,personal_fouls:3}},
-        ],
-        periods:[{number:1,scoring:{points:32}},{number:2,scoring:{points:24}}],
-      },
-    },
-  };
+// ── Fake game object — CLE trailing early, coming back structurally ──
+const demoGame = {
+id: DEMO_ID, status: ‘inprogress’,
+scheduled: new Date().toISOString(),
+venue: ‘Demo Arena’,
+home: {id:‘demo-h’, name:‘Cleveland Cavaliers’, alias:‘CLE’, sr_id:‘demo-h’},
+away: {id:‘demo-a’, name:‘Milwaukee Bucks’, alias:‘MIL’, sr_id:‘demo-a’},
+homePoints: 46, awayPoints: 56, period: 2, clock: ‘3:20’,
+dataSource: ‘DEMO’,
+summary: {
+status:‘inprogress’, quarter:2, clock:‘3:20’,
+home:{
+name:‘Cavaliers’, alias:‘CLE’, points:46, bonus:false,
+statistics:{
+assists:11, turnovers:5, steals:5, blocks:3, offensive_rebounds:7,
+field_goals_made:18, field_goals_att:36, three_points_made:3, three_points_att:10,
+free_throws_made:7, free_throws_att:8, points_in_the_paint:22,
+fast_break_points:9, points_off_turnovers:12, second_chance_points:7,
+biggest_lead:2, bench_points:12, possessions:44,
+offensive_points_per_possession:1.05, defensive_points_per_possession:1.27,
+field_goals_at_rim_made:9, field_goals_at_rim_att:12, fouls:8,
+},
+players:[
+{full_name:‘Donovan Mitchell’,on_court:true,starter:true,primary_position:‘SG’,average:{points:24.1,assists:4.5,rebounds:4.2,field_goals_made:8.5,field_goals_att:18.2,three_points_made:3.1,three_points_att:8.0,steals:1.4,usage_pct:29.5,minutes:33.5},statistics:{minutes:‘18:11’,points:14,assists:3,field_goals_made:5,field_goals_att:11,three_points_made:1,three_points_att:3,rebounds:2,turnovers:1,steals:2,pls_min:-5,personal_fouls:1}},
+{full_name:‘Darius Garland’,on_court:true,starter:true,primary_position:‘PG’,average:{points:21.3,assists:6.8,rebounds:2.5,field_goals_made:7.6,field_goals_att:16.1,three_points_made:2.8,three_points_att:7.2,steals:1.1,usage_pct:26.8,minutes:32.0},statistics:{minutes:‘17:44’,points:10,assists:4,field_goals_made:4,field_goals_att:8,three_points_made:1,three_points_att:3,rebounds:1,turnovers:1,steals:1,pls_min:-4,personal_fouls:1}},
+{full_name:‘Evan Mobley’,on_court:true,starter:true,primary_position:‘PF’,average:{points:18.2,assists:3.1,rebounds:9.4,field_goals_made:7.2,field_goals_att:13.5,three_points_made:0.8,three_points_att:2.2,steals:0.9,usage_pct:22.1,minutes:34.0},statistics:{minutes:‘18:30’,points:12,assists:2,field_goals_made:6,field_goals_att:9,three_points_made:0,three_points_att:1,rebounds:7,turnovers:1,steals:1,pls_min:-2,personal_fouls:2}},
+{full_name:‘Jarrett Allen’,on_court:false,starter:true,primary_position:‘C’,average:{points:13.8,assists:1.5,rebounds:10.2,field_goals_made:5.8,field_goals_att:9.1,three_points_made:0.1,three_points_att:0.3,steals:0.5,usage_pct:16.2,minutes:30.0},statistics:{minutes:‘14:15’,points:6,assists:1,field_goals_made:3,field_goals_att:5,three_points_made:0,three_points_att:0,rebounds:5,turnovers:1,steals:0,pls_min:-6,personal_fouls:2}},
+{full_name:‘Max Strus’,on_court:true,starter:true,primary_position:‘SF’,average:{points:11.5,assists:2.0,rebounds:3.8,field_goals_made:4.0,field_goals_att:9.5,three_points_made:2.2,three_points_att:6.1,steals:0.7,usage_pct:14.5,minutes:28.0},statistics:{minutes:‘16:00’,points:2,assists:1,field_goals_made:0,field_goals_att:2,three_points_made:1,three_points_att:3,rebounds:2,turnovers:0,steals:1,pls_min:-3,personal_fouls:1}},
+{full_name:‘Caris LeVert’,on_court:false,starter:false,primary_position:‘SG’,average:{points:9.2,assists:2.5,rebounds:2.1,field_goals_made:3.4,field_goals_att:8.0,three_points_made:1.0,three_points_att:3.2,steals:0.6,usage_pct:18.0,minutes:20.0},statistics:{minutes:‘8:20’,points:2,assists:0,field_goals_made:0,field_goals_att:1,three_points_made:0,three_points_att:0,rebounds:1,turnovers:0,steals:0,pls_min:2,personal_fouls:1}},
+],
+periods:[{number:1,scoring:{points:18}},{number:2,scoring:{points:28}}],
+},
+away:{
+name:‘Bucks’, alias:‘MIL’, points:56, bonus:true,
+statistics:{
+assists:9, turnovers:10, steals:3, blocks:1, offensive_rebounds:3,
+field_goals_made:21, field_goals_att:48, three_points_made:9, three_points_att:24,
+free_throws_made:5, free_throws_att:7, points_in_the_paint:18,
+fast_break_points:5, points_off_turnovers:7, second_chance_points:3,
+biggest_lead:14, bench_points:10, possessions:44,
+offensive_points_per_possession:1.27, defensive_points_per_possession:1.05,
+field_goals_at_rim_made:5, field_goals_at_rim_att:10, fouls:11,
+},
+players:[
+{full_name:‘Damian Lillard’,on_court:true,starter:true,primary_position:‘PG’,average:{points:25.8,assists:7.2,rebounds:4.5,field_goals_made:8.8,field_goals_att:19.5,three_points_made:3.2,three_points_att:9.0,steals:0.9,usage_pct:31.2,minutes:35.5},statistics:{minutes:‘19:00’,points:22,assists:3,field_goals_made:7,field_goals_att:17,three_points_made:5,three_points_att:11,rebounds:2,turnovers:3,steals:1,pls_min:8,personal_fouls:1}},
+{full_name:‘Bobby Portis’,on_court:true,starter:true,primary_position:‘PF’,average:{points:14.5,assists:1.8,rebounds:8.5,field_goals_made:5.5,field_goals_att:12.0,three_points_made:1.2,three_points_att:3.8,steals:0.6,usage_pct:18.5,minutes:26.0},statistics:{minutes:‘17:30’,points:12,assists:1,field_goals_made:5,field_goals_att:10,three_points_made:2,three_points_att:4,rebounds:5,turnovers:2,steals:1,pls_min:5,personal_fouls:3}},
+{full_name:‘Khris Middleton’,on_court:false,starter:true,primary_position:‘SF’,average:{points:16.2,assists:4.1,rebounds:4.8,field_goals_made:6.0,field_goals_att:14.0,three_points_made:1.8,three_points_att:5.0,steals:0.7,usage_pct:24.5,minutes:29.0},statistics:{minutes:‘16:00’,points:8,assists:2,field_goals_made:3,field_goals_att:8,three_points_made:1,three_points_att:3,rebounds:2,turnovers:2,steals:0,pls_min:4,personal_fouls:2}},
+{full_name:‘Taurean Prince’,on_court:true,starter:true,primary_position:‘SF’,average:{points:8.5,assists:1.2,rebounds:3.5,field_goals_made:3.1,field_goals_att:7.5,three_points_made:1.0,three_points_att:3.5,steals:0.5,usage_pct:12.0,minutes:22.0},statistics:{minutes:‘15:00’,points:8,assists:1,field_goals_made:3,field_goals_att:7,three_points_made:1,three_points_att:3,rebounds:3,turnovers:2,steals:1,pls_min:2,personal_fouls:2}},
+{full_name:‘Andre Jackson’,on_court:true,starter:false,primary_position:‘SG’,average:{points:5.2,assists:1.5,rebounds:3.8,field_goals_made:2.0,field_goals_att:4.5,three_points_made:0.5,three_points_att:1.8,steals:0.8,usage_pct:8.5,minutes:18.0},statistics:{minutes:‘12:00’,points:6,assists:2,field_goals_made:3,field_goals_att:6,three_points_made:0,three_points_att:3,rebounds:3,turnovers:1,steals:0,pls_min:1,personal_fouls:3}},
+],
+periods:[{number:1,scoring:{points:32}},{number:2,scoring:{points:24}}],
+},
+},
+};
 
-  // ── Fake thesis ──
-  theses[DEMO_ID] = `COMPACT THESIS — MIL vs CLE | 7:00 PM ET
+// ── Fake thesis ──
+theses[DEMO_ID] = `COMPACT THESIS — MIL vs CLE | 7:00 PM ET
 Feb 28 2026 | Rocket Mortgage FieldHouse
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 AVAILABILITY
@@ -10059,318 +10063,322 @@ PASS       MIL lead structural (LOCKED IN/DURABLE 3PT from Lillard/Middleton at 
 CLUTCH GATE: CLE season NetRtg +0.5, L10 +44.7 (4GP 3-1) vs MIL +38.0 (4GP 4-0) contaminated — gate unlikely to fire
 
 WATCH
+
 1. MIL 3PT sustainability — confirms entry if MIL shooting 40%+ from 3 with 40%+ makes from Portis/Connaughton/non-shooters; denies if Lillard hitting at normal career rates
-2. CLE interior structural — confirms if Mobley+Allen paint pts + FTA on pace with 48+/16+ season norms; denies if MIL small-ball forces CLE to perimeter
-3. MIL turnover rate — confirms if MIL TO count exceeds 8 at half (season avg 14.2 w/ Giannis); denies if Lillard stabilizes ball handling below 12 pace`;
+1. CLE interior structural — confirms if Mobley+Allen paint pts + FTA on pace with 48+/16+ season norms; denies if MIL small-ball forces CLE to perimeter
+1. MIL turnover rate — confirms if MIL TO count exceeds 8 at half (season avg 14.2 w/ Giannis); denies if Lillard stabilizes ball handling below 12 pace`;
 
-  // ── Inject into games array + mount ──
-  games.unshift(demoGame);
-  mountCard(demoGame);
+// ── Inject into games array + mount ──
+games.unshift(demoGame);
+mountCard(demoGame);
 
-  // ── Set up full cardState with mock data ──
-  const cs = cardState[DEMO_ID];
+// ── Set up full cardState with mock data ──
+const cs = cardState[DEMO_ID];
 
-  cs.oddsData = {homeSpread:'-6.5', homeML:'-280', awayML:'+230', total:'222'};
-  cs.enrichDone = true;
-  cs.mktCollapsed = false;
-  cs.oddsHistory = [
-    {homeSpread:'-8.5', homeML:'-380', awayML:'+300', total:'223', ts:Date.now()-7200000},
-    {homeSpread:'-6.5', homeML:'-280', awayML:'+230', total:'222', ts:Date.now()},
-  ];
-  cs._demoSummary = demoGame.summary; // preserve for re-injection after schedule refresh
-  cs.clutchData = {
-    tier:2,
-    home:{netRtg:8.2, offRtg:118.5, defRtg:110.3, gp:12, wl:'8-4', efg:54.2, ts:58.1, tovPct:11.2, pace:98.5},
-    away:{netRtg:-3.5, offRtg:108.0, defRtg:111.5, gp:10, wl:'4-6', efg:48.8, ts:52.4, tovPct:14.8, pace:100.2},
-  };
-  cs.clutchTier = 2;
-  cs.trackingData = {
-    home:{catchAndShoot:{efg:58.2,fg3pct:39.1},pullUp:{efg:48.5,fg3pct:34.2}},
-    away:{catchAndShoot:{efg:52.1,fg3pct:35.8},pullUp:{efg:44.3,fg3pct:31.5}},
-  };
+cs.oddsData = {homeSpread:’-6.5’, homeML:’-280’, awayML:’+230’, total:‘222’};
+cs.enrichDone = true;
+cs.mktCollapsed = false;
+cs.oddsHistory = [
+{homeSpread:’-8.5’, homeML:’-380’, awayML:’+300’, total:‘223’, ts:Date.now()-7200000},
+{homeSpread:’-6.5’, homeML:’-280’, awayML:’+230’, total:‘222’, ts:Date.now()},
+];
+cs._demoSummary = demoGame.summary; // preserve for re-injection after schedule refresh
+cs.clutchData = {
+tier:2,
+home:{netRtg:8.2, offRtg:118.5, defRtg:110.3, gp:12, wl:‘8-4’, efg:54.2, ts:58.1, tovPct:11.2, pace:98.5},
+away:{netRtg:-3.5, offRtg:108.0, defRtg:111.5, gp:10, wl:‘4-6’, efg:48.8, ts:52.4, tovPct:14.8, pace:100.2},
+};
+cs.clutchTier = 2;
+cs.trackingData = {
+home:{catchAndShoot:{efg:58.2,fg3pct:39.1},pullUp:{efg:48.5,fg3pct:34.2}},
+away:{catchAndShoot:{efg:52.1,fg3pct:35.8},pullUp:{efg:44.3,fg3pct:31.5}},
+};
 
-  cs.sonnetIndicators = {
-    I1:{score:0.80,leader:'CLE',detail:'CLE +5 TO margin, 5 steals, 12 POT + 9 FBP — generation + conversion building',sonnet:true,rawScore:0.80},
-    I2:{score:0.75,leader:'CLE',detail:'CLE 22 paint (9/12 at-rim 75%) vs MIL 18 paint (5/10). CLE 8 FTA, MIL 11 fouls',sonnet:true,rawScore:0.75},
-    I3:{score:0.50,leader:'EVEN',detail:'CLE 63% assisted (11/18 FGM) but MIL eFG% higher on Lillard pull-ups. Contested.',sonnet:true,rawScore:0.50},
-    I4:{score:0.55,leader:'CLE',detail:'MIL biggest lead 14 (Q1 heater) but CLE outscoring Q2 28-24. CLE bench 12 vs MIL 10.',sonnet:true,rawScore:0.55},
-    I5:{score:0.50,leader:'EVEN',detail:'CLE 1.05 vs MIL 1.27 pts/poss — MIL efficiency edge still holds from Q1 run',sonnet:true,rawScore:0.50},
-    score: 0.68, controlTeam: 'CLE', dataQuality: 'SONNET',
-    traj:{
-      signals:[
-        {key:'T1',text:'Role Player Heater: [MIL] Portis 2/4 from 3 (szn 31.2%) — NON-SHOOTER hot',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T2',text:'Star Process: Lillard 5/11 from 3 (43%) vs szn 35.6% — hot but pull-up heavy',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T3',text:'Quarter Delta: CLE winning Q2 28-24 while trailing overall — comeback developing',color:'var(--green)',team:'CLE',w:2},
-        {key:'T4',text:'Foul Gate: [MIL] Portis 3 fouls Q2 — CONSTRAINT / resilience LOW',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T5',text:'Interior Trend: CLE at-rim rising (5→7 att Q1→Q2)',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T6',text:'Quarter Assist Ratio: CLE Q2 ast ratio 64% vs Q1 57% — improving',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T7',text:'Closing Lineup: CLE starters 4/5 on floor',color:'var(--amber)',team:'CLE',w:1},
-        {key:'T8',text:'Shot Diet: MIL 3PA/FGA 50% vs structural baseline 34% — MISALIGNED',color:'var(--green)',team:'CLE',w:2},
-      ],
-      lean:'CLE', count:8, total:8, tooEarly:false,
-    },
-    source:'sonnet',
-  };
+cs.sonnetIndicators = {
+I1:{score:0.80,leader:‘CLE’,detail:‘CLE +5 TO margin, 5 steals, 12 POT + 9 FBP — generation + conversion building’,sonnet:true,rawScore:0.80},
+I2:{score:0.75,leader:‘CLE’,detail:‘CLE 22 paint (9/12 at-rim 75%) vs MIL 18 paint (5/10). CLE 8 FTA, MIL 11 fouls’,sonnet:true,rawScore:0.75},
+I3:{score:0.50,leader:‘EVEN’,detail:‘CLE 63% assisted (11/18 FGM) but MIL eFG% higher on Lillard pull-ups. Contested.’,sonnet:true,rawScore:0.50},
+I4:{score:0.55,leader:‘CLE’,detail:‘MIL biggest lead 14 (Q1 heater) but CLE outscoring Q2 28-24. CLE bench 12 vs MIL 10.’,sonnet:true,rawScore:0.55},
+I5:{score:0.50,leader:‘EVEN’,detail:‘CLE 1.05 vs MIL 1.27 pts/poss — MIL efficiency edge still holds from Q1 run’,sonnet:true,rawScore:0.50},
+score: 0.68, controlTeam: ‘CLE’, dataQuality: ‘SONNET’,
+traj:{
+signals:[
+{key:‘T1’,text:‘Role Player Heater: [MIL] Portis 2/4 from 3 (szn 31.2%) — NON-SHOOTER hot’,color:‘var(–amber)’,team:‘CLE’,w:1},
+{key:‘T2’,text:‘Star Process: Lillard 5/11 from 3 (43%) vs szn 35.6% — hot but pull-up heavy’,color:‘var(–amber)’,team:‘CLE’,w:1},
+{key:‘T3’,text:‘Quarter Delta: CLE winning Q2 28-24 while trailing overall — comeback developing’,color:‘var(–green)’,team:‘CLE’,w:2},
+{key:‘T4’,text:‘Foul Gate: [MIL] Portis 3 fouls Q2 — CONSTRAINT / resilience LOW’,color:‘var(–amber)’,team:‘CLE’,w:1},
+{key:‘T5’,text:‘Interior Trend: CLE at-rim rising (5→7 att Q1→Q2)’,color:‘var(–amber)’,team:‘CLE’,w:1},
+{key:‘T6’,text:‘Quarter Assist Ratio: CLE Q2 ast ratio 64% vs Q1 57% — improving’,color:‘var(–amber)’,team:‘CLE’,w:1},
+{key:‘T7’,text:‘Closing Lineup: CLE starters 4/5 on floor’,color:‘var(–amber)’,team:‘CLE’,w:1},
+{key:‘T8’,text:‘Shot Diet: MIL 3PA/FGA 50% vs structural baseline 34% — MISALIGNED’,color:‘var(–green)’,team:‘CLE’,w:2},
+],
+lean:‘CLE’, count:8, total:8, tooEarly:false,
+},
+source:‘sonnet’,
+};
 
-  cs.prediction = {
-    edge:'+1.8%', edgeNum:1.8, fwp:'72.4%', mip:'70.6%',
-    entry:'WINDOW OPEN', conviction:'EARNED',
-    sustainability:'CLE: LOCKED IN | MIL: FRAGILE',
-    leadSource:'VARIANCE', leadSourceNote:'MIL +10 lead built on 3PT variance (27 3PT pts) while CLE holds +7 structural margin (29 Paint/FT vs 23)',
-    thesisStatus:'DEVELOPING',
-    teamQuality:'CLE 44-16 full strength, top-3 East | MIL 32-28 missing Giannis, Middleton limited',
-    clutch:'CLEAR — CLE +8.2 L10 NetRtg vs MIL -3.5',
-    prediction:'CLE structural edge building. MIL Q1 lead variance-sourced — Lillard 5/11 from 3 + Portis 2/4 as non-shooter. CLE Q2 interior pivot underway. Monitor Q3 for confirmation.',
-    signalType:'BUY CLE', signalNote:'CLE structural floor 0.68 + arrows show INTERIOR PIVOT developing — early window on MIL variance lead', buyTeam:'CLE',
-    spreadAnalysis:'CLE -6.5 moved from -8.5 on MIL Q1 run — value emerging if structural trend holds through halftime',
-    homeValue:{team:'CLE', fwp:72.4, mip:70.6, edge:1.8, ml:'-280', spread:'-6.5'},
-    awayValue:{team:'MIL', fwp:27.6, mip:29.4, edge:-1.8, ml:'+230', spread:'+6.5'},
-  };
-  cs.sustainabilityAudit = {
-    home:{teamAlias:'CLE',live3PM:3,live3PA:10,live3Pct:'30.0',seasonPrior:'36.1',gotSeasonData:true,deviation:'-6.1',personnelGrade:'N/A (below baseline)',personnelDetails:[],elitePct:'0',nonPct:'0',posteriorMean:'34.5',regressionPull:'0',regressionProb:10,regressionGrade:'MINIMAL',shotTypeGrade:'DURABLE',shotTypeNote:'High ast% (61%)',assistRatio:'61',composite:'0.00',tier:'LOCKED IN'},
-    away:{teamAlias:'MIL',live3PM:9,live3PA:24,live3Pct:'37.5',seasonPrior:'35.2',gotSeasonData:true,deviation:'2.3',personnelGrade:'FRAGILE',personnelDetails:[{name:'Damian Lillard',live3m:5,live3a:11,livePct:'45',sznPct:35.6,sznVol:9.0,sznStr:'35.6% (9.0/gm)',tier:'average',tierLabel:'AVERAGE',hot:true},{name:'Bobby Portis',live3m:2,live3a:4,livePct:'50',sznPct:31.2,sznVol:3.8,sznStr:'31.2% (3.8/gm)',tier:'non',tierLabel:'NON-SHOOTER',hot:true}],elitePct:'0',nonPct:'33',posteriorMean:'35.8',regressionPull:'38',regressionProb:55,regressionGrade:'MODERATE',shotTypeGrade:'FRAGILE',shotTypeNote:'Low ast% (43%) + Lillard pull-up heavy',assistRatio:'43',composite:'1.35',tier:'FRAGILE'},
-  };
+cs.prediction = {
+edge:’+1.8%’, edgeNum:1.8, fwp:‘72.4%’, mip:‘70.6%’,
+entry:‘WINDOW OPEN’, conviction:‘EARNED’,
+sustainability:‘CLE: LOCKED IN | MIL: FRAGILE’,
+leadSource:‘VARIANCE’, leadSourceNote:‘MIL +10 lead built on 3PT variance (27 3PT pts) while CLE holds +7 structural margin (29 Paint/FT vs 23)’,
+thesisStatus:‘DEVELOPING’,
+teamQuality:‘CLE 44-16 full strength, top-3 East | MIL 32-28 missing Giannis, Middleton limited’,
+clutch:‘CLEAR — CLE +8.2 L10 NetRtg vs MIL -3.5’,
+prediction:‘CLE structural edge building. MIL Q1 lead variance-sourced — Lillard 5/11 from 3 + Portis 2/4 as non-shooter. CLE Q2 interior pivot underway. Monitor Q3 for confirmation.’,
+signalType:‘BUY CLE’, signalNote:‘CLE structural floor 0.68 + arrows show INTERIOR PIVOT developing — early window on MIL variance lead’, buyTeam:‘CLE’,
+spreadAnalysis:‘CLE -6.5 moved from -8.5 on MIL Q1 run — value emerging if structural trend holds through halftime’,
+homeValue:{team:‘CLE’, fwp:72.4, mip:70.6, edge:1.8, ml:’-280’, spread:’-6.5’},
+awayValue:{team:‘MIL’, fwp:27.6, mip:29.4, edge:-1.8, ml:’+230’, spread:’+6.5’},
+};
+cs.sustainabilityAudit = {
+home:{teamAlias:‘CLE’,live3PM:3,live3PA:10,live3Pct:‘30.0’,seasonPrior:‘36.1’,gotSeasonData:true,deviation:’-6.1’,personnelGrade:‘N/A (below baseline)’,personnelDetails:[],elitePct:‘0’,nonPct:‘0’,posteriorMean:‘34.5’,regressionPull:‘0’,regressionProb:10,regressionGrade:‘MINIMAL’,shotTypeGrade:‘DURABLE’,shotTypeNote:‘High ast% (61%)’,assistRatio:‘61’,composite:‘0.00’,tier:‘LOCKED IN’},
+away:{teamAlias:‘MIL’,live3PM:9,live3PA:24,live3Pct:‘37.5’,seasonPrior:‘35.2’,gotSeasonData:true,deviation:‘2.3’,personnelGrade:‘FRAGILE’,personnelDetails:[{name:‘Damian Lillard’,live3m:5,live3a:11,livePct:‘45’,sznPct:35.6,sznVol:9.0,sznStr:‘35.6% (9.0/gm)’,tier:‘average’,tierLabel:‘AVERAGE’,hot:true},{name:‘Bobby Portis’,live3m:2,live3a:4,livePct:‘50’,sznPct:31.2,sznVol:3.8,sznStr:‘31.2% (3.8/gm)’,tier:‘non’,tierLabel:‘NON-SHOOTER’,hot:true}],elitePct:‘0’,nonPct:‘33’,posteriorMean:‘35.8’,regressionPull:‘38’,regressionProb:55,regressionGrade:‘MODERATE’,shotTypeGrade:‘FRAGILE’,shotTypeNote:‘Low ast% (43%) + Lillard pull-up heavy’,assistRatio:‘43’,composite:‘1.35’,tier:‘FRAGILE’},
+};
 
-  // ── Lead Composition (matches Q2 game summary stats) ──
-  cs.leadComposition = {
-    home:{team:'CLE',total:46,paint:22,ft:7,three:9,midOther:8,transition:9,pot:12,secondChance:7,structural:29,variance:17,structuralPct:63,variancePct:37},
-    away:{team:'MIL',total:56,paint:18,ft:5,three:27,midOther:6,transition:5,pot:7,secondChance:3,structural:23,variance:33,structuralPct:41,variancePct:59},
-    margin:-10, absMargin:10, leadTeam:'MIL', trailTeam:'CLE',
-    structuralMargin:6, varianceMargin:-16,
-    durability:'MIL lead is VOLATILE — perimeter production FRAGILE. Structural favors CLE (+6). Entry signal for trailing team.',
-    classification:'VOLATILE',
-  };
+// ── Lead Composition (matches Q2 game summary stats) ──
+cs.leadComposition = {
+home:{team:‘CLE’,total:46,paint:22,ft:7,three:9,midOther:8,transition:9,pot:12,secondChance:7,structural:29,variance:17,structuralPct:63,variancePct:37},
+away:{team:‘MIL’,total:56,paint:18,ft:5,three:27,midOther:6,transition:5,pot:7,secondChance:3,structural:23,variance:33,structuralPct:41,variancePct:59},
+margin:-10, absMargin:10, leadTeam:‘MIL’, trailTeam:‘CLE’,
+structuralMargin:6, varianceMargin:-16,
+durability:‘MIL lead is VOLATILE — perimeter production FRAGILE. Structural favors CLE (+6). Entry signal for trailing team.’,
+classification:‘VOLATILE’,
+};
 
-  cs.edgeHistory = [
-    {time:'7:05 PM',period:1,edge:'-2.1%',edgeNum:-2.1,fwp:'55.2%',control:'CLE',score:'MIL 32-CLE 18'},
-    {time:'7:20 PM',period:2,edge:'+1.8%',edgeNum:1.8,fwp:'72.4%',control:'CLE',score:'MIL 56-CLE 46'},
-  ];
+cs.edgeHistory = [
+{time:‘7:05 PM’,period:1,edge:’-2.1%’,edgeNum:-2.1,fwp:‘55.2%’,control:‘CLE’,score:‘MIL 32-CLE 18’},
+{time:‘7:20 PM’,period:2,edge:’+1.8%’,edgeNum:1.8,fwp:‘72.4%’,control:‘CLE’,score:‘MIL 56-CLE 46’},
+];
 
-  cs.analysisHistory = [
-    {time:'7:05 PM',period:'1',clock:'1:30',score:'MIL 32-CLE 18',controlTeam:'CLE',controlScore:0.55,verdict:'NO EDGE',entry:'NO WINDOW',conviction:'CONDITIONAL',signal:'PASS',buyTeam:null,leadTeam:'MIL',trailTeam:'CLE',leadSust:'MIXED',trailSust:'LOCKED IN',thesisStatus:'CONTESTED',keyRead:'MIL Q1 explosion on Lillard 5/6 from 3 + Portis heater. Divergence gate TRIGGERED.',fwp:'55.2%',edge:'-2.1%'},
-    {time:'7:20 PM',period:'2',clock:'3:20',score:'MIL 56-CLE 46',controlTeam:'CLE',controlScore:0.68,verdict:'EARNED',entry:'WINDOW OPEN',conviction:'EARNED',signal:'BUY CLE',buyTeam:'CLE',leadTeam:'MIL',trailTeam:'CLE',leadSust:'FRAGILE',trailSust:'LOCKED IN',thesisStatus:'DEVELOPING',keyRead:'CLE outscoring MIL 28-24 in Q2. Arrows: INTERIOR PIVOT (paint ▲ at-rim ▲ FTA ▲ 3PA% ▼). MIL lead VARIANCE SOURCED.',fwp:'72.4%',edge:'+1.8%'},
-  ];
+cs.analysisHistory = [
+{time:‘7:05 PM’,period:‘1’,clock:‘1:30’,score:‘MIL 32-CLE 18’,controlTeam:‘CLE’,controlScore:0.55,verdict:‘NO EDGE’,entry:‘NO WINDOW’,conviction:‘CONDITIONAL’,signal:‘PASS’,buyTeam:null,leadTeam:‘MIL’,trailTeam:‘CLE’,leadSust:‘MIXED’,trailSust:‘LOCKED IN’,thesisStatus:‘CONTESTED’,keyRead:‘MIL Q1 explosion on Lillard 5/6 from 3 + Portis heater. Divergence gate TRIGGERED.’,fwp:‘55.2%’,edge:’-2.1%’},
+{time:‘7:20 PM’,period:‘2’,clock:‘3:20’,score:‘MIL 56-CLE 46’,controlTeam:‘CLE’,controlScore:0.68,verdict:‘EARNED’,entry:‘WINDOW OPEN’,conviction:‘EARNED’,signal:‘BUY CLE’,buyTeam:‘CLE’,leadTeam:‘MIL’,trailTeam:‘CLE’,leadSust:‘FRAGILE’,trailSust:‘LOCKED IN’,thesisStatus:‘DEVELOPING’,keyRead:‘CLE outscoring MIL 28-24 in Q2. Arrows: INTERIOR PIVOT (paint ▲ at-rim ▲ FTA ▲ 3PA% ▼). MIL lead VARIANCE SOURCED.’,fwp:‘72.4%’,edge:’+1.8%’},
+];
 
-  // Build baselines from demo player averages
-  const bl = buildPlayerBaselines(demoGame);
-  if(bl){ cs.baselines = bl; console.log('DEMO baselines:', bl.built, 'stars:', bl.stars); }
-  cs.divergences = [];
-  cs.clientInd = null;
-  cs.clientIndAtAnalysis = computeAny(demoGame);
-  cs.analysisTime = new Date();
+// Build baselines from demo player averages
+const bl = buildPlayerBaselines(demoGame);
+if(bl){ cs.baselines = bl; console.log(‘DEMO baselines:’, bl.built, ‘stars:’, bl.stars); }
+cs.divergences = [];
+cs.clientInd = null;
+cs.clientIndAtAnalysis = computeAny(demoGame);
+cs.analysisTime = new Date();
 
-  // ── Demo rolling window architecture data (Q2 — early read) ──
-  cs.quarterSnapshots = {
-    boundaries: {
-      0: {ts:Date.now()-3600000, home:{points_in_the_paint:0,fast_break_points:0,points_off_turnovers:0,second_chance_points:0,possessions:0,field_goals_at_rim_att:0,field_goals_at_rim_made:0,steals:0,turnovers:0,free_throws_att:0,assists:0,field_goals_made:0,field_goals_att:0,three_points_made:0,three_points_att:0}, away:{points_in_the_paint:0,fast_break_points:0,points_off_turnovers:0,second_chance_points:0,possessions:0,field_goals_at_rim_att:0,field_goals_at_rim_made:0,steals:0,turnovers:0,free_throws_att:0,assists:0,field_goals_made:0,field_goals_att:0,three_points_made:0,three_points_att:0}},
-      1: {ts:Date.now()-1800000, home:{points_in_the_paint:8,fast_break_points:3,points_off_turnovers:4,second_chance_points:2,possessions:22,field_goals_at_rim_att:5,field_goals_at_rim_made:3,steals:2,turnovers:3,free_throws_att:2,assists:4,field_goals_made:7,field_goals_att:18,three_points_made:2,three_points_att:6,points:18}, away:{points_in_the_paint:10,fast_break_points:4,points_off_turnovers:5,second_chance_points:2,possessions:23,field_goals_at_rim_att:5,field_goals_at_rim_made:3,steals:3,turnovers:4,free_throws_att:3,assists:5,field_goals_made:12,field_goals_att:22,three_points_made:5,three_points_att:12,points:32}},
-    },
-    quarters: {
-      1: {home:{points_in_the_paint:8,fast_break_points:3,points_off_turnovers:4,second_chance_points:2,possessions:22,field_goals_at_rim_att:5,field_goals_at_rim_made:3,steals:2,turnovers:3,free_throws_att:2,assists:4,field_goals_made:7,field_goals_att:18,three_points_made:2,three_points_att:6,points:18,efg:0.444,assist_ratio:57.1,fg3a_share:33.3}, away:{points_in_the_paint:10,fast_break_points:4,points_off_turnovers:5,second_chance_points:2,possessions:23,field_goals_at_rim_att:5,field_goals_at_rim_made:3,steals:3,turnovers:4,free_throws_att:3,assists:5,field_goals_made:12,field_goals_att:22,three_points_made:5,three_points_att:12,points:32,efg:0.659,assist_ratio:41.7,fg3a_share:54.5}, source:'snapshot',partial:false},
-      2: {home:{points_in_the_paint:14,fast_break_points:6,points_off_turnovers:8,second_chance_points:5,possessions:22,field_goals_at_rim_att:7,field_goals_at_rim_made:6,steals:3,turnovers:2,free_throws_att:6,assists:7,field_goals_made:11,field_goals_att:18,three_points_made:1,three_points_att:4,points:28,efg:0.639,assist_ratio:63.6,fg3a_share:22.2}, away:{points_in_the_paint:8,fast_break_points:1,points_off_turnovers:2,second_chance_points:1,possessions:21,field_goals_at_rim_att:5,field_goals_at_rim_made:2,steals:0,turnovers:6,free_throws_att:4,assists:4,field_goals_made:9,field_goals_att:26,three_points_made:4,three_points_att:12,points:24,efg:0.423,assist_ratio:44.4,fg3a_share:46.2}, source:'snapshot',partial:true},
-    },
-    lastSnapshotPeriod: 1, backfillNeeded: [], backfillDone: false,
-  };
+// ── Demo rolling window architecture data (Q2 — early read) ──
+cs.quarterSnapshots = {
+boundaries: {
+0: {ts:Date.now()-3600000, home:{points_in_the_paint:0,fast_break_points:0,points_off_turnovers:0,second_chance_points:0,possessions:0,field_goals_at_rim_att:0,field_goals_at_rim_made:0,steals:0,turnovers:0,free_throws_att:0,assists:0,field_goals_made:0,field_goals_att:0,three_points_made:0,three_points_att:0}, away:{points_in_the_paint:0,fast_break_points:0,points_off_turnovers:0,second_chance_points:0,possessions:0,field_goals_at_rim_att:0,field_goals_at_rim_made:0,steals:0,turnovers:0,free_throws_att:0,assists:0,field_goals_made:0,field_goals_att:0,three_points_made:0,three_points_att:0}},
+1: {ts:Date.now()-1800000, home:{points_in_the_paint:8,fast_break_points:3,points_off_turnovers:4,second_chance_points:2,possessions:22,field_goals_at_rim_att:5,field_goals_at_rim_made:3,steals:2,turnovers:3,free_throws_att:2,assists:4,field_goals_made:7,field_goals_att:18,three_points_made:2,three_points_att:6,points:18}, away:{points_in_the_paint:10,fast_break_points:4,points_off_turnovers:5,second_chance_points:2,possessions:23,field_goals_at_rim_att:5,field_goals_at_rim_made:3,steals:3,turnovers:4,free_throws_att:3,assists:5,field_goals_made:12,field_goals_att:22,three_points_made:5,three_points_att:12,points:32}},
+},
+quarters: {
+1: {home:{points_in_the_paint:8,fast_break_points:3,points_off_turnovers:4,second_chance_points:2,possessions:22,field_goals_at_rim_att:5,field_goals_at_rim_made:3,steals:2,turnovers:3,free_throws_att:2,assists:4,field_goals_made:7,field_goals_att:18,three_points_made:2,three_points_att:6,points:18,efg:0.444,assist_ratio:57.1,fg3a_share:33.3}, away:{points_in_the_paint:10,fast_break_points:4,points_off_turnovers:5,second_chance_points:2,possessions:23,field_goals_at_rim_att:5,field_goals_at_rim_made:3,steals:3,turnovers:4,free_throws_att:3,assists:5,field_goals_made:12,field_goals_att:22,three_points_made:5,three_points_att:12,points:32,efg:0.659,assist_ratio:41.7,fg3a_share:54.5}, source:‘snapshot’,partial:false},
+2: {home:{points_in_the_paint:14,fast_break_points:6,points_off_turnovers:8,second_chance_points:5,possessions:22,field_goals_at_rim_att:7,field_goals_at_rim_made:6,steals:3,turnovers:2,free_throws_att:6,assists:7,field_goals_made:11,field_goals_att:18,three_points_made:1,three_points_att:4,points:28,efg:0.639,assist_ratio:63.6,fg3a_share:22.2}, away:{points_in_the_paint:8,fast_break_points:1,points_off_turnovers:2,second_chance_points:1,possessions:21,field_goals_at_rim_att:5,field_goals_at_rim_made:2,steals:0,turnovers:6,free_throws_att:4,assists:4,field_goals_made:9,field_goals_att:26,three_points_made:4,three_points_att:12,points:24,efg:0.423,assist_ratio:44.4,fg3a_share:46.2}, source:‘snapshot’,partial:true},
+},
+lastSnapshotPeriod: 1, backfillNeeded: [], backfillDone: false,
+};
 
-  // Window TOO EARLY in Q2
-  cs.rollingWindow = { available:false, reason:'TOO EARLY' };
+// Window TOO EARLY in Q2
+cs.rollingWindow = { available:false, reason:‘TOO EARLY’ };
 
-  // No gap log yet (window not active)
-  cs.gapLog = [];
-  cs.acceleration = {accel:'TOO EARLY',entries:[],consecutive:0};
+// No gap log yet (window not active)
+cs.gapLog = [];
+cs.acceleration = {accel:‘TOO EARLY’,entries:[],consecutive:0};
 
-  // Arrows fire with Q1 + partial Q2 data (2 data points)
-  cs.subMetricArrows = {
-    home:{
-      paint:{arrow:'RISING',values:[8,14],display:'▲ (8→14)',label:'Paint pts',indicator:'I2',structural:true},
-      atRim:{arrow:'RISING',values:[5,7],display:'▲ (5→7)',label:'At-rim att',indicator:'I2',structural:true},
-      fta:{arrow:'RISING',values:[2,6],display:'▲ (2→6)',label:'FTA',indicator:'I2',structural:true},
-      steals:{arrow:'RISING',values:[2,3],display:'▲ (2→3)',label:'Steals',indicator:'I1',structural:true},
-      tos:{arrow:'FALLING',values:[3,2],display:'▼ (3→2)',label:'TOs',indicator:'I1',structural:false},
-      fg3aShare:{arrow:'FALLING',values:[33,22],display:'▼ (33%→22%)',label:'3PA%',indicator:'I3',structural:false},
-      astRatio:{arrow:'RISING',values:[57,64],display:'▲ (57%→64%)',label:'Ast ratio',indicator:'I3',structural:true},
-      poss:{arrow:'FLAT',values:[22,22],display:'▬ (22→22)',label:'Poss',indicator:'I5',structural:true},
-    },
-    away:{
-      paint:{arrow:'FALLING',values:[10,8],display:'▼ (10→8)',label:'Paint pts',indicator:'I2',structural:true},
-      atRim:{arrow:'FLAT',values:[5,5],display:'▬ (5→5)',label:'At-rim att',indicator:'I2',structural:true},
-      fta:{arrow:'FLAT',values:[3,4],display:'▬ (3→4)',label:'FTA',indicator:'I2',structural:true},
-      steals:{arrow:'FALLING',values:[3,0],display:'▼ (3→0)',label:'Steals',indicator:'I1',structural:true},
-      tos:{arrow:'RISING',values:[4,6],display:'▲ (4→6)',label:'TOs',indicator:'I1',structural:false},
-      fg3aShare:{arrow:'FLAT',values:[55,46],display:'▬ (55%→46%)',label:'3PA%',indicator:'I3',structural:false},
-      astRatio:{arrow:'FLAT',values:[42,44],display:'▬ (42%→44%)',label:'Ast ratio',indicator:'I3',structural:true},
-      poss:{arrow:'FLAT',values:[23,21],display:'▬ (23→21)',label:'Poss',indicator:'I5',structural:true},
-    },
-  };
-  cs.adjustment = {signal:'INTERIOR PIVOT',note:'CLE progressive rim pressure + falling 3PA share (Q1→Q2 early)',risingStructural:3,fallingVariance:1,team:'CLE'};
-  cs.combinedRead = {read:'TOO EARLY',note:'Window activates Q2 — arrows show early directional reads'};
+// Arrows fire with Q1 + partial Q2 data (2 data points)
+cs.subMetricArrows = {
+home:{
+paint:{arrow:‘RISING’,values:[8,14],display:‘▲ (8→14)’,label:‘Paint pts’,indicator:‘I2’,structural:true},
+atRim:{arrow:‘RISING’,values:[5,7],display:‘▲ (5→7)’,label:‘At-rim att’,indicator:‘I2’,structural:true},
+fta:{arrow:‘RISING’,values:[2,6],display:‘▲ (2→6)’,label:‘FTA’,indicator:‘I2’,structural:true},
+steals:{arrow:‘RISING’,values:[2,3],display:‘▲ (2→3)’,label:‘Steals’,indicator:‘I1’,structural:true},
+tos:{arrow:‘FALLING’,values:[3,2],display:‘▼ (3→2)’,label:‘TOs’,indicator:‘I1’,structural:false},
+fg3aShare:{arrow:‘FALLING’,values:[33,22],display:‘▼ (33%→22%)’,label:‘3PA%’,indicator:‘I3’,structural:false},
+astRatio:{arrow:‘RISING’,values:[57,64],display:‘▲ (57%→64%)’,label:‘Ast ratio’,indicator:‘I3’,structural:true},
+poss:{arrow:‘FLAT’,values:[22,22],display:‘▬ (22→22)’,label:‘Poss’,indicator:‘I5’,structural:true},
+},
+away:{
+paint:{arrow:‘FALLING’,values:[10,8],display:‘▼ (10→8)’,label:‘Paint pts’,indicator:‘I2’,structural:true},
+atRim:{arrow:‘FLAT’,values:[5,5],display:‘▬ (5→5)’,label:‘At-rim att’,indicator:‘I2’,structural:true},
+fta:{arrow:‘FLAT’,values:[3,4],display:‘▬ (3→4)’,label:‘FTA’,indicator:‘I2’,structural:true},
+steals:{arrow:‘FALLING’,values:[3,0],display:‘▼ (3→0)’,label:‘Steals’,indicator:‘I1’,structural:true},
+tos:{arrow:‘RISING’,values:[4,6],display:‘▲ (4→6)’,label:‘TOs’,indicator:‘I1’,structural:false},
+fg3aShare:{arrow:‘FLAT’,values:[55,46],display:‘▬ (55%→46%)’,label:‘3PA%’,indicator:‘I3’,structural:false},
+astRatio:{arrow:‘FLAT’,values:[42,44],display:‘▬ (42%→44%)’,label:‘Ast ratio’,indicator:‘I3’,structural:true},
+poss:{arrow:‘FLAT’,values:[23,21],display:‘▬ (23→21)’,label:‘Poss’,indicator:‘I5’,structural:true},
+},
+};
+cs.adjustment = {signal:‘INTERIOR PIVOT’,note:‘CLE progressive rim pressure + falling 3PA share (Q1→Q2 early)’,risingStructural:3,fallingVariance:1,team:‘CLE’};
+cs.combinedRead = {read:‘TOO EARLY’,note:‘Window activates Q2 — arrows show early directional reads’};
 
-  renderPills(); updateCounts();
-  // Select the demo pill
-  selIds = [DEMO_ID];
-  renderPills();
-  renderCard(demoGame);
-  renderConfidenceTable();
+renderPills(); updateCounts();
+// Select the demo pill
+selIds = [DEMO_ID];
+renderPills();
+renderCard(demoGame);
+renderConfidenceTable();
 }
-
 
 // ══════════════════════════════════════════════════════════════════════════════
 // QA VALIDATION SUITE — run from console: runQA() or runQA(gameId)
 // ══════════════════════════════════════════════════════════════════════════════
 function runQA(gameId){
-  if(!gameId){ if(selIds && selIds[0]) gameId=selIds[0]; else { console.error('No game selected. Pass gameId or select a game.'); return; } }
-  var g = games.find(function(x){return x.id===gameId;});
-  if(!g){ console.error('Game not found:', gameId); return; }
-  var cs = cardState[gameId];
-  if(!cs){ console.error('No cardState for game'); return; }
-  var s = g.summary;
-  var hA = g.home?.alias||'HOME', aA = g.away?.alias||'AWAY';
-  var results = [], pass=0, fail=0, warn=0;
-  function ok(label, detail){ results.push({status:'PASS', label:label, detail:detail||''}); pass++; }
-  function bad(label, detail){ results.push({status:'FAIL', label:label, detail:detail||''}); fail++; }
-  function meh(label, detail){ results.push({status:'WARN', label:label, detail:detail||''}); warn++; }
-  function close(a,b,tolerance){ return Math.abs(a-b)<=tolerance; }
+if(!gameId){ if(selIds && selIds[0]) gameId=selIds[0]; else { console.error(‘No game selected. Pass gameId or select a game.’); return; } }
+var g = games.find(function(x){return x.id===gameId;});
+if(!g){ console.error(‘Game not found:’, gameId); return; }
+var cs = cardState[gameId];
+if(!cs){ console.error(‘No cardState for game’); return; }
+var s = g.summary;
+var hA = g.home?.alias||‘HOME’, aA = g.away?.alias||‘AWAY’;
+var results = [], pass=0, fail=0, warn=0;
+function ok(label, detail){ results.push({status:‘PASS’, label:label, detail:detail||’’}); pass++; }
+function bad(label, detail){ results.push({status:‘FAIL’, label:label, detail:detail||’’}); fail++; }
+function meh(label, detail){ results.push({status:‘WARN’, label:label, detail:detail||’’}); warn++; }
+function close(a,b,tolerance){ return Math.abs(a-b)<=tolerance; }
 
-  console.log('%c══ QA SUITE: '+hA+' vs '+aA+' ══', 'color:#f5a62a;font-weight:bold;font-size:14px');
+console.log(’%c══ QA SUITE: ‘+hA+’ vs ‘+aA+’ ══’, ‘color:#f5a62a;font-weight:bold;font-size:14px’);
 
-  // ── 1. PBP DATA EXISTS ──
-  var pl = cs.pbpAudit?.possessionLog;
-  var tl = cs.pbpAudit?.timeline;
-  if(!pl || pl.length===0) bad('PBP:possessions', 'No possession log'); else ok('PBP:possessions', pl.length+' possessions');
-  if(!tl || tl.length===0) bad('PBP:timeline', 'No timeline'); else ok('PBP:timeline', tl.length+' events');
+// ── 1. PBP DATA EXISTS ──
+var pl = cs.pbpAudit?.possessionLog;
+var tl = cs.pbpAudit?.timeline;
+if(!pl || pl.length===0) bad(‘PBP:possessions’, ‘No possession log’); else ok(‘PBP:possessions’, pl.length+’ possessions’);
+if(!tl || tl.length===0) bad(‘PBP:timeline’, ‘No timeline’); else ok(‘PBP:timeline’, tl.length+’ events’);
 
-  // ── 2. POSSESSION SANITY ──
-  if(pl && pl.length>0){
-    var hPoss = pl.filter(function(p){return p.team===hA;}).length;
-    var aPoss = pl.filter(function(p){return p.team===aA;}).length;
-    var unkPoss = pl.filter(function(p){return p.team!==hA && p.team!==aA;}).length;
-    if(hPoss===0) bad('POSS:home', hA+' has 0 possessions'); else ok('POSS:home', hA+': '+hPoss);
-    if(aPoss===0) bad('POSS:away', aA+' has 0 possessions'); else ok('POSS:away', aA+': '+aPoss);
-    if(unkPoss>0) meh('POSS:unknown', unkPoss+' possessions with unknown team');
-    var ratio = hPoss>0&&aPoss>0 ? Math.max(hPoss,aPoss)/Math.min(hPoss,aPoss) : 99;
-    if(ratio>1.3) meh('POSS:balance', 'Imbalanced: '+hA+'='+hPoss+' '+aA+'='+aPoss+' (ratio '+ratio.toFixed(2)+')'); else ok('POSS:balance', 'Balanced (ratio '+ratio.toFixed(2)+')');
+// ── 2. POSSESSION SANITY ──
+if(pl && pl.length>0){
+var hPoss = pl.filter(function(p){return p.team===hA;}).length;
+var aPoss = pl.filter(function(p){return p.team===aA;}).length;
+var unkPoss = pl.filter(function(p){return p.team!==hA && p.team!==aA;}).length;
+if(hPoss===0) bad(‘POSS:home’, hA+’ has 0 possessions’); else ok(‘POSS:home’, hA+’: ‘+hPoss);
+if(aPoss===0) bad(‘POSS:away’, aA+’ has 0 possessions’); else ok(‘POSS:away’, aA+’: ‘+aPoss);
+if(unkPoss>0) meh(‘POSS:unknown’, unkPoss+’ possessions with unknown team’);
+var ratio = hPoss>0&&aPoss>0 ? Math.max(hPoss,aPoss)/Math.min(hPoss,aPoss) : 99;
+if(ratio>1.3) meh(‘POSS:balance’, ‘Imbalanced: ‘+hA+’=’+hPoss+’ ‘+aA+’=’+aPoss+’ (ratio ‘+ratio.toFixed(2)+’)’); else ok(‘POSS:balance’, ‘Balanced (ratio ‘+ratio.toFixed(2)+’)’);
 
-    // Forced close check
-    var forcedCloses = pl.filter(function(p){return p.result==='forced_close';}).length;
-    if(forcedCloses>pl.length*0.1) meh('POSS:forced_close', forcedCloses+'/'+pl.length+' forced closes (>10%)');
-    else if(forcedCloses>0) ok('POSS:forced_close', forcedCloses+' forced closes (ok)');
-    else ok('POSS:forced_close', 'None');
-  }
+```
+// Forced close check
+var forcedCloses = pl.filter(function(p){return p.result==='forced_close';}).length;
+if(forcedCloses>pl.length*0.1) meh('POSS:forced_close', forcedCloses+'/'+pl.length+' forced closes (>10%)');
+else if(forcedCloses>0) ok('POSS:forced_close', forcedCloses+' forced closes (ok)');
+else ok('POSS:forced_close', 'None');
+```
 
-  // ── 3. PBP vs BOX SCORE RECONCILIATION ──
-  if(pl && pl.length>0 && s && s.home && s.away){
-    var hs = s.home?.statistics||s.home||{}, as = s.away?.statistics||s.away||{};
-    // Aggregate PBP full-game stats
-    var pbp = {hPts:0,aPts:0,hStl:0,aStl:0,hTO:0,aTO:0,hFGM:0,aFGM:0,hFGA:0,aFGA:0,h3PM:0,a3PM:0,h3PA:0,a3PA:0,hAst:0,aAst:0,hBlk:0,aBlk:0,hFTA:0,aFTA:0};
-    var hP = pl.filter(function(p){return p.team===hA;}), aP = pl.filter(function(p){return p.team===aA;});
-    hP.forEach(function(p){
-      pbp.hPts+=p.points; pbp.hTO+=p.turnovers.length; pbp.hAst+=p.assists; pbp.hFTA+=p.ftAttempts;
-      p.shots.forEach(function(sh){ pbp.hFGA++; if(sh.made)pbp.hFGM++; if(sh.is3){pbp.h3PA++;if(sh.made)pbp.h3PM++;} });
-    });
-    aP.forEach(function(p){
-      pbp.aPts+=p.points; pbp.aTO+=p.turnovers.length; pbp.aAst+=p.assists; pbp.aFTA+=p.ftAttempts;
-      p.shots.forEach(function(sh){ pbp.aFGA++; if(sh.made)pbp.aFGM++; if(sh.is3){pbp.a3PA++;if(sh.made)pbp.a3PM++;} });
-    });
-    // Steals: from OPPONENT possessions (attribution fix)
-    aP.forEach(function(p){pbp.hStl+=p.steals;}); hP.forEach(function(p){pbp.aStl+=p.steals;});
-    // Blocks: from OPPONENT possessions
-    aP.forEach(function(p){pbp.hBlk+=p.blocks;}); hP.forEach(function(p){pbp.aBlk+=p.blocks;});
+}
 
-    var checks = [
-      {label:'Points:'+hA, pbp:pbp.hPts, box:hs.points||s.home?.points||0, tol:3},
-      {label:'Points:'+aA, pbp:pbp.aPts, box:as.points||s.away?.points||0, tol:3},
-      {label:'FGM:'+hA, pbp:pbp.hFGM, box:hs.field_goals_made||0, tol:2},
-      {label:'FGM:'+aA, pbp:pbp.aFGM, box:as.field_goals_made||0, tol:2},
-      {label:'FGA:'+hA, pbp:pbp.hFGA, box:hs.field_goals_att||0, tol:3},
-      {label:'FGA:'+aA, pbp:pbp.aFGA, box:as.field_goals_att||0, tol:3},
-      {label:'3PM:'+hA, pbp:pbp.h3PM, box:hs.three_points_made||0, tol:1},
-      {label:'3PM:'+aA, pbp:pbp.a3PM, box:as.three_points_made||0, tol:1},
-      {label:'Ast:'+hA, pbp:pbp.hAst, box:hs.assists||0, tol:2},
-      {label:'Ast:'+aA, pbp:pbp.aAst, box:as.assists||0, tol:2},
-      {label:'TO:'+hA, pbp:pbp.hTO, box:hs.turnovers||hs.total_turnovers||0, tol:2},
-      {label:'TO:'+aA, pbp:pbp.aTO, box:as.turnovers||as.total_turnovers||0, tol:2},
-      {label:'Stl:'+hA, pbp:pbp.hStl, box:hs.steals||0, tol:3},
-      {label:'Stl:'+aA, pbp:pbp.aStl, box:as.steals||0, tol:3},
-      {label:'Blk:'+hA, pbp:pbp.hBlk, box:hs.blocks||0, tol:2},
-      {label:'Blk:'+aA, pbp:pbp.aBlk, box:as.blocks||0, tol:2},
-      {label:'FTA:'+hA, pbp:pbp.hFTA, box:hs.free_throws_att||0, tol:2},
-      {label:'FTA:'+aA, pbp:pbp.aFTA, box:as.free_throws_att||0, tol:2},
-    ];
-    checks.forEach(function(c){
-      var diff = Math.abs(c.pbp - c.box);
-      if(diff===0) ok('RECON:'+c.label, 'PBP='+c.pbp+' Box='+c.box+' ✓');
-      else if(diff<=c.tol) meh('RECON:'+c.label, 'PBP='+c.pbp+' Box='+c.box+' (off by '+diff+')');
-      else bad('RECON:'+c.label, 'PBP='+c.pbp+' Box='+c.box+' (off by '+diff+' > tol '+c.tol+')');
-    });
-  } else {
-    meh('RECON:skip', 'Box score or PBP not available for reconciliation');
-  }
+// ── 3. PBP vs BOX SCORE RECONCILIATION ──
+if(pl && pl.length>0 && s && s.home && s.away){
+var hs = s.home?.statistics||s.home||{}, as = s.away?.statistics||s.away||{};
+// Aggregate PBP full-game stats
+var pbp = {hPts:0,aPts:0,hStl:0,aStl:0,hTO:0,aTO:0,hFGM:0,aFGM:0,hFGA:0,aFGA:0,h3PM:0,a3PM:0,h3PA:0,a3PA:0,hAst:0,aAst:0,hBlk:0,aBlk:0,hFTA:0,aFTA:0};
+var hP = pl.filter(function(p){return p.team===hA;}), aP = pl.filter(function(p){return p.team===aA;});
+hP.forEach(function(p){
+pbp.hPts+=p.points; pbp.hTO+=p.turnovers.length; pbp.hAst+=p.assists; pbp.hFTA+=p.ftAttempts;
+p.shots.forEach(function(sh){ pbp.hFGA++; if(sh.made)pbp.hFGM++; if(sh.is3){pbp.h3PA++;if(sh.made)pbp.h3PM++;} });
+});
+aP.forEach(function(p){
+pbp.aPts+=p.points; pbp.aTO+=p.turnovers.length; pbp.aAst+=p.assists; pbp.aFTA+=p.ftAttempts;
+p.shots.forEach(function(sh){ pbp.aFGA++; if(sh.made)pbp.aFGM++; if(sh.is3){pbp.a3PA++;if(sh.made)pbp.a3PM++;} });
+});
+// Steals: from OPPONENT possessions (attribution fix)
+aP.forEach(function(p){pbp.hStl+=p.steals;}); hP.forEach(function(p){pbp.aStl+=p.steals;});
+// Blocks: from OPPONENT possessions
+aP.forEach(function(p){pbp.hBlk+=p.blocks;}); hP.forEach(function(p){pbp.aBlk+=p.blocks;});
 
-  // ── 4. INDICATOR MATH ──
-  var rawInd = cs.clientInd;
-  if(rawInd && rawInd.I1 && rawInd.I2 && rawInd.I3 && rawInd.I4 && rawInd.I5){
-    var W = {I1:.25, I2:.25, I3:.20, I4:.20, I5:.10};
-    var raw = rawInd.I1.score*W.I1 + rawInd.I2.score*W.I2 + rawInd.I3.score*W.I3 + rawInd.I4.score*W.I4 + rawInd.I5.score*W.I5;
-    var expectedScore = raw>=0.5 ? raw : 1-raw;
-    if(close(rawInd.score, expectedScore, 0.01)) ok('IND:composite', 'Score '+rawInd.score.toFixed(3)+' matches weighted sum');
-    else bad('IND:composite', 'Score '+rawInd.score.toFixed(3)+' != expected '+expectedScore.toFixed(3));
-    // Bounds check
-    ['I1','I2','I3','I4','I5'].forEach(function(k){
-      var v = rawInd[k].score;
-      if(v!==0 && v!==0.5 && v!==1) bad('IND:'+k+':bounds', 'Score='+v+' not in {0, 0.5, 1}');
-      else ok('IND:'+k+':bounds', 'Score='+v+' ✓');
-    });
-  } else {
-    meh('IND:skip', 'No clientInd available');
-  }
+```
+var checks = [
+  {label:'Points:'+hA, pbp:pbp.hPts, box:hs.points||s.home?.points||0, tol:3},
+  {label:'Points:'+aA, pbp:pbp.aPts, box:as.points||s.away?.points||0, tol:3},
+  {label:'FGM:'+hA, pbp:pbp.hFGM, box:hs.field_goals_made||0, tol:2},
+  {label:'FGM:'+aA, pbp:pbp.aFGM, box:as.field_goals_made||0, tol:2},
+  {label:'FGA:'+hA, pbp:pbp.hFGA, box:hs.field_goals_att||0, tol:3},
+  {label:'FGA:'+aA, pbp:pbp.aFGA, box:as.field_goals_att||0, tol:3},
+  {label:'3PM:'+hA, pbp:pbp.h3PM, box:hs.three_points_made||0, tol:1},
+  {label:'3PM:'+aA, pbp:pbp.a3PM, box:as.three_points_made||0, tol:1},
+  {label:'Ast:'+hA, pbp:pbp.hAst, box:hs.assists||0, tol:2},
+  {label:'Ast:'+aA, pbp:pbp.aAst, box:as.assists||0, tol:2},
+  {label:'TO:'+hA, pbp:pbp.hTO, box:hs.turnovers||hs.total_turnovers||0, tol:2},
+  {label:'TO:'+aA, pbp:pbp.aTO, box:as.turnovers||as.total_turnovers||0, tol:2},
+  {label:'Stl:'+hA, pbp:pbp.hStl, box:hs.steals||0, tol:3},
+  {label:'Stl:'+aA, pbp:pbp.aStl, box:as.steals||0, tol:3},
+  {label:'Blk:'+hA, pbp:pbp.hBlk, box:hs.blocks||0, tol:2},
+  {label:'Blk:'+aA, pbp:pbp.aBlk, box:as.blocks||0, tol:2},
+  {label:'FTA:'+hA, pbp:pbp.hFTA, box:hs.free_throws_att||0, tol:2},
+  {label:'FTA:'+aA, pbp:pbp.aFTA, box:as.free_throws_att||0, tol:2},
+];
+checks.forEach(function(c){
+  var diff = Math.abs(c.pbp - c.box);
+  if(diff===0) ok('RECON:'+c.label, 'PBP='+c.pbp+' Box='+c.box+' ✓');
+  else if(diff<=c.tol) meh('RECON:'+c.label, 'PBP='+c.pbp+' Box='+c.box+' (off by '+diff+')');
+  else bad('RECON:'+c.label, 'PBP='+c.pbp+' Box='+c.box+' (off by '+diff+' > tol '+c.tol+')');
+});
+```
 
-  // ── 5. WINDOW VALIDATION ──
-  var windows = [
-    {label:'QTR', w:cs.rollingWindow},
-    {label:'PBP', w:cs.pbpWindow},
-  ];
-  windows.forEach(function(ww){
-    var w = ww.w;
-    if(!w){ meh('WIN:'+ww.label, 'Not computed'); return; }
-    if(!w.available){ ok('WIN:'+ww.label+':early', w.reason||'Too early'); return; }
-    // Score bounds
-    if(w.score<0||w.score>1) bad('WIN:'+ww.label+':score', 'Score '+w.score+' out of [0,1]');
-    else ok('WIN:'+ww.label+':score', w.controlTeam+' '+w.score.toFixed(2));
-    // Indicator math
-    if(w.I1&&w.I2&&w.I3&&w.I4&&w.I5){
-      var W2 = {I1:.25,I2:.25,I3:.20,I4:.20,I5:.10};
-      var raw2 = w.I1.score*W2.I1+w.I2.score*W2.I2+w.I3.score*W2.I3+w.I4.score*W2.I4+w.I5.score*W2.I5;
-      var exp2 = raw2>=0.5?raw2:1-raw2;
-      if(close(w.score, exp2, 0.02)) ok('WIN:'+ww.label+':math', 'Composite matches');
-      else bad('WIN:'+ww.label+':math', 'Score '+w.score.toFixed(3)+' != expected '+exp2.toFixed(3));
-    }
-    // Control team is valid alias
-    if(w.controlTeam && w.controlTeam.length<=4 && w.controlTeam!=='?') ok('WIN:'+ww.label+':team', w.controlTeam);
-    else bad('WIN:'+ww.label+':team', 'Invalid: '+w.controlTeam);
-  });
+} else {
+meh(‘RECON:skip’, ‘Box score or PBP not available for reconciliation’);
+}
 
+// ── 4. INDICATOR MATH ──
+var rawInd = cs.clientInd;
+if(rawInd && rawInd.I1 && rawInd.I2 && rawInd.I3 && rawInd.I4 && rawInd.I5){
+var W = {I1:.25, I2:.25, I3:.20, I4:.20, I5:.10};
+var raw = rawInd.I1.score*W.I1 + rawInd.I2.score*W.I2 + rawInd.I3.score*W.I3 + rawInd.I4.score*W.I4 + rawInd.I5.score*W.I5;
+var expectedScore = raw>=0.5 ? raw : 1-raw;
+if(close(rawInd.score, expectedScore, 0.01)) ok(‘IND:composite’, ‘Score ‘+rawInd.score.toFixed(3)+’ matches weighted sum’);
+else bad(‘IND:composite’, ‘Score ‘+rawInd.score.toFixed(3)+’ != expected ‘+expectedScore.toFixed(3));
+// Bounds check
+[‘I1’,‘I2’,‘I3’,‘I4’,‘I5’].forEach(function(k){
+var v = rawInd[k].score;
+if(v!==0 && v!==0.5 && v!==1) bad(‘IND:’+k+’:bounds’, ‘Score=’+v+’ not in {0, 0.5, 1}’);
+else ok(‘IND:’+k+’:bounds’, ‘Score=’+v+’ ✓’);
+});
+} else {
+meh(‘IND:skip’, ‘No clientInd available’);
+}
 
+// ── 5. WINDOW VALIDATION ──
+var windows = [
+{label:‘QTR’, w:cs.rollingWindow},
+{label:‘PBP’, w:cs.pbpWindow},
+];
+windows.forEach(function(ww){
+var w = ww.w;
+if(!w){ meh(‘WIN:’+ww.label, ‘Not computed’); return; }
+if(!w.available){ ok(‘WIN:’+ww.label+’:early’, w.reason||‘Too early’); return; }
+// Score bounds
+if(w.score<0||w.score>1) bad(‘WIN:’+ww.label+’:score’, ‘Score ‘+w.score+’ out of [0,1]’);
+else ok(‘WIN:’+ww.label+’:score’, w.controlTeam+’ ‘+w.score.toFixed(2));
+// Indicator math
+if(w.I1&&w.I2&&w.I3&&w.I4&&w.I5){
+var W2 = {I1:.25,I2:.25,I3:.20,I4:.20,I5:.10};
+var raw2 = w.I1.score*W2.I1+w.I2.score*W2.I2+w.I3.score*W2.I3+w.I4.score*W2.I4+w.I5.score*W2.I5;
+var exp2 = raw2>=0.5?raw2:1-raw2;
+if(close(w.score, exp2, 0.02)) ok(‘WIN:’+ww.label+’:math’, ‘Composite matches’);
+else bad(‘WIN:’+ww.label+’:math’, ‘Score ‘+w.score.toFixed(3)+’ != expected ‘+exp2.toFixed(3));
+}
+// Control team is valid alias
+if(w.controlTeam && w.controlTeam.length<=4 && w.controlTeam!==’?’) ok(‘WIN:’+ww.label+’:team’, w.controlTeam);
+else bad(‘WIN:’+ww.label+’:team’, ’Invalid: ’+w.controlTeam);
+});
 
-  // ── 7. CROSS-WINDOW CONSISTENCY ──
-  var pw = cs.pbpWindow, qw = cs.rollingWindow;
-  if(pw && pw.available && qw && qw.available){
-    // Both should agree on which team controls (most of the time)
-    if(pw.controlTeam === qw.controlTeam) ok('XWIN:agreement', 'PBP+QTR agree: '+pw.controlTeam);
-    else meh('XWIN:agreement', 'PBP='+pw.controlTeam+' QTR='+qw.controlTeam+' (divergence — worth investigating)');
-    // Score shouldn't be wildly different
-    var scoreDiff = Math.abs(pw.score - qw.score);
-    if(scoreDiff<0.15) ok('XWIN:scoreDelta', 'Δ'+scoreDiff.toFixed(2));
-    else meh('XWIN:scoreDelta', 'Δ'+scoreDiff.toFixed(2)+' (large gap — investigate I1-I5 differences)');
-  }
+// ── 7. CROSS-WINDOW CONSISTENCY ──
+var pw = cs.pbpWindow, qw = cs.rollingWindow;
+if(pw && pw.available && qw && qw.available){
+// Both should agree on which team controls (most of the time)
+if(pw.controlTeam === qw.controlTeam) ok(‘XWIN:agreement’, ‘PBP+QTR agree: ‘+pw.controlTeam);
+else meh(‘XWIN:agreement’, ‘PBP=’+pw.controlTeam+’ QTR=’+qw.controlTeam+’ (divergence — worth investigating)’);
+// Score shouldn’t be wildly different
+var scoreDiff = Math.abs(pw.score - qw.score);
+if(scoreDiff<0.15) ok(‘XWIN:scoreDelta’, ‘Δ’+scoreDiff.toFixed(2));
+else meh(‘XWIN:scoreDelta’, ‘Δ’+scoreDiff.toFixed(2)+’ (large gap — investigate I1-I5 differences)’);
+}
 
-  // ── SUMMARY ──
-  console.log('%c── RESULTS ──', 'color:#00ff88;font-weight:bold');
-  results.forEach(function(r){
-    var color = r.status==='PASS'?'color:#00ff88':r.status==='FAIL'?'color:#ff5252':'color:#ffd166';
-    console.log('%c'+r.status+'%c '+r.label+' '+r.detail, color+';font-weight:bold', 'color:inherit');
-  });
-  console.log('%c══ SUMMARY: '+pass+' pass, '+fail+' fail, '+warn+' warn ══', fail>0?'color:#ff5252;font-weight:bold;font-size:12px':'color:#00ff88;font-weight:bold;font-size:12px');
-  return {pass:pass, fail:fail, warn:warn, results:results};
+// ── SUMMARY ──
+console.log(’%c── RESULTS ──’, ‘color:#00ff88;font-weight:bold’);
+results.forEach(function(r){
+var color = r.status===‘PASS’?‘color:#00ff88’:r.status===‘FAIL’?‘color:#ff5252’:‘color:#ffd166’;
+console.log(’%c’+r.status+’%c ‘+r.label+’ ‘+r.detail, color+’;font-weight:bold’, ‘color:inherit’);
+});
+console.log(’%c══ SUMMARY: ‘+pass+’ pass, ‘+fail+’ fail, ‘+warn+’ warn ══’, fail>0?‘color:#ff5252;font-weight:bold;font-size:12px’:‘color:#00ff88;font-weight:bold;font-size:12px’);
+return {pass:pass, fail:fail, warn:warn, results:results};
 }
 
 </script>
