@@ -979,7 +979,7 @@ async function fetchEspnWinProb(gameId){
 
 
 let games = [], selIds = [], paused = false, pollTimer = null, alertTimer = null, confCollapsed = false;
-let pollInterval = 20000; // BDL: 20s (was 90s for SR)
+let pollInterval = 10000; // BDL: 10s — 600 req/min allows near-realtime polling
 const theses = JSON.parse(localStorage.getItem('ncaamb:theses')||'{}');
 const cachedClutch = JSON.parse(localStorage.getItem('ncaamb:clutch')||'{}');
 const cachedOdds = JSON.parse(localStorage.getItem('ncaamb:odds')||'{}');
@@ -1731,10 +1731,40 @@ async function fetchSummaryBDL(game){
 
     captureSnapshot(game);
 
-    // ESPN WP
+    // ESPN WP (every ~30s)
     var _espnSt = getState(game);
-    if((_espnSt==='LIVE'||(_espnSt==='FINAL'&&!cs.espnWP)) && espnGameMap[game.id] && (!cs.espnWP || (Date.now() - (cs.espnWP.time?.getTime()||0)) > pollInterval * 1.5)){
+    if((_espnSt==='LIVE'||(_espnSt==='FINAL'&&!cs.espnWP)) && espnGameMap[game.id] && (!cs.espnWP || (Date.now() - (cs.espnWP.time?.getTime()||0)) > 30000)){
       setTimeout(function(){ fetchEspnWinProb(game.id); }, 1000);
+    }
+
+    // Auto-odds refresh (every poll cycle — lines move fast in live betting)
+    if(getState(game)==='LIVE' && bdlGameMap[game.id]){
+      var oddsAge = cs._lastOddsTime ? (Date.now() - cs._lastOddsTime) : 999999;
+      if(oddsAge > pollInterval * 0.9){
+        (async function(gid, bdlGid){
+          try{
+            var oddsResp = await bdl('odds',{game_id:bdlGid});
+            var oddsArr = oddsResp.data||[];
+            if(Array.isArray(oddsArr)&&oddsArr.length>0){
+              var book = oddsArr.find(function(b){return b.vendor==='fanduel';}) || oddsArr.find(function(b){return b.vendor==='draftkings';}) || oddsArr[0];
+              if(book){
+                var hML=book.moneyline_home_odds||'',aML=book.moneyline_away_odds||'',spread=book.spread_home_value||'',total=book.total_value||'';
+                var _cs=cardState[gid];if(!_cs)return;
+                if(_cs.oddsData&&_cs.oddsData.homeSpread&&_cs.oddsData.homeSpread!==String(spread)){
+                  _cs.oddsHistory=_cs.oddsHistory||[];
+                  _cs.oddsHistory.push({..._cs.oddsData,time:_cs.oddsData.time||'?'});
+                  if(_cs.oddsHistory.length>30)_cs.oddsHistory=_cs.oddsHistory.slice(-30);
+                }
+                _cs.oddsData={homeSpread:String(spread),homeML:String(hML),awayML:String(aML),total:String(total),time:new Date().toLocaleTimeString()};
+                _cs.oddsAll=oddsArr;
+                if(!_cs.openingOdds)_cs.openingOdds={..._cs.oddsData};
+                _cs._lastOddsTime=Date.now();
+                persistOdds(gid,_cs);
+              }
+            }
+          }catch(e){}
+        })(game.id, String(bdlGameMap[game.id]));
+      }
     }
 
     var fp = fingerprint(data);
