@@ -2773,7 +2773,7 @@ function parseBDLPBP(plays,homeAbbr,awayAbbr,playerTeamMap){
         pts=isMade?1:0;
         if(isMade){if(team===hA)hScore+=1;else aScore+=1;scoreLog.push({team:team,pts:1,hScore:hScore,aScore:aScore,q:quarter});scoringEvents.push({tm:team,p:player,pts:1,type:'FT',ck:clock,q:quarter,m:aScore-hScore});if(pendOREB===team){if(team===hA)scpH+=1;else scpA+=1;}if(pendPOT===team){if(team===hA)potH+=1;else potA+=1;}}
         var ftM=type.match(/(\d+)\s*of\s*(\d+)/i);if(ftM&&ftM[1]===ftM[2]&&isMade){pendOREB=null;pendPOT=null;}
-        timeline.push({idx:idx,type:isMade?'ft_made':'ft_miss',team:team,player:player,clock:clock,quarter:quarter});
+        timeline.push({idx:idx,type:isMade?'ft_made':'ft_miss',team:team,player:player,clock:clock,quarter:quarter,freeThrow:{made:isMade,ftType:type,points:isMade?1:0}});
         return;
       }
       var assisted=isMade?!!_bdlExtractAssist(text):false;
@@ -2787,13 +2787,13 @@ function parseBDLPBP(plays,homeAbbr,awayAbbr,playerTeamMap){
         if(pendPOT===team){if(team===hA)potH+=pts;else potA+=pts;}
         pendOREB=null;pendPOT=null;
       }
-      timeline.push({idx:idx,type:isMade?'shot_made':'shot_miss',team:team,player:player,clock:clock,quarter:quarter,shot:{zone:zone,is3:is3,context:context}});
+      timeline.push({idx:idx,type:isMade?'shot_made':'shot_miss',team:team,player:player,clock:clock,quarter:quarter,shot:{zone:zone,is3:is3,context:context,made:isMade,assisted:assisted,points:isMade?pts:0}});
       return;
     }
-    if(tl.includes('turnover')){var tc=_bdlClassifyTO(type,text);turnovers.push({p:player,tm:team,q:quarter,forced:tc.forced,type:tc.type});pendOREB=null;pendPOT=team===hA?aA:hA;timeline.push({idx:idx,type:'turnover',team:team,player:player,clock:clock,quarter:quarter});return;}
+    if(tl.includes('turnover')){var tc=_bdlClassifyTO(type,text);turnovers.push({p:player,tm:team,q:quarter,forced:tc.forced,type:tc.type});pendOREB=null;pendPOT=team===hA?aA:hA;timeline.push({idx:idx,type:'turnover',team:team,player:player,clock:clock,quarter:quarter,turnover:{forced:tc.forced,type:tc.type}});return;}
     if(tl.includes('steal')&&!tl.includes('turnover')){/* standalone steal — the turnover was already counted */return;}
-    if(tl.includes('rebound')){var isOff=tl.includes('offensive');if(isOff)pendOREB=team;else{pendOREB=null;pendPOT=null;}timeline.push({idx:idx,type:'rebound',team:team,player:player,clock:clock,quarter:quarter});return;}
-    if(tl.includes('foul')){if(tl.includes('offensive')){pendOREB=null;pendPOT=team===hA?aA:hA;}timeline.push({idx:idx,type:'foul',team:team,player:player,clock:clock,quarter:quarter});return;}
+    if(tl.includes('rebound')){var isOff=tl.includes('offensive');if(isOff)pendOREB=team;else{pendOREB=null;pendPOT=null;}timeline.push({idx:idx,type:'rebound',team:team,player:player,clock:clock,quarter:quarter,rebound:{type:isOff?'offensive':'defensive'}});return;}
+    if(tl.includes('foul')){var ft='personal';if(tl.includes('offensive'))ft='offensive';else if(tl.includes('flagrant'))ft='flagrant';else if(tl.includes('technical'))ft='technical';else if(tl.includes('shooting'))ft='shooting';if(ft==='offensive'){pendOREB=null;pendPOT=team===hA?aA:hA;}timeline.push({idx:idx,type:'foul',team:team,player:player,clock:clock,quarter:quarter,foul:{type:ft,player:player}});return;}
     if(tl.includes('end period')||tl.includes('end game')){pendPOT=null;pendOREB=null;return;}
     timeline.push({idx:idx,type:'other',team:team,player:player,clock:clock,quarter:quarter});
   });
@@ -2982,8 +2982,8 @@ function buildPossessionLog(timeline, hA, aA){
       continue;
     }
     if(ev.type === 'foul'){
-      currentPoss.fouls.push(ev.foul);
-      if(ev.foul.type === 'offensive') closePoss('turnover', ev.clock);
+      if(ev.foul) currentPoss.fouls.push(ev.foul);
+      if(ev.foul && ev.foul.type === 'offensive') closePoss('turnover', ev.clock);
       continue;
     }
   }
