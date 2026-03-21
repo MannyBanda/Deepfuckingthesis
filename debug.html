@@ -1719,6 +1719,7 @@ async function bdlParseTest(league) {
   log('✅ Parsed in ' + elapsed + 'ms: ' + result.totalShots + ' shots, ' + result.totalTOs + ' TOs, ' + result.runs.length + ' runs', 'log-ok');
 
   // Step 4: render results
+  try {
   var h = '<h2 style="color:#00ff88">⚡ BDL PARSE TEST — ' + escH(aA) + ' @ ' + escH(hA) + '</h2>';
   h += '<div style="color:#64748b;font-size:10px;margin:-8px 0 8px 0">' + escH(gameDate) + ' | Game ID: ' + game.id + ' | ' + escH(game.status) + ' | Parsed in ' + elapsed + 'ms</div>';
 
@@ -1832,10 +1833,13 @@ async function bdlParseTest(league) {
     h += '<span style="background:rgba(255,255,255,.06);border-radius:3px;padding:1px 5px;font-size:9px;color:#94a3b8">' + escH(t[0]) + ' <b style="color:#e2e8f0">' + t[1] + '</b></span>';
   });
   h += '</div>';
-  h += '<div style="font-size:10px;color:#64748b;margin-top:4px">Score: ' + escH(hA) + ' ' + hScore + ' — ' + escH(aA) + ' ' + aScore + '</div>';
+  h += '<div style="font-size:10px;color:#64748b;margin-top:4px">Score: ' + escH(hA) + ' ' + (game.home_team_score||0) + ' — ' + escH(aA) + ' ' + (game.visitor_team_score||0) + '</div>';
   h += '</div>';
 
   contentEl.innerHTML = h;
+  } catch (renderErr) {
+    log('❌ Render error: ' + renderErr.message + ' at line ' + (renderErr.stack || '').substring(0, 200), 'log-err');
+  }
 }
 
 // Show game selector on load
