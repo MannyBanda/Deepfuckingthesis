@@ -197,9 +197,28 @@ exports.handler = async (event) => {
       break;
 
     case 'plays':
-      // Play-by-play (all leagues)
-      url = `${BDL_BASE}${pfx}/v1/plays?game_id=${params.game_id}&per_page=100`;
+      // Play-by-play (all leagues) — BDL returns all events, no pagination needed
+      url = `${BDL_BASE}${pfx}/v1/plays?game_id=${params.game_id}&per_page=500`;
       if (params.period) url += `&period=${params.period}`;
+      break;
+
+    case 'lineups':
+      // Starting lineups + bench (NBA 2025+ only)
+      url = `${BDL_BASE}${pfx}/v1/lineups?per_page=50`;
+      if (params.game_id) url += `&game_ids[]=${params.game_id}`;
+      if (params.game_ids) {
+        params.game_ids.split(',').forEach(id => { url += `&game_ids[]=${id.trim()}`; });
+      }
+      break;
+
+    case 'box_scores':
+      // Box scores by date — pre-grouped by team with per-player stats
+      url = `${BDL_BASE}${pfx}/v1/box_scores?date=${params.date}`;
+      break;
+
+    case 'box_scores_live':
+      // Live box scores — all in-progress games
+      url = `${BDL_BASE}${pfx}/v1/box_scores/live`;
       break;
 
     default:
@@ -207,7 +226,7 @@ exports.handler = async (event) => {
         statusCode: 400,
         headers,
         body: JSON.stringify({
-          error: 'Invalid type. Valid: games, game, stats, team_stats, advanced, player_injuries, team_games, multi_stats, odds, standings, rankings, bracket, season_stats, team_season_stats, plays',
+          error: 'Invalid type. Valid: games, game, stats, team_stats, advanced, player_injuries, team_games, multi_stats, odds, standings, rankings, bracket, season_stats, team_season_stats, plays, lineups, box_scores, box_scores_live',
           league,
         }),
       };
