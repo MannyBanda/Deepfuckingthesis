@@ -1677,8 +1677,18 @@ async function fetchSummaryBDL(game){
     var teamStats = tsResult.data || [];
     var plays = playsResult.data || [];
 
+    // Build player→team map for PBP team resolution (NCAAMB plays lack team field)
+    var ptMap = {};
+    playerStats.forEach(function(p){
+      var fn = ((p.player?.first_name||'')+' '+(p.player?.last_name||'')).trim();
+      var ln = (p.player?.last_name||'').trim();
+      var ab = p.team?.abbreviation||'';
+      if(fn && ab) ptMap[fn] = ab;
+      if(ln && ab && !ptMap[ln]) ptMap[ln] = ab; // last name fallback (only if unambiguous)
+    });
+
     // Parse PBP
-    var pbpResult = parseBDLPBP(plays, hA, aA);
+    var pbpResult = parseBDLPBP(plays, hA, aA, ptMap);
 
     // Build SR-shaped summary
     var data = buildSummaryFromBDL(gameInfo, playerStats, teamStats, pbpResult);
@@ -2400,7 +2410,9 @@ async function fetchPBP(gameId){
     const hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
     const playsResult = await bdl('plays', {game_id: String(bdlId), league: 'ncaamb'});
     const plays = playsResult.data || [];
-    const audit = parseBDLPBP(plays, hA, aA);
+    var ptMap = {};
+    if(game.summary){[game.summary.home,game.summary.away].forEach(function(side){if(!side)return;var ab=side.alias||'';(side.players||[]).forEach(function(p){if(p.full_name&&ab)ptMap[p.full_name]=ab;var parts=p.full_name?.split(/\s+/)||[];var ln=parts[parts.length-1];if(ln&&ab&&!ptMap[ln])ptMap[ln]=ab;});});}
+    const audit = parseBDLPBP(plays, hA, aA, ptMap);
     cs.pbpAudit = audit;
     cs.pbpTime = new Date();
     cs.pbpPeriod = game.period || 0;
@@ -2426,7 +2438,9 @@ async function fetchPBPQuiet(gameId){
     const hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
     const playsResult = await bdl('plays', {game_id: String(bdlId), league: 'ncaamb'});
     const plays = playsResult.data || [];
-    const audit = parseBDLPBP(plays, hA, aA);
+    var ptMap = {};
+    if(game.summary){[game.summary.home,game.summary.away].forEach(function(side){if(!side)return;var ab=side.alias||'';(side.players||[]).forEach(function(p){if(p.full_name&&ab)ptMap[p.full_name]=ab;var parts=p.full_name?.split(/\s+/)||[];var ln=parts[parts.length-1];if(ln&&ab&&!ptMap[ln])ptMap[ln]=ab;});});}
+    const audit = parseBDLPBP(plays, hA, aA, ptMap);
     cs.pbpAudit = audit;
     cs.pbpTime = new Date();
     cs.pbpPeriod = game.period || 0;
@@ -2686,27 +2700,41 @@ function _bdlExtractDistance(t){if(!t)return null;var m=t.match(/(\d+)-foot/i);r
 function _bdlClassifyContext(type,assisted,isThree){var t=(type||'').toLowerCase();if(t.includes('driving')||t.includes('layup')||t.includes('dunk'))return'drive';if(t.includes('pullup')||t.includes('pull-up')||t.includes('step back')||t.includes('fadeaway'))return'pullup';if(t.includes('putback')||t.includes('tip'))return'putback';if(t.includes('cutting')||t.includes('alley'))return'cut';if(t.includes('hook')||t.includes('float')||t.includes('runner'))return'floater';if(t.includes('running')&&!t.includes('pullup'))return'transition';if(assisted&&isThree)return'catch-shoot';return'halfcourt';}
 function _bdlClassifyTO(type,text){var t=(type||'').toLowerCase(),tx=(text||'').toLowerCase();if(tx.includes('steal'))return{forced:true,type:t};if(t.includes('bad pass'))return{forced:true,type:t};if(t.includes('traveling')||t.includes('out of bounds')||t.includes('3-second')||t.includes('shot clock')||t.includes('offensive foul')||t.includes('double dribble')||t.includes('backcourt')||t.includes('5-second')||t.includes('kicked ball'))return{forced:false,type:t};return{forced:null,type:t};}
 
-function parseBDLPBP(plays,homeAbbr,awayAbbr){
-  if(!plays||plays.length===0)return{home:null,away:null,homeAlias:homeAbbr,awayAlias:awayAbbr,totalShots:0,totalTOs:0,runs:[],scoringEvents:[],timeline:[],_bdl:{potHome:0,potAway:0,scpHome:0,scpAway:0,biggestLeadHome:0,biggestLeadAway:0,scoreLog:[]}};
+function parseBDLPBP(plays,homeAbbr,awayAbbr,playerTeamMap){
+  if(!plays||plays.length===0)return{home:null,away:null,homeAlias:homeAbbr,awayAlias:awayAbbr,totalShots:0,totalTOs:0,runs:[],raw:{shots:[],turnovers:[]},scoringEvents:[],possessionLog:[],timeline:[],_bdl:{potHome:0,potAway:0,scpHome:0,scpAway:0,biggestLeadHome:0,biggestLeadAway:0,scoreLog:[]}};
   var hA=homeAbbr,aA=awayAbbr;
+  var ptMap=playerTeamMap||{};
   var shots=[],turnovers=[],scoreLog=[],scoringEvents=[],timeline=[];
   var hScore=0,aScore=0,bigH=0,bigA=0;
   var pendPOT=null,pendOREB=null,potH=0,potA=0,scpH=0,scpA=0,lastP=0;
+  var prevHS=0,prevAS=0;
   var sorted=plays.slice().sort(function(a,b){return(a.order||0)-(b.order||0);});
+  // Team resolution: NCAAMB plays have team:undefined
+  function resolveTeam(ev,player,isScoring){
+    var ta=ev.team?.abbreviation||'';
+    if(ta===hA||ta===aA) return ta;
+    if(isScoring){var curHS=ev.home_score??prevHS,curAS=ev.away_score??prevAS;if(curHS>prevHS&&curAS===prevAS)return hA;if(curAS>prevAS&&curHS===prevHS)return aA;}
+    if(player&&player!=='?'&&ptMap[player])return ptMap[player];
+    if(player&&player!=='?'){var parts=player.split(/\s+/);var ln=parts[parts.length-1];if(ln&&ptMap[ln])return ptMap[ln];}
+    return '?';
+  }
   sorted.forEach(function(ev,idx){
     var type=(ev.type||'').trim(),tl=type.toLowerCase(),text=(ev.text||'').replace(/\n/g,' ').trim(),tx=text.toLowerCase();
-    var tAbbr=ev.team?.abbreviation||'',team=tAbbr===hA?hA:tAbbr===aA?aA:tAbbr||'?';
     var player=_bdlExtractPlayer(text),clock=ev.clock||null,quarter=ev.period||0;
+    var isMade=ev.scoring_play||tx.includes('makes');
+    var team=resolveTeam(ev,player,isMade);
     var hs=ev.home_score??null,as=ev.away_score??null;
+    if(hs!=null)prevHS=hs;if(as!=null)prevAS=as;
     if(quarter!==lastP&&lastP>0){pendPOT=null;pendOREB=null;}lastP=quarter;
     if(hs!=null&&as!=null){var mg=hs-as;if(mg>bigH)bigH=mg;if(-mg>bigA)bigA=-mg;}
     if(tl.includes('substitution')||tx.includes('enters the game for'))return;
     // Detect shots: NCAAMB BDL has no shooting_play boolean — classify from type
-    var isShotType=tl.includes('shot')||tl.includes('layup')||tl.includes('dunk')||tl.includes('tip')||tl.includes('free throw')||tl==='madefree throw'||tl==='madefreethrow';
-    var isFT=tl.includes('free throw');
-    var isMade=ev.scoring_play||tx.includes('makes');
+    // Block Shot is defensive — exclude before shot detection
+    if(tl==='block shot'){timeline.push({idx:idx,type:'block',team:team,player:player,clock:clock,quarter:quarter});return;}
+    var isFT=tl.includes('free throw')||tl.includes('freethrow');
+    var isShotType=tl.includes('shot')||tl.includes('layup')||tl.includes('dunk')||tl.includes('tip')||isFT;
     var isMiss=tx.includes('misses');
-    var isShot=isShotType||(isMade&&!tl.includes('rebound')&&!tl.includes('foul')&&!tl.includes('turnover')&&!tl.includes('steal'));
+    var isShot=isShotType||(isMade&&!tl.includes('rebound')&&!tl.includes('foul')&&!tl.includes('turnover')&&!tl.includes('steal')&&tl!=='block shot');
     if(isShot){
       var is3=ev.score_value===3||tx.includes('three point');
       var pts=isMade?(ev.score_value||(is3?3:isFT?1:2)):0;
