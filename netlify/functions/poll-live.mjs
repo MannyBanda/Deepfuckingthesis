@@ -385,6 +385,237 @@ function mergeBdlSeasonData(summary, bdlHomeSeason, bdlAwaySeason) {
   mergeTeam(summary.away, bdlAwaySeason);
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// SERVER-SIDE BDL ADAPTERS
+// Same logic as client — coordinateToZone, parseBDLPBP, buildSummaryFromBDL
+// ══════════════════════════════════════════════════════════════════════════════
+
+function normalizeBdlStatusServer(s) {
+  if (!s) return 'scheduled';
+  const sl = s.toLowerCase();
+  if (sl === 'final') return 'closed';
+  if (sl === 'in progress' || sl.includes('qtr') || sl.includes('quarter') || sl.includes('overtime') || sl === 'ot') return 'inprogress';
+  if (sl === 'halftime' || sl.includes('half')) return 'halftime';
+  if (s.includes('T') && s.includes(':')) return 'scheduled';
+  return s;
+}
+
+const BDL_BASKET_X = 25, BDL_BASKET_Y = 1.5, BDL_RIM_RADIUS = 4, BDL_PAINT_RADIUS = 9, BDL_THREE_RADIUS = 22, BDL_CORNER_Y_MAX = 9;
+function bdlCoordsValid(x, y) { return x != null && y != null && x > -1000 && y > -1000 && x < 1000 && y < 1000; }
+function bdlDistFromBasket(x, y) { return Math.sqrt(Math.pow(x - BDL_BASKET_X, 2) + Math.pow(y - BDL_BASKET_Y, 2)); }
+
+const BDL_RIM_SET = new Set(['layup shot','driving layup shot','running layup shot','cutting layup shot','reverse layup shot','finger roll layup','layup shot putback','putback layup shot','driving reverse layup shot','running reverse layup shot','dunk shot','driving dunk shot','running dunk shot','cutting dunk shot','alley oop dunk shot','putback dunk shot','running alley oop dunk shot','tip shot','tip dunk shot']);
+const BDL_PAINT_SET = new Set(['driving floating jump shot','floating jump shot','driving hook shot','hook shot','running hook shot','driving finger roll layup','turnaround hook shot']);
+
+function coordinateToZoneServer(x, y, shotType, text, scoreValue) {
+  const tl = (shotType || '').toLowerCase().trim();
+  const tx = (text || '').toLowerCase();
+  const is3 = scoreValue === 3 || tx.includes('three point');
+  if (BDL_RIM_SET.has(tl)) return 'rim';
+  if (BDL_PAINT_SET.has(tl)) return 'paint';
+  if (is3) { if (bdlCoordsValid(x, y) && y < BDL_CORNER_Y_MAX) return 'corner3'; return 'above3'; }
+  if (bdlCoordsValid(x, y)) { const d = bdlDistFromBasket(x, y); if (d < BDL_RIM_RADIUS) return 'rim'; if (d < BDL_PAINT_RADIUS) return 'paint'; if (d >= BDL_THREE_RADIUS) return y < BDL_CORNER_Y_MAX ? 'corner3' : 'above3'; return 'mid'; }
+  const dm = tx.match(/(\d+)-foot/); if (dm) { const dd = parseInt(dm[1]); if (dd <= 4) return 'rim'; if (dd <= 9) return 'paint'; if (dd >= 22) return 'above3'; return 'mid'; }
+  if (tl.includes('layup') || tl.includes('dunk') || tl.includes('tip')) return 'rim';
+  if (tl.includes('hook') || tl.includes('float')) return 'paint';
+  return 'mid';
+}
+
+function bdlExtractPlayerS(t) { if (!t) return '?'; const c = t.replace(/\n/g, ' ').trim(); const m = c.match(/^([A-Z][a-zA-Z'.]+(?:[\s-][A-Z][a-zA-Z'.]+)*(?:\s+(?:Jr\.|Sr\.|III|II|IV))?)\s+(?:makes|misses|personal|shooting|loose|bad|offensive|defensive|lost|out|traveling|turnover|flagrant|double|blocks|steals|enters|steps|kicked)/i); if (m) return m[1].trim(); const m2 = c.match(/^(.+?)\s+(?:makes|misses|personal|shooting|offensive|defensive|bad|loose|lost|blocks|steals)/i); if (m2) return m2[1].trim(); return c.split(/\s+/).slice(0, 2).join(' '); }
+function bdlExtractAssistS(t) { if (!t) return null; const m = t.match(/\(([^)]+?)\s+assists?\)/i); return m ? m[1].trim() : null; }
+function bdlExtractBlockS(t) { if (!t) return null; const m = t.match(/\(([^)]+?)\s+blocks?\)/i); if (m) return m[1].trim(); const m2 = t.match(/([A-Z][a-zA-Z'.]+(?:[\s-][A-Z][a-zA-Z'.]+)*)\s+blocks\s/i); return m2 ? m2[1].trim() : null; }
+function bdlExtractStealS(t) { if (!t) return null; const m = t.match(/\(([^)]+?)\s+steals?\)/i); return m ? m[1].trim() : null; }
+function bdlClassifyContextS(type, assisted, isThree) { const t = (type || '').toLowerCase(); if (t.includes('driving') || t.includes('layup') || t.includes('dunk')) return 'drive'; if (t.includes('pullup') || t.includes('step back') || t.includes('fadeaway')) return 'pullup'; if (t.includes('putback') || t.includes('tip')) return 'putback'; if (t.includes('cutting') || t.includes('alley')) return 'cut'; if (t.includes('hook') || t.includes('float')) return 'floater'; if (t.includes('running') && !t.includes('pullup')) return 'transition'; if (assisted && isThree) return 'catch-shoot'; return 'halfcourt'; }
+function bdlClassifyTOS(type, text) { const t = (type || '').toLowerCase(); const tx = (text || '').toLowerCase(); if (tx.includes('steal')) return { forced: true, type: t }; if (t.includes('bad pass')) return { forced: true, type: t }; if (t.includes('traveling') || t.includes('out of bounds') || t.includes('3-second') || t.includes('shot clock') || t.includes('offensive foul') || t.includes('double dribble') || t.includes('backcourt') || t.includes('kicked ball')) return { forced: false, type: t }; return { forced: null, type: t }; }
+
+// Server-side parseBDLPBP — same as client but returns perQuarter for sub-metric arrows
+function parseBDLPBPServer(plays, homeAbbr, awayAbbr) {
+  if (!plays || plays.length === 0) return null;
+  const hA = homeAbbr, aA = awayAbbr;
+  const shots = [], turnovers = [], scoreLog = [], runs = [];
+  let hScore = 0, aScore = 0, bigH = 0, bigA = 0;
+  let pendPOT = null, pendOREB = null, potH = 0, potA = 0, scpH = 0, scpA = 0, lastP = 0;
+
+  const sorted = plays.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+  sorted.forEach(ev => {
+    const type = (ev.type || '').trim(), tl = type.toLowerCase();
+    const text = (ev.text || '').replace(/\n/g, ' ').trim(), tx = text.toLowerCase();
+    const tAbbr = ev.team?.abbreviation || '';
+    const team = tAbbr === hA ? hA : tAbbr === aA ? aA : tAbbr || '?';
+    const player = bdlExtractPlayerS(text);
+    const quarter = ev.period || 0;
+    const hs = ev.home_score ?? null, as = ev.away_score ?? null;
+
+    if (quarter !== lastP && lastP > 0) { pendPOT = null; pendOREB = null; }
+    lastP = quarter;
+    if (hs != null && as != null) { const mg = hs - as; if (mg > bigH) bigH = mg; if (-mg > bigA) bigA = -mg; }
+    if (tl.includes('substitution') || tx.includes('enters the game for')) return;
+
+    if (ev.shooting_play) {
+      const made = ev.scoring_play || false;
+      const is3 = ev.score_value === 3 || tx.includes('three point');
+      let pts = made ? (ev.score_value || (is3 ? 3 : 2)) : 0;
+      const zone = coordinateToZoneServer(ev.coordinate_x, ev.coordinate_y, type, text, ev.score_value);
+
+      if (tl.includes('free throw')) {
+        pts = made ? 1 : 0;
+        if (made) {
+          if (team === hA) hScore += 1; else aScore += 1;
+          scoreLog.push({ team, pts: 1, hScore, aScore, q: quarter });
+          if (pendOREB === team) { if (team === hA) scpH += 1; else scpA += 1; }
+          if (pendPOT === team) { if (team === hA) potH += 1; else potA += 1; }
+        }
+        const ftM = type.match(/(\d+)\s*of\s*(\d+)/i);
+        if (ftM && ftM[1] === ftM[2] && made) { pendOREB = null; pendPOT = null; }
+        return;
+      }
+
+      const assisted = made ? !!bdlExtractAssistS(text) : false;
+      const context = bdlClassifyContextS(type, assisted, is3);
+      shots.push({ p: player, tm: team, z: zone, m: made, a: assisted, q: quarter, ctx: context, is3 });
+      if (made) {
+        if (team === hA) hScore += pts; else aScore += pts;
+        scoreLog.push({ team, pts, hScore, aScore, q: quarter });
+        if (pendOREB === team) { if (team === hA) scpH += pts; else scpA += pts; }
+        if (pendPOT === team) { if (team === hA) potH += pts; else potA += pts; }
+        pendOREB = null; pendPOT = null;
+      }
+      return;
+    }
+
+    if (tl.includes('turnover')) {
+      const tc = bdlClassifyTOS(type, text);
+      turnovers.push({ p: player, tm: team, q: quarter, forced: tc.forced, type: tc.type });
+      pendOREB = null;
+      pendPOT = team === hA ? aA : hA;
+      return;
+    }
+
+    if (tl.includes('rebound')) {
+      if (tl.includes('offensive')) pendOREB = team;
+      else { pendOREB = null; pendPOT = null; }
+      return;
+    }
+
+    if (tl.includes('foul') && tl.includes('offensive')) {
+      pendOREB = null; pendPOT = team === hA ? aA : hA;
+    }
+
+    if (tl.includes('end period') || tl.includes('end game')) {
+      pendPOT = null; pendOREB = null;
+    }
+  });
+
+  // Runs
+  let rTm = null, rPts = 0, rSt = 0, rCt = 0, rST = [];
+  for (let i = 0; i < scoreLog.length; i++) {
+    const s = scoreLog[i];
+    if (s.team === rTm) { rPts += s.pts; rCt++; rST.push(s.pts === 3 ? '3PT' : s.pts === 1 ? 'FT' : '2PT'); }
+    else { if (rPts >= 8 || rCt >= 3) runs.push({ team: rTm, pts: rPts, count: rCt, q: scoreLog[rSt]?.q, mechanism: rST.slice(), si: rSt, ei: i - 1 }); rTm = s.team; rPts = s.pts; rSt = i; rCt = 1; rST = [s.pts === 3 ? '3PT' : s.pts === 1 ? 'FT' : '2PT']; }
+  }
+  if (rPts >= 8 || rCt >= 3) runs.push({ team: rTm, pts: rPts, count: rCt, q: scoreLog[rSt]?.q, mechanism: rST.slice(), si: rSt, ei: scoreLog.length - 1 });
+  runs.sort((a, b) => b.ei - a.ei);
+
+  // Aggregates (same shape as SR parsePBPServer aggTeam)
+  function aggTeam(tm) {
+    const s = shots.filter(x => x.tm === tm);
+    const threes = s.filter(x => x.is3), rim = s.filter(x => x.z === 'rim'), paint = s.filter(x => x.z === 'paint'), mid = s.filter(x => x.z === 'mid');
+    const threeMade = threes.filter(x => x.m), rimMade = rim.filter(x => x.m), midMade = mid.filter(x => x.m);
+    const assistedThrees = threeMade.filter(x => x.a).length;
+    const tms = turnovers.filter(t => t.tm === tm);
+    return {
+      threes: { made: threeMade.length, att: threes.length, assisted: assistedThrees, pct: threes.length > 0 ? (threeMade.length / threes.length * 100).toFixed(1) : '0',
+        corner: { made: threeMade.filter(x => x.z === 'corner3').length, att: threes.filter(x => x.z === 'corner3').length },
+        above: { made: threeMade.filter(x => x.z === 'above3').length, att: threes.filter(x => x.z === 'above3').length },
+        byPlayer: [] },
+      rim: { made: rimMade.length, att: rim.length, pct: rim.length > 0 ? (rimMade.length / rim.length * 100).toFixed(1) : '0', byPlayer: [] },
+      paint: { made: paint.filter(x => x.m).length, att: paint.length, pct: paint.length > 0 ? (paint.filter(x => x.m).length / paint.length * 100).toFixed(1) : '0' },
+      mid: { made: midMade.length, att: mid.length, assisted: midMade.filter(x => x.a).length, pct: mid.length > 0 ? (midMade.length / mid.length * 100).toFixed(1) : '0', byPlayer: [] },
+      tos: { total: tms.length, forced: tms.filter(t => t.forced === true).length, unforced: tms.filter(t => t.forced === false).length, unknown: tms.filter(t => t.forced === null).length },
+      shotDiet: { total: s.length, threePct: s.length > 0 ? (threes.length / s.length * 100).toFixed(1) : '0', rimPct: s.length > 0 ? (rim.length / s.length * 100).toFixed(1) : '0', midPct: s.length > 0 ? (mid.length / s.length * 100).toFixed(1) : '0' },
+    };
+  }
+
+  return {
+    home: aggTeam(hA), away: aggTeam(aA),
+    homeAlias: hA, awayAlias: aA,
+    totalShots: shots.length, totalTOs: turnovers.length,
+    runs: runs.slice(0, 10),
+    perQuarter: buildPerQuarterMetrics(shots, turnovers, hA, aA),
+    pbpPeriod: lastP, pbpAge: 0,
+    _bdl: { potHome: potH, potAway: potA, scpHome: scpH, scpAway: scpA, biggestLeadHome: bigH, biggestLeadAway: bigA, scoreLog },
+  };
+}
+
+// Server-side buildSummaryFromBDL — builds SR summary shape from BDL box score + PBP
+function buildSummaryFromBDLServer(boxScore, pbpResult, lineupsArr) {
+  const game = boxScore || {};
+  const bdl = pbpResult?._bdl || {};
+  const homeTeam = game.home_team?.team || game.home_team || {};
+  const awayTeam = game.visitor_team?.team || game.visitor_team || {};
+  const hA = homeTeam.abbreviation || 'HOME', aA = awayTeam.abbreviation || 'AWAY';
+  const homePlayers = game.home_team?.players || [];
+  const awayPlayers = game.visitor_team?.players || [];
+  const hSIds = new Set(), aSIds = new Set();
+  if (lineupsArr) lineupsArr.forEach(l => { if (!l.starter) return; const ab = l.team?.abbreviation || ''; if (ab === hA) hSIds.add(l.player?.id); else if (ab === aA) aSIds.add(l.player?.id); });
+
+  function bts(players, starterIds, side) {
+    const s = { field_goals_made: 0, field_goals_att: 0, three_points_made: 0, three_points_att: 0, two_points_made: 0, two_points_att: 0, free_throws_made: 0, free_throws_att: 0, assists: 0, steals: 0, blocks: 0, offensive_rebounds: 0, defensive_rebounds: 0, rebounds: 0, turnovers: 0, total_turnovers: 0, personal_fouls: 0, points: 0, bench_points: 0 };
+    let sPts = 0;
+    players.forEach(p => { s.field_goals_made += p.fgm || 0; s.field_goals_att += p.fga || 0; s.three_points_made += p.fg3m || 0; s.three_points_att += p.fg3a || 0; s.free_throws_made += p.ftm || 0; s.free_throws_att += p.fta || 0; s.assists += p.ast || 0; s.steals += p.stl || 0; s.blocks += p.blk || 0; s.offensive_rebounds += p.oreb || 0; s.defensive_rebounds += p.dreb || 0; s.rebounds += p.reb || 0; s.turnovers += p.turnover || 0; s.personal_fouls += p.pf || 0; s.points += p.pts || 0; if (starterIds.has(p.player?.id || p.id)) sPts += p.pts || 0; });
+    s.total_turnovers = s.turnovers; s.two_points_made = s.field_goals_made - s.three_points_made; s.two_points_att = s.field_goals_att - s.three_points_att; s.bench_points = Math.max(0, s.points - sPts);
+    const fga = s.field_goals_att || 1;
+    s.field_goals_pct = +(s.field_goals_made / fga * 100).toFixed(1); s.three_points_pct = s.three_points_att > 0 ? +(s.three_points_made / s.three_points_att * 100).toFixed(1) : 0;
+    s.effective_fg_pct = +((s.field_goals_made + 0.5 * s.three_points_made) / fga * 100).toFixed(1);
+    s.true_shooting_att = +(fga + 0.44 * s.free_throws_att).toFixed(1); s.true_shooting_pct = s.true_shooting_att > 0 ? +(s.points / (2 * s.true_shooting_att) * 100).toFixed(1) : 0;
+    s.assists_turnover_ratio = s.turnovers > 0 ? +(s.assists / s.turnovers).toFixed(2) : s.assists;
+    s.possessions = +(fga - s.offensive_rebounds + s.turnovers + 0.4 * s.free_throws_att).toFixed(1);
+    s.offensive_points_per_possession = s.possessions > 0 ? +(s.points / s.possessions).toFixed(2) : 0;
+    const isHome = side === 'home'; const pbpSide = isHome ? pbpResult?.home : pbpResult?.away;
+    if (pbpSide) { const rM = pbpSide.rim?.made || 0, rA = pbpSide.rim?.att || 0, pM = pbpSide.paint?.made || 0, pA = pbpSide.paint?.att || 0; s.points_in_paint_made = rM + pM; s.points_in_paint_att = rA + pA; s.points_in_paint = s.points_in_paint_made * 2; s.points_in_the_paint = s.points_in_paint; s.field_goals_at_rim_made = rM; s.field_goals_at_rim_att = rA; }
+    s.points_off_turnovers = isHome ? (bdl.potHome || 0) : (bdl.potAway || 0); s.second_chance_pts = isHome ? (bdl.scpHome || 0) : (bdl.scpAway || 0); s.second_chance_points = s.second_chance_pts;
+    s.biggest_lead = isHome ? (bdl.biggestLeadHome || 0) : (bdl.biggestLeadAway || 0);
+    s.fast_break_pts = 0; s.fast_break_points = 0; s.most_unanswered = { points: 0 };
+    if (pbpResult?.runs) { const tr = pbpResult.runs.filter(r => r.team === (isHome ? hA : aA)); if (tr.length > 0) s.most_unanswered.points = tr.reduce((m, r) => r.pts > m ? r.pts : m, 0); }
+    s.fouls_drawn = 0; s.defensive_points_per_possession = 0; s.offensive_rating = 0; s.defensive_rating = 0; s.points_against = 0; s.time_leading = '';
+    return s;
+  }
+
+  const homeStats = bts(homePlayers, hSIds, 'home'), awayStats = bts(awayPlayers, aSIds, 'away');
+  homeStats.points_against = awayStats.points; awayStats.points_against = homeStats.points;
+  homeStats.defensive_points_per_possession = homeStats.possessions > 0 ? +(awayStats.points / homeStats.possessions).toFixed(2) : 0;
+  awayStats.defensive_points_per_possession = awayStats.possessions > 0 ? +(homeStats.points / awayStats.possessions).toFixed(2) : 0;
+  homeStats.offensive_rating = homeStats.possessions > 0 ? +(homeStats.points / homeStats.possessions * 100).toFixed(1) : 0;
+  homeStats.defensive_rating = homeStats.possessions > 0 ? +(awayStats.points / homeStats.possessions * 100).toFixed(1) : 0;
+  awayStats.offensive_rating = awayStats.possessions > 0 ? +(awayStats.points / awayStats.possessions * 100).toFixed(1) : 0;
+  awayStats.defensive_rating = awayStats.possessions > 0 ? +(homeStats.points / awayStats.possessions * 100).toFixed(1) : 0;
+
+  // Per-quarter scores
+  const periods = [];
+  for (let q = 1; q <= 4; q++) { const hP = game['home_q' + q] ?? null, aP = game['visitor_q' + q] ?? null; if (hP != null || aP != null) periods.push({ number: q, home_points: hP || 0, away_points: aP || 0 }); }
+  for (let ot = 1; ot <= 3; ot++) { const hOT = game['home_ot' + ot] ?? null, aOT = game['visitor_ot' + ot] ?? null; if (hOT != null || aOT != null) periods.push({ number: 4 + ot, home_points: hOT || 0, away_points: aOT || 0 }); }
+
+  const hScoring = periods.map(p => ({ type: 'quarter', number: p.number, sequence: p.number, points: p.home_points }));
+  const aScoring = periods.map(p => ({ type: 'quarter', number: p.number, sequence: p.number, points: p.away_points }));
+
+  // Lead changes / ties
+  let lc = 0, tt = 0, prev = null;
+  if (bdl.scoreLog) bdl.scoreLog.forEach(s => { const mg = s.hScore - s.aScore; const ld = mg > 0 ? 'h' : mg < 0 ? 'a' : 't'; if (ld === 't') tt++; else if (prev && prev !== 't' && ld !== prev) lc++; prev = ld; });
+
+  function bpa(bPlayers, sIds) { return bPlayers.map(p => { const pl = p.player || {}; const pid = pl.id || p.id; return { id: pid, full_name: ((pl.first_name || '') + ' ' + (pl.last_name || '')).trim(), position: pl.position || '', primary_position: pl.position || '', played: (p.min && p.min !== '0') || (p.pts > 0), active: true, starter: sIds.has(pid), on_court: false, statistics: { minutes: p.min || '0', field_goals_made: p.fgm || 0, field_goals_att: p.fga || 0, three_points_made: p.fg3m || 0, three_points_att: p.fg3a || 0, free_throws_made: p.ftm || 0, free_throws_att: p.fta || 0, offensive_rebounds: p.oreb || 0, defensive_rebounds: p.dreb || 0, rebounds: p.reb || 0, assists: p.ast || 0, steals: p.stl || 0, blocks: p.blk || 0, turnovers: p.turnover || 0, personal_fouls: p.pf || 0, points: p.pts || 0, pls_min: p.plus_minus || 0 } }; }); }
+
+  const srSt = normalizeBdlStatusServer(game.status);
+  return { id: game.id, status: srSt, quarter: game.period || periods.length || 0, clock: game.time || '', lead_changes: lc, times_tied: tt, _dataSource: 'BDL',
+    home: { name: homeTeam.name || '', alias: hA, market: homeTeam.city || '', id: homeTeam.id || '', points: game.home_team_score || homeStats.points, bonus: game.home_in_bonus || false, double_bonus: false, remaining_timeouts: game.home_timeouts_remaining ?? null, scoring: hScoring, statistics: homeStats, players: bpa(homePlayers, hSIds) },
+    away: { name: awayTeam.name || '', alias: aA, market: awayTeam.city || '', id: awayTeam.id || '', points: game.visitor_team_score || awayStats.points, bonus: game.visitor_in_bonus || false, double_bonus: false, remaining_timeouts: game.visitor_timeouts_remaining ?? null, scoring: aScoring, statistics: awayStats, players: bpa(awayPlayers, aSIds) },
+    periods };
+}
+
+// ── In-memory BDL caches for server polling ──
+let _serverBoxScoreCache = null;    // Array of box score objects
+let _serverBoxScoreTime = 0;
+let _serverLineupsCache = {};       // bdlGameId → lineups array
+
 // ── SERVER-SIDE COMPUTE (I1–I5) ─────────────────────────────────────────────
 // Pure function. No cardState, no DOM, no PBP, no baselines.
 // Input: SR game summary JSON. Output: indicator scores + composite.
@@ -1156,39 +1387,45 @@ async function computeServerContext(sql, game, league, summary, ind, espnWP, hA,
     log(`${matchup}: server context — snapshot query failed: ${e.message}`);
   }
 
-  // ── 5. PBP AUDIT + SUB-METRIC ARROWS (one SR API call) ──
+  // ── 5. PBP AUDIT + SUB-METRIC ARROWS (from BDL — already parsed in main loop) ──
   try {
-    const cfg = LEAGUES[league];
-    const apiKey = process.env[cfg.srKeyEnv];
-    if (apiKey) {
-      await sleep(SR_DELAY_MS);
-      const pbpData = await srFetch(league, `games/${game.id}/pbp.json`);
-      if (pbpData) {
-        const hId = summary.home?.id || '';
-        const aId = summary.away?.id || '';
-        const pbpResult = parsePBPServer(pbpData, hId, aId, hA, aA);
-        if (pbpResult) {
-          ctx.pbpAudit = {
-            home: pbpResult.home, away: pbpResult.away,
-            homeAlias: hA, awayAlias: aA,
-            runs: pbpResult.runs,
-            pbpPeriod: pbpResult.pbpPeriod, pbpAge: 0,
-          };
+    const pbpResult = game._bdlPbp || null;
+    if (pbpResult) {
+      ctx.pbpAudit = {
+        home: pbpResult.home, away: pbpResult.away,
+        homeAlias: hA, awayAlias: aA,
+        runs: pbpResult.runs,
+        pbpPeriod: pbpResult.pbpPeriod, pbpAge: 0,
+      };
 
-          // Sub-metric arrows from PBP per-quarter data
-          if (pbpResult.perQuarter) {
-            ctx.subMetricArrows = computeSubMetricArrowsServer(pbpResult.perQuarter, hA, aA);
-            // Adjustment signal from arrows
-            if (ctx.subMetricArrows && ind.controlTeam) {
-              ctx.adjustment = classifyAdjustmentServer(ctx.subMetricArrows, ind.controlTeam, hA, aA);
-            }
-          }
+      // Save PBP to DB
+      try {
+        const pbpSave = {
+          home: pbpResult.home, away: pbpResult.away,
+          homeAlias: hA, awayAlias: aA,
+          totalShots: pbpResult.totalShots, totalTOs: pbpResult.totalTOs,
+          runs: pbpResult.runs,
+        };
+        await sql`
+          INSERT INTO game_pbp (game_id, league, home_alias, away_alias, total_shots, total_tos, pbp_json, saved_at)
+          VALUES (${game.id}, ${league}, ${hA}, ${aA}, ${pbpResult.totalShots || 0}, ${pbpResult.totalTOs || 0}, ${JSON.stringify(pbpSave)}, NOW())
+          ON CONFLICT (game_id) DO UPDATE SET
+            pbp_json = ${JSON.stringify(pbpSave)}, total_shots = ${pbpResult.totalShots || 0},
+            total_tos = ${pbpResult.totalTOs || 0}, saved_at = NOW()
+        `;
+      } catch (e) { /* non-fatal */ }
+
+      // Sub-metric arrows from PBP per-quarter data
+      if (pbpResult.perQuarter) {
+        ctx.subMetricArrows = computeSubMetricArrowsServer(pbpResult.perQuarter, hA, aA);
+        if (ctx.subMetricArrows && ind.controlTeam) {
+          ctx.adjustment = classifyAdjustmentServer(ctx.subMetricArrows, ind.controlTeam, hA, aA);
         }
-        log(`${matchup}: server PBP parsed — ${pbpResult?.totalShots || 0} shots, ${pbpResult?.totalTOs || 0} TOs, ${Object.keys(pbpResult?.perQuarter || {}).length}Q arrows`);
       }
+      log(`${matchup}: BDL PBP — ${pbpResult.totalShots || 0} shots, ${pbpResult.totalTOs || 0} TOs, ${Object.keys(pbpResult.perQuarter || {}).length}Q arrows`);
     }
   } catch (e) {
-    log(`${matchup}: server PBP fetch failed: ${e.message}`);
+    log(`${matchup}: server PBP processing failed: ${e.message}`);
   }
 
   const layerCount = Object.keys(ctx).length;
@@ -1543,7 +1780,7 @@ export default async function(req) {
           SELECT EXTRACT(EPOCH FROM (NOW() - last_poll)) / 60 AS age_minutes, device
           FROM poll_heartbeats WHERE league = ${league}
         `;
-        if (hbRows.length > 0 && hbRows[0].age_minutes < 3) {
+        if (hbRows.length > 0 && hbRows[0].age_minutes < 1.5) {
           log(`${league.toUpperCase()}: client active (${hbRows[0].device}, ${Math.round(hbRows[0].age_minutes * 10) / 10}m ago) — skipping`);
           continue;
         }
@@ -1691,37 +1928,101 @@ export default async function(req) {
       let cacheUpdated = false;
       let liveCount = 0;
 
-      // ── 4. Process each potentially live game — summary fetch is the ONLY SR call ──
-      for (const game of potentiallyLive) {
+      // ── 3c. Batch BDL box_scores + lineups fetch (one call each, covers ALL games) ──
+      let bdlBoxScores = [];
+      try {
+        const boxResult = await bdlFetch(`/${cfg.bdlPrefix}/v1/box_scores/live`);
+        bdlBoxScores = boxResult?.data || [];
+        if (bdlBoxScores.length === 0) {
+          // Fallback to date-based
+          const boxResult2 = await bdlFetch(`/${cfg.bdlPrefix}/v1/box_scores?date=${bdlDateStr}`);
+          bdlBoxScores = boxResult2?.data || [];
+        }
+        _serverBoxScoreCache = bdlBoxScores;
+        _serverBoxScoreTime = Date.now();
+        log(`BDL box_scores: ${bdlBoxScores.length} games`);
+      } catch (e) {
+        log(`BDL box_scores failed: ${e.message}`);
+      }
+
+      // Batch lineups for all games we don't have cached
+      const lineupsNeeded = potentiallyLive.filter(g => {
+        const bdlGid = bdlGameIds[`${g.away_alias}@${g.home_alias}`];
+        return bdlGid && !_serverLineupsCache[bdlGid];
+      }).map(g => bdlGameIds[`${g.away_alias}@${g.home_alias}`]);
+      if (lineupsNeeded.length > 0) {
+        try {
+          const luResult = await bdlFetch(`/${cfg.bdlPrefix}/v1/lineups?${lineupsNeeded.map(id => 'game_ids[]=' + id).join('&')}&per_page=100`);
+          if (luResult?.data) {
+            // Group by game_id
+            luResult.data.forEach(l => {
+              const gid = l.game_id;
+              if (!_serverLineupsCache[gid]) _serverLineupsCache[gid] = [];
+              _serverLineupsCache[gid].push(l);
+            });
+            log(`BDL lineups: ${luResult.data.length} records cached`);
+          }
+        } catch (e) { log(`BDL lineups failed: ${e.message}`); }
+      }
+
+      // ── 4. Process each potentially live game — BDL box_scores + plays ──
+      // Fetch plays for all live games in parallel (BDL: 600 req/min)
+      const playsFetches = potentiallyLive.map(g => {
+        const bdlGid = bdlGameIds[`${g.away_alias}@${g.home_alias}`];
+        if (!bdlGid) return Promise.resolve(null);
+        return bdlFetch(`/${cfg.bdlPrefix}/v1/plays?game_id=${bdlGid}&per_page=500`).catch(() => null);
+      });
+      const allPlaysResults = await Promise.all(playsFetches);
+
+      for (let gi = 0; gi < potentiallyLive.length; gi++) {
+        const game = potentiallyLive[gi];
         const hA = game.home_alias || 'HOME';
         const aA = game.away_alias || 'AWAY';
         const matchup = `${aA}@${hA}`;
+        const bdlGid = bdlGameIds[matchup];
 
         try {
-          // Fetch summary — this is the ONLY SR API call per game per cycle
-          await sleep(SR_DELAY_MS);
-          const summary = await srFetch(league, `games/${game.id}/summary.json`);
+          if (!bdlGid) {
+            log(`${matchup}: no BDL game ID mapped — skipping`);
+            continue;
+          }
 
-          // Check game status from summary
-          const gameStatus = (summary.status || '').toLowerCase();
+          // Find box score for this game
+          const boxScore = bdlBoxScores.find(b => b.id === bdlGid);
+          if (!boxScore) {
+            log(`${matchup}: no box score — game may not have started`);
+            continue;
+          }
+
+          // Check game status
+          const gameStatus = normalizeBdlStatusServer(boxScore.status);
           if (gameStatus === 'closed' || gameStatus === 'complete') {
-            // Game finished — update cache so we skip it next cycle
             game.status = gameStatus;
             cacheUpdated = true;
             log(`${matchup}: FINAL — removed from active polling`);
-            // Fetch one last ESPN WP for the final state
             if (espnMap[game.id]) {
               var finalWP = await espnWinProb(league, espnMap[game.id]);
             }
             continue;
           }
           if (gameStatus === 'scheduled' || gameStatus === 'created') {
-            // Game hasn't tipped yet
             log(`${matchup}: not started yet (${gameStatus})`);
             continue;
           }
 
           liveCount++;
+
+          // Parse PBP
+          const playsResult = allPlaysResults[gi];
+          const plays = playsResult?.data || [];
+          const pbpResult = parseBDLPBPServer(plays, hA, aA);
+          const lineupsArr = _serverLineupsCache[bdlGid] || null;
+
+          // Build SR-shaped summary
+          const summary = buildSummaryFromBDLServer(boxScore, pbpResult, lineupsArr);
+
+          // Stash PBP result for computeServerContext to use (avoids re-fetching)
+          game._bdlPbp = pbpResult;
 
           // Compute indicators
           const ind = computeServer(summary);
@@ -1774,7 +2075,6 @@ export default async function(req) {
 
           // Fetch BDL odds (no rate limit, fast)
           let odds = null;
-          const bdlGid = bdlGameIds[matchup];
           if (bdlGid) {
             odds = await bdlOdds(league, bdlGid);
           }
@@ -1986,5 +2286,5 @@ export default async function(req) {
 // ── SCHEDULE CONFIG ─────────────────────────────────────────────────────────
 
 export const config = {
-  schedule: "*/3 * * * *",
+  schedule: "*/1 * * * *",  // BDL: every 1 min
 };
