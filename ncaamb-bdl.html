@@ -1292,7 +1292,7 @@ async function buildBdlGameMap(dateStr){
         var grid = document.querySelector('.game-grid')||document.body;
         grid.insertBefore(diagEl, grid.firstChild);
       }
-      var lines = ['BDL MAP: '+Object.keys(bdlGameMap).length+'/'+games.length+' mapped | BDL returned '+bdlGames.length+' games for '+dateStr];
+      var lines = ['BDL MAP v2: '+Object.keys(bdlGameMap).length+'/'+games.length+' mapped | BDL returned '+bdlGames.length+' games for '+dateStr];
       unmapped.forEach(function(u){ lines.push('UNMAPPED: '+u.matchup+' (name:'+u.hName+'/'+u.aName+' market:'+u.hMarket+'/'+u.aMarket+')'); });
       if(window._bdlMapDiag.sample){
         var s = window._bdlMapDiag.sample.home;
