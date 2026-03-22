@@ -106,7 +106,7 @@ exports.handler = async (event) => {
     case 'games':
       // NBA:    /nba/v1/games?dates[]=YYYY-MM-DD
       // NCAAMB: /ncaab/v1/games?dates[]=YYYY-MM-DD
-      url = `${BDL_BASE}${pfx}/v1/games?dates[]=${params.date}&per_page=25`;
+      url = `${BDL_BASE}${pfx}/v1/games?dates[]=${params.date}&per_page=50`;
       break;
 
     case 'game':
