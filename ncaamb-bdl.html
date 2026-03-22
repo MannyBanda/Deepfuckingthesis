@@ -1274,11 +1274,17 @@ async function buildBdlGameMap(dateStr){
       });
       if(match){
         bdlGameMap[game.id] = match.id;
-        // Detect if match was swapped (SR home matched BDL visitor)
-        var ht = match.home_team||{}, vt = match.visitor_team||{};
-        var bhAll = [ht.name, ht.full_name, ht.school, ht.college, ht.display_name, ht.abbreviation].filter(Boolean).map(function(s){return s.toLowerCase();});
-        var normalMatch = anyMatch(hName,hAlias,hMarket,bhAll);
-        if(!normalMatch){ bdlSwapMap[game.id] = true; console.log('BDL SWAP detected:', (game.away?.alias||'?')+'@'+(game.home?.alias||'?'), '— BDL has home/away flipped'); }
+        // Detect if match was swapped (SR home matched BDL visitor instead of BDL home)
+        var ht = match.home_team||{};
+        var bhCheck = [ht.name, ht.full_name, ht.school, ht.college, ht.display_name, ht.abbreviation].filter(Boolean).map(function(s){return s.toLowerCase();});
+        var normalHome = false;
+        for(var ci=0;ci<bhCheck.length;ci++){
+          var cf = bhCheck[ci];
+          if(hAlias && cf === hAlias){ normalHome = true; break; }
+          if(hName && hName.length >= 4 && cf.length >= 4 && (cf.includes(hName) || hName.includes(cf))){ normalHome = true; break; }
+          if(hMarket && hMarket.length >= 4 && (cf.includes(hMarket) || hMarket.includes(cf))){ normalHome = true; break; }
+        }
+        if(!normalHome){ bdlSwapMap[game.id] = true; console.log('BDL SWAP detected:', (game.away?.alias||'?')+'@'+(game.home?.alias||'?'), '— BDL has home/away flipped'); }
       }
       else { unmapped.push({matchup:(game.away?.alias||'?')+'@'+(game.home?.alias||'?'), hName:hName, aName:aName, hMarket:hMarket, aMarket:aMarket}); }
     }
@@ -1301,7 +1307,7 @@ async function buildBdlGameMap(dateStr){
         var grid = document.querySelector('.game-grid')||document.body;
         grid.insertBefore(diagEl, grid.firstChild);
       }
-      var lines = ['BDL MAP v3: '+Object.keys(bdlGameMap).length+'/'+games.length+' mapped | BDL returned '+bdlGames.length+' games for '+dateStr];
+      var lines = ['BDL MAP v4: '+Object.keys(bdlGameMap).length+'/'+games.length+' mapped | BDL returned '+bdlGames.length+' games for '+dateStr];
       unmapped.forEach(function(u){ lines.push('SR UNMAPPED: '+u.matchup+' (name:'+u.hName+'/'+u.aName+' market:'+u.hMarket+'/'+u.aMarket+')'); });
       // Show which BDL games didn't get matched to any SR game
       var matchedBdlIds = new Set(Object.values(bdlGameMap));
