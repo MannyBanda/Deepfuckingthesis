@@ -536,12 +536,16 @@ async function pushContextToDB(game){
   var pbpAge = cs.pbpTime ? (Date.now() - cs.pbpTime.getTime()) / 60000 : 999;
   if((pbpAge > 3 || !cs.pbpAudit) && getState(game) === 'LIVE' && !cs.pbpLoading){
     try{
-      var pbpData = await sr('pbp', {game_id: game.id});
-      var audit = parsePBP(pbpData, game);
-      cs.pbpAudit = audit;
-      cs.pbpTime = new Date();
-      cs.pbpPeriod = period;
-      persistDepth(game.id, cs);
+      var _bdlId = bdlGameMap[game.id];
+      if(_bdlId){
+        var _playsData = await bdl('plays', {game_id: String(_bdlId)});
+        var _lineupsArr = _bdlLineupsCache[_bdlId] || [];
+        var audit = parseBDLPBP((_playsData.data||[]), hA, aA, _lineupsArr);
+        cs.pbpAudit = audit;
+        cs.pbpTime = new Date();
+        cs.pbpPeriod = period;
+        persistDepth(game.id, cs);
+      }
     }catch(e){}
   }
 
@@ -1884,12 +1888,17 @@ async function triggerAnalysis(game){
       if(pbpAge > 3 || !cs.pbpAudit){
         addLog(game.id, '⚡ Pre-analyze: refreshing PBP…', true);
         try{
-          const pbpData = await sr('pbp', {game_id: game.id});
-          const audit = parsePBP(pbpData, game);
-          cs.pbpAudit = audit;
-          cs.pbpTime = new Date();
-          cs.pbpPeriod = game.period || 0;
-          persistDepth(game.id, cs);
+          const _bdlId = bdlGameMap[game.id];
+          if(_bdlId){
+            const _hA = game.home?.alias||'HOME', _aA = game.away?.alias||'AWAY';
+            const _playsData = await bdl('plays', {game_id: String(_bdlId)});
+            const _lineupsArr = _bdlLineupsCache[_bdlId] || [];
+            const audit = parseBDLPBP((_playsData.data||[]), _hA, _aA, _lineupsArr);
+            cs.pbpAudit = audit;
+            cs.pbpTime = new Date();
+            cs.pbpPeriod = game.period || 0;
+            persistDepth(game.id, cs);
+          }
         }catch(e){ addLog(game.id, '⚠ Pre-analyze PBP failed: '+e.message, false); }
       }
     }
@@ -1916,7 +1925,7 @@ async function triggerAnalysis(game){
       }
     }
 
-    const summaryPayload = isBDL ? game.bdlData : game.summary;
+    const summaryPayload = game.summary;
 
     // Build clutch data with tier info
     let clutchPayload = cs.clutchData || null;
