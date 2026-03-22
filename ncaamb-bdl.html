@@ -1260,10 +1260,11 @@ async function buildBdlGameMap(dateStr){
             if(srAlias && f === srAlias) return true;
             if(srName && f === srName) return true;
             if(srMarket && f === srMarket) return true;
-            // Substring: SR market in BDL field or vice versa (min 4 chars to avoid false positives)
+            // Substring both directions (min 4 chars to avoid false positives)
             if(srMarket && srMarket.length >= 4 && (f.includes(srMarket) || srMarket.includes(f))) return true;
-            // Substring: SR name (mascot) in BDL field
-            if(srName && srName.length >= 4 && f.includes(srName)) return true;
+            // SR name is "nebraska cornhuskers", BDL field is "cornhuskers" or "nebraska"
+            // Check both: BDL contains SR, AND SR contains BDL
+            if(srName && srName.length >= 4 && f.length >= 4 && (f.includes(srName) || srName.includes(f))) return true;
           }
           return false;
         }
