@@ -1220,36 +1220,73 @@ async function bdl(type, params={}){
   return r.json();
 }
 
-// BDL game matching for NCAAMB — uses team name/alias from game objects
-// No hardcoded map needed; NCAAMB has 362 teams
+// BDL game matching for NCAAMB — uses mascot + school/market fuzzy matching
+// BDL NCAAB teams have: school (full name) + name (mascot), NO abbreviation
+// SR NCAAMB teams have: alias (abbr) + name (mascot) + market (school name)
 
 async function buildBdlGameMap(dateStr){
   try{
     const data = await bdl('games',{date:dateStr});
     const bdlGames = data.data||[];
-    // Match each SR game to a BDL game by team name fuzzy matching
-    // NCAAMB: BDL has school/name fields; SR has name/market/alias
+    console.log('[BDL-MAP] BDL returned', bdlGames.length, 'NCAAB games for', dateStr, '| SR has', games.length, 'games');
+    if(bdlGames.length === 0) console.warn('[BDL-MAP] BDL returned ZERO games — check date format or API status');
+    var unmapped = [];
     for(const game of games){
-      const hName = (game.home?.name||'').toLowerCase();
-      const aName = (game.away?.name||'').toLowerCase();
-      const hAlias = (game.home?.alias||'').toLowerCase();
-      const aAlias = (game.away?.alias||'').toLowerCase();
-      const hMarket = (game.home?.market||'').toLowerCase();
-      const aMarket = (game.away?.market||'').toLowerCase();
-      if(!hName&&!hAlias) continue;
+      const hName = (game.home?.name||'').toLowerCase().trim();
+      const aName = (game.away?.name||'').toLowerCase().trim();
+      const hAlias = (game.home?.alias||'').toLowerCase().trim();
+      const aAlias = (game.away?.alias||'').toLowerCase().trim();
+      const hMarket = (game.home?.market||'').toLowerCase().trim();
+      const aMarket = (game.away?.market||'').toLowerCase().trim();
+      if(!hName&&!hAlias&&!hMarket) continue;
       const match = bdlGames.find(bg => {
-        const bh = (bg.home_team?.school||bg.home_team?.full_name||bg.home_team?.name||'').toLowerCase();
-        const ba = (bg.visitor_team?.school||bg.visitor_team?.full_name||bg.visitor_team?.name||'').toLowerCase();
-        const bhAbbr = (bg.home_team?.abbreviation||bg.home_team?.alias||'').toLowerCase();
-        const baAbbr = (bg.visitor_team?.abbreviation||bg.visitor_team?.alias||'').toLowerCase();
-        // Try alias match first (most reliable), then name substring match
-        const homeMatch = (hAlias && bhAbbr && hAlias===bhAbbr) || bh.includes(hName) || hName.includes(bh) || (hMarket && bh.includes(hMarket));
-        const awayMatch = (aAlias && baAbbr && aAlias===baAbbr) || ba.includes(aName) || aName.includes(ba) || (aMarket && ba.includes(aMarket));
+        // BDL NCAAB fields: name, full_name, college (nullable), abbreviation (nullable)
+        const bhCollege = (bg.home_team?.college||bg.home_team?.school||'').toLowerCase();
+        const baCollege = (bg.visitor_team?.college||bg.visitor_team?.school||'').toLowerCase();
+        const bhFull = (bg.home_team?.full_name||'').toLowerCase();
+        const baFull = (bg.visitor_team?.full_name||'').toLowerCase();
+        const bhName = (bg.home_team?.name||'').toLowerCase();
+        const baName = (bg.visitor_team?.name||'').toLowerCase();
+        const bhAbbr = (bg.home_team?.abbreviation||'').toLowerCase();
+        const baAbbr = (bg.visitor_team?.abbreviation||'').toLowerCase();
+
+        function teamMatch(srName, srAlias, srMarket, bdlName, bdlFull, bdlCollege, bdlAbbr) {
+          // 1. Abbreviation exact match
+          if (srAlias && bdlAbbr && srAlias === bdlAbbr) return true;
+          // 2. Mascot/name exact match (SR name = BDL name, e.g. "Longhorns" = "Longhorns")
+          if (srName && bdlName && srName === bdlName) return true;
+          // 3. College/market exact match (SR market = BDL college, e.g. "texas" = "texas")
+          if (srMarket && bdlCollege && srMarket === bdlCollege) return true;
+          // 4. Full name substring (BDL "Texas Longhorns" includes SR market "texas")
+          if (srMarket && bdlFull && (bdlFull.includes(srMarket) || srMarket.includes(bdlFull))) return true;
+          // 5. SR name in BDL full_name (BDL "Texas Longhorns" includes SR name "Longhorns")
+          if (srName && bdlFull && bdlFull.includes(srName)) return true;
+          // 6. College substring (partial match for "virginia" in "west virginia" etc.)
+          if (srMarket && bdlCollege && srMarket.length >= 4 && (bdlCollege.includes(srMarket) || srMarket.includes(bdlCollege))) return true;
+          // 7. SR market in BDL name (sometimes BDL name IS the school name, not mascot)
+          if (srMarket && bdlName && bdlName.includes(srMarket)) return true;
+          return false;
+        }
+        const homeMatch = teamMatch(hName, hAlias, hMarket, bhName, bhFull, bhCollege, bhAbbr);
+        const awayMatch = teamMatch(aName, aAlias, aMarket, baName, baFull, baCollege, baAbbr);
         return homeMatch && awayMatch;
       });
-      if(match) bdlGameMap[game.id] = match.id;
+      if(match){ bdlGameMap[game.id] = match.id; }
+      else { unmapped.push((game.away?.alias||'?')+'@'+(game.home?.alias||'?')); }
     }
-    console.log('BDL game map built:', Object.keys(bdlGameMap).length, 'games mapped');
+    console.log('BDL game map built:', Object.keys(bdlGameMap).length+'/'+games.length, 'mapped' + (unmapped.length>0 ? ' | UNMAPPED: '+unmapped.join(', ') : ''));
+    if(unmapped.length > 0){
+      console.warn('BDL unmapped — SR teams vs BDL games:', unmapped, 'BDL returned', bdlGames.length, 'games');
+      // Diagnostic: log first BDL game's team structure so we can see exact field names
+      if(bdlGames.length > 0){
+        var bg0 = bdlGames[0];
+        console.log('BDL sample team fields:', JSON.stringify({h:{name:bg0.home_team?.name,full_name:bg0.home_team?.full_name,college:bg0.home_team?.college,school:bg0.home_team?.school,abbr:bg0.home_team?.abbreviation},a:{name:bg0.visitor_team?.name,full_name:bg0.visitor_team?.full_name,college:bg0.visitor_team?.college,school:bg0.visitor_team?.school,abbr:bg0.visitor_team?.abbreviation}}));
+      }
+      // Log what SR provided for unmapped games
+      games.forEach(function(g){
+        if(!bdlGameMap[g.id]) console.log('SR unmapped:', g.away?.alias+'@'+g.home?.alias, '| name:', g.home?.name, '/', g.away?.name, '| market:', g.home?.market, '/', g.away?.market);
+      });
+    }
   }catch(e){
     console.warn('BDL game map failed:', e.message);
   }
