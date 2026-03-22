@@ -957,7 +957,21 @@ async function hydrateFromServerContext(gameId){
     if(hydrated.length > 0){
       addLog(gameId, '📡 Server context hydrated (Q'+ctxPeriod+'): '+hydrated.join(', '), true);
       var g = games.find(function(x){ return x.id === gameId; });
-      if(g) renderCard(g);
+      if(g){
+        // Re-compute rolling window with freshly hydrated server period scores
+        var freshWindow = computeRollingWindow(g);
+        if(freshWindow && freshWindow.available){
+          cs.rollingWindow = freshWindow;
+          // Also update gap/acceleration/combined read
+          var flr = computeAny(g);
+          if(flr){
+            updateGapLog(gameId, flr.score, flr.controlTeam, freshWindow, g);
+            cs.acceleration = computeAcceleration(cs.gapLog);
+            cs.combinedRead = classifyCombinedRead(flr.score, flr.controlTeam, freshWindow, cs.acceleration);
+          }
+        }
+        renderCard(g);
+      }
     }
 
     // Schedule one-shot retry if key layers still missing (server may not have had enough data yet)
@@ -1560,6 +1574,20 @@ var _lastThesisRecomputeLog = 0; // global throttle for THESIS RECOMPUTE logs
 
 // BDL fallback state
 const bdlGameMap = {}; // SR game ID → BDL game ID
+const standingsCache = {}; // { 'OKC': { confRank: 1, w: 55, l: 20, conf: 'Western' }, ... }
+function ordinal(n){ if(!n) return ''; return n+(['st','nd','rd'][((n+90)%100-10)%10-1]||'th'); }
+async function fetchStandings(){
+  try{
+    var data = await bdl('standings',{season:'2025'});
+    var arr = data.data||[];
+    arr.forEach(function(s){
+      var abbr = s.team?.abbreviation||'';
+      if(!abbr) return;
+      standingsCache[abbr] = { confRank: s.conference_rank||null, divRank: s.division_rank||null, w: s.wins||0, l: s.losses||0, conf: s.team?.conference||'' };
+    });
+    console.log('[STANDINGS] Cached:', Object.keys(standingsCache).length, 'teams');
+  }catch(e){ console.warn('[STANDINGS] Fetch failed:', e.message); }
+}
 let globalClutchData = JSON.parse(localStorage.getItem('nba4:globalClutch')||'null'); // { segment, teams: { "BOS": { netRtg, offRtg, ... }, ... }, teamCount }
 let srExhausted = false; // true when daily limit suspected
 let sr429Count = 0; // consecutive 429s across games
@@ -1824,6 +1852,8 @@ async function loadSchedule(){
     renderPills(); updateCounts(); renderConfidenceTable();
     // Build BDL game map for fallback (await so enrich has IDs ready)
     await buildBdlGameMap(d.str);
+    // Fetch conference standings (one call, cached for session)
+    if(Object.keys(standingsCache).length === 0) fetchStandings();
     // Fetch ESPN scoreboard for win probability ID mapping
     fetchEspnScoreboard();
     // Sync theses, analyses, and clutch from DB (cross-device)
@@ -8912,10 +8942,10 @@ function renderCard(game){
     <div class="chr">${state==='LIVE'?'<div class="ld"></div>':''}<span class="pb">${periodLabel}${game.clock?' '+game.clock:''}</span></div>
   </div>
   <div class="sr">
-    <div><div class="srt">${esc(aA)}</div>
+    <div><div class="srt">${esc(aA)}${standingsCache[aA]?'<span style="font-size:8px;color:var(--amber);font-weight:600;margin-left:3px">('+ordinal(standingsCache[aA].confRank)+')</span>':''}</div>
     <div><span class="srs">${state==='PRE'?'—':game.awayPoints??'—'}</span>${game.summary?.away?.bonus?'<span class="bonus-tag">BONUS</span>':''}</div></div>
     <span class="sr-sep">–</span>
-    <div style="text-align:right"><div class="srt">${esc(hA)}</div>
+    <div style="text-align:right"><div class="srt">${esc(hA)}${standingsCache[hA]?'<span style="font-size:8px;color:var(--amber);font-weight:600;margin-left:3px">('+ordinal(standingsCache[hA].confRank)+')</span>':''}</div>
     <div>${game.summary?.home?.bonus?'<span class="bonus-tag">BONUS</span>':''}<span class="srs">${state==='PRE'?'—':game.homePoints??'—'}</span></div></div>
   </div>`;
 

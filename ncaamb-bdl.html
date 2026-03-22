@@ -626,7 +626,19 @@ async function hydrateFromServerContext(gameId){
     if(hydrated.length > 0){
       addLog(gameId, '📡 Server context hydrated (H'+ctxPeriod+'): '+hydrated.join(', '), true);
       var g = games.find(function(x){return x.id===gameId;});
-      if(g) renderCard(g);
+      if(g){
+        var freshWindow = computeRollingWindow(g);
+        if(freshWindow && freshWindow.available){
+          cs.rollingWindow = freshWindow;
+          var flr = computeAny(g);
+          if(flr){
+            updateGapLog(gameId, flr.score, flr.controlTeam, freshWindow, g);
+            cs.acceleration = computeAcceleration(cs.gapLog);
+            cs.combinedRead = classifyCombinedRead(flr.score, flr.controlTeam, freshWindow, cs.acceleration);
+          }
+        }
+        renderCard(g);
+      }
     }
 
     // Schedule one-shot retry if key layers still missing
@@ -7627,10 +7639,10 @@ function renderCard(game){
     <div class="chr">${state==='LIVE'?'<div class="ld"></div>':''}<span class="pb">${periodLabel}${game.clock?' '+game.clock:''}</span></div>
   </div>
   <div class="sr">
-    <div><div class="srt">${esc(aA)}</div>
+    <div><div class="srt">${esc(aA)}${game.away?.seed?'<span style="font-size:8px;color:var(--amber);font-weight:600;margin-left:3px">('+game.away.seed+')</span>':''}</div>
     <div><span class="srs">${state==='PRE'?'—':game.awayPoints??'—'}</span>${game.summary?.away?.bonus?'<span class="bonus-tag">BONUS</span>':''}</div></div>
     <span class="sr-sep">–</span>
-    <div style="text-align:right"><div class="srt">${esc(hA)}</div>
+    <div style="text-align:right"><div class="srt">${esc(hA)}${game.home?.seed?'<span style="font-size:8px;color:var(--amber);font-weight:600;margin-left:3px">('+game.home.seed+')</span>':''}</div>
     <div>${game.summary?.home?.bonus?'<span class="bonus-tag">BONUS</span>':''}<span class="srs">${state==='PRE'?'—':game.homePoints??'—'}</span></div></div>
   </div>`;
 
