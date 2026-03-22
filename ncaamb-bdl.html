@@ -1004,6 +1004,7 @@ var _lastThesisRecomputeLog = 0; // global throttle for THESIS RECOMPUTE logs
 
 // BDL fallback state
 const bdlGameMap = {}; // SR game ID → BDL game ID
+const bdlSwapMap = {}; // SR game ID → true if BDL has home/away flipped vs SR
 let globalClutchData = JSON.parse(localStorage.getItem('ncaamb:globalClutch')||'null'); // { segment, teams: { "BOS": { netRtg, offRtg, ... }, ... }, teamCount }
 let srExhausted = false; // true when daily limit suspected
 let sr429Count = 0; // consecutive 429s across games
@@ -1268,9 +1269,17 @@ async function buildBdlGameMap(dateStr){
           }
           return false;
         }
-        return anyMatch(hName,hAlias,hMarket,bhAll) && anyMatch(aName,aAlias,aMarket,baAll);
+        return (anyMatch(hName,hAlias,hMarket,bhAll) && anyMatch(aName,aAlias,aMarket,baAll))
+            || (anyMatch(hName,hAlias,hMarket,baAll) && anyMatch(aName,aAlias,aMarket,bhAll));
       });
-      if(match){ bdlGameMap[game.id] = match.id; }
+      if(match){
+        bdlGameMap[game.id] = match.id;
+        // Detect if match was swapped (SR home matched BDL visitor)
+        var ht = match.home_team||{}, vt = match.visitor_team||{};
+        var bhAll = [ht.name, ht.full_name, ht.school, ht.college, ht.display_name, ht.abbreviation].filter(Boolean).map(function(s){return s.toLowerCase();});
+        var normalMatch = anyMatch(hName,hAlias,hMarket,bhAll);
+        if(!normalMatch){ bdlSwapMap[game.id] = true; console.log('BDL SWAP detected:', (game.away?.alias||'?')+'@'+(game.home?.alias||'?'), '— BDL has home/away flipped'); }
+      }
       else { unmapped.push({matchup:(game.away?.alias||'?')+'@'+(game.home?.alias||'?'), hName:hName, aName:aName, hMarket:hMarket, aMarket:aMarket}); }
     }
     window._bdlMapDiag.mapped = Object.keys(bdlGameMap).length;
@@ -1282,7 +1291,7 @@ async function buildBdlGameMap(dateStr){
       console.warn('BDL sample team keys:', Object.keys(ht).join(','), '| vals:', JSON.stringify({name:ht.name,full_name:ht.full_name,school:ht.school,college:ht.college,abbreviation:ht.abbreviation}));
       unmapped.forEach(function(u){ console.warn('UNMAPPED:', u.matchup, '| SR name:', u.hName+'/'+u.aName, '| SR market:', u.hMarket+'/'+u.aMarket); });
     }
-    // Show banner if mapping failed
+    // Show banner if mapping failed, remove if all mapped
     if(unmapped.length > 0){
       var diagEl = document.getElementById('bdl-map-diag');
       if(!diagEl){
@@ -1292,13 +1301,23 @@ async function buildBdlGameMap(dateStr){
         var grid = document.querySelector('.game-grid')||document.body;
         grid.insertBefore(diagEl, grid.firstChild);
       }
-      var lines = ['BDL MAP v2: '+Object.keys(bdlGameMap).length+'/'+games.length+' mapped | BDL returned '+bdlGames.length+' games for '+dateStr];
-      unmapped.forEach(function(u){ lines.push('UNMAPPED: '+u.matchup+' (name:'+u.hName+'/'+u.aName+' market:'+u.hMarket+'/'+u.aMarket+')'); });
+      var lines = ['BDL MAP v3: '+Object.keys(bdlGameMap).length+'/'+games.length+' mapped | BDL returned '+bdlGames.length+' games for '+dateStr];
+      unmapped.forEach(function(u){ lines.push('SR UNMAPPED: '+u.matchup+' (name:'+u.hName+'/'+u.aName+' market:'+u.hMarket+'/'+u.aMarket+')'); });
+      // Show which BDL games didn't get matched to any SR game
+      var matchedBdlIds = new Set(Object.values(bdlGameMap));
+      var unmatchedBdl = bdlGames.filter(function(bg){ return !matchedBdlIds.has(bg.id); });
+      unmatchedBdl.forEach(function(bg){
+        var h = bg.home_team||{}, v = bg.visitor_team||{};
+        lines.push('BDL ORPHAN: '+[v.full_name||v.name||'?','@',h.full_name||h.name||'?'].join('')+' (h.college:'+h.college+' v.college:'+v.college+' h.abbr:'+h.abbreviation+' v.abbr:'+v.abbreviation+')');
+      });
       if(window._bdlMapDiag.sample){
         var s = window._bdlMapDiag.sample.home;
         lines.push('BDL sample team: '+JSON.stringify(s));
       }
       diagEl.textContent = lines.join('\n');
+    } else {
+      var diagEl = document.getElementById('bdl-map-diag');
+      if(diagEl) diagEl.remove();
     }
   }catch(e){
     console.warn('BDL game map failed:', e.message);
@@ -1757,6 +1776,16 @@ async function fetchSummaryBDL(game){
 
     // Build SR-shaped summary
     var data = buildSummaryFromBDL(gameInfo, playerStats, teamStats, pbpResult);
+
+    // Handle BDL home/away swap (neutral-site tournament games)
+    if(bdlSwapMap[game.id] && data.home && data.away){
+      var tmp = data.home; data.home = data.away; data.away = tmp;
+      // Swap period scores too
+      if(data.periods){
+        data.periods.forEach(function(p){ var th = p.home_points; p.home_points = p.away_points; p.away_points = th; });
+      }
+      addLog(game.id, '🔄 BDL home/away swapped (neutral site)', true);
+    }
 
     // Store on game object
     game.summary = data;
