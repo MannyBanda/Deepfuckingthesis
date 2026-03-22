@@ -1228,8 +1228,17 @@ async function buildBdlGameMap(dateStr){
   try{
     const data = await bdl('games',{date:dateStr});
     const bdlGames = data.data||[];
-    console.log('[BDL-MAP] BDL returned', bdlGames.length, 'NCAAB games for', dateStr, '| SR has', games.length, 'games');
-    if(bdlGames.length === 0) console.warn('[BDL-MAP] BDL returned ZERO games — check date format or API status');
+    // Store visible diagnostic for debug
+    window._bdlMapDiag = { bdlCount: bdlGames.length, srCount: games.length, date: dateStr, sample: null, unmapped: [], mapped: 0 };
+    if(bdlGames.length > 0){
+      var bg0 = bdlGames[0];
+      var ht = bg0.home_team||{};
+      var vt = bg0.visitor_team||{};
+      window._bdlMapDiag.sample = {
+        home: {name:ht.name, full_name:ht.full_name, school:ht.school, college:ht.college, abbreviation:ht.abbreviation, display_name:ht.display_name},
+        away: {name:vt.name, full_name:vt.full_name, school:vt.school, college:vt.college, abbreviation:vt.abbreviation, display_name:vt.display_name},
+      };
+    }
     var unmapped = [];
     for(const game of games){
       const hName = (game.home?.name||'').toLowerCase().trim();
@@ -1240,55 +1249,67 @@ async function buildBdlGameMap(dateStr){
       const aMarket = (game.away?.market||'').toLowerCase().trim();
       if(!hName&&!hAlias&&!hMarket) continue;
       const match = bdlGames.find(bg => {
-        // BDL NCAAB fields: name, full_name, college (nullable), abbreviation (nullable)
-        const bhCollege = (bg.home_team?.college||bg.home_team?.school||'').toLowerCase();
-        const baCollege = (bg.visitor_team?.college||bg.visitor_team?.school||'').toLowerCase();
-        const bhFull = (bg.home_team?.full_name||'').toLowerCase();
-        const baFull = (bg.visitor_team?.full_name||'').toLowerCase();
-        const bhName = (bg.home_team?.name||'').toLowerCase();
-        const baName = (bg.visitor_team?.name||'').toLowerCase();
-        const bhAbbr = (bg.home_team?.abbreviation||'').toLowerCase();
-        const baAbbr = (bg.visitor_team?.abbreviation||'').toLowerCase();
-
-        function teamMatch(srName, srAlias, srMarket, bdlName, bdlFull, bdlCollege, bdlAbbr) {
-          // 1. Abbreviation exact match
-          if (srAlias && bdlAbbr && srAlias === bdlAbbr) return true;
-          // 2. Mascot/name exact match (SR name = BDL name, e.g. "Longhorns" = "Longhorns")
-          if (srName && bdlName && srName === bdlName) return true;
-          // 3. College/market exact match (SR market = BDL college, e.g. "texas" = "texas")
-          if (srMarket && bdlCollege && srMarket === bdlCollege) return true;
-          // 4. Full name substring (BDL "Texas Longhorns" includes SR market "texas")
-          if (srMarket && bdlFull && (bdlFull.includes(srMarket) || srMarket.includes(bdlFull))) return true;
-          // 5. SR name in BDL full_name (BDL "Texas Longhorns" includes SR name "Longhorns")
-          if (srName && bdlFull && bdlFull.includes(srName)) return true;
-          // 6. College substring (partial match for "virginia" in "west virginia" etc.)
-          if (srMarket && bdlCollege && srMarket.length >= 4 && (bdlCollege.includes(srMarket) || srMarket.includes(bdlCollege))) return true;
-          // 7. SR market in BDL name (sometimes BDL name IS the school name, not mascot)
-          if (srMarket && bdlName && bdlName.includes(srMarket)) return true;
+        var ht = bg.home_team||{}, vt = bg.visitor_team||{};
+        // Collect ALL string fields from BDL team object — cast wide net
+        var bhAll = [ht.name, ht.full_name, ht.school, ht.college, ht.display_name, ht.abbreviation].filter(Boolean).map(function(s){return s.toLowerCase();});
+        var baAll = [vt.name, vt.full_name, vt.school, vt.college, vt.display_name, vt.abbreviation].filter(Boolean).map(function(s){return s.toLowerCase();});
+        function anyMatch(srName, srAlias, srMarket, bdlFields){
+          for(var i=0;i<bdlFields.length;i++){
+            var f = bdlFields[i];
+            // Exact match on any field
+            if(srAlias && f === srAlias) return true;
+            if(srName && f === srName) return true;
+            if(srMarket && f === srMarket) return true;
+            // Substring: SR market in BDL field or vice versa (min 4 chars to avoid false positives)
+            if(srMarket && srMarket.length >= 4 && (f.includes(srMarket) || srMarket.includes(f))) return true;
+            // Substring: SR name (mascot) in BDL field
+            if(srName && srName.length >= 4 && f.includes(srName)) return true;
+          }
           return false;
         }
-        const homeMatch = teamMatch(hName, hAlias, hMarket, bhName, bhFull, bhCollege, bhAbbr);
-        const awayMatch = teamMatch(aName, aAlias, aMarket, baName, baFull, baCollege, baAbbr);
-        return homeMatch && awayMatch;
+        return anyMatch(hName,hAlias,hMarket,bhAll) && anyMatch(aName,aAlias,aMarket,baAll);
       });
       if(match){ bdlGameMap[game.id] = match.id; }
-      else { unmapped.push((game.away?.alias||'?')+'@'+(game.home?.alias||'?')); }
+      else { unmapped.push({matchup:(game.away?.alias||'?')+'@'+(game.home?.alias||'?'), hName:hName, aName:aName, hMarket:hMarket, aMarket:aMarket}); }
     }
-    console.log('BDL game map built:', Object.keys(bdlGameMap).length+'/'+games.length, 'mapped' + (unmapped.length>0 ? ' | UNMAPPED: '+unmapped.join(', ') : ''));
+    window._bdlMapDiag.mapped = Object.keys(bdlGameMap).length;
+    window._bdlMapDiag.unmapped = unmapped;
+    console.log('BDL game map:', Object.keys(bdlGameMap).length+'/'+games.length, 'mapped', unmapped.length > 0 ? '| UNMAPPED: '+unmapped.map(function(u){return u.matchup;}).join(', ') : '');
+    // Surface diagnostic visibly if any unmapped
+    if(unmapped.length > 0 && bdlGames.length > 0){
+      var bg0 = bdlGames[0]; var ht = bg0.home_team||{};
+      console.warn('BDL sample team keys:', Object.keys(ht).join(','), '| vals:', JSON.stringify({name:ht.name,full_name:ht.full_name,school:ht.school,college:ht.college,abbreviation:ht.abbreviation}));
+      unmapped.forEach(function(u){ console.warn('UNMAPPED:', u.matchup, '| SR name:', u.hName+'/'+u.aName, '| SR market:', u.hMarket+'/'+u.aMarket); });
+    }
+    // Show banner if mapping failed
     if(unmapped.length > 0){
-      console.warn('BDL unmapped — SR teams vs BDL games:', unmapped, 'BDL returned', bdlGames.length, 'games');
-      // Diagnostic: log first BDL game's team structure so we can see exact field names
-      if(bdlGames.length > 0){
-        var bg0 = bdlGames[0];
-        console.log('BDL sample team fields:', JSON.stringify({h:{name:bg0.home_team?.name,full_name:bg0.home_team?.full_name,college:bg0.home_team?.college,school:bg0.home_team?.school,abbr:bg0.home_team?.abbreviation},a:{name:bg0.visitor_team?.name,full_name:bg0.visitor_team?.full_name,college:bg0.visitor_team?.college,school:bg0.visitor_team?.school,abbr:bg0.visitor_team?.abbreviation}}));
+      var diagEl = document.getElementById('bdl-map-diag');
+      if(!diagEl){
+        diagEl = document.createElement('div');
+        diagEl.id = 'bdl-map-diag';
+        diagEl.style.cssText = 'background:#2a1a1a;border:1px solid #ff6b6b;color:#ff6b6b;padding:6px 10px;margin:4px 0;font-size:10px;border-radius:4px;font-family:monospace;white-space:pre-wrap;max-height:200px;overflow-y:auto;';
+        var grid = document.querySelector('.game-grid')||document.body;
+        grid.insertBefore(diagEl, grid.firstChild);
       }
-      // Log what SR provided for unmapped games
-      games.forEach(function(g){
-        if(!bdlGameMap[g.id]) console.log('SR unmapped:', g.away?.alias+'@'+g.home?.alias, '| name:', g.home?.name, '/', g.away?.name, '| market:', g.home?.market, '/', g.away?.market);
-      });
+      var lines = ['BDL MAP: '+Object.keys(bdlGameMap).length+'/'+games.length+' mapped | BDL returned '+bdlGames.length+' games for '+dateStr];
+      unmapped.forEach(function(u){ lines.push('UNMAPPED: '+u.matchup+' (name:'+u.hName+'/'+u.aName+' market:'+u.hMarket+'/'+u.aMarket+')'); });
+      if(window._bdlMapDiag.sample){
+        var s = window._bdlMapDiag.sample.home;
+        lines.push('BDL sample team: '+JSON.stringify(s));
+      }
+      diagEl.textContent = lines.join('\n');
     }
   }catch(e){
     console.warn('BDL game map failed:', e.message);
+    var diagEl = document.getElementById('bdl-map-diag');
+    if(!diagEl){
+      diagEl = document.createElement('div');
+      diagEl.id = 'bdl-map-diag';
+      diagEl.style.cssText = 'background:#2a1a1a;border:1px solid #ff6b6b;color:#ff6b6b;padding:6px 10px;margin:4px 0;font-size:10px;border-radius:4px;font-family:monospace;';
+      var grid = document.querySelector('.game-grid')||document.body;
+      grid.insertBefore(diagEl, grid.firstChild);
+    }
+    diagEl.textContent = 'BDL MAP ERROR: '+e.message;
   }
 }
 
