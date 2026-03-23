@@ -1774,19 +1774,9 @@ export default async function(req) {
         }
       }
 
-      // ── 0b. Check client heartbeat — skip if client is actively polling ──
-      try {
-        const hbRows = await sql`
-          SELECT EXTRACT(EPOCH FROM (NOW() - last_poll)) / 60 AS age_minutes, device
-          FROM poll_heartbeats WHERE league = ${league}
-        `;
-        if (hbRows.length > 0 && hbRows[0].age_minutes < 1.5) {
-          log(`${league.toUpperCase()}: client active (${hbRows[0].device}, ${Math.round(hbRows[0].age_minutes * 10) / 10}m ago) — skipping`);
-          continue;
-        }
-      } catch (e) {
-        // Heartbeat table may not exist yet
-      }
+      // ── 0b. Client heartbeat — logged but no longer skips server polling ──
+      // BDL has 600 req/min — both client and server can poll simultaneously.
+      // Server must always run for quarter-boundary calibration snapshots.
 
       // ── 1. Get game list — from cache OR one-time SR schedule fetch ──
       let cachedGames = null; // [{id, scheduled, home_alias, away_alias, status}]
