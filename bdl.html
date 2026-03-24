@@ -1345,6 +1345,30 @@ function applyAutoAnalysesToCards(){
         if(ind){
           cs.sonnetIndicators = ind;
         }
+        // ── SUSTAINABILITY HYDRATION from auto-analysis ──
+        // Parse "TEAM: TIER | TEAM: TIER" into cs.clientSustainability so synthesizer decision tree can use it
+        if(latest.sustainability && !cs.clientSustainability){
+          var _sustText = latest.sustainability;
+          var _sustParts = _sustText.split('|').map(function(s){return s.trim();});
+          var _g = games.find(function(x){return x.id===gid;});
+          var _hA = _g?.home?.alias||'', _aA = _g?.away?.alias||'';
+          var _autoSust = {home:{tier:null}, away:{tier:null}};
+          var _validTiers = ['LOCKED IN','LOCKED','DURABLE','MIXED','FRAGILE','UNSUSTAINABLE','TOO EARLY'];
+          _sustParts.forEach(function(part){
+            var m = part.match(/^(\w+)\s*:\s*(.+)/);
+            if(!m) return;
+            var team = m[1].trim().toUpperCase();
+            var tier = m[2].trim().toUpperCase();
+            // Normalize tier
+            var matched = _validTiers.find(function(t){return tier.includes(t);});
+            if(!matched) return;
+            if(team === _hA) _autoSust.home.tier = matched;
+            else if(team === _aA) _autoSust.away.tier = matched;
+          });
+          if(_autoSust.home.tier || _autoSust.away.tier){
+            cs.clientSustainability = _autoSust;
+          }
+        }
         persistAnalysis(gid, cs);
         applied++;
         addLog(gid, '📡 Auto '+((latest.trigger||'q?').replace('auto_','').toUpperCase())+' analysis hydrated — '
