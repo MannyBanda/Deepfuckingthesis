@@ -2579,9 +2579,12 @@ async function fetchSummaryBDL(game){
                 if(!_cs.openingOdds)_cs.openingOdds={..._cs.oddsData};
                 _cs._lastOddsTime=Date.now();
                 persistOdds(gid,_cs);
+                addLog(gid, '💰 Odds: '+spread+' ML:'+hML+'/'+aML, true);
               }
+            } else {
+              var _cs=cardState[gid]; if(_cs) _cs._lastOddsTime=Date.now(); // prevent spam
             }
-          }catch(e){}
+          }catch(e){ addLog(gid, '⚠ Odds: '+e.message, false); }
         })(game.id, String(bdlGameMap[game.id]));
       }
     }
@@ -3012,6 +3015,25 @@ async function triggerAnalysis(game){
         console.log('FWP (Sonnet, no odds): '+hAlias+' '+homeFWP.toFixed(1)+'% '+aAlias+' '+awayFWP.toFixed(1)+'%');
       }
       cs.prediction = decision;
+
+      // ── PARSE SONNET SUSTAINABILITY INTO STRUCTURED FORMAT ──
+      // Sonnet returns sustainability as text (e.g. "TOR: LOCKED IN | PHX: FRAGILE")
+      // Convert to structured {home:{tier}, away:{tier}} so synthesizer can read it immediately
+      if(decision.sustainability && (!cs.clientSustainability || !cs.clientSustainability.home?.tier || !cs.clientSustainability.away?.tier)){
+        var _sonnetSust = {home:{tier:null}, away:{tier:null}};
+        var _sustStr = decision.sustainability;
+        var _sustTiers = ['LOCKED IN','LOCKED','DURABLE','MIXED','FRAGILE','UNSUSTAINABLE','TOO EARLY'];
+        _sustTiers.forEach(function(t){
+          var hPat = new RegExp(hAlias+'[:\\s]+'+t,'i');
+          var aPat = new RegExp(aAlias+'[:\\s]+'+t,'i');
+          if(hPat.test(_sustStr)) _sonnetSust.home.tier = t;
+          if(aPat.test(_sustStr)) _sonnetSust.away.tier = t;
+        });
+        if(_sonnetSust.home.tier || _sonnetSust.away.tier){
+          cs.clientSustainability = _sonnetSust;
+          console.log('[SUST] Parsed from Sonnet: '+hAlias+':'+(_sonnetSust.home.tier||'?')+' / '+aAlias+':'+(_sonnetSust.away.tier||'?'));
+        }
+      }
 
       // ── CONVICTION OVERRIDE — client score is authoritative, Sonnet can downgrade only ──
       if(parsed?.score && decision.conviction){
@@ -5855,8 +5877,17 @@ function synthesize(game){
   // Check if trailing (structural) team's own shooting is sustainable enough to mount comeback
   var ctrlFragile = ctrlSust === 'FRAGILE' || ctrlSust === 'UNSUSTAINABLE';
   var ctrlLocked = ctrlSust === 'LOCKED' || ctrlSust === 'DURABLE';
+  var sustMissing = !oppSust && !ctrlSust; // neither side has sustainability data
 
-  if(fScore >= 0.70 && pbpAgrees && trailing && inBuyRange && sustFragile && !ctrlFragile){
+  // ── NULL SUSTAINABILITY GATE ──
+  // If we're in the entry zone but have no sustainability data, we can't make a real call.
+  // Produce DEVELOPING instead of a premature weaker action.
+  if(fScore >= 0.70 && pbpAgrees && trailing && inBuyRange && sustMissing){
+    action = 'DEVELOPING'; actionColor = 'var(--yellow)';
+    lines.push('Entry conditions forming but sustainability data missing — cannot classify lead quality.');
+    triggers.push('Press ⚡ ANALYZE for Sonnet sustainability read');
+    triggers.push('Wait for season cache to load baselines');
+  } else if(fScore >= 0.70 && pbpAgrees && trailing && inBuyRange && sustFragile && !ctrlFragile){
     action = 'BUY'; actionColor = 'var(--green)';
     lines.push(fTeam + ' structural edge + opponent variance = entry signal.' + (ctrlLocked ? ' ' + fTeam + ' shooting ' + ctrlSust + '.' : ''));
   } else if(fScore >= 0.70 && pbpAgrees && trailing && inBuyRange && sustFragile && ctrlFragile){
