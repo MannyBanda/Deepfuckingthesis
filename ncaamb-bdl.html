@@ -2087,6 +2087,19 @@ async function triggerAnalysis(game){
         subMetricArrows: cs.subMetricArrows || null,
         adjustment: cs.adjustment || null,
         combinedRead: cs.combinedRead || null,
+        throughput: cs.throughput ? {
+          classification: cs.throughput.classification,
+          deficit: cs.throughput.deficit,
+          conservative: Math.round(cs.throughput.conservative.totalSwing),
+          expected: Math.round(cs.throughput.expected.totalSwing),
+          optimistic: Math.round(cs.throughput.optimistic.totalSwing),
+          remainingPoss: cs.throughput.remainingPoss,
+          structEdge: cs.throughput.structEdge,
+          ctrlStructRate: cs.throughput.ctrlStructRate,
+          oppStructRate: cs.throughput.oppStructRate,
+          degradation: cs.throughput.degradation,
+          fTeam: cs.throughput.fTeam,
+        } : null,
         projection: cs.projection ? {
           projectedMargin: cs.projection.projectedMargin,
           projTeam: cs.projection.projTeam,
@@ -2217,6 +2230,23 @@ async function triggerAnalysis(game){
         console.log('FWP (Sonnet, no odds): '+hAlias+' '+homeFWP.toFixed(1)+'% '+aAlias+' '+awayFWP.toFixed(1)+'%');
       }
       cs.prediction = decision;
+
+      // ── PARSE SONNET SUSTAINABILITY INTO STRUCTURED FORMAT ──
+      if(decision.sustainability && (!cs.clientSustainability || !cs.clientSustainability.home?.tier || !cs.clientSustainability.away?.tier)){
+        var _sonnetSust = {home:{tier:null}, away:{tier:null}};
+        var _sustStr = decision.sustainability;
+        var _sustTiers = ['LOCKED IN','LOCKED','DURABLE','MIXED','FRAGILE','UNSUSTAINABLE','TOO EARLY'];
+        _sustTiers.forEach(function(t){
+          var hPat = new RegExp(hAlias+'[:\\s]+'+t,'i');
+          var aPat = new RegExp(aAlias+'[:\\s]+'+t,'i');
+          if(hPat.test(_sustStr)) _sonnetSust.home.tier = t;
+          if(aPat.test(_sustStr)) _sonnetSust.away.tier = t;
+        });
+        if(_sonnetSust.home.tier || _sonnetSust.away.tier){
+          cs.clientSustainability = _sonnetSust;
+          console.log('[SUST] Parsed from Sonnet: '+hAlias+':'+(_sonnetSust.home.tier||'?')+' / '+aAlias+':'+(_sonnetSust.away.tier||'?'));
+        }
+      }
 
       // ── CONVICTION OVERRIDE — client score is authoritative, Sonnet can downgrade only ──
       if(parsed?.score && decision.conviction){
@@ -2798,7 +2828,7 @@ function normalizeBdlStatus(s){
   if(!s) return 'scheduled';
   var sl = s.toLowerCase();
   if(sl==='post'||sl==='final') return 'closed';
-  if(sl==='in'||sl==='in progress'||sl.includes('half')||sl.includes('overtime')) return 'inprogress';
+  if(sl==='in'||sl==='in progress'||sl.includes('half')||sl.includes('overtime')||sl.includes(' ot')||sl==='ot'||/^\d*\s*ot/i.test(sl)) return 'inprogress';
   if(sl==='halftime') return 'halftime';
   if(sl==='pre') return 'scheduled';
   return s;
@@ -4998,8 +5028,15 @@ function synthesize(game){
   // Check if trailing (structural) team's own shooting is sustainable enough to mount comeback
   var ctrlFragile = ctrlSust === 'FRAGILE' || ctrlSust === 'UNSUSTAINABLE';
   var ctrlLocked = ctrlSust === 'LOCKED' || ctrlSust === 'DURABLE';
+  var sustMissing = !oppSust && !ctrlSust; // neither side has sustainability data
 
-  if(fScore >= 0.70 && pbpAgrees && trailing && inBuyRange && sustFragile && !ctrlFragile){
+  // ── NULL SUSTAINABILITY GATE ──
+  if(fScore >= 0.70 && pbpAgrees && trailing && inBuyRange && sustMissing){
+    action = 'DEVELOPING'; actionColor = 'var(--yellow)';
+    lines.push('Entry conditions forming but sustainability data missing — cannot classify lead quality.');
+    triggers.push('Press ⚡ ANALYZE for Sonnet sustainability read');
+    triggers.push('Wait for season cache to load baselines');
+  } else if(fScore >= 0.70 && pbpAgrees && trailing && inBuyRange && sustFragile && !ctrlFragile){
     action = 'BUY'; actionColor = 'var(--green)';
     lines.push(fTeam + ' structural edge + opponent variance = entry signal.' + (ctrlLocked ? ' ' + fTeam + ' shooting ' + ctrlSust + '.' : ''));
   } else if(fScore >= 0.70 && pbpAgrees && trailing && inBuyRange && sustFragile && ctrlFragile){
@@ -5051,6 +5088,37 @@ function synthesize(game){
       triggers.push('Floor reaches 0.60+');
     }
   }
+
+  // ── THROUGHPUT RECOVERY GATE ──
+  var throughput = null;
+  if(trailing && deficit > 0 && period >= 1){
+    throughput = computeThroughput(game);
+  }
+
+  if(throughput && (action === 'BUY' || action === 'LEAN BUY' || action === 'WATCH')){
+    var tpClass = throughput.classification;
+    var conSwing = throughput.conservative.totalSwing;
+    var expSwing = throughput.expected.totalSwing;
+    var optSwing = throughput.optimistic.totalSwing;
+
+    if(tpClass === 'STRONG RECOVERY' || tpClass === 'PROBABLE'){
+      lines.push('Engine +' + Math.round(conSwing) + ' / +' + Math.round(expSwing) + ' / +' + Math.round(optSwing) + ' vs ' + deficit + ' deficit (' + throughput.remainingPoss + ' poss) — ' + tpClass + '.');
+    } else if(tpClass === 'CONTESTED'){
+      if(action === 'BUY'){ action = 'WATCH'; actionColor = 'var(--amber)'; }
+      else if(action === 'LEAN BUY'){ action = 'WATCH'; actionColor = 'var(--amber)'; }
+      lines.push('Engine +' + Math.round(conSwing) + ' / +' + Math.round(expSwing) + ' / +' + Math.round(optSwing) + ' vs ' + deficit + ' deficit — CONTESTED recovery, math uncertain.');
+      triggers.push('Deficit narrows or structural rate increases');
+    } else if(tpClass === 'UNLIKELY' || tpClass === 'NO PATH'){
+      action = 'TOO DEEP'; actionColor = 'var(--red)';
+      lines.push('Engine +' + Math.round(conSwing) + ' / +' + Math.round(expSwing) + ' / +' + Math.round(optSwing) + ' vs ' + deficit + ' deficit — ' + tpClass + '. Structural ceiling below variance floor.');
+      triggers.length = 0;
+      triggers.push('Deficit compresses significantly');
+      triggers.push('Opponent variance collapses further');
+    }
+  }
+
+  // Persist throughput on cardState for spread conviction + confidence table
+  cs.throughput = throughput;
 
   // ── BET TYPE RECOMMENDATION (ML vs Spread) ──
   var betType = null;
@@ -5121,6 +5189,7 @@ function synthesize(game){
     trailing: trailing,
     deficit: deficit,
     betType: betType,
+    throughput: throughput,
   };
 }
 
@@ -5629,6 +5698,264 @@ function computeLeadCompositionClient(game, sustData){
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// THROUGHPUT RECOVERY MODEL — can the trailing team's engine close the gap?
+// Computes structural scoring rate + variance regression across remaining
+// possessions with conservative/expected/optimistic confidence bands.
+// NCAAMB: 40 min game, 2×20 min halves, ~65 possessions per game
+// ══════════════════════════════════════════════════════════════════════════════
+function computeThroughput(game){
+  var cs = cardState[game.id]; if(!cs) return null;
+  var s = game.summary || game.bdlData; if(!s || !s.home || !s.away) return null;
+  var hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
+  var hPts = game.homePoints||0, aPts = game.awayPoints||0;
+  var period = game.period||0;
+  if(period < 1) return null;
+
+  var floor = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
+  if(!floor || !floor.score) return null;
+  var fTeam = floor.controlTeam;
+  var ctrlIsHome = fTeam === hA;
+  var ctrlPts = ctrlIsHome ? hPts : aPts;
+  var oppPts = ctrlIsHome ? aPts : hPts;
+  var deficit = oppPts - ctrlPts;
+  if(deficit <= 0) return null; // not trailing — throughput N/A
+
+  // ── TIME REMAINING (NCAAMB: 2×20 min halves) ──
+  var GAME_MINUTES = 40, PERIOD_MINUTES = 20;
+  var clockParts = (game.clock||'').split(':');
+  var clockMins = clockParts.length===2 ? parseInt(clockParts[0])+(parseInt(clockParts[1]||0)/60) : PERIOD_MINUTES;
+  var periodsLeft = Math.max(0, 2 - period);
+  var minsLeft = clockMins + (periodsLeft * PERIOD_MINUTES);
+  var minsElapsed = Math.max(1, GAME_MINUTES - minsLeft);
+  var gameFraction = Math.min(1, minsLeft / GAME_MINUTES);
+  if(minsLeft < 2) return null; // too late for throughput model
+
+  // ── STRUCTURAL RATE per possession ──
+  var isBDL = game.dataSource === 'BDL';
+  var hs = isBDL ? (s.home||{}) : (s.home?.statistics||s.home||{});
+  var as = isBDL ? (s.away||{}) : (s.away?.statistics||s.away||{});
+  var ctrlStats = ctrlIsHome ? hs : as;
+  var oppStats = ctrlIsHome ? as : hs;
+
+  var ctrlPoss = ctrlStats.possessions || 0;
+  var oppPoss = oppStats.possessions || 0;
+  if(ctrlPoss < 3) ctrlPoss = (ctrlStats.field_goals_att||0) + 0.44*(ctrlStats.free_throws_att||0) - (ctrlStats.offensive_rebounds||0) + (ctrlStats.turnovers||ctrlStats.total_turnovers||0);
+  if(oppPoss < 3) oppPoss = (oppStats.field_goals_att||0) + 0.44*(oppStats.free_throws_att||0) - (oppStats.offensive_rebounds||0) + (oppStats.turnovers||oppStats.total_turnovers||0);
+  if(ctrlPoss < 5 || oppPoss < 5) return null;
+
+  var ctrlPaint = ctrlStats.points_in_the_paint || ctrlStats.points_in_paint || 0;
+  var ctrlFT = ctrlStats.free_throws_made || 0;
+  var ctrlPOT = ctrlStats.points_off_turnovers || 0;
+  var ctrlSCP = ctrlStats.second_chance_points || ctrlStats.second_chance_pts || 0;
+  var ctrlStructRate = (ctrlPaint + ctrlFT + ctrlPOT + ctrlSCP) / ctrlPoss;
+
+  var oppPaint = oppStats.points_in_the_paint || oppStats.points_in_paint || 0;
+  var oppFT = oppStats.free_throws_made || 0;
+  var oppPOT = oppStats.points_off_turnovers || 0;
+  var oppSCP = oppStats.second_chance_points || oppStats.second_chance_pts || 0;
+  var oppStructRate = (oppPaint + oppFT + oppPOT + oppSCP) / oppPoss;
+
+  var structEdgePerPoss = ctrlStructRate - oppStructRate;
+
+  // ── VARIANCE POSITION ──
+  var sust = cs.clientSustainability;
+  var sa = cs.sustainabilityAudit;
+  var ctrlSustData = sust ? (ctrlIsHome ? sust.home : sust.away) : (sa ? (ctrlIsHome ? sa.home : sa.away) : null);
+  var oppSustData = sust ? (ctrlIsHome ? sust.away : sust.home) : (sa ? (ctrlIsHome ? sa.away : sa.home) : null);
+
+  function getVarData(sustObj, stats, poss){
+    if(!sustObj) return {deviation:0, threePARate:0, live3Pct:0, sznPct:33};
+    var livePct = parseFloat(sustObj.live3Pct || 0);
+    var sznPct = parseFloat(sustObj.seasonPrior || sustObj.seasonBaseline || 33);
+    var dev = livePct - sznPct;
+    var tpaRate = poss > 0 ? (stats.three_points_att||0) / poss : 0;
+    return {deviation:dev, threePARate:tpaRate, live3Pct:livePct, sznPct:sznPct};
+  }
+
+  var ctrlVar = getVarData(ctrlSustData, ctrlStats, ctrlPoss);
+  var oppVar = getVarData(oppSustData, oppStats, oppPoss);
+
+  // ── REMAINING POSSESSIONS ──
+  var avgPoss = (ctrlPoss + oppPoss) / 2;
+  var possPerMin = avgPoss / minsElapsed;
+  var remainingPoss = possPerMin * minsLeft;
+
+  // ── DEFICIT DEGRADATION ──
+  var degradation = 1.0;
+  if(deficit >= 24) degradation = 0.70;
+  else if(deficit >= 18) degradation = 0.85;
+
+  // ── CONFIDENCE BANDS ──
+  var bandDefs = [
+    {label:'conservative', baseRate:0.40},
+    {label:'expected',     baseRate:0.65},
+    {label:'optimistic',   baseRate:0.90},
+  ];
+
+  var bandResults = bandDefs.map(function(band){
+    var appliedRegression = band.baseRate * gameFraction;
+    var oppCoolingPerPoss = 0;
+    if(oppVar.deviation > 0){
+      oppCoolingPerPoss = (oppVar.deviation / 100) * appliedRegression * oppVar.threePARate * 3;
+    }
+    var ctrlHeatingPerPoss = 0;
+    if(ctrlVar.deviation < 0){
+      ctrlHeatingPerPoss = (Math.abs(ctrlVar.deviation) / 100) * appliedRegression * ctrlVar.threePARate * 3;
+    }
+    var netSwingPerPoss = (structEdgePerPoss * degradation) + oppCoolingPerPoss + ctrlHeatingPerPoss;
+    var totalSwing = netSwingPerPoss * remainingPoss;
+    var ratio = deficit > 0 ? totalSwing / deficit : 0;
+    return { label: band.label, ratio: Math.round(ratio * 100) / 100, totalSwing: Math.round(totalSwing * 10) / 10, netSwingPerPoss: Math.round(netSwingPerPoss * 1000) / 1000 };
+  });
+
+  var conservative = bandResults[0], expected = bandResults[1], optimistic = bandResults[2];
+
+  var classification;
+  if(conservative.ratio > 1.2) classification = 'STRONG RECOVERY';
+  else if(conservative.ratio > 0.9) classification = 'PROBABLE';
+  else if(conservative.ratio > 0.6) classification = 'CONTESTED';
+  else if(conservative.ratio > 0.3) classification = 'UNLIKELY';
+  else classification = 'NO PATH';
+
+  return {
+    classification: classification, deficit: deficit, remainingPoss: Math.round(remainingPoss),
+    conservative: conservative, expected: expected, optimistic: optimistic,
+    ctrlStructRate: Math.round(ctrlStructRate * 1000) / 1000, oppStructRate: Math.round(oppStructRate * 1000) / 1000,
+    structEdge: Math.round(structEdgePerPoss * 1000) / 1000,
+    ctrlVar: ctrlVar, oppVar: oppVar, degradation: degradation,
+    minsLeft: Math.round(minsLeft * 10) / 10, fTeam: fTeam,
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// THROUGHPUT RECOVERY MODEL — can the trailing team's engine close the gap?
+// Computes structural scoring rate + variance regression across remaining
+// possessions with conservative/expected/optimistic confidence bands.
+// NCAAMB: 40 min game, 2 halves × 20 min, ~65 possessions/game
+// ══════════════════════════════════════════════════════════════════════════════
+function computeThroughput(game){
+  var cs = cardState[game.id]; if(!cs) return null;
+  var s = game.summary; if(!s || !s.home || !s.away) return null;
+  var hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
+  var hPts = game.homePoints||0, aPts = game.awayPoints||0;
+  var period = game.period||0;
+  if(period < 1) return null;
+
+  var floor = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
+  if(!floor || !floor.score) return null;
+  var fTeam = floor.controlTeam;
+  var ctrlIsHome = fTeam === hA;
+  var ctrlPts = ctrlIsHome ? hPts : aPts;
+  var oppPts = ctrlIsHome ? aPts : hPts;
+  var deficit = oppPts - ctrlPts;
+  if(deficit <= 0) return null; // not trailing — throughput N/A
+
+  // ── TIME REMAINING (NCAAMB: 2×20 min) ──
+  var GAME_MINUTES = 40, PERIOD_MINUTES = 20;
+  var clockParts = (game.clock||'').split(':');
+  var clockMins = clockParts.length===2 ? parseInt(clockParts[0])+(parseInt(clockParts[1]||0)/60) : PERIOD_MINUTES;
+  var periodsLeft = Math.max(0, 2 - period);
+  var minsLeft = clockMins + (periodsLeft * PERIOD_MINUTES);
+  var minsElapsed = Math.max(1, GAME_MINUTES - minsLeft);
+  var gameFraction = Math.min(1, minsLeft / GAME_MINUTES);
+  if(minsLeft < 2) return null; // too late for throughput model
+
+  // ── STRUCTURAL RATE per possession ──
+  var hs = s.home?.statistics || s.home || {};
+  var as = s.away?.statistics || s.away || {};
+  var ctrlStats = ctrlIsHome ? hs : as;
+  var oppStats = ctrlIsHome ? as : hs;
+
+  var ctrlPoss = ctrlStats.possessions || 0;
+  var oppPoss = oppStats.possessions || 0;
+  if(ctrlPoss < 3) ctrlPoss = (ctrlStats.field_goals_att||0) + 0.44*(ctrlStats.free_throws_att||0) - (ctrlStats.offensive_rebounds||0) + (ctrlStats.turnovers||ctrlStats.total_turnovers||0);
+  if(oppPoss < 3) oppPoss = (oppStats.field_goals_att||0) + 0.44*(oppStats.free_throws_att||0) - (oppStats.offensive_rebounds||0) + (oppStats.turnovers||oppStats.total_turnovers||0);
+  if(ctrlPoss < 5 || oppPoss < 5) return null;
+
+  var ctrlPaint = ctrlStats.points_in_the_paint || ctrlStats.points_in_paint || 0;
+  var ctrlFT = ctrlStats.free_throws_made || 0;
+  var ctrlPOT = ctrlStats.points_off_turnovers || 0;
+  var ctrlSCP = ctrlStats.second_chance_points || ctrlStats.second_chance_pts || 0;
+  var ctrlStructRate = (ctrlPaint + ctrlFT + ctrlPOT + ctrlSCP) / ctrlPoss;
+
+  var oppPaint = oppStats.points_in_the_paint || oppStats.points_in_paint || 0;
+  var oppFT = oppStats.free_throws_made || 0;
+  var oppPOT = oppStats.points_off_turnovers || 0;
+  var oppSCP = oppStats.second_chance_points || oppStats.second_chance_pts || 0;
+  var oppStructRate = (oppPaint + oppFT + oppPOT + oppSCP) / oppPoss;
+
+  var structEdgePerPoss = ctrlStructRate - oppStructRate;
+
+  // ── VARIANCE POSITION (3PT deviation from baseline) ──
+  var sust = cs.clientSustainability;
+  var sa = cs.sustainabilityAudit;
+  var ctrlSustData = sust ? (ctrlIsHome ? sust.home : sust.away) : (sa ? (ctrlIsHome ? sa.home : sa.away) : null);
+  var oppSustData = sust ? (ctrlIsHome ? sust.away : sust.home) : (sa ? (ctrlIsHome ? sa.away : sa.home) : null);
+
+  function getVarData(sustObj, stats, poss){
+    if(!sustObj) return {deviation:0, threePARate:0, live3Pct:0, sznPct:33};
+    var livePct = parseFloat(sustObj.live3Pct || 0);
+    var sznPct = parseFloat(sustObj.seasonPrior || sustObj.seasonBaseline || 33);
+    var dev = livePct - sznPct;
+    var tpaRate = poss > 0 ? (stats.three_points_att||0) / poss : 0;
+    return {deviation:dev, threePARate:tpaRate, live3Pct:livePct, sznPct:sznPct};
+  }
+
+  var ctrlVar = getVarData(ctrlSustData, ctrlStats, ctrlPoss);
+  var oppVar = getVarData(oppSustData, oppStats, oppPoss);
+
+  // ── REMAINING POSSESSIONS ──
+  var avgPoss = (ctrlPoss + oppPoss) / 2;
+  var possPerMin = avgPoss / minsElapsed;
+  var remainingPoss = possPerMin * minsLeft;
+
+  // ── DEFICIT DEGRADATION ──
+  var degradation = 1.0;
+  if(deficit >= 24) degradation = 0.70;
+  else if(deficit >= 18) degradation = 0.85;
+
+  // ── CONFIDENCE BANDS ──
+  var bandDefs = [
+    {label:'conservative', baseRate:0.40},
+    {label:'expected',     baseRate:0.65},
+    {label:'optimistic',   baseRate:0.90},
+  ];
+
+  var bandResults = bandDefs.map(function(band){
+    var appliedRegression = band.baseRate * gameFraction;
+    var oppCoolingPerPoss = 0;
+    if(oppVar.deviation > 0){
+      oppCoolingPerPoss = (oppVar.deviation / 100) * appliedRegression * oppVar.threePARate * 3;
+    }
+    var ctrlHeatingPerPoss = 0;
+    if(ctrlVar.deviation < 0){
+      ctrlHeatingPerPoss = (Math.abs(ctrlVar.deviation) / 100) * appliedRegression * ctrlVar.threePARate * 3;
+    }
+    var netSwingPerPoss = (structEdgePerPoss * degradation) + oppCoolingPerPoss + ctrlHeatingPerPoss;
+    var totalSwing = netSwingPerPoss * remainingPoss;
+    var ratio = deficit > 0 ? totalSwing / deficit : 0;
+    return {label:band.label, ratio:Math.round(ratio*100)/100, totalSwing:Math.round(totalSwing*10)/10, netSwingPerPoss:Math.round(netSwingPerPoss*1000)/1000};
+  });
+
+  var conservative = bandResults[0], expected = bandResults[1], optimistic = bandResults[2];
+
+  var classification;
+  if(conservative.ratio > 1.2) classification = 'STRONG RECOVERY';
+  else if(conservative.ratio > 0.9) classification = 'PROBABLE';
+  else if(conservative.ratio > 0.6) classification = 'CONTESTED';
+  else if(conservative.ratio > 0.3) classification = 'UNLIKELY';
+  else classification = 'NO PATH';
+
+  return {
+    classification: classification, deficit: deficit, remainingPoss: Math.round(remainingPoss),
+    conservative: conservative, expected: expected, optimistic: optimistic,
+    ctrlStructRate: Math.round(ctrlStructRate * 1000) / 1000, oppStructRate: Math.round(oppStructRate * 1000) / 1000,
+    structEdge: Math.round(structEdgePerPoss * 1000) / 1000, ctrlVar: ctrlVar, oppVar: oppVar,
+    degradation: degradation, minsLeft: Math.round(minsLeft * 10) / 10, fTeam: fTeam,
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // MARGIN PROJECTION ENGINE — pace-adjusted forward-looking margin forecast
 // Feeds: spread conviction + Sonnet FWP anchor
 // ══════════════════════════════════════════════════════════════════════════════
@@ -5900,6 +6227,17 @@ function computeSpreadConviction(game){
     coverProb = coverProb + structMod + scoringMod + rwMod + garbageMod;
     if(isFavorite && coverProb > inflationCap) coverProb = inflationCap;
     if(isUnderdog && coverProb < inflationFloor) coverProb = inflationFloor;
+
+    // ── GUARDRAIL 3: THROUGHPUT RECOVERY CAP ──
+    var tpCap = null;
+    var _tp = cs.throughput;
+    if(_tp && _tp.fTeam === alias && _tp.conservative){
+      var conRatio = _tp.conservative.ratio;
+      if(conRatio < 0.4){ tpCap = 45; }
+      else if(conRatio < 0.7){ tpCap = 60; }
+      if(tpCap !== null && coverProb > tpCap) coverProb = tpCap;
+    }
+
     coverProb = Math.max(5, Math.min(95, coverProb));
 
     var parts = [];
@@ -5916,6 +6254,7 @@ function computeSpreadConviction(game){
     if(regimeChange) parts.push('REGIME FLIP');
     if(scoringClass === 'VOLATILE' && teamIsLeadTeam) parts.push('VOLATILE lead');
     if(proj?.garbageTime?.detected) parts.push('GARBAGE('+proj.garbageTime.reason+')');
+    if(tpCap !== null) parts.push('TP cap:'+tpCap+'(con:'+_tp.conservative.ratio.toFixed(2)+')');
     if(minsLeft < 8) parts.push(minsLeft.toFixed(0)+'min left');
 
     return { team:alias, spread:(spread>0?'+':'')+spread.toFixed(1), coverProb:Math.round(coverProb), coverMargin:coverMargin, projBased:projBased, reason:parts.join(' + ') };
@@ -6675,7 +7014,7 @@ function buildTrajectoryBDL(game, hA, aA, hs, as, hS, aS, qDs, d){
 // ══════════════════════════════════════════════════════════════════════════════
 function showLoading(v){document.getElementById('loading').style.display=v?'flex':'none';}
 function showErr(msg){const el=document.getElementById('err');el.style.display=msg?'block':'none';if(msg)el.textContent='⚠ '+msg;}
-function getState(g){const s=(g.status||'').toLowerCase();if(s==='closed'||s==='complete'||s==='final'||s==='post')return'FINAL';if(s==='inprogress'||s==='halftime'||s==='in progress'||s==='in'||s.includes('half')||s.includes('qtr')||s.includes('overtime'))return'LIVE';return'PRE';}
+function getState(g){const s=(g.status||'').toLowerCase();if(s==='closed'||s==='complete'||s==='final'||s==='post')return'FINAL';if(s==='inprogress'||s==='halftime'||s==='in progress'||s==='in'||s.includes('half')||s.includes('qtr')||s.includes('overtime')||s.includes(' ot')||s==='ot'||/^\d*\s*ot/i.test(s))return'LIVE';return'PRE';}
 function updateCounts(){
   const lc=games.filter(g=>getState(g)==='LIVE').length;
   document.getElementById('live-count').textContent=lc;
@@ -6992,7 +7331,11 @@ function renderConfidenceTable(){
     const gapVal = (accelData && accelData.entries && accelData.entries.length>0) ? accelData.entries[accelData.entries.length-1].gap : null;
     const accelLabel = accelData?.accel || null;
     const combinedReadLabel = crData?.read || null;
-    const row = {matchup, team, score, verdict, gameId:g.id, state, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, hA, aA, entryIf:p.entry||null, passIf:p.pass||null, fwpTeamAlias, fwpTeamEdge, fwpTeamFwp, fwpTeamEntry, signal, windowScore, windowTeam, gapVal, accelLabel, combinedReadLabel};
+    const tpData = cs?.throughput;
+    const tpClass = tpData?.classification || null;
+    const tpConSwing = tpData?.conservative?.totalSwing || null;
+    const tpDeficit = tpData?.deficit || null;
+    const row = {matchup, team, score, verdict, gameId:g.id, state, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, hA, aA, entryIf:p.entry||null, passIf:p.pass||null, fwpTeamAlias, fwpTeamEdge, fwpTeamFwp, fwpTeamEntry, signal, windowScore, windowTeam, gapVal, accelLabel, combinedReadLabel, tpClass, tpConSwing, tpDeficit};
     // Persist live data to cache whenever we have analysis results or fresh live sustainability
     if(pred || si || (state==='LIVE' && (sustHome || sustAway))){
       persistConfRow(g.id, {team, score, verdict, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, state, fwpTeamAlias, fwpTeamEdge, fwpTeamFwp, fwpTeamEntry, signal:csPred?.signalType||null, ts:Date.now()});
@@ -7066,7 +7409,7 @@ function renderConfidenceTable(){
   }
   html += '</div>';
   if(!confCollapsed){
-  html += '<div class="ct-scroll"><table><tr><th style="text-align:center;position:sticky;left:0;z-index:2;background:var(--c1);border-right:1px solid var(--b1)">SCORE</th><th style="text-align:center">SUST</th><th style="text-align:center">FWP</th><th style="text-align:center">EDGE</th><th style="text-align:center">ENTRY</th><th style="text-align:center">FLOOR</th><th style="text-align:center">WINDOW</th><th style="text-align:center">GAP</th><th style="text-align:center">THESIS</th></tr>';
+  html += '<div class="ct-scroll"><table><tr><th style="text-align:center;position:sticky;left:0;z-index:2;background:var(--c1);border-right:1px solid var(--b1)">SCORE</th><th style="text-align:center">SUST</th><th style="text-align:center">FWP</th><th style="text-align:center">EDGE</th><th style="text-align:center">ENTRY</th><th style="text-align:center">FLOOR</th><th style="text-align:center">RECOVERY</th><th style="text-align:center">WINDOW</th><th style="text-align:center">GAP</th><th style="text-align:center">THESIS</th></tr>';
   for(const r of rows){
     const isFinal = r.state==='FINAL';
     const rowClass = 'ct-row'+(isFinal?' ct-final':' '+entryClass(r.entry));
@@ -7157,6 +7500,7 @@ function renderConfidenceTable(){
       + '<td style="font-size:7px;text-align:center;white-space:nowrap">'+edgeDispStr+'</td>'
       + '<td style="font-size:6px;text-align:center;white-space:nowrap">'+entryStr+'</td>'
       + '<td class="ct-score" style="color:'+vColor(r.verdict)+'">'+r.score.toFixed(2)+'<div class="ct-verdict" style="color:'+vColor(r.verdict)+'">'+esc(r.team||'')+'</div></td>'
+      + '<td style="text-align:center;font-size:7px;white-space:nowrap">'+(r.tpConSwing!=null?'<span style="font-weight:600;color:'+(r.tpConSwing>=r.tpDeficit?'var(--green)':r.tpConSwing>=r.tpDeficit*0.6?'var(--yellow)':'var(--red)')+'">+'+Math.round(r.tpConSwing)+'</span><span style="color:var(--t3);font-size:5.5px"> vs '+r.tpDeficit+'</span>':'<span style="color:var(--t3)">&#8212;</span>')+'</td>'
       + '<td style="text-align:center;font-size:7px">'+(r.windowScore!=null?'<span style="font-weight:600;color:'+(r.windowScore>=0.75?'var(--g2)':r.windowScore>=0.60?'var(--yellow)':'var(--t3)')+'">'+r.windowScore.toFixed(2)+'</span>':'<span style="color:var(--t3)">&#8212;</span>')+'</td>'
       + '<td style="text-align:center;font-size:7px">'+(r.gapVal!=null?'<span style="color:'+(r.gapVal>0.03?'var(--green)':r.gapVal<-0.03?'var(--amber)':'var(--t3)')+'">'+(r.gapVal>=0?'+':'')+r.gapVal.toFixed(2)+'</span>'+(r.accelLabel&&r.accelLabel!=='TOO EARLY'&&r.accelLabel!=='STABLE'?' <span style="font-size:5px;color:'+(r.accelLabel==='GROWING'?'var(--green)':r.accelLabel==='DECLINING'?'var(--amber)':r.accelLabel==='FLIPPED'?'var(--red)':'var(--t3)')+'">'+({'GROWING':'▲','DECLINING':'▼','FLIPPED':'⟳','NEW_PHASE':'◆'}[r.accelLabel]||'')+'</span>':''):'<span style="color:var(--t3)">&#8212;</span>')+'</td>'
       + '<td style="font-size:6px;text-align:center">'+tsStr+'</td>'
@@ -7764,6 +8108,19 @@ function renderCard(game){
       html+='</div>';
       // Narrative
       html+='<div style="font-size:6.5px;color:var(--t1);line-height:1.5;margin-bottom:4px">'+esc(synth.narrative)+'</div>';
+      // Throughput recovery line
+      if(synth.throughput){
+        var _tp = synth.throughput;
+        var _tpCol = _tp.classification==='STRONG RECOVERY'?'var(--green)':_tp.classification==='PROBABLE'?'var(--g2)':_tp.classification==='CONTESTED'?'var(--yellow)':_tp.classification==='UNLIKELY'?'var(--amber)':'var(--red)';
+        var _tpConCol = _tp.conservative.totalSwing >= _tp.deficit ? 'var(--green)' : _tp.expected.totalSwing >= _tp.deficit ? 'var(--yellow)' : 'var(--red)';
+        html+='<div style="display:flex;align-items:center;gap:6px;padding:4px 7px;margin-bottom:4px;border-radius:4px;border:1px solid '+_tpCol+';background:rgba(255,255,255,.02)">';
+        html+='<span style="font-size:6px;font-weight:700;color:'+_tpCol+';letter-spacing:.5px;white-space:nowrap">RECOVERY</span>';
+        html+='<span style="font-size:6.5px;font-weight:600;color:'+_tpCol+'">'+esc(_tp.classification)+'</span>';
+        html+='<span style="font-size:7px;font-weight:700;color:'+_tpConCol+'">+'+Math.round(_tp.conservative.totalSwing)+' / +'+Math.round(_tp.expected.totalSwing)+' / +'+Math.round(_tp.optimistic.totalSwing)+'</span>';
+        html+='<span style="font-size:6.5px;color:var(--t2)">vs '+_tp.deficit+' deficit</span>';
+        html+='<span style="font-size:5.5px;color:var(--t3)">~'+_tp.remainingPoss+' poss</span>';
+        html+='</div>';
+      }
       // Triggers
       if(synth.triggers.length > 0){
         html+='<div style="font-size:5.5px;color:var(--t3)">';
