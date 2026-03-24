@@ -1956,13 +1956,10 @@ export default async function(req) {
       // ── 3c. Batch BDL box_scores + lineups fetch (one call each, covers ALL games) ──
       let bdlBoxScores = [];
       try {
-        const boxResult = await bdlFetch(`${cfg.bdlPrefix}/v1/box_scores/live`);
+        // Use date endpoint — returns ALL games (in-progress, OT, halftime, final)
+        // box_scores/live may omit OT games
+        const boxResult = await bdlFetch(`${cfg.bdlPrefix}/v1/box_scores?date=${bdlDateStr}`);
         bdlBoxScores = boxResult?.data || [];
-        if (bdlBoxScores.length === 0) {
-          // Fallback to date-based
-          const boxResult2 = await bdlFetch(`${cfg.bdlPrefix}/v1/box_scores?date=${bdlDateStr}`);
-          bdlBoxScores = boxResult2?.data || [];
-        }
         _serverBoxScoreCache = bdlBoxScores;
         _serverBoxScoreTime = Date.now();
         log(`BDL box_scores: ${bdlBoxScores.length} games`);
