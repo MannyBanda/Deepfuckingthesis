@@ -160,10 +160,10 @@ exports.handler = async (event) => {
       break;
 
     case 'odds':
-      // NBA:    /nba/v2/odds?game_id=ID
+      // NBA:    /nba/v2/odds?game_ids[]=ID (array param per BDL spec)
       // NCAAMB: /ncaab/v1/odds?game_ids[]=ID (array param per BDL spec)
       if (league === 'nba') {
-        url = `${BDL_BASE}/v2/odds?game_id=${params.game_id}`;
+        url = `${BDL_BASE}/v2/odds?game_ids[]=${params.game_id}`;
       } else {
         url = `${BDL_BASE}${pfx}/v1/odds?game_ids[]=${params.game_id}`;
       }

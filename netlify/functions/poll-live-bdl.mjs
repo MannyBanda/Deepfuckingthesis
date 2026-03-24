@@ -326,7 +326,7 @@ async function bdlOdds(league, bdlGameId) {
   // NBA uses /v2/odds, NCAAMB uses /v1/odds with array param
   let path;
   if (league === 'nba') {
-    path = `/v2/odds?game_id=${bdlGameId}`;
+    path = `/nba/v2/odds?game_ids[]=${bdlGameId}`;
   } else {
     path = `${cfg.bdlPrefix}/v1/odds?game_ids[]=${bdlGameId}`;
   }
@@ -410,7 +410,7 @@ function normalizeBdlStatusServer(s) {
   if (!s) return 'scheduled';
   const sl = s.toLowerCase();
   if (sl === 'final') return 'closed';
-  if (sl === 'in progress' || sl.includes('qtr') || sl.includes('quarter') || sl.includes('overtime') || sl === 'ot') return 'inprogress';
+  if (sl === 'in progress' || sl.includes('qtr') || sl.includes('quarter') || sl.includes('overtime') || sl.includes(' ot') || sl === 'ot' || /^\d*\s*ot/i.test(sl)) return 'inprogress';
   if (sl === 'halftime' || sl.includes('half')) return 'halftime';
   if (s.includes('T') && s.includes(':')) return 'scheduled';
   return s;
