@@ -1956,11 +1956,11 @@ export default async function(req) {
       // ── 3c. Batch BDL box_scores + lineups fetch (one call each, covers ALL games) ──
       let bdlBoxScores = [];
       try {
-        const boxResult = await bdlFetch(`/${cfg.bdlPrefix}/v1/box_scores/live`);
+        const boxResult = await bdlFetch(`${cfg.bdlPrefix}/v1/box_scores/live`);
         bdlBoxScores = boxResult?.data || [];
         if (bdlBoxScores.length === 0) {
           // Fallback to date-based
-          const boxResult2 = await bdlFetch(`/${cfg.bdlPrefix}/v1/box_scores?date=${bdlDateStr}`);
+          const boxResult2 = await bdlFetch(`${cfg.bdlPrefix}/v1/box_scores?date=${bdlDateStr}`);
           bdlBoxScores = boxResult2?.data || [];
         }
         _serverBoxScoreCache = bdlBoxScores;
@@ -1977,7 +1977,7 @@ export default async function(req) {
       }).map(g => bdlGameIds[`${g.away_alias}@${g.home_alias}`]);
       if (lineupsNeeded.length > 0) {
         try {
-          const luResult = await bdlFetch(`/${cfg.bdlPrefix}/v1/lineups?${lineupsNeeded.map(id => 'game_ids[]=' + id).join('&')}&per_page=100`);
+          const luResult = await bdlFetch(`${cfg.bdlPrefix}/v1/lineups?${lineupsNeeded.map(id => 'game_ids[]=' + id).join('&')}&per_page=100`);
           if (luResult?.data) {
             // Group by game_id
             luResult.data.forEach(l => {
@@ -1995,7 +1995,7 @@ export default async function(req) {
       const playsFetches = potentiallyLive.map(g => {
         const bdlGid = bdlGameIds[`${g.away_alias}@${g.home_alias}`];
         if (!bdlGid) return Promise.resolve(null);
-        return bdlFetch(`/${cfg.bdlPrefix}/v1/plays?game_id=${bdlGid}&per_page=500`).catch(() => null);
+        return bdlFetch(`${cfg.bdlPrefix}/v1/plays?game_id=${bdlGid}&per_page=500`).catch(() => null);
       });
       const allPlaysResults = await Promise.all(playsFetches);
 
