@@ -49,6 +49,22 @@ const SR_DELAY_MS = 1400; // respect trial tier rate limit
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+// ── NTFY PUSH NOTIFICATIONS ─────────────────────────────────────────────
+async function sendNtfy(title, body, priority = 4) {
+  const topic = process.env.NTFY_TOPIC;
+  if (!topic) return;
+  try {
+    await fetch(`https://ntfy.sh/${topic}`, {
+      method: 'POST',
+      headers: { 'Title': title, 'Priority': String(priority), 'Tags': 'basketball' },
+      body: body,
+    });
+    log(`NTFY sent: ${title}`);
+  } catch (e) {
+    log(`NTFY failed: ${e.message}`);
+  }
+}
+
 function today() {
   // Use ET for game dates (NBA schedule is ET-based)
   const now = new Date();
@@ -1702,6 +1718,25 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
 
     log(`${matchup}: ★ ${triggerTag.toUpperCase()} CALIBRATION COMPLETE — ${parsed.controlTeam || '?'} ${parsed.controlScore || '?'} | ${parsed.signal || '?'} | FWP: ${parsed.fwp || '?'}`);
 
+    // ── 10. Push notification for actionable signals ──
+    const entry = (parsed.entry || '').toUpperCase();
+    const signal = (parsed.signal || '');
+    const isBuy = signal.toUpperCase().includes('BUY');
+    const isOptimal = entry === 'OPTIMAL WINDOW';
+    const isOpen = entry === 'WINDOW OPEN';
+    if (isBuy || isOptimal || isOpen) {
+      const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA}`;
+      const periodStr = `Q${period} ${clock}`;
+      const ntfyTitle = `${isOptimal ? '🟢' : '🟡'} ${signal || entry} — ${matchup}`;
+      const ntfyBody = `${scoreLine} ${periodStr}`
+        + `\nControl: ${parsed.controlTeam || '?'} ${parsed.controlScore || '?'}`
+        + `\nFWP: ${parsed.fwp || '?'}`
+        + `\nEntry: ${entry} | ${parsed.conviction || '?'}`
+        + (parsed.sustainability ? `\nSust: ${parsed.sustainability}` : '')
+        + `\n[${triggerTag}]`;
+      const ntfyPriority = isOptimal ? 5 : 4;
+      sendNtfy(ntfyTitle, ntfyBody, ntfyPriority).catch(() => {});
+    }
   } catch (e) {
     log(`${matchup}: ${triggerTag} CAL ERROR — ${e.message}`);
   }
@@ -1774,19 +1809,9 @@ export default async function(req) {
         }
       }
 
-      // ── 0b. Check client heartbeat — skip if client is actively polling ──
-      try {
-        const hbRows = await sql`
-          SELECT EXTRACT(EPOCH FROM (NOW() - last_poll)) / 60 AS age_minutes, device
-          FROM poll_heartbeats WHERE league = ${league}
-        `;
-        if (hbRows.length > 0 && hbRows[0].age_minutes < 1.5) {
-          log(`${league.toUpperCase()}: client active (${hbRows[0].device}, ${Math.round(hbRows[0].age_minutes * 10) / 10}m ago) — skipping`);
-          continue;
-        }
-      } catch (e) {
-        // Heartbeat table may not exist yet
-      }
+      // ── 0b. Client heartbeat — logged but no longer skips server polling ──
+      // BDL has 600 req/min — both client and server can poll simultaneously.
+      // Server must always run for quarter-boundary calibration snapshots.
 
       // ── 1. Get game list — from cache OR one-time SR schedule fetch ──
       let cachedGames = null; // [{id, scheduled, home_alias, away_alias, status}]
@@ -2075,7 +2100,6 @@ export default async function(req) {
 
           // Fetch BDL odds (no rate limit, fast)
           let odds = null;
-          const bdlGid = bdlGameIds[matchup];
           if (bdlGid) {
             odds = await bdlOdds(league, bdlGid);
           }
@@ -2122,6 +2146,40 @@ export default async function(req) {
           const bdlEnriched = (homeBdl.length > 0 || awayBdl.length > 0);
           log(`${matchup} Q${currentPeriod} ${clock} | ${ind.homePts}-${ind.awayPts} | ${ind.controlTeam} ${ind.score} | I:${ind.I1.score}/${ind.I2.score}/${ind.I3.score}/${ind.I4.score}/${ind.I5.score} | sust:${leadSust || '?'} class:${leadClass || '?'}${bdlEnriched ? ' BDL✓' : ''}${spreadVal != null ? ` spd:${spreadVal}` : ''}${espnWP ? ` | WP:${espnWP.home}%` : ''}`);
 
+          // ── LIGHTWEIGHT ENTRY SIGNAL CHECK (every cycle, no Sonnet needed) ──
+          // Mirrors client synthesizer BUY conditions: floor ≥ 0.70, trailing, deficit 4-15,
+          // opponent FRAGILE/UNSUSTAINABLE, control team NOT FRAGILE
+          {
+            const trailSide = leadSide === 'home' ? 'away' : 'home';
+            const ctrlSide = ind.controlTeam === hA ? 'home' : 'away';
+            const oppSide = ctrlSide === 'home' ? 'away' : 'home';
+            const ctrlSust = sust?.[ctrlSide]?.tier || null;
+            const oppSustTier = sust?.[oppSide]?.tier || null;
+            const ctrlTrailing = (ctrlSide === 'home' && ind.homePts < ind.awayPts) || (ctrlSide === 'away' && ind.awayPts < ind.homePts);
+            const ctrlDeficit = ctrlTrailing ? Math.abs(ind.homePts - ind.awayPts) : 0;
+            const oppFragile = oppSustTier === 'FRAGILE' || oppSustTier === 'UNSUSTAINABLE';
+            const ctrlNotFragile = ctrlSust !== 'FRAGILE' && ctrlSust !== 'UNSUSTAINABLE';
+            const inBuyRange = ctrlDeficit >= 4 && ctrlDeficit <= 15;
+
+            if (ind.score >= 0.70 && ctrlTrailing && inBuyRange && oppFragile && ctrlNotFragile && currentPeriod >= 2) {
+              // Debounce: only fire once per game per period
+              const alertKey = `${game.id}_Q${currentPeriod}`;
+              if (!game._lastAlert || game._lastAlert !== alertKey) {
+                game._lastAlert = alertKey;
+                cacheUpdated = true;
+                const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA}`;
+                const ntfyTitle = `🟢 BUY SIGNAL — ${matchup}`;
+                const ntfyBody = `${scoreLine} Q${currentPeriod} ${clock}`
+                  + `\nFloor: ${ind.controlTeam} ${ind.score.toFixed(2)}`
+                  + `\nDeficit: ${ctrlDeficit} | ${oppSustTier} vs ${ctrlSust || 'N/A'}`
+                  + (spreadVal != null ? `\nSpread: ${spreadVal}` : '')
+                  + (espnWP ? `\nESPN WP: ${espnWP.home}%/${espnWP.away}%` : '')
+                  + `\nClass: ${leadClass || '?'}`;
+                sendNtfy(ntfyTitle, ntfyBody, 5).catch(() => {});
+                log(`${matchup}: 🟢 ENTRY SIGNAL PUSHED — ${ind.controlTeam} ${ind.score.toFixed(2)} trailing by ${ctrlDeficit}, opp ${oppSustTier}`);
+              }
+            }
+          }
           // ── QUARTER-BOUNDARY CALIBRATION SNAPSHOTS ─────────────────
           // Detect Q1→Q2, Q2→Q3, Q3→Q4 transitions. Fire ONCE each per game:
           //   1. Save calibration-tagged snapshot (all data layers fresh from this cycle)
