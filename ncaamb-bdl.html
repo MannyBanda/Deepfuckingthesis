@@ -5723,12 +5723,12 @@ function computeThroughput(game){
   // ── TIME REMAINING (NCAAMB: 2×20 min halves) ──
   var GAME_MINUTES = 40, PERIOD_MINUTES = 20;
   var clockParts = (game.clock||'').split(':');
-  var clockMins = clockParts.length===2 ? parseInt(clockParts[0])+(parseInt(clockParts[1]||0)/60) : PERIOD_MINUTES;
+  var clockMins = clockParts.length===2 ? (parseInt(clockParts[0])||0)+(((parseInt(clockParts[1])||0))/60) : PERIOD_MINUTES;
   var periodsLeft = Math.max(0, 2 - period);
   var minsLeft = clockMins + (periodsLeft * PERIOD_MINUTES);
   var minsElapsed = Math.max(1, GAME_MINUTES - minsLeft);
   var gameFraction = Math.min(1, minsLeft / GAME_MINUTES);
-  if(minsLeft < 2) return null; // too late for throughput model
+  if(minsLeft < 2 || isNaN(minsLeft)) return null;
 
   // ── STRUCTURAL RATE per possession ──
   var isBDL = game.dataSource === 'BDL';
@@ -5737,11 +5737,11 @@ function computeThroughput(game){
   var ctrlStats = ctrlIsHome ? hs : as;
   var oppStats = ctrlIsHome ? as : hs;
 
-  var ctrlPoss = ctrlStats.possessions || 0;
-  var oppPoss = oppStats.possessions || 0;
-  if(ctrlPoss < 3) ctrlPoss = (ctrlStats.field_goals_att||0) + 0.44*(ctrlStats.free_throws_att||0) - (ctrlStats.offensive_rebounds||0) + (ctrlStats.turnovers||ctrlStats.total_turnovers||0);
-  if(oppPoss < 3) oppPoss = (oppStats.field_goals_att||0) + 0.44*(oppStats.free_throws_att||0) - (oppStats.offensive_rebounds||0) + (oppStats.turnovers||oppStats.total_turnovers||0);
-  if(ctrlPoss < 5 || oppPoss < 5) return null;
+  var ctrlPoss = Number(ctrlStats.possessions) || 0;
+  var oppPoss = Number(oppStats.possessions) || 0;
+  if(ctrlPoss < 3) ctrlPoss = (Number(ctrlStats.field_goals_att)||0) + 0.44*(Number(ctrlStats.free_throws_att)||0) - (Number(ctrlStats.offensive_rebounds)||0) + (Number(ctrlStats.turnovers||ctrlStats.total_turnovers)||0);
+  if(oppPoss < 3) oppPoss = (Number(oppStats.field_goals_att)||0) + 0.44*(Number(oppStats.free_throws_att)||0) - (Number(oppStats.offensive_rebounds)||0) + (Number(oppStats.turnovers||oppStats.total_turnovers)||0);
+  if(ctrlPoss < 5 || oppPoss < 5 || isNaN(ctrlPoss) || isNaN(oppPoss)) return null;
 
   var ctrlPaint = ctrlStats.points_in_the_paint || ctrlStats.points_in_paint || 0;
   var ctrlFT = ctrlStats.free_throws_made || 0;
@@ -5779,6 +5779,7 @@ function computeThroughput(game){
   var avgPoss = (ctrlPoss + oppPoss) / 2;
   var possPerMin = avgPoss / minsElapsed;
   var remainingPoss = possPerMin * minsLeft;
+  if(isNaN(remainingPoss) || remainingPoss < 1) return null;
 
   // ── DEFICIT DEGRADATION ──
   var degradation = 1.0;
@@ -5810,6 +5811,9 @@ function computeThroughput(game){
 
   var conservative = bandResults[0], expected = bandResults[1], optimistic = bandResults[2];
 
+  // NaN safety — if any band calculation produced NaN, bail out
+  if(isNaN(conservative.totalSwing) || isNaN(expected.totalSwing) || isNaN(remainingPoss)) return null;
+
   var classification;
   if(conservative.ratio > 1.2) classification = 'STRONG RECOVERY';
   else if(conservative.ratio > 0.9) classification = 'PROBABLE';
@@ -5824,134 +5828,6 @@ function computeThroughput(game){
     structEdge: Math.round(structEdgePerPoss * 1000) / 1000,
     ctrlVar: ctrlVar, oppVar: oppVar, degradation: degradation,
     minsLeft: Math.round(minsLeft * 10) / 10, fTeam: fTeam,
-  };
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// THROUGHPUT RECOVERY MODEL — can the trailing team's engine close the gap?
-// Computes structural scoring rate + variance regression across remaining
-// possessions with conservative/expected/optimistic confidence bands.
-// NCAAMB: 40 min game, 2 halves × 20 min, ~65 possessions/game
-// ══════════════════════════════════════════════════════════════════════════════
-function computeThroughput(game){
-  var cs = cardState[game.id]; if(!cs) return null;
-  var s = game.summary; if(!s || !s.home || !s.away) return null;
-  var hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
-  var hPts = game.homePoints||0, aPts = game.awayPoints||0;
-  var period = game.period||0;
-  if(period < 1) return null;
-
-  var floor = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
-  if(!floor || !floor.score) return null;
-  var fTeam = floor.controlTeam;
-  var ctrlIsHome = fTeam === hA;
-  var ctrlPts = ctrlIsHome ? hPts : aPts;
-  var oppPts = ctrlIsHome ? aPts : hPts;
-  var deficit = oppPts - ctrlPts;
-  if(deficit <= 0) return null; // not trailing — throughput N/A
-
-  // ── TIME REMAINING (NCAAMB: 2×20 min) ──
-  var GAME_MINUTES = 40, PERIOD_MINUTES = 20;
-  var clockParts = (game.clock||'').split(':');
-  var clockMins = clockParts.length===2 ? parseInt(clockParts[0])+(parseInt(clockParts[1]||0)/60) : PERIOD_MINUTES;
-  var periodsLeft = Math.max(0, 2 - period);
-  var minsLeft = clockMins + (periodsLeft * PERIOD_MINUTES);
-  var minsElapsed = Math.max(1, GAME_MINUTES - minsLeft);
-  var gameFraction = Math.min(1, minsLeft / GAME_MINUTES);
-  if(minsLeft < 2) return null; // too late for throughput model
-
-  // ── STRUCTURAL RATE per possession ──
-  var hs = s.home?.statistics || s.home || {};
-  var as = s.away?.statistics || s.away || {};
-  var ctrlStats = ctrlIsHome ? hs : as;
-  var oppStats = ctrlIsHome ? as : hs;
-
-  var ctrlPoss = ctrlStats.possessions || 0;
-  var oppPoss = oppStats.possessions || 0;
-  if(ctrlPoss < 3) ctrlPoss = (ctrlStats.field_goals_att||0) + 0.44*(ctrlStats.free_throws_att||0) - (ctrlStats.offensive_rebounds||0) + (ctrlStats.turnovers||ctrlStats.total_turnovers||0);
-  if(oppPoss < 3) oppPoss = (oppStats.field_goals_att||0) + 0.44*(oppStats.free_throws_att||0) - (oppStats.offensive_rebounds||0) + (oppStats.turnovers||oppStats.total_turnovers||0);
-  if(ctrlPoss < 5 || oppPoss < 5) return null;
-
-  var ctrlPaint = ctrlStats.points_in_the_paint || ctrlStats.points_in_paint || 0;
-  var ctrlFT = ctrlStats.free_throws_made || 0;
-  var ctrlPOT = ctrlStats.points_off_turnovers || 0;
-  var ctrlSCP = ctrlStats.second_chance_points || ctrlStats.second_chance_pts || 0;
-  var ctrlStructRate = (ctrlPaint + ctrlFT + ctrlPOT + ctrlSCP) / ctrlPoss;
-
-  var oppPaint = oppStats.points_in_the_paint || oppStats.points_in_paint || 0;
-  var oppFT = oppStats.free_throws_made || 0;
-  var oppPOT = oppStats.points_off_turnovers || 0;
-  var oppSCP = oppStats.second_chance_points || oppStats.second_chance_pts || 0;
-  var oppStructRate = (oppPaint + oppFT + oppPOT + oppSCP) / oppPoss;
-
-  var structEdgePerPoss = ctrlStructRate - oppStructRate;
-
-  // ── VARIANCE POSITION (3PT deviation from baseline) ──
-  var sust = cs.clientSustainability;
-  var sa = cs.sustainabilityAudit;
-  var ctrlSustData = sust ? (ctrlIsHome ? sust.home : sust.away) : (sa ? (ctrlIsHome ? sa.home : sa.away) : null);
-  var oppSustData = sust ? (ctrlIsHome ? sust.away : sust.home) : (sa ? (ctrlIsHome ? sa.away : sa.home) : null);
-
-  function getVarData(sustObj, stats, poss){
-    if(!sustObj) return {deviation:0, threePARate:0, live3Pct:0, sznPct:33};
-    var livePct = parseFloat(sustObj.live3Pct || 0);
-    var sznPct = parseFloat(sustObj.seasonPrior || sustObj.seasonBaseline || 33);
-    var dev = livePct - sznPct;
-    var tpaRate = poss > 0 ? (stats.three_points_att||0) / poss : 0;
-    return {deviation:dev, threePARate:tpaRate, live3Pct:livePct, sznPct:sznPct};
-  }
-
-  var ctrlVar = getVarData(ctrlSustData, ctrlStats, ctrlPoss);
-  var oppVar = getVarData(oppSustData, oppStats, oppPoss);
-
-  // ── REMAINING POSSESSIONS ──
-  var avgPoss = (ctrlPoss + oppPoss) / 2;
-  var possPerMin = avgPoss / minsElapsed;
-  var remainingPoss = possPerMin * minsLeft;
-
-  // ── DEFICIT DEGRADATION ──
-  var degradation = 1.0;
-  if(deficit >= 24) degradation = 0.70;
-  else if(deficit >= 18) degradation = 0.85;
-
-  // ── CONFIDENCE BANDS ──
-  var bandDefs = [
-    {label:'conservative', baseRate:0.40},
-    {label:'expected',     baseRate:0.65},
-    {label:'optimistic',   baseRate:0.90},
-  ];
-
-  var bandResults = bandDefs.map(function(band){
-    var appliedRegression = band.baseRate * gameFraction;
-    var oppCoolingPerPoss = 0;
-    if(oppVar.deviation > 0){
-      oppCoolingPerPoss = (oppVar.deviation / 100) * appliedRegression * oppVar.threePARate * 3;
-    }
-    var ctrlHeatingPerPoss = 0;
-    if(ctrlVar.deviation < 0){
-      ctrlHeatingPerPoss = (Math.abs(ctrlVar.deviation) / 100) * appliedRegression * ctrlVar.threePARate * 3;
-    }
-    var netSwingPerPoss = (structEdgePerPoss * degradation) + oppCoolingPerPoss + ctrlHeatingPerPoss;
-    var totalSwing = netSwingPerPoss * remainingPoss;
-    var ratio = deficit > 0 ? totalSwing / deficit : 0;
-    return {label:band.label, ratio:Math.round(ratio*100)/100, totalSwing:Math.round(totalSwing*10)/10, netSwingPerPoss:Math.round(netSwingPerPoss*1000)/1000};
-  });
-
-  var conservative = bandResults[0], expected = bandResults[1], optimistic = bandResults[2];
-
-  var classification;
-  if(conservative.ratio > 1.2) classification = 'STRONG RECOVERY';
-  else if(conservative.ratio > 0.9) classification = 'PROBABLE';
-  else if(conservative.ratio > 0.6) classification = 'CONTESTED';
-  else if(conservative.ratio > 0.3) classification = 'UNLIKELY';
-  else classification = 'NO PATH';
-
-  return {
-    classification: classification, deficit: deficit, remainingPoss: Math.round(remainingPoss),
-    conservative: conservative, expected: expected, optimistic: optimistic,
-    ctrlStructRate: Math.round(ctrlStructRate * 1000) / 1000, oppStructRate: Math.round(oppStructRate * 1000) / 1000,
-    structEdge: Math.round(structEdgePerPoss * 1000) / 1000, ctrlVar: ctrlVar, oppVar: oppVar,
-    degradation: degradation, minsLeft: Math.round(minsLeft * 10) / 10, fTeam: fTeam,
   };
 }
 
