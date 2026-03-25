@@ -11,6 +11,9 @@
 // ══════════════════════════════════════════════════════════════════════════════
 
 import { neon } from '@neondatabase/serverless';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const analyzeModule = require('./analyze.js');
 
 // ── CONFIG ──────────────────────────────────────────────────────────────────
 
@@ -1527,8 +1530,6 @@ function parseAnalysisText(text, homeAlias, awayAlias) {
 
 async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, leadComp, espnWP, odds, matchup, hA, aA, period, clock, trigger) {
   const triggerTag = trigger || 'auto_q3';
-  const siteUrl = process.env.URL || '';
-  if (!siteUrl) { log(`${matchup}: ${triggerTag} CAL — no URL env, skipping analysis`); return; }
 
   try {
     // ── 1. Fetch thesis from DB ──
@@ -1674,28 +1675,24 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       } : clientCtx?.espnWP || null,
     };
 
-    // ── 7. Call analyze function ──
+    // ── 7. Call analyze function (in-process, bypasses site password protection) ──
     const ctxStatus = ctxSource === 'client' ? 'client✓' : ctxSource === 'server' ? 'server-computed' : 'no-context';
     log(`${matchup}: ${triggerTag} CAL — firing Sonnet analysis (${ctxStatus} thesis:${thesis ? 'yes' : 'no'} clutch:${clutchData ? 'yes' : 'no'} odds:${odds ? 'yes' : 'no'} wp:${wpProfiles ? 'yes' : 'no'})`);
 
-    // Build auth header for Netlify password-protected sites
-    const sitePass = process.env.SITE_PASSWORD || '';
-    const authHeaders = { 'Content-Type': 'application/json' };
-    if (sitePass) authHeaders['Authorization'] = 'Basic ' + Buffer.from(':' + sitePass).toString('base64');
-
-    const resp = await fetch(`${siteUrl}/.netlify/functions/analyze`, {
-      method: 'POST',
-      headers: authHeaders,
+    const syntheticEvent = {
+      httpMethod: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
-    });
+    };
 
-    if (!resp.ok) {
-      const errText = await resp.text();
-      log(`${matchup}: ${triggerTag} CAL — analyze HTTP ${resp.status}: ${errText.substring(0, 200)}`);
+    const resp = await analyzeModule.handler(syntheticEvent);
+
+    if (!resp || resp.statusCode !== 200) {
+      log(`${matchup}: ${triggerTag} CAL — analyze returned ${resp?.statusCode || 'null'}: ${(resp?.body || '').substring(0, 200)}`);
       return;
     }
 
-    const result = await resp.json();
+    const result = JSON.parse(resp.body);
     if (!result.analysis) {
       log(`${matchup}: ${triggerTag} CAL — analyze returned no text`);
       return;
