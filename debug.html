@@ -2125,7 +2125,7 @@ async function runQA(section){
           var failExamples = {edge:[],pred:[],ind:[]};
 
           anRows.forEach(function(r){
-            if(r.edge){ var m=String(r.edge).match(/([+-]?\d+\.?\d*)/); if(m) edgeParseOK++; else {edgeParseFail++;failExamples.edge.push({edge:r.edge,game:r.game_id});} }
+            if(r.edge){ var _eStr=String(r.edge); if(_eStr.match(/no market/i)){edgeParseOK++;}else{ var m=_eStr.match(/([+-]?\d+\.?\d*)/); if(m) edgeParseOK++; else {edgeParseFail++;failExamples.edge.push({edge:r.edge,game:r.game_id});}} }
             var pj=r.prediction_json;
             if(pj){ try{ if(typeof pj==='string') pj=JSON.parse(pj); if(pj.homeValue&&pj.awayValue&&pj.homeValue.fwp!=null) predJsonOK++; else {predJsonFail++;failExamples.pred.push({keys:Object.keys(pj),game:r.game_id});} }catch(e){predJsonFail++;failExamples.pred.push({raw:String(pj).substring(0,100),err:e.message});} } else predJsonMissing++;
             var ij=r.indicators_json;
@@ -2193,8 +2193,8 @@ async function runQA(section){
               try{if(typeof sd==='string')sd=JSON.parse(sd);}catch(e){return;}
               if(sd.throughput){tpFound++;if(sd.throughput.classification&&validTP.indexOf(sd.throughput.classification)>=0&&typeof sd.throughput.conservative==='number'&&!isNaN(sd.throughput.conservative))tpValid++;else tpBadExamples.push({idx:idx,period:r.period,clock:r.clock,tp:sd.throughput});}
               if(sd.leadSafety){lsFound++;if(sd.leadSafety.classification&&validLS.indexOf(sd.leadSafety.classification)>=0&&typeof sd.leadSafety.conservative==='number'&&!isNaN(sd.leadSafety.conservative))lsValid++;else lsBadExamples.push({idx:idx,period:r.period,clock:r.clock,ls:sd.leadSafety});}
-              if(sd.sustainability||sd.sust_json)sustFound++;
-              if(r.floor_score||sd.controlScore||sd.floorScore)floorFound++;
+              if(sd.sustainability||sd.sust_json||r.sust_json)sustFound++;
+              if(r.floor_score!=null||r.floor_team||sd.controlScore!=null||sd.floorScore!=null)floorFound++;
             });
 
             if(tpFound>0){ok('SNAP','throughput:found',tpFound+'/'+snRows.length);if(tpValid===tpFound)ok('SNAP','throughput:valid','All valid');else bad('SNAP','throughput:invalid',(tpFound-tpValid)+' invalid',snap(tpBadExamples));}
