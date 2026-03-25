@@ -2048,10 +2048,9 @@ document.getElementById('game-selector-card').style.display = 'block';
 checkDB();
 
 // ══════════════════════════════════════════════════════════════════════════════
-// QA VALIDATION SUITE — tests BDL pipeline, server polling, analyses,
-// throughput/lead safety, snapshots, odds, and data integrity
-// Run all: runQA() | Run section: runQA('polling') | runQA('analyses') etc.
+// QA VALIDATION SUITE
 // ══════════════════════════════════════════════════════════════════════════════
+var _qaIdx = 0;
 async function runQA(section){
   var qaEl = document.getElementById('qa-results');
   qaEl.style.display = 'block';
@@ -2063,9 +2062,10 @@ async function runQA(section){
 
   var results = [];
   var pass=0, fail=0, warn=0;
-  function ok(group, label, detail){ results.push({status:'PASS',group:group,label:label,detail:detail||''}); pass++; }
-  function bad(group, label, detail){ results.push({status:'FAIL',group:group,label:label,detail:detail||''}); fail++; }
-  function meh(group, label, detail){ results.push({status:'WARN',group:group,label:label,detail:detail||''}); warn++; }
+  function ok(group, label, detail, dbg){ results.push({status:'PASS',group:group,label:label,detail:detail||'',dbg:dbg||null}); pass++; }
+  function bad(group, label, detail, dbg){ results.push({status:'FAIL',group:group,label:label,detail:detail||'',dbg:dbg||null}); fail++; }
+  function meh(group, label, detail, dbg){ results.push({status:'WARN',group:group,label:label,detail:detail||'',dbg:dbg||null}); warn++; }
+  function snap(obj){ try{return JSON.stringify(obj,null,2).substring(0,3000);}catch(e){return String(obj).substring(0,1000);} }
 
   var runAll = !section;
 
@@ -2075,28 +2075,28 @@ async function runQA(section){
       try {
         var hbData = await fetchJSON(FN+'db-api?action=heartbeat_check&league=nba');
         if(!hbData){
-          bad('POLL','heartbeat','Failed to fetch heartbeat');
+          bad('POLL','heartbeat','Failed to fetch heartbeat',snap({url:FN+'db-api?action=heartbeat_check&league=nba',response:hbData}));
         } else if(hbData.clientActive){
-          ok('POLL','heartbeat:active','Client active — last poll '+Math.round(hbData.ageMinutes)+'m ago ('+hbData.device+')');
+          ok('POLL','heartbeat:active','Client active — last poll '+Math.round(hbData.ageMinutes)+'m ago ('+hbData.device+')',snap(hbData));
         } else if(hbData.lastPoll){
           var ageMins = hbData.ageMinutes || 999;
-          if(ageMins < 60) meh('POLL','heartbeat:idle','Client idle — last poll '+Math.round(ageMins)+'m ago');
-          else bad('POLL','heartbeat:stale','Client stale — last poll '+Math.round(ageMins)+'m ago');
+          if(ageMins < 60) meh('POLL','heartbeat:idle','Client idle — last poll '+Math.round(ageMins)+'m ago',snap(hbData));
+          else bad('POLL','heartbeat:stale','Client stale — last poll '+Math.round(ageMins)+'m ago',snap(hbData));
         } else {
-          meh('POLL','heartbeat:none','No heartbeat records found');
+          meh('POLL','heartbeat:none','No heartbeat records found',snap(hbData));
         }
 
         var psData = await fetchJSON(FN+'db-api?action=get_poll_state&league=nba');
         if(!psData || !psData.state){
-          meh('POLL','poll_state','No poll_state for NBA');
+          meh('POLL','poll_state','No poll_state for NBA',snap(psData));
         } else {
           var ps = psData.state;
           var psAge = ps.fetched_at ? (Date.now() - new Date(ps.fetched_at).getTime()) / 3600000 : 999;
           ok('POLL','poll_state','Date: '+ps.date+' | Games: '+ps.game_count+' | All final: '+(ps.all_final?'YES':'NO'));
-          if(psAge > 24) meh('POLL','schedule:stale','Schedule cache '+psAge.toFixed(0)+'h old');
+          if(psAge > 24) meh('POLL','schedule:stale','Schedule cache '+psAge.toFixed(0)+'h old',snap({fetched_at:ps.fetched_at,ageHours:psAge}));
           else ok('POLL','schedule:fresh','Schedule fetched '+psAge.toFixed(1)+'h ago');
         }
-      } catch(e){ bad('POLL','error',e.message); }
+      } catch(e){ bad('POLL','error',e.message,snap({stack:e.stack})); }
     }
 
     // 2. ANALYSES PIPELINE
@@ -2108,46 +2108,42 @@ async function runQA(section){
         var anData = await fetchJSON(anUrl);
         var anRows = [];
         if(anData && anData.analyses){
-          if(Array.isArray(anData.analyses)){
-            anRows = anData.analyses;
-          } else {
-            Object.keys(anData.analyses).forEach(function(gid){
-              anRows = anRows.concat(anData.analyses[gid]);
-            });
-          }
+          if(Array.isArray(anData.analyses)) anRows = anData.analyses;
+          else Object.keys(anData.analyses).forEach(function(gid){ anRows = anRows.concat(anData.analyses[gid]); });
         }
 
         if(anRows.length === 0){
-          meh('ANAL','no_data','No analyses found'+(selectedGameId?' for this game':''));
+          meh('ANAL','no_data','No analyses found'+(selectedGameId?' for this game':''),snap({url:anUrl,response:anData}));
         } else {
           ok('ANAL','count',anRows.length+' analyses');
           var autoCount = anRows.filter(function(r){return r.trigger && r.trigger.startsWith('auto');}).length;
           var manualCount = anRows.filter(function(r){return !r.trigger || r.trigger === 'manual';}).length;
           ok('ANAL','triggers','Auto: '+autoCount+' | Manual: '+manualCount);
 
-          var edgeParseOK=0, edgeParseFail=0, predJsonOK=0, predJsonFail=0, predJsonMissing=0;
-          var indJsonOK=0, indJsonFail=0, indJsonMissing=0, sustOK=0, sustMissing=0, fwpOK=0, fwpMissing=0;
+          var edgeParseOK=0,edgeParseFail=0,predJsonOK=0,predJsonFail=0,predJsonMissing=0;
+          var indJsonOK=0,indJsonFail=0,indJsonMissing=0,sustOK=0,sustMissing=0,fwpOK=0,fwpMissing=0;
+          var failExamples = {edge:[],pred:[],ind:[]};
 
           anRows.forEach(function(r){
-            if(r.edge){ var m=String(r.edge).match(/([+-]?\d+\.?\d*)/); if(m) edgeParseOK++; else edgeParseFail++; }
+            if(r.edge){ var m=String(r.edge).match(/([+-]?\d+\.?\d*)/); if(m) edgeParseOK++; else {edgeParseFail++;failExamples.edge.push({edge:r.edge,game:r.game_id});} }
             var pj=r.prediction_json;
-            if(pj){ try{ if(typeof pj==='string') pj=JSON.parse(pj); if(pj.homeValue&&pj.awayValue&&pj.homeValue.fwp!=null) predJsonOK++; else predJsonFail++; }catch(e){predJsonFail++;} } else predJsonMissing++;
+            if(pj){ try{ if(typeof pj==='string') pj=JSON.parse(pj); if(pj.homeValue&&pj.awayValue&&pj.homeValue.fwp!=null) predJsonOK++; else {predJsonFail++;failExamples.pred.push({keys:Object.keys(pj),game:r.game_id});} }catch(e){predJsonFail++;failExamples.pred.push({raw:String(pj).substring(0,100),err:e.message});} } else predJsonMissing++;
             var ij=r.indicators_json;
-            if(ij){ try{ if(typeof ij==='string') ij=JSON.parse(ij); if(ij.I1&&ij.I2&&ij.I3) indJsonOK++; else indJsonFail++; }catch(e){indJsonFail++;} } else indJsonMissing++;
+            if(ij){ try{ if(typeof ij==='string') ij=JSON.parse(ij); if(ij.I1&&ij.I2&&ij.I3) indJsonOK++; else {indJsonFail++;failExamples.ind.push({keys:Object.keys(ij),game:r.game_id});} }catch(e){indJsonFail++;} } else indJsonMissing++;
             if(r.sustainability&&r.sustainability.length>3) sustOK++; else sustMissing++;
             if(r.fwp&&r.fwp.length>3) fwpOK++; else fwpMissing++;
           });
 
-          if(edgeParseFail>0) bad('ANAL','edge:parse',edgeParseFail+'/'+anRows.length+' unparseable');
+          if(edgeParseFail>0) bad('ANAL','edge:parse',edgeParseFail+'/'+anRows.length+' unparseable',snap(failExamples.edge));
           else if(edgeParseOK>0) ok('ANAL','edge:parse',edgeParseOK+'/'+anRows.length+' parse OK');
-          if(predJsonFail>0) bad('ANAL','pred_json',predJsonFail+' malformed');
+          if(predJsonFail>0) bad('ANAL','pred_json',predJsonFail+' malformed',snap(failExamples.pred));
           else if(predJsonOK>0) ok('ANAL','pred_json',predJsonOK+' valid, '+predJsonMissing+' missing');
-          else if(predJsonMissing===anRows.length) meh('ANAL','pred_json','All lack prediction_json');
-          if(indJsonFail>0) bad('ANAL','ind_json',indJsonFail+' malformed');
+          else if(predJsonMissing===anRows.length) meh('ANAL','pred_json','All lack prediction_json',snap({sample:anRows[0]?{edge:anRows[0].edge,fwp:anRows[0].fwp,trigger:anRows[0].trigger}:null}));
+          if(indJsonFail>0) bad('ANAL','ind_json',indJsonFail+' malformed',snap(failExamples.ind));
           else if(indJsonOK>0) ok('ANAL','ind_json',indJsonOK+' valid');
-          if(sustMissing>anRows.length*0.5) meh('ANAL','sustainability',sustOK+'/'+anRows.length+' have sustainability');
+          if(sustMissing>anRows.length*0.5) meh('ANAL','sustainability',sustOK+'/'+anRows.length+' have sustainability',snap({sampleSust:anRows.slice(0,3).map(function(r){return{sust:r.sustainability,trigger:r.trigger};})}));
           else ok('ANAL','sustainability',sustOK+'/'+anRows.length+' have sustainability');
-          if(fwpMissing>anRows.length*0.5) meh('ANAL','fwp',fwpOK+'/'+anRows.length+' have FWP');
+          if(fwpMissing>anRows.length*0.5) meh('ANAL','fwp',fwpOK+'/'+anRows.length+' have FWP',snap({sampleFWP:anRows.slice(0,3).map(function(r){return{fwp:r.fwp,trigger:r.trigger};})}));
           else ok('ANAL','fwp',fwpOK+'/'+anRows.length+' have FWP');
 
           var hydratable=0;
@@ -2159,14 +2155,14 @@ async function runQA(section){
             if(hasEdgeStr||hasFwpEdge) hydratable++;
           });
           if(hydratable>0) ok('ANAL','edgeNum:hydration',hydratable+'/'+anRows.length+' can hydrate edgeNum');
-          else meh('ANAL','edgeNum:hydration','0 can hydrate — BWC requires edge data');
+          else meh('ANAL','edgeNum:hydration','0 can hydrate — BWC requires edge data',snap({sampleEdge:anRows.slice(0,3).map(function(r){return{edge:r.edge,pred_json_keys:r.prediction_json?Object.keys(typeof r.prediction_json==='string'?JSON.parse(r.prediction_json):r.prediction_json):'null'};})}));
 
           var buyCount=anRows.filter(function(r){return r.signal&&r.signal.toUpperCase().startsWith('BUY');}).length;
           var noValCount=anRows.filter(function(r){return r.signal&&r.signal.toUpperCase().includes('NO VALUE');}).length;
           var passCount=anRows.filter(function(r){return r.signal&&r.signal.toUpperCase().includes('PASS');}).length;
           ok('SIG','distribution','BUY='+buyCount+' NO_VALUE='+noValCount+' PASS='+passCount+' (of '+anRows.length+')');
         }
-      } catch(e){ bad('ANAL','error',e.message); }
+      } catch(e){ bad('ANAL','error',e.message,snap({stack:e.stack})); }
     }
 
     // 3. SNAPSHOTS
@@ -2178,7 +2174,7 @@ async function runQA(section){
           var snData = await fetchJSON(FN+'db-api?action=history&game_id='+encodeURIComponent(selectedGameId));
           var snRows = (snData && snData.snapshots) || [];
           if(snRows.length === 0){
-            meh('SNAP','no_data','No snapshots for this game');
+            meh('SNAP','no_data','No snapshots for this game',snap({url:FN+'db-api?action=history&game_id='+selectedGameId,response:snData}));
           } else {
             ok('SNAP','count',snRows.length+' snapshots');
             var serverCount=snRows.filter(function(r){return r.source==='server';}).length;
@@ -2187,22 +2183,23 @@ async function runQA(section){
             if(serverCount>0) ok('SNAP','server_polling','Server polling produced '+serverCount+' snapshots');
 
             var tpFound=0,lsFound=0,sustFound=0,floorFound=0,tpValid=0,lsValid=0;
+            var tpBadExamples=[], lsBadExamples=[];
             var validTP=['STRONG RECOVERY','PROBABLE','CONTESTED','UNLIKELY','NO PATH'];
             var validLS=['SAFE','CUSHIONED','AT RISK','CRITICAL'];
 
-            snRows.forEach(function(r){
+            snRows.forEach(function(r,idx){
               var sd=r.snapshot_data;
               if(!sd)return;
               try{if(typeof sd==='string')sd=JSON.parse(sd);}catch(e){return;}
-              if(sd.throughput){tpFound++;if(sd.throughput.classification&&validTP.indexOf(sd.throughput.classification)>=0&&typeof sd.throughput.conservative==='number'&&!isNaN(sd.throughput.conservative))tpValid++;}
-              if(sd.leadSafety){lsFound++;if(sd.leadSafety.classification&&validLS.indexOf(sd.leadSafety.classification)>=0&&typeof sd.leadSafety.conservative==='number'&&!isNaN(sd.leadSafety.conservative))lsValid++;}
+              if(sd.throughput){tpFound++;if(sd.throughput.classification&&validTP.indexOf(sd.throughput.classification)>=0&&typeof sd.throughput.conservative==='number'&&!isNaN(sd.throughput.conservative))tpValid++;else tpBadExamples.push({idx:idx,period:r.period,clock:r.clock,tp:sd.throughput});}
+              if(sd.leadSafety){lsFound++;if(sd.leadSafety.classification&&validLS.indexOf(sd.leadSafety.classification)>=0&&typeof sd.leadSafety.conservative==='number'&&!isNaN(sd.leadSafety.conservative))lsValid++;else lsBadExamples.push({idx:idx,period:r.period,clock:r.clock,ls:sd.leadSafety});}
               if(sd.sustainability||sd.sust_json)sustFound++;
               if(r.floor_score||sd.controlScore||sd.floorScore)floorFound++;
             });
 
-            if(tpFound>0){ok('SNAP','throughput:found',tpFound+'/'+snRows.length);if(tpValid===tpFound)ok('SNAP','throughput:valid','All valid');else bad('SNAP','throughput:invalid',(tpFound-tpValid)+' invalid');}
+            if(tpFound>0){ok('SNAP','throughput:found',tpFound+'/'+snRows.length);if(tpValid===tpFound)ok('SNAP','throughput:valid','All valid');else bad('SNAP','throughput:invalid',(tpFound-tpValid)+' invalid',snap(tpBadExamples));}
             else meh('SNAP','throughput:none','Needs trailing control team, period 2+');
-            if(lsFound>0){ok('SNAP','leadSafety:found',lsFound+'/'+snRows.length);if(lsValid===lsFound)ok('SNAP','leadSafety:valid','All valid');else bad('SNAP','leadSafety:invalid',(lsFound-lsValid)+' invalid');}
+            if(lsFound>0){ok('SNAP','leadSafety:found',lsFound+'/'+snRows.length);if(lsValid===lsFound)ok('SNAP','leadSafety:valid','All valid');else bad('SNAP','leadSafety:invalid',(lsFound-lsValid)+' invalid',snap(lsBadExamples));}
             else meh('SNAP','leadSafety:none','Needs leading control team (lead>=2), period 2+');
             if(sustFound>0) ok('SNAP','sustainability',sustFound+'/'+snRows.length); else meh('SNAP','sustainability:none','No sustainability');
             if(floorFound>0) ok('SNAP','floor',floorFound+'/'+snRows.length); else meh('SNAP','floor:none','No floor score');
@@ -2214,7 +2211,7 @@ async function runQA(section){
             }
           }
         }
-      } catch(e){ bad('SNAP','error',e.message); }
+      } catch(e){ bad('SNAP','error',e.message,snap({stack:e.stack})); }
     }
 
     // 4. BDL DATA TYPE SAFETY
@@ -2227,43 +2224,40 @@ async function runQA(section){
         var bdlGames=(bData&&bData.data)||[];
         if(bdlGames.length===0&&!selectedGame){bData=await fetchJSON(FN+'bdl-data?type=box_scores&league=nba&date='+today);bdlGames=(bData&&bData.data)||[];}
         if(bdlGames.length===0){
-          meh('BDL','no_games','No box scores found — try during game day');
+          meh('BDL','no_games','No box scores found',snap({targetDate:targetDate,response:bData}));
         } else {
           var g=bdlGames[0];
           if(selectedGameId){
             var matched=bdlGames.find(function(bg){return String(bg.id)===String(selectedGameId);});
             if(!matched&&selectedGame){
               var dbHome=(selectedGame.home_alias||'').toUpperCase(), dbAway=(selectedGame.away_alias||'').toUpperCase();
-              matched=bdlGames.find(function(bg){
-                var bH=(bg.home_team?.abbreviation||'').toUpperCase(), bA=(bg.visitor_team?.abbreviation||bg.away_team?.abbreviation||'').toUpperCase();
-                return(bH===dbHome&&bA===dbAway)||(bH===dbAway&&bA===dbHome);
-              });
+              matched=bdlGames.find(function(bg){var bH=(bg.home_team?.abbreviation||'').toUpperCase(),bA=(bg.visitor_team?.abbreviation||bg.away_team?.abbreviation||'').toUpperCase();return(bH===dbHome&&bA===dbAway)||(bH===dbAway&&bA===dbHome);});
             }
             if(matched){g=matched;ok('BDL','game_match','Matched selected game');}
-            else meh('BDL','game_match','Selected game not found in BDL — testing first available');
+            else meh('BDL','game_match','Not found in BDL — testing first available',snap({searched:{id:selectedGameId,home:selectedGame?.home_alias,away:selectedGame?.away_alias},available:bdlGames.slice(0,3).map(function(bg){return{id:bg.id,home:bg.home_team?.abbreviation,away:bg.visitor_team?.abbreviation||bg.away_team?.abbreviation};})}));
           }
           ok('BDL','box_scores',bdlGames.length+' games, testing: '+(g.home_team?.abbreviation||'?')+' vs '+(g.visitor_team?.abbreviation||g.away_team?.abbreviation||'?'));
           var hStats=g.home_team_stats||{};
           var stringFields=['pts','fgm','fga','fg3m','fg3a','ftm','fta','ast','reb','stl','blk','turnover','oreb','dreb','pf'];
-          var stringsFound=0,numbersFound=0;
-          stringFields.forEach(function(f){var v=hStats[f];if(v===undefined)return;if(typeof v==='string')stringsFound++;else if(typeof v==='number')numbersFound++;});
-          if(stringsFound>0) ok('BDL','type:strings',stringsFound+' fields are strings (expected)');
-          if(numbersFound>0) meh('BDL','type:numbers',numbersFound+' already numbers');
-          var nanCount=0;
-          stringFields.forEach(function(f){var v=hStats[f];if(v!==undefined&&isNaN(Number(v)))nanCount++;});
-          if(nanCount>0) bad('BDL','type:NaN',nanCount+' fields produce NaN');
+          var stringsFound=0,numbersFound=0,typeMap={};
+          stringFields.forEach(function(f){var v=hStats[f];if(v===undefined)return;typeMap[f]=typeof v+'='+v;if(typeof v==='string')stringsFound++;else if(typeof v==='number')numbersFound++;});
+          if(stringsFound>0) ok('BDL','type:strings',stringsFound+' fields are strings (expected)',snap(typeMap));
+          if(numbersFound>0) meh('BDL','type:numbers',numbersFound+' already numbers',snap(typeMap));
+          var nanFields=[];
+          stringFields.forEach(function(f){var v=hStats[f];if(v!==undefined&&isNaN(Number(v)))nanFields.push(f+'='+v);});
+          if(nanFields.length>0) bad('BDL','type:NaN',nanFields.length+' produce NaN',snap(nanFields));
           else ok('BDL','type:NaN','All safe after Number()');
           var hPlayers=g.home_team?.players||[], aPlayers=g.away_team?.players||g.visitor_team?.players||[];
-          if(hPlayers.length>0) ok('BDL','players:home',hPlayers.length+' players'); else bad('BDL','players:home','No home players');
-          if(aPlayers.length>0) ok('BDL','players:away',aPlayers.length+' players'); else bad('BDL','players:away','No away players');
+          if(hPlayers.length>0) ok('BDL','players:home',hPlayers.length+' players'); else bad('BDL','players:home','No home players',snap({home_team:g.home_team?Object.keys(g.home_team):'null'}));
+          if(aPlayers.length>0) ok('BDL','players:away',aPlayers.length+' players'); else bad('BDL','players:away','No away players',snap({away_team:g.away_team?Object.keys(g.away_team):'null',visitor_team:g.visitor_team?Object.keys(g.visitor_team):'null'}));
           try{
             var advData=await fetchJSON(FN+'bdl-data?type=advanced_stats&league=nba&game_id='+g.id);
             var advRows=(advData&&advData.data)||[];
-            if(advRows.length>0){ok('BDL','advanced',advRows.length+' rows');var advF=['off_rating','def_rating','possessions','pie','pace'];var advP=advF.filter(function(f){return advRows[0][f]!==undefined;});ok('BDL','advanced:fields',advP.join(', '));}
-            else meh('BDL','advanced:empty','No advanced stats');
+            if(advRows.length>0){ok('BDL','advanced',advRows.length+' rows');var advF=['off_rating','def_rating','possessions','pie','pace'];var advP=advF.filter(function(f){return advRows[0][f]!==undefined;});ok('BDL','advanced:fields',advP.join(', '),snap(advRows[0]));}
+            else meh('BDL','advanced:empty','No advanced stats',snap({url:FN+'bdl-data?type=advanced_stats&league=nba&game_id='+g.id,response:advData}));
           }catch(e){meh('BDL','advanced:error',e.message);}
         }
-      } catch(e){ bad('BDL','error',e.message); }
+      } catch(e){ bad('BDL','error',e.message,snap({stack:e.stack})); }
     }
 
     // 5. ODDS DATA
@@ -2275,12 +2269,12 @@ async function runQA(section){
           var odData=await fetchJSON(FN+'db-api?action=get_odds&game_id='+encodeURIComponent(selectedGameId));
           var odRows=(odData&&odData.odds)||[];
           if(odRows.length===0){
-            meh('ODDS','no_data','No odds for this game');
+            meh('ODDS','no_data','No odds for this game',snap({url:FN+'db-api?action=get_odds&game_id='+selectedGameId,response:odData}));
           } else {
             ok('ODDS','count',odRows.length+' odds records');
-            var parseOK=0,parseBad=0;
-            odRows.forEach(function(r){var sp=parseFloat(r.home_spread),ml=parseFloat(r.home_ml);if(!isNaN(sp)&&!isNaN(ml))parseOK++;else parseBad++;});
-            if(parseBad>0) bad('ODDS','parse',parseBad+' unparseable'); else ok('ODDS','parse','All '+parseOK+' parse OK');
+            var parseOK=0,parseBad=0,badOddsExamples=[];
+            odRows.forEach(function(r){var sp=parseFloat(r.home_spread),ml=parseFloat(r.home_ml);if(!isNaN(sp)&&!isNaN(ml))parseOK++;else{parseBad++;badOddsExamples.push({home_spread:r.home_spread,home_ml:r.home_ml,away_ml:r.away_ml});}});
+            if(parseBad>0) bad('ODDS','parse',parseBad+' unparseable',snap(badOddsExamples)); else ok('ODDS','parse','All '+parseOK+' parse OK');
             var latestOdds=new Date(odRows[odRows.length-1].ts||odRows[odRows.length-1].created_at);
             var oddsAge=(Date.now()-latestOdds.getTime())/3600000;
             if(oddsAge<12) ok('ODDS','fresh','Latest '+oddsAge.toFixed(1)+'h old'); else meh('ODDS','age','Latest '+oddsAge.toFixed(0)+'h old');
@@ -2290,10 +2284,10 @@ async function runQA(section){
             if(odRows.length>=2){var fs=parseFloat(odRows[0].home_spread),ls=parseFloat(odRows[odRows.length-1].home_spread);if(!isNaN(fs)&&!isNaN(ls))ok('ODDS','movement','Spread moved '+Math.abs(ls-fs).toFixed(1)+' pts ('+fs+' → '+ls+')');}
           }
         }
-      } catch(e){ bad('ODDS','error',e.message); }
+      } catch(e){ bad('ODDS','error',e.message,snap({stack:e.stack})); }
     }
 
-  } catch(e){ bad('SYSTEM','fatal',e.message); }
+  } catch(e){ bad('SYSTEM','fatal',e.message,snap({stack:e.stack})); }
 
   // RENDER RESULTS
   var h = '<div style="padding:10px">';
@@ -2319,10 +2313,19 @@ async function runQA(section){
     items.forEach(function(r){
       var color=r.status==='PASS'?'#00ff88':r.status==='FAIL'?'#ff5252':'#ffd166';
       var icon=r.status==='PASS'?'✓':r.status==='FAIL'?'✗':'⚠';
-      h+='<div style="display:flex;gap:6px;padding:2px 0;border-top:1px solid rgba(255,255,255,.03);font-size:10px">';
+      var hasDbg = r.dbg && (r.status==='FAIL'||r.status==='WARN');
+      var rid = 'qa-dbg-'+(_qaIdx++);
+      h+='<div style="border-top:1px solid rgba(255,255,255,.03)">';
+      h+='<div style="display:flex;gap:6px;padding:2px 0;font-size:10px;'+(hasDbg?'cursor:pointer':'')+ '"'+(hasDbg?' onclick="var el=document.getElementById(\''+rid+'\');el.style.display=el.style.display===\'none\'?\'block\':\'none\'"':'')+'>';
       h+='<span style="color:'+color+';font-weight:700;min-width:12px">'+icon+'</span>';
       h+='<span style="color:#94a3b8;min-width:110px">'+escH(r.label)+'</span>';
-      h+='<span style="color:#e2e8f0;word-break:break-word">'+escH(r.detail)+'</span></div>';
+      h+='<span style="color:#e2e8f0;word-break:break-word;flex:1">'+escH(r.detail)+'</span>';
+      if(hasDbg) h+='<span style="color:#64748b;font-size:8px;white-space:nowrap">TAP ▶</span>';
+      h+='</div>';
+      if(hasDbg){
+        h+='<pre id="'+rid+'" style="display:none;background:#0f172a;border:1px solid #1e293b;border-radius:4px;padding:6px;margin:2px 0 4px 18px;font-size:9px;color:#94a3b8;max-height:200px;overflow:auto;white-space:pre-wrap;word-break:break-all">'+escH(r.dbg)+'</pre>';
+      }
+      h+='</div>';
     });
     h+='</div>';
   });
