@@ -1678,9 +1678,14 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
     const ctxStatus = ctxSource === 'client' ? 'client✓' : ctxSource === 'server' ? 'server-computed' : 'no-context';
     log(`${matchup}: ${triggerTag} CAL — firing Sonnet analysis (${ctxStatus} thesis:${thesis ? 'yes' : 'no'} clutch:${clutchData ? 'yes' : 'no'} odds:${odds ? 'yes' : 'no'} wp:${wpProfiles ? 'yes' : 'no'})`);
 
+    // Build auth header for Netlify password-protected sites
+    const sitePass = process.env.SITE_PASSWORD || '';
+    const authHeaders = { 'Content-Type': 'application/json' };
+    if (sitePass) authHeaders['Authorization'] = 'Basic ' + Buffer.from(':' + sitePass).toString('base64');
+
     const resp = await fetch(`${siteUrl}/.netlify/functions/analyze`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify(payload),
     });
 
