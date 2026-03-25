@@ -2521,11 +2521,19 @@ async function refreshLiveCards(){
     }).catch(function(){});
   }
 
-  // Collect live games that need refreshing
+  // Collect games that need refreshing — LIVE games always, PRE games past tip-off
   var liveGames = [];
+  var now = Date.now();
   selIds.forEach(function(id){
     var g = games.find(function(x){ return x.id===id; });
-    if(g && getState(g)==='LIVE') liveGames.push(g);
+    if(!g) return;
+    var state = getState(g);
+    if(state === 'LIVE') { liveGames.push(g); return; }
+    // Include PRE games whose scheduled time has passed (may have tipped off)
+    if(state === 'PRE' && g.scheduled){
+      var tipTime = new Date(g.scheduled).getTime();
+      if(!isNaN(tipTime) && now > tipTime) liveGames.push(g);
+    }
   });
   if(liveGames.length === 0) return;
 
