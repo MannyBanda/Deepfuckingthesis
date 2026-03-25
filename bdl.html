@@ -6835,16 +6835,16 @@ function computeThroughput(game){
   if(ctrlPoss < 5 || oppPoss < 5 || isNaN(ctrlPoss) || isNaN(oppPoss)) return null;
 
   // Structural points = paint + FT + POT + SCP (durable scoring sources)
-  var ctrlPaint = ctrlStats.points_in_the_paint || ctrlStats.points_in_paint || 0;
-  var ctrlFT = ctrlStats.free_throws_made || 0;
-  var ctrlPOT = ctrlStats.points_off_turnovers || 0;
-  var ctrlSCP = ctrlStats.second_chance_points || ctrlStats.second_chance_pts || 0;
+  var ctrlPaint = Number(ctrlStats.points_in_the_paint || ctrlStats.points_in_paint) || 0;
+  var ctrlFT = Number(ctrlStats.free_throws_made) || 0;
+  var ctrlPOT = Number(ctrlStats.points_off_turnovers) || 0;
+  var ctrlSCP = Number(ctrlStats.second_chance_points || ctrlStats.second_chance_pts) || 0;
   var ctrlStructRate = (ctrlPaint + ctrlFT + ctrlPOT + ctrlSCP) / ctrlPoss;
 
-  var oppPaint = oppStats.points_in_the_paint || oppStats.points_in_paint || 0;
-  var oppFT = oppStats.free_throws_made || 0;
-  var oppPOT = oppStats.points_off_turnovers || 0;
-  var oppSCP = oppStats.second_chance_points || oppStats.second_chance_pts || 0;
+  var oppPaint = Number(oppStats.points_in_the_paint || oppStats.points_in_paint) || 0;
+  var oppFT = Number(oppStats.free_throws_made) || 0;
+  var oppPOT = Number(oppStats.points_off_turnovers) || 0;
+  var oppSCP = Number(oppStats.second_chance_points || oppStats.second_chance_pts) || 0;
   var oppStructRate = (oppPaint + oppFT + oppPOT + oppSCP) / oppPoss;
 
   var structEdgePerPoss = ctrlStructRate - oppStructRate;
@@ -6860,7 +6860,7 @@ function computeThroughput(game){
     var livePct = parseFloat(sustObj.live3Pct || 0);
     var sznPct = parseFloat(sustObj.seasonPrior || sustObj.seasonBaseline || 36);
     var dev = livePct - sznPct;
-    var tpaRate = poss > 0 ? (stats.three_points_att||0) / poss : 0;
+    var tpaRate = poss > 0 ? (Number(stats.three_points_att)||0) / poss : 0;
     return {deviation:dev, threePARate:tpaRate, live3Pct:livePct, sznPct:sznPct};
   }
 
