@@ -1306,11 +1306,23 @@ function applyAutoAnalysesToCards(){
         leadSource: latest.lead_source || null,
         fwp: latest.fwp || null,
         edge: latest.edge || null,
+        edgeNum: null,
         prediction: null, // will be extracted from raw text below
         homeValue: pred ? pred.homeValue : null,
         awayValue: pred ? pred.awayValue : null,
         source: 'auto',
       };
+      // Hydrate edgeNum so synthesizer has edge data on first render
+      if(latest.edge){
+        var _enMatch = String(latest.edge).match(/([+-]?\d+\.?\d*)/);
+        if(_enMatch) autoDecision.edgeNum = parseFloat(_enMatch[1]);
+      }
+      if(autoDecision.edgeNum === null && autoDecision.homeValue && autoDecision.awayValue){
+        var _hE = autoDecision.homeValue.edge, _aE = autoDecision.awayValue.edge;
+        if(_hE !== null && _aE !== null){
+          autoDecision.edgeNum = Math.max(_hE, _aE);
+        }
+      }
 
       // Extract prediction line from raw text
       if(latest.raw_text){
@@ -2989,6 +3001,17 @@ async function triggerAnalysis(game){
           oppStructRate: cs.throughput.oppStructRate,
           degradation: cs.throughput.degradation,
           fTeam: cs.throughput.fTeam,
+        } : null,
+        leadSafety: cs.leadSafety ? {
+          classification: cs.leadSafety.classification,
+          lead: cs.leadSafety.lead,
+          conservative: Math.round(cs.leadSafety.conservative.totalSwing),
+          expected: Math.round(cs.leadSafety.expected.totalSwing),
+          optimistic: Math.round(cs.leadSafety.optimistic.totalSwing),
+          remainingPoss: cs.leadSafety.remainingPoss,
+          structEdge: cs.leadSafety.structEdge,
+          fTeam: cs.leadSafety.fTeam,
+          oppTeam: cs.leadSafety.oppTeam,
         } : null,
         wpProfiles: _wpProfileText || null,
         espnWP: cs.espnWP ? {
@@ -6004,9 +6027,25 @@ function synthesize(game){
     action = 'TOO DEEP'; actionColor = 'var(--red)';
     lines.push('Deficit exceeds structural recovery range.');
     triggers.push('Deficit narrows to 10-15');
-  } else if(fScore >= 0.70 && !trailing && deficit > 3){
-    action = 'NO VALUE'; actionColor = 'var(--t2)';
-    lines.push('Market already prices ' + fTeam + ' advantage.');
+  } else if(fScore >= 0.70 && !trailing && deficit >= 2){
+    // Edge-based: check if there's still betting value on the leading structural team
+    var _pred = cs.prediction;
+    var ctrlEdge = null;
+    if(_pred && _pred.homeValue && _pred.awayValue){
+      ctrlEdge = ctrlIsHome ? _pred.homeValue.edge : _pred.awayValue.edge;
+    }
+    if(ctrlEdge !== null && ctrlEdge > 0){
+      action = 'BUY WINDOW CLOSING'; actionColor = 'var(--g2)';
+      lines.push(fTeam + ' leads by ' + deficit + ' with +' + ctrlEdge.toFixed(1) + '% edge — value remains but window narrowing.');
+    } else if(ctrlEdge !== null && ctrlEdge <= 0){
+      action = 'NO VALUE'; actionColor = 'var(--t2)';
+      lines.push(fTeam + ' leads by ' + deficit + '. Edge ' + (ctrlEdge >= 0 ? '+' : '') + ctrlEdge.toFixed(1) + '% — market already prices advantage.');
+    } else {
+      // No edge data yet (no odds or no analysis)
+      action = 'DEVELOPING'; actionColor = 'var(--yellow)';
+      lines.push(fTeam + ' leads by ' + deficit + ' — awaiting edge data.');
+      triggers.push('Press ANALYZE for Sonnet FWP + edge calculation');
+    }
   } else if(fScore >= 0.70 && pbpDisagrees){
     action = 'WAIT'; actionColor = 'var(--yellow)';
     lines.push('Floor and window disagree — momentum shifting.');
@@ -6070,10 +6109,46 @@ function synthesize(game){
   // Persist throughput on cardState for spread conviction + confidence table
   cs.throughput = throughput;
 
+  // ── LEAD SAFETY GATE ──
+  // When the structural team leads, compute whether the opponent's engine can erode the lead.
+  var leadSafety = null;
+  if(!trailing && deficit >= 2 && period >= 2){
+    leadSafety = computeLeadSafety(game);
+  }
+
+  if(leadSafety){
+    var lsClass = leadSafety.classification;
+    var lsCon = Math.round(leadSafety.conservative.totalSwing);
+    var lsExp = Math.round(leadSafety.expected.totalSwing);
+    var lsOpt = Math.round(leadSafety.optimistic.totalSwing);
+    var lsLead = leadSafety.lead;
+    var lsOppTeam = leadSafety.oppTeam;
+
+    if(action === 'BUY WINDOW CLOSING'){
+      if(lsClass === 'AT RISK' || lsClass === 'CRITICAL'){
+        action = 'WATCH'; actionColor = 'var(--amber)';
+        lines.push('Lead ' + lsClass + ' — ' + lsOppTeam + ' engine projects +' + lsCon + ' / +' + lsExp + ' / +' + lsOpt + ' vs ' + lsLead + ' lead (' + leadSafety.remainingPoss + ' poss). Lead erosion threatens position.');
+        triggers.push('Lead erosion — opponent engine projects recovery');
+        triggers.push('Opponent may become the play if variance collapses');
+      } else {
+        lines.push('Lead ' + lsClass + ' — ' + lsOppTeam + ' recovery engine projects +' + lsCon + ' / +' + lsExp + ' / +' + lsOpt + ' vs ' + lsLead + ' lead. Position durable.');
+      }
+    } else if(action === 'NO VALUE'){
+      if(lsClass === 'AT RISK' || lsClass === 'CRITICAL'){
+        action = 'WATCH'; actionColor = 'var(--amber)';
+        lines.push('No edge on ' + fTeam + ' but lead ' + lsClass + ' — ' + lsOppTeam + ' recovery engine projects +' + lsCon + ' / +' + lsExp + ' / +' + lsOpt + ' vs ' + lsLead + ' lead.');
+        triggers.push('Opponent may become the play if variance collapses');
+      }
+    }
+  }
+
+  // Persist lead safety on cardState for spread conviction + confidence table
+  cs.leadSafety = leadSafety;
+
   // ── BET TYPE RECOMMENDATION (ML vs Spread) ──
   var betType = null;
   var betDetail = null;
-  if(od && (action === 'BUY' || action === 'LEAN BUY')){
+  if(od && (action === 'BUY' || action === 'LEAN BUY' || action === 'BUY WINDOW CLOSING')){
     var spConv = cs.spreadConviction;
     var spread = parseFloat(od.homeSpread);
     var ctrlSpread = (!isNaN(spread)) ? (ctrlIsHome ? spread : -spread) : null;
@@ -6140,6 +6215,7 @@ function synthesize(game){
     deficit: deficit,
     betType: betType,
     throughput: throughput,
+    leadSafety: leadSafety,
   };
 }
 
@@ -6849,9 +6925,110 @@ function computeLeadCompositionClient(game, sustData){
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// SWING CORE — shared math engine for throughput recovery + lead safety
+// Computes structural scoring rate + 4-direction variance regression across
+// remaining possessions with conservative/expected/optimistic confidence bands.
+//
+// focalStats/targetStats: focal = team trying to close gap, target = team defending lead
+// All 4 variance directions modeled:
+//   Favorable for focal:  target cooling (hot→regress down), focal heating (cold→regress up)
+//   Unfavorable for focal: target heating (cold→regress up), focal cooling (hot→regress down)
+// ══════════════════════════════════════════════════════════════════════════════
+function computeSwingCore(focalStats, targetStats, focalSustData, targetSustData, deficit, minsLeft, minsElapsed, gameFraction, sznDefault){
+  // ── POSSESSIONS ──
+  var focalPoss = Number(focalStats.possessions) || 0;
+  var targetPoss = Number(targetStats.possessions) || 0;
+  if(focalPoss < 3) focalPoss = (Number(focalStats.field_goals_att)||0) + 0.44*(Number(focalStats.free_throws_att)||0) - (Number(focalStats.offensive_rebounds)||0) + (Number(focalStats.turnovers||focalStats.total_turnovers)||0);
+  if(targetPoss < 3) targetPoss = (Number(targetStats.field_goals_att)||0) + 0.44*(Number(targetStats.free_throws_att)||0) - (Number(targetStats.offensive_rebounds)||0) + (Number(targetStats.turnovers||targetStats.total_turnovers)||0);
+  if(focalPoss < 5 || targetPoss < 5 || isNaN(focalPoss) || isNaN(targetPoss)) return null;
+
+  // ── STRUCTURAL RATE per possession (paint + FT + POT + SCP = durable sources) ──
+  function structRate(st, poss){
+    var paint = Number(st.points_in_the_paint || st.points_in_paint) || 0;
+    var ft = Number(st.free_throws_made) || 0;
+    var pot = Number(st.points_off_turnovers) || 0;
+    var scp = Number(st.second_chance_points || st.second_chance_pts) || 0;
+    return (paint + ft + pot + scp) / poss;
+  }
+  var focalStructRate = structRate(focalStats, focalPoss);
+  var targetStructRate = structRate(targetStats, targetPoss);
+  var structEdge = focalStructRate - targetStructRate;
+
+  // ── VARIANCE DATA (3PT deviation from season baseline) ──
+  function getVarData(sustObj, stats, poss){
+    if(!sustObj) return {deviation:0, threePARate:0, live3Pct:0, sznPct:sznDefault};
+    var livePct = parseFloat(sustObj.live3Pct || 0);
+    var sznPct = parseFloat(sustObj.seasonPrior || sustObj.seasonBaseline || sznDefault);
+    var dev = livePct - sznPct;
+    var tpaRate = poss > 0 ? (Number(stats.three_points_att)||0) / poss : 0;
+    return {deviation:dev, threePARate:tpaRate, live3Pct:livePct, sznPct:sznPct};
+  }
+  var focalVar = getVarData(focalSustData, focalStats, focalPoss);
+  var targetVar = getVarData(targetSustData, targetStats, targetPoss);
+
+  // ── REMAINING POSSESSIONS ──
+  var avgPoss = (focalPoss + targetPoss) / 2;
+  var possPerMin = avgPoss / minsElapsed;
+  var remainingPoss = possPerMin * minsLeft;
+  if(isNaN(remainingPoss) || remainingPoss < 1) return null;
+
+  // ── DEFICIT DEGRADATION (structural rate degrades at massive deficits) ──
+  var degradation = 1.0;
+  if(deficit >= 24) degradation = 0.70;
+  else if(deficit >= 18) degradation = 0.85;
+
+  // ── CONFIDENCE BANDS with 4-direction variance ──
+  var bandDefs = [
+    {label:'conservative', baseRate:0.40},
+    {label:'expected',     baseRate:0.65},
+    {label:'optimistic',   baseRate:0.90},
+  ];
+
+  var bands = bandDefs.map(function(band){
+    var appliedRegression = band.baseRate * gameFraction;
+
+    // Favorable for focal (helps close gap):
+    // Target is hot → cooling gives back points to focal
+    var targetCooling = 0;
+    if(targetVar.deviation > 0){
+      targetCooling = (targetVar.deviation / 100) * appliedRegression * targetVar.threePARate * 3;
+    }
+    // Focal is cold → heating reclaims points for focal
+    var focalHeating = 0;
+    if(focalVar.deviation < 0){
+      focalHeating = (Math.abs(focalVar.deviation) / 100) * appliedRegression * focalVar.threePARate * 3;
+    }
+
+    // Unfavorable for focal (hurts gap closure):
+    // Target is cold → heating lets target score more
+    var targetHeating = 0;
+    if(targetVar.deviation < 0){
+      targetHeating = (Math.abs(targetVar.deviation) / 100) * appliedRegression * targetVar.threePARate * 3;
+    }
+    // Focal is hot → cooling reduces focal scoring output
+    var focalCooling = 0;
+    if(focalVar.deviation > 0){
+      focalCooling = (focalVar.deviation / 100) * appliedRegression * focalVar.threePARate * 3;
+    }
+
+    var netSwingPerPoss = (structEdge * degradation) + targetCooling + focalHeating - targetHeating - focalCooling;
+    var totalSwing = netSwingPerPoss * remainingPoss;
+    var ratio = deficit > 0 ? totalSwing / deficit : 0;
+
+    return {label:band.label, ratio:Math.round(ratio*100)/100, totalSwing:Math.round(totalSwing*10)/10, netSwingPerPoss:Math.round(netSwingPerPoss*1000)/1000};
+  });
+
+  // NaN safety
+  if(isNaN(bands[0].totalSwing) || isNaN(bands[1].totalSwing) || isNaN(remainingPoss)) return null;
+
+  return {bands:bands, focalStructRate:Math.round(focalStructRate*1000)/1000, targetStructRate:Math.round(targetStructRate*1000)/1000,
+    structEdge:Math.round(structEdge*1000)/1000, focalVar:focalVar, targetVar:targetVar,
+    remainingPoss:Math.round(remainingPoss), degradation:degradation};
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // THROUGHPUT RECOVERY MODEL — can the trailing team's engine close the gap?
-// Computes structural scoring rate + variance regression across remaining
-// possessions with conservative/expected/optimistic confidence bands.
+// Focal = control team (trailing). Target = opponent (leading).
 // ══════════════════════════════════════════════════════════════════════════════
 function computeThroughput(game){
   var cs = cardState[game.id]; if(!cs) return null;
@@ -6880,103 +7057,23 @@ function computeThroughput(game){
   var gameFraction = Math.min(1, minsLeft / GAME_MINUTES);
   if(minsLeft < 2 || isNaN(minsLeft)) return null;
 
-  // ── STRUCTURAL RATE per possession ──
+  // ── STATS ──
   var hs = s.home?.statistics || s.home || {};
   var as = s.away?.statistics || s.away || {};
-  var ctrlStats = ctrlIsHome ? hs : as;
-  var oppStats = ctrlIsHome ? as : hs;
+  var focalStats = ctrlIsHome ? hs : as;   // trailing control team
+  var targetStats = ctrlIsHome ? as : hs;   // leading opponent
 
-  var ctrlPoss = Number(ctrlStats.possessions) || 0;
-  var oppPoss = Number(oppStats.possessions) || 0;
-  // Estimate possessions if unavailable
-  if(ctrlPoss < 3) ctrlPoss = (Number(ctrlStats.field_goals_att)||0) + 0.44*(Number(ctrlStats.free_throws_att)||0) - (Number(ctrlStats.offensive_rebounds)||0) + (Number(ctrlStats.turnovers||ctrlStats.total_turnovers)||0);
-  if(oppPoss < 3) oppPoss = (Number(oppStats.field_goals_att)||0) + 0.44*(Number(oppStats.free_throws_att)||0) - (Number(oppStats.offensive_rebounds)||0) + (Number(oppStats.turnovers||oppStats.total_turnovers)||0);
-  if(ctrlPoss < 5 || oppPoss < 5 || isNaN(ctrlPoss) || isNaN(oppPoss)) return null;
-
-  // Structural points = paint + FT + POT + SCP (durable scoring sources)
-  var ctrlPaint = Number(ctrlStats.points_in_the_paint || ctrlStats.points_in_paint) || 0;
-  var ctrlFT = Number(ctrlStats.free_throws_made) || 0;
-  var ctrlPOT = Number(ctrlStats.points_off_turnovers) || 0;
-  var ctrlSCP = Number(ctrlStats.second_chance_points || ctrlStats.second_chance_pts) || 0;
-  var ctrlStructRate = (ctrlPaint + ctrlFT + ctrlPOT + ctrlSCP) / ctrlPoss;
-
-  var oppPaint = Number(oppStats.points_in_the_paint || oppStats.points_in_paint) || 0;
-  var oppFT = Number(oppStats.free_throws_made) || 0;
-  var oppPOT = Number(oppStats.points_off_turnovers) || 0;
-  var oppSCP = Number(oppStats.second_chance_points || oppStats.second_chance_pts) || 0;
-  var oppStructRate = (oppPaint + oppFT + oppPOT + oppSCP) / oppPoss;
-
-  var structEdgePerPoss = ctrlStructRate - oppStructRate;
-
-  // ── VARIANCE POSITION (3PT deviation from baseline) ──
+  // ── SUSTAINABILITY DATA ──
   var sust = cs.clientSustainability;
   var sa = cs.sustainabilityAudit;
-  var ctrlSustData = sust ? (ctrlIsHome ? sust.home : sust.away) : (sa ? (ctrlIsHome ? sa.home : sa.away) : null);
-  var oppSustData = sust ? (ctrlIsHome ? sust.away : sust.home) : (sa ? (ctrlIsHome ? sa.away : sa.home) : null);
+  var focalSustData = sust ? (ctrlIsHome ? sust.home : sust.away) : (sa ? (ctrlIsHome ? sa.home : sa.away) : null);
+  var targetSustData = sust ? (ctrlIsHome ? sust.away : sust.home) : (sa ? (ctrlIsHome ? sa.away : sa.home) : null);
 
-  function getVarData(sustObj, stats, poss){
-    if(!sustObj) return {deviation:0, threePARate:0, live3Pct:0, sznPct:36};
-    var livePct = parseFloat(sustObj.live3Pct || 0);
-    var sznPct = parseFloat(sustObj.seasonPrior || sustObj.seasonBaseline || 36);
-    var dev = livePct - sznPct;
-    var tpaRate = poss > 0 ? (Number(stats.three_points_att)||0) / poss : 0;
-    return {deviation:dev, threePARate:tpaRate, live3Pct:livePct, sznPct:sznPct};
-  }
+  // ── CORE MATH ──
+  var core = computeSwingCore(focalStats, targetStats, focalSustData, targetSustData, deficit, minsLeft, minsElapsed, gameFraction, 36);
+  if(!core) return null;
 
-  var ctrlVar = getVarData(ctrlSustData, ctrlStats, ctrlPoss);
-  var oppVar = getVarData(oppSustData, oppStats, oppPoss);
-
-  // ── REMAINING POSSESSIONS ──
-  var avgPoss = (ctrlPoss + oppPoss) / 2;
-  var possPerMin = avgPoss / minsElapsed;
-  var remainingPoss = possPerMin * minsLeft;
-  if(isNaN(remainingPoss) || remainingPoss < 1) return null;
-
-  // ── DEFICIT DEGRADATION ──
-  // Teams maintain structure until deficit is massive (near-playoff caliber)
-  var degradation = 1.0;
-  if(deficit >= 24) degradation = 0.70;
-  else if(deficit >= 18) degradation = 0.85;
-
-  // ── CONFIDENCE BANDS ──
-  // Base regression rates scaled by time fraction remaining
-  var bandDefs = [
-    {label:'conservative', baseRate:0.40},
-    {label:'expected',     baseRate:0.65},
-    {label:'optimistic',   baseRate:0.90},
-  ];
-
-  var bandResults = bandDefs.map(function(band){
-    var appliedRegression = band.baseRate * gameFraction;
-
-    // Opponent cooling: positive deviation regresses → gives back points
-    var oppCoolingPerPoss = 0;
-    if(oppVar.deviation > 0){
-      oppCoolingPerPoss = (oppVar.deviation / 100) * appliedRegression * oppVar.threePARate * 3;
-    }
-
-    // Trailing team heating: negative deviation regresses → reclaims points
-    var ctrlHeatingPerPoss = 0;
-    if(ctrlVar.deviation < 0){
-      ctrlHeatingPerPoss = (Math.abs(ctrlVar.deviation) / 100) * appliedRegression * ctrlVar.threePARate * 3;
-    }
-
-    var netSwingPerPoss = (structEdgePerPoss * degradation) + oppCoolingPerPoss + ctrlHeatingPerPoss;
-    var totalSwing = netSwingPerPoss * remainingPoss;
-    var ratio = deficit > 0 ? totalSwing / deficit : 0;
-
-    return {
-      label: band.label,
-      ratio: Math.round(ratio * 100) / 100,
-      totalSwing: Math.round(totalSwing * 10) / 10,
-      netSwingPerPoss: Math.round(netSwingPerPoss * 1000) / 1000,
-    };
-  });
-
-  var conservative = bandResults[0], expected = bandResults[1], optimistic = bandResults[2];
-
-  // NaN safety — if any band calculation produced NaN, bail out
-  if(isNaN(conservative.totalSwing) || isNaN(expected.totalSwing) || isNaN(remainingPoss)) return null;
+  var conservative = core.bands[0], expected = core.bands[1], optimistic = core.bands[2];
 
   // ── CLASSIFICATION (gated by conservative band) ──
   var classification;
@@ -6987,20 +7084,81 @@ function computeThroughput(game){
   else classification = 'NO PATH';
 
   return {
-    classification: classification,
-    deficit: deficit,
-    remainingPoss: Math.round(remainingPoss),
-    conservative: conservative,
-    expected: expected,
-    optimistic: optimistic,
-    ctrlStructRate: Math.round(ctrlStructRate * 1000) / 1000,
-    oppStructRate: Math.round(oppStructRate * 1000) / 1000,
-    structEdge: Math.round(structEdgePerPoss * 1000) / 1000,
-    ctrlVar: ctrlVar,
-    oppVar: oppVar,
-    degradation: degradation,
-    minsLeft: Math.round(minsLeft * 10) / 10,
-    fTeam: fTeam,
+    classification: classification, deficit: deficit, remainingPoss: core.remainingPoss,
+    conservative: conservative, expected: expected, optimistic: optimistic,
+    ctrlStructRate: core.focalStructRate, oppStructRate: core.targetStructRate,
+    structEdge: core.structEdge, ctrlVar: core.focalVar, oppVar: core.targetVar,
+    degradation: core.degradation, minsLeft: Math.round(minsLeft * 10) / 10, fTeam: fTeam,
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// LEAD SAFETY MODEL — is the leading team's lead durable or at risk?
+// Focal = opponent (trailing, trying to recover). Target = control team (leading).
+// High ratio = opponent CAN recover = lead is NOT safe.
+// ══════════════════════════════════════════════════════════════════════════════
+function computeLeadSafety(game){
+  var cs = cardState[game.id]; if(!cs) return null;
+  var s = game.summary || game.bdlData; if(!s || !s.home || !s.away) return null;
+  var hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
+  var hPts = game.homePoints||0, aPts = game.awayPoints||0;
+  var period = game.period||0;
+  if(period < 2) return null;
+
+  var floor = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
+  if(!floor || !floor.score) return null;
+  var fTeam = floor.controlTeam;
+  var ctrlIsHome = fTeam === hA;
+  var ctrlPts = ctrlIsHome ? hPts : aPts;
+  var oppPts = ctrlIsHome ? aPts : hPts;
+  var lead = ctrlPts - oppPts;
+  if(lead < 2) return null; // not leading by enough — lead safety N/A
+
+  // ── TIME REMAINING (NBA: 4×12 min) ──
+  var GAME_MINUTES = 48, PERIOD_MINUTES = 12;
+  var clockParts = (game.clock||'').split(':');
+  var clockMins = clockParts.length===2 ? (parseInt(clockParts[0])||0)+(((parseInt(clockParts[1])||0))/60) : PERIOD_MINUTES;
+  var quartersLeft = Math.max(0, 4 - period);
+  var minsLeft = clockMins + (quartersLeft * PERIOD_MINUTES);
+  var minsElapsed = Math.max(1, GAME_MINUTES - minsLeft);
+  var gameFraction = Math.min(1, minsLeft / GAME_MINUTES);
+  if(minsLeft < 2 || isNaN(minsLeft)) return null;
+
+  // ── STATS — focal is the OPPONENT (trailing, trying to recover) ──
+  var hs = s.home?.statistics || s.home || {};
+  var as = s.away?.statistics || s.away || {};
+  var focalStats = ctrlIsHome ? as : hs;   // opponent (trailing)
+  var targetStats = ctrlIsHome ? hs : as;   // control team (leading)
+
+  // ── SUSTAINABILITY DATA — focal is opponent, target is control ──
+  var sust = cs.clientSustainability;
+  var sa = cs.sustainabilityAudit;
+  var focalSustData = sust ? (ctrlIsHome ? sust.away : sust.home) : (sa ? (ctrlIsHome ? sa.away : sa.home) : null);
+  var targetSustData = sust ? (ctrlIsHome ? sust.home : sust.away) : (sa ? (ctrlIsHome ? sa.home : sa.away) : null);
+
+  // ── CORE MATH (opponent's recovery potential) ──
+  var core = computeSwingCore(focalStats, targetStats, focalSustData, targetSustData, lead, minsLeft, minsElapsed, gameFraction, 36);
+  if(!core) return null;
+
+  var conservative = core.bands[0], expected = core.bands[1], optimistic = core.bands[2];
+
+  // ── CLASSIFICATION (how safe is the lead?) ──
+  // High ratio = opponent CAN close gap = lead NOT safe
+  var classification;
+  if(conservative.ratio > 0.8) classification = 'CRITICAL';
+  else if(expected.ratio > 0.7) classification = 'AT RISK';
+  else if(optimistic.ratio > 0.5 && expected.ratio >= 0.3) classification = 'CUSHIONED';
+  else classification = 'SAFE';
+
+  var oppTeam = ctrlIsHome ? aA : hA;
+
+  return {
+    classification: classification, lead: lead, remainingPoss: core.remainingPoss,
+    conservative: conservative, expected: expected, optimistic: optimistic,
+    oppStructRate: core.focalStructRate, ctrlStructRate: core.targetStructRate,
+    structEdge: core.structEdge, oppVar: core.focalVar, ctrlVar: core.targetVar,
+    degradation: core.degradation, minsLeft: Math.round(minsLeft * 10) / 10,
+    fTeam: fTeam, oppTeam: oppTeam,
   };
 }
 
@@ -7309,6 +7467,17 @@ function computeSpreadConviction(game){
       if(tpCap !== null && coverProb > tpCap) coverProb = tpCap;
     }
 
+    // ── GUARDRAIL 4: LEAD SAFETY CAP ──
+    // If the leading structural team's lead is at risk of erosion, cap their cover prob
+    var lsCap = null;
+    var _ls = cs.leadSafety;
+    if(_ls && _ls.fTeam === alias && _ls.conservative){
+      var lsClass = _ls.classification;
+      if(lsClass === 'CRITICAL'){ lsCap = 50; } // Lead paper-thin — opponent regression threatens cover
+      else if(lsClass === 'AT RISK'){ lsCap = 65; } // Lead eroding — prevent overconfident cover
+      if(lsCap !== null && coverProb > lsCap) coverProb = lsCap;
+    }
+
     coverProb = Math.max(5, Math.min(95, coverProb));
 
     // ── REASON STRING ──
@@ -7329,6 +7498,7 @@ function computeSpreadConviction(game){
     if(scoringClass === 'VOLATILE' && teamIsLeadTeam) parts.push('VOLATILE lead');
     if(proj?.garbageTime?.detected) parts.push('GARBAGE('+proj.garbageTime.reason+')');
     if(tpCap !== null) parts.push('TP cap:'+tpCap+'(con:'+_tp.conservative.ratio.toFixed(2)+')');
+    if(lsCap !== null) parts.push('LS cap:'+lsCap+'('+_ls.classification+')');
     if(minsLeft < 10) parts.push(minsLeft.toFixed(0)+'min left');
 
     return {
@@ -8507,7 +8677,11 @@ function renderConfidenceTable(){
     const tpClass = tpData?.classification || null;
     const tpConSwing = tpData?.conservative?.totalSwing || null;
     const tpDeficit = tpData?.deficit || null;
-    const row = {matchup, team, score, verdict, gameId:g.id, state, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, hA, aA, entryIf:p.entry||null, passIf:p.pass||null, fwpTeamAlias, fwpTeamEdge, fwpTeamFwp, fwpTeamEntry, signal, windowScore, windowTeam, gapVal, accelLabel, combinedReadLabel, tpClass, tpConSwing, tpDeficit};
+    const lsData = cs?.leadSafety;
+    const lsClass = lsData?.classification || null;
+    const lsConSwing = lsData?.conservative?.totalSwing || null;
+    const lsLead = lsData?.lead || null;
+    const row = {matchup, team, score, verdict, gameId:g.id, state, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, hA, aA, entryIf:p.entry||null, passIf:p.pass||null, fwpTeamAlias, fwpTeamEdge, fwpTeamFwp, fwpTeamEntry, signal, windowScore, windowTeam, gapVal, accelLabel, combinedReadLabel, tpClass, tpConSwing, tpDeficit, lsClass, lsConSwing, lsLead};
     // Persist live data to cache whenever we have analysis results or fresh live sustainability
     if(pred || si || (state==='LIVE' && (sustHome || sustAway))){
       persistConfRow(g.id, {team, score, verdict, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, state, fwpTeamAlias, fwpTeamEdge, fwpTeamFwp, fwpTeamEntry, signal:csPred?.signalType||null, ts:Date.now()});
@@ -8692,7 +8866,7 @@ function renderConfidenceTable(){
       + '<td style="font-size:7px;text-align:center;white-space:nowrap">'+edgeDispStr+'</td>'
       + '<td style="font-size:6px;text-align:center;white-space:nowrap">'+entryStr+'</td>'
       + '<td class="ct-score" style="color:'+vColor(r.verdict)+'">'+r.score.toFixed(2)+'<div class="ct-verdict" style="color:'+vColor(r.verdict)+'">'+esc(r.team||'')+'</div></td>'
-      + '<td style="text-align:center;font-size:7px;white-space:nowrap">'+(r.tpConSwing!=null?'<span style="font-weight:600;color:'+(r.tpConSwing>=r.tpDeficit?'var(--green)':r.tpConSwing>=r.tpDeficit*0.6?'var(--yellow)':'var(--red)')+'">+'+Math.round(r.tpConSwing)+'</span><span style="color:var(--t3);font-size:5.5px"> vs '+r.tpDeficit+'</span>':'<span style="color:var(--t3)">&#8212;</span>')+'</td>'
+      + '<td style="text-align:center;font-size:7px;white-space:nowrap">'+(r.tpConSwing!=null?'<span style="font-weight:600;color:'+(r.tpConSwing>=r.tpDeficit?'var(--green)':r.tpConSwing>=r.tpDeficit*0.6?'var(--yellow)':'var(--red)')+'">+'+Math.round(r.tpConSwing)+'</span><span style="color:var(--t3);font-size:5.5px"> vs '+r.tpDeficit+'</span>':r.lsClass!=null?'<span style="font-weight:600;font-size:5.5px;color:'+(r.lsClass==='SAFE'?'var(--green)':r.lsClass==='CUSHIONED'?'var(--g2)':r.lsClass==='AT RISK'?'var(--amber)':'var(--red)')+'">'+r.lsClass+'</span><span style="color:var(--t3);font-size:5px"> +'+Math.round(r.lsConSwing)+' vs '+r.lsLead+'</span>':'<span style="color:var(--t3)">&#8212;</span>')+'</td>'
       + '<td style="text-align:center;font-size:7px">'+(r.windowScore!=null?'<span style="font-weight:600;color:'+(r.windowScore>=0.75?'var(--g2)':r.windowScore>=0.60?'var(--yellow)':'var(--t3)')+'">'+r.windowScore.toFixed(2)+'</span>':'<span style="color:var(--t3)">&#8212;</span>')+'</td>'
       + '<td style="text-align:center;font-size:7px">'+(r.gapVal!=null?'<span style="color:'+(r.gapVal>0.03?'var(--green)':r.gapVal<-0.03?'var(--amber)':'var(--t3)')+'">'+(r.gapVal>=0?'+':'')+r.gapVal.toFixed(2)+'</span>'+(r.accelLabel&&r.accelLabel!=='TOO EARLY'&&r.accelLabel!=='STABLE'?' <span style="font-size:5px;color:'+(r.accelLabel==='GROWING'?'var(--green)':r.accelLabel==='DECLINING'?'var(--amber)':r.accelLabel==='FLIPPED'?'var(--red)':'var(--t3)')+'">'+({'GROWING':'▲','DECLINING':'▼','FLIPPED':'⟳','NEW_PHASE':'◆'}[r.accelLabel]||'')+'</span>':''):'<span style="color:var(--t3)">&#8212;</span>')+'</td>'
       + '<td style="font-size:6px;text-align:center">'+tsStr+'</td>'
@@ -9374,7 +9548,23 @@ function renderCard(game){
   // ─── DECISION SYNTHESIZER (always visible when data exists) ───
     var synth = synthesize(game);
     if(synth){
-      var _sBorder = synth.action==='BUY'?'var(--green)':synth.action==='LEAN BUY'?'var(--g2)':synth.action==='WAIT'||synth.action==='DEVELOPING'?'var(--yellow)':synth.action==='CAUTION'?'var(--amber)':synth.action==='NO VALUE'||synth.action==='TOO DEEP'?'var(--red)':'var(--b1)';
+      // Ntfy alert for BUY WINDOW CLOSING (synthesizer-driven, separate from Sonnet signal ntfy)
+      if(ntfyEnabled && synth.action === 'BUY WINDOW CLOSING' && !cs._ntfySynthBWC){
+        var _pred = cs.prediction;
+        var _bwcCtrlHome = synth.fTeam === hA;
+        var _bwcEdge = _pred ? (_bwcCtrlHome ? _pred.homeValue?.edge : _pred.awayValue?.edge) : null;
+        if(_bwcEdge === null || _bwcEdge >= ntfyMinEdge){
+          var _bwcScore = aA + ' ' + (game.awayPoints||0) + '-' + (game.homePoints||0) + ' ' + hA;
+          var _bwcQ = game.period ? 'Q' + game.period + (game.clock ? ' ' + game.clock : '') : '';
+          var _bwcEdgeStr = _bwcEdge !== null ? '+' + _bwcEdge.toFixed(1) + '%' : '';
+          var _lsSafe = synth.leadSafety ? synth.leadSafety.classification : '';
+          sendNtfyRaw('BUY WINDOW CLOSING — ' + synth.fTeam, _bwcScore + ' ' + _bwcQ + '\nEdge: ' + _bwcEdgeStr + ' | Lead: ' + _lsSafe + '\n' + synth.fTeam + ' leads with structural control + live edge', 4);
+          cs._ntfySynthBWC = true;
+        }
+      }
+      // Reset ntfy flag if action changes away from BWC
+      if(synth.action !== 'BUY WINDOW CLOSING') cs._ntfySynthBWC = false;
+      var _sBorder = synth.action==='BUY'?'var(--green)':synth.action==='LEAN BUY'||synth.action==='BUY WINDOW CLOSING'?'var(--g2)':synth.action==='WAIT'||synth.action==='DEVELOPING'?'var(--yellow)':synth.action==='CAUTION'?'var(--amber)':synth.action==='NO VALUE'||synth.action==='TOO DEEP'?'var(--red)':'var(--b1)';
       html+='<div style="padding:8px 10px;border-top:2px solid '+_sBorder+';background:rgba(255,255,255,.02)">';
       // Action badge + control
       html+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">';
@@ -9397,6 +9587,19 @@ function renderCard(game){
         html+='<span style="font-size:7px;font-weight:700;color:'+_tpConCol+'">+'+Math.round(_tp.conservative.totalSwing)+' / +'+Math.round(_tp.expected.totalSwing)+' / +'+Math.round(_tp.optimistic.totalSwing)+'</span>';
         html+='<span style="font-size:6.5px;color:var(--t2)">vs '+_tp.deficit+' deficit</span>';
         html+='<span style="font-size:5.5px;color:var(--t3)">~'+_tp.remainingPoss+' poss</span>';
+        html+='</div>';
+      }
+      // Lead safety line (when control team leads)
+      if(synth.leadSafety){
+        var _ls = synth.leadSafety;
+        var _lsCol = _ls.classification==='SAFE'?'var(--green)':_ls.classification==='CUSHIONED'?'var(--g2)':_ls.classification==='AT RISK'?'var(--amber)':'var(--red)';
+        var _lsSwingCol = _ls.optimistic.totalSwing < _ls.lead*0.5 ? 'var(--green)' : _ls.expected.totalSwing >= _ls.lead ? 'var(--red)' : 'var(--yellow)';
+        html+='<div style="display:flex;align-items:center;gap:6px;padding:4px 7px;margin-bottom:4px;border-radius:4px;border:1px solid '+_lsCol+';background:rgba(255,255,255,.02)">';
+        html+='<span style="font-size:6px;font-weight:700;color:'+_lsCol+';letter-spacing:.5px;white-space:nowrap">HOLD</span>';
+        html+='<span style="font-size:6.5px;font-weight:600;color:'+_lsCol+'">'+esc(_ls.classification)+'</span>';
+        html+='<span style="font-size:7px;font-weight:700;color:'+_lsSwingCol+'">+'+Math.round(_ls.conservative.totalSwing)+' / +'+Math.round(_ls.expected.totalSwing)+' / +'+Math.round(_ls.optimistic.totalSwing)+'</span>';
+        html+='<span style="font-size:6.5px;color:var(--t2)">vs '+_ls.lead+' lead</span>';
+        html+='<span style="font-size:5.5px;color:var(--t3)">~'+_ls.remainingPoss+' poss</span>';
         html+='</div>';
       }
       // Triggers
