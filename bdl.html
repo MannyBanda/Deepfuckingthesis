@@ -2668,6 +2668,8 @@ async function fetchSummaryBDL(game){
                 _cs._lastOddsTime=Date.now();
                 persistOdds(gid,_cs);
                 addLog(gid, '💰 Odds: '+spread+' ML:'+hML+'/'+aML, true);
+                // Re-render card so odds UI updates (this IIFE completes after main renderCard)
+                var _og=games.find(function(x){return x.id===gid;});if(_og)renderCard(_og);
               }
             } else {
               var _cs=cardState[gid]; if(_cs) _cs._lastOddsTime=Date.now(); // prevent spam
