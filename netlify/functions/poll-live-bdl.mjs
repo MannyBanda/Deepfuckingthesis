@@ -1926,6 +1926,7 @@ export default async function(req) {
   const sql = neon(dbUrl);
 
   const results = { games: 0, snapshots: 0, espn: 0, odds: 0, errors: [], skipped: null };
+  const pendingAnalyses = []; // collect async Sonnet calls so we await them before returning
 
   for (const league of Object.keys(LEAGUES)) {
     const cfg = LEAGUES[league];
@@ -2449,8 +2450,10 @@ export default async function(req) {
 
                 // Fire Sonnet analysis only for NBA (NCAAMB: snapshot + context only)
                 if (t.sonnet) {
-                  fireCalibrationAnalysis(sql, game, league, summary, ind, sust, leadComp, espnWP, odds, matchup, hA, aA, currentPeriod, clock, t.trigger)
-                    .catch(e => log(`${matchup}: ${t.label} CAL analysis async error: ${e.message}`));
+                  pendingAnalyses.push(
+                    fireCalibrationAnalysis(sql, game, league, summary, ind, sust, leadComp, espnWP, odds, matchup, hA, aA, currentPeriod, clock, t.trigger)
+                      .catch(e => log(`${matchup}: ${t.label} CAL analysis async error: ${e.message}`))
+                  );
                 }
               }
             }
@@ -2495,6 +2498,13 @@ export default async function(req) {
       results.errors.push(`${league}: ${e.message}`);
       log(`ERROR ${league}: ${e.message}`);
     }
+  }
+
+  // Wait for all Sonnet analyses to complete (including DB INSERT) before runtime exits
+  if (pendingAnalyses.length > 0) {
+    log(`Awaiting ${pendingAnalyses.length} Sonnet analyse(s)...`);
+    await Promise.all(pendingAnalyses);
+    log(`All Sonnet analyses complete.`);
   }
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
