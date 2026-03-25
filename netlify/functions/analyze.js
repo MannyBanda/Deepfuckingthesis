@@ -675,7 +675,7 @@ exports.handler = async function(event) {
     // ── EDGE HISTORY ──
     var edgeSection = '';
     if (edgeHistory && edgeHistory.length > 0) {
-      edgeSection = '\nEDGE HISTORY:\n' + edgeHistory.map(function(e) { return e.time + ' | ' + e.edge + ' FWP ' + e.fwp + ' | ' + e.control + ' ' + e.score; }).join('\n') + '\n';
+      edgeSection = '\nEDGE HISTORY:\n' + edgeHistory.map(function(e) { return (e.time||'?') + ' | ' + (e.edge||'?') + ' FWP ' + (e.fwp||'?') + ' | ' + (e.control||'?') + ' ' + (e.score||'?'); }).join('\n') + '\n';
     }
 
     // ── ANALYSIS HISTORY (game narrative across prior calls) ──
@@ -718,7 +718,7 @@ exports.handler = async function(event) {
             pbpSection += p.name + ' ' + p.made + '/' + p.att + ' (' + p.assisted + ' ast, ' + ctxStr + ') | ';
           });
           pbpSection += '\n';
-          if (tm.threes.corner) pbpSection += '  Corner: ' + tm.threes.corner.made + '/' + tm.threes.corner.att + ' | Above: ' + tm.threes.above.made + '/' + tm.threes.above.att + '\n';
+          if (tm.threes.corner && tm.threes.above) pbpSection += '  Corner: ' + tm.threes.corner.made + '/' + tm.threes.corner.att + ' | Above: ' + tm.threes.above.made + '/' + tm.threes.above.att + '\n';
         }
         
         // At-rim detail
@@ -747,9 +747,9 @@ exports.handler = async function(event) {
         
         // TO breakdown
         if (tm.tos && tm.tos.total > 0) {
-          pbpSection += '  TOs: ' + tm.tos.forced + ' forced / ' + tm.tos.unforced + ' unforced' + (tm.tos.unknown > 0 ? ' / ' + tm.tos.unknown + ' unclear' : '') + '\n';
-          tm.tos.byPlayer.forEach(function(to) {
-            pbpSection += '    Q' + to.q + ' ' + to.p + ' — ' + (to.forced === true ? 'FORCED' : to.forced === false ? 'UNFORCED' : '?') + ' (' + (to.type || '?') + ')\n';
+          pbpSection += '  TOs: ' + (tm.tos.forced||0) + ' forced / ' + (tm.tos.unforced||0) + ' unforced' + (tm.tos.unknown > 0 ? ' / ' + tm.tos.unknown + ' unclear' : '') + '\n';
+          (tm.tos.byPlayer||[]).forEach(function(to) {
+            pbpSection += '    Q' + (to.q||'?') + ' ' + (to.p||'?') + ' — ' + (to.forced === true ? 'FORCED' : to.forced === false ? 'UNFORCED' : '?') + ' (' + (to.type || '?') + ')\n';
           });
         }
       });
@@ -807,15 +807,15 @@ exports.handler = async function(event) {
         {header: 'I3 SHOT QUALITY', keys: ['fg3aShare','astRatio']},
         {header: 'I5 TEMPO', keys: ['poss']},
       ];
-      arrowSection += String('').padEnd(12) + homeTeam.padEnd(18) + awayTeam + '\n';
+      arrowSection += String('').padEnd(12) + String(homeTeam||'HOME').padEnd(18) + String(awayTeam||'AWAY') + '\n';
       arrowOrder.forEach(function(grp) {
         arrowSection += grp.header + ':\n';
         grp.keys.forEach(function(key) {
           var hm = subMetricArrows.home ? subMetricArrows.home[key] : null;
           var am = subMetricArrows.away ? subMetricArrows.away[key] : null;
-          var label = hm ? hm.label : (am ? am.label : key);
-          var hStr = hm && hm.arrow ? hm.display : '—';
-          var aStr = am && am.arrow ? am.display : '—';
+          var label = String(hm ? hm.label : (am ? am.label : key));
+          var hStr = String(hm && hm.arrow ? (hm.display || '?') : '—');
+          var aStr = String(am && am.arrow ? (am.display || '?') : '—');
           arrowSection += '  ' + label.padEnd(10) + hStr.padEnd(18) + aStr + '\n';
         });
       });
@@ -823,7 +823,7 @@ exports.handler = async function(event) {
 
     var adjustmentSection = '';
     if (adjustment && adjustment.signal && adjustment.signal !== 'NO ADJUSTMENT' && adjustment.signal !== 'NO DATA') {
-      adjustmentSection = 'ADJUSTMENT: ' + adjustment.signal + ' (' + adjustment.team + ') — ' + adjustment.note + '\n';
+      adjustmentSection = 'ADJUSTMENT: ' + adjustment.signal + ' (' + (adjustment.team || '?') + ') — ' + (adjustment.note || '') + '\n';
     }
 
     var combinedReadSection = '';
@@ -892,6 +892,6 @@ exports.handler = async function(event) {
       body: JSON.stringify({ analysis: analysis, usage: data.usage, sustainabilityAudit: audit, leadComposition: leadComp }),
     };
   } catch (err) {
-    return { statusCode: 500, headers: headers, body: JSON.stringify({ error: err.message }) };
+    return { statusCode: 500, headers: headers, body: JSON.stringify({ error: err.message, stack: (err.stack || '').substring(0, 500) }) };
   }
 };
