@@ -4198,32 +4198,55 @@ async function handleClutchUpload(input){
     }
 
     // Send to clutch-ocr function with team filter
-    const payload = JSON.stringify({ image: base64, mediaType, segment, teams: activeTeams });
-    const payloadMB = (payload.length / 1024 / 1024).toFixed(1);
-    console.log('Clutch OCR payload:', payloadMB+'MB');
-    if(payload.length > 5500000){
-      throw new Error('Image still too large after compression ('+payloadMB+'MB). Try cropping the screenshot to just the table area.');
-    }
-    status.textContent = '⏳ Extracting ' + activeTeams.length + ' teams from ' + targetGames.length + ' games (~15s, '+payloadMB+'MB)...';
-    const resp = await fetch(FN+'clutch-ocr',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: payload
-    });
-
-    if(!resp.ok){
-      if(resp.status === 502) throw new Error('Server crashed processing image ('+payloadMB+'MB). Try cropping to just the table.');
-      if(resp.status === 504) throw new Error('Server timed out. Try cropping the screenshot.');
-      if(resp.status === 413) throw new Error('Image too large for server. Try a smaller screenshot.');
-      const err = await resp.json().catch(()=>({error:resp.statusText}));
-      throw new Error(err.error || 'OCR failed: '+resp.status);
+    // Batch into groups of 8 to avoid Netlify 26s function timeout on large slates
+    const BATCH_SIZE = 8;
+    var allExtracted = {};
+    var totalUsage = {input:0, output:0};
+    var batches = [];
+    for(var bi=0; bi<activeTeams.length; bi+=BATCH_SIZE){
+      batches.push(activeTeams.slice(bi, bi+BATCH_SIZE));
     }
 
-    const data = await resp.json();
+    for(var batchIdx=0; batchIdx<batches.length; batchIdx++){
+      var batchTeams = batches[batchIdx];
+      var batchLabel = batches.length > 1 ? ' (batch '+(batchIdx+1)+'/'+batches.length+')' : '';
+      const payload = JSON.stringify({ image: base64, mediaType, segment, teams: batchTeams });
+      const payloadMB = (payload.length / 1024 / 1024).toFixed(1);
+      console.log('Clutch OCR payload'+batchLabel+':', payloadMB+'MB, teams:', batchTeams.join(','));
+      if(payload.length > 5500000){
+        throw new Error('Image still too large after compression ('+payloadMB+'MB). Try cropping the screenshot to just the table area.');
+      }
+      status.textContent = '⏳ Extracting ' + batchTeams.length + ' teams'+batchLabel+' (~15s, '+payloadMB+'MB)...';
+      const resp = await fetch(FN+'clutch-ocr',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: payload
+      });
 
-    if(data.error){
-      throw new Error(data.error + (data.rawText ? ' — raw: '+data.rawText.substring(0,100) : ''));
+      if(!resp.ok){
+        if(resp.status === 502) throw new Error('Server crashed processing image'+batchLabel+' ('+payloadMB+'MB). Try cropping to just the table.');
+        if(resp.status === 504) throw new Error('Server timed out'+batchLabel+'. Try cropping the screenshot.');
+        if(resp.status === 413) throw new Error('Image too large for server. Try a smaller screenshot.');
+        const err = await resp.json().catch(()=>({error:resp.statusText}));
+        throw new Error(err.error || 'OCR failed: '+resp.status);
+      }
+
+      const data = await resp.json();
+
+      if(data.error){
+        throw new Error(data.error + batchLabel + (data.rawText ? ' — raw: '+data.rawText.substring(0,100) : ''));
+      }
+
+      if(data.teams){
+        Object.assign(allExtracted, data.teams);
+      }
+      if(data.usage){
+        totalUsage.input += data.usage.input||0;
+        totalUsage.output += data.usage.output||0;
+      }
     }
+
+    var data = {teams: allExtracted, segment: segment, teamCount: Object.keys(allExtracted).length, usage: totalUsage};
 
     if(!data.teams || Object.keys(data.teams).length === 0){
       throw new Error('No teams extracted from screenshot');
