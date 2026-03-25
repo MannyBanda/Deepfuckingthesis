@@ -11,9 +11,6 @@
 // ══════════════════════════════════════════════════════════════════════════════
 
 import { neon } from '@neondatabase/serverless';
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-const analyzeModule = require('./analyze.js');
 
 // ── CONFIG ──────────────────────────────────────────────────────────────────
 
@@ -47,6 +44,48 @@ const BDL_BASE = 'https://api.balldontlie.io';
 const W = { I1: 0.25, I2: 0.25, I3: 0.20, I4: 0.20, I5: 0.10 };
 
 const SR_DELAY_MS = 1400; // respect trial tier rate limit
+
+// ── SONNET SYSTEM PROMPT (same as analyze.js) ────────────────────────────────
+const SONNET_SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing real-time control assessment and outcome prediction for sports betting.\n\n'
++ 'CORE TASK: Determine which team structurally controls this game, assess whether each team\'s production is sustainable, evaluate whether control is compounding or fading, and identify the best entry — on EITHER team — using pre-computed data and your own reasoning.\n\n'
++ 'FIVE INDICATORS (score each 0.00-1.00 for the controlling team):\n'
++ 'I1 Possession & Transition (25%): TO margin, steals, OREBs, fast break pts, pts off TOs, second chance pts\n'
++ 'I2 Rim Pressure & Foul (25%): Paint points, at-rim FG, FTA, blocks, fouls, bonus status\n'
++ 'I3 Shot Quality & Creation (20%): eFG%, assist ratio (65%+ sustainable, <50% isolation-dependent), shot diet\n'
++ 'I4 Lineup Integrity (20%): Biggest lead, bench contribution, which lineups producing, plus/minus\n'
++ 'I5 Tempo & Efficiency (10%): Possessions, pts/possession differential, pace control\n\n'
++ 'CONTROL: 0.90+ DOMINANT | 0.75-0.89 STRONG | 0.60-0.74 EARNED | 0.45-0.59 NO EDGE | <0.45 WAIT\n\n'
++ 'YOU RECEIVE PRE-COMPUTED DATA LAYERS including: 3PT Sustainability Audit (tier per team), Lead Composition (structural vs variance), Structural Floor (cumulative I1-I5), Rolling Window (recent possessions), Gap Acceleration, Directional Arrows, Event Flags, Depth Audit (PBP), Bonus Status, WP Identity Profiles, ESPN Win Probability.\n\n'
++ 'Use all available layers. DASHBOARD SCORES are authoritative for I1-I5 baseline.\n\n'
++ 'ENTRY STRATEGY — FIND THE STRUCTURAL EDGE AT VALUE PRICE:\n'
++ '   Evaluate BOTH teams. Core strategy: buy structural control when trailing on variance.\n'
++ '   ENTRY SIGNALS: OPTIMAL WINDOW | WINDOW OPEN | WINDOW CLOSING | NO WINDOW | FADE\n'
++ '   Before signaling BUY, check the sustainability tier of the team you are recommending.\n\n'
++ 'FWP (Framework Win Probability) IS GAME-STATE-AWARE:\n'
++ '   Factor in: score margin, quarter, time remaining, combined read trajectory.\n'
++ '   OUTPUT BOTH TEAMS with alias labels. The two values must sum to ~100%.\n\n'
++ 'CONVICTION: DOMINANT | STRONG | EARNED | CONDITIONAL | NO ENTRY\n\n'
++ 'OUTPUT FORMAT (follow exactly):\n\n'
++ 'DECISION:\nEDGE: [+X% | No market data] | FWP: [AwayAlias X% / HomeAlias Y%] | MIP: [X% | N/A]\n'
++ 'ENTRY: [OPTIMAL WINDOW | WINDOW OPEN | WINDOW CLOSING | NO WINDOW | FADE]\n'
++ 'CONVICTION: [DOMINANT | STRONG | EARNED | CONDITIONAL | NO ENTRY]\n'
++ 'SIGNAL: [BUY TeamAlias | NO VALUE | PASS] — [1-line reason naming both teams]\n'
++ 'Sustainability: [TeamA]: [tier] | [TeamB]: [tier]\n'
++ 'Lead Source: [STRUCTURAL | VARIANCE | MIXED | EVEN] — [1-line]\n'
++ 'SPREAD ANALYSIS: [1-line]\nTeam Quality: [context]\nClutch: [Tier X] — [CLEAR|WATCH|FIRES|NEUTRALIZED]\n'
++ 'Prediction: [1-line decisive call]\n\n'
++ 'EVIDENCE:\nCONTROL: [Team] [score] — [level]\n'
++ 'COMBINED READ: [DOMINANT|STRONG|EMERGING|EARNED|ERODING|FADING|COLLAPSING|SHIFT|NO EDGE] — [note]\n\n'
++ 'I1 Possession & Transition (25%): [team] [score] — [explanation]\n'
++ 'I2 Rim Pressure & Foul (25%): [team] [score] — [explanation]\n'
++ 'I3 Shot Quality & Creation (20%): [team] [score] — [explanation]\n'
++ 'I4 Lineup Integrity (20%): [team] [score] — [explanation]\n'
++ 'I5 Tempo & Efficiency (10%): [team] [score] — [explanation]\n\n'
++ 'EVENT FLAGS:\nTrag1 — Role Player Heater: [detail or CLEAR]\nTrag2 — Star Process: [detail or CLEAR]\n'
++ 'Trag3 — Foul Gate: [detail or CLEAR]\nTrag4 — Closing Lineup: [detail or CLEAR]\n\n'
++ 'THESIS STATUS: [CONFIRMED|DEVELOPING|CONTESTED|DENIED|FLIPPED] — [note]\n'
++ 'DIVERGENCE NOTES: [where your scores differ from dashboard and why]\n\n'
++ 'Be concise. 1 line per indicator. Decisive when clear. Passing is correct when it is not.';
 
 // ── HELPERS ─────────────────────────────────────────────────────────────────
 
@@ -1675,28 +1714,99 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       } : clientCtx?.espnWP || null,
     };
 
-    // ── 7. Call analyze function (in-process, bypasses site password protection) ──
+    // ── 7. Call Anthropic API directly (bypasses site password protection) ──
     const ctxStatus = ctxSource === 'client' ? 'client✓' : ctxSource === 'server' ? 'server-computed' : 'no-context';
     log(`${matchup}: ${triggerTag} CAL — firing Sonnet analysis (${ctxStatus} thesis:${thesis ? 'yes' : 'no'} clutch:${clutchData ? 'yes' : 'no'} odds:${odds ? 'yes' : 'no'} wp:${wpProfiles ? 'yes' : 'no'})`);
 
-    const syntheticEvent = {
-      httpMethod: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
-    };
+    const anthropicKey = process.env.ANTHROPIC_API_KEY;
+    if (!anthropicKey) { log(`${matchup}: ${triggerTag} CAL — ANTHROPIC_API_KEY not configured`); return; }
 
-    const resp = await analyzeModule.handler(syntheticEvent);
+    // Build user prompt from payload sections
+    let userPrompt = `${aA} @ ${hA} | Q${period} ${clock} | ${scoreLine}\n\n`;
+    if (thesis) userPrompt += `THESIS:\n${thesis}\n\n`;
 
-    if (!resp || resp.statusCode !== 200) {
-      log(`${matchup}: ${triggerTag} CAL — analyze returned ${resp?.statusCode || 'null'}: ${(resp?.body || '').substring(0, 200)}`);
+    // Sustainability
+    if (sust) {
+      userPrompt += `3PT SUSTAINABILITY:\n`;
+      if (sust.home) userPrompt += `  ${hA}: ${sust.home.tier || '?'} — live ${sust.home.live3Pct || '?'}% vs ${sust.home.seasonPrior || sust.home.seasonBaseline || '?'}% szn, regression ${sust.home.regressionProb || '?'}%\n`;
+      if (sust.away) userPrompt += `  ${aA}: ${sust.away.tier || '?'} — live ${sust.away.live3Pct || '?'}% vs ${sust.away.seasonPrior || sust.away.seasonBaseline || '?'}% szn, regression ${sust.away.regressionProb || '?'}%\n`;
+    }
+    // Lead composition
+    if (leadComp) {
+      userPrompt += `LEAD COMPOSITION: ${leadComp.classification || '?'} — S:${leadComp.structuralPct || '?'}% V:${leadComp.variancePct || '?'}%\n`;
+      userPrompt += `  ${hA}: Paint ${leadComp.home?.paint || 0} FT ${leadComp.home?.ft || 0} 3PT ${leadComp.home?.three || 0}\n`;
+      userPrompt += `  ${aA}: Paint ${leadComp.away?.paint || 0} FT ${leadComp.away?.ft || 0} 3PT ${leadComp.away?.three || 0}\n`;
+    }
+    // Dashboard indicators
+    if (ind) {
+      userPrompt += `DASHBOARD SCORES: ${ind.controlTeam || '?'} ${ind.score?.toFixed(2) || '?'}\n`;
+      ['I1','I2','I3','I4','I5'].forEach(k => {
+        if (ind[k]) userPrompt += `  ${k}: ${ind[k].score?.toFixed(1) || '?'} ${ind[k].leader || ''} — ${ind[k].detail || ''}\n`;
+      });
+    }
+    // Clutch
+    if (clutchData) {
+      userPrompt += `CLUTCH:\n  ${aA}: NetRtg ${clutchData.away?.netRtg ?? 'N/A'}\n  ${hA}: NetRtg ${clutchData.home?.netRtg ?? 'N/A'}\n`;
+    }
+    // Odds
+    if (odds) {
+      userPrompt += `MARKET: Spread ${hA} ${odds.homeSpread || 'N/A'} | ML ${aA} ${odds.awayML || 'N/A'} / ${hA} ${odds.homeML || 'N/A'} | O/U ${odds.total || 'N/A'}\n`;
+    }
+    // ESPN WP
+    if (espnWP) {
+      userPrompt += `ESPN WP: ${hA} ${espnWP.home ?? '?'}% / ${aA} ${espnWP.away ?? '?'}%\n`;
+    }
+    // Client context layers
+    if (clientCtx?.rollingWindow?.available) {
+      const rw = clientCtx.rollingWindow;
+      userPrompt += `ROLLING WINDOW: ${rw.controlTeam} ${rw.score?.toFixed(2)}\n`;
+    }
+    if (clientCtx?.acceleration?.accel) {
+      userPrompt += `GAP ACCEL: ${clientCtx.acceleration.accel}\n`;
+    }
+    if (clientCtx?.combinedRead?.read) {
+      userPrompt += `COMBINED READ: ${clientCtx.combinedRead.read}\n`;
+    }
+    // WP profiles
+    if (wpProfiles) userPrompt += `\n${wpProfiles}\n`;
+    // Analysis history
+    if (analysisHistory && analysisHistory.length > 0) {
+      userPrompt += `\nGAME NARRATIVE:\n`;
+      analysisHistory.forEach((h, i) => {
+        userPrompt += `${i+1}. Q${h.period || '?'} ${h.clock || ''} | ${h.controlTeam || '?'} ${h.controlScore || '?'} | ${h.entry || '—'}/${h.conviction || '—'} | ${h.signal || '—'}\n`;
+      });
+    }
+    // Full game data
+    userPrompt += `\nGAME DATA:\n${JSON.stringify(summary)}`;
+
+    const anthropicResp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': anthropicKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 2500,
+        system: SONNET_SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: userPrompt }],
+      }),
+    });
+
+    if (!anthropicResp.ok) {
+      const errText = await anthropicResp.text();
+      log(`${matchup}: ${triggerTag} CAL — Anthropic ${anthropicResp.status}: ${errText.substring(0, 200)}`);
       return;
     }
 
-    const result = JSON.parse(resp.body);
-    if (!result.analysis) {
-      log(`${matchup}: ${triggerTag} CAL — analyze returned no text`);
+    const anthropicData = await anthropicResp.json();
+    const analysisText = anthropicData.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+    if (!analysisText || analysisText.length < 20) {
+      log(`${matchup}: ${triggerTag} CAL — Sonnet returned empty analysis`);
       return;
     }
+    const result = { analysis: analysisText, usage: anthropicData.usage };
 
     // ── 8. Parse structured fields from Sonnet response ──
     const parsed = parseAnalysisText(result.analysis, hA, aA);
