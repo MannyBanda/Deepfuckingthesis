@@ -7838,8 +7838,8 @@ function renderCard(game){
   // If Sonnet said "Neither"/"EVEN", override controlTeam with client compute (non-mutating)
   var _indMerged = (_indRaw && rawInd && (!_indRaw.controlTeam || _indRaw.controlTeam==='Neither' || _indRaw.controlTeam==='EVEN') && rawInd.controlTeam && rawInd.controlTeam!=='Neither')
     ? Object.assign({}, _indRaw, {controlTeam: rawInd.controlTeam}) : _indRaw;
-  // Guard: ind must have score + I1 to be usable — incomplete hydration from auto-analysis gets nulled out
-  const ind = (_indMerged && _indMerged.score != null && _indMerged.I1) ? _indMerged : null;
+  // Guard: ind must have score + I1 to be usable — incomplete hydration from auto-analysis falls back to client compute
+  const ind = (_indMerged && _indMerged.score != null && _indMerged.I1) ? _indMerged : rawInd;
   const v=ind?getVerdict(ind.score):null;
   // Count indicators where the leader matches the controlling team (0.75+ for Sonnet, 1.0 for compute)
   const indWon = (ind && ind.controlTeam) ? [ind.I1,ind.I2,ind.I3,ind.I4,ind.I5].filter(d => {
