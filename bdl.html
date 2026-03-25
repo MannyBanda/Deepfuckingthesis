@@ -9199,8 +9199,8 @@ function renderCard(game){
     ? Object.assign({}, _indRaw, {controlTeam: rawInd.controlTeam}) : _indRaw;
   const v=ind?getVerdict(ind.score):null;
   // Count indicators where the leader matches the controlling team (0.75+ for Sonnet, 1.0 for compute)
-  const indWon = ind ? [ind.I1,ind.I2,ind.I3,ind.I4,ind.I5].filter(d => {
-    if(d.leader === 'EVEN') return false;
+  const indWon = (ind && ind.controlTeam) ? [ind.I1,ind.I2,ind.I3,ind.I4,ind.I5].filter(d => {
+    if(!d || d.leader === 'EVEN') return false;
     const leaderMatchesControl = d.leader.toUpperCase().substring(0,3) === ind.controlTeam.toUpperCase().substring(0,3);
     return leaderMatchesControl;
   }).length : 0;
@@ -9993,7 +9993,7 @@ function renderCard(game){
        {id:'I5',nm:'TEMPO/EFF',wt:10,d:ind.I5}].map(({id:iid,nm,wt,d})=>{
       let displayScore;
       if(d.sonnet){
-        const leaderIsControl = d.leader.toUpperCase().substring(0,3) === ind.controlTeam.toUpperCase().substring(0,3);
+        const leaderIsControl = (ind.controlTeam && d.leader) ? d.leader.toUpperCase().substring(0,3) === ind.controlTeam.toUpperCase().substring(0,3) : true;
         displayScore = leaderIsControl ? d.rawScore : (1 - d.rawScore);
       } else {
         displayScore = d.score;
