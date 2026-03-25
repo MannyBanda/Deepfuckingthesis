@@ -303,6 +303,7 @@ input,textarea,select{font-size:16px!important;}
     <button class="cbtn" id="btn-wp" onclick="showWPProfiles()" style="color:#60a5fa;border-color:#60a5fa">📈 WP</button>
     <button class="cbtn" id="btn-demo" onclick="toggleDemo()" style="color:var(--amber);border-color:var(--amber)">DEMO</button>
     <button class="cbtn" id="btn-ntfy" onclick="configNtfy()" style="color:var(--t3);border-color:var(--t3)">🔔 ALERTS</button>
+    <button class="cbtn" onclick="runClientQA()" style="color:#818cf8;border-color:#818cf8">QA</button>
     <span class="cml"><span id="game-count">0</span> games</span>
   </div>
 
@@ -507,7 +508,8 @@ async function pushContextToDB(game){
   var context = {};
 
   // Rolling window (cross-fade weighted recent-quarter I1-I5)
-  if(cs.rollingWindow && cs.rollingWindow.available){
+  // Only push client-computed windows — don't echo server data back to server
+  if(cs.rollingWindow && cs.rollingWindow.available && cs.rollingWindow.source !== 'server' && cs.rollingWindow.source !== 'server-ctx'){
     context.rollingWindow = {
       available: true,
       score: cs.rollingWindow.score,
@@ -851,28 +853,11 @@ async function hydrateFromServerContext(gameId){
     var ctxPeriod = data.period || 0;
     var hydrated = [];
 
-    // Rolling window + per-period scores — always adopt if server has more periods than client
+    // Rolling window — server is authoritative. Always adopt.
     if(ctx.rollingWindow && ctx.rollingWindow.available){
-      var serverPeriodCount = (ctx.rollingWindow.windowQuarters||[]).length;
-      var clientPeriodCount = cs._serverPeriodScores ? Object.keys(cs._serverPeriodScores).length : 0;
-      // Also count client's own captured quarterSnapshot periods
-      var clientQSCount = cs.quarterSnapshots ? Object.keys(cs.quarterSnapshots.quarters||{}).length : 0;
-      var clientTotal = Math.max(clientPeriodCount, clientQSCount);
-
-      if(!cs.rollingWindow || !cs.rollingWindow.available || serverPeriodCount > clientTotal){
-        cs.rollingWindow = ctx.rollingWindow;
-        cs.rollingWindow.source = 'server-ctx';
-        hydrated.push('window(Q'+serverPeriodCount+')');
-      }
-    }
-    // Per-period I1-I5 seeds — client uses these for cross-fade when its own snapshots are sparse
-    if(ctx.perPeriodScores){
-      var serverPKeys = Object.keys(ctx.perPeriodScores);
-      var existingPKeys = cs._serverPeriodScores ? Object.keys(cs._serverPeriodScores) : [];
-      if(serverPKeys.length > existingPKeys.length){
-        cs._serverPeriodScores = ctx.perPeriodScores;
-        hydrated.push('periods:'+serverPKeys.length);
-      }
+      cs.rollingWindow = ctx.rollingWindow;
+      cs.rollingWindow.source = 'server-ctx';
+      hydrated.push('window(Q'+(ctx.rollingWindow.windowQuarters||[]).length+')');
     }
 
     // Acceleration
@@ -966,16 +951,13 @@ async function hydrateFromServerContext(gameId){
       addLog(gameId, '📡 Server context hydrated (Q'+ctxPeriod+'): '+hydrated.join(', '), true);
       var g = games.find(function(x){ return x.id === gameId; });
       if(g){
-        // Re-compute rolling window with freshly hydrated server period scores
-        var freshWindow = computeRollingWindow(g);
-        if(freshWindow && freshWindow.available){
-          cs.rollingWindow = freshWindow;
-          // Also update gap/acceleration/combined read
-          var flr = computeAny(g);
-          if(flr){
-            updateGapLog(gameId, flr.score, flr.controlTeam, freshWindow, g);
-            cs.acceleration = computeAcceleration(cs.gapLog);
-            cs.combinedRead = classifyCombinedRead(flr.score, flr.controlTeam, freshWindow, cs.acceleration);
+        // QTR window is server-authoritative — already hydrated at line ~863.
+        // Re-run computeAny for floor + PBP + arrows, then update combined read from existing QTR window.
+        computeAny(g);
+        if(cs.rollingWindow && cs.rollingWindow.available){
+          var flr = cs.sonnetIndicators || cs.clientInd;
+          if(flr && flr.score){
+            cs.combinedRead = classifyCombinedRead(flr.score, flr.controlTeam, cs.rollingWindow, cs.acceleration);
           }
         }
         renderCard(g);
@@ -5568,13 +5550,8 @@ function compute(game){
   // Persist updated sustainability + lead comp so they survive refresh
   if(cardState[game.id].analysis) persistAnalysis(game.id, cardState[game.id]);
 
-  // Rolling window — quarter-based, merges server-seeded periods with client-captured ones
-  var windowResult = computeRollingWindow(game);
-  if(windowResult && windowResult.available){
-    cardState[game.id].rollingWindow = windowResult;
-  } else if(!cardState[game.id].rollingWindow || !cardState[game.id].rollingWindow.available){
-    cardState[game.id].rollingWindow = windowResult;
-  }
+  // QTR rolling window is server-authoritative — client never computes or overwrites.
+  // Hydrated from server snapshots (W2 in applyAutoAnalysesToCards) or server context (W3 in hydrateFromServerContext).
   var _pwSize = getPossWindowSize(game);
   var pbpWindow = computePossessionWindow(game, _pwSize);
   cardState[game.id].pbpWindow = pbpWindow;
@@ -5585,7 +5562,7 @@ function compute(game){
   var _cs = cardState[game.id];
   var _floorScore = (_cs.sonnetIndicators ? _cs.sonnetIndicators.score : score);
   var _floorTeam = (_cs.sonnetIndicators ? _cs.sonnetIndicators.controlTeam : cTeam);
-  var _gapWindow = (pbpWindow && pbpWindow.available) ? pbpWindow : windowResult;
+  var _gapWindow = (pbpWindow && pbpWindow.available) ? pbpWindow : (_cs.rollingWindow && _cs.rollingWindow.available) ? _cs.rollingWindow : null;
   if(_gapWindow && _gapWindow.available){
     updateGapLog(game.id, _floorScore, _floorTeam, _gapWindow, game);
   }
@@ -5865,7 +5842,6 @@ function synthesize(game){
   // ── GATHER INPUTS ──
   var floor = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
   var pbp = cs.pbpWindow;
-  var qtr = cs.rollingWindow;
   var ewp = cs.espnWP;
   var sust = cs.clientSustainability;
   var od = cs.oddsData;
@@ -5895,9 +5871,6 @@ function synthesize(game){
   var pbpScore = pbpAvail ? pbp.score : null;
   var pbpGap = pbpAvail && pbpAgrees ? (pbp.score - fScore) : pbpAvail ? -(pbp.score) : null;
 
-  // ── QTR CONTEXT ──
-  var qtrAvail = qtr && qtr.available && qtr.score;
-  var qtrAgrees = qtrAvail && qtr.controlTeam === fTeam;
 
   // ── SUSTAINABILITY ──
   // Check both client sustainability and Sonnet's sustainability audit
@@ -11632,6 +11605,213 @@ function runQA(gameId){
   });
   console.log('%c══ SUMMARY: '+pass+' pass, '+fail+' fail, '+warn+' warn ══', fail>0?'color:#ff5252;font-weight:bold;font-size:12px':'color:#00ff88;font-weight:bold;font-size:12px');
   return {pass:pass, fail:fail, warn:warn, results:results};
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CLIENT QA — inspects live cardState, renders results in modal overlay
+// ══════════════════════════════════════════════════════════════════════════════
+function runClientQA(gameId){
+  if(!gameId){ if(selIds && selIds[0]) gameId=selIds[0]; else { alert('Select a game first'); return; } }
+  var g = games.find(function(x){return x.id===gameId;});
+  if(!g){ alert('Game not found: '+gameId); return; }
+  var cs = cardState[gameId];
+  if(!cs){ alert('No cardState for game'); return; }
+  var hA = g.home?.alias||'HOME', aA = g.away?.alias||'AWAY';
+  var results = [];
+  var pass=0, fail=0, warn=0;
+
+  function ok(label, detail){ results.push({s:'PASS',l:label,d:detail||''}); pass++; }
+  function bad(label, detail){ results.push({s:'FAIL',l:label,d:detail||''}); fail++; }
+  function meh(label, detail){ results.push({s:'WARN',l:label,d:detail||''}); warn++; }
+
+  // ── 1. FLOOR SCORE ──
+  var ind = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
+  if(ind && ind.score != null){
+    var src = cs.sonnetIndicators ? 'SONNET' : cs.clientInd ? 'CLIENT' : 'SERVER';
+    ok('Floor score', ind.controlTeam + ' ' + ind.score.toFixed(2) + ' (' + src + ')');
+  } else { bad('Floor score', 'No indicator data — no floor, PBP, or Sonnet analysis'); }
+
+  // ── 2. QTR WINDOW (server-authoritative) ──
+  var rw = cs.rollingWindow;
+  if(rw && rw.available){
+    var rwSrc = rw.source || rw.dataQuality || '?';
+    var rwAge = rw._hydratedAt ? Math.round((Date.now() - rw._hydratedAt) / 60000) + 'm' : '?';
+    ok('QTR window', rw.controlTeam + ' ' + rw.score.toFixed(2) + ' | source: ' + rwSrc + ' | quarters: ' + (rw.windowQuarters||[]).join(','));
+  } else if(rw && rw.reason){
+    meh('QTR window', 'Not available: ' + rw.reason);
+  } else {
+    meh('QTR window', 'Null — waiting for server hydration');
+  }
+
+  // ── 3. PBP WINDOW ──
+  var pw = cs.pbpWindow;
+  if(pw && pw.available){
+    ok('PBP window', pw.controlTeam + ' ' + pw.score.toFixed(2) + ' | ' + (pw.windowPossessions||0) + ' poss');
+  } else if(pw && pw.reason){
+    meh('PBP window', 'Not available: ' + pw.reason);
+  } else {
+    meh('PBP window', 'Null — no PBP data fetched yet');
+  }
+
+  // ── 4. SONNET INDICATORS ──
+  if(cs.sonnetIndicators && cs.sonnetIndicators.score != null){
+    var si = cs.sonnetIndicators;
+    ok('Sonnet indicators', si.controlTeam + ' ' + si.score.toFixed(2) + ' | I1:' + (si.I1?.score||'?') + ' I2:' + (si.I2?.score||'?') + ' I3:' + (si.I3?.score||'?') + ' I4:' + (si.I4?.score||'?') + ' I5:' + (si.I5?.score||'?'));
+  } else {
+    meh('Sonnet indicators', 'Not populated — press ANALYZE or wait for server auto-analysis');
+  }
+
+  // ── 5. PREDICTION + EDGE ──
+  var pred = cs.prediction;
+  if(pred){
+    var edgeVal = pred.edgeNum;
+    if(edgeVal != null && !isNaN(edgeVal)){
+      ok('Edge', (edgeVal >= 0 ? '+' : '') + edgeVal.toFixed(1) + '% | FWP: ' + (pred.fwp||'?') + ' | MIP: ' + (pred.mip||'?'));
+    } else {
+      meh('Edge', 'edgeNum is null/NaN — prediction exists but edge not computed');
+    }
+    ok('Prediction', (pred.signalType||'?') + ' | entry: ' + (pred.entry||'?') + ' | conviction: ' + (pred.conviction||'?'));
+  } else {
+    meh('Prediction', 'Not hydrated — no Sonnet analysis yet');
+  }
+
+  // ── 6. SUSTAINABILITY ──
+  var sust = cs.clientSustainability;
+  var sa = cs.sustainabilityAudit;
+  if(sust && (sust.home?.tier || sust.away?.tier)){
+    ok('Sustainability', hA + ': ' + (sust.home?.tier||'?') + ' | ' + aA + ': ' + (sust.away?.tier||'?') + ' (clientSustainability)');
+  } else if(sa && (sa.home?.tier || sa.away?.tier)){
+    meh('Sustainability', hA + ': ' + (sa.home?.tier||'?') + ' | ' + aA + ': ' + (sa.away?.tier||'?') + ' (sustainabilityAudit fallback)');
+  } else {
+    bad('Sustainability', 'No sustainability data — neither clientSustainability nor sustainabilityAudit populated');
+  }
+
+  // ── 7. THROUGHPUT / LEAD SAFETY ──
+  var tp = cs.throughput;
+  var ls = cs.leadSafety;
+  if(tp){
+    if(!isNaN(tp.conservative?.totalSwing) && !isNaN(tp.expected?.totalSwing)){
+      ok('Throughput', tp.classification + ' | +' + Math.round(tp.conservative.totalSwing) + '/+' + Math.round(tp.expected.totalSwing) + '/+' + Math.round(tp.optimistic.totalSwing) + ' vs ' + tp.deficit + ' deficit | ' + tp.remainingPoss + ' poss');
+    } else {
+      bad('Throughput', 'Values are NaN — computeSwingCore returned garbage');
+    }
+  } else if(ls){
+    if(!isNaN(ls.conservative?.totalSwing) && !isNaN(ls.expected?.totalSwing)){
+      ok('Lead safety', ls.classification + ' | +' + Math.round(ls.conservative.totalSwing) + '/+' + Math.round(ls.expected.totalSwing) + '/+' + Math.round(ls.optimistic.totalSwing) + ' vs ' + ls.lead + ' lead | ' + ls.remainingPoss + ' poss');
+    } else {
+      bad('Lead safety', 'Values are NaN — computeSwingCore returned garbage');
+    }
+  } else {
+    // Both null is normal for tied games or pre-Q2
+    var period = g.period || 0;
+    var margin = Math.abs((g.homePoints||0) - (g.awayPoints||0));
+    if(period >= 2 && margin >= 2){
+      meh('Throughput/Lead safety', 'Null despite Q' + period + ' margin ' + margin + ' — check floor score exists');
+    } else {
+      ok('Throughput/Lead safety', 'N/A (period ' + period + ', margin ' + margin + ')');
+    }
+  }
+
+  // ── 8. COMBINED READ ──
+  var cr = cs.combinedRead;
+  if(cr && cr.read && cr.read !== 'TOO EARLY'){
+    ok('Combined read', cr.read + (cr.note ? ' — ' + cr.note : ''));
+  } else if(cr && cr.read === 'TOO EARLY'){
+    meh('Combined read', 'TOO EARLY — window not yet available');
+  } else {
+    meh('Combined read', 'Null');
+  }
+
+  // ── 9. PBP AUDIT ──
+  var pbp = cs.pbpAudit;
+  if(pbp && pbp.home && pbp.away){
+    var age = cs.pbpTime ? Math.round((Date.now() - cs.pbpTime.getTime()) / 60000) : '?';
+    ok('PBP audit', pbp.totalShots + ' shots, ' + pbp.totalTOs + ' TOs, ' + (pbp.runs||[]).length + ' runs | Q' + (cs.pbpPeriod||'?') + ' | ' + age + 'm ago');
+  } else {
+    meh('PBP audit', 'Not populated — BDL plays not fetched');
+  }
+
+  // ── 10. ODDS ──
+  if(cs.oddsData && cs.oddsData.homeSpread){
+    ok('Odds', hA + ' ' + cs.oddsData.homeSpread + ' | ML ' + (cs.oddsData.homeML||'?') + '/' + (cs.oddsData.awayML||'?') + ' | O/U ' + (cs.oddsData.total||'?'));
+  } else {
+    meh('Odds', 'Not populated');
+  }
+
+  // ── 11. ARROWS ──
+  var arrows = cs.subMetricArrows;
+  if(arrows && arrows.home && arrows.away){
+    var rising = 0, falling = 0;
+    ['home','away'].forEach(function(side){
+      Object.values(arrows[side]).forEach(function(a){ if(a.arrow==='RISING') rising++; if(a.arrow==='FALLING') falling++; });
+    });
+    ok('Sub-metric arrows', rising + ' rising, ' + falling + ' falling');
+  } else {
+    meh('Sub-metric arrows', 'Not populated');
+  }
+
+  // ── 12. SYNTHESIZER ──
+  var synth = cs._lastSynth;
+  if(!synth){
+    // Try computing it
+    var synthResult = synthesize(g);
+    if(synthResult){
+      ok('Synthesizer', synthResult.action + ' | ' + synthResult.fTeam + ' ' + synthResult.fScore.toFixed(2) + ' | conf: ' + synthResult.confidence);
+    } else {
+      meh('Synthesizer', 'Returns null — likely missing floor score');
+    }
+  } else {
+    ok('Synthesizer', synth.action + ' | ' + synth.fTeam + ' ' + synth.fScore.toFixed(2));
+  }
+
+  // ── 13. LEAD COMPOSITION ──
+  var lc = cs.clientLeadComposition || cs.leadComposition;
+  if(lc && lc.classification){
+    ok('Lead composition', lc.classification + ' | S:' + (lc.structuralPct||0) + '% V:' + (lc.variancePct||0) + '%');
+  } else {
+    meh('Lead composition', 'Not computed');
+  }
+
+  // ── RENDER MODAL ──
+  var existing = document.getElementById('qa-modal');
+  if(existing) existing.remove();
+
+  var overlay = document.createElement('div');
+  overlay.id = 'qa-modal';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;background:rgba(0,0,0,.85);overflow-y:auto;padding:12px;-webkit-overflow-scrolling:touch';
+  overlay.onclick = function(e){ if(e.target === overlay) overlay.remove(); };
+
+  var h = '<div style="max-width:500px;margin:0 auto;font-family:var(--mono)">';
+  h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
+  h += '<div style="font-size:11px;font-weight:700;color:#818cf8;letter-spacing:2px">CLIENT QA</div>';
+  h += '<div style="font-size:9px;color:var(--t2)">' + aA + ' @ ' + hA + ' | Q' + (g.period||0) + ' ' + (g.clock||'') + '</div>';
+  h += '<button onclick="this.closest(\'#qa-modal\').remove()" style="background:none;border:1px solid var(--t3);color:var(--t2);font-size:10px;padding:3px 8px;cursor:pointer;border-radius:3px">CLOSE</button>';
+  h += '</div>';
+
+  // Summary bar
+  var sumColor = fail > 0 ? '#ff5252' : warn > 0 ? '#ffab40' : '#00ff88';
+  h += '<div style="padding:6px 10px;margin-bottom:8px;border-radius:4px;border:1px solid ' + sumColor + ';background:rgba(255,255,255,.03)">';
+  h += '<span style="font-size:10px;font-weight:700;color:' + sumColor + '">' + pass + ' PASS</span>';
+  if(fail > 0) h += ' <span style="font-size:10px;font-weight:700;color:#ff5252">' + fail + ' FAIL</span>';
+  if(warn > 0) h += ' <span style="font-size:10px;font-weight:700;color:#ffab40">' + warn + ' WARN</span>';
+  h += '</div>';
+
+  // Results
+  results.forEach(function(r){
+    var color = r.s === 'PASS' ? '#00ff88' : r.s === 'FAIL' ? '#ff5252' : '#ffab40';
+    var bg = r.s === 'FAIL' ? 'rgba(255,82,82,.08)' : 'transparent';
+    h += '<div style="padding:5px 8px;margin-bottom:2px;border-left:2px solid ' + color + ';background:' + bg + '">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:baseline">';
+    h += '<span style="font-size:8px;font-weight:600;color:' + color + '">' + r.s + '</span>';
+    h += '<span style="font-size:8px;font-weight:600;color:var(--t1)">' + r.l + '</span>';
+    h += '</div>';
+    if(r.d) h += '<div style="font-size:7px;color:var(--t3);margin-top:1px;word-break:break-word">' + r.d + '</div>';
+    h += '</div>';
+  });
+
+  h += '</div>';
+  overlay.innerHTML = h;
+  document.body.appendChild(overlay);
 }
 
 </script>
