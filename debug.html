@@ -2057,439 +2057,278 @@ async function runQA(section){
   qaEl.style.display = 'block';
   qaEl.innerHTML = '<div style="color:#ffd166;font-size:12px;padding:8px">Running QA suite...</div>';
 
-  // ── GAME SCOPING ──
   var selectedGameId = gameSelectEl.value || null;
   var selectedGame = selectedGameId ? allGames.find(function(g){return g.id === selectedGameId;}) : null;
   var gameLabel = selectedGame ? (selectedGame.matchup || selectedGame.away_alias+'@'+selectedGame.home_alias || selectedGameId.substring(0,12)) : 'ALL GAMES';
-  var gameFilter = selectedGameId ? " AND game_id = '"+selectedGameId.replace(/'/g,"''")+"'" : '';
-  var gameFilterWhere = selectedGameId ? " WHERE game_id = '"+selectedGameId.replace(/'/g,"''")+"'" : '';
 
   var results = [];
   var pass=0, fail=0, warn=0;
   function ok(group, label, detail){ results.push({status:'PASS',group:group,label:label,detail:detail||''}); pass++; }
   function bad(group, label, detail){ results.push({status:'FAIL',group:group,label:label,detail:detail||''}); fail++; }
   function meh(group, label, detail){ results.push({status:'WARN',group:group,label:label,detail:detail||''}); warn++; }
-  async function qFetch(url){ var r = await fetch(url, {credentials:'include'}); if(!r.ok) throw new Error('HTTP '+r.status); return await r.json(); }
 
   var runAll = !section;
 
   try {
-    // ═══════════════════════════════════════════
     // 1. SERVER POLLING HEALTH
-    // ═══════════════════════════════════════════
     if(runAll || section === 'polling'){
       try {
-        // Heartbeats
-        var hbData = await qFetch(FN+'db-api?action=query&q='+encodeURIComponent('SELECT * FROM poll_heartbeats ORDER BY last_beat DESC LIMIT 5'));
-        var hbRows = hbData.rows || [];
-        if(hbRows.length === 0){
-          bad('POLL','heartbeats','No heartbeat records found — server polling may not be running');
+        var hbData = await fetchJSON(FN+'db-api?action=heartbeat_check&league=nba');
+        if(!hbData){
+          bad('POLL','heartbeat','Failed to fetch heartbeat');
+        } else if(hbData.clientActive){
+          ok('POLL','heartbeat:active','Client active — last poll '+Math.round(hbData.ageMinutes)+'m ago ('+hbData.device+')');
+        } else if(hbData.lastPoll){
+          var ageMins = hbData.ageMinutes || 999;
+          if(ageMins < 60) meh('POLL','heartbeat:idle','Client idle — last poll '+Math.round(ageMins)+'m ago');
+          else bad('POLL','heartbeat:stale','Client stale — last poll '+Math.round(ageMins)+'m ago');
         } else {
-          var latestBeat = new Date(hbRows[0].last_beat);
-          var ageMins = (Date.now() - latestBeat.getTime()) / 60000;
-          if(ageMins < 5) ok('POLL','heartbeat:fresh','Last beat '+ageMins.toFixed(0)+'m ago ('+hbRows[0].source+')');
-          else if(ageMins < 60) meh('POLL','heartbeat:stale','Last beat '+ageMins.toFixed(0)+'m ago — polling may be idle (no live games)');
-          else bad('POLL','heartbeat:old','Last beat '+ageMins.toFixed(0)+'m ago — server polling appears dead');
-          ok('POLL','heartbeat:count',hbRows.length+' heartbeat records');
+          meh('POLL','heartbeat:none','No heartbeat records found');
         }
 
-        // Poll state (cached schedule)
-        var psData = await qFetch(FN+'db-api?action=query&q='+encodeURIComponent("SELECT key, LENGTH(value::text) as size, updated_at FROM poll_state ORDER BY updated_at DESC LIMIT 10"));
-        var psRows = psData.rows || [];
-        if(psRows.length === 0) meh('POLL','poll_state','No poll_state records');
-        else {
-          ok('POLL','poll_state',psRows.length+' entries');
-          psRows.forEach(function(r){
-            var age = (Date.now() - new Date(r.updated_at).getTime()) / 3600000;
-            if(r.key && r.key.includes('schedule') && age > 24) meh('POLL','schedule:'+r.key,'Schedule cache '+age.toFixed(0)+'h old');
-          });
+        var psData = await fetchJSON(FN+'db-api?action=get_poll_state&league=nba');
+        if(!psData || !psData.state){
+          meh('POLL','poll_state','No poll_state for NBA');
+        } else {
+          var ps = psData.state;
+          var psAge = ps.fetched_at ? (Date.now() - new Date(ps.fetched_at).getTime()) / 3600000 : 999;
+          ok('POLL','poll_state','Date: '+ps.date+' | Games: '+ps.game_count+' | All final: '+(ps.all_final?'YES':'NO'));
+          if(psAge > 24) meh('POLL','schedule:stale','Schedule cache '+psAge.toFixed(0)+'h old');
+          else ok('POLL','schedule:fresh','Schedule fetched '+psAge.toFixed(1)+'h ago');
         }
       } catch(e){ bad('POLL','error',e.message); }
     }
 
-    // ═══════════════════════════════════════════
     // 2. ANALYSES PIPELINE
-    // ═══════════════════════════════════════════
     if(runAll || section === 'analyses'){
       try {
-        var anData = await qFetch(FN+'db-api?action=query&q='+encodeURIComponent('SELECT game_id, period, clock, control_team, control_score, fwp, edge, entry, conviction, signal, sustainability, lead_source, trigger, prediction_json, indicators_json, created_at FROM analyses WHERE 1=1'+gameFilter+' ORDER BY created_at DESC LIMIT 20'));
-        var anRows = anData.rows || [];
-        if(anRows.length === 0){
-          meh('ANAL','no_data','No analyses in DB');
-        } else {
-          ok('ANAL','count',anRows.length+' recent analyses');
+        var anUrl = selectedGameId
+          ? FN+'db-api?action=get_auto_analyses&game_ids='+encodeURIComponent(selectedGameId)
+          : FN+'db-api?action=get_analyses&league=nba';
+        var anData = await fetchJSON(anUrl);
+        var anRows = [];
+        if(anData && anData.analyses){
+          if(Array.isArray(anData.analyses)){
+            anRows = anData.analyses;
+          } else {
+            Object.keys(anData.analyses).forEach(function(gid){
+              anRows = anRows.concat(anData.analyses[gid]);
+            });
+          }
+        }
 
-          // Check auto vs manual trigger mix
+        if(anRows.length === 0){
+          meh('ANAL','no_data','No analyses found'+(selectedGameId?' for this game':''));
+        } else {
+          ok('ANAL','count',anRows.length+' analyses');
           var autoCount = anRows.filter(function(r){return r.trigger && r.trigger.startsWith('auto');}).length;
           var manualCount = anRows.filter(function(r){return !r.trigger || r.trigger === 'manual';}).length;
           ok('ANAL','triggers','Auto: '+autoCount+' | Manual: '+manualCount);
 
-          // Validate each analysis
-          var edgeParseOK = 0, edgeParseFail = 0;
-          var predJsonOK = 0, predJsonFail = 0, predJsonMissing = 0;
-          var indJsonOK = 0, indJsonFail = 0, indJsonMissing = 0;
-          var sustOK = 0, sustMissing = 0;
-          var fwpOK = 0, fwpMissing = 0;
+          var edgeParseOK=0, edgeParseFail=0, predJsonOK=0, predJsonFail=0, predJsonMissing=0;
+          var indJsonOK=0, indJsonFail=0, indJsonMissing=0, sustOK=0, sustMissing=0, fwpOK=0, fwpMissing=0;
 
           anRows.forEach(function(r){
-            // Edge parseable?
-            if(r.edge){
-              var m = String(r.edge).match(/([+-]?\d+\.?\d*)/);
-              if(m) edgeParseOK++; else edgeParseFail++;
-            }
-
-            // prediction_json has homeValue/awayValue?
-            if(r.prediction_json){
-              try {
-                var pj = typeof r.prediction_json === 'string' ? JSON.parse(r.prediction_json) : r.prediction_json;
-                if(pj.homeValue && pj.awayValue && pj.homeValue.fwp != null) predJsonOK++;
-                else predJsonFail++;
-              } catch(e){ predJsonFail++; }
-            } else { predJsonMissing++; }
-
-            // indicators_json structure
-            if(r.indicators_json){
-              try {
-                var ij = typeof r.indicators_json === 'string' ? JSON.parse(r.indicators_json) : r.indicators_json;
-                if(ij.I1 && ij.I2 && ij.I3) indJsonOK++;
-                else indJsonFail++;
-              } catch(e){ indJsonFail++; }
-            } else { indJsonMissing++; }
-
-            // Sustainability
-            if(r.sustainability && r.sustainability.length > 3) sustOK++; else sustMissing++;
-
-            // FWP
-            if(r.fwp && r.fwp.length > 3) fwpOK++; else fwpMissing++;
+            if(r.edge){ var m=String(r.edge).match(/([+-]?\d+\.?\d*)/); if(m) edgeParseOK++; else edgeParseFail++; }
+            var pj=r.prediction_json;
+            if(pj){ try{ if(typeof pj==='string') pj=JSON.parse(pj); if(pj.homeValue&&pj.awayValue&&pj.homeValue.fwp!=null) predJsonOK++; else predJsonFail++; }catch(e){predJsonFail++;} } else predJsonMissing++;
+            var ij=r.indicators_json;
+            if(ij){ try{ if(typeof ij==='string') ij=JSON.parse(ij); if(ij.I1&&ij.I2&&ij.I3) indJsonOK++; else indJsonFail++; }catch(e){indJsonFail++;} } else indJsonMissing++;
+            if(r.sustainability&&r.sustainability.length>3) sustOK++; else sustMissing++;
+            if(r.fwp&&r.fwp.length>3) fwpOK++; else fwpMissing++;
           });
 
-          if(edgeParseFail > 0) bad('ANAL','edge:parse',edgeParseFail+'/'+anRows.length+' edges unparseable');
-          else if(edgeParseOK > 0) ok('ANAL','edge:parse',edgeParseOK+'/'+anRows.length+' edges parse OK');
-
-          if(predJsonFail > 0) bad('ANAL','pred_json:shape',predJsonFail+' malformed prediction_json');
-          else if(predJsonOK > 0) ok('ANAL','pred_json:shape',predJsonOK+' valid, '+predJsonMissing+' missing');
-          else if(predJsonMissing === anRows.length) meh('ANAL','pred_json:missing','All '+anRows.length+' analyses lack prediction_json');
-
-          if(indJsonFail > 0) bad('ANAL','ind_json:shape',indJsonFail+' malformed indicators_json');
-          else if(indJsonOK > 0) ok('ANAL','ind_json:shape',indJsonOK+' valid');
-
-          if(sustMissing > anRows.length * 0.5) meh('ANAL','sustainability',sustOK+'/'+anRows.length+' have sustainability');
+          if(edgeParseFail>0) bad('ANAL','edge:parse',edgeParseFail+'/'+anRows.length+' unparseable');
+          else if(edgeParseOK>0) ok('ANAL','edge:parse',edgeParseOK+'/'+anRows.length+' parse OK');
+          if(predJsonFail>0) bad('ANAL','pred_json',predJsonFail+' malformed');
+          else if(predJsonOK>0) ok('ANAL','pred_json',predJsonOK+' valid, '+predJsonMissing+' missing');
+          else if(predJsonMissing===anRows.length) meh('ANAL','pred_json','All lack prediction_json');
+          if(indJsonFail>0) bad('ANAL','ind_json',indJsonFail+' malformed');
+          else if(indJsonOK>0) ok('ANAL','ind_json',indJsonOK+' valid');
+          if(sustMissing>anRows.length*0.5) meh('ANAL','sustainability',sustOK+'/'+anRows.length+' have sustainability');
           else ok('ANAL','sustainability',sustOK+'/'+anRows.length+' have sustainability');
-
-          if(fwpMissing > anRows.length * 0.5) meh('ANAL','fwp',fwpOK+'/'+anRows.length+' have FWP');
+          if(fwpMissing>anRows.length*0.5) meh('ANAL','fwp',fwpOK+'/'+anRows.length+' have FWP');
           else ok('ANAL','fwp',fwpOK+'/'+anRows.length+' have FWP');
 
-          // Check edgeNum hydration capability — can the client extract edgeNum from DB data?
-          var hydratable = 0;
+          var hydratable=0;
           anRows.forEach(function(r){
-            var hasEdgeStr = r.edge && String(r.edge).match(/([+-]?\d+\.?\d*)/);
-            var hasFwpEdge = false;
-            if(r.prediction_json){
-              try {
-                var pj = typeof r.prediction_json === 'string' ? JSON.parse(r.prediction_json) : r.prediction_json;
-                hasFwpEdge = pj.homeValue && pj.homeValue.edge != null;
-              } catch(e){}
-            }
-            if(hasEdgeStr || hasFwpEdge) hydratable++;
+            var hasEdgeStr=r.edge&&String(r.edge).match(/([+-]?\d+\.?\d*)/);
+            var hasFwpEdge=false;
+            var pj2=r.prediction_json;
+            if(pj2){try{if(typeof pj2==='string')pj2=JSON.parse(pj2);hasFwpEdge=pj2.homeValue&&pj2.homeValue.edge!=null;}catch(e){}}
+            if(hasEdgeStr||hasFwpEdge) hydratable++;
           });
-          if(hydratable > 0) ok('ANAL','edgeNum:hydration',hydratable+'/'+anRows.length+' can hydrate edgeNum on mount');
-          else meh('ANAL','edgeNum:hydration','0 analyses can hydrate edgeNum — BUY WINDOW CLOSING will show DEVELOPING until manual Analyze');
+          if(hydratable>0) ok('ANAL','edgeNum:hydration',hydratable+'/'+anRows.length+' can hydrate edgeNum');
+          else meh('ANAL','edgeNum:hydration','0 can hydrate — BWC requires edge data');
+
+          var buyCount=anRows.filter(function(r){return r.signal&&r.signal.toUpperCase().startsWith('BUY');}).length;
+          var noValCount=anRows.filter(function(r){return r.signal&&r.signal.toUpperCase().includes('NO VALUE');}).length;
+          var passCount=anRows.filter(function(r){return r.signal&&r.signal.toUpperCase().includes('PASS');}).length;
+          ok('SIG','distribution','BUY='+buyCount+' NO_VALUE='+noValCount+' PASS='+passCount+' (of '+anRows.length+')');
         }
       } catch(e){ bad('ANAL','error',e.message); }
     }
 
-    // ═══════════════════════════════════════════
-    // 3. SNAPSHOTS — throughput + lead safety
-    // ═══════════════════════════════════════════
+    // 3. SNAPSHOTS
     if(runAll || section === 'snapshots'){
       try {
-        var snData = await qFetch(FN+'db-api?action=query&q='+encodeURIComponent("SELECT game_id, period, clock, snapshot_data, created_at FROM snapshots WHERE 1=1"+gameFilter+" ORDER BY created_at DESC LIMIT 20"));
-        var snRows = snData.rows || [];
-        if(snRows.length === 0){
-          meh('SNAP','no_data','No snapshots in DB');
+        if(!selectedGameId){
+          meh('SNAP','no_game','Select a game to validate snapshots');
         } else {
-          ok('SNAP','count',snRows.length+' recent snapshots');
-
-          var tpFound=0, lsFound=0, sustFound=0, floorFound=0;
-          var tpValid=0, lsValid=0;
-          var validClasses = ['STRONG RECOVERY','PROBABLE','CONTESTED','UNLIKELY','NO PATH'];
-          var validLsClasses = ['SAFE','CUSHIONED','AT RISK','CRITICAL'];
-
-          snRows.forEach(function(r){
-            var sd = null;
-            try { sd = typeof r.snapshot_data === 'string' ? JSON.parse(r.snapshot_data) : r.snapshot_data; } catch(e){}
-            if(!sd) return;
-
-            // Throughput
-            if(sd.throughput){
-              tpFound++;
-              if(sd.throughput.classification && validClasses.indexOf(sd.throughput.classification) >= 0
-                && typeof sd.throughput.conservative === 'number'
-                && typeof sd.throughput.deficit === 'number'
-                && !isNaN(sd.throughput.conservative)){
-                tpValid++;
-              }
-            }
-
-            // Lead Safety
-            if(sd.leadSafety){
-              lsFound++;
-              if(sd.leadSafety.classification && validLsClasses.indexOf(sd.leadSafety.classification) >= 0
-                && typeof sd.leadSafety.conservative === 'number'
-                && typeof sd.leadSafety.lead === 'number'
-                && !isNaN(sd.leadSafety.conservative)){
-                lsValid++;
-              }
-            }
-
-            // Sustainability in snapshot
-            if(sd.sustainability || sd.sust_json) sustFound++;
-
-            // Floor score
-            if(sd.controlScore || sd.floorScore) floorFound++;
-          });
-
-          // Throughput results
-          if(tpFound > 0){
-            ok('SNAP','throughput:found',tpFound+'/'+snRows.length+' snapshots have throughput data');
-            if(tpValid === tpFound) ok('SNAP','throughput:valid','All '+tpFound+' throughput records valid');
-            else bad('SNAP','throughput:valid',tpValid+'/'+tpFound+' valid — some have NaN or bad classification');
+          var snData = await fetchJSON(FN+'db-api?action=history&game_id='+encodeURIComponent(selectedGameId));
+          var snRows = (snData && snData.snapshots) || [];
+          if(snRows.length === 0){
+            meh('SNAP','no_data','No snapshots for this game');
           } else {
-            meh('SNAP','throughput:missing','No snapshots contain throughput — needs trailing control team in period 2+');
+            ok('SNAP','count',snRows.length+' snapshots');
+            var serverCount=snRows.filter(function(r){return r.source==='server';}).length;
+            var clientCount=snRows.filter(function(r){return r.source==='client';}).length;
+            ok('SNAP','sources','Server: '+serverCount+' | Client: '+clientCount);
+            if(serverCount>0) ok('SNAP','server_polling','Server polling produced '+serverCount+' snapshots');
+
+            var tpFound=0,lsFound=0,sustFound=0,floorFound=0,tpValid=0,lsValid=0;
+            var validTP=['STRONG RECOVERY','PROBABLE','CONTESTED','UNLIKELY','NO PATH'];
+            var validLS=['SAFE','CUSHIONED','AT RISK','CRITICAL'];
+
+            snRows.forEach(function(r){
+              var sd=r.snapshot_data;
+              if(!sd)return;
+              try{if(typeof sd==='string')sd=JSON.parse(sd);}catch(e){return;}
+              if(sd.throughput){tpFound++;if(sd.throughput.classification&&validTP.indexOf(sd.throughput.classification)>=0&&typeof sd.throughput.conservative==='number'&&!isNaN(sd.throughput.conservative))tpValid++;}
+              if(sd.leadSafety){lsFound++;if(sd.leadSafety.classification&&validLS.indexOf(sd.leadSafety.classification)>=0&&typeof sd.leadSafety.conservative==='number'&&!isNaN(sd.leadSafety.conservative))lsValid++;}
+              if(sd.sustainability||sd.sust_json)sustFound++;
+              if(r.floor_score||sd.controlScore||sd.floorScore)floorFound++;
+            });
+
+            if(tpFound>0){ok('SNAP','throughput:found',tpFound+'/'+snRows.length);if(tpValid===tpFound)ok('SNAP','throughput:valid','All valid');else bad('SNAP','throughput:invalid',(tpFound-tpValid)+' invalid');}
+            else meh('SNAP','throughput:none','Needs trailing control team, period 2+');
+            if(lsFound>0){ok('SNAP','leadSafety:found',lsFound+'/'+snRows.length);if(lsValid===lsFound)ok('SNAP','leadSafety:valid','All valid');else bad('SNAP','leadSafety:invalid',(lsFound-lsValid)+' invalid');}
+            else meh('SNAP','leadSafety:none','Needs leading control team (lead>=2), period 2+');
+            if(sustFound>0) ok('SNAP','sustainability',sustFound+'/'+snRows.length); else meh('SNAP','sustainability:none','No sustainability');
+            if(floorFound>0) ok('SNAP','floor',floorFound+'/'+snRows.length); else meh('SNAP','floor:none','No floor score');
+            if(snRows.length>=2){
+              var firstTs=new Date(snRows[0].ts||snRows[0].created_at);
+              var lastTs=new Date(snRows[snRows.length-1].ts||snRows[snRows.length-1].created_at);
+              var spanMins=Math.abs(lastTs-firstTs)/60000;
+              ok('SNAP','timespan',spanMins.toFixed(0)+' min span (~'+Math.round(spanMins/snRows.length)+' min interval)');
+            }
           }
-
-          // Lead Safety results
-          if(lsFound > 0){
-            ok('SNAP','leadSafety:found',lsFound+'/'+snRows.length+' snapshots have lead safety data');
-            if(lsValid === lsFound) ok('SNAP','leadSafety:valid','All '+lsFound+' lead safety records valid');
-            else bad('SNAP','leadSafety:valid',lsValid+'/'+lsFound+' valid');
-          } else {
-            meh('SNAP','leadSafety:missing','No snapshots contain lead safety — needs leading control team (lead >= 2) in period 2+');
-          }
-
-          if(sustFound > 0) ok('SNAP','sustainability',sustFound+'/'+snRows.length+' have sustainability');
-          else meh('SNAP','sustainability','No snapshots contain sustainability data');
-
-          if(floorFound > 0) ok('SNAP','floor',floorFound+'/'+snRows.length+' have floor score');
-          else meh('SNAP','floor','No snapshots contain floor score');
         }
       } catch(e){ bad('SNAP','error',e.message); }
     }
 
-    // ═══════════════════════════════════════════
     // 4. BDL DATA TYPE SAFETY
-    // ═══════════════════════════════════════════
     if(runAll || section === 'bdl'){
       try {
-        // Fetch today's box scores
-        var today = new Date().toISOString().slice(0,10);
-        var yesterday = new Date(Date.now()-86400000).toISOString().slice(0,10);
-        var targetDate = selectedGame && selectedGame.date ? selectedGame.date : yesterday;
-        var bData = await qFetch(FN+'bdl-data?type=box_scores&league=nba&date='+targetDate);
-        var games = (bData && bData.data) || [];
-        if(games.length === 0 && !selectedGame){
-          // Try today
-          bData = await qFetch(FN+'bdl-data?type=box_scores&league=nba&date='+today);
-          games = (bData && bData.data) || [];
-        }
-        if(games.length === 0){
-          meh('BDL','no_games','No box scores found'+(selectedGame?' for '+gameLabel:'')+'— try during game day');
+        var today=new Date().toISOString().slice(0,10);
+        var yesterday=new Date(Date.now()-86400000).toISOString().slice(0,10);
+        var targetDate=selectedGame&&selectedGame.date?selectedGame.date:yesterday;
+        var bData=await fetchJSON(FN+'bdl-data?type=box_scores&league=nba&date='+targetDate);
+        var bdlGames=(bData&&bData.data)||[];
+        if(bdlGames.length===0&&!selectedGame){bData=await fetchJSON(FN+'bdl-data?type=box_scores&league=nba&date='+today);bdlGames=(bData&&bData.data)||[];}
+        if(bdlGames.length===0){
+          meh('BDL','no_games','No box scores found — try during game day');
         } else {
-          // If a specific game is selected, try to match it in BDL results
-          var g = games[0];
+          var g=bdlGames[0];
           if(selectedGameId){
-            var matched = games.find(function(bg){ return String(bg.id) === String(selectedGameId); });
-            if(!matched && selectedGame){
-              // Try matching by team abbreviations
-              var dbHome = (selectedGame.home_alias || '').toUpperCase();
-              var dbAway = (selectedGame.away_alias || '').toUpperCase();
-              matched = games.find(function(bg){
-                var bH = (bg.home_team?.abbreviation || '').toUpperCase();
-                var bA = (bg.visitor_team?.abbreviation || bg.away_team?.abbreviation || '').toUpperCase();
-                return (bH === dbHome && bA === dbAway) || (bH === dbAway && bA === dbHome);
+            var matched=bdlGames.find(function(bg){return String(bg.id)===String(selectedGameId);});
+            if(!matched&&selectedGame){
+              var dbHome=(selectedGame.home_alias||'').toUpperCase(), dbAway=(selectedGame.away_alias||'').toUpperCase();
+              matched=bdlGames.find(function(bg){
+                var bH=(bg.home_team?.abbreviation||'').toUpperCase(), bA=(bg.visitor_team?.abbreviation||bg.away_team?.abbreviation||'').toUpperCase();
+                return(bH===dbHome&&bA===dbAway)||(bH===dbAway&&bA===dbHome);
               });
             }
-            if(matched){ g = matched; ok('BDL','game_match','Matched selected game in BDL results'); }
-            else meh('BDL','game_match','Selected game not found in BDL box scores — testing first available game');
+            if(matched){g=matched;ok('BDL','game_match','Matched selected game');}
+            else meh('BDL','game_match','Selected game not found in BDL — testing first available');
           }
-          ok('BDL','box_scores',games.length+' games found, testing: '+(g.home_team?.abbreviation||'?')+' vs '+(g.visitor_team?.abbreviation||g.away_team?.abbreviation||'?'));
-          var hStats = g.home_team_stats || {};
-          var aStats = g.away_team_stats || {};
-
-          // BDL returns stats as STRINGS — this is the #1 bug class
-          var stringFields = ['pts','fgm','fga','fg3m','fg3a','ftm','fta','ast','reb','stl','blk','turnover','oreb','dreb','pf'];
-          var stringsFound = 0, numbersFound = 0;
-          stringFields.forEach(function(f){
-            var v = hStats[f];
-            if(v === undefined) return;
-            if(typeof v === 'string') stringsFound++;
-            else if(typeof v === 'number') numbersFound++;
-          });
-
-          if(stringsFound > 0) ok('BDL','type:strings',stringsFound+' stat fields are strings (expected — BDL behavior). Number() wrapping required.');
-          if(numbersFound > 0) meh('BDL','type:numbers',numbersFound+' fields are already numbers — BDL may have changed behavior');
-
-          // Verify Number() wrapping produces real values
-          var nanCount = 0;
-          stringFields.forEach(function(f){
-            var v = hStats[f];
-            if(v !== undefined && isNaN(Number(v))) nanCount++;
-          });
-          if(nanCount > 0) bad('BDL','type:NaN',nanCount+' fields produce NaN after Number() wrapping');
-          else ok('BDL','type:NaN','All stat fields safe after Number() wrapping');
-
-          // Check player stats existence
-          var hPlayers = g.home_team?.players || [];
-          var aPlayers = g.away_team?.players || [];
-          if(hPlayers.length > 0) ok('BDL','players:home',hPlayers.length+' home players');
-          else bad('BDL','players:home','No home players in box score');
-          if(aPlayers.length > 0) ok('BDL','players:away',aPlayers.length+' away players');
-          else bad('BDL','players:away','No away players');
-
-          // Check for structural scoring fields (paint, POT, SCP — needed for throughput)
-          var advData = await qFetch(FN+'bdl-data?type=advanced_stats&league=nba&game_id='+g.id);
-          var advRows = advData.data || [];
-          if(advRows.length > 0){
-            ok('BDL','advanced:available',advRows.length+' advanced stat rows');
-            var sampleAdv = advRows[0];
-            var advFields = ['off_rating','def_rating','possessions','pie','pace'];
-            var advPresent = advFields.filter(function(f){return sampleAdv[f] !== undefined;});
-            ok('BDL','advanced:fields',advPresent.join(', ')+' present');
-            var advMissing = advFields.filter(function(f){return sampleAdv[f] === undefined;});
-            if(advMissing.length > 0) meh('BDL','advanced:missing',advMissing.join(', ')+' missing');
-          } else {
-            meh('BDL','advanced:empty','No advanced stats returned — may need game_ids[] param');
-          }
+          ok('BDL','box_scores',bdlGames.length+' games, testing: '+(g.home_team?.abbreviation||'?')+' vs '+(g.visitor_team?.abbreviation||g.away_team?.abbreviation||'?'));
+          var hStats=g.home_team_stats||{};
+          var stringFields=['pts','fgm','fga','fg3m','fg3a','ftm','fta','ast','reb','stl','blk','turnover','oreb','dreb','pf'];
+          var stringsFound=0,numbersFound=0;
+          stringFields.forEach(function(f){var v=hStats[f];if(v===undefined)return;if(typeof v==='string')stringsFound++;else if(typeof v==='number')numbersFound++;});
+          if(stringsFound>0) ok('BDL','type:strings',stringsFound+' fields are strings (expected)');
+          if(numbersFound>0) meh('BDL','type:numbers',numbersFound+' already numbers');
+          var nanCount=0;
+          stringFields.forEach(function(f){var v=hStats[f];if(v!==undefined&&isNaN(Number(v)))nanCount++;});
+          if(nanCount>0) bad('BDL','type:NaN',nanCount+' fields produce NaN');
+          else ok('BDL','type:NaN','All safe after Number()');
+          var hPlayers=g.home_team?.players||[], aPlayers=g.away_team?.players||g.visitor_team?.players||[];
+          if(hPlayers.length>0) ok('BDL','players:home',hPlayers.length+' players'); else bad('BDL','players:home','No home players');
+          if(aPlayers.length>0) ok('BDL','players:away',aPlayers.length+' players'); else bad('BDL','players:away','No away players');
+          try{
+            var advData=await fetchJSON(FN+'bdl-data?type=advanced_stats&league=nba&game_id='+g.id);
+            var advRows=(advData&&advData.data)||[];
+            if(advRows.length>0){ok('BDL','advanced',advRows.length+' rows');var advF=['off_rating','def_rating','possessions','pie','pace'];var advP=advF.filter(function(f){return advRows[0][f]!==undefined;});ok('BDL','advanced:fields',advP.join(', '));}
+            else meh('BDL','advanced:empty','No advanced stats');
+          }catch(e){meh('BDL','advanced:error',e.message);}
         }
       } catch(e){ bad('BDL','error',e.message); }
     }
 
-    // ═══════════════════════════════════════════
     // 5. ODDS DATA
-    // ═══════════════════════════════════════════
     if(runAll || section === 'odds'){
       try {
-        var odData = await qFetch(FN+'db-api?action=query&q='+encodeURIComponent("SELECT game_id, home_spread, home_ml, away_ml, total, created_at FROM odds_history WHERE 1=1"+gameFilter+" ORDER BY created_at DESC LIMIT 20"));
-        var odRows = odData.rows || [];
-        if(odRows.length === 0){
-          meh('ODDS','no_data','No odds history in DB');
+        if(!selectedGameId){
+          meh('ODDS','no_game','Select a game to validate odds');
         } else {
-          ok('ODDS','count',odRows.length+' recent odds records');
-
-          // Check parseability
-          var parseOK = 0, parseBad = 0;
-          odRows.forEach(function(r){
-            var spread = parseFloat(r.home_spread);
-            var ml = parseFloat(r.home_ml);
-            if(!isNaN(spread) && !isNaN(ml)) parseOK++;
-            else parseBad++;
-          });
-          if(parseBad > 0) bad('ODDS','parse',parseBad+'/'+odRows.length+' odds records have unparseable spread/ML');
-          else ok('ODDS','parse','All '+parseOK+' odds records parse correctly');
-
-          // Check freshness
-          var latestOdds = new Date(odRows[0].created_at);
-          var oddsAge = (Date.now() - latestOdds.getTime()) / 3600000;
-          if(oddsAge < 12) ok('ODDS','fresh','Latest odds '+oddsAge.toFixed(1)+'h old');
-          else if(oddsAge < 48) meh('ODDS','stale','Latest odds '+oddsAge.toFixed(0)+'h old');
-          else meh('ODDS','old','Latest odds '+oddsAge.toFixed(0)+'h old — no recent games');
-
-          // MIP computation test — can we compute edge from these?
-          var mipOK = 0;
-          odRows.forEach(function(r){
-            var hml = parseFloat(r.home_ml), aml = parseFloat(r.away_ml);
-            if(isNaN(hml) || isNaN(aml) || hml === 0 || aml === 0) return;
-            var rawH = hml < 0 ? Math.abs(hml)/(Math.abs(hml)+100) : 100/(hml+100);
-            var rawA = aml < 0 ? Math.abs(aml)/(Math.abs(aml)+100) : 100/(aml+100);
-            var vigSum = rawH + rawA;
-            if(vigSum > 0 && !isNaN(rawH/vigSum)) mipOK++;
-          });
-          ok('ODDS','mip:compute',mipOK+'/'+odRows.length+' odds records produce valid MIP');
+          var odData=await fetchJSON(FN+'db-api?action=get_odds&game_id='+encodeURIComponent(selectedGameId));
+          var odRows=(odData&&odData.odds)||[];
+          if(odRows.length===0){
+            meh('ODDS','no_data','No odds for this game');
+          } else {
+            ok('ODDS','count',odRows.length+' odds records');
+            var parseOK=0,parseBad=0;
+            odRows.forEach(function(r){var sp=parseFloat(r.home_spread),ml=parseFloat(r.home_ml);if(!isNaN(sp)&&!isNaN(ml))parseOK++;else parseBad++;});
+            if(parseBad>0) bad('ODDS','parse',parseBad+' unparseable'); else ok('ODDS','parse','All '+parseOK+' parse OK');
+            var latestOdds=new Date(odRows[odRows.length-1].ts||odRows[odRows.length-1].created_at);
+            var oddsAge=(Date.now()-latestOdds.getTime())/3600000;
+            if(oddsAge<12) ok('ODDS','fresh','Latest '+oddsAge.toFixed(1)+'h old'); else meh('ODDS','age','Latest '+oddsAge.toFixed(0)+'h old');
+            var mipOK=0;
+            odRows.forEach(function(r){var hml=parseFloat(r.home_ml),aml=parseFloat(r.away_ml);if(isNaN(hml)||isNaN(aml)||hml===0||aml===0)return;var rawH=hml<0?Math.abs(hml)/(Math.abs(hml)+100):100/(hml+100);var rawA=aml<0?Math.abs(aml)/(Math.abs(aml)+100):100/(aml+100);if(rawH+rawA>0&&!isNaN(rawH/(rawH+rawA)))mipOK++;});
+            ok('ODDS','mip:compute',mipOK+'/'+odRows.length+' produce valid MIP');
+            if(odRows.length>=2){var fs=parseFloat(odRows[0].home_spread),ls=parseFloat(odRows[odRows.length-1].home_spread);if(!isNaN(fs)&&!isNaN(ls))ok('ODDS','movement','Spread moved '+Math.abs(ls-fs).toFixed(1)+' pts ('+fs+' → '+ls+')');}
+          }
         }
       } catch(e){ bad('ODDS','error',e.message); }
     }
 
-    // ═══════════════════════════════════════════
-    // 6. SYNTHESIZER ACTIONS IN DB
-    // ═══════════════════════════════════════════
-    if(runAll || section === 'analyses'){
-      try {
-        // Check for BUY WINDOW CLOSING signals in analysis history
-        var sigData = await qFetch(FN+'db-api?action=query&q='+encodeURIComponent("SELECT signal, entry, edge, fwp, trigger FROM analyses WHERE created_at > NOW() - INTERVAL '7 days'"+gameFilter+" ORDER BY created_at DESC LIMIT 50"));
-        var sigRows = sigData.rows || [];
-        if(sigRows.length > 0){
-          var buyCount = sigRows.filter(function(r){return r.signal && r.signal.toUpperCase().startsWith('BUY');}).length;
-          var noValCount = sigRows.filter(function(r){return r.signal && r.signal.toUpperCase().includes('NO VALUE');}).length;
-          var passCount = sigRows.filter(function(r){return r.signal && r.signal.toUpperCase().includes('PASS');}).length;
-          var windowClosing = sigRows.filter(function(r){return r.entry && r.entry.toUpperCase().includes('CLOSING');}).length;
-          ok('SIG','distribution','Last 7d: BUY='+buyCount+' NO_VALUE='+noValCount+' PASS='+passCount+' WINDOW_CLOSING='+windowClosing+' (of '+sigRows.length+')');
-
-          // Positive edge with leading team should produce BWC in synthesizer (client-side)
-          // Here we can only check if the data supports it
-          var positiveEdge = sigRows.filter(function(r){
-            if(!r.edge) return false;
-            var m = String(r.edge).match(/\+(\d+\.?\d*)/);
-            return m && parseFloat(m[1]) > 0;
-          }).length;
-          ok('SIG','positive_edge',positiveEdge+'/'+sigRows.length+' analyses show positive edge');
-        }
-      } catch(e){ /* already covered in analyses section */ }
-    }
-
   } catch(e){ bad('SYSTEM','fatal',e.message); }
 
-  // ═══════════════════════════════════════════
   // RENDER RESULTS
-  // ═══════════════════════════════════════════
   var h = '<div style="padding:10px">';
-  h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">';
+  h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:4px">';
   h += '<span style="font-size:14px;font-weight:700;color:'+(fail>0?'#ff5252':'#00ff88')+'">QA RESULTS</span>';
   h += '<span style="font-size:11px;color:#60a5fa;font-weight:600">'+escH(gameLabel)+'</span>';
   h += '<span style="font-size:12px;color:#94a3b8">'+pass+' pass · '+fail+' fail · '+warn+' warn</span>';
   h += '</div>';
-
-  // Group by section
-  var groups = {};
-  results.forEach(function(r){
-    if(!groups[r.group]) groups[r.group] = [];
-    groups[r.group].push(r);
-  });
-
-  var groupColors = {POLL:'#60a5fa', ANAL:'#a78bfa', SNAP:'#ffd166', BDL:'#fbbf24', ODDS:'#f5a62a', SIG:'#00ff88', SYSTEM:'#ff5252'};
-  var groupLabels = {POLL:'SERVER POLLING', ANAL:'ANALYSES PIPELINE', SNAP:'SNAPSHOTS (TP/LS)', BDL:'BDL DATA TYPES', ODDS:'ODDS & EDGE', SIG:'SIGNAL DISTRIBUTION', SYSTEM:'SYSTEM'};
-
+  var groups={};
+  results.forEach(function(r){if(!groups[r.group])groups[r.group]=[];groups[r.group].push(r);});
+  var groupColors={POLL:'#60a5fa',ANAL:'#a78bfa',SNAP:'#ffd166',BDL:'#fbbf24',ODDS:'#f5a62a',SIG:'#00ff88',SYSTEM:'#ff5252'};
+  var groupLabels={POLL:'SERVER POLLING',ANAL:'ANALYSES PIPELINE',SNAP:'SNAPSHOTS (TP/LS)',BDL:'BDL DATA TYPES',ODDS:'ODDS & EDGE',SIG:'SIGNAL DISTRIBUTION',SYSTEM:'SYSTEM'};
   Object.keys(groups).forEach(function(grp){
-    var items = groups[grp];
-    var gFail = items.filter(function(r){return r.status==='FAIL';}).length;
-    var gPass = items.filter(function(r){return r.status==='PASS';}).length;
-    var gWarn = items.filter(function(r){return r.status==='WARN';}).length;
-    var gColor = groupColors[grp] || '#94a3b8';
-    var gLabel = groupLabels[grp] || grp;
-
-    h += '<div class="card" style="border-color:'+gColor+'33;margin-bottom:6px">';
-    h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">';
-    h += '<span style="font-size:11px;font-weight:700;color:'+gColor+';letter-spacing:.5px">'+gLabel+'</span>';
-    h += '<span style="font-size:9px;color:#64748b">'+gPass+'✓ '+gFail+'✗ '+gWarn+'⚠</span>';
-    h += '</div>';
-
+    var items=groups[grp];
+    var gFail=items.filter(function(r){return r.status==='FAIL';}).length;
+    var gPass=items.filter(function(r){return r.status==='PASS';}).length;
+    var gWarn=items.filter(function(r){return r.status==='WARN';}).length;
+    var gColor=groupColors[grp]||'#94a3b8', gLabel=groupLabels[grp]||grp;
+    h+='<div class="card" style="border-color:'+gColor+'33;margin-bottom:6px">';
+    h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">';
+    h+='<span style="font-size:11px;font-weight:700;color:'+gColor+';letter-spacing:.5px">'+gLabel+'</span>';
+    h+='<span style="font-size:9px;color:#64748b">'+gPass+'✓ '+gFail+'✗ '+gWarn+'⚠</span></div>';
     items.forEach(function(r){
-      var color = r.status==='PASS'?'#00ff88':r.status==='FAIL'?'#ff5252':'#ffd166';
-      var icon = r.status==='PASS'?'✓':r.status==='FAIL'?'✗':'⚠';
-      h += '<div style="display:flex;gap:6px;padding:2px 0;border-top:1px solid rgba(255,255,255,.03);font-size:10px">';
-      h += '<span style="color:'+color+';font-weight:700;min-width:12px">'+icon+'</span>';
-      h += '<span style="color:#94a3b8;min-width:110px">'+escH(r.label)+'</span>';
-      h += '<span style="color:#e2e8f0;word-break:break-word">'+escH(r.detail)+'</span>';
-      h += '</div>';
+      var color=r.status==='PASS'?'#00ff88':r.status==='FAIL'?'#ff5252':'#ffd166';
+      var icon=r.status==='PASS'?'✓':r.status==='FAIL'?'✗':'⚠';
+      h+='<div style="display:flex;gap:6px;padding:2px 0;border-top:1px solid rgba(255,255,255,.03);font-size:10px">';
+      h+='<span style="color:'+color+';font-weight:700;min-width:12px">'+icon+'</span>';
+      h+='<span style="color:#94a3b8;min-width:110px">'+escH(r.label)+'</span>';
+      h+='<span style="color:#e2e8f0;word-break:break-word">'+escH(r.detail)+'</span></div>';
     });
-    h += '</div>';
+    h+='</div>';
   });
-
-  // Summary bar
-  h += '<div style="text-align:center;padding:8px;margin-top:6px;border-radius:6px;background:'+(fail>0?'rgba(255,82,82,.1)':'rgba(0,255,136,.08)')+';border:1px solid '+(fail>0?'rgba(255,82,82,.3)':'rgba(0,255,136,.2)')+'">';
-  h += '<span style="font-size:13px;font-weight:700;color:'+(fail>0?'#ff5252':'#00ff88')+'">'+pass+' PASS · '+fail+' FAIL · '+warn+' WARN</span>';
-  h += '</div>';
-  h += '</div>';
-
+  h+='<div style="text-align:center;padding:8px;margin-top:6px;border-radius:6px;background:'+(fail>0?'rgba(255,82,82,.1)':'rgba(0,255,136,.08)')+';border:1px solid '+(fail>0?'rgba(255,82,82,.3)':'rgba(0,255,136,.2)')+'">';
+  h+='<span style="font-size:13px;font-weight:700;color:'+(fail>0?'#ff5252':'#00ff88')+'">'+pass+' PASS · '+fail+' FAIL · '+warn+' WARN</span></div>';
+  h+='</div>';
   qaEl.innerHTML = h;
 }
 </script>
