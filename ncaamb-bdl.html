@@ -8187,7 +8187,7 @@ function renderCard(game){
         // Fallback: single-line legacy edge display
         var legEdgeNum = pred.edgeNum;
         var legEdgeColor = legEdgeNum===null?'var(--t3)':legEdgeNum>=10?'var(--green)':legEdgeNum>=5?'var(--g2)':legEdgeNum>=1?'var(--yellow)':legEdgeNum>=0?'var(--t3)':'var(--red)';
-        html+='<div class="dv-row"><span class="dv-label">EDGE</span><span class="dv-val" style="color:'+legEdgeColor+'">'+esc(pred.edge||'&#8212;')+'</span><span class="dv-sub">FWP '+esc(pred.fwp||'&#8212;')+'</span><span class="dv-sub">MIP '+esc(pred.mip||'N/A')+'</span></div>';
+        html+='<div class="dv-row"><span class="dv-label">EDGE</span><span class="dv-val" style="color:'+legEdgeColor+'">'+esc(pred.edge||'—')+'</span><span class="dv-sub">FWP '+esc(pred.fwp||'—')+'</span><span class="dv-sub">MIP '+esc(pred.mip||'N/A')+'</span></div>';
       }
 
       // Signal bar (entry + conviction + buy team)
@@ -8201,7 +8201,7 @@ function renderCard(game){
       html+='</div>';
 
       // Entry + Conviction tags
-      html+='<div class="dv-row" style="margin-top:5px"><span class="dv-label">ENTRY</span><span class="dv-tag" style="color:'+entryColor+';border-color:'+entryColor+'">'+esc(pred.entry||'&#8212;')+'</span><span class="dv-tag" style="color:'+convColor+';border-color:'+convColor+';margin-left:4px">'+esc(pred.conviction||'&#8212;')+'</span></div>';
+      html+='<div class="dv-row" style="margin-top:5px"><span class="dv-label">ENTRY</span><span class="dv-tag" style="color:'+entryColor+';border-color:'+entryColor+'">'+esc(pred.entry||'—')+'</span><span class="dv-tag" style="color:'+convColor+';border-color:'+convColor+';margin-left:4px">'+esc(pred.conviction||'—')+'</span></div>';
 
       // Spread analysis (from Sonnet)
       if(pred.spreadAnalysis){

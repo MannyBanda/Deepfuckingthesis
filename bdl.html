@@ -1897,43 +1897,100 @@ async function loadSchedule(){
 // ── LOCALSTORAGE CLEANUP — purge stale per-game data on boot ──
 (function cleanupStorage(){
   try{
-    const now = Date.now();
-    const maxAge = 24*60*60*1000; // 24 hours
-    const prefixes = ['nba4:analysis:','nba4:depth:','nba4:tracking:','nba4:structural:','nba4:snap:','nba4:gap:','nba4:srCache:'];
-    const keysToRemove = [];
-    for(let i=0; i<localStorage.length; i++){
-      const key = localStorage.key(i);
-      if(!key) continue;
-      const isGameKey = prefixes.some(p => key.startsWith(p));
-      if(!isGameKey) continue;
-      // Try to parse and check for staleness
-      try{
-        const raw = localStorage.getItem(key);
-        if(!raw || raw.length < 5){ keysToRemove.push(key); continue; }
-        const val = JSON.parse(raw);
-        // Check for timestamp indicators
-        const ts = val.analysisTime || val.pbpTime || val.time || 0;
-        if(ts > 0 && (now - ts) > maxAge){ keysToRemove.push(key); continue; }
-        // srCache entries older than 6 hours
-        if(key.startsWith('nba4:srCache:') && raw.length > 100000){ keysToRemove.push(key); continue; }
-      }catch(e){ keysToRemove.push(key); } // corrupt data — remove
+    var now = Date.now();
+    var keysToRemove = [];
+
+    // 1. Collect all nba4: keys and their sizes
+    var allKeys = [];
+    var totalSize = 0;
+    for(var i=0; i<localStorage.length; i++){
+      var key = localStorage.key(i);
+      if(!key || !key.startsWith('nba4:')) continue;
+      var size = (localStorage.getItem(key)||'').length;
+      allKeys.push({key:key, size:size});
+      totalSize += size;
     }
-    // Also clean up bulk caches if they have old game IDs
-    ['nba4:clutch','nba4:odds','nba4:oddsHist','nba4:confTable'].forEach(function(bulkKey){
-      try{
-        const raw = localStorage.getItem(bulkKey);
-        if(raw && raw.length > 500000) localStorage.removeItem(bulkKey); // over 500KB = stale
-      }catch(e){}
+
+    // 2. Remove old schedule caches (keep today + yesterday only)
+    var today = new Date();
+    var yesterday = new Date(today); yesterday.setDate(yesterday.getDate()-1);
+    var keepDates = [today.toISOString().slice(0,10), yesterday.toISOString().slice(0,10)];
+    allKeys.forEach(function(k){
+      if(k.key.startsWith('nba4:schedule:') && !keepDates.some(function(d){ return k.key.includes(d); })){
+        keysToRemove.push(k.key);
+      }
     });
+
+    // 3. Remove per-game data older than 48 hours (analysis, depth, tracking, structural, snap, gap, srCache)
+    var maxAge = 48*60*60*1000;
+    var perGamePrefixes = ['nba4:analysis:','nba4:depth:','nba4:tracking:','nba4:structural:','nba4:snap:','nba4:gap:','nba4:srCache:'];
+    allKeys.forEach(function(k){
+      var isGameKey = perGamePrefixes.some(function(p){ return k.key.startsWith(p); });
+      if(!isGameKey) return;
+      try{
+        var raw = localStorage.getItem(k.key);
+        if(!raw || raw.length < 5){ keysToRemove.push(k.key); return; }
+        var val = JSON.parse(raw);
+        var ts = val.analysisTime || val.pbpTime || val.time || 0;
+        if(ts > 0 && (now - ts) > maxAge){ keysToRemove.push(k.key); return; }
+        // srCache: remove if over 100KB (single game summary bloat)
+        if(k.key.startsWith('nba4:srCache:') && raw.length > 100000){ keysToRemove.push(k.key); return; }
+        // No timestamp but over 72 hours since any key with this game ID was updated? Remove.
+        // Heuristic: if total storage > 3MB, be more aggressive (24h instead of 48h)
+        if(totalSize > 3*1024*1024 && ts > 0 && (now - ts) > 24*60*60*1000){ keysToRemove.push(k.key); return; }
+      }catch(e){ keysToRemove.push(k.key); } // corrupt data — remove
+    });
+
+    // 4. Prune bulk caches — remove game IDs not in today's schedule
+    // (Will be populated after loadSchedule — run deferred)
+    setTimeout(function(){
+      try{
+        var currentGameIds = new Set(games.map(function(g){ return g.id; }));
+        if(currentGameIds.size === 0) return; // schedule not loaded yet
+
+        ['nba4:clutch','nba4:odds','nba4:oddsHist','nba4:confTable'].forEach(function(bulkKey){
+          try{
+            var raw = localStorage.getItem(bulkKey);
+            if(!raw) return;
+            var obj = JSON.parse(raw);
+            var pruned = false;
+            Object.keys(obj).forEach(function(gid){
+              if(!currentGameIds.has(gid)){ delete obj[gid]; pruned = true; }
+            });
+            if(pruned){
+              localStorage.setItem(bulkKey, JSON.stringify(obj));
+              console.log('[CLEANUP] Pruned old game IDs from ' + bulkKey);
+            }
+          }catch(e){}
+        });
+
+        // Also prune per-game keys for games not on today's slate (if storage still high)
+        var postSize = 0;
+        for(var j=0; j<localStorage.length; j++){
+          var pk = localStorage.key(j);
+          if(pk) postSize += (localStorage.getItem(pk)||'').length;
+        }
+        if(postSize > 3*1024*1024){
+          var extraRemoved = 0;
+          perGamePrefixes.forEach(function(pfx){
+            for(var j=0; j<localStorage.length; j++){
+              var pk = localStorage.key(j);
+              if(!pk || !pk.startsWith(pfx)) continue;
+              var gid = pk.substring(pfx.length);
+              if(!currentGameIds.has(gid)){
+                try{ localStorage.removeItem(pk); extraRemoved++; }catch(e){}
+              }
+            }
+          });
+          if(extraRemoved > 0) console.log('[CLEANUP] Removed ' + extraRemoved + ' per-game keys for non-current games');
+        }
+      }catch(e){ console.warn('Deferred cleanup failed:', e.message); }
+    }, 15000); // run 15s after boot — gives loadSchedule time to populate games[]
+
+    // 5. Apply immediate removals
     keysToRemove.forEach(function(k){ try{ localStorage.removeItem(k); }catch(e){} });
     if(keysToRemove.length > 0) console.log('[CLEANUP] Removed '+keysToRemove.length+' stale localStorage entries');
-    // Log storage usage
-    let totalSize = 0;
-    for(let i=0; i<localStorage.length; i++){
-      const k = localStorage.key(i);
-      if(k) totalSize += (localStorage.getItem(k)||'').length;
-    }
-    console.log('[STORAGE] ~'+(totalSize/1024).toFixed(0)+'KB used across '+localStorage.length+' keys');
+    console.log('[STORAGE] ~'+(totalSize/1024).toFixed(0)+'KB used across '+allKeys.length+' nba4 keys');
   }catch(e){ console.warn('Storage cleanup failed:', e.message); }
 })();
 
@@ -2945,7 +3002,9 @@ async function triggerAnalysis(game){
     clearTimeout(_acTimer);
     if(!resp.ok){
       const errData = await resp.json().catch(()=>({error:'HTTP '+resp.status}));
-      throw new Error(errData.error || 'Analysis failed: '+resp.status);
+      var errMsg = errData.error || 'Analysis failed: '+resp.status;
+      if(errData.stack) console.error('Analyze server stack:', errData.stack);
+      throw new Error(errMsg);
     }
     const data = await resp.json();
     cs.analysis = data.analysis;
@@ -9528,7 +9587,7 @@ function renderCard(game){
         // Fallback: single-line legacy edge display
         var legEdgeNum = pred.edgeNum;
         var legEdgeColor = legEdgeNum===null?'var(--t3)':legEdgeNum>=10?'var(--green)':legEdgeNum>=5?'var(--g2)':legEdgeNum>=1?'var(--yellow)':legEdgeNum>=0?'var(--t3)':'var(--red)';
-        html+='<div class="dv-row"><span class="dv-label">EDGE</span><span class="dv-val" style="color:'+legEdgeColor+'">'+esc(pred.edge||'&#8212;')+'</span><span class="dv-sub">FWP '+esc(pred.fwp||'&#8212;')+'</span><span class="dv-sub">MIP '+esc(pred.mip||'N/A')+'</span></div>';
+        html+='<div class="dv-row"><span class="dv-label">EDGE</span><span class="dv-val" style="color:'+legEdgeColor+'">'+esc(pred.edge||'—')+'</span><span class="dv-sub">FWP '+esc(pred.fwp||'—')+'</span><span class="dv-sub">MIP '+esc(pred.mip||'N/A')+'</span></div>';
       }
 
       // Signal bar (entry + conviction + buy team)
@@ -9542,7 +9601,7 @@ function renderCard(game){
       html+='</div>';
 
       // Entry + Conviction tags
-      html+='<div class="dv-row" style="margin-top:5px"><span class="dv-label">ENTRY</span><span class="dv-tag" style="color:'+entryColor+';border-color:'+entryColor+'">'+esc(pred.entry||'&#8212;')+'</span><span class="dv-tag" style="color:'+convColor+';border-color:'+convColor+';margin-left:4px">'+esc(pred.conviction||'&#8212;')+'</span></div>';
+      html+='<div class="dv-row" style="margin-top:5px"><span class="dv-label">ENTRY</span><span class="dv-tag" style="color:'+entryColor+';border-color:'+entryColor+'">'+esc(pred.entry||'—')+'</span><span class="dv-tag" style="color:'+convColor+';border-color:'+convColor+';margin-left:4px">'+esc(pred.conviction||'—')+'</span></div>';
 
       // Spread analysis (from Sonnet)
       if(pred.spreadAnalysis){
