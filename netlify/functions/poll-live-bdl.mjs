@@ -519,8 +519,11 @@ function normalizeBdlStatusServer(s, boxScore) {
       const hasScore = ((boxScore.home_team_score || 0) + (boxScore.visitor_team_score || 0)) > 0;
       const hasPeriod = (boxScore.period || 0) > 0;
       const hasTime = boxScore.time && boxScore.time !== '' && !boxScore.time.includes('T');
-      if (hasScore || hasPeriod || hasTime) return 'inprogress';
+      const hasQtrScore = (boxScore.home_q1 || 0) > 0 || (boxScore.visitor_q1 || 0) > 0;
+      const hasPlayers = boxScore.home_team && boxScore.home_team.players && boxScore.home_team.players.length > 0;
+      if (hasScore || hasPeriod || hasTime || hasQtrScore || hasPlayers) return 'inprogress';
     }
+    try { const _tipMs = new Date(s).getTime(); if (!isNaN(_tipMs) && Date.now() > _tipMs + 120000) return 'inprogress'; } catch(e) {}
     return 'scheduled';
   }
   return s;
