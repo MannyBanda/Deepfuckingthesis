@@ -148,6 +148,7 @@ var contentEl = document.getElementById('content');
 var gameSelectEl = document.getElementById('game-select');
 var gameCountEl = document.getElementById('game-count');
 var allGames = []; // cached list from DB
+var qaLeague = 'nba'; // set by loadGames, used by QA suite
 
 function log(msg, cls){
   var line = document.createElement('div');
@@ -203,6 +204,7 @@ async function loadGames(league){
   }
 
   allGames = data.games;
+  qaLeague = league;
   // Sort: most recent first
   allGames.sort(function(a, b){ return (b.date || '').localeCompare(a.date || ''); });
 
@@ -2107,9 +2109,9 @@ async function runQA(section){
     // 1. SERVER POLLING HEALTH
     if(runAll || section === 'polling'){
       try {
-        var hbData = await fetchJSON(FN+'db-api?action=heartbeat_check&league=nba');
+        var hbData = await fetchJSON(FN+'db-api?action=heartbeat_check&league='+qaLeague);
         if(!hbData){
-          bad('POLL','heartbeat','Failed to fetch heartbeat',snap({url:FN+'db-api?action=heartbeat_check&league=nba',response:hbData}));
+          bad('POLL','heartbeat','Failed to fetch heartbeat',snap({url:FN+'db-api?action=heartbeat_check&league='+qaLeague,response:hbData}));
         } else if(hbData.clientActive){
           ok('POLL','heartbeat:active','Client active — last poll '+Math.round(hbData.ageMinutes)+'m ago ('+hbData.device+')',snap(hbData));
         } else if(hbData.lastPoll){
@@ -2120,9 +2122,9 @@ async function runQA(section){
           meh('POLL','heartbeat:none','No heartbeat records found',snap(hbData));
         }
 
-        var psData = await fetchJSON(FN+'db-api?action=get_poll_state&league=nba');
+        var psData = await fetchJSON(FN+'db-api?action=get_poll_state&league='+qaLeague);
         if(!psData || !psData.state){
-          meh('POLL','poll_state','No poll_state for NBA',snap(psData));
+          meh('POLL','poll_state','No poll_state for '+qaLeague.toUpperCase(),snap(psData));
         } else {
           var ps = psData.state;
           var psAge = ps.fetched_at ? (Date.now() - new Date(ps.fetched_at).getTime()) / 3600000 : 999;
@@ -2138,7 +2140,7 @@ async function runQA(section){
       try {
         var anUrl = selectedGameId
           ? FN+'db-api?action=get_auto_analyses&game_ids='+encodeURIComponent(selectedGameId)
-          : FN+'db-api?action=get_analyses&league=nba';
+          : FN+'db-api?action=get_analyses&league='+qaLeague;
         var anData = await fetchJSON(anUrl);
         var anRows = [];
         if(anData && anData.analyses){
@@ -2254,11 +2256,11 @@ async function runQA(section){
         var today=new Date().toISOString().slice(0,10);
         var yesterday=new Date(Date.now()-86400000).toISOString().slice(0,10);
         var targetDate=selectedGame&&selectedGame.date?selectedGame.date:yesterday;
-        var bData=await fetchJSON(FN+'bdl-data?type=box_scores&league=nba&date='+targetDate);
+        var bData=await fetchJSON(FN+'bdl-data?type=box_scores&league='+qaLeague+'&date='+targetDate);
         var bdlGames=(bData&&bData.data)||[];
-        if(bdlGames.length===0&&!selectedGame){bData=await fetchJSON(FN+'bdl-data?type=box_scores&league=nba&date='+today);bdlGames=(bData&&bData.data)||[];}
+        if(bdlGames.length===0&&!selectedGame){bData=await fetchJSON(FN+'bdl-data?type=box_scores&league='+qaLeague+'&date='+today);bdlGames=(bData&&bData.data)||[];}
         if(bdlGames.length===0){
-          meh('BDL','no_games','No box scores found',snap({targetDate:targetDate,response:bData}));
+          meh('BDL','no_games','No box scores found',snap({targetDate:targetDate,league:qaLeague,response:bData}));
         } else {
           var g=bdlGames[0];
           if(selectedGameId){
@@ -2284,12 +2286,17 @@ async function runQA(section){
           var hPlayers=g.home_team?.players||[], aPlayers=g.away_team?.players||g.visitor_team?.players||[];
           if(hPlayers.length>0) ok('BDL','players:home',hPlayers.length+' players'); else bad('BDL','players:home','No home players',snap({home_team:g.home_team?Object.keys(g.home_team):'null'}));
           if(aPlayers.length>0) ok('BDL','players:away',aPlayers.length+' players'); else bad('BDL','players:away','No away players',snap({away_team:g.away_team?Object.keys(g.away_team):'null',visitor_team:g.visitor_team?Object.keys(g.visitor_team):'null'}));
-          try{
-            var advData=await fetchJSON(FN+'bdl-data?type=advanced_stats&league=nba&game_id='+g.id);
-            var advRows=(advData&&advData.data)||[];
-            if(advRows.length>0){ok('BDL','advanced',advRows.length+' rows');var advF=['off_rating','def_rating','possessions','pie','pace'];var advP=advF.filter(function(f){return advRows[0][f]!==undefined;});ok('BDL','advanced:fields',advP.join(', '),snap(advRows[0]));}
-            else meh('BDL','advanced:empty','No advanced stats',snap({url:FN+'bdl-data?type=advanced_stats&league=nba&game_id='+g.id,response:advData}));
-          }catch(e){meh('BDL','advanced:error',e.message);}
+          // Advanced stats — NBA only (NCAAMB/WNBA have no BDL v2 advanced endpoint)
+          if(qaLeague === 'nba'){
+            try{
+              var advData=await fetchJSON(FN+'bdl-data?type=advanced_stats&league=nba&game_id='+g.id);
+              var advRows=(advData&&advData.data)||[];
+              if(advRows.length>0){ok('BDL','advanced',advRows.length+' rows');var advF=['off_rating','def_rating','possessions','pie','pace'];var advP=advF.filter(function(f){return advRows[0][f]!==undefined;});ok('BDL','advanced:fields',advP.join(', '),snap(advRows[0]));}
+              else meh('BDL','advanced:empty','No advanced stats',snap({url:FN+'bdl-data?type=advanced_stats&league=nba&game_id='+g.id,response:advData}));
+            }catch(e){meh('BDL','advanced:error',e.message);}
+          } else {
+            ok('BDL','advanced:n/a','No BDL advanced stats for '+qaLeague.toUpperCase()+' — skipped');
+          }
         }
       } catch(e){ bad('BDL','error',e.message,snap({stack:e.stack})); }
     }
@@ -2327,6 +2334,7 @@ async function runQA(section){
   var h = '<div style="padding:10px">';
   h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:4px">';
   h += '<span style="font-size:14px;font-weight:700;color:'+(fail>0?'#ff5252':'#00ff88')+'">QA RESULTS</span>';
+  h += '<span style="font-size:10px;font-weight:700;color:#a78bfa;letter-spacing:1px;padding:2px 6px;border:1px solid #a78bfa;border-radius:3px">'+qaLeague.toUpperCase()+'</span>';
   h += '<span style="font-size:11px;color:#60a5fa;font-weight:600">'+escH(gameLabel)+'</span>';
   h += '<span style="font-size:12px;color:#94a3b8">'+pass+' pass · '+fail+' fail · '+warn+' warn</span>';
   h += '</div>';
