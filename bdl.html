@@ -410,7 +410,7 @@ async function initDB(){
 async function saveSnapshotDB(game){
   if(!dbReady) return;
   var cs = cardState[game.id]; if(!cs) return;
-  var floor = cs.sonnetIndicators || cs.clientInd || cs._serverFloor; if(!floor || !floor.score) return;
+  var floor = getFloor(cs); if(!floor || !floor.score) return;
   var pbp = cs.pbpWindow;
   var qtr = cs.rollingWindow;
   var ewp = cs.espnWP;
@@ -498,7 +498,7 @@ async function pushContextToDB(game){
   if(cs.pbpAudit && cs.pbpAudit.raw && cs.pbpAudit.raw.shots){
     var freshArrows = computeSubMetricArrows(game.id);
     if(freshArrows){ cs.subMetricArrows = freshArrows; }
-    var floorInd = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
+    var floorInd = getFloor(cs);
     if(freshArrows && floorInd){
       cs.adjustment = classifyAdjustment(freshArrows, floorInd.controlTeam || hA, hA, aA);
     }
@@ -697,7 +697,7 @@ async function hydrateFromServerSnapshots(gameId){
       cs.acceleration = accelResult;
 
       // Compute combined read if we have a floor
-      var floor = cs._serverFloor || cs.sonnetIndicators || cs.clientInd;
+      var floor = getFloor(cs);
       if(floor && floor.score){
         var windowResult = cs.rollingWindow || cs.pbpWindow || null;
         cs.combinedRead = classifyCombinedRead(floor.score, floor.controlTeam, windowResult, accelResult);
@@ -755,7 +755,7 @@ async function hydrateFromServerSnapshots(gameId){
           };
           // Re-compute combined read now that we have a window
           if(cs.acceleration){
-            var flr = cs._serverFloor || cs.sonnetIndicators || cs.clientInd;
+            var flr = getFloor(cs);
             if(flr && flr.score){
               cs.combinedRead = classifyCombinedRead(flr.score, flr.controlTeam, cs.rollingWindow, cs.acceleration);
             }
@@ -955,7 +955,7 @@ async function hydrateFromServerContext(gameId){
         // Re-run computeAny for floor + PBP + arrows, then update combined read from existing QTR window.
         computeAny(g);
         if(cs.rollingWindow && cs.rollingWindow.available){
-          var flr = cs.sonnetIndicators || cs.clientInd;
+          var flr = getFloor(cs);
           if(flr && flr.score){
             cs.combinedRead = classifyCombinedRead(flr.score, flr.controlTeam, cs.rollingWindow, cs.acceleration);
           }
@@ -5939,7 +5939,7 @@ function synthesize(game){
   if(state==='PRE') return null;
 
   // ── GATHER INPUTS ──
-  var floor = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
+  var floor = getFloor(cs);
   var pbp = cs.pbpWindow;
   var ewp = cs.espnWP;
   var sust = cs.clientSustainability;
@@ -7119,7 +7119,7 @@ function computeThroughput(game){
   var period = game.period||0;
   if(period < 2) return null;
 
-  var floor = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
+  var floor = getFloor(cs);
   if(!floor || !floor.score) return null;
   var fTeam = floor.controlTeam;
   var ctrlIsHome = fTeam === hA;
@@ -7186,7 +7186,7 @@ function computeLeadSafety(game){
   var period = game.period||0;
   if(period < 2) return null;
 
-  var floor = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
+  var floor = getFloor(cs);
   if(!floor || !floor.score) return null;
   var fTeam = floor.controlTeam;
   var ctrlIsHome = fTeam === hA;
@@ -7397,7 +7397,7 @@ function computeSpreadConviction(game){
   const minsLeft = clockMins + (quartersLeft * 12);
 
   // ── STRUCTURAL CONTEXT ──
-  const floorInd = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
+  var floorInd = getFloor(cs);
   const floorScore = floorInd?.score || 0.5;
   const floorTeam = floorInd?.controlTeam || '';
   const lc = cs.clientLeadComposition;
@@ -8438,6 +8438,8 @@ function buildTrajectoryBDL(game, hA, aA, hs, as, hS, aS, qDs, d){
 function showLoading(v){document.getElementById('loading').style.display=v?'flex':'none';}
 function showErr(msg){const el=document.getElementById('err');el.style.display=msg?'block':'none';if(msg)el.textContent='⚠ '+msg;}
 function getState(g){const s=(g.status||'').toLowerCase();if(s==='closed'||s==='complete'||s==='final')return'FINAL';if(s==='inprogress'||s==='halftime'||s==='in progress'||s.includes('qtr')||s.includes('quarter')||s.includes('half')||s.includes('overtime')||s.includes(' ot')||s==='ot'||/^\d*\s*ot/i.test(s))return'LIVE';return'PRE';}
+// Floor fallback: must check .score exists, not just object truthiness
+function getFloor(cs){if(!cs)return null;if(cs.sonnetIndicators&&cs.sonnetIndicators.score!=null)return cs.sonnetIndicators;if(cs.clientInd&&cs.clientInd.score!=null)return cs.clientInd;if(cs._serverFloor&&cs._serverFloor.score!=null)return cs._serverFloor;return null;}
 function updateCounts(){
   const lc=games.filter(g=>getState(g)==='LIVE').length;
   document.getElementById('live-count').textContent=lc;
@@ -8495,7 +8497,7 @@ function checkStructuralAlert(game){
   var p = game.period || 0;
   if(p < 2) return; // too early
 
-  var floor = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
+  var floor = getFloor(cs);
   var win = cs.pbpWindow || cs.rollingWindow;
   if(!floor || !floor.score) return;
 
@@ -10027,7 +10029,7 @@ function renderCard(game){
     var pbpW = cs.pbpWindow;
     var accel = cs.acceleration;
     var cRead = cs.combinedRead;
-    var floorInd = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
+    var floorInd = getFloor(cs);
     var _vc = function(vrd){ return vrd==='DOMINANT'?'var(--green)':vrd==='STRONG'?'var(--g2)':vrd==='EARNED'?'var(--yellow)':vrd==='NO EDGE'?'var(--t3)':'var(--t3)'; };
     var _validTeam = function(t){ return t && t!=='Neither' && t!=='EVEN' && t!=='CONTESTED' && t!=='?' && t.length<=4; };
     if(floorInd && !_validTeam(floorInd.controlTeam) && rawInd && _validTeam(rawInd.controlTeam)){
@@ -10147,7 +10149,7 @@ function renderCard(game){
     // ─── 5. DIRECTIONAL ARROWS (compact horizontal — teams as rows, metrics as columns) ───
     var arrows = cs.subMetricArrows;
     var adj = cs.adjustment;
-    var floorInd2 = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
+    var floorInd2 = getFloor(cs);
     if(arrows && arrows.home && arrows.away){
       var _arrowColor = function(arrow, isVariance){
         if(!arrow||arrow==="FLAT") return "var(--t3)";
@@ -11726,7 +11728,7 @@ function runClientQA(gameId){
   function meh(label, detail){ results.push({s:'WARN',l:label,d:detail||''}); warn++; }
 
   // ── 1. FLOOR SCORE ──
-  var ind = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
+  var ind = getFloor(cs);
   if(ind && ind.score != null){
     var src = cs.sonnetIndicators ? 'SONNET' : cs.clientInd ? 'CLIENT' : 'SERVER';
     ok('Floor score', ind.controlTeam + ' ' + ind.score.toFixed(2) + ' (' + src + ')');
