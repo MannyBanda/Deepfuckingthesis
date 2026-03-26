@@ -3057,7 +3057,7 @@ async function triggerAnalysis(game){
           parsed.score = floor.floor;
         }
       }
-      console.log('Sonnet scores parsed:', parsed.controlTeam, parsed.score.toFixed(2));
+      console.log('Sonnet scores parsed:', parsed.controlTeam, parsed.score != null ? parsed.score.toFixed(2) : 'null');
     }
 
     // Parse decision/predictive layer
@@ -3071,21 +3071,22 @@ async function triggerAnalysis(game){
         // Two-sided labeled — match team aliases to home/away
         const hUp = hAlias.toUpperCase(), aUp = aAlias.toUpperCase();
         const t1Up = decision.fwpTeam1, t2Up = decision.fwpTeam2;
+        var _v1 = decision.fwpVal1 ?? 50, _v2 = decision.fwpVal2 ?? 50;
         if(t1Up === hUp || t1Up.startsWith(hUp.substring(0,3)) || hUp.startsWith(t1Up.substring(0,3))){
-          homeFWP = decision.fwpVal1; awayFWP = decision.fwpVal2;
+          homeFWP = _v1; awayFWP = _v2;
         } else if(t2Up === hUp || t2Up.startsWith(hUp.substring(0,3)) || hUp.startsWith(t2Up.substring(0,3))){
-          homeFWP = decision.fwpVal2; awayFWP = decision.fwpVal1;
+          homeFWP = _v2; awayFWP = _v1;
         } else if(t1Up === aUp || t1Up.startsWith(aUp.substring(0,3)) || aUp.startsWith(t1Up.substring(0,3))){
-          awayFWP = decision.fwpVal1; homeFWP = decision.fwpVal2;
+          awayFWP = _v1; homeFWP = _v2;
         } else {
           // Couldn't match either team — use positional (first listed = away by convention)
-          awayFWP = decision.fwpVal1; homeFWP = decision.fwpVal2;
+          awayFWP = _v1; homeFWP = _v2;
           console.warn('FWP: Could not match teams '+t1Up+'/'+t2Up+' to '+hUp+'/'+aUp+' — using positional');
         }
         console.log('FWP (labeled): '+hAlias+' '+homeFWP.toFixed(1)+'% / '+aAlias+' '+awayFWP.toFixed(1)+'%');
       } else if(decision.fwpSingleTeam){
         // Single labeled value: "MEM 72%" — derive other side
-        const fwpVal = decision.fwpSingleVal;
+        const fwpVal = decision.fwpSingleVal ?? 50;
         const fwpTeamUp = decision.fwpSingleTeam;
         const hUp = hAlias.toUpperCase(), aUp = aAlias.toUpperCase();
         if(fwpTeamUp === hUp || fwpTeamUp.startsWith(hUp.substring(0,3)) || hUp.startsWith(fwpTeamUp.substring(0,3))){
