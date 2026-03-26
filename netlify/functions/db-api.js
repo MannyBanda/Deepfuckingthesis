@@ -138,6 +138,10 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'client'`; } catch(e) {}
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS lead_class TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS sust_json JSONB`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS window_json JSONB`; } catch(e) {}
+
+      // Quarter-level data for server-authoritative rolling window
+      try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS quarter_data JSONB`; } catch(e) {}
 
       // WP profile table — team-level win probability curve analysis
       await sql`
@@ -369,6 +373,25 @@ exports.handler = async (event) => {
     }
 
     // ═══════════════════════════════════════════════════════
+    // GET_QUARTER_DATA — server-authoritative rolling window data
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_quarter_data') {
+      const gameId = params.game_id;
+      if (!gameId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id required' }) };
+
+      try {
+        const rows = await sql`SELECT quarter_data FROM games WHERE id = ${gameId}`;
+        if (rows.length === 0 || !rows[0].quarter_data) {
+          return { statusCode: 200, headers, body: JSON.stringify({ quarter_data: null }) };
+        }
+        const qd = typeof rows[0].quarter_data === 'string' ? JSON.parse(rows[0].quarter_data) : rows[0].quarter_data;
+        return { statusCode: 200, headers, body: JSON.stringify({ quarter_data: qd }) };
+      } catch (e) {
+        return { statusCode: 200, headers, body: JSON.stringify({ quarter_data: null, error: e.message }) };
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════
     // BUILD_SEASON_CACHE — fetch BDL season data and save to DB
     // ═══════════════════════════════════════════════════════
     if (action === 'build_season_cache' && event.httpMethod === 'POST') {
@@ -583,7 +606,16 @@ exports.handler = async (event) => {
           ${s.i1}, ${s.i2}, ${s.i3}, ${s.i4}, ${s.i5})
       `;
 
-      return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
+      // Piggyback: return server's latest rolling window from quarter_data
+      let serverWindow = null;
+      try {
+        const wRows = await sql`SELECT quarter_data->'window' AS win FROM games WHERE id = ${s.game_id}`;
+        if (wRows.length > 0 && wRows[0].win) {
+          serverWindow = typeof wRows[0].win === 'string' ? JSON.parse(wRows[0].win) : wRows[0].win;
+        }
+      } catch (e) { /* quarter_data column may not exist yet */ }
+
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, window: serverWindow }) };
     }
 
     // ═══════════════════════════════════════════════════════

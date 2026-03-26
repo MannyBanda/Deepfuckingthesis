@@ -561,6 +561,7 @@ exports.handler = async function(event) {
     var trackingData = body.trackingData;
     var pbpAudit = body.pbpAudit;
     var rollingWindow = body.rollingWindow;
+    var quarterDiffs = body.quarterDiffs || null;
     var acceleration = body.acceleration;
     var subMetricArrows = body.subMetricArrows;
     var adjustment = body.adjustment;
@@ -790,6 +791,32 @@ exports.handler = async function(event) {
       }
     }
 
+    // Per-quarter stat breakdown from server quarter_data
+    var quarterSection = '';
+    if (quarterDiffs && Object.keys(quarterDiffs).length > 0) {
+      quarterSection = '\nPER-QUARTER BREAKDOWN:\n';
+      var qdKeys = Object.keys(quarterDiffs).map(Number).filter(function(n){return !isNaN(n);}).sort(function(a,b){return a-b;});
+      var hAlias = body.homeTeam || 'HOME', aAlias = body.awayTeam || 'AWAY';
+      qdKeys.forEach(function(qk) {
+        var qd = quarterDiffs[qk];
+        if (!qd || !qd.home || !qd.away) return;
+        var h = qd.home, a = qd.away;
+        var isPartial = rollingWindow && rollingWindow.windowQuarters && rollingWindow.windowQuarters.some(function(wq){return wq === 'Q'+qk+'*';});
+        var label = 'Q' + qk + (isPartial ? '*' : '');
+        var hPaint = h.points_in_the_paint || h.points_in_paint || 0;
+        var aPaint = a.points_in_the_paint || a.points_in_paint || 0;
+        quarterSection += '  ' + label + ': '
+          + 'Paint ' + hPaint + '-' + aPaint
+          + ', FTA ' + (h.free_throws_att||0) + '-' + (a.free_throws_att||0)
+          + ', 3P ' + (h.three_points_made||0) + '/' + (h.three_points_att||0) + '-' + (a.three_points_made||0) + '/' + (a.three_points_att||0)
+          + ', AST ' + (h.assists||0) + '-' + (a.assists||0)
+          + ', TO ' + (h.turnovers||h.total_turnovers||0) + '-' + (a.turnovers||a.total_turnovers||0)
+          + ', STL ' + (h.steals||0) + '-' + (a.steals||0)
+          + (h.possessions ? ', Poss ' + (h.possessions||0) + '-' + (a.possessions||0) : '')
+          + ' (' + hAlias + '-' + aAlias + ')\n';
+      });
+    }
+
     var gapSection = '';
     if (acceleration && acceleration.entries && acceleration.entries.length > 0) {
       var lastEntry = acceleration.entries[acceleration.entries.length - 1];
@@ -895,7 +922,7 @@ exports.handler = async function(event) {
     var userPrompt = awayTeam + ' @ ' + homeTeam + ' | ' + period + ' | ' + score + '\n\n'
       + (thesis ? 'THESIS:\n' + thesis + '\n' : 'No thesis.')
       + '\n' + clutchSection + oddsSection + bonusSection + trackingSection + sustainabilitySection + leadCompSection
-      + windowSection + gapSection + combinedReadSection + arrowSection + adjustmentSection
+      + windowSection + quarterSection + gapSection + combinedReadSection + arrowSection + adjustmentSection
       + pbpSection + edgeSection + narrativeSection + wpSection + espnWPSection
       + throughputSection + leadSafetySection
       + '\nGAME DATA:\n' + JSON.stringify(summaryData);

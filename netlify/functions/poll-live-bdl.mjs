@@ -813,6 +813,292 @@ function computeServer(summary) {
   };
 }
 
+// ── QUARTER DATA HELPERS ──────────────────────────────────────────────────────
+// Extracts the ~23 stat fields that power I1-I5 from a team's statistics object.
+// Used for boundary capture and per-quarter diffing.
+
+const QD_STAT_KEYS = [
+  // I1 inputs
+  'steals', 'offensive_rebounds', 'turnovers', 'total_turnovers',
+  'fast_break_points', 'points_off_turnovers', 'second_chance_points',
+  // I2 inputs
+  'points_in_the_paint', 'points_in_paint', 'field_goals_at_rim_made', 'field_goals_at_rim_att',
+  'free_throws_att', 'blocks', 'fouls_drawn', 'personal_fouls',
+  // I3 inputs
+  'field_goals_made', 'field_goals_att', 'three_points_made', 'three_points_att',
+  'assists',
+  // I4 inputs
+  'bench_points', 'biggest_lead', 'points',
+  // I5 inputs
+  'offensive_points_per_possession', 'defensive_points_per_possession',
+  'possessions',
+  // Free throws (for sustainability / evidence)
+  'free_throws_made',
+];
+
+function extractBoundaryStats(teamStats) {
+  if (!teamStats) return {};
+  const out = {};
+  for (const k of QD_STAT_KEYS) {
+    if (teamStats[k] != null) out[k] = teamStats[k];
+  }
+  return out;
+}
+
+function diffBoundaryStats(current, previous) {
+  if (!current || !previous) return current || {};
+  const d = {};
+  for (const k of QD_STAT_KEYS) {
+    const c = current[k], p = previous[k];
+    // Rate fields — don't diff, use current value directly
+    if (k === 'offensive_points_per_possession' || k === 'defensive_points_per_possession') {
+      d[k] = c != null ? c : null;
+      continue;
+    }
+    // biggest_lead — game-level max, not diffable, use current cumulative
+    if (k === 'biggest_lead') {
+      d[k] = c != null ? c : null;
+      continue;
+    }
+    // Count fields — diff normally
+    if (c != null && p != null) d[k] = c - p;
+    else if (c != null) d[k] = c;
+    else d[k] = null;
+  }
+  // Compute per-quarter efficiency from diffed possessions and points
+  const qPoss = d.possessions;
+  const qPts = d.points;
+  if (qPoss != null && qPoss > 0 && qPts != null) {
+    d._quarter_ppp = qPts / qPoss;
+  }
+  return d;
+}
+
+// Read quarter_data from games row, or return empty structure
+async function readQuarterData(sql, gameId) {
+  try {
+    const rows = await sql`SELECT quarter_data FROM games WHERE id = ${gameId}`;
+    if (rows.length > 0 && rows[0].quarter_data) {
+      const qd = typeof rows[0].quarter_data === 'string'
+        ? JSON.parse(rows[0].quarter_data)
+        : rows[0].quarter_data;
+      return qd;
+    }
+  } catch (e) { /* column may not exist yet */ }
+  return { boundaries: {}, diffs: {}, window: null };
+}
+
+// Write quarter_data back to games row
+async function writeQuarterData(sql, gameId, qd) {
+  try {
+    await sql`UPDATE games SET quarter_data = ${JSON.stringify(qd)} WHERE id = ${gameId}`;
+  } catch (e) {
+    log(`quarter_data write failed for ${gameId}: ${e.message}`);
+  }
+}
+
+// Capture a boundary: freeze cumulative stats, compute diff from previous boundary
+function captureBoundary(qd, periodKey, prevKey, homeStats, awayStats) {
+  const boundary = {
+    ts: new Date().toISOString(),
+    home: extractBoundaryStats(homeStats),
+    away: extractBoundaryStats(awayStats),
+  };
+  qd.boundaries[periodKey] = boundary;
+
+  // Compute diff from the specified previous boundary
+  const prevBoundary = qd.boundaries[prevKey];
+  if (prevBoundary) {
+    qd.diffs[periodKey] = {
+      home: diffBoundaryStats(boundary.home, prevBoundary.home),
+      away: diffBoundaryStats(boundary.away, prevBoundary.away),
+    };
+  }
+
+  return qd;
+}
+
+// ── COMPUTE SERVER-SIDE ROLLING WINDOW ────────────────────────────────────────
+// Runs every poll. Reads quarter_data boundaries, computes a partial diff for
+// the current quarter, scores I1-I5 on the cross-fade weighted aggregate,
+// saves the result back to quarter_data.window.
+//
+// Cross-fade weighting (matches client):
+//   Q2: Q1(fading) + Q2(partial)
+//   Q3: Q2(anchor) + Q3(partial)
+//   Q4: Q2(fading) + Q3(anchor) + Q4(partial)
+//   OT: Q3(fading) + Q4(anchor) + OT(partial)
+
+function computeServerWindow(qd, currentPeriod, clock, summary, hA, aA, league) {
+  if (!qd || !qd.boundaries) return null;
+
+  // Need at least one completed quarter boundary + current stats
+  const completedKeys = Object.keys(qd.diffs || {}).map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
+  if (completedKeys.length === 0) return null;
+
+  // Compute partial current quarter: current cumulative - last boundary
+  const lastBoundaryKey = String(Math.max(...completedKeys));
+  const lastBoundary = qd.boundaries[lastBoundaryKey];
+  if (!lastBoundary) return null;
+
+  const homeStats = summary.home?.statistics || {};
+  const awayStats = summary.away?.statistics || {};
+  const partialDiff = {
+    home: diffBoundaryStats(extractBoundaryStats(homeStats), lastBoundary.home),
+    away: diffBoundaryStats(extractBoundaryStats(awayStats), lastBoundary.away),
+  };
+
+  // Clock → completion fraction
+  const clockParts = (clock || '').split(':');
+  const clockMins = clockParts.length === 2 ? parseInt(clockParts[0]) + (parseInt(clockParts[1] || 0) / 60) : 12;
+  const periodLength = league === 'ncaamb' ? 20 : 12;
+  const completion = Math.max(0, Math.min(1, (periodLength - clockMins) / periodLength));
+
+  // Build weighted quarter map: {quarterKey: {weight, diff}}
+  const windowQs = [];
+  const p = currentPeriod;
+
+  if (league === 'ncaamb') {
+    // NCAAMB uses synthetic quarter keys 1,2,3
+    // sQ1 = H1 first 10min, sQ2 = H1 last 10min + halftime, sQ3 = H2 first 10min
+    // The diff keys match: 1, 2, 3
+    for (const k of completedKeys) {
+      // Older quarters fade, recent anchor
+      const maxK = Math.max(...completedKeys);
+      const weight = (k === maxK) ? 1.0 : (k >= maxK - 1) ? 1.0 : 0.5;
+      if (qd.diffs[k]) windowQs.push({ key: k, weight, diff: qd.diffs[k] });
+    }
+    // Add partial current — key is next synthetic quarter after last completed
+    const partialKey = Math.max(...completedKeys) + 1;
+    windowQs.push({ key: partialKey, weight: 1.0, diff: partialDiff, partial: true });
+  } else {
+    // NBA cross-fade logic
+    if (p === 2) {
+      if (qd.diffs['1']) windowQs.push({ key: 1, weight: Math.max(0, 1.0 - completion), diff: qd.diffs['1'] });
+      windowQs.push({ key: 2, weight: 1.0, diff: partialDiff, partial: true });
+    } else if (p === 3) {
+      if (qd.diffs['2']) windowQs.push({ key: 2, weight: 1.0, diff: qd.diffs['2'] });
+      windowQs.push({ key: 3, weight: 1.0, diff: partialDiff, partial: true });
+    } else if (p === 4) {
+      if (qd.diffs['2']) windowQs.push({ key: 2, weight: Math.max(0, 1.0 - completion), diff: qd.diffs['2'] });
+      if (qd.diffs['3']) windowQs.push({ key: 3, weight: 1.0, diff: qd.diffs['3'] });
+      windowQs.push({ key: 4, weight: 1.0, diff: partialDiff, partial: true });
+    } else if (p >= 5) {
+      if (qd.diffs['3']) windowQs.push({ key: 3, weight: Math.max(0, 1.0 - completion), diff: qd.diffs['3'] });
+      if (qd.diffs['4']) windowQs.push({ key: 4, weight: 1.0, diff: qd.diffs['4'] });
+      windowQs.push({ key: p, weight: 1.0, diff: partialDiff, partial: true });
+    } else {
+      // Q1 or earlier — too early for a window
+      return null;
+    }
+  }
+
+  if (windowQs.length === 0) return null;
+
+  // Aggregate stats with cross-fade weights
+  function aggSide(side) {
+    const agg = {};
+    const countKeys = QD_STAT_KEYS.filter(k =>
+      k !== 'offensive_points_per_possession' && k !== 'defensive_points_per_possession' && k !== 'biggest_lead'
+    );
+    for (const k of countKeys) {
+      let sum = 0, hasAny = false;
+      for (const wq of windowQs) {
+        const v = wq.diff?.[side]?.[k];
+        if (v != null) { sum += v * wq.weight; hasAny = true; }
+      }
+      agg[k] = hasAny ? sum : null;
+    }
+    // Derived rates from aggregated counts
+    const fga = agg.field_goals_att || 1;
+    agg.efg = fga > 0 ? ((agg.field_goals_made || 0) + 0.5 * (agg.three_points_made || 0)) / fga : null;
+    agg.assist_ratio = (agg.field_goals_made || 0) > 0 ? ((agg.assists || 0) / (agg.field_goals_made || 1)) * 100 : null;
+    // Per-quarter efficiency: weighted average of _quarter_ppp
+    let pppSum = 0, pppW = 0;
+    for (const wq of windowQs) {
+      const ppp = wq.diff?.[side]?._quarter_ppp;
+      if (ppp != null) { pppSum += ppp * wq.weight; pppW += wq.weight; }
+    }
+    agg.ppp = pppW > 0 ? pppSum / pppW : null;
+    return agg;
+  }
+
+  const hW = aggSide('home'), aW = aggSide('away');
+
+  // Score I1-I5 on aggregated window stats
+  // Thresholds scaled for ~2 quarter window volume
+
+  // I1 — Possession & Transition
+  const hTO = hW.turnovers || hW.total_turnovers || 0;
+  const aTO = aW.turnovers || aW.total_turnovers || 0;
+  const hGen = (hW.steals || 0) + (hW.offensive_rebounds || 0) - hTO;
+  const aGen = (aW.steals || 0) + (aW.offensive_rebounds || 0) - aTO;
+  const hConv = (hW.fast_break_points || 0) + (hW.points_off_turnovers || 0) + (hW.second_chance_points || 0);
+  const aConv = (aW.fast_break_points || 0) + (aW.points_off_turnovers || 0) + (aW.second_chance_points || 0);
+  const i1r = (hGen > aGen ? 1 : hGen < aGen ? -1 : 0) + (hConv > aConv ? 1 : hConv < aConv ? -1 : 0);
+  const wI1 = { score: i1r > 0 ? 1 : i1r === 0 ? 0.5 : 0, leader: i1r > 0 ? hA : i1r < 0 ? aA : 'EVEN' };
+
+  // I2 — Rim Pressure & Foul (scaled threshold: 5 instead of 10 for ~half game volume)
+  const hPaint = hW.points_in_the_paint || hW.points_in_paint || 0;
+  const aPaint = aW.points_in_the_paint || aW.points_in_paint || 0;
+  const hAtRim = hW.field_goals_at_rim_att || 0, aAtRim = aW.field_goals_at_rim_att || 0;
+  const hFTA = hW.free_throws_att || 0, aFTA = aW.free_throws_att || 0;
+  const hBlk = hW.blocks || 0, aBlk = aW.blocks || 0;
+  const hFD = hW.fouls_drawn || 0, aFD = aW.fouls_drawn || 0;
+  const rimD = (hPaint + hAtRim + hFTA + hBlk + Math.round(hFD * 0.5))
+             - (aPaint + aAtRim + aFTA + aBlk + Math.round(aFD * 0.5));
+  const wI2 = { score: rimD > 5 ? 1 : rimD < -5 ? 0 : 0.5, leader: rimD > 5 ? hA : rimD < -5 ? aA : 'EVEN' };
+
+  // I3 — Shot Quality & Creation (eFG% and assist ratio are rates — thresholds unchanged)
+  const hEFG = hW.efg || 0, aEFG = aW.efg || 0;
+  const hAR = hW.assist_ratio || 0, aAR = aW.assist_ratio || 0;
+  const i3r = (hEFG > aEFG + 0.02 ? 1 : hEFG < aEFG - 0.02 ? -1 : 0)
+            + (hAR > aAR + 5 ? 1 : hAR < aAR - 5 ? -1 : 0);
+  const wI3 = { score: i3r > 0 ? 1 : i3r === 0 ? 0.5 : 0, leader: i3r > 0 ? hA : i3r < 0 ? aA : 'EVEN' };
+
+  // I4 — Lineup Integrity (use cumulative biggest_lead + window bench diff + per-quarter scoring margins)
+  const hBigLead = homeStats.biggest_lead || 0, aBigLead = awayStats.biggest_lead || 0;
+  const hBench = hW.bench_points || 0, aBench = aW.bench_points || 0;
+  const benchD = hBench - aBench;
+  // Scoring margin trend from the window quarters
+  const margins = windowQs.map(wq => ((wq.diff?.home?.points || 0) - (wq.diff?.away?.points || 0)));
+  const trend = margins.length >= 2 ? margins[margins.length - 1] - margins[0] : 0;
+  const i4r = (hBigLead > aBigLead + 4 ? 1 : hBigLead < aBigLead - 4 ? -1 : 0)
+            + (trend > 2 ? 1 : trend < -2 ? -1 : 0)
+            + (benchD > 5 ? 1 : benchD < -5 ? -1 : 0); // scaled bench threshold
+  const wI4 = { score: i4r > 0 ? 1 : i4r === 0 ? 0.5 : 0, leader: i4r > 0 ? hA : i4r < 0 ? aA : 'EVEN' };
+
+  // I5 — Tempo & Efficiency (use per-quarter PPP from diffs)
+  const hPPP = hW.ppp || 0, aPPP = aW.ppp || 0;
+  const effD = hPPP - aPPP;
+  const wI5 = { score: effD > 0.08 ? 1 : effD < -0.08 ? 0 : 0.5, leader: effD > 0.08 ? hA : effD < -0.08 ? aA : 'EVEN' };
+
+  // Composite
+  const raw = wI1.score * W.I1 + wI2.score * W.I2 + wI3.score * W.I3 + wI4.score * W.I4 + wI5.score * W.I5;
+  const ctrlHome = raw >= 0.5;
+  const wTeam = ctrlHome ? hA : aA;
+  const wScore = ctrlHome ? raw : 1 - raw;
+
+  // Build window labels
+  const windowQuarters = windowQs.map(wq => 'Q' + wq.key + (wq.partial ? '*' : ''));
+
+  return {
+    available: true,
+    score: Math.round(wScore * 100) / 100,
+    controlTeam: wTeam,
+    windowQuarters,
+    I1: { score: Math.round(wI1.score * 10) / 10 },
+    I2: { score: Math.round(wI2.score * 10) / 10 },
+    I3: { score: Math.round(wI3.score * 10) / 10 },
+    I4: { score: Math.round(wI4.score * 10) / 10 },
+    I5: { score: Math.round(wI5.score * 10) / 10 },
+    dataQuality: 'SERVER-QD',
+    source: 'server-qd',
+    partial_quarter: currentPeriod,
+    updated_at: new Date().toISOString(),
+  };
+}
+
 // ── SERVER-SIDE SUSTAINABILITY AUDIT ─────────────────────────────────────────
 // Ported from analyze.js. Pure function of SR summary data.
 // No tracking data server-side — degrades gracefully (uses assist ratio only).
@@ -1819,6 +2105,32 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       const rw = clientCtx.rollingWindow;
       userPrompt += `ROLLING WINDOW: ${rw.controlTeam} ${rw.score?.toFixed(2)}\n`;
     }
+    // Per-quarter stat breakdown from quarter_data
+    try {
+      const qdRows = await sql`SELECT quarter_data FROM games WHERE id = ${game.id}`;
+      if (qdRows.length > 0 && qdRows[0].quarter_data) {
+        const qd = typeof qdRows[0].quarter_data === 'string' ? JSON.parse(qdRows[0].quarter_data) : qdRows[0].quarter_data;
+        if (qd.diffs && Object.keys(qd.diffs).length > 0) {
+          userPrompt += `PER-QUARTER BREAKDOWN:\n`;
+          const qdKeys = Object.keys(qd.diffs).map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
+          for (const qk of qdKeys) {
+            const d = qd.diffs[qk];
+            if (!d || !d.home || !d.away) continue;
+            const h = d.home, a = d.away;
+            const hPaint = h.points_in_the_paint || h.points_in_paint || 0;
+            const aPaint = a.points_in_the_paint || a.points_in_paint || 0;
+            userPrompt += `  Q${qk}: Paint ${hPaint}-${aPaint}`
+              + `, FTA ${h.free_throws_att||0}-${a.free_throws_att||0}`
+              + `, 3P ${h.three_points_made||0}/${h.three_points_att||0}-${a.three_points_made||0}/${a.three_points_att||0}`
+              + `, AST ${h.assists||0}-${a.assists||0}`
+              + `, TO ${h.turnovers||h.total_turnovers||0}-${a.turnovers||a.total_turnovers||0}`
+              + `, STL ${h.steals||0}-${a.steals||0}`
+              + (h.possessions ? `, Poss ${h.possessions||0}-${a.possessions||0}` : '')
+              + ` (${hA}-${aA})\n`;
+          }
+        }
+      }
+    } catch (e) { /* quarter_data not available */ }
     if (clientCtx?.acceleration?.accel) {
       userPrompt += `GAP ACCEL: ${clientCtx.acceleration.accel}\n`;
     }
@@ -2385,6 +2697,31 @@ export default async function(req) {
           if (espnWP) results.espn++;
           if (odds) results.odds++;
 
+          // ── QUARTER DATA: baseline capture (first poll with stats) ──
+          // Saves boundaries["0"] so Q1 diffs are computable from game start.
+          if (!game._qdBaselineSaved) {
+            try {
+              const qd = await readQuarterData(sql, game.id);
+              if (!qd.boundaries['0']) {
+                const homeStats = summary.home?.statistics || {};
+                const awayStats = summary.away?.statistics || {};
+                // Only save baseline if we actually have stats
+                if (Object.keys(homeStats).length > 0 || Object.keys(awayStats).length > 0) {
+                  qd.boundaries['0'] = {
+                    ts: new Date().toISOString(),
+                    home: extractBoundaryStats(homeStats),
+                    away: extractBoundaryStats(awayStats),
+                  };
+                  await writeQuarterData(sql, game.id, qd);
+                  log(`${matchup}: ★ quarter_data baseline captured (${Object.keys(homeStats).length} home fields, ${Object.keys(awayStats).length} away fields)`);
+                }
+              }
+              game._qdBaselineSaved = true;
+            } catch (e) {
+              log(`${matchup}: quarter_data baseline failed: ${e.message}`);
+            }
+          }
+
           const bdlEnriched = (homeBdl.length > 0 || awayBdl.length > 0);
           log(`${matchup} Q${currentPeriod} ${clock} | ${ind.homePts}-${ind.awayPts} | ${ind.controlTeam} ${ind.score} | I:${ind.I1.score}/${ind.I2.score}/${ind.I3.score}/${ind.I4.score}/${ind.I5.score} | sust:${leadSust || '?'} class:${leadClass || '?'}${bdlEnriched ? ' BDL✓' : ''}${spreadVal != null ? ` spd:${spreadVal}` : ''}${espnWP ? ` | WP:${espnWP.home}%` : ''}`);
 
@@ -2449,21 +2786,21 @@ export default async function(req) {
 
             if (league === 'nba') {
               transitions = [
-                { from: 1, to: 2, tag: 'calibration_q1', trigger: 'auto_q1', label: 'Q1', sonnet: true },
-                { from: 2, to: 3, tag: 'calibration_q2', trigger: 'auto_q2', label: 'Q2', sonnet: true },
-                { from: 3, to: 4, tag: 'calibration_q3', trigger: 'auto_q3', label: 'Q3', sonnet: true },
+                { from: 1, to: 2, tag: 'calibration_q1', trigger: 'auto_q1', label: 'Q1', sonnet: true, qdKey: '1', qdPrev: '0' },
+                { from: 2, to: 3, tag: 'calibration_q2', trigger: 'auto_q2', label: 'Q2', sonnet: true, qdKey: '2', qdPrev: '1' },
+                { from: 3, to: 4, tag: 'calibration_q3', trigger: 'auto_q3', label: 'Q3', sonnet: true, qdKey: '3', qdPrev: '2' },
               ];
             } else if (league === 'ncaamb') {
               // Period-based: halftime (period 1→2)
-              transitions.push({ from: 1, to: 2, tag: 'calibration_sq2', trigger: 'auto_sq2', label: 'sQ2(half)', sonnet: false });
+              transitions.push({ from: 1, to: 2, tag: 'calibration_sq2', trigger: 'auto_sq2', label: 'sQ2(half)', sonnet: false, qdKey: '2', qdPrev: '1' });
 
               // State-based: if we're past the 10:00 mark, the synthetic quarter boundary should exist
               // DB dedup prevents re-firing on every poll
               if (currentPeriod === 1 && clockMin != null && clockMin <= 10.0) {
-                transitions.push({ from: 0, to: 1, tag: 'calibration_sq1', trigger: 'auto_sq1', label: 'sQ1(H1@10)', sonnet: false, clockBased: true });
+                transitions.push({ from: 0, to: 1, tag: 'calibration_sq1', trigger: 'auto_sq1', label: 'sQ1(H1@10)', sonnet: false, clockBased: true, qdKey: '1', qdPrev: '0' });
               }
               if (currentPeriod === 2 && clockMin != null && clockMin <= 10.0) {
-                transitions.push({ from: 0, to: 1, tag: 'calibration_sq3', trigger: 'auto_sq3', label: 'sQ3(H2@10)', sonnet: false, clockBased: true });
+                transitions.push({ from: 0, to: 1, tag: 'calibration_sq3', trigger: 'auto_sq3', label: 'sQ3(H2@10)', sonnet: false, clockBased: true, qdKey: '3', qdPrev: '2' });
               }
             }
 
@@ -2506,6 +2843,21 @@ export default async function(req) {
                   log(`${matchup}: ${t.label} CAL snapshot save failed: ${e.message}`);
                 }
 
+                // ── QUARTER DATA: capture boundary stats + compute diffs ──
+                if (t.qdKey) {
+                  try {
+                    const qd = await readQuarterData(sql, game.id);
+                    const homeStats = summary.home?.statistics || {};
+                    const awayStats = summary.away?.statistics || {};
+                    captureBoundary(qd, t.qdKey, t.qdPrev, homeStats, awayStats);
+                    await writeQuarterData(sql, game.id, qd);
+                    const diffKeys = qd.diffs[t.qdKey] ? Object.keys(qd.diffs[t.qdKey].home || {}).length : 0;
+                    log(`${matchup}: ${t.label} quarter_data boundary[${t.qdKey}] captured (diff from [${t.qdPrev}]: ${diffKeys} fields)`);
+                  } catch (e) {
+                    log(`${matchup}: ${t.label} quarter_data capture failed: ${e.message}`);
+                  }
+                }
+
                 // Compute + save server context (PBP, arrows, window, etc.)
                 // Uses DO NOTHING on conflict — client-pushed context is richer, don't overwrite
                 const serverCtx = await computeServerContext(sql, game, league, summary, ind, espnWP, hA, aA, currentPeriod, clock, matchup);
@@ -2539,6 +2891,27 @@ export default async function(req) {
           }
           // Always track period for transition detection across cycles
           game.last_period = currentPeriod;
+
+          // ── QUARTER DATA: compute rolling window every poll ──
+          // Reads quarter_data (with any freshly captured boundaries), computes
+          // partial current quarter diff, scores I1-I5, saves window back.
+          // This runs AFTER boundary capture so new boundaries are included.
+          if (currentPeriod >= 2 || (league === 'ncaamb' && currentPeriod >= 1)) {
+            try {
+              const qd = await readQuarterData(sql, game.id);
+              const hasDiffs = Object.keys(qd.diffs || {}).length > 0;
+              if (hasDiffs) {
+                const serverWindow = computeServerWindow(qd, currentPeriod, clock, summary, hA, aA, league);
+                if (serverWindow) {
+                  qd.window = serverWindow;
+                  await writeQuarterData(sql, game.id, qd);
+                  log(`${matchup}: QTR window — ${serverWindow.controlTeam} ${serverWindow.score} [${serverWindow.windowQuarters.join(',')}]`);
+                }
+              }
+            } catch (e) {
+              log(`${matchup}: server window compute failed: ${e.message}`);
+            }
+          }
 
         } catch (e) {
           results.errors.push(`${matchup}: ${e.message}`);
