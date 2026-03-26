@@ -1886,6 +1886,7 @@ async function loadSchedule(){
       if(_statusArr.length > 0){
         _bdlBoxScoreCache = {data: _statusArr, time: Date.now(), date: d.str};
         var _updated = 0;
+        var _flippedToLive = [];
         games.forEach(function(g){
           var bdlId = bdlGameMap[g.id];
           if(!bdlId) return;
@@ -1893,12 +1894,17 @@ async function loadSchedule(){
           if(!box) return;
           var newStatus = normalizeBdlStatus(box.status);
           if(newStatus !== g.status){
+            var wasPreOrScheduled = g.status === 'scheduled' || g.status === 'created';
             g.status = newStatus;
             g.homePoints = box.home_team_score || g.homePoints;
             g.awayPoints = box.visitor_team_score || g.awayPoints;
             g.period = box.period || g.period;
             g.clock = normalizeBdlClock(box.time, box.status) || g.clock;
             _updated++;
+            // Track games that flipped from PRE → LIVE/FINAL for server snapshot hydration
+            if(wasPreOrScheduled && (newStatus === 'inprogress' || newStatus === 'halftime' || newStatus === 'closed' || newStatus === 'complete')){
+              _flippedToLive.push(g.id);
+            }
           }
         });
         if(_updated > 0){
@@ -1909,7 +1915,16 @@ async function loadSchedule(){
             if(oa!==ob) return oa-ob;
             return new Date(a.scheduled)-new Date(b.scheduled);
           });
-          console.log('[SCHEDULE] BDL status update: '+_updated+' games corrected');
+          console.log('[SCHEDULE] BDL status update: '+_updated+' games corrected'+ (_flippedToLive.length > 0 ? ' ('+_flippedToLive.length+' flipped to live/final — will hydrate snapshots)' : ''));
+        }
+        // Deferred: hydrate server snapshots for games that were PRE at SR cache time but are actually LIVE/FINAL
+        // Must run AFTER mountCard (which happens in renderPills below)
+        if(_flippedToLive.length > 0){
+          setTimeout(function(){
+            _flippedToLive.forEach(function(gid){
+              if(cardState[gid]) hydrateFromServerSnapshots(gid);
+            });
+          }, 500);
         }
       }
     }catch(e){ console.warn('[SCHEDULE] BDL status prefetch failed:', e.message); }
