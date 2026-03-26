@@ -5649,8 +5649,15 @@ function compute(game){
   // Persist updated sustainability + lead comp so they survive refresh
   if(cardState[game.id].analysis) persistAnalysis(game.id, cardState[game.id]);
 
-  // QTR rolling window is server-authoritative — client never computes or overwrites.
-  // Hydrated from server snapshots (W2 in applyAutoAnalysesToCards) or server context (W3 in hydrateFromServerContext).
+  // QTR rolling window is server-authoritative — but falls back to client compute
+  // when server has no data (no snapshots, no context pushed).
+  if(!cardState[game.id].rollingWindow || !cardState[game.id].rollingWindow.available){
+    var _clientWindow = computeRollingWindow(game);
+    if(_clientWindow && _clientWindow.available){
+      _clientWindow.source = 'client-fallback';
+      cardState[game.id].rollingWindow = _clientWindow;
+    }
+  }
   var _pwSize = getPossWindowSize(game);
   var pbpWindow = computePossessionWindow(game, _pwSize);
   cardState[game.id].pbpWindow = pbpWindow;
