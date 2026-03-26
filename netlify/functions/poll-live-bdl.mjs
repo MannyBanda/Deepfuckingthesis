@@ -506,13 +506,23 @@ function mergeBdlSeasonData(summary, bdlHomeSeason, bdlAwaySeason) {
 // Same logic as client — coordinateToZone, parseBDLPBP, buildSummaryFromBDL
 // ══════════════════════════════════════════════════════════════════════════════
 
-function normalizeBdlStatusServer(s) {
+function normalizeBdlStatusServer(s, boxScore) {
   if (!s) return 'scheduled';
   const sl = s.toLowerCase();
   if (sl === 'final') return 'closed';
   if (sl === 'in progress' || sl.includes('qtr') || sl.includes('quarter') || sl.includes('overtime') || sl.includes(' ot') || sl === 'ot' || /^\d*\s*ot/i.test(sl)) return 'inprogress';
   if (sl === 'halftime' || sl.includes('half')) return 'halftime';
-  if (s.includes('T') && s.includes(':')) return 'scheduled';
+  // Datetime string — check box score for live signals (BDL sometimes returns
+  // scheduled time as status even when game is in progress)
+  if (s.includes('T') && s.includes(':')) {
+    if (boxScore) {
+      const hasScore = ((boxScore.home_team_score || 0) + (boxScore.visitor_team_score || 0)) > 0;
+      const hasPeriod = (boxScore.period || 0) > 0;
+      const hasTime = boxScore.time && boxScore.time !== '' && !boxScore.time.includes('T');
+      if (hasScore || hasPeriod || hasTime) return 'inprogress';
+    }
+    return 'scheduled';
+  }
   return s;
 }
 
@@ -720,7 +730,7 @@ function buildSummaryFromBDLServer(boxScore, pbpResult, lineupsArr) {
 
   function bpa(bPlayers, sIds) { return bPlayers.map(p => { const pl = p.player || {}; const pid = pl.id || p.id; return { id: pid, full_name: ((pl.first_name || '') + ' ' + (pl.last_name || '')).trim(), position: pl.position || '', primary_position: pl.position || '', played: (p.min && p.min !== '0') || (p.pts > 0), active: true, starter: sIds.has(pid), on_court: false, statistics: { minutes: p.min || '0', field_goals_made: p.fgm || 0, field_goals_att: p.fga || 0, three_points_made: p.fg3m || 0, three_points_att: p.fg3a || 0, free_throws_made: p.ftm || 0, free_throws_att: p.fta || 0, offensive_rebounds: p.oreb || 0, defensive_rebounds: p.dreb || 0, rebounds: p.reb || 0, assists: p.ast || 0, steals: p.stl || 0, blocks: p.blk || 0, turnovers: p.turnover || 0, personal_fouls: p.pf || 0, points: p.pts || 0, pls_min: p.plus_minus || 0 } }; }); }
 
-  const srSt = normalizeBdlStatusServer(game.status);
+  const srSt = normalizeBdlStatusServer(game.status, game);
   return { id: game.id, status: srSt, quarter: game.period || periods.length || 0, clock: game.time || '', lead_changes: lc, times_tied: tt, _dataSource: 'BDL',
     home: { name: homeTeam.name || '', alias: hA, market: homeTeam.city || '', id: homeTeam.id || '', points: game.home_team_score || homeStats.points, bonus: game.home_in_bonus || false, double_bonus: false, remaining_timeouts: game.home_timeouts_remaining ?? null, scoring: hScoring, statistics: homeStats, players: bpa(homePlayers, hSIds) },
     away: { name: awayTeam.name || '', alias: aA, market: awayTeam.city || '', id: awayTeam.id || '', points: game.visitor_team_score || awayStats.points, bonus: game.visitor_in_bonus || false, double_bonus: false, remaining_timeouts: game.visitor_timeouts_remaining ?? null, scoring: aScoring, statistics: awayStats, players: bpa(awayPlayers, aSIds) },
@@ -2500,7 +2510,7 @@ export default async function(req) {
           }
 
           // Check game status
-          const gameStatus = normalizeBdlStatusServer(boxScore.status);
+          const gameStatus = normalizeBdlStatusServer(boxScore.status, boxScore);
           if (gameStatus === 'closed' || gameStatus === 'complete') {
             game.status = gameStatus;
             cacheUpdated = true;
