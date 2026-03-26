@@ -3042,7 +3042,9 @@ async function triggerAnalysis(game){
 
     // Parse structural indicators
     const hAlias = game.home?.alias||'HOME', aAlias = game.away?.alias||'AWAY';
-    const parsed = parseSonnetScores(data.analysis, hAlias, aAlias);
+    var parsed = null, decision = null;
+    try{
+    parsed = parseSonnetScores(data.analysis, hAlias, aAlias);
     if(parsed){
       cs.sonnetIndicators = parsed;
       // Snapshot client indicators at analysis time — divergence compares future client reads against THIS baseline
@@ -3061,7 +3063,7 @@ async function triggerAnalysis(game){
     }
 
     // Parse decision/predictive layer
-    const decision = parseSonnetDecision(data.analysis);
+    decision = parseSonnetDecision(data.analysis);
     if(decision){
       // ── SONNET FWP — game-state-aware win probability ──
       // Wrapped in try-catch: any toFixed/null crash defaults to 50/50 instead of killing analysis
@@ -3230,6 +3232,16 @@ async function triggerAnalysis(game){
       if(cs.analysisHistory.length > 15) cs.analysisHistory = cs.analysisHistory.slice(-15);
     }
 
+    }catch(_parseErr){
+      // Inner catch: Sonnet response arrived but parsing crashed
+      // cs.analysis already saved above — raw text preserved
+      var _pStack = '';
+      try{ var _psl = (_parseErr.stack||'').split('\n'); _pStack = _psl.length>1 ? _psl[1].trim().substring(0,120) : ''; }catch(_){}
+      cs.analysisError = 'Parse: ' + _parseErr.message + (_pStack ? ' [' + _pStack + ']' : '');
+      addLog(game.id, '⚠ Analysis PARSE error: '+_parseErr.message+' STACK: '+(_parseErr.stack||'').substring(0,300), false);
+      console.error('Analysis parse error:', _parseErr);
+    }
+
     // ── PUSH NOTIFICATION — fire if entry conditions met ──
     if(decision) checkNtfyAlert(game, decision);
 
@@ -3262,8 +3274,14 @@ async function triggerAnalysis(game){
     renderCard(game);
     renderConfidenceTable();
   }catch(e){
-    cs.analysisError = e.message;
-    addLog(game.id, '⚠ Analysis FAILED: '+e.message, false);
+    // Extract line number from stack for diagnosis
+    var _stackLine = '';
+    try{
+      var _sl = (e.stack||'').split('\n').filter(function(l){return l.includes('bdl.html')||l.includes('<anonymous>');});
+      _stackLine = _sl.length > 0 ? _sl[0].trim().substring(0, 80) : (e.stack||'').split('\n')[1]||'';
+    }catch(se){}
+    cs.analysisError = e.message + (_stackLine ? ' [' + _stackLine + ']' : '');
+    addLog(game.id, '⚠ Analysis FAILED: '+e.message+' STACK: '+(e.stack||'').substring(0, 200), false);
     console.error('Analysis error:', e);
     renderCard(game);
   }finally{
