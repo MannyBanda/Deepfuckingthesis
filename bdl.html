@@ -2873,6 +2873,8 @@ async function triggerAnalysis(game){
   if(cs.analyzing) return;
   cs.analyzing = true;
   cs._analyzeStart = Date.now();
+  cs.analysisError = null; // Clear previous error
+  addLog(game.id, '⚡ ANALYZE started (manual)', true);
   renderCard(game);
   try{
     // ── PRE-FLIGHT: ensure enrichment + PBP are current before building prompt ──
@@ -2947,6 +2949,7 @@ async function triggerAnalysis(game){
     }
 
     // Client-side timeout: prevent fetch from hanging forever (AbortController is safe in browsers)
+    addLog(game.id, '⚡ Pre-flight done — calling Sonnet…', true);
     const _ac = new AbortController();
     const _acTimer = setTimeout(function(){ _ac.abort(); }, 35000);
     const resp = await fetch(FN+'analyze',{
@@ -3252,10 +3255,12 @@ async function triggerAnalysis(game){
     renderConfidenceTable();
   }catch(e){
     cs.analysisError = e.message;
+    addLog(game.id, '⚠ Analysis FAILED: '+e.message, false);
     console.error('Analysis error:', e);
     renderCard(game);
   }finally{
     cs.analyzing = false;
+    cs.preFlightStep = null;
   }
 }
 
@@ -9777,6 +9782,8 @@ function renderCard(game){
       html+='<div class="dv-hdr">VALUE READ<span style="display:flex;align-items:center;gap:6px;margin-left:auto">';
       if(thesisTeam && pred.thesisStatus) html+='<span style="font-size:5.5px;color:var(--t3);letter-spacing:.3px">THESIS '+esc(thesisTeam)+': <span style="color:'+tsCol+'">'+esc(pred.thesisStatus)+'</span></span>';
       html+=analyzeBtn+'<span class="analysis-cost">'+(cs.analysisTime?fmtTs(cs.analysisTime)+'('+fmtAge(cs.analysisTime)+')':'')+'</span></span></div>';
+      // Show analysis error even when old pred exists (so failed re-analysis is visible)
+      if(cs.analysisError) html+='<div style="font-size:6px;color:var(--red);padding:2px 4px;margin-bottom:4px">&#9888; '+esc(cs.analysisError)+'</div>';
 
       if(hasValues){
         // Table header
