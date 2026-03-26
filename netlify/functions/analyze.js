@@ -776,10 +776,10 @@ exports.handler = async function(event) {
           ? 'Last ' + rollingWindow.windowPossessions + ' possessions, ' + (rollingWindow.timeSpanMin||0).toFixed(1) + ' min'
           : (rollingWindow.crossFade ? rollingWindow.windowQuarters.join('+') : rollingWindow.windowQuarters.map(function(q){return 'Q'+q;}).join('+')) + ', ' + (rollingWindow.windowPossessions||'?') + ' poss';
         windowSection = '\nROLLING WINDOW (' + windowLabel + '):\n';
-        windowSection += 'Control: ' + rollingWindow.controlTeam + ' ' + rollingWindow.score.toFixed(2) + '\n';
+        windowSection += 'Control: ' + rollingWindow.controlTeam + ' ' + (rollingWindow.score != null ? rollingWindow.score.toFixed(2) : '?') + '\n';
         ['I1','I2','I3','I4','I5'].forEach(function(k) {
           var ind = rollingWindow[k];
-          if (ind) windowSection += '  ' + k + ': ' + ind.score.toFixed(1) + ' \u2014 ' + (ind.detail||'') + '\n';
+          if (ind && ind.score != null) windowSection += '  ' + k + ': ' + ind.score.toFixed(1) + ' \u2014 ' + (ind.detail||'') + '\n';
         });
         if (rollingWindow.possessionBased && rollingWindow.enrichSummary) {
           windowSection += '\nWINDOW INSIGHTS:\n' + rollingWindow.enrichSummary;
@@ -794,8 +794,8 @@ exports.handler = async function(event) {
     if (acceleration && acceleration.entries && acceleration.entries.length > 0) {
       var lastEntry = acceleration.entries[acceleration.entries.length - 1];
       gapSection = '\nGAP ACCELERATION:\n';
-      gapSection += 'Gap: ' + (lastEntry.gap >= 0 ? '+' : '') + lastEntry.gap.toFixed(3) + ' | Acceleration: ' + acceleration.accel + ' (' + acceleration.consecutive + ' consecutive)\n';
-      gapSection += 'History: ' + acceleration.entries.slice(-5).map(function(e) { return (e.gap >= 0 ? '+' : '') + e.gap.toFixed(2) + ' (' + e.score + ')'; }).join(' → ') + '\n';
+      gapSection += 'Gap: ' + (lastEntry.gap >= 0 ? '+' : '') + (lastEntry.gap != null ? lastEntry.gap.toFixed(3) : '?') + ' | Acceleration: ' + acceleration.accel + ' (' + acceleration.consecutive + ' consecutive)\n';
+      gapSection += 'History: ' + acceleration.entries.slice(-5).map(function(e) { return (e.gap >= 0 ? '+' : '') + (e.gap != null ? e.gap.toFixed(2) : '?') + ' (' + e.score + ')'; }).join(' → ') + '\n';
     } else if (acceleration) {
       gapSection = '\nGAP: ' + (acceleration.accel || 'TOO EARLY') + '\n';
     }
