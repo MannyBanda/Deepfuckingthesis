@@ -2967,8 +2967,11 @@ function normalizeBdlStatus(s, gameInfo){
       var hasScore = ((gameInfo.home_team_score||0) + (gameInfo.visitor_team_score||0)) > 0;
       var hasPeriod = (gameInfo.period||0) > 0;
       var hasTime = gameInfo.time && gameInfo.time !== '' && !gameInfo.time.includes('T');
-      if(hasScore || hasPeriod || hasTime) return 'inprogress';
+      var hasQtrScore = (gameInfo.home_q1||0) > 0 || (gameInfo.visitor_q1||0) > 0;
+      var hasPlayers = gameInfo.home_team && gameInfo.home_team.players && gameInfo.home_team.players.length > 0;
+      if(hasScore || hasPeriod || hasTime || hasQtrScore || hasPlayers) return 'inprogress';
     }
+    try{ var _tipMs = new Date(s).getTime(); if(!isNaN(_tipMs) && Date.now() > _tipMs + 120000) return 'inprogress'; }catch(e){}
     return 'scheduled';
   }
   return s;

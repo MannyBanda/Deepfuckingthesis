@@ -3850,12 +3850,18 @@ function normalizeBdlStatus(s, boxScore){
   // Datetime string — but check box score for live signals (BDL sometimes returns
   // the scheduled time as status even when the game is in progress)
   if(s.includes('T')&&s.includes(':')){
+    // BDL sometimes returns scheduled datetime as status even when live.
+    // Check box score data OR if the scheduled time has passed.
     if(boxScore){
       var hasScore = ((boxScore.home_team_score||0) + (boxScore.visitor_team_score||0)) > 0;
       var hasPeriod = (boxScore.period||0) > 0;
       var hasTime = boxScore.time && boxScore.time !== '' && !boxScore.time.includes('T');
-      if(hasScore || hasPeriod || hasTime) return 'inprogress';
+      var hasQtrScore = (boxScore.home_q1||0) > 0 || (boxScore.visitor_q1||0) > 0;
+      var hasPlayers = boxScore.home_team && boxScore.home_team.players && boxScore.home_team.players.length > 0;
+      if(hasScore || hasPeriod || hasTime || hasQtrScore || hasPlayers) return 'inprogress';
     }
+    // Fallback: if the datetime has passed, game should have tipped
+    try{ var _tipMs = new Date(s).getTime(); if(!isNaN(_tipMs) && Date.now() > _tipMs + 120000) return 'inprogress'; }catch(e){}
     return 'scheduled';
   }
   return s;
