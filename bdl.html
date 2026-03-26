@@ -2595,6 +2595,49 @@ async function refreshLiveCards(){
     }).catch(function(){});
   }
 
+  // ── STATUS REFRESH: re-check BDL statuses for ALL games (not just selected) ──
+  // Catches games that tipped after schedule load. One BDL call, lightweight.
+  var _now = Date.now();
+  var _preGamesPastTip = games.filter(function(g){
+    if(getState(g) !== 'PRE') return false;
+    if(!g.scheduled) return false;
+    return _now > new Date(g.scheduled).getTime();
+  });
+  if(_preGamesPastTip.length > 0){
+    try{
+      var _slateDate = getSlateDate(0).str;
+      var _boxAge = _now - _bdlBoxScoreCache.time;
+      // Only re-fetch if cache is stale (>15s) to avoid hammering BDL
+      if(!_bdlBoxScoreCache.data || _bdlBoxScoreCache.date !== _slateDate || _boxAge > 15000){
+        var _freshBox = await bdl('box_scores', {date: _slateDate}).catch(function(){ return {data:[]}; });
+        var _freshArr = _freshBox.data || [];
+        if(_freshArr.length > 0){
+          _bdlBoxScoreCache = {data: _freshArr, time: Date.now(), date: _slateDate};
+        }
+      }
+      var _statusUpdated = 0;
+      _preGamesPastTip.forEach(function(g){
+        var bdlId = bdlGameMap[g.id];
+        if(!bdlId) return;
+        var box = (_bdlBoxScoreCache.data || []).find(function(b){ return b.id === bdlId; });
+        if(!box) return;
+        var newStatus = normalizeBdlStatus(box.status);
+        if(newStatus !== g.status && newStatus !== 'scheduled' && newStatus !== 'created'){
+          g.status = newStatus;
+          g.homePoints = box.home_team_score || g.homePoints;
+          g.awayPoints = box.visitor_team_score || g.awayPoints;
+          g.period = box.period || g.period;
+          g.clock = normalizeBdlClock(box.time, box.status) || g.clock;
+          _statusUpdated++;
+        }
+      });
+      if(_statusUpdated > 0){
+        console.log('[POLL] Status refresh: '+_statusUpdated+' games flipped from PRE → LIVE/FINAL');
+        renderPills(); updateCounts(); renderConfidenceTable();
+      }
+    }catch(e){ /* status refresh failed — non-fatal, will retry next cycle */ }
+  }
+
   // Collect games that need refreshing — LIVE games always, PRE games past tip-off
   var liveGames = [];
   var now = Date.now();

@@ -1543,6 +1543,35 @@ async function loadSchedule(){
     renderPills(); updateCounts(); renderConfidenceTable();
     // Build BDL game map for fallback (await so enrich has IDs ready)
     await buildBdlGameMap(d.str);
+    // ── IMMEDIATE STATUS UPDATE: BDL games fetch to correct stale SR cache statuses ──
+    try{
+      var _statusGames = await bdl('games', {date: d.str}).catch(function(){ return {data:[]}; });
+      var _statusArr = _statusGames.data || [];
+      if(_statusArr.length > 0){
+        _bdlGamesCache = {data: _statusArr, time: Date.now(), date: d.str};
+        var _updated = 0;
+        games.forEach(function(g){
+          var bdlId = bdlGameMap[g.id];
+          if(!bdlId) return;
+          var gInfo = _statusArr.find(function(b){ return b.id === bdlId; });
+          if(!gInfo) return;
+          var newStatus = normalizeBdlStatus(gInfo.status);
+          if(newStatus !== g.status){
+            g.status = newStatus;
+            g.homePoints = gInfo.home_team_score || g.homePoints;
+            g.awayPoints = gInfo.visitor_team_score || g.awayPoints;
+            g.period = gInfo.period || g.period;
+            g.clock = normalizeBdlClock(gInfo.time, gInfo.status) || g.clock;
+            _updated++;
+          }
+        });
+        if(_updated > 0){
+          var _order = {inprogress:0, halftime:0, scheduled:1, closed:2, complete:2, 'created':1};
+          games.sort(function(a,b){ var oa=_order[a.status]??1, ob=_order[b.status]??1; if(oa!==ob) return oa-ob; return new Date(a.scheduled)-new Date(b.scheduled); });
+          console.log('[SCHEDULE] BDL status update: '+_updated+' games corrected');
+        }
+      }
+    }catch(e){ console.warn('[SCHEDULE] BDL status prefetch failed:', e.message); }
     // Fetch ESPN scoreboard for win probability ID mapping
     fetchEspnScoreboard();
     // Sync theses, analyses, and clutch from DB (cross-device)
@@ -1777,8 +1806,50 @@ async function refreshLiveCards(){
       body:JSON.stringify({league:'ncaamb',device:navigator.userAgent.includes('iPad')?'ipad':navigator.userAgent.includes('iPhone')?'iphone':'browser'})
     }).catch(function(){});
   }
+
+  // ── STATUS REFRESH: re-check BDL statuses for ALL games (not just selected) ──
+  var _now = Date.now();
+  var _preGamesPastTip = games.filter(function(g){
+    if(getState(g) !== 'PRE') return false;
+    if(!g.scheduled) return false;
+    return _now > new Date(g.scheduled).getTime();
+  });
+  if(_preGamesPastTip.length > 0){
+    try{
+      var _slateDate = getSlateDate(0).str;
+      var _boxAge = _now - _bdlGamesCache.time;
+      if(!_bdlGamesCache.data || _bdlGamesCache.date !== _slateDate || _boxAge > 15000){
+        var _freshBox = await bdl('games', {date: _slateDate}).catch(function(){ return {data:[]}; });
+        var _freshArr = _freshBox.data || [];
+        if(_freshArr.length > 0){
+          _bdlGamesCache = {data: _freshArr, time: Date.now(), date: _slateDate};
+        }
+      }
+      var _statusUpdated = 0;
+      _preGamesPastTip.forEach(function(g){
+        var bdlId = bdlGameMap[g.id];
+        if(!bdlId) return;
+        var gInfo = (_bdlGamesCache.data || []).find(function(b){ return b.id === bdlId; });
+        if(!gInfo) return;
+        var newStatus = normalizeBdlStatus(gInfo.status);
+        if(newStatus !== g.status && newStatus !== 'scheduled' && newStatus !== 'created'){
+          g.status = newStatus;
+          g.homePoints = gInfo.home_team_score || g.homePoints;
+          g.awayPoints = gInfo.visitor_team_score || g.awayPoints;
+          g.period = gInfo.period || g.period;
+          g.clock = normalizeBdlClock(gInfo.time, gInfo.status) || g.clock;
+          _statusUpdated++;
+        }
+      });
+      if(_statusUpdated > 0){
+        console.log('[POLL] Status refresh: '+_statusUpdated+' games flipped from PRE → LIVE/FINAL');
+        renderPills(); updateCounts(); renderConfidenceTable();
+      }
+    }catch(e){}
+  }
+
   var liveGames = [];
-  selIds.forEach(function(id){ var g = games.find(function(x){ return x.id===id; }); if(g && getState(g)==='LIVE') liveGames.push(g); });
+  selIds.forEach(function(id){ var g = games.find(function(x){ return x.id===id; }); if(g && (getState(g)==='LIVE' || (getState(g)==='PRE' && g.scheduled && _now > new Date(g.scheduled).getTime()))) liveGames.push(g); });
   if(liveGames.length === 0) return;
 
   // ── BATCH: fetch BDL games list (one call for ALL games — scores, status, clock) ──
