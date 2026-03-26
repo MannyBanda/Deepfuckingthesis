@@ -427,10 +427,25 @@ async function saveSnapshotDB(game){
   };
 
   try{
-    await fetch(FN+'db-api?action=snapshot', {
+    var _snapResp = await fetch(FN+'db-api?action=snapshot', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify(snapshot)
     });
+    if(_snapResp.ok){
+      try{
+        var _snapData = await _snapResp.json();
+        if(_snapData.window && _snapData.window.available){
+          var _prevSource = cs.rollingWindow?.source || 'none';
+          cs.rollingWindow = _snapData.window;
+          cs.rollingWindow.source = 'server-qd';
+          var _flr = getFloor(cs);
+          if(_flr && _flr.score && cs.acceleration){
+            cs.combinedRead = classifyCombinedRead(_flr.score, _flr.controlTeam, cs.rollingWindow, cs.acceleration);
+          }
+          if(_prevSource !== 'server-qd') addLog(game.id, '📡 QTR window updated from server — '+cs.rollingWindow.controlTeam+' '+cs.rollingWindow.score, true);
+        }
+      }catch(e){}
+    }
   }catch(e){ /* silent */ }
 }
 
@@ -513,6 +528,29 @@ async function hydrateFromServerSnapshots(gameId){
       }
     }
 
+    // ── Hydrate rolling window from server quarter_data (authoritative) ──
+    if(!cs.rollingWindow || !cs.rollingWindow.available){
+      try{
+        var qdResp = await fetch(FN+'db-api?action=get_quarter_data&game_id='+encodeURIComponent(gameId));
+        if(qdResp.ok){
+          var qdData = await qdResp.json();
+          var qd = qdData.quarter_data;
+          if(qd && qd.window && qd.window.available){
+            cs.rollingWindow = qd.window;
+            cs.rollingWindow.source = 'server-qd';
+            addLog(gameId, '📡 Server QTR window hydrated — '+qd.window.controlTeam+' '+qd.window.score+' ['+qd.window.windowQuarters.join(',')+']', true);
+            if(cs.acceleration){
+              var flr = getFloor(cs);
+              if(flr && flr.score){
+                cs.combinedRead = classifyCombinedRead(flr.score, flr.controlTeam, cs.rollingWindow, cs.acceleration);
+              }
+            }
+          }
+          if(qd && qd.diffs) cs._serverQuarterDiffs = qd.diffs;
+        }
+      }catch(e){ /* quarter_data not available yet */ }
+    }
+
     // Count sources
     var serverCount = snaps.filter(function(s){ return s.source === 'server'; }).length;
     var clientCount = usable.length - serverCount;
@@ -560,7 +598,7 @@ async function pushContextToDB(game){
   }
 
   var context = {};
-  if(cs.rollingWindow && cs.rollingWindow.available){
+  if(cs.rollingWindow && cs.rollingWindow.available && cs.rollingWindow.source !== 'server' && cs.rollingWindow.source !== 'server-ctx' && cs.rollingWindow.source !== 'server-qd'){
     context.rollingWindow = {available:true, score:cs.rollingWindow.score, controlTeam:cs.rollingWindow.controlTeam, windowQuarters:cs.rollingWindow.windowQuarters, dataQuality:cs.rollingWindow.dataQuality||'?', I1:cs.rollingWindow.I1, I2:cs.rollingWindow.I2, I3:cs.rollingWindow.I3, I4:cs.rollingWindow.I4, I5:cs.rollingWindow.I5};
   }
   if(cs.acceleration && cs.acceleration.accel) context.acceleration = {accel:cs.acceleration.accel, consecutive:cs.acceleration.consecutive, entries:(cs.acceleration.entries||[]).slice(-5)};
@@ -597,21 +635,14 @@ async function hydrateFromServerContext(gameId){
     var ctxPeriod = data.period || 0;
     var hydrated = [];
 
-    if(ctx.rollingWindow && ctx.rollingWindow.available){
-      var serverPeriodCount = (ctx.rollingWindow.windowQuarters||[]).length;
-      var clientPeriodCount = cs._serverPeriodScores ? Object.keys(cs._serverPeriodScores).length : 0;
-      var clientQSCount = cs.quarterSnapshots ? Object.keys(cs.quarterSnapshots.quarters||{}).length : 0;
-      var clientTotal = Math.max(clientPeriodCount, clientQSCount);
-      if(!cs.rollingWindow || !cs.rollingWindow.available || serverPeriodCount > clientTotal){
-        cs.rollingWindow = ctx.rollingWindow; cs.rollingWindow.source = 'server-ctx'; hydrated.push('window(H'+serverPeriodCount+')');
-      }
+    // Rolling window — quarter_data is now the primary source.
+    // game_context window kept as fallback for pre-migration games.
+    if(ctx.rollingWindow && ctx.rollingWindow.available && (!cs.rollingWindow || !cs.rollingWindow.available)){
+      cs.rollingWindow = ctx.rollingWindow; cs.rollingWindow.source = 'server-ctx'; hydrated.push('window [fallback]');
     }
-    if(ctx.perPeriodScores){
-      var serverPKeys = Object.keys(ctx.perPeriodScores);
-      var existingPKeys = cs._serverPeriodScores ? Object.keys(cs._serverPeriodScores) : [];
-      if(serverPKeys.length > existingPKeys.length){
-        cs._serverPeriodScores = ctx.perPeriodScores; hydrated.push('periods:'+serverPKeys.length);
-      }
+    // perPeriodScores — legacy, superseded by _serverQuarterDiffs from quarter_data
+    if(ctx.perPeriodScores && !cs._serverPeriodScores){
+      cs._serverPeriodScores = ctx.perPeriodScores; hydrated.push('periods:'+Object.keys(ctx.perPeriodScores).length);
     }
     if(ctx.acceleration && ctx.acceleration.accel && (!cs.acceleration || cs.acceleration.accel === 'TOO EARLY')){
       cs.acceleration = ctx.acceleration; hydrated.push('accel:'+ctx.acceleration.accel);
@@ -2095,6 +2126,7 @@ async function triggerAnalysis(game){
           if(rw.enrichSummary) slim.enrichSummary=rw.enrichSummary;
           return slim;
         })(cs.rollingWindow) : null,
+        quarterDiffs: cs._serverQuarterDiffs || null,
         acceleration: cs.acceleration || null,
         subMetricArrows: cs.subMetricArrows || null,
         adjustment: cs.adjustment || null,
@@ -7840,6 +7872,60 @@ window._daSel=function(id,ri){
   var g=games.find(function(x){return x.id===id;});if(g)renderCard(g);
 };
 
+// ── PER-QUARTER STAT BREAKDOWN (from server quarter_data) ──
+function renderQuarterBreakdown(id, cs, hA, aA){
+  var diffs = cs._serverQuarterDiffs;
+  if(!diffs || Object.keys(diffs).length === 0) return '';
+  var keys = Object.keys(diffs).map(Number).filter(function(n){return !isNaN(n);}).sort(function(a,b){return a-b;});
+  if(keys.length === 0) return '';
+
+  var rw = cs.rollingWindow;
+  var partialQ = rw ? rw.partial_quarter : null;
+
+  var stats = [
+    {label:'PNT', get:function(d){return d.points_in_the_paint||d.points_in_paint||0;}},
+    {label:'FTA', get:function(d){return d.free_throws_att||0;}},
+    {label:'3PM', get:function(d){return d.three_points_made||0;}},
+    {label:'3PA', get:function(d){return d.three_points_att||0;}},
+    {label:'AST', get:function(d){return d.assists||0;}},
+    {label:'TO',  get:function(d){return d.turnovers||d.total_turnovers||0;}, invert:true},
+    {label:'STL', get:function(d){return d.steals||0;}},
+    {label:'BLK', get:function(d){return d.blocks||0;}},
+  ];
+
+  var html = '<div style="margin:6px 0 4px;padding:4px 6px;background:rgba(30,30,40,.5);border-radius:4px;border:1px solid var(--b2)">';
+  html += '<div style="font-size:7px;color:var(--t2);letter-spacing:1px;margin-bottom:4px;font-weight:600">PER-QUARTER BREAKDOWN</div>';
+
+  html += '<div style="display:flex;font-size:5px;color:var(--t3);letter-spacing:.5px;padding:0 0 2px;border-bottom:1px solid var(--b2);margin-bottom:2px">';
+  html += '<span style="width:28px"></span>';
+  stats.forEach(function(s){ html += '<span style="width:28px;text-align:center">'+s.label+'</span>'; });
+  html += '</div>';
+
+  keys.forEach(function(qk){
+    var d = diffs[qk]; if(!d || !d.home || !d.away) return;
+    var isPartial = (qk === partialQ);
+    var qLabel = 'Q'+qk+(isPartial ? '*' : '');
+
+    html += '<div style="display:flex;align-items:center;font-size:6px;padding:1px 0">';
+    html += '<span style="width:28px;color:var(--t2);font-weight:600;font-size:5px">'+qLabel+'</span>';
+    stats.forEach(function(s){
+      var hVal = s.get(d.home);
+      var aVal = s.get(d.away);
+      var hBetter = s.invert ? hVal < aVal : hVal > aVal;
+      var aBetter = s.invert ? aVal < hVal : aVal > hVal;
+      var tied = hVal === aVal;
+      var hCol = tied ? 'var(--t3)' : hBetter ? 'var(--green)' : 'rgba(255,100,100,.7)';
+      var aCol = tied ? 'var(--t3)' : aBetter ? 'var(--green)' : 'rgba(255,100,100,.7)';
+      html += '<span style="width:28px;text-align:center"><span style="color:'+hCol+'">'+hVal+'</span><span style="color:var(--t3);font-size:4px">-</span><span style="color:'+aCol+'">'+aVal+'</span></span>';
+    });
+    html += '</div>';
+  });
+
+  html += '<div style="font-size:4px;color:var(--t3);margin-top:2px;text-align:right">'+esc(hA)+' - '+esc(aA)+'</div>';
+  html += '</div>';
+  return html;
+}
+
 function renderDepthAuditVisual(id, cs, hA, aA){
   var pbp=cs.pbpAudit; if(!pbp||!pbp.home||!pbp.away) return '';
   var pbpAge=cs.pbpTime?Math.round((Date.now()-cs.pbpTime.getTime())/60000):'?';
@@ -8900,6 +8986,9 @@ function renderCard(game){
 
     // ─── VISUAL DEPTH AUDIT ───
     html += renderDepthAuditVisual(id, cs, hA, aA);
+
+    // ─── PER-QUARTER STAT BREAKDOWN ───
+    html += renderQuarterBreakdown(id, cs, hA, aA);
 
     // Full Sonnet analysis text (in evidence view)
     html+=`<div class="analysis" id="analysis-${id}">`;
