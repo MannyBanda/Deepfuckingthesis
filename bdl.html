@@ -3052,7 +3052,7 @@ async function triggerAnalysis(game){
         const ctUp = parsed.controlTeam.toUpperCase();
         const isHome = ctUp === hAlias.toUpperCase() || ctUp.includes(hAlias.toUpperCase().substring(0,3));
         const floor = isHome ? cs.floorScores.home : cs.floorScores.away;
-        if(floor && parsed.score < floor.floor){
+        if(floor && parsed.score != null && parsed.score < floor.floor){
           console.log('FLOOR OVERRIDE (live): ' + parsed.controlTeam + ' ' + parsed.score.toFixed(3) + ' → ' + floor.floor.toFixed(3) + ' (SIA floor)');
           parsed.score = floor.floor;
         }
@@ -3064,9 +3064,9 @@ async function triggerAnalysis(game){
     const decision = parseSonnetDecision(data.analysis);
     if(decision){
       // ── SONNET FWP — game-state-aware win probability ──
-      // Sonnet outputs labeled two-sided FWP: "MEM 72% / LAC 28%"
-      // Parse directly — no guessing which team Sonnet meant
+      // Wrapped in try-catch: any toFixed/null crash defaults to 50/50 instead of killing analysis
       let homeFWP = 50, awayFWP = 50;
+      try{
       if(decision.fwpLabeled && decision.fwpTeam1 && decision.fwpTeam2){
         // Two-sided labeled — match team aliases to home/away
         const hUp = hAlias.toUpperCase(), aUp = aAlias.toUpperCase();
@@ -3133,6 +3133,13 @@ async function triggerAnalysis(game){
         decision.edgeNum = null;
         decision.mip = 'N/A';
         console.log('FWP (Sonnet, no odds): '+hAlias+' '+homeFWP.toFixed(1)+'% '+aAlias+' '+awayFWP.toFixed(1)+'%');
+      }
+      }catch(_fwpErr){
+        console.warn('FWP parsing crashed — defaulting to 50/50:', _fwpErr.message);
+        addLog(game.id, '⚠ FWP parse error: '+_fwpErr.message+' — using 50/50 defaults', false);
+        homeFWP = 50; awayFWP = 50;
+        if(!decision.homeValue) decision.homeValue = {team:hAlias, fwp:50, mip:null, edge:null, ml:'—', spread:'—'};
+        if(!decision.awayValue) decision.awayValue = {team:aAlias, fwp:50, mip:null, edge:null, ml:'—', spread:'—'};
       }
       cs.prediction = decision;
 
