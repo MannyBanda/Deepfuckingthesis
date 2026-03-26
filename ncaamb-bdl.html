@@ -1555,7 +1555,7 @@ async function loadSchedule(){
           if(!bdlId) return;
           var gInfo = _statusArr.find(function(b){ return b.id === bdlId; });
           if(!gInfo) return;
-          var newStatus = normalizeBdlStatus(gInfo.status);
+          var newStatus = normalizeBdlStatus(gInfo.status, gInfo);
           if(newStatus !== g.status){
             g.status = newStatus;
             g.homePoints = gInfo.home_team_score || g.homePoints;
@@ -1831,7 +1831,7 @@ async function refreshLiveCards(){
         if(!bdlId) return;
         var gInfo = (_bdlGamesCache.data || []).find(function(b){ return b.id === bdlId; });
         if(!gInfo) return;
-        var newStatus = normalizeBdlStatus(gInfo.status);
+        var newStatus = normalizeBdlStatus(gInfo.status, gInfo);
         if(newStatus !== g.status && newStatus !== 'scheduled' && newStatus !== 'created'){
           g.status = newStatus;
           g.homePoints = gInfo.home_team_score || g.homePoints;
@@ -1879,7 +1879,7 @@ async function fetchSummaryBDL(game){
     if(!gameInfo){ addLog(game.id, 'BDL game not in cache', false); return; }
 
     // Check if game hasn't started yet
-    var gStatus = normalizeBdlStatus(gameInfo.status);
+    var gStatus = normalizeBdlStatus(gameInfo.status, gameInfo);
     if(gStatus === 'scheduled'){ addLog(game.id, 'Not started ('+gameInfo.status+')', true); return; }
 
     // Fetch player_stats + team_stats + plays in parallel
@@ -2954,13 +2954,23 @@ function parsePBP(pbpData, game){
 // ══════════════════════════════════════════════════════════════════════════════
 // BDL STATUS / CLOCK NORMALIZERS (NCAAMB)
 // ══════════════════════════════════════════════════════════════════════════════
-function normalizeBdlStatus(s){
+function normalizeBdlStatus(s, gameInfo){
   if(!s) return 'scheduled';
   var sl = s.toLowerCase();
   if(sl==='post'||sl==='final') return 'closed';
   if(sl==='in'||sl==='in progress'||sl.includes('half')||sl.includes('overtime')||sl.includes(' ot')||sl==='ot'||/^\d*\s*ot/i.test(sl)) return 'inprogress';
   if(sl==='halftime') return 'halftime';
   if(sl==='pre') return 'scheduled';
+  // Datetime string — check game info for live signals
+  if(s.includes('T')&&s.includes(':')){
+    if(gameInfo){
+      var hasScore = ((gameInfo.home_team_score||0) + (gameInfo.visitor_team_score||0)) > 0;
+      var hasPeriod = (gameInfo.period||0) > 0;
+      var hasTime = gameInfo.time && gameInfo.time !== '' && !gameInfo.time.includes('T');
+      if(hasScore || hasPeriod || hasTime) return 'inprogress';
+    }
+    return 'scheduled';
+  }
   return s;
 }
 // BDL NCAAMB: clock embedded in period_detail ("9:09 - 2nd Half" or "Halftime" or "Final")
@@ -3182,7 +3192,7 @@ function buildSummaryFromBDL(gameInfo, playerStats, teamStatsArr, pbpResult){
   function buildPlayerArr(pls){return pls.map(function(p){var pl=p.player||{};return{id:pl.id,full_name:((pl.first_name||'')+' '+(pl.last_name||'')).trim(),jersey_number:pl.jersey_number||'',position:pl.position||'',primary_position:pl.position||'',played:(p.min&&p.min!=='0')||(p.pts>0),active:true,starter:false,on_court:false,statistics:{minutes:p.min||'0',field_goals_made:p.fgm||0,field_goals_att:p.fga||0,three_points_made:p.fg3m||0,three_points_att:p.fg3a||0,free_throws_made:p.ftm||0,free_throws_att:p.fta||0,offensive_rebounds:p.oreb||0,defensive_rebounds:p.dreb||0,rebounds:p.reb||0,assists:p.ast||0,steals:p.stl||0,blocks:p.blk||0,turnovers:p.turnover||0,personal_fouls:p.pf||0,points:p.pts||0,pls_min:0}};});}
 
   var pd = parseBdlPeriodDetail(gameInfo.period_detail);
-  var srSt = normalizeBdlStatus(gameInfo.status);
+  var srSt = normalizeBdlStatus(gameInfo.status, gameInfo);
 
   return{id:gameInfo.id,status:srSt,quarter:gameInfo.period||pd.period||periods.length||0,clock:pd.clock,lead_changes:lc,times_tied:tt,_dataSource:'BDL',
     home:{name:hTeam.name||hTeam.school||'',alias:hA,market:hTeam.college||hTeam.full_name||'',id:hTeam.id||'',points:gameInfo.home_score||homeStats.points,bonus:false,double_bonus:false,remaining_timeouts:null,scoring:periods.map(function(p){return{type:'half',number:p.number,sequence:p.number,points:p.home_points};}),statistics:homeStats,players:buildPlayerArr(homePlayers)},

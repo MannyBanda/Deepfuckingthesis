@@ -1914,7 +1914,7 @@ async function loadSchedule(){
           if(!bdlId) return;
           var box = _statusArr.find(function(b){ return b.id === bdlId; });
           if(!box) return;
-          var newStatus = normalizeBdlStatus(box.status);
+          var newStatus = normalizeBdlStatus(box.status, box);
           if(newStatus !== g.status){
             var wasPreOrScheduled = g.status === 'scheduled' || g.status === 'created';
             g.status = newStatus;
@@ -2621,7 +2621,7 @@ async function refreshLiveCards(){
         if(!bdlId) return;
         var box = (_bdlBoxScoreCache.data || []).find(function(b){ return b.id === bdlId; });
         if(!box) return;
-        var newStatus = normalizeBdlStatus(box.status);
+        var newStatus = normalizeBdlStatus(box.status, box);
         if(newStatus !== g.status && newStatus !== 'scheduled' && newStatus !== 'created'){
           g.status = newStatus;
           g.homePoints = box.home_team_score || g.homePoints;
@@ -2722,7 +2722,7 @@ async function fetchSummaryBDL(game){
     game.dataSource = 'BDL';
     game.homePoints = data.home?.points ?? 0;
     game.awayPoints = data.away?.points ?? 0;
-    game.status = normalizeBdlStatus(boxScore.status);
+    game.status = normalizeBdlStatus(boxScore.status, boxScore);
     game.period = data.quarter || 0;
     game.clock = normalizeBdlClock(boxScore.time || data.clock, boxScore.status);
 
@@ -3841,14 +3841,23 @@ function parsePBP(pbpData, game){
 // ══════════════════════════════════════════════════════════════════════════════
 // BDL STATUS / FORMAT NORMALIZERS
 // ══════════════════════════════════════════════════════════════════════════════
-function normalizeBdlStatus(s){
+function normalizeBdlStatus(s, boxScore){
   if(!s) return 'scheduled';
   var sl = s.toLowerCase();
   if(sl==='final') return 'closed';
   if(sl==='in progress'||sl.includes('qtr')||sl.includes('quarter')||sl.includes('overtime')||sl.includes(' ot')||sl==='ot'||/^\d*\s*ot/i.test(sl)) return 'inprogress';
   if(sl==='halftime'||sl.includes('half')) return 'halftime';
-  // Datetime string = scheduled
-  if(s.includes('T')&&s.includes(':')) return 'scheduled';
+  // Datetime string — but check box score for live signals (BDL sometimes returns
+  // the scheduled time as status even when the game is in progress)
+  if(s.includes('T')&&s.includes(':')){
+    if(boxScore){
+      var hasScore = ((boxScore.home_team_score||0) + (boxScore.visitor_team_score||0)) > 0;
+      var hasPeriod = (boxScore.period||0) > 0;
+      var hasTime = boxScore.time && boxScore.time !== '' && !boxScore.time.includes('T');
+      if(hasScore || hasPeriod || hasTime) return 'inprogress';
+    }
+    return 'scheduled';
+  }
   return s;
 }
 
