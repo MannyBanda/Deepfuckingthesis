@@ -1876,9 +1876,44 @@ async function loadSchedule(){
       }
     }
     document.getElementById('date-lbl').innerHTML = 'Schedule for <span>'+d.str+'</span> (times MST)';
-    renderPills(); updateCounts(); renderConfidenceTable();
-    // Build BDL game map for fallback (await so enrich has IDs ready)
+    // Build BDL game map FIRST (await so status update has IDs ready)
     await buildBdlGameMap(d.str);
+    // ── IMMEDIATE STATUS UPDATE: fetch BDL box scores to correct stale SR cache statuses ──
+    // Without this, SR cache keeps games as 'scheduled' until they're selected and polled
+    try{
+      var _statusBox = await bdl('box_scores', {date: d.str}).catch(function(){ return {data:[]}; });
+      var _statusArr = _statusBox.data || [];
+      if(_statusArr.length > 0){
+        _bdlBoxScoreCache = {data: _statusArr, time: Date.now(), date: d.str};
+        var _updated = 0;
+        games.forEach(function(g){
+          var bdlId = bdlGameMap[g.id];
+          if(!bdlId) return;
+          var box = _statusArr.find(function(b){ return b.id === bdlId; });
+          if(!box) return;
+          var newStatus = normalizeBdlStatus(box.status);
+          if(newStatus !== g.status){
+            g.status = newStatus;
+            g.homePoints = box.home_team_score || g.homePoints;
+            g.awayPoints = box.visitor_team_score || g.awayPoints;
+            g.period = box.period || g.period;
+            g.clock = normalizeBdlClock(box.time, box.status) || g.clock;
+            _updated++;
+          }
+        });
+        if(_updated > 0){
+          // Re-sort with updated statuses (live first, then scheduled, then final)
+          var _order = {inprogress:0, halftime:0, scheduled:1, closed:2, complete:2, 'created':1};
+          games.sort(function(a,b){
+            var oa=_order[a.status]??1, ob=_order[b.status]??1;
+            if(oa!==ob) return oa-ob;
+            return new Date(a.scheduled)-new Date(b.scheduled);
+          });
+          console.log('[SCHEDULE] BDL status update: '+_updated+' games corrected');
+        }
+      }
+    }catch(e){ console.warn('[SCHEDULE] BDL status prefetch failed:', e.message); }
+    renderPills(); updateCounts(); renderConfidenceTable();
     // Fetch conference standings (one call, cached for session)
     if(Object.keys(standingsCache).length === 0) fetchStandings();
     // Fetch ESPN scoreboard for win probability ID mapping
