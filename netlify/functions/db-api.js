@@ -131,6 +131,8 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS indicators_json JSONB`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS narrative_json JSONB`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS "trigger" TEXT DEFAULT 'manual'`; } catch(e) {}
+      try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS home_pts INTEGER`; } catch(e) {}
+      try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS away_pts INTEGER`; } catch(e) {}
 
       // Snapshot enrichment columns (server-side polling)
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'client'`; } catch(e) {}
@@ -678,12 +680,12 @@ exports.handler = async (event) => {
       await sql`
         INSERT INTO analyses (game_id, period, clock, control_team, control_score,
           fwp, edge, entry, conviction, signal, sustainability, lead_source, raw_text,
-          prediction_json, indicators_json, narrative_json, "trigger")
+          prediction_json, indicators_json, narrative_json, "trigger", home_pts, away_pts)
         VALUES (${a.game_id}, ${a.period}, ${a.clock}, ${a.control_team}, ${a.control_score},
           ${a.fwp}, ${a.edge}, ${a.entry}, ${a.conviction}, ${a.signal},
           ${a.sustainability}, ${a.lead_source}, ${a.raw_text},
           ${a.prediction_json || null}, ${a.indicators_json || null}, ${a.narrative_json || null},
-          ${a.trigger || 'manual'})
+          ${a.trigger || 'manual'}, ${a.home_pts || null}, ${a.away_pts || null})
       `;
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
     }
@@ -912,7 +914,7 @@ exports.handler = async (event) => {
         SELECT game_id, ts, period, clock,
           control_team, control_score, fwp, edge, entry, conviction, signal,
           sustainability, lead_source, prediction_json, indicators_json, raw_text,
-          "trigger"
+          "trigger", home_pts, away_pts
         FROM analyses
         WHERE game_id = ANY(${gameIds}) AND "trigger" LIKE 'auto_q%'
         ORDER BY game_id, ts ASC

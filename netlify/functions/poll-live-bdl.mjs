@@ -1874,13 +1874,13 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       await sql`
         INSERT INTO analyses (game_id, period, clock, control_team, control_score,
           fwp, edge, entry, conviction, signal, sustainability, lead_source, raw_text,
-          prediction_json, indicators_json, "trigger")
+          prediction_json, indicators_json, "trigger", home_pts, away_pts)
         VALUES (${game.id}, ${period}, ${clock}, ${parsed.controlTeam}, ${parsed.controlScore},
           ${parsed.fwp}, ${parsed.edge}, ${parsed.entry}, ${parsed.conviction}, ${parsed.signal},
           ${parsed.sustainability}, ${parsed.leadSource}, ${result.analysis},
           ${parsed.predictionJson ? JSON.stringify(parsed.predictionJson) : null},
           ${parsed.indicatorsJson ? JSON.stringify(parsed.indicatorsJson) : null},
-          ${triggerTag})
+          ${triggerTag}, ${ind.homePts || null}, ${ind.awayPts || null})
       `;
     } catch (e) {
       log(`${matchup}: ${triggerTag} CAL — analysis save failed: ${e.message}`);
@@ -2196,6 +2196,80 @@ export default async function(req) {
             if (espnMap[game.id]) {
               var finalWP = await espnWinProb(league, espnMap[game.id]);
             }
+
+            // ── SERVER-SIDE FINALIZE — ensures calibration view works even when client is asleep ──
+            try {
+              const homePts = boxScore.home_team_score || 0;
+              const awayPts = boxScore.visitor_team_score || 0;
+              const winner = homePts > awayPts ? hA : (awayPts > homePts ? aA : 'TIE');
+              const margin = Math.abs(homePts - awayPts);
+
+              // Pull FWP from latest auto analysis if available
+              let fwpTeam = null, fwpValue = null, conviction = null, entrySignal = null;
+              try {
+                const aRows = await sql`
+                  SELECT prediction_json, conviction, entry FROM analyses
+                  WHERE game_id = ${game.id} AND "trigger" LIKE 'auto_q%'
+                  ORDER BY ts DESC LIMIT 1
+                `;
+                if (aRows.length > 0) {
+                  const pred = typeof aRows[0].prediction_json === 'string'
+                    ? JSON.parse(aRows[0].prediction_json) : aRows[0].prediction_json;
+                  if (pred?.homeValue?.fwp != null && pred?.awayValue?.fwp != null) {
+                    if (pred.homeValue.fwp >= pred.awayValue.fwp) { fwpTeam = hA; fwpValue = pred.homeValue.fwp; }
+                    else { fwpTeam = aA; fwpValue = pred.awayValue.fwp; }
+                  }
+                  conviction = aRows[0].conviction || null;
+                  entrySignal = aRows[0].entry || null;
+                }
+              } catch (e) { /* no auto analyses */ }
+
+              // Pull thesis team from theses table
+              let thesisTeam = null;
+              try {
+                const tRows = await sql`SELECT text FROM theses WHERE game_id = ${game.id} LIMIT 1`;
+                if (tRows.length > 0) {
+                  const csMatch = (tRows[0].text || '').match(/CONTROL SCORE:\s*(\w+)/i);
+                  if (csMatch) thesisTeam = csMatch[1].toUpperCase();
+                }
+              } catch (e) { /* no thesis */ }
+
+              // Pull latest odds for spread coverage
+              let homeSpread = null;
+              try {
+                const oRows = await sql`
+                  SELECT home_spread FROM odds_history
+                  WHERE game_id = ${game.id} AND home_spread IS NOT NULL
+                  ORDER BY ts DESC LIMIT 1
+                `;
+                if (oRows.length > 0) homeSpread = parseFloat(oRows[0].home_spread);
+              } catch (e) { /* no odds */ }
+
+              let homeCovered = null, awayCovered = null;
+              if (homeSpread != null && !isNaN(homeSpread)) {
+                const m = homePts - awayPts;
+                homeCovered = (m + homeSpread) > 0;
+                awayCovered = (-m + (-homeSpread)) > 0;
+              }
+
+              await sql`
+                UPDATE games SET
+                  home_pts = ${homePts}, away_pts = ${awayPts},
+                  winner = ${winner}, margin = ${margin},
+                  spread = ${homeSpread},
+                  home_covered = ${homeCovered}, away_covered = ${awayCovered},
+                  thesis_team = ${thesisTeam},
+                  thesis_correct = ${thesisTeam ? thesisTeam === winner : null},
+                  fwp_team = ${fwpTeam}, fwp_value = ${fwpValue},
+                  fwp_correct = ${fwpTeam ? fwpTeam === winner : null},
+                  conviction = ${conviction}, entry_signal = ${entrySignal}
+                WHERE id = ${game.id}
+              `;
+              log(`${matchup}: ★ SERVER FINALIZED — ${winner} by ${margin} (FWP:${fwpTeam || 'N/A'} thesis:${thesisTeam || 'N/A'} spread:${homeSpread || 'N/A'})`);
+            } catch (e) {
+              log(`${matchup}: server finalize failed: ${e.message}`);
+            }
+
             continue;
           }
           if (gameStatus === 'scheduled' || gameStatus === 'created') {
