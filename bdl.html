@@ -208,6 +208,10 @@ input,textarea,select{font-size:16px!important;}
 .empty{padding:44px;text-align:center;color:var(--t3);font-size:8px;letter-spacing:2px;}
 .date-label{font-size:7px;color:var(--t2);letter-spacing:1px;margin-bottom:6px;padding:4px 0;}
 .date-label span{color:var(--amber);}
+.date-nav{display:flex;gap:0;margin-bottom:6px;border-bottom:1px solid var(--glass-border);}
+.date-tab{flex:1;background:none;border:none;border-bottom:2px solid transparent;color:var(--t3);font-family:var(--mono);font-size:8px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;padding:8px 0;cursor:pointer;transition:all .15s;}
+.date-tab:active{opacity:.7;}
+.date-tab.active{color:var(--t0);border-bottom-color:var(--amber);}
 
 /* Alert bar */
 .abar{position:fixed;top:0;left:0;right:0;z-index:200;display:flex;align-items:center;gap:9px;padding:10px 14px;font-size:8px;letter-spacing:1px;transform:translateY(-100%);transition:transform .3s ease;padding-top:max(10px,env(safe-area-inset-top));backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);border-radius:0 0 var(--radius) var(--radius);}
@@ -329,6 +333,11 @@ input,textarea,select{font-size:16px!important;}
 
   <div id="loading" class="loading" style="display:none;"><div class="spin"></div> Loading schedule…</div>
   <div id="err" class="err-msg" style="display:none;"></div>
+  <div id="date-nav" class="date-nav">
+    <button class="date-tab" onclick="switchDate(-1)">Yesterday</button>
+    <button class="date-tab active" onclick="switchDate(0)">Today</button>
+    <button class="date-tab" onclick="switchDate(1)">Upcoming</button>
+  </div>
   <div id="date-lbl" class="date-label"></div>
   <div id="conf-table" style="display:none"></div>
   <div id="pills" class="pills"></div>
@@ -1577,6 +1586,7 @@ async function fetchEspnWinProb(gameId){
 
 
 let games = [], selIds = [], paused = false, pollTimer = null, alertTimer = null, confCollapsed = false;
+var dateOffset = 0; // -1=yesterday, 0=today, 1=tomorrow
 let pollInterval = 10000; // BDL: 10s — 600 req/min allows near-realtime polling
 const theses = JSON.parse(localStorage.getItem('nba4:theses')||'{}');
 const cachedClutch = JSON.parse(localStorage.getItem('nba4:clutch')||'{}');
@@ -1822,25 +1832,47 @@ function getSlateDate(offset=0){
   };
 }
 
+function switchDate(offset){
+  dateOffset = offset;
+  // Update tab active state
+  document.querySelectorAll('.date-tab').forEach(function(tab,i){
+    tab.classList.toggle('active', (i===0&&offset===-1)||(i===1&&offset===0)||(i===2&&offset===1));
+  });
+  // Clear selections and stop polling before loading new date
+  selIds = [];
+  clearInterval(pollTimer);
+  pollTimer = null;
+  loadSchedule();
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // SCHEDULE
 // ══════════════════════════════════════════════════════════════════════════════
 async function loadSchedule(){
   showLoading(true); showErr(null);
   try{
-    const d = getSlateDate(0);
-    // ── Schedule cache: one SR call per day, cached in localStorage ──
-    var schedCacheKey = 'nba4:schedule:' + d.str;
-    var cachedSched = null;
-    try { cachedSched = JSON.parse(localStorage.getItem(schedCacheKey)); } catch(e) {}
-    var data;
-    if(cachedSched && cachedSched.games && cachedSched.games.length > 0) {
-      data = cachedSched;
-      console.log('[SCHEDULE] Loaded from cache — ' + data.games.length + ' games for ' + d.str);
-    } else {
-      data = await sr('schedule',{year:d.year, month:d.month, day:d.day});
-      try { localStorage.setItem(schedCacheKey, JSON.stringify(data)); } catch(e) {}
-      console.log('[SCHEDULE] Fetched from SR — ' + (data.games||[]).length + ' games, cached');
+    var lookbackOffset = dateOffset;
+    var d, data;
+
+    // ── Lookback: if going backwards and no games, try up to 5 days back ──
+    for(var attempt = 0; attempt < (dateOffset < 0 ? 5 : 1); attempt++){
+      d = getSlateDate(lookbackOffset);
+      var schedCacheKey = 'nba4:schedule:' + d.str;
+      var cachedSched = null;
+      try { cachedSched = JSON.parse(localStorage.getItem(schedCacheKey)); } catch(e) {}
+      if(cachedSched && cachedSched.games && cachedSched.games.length > 0) {
+        data = cachedSched;
+        console.log('[SCHEDULE] Loaded from cache — ' + data.games.length + ' games for ' + d.str);
+      } else {
+        data = await sr('schedule',{year:d.year, month:d.month, day:d.day});
+        try { localStorage.setItem(schedCacheKey, JSON.stringify(data)); } catch(e) {}
+        console.log('[SCHEDULE] Fetched from SR — ' + (data.games||[]).length + ' games for ' + d.str);
+      }
+      if((data.games||[]).length > 0) break;
+      if(dateOffset < 0){
+        lookbackOffset--;
+        console.log('[SCHEDULE] No games on ' + d.str + ', trying ' + getSlateDate(lookbackOffset).str);
+      }
     }
     games = (data.games||[]).map(g=>({
       id: g.id,
@@ -1875,7 +1907,7 @@ async function loadSchedule(){
         games.unshift(dg);
       }
     }
-    document.getElementById('date-lbl').innerHTML = 'Schedule for <span>'+d.str+'</span> (times MST)';
+    document.getElementById('date-lbl').innerHTML = 'Schedule for <span>'+d.str+'</span> (times MST) · <span style="color:var(--t2)">' + games.length + ' ' + (dateOffset===0?'NBA':'') + ' games</span>';
     // Build BDL game map FIRST (await so status update has IDs ready)
     await buildBdlGameMap(d.str);
     // ── IMMEDIATE STATUS UPDATE: fetch BDL box scores to correct stale SR cache statuses ──
@@ -1940,9 +1972,11 @@ async function loadSchedule(){
     syncLatestSnapshotsFromDB();
     syncClutchFromDB();
     syncSeasonCacheFromDB();
-    // Start polling
+    // Start polling (today only — yesterday/upcoming don't need live updates)
     clearInterval(pollTimer);
-    pollTimer = setInterval(()=>{ if(!paused) refreshLiveCards(); }, pollInterval);
+    if(dateOffset === 0){
+      pollTimer = setInterval(()=>{ if(!paused) refreshLiveCards(); }, pollInterval);
+    }
   }catch(e){ showErr(e.message); }
   finally{ showLoading(false); }
 }
