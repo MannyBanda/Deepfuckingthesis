@@ -372,7 +372,7 @@ async function initDB(){
 async function saveSnapshotDB(game){
   if(!dbReady) return;
   var cs = cardState[game.id]; if(!cs) return;
-  var floor = cs.sonnetIndicators || cs.clientInd || cs._serverFloor; if(!floor || !floor.score) return;
+  var floor = getFloor(cs); if(!floor || !floor.score) return;
   var pbp = cs.pbpWindow;
   var qtr = cs.rollingWindow;
   var ewp = cs.espnWP;
@@ -496,7 +496,7 @@ async function hydrateFromServerSnapshots(gameId){
       cs.acceleration = accelResult;
 
       // Compute combined read if we have a floor
-      var floor = cs._serverFloor || cs.sonnetIndicators || cs.clientInd;
+      var floor = getFloor(cs);
       if(floor && floor.score){
         var windowResult = cs.rollingWindow || cs.pbpWindow || null;
         cs.combinedRead = classifyCombinedRead(floor.score, floor.controlTeam, windowResult, accelResult);
@@ -2100,6 +2100,17 @@ async function triggerAnalysis(game){
           degradation: cs.throughput.degradation,
           fTeam: cs.throughput.fTeam,
         } : null,
+        leadSafety: cs.leadSafety ? {
+          classification: cs.leadSafety.classification,
+          lead: cs.leadSafety.lead,
+          conservative: Math.round(cs.leadSafety.conservative.totalSwing),
+          expected: Math.round(cs.leadSafety.expected.totalSwing),
+          optimistic: Math.round(cs.leadSafety.optimistic.totalSwing),
+          remainingPoss: cs.leadSafety.remainingPoss,
+          structEdge: cs.leadSafety.structEdge,
+          fTeam: cs.leadSafety.fTeam,
+          oppTeam: cs.leadSafety.oppTeam,
+        } : null,
         projection: cs.projection ? {
           projectedMargin: cs.projection.projectedMargin,
           projTeam: cs.projection.projTeam,
@@ -2170,19 +2181,20 @@ async function triggerAnalysis(game){
       if(decision.fwpLabeled && decision.fwpTeam1 && decision.fwpTeam2){
         const hUp = hAlias.toUpperCase(), aUp = aAlias.toUpperCase();
         const t1Up = decision.fwpTeam1, t2Up = decision.fwpTeam2;
+        var _v1 = decision.fwpVal1 ?? 50, _v2 = decision.fwpVal2 ?? 50;
         if(t1Up === hUp || t1Up.startsWith(hUp.substring(0,3)) || hUp.startsWith(t1Up.substring(0,3))){
-          homeFWP = decision.fwpVal1; awayFWP = decision.fwpVal2;
+          homeFWP = _v1; awayFWP = _v2;
         } else if(t2Up === hUp || t2Up.startsWith(hUp.substring(0,3)) || hUp.startsWith(t2Up.substring(0,3))){
-          homeFWP = decision.fwpVal2; awayFWP = decision.fwpVal1;
+          homeFWP = _v2; awayFWP = _v1;
         } else if(t1Up === aUp || t1Up.startsWith(aUp.substring(0,3)) || aUp.startsWith(t1Up.substring(0,3))){
-          awayFWP = decision.fwpVal1; homeFWP = decision.fwpVal2;
+          awayFWP = _v1; homeFWP = _v2;
         } else {
-          awayFWP = decision.fwpVal1; homeFWP = decision.fwpVal2;
+          awayFWP = _v1; homeFWP = _v2;
           console.warn('FWP: Could not match teams '+t1Up+'/'+t2Up+' to '+hUp+'/'+aUp+' — using positional');
         }
         console.log('FWP (labeled): '+hAlias+' '+homeFWP.toFixed(1)+'% / '+aAlias+' '+awayFWP.toFixed(1)+'%');
       } else if(decision.fwpSingleTeam){
-        const fwpVal = decision.fwpSingleVal;
+        const fwpVal = decision.fwpSingleVal ?? 50;
         const fwpTeamUp = decision.fwpSingleTeam;
         const hUp = hAlias.toUpperCase(), aUp = aAlias.toUpperCase();
         if(fwpTeamUp === hUp || fwpTeamUp.startsWith(hUp.substring(0,3)) || hUp.startsWith(fwpTeamUp.substring(0,3))){
@@ -3402,32 +3414,55 @@ async function handleClutchUpload(input){
     }
 
     // Send to clutch-ocr function with team filter
-    const payload = JSON.stringify({ image: base64, mediaType, segment, teams: activeTeams });
-    const payloadMB = (payload.length / 1024 / 1024).toFixed(1);
-    console.log('Clutch OCR payload:', payloadMB+'MB');
-    if(payload.length > 5500000){
-      throw new Error('Image still too large after compression ('+payloadMB+'MB). Try cropping the screenshot to just the table area.');
-    }
-    status.textContent = '⏳ Extracting ' + activeTeams.length + ' teams from ' + targetGames.length + ' games (~15s, '+payloadMB+'MB)...';
-    const resp = await fetch(FN+'clutch-ocr',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: payload
-    });
-
-    if(!resp.ok){
-      if(resp.status === 502) throw new Error('Server crashed processing image ('+payloadMB+'MB). Try cropping to just the table.');
-      if(resp.status === 504) throw new Error('Server timed out. Try cropping the screenshot.');
-      if(resp.status === 413) throw new Error('Image too large for server. Try a smaller screenshot.');
-      const err = await resp.json().catch(()=>({error:resp.statusText}));
-      throw new Error(err.error || 'OCR failed: '+resp.status);
+    // Batch into groups of 8 to avoid Netlify 26s function timeout on large slates
+    const BATCH_SIZE = 8;
+    var allExtracted = {};
+    var totalUsage = {input:0, output:0};
+    var batches = [];
+    for(var bi=0; bi<activeTeams.length; bi+=BATCH_SIZE){
+      batches.push(activeTeams.slice(bi, bi+BATCH_SIZE));
     }
 
-    const data = await resp.json();
+    for(var batchIdx=0; batchIdx<batches.length; batchIdx++){
+      var batchTeams = batches[batchIdx];
+      var batchLabel = batches.length > 1 ? ' (batch '+(batchIdx+1)+'/'+batches.length+')' : '';
+      const payload = JSON.stringify({ image: base64, mediaType, segment, teams: batchTeams });
+      const payloadMB = (payload.length / 1024 / 1024).toFixed(1);
+      console.log('Clutch OCR payload'+batchLabel+':', payloadMB+'MB, teams:', batchTeams.join(','));
+      if(payload.length > 5500000){
+        throw new Error('Image still too large after compression ('+payloadMB+'MB). Try cropping the screenshot to just the table area.');
+      }
+      status.textContent = '⏳ Extracting ' + batchTeams.length + ' teams'+batchLabel+' (~15s, '+payloadMB+'MB)...';
+      const resp = await fetch(FN+'clutch-ocr',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: payload
+      });
 
-    if(data.error){
-      throw new Error(data.error + (data.rawText ? ' — raw: '+data.rawText.substring(0,100) : ''));
+      if(!resp.ok){
+        if(resp.status === 502) throw new Error('Server crashed processing image'+batchLabel+' ('+payloadMB+'MB). Try cropping to just the table.');
+        if(resp.status === 504) throw new Error('Server timed out'+batchLabel+'. Try cropping the screenshot.');
+        if(resp.status === 413) throw new Error('Image too large for server. Try a smaller screenshot.');
+        const err = await resp.json().catch(()=>({error:resp.statusText}));
+        throw new Error(err.error || 'OCR failed: '+resp.status);
+      }
+
+      const batchData = await resp.json();
+
+      if(batchData.error){
+        throw new Error(batchData.error + batchLabel + (batchData.rawText ? ' — raw: '+batchData.rawText.substring(0,100) : ''));
+      }
+
+      if(batchData.teams){
+        Object.assign(allExtracted, batchData.teams);
+      }
+      if(batchData.usage){
+        totalUsage.input += batchData.usage.input||0;
+        totalUsage.output += batchData.usage.output||0;
+      }
     }
+
+    var data = {teams: allExtracted, segment: segment, teamCount: Object.keys(allExtracted).length, usage: totalUsage};
 
     if(!data.teams || Object.keys(data.teams).length === 0){
       throw new Error('No teams extracted from screenshot');
@@ -4880,6 +4915,13 @@ function buildTrajectory(game, hA, aA, hs, as, H, A, hS, aS, qDs, periods){
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+// FLOOR HELPER — safe accessor for sonnetIndicators/clientInd/serverFloor
+// Guards against truthy objects with score:undefined
+// ══════════════════════════════════════════════════════════════════════════════
+function getFloor(cs){if(!cs)return null;if(cs.sonnetIndicators&&cs.sonnetIndicators.score!=null)return cs.sonnetIndicators;if(cs.clientInd&&cs.clientInd.score!=null)return cs.clientInd;if(cs._serverFloor&&cs._serverFloor.score!=null)return cs._serverFloor;return null;}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // DECISION SYNTHESIZER — resolves all signals into one actionable read
 // ══════════════════════════════════════════════════════════════════════════════
 function synthesize(game){
@@ -4890,9 +4932,8 @@ function synthesize(game){
   if(state==='PRE') return null;
 
   // ── GATHER INPUTS ──
-  var floor = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
+  var floor = getFloor(cs);
   var pbp = cs.pbpWindow;
-  var qtr = cs.rollingWindow;
   var ewp = cs.espnWP;
   var sust = cs.clientSustainability;
   var od = cs.oddsData;
@@ -4922,9 +4963,6 @@ function synthesize(game){
   var pbpScore = pbpAvail ? pbp.score : null;
   var pbpGap = pbpAvail && pbpAgrees ? (pbp.score - fScore) : pbpAvail ? -(pbp.score) : null;
 
-  // ── QTR CONTEXT ──
-  var qtrAvail = qtr && qtr.available && qtr.score;
-  var qtrAgrees = qtrAvail && qtr.controlTeam === fTeam;
 
   // ── SUSTAINABILITY ──
   // Check both client sustainability and Sonnet's sustainability audit
@@ -5031,6 +5069,8 @@ function synthesize(game){
   var sustMissing = !oppSust && !ctrlSust; // neither side has sustainability data
 
   // ── NULL SUSTAINABILITY GATE ──
+  // If we're in the entry zone but have no sustainability data, we can't make a real call.
+  // Produce DEVELOPING instead of a premature weaker action.
   if(fScore >= 0.70 && pbpAgrees && trailing && inBuyRange && sustMissing){
     action = 'DEVELOPING'; actionColor = 'var(--yellow)';
     lines.push('Entry conditions forming but sustainability data missing — cannot classify lead quality.');
@@ -5061,9 +5101,25 @@ function synthesize(game){
     action = 'TOO DEEP'; actionColor = 'var(--red)';
     lines.push('Deficit exceeds structural recovery range.');
     triggers.push('Deficit narrows to 10-15');
-  } else if(fScore >= 0.70 && !trailing && deficit > 3){
-    action = 'NO VALUE'; actionColor = 'var(--t2)';
-    lines.push('Market already prices ' + fTeam + ' advantage.');
+  } else if(fScore >= 0.70 && !trailing && deficit >= 2){
+    // Edge-based: check if there's still betting value on the leading structural team
+    var _pred = cs.prediction;
+    var ctrlEdge = null;
+    if(_pred && _pred.homeValue && _pred.awayValue){
+      ctrlEdge = ctrlIsHome ? _pred.homeValue.edge : _pred.awayValue.edge;
+    }
+    if(ctrlEdge !== null && ctrlEdge > 0){
+      action = 'BUY WINDOW CLOSING'; actionColor = 'var(--g2)';
+      lines.push(fTeam + ' leads by ' + deficit + ' with +' + ctrlEdge.toFixed(1) + '% edge — value remains but window narrowing.');
+    } else if(ctrlEdge !== null && ctrlEdge <= 0){
+      action = 'NO VALUE'; actionColor = 'var(--t2)';
+      lines.push(fTeam + ' leads by ' + deficit + '. Edge ' + (ctrlEdge >= 0 ? '+' : '') + ctrlEdge.toFixed(1) + '% — market already prices advantage.');
+    } else {
+      // No edge data yet (no odds or no analysis)
+      action = 'DEVELOPING'; actionColor = 'var(--yellow)';
+      lines.push(fTeam + ' leads by ' + deficit + ' — awaiting edge data.');
+      triggers.push('Press ANALYZE for Sonnet FWP + edge calculation');
+    }
   } else if(fScore >= 0.70 && pbpDisagrees){
     action = 'WAIT'; actionColor = 'var(--yellow)';
     lines.push('Floor and window disagree — momentum shifting.');
@@ -5090,6 +5146,9 @@ function synthesize(game){
   }
 
   // ── THROUGHPUT RECOVERY GATE ──
+  // After decision tree resolves action, compute whether the trailing team's
+  // structural engine can actually close the deficit across remaining possessions.
+  // Uses conservative (25th percentile) band to gate — does the math work even if regression is slow?
   var throughput = null;
   if(trailing && deficit > 0 && period >= 1){
     throughput = computeThroughput(game);
@@ -5102,15 +5161,19 @@ function synthesize(game){
     var optSwing = throughput.optimistic.totalSwing;
 
     if(tpClass === 'STRONG RECOVERY' || tpClass === 'PROBABLE'){
+      // Math works — add confirmation to narrative
       lines.push('Engine +' + Math.round(conSwing) + ' / +' + Math.round(expSwing) + ' / +' + Math.round(optSwing) + ' vs ' + deficit + ' deficit (' + throughput.remainingPoss + ' poss) — ' + tpClass + '.');
     } else if(tpClass === 'CONTESTED'){
+      // Grey zone — downgrade BUY to WATCH, LEAN BUY to WATCH
       if(action === 'BUY'){ action = 'WATCH'; actionColor = 'var(--amber)'; }
       else if(action === 'LEAN BUY'){ action = 'WATCH'; actionColor = 'var(--amber)'; }
       lines.push('Engine +' + Math.round(conSwing) + ' / +' + Math.round(expSwing) + ' / +' + Math.round(optSwing) + ' vs ' + deficit + ' deficit — CONTESTED recovery, math uncertain.');
       triggers.push('Deficit narrows or structural rate increases');
     } else if(tpClass === 'UNLIKELY' || tpClass === 'NO PATH'){
+      // Engine can't close — force TOO DEEP regardless of floor score
       action = 'TOO DEEP'; actionColor = 'var(--red)';
       lines.push('Engine +' + Math.round(conSwing) + ' / +' + Math.round(expSwing) + ' / +' + Math.round(optSwing) + ' vs ' + deficit + ' deficit — ' + tpClass + '. Structural ceiling below variance floor.');
+      // Clear existing triggers (they're stale now)
       triggers.length = 0;
       triggers.push('Deficit compresses significantly');
       triggers.push('Opponent variance collapses further');
@@ -5120,10 +5183,46 @@ function synthesize(game){
   // Persist throughput on cardState for spread conviction + confidence table
   cs.throughput = throughput;
 
+  // ── LEAD SAFETY GATE ──
+  // When the structural team leads, compute whether the opponent's engine can erode the lead.
+  var leadSafety = null;
+  if(!trailing && deficit >= 2 && period >= 1){
+    leadSafety = computeLeadSafety(game);
+  }
+
+  if(leadSafety){
+    var lsClass = leadSafety.classification;
+    var lsCon = Math.round(leadSafety.conservative.totalSwing);
+    var lsExp = Math.round(leadSafety.expected.totalSwing);
+    var lsOpt = Math.round(leadSafety.optimistic.totalSwing);
+    var lsLead = leadSafety.lead;
+    var lsOppTeam = leadSafety.oppTeam;
+
+    if(action === 'BUY WINDOW CLOSING'){
+      if(lsClass === 'AT RISK' || lsClass === 'CRITICAL'){
+        action = 'WATCH'; actionColor = 'var(--amber)';
+        lines.push('Lead ' + lsClass + ' — ' + lsOppTeam + ' engine projects +' + lsCon + ' / +' + lsExp + ' / +' + lsOpt + ' vs ' + lsLead + ' lead (' + leadSafety.remainingPoss + ' poss). Lead erosion threatens position.');
+        triggers.push('Lead erosion — opponent engine projects recovery');
+        triggers.push('Opponent may become the play if variance collapses');
+      } else {
+        lines.push('Lead ' + lsClass + ' — ' + lsOppTeam + ' recovery engine projects +' + lsCon + ' / +' + lsExp + ' / +' + lsOpt + ' vs ' + lsLead + ' lead. Position durable.');
+      }
+    } else if(action === 'NO VALUE'){
+      if(lsClass === 'AT RISK' || lsClass === 'CRITICAL'){
+        action = 'WATCH'; actionColor = 'var(--amber)';
+        lines.push('No edge on ' + fTeam + ' but lead ' + lsClass + ' — ' + lsOppTeam + ' recovery engine projects +' + lsCon + ' / +' + lsExp + ' / +' + lsOpt + ' vs ' + lsLead + ' lead.');
+        triggers.push('Opponent may become the play if variance collapses');
+      }
+    }
+  }
+
+  // Persist lead safety on cardState for spread conviction + confidence table
+  cs.leadSafety = leadSafety;
+
   // ── BET TYPE RECOMMENDATION (ML vs Spread) ──
   var betType = null;
   var betDetail = null;
-  if(od && (action === 'BUY' || action === 'LEAN BUY')){
+  if(od && (action === 'BUY' || action === 'LEAN BUY' || action === 'BUY WINDOW CLOSING')){
     var spConv = cs.spreadConviction;
     var spread = parseFloat(od.homeSpread);
     var ctrlSpread = (!isNaN(spread)) ? (ctrlIsHome ? spread : -spread) : null;
@@ -5190,8 +5289,10 @@ function synthesize(game){
     deficit: deficit,
     betType: betType,
     throughput: throughput,
+    leadSafety: leadSafety,
   };
 }
+
 
 function getVerdict(s){
   if(s>=.90) return {label:'DOMINANT',color:'#00ff88',bg:'rgba(0,255,136,.10)',lvl:'entry'};
@@ -5698,10 +5799,86 @@ function computeLeadCompositionClient(game, sustData){
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// THROUGHPUT RECOVERY MODEL — can the trailing team's engine close the gap?
-// Computes structural scoring rate + variance regression across remaining
-// possessions with conservative/expected/optimistic confidence bands.
-// NCAAMB: 40 min game, 2×20 min halves, ~65 possessions per game
+// SWING CORE — shared 4-direction variance engine for throughput + lead safety
+// ══════════════════════════════════════════════════════════════════════════════
+function computeSwingCore(focalStats, targetStats, focalSustData, targetSustData, deficit, minsLeft, minsElapsed, gameFraction, sznDefault){
+  var focalPoss = Number(focalStats.possessions) || 0;
+  var targetPoss = Number(targetStats.possessions) || 0;
+  if(focalPoss < 3) focalPoss = (Number(focalStats.field_goals_att)||0) + 0.44*(Number(focalStats.free_throws_att)||0) - (Number(focalStats.offensive_rebounds)||0) + (Number(focalStats.turnovers||focalStats.total_turnovers)||0);
+  if(targetPoss < 3) targetPoss = (Number(targetStats.field_goals_att)||0) + 0.44*(Number(targetStats.free_throws_att)||0) - (Number(targetStats.offensive_rebounds)||0) + (Number(targetStats.turnovers||targetStats.total_turnovers)||0);
+  if(focalPoss < 5 || targetPoss < 5 || isNaN(focalPoss) || isNaN(targetPoss)) return null;
+
+  function structRate(st, poss){
+    var paint = Number(st.points_in_the_paint || st.points_in_paint) || 0;
+    var ft = Number(st.free_throws_made) || 0;
+    var pot = Number(st.points_off_turnovers) || 0;
+    var scp = Number(st.second_chance_points || st.second_chance_pts) || 0;
+    return (paint + ft + pot + scp) / poss;
+  }
+  var focalStructRate = structRate(focalStats, focalPoss);
+  var targetStructRate = structRate(targetStats, targetPoss);
+  var structEdge = focalStructRate - targetStructRate;
+
+  function getVarData(sustObj, stats, poss){
+    if(!sustObj) return {deviation:0, threePARate:0, live3Pct:0, sznPct:sznDefault};
+    var livePct = parseFloat(sustObj.live3Pct || 0);
+    var sznPct = parseFloat(sustObj.seasonPrior || sustObj.seasonBaseline || sznDefault);
+    var dev = livePct - sznPct;
+    var tpaRate = poss > 0 ? (Number(stats.three_points_att)||0) / poss : 0;
+    return {deviation:dev, threePARate:tpaRate, live3Pct:livePct, sznPct:sznPct};
+  }
+  var focalVar = getVarData(focalSustData, focalStats, focalPoss);
+  var targetVar = getVarData(targetSustData, targetStats, targetPoss);
+
+  var avgPoss = (focalPoss + targetPoss) / 2;
+  var possPerMin = avgPoss / minsElapsed;
+  var remainingPoss = possPerMin * minsLeft;
+  if(isNaN(remainingPoss) || remainingPoss < 1) return null;
+
+  var degradation = 1.0;
+  if(deficit >= 24) degradation = 0.70;
+  else if(deficit >= 18) degradation = 0.85;
+
+  var bandDefs = [
+    {label:'conservative', baseRate:0.40},
+    {label:'expected',     baseRate:0.65},
+    {label:'optimistic',   baseRate:0.90},
+  ];
+
+  var bands = bandDefs.map(function(band){
+    var appliedRegression = band.baseRate * gameFraction;
+    var targetCooling = 0;
+    if(targetVar.deviation > 0){
+      targetCooling = (targetVar.deviation / 100) * appliedRegression * targetVar.threePARate * 3;
+    }
+    var focalHeating = 0;
+    if(focalVar.deviation < 0){
+      focalHeating = (Math.abs(focalVar.deviation) / 100) * appliedRegression * focalVar.threePARate * 3;
+    }
+    var targetHeating = 0;
+    if(targetVar.deviation < 0){
+      targetHeating = (Math.abs(targetVar.deviation) / 100) * appliedRegression * targetVar.threePARate * 3;
+    }
+    var focalCooling = 0;
+    if(focalVar.deviation > 0){
+      focalCooling = (focalVar.deviation / 100) * appliedRegression * focalVar.threePARate * 3;
+    }
+    var netSwingPerPoss = (structEdge * degradation) + targetCooling + focalHeating - targetHeating - focalCooling;
+    var totalSwing = netSwingPerPoss * remainingPoss;
+    var ratio = deficit > 0 ? totalSwing / deficit : 0;
+    return {label:band.label, ratio:Math.round(ratio*100)/100, totalSwing:Math.round(totalSwing*10)/10, netSwingPerPoss:Math.round(netSwingPerPoss*1000)/1000};
+  });
+
+  if(isNaN(bands[0].totalSwing) || isNaN(bands[1].totalSwing) || isNaN(remainingPoss)) return null;
+
+  return {bands:bands, focalStructRate:Math.round(focalStructRate*1000)/1000, targetStructRate:Math.round(targetStructRate*1000)/1000,
+    structEdge:Math.round(structEdge*1000)/1000, focalVar:focalVar, targetVar:targetVar,
+    remainingPoss:Math.round(remainingPoss), degradation:degradation};
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// THROUGHPUT RECOVERY MODEL — trailing team's engine vs deficit
+// NCAAMB: 40 min, 2×20 min halves. Elapsed-time gate (≥10 min = synthetic Q2)
 // ══════════════════════════════════════════════════════════════════════════════
 function computeThroughput(game){
   var cs = cardState[game.id]; if(!cs) return null;
@@ -5711,16 +5888,15 @@ function computeThroughput(game){
   var period = game.period||0;
   if(period < 1) return null;
 
-  var floor = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
+  var floor = getFloor(cs);
   if(!floor || !floor.score) return null;
   var fTeam = floor.controlTeam;
   var ctrlIsHome = fTeam === hA;
   var ctrlPts = ctrlIsHome ? hPts : aPts;
   var oppPts = ctrlIsHome ? aPts : hPts;
   var deficit = oppPts - ctrlPts;
-  if(deficit <= 0) return null; // not trailing — throughput N/A
+  if(deficit <= 0) return null;
 
-  // ── TIME REMAINING (NCAAMB: 2×20 min halves) ──
   var GAME_MINUTES = 40, PERIOD_MINUTES = 20;
   var clockParts = (game.clock||'').split(':');
   var clockMins = clockParts.length===2 ? (parseInt(clockParts[0])||0)+(((parseInt(clockParts[1])||0))/60) : PERIOD_MINUTES;
@@ -5729,91 +5905,22 @@ function computeThroughput(game){
   var minsElapsed = Math.max(1, GAME_MINUTES - minsLeft);
   var gameFraction = Math.min(1, minsLeft / GAME_MINUTES);
   if(minsLeft < 2 || isNaN(minsLeft)) return null;
+  if(minsElapsed < 10) return null; // need ~10 min of data (synthetic Q2)
 
-  // ── STRUCTURAL RATE per possession ──
-  var isBDL = game.dataSource === 'BDL';
-  var hs = isBDL ? (s.home||{}) : (s.home?.statistics||s.home||{});
-  var as = isBDL ? (s.away||{}) : (s.away?.statistics||s.away||{});
-  var ctrlStats = ctrlIsHome ? hs : as;
-  var oppStats = ctrlIsHome ? as : hs;
+  var hs = s.home?.statistics || s.home || {};
+  var as = s.away?.statistics || s.away || {};
+  var focalStats = ctrlIsHome ? hs : as;
+  var targetStats = ctrlIsHome ? as : hs;
 
-  var ctrlPoss = Number(ctrlStats.possessions) || 0;
-  var oppPoss = Number(oppStats.possessions) || 0;
-  if(ctrlPoss < 3) ctrlPoss = (Number(ctrlStats.field_goals_att)||0) + 0.44*(Number(ctrlStats.free_throws_att)||0) - (Number(ctrlStats.offensive_rebounds)||0) + (Number(ctrlStats.turnovers||ctrlStats.total_turnovers)||0);
-  if(oppPoss < 3) oppPoss = (Number(oppStats.field_goals_att)||0) + 0.44*(Number(oppStats.free_throws_att)||0) - (Number(oppStats.offensive_rebounds)||0) + (Number(oppStats.turnovers||oppStats.total_turnovers)||0);
-  if(ctrlPoss < 5 || oppPoss < 5 || isNaN(ctrlPoss) || isNaN(oppPoss)) return null;
-
-  var ctrlPaint = Number(ctrlStats.points_in_the_paint || ctrlStats.points_in_paint) || 0;
-  var ctrlFT = Number(ctrlStats.free_throws_made) || 0;
-  var ctrlPOT = Number(ctrlStats.points_off_turnovers) || 0;
-  var ctrlSCP = Number(ctrlStats.second_chance_points || ctrlStats.second_chance_pts) || 0;
-  var ctrlStructRate = (ctrlPaint + ctrlFT + ctrlPOT + ctrlSCP) / ctrlPoss;
-
-  var oppPaint = Number(oppStats.points_in_the_paint || oppStats.points_in_paint) || 0;
-  var oppFT = Number(oppStats.free_throws_made) || 0;
-  var oppPOT = Number(oppStats.points_off_turnovers) || 0;
-  var oppSCP = Number(oppStats.second_chance_points || oppStats.second_chance_pts) || 0;
-  var oppStructRate = (oppPaint + oppFT + oppPOT + oppSCP) / oppPoss;
-
-  var structEdgePerPoss = ctrlStructRate - oppStructRate;
-
-  // ── VARIANCE POSITION ──
-  var sust = cs.clientSustainability;
   var sa = cs.sustainabilityAudit;
-  var ctrlSustData = sust ? (ctrlIsHome ? sust.home : sust.away) : (sa ? (ctrlIsHome ? sa.home : sa.away) : null);
-  var oppSustData = sust ? (ctrlIsHome ? sust.away : sust.home) : (sa ? (ctrlIsHome ? sa.away : sa.home) : null);
+  var sust = cs.clientSustainability;
+  var focalSustData = (sa && sa.home?.live3Pct != null) ? (ctrlIsHome ? sa.home : sa.away) : sust ? (ctrlIsHome ? sust.home : sust.away) : null;
+  var targetSustData = (sa && sa.home?.live3Pct != null) ? (ctrlIsHome ? sa.away : sa.home) : sust ? (ctrlIsHome ? sust.away : sust.home) : null;
 
-  function getVarData(sustObj, stats, poss){
-    if(!sustObj) return {deviation:0, threePARate:0, live3Pct:0, sznPct:33};
-    var livePct = parseFloat(sustObj.live3Pct || 0);
-    var sznPct = parseFloat(sustObj.seasonPrior || sustObj.seasonBaseline || 33);
-    var dev = livePct - sznPct;
-    var tpaRate = poss > 0 ? (Number(stats.three_points_att)||0) / poss : 0;
-    return {deviation:dev, threePARate:tpaRate, live3Pct:livePct, sznPct:sznPct};
-  }
+  var core = computeSwingCore(focalStats, targetStats, focalSustData, targetSustData, deficit, minsLeft, minsElapsed, gameFraction, 33);
+  if(!core) return null;
 
-  var ctrlVar = getVarData(ctrlSustData, ctrlStats, ctrlPoss);
-  var oppVar = getVarData(oppSustData, oppStats, oppPoss);
-
-  // ── REMAINING POSSESSIONS ──
-  var avgPoss = (ctrlPoss + oppPoss) / 2;
-  var possPerMin = avgPoss / minsElapsed;
-  var remainingPoss = possPerMin * minsLeft;
-  if(isNaN(remainingPoss) || remainingPoss < 1) return null;
-
-  // ── DEFICIT DEGRADATION ──
-  var degradation = 1.0;
-  if(deficit >= 24) degradation = 0.70;
-  else if(deficit >= 18) degradation = 0.85;
-
-  // ── CONFIDENCE BANDS ──
-  var bandDefs = [
-    {label:'conservative', baseRate:0.40},
-    {label:'expected',     baseRate:0.65},
-    {label:'optimistic',   baseRate:0.90},
-  ];
-
-  var bandResults = bandDefs.map(function(band){
-    var appliedRegression = band.baseRate * gameFraction;
-    var oppCoolingPerPoss = 0;
-    if(oppVar.deviation > 0){
-      oppCoolingPerPoss = (oppVar.deviation / 100) * appliedRegression * oppVar.threePARate * 3;
-    }
-    var ctrlHeatingPerPoss = 0;
-    if(ctrlVar.deviation < 0){
-      ctrlHeatingPerPoss = (Math.abs(ctrlVar.deviation) / 100) * appliedRegression * ctrlVar.threePARate * 3;
-    }
-    var netSwingPerPoss = (structEdgePerPoss * degradation) + oppCoolingPerPoss + ctrlHeatingPerPoss;
-    var totalSwing = netSwingPerPoss * remainingPoss;
-    var ratio = deficit > 0 ? totalSwing / deficit : 0;
-    return { label: band.label, ratio: Math.round(ratio * 100) / 100, totalSwing: Math.round(totalSwing * 10) / 10, netSwingPerPoss: Math.round(netSwingPerPoss * 1000) / 1000 };
-  });
-
-  var conservative = bandResults[0], expected = bandResults[1], optimistic = bandResults[2];
-
-  // NaN safety — if any band calculation produced NaN, bail out
-  if(isNaN(conservative.totalSwing) || isNaN(expected.totalSwing) || isNaN(remainingPoss)) return null;
-
+  var conservative = core.bands[0], expected = core.bands[1], optimistic = core.bands[2];
   var classification;
   if(conservative.ratio > 1.2) classification = 'STRONG RECOVERY';
   else if(conservative.ratio > 0.9) classification = 'PROBABLE';
@@ -5822,14 +5929,78 @@ function computeThroughput(game){
   else classification = 'NO PATH';
 
   return {
-    classification: classification, deficit: deficit, remainingPoss: Math.round(remainingPoss),
+    classification: classification, deficit: deficit, remainingPoss: core.remainingPoss,
     conservative: conservative, expected: expected, optimistic: optimistic,
-    ctrlStructRate: Math.round(ctrlStructRate * 1000) / 1000, oppStructRate: Math.round(oppStructRate * 1000) / 1000,
-    structEdge: Math.round(structEdgePerPoss * 1000) / 1000,
-    ctrlVar: ctrlVar, oppVar: oppVar, degradation: degradation,
-    minsLeft: Math.round(minsLeft * 10) / 10, fTeam: fTeam,
+    ctrlStructRate: core.focalStructRate, oppStructRate: core.targetStructRate,
+    structEdge: core.structEdge, ctrlVar: core.focalVar, oppVar: core.targetVar,
+    degradation: core.degradation, minsLeft: Math.round(minsLeft * 10) / 10, fTeam: fTeam,
   };
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// LEAD SAFETY MODEL — is the leading team's lead durable or at risk?
+// Focal = opponent (trailing). High ratio = lead NOT safe.
+// NCAAMB: 40 min, 2×20 min halves. Elapsed-time gate (≥10 min).
+// ══════════════════════════════════════════════════════════════════════════════
+function computeLeadSafety(game){
+  var cs = cardState[game.id]; if(!cs) return null;
+  var s = game.summary || game.bdlData; if(!s || !s.home || !s.away) return null;
+  var hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
+  var hPts = game.homePoints||0, aPts = game.awayPoints||0;
+  var period = game.period||0;
+  if(period < 1) return null;
+
+  var floor = getFloor(cs);
+  if(!floor || !floor.score) return null;
+  var fTeam = floor.controlTeam;
+  var ctrlIsHome = fTeam === hA;
+  var ctrlPts = ctrlIsHome ? hPts : aPts;
+  var oppPts = ctrlIsHome ? aPts : hPts;
+  var lead = ctrlPts - oppPts;
+  if(lead < 2) return null;
+
+  var GAME_MINUTES = 40, PERIOD_MINUTES = 20;
+  var clockParts = (game.clock||'').split(':');
+  var clockMins = clockParts.length===2 ? (parseInt(clockParts[0])||0)+(((parseInt(clockParts[1])||0))/60) : PERIOD_MINUTES;
+  var periodsLeft = Math.max(0, 2 - period);
+  var minsLeft = clockMins + (periodsLeft * PERIOD_MINUTES);
+  var minsElapsed = Math.max(1, GAME_MINUTES - minsLeft);
+  var gameFraction = Math.min(1, minsLeft / GAME_MINUTES);
+  if(minsLeft < 2 || isNaN(minsLeft)) return null;
+  if(minsElapsed < 10) return null; // need ~10 min of data (synthetic Q2)
+
+  var hs = s.home?.statistics || s.home || {};
+  var as = s.away?.statistics || s.away || {};
+  var focalStats = ctrlIsHome ? as : hs;   // opponent (trailing)
+  var targetStats = ctrlIsHome ? hs : as;   // control team (leading)
+
+  var sa = cs.sustainabilityAudit;
+  var sust = cs.clientSustainability;
+  var focalSustData = (sa && sa.home?.live3Pct != null) ? (ctrlIsHome ? sa.away : sa.home) : sust ? (ctrlIsHome ? sust.away : sust.home) : null;
+  var targetSustData = (sa && sa.home?.live3Pct != null) ? (ctrlIsHome ? sa.home : sa.away) : sust ? (ctrlIsHome ? sust.home : sust.away) : null;
+
+  var core = computeSwingCore(focalStats, targetStats, focalSustData, targetSustData, lead, minsLeft, minsElapsed, gameFraction, 33);
+  if(!core) return null;
+
+  var conservative = core.bands[0], expected = core.bands[1], optimistic = core.bands[2];
+  var classification;
+  if(conservative.ratio > 0.8) classification = 'CRITICAL';
+  else if(expected.ratio > 0.7) classification = 'AT RISK';
+  else if(optimistic.ratio > 0.5 && expected.ratio >= 0.3) classification = 'CUSHIONED';
+  else classification = 'SAFE';
+
+  var oppTeam = ctrlIsHome ? aA : hA;
+
+  return {
+    classification: classification, lead: lead, remainingPoss: core.remainingPoss,
+    conservative: conservative, expected: expected, optimistic: optimistic,
+    oppStructRate: core.focalStructRate, ctrlStructRate: core.targetStructRate,
+    structEdge: core.structEdge, oppVar: core.focalVar, ctrlVar: core.targetVar,
+    degradation: core.degradation, minsLeft: Math.round(minsLeft * 10) / 10,
+    fTeam: fTeam, oppTeam: oppTeam,
+  };
+}
+
 
 // ══════════════════════════════════════════════════════════════════════════════
 // MARGIN PROJECTION ENGINE — pace-adjusted forward-looking margin forecast
@@ -6003,7 +6174,7 @@ function computeSpreadConviction(game){
   const minsLeft = clockMins + (periodsLeft * 20);
 
   // ── STRUCTURAL CONTEXT ──
-  const floorInd = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
+  const floorInd = getFloor(cs);
   const floorScore = floorInd?.score || 0.5;
   const floorTeam = floorInd?.controlTeam || '';
   const lc = cs.clientLeadComposition;
@@ -6114,6 +6285,16 @@ function computeSpreadConviction(game){
       if(tpCap !== null && coverProb > tpCap) coverProb = tpCap;
     }
 
+    // ── GUARDRAIL 4: LEAD SAFETY CAP ──
+    var lsCap = null;
+    var _ls = cs.leadSafety;
+    if(_ls && _ls.fTeam === alias && _ls.conservative){
+      var lsClass = _ls.classification;
+      if(lsClass === 'CRITICAL'){ lsCap = 50; }
+      else if(lsClass === 'AT RISK'){ lsCap = 65; }
+      if(lsCap !== null && coverProb > lsCap) coverProb = lsCap;
+    }
+
     coverProb = Math.max(5, Math.min(95, coverProb));
 
     var parts = [];
@@ -6131,6 +6312,7 @@ function computeSpreadConviction(game){
     if(scoringClass === 'VOLATILE' && teamIsLeadTeam) parts.push('VOLATILE lead');
     if(proj?.garbageTime?.detected) parts.push('GARBAGE('+proj.garbageTime.reason+')');
     if(tpCap !== null) parts.push('TP cap:'+tpCap+'(con:'+_tp.conservative.ratio.toFixed(2)+')');
+    if(lsCap !== null) parts.push('LS cap:'+lsCap+'('+_ls.classification+')');
     if(minsLeft < 8) parts.push(minsLeft.toFixed(0)+'min left');
 
     return { team:alias, spread:(spread>0?'+':'')+spread.toFixed(1), coverProb:Math.round(coverProb), coverMargin:coverMargin, projBased:projBased, reason:parts.join(' + ') };
@@ -6948,7 +7130,7 @@ function checkStructuralAlert(game){
   var p = game.period || 0;
   if(p < 2) return; // too early
 
-  var floor = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
+  var floor = getFloor(cs);
   var win = cs.pbpWindow || cs.rollingWindow;
   if(!floor || !floor.score) return;
 
@@ -7999,6 +8181,25 @@ function renderCard(game){
         html+='<span style="font-size:5.5px;color:var(--t3)">~'+_tp.remainingPoss+' poss</span>';
         html+='</div>';
       }
+      // Lead safety line (leading structural team)
+      if(synth.leadSafety){
+        var _ls = synth.leadSafety;
+        var _lsCol = _ls.classification==='SAFE'?'var(--green)':_ls.classification==='CUSHIONED'?'var(--g2)':_ls.classification==='AT RISK'?'var(--amber)':'var(--red)';
+        var _lsCon = Math.round(_ls.conservative.totalSwing), _lsExp = Math.round(_ls.expected.totalSwing), _lsOpt = Math.round(_ls.optimistic.totalSwing);
+        var _lsNeg = _lsCon <= 0 && _lsExp <= 0; // Opponent losing ground — lead expanding
+        var _lsSwingCol = _lsNeg ? 'var(--green)' : _ls.optimistic.totalSwing < _ls.lead*0.5 ? 'var(--green)' : _ls.expected.totalSwing >= _ls.lead ? 'var(--red)' : 'var(--yellow)';
+        html+='<div style="display:flex;align-items:center;gap:6px;padding:4px 7px;margin-bottom:4px;border-radius:4px;border:1px solid '+_lsCol+';background:rgba(255,255,255,.02)">';
+        html+='<span style="font-size:6px;font-weight:700;color:'+_lsCol+';letter-spacing:.5px;white-space:nowrap">HOLD</span>';
+        html+='<span style="font-size:6.5px;font-weight:600;color:'+_lsCol+'">'+esc(_ls.classification)+'</span>';
+        if(_lsNeg){
+          html+='<span style="font-size:7px;font-weight:700;color:var(--green)">LEAD EXPANDING</span>';
+        } else {
+          html+='<span style="font-size:7px;font-weight:700;color:'+_lsSwingCol+'">+'+_lsCon+' / +'+_lsExp+' / +'+_lsOpt+'</span>';
+        }
+        html+='<span style="font-size:6.5px;color:var(--t2)">vs '+_ls.lead+' lead</span>';
+        html+='<span style="font-size:5.5px;color:var(--t3)">~'+_ls.remainingPoss+' poss</span>';
+        html+='</div>';
+      }
       // Triggers
       if(synth.triggers.length > 0){
         html+='<div style="font-size:5.5px;color:var(--t3)">';
@@ -8333,7 +8534,7 @@ function renderCard(game){
     var pbpW = cs.pbpWindow;
     var accel = cs.acceleration;
     var cRead = cs.combinedRead;
-    var floorInd = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
+    var floorInd = getFloor(cs);
     var _vc = function(vrd){ return vrd==='DOMINANT'?'var(--green)':vrd==='STRONG'?'var(--g2)':vrd==='EARNED'?'var(--yellow)':vrd==='NO EDGE'?'var(--t3)':'var(--t3)'; };
     var _validTeam = function(t){ return t && t!=='Neither' && t!=='EVEN' && t!=='CONTESTED' && t!=='?' && t.length<=4; };
     if(floorInd && !_validTeam(floorInd.controlTeam) && rawInd && _validTeam(rawInd.controlTeam)){
@@ -8455,7 +8656,7 @@ function renderCard(game){
     // ─── 5. DIRECTIONAL ARROWS (compact horizontal — teams as rows, metrics as columns) ───
     var arrows = cs.subMetricArrows;
     var adj = cs.adjustment;
-    var floorInd2 = cs.sonnetIndicators || cs.clientInd || cs._serverFloor;
+    var floorInd2 = getFloor(cs);
     if(arrows && arrows.home && arrows.away){
       var _arrowColor = function(arrow, isVariance){
         if(!arrow||arrow==="FLAT") return "var(--t3)";
