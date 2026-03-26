@@ -1237,9 +1237,11 @@ function applyAutoAnalysesToCards(){
       // Strip team prefix from sust text to get just the tier
       var leadTier = leadSust.replace(/^\w+\s*:\s*/, '');
       var trailTier = trailSust.replace(/^\w+\s*:\s*/, '');
-      // Extract score line from raw text
+      // Use authoritative home_pts/away_pts columns (not regex on raw_text)
       var scoreStr = '';
-      if(a.raw_text){
+      if(a.home_pts != null && a.away_pts != null){
+        scoreStr = a.away_pts + '-' + a.home_pts;
+      } else if(a.raw_text){
         var sm = a.raw_text.match(/(\d+)\s*[-–]\s*(\d+)/);
         if(sm) scoreStr = sm[0];
       }
@@ -1358,7 +1360,8 @@ function applyAutoAnalysesToCards(){
         }
         // ── SUSTAINABILITY HYDRATION from auto-analysis ──
         // Parse "TEAM: TIER | TEAM: TIER" into cs.clientSustainability so synthesizer decision tree can use it
-        if(latest.sustainability && !cs.clientSustainability){
+        // Always overwrite — latest auto analysis has freshest sustainability (Q3 > Q1)
+        if(latest.sustainability){
           var _sustText = latest.sustainability;
           var _sustParts = _sustText.split('|').map(function(s){return s.trim();});
           var _g = games.find(function(x){return x.id===gid;});
@@ -3350,6 +3353,8 @@ async function triggerAnalysis(game){
         indicators_json: _indSafe,
         narrative_json: _narrativeSafe,
         trigger: 'manual',
+        home_pts: game.home_points||game.home?.points||null,
+        away_pts: game.away_points||game.away?.points||null,
       };
       fetch(FN+'db-api?action=save_analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(_aSnap)}).catch(function(){});
     }

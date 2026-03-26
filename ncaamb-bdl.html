@@ -2363,6 +2363,9 @@ async function triggerAnalysis(game){
         prediction_json: _predSafe,
         indicators_json: _indSafe,
         narrative_json: _narrativeSafe,
+        trigger: 'manual',
+        home_pts: game.home_points||game.home?.points||null,
+        away_pts: game.away_points||game.away?.points||null,
       };
       fetch(FN+'db-api?action=save_analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(_aSnap)}).catch(function(){});
     }
