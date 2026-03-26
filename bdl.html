@@ -7152,10 +7152,11 @@ function computeThroughput(game){
   var targetStats = ctrlIsHome ? as : hs;   // leading opponent
 
   // ── SUSTAINABILITY DATA ──
-  var sust = cs.clientSustainability;
+  // Prefer sustainabilityAudit (has live3Pct/seasonPrior numbers) over clientSustainability (tier/reason only)
   var sa = cs.sustainabilityAudit;
-  var focalSustData = sust ? (ctrlIsHome ? sust.home : sust.away) : (sa ? (ctrlIsHome ? sa.home : sa.away) : null);
-  var targetSustData = sust ? (ctrlIsHome ? sust.away : sust.home) : (sa ? (ctrlIsHome ? sa.away : sa.home) : null);
+  var sust = cs.clientSustainability;
+  var focalSustData = (sa && sa.home?.live3Pct != null) ? (ctrlIsHome ? sa.home : sa.away) : sust ? (ctrlIsHome ? sust.home : sust.away) : null;
+  var targetSustData = (sa && sa.home?.live3Pct != null) ? (ctrlIsHome ? sa.away : sa.home) : sust ? (ctrlIsHome ? sust.away : sust.home) : null;
 
   // ── CORE MATH ──
   var core = computeSwingCore(focalStats, targetStats, focalSustData, targetSustData, deficit, minsLeft, minsElapsed, gameFraction, 36);
@@ -7219,10 +7220,11 @@ function computeLeadSafety(game){
   var targetStats = ctrlIsHome ? hs : as;   // control team (leading)
 
   // ── SUSTAINABILITY DATA — focal is opponent, target is control ──
-  var sust = cs.clientSustainability;
+  // Prefer sustainabilityAudit (has live3Pct/seasonPrior numbers) over clientSustainability (tier/reason only)
   var sa = cs.sustainabilityAudit;
-  var focalSustData = sust ? (ctrlIsHome ? sust.away : sust.home) : (sa ? (ctrlIsHome ? sa.away : sa.home) : null);
-  var targetSustData = sust ? (ctrlIsHome ? sust.home : sust.away) : (sa ? (ctrlIsHome ? sa.home : sa.away) : null);
+  var sust = cs.clientSustainability;
+  var focalSustData = (sa && sa.home?.live3Pct != null) ? (ctrlIsHome ? sa.away : sa.home) : sust ? (ctrlIsHome ? sust.away : sust.home) : null;
+  var targetSustData = (sa && sa.home?.live3Pct != null) ? (ctrlIsHome ? sa.home : sa.away) : sust ? (ctrlIsHome ? sust.home : sust.away) : null;
 
   // ── CORE MATH (opponent's recovery potential) ──
   var core = computeSwingCore(focalStats, targetStats, focalSustData, targetSustData, lead, minsLeft, minsElapsed, gameFraction, 36);
