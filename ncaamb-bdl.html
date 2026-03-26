@@ -287,6 +287,7 @@ input,textarea,select{font-size:16px!important;}
     <button class="cbtn" onclick="clearTheses()">CLR THESIS</button>
     <button class="cbtn" onclick="clearMarketCache()">CLR MKT</button>
     <button class="cbtn" id="btn-ntfy" onclick="configNtfy()" style="color:var(--t3);border-color:var(--t3)">🔔 ALERTS</button>
+    <button class="cbtn" onclick="runClientQA()" style="color:#818cf8;border-color:#818cf8">QA</button>
     <span class="cml"><span id="game-count">0</span> games</span>
   </div>
 
@@ -9099,163 +9100,220 @@ function checkNtfyAlert(game, decision){
 
 
 // ══════════════════════════════════════════════════════════════════════════════
-// QA VALIDATION SUITE — run from console: runQA() or runQA(gameId)
+// CLIENT QA — modal overlay for live card state validation
+// NCAAMB: halves (H1/H2), elapsed-time gate (10 min), sznDefault 33%
 // ══════════════════════════════════════════════════════════════════════════════
-function runQA(gameId){
-  if(!gameId){ if(selIds && selIds[0]) gameId=selIds[0]; else { console.error('No game selected. Pass gameId or select a game.'); return; } }
+function runClientQA(gameId){
+  if(!gameId){ if(selIds && selIds[0]) gameId=selIds[0]; else { alert('Select a game first'); return; } }
   var g = games.find(function(x){return x.id===gameId;});
-  if(!g){ console.error('Game not found:', gameId); return; }
+  if(!g){ alert('Game not found: '+gameId); return; }
   var cs = cardState[gameId];
-  if(!cs){ console.error('No cardState for game'); return; }
-  var s = g.summary;
+  if(!cs){ alert('No cardState for game'); return; }
   var hA = g.home?.alias||'HOME', aA = g.away?.alias||'AWAY';
-  var results = [], pass=0, fail=0, warn=0;
-  function ok(label, detail){ results.push({status:'PASS', label:label, detail:detail||''}); pass++; }
-  function bad(label, detail){ results.push({status:'FAIL', label:label, detail:detail||''}); fail++; }
-  function meh(label, detail){ results.push({status:'WARN', label:label, detail:detail||''}); warn++; }
-  function close(a,b,tolerance){ return Math.abs(a-b)<=tolerance; }
+  var results = [];
+  var pass=0, fail=0, warn=0;
 
-  console.log('%c══ QA SUITE: '+hA+' vs '+aA+' ══', 'color:#f5a62a;font-weight:bold;font-size:14px');
+  function ok(label, detail){ results.push({s:'PASS',l:label,d:detail||''}); pass++; }
+  function bad(label, detail){ results.push({s:'FAIL',l:label,d:detail||''}); fail++; }
+  function meh(label, detail){ results.push({s:'WARN',l:label,d:detail||''}); warn++; }
 
-  // ── 1. PBP DATA EXISTS ──
-  var pl = cs.pbpAudit?.possessionLog;
-  var tl = cs.pbpAudit?.timeline;
-  if(!pl || pl.length===0) bad('PBP:possessions', 'No possession log'); else ok('PBP:possessions', pl.length+' possessions');
-  if(!tl || tl.length===0) bad('PBP:timeline', 'No timeline'); else ok('PBP:timeline', tl.length+' events');
+  // Period label helper (NCAAMB: halves)
+  var period = g.period || 0;
+  var periodLabel = period===1?'H1':period===2?'H2':period>2?'OT':'PRE';
 
-  // ── 2. POSSESSION SANITY ──
-  if(pl && pl.length>0){
-    var hPoss = pl.filter(function(p){return p.team===hA;}).length;
-    var aPoss = pl.filter(function(p){return p.team===aA;}).length;
-    var unkPoss = pl.filter(function(p){return p.team!==hA && p.team!==aA;}).length;
-    if(hPoss===0) bad('POSS:home', hA+' has 0 possessions'); else ok('POSS:home', hA+': '+hPoss);
-    if(aPoss===0) bad('POSS:away', aA+' has 0 possessions'); else ok('POSS:away', aA+': '+aPoss);
-    if(unkPoss>0) meh('POSS:unknown', unkPoss+' possessions with unknown team');
-    var ratio = hPoss>0&&aPoss>0 ? Math.max(hPoss,aPoss)/Math.min(hPoss,aPoss) : 99;
-    if(ratio>1.3) meh('POSS:balance', 'Imbalanced: '+hA+'='+hPoss+' '+aA+'='+aPoss+' (ratio '+ratio.toFixed(2)+')'); else ok('POSS:balance', 'Balanced (ratio '+ratio.toFixed(2)+')');
+  // Elapsed time (for threshold checks)
+  var GAME_MINUTES = 40, PERIOD_MINUTES = 20;
+  var clockParts = (g.clock||'').split(':');
+  var clockMins = clockParts.length===2 ? (parseInt(clockParts[0])||0)+((parseInt(clockParts[1])||0)/60) : PERIOD_MINUTES;
+  var periodsLeft = Math.max(0, 2 - period);
+  var minsLeft = clockMins + (periodsLeft * PERIOD_MINUTES);
+  var minsElapsed = Math.max(0, GAME_MINUTES - minsLeft);
 
-    // Forced close check
-    var forcedCloses = pl.filter(function(p){return p.result==='forced_close';}).length;
-    if(forcedCloses>pl.length*0.1) meh('POSS:forced_close', forcedCloses+'/'+pl.length+' forced closes (>10%)');
-    else if(forcedCloses>0) ok('POSS:forced_close', forcedCloses+' forced closes (ok)');
-    else ok('POSS:forced_close', 'None');
-  }
+  // ── 1. FLOOR SCORE ──
+  var ind = getFloor(cs);
+  if(ind && ind.score != null){
+    var src = cs.sonnetIndicators ? 'SONNET' : cs.clientInd ? 'CLIENT' : 'SERVER';
+    ok('Floor score', ind.controlTeam + ' ' + ind.score.toFixed(2) + ' (' + src + ')');
+  } else { bad('Floor score', 'No indicator data \u2014 no floor, PBP, or Sonnet analysis'); }
 
-  // ── 3. PBP vs BOX SCORE RECONCILIATION ──
-  if(pl && pl.length>0 && s && s.home && s.away){
-    var hs = s.home?.statistics||s.home||{}, as = s.away?.statistics||s.away||{};
-    // Aggregate PBP full-game stats
-    var pbp = {hPts:0,aPts:0,hStl:0,aStl:0,hTO:0,aTO:0,hFGM:0,aFGM:0,hFGA:0,aFGA:0,h3PM:0,a3PM:0,h3PA:0,a3PA:0,hAst:0,aAst:0,hBlk:0,aBlk:0,hFTA:0,aFTA:0};
-    var hP = pl.filter(function(p){return p.team===hA;}), aP = pl.filter(function(p){return p.team===aA;});
-    hP.forEach(function(p){
-      pbp.hPts+=p.points; pbp.hTO+=p.turnovers.length; pbp.hAst+=p.assists; pbp.hFTA+=p.ftAttempts;
-      p.shots.forEach(function(sh){ pbp.hFGA++; if(sh.made)pbp.hFGM++; if(sh.is3){pbp.h3PA++;if(sh.made)pbp.h3PM++;} });
-    });
-    aP.forEach(function(p){
-      pbp.aPts+=p.points; pbp.aTO+=p.turnovers.length; pbp.aAst+=p.assists; pbp.aFTA+=p.ftAttempts;
-      p.shots.forEach(function(sh){ pbp.aFGA++; if(sh.made)pbp.aFGM++; if(sh.is3){pbp.a3PA++;if(sh.made)pbp.a3PM++;} });
-    });
-    // Steals: from OPPONENT possessions (attribution fix)
-    aP.forEach(function(p){pbp.hStl+=p.steals;}); hP.forEach(function(p){pbp.aStl+=p.steals;});
-    // Blocks: from OPPONENT possessions
-    aP.forEach(function(p){pbp.hBlk+=p.blocks;}); hP.forEach(function(p){pbp.aBlk+=p.blocks;});
-
-    var checks = [
-      {label:'Points:'+hA, pbp:pbp.hPts, box:hs.points||s.home?.points||0, tol:3},
-      {label:'Points:'+aA, pbp:pbp.aPts, box:as.points||s.away?.points||0, tol:3},
-      {label:'FGM:'+hA, pbp:pbp.hFGM, box:hs.field_goals_made||0, tol:2},
-      {label:'FGM:'+aA, pbp:pbp.aFGM, box:as.field_goals_made||0, tol:2},
-      {label:'FGA:'+hA, pbp:pbp.hFGA, box:hs.field_goals_att||0, tol:3},
-      {label:'FGA:'+aA, pbp:pbp.aFGA, box:as.field_goals_att||0, tol:3},
-      {label:'3PM:'+hA, pbp:pbp.h3PM, box:hs.three_points_made||0, tol:1},
-      {label:'3PM:'+aA, pbp:pbp.a3PM, box:as.three_points_made||0, tol:1},
-      {label:'Ast:'+hA, pbp:pbp.hAst, box:hs.assists||0, tol:2},
-      {label:'Ast:'+aA, pbp:pbp.aAst, box:as.assists||0, tol:2},
-      {label:'TO:'+hA, pbp:pbp.hTO, box:hs.turnovers||hs.total_turnovers||0, tol:2},
-      {label:'TO:'+aA, pbp:pbp.aTO, box:as.turnovers||as.total_turnovers||0, tol:2},
-      {label:'Stl:'+hA, pbp:pbp.hStl, box:hs.steals||0, tol:3},
-      {label:'Stl:'+aA, pbp:pbp.aStl, box:as.steals||0, tol:3},
-      {label:'Blk:'+hA, pbp:pbp.hBlk, box:hs.blocks||0, tol:2},
-      {label:'Blk:'+aA, pbp:pbp.aBlk, box:as.blocks||0, tol:2},
-      {label:'FTA:'+hA, pbp:pbp.hFTA, box:hs.free_throws_att||0, tol:2},
-      {label:'FTA:'+aA, pbp:pbp.aFTA, box:as.free_throws_att||0, tol:2},
-    ];
-    checks.forEach(function(c){
-      var diff = Math.abs(c.pbp - c.box);
-      if(diff===0) ok('RECON:'+c.label, 'PBP='+c.pbp+' Box='+c.box+' ✓');
-      else if(diff<=c.tol) meh('RECON:'+c.label, 'PBP='+c.pbp+' Box='+c.box+' (off by '+diff+')');
-      else bad('RECON:'+c.label, 'PBP='+c.pbp+' Box='+c.box+' (off by '+diff+' > tol '+c.tol+')');
-    });
+  // ── 2. QTR WINDOW (server-authoritative) ──
+  var rw = cs.rollingWindow;
+  if(rw && rw.available){
+    var rwSrc = rw.source || rw.dataQuality || '?';
+    ok('QTR window', rw.controlTeam + ' ' + rw.score.toFixed(2) + ' | source: ' + rwSrc);
+  } else if(rw && rw.reason){
+    meh('QTR window', 'Not available: ' + rw.reason);
   } else {
-    meh('RECON:skip', 'Box score or PBP not available for reconciliation');
+    meh('QTR window', 'Null \u2014 waiting for server hydration');
   }
 
-  // ── 4. INDICATOR MATH ──
-  var rawInd = cs.clientInd;
-  if(rawInd && rawInd.I1 && rawInd.I2 && rawInd.I3 && rawInd.I4 && rawInd.I5){
-    var W = {I1:.25, I2:.25, I3:.20, I4:.20, I5:.10};
-    var raw = rawInd.I1.score*W.I1 + rawInd.I2.score*W.I2 + rawInd.I3.score*W.I3 + rawInd.I4.score*W.I4 + rawInd.I5.score*W.I5;
-    var expectedScore = raw>=0.5 ? raw : 1-raw;
-    if(close(rawInd.score, expectedScore, 0.01)) ok('IND:composite', 'Score '+rawInd.score.toFixed(3)+' matches weighted sum');
-    else bad('IND:composite', 'Score '+rawInd.score.toFixed(3)+' != expected '+expectedScore.toFixed(3));
-    // Bounds check
-    ['I1','I2','I3','I4','I5'].forEach(function(k){
-      var v = rawInd[k].score;
-      if(v!==0 && v!==0.5 && v!==1) bad('IND:'+k+':bounds', 'Score='+v+' not in {0, 0.5, 1}');
-      else ok('IND:'+k+':bounds', 'Score='+v+' ✓');
-    });
+  // ── 3. PBP WINDOW ──
+  var pw = cs.pbpWindow;
+  if(pw && pw.available){
+    ok('PBP window', pw.controlTeam + ' ' + pw.score.toFixed(2) + ' | ' + (pw.windowPossessions||0) + ' poss');
+  } else if(pw && pw.reason){
+    meh('PBP window', 'Not available: ' + pw.reason);
   } else {
-    meh('IND:skip', 'No clientInd available');
+    meh('PBP window', 'Null \u2014 no PBP data fetched yet');
   }
 
-  // ── 5. WINDOW VALIDATION ──
-  var windows = [
-    {label:'QTR', w:cs.rollingWindow},
-    {label:'PBP', w:cs.pbpWindow},
-  ];
-  windows.forEach(function(ww){
-    var w = ww.w;
-    if(!w){ meh('WIN:'+ww.label, 'Not computed'); return; }
-    if(!w.available){ ok('WIN:'+ww.label+':early', w.reason||'Too early'); return; }
-    // Score bounds
-    if(w.score<0||w.score>1) bad('WIN:'+ww.label+':score', 'Score '+w.score+' out of [0,1]');
-    else ok('WIN:'+ww.label+':score', w.controlTeam+' '+w.score.toFixed(2));
-    // Indicator math
-    if(w.I1&&w.I2&&w.I3&&w.I4&&w.I5){
-      var W2 = {I1:.25,I2:.25,I3:.20,I4:.20,I5:.10};
-      var raw2 = w.I1.score*W2.I1+w.I2.score*W2.I2+w.I3.score*W2.I3+w.I4.score*W2.I4+w.I5.score*W2.I5;
-      var exp2 = raw2>=0.5?raw2:1-raw2;
-      if(close(w.score, exp2, 0.02)) ok('WIN:'+ww.label+':math', 'Composite matches');
-      else bad('WIN:'+ww.label+':math', 'Score '+w.score.toFixed(3)+' != expected '+exp2.toFixed(3));
+  // ── 4. SONNET INDICATORS ──
+  if(cs.sonnetIndicators && cs.sonnetIndicators.score != null){
+    var si = cs.sonnetIndicators;
+    ok('Sonnet indicators', si.controlTeam + ' ' + si.score.toFixed(2) + ' | I1:' + (si.I1?.score||'?') + ' I2:' + (si.I2?.score||'?') + ' I3:' + (si.I3?.score||'?') + ' I4:' + (si.I4?.score||'?') + ' I5:' + (si.I5?.score||'?'));
+  } else {
+    meh('Sonnet indicators', 'Not populated \u2014 press ANALYZE or wait for server auto-analysis');
+  }
+
+  // ── 5. PREDICTION + EDGE ──
+  var pred = cs.prediction;
+  if(pred){
+    var edgeVal = pred.edgeNum;
+    if(edgeVal != null && !isNaN(edgeVal)){
+      ok('Edge', (edgeVal >= 0 ? '+' : '') + edgeVal.toFixed(1) + '% | FWP: ' + (pred.fwp||'?') + ' | MIP: ' + (pred.mip||'?'));
+    } else {
+      meh('Edge', 'edgeNum is null/NaN \u2014 prediction exists but edge not computed');
     }
-    // Control team is valid alias
-    if(w.controlTeam && w.controlTeam.length<=4 && w.controlTeam!=='?') ok('WIN:'+ww.label+':team', w.controlTeam);
-    else bad('WIN:'+ww.label+':team', 'Invalid: '+w.controlTeam);
-  });
-
-
-
-  // ── 7. CROSS-WINDOW CONSISTENCY ──
-  var pw = cs.pbpWindow, qw = cs.rollingWindow;
-  if(pw && pw.available && qw && qw.available){
-    // Both should agree on which team controls (most of the time)
-    if(pw.controlTeam === qw.controlTeam) ok('XWIN:agreement', 'PBP+QTR agree: '+pw.controlTeam);
-    else meh('XWIN:agreement', 'PBP='+pw.controlTeam+' QTR='+qw.controlTeam+' (divergence — worth investigating)');
-    // Score shouldn't be wildly different
-    var scoreDiff = Math.abs(pw.score - qw.score);
-    if(scoreDiff<0.15) ok('XWIN:scoreDelta', 'Δ'+scoreDiff.toFixed(2));
-    else meh('XWIN:scoreDelta', 'Δ'+scoreDiff.toFixed(2)+' (large gap — investigate I1-I5 differences)');
+    ok('Prediction', (pred.signalType||'?') + ' | entry: ' + (pred.entry||'?') + ' | conviction: ' + (pred.conviction||'?'));
+  } else {
+    meh('Prediction', 'Not hydrated \u2014 no Sonnet analysis yet');
   }
 
-  // ── SUMMARY ──
-  console.log('%c── RESULTS ──', 'color:#00ff88;font-weight:bold');
+  // ── 6. SUSTAINABILITY ──
+  var sust = cs.clientSustainability;
+  var sa = cs.sustainabilityAudit;
+  if(sust && (sust.home?.tier || sust.away?.tier)){
+    ok('Sustainability', hA + ': ' + (sust.home?.tier||'?') + ' | ' + aA + ': ' + (sust.away?.tier||'?') + ' (clientSustainability)');
+  } else if(sa && (sa.home?.tier || sa.away?.tier)){
+    meh('Sustainability', hA + ': ' + (sa.home?.tier||'?') + ' | ' + aA + ': ' + (sa.away?.tier||'?') + ' (sustainabilityAudit fallback)');
+  } else {
+    bad('Sustainability', 'No sustainability data \u2014 neither clientSustainability nor sustainabilityAudit populated');
+  }
+
+  // ── 7. THROUGHPUT / LEAD SAFETY ──
+  // NCAAMB uses elapsed-time gate (>=10 min) instead of period>=2
+  var tp = cs.throughput;
+  var ls = cs.leadSafety;
+  if(tp){
+    if(!isNaN(tp.conservative?.totalSwing) && !isNaN(tp.expected?.totalSwing)){
+      ok('Throughput', tp.classification + ' | +' + Math.round(tp.conservative.totalSwing) + '/+' + Math.round(tp.expected.totalSwing) + '/+' + Math.round(tp.optimistic.totalSwing) + ' vs ' + tp.deficit + ' deficit | ' + tp.remainingPoss + ' poss');
+    } else {
+      bad('Throughput', 'Values are NaN \u2014 computeSwingCore returned garbage');
+    }
+  } else if(ls){
+    if(!isNaN(ls.conservative?.totalSwing) && !isNaN(ls.expected?.totalSwing)){
+      ok('Lead safety', ls.classification + ' | +' + Math.round(ls.conservative.totalSwing) + '/+' + Math.round(ls.expected.totalSwing) + '/+' + Math.round(ls.optimistic.totalSwing) + ' vs ' + ls.lead + ' lead | ' + ls.remainingPoss + ' poss');
+    } else {
+      bad('Lead safety', 'Values are NaN \u2014 computeSwingCore returned garbage');
+    }
+  } else {
+    var margin = Math.abs((g.homePoints||0) - (g.awayPoints||0));
+    if(minsElapsed >= 10 && margin >= 2){
+      meh('Throughput/Lead safety', 'Null despite ' + Math.round(minsElapsed) + ' min elapsed, margin ' + margin + ' \u2014 check floor score exists');
+    } else {
+      ok('Throughput/Lead safety', 'N/A (' + Math.round(minsElapsed) + ' min elapsed, margin ' + margin + ')');
+    }
+  }
+
+  // ── 8. COMBINED READ ──
+  var cr = cs.combinedRead;
+  if(cr && cr.read && cr.read !== 'TOO EARLY'){
+    ok('Combined read', cr.read + (cr.note ? ' \u2014 ' + cr.note : ''));
+  } else if(cr && cr.read === 'TOO EARLY'){
+    meh('Combined read', 'TOO EARLY \u2014 window not yet available');
+  } else {
+    meh('Combined read', 'Null');
+  }
+
+  // ── 9. PBP AUDIT ──
+  var pbpA = cs.pbpAudit;
+  if(pbpA && pbpA.home && pbpA.away){
+    var age = cs.pbpTime ? Math.round((Date.now() - cs.pbpTime.getTime()) / 60000) : '?';
+    ok('PBP audit', pbpA.totalShots + ' shots, ' + pbpA.totalTOs + ' TOs, ' + (pbpA.runs||[]).length + ' runs | ' + periodLabel + ' | ' + age + 'm ago');
+  } else {
+    meh('PBP audit', 'Not populated \u2014 BDL plays not fetched');
+  }
+
+  // ── 10. ODDS ──
+  if(cs.oddsData && cs.oddsData.homeSpread){
+    ok('Odds', hA + ' ' + cs.oddsData.homeSpread + ' | ML ' + (cs.oddsData.homeML||'?') + '/' + (cs.oddsData.awayML||'?') + ' | O/U ' + (cs.oddsData.total||'?'));
+  } else {
+    meh('Odds', 'Not populated');
+  }
+
+  // ── 11. ARROWS ──
+  var arrows = cs.subMetricArrows;
+  if(arrows && arrows.home && arrows.away){
+    var rising = 0, falling = 0;
+    ['home','away'].forEach(function(side){
+      Object.values(arrows[side]).forEach(function(a){ if(a.arrow==='RISING') rising++; if(a.arrow==='FALLING') falling++; });
+    });
+    ok('Sub-metric arrows', rising + ' rising, ' + falling + ' falling');
+  } else {
+    meh('Sub-metric arrows', 'Not populated');
+  }
+
+  // ── 12. SYNTHESIZER ──
+  var synth = cs._lastSynth;
+  if(!synth){
+    var synthResult = synthesize(g);
+    if(synthResult){
+      ok('Synthesizer', synthResult.action + ' | ' + synthResult.fTeam + ' ' + synthResult.fScore.toFixed(2) + ' | conf: ' + synthResult.confidence);
+    } else {
+      meh('Synthesizer', 'Returns null \u2014 likely missing floor score');
+    }
+  } else {
+    ok('Synthesizer', synth.action + ' | ' + synth.fTeam + ' ' + synth.fScore.toFixed(2));
+  }
+
+  // ── 13. LEAD COMPOSITION ──
+  var lc = cs.clientLeadComposition || cs.leadComposition;
+  if(lc && lc.classification){
+    ok('Lead composition', lc.classification + ' | S:' + (lc.structuralPct||0) + '% V:' + (lc.variancePct||0) + '%');
+  } else {
+    meh('Lead composition', 'Not computed');
+  }
+
+  // ── RENDER MODAL ──
+  var existing = document.getElementById('qa-modal');
+  if(existing) existing.remove();
+
+  var overlay = document.createElement('div');
+  overlay.id = 'qa-modal';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;background:rgba(0,0,0,.85);overflow-y:auto;padding:12px;-webkit-overflow-scrolling:touch';
+  overlay.onclick = function(e){ if(e.target === overlay) overlay.remove(); };
+
+  var h = '<div style="max-width:500px;margin:0 auto;font-family:var(--mono)">';
+  h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
+  h += '<div style="font-size:11px;font-weight:700;color:#818cf8;letter-spacing:2px">CLIENT QA</div>';
+  h += '<div style="font-size:9px;color:var(--t2)">' + aA + ' @ ' + hA + ' | ' + periodLabel + ' ' + (g.clock||'') + ' | ' + Math.round(minsElapsed) + 'min</div>';
+  h += '<button onclick="this.closest(\'#qa-modal\').remove()" style="background:none;border:1px solid var(--t3);color:var(--t2);font-size:10px;padding:3px 8px;cursor:pointer;border-radius:3px">CLOSE</button>';
+  h += '</div>';
+
+  var sumColor = fail > 0 ? '#ff5252' : warn > 0 ? '#ffab40' : '#00ff88';
+  h += '<div style="padding:6px 10px;margin-bottom:8px;border-radius:4px;border:1px solid ' + sumColor + ';background:rgba(255,255,255,.03)">';
+  h += '<span style="font-size:10px;font-weight:700;color:' + sumColor + '">' + pass + ' PASS</span>';
+  if(fail > 0) h += ' <span style="font-size:10px;font-weight:700;color:#ff5252">' + fail + ' FAIL</span>';
+  if(warn > 0) h += ' <span style="font-size:10px;font-weight:700;color:#ffab40">' + warn + ' WARN</span>';
+  h += '</div>';
+
   results.forEach(function(r){
-    var color = r.status==='PASS'?'color:#00ff88':r.status==='FAIL'?'color:#ff5252':'color:#ffd166';
-    console.log('%c'+r.status+'%c '+r.label+' '+r.detail, color+';font-weight:bold', 'color:inherit');
+    var color = r.s === 'PASS' ? '#00ff88' : r.s === 'FAIL' ? '#ff5252' : '#ffab40';
+    var bg = r.s === 'FAIL' ? 'rgba(255,82,82,.08)' : 'transparent';
+    h += '<div style="padding:5px 8px;margin-bottom:2px;border-left:2px solid ' + color + ';background:' + bg + '">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:baseline">';
+    h += '<span style="font-size:8px;font-weight:600;color:' + color + '">' + r.s + '</span>';
+    h += '<span style="font-size:8px;font-weight:600;color:var(--t1)">' + r.l + '</span>';
+    h += '</div>';
+    if(r.d) h += '<div style="font-size:7px;color:var(--t3);margin-top:1px;word-break:break-word">' + r.d + '</div>';
+    h += '</div>';
   });
-  console.log('%c══ SUMMARY: '+pass+' pass, '+fail+' fail, '+warn+' warn ══', fail>0?'color:#ff5252;font-weight:bold;font-size:12px':'color:#00ff88;font-weight:bold;font-size:12px');
-  return {pass:pass, fail:fail, warn:warn, results:results};
+
+  h += '</div>';
+  overlay.innerHTML = h;
+  document.body.appendChild(overlay);
 }
+
 
 </script>
 </body>
