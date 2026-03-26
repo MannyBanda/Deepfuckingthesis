@@ -5659,8 +5659,8 @@ function compute(game){
   // Gap acceleration — uses PBP window (falls back to QTR)
   // Floor reference: prefer Sonnet's structural read when available (smarter), fall back to client compute
   var _cs = cardState[game.id];
-  var _floorScore = (_cs.sonnetIndicators ? _cs.sonnetIndicators.score : score);
-  var _floorTeam = (_cs.sonnetIndicators ? _cs.sonnetIndicators.controlTeam : cTeam);
+  var _floorScore = (_cs.sonnetIndicators && _cs.sonnetIndicators.score != null) ? _cs.sonnetIndicators.score : score;
+  var _floorTeam = (_cs.sonnetIndicators && _cs.sonnetIndicators.score != null) ? _cs.sonnetIndicators.controlTeam : cTeam;
   var _gapWindow = (pbpWindow && pbpWindow.available) ? pbpWindow : (_cs.rollingWindow && _cs.rollingWindow.available) ? _cs.rollingWindow : null;
   if(_gapWindow && _gapWindow.available){
     updateGapLog(game.id, _floorScore, _floorTeam, _gapWindow, game);
@@ -8481,7 +8481,7 @@ function hideAlert(){document.getElementById('abar').className='abar';}
 
 function checkAlert(game){
   const cs=cardState[game.id];if(!cs)return;
-  const ind=cs.sonnetIndicators||computeAny(game);if(!ind)return;
+  const ind=getFloor(cs)||computeAny(game);if(!ind||ind.score==null)return;
   const v=getVerdict(ind.score);
   if(v.lvl&&v.lvl!==cs.prevLvl)
     showAlert(v.lvl,ind.controlTeam+' '+v.label+' — '+(game.away?.alias||'')+'@'+(game.home?.alias||''));
@@ -9509,7 +9509,7 @@ function renderCard(game){
   if(!el)return;
   const state=getState(game), rawInd=computeAny(game);
   // Prefer Sonnet indicators when available, fall back to compute()
-  var _indRaw = cs.sonnetIndicators || rawInd;
+  var _indRaw = (cs.sonnetIndicators && cs.sonnetIndicators.score != null) ? cs.sonnetIndicators : rawInd;
   // If Sonnet said "Neither"/"EVEN", override controlTeam with client compute (non-mutating)
   var _indMerged = (_indRaw && rawInd && (!_indRaw.controlTeam || _indRaw.controlTeam==='Neither' || _indRaw.controlTeam==='EVEN') && rawInd.controlTeam && rawInd.controlTeam!=='Neither')
     ? Object.assign({}, _indRaw, {controlTeam: rawInd.controlTeam}) : _indRaw;
@@ -10044,7 +10044,7 @@ function renderCard(game){
       var flI1=floorInd.I1,flI2=floorInd.I2,flI3=floorInd.I3,flI4=floorInd.I4,flI5=floorInd.I5;
       html+='<div style="margin-bottom:6px">';
       // ── DUAL FLOOR DISPLAY: Sonnet (authority when available) + Client (live every 90s) ──
-      var _sonnet = cs.sonnetIndicators;
+      var _sonnet = cs.sonnetIndicators && cs.sonnetIndicators.score != null ? cs.sonnetIndicators : null;
       var _client = rawInd; // freshest client compute from this render cycle
       var _hasBoth = _sonnet && _client && _client.score;
       var _sonnetV = _sonnet ? (_sonnet.score>=0.90?'DOMINANT':_sonnet.score>=0.75?'STRONG':_sonnet.score>=0.60?'EARNED':_sonnet.score>=0.45?'NO EDGE':'WAIT') : '';
