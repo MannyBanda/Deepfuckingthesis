@@ -455,6 +455,29 @@ async function hydrateFromServerSnapshots(gameId){
   var cs = cardState[gameId]; if(!cs) return;
   // Only hydrate if we have no gap log yet (fresh mount, device was sleeping)
   if(cs.gapLog && cs.gapLog.length > 2) return;
+
+  // ── Hydrate from server quarter_data (independent of snapshots) ──
+  try{
+    var qdResp = await fetch(FN+'db-api?action=get_quarter_data&game_id='+encodeURIComponent(gameId));
+    if(qdResp.ok){
+      var qdData = await qdResp.json();
+      var qd = qdData.quarter_data;
+      if(qd && qd.diffs) cs._serverQuarterDiffs = qd.diffs;
+      if(qd && qd.window && qd.window.available){
+        var prevSrc = cs.rollingWindow ? cs.rollingWindow.source : 'none';
+        cs.rollingWindow = qd.window;
+        cs.rollingWindow.source = 'server-qd';
+        addLog(gameId, '📡 Server QTR window hydrated — '+qd.window.controlTeam+' '+qd.window.score+' ['+qd.window.windowQuarters.join(',')+']'+(prevSrc!=='none'?' (replaced '+prevSrc+')':''), true);
+        if(cs.acceleration){
+          var flr = getFloor(cs);
+          if(flr && flr.score){
+            cs.combinedRead = classifyCombinedRead(flr.score, flr.controlTeam, cs.rollingWindow, cs.acceleration);
+          }
+        }
+      }
+    }
+  }catch(e){ /* quarter_data not available yet */ }
+
   try{
     var resp = await fetch(FN+'db-api?action=history&game_id='+gameId);
     if(!resp.ok) return;
@@ -527,28 +550,6 @@ async function hydrateFromServerSnapshots(gameId){
         cs.combinedRead = classifyCombinedRead(floor.score, floor.controlTeam, windowResult, accelResult);
       }
     }
-
-    // ── Hydrate from server quarter_data (authoritative for both window + diffs) ──
-    try{
-      var qdResp = await fetch(FN+'db-api?action=get_quarter_data&game_id='+encodeURIComponent(gameId));
-      if(qdResp.ok){
-        var qdData = await qdResp.json();
-        var qd = qdData.quarter_data;
-        if(qd && qd.diffs) cs._serverQuarterDiffs = qd.diffs;
-        if(qd && qd.window && qd.window.available){
-          var prevSrc = cs.rollingWindow ? cs.rollingWindow.source : 'none';
-          cs.rollingWindow = qd.window;
-          cs.rollingWindow.source = 'server-qd';
-          addLog(gameId, '📡 Server QTR window hydrated — '+qd.window.controlTeam+' '+qd.window.score+' ['+qd.window.windowQuarters.join(',')+']'+(prevSrc!=='none'?' (replaced '+prevSrc+')':''), true);
-          if(cs.acceleration){
-            var flr = getFloor(cs);
-            if(flr && flr.score){
-              cs.combinedRead = classifyCombinedRead(flr.score, flr.controlTeam, cs.rollingWindow, cs.acceleration);
-            }
-          }
-        }
-      }
-    }catch(e){ /* quarter_data not available yet */ }
 
     // Count sources
     var serverCount = snaps.filter(function(s){ return s.source === 'server'; }).length;
