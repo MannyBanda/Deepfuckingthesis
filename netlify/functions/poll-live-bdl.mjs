@@ -2657,6 +2657,12 @@ export default async function(req) {
 
           liveCount++;
 
+          // Update cached schedule status (so poll_state reflects live games)
+          if (game.status !== gameStatus) {
+            game.status = gameStatus;
+            cacheUpdated = true;
+          }
+
           // Parse PBP
           const playsResult = allPlaysResults[gi];
           const plays = playsResult?.data || [];
