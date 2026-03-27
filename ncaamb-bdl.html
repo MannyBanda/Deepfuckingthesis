@@ -1275,14 +1275,29 @@ async function bdl(type, params={}){
   return r.json();
 }
 
+// BDL uses UTC dates — late-tip games (after ~7pm ET) fall on the next UTC day.
+// Always fetch both slate date and next day to catch all games.
+function _nextDateStr(dateStr){
+  var parts = dateStr.split('-');
+  var nd = new Date(Date.UTC(+parts[0], +parts[1]-1, +parts[2]+1));
+  return nd.toISOString().slice(0,10);
+}
+async function bdlGamesBothDates(dateStr){
+  var [d1, d2] = await Promise.all([
+    bdl('games',{date:dateStr}).catch(function(){ return {data:[]}; }),
+    bdl('games',{date:_nextDateStr(dateStr)}).catch(function(){ return {data:[]}; })
+  ]);
+  return (d1.data||[]).concat(d2.data||[]);
+}
+
 // BDL game matching for NCAAMB — uses mascot + school/market fuzzy matching
 // BDL NCAAB teams have: school (full name) + name (mascot), NO abbreviation
 // SR NCAAMB teams have: alias (abbr) + name (mascot) + market (school name)
 
 async function buildBdlGameMap(dateStr){
   try{
-    const data = await bdl('games',{date:dateStr});
-    const bdlGames = data.data||[];
+    var nextDateStr = _nextDateStr(dateStr);
+    const bdlGames = await bdlGamesBothDates(dateStr);
     // Store visible diagnostic for debug
     window._bdlMapDiag = { bdlCount: bdlGames.length, srCount: games.length, date: dateStr, sample: null, unmapped: [], mapped: 0 };
     if(bdlGames.length > 0){
@@ -1545,8 +1560,7 @@ async function loadSchedule(){
     await buildBdlGameMap(d.str);
     // ── IMMEDIATE STATUS UPDATE: BDL games fetch to correct stale SR cache statuses ──
     try{
-      var _statusGames = await bdl('games', {date: d.str}).catch(function(){ return {data:[]}; });
-      var _statusArr = _statusGames.data || [];
+      var _statusArr = await bdlGamesBothDates(d.str);
       if(_statusArr.length > 0){
         _bdlGamesCache = {data: _statusArr, time: Date.now(), date: d.str};
         var _updated = 0;
@@ -1820,8 +1834,7 @@ async function refreshLiveCards(){
       var _slateDate = getSlateDate(0).str;
       var _boxAge = _now - _bdlGamesCache.time;
       if(!_bdlGamesCache.data || _bdlGamesCache.date !== _slateDate || _boxAge > 15000){
-        var _freshBox = await bdl('games', {date: _slateDate}).catch(function(){ return {data:[]}; });
-        var _freshArr = _freshBox.data || [];
+        var _freshArr = await bdlGamesBothDates(_slateDate);
         if(_freshArr.length > 0){
           _bdlGamesCache = {data: _freshArr, time: Date.now(), date: _slateDate};
         }
@@ -1859,8 +1872,8 @@ async function refreshLiveCards(){
   try {
     var cacheAge = Date.now() - _bdlGamesCache.time;
     if(!_bdlGamesCache.data || _bdlGamesCache.date !== slateDate || cacheAge > 10000) {
-      var gResult = await bdl('games', {date: slateDate}).catch(function(){ return {data:[]}; });
-      _bdlGamesCache = { data: gResult.data || [], time: Date.now(), date: slateDate };
+      var _bothDates = await bdlGamesBothDates(slateDate);
+      _bdlGamesCache = { data: _bothDates, time: Date.now(), date: slateDate };
     }
   } catch(e) { console.warn('[BDL] Games list fetch failed:', e.message); }
 
@@ -2048,8 +2061,8 @@ async function fetchSummary(game){
   var cacheAge = Date.now() - _bdlGamesCache.time;
   if(!_bdlGamesCache.data || _bdlGamesCache.date !== slateDate || cacheAge > 10000) {
     try {
-      var gResult = await bdl('games', {date: slateDate}).catch(function(){ return {data:[]}; });
-      _bdlGamesCache = { data: gResult.data || [], time: Date.now(), date: slateDate };
+      var _bothDates = await bdlGamesBothDates(slateDate);
+      _bdlGamesCache = { data: _bothDates, time: Date.now(), date: slateDate };
     } catch(e) {}
   }
   return fetchSummaryBDL(game);
