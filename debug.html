@@ -416,7 +416,7 @@ async function viewQuarterData(){
 
   var bKeys = Object.keys(qd.boundaries).sort();
   var dKeys = Object.keys(qd.diffs || {}).sort();
-  var hasWindow = qd.window && qd.window.indicators;
+  var hasWindow = qd.window && qd.window.available;
 
   // ── Summary card ──
   html += '<div class="card">';
@@ -424,10 +424,10 @@ async function viewQuarterData(){
   html += '<div class="row"><span class="label">Boundaries</span><span class="val">' + bKeys.length + ' captured: [' + bKeys.join(', ') + ']</span></div>';
   html += '<div class="row"><span class="label">Diffs</span><span class="val">' + dKeys.length + ' computed: [' + dKeys.join(', ') + ']</span></div>';
   html += '<div class="row"><span class="label">Window</span><span class="val" style="color:' + (hasWindow ? '#00ff88' : '#ff5252') + '">' + (hasWindow ? 'ACTIVE' : 'NOT COMPUTED') + '</span></div>';
-  if(hasWindow && qd.window.meta){
-    var m = qd.window.meta;
-    html += '<div class="row"><span class="label">Window Period</span><span class="val">Q' + (m.currentPeriod||'?') + ' @ ' + (m.clock||'?') + ' (completion: ' + ((m.completion||0)*100).toFixed(0) + '%)</span></div>';
-    html += '<div class="row"><span class="label">Quarters Used</span><span class="val">' + (m.quartersUsed||'?') + '</span></div>';
+  if(hasWindow){
+    var wm = qd.window;
+    html += '<div class="row"><span class="label">Window Quarters</span><span class="val">' + (wm.windowQuarters||[]).join(', ') + '</span></div>';
+    if(wm.partial_quarter) html += '<div class="row"><span class="label">Partial Quarter</span><span class="val">Q' + wm.partial_quarter + '</span></div>';
   }
   html += '</div>';
 
@@ -501,21 +501,20 @@ async function viewQuarterData(){
     var w = qd.window;
     html += '<div class="card" style="border-color:#00ff8833">';
     html += '<div style="font-size:12px;font-weight:700;color:#00ff88;margin-bottom:6px">CROSS-FADE WINDOW</div>';
-    if(w.indicators){
-      var ind = w.indicators;
-      var indKeys = Object.keys(ind).sort();
-      indKeys.forEach(function(ik){
-        var val = ind[ik];
-        var vStr = typeof val === 'number' ? val.toFixed(3) : String(val);
-        var color = typeof val === 'number' ? (val > 0.55 ? '#00ff88' : val > 0.45 ? '#ffd166' : '#ff5252') : '#94a3b8';
-        html += '<div class="row"><span class="label">' + escH(ik) + '</span><span class="val" style="color:' + color + '">' + escH(vStr) + '</span></div>';
-      });
+    ['I1','I2','I3','I4','I5'].forEach(function(ik){
+      var val = w[ik] && w[ik].score;
+      var vStr = typeof val === 'number' ? val.toFixed(1) : '?';
+      var color = typeof val === 'number' ? (val > 0.55 ? '#00ff88' : val > 0.45 ? '#ffd166' : '#ff5252') : '#94a3b8';
+      html += '<div class="row"><span class="label">' + ik + '</span><span class="val" style="color:' + color + '">' + vStr + '</span></div>';
+    });
+    if(w.score != null){
+      html += '<div class="row" style="border-top:1px solid #1e293b;padding-top:4px;margin-top:4px"><span class="label" style="font-weight:700">Floor Score</span><span class="val" style="color:#00ff88;font-weight:700">' + (typeof w.score === 'number' ? w.score.toFixed(3) : w.score) + '</span></div>';
     }
-    if(w.floor != null){
-      html += '<div class="row" style="border-top:1px solid #1e293b;padding-top:4px;margin-top:4px"><span class="label" style="font-weight:700">Floor Score</span><span class="val" style="color:#00ff88;font-weight:700">' + (typeof w.floor === 'number' ? w.floor.toFixed(3) : w.floor) + '</span></div>';
+    if(w.controlTeam){
+      html += '<div class="row"><span class="label">Control Team</span><span class="val">' + escH(w.controlTeam) + '</span></div>';
     }
-    if(w.floorTeam){
-      html += '<div class="row"><span class="label">Floor Team</span><span class="val">' + escH(w.floorTeam) + '</span></div>';
+    if(w.dataQuality){
+      html += '<div class="row"><span class="label">Source</span><span class="val" style="color:#64748b">' + escH(w.dataQuality) + '</span></div>';
     }
     html += '</div>';
   }
@@ -554,7 +553,7 @@ async function viewQuarterDataAll(){
 
   // Summary
   var hasQD = results.filter(function(r){ return r.qd && r.qd.boundaries && Object.keys(r.qd.boundaries).length > 0; }).length;
-  var hasWindow = results.filter(function(r){ return r.qd && r.qd.window && r.qd.window.indicators; }).length;
+  var hasWindow = results.filter(function(r){ return r.qd && r.qd.window && r.qd.window.available; }).length;
   var noQD = results.length - hasQD;
 
   html += '<div class="card">';
@@ -573,7 +572,7 @@ async function viewQuarterDataAll(){
 
     var bKeys = qd && qd.boundaries ? Object.keys(qd.boundaries).sort() : [];
     var dKeys = qd && qd.diffs ? Object.keys(qd.diffs).sort() : [];
-    var hasW = qd && qd.window && qd.window.indicators;
+    var hasW = qd && qd.window && qd.window.available;
     var isFinal = !!g.winner;
 
     // Health assessment
@@ -2639,7 +2638,7 @@ async function runQA(section){
               }
 
               // Check window
-              if(qd.window && qd.window.indicators) hasWindowCount++;
+              if(qd.window && qd.window.available) hasWindowCount++;
               else noWindowCount++;
 
               // Check each boundary has both home and away

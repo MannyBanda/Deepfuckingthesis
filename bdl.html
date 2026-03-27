@@ -12059,6 +12059,40 @@ function runClientQA(gameId){
     meh('Lead composition', 'Not computed');
   }
 
+  // ── 14. SERVER QUARTER DIFFS (per-quarter boundary data) ──
+  var sqd = cs._serverQuarterDiffs;
+  if(sqd && Object.keys(sqd).length > 0){
+    var qdKeys = Object.keys(sqd).map(Number).filter(function(n){return !isNaN(n);}).sort(function(a,b){return a-b;});
+    var hasHome = qdKeys.every(function(k){ return sqd[k] && sqd[k].home && Object.keys(sqd[k].home).length > 0; });
+    var hasAway = qdKeys.every(function(k){ return sqd[k] && sqd[k].away && Object.keys(sqd[k].away).length > 0; });
+    if(hasHome && hasAway){
+      ok('Quarter diffs', qdKeys.length + ' quarters [' + qdKeys.join(',') + '] — home+away stats present');
+    } else {
+      bad('Quarter diffs', qdKeys.length + ' quarters but missing ' + (!hasHome ? 'home' : '') + (!hasAway ? 'away' : '') + ' stats');
+    }
+    // Check key indicator fields exist in diffs
+    var q1d = sqd[qdKeys[0]];
+    if(q1d && q1d.home){
+      var hasI1 = q1d.home.steals != null || q1d.home.turnovers != null;
+      var hasI2 = q1d.home.points_in_the_paint != null || q1d.home.points_in_paint != null || q1d.home.free_throws_att != null;
+      var hasI3 = q1d.home.three_points_made != null || q1d.home.assists != null;
+      if(hasI1 && hasI2 && hasI3) ok('QD field coverage', 'I1/I2/I3 fields present in diffs');
+      else meh('QD field coverage', 'Missing: ' + (!hasI1?'I1 ':'') + (!hasI2?'I2 ':'') + (!hasI3?'I3 ':''));
+    }
+  } else {
+    meh('Quarter diffs', 'Not hydrated — cs._serverQuarterDiffs empty');
+  }
+
+  // ── 15. PER-QUARTER BREAKDOWN RENDER ──
+  var qbHtml = renderQuarterBreakdown(gameId, cs, hA, aA);
+  if(qbHtml && qbHtml.length > 50){
+    ok('QD render', 'Per-quarter breakdown renders (' + qbHtml.length + ' chars)');
+  } else if(sqd && Object.keys(sqd).length > 0){
+    bad('QD render', 'Quarter diffs exist but renderQuarterBreakdown returned empty');
+  } else {
+    meh('QD render', 'No quarter diffs to render');
+  }
+
   // ── RENDER MODAL ──
   var existing = document.getElementById('qa-modal');
   if(existing) existing.remove();
