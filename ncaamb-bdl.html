@@ -462,6 +462,7 @@ async function hydrateFromServerSnapshots(gameId){
         var qdData = await qdResp.json();
         var qd = qdData.quarter_data;
         if(qd && qd.diffs) cs._serverQuarterDiffs = qd.diffs;
+        if(qd && qd.boundaries) cs._serverQuarterBoundaries = qd.boundaries;
         if(qd && qd.window && qd.window.available){
           var prevSrc = cs.rollingWindow ? cs.rollingWindow.source : 'none';
           cs.rollingWindow = qd.window;
@@ -8022,6 +8023,44 @@ function renderQuarterBreakdown(id, cs, hA, aA){
     html += '</div>';
   });
 
+  // ── LIVE PARTIAL QUARTER ROW ──
+  var game = games.find(function(x){ return x.id === id; });
+  var boundaries = cs._serverQuarterBoundaries;
+  if(game && boundaries && getState(game) === 'LIVE' && game.bdlData){
+    var maxBoundary = Math.max.apply(null, Object.keys(boundaries).map(Number).filter(function(n){return !isNaN(n);}));
+    var lastB = boundaries[String(maxBoundary)];
+    if(lastB && lastB.home && lastB.away){
+      var liveHome = game.bdlData.home || {};
+      var liveAway = game.bdlData.away || {};
+      var pHome = {}, pAway = {};
+      var diffFields = ['points_in_the_paint','points_in_paint','free_throws_att','three_points_made','three_points_att',
+        'assists','turnovers','total_turnovers','steals','blocks','field_goals_made','field_goals_att',
+        'offensive_rebounds','fast_break_points','points_off_turnovers','second_chance_points',
+        'personal_fouls','bench_points','points','possessions','free_throws_made'];
+      diffFields.forEach(function(f){
+        if(liveHome[f] != null && lastB.home[f] != null) pHome[f] = liveHome[f] - lastB.home[f];
+        else if(liveHome[f] != null) pHome[f] = liveHome[f];
+        if(liveAway[f] != null && lastB.away[f] != null) pAway[f] = liveAway[f] - lastB.away[f];
+        else if(liveAway[f] != null) pAway[f] = liveAway[f];
+      });
+
+      var partialLabel = maxBoundary >= 4 ? 'OT*' : 'Q'+(maxBoundary+1)+'*';
+      html += '<div style="display:flex;align-items:center;font-size:6px;padding:1px 0;opacity:.75;border-top:1px dashed var(--b2)">';
+      html += '<span style="width:28px;color:var(--amber);font-weight:600;font-size:5px">'+partialLabel+'</span>';
+      stats.forEach(function(s){
+        var hVal = s.get(pHome);
+        var aVal = s.get(pAway);
+        var hBetter = s.invert ? hVal < aVal : hVal > aVal;
+        var aBetter = s.invert ? aVal < hVal : aVal > hVal;
+        var tied = hVal === aVal;
+        var hCol = tied ? 'var(--t3)' : hBetter ? 'var(--green)' : 'rgba(255,100,100,.7)';
+        var aCol = tied ? 'var(--t3)' : aBetter ? 'var(--green)' : 'rgba(255,100,100,.7)';
+        html += '<span style="width:28px;text-align:center"><span style="color:'+hCol+'">'+hVal+'</span><span style="color:var(--t3);font-size:4px">-</span><span style="color:'+aCol+'">'+aVal+'</span></span>';
+      });
+      html += '</div>';
+    }
+  }
+
   html += '<div style="font-size:4px;color:var(--t3);margin-top:2px;text-align:right">'+esc(hA)+' - '+esc(aA)+'</div>';
   html += '</div>';
   return html;
@@ -8855,76 +8894,6 @@ function renderCard(game){
 
 
 
-    // ─── 5. DIRECTIONAL ARROWS (compact horizontal — teams as rows, metrics as columns) ───
-    var arrows = cs.subMetricArrows;
-    var adj = cs.adjustment;
-    var floorInd2 = getFloor(cs);
-    if(arrows && arrows.home && arrows.away){
-      var _arrowColor = function(arrow, isVariance){
-        if(!arrow||arrow==="FLAT") return "var(--t3)";
-        if(arrow==="RISING") return isVariance?"var(--amber)":"var(--green)";
-        return isVariance?"var(--green)":"var(--amber)";
-      };
-      var _arrowSym = function(arrow){ return arrow==="RISING"?"▲":arrow==="FALLING"?"▼":"▬"; };
-      var _vals = function(m){ if(!m||!m.values) return "?"; var v=m.values; return v.length>1?(v[0]!=null?Math.round(v[0]):'?')+'→'+(v[v.length-1]!=null?Math.round(v[v.length-1]):'?'):'?'; };
-      html+='<div style="padding:5px 10px;border-top:1px solid var(--b1)">';
-      html+=_secHdr(id,'arr',cs,'DIRECTIONAL ARROWS');
-      if(_secOpen(cs,'arr')){
-      // Column definitions: grouped by indicator
-      var cols = [
-        {key:"paint",hdr:"Paint",grp:"I2",isVar:false},
-        {key:"atRim",hdr:"AtRim",grp:"I2",isVar:false},
-        {key:"fta",hdr:"FTA",grp:"I2",isVar:false},
-        {key:"steals",hdr:"Stl",grp:"I1",isVar:false},
-        {key:"tos",hdr:"TOs",grp:"I1",isVar:true},
-        {key:"fg3aShare",hdr:"3PA%",grp:"I3",isVar:true},
-        {key:"astRatio",hdr:"Ast%",grp:"I3",isVar:false},
-        {key:"poss",hdr:"Poss",grp:"I5",isVar:false},
-      ];
-      // Group header row
-      var grpSpans = [];
-      var lastGrp = '';
-      cols.forEach(function(c){
-        if(c.grp !== lastGrp){ grpSpans.push({grp:c.grp, span:1}); lastGrp = c.grp; }
-        else { grpSpans[grpSpans.length-1].span++; }
-      });
-      html+='<div style="overflow-x:auto;-webkit-overflow-scrolling:touch">';
-      html+='<table style="border-collapse:collapse;font-size:5.5px;min-width:340px">';
-      // Indicator group header
-      html+='<tr><td style="padding:0 3px;min-width:28px"></td>';
-      grpSpans.forEach(function(g){
-        html+='<td colspan="'+g.span+'" style="text-align:center;padding:0 2px 1px;color:var(--t3);font-size:4.5px;letter-spacing:.5px;border-bottom:1px solid var(--b1)">'+g.grp+'</td>';
-      });
-      html+='</tr>';
-      // Metric header row
-      html+='<tr><td style="padding:1px 3px;color:var(--t3);font-size:4.5px"></td>';
-      cols.forEach(function(c){
-        html+='<td style="text-align:center;padding:1px 3px;color:var(--t3);font-size:5px;font-weight:400">'+c.hdr+'</td>';
-      });
-      html+='</tr>';
-      // Team rows
-      [['away',aA,arrows.away],['home',hA,arrows.home]].forEach(function(t){
-        var alias=t[1], data=t[2];
-        html+='<tr><td style="padding:2px 3px;color:var(--t1);font-weight:600;font-size:6px">'+esc(alias)+'</td>';
-        cols.forEach(function(c){
-          var m = data[c.key];
-          var arrow = m&&m.arrow ? _arrowSym(m.arrow) : "—";
-          var col = _arrowColor(m&&m.arrow, c.isVar);
-          var vals = m ? _vals(m) : "?";
-          html+='<td style="text-align:center;padding:2px 3px;white-space:nowrap"><span style="color:'+col+';font-weight:600">'+arrow+'</span> <span style="font-size:4.5px;color:var(--t3)">'+esc(vals)+'</span></td>';
-        });
-        html+='</tr>';
-      });
-      html+='</table></div>';
-      // Adjustment signal row
-      if(adj && adj.signal && adj.signal!=="NO ADJUSTMENT" && adj.signal!=="NO DATA"){
-        var adjColor2 = adj.signal==="INTERIOR PIVOT"?"var(--green)":adj.signal==="STRUCTURAL ACCEL"?"var(--green)":adj.signal==="STRUCTURAL EROSION"?"var(--red)":adj.signal==="VARIANCE SHIFT"?"var(--amber)":"var(--t3)";
-        html+='<div style="margin-top:4px;font-size:6px;color:'+adjColor2+';font-weight:500">'+esc(adj.signal)+' <span style="font-weight:400;color:var(--t2)">&#8212; '+esc(adj.note)+'</span></div>';
-      }
-      } // end _secOpen arr
-      html+='</div>';
-    }
-
     // ─── GAME NARRATIVE STRIP (analysis history timeline — after value read) ───
     var nh = cs.analysisHistory;
     if(nh && nh.length > 0){
@@ -9085,11 +9054,72 @@ function renderCard(game){
           :'<div style="font-size:6px;color:var(--t3)">No event flags active</div>'}
     </div>`;
 
-    // ─── VISUAL DEPTH AUDIT ───
-    html += renderDepthAuditVisual(id, cs, hA, aA);
+    // ─── DIRECTIONAL ARROWS (per-quarter trends) ───
+    var arrows = cs.subMetricArrows;
+    var adj = cs.adjustment;
+    if(arrows && arrows.home && arrows.away){
+      var _arrowColor = function(arrow, isVariance){
+        if(!arrow||arrow==="FLAT") return "var(--t3)";
+        if(arrow==="RISING") return isVariance?"var(--amber)":"var(--green)";
+        return isVariance?"var(--green)":"var(--amber)";
+      };
+      var _arrowSym = function(arrow){ return arrow==="RISING"?"▲":arrow==="FALLING"?"▼":"▬"; };
+      var _vals = function(m){ if(!m||!m.values) return "?"; var v=m.values; return v.length>1?(v[0]!=null?Math.round(v[0]):'?')+'→'+(v[v.length-1]!=null?Math.round(v[v.length-1]):'?'):'?'; };
+      html+='<div style="padding:5px 6px;border-top:1px solid var(--b2)">';
+      html+='<div style="font-size:7px;color:var(--t2);letter-spacing:1px;margin-bottom:4px;font-weight:600">DIRECTIONAL ARROWS</div>';
+      var cols = [
+        {key:"paint",hdr:"Paint",grp:"I2",isVar:false},
+        {key:"atRim",hdr:"AtRim",grp:"I2",isVar:false},
+        {key:"fta",hdr:"FTA",grp:"I2",isVar:false},
+        {key:"steals",hdr:"Stl",grp:"I1",isVar:false},
+        {key:"tos",hdr:"TOs",grp:"I1",isVar:true},
+        {key:"fg3aShare",hdr:"3PA%",grp:"I3",isVar:true},
+        {key:"astRatio",hdr:"Ast%",grp:"I3",isVar:false},
+        {key:"poss",hdr:"Poss",grp:"I5",isVar:false},
+      ];
+      var grpSpans = [];
+      var lastGrp = '';
+      cols.forEach(function(c){
+        if(c.grp !== lastGrp){ grpSpans.push({grp:c.grp, span:1}); lastGrp = c.grp; }
+        else { grpSpans[grpSpans.length-1].span++; }
+      });
+      html+='<div style="overflow-x:auto;-webkit-overflow-scrolling:touch">';
+      html+='<table style="border-collapse:collapse;font-size:5.5px;min-width:340px">';
+      html+='<tr><td style="padding:0 3px;min-width:28px"></td>';
+      grpSpans.forEach(function(g){
+        html+='<td colspan="'+g.span+'" style="text-align:center;padding:0 2px 1px;color:var(--t3);font-size:4.5px;letter-spacing:.5px;border-bottom:1px solid var(--b1)">'+g.grp+'</td>';
+      });
+      html+='</tr>';
+      html+='<tr><td style="padding:1px 3px;color:var(--t3);font-size:4.5px"></td>';
+      cols.forEach(function(c){
+        html+='<td style="text-align:center;padding:1px 3px;color:var(--t3);font-size:5px;font-weight:400">'+c.hdr+'</td>';
+      });
+      html+='</tr>';
+      [['away',aA,arrows.away],['home',hA,arrows.home]].forEach(function(t){
+        var alias=t[1], data=t[2];
+        html+='<tr><td style="padding:2px 3px;color:var(--t1);font-weight:600;font-size:6px">'+esc(alias)+'</td>';
+        cols.forEach(function(c){
+          var m = data[c.key];
+          var arrow = m&&m.arrow ? _arrowSym(m.arrow) : "—";
+          var col = _arrowColor(m&&m.arrow, c.isVar);
+          var vals = m ? _vals(m) : "?";
+          html+='<td style="text-align:center;padding:2px 3px;white-space:nowrap"><span style="color:'+col+';font-weight:600">'+arrow+'</span> <span style="font-size:4.5px;color:var(--t3)">'+esc(vals)+'</span></td>';
+        });
+        html+='</tr>';
+      });
+      html+='</table></div>';
+      if(adj && adj.signal && adj.signal!=="NO ADJUSTMENT" && adj.signal!=="NO DATA"){
+        var adjColor2 = adj.signal==="INTERIOR PIVOT"?"var(--green)":adj.signal==="STRUCTURAL ACCEL"?"var(--green)":adj.signal==="STRUCTURAL EROSION"?"var(--red)":adj.signal==="VARIANCE SHIFT"?"var(--amber)":"var(--t3)";
+        html+='<div style="margin-top:4px;font-size:6px;color:'+adjColor2+';font-weight:500">'+esc(adj.signal)+' <span style="font-weight:400;color:var(--t2)">&#8212; '+esc(adj.note)+'</span></div>';
+      }
+      html+='</div>';
+    }
 
     // ─── PER-QUARTER STAT BREAKDOWN ───
     html += renderQuarterBreakdown(id, cs, hA, aA);
+
+    // ─── VISUAL DEPTH AUDIT ───
+    html += renderDepthAuditVisual(id, cs, hA, aA);
 
     // Full Sonnet analysis text (in evidence view)
     html+=`<div class="analysis" id="analysis-${id}">`;
