@@ -528,28 +528,27 @@ async function hydrateFromServerSnapshots(gameId){
       }
     }
 
-    // ── Hydrate rolling window from server quarter_data (authoritative) ──
-    if(!cs.rollingWindow || !cs.rollingWindow.available){
-      try{
-        var qdResp = await fetch(FN+'db-api?action=get_quarter_data&game_id='+encodeURIComponent(gameId));
-        if(qdResp.ok){
-          var qdData = await qdResp.json();
-          var qd = qdData.quarter_data;
-          if(qd && qd.window && qd.window.available){
-            cs.rollingWindow = qd.window;
-            cs.rollingWindow.source = 'server-qd';
-            addLog(gameId, '📡 Server QTR window hydrated — '+qd.window.controlTeam+' '+qd.window.score+' ['+qd.window.windowQuarters.join(',')+']', true);
-            if(cs.acceleration){
-              var flr = getFloor(cs);
-              if(flr && flr.score){
-                cs.combinedRead = classifyCombinedRead(flr.score, flr.controlTeam, cs.rollingWindow, cs.acceleration);
-              }
+    // ── Hydrate from server quarter_data (authoritative for both window + diffs) ──
+    try{
+      var qdResp = await fetch(FN+'db-api?action=get_quarter_data&game_id='+encodeURIComponent(gameId));
+      if(qdResp.ok){
+        var qdData = await qdResp.json();
+        var qd = qdData.quarter_data;
+        if(qd && qd.diffs) cs._serverQuarterDiffs = qd.diffs;
+        if(qd && qd.window && qd.window.available){
+          var prevSrc = cs.rollingWindow ? cs.rollingWindow.source : 'none';
+          cs.rollingWindow = qd.window;
+          cs.rollingWindow.source = 'server-qd';
+          addLog(gameId, '📡 Server QTR window hydrated — '+qd.window.controlTeam+' '+qd.window.score+' ['+qd.window.windowQuarters.join(',')+']'+(prevSrc!=='none'?' (replaced '+prevSrc+')':''), true);
+          if(cs.acceleration){
+            var flr = getFloor(cs);
+            if(flr && flr.score){
+              cs.combinedRead = classifyCombinedRead(flr.score, flr.controlTeam, cs.rollingWindow, cs.acceleration);
             }
           }
-          if(qd && qd.diffs) cs._serverQuarterDiffs = qd.diffs;
         }
-      }catch(e){ /* quarter_data not available yet */ }
-    }
+      }
+    }catch(e){ /* quarter_data not available yet */ }
 
     // Count sources
     var serverCount = snaps.filter(function(s){ return s.source === 'server'; }).length;
