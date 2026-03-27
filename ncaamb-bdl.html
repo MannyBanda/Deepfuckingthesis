@@ -5064,7 +5064,7 @@ function buildTrajectory(game, hA, aA, hs, as, H, A, hS, aS, qDs, periods){
 // FLOOR HELPER — safe accessor for sonnetIndicators/clientInd/serverFloor
 // Guards against truthy objects with score:undefined
 // ══════════════════════════════════════════════════════════════════════════════
-function getFloor(cs){if(!cs)return null;if(cs.sonnetIndicators&&cs.sonnetIndicators.score!=null)return cs.sonnetIndicators;if(cs.clientInd&&cs.clientInd.score!=null)return cs.clientInd;if(cs._serverFloor&&cs._serverFloor.score!=null)return cs._serverFloor;return null;}
+function getFloor(cs){if(!cs)return null;if(cs.sonnetIndicators&&cs.sonnetIndicators.score!=null)return cs.sonnetIndicators;if(cs.clientInd&&cs.clientInd.score!=null)return cs.clientInd;if(cs._serverFloor&&cs._serverFloor.score!=null)return cs._serverFloor;if(cs.rollingWindow&&cs.rollingWindow.available&&cs.rollingWindow.score!=null)return{score:cs.rollingWindow.score,controlTeam:cs.rollingWindow.controlTeam,I1:cs.rollingWindow.I1,I2:cs.rollingWindow.I2,I3:cs.rollingWindow.I3,I4:cs.rollingWindow.I4,I5:cs.rollingWindow.I5,source:cs.rollingWindow.source||'window'};return null;}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // DECISION SYNTHESIZER — resolves all signals into one actionable read
@@ -9354,7 +9354,7 @@ function runClientQA(gameId){
   // ── 1. FLOOR SCORE ──
   var ind = getFloor(cs);
   if(ind && ind.score != null){
-    var src = cs.sonnetIndicators ? 'SONNET' : cs.clientInd ? 'CLIENT' : 'SERVER';
+    var src = cs.sonnetIndicators ? 'SONNET' : cs.clientInd ? 'CLIENT' : cs._serverFloor ? 'SERVER' : (cs.rollingWindow && cs.rollingWindow.available) ? 'WINDOW' : '?';
     ok('Floor score', ind.controlTeam + ' ' + ind.score.toFixed(2) + ' (' + src + ')');
   } else { bad('Floor score', 'No indicator data \u2014 no floor, PBP, or Sonnet analysis'); }
 

@@ -8548,7 +8548,7 @@ function showLoading(v){document.getElementById('loading').style.display=v?'flex
 function showErr(msg){const el=document.getElementById('err');el.style.display=msg?'block':'none';if(msg)el.textContent='⚠ '+msg;}
 function getState(g){const s=(g.status||'').toLowerCase();if(s==='closed'||s==='complete'||s==='final')return'FINAL';if(s==='inprogress'||s==='halftime'||s==='in progress'||s.includes('qtr')||s.includes('quarter')||s.includes('half')||s.includes('overtime')||s.includes(' ot')||s==='ot'||/^\d*\s*ot/i.test(s))return'LIVE';return'PRE';}
 // Floor fallback: must check .score exists, not just object truthiness
-function getFloor(cs){if(!cs)return null;if(cs.sonnetIndicators&&cs.sonnetIndicators.score!=null)return cs.sonnetIndicators;if(cs.clientInd&&cs.clientInd.score!=null)return cs.clientInd;if(cs._serverFloor&&cs._serverFloor.score!=null)return cs._serverFloor;return null;}
+function getFloor(cs){if(!cs)return null;if(cs.sonnetIndicators&&cs.sonnetIndicators.score!=null)return cs.sonnetIndicators;if(cs.clientInd&&cs.clientInd.score!=null)return cs.clientInd;if(cs._serverFloor&&cs._serverFloor.score!=null)return cs._serverFloor;if(cs.rollingWindow&&cs.rollingWindow.available&&cs.rollingWindow.score!=null)return{score:cs.rollingWindow.score,controlTeam:cs.rollingWindow.controlTeam,I1:cs.rollingWindow.I1,I2:cs.rollingWindow.I2,I3:cs.rollingWindow.I3,I4:cs.rollingWindow.I4,I5:cs.rollingWindow.I5,source:cs.rollingWindow.source||'window'};return null;}
 function updateCounts(){
   const lc=games.filter(g=>getState(g)==='LIVE').length;
   document.getElementById('live-count').textContent=lc;
@@ -11914,7 +11914,7 @@ function runClientQA(gameId){
   // ── 1. FLOOR SCORE ──
   var ind = getFloor(cs);
   if(ind && ind.score != null){
-    var src = cs.sonnetIndicators ? 'SONNET' : cs.clientInd ? 'CLIENT' : 'SERVER';
+    var src = cs.sonnetIndicators ? 'SONNET' : cs.clientInd ? 'CLIENT' : cs._serverFloor ? 'SERVER' : (cs.rollingWindow && cs.rollingWindow.available) ? 'WINDOW' : '?';
     ok('Floor score', ind.controlTeam + ' ' + ind.score.toFixed(2) + ' (' + src + ')');
   } else { bad('Floor score', 'No indicator data — no floor, PBP, or Sonnet analysis'); }
 
