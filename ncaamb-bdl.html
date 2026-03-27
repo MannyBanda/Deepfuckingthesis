@@ -1558,10 +1558,11 @@ async function loadSchedule(){
           var newStatus = normalizeBdlStatus(gInfo.status, gInfo);
           if(newStatus !== g.status){
             g.status = newStatus;
-            g.homePoints = gInfo.home_team_score || g.homePoints;
-            g.awayPoints = gInfo.visitor_team_score || g.awayPoints;
-            g.period = gInfo.period || g.period;
-            g.clock = normalizeBdlClock(gInfo.time, gInfo.status) || g.clock;
+            g.homePoints = gInfo.home_score || g.homePoints;
+            g.awayPoints = gInfo.away_score || g.awayPoints;
+            var _pd = parseBdlPeriodDetail(gInfo.period_detail);
+            if(_pd.period) g.period = _pd.period;
+            if(_pd.clock) g.clock = _pd.clock;
             _updated++;
           }
         });
@@ -1834,10 +1835,11 @@ async function refreshLiveCards(){
         var newStatus = normalizeBdlStatus(gInfo.status, gInfo);
         if(newStatus !== g.status && newStatus !== 'scheduled' && newStatus !== 'created'){
           g.status = newStatus;
-          g.homePoints = gInfo.home_team_score || g.homePoints;
-          g.awayPoints = gInfo.visitor_team_score || g.awayPoints;
-          g.period = gInfo.period || g.period;
-          g.clock = normalizeBdlClock(gInfo.time, gInfo.status) || g.clock;
+          g.homePoints = gInfo.home_score || g.homePoints;
+          g.awayPoints = gInfo.away_score || g.awayPoints;
+          var _pd2 = parseBdlPeriodDetail(gInfo.period_detail);
+          if(_pd2.period) g.period = _pd2.period;
+          if(_pd2.clock) g.clock = _pd2.clock;
           _statusUpdated++;
         }
       });
@@ -2964,12 +2966,11 @@ function normalizeBdlStatus(s, gameInfo){
   // Datetime string — check game info for live signals
   if(s.includes('T')&&s.includes(':')){
     if(gameInfo){
-      var hasScore = ((gameInfo.home_team_score||0) + (gameInfo.visitor_team_score||0)) > 0;
+      var hasScore = ((gameInfo.home_team_score||gameInfo.home_score||0) + (gameInfo.visitor_team_score||gameInfo.away_score||0)) > 0;
       var hasPeriod = (gameInfo.period||0) > 0;
-      var hasTime = gameInfo.time && gameInfo.time !== '' && !gameInfo.time.includes('T');
-      var hasQtrScore = (gameInfo.home_q1||0) > 0 || (gameInfo.visitor_q1||0) > 0;
-      var hasPlayers = gameInfo.home_team && gameInfo.home_team.players && gameInfo.home_team.players.length > 0;
-      if(hasScore || hasPeriod || hasTime || hasQtrScore || hasPlayers) return 'inprogress';
+      var hasPeriodDetail = gameInfo.period_detail && gameInfo.period_detail !== '' && !gameInfo.period_detail.includes('T');
+      var hasHalfScore = (gameInfo.home_score_h1||0) > 0 || (gameInfo.away_score_h1||0) > 0;
+      if(hasScore || hasPeriod || hasPeriodDetail || hasHalfScore) return 'inprogress';
     }
     try{ var _tipMs = new Date(s).getTime(); if(!isNaN(_tipMs) && Date.now() > _tipMs + 120000) return 'inprogress'; }catch(e){}
     return 'scheduled';
