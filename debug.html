@@ -47,6 +47,8 @@ select{background:#1e293b;color:#e0e0e0;border:1px solid #334155;border-radius:6
     <button onclick="checkTheses()">📝 Theses</button>
     <button onclick="checkAnalyses()">🧠 Analyses</button>
     <button onclick="checkPollState()">⏱ Poll State</button>
+    <button onclick="viewPollHistory('nba')">📅 NBA Poll Hx</button>
+    <button onclick="viewPollHistory('ncaamb')">📅 NCAA Poll Hx</button>
     <button onclick="checkClutch()">🏀 Clutch</button>
   </div>
   <div class="btn-row">
@@ -581,7 +583,7 @@ async function viewQuarterDataAll(){
       if(isFinal){
         // Final game should have baseline + all period ends
         var isNcaa = qaLeague === 'ncaamb';
-        var expectedPeriods = isNcaa ? ['0','1','2'] : ['0','1','2','3','4'];
+        var expectedPeriods = isNcaa ? ['0','1','2','3','4'] : ['0','1','2','3','4'];
         var missing = expectedPeriods.filter(function(p){ return bKeys.indexOf(p) === -1; });
         if(missing.length === 0 && hasW){ health = 'COMPLETE'; healthColor = '#00ff88'; }
         else if(missing.length === 0){ health = 'BOUNDARIES OK'; healthColor = '#66bb6a'; }
@@ -971,6 +973,44 @@ async function checkPollState(){
   if(!found) html += '<div class="card" style="color:#94a3b8;font-size:11px">No poll state found. Server polling may not have run yet — check Netlify function logs.</div>';
   contentEl.innerHTML = html;
   log('Poll state check complete', found ? 'log-ok' : 'log-warn');
+}
+
+// ── Poll History (multi-day view) ──
+async function viewPollHistory(league){
+  log('Fetching poll history for ' + league.toUpperCase() + '...', 'log-info');
+  var data = await fetchJSON(FN + 'db-api?action=get_poll_history&league=' + league + '&limit=14');
+  var rows = (data && data.history) || [];
+
+  var html = '<h2>📅 POLL HISTORY — ' + league.toUpperCase() + ' (' + rows.length + ' days)</h2>';
+
+  if(rows.length === 0){
+    html += '<div class="card" style="color:#94a3b8;font-size:11px">No poll_state records found for ' + league.toUpperCase() + '. Server polling may never have run for this league.</div>';
+    contentEl.innerHTML = html;
+    log('No poll history', 'log-warn');
+    return;
+  }
+
+  rows.forEach(function(r){
+    var allFinal = r.all_final;
+    var tipStr = r.first_tip ? new Date(r.first_tip).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '?';
+    var lastStr = r.last_tip ? new Date(r.last_tip).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '?';
+    var fetchedStr = r.fetched_at ? new Date(r.fetched_at).toLocaleString() : '?';
+    var statusColor = allFinal ? '#00ff88' : '#ffd166';
+    var statusLabel = allFinal ? 'ALL FINAL' : 'ACTIVE/INCOMPLETE';
+
+    html += '<div class="card" style="padding:6px">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center">';
+    html += '<span style="font-size:11px;font-weight:700;color:#e2e8f0">' + (r.date||'?') + '</span>';
+    html += '<span style="font-size:9px;font-weight:700;color:' + statusColor + '">' + statusLabel + '</span>';
+    html += '</div>';
+    html += '<div style="font-size:9px;color:#94a3b8;margin-top:2px">';
+    html += 'Games: ' + (r.game_count||0) + ' · Tips: ' + tipStr + ' — ' + lastStr + ' · Fetched: ' + fetchedStr;
+    html += '</div>';
+    html += '</div>';
+  });
+
+  contentEl.innerHTML = html;
+  log('Poll history: ' + rows.length + ' days for ' + league.toUpperCase(), 'log-ok');
 }
 
 // ── Theses ──
@@ -2565,8 +2605,8 @@ async function runQA(section){
           var hasData=0, noData=0, completeCount=0, missingBoundaries=0, missingDiffs=0, hasWindowCount=0, noWindowCount=0;
           var badGames = [];
           var isNcaa = qaLeague === 'ncaamb';
-          var expectedPeriods = isNcaa ? ['0','1','2'] : ['0','1','2','3','4'];
-          var expectedDiffs = isNcaa ? ['1','2'] : ['1','2','3','4'];
+          var expectedPeriods = ['0','1','2','3','4'];
+          var expectedDiffs = ['1','2','3','4'];
 
           // Check each final game
           for(var qi = 0; qi < finalGames.length; qi++){
