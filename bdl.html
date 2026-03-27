@@ -654,36 +654,37 @@ async function pushContextToDB(game){
 async function hydrateFromServerSnapshots(gameId){
   if(!dbReady) return;
   var cs = cardState[gameId]; if(!cs) return;
-  // Only hydrate if we have no gap log yet (fresh mount, device was sleeping)
-  if(cs.gapLog && cs.gapLog.length > 2) return;
 
-  // ── Hydrate from server quarter_data (independent of snapshots) ──
+  // ── Hydrate from server quarter_data (independent of snapshots + gapLog) ──
   // Quarter data lives in games.quarter_data, NOT in snapshots table.
-  // Must run before snapshot quality checks which may early-return.
-  try{
-    var qdResp = await fetch(FN+'db-api?action=get_quarter_data&game_id='+encodeURIComponent(gameId));
-    if(qdResp.ok){
-      var qdData = await qdResp.json();
-      var qd = qdData.quarter_data;
-      // Always store per-quarter diffs for evidence view
-      if(qd && qd.diffs){
-        cs._serverQuarterDiffs = qd.diffs;
-      }
-      // Window: server-qd is authoritative over server-ctx
-      if(qd && qd.window && qd.window.available){
-        var prevSrc = cs.rollingWindow ? cs.rollingWindow.source : 'none';
-        cs.rollingWindow = qd.window;
-        cs.rollingWindow.source = 'server-qd';
-        addLog(gameId, '📡 Server QTR window hydrated — '+qd.window.controlTeam+' '+qd.window.score+' ['+qd.window.windowQuarters.join(',')+']'+(prevSrc!=='none'?' (replaced '+prevSrc+')':''), true);
-        if(cs.acceleration){
-          var flr = getFloor(cs);
-          if(flr && flr.score){
-            cs.combinedRead = classifyCombinedRead(flr.score, flr.controlTeam, cs.rollingWindow, cs.acceleration);
+  // Must run even when gapLog is already populated (re-open of card).
+  if(!cs._serverQuarterDiffs){
+    try{
+      var qdResp = await fetch(FN+'db-api?action=get_quarter_data&game_id='+encodeURIComponent(gameId));
+      if(qdResp.ok){
+        var qdData = await qdResp.json();
+        var qd = qdData.quarter_data;
+        if(qd && qd.diffs){
+          cs._serverQuarterDiffs = qd.diffs;
+        }
+        if(qd && qd.window && qd.window.available){
+          var prevSrc = cs.rollingWindow ? cs.rollingWindow.source : 'none';
+          cs.rollingWindow = qd.window;
+          cs.rollingWindow.source = 'server-qd';
+          addLog(gameId, '📡 Server QTR window hydrated — '+qd.window.controlTeam+' '+qd.window.score+' ['+qd.window.windowQuarters.join(',')+']'+(prevSrc!=='none'?' (replaced '+prevSrc+')':''), true);
+          if(cs.acceleration){
+            var flr = getFloor(cs);
+            if(flr && flr.score){
+              cs.combinedRead = classifyCombinedRead(flr.score, flr.controlTeam, cs.rollingWindow, cs.acceleration);
+            }
           }
         }
       }
-    }
-  }catch(e){ /* quarter_data not available yet — non-fatal */ }
+    }catch(e){ /* quarter_data not available yet — non-fatal */ }
+  }
+
+  // Only hydrate snapshots if we have no gap log yet (fresh mount, device was sleeping)
+  if(cs.gapLog && cs.gapLog.length > 2) return;
 
   try{
     var resp = await fetch(FN+'db-api?action=history&game_id='+gameId);
