@@ -96,6 +96,8 @@ select{background:#1e293b;color:#e0e0e0;border:1px solid #334155;border-radius:6
     <button onclick="viewSnapshots()">📸 Snapshots</button>
     <button onclick="viewOdds()">💰 Odds</button>
     <button onclick="viewSustainability()">🧬 Sustainability</button>
+    <button onclick="viewQuarterData()">📊 Quarter Data</button>
+    <button onclick="viewQuarterDataAll()">📊 QD All Games</button>
     <button onclick="viewSeasonCache('nba')">📈 NBA Cache</button>
     <button onclick="viewSeasonCache('ncaamb')">📈 NCAA Cache</button>
   </div>
@@ -111,6 +113,7 @@ select{background:#1e293b;color:#e0e0e0;border:1px solid #334155;border-radius:6
     <button onclick="runQA('snapshots')" style="color:#ffd166">📸 Snapshots</button>
     <button onclick="runQA('bdl')" style="color:#fbbf24">🔬 BDL Data</button>
     <button onclick="runQA('odds')" style="color:#f5a62a">💰 Odds</button>
+    <button onclick="runQA('quarter_data')" style="color:#38bdf8">📊 QD Pipeline</button>
   </div>
 </div>
 <div id="qa-results" style="display:none"></div>
@@ -387,6 +390,224 @@ async function viewSustainability(){
 
   contentEl.innerHTML = html;
   log('Sustainability loaded', 'log-ok');
+}
+
+// ── Quarter Data Inspector (single game) ──
+async function viewQuarterData(){
+  var gid = getSelectedGame();
+  if(!gid) return;
+  log('Fetching quarter_data for ' + gid.substring(0,8) + '...', 'log-info');
+
+  var data = await fetchJSON(FN + 'db-api?action=get_quarter_data&game_id=' + encodeURIComponent(gid));
+  var qd = data && data.quarter_data;
+  var game = allGames.find(function(g){ return g.id === gid; });
+  var title = game ? (game.matchup || game.away_alias+'@'+game.home_alias || gid.substring(0,12)) : gid.substring(0,12);
+
+  var html = '<h2>📊 QUARTER DATA — ' + escH(title) + '</h2>';
+
+  if(!qd || (!qd.boundaries || Object.keys(qd.boundaries).length === 0)){
+    html += '<div class="card" style="color:#94a3b8;font-size:11px">No quarter_data for this game. Server polling captures boundaries at period transitions.</div>';
+    contentEl.innerHTML = html;
+    log('No quarter_data', 'log-warn');
+    return;
+  }
+
+  var bKeys = Object.keys(qd.boundaries).sort();
+  var dKeys = Object.keys(qd.diffs || {}).sort();
+  var hasWindow = qd.window && qd.window.indicators;
+
+  // ── Summary card ──
+  html += '<div class="card">';
+  html += '<div style="font-size:12px;font-weight:700;color:#38bdf8;margin-bottom:6px">PIPELINE STATUS</div>';
+  html += '<div class="row"><span class="label">Boundaries</span><span class="val">' + bKeys.length + ' captured: [' + bKeys.join(', ') + ']</span></div>';
+  html += '<div class="row"><span class="label">Diffs</span><span class="val">' + dKeys.length + ' computed: [' + dKeys.join(', ') + ']</span></div>';
+  html += '<div class="row"><span class="label">Window</span><span class="val" style="color:' + (hasWindow ? '#00ff88' : '#ff5252') + '">' + (hasWindow ? 'ACTIVE' : 'NOT COMPUTED') + '</span></div>';
+  if(hasWindow && qd.window.meta){
+    var m = qd.window.meta;
+    html += '<div class="row"><span class="label">Window Period</span><span class="val">Q' + (m.currentPeriod||'?') + ' @ ' + (m.clock||'?') + ' (completion: ' + ((m.completion||0)*100).toFixed(0) + '%)</span></div>';
+    html += '<div class="row"><span class="label">Quarters Used</span><span class="val">' + (m.quartersUsed||'?') + '</span></div>';
+  }
+  html += '</div>';
+
+  // Key stat fields to highlight (grouped by indicator)
+  var qdGroups = {
+    'I1 Possession': ['steals','turnovers','offensive_rebounds','fast_break_points','points_off_turnovers','second_chance_points'],
+    'I2 Rim/Foul': ['points_in_the_paint','points_in_paint','free_throws_att','blocks','personal_fouls'],
+    'I3 Shot Quality': ['field_goals_made','field_goals_att','three_points_made','three_points_att','assists'],
+    'I4 Lineup': ['bench_points','biggest_lead','points'],
+    'I5 Tempo': ['possessions','offensive_points_per_possession','defensive_points_per_possession']
+  };
+
+  // ── Boundary cards ──
+  bKeys.forEach(function(bk){
+    var b = qd.boundaries[bk];
+    var label = bk === '0' ? 'BASELINE (pre-game)' : 'Q' + bk + ' END';
+    var ts = b.ts ? new Date(b.ts).toLocaleString() : '?';
+    html += '<div class="card" style="border-color:#38bdf833">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
+    html += '<span style="font-size:12px;font-weight:700;color:#38bdf8">' + escH(label) + ' — BOUNDARY</span>';
+    html += '<span style="font-size:9px;color:#64748b">' + escH(ts) + '</span></div>';
+
+    // Home vs Away side by side
+    ['home','away'].forEach(function(side){
+      var stats = b[side];
+      if(!stats) return;
+      var alias = side === 'home' ? (game ? (game.home_alias||'HOME') : 'HOME') : (game ? (game.away_alias||'AWAY') : 'AWAY');
+      html += '<div style="font-size:10px;font-weight:700;color:#a78bfa;margin:6px 0 2px">' + escH(alias) + ' (cumulative)</div>';
+      Object.keys(qdGroups).forEach(function(gName){
+        var fields = qdGroups[gName];
+        var vals = [];
+        fields.forEach(function(f){
+          if(stats[f] != null) vals.push(f.replace(/_/g,' ').replace('points in the paint','paint').replace('points in paint','paint').replace('offensive rebounds','oreb').replace('three points','3pt').replace('field goals','fg').replace('free throws','ft').replace('personal fouls','pf').replace('fast break points','fbp').replace('points off turnovers','pot').replace('second chance points','scp').replace('offensive points per possession','oppg').replace('defensive points per possession','dppg') + ': ' + (typeof stats[f] === 'number' && stats[f] % 1 !== 0 ? stats[f].toFixed(2) : stats[f]));
+        });
+        if(vals.length > 0){
+          html += '<div style="font-size:9px;color:#94a3b8;margin-left:4px"><span style="color:#64748b">' + gName + ':</span> ' + escH(vals.join(' · ')) + '</div>';
+        }
+      });
+    });
+    html += '</div>';
+  });
+
+  // ── Diff cards ──
+  if(dKeys.length > 0){
+    dKeys.forEach(function(dk){
+      var d = qd.diffs[dk];
+      html += '<div class="card" style="border-color:#ffd16633">';
+      html += '<div style="font-size:12px;font-weight:700;color:#ffd166;margin-bottom:6px">Q' + dk + ' DIFF (period-isolated)</div>';
+      ['home','away'].forEach(function(side){
+        var stats = d[side];
+        if(!stats) return;
+        var alias = side === 'home' ? (game ? (game.home_alias||'HOME') : 'HOME') : (game ? (game.away_alias||'AWAY') : 'AWAY');
+        html += '<div style="font-size:10px;font-weight:700;color:#a78bfa;margin:6px 0 2px">' + escH(alias) + ' (Q' + dk + ' only)</div>';
+        Object.keys(qdGroups).forEach(function(gName){
+          var fields = qdGroups[gName];
+          var vals = [];
+          fields.forEach(function(f){
+            if(stats[f] != null) vals.push(f.replace(/_/g,' ').replace('points in the paint','paint').replace('points in paint','paint').replace('offensive rebounds','oreb').replace('three points','3pt').replace('field goals','fg').replace('free throws','ft').replace('personal fouls','pf').replace('fast break points','fbp').replace('points off turnovers','pot').replace('second chance points','scp').replace('offensive points per possession','oppg').replace('defensive points per possession','dppg') + ': ' + (typeof stats[f] === 'number' && stats[f] % 1 !== 0 ? stats[f].toFixed(2) : stats[f]));
+          });
+          if(vals.length > 0){
+            html += '<div style="font-size:9px;color:#94a3b8;margin-left:4px"><span style="color:#64748b">' + gName + ':</span> ' + escH(vals.join(' · ')) + '</div>';
+          }
+        });
+      });
+      html += '</div>';
+    });
+  }
+
+  // ── Window card ──
+  if(hasWindow){
+    var w = qd.window;
+    html += '<div class="card" style="border-color:#00ff8833">';
+    html += '<div style="font-size:12px;font-weight:700;color:#00ff88;margin-bottom:6px">CROSS-FADE WINDOW</div>';
+    if(w.indicators){
+      var ind = w.indicators;
+      var indKeys = Object.keys(ind).sort();
+      indKeys.forEach(function(ik){
+        var val = ind[ik];
+        var vStr = typeof val === 'number' ? val.toFixed(3) : String(val);
+        var color = typeof val === 'number' ? (val > 0.55 ? '#00ff88' : val > 0.45 ? '#ffd166' : '#ff5252') : '#94a3b8';
+        html += '<div class="row"><span class="label">' + escH(ik) + '</span><span class="val" style="color:' + color + '">' + escH(vStr) + '</span></div>';
+      });
+    }
+    if(w.floor != null){
+      html += '<div class="row" style="border-top:1px solid #1e293b;padding-top:4px;margin-top:4px"><span class="label" style="font-weight:700">Floor Score</span><span class="val" style="color:#00ff88;font-weight:700">' + (typeof w.floor === 'number' ? w.floor.toFixed(3) : w.floor) + '</span></div>';
+    }
+    if(w.floorTeam){
+      html += '<div class="row"><span class="label">Floor Team</span><span class="val">' + escH(w.floorTeam) + '</span></div>';
+    }
+    html += '</div>';
+  }
+
+  // ── Raw JSON dump (collapsed) ──
+  html += '<div class="card" style="cursor:pointer" onclick="var el=document.getElementById(\'qd-raw-json\');el.style.display=el.style.display===\'none\'?\'block\':\'none\'">';
+  html += '<div style="font-size:11px;font-weight:700;color:#64748b">RAW JSON <span style="font-size:8px">TAP ▶</span></div>';
+  html += '</div>';
+  html += '<pre id="qd-raw-json" style="display:none;background:#0f172a;border:1px solid #1e293b;border-radius:4px;padding:8px;font-size:9px;color:#94a3b8;max-height:400px;overflow:auto;white-space:pre-wrap;word-break:break-all">' + escH(JSON.stringify(qd,null,2)) + '</pre>';
+
+  contentEl.innerHTML = html;
+  log('Quarter data loaded: ' + bKeys.length + ' boundaries, ' + dKeys.length + ' diffs, window: ' + (hasWindow?'YES':'NO'), 'log-ok');
+}
+
+// ── Quarter Data Overview (all loaded games) ──
+async function viewQuarterDataAll(){
+  if(!allGames || allGames.length === 0){
+    log('Load games first (NBA or NCAAMB)', 'log-warn');
+    return;
+  }
+  log('Fetching quarter_data for ' + allGames.length + ' games...', 'log-info');
+
+  var results = [];
+  for(var i = 0; i < allGames.length; i++){
+    var g = allGames[i];
+    try {
+      var data = await fetchJSON(FN + 'db-api?action=get_quarter_data&game_id=' + encodeURIComponent(g.id));
+      var qd = data && data.quarter_data;
+      results.push({game: g, qd: qd});
+    } catch(e){
+      results.push({game: g, qd: null, error: e.message});
+    }
+  }
+
+  var html = '<h2>📊 QUARTER DATA OVERVIEW — ' + qaLeague.toUpperCase() + ' (' + results.length + ' games)</h2>';
+
+  // Summary
+  var hasQD = results.filter(function(r){ return r.qd && r.qd.boundaries && Object.keys(r.qd.boundaries).length > 0; }).length;
+  var hasWindow = results.filter(function(r){ return r.qd && r.qd.window && r.qd.window.indicators; }).length;
+  var noQD = results.length - hasQD;
+
+  html += '<div class="card">';
+  html += '<div class="row"><span class="label">Total Games</span><span class="val">' + results.length + '</span></div>';
+  html += '<div class="row"><span class="label">Has Quarter Data</span><span class="val" style="color:' + (hasQD > 0 ? '#00ff88' : '#ff5252') + '">' + hasQD + '</span></div>';
+  html += '<div class="row"><span class="label">Has Window</span><span class="val" style="color:' + (hasWindow > 0 ? '#00ff88' : '#ffd166') + '">' + hasWindow + '</span></div>';
+  html += '<div class="row"><span class="label">No Data</span><span class="val" style="color:' + (noQD > 0 ? '#ffd166' : '#00ff88') + '">' + noQD + '</span></div>';
+  html += '</div>';
+
+  // Per-game table
+  results.forEach(function(r){
+    var g = r.game;
+    var qd = r.qd;
+    var label = (g.date||'?') + ' · ' + (g.matchup || g.away_alias + '@' + g.home_alias || g.id.substring(0,12));
+    if(g.home_pts && g.away_pts) label += ' · ' + g.away_pts + '-' + g.home_pts;
+
+    var bKeys = qd && qd.boundaries ? Object.keys(qd.boundaries).sort() : [];
+    var dKeys = qd && qd.diffs ? Object.keys(qd.diffs).sort() : [];
+    var hasW = qd && qd.window && qd.window.indicators;
+    var isFinal = !!g.winner;
+
+    // Health assessment
+    var health = 'NONE';
+    var healthColor = '#ff5252';
+    if(bKeys.length > 0){
+      if(isFinal){
+        // Final game should have baseline + all period ends
+        var isNcaa = qaLeague === 'ncaamb';
+        var expectedPeriods = isNcaa ? ['0','1','2'] : ['0','1','2','3','4'];
+        var missing = expectedPeriods.filter(function(p){ return bKeys.indexOf(p) === -1; });
+        if(missing.length === 0 && hasW){ health = 'COMPLETE'; healthColor = '#00ff88'; }
+        else if(missing.length === 0){ health = 'BOUNDARIES OK'; healthColor = '#66bb6a'; }
+        else { health = 'MISSING: ' + missing.join(','); healthColor = '#ffd166'; }
+      } else {
+        health = 'IN PROGRESS (' + bKeys.length + ' boundaries)';
+        healthColor = '#60a5fa';
+      }
+    }
+
+    html += '<div class="card" style="padding:6px">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:2px">';
+    html += '<span style="font-size:10px;color:#e2e8f0;font-weight:600">' + escH(label) + '</span>';
+    html += '<span style="font-size:9px;font-weight:700;color:' + healthColor + '">' + health + '</span>';
+    html += '</div>';
+    if(bKeys.length > 0){
+      html += '<div style="font-size:9px;color:#64748b;margin-top:2px">Boundaries: [' + bKeys.join(',') + '] · Diffs: [' + dKeys.join(',') + '] · Window: ' + (hasW ? '✓' : '—') + '</div>';
+      if(hasW && qd.window.floor != null){
+        html += '<div style="font-size:9px;color:#94a3b8;margin-top:1px">Floor: <span style="color:#00ff88;font-weight:700">' + (typeof qd.window.floor === 'number' ? qd.window.floor.toFixed(3) : qd.window.floor) + '</span>' + (qd.window.floorTeam ? ' (' + escH(qd.window.floorTeam) + ')' : '') + '</div>';
+      }
+    }
+    html += '</div>';
+  });
+
+  contentEl.innerHTML = html;
+  log('Quarter data overview: ' + hasQD + '/' + results.length + ' have data, ' + hasWindow + ' have window', 'log-ok');
 }
 
 // ── Calibration Dashboard ──
@@ -2328,6 +2549,117 @@ async function runQA(section){
       } catch(e){ bad('ODDS','error',e.message,snap({stack:e.stack})); }
     }
 
+    // 6. QUARTER DATA PIPELINE
+    if(runAll || section === 'quarter_data'){
+      try {
+        // Get all games to check (use loaded games or fetch)
+        var qdGames = allGames || [];
+        if(qdGames.length === 0){
+          meh('QD','no_games','Load games first (NBA or NCAAMB) to run QD pipeline QA');
+        } else {
+          // Filter to final games only for completeness checks
+          var finalGames = qdGames.filter(function(g){ return !!g.winner; });
+          var liveGames = qdGames.filter(function(g){ return !g.winner && g.status && g.status !== 'scheduled'; });
+          ok('QD','game_count', qdGames.length + ' total · ' + finalGames.length + ' final · ' + liveGames.length + ' live/other');
+
+          var hasData=0, noData=0, completeCount=0, missingBoundaries=0, missingDiffs=0, hasWindowCount=0, noWindowCount=0;
+          var badGames = [];
+          var isNcaa = qaLeague === 'ncaamb';
+          var expectedPeriods = isNcaa ? ['0','1','2'] : ['0','1','2','3','4'];
+          var expectedDiffs = isNcaa ? ['1','2'] : ['1','2','3','4'];
+
+          // Check each final game
+          for(var qi = 0; qi < finalGames.length; qi++){
+            var fg = finalGames[qi];
+            try {
+              var qdResp = await fetchJSON(FN + 'db-api?action=get_quarter_data&game_id=' + encodeURIComponent(fg.id));
+              var qd = qdResp && qdResp.quarter_data;
+              if(!qd || !qd.boundaries || Object.keys(qd.boundaries).length === 0){
+                noData++;
+                badGames.push({id:fg.id.substring(0,12), matchup:fg.matchup||'?', issue:'NO DATA'});
+                continue;
+              }
+              hasData++;
+
+              var bKeys = Object.keys(qd.boundaries).sort();
+              var dKeys = Object.keys(qd.diffs || {}).sort();
+
+              // Check boundary completeness
+              var missingB = expectedPeriods.filter(function(p){ return bKeys.indexOf(p) === -1; });
+              if(missingB.length > 0){
+                missingBoundaries++;
+                badGames.push({id:fg.id.substring(0,12), matchup:fg.matchup||'?', issue:'MISSING BOUNDARIES: '+missingB.join(','), have:bKeys.join(',')});
+              }
+
+              // Check diff completeness
+              var missingD = expectedDiffs.filter(function(p){ return dKeys.indexOf(p) === -1; });
+              if(missingD.length > 0){
+                missingDiffs++;
+                badGames.push({id:fg.id.substring(0,12), matchup:fg.matchup||'?', issue:'MISSING DIFFS: '+missingD.join(','), have:dKeys.join(',')});
+              }
+
+              // Check window
+              if(qd.window && qd.window.indicators) hasWindowCount++;
+              else noWindowCount++;
+
+              // Check each boundary has both home and away
+              bKeys.forEach(function(bk){
+                var b = qd.boundaries[bk];
+                if(!b.home || Object.keys(b.home).length === 0) badGames.push({id:fg.id.substring(0,12), matchup:fg.matchup||'?', issue:'EMPTY HOME STATS in boundary ' + bk});
+                if(!b.away || Object.keys(b.away).length === 0) badGames.push({id:fg.id.substring(0,12), matchup:fg.matchup||'?', issue:'EMPTY AWAY STATS in boundary ' + bk});
+              });
+
+              // Check diff integrity (no negative counts for count fields)
+              dKeys.forEach(function(dk){
+                var d = qd.diffs[dk];
+                if(!d) return;
+                ['home','away'].forEach(function(side){
+                  var stats = d[side];
+                  if(!stats) return;
+                  var negFields = [];
+                  ['steals','turnovers','offensive_rebounds','field_goals_made','field_goals_att','three_points_made','three_points_att','free_throws_att','assists','blocks','personal_fouls','possessions','points'].forEach(function(f){
+                    if(stats[f] != null && stats[f] < 0) negFields.push(f + '=' + stats[f]);
+                  });
+                  if(negFields.length > 0){
+                    badGames.push({id:fg.id.substring(0,12), matchup:fg.matchup||'?', issue:'NEGATIVE DIFF Q'+dk+' '+side+': '+negFields.join(', ')});
+                  }
+                });
+              });
+
+              // If all good for this game
+              if(missingB.length === 0 && missingD.length === 0) completeCount++;
+
+            } catch(e){
+              badGames.push({id:fg.id.substring(0,12), matchup:fg.matchup||'?', issue:'FETCH ERROR: '+e.message});
+            }
+          }
+
+          // Report results
+          if(finalGames.length === 0){
+            meh('QD','no_final','No finalized games to check');
+          } else {
+            if(hasData > 0) ok('QD','coverage', hasData + '/' + finalGames.length + ' final games have quarter_data');
+            if(noData > 0) bad('QD','missing', noData + '/' + finalGames.length + ' final games have NO quarter_data', snap(badGames.filter(function(b){return b.issue==='NO DATA';})));
+            if(completeCount > 0) ok('QD','complete', completeCount + '/' + hasData + ' have all expected boundaries+diffs');
+            if(missingBoundaries > 0) bad('QD','boundaries', missingBoundaries + ' games missing boundaries', snap(badGames.filter(function(b){return b.issue.indexOf('MISSING BOUNDARIES')===0;})));
+            if(missingDiffs > 0) bad('QD','diffs', missingDiffs + ' games missing diffs', snap(badGames.filter(function(b){return b.issue.indexOf('MISSING DIFFS')===0;})));
+            if(hasWindowCount > 0) ok('QD','window', hasWindowCount + '/' + hasData + ' have computed window');
+            if(noWindowCount > 0) meh('QD','window:missing', noWindowCount + ' games with data but no window (normal for final games if last poll had window)');
+
+            // Check for negative diffs
+            var negIssues = badGames.filter(function(b){return b.issue.indexOf('NEGATIVE DIFF')===0;});
+            if(negIssues.length > 0) bad('QD','integrity', negIssues.length + ' negative diff values detected', snap(negIssues));
+            else if(hasData > 0) ok('QD','integrity','No negative diff values — all diffs clean');
+
+            // Check for empty stats
+            var emptyIssues = badGames.filter(function(b){return b.issue.indexOf('EMPTY')===0;});
+            if(emptyIssues.length > 0) bad('QD','stats', emptyIssues.length + ' boundaries with empty home/away stats', snap(emptyIssues));
+            else if(hasData > 0) ok('QD','stats','All boundaries have home+away stats');
+          }
+        }
+      } catch(e){ bad('QD','error',e.message,snap({stack:e.stack})); }
+    }
+
   } catch(e){ bad('SYSTEM','fatal',e.message,snap({stack:e.stack})); }
 
   // RENDER RESULTS
@@ -2340,8 +2672,8 @@ async function runQA(section){
   h += '</div>';
   var groups={};
   results.forEach(function(r){if(!groups[r.group])groups[r.group]=[];groups[r.group].push(r);});
-  var groupColors={POLL:'#60a5fa',ANAL:'#a78bfa',SNAP:'#ffd166',BDL:'#fbbf24',ODDS:'#f5a62a',SIG:'#00ff88',SYSTEM:'#ff5252'};
-  var groupLabels={POLL:'SERVER POLLING',ANAL:'ANALYSES PIPELINE',SNAP:'SNAPSHOTS (TP/LS)',BDL:'BDL DATA TYPES',ODDS:'ODDS & EDGE',SIG:'SIGNAL DISTRIBUTION',SYSTEM:'SYSTEM'};
+  var groupColors={POLL:'#60a5fa',ANAL:'#a78bfa',SNAP:'#ffd166',BDL:'#fbbf24',ODDS:'#f5a62a',QD:'#38bdf8',SIG:'#00ff88',SYSTEM:'#ff5252'};
+  var groupLabels={POLL:'SERVER POLLING',ANAL:'ANALYSES PIPELINE',SNAP:'SNAPSHOTS (TP/LS)',BDL:'BDL DATA TYPES',ODDS:'ODDS & EDGE',QD:'QUARTER DATA PIPELINE',SIG:'SIGNAL DISTRIBUTION',SYSTEM:'SYSTEM'};
   Object.keys(groups).forEach(function(grp){
     var items=groups[grp];
     var gFail=items.filter(function(r){return r.status==='FAIL';}).length;
