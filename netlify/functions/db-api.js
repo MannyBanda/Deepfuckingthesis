@@ -1073,6 +1073,24 @@ exports.handler = async (event) => {
     }
 
     // ═══════════════════════════════════════════════════════
+    // GET_POLL_HISTORY — all poll_state rows for a league (last N days)
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_poll_history') {
+      const league = params.league || 'nba';
+      const limit = parseInt(params.limit) || 14;
+      try {
+        const rows = await sql`
+          SELECT league, date, first_tip, last_tip, game_count, all_final, fetched_at
+          FROM poll_state WHERE league = ${league}
+          ORDER BY date DESC LIMIT ${limit}
+        `;
+        return { statusCode: 200, headers, body: JSON.stringify({ history: rows }) };
+      } catch (e) {
+        return { statusCode: 200, headers, body: JSON.stringify({ history: [], error: e.message }) };
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════
     // GET_CALIBRATION — aggregate game outcomes vs framework predictions
     // ═══════════════════════════════════════════════════════
     if (action === 'get_calibration') {

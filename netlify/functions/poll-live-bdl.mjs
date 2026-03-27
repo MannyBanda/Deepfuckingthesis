@@ -270,16 +270,31 @@ async function bdlGameData(league, dateStr) {
   const cfg = LEAGUES[league];
   if (!cfg.bdlHasSeasonStats) return { teamIds: {}, gameIds: {} };
   // dateStr format: YYYY-MM-DD
-  const data = await bdlFetch(`${cfg.bdlPrefix}/v1/games?dates[]=${dateStr}&per_page=50`);
-  if (!data || !data.data) return { teamIds: {}, gameIds: {} };
+  // NCAAMB: BDL uses UTC dates, so late-ET games appear on the next UTC day.
+  // Fetch both the requested date and the next day, merge results.
+  const dates = [dateStr];
+  if (league === 'ncaamb') {
+    const dt = new Date(dateStr + 'T12:00:00Z');
+    dt.setUTCDate(dt.getUTCDate() + 1);
+    const nd = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth()+1).padStart(2,'0')}-${String(dt.getUTCDate()).padStart(2,'0')}`;
+    dates.push(nd);
+  }
   const teamIds = {}; // { 'LAL': 14, 'HOU': 11, ... }
   const gameIds = {}; // { 'HOU@LAL': 54321, ... } — keyed by matchup for SR→BDL mapping
-  for (const g of data.data) {
-    const hAbbr = g.home_team?.abbreviation;
-    const aAbbr = g.visitor_team?.abbreviation;
-    if (hAbbr && g.home_team?.id) teamIds[hAbbr] = g.home_team.id;
-    if (aAbbr && g.visitor_team?.id) teamIds[aAbbr] = g.visitor_team.id;
-    if (hAbbr && aAbbr && g.id) gameIds[`${aAbbr}@${hAbbr}`] = g.id;
+  for (const ds of dates) {
+    try {
+      const data = await bdlFetch(`${cfg.bdlPrefix}/v1/games?dates[]=${ds}&per_page=50`);
+      if (!data || !data.data) continue;
+      for (const g of data.data) {
+        const hAbbr = g.home_team?.abbreviation;
+        const aAbbr = g.visitor_team?.abbreviation;
+        if (hAbbr && g.home_team?.id) teamIds[hAbbr] = g.home_team.id;
+        if (aAbbr && g.visitor_team?.id) teamIds[aAbbr] = g.visitor_team.id;
+        if (hAbbr && aAbbr && g.id) gameIds[`${aAbbr}@${hAbbr}`] = g.id;
+      }
+    } catch (e) {
+      log(`bdlGameData ${ds} failed: ${e.message}`);
+    }
   }
   return { teamIds, gameIds };
 }
@@ -2456,6 +2471,16 @@ export default async function(req) {
         // box_scores/live may omit OT games
         const boxResult = await bdlFetch(`${cfg.bdlPrefix}/v1/box_scores?date=${bdlDateStr}`);
         bdlBoxScores = boxResult?.data || [];
+        // NCAAMB: BDL uses UTC dates — also fetch next day to catch late-ET games
+        if (league === 'ncaamb') {
+          const dt = new Date(bdlDateStr + 'T12:00:00Z');
+          dt.setUTCDate(dt.getUTCDate() + 1);
+          const nd = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth()+1).padStart(2,'0')}-${String(dt.getUTCDate()).padStart(2,'0')}`;
+          try {
+            const box2 = await bdlFetch(`${cfg.bdlPrefix}/v1/box_scores?date=${nd}`);
+            if (box2?.data) bdlBoxScores = bdlBoxScores.concat(box2.data);
+          } catch (e) { log(`BDL box_scores next-day ${nd} failed: ${e.message}`); }
+        }
         _serverBoxScoreCache = bdlBoxScores;
         _serverBoxScoreTime = Date.now();
         log(`BDL box_scores: ${bdlBoxScores.length} games`);
@@ -2518,6 +2543,34 @@ export default async function(req) {
             game.status = gameStatus;
             cacheUpdated = true;
             log(`${matchup}: FINAL — removed from active polling`);
+
+            // ── QUARTER DATA: capture game-end boundary before finalization ──
+            // This captures the final cumulative stats so the last period's diff is computable.
+            // NBA: boundary '4' (Q4 end). NCAAMB: boundary '4' (game end / H2 end).
+            try {
+              const playsResult = allPlaysResults[gi];
+              const plays = playsResult?.data || [];
+              const pbpResult = parseBDLPBPServer(plays, hA, aA);
+              const lineupsArr = _serverLineupsCache[bdlGid] || null;
+              const finalSummary = buildSummaryFromBDLServer(boxScore, pbpResult, lineupsArr);
+              const homeStats = finalSummary.home?.statistics || {};
+              const awayStats = finalSummary.away?.statistics || {};
+              if (Object.keys(homeStats).length > 0) {
+                const qd = await readQuarterData(sql, game.id);
+                // Determine last boundary key: NBA='4', NCAAMB='4' (game end)
+                const endKey = '4';
+                // Find the previous boundary key
+                const prevKey = league === 'ncaamb' ? '3' : '3';
+                if (!qd.boundaries[endKey]) {
+                  captureBoundary(qd, endKey, prevKey, homeStats, awayStats);
+                  await writeQuarterData(sql, game.id, qd);
+                  log(`${matchup}: ★ game-end quarter_data boundary[${endKey}] captured`);
+                }
+              }
+            } catch (e) {
+              log(`${matchup}: game-end quarter_data capture failed: ${e.message}`);
+            }
+
             if (espnMap[game.id]) {
               var finalWP = await espnWinProb(league, espnMap[game.id]);
             }
