@@ -2605,7 +2605,7 @@ async function refreshLiveCards(){
   });
   if(_preGamesPastTip.length > 0){
     try{
-      var _slateDate = getSlateDate(0).str;
+      var _slateDate = getSlateDate(dateOffset).str;
       var _boxAge = _now - _bdlBoxScoreCache.time;
       // Only re-fetch if cache is stale (>15s) to avoid hammering BDL
       if(!_bdlBoxScoreCache.data || _bdlBoxScoreCache.date !== _slateDate || _boxAge > 15000){
@@ -2655,7 +2655,7 @@ async function refreshLiveCards(){
   if(liveGames.length === 0) return;
 
   // ── BATCH BDL FETCH: one box_scores + parallel plays for all games ──
-  var slateDate = getSlateDate(0).str;
+  var slateDate = getSlateDate(dateOffset).str;
 
   // Refresh box scores (shared across all games, one call)
   try {
@@ -2845,7 +2845,7 @@ async function fetchSummary(game){
   const cs = cardState[game.id];
   if(!cs || cs.editing || cs.generating) return;
   // Ensure shared box score cache is fresh
-  var slateDate = getSlateDate(0).str;
+  var slateDate = getSlateDate(dateOffset).str;
   var boxAge = Date.now() - _bdlBoxScoreCache.time;
   if(!_bdlBoxScoreCache.data || _bdlBoxScoreCache.date !== slateDate || boxAge > 10000) {
     try {

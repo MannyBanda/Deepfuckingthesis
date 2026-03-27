@@ -1830,7 +1830,7 @@ async function refreshLiveCards(){
   });
   if(_preGamesPastTip.length > 0){
     try{
-      var _slateDate = getSlateDate(0).str;
+      var _slateDate = getSlateDate(dateOffset).str;
       var _boxAge = _now - _bdlGamesCache.time;
       if(!_bdlGamesCache.data || _bdlGamesCache.date !== _slateDate || _boxAge > 15000){
         var _freshArr = await bdlGamesBothDates(_slateDate);
@@ -1867,7 +1867,7 @@ async function refreshLiveCards(){
   if(liveGames.length === 0) return;
 
   // ── BATCH: fetch BDL games list (one call for ALL games — scores, status, clock) ──
-  var slateDate = getSlateDate(0).str;
+  var slateDate = getSlateDate(dateOffset).str;
   try {
     var cacheAge = Date.now() - _bdlGamesCache.time;
     if(!_bdlGamesCache.data || _bdlGamesCache.date !== slateDate || cacheAge > 10000) {
@@ -2056,7 +2056,7 @@ async function fetchSummary(game){
   if(!cs || cs.editing || cs.generating) return;
   if(!bdlGameMap[game.id]) return; // BDL coverage gap — skip
   // Ensure shared games cache is fresh
-  var slateDate = getSlateDate(0).str;
+  var slateDate = getSlateDate(dateOffset).str;
   var cacheAge = Date.now() - _bdlGamesCache.time;
   if(!_bdlGamesCache.data || _bdlGamesCache.date !== slateDate || cacheAge > 10000) {
     try {
