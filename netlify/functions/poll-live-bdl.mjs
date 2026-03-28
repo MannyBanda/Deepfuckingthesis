@@ -691,6 +691,33 @@ function parseBDLPBPServer(plays, homeAbbr, awayAbbr) {
   };
 }
 
+// Normalize BDL clock format — strips period prefix, handles sub-minute and special labels
+// BDL returns: "Q4 8:03", "Q3 :15.2", "END Q1", "Half", "Final", "PT04M32S", "8:03"
+function normalizeBdlClockServer(time) {
+  if (!time) return '';
+  if (time === 'Final' || time === 'final') return '00:00';
+  if (/^END\s|^Half/i.test(time)) return '0:00';
+  // Period-prefixed: "Q4 8:03" or "Q3 :15.2" or "OT1 3:22"
+  const qMatch = time.match(/^(?:Q\d+|OT\d?)\s+(.+)$/i);
+  if (qMatch) return normalizeBdlClockServer(qMatch[1]);
+  // Sub-minute: ":45.0" or ":08.9"
+  if (/^:\d/.test(time)) {
+    const secs = parseFloat(time.substring(1));
+    if (!isNaN(secs)) return '0:' + String(Math.floor(secs)).padStart(2, '0');
+  }
+  // Already MM:SS
+  if (/^\d{1,2}:\d{2}(\.\d)?$/.test(time)) return time;
+  // ISO duration PT04M32S
+  const iso = time.match(/PT(\d+)M(\d+)(?:\.(\d+))?S/);
+  if (iso) return iso[1] + ':' + iso[2].padStart(2, '0');
+  // Seconds only
+  if (/^\d+(\.\d+)?$/.test(time)) {
+    const sec = parseFloat(time);
+    return Math.floor(sec / 60) + ':' + String(Math.floor(sec % 60)).padStart(2, '0');
+  }
+  return time;
+}
+
 // Server-side buildSummaryFromBDL — builds SR summary shape from BDL box score + PBP
 function buildSummaryFromBDLServer(boxScore, pbpResult, lineupsArr) {
   const game = boxScore || {};
@@ -749,7 +776,7 @@ function buildSummaryFromBDLServer(boxScore, pbpResult, lineupsArr) {
   function bpa(bPlayers, sIds) { return bPlayers.map(p => { const pl = p.player || {}; const pid = pl.id || p.id; return { id: pid, full_name: ((pl.first_name || '') + ' ' + (pl.last_name || '')).trim(), position: pl.position || '', primary_position: pl.position || '', played: (p.min && p.min !== '0') || (p.pts > 0), active: true, starter: sIds.has(pid), on_court: false, statistics: { minutes: p.min || '0', field_goals_made: p.fgm || 0, field_goals_att: p.fga || 0, three_points_made: p.fg3m || 0, three_points_att: p.fg3a || 0, free_throws_made: p.ftm || 0, free_throws_att: p.fta || 0, offensive_rebounds: p.oreb || 0, defensive_rebounds: p.dreb || 0, rebounds: p.reb || 0, assists: p.ast || 0, steals: p.stl || 0, blocks: p.blk || 0, turnovers: p.turnover || 0, personal_fouls: p.pf || 0, points: p.pts || 0, pls_min: p.plus_minus || 0 } }; }); }
 
   const srSt = normalizeBdlStatusServer(game.status, game);
-  return { id: game.id, status: srSt, quarter: game.period || periods.length || 0, clock: game.time || '', lead_changes: lc, times_tied: tt, _dataSource: 'BDL',
+  return { id: game.id, status: srSt, quarter: game.period || periods.length || 0, clock: normalizeBdlClockServer(game.time) || '', lead_changes: lc, times_tied: tt, _dataSource: 'BDL',
     home: { name: homeTeam.name || '', alias: hA, market: homeTeam.city || '', id: homeTeam.id || '', points: game.home_team_score || homeStats.points, bonus: game.home_in_bonus || false, double_bonus: false, remaining_timeouts: game.home_timeouts_remaining ?? null, scoring: hScoring, statistics: homeStats, players: bpa(homePlayers, hSIds) },
     away: { name: awayTeam.name || '', alias: aA, market: awayTeam.city || '', id: awayTeam.id || '', points: game.visitor_team_score || awayStats.points, bonus: game.visitor_in_bonus || false, double_bonus: false, remaining_timeouts: game.visitor_timeouts_remaining ?? null, scoring: aScoring, statistics: awayStats, players: bpa(awayPlayers, aSIds) },
     periods };

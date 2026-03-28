@@ -639,7 +639,11 @@ exports.handler = async function(event) {
     if (bonusStatus && gamePeriod >= 1) {
       var clockMins = 12;
       if (gameClock) {
-        var cp = gameClock.split(':');
+        // Strip period prefix if present ("Q4 8:03" → "8:03", "Q3 :15.2" → ":15.2")
+        var cleanClock = gameClock.replace(/^(?:Q\d+|OT\d?)\s+/i, '');
+        if (/^END\s|^Half/i.test(gameClock)) cleanClock = '0:00';
+        if (/^:\d/.test(cleanClock)) cleanClock = '0' + cleanClock; // ":45.0" → "0:45.0"
+        var cp = cleanClock.split(':');
         clockMins = (parseInt(cp[0]) || 0) + (parseInt(cp[1] || 0) / 60);
       }
       var homeInBonus = bonusStatus.home || false;
