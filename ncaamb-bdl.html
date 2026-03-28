@@ -8445,7 +8445,7 @@ function renderCard(game){
         html+='<span style="font-size:6px;font-weight:700;color:'+_tpCol+';letter-spacing:.5px;white-space:nowrap">RECOVERY</span>';
         html+='<span style="font-size:6.5px;font-weight:600;color:'+_tpCol+'">'+esc(_tp.classification)+'</span>';
         if(_tpNeg){
-          html+='<span style="font-size:7px;font-weight:700;color:var(--red)">NO ENGINE</span>';
+          html+='<span style="font-size:7px;font-weight:700;color:var(--red)">NO ENGINE '+fmtSwing(_tpCon)+' / '+fmtSwing(_tpExp)+' / '+fmtSwing(_tpOpt)+'</span>';
         } else {
           html+='<span style="font-size:7px;font-weight:700;color:'+_tpConCol+'">'+fmtSwing(_tpCon)+' / '+fmtSwing(_tpExp)+' / '+fmtSwing(_tpOpt)+'</span>';
         }
@@ -8464,7 +8464,7 @@ function renderCard(game){
         html+='<span style="font-size:6px;font-weight:700;color:'+_lsCol+';letter-spacing:.5px;white-space:nowrap">HOLD</span>';
         html+='<span style="font-size:6.5px;font-weight:600;color:'+_lsCol+'">'+esc(_ls.classification)+'</span>';
         if(_lsNeg){
-          html+='<span style="font-size:7px;font-weight:700;color:var(--green)">LEAD EXPANDING</span>';
+          html+='<span style="font-size:7px;font-weight:700;color:var(--green)">EXPANDING '+fmtSwing(_lsCon)+' / '+fmtSwing(_lsExp)+' / '+fmtSwing(_lsOpt)+'</span>';
         } else {
           html+='<span style="font-size:7px;font-weight:700;color:'+_lsSwingCol+'">'+fmtSwing(_lsCon)+' / '+fmtSwing(_lsExp)+' / '+fmtSwing(_lsOpt)+'</span>';
         }
