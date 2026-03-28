@@ -99,7 +99,7 @@ input,textarea,select{font-size:16px!important;}
 .dq{font-size:6px;letter-spacing:1px;padding:1px 4px;border:1px solid;color:var(--green);border-color:var(--green);border-radius:var(--radius-xs);}
 
 .inds{padding:6px 11px;border-bottom:1px solid var(--b1);}
-.ind{display:flex;align-items:center;gap:4px;padding:2px 0;border-bottom:1px solid var(--b1);}
+.ind{display:flex;align-items:flex-start;gap:4px;padding:2px 0;border-bottom:1px solid var(--b1);flex-wrap:wrap;}
 .ind:last-child{border:none;}
 .ii{font-size:6px;color:var(--t3);width:14px;flex-shrink:0;}
 .in{font-size:6px;color:var(--t2);width:78px;flex-shrink:0;}
@@ -107,7 +107,7 @@ input,textarea,select{font-size:16px!important;}
 .pip{width:5px;height:5px;border-radius:1px;flex-shrink:0;}
 .pw{background:#00ff88;}.plw{background:#a8ff78;}.pd{background:var(--yellow);}.pll{background:#ff8c42;}.pl{background:var(--red);}
 .il{font-size:7px;font-weight:600;width:26px;flex-shrink:0;}
-.id{font-size:6px;color:var(--t2);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.id{font-size:6px;color:var(--t2);flex:1;line-height:1.4;}
 
 .traj{padding:6px 11px;border-bottom:1px solid var(--b1);}
 .th{font-size:6px;color:var(--t2);letter-spacing:1.5px;text-transform:uppercase;display:flex;align-items:center;margin-bottom:3px;gap:4px;flex-wrap:wrap;}
@@ -2351,6 +2351,20 @@ async function triggerAnalysis(game){
       const od = cs.oddsData;
       if(od && (od.homeML || od.awayML)){
         const mlToProb = (ml) => { const n=parseFloat(ml); if(isNaN(n)||n===0) return null; return n<0?Math.abs(n)/(Math.abs(n)+100):100/(n+100); };
+        // Garbage guard: dead lines produce meaningless MIP/edge
+        const _absH = Math.abs(parseFloat(od.homeML) || 0), _absA = Math.abs(parseFloat(od.awayML) || 0);
+        const _isGarbage = (_absH >= 50000 || _absA >= 50000) || (od.homeML === od.awayML && od.homeML != null);
+        if(_isGarbage){
+          var _aSprdG = od.homeSpread ? parseFloat(od.homeSpread)*-1 : null;
+          var _aSprdGStr = _aSprdG!==null&&!isNaN(_aSprdG) ? (_aSprdG>0?'+':'')+_aSprdG : '—';
+          decision.homeValue = {team:hAlias, fwp:homeFWP, mip:null, edge:null, ml:od.homeML||'—', spread:od.homeSpread||'—'};
+          decision.awayValue = {team:aAlias, fwp:awayFWP, mip:null, edge:null, ml:od.awayML||'—', spread:_aSprdGStr};
+          decision.edge = 'Line dead';
+          decision.edgeNum = null;
+          decision.mip = 'N/A';
+          decision.garbageLine = true;
+          console.log('FWP (Sonnet, line dead): '+hAlias+' '+homeFWP.toFixed(1)+'% '+aAlias+' '+awayFWP.toFixed(1)+'% — ML '+od.homeML+'/'+od.awayML);
+        } else {
         const rawH = mlToProb(od.homeML), rawA = mlToProb(od.awayML);
         if(rawH!==null && rawA!==null){
           const vigSum = rawH + rawA;
@@ -2365,6 +2379,7 @@ async function triggerAnalysis(game){
           decision.edgeNum = parseFloat(edge.toFixed(1));
           decision.mip = winnerMIP.toFixed(1)+'%';
           console.log('FWP (Sonnet): '+hAlias+' '+homeFWP.toFixed(1)+'%/'+homeMIP.toFixed(1)+'% '+aAlias+' '+awayFWP.toFixed(1)+'%/'+awayMIP.toFixed(1)+'%');
+        }
         }
       } else {
         // No odds — set FWP values without edge
@@ -5263,6 +5278,9 @@ function synthesize(game){
     } else if(ctrlEdge !== null && ctrlEdge <= 0){
       action = 'NO VALUE'; actionColor = 'var(--t2)';
       lines.push(fTeam + ' leads by ' + deficit + '. Edge ' + (ctrlEdge >= 0 ? '+' : '') + ctrlEdge.toFixed(1) + '% — market already prices advantage.');
+    } else if(_pred && _pred.garbageLine){
+      action = 'NO VALUE'; actionColor = 'var(--t2)';
+      lines.push(fTeam + ' leads by ' + deficit + '. Line dead — market not pricing actionable odds.');
     } else {
       // No edge data yet (no odds or no analysis)
       action = 'DEVELOPING'; actionColor = 'var(--yellow)';
@@ -8474,6 +8492,13 @@ function renderCard(game){
       const od = cs.oddsData;
       if(od && (od.homeML || od.awayML)){
         const _mlP = (ml) => { const n=parseFloat(ml); if(isNaN(n)||n===0) return null; return n<0?Math.abs(n)/(Math.abs(n)+100):100/(n+100); };
+        const _absHR = Math.abs(parseFloat(od.homeML) || 0), _absAR = Math.abs(parseFloat(od.awayML) || 0);
+        const _isGarbageR = (_absHR >= 50000 || _absAR >= 50000) || (od.homeML === od.awayML && od.homeML != null);
+        if(_isGarbageR){
+          pred.homeValue.mip=null; pred.homeValue.edge=null;
+          pred.awayValue.mip=null; pred.awayValue.edge=null;
+          pred.edge='Line dead'; pred.edgeNum=null; pred.mip='N/A'; pred.garbageLine=true;
+        } else {
         const rH=_mlP(od.homeML), rA=_mlP(od.awayML);
         if(rH!==null && rA!==null){
           const vs=rH+rA, hMIP=rH/vs*100, aMIP=rA/vs*100;
@@ -8486,6 +8511,8 @@ function renderCard(game){
           pred.edge=(edge>=0?'+':'')+edge.toFixed(1)+'%';
           pred.edgeNum=parseFloat(edge.toFixed(1));
           pred.mip=wMIP.toFixed(1)+'%';
+          pred.garbageLine=false;
+        }
         }
       }
     }
