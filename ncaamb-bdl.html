@@ -5311,17 +5311,17 @@ function synthesize(game){
 
     if(tpClass === 'STRONG RECOVERY' || tpClass === 'PROBABLE'){
       // Math works — add confirmation to narrative
-      lines.push('Engine +' + Math.round(conSwing) + ' / +' + Math.round(expSwing) + ' / +' + Math.round(optSwing) + ' vs ' + deficit + ' deficit (' + throughput.remainingPoss + ' poss) — ' + tpClass + '.');
+      lines.push('Engine ' + fmtSwing(conSwing) + ' / ' + fmtSwing(expSwing) + ' / ' + fmtSwing(optSwing) + ' vs ' + deficit + ' deficit (' + throughput.remainingPoss + ' poss) — ' + tpClass + '.');
     } else if(tpClass === 'CONTESTED'){
       // Grey zone — downgrade BUY to WATCH, LEAN BUY to WATCH
       if(action === 'BUY'){ action = 'WATCH'; actionColor = 'var(--amber)'; }
       else if(action === 'LEAN BUY'){ action = 'WATCH'; actionColor = 'var(--amber)'; }
-      lines.push('Engine +' + Math.round(conSwing) + ' / +' + Math.round(expSwing) + ' / +' + Math.round(optSwing) + ' vs ' + deficit + ' deficit — CONTESTED recovery, math uncertain.');
+      lines.push('Engine ' + fmtSwing(conSwing) + ' / ' + fmtSwing(expSwing) + ' / ' + fmtSwing(optSwing) + ' vs ' + deficit + ' deficit — CONTESTED recovery, math uncertain.');
       triggers.push('Deficit narrows or structural rate increases');
     } else if(tpClass === 'UNLIKELY' || tpClass === 'NO PATH'){
       // Engine can't close — force TOO DEEP regardless of floor score
       action = 'TOO DEEP'; actionColor = 'var(--red)';
-      lines.push('Engine +' + Math.round(conSwing) + ' / +' + Math.round(expSwing) + ' / +' + Math.round(optSwing) + ' vs ' + deficit + ' deficit — ' + tpClass + '. Structural ceiling below variance floor.');
+      lines.push('Engine ' + fmtSwing(conSwing) + ' / ' + fmtSwing(expSwing) + ' / ' + fmtSwing(optSwing) + ' vs ' + deficit + ' deficit — ' + tpClass + '. Structural ceiling below variance floor.');
       // Clear existing triggers (they're stale now)
       triggers.length = 0;
       triggers.push('Deficit compresses significantly');
@@ -5350,16 +5350,16 @@ function synthesize(game){
     if(action === 'BUY WINDOW CLOSING'){
       if(lsClass === 'AT RISK' || lsClass === 'CRITICAL'){
         action = 'WATCH'; actionColor = 'var(--amber)';
-        lines.push('Lead ' + lsClass + ' — ' + lsOppTeam + ' engine projects +' + lsCon + ' / +' + lsExp + ' / +' + lsOpt + ' vs ' + lsLead + ' lead (' + leadSafety.remainingPoss + ' poss). Lead erosion threatens position.');
+        lines.push('Lead ' + lsClass + ' — ' + lsOppTeam + ' engine projects ' + fmtSwing(lsCon) + ' / ' + fmtSwing(lsExp) + ' / ' + fmtSwing(lsOpt) + ' vs ' + lsLead + ' lead (' + leadSafety.remainingPoss + ' poss). Lead erosion threatens position.');
         triggers.push('Lead erosion — opponent engine projects recovery');
         triggers.push('Opponent may become the play if variance collapses');
       } else {
-        lines.push('Lead ' + lsClass + ' — ' + lsOppTeam + ' recovery engine projects +' + lsCon + ' / +' + lsExp + ' / +' + lsOpt + ' vs ' + lsLead + ' lead. Position durable.');
+        lines.push('Lead ' + lsClass + ' — ' + lsOppTeam + ' recovery engine projects ' + fmtSwing(lsCon) + ' / ' + fmtSwing(lsExp) + ' / ' + fmtSwing(lsOpt) + ' vs ' + lsLead + ' lead. Position durable.');
       }
     } else if(action === 'NO VALUE'){
       if(lsClass === 'AT RISK' || lsClass === 'CRITICAL'){
         action = 'WATCH'; actionColor = 'var(--amber)';
-        lines.push('No edge on ' + fTeam + ' but lead ' + lsClass + ' — ' + lsOppTeam + ' recovery engine projects +' + lsCon + ' / +' + lsExp + ' / +' + lsOpt + ' vs ' + lsLead + ' lead.');
+        lines.push('No edge on ' + fTeam + ' but lead ' + lsClass + ' — ' + lsOppTeam + ' recovery engine projects ' + fmtSwing(lsCon) + ' / ' + fmtSwing(lsExp) + ' / ' + fmtSwing(lsOpt) + ' vs ' + lsLead + ' lead.');
         triggers.push('Opponent may become the play if variance collapses');
       }
     }
@@ -5948,6 +5948,9 @@ function computeLeadCompositionClient(game, sustData){
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// Format swing value with correct sign — prevents "+-8" display bug
+function fmtSwing(v){ var n = Math.round(v); return n >= 0 ? '+'+n : ''+n; }
+
 // SWING CORE — shared 4-direction variance engine for throughput + lead safety
 // ══════════════════════════════════════════════════════════════════════════════
 function computeSwingCore(focalStats, targetStats, focalSustData, targetSustData, deficit, minsLeft, minsElapsed, gameFraction, sznDefault){
@@ -7542,7 +7545,11 @@ function renderConfidenceTable(){
     const tpClass = tpData?.classification || null;
     const tpConSwing = tpData?.conservative?.totalSwing || null;
     const tpDeficit = tpData?.deficit || null;
-    const row = {matchup, team, score, verdict, gameId:g.id, state, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, hA, aA, entryIf:p.entry||null, passIf:p.pass||null, fwpTeamAlias, fwpTeamEdge, fwpTeamFwp, fwpTeamEntry, signal, windowScore, windowTeam, gapVal, accelLabel, combinedReadLabel, tpClass, tpConSwing, tpDeficit};
+    const lsData = cs?.leadSafety;
+    const lsClass = lsData?.classification || null;
+    const lsConSwing = lsData?.conservative?.totalSwing || null;
+    const lsLead = lsData?.lead || null;
+    const row = {matchup, team, score, verdict, gameId:g.id, state, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, hA, aA, entryIf:p.entry||null, passIf:p.pass||null, fwpTeamAlias, fwpTeamEdge, fwpTeamFwp, fwpTeamEntry, signal, windowScore, windowTeam, gapVal, accelLabel, combinedReadLabel, tpClass, tpConSwing, tpDeficit, lsClass, lsConSwing, lsLead};
     // Persist live data to cache whenever we have analysis results or fresh live sustainability
     if(pred || si || (state==='LIVE' && (sustHome || sustAway))){
       persistConfRow(g.id, {team, score, verdict, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, state, fwpTeamAlias, fwpTeamEdge, fwpTeamFwp, fwpTeamEntry, signal:csPred?.signalType||null, ts:Date.now()});
@@ -7707,7 +7714,7 @@ function renderConfidenceTable(){
       + '<td style="font-size:7px;text-align:center;white-space:nowrap">'+edgeDispStr+'</td>'
       + '<td style="font-size:6px;text-align:center;white-space:nowrap">'+entryStr+'</td>'
       + '<td class="ct-score" style="color:'+vColor(r.verdict)+'">'+r.score.toFixed(2)+'<div class="ct-verdict" style="color:'+vColor(r.verdict)+'">'+esc(r.team||'')+'</div></td>'
-      + '<td style="text-align:center;font-size:7px;white-space:nowrap">'+(r.tpConSwing!=null?'<span style="font-weight:600;color:'+(r.tpConSwing>=r.tpDeficit?'var(--green)':r.tpConSwing>=r.tpDeficit*0.6?'var(--yellow)':'var(--red)')+'">+'+Math.round(r.tpConSwing)+'</span><span style="color:var(--t3);font-size:5.5px"> vs '+r.tpDeficit+'</span>':'<span style="color:var(--t3)">&#8212;</span>')+'</td>'
+      + '<td style="text-align:center;font-size:7px;white-space:nowrap">'+(r.tpConSwing!=null?'<span style="font-weight:600;color:'+(r.tpConSwing>=r.tpDeficit?'var(--green)':r.tpConSwing>=r.tpDeficit*0.6?'var(--yellow)':'var(--red)')+'">'+fmtSwing(r.tpConSwing)+'</span><span style="color:var(--t3);font-size:5.5px"> vs '+r.tpDeficit+'</span>':r.lsClass!=null?'<span style="font-weight:600;font-size:5.5px;color:'+(r.lsClass==='SAFE'?'var(--green)':r.lsClass==='CUSHIONED'?'var(--g2)':r.lsClass==='AT RISK'?'var(--amber)':'var(--red)')+'">'+r.lsClass+'</span><span style="color:var(--t3);font-size:5px"> '+fmtSwing(r.lsConSwing)+' vs '+r.lsLead+'</span>':'<span style="color:var(--t3)">&#8212;</span>')+'</td>'
       + '<td style="text-align:center;font-size:7px">'+(r.windowScore!=null?'<span style="font-weight:600;color:'+(r.windowScore>=0.75?'var(--g2)':r.windowScore>=0.60?'var(--yellow)':'var(--t3)')+'">'+r.windowScore.toFixed(2)+'</span>':'<span style="color:var(--t3)">&#8212;</span>')+'</td>'
       + '<td style="text-align:center;font-size:7px">'+(r.gapVal!=null?'<span style="color:'+(r.gapVal>0.03?'var(--green)':r.gapVal<-0.03?'var(--amber)':'var(--t3)')+'">'+(r.gapVal>=0?'+':'')+r.gapVal.toFixed(2)+'</span>'+(r.accelLabel&&r.accelLabel!=='TOO EARLY'&&r.accelLabel!=='STABLE'?' <span style="font-size:5px;color:'+(r.accelLabel==='GROWING'?'var(--green)':r.accelLabel==='DECLINING'?'var(--amber)':r.accelLabel==='FLIPPED'?'var(--red)':'var(--t3)')+'">'+({'GROWING':'▲','DECLINING':'▼','FLIPPED':'⟳','NEW_PHASE':'◆'}[r.accelLabel]||'')+'</span>':''):'<span style="color:var(--t3)">&#8212;</span>')+'</td>'
       + '<td style="font-size:6px;text-align:center">'+tsStr+'</td>'
@@ -8413,11 +8420,17 @@ function renderCard(game){
       if(synth.throughput){
         var _tp = synth.throughput;
         var _tpCol = _tp.classification==='STRONG RECOVERY'?'var(--green)':_tp.classification==='PROBABLE'?'var(--g2)':_tp.classification==='CONTESTED'?'var(--yellow)':_tp.classification==='UNLIKELY'?'var(--amber)':'var(--red)';
-        var _tpConCol = _tp.conservative.totalSwing >= _tp.deficit ? 'var(--green)' : _tp.expected.totalSwing >= _tp.deficit ? 'var(--yellow)' : 'var(--red)';
+        var _tpCon = Math.round(_tp.conservative.totalSwing), _tpExp = Math.round(_tp.expected.totalSwing), _tpOpt = Math.round(_tp.optimistic.totalSwing);
+        var _tpNeg = _tpCon <= 0 && _tpExp <= 0;
+        var _tpConCol = _tpNeg ? 'var(--red)' : _tp.conservative.totalSwing >= _tp.deficit ? 'var(--green)' : _tp.expected.totalSwing >= _tp.deficit ? 'var(--yellow)' : 'var(--red)';
         html+='<div style="display:flex;align-items:center;gap:6px;padding:4px 7px;margin-bottom:4px;border-radius:4px;border:1px solid '+_tpCol+';background:rgba(255,255,255,.02)">';
         html+='<span style="font-size:6px;font-weight:700;color:'+_tpCol+';letter-spacing:.5px;white-space:nowrap">RECOVERY</span>';
         html+='<span style="font-size:6.5px;font-weight:600;color:'+_tpCol+'">'+esc(_tp.classification)+'</span>';
-        html+='<span style="font-size:7px;font-weight:700;color:'+_tpConCol+'">+'+Math.round(_tp.conservative.totalSwing)+' / +'+Math.round(_tp.expected.totalSwing)+' / +'+Math.round(_tp.optimistic.totalSwing)+'</span>';
+        if(_tpNeg){
+          html+='<span style="font-size:7px;font-weight:700;color:var(--red)">NO ENGINE</span>';
+        } else {
+          html+='<span style="font-size:7px;font-weight:700;color:'+_tpConCol+'">'+fmtSwing(_tpCon)+' / '+fmtSwing(_tpExp)+' / '+fmtSwing(_tpOpt)+'</span>';
+        }
         html+='<span style="font-size:6.5px;color:var(--t2)">vs '+_tp.deficit+' deficit</span>';
         html+='<span style="font-size:5.5px;color:var(--t3)">~'+_tp.remainingPoss+' poss</span>';
         html+='</div>';
@@ -8435,7 +8448,7 @@ function renderCard(game){
         if(_lsNeg){
           html+='<span style="font-size:7px;font-weight:700;color:var(--green)">LEAD EXPANDING</span>';
         } else {
-          html+='<span style="font-size:7px;font-weight:700;color:'+_lsSwingCol+'">+'+_lsCon+' / +'+_lsExp+' / +'+_lsOpt+'</span>';
+          html+='<span style="font-size:7px;font-weight:700;color:'+_lsSwingCol+'">'+fmtSwing(_lsCon)+' / '+fmtSwing(_lsExp)+' / '+fmtSwing(_lsOpt)+'</span>';
         }
         html+='<span style="font-size:6.5px;color:var(--t2)">vs '+_ls.lead+' lead</span>';
         html+='<span style="font-size:5.5px;color:var(--t3)">~'+_ls.remainingPoss+' poss</span>';
