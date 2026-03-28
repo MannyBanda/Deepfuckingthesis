@@ -6074,7 +6074,7 @@ function computeThroughput(game){
   var minsLeft = clockMins + (periodsLeft * PERIOD_MINUTES);
   var minsElapsed = Math.max(1, GAME_MINUTES - minsLeft);
   var gameFraction = Math.min(1, minsLeft / GAME_MINUTES);
-  if(minsLeft < 2 || isNaN(minsLeft)) return null;
+  if(minsLeft < 0.3 || isNaN(minsLeft)) return null;
   if(minsElapsed < 10) return null; // need ~10 min of data (synthetic Q2)
 
   var hs = s.home?.statistics || s.home || {};
@@ -6136,7 +6136,7 @@ function computeLeadSafety(game){
   var minsLeft = clockMins + (periodsLeft * PERIOD_MINUTES);
   var minsElapsed = Math.max(1, GAME_MINUTES - minsLeft);
   var gameFraction = Math.min(1, minsLeft / GAME_MINUTES);
-  if(minsLeft < 2 || isNaN(minsLeft)) return null;
+  if(minsLeft < 0.3 || isNaN(minsLeft)) return null;
   if(minsElapsed < 10) return null; // need ~10 min of data (synthetic Q2)
 
   var hs = s.home?.statistics || s.home || {};

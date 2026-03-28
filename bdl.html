@@ -7278,7 +7278,7 @@ function computeThroughput(game){
   var minsLeft = clockMins + (quartersLeft * PERIOD_MINUTES);
   var minsElapsed = Math.max(1, GAME_MINUTES - minsLeft);
   var gameFraction = Math.min(1, minsLeft / GAME_MINUTES);
-  if(minsLeft < 2 || isNaN(minsLeft)) return null;
+  if(minsLeft < 0.3 || isNaN(minsLeft)) return null;
 
   // ── STATS ──
   var hs = s.home?.statistics || s.home || {};
@@ -7346,7 +7346,7 @@ function computeLeadSafety(game){
   var minsLeft = clockMins + (quartersLeft * PERIOD_MINUTES);
   var minsElapsed = Math.max(1, GAME_MINUTES - minsLeft);
   var gameFraction = Math.min(1, minsLeft / GAME_MINUTES);
-  if(minsLeft < 2 || isNaN(minsLeft)) return null;
+  if(minsLeft < 0.3 || isNaN(minsLeft)) return null;
 
   // ── STATS — focal is the OPPONENT (trailing, trying to recover) ──
   var hs = s.home?.statistics || s.home || {};
