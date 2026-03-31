@@ -1383,6 +1383,176 @@ function computeLeadComposition(summary) {
   return { classification, leadTeam, structuralMargin: leadStruct, varianceMargin: leadVar };
 }
 
+// ── THROUGHPUT / LEAD SAFETY (ported from client) ──────────────────────────
+// Pure math — no API calls, no DB queries. All inputs from poll loop.
+
+function computeSwingCoreServer(focalStats, targetStats, focalSustData, targetSustData, deficit, minsLeft, minsElapsed, gameFraction, sznDefault) {
+  var focalPoss = Number(focalStats.possessions) || 0;
+  var targetPoss = Number(targetStats.possessions) || 0;
+  if (focalPoss < 3) focalPoss = (Number(focalStats.field_goals_att)||0) + 0.44*(Number(focalStats.free_throws_att)||0) - (Number(focalStats.offensive_rebounds)||0) + (Number(focalStats.turnovers||focalStats.total_turnovers)||0);
+  if (targetPoss < 3) targetPoss = (Number(targetStats.field_goals_att)||0) + 0.44*(Number(targetStats.free_throws_att)||0) - (Number(targetStats.offensive_rebounds)||0) + (Number(targetStats.turnovers||targetStats.total_turnovers)||0);
+  if (focalPoss < 5 || targetPoss < 5 || isNaN(focalPoss) || isNaN(targetPoss)) return null;
+
+  function structRate(st, poss) {
+    var paint = Number(st.points_in_the_paint || st.points_in_paint) || 0;
+    var ft = Number(st.free_throws_made) || 0;
+    var pot = Number(st.points_off_turnovers) || 0;
+    var scp = Number(st.second_chance_points || st.second_chance_pts) || 0;
+    return (paint + ft + pot + scp) / poss;
+  }
+  var focalStructRate = structRate(focalStats, focalPoss);
+  var targetStructRate = structRate(targetStats, targetPoss);
+  var structEdge = focalStructRate - targetStructRate;
+
+  function getVarData(sustObj, stats, poss) {
+    if (!sustObj) return { deviation: 0, threePARate: 0, live3Pct: 0, sznPct: sznDefault };
+    var livePct = parseFloat(sustObj.live3Pct || 0);
+    var sznPct = parseFloat(sustObj.seasonPrior || sustObj.seasonBaseline || sznDefault);
+    var dev = livePct - sznPct;
+    var tpaRate = poss > 0 ? (Number(stats.three_points_att) || 0) / poss : 0;
+    return { deviation: dev, threePARate: tpaRate, live3Pct: livePct, sznPct: sznPct };
+  }
+  var focalVar = getVarData(focalSustData, focalStats, focalPoss);
+  var targetVar = getVarData(targetSustData, targetStats, targetPoss);
+
+  var avgPoss = (focalPoss + targetPoss) / 2;
+  var possPerMin = avgPoss / minsElapsed;
+  var remainingPoss = possPerMin * minsLeft;
+  if (isNaN(remainingPoss) || remainingPoss < 1) return null;
+
+  var degradation = 1.0;
+  if (deficit >= 24) degradation = 0.70;
+  else if (deficit >= 18) degradation = 0.85;
+
+  var bandDefs = [
+    { label: 'conservative', baseRate: 0.40 },
+    { label: 'expected',     baseRate: 0.65 },
+    { label: 'optimistic',   baseRate: 0.90 },
+  ];
+  var bands = bandDefs.map(function(band) {
+    var appliedRegression = band.baseRate * gameFraction;
+    var targetCooling = targetVar.deviation > 0 ? (targetVar.deviation / 100) * appliedRegression * targetVar.threePARate * 3 : 0;
+    var focalHeating = focalVar.deviation < 0 ? (Math.abs(focalVar.deviation) / 100) * appliedRegression * focalVar.threePARate * 3 : 0;
+    var targetHeating = targetVar.deviation < 0 ? (Math.abs(targetVar.deviation) / 100) * appliedRegression * targetVar.threePARate * 3 : 0;
+    var focalCooling = focalVar.deviation > 0 ? (focalVar.deviation / 100) * appliedRegression * focalVar.threePARate * 3 : 0;
+    var netSwingPerPoss = (structEdge * degradation) + targetCooling + focalHeating - targetHeating - focalCooling;
+    var totalSwing = netSwingPerPoss * remainingPoss;
+    var ratio = deficit > 0 ? totalSwing / deficit : 0;
+    return { label: band.label, ratio: Math.round(ratio * 100) / 100, totalSwing: Math.round(totalSwing * 10) / 10, netSwingPerPoss: Math.round(netSwingPerPoss * 1000) / 1000 };
+  });
+  if (isNaN(bands[0].totalSwing) || isNaN(bands[1].totalSwing) || isNaN(remainingPoss)) return null;
+
+  return { bands, focalStructRate: Math.round(focalStructRate * 1000) / 1000, targetStructRate: Math.round(targetStructRate * 1000) / 1000,
+    structEdge: Math.round(structEdge * 1000) / 1000, focalVar, targetVar, remainingPoss: Math.round(remainingPoss), degradation };
+}
+
+function computeThroughputServer(summary, ind, sust, hA, aA, period, clock, league) {
+  if (!summary || !summary.home || !summary.away || period < 2) return null;
+  if (!ind || !ind.score) return null;
+  var fTeam = ind.controlTeam;
+  var ctrlIsHome = fTeam === hA;
+  var hPts = summary.home?.points || 0, aPts = summary.away?.points || 0;
+  var ctrlPts = ctrlIsHome ? hPts : aPts;
+  var oppPts = ctrlIsHome ? aPts : hPts;
+  var deficit = oppPts - ctrlPts;
+  if (deficit <= 0) return null; // not trailing
+
+  var PERIOD_MINUTES = league === 'ncaamb' ? 20 : 12;
+  var GAME_MINUTES = league === 'ncaamb' ? 40 : 48;
+  var totalPeriods = league === 'ncaamb' ? 2 : 4;
+  var clockParts = (clock || '').split(':');
+  var clockMins = clockParts.length === 2 ? (parseInt(clockParts[0]) || 0) + ((parseInt(clockParts[1]) || 0) / 60) : PERIOD_MINUTES;
+  var periodsLeft = Math.max(0, totalPeriods - period);
+  var minsLeft = clockMins + (periodsLeft * PERIOD_MINUTES);
+  var minsElapsed = Math.max(1, GAME_MINUTES - minsLeft);
+  var gameFraction = Math.min(1, minsLeft / GAME_MINUTES);
+  if (minsLeft < 0.3 || isNaN(minsLeft)) return null;
+
+  var hs = summary.home?.statistics || {};
+  var as = summary.away?.statistics || {};
+  var focalStats = ctrlIsHome ? hs : as;
+  var targetStats = ctrlIsHome ? as : hs;
+  var sznDefault = league === 'ncaamb' ? 33 : 36;
+
+  var focalSustData = sust ? (ctrlIsHome ? sust.home : sust.away) : null;
+  var targetSustData = sust ? (ctrlIsHome ? sust.away : sust.home) : null;
+
+  var core = computeSwingCoreServer(focalStats, targetStats, focalSustData, targetSustData, deficit, minsLeft, minsElapsed, gameFraction, sznDefault);
+  if (!core) return null;
+  var con = core.bands[0], exp = core.bands[1], opt = core.bands[2];
+
+  var classification;
+  if (con.ratio > 1.2) classification = 'STRONG RECOVERY';
+  else if (con.ratio > 0.9) classification = 'PROBABLE';
+  else if (con.ratio > 0.6) classification = 'CONTESTED';
+  else if (con.ratio > 0.3) classification = 'UNLIKELY';
+  else classification = 'NO PATH';
+
+  return { classification, deficit, remainingPoss: core.remainingPoss,
+    conservative: con, expected: exp, optimistic: opt,
+    ctrlStructRate: core.focalStructRate, oppStructRate: core.targetStructRate,
+    structEdge: core.structEdge, degradation: core.degradation,
+    minsLeft: Math.round(minsLeft * 10) / 10, fTeam };
+}
+
+function computeLeadSafetyServer(summary, ind, sust, hA, aA, period, clock, league) {
+  if (!summary || !summary.home || !summary.away || period < 2) return null;
+  if (!ind || !ind.score) return null;
+  var fTeam = ind.controlTeam;
+  var ctrlIsHome = fTeam === hA;
+  var hPts = summary.home?.points || 0, aPts = summary.away?.points || 0;
+  var ctrlPts = ctrlIsHome ? hPts : aPts;
+  var oppPts = ctrlIsHome ? aPts : hPts;
+  var lead = ctrlPts - oppPts;
+  if (lead < 2) return null; // not leading enough
+
+  var PERIOD_MINUTES = league === 'ncaamb' ? 20 : 12;
+  var GAME_MINUTES = league === 'ncaamb' ? 40 : 48;
+  var totalPeriods = league === 'ncaamb' ? 2 : 4;
+  var clockParts = (clock || '').split(':');
+  var clockMins = clockParts.length === 2 ? (parseInt(clockParts[0]) || 0) + ((parseInt(clockParts[1]) || 0) / 60) : PERIOD_MINUTES;
+  var periodsLeft = Math.max(0, totalPeriods - period);
+  var minsLeft = clockMins + (periodsLeft * PERIOD_MINUTES);
+  var minsElapsed = Math.max(1, GAME_MINUTES - minsLeft);
+  var gameFraction = Math.min(1, minsLeft / GAME_MINUTES);
+  if (minsLeft < 0.3 || isNaN(minsLeft)) return null;
+
+  var hs = summary.home?.statistics || {};
+  var as = summary.away?.statistics || {};
+  // Focal = OPPONENT (trailing, trying to recover)
+  var focalStats = ctrlIsHome ? as : hs;
+  var targetStats = ctrlIsHome ? hs : as;
+  var sznDefault = league === 'ncaamb' ? 33 : 36;
+
+  var focalSustData = sust ? (ctrlIsHome ? sust.away : sust.home) : null;
+  var targetSustData = sust ? (ctrlIsHome ? sust.home : sust.away) : null;
+
+  var core = computeSwingCoreServer(focalStats, targetStats, focalSustData, targetSustData, lead, minsLeft, minsElapsed, gameFraction, sznDefault);
+  if (!core) return null;
+  var con = core.bands[0], exp = core.bands[1], opt = core.bands[2];
+
+  var classification;
+  if (con.ratio > 0.8) classification = 'CRITICAL';
+  else if (exp.ratio > 0.7) classification = 'AT RISK';
+  else if (opt.ratio > 0.5 && exp.ratio >= 0.3) classification = 'CUSHIONED';
+  else classification = 'SAFE';
+
+  var oppTeam = ctrlIsHome ? aA : hA;
+  return { classification, lead, remainingPoss: core.remainingPoss,
+    conservative: con, expected: exp, optimistic: opt,
+    oppStructRate: core.focalStructRate, ctrlStructRate: core.targetStructRate,
+    structEdge: core.structEdge, degradation: core.degradation,
+    minsLeft: Math.round(minsLeft * 10) / 10, fTeam, oppTeam };
+}
+
+function mlToProb(ml) {
+  var n = parseFloat(ml);
+  if (isNaN(n) || n === 0) return null;
+  return n < 0 ? Math.abs(n) / (Math.abs(n) + 100) : 100 / (n + 100);
+}
+
+function fmtSwing(v) { var n = Math.round(v); return n >= 0 ? '+' + n : '' + n; }
+
 // ── SERVER-SIDE CONTEXT COMPUTATION ─────────────────────────────────────────
 // Computes the 9 data layers that are normally client-only.
 // Used as fallback when client hasn't pushed context to DB.
@@ -1716,7 +1886,7 @@ function computeSubMetricArrowsServer(perQuarter, hA, aA) {
 }
 
 // Main server context computation — called when client hasn't pushed context
-async function computeServerContext(sql, game, league, summary, ind, espnWP, hA, aA, period, clock, matchup) {
+async function computeServerContext(sql, game, league, summary, ind, espnWP, hA, aA, period, clock, matchup, sust, odds) {
   const ctx = {};
   const W = { I1: 0.25, I2: 0.25, I3: 0.20, I4: 0.20, I5: 0.10 };
 
@@ -1758,92 +1928,53 @@ async function computeServerContext(sql, game, league, summary, ind, espnWP, hA,
     }
   } catch (e) { /* no prior analyses */ }
 
-  // ── 4. ROLLING WINDOW + ACCELERATION (from DB snapshots) ──
+  // ── 4. ROLLING WINDOW + ACCELERATION (from quarter_data — same engine as snapshot responses) ──
   try {
+    const qd = await readQuarterData(sql, game.id);
+    const completedKeys = Object.keys(qd.diffs || {}).map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
+    if (completedKeys.length >= 1 && summary) {
+      // Use the good server window function (same as snapshot piggyback)
+      const serverWindow = computeServerWindow(qd, period, clock, summary, hA, aA, league);
+      if (serverWindow && serverWindow.available) {
+        ctx.rollingWindow = serverWindow;
+        ctx.rollingWindow.dataQuality = 'SERVER-QD';
+      }
+    }
+    // Store quarter diffs for prompt
+    if (qd.diffs && Object.keys(qd.diffs).length > 0) {
+      ctx.quarterDiffs = qd.diffs;
+    }
+
+    // Acceleration from snapshots (gap trajectory still uses snapshot history — more data points)
     const snaps = await sql`
       SELECT period, floor_score, floor_team, i1, i2, i3, i4, i5, ts
       FROM snapshots WHERE game_id = ${game.id} AND floor_score IS NOT NULL
       ORDER BY ts ASC
     `;
-
-    if (snaps.length >= 1) {
-      // Rolling window: group by period, cross-fade weighted
+    if (snaps.length >= 3 && ctx.rollingWindow) {
       const byPeriod = {};
-      for (const s of snaps) {
-        if (s.period >= 1) byPeriod[s.period] = s; // last snapshot per period
-      }
+      for (const s of snaps) { if (s.period >= 1) byPeriod[s.period] = s; }
       const periodKeys = Object.keys(byPeriod).map(Number).sort((a, b) => a - b);
-
-      if (periodKeys.length >= 1) {
-        const maxPer = periodKeys[periodKeys.length - 1];
-        let wI1 = 0, wI2 = 0, wI3 = 0, wI4 = 0, wI5 = 0, wSum = 0;
-        for (const pk of periodKeys) {
-          const sn = byPeriod[pk];
-          const weight = (pk === maxPer) ? 1.0 : (pk >= maxPer - 1) ? 1.0 : 0.5;
-          wI1 += (sn.i1 ?? 0.5) * weight;
-          wI2 += (sn.i2 ?? 0.5) * weight;
-          wI3 += (sn.i3 ?? 0.5) * weight;
-          wI4 += (sn.i4 ?? 0.5) * weight;
-          wI5 += (sn.i5 ?? 0.5) * weight;
-          wSum += weight;
-        }
-        if (wSum > 0) {
-          const nI1 = wI1 / wSum, nI2 = wI2 / wSum, nI3 = wI3 / wSum, nI4 = wI4 / wSum, nI5 = wI5 / wSum;
-          const rawW = nI1 * W.I1 + nI2 * W.I2 + nI3 * W.I3 + nI4 * W.I4 + nI5 * W.I5;
-          const ctrlHomeW = rawW >= 0.5;
-          const wTeam = ctrlHomeW ? hA : aA;
-          const wScore = ctrlHomeW ? rawW : 1 - rawW;
-          ctx.rollingWindow = {
-            available: true,
-            score: Math.round(wScore * 100) / 100,
-            controlTeam: wTeam,
-            windowQuarters: periodKeys.map(q => 'Q' + q),
-            windowPossessions: 0,
-            possessionBased: false,
-            dataQuality: 'SERVER',
-            I1: { score: Math.round(nI1 * 10) / 10 }, I2: { score: Math.round(nI2 * 10) / 10 },
-            I3: { score: Math.round(nI3 * 10) / 10 }, I4: { score: Math.round(nI4 * 10) / 10 },
-            I5: { score: Math.round(nI5 * 10) / 10 },
-          };
-          // Per-period I1-I5 scores — client uses these as seed data for cross-fade
-          ctx.perPeriodScores = {};
-          for (const pk of periodKeys) {
-            const sn = byPeriod[pk];
-            ctx.perPeriodScores[pk] = {
-              i1: sn.i1 ?? 0.5, i2: sn.i2 ?? 0.5, i3: sn.i3 ?? 0.5,
-              i4: sn.i4 ?? 0.5, i5: sn.i5 ?? 0.5,
-              floor_score: sn.floor_score, floor_team: sn.floor_team,
-            };
-          }
+      const gapEntries = [];
+      for (const pk of periodKeys) {
+        const sn = byPeriod[pk];
+        if (sn.floor_score != null) {
+          const periodRaw = (sn.i1 ?? 0.5) * W.I1 + (sn.i2 ?? 0.5) * W.I2 + (sn.i3 ?? 0.5) * W.I3 + (sn.i4 ?? 0.5) * W.I4 + (sn.i5 ?? 0.5) * W.I5;
+          const periodScore = periodRaw >= 0.5 ? periodRaw : 1 - periodRaw;
+          gapEntries.push({ gap: periodScore - sn.floor_score, score: sn.floor_score, period: pk });
         }
       }
-
-      // Acceleration: compute gap (window - floor) across snapshots
-      if (ctx.rollingWindow && snaps.length >= 3) {
-        const gapEntries = [];
-        // Use one entry per period boundary from snapshots
-        for (const pk of periodKeys) {
-          const sn = byPeriod[pk];
-          if (sn.floor_score != null && ctx.rollingWindow.score != null) {
-            // Approximate gap at each period
-            const periodRaw = (sn.i1 ?? 0.5) * W.I1 + (sn.i2 ?? 0.5) * W.I2 + (sn.i3 ?? 0.5) * W.I3 + (sn.i4 ?? 0.5) * W.I4 + (sn.i5 ?? 0.5) * W.I5;
-            const periodScore = periodRaw >= 0.5 ? periodRaw : 1 - periodRaw;
-            const gap = periodScore - sn.floor_score;
-            gapEntries.push({ gap, score: sn.floor_score, period: pk });
-          }
-        }
-        if (gapEntries.length >= 2) {
-          ctx.acceleration = computeAccelerationServer(gapEntries);
-        }
-      }
-
-      // Combined read
-      if (ctx.rollingWindow) {
-        ctx.combinedRead = classifyCombinedReadServer(ind.score, ind.controlTeam, ctx.rollingWindow, ctx.acceleration);
+      if (gapEntries.length >= 2) {
+        ctx.acceleration = computeAccelerationServer(gapEntries);
       }
     }
+
+    // Combined read
+    if (ctx.rollingWindow) {
+      ctx.combinedRead = classifyCombinedReadServer(ind.score, ind.controlTeam, ctx.rollingWindow, ctx.acceleration);
+    }
   } catch (e) {
-    log(`${matchup}: server context — snapshot query failed: ${e.message}`);
+    log(`${matchup}: server context — quarter_data/window failed: ${e.message}`);
   }
 
   // ── 5. PBP AUDIT + SUB-METRIC ARROWS (from BDL — already parsed in main loop) ──
@@ -1886,6 +2017,53 @@ async function computeServerContext(sql, game, league, summary, ind, espnWP, hA,
   } catch (e) {
     log(`${matchup}: server PBP processing failed: ${e.message}`);
   }
+
+  // ── 6. THROUGHPUT + LEAD SAFETY (ported from client) ──
+  try {
+    ctx.throughput = computeThroughputServer(summary, ind, sust, hA, aA, period, clock, league);
+    ctx.leadSafety = computeLeadSafetyServer(summary, ind, sust, hA, aA, period, clock, league);
+  } catch (e) {
+    log(`${matchup}: server throughput/leadSafety failed: ${e.message}`);
+  }
+
+  // ── 7. MIP (Market Implied Probability) ──
+  if (odds && (odds.homeML || odds.awayML)) {
+    const hML = parseFloat(odds.homeML), aML = parseFloat(odds.awayML);
+    const garbageLine = (Math.abs(hML) >= 50000 || Math.abs(aML) >= 50000 || hML === aML);
+    if (!garbageLine) {
+      const homeMIP = mlToProb(odds.homeML);
+      const awayMIP = mlToProb(odds.awayML);
+      if (homeMIP != null && awayMIP != null) {
+        const vigSum = homeMIP + awayMIP;
+        ctx.mip = {
+          homeNorm: (homeMIP / vigSum * 100).toFixed(1),
+          awayNorm: (awayMIP / vigSum * 100).toFixed(1),
+          homeAlias: hA, awayAlias: aA,
+        };
+      }
+    } else {
+      ctx.mip = { garbage: true };
+    }
+  }
+
+  // ── 8. BONUS STATUS ──
+  if (summary.home?.bonus || summary.away?.bonus) {
+    ctx.bonusStatus = {
+      home: summary.home?.bonus || false,
+      away: summary.away?.bonus || false,
+      homeDouble: summary.home?.double_bonus || false,
+      awayDouble: summary.away?.double_bonus || false,
+    };
+  }
+
+  // ── 9. GAME META ──
+  const hs = summary.home?.statistics || {};
+  const as = summary.away?.statistics || {};
+  ctx.gameMeta = {
+    leadChanges: summary.lead_changes || 0,
+    timesTied: summary.times_tied || 0,
+    hFoulouts: hs.foulouts || 0, aFoulouts: as.foulouts || 0,
+  };
 
   const layerCount = Object.keys(ctx).length;
   if (layerCount > 0) {
@@ -1960,6 +2138,312 @@ function parseAnalysisText(text, homeAlias, awayAlias) {
   if (Object.keys(indicators).length > 0) result.indicatorsJson = indicators;
 
   return result;
+}
+
+// ── FORMAT SONNET PROMPT ──────────────────────────────────────────────────────
+// Single function that formats ALL data layers into prompt text.
+// Matches analyze.js quality — no more "payload ghost" layers.
+
+function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, calibrationNote, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary }) {
+  let p = `${aA} @ ${hA} | Q${period} ${clock} | ${score}\n\n`;
+
+  // Thesis + calibration
+  if (thesis) p += `THESIS:\n${thesis}\n`;
+  if (calibrationNote) p += `${calibrationNote}\n`;
+  p += '\n';
+
+  // Game meta
+  if (ctx?.gameMeta) {
+    const m = ctx.gameMeta;
+    p += `GAME META: LC:${m.leadChanges} TT:${m.timesTied} Foulouts:${m.hFoulouts}/${m.aFoulouts}\n`;
+  }
+
+  // 3PT Sustainability (rich format with personnel details)
+  if (sust) {
+    p += `3PT SUSTAINABILITY AUDIT:\n`;
+    [{ data: sust.away, alias: aA }, { data: sust.home, alias: hA }].forEach(({ data: t, alias }) => {
+      if (!t) return;
+      if (t.tier === 'TOO EARLY') { p += `${alias}: ${t.live3PM || '?'}/${t.live3PA || '?'} 3PT — TOO EARLY (< 5 attempts)\n`; return; }
+      p += `${alias}: ${t.live3PM || '?'}/${t.live3PA || '?'} (${t.live3Pct || '?'}%) vs season ${t.seasonPrior || '?'}%${t.gotSeasonData ? '' : ' [avg fallback]'}\n`;
+      if (t.personnelGrade === 'N/A (at baseline)') {
+        p += `  Personnel: N/A — shooting at/below baseline\n`;
+      } else if (t.personnelDetails && t.personnelDetails.length > 0) {
+        p += `  Personnel: ${t.elitePct || 0}% from ELITE, ${t.nonPct || 0}% from NON-SHOOTERS — ${t.personnelGrade || '?'}\n`;
+        t.personnelDetails.forEach(pl => {
+          p += `    ${pl.name}: ${pl.live3m}/${pl.live3a} (${pl.livePct}%) vs szn ${pl.sznStr} [${pl.tierLabel}]${pl.hot ? ' HOT' : ''}\n`;
+        });
+      }
+      p += `  Regression: prior ${t.seasonPrior || '?'}% | posterior ${t.posteriorMean || '?'}% | pull ${t.regressionPull || '?'}% — ${t.regressionGrade || '?'} (${t.regressionProb || '?'}%)\n`;
+      p += `  Shot type: ${t.shotTypeNote || '?'} — ${t.shotTypeGrade || '?'}\n`;
+      p += `  -> TIER: ${t.tier} (composite ${t.composite || '?'})\n`;
+    });
+  }
+
+  // Lead composition
+  if (leadComp) {
+    const h = leadComp.home || {}, a = leadComp.away || {};
+    if (h.total && a.total) {
+      p += `\nLEAD COMPOSITION: ${aA} ${a.total} — ${hA} ${h.total} (${leadComp.leadTeam || '?'} ${leadComp.margin >= 0 ? '+' : ''}${leadComp.margin || 0})\n`;
+      p += `${aA}: Paint ${a.paint || 0} (${a.total > 0 ? Math.round((a.paint||0)/a.total*100) : 0}%) | FT ${a.ft || 0} | 3PT ${a.three || 0} (${a.total > 0 ? Math.round((a.three||0)/a.total*100) : 0}%) | Mid ${a.midOther || 0} | Trans ${a.transition || 0}\n`;
+      p += `${hA}: Paint ${h.paint || 0} (${h.total > 0 ? Math.round((h.paint||0)/h.total*100) : 0}%) | FT ${h.ft || 0} | 3PT ${h.three || 0} (${h.total > 0 ? Math.round((h.three||0)/h.total*100) : 0}%) | Mid ${h.midOther || 0} | Trans ${h.transition || 0}\n`;
+      p += `Structural (Paint+FT): ${aA} ${a.structural || 0} (${a.structuralPct || 0}%) vs ${hA} ${h.structural || 0} (${h.structuralPct || 0}%)\n`;
+      p += `Variance (3PT+Mid): ${aA} ${a.variance || 0} (${a.variancePct || 0}%) vs ${hA} ${h.variance || 0} (${h.variancePct || 0}%)\n`;
+      if (leadComp.durability) p += `MARGIN DURABILITY: ${leadComp.durability}\n`;
+    } else {
+      p += `\nLEAD COMPOSITION: ${leadComp.classification || '?'} — S:${leadComp.structuralPct || '?'}% V:${leadComp.variancePct || '?'}%\n`;
+      if (leadComp.home) p += `  ${hA}: Paint ${leadComp.home?.paint || 0} FT ${leadComp.home?.ft || 0} 3PT ${leadComp.home?.three || 0}\n`;
+      if (leadComp.away) p += `  ${aA}: Paint ${leadComp.away?.paint || 0} FT ${leadComp.away?.ft || 0} 3PT ${leadComp.away?.three || 0}\n`;
+    }
+  }
+
+  // Dashboard indicators
+  if (ind) {
+    p += `\nDASHBOARD SCORES: ${ind.controlTeam || '?'} ${ind.score?.toFixed(2) || '?'}\n`;
+    ['I1', 'I2', 'I3', 'I4', 'I5'].forEach(k => {
+      if (ind[k]) p += `  ${k}: ${ind[k].score?.toFixed(1) || '?'} ${ind[k].leader || ''} — ${ind[k].detail || ''}\n`;
+    });
+  }
+
+  // Clutch (rich format)
+  if (clutchData) {
+    const tierLabel = clutchData.tier === 1 ? 'L15 NBA.com Tier 1' : clutchData.tier === 2 ? 'Season BDL Tier 2' : 'Tier 3';
+    p += `\nCLUTCH (${tierLabel}):\n`;
+    p += `${aA}: NetRtg ${clutchData.away?.netRtg ?? 'N/A'} OffRtg ${clutchData.away?.offRtg ?? 'N/A'} DefRtg ${clutchData.away?.defRtg ?? 'N/A'} ${clutchData.away?.wl || ''}\n`;
+    p += `${hA}: NetRtg ${clutchData.home?.netRtg ?? 'N/A'} OffRtg ${clutchData.home?.offRtg ?? 'N/A'} DefRtg ${clutchData.home?.defRtg ?? 'N/A'} ${clutchData.home?.wl || ''}\n`;
+    const hNet = clutchData.home?.netRtg, aNet = clutchData.away?.netRtg;
+    if (hNet != null && aNet != null) p += `Edge: ${hNet > aNet ? hA : aA} by ${Math.abs(hNet - aNet).toFixed(1)} NetRtg\n`;
+  }
+
+  // Odds + MIP
+  if (odds && (odds.homeML || odds.homeSpread)) {
+    p += `\nMARKET: Spread ${hA} ${odds.homeSpread || 'N/A'} | ML ${aA} ${odds.awayML || 'N/A'} / ${hA} ${odds.homeML || 'N/A'} | O/U ${odds.total || 'N/A'}\n`;
+    if (ctx?.mip && !ctx.mip.garbage) {
+      p += `PRE-COMPUTED MIP: If ${hA} wins -> Edge = FWP - ${ctx.mip.homeNorm}% | If ${aA} wins -> Edge = FWP - ${ctx.mip.awayNorm}%\nUse the MIP of the team you are PREDICTING TO WIN.\n`;
+    } else if (ctx?.mip?.garbage) {
+      p += `MIP: N/A — line dead (extreme/identical MLs)\n`;
+    }
+  }
+
+  // Bonus status (with I2 multiplier)
+  if (ctx?.bonusStatus) {
+    const bs = ctx.bonusStatus;
+    const homeInBonus = bs.home, awayInBonus = bs.away;
+    if (homeInBonus || awayInBonus) {
+      const bothInBonus = homeInBonus && awayInBonus;
+      p += `\nBONUS STATUS: `;
+      if (bothInBonus) {
+        p += `BOTH teams in bonus — advantage NEUTRALIZED\n`;
+      } else {
+        const bonusTeam = homeInBonus ? hA : aA;
+        const penalizedTeam = homeInBonus ? aA : hA;
+        const clockParts = (clock || '').split(':');
+        const clockMins = clockParts.length === 2 ? (parseInt(clockParts[0]) || 0) + (parseInt(clockParts[1] || 0) / 60) : 12;
+        p += `${bonusTeam} IN BONUS (BENEFITS ${bonusTeam}, PENALIZES ${penalizedTeam})`;
+        if (clockMins >= 4.0) {
+          p += ` with ${clockMins.toFixed(1)} min remaining — STRUCTURAL I2 MULTIPLIER.\n`;
+          p += `  ${bonusTeam} GAINS: Every drive/paint touch = automatic free throws. Compounds every possession.\n`;
+          p += `  ${penalizedTeam} LOSES: Cannot play physical defense. Players risk fouling out. Interior defense compromised.\n`;
+        } else {
+          p += ` with ${clockMins.toFixed(1)} min remaining\n`;
+        }
+      }
+    }
+  }
+
+  // Tracking baselines (from client context if available)
+  if (ctx?.trackingData) {
+    const ht = ctx.trackingData.home || {}, at = ctx.trackingData.away || {};
+    p += `\nSHOOTING BASELINES:\n`;
+    if (ht.catchAndShoot || at.catchAndShoot) p += `C&S: ${aA} ${at.catchAndShoot?.efg || '?'}% | ${hA} ${ht.catchAndShoot?.efg || '?'}%\n`;
+    if (ht.pullUp || at.pullUp) p += `Pull-up: ${aA} ${at.pullUp?.efg || '?'}% | ${hA} ${ht.pullUp?.efg || '?'}%\n`;
+  }
+
+  // ESPN WP (with divergence check)
+  if (espnWP && (espnWP.home != null || espnWP.away != null)) {
+    p += `\nESPN WIN PROBABILITY (live model):\n`;
+    p += `${hA} ${espnWP.home ?? '?'}% / ${aA} ${espnWP.away ?? '?'}%\n`;
+    p += `NOTE: ESPN WP is a reference model, not ground truth.\n`;
+    p += `DIVERGENCE CHECK: If your FWP diverges >15% from ESPN WP, explain WHY.\n`;
+  }
+
+  // Rolling window (full I1-I5 breakdown)
+  if (ctx?.rollingWindow?.available) {
+    const rw = ctx.rollingWindow;
+    const wLabel = rw.windowQuarters ? rw.windowQuarters.join('+') : '?';
+    p += `\nROLLING WINDOW (${wLabel}, ${rw.windowPossessions || '?'} poss):\n`;
+    p += `Control: ${rw.controlTeam} ${rw.score != null ? rw.score.toFixed(2) : '?'}\n`;
+    ['I1', 'I2', 'I3', 'I4', 'I5'].forEach(k => {
+      const i = rw[k];
+      if (i && i.score != null) p += `  ${k}: ${i.score.toFixed(1)} — ${i.detail || ''}\n`;
+    });
+    p += `Data quality: ${rw.dataQuality || '?'}\n`;
+  }
+
+  // Per-quarter breakdown
+  const qdSource = quarterDataFromDB || ctx?.quarterDiffs;
+  if (qdSource && Object.keys(qdSource).length > 0) {
+    p += `\nPER-QUARTER BREAKDOWN:\n`;
+    const qdKeys = Object.keys(qdSource).map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
+    for (const qk of qdKeys) {
+      const d = qdSource[qk];
+      if (!d || !d.home || !d.away) continue;
+      const h = d.home, a = d.away;
+      const hPaint = h.points_in_the_paint || h.points_in_paint || 0;
+      const aPaint = a.points_in_the_paint || a.points_in_paint || 0;
+      p += `  Q${qk}: Paint ${hPaint}-${aPaint}`
+        + `, FTA ${h.free_throws_att||0}-${a.free_throws_att||0}`
+        + `, 3P ${h.three_points_made||0}/${h.three_points_att||0}-${a.three_points_made||0}/${a.three_points_att||0}`
+        + `, AST ${h.assists||0}-${a.assists||0}`
+        + `, TO ${h.turnovers||h.total_turnovers||0}-${a.turnovers||a.total_turnovers||0}`
+        + `, STL ${h.steals||0}-${a.steals||0}`
+        + (h.possessions ? `, Poss ${h.possessions||0}-${a.possessions||0}` : '')
+        + ` (${hA}-${aA})\n`;
+    }
+  }
+
+  // Gap acceleration (with values and history)
+  if (ctx?.acceleration) {
+    const acc = ctx.acceleration;
+    if (acc.entries && acc.entries.length > 0) {
+      const last = acc.entries[acc.entries.length - 1];
+      p += `\nGAP ACCELERATION:\n`;
+      p += `Gap: ${last.gap >= 0 ? '+' : ''}${last.gap != null ? last.gap.toFixed(3) : '?'} | Acceleration: ${acc.accel} (${acc.consecutive} consecutive)\n`;
+      p += `History: ${acc.entries.slice(-5).map(e => `${e.gap >= 0 ? '+' : ''}${e.gap != null ? e.gap.toFixed(2) : '?'} (${e.score})`).join(' -> ')}\n`;
+    } else {
+      p += `\nGAP: ${acc.accel || 'TOO EARLY'}\n`;
+    }
+  }
+
+  // Combined read (with supporting data)
+  if (ctx?.combinedRead?.read) {
+    p += `\nCOMBINED READ: ${ctx.combinedRead.read} — ${ctx.combinedRead.note || ''}\n`;
+  }
+
+  // Sub-metric arrows (directional trends)
+  if (ctx?.subMetricArrows && (ctx.subMetricArrows.home || ctx.subMetricArrows.away)) {
+    p += `\nDIRECTIONAL ARROWS:\n`;
+    const arrowOrder = [
+      { header: 'I2 RIM PRESSURE', keys: ['paint', 'atRim', 'fta'] },
+      { header: 'I1 POSSESSION', keys: ['steals', 'tos'] },
+      { header: 'I3 SHOT QUALITY', keys: ['fg3aShare', 'astRatio'] },
+      { header: 'I5 TEMPO', keys: ['poss'] },
+    ];
+    p += `${''.padEnd(12)}${hA.padEnd(18)}${aA}\n`;
+    arrowOrder.forEach(grp => {
+      p += `${grp.header}:\n`;
+      grp.keys.forEach(key => {
+        const hm = ctx.subMetricArrows.home ? ctx.subMetricArrows.home[key] : null;
+        const am = ctx.subMetricArrows.away ? ctx.subMetricArrows.away[key] : null;
+        const label = (hm ? hm.label : (am ? am.label : key)).toString();
+        const hStr = (hm && hm.arrow ? (hm.display || '?') : '-').toString();
+        const aStr = (am && am.arrow ? (am.display || '?') : '-').toString();
+        p += `  ${label.padEnd(10)}${hStr.padEnd(18)}${aStr}\n`;
+      });
+    });
+  }
+
+  // Adjustment signal
+  if (ctx?.adjustment && ctx.adjustment.signal && ctx.adjustment.signal !== 'NO ADJUSTMENT' && ctx.adjustment.signal !== 'NO DATA') {
+    p += `ADJUSTMENT: ${ctx.adjustment.signal} (${ctx.adjustment.team || '?'}) — ${ctx.adjustment.note || ''}\n`;
+  }
+
+  // PBP depth audit (full shot maps, TO breakdown, runs)
+  if (ctx?.pbpAudit && (ctx.pbpAudit.home || ctx.pbpAudit.away)) {
+    const pAge = ctx.pbpAudit.pbpAge != null ? ctx.pbpAudit.pbpAge + ' min ago' : '';
+    const pPer = ctx.pbpAudit.pbpPeriod ? 'Q' + ctx.pbpAudit.pbpPeriod : '?';
+    p += `\nDEPTH AUDIT (PBP through ${pPer} ${pAge}):\n`;
+    const teams = [
+      { data: ctx.pbpAudit.away, alias: ctx.pbpAudit.awayAlias || aA },
+      { data: ctx.pbpAudit.home, alias: ctx.pbpAudit.homeAlias || hA },
+    ];
+    teams.forEach(t => {
+      const tm = t.data;
+      if (!tm) return;
+      p += `\n${t.alias} SHOT MAP:\n`;
+      if (tm.threes && tm.threes.byPlayer && tm.threes.byPlayer.length > 0) {
+        p += `  3PT (${tm.threes.made}/${tm.threes.att}, ${tm.threes.pct}%, ${tm.threes.assisted}/${tm.threes.made} ast): `;
+        tm.threes.byPlayer.forEach(pl => {
+          const ctxStr = Object.entries(pl.contexts || {}).map(e => e[0] + ':' + e[1]).join(',');
+          p += `${pl.name} ${pl.made}/${pl.att} (${pl.assisted} ast, ${ctxStr}) | `;
+        });
+        p += '\n';
+        if (tm.threes.corner && tm.threes.above) p += `  Corner: ${tm.threes.corner.made}/${tm.threes.corner.att} | Above: ${tm.threes.above.made}/${tm.threes.above.att}\n`;
+      }
+      if (tm.rim && tm.rim.byPlayer && tm.rim.byPlayer.length > 0) {
+        p += `  AT-RIM (${tm.rim.made}/${tm.rim.att}, ${tm.rim.pct}%): `;
+        tm.rim.byPlayer.forEach(pl => {
+          const ctxStr = Object.entries(pl.contexts || {}).map(e => e[0] + ':' + e[1]).join(',');
+          p += `${pl.name} ${pl.made}/${pl.att} (${ctxStr}) | `;
+        });
+        p += '\n';
+      }
+      if (tm.mid && tm.mid.byPlayer && tm.mid.byPlayer.length > 0) {
+        p += `  MID-RANGE (${tm.mid.made}/${tm.mid.att}, ${tm.mid.pct}%, ${tm.mid.assisted}/${tm.mid.made} ast): `;
+        tm.mid.byPlayer.forEach(pl => { p += `${pl.name} ${pl.made}/${pl.att} (${pl.assisted} ast) | `; });
+        p += '\n';
+      }
+      if (tm.shotDiet) p += `  ZONES: rim ${tm.shotDiet.rimPct}% | mid ${tm.shotDiet.midPct}% | 3pt ${tm.shotDiet.threePct}% of FGA\n`;
+      if (tm.tos && tm.tos.total > 0) {
+        p += `  TOs: ${tm.tos.forced || 0} forced / ${tm.tos.unforced || 0} unforced${tm.tos.unknown > 0 ? ' / ' + tm.tos.unknown + ' unclear' : ''}\n`;
+      }
+    });
+    if (ctx.pbpAudit.runs && ctx.pbpAudit.runs.length > 0) {
+      p += `\nSCORING RUNS:\n`;
+      ctx.pbpAudit.runs.forEach(r => {
+        const mechStr = Array.isArray(r.mechanism) ? r.mechanism.join('+') : (r.mechanism || '?');
+        p += `  ${r.team} ${r.pts}-${r.count} run (Q${r.q}): ${mechStr}\n`;
+      });
+    }
+  }
+
+  // Edge history
+  if (ctx?.edgeHistory && ctx.edgeHistory.length > 0) {
+    p += `\nEDGE HISTORY:\n${ctx.edgeHistory.map(e => `${e.time || '?'} | ${e.edge || '?'} FWP ${e.fwp || '?'} | ${e.control || '?'} ${e.score || ''}`).join('\n')}\n`;
+  }
+
+  // Throughput recovery model
+  if (ctx?.throughput) {
+    const tp = ctx.throughput;
+    p += `\nTHROUGHPUT RECOVERY MODEL (server-computed, 4-direction variance regression):\n`;
+    p += `Classification: ${tp.classification}\n`;
+    p += `The trailing structural team (${tp.fTeam}) projects to recover:\n`;
+    p += `  Conservative (25th pctile): ${fmtSwing(tp.conservative.totalSwing)} pts\n`;
+    p += `  Expected (50th pctile): ${fmtSwing(tp.expected.totalSwing)} pts\n`;
+    p += `  Optimistic (75th pctile): ${fmtSwing(tp.optimistic.totalSwing)} pts\n`;
+    p += `Current deficit: ${tp.deficit} pts | Remaining possessions: ~${tp.remainingPoss}\n`;
+    p += `Structural edge per possession: ${tp.structEdge} (${tp.fTeam} structural rate: ${tp.ctrlStructRate} vs opponent: ${tp.oppStructRate})\n`;
+    if (tp.degradation < 1.0) p += `Deficit degradation applied: ${(tp.degradation * 100).toFixed(0)}%\n`;
+    p += `HOW TO USE: Compare projected recovery points to deficit. If conservative covers deficit, recovery is PROBABLE. If only optimistic covers it, CONTESTED. If none cover it, NO PATH.\n`;
+  }
+
+  // Lead safety model
+  if (ctx?.leadSafety) {
+    const ls = ctx.leadSafety;
+    p += `\nLEAD SAFETY MODEL (server-computed, opponent recovery potential):\n`;
+    p += `Classification: ${ls.classification}\n`;
+    p += `The leading structural team (${ls.fTeam}) leads by ${ls.lead}. The opponent (${ls.oppTeam}) recovery projects:\n`;
+    p += `  Conservative: ${fmtSwing(ls.conservative.totalSwing)} pts recovery\n`;
+    p += `  Expected: ${fmtSwing(ls.expected.totalSwing)} pts recovery\n`;
+    p += `  Optimistic: ${fmtSwing(ls.optimistic.totalSwing)} pts recovery\n`;
+    p += `Remaining possessions: ~${ls.remainingPoss}\n`;
+    p += `SAFE = optimistic < 50% of lead. AT RISK = expected meaningfully erodes lead. CRITICAL = conservative threatens lead.\n`;
+  }
+
+  // WP profiles
+  if (wpProfiles) p += `\n${wpProfiles}\n`;
+
+  // Analysis history (rich format)
+  if (analysisHistory && analysisHistory.length > 0) {
+    p += `\nGAME NARRATIVE (prior reads this game):\n`;
+    analysisHistory.forEach((h, i) => {
+      p += `${i + 1}. Q${h.period || '?'} ${h.clock || ''} | ${h.controlTeam || '?'} ${h.controlScore != null ? h.controlScore.toFixed(2) : '?'} | ${h.entry || '-'}/${h.conviction || '-'} | ${h.signal || '-'}\n`;
+    });
+  }
+
+  // Full game data
+  p += `\nGAME DATA:\n${JSON.stringify(summary)}`;
+
+  return p;
 }
 
 // ── Q3-END CALIBRATION: FIRE SONNET ANALYSIS ───────────────────────────────
@@ -2077,134 +2561,38 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
     // ── 6b. Server fallback — compute context when client is asleep ──
     if (!clientCtx) {
       log(`${matchup}: ${triggerTag} CAL — no client context, computing server-side fallback`);
-      clientCtx = await computeServerContext(sql, game, league, summary, ind, espnWP, hA, aA, period, clock, matchup);
+      clientCtx = await computeServerContext(sql, game, league, summary, ind, espnWP, hA, aA, period, clock, matchup, sust, odds);
       if (clientCtx) ctxSource = 'server';
     }
 
-    const payload = {
-      summaryData: summary,
-      thesis: thesis ? thesis + (calibrationNote ? '\n\n' + calibrationNote : '') : calibrationNote || null,
-      homeTeam: hA,
-      awayTeam: aA,
-      period: periodStr,
-      score: scoreLine,
-      clutchData: clutchData,
-      oddsData: odds ? {
-        homeSpread: odds.homeSpread, homeML: odds.homeML,
-        awayML: odds.awayML, total: odds.total,
-      } : null,
-      wpProfiles: wpProfiles,
-      analysisHistory: analysisHistory,
-      // Client-pushed context — fills the 9-layer gap when client is active
-      edgeHistory: clientCtx?.edgeHistory || null,
-      trackingData: clientCtx?.trackingData || null,
-      pbpAudit: clientCtx?.pbpAudit || null,
-      rollingWindow: clientCtx?.rollingWindow || null,
-      acceleration: clientCtx?.acceleration || null,
-      subMetricArrows: clientCtx?.subMetricArrows || null,
-      adjustment: clientCtx?.adjustment || null,
-      combinedRead: clientCtx?.combinedRead || null,
-      bonusStatus: clientCtx?.bonusStatus || null,
-      gameClock: clientCtx?.gameClock || clock,
-      gamePeriod: period,
-      // ESPN WP: prefer server's fresh fetch, fall back to client-pushed
-      espnWP: espnWP ? {
-        home: espnWP.home, away: espnWP.away,
-        homeAlias: hA, awayAlias: aA,
-        opening: null, dataPoints: 0,
-      } : clientCtx?.espnWP || null,
-    };
-
     // ── 7. Call Anthropic API directly (bypasses site password protection) ──
-    const ctxStatus = ctxSource === 'client' ? 'client✓' : ctxSource === 'server' ? 'server-computed' : 'no-context';
-    log(`${matchup}: ${triggerTag} CAL — firing Sonnet analysis (${ctxStatus} thesis:${thesis ? 'yes' : 'no'} clutch:${clutchData ? 'yes' : 'no'} odds:${odds ? 'yes' : 'no'} wp:${wpProfiles ? 'yes' : 'no'})`);
+    const ctxStatus = ctxSource === 'client' ? 'client' : ctxSource === 'server' ? 'server-rich' : 'no-context';
+    const ctxLayers = clientCtx ? Object.keys(clientCtx).filter(k => clientCtx[k] != null).length : 0;
+    log(`${matchup}: ${triggerTag} CAL — firing Sonnet (${ctxStatus} ${ctxLayers}L thesis:${thesis ? 'y' : 'n'} clutch:${clutchData ? 'y' : 'n'} odds:${odds ? 'y' : 'n'} tp:${clientCtx?.throughput ? 'y' : 'n'} ls:${clientCtx?.leadSafety ? 'y' : 'n'} pbp:${clientCtx?.pbpAudit ? 'y' : 'n'} arrows:${clientCtx?.subMetricArrows ? 'y' : 'n'})`);
 
     const anthropicKey = process.env.ANTHROPIC_API_KEY;
     if (!anthropicKey) { log(`${matchup}: ${triggerTag} CAL — ANTHROPIC_API_KEY not configured`); return; }
 
-    // Build user prompt from payload sections
-    let userPrompt = `${aA} @ ${hA} | Q${period} ${clock} | ${scoreLine}\n\n`;
-    if (thesis) userPrompt += `THESIS:\n${thesis}\n\n`;
-
-    // Sustainability
-    if (sust) {
-      userPrompt += `3PT SUSTAINABILITY:\n`;
-      if (sust.home) userPrompt += `  ${hA}: ${sust.home.tier || '?'} — live ${sust.home.live3Pct || '?'}% vs ${sust.home.seasonPrior || sust.home.seasonBaseline || '?'}% szn, regression ${sust.home.regressionProb || '?'}%\n`;
-      if (sust.away) userPrompt += `  ${aA}: ${sust.away.tier || '?'} — live ${sust.away.live3Pct || '?'}% vs ${sust.away.seasonPrior || sust.away.seasonBaseline || '?'}% szn, regression ${sust.away.regressionProb || '?'}%\n`;
-    }
-    // Lead composition
-    if (leadComp) {
-      userPrompt += `LEAD COMPOSITION: ${leadComp.classification || '?'} — S:${leadComp.structuralPct || '?'}% V:${leadComp.variancePct || '?'}%\n`;
-      userPrompt += `  ${hA}: Paint ${leadComp.home?.paint || 0} FT ${leadComp.home?.ft || 0} 3PT ${leadComp.home?.three || 0}\n`;
-      userPrompt += `  ${aA}: Paint ${leadComp.away?.paint || 0} FT ${leadComp.away?.ft || 0} 3PT ${leadComp.away?.three || 0}\n`;
-    }
-    // Dashboard indicators
-    if (ind) {
-      userPrompt += `DASHBOARD SCORES: ${ind.controlTeam || '?'} ${ind.score?.toFixed(2) || '?'}\n`;
-      ['I1','I2','I3','I4','I5'].forEach(k => {
-        if (ind[k]) userPrompt += `  ${k}: ${ind[k].score?.toFixed(1) || '?'} ${ind[k].leader || ''} — ${ind[k].detail || ''}\n`;
-      });
-    }
-    // Clutch
-    if (clutchData) {
-      userPrompt += `CLUTCH:\n  ${aA}: NetRtg ${clutchData.away?.netRtg ?? 'N/A'}\n  ${hA}: NetRtg ${clutchData.home?.netRtg ?? 'N/A'}\n`;
-    }
-    // Odds
-    if (odds) {
-      userPrompt += `MARKET: Spread ${hA} ${odds.homeSpread || 'N/A'} | ML ${aA} ${odds.awayML || 'N/A'} / ${hA} ${odds.homeML || 'N/A'} | O/U ${odds.total || 'N/A'}\n`;
-    }
-    // ESPN WP
-    if (espnWP) {
-      userPrompt += `ESPN WP: ${hA} ${espnWP.home ?? '?'}% / ${aA} ${espnWP.away ?? '?'}%\n`;
-    }
-    // Client context layers
-    if (clientCtx?.rollingWindow?.available) {
-      const rw = clientCtx.rollingWindow;
-      userPrompt += `ROLLING WINDOW: ${rw.controlTeam} ${rw.score?.toFixed(2)}\n`;
-    }
-    // Per-quarter stat breakdown from quarter_data
+    // Build user prompt from payload sections via formatSonnetPrompt
+    // Fetch quarter_data from DB for per-quarter breakdown
+    let quarterDataFromDB = null;
     try {
       const qdRows = await sql`SELECT quarter_data FROM games WHERE id = ${game.id}`;
       if (qdRows.length > 0 && qdRows[0].quarter_data) {
         const qd = typeof qdRows[0].quarter_data === 'string' ? JSON.parse(qdRows[0].quarter_data) : qdRows[0].quarter_data;
-        if (qd.diffs && Object.keys(qd.diffs).length > 0) {
-          userPrompt += `PER-QUARTER BREAKDOWN:\n`;
-          const qdKeys = Object.keys(qd.diffs).map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
-          for (const qk of qdKeys) {
-            const d = qd.diffs[qk];
-            if (!d || !d.home || !d.away) continue;
-            const h = d.home, a = d.away;
-            const hPaint = h.points_in_the_paint || h.points_in_paint || 0;
-            const aPaint = a.points_in_the_paint || a.points_in_paint || 0;
-            userPrompt += `  Q${qk}: Paint ${hPaint}-${aPaint}`
-              + `, FTA ${h.free_throws_att||0}-${a.free_throws_att||0}`
-              + `, 3P ${h.three_points_made||0}/${h.three_points_att||0}-${a.three_points_made||0}/${a.three_points_att||0}`
-              + `, AST ${h.assists||0}-${a.assists||0}`
-              + `, TO ${h.turnovers||h.total_turnovers||0}-${a.turnovers||a.total_turnovers||0}`
-              + `, STL ${h.steals||0}-${a.steals||0}`
-              + (h.possessions ? `, Poss ${h.possessions||0}-${a.possessions||0}` : '')
-              + ` (${hA}-${aA})\n`;
-          }
-        }
+        if (qd.diffs) quarterDataFromDB = qd.diffs;
       }
     } catch (e) { /* quarter_data not available */ }
-    if (clientCtx?.acceleration?.accel) {
-      userPrompt += `GAP ACCEL: ${clientCtx.acceleration.accel}\n`;
-    }
-    if (clientCtx?.combinedRead?.read) {
-      userPrompt += `COMBINED READ: ${clientCtx.combinedRead.read}\n`;
-    }
-    // WP profiles
-    if (wpProfiles) userPrompt += `\n${wpProfiles}\n`;
-    // Analysis history
-    if (analysisHistory && analysisHistory.length > 0) {
-      userPrompt += `\nGAME NARRATIVE:\n`;
-      analysisHistory.forEach((h, i) => {
-        userPrompt += `${i+1}. Q${h.period || '?'} ${h.clock || ''} | ${h.controlTeam || '?'} ${h.controlScore || '?'} | ${h.entry || '—'}/${h.conviction || '—'} | ${h.signal || '—'}\n`;
-      });
-    }
-    // Full game data
-    userPrompt += `\nGAME DATA:\n${JSON.stringify(summary)}`;
+
+    const userPrompt = formatSonnetPrompt({
+      hA, aA, period, clock, score: scoreLine,
+      thesis: thesis ? thesis + (calibrationNote ? '\n\n' + calibrationNote : '') : calibrationNote || null,
+      calibrationNote: null, // already merged into thesis above
+      sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory,
+      ctx: clientCtx || {},
+      quarterDataFromDB,
+      summary,
+    });
 
     const anthropicResp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -3001,7 +3389,7 @@ export default async function(req) {
 
                 // Compute + save server context (PBP, arrows, window, etc.)
                 // Uses DO NOTHING on conflict — client-pushed context is richer, don't overwrite
-                const serverCtx = await computeServerContext(sql, game, league, summary, ind, espnWP, hA, aA, currentPeriod, clock, matchup);
+                const serverCtx = await computeServerContext(sql, game, league, summary, ind, espnWP, hA, aA, currentPeriod, clock, matchup, sust, odds);
                 if (serverCtx) {
                   try {
                     await sql`
