@@ -2287,9 +2287,27 @@ export default async function(req) {
   // ── TEST MODE: verify ntfy pipeline end-to-end ──
   const url = new URL(req.url, 'https://localhost');
   if (url.searchParams.get('test_ntfy') === '1') {
-    log('TEST NTFY: firing test alert...');
-    await sendNtfy('🔔 DFT Server Alert Test', 'If you see this, server alerts are working!\nTimestamp: ' + new Date().toISOString(), 3);
-    return new Response(JSON.stringify({ test: true, ntfy_topic: process.env.NTFY_TOPIC ? 'SET' : 'MISSING' }), {
+    const topic = process.env.NTFY_TOPIC;
+    const result = { test: true, ntfy_topic: topic ? 'SET' : 'MISSING', topic_value: topic || null };
+    if (topic) {
+      try {
+        const ntfyUrl = `https://ntfy.sh/${topic}`;
+        result.ntfy_url = ntfyUrl;
+        const resp = await fetch(ntfyUrl, {
+          method: 'POST',
+          headers: { 'Title': '🔔 DFT Server Alert Test', 'Priority': '3', 'Tags': 'basketball' },
+          body: 'If you see this, server alerts are working!\nTimestamp: ' + new Date().toISOString(),
+        });
+        result.status = resp.status;
+        result.statusText = resp.statusText;
+        const body = await resp.text();
+        result.response = body.substring(0, 200);
+      } catch (e) {
+        result.error = e.message;
+        result.stack = e.stack?.substring(0, 200);
+      }
+    }
+    return new Response(JSON.stringify(result, null, 2), {
       headers: { 'Content-Type': 'application/json' },
     });
   }
