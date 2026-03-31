@@ -3322,6 +3322,112 @@ export default async function(req) {
               }
             }
           }
+          // ── TRANSITION ALERTS (throughput/lead safety/sustainability) ──────
+          // Computed every poll cycle. Fires on classification changes.
+          if (currentPeriod >= 2) {
+            try {
+              const tp = computeThroughputServer(summary, ind, sust, hA, aA, currentPeriod, clock, league);
+              const ls = computeLeadSafetyServer(summary, ind, sust, hA, aA, currentPeriod, clock, league);
+              const oppSide = ind.controlTeam === hA ? 'away' : 'home';
+              const oppSustNow = sust?.[oppSide]?.tier || null;
+              const tpClass = tp?.classification || null;
+              const lsClass = ls?.classification || null;
+
+              // Read previous values
+              const prevRows = await sql`SELECT prev_tp_class, prev_ls_class, prev_opp_sust FROM games WHERE id = ${game.id}`;
+              const prev = prevRows.length > 0 ? prevRows[0] : {};
+              const prevTpClass = prev.prev_tp_class || null;
+              const prevLsClass = prev.prev_ls_class || null;
+              const prevOppSust = prev.prev_opp_sust || null;
+
+              const ctrlIsHome = ind.controlTeam === hA;
+              const ctrlPtsT = ctrlIsHome ? ind.homePts : ind.awayPts;
+              const oppPtsT = ctrlIsHome ? ind.awayPts : ind.homePts;
+              const marginT = Math.abs(ctrlPtsT - oppPtsT);
+              const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA}`;
+
+              // ALERT 1: RECOVERY PATH OPENED
+              if (tpClass && ind.score >= 0.65 && oppPtsT > ctrlPtsT && marginT >= 4 && marginT <= 15) {
+                const wasWeak = !prevTpClass || prevTpClass === 'UNLIKELY' || prevTpClass === 'NO PATH';
+                const nowStrong = tpClass === 'CONTESTED' || tpClass === 'PROBABLE' || tpClass === 'STRONG RECOVERY';
+                if (wasWeak && nowStrong) {
+                  const tpAlertKey = `${game.id}_TP_RECOVERY_Q${currentPeriod}`;
+                  if (!game._lastTpAlert || game._lastTpAlert !== tpAlertKey) {
+                    game._lastTpAlert = tpAlertKey;
+                    await sendNtfy(
+                      `RECOVERY PATH OPENED — ${matchup}`,
+                      `${scoreLine} Q${currentPeriod} ${clock}`
+                        + `\nThroughput: ${prevTpClass || 'none'} -> ${tpClass}`
+                        + `\n${ind.controlTeam} trails by ${marginT} | Floor: ${ind.score.toFixed(2)}`
+                        + `\nEngine: ${fmtSwing(tp.conservative.totalSwing)} / ${fmtSwing(tp.expected.totalSwing)} / ${fmtSwing(tp.optimistic.totalSwing)} vs ${tp.deficit} deficit`
+                        + `\n~${tp.remainingPoss} poss remaining`,
+                      5
+                    );
+                    log(`${matchup}: RECOVERY PATH OPENED — ${prevTpClass} -> ${tpClass}, trailing ${marginT}`);
+                  }
+                }
+              }
+
+              // ALERT 2: LEAD CRUMBLING / LEAD LOST
+              const wasSafe = prevLsClass === 'SAFE' || prevLsClass === 'CUSHIONED';
+              if (wasSafe) {
+                const nowDanger = lsClass === 'AT RISK' || lsClass === 'CRITICAL';
+                const leadLost = !lsClass && oppPtsT >= ctrlPtsT;
+                if (nowDanger || leadLost) {
+                  const lsAlertKey = `${game.id}_LS_CRUMBLE_Q${currentPeriod}`;
+                  if (!game._lastLsAlert || game._lastLsAlert !== lsAlertKey) {
+                    game._lastLsAlert = lsAlertKey;
+                    const alertBody = leadLost
+                      ? `${scoreLine} Q${currentPeriod} ${clock}`
+                        + `\nLEAD LOST — was ${prevLsClass}`
+                        + `\n${ind.controlTeam} ${ctrlPtsT > oppPtsT ? 'now leads by ' + marginT : ctrlPtsT === oppPtsT ? 'TIED' : 'now trails by ' + marginT}`
+                      : `${scoreLine} Q${currentPeriod} ${clock}`
+                        + `\nLead Safety: ${prevLsClass} -> ${lsClass}`
+                        + `\n${ind.controlTeam} leads by ${marginT}`
+                        + `\nOpp recovery: ${fmtSwing(ls.conservative.totalSwing)} / ${fmtSwing(ls.expected.totalSwing)} / ${fmtSwing(ls.optimistic.totalSwing)}`
+                        + `\n~${ls.remainingPoss} poss remaining`;
+                    await sendNtfy(
+                      `${leadLost ? 'LEAD LOST' : 'LEAD CRUMBLING'} — ${matchup}`,
+                      alertBody,
+                      5
+                    );
+                    log(`${matchup}: ${leadLost ? 'LEAD LOST' : 'LEAD CRUMBLING'} — ${prevLsClass} -> ${lsClass || 'null'}`);
+                  }
+                }
+              }
+
+              // ALERT 3: OPPONENT VARIANCE BREAKING
+              if (oppPtsT > ctrlPtsT && marginT >= 3 && ind.score >= 0.60) {
+                const wasStable = prevOppSust === 'LOCKED IN' || prevOppSust === 'DURABLE';
+                const nowBreaking = oppSustNow === 'FRAGILE' || oppSustNow === 'UNSUSTAINABLE';
+                if (wasStable && nowBreaking) {
+                  const sustAlertKey = `${game.id}_SUST_BREAK_Q${currentPeriod}`;
+                  if (!game._lastSustAlert || game._lastSustAlert !== sustAlertKey) {
+                    game._lastSustAlert = sustAlertKey;
+                    const oppAlias = ctrlIsHome ? aA : hA;
+                    await sendNtfy(
+                      `VARIANCE BREAKING — ${matchup}`,
+                      `${scoreLine} Q${currentPeriod} ${clock}`
+                        + `\n${oppAlias} shooting: ${prevOppSust} -> ${oppSustNow}`
+                        + `\n${ind.controlTeam} structural edge ${ind.score.toFixed(2)}, trailing by ${marginT}`
+                        + `\nVariance-sourced lead expected to erode`,
+                      4
+                    );
+                    log(`${matchup}: VARIANCE BREAKING — ${oppAlias} ${prevOppSust} -> ${oppSustNow}`);
+                  }
+                }
+              }
+
+              // Write current values for next cycle comparison
+              await sql`UPDATE games SET
+                prev_tp_class = ${tpClass},
+                prev_ls_class = ${lsClass},
+                prev_opp_sust = ${oppSustNow}
+                WHERE id = ${game.id}`;
+            } catch (e) {
+              log(`${matchup}: transition alert error: ${e.message}`);
+            }
+          }
           // ── QUARTER-BOUNDARY CALIBRATION SNAPSHOTS ─────────────────
           // Detect Q1→Q2, Q2→Q3, Q3→Q4 transitions. Fire ONCE each per game:
           //   1. Save calibration-tagged snapshot (all data layers fresh from this cycle)
