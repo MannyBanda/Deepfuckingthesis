@@ -2272,7 +2272,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
         + (parsed.sustainability ? `\nSust: ${parsed.sustainability}` : '')
         + `\n[${triggerTag}]`;
       const ntfyPriority = isOptimal ? 5 : 4;
-      sendNtfy(ntfyTitle, ntfyBody, ntfyPriority).catch(() => {});
+      await sendNtfy(ntfyTitle, ntfyBody, ntfyPriority);
     }
   } catch (e) {
     log(`${matchup}: ${triggerTag} CAL ERROR — ${e.message}`);
@@ -2875,7 +2875,7 @@ export default async function(req) {
                   + (spreadVal != null ? `\nSpread: ${spreadVal}` : '')
                   + (espnWP ? `\nESPN: ${espnWP.home}%/${espnWP.away}%` : '')
                   + `\nClass: ${leadClass || '?'}`;
-                sendNtfy(ntfyTitle, ntfyBody, alertPriority).catch(() => {});
+                await sendNtfy(ntfyTitle, ntfyBody, alertPriority);
                 log(`${matchup}: ${alertEmoji} ${alertType} PUSHED — ${ind.controlTeam} ${ind.score.toFixed(2)} ${ctrlTrailing ? 'trailing' : 'leading'} by ${margin}${oppSustTier ? ', opp ' + oppSustTier : ''}`);
               }
             }
