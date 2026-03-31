@@ -2284,6 +2284,16 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
 export default async function(req) {
   const startTime = Date.now();
 
+  // ── TEST MODE: verify ntfy pipeline end-to-end ──
+  const url = new URL(req.url, 'https://localhost');
+  if (url.searchParams.get('test_ntfy') === '1') {
+    log('TEST NTFY: firing test alert...');
+    await sendNtfy('🔔 DFT Server Alert Test', 'If you see this, server alerts are working!\nTimestamp: ' + new Date().toISOString(), 3);
+    return new Response(JSON.stringify({ test: true, ntfy_topic: process.env.NTFY_TOPIC ? 'SET' : 'MISSING' }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
   // Get DB connection
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) {
