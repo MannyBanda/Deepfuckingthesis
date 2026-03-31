@@ -154,10 +154,12 @@ async function sendNtfy(title, body, priority = 4) {
   const topic = process.env.NTFY_TOPIC;
   if (!topic) return;
   try {
+    // Node.js fetch requires ASCII-only headers — strip emojis/unicode from Title
+    const asciiTitle = title.replace(/\u2014/g, '-').replace(/[^\x00-\x7F]/g, '').replace(/\s+/g, ' ').trim();
     await fetch(`https://ntfy.sh/${topic}`, {
       method: 'POST',
-      headers: { 'Title': title, 'Priority': String(priority), 'Tags': 'basketball' },
-      body: body,
+      headers: { 'Title': asciiTitle || 'DFT Alert', 'Priority': String(priority), 'Tags': 'basketball' },
+      body: title + '\n' + body,
     });
     log(`NTFY sent: ${title}`);
   } catch (e) {
@@ -2291,20 +2293,10 @@ export default async function(req) {
     const result = { test: true, ntfy_topic: topic ? 'SET' : 'MISSING', topic_value: topic || null };
     if (topic) {
       try {
-        const ntfyUrl = `https://ntfy.sh/${topic}`;
-        result.ntfy_url = ntfyUrl;
-        const resp = await fetch(ntfyUrl, {
-          method: 'POST',
-          headers: { 'Title': '🔔 DFT Server Alert Test', 'Priority': '3', 'Tags': 'basketball' },
-          body: 'If you see this, server alerts are working!\nTimestamp: ' + new Date().toISOString(),
-        });
-        result.status = resp.status;
-        result.statusText = resp.statusText;
-        const body = await resp.text();
-        result.response = body.substring(0, 200);
+        await sendNtfy('DFT Server Alert Test', 'If you see this, server alerts are working!\nTimestamp: ' + new Date().toISOString(), 3);
+        result.status = 'sent';
       } catch (e) {
         result.error = e.message;
-        result.stack = e.stack?.substring(0, 200);
       }
     }
     return new Response(JSON.stringify(result, null, 2), {
