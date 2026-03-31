@@ -41,6 +41,13 @@ const LEAGUES = {
 
 const BDL_BASE = 'https://api.balldontlie.io';
 
+// BDL team IDs (NBA only — tracking data is NBA-specific)
+const BDL_TEAMS = {
+  ATL:1, BOS:2, BKN:3, CHA:4, CHI:5, CLE:6, DAL:7, DEN:8, DET:9, GSW:10,
+  HOU:11, IND:12, LAC:13, LAL:14, MEM:15, MIA:16, MIL:17, MIN:18, NOP:19, NYK:20,
+  OKC:21, ORL:22, PHI:23, PHX:24, POR:25, SAC:26, SAS:27, TOR:28, UTA:29, WAS:30
+};
+
 const W = { I1: 0.25, I2: 0.25, I3: 0.20, I4: 0.20, I5: 0.10 };
 
 const SR_DELAY_MS = 1400; // respect trial tier rate limit
@@ -467,6 +474,39 @@ async function bdlOdds(league, bdlGameId) {
 
   if (homeSpread == null && homeML == null) return null;
   return { homeSpread, homeML, awayML, total };
+}
+
+// Fetch tracking baselines (catch-and-shoot + pull-up eFG) — NBA only, season stats
+// Called once per game, cached on game._trackingData
+async function fetchTrackingData(hA, aA, season) {
+  const hId = BDL_TEAMS[hA], aId = BDL_TEAMS[aA];
+  if (!hId || !aId) return null;
+  try {
+    const s = season || '2025';
+    function extractStats(resp) {
+      const entry = resp?.data?.[0];
+      return entry?.stats || entry || {};
+    }
+    const [hCAS, aCAS, hPU, aPU] = await Promise.all([
+      bdlFetch(`/nba/v1/team_season_averages/shotdashboard?team_id=${hId}&season=${s}&season_type=regular&type=catch_and_shoot`),
+      bdlFetch(`/nba/v1/team_season_averages/shotdashboard?team_id=${aId}&season=${s}&season_type=regular&type=catch_and_shoot`),
+      bdlFetch(`/nba/v1/team_season_averages/shotdashboard?team_id=${hId}&season=${s}&season_type=regular&type=pullups`),
+      bdlFetch(`/nba/v1/team_season_averages/shotdashboard?team_id=${aId}&season=${s}&season_type=regular&type=pullups`),
+    ]);
+    return {
+      home: {
+        catchAndShoot: { efg: extractStats(hCAS).effective_field_goal_percentage || extractStats(hCAS).efg_pct || null },
+        pullUp: { efg: extractStats(hPU).effective_field_goal_percentage || extractStats(hPU).efg_pct || null },
+      },
+      away: {
+        catchAndShoot: { efg: extractStats(aCAS).effective_field_goal_percentage || extractStats(aCAS).efg_pct || null },
+        pullUp: { efg: extractStats(aPU).effective_field_goal_percentage || extractStats(aPU).efg_pct || null },
+      },
+    };
+  } catch (e) {
+    log(`Tracking data fetch failed for ${hA}/${aA}: ${e.message}`);
+    return null;
+  }
 }
 
 // Normalize player name for fuzzy matching (lowercase, strip Jr./Sr./III/II/IV, trim)
@@ -2097,6 +2137,20 @@ async function computeServerContext(sql, game, league, summary, ind, espnWP, hA,
     hFoulouts: hs.foulouts || 0, aFoulouts: as.foulouts || 0,
   };
 
+  // ── 10. TRACKING DATA (catch-and-shoot + pull-up eFG — NBA only, fetched once per game) ──
+  if (league === 'nba') {
+    if (!game._trackingData && !game._trackingFetched) {
+      game._trackingFetched = true;
+      try {
+        game._trackingData = await fetchTrackingData(hA, aA);
+        if (game._trackingData) log(`${matchup}: tracking data fetched`);
+      } catch (e) { /* non-fatal */ }
+    }
+    if (game._trackingData) {
+      ctx.trackingData = game._trackingData;
+    }
+  }
+
   const layerCount = Object.keys(ctx).length;
   if (layerCount > 0) {
     log(`${matchup}: server context computed — ${layerCount} layers: ${Object.keys(ctx).join(', ')}`);
@@ -2572,32 +2626,9 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
     const scoreLine = `${aA} ${ind.awayPts} — ${hA} ${ind.homePts}`;
     const periodStr = `Q${period} ${clock}`;
 
-    // ── 6. Read client-pushed context from DB (rich layers only client can compute) ──
-    let clientCtx = null;
-    let ctxSource = 'none';
-    try {
-      const ctxRows = await sql`
-        SELECT context_json, period, updated_at FROM game_context
-        WHERE game_id = ${game.id}
-        ORDER BY period DESC LIMIT 1
-      `;
-      if (ctxRows.length > 0) {
-        clientCtx = typeof ctxRows[0].context_json === 'string'
-          ? JSON.parse(ctxRows[0].context_json)
-          : ctxRows[0].context_json;
-        const ctxAge = (Date.now() - new Date(ctxRows[0].updated_at).getTime()) / 60000;
-        const ctxLayers = clientCtx ? Object.keys(clientCtx).filter(k => !['gamePeriod','gameClock','homePts','awayPts'].includes(k)).length : 0;
-        log(`${matchup}: ${triggerTag} CAL — client context found (Q${ctxRows[0].period}, ${ctxAge.toFixed(0)}m ago, ${ctxLayers} layers)`);
-        ctxSource = 'client';
-      }
-    } catch (e) { /* game_context table may not exist yet */ }
-
-    // ── 6b. Server fallback — compute context when client is asleep ──
-    if (!clientCtx) {
-      log(`${matchup}: ${triggerTag} CAL — no client context, computing server-side fallback`);
-      clientCtx = await computeServerContext(sql, game, league, summary, ind, espnWP, hA, aA, period, clock, matchup, sust, odds);
-      if (clientCtx) ctxSource = 'server';
-    }
+    // ── 6. Compute server context (server is self-sufficient — no client dependency) ──
+    let clientCtx = await computeServerContext(sql, game, league, summary, ind, espnWP, hA, aA, period, clock, matchup, sust, odds);
+    const ctxSource = clientCtx ? 'server' : 'none';
 
     // ── 7. Call Anthropic API directly (bypasses site password protection) ──
     const ctxStatus = ctxSource === 'client' ? 'client' : ctxSource === 'server' ? 'server-rich' : 'no-context';
