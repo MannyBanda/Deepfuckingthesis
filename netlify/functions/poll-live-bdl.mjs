@@ -2022,6 +2022,38 @@ async function computeServerContext(sql, game, league, summary, ind, espnWP, hA,
   try {
     ctx.throughput = computeThroughputServer(summary, ind, sust, hA, aA, period, clock, league);
     ctx.leadSafety = computeLeadSafetyServer(summary, ind, sust, hA, aA, period, clock, league);
+
+    // Trend arrows — compare against previous poll's expected swing
+    try {
+      const prevRows = await sql`SELECT prev_tp_exp, prev_ls_exp FROM games WHERE id = ${game.id}`;
+      const prev = prevRows.length > 0 ? prevRows[0] : {};
+
+      if (ctx.throughput) {
+        const curExp = ctx.throughput.expected.totalSwing;
+        const prevExp = prev.prev_tp_exp;
+        if (prevExp != null && !isNaN(prevExp)) {
+          const delta = Math.round((curExp - prevExp) * 10) / 10;
+          ctx.throughput.trend = Math.abs(delta) < 0.5 ? '▬' : delta > 0 ? '▲' : '▼';
+          ctx.throughput.trendDelta = delta;
+        }
+        await sql`UPDATE games SET prev_tp_exp = ${curExp} WHERE id = ${game.id}`;
+      }
+
+      if (ctx.leadSafety) {
+        const curExp = ctx.leadSafety.expected.totalSwing;
+        const prevExp = prev.prev_ls_exp;
+        if (prevExp != null && !isNaN(prevExp)) {
+          const delta = Math.round((curExp - prevExp) * 10) / 10;
+          // For lead safety, LOWER opponent recovery = safer lead = ▲ (improving)
+          ctx.leadSafety.trend = Math.abs(delta) < 0.5 ? '▬' : delta < 0 ? '▲' : '▼';
+          ctx.leadSafety.trendDelta = delta;
+        }
+        await sql`UPDATE games SET prev_ls_exp = ${curExp} WHERE id = ${game.id}`;
+      }
+    } catch (e) {
+      // prev columns may not exist yet — non-fatal
+      log(`${matchup}: trend columns read/write failed (run init?): ${e.message}`);
+    }
   } catch (e) {
     log(`${matchup}: server throughput/leadSafety failed: ${e.message}`);
   }
@@ -2413,6 +2445,7 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, calibrationN
     p += `Current deficit: ${tp.deficit} pts | Remaining possessions: ~${tp.remainingPoss}\n`;
     p += `Structural edge per possession: ${tp.structEdge} (${tp.fTeam} structural rate: ${tp.ctrlStructRate} vs opponent: ${tp.oppStructRate})\n`;
     if (tp.degradation < 1.0) p += `Deficit degradation applied: ${(tp.degradation * 100).toFixed(0)}%\n`;
+    if (tp.trend) p += `TREND: ${tp.trend} ${tp.trendDelta >= 0 ? '+' : ''}${tp.trendDelta} (${tp.trend === '▲' ? 'recovery improving' : tp.trend === '▼' ? 'recovery fading' : 'stable'})\n`;
     p += `HOW TO USE: Compare projected recovery points to deficit. If conservative covers deficit, recovery is PROBABLE. If only optimistic covers it, CONTESTED. If none cover it, NO PATH.\n`;
   }
 
@@ -2426,6 +2459,7 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, calibrationN
     p += `  Expected: ${fmtSwing(ls.expected.totalSwing)} pts recovery\n`;
     p += `  Optimistic: ${fmtSwing(ls.optimistic.totalSwing)} pts recovery\n`;
     p += `Remaining possessions: ~${ls.remainingPoss}\n`;
+    if (ls.trend) p += `TREND: ${ls.trend} ${ls.trendDelta >= 0 ? '+' : ''}${ls.trendDelta} (${ls.trend === '▲' ? 'lead strengthening' : ls.trend === '▼' ? 'lead eroding' : 'stable'})\n`;
     p += `SAFE = optimistic < 50% of lead. AT RISK = expected meaningfully erodes lead. CRITICAL = conservative threatens lead.\n`;
   }
 

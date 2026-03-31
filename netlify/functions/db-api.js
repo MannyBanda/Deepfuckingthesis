@@ -143,6 +143,10 @@ exports.handler = async (event) => {
       // Quarter-level data for server-authoritative rolling window
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS quarter_data JSONB`; } catch(e) {}
 
+      // Throughput/lead safety trend tracking
+      try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_tp_exp REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_ls_exp REAL`; } catch(e) {}
+
       // WP profile table — team-level win probability curve analysis
       await sql`
         CREATE TABLE IF NOT EXISTS wp_profiles (
