@@ -2825,36 +2825,58 @@ export default async function(req) {
           log(`${matchup} Q${currentPeriod} ${clock} | ${ind.homePts}-${ind.awayPts} | ${ind.controlTeam} ${ind.score} | I:${ind.I1.score}/${ind.I2.score}/${ind.I3.score}/${ind.I4.score}/${ind.I5.score} | sust:${leadSust || '?'} class:${leadClass || '?'}${bdlEnriched ? ' BDL✓' : ''}${spreadVal != null ? ` spd:${spreadVal}` : ''}${espnWP ? ` | WP:${espnWP.home}%` : ''}`);
 
           // ── LIGHTWEIGHT ENTRY SIGNAL CHECK (every cycle, no Sonnet needed) ──
-          // Mirrors client synthesizer BUY conditions: floor ≥ 0.70, trailing, deficit 4-15,
-          // opponent FRAGILE/UNSUSTAINABLE, control team NOT FRAGILE
+          // Relaxed to match client synthesizer coverage:
+          //   BUY:  floor ≥ 0.70, trailing 4-15, Q2+
+          //   LEAN: floor ≥ 0.60, trailing 4-15, opp FRAGILE/UNSUSTAINABLE, Q2+
+          //   BWC:  floor ≥ 0.70, leading 2+, Q2+
+          //   HOLD RISK: floor ≥ 0.65, leading 2+, opp sust LOCKED/DURABLE (opponent engine strong), Q3+
           {
-            const trailSide = leadSide === 'home' ? 'away' : 'home';
             const ctrlSide = ind.controlTeam === hA ? 'home' : 'away';
             const oppSide = ctrlSide === 'home' ? 'away' : 'home';
             const ctrlSust = sust?.[ctrlSide]?.tier || null;
             const oppSustTier = sust?.[oppSide]?.tier || null;
-            const ctrlTrailing = (ctrlSide === 'home' && ind.homePts < ind.awayPts) || (ctrlSide === 'away' && ind.awayPts < ind.homePts);
-            const ctrlDeficit = ctrlTrailing ? Math.abs(ind.homePts - ind.awayPts) : 0;
+            const ctrlIsHome = ind.controlTeam === hA;
+            const ctrlPtsA = ctrlIsHome ? ind.homePts : ind.awayPts;
+            const oppPtsA = ctrlIsHome ? ind.awayPts : ind.homePts;
+            const ctrlTrailing = oppPtsA > ctrlPtsA;
+            const ctrlLeading = ctrlPtsA > oppPtsA;
+            const margin = Math.abs(ctrlPtsA - oppPtsA);
             const oppFragile = oppSustTier === 'FRAGILE' || oppSustTier === 'UNSUSTAINABLE';
-            const ctrlNotFragile = ctrlSust !== 'FRAGILE' && ctrlSust !== 'UNSUSTAINABLE';
-            const inBuyRange = ctrlDeficit >= 4 && ctrlDeficit <= 15;
+            const oppStrong = oppSustTier === 'LOCKED IN' || oppSustTier === 'DURABLE';
 
-            if (ind.score >= 0.70 && ctrlTrailing && inBuyRange && oppFragile && ctrlNotFragile && currentPeriod >= 2) {
-              // Debounce: only fire once per game per period
-              const alertKey = `${game.id}_Q${currentPeriod}`;
+            let alertType = null, alertEmoji = '', alertPriority = 4;
+
+            if (ind.score >= 0.70 && ctrlTrailing && margin >= 4 && margin <= 15 && currentPeriod >= 2) {
+              alertType = 'BUY';
+              alertEmoji = '🟢';
+              alertPriority = 5;
+            } else if (ind.score >= 0.60 && ctrlTrailing && margin >= 4 && margin <= 15 && oppFragile && currentPeriod >= 2) {
+              alertType = 'LEAN BUY';
+              alertEmoji = '🟡';
+              alertPriority = 4;
+            } else if (ind.score >= 0.70 && ctrlLeading && margin >= 2 && currentPeriod >= 2) {
+              alertType = 'BWC';
+              alertEmoji = '🔵';
+              alertPriority = 3;
+            }
+
+            if (alertType) {
+              const alertKey = `${game.id}_${alertType}_Q${currentPeriod}`;
               if (!game._lastAlert || game._lastAlert !== alertKey) {
                 game._lastAlert = alertKey;
                 cacheUpdated = true;
                 const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA}`;
-                const ntfyTitle = `🟢 BUY SIGNAL — ${matchup}`;
+                const sustLine = (ctrlSust || oppSustTier) ? `\nSust: ${oppSustTier || '?'} vs ${ctrlSust || '?'}` : '';
+                const ntfyTitle = `${alertEmoji} ${alertType} — ${matchup}`;
                 const ntfyBody = `${scoreLine} Q${currentPeriod} ${clock}`
                   + `\nFloor: ${ind.controlTeam} ${ind.score.toFixed(2)}`
-                  + `\nDeficit: ${ctrlDeficit} | ${oppSustTier} vs ${ctrlSust || 'N/A'}`
+                  + (ctrlTrailing ? `\nDeficit: ${margin}` : `\nLead: ${margin}`)
+                  + sustLine
                   + (spreadVal != null ? `\nSpread: ${spreadVal}` : '')
-                  + (espnWP ? `\nESPN WP: ${espnWP.home}%/${espnWP.away}%` : '')
+                  + (espnWP ? `\nESPN: ${espnWP.home}%/${espnWP.away}%` : '')
                   + `\nClass: ${leadClass || '?'}`;
-                sendNtfy(ntfyTitle, ntfyBody, 5).catch(() => {});
-                log(`${matchup}: 🟢 ENTRY SIGNAL PUSHED — ${ind.controlTeam} ${ind.score.toFixed(2)} trailing by ${ctrlDeficit}, opp ${oppSustTier}`);
+                sendNtfy(ntfyTitle, ntfyBody, alertPriority).catch(() => {});
+                log(`${matchup}: ${alertEmoji} ${alertType} PUSHED — ${ind.controlTeam} ${ind.score.toFixed(2)} ${ctrlTrailing ? 'trailing' : 'leading'} by ${margin}${oppSustTier ? ', opp ' + oppSustTier : ''}`);
               }
             }
           }
