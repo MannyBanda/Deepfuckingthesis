@@ -3435,8 +3435,8 @@ export default async function(req) {
           log(`${matchup} Q${currentPeriod} ${clock} | ${ind.homePts}-${ind.awayPts} | ${ind.controlTeam} ${ind.score} | I:${ind.I1.score}/${ind.I2.score}/${ind.I3.score}/${ind.I4.score}/${ind.I5.score} | sust:${leadSust || '?'} class:${leadClass || '?'}${bdlEnriched ? ' BDL✓' : ''}${spreadVal != null ? ` spd:${spreadVal}` : ''}${espnWP ? ` | WP:${espnWP.home}%` : ''}`);
 
           // ── LIGHTWEIGHT ENTRY SIGNAL CHECK (every cycle, no Sonnet needed) ──
-          // BUY:  floor ≥ 0.70, trailing 4-15, Q2+
-          // LEAN: floor ≥ 0.60, trailing 4-15, opp FRAGILE/UNSUSTAINABLE, Q2+
+          // BUY:  floor ≥ 0.70, trailing 4-15, Q2+, throughput not UNLIKELY/NO PATH
+          // LEAN: floor ≥ 0.60, trailing 4-15, opp FRAGILE/UNSUSTAINABLE, Q2+, throughput not UNLIKELY/NO PATH
           // BWC:  floor ≥ 0.70, leading 2+, Q2+, edge > 0, lead safety not AT RISK/CRITICAL
           {
             const ctrlSide = ind.controlTeam === hA ? 'home' : 'away';
@@ -3474,17 +3474,35 @@ export default async function(req) {
               lsForBWC = computeLeadSafetyServer(summary, ind, sust, hA, aA, currentPeriod, clock, league);
             }
 
+            // Compute throughput for BUY/LEAN gate — is the deficit recoverable?
+            let tpForBuy = null;
+            if (ctrlTrailing && margin >= 4) {
+              try { tpForBuy = computeThroughputServer(summary, ind, sust, hA, aA, currentPeriod, clock, league); }
+              catch (e) { log(`${matchup}: throughput compute failed in alert gate: ${e.message}`); }
+            }
+
             let alertType = null, alertEmoji = '', alertPriority = 4;
             let alertDetail = ''; // extra context for BWC body
 
             if (ind.score >= 0.70 && ctrlTrailing && margin >= 4 && margin <= 15 && currentPeriod >= 2) {
-              alertType = 'BUY';
-              alertEmoji = '🟢';
-              alertPriority = 5;
+              // Throughput gate: suppress if recovery math says no path
+              const tpClass = tpForBuy?.classification || null;
+              if (tpClass === 'UNLIKELY' || tpClass === 'NO PATH') {
+                log(`${matchup}: BUY suppressed — throughput ${tpClass} (exp swing ${tpForBuy ? Math.round(tpForBuy.expected.totalSwing) : '?'} vs deficit ${margin})`);
+              } else {
+                alertType = 'BUY';
+                alertEmoji = '🟢';
+                alertPriority = 5;
+              }
             } else if (ind.score >= 0.60 && ctrlTrailing && margin >= 4 && margin <= 15 && oppFragile && currentPeriod >= 2) {
-              alertType = 'LEAN BUY';
-              alertEmoji = '🟡';
-              alertPriority = 4;
+              const tpClass = tpForBuy?.classification || null;
+              if (tpClass === 'UNLIKELY' || tpClass === 'NO PATH') {
+                log(`${matchup}: LEAN BUY suppressed — throughput ${tpClass} (exp swing ${tpForBuy ? Math.round(tpForBuy.expected.totalSwing) : '?'} vs deficit ${margin})`);
+              } else {
+                alertType = 'LEAN BUY';
+                alertEmoji = '🟡';
+                alertPriority = 4;
+              }
             } else if (ind.score >= 0.70 && ctrlLeading && margin >= 2 && currentPeriod >= 2) {
               // BWC with edge gate (matches client synthesizer)
               if (ctrlEdge !== null && ctrlEdge > 0) {
@@ -3527,9 +3545,11 @@ export default async function(req) {
                 } else {
                   // BUY/LEAN BUY body — lead with actionable line
                   const mlLine = ctrlML ? `\nBUY ${ind.controlTeam} ML ${ctrlML}${ctrlEdge != null ? ' | Edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}` : '';
+                  const tpLine = tpForBuy ? `\nTP: ${tpForBuy.classification} (${fmtSwing(tpForBuy.expected.totalSwing)} exp vs ${margin} deficit, ~${tpForBuy.remainingPoss} poss)` : '';
                   ntfyBody = `${scoreLine} Q${currentPeriod} ${clock}`
                     + mlLine
                     + `\nFloor: ${ind.controlTeam} ${ind.score.toFixed(2)} | Deficit: ${margin}`
+                    + tpLine
                     + sustLine
                     + (spreadVal != null ? `\nSpread: ${spreadVal}` : '');
                 }
