@@ -2442,6 +2442,29 @@ async function runQA(section){
           if(fwpMissing>anRows.length*0.5) meh('ANAL','fwp',fwpOK+'/'+anRows.length+' have FWP',snap({sampleFWP:anRows.slice(0,3).map(function(r){return{fwp:r.fwp,trigger:r.trigger};})}));
           else ok('ANAL','fwp',fwpOK+'/'+anRows.length+' have FWP');
 
+          // Context layers analysis — how rich was the server prompt?
+          var ctxRows = anRows.filter(function(r){ return r.context_layers; });
+          if(ctxRows.length > 0){
+            var layerCounts = ctxRows.map(function(r){
+              var m = String(r.context_layers).match(/^(\d+)L/);
+              return m ? parseInt(m[1]) : 0;
+            });
+            var avgLayers = (layerCounts.reduce(function(a,b){return a+b;},0) / layerCounts.length).toFixed(1);
+            var minLayers = Math.min.apply(null, layerCounts);
+            var maxLayers = Math.max.apply(null, layerCounts);
+            if(minLayers < 8) meh('ANAL','ctx_layers','Avg '+avgLayers+'L (min '+minLayers+', max '+maxLayers+') — thin prompts detected',snap(ctxRows.map(function(r){return{trigger:r.trigger,layers:r.context_layers,chars:r.prompt_chars};})));
+            else ok('ANAL','ctx_layers','Avg '+avgLayers+'L (min '+minLayers+', max '+maxLayers+') across '+ctxRows.length+' analyses');
+            // Show per-trigger breakdown
+            var byTrigger = {};
+            ctxRows.forEach(function(r){ if(!byTrigger[r.trigger]) byTrigger[r.trigger] = []; byTrigger[r.trigger].push(r.context_layers); });
+            Object.keys(byTrigger).sort().forEach(function(t){
+              var vals = byTrigger[t];
+              ok('ANAL','ctx:'+t, vals.length + ' analyses: ' + vals.join(' | '));
+            });
+          } else if(anRows.length > 0) {
+            meh('ANAL','ctx_layers','No context_layers data — run ?action=init to add column, then redeploy',snap({hint:'context_layers column added in latest db-api.js'}));
+          }
+
           var hydratable=0;
           anRows.forEach(function(r){
             var hasEdgeStr=r.edge&&String(r.edge).match(/([+-]?\d+\.?\d*)/);
