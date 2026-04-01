@@ -3425,11 +3425,9 @@ export default async function(req) {
           log(`${matchup} Q${currentPeriod} ${clock} | ${ind.homePts}-${ind.awayPts} | ${ind.controlTeam} ${ind.score} | I:${ind.I1.score}/${ind.I2.score}/${ind.I3.score}/${ind.I4.score}/${ind.I5.score} | sust:${leadSust || '?'} class:${leadClass || '?'}${bdlEnriched ? ' BDL✓' : ''}${spreadVal != null ? ` spd:${spreadVal}` : ''}${espnWP ? ` | WP:${espnWP.home}%` : ''}`);
 
           // ── LIGHTWEIGHT ENTRY SIGNAL CHECK (every cycle, no Sonnet needed) ──
-          // Relaxed to match client synthesizer coverage:
-          //   BUY:  floor ≥ 0.70, trailing 4-15, Q2+
-          //   LEAN: floor ≥ 0.60, trailing 4-15, opp FRAGILE/UNSUSTAINABLE, Q2+
-          //   BWC:  floor ≥ 0.70, leading 2+, Q2+
-          //   HOLD RISK: floor ≥ 0.65, leading 2+, opp sust LOCKED/DURABLE (opponent engine strong), Q3+
+          // BUY:  floor ≥ 0.70, trailing 4-15, Q2+
+          // LEAN: floor ≥ 0.60, trailing 4-15, opp FRAGILE/UNSUSTAINABLE, Q2+
+          // BWC:  floor ≥ 0.70, leading 2+, Q2+, edge > 0, lead safety not AT RISK/CRITICAL
           {
             const ctrlSide = ind.controlTeam === hA ? 'home' : 'away';
             const oppSide = ctrlSide === 'home' ? 'away' : 'home';
@@ -3442,9 +3440,32 @@ export default async function(req) {
             const ctrlLeading = ctrlPtsA > oppPtsA;
             const margin = Math.abs(ctrlPtsA - oppPtsA);
             const oppFragile = oppSustTier === 'FRAGILE' || oppSustTier === 'UNSUSTAINABLE';
-            const oppStrong = oppSustTier === 'LOCKED IN' || oppSustTier === 'DURABLE';
+
+            // Compute edge for BWC gate: floor (structural win prob) minus MIP
+            let ctrlEdge = null;
+            let ctrlML = null;
+            let garbageLine = false;
+            if (odds && (odds.homeML || odds.awayML)) {
+              const hML = parseFloat(odds.homeML), aML = parseFloat(odds.awayML);
+              garbageLine = (Math.abs(hML) >= 50000 || Math.abs(aML) >= 50000 || hML === aML);
+              if (!garbageLine) {
+                ctrlML = ctrlIsHome ? odds.homeML : odds.awayML;
+                const ctrlMIP = mlToProb(ctrlML);
+                if (ctrlMIP != null) {
+                  ctrlEdge = (ind.score * 100) - (ctrlMIP * 100);
+                  ctrlEdge = Math.round(ctrlEdge * 10) / 10;
+                }
+              }
+            }
+
+            // Compute lead safety for BWC downgrade check
+            let lsForBWC = null;
+            if (ctrlLeading && margin >= 2) {
+              lsForBWC = computeLeadSafetyServer(summary, ind, sust, hA, aA, currentPeriod, clock, league);
+            }
 
             let alertType = null, alertEmoji = '', alertPriority = 4;
+            let alertDetail = ''; // extra context for BWC body
 
             if (ind.score >= 0.70 && ctrlTrailing && margin >= 4 && margin <= 15 && currentPeriod >= 2) {
               alertType = 'BUY';
@@ -3455,9 +3476,27 @@ export default async function(req) {
               alertEmoji = '🟡';
               alertPriority = 4;
             } else if (ind.score >= 0.70 && ctrlLeading && margin >= 2 && currentPeriod >= 2) {
-              alertType = 'BWC';
-              alertEmoji = '🔵';
-              alertPriority = 3;
+              // BWC with edge gate (matches client synthesizer)
+              if (ctrlEdge !== null && ctrlEdge > 0) {
+                // Check lead safety — downgrade to WATCH if AT RISK/CRITICAL
+                const lsClass = lsForBWC?.classification || null;
+                if (lsClass === 'AT RISK' || lsClass === 'CRITICAL') {
+                  // Don't fire BWC — lead is eroding, not actionable
+                  log(`${matchup}: BWC suppressed — lead ${lsClass}, edge +${ctrlEdge}%`);
+                } else {
+                  alertType = 'BUY WINDOW CLOSING';
+                  alertEmoji = '🔵';
+                  alertPriority = 3;
+                  alertDetail = `BUY ${ind.controlTeam} ML ${ctrlML} | Edge +${ctrlEdge}%`
+                    + (lsClass ? `\nLead Safety: ${lsClass}` : '');
+                }
+              } else if (garbageLine) {
+                log(`${matchup}: BWC skipped — line dead (garbage MLs)`);
+              } else if (ctrlEdge !== null && ctrlEdge <= 0) {
+                log(`${matchup}: BWC skipped — no edge (${ctrlEdge > 0 ? '+' : ''}${ctrlEdge}%)`);
+              } else {
+                log(`${matchup}: BWC skipped — no odds data for edge calc`);
+              }
             }
 
             if (alertType) {
@@ -3466,39 +3505,53 @@ export default async function(req) {
                 game._lastAlert = alertKey;
                 cacheUpdated = true;
                 const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA}`;
-                const sustLine = (ctrlSust || oppSustTier) ? `\nSust: ${oppSustTier || '?'} vs ${ctrlSust || '?'}` : '';
+                const sustLine = (ctrlSust || oppSustTier) ? `\nSust: ${ind.controlTeam} ${ctrlSust || '?'} vs ${ctrlIsHome ? aA : hA} ${oppSustTier || '?'}` : '';
                 const ntfyTitle = `${alertEmoji} ${alertType} — ${matchup}`;
-                const ntfyBody = `${scoreLine} Q${currentPeriod} ${clock}`
-                  + `\nFloor: ${ind.controlTeam} ${ind.score.toFixed(2)}`
-                  + (ctrlTrailing ? `\nDeficit: ${margin}` : `\nLead: ${margin}`)
-                  + sustLine
-                  + (spreadVal != null ? `\nSpread: ${spreadVal}` : '')
-                  + (espnWP ? `\nESPN: ${espnWP.home}%/${espnWP.away}%` : '')
-                  + `\nClass: ${leadClass || '?'}`;
+                let ntfyBody;
+                if (alertDetail) {
+                  // BWC body: lead with actionable BUY line
+                  ntfyBody = `${scoreLine} Q${currentPeriod} ${clock}`
+                    + `\n${alertDetail}`
+                    + `\nFloor: ${ind.score.toFixed(2)} | Lead: ${margin}`
+                    + sustLine;
+                } else {
+                  // BUY/LEAN BUY body — lead with actionable line
+                  const mlLine = ctrlML ? `\nBUY ${ind.controlTeam} ML ${ctrlML}${ctrlEdge != null ? ' | Edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}` : '';
+                  ntfyBody = `${scoreLine} Q${currentPeriod} ${clock}`
+                    + mlLine
+                    + `\nFloor: ${ind.controlTeam} ${ind.score.toFixed(2)} | Deficit: ${margin}`
+                    + sustLine
+                    + (spreadVal != null ? `\nSpread: ${spreadVal}` : '');
+                }
                 await sendNtfy(ntfyTitle, ntfyBody, alertPriority);
-                log(`${matchup}: ${alertEmoji} ${alertType} PUSHED — ${ind.controlTeam} ${ind.score.toFixed(2)} ${ctrlTrailing ? 'trailing' : 'leading'} by ${margin}${oppSustTier ? ', opp ' + oppSustTier : ''}`);
+                log(`${matchup}: ${alertEmoji} ${alertType} PUSHED — ${ind.controlTeam} ${ind.score.toFixed(2)} ${ctrlTrailing ? 'trailing' : 'leading'} by ${margin}${ctrlEdge != null ? ', edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}${oppSustTier ? ', opp ' + oppSustTier : ''}`);
               }
             }
           }
           // ── TRANSITION ALERTS (throughput/lead safety/sustainability) ──────
-          // Computed every poll cycle. Fires on classification changes.
+          // Per-side tracking: each team's prev values are independent, so
+          // control flips never cross-contaminate transition comparisons.
           if (currentPeriod >= 2) {
             try {
               const tp = computeThroughputServer(summary, ind, sust, hA, aA, currentPeriod, clock, league);
               const ls = computeLeadSafetyServer(summary, ind, sust, hA, aA, currentPeriod, clock, league);
-              const oppSide = ind.controlTeam === hA ? 'away' : 'home';
+              const ctrlIsHome = ind.controlTeam === hA;
+              const oppSide = ctrlIsHome ? 'away' : 'home';
               const oppSustNow = sust?.[oppSide]?.tier || null;
               const tpClass = tp?.classification || null;
               const lsClass = ls?.classification || null;
 
-              // Read previous values
-              const prevRows = await sql`SELECT prev_tp_class, prev_ls_class, prev_opp_sust FROM games WHERE id = ${game.id}`;
+              // Read per-side previous values (home reads home prev, away reads away prev)
+              const prevRows = await sql`SELECT
+                prev_home_tp_class, prev_home_ls_class, prev_home_opp_sust,
+                prev_away_tp_class, prev_away_ls_class, prev_away_opp_sust
+                FROM games WHERE id = ${game.id}`;
               const prev = prevRows.length > 0 ? prevRows[0] : {};
-              const prevTpClass = prev.prev_tp_class || null;
-              const prevLsClass = prev.prev_ls_class || null;
-              const prevOppSust = prev.prev_opp_sust || null;
+              const sidePrefix = ctrlIsHome ? 'prev_home' : 'prev_away';
+              const prevTpClass = prev[`${sidePrefix}_tp_class`] || null;
+              const prevLsClass = prev[`${sidePrefix}_ls_class`] || null;
+              const prevOppSust = prev[`${sidePrefix}_opp_sust`] || null;
 
-              const ctrlIsHome = ind.controlTeam === hA;
               const ctrlPtsT = ctrlIsHome ? ind.homePts : ind.awayPts;
               const oppPtsT = ctrlIsHome ? ind.awayPts : ind.homePts;
               const marginT = Math.abs(ctrlPtsT - oppPtsT);
@@ -3576,12 +3629,20 @@ export default async function(req) {
                 }
               }
 
-              // Write current values for next cycle comparison
-              await sql`UPDATE games SET
-                prev_tp_class = ${tpClass},
-                prev_ls_class = ${lsClass},
-                prev_opp_sust = ${oppSustNow}
-                WHERE id = ${game.id}`;
+              // Write current values to THIS SIDE's prev columns only
+              if (ctrlIsHome) {
+                await sql`UPDATE games SET
+                  prev_home_tp_class = ${tpClass},
+                  prev_home_ls_class = ${lsClass},
+                  prev_home_opp_sust = ${oppSustNow}
+                  WHERE id = ${game.id}`;
+              } else {
+                await sql`UPDATE games SET
+                  prev_away_tp_class = ${tpClass},
+                  prev_away_ls_class = ${lsClass},
+                  prev_away_opp_sust = ${oppSustNow}
+                  WHERE id = ${game.id}`;
+              }
             } catch (e) {
               log(`${matchup}: transition alert error: ${e.message}`);
             }

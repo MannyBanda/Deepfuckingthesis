@@ -148,10 +148,17 @@ exports.handler = async (event) => {
       // Throughput/lead safety trend tracking
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_tp_exp REAL`; } catch(e) {}
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_ls_exp REAL`; } catch(e) {}
-      // Transition alert tracking
+      // Transition alert tracking (legacy — single-side, deprecated)
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_tp_class TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_ls_class TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_opp_sust TEXT`; } catch(e) {}
+      // Per-side transition alert tracking (fixes control-flip false fires)
+      try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_home_tp_class TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_home_ls_class TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_home_opp_sust TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_away_tp_class TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_away_ls_class TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_away_opp_sust TEXT`; } catch(e) {}
 
       // WP profile table — team-level win probability curve analysis
       await sql`
