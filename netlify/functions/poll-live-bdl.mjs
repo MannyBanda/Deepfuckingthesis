@@ -2743,7 +2743,8 @@ export default async function(req) {
   const url = new URL(req.url, 'https://localhost');
   if (url.searchParams.get('test_ntfy') === '1') {
     const topic = process.env.NTFY_TOPIC;
-    const result = { test: true, ntfy_topic: topic ? 'SET' : 'MISSING', topic_value: topic || null };
+    const result = { test: true, version: 'v2-server-rich-ctx', ntfy_topic: topic ? 'SET' : 'MISSING', topic_value: topic || null,
+      hasFunctions: { computeThroughputServer: typeof computeThroughputServer, formatSonnetPrompt: typeof formatSonnetPrompt, computeSwingCoreServer: typeof computeSwingCoreServer, fetchTrackingData: typeof fetchTrackingData } };
     if (topic) {
       try {
         await sendNtfy('DFT Server Alert Test', 'If you see this, server alerts are working!\nTimestamp: ' + new Date().toISOString(), 3);
