@@ -2659,6 +2659,38 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       summary,
     });
 
+    // ── Compute prompt layer inventory for diagnostics ──
+    const ctx = clientCtx || {};
+    const layerInventory = [
+      thesis ? 'thesis' : null,
+      calibrationNote ? 'calibration' : null,
+      sust ? 'sust' : null,
+      leadComp ? 'leadComp' : null,
+      ind ? 'ind' : null,
+      clutchData ? 'clutch' : null,
+      odds ? 'odds' : null,
+      espnWP ? 'espnWP' : null,
+      wpProfiles ? 'wpProfiles' : null,
+      analysisHistory ? 'history' : null,
+      quarterDataFromDB ? 'quarterData' : null,
+      ctx.rollingWindow?.available ? 'window' : null,
+      ctx.acceleration ? 'accel' : null,
+      ctx.combinedRead ? 'combinedRead' : null,
+      ctx.pbpAudit ? 'pbp' : null,
+      ctx.subMetricArrows ? 'arrows' : null,
+      ctx.adjustment ? 'adjustment' : null,
+      ctx.throughput ? 'throughput' : null,
+      ctx.leadSafety ? 'leadSafety' : null,
+      ctx.mip ? 'mip' : null,
+      ctx.bonusStatus ? 'bonus' : null,
+      ctx.gameMeta ? 'gameMeta' : null,
+      ctx.edgeHistory ? 'edgeHistory' : null,
+      ctx.trackingData ? 'tracking' : null,
+    ].filter(Boolean);
+    const contextLayersStr = `${layerInventory.length}L: ${layerInventory.join(',')}`;
+    const promptChars = userPrompt.length;
+    log(`${matchup}: ${triggerTag} PROMPT — ${contextLayersStr} | ${promptChars} chars`);
+
     const anthropicResp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -2691,18 +2723,20 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
     // ── 8. Parse structured fields from Sonnet response ──
     const parsed = parseAnalysisText(result.analysis, hA, aA);
 
-    // ── 9. Save analysis to DB with trigger tag ──
+    // ── 9. Save analysis to DB with trigger tag + prompt diagnostics ──
     try {
       await sql`
         INSERT INTO analyses (game_id, period, clock, control_team, control_score,
           fwp, edge, entry, conviction, signal, sustainability, lead_source, raw_text,
-          prediction_json, indicators_json, "trigger", home_pts, away_pts)
+          prediction_json, indicators_json, "trigger", home_pts, away_pts,
+          context_layers, prompt_chars)
         VALUES (${game.id}, ${period}, ${clock}, ${parsed.controlTeam}, ${parsed.controlScore},
           ${parsed.fwp}, ${parsed.edge}, ${parsed.entry}, ${parsed.conviction}, ${parsed.signal},
           ${parsed.sustainability}, ${parsed.leadSource}, ${result.analysis},
           ${parsed.predictionJson ? JSON.stringify(parsed.predictionJson) : null},
           ${parsed.indicatorsJson ? JSON.stringify(parsed.indicatorsJson) : null},
-          ${triggerTag}, ${ind.homePts || null}, ${ind.awayPts || null})
+          ${triggerTag}, ${ind.homePts || null}, ${ind.awayPts || null},
+          ${contextLayersStr}, ${promptChars})
       `;
     } catch (e) {
       log(`${matchup}: ${triggerTag} CAL — analysis save failed: ${e.message}`);

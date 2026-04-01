@@ -133,6 +133,8 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS "trigger" TEXT DEFAULT 'manual'`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS home_pts INTEGER`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS away_pts INTEGER`; } catch(e) {}
+      try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS context_layers TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS prompt_chars INTEGER`; } catch(e) {}
 
       // Snapshot enrichment columns (server-side polling)
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'client'`; } catch(e) {}
@@ -954,7 +956,7 @@ exports.handler = async (event) => {
         SELECT game_id, ts, period, clock,
           control_team, control_score, fwp, edge, entry, conviction, signal,
           sustainability, lead_source, prediction_json, indicators_json, raw_text,
-          "trigger", home_pts, away_pts
+          "trigger", home_pts, away_pts, context_layers, prompt_chars
         FROM analyses
         WHERE game_id = ANY(${gameIds}) AND "trigger" LIKE 'auto_q%'
         ORDER BY game_id, ts ASC
