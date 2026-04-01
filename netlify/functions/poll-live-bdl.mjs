@@ -2765,6 +2765,95 @@ export default async function(req) {
   }
   const sql = neon(dbUrl);
 
+  // ── TEST CONTEXT: diagnose server context computation ──
+  if (url.searchParams.get('test_context') === '1') {
+    try {
+      const testGameId = url.searchParams.get('game_id');
+      // Find a live game
+      const gamesRows = await sql`SELECT id, matchup, home_alias, away_alias FROM games WHERE league = 'nba' ORDER BY created_at DESC LIMIT 10`;
+      const targetGame = testGameId ? gamesRows.find(g => g.id.startsWith(testGameId)) : gamesRows[0];
+      if (!targetGame) return new Response(JSON.stringify({ error: 'No games found' }), { headers: { 'Content-Type': 'application/json' } });
+
+      const gid = targetGame.id;
+      const hA = targetGame.home_alias, aA = targetGame.away_alias;
+
+      // Get latest snapshot for summary-like data
+      const snapRows = await sql`SELECT * FROM snapshots WHERE game_id = ${gid} ORDER BY ts DESC LIMIT 1`;
+      const snap = snapRows.length > 0 ? snapRows[0] : null;
+
+      // Build a minimal summary from BDL (same as poll loop would)
+      const bdlKey = process.env.BDL_API_KEY;
+      const d = today();
+      const pad = n => String(n).padStart(2, '0');
+      const dateStr = `${d.year}-${pad(d.month)}-${pad(d.day)}`;
+      const boxResp = await bdlFetch(`/nba/v1/box_scores?date=${dateStr}`);
+      const boxGames = boxResp?.data || [];
+      
+      // Find the matching BDL game
+      const bdlGame = boxGames.find(bg => {
+        const bh = bg.home_team?.abbreviation, ba = bg.away_team?.abbreviation;
+        return (bh === hA && ba === aA) || (bh === aA && ba === hA);
+      });
+
+      if (!bdlGame) return new Response(JSON.stringify({ error: 'BDL game not found for ' + aA + '@' + hA, gamesAvailable: boxGames.length }), { headers: { 'Content-Type': 'application/json' } });
+
+      // Parse PBP
+      const playsResp = await bdlFetch(`/nba/v1/plays?game_id=${bdlGame.id}`);
+      const pbpResult = parseBDLPBPServer(playsResp?.data || [], hA, aA);
+
+      // Build summary
+      const summary = buildSummaryFromBDLServer(bdlGame, pbpResult, null);
+      const period = summary.quarter || bdlGame.period || 1;
+      const clock = summary.clock || '';
+
+      // Compute indicators + sustainability
+      const ind = computeServer(summary);
+      const sust = computeSustainability(summary);
+      const leadComp = computeLeadComposition(summary);
+
+      // Compute server context
+      const game = { id: gid, _bdlPbp: pbpResult };
+      const ctx = await computeServerContext(sql, game, 'nba', summary, ind, null, hA, aA, period, clock, aA + '@' + hA, sust, null);
+
+      const result = {
+        game: aA + '@' + hA,
+        period, clock,
+        score: `${aA} ${ind?.awayPts || '?'} - ${hA} ${ind?.homePts || '?'}`,
+        contextLayers: ctx ? Object.keys(ctx).filter(k => ctx[k] != null) : [],
+        layerCount: ctx ? Object.keys(ctx).filter(k => ctx[k] != null).length : 0,
+        hasThroughput: !!ctx?.throughput,
+        hasLeadSafety: !!ctx?.leadSafety,
+        hasPbpAudit: !!ctx?.pbpAudit,
+        hasArrows: !!ctx?.subMetricArrows,
+        hasBonus: !!ctx?.bonusStatus,
+        hasMip: !!ctx?.mip,
+        hasGameMeta: !!ctx?.gameMeta,
+        hasWindow: !!ctx?.rollingWindow?.available,
+        hasTracking: !!ctx?.trackingData,
+        throughputClass: ctx?.throughput?.classification || null,
+        leadSafetyClass: ctx?.leadSafety?.classification || null,
+      };
+
+      // Generate prompt snippet
+      if (ctx && ind) {
+        const prompt = formatSonnetPrompt({
+          hA, aA, period, clock, score: result.score,
+          thesis: null, calibrationNote: null,
+          sust, leadComp, ind, clutchData: null, odds: null,
+          espnWP: null, wpProfiles: null, analysisHistory: null,
+          ctx, quarterDataFromDB: ctx.quarterDiffs || null, summary,
+        });
+        result.promptLength = prompt.length;
+        result.promptFirst500 = prompt.substring(0, 500);
+        result.promptLast500 = prompt.substring(prompt.length - 500);
+      }
+
+      return new Response(JSON.stringify(result, null, 2), { headers: { 'Content-Type': 'application/json' } });
+    } catch (e) {
+      return new Response(JSON.stringify({ error: e.message, stack: (e.stack || '').substring(0, 500) }), { headers: { 'Content-Type': 'application/json' } });
+    }
+  }
+
   const results = { games: 0, snapshots: 0, espn: 0, odds: 0, errors: [], skipped: null };
   const pendingAnalyses = []; // collect async Sonnet calls so we await them before returning
 
