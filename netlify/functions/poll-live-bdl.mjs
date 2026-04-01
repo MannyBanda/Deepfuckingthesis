@@ -3365,6 +3365,8 @@ export default async function(req) {
 
           // Insert snapshot (source = 'server' to distinguish from client)
           const sustJson = sust ? JSON.stringify(sust) : null;
+          // DIAGNOSTIC: log ind shape before INSERT to catch null fields
+          log(`${matchup}: SNAP IND — score:${ind.score} team:${ind.controlTeam} I1:${ind.I1?.score} I2:${ind.I2?.score} I3:${ind.I3?.score} I4:${ind.I4?.score} I5:${ind.I5?.score} hPts:${ind.homePts} aPts:${ind.awayPts}`);
           await sql`
             INSERT INTO snapshots (game_id, period, clock, home_pts, away_pts,
               floor_score, floor_team, pbp_score, pbp_team, pbp_window_size,
@@ -3378,6 +3380,7 @@ export default async function(req) {
               ${ind.I1.score}, ${ind.I2.score}, ${ind.I3.score}, ${ind.I4.score}, ${ind.I5.score},
               ${'server'}, ${leadClass}, ${sustJson})
           `;
+          log(`${matchup}: snapshot saved — floor:${ind.score} I1-5:${ind.I1?.score},${ind.I2?.score},${ind.I3?.score},${ind.I4?.score},${ind.I5?.score}`);
 
           // Save odds to odds_history table if we got data
           if (odds) {
