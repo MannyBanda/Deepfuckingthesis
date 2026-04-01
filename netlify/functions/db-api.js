@@ -141,6 +141,12 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS lead_class TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS sust_json JSONB`; } catch(e) {}
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS window_json JSONB`; } catch(e) {}
+      // Throughput + lead safety persistence for backtesting
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS tp_class TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS tp_exp_swing REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS tp_remain_poss INTEGER`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ls_class TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ls_exp_swing REAL`; } catch(e) {}
 
       // Quarter-level data for server-authoritative rolling window
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS quarter_data JSONB`; } catch(e) {}
@@ -1179,6 +1185,9 @@ exports.handler = async (event) => {
             s.home_pts AS q3_home_pts, s.away_pts AS q3_away_pts,
             s.period AS q3_period, s.clock AS q3_clock, s.ts AS q3_ts,
             s.sust_json AS q3_sust_json,
+            s.tp_class AS q3_tp_class, s.tp_exp_swing AS q3_tp_exp_swing,
+            s.tp_remain_poss AS q3_tp_remain_poss,
+            s.ls_class AS q3_ls_class, s.ls_exp_swing AS q3_ls_exp_swing,
             -- Quarter-end Sonnet analysis
             a.control_team AS q3a_control, a.control_score AS q3a_score,
             a.fwp AS q3a_fwp, a.edge AS q3a_edge, a.entry AS q3a_entry,
@@ -1302,7 +1311,8 @@ exports.handler = async (event) => {
         SELECT DISTINCT ON (game_id) game_id, ts, period, clock, home_pts, away_pts,
           floor_score, floor_team, espn_wp_home, espn_wp_away,
           spread, deficit, trailing_team, lead_sust, lead_class,
-          i1, i2, i3, i4, i5, source, sust_json
+          i1, i2, i3, i4, i5, source, sust_json,
+          tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing
         FROM snapshots
         WHERE game_id = ANY(${gameIds})
         ORDER BY game_id, ts DESC

@@ -3365,22 +3365,32 @@ export default async function(req) {
 
           // Insert snapshot (source = 'server' to distinguish from client)
           const sustJson = sust ? JSON.stringify(sust) : null;
+          // Compute throughput + lead safety for snapshot persistence
+          let snapTp = null, snapLs = null;
+          if (currentPeriod >= 2) {
+            try {
+              snapTp = computeThroughputServer(summary, ind, sust, hA, aA, currentPeriod, clock, league);
+              snapLs = computeLeadSafetyServer(summary, ind, sust, hA, aA, currentPeriod, clock, league);
+            } catch (e) { /* non-fatal — snapshot still saves without tp/ls */ }
+          }
           // DIAGNOSTIC: log ind shape before INSERT to catch null fields
-          log(`${matchup}: SNAP IND — score:${ind.score} team:${ind.controlTeam} I1:${ind.I1?.score} I2:${ind.I2?.score} I3:${ind.I3?.score} I4:${ind.I4?.score} I5:${ind.I5?.score} hPts:${ind.homePts} aPts:${ind.awayPts}`);
+          log(`${matchup}: SNAP IND — score:${ind.score} team:${ind.controlTeam} I1:${ind.I1?.score} I2:${ind.I2?.score} I3:${ind.I3?.score} I4:${ind.I4?.score} I5:${ind.I5?.score} hPts:${ind.homePts} aPts:${ind.awayPts} tp:${snapTp?.classification||'null'} ls:${snapLs?.classification||'null'}`);
           await sql`
             INSERT INTO snapshots (game_id, period, clock, home_pts, away_pts,
               floor_score, floor_team, pbp_score, pbp_team, pbp_window_size,
               qtr_score, qtr_team, espn_wp_home, espn_wp_away,
               spread, deficit, trailing_team, lead_sust, gap, accel,
-              i1, i2, i3, i4, i5, source, lead_class, sust_json)
+              i1, i2, i3, i4, i5, source, lead_class, sust_json,
+              tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing)
             VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
               ${ind.score}, ${ind.controlTeam}, ${null}, ${null}, ${null},
               ${null}, ${null}, ${espnWP?.home || null}, ${espnWP?.away || null},
               ${spreadVal}, ${deficit}, ${trailingTeam}, ${leadSust}, ${null}, ${null},
               ${ind.I1.score}, ${ind.I2.score}, ${ind.I3.score}, ${ind.I4.score}, ${ind.I5.score},
-              ${'server'}, ${leadClass}, ${sustJson})
+              ${'server'}, ${leadClass}, ${sustJson},
+              ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null})
           `;
-          log(`${matchup}: snapshot saved — floor:${ind.score} I1-5:${ind.I1?.score},${ind.I2?.score},${ind.I3?.score},${ind.I4?.score},${ind.I5?.score}`);
+          log(`${matchup}: snapshot saved — floor:${ind.score} I1-5:${ind.I1?.score},${ind.I2?.score},${ind.I3?.score},${ind.I4?.score},${ind.I5?.score} tp:${snapTp?.classification||'-'} ls:${snapLs?.classification||'-'}`);
 
           // Save odds to odds_history table if we got data
           if (odds) {
@@ -3719,12 +3729,14 @@ export default async function(req) {
                     INSERT INTO snapshots (game_id, period, clock, home_pts, away_pts,
                       floor_score, floor_team, espn_wp_home, espn_wp_away,
                       spread, deficit, trailing_team, lead_sust, lead_class,
-                      i1, i2, i3, i4, i5, source, sust_json)
+                      i1, i2, i3, i4, i5, source, sust_json,
+                      tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing)
                     VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
                       ${ind.score}, ${ind.controlTeam}, ${espnWP?.home || null}, ${espnWP?.away || null},
                       ${spreadVal}, ${deficit}, ${trailingTeam}, ${leadSust}, ${leadClass},
                       ${ind.I1.score}, ${ind.I2.score}, ${ind.I3.score}, ${ind.I4.score}, ${ind.I5.score},
-                      ${t.tag}, ${sustJson})
+                      ${t.tag}, ${sustJson},
+                      ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null})
                   `;
                   log(`${matchup}: ${t.label} CAL snapshot saved — floor ${ind.controlTeam} ${ind.score} | sust:${leadSust || '?'} class:${leadClass || '?'} | WP:${espnWP?.home || '?'}% | spd:${spreadVal != null ? spreadVal : 'N/A'}`);
                 } catch (e) {
