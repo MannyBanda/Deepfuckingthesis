@@ -5348,11 +5348,16 @@ function synthesize(game){
   }
 
   // Persist throughput on cardState for spread conviction + confidence table
-  // Trend arrow — compare against previous expected swing
-  if(throughput && cs.throughput && cs.throughput.expected){
+  // Trend arrow — only update when score changed (prevents flickering on stale data polls)
+  var _scoreKey = (game.homePoints||0) + '-' + (game.awayPoints||0);
+  if(throughput && cs.throughput && cs.throughput.expected && _scoreKey !== cs._lastThroughputScoreKey){
     var _tpDelta = Math.round((throughput.expected.totalSwing - cs.throughput.expected.totalSwing) * 10) / 10;
     throughput.trend = Math.abs(_tpDelta) < 0.5 ? '▬' : _tpDelta > 0 ? '▲' : '▼';
     throughput.trendDelta = _tpDelta;
+    cs._lastThroughputScoreKey = _scoreKey;
+  } else if(throughput && cs.throughput && cs.throughput.trend){
+    throughput.trend = cs.throughput.trend;
+    throughput.trendDelta = cs.throughput.trendDelta;
   }
   cs.throughput = throughput;
 
@@ -5390,11 +5395,16 @@ function synthesize(game){
   }
 
   // Persist lead safety on cardState for spread conviction + confidence table
-  // Trend arrow — for lead safety, LOWER opponent recovery = safer = ▲
-  if(leadSafety && cs.leadSafety && cs.leadSafety.expected){
+  // Trend arrow — only update when score changed (prevents flickering on stale data polls)
+  var _lsScoreKey = (game.homePoints||0) + '-' + (game.awayPoints||0);
+  if(leadSafety && cs.leadSafety && cs.leadSafety.expected && _lsScoreKey !== cs._lastLeadSafetyScoreKey){
     var _lsDelta = Math.round((leadSafety.expected.totalSwing - cs.leadSafety.expected.totalSwing) * 10) / 10;
     leadSafety.trend = Math.abs(_lsDelta) < 0.5 ? '▬' : _lsDelta < 0 ? '▲' : '▼';
     leadSafety.trendDelta = _lsDelta;
+    cs._lastLeadSafetyScoreKey = _lsScoreKey;
+  } else if(leadSafety && cs.leadSafety && cs.leadSafety.trend){
+    leadSafety.trend = cs.leadSafety.trend;
+    leadSafety.trendDelta = cs.leadSafety.trendDelta;
   }
   cs.leadSafety = leadSafety;
 
