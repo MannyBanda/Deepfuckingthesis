@@ -2226,17 +2226,226 @@ function parseAnalysisText(text, homeAlias, awayAlias) {
   return result;
 }
 
+// ── TEAM CALIBRATION LOOKUP ──────────────────────────────────────────────────
+// Builds per-team floor accuracy stats from Q2+Q3 calibration snapshots.
+// Called once per poll startup, cached for the slate.
+// Returns { [teamAlias]: { q2: {...}, q3: {...}, combined: {...} } }
+
+async function buildCalibrationLookup(sql, league) {
+  try {
+    // Query both Q2 and Q3 calibration snapshots for finalized games
+    const rows = await sql`
+      SELECT
+        g.home_alias, g.away_alias, g.winner, g.home_pts, g.away_pts,
+        s.floor_score, s.floor_team, s.home_pts AS snap_home, s.away_pts AS snap_away,
+        s.source
+      FROM games g
+      INNER JOIN snapshots s ON s.game_id = g.id
+        AND s.source IN ('calibration_q1', 'calibration_q2', 'calibration_q3')
+      WHERE g.league = ${league} AND g.winner IS NOT NULL
+      ORDER BY g.date DESC
+    `;
+
+    if (rows.length === 0) return null;
+
+    const teams = {};
+    const leagueStats = { q2: { total: 0, wins: 0, buckets: {} }, q3: { total: 0, wins: 0, buckets: {} } };
+    const bucketKeys = ['50-59', '60-69', '70-79', '80+'];
+
+    for (const r of rows) {
+      const ft = r.floor_team;
+      if (!ft || !r.floor_score) continue;
+
+      // Determine quarter from source tag
+      // calibration_q2 = Q2 end (halftime) = "Q2" in dashboard (77% accuracy)
+      // calibration_q3 = Q3 end = "Q3" in dashboard (74% accuracy)
+      // calibration_q1 = Q1 end = excluded (too early, 69%)
+      const qKey = r.source === 'calibration_q2' ? 'q2' : r.source === 'calibration_q3' ? 'q3' : null;
+      if (!qKey) continue;
+
+      const ftIsHome = ft === r.home_alias;
+      const ftWon = r.winner === ft;
+      const ftPtsAtSnap = ftIsHome ? r.snap_home : r.snap_away;
+      const oppPtsAtSnap = ftIsHome ? r.snap_away : r.snap_home;
+      const wasTrailing = oppPtsAtSnap > ftPtsAtSnap;
+      const wasLeading = ftPtsAtSnap > oppPtsAtSnap;
+
+      // Floor bucket
+      const fs = r.floor_score;
+      const bucket = fs >= 0.80 ? '80+' : fs >= 0.70 ? '70-79' : fs >= 0.60 ? '60-69' : '50-59';
+
+      // Initialize team entry
+      if (!teams[ft]) {
+        teams[ft] = {
+          q2: { games: 0, wins: 0, trailing: 0, trailingRecovered: 0, leading: 0, leadingHeld: 0, buckets: {} },
+          q3: { games: 0, wins: 0, trailing: 0, trailingRecovered: 0, leading: 0, leadingHeld: 0, buckets: {} },
+        };
+        for (const bk of bucketKeys) {
+          teams[ft].q2.buckets[bk] = { games: 0, wins: 0 };
+          teams[ft].q3.buckets[bk] = { games: 0, wins: 0 };
+        }
+      }
+
+      const tq = teams[ft][qKey];
+      tq.games++;
+      if (ftWon) tq.wins++;
+      tq.buckets[bucket].games++;
+      if (ftWon) tq.buckets[bucket].wins++;
+
+      if (wasTrailing) {
+        tq.trailing++;
+        if (ftWon) tq.trailingRecovered++;
+      }
+      if (wasLeading) {
+        tq.leading++;
+        if (ftWon) tq.leadingHeld++;
+      }
+
+      // League stats
+      if (!leagueStats[qKey].buckets[bucket]) leagueStats[qKey].buckets[bucket] = { games: 0, wins: 0 };
+      leagueStats[qKey].total++;
+      if (ftWon) leagueStats[qKey].wins++;
+      leagueStats[qKey].buckets[bucket].games++;
+      if (ftWon) leagueStats[qKey].buckets[bucket].wins++;
+    }
+
+    return { teams, leagueStats, totalGames: rows.length };
+  } catch (e) {
+    return null;
+  }
+}
+
+// Format team calibration for Sonnet prompt
+function formatTeamCalibration(calLookup, hA, aA, triggerTag) {
+  if (!calLookup || !calLookup.teams) return null;
+
+  const ls = calLookup.leagueStats;
+  const q2Rate = ls.q2.total > 0 ? Math.round(ls.q2.wins / ls.q2.total * 100) : '?';
+  const q3Rate = ls.q3.total > 0 ? Math.round(ls.q3.wins / ls.q3.total * 100) : '?';
+  const q2_70 = ls.q2.buckets?.['70-79'] || { games: 0, wins: 0 };
+  const q3_70 = ls.q3.buckets?.['70-79'] || { games: 0, wins: 0 };
+  const q2_80 = ls.q2.buckets?.['80+'] || { games: 0, wins: 0 };
+  const q3_80 = ls.q3.buckets?.['80+'] || { games: 0, wins: 0 };
+
+  // Determine which quarter this analysis targets
+  // auto_q1 fires at Q1→Q2: Q2 cal closest. auto_q2 fires at Q2→Q3: Q2 cal IS this moment. auto_q3: Q3 cal IS this moment.
+  const primaryQ = triggerTag === 'auto_q3' ? 'q3' : 'q2';
+  const primaryLabel = primaryQ === 'q2' ? 'Q2' : 'Q3';
+
+  let p = `\nTEAM CALIBRATION (Q2+Q3 boundary snapshots, ${ls.q2.total + ls.q3.total} readings):\n`;
+  p += `League baselines:\n`;
+  p += `  Q2: Overall ${q2Rate}% | Floor 0.70+ ${q2_70.games + q2_80.games > 0 ? Math.round((q2_70.wins + q2_80.wins) / (q2_70.games + q2_80.games) * 100) : '?'}%\n`;
+  p += `  Q3: Overall ${q3Rate}% | Floor 0.70+ ${q3_70.games + q3_80.games > 0 ? Math.round((q3_70.wins + q3_80.wins) / (q3_70.games + q3_80.games) * 100) : '?'}%\n`;
+  p += `This analysis point: ${primaryLabel} data is primary.\n\n`;
+
+  for (const { alias, side } of [{ alias: hA, side: 'HOME' }, { alias: aA, side: 'AWAY' }]) {
+    const t = calLookup.teams[alias];
+    if (!t) {
+      p += `[${side}] ${alias}: No calibration data yet\n`;
+      continue;
+    }
+
+    const q2 = t.q2, q3 = t.q3;
+    const totalGames = q2.games + q3.games;
+    const totalWins = q2.wins + q3.wins;
+
+    p += `[${side}] ${alias} (${totalGames} samples: ${q2.games} Q2, ${q3.games} Q3):\n`;
+
+    // Show each quarter separately
+    for (const [qKey, qLabel, qData] of [['q2', 'Q2', q2], ['q3', 'Q3', q3]]) {
+      if (qData.games === 0) {
+        p += `  ${qLabel}: No data\n`;
+        continue;
+      }
+      const winRate = Math.round(qData.wins / qData.games * 100);
+      const bk70 = (qData.buckets['70-79']?.games || 0) + (qData.buckets['80+']?.games || 0);
+      const bk70w = (qData.buckets['70-79']?.wins || 0) + (qData.buckets['80+']?.wins || 0);
+      const bk70Rate = bk70 > 0 ? Math.round(bk70w / bk70 * 100) : null;
+
+      // Compare to league baseline
+      const leagueQ = ls[qKey];
+      const leagueRate = leagueQ.total > 0 ? Math.round(leagueQ.wins / leagueQ.total * 100) : null;
+      const deviation = leagueRate != null ? winRate - leagueRate : null;
+      const devStr = deviation != null && Math.abs(deviation) >= 15 && qData.games >= 5
+        ? (deviation > 0 ? ` ✅ +${deviation}pts vs league` : ` ⚠️ ${deviation}pts vs league`)
+        : '';
+
+      let line = `  ${qLabel} (${qData.games}g): ${qData.wins}-${qData.games - qData.wins} (${winRate}%)${devStr}`;
+      if (bk70 > 0 && bk70Rate != null) line += ` | Floor 0.70+: ${bk70w}/${bk70} (${bk70Rate}%)`;
+      p += line + '\n';
+
+      // Trailing/leading breakdown
+      if (qData.trailing > 0) {
+        p += `    Trailing recovery: ${qData.trailingRecovered}/${qData.trailing}${qData.trailing >= 3 && qData.trailingRecovered === 0 ? ' ⚠️' : ''}\n`;
+      }
+      if (qData.leading > 0) {
+        p += `    Leading hold: ${qData.leadingHeld}/${qData.leading}\n`;
+      }
+    }
+    p += '\n';
+  }
+
+  p += `INSTRUCTIONS: Weight the ${primaryLabel} column more heavily — it matches this analysis point. `;
+  p += `Adjust FWP proportionally to deviation from league baseline. `;
+  p += `A team 20+ pts below baseline → reduce FWP by 10-15%. `;
+  p += `40+ pts below → reduce by 15-25%. `;
+  p += `Never zero out — structural edge still exists, conversion rate is lower. `;
+  p += `Teams with <5 samples at a quarter: note insufficient data, use league baseline.\n`;
+
+  return p;
+}
+
+// Get calibration warning line for alert body (one-liner when team deviates significantly)
+function getCalibrationWarning(calLookup, teamAlias, floorScore, isTrailing) {
+  if (!calLookup?.teams?.[teamAlias]) return '';
+  const t = calLookup.teams[teamAlias];
+  const combined = { games: t.q2.games + t.q3.games, wins: t.q2.wins + t.q3.wins };
+  if (combined.games < 5) return '';
+
+  const bucket = floorScore >= 0.70 ? '70+' : floorScore >= 0.60 ? '60+' : null;
+  if (!bucket) return '';
+
+  let bGames, bWins;
+  if (bucket === '70+') {
+    bGames = (t.q2.buckets['70-79']?.games||0) + (t.q2.buckets['80+']?.games||0) + (t.q3.buckets['70-79']?.games||0) + (t.q3.buckets['80+']?.games||0);
+    bWins = (t.q2.buckets['70-79']?.wins||0) + (t.q2.buckets['80+']?.wins||0) + (t.q3.buckets['70-79']?.wins||0) + (t.q3.buckets['80+']?.wins||0);
+  } else {
+    bGames = combined.games;
+    bWins = combined.wins;
+  }
+  if (bGames < 5) return '';
+
+  const teamRate = Math.round(bWins / bGames * 100);
+  const leagueRate = 82; // hardcoded from data — floor 0.70+ league avg
+  const deviation = teamRate - leagueRate;
+
+  if (Math.abs(deviation) < 15) return '';
+
+  if (isTrailing) {
+    const trailGames = t.q2.trailing + t.q3.trailing;
+    const trailWins = t.q2.trailingRecovered + t.q3.trailingRecovered;
+    if (trailGames >= 3) {
+      return `\n⚠️ ${teamAlias} trailing recovery: ${trailWins}/${trailGames} (floor ${bucket} at ${teamRate}% vs league ${leagueRate}%)`;
+    }
+  }
+
+  return deviation < -15 ? `\n⚠️ ${teamAlias} floor ${bucket} at ${teamRate}% (league ${leagueRate}%)` : '';
+}
+
 // ── FORMAT SONNET PROMPT ──────────────────────────────────────────────────────
 // Single function that formats ALL data layers into prompt text.
 // Matches analyze.js quality — no more "payload ghost" layers.
 
-function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, calibrationNote, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary }) {
+function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, calibrationNote, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary, teamCalibration }) {
   let p = `${aA} @ ${hA} | Q${period} ${clock} | ${score}\n\n`;
 
   // Thesis + calibration
   if (thesis) p += `THESIS:\n${thesis}\n`;
   if (calibrationNote) p += `${calibrationNote}\n`;
   p += '\n';
+
+  // Team calibration (per-team floor accuracy from Q2+Q3 data)
+  if (teamCalibration) p += teamCalibration;
 
   // Game meta
   if (ctx?.gameMeta) {
@@ -2540,7 +2749,7 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, calibrationN
 // analyze function with the full SR summary + server-computed layers.
 // Result is saved as a tagged 'auto_q3' analysis row — gold standard metric.
 
-async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, leadComp, espnWP, odds, matchup, hA, aA, period, clock, trigger) {
+async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, leadComp, espnWP, odds, matchup, hA, aA, period, clock, trigger, calLookup) {
   const triggerTag = trigger || 'auto_q3';
 
   try {
@@ -2649,6 +2858,9 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       }
     } catch (e) { /* quarter_data not available */ }
 
+    // Build team calibration prompt section
+    const teamCalibration = formatTeamCalibration(calLookup, hA, aA, triggerTag);
+
     const userPrompt = formatSonnetPrompt({
       hA, aA, period, clock, score: scoreLine,
       thesis: thesis ? thesis + (calibrationNote ? '\n\n' + calibrationNote : '') : calibrationNote || null,
@@ -2657,6 +2869,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       ctx: clientCtx || {},
       quarterDataFromDB,
       summary,
+      teamCalibration,
     });
 
     // ── Compute prompt layer inventory for diagnostics ──
@@ -2664,6 +2877,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
     const layerInventory = [
       thesis ? 'thesis' : null,
       calibrationNote ? 'calibration' : null,
+      teamCalibration ? 'teamCal' : null,
       sust ? 'sust' : null,
       leadComp ? 'leadComp' : null,
       ind ? 'ind' : null,
@@ -3132,6 +3346,13 @@ export default async function(req) {
         } catch (e) { log(`BDL lineups failed: ${e.message}`); }
       }
 
+      // ── 3b. Build team calibration lookup (once per slate) ──
+      let calLookup = null;
+      try {
+        calLookup = await buildCalibrationLookup(sql, league);
+        if (calLookup) log(`Calibration: ${Object.keys(calLookup.teams).length} teams, ${calLookup.leagueStats.q2.total + calLookup.leagueStats.q3.total} readings`);
+      } catch (e) { log(`Calibration lookup failed: ${e.message}`); }
+
       // ── 4. Process each potentially live game — BDL box_scores + plays ──
       // Fetch plays for all live games in parallel (BDL: 600 req/min)
       const playsFetches = potentiallyLive.map(g => {
@@ -3437,7 +3658,7 @@ export default async function(req) {
           // ── LIGHTWEIGHT ENTRY SIGNAL CHECK (every cycle, no Sonnet needed) ──
           // BUY:  floor ≥ 0.70, trailing 4-15, Q2+, throughput not UNLIKELY/NO PATH
           // LEAN: floor ≥ 0.60, trailing 4-15, opp FRAGILE/UNSUSTAINABLE, Q2+, throughput not UNLIKELY/NO PATH
-          // BWC:  floor ≥ 0.70, leading 2+, Q2+, edge > 0, lead safety not AT RISK/CRITICAL
+          // BWC:  floor ≥ 0.55, leading 2+, Q2+, edge > 0, lead safety not AT RISK/CRITICAL
           {
             const ctrlSide = ind.controlTeam === hA ? 'home' : 'away';
             const oppSide = ctrlSide === 'home' ? 'away' : 'home';
@@ -3485,10 +3706,12 @@ export default async function(req) {
             let alertDetail = ''; // extra context for BWC body
 
             if (ind.score >= 0.70 && ctrlTrailing && margin >= 4 && margin <= 15 && currentPeriod >= 2) {
-              // Throughput gate: suppress if recovery math says no path
+              // Throughput gate (fail-closed): suppress if no path OR computation failed
               const tpClass = tpForBuy?.classification || null;
-              if (tpClass === 'UNLIKELY' || tpClass === 'NO PATH') {
-                log(`${matchup}: BUY suppressed — throughput ${tpClass} (exp swing ${tpForBuy ? Math.round(tpForBuy.expected.totalSwing) : '?'} vs deficit ${margin})`);
+              if (!tpForBuy) {
+                log(`${matchup}: BUY suppressed — throughput computation failed/null (fail-closed)`);
+              } else if (tpClass === 'UNLIKELY' || tpClass === 'NO PATH') {
+                log(`${matchup}: BUY suppressed — throughput ${tpClass} (exp swing ${Math.round(tpForBuy.expected.totalSwing)} vs deficit ${margin})`);
               } else {
                 alertType = 'BUY';
                 alertEmoji = '🟢';
@@ -3496,14 +3719,16 @@ export default async function(req) {
               }
             } else if (ind.score >= 0.60 && ctrlTrailing && margin >= 4 && margin <= 15 && oppFragile && currentPeriod >= 2) {
               const tpClass = tpForBuy?.classification || null;
-              if (tpClass === 'UNLIKELY' || tpClass === 'NO PATH') {
-                log(`${matchup}: LEAN BUY suppressed — throughput ${tpClass} (exp swing ${tpForBuy ? Math.round(tpForBuy.expected.totalSwing) : '?'} vs deficit ${margin})`);
+              if (!tpForBuy) {
+                log(`${matchup}: LEAN BUY suppressed — throughput computation failed/null (fail-closed)`);
+              } else if (tpClass === 'UNLIKELY' || tpClass === 'NO PATH') {
+                log(`${matchup}: LEAN BUY suppressed — throughput ${tpClass} (exp swing ${Math.round(tpForBuy.expected.totalSwing)} vs deficit ${margin})`);
               } else {
                 alertType = 'LEAN BUY';
                 alertEmoji = '🟡';
                 alertPriority = 4;
               }
-            } else if (ind.score >= 0.70 && ctrlLeading && margin >= 2 && currentPeriod >= 2) {
+            } else if (ind.score >= 0.55 && ctrlLeading && margin >= 2 && currentPeriod >= 2) {
               // BWC with edge gate (matches client synthesizer)
               if (ctrlEdge !== null && ctrlEdge > 0) {
                 // Check lead safety — downgrade to WATCH if AT RISK/CRITICAL
@@ -3534,6 +3759,7 @@ export default async function(req) {
                 cacheUpdated = true;
                 const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA}`;
                 const sustLine = (ctrlSust || oppSustTier) ? `\nSust: ${ind.controlTeam} ${ctrlSust || '?'} vs ${ctrlIsHome ? aA : hA} ${oppSustTier || '?'}` : '';
+                const calWarn = getCalibrationWarning(calLookup, ind.controlTeam, ind.score, ctrlTrailing);
                 const ntfyTitle = `${alertEmoji} ${alertType} — ${matchup}`;
                 let ntfyBody;
                 if (alertDetail) {
@@ -3541,7 +3767,8 @@ export default async function(req) {
                   ntfyBody = `${scoreLine} Q${currentPeriod} ${clock}`
                     + `\n${alertDetail}`
                     + `\nFloor: ${ind.score.toFixed(2)} | Lead: ${margin}`
-                    + sustLine;
+                    + sustLine
+                    + calWarn;
                 } else {
                   // BUY/LEAN BUY body — lead with actionable line
                   const mlLine = ctrlML ? `\nBUY ${ind.controlTeam} ML ${ctrlML}${ctrlEdge != null ? ' | Edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}` : '';
@@ -3551,6 +3778,7 @@ export default async function(req) {
                     + `\nFloor: ${ind.controlTeam} ${ind.score.toFixed(2)} | Deficit: ${margin}`
                     + tpLine
                     + sustLine
+                    + calWarn
                     + (spreadVal != null ? `\nSpread: ${spreadVal}` : '');
                 }
                 await sendNtfy(ntfyTitle, ntfyBody, alertPriority);
@@ -3797,7 +4025,7 @@ export default async function(req) {
                 // Fire Sonnet analysis only for NBA (NCAAMB: snapshot + context only)
                 if (t.sonnet) {
                   pendingAnalyses.push(
-                    fireCalibrationAnalysis(sql, game, league, summary, ind, sust, leadComp, espnWP, odds, matchup, hA, aA, currentPeriod, clock, t.trigger)
+                    fireCalibrationAnalysis(sql, game, league, summary, ind, sust, leadComp, espnWP, odds, matchup, hA, aA, currentPeriod, clock, t.trigger, calLookup)
                       .catch(e => log(`${matchup}: ${t.label} CAL analysis async error: ${e.message}`))
                   );
                 }
