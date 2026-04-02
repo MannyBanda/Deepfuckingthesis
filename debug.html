@@ -273,8 +273,8 @@ async function viewSnapshots(){
     html += '</div>';
   }
 
-  // Show last 20
-  var recent = snaps.slice(-20);
+  // Show all snapshots, newest first
+  var recent = snaps.slice().reverse();
   recent.forEach(function(s){
     var ts = s.ts ? new Date(s.ts).toLocaleTimeString() : '?';
     var srcTag = s.source === 'server' ? '<span class="tag tag-server">SERVER</span>' : s.source && s.source.startsWith('calibration_q') ? '<span class="tag tag-cal">★ ' + s.source.replace('calibration_','').toUpperCase() + ' CAL</span>' : '<span class="tag tag-client">CLIENT</span>';
@@ -297,7 +297,6 @@ async function viewSnapshots(){
     if(s.i1 != null) html += '<div style="font-size:9px;color:#64748b;margin-top:2px">I1:' + s.i1 + ' I2:' + s.i2 + ' I3:' + s.i3 + ' I4:' + s.i4 + ' I5:' + s.i5 + '</div>';
     html += '</div>';
   });
-  if(snaps.length > 20) html += '<div style="font-size:10px;color:#64748b;text-align:center;padding:4px">Showing last 20 of ' + snaps.length + '</div>';
   contentEl.innerHTML = html;
 }
 
