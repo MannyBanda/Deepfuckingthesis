@@ -658,7 +658,7 @@ function parseBDLPBPServer(plays, homeAbbr, awayAbbr) {
 
       const assisted = made ? !!bdlExtractAssistS(text) : false;
       const context = bdlClassifyContextS(type, assisted, is3);
-      shots.push({ p: player, tm: team, z: zone, m: made, a: assisted, q: quarter, ctx: context, is3 });
+      shots.push({ p: player, tm: team, z: zone, m: made, a: assisted, q: quarter, ctx: context, is3, x: ev.coordinate_x ?? null, y: ev.coordinate_y ?? null });
       if (made) {
         if (team === hA) hScore += pts; else aScore += pts;
         scoreLog.push({ team, pts, hScore, aScore, q: quarter });
@@ -1743,7 +1743,8 @@ function parsePBPServer(pbpData, hId, aId, hA, aA) {
         (ev.statistics || []).forEach(s => { if ((s.type || '').toLowerCase().includes('assist')) assisted = true; });
       }
       const pts = made ? (isThree ? 3 : 2) : 0;
-      shots.push({ p: player, tm: team, z: zone, m: made, a: assisted, q: quarter, is3: isThree });
+      const shotDist = stat.shot_distance ?? ev.shot_distance ?? null;
+      shots.push({ p: player, tm: team, z: zone, m: made, a: assisted, q: quarter, is3: isThree, x: ev.location?.coord_x ?? ev.coord_x ?? null, y: ev.location?.coord_y ?? ev.coord_y ?? null, d: shotDist });
       if (made) {
         if (team === hA) hScore += pts; else aScore += pts;
         scoreLog.push({ team, pts, hScore, aScore, q: quarter });
@@ -2064,31 +2065,39 @@ async function computeServerContext(sql, game, league, summary, ind, espnWP, hA,
     ctx.leadSafety = computeLeadSafetyServer(summary, ind, sust, hA, aA, period, clock, league);
 
     // Trend arrows — compare against previous poll's expected swing
+    // CTRL-FLIP GUARD: reset prev values when control team changes
     try {
-      const prevRows = await sql`SELECT prev_tp_exp, prev_ls_exp FROM games WHERE id = ${game.id}`;
+      const prevRows = await sql`SELECT prev_tp_exp, prev_ls_exp, prev_ctrl_team FROM games WHERE id = ${game.id}`;
       const prev = prevRows.length > 0 ? prevRows[0] : {};
+      const ctrlFlipped = prev.prev_ctrl_team && prev.prev_ctrl_team !== ind.controlTeam;
 
-      if (ctx.throughput) {
-        const curExp = ctx.throughput.expected.totalSwing;
-        const prevExp = prev.prev_tp_exp;
-        if (prevExp != null && !isNaN(prevExp)) {
-          const delta = Math.round((curExp - prevExp) * 10) / 10;
-          ctx.throughput.trend = Math.abs(delta) < 0.5 ? '▬' : delta > 0 ? '▲' : '▼';
-          ctx.throughput.trendDelta = delta;
+      if (ctrlFlipped) {
+        // Control team changed — prev swing values are for the wrong team, reset
+        log(`${matchup}: trend RESET — ctrl flip ${prev.prev_ctrl_team} → ${ind.controlTeam}`);
+        await sql`UPDATE games SET prev_tp_exp = NULL, prev_ls_exp = NULL, prev_ctrl_team = ${ind.controlTeam} WHERE id = ${game.id}`;
+      } else {
+        if (ctx.throughput) {
+          const curExp = ctx.throughput.expected.totalSwing;
+          const prevExp = prev.prev_tp_exp;
+          if (prevExp != null && !isNaN(prevExp)) {
+            const delta = Math.round((curExp - prevExp) * 10) / 10;
+            ctx.throughput.trend = Math.abs(delta) < 0.5 ? '▬' : delta > 0 ? '▲' : '▼';
+            ctx.throughput.trendDelta = delta;
+          }
+          await sql`UPDATE games SET prev_tp_exp = ${curExp}, prev_ctrl_team = ${ind.controlTeam} WHERE id = ${game.id}`;
         }
-        await sql`UPDATE games SET prev_tp_exp = ${curExp} WHERE id = ${game.id}`;
-      }
 
-      if (ctx.leadSafety) {
-        const curExp = ctx.leadSafety.expected.totalSwing;
-        const prevExp = prev.prev_ls_exp;
-        if (prevExp != null && !isNaN(prevExp)) {
-          const delta = Math.round((curExp - prevExp) * 10) / 10;
-          // For lead safety, LOWER opponent recovery = safer lead = ▲ (improving)
-          ctx.leadSafety.trend = Math.abs(delta) < 0.5 ? '▬' : delta < 0 ? '▲' : '▼';
-          ctx.leadSafety.trendDelta = delta;
+        if (ctx.leadSafety) {
+          const curExp = ctx.leadSafety.expected.totalSwing;
+          const prevExp = prev.prev_ls_exp;
+          if (prevExp != null && !isNaN(prevExp)) {
+            const delta = Math.round((curExp - prevExp) * 10) / 10;
+            // For lead safety, LOWER opponent recovery = safer lead = ▲ (improving)
+            ctx.leadSafety.trend = Math.abs(delta) < 0.5 ? '▬' : delta < 0 ? '▲' : '▼';
+            ctx.leadSafety.trendDelta = delta;
+          }
+          await sql`UPDATE games SET prev_ls_exp = ${curExp} WHERE id = ${game.id}`;
         }
-        await sql`UPDATE games SET prev_ls_exp = ${curExp} WHERE id = ${game.id}`;
       }
     } catch (e) {
       // prev columns may not exist yet — non-fatal
@@ -2959,23 +2968,42 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
     log(`${matchup}: ★ ${triggerTag.toUpperCase()} CALIBRATION COMPLETE — ${parsed.controlTeam || '?'} ${parsed.controlScore || '?'} | ${parsed.signal || '?'} | FWP: ${parsed.fwp || '?'}`);
 
     // ── 10. Push notification for actionable signals ──
+    // Gate on TP class + clock — fail-closed (suppress if TP computation fails)
     const entry = (parsed.entry || '').toUpperCase();
     const signal = (parsed.signal || '');
     const isBuy = signal.toUpperCase().includes('BUY');
     const isOptimal = entry === 'OPTIMAL WINDOW';
     const isOpen = entry === 'WINDOW OPEN';
     if (isBuy || isOptimal || isOpen) {
-      const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA}`;
-      const periodStr = `Q${period} ${clock}`;
-      const ntfyTitle = `${isOptimal ? '🟢' : '🟡'} ${signal || entry} — ${matchup}`;
-      const ntfyBody = `${scoreLine} ${periodStr}`
-        + `\nControl: ${parsed.controlTeam || '?'} ${parsed.controlScore || '?'}`
-        + `\nFWP: ${parsed.fwp || '?'}`
-        + `\nEntry: ${entry} | ${parsed.conviction || '?'}`
-        + (parsed.sustainability ? `\nSust: ${parsed.sustainability}` : '')
-        + `\n[${triggerTag}]`;
-      const ntfyPriority = isOptimal ? 5 : 4;
-      await sendNtfy(ntfyTitle, ntfyBody, ntfyPriority);
+      // ── TP gate: suppress when no recovery path (fail-closed) ──
+      let tpSuppressed = false;
+      try {
+        const tpClass = clientCtx?.throughput?.classification || null;
+        if (tpClass === 'UNLIKELY' || tpClass === 'NO PATH') {
+          tpSuppressed = true;
+          log(`${matchup}: ${triggerTag} ntfy SUPPRESSED — TP=${tpClass} (no recovery path)`);
+        }
+      } catch (e) {
+        // Fail-closed: if TP check throws, suppress
+        tpSuppressed = true;
+        log(`${matchup}: ${triggerTag} ntfy SUPPRESSED — TP gate threw: ${e.message}`);
+      }
+
+      if (!tpSuppressed) {
+        const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA}`;
+        const periodStr = `Q${period} ${clock}`;
+        const tpClass = clientCtx?.throughput?.classification || '?';
+        const ntfyTitle = `${isOptimal ? '🟢' : '🟡'} ${signal || entry} — ${matchup}`;
+        const ntfyBody = `${scoreLine} ${periodStr}`
+          + `\nControl: ${parsed.controlTeam || '?'} ${parsed.controlScore || '?'}`
+          + `\nFWP: ${parsed.fwp || '?'}`
+          + `\nEntry: ${entry} | ${parsed.conviction || '?'}`
+          + (parsed.sustainability ? `\nSust: ${parsed.sustainability}` : '')
+          + `\nTP: ${tpClass}`
+          + `\n[${triggerTag}]`;
+        const ntfyPriority = isOptimal ? 5 : 4;
+        await sendNtfy(ntfyTitle, ntfyBody, ntfyPriority);
+      }
     }
   } catch (e) {
     log(`${matchup}: ${triggerTag} CAL ERROR — ${e.message}`);

@@ -154,6 +154,7 @@ exports.handler = async (event) => {
       // Throughput/lead safety trend tracking
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_tp_exp REAL`; } catch(e) {}
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_ls_exp REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_ctrl_team TEXT`; } catch(e) {}
       // Transition alert tracking (legacy — single-side, deprecated)
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_tp_class TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_ls_class TEXT`; } catch(e) {}
@@ -349,6 +350,32 @@ exports.handler = async (event) => {
         pbp: typeof r.pbp_json === 'string' ? JSON.parse(r.pbp_json) : r.pbp_json,
       }));
       return { statusCode: 200, headers, body: JSON.stringify({ games, total: games.length }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_ZONE_BASELINES — aggregated per-team shot zone baselines from game_pbp
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_zone_baselines') {
+      const league = params.league || 'nba';
+      const rows = await sql`SELECT home_alias, away_alias, pbp_json FROM game_pbp WHERE league = ${league}`;
+      const teams = {};
+      for (const r of rows) {
+        const pbp = typeof r.pbp_json === 'string' ? JSON.parse(r.pbp_json) : r.pbp_json;
+        for (const [side, alias] of [['home', r.home_alias], ['away', r.away_alias]]) {
+          const tm = pbp[side];
+          if (!tm) continue;
+          if (!teams[alias]) teams[alias] = { gp: 0, rim: {m:0,a:0}, paint: {m:0,a:0}, mid: {m:0,a:0}, corner3: {m:0,a:0}, above3: {m:0,a:0} };
+          teams[alias].gp++;
+          if (tm.rim) { teams[alias].rim.m += tm.rim.made || 0; teams[alias].rim.a += tm.rim.att || 0; }
+          if (tm.paint) { teams[alias].paint.m += tm.paint.made || 0; teams[alias].paint.a += tm.paint.att || 0; }
+          if (tm.mid) { teams[alias].mid.m += tm.mid.made || 0; teams[alias].mid.a += tm.mid.att || 0; }
+          if (tm.threes) {
+            if (tm.threes.corner) { teams[alias].corner3.m += tm.threes.corner.made || 0; teams[alias].corner3.a += tm.threes.corner.att || 0; }
+            if (tm.threes.above) { teams[alias].above3.m += tm.threes.above.made || 0; teams[alias].above3.a += tm.threes.above.att || 0; }
+          }
+        }
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ teams, total_games: rows.length }) };
     }
 
     // ═══════════════════════════════════════════════════════
