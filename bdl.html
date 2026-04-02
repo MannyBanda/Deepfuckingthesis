@@ -9578,7 +9578,12 @@ function renderDepthAuditVisual(id, cs, hA, aA){
           s+='<circle cx="'+zp.cx+'" cy="'+zp.cy+'" r="'+bVol+'" fill="none" stroke="rgba(255,255,255,0.35)" stroke-width="1" stroke-dasharray="3,2"/>';
           // Baseline % label — offset to avoid overlapping live label
           if(hasLive){
-            s+='<text x="'+(zp.cx+Math.max(14,Math.min(28,d.a*2.5))+4)+'" y="'+(zp.cy+3)+'" text-anchor="start" fill="rgba(255,255,255,0.3)" font-size="6" font-family="monospace">szn '+bPct+'%</text>';
+            var _lblOff=Math.max(14,Math.min(28,d.a*2.5))+4;
+            if(side==='away'){
+              s+='<text x="'+(zp.cx-_lblOff)+'" y="'+(zp.cy+3)+'" text-anchor="end" fill="rgba(255,255,255,0.3)" font-size="6" font-family="monospace">szn '+bPct+'%</text>';
+            } else {
+              s+='<text x="'+(zp.cx+_lblOff)+'" y="'+(zp.cy+3)+'" text-anchor="start" fill="rgba(255,255,255,0.3)" font-size="6" font-family="monospace">szn '+bPct+'%</text>';
+            }
           } else {
             s+='<text x="'+zp.cx+'" y="'+(zp.cy+3)+'" text-anchor="middle" fill="rgba(255,255,255,0.3)" font-size="7" font-family="monospace">szn '+bPct+'%</text>';
           }
@@ -10611,10 +10616,12 @@ function renderCard(game){
         const leaderIsControl = (ind.controlTeam && d.leader) ? d.leader.toUpperCase().substring(0,3) === ind.controlTeam.toUpperCase().substring(0,3) : true;
         displayScore = leaderIsControl ? d.rawScore : (1 - d.rawScore);
       } else {
-        displayScore = d.score;
+        // d.score is home-relative (1=home wins, 0=away wins) — flip to control-team-relative
+        var _ctrlHome = !ind.controlTeam || hA.toUpperCase().substring(0,3) === ind.controlTeam.toUpperCase().substring(0,3);
+        displayScore = _ctrlHome ? d.score : (1 - d.score);
       }
-      const col = d.sonnet ? indColor(displayScore) : (d.score===1?'var(--green)':d.score===.5?'var(--yellow)':'var(--red)');
-      const pc = d.sonnet ? pipClass(displayScore) : (d.score===1?'pw':d.score===.5?'pd':'pl');
+      const col = d.sonnet ? indColor(displayScore) : (displayScore===1?'var(--green)':displayScore===.5?'var(--yellow)':'var(--red)');
+      const pc = d.sonnet ? pipClass(displayScore) : (displayScore===1?'pw':displayScore===.5?'pd':'pl');
       return `
       <div class="ind">
         <span class="ii">${iid}</span><span class="in">${nm}</span><span class="iw">${wt}%</span>
