@@ -940,6 +940,20 @@ async function syncClutchFromDB(){
   }catch(e){ console.warn('[DB] Clutch sync failed:', e.message); }
 }
 
+// ── Zone Baselines (per-team shot zone averages from game_pbp) ──
+var zoneBaselines = {};
+async function syncZoneBaselinesFromDB(){
+  if(!dbReady) return;
+  try{
+    var r = await fetch(FN+'db-api?action=get_zone_baselines&league=ncaamb');
+    if(!r.ok) return;
+    var data = await r.json();
+    zoneBaselines = data.teams || {};
+    var count = Object.keys(zoneBaselines).length;
+    if(count > 0) console.log('[DB] Zone baselines loaded — '+count+' teams ('+data.total_games+' games)');
+  }catch(e){ console.warn('[DB] Zone baselines sync failed:', e.message); }
+}
+
 // Sync theses from DB on load — enables cross-device access
 async function syncThesesFromDB(){
   if(!dbReady) return;
@@ -1597,6 +1611,7 @@ async function loadSchedule(){
     syncThesesFromDB();
     syncAnalysesFromDB();
     syncClutchFromDB();
+    syncZoneBaselinesFromDB();
     // Start polling (today only — yesterday/upcoming don't need live updates)
     clearInterval(pollTimer);
     if(dateOffset === 0){
@@ -2869,7 +2884,7 @@ function parsePBP(pbpData, game){
       // Check for block embedded in shot statistics (NCAAMB doesn't emit standalone block events)
       if(!made){ (ev.statistics||[]).forEach(s=>{ var st=(s.type||'').toLowerCase(); if(st.includes('block')&&!st.includes('attempt')){ enriched.block={blocker:s.player?.full_name||s.player?.name||'?'}; } }); }
       if(!made && !enriched.block){ var desc=(ev.description||'').toLowerCase(); if(desc.includes('block')) enriched.block={blocker:'?'}; }
-      shots.push({p:player, tm:team, z:zone, m:made, a:assisted, q:quarter, ctx:context, is3:isThree});
+      shots.push({p:player, tm:team, z:zone, m:made, a:assisted, q:quarter, ctx:context, is3:isThree, x:ev.location?.coord_x??ev.coord_x??null, y:ev.location?.coord_y??ev.coord_y??null, d:shotDist});
       if(made){ if(team===hA) hScore+=pts; else aScore+=pts; scoreLog.push({team,pts,hScore,aScore,q:quarter,lineup:team===hA?onCourt.home:onCourt.away}); scoringEvents.push({tm:team,p:player,pts:pts,type:isThree?'3PT':'2PT',ck:clock,q:quarter,m:aScore-hScore}); }
     } else if(et.includes('turnover')){
       const forced = classifyTO(stat,ev);
@@ -3102,7 +3117,7 @@ function parseBDLPBP(plays,homeAbbr,awayAbbr,playerTeamMap){
       }
       var assisted=isMade?!!_bdlExtractAssist(text):false;
       var context=_bdlClassifyContext(type,assisted,is3);
-      shots.push({p:player,tm:team,z:zone,m:isMade,a:assisted,q:quarter,ctx:context,is3:is3});
+      shots.push({p:player,tm:team,z:zone,m:isMade,a:assisted,q:quarter,ctx:context,is3:is3,x:ev.coordinate_x??null,y:ev.coordinate_y??null,d:null});
       if(isMade){
         if(team===hA)hScore+=pts;else aScore+=pts;
         scoreLog.push({team:team,pts:pts,hScore:hScore,aScore:aScore,q:quarter});
@@ -5349,8 +5364,12 @@ function synthesize(game){
 
   // Persist throughput on cardState for spread conviction + confidence table
   // Trend arrow — only update when score changed (prevents flickering on stale data polls)
+  // CTRL-FLIP GUARD: reset trend when control team changes (delta would be cross-team nonsense)
   var _scoreKey = (game.homePoints||0) + '-' + (game.awayPoints||0);
-  if(throughput && cs.throughput && cs.throughput.expected && _scoreKey !== cs._lastThroughputScoreKey){
+  var _tpTeamFlipped = throughput && cs.throughput && cs.throughput.fTeam && throughput.fTeam !== cs.throughput.fTeam;
+  if(_tpTeamFlipped){
+    cs._lastThroughputScoreKey = _scoreKey;
+  } else if(throughput && cs.throughput && cs.throughput.expected && _scoreKey !== cs._lastThroughputScoreKey){
     var _tpDelta = Math.round((throughput.expected.totalSwing - cs.throughput.expected.totalSwing) * 10) / 10;
     throughput.trend = Math.abs(_tpDelta) < 0.5 ? '▬' : _tpDelta > 0 ? '▲' : '▼';
     throughput.trendDelta = _tpDelta;
@@ -5396,8 +5415,12 @@ function synthesize(game){
 
   // Persist lead safety on cardState for spread conviction + confidence table
   // Trend arrow — only update when score changed (prevents flickering on stale data polls)
+  // CTRL-FLIP GUARD: reset trend when control team changes (delta would be cross-team nonsense)
   var _lsScoreKey = (game.homePoints||0) + '-' + (game.awayPoints||0);
-  if(leadSafety && cs.leadSafety && cs.leadSafety.expected && _lsScoreKey !== cs._lastLeadSafetyScoreKey){
+  var _lsTeamFlipped = leadSafety && cs.leadSafety && cs.leadSafety.fTeam && leadSafety.fTeam !== cs.leadSafety.fTeam;
+  if(_lsTeamFlipped){
+    cs._lastLeadSafetyScoreKey = _lsScoreKey;
+  } else if(leadSafety && cs.leadSafety && cs.leadSafety.expected && _lsScoreKey !== cs._lastLeadSafetyScoreKey){
     var _lsDelta = Math.round((leadSafety.expected.totalSwing - cs.leadSafety.expected.totalSwing) * 10) / 10;
     leadSafety.trend = Math.abs(_lsDelta) < 0.5 ? '▬' : _lsDelta < 0 ? '▲' : '▼';
     leadSafety.trendDelta = _lsDelta;
@@ -8153,8 +8176,25 @@ function renderDepthAuditVisual(id, cs, hA, aA){
         s+='<path d="M48 7 L48 70 Q48 170 150 170 Q252 170 252 70 L252 7" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="1.2"/>';
       }
       var positions=zPos[side];
+      var bl=zoneBaselines[alias]||null;
       positions.forEach(function(zp){
-        var d=zones[zp.k]; if(!d||d.a===0)return;
+        var d=zones[zp.k];
+        var bz=bl?bl[zp.k]:null;
+        var hasLive=d&&d.a>0;
+        var hasBaseline=bz&&bz.a>0&&bl.gp>0;
+        if(!hasLive&&!hasBaseline)return;
+        if(hasBaseline){
+          var avgAtt=bz.a/bl.gp;
+          var bVol=Math.max(12,Math.min(28,avgAtt*2.5));
+          var bPct=Math.round(bz.m/bz.a*100);
+          s+='<circle cx="'+zp.cx+'" cy="'+zp.cy+'" r="'+bVol+'" fill="none" stroke="rgba(255,255,255,0.35)" stroke-width="1" stroke-dasharray="3,2"/>';
+          if(hasLive){
+            s+='<text x="'+(zp.cx+Math.max(14,Math.min(28,d.a*2.5))+4)+'" y="'+(zp.cy+3)+'" text-anchor="start" fill="rgba(255,255,255,0.3)" font-size="6" font-family="monospace">szn '+bPct+'%</text>';
+          } else {
+            s+='<text x="'+zp.cx+'" y="'+(zp.cy+3)+'" text-anchor="middle" fill="rgba(255,255,255,0.3)" font-size="7" font-family="monospace">szn '+bPct+'%</text>';
+          }
+        }
+        if(!hasLive)return;
         var vol=Math.max(12,Math.min(26,d.a*2.5));
         var c=_dEc(d.m,d.a);
         var pct=d.a>0?Math.round(d.m/d.a*100):0;
