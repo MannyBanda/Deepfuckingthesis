@@ -290,6 +290,8 @@ async function viewSnapshots(){
     if(s.deficit) html += '<span>Def: ' + s.deficit + '</span>';
     if(s.lead_sust) html += '<span>Sust: <b style="color:#ffd166">' + s.lead_sust + '</b></span>';
     if(s.lead_class) html += '<span>Class: ' + s.lead_class + '</span>';
+    if(s.tp_class) html += '<span>TP: <b style="color:#c084fc">' + s.tp_class + '</b>' + (s.tp_exp_swing != null ? ' ' + (s.tp_exp_swing >= 0 ? '+' : '') + s.tp_exp_swing + 'exp' : '') + (s.tp_remain_poss ? ' ~' + s.tp_remain_poss + 'p' : '') + '</span>';
+    if(s.ls_class) html += '<span>LS: <b style="color:#38bdf8">' + s.ls_class + '</b>' + (s.ls_exp_swing != null ? ' ' + (s.ls_exp_swing >= 0 ? '+' : '') + s.ls_exp_swing + 'exp' : '') + '</span>';
     html += '</div>';
     // I1-I5
     if(s.i1 != null) html += '<div style="font-size:9px;color:#64748b;margin-top:2px">I1:' + s.i1 + ' I2:' + s.i2 + ' I3:' + s.i3 + ' I4:' + s.i4 + ' I5:' + s.i5 + '</div>';
@@ -353,6 +355,8 @@ async function viewSustainability(){
   html += '<div class="row"><span class="label">Floor</span><span class="val green">' + (snap.floor_team||'?') + ' ' + (snap.floor_score ? snap.floor_score.toFixed(2) : '?') + '</span></div>';
   html += '<div class="row"><span class="label">Lead Sust</span><span class="val yellow">' + (snap.lead_sust||'—') + '</span></div>';
   html += '<div class="row"><span class="label">Lead Class</span><span class="val">' + (snap.lead_class||'—') + '</span></div>';
+  html += '<div class="row"><span class="label">Throughput</span><span class="val" style="color:#c084fc">' + (snap.tp_class||'—') + (snap.tp_exp_swing != null ? ' (' + (snap.tp_exp_swing >= 0 ? '+' : '') + snap.tp_exp_swing + ' exp, ~' + (snap.tp_remain_poss||'?') + ' poss)' : '') + '</span></div>';
+  html += '<div class="row"><span class="label">Lead Safety</span><span class="val" style="color:#38bdf8">' + (snap.ls_class||'—') + (snap.ls_exp_swing != null ? ' (' + (snap.ls_exp_swing >= 0 ? '+' : '') + snap.ls_exp_swing + ' exp)' : '') + '</span></div>';
   html += '<div class="row"><span class="label">Source</span><span class="val">' + (snap.source||'?') + '</span></div>';
   html += '</div>';
 
@@ -2522,6 +2526,13 @@ async function runQA(section){
             else meh('SNAP','leadSafety:none','Needs leading control team (lead>=2), period 2+');
             if(sustFound>0) ok('SNAP','sustainability',sustFound+'/'+snRows.length); else meh('SNAP','sustainability:none','No sustainability');
             if(floorFound>0) ok('SNAP','floor',floorFound+'/'+snRows.length); else meh('SNAP','floor:none','No floor score');
+            // Check new persisted tp/ls columns (server-side, not from snapshot_data blob)
+            var tpColFound = snRows.filter(function(r){return r.tp_class;}).length;
+            var lsColFound = snRows.filter(function(r){return r.ls_class;}).length;
+            if(tpColFound>0) ok('SNAP','tp_col',tpColFound+'/'+snRows.length+' snapshots have tp_class column');
+            else meh('SNAP','tp_col:none','No tp_class column data — deploy latest poll-live-bdl.mjs + run init');
+            if(lsColFound>0) ok('SNAP','ls_col',lsColFound+'/'+snRows.length+' snapshots have ls_class column');
+            else meh('SNAP','ls_col:none','No ls_class column data — deploy latest poll-live-bdl.mjs + run init');
             if(snRows.length>=2){
               var firstTs=new Date(snRows[0].ts||snRows[0].created_at);
               var lastTs=new Date(snRows[snRows.length-1].ts||snRows[snRows.length-1].created_at);
