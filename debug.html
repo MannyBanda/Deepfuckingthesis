@@ -116,6 +116,7 @@ select{background:#1e293b;color:#e0e0e0;border:1px solid #334155;border-radius:6
     <button onclick="runQA('bdl')" style="color:#fbbf24">🔬 BDL Data</button>
     <button onclick="runQA('odds')" style="color:#f5a62a">💰 Odds</button>
     <button onclick="runQA('quarter_data')" style="color:#38bdf8">📊 QD Pipeline</button>
+    <button onclick="runQA('volume_threat')" style="color:#f472b6">🎯 Volume Threat</button>
   </div>
 </div>
 <div id="qa-results" style="display:none"></div>
@@ -2732,6 +2733,101 @@ async function runQA(section){
       } catch(e){ bad('QD','error',e.message,snap({stack:e.stack})); }
     }
 
+    // 7. VOLUME THREAT + I3 C&S VALIDATION
+    if(runAll || section === 'volume_threat'){
+      try {
+        if(!selectedGameId){
+          meh('VT','no_game','Select a game to validate VT + I3');
+        } else {
+          var vtSnData = await fetchJSON(FN+'db-api?action=history&game_id='+encodeURIComponent(selectedGameId));
+          var vtRows = (vtSnData && vtSnData.snapshots) || [];
+          if(vtRows.length === 0){
+            meh('VT','no_snapshots','No snapshots for this game');
+          } else {
+            // ── I3 COLUMN PRESENCE + VALIDITY ──
+            var i3Present = vtRows.filter(function(r){ return r.i3 != null; }).length;
+            var i3Valid = vtRows.filter(function(r){ return r.i3 === 0 || r.i3 === 0.5 || r.i3 === 1; }).length;
+            var i3Bad = vtRows.filter(function(r){ return r.i3 != null && r.i3 !== 0 && r.i3 !== 0.5 && r.i3 !== 1; });
+            if(i3Present > 0) ok('VT','i3:present', i3Present+'/'+vtRows.length+' snapshots have I3');
+            else bad('VT','i3:missing','No I3 values on any snapshot');
+            if(i3Present > 0 && i3Valid === i3Present) ok('VT','i3:valid','All I3 values are 0/0.5/1');
+            else if(i3Bad.length > 0) bad('VT','i3:invalid',i3Bad.length+' snapshots with unexpected I3 values',snap(i3Bad.slice(0,5).map(function(r){return{i3:r.i3,period:r.period,clock:r.clock};})));
+
+            // ── I3 C&S COMPONENT — check for 3-way scoring ──
+            // I3=0.5 (EVEN) can come from 2-component or 3-component system.
+            // But I3=1 or I3=0 WITH all sub-components tied in eFG/AR means C&S broke the tie.
+            // Best we can do: verify I3 variance (not all 0.5) — healthy sign that C&S contributes
+            var i3Dist = {zero:0, half:0, one:0};
+            vtRows.forEach(function(r){ if(r.i3===0)i3Dist.zero++; else if(r.i3===0.5)i3Dist.half++; else if(r.i3===1)i3Dist.one++; });
+            var i3HasVariance = (i3Dist.zero > 0 || i3Dist.one > 0);
+            if(i3HasVariance) ok('VT','i3:variance','I3 distribution: 0→'+i3Dist.zero+' 0.5→'+i3Dist.half+' 1→'+i3Dist.one+' (C&S component can contribute)');
+            else if(i3Present > 0) meh('VT','i3:all_even','All I3=0.5 — C&S component may not be firing (or eFG/AR/C&S all tied)',snap(i3Dist));
+
+            // ── VT FLOOR DISCOUNT DETECTION ──
+            // Reconstructed floor from I1-I5 weighted sum vs stored floor_score
+            // If floor_score < reconstructed - 0.005, VT discount was applied
+            var vtDiscounted = [], vtNormal = [], vtReconstructable = 0;
+            vtRows.forEach(function(r){
+              if(r.i1 != null && r.i2 != null && r.i3 != null && r.i4 != null && r.i5 != null && r.floor_score != null){
+                vtReconstructable++;
+                var reconstructed = r.i1 * 0.25 + r.i2 * 0.25 + r.i3 * 0.20 + r.i4 * 0.20 + r.i5 * 0.10;
+                var gap = reconstructed - r.floor_score;
+                if(gap > 0.005){
+                  vtDiscounted.push({period:r.period, clock:r.clock, floor:r.floor_score, reconstructed:Math.round(reconstructed*100)/100, discount:Math.round(gap*100)+'%', source:r.source||'?'});
+                } else {
+                  vtNormal.push({period:r.period,clock:r.clock});
+                }
+              }
+            });
+            if(vtReconstructable === 0){
+              meh('VT','discount:no_data','No snapshots with complete I1-I5 + floor_score');
+            } else if(vtDiscounted.length > 0){
+              ok('VT','discount:detected',vtDiscounted.length+'/'+vtReconstructable+' snapshots show VT floor discount',snap(vtDiscounted.slice(0,10)));
+            } else {
+              ok('VT','discount:none',vtReconstructable+' snapshots — no VT discount detected (opponent may not have had volume threat)',snap({sampleNormal:vtNormal.slice(0,3)}));
+            }
+
+            // ── TP/LS VALIDITY POST-VT (vtBonus integration) ──
+            // Verify TP/LS classifications are still valid enum values after vtBonus changes
+            var validTPClasses = ['STRONG RECOVERY','PROBABLE','CONTESTED','UNLIKELY','NO PATH'];
+            var validLSClasses = ['SAFE','CUSHIONED','AT RISK','CRITICAL'];
+            var tpColRows = vtRows.filter(function(r){ return r.tp_class; });
+            var lsColRows = vtRows.filter(function(r){ return r.ls_class; });
+            var tpInvalid = tpColRows.filter(function(r){ return validTPClasses.indexOf(r.tp_class) === -1; });
+            var lsInvalid = lsColRows.filter(function(r){ return validLSClasses.indexOf(r.ls_class) === -1; });
+            if(tpColRows.length > 0){
+              if(tpInvalid.length === 0) ok('VT','tp_post_vt',tpColRows.length+' TP classifications valid post-vtBonus');
+              else bad('VT','tp_post_vt',tpInvalid.length+' invalid TP classifications',snap(tpInvalid.slice(0,5).map(function(r){return{tp:r.tp_class,period:r.period};})));
+            } else meh('VT','tp_post_vt:none','No tp_class data — needs trailing control team period 2+');
+            if(lsColRows.length > 0){
+              if(lsInvalid.length === 0) ok('VT','ls_post_vt',lsColRows.length+' LS classifications valid post-vtBonus');
+              else bad('VT','ls_post_vt',lsInvalid.length+' invalid LS classifications',snap(lsInvalid.slice(0,5).map(function(r){return{ls:r.ls_class,period:r.period};})));
+            } else meh('VT','ls_post_vt:none','No ls_class data — needs leading control team period 2+');
+
+            // ── TP/LS SWING NaN CHECK ──
+            // After vtBonus integration, verify swing values aren't NaN
+            var tpSwingRows = vtRows.filter(function(r){ return r.tp_exp_swing != null; });
+            var lsSwingRows = vtRows.filter(function(r){ return r.ls_exp_swing != null; });
+            var tpNaN = tpSwingRows.filter(function(r){ return isNaN(r.tp_exp_swing); });
+            var lsNaN = lsSwingRows.filter(function(r){ return isNaN(r.ls_exp_swing); });
+            if(tpSwingRows.length > 0){
+              if(tpNaN.length === 0) ok('VT','tp_swing_nan',tpSwingRows.length+' TP swing values — no NaN');
+              else bad('VT','tp_swing_nan',tpNaN.length+' TP swing values are NaN (vtBonus may be producing Infinity)',snap(tpNaN.slice(0,5).map(function(r){return{swing:r.tp_exp_swing,period:r.period,clock:r.clock};})));
+            }
+            if(lsSwingRows.length > 0){
+              if(lsNaN.length === 0) ok('VT','ls_swing_nan',lsSwingRows.length+' LS swing values — no NaN');
+              else bad('VT','ls_swing_nan',lsNaN.length+' LS swing values are NaN',snap(lsNaN.slice(0,5).map(function(r){return{swing:r.ls_exp_swing,period:r.period,clock:r.clock};})));
+            }
+
+            // ── SERVER SOURCE CHECK ──
+            var serverRows = vtRows.filter(function(r){ return r.source === 'server'; });
+            if(serverRows.length > 0) ok('VT','server_source',serverRows.length+' server-side snapshots (VT computed server-side)');
+            else meh('VT','server_source:none','No server snapshots — VT floor discount only fires server-side');
+          }
+        }
+      } catch(e){ bad('VT','error',e.message,snap({stack:e.stack})); }
+    }
+
   } catch(e){ bad('SYSTEM','fatal',e.message,snap({stack:e.stack})); }
 
   // RENDER RESULTS
@@ -2744,8 +2840,8 @@ async function runQA(section){
   h += '</div>';
   var groups={};
   results.forEach(function(r){if(!groups[r.group])groups[r.group]=[];groups[r.group].push(r);});
-  var groupColors={POLL:'#60a5fa',ANAL:'#a78bfa',SNAP:'#ffd166',BDL:'#fbbf24',ODDS:'#f5a62a',QD:'#38bdf8',SIG:'#00ff88',SYSTEM:'#ff5252'};
-  var groupLabels={POLL:'SERVER POLLING',ANAL:'ANALYSES PIPELINE',SNAP:'SNAPSHOTS (TP/LS)',BDL:'BDL DATA TYPES',ODDS:'ODDS & EDGE',QD:'QUARTER DATA PIPELINE',SIG:'SIGNAL DISTRIBUTION',SYSTEM:'SYSTEM'};
+  var groupColors={POLL:'#60a5fa',ANAL:'#a78bfa',SNAP:'#ffd166',BDL:'#fbbf24',ODDS:'#f5a62a',QD:'#38bdf8',VT:'#f472b6',SIG:'#00ff88',SYSTEM:'#ff5252'};
+  var groupLabels={POLL:'SERVER POLLING',ANAL:'ANALYSES PIPELINE',SNAP:'SNAPSHOTS (TP/LS)',BDL:'BDL DATA TYPES',ODDS:'ODDS & EDGE',QD:'QUARTER DATA PIPELINE',VT:'VOLUME THREAT + I3 C&S',SIG:'SIGNAL DISTRIBUTION',SYSTEM:'SYSTEM'};
   Object.keys(groups).forEach(function(grp){
     var items=groups[grp];
     var gFail=items.filter(function(r){return r.status==='FAIL';}).length;
