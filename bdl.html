@@ -4200,13 +4200,13 @@ function computePossessionWindow(game, windowSize){
   var wI2={score:rimScore>4?1:rimScore<-4?0:.5, detail:'PntTch:'+hPaintT+'\u2013'+aPaintT+' FTA:'+hFTA+'\u2013'+aFTA+' Blk:'+hBlk+'\u2013'+aBlk+' Rim:'+hRimS+'\u2013'+aRimS};
 
   // I3: Shot Quality & Creation
-  var hFGM=0,aFGM=0,hFGA=0,aFGA=0,h3PM=0,a3PM=0,h3PA=0,a3PA=0,hAst=0,aAst=0;
-  hP.forEach(function(p){hAst+=p.assists;p.shots.forEach(function(s){hFGA++;if(s.made)hFGM++;if(s.is3){h3PA++;if(s.made)h3PM++;}});});
-  aP.forEach(function(p){aAst+=p.assists;p.shots.forEach(function(s){aFGA++;if(s.made)aFGM++;if(s.is3){a3PA++;if(s.made)a3PM++;}});});
+  var hFGM=0,aFGM=0,hFGA=0,aFGA=0,h3PM=0,a3PM=0,h3PA=0,a3PA=0,hAst=0,aAst=0,hCS3=0,aCS3=0;
+  hP.forEach(function(p){hAst+=p.assists;p.shots.forEach(function(s){hFGA++;if(s.made)hFGM++;if(s.is3){h3PA++;if(s.made){h3PM++;if(s.a)hCS3++;}}});});
+  aP.forEach(function(p){aAst+=p.assists;p.shots.forEach(function(s){aFGA++;if(s.made)aFGM++;if(s.is3){a3PA++;if(s.made){a3PM++;if(s.a)aCS3++;}}});});
   var hEFG=hFGA>0?(hFGM+0.5*h3PM)/hFGA:0, aEFG=aFGA>0?(aFGM+0.5*a3PM)/aFGA:0;
   var hAR=hFGM>0?(hAst/hFGM)*100:0, aAR=aFGM>0?(aAst/aFGM)*100:0;
-  var i3=(hEFG>aEFG+.03?1:hEFG<aEFG-.03?-1:0)+(hAR>aAR+8?1:hAR<aAR-8?-1:0);
-  var wI3={score:i3>0?1:i3===0?.5:0, detail:'eFG:'+(hEFG*100).toFixed(0)+'\u2013'+(aEFG*100).toFixed(0)+' AR:'+hAR.toFixed(0)+'\u2013'+aAR.toFixed(0)+' Ast:'+hAst+'\u2013'+aAst};
+  var i3=(hEFG>aEFG+.03?1:hEFG<aEFG-.03?-1:0)+(hAR>aAR+8?1:hAR<aAR-8?-1:0)+(hCS3>aCS3+2?1:hCS3<aCS3-2?-1:0);
+  var wI3={score:i3>0?1:i3===0?.5:0, detail:'eFG:'+(hEFG*100).toFixed(0)+'\u2013'+(aEFG*100).toFixed(0)+' AR:'+hAR.toFixed(0)+'\u2013'+aAR.toFixed(0)+' C&S:'+hCS3+'\u2013'+aCS3+' Ast:'+hAst+'\u2013'+aAst};
 
   // I4: Lineup Integrity
   var hPts=0,aPts=0; hP.forEach(function(p){hPts+=p.points;}); aP.forEach(function(p){aPts+=p.points;});
@@ -5683,8 +5683,9 @@ function compute(game){
   const hAst=hs.assists||0, aAst=as.assists||0;
   const hFGM=hs.field_goals_made||1, aFGM=as.field_goals_made||1;
   const hAR=(hAst/hFGM)*100, aAR=(aAst/aFGM)*100;
-  const i3=(hEFG>aEFG+.02?1:hEFG<aEFG-.02?-1:0)+(hAR>aAR+5?1:hAR<aAR-5?-1:0);
-  let i3detail=`eFG%:${(hEFG*100).toFixed(1)}–${(aEFG*100).toFixed(1)} AR:${hAR.toFixed(0)}–${aAR.toFixed(0)} AST:${hAst}–${aAst}`;
+  const hCS3=pbp?.home?.threes?.assisted||0, aCS3=pbp?.away?.threes?.assisted||0;
+  const i3=(hEFG>aEFG+.02?1:hEFG<aEFG-.02?-1:0)+(hAR>aAR+5?1:hAR<aAR-5?-1:0)+(hCS3>aCS3+2?1:hCS3<aCS3-2?-1:0);
+  let i3detail=`eFG%:${(hEFG*100).toFixed(1)}–${(aEFG*100).toFixed(1)} AR:${hAR.toFixed(0)}–${aAR.toFixed(0)} C&S:${hCS3}–${aCS3} AST:${hAst}–${aAst}`;
   if(pbp){
     const hD=pbp.home?.shotDiet, aD=pbp.away?.shotDiet;
     if(hD&&aD) i3detail+=` | diet ${hA}:rim${hD.rimPct}%/mid${hD.midPct}%/3pt${hD.threePct}% ${aA}:rim${aD.rimPct}%/mid${aD.midPct}%/3pt${aD.threePct}%`;
@@ -6103,6 +6104,22 @@ function synthesize(game){
 
   var fScore = floor.score;
   var fTeam = floor.controlTeam;
+
+  // ── VOLUME THREAT — compute early, store on cs for TP/LS to read ──
+  var vtResult = computeVolumeThreat(game);
+  cs.volumeThreat = vtResult;
+  var vtActive = false, vtDiscount = 0, vtTeam = null;
+  if(vtResult){
+    var ctrlIsHomeVT = fTeam === hA;
+    var oppVT = ctrlIsHomeVT ? vtResult.away : vtResult.home;
+    if(oppVT && oppVT.active && oppVT.discount > 0){
+      vtActive = true;
+      vtDiscount = oppVT.discount;
+      vtTeam = ctrlIsHomeVT ? aA : hA;
+      fScore = Math.round(fScore * (1 - vtDiscount) * 100) / 100;
+    }
+  }
+
   var fVerdict = fScore>=0.90?'DOMINANT':fScore>=0.75?'STRONG':fScore>=0.60?'EARNED':'WEAK';
   var oppTeam = fTeam === hA ? aA : hA;
 
@@ -6485,6 +6502,9 @@ function synthesize(game){
     betType: betType,
     throughput: throughput,
     leadSafety: leadSafety,
+    vtActive: vtActive,
+    vtDiscount: vtDiscount,
+    vtTeam: vtTeam,
   };
 }
 
@@ -7201,12 +7221,72 @@ function fmtSwing(v){ var n = Math.round(v); return n >= 0 ? '+'+n : ''+n; }
 // Computes structural scoring rate + 4-direction variance regression across
 // remaining possessions with conservative/expected/optimistic confidence bands.
 //
+// ══════════════════════════════════════════════════════════════════════════════
+// VOLUME THREAT — detects opponent perimeter counter-engine at baseline
+// Returns per-side: active flag, projected 3PA, discount (for floor), vtBonus (for structRate)
+// ══════════════════════════════════════════════════════════════════════════════
+function computeVolumeThreat(game){
+  var cs = cardState[game.id]; if(!cs) return null;
+  var s = game.summary || game.bdlData; if(!s || !s.home || !s.away) return null;
+  var period = game.period || 1;
+  var GAME_MINUTES = 48, PERIOD_MINUTES = 12;
+  var sznDefault = 36;
+  var clockParts = (game.clock||'').split(':');
+  var clockMins = clockParts.length===2 ? (parseInt(clockParts[0])||0)+((parseInt(clockParts[1])||0)/60) : PERIOD_MINUTES;
+  var quartersLeft = Math.max(0, 4 - period);
+  var minsLeft = clockMins + (quartersLeft * PERIOD_MINUTES);
+  var minsElapsed = Math.max(1, GAME_MINUTES - minsLeft);
+
+  var pbpAudit = cs.pbpAudit;
+  var sa = cs.sustainabilityAudit;
+  var sust = cs.clientSustainability;
+
+  function evalSide(stats, pbpSide, sustSide){
+    var live3PA = Number(stats.three_points_att) || 0;
+    var live3PM = Number(stats.three_points_made) || 0;
+    var live3Pct = live3PA > 0 ? (live3PM / live3PA * 100) : 0;
+    var baseline = parseFloat(sustSide?.seasonPrior || sustSide?.seasonBaseline || sznDefault);
+    var cs3PM = pbpSide?.threes?.assisted || 0;
+    var projected3PA = minsElapsed > 5 ? live3PA * (GAME_MINUTES / minsElapsed) : live3PA * 2;
+    var deviation = live3Pct - baseline;
+    var withinRange = deviation >= -5 && deviation <= 15;
+    var active = projected3PA >= 30 && withinRange && live3PA >= 8;
+    var discount = 0;
+    if(active) discount = Math.min(0.50, Math.max(0, 0.25 + 0.15 * ((projected3PA - 30) / 15)));
+    var vtBonus = 0;
+    if(active && live3PM > 0){
+      var poss = Number(stats.possessions) || 0;
+      if(poss < 5) poss = (Number(stats.field_goals_att)||0) + 0.44*(Number(stats.free_throws_att)||0) - (Number(stats.offensive_rebounds)||0) + (Number(stats.turnovers||stats.total_turnovers)||0);
+      if(poss > 10){
+        var cs3PAEst = (cs3PM / live3PM) * live3PA;
+        var cs3PAPerPoss = cs3PAEst / poss;
+        vtBonus = cs3PAPerPoss * (baseline / 100) * 3 * 0.5;
+      }
+    }
+    return {active:active, projected3PA:Math.round(projected3PA), live3PA:live3PA, live3PM:live3PM,
+      live3Pct:Math.round(live3Pct*10)/10, cs3PM:cs3PM, baseline:baseline,
+      deviation:Math.round(deviation*10)/10, discount:Math.round(discount*100)/100,
+      vtBonus:Math.round(vtBonus*1000)/1000};
+  }
+
+  var hs = s.home?.statistics || s.home || {};
+  var as = s.away?.statistics || s.away || {};
+  var hSust = (sa && sa.home?.live3Pct != null) ? sa.home : sust ? sust.home : null;
+  var aSust = (sa && sa.home?.live3Pct != null) ? sa.away : sust ? sust.away : null;
+  return {
+    home: evalSide(hs, pbpAudit?.home || null, hSust),
+    away: evalSide(as, pbpAudit?.away || null, aSust),
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SWING CORE — shared math engine for throughput & lead safety
 // focalStats/targetStats: focal = team trying to close gap, target = team defending lead
 // All 4 variance directions modeled:
 //   Favorable for focal:  target cooling (hot→regress down), focal heating (cold→regress up)
 //   Unfavorable for focal: target heating (cold→regress up), focal cooling (hot→regress down)
 // ══════════════════════════════════════════════════════════════════════════════
-function computeSwingCore(focalStats, targetStats, focalSustData, targetSustData, deficit, minsLeft, minsElapsed, gameFraction, sznDefault){
+function computeSwingCore(focalStats, targetStats, focalSustData, targetSustData, deficit, minsLeft, minsElapsed, gameFraction, sznDefault, focalVTBonus, targetVTBonus){
   // ── POSSESSIONS ──
   var focalPoss = Number(focalStats.possessions) || 0;
   var targetPoss = Number(targetStats.possessions) || 0;
@@ -7222,8 +7302,8 @@ function computeSwingCore(focalStats, targetStats, focalSustData, targetSustData
     var scp = Number(st.second_chance_points || st.second_chance_pts) || 0;
     return (paint + ft + pot + scp) / poss;
   }
-  var focalStructRate = structRate(focalStats, focalPoss);
-  var targetStructRate = structRate(targetStats, targetPoss);
+  var focalStructRate = structRate(focalStats, focalPoss) + (focalVTBonus || 0);
+  var targetStructRate = structRate(targetStats, targetPoss) + (targetVTBonus || 0);
   var structEdge = focalStructRate - targetStructRate;
 
   // ── VARIANCE DATA (3PT deviation from season baseline) ──
@@ -7343,7 +7423,10 @@ function computeThroughput(game){
   var targetSustData = (sa && sa.home?.live3Pct != null) ? (ctrlIsHome ? sa.away : sa.home) : sust ? (ctrlIsHome ? sust.away : sust.home) : null;
 
   // ── CORE MATH ──
-  var core = computeSwingCore(focalStats, targetStats, focalSustData, targetSustData, deficit, minsLeft, minsElapsed, gameFraction, 36);
+  var vt = cs.volumeThreat;
+  var focalVT = vt ? (ctrlIsHome ? vt.home?.vtBonus : vt.away?.vtBonus) : 0;
+  var targetVT = vt ? (ctrlIsHome ? vt.away?.vtBonus : vt.home?.vtBonus) : 0;
+  var core = computeSwingCore(focalStats, targetStats, focalSustData, targetSustData, deficit, minsLeft, minsElapsed, gameFraction, 36, focalVT, targetVT);
   if(!core) return null;
 
   var conservative = core.bands[0], expected = core.bands[1], optimistic = core.bands[2];
@@ -7411,7 +7494,10 @@ function computeLeadSafety(game){
   var targetSustData = (sa && sa.home?.live3Pct != null) ? (ctrlIsHome ? sa.home : sa.away) : sust ? (ctrlIsHome ? sust.home : sust.away) : null;
 
   // ── CORE MATH (opponent's recovery potential) ──
-  var core = computeSwingCore(focalStats, targetStats, focalSustData, targetSustData, lead, minsLeft, minsElapsed, gameFraction, 36);
+  var vt = cs.volumeThreat;
+  var focalVT = vt ? (ctrlIsHome ? vt.away?.vtBonus : vt.home?.vtBonus) : 0;
+  var targetVT = vt ? (ctrlIsHome ? vt.home?.vtBonus : vt.away?.vtBonus) : 0;
+  var core = computeSwingCore(focalStats, targetStats, focalSustData, targetSustData, lead, minsLeft, minsElapsed, gameFraction, 36, focalVT, targetVT);
   if(!core) return null;
 
   var conservative = core.bands[0], expected = core.bands[1], optimistic = core.bands[2];
@@ -10069,9 +10155,13 @@ function renderCard(game){
     const _filtSigs2 = (ind.traj&&ind.traj.signals||[]).filter(s=>_tragKeys2.includes(s.key));
     const _tragActive2 = _filtSigs2.filter(s=>s.w>0).length;
     const trajBadgeText = ind.traj&&!ind.traj.tooEarly ? (trajTeam||'EVEN')+' '+_tragActive2+'/'+_filtSigs2.length : '';
+    const _vtInfo = cs.volumeThreat;
+    const _vtOppActive = _vtInfo && ind.controlTeam ? (ind.controlTeam === hA ? _vtInfo.away?.active : _vtInfo.home?.active) : false;
+    const _vtDiscPct = _vtOppActive ? (ind.controlTeam === hA ? _vtInfo.away?.discount : _vtInfo.home?.discount) : 0;
+    const _vtBadge = _vtOppActive ? `<span style="font-size:5px;font-weight:700;color:var(--amber);background:rgba(255,209,102,.12);padding:1px 4px;border-radius:3px;margin-left:3px;letter-spacing:.4px">VT↓${Math.round(_vtDiscPct*100)}%</span>` : '';
     html+=`
     <div class="ctrl-bar">
-      <div class="vrd" style="color:${v.color};border-color:${v.color};background:${v.bg}">${v.label} (${ind.score.toFixed(2)})</div>
+      <div class="vrd" style="color:${v.color};border-color:${v.color};background:${v.bg}">${v.label} (${ind.score.toFixed(2)})${_vtBadge}</div>
       <div><div class="cl">CONTROL</div><div class="ct">${esc(ind.controlTeam)}</div></div>
       <div class="bw"><div class="bt2"><div class="bf" style="width:${ind.score*100}%;background:${v.color}"></div></div></div>
       <div class="cn" style="color:${v.color}">${ind.score.toFixed(2)}</div>
