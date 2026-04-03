@@ -1423,10 +1423,70 @@ function computeLeadComposition(summary) {
   return { classification, leadTeam, structuralMargin: leadStruct, varianceMargin: leadVar };
 }
 
+// ── VOLUME THREAT DETECTION ──────────────────────────────────────────────────
+// Identifies teams with scheme-driven high-volume 3PT production at baseline.
+// Returns per-team: active flag, projected 3PA, discount (for floor), vtBonus (for structRate).
+
+function computeVolumeThreat(summary, pbpAudit, sust, league, minsElapsed) {
+  var GAME_MINUTES = league === 'ncaamb' ? 40 : 48;
+  var sznDefault = league === 'ncaamb' ? 33 : 36;
+
+  function evalSide(stats, pbpSide, sustSide) {
+    var live3PA = Number(stats.three_points_att) || 0;
+    var live3PM = Number(stats.three_points_made) || 0;
+    var live3Pct = live3PA > 0 ? (live3PM / live3PA * 100) : 0;
+    var baseline = parseFloat(sustSide?.seasonPrior || sustSide?.seasonBaseline || sznDefault);
+    var cs3PM = pbpSide?.threes?.assisted || 0;
+
+    // Pace-adjusted projection to full game
+    var projected3PA = minsElapsed > 5 ? live3PA * (GAME_MINUTES / minsElapsed) : live3PA * 2;
+
+    // Check thresholds: projected >= 30, conversion within [-5%, +15%] of baseline, min 8 attempts
+    var deviation = live3Pct - baseline;
+    var withinRange = deviation >= -5 && deviation <= 15;
+    var active = projected3PA >= 30 && withinRange && live3PA >= 8;
+
+    // Discount for floor modifier — scales with projected volume
+    var discount = 0;
+    if (active) {
+      discount = Math.min(0.50, Math.max(0, 0.25 + 0.15 * ((projected3PA - 30) / 15)));
+    }
+
+    // VT bonus for structRate — reliable per-possession C&S production at baseline
+    // Estimates C&S 3PA from ratio of assisted makes to total makes
+    var vtBonus = 0;
+    if (active && live3PM > 0) {
+      var poss = Number(stats.possessions) || 0;
+      if (poss < 5) poss = (Number(stats.field_goals_att) || 0) + 0.44 * (Number(stats.free_throws_att) || 0)
+        - (Number(stats.offensive_rebounds) || 0) + (Number(stats.turnovers || stats.total_turnovers) || 0);
+      if (poss > 10) {
+        var cs3PAEst = (cs3PM / live3PM) * live3PA; // project C&S attempts from assist ratio
+        var cs3PAPerPoss = cs3PAEst / poss;
+        vtBonus = cs3PAPerPoss * (baseline / 100) * 3 * 0.5; // 50% scaling — perimeter still more variant than paint
+      }
+    }
+
+    return {
+      active, projected3PA: Math.round(projected3PA),
+      live3PA, live3PM, live3Pct: Math.round(live3Pct * 10) / 10,
+      cs3PM, baseline, deviation: Math.round(deviation * 10) / 10,
+      discount: Math.round(discount * 100) / 100,
+      vtBonus: Math.round(vtBonus * 1000) / 1000,
+    };
+  }
+
+  var hs = summary.home?.statistics || {};
+  var as = summary.away?.statistics || {};
+  return {
+    home: evalSide(hs, pbpAudit?.home || null, sust?.home || null),
+    away: evalSide(as, pbpAudit?.away || null, sust?.away || null),
+  };
+}
+
 // ── THROUGHPUT / LEAD SAFETY (ported from client) ──────────────────────────
 // Pure math — no API calls, no DB queries. All inputs from poll loop.
 
-function computeSwingCoreServer(focalStats, targetStats, focalSustData, targetSustData, deficit, minsLeft, minsElapsed, gameFraction, sznDefault) {
+function computeSwingCoreServer(focalStats, targetStats, focalSustData, targetSustData, deficit, minsLeft, minsElapsed, gameFraction, sznDefault, focalVTBonus, targetVTBonus) {
   var focalPoss = Number(focalStats.possessions) || 0;
   var targetPoss = Number(targetStats.possessions) || 0;
   if (focalPoss < 3) focalPoss = (Number(focalStats.field_goals_att)||0) + 0.44*(Number(focalStats.free_throws_att)||0) - (Number(focalStats.offensive_rebounds)||0) + (Number(focalStats.turnovers||focalStats.total_turnovers)||0);
@@ -1440,8 +1500,8 @@ function computeSwingCoreServer(focalStats, targetStats, focalSustData, targetSu
     var scp = Number(st.second_chance_points || st.second_chance_pts) || 0;
     return (paint + ft + pot + scp) / poss;
   }
-  var focalStructRate = structRate(focalStats, focalPoss);
-  var targetStructRate = structRate(targetStats, targetPoss);
+  var focalStructRate = structRate(focalStats, focalPoss) + (focalVTBonus || 0);
+  var targetStructRate = structRate(targetStats, targetPoss) + (targetVTBonus || 0);
   var structEdge = focalStructRate - targetStructRate;
 
   function getVarData(sustObj, stats, poss) {
@@ -1486,7 +1546,7 @@ function computeSwingCoreServer(focalStats, targetStats, focalSustData, targetSu
     structEdge: Math.round(structEdge * 1000) / 1000, focalVar, targetVar, remainingPoss: Math.round(remainingPoss), degradation };
 }
 
-function computeThroughputServer(summary, ind, sust, hA, aA, period, clock, league) {
+function computeThroughputServer(summary, ind, sust, hA, aA, period, clock, league, volumeThreat) {
   if (!summary || !summary.home || !summary.away || period < 2) return null;
   if (!ind || !ind.score) return null;
   var fTeam = ind.controlTeam;
@@ -1517,7 +1577,11 @@ function computeThroughputServer(summary, ind, sust, hA, aA, period, clock, leag
   var focalSustData = sust ? (ctrlIsHome ? sust.home : sust.away) : null;
   var targetSustData = sust ? (ctrlIsHome ? sust.away : sust.home) : null;
 
-  var core = computeSwingCoreServer(focalStats, targetStats, focalSustData, targetSustData, deficit, minsLeft, minsElapsed, gameFraction, sznDefault);
+  // Volume threat: focal = control team, target = opponent
+  var focalVT = volumeThreat ? (ctrlIsHome ? volumeThreat.home?.vtBonus : volumeThreat.away?.vtBonus) : 0;
+  var targetVT = volumeThreat ? (ctrlIsHome ? volumeThreat.away?.vtBonus : volumeThreat.home?.vtBonus) : 0;
+
+  var core = computeSwingCoreServer(focalStats, targetStats, focalSustData, targetSustData, deficit, minsLeft, minsElapsed, gameFraction, sznDefault, focalVT, targetVT);
   if (!core) return null;
   var con = core.bands[0], exp = core.bands[1], opt = core.bands[2];
 
@@ -1535,7 +1599,7 @@ function computeThroughputServer(summary, ind, sust, hA, aA, period, clock, leag
     minsLeft: Math.round(minsLeft * 10) / 10, fTeam };
 }
 
-function computeLeadSafetyServer(summary, ind, sust, hA, aA, period, clock, league) {
+function computeLeadSafetyServer(summary, ind, sust, hA, aA, period, clock, league, volumeThreat) {
   if (!summary || !summary.home || !summary.away || period < 2) return null;
   if (!ind || !ind.score) return null;
   var fTeam = ind.controlTeam;
@@ -1567,7 +1631,11 @@ function computeLeadSafetyServer(summary, ind, sust, hA, aA, period, clock, leag
   var focalSustData = sust ? (ctrlIsHome ? sust.away : sust.home) : null;
   var targetSustData = sust ? (ctrlIsHome ? sust.home : sust.away) : null;
 
-  var core = computeSwingCoreServer(focalStats, targetStats, focalSustData, targetSustData, lead, minsLeft, minsElapsed, gameFraction, sznDefault);
+  // Volume threat: focal = opponent (trailing), target = control team (leading)
+  var focalVT = volumeThreat ? (ctrlIsHome ? volumeThreat.away?.vtBonus : volumeThreat.home?.vtBonus) : 0;
+  var targetVT = volumeThreat ? (ctrlIsHome ? volumeThreat.home?.vtBonus : volumeThreat.away?.vtBonus) : 0;
+
+  var core = computeSwingCoreServer(focalStats, targetStats, focalSustData, targetSustData, lead, minsLeft, minsElapsed, gameFraction, sznDefault, focalVT, targetVT);
   if (!core) return null;
   var con = core.bands[0], exp = core.bands[1], opt = core.bands[2];
 
@@ -2059,10 +2127,21 @@ async function computeServerContext(sql, game, league, summary, ind, espnWP, hA,
     log(`${matchup}: server PBP processing failed: ${e.message}`);
   }
 
-  // ── 6. THROUGHPUT + LEAD SAFETY (ported from client) ──
+  // ── 6. VOLUME THREAT + THROUGHPUT + LEAD SAFETY ──
   try {
-    ctx.throughput = computeThroughputServer(summary, ind, sust, hA, aA, period, clock, league);
-    ctx.leadSafety = computeLeadSafetyServer(summary, ind, sust, hA, aA, period, clock, league);
+    // Compute volume threat (needs PBP + sust + game time)
+    var GAME_MINS_VT = league === 'ncaamb' ? 40 : 48;
+    var PERIOD_MINS_VT = league === 'ncaamb' ? 20 : 12;
+    var totalPeriodsVT = league === 'ncaamb' ? 2 : 4;
+    var vtClockParts = (clock || '').split(':');
+    var vtClockMins = vtClockParts.length === 2 ? (parseInt(vtClockParts[0]) || 0) + ((parseInt(vtClockParts[1]) || 0) / 60) : PERIOD_MINS_VT;
+    var vtPeriodsLeft = Math.max(0, totalPeriodsVT - period);
+    var vtMinsLeft = vtClockMins + (vtPeriodsLeft * PERIOD_MINS_VT);
+    var vtMinsElapsed = Math.max(1, GAME_MINS_VT - vtMinsLeft);
+    ctx.volumeThreat = computeVolumeThreat(summary, ctx.pbpAudit, sust, league, vtMinsElapsed);
+
+    ctx.throughput = computeThroughputServer(summary, ind, sust, hA, aA, period, clock, league, ctx.volumeThreat);
+    ctx.leadSafety = computeLeadSafetyServer(summary, ind, sust, hA, aA, period, clock, league, ctx.volumeThreat);
 
     // Trend arrows — compare against previous poll's expected swing
     // CTRL-FLIP GUARD: reset prev values when control team changes
@@ -2705,34 +2784,24 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, calibrationN
     p += `\nEDGE HISTORY:\n${ctx.edgeHistory.map(e => `${e.time || '?'} | ${e.edge || '?'} FWP ${e.fwp || '?'} | ${e.control || '?'} ${e.score || ''}`).join('\n')}\n`;
   }
 
-  // Throughput recovery model
-  if (ctx?.throughput) {
-    const tp = ctx.throughput;
-    p += `\nTHROUGHPUT RECOVERY MODEL (server-computed, 4-direction variance regression):\n`;
-    p += `Classification: ${tp.classification}\n`;
-    p += `The trailing structural team (${tp.fTeam}) projects to recover:\n`;
-    p += `  Conservative (25th pctile): ${fmtSwing(tp.conservative.totalSwing)} pts\n`;
-    p += `  Expected (50th pctile): ${fmtSwing(tp.expected.totalSwing)} pts\n`;
-    p += `  Optimistic (75th pctile): ${fmtSwing(tp.optimistic.totalSwing)} pts\n`;
-    p += `Current deficit: ${tp.deficit} pts | Remaining possessions: ~${tp.remainingPoss}\n`;
-    p += `Structural edge per possession: ${tp.structEdge} (${tp.fTeam} structural rate: ${tp.ctrlStructRate} vs opponent: ${tp.oppStructRate})\n`;
-    if (tp.degradation < 1.0) p += `Deficit degradation applied: ${(tp.degradation * 100).toFixed(0)}%\n`;
-    if (tp.trend) p += `TREND: ${tp.trend} ${tp.trendDelta >= 0 ? '+' : ''}${tp.trendDelta} (${tp.trend === '▲' ? 'recovery improving' : tp.trend === '▼' ? 'recovery fading' : 'stable'})\n`;
-    p += `HOW TO USE: Compare projected recovery points to deficit. If conservative covers deficit, recovery is PROBABLE. If only optimistic covers it, CONTESTED. If none cover it, NO PATH.\n`;
-  }
-
-  // Lead safety model
-  if (ctx?.leadSafety) {
-    const ls = ctx.leadSafety;
-    p += `\nLEAD SAFETY MODEL (server-computed, opponent recovery potential):\n`;
-    p += `Classification: ${ls.classification}\n`;
-    p += `The leading structural team (${ls.fTeam}) leads by ${ls.lead}. The opponent (${ls.oppTeam}) recovery projects:\n`;
-    p += `  Conservative: ${fmtSwing(ls.conservative.totalSwing)} pts recovery\n`;
-    p += `  Expected: ${fmtSwing(ls.expected.totalSwing)} pts recovery\n`;
-    p += `  Optimistic: ${fmtSwing(ls.optimistic.totalSwing)} pts recovery\n`;
-    p += `Remaining possessions: ~${ls.remainingPoss}\n`;
-    if (ls.trend) p += `TREND: ${ls.trend} ${ls.trendDelta >= 0 ? '+' : ''}${ls.trendDelta} (${ls.trend === '▲' ? 'lead strengthening' : ls.trend === '▼' ? 'lead eroding' : 'stable'})\n`;
-    p += `SAFE = optimistic < 50% of lead. AT RISK = expected meaningfully erodes lead. CRITICAL = conservative threatens lead.\n`;
+  // Volume threat
+  if (ctx?.volumeThreat) {
+    const vt = ctx.volumeThreat;
+    const hVT = vt.home, aVT = vt.away;
+    if (hVT?.active || aVT?.active) {
+      p += `\nVOLUME THREAT DETECTION:\n`;
+      if (hVT?.active) {
+        p += `${hA}: ACTIVE — projected ${hVT.projected3PA} 3PA (live ${hVT.live3PA}), ${hVT.live3Pct}% (szn ${hVT.baseline}%), C&S 3PM: ${hVT.cs3PM}\n`;
+        p += `  Scheme-driven perimeter production at baseline. This is structural offense, not variance.\n`;
+        p += `  Floor discount: ${(hVT.discount * 100).toFixed(0)}% | TP/LS structRate bonus: ${hVT.vtBonus}\n`;
+      }
+      if (aVT?.active) {
+        p += `${aA}: ACTIVE — projected ${aVT.projected3PA} 3PA (live ${aVT.live3PA}), ${aVT.live3Pct}% (szn ${aVT.baseline}%), C&S 3PM: ${aVT.cs3PM}\n`;
+        p += `  Scheme-driven perimeter production at baseline. This is structural offense, not variance.\n`;
+        p += `  Floor discount: ${(aVT.discount * 100).toFixed(0)}% | TP/LS structRate bonus: ${aVT.vtBonus}\n`;
+      }
+      p += `HOW TO USE: A team with active volume threat has a structural perimeter counter-engine. The control team's structural edge is overstated — discount conviction and FWP accordingly. Do NOT treat baseline-rate 3PT shooting from a volume threat team as variance to regress.\n`;
+    }
   }
 
   // WP profiles
@@ -2902,8 +2971,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       ctx.pbpAudit ? 'pbp' : null,
       ctx.subMetricArrows ? 'arrows' : null,
       ctx.adjustment ? 'adjustment' : null,
-      ctx.throughput ? 'throughput' : null,
-      ctx.leadSafety ? 'leadSafety' : null,
+      (ctx.volumeThreat?.home?.active || ctx.volumeThreat?.away?.active) ? 'volumeThreat' : null,
       ctx.mip ? 'mip' : null,
       ctx.bonusStatus ? 'bonus' : null,
       ctx.gameMeta ? 'gameMeta' : null,
@@ -3590,6 +3658,25 @@ export default async function(req) {
           const sust = computeSustainability(summary);
           const leadComp = computeLeadComposition(summary);
 
+          // Compute volume threat (needs PBP + sust + game time)
+          let gameVolumeThreat = null;
+          try {
+            var VT_GAME_MINS = league === 'ncaamb' ? 40 : 48;
+            var VT_PERIOD_MINS = league === 'ncaamb' ? 20 : 12;
+            var vtTotalPeriods = league === 'ncaamb' ? 2 : 4;
+            var vtClk = (clock || '').split(':');
+            var vtClkMins = vtClk.length === 2 ? (parseInt(vtClk[0]) || 0) + ((parseInt(vtClk[1]) || 0) / 60) : VT_PERIOD_MINS;
+            var vtPLeft = Math.max(0, vtTotalPeriods - currentPeriod);
+            var vtMLeft = vtClkMins + (vtPLeft * VT_PERIOD_MINS);
+            var vtElapsed = Math.max(1, VT_GAME_MINS - vtMLeft);
+            gameVolumeThreat = computeVolumeThreat(summary, pbpResult, sust, league, vtElapsed);
+            if (gameVolumeThreat) {
+              var hVT = gameVolumeThreat.home, aVT = gameVolumeThreat.away;
+              if (hVT.active) log(`${matchup}: VOLUME THREAT ${hA} — proj ${hVT.projected3PA} 3PA, ${hVT.live3Pct}% (szn ${hVT.baseline}%), C&S:${hVT.cs3PM}, disc:${hVT.discount}, bonus:${hVT.vtBonus}`);
+              if (aVT.active) log(`${matchup}: VOLUME THREAT ${aA} — proj ${aVT.projected3PA} 3PA, ${aVT.live3Pct}% (szn ${aVT.baseline}%), C&S:${aVT.cs3PM}, disc:${aVT.discount}, bonus:${aVT.vtBonus}`);
+            }
+          } catch (e) { /* non-fatal */ }
+
           // Lead team sustainability tier
           const leadSide = ind.homePts > ind.awayPts ? 'home'
                          : ind.awayPts > ind.homePts ? 'away'
@@ -3618,8 +3705,8 @@ export default async function(req) {
           let snapTp = null, snapLs = null;
           if (currentPeriod >= 2) {
             try {
-              snapTp = computeThroughputServer(summary, ind, sust, hA, aA, currentPeriod, clock, league);
-              snapLs = computeLeadSafetyServer(summary, ind, sust, hA, aA, currentPeriod, clock, league);
+              snapTp = computeThroughputServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat);
+              snapLs = computeLeadSafetyServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat);
             } catch (e) { /* non-fatal — snapshot still saves without tp/ls */ }
           }
           // DIAGNOSTIC: log ind shape before INSERT to catch null fields
@@ -3720,15 +3807,32 @@ export default async function(req) {
             // Compute lead safety for BWC downgrade check
             let lsForBWC = null;
             if (ctrlLeading && margin >= 2) {
-              lsForBWC = computeLeadSafetyServer(summary, ind, sust, hA, aA, currentPeriod, clock, league);
+              lsForBWC = computeLeadSafetyServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat);
             }
 
             // Compute throughput for BUY/LEAN gate — is the deficit recoverable?
             let tpForBuy = null;
             if (ctrlTrailing && margin >= 4) {
-              try { tpForBuy = computeThroughputServer(summary, ind, sust, hA, aA, currentPeriod, clock, league); }
+              try { tpForBuy = computeThroughputServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat); }
               catch (e) { log(`${matchup}: throughput compute failed in alert gate: ${e.message}`); }
             }
+
+            // ── LEAD DEGRADED SUPPRESSION: skip all alerts if lead crumbled within 5 min ──
+            let leadDegradedSuppressed = false;
+            try {
+              const degradedCol = ctrlIsHome ? 'home_lead_degraded_at' : 'away_lead_degraded_at';
+              const degRows = await sql`SELECT home_lead_degraded_at, away_lead_degraded_at FROM games WHERE id = ${game.id}`;
+              if (degRows.length > 0) {
+                const degradedAt = degRows[0][degradedCol];
+                if (degradedAt) {
+                  const msSince = Date.now() - new Date(degradedAt).getTime();
+                  if (msSince < 5 * 60 * 1000) {
+                    leadDegradedSuppressed = true;
+                    log(`${matchup}: alerts suppressed — lead degraded ${Math.round(msSince / 1000)}s ago (5min window)`);
+                  }
+                }
+              }
+            } catch (e) { /* non-fatal — proceed without suppression */ }
 
             let alertType = null, alertEmoji = '', alertPriority = 4;
             let alertDetail = ''; // extra context for BWC body
@@ -3780,6 +3884,12 @@ export default async function(req) {
               }
             }
 
+            // Suppress all alerts if lead degraded within 5 min window
+            if (leadDegradedSuppressed && alertType) {
+              log(`${matchup}: ${alertType} nullified — lead degraded suppression active`);
+              alertType = null;
+            }
+
             if (alertType) {
               const alertKey = `${game.id}_${alertType}_Q${currentPeriod}`;
               if (!game._lastAlert || game._lastAlert !== alertKey) {
@@ -3788,6 +3898,8 @@ export default async function(req) {
                 const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA}`;
                 const sustLine = (ctrlSust || oppSustTier) ? `\nSust: ${ind.controlTeam} ${ctrlSust || '?'} vs ${ctrlIsHome ? aA : hA} ${oppSustTier || '?'}` : '';
                 const calWarn = getCalibrationWarning(calLookup, ind.controlTeam, ind.score, ctrlTrailing);
+                const oppVT = gameVolumeThreat ? (ctrlIsHome ? gameVolumeThreat.away : gameVolumeThreat.home) : null;
+                const vtWarn = oppVT?.active ? `\n⚠️ ${ctrlIsHome ? aA : hA} volume threat: proj ${oppVT.projected3PA} 3PA at ${oppVT.live3Pct}% (szn ${oppVT.baseline}%)` : '';
                 const ntfyTitle = `${alertEmoji} ${alertType} — ${matchup}`;
                 let ntfyBody;
                 if (alertDetail) {
@@ -3796,7 +3908,8 @@ export default async function(req) {
                     + `\n${alertDetail}`
                     + `\nFloor: ${ind.score.toFixed(2)} | Lead: ${margin}`
                     + sustLine
-                    + calWarn;
+                    + calWarn
+                    + vtWarn;
                 } else {
                   // BUY/LEAN BUY body — lead with actionable line
                   const mlLine = ctrlML ? `\nBUY ${ind.controlTeam} ML ${ctrlML}${ctrlEdge != null ? ' | Edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}` : '';
@@ -3807,6 +3920,7 @@ export default async function(req) {
                     + tpLine
                     + sustLine
                     + calWarn
+                    + vtWarn
                     + (spreadVal != null ? `\nSpread: ${spreadVal}` : '');
                 }
                 await sendNtfy(ntfyTitle, ntfyBody, alertPriority);
@@ -3819,8 +3933,8 @@ export default async function(req) {
           // control flips never cross-contaminate transition comparisons.
           if (currentPeriod >= 2) {
             try {
-              const tp = computeThroughputServer(summary, ind, sust, hA, aA, currentPeriod, clock, league);
-              const ls = computeLeadSafetyServer(summary, ind, sust, hA, aA, currentPeriod, clock, league);
+              const tp = computeThroughputServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat);
+              const ls = computeLeadSafetyServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat);
               const ctrlIsHome = ind.controlTeam === hA;
               const oppSide = ctrlIsHome ? 'away' : 'home';
               const oppSustNow = sust?.[oppSide]?.tier || null;
@@ -3889,6 +4003,14 @@ export default async function(req) {
                       5
                     );
                     log(`${matchup}: ${leadLost ? 'LEAD LOST' : 'LEAD CRUMBLING'} — ${prevLsClass} -> ${lsClass || 'null'}`);
+                    // Write suppression timestamp for BWC/BUY alerts
+                    try {
+                      if (ctrlIsHome) {
+                        await sql`UPDATE games SET home_lead_degraded_at = NOW() WHERE id = ${game.id}`;
+                      } else {
+                        await sql`UPDATE games SET away_lead_degraded_at = NOW() WHERE id = ${game.id}`;
+                      }
+                    } catch (e) { /* non-fatal */ }
                   }
                 }
               }

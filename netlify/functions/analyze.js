@@ -568,9 +568,6 @@ exports.handler = async function(event) {
     var combinedRead = body.combinedRead;
     var wpProfiles = body.wpProfiles || null;
     var espnWP = body.espnWP || null;
-    var throughputData = body.throughput || null;
-    var leadSafetyData = body.leadSafety || null;
-
     if (!summaryData) {
       return { statusCode: 400, headers: headers, body: JSON.stringify({ error: 'summaryData required' }) };
     }
@@ -888,47 +885,12 @@ exports.handler = async function(event) {
       espnWPSection += 'Common valid divergences: sustainability concern ESPN misses, structural control not reflected in score, foul trouble.\n';
     }
 
-    // ── THROUGHPUT RECOVERY MODEL (client-computed) ──
-    var throughputSection = '';
-    if (throughputData) {
-      throughputSection = '\nTHROUGHPUT RECOVERY MODEL (client-computed, 4-direction variance regression):\n';
-      throughputSection += 'Classification: ' + throughputData.classification + '\n';
-      throughputSection += 'The trailing structural team (' + throughputData.fTeam + ') projects to recover:\n';
-      throughputSection += '  Conservative (25th pctile regression): +' + throughputData.conservative + ' pts\n';
-      throughputSection += '  Expected (50th pctile regression): +' + throughputData.expected + ' pts\n';
-      throughputSection += '  Optimistic (75th pctile regression): +' + throughputData.optimistic + ' pts\n';
-      throughputSection += 'Current deficit: ' + throughputData.deficit + ' pts | Remaining possessions: ~' + throughputData.remainingPoss + '\n';
-      throughputSection += 'Structural edge per possession: ' + throughputData.structEdge + ' (' + throughputData.fTeam + ' structural rate: ' + throughputData.ctrlStructRate + ' vs opponent: ' + throughputData.oppStructRate + ')\n';
-      if (throughputData.degradation < 1.0) throughputSection += 'Deficit degradation applied: ' + (throughputData.degradation * 100).toFixed(0) + '% (large deficit reduces structural output)\n';
-      throughputSection += 'HOW TO USE: Compare projected recovery points to deficit. If conservative band covers the deficit, recovery is PROBABLE. ';
-      throughputSection += 'If only optimistic covers it, recovery is CONTESTED. If none cover it, the trailing team lacks sufficient engine to close the gap.\n';
-      throughputSection += 'Variance regression modeled in BOTH directions: hot teams cool off (lose output), cold teams heat up (gain output) — applies to BOTH teams simultaneously.\n';
-    }
-
-    // ── LEAD SAFETY MODEL (client-computed) ──
-    var leadSafetySection = '';
-    if (leadSafetyData) {
-      leadSafetySection = '\nLEAD SAFETY MODEL (client-computed, opponent recovery potential):\n';
-      leadSafetySection += 'Classification: ' + leadSafetyData.classification + '\n';
-      leadSafetySection += 'The leading structural team (' + leadSafetyData.fTeam + ') leads by ' + leadSafetyData.lead + '. ';
-      leadSafetySection += 'The opponent (' + leadSafetyData.oppTeam + ') recovery engine projects:\n';
-      leadSafetySection += '  Conservative: +' + leadSafetyData.conservative + ' pts recovery\n';
-      leadSafetySection += '  Expected: +' + leadSafetyData.expected + ' pts recovery\n';
-      leadSafetySection += '  Optimistic: +' + leadSafetyData.optimistic + ' pts recovery\n';
-      leadSafetySection += 'Remaining possessions: ~' + leadSafetyData.remainingPoss + '\n';
-      leadSafetySection += 'SAFE = optimistic recovery < 50% of lead. CUSHIONED = lead probably holds. AT RISK = expected regression meaningfully erodes lead. CRITICAL = even conservative regression threatens lead.\n';
-      leadSafetySection += 'HOW TO USE: If AT RISK or CRITICAL, the leading team may not hold their advantage — factor into FWP and conviction. ';
-      leadSafetySection += 'A "leading with edge" position is only durable if lead safety is SAFE or CUSHIONED. ';
-      leadSafetySection += 'If CRITICAL, consider whether the OPPONENT becomes the play as variance regresses.\n';
-    }
-
     // ── BUILD PROMPT ──
     var userPrompt = awayTeam + ' @ ' + homeTeam + ' | ' + period + ' | ' + score + '\n\n'
       + (thesis ? 'THESIS:\n' + thesis + '\n' : 'No thesis.')
       + '\n' + clutchSection + oddsSection + bonusSection + trackingSection + sustainabilitySection + leadCompSection
       + windowSection + quarterSection + gapSection + combinedReadSection + arrowSection + adjustmentSection
       + pbpSection + edgeSection + narrativeSection + wpSection + espnWPSection
-      + throughputSection + leadSafetySection
       + '\nGAME DATA:\n' + JSON.stringify(summaryData);
 
     var resp = await fetch('https://api.anthropic.com/v1/messages', {
