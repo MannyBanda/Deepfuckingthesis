@@ -58,7 +58,7 @@ const SONNET_SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing r
 + 'FIVE INDICATORS (score each 0.00-1.00 for the controlling team):\n'
 + 'I1 Possession & Transition (25%): TO margin, steals, OREBs, fast break pts, pts off TOs, second chance pts\n'
 + 'I2 Rim Pressure & Foul (25%): Paint points, at-rim FG, FTA, blocks, fouls, bonus status\n'
-+ 'I3 Shot Quality & Creation (20%): eFG%, assist ratio (65%+ sustainable, <50% isolation-dependent), shot diet\n'
++ 'I3 Shot Quality & Creation (20%): eFG%, assist ratio (65%+ sustainable, <50% isolation-dependent), catch-and-shoot 3PM comparison, shot diet\n'
 + 'I4 Lineup Integrity (20%): Biggest lead, bench contribution, which lineups producing, plus/minus\n'
 + 'I5 Tempo & Efficiency (10%): Possessions, pts/possession differential, pace control\n\n'
 + 'CONTROL: 0.90+ DOMINANT | 0.75-0.89 STRONG | 0.60-0.74 EARNED | 0.45-0.59 NO EDGE | <0.45 WAIT\n\n'
@@ -833,7 +833,7 @@ let _serverLineupsCache = {};       // bdlGameId → lineups array
 // Pure function. No cardState, no DOM, no PBP, no baselines.
 // Input: SR game summary JSON. Output: indicator scores + composite.
 
-function computeServer(summary) {
+function computeServer(summary, pbpData) {
   const H = summary.home, A = summary.away;
   if (!H || !A) return null;
   const hs = H.statistics || {}, as = A.statistics || {};
@@ -869,8 +869,10 @@ function computeServer(summary) {
   const hAst = hs.assists || 0, aAst = as.assists || 0;
   const hFGM = hs.field_goals_made || 1, aFGM = as.field_goals_made || 1;
   const hAR = (hAst / hFGM) * 100, aAR = (aAst / aFGM) * 100;
+  const hCS3 = pbpData?.home?.threes?.assisted || 0, aCS3 = pbpData?.away?.threes?.assisted || 0;
   const i3raw = (hEFG > aEFG + 0.02 ? 1 : hEFG < aEFG - 0.02 ? -1 : 0)
-              + (hAR > aAR + 5 ? 1 : hAR < aAR - 5 ? -1 : 0);
+              + (hAR > aAR + 5 ? 1 : hAR < aAR - 5 ? -1 : 0)
+              + (hCS3 > aCS3 + 2 ? 1 : hCS3 < aCS3 - 2 ? -1 : 0);
   const I3 = { score: i3raw > 0 ? 1 : i3raw === 0 ? 0.5 : 0, leader: i3raw > 0 ? hA : i3raw < 0 ? aA : 'EVEN' };
 
   // I4 — Lineup Integrity
@@ -3152,7 +3154,7 @@ export default async function(req) {
       const clock = summary.clock || '';
 
       // Compute indicators + sustainability
-      const ind = computeServer(summary);
+      const ind = computeServer(summary, pbpResult);
       const sust = computeSustainability(summary);
       const leadComp = computeLeadComposition(summary);
 
@@ -3617,7 +3619,7 @@ export default async function(req) {
           game._bdlPbp = pbpResult;
 
           // Compute indicators
-          const ind = computeServer(summary);
+          const ind = computeServer(summary, pbpResult);
           if (!ind) {
             log(`${matchup}: compute returned null (no stats yet?)`);
             continue;
@@ -3674,6 +3676,14 @@ export default async function(req) {
               var hVT = gameVolumeThreat.home, aVT = gameVolumeThreat.away;
               if (hVT.active) log(`${matchup}: VOLUME THREAT ${hA} — proj ${hVT.projected3PA} 3PA, ${hVT.live3Pct}% (szn ${hVT.baseline}%), C&S:${hVT.cs3PM}, disc:${hVT.discount}, bonus:${hVT.vtBonus}`);
               if (aVT.active) log(`${matchup}: VOLUME THREAT ${aA} — proj ${aVT.projected3PA} 3PA, ${aVT.live3Pct}% (szn ${aVT.baseline}%), C&S:${aVT.cs3PM}, disc:${aVT.discount}, bonus:${aVT.vtBonus}`);
+              // Floor discount: opponent's VT undermines control team's structural edge
+              var ctrlIsHomeVT = ind.controlTeam === hA;
+              var oppVT = ctrlIsHomeVT ? aVT : hVT;
+              if (oppVT && oppVT.active && oppVT.discount > 0) {
+                var rawFloor = ind.score;
+                ind.score = Math.round(ind.score * (1 - oppVT.discount) * 100) / 100;
+                log(`${matchup}: VT FLOOR DISCOUNT — ${rawFloor.toFixed(2)} → ${ind.score.toFixed(2)} (${(oppVT.discount*100).toFixed(0)}% disc from ${ctrlIsHomeVT ? aA : hA})`);
+              }
             }
           } catch (e) { /* non-fatal */ }
 
