@@ -3935,6 +3935,41 @@ export default async function(req) {
               }
             }
 
+            // ── WINDOW BUY: windows show structural takeover even when cumulative floor is below BUY threshold ──
+            // Fires when QTR window ≥ 0.75, trailing/tied/leading ≤ 5, sustainability LOCKED/DURABLE, floor ≥ 0.45
+            if (!alertType && currentPeriod >= 2 && ind.controlTeam && ind.controlTeam !== 'Neither') {
+              const ctrlMargin = ctrlPtsA - oppPtsA; // positive = leading
+              const inRange = ctrlMargin >= -15 && ctrlMargin <= 5;
+              const floorBaseline = ind.score >= 0.45;
+              const sustGood = ctrlSust === 'LOCKED IN' || ctrlSust === 'DURABLE';
+              if (inRange && floorBaseline && sustGood) {
+                try {
+                  const wbQd = await readQuarterData(sql, game.id);
+                  const wbWindow = computeServerWindow(wbQd, currentPeriod, clock, summary, hA, aA, league);
+                  if (wbWindow && wbWindow.available && wbWindow.score >= 0.75 && wbWindow.controlTeam === ind.controlTeam) {
+                    // TP gate when trailing
+                    let wbBlocked = false;
+                    if (ctrlMargin < 0) {
+                      const wbTp = tpForBuy || (function(){ try { return computeThroughputServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat); } catch(e){ return null; } })();
+                      const wbTpClass = wbTp?.classification || null;
+                      if (!wbTp) { wbBlocked = true; log(`${matchup}: WINDOW BUY suppressed — throughput failed (fail-closed)`); }
+                      else if (wbTpClass === 'UNLIKELY' || wbTpClass === 'NO PATH') { wbBlocked = true; log(`${matchup}: WINDOW BUY suppressed — throughput ${wbTpClass}`); }
+                    }
+                    if (!wbBlocked) {
+                      alertType = 'WINDOW BUY';
+                      alertEmoji = '🪟';
+                      alertPriority = 4;
+                      const stateLabel = ctrlMargin > 0 ? 'leading +' + ctrlMargin : ctrlMargin === 0 ? 'TIED' : 'trailing ' + Math.abs(ctrlMargin);
+                      alertDetail = `${ind.controlTeam} ${stateLabel} | Window: ${wbWindow.score.toFixed(2)} (${wbWindow.windowQuarters.join('+')}) vs floor ${ind.score.toFixed(2)}`
+                        + (ctrlML ? `\\nBUY ${ind.controlTeam} ML ${ctrlML}${ctrlEdge != null ? ' | Edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}` : '')
+                        + `\\nSust: ${ind.controlTeam} ${ctrlSust}`;
+                      log(`${matchup}: WINDOW BUY — ${ind.controlTeam} QTR:${wbWindow.score.toFixed(2)} floor:${ind.score.toFixed(2)} ${stateLabel} sust:${ctrlSust}`);
+                    }
+                  }
+                } catch (e) { log(`${matchup}: WINDOW BUY check failed: ${e.message}`); }
+              }
+            }
+
             // Suppress all alerts if lead degraded within 5 min window
             if (leadDegradedSuppressed && alertType) {
               log(`${matchup}: ${alertType} nullified — lead degraded suppression active`);
