@@ -6085,10 +6085,23 @@ function computeVolumeThreat(game){
   var as = s.away?.statistics || s.away || {};
   var hSust = (sa && sa.home?.live3Pct != null) ? sa.home : sust ? sust.home : null;
   var aSust = (sa && sa.home?.live3Pct != null) ? sa.away : sust ? sust.away : null;
-  return {
+  var result = {
     home: evalSide(hs, pbpAudit?.home || null, hSust),
     away: evalSide(as, pbpAudit?.away || null, aSust),
   };
+  function mitigate(vtSide, otherSide){
+    if(!vtSide.active || vtSide.live3PA < 1) return;
+    var ratio = otherSide.live3PA / vtSide.live3PA;
+    var mitFactor = Math.max(0, Math.min(1, 1 - (ratio - 0.7) / 0.3));
+    vtSide.discount = Math.round(vtSide.discount * mitFactor * 100) / 100;
+    vtSide.vtBonus = Math.round(vtSide.vtBonus * mitFactor * 1000) / 1000;
+    vtSide.mitigated = mitFactor < 1;
+    vtSide.mitRatio = Math.round(ratio * 100) / 100;
+    if(mitFactor === 0) vtSide.active = false;
+  }
+  mitigate(result.home, result.away);
+  mitigate(result.away, result.home);
+  return result;
 }
 
 // SWING CORE — shared 4-direction variance engine for throughput + lead safety
