@@ -3822,8 +3822,8 @@ export default async function(req) {
           log(`${matchup} Q${currentPeriod} ${clock} | ${ind.homePts}-${ind.awayPts} | ${ind.controlTeam} ${ind.score} | I:${ind.I1.score}/${ind.I2.score}/${ind.I3.score}/${ind.I4.score}/${ind.I5.score} | sust:${leadSust || '?'} class:${leadClass || '?'}${bdlEnriched ? ' BDL✓' : ''}${spreadVal != null ? ` spd:${spreadVal}` : ''}${espnWP ? ` | WP:${espnWP.home}%` : ''}`);
 
           // ── LIGHTWEIGHT ENTRY SIGNAL CHECK (every cycle, no Sonnet needed) ──
-          // BUY:  floor ≥ 0.70, trailing 4-15, Q2+, throughput not UNLIKELY/NO PATH
-          // LEAN: floor ≥ 0.60, trailing 4-15, opp FRAGILE/UNSUSTAINABLE, Q2+, throughput not UNLIKELY/NO PATH
+          // BUY:  floor ≥ 0.60, trailing 1-15, Q2+, throughput not UNLIKELY/NO PATH
+          // LEAN: floor ≥ 0.55, trailing 1-15, opp FRAGILE/UNSUSTAINABLE, Q2+, throughput not UNLIKELY/NO PATH
           // BWC:  floor ≥ 0.55, leading 2+, Q2+, edge > 0, lead safety not AT RISK/CRITICAL
           {
             const ctrlSide = ind.controlTeam === hA ? 'home' : 'away';
@@ -3863,7 +3863,7 @@ export default async function(req) {
 
             // Compute throughput for BUY/LEAN gate — is the deficit recoverable?
             let tpForBuy = null;
-            if (ctrlTrailing && margin >= 4) {
+            if (ctrlTrailing && margin >= 1) {
               try { tpForBuy = computeThroughputServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat); }
               catch (e) { log(`${matchup}: throughput compute failed in alert gate: ${e.message}`); }
             }
@@ -3888,7 +3888,7 @@ export default async function(req) {
             let alertType = null, alertEmoji = '', alertPriority = 4;
             let alertDetail = ''; // extra context for BWC body
 
-            if (ind.score >= 0.70 && ctrlTrailing && margin >= 4 && margin <= 15 && currentPeriod >= 2) {
+            if (ind.score >= 0.60 && ctrlTrailing && margin >= 1 && margin <= 15 && currentPeriod >= 2) {
               // Throughput gate (fail-closed): suppress if no path OR computation failed
               const tpClass = tpForBuy?.classification || null;
               if (!tpForBuy) {
@@ -3900,7 +3900,7 @@ export default async function(req) {
                 alertEmoji = '🟢';
                 alertPriority = 5;
               }
-            } else if (ind.score >= 0.60 && ctrlTrailing && margin >= 4 && margin <= 15 && oppFragile && currentPeriod >= 2) {
+            } else if (ind.score >= 0.55 && ctrlTrailing && margin >= 1 && margin <= 15 && oppFragile && currentPeriod >= 2) {
               const tpClass = tpForBuy?.classification || null;
               if (!tpForBuy) {
                 log(`${matchup}: LEAN BUY suppressed — throughput computation failed/null (fail-closed)`);
@@ -4059,7 +4059,7 @@ export default async function(req) {
               const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA}`;
 
               // ALERT 1: RECOVERY PATH OPENED
-              if (tpClass && ind.score >= 0.65 && oppPtsT > ctrlPtsT && marginT >= 4 && marginT <= 15) {
+              if (tpClass && ind.score >= 0.55 && oppPtsT > ctrlPtsT && marginT >= 1 && marginT <= 15) {
                 const wasWeak = !prevTpClass || prevTpClass === 'UNLIKELY' || prevTpClass === 'NO PATH';
                 const nowStrong = tpClass === 'CONTESTED' || tpClass === 'PROBABLE' || tpClass === 'STRONG RECOVERY';
                 if (wasWeak && nowStrong) {
@@ -4117,7 +4117,7 @@ export default async function(req) {
               }
 
               // ALERT 3: OPPONENT VARIANCE BREAKING
-              if (oppPtsT > ctrlPtsT && marginT >= 3 && ind.score >= 0.60) {
+              if (oppPtsT > ctrlPtsT && marginT >= 1 && ind.score >= 0.60) {
                 const wasStable = prevOppSust === 'LOCKED IN' || prevOppSust === 'DURABLE';
                 const nowBreaking = oppSustNow === 'FRAGILE' || oppSustNow === 'UNSUSTAINABLE';
                 if (wasStable && nowBreaking) {
