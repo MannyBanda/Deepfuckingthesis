@@ -1479,10 +1479,31 @@ function computeVolumeThreat(summary, pbpAudit, sust, league, minsElapsed) {
 
   var hs = summary.home?.statistics || {};
   var as = summary.away?.statistics || {};
-  return {
+  var result = {
     home: evalSide(hs, pbpAudit?.home || null, sust?.home || null),
     away: evalSide(as, pbpAudit?.away || null, sust?.away || null),
   };
+
+  // Cross-side mitigation: if the OTHER side has equal or more 3PA,
+  // the VT team's perimeter production isn't a unique structural counter — it's a shared game profile.
+  // Scale discount to zero as opponent's 3PA approaches or exceeds VT team's 3PA.
+  function mitigate(vtSide, otherSide) {
+    if (!vtSide.active || vtSide.live3PA < 1) return;
+    var ratio = otherSide.live3PA / vtSide.live3PA;
+    // ratio >= 1.0 → full mitigation (other side matching/exceeding volume)
+    // ratio 0.7–1.0 → linear scale down
+    // ratio < 0.7 → no mitigation (VT side has clear perimeter advantage)
+    var mitFactor = Math.max(0, Math.min(1, 1 - (ratio - 0.7) / 0.3));
+    vtSide.discount = Math.round(vtSide.discount * mitFactor * 100) / 100;
+    vtSide.vtBonus = Math.round(vtSide.vtBonus * mitFactor * 1000) / 1000;
+    vtSide.mitigated = mitFactor < 1;
+    vtSide.mitRatio = Math.round(ratio * 100) / 100;
+    if (mitFactor === 0) vtSide.active = false; // fully mitigated → no longer active
+  }
+  mitigate(result.home, result.away);
+  mitigate(result.away, result.home);
+
+  return result;
 }
 
 // ── THROUGHPUT / LEAD SAFETY (ported from client) ──────────────────────────
@@ -2790,19 +2811,25 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, calibrationN
   if (ctx?.volumeThreat) {
     const vt = ctx.volumeThreat;
     const hVT = vt.home, aVT = vt.away;
-    if (hVT?.active || aVT?.active) {
+    if (hVT?.active || aVT?.active || hVT?.mitigated || aVT?.mitigated) {
       p += `\nVOLUME THREAT DETECTION:\n`;
       if (hVT?.active) {
         p += `${hA}: ACTIVE — projected ${hVT.projected3PA} 3PA (live ${hVT.live3PA}), ${hVT.live3Pct}% (szn ${hVT.baseline}%), C&S 3PM: ${hVT.cs3PM}\n`;
         p += `  Scheme-driven perimeter production at baseline. This is structural offense, not variance.\n`;
-        p += `  Floor discount: ${(hVT.discount * 100).toFixed(0)}% | TP/LS structRate bonus: ${hVT.vtBonus}\n`;
+        p += `  Floor discount: ${(hVT.discount * 100).toFixed(0)}% | TP/LS structRate bonus: ${hVT.vtBonus}${hVT.mitigated ? ' (partially mitigated — '+aA+' has '+aVT.live3PA+' 3PA, ratio:'+hVT.mitRatio+')' : ''}\n`;
+      } else if (hVT?.mitigated) {
+        p += `${hA}: MITIGATED — projected ${hVT.projected3PA} 3PA but ${aA} matching volume (${aVT.live3PA} 3PA, ratio:${hVT.mitRatio}). Shared game profile, not unique counter.\n`;
       }
       if (aVT?.active) {
         p += `${aA}: ACTIVE — projected ${aVT.projected3PA} 3PA (live ${aVT.live3PA}), ${aVT.live3Pct}% (szn ${aVT.baseline}%), C&S 3PM: ${aVT.cs3PM}\n`;
         p += `  Scheme-driven perimeter production at baseline. This is structural offense, not variance.\n`;
-        p += `  Floor discount: ${(aVT.discount * 100).toFixed(0)}% | TP/LS structRate bonus: ${aVT.vtBonus}\n`;
+        p += `  Floor discount: ${(aVT.discount * 100).toFixed(0)}% | TP/LS structRate bonus: ${aVT.vtBonus}${aVT.mitigated ? ' (partially mitigated — '+hA+' has '+hVT.live3PA+' 3PA, ratio:'+aVT.mitRatio+')' : ''}\n`;
+      } else if (aVT?.mitigated) {
+        p += `${aA}: MITIGATED — projected ${aVT.projected3PA} 3PA but ${hA} matching volume (${hVT.live3PA} 3PA, ratio:${aVT.mitRatio}). Shared game profile, not unique counter.\n`;
       }
-      p += `HOW TO USE: A team with active volume threat has a structural perimeter counter-engine. The control team's structural edge is overstated — discount conviction and FWP accordingly. Do NOT treat baseline-rate 3PT shooting from a volume threat team as variance to regress.\n`;
+      if (hVT?.active || aVT?.active) {
+        p += `HOW TO USE: A team with active volume threat has a structural perimeter counter-engine. The control team's structural edge is overstated — discount conviction and FWP accordingly. Do NOT treat baseline-rate 3PT shooting from a volume threat team as variance to regress.\n`;
+      }
     }
   }
 
@@ -3674,8 +3701,10 @@ export default async function(req) {
             gameVolumeThreat = computeVolumeThreat(summary, pbpResult, sust, league, vtElapsed);
             if (gameVolumeThreat) {
               var hVT = gameVolumeThreat.home, aVT = gameVolumeThreat.away;
-              if (hVT.active) log(`${matchup}: VOLUME THREAT ${hA} — proj ${hVT.projected3PA} 3PA, ${hVT.live3Pct}% (szn ${hVT.baseline}%), C&S:${hVT.cs3PM}, disc:${hVT.discount}, bonus:${hVT.vtBonus}`);
-              if (aVT.active) log(`${matchup}: VOLUME THREAT ${aA} — proj ${aVT.projected3PA} 3PA, ${aVT.live3Pct}% (szn ${aVT.baseline}%), C&S:${aVT.cs3PM}, disc:${aVT.discount}, bonus:${aVT.vtBonus}`);
+              if (hVT.active) log(`${matchup}: VOLUME THREAT ${hA} — proj ${hVT.projected3PA} 3PA, ${hVT.live3Pct}% (szn ${hVT.baseline}%), C&S:${hVT.cs3PM}, disc:${hVT.discount}, bonus:${hVT.vtBonus}${hVT.mitigated ? ' (mitigated, ratio:'+hVT.mitRatio+')' : ''}`);
+              if (aVT.active) log(`${matchup}: VOLUME THREAT ${aA} — proj ${aVT.projected3PA} 3PA, ${aVT.live3Pct}% (szn ${aVT.baseline}%), C&S:${aVT.cs3PM}, disc:${aVT.discount}, bonus:${aVT.vtBonus}${aVT.mitigated ? ' (mitigated, ratio:'+aVT.mitRatio+')' : ''}`);
+              if (hVT.mitigated && !hVT.active) log(`${matchup}: VT ${hA} FULLY MITIGATED — ${aA} has ${aVT.live3PA||'?'} 3PA vs ${hVT.live3PA} (ratio:${hVT.mitRatio})`);
+              if (aVT.mitigated && !aVT.active) log(`${matchup}: VT ${aA} FULLY MITIGATED — ${hA} has ${hVT.live3PA||'?'} 3PA vs ${aVT.live3PA} (ratio:${aVT.mitRatio})`);
               // Floor discount: opponent's VT undermines control team's structural edge
               var ctrlIsHomeVT = ind.controlTeam === hA;
               var oppVT = ctrlIsHomeVT ? aVT : hVT;
