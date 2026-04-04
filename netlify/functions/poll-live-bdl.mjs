@@ -3947,23 +3947,38 @@ export default async function(req) {
                   const wbQd = await readQuarterData(sql, game.id);
                   const wbWindow = computeServerWindow(wbQd, currentPeriod, clock, summary, hA, aA, league);
                   if (wbWindow && wbWindow.available && wbWindow.score >= 0.75 && wbWindow.controlTeam === ind.controlTeam) {
-                    // TP gate when trailing
+                    // TP OR LS gate when trailing: either math says recoverable, or opponent lead is crumbling
                     let wbBlocked = false;
+                    let wbTpClass = null, wbLsClass = null, tpPass = false, lsPass = false;
                     if (ctrlMargin < 0) {
+                      // TP check: can the deficit be closed?
                       const wbTp = tpForBuy || (function(){ try { return computeThroughputServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat); } catch(e){ return null; } })();
-                      const wbTpClass = wbTp?.classification || null;
-                      if (!wbTp) { wbBlocked = true; log(`${matchup}: WINDOW BUY suppressed — throughput failed (fail-closed)`); }
-                      else if (wbTpClass === 'UNLIKELY' || wbTpClass === 'NO PATH') { wbBlocked = true; log(`${matchup}: WINDOW BUY suppressed — throughput ${wbTpClass}`); }
+                      wbTpClass = wbTp?.classification || null;
+                      tpPass = wbTp && wbTpClass !== 'UNLIKELY' && wbTpClass !== 'NO PATH';
+                      // LS check: is the opponent's lead vulnerable? (compute from opponent's perspective)
+                      try {
+                        const oppInd = { ...ind, controlTeam: ctrlIsHome ? aA : hA };
+                        const oppLs = computeLeadSafetyServer(summary, oppInd, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat);
+                        wbLsClass = oppLs?.classification || null;
+                        lsPass = wbLsClass === 'AT RISK' || wbLsClass === 'CRITICAL';
+                        if (lsPass) log(`${matchup}: WINDOW BUY LS gate passed — opponent lead ${wbLsClass}`);
+                      } catch (e) { /* LS check failed, rely on TP */ }
+                      if (!tpPass && !lsPass) {
+                        wbBlocked = true;
+                        log(`${matchup}: WINDOW BUY suppressed — TP:${wbTpClass || 'failed'} LS:opponent lead not vulnerable`);
+                      }
                     }
                     if (!wbBlocked) {
                       alertType = 'WINDOW BUY';
                       alertEmoji = '🪟';
                       alertPriority = 4;
                       const stateLabel = ctrlMargin > 0 ? 'leading +' + ctrlMargin : ctrlMargin === 0 ? 'TIED' : 'trailing ' + Math.abs(ctrlMargin);
+                      const gateLine = ctrlMargin < 0 ? `\\nGate: ${tpPass ? 'TP:' + wbTpClass : ''}${tpPass && lsPass ? ' + ' : ''}${lsPass ? 'LS:opp ' + wbLsClass : ''}` : '';
                       alertDetail = `${ind.controlTeam} ${stateLabel} | Window: ${wbWindow.score.toFixed(2)} (${wbWindow.windowQuarters.join('+')}) vs floor ${ind.score.toFixed(2)}`
                         + (ctrlML ? `\\nBUY ${ind.controlTeam} ML ${ctrlML}${ctrlEdge != null ? ' | Edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}` : '')
-                        + `\\nSust: ${ind.controlTeam} ${ctrlSust}`;
-                      log(`${matchup}: WINDOW BUY — ${ind.controlTeam} QTR:${wbWindow.score.toFixed(2)} floor:${ind.score.toFixed(2)} ${stateLabel} sust:${ctrlSust}`);
+                        + `\\nSust: ${ind.controlTeam} ${ctrlSust}`
+                        + gateLine;
+                      log(`${matchup}: WINDOW BUY — ${ind.controlTeam} QTR:${wbWindow.score.toFixed(2)} floor:${ind.score.toFixed(2)} ${stateLabel} sust:${ctrlSust} tp:${wbTpClass} ls:${wbLsClass}`);
                     }
                   }
                 } catch (e) { log(`${matchup}: WINDOW BUY check failed: ${e.message}`); }
