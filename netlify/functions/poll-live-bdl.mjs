@@ -3099,17 +3099,15 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       }
 
       if (!tpSuppressed) {
-        const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA}`;
-        const periodStr = `Q${period} ${clock}`;
-        const tpClass = clientCtx?.throughput?.classification || '?';
-        const ntfyTitle = `${isOptimal ? '🟢' : '🟡'} ${signal || entry} — ${matchup}`;
-        const ntfyBody = `${scoreLine} ${periodStr}`
-          + `\nControl: ${parsed.controlTeam || '?'} ${parsed.controlScore || '?'}`
-          + `\nFWP: ${parsed.fwp || '?'}`
-          + `\nEntry: ${entry} | ${parsed.conviction || '?'}`
-          + (parsed.sustainability ? `\nSust: ${parsed.sustainability}` : '')
-          + `\nTP: ${tpClass}`
-          + `\n[${triggerTag}]`;
+        const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${period} ${clock}`;
+        const ctrlTeam = parsed.controlTeam || '?';
+        const ntfyTitle = `${signal || entry} — ${matchup}`;
+        const ntfyBody = scoreLine
+          + `\nSonnet says: ${ctrlTeam} has structural control (${parsed.controlScore || '?'})`
+          + (parsed.fwp ? `\nWin probability: ${parsed.fwp}` : '')
+          + `\nEntry: ${entry} | Conviction: ${parsed.conviction || '?'}`
+          + (parsed.sustainability ? `\nShooting: ${parsed.sustainability}` : '')
+          + `\n[AI analysis — ${triggerTag}]`;
         const ntfyPriority = isOptimal ? 5 : 4;
         await sendNtfy(ntfyTitle, ntfyBody, ntfyPriority);
       }
@@ -3886,7 +3884,6 @@ export default async function(req) {
             } catch (e) { /* non-fatal — proceed without suppression */ }
 
             let alertType = null, alertEmoji = '', alertPriority = 4;
-            let alertDetail = ''; // extra context for BWC body
 
             if (ind.score >= 0.60 && ctrlTrailing && margin >= 1 && margin <= 15 && currentPeriod >= 2) {
               // Throughput gate (fail-closed): suppress if no path OR computation failed
@@ -3923,8 +3920,6 @@ export default async function(req) {
                   alertType = 'BUY WINDOW CLOSING';
                   alertEmoji = '🔵';
                   alertPriority = 3;
-                  alertDetail = `BUY ${ind.controlTeam} ML ${ctrlML} | Edge +${ctrlEdge}%`
-                    + (lsClass ? `\nLead Safety: ${lsClass}` : '');
                 }
               } else if (garbageLine) {
                 log(`${matchup}: BWC skipped — line dead (garbage MLs)`);
@@ -3937,8 +3932,8 @@ export default async function(req) {
 
             // ── WINDOW BUY: windows show structural takeover even when cumulative floor is below BUY threshold ──
             // Fires when QTR window ≥ 0.75, trailing/tied/leading ≤ 5, sustainability LOCKED/DURABLE, floor ≥ 0.45
+            var wbTpClass = null, wbLsClass = null, tpPass = false, lsPass = false, ctrlMargin = ctrlPtsA - oppPtsA;
             if (!alertType && currentPeriod >= 2 && ind.controlTeam && ind.controlTeam !== 'Neither') {
-              const ctrlMargin = ctrlPtsA - oppPtsA; // positive = leading
               const inRange = ctrlMargin >= -15 && ctrlMargin <= 5;
               const floorBaseline = ind.score >= 0.45;
               const sustGood = ctrlSust === 'LOCKED IN' || ctrlSust === 'DURABLE';
@@ -3949,7 +3944,6 @@ export default async function(req) {
                   if (wbWindow && wbWindow.available && wbWindow.score >= 0.75 && wbWindow.controlTeam === ind.controlTeam) {
                     // TP OR LS gate when trailing: either math says recoverable, or opponent lead is crumbling
                     let wbBlocked = false;
-                    let wbTpClass = null, wbLsClass = null, tpPass = false, lsPass = false;
                     if (ctrlMargin < 0) {
                       // TP check: can the deficit be closed?
                       const wbTp = tpForBuy || (function(){ try { return computeThroughputServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat); } catch(e){ return null; } })();
@@ -3972,13 +3966,7 @@ export default async function(req) {
                       alertType = 'WINDOW BUY';
                       alertEmoji = '🪟';
                       alertPriority = 4;
-                      const stateLabel = ctrlMargin > 0 ? 'leading +' + ctrlMargin : ctrlMargin === 0 ? 'TIED' : 'trailing ' + Math.abs(ctrlMargin);
-                      const gateLine = ctrlMargin < 0 ? `\\nGate: ${tpPass ? 'TP:' + wbTpClass : ''}${tpPass && lsPass ? ' + ' : ''}${lsPass ? 'LS:opp ' + wbLsClass : ''}` : '';
-                      alertDetail = `${ind.controlTeam} ${stateLabel} | Window: ${wbWindow.score.toFixed(2)} (${wbWindow.windowQuarters.join('+')}) vs floor ${ind.score.toFixed(2)}`
-                        + (ctrlML ? `\\nBUY ${ind.controlTeam} ML ${ctrlML}${ctrlEdge != null ? ' | Edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}` : '')
-                        + `\\nSust: ${ind.controlTeam} ${ctrlSust}`
-                        + gateLine;
-                      log(`${matchup}: WINDOW BUY — ${ind.controlTeam} QTR:${wbWindow.score.toFixed(2)} floor:${ind.score.toFixed(2)} ${stateLabel} sust:${ctrlSust} tp:${wbTpClass} ls:${wbLsClass}`);
+                      log(`${matchup}: WINDOW BUY — ${ind.controlTeam} floor:${ind.score.toFixed(2)} margin:${ctrlMargin} sust:${ctrlSust} tp:${wbTpClass} ls:${wbLsClass}`);
                     }
                   }
                 } catch (e) { log(`${matchup}: WINDOW BUY check failed: ${e.message}`); }
@@ -3996,34 +3984,86 @@ export default async function(req) {
               if (!game._lastAlert || game._lastAlert !== alertKey) {
                 game._lastAlert = alertKey;
                 cacheUpdated = true;
-                const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA}`;
-                const sustLine = (ctrlSust || oppSustTier) ? `\nSust: ${ind.controlTeam} ${ctrlSust || '?'} vs ${ctrlIsHome ? aA : hA} ${oppSustTier || '?'}` : '';
+                const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
+                const oppAlias = ctrlIsHome ? aA : hA;
                 const calWarn = getCalibrationWarning(calLookup, ind.controlTeam, ind.score, ctrlTrailing);
                 const oppVT = gameVolumeThreat ? (ctrlIsHome ? gameVolumeThreat.away : gameVolumeThreat.home) : null;
-                const vtWarn = oppVT?.active ? `\n⚠️ ${ctrlIsHome ? aA : hA} volume threat: proj ${oppVT.projected3PA} 3PA at ${oppVT.live3Pct}% (szn ${oppVT.baseline}%)` : '';
-                const ntfyTitle = `${alertEmoji} ${alertType} — ${matchup}`;
-                let ntfyBody;
-                if (alertDetail) {
-                  // BWC body: lead with actionable BUY line
-                  ntfyBody = `${scoreLine} Q${currentPeriod} ${clock}`
-                    + `\n${alertDetail}`
-                    + `\nFloor: ${ind.score.toFixed(2)} | Lead: ${margin}`
-                    + sustLine
-                    + calWarn
-                    + vtWarn;
-                } else {
-                  // BUY/LEAN BUY body — lead with actionable line
-                  const mlLine = ctrlML ? `\nBUY ${ind.controlTeam} ML ${ctrlML}${ctrlEdge != null ? ' | Edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}` : '';
-                  const tpLine = tpForBuy ? `\nTP: ${tpForBuy.classification} (${fmtSwing(tpForBuy.expected.totalSwing)} exp vs ${margin} deficit, ~${tpForBuy.remainingPoss} poss)` : '';
-                  ntfyBody = `${scoreLine} Q${currentPeriod} ${clock}`
-                    + mlLine
-                    + `\nFloor: ${ind.controlTeam} ${ind.score.toFixed(2)} | Deficit: ${margin}`
-                    + tpLine
-                    + sustLine
-                    + calWarn
-                    + vtWarn
+                const vtWarn = oppVT?.active ? `\n⚠️ ${oppAlias} on pace for ${oppVT.projected3PA} threes at ${oppVT.live3Pct}% — volume threat` : '';
+
+                // Sustainability in plain English
+                const sustExplain = (function(){
+                  if (!oppSustTier && !ctrlSust) return '';
+                  const oppDesc = oppSustTier === 'FRAGILE' || oppSustTier === 'UNSUSTAINABLE'
+                    ? `${oppAlias}'s shooting is unsustainable (${oppSustTier})`
+                    : oppSustTier === 'LOCKED IN' || oppSustTier === 'DURABLE'
+                    ? `${oppAlias}'s shooting looks sustainable (${oppSustTier})`
+                    : oppSustTier ? `${oppAlias} shooting: ${oppSustTier}` : '';
+                  const ctrlDesc = ctrlSust === 'LOCKED IN' || ctrlSust === 'DURABLE'
+                    ? `${ind.controlTeam}'s shooting is sustainable (${ctrlSust})`
+                    : ctrlSust === 'FRAGILE' || ctrlSust === 'UNSUSTAINABLE'
+                    ? `${ind.controlTeam}'s shooting looks shaky (${ctrlSust})`
+                    : '';
+                  return (oppDesc ? '\n' + oppDesc : '') + (ctrlDesc ? '\n' + ctrlDesc : '');
+                })();
+
+                let ntfyTitle, ntfyBody;
+
+                if (alertType === 'BUY') {
+                  const mlStr = ctrlML ? `${ind.controlTeam} ML ${ctrlML}` : ind.controlTeam;
+                  ntfyTitle = `BUY ${mlStr}`;
+                  ntfyBody = scoreLine
+                    + `\n${ind.controlTeam} trails by ${margin} but controls the game structurally (${ind.score.toFixed(2)})`
+                    + (tpForBuy ? `\nMath projects a ${fmtSwing(tpForBuy.expected.totalSwing)}-point swing with ${tpForBuy.remainingPoss} possessions left` : '')
+                    + (ctrlEdge != null ? `\nEdge: ${ctrlEdge > 0 ? '+' : ''}${ctrlEdge}% over market` : '')
+                    + sustExplain
+                    + calWarn + vtWarn
                     + (spreadVal != null ? `\nSpread: ${spreadVal}` : '');
+
+                } else if (alertType === 'LEAN BUY') {
+                  const mlStr = ctrlML ? `${ind.controlTeam} ML ${ctrlML}` : ind.controlTeam;
+                  ntfyTitle = `LEAN BUY ${mlStr}`;
+                  ntfyBody = scoreLine
+                    + `\n${ind.controlTeam} trails by ${margin} with emerging structural control (${ind.score.toFixed(2)})`
+                    + `\n${oppAlias}'s lead is built on fragile shooting`
+                    + (tpForBuy ? `\nComeback math: ${fmtSwing(tpForBuy.expected.totalSwing)}-point swing projected, ${tpForBuy.remainingPoss} possessions left` : '')
+                    + (ctrlEdge != null ? `\nEdge: ${ctrlEdge > 0 ? '+' : ''}${ctrlEdge}% over market` : '')
+                    + calWarn + vtWarn
+                    + (spreadVal != null ? `\nSpread: ${spreadVal}` : '');
+
+                } else if (alertType === 'BUY WINDOW CLOSING') {
+                  const mlStr = ctrlML ? `${ind.controlTeam} ML ${ctrlML}` : ind.controlTeam;
+                  ntfyTitle = `WINDOW CLOSING — ${mlStr}`;
+                  const lsClass = lsForBWC?.classification || null;
+                  const lsDesc = lsClass === 'SAFE' ? 'Lead is mechanically safe'
+                    : lsClass === 'CUSHIONED' ? 'Lead has a comfortable cushion'
+                    : lsClass ? `Lead safety: ${lsClass}` : '';
+                  ntfyBody = scoreLine
+                    + `\n${ind.controlTeam} leads by ${margin} with structural dominance (${ind.score.toFixed(2)})`
+                    + `\nMarket hasn't caught up — ${ctrlEdge > 0 ? '+' : ''}${ctrlEdge}% edge remaining`
+                    + (lsDesc ? '\n' + lsDesc : '')
+                    + `\nLine will tighten soon, act now or pass`
+                    + sustExplain
+                    + calWarn + vtWarn;
+
+                } else if (alertType === 'WINDOW BUY') {
+                  const mlStr = ctrlML ? `${ind.controlTeam} ML ${ctrlML}` : ind.controlTeam;
+                  ntfyTitle = `WINDOW BUY — ${mlStr}`;
+                  const stateDesc = ctrlMargin > 0 ? `leads by ${ctrlMargin}` : ctrlMargin === 0 ? 'is tied' : `trails by ${Math.abs(ctrlMargin)}`;
+                  ntfyBody = scoreLine
+                    + `\n${ind.controlTeam} ${stateDesc} but has taken over the recent window`
+                    + `\nFull-game score hasn't caught up yet (floor ${ind.score.toFixed(2)})`
+                    + `\n${ind.controlTeam} shooting is sustainable (${ctrlSust})`
+                    + (wbLsClass === 'AT RISK' || wbLsClass === 'CRITICAL' ? `\n${oppAlias}'s lead is crumbling (${wbLsClass})` : '')
+                    + (wbTpClass && tpPass ? `\nComeback math supports recovery (${wbTpClass})` : '')
+                    + (ctrlEdge != null ? `\nEdge: ${ctrlEdge > 0 ? '+' : ''}${ctrlEdge}% over market` : '')
+                    + calWarn + vtWarn;
+
+                } else {
+                  // Fallback
+                  ntfyTitle = `${alertEmoji} ${alertType} — ${matchup}`;
+                  ntfyBody = scoreLine + `\n${ind.controlTeam} ${ind.score.toFixed(2)}`;
                 }
+
                 await sendNtfy(ntfyTitle, ntfyBody, alertPriority);
                 log(`${matchup}: ${alertEmoji} ${alertType} PUSHED — ${ind.controlTeam} ${ind.score.toFixed(2)} ${ctrlTrailing ? 'trailing' : 'leading'} by ${margin}${ctrlEdge != null ? ', edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}${oppSustTier ? ', opp ' + oppSustTier : ''}`);
               }
@@ -4066,13 +4106,13 @@ export default async function(req) {
                   const tpAlertKey = `${game.id}_TP_RECOVERY_Q${currentPeriod}`;
                   if (!game._lastTpAlert || game._lastTpAlert !== tpAlertKey) {
                     game._lastTpAlert = tpAlertKey;
+                    const tScoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
                     await sendNtfy(
-                      `RECOVERY PATH OPENED — ${matchup}`,
-                      `${scoreLine} Q${currentPeriod} ${clock}`
-                        + `\nThroughput: ${prevTpClass || 'none'} -> ${tpClass}`
-                        + `\n${ind.controlTeam} trails by ${marginT} | Floor: ${ind.score.toFixed(2)}`
-                        + `\nEngine: ${fmtSwing(tp.conservative.totalSwing)} / ${fmtSwing(tp.expected.totalSwing)} / ${fmtSwing(tp.optimistic.totalSwing)} vs ${tp.deficit} deficit`
-                        + `\n~${tp.remainingPoss} poss remaining`,
+                      `RECOVERY PATH — ${matchup}`,
+                      tScoreLine
+                        + `\n${ind.controlTeam} trails by ${marginT} — comeback math just turned favorable`
+                        + `\nProjects ${fmtSwing(tp.expected.totalSwing)}-point swing with ${tp.remainingPoss} possessions left`
+                        + `\n${ind.controlTeam} structural control: ${ind.score.toFixed(2)}`,
                       5
                     );
                     log(`${matchup}: RECOVERY PATH OPENED — ${prevTpClass} -> ${tpClass}, trailing ${marginT}`);
@@ -4089,15 +4129,16 @@ export default async function(req) {
                   const lsAlertKey = `${game.id}_LS_CRUMBLE_Q${currentPeriod}`;
                   if (!game._lastLsAlert || game._lastLsAlert !== lsAlertKey) {
                     game._lastLsAlert = lsAlertKey;
+                    const tScoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
                     const alertBody = leadLost
-                      ? `${scoreLine} Q${currentPeriod} ${clock}`
-                        + `\nLEAD LOST — was ${prevLsClass}`
-                        + `\n${ind.controlTeam} ${ctrlPtsT > oppPtsT ? 'now leads by ' + marginT : ctrlPtsT === oppPtsT ? 'TIED' : 'now trails by ' + marginT}`
-                      : `${scoreLine} Q${currentPeriod} ${clock}`
-                        + `\nLead Safety: ${prevLsClass} -> ${lsClass}`
-                        + `\n${ind.controlTeam} leads by ${marginT}`
-                        + `\nOpp recovery: ${fmtSwing(ls.conservative.totalSwing)} / ${fmtSwing(ls.expected.totalSwing)} / ${fmtSwing(ls.optimistic.totalSwing)}`
-                        + `\n~${ls.remainingPoss} poss remaining`;
+                      ? tScoreLine
+                        + `\n${ind.controlTeam} lost their lead — was ${prevLsClass === 'SAFE' ? 'safe' : 'cushioned'}`
+                        + `\n${ctrlPtsT === oppPtsT ? 'Game is now TIED' : ind.controlTeam + ' now trails by ' + marginT}`
+                        + `\nStructural read may still hold, but the cushion is gone`
+                      : tScoreLine
+                        + `\n${ind.controlTeam} lead shrunk to ${marginT} — was ${prevLsClass === 'SAFE' ? 'safe' : 'cushioned'}, now ${lsClass === 'CRITICAL' ? 'critical' : 'vulnerable'}`
+                        + `\nOpponent projects to close gap with ${ls.remainingPoss} possessions left`
+                        + `\nIf holding ${ind.controlTeam}, watch for exit`;
                     await sendNtfy(
                       `${leadLost ? 'LEAD LOST' : 'LEAD CRUMBLING'} — ${matchup}`,
                       alertBody,
@@ -4125,12 +4166,14 @@ export default async function(req) {
                   if (!game._lastSustAlert || game._lastSustAlert !== sustAlertKey) {
                     game._lastSustAlert = sustAlertKey;
                     const oppAlias = ctrlIsHome ? aA : hA;
+                    const tScoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
                     await sendNtfy(
                       `VARIANCE BREAKING — ${matchup}`,
-                      `${scoreLine} Q${currentPeriod} ${clock}`
-                        + `\n${oppAlias} shooting: ${prevOppSust} -> ${oppSustNow}`
-                        + `\n${ind.controlTeam} structural edge ${ind.score.toFixed(2)}, trailing by ${marginT}`
-                        + `\nVariance-sourced lead expected to erode`,
+                      tScoreLine
+                        + `\n${oppAlias}'s shooting is cooling off (was sustainable, now ${oppSustNow === 'UNSUSTAINABLE' ? 'unsustainable' : 'fragile'})`
+                        + `\n${ind.controlTeam} trails by ${marginT} with structural control (${ind.score.toFixed(2)})`
+                        + `\n${oppAlias}'s lead was built on hot shooting — that's fading`
+                        + `\nWatch for BUY opportunity as lead erodes`,
                       4
                     );
                     log(`${matchup}: VARIANCE BREAKING — ${oppAlias} ${prevOppSust} -> ${oppSustNow}`);
