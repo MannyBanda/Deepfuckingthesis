@@ -4076,7 +4076,7 @@ export default async function(req) {
 
                 await sendNtfy(ntfyTitle, ntfyBody, alertPriority);
                 try {
-                  await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score)
+                  await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score)
                     VALUES (${game.id}, ${league}, ${alertType}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal}, ${tpForBuy?.classification || null}, ${lsForBWC?.classification || null}, ${ctrlSust}, ${oppSustTier}, ${wbWindowScore})`;
                 } catch (e) { log(`${matchup}: alert save failed: ${e.message}`); }
                 log(`${matchup}: ${alertEmoji} ${alertType} PUSHED — ${ind.controlTeam} ${ind.score.toFixed(2)} ${ctrlTrailing ? 'trailing' : 'leading'} by ${margin}${ctrlEdge != null ? ', edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}${oppSustTier ? ', opp ' + oppSustTier : ''}`);
@@ -4130,7 +4130,7 @@ export default async function(req) {
                       5
                     );
                     log(`${matchup}: RECOVERY PATH OPENED — ${prevTpClass} -> ${tpClass}, trailing ${marginT}`);
-                    try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, trailing, tp_class, ls_class) VALUES (${game.id}, ${league}, ${'RECOVERY PATH'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${true}, ${tpClass}, ${lsClass})`; } catch(e) {}
+                    try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, tp_class, ls_class) VALUES (${game.id}, ${league}, ${'RECOVERY PATH'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${true}, ${tpClass}, ${lsClass})`; } catch(e) {}
                   }
                 }
               }
@@ -4160,7 +4160,7 @@ export default async function(req) {
                       5
                     );
                     log(`${matchup}: ${leadLost ? 'LEAD LOST' : 'LEAD CRUMBLING'} — ${prevLsClass} -> ${lsClass || 'null'}`);
-                    try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, trailing, tp_class, ls_class) VALUES (${game.id}, ${league}, ${leadLost ? 'LEAD LOST' : 'LEAD CRUMBLING'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${oppPtsT > ctrlPtsT}, ${tpClass}, ${lsClass})`; } catch(e) {}
+                    try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, tp_class, ls_class) VALUES (${game.id}, ${league}, ${leadLost ? 'LEAD LOST' : 'LEAD CRUMBLING'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${oppPtsT > ctrlPtsT}, ${tpClass}, ${lsClass})`; } catch(e) {}
                     // Write suppression timestamp for BWC/BUY alerts
                     try {
                       if (ctrlIsHome) {
@@ -4193,7 +4193,7 @@ export default async function(req) {
                       4
                     );
                     log(`${matchup}: VARIANCE BREAKING — ${oppAlias} ${prevOppSust} -> ${oppSustNow}`);
-                    try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, trailing, opp_sust) VALUES (${game.id}, ${league}, ${'VARIANCE BREAKING'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${true}, ${oppSustNow})`; } catch(e) {}
+                    try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, opp_sust) VALUES (${game.id}, ${league}, ${'VARIANCE BREAKING'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${true}, ${oppSustNow})`; } catch(e) {}
                   }
                 }
               }

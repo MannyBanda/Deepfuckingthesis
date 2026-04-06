@@ -296,7 +296,7 @@ exports.handler = async (event) => {
           control_team TEXT,
           floor_score REAL,
           margin INTEGER,
-          trailing BOOLEAN,
+          is_trailing BOOLEAN,
           edge REAL,
           ml INTEGER,
           spread REAL,
