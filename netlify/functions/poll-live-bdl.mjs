@@ -3941,7 +3941,7 @@ export default async function(req) {
 
             // ── WINDOW BUY: windows show structural takeover even when cumulative floor is below BUY threshold ──
             // Fires when QTR window ≥ 0.75, trailing/tied/leading ≤ 5, sustainability LOCKED/DURABLE, floor ≥ 0.45
-            var wbTpClass = null, wbLsClass = null, tpPass = false, lsPass = false, ctrlMargin = ctrlPtsA - oppPtsA;
+            var wbTpClass = null, wbLsClass = null, tpPass = false, lsPass = false, ctrlMargin = ctrlPtsA - oppPtsA, wbWindowScore = null;
             if (!alertType && currentPeriod >= 2 && ind.controlTeam && ind.controlTeam !== 'Neither') {
               const inRange = ctrlMargin >= -15 && ctrlMargin <= 5;
               const floorBaseline = ind.score >= 0.45;
@@ -3951,6 +3951,7 @@ export default async function(req) {
                   const wbQd = await readQuarterData(sql, game.id);
                   const wbWindow = computeServerWindow(wbQd, currentPeriod, clock, summary, hA, aA, league);
                   if (wbWindow && wbWindow.available && wbWindow.score >= 0.75 && wbWindow.controlTeam === ind.controlTeam) {
+                    wbWindowScore = wbWindow.score;
                     // TP OR LS gate when trailing: either math says recoverable, or opponent lead is crumbling
                     let wbBlocked = false;
                     if (ctrlMargin < 0) {
@@ -4074,6 +4075,10 @@ export default async function(req) {
                 }
 
                 await sendNtfy(ntfyTitle, ntfyBody, alertPriority);
+                try {
+                  await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score)
+                    VALUES (${game.id}, ${league}, ${alertType}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal}, ${tpForBuy?.classification || null}, ${lsForBWC?.classification || null}, ${ctrlSust}, ${oppSustTier}, ${wbWindowScore})`;
+                } catch (e) { log(`${matchup}: alert save failed: ${e.message}`); }
                 log(`${matchup}: ${alertEmoji} ${alertType} PUSHED — ${ind.controlTeam} ${ind.score.toFixed(2)} ${ctrlTrailing ? 'trailing' : 'leading'} by ${margin}${ctrlEdge != null ? ', edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}${oppSustTier ? ', opp ' + oppSustTier : ''}`);
               }
             }
@@ -4125,6 +4130,7 @@ export default async function(req) {
                       5
                     );
                     log(`${matchup}: RECOVERY PATH OPENED — ${prevTpClass} -> ${tpClass}, trailing ${marginT}`);
+                    try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, trailing, tp_class, ls_class) VALUES (${game.id}, ${league}, ${'RECOVERY PATH'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${true}, ${tpClass}, ${lsClass})`; } catch(e) {}
                   }
                 }
               }
@@ -4154,6 +4160,7 @@ export default async function(req) {
                       5
                     );
                     log(`${matchup}: ${leadLost ? 'LEAD LOST' : 'LEAD CRUMBLING'} — ${prevLsClass} -> ${lsClass || 'null'}`);
+                    try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, trailing, tp_class, ls_class) VALUES (${game.id}, ${league}, ${leadLost ? 'LEAD LOST' : 'LEAD CRUMBLING'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${oppPtsT > ctrlPtsT}, ${tpClass}, ${lsClass})`; } catch(e) {}
                     // Write suppression timestamp for BWC/BUY alerts
                     try {
                       if (ctrlIsHome) {
@@ -4186,6 +4193,7 @@ export default async function(req) {
                       4
                     );
                     log(`${matchup}: VARIANCE BREAKING — ${oppAlias} ${prevOppSust} -> ${oppSustNow}`);
+                    try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, trailing, opp_sust) VALUES (${game.id}, ${league}, ${'VARIANCE BREAKING'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${true}, ${oppSustNow})`; } catch(e) {}
                   }
                 }
               }

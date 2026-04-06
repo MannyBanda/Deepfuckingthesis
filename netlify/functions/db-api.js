@@ -285,6 +285,32 @@ exports.handler = async (event) => {
         )
       `;
 
+      await sql`
+        CREATE TABLE IF NOT EXISTS alerts (
+          id SERIAL PRIMARY KEY,
+          game_id TEXT NOT NULL,
+          league TEXT DEFAULT 'nba',
+          alert_type TEXT NOT NULL,
+          period INTEGER,
+          clock TEXT,
+          control_team TEXT,
+          floor_score REAL,
+          margin INTEGER,
+          trailing BOOLEAN,
+          edge REAL,
+          ml INTEGER,
+          spread REAL,
+          tp_class TEXT,
+          ls_class TEXT,
+          ctrl_sust TEXT,
+          opp_sust TEXT,
+          window_score REAL,
+          ts TIMESTAMPTZ DEFAULT NOW()
+        )
+      `;
+      try { await sql`CREATE INDEX IF NOT EXISTS idx_alerts_game ON alerts (game_id)`; } catch(e) {}
+      try { await sql`CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts (ts)`; } catch(e) {}
+
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'Schema initialized' }) };
     }
 
