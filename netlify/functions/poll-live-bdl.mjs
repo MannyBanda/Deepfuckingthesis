@@ -4301,14 +4301,14 @@ export default async function(req) {
                 }
 
                 // Compute + save server context (PBP, arrows, window, etc.)
-                // Uses DO NOTHING on conflict — client-pushed context is richer, don't overwrite
+                // Server is sole writer — updates on each auto-analysis trigger
                 const serverCtx = await computeServerContext(sql, game, league, summary, ind, espnWP, hA, aA, currentPeriod, clock, matchup, sust, odds);
                 if (serverCtx) {
                   try {
                     await sql`
                       INSERT INTO game_context (game_id, league, period, context_json, updated_at)
                       VALUES (${game.id}, ${league}, ${currentPeriod}, ${JSON.stringify(serverCtx)}, NOW())
-                      ON CONFLICT (game_id, period) DO NOTHING
+                      ON CONFLICT (game_id, period) DO UPDATE SET context_json = ${JSON.stringify(serverCtx)}, updated_at = NOW()
                     `;
                     log(`${matchup}: ${t.label} server context saved — ${Object.keys(serverCtx).length} layers`);
                   } catch (e) {

@@ -488,169 +488,6 @@ async function saveSnapshotDB(game){
   }catch(e){ /* silent */ }
 }
 
-// Push rich client-computed context to DB at quarter boundaries
-// Server reads this before firing auto calibration analyses — fills the 9-layer gap
-async function pushContextToDB(game){
-  if(!dbReady) return;
-  var cs = cardState[game.id]; if(!cs) return;
-  var period = game.period || 0;
-  if(period < 1) return;
-  var hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
-
-  // ── Ensure PBP is fresh before pushing context ──
-  // PBP is the foundation for arrows + shot quality — stale PBP undermines the whole context
-  var pbpAge = cs.pbpTime ? (Date.now() - cs.pbpTime.getTime()) / 60000 : 999;
-  if((pbpAge > 3 || !cs.pbpAudit) && getState(game) === 'LIVE' && !cs.pbpLoading){
-    try{
-      var _bdlId = bdlGameMap[game.id];
-      if(_bdlId){
-        var _playsData = await bdl('plays', {game_id: String(_bdlId)});
-        var _lineupsArr = _bdlLineupsCache[_bdlId] || [];
-        var audit = parseBDLPBP((_playsData.data||[]), hA, aA, _lineupsArr);
-        cs.pbpAudit = audit;
-        cs.pbpTime = new Date();
-        cs.pbpPeriod = period;
-        persistDepth(game.id, cs);
-        addLog(game.id, '📡 PBP refreshed for context push (was '+pbpAge.toFixed(0)+'m stale)', true);
-      }
-    }catch(e){
-      // Non-fatal — push whatever PBP we have
-      addLog(game.id, '⚠ PBP refresh failed for context push: '+e.message, false);
-    }
-  }
-
-  // ── Re-compute arrows from PBP if we just refreshed ──
-  // Ensures arrows sent to server reflect fresh PBP, not stale quarterSnapshot boundaries
-  if(cs.pbpAudit && cs.pbpAudit.raw && cs.pbpAudit.raw.shots){
-    var freshArrows = computeSubMetricArrows(game.id);
-    if(freshArrows){ cs.subMetricArrows = freshArrows; }
-    var floorInd = getFloor(cs);
-    if(freshArrows && floorInd){
-      cs.adjustment = classifyAdjustment(freshArrows, floorInd.controlTeam || hA, hA, aA);
-    }
-  }
-
-  // Collect all client-computed layers the server can't produce
-  var context = {};
-
-  // Rolling window (cross-fade weighted recent-quarter I1-I5)
-  // Only push client-computed windows — don't echo server data back to server
-  if(cs.rollingWindow && cs.rollingWindow.available && cs.rollingWindow.source !== 'server' && cs.rollingWindow.source !== 'server-ctx' && cs.rollingWindow.source !== 'server-qd'){
-    context.rollingWindow = {
-      available: true,
-      score: cs.rollingWindow.score,
-      controlTeam: cs.rollingWindow.controlTeam,
-      windowQuarters: cs.rollingWindow.windowQuarters,
-      windowPossessions: cs.rollingWindow.windowPossessions || 0,
-      possessionBased: cs.rollingWindow.possessionBased || false,
-      crossFade: cs.rollingWindow.crossFade || false,
-      dataQuality: cs.rollingWindow.dataQuality || '?',
-      I1: cs.rollingWindow.I1, I2: cs.rollingWindow.I2,
-      I3: cs.rollingWindow.I3, I4: cs.rollingWindow.I4,
-      I5: cs.rollingWindow.I5,
-      enrichSummary: cs.rollingWindow.enrichSummary || null,
-    };
-  }
-
-  // Acceleration (gap trajectory)
-  if(cs.acceleration){
-    context.acceleration = {
-      accel: cs.acceleration.accel,
-      consecutive: cs.acceleration.consecutive,
-      entries: (cs.acceleration.entries || []).slice(-5).map(function(e){
-        return {gap: e.gap, score: e.score};
-      }),
-    };
-  }
-
-  // Combined read
-  if(cs.combinedRead){
-    context.combinedRead = {
-      read: cs.combinedRead.read,
-      note: cs.combinedRead.note || '',
-    };
-  }
-
-  // Sub-metric arrows (per-quarter directional trends)
-  if(cs.subMetricArrows && (cs.subMetricArrows.home || cs.subMetricArrows.away)){
-    context.subMetricArrows = cs.subMetricArrows;
-  }
-
-  // Adjustment signal
-  if(cs.adjustment && cs.adjustment.signal && cs.adjustment.signal !== 'NO ADJUSTMENT' && cs.adjustment.signal !== 'NO DATA'){
-    context.adjustment = {
-      signal: cs.adjustment.signal,
-      team: cs.adjustment.team,
-      note: cs.adjustment.note,
-    };
-  }
-
-  // PBP audit (3PT zones, shot diet, scoring runs, forced/unforced TOs)
-  if(cs.pbpAudit && (cs.pbpAudit.home || cs.pbpAudit.away)){
-    // Trim to essential fields — full pbpAudit can be large
-    var pbp = {pbpAge: cs.pbpAudit.pbpAge, pbpPeriod: cs.pbpAudit.pbpPeriod,
-      homeAlias: cs.pbpAudit.homeAlias, awayAlias: cs.pbpAudit.awayAlias};
-    ['home','away'].forEach(function(side){
-      var tm = cs.pbpAudit[side]; if(!tm) return;
-      pbp[side] = {
-        threes: tm.threes || null, rim: tm.rim || null, mid: tm.mid || null,
-        shotDiet: tm.shotDiet || null, tos: tm.tos || null,
-      };
-    });
-    if(cs.pbpAudit.runs) pbp.runs = cs.pbpAudit.runs;
-    context.pbpAudit = pbp;
-  }
-
-  // Tracking baselines (catch-and-shoot / pull-up)
-  if(cs.trackingData){
-    context.trackingData = cs.trackingData;
-  }
-
-  // Edge history (entry timing progression)
-  if(cs.edgeHistory && cs.edgeHistory.length > 0){
-    context.edgeHistory = cs.edgeHistory.slice(-10);
-  }
-
-  // Bonus status
-  var homeBonus = game.summary?.home?.bonus || false;
-  var awayBonus = game.summary?.away?.bonus || false;
-  var homeDouble = game.summary?.home?.double_bonus || false;
-  var awayDouble = game.summary?.away?.double_bonus || false;
-  if(homeBonus || awayBonus){
-    context.bonusStatus = {
-      home: homeBonus, away: awayBonus,
-      homeDouble: homeDouble, awayDouble: awayDouble,
-    };
-  }
-
-  // ESPN WP (current + opening)
-  if(cs.espnWP){
-    context.espnWP = {
-      home: cs.espnWP.home,
-      away: cs.espnWP.away,
-      opening: cs.espnWP.opening || null,
-      dataPoints: cs.espnWP.dataPoints || 0,
-    };
-  }
-
-  // Game clock context for prompt
-  context.gamePeriod = period;
-  context.gameClock = game.clock || '';
-  context.homePts = game.homePoints || 0;
-  context.awayPts = game.awayPoints || 0;
-
-  // Skip if context is nearly empty (no meaningful layers)
-  var layerCount = Object.keys(context).filter(function(k){
-    return !['gamePeriod','gameClock','homePts','awayPts'].includes(k);
-  }).length;
-  if(layerCount === 0) return;
-
-  fetch(FN+'db-api?action=save_context',{
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({game_id: game.id, league: 'nba', period: period, context: context})
-  }).catch(function(){});
-  console.log('[CTX] Pushed '+layerCount+' layers for Q'+period+' — '+hA+'v'+aA);
-}
 async function hydrateFromServerSnapshots(gameId){
   if(!dbReady) return;
   var cs = cardState[gameId]; if(!cs) return;
@@ -2829,7 +2666,6 @@ async function fetchSummaryBDL(game){
       var prevPer = cs._lastHydratedPeriod || 0;
       if(game.period > prevPer){
         cs._lastHydratedPeriod = game.period;
-        pushContextToDB(game);
         (async function(gid){ try{ var r=await fetch(FN+'db-api?action=get_auto_analyses&game_ids='+encodeURIComponent(gid));if(!r.ok)return;var d=await r.json();var gr=d.analyses||{};if(gr[gid]&&gr[gid].length>0){var prev=autoAnalysisCache[gid]?autoAnalysisCache[gid].length:0;autoAnalysisCache[gid]=gr[gid];if(gr[gid].length>prev){applyAutoAnalysesToCards();}}var _cs=cardState[gid];if(_cs&&(!_cs.pbpAudit||!_cs.subMetricArrows||!_cs.combinedRead))hydrateFromServerContext(gid);}catch(e){}})(game.id);
       }
     }
@@ -2914,7 +2750,6 @@ async function fetchBdlFallback(game, reason){
       var prevPer = cs._lastHydratedPeriod || 0;
       if(game.period > prevPer){
         cs._lastHydratedPeriod = game.period;
-        pushContextToDB(game);
         (async function(gid){
           try{
             var r = await fetch(FN+'db-api?action=get_auto_analyses&game_ids='+encodeURIComponent(gid));
