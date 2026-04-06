@@ -1122,6 +1122,57 @@ exports.handler = async (event) => {
     }
 
     // ═══════════════════════════════════════════════════════
+    // GET_ALERTS — query alert history with game outcomes for accuracy tracking
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_alerts') {
+      const league = params.league || 'nba';
+      const type = params.type || null; // optional: BUY, LEAN BUY, BWC, WINDOW BUY, etc.
+      const date = params.date || null; // optional: YYYY-MM-DD
+      const limit = parseInt(params.limit) || 100;
+
+      let rows;
+      if (type && date) {
+        rows = await sql`
+          SELECT a.*, g.matchup, g.home_alias, g.away_alias, g.home_pts, g.away_pts, g.winner, g.margin as game_margin, g.date
+          FROM alerts a JOIN games g ON a.game_id = g.id
+          WHERE a.league = ${league} AND a.alert_type = ${type} AND g.date = ${date}
+          ORDER BY a.ts DESC LIMIT ${limit}`;
+      } else if (type) {
+        rows = await sql`
+          SELECT a.*, g.matchup, g.home_alias, g.away_alias, g.home_pts, g.away_pts, g.winner, g.margin as game_margin, g.date
+          FROM alerts a JOIN games g ON a.game_id = g.id
+          WHERE a.league = ${league} AND a.alert_type = ${type}
+          ORDER BY a.ts DESC LIMIT ${limit}`;
+      } else if (date) {
+        rows = await sql`
+          SELECT a.*, g.matchup, g.home_alias, g.away_alias, g.home_pts, g.away_pts, g.winner, g.margin as game_margin, g.date
+          FROM alerts a JOIN games g ON a.game_id = g.id
+          WHERE a.league = ${league} AND g.date = ${date}
+          ORDER BY a.ts DESC LIMIT ${limit}`;
+      } else {
+        rows = await sql`
+          SELECT a.*, g.matchup, g.home_alias, g.away_alias, g.home_pts, g.away_pts, g.winner, g.margin as game_margin, g.date
+          FROM alerts a JOIN games g ON a.game_id = g.id
+          WHERE a.league = ${league}
+          ORDER BY a.ts DESC LIMIT ${limit}`;
+      }
+
+      // Compute accuracy: did the control team win?
+      const alerts = rows.map(r => ({
+        ...r,
+        correct: r.winner ? r.winner === r.control_team : null,
+      }));
+      const total = alerts.length;
+      const resolved = alerts.filter(a => a.correct !== null);
+      const correct = resolved.filter(a => a.correct).length;
+
+      return { statusCode: 200, headers, body: JSON.stringify({
+        alerts,
+        summary: { total, resolved: resolved.length, correct, accuracy: resolved.length > 0 ? Math.round(correct / resolved.length * 100) : null }
+      }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
     // GET_GAMES — list all games for a league
     // ═══════════════════════════════════════════════════════
     if (action === 'get_games') {
