@@ -4115,64 +4115,98 @@ export default async function(req) {
               const marginT = Math.abs(ctrlPtsT - oppPtsT);
               const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA}`;
 
-              // ALERT 1: RECOVERY PATH OPENED
-              if (tpClass && ind.score >= 0.60 && oppPtsT > ctrlPtsT && marginT >= 1 && marginT <= 15) {
-                const wasWeak = !prevTpClass || prevTpClass === 'UNLIKELY' || prevTpClass === 'NO PATH';
-                const nowStrong = tpClass === 'CONTESTED' || tpClass === 'PROBABLE' || tpClass === 'STRONG RECOVERY';
-                if (wasWeak && nowStrong) {
-                  const tpAlertKey = `${game.id}_TP_RECOVERY_Q${currentPeriod}`;
-                  if (!game._lastTpAlert || game._lastTpAlert !== tpAlertKey) {
-                    game._lastTpAlert = tpAlertKey;
-                    const tScoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
-                    await sendNtfy(
-                      `RECOVERY PATH — ${matchup}`,
-                      tScoreLine
-                        + `\n${ind.controlTeam} trails by ${marginT} — comeback math just turned favorable`
-                        + `\nProjects ${fmtSwing(tp.expected.totalSwing)}-point swing with ${tp.remainingPoss} possessions left`
-                        + `\n${ind.controlTeam} structural control: ${ind.score.toFixed(2)}`,
-                      5
-                    );
-                    log(`${matchup}: RECOVERY PATH OPENED — ${prevTpClass} -> ${tpClass}, trailing ${marginT}`);
-                    try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, tp_class, ls_class) VALUES (${game.id}, ${league}, ${'RECOVERY PATH'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${true}, ${tpClass}, ${lsClass})`; } catch(e) {}
+              // ALERT 1: RECOVERY PATH (state alert — no transition required)
+              // Gate: TP strong + floor ≥ 0.30 + trailing 1-15 + ML > -250 OR edge > 10%
+              if (oppPtsT > ctrlPtsT && marginT >= 1 && marginT <= 15 && ind.score >= 0.30) {
+                const tpStrong = tpClass === 'STRONG RECOVERY' || tpClass === 'PROBABLE';
+                if (tpStrong) {
+                  // ML / edge gate: only alert when there's actionable value
+                  let rpML = null, rpEdge = null, rpGatePass = false;
+                  if (odds && (odds.homeML || odds.awayML)) {
+                    const hML = parseFloat(odds.homeML), aML = parseFloat(odds.awayML);
+                    const garbageOdds = (Math.abs(hML) >= 50000 || Math.abs(aML) >= 50000 || hML === aML);
+                    if (!garbageOdds) {
+                      rpML = ctrlIsHome ? odds.homeML : odds.awayML;
+                      const rpMLNum = parseFloat(rpML);
+                      const rpMIP = mlToProb(rpMLNum);
+                      if (rpMIP != null) rpEdge = Math.round(((ind.score * 100) - (rpMIP * 100)) * 10) / 10;
+                      rpGatePass = rpMLNum > -250 || (rpEdge != null && rpEdge > 10);
+                    }
+                  }
+                  if (rpGatePass) {
+                    const tpAlertKey = `${game.id}_TP_RECOVERY_Q${currentPeriod}`;
+                    if (!game._lastTpAlert || game._lastTpAlert !== tpAlertKey) {
+                      game._lastTpAlert = tpAlertKey;
+                      const tScoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
+                      const mlStr = rpML ? ` (ML ${rpML > 0 ? '+' : ''}${rpML})` : '';
+                      await sendNtfy(
+                        `RECOVERY PATH — ${matchup}`,
+                        tScoreLine
+                          + `\n${ind.controlTeam} trails by ${marginT} — comeback math is favorable${mlStr}`
+                          + `\nProjects ${fmtSwing(tp.expected.totalSwing)}-point swing with ${tp.remainingPoss} possessions left`
+                          + `\n${ind.controlTeam} structural floor: ${ind.score.toFixed(2)}${rpEdge != null ? ' | edge ' + (rpEdge > 0 ? '+' : '') + rpEdge + '%' : ''}`,
+                        5
+                      );
+                      log(`${matchup}: RECOVERY PATH — TP ${tpClass}, floor ${ind.score.toFixed(2)}, trailing ${marginT}, ML ${rpML}${rpEdge != null ? ', edge ' + rpEdge + '%' : ''}`);
+                      try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, tp_class, ls_class, ctrl_sust, opp_sust) VALUES (${game.id}, ${league}, ${'RECOVERY PATH'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${true}, ${rpEdge}, ${rpML ? parseInt(rpML) : null}, ${tpClass}, ${lsClass}, ${sust?.[ctrlIsHome ? 'home' : 'away']?.tier || null}, ${sust?.[ctrlIsHome ? 'away' : 'home']?.tier || null})`; } catch(e) {}
+                    }
+                  } else {
+                    log(`${matchup}: RECOVERY PATH skipped — ML gate (ML ${rpML}, edge ${rpEdge}%)`);
                   }
                 }
               }
 
-              // ALERT 2: LEAD CRUMBLING / LEAD LOST
-              const wasSafe = prevLsClass === 'SAFE' || prevLsClass === 'CUSHIONED';
-              if (wasSafe) {
-                const nowDanger = lsClass === 'AT RISK' || lsClass === 'CRITICAL';
-                const leadLost = !lsClass && oppPtsT >= ctrlPtsT;
-                if (nowDanger || leadLost) {
-                  const lsAlertKey = `${game.id}_LS_CRUMBLE_Q${currentPeriod}`;
-                  if (!game._lastLsAlert || game._lastLsAlert !== lsAlertKey) {
-                    game._lastLsAlert = lsAlertKey;
-                    const tScoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
-                    const alertBody = leadLost
-                      ? tScoreLine
-                        + `\n${ind.controlTeam} lost their lead — was ${prevLsClass === 'SAFE' ? 'safe' : 'cushioned'}`
-                        + `\n${ctrlPtsT === oppPtsT ? 'Game is now TIED' : ind.controlTeam + ' now trails by ' + marginT}`
-                        + `\nStructural read may still hold, but the cushion is gone`
-                      : tScoreLine
-                        + `\n${ind.controlTeam} lead shrunk to ${marginT} — was ${prevLsClass === 'SAFE' ? 'safe' : 'cushioned'}, now ${lsClass === 'CRITICAL' ? 'critical' : 'vulnerable'}`
-                        + `\nOpponent projects to close gap with ${ls.remainingPoss} possessions left`
-                        + `\nIf holding ${ind.controlTeam}, watch for exit`;
-                    await sendNtfy(
-                      `${leadLost ? 'LEAD LOST' : 'LEAD CRUMBLING'} — ${matchup}`,
-                      alertBody,
-                      5
-                    );
-                    log(`${matchup}: ${leadLost ? 'LEAD LOST' : 'LEAD CRUMBLING'} — ${prevLsClass} -> ${lsClass || 'null'}`);
-                    try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, tp_class, ls_class) VALUES (${game.id}, ${league}, ${leadLost ? 'LEAD LOST' : 'LEAD CRUMBLING'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${oppPtsT > ctrlPtsT}, ${tpClass}, ${lsClass})`; } catch(e) {}
-                    // Write suppression timestamp for BWC/BUY alerts
-                    try {
-                      if (ctrlIsHome) {
-                        await sql`UPDATE games SET home_lead_degraded_at = NOW() WHERE id = ${game.id}`;
-                      } else {
-                        await sql`UPDATE games SET away_lead_degraded_at = NOW() WHERE id = ${game.id}`;
-                      }
-                    } catch (e) { /* non-fatal */ }
-                  }
+              // ALERT 2: LEAD CRUMBLING (state alert) / LEAD LOST (transition)
+              // LEAD CRUMBLING: leading + LS vulnerable + floor ≥ 0.55 — no transition required
+              if (ctrlPtsT > oppPtsT && (lsClass === 'AT RISK' || lsClass === 'CRITICAL') && ind.score >= 0.55) {
+                const lsAlertKey = `${game.id}_LS_CRUMBLE_Q${currentPeriod}`;
+                if (!game._lastLsAlert || game._lastLsAlert !== lsAlertKey) {
+                  game._lastLsAlert = lsAlertKey;
+                  const tScoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
+                  await sendNtfy(
+                    `LEAD CRUMBLING — ${matchup}`,
+                    tScoreLine
+                      + `\n${ind.controlTeam} leads by ${marginT} but lead is ${lsClass === 'CRITICAL' ? 'critically vulnerable' : 'at risk'}`
+                      + `\nOpponent projects to close gap with ${ls.remainingPoss} possessions left`
+                      + `\nIf holding ${ind.controlTeam}, watch for exit`,
+                    5
+                  );
+                  log(`${matchup}: LEAD CRUMBLING — LS ${lsClass}, leading ${marginT}, floor ${ind.score.toFixed(2)}`);
+                  try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, tp_class, ls_class) VALUES (${game.id}, ${league}, ${'LEAD CRUMBLING'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${false}, ${tpClass}, ${lsClass})`; } catch(e) {}
+                  // Write suppression timestamp for BWC/BUY alerts
+                  try {
+                    if (ctrlIsHome) {
+                      await sql`UPDATE games SET home_lead_degraded_at = NOW() WHERE id = ${game.id}`;
+                    } else {
+                      await sql`UPDATE games SET away_lead_degraded_at = NOW() WHERE id = ${game.id}`;
+                    }
+                  } catch (e) { /* non-fatal */ }
+                }
+              }
+              // LEAD LOST: had any lead state before, now tied/trailing
+              const hadLead = prevLsClass !== null;
+              if (hadLead && oppPtsT >= ctrlPtsT) {
+                const lostKey = `${game.id}_LS_LOST_Q${currentPeriod}`;
+                if (!game._lastLsLostAlert || game._lastLsLostAlert !== lostKey) {
+                  game._lastLsLostAlert = lostKey;
+                  const tScoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
+                  await sendNtfy(
+                    `LEAD LOST — ${matchup}`,
+                    tScoreLine
+                      + `\n${ind.controlTeam} lost their lead — was ${prevLsClass}`
+                      + `\n${ctrlPtsT === oppPtsT ? 'Game is now TIED' : ind.controlTeam + ' now trails by ' + marginT}`
+                      + `\nStructural read may still hold, but the cushion is gone`,
+                    5
+                  );
+                  log(`${matchup}: LEAD LOST — ${prevLsClass} -> tied/trailing`);
+                  try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, tp_class, ls_class) VALUES (${game.id}, ${league}, ${'LEAD LOST'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${oppPtsT > ctrlPtsT}, ${tpClass}, ${lsClass})`; } catch(e) {}
+                  try {
+                    if (ctrlIsHome) {
+                      await sql`UPDATE games SET home_lead_degraded_at = NOW() WHERE id = ${game.id}`;
+                    } else {
+                      await sql`UPDATE games SET away_lead_degraded_at = NOW() WHERE id = ${game.id}`;
+                    }
+                  } catch (e) { /* non-fatal */ }
                 }
               }
 
