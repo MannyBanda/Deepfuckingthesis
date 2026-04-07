@@ -3926,6 +3926,8 @@ export default async function(req) {
                 if (lsClass === 'AT RISK' || lsClass === 'CRITICAL') {
                   // Don't fire BWC — lead is eroding, not actionable
                   log(`${matchup}: BWC suppressed — lead ${lsClass}, edge +${ctrlEdge}%`);
+                } else if (ctrlSust === 'FRAGILE' || ctrlSust === 'UNSUSTAINABLE') {
+                  log(`${matchup}: BWC suppressed — ctrl sust ${ctrlSust} (lead built on variance)`);
                 } else {
                   alertType = 'BUY WINDOW CLOSING';
                   alertEmoji = '🔵';
