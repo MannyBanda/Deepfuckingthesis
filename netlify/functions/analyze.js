@@ -806,15 +806,15 @@ exports.handler = async function(event) {
         var label = 'Q' + qk + (isPartial ? '*' : '');
         var hPaint = h.points_in_the_paint || h.points_in_paint || 0;
         var aPaint = a.points_in_the_paint || a.points_in_paint || 0;
-        quarterSection += '  ' + label + ': '
-          + 'Paint ' + hPaint + '-' + aPaint
-          + ', FTA ' + (h.free_throws_att||0) + '-' + (a.free_throws_att||0)
-          + ', 3P ' + (h.three_points_made||0) + '/' + (h.three_points_att||0) + '-' + (a.three_points_made||0) + '/' + (a.three_points_att||0)
-          + ', AST ' + (h.assists||0) + '-' + (a.assists||0)
-          + ', TO ' + (h.turnovers||h.total_turnovers||0) + '-' + (a.turnovers||a.total_turnovers||0)
-          + ', STL ' + (h.steals||0) + '-' + (a.steals||0)
-          + (h.possessions ? ', Poss ' + (h.possessions||0) + '-' + (a.possessions||0) : '')
-          + ' (' + hAlias + '-' + aAlias + ')\n';
+        quarterSection += '  ' + label + ' (' + hAlias + ' vs ' + aAlias + '):'
+          + ' Paint ' + hAlias + ':' + hPaint + ' ' + aAlias + ':' + aPaint
+          + ' | FTA ' + hAlias + ':' + (h.free_throws_att||0) + ' ' + aAlias + ':' + (a.free_throws_att||0)
+          + ' | 3P ' + hAlias + ':' + (h.three_points_made||0) + '/' + (h.three_points_att||0) + ' ' + aAlias + ':' + (a.three_points_made||0) + '/' + (a.three_points_att||0)
+          + ' | AST ' + hAlias + ':' + (h.assists||0) + ' ' + aAlias + ':' + (a.assists||0)
+          + ' | TO ' + hAlias + ':' + (h.turnovers||h.total_turnovers||0) + ' ' + aAlias + ':' + (a.turnovers||a.total_turnovers||0)
+          + ' | STL ' + hAlias + ':' + (h.steals||0) + ' ' + aAlias + ':' + (a.steals||0)
+          + (h.possessions ? ' | Poss ' + hAlias + ':' + (h.possessions||0) + ' ' + aAlias + ':' + (a.possessions||0) : '')
+          + '\n';
       });
     }
 
