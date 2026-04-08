@@ -1157,11 +1157,14 @@ exports.handler = async (event) => {
           ORDER BY a.ts DESC LIMIT ${limit}`;
       }
 
-      // Compute accuracy: did the control team win?
-      const alerts = rows.map(r => ({
-        ...r,
-        correct: r.winner ? r.winner === r.control_team : null,
-      }));
+      // Compute accuracy: did the alert's prediction come true?
+      // BUY/WB/RP/BWC: control team should WIN → correct = winner === control_team
+      // LEAD CRUMBLING/LEAD LOST: warns lead is failing → correct = control team LOST
+      const alerts = rows.map(r => {
+        if (!r.winner) return { ...r, correct: null };
+        var inverted = r.alert_type === 'LEAD CRUMBLING' || r.alert_type === 'LEAD LOST';
+        return { ...r, correct: inverted ? r.winner !== r.control_team : r.winner === r.control_team };
+      });
       const total = alerts.length;
       const resolved = alerts.filter(a => a.correct !== null);
       const correct = resolved.filter(a => a.correct).length;
