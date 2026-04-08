@@ -10816,65 +10816,19 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!paused)r
 // ══════════════════════════════════════════════════════════════════════════════
 // NTFY PUSH NOTIFICATIONS
 // ══════════════════════════════════════════════════════════════════════════════
-let ntfyTopic = localStorage.getItem('nba4:ntfy:topic') || '';
-let ntfyEnabled = !!ntfyTopic;
-let ntfyMinEdge = parseFloat(localStorage.getItem('nba4:ntfy:minEdge')) || 3.0;
-// Restore UI state
-if(ntfyEnabled){
-  setTimeout(()=>{
-    const btn = document.getElementById('btn-ntfy');
-    if(btn){ btn.style.color='var(--green)'; btn.style.borderColor='var(--green)'; }
-  }, 100);
-}
+// CLIENT ALERTS DISABLED — server poll-live-bdl.mjs handles all ntfy alerts
+// Subscribe to ntfy topic 'manny_nba_control' for server-driven alerts
+let ntfyTopic = '';
+let ntfyEnabled = false;
+let ntfyMinEdge = 3.0;
 
 function configNtfy(){
-  const current = ntfyTopic || '(not set)';
-  const topic = prompt('ntfy.sh topic name for push alerts:\n\nCurrent: ' + current + '\nMin edge: ' + ntfyMinEdge + '%\n\nEnter topic (or "off" to disable, "edge:X" to change min edge):', ntfyTopic);
-  if(topic === null) return; // cancelled
-  const trimmed = topic.trim();
-  if(trimmed.toLowerCase() === 'off' || trimmed === ''){
-    ntfyTopic = ''; ntfyEnabled = false;
-    localStorage.removeItem('nba4:ntfy:topic');
-    document.getElementById('btn-ntfy').style.color='var(--t3)';
-    document.getElementById('btn-ntfy').style.borderColor='var(--t3)';
-    alert('Alerts disabled.');
-    return;
-  }
-  if(trimmed.toLowerCase().startsWith('edge:')){
-    const val = parseFloat(trimmed.substring(5));
-    if(!isNaN(val) && val >= 0){
-      ntfyMinEdge = val;
-      localStorage.setItem('nba4:ntfy:minEdge', String(val));
-      alert('Min edge set to ' + val + '%');
-    }
-    return;
-  }
-  ntfyTopic = trimmed;
-  ntfyEnabled = true;
-  localStorage.setItem('nba4:ntfy:topic', trimmed);
-  document.getElementById('btn-ntfy').style.color='var(--green)';
-  document.getElementById('btn-ntfy').style.borderColor='var(--green)';
-  // Send test notification
-  sendNtfyRaw('NBA Control — alerts active', 'Topic: ' + trimmed + ' | Min edge: ' + ntfyMinEdge + '%', 2);
-  alert('Alerts enabled! Check your ntfy app for a test notification.\n\nTopic: ' + trimmed + '\nMin edge: ' + ntfyMinEdge + '%');
+  alert('Alerts are now server-managed.\n\nSubscribe to ntfy topic: manny_nba_control\n\nThe server polls every 10s and sends BUY, BWC, WINDOW BUY, RECOVERY PATH, LEAD CRUMBLING, and LEAD LOST alerts automatically.');
 }
 
 function sendNtfyRaw(title, body, priority){
-  if(!ntfyTopic) return;
-  fetch('https://ntfy.sh', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      topic: ntfyTopic,
-      title: title,
-      message: body,
-      priority: priority || 3,
-      tags: ['basketball'],
-    }),
-  }).then(function(r){
-    if(!r.ok) console.warn('ntfy response:', r.status);
-    else console.log('ntfy sent OK');
-  }).catch(function(e){ console.warn('ntfy send failed:', e.message); });
+  // CLIENT ALERTS DISABLED — server poll-live-bdl.mjs handles all ntfy alerts
+  return;
 }
 
 function checkNtfyAlert(game, decision){
