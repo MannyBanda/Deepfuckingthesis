@@ -4018,7 +4018,15 @@ export default async function(req) {
               const inRange = ctrlMargin >= -15 && ctrlMargin <= 5;
               const floorBaseline = ind.score >= 0.45;
               const sustGood = ctrlSust === 'LOCKED IN' || ctrlSust === 'DURABLE';
-              if (inRange && floorBaseline && sustGood) {
+              // Clock gate: suppress WB with < 1 min left in game (unbettable)
+              const wbClockParts = clock.replace(/^[A-Za-z]+\s*/, '').split(':');
+              const wbPeriodMins = league === 'ncaamb' ? 20 : 12;
+              const wbClockMins = wbClockParts.length === 2 ? (parseInt(wbClockParts[0]) || 0) + ((parseInt(wbClockParts[1]) || 0) / 60) : wbPeriodMins;
+              const wbTotalPeriods = league === 'ncaamb' ? 2 : 4;
+              const wbMinsLeft = wbClockMins + (Math.max(0, wbTotalPeriods - currentPeriod) * wbPeriodMins);
+              const wbClockOk = wbMinsLeft >= 1.0;
+              if (!wbClockOk && inRange && floorBaseline && sustGood) log(`${matchup}: WINDOW BUY suppressed — ${wbMinsLeft.toFixed(1)} min left (< 1 min clock gate)`);
+              if (inRange && floorBaseline && sustGood && wbClockOk) {
                 try {
                   const wbQd = await readQuarterData(sql, game.id);
                   const wbWindow = computeServerWindow(wbQd, currentPeriod, clock, summary, hA, aA, league);
