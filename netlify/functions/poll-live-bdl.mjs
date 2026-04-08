@@ -3912,7 +3912,6 @@ export default async function(req) {
 
           // ── LIGHTWEIGHT ENTRY SIGNAL CHECK (every cycle, no Sonnet needed) ──
           // BUY:  floor ≥ 0.65, trailing 1-15, Q2+, throughput not UNLIKELY/NO PATH
-          // LEAN: floor ≥ 0.60, trailing 1-15, opp FRAGILE/UNSUSTAINABLE, Q2+, throughput not UNLIKELY/NO PATH
           // BWC:  floor ≥ 0.60, leading 2+, Q2+, edge > 0, lead safety not AT RISK/CRITICAL
           {
             const ctrlSide = ind.controlTeam === hA ? 'home' : 'away';
@@ -3950,7 +3949,7 @@ export default async function(req) {
               lsForBWC = computeLeadSafetyServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat);
             }
 
-            // Compute throughput for BUY/LEAN gate — is the deficit recoverable?
+            // Compute throughput for BUY gate — is the deficit recoverable?
             let tpForBuy = null;
             if (ctrlTrailing && margin >= 1) {
               try { tpForBuy = computeThroughputServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat); }
@@ -3987,17 +3986,6 @@ export default async function(req) {
                 alertType = 'BUY';
                 alertEmoji = '🟢';
                 alertPriority = 5;
-              }
-            } else if (ind.score >= 0.60 && ctrlTrailing && margin >= 1 && margin <= 15 && oppFragile && currentPeriod >= 2) {
-              const tpClass = tpForBuy?.classification || null;
-              if (!tpForBuy) {
-                log(`${matchup}: LEAN BUY suppressed — throughput computation failed/null (fail-closed)`);
-              } else if (tpClass === 'UNLIKELY' || tpClass === 'NO PATH') {
-                log(`${matchup}: LEAN BUY suppressed — throughput ${tpClass} (exp swing ${Math.round(tpForBuy.expected.totalSwing)} vs deficit ${margin})`);
-              } else {
-                alertType = 'LEAN BUY';
-                alertEmoji = '🟡';
-                alertPriority = 4;
               }
             } else if (ind.score >= 0.60 && ctrlLeading && margin >= 2 && currentPeriod >= 2) {
               // BWC with edge gate (matches client synthesizer)
@@ -4110,17 +4098,6 @@ export default async function(req) {
                     + (tpForBuy ? `\nMath projects a ${fmtSwing(tpForBuy.expected.totalSwing)}-point swing with ${tpForBuy.remainingPoss} possessions left` : '')
                     + (ctrlEdge != null ? `\nEdge: ${ctrlEdge > 0 ? '+' : ''}${ctrlEdge}% over market` : '')
                     + sustExplain
-                    + calWarn + vtWarn
-                    + (spreadVal != null ? `\nSpread: ${spreadVal}` : '');
-
-                } else if (alertType === 'LEAN BUY') {
-                  const mlStr = ctrlML ? `${ind.controlTeam} ML ${ctrlML}` : ind.controlTeam;
-                  ntfyTitle = `LEAN BUY ${mlStr}`;
-                  ntfyBody = scoreLine
-                    + `\n${ind.controlTeam} trails by ${margin} with emerging structural control (${ind.score.toFixed(2)})`
-                    + `\n${oppAlias}'s lead is built on fragile shooting`
-                    + (tpForBuy ? `\nComeback math: ${fmtSwing(tpForBuy.expected.totalSwing)}-point swing projected, ${tpForBuy.remainingPoss} possessions left` : '')
-                    + (ctrlEdge != null ? `\nEdge: ${ctrlEdge > 0 ? '+' : ''}${ctrlEdge}% over market` : '')
                     + calWarn + vtWarn
                     + (spreadVal != null ? `\nSpread: ${spreadVal}` : '');
 
