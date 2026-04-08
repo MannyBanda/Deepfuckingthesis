@@ -4150,9 +4150,10 @@ export default async function(req) {
                 }
 
                 await sendNtfy(ntfyTitle, ntfyBody, alertPriority);
+                const tpRatio = tpForBuy?.conservative?.ratio ?? null;
                 try {
-                  await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score)
-                    VALUES (${game.id}, ${league}, ${alertType}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal}, ${tpForBuy?.classification || null}, ${lsForBWC?.classification || null}, ${ctrlSust}, ${oppSustTier}, ${wbWindowScore})`;
+                  await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, tp_ratio)
+                    VALUES (${game.id}, ${league}, ${alertType}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal}, ${tpForBuy?.classification || null}, ${lsForBWC?.classification || null}, ${ctrlSust}, ${oppSustTier}, ${wbWindowScore}, ${tpRatio})`;
                 } catch (e) { log(`${matchup}: alert save failed: ${e.message}`); }
                 log(`${matchup}: ${alertEmoji} ${alertType} PUSHED — ${ind.controlTeam} ${ind.score.toFixed(2)} ${ctrlTrailing ? 'trailing' : 'leading'} by ${margin}${ctrlEdge != null ? ', edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}${oppSustTier ? ', opp ' + oppSustTier : ''}`);
               }
@@ -4220,7 +4221,7 @@ export default async function(req) {
                         5
                       );
                       log(`${matchup}: RECOVERY PATH — TP ${tpClass}, floor ${ind.score.toFixed(2)}, trailing ${marginT}, ML ${rpML}${rpEdge != null ? ', edge ' + rpEdge + '%' : ''}`);
-                      try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, tp_class, ls_class, ctrl_sust, opp_sust) VALUES (${game.id}, ${league}, ${'RECOVERY PATH'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${true}, ${rpEdge}, ${rpML ? parseInt(rpML) : null}, ${tpClass}, ${lsClass}, ${sust?.[ctrlIsHome ? 'home' : 'away']?.tier || null}, ${sust?.[ctrlIsHome ? 'away' : 'home']?.tier || null})`; } catch(e) {}
+                      try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, tp_class, ls_class, ctrl_sust, opp_sust, tp_ratio) VALUES (${game.id}, ${league}, ${'RECOVERY PATH'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${true}, ${rpEdge}, ${rpML ? parseInt(rpML) : null}, ${tpClass}, ${lsClass}, ${sust?.[ctrlIsHome ? 'home' : 'away']?.tier || null}, ${sust?.[ctrlIsHome ? 'away' : 'home']?.tier || null}, ${tp?.conservative?.ratio ?? null})`; } catch(e) {}
                     }
                   } else {
                     log(`${matchup}: RECOVERY PATH skipped — ML gate (ML ${rpML}, edge ${rpEdge}%)`);
