@@ -67,7 +67,8 @@ const SONNET_SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing r
 + '   - PERSONNEL AUDIT: What % of 3PM came from ELITE (38%+ season) vs NON-SHOOTERS (<33%)\n'
 + '   - BAYESIAN REGRESSION: Sample-size-aware posterior expected 3PT% and regression probability\n'
 + '   - SHOT TYPE: Assist ratio proxy — catch-and-shoot (durable) vs pull-up/isolation (fragile)\n'
-+ '   - COMPOSITE TIER: LOCKED IN / DURABLE / MIXED / FRAGILE / UNSUSTAINABLE\n\n'
++ '   - COMPOSITE TIER: LOCKED IN / COLD / DURABLE / MIXED / FRAGILE / UNSUSTAINABLE\n'
++ '   - COLD = at/below 3PT baseline BUT also converting poorly from 2PT (below league avg). Whole offense is broken, not just 3PT variance. Regression upward is unreliable — do NOT project shooting improvement.\n\n'
 + '2. LEAD COMPOSITION (both teams):\n'
 + '   - Structural points (Paint + FT) vs Variance points (3PT + Mid-range)\n'
 + '   - MARGIN DURABILITY: is the lead structurally sourced, variance sourced, or mixed\n\n'
@@ -1425,6 +1426,16 @@ function computeSustainability(summary) {
       tier = 'LOCKED IN';
       regressionGrade = 'MINIMAL';
       personnelGrade = 'N/A (at baseline)';
+    }
+    // COLD: at/below 3PT baseline but can't convert from 2 either
+    // Regression is unreliable when the whole offense is broken
+    if (tier === 'LOCKED IN') {
+      var fg2m = (stats.field_goals_made || 0) - team3PM;
+      var fg2a = teamFGA - team3PA;
+      var twoPointBase = seasonPrior3Pct < 34 ? 0.49 : 0.52;
+      if (fg2a >= 6 && fg2m / fg2a < twoPointBase) {
+        tier = 'COLD';
+      }
     }
     // Override: too few attempts
     if (team3PA < 5) tier = 'TOO EARLY';
