@@ -58,7 +58,7 @@ const SONNET_SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing r
 + 'FIVE INDICATORS (score each 0.00-1.00 for the controlling team):\n'
 + 'I1 Possession & Transition (25%): TO margin, steals, OREBs, fast break pts, pts off TOs, second chance pts\n'
 + 'I2 Rim Pressure & Foul (25%): Paint points, at-rim FG, FTA, blocks, fouls, bonus status\n'
-+ 'I3 Shot Quality & Creation (20%): eFG%, assist ratio (65%+ sustainable, <50% isolation-dependent), catch-and-shoot 3PM comparison, shot diet\n'
++ 'I3 Shot Quality & Creation (20%): eFG%, assist ratio (65%+ sustainable, <50% isolation-dependent), shot diet\n'
 + 'I4 Lineup Integrity (20%): Biggest lead, bench contribution, which lineups producing, plus/minus\n'
 + 'I5 Tempo & Efficiency (10%): Possessions, pts/possession differential, pace control\n\n'
 + 'CONTROL: 0.90+ DOMINANT | 0.75-0.89 STRONG | 0.60-0.74 EARNED | 0.45-0.59 NO EDGE | <0.45 WAIT\n\n'
@@ -80,47 +80,106 @@ const SONNET_SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing r
 + '     include these enhancements. Only diverge from dashboard scores with stated reasoning.\n\n'
 + '4. ROLLING WINDOW (cross-fade, activates Q2+):\n'
 + '   - I1-I5 scored on a sliding ~2-quarter window with cross-fade weighting\n'
++ '   - The oldest quarter fades out as the current quarter builds in (e.g. Q4: Q2 fading + Q3 anchor + Q4 live)\n'
 + '   - This is "who is controlling the game RIGHT NOW" — never stale\n\n'
 + '5. GAP ACCELERATION (when window available):\n'
 + '   - Gap = window score minus floor score. Positive = window stronger than cumulative (edge compounding)\n'
-+ '   - Classification: GROWING | DECLINING | STABLE | FLIPPED | TOO EARLY\n\n'
++ '   - Tracked across check-ins. Classification:\n'
++ '     GROWING = gap widening (edge compounding) | DECLINING = gap narrowing (edge fading)\n'
++ '     STABLE = no clear trend | FLIPPED = control changing hands | TOO EARLY = insufficient data\n\n'
 + '6. DIRECTIONAL ARROWS (both teams, per quarter):\n'
-+ '   - Raw sub-metric trends: I2 (Paint, At-rim, FTA), I1 (Steals, TOs), I3 (3PA share, Assist ratio), I5 (Possessions)\n'
-+ '   - ADJUSTMENT SIGNAL: INTERIOR PIVOT | STRUCTURAL EROSION | VARIANCE SHIFT | STRUCTURAL ACCEL\n\n'
-+ '7. EVENT FLAGS (player-level): Trag1 Role Player Heater, Trag2 Star Process, Trag3 Foul Gate, Trag4 Closing Lineup\n\n'
-+ '8. DEPTH AUDIT (PBP): 3PT assisted/unassisted, forced/unforced TOs, shot zones, scoring runs\n\n'
++ '   - Raw sub-metric trends across completed quarters, grouped by indicator:\n'
++ '     I2: Paint pts, At-rim att, FTA | I1: Steals, TOs committed | I3: 3PA share, Assist ratio | I5: Possessions\n'
++ '   - Each metric: RISING (▲), FALLING (▼), or FLAT (▬) with per-quarter values\n'
++ '   - ADJUSTMENT SIGNAL derived from arrow pattern:\n'
++ '     INTERIOR PIVOT = structural arrows rising + variance falling (team adjusting toward rim)\n'
++ '     STRUCTURAL EROSION = structural arrows falling (interior game fading)\n'
++ '     VARIANCE SHIFT = moving toward perimeter (less durable production)\n'
++ '     STRUCTURAL ACCEL = multiple structural inputs compounding\n\n'
++ '7. EVENT FLAGS (player-level, not absorbed by indicator math):\n'
++ '   - Trag1 (Role Player Heater): non-star shooting far above season norms — variance signal\n'
++ '   - Trag2 (Star Process): star cold but process intact/declining — forward regression read\n'
++ '   - Trag3 (Foul Gate): key player in foul trouble — forward indicator degradation\n'
++ '   - Trag4 (Closing Lineup): who is on the floor generating the current read\n\n'
++ '8. DEPTH AUDIT (PBP, when available): 3PT assisted/unassisted, forced/unforced TOs, shot zones, scoring runs\n\n'
 + 'DATA QUALITY NOTE — PAINT POINTS:\n'
-+ '   Use DEPTH AUDIT rim section as AUTHORITATIVE paint signal. Lead composition has at-rim fallback.\n'
-+ '   Only trust raw JSON points_in_the_paint when non-zero.\n\n'
++ '   SR often delays or zeros out `points_in_the_paint` in the game summary JSON.\n'
++ '   When you see 0 paint points in the JSON, DO NOT conclude paint data is missing.\n'
++ '   Use these as the AUTHORITATIVE paint/rim signal (in priority order):\n'
++ '   1. DEPTH AUDIT rim section (AT-RIM made/att per team) — most reliable\n'
++ '   2. LEAD COMPOSITION structural points — pre-computed with at-rim proxy fallback\n'
++ '   3. Raw JSON `points_in_the_paint` — only trust when non-zero\n'
++ '   A team shooting 78% at the rim on 19 attempts is dominating I2 regardless of what the JSON paint field says.\n\n'
 + '9. BONUS STATUS RULE:\n'
-+ '   - "TeamX IN BONUS" = BENEFITS TeamX. PENALIZES opponent. PURE UPSIDE.\n'
-+ '   - Before 4:00 mark = STRUCTURAL I2 MULTIPLIER. Both in bonus = NEUTRALIZED.\n\n'
++ '   - "TeamX IN BONUS" means TeamX BENEFITS — they get free throws on every foul. This is PURE UPSIDE for TeamX.\n'
++ '   - The OPPONENT is penalized: they cannot play physical defense, their players risk fouling out, their interior defense is compromised.\n'
++ '   - The bonus is NEVER a "trap" or disadvantage for the team that has it. Do not describe it as risky for the team in the bonus.\n'
++ '   - When ONE team is in the bonus before the 4:00 mark of any quarter, treat as STRUCTURAL I2 MULTIPLIER.\n'
++ '     Every drive and paint touch generates free throws. This compounds every possession and cannot be undone.\n'
++ '     Elevate I2 weight and factor this into FWP — the team in the bonus has guaranteed foul leverage.\n'
++ '   - When BOTH teams are in the bonus, the advantage NEUTRALIZES — both sides benefit equally from foul calls.\n'
++ '   - This is especially critical in Q4 where foul leverage directly impacts closing possessions.\n\n'
 + '10. TEAM WP IDENTITY PROFILES (when provided):\n'
-+ '   - COMEBACK, FRONTRUNNER, VOLATILE, CLOSER, STEADY — modifies FWP and conviction, not indicators.\n\n'
-+ 'HOW TO USE LAYERS TOGETHER:\n'
-+ '   FLOOR = "who should win." WINDOW = "who is winning now." GAP = "compounding or fading."\n'
-+ '   ARROWS = HOW. FLAGS = WHY. SUSTAINABILITY + LEAD COMP = "is the scoreline real."\n\n'
-+ '   COMBINED READ: DOMINANT | STRONG | EMERGING | EARNED | ERODING | COLLAPSING | FADING | SHIFT | NO EDGE\n\n'
++ '   - Historical win probability curve analysis from last 20 games per team.\n'
++ '   - IDENTITY TYPES: COMEBACK (routinely recovers from large deficits), FRONTRUNNER (dominates from ahead, rarely collapses),\n'
++ '     VOLATILE (wild WP swings — capable of both comebacks and collapses), CLOSER (strong finishing),\n'
++ '     STEADY (consistent, predictable WP curves).\n'
++ '   - USE FOR FWP: A COMEBACK team trailing by 12 has higher FWP than a STEADY team in the same position.\n'
++ '     A FRONTRUNNER leading by 10 has higher FWP than a VOLATILE team with the same lead.\n'
++ '   - USE FOR ENTRY: A COMEBACK team trailing on variance is a STRONGER buy signal than their current score suggests.\n'
++ '     A team with high collapse rate protecting a variance-sourced lead is a WEAKER hold.\n'
++ '   - QUARTER SURGES: If a team\'s best surge quarter is Q3 and you\'re evaluating in Q2, factor in the likely Q3 push.\n'
++ '   - DO NOT override structural control reads with identity alone — identity modifies conviction and FWP, not indicators.\n\n'
++ 'HOW TO USE THE LAYERS TOGETHER:\n'
++ '   The STRUCTURAL FLOOR answers "who should win." The ROLLING WINDOW answers "who is winning now." The GAP answers "is the edge compounding or fading."\n'
++ '   The ARROWS show HOW — is the team adjusting its approach (interior pivot, variance shift).\n'
++ '   The EVENT FLAGS explain WHY — personnel events the math can\'t capture.\n'
++ '   SUSTAINABILITY + LEAD COMPOSITION answer "is the scoreline real."\n\n'
++ '   COMBINED READ (pre-computed from floor × window × acceleration):\n'
++ '   DOMINANT = floor 0.75+ / window 0.80+ / growing or stable\n'
++ '   STRONG = floor 0.75+ / window 0.75+\n'
++ '   EMERGING = floor 0.60-0.74 / window 0.75+ / growing\n'
++ '   EARNED = floor 0.60+ / window 0.60+\n'
++ '   ERODING = floor 0.75+ / window 0.60-0.74 / declining\n'
++ '   COLLAPSING = floor 0.75+ / window <0.60\n'
++ '   FADING = floor 0.60-0.74 / window <0.60\n'
++ '   SHIFT = floor and window disagree on control team\n'
++ '   NO EDGE = neither team has structural control\n\n'
 + 'ENTRY STRATEGY — FIND THE STRUCTURAL EDGE AT VALUE PRICE:\n'
 + '   Evaluate BOTH teams. Pre-game thesis is context, not permanent anchor.\n'
-+ '   Core strategy: buy structural control when trailing on variance.\n'
++ '   Core strategy: buy structural control when trailing on variance. Applies either direction.\n'
 + '   ENTRY SIGNALS:\n'
-+ '   OPTIMAL WINDOW = dominant + TRAILING + opponent FRAGILE/UNSUSTAINABLE + variance lead + gap GROWING\n'
-+ '   WINDOW OPEN = structural edge + trailing or at value + opponent MIXED\n'
-+ '   WINDOW CLOSING = structural team now LEADING + variance cooling\n'
++ '   OPTIMAL WINDOW = structurally dominant + TRAILING + opponent FRAGILE/UNSUSTAINABLE + variance-sourced lead + gap GROWING\n'
++ '   WINDOW OPEN = structural edge + trailing or at value + opponent MIXED sustainability\n'
++ '   WINDOW CLOSING = structural edge team now LEADING + variance cooling\n'
 + '   NO WINDOW = no structural edge, or dominant team at full price\n'
 + '   FADE = structural read says do not buy either team\n\n'
-+ '   CRITICAL: A team leading AND priced beyond -400 ML has NO VALUE.\n\n'
-+ '   SUSTAINABILITY CHECK: Before signaling BUY, check the structural team\'s own sustainability.\n'
-+ '   If FRAGILE/UNSUSTAINABLE, downgrade to CAUTION/CONDITIONAL. Exception: 0.85+ driven by I1+I2.\n\n'
-+ '   ATTRIBUTION CHECK: The team you call unsustainable must match the UNSUSTAINABLE/FRAGILE tier.\n\n'
++ '   CRITICAL: A team leading AND priced beyond -400 ML has NO VALUE regardless of structural control.\n\n'
++ '   STRUCTURAL TEAM SUSTAINABILITY CHECK:\n'
++ '   Before signaling BUY, check the sustainability tier of the team you are recommending.\n'
++ '   If the structural control team\'s own 3PT sustainability is FRAGILE or UNSUSTAINABLE, downgrade:\n'
++ '   - BUY with DOMINANT/STRONG conviction → CAUTION (CONDITIONAL conviction)\n'
++ '   - The structural edge (I1+I2) is real, but fragile shooting undermines closing ability\n'
++ '   - Exception: if control is 0.85+ AND driven entirely by I1+I2 (paint/FT/TO), shooting fragility is less material\n'
++ '   This prevents recommending a team whose own production is at risk of regressing.\n\n'
++ '   SUSTAINABILITY ATTRIBUTION CHECK:\n'
++ '   In the SIGNAL line, verify which team\'s sustainability you reference matches the tiers above.\n'
++ '   If TeamA is UNSUSTAINABLE and TeamB is LOCKED IN, do NOT say "unsustainable TeamB variance."\n'
++ '   The UNSUSTAINABLE label belongs to the team whose shooting is above baseline, not the LOCKED IN team.\n'
++ '   Cross-check before outputting: the team you call unsustainable must match the UNSUSTAINABLE/FRAGILE tier.\n\n'
 + 'FWP (Framework Win Probability) IS GAME-STATE-AWARE:\n'
 + '   FWP = probability of WINNING given score, time, AND structural control. NOT the control score.\n'
 + '   Factor in: score margin, quarter, time remaining, combined read trajectory. BE ACCURATE.\n'
 + '   OUTPUT BOTH TEAMS with alias labels. The two values must sum to ~100%.\n'
 + '   Example: FWP: MEM 72% / LAC 28%\n'
-+ '   COHERENCE: If you signal BUY TeamB, TeamB FWP MUST be > 50%.\n\n'
-+ 'CONVICTION: DOMINANT | STRONG | EARNED | CONDITIONAL | NO ENTRY\n'
++ '   FWP reflects who you predict WINS — not who is currently ahead. A team trailing by 6 on unsustainable variance can have higher FWP than the leader.\n'
++ '   COHERENCE: If you signal BUY TeamB, TeamB FWP MUST be > 50%. If you signal PASS, FWP still reflects your honest win probability assessment.\n\n'
++ 'CONVICTION GUIDELINES:\n'
++ '  DOMINANT = control 0.85+ driven by I1+I2, opponent unsustainable, gap GROWING\n'
++ '  STRONG = control 0.70+, lead composition supports read, gap STABLE or GROWING\n'
++ '  EARNED = control 0.60+ with edge, may have mixed sustainability\n'
++ '  CONDITIONAL = edge exists but gap DECLINING, sustainability concerns, or lead composition tension\n'
++ '  NO ENTRY = no structural edge for either team, or no value at current price\n'
 + '  State which indicators drive your score. I1+I2 (50% weight) warrants higher conviction than I4+I5 (30%).\n\n'
 + 'OUTPUT FORMAT (follow exactly):\n\n'
 + 'DECISION:\n'
@@ -151,7 +210,6 @@ const SONNET_SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing r
 + 'FLIPPED = thesis was wrong AND the other team has emerged as the structural edge with a valid entry.\n'
 + 'DIVERGENCE NOTES: [where your scores differ from dashboard and why]\n\n'
 + 'Be concise. 1 line per indicator. Decisive when clear. Passing is correct when it is not.';
-
 // ── HELPERS ─────────────────────────────────────────────────────────────────
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -2562,13 +2620,12 @@ function getCalibrationWarning(calLookup, teamAlias, floorScore, isTrailing) {
 function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, calibrationNote, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary, teamCalibration }) {
   let p = `${aA} @ ${hA} | Q${period} ${clock} | ${score}\n\n`;
 
-  // Thesis + calibration
+  // Thesis
   if (thesis) p += `THESIS:\n${thesis}\n`;
-  if (calibrationNote) p += `${calibrationNote}\n`;
   p += '\n';
 
-  // Team calibration (per-team floor accuracy from Q2+Q3 data)
-  if (teamCalibration) p += teamCalibration;
+  // Team calibration DISABLED — re-accumulating clean data after server-client parity fix
+  // if (teamCalibration) p += teamCalibration;
 
   // Game meta
   if (ctx?.gameMeta) {
@@ -2996,8 +3053,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
     const ctx = clientCtx || {};
     const layerInventory = [
       thesis ? 'thesis' : null,
-      calibrationNote ? 'calibration' : null,
-      teamCalibration ? 'teamCal' : null,
+      // calibration + teamCal DISABLED — re-accumulating after parity fix
       sust ? 'sust' : null,
       leadComp ? 'leadComp' : null,
       ind ? 'ind' : null,
@@ -3999,7 +4055,7 @@ export default async function(req) {
                 cacheUpdated = true;
                 const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
                 const oppAlias = ctrlIsHome ? aA : hA;
-                const calWarn = getCalibrationWarning(calLookup, ind.controlTeam, ind.score, ctrlTrailing);
+                const calWarn = ''; // DISABLED — re-accumulating clean data after server-client parity fix
                 const oppVT = gameVolumeThreat ? (ctrlIsHome ? gameVolumeThreat.away : gameVolumeThreat.home) : null;
                 const vtWarn = oppVT?.active ? `\n⚠️ ${oppAlias} on pace for ${oppVT.projected3PA} threes at ${oppVT.live3Pct}% — volume threat` : '';
 
