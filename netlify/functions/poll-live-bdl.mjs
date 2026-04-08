@@ -1593,8 +1593,22 @@ function computeSwingCoreServer(focalStats, targetStats, focalSustData, targetSu
     var scp = Number(st.second_chance_points || st.second_chance_pts) || 0;
     return (paint + ft + pot + scp) / poss;
   }
-  var focalStructRate = structRate(focalStats, focalPoss) + (focalVTBonus || 0);
-  var targetStructRate = structRate(targetStats, targetPoss) + (targetVTBonus || 0);
+  // 2PT quality factor: discount structRate when team converts poorly from 2
+  // Teams below league-avg 2PT% are generating structural points through volume/hustle
+  // rather than efficient conversion. Floor at 0.75 prevents overcorrection.
+  var twoPointBaseline = sznDefault <= 34 ? 0.49 : 0.52; // NCAAMB ~49%, NBA ~52%
+  function qualityFactor(st) {
+    var fgm = Number(st.field_goals_made) || 0;
+    var fga = Number(st.field_goals_att) || 0;
+    var fg3m = Number(st.three_points_made) || 0;
+    var fg3a = Number(st.three_points_att) || 0;
+    var fg2m = fgm - fg3m;
+    var fg2a = fga - fg3a;
+    if (fg2a < 6) return 1.0; // not enough data to judge conversion quality
+    return Math.max(0.75, Math.min(1.0, (fg2m / fg2a) / twoPointBaseline));
+  }
+  var focalStructRate = structRate(focalStats, focalPoss) * qualityFactor(focalStats) + (focalVTBonus || 0);
+  var targetStructRate = structRate(targetStats, targetPoss) * qualityFactor(targetStats) + (targetVTBonus || 0);
   var structEdge = focalStructRate - targetStructRate;
 
   function getVarData(sustObj, stats, poss) {
