@@ -3975,7 +3975,19 @@ export default async function(req) {
 
             let alertType = null, alertEmoji = '', alertPriority = 4;
 
-            if (ind.score >= 0.65 && ctrlTrailing && margin >= 1 && margin <= 15 && currentPeriod >= 2) {
+            // Shared clock computation for alert time gates
+            const alertClockParts = clock.replace(/^[A-Za-z]+\s*/, '').split(':');
+            const alertPeriodMins = league === 'ncaamb' ? 20 : 12;
+            const alertClockMins = alertClockParts.length === 2 ? (parseInt(alertClockParts[0]) || 0) + ((parseInt(alertClockParts[1]) || 0) / 60) : alertPeriodMins;
+            const alertTotalPeriods = league === 'ncaamb' ? 2 : 4;
+            const alertMinsLeft = alertClockMins + (Math.max(0, alertTotalPeriods - currentPeriod) * alertPeriodMins);
+
+            // Log clock gate suppression for BUY
+            if (ind.score >= 0.65 && ctrlTrailing && margin >= 1 && margin <= 15 && currentPeriod >= 2 && alertMinsLeft < 1.0) {
+              log(`${matchup}: BUY suppressed — ${alertMinsLeft.toFixed(1)} min left (< 1 min clock gate)`);
+            }
+
+            if (ind.score >= 0.65 && ctrlTrailing && margin >= 1 && margin <= 15 && currentPeriod >= 2 && alertMinsLeft >= 1.0) {
               // Throughput gate (fail-closed): suppress if no path OR computation failed
               const tpClass = tpForBuy?.classification || null;
               if (!tpForBuy) {
@@ -4018,15 +4030,9 @@ export default async function(req) {
               const inRange = ctrlMargin >= -15 && ctrlMargin <= 5;
               const floorBaseline = ind.score >= 0.45;
               const sustGood = ctrlSust === 'LOCKED IN' || ctrlSust === 'DURABLE';
-              // Clock gate: suppress WB with < 1 min left in game (unbettable)
-              const wbClockParts = clock.replace(/^[A-Za-z]+\s*/, '').split(':');
-              const wbPeriodMins = league === 'ncaamb' ? 20 : 12;
-              const wbClockMins = wbClockParts.length === 2 ? (parseInt(wbClockParts[0]) || 0) + ((parseInt(wbClockParts[1]) || 0) / 60) : wbPeriodMins;
-              const wbTotalPeriods = league === 'ncaamb' ? 2 : 4;
-              const wbMinsLeft = wbClockMins + (Math.max(0, wbTotalPeriods - currentPeriod) * wbPeriodMins);
-              const wbClockOk = wbMinsLeft >= 1.0;
-              if (!wbClockOk && inRange && floorBaseline && sustGood) log(`${matchup}: WINDOW BUY suppressed — ${wbMinsLeft.toFixed(1)} min left (< 1 min clock gate)`);
-              if (inRange && floorBaseline && sustGood && wbClockOk) {
+              // Clock gate: suppress WB with < 1 min left in game (unbettable) — uses shared alertMinsLeft
+              if (alertMinsLeft < 1.0 && inRange && floorBaseline && sustGood) log(`${matchup}: WINDOW BUY suppressed — ${alertMinsLeft.toFixed(1)} min left (< 1 min clock gate)`);
+              if (inRange && floorBaseline && sustGood && alertMinsLeft >= 1.0) {
                 try {
                   const wbQd = await readQuarterData(sql, game.id);
                   const wbWindow = computeServerWindow(wbQd, currentPeriod, clock, summary, hA, aA, league);
@@ -4182,8 +4188,8 @@ export default async function(req) {
               const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA}`;
 
               // ALERT 1: RECOVERY PATH (state alert — no transition required)
-              // Gate: TP strong + floor ≥ 0.30 + trailing 1-15 + ML > -250 OR edge > 10%
-              if (oppPtsT > ctrlPtsT && marginT >= 1 && marginT <= 15 && ind.score >= 0.30) {
+              // Gate: TP strong + floor ≥ 0.30 + trailing 1-15 + ML > -250 OR edge > 10% + clock > 1 min
+              if (oppPtsT > ctrlPtsT && marginT >= 1 && marginT <= 15 && ind.score >= 0.30 && alertMinsLeft >= 1.0) {
                 const tpStrong = tpClass === 'STRONG RECOVERY' || tpClass === 'PROBABLE';
                 if (tpStrong) {
                   // ML / edge gate: only alert when there's actionable value
