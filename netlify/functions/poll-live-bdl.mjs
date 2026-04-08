@@ -4215,8 +4215,9 @@ export default async function(req) {
               }
 
               // ALERT 2: LEAD CRUMBLING (state alert) / LEAD LOST (transition)
-              // LEAD CRUMBLING: leading + LS vulnerable + floor ≥ 0.55 — no transition required
-              if (ctrlPtsT > oppPtsT && (lsClass === 'AT RISK' || lsClass === 'CRITICAL') && ind.score >= 0.55) {
+              // LEAD CRUMBLING: leading 5+ pts + LS vulnerable + floor >= 0.55
+              // Leads < 5 fluctuate naturally — only alert when a meaningful lead is structurally threatened
+              if (ctrlPtsT > oppPtsT && marginT >= 5 && (lsClass === 'AT RISK' || lsClass === 'CRITICAL') && ind.score >= 0.55) {
                 const lsAlertKey = `${game.id}_LS_CRUMBLE_Q${currentPeriod}`;
                 if (!game._lastLsAlert || game._lastLsAlert !== lsAlertKey) {
                   game._lastLsAlert = lsAlertKey;
