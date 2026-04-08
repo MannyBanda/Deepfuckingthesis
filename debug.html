@@ -121,6 +121,30 @@ select{background:#1e293b;color:#e0e0e0;border:1px solid #334155;border-radius:6
 </div>
 <div id="qa-results" style="display:none"></div>
 
+<!-- ═══ 6. ALERT ACCURACY ═══ -->
+<div class="section-label">ALERT ACCURACY</div>
+<div class="section-card">
+  <div class="btn-row">
+    <button onclick="viewAlerts()" style="color:#ff5252;font-weight:700;font-size:13px;padding:10px 18px">🎯 ALL ALERTS</button>
+    <button onclick="viewAlerts('BUY')" style="color:#00ff88">BUY</button>
+    <button onclick="viewAlerts('LEAN BUY')" style="color:#ffd166">LEAN</button>
+    <button onclick="viewAlerts('BUY WINDOW CLOSING')" style="color:#60a5fa">BWC</button>
+    <button onclick="viewAlerts('WINDOW BUY')" style="color:#a78bfa">W.BUY</button>
+  </div>
+  <div class="btn-row">
+    <button onclick="viewAlerts('RECOVERY PATH')" style="color:#38bdf8">RECOVERY</button>
+    <button onclick="viewAlerts('LEAD CRUMBLING')" style="color:#f472b6">CRUMBLING</button>
+    <button onclick="viewAlerts('LEAD LOST')" style="color:#ff5252">LOST</button>
+    <button onclick="viewAlerts('VARIANCE BREAKING')" style="color:#fbbf24">VARIANCE</button>
+  </div>
+  <div style="margin-top:6px">
+    <input id="alert-date" type="date" style="background:#1e293b;color:#e0e0e0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:12px;width:auto;margin:0 4px 0 0">
+    <button onclick="viewAlertsByDate()" style="color:#94a3b8">📅 By Date</button>
+    <button onclick="document.getElementById('alert-date').value='';viewAlerts()" style="color:#64748b">✕ Clear</button>
+  </div>
+</div>
+<div id="alert-results" style="display:none"></div>
+
 <div id="stats" class="card" style="display:none"></div>
 <div id="content"></div>
 
@@ -155,6 +179,145 @@ var gameSelectEl = document.getElementById('game-select');
 var gameCountEl = document.getElementById('game-count');
 var allGames = []; // cached list from DB
 var qaLeague = 'nba'; // set by loadGames, used by QA suite
+var alertResultsEl = document.getElementById('alert-results');
+
+// ═══ ALERT ACCURACY ═══
+function viewAlertsByDate() {
+  var dt = document.getElementById('alert-date').value;
+  if (!dt) { log('Select a date first', 'log-warn'); return; }
+  viewAlerts(null, dt);
+}
+
+async function viewAlerts(type, date) {
+  log('Fetching alerts…', 'log-info');
+  alertResultsEl.style.display = 'block';
+  alertResultsEl.innerHTML = '<div class="card" style="color:#64748b;font-size:11px">Loading…</div>';
+  try {
+    var url = FN + 'db-api?action=get_alerts&league=' + qaLeague + '&limit=200';
+    if (type) url += '&type=' + encodeURIComponent(type);
+    if (date) url += '&date=' + encodeURIComponent(date);
+    var resp = await fetch(url);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    var data = await resp.json();
+    var alerts = data.alerts || [];
+    var summary = data.summary || {};
+    log('Alerts: ' + alerts.length + ' | Resolved: ' + summary.resolved + ' | Correct: ' + summary.correct + ' (' + summary.accuracy + '%)', summary.accuracy >= 75 ? 'log-ok' : summary.accuracy >= 50 ? 'log-warn' : 'log-err');
+    renderAlerts(alerts, summary, type, date);
+  } catch (e) {
+    log('Alert fetch failed: ' + e.message, 'log-err');
+    alertResultsEl.innerHTML = '<div class="card" style="color:#ff5252;font-size:11px">Error: ' + e.message + '</div>';
+  }
+}
+
+function renderAlerts(alerts, summary, filterType, filterDate) {
+  if (!alerts.length) {
+    alertResultsEl.innerHTML = '<div class="card" style="color:#64748b;font-size:11px">No alerts found.</div>';
+    return;
+  }
+
+  // Summary card
+  var accColor = summary.accuracy >= 75 ? '#00ff88' : summary.accuracy >= 50 ? '#ffd166' : '#ff5252';
+  var html = '<h2>🎯 ALERT ACCURACY' + (filterType ? ' — ' + filterType : '') + (filterDate ? ' — ' + filterDate : '') + '</h2>';
+  html += '<div class="card" style="display:flex;gap:20px;align-items:center;flex-wrap:wrap">';
+  html += '<div style="text-align:center"><div style="font-size:28px;font-weight:800;color:' + accColor + '">' + (summary.accuracy != null ? summary.accuracy + '%' : '—') + '</div><div style="font-size:9px;color:#64748b">ACCURACY</div></div>';
+  html += '<div style="font-size:11px;color:#94a3b8;line-height:1.8">';
+  html += 'Total: <span style="color:#e2e8f0;font-weight:600">' + summary.total + '</span> &nbsp;';
+  html += 'Resolved: <span style="color:#e2e8f0;font-weight:600">' + summary.resolved + '</span> &nbsp;';
+  html += 'Correct: <span style="color:#00ff88;font-weight:600">' + summary.correct + '</span> &nbsp;';
+  html += 'Wrong: <span style="color:#ff5252;font-weight:600">' + (summary.resolved - summary.correct) + '</span>';
+  html += '</div></div>';
+
+  // Per-type breakdown
+  var types = {};
+  alerts.forEach(function(a) {
+    if (!types[a.alert_type]) types[a.alert_type] = { total: 0, correct: 0, wrong: 0, pending: 0 };
+    var t = types[a.alert_type];
+    t.total++;
+    if (a.correct === true) t.correct++;
+    else if (a.correct === false) t.wrong++;
+    else t.pending++;
+  });
+  html += '<div class="card" style="font-size:11px">';
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:6px">';
+  Object.keys(types).sort().forEach(function(ty) {
+    var t = types[ty];
+    var resolved = t.correct + t.wrong;
+    var acc = resolved > 0 ? Math.round(t.correct / resolved * 100) : null;
+    var c = acc >= 75 ? '#00ff88' : acc >= 50 ? '#ffd166' : '#ff5252';
+    html += '<div style="background:#0f172a;border-radius:4px;padding:6px;text-align:center">';
+    html += '<div style="font-size:9px;color:#64748b;letter-spacing:.5px;margin-bottom:2px">' + ty + '</div>';
+    html += '<div style="font-size:18px;font-weight:700;color:' + c + '">' + (acc != null ? acc + '%' : '—') + '</div>';
+    html += '<div style="font-size:9px;color:#94a3b8">' + t.correct + '✓ ' + t.wrong + '✗' + (t.pending ? ' ' + t.pending + '?' : '') + '</div>';
+    html += '</div>';
+  });
+  html += '</div></div>';
+
+  // Per-date breakdown
+  var dates = {};
+  alerts.forEach(function(a) {
+    var d = a.date || 'unknown';
+    if (!dates[d]) dates[d] = { total: 0, correct: 0, wrong: 0 };
+    dates[d].total++;
+    if (a.correct === true) dates[d].correct++;
+    else if (a.correct === false) dates[d].wrong++;
+  });
+  html += '<div class="card" style="font-size:11px">';
+  html += '<div style="font-size:9px;color:#64748b;letter-spacing:1px;font-weight:600;margin-bottom:4px">BY DATE</div>';
+  Object.keys(dates).sort().reverse().forEach(function(d) {
+    var dd = dates[d];
+    var resolved = dd.correct + dd.wrong;
+    var acc = resolved > 0 ? Math.round(dd.correct / resolved * 100) : null;
+    var c = acc >= 75 ? '#00ff88' : acc >= 50 ? '#ffd166' : '#ff5252';
+    html += '<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #1e293b22">';
+    html += '<span style="color:#94a3b8;cursor:pointer;text-decoration:underline" onclick="document.getElementById(\'alert-date\').value=\'' + d + '\';viewAlertsByDate()">' + d + '</span>';
+    html += '<span><span style="color:' + c + ';font-weight:600">' + (acc != null ? acc + '%' : '—') + '</span> <span style="color:#64748b">(' + dd.correct + '/' + resolved + ')</span></span>';
+    html += '</div>';
+  });
+  html += '</div>';
+
+  // Alert detail table
+  html += '<div class="card" style="overflow-x:auto">';
+  html += '<table style="width:100%;border-collapse:collapse;font-size:10px">';
+  html += '<tr style="color:#64748b;border-bottom:1px solid #1e293b;text-align:left">';
+  html += '<th style="padding:4px">Result</th><th style="padding:4px">Type</th><th style="padding:4px">Game</th>';
+  html += '<th style="padding:4px">Q</th><th style="padding:4px">Clock</th><th style="padding:4px">Ctrl</th>';
+  html += '<th style="padding:4px">Floor</th><th style="padding:4px">Margin</th><th style="padding:4px">Edge</th>';
+  html += '<th style="padding:4px">ML</th><th style="padding:4px">TP</th><th style="padding:4px">LS</th>';
+  html += '<th style="padding:4px">Ctrl Sust</th><th style="padding:4px">Opp Sust</th><th style="padding:4px">Final</th>';
+  html += '</tr>';
+  alerts.forEach(function(a) {
+    var resultIcon = a.correct === true ? '✅' : a.correct === false ? '❌' : '⏳';
+    var rowBg = a.correct === false ? 'rgba(255,82,82,.06)' : '';
+    var matchup = (a.matchup || (a.away_alias + '@' + a.home_alias));
+    var finalScore = a.home_pts != null ? a.away_alias + ' ' + a.away_pts + '-' + a.home_pts + ' ' + a.home_alias : '—';
+    var typeColors = {
+      'BUY': '#00ff88', 'LEAN BUY': '#ffd166', 'BUY WINDOW CLOSING': '#60a5fa',
+      'WINDOW BUY': '#a78bfa', 'RECOVERY PATH': '#38bdf8', 'LEAD CRUMBLING': '#f472b6',
+      'LEAD LOST': '#ff5252', 'VARIANCE BREAKING': '#fbbf24'
+    };
+    var tc = typeColors[a.alert_type] || '#94a3b8';
+    html += '<tr style="border-bottom:1px solid #1e293b11;background:' + rowBg + '">';
+    html += '<td style="padding:4px;text-align:center">' + resultIcon + '</td>';
+    html += '<td style="padding:4px;color:' + tc + ';font-weight:600;white-space:nowrap">' + a.alert_type + '</td>';
+    html += '<td style="padding:4px;white-space:nowrap">' + matchup + '</td>';
+    html += '<td style="padding:4px">Q' + (a.period || '?') + '</td>';
+    html += '<td style="padding:4px">' + (a.clock || '—') + '</td>';
+    html += '<td style="padding:4px;font-weight:600">' + (a.control_team || '—') + '</td>';
+    html += '<td style="padding:4px">' + (a.floor_score != null ? a.floor_score.toFixed(2) : '—') + '</td>';
+    html += '<td style="padding:4px">' + (a.is_trailing ? '-' : '+') + (a.margin || 0) + '</td>';
+    html += '<td style="padding:4px;color:' + (a.edge > 0 ? '#00ff88' : a.edge < 0 ? '#ff5252' : '#94a3b8') + '">' + (a.edge != null ? (a.edge > 0 ? '+' : '') + a.edge + '%' : '—') + '</td>';
+    html += '<td style="padding:4px">' + (a.ml != null ? (a.ml > 0 ? '+' : '') + a.ml : '—') + '</td>';
+    html += '<td style="padding:4px">' + (a.tp_class || '—') + '</td>';
+    html += '<td style="padding:4px">' + (a.ls_class || '—') + '</td>';
+    html += '<td style="padding:4px;font-size:9px">' + (a.ctrl_sust || '—') + '</td>';
+    html += '<td style="padding:4px;font-size:9px">' + (a.opp_sust || '—') + '</td>';
+    html += '<td style="padding:4px;font-size:9px;white-space:nowrap">' + finalScore + '</td>';
+    html += '</tr>';
+  });
+  html += '</table></div>';
+
+  alertResultsEl.innerHTML = html;
+}
 
 function log(msg, cls){
   var line = document.createElement('div');
