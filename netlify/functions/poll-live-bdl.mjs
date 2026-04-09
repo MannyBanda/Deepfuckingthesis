@@ -233,6 +233,136 @@ async function sendNtfy(title, body, priority = 4) {
   }
 }
 
+// ── ALERT REASONING AGENT ────────────────────────────────────────────────
+// Sonnet-powered reasoning layer for alert quality assessment.
+// Receives frontloaded context (all mechanical data + DB history),
+// returns SEND / SUPPRESS / DOWNGRADE decision with reasoning.
+// FIRED alerts fall through to ntfy on agent failure (safe default).
+// CANDIDATE alerts are dropped on agent failure (conservative default).
+async function runAlertAgent(ctx) {
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  if (!anthropicKey) { log(`Agent: no API key, skipping`); return null; }
+
+  const prompt = `You are a live NBA betting alert quality agent. A mechanical system has identified a potential betting signal. Your job is to assess whether it should be sent to the bettor.
+
+ALERT:
+Type: ${ctx.alertType} (${ctx.alertTier})
+Control team: ${ctx.controlTeam} | Floor: ${ctx.floor} | Margin: ${ctx.margin} (${ctx.isTrailing ? 'trailing' : 'leading'})
+Period: Q${ctx.period} ${ctx.clock} | Minutes left: ${ctx.minsLeft}
+Edge: ${ctx.edge != null ? ctx.edge + '%' : 'N/A'} | ML: ${ctx.ml || 'N/A'} | Spread: ${ctx.spread || 'N/A'}
+TP: ${ctx.tpClass || 'N/A'} | LS: ${ctx.lsClass || 'N/A'}
+Ctrl sust: ${ctx.ctrlSust || 'N/A'} | Opp sust: ${ctx.oppSust || 'N/A'}
+Window score: ${ctx.windowScore || 'N/A'}
+
+INDICATORS (control-team-relative):
+I1 Possession: ${ctx.i1} | I2 Rim/Foul: ${ctx.i2} | I3 Shot Quality: ${ctx.i3} | I4 Lineup: ${ctx.i4} | I5 Tempo: ${ctx.i5}
+Indicators won by control team: ${ctx.indicatorsWon}/5
+
+FLOOR TRAJECTORY (recent snapshots, newest first):
+${ctx.floorHistory || 'No prior snapshots'}
+
+PRIOR ALERTS THIS GAME:
+${ctx.priorAlerts || 'None'}
+
+QUARTER PERFORMANCE:
+${ctx.quarterSummary || 'N/A'}
+
+RULES:
+- FIRED alerts passed all mechanical thresholds. You should SEND unless you see a clear structural contradiction (e.g. floor trending DOWN while alert says BUY, or control team wins 1/5 indicators).
+- CANDIDATE alerts failed a soft threshold but might still have value. You should SEND only if the structural case is compelling despite the threshold miss.
+- BUY/WINDOW BUY: the thesis is "structurally dominant team is trailing due to unsustainable opponent variance." Verify the control team actually dominates AND the opponent's lead is variance-driven.
+- BWC (Buy Window Closing): the thesis is "market hasn't priced in structural dominance yet." Verify edge is real and lead is secure.
+- RECOVERY PATH: math projects a comeback. Verify structural control supports the math.
+- Be skeptical of high floors (0.75+) at small margins (1-3 pts) — floor may be anchored from earlier dominance that's fading.
+- CANDIDATE BUYs at floor 0.55-0.65: only SEND if indicators strongly favor control team (3+ of 5) AND opponent sustainability is weak.
+
+Respond in EXACTLY this format:
+DECISION: [SEND|SUPPRESS|DOWNGRADE]
+REASONING: [1-2 sentences explaining why]
+BODY: [If SEND/DOWNGRADE: enhanced plain-English alert body for the bettor. If SUPPRESS: leave blank]`;
+
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': anthropicKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 500,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+
+    if (!resp.ok) {
+      log(`Agent: Anthropic ${resp.status}`);
+      return null; // fallback: FIRED sends, CANDIDATE drops
+    }
+
+    const data = await resp.json();
+    const text = data.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+
+    const decisionMatch = text.match(/DECISION:\s*(SEND|SUPPRESS|DOWNGRADE)/i);
+    const reasoningMatch = text.match(/REASONING:\s*(.+?)(?:\n|$)/i);
+    const bodyMatch = text.match(/BODY:\s*([\s\S]*)/i);
+
+    if (!decisionMatch) {
+      log(`Agent: failed to parse decision from: ${text.substring(0, 100)}`);
+      return null;
+    }
+
+    return {
+      decision: decisionMatch[1].toUpperCase(),
+      reasoning: reasoningMatch ? reasoningMatch[1].trim() : '',
+      body: bodyMatch ? bodyMatch[1].trim() : '',
+      usage: data.usage,
+    };
+  } catch (e) {
+    log(`Agent: error — ${e.message}`);
+    return null;
+  }
+}
+
+// Helper: gather agent context from DB
+async function gatherAgentContext(sql, gameId, matchup) {
+  let floorHistory = '', priorAlerts = '', quarterSummary = '';
+  try {
+    const snaps = await sql`SELECT floor_score, floor_team, period, clock, home_pts, away_pts, i1, i2, i3, i4, i5, tp_class, ls_class
+      FROM snapshots WHERE game_id = ${gameId} ORDER BY ts DESC LIMIT 5`;
+    if (snaps.length > 0) {
+      floorHistory = snaps.map(s =>
+        `Q${s.period} ${s.clock}: ${s.floor_team} ${Number(s.floor_score).toFixed(2)} (${s.away_pts}-${s.home_pts}) TP:${s.tp_class || '?'} LS:${s.ls_class || '?'}`
+      ).join('\n');
+    }
+  } catch (e) { /* non-fatal */ }
+  try {
+    const alerts = await sql`SELECT alert_type, period, clock, floor_score, margin, is_trailing, ctrl_sust, opp_sust
+      FROM alerts WHERE game_id = ${gameId} ORDER BY ts DESC LIMIT 5`;
+    if (alerts.length > 0) {
+      priorAlerts = alerts.map(a =>
+        `${a.alert_type} Q${a.period} ${a.clock}: floor ${Number(a.floor_score).toFixed(2)}, margin ${a.margin} ${a.is_trailing ? 'trailing' : 'leading'}, sust ${a.ctrl_sust}/${a.opp_sust}`
+      ).join('\n');
+    }
+  } catch (e) { /* non-fatal */ }
+  try {
+    const qd = await readQuarterData(sql, gameId);
+    if (qd && qd.boundaries) {
+      const keys = Object.keys(qd.boundaries).filter(k => k !== '0').sort();
+      if (keys.length > 0) {
+        quarterSummary = keys.map(k => {
+          const b = qd.boundaries[k];
+          if (!b) return null;
+          const h = b.home || {}, a = b.away || {};
+          return `Q${k}: ${h.points || '?'}-${a.points || '?'} pts, paint ${h.points_in_paint || '?'}-${a.points_in_paint || '?'}, TO ${h.turnovers || '?'}-${a.turnovers || '?'}`;
+        }).filter(Boolean).join('\n');
+      }
+    }
+  } catch (e) { /* non-fatal */ }
+  return { floorHistory, priorAlerts, quarterSummary };
+}
+
 function today() {
   // Use ET for game dates (NBA schedule is ET-based)
   const now = new Date();
@@ -3979,7 +4109,7 @@ export default async function(req) {
               }
             } catch (e) { /* non-fatal — proceed without suppression */ }
 
-            let alertType = null, alertEmoji = '', alertPriority = 4;
+            let alertType = null, alertTier = null, alertEmoji = '', alertPriority = 4;
 
             // Shared clock computation for alert time gates
             const alertClockParts = clock.replace(/^[A-Za-z]+\s*/, '').split(':');
@@ -4002,6 +4132,7 @@ export default async function(req) {
                 log(`${matchup}: BUY suppressed — throughput ${tpClass} (exp swing ${Math.round(tpForBuy.expected.totalSwing)} vs deficit ${margin})`);
               } else {
                 alertType = 'BUY';
+                alertTier = 'FIRED';
                 alertEmoji = '🟢';
                 alertPriority = 5;
               }
@@ -4020,6 +4151,7 @@ export default async function(req) {
                   log(`${matchup}: BWC suppressed — ctrl sust ${ctrlSust} (lead built on variance)`);
                 } else {
                   alertType = 'BUY WINDOW CLOSING';
+                  alertTier = 'FIRED';
                   alertEmoji = '🔵';
                   alertPriority = 3;
                 }
@@ -4072,6 +4204,7 @@ export default async function(req) {
                         log(`${matchup}: WINDOW BUY suppressed — ML ${ctrlML} (heavy favorite, no value)`);
                       } else {
                       alertType = 'WINDOW BUY';
+                      alertTier = 'FIRED';
                       alertEmoji = '🪟';
                       alertPriority = 4;
                       log(`${matchup}: WINDOW BUY — ${ind.controlTeam} floor:${ind.score.toFixed(2)} margin:${ctrlMargin} sust:${ctrlSust} tp:${wbTpClass} ls:${wbLsClass}`);
@@ -4082,6 +4215,67 @@ export default async function(req) {
               }
             }
 
+            // ── CANDIDATE DETECTION: borderline signals for agent reasoning ──────
+            // These failed a soft gate but might still have value.
+            // Only checked if no FIRED alert exists for this cycle.
+            if (!alertType && currentPeriod >= 2 && ind.controlTeam && ind.controlTeam !== 'Neither' && alertMinsLeft >= 1.0 && !leadDegradedSuppressed) {
+              const tpClass = tpForBuy?.classification || null;
+
+              // CANDIDATE BUY: floor 0.55-0.65 (below FIRED threshold)
+              if (ind.score >= 0.55 && ind.score < 0.65 && ctrlTrailing && margin >= 1 && margin <= 15) {
+                if (!tpClass || (tpClass !== 'UNLIKELY' && tpClass !== 'NO PATH')) {
+                  alertType = 'BUY'; alertTier = 'CANDIDATE'; alertEmoji = '🟢'; alertPriority = 4;
+                  log(`${matchup}: BUY CANDIDATE — floor ${ind.score.toFixed(2)} below 0.65 threshold`);
+                }
+              }
+              // CANDIDATE BUY: margin 16-20 (above FIRED range)
+              if (!alertType && ind.score >= 0.65 && ctrlTrailing && margin >= 16 && margin <= 20) {
+                if (tpClass && tpClass !== 'UNLIKELY' && tpClass !== 'NO PATH') {
+                  alertType = 'BUY'; alertTier = 'CANDIDATE'; alertEmoji = '🟢'; alertPriority = 4;
+                  log(`${matchup}: BUY CANDIDATE — margin ${margin} above 15-pt cap`);
+                }
+              }
+              // CANDIDATE BUY: TP CONTESTED (normally blocks FIRED BUY)
+              if (!alertType && ind.score >= 0.65 && ctrlTrailing && margin >= 1 && margin <= 15 && tpClass === 'CONTESTED') {
+                alertType = 'BUY'; alertTier = 'CANDIDATE'; alertEmoji = '🟢'; alertPriority = 4;
+                log(`${matchup}: BUY CANDIDATE — TP CONTESTED (FIRED requires better throughput)`);
+              }
+              // CANDIDATE BWC: ctrl sust FRAGILE (normally blocks FIRED BWC)
+              if (!alertType && ind.score >= 0.60 && ctrlLeading && margin >= 2) {
+                const ctrlMLNum = ctrlML ? parseFloat(ctrlML) : null;
+                if (ctrlMLNum !== null && ctrlMLNum >= -400 && (ctrlSust === 'FRAGILE')) {
+                  const lsClass = lsForBWC?.classification || null;
+                  if (lsClass !== 'AT RISK' && lsClass !== 'CRITICAL') {
+                    alertType = 'BUY WINDOW CLOSING'; alertTier = 'CANDIDATE'; alertEmoji = '🔵'; alertPriority = 3;
+                    log(`${matchup}: BWC CANDIDATE — ctrl sust ${ctrlSust} (FIRED requires MIXED+)`);
+                  }
+                }
+              }
+              // CANDIDATE BWC: ML < -250 but > -400 (normally blocks FIRED BWC)
+              if (!alertType && ind.score >= 0.60 && ctrlLeading && margin >= 2) {
+                const ctrlMLNum = ctrlML ? parseFloat(ctrlML) : null;
+                if (ctrlMLNum !== null && ctrlMLNum < -250 && ctrlMLNum >= -400 && ctrlSust !== 'FRAGILE' && ctrlSust !== 'UNSUSTAINABLE') {
+                  const lsClass = lsForBWC?.classification || null;
+                  if (lsClass !== 'AT RISK' && lsClass !== 'CRITICAL' && ctrlEdge > 5) {
+                    alertType = 'BUY WINDOW CLOSING'; alertTier = 'CANDIDATE'; alertEmoji = '🔵'; alertPriority = 3;
+                    log(`${matchup}: BWC CANDIDATE — ML ${ctrlML} heavy but edge ${ctrlEdge}%`);
+                  }
+                }
+              }
+              // CANDIDATE WINDOW BUY: sust MIXED (FIRED requires LOCKED/DURABLE)
+              if (!alertType && ind.score >= 0.45 && ctrlMargin >= -15 && ctrlMargin <= 5 && ctrlSust === 'MIXED') {
+                try {
+                  const wbQd = await readQuarterData(sql, game.id);
+                  const wbWindow = computeServerWindow(wbQd, currentPeriod, clock, summary, hA, aA, league);
+                  if (wbWindow && wbWindow.available && wbWindow.score >= 0.75 && wbWindow.controlTeam === ind.controlTeam) {
+                    wbWindowScore = wbWindow.score;
+                    alertType = 'WINDOW BUY'; alertTier = 'CANDIDATE'; alertEmoji = '🪟'; alertPriority = 4;
+                    log(`${matchup}: WINDOW BUY CANDIDATE — sust MIXED (FIRED requires LOCKED/DURABLE)`);
+                  }
+                } catch (e) { /* non-fatal */ }
+              }
+            }
+
             // Suppress all alerts if lead degraded within 5 min window
             if (leadDegradedSuppressed && alertType) {
               log(`${matchup}: ${alertType} nullified — lead degraded suppression active`);
@@ -4089,86 +4283,147 @@ export default async function(req) {
             }
 
             if (alertType) {
-              const alertKey = `${game.id}_${alertType}_Q${currentPeriod}`;
+              const alertKey = `${game.id}_${alertType}_${alertTier}_Q${currentPeriod}`;
               if (!game._lastAlert || game._lastAlert !== alertKey) {
                 game._lastAlert = alertKey;
                 cacheUpdated = true;
                 const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
                 const oppAlias = ctrlIsHome ? aA : hA;
-                const calWarn = ''; // DISABLED — re-accumulating clean data after server-client parity fix
-                const oppVT = gameVolumeThreat ? (ctrlIsHome ? gameVolumeThreat.away : gameVolumeThreat.home) : null;
-                const vtWarn = oppVT?.active ? `\n⚠️ ${oppAlias} on pace for ${oppVT.projected3PA} threes at ${oppVT.live3Pct}% — volume threat` : '';
 
-                // Sustainability in plain English
-                const sustExplain = (function(){
-                  if (!oppSustTier && !ctrlSust) return '';
-                  const oppDesc = oppSustTier === 'FRAGILE' || oppSustTier === 'UNSUSTAINABLE'
-                    ? `${oppAlias}'s shooting is unsustainable (${oppSustTier})`
-                    : oppSustTier === 'LOCKED IN' || oppSustTier === 'DURABLE'
-                    ? `${oppAlias}'s shooting looks sustainable (${oppSustTier})`
-                    : oppSustTier ? `${oppAlias} shooting: ${oppSustTier}` : '';
-                  const ctrlDesc = ctrlSust === 'LOCKED IN' || ctrlSust === 'DURABLE'
-                    ? `${ind.controlTeam}'s shooting is sustainable (${ctrlSust})`
-                    : ctrlSust === 'FRAGILE' || ctrlSust === 'UNSUSTAINABLE'
-                    ? `${ind.controlTeam}'s shooting looks shaky (${ctrlSust})`
-                    : '';
-                  return (oppDesc ? '\n' + oppDesc : '') + (ctrlDesc ? '\n' + ctrlDesc : '');
-                })();
+                // ── AGENT REASONING GATE ──────────────────────────────────────
+                // Compute indicators won by control team for agent context
+                const indScores = [ind.I1, ind.I2, ind.I3, ind.I4, ind.I5];
+                const indicatorsWon = indScores.filter(i => i && i.score >= 0.55).length;
 
-                let ntfyTitle, ntfyBody;
+                // Gather DB context for agent
+                const agentCtx = await gatherAgentContext(sql, game.id, matchup);
 
-                if (alertType === 'BUY') {
-                  const mlStr = ctrlML ? `${ind.controlTeam} ML ${ctrlML}` : ind.controlTeam;
-                  ntfyTitle = `BUY ${mlStr}`;
-                  ntfyBody = scoreLine
-                    + `\n${ind.controlTeam} trails by ${margin} but controls the game structurally (${ind.score.toFixed(2)})`
-                    + (tpForBuy ? `\nMath projects a ${fmtSwing(tpForBuy.expected.totalSwing)}-point swing with ${tpForBuy.remainingPoss} possessions left` : '')
-                    + (ctrlEdge != null ? `\nEdge: ${ctrlEdge > 0 ? '+' : ''}${ctrlEdge}% over market` : '')
-                    + sustExplain
-                    + calWarn + vtWarn
-                    + (spreadVal != null ? `\nSpread: ${spreadVal}` : '');
+                const agentResult = await runAlertAgent({
+                  alertType, alertTier,
+                  controlTeam: ind.controlTeam, floor: ind.score.toFixed(2),
+                  margin, isTrailing: ctrlTrailing,
+                  period: currentPeriod, clock, minsLeft: alertMinsLeft.toFixed(1),
+                  edge: ctrlEdge, ml: ctrlML, spread: spreadVal,
+                  tpClass: tpForBuy?.classification || wbTpClass || null,
+                  lsClass: lsForBWC?.classification || wbLsClass || null,
+                  ctrlSust, oppSust: oppSustTier,
+                  windowScore: wbWindowScore,
+                  i1: ind.I1?.score?.toFixed(2), i2: ind.I2?.score?.toFixed(2),
+                  i3: ind.I3?.score?.toFixed(2), i4: ind.I4?.score?.toFixed(2),
+                  i5: ind.I5?.score?.toFixed(2),
+                  indicatorsWon,
+                  floorHistory: agentCtx.floorHistory,
+                  priorAlerts: agentCtx.priorAlerts,
+                  quarterSummary: agentCtx.quarterSummary,
+                });
 
-                } else if (alertType === 'BUY WINDOW CLOSING') {
-                  const mlStr = ctrlML ? `${ind.controlTeam} ML ${ctrlML}` : ind.controlTeam;
-                  ntfyTitle = `WINDOW CLOSING — ${mlStr}`;
-                  const lsClass = lsForBWC?.classification || null;
-                  const lsDesc = lsClass === 'SAFE' ? 'Lead is mechanically safe'
-                    : lsClass === 'CUSHIONED' ? 'Lead has a comfortable cushion'
-                    : lsClass ? `Lead safety: ${lsClass}` : '';
-                  ntfyBody = scoreLine
-                    + `\n${ind.controlTeam} leads by ${margin} with structural dominance (${ind.score.toFixed(2)})`
-                    + `\nMarket hasn't caught up — ${ctrlEdge > 0 ? '+' : ''}${ctrlEdge}% edge remaining`
-                    + (lsDesc ? '\n' + lsDesc : '')
-                    + `\nLine will tighten soon, act now or pass`
-                    + sustExplain
-                    + calWarn + vtWarn;
+                let agentDecision = null;
+                let agentReasoning = '';
+                let shouldSend = false;
 
-                } else if (alertType === 'WINDOW BUY') {
-                  const mlStr = ctrlML ? `${ind.controlTeam} ML ${ctrlML}` : ind.controlTeam;
-                  ntfyTitle = `WINDOW BUY — ${mlStr}`;
-                  const stateDesc = ctrlMargin > 0 ? `leads by ${ctrlMargin}` : ctrlMargin === 0 ? 'is tied' : `trails by ${Math.abs(ctrlMargin)}`;
-                  ntfyBody = scoreLine
-                    + `\n${ind.controlTeam} ${stateDesc} but has taken over the recent window`
-                    + `\nFull-game score hasn't caught up yet (floor ${ind.score.toFixed(2)})`
-                    + `\n${ind.controlTeam} shooting is sustainable (${ctrlSust})`
-                    + (wbLsClass === 'AT RISK' || wbLsClass === 'CRITICAL' ? `\n${oppAlias}'s lead is crumbling (${wbLsClass})` : '')
-                    + (wbTpClass && tpPass ? `\nComeback math supports recovery (${wbTpClass})` : '')
-                    + (ctrlEdge != null ? `\nEdge: ${ctrlEdge > 0 ? '+' : ''}${ctrlEdge}% over market` : '')
-                    + calWarn + vtWarn;
-
+                if (agentResult) {
+                  agentDecision = agentResult.decision;
+                  agentReasoning = agentResult.reasoning;
+                  if (agentDecision === 'SEND') {
+                    shouldSend = true;
+                    log(`${matchup}: Agent SEND ${alertTier} ${alertType} — ${agentReasoning}`);
+                  } else if (agentDecision === 'DOWNGRADE') {
+                    shouldSend = true;
+                    alertPriority = Math.max(2, alertPriority - 1);
+                    log(`${matchup}: Agent DOWNGRADE ${alertTier} ${alertType} — ${agentReasoning}`);
+                  } else {
+                    shouldSend = false;
+                    log(`${matchup}: Agent SUPPRESS ${alertTier} ${alertType} — ${agentReasoning}`);
+                  }
+                  if (agentResult.usage) {
+                    log(`${matchup}: Agent tokens — in:${agentResult.usage.input_tokens} out:${agentResult.usage.output_tokens}`);
+                  }
                 } else {
-                  // Fallback
-                  ntfyTitle = `${alertEmoji} ${alertType} — ${matchup}`;
-                  ntfyBody = scoreLine + `\n${ind.controlTeam} ${ind.score.toFixed(2)}`;
+                  // Agent failed — FIRED sends as-is (safe fallback), CANDIDATE drops
+                  shouldSend = (alertTier === 'FIRED');
+                  agentDecision = alertTier === 'FIRED' ? 'FALLBACK_SEND' : 'FALLBACK_DROP';
+                  log(`${matchup}: Agent unavailable — ${agentDecision} for ${alertTier} ${alertType}`);
                 }
 
-                await sendNtfy(ntfyTitle, ntfyBody, alertPriority);
+                if (shouldSend) {
+                  // Build ntfy message — use agent body if available, else mechanical body
+                  let ntfyTitle, ntfyBody;
+                  const tierTag = alertTier === 'CANDIDATE' ? ' [CANDIDATE]' : '';
+
+                  if (agentResult?.body && agentResult.body.length > 20) {
+                    // Agent-enhanced body
+                    ntfyTitle = `${alertType}${tierTag} — ${matchup}`;
+                    ntfyBody = scoreLine + '\n' + agentResult.body;
+                  } else {
+                    // Mechanical fallback body
+                    const calWarn = '';
+                    const oppVT = gameVolumeThreat ? (ctrlIsHome ? gameVolumeThreat.away : gameVolumeThreat.home) : null;
+                    const vtWarn = oppVT?.active ? `\n${oppAlias} on pace for ${oppVT.projected3PA} threes at ${oppVT.live3Pct}% — volume threat` : '';
+                    const sustExplain = (function(){
+                      if (!oppSustTier && !ctrlSust) return '';
+                      const oppDesc = oppSustTier === 'FRAGILE' || oppSustTier === 'UNSUSTAINABLE'
+                        ? `${oppAlias}'s shooting is unsustainable (${oppSustTier})`
+                        : oppSustTier === 'LOCKED IN' || oppSustTier === 'DURABLE'
+                        ? `${oppAlias}'s shooting looks sustainable (${oppSustTier})`
+                        : oppSustTier ? `${oppAlias} shooting: ${oppSustTier}` : '';
+                      const ctrlDesc = ctrlSust === 'LOCKED IN' || ctrlSust === 'DURABLE'
+                        ? `${ind.controlTeam}'s shooting is sustainable (${ctrlSust})`
+                        : ctrlSust === 'FRAGILE' || ctrlSust === 'UNSUSTAINABLE'
+                        ? `${ind.controlTeam}'s shooting looks shaky (${ctrlSust})`
+                        : '';
+                      return (oppDesc ? '\n' + oppDesc : '') + (ctrlDesc ? '\n' + ctrlDesc : '');
+                    })();
+
+                    if (alertType === 'BUY') {
+                      const mlStr = ctrlML ? `${ind.controlTeam} ML ${ctrlML}` : ind.controlTeam;
+                      ntfyTitle = `BUY${tierTag} ${mlStr}`;
+                      ntfyBody = scoreLine
+                        + `\n${ind.controlTeam} trails by ${margin} but controls the game structurally (${ind.score.toFixed(2)})`
+                        + (tpForBuy ? `\nMath projects a ${fmtSwing(tpForBuy.expected.totalSwing)}-point swing with ${tpForBuy.remainingPoss} possessions left` : '')
+                        + (ctrlEdge != null ? `\nEdge: ${ctrlEdge > 0 ? '+' : ''}${ctrlEdge}% over market` : '')
+                        + sustExplain + calWarn + vtWarn
+                        + (spreadVal != null ? `\nSpread: ${spreadVal}` : '');
+                    } else if (alertType === 'BUY WINDOW CLOSING') {
+                      const mlStr = ctrlML ? `${ind.controlTeam} ML ${ctrlML}` : ind.controlTeam;
+                      ntfyTitle = `WINDOW CLOSING${tierTag} — ${mlStr}`;
+                      const lsClass = lsForBWC?.classification || null;
+                      const lsDesc = lsClass === 'SAFE' ? 'Lead is mechanically safe'
+                        : lsClass === 'CUSHIONED' ? 'Lead has a comfortable cushion'
+                        : lsClass ? `Lead safety: ${lsClass}` : '';
+                      ntfyBody = scoreLine
+                        + `\n${ind.controlTeam} leads by ${margin} with structural dominance (${ind.score.toFixed(2)})`
+                        + `\nMarket hasn't caught up — ${ctrlEdge > 0 ? '+' : ''}${ctrlEdge}% edge remaining`
+                        + (lsDesc ? '\n' + lsDesc : '')
+                        + `\nLine will tighten soon, act now or pass`
+                        + sustExplain + calWarn + vtWarn;
+                    } else if (alertType === 'WINDOW BUY') {
+                      const mlStr = ctrlML ? `${ind.controlTeam} ML ${ctrlML}` : ind.controlTeam;
+                      ntfyTitle = `WINDOW BUY${tierTag} — ${mlStr}`;
+                      const stateDesc = ctrlMargin > 0 ? `leads by ${ctrlMargin}` : ctrlMargin === 0 ? 'is tied' : `trails by ${Math.abs(ctrlMargin)}`;
+                      ntfyBody = scoreLine
+                        + `\n${ind.controlTeam} ${stateDesc} but has taken over the recent window`
+                        + `\nFull-game score hasn't caught up yet (floor ${ind.score.toFixed(2)})`
+                        + `\n${ind.controlTeam} shooting is sustainable (${ctrlSust})`
+                        + (wbLsClass === 'AT RISK' || wbLsClass === 'CRITICAL' ? `\n${oppAlias}'s lead is crumbling (${wbLsClass})` : '')
+                        + (wbTpClass && tpPass ? `\nComeback math supports recovery (${wbTpClass})` : '')
+                        + (ctrlEdge != null ? `\nEdge: ${ctrlEdge > 0 ? '+' : ''}${ctrlEdge}% over market` : '')
+                        + calWarn + vtWarn;
+                    } else {
+                      ntfyTitle = `${alertType}${tierTag} — ${matchup}`;
+                      ntfyBody = scoreLine + `\n${ind.controlTeam} ${ind.score.toFixed(2)}`;
+                    }
+                  }
+
+                  await sendNtfy(ntfyTitle, ntfyBody, alertPriority);
+                }
+
+                // Always save to alerts table — including suppressed candidates for accuracy tracking
                 const tpRatio = tpForBuy?.conservative?.ratio ?? null;
                 try {
-                  await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, tp_ratio)
-                    VALUES (${game.id}, ${league}, ${alertType}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal}, ${tpForBuy?.classification || null}, ${lsForBWC?.classification || null}, ${ctrlSust}, ${oppSustTier}, ${wbWindowScore}, ${tpRatio})`;
+                  await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, tp_ratio, alert_tier, agent_decision, agent_reasoning)
+                    VALUES (${game.id}, ${league}, ${alertType}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal}, ${tpForBuy?.classification || null}, ${lsForBWC?.classification || null}, ${ctrlSust}, ${oppSustTier}, ${wbWindowScore}, ${tpRatio}, ${alertTier}, ${agentDecision}, ${agentReasoning})`;
                 } catch (e) { log(`${matchup}: alert save failed: ${e.message}`); }
-                log(`${matchup}: ${alertEmoji} ${alertType} PUSHED — ${ind.controlTeam} ${ind.score.toFixed(2)} ${ctrlTrailing ? 'trailing' : 'leading'} by ${margin}${ctrlEdge != null ? ', edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}${oppSustTier ? ', opp ' + oppSustTier : ''}`);
+                log(`${matchup}: ${alertEmoji} ${alertType} ${alertTier} ${agentDecision} — ${ind.controlTeam} ${ind.score.toFixed(2)} ${ctrlTrailing ? 'trailing' : 'leading'} by ${margin}${ctrlEdge != null ? ', edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}${oppSustTier ? ', opp ' + oppSustTier : ''}`);
               }
             }
           }

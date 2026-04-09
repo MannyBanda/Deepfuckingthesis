@@ -311,6 +311,9 @@ exports.handler = async (event) => {
       try { await sql`CREATE INDEX IF NOT EXISTS idx_alerts_game ON alerts (game_id)`; } catch(e) {}
       try { await sql`CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts (ts)`; } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS tp_ratio REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS alert_tier TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS agent_decision TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS agent_reasoning TEXT`; } catch(e) {}
 
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'Schema initialized' }) };
     }
