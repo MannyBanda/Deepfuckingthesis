@@ -21,6 +21,9 @@
 [functions."post-game-agent"]
   timeout = 120
 
+[functions."test-agent"]
+  timeout = 60
+
 [[headers]]
   for = "/*"
   [headers.values]
