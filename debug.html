@@ -170,6 +170,16 @@ select{background:#1e293b;color:#e0e0e0;border:1px solid #334155;border-radius:6
   </div>
 </div>
 
+<!-- ═══ 7. NIGHTLY LEARNINGS ═══ -->
+<div class="section-label" style="margin-top:20px">NIGHTLY LEARNINGS</div>
+<div class="section-card">
+  <div class="btn-row">
+    <button onclick="loadLearnings()" style="color:#00ff88;font-weight:700">📊 Load Learnings</button>
+    <button onclick="loadLearnings(7)" style="color:#60a5fa">Last 7</button>
+    <button onclick="loadLearnings(30)" style="color:#a78bfa">Last 30</button>
+  </div>
+</div>
+
 <script>
 var FN = '/.netlify/functions/';
 var logEl = document.getElementById('log');
@@ -3038,6 +3048,133 @@ async function runQA(section){
   h+='<span style="font-size:13px;font-weight:700;color:'+(fail>0?'#ff5252':'#00ff88')+'">'+pass+' PASS · '+fail+' FAIL · '+warn+' WARN</span></div>';
   h+='</div>';
   qaEl.innerHTML = h;
+}
+
+// ── NIGHTLY LEARNINGS ─────────────────────────────────────────────────────
+async function loadLearnings(limit) {
+  limit = limit || 10;
+  var contentEl = document.getElementById('log');
+  contentEl.innerHTML = '<span class="log-info">Loading learnings...</span>';
+  try {
+    var resp = await fetch(FN + 'db-api?action=get_learnings&limit=' + limit);
+    var data = await resp.json();
+    var rows = data.learnings || [];
+    if (rows.length === 0) { contentEl.innerHTML = '<span class="log-warn">No learnings found. Post-game agent runs nightly at 11:45pm MST.</span>'; return; }
+
+    var h = '<h2>📊 NIGHTLY LEARNINGS (' + rows.length + ' nights)</h2>';
+
+    // Accuracy trend chart (simple text-based)
+    h += '<div class="card"><div style="font-size:11px;color:#a78bfa;font-weight:700;margin-bottom:6px">ACCURACY TREND</div>';
+    h += '<div style="display:flex;gap:4px;align-items:end;height:60px;padding:0 4px">';
+    rows.slice().reverse().forEach(function(r) {
+      var pct = r.accuracy_overall || 0;
+      var barH = Math.max(4, (pct / 100) * 56);
+      var color = pct >= 70 ? '#00ff88' : pct >= 50 ? '#ffd166' : '#ff5252';
+      h += '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px">';
+      h += '<span style="font-size:8px;color:' + color + '">' + pct + '%</span>';
+      h += '<div style="width:100%;height:' + barH + 'px;background:' + color + ';border-radius:2px;opacity:0.7"></div>';
+      h += '<span style="font-size:7px;color:#64748b">' + (r.date || '').slice(5) + '</span>';
+      h += '</div>';
+    });
+    h += '</div></div>';
+
+    // Agent accuracy summary (across all nights)
+    var totalSentCorrect = 0, totalSentWrong = 0, totalSuppCorrect = 0, totalSuppMissed = 0;
+    rows.forEach(function(r) {
+      var aa = r.agent_accuracy || {};
+      totalSentCorrect += aa.sent_correct || 0;
+      totalSentWrong += aa.sent_wrong || 0;
+      totalSuppCorrect += aa.suppressed_correct || 0;
+      totalSuppMissed += aa.suppressed_missed || 0;
+    });
+    var totalAgentDecisions = totalSentCorrect + totalSentWrong + totalSuppCorrect + totalSuppMissed;
+    if (totalAgentDecisions > 0) {
+      var agentPct = Math.round(((totalSentCorrect + totalSuppCorrect) / totalAgentDecisions) * 100);
+      h += '<div class="card"><div style="font-size:11px;color:#60a5fa;font-weight:700;margin-bottom:6px">AGENT ACCURACY (cumulative)</div>';
+      h += '<div class="row"><span class="label">Agent correct decisions</span><span class="val ' + (agentPct >= 60 ? 'green' : 'yellow') + '">' + agentPct + '% (' + (totalSentCorrect + totalSuppCorrect) + '/' + totalAgentDecisions + ')</span></div>';
+      h += '<div class="row"><span class="label">Sent correctly</span><span class="val green">' + totalSentCorrect + '</span></div>';
+      h += '<div class="row"><span class="label">Sent incorrectly</span><span class="val red">' + totalSentWrong + '</span></div>';
+      h += '<div class="row"><span class="label">Good suppressions (would have been wrong)</span><span class="val green">' + totalSuppCorrect + '</span></div>';
+      h += '<div class="row"><span class="label">Missed opportunities (suppressed winner)</span><span class="val red">' + totalSuppMissed + '</span></div>';
+      h += '</div>';
+    }
+
+    // Per-night cards
+    rows.forEach(function(r) {
+      var byType = r.accuracy_by_type || {};
+      var aa = r.agent_accuracy || {};
+      h += '<div class="card">';
+      h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
+      h += '<span style="font-size:12px;font-weight:700;color:#e2e8f0">' + r.date + '</span>';
+      var accColor = (r.accuracy_overall || 0) >= 70 ? '#00ff88' : (r.accuracy_overall || 0) >= 50 ? '#ffd166' : '#ff5252';
+      h += '<span style="font-size:13px;font-weight:700;color:' + accColor + '">' + (r.accuracy_overall || '?') + '% (' + (r.alerts_scored || 0) + ' alerts, ' + (r.games_analyzed || 0) + ' games)</span>';
+      h += '</div>';
+
+      // Type breakdown
+      var types = Object.keys(byType);
+      if (types.length > 0) {
+        h += '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px">';
+        types.forEach(function(t) {
+          var v = byType[t];
+          var tc = (v.pct || 0) >= 70 ? '#00ff88' : (v.pct || 0) >= 50 ? '#ffd166' : '#ff5252';
+          h += '<span class="tag" style="background:rgba(255,255,255,.05);border:1px solid ' + tc + ';color:' + tc + '">' + t + ' ' + v.pct + '% (' + v.correct + '/' + v.total + ')</span>';
+        });
+        h += '</div>';
+      }
+
+      // Agent stats for this night
+      if ((aa.sent_correct || 0) + (aa.sent_wrong || 0) + (aa.suppressed_correct || 0) + (aa.suppressed_missed || 0) > 0) {
+        h += '<div style="font-size:10px;color:#64748b;margin-bottom:4px">Agent: ';
+        h += '<span style="color:#00ff88">' + (aa.sent_correct || 0) + ' good sends</span> · ';
+        h += '<span style="color:#ff5252">' + (aa.sent_wrong || 0) + ' bad sends</span> · ';
+        h += '<span style="color:#00ff88">' + (aa.suppressed_correct || 0) + ' good suppresses</span> · ';
+        h += '<span style="color:#ff5252">' + (aa.suppressed_missed || 0) + ' missed opps</span>';
+        h += '</div>';
+      }
+
+      // Findings
+      if (r.findings) {
+        h += '<div style="font-size:10px;color:#94a3b8;line-height:1.5;margin-top:4px;padding:6px;background:#0f172a;border-radius:4px;border:1px solid #1e293b;max-height:200px;overflow-y:auto;white-space:pre-wrap">' + escH(r.findings) + '</div>';
+      }
+
+      // Patterns
+      var patterns = [];
+      try { patterns = typeof r.patterns === 'string' ? JSON.parse(r.patterns) : (r.patterns || []); } catch(e) {}
+      if (patterns.length > 0) {
+        h += '<div style="margin-top:6px"><span style="font-size:10px;color:#a78bfa;font-weight:700">PATTERNS:</span>';
+        patterns.forEach(function(p) {
+          var confColor = p.confidence === 'high' ? '#00ff88' : p.confidence === 'medium' ? '#ffd166' : '#94a3b8';
+          h += '<div style="font-size:10px;padding:3px 0;border-bottom:1px solid #1e293b11">';
+          h += '<span style="color:' + confColor + '">[' + (p.confidence || '?') + ']</span> ';
+          h += '<span style="color:#e2e8f0">' + escH(p.pattern || '') + '</span>';
+          if (p.games) h += ' <span style="color:#64748b">(' + p.games.join(', ') + ')</span>';
+          h += '</div>';
+        });
+        h += '</div>';
+      }
+
+      // Recommendations
+      var recs = [];
+      try { recs = typeof r.recommendations === 'string' ? JSON.parse(r.recommendations) : (r.recommendations || []); } catch(e) {}
+      if (recs.length > 0) {
+        h += '<div style="margin-top:6px"><span style="font-size:10px;color:#ffd166;font-weight:700">RECOMMENDATIONS:</span>';
+        recs.forEach(function(rec) {
+          h += '<div style="font-size:10px;padding:3px 0;border-bottom:1px solid #1e293b11">';
+          h += '<span style="color:#ffd166">→</span> ';
+          h += '<span style="color:#e2e8f0">' + escH(rec.action || '') + '</span>';
+          if (rec.rationale) h += ' <span style="color:#64748b">— ' + escH(rec.rationale) + '</span>';
+          h += '</div>';
+        });
+        h += '</div>';
+      }
+
+      h += '</div>';
+    });
+
+    contentEl.innerHTML = h;
+  } catch (e) {
+    contentEl.innerHTML = '<span class="log-err">Error: ' + e.message + '</span>';
+  }
 }
 </script>
 </body>

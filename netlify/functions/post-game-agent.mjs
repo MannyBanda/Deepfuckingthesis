@@ -1,0 +1,376 @@
+// ══════════════════════════════════════════════════════════════════════════════
+// post-game-agent.mjs — Nightly Post-Game Learning Agent
+//
+// Runs at 11:45pm MST (6:45am UTC) daily. For each day's games:
+//   1. COLLECT: alerts, final scores, snapshots, agent decisions
+//   2. SCORE: mark each alert correct/incorrect vs final outcome
+//   3. ANALYZE: one Sonnet call to identify patterns across the full slate
+//   4. STORE: save findings to `learnings` table
+//
+// This is the feedback loop that makes the alert system smarter over time.
+// ══════════════════════════════════════════════════════════════════════════════
+
+import { neon } from '@neondatabase/serverless';
+
+function log(msg) { console.log(`[post-game-agent] ${msg}`); }
+
+// Get today's date in Arizona time (UTC-7, no DST)
+function getArizonaDate() {
+  const now = new Date();
+  const az = new Date(now.getTime() - 7 * 60 * 60 * 1000);
+  return {
+    year: az.getUTCFullYear(),
+    month: az.getUTCMonth() + 1,
+    day: az.getUTCDate(),
+    dateStr: `${az.getUTCFullYear()}-${String(az.getUTCMonth() + 1).padStart(2, '0')}-${String(az.getUTCDate()).padStart(2, '0')}`,
+  };
+}
+
+// Fetch final scores from BDL
+async function fetchFinalScores(dateStr) {
+  const apiKey = process.env.BDL_API_KEY;
+  if (!apiKey) { log('No BDL_API_KEY'); return []; }
+  try {
+    const resp = await fetch(`https://api.balldontlie.io/nba/v1/games?dates[]=${dateStr}`, {
+      headers: { Authorization: apiKey },
+    });
+    if (!resp.ok) { log(`BDL scores ${resp.status}`); return []; }
+    const data = await resp.json();
+    return (data.data || []).map(g => ({
+      home: g.home_team?.abbreviation,
+      away: g.visitor_team?.abbreviation,
+      homeScore: g.home_team_score,
+      awayScore: g.visitor_team_score,
+      status: g.status,
+    }));
+  } catch (e) { log(`BDL fetch error: ${e.message}`); return []; }
+}
+
+// Score a single alert against final outcome
+function scoreAlert(alert, games) {
+  // Find matching game
+  const game = games.find(g => {
+    const matchup = `${alert.control_team}`;
+    return g.home === matchup || g.away === matchup;
+  });
+  if (!game || game.status !== 'Final') return null;
+
+  const ctrlIsHome = game.home === alert.control_team;
+  const ctrlFinalPts = ctrlIsHome ? game.homeScore : game.awayScore;
+  const oppFinalPts = ctrlIsHome ? game.awayScore : game.homeScore;
+  const ctrlWon = ctrlFinalPts > oppFinalPts;
+  const finalMargin = ctrlFinalPts - oppFinalPts;
+
+  // Alert-type-specific accuracy
+  let correct = false;
+  if (['BUY', 'WINDOW BUY', 'RECOVERY PATH'].includes(alert.alert_type)) {
+    correct = ctrlWon; // Control team should win
+  } else if (alert.alert_type === 'BUY WINDOW CLOSING') {
+    correct = ctrlWon; // BWC = control team leading, should hold
+  } else if (alert.alert_type === 'LEAD CRUMBLING') {
+    correct = !ctrlWon; // Lead crumbled = control team lost (alert was right about danger)
+  } else if (alert.alert_type === 'LEAD LOST') {
+    correct = !ctrlWon; // Lead lost = warning was correct
+  } else if (alert.alert_type === 'VARIANCE BREAKING') {
+    correct = ctrlWon; // Variance broke = control team should come back
+  }
+
+  // Spread accuracy
+  let spreadCorrect = null;
+  if (alert.spread != null) {
+    const spreadVal = parseFloat(alert.spread);
+    if (!isNaN(spreadVal)) {
+      // Spread is from control team perspective (negative = favorite)
+      spreadCorrect = (finalMargin + spreadVal) > 0;
+    }
+  }
+
+  return {
+    correct,
+    ctrlWon,
+    finalMargin,
+    spreadCorrect,
+    homeScore: game.homeScore,
+    awayScore: game.awayScore,
+  };
+}
+
+export default async function handler(req) {
+  log('Post-game learning agent starting...');
+
+  const sql = neon(process.env.DATABASE_URL);
+  const today = getArizonaDate();
+  log(`Processing date: ${today.dateStr} (Arizona time)`);
+
+  // ── 1. COLLECT ──────────────────────────────────────────────────────────
+
+  // Check if we already ran today (idempotent)
+  try {
+    const existing = await sql`SELECT 1 FROM learnings WHERE date = ${today.dateStr} LIMIT 1`;
+    if (existing.length > 0) {
+      log(`Already processed ${today.dateStr}, skipping`);
+      return new Response(JSON.stringify({ ok: true, message: 'Already processed' }));
+    }
+  } catch (e) {
+    // Table may not exist yet, continue
+    log(`Learnings table check: ${e.message}`);
+  }
+
+  // Get today's alerts
+  const alerts = await sql`
+    SELECT a.*, g.away_alias, g.home_alias
+    FROM alerts a
+    JOIN games g ON a.game_id = g.id
+    WHERE a.ts::date = ${today.dateStr}::date
+    ORDER BY a.ts
+  `;
+  log(`Found ${alerts.length} alerts for ${today.dateStr}`);
+
+  if (alerts.length === 0) {
+    log('No alerts to analyze');
+    // Save empty learning record so we don't re-run
+    try {
+      await sql`INSERT INTO learnings (date, games_analyzed, alerts_scored, accuracy_overall, accuracy_by_type, agent_accuracy, findings, patterns, recommendations)
+        VALUES (${today.dateStr}, 0, 0, null, '{}', '{}', 'No alerts fired today.', '[]', '[]')`;
+    } catch (e) { log(`Save empty learning: ${e.message}`); }
+    return new Response(JSON.stringify({ ok: true, message: 'No alerts' }));
+  }
+
+  // Fetch final scores
+  const finalScores = await fetchFinalScores(today.dateStr);
+  log(`BDL returned ${finalScores.length} games`);
+
+  if (finalScores.length === 0) {
+    log('No final scores available yet');
+    return new Response(JSON.stringify({ ok: true, message: 'No final scores' }));
+  }
+
+  // ── 2. SCORE ────────────────────────────────────────────────────────────
+
+  const scoredAlerts = alerts.map(a => {
+    const matchup = `${a.away_alias}@${a.home_alias}`;
+    const result = scoreAlert(a, finalScores);
+    return { ...a, matchup, result };
+  }).filter(a => a.result !== null);
+
+  log(`Scored ${scoredAlerts.length}/${alerts.length} alerts (rest had no final score)`);
+
+  // Compute accuracy breakdowns
+  const totalCorrect = scoredAlerts.filter(a => a.result.correct).length;
+  const totalScored = scoredAlerts.length;
+  const accuracyOverall = totalScored > 0 ? Math.round((totalCorrect / totalScored) * 100) : null;
+
+  // By type
+  const byType = {};
+  scoredAlerts.forEach(a => {
+    if (!byType[a.alert_type]) byType[a.alert_type] = { correct: 0, total: 0 };
+    byType[a.alert_type].total++;
+    if (a.result.correct) byType[a.alert_type].correct++;
+  });
+  Object.keys(byType).forEach(k => {
+    byType[k].pct = Math.round((byType[k].correct / byType[k].total) * 100);
+  });
+
+  // Agent decision accuracy
+  const agentStats = { sent_correct: 0, sent_wrong: 0, suppressed_correct: 0, suppressed_missed: 0, fallback: 0 };
+  scoredAlerts.forEach(a => {
+    if (a.agent_decision === 'SEND') {
+      if (a.result.correct) agentStats.sent_correct++;
+      else agentStats.sent_wrong++;
+    } else if (a.agent_decision === 'SUPPRESS') {
+      if (a.result.correct) agentStats.suppressed_missed++; // Suppressed a winner — bad
+      else agentStats.suppressed_correct++; // Suppressed a loser — good
+    } else if (a.agent_decision === 'DOWNGRADE') {
+      if (a.result.correct) agentStats.sent_correct++;
+      else agentStats.sent_wrong++;
+    } else {
+      agentStats.fallback++;
+    }
+  });
+
+  // Detect cascade games (3+ wrong alerts from same game)
+  const gameAlerts = {};
+  scoredAlerts.forEach(a => {
+    if (!gameAlerts[a.game_id]) gameAlerts[a.game_id] = { matchup: a.matchup, alerts: [], wrong: 0 };
+    gameAlerts[a.game_id].alerts.push(a);
+    if (!a.result.correct) gameAlerts[a.game_id].wrong++;
+  });
+  const cascadeGames = Object.values(gameAlerts).filter(g => g.wrong >= 3);
+
+  // Detect conflicting signal games (both teams got alerts)
+  const conflictGames = Object.values(gameAlerts).filter(g => {
+    const teams = new Set(g.alerts.map(a => a.control_team));
+    return teams.size > 1;
+  });
+
+  // TP gate failures
+  const tpFailures = scoredAlerts.filter(a =>
+    !a.result.correct &&
+    a.tp_class &&
+    a.tp_class !== 'UNLIKELY' && a.tp_class !== 'NO PATH'
+  );
+
+  // Sustainability misreads
+  const sustMisreads = scoredAlerts.filter(a =>
+    !a.result.correct &&
+    (a.ctrl_sust === 'LOCKED IN' || a.ctrl_sust === 'DURABLE') &&
+    ['BUY', 'WINDOW BUY', 'BUY WINDOW CLOSING'].includes(a.alert_type)
+  );
+
+  // CANDIDATE performance
+  const candidates = scoredAlerts.filter(a => a.alert_tier === 'CANDIDATE');
+  const candidatesSent = candidates.filter(a => a.agent_decision === 'SEND' || a.agent_decision === 'DOWNGRADE');
+  const candidatesSentCorrect = candidatesSent.filter(a => a.result.correct);
+
+  log(`Accuracy: ${accuracyOverall}% (${totalCorrect}/${totalScored})`);
+  log(`By type: ${JSON.stringify(byType)}`);
+  log(`Agent: sent_correct=${agentStats.sent_correct}, sent_wrong=${agentStats.sent_wrong}, suppressed_correct=${agentStats.suppressed_correct}, suppressed_missed=${agentStats.suppressed_missed}`);
+  log(`Cascades: ${cascadeGames.length}, Conflicts: ${conflictGames.length}, TP failures: ${tpFailures.length}`);
+  log(`Candidates sent: ${candidatesSent.length}/${candidates.length}, correct: ${candidatesSentCorrect.length}`);
+
+  // ── 3. ANALYZE (Sonnet) ─────────────────────────────────────────────────
+
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  let findings = '', patterns = '[]', recommendations = '[]';
+
+  if (anthropicKey && scoredAlerts.length > 0) {
+    const alertSummary = scoredAlerts.map(a => {
+      const r = a.result;
+      const agentTag = a.alert_tier === 'CANDIDATE' ? ` [CANDIDATE, agent:${a.agent_decision}]` : ` [FIRED, agent:${a.agent_decision}]`;
+      return `${a.matchup} Q${a.period} ${a.clock}: ${a.alert_type}${agentTag} — ${a.control_team} floor:${Number(a.floor_score).toFixed(2)} margin:${a.margin} ${a.is_trailing ? 'trailing' : 'leading'} | TP:${a.tp_class || '?'} LS:${a.ls_class || '?'} sust:${a.ctrl_sust || '?'}/${a.opp_sust || '?'} edge:${a.edge || '?'}% | RESULT: ${r.correct ? 'CORRECT' : 'WRONG'} (final margin: ${r.finalMargin > 0 ? '+' : ''}${r.finalMargin})${a.agent_reasoning ? ' | Agent reasoning: ' + a.agent_reasoning : ''}`;
+    }).join('\n');
+
+    const cascadeDetail = cascadeGames.map(g =>
+      `${g.matchup}: ${g.wrong} wrong alerts — ${g.alerts.map(a => `${a.alert_type}(${a.result.correct ? '✓' : '✗'})`).join(', ')}`
+    ).join('\n');
+
+    const conflictDetail = conflictGames.map(g => {
+      const teams = [...new Set(g.alerts.map(a => a.control_team))];
+      return `${g.matchup}: alerts for both ${teams.join(' and ')} — ${g.alerts.map(a => `${a.alert_type} ${a.control_team}(${a.result.correct ? '✓' : '✗'})`).join(', ')}`;
+    }).join('\n');
+
+    const prompt = `You are the post-game learning agent for a live NBA betting alert system. Analyze tonight's results and identify patterns.
+
+ACCURACY SUMMARY:
+Overall: ${accuracyOverall}% (${totalCorrect}/${totalScored})
+By type: ${JSON.stringify(byType)}
+Agent decisions: sent_correct=${agentStats.sent_correct}, sent_wrong=${agentStats.sent_wrong}, suppressed_correct=${agentStats.suppressed_correct}, suppressed_missed=${agentStats.suppressed_missed}
+Candidates sent: ${candidatesSent.length}/${candidates.length}, correct: ${candidatesSentCorrect.length}
+
+SCORED ALERTS:
+${alertSummary}
+
+${cascadeGames.length > 0 ? `CASCADE GAMES (3+ wrong alerts):\n${cascadeDetail}` : 'No cascade games.'}
+
+${conflictGames.length > 0 ? `CONFLICTING SIGNALS (both teams got alerts):\n${conflictDetail}` : 'No conflicting signals.'}
+
+TP GATE FAILURES (TP passed but alert was wrong): ${tpFailures.length}/${scoredAlerts.filter(a => !a.result.correct).length} wrong alerts
+
+Respond in EXACTLY this format:
+
+FINDINGS:
+[2-4 paragraph analysis of tonight's slate. What worked, what didn't, why. Be specific — name games, alert types, patterns.]
+
+PATTERNS:
+[JSON array of pattern objects, each with "pattern" (string description), "confidence" (high/medium/low), "games" (array of matchup strings that exhibited it), "impact" (how many alerts affected)]
+
+RECOMMENDATIONS:
+[JSON array of recommendation objects, each with "action" (specific threshold/gate change), "rationale" (why), "expected_impact" (what would change)]`;
+
+    try {
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': anthropicKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1500,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+      });
+
+      if (resp.ok) {
+        const data = await resp.json();
+        const text = data.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+
+        const findingsMatch = text.match(/FINDINGS:\s*([\s\S]*?)(?=\nPATTERNS:)/i);
+        const patternsMatch = text.match(/PATTERNS:\s*(\[[\s\S]*?\])(?=\s*\nRECOMMENDATIONS:)/i);
+        const recsMatch = text.match(/RECOMMENDATIONS:\s*(\[[\s\S]*)/i);
+
+        findings = findingsMatch ? findingsMatch[1].trim() : text;
+        if (patternsMatch) {
+          try { patterns = patternsMatch[1].trim(); JSON.parse(patterns); } catch { patterns = '[]'; }
+        }
+        if (recsMatch) {
+          try {
+            let recsText = recsMatch[1].trim();
+            // Extract just the JSON array
+            const arrMatch = recsText.match(/\[[\s\S]*\]/);
+            if (arrMatch) { recommendations = arrMatch[0]; JSON.parse(recommendations); }
+          } catch { recommendations = '[]'; }
+        }
+
+        log(`Sonnet analysis complete (${data.usage?.input_tokens}in/${data.usage?.output_tokens}out)`);
+      } else {
+        log(`Sonnet ${resp.status}`);
+        findings = `Agent analysis unavailable (API ${resp.status}). Raw accuracy: ${accuracyOverall}% (${totalCorrect}/${totalScored}).`;
+      }
+    } catch (e) {
+      log(`Sonnet error: ${e.message}`);
+      findings = `Agent analysis failed: ${e.message}. Raw accuracy: ${accuracyOverall}% (${totalCorrect}/${totalScored}).`;
+    }
+  } else {
+    findings = `No API key or no scored alerts. Raw accuracy: ${accuracyOverall}% (${totalCorrect}/${totalScored}).`;
+  }
+
+  // ── 4. STORE ────────────────────────────────────────────────────────────
+
+  const uniqueGames = new Set(scoredAlerts.map(a => a.game_id));
+
+  try {
+    await sql`INSERT INTO learnings (date, games_analyzed, alerts_scored, accuracy_overall, accuracy_by_type, agent_accuracy, findings, patterns, recommendations)
+      VALUES (${today.dateStr}, ${uniqueGames.size}, ${totalScored}, ${accuracyOverall}, ${JSON.stringify(byType)}, ${JSON.stringify(agentStats)}, ${findings}, ${patterns}, ${recommendations})`;
+    log(`Learning saved for ${today.dateStr}`);
+  } catch (e) {
+    log(`Learning save failed: ${e.message}`);
+  }
+
+  // ── 5. NTFY SUMMARY ────────────────────────────────────────────────────
+  // Send a brief nightly summary so Manny sees it without opening debug
+  const topic = process.env.NTFY_TOPIC;
+  if (topic && totalScored > 0) {
+    const typeBreakdown = Object.entries(byType).map(([k, v]) => `${k}: ${v.pct}% (${v.correct}/${v.total})`).join('\n');
+    const agentLine = (agentStats.sent_correct + agentStats.sent_wrong > 0)
+      ? `\nAgent: ${agentStats.sent_correct}/${agentStats.sent_correct + agentStats.sent_wrong} sent correctly, ${agentStats.suppressed_correct} good suppressions`
+      : '';
+    const candidateLine = candidates.length > 0
+      ? `\nCandidates: ${candidatesSentCorrect.length}/${candidatesSent.length} sent correctly (${candidates.length} total)`
+      : '';
+
+    try {
+      const asciiTitle = `DFT Nightly: ${accuracyOverall}% (${totalCorrect}/${totalScored})`;
+      await fetch(`https://ntfy.sh/${topic}`, {
+        method: 'POST',
+        headers: { 'Title': asciiTitle, 'Priority': '3', 'Tags': 'chart_with_upwards_trend' },
+        body: `${asciiTitle}\n${typeBreakdown}${agentLine}${candidateLine}\n\nCheck debug page for full analysis`,
+      });
+      log('Nightly summary sent to ntfy');
+    } catch (e) { log(`Ntfy summary failed: ${e.message}`); }
+  }
+
+  log('Post-game learning agent complete');
+  return new Response(JSON.stringify({
+    ok: true,
+    date: today.dateStr,
+    alerts: totalScored,
+    accuracy: accuracyOverall,
+    agentStats,
+  }));
+}
+
+export const config = {
+  schedule: "45 6 * * *",  // 6:45am UTC = 11:45pm MST (Arizona)
+};

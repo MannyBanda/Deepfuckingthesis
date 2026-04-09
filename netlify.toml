@@ -18,6 +18,9 @@
 [functions."test-bdl"]
   timeout = 60
 
+[functions."post-game-agent"]
+  timeout = 120
+
 [[headers]]
   for = "/*"
   [headers.values]

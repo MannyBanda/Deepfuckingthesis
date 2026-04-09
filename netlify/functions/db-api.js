@@ -315,6 +315,22 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS agent_decision TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS agent_reasoning TEXT`; } catch(e) {}
 
+      // ── LEARNINGS table (post-game agent nightly analysis) ──
+      await sql`CREATE TABLE IF NOT EXISTS learnings (
+        id SERIAL PRIMARY KEY,
+        date TEXT NOT NULL UNIQUE,
+        games_analyzed INT DEFAULT 0,
+        alerts_scored INT DEFAULT 0,
+        accuracy_overall INT,
+        accuracy_by_type JSONB DEFAULT '{}',
+        agent_accuracy JSONB DEFAULT '{}',
+        findings TEXT,
+        patterns JSONB DEFAULT '[]',
+        recommendations JSONB DEFAULT '[]',
+        ts TIMESTAMPTZ DEFAULT NOW()
+      )`;
+      try { await sql`CREATE INDEX IF NOT EXISTS idx_learnings_date ON learnings (date)`; } catch(e) {}
+
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'Schema initialized' }) };
     }
 
@@ -1177,6 +1193,15 @@ exports.handler = async (event) => {
         alerts,
         summary: { total, resolved: resolved.length, correct, accuracy: resolved.length > 0 ? Math.round(correct / resolved.length * 100) : null }
       }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_LEARNINGS — query nightly post-game agent findings
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_learnings') {
+      const limit = parseInt(params.get('limit') || '30');
+      const rows = await sql`SELECT * FROM learnings ORDER BY date DESC LIMIT ${limit}`;
+      return { statusCode: 200, headers, body: JSON.stringify({ learnings: rows }) };
     }
 
     // ═══════════════════════════════════════════════════════
