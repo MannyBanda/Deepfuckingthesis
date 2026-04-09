@@ -4006,8 +4006,11 @@ export default async function(req) {
                 alertPriority = 5;
               }
             } else if (ind.score >= 0.60 && ctrlLeading && margin >= 2 && currentPeriod >= 2) {
-              // BWC with edge gate (matches client synthesizer)
-              if (ctrlEdge !== null && ctrlEdge > 0) {
+              // BWC with ML gate — no value betting heavy favorites
+              const ctrlMLNum = ctrlML ? parseFloat(ctrlML) : null;
+              if (ctrlMLNum !== null && ctrlMLNum < -250) {
+                log(`${matchup}: BWC suppressed — ML ${ctrlML} (heavy favorite, no value)`);
+              } else if (ctrlMLNum !== null) {
                 // Check lead safety — downgrade to WATCH if AT RISK/CRITICAL
                 const lsClass = lsForBWC?.classification || null;
                 if (lsClass === 'AT RISK' || lsClass === 'CRITICAL') {
@@ -4022,10 +4025,8 @@ export default async function(req) {
                 }
               } else if (garbageLine) {
                 log(`${matchup}: BWC skipped — line dead (garbage MLs)`);
-              } else if (ctrlEdge !== null && ctrlEdge <= 0) {
-                log(`${matchup}: BWC skipped — no edge (${ctrlEdge > 0 ? '+' : ''}${ctrlEdge}%)`);
-              } else {
-                log(`${matchup}: BWC skipped — no odds data for edge calc`);
+              } else if (ctrlMLNum === null) {
+                log(`${matchup}: BWC skipped — no odds data`);
               }
             }
 
@@ -4065,10 +4066,16 @@ export default async function(req) {
                       }
                     }
                     if (!wbBlocked) {
+                      // ML gate: suppress when heavy favorite (no betting value)
+                      const wbMLNum = ctrlML ? parseFloat(ctrlML) : null;
+                      if (wbMLNum !== null && wbMLNum < -250) {
+                        log(`${matchup}: WINDOW BUY suppressed — ML ${ctrlML} (heavy favorite, no value)`);
+                      } else {
                       alertType = 'WINDOW BUY';
                       alertEmoji = '🪟';
                       alertPriority = 4;
                       log(`${matchup}: WINDOW BUY — ${ind.controlTeam} floor:${ind.score.toFixed(2)} margin:${ctrlMargin} sust:${ctrlSust} tp:${wbTpClass} ls:${wbLsClass}`);
+                      }
                     }
                   }
                 } catch (e) { log(`${matchup}: WINDOW BUY check failed: ${e.message}`); }
