@@ -3181,6 +3181,11 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       }
 
       if (!tpSuppressed) {
+        // ── Floor gate: suppress BUY push when Sonnet's floor < 0.65 ──
+        const sonnetFloor = parseFloat(parsed.controlScore) || 0;
+        if (isBuy && sonnetFloor < 0.65) {
+          log(`${matchup}: ${triggerTag} ntfy SUPPRESSED — Sonnet floor ${sonnetFloor.toFixed(2)} < 0.65 (analysis saved, no push)`);
+        } else {
         const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${period} ${clock}`;
         const ctrlTeam = parsed.controlTeam || '?';
         const ntfyTitle = `${signal || entry} — ${matchup}`;
@@ -3192,6 +3197,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           + `\n[AI analysis — ${triggerTag}]`;
         const ntfyPriority = isOptimal ? 5 : 4;
         await sendNtfy(ntfyTitle, ntfyBody, ntfyPriority);
+        } // close floor gate else
       }
     }
   } catch (e) {
