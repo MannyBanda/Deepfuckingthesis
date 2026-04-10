@@ -4350,9 +4350,22 @@ export default async function(req) {
                   let ntfyTitle, ntfyBody;
                   const tierTag = alertTier === 'CANDIDATE' ? ' [CANDIDATE]' : '';
 
+                  // Always build mechanical title (team + ML in header)
+                  if (alertType === 'BUY') {
+                    const mlStr = ctrlML ? `${ind.controlTeam} ML ${ctrlML}` : ind.controlTeam;
+                    ntfyTitle = `BUY${tierTag} ${mlStr}`;
+                  } else if (alertType === 'BUY WINDOW CLOSING') {
+                    const mlStr = ctrlML ? `${ind.controlTeam} ML ${ctrlML}` : ind.controlTeam;
+                    ntfyTitle = `WINDOW CLOSING${tierTag} -- ${mlStr}`;
+                  } else if (alertType === 'WINDOW BUY') {
+                    const mlStr = ctrlML ? `${ind.controlTeam} ML ${ctrlML}` : ind.controlTeam;
+                    ntfyTitle = `WINDOW BUY${tierTag} -- ${mlStr}`;
+                  } else {
+                    ntfyTitle = `${alertType}${tierTag} -- ${matchup}`;
+                  }
+
                   if (agentResult?.body && agentResult.body.length > 20) {
-                    // Agent-enhanced body
-                    ntfyTitle = `${alertType}${tierTag} — ${matchup}`;
+                    // Agent-enhanced body with mechanical title
                     ntfyBody = scoreLine + '\n' + agentResult.body;
                   } else {
                     // Mechanical fallback body
@@ -4375,8 +4388,6 @@ export default async function(req) {
                     })();
 
                     if (alertType === 'BUY') {
-                      const mlStr = ctrlML ? `${ind.controlTeam} ML ${ctrlML}` : ind.controlTeam;
-                      ntfyTitle = `BUY${tierTag} ${mlStr}`;
                       ntfyBody = scoreLine
                         + `\n${ind.controlTeam} trails by ${margin} but controls the game structurally (${ind.score.toFixed(2)})`
                         + (tpForBuy ? `\nMath projects a ${fmtSwing(tpForBuy.expected.totalSwing)}-point swing with ${tpForBuy.remainingPoss} possessions left` : '')
@@ -4384,8 +4395,6 @@ export default async function(req) {
                         + sustExplain + calWarn + vtWarn
                         + (spreadVal != null ? `\nSpread: ${spreadVal}` : '');
                     } else if (alertType === 'BUY WINDOW CLOSING') {
-                      const mlStr = ctrlML ? `${ind.controlTeam} ML ${ctrlML}` : ind.controlTeam;
-                      ntfyTitle = `WINDOW CLOSING${tierTag} — ${mlStr}`;
                       const lsClass = lsForBWC?.classification || null;
                       const lsDesc = lsClass === 'SAFE' ? 'Lead is mechanically safe'
                         : lsClass === 'CUSHIONED' ? 'Lead has a comfortable cushion'
@@ -4397,8 +4406,6 @@ export default async function(req) {
                         + `\nLine will tighten soon, act now or pass`
                         + sustExplain + calWarn + vtWarn;
                     } else if (alertType === 'WINDOW BUY') {
-                      const mlStr = ctrlML ? `${ind.controlTeam} ML ${ctrlML}` : ind.controlTeam;
-                      ntfyTitle = `WINDOW BUY${tierTag} — ${mlStr}`;
                       const stateDesc = ctrlMargin > 0 ? `leads by ${ctrlMargin}` : ctrlMargin === 0 ? 'is tied' : `trails by ${Math.abs(ctrlMargin)}`;
                       ntfyBody = scoreLine
                         + `\n${ind.controlTeam} ${stateDesc} but has taken over the recent window`
@@ -4409,7 +4416,6 @@ export default async function(req) {
                         + (ctrlEdge != null ? `\nEdge: ${ctrlEdge > 0 ? '+' : ''}${ctrlEdge}% over market` : '')
                         + calWarn + vtWarn;
                     } else {
-                      ntfyTitle = `${alertType}${tierTag} — ${matchup}`;
                       ntfyBody = scoreLine + `\n${ind.controlTeam} ${ind.score.toFixed(2)}`;
                     }
                   }
