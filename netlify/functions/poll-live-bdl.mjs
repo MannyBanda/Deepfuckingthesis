@@ -279,6 +279,7 @@ RULES:
 - BWC (Buy Window Closing): the thesis is "market hasn't priced in structural dominance yet." Verify edge is real and lead is secure.
 - RECOVERY PATH: math projects a comeback. Verify structural control supports the math.
 - Be skeptical of high floors (0.75+) at small margins (1-3 pts) — floor may be anchored from earlier dominance that's fading.
+- EARLY GAME CAUTION (Q1-Q2): Indicator signals are noisy with small samples. Steals/blocks counts are low, run share hasn't stabilized (I5 likely EVEN), and biggest_lead gaps are volatile — a 6-0 opening run creates a +6 biggest_lead that may not reflect structural control. For Q1-Q2 FIRED alerts: require I4 COMBO YES to SEND. Without it, DOWNGRADE. For Q1-Q2 CANDIDATE alerts: SUPPRESS unless the case is overwhelming. Q3+ alerts have proven far more reliable — trust those more.
 - CANDIDATE BUYs at floor 0.55-0.65: only SEND if I4 COMBO is YES (I4 decisive + at least one other indicator agrees — this pattern is 98-100% accurate historically). Without I4 COMBO, require very strong sustainability case to justify SEND.
 
 Respond in EXACTLY this format:
