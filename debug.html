@@ -610,11 +610,11 @@ async function viewQuarterData(){
 
   // Key stat fields to highlight (grouped by indicator)
   var qdGroups = {
-    'I1 Possession': ['steals','turnovers','offensive_rebounds','fast_break_points','points_off_turnovers','second_chance_points'],
-    'I2 Rim/Foul': ['points_in_the_paint','points_in_paint','free_throws_att','blocks','personal_fouls'],
+    'I1 Disruption': ['steals','blocks','points_off_turnovers'],
+    'I2 Interior': ['points_in_the_paint','points_in_paint','field_goals_at_rim_made','field_goals_at_rim_att'],
     'I3 Shot Quality': ['field_goals_made','field_goals_att','three_points_made','three_points_att','assists'],
-    'I4 Lineup': ['bench_points','biggest_lead','points'],
-    'I5 Tempo': ['possessions','offensive_points_per_possession','defensive_points_per_possession']
+    'I4 Game Control': ['biggest_lead','points'],
+    'I5 Execution': []
   };
 
   // ── Boundary cards ──

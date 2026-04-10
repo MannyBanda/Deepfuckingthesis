@@ -365,7 +365,7 @@ setTimeout(function(){
 // ══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS & STATE
 // ══════════════════════════════════════════════════════════════════════════════
-const W = {I1:.25, I2:.25, I3:.20, I4:.20, I5:.10};
+const W = {I1:.10, I2:.15, I3:.20, I4:.30, I5:.25};
 const FN = '/.netlify/functions/';
 
 
@@ -2869,6 +2869,10 @@ function parsePBP(pbpData, game){
   if(runPts>=8||runCount>=3) runs.push({team:runTeam,pts:runPts,count:runCount,q:scoreLog[runStart]?.q,lineup:runLineup,mechanism:runShotTypes.slice(),si:runStart,ei:scoreLog.length-1});
   runs.sort((a,b)=>b.ei-a.ei); // most recent first
 
+  // I5 runs — 6+ pts threshold
+  const runs6=[];
+  {let r6Tm=null,r6Pts=0;for(let i=0;i<scoreLog.length;i++){const s=scoreLog[i];if(s.team===r6Tm){r6Pts+=s.pts;}else{if(r6Pts>=6&&r6Tm)runs6.push({team:r6Tm,pts:r6Pts});r6Tm=s.team;r6Pts=s.pts;}}if(r6Pts>=6&&r6Tm)runs6.push({team:r6Tm,pts:r6Pts});}
+
   // ── AGGREGATE SUMMARIES (unchanged) ──
   function teamShots(tm){ return shots.filter(s=>s.tm===tm); }
   function aggTeam(tm){
@@ -2938,6 +2942,7 @@ function parsePBP(pbpData, game){
     home, away, homeAlias:hA, awayAlias:aA,
     totalShots: shots.length, totalTOs: turnovers.length,
     runs: runs,
+    runs6: runs6,
     syntheticQuarters: syntheticQuarters.length >= 2 ? syntheticQuarters : null,
     scoringEvents: scoringEvents,
     raw: {shots, turnovers},
@@ -3349,7 +3354,7 @@ function computePossessionWindow(game, windowSize){
   var pace=timeSpanMin>0?(windowSize/timeSpanMin)*40:0; // per 40 min (NCAAMB game length)
   var wI5={score:effD>.05?1:effD<-.05?0:.5, detail:'PPP:'+hPPP.toFixed(2)+'\u2013'+aPPP.toFixed(2)+' Pace:'+pace.toFixed(0)+' ('+timeSpanMin.toFixed(1)+'min)'};
 
-  var W={I1:.25,I2:.25,I3:.20,I4:.20,I5:.10};
+  var W={I1:.10,I2:.15,I3:.20,I4:.30,I5:.25};
   var raw=wI1.score*W.I1+wI2.score*W.I2+wI3.score*W.I3+wI4.score*W.I4+wI5.score*W.I5;
   var controlHome=raw>=0.5, score=controlHome?raw:1-raw, controlTeam=controlHome?hA:aA;
 
@@ -3456,7 +3461,7 @@ function computePossessionWindowEnriched(game, windowSize){
 
   var eI5 = base.I5;
 
-  var W = {I1:.25, I2:.25, I3:.20, I4:.20, I5:.10};
+  var W = {I1:.10, I2:.15, I3:.20, I4:.30, I5:.25};
   var raw = eI1.score*W.I1 + eI2.score*W.I2 + eI3.score*W.I3 + eI4.score*W.I4 + eI5.score*W.I5;
   var controlHome = raw >= 0.5, eScore = controlHome ? raw : 1 - raw;
   var eControlTeam = controlHome ? hA : aA;
@@ -3758,11 +3763,11 @@ function parseSonnetScores(text, homeAlias, awayAlias){
   try{
     const ind = {};
     const iMap = {
-      'I1':{weight:0.25, nm:'POSSESS/TRANS'},
-      'I2':{weight:0.25, nm:'RIM/FOUL'},
+      'I1':{weight:0.10, nm:'DISRUPT/CONV'},
+      'I2':{weight:0.15, nm:'INTERIOR'},
       'I3':{weight:0.20, nm:'SHOT QUALITY'},
-      'I4':{weight:0.20, nm:'LINEUP INTEG'},
-      'I5':{weight:0.10, nm:'TEMPO/EFF'},
+      'I4':{weight:0.30, nm:'GAME CONTROL'},
+      'I5':{weight:0.25, nm:'EXECUTION'},
     };
     for(const [key, meta] of Object.entries(iMap)){
       // Match any decimal score: "I1 Possession... : CLE 0.75 — explanation"
@@ -3789,7 +3794,7 @@ function parseSonnetScores(text, homeAlias, awayAlias){
       if(!ind[key]) ind[key] = {score:0.5, leader:'EVEN', detail:'(not parsed from Sonnet)', sonnet:false, rawScore:0.5};
     }
 
-    const W = {I1:0.25, I2:0.25, I3:0.20, I4:0.20, I5:0.10};
+    const W = {I1:0.10, I2:0.15, I3:0.20, I4:0.30, I5:0.25};
     const raw = ind.I1.score*W.I1 + ind.I2.score*W.I2 + ind.I3.score*W.I3 + ind.I4.score*W.I4 + ind.I5.score*W.I5;
     const controlHome = raw >= 0.5;
     let score = controlHome ? raw : 1 - raw;
@@ -4601,28 +4606,31 @@ function compute(game){
   const hA = H?.alias||H?.name||'HOME', aA = A?.alias||A?.name||'AWAY';
   const hS = H?.points||0, aS = A?.points||0;
 
-  // I1 — Possession & Transition
-  const hGen = (hs.steals||0)+(hs.offensive_rebounds||0)-(hs.turnovers||hs.total_turnovers||0);
-  const aGen = (as.steals||0)+(as.offensive_rebounds||0)-(as.turnovers||as.total_turnovers||0);
-  const hConv = (hs.fast_break_points||0)+(hs.points_off_turnovers||0)+(hs.second_chance_points||0);
-  const aConv = (as.fast_break_points||0)+(as.points_off_turnovers||0)+(as.second_chance_points||0);
-  let i1 = (hGen>aGen?1:hGen<aGen?-1:0)+(hConv>aConv?1:hConv<aConv?-1:0);
+  // I1 — Disruption & Conversion
+  const hDisrupt = (hs.steals||0) + (hs.blocks||0);
+  const aDisrupt = (as.steals||0) + (as.blocks||0);
+  const disruptDiff = hDisrupt - aDisrupt;
+  const i1subA = disruptDiff > 1 ? 1 : disruptDiff < -1 ? -1 : 0;
+  const hPOT = hs.points_off_turnovers||0, aPOT = as.points_off_turnovers||0;
+  const potDiff = hPOT - aPOT;
+  const i1subB = potDiff > 4 ? 1 : potDiff < -4 ? -1 : 0;
+  let i1 = i1subA + i1subB;
   // Chaos layer from PBP — forced vs unforced TOs
   const pbp = cardState[game.id]?.pbpAudit;
   let chaosNote = '';
   if(pbp){
-    const hForced = pbp.away.tos.forced||0; // home team FORCES opponent (away) TOs
-    const aForced = pbp.home.tos.forced||0; // away team FORCES opponent (home) TOs
-    const hUnforced = pbp.home.tos.unforced||0; // home team's own unforced
-    const aUnforced = pbp.away.tos.unforced||0; // away team's own unforced
-    if(hForced >= aForced+3) { i1 += 1; chaosNote = ` | CHAOS:${hA} +${hForced-aForced} forced`; }
-    else if(aForced >= hForced+3) { i1 -= 1; chaosNote = ` | CHAOS:${aA} +${aForced-hForced} forced`; }
-    else if(hUnforced >= aUnforced+3) { i1 -= 1; chaosNote = ` | CHAOS:${hA} ${hUnforced} unforced`; }
-    else if(aUnforced >= hUnforced+3) { i1 += 1; chaosNote = ` | CHAOS:${aA} ${aUnforced} unforced`; }
+    const hForced = pbp.away.tos.forced||0;
+    const aForced = pbp.home.tos.forced||0;
+    const hUnforced = pbp.home.tos.unforced||0;
+    const aUnforced = pbp.away.tos.unforced||0;
+    if(hForced >= aForced+4) { i1 += 0.5; chaosNote = ` | CHAOS:${hA} +${hForced-aForced} forced`; }
+    else if(aForced >= hForced+4) { i1 -= 0.5; chaosNote = ` | CHAOS:${aA} +${aForced-hForced} forced`; }
+    else if(hUnforced >= aUnforced+4) { i1 -= 0.5; chaosNote = ` | CHAOS:${hA} ${hUnforced} unforced`; }
+    else if(aUnforced >= hUnforced+4) { i1 += 0.5; chaosNote = ` | CHAOS:${aA} ${aUnforced} unforced`; }
     else { chaosNote = ` | chaos:even`; }
   }
   const I1={score:i1>0?1:i1===0?.5:0, leader:i1>0?hA:i1<0?aA:'EVEN',
-    detail:`${hA} ${hs.steals||0}stl ${hs.offensive_rebounds||0}or ${hs.turnovers||hs.total_turnovers||0}to | ${aA} ${as.steals||0}stl ${as.offensive_rebounds||0}or ${as.turnovers||as.total_turnovers||0}to | Conv:${hConv}–${aConv}${chaosNote}`};
+    detail:`Disrupt:${hDisrupt}–${aDisrupt} (stl+blk) POT:${hPOT}–${aPOT}${chaosNote}`};
 
   // I2 — Interior Control (Sub-A: paint volume, Sub-B: rim efficiency)
   var hPaint = hs.points_in_the_paint||hs.points_in_paint||0, aPaint = as.points_in_the_paint||as.points_in_paint||0;
@@ -4665,46 +4673,41 @@ function compute(game){
   }
   const I3={score:i3>0?1:i3===0?.5:0, leader:i3>0?hA:i3<0?aA:'EVEN', detail:i3detail};
 
-  // I4 — Lineup Integrity
+  // I4 — Game Control
   const periods = s.periods||[];
-  let qDs = periods.map(p=>(p.home_points||0)-(p.away_points||0));
-  // NCAAMB: override with synthetic quarters from PBP when available (4 virtual quarters from 2 halves)
-  const synQ = cardState[game.id]?.pbpAudit?.syntheticQuarters;
-  if(synQ && synQ.length >= 2){
-    qDs = synQ.map(q => (q.home_points||0) - (q.away_points||0));
-  }
-  const trend = qDs.length>=2 ? qDs[qDs.length-1]-qDs[0] : 0;
   const hBigLead = hs.biggest_lead||0, aBigLead = as.biggest_lead||0;
-  const hBench = hs.bench_points||0, aBench = as.bench_points||0;
-  const hRun = hs.most_unanswered?.points||0, aRun = as.most_unanswered?.points||0;
-  const hTimeLead = hs.time_leading||'', aTimeLead = as.time_leading||'';
+  const bigLeadDiff = hBigLead - aBigLead;
+  const i4subA = bigLeadDiff > 4 ? 1 : bigLeadDiff < -4 ? -1 : 0;
+  let i4subB = 0;
+  // NCAAMB: use H2 diff when in second half (periods.length >= 2)
+  if (periods.length >= 2) {
+    const lastP = periods[periods.length - 1];
+    const lastQDiff = (lastP?.home_points||0) - (lastP?.away_points||0);
+    i4subB = lastQDiff > 2 ? 1 : lastQDiff < -2 ? -1 : 0;
+  }
+  const i4 = i4subA + i4subB;
+  const qDs = periods.map(p=>(p.home_points||0)-(p.away_points||0));
   const lc = s.lead_changes||0, tt = s.times_tied||0;
-  const hTO_rem = H?.remaining_timeouts, aTO_rem = A?.remaining_timeouts;
-  const benchD = hBench - aBench;
-  const i4 = (hBigLead>aBigLead+4?1:hBigLead<aBigLead-4?-1:0)+(trend>2?1:trend<-2?-1:0)+(benchD>10?1:benchD<-10?-1:0);
-  const periodPrefix = synQ ? 'sQ' : 'H';
-  let i4detail = `BigLead:${hBigLead}–${aBigLead} Bench:${hBench}–${aBench} Δ:${hS>aS?'+':''}${hS-aS} trend:${trend>0?'+':''}${trend} ${qDs.map((d,i)=>periodPrefix+(i+1)+':'+(d>0?'+':'')+d).join(' ')}`;
-  if(hRun||aRun) i4detail += ` | runs:${hA}${hRun} ${aA}${aRun}`;
-  if(hTimeLead||aTimeLead) i4detail += ` | lead:${hA}${hTimeLead} ${aA}${aTimeLead}`;
+  let i4detail = `BigLead:${hBigLead}–${aBigLead} ${qDs.map((d,i)=>'H'+(i+1)+':'+(d>0?'+':'')+d).join(' ')}`;
   if(lc||tt) i4detail += ` | LC:${lc} TT:${tt}`;
-  if(hTO_rem!=null||aTO_rem!=null) i4detail += ` | TO:${hTO_rem!=null?hA+hTO_rem:'?'}/${aTO_rem!=null?aA+aTO_rem:'?'}`;
   const I4={score:i4>0?1:i4===0?.5:0, leader:i4>0?hA:i4<0?aA:'EVEN', detail:i4detail};
 
-  // I5 — Tempo & Efficiency
-  const hOPPP = hs.offensive_points_per_possession||0, aOPPP = as.offensive_points_per_possession||0;
-  const hDPPP = hs.defensive_points_per_possession||0, aDPPP = as.defensive_points_per_possession||0;
-  const effD = (hOPPP-aDPPP)-(aOPPP-hDPPP);
-  const hPoss = hs.possessions||0, aPoss = as.possessions||0;
-  const hTS = hs.true_shooting_pct||0, aTS = as.true_shooting_pct||0;
-  const hATO = hs.assists_turnover_ratio||0, aATO = as.assists_turnover_ratio||0;
-  const hTransO = hs.transition_offense, aTransO = as.transition_offense;
-  const hTransD = hs.transition_defense, aTransD = as.transition_defense;
-  const hEGS = hs.efficiency_game_score||0, aEGS = as.efficiency_game_score||0;
-  let i5detail = `OPPP:${hOPPP.toFixed(2)}–${aOPPP.toFixed(2)} DPPP:${hDPPP.toFixed(2)}–${aDPPP.toFixed(2)} NetΔ:${effD>0?'+':''}${effD.toFixed(3)} Poss:${hPoss}–${aPoss}`;
-  i5detail += ` TS:${hTS.toFixed?hTS.toFixed(1):hTS}–${aTS.toFixed?aTS.toFixed(1):aTS} A/TO:${hATO.toFixed?hATO.toFixed(1):hATO}–${aATO.toFixed?aATO.toFixed(1):aATO}`;
-  if(hEGS||aEGS) i5detail += ` EGS:${hEGS.toFixed?hEGS.toFixed(1):hEGS}–${aEGS.toFixed?aEGS.toFixed(1):aEGS}`;
-  if(hTransO!=null&&aTransO!=null) i5detail += ` TransO:${hTransO}–${aTransO} TransD:${hTransD||'?'}–${aTransD||'?'}`;
-  const I5={score:effD>0.08?1:effD<-0.08?0:.5, leader:effD>0.08?hA:effD<-0.08?aA:'EVEN', detail:i5detail};
+  // I5 — Sustained Execution (run share from PBP)
+  let I5={score:0.5, leader:'EVEN', detail:'No PBP runs data'};
+  const pbpRuns6 = pbp?.runs6 || cardState[game.id]?.pbpAudit?.runs6;
+  if (pbpRuns6) {
+    const hRuns = pbpRuns6.filter(r=>r.team===hA).length;
+    const aRuns = pbpRuns6.filter(r=>r.team===aA).length;
+    const totalRuns = hRuns + aRuns;
+    if (totalRuns >= 4) {
+      const runShare = hRuns / totalRuns;
+      I5 = {score: runShare > 0.55 ? 1 : runShare < 0.45 ? 0 : 0.5,
+            leader: runShare > 0.55 ? hA : runShare < 0.45 ? aA : 'EVEN',
+            detail: `Runs(6+):${hA}${hRuns}–${aA}${aRuns} share:${(runShare*100).toFixed(0)}%`};
+    } else {
+      I5.detail = `Runs(6+):${hA}${hRuns}–${aA}${aRuns} (< 4 total, EVEN)`;
+    }
+  }
 
   const raw = I1.score*W.I1 + I2.score*W.I2 + I3.score*W.I3 + I4.score*W.I4 + I5.score*W.I5;
   const controlHome = raw>=.5, cTeam = controlHome?hA:aA;
@@ -6949,16 +6952,13 @@ function computeRollingWindow(game){
 
   const hW = aggWindow('home'), aW = aggWindow('away');
   const hA = game.home?.alias||'HOME', aA = game.away?.alias||'AWAY';
-  const W = {I1:.25,I2:.25,I3:.20,I4:.20,I5:.10};
+  const W = {I1:.10,I2:.15,I3:.20,I4:.30,I5:.25};
 
-  const hGen=(hW.steals||0)+(hW.offensive_rebounds||0)-(hW.turnovers||hW.total_turnovers||0);
-  const aGen=(aW.steals||0)+(aW.offensive_rebounds||0)-(aW.turnovers||aW.total_turnovers||0);
-  const hConv=(hW.fast_break_points||0)+(hW.points_off_turnovers||0)+(hW.second_chance_points||0);
-  const aConv=(aW.fast_break_points||0)+(aW.points_off_turnovers||0)+(aW.second_chance_points||0);
-  const convAvail = hConv>0||aConv>0;
-  let i1 = (hGen>aGen?1:hGen<aGen?-1:0);
-  if(convAvail) i1 += (hConv>aConv?1:hConv<aConv?-1:0);
-  const wI1 = {score:i1>0?1:i1===0?.5:0, detail:'Gen:'+hGen.toFixed(0)+'\u2013'+aGen.toFixed(0)+(convAvail?' Conv:'+hConv.toFixed(0)+'\u2013'+aConv.toFixed(0):' (conv N/A)')};
+  const hWDisrupt=(hW.steals||0)+(hW.blocks||0);
+  const aWDisrupt=(aW.steals||0)+(aW.blocks||0);
+  const wDisruptDiff=hWDisrupt-aWDisrupt;
+  const i1=wDisruptDiff>1?1:wDisruptDiff<-1?-1:0;
+  const wI1 = {score:i1>0?1:i1===0?.5:0, detail:'Disrupt:'+hWDisrupt.toFixed(0)+'\u2013'+aWDisrupt.toFixed(0)+' (stl+blk, window)'};
 
   const hPaint=hW.points_in_the_paint||0, aPaint=aW.points_in_the_paint||0;
   const cfPaintDiff=hPaint-aPaint;
@@ -6978,18 +6978,17 @@ function computeRollingWindow(game){
   i3+=(hAR>aAR+5?1:hAR<aAR-5?-1:0);
   const wI3 = {score:i3>0?1:i3===0?.5:0, detail:'eFG:'+(hEFG!=null?(hEFG*100).toFixed(0):'?')+'\u2013'+(aEFG!=null?(aEFG*100).toFixed(0):'?')+' AR:'+hAR.toFixed(0)+'\u2013'+aAR.toFixed(0)};
 
+  const hCumBigLead=game.summary?.home?.statistics?.biggest_lead||0;
+  const aCumBigLead=game.summary?.away?.statistics?.biggest_lead||0;
+  const wBLdiff=hCumBigLead-aCumBigLead;
+  const wi4subA=wBLdiff>4?1:wBLdiff<-4?-1:0;
   const hPts=hW.points||0, aPts=aW.points||0;
   const pDiff=hPts-aPts;
-  const hBench=hW.bench_points||0, aBench=aW.bench_points||0;
-  let i4=(Math.abs(pDiff)>4?(pDiff>0?1:-1):0);
-  if(hBench>0||aBench>0) i4+=(hBench>aBench+4?1:hBench<aBench-4?-1:0);
-  const wI4 = {score:i4>0?1:i4===0?.5:0, detail:'Window \u0394:'+pDiff.toFixed(0)+' Bench:'+hBench.toFixed(0)+'\u2013'+aBench.toFixed(0)};
+  const wi4subB=pDiff>4?1:pDiff<-4?-1:0;
+  let i4=wi4subA+wi4subB;
+  const wI4 = {score:i4>0?1:i4===0?.5:0, detail:'BigLead:'+hCumBigLead+'\u2013'+aCumBigLead+' WinΔ:'+pDiff.toFixed(0)};
 
-  const hPoss=hW.possessions||0, aPoss=aW.possessions||0;
-  let hEff=0,aEff=0;
-  if(hPoss>0&&aPoss>0){ hEff=hPts/hPoss; aEff=aPts/aPoss; }
-  const effD=hEff-aEff;
-  const wI5 = {score:effD>0.06?1:effD<-0.06?0:.5, detail:'Eff:'+hEff.toFixed(2)+'\u2013'+aEff.toFixed(2)+' Poss:'+hPoss.toFixed(0)+'\u2013'+aPoss.toFixed(0)};
+  const wI5 = {score:0.5, detail:'Runs not window-segmentable'};
 
   const raw_pre = wI1.score*W.I1 + wI2.score*W.I2 + wI3.score*W.I3 + wI4.score*W.I4 + wI5.score*W.I5;
 
@@ -7237,7 +7236,7 @@ function classifyCombinedRead(floorScore, floorTeam, windowResult, accelResult){
 // COMPUTE DISPATCH — routes to SR or BDL compute path
 // ══════════════════════════════════════════════════════════════════════════════
 function computeAny(game){
-  if(game.dataSource==='BDL' && game.bdlData) return computeBDL(game);
+  // BDL builds SR-shaped summary via buildSummaryFromBDL — same compute() path works for both
   return compute(game);
 }
 
@@ -7622,7 +7621,7 @@ function renderConfidenceTable(){
     if(!cs?.sonnetIndicators && t){
       const thesisParsed = parseSonnetScores(t, hA, aA);
       if(thesisParsed){
-        const Wt = {I1:0.25, I2:0.25, I3:0.20, I4:0.20, I5:0.10};
+        const Wt = {I1:0.10, I2:0.15, I3:0.20, I4:0.30, I5:0.25};
         const tRaw = thesisParsed.I1.score*Wt.I1 + thesisParsed.I2.score*Wt.I2 + thesisParsed.I3.score*Wt.I3 + thesisParsed.I4.score*Wt.I4 + thesisParsed.I5.score*Wt.I5;
         const tHome = tRaw >= 0.5;
         const tScore = tHome ? tRaw : 1 - tRaw;
@@ -9224,9 +9223,9 @@ function renderCard(game){
 
     // Indicators
     html+=`<div class="inds">
-    ${[{id:'I1',nm:'POSSESS/TRANS',wt:25,d:ind.I1},{id:'I2',nm:'RIM/FOUL',wt:25,d:ind.I2},
-       {id:'I3',nm:'SHOT QUALITY',wt:20,d:ind.I3},{id:'I4',nm:'LINEUP INTEG',wt:20,d:ind.I4},
-       {id:'I5',nm:'TEMPO/EFF',wt:10,d:ind.I5}].map(({id:iid,nm,wt,d})=>{
+    ${[{id:'I1',nm:'DISRUPT/CONV',wt:10,d:ind.I1},{id:'I2',nm:'INTERIOR',wt:15,d:ind.I2},
+       {id:'I3',nm:'SHOT QUALITY',wt:20,d:ind.I3},{id:'I4',nm:'GAME CONTROL',wt:30,d:ind.I4},
+       {id:'I5',nm:'EXECUTION',wt:25,d:ind.I5}].map(({id:iid,nm,wt,d})=>{
       let displayScore;
       if(d.sonnet){
         const leaderIsControl = (ind.controlTeam && d.leader) ? d.leader.toUpperCase().substring(0,3) === ind.controlTeam.toUpperCase().substring(0,3) : true;

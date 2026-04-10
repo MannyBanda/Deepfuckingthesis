@@ -48,7 +48,7 @@ const BDL_TEAMS = {
   OKC:21, ORL:22, PHI:23, PHX:24, POR:25, SAC:26, SAS:27, TOR:28, UTA:29, WAS:30
 };
 
-const W = { I1: 0.25, I2: 0.25, I3: 0.20, I4: 0.20, I5: 0.10 };
+const W = { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 };
 
 const SR_DELAY_MS = 1400; // respect trial tier rate limit
 
@@ -56,11 +56,11 @@ const SR_DELAY_MS = 1400; // respect trial tier rate limit
 const SONNET_SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing real-time control assessment and outcome prediction for sports betting.\n\n'
 + 'CORE TASK: Determine which team structurally controls this game, assess whether each team\'s production is sustainable, evaluate whether control is compounding or fading, and identify the best entry — on EITHER team — using pre-computed data and your own reasoning.\n\n'
 + 'FIVE INDICATORS (score each 0.00-1.00 for the controlling team):\n'
-+ 'I1 Possession & Transition (25%): TO margin, steals, OREBs, fast break pts, pts off TOs, second chance pts\n'
-+ 'I2 Interior Control (25%): Paint volume differential, rim FG% efficiency differential\n'
++ 'I1 Disruption & Conversion (10%): Steals + blocks differential, points off turnovers differential\n'
++ 'I2 Interior Control (15%): Paint volume differential, rim FG% efficiency differential\n'
 + 'I3 Shot Quality & Creation (20%): eFG%, assist ratio (65%+ sustainable, <50% isolation-dependent), shot diet\n'
-+ 'I4 Lineup Integrity (20%): Biggest lead, bench contribution, which lineups producing, plus/minus\n'
-+ 'I5 Tempo & Efficiency (10%): Possessions, pts/possession differential, pace control\n\n'
++ 'I4 Game Control (30%): Biggest lead differential, closing quarter differential\n'
++ 'I5 Sustained Execution (25%): Run share — which team generates more scoring runs (6+ consecutive pts)\n\n'
 + 'CONTROL: 0.90+ DOMINANT | 0.75-0.89 STRONG | 0.60-0.74 EARNED | 0.45-0.59 NO EDGE | <0.45 WAIT\n\n'
 + 'YOU RECEIVE PRE-COMPUTED DATA LAYERS:\n\n'
 + '1. 3PT SUSTAINABILITY AUDIT (per team):\n'
@@ -90,7 +90,7 @@ const SONNET_SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing r
 + '     STABLE = no clear trend | FLIPPED = control changing hands | TOO EARLY = insufficient data\n\n'
 + '6. DIRECTIONAL ARROWS (both teams, per quarter):\n'
 + '   - Raw sub-metric trends across completed quarters, grouped by indicator:\n'
-+ '     I2: Paint pts, At-rim att, FTA | I1: Steals, TOs committed | I3: 3PA share, Assist ratio | I5: Possessions\n'
++ '     I2: Paint pts, At-rim att, FTA | I1: Steals, Blocks, POT | I3: 3PA share, Assist ratio | I5: Run share\n'
 + '   - Each metric: RISING (▲), FALLING (▼), or FLAT (▬) with per-quarter values\n'
 + '   - ADJUSTMENT SIGNAL derived from arrow pattern:\n'
 + '     INTERIOR PIVOT = structural arrows rising + variance falling (team adjusting toward rim)\n'
@@ -197,11 +197,11 @@ const SONNET_SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing r
 + 'EVIDENCE:\n'
 + 'CONTROL: [Team] [score] — [level]\n'
 + 'COMBINED READ: [DOMINANT|STRONG|EMERGING|EARNED|ERODING|FADING|COLLAPSING|SHIFT|NO EDGE] — [note]\n\n'
-+ 'I1 Possession & Transition (25%): [team] [score] — [explanation]\n'
-+ 'I2 Interior Control (25%): [team] [score] — [explanation]\n'
++ 'I1 Disruption & Conversion (10%): [team] [score] — [explanation]\n'
++ 'I2 Interior Control (15%): [team] [score] — [explanation]\n'
 + 'I3 Shot Quality & Creation (20%): [team] [score] — [explanation]\n'
-+ 'I4 Lineup Integrity (20%): [team] [score] — [explanation]\n'
-+ 'I5 Tempo & Efficiency (10%): [team] [score] — [explanation]\n\n'
++ 'I4 Game Control (30%): [team] [score] — [explanation]\n'
++ 'I5 Sustained Execution (25%): [team] [score] — [explanation]\n\n'
 + 'EVENT FLAGS:\n'
 + 'Trag1 — Role Player Heater: [detail or CLEAR]\n'
 + 'Trag2 — Star Process: [detail or CLEAR]\n'
@@ -255,7 +255,7 @@ Ctrl sust: ${ctx.ctrlSust || 'N/A'} | Opp sust: ${ctx.oppSust || 'N/A'}
 Window score: ${ctx.windowScore || 'N/A'}
 
 INDICATORS (control-team-relative):
-I1 Possession: ${ctx.i1} | I2 Interior Control: ${ctx.i2} | I3 Shot Quality: ${ctx.i3} | I4 Lineup: ${ctx.i4} | I5 Tempo: ${ctx.i5}
+I1 Disruption: ${ctx.i1} | I2 Interior: ${ctx.i2} | I3 Shot Quality: ${ctx.i3} | I4 Game Control: ${ctx.i4} | I5 Execution: ${ctx.i5}
 Indicators won by control team: ${ctx.indicatorsWon}/5
 
 FLOOR TRAJECTORY (recent snapshots, newest first):
@@ -891,6 +891,17 @@ function parseBDLPBPServer(plays, homeAbbr, awayAbbr) {
   if (rPts >= 8 || rCt >= 3) runs.push({ team: rTm, pts: rPts, count: rCt, q: scoreLog[rSt]?.q, mechanism: rST.slice(), si: rSt, ei: scoreLog.length - 1 });
   runs.sort((a, b) => b.ei - a.ei);
 
+  // I5 runs — separate 6+ pts threshold (don't modify existing 8+ runs)
+  const runs6 = [];
+  { let r6Tm = null, r6Pts = 0;
+    for (let i = 0; i < scoreLog.length; i++) {
+      const s = scoreLog[i];
+      if (s.team === r6Tm) { r6Pts += s.pts; }
+      else { if (r6Pts >= 6 && r6Tm) runs6.push({ team: r6Tm, pts: r6Pts }); r6Tm = s.team; r6Pts = s.pts; }
+    }
+    if (r6Pts >= 6 && r6Tm) runs6.push({ team: r6Tm, pts: r6Pts });
+  }
+
   // Aggregates (same shape as SR parsePBPServer aggTeam)
   function aggTeam(tm) {
     const s = shots.filter(x => x.tm === tm);
@@ -916,6 +927,7 @@ function parseBDLPBPServer(plays, homeAbbr, awayAbbr) {
     homeAlias: hA, awayAlias: aA,
     totalShots: shots.length, totalTOs: turnovers.length,
     runs: runs.slice(0, 10),
+    runs6,
     perQuarter: buildPerQuarterMetrics(shots, turnovers, hA, aA),
     pbpPeriod: lastP, pbpAge: 0,
     _bdl: { potHome: potH, potAway: potA, scpHome: scpH, scpAway: scpA, biggestLeadHome: bigH, biggestLeadAway: bigA, scoreLog },
@@ -1042,14 +1054,15 @@ function computeServer(summary, pbpData) {
   const hS = H.points || 0, aS = A.points || 0;
   if (hS === 0 && aS === 0) return null;
 
-  // I1 — Possession & Transition
-  const hTO = hs.turnovers || hs.total_turnovers || 0;
-  const aTO = as.turnovers || as.total_turnovers || 0;
-  const hGen = (hs.steals || 0) + (hs.offensive_rebounds || 0) - hTO;
-  const aGen = (as.steals || 0) + (as.offensive_rebounds || 0) - aTO;
-  const hConv = (hs.fast_break_points || 0) + (hs.points_off_turnovers || 0) + (hs.second_chance_points || 0);
-  const aConv = (as.fast_break_points || 0) + (as.points_off_turnovers || 0) + (as.second_chance_points || 0);
-  let i1raw = (hGen > aGen ? 1 : hGen < aGen ? -1 : 0) + (hConv > aConv ? 1 : hConv < aConv ? -1 : 0);
+  // I1 — Disruption & Conversion
+  const hDisrupt = (hs.steals || 0) + (hs.blocks || 0);
+  const aDisrupt = (as.steals || 0) + (as.blocks || 0);
+  const disruptDiff = hDisrupt - aDisrupt;
+  const i1subA = disruptDiff > 1 ? 1 : disruptDiff < -1 ? -1 : 0;
+  const hPOT = hs.points_off_turnovers || 0, aPOT = as.points_off_turnovers || 0;
+  const potDiff = hPOT - aPOT;
+  const i1subB = potDiff > 4 ? 1 : potDiff < -4 ? -1 : 0;
+  let i1raw = i1subA + i1subB;
   // Chaos layer — forced vs unforced TO split from PBP (±0.5, threshold ±4)
   if (pbpData) {
     const hForced = pbpData.away?.tos?.forced || 0, aForced = pbpData.home?.tos?.forced || 0;
@@ -1093,25 +1106,33 @@ function computeServer(summary, pbpData) {
               + (hCS3 > aCS3 + 2 ? 1 : hCS3 < aCS3 - 2 ? -1 : 0);
   const I3 = { score: i3raw > 0 ? 1 : i3raw === 0 ? 0.5 : 0, leader: i3raw > 0 ? hA : i3raw < 0 ? aA : 'EVEN' };
 
-  // I4 — Lineup Integrity
-  const periods = summary.periods || [];
-  const qDs = periods.map(p => (p.home_points || 0) - (p.away_points || 0));
-  const trend = qDs.length >= 2 ? qDs[qDs.length - 1] - qDs[0] : 0;
+  // I4 — Game Control
   const hBigLead = hs.biggest_lead || 0, aBigLead = as.biggest_lead || 0;
-  const hBench = hs.bench_points || 0, aBench = as.bench_points || 0;
-  const benchD = hBench - aBench;
-  const i4raw = (hBigLead > aBigLead + 4 ? 1 : hBigLead < aBigLead - 4 ? -1 : 0)
-              + (trend > 2 ? 1 : trend < -2 ? -1 : 0)
-              + (benchD > 10 ? 1 : benchD < -10 ? -1 : 0);
+  const bigLeadDiff = hBigLead - aBigLead;
+  const i4subA = bigLeadDiff > 4 ? 1 : bigLeadDiff < -4 ? -1 : 0;
+  let i4subB = 0;
+  const periods = summary.periods || [];
+  if (periods.length >= 4) {
+    // Q4+ — use live last quarter diff
+    const lastP = periods[periods.length - 1];
+    const lastQDiff = (lastP?.home_points || 0) - (lastP?.away_points || 0);
+    i4subB = lastQDiff > 2 ? 1 : lastQDiff < -2 ? -1 : 0;
+  }
+  const i4raw = i4subA + i4subB;
   const I4 = { score: i4raw > 0 ? 1 : i4raw === 0 ? 0.5 : 0, leader: i4raw > 0 ? hA : i4raw < 0 ? aA : 'EVEN' };
 
-  // I5 — Tempo & Efficiency
-  const hOPPP = hs.offensive_points_per_possession || 0;
-  const aOPPP = as.offensive_points_per_possession || 0;
-  const hDPPP = hs.defensive_points_per_possession || 0;
-  const aDPPP = as.defensive_points_per_possession || 0;
-  const effD = (hOPPP - aDPPP) - (aOPPP - hDPPP);
-  const I5 = { score: effD > 0.08 ? 1 : effD < -0.08 ? 0 : 0.5, leader: effD > 0.08 ? hA : effD < -0.08 ? aA : 'EVEN' };
+  // I5 — Sustained Execution (run share from PBP)
+  let I5 = { score: 0.5, leader: 'EVEN' };
+  if (pbpData?.runs6) {
+    const hRuns = pbpData.runs6.filter(r => r.team === hA).length;
+    const aRuns = pbpData.runs6.filter(r => r.team === aA).length;
+    const totalRuns = hRuns + aRuns;
+    if (totalRuns >= 4) {
+      const runShare = hRuns / totalRuns;
+      I5 = { score: runShare > 0.55 ? 1 : runShare < 0.45 ? 0 : 0.5,
+             leader: runShare > 0.55 ? hA : runShare < 0.45 ? aA : 'EVEN' };
+    }
+  }
 
   // Composite
   const raw = I1.score * W.I1 + I2.score * W.I2 + I3.score * W.I3 + I4.score * W.I4 + I5.score * W.I5;
@@ -1345,14 +1366,11 @@ function computeServerWindow(qd, currentPeriod, clock, summary, hA, aA, league) 
   // Score I1-I5 on aggregated window stats
   // Thresholds scaled for ~2 quarter window volume
 
-  // I1 — Possession & Transition
-  const hTO = hW.turnovers || hW.total_turnovers || 0;
-  const aTO = aW.turnovers || aW.total_turnovers || 0;
-  const hGen = (hW.steals || 0) + (hW.offensive_rebounds || 0) - hTO;
-  const aGen = (aW.steals || 0) + (aW.offensive_rebounds || 0) - aTO;
-  const hConv = (hW.fast_break_points || 0) + (hW.points_off_turnovers || 0) + (hW.second_chance_points || 0);
-  const aConv = (aW.fast_break_points || 0) + (aW.points_off_turnovers || 0) + (aW.second_chance_points || 0);
-  const i1r = (hGen > aGen ? 1 : hGen < aGen ? -1 : 0) + (hConv > aConv ? 1 : hConv < aConv ? -1 : 0);
+  // I1 — Disruption & Conversion (window: disruption only, no POT in quarter diffs)
+  const hWDisrupt = (hW.steals || 0) + (hW.blocks || 0);
+  const aWDisrupt = (aW.steals || 0) + (aW.blocks || 0);
+  const wDisruptDiff = hWDisrupt - aWDisrupt;
+  const i1r = wDisruptDiff > 1 ? 1 : wDisruptDiff < -1 ? -1 : 0;
   const wI1 = { score: i1r > 0 ? 1 : i1r === 0 ? 0.5 : 0, leader: i1r > 0 ? hA : i1r < 0 ? aA : 'EVEN' };
 
   // I2 — Interior Control (Sub-A: paint volume ±3 for window, Sub-B: rim efficiency ±10%)
@@ -1381,22 +1399,18 @@ function computeServerWindow(qd, currentPeriod, clock, summary, hA, aA, league) 
             + (hAR > aAR + 5 ? 1 : hAR < aAR - 5 ? -1 : 0);
   const wI3 = { score: i3r > 0 ? 1 : i3r === 0 ? 0.5 : 0, leader: i3r > 0 ? hA : i3r < 0 ? aA : 'EVEN' };
 
-  // I4 — Lineup Integrity (use cumulative biggest_lead + window bench diff + per-quarter scoring margins)
+  // I4 — Game Control (cumulative biggest_lead + window scoring margin)
   const hBigLead = homeStats.biggest_lead || 0, aBigLead = awayStats.biggest_lead || 0;
-  const hBench = hW.bench_points || 0, aBench = aW.bench_points || 0;
-  const benchD = hBench - aBench;
-  // Scoring margin trend from the window quarters
+  const wBigLeadDiff = hBigLead - aBigLead;
+  const wi4subA = wBigLeadDiff > 4 ? 1 : wBigLeadDiff < -4 ? -1 : 0;
   const margins = windowQs.map(wq => ((wq.diff?.home?.points || 0) - (wq.diff?.away?.points || 0)));
-  const trend = margins.length >= 2 ? margins[margins.length - 1] - margins[0] : 0;
-  const i4r = (hBigLead > aBigLead + 4 ? 1 : hBigLead < aBigLead - 4 ? -1 : 0)
-            + (trend > 2 ? 1 : trend < -2 ? -1 : 0)
-            + (benchD > 5 ? 1 : benchD < -5 ? -1 : 0); // scaled bench threshold
+  const marginSum = margins.reduce((a, b) => a + b, 0);
+  const wi4subB = marginSum > 4 ? 1 : marginSum < -4 ? -1 : 0;
+  const i4r = wi4subA + wi4subB;
   const wI4 = { score: i4r > 0 ? 1 : i4r === 0 ? 0.5 : 0, leader: i4r > 0 ? hA : i4r < 0 ? aA : 'EVEN' };
 
-  // I5 — Tempo & Efficiency (use per-quarter PPP from diffs)
-  const hPPP = hW.ppp || 0, aPPP = aW.ppp || 0;
-  const effD = hPPP - aPPP;
-  const wI5 = { score: effD > 0.08 ? 1 : effD < -0.08 ? 0 : 0.5, leader: effD > 0.08 ? hA : effD < -0.08 ? aA : 'EVEN' };
+  // I5 — Sustained Execution (cumulative runShare — runs not window-segmentable)
+  const wI5 = { score: 0.5, leader: 'EVEN' };
 
   // Composite
   const raw = wI1.score * W.I1 + wI2.score * W.I2 + wI3.score * W.I3 + wI4.score * W.I4 + wI5.score * W.I5;
@@ -2270,7 +2284,7 @@ function computeSubMetricArrowsServer(perQuarter, hA, aA) {
 // Main server context computation — called when client hasn't pushed context
 async function computeServerContext(sql, game, league, summary, ind, espnWP, hA, aA, period, clock, matchup, sust, odds) {
   const ctx = {};
-  const W = { I1: 0.25, I2: 0.25, I3: 0.20, I4: 0.20, I5: 0.10 };
+  const W = { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 };
 
   // ── 1. BONUS STATUS (from SR summary — trivial) ──
   if (summary.home?.bonus || summary.away?.bonus) {
@@ -4010,6 +4024,7 @@ export default async function(req) {
             rawStatsJson = JSON.stringify({
               home: { stl: _hs.steals||0, oreb: _hs.offensive_rebounds||0, to: _hs.turnovers||_hs.total_turnovers||0, fbp: _hs.fast_break_points||0, pot: _hs.points_off_turnovers||0, scp: _hs.second_chance_points||_hs.second_chance_pts||0, paint: _hs.points_in_the_paint||_hs.points_in_paint||0, atRimM: _hs.field_goals_at_rim_made||0, atRimA: _hs.field_goals_at_rim_att||0, paintM: _hs.points_in_paint_made||0, paintA: _hs.points_in_paint_att||0, fta: _hs.free_throws_att||0, blk: _hs.blocks||0, fd: _hs.fouls_drawn||0, fgm: _hs.field_goals_made||0, fga: _hs.field_goals_att||0, fg3m: _hs.three_points_made||0, fg3a: _hs.three_points_att||0, ast: _hs.assists||0, bigLead: _hs.biggest_lead||0, bench: _hs.bench_points||0, oppp: _hs.offensive_points_per_possession||0, dppp: _hs.defensive_points_per_possession||0, poss: _hs.possessions||0 },
               away: { stl: _as.steals||0, oreb: _as.offensive_rebounds||0, to: _as.turnovers||_as.total_turnovers||0, fbp: _as.fast_break_points||0, pot: _as.points_off_turnovers||0, scp: _as.second_chance_points||_as.second_chance_pts||0, paint: _as.points_in_the_paint||_as.points_in_paint||0, atRimM: _as.field_goals_at_rim_made||0, atRimA: _as.field_goals_at_rim_att||0, paintM: _as.points_in_paint_made||0, paintA: _as.points_in_paint_att||0, fta: _as.free_throws_att||0, blk: _as.blocks||0, fd: _as.fouls_drawn||0, fgm: _as.field_goals_made||0, fga: _as.field_goals_att||0, fg3m: _as.three_points_made||0, fg3a: _as.three_points_att||0, ast: _as.assists||0, bigLead: _as.biggest_lead||0, bench: _as.bench_points||0, oppp: _as.offensive_points_per_possession||0, dppp: _as.defensive_points_per_possession||0, poss: _as.possessions||0 },
+              runs6: pbpResult?.runs6 ? { home: pbpResult.runs6.filter(r=>r.team===hA).length, away: pbpResult.runs6.filter(r=>r.team===aA).length, total: pbpResult.runs6.length } : null,
             });
           } catch (e) { /* non-fatal — snapshot still saves without raw stats */ }
           await sql`
