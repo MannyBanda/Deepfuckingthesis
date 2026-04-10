@@ -4024,15 +4024,16 @@ function computePossessionWindow(game, windowSize){
   var i1=(hGen>aGen?1:hGen<aGen?-1:0); if(hTrans>0||aTrans>0) i1+=(hTrans>aTrans?1:hTrans<aTrans?-1:0);
   var wI1={score:i1>0?1:i1===0?.5:0, detail:'Gen:'+hGen+'\u2013'+aGen+' Stl:'+hStl+'\u2013'+aStl+' TO:'+hTO+'\u2013'+aTO+' Trans:'+hTrans+'\u2013'+aTrans};
 
-  // I2: Rim Pressure & Foul
-  var hFTA=0,aFTA=0,hBlk=0,aBlk=0,hPaintT=0,aPaintT=0,hRimS=0,aRimS=0,hFouls=0,aFouls=0;
-  hP.forEach(function(p){hFTA+=p.ftAttempts;if(p.paintTouch)hPaintT++;p.fouls.forEach(function(f){if(f.type==='personal')aFouls++;});});
-  aP.forEach(function(p){aFTA+=p.ftAttempts;if(p.paintTouch)aPaintT++;p.fouls.forEach(function(f){if(f.type==='personal')hFouls++;});});
-  aP.forEach(function(p){hBlk+=p.blocks;}); hP.forEach(function(p){aBlk+=p.blocks;});
-  hP.forEach(function(p){p.shots.forEach(function(s){if(s.zone==='rim'||s.zone==='paint')hRimS++;});});
-  aP.forEach(function(p){p.shots.forEach(function(s){if(s.zone==='rim'||s.zone==='paint')aRimS++;});});
-  var rimScore=(hPaintT+hFTA+hBlk)-(aPaintT+aFTA+aBlk);
-  var wI2={score:rimScore>4?1:rimScore<-4?0:.5, detail:'PntTch:'+hPaintT+'\u2013'+aPaintT+' FTA:'+hFTA+'\u2013'+aFTA+' Blk:'+hBlk+'\u2013'+aBlk+' Rim:'+hRimS+'\u2013'+aRimS};
+  // I2: Interior Control (Sub-A: paint volume, Sub-B: rim efficiency)
+  var hRimMW=0,aRimMW=0,hRimAW=0,aRimAW=0,hPaintPtsW=0,aPaintPtsW=0;
+  hP.forEach(function(p){p.shots.forEach(function(s){if(s.zone==='rim'){hRimAW++;if(s.made)hRimMW++;}if((s.zone==='rim'||s.zone==='paint')&&s.made)hPaintPtsW+=2;});});
+  aP.forEach(function(p){p.shots.forEach(function(s){if(s.zone==='rim'){aRimAW++;if(s.made)aRimMW++;}if((s.zone==='rim'||s.zone==='paint')&&s.made)aPaintPtsW+=2;});});
+  var wPaintDiff=hPaintPtsW-aPaintPtsW;
+  var wi2sA=0; if(wPaintDiff>3)wi2sA=1; else if(wPaintDiff<-3)wi2sA=-1;
+  var whRPct=hRimAW>=6?hRimMW/hRimAW:null, waRPct=aRimAW>=6?aRimMW/aRimAW:null;
+  var wi2sB=0; if(whRPct!=null&&waRPct!=null){if(whRPct-waRPct>0.10)wi2sB=1;else if(waRPct-whRPct>0.10)wi2sB=-1;}
+  var wi2r=wi2sA+wi2sB;
+  var wI2={score:wi2r>0?1:wi2r<0?0:.5, detail:'Paint:'+hPaintPtsW+'\u2013'+aPaintPtsW+'('+(wPaintDiff>0?'+':'')+wPaintDiff+') RimFG:'+(whRPct!=null?(whRPct*100).toFixed(0):'?')+'%\u2013'+(waRPct!=null?(waRPct*100).toFixed(0):'?')+'% | A:'+wi2sA+' B:'+wi2sB};
 
   // I3: Shot Quality & Creation
   var hFGM=0,aFGM=0,hFGA=0,aFGA=0,h3PM=0,a3PM=0,h3PA=0,a3PA=0,hAst=0,aAst=0,hCS3=0,aCS3=0;
@@ -5495,21 +5496,30 @@ function compute(game){
   const I1={score:i1>0?1:i1===0?.5:0, leader:i1>0?hA:i1<0?aA:'EVEN',
     detail:`${hA} ${hs.steals||0}stl ${hs.offensive_rebounds||0}or ${hs.turnovers||hs.total_turnovers||0}to | ${aA} ${as.steals||0}stl ${as.offensive_rebounds||0}or ${as.turnovers||as.total_turnovers||0}to | Conv:${hConv}–${aConv}${chaosNote}`};
 
-  // I2 — Rim Pressure & Foul
+  // I2 — Interior Control (Sub-A: paint volume, Sub-B: rim efficiency)
   var hPaint = hs.points_in_the_paint||hs.points_in_paint||0, aPaint = as.points_in_the_paint||as.points_in_paint||0;
   // SR often delays points_in_the_paint — use PBP at-rim makes × 2 as floor proxy
   if(pbp){
     if(!hPaint && pbp.home?.rim?.made) hPaint = pbp.home.rim.made * 2;
     if(!aPaint && pbp.away?.rim?.made) aPaint = pbp.away.rim.made * 2;
   }
-  const hAtRim = hs.field_goals_at_rim_att||0, aAtRim = as.field_goals_at_rim_att||0;
-  const hFTA = hs.free_throws_att||0, aFTA = as.free_throws_att||0;
-  const hBlk = hs.blocks||0, aBlk = as.blocks||0;
-  const hFD = hs.fouls_drawn||0, aFD = as.fouls_drawn||0;
-  const rimScore = (hPaint+hAtRim+hFTA+hBlk+Math.round(hFD*.5))-(aPaint+aAtRim+aFTA+aBlk+Math.round(aFD*.5));
+  const i2paintDiff = hPaint - aPaint;
+  let i2subA = 0;
+  if (i2paintDiff > 6) i2subA = 1;
+  else if (i2paintDiff < -6) i2subA = -1;
+  const hRimM = hs.field_goals_at_rim_made||0, hRimA = hs.field_goals_at_rim_att||0;
+  const aRimM = as.field_goals_at_rim_made||0, aRimA = as.field_goals_at_rim_att||0;
+  const hRimPct = hRimA >= 6 ? hRimM/hRimA : null;
+  const aRimPct = aRimA >= 6 ? aRimM/aRimA : null;
+  let i2subB = 0;
+  if (hRimPct != null && aRimPct != null) {
+    if (hRimPct - aRimPct > 0.10) i2subB = 1;
+    else if (aRimPct - hRimPct > 0.10) i2subB = -1;
+  }
+  const i2raw = i2subA + i2subB;
   const hBonusTag = H?.double_bonus?'⬤⬤':H?.bonus?'⬤':'', aBonusTag = A?.double_bonus?'⬤⬤':A?.bonus?'⬤':'';
-  const I2={score:rimScore>10?1:rimScore<-10?0:.5, leader:rimScore>10?hA:rimScore<-10?aA:'EVEN',
-    detail:`Paint:${hPaint}–${aPaint} AtRim:${hs.field_goals_at_rim_made||0}/${hAtRim}–${as.field_goals_at_rim_made||0}/${aAtRim} FTA:${hFTA}–${aFTA} FD:${hFD}–${aFD} BLK:${hBlk}–${aBlk}${hBonusTag?' '+hA+hBonusTag:''}${aBonusTag?' '+aA+aBonusTag:''}`};
+  const I2={score:i2raw>0?1:i2raw<0?0:.5, leader:i2raw>0?hA:i2raw<0?aA:'EVEN',
+    detail:`Paint:${hPaint}–${aPaint}(${i2paintDiff>0?'+':''}${i2paintDiff}) RimFG:${hRimPct!=null?(hRimPct*100).toFixed(1):'?'}%–${aRimPct!=null?(aRimPct*100).toFixed(1):'?'}% Rim:${hRimM}/${hRimA}–${aRimM}/${aRimA} | A:${i2subA>0?'+':''}${i2subA} B:${i2subB>0?'+':''}${i2subB}${hBonusTag?' '+hA+hBonusTag:''}${aBonusTag?' '+aA+aBonusTag:''}`};
 
   // I3 — Shot Quality & Creation (enhanced with PBP zone data)
   const hFGA=hs.field_goals_att||1, aFGA=as.field_goals_att||1;
@@ -8111,13 +8121,15 @@ function computeRollingWindow(game){
   const wI1 = {score:i1>0?1:i1===0?.5:0, detail:'Gen:'+hGen.toFixed(0)+'–'+aGen.toFixed(0)+(convAvail?' Conv:'+hConv.toFixed(0)+'–'+aConv.toFixed(0):' (conv N/A)')};
 
   const hPaint=hW.points_in_the_paint||0, aPaint=aW.points_in_the_paint||0;
-  const hFTA=hW.free_throws_att||0, aFTA=aW.free_throws_att||0;
-  const hBlk=hW.blocks||0, aBlk=aW.blocks||0;
-  const hAtRim=hW.field_goals_at_rim_att, aAtRim=aW.field_goals_at_rim_att;
-  let rim = (hPaint+hFTA+hBlk)-(aPaint+aFTA+aBlk);
-  if(hAtRim!=null&&aAtRim!=null) rim += (hAtRim-aAtRim);
-  const rimThresh = (hAtRim!=null)?10:6;
-  const wI2 = {score:rim>rimThresh?1:rim<-rimThresh?0:.5, detail:'Paint:'+hPaint.toFixed(0)+'–'+aPaint.toFixed(0)+' FTA:'+hFTA.toFixed(0)+'–'+aFTA.toFixed(0)+(hAtRim!=null?' Rim:'+hAtRim.toFixed(0)+'–'+aAtRim.toFixed(0):'')};
+  const cfPaintDiff=hPaint-aPaint;
+  let cfSubA=0; if(cfPaintDiff>3)cfSubA=1; else if(cfPaintDiff<-3)cfSubA=-1;
+  const cfhRimM=hW.field_goals_at_rim_made, cfaRimM=aW.field_goals_at_rim_made;
+  const cfhRimA=hW.field_goals_at_rim_att, cfaRimA=aW.field_goals_at_rim_att;
+  const cfhRPct=(cfhRimA!=null&&cfhRimA>=6)?cfhRimM/cfhRimA:null;
+  const cfaRPct=(cfaRimA!=null&&cfaRimA>=6)?cfaRimM/cfaRimA:null;
+  let cfSubB=0; if(cfhRPct!=null&&cfaRPct!=null){if(cfhRPct-cfaRPct>0.10)cfSubB=1;else if(cfaRPct-cfhRPct>0.10)cfSubB=-1;}
+  const cfI2raw=cfSubA+cfSubB;
+  const wI2 = {score:cfI2raw>0?1:cfI2raw<0?0:.5, detail:'Paint:'+hPaint.toFixed(0)+'–'+aPaint.toFixed(0)+'('+(cfPaintDiff>0?'+':'')+cfPaintDiff.toFixed(0)+') RimFG:'+(cfhRPct!=null?(cfhRPct*100).toFixed(0):'?')+'%–'+(cfaRPct!=null?(cfaRPct*100).toFixed(0):'?')+'%'};
 
   const hEFG=hW.efg, aEFG=aW.efg;
   const hAR=hW.assist_ratio||0, aAR=aW.assist_ratio||0;
@@ -9143,7 +9155,7 @@ function crossRef(parsed,ind){
   if((txt.includes('turnover')||txt.includes('to rate'))&&ind.I1)
     a.push(ind.I1.score===0?{msg:'⚠ Turnover concern confirmed — I1 flagged',level:'warn'}:{msg:'✓ Turnover rate holding — I1 intact',level:'ok'});
   if((txt.includes('paint')||txt.includes('interior')||txt.includes('rim'))&&ind.I2)
-    a.push(ind.I2.score===1?{msg:'✓ Interior edge confirmed — I2 developing',level:'ok'}:ind.I2.score===0?{msg:'⚠ Interior edge denied',level:'warn'}:{msg:'I2 contested',level:'info'});
+    a.push(ind.I2.score===1?{msg:'✓ Interior control confirmed — paint + rim efficiency',level:'ok'}:ind.I2.score===0?{msg:'⚠ Interior control denied',level:'warn'}:{msg:'I2 contested — paint/efficiency split',level:'info'});
   if((txt.includes('assist')||txt.includes('creation'))&&ind.I3)
     a.push(ind.I3.score===1?{msg:'✓ Ball movement confirmed — I3 developing',level:'ok'}:{msg:'⚠ Creation edge not materializing',level:'warn'});
   if((txt.includes('bonus')||txt.includes('foul'))&&ind.I2)

@@ -57,7 +57,7 @@ const SONNET_SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing r
 + 'CORE TASK: Determine which team structurally controls this game, assess whether each team\'s production is sustainable, evaluate whether control is compounding or fading, and identify the best entry — on EITHER team — using pre-computed data and your own reasoning.\n\n'
 + 'FIVE INDICATORS (score each 0.00-1.00 for the controlling team):\n'
 + 'I1 Possession & Transition (25%): TO margin, steals, OREBs, fast break pts, pts off TOs, second chance pts\n'
-+ 'I2 Rim Pressure & Foul (25%): Paint points, at-rim FG, FTA, blocks, fouls, bonus status\n'
++ 'I2 Interior Control (25%): Paint volume differential, rim FG% efficiency differential\n'
 + 'I3 Shot Quality & Creation (20%): eFG%, assist ratio (65%+ sustainable, <50% isolation-dependent), shot diet\n'
 + 'I4 Lineup Integrity (20%): Biggest lead, bench contribution, which lineups producing, plus/minus\n'
 + 'I5 Tempo & Efficiency (10%): Possessions, pts/possession differential, pace control\n\n'
@@ -198,7 +198,7 @@ const SONNET_SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing r
 + 'CONTROL: [Team] [score] — [level]\n'
 + 'COMBINED READ: [DOMINANT|STRONG|EMERGING|EARNED|ERODING|FADING|COLLAPSING|SHIFT|NO EDGE] — [note]\n\n'
 + 'I1 Possession & Transition (25%): [team] [score] — [explanation]\n'
-+ 'I2 Rim Pressure & Foul (25%): [team] [score] — [explanation]\n'
++ 'I2 Interior Control (25%): [team] [score] — [explanation]\n'
 + 'I3 Shot Quality & Creation (20%): [team] [score] — [explanation]\n'
 + 'I4 Lineup Integrity (20%): [team] [score] — [explanation]\n'
 + 'I5 Tempo & Efficiency (10%): [team] [score] — [explanation]\n\n'
@@ -255,7 +255,7 @@ Ctrl sust: ${ctx.ctrlSust || 'N/A'} | Opp sust: ${ctx.oppSust || 'N/A'}
 Window score: ${ctx.windowScore || 'N/A'}
 
 INDICATORS (control-team-relative):
-I1 Possession: ${ctx.i1} | I2 Rim/Foul: ${ctx.i2} | I3 Shot Quality: ${ctx.i3} | I4 Lineup: ${ctx.i4} | I5 Tempo: ${ctx.i5}
+I1 Possession: ${ctx.i1} | I2 Interior Control: ${ctx.i2} | I3 Shot Quality: ${ctx.i3} | I4 Lineup: ${ctx.i4} | I5 Tempo: ${ctx.i5}
 Indicators won by control team: ${ctx.indicatorsWon}/5
 
 FLOOR TRAJECTORY (recent snapshots, newest first):
@@ -1061,16 +1061,24 @@ function computeServer(summary, pbpData) {
   }
   const I1 = { score: i1raw > 0 ? 1 : i1raw === 0 ? 0.5 : 0, leader: i1raw > 0 ? hA : i1raw < 0 ? aA : 'EVEN' };
 
-  // I2 — Rim Pressure & Foul
+  // I2 — Interior Control (Sub-A: paint volume, Sub-B: rim efficiency)
   const hPaint = hs.points_in_the_paint || hs.points_in_paint || 0;
   const aPaint = as.points_in_the_paint || as.points_in_paint || 0;
-  const hAtRim = hs.field_goals_at_rim_att || 0, aAtRim = as.field_goals_at_rim_att || 0;
-  const hFTA = hs.free_throws_att || 0, aFTA = as.free_throws_att || 0;
-  const hBlk = hs.blocks || 0, aBlk = as.blocks || 0;
-  const hFD = hs.fouls_drawn || 0, aFD = as.fouls_drawn || 0;
-  const rimScore = (hPaint + hAtRim + hFTA + hBlk + Math.round(hFD * 0.5))
-                 - (aPaint + aAtRim + aFTA + aBlk + Math.round(aFD * 0.5));
-  const I2 = { score: rimScore > 10 ? 1 : rimScore < -10 ? 0 : 0.5, leader: rimScore > 10 ? hA : rimScore < -10 ? aA : 'EVEN' };
+  const paintDiff = hPaint - aPaint;
+  let i2subA = 0;
+  if (paintDiff > 6) i2subA = 1;
+  else if (paintDiff < -6) i2subA = -1;
+  const hRimM = hs.field_goals_at_rim_made || 0, hRimA = hs.field_goals_at_rim_att || 0;
+  const aRimM = as.field_goals_at_rim_made || 0, aRimA = as.field_goals_at_rim_att || 0;
+  const hRimPct = hRimA >= 6 ? hRimM / hRimA : null;
+  const aRimPct = aRimA >= 6 ? aRimM / aRimA : null;
+  let i2subB = 0;
+  if (hRimPct != null && aRimPct != null) {
+    if (hRimPct - aRimPct > 0.10) i2subB = 1;
+    else if (aRimPct - hRimPct > 0.10) i2subB = -1;
+  }
+  const i2raw = i2subA + i2subB;
+  const I2 = { score: i2raw > 0 ? 1 : i2raw < 0 ? 0 : 0.5, leader: i2raw > 0 ? hA : i2raw < 0 ? aA : 'EVEN' };
 
   // I3 — Shot Quality & Creation
   const hFGA = hs.field_goals_att || 1, aFGA = as.field_goals_att || 1;
@@ -1347,16 +1355,24 @@ function computeServerWindow(qd, currentPeriod, clock, summary, hA, aA, league) 
   const i1r = (hGen > aGen ? 1 : hGen < aGen ? -1 : 0) + (hConv > aConv ? 1 : hConv < aConv ? -1 : 0);
   const wI1 = { score: i1r > 0 ? 1 : i1r === 0 ? 0.5 : 0, leader: i1r > 0 ? hA : i1r < 0 ? aA : 'EVEN' };
 
-  // I2 — Rim Pressure & Foul (scaled threshold: 5 instead of 10 for ~half game volume)
+  // I2 — Interior Control (Sub-A: paint volume ±3 for window, Sub-B: rim efficiency ±10%)
   const hPaint = hW.points_in_the_paint || hW.points_in_paint || 0;
   const aPaint = aW.points_in_the_paint || aW.points_in_paint || 0;
-  const hAtRim = hW.field_goals_at_rim_att || 0, aAtRim = aW.field_goals_at_rim_att || 0;
-  const hFTA = hW.free_throws_att || 0, aFTA = aW.free_throws_att || 0;
-  const hBlk = hW.blocks || 0, aBlk = aW.blocks || 0;
-  const hFD = hW.fouls_drawn || 0, aFD = aW.fouls_drawn || 0;
-  const rimD = (hPaint + hAtRim + hFTA + hBlk + Math.round(hFD * 0.5))
-             - (aPaint + aAtRim + aFTA + aBlk + Math.round(aFD * 0.5));
-  const wI2 = { score: rimD > 5 ? 1 : rimD < -5 ? 0 : 0.5, leader: rimD > 5 ? hA : rimD < -5 ? aA : 'EVEN' };
+  const wPaintDiff = hPaint - aPaint;
+  let wi2subA = 0;
+  if (wPaintDiff > 3) wi2subA = 1;
+  else if (wPaintDiff < -3) wi2subA = -1;
+  const whRimM = hW.field_goals_at_rim_made || 0, whRimA = hW.field_goals_at_rim_att || 0;
+  const waRimM = aW.field_goals_at_rim_made || 0, waRimA = aW.field_goals_at_rim_att || 0;
+  const whRimPct = whRimA >= 6 ? whRimM / whRimA : null;
+  const waRimPct = waRimA >= 6 ? waRimM / waRimA : null;
+  let wi2subB = 0;
+  if (whRimPct != null && waRimPct != null) {
+    if (whRimPct - waRimPct > 0.10) wi2subB = 1;
+    else if (waRimPct - whRimPct > 0.10) wi2subB = -1;
+  }
+  const wi2raw = wi2subA + wi2subB;
+  const wI2 = { score: wi2raw > 0 ? 1 : wi2raw < 0 ? 0 : 0.5, leader: wi2raw > 0 ? hA : wi2raw < 0 ? aA : 'EVEN' };
 
   // I3 — Shot Quality & Creation (eFG% and assist ratio are rates — thresholds unchanged)
   const hEFG = hW.efg || 0, aEFG = aW.efg || 0;
@@ -3992,8 +4008,8 @@ export default async function(req) {
           try {
             var _hs = summary.home?.statistics || {}, _as = summary.away?.statistics || {};
             rawStatsJson = JSON.stringify({
-              home: { stl: _hs.steals||0, oreb: _hs.offensive_rebounds||0, to: _hs.turnovers||_hs.total_turnovers||0, fbp: _hs.fast_break_points||0, pot: _hs.points_off_turnovers||0, scp: _hs.second_chance_points||_hs.second_chance_pts||0, paint: _hs.points_in_the_paint||_hs.points_in_paint||0, atRimA: _hs.field_goals_at_rim_att||0, fta: _hs.free_throws_att||0, blk: _hs.blocks||0, fd: _hs.fouls_drawn||0, fgm: _hs.field_goals_made||0, fga: _hs.field_goals_att||0, fg3m: _hs.three_points_made||0, fg3a: _hs.three_points_att||0, ast: _hs.assists||0, bigLead: _hs.biggest_lead||0, bench: _hs.bench_points||0, oppp: _hs.offensive_points_per_possession||0, dppp: _hs.defensive_points_per_possession||0, poss: _hs.possessions||0 },
-              away: { stl: _as.steals||0, oreb: _as.offensive_rebounds||0, to: _as.turnovers||_as.total_turnovers||0, fbp: _as.fast_break_points||0, pot: _as.points_off_turnovers||0, scp: _as.second_chance_points||_as.second_chance_pts||0, paint: _as.points_in_the_paint||_as.points_in_paint||0, atRimA: _as.field_goals_at_rim_att||0, fta: _as.free_throws_att||0, blk: _as.blocks||0, fd: _as.fouls_drawn||0, fgm: _as.field_goals_made||0, fga: _as.field_goals_att||0, fg3m: _as.three_points_made||0, fg3a: _as.three_points_att||0, ast: _as.assists||0, bigLead: _as.biggest_lead||0, bench: _as.bench_points||0, oppp: _as.offensive_points_per_possession||0, dppp: _as.defensive_points_per_possession||0, poss: _as.possessions||0 },
+              home: { stl: _hs.steals||0, oreb: _hs.offensive_rebounds||0, to: _hs.turnovers||_hs.total_turnovers||0, fbp: _hs.fast_break_points||0, pot: _hs.points_off_turnovers||0, scp: _hs.second_chance_points||_hs.second_chance_pts||0, paint: _hs.points_in_the_paint||_hs.points_in_paint||0, atRimM: _hs.field_goals_at_rim_made||0, atRimA: _hs.field_goals_at_rim_att||0, paintM: _hs.points_in_paint_made||0, paintA: _hs.points_in_paint_att||0, fta: _hs.free_throws_att||0, blk: _hs.blocks||0, fd: _hs.fouls_drawn||0, fgm: _hs.field_goals_made||0, fga: _hs.field_goals_att||0, fg3m: _hs.three_points_made||0, fg3a: _hs.three_points_att||0, ast: _hs.assists||0, bigLead: _hs.biggest_lead||0, bench: _hs.bench_points||0, oppp: _hs.offensive_points_per_possession||0, dppp: _hs.defensive_points_per_possession||0, poss: _hs.possessions||0 },
+              away: { stl: _as.steals||0, oreb: _as.offensive_rebounds||0, to: _as.turnovers||_as.total_turnovers||0, fbp: _as.fast_break_points||0, pot: _as.points_off_turnovers||0, scp: _as.second_chance_points||_as.second_chance_pts||0, paint: _as.points_in_the_paint||_as.points_in_paint||0, atRimM: _as.field_goals_at_rim_made||0, atRimA: _as.field_goals_at_rim_att||0, paintM: _as.points_in_paint_made||0, paintA: _as.points_in_paint_att||0, fta: _as.free_throws_att||0, blk: _as.blocks||0, fd: _as.fouls_drawn||0, fgm: _as.field_goals_made||0, fga: _as.field_goals_att||0, fg3m: _as.three_points_made||0, fg3a: _as.three_points_att||0, ast: _as.assists||0, bigLead: _as.biggest_lead||0, bench: _as.bench_points||0, oppp: _as.offensive_points_per_possession||0, dppp: _as.defensive_points_per_possession||0, poss: _as.possessions||0 },
             });
           } catch (e) { /* non-fatal — snapshot still saves without raw stats */ }
           await sql`
