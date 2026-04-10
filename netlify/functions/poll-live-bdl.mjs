@@ -1052,18 +1052,15 @@ function computeServer(summary, pbpData) {
   const i1raw = (hGen > aGen ? 1 : hGen < aGen ? -1 : 0) + (hConv > aConv ? 1 : hConv < aConv ? -1 : 0);
   const I1 = { score: i1raw > 0 ? 1 : i1raw === 0 ? 0.5 : 0, leader: i1raw > 0 ? hA : i1raw < 0 ? aA : 'EVEN' };
 
-  // I2 — Rim Pressure & Foul
+  // I2 — Rim Pressure & Foul (aligned with client: paint + FTA + blocks, threshold ±8)
   const hPaint = hs.points_in_the_paint || hs.points_in_paint || 0;
   const aPaint = as.points_in_the_paint || as.points_in_paint || 0;
-  const hAtRim = hs.field_goals_at_rim_att || 0, aAtRim = as.field_goals_at_rim_att || 0;
   const hFTA = hs.free_throws_att || 0, aFTA = as.free_throws_att || 0;
   const hBlk = hs.blocks || 0, aBlk = as.blocks || 0;
-  const hFD = hs.fouls_drawn || 0, aFD = as.fouls_drawn || 0;
-  const rimScore = (hPaint + hAtRim + hFTA + hBlk + Math.round(hFD * 0.5))
-                 - (aPaint + aAtRim + aFTA + aBlk + Math.round(aFD * 0.5));
-  const I2 = { score: rimScore > 10 ? 1 : rimScore < -10 ? 0 : 0.5, leader: rimScore > 10 ? hA : rimScore < -10 ? aA : 'EVEN' };
+  const rimScore = (hPaint + hFTA + hBlk) - (aPaint + aFTA + aBlk);
+  const I2 = { score: rimScore > 8 ? 1 : rimScore < -8 ? 0 : 0.5, leader: rimScore > 8 ? hA : rimScore < -8 ? aA : 'EVEN' };
 
-  // I3 — Shot Quality & Creation
+  // I3 — Shot Quality & Creation (aligned with client + C&S 3PM from PBP)
   const hFGA = hs.field_goals_att || 1, aFGA = as.field_goals_att || 1;
   const hEFG = ((hs.field_goals_made || 0) + 0.5 * (hs.three_points_made || 0)) / hFGA;
   const aEFG = ((as.field_goals_made || 0) + 0.5 * (as.three_points_made || 0)) / aFGA;
@@ -1076,16 +1073,13 @@ function computeServer(summary, pbpData) {
               + (hCS3 > aCS3 + 2 ? 1 : hCS3 < aCS3 - 2 ? -1 : 0);
   const I3 = { score: i3raw > 0 ? 1 : i3raw === 0 ? 0.5 : 0, leader: i3raw > 0 ? hA : i3raw < 0 ? aA : 'EVEN' };
 
-  // I4 — Lineup Integrity
+  // I4 — Lineup Integrity (aligned with client: score differential + trend, no biggest_lead/bench)
   const periods = summary.periods || [];
   const qDs = periods.map(p => (p.home_points || 0) - (p.away_points || 0));
   const trend = qDs.length >= 2 ? qDs[qDs.length - 1] - qDs[0] : 0;
-  const hBigLead = hs.biggest_lead || 0, aBigLead = as.biggest_lead || 0;
-  const hBench = hs.bench_points || 0, aBench = as.bench_points || 0;
-  const benchD = hBench - aBench;
-  const i4raw = (hBigLead > aBigLead + 4 ? 1 : hBigLead < aBigLead - 4 ? -1 : 0)
-              + (trend > 2 ? 1 : trend < -2 ? -1 : 0)
-              + (benchD > 10 ? 1 : benchD < -10 ? -1 : 0);
+  const scoreDiff = Math.abs(hS - aS);
+  const i4raw = (scoreDiff > 8 && hS > aS ? 1 : scoreDiff > 8 && aS > hS ? -1 : 0)
+              + (trend > 2 ? 1 : trend < -2 ? -1 : 0);
   const I4 = { score: i4raw > 0 ? 1 : i4raw === 0 ? 0.5 : 0, leader: i4raw > 0 ? hA : i4raw < 0 ? aA : 'EVEN' };
 
   // I5 — Tempo & Efficiency
@@ -1338,16 +1332,13 @@ function computeServerWindow(qd, currentPeriod, clock, summary, hA, aA, league) 
   const i1r = (hGen > aGen ? 1 : hGen < aGen ? -1 : 0) + (hConv > aConv ? 1 : hConv < aConv ? -1 : 0);
   const wI1 = { score: i1r > 0 ? 1 : i1r === 0 ? 0.5 : 0, leader: i1r > 0 ? hA : i1r < 0 ? aA : 'EVEN' };
 
-  // I2 — Rim Pressure & Foul (scaled threshold: 5 instead of 10 for ~half game volume)
+  // I2 — Rim Pressure & Foul (aligned with client: paint + FTA + blocks, threshold ±4 scaled from ±8)
   const hPaint = hW.points_in_the_paint || hW.points_in_paint || 0;
   const aPaint = aW.points_in_the_paint || aW.points_in_paint || 0;
-  const hAtRim = hW.field_goals_at_rim_att || 0, aAtRim = aW.field_goals_at_rim_att || 0;
   const hFTA = hW.free_throws_att || 0, aFTA = aW.free_throws_att || 0;
   const hBlk = hW.blocks || 0, aBlk = aW.blocks || 0;
-  const hFD = hW.fouls_drawn || 0, aFD = aW.fouls_drawn || 0;
-  const rimD = (hPaint + hAtRim + hFTA + hBlk + Math.round(hFD * 0.5))
-             - (aPaint + aAtRim + aFTA + aBlk + Math.round(aFD * 0.5));
-  const wI2 = { score: rimD > 5 ? 1 : rimD < -5 ? 0 : 0.5, leader: rimD > 5 ? hA : rimD < -5 ? aA : 'EVEN' };
+  const rimD = (hPaint + hFTA + hBlk) - (aPaint + aFTA + aBlk);
+  const wI2 = { score: rimD > 4 ? 1 : rimD < -4 ? 0 : 0.5, leader: rimD > 4 ? hA : rimD < -4 ? aA : 'EVEN' };
 
   // I3 — Shot Quality & Creation (eFG% and assist ratio are rates — thresholds unchanged)
   const hEFG = hW.efg || 0, aEFG = aW.efg || 0;
@@ -1356,16 +1347,12 @@ function computeServerWindow(qd, currentPeriod, clock, summary, hA, aA, league) 
             + (hAR > aAR + 5 ? 1 : hAR < aAR - 5 ? -1 : 0);
   const wI3 = { score: i3r > 0 ? 1 : i3r === 0 ? 0.5 : 0, leader: i3r > 0 ? hA : i3r < 0 ? aA : 'EVEN' };
 
-  // I4 — Lineup Integrity (use cumulative biggest_lead + window bench diff + per-quarter scoring margins)
-  const hBigLead = homeStats.biggest_lead || 0, aBigLead = awayStats.biggest_lead || 0;
-  const hBench = hW.bench_points || 0, aBench = aW.bench_points || 0;
-  const benchD = hBench - aBench;
-  // Scoring margin trend from the window quarters
+  // I4 — Lineup Integrity (aligned with client: window score differential + trend)
   const margins = windowQs.map(wq => ((wq.diff?.home?.points || 0) - (wq.diff?.away?.points || 0)));
   const trend = margins.length >= 2 ? margins[margins.length - 1] - margins[0] : 0;
-  const i4r = (hBigLead > aBigLead + 4 ? 1 : hBigLead < aBigLead - 4 ? -1 : 0)
-            + (trend > 2 ? 1 : trend < -2 ? -1 : 0)
-            + (benchD > 5 ? 1 : benchD < -5 ? -1 : 0); // scaled bench threshold
+  const windowPtsDiff = margins.reduce((a, b) => a + b, 0);
+  const i4r = (Math.abs(windowPtsDiff) > 4 && windowPtsDiff > 0 ? 1 : Math.abs(windowPtsDiff) > 4 && windowPtsDiff < 0 ? -1 : 0)
+            + (trend > 2 ? 1 : trend < -2 ? -1 : 0);
   const wI4 = { score: i4r > 0 ? 1 : i4r === 0 ? 0.5 : 0, leader: i4r > 0 ? hA : i4r < 0 ? aA : 'EVEN' };
 
   // I5 — Tempo & Efficiency (use per-quarter PPP from diffs)
