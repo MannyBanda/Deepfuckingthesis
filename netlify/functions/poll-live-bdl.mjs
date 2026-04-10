@@ -256,7 +256,8 @@ Window score: ${ctx.windowScore || 'N/A'}
 
 INDICATORS (control-team-relative):
 I1 Disruption: ${ctx.i1} | I2 Interior: ${ctx.i2} | I3 Shot Quality: ${ctx.i3} | I4 Game Control: ${ctx.i4} | I5 Execution: ${ctx.i5}
-Indicators won by control team: ${ctx.indicatorsWon}/5
+Indicators won: ${ctx.indWon || 'none'} (${ctx.indicatorsWon}/5) | Lost: ${ctx.indLost || 'none'}
+I4 COMBO: ${ctx.i4Combo ? 'YES — I4 + another indicator agree (98-100% historically)' : ctx.i4Won ? 'PARTIAL — I4 won but no other decisive' : ctx.i4Decisive ? 'NO — I4 favors opponent' : 'EVEN — I4 undecided'}
 
 FLOOR TRAJECTORY (recent snapshots, newest first):
 ${ctx.floorHistory || 'No prior snapshots'}
@@ -274,7 +275,7 @@ RULES:
 - BWC (Buy Window Closing): the thesis is "market hasn't priced in structural dominance yet." Verify edge is real and lead is secure.
 - RECOVERY PATH: math projects a comeback. Verify structural control supports the math.
 - Be skeptical of high floors (0.75+) at small margins (1-3 pts) — floor may be anchored from earlier dominance that's fading.
-- CANDIDATE BUYs at floor 0.55-0.65: only SEND if indicators strongly favor control team (3+ of 5) AND opponent sustainability is weak.
+- CANDIDATE BUYs at floor 0.55-0.65: only SEND if I4 COMBO is YES (I4 decisive + at least one other indicator agrees — this pattern is 98-100% accurate historically). Without I4 COMBO, require very strong sustainability case to justify SEND.
 
 Respond in EXACTLY this format:
 DECISION: [SEND|SUPPRESS|DOWNGRADE]
@@ -4377,9 +4378,15 @@ export default async function(req) {
                 const oppAlias = ctrlIsHome ? aA : hA;
 
                 // ── AGENT REASONING GATE ──────────────────────────────────────
-                // Compute indicators won by control team for agent context
+                // Compute which indicators the control team wins
+                const indNames = ['I1','I2','I3','I4','I5'];
                 const indScores = [ind.I1, ind.I2, ind.I3, ind.I4, ind.I5];
-                const indicatorsWon = indScores.filter(i => i && i.score >= 0.55).length;
+                const indWon = indNames.filter((n, i) => indScores[i] && indScores[i].score >= 0.55);
+                const indLost = indNames.filter((n, i) => indScores[i] && indScores[i].score <= 0.45);
+                const indicatorsWon = indWon.length;
+                const i4Decisive = ind.I4 && ind.I4.score !== 0.5;
+                const i4Won = ind.I4 && ind.I4.score >= 0.55;
+                const i4Combo = i4Won && indWon.length >= 2; // I4 + at least one other = historically 98-100%
 
                 // Gather DB context for agent
                 const agentCtx = await gatherAgentContext(sql, game.id, matchup);
@@ -4398,6 +4405,9 @@ export default async function(req) {
                   i3: ind.I3?.score?.toFixed(2), i4: ind.I4?.score?.toFixed(2),
                   i5: ind.I5?.score?.toFixed(2),
                   indicatorsWon,
+                  indWon: indWon.join('+'),
+                  indLost: indLost.join('+'),
+                  i4Decisive, i4Won, i4Combo,
                   floorHistory: agentCtx.floorHistory,
                   priorAlerts: agentCtx.priorAlerts,
                   quarterSummary: agentCtx.quarterSummary,
