@@ -3549,11 +3549,14 @@ export default async function(req) {
     const maxGames = parseInt(url.searchParams.get('max') || '200');
     const batchSize = 50;
     try {
-      // All finished games ordered by most recent
+      // All finished games NOT already in game_pbp, ordered by most recent
       const allGames = await sql`
-        SELECT id, home_alias, away_alias, date
-        FROM games WHERE league = 'nba' AND home_pts IS NOT NULL AND home_pts > 0
-        ORDER BY date DESC LIMIT ${maxGames}
+        SELECT g.id, g.home_alias, g.away_alias, g.date
+        FROM games g
+        LEFT JOIN game_pbp p ON p.game_id = g.id
+        WHERE g.league = 'nba' AND g.home_pts IS NOT NULL AND g.home_pts > 0
+        AND p.game_id IS NULL
+        ORDER BY g.date DESC LIMIT ${maxGames}
       `;
 
       // Group by date for efficient BDL box_scores fetching
