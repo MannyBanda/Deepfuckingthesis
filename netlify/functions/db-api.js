@@ -1199,7 +1199,7 @@ exports.handler = async (event) => {
     // GET_LEARNINGS — query nightly post-game agent findings
     // ═══════════════════════════════════════════════════════
     if (action === 'get_learnings') {
-      const limit = parseInt(params.get('limit') || '30');
+      const limit = parseInt(params.limit || '30');
       const rows = await sql`SELECT * FROM learnings ORDER BY date DESC LIMIT ${limit}`;
       return { statusCode: 200, headers, body: JSON.stringify({ learnings: rows }) };
     }
