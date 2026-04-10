@@ -1041,12 +1041,51 @@ function buildSummaryFromBDLServer(boxScore, pbpResult, lineupsArr) {
 let _serverBoxScoreCache = null;    // Array of box score objects
 let _serverBoxScoreTime = 0;
 let _serverLineupsCache = {};       // bdlGameId → lineups array
+let _seasonQ4Cache = null;          // { teamAlias: avgQ4margin, ... }
+let _seasonQ4Time = 0;
+
+// Load season Q4 margins from games table (cached per hour)
+async function loadSeasonQ4(sql, league) {
+  if (_seasonQ4Cache && Date.now() - _seasonQ4Time < 3600000) return _seasonQ4Cache;
+  try {
+    const rows = await sql`
+      SELECT home_alias, away_alias, quarter_data
+      FROM games WHERE league = ${league} AND home_pts IS NOT NULL AND home_pts > 0
+      AND quarter_data IS NOT NULL
+      ORDER BY date DESC LIMIT 200
+    `;
+    const teamQ4 = {}; // { alias: [margin1, margin2, ...] }
+    for (const r of rows) {
+      const qd = typeof r.quarter_data === 'string' ? JSON.parse(r.quarter_data) : r.quarter_data;
+      if (!qd?.diffs?.['4']) continue;
+      const hQ4 = qd.diffs['4']?.home?.points;
+      const aQ4 = qd.diffs['4']?.away?.points;
+      if (hQ4 == null || aQ4 == null) continue;
+      const margin = hQ4 - aQ4; // positive = home won Q4
+      if (!teamQ4[r.home_alias]) teamQ4[r.home_alias] = [];
+      if (!teamQ4[r.away_alias]) teamQ4[r.away_alias] = [];
+      teamQ4[r.home_alias].push(margin);
+      teamQ4[r.away_alias].push(-margin);
+    }
+    const result = {};
+    for (const [team, margins] of Object.entries(teamQ4)) {
+      if (margins.length >= 3) {
+        result[team] = margins.reduce((a, b) => a + b, 0) / margins.length;
+      }
+    }
+    _seasonQ4Cache = result;
+    _seasonQ4Time = Date.now();
+    return result;
+  } catch (e) {
+    return _seasonQ4Cache || {};
+  }
+}
 
 // ── SERVER-SIDE COMPUTE (I1–I5) ─────────────────────────────────────────────
 // Pure function. No cardState, no DOM, no PBP, no baselines.
 // Input: SR game summary JSON. Output: indicator scores + composite.
 
-function computeServer(summary, pbpData) {
+function computeServer(summary, pbpData, seasonQ4) {
   const H = summary.home, A = summary.away;
   if (!H || !A) return null;
   const hs = H.statistics || {}, as = A.statistics || {};
@@ -1117,6 +1156,10 @@ function computeServer(summary, pbpData) {
     const lastP = periods[periods.length - 1];
     const lastQDiff = (lastP?.home_points || 0) - (lastP?.away_points || 0);
     i4subB = lastQDiff > 2 ? 1 : lastQDiff < -2 ? -1 : 0;
+  } else if (seasonQ4) {
+    // Pre-Q4 — use season Q4 margin prior
+    const sznQ4diff = (seasonQ4[hA] || 0) - (seasonQ4[aA] || 0);
+    i4subB = sznQ4diff > 2 ? 1 : sznQ4diff < -2 ? -1 : 0;
   }
   const i4raw = i4subA + i4subB;
   const I4 = { score: i4raw > 0 ? 1 : i4raw === 0 ? 0.5 : 0, leader: i4raw > 0 ? hA : i4raw < 0 ? aA : 'EVEN' };
@@ -3448,7 +3491,7 @@ export default async function(req) {
       const clock = summary.clock || '';
 
       // Compute indicators + sustainability
-      const ind = computeServer(summary, pbpResult);
+      const ind = computeServer(summary, pbpResult, _seasonQ4Cache || {});
       const sust = computeSustainability(summary);
       const leadComp = computeLeadComposition(summary);
 
@@ -3754,6 +3797,9 @@ export default async function(req) {
       });
       const allPlaysResults = await Promise.all(playsFetches);
 
+      // Load season Q4 margins for I4 pre-Q4 prior
+      const seasonQ4 = await loadSeasonQ4(sql, league);
+
       for (let gi = 0; gi < potentiallyLive.length; gi++) {
         const game = potentiallyLive[gi];
         const hA = game.home_alias || 'HOME';
@@ -3913,7 +3959,7 @@ export default async function(req) {
           game._bdlPbp = pbpResult;
 
           // Compute indicators
-          const ind = computeServer(summary, pbpResult);
+          const ind = computeServer(summary, pbpResult, _seasonQ4Cache || {});
           if (!ind) {
             log(`${matchup}: compute returned null (no stats yet?)`);
             continue;
