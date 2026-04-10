@@ -3544,6 +3544,99 @@ export default async function(req) {
     }
   }
 
+  // ── BACKFILL PBP: fetch historical plays from BDL, save to game_pbp ──
+  if (url.searchParams.get('action') === 'backfill_pbp') {
+    const maxGames = parseInt(url.searchParams.get('max') || '200');
+    const batchSize = 50;
+    try {
+      // All finished games ordered by most recent
+      const allGames = await sql`
+        SELECT id, home_alias, away_alias, date
+        FROM games WHERE league = 'nba' AND home_pts IS NOT NULL AND home_pts > 0
+        ORDER BY date DESC LIMIT ${maxGames}
+      `;
+
+      // Group by date for efficient BDL box_scores fetching
+      const byDate = {};
+      allGames.forEach(g => {
+        if (!byDate[g.date]) byDate[g.date] = [];
+        byDate[g.date].push(g);
+      });
+
+      let filled = 0, failed = 0, skipped = 0;
+      const errors = [];
+      const sortedDates = Object.keys(byDate).sort().reverse();
+
+      for (const dateStr of sortedDates) {
+        if (filled >= batchSize) break;
+        const gamesOnDate = byDate[dateStr];
+
+        // Fetch BDL box_scores for this date to get BDL game IDs
+        let boxGames = [];
+        try {
+          const boxResp = await bdlFetch(`/nba/v1/box_scores?date=${dateStr}`);
+          boxGames = boxResp?.data || [];
+        } catch (e) {
+          errors.push(`${dateStr}: box_scores failed — ${e.message}`);
+          continue;
+        }
+        await new Promise(r => setTimeout(r, 100));
+
+        for (const game of gamesOnDate) {
+          if (filled >= batchSize) break;
+          const hA = game.home_alias, aA = game.away_alias;
+
+          // Match to BDL game
+          const bdlGame = boxGames.find(bg => {
+            const bh = bg.home_team?.team?.abbreviation || bg.home_team?.abbreviation || '';
+            const ba = bg.visitor_team?.team?.abbreviation || bg.visitor_team?.abbreviation || bg.away_team?.abbreviation || '';
+            return (bh === hA && ba === aA);
+          });
+
+          if (!bdlGame) { skipped++; continue; }
+
+          // Fetch plays
+          try {
+            const playsResp = await bdlFetch(`/nba/v1/plays?game_id=${bdlGame.id}&per_page=500`);
+            const plays = playsResp?.data || [];
+            if (plays.length < 10) { skipped++; continue; }
+
+            const pbpResult = parseBDLPBPServer(plays, hA, aA);
+            const pbpSave = {
+              home: pbpResult.home, away: pbpResult.away,
+              totalShots: pbpResult.totalShots, totalTOs: pbpResult.totalTOs,
+              runs: pbpResult.runs, runs6: pbpResult.runs6,
+              perQuarter: pbpResult.perQuarter,
+              _bdl: pbpResult._bdl,
+            };
+
+            await sql`
+              INSERT INTO game_pbp (game_id, league, home_alias, away_alias, total_shots, total_tos, pbp_json, saved_at)
+              VALUES (${game.id}, ${'nba'}, ${hA}, ${aA}, ${pbpResult.totalShots || 0}, ${pbpResult.totalTOs || 0}, ${JSON.stringify(pbpSave)}, NOW())
+              ON CONFLICT (game_id) DO UPDATE SET
+                pbp_json = ${JSON.stringify(pbpSave)}, total_shots = ${pbpResult.totalShots || 0},
+                total_tos = ${pbpResult.totalTOs || 0}, saved_at = NOW()
+            `;
+            filled++;
+          } catch (e) {
+            failed++;
+            errors.push(`${aA}@${hA} ${dateStr}: ${e.message}`);
+          }
+          await new Promise(r => setTimeout(r, 100));
+        }
+      }
+
+      return new Response(JSON.stringify({
+        filled, failed, skipped,
+        remaining: Math.max(0, allGames.length - filled - skipped),
+        total: allGames.length,
+        errors: errors.slice(0, 10),
+      }, null, 2), { headers: { 'Content-Type': 'application/json' } });
+    } catch (e) {
+      return new Response(JSON.stringify({ error: e.message }), { headers: { 'Content-Type': 'application/json' } });
+    }
+  }
+
   const results = { games: 0, snapshots: 0, espn: 0, odds: 0, errors: [], skipped: null };
   const pendingAnalyses = []; // collect async Sonnet calls so we await them before returning
 

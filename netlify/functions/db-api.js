@@ -1525,6 +1525,166 @@ exports.handler = async (event) => {
     }
 
     // ═══════════════════════════════════════════════════════
+    // SIM_STABILITY — per-quarter indicator stability from DB
+    // ═══════════════════════════════════════════════════════
+    if (action === 'sim_stability') {
+      const league = params.league || 'nba';
+
+      const games = await sql`
+        SELECT g.id, g.home_alias, g.away_alias, g.home_pts, g.away_pts, g.date,
+               p.pbp_json
+        FROM games g
+        JOIN game_pbp p ON p.game_id = g.id
+        WHERE g.league = ${league} AND g.home_pts IS NOT NULL AND g.home_pts > 0
+        ORDER BY g.date DESC LIMIT 300
+      `;
+
+      const results = [];
+      for (const g of games) {
+        const hA = g.home_alias, aA = g.away_alias;
+        const winner = g.home_pts > g.away_pts ? hA : aA;
+        let pbp;
+        try { pbp = typeof g.pbp_json === 'string' ? JSON.parse(g.pbp_json) : g.pbp_json; } catch(e) { continue; }
+        if (!pbp?._bdl?.scoreLog || pbp._bdl.scoreLog.length < 10) continue;
+
+        const scoreLog = pbp._bdl.scoreLog;
+        const pq = pbp.perQuarter || {};
+
+        // Compute indicators at end of each quarter cutoff
+        function computeAt(maxQ) {
+          // I4: biggest_lead through maxQ from scoreLog
+          let bigH = 0, bigA = 0;
+          for (const s of scoreLog) {
+            if (s.q > maxQ) break;
+            const mg = (s.hScore || 0) - (s.aScore || 0);
+            if (mg > bigH) bigH = mg;
+            if (-mg > bigA) bigA = -mg;
+          }
+          const blDiff = bigH - bigA;
+          const i4subA = blDiff > 4 ? 1 : blDiff < -4 ? -1 : 0;
+          let i4subB = 0;
+          if (maxQ >= 4) {
+            const q4scores = scoreLog.filter(s => s.q === maxQ);
+            let lastQH = 0, lastQA = 0;
+            q4scores.forEach(s => { if (s.team === hA) lastQH += s.pts; else lastQA += s.pts; });
+            const lqd = lastQH - lastQA;
+            i4subB = lqd > 2 ? 1 : lqd < -2 ? -1 : 0;
+          }
+          const I4 = (i4subA + i4subB) > 0 ? 1 : (i4subA + i4subB) === 0 ? 0.5 : 0;
+
+          // I5: runs through maxQ
+          const sl = scoreLog.filter(s => s.q <= maxQ);
+          const runs6 = [];
+          let rTm = null, rPts = 0;
+          for (let i = 0; i < sl.length; i++) {
+            const s = sl[i];
+            if (s.team === rTm) { rPts += s.pts; }
+            else { if (rPts >= 6 && rTm) runs6.push({ team: rTm }); rTm = s.team; rPts = s.pts; }
+          }
+          if (rPts >= 6 && rTm) runs6.push({ team: rTm });
+          const hRuns = runs6.filter(r => r.team === hA).length;
+          const aRuns = runs6.filter(r => r.team === aA).length;
+          const totalRuns = hRuns + aRuns;
+          let I5 = 0.5;
+          if (totalRuns >= 4) {
+            const rs = hRuns / totalRuns;
+            I5 = rs > 0.55 ? 1 : rs < 0.45 ? 0 : 0.5;
+          }
+
+          // I1, I2, I3 from cumulative perQuarter (sum Q1..maxQ)
+          let hStl=0, aStl=0, hPaint=0, aPaint=0, hAR=0, aAR=0, qCount=0;
+          for (let q = 1; q <= maxQ; q++) {
+            if (!pq[q]) continue;
+            hStl += pq[q].home?.steals || 0;
+            aStl += pq[q].away?.steals || 0;
+            hPaint += pq[q].home?.points_in_the_paint || 0;
+            aPaint += pq[q].away?.points_in_the_paint || 0;
+            hAR += pq[q].home?.assist_ratio || 0;
+            aAR += pq[q].away?.assist_ratio || 0;
+            qCount++;
+          }
+          // I1: disruption (steals only from perQuarter — blocks not tracked)
+          const stlDiff = hStl - aStl;
+          const I1 = stlDiff > 1 ? 1 : stlDiff < -1 ? 0 : 0.5;
+
+          // I2: paint
+          const paintDiff = hPaint - aPaint;
+          const I2 = paintDiff > 6 ? 1 : paintDiff < -6 ? 0 : 0.5;
+
+          // I3: assist ratio (averaged over quarters — eFG% not available per-quarter)
+          const avgHAR = qCount > 0 ? hAR / qCount : 50;
+          const avgAAR = qCount > 0 ? aAR / qCount : 50;
+          const I3 = avgHAR > avgAAR + 5 ? 1 : avgHAR < avgAAR - 5 ? 0 : 0.5;
+
+          // Composite
+          const raw = I1*0.10 + I2*0.15 + I3*0.20 + I4*0.30 + I5*0.25;
+          const ctrlHome = raw >= 0.5;
+          const ctrlTeam = raw === 0.5 ? 'EVEN' : ctrlHome ? hA : aA;
+
+          return { I1, I2, I3, I4, I5, ctrlTeam, bigH, bigA, hRuns, aRuns, totalRuns };
+        }
+
+        results.push({
+          id: g.id, date: g.date, matchup: aA+'@'+hA, winner,
+          atQ1: computeAt(1), atQ2: computeAt(2), atQ3: computeAt(3), atFinal: computeAt(10),
+        });
+      }
+
+      // Compute stability metrics
+      function stabilityRow(qKey, indKey) {
+        let matchWinner=0, holdsFinal=0, decisive=0, even=0;
+        for (const r of results) {
+          const qv = r[qKey][indKey], fv = r.atFinal[indKey];
+          if (qv === 0.5) { even++; continue; }
+          decisive++;
+          if (qv === fv) holdsFinal++;
+          const qWin = qv > 0.5 ? r.matchup.split('@')[1] : r.matchup.split('@')[0];
+          if (qWin === r.winner) matchWinner++;
+        }
+        return { predicts_winner: decisive > 0 ? +(matchWinner/decisive*100).toFixed(1) : null, holds_to_final: decisive > 0 ? +(holdsFinal/decisive*100).toFixed(1) : null, decisive, even };
+      }
+
+      const stability = {};
+      ['I1','I2','I3','I4','I5'].forEach(ind => {
+        stability[ind] = { Q1: stabilityRow('atQ1',ind), Q2: stabilityRow('atQ2',ind), Q3: stabilityRow('atQ3',ind) };
+      });
+
+      // Composite accuracy by quarter
+      const composite = {};
+      ['atQ1','atQ2','atQ3','atFinal'].forEach(qKey => {
+        let correct=0, total=0;
+        for (const r of results) { const c = r[qKey].ctrlTeam; if (c==='EVEN') continue; total++; if (c===r.winner) correct++; }
+        composite[qKey.replace('at','')] = { accuracy: total > 0 ? +(correct/total*100).toFixed(1) : null, correct, total };
+      });
+
+      // I4 combo by quarter
+      const i4combo = {};
+      ['atQ1','atQ2','atQ3','atFinal'].forEach(qKey => {
+        let correct=0, agree=0;
+        for (const r of results) {
+          const i4 = r[qKey].I4;
+          if (i4 === 0.5) continue;
+          const i4Win = i4 > 0.5 ? r.matchup.split('@')[1] : r.matchup.split('@')[0];
+          const anyAgree = ['I1','I2','I3','I5'].some(ind => { const v = r[qKey][ind]; if (v===0.5) return false; const w = v > 0.5 ? r.matchup.split('@')[1] : r.matchup.split('@')[0]; return w === i4Win; });
+          if (!anyAgree) continue;
+          agree++;
+          if (i4Win === r.winner) correct++;
+        }
+        i4combo[qKey.replace('at','')] = { accuracy: agree > 0 ? +(correct/agree*100).toFixed(1) : null, games: agree };
+      });
+
+      // Flip rates Q2 → final
+      const flips = {};
+      ['I1','I2','I3','I4','I5'].forEach(ind => {
+        let holds=0, fl=0, q2even=0;
+        for (const r of results) { const q2=r.atQ2[ind], fin=r.atFinal[ind]; if(q2===0.5){q2even++;continue;} if(fin===0.5){continue;} if(q2===fin)holds++;else fl++; }
+        flips[ind] = { holds, flips: fl, flip_rate: (holds+fl)>0 ? +(fl/(holds+fl)*100).toFixed(1) : null, q2_even: q2even };
+      });
+
+      return { statusCode: 200, headers, body: JSON.stringify({ gamesAnalyzed: results.length, stability, composite, i4combo, flips }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
     // SIM_INDICATORS — bulk re-sim with new indicator formulas
     // ═══════════════════════════════════════════════════════
     if (action === 'sim_indicators') {
