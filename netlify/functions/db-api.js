@@ -1524,6 +1524,272 @@ exports.handler = async (event) => {
       return { statusCode: 200, headers, body: JSON.stringify({ profiles: rows }) };
     }
 
+    // ═══════════════════════════════════════════════════════
+    // SIM_INDICATORS — bulk re-sim with new indicator formulas
+    // ═══════════════════════════════════════════════════════
+    if (action === 'sim_indicators') {
+      const league = params.league || 'nba';
+
+      // 1. All finished games with scores
+      const games = await sql`
+        SELECT id, home_alias, away_alias, home_pts, away_pts, winner, margin, date
+        FROM games WHERE league = ${league} AND home_pts IS NOT NULL AND away_pts IS NOT NULL
+        AND home_pts > 0 AND away_pts > 0
+        ORDER BY date DESC
+      `;
+
+      // 2. Latest Q3+ snapshot per game with raw_stats_json
+      const snaps = await sql`
+        SELECT DISTINCT ON (game_id) game_id, period, clock, home_pts, away_pts,
+          floor_score, floor_team, i1, i2, i3, i4, i5, raw_stats_json
+        FROM snapshots
+        WHERE period >= 3 AND raw_stats_json IS NOT NULL
+        ORDER BY game_id, period DESC, clock ASC
+      `;
+      const snapMap = {};
+      snaps.forEach(s => { snapMap[s.game_id] = s; });
+
+      // 3. PBP data for runs + biggest_lead
+      const pbps = await sql`
+        SELECT game_id, home_alias, away_alias, pbp_json
+        FROM game_pbp WHERE league = ${league}
+      `;
+      const pbpMap = {};
+      pbps.forEach(p => {
+        try {
+          const j = typeof p.pbp_json === 'string' ? JSON.parse(p.pbp_json) : p.pbp_json;
+          pbpMap[p.game_id] = j;
+        } catch(e) {}
+      });
+
+      // 4. Compute indicators per game
+      const results = [];
+      for (const g of games) {
+        const snap = snapMap[g.id];
+        if (!snap || !snap.raw_stats_json) continue;
+
+        const raw = typeof snap.raw_stats_json === 'string' ? JSON.parse(snap.raw_stats_json) : snap.raw_stats_json;
+        const h = raw.home || {}, a = raw.away || {};
+        const hA = g.home_alias, aA = g.away_alias;
+        const winner = g.winner || (g.home_pts > g.away_pts ? hA : aA);
+
+        // PBP data
+        const pbp = pbpMap[g.id];
+        let hBigLead = h.bigLead || 0, aBigLead = a.bigLead || 0;
+        let hRuns = 0, aRuns = 0, totalRuns = 0;
+        let hRuns6 = 0, aRuns6 = 0, totalRuns6 = 0;
+
+        if (pbp) {
+          // Override biggest_lead from PBP if available
+          if (pbp.biggestLeadHome != null) hBigLead = pbp.biggestLeadHome;
+          if (pbp.biggestLeadAway != null) aBigLead = pbp.biggestLeadAway;
+
+          // Runs at 8+ threshold (stored)
+          if (pbp.runs) {
+            pbp.runs.forEach(r => {
+              if (r.team === hA) hRuns++;
+              else if (r.team === aA) aRuns++;
+            });
+            totalRuns = hRuns + aRuns;
+          }
+
+          // Recompute runs at 6+ threshold from scoreLog
+          if (pbp.scoreLog && pbp.scoreLog.length > 0) {
+            let rTm = null, rPts = 0;
+            for (let i = 0; i < pbp.scoreLog.length; i++) {
+              const s = pbp.scoreLog[i];
+              if (s.team === rTm) { rPts += s.pts; }
+              else {
+                if (rPts >= 6 && rTm) { if (rTm === hA) hRuns6++; else aRuns6++; }
+                rTm = s.team; rPts = s.pts;
+              }
+            }
+            if (rPts >= 6 && rTm) { if (rTm === hA) hRuns6++; else aRuns6++; }
+            totalRuns6 = hRuns6 + aRuns6;
+          }
+        }
+
+        // --- OLD INDICATORS ---
+        // I1 old: gen + conv
+        const hGen = (h.stl||0) + (h.oreb||0) - (h.to||0);
+        const aGen = (a.stl||0) + (a.oreb||0) - (a.to||0);
+        const hConv = (h.fbp||0) + (h.pot||0) + (h.scp||0);
+        const aConv = (a.fbp||0) + (a.pot||0) + (a.scp||0);
+        let i1old = (hGen > aGen ? 1 : hGen < aGen ? -1 : 0) + (hConv > aConv ? 1 : hConv < aConv ? -1 : 0);
+        const oldI1 = i1old > 0 ? 1 : i1old === 0 ? 0.5 : 0;
+
+        // I4 old: biggest_lead + trend + bench (using raw_stats bigLead which may be 0)
+        const qDs = [];
+        // approximate from snapshot period data — not available in raw_stats
+        // Use score diff as proxy (matches old BDL compute path)
+        const scoreDiff = Math.abs((snap.home_pts||0) - (snap.away_pts||0));
+        let i4old_raw = (scoreDiff > 8 && (snap.home_pts||0) > (snap.away_pts||0) ? 1 : scoreDiff > 8 ? -1 : 0);
+        const oldI4 = i4old_raw > 0 ? 1 : i4old_raw === 0 ? 0.5 : 0;
+
+        // I5 old: effD
+        const hOPPP = h.oppp || 0, aOPPP = a.oppp || 0;
+        const hDPPP = h.dppp || 0, aDPPP = a.dppp || 0;
+        const effD = (hOPPP - aDPPP) - (aOPPP - hDPPP);
+        const oldI5 = effD > 0.08 ? 1 : effD < -0.08 ? 0 : 0.5;
+
+        // --- NEW INDICATORS ---
+        // I1 new: disruption(stl+blk) + POT
+        const disruptDiff = (h.stl||0) + (h.blk||0) - (a.stl||0) - (a.blk||0);
+        const i1subA = disruptDiff > 1 ? 1 : disruptDiff < -1 ? -1 : 0;
+        const potDiff = (h.pot||0) - (a.pot||0);
+        const i1subB = potDiff > 4 ? 1 : potDiff < -4 ? -1 : 0;
+        const i1new_raw = i1subA + i1subB;
+        const newI1 = i1new_raw > 0 ? 1 : i1new_raw === 0 ? 0.5 : 0;
+
+        // I2 new (already shipped): paint ±6, rimFG% ±10%
+        const paintDiff = (h.paint||0) - (a.paint||0);
+        const i2subA = paintDiff > 6 ? 1 : paintDiff < -6 ? -1 : 0;
+        let i2subB = 0;
+        const hRimA = h.atRimA || h.paintA || 0, aRimA = a.atRimA || a.paintA || 0;
+        const hRimM = h.atRimM || h.paintM || 0, aRimM = a.atRimM || a.paintM || 0;
+        if (hRimA >= 6 && aRimA >= 6) {
+          const hRimPct = hRimM / hRimA * 100, aRimPct = aRimM / aRimA * 100;
+          i2subB = (hRimPct - aRimPct) > 10 ? 1 : (hRimPct - aRimPct) < -10 ? -1 : 0;
+        }
+        const newI2 = (i2subA + i2subB) > 0 ? 1 : (i2subA + i2subB) === 0 ? 0.5 : 0;
+
+        // I3: unchanged — use stored snapshot value
+        const I3 = snap.i3 != null ? snap.i3 : 0.5;
+
+        // I4 new: biggestLead ±4 + lastQ ±2
+        const bigLeadDiff = hBigLead - aBigLead;
+        const i4subA = bigLeadDiff > 4 ? 1 : bigLeadDiff < -4 ? -1 : 0;
+        // For sim, use final margin as lastQ proxy (Q4 already played)
+        const finalMargin = (g.home_pts || 0) - (g.away_pts || 0);
+        // Actually use Q4 diff = final - Q3 score
+        const q4hPts = (g.home_pts || 0) - (snap.home_pts || 0);
+        const q4aPts = (g.away_pts || 0) - (snap.away_pts || 0);
+        const lastQDiff = q4hPts - q4aPts;
+        const i4subB = lastQDiff > 2 ? 1 : lastQDiff < -2 ? -1 : 0;
+        const newI4 = (i4subA + i4subB) > 0 ? 1 : (i4subA + i4subB) === 0 ? 0.5 : 0;
+
+        // I4 variant: biggestLead only (no sub-B)
+        const newI4blOnly = i4subA > 0 ? 1 : i4subA === 0 ? 0.5 : 0;
+
+        // I5 new: runShare (6+ pts threshold)
+        let newI5 = 0.5;
+        if (totalRuns6 >= 4) {
+          const runShare = hRuns6 / totalRuns6;
+          newI5 = runShare > 0.60 ? 1 : runShare < 0.40 ? 0 : 0.5;
+        }
+        // I5 variant: 8+ threshold
+        let newI5_8 = 0.5;
+        if (totalRuns >= 4) {
+          const runShare8 = hRuns / totalRuns;
+          newI5_8 = runShare8 > 0.60 ? 1 : runShare8 < 0.40 ? 0 : 0.5;
+        }
+
+        // Determine who each indicator says wins (home-relative: >0.5=home, <0.5=away)
+        function indWinner(score, hAlias, aAlias) {
+          return score > 0.5 ? hAlias : score < 0.5 ? aAlias : 'EVEN';
+        }
+
+        results.push({
+          id: g.id, date: g.date, matchup: hA + ' vs ' + aA, winner,
+          home_pts: g.home_pts, away_pts: g.away_pts,
+          hBigLead, aBigLead, hRuns6, aRuns6, totalRuns6, hRuns, aRuns, totalRuns,
+          // Old
+          oldI1, oldI2: snap.i2 != null ? snap.i2 : 0.5, I3,
+          oldI4, oldI5,
+          // New
+          newI1, newI2, newI4, newI4blOnly, newI5, newI5_8,
+          // Sub-scores for debugging
+          disruptDiff, potDiff, bigLeadDiff, lastQDiff, paintDiff, effD,
+        });
+      }
+
+      // 5. Test weight distributions
+      const weightSets = [
+        { name: 'OLD 25/25/20/20/10', w: [0.25, 0.25, 0.20, 0.20, 0.10] },
+        { name: 'NEW 15/20/20/20/25', w: [0.15, 0.20, 0.20, 0.20, 0.25] },
+        { name: 'EQUAL 20/20/20/20/20', w: [0.20, 0.20, 0.20, 0.20, 0.20] },
+        { name: 'I4-HEAVY 15/20/20/25/20', w: [0.15, 0.20, 0.20, 0.25, 0.20] },
+        { name: 'I4-MAX 10/20/20/25/25', w: [0.10, 0.20, 0.20, 0.25, 0.25] },
+        { name: 'I5-HEAVY 15/20/20/15/30', w: [0.15, 0.20, 0.20, 0.15, 0.30] },
+        { name: 'I34-HEAVY 15/15/25/25/20', w: [0.15, 0.15, 0.25, 0.25, 0.20] },
+        { name: 'I345 10/15/25/25/25', w: [0.10, 0.15, 0.25, 0.25, 0.25] },
+      ];
+
+      const simResults = [];
+      for (const ws of weightSets) {
+        let correct = 0, total = 0, decisive = 0;
+        for (const r of results) {
+          const raw = r.newI1 * ws.w[0] + r.newI2 * ws.w[1] + r.I3 * ws.w[2] + r.newI4 * ws.w[3] + r.newI5 * ws.w[4];
+          const ctrlHome = raw >= 0.5;
+          const ctrlTeam = ctrlHome ? r.matchup.split(' vs ')[0] : r.matchup.split(' vs ')[1];
+          if (ctrlTeam !== 'EVEN') {
+            total++;
+            if (raw !== 0.5) decisive++;
+            if (ctrlTeam === r.winner) correct++;
+          }
+        }
+        simResults.push({ name: ws.name, accuracy: total > 0 ? (correct / total * 100).toFixed(1) : 'N/A', correct, total, decisive });
+      }
+
+      // Also test old weights with old indicators
+      {
+        let correct = 0, total = 0;
+        for (const r of results) {
+          const raw = r.oldI1 * 0.25 + r.oldI2 * 0.25 + r.I3 * 0.20 + r.oldI4 * 0.20 + r.oldI5 * 0.10;
+          const ctrlHome = raw >= 0.5;
+          const ctrlTeam = ctrlHome ? r.matchup.split(' vs ')[0] : r.matchup.split(' vs ')[1];
+          if (ctrlTeam !== 'EVEN') { total++; if (ctrlTeam === r.winner) correct++; }
+        }
+        simResults.unshift({ name: 'BASELINE old indicators + old weights', accuracy: total > 0 ? (correct / total * 100).toFixed(1) : 'N/A', correct, total });
+      }
+
+      // Per-indicator accuracy with new formulas
+      function indAccuracy(results, field, hIdx) {
+        let correct = 0, decisive = 0, even = 0;
+        for (const r of results) {
+          const v = r[field];
+          if (v === 0.5) { even++; continue; }
+          decisive++;
+          const indWin = v > 0.5 ? r.matchup.split(' vs ')[0] : r.matchup.split(' vs ')[1];
+          if (indWin === r.winner) correct++;
+        }
+        return { accuracy: decisive > 0 ? (correct / decisive * 100).toFixed(1) : 'N/A', correct, decisive, even, total: results.length };
+      }
+
+      const perIndicator = {
+        oldI1: indAccuracy(results, 'oldI1'), newI1: indAccuracy(results, 'newI1'),
+        oldI2: indAccuracy(results, 'oldI2'), newI2: indAccuracy(results, 'newI2'),
+        I3: indAccuracy(results, 'I3'),
+        oldI4: indAccuracy(results, 'oldI4'), newI4: indAccuracy(results, 'newI4'),
+        newI4blOnly: indAccuracy(results, 'newI4blOnly'),
+        oldI5: indAccuracy(results, 'oldI5'), newI5: indAccuracy(results, 'newI5'),
+        newI5_8: indAccuracy(results, 'newI5_8'),
+      };
+
+      // 2-indicator combos (new indicators)
+      const combos = [];
+      const indPairs = [['newI1','newI2'],['newI1','I3'],['newI1','newI4'],['newI1','newI5'],
+        ['newI2','I3'],['newI2','newI4'],['newI2','newI5'],
+        ['I3','newI4'],['I3','newI5'],['newI4','newI5']];
+      for (const [a2, b] of indPairs) {
+        let correct = 0, agree = 0;
+        for (const r of results) {
+          const va = r[a2], vb = r[b];
+          if (va === 0.5 || vb === 0.5) continue;
+          const wa = va > 0.5 ? r.matchup.split(' vs ')[0] : r.matchup.split(' vs ')[1];
+          const wb = vb > 0.5 ? r.matchup.split(' vs ')[0] : r.matchup.split(' vs ')[1];
+          if (wa === wb) { agree++; if (wa === r.winner) correct++; }
+        }
+        combos.push({ pair: a2 + '+' + b, accuracy: agree > 0 ? (correct / agree * 100).toFixed(1) : 'N/A', agree, correct });
+      }
+
+      return { statusCode: 200, headers, body: JSON.stringify({
+        gamesTotal: games.length, gamesWithData: results.length,
+        simResults, perIndicator, combos,
+        sampleGames: results.slice(0, 5),
+      }) };
+    }
+
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Unknown action: ' + action }) };
 
   } catch (err) {
