@@ -269,7 +269,11 @@ QUARTER PERFORMANCE:
 ${ctx.quarterSummary || 'N/A'}
 
 RULES:
-- FIRED alerts passed all mechanical thresholds. You should SEND unless you see a clear structural contradiction (e.g. floor trending DOWN while alert says BUY, or I4 COMBO is NO meaning I4 favors the opponent, or control team wins only 1/5 indicators).
+- FIRED alerts passed all mechanical thresholds. You should SEND unless you see a clear structural contradiction. Check the indicator breakdown:
+  • I4 COMBO YES (I4 + another agrees): highest conviction — SEND with confidence
+  • I4 COMBO NO (I4 favors opponent): major red flag — the opponent has game control. SUPPRESS or DOWNGRADE unless other indicators are overwhelming (4/5)
+  • Floor driven by I1+I2 without I4 or I5: effort-based control (hustle stats), not structural dominance. DOWNGRADE unless sustainability strongly favors control team
+  • Floor trending DOWN across recent snapshots while alert says BUY: fading control, consider SUPPRESS
 - CANDIDATE alerts failed a soft threshold but might still have value. You should SEND only if the structural case is compelling despite the threshold miss.
 - BUY/WINDOW BUY: the thesis is "structurally dominant team is trailing due to unsustainable opponent variance." Verify the control team actually dominates AND the opponent's lead is variance-driven.
 - BWC (Buy Window Closing): the thesis is "market hasn't priced in structural dominance yet." Verify edge is real and lead is secure.
