@@ -5486,10 +5486,10 @@ function compute(game){
     const aForced = pbp.home.tos.forced||0; // away team FORCES opponent (home) TOs
     const hUnforced = pbp.home.tos.unforced||0; // home team's own unforced
     const aUnforced = pbp.away.tos.unforced||0; // away team's own unforced
-    if(hForced >= aForced+3) { i1 += 1; chaosNote = ` | CHAOS:${hA} +${hForced-aForced} forced`; }
-    else if(aForced >= hForced+3) { i1 -= 1; chaosNote = ` | CHAOS:${aA} +${aForced-hForced} forced`; }
-    else if(hUnforced >= aUnforced+3) { i1 -= 1; chaosNote = ` | CHAOS:${hA} ${hUnforced} unforced`; }
-    else if(aUnforced >= hUnforced+3) { i1 += 1; chaosNote = ` | CHAOS:${aA} ${aUnforced} unforced`; }
+    if(hForced >= aForced+4) { i1 += 0.5; chaosNote = ` | CHAOS:${hA} +${hForced-aForced} forced`; }
+    else if(aForced >= hForced+4) { i1 -= 0.5; chaosNote = ` | CHAOS:${aA} +${aForced-hForced} forced`; }
+    else if(hUnforced >= aUnforced+4) { i1 -= 0.5; chaosNote = ` | CHAOS:${hA} ${hUnforced} unforced`; }
+    else if(aUnforced >= hUnforced+4) { i1 += 0.5; chaosNote = ` | CHAOS:${aA} ${aUnforced} unforced`; }
     else { chaosNote = ` | chaos:even`; }
   }
   const I1={score:i1>0?1:i1===0?.5:0, leader:i1>0?hA:i1<0?aA:'EVEN',

@@ -1049,7 +1049,16 @@ function computeServer(summary, pbpData) {
   const aGen = (as.steals || 0) + (as.offensive_rebounds || 0) - aTO;
   const hConv = (hs.fast_break_points || 0) + (hs.points_off_turnovers || 0) + (hs.second_chance_points || 0);
   const aConv = (as.fast_break_points || 0) + (as.points_off_turnovers || 0) + (as.second_chance_points || 0);
-  const i1raw = (hGen > aGen ? 1 : hGen < aGen ? -1 : 0) + (hConv > aConv ? 1 : hConv < aConv ? -1 : 0);
+  let i1raw = (hGen > aGen ? 1 : hGen < aGen ? -1 : 0) + (hConv > aConv ? 1 : hConv < aConv ? -1 : 0);
+  // Chaos layer — forced vs unforced TO split from PBP (±0.5, threshold ±4)
+  if (pbpData) {
+    const hForced = pbpData.away?.tos?.forced || 0, aForced = pbpData.home?.tos?.forced || 0;
+    const hUnforced = pbpData.home?.tos?.unforced || 0, aUnforced = pbpData.away?.tos?.unforced || 0;
+    if (hForced >= aForced + 4) i1raw += 0.5;
+    else if (aForced >= hForced + 4) i1raw -= 0.5;
+    else if (hUnforced >= aUnforced + 4) i1raw -= 0.5;
+    else if (aUnforced >= hUnforced + 4) i1raw += 0.5;
+  }
   const I1 = { score: i1raw > 0 ? 1 : i1raw === 0 ? 0.5 : 0, leader: i1raw > 0 ? hA : i1raw < 0 ? aA : 'EVEN' };
 
   // I2 — Rim Pressure & Foul
