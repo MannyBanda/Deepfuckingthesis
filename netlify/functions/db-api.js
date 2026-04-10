@@ -1581,8 +1581,9 @@ exports.handler = async (event) => {
 
         if (pbp) {
           // Override biggest_lead from PBP if available
-          if (pbp.biggestLeadHome != null) hBigLead = pbp.biggestLeadHome;
-          if (pbp.biggestLeadAway != null) aBigLead = pbp.biggestLeadAway;
+          const bdl = pbp._bdl || pbp;
+          if (bdl.biggestLeadHome != null) hBigLead = bdl.biggestLeadHome;
+          if (bdl.biggestLeadAway != null) aBigLead = bdl.biggestLeadAway;
 
           // Runs at 8+ threshold (stored)
           if (pbp.runs) {
@@ -1594,10 +1595,11 @@ exports.handler = async (event) => {
           }
 
           // Recompute runs at 6+ threshold from scoreLog
-          if (pbp.scoreLog && pbp.scoreLog.length > 0) {
+          const sLog = bdl.scoreLog || pbp.scoreLog || [];
+          if (sLog.length > 0) {
             let rTm = null, rPts = 0;
-            for (let i = 0; i < pbp.scoreLog.length; i++) {
-              const s = pbp.scoreLog[i];
+            for (let i = 0; i < sLog.length; i++) {
+              const s = sLog[i];
               if (s.team === rTm) { rPts += s.pts; }
               else {
                 if (rPts >= 6 && rTm) { if (rTm === hA) hRuns6++; else aRuns6++; }
