@@ -3549,15 +3549,29 @@ export default async function(req) {
     const maxGames = parseInt(url.searchParams.get('max') || '200');
     const batchSize = 50;
     try {
-      // All finished games NOT already in game_pbp, ordered by most recent
-      const allGames = await sql`
-        SELECT g.id, g.home_alias, g.away_alias, g.date
-        FROM games g
-        LEFT JOIN game_pbp p ON p.game_id = g.id
-        WHERE g.league = 'nba' AND g.home_pts IS NOT NULL AND g.home_pts > 0
-        AND p.game_id IS NULL
-        ORDER BY g.date DESC LIMIT ${maxGames}
-      `;
+      // All finished games missing PBP or with incomplete PBP (no scoreLog)
+      const force = url.searchParams.get('force') === '1';
+      let allGames;
+      if (force) {
+        // Re-process ALL finished games — overwrites stale/incomplete PBP
+        allGames = await sql`
+          SELECT g.id, g.home_alias, g.away_alias, g.date
+          FROM games g
+          LEFT JOIN game_pbp p ON p.game_id = g.id
+          WHERE g.league = 'nba' AND g.home_pts IS NOT NULL AND g.home_pts > 0
+          AND (p.game_id IS NULL OR p.pbp_json::text NOT LIKE '%scoreLog%' OR p.pbp_json::text NOT LIKE '%perQuarter%')
+          ORDER BY g.date DESC LIMIT ${maxGames}
+        `;
+      } else {
+        allGames = await sql`
+          SELECT g.id, g.home_alias, g.away_alias, g.date
+          FROM games g
+          LEFT JOIN game_pbp p ON p.game_id = g.id
+          WHERE g.league = 'nba' AND g.home_pts IS NOT NULL AND g.home_pts > 0
+          AND p.game_id IS NULL
+          ORDER BY g.date DESC LIMIT ${maxGames}
+        `;
+      }
 
       // Group by date for efficient BDL box_scores fetching
       const byDate = {};
