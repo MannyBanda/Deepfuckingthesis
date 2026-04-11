@@ -155,14 +155,34 @@ export default async function handler(req) {
 
   log(`Scored ${scoredAlerts.length}/${alerts.length} alerts (rest had no final score)`);
 
-  // Compute accuracy breakdowns
-  const totalCorrect = scoredAlerts.filter(a => a.result.correct).length;
-  const totalScored = scoredAlerts.length;
-  const accuracyOverall = totalScored > 0 ? Math.round((totalCorrect / totalScored) * 100) : null;
+  // Compute accuracy breakdowns — split actionable vs transitional
+  const ACTIONABLE_TYPES = ['BUY', 'WINDOW BUY', 'BUY WINDOW CLOSING', 'RECOVERY PATH', 'VARIANCE BREAKING'];
+  const TRANSITIONAL_TYPES = ['LEAD LOST', 'LEAD CRUMBLING'];
 
-  // By type
+  // Delivered = agent said SEND or DOWNGRADE (actually reached ntfy)
+  const delivered = scoredAlerts.filter(a => a.agent_decision === 'SEND' || a.agent_decision === 'DOWNGRADE');
+  const suppressed = scoredAlerts.filter(a => a.agent_decision === 'SUPPRESS');
+
+  // Delivered actionable — THE headline number
+  const deliveredActionable = delivered.filter(a => ACTIONABLE_TYPES.includes(a.alert_type));
+  const deliveredActionableCorrect = deliveredActionable.filter(a => a.result.correct).length;
+
+  // Delivered transitional — informational only
+  const deliveredTransitional = delivered.filter(a => TRANSITIONAL_TYPES.includes(a.alert_type));
+  const deliveredTransitionalHeld = deliveredTransitional.filter(a => a.result.correct).length;
+
+  // Agent saves — suppressed alerts that would have been wrong
+  const agentSaves = suppressed.filter(a => !a.result.correct).length;
+  // Agent misses — suppressed alerts that would have been right
+  const agentMisses = suppressed.filter(a => a.result.correct).length;
+
+  // Overall accuracy = delivered actionable only
+  const accuracyOverall = deliveredActionable.length > 0
+    ? Math.round((deliveredActionableCorrect / deliveredActionable.length) * 100) : null;
+
+  // By type (delivered only)
   const byType = {};
-  scoredAlerts.forEach(a => {
+  delivered.forEach(a => {
     if (!byType[a.alert_type]) byType[a.alert_type] = { correct: 0, total: 0 };
     byType[a.alert_type].total++;
     if (a.result.correct) byType[a.alert_type].correct++;
@@ -171,22 +191,21 @@ export default async function handler(req) {
     byType[k].pct = Math.round((byType[k].correct / byType[k].total) * 100);
   });
 
+  // Raw mechanical accuracy (all alerts, diagnostic only)
+  const rawCorrect = scoredAlerts.filter(a => a.result.correct).length;
+  const rawTotal = scoredAlerts.length;
+
   // Agent decision accuracy
-  const agentStats = { sent_correct: 0, sent_wrong: 0, suppressed_correct: 0, suppressed_missed: 0, fallback: 0 };
-  scoredAlerts.forEach(a => {
-    if (a.agent_decision === 'SEND') {
-      if (a.result.correct) agentStats.sent_correct++;
-      else agentStats.sent_wrong++;
-    } else if (a.agent_decision === 'SUPPRESS') {
-      if (a.result.correct) agentStats.suppressed_missed++; // Suppressed a winner — bad
-      else agentStats.suppressed_correct++; // Suppressed a loser — good
-    } else if (a.agent_decision === 'DOWNGRADE') {
-      if (a.result.correct) agentStats.sent_correct++;
-      else agentStats.sent_wrong++;
-    } else {
-      agentStats.fallback++;
-    }
-  });
+  const agentStats = {
+    delivered_correct: deliveredActionableCorrect,
+    delivered_total: deliveredActionable.length,
+    saves: agentSaves,
+    missed_winners: agentMisses,
+    transitional_held: deliveredTransitionalHeld,
+    transitional_total: deliveredTransitional.length,
+    raw_correct: rawCorrect,
+    raw_total: rawTotal,
+  };
 
   // Detect cascade games (3+ wrong alerts from same game)
   const gameAlerts = {};
@@ -222,7 +241,7 @@ export default async function handler(req) {
   const candidatesSent = candidates.filter(a => a.agent_decision === 'SEND' || a.agent_decision === 'DOWNGRADE');
   const candidatesSentCorrect = candidatesSent.filter(a => a.result.correct);
 
-  log(`Accuracy: ${accuracyOverall}% (${totalCorrect}/${totalScored})`);
+  log(`Delivered accuracy: ${accuracyOverall}% (${deliveredActionableCorrect}/${deliveredActionable.length}) | Agent saves: ${agentSaves} | Raw: ${rawCorrect}/${rawTotal}`);
   log(`By type: ${JSON.stringify(byType)}`);
   log(`Agent: sent_correct=${agentStats.sent_correct}, sent_wrong=${agentStats.sent_wrong}, suppressed_correct=${agentStats.suppressed_correct}, suppressed_missed=${agentStats.suppressed_missed}`);
   log(`Cascades: ${cascadeGames.length}, Conflicts: ${conflictGames.length}, TP failures: ${tpFailures.length}`);
@@ -252,9 +271,12 @@ export default async function handler(req) {
     const prompt = `You are the post-game learning agent for a live NBA betting alert system. Analyze tonight's results and identify patterns.
 
 ACCURACY SUMMARY:
-Overall: ${accuracyOverall}% (${totalCorrect}/${totalScored})
-By type: ${JSON.stringify(byType)}
-Agent decisions: sent_correct=${agentStats.sent_correct}, sent_wrong=${agentStats.sent_wrong}, suppressed_correct=${agentStats.suppressed_correct}, suppressed_missed=${agentStats.suppressed_missed}
+Delivered actionable: ${accuracyOverall}% (${deliveredActionableCorrect}/${deliveredActionable.length})
+Raw mechanical (all alerts): ${rawTotal > 0 ? Math.round((rawCorrect / rawTotal) * 100) : '?'}% (${rawCorrect}/${rawTotal})
+Agent saves (suppressed losers): ${agentSaves}
+Agent missed winners (suppressed winners): ${agentMisses}
+Transitional alerts (LEAD LOST/CRUMBLING): ${deliveredTransitionalHeld}/${deliveredTransitional.length} held
+By type (delivered only): ${JSON.stringify(byType)}
 Candidates sent: ${candidatesSent.length}/${candidates.length}, correct: ${candidatesSentCorrect.length}
 
 SCORED ALERTS:
@@ -316,14 +338,14 @@ RECOMMENDATIONS:
         log(`Sonnet analysis complete (${data.usage?.input_tokens}in/${data.usage?.output_tokens}out)`);
       } else {
         log(`Sonnet ${resp.status}`);
-        findings = `Agent analysis unavailable (API ${resp.status}). Raw accuracy: ${accuracyOverall}% (${totalCorrect}/${totalScored}).`;
+        findings = `Agent analysis unavailable (API ${resp.status}). Delivered: ${accuracyOverall}% (${deliveredActionableCorrect}/${deliveredActionable.length}).`;
       }
     } catch (e) {
       log(`Sonnet error: ${e.message}`);
-      findings = `Agent analysis failed: ${e.message}. Raw accuracy: ${accuracyOverall}% (${totalCorrect}/${totalScored}).`;
+      findings = `Agent analysis failed: ${e.message}. Delivered: ${accuracyOverall}% (${deliveredActionableCorrect}/${deliveredActionable.length}).`;
     }
   } else {
-    findings = `No API key or no scored alerts. Raw accuracy: ${accuracyOverall}% (${totalCorrect}/${totalScored}).`;
+    findings = `No API key or no scored alerts. Delivered: ${accuracyOverall}% (${deliveredActionableCorrect}/${deliveredActionable.length}).`;
   }
 
   // ── 4. STORE ────────────────────────────────────────────────────────────
@@ -332,7 +354,7 @@ RECOMMENDATIONS:
 
   try {
     await sql`INSERT INTO learnings (date, games_analyzed, alerts_scored, accuracy_overall, accuracy_by_type, agent_accuracy, findings, patterns, recommendations)
-      VALUES (${today.dateStr}, ${uniqueGames.size}, ${totalScored}, ${accuracyOverall}, ${JSON.stringify(byType)}, ${JSON.stringify(agentStats)}, ${findings}, ${patterns}, ${recommendations})`;
+      VALUES (${today.dateStr}, ${uniqueGames.size}, ${scoredAlerts.length}, ${accuracyOverall}, ${JSON.stringify(byType)}, ${JSON.stringify(agentStats)}, ${findings}, ${patterns}, ${recommendations})`;
     log(`Learning saved for ${today.dateStr}`);
   } catch (e) {
     log(`Learning save failed: ${e.message}`);
@@ -341,21 +363,47 @@ RECOMMENDATIONS:
   // ── 5. NTFY SUMMARY ────────────────────────────────────────────────────
   // Send a brief nightly summary so Manny sees it without opening debug
   const topic = process.env.NTFY_TOPIC;
-  if (topic && totalScored > 0) {
-    const typeBreakdown = Object.entries(byType).map(([k, v]) => `${k}: ${v.pct}% (${v.correct}/${v.total})`).join('\n');
-    const agentLine = (agentStats.sent_correct + agentStats.sent_wrong > 0)
-      ? `\nAgent: ${agentStats.sent_correct}/${agentStats.sent_correct + agentStats.sent_wrong} sent correctly, ${agentStats.suppressed_correct} good suppressions`
-      : '';
-    const candidateLine = candidates.length > 0
-      ? `\nCandidates: ${candidatesSentCorrect.length}/${candidatesSent.length} sent correctly (${candidates.length} total)`
-      : '';
+  if (topic && scoredAlerts.length > 0) {
+    // Build plain English summary
+    const pct = accuracyOverall != null ? accuracyOverall : 0;
+    const emoji = pct >= 80 ? '🟢' : pct >= 60 ? '🟡' : '🔴';
+
+    // Headline: delivered actionable accuracy
+    const headline = deliveredActionable.length > 0
+      ? `${emoji} ${deliveredActionableCorrect}/${deliveredActionable.length} alerts hit tonight (${pct}%)`
+      : `No actionable alerts sent tonight`;
+
+    // Per-type breakdown (delivered only, actionable)
+    const typeLines = [];
+    ['BUY', 'WINDOW BUY', 'BUY WINDOW CLOSING', 'RECOVERY PATH'].forEach(t => {
+      const b = byType[t];
+      if (b) typeLines.push(`${t}: ${b.correct}/${b.total}`);
+    });
+
+    // Agent value line
+    let agentLine = '';
+    if (agentSaves > 0 || agentMisses > 0) {
+      agentLine = `\nThe AI filter blocked ${agentSaves + agentMisses} signals`;
+      if (agentSaves > 0) agentLine += ` — ${agentSaves} would have lost`;
+      if (agentMisses > 0) agentLine += `, ${agentMisses} would have won`;
+    }
+
+    // Transitional line (gray tier — informational)
+    let transLine = '';
+    if (deliveredTransitional.length > 0) {
+      transLine = `\nLead alerts: ${deliveredTransitionalHeld}/${deliveredTransitional.length} held`;
+    }
+
+    const body = headline
+      + (typeLines.length > 0 ? '\n' + typeLines.join(' | ') : '')
+      + agentLine
+      + transLine;
 
     try {
-      const asciiTitle = `DFT Nightly: ${accuracyOverall}% (${totalCorrect}/${totalScored})`;
       await fetch(`https://ntfy.sh/${topic}`, {
         method: 'POST',
-        headers: { 'Title': asciiTitle, 'Priority': '3', 'Tags': 'chart_with_upwards_trend' },
-        body: `${asciiTitle}\n${typeBreakdown}${agentLine}${candidateLine}\n\nCheck debug page for full analysis`,
+        headers: { 'Title': 'Tonight\'s results', 'Priority': '3', 'Tags': 'basketball' },
+        body: body,
       });
       log('Nightly summary sent to ntfy');
     } catch (e) { log(`Ntfy summary failed: ${e.message}`); }
@@ -365,7 +413,7 @@ RECOMMENDATIONS:
   return new Response(JSON.stringify({
     ok: true,
     date: today.dateStr,
-    alerts: totalScored,
+    alerts: scoredAlerts.length,
     accuracy: accuracyOverall,
     agentStats,
   }));
