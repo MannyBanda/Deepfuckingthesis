@@ -4022,8 +4022,10 @@ function computePossessionWindow(game, windowSize){
   var hP = win.filter(function(p){return p.team===hA;}), aP = win.filter(function(p){return p.team===aA;});
 
   // I1: Disruption & Conversion (window — steals only, blocks/POT not per-possession)
-  var hStl=0,aStl=0;
+  var hStl=0,aStl=0,hTO=0,aTO=0,hOreb=0,aOreb=0,hBlk=0,aBlk=0,hFouls=0,aFouls=0,hPaintT=0,aPaintT=0,hFTA=0,aFTA=0,hRimS=0,aRimS=0;
   aP.forEach(function(p){hStl+=p.steals;}); hP.forEach(function(p){aStl+=p.steals;});
+  hP.forEach(function(p){hTO+=p.turnovers.length;hBlk+=p.blocks||0;hFouls+=p.fouls.length;hFTA+=p.ftAttempts||0;if(p.paintTouch)hPaintT++;p.rebounds.forEach(function(r){if(r.type==='offensive')hOreb++;});p.shots.forEach(function(s){if(s.zone==='rim'&&s.made)hRimS++;});});
+  aP.forEach(function(p){aTO+=p.turnovers.length;aBlk+=p.blocks||0;aFouls+=p.fouls.length;aFTA+=p.ftAttempts||0;if(p.paintTouch)aPaintT++;p.rebounds.forEach(function(r){if(r.type==='offensive')aOreb++;});p.shots.forEach(function(s){if(s.zone==='rim'&&s.made)aRimS++;});});
   var i1=hStl>aStl?1:hStl<aStl?-1:0;
   var wI1={score:i1>0?1:i1===0?.5:0, detail:'Stl:'+hStl+'\u2013'+aStl+' (window disrupt)'};
 
