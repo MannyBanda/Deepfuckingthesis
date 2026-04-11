@@ -249,6 +249,7 @@ ALERT:
 Type: ${ctx.alertType} (${ctx.alertTier})
 Control team: ${ctx.controlTeam} | Floor: ${ctx.floor} | Margin: ${ctx.margin} (${ctx.isTrailing ? 'trailing' : 'leading'})
 Period: Q${ctx.period} ${ctx.clock} | Minutes left: ${ctx.minsLeft}
+Mechanical Conviction: ${ctx.convictionTier || 'N/A'} (${ctx.convictionCombo || 'N/A'}) ${ctx.convictionPairs ? '| Killer pairs: ' + ctx.convictionPairs : ''}
 Edge: ${ctx.edge != null ? ctx.edge + '%' : 'N/A'} | ML: ${ctx.ml || 'N/A'} | Spread: ${ctx.spread || 'N/A'}
 TP: ${ctx.tpClass || 'N/A'} | LS: ${ctx.lsClass || 'N/A'}
 Ctrl sust: ${ctx.ctrlSust || 'N/A'} | Opp sust: ${ctx.oppSust || 'N/A'}
@@ -1198,6 +1199,62 @@ function computeServer(summary, pbpData, seasonQ4) {
     homePts: hS,
     awayPts: aS,
   };
+}
+
+// ── CONVICTION ENGINE — combo-pattern-driven from 171-game validation ──────
+// Returns mechanical conviction tier based on WHICH indicators the control team wins.
+// Data basis: I4+I5=100%(77g), I3+I4=99%(68g), I3+I5=96%(68g), 4+=100%(66g), 3=85%(62g), 2=70%(33g)
+function computeConviction(ind) {
+  if (!ind || ind.score == null) return { tier: 'NO ENTRY', combo: 'NONE', indicatorsWon: [], indicatorsLost: [], count: 0, pairs: [] };
+  const ctrlHome = ind.controlTeam === ind.homeAlias;
+
+  // Determine which indicators the control team wins
+  const wins = [], loses = [], even = [];
+  for (const [key, val] of [['I1', ind.I1], ['I2', ind.I2], ['I3', ind.I3], ['I4', ind.I4], ['I5', ind.I5]]) {
+    if (!val || val.score == null) { even.push(key); continue; }
+    const ctrlScore = ctrlHome ? val.score : 1 - val.score;
+    if (ctrlScore > 0.5) wins.push(key);
+    else if (ctrlScore < 0.5) loses.push(key);
+    else even.push(key);
+  }
+
+  const count = wins.length;
+  const has = (a, b) => wins.includes(a) && wins.includes(b);
+  const combo = count > 0 ? wins.join('+') : 'NONE';
+
+  // Check killer pairs
+  const hasI4I5 = has('I4', 'I5');
+  const hasI3I4 = has('I3', 'I4');
+  const hasI3I5 = has('I3', 'I5');
+  const hasKillerPair = hasI4I5 || hasI3I4 || hasI3I5;
+
+  // Danger combos — high count but historically weak
+  const isDanger = (
+    (count === 2 && wins.includes('I1') && wins.includes('I5') && !wins.includes('I3') && !wins.includes('I4')) || // I1+I5 only: 50%
+    (count === 3 && wins.includes('I1') && wins.includes('I2') && wins.includes('I5') && !wins.includes('I3') && !wins.includes('I4')) || // I1+I2+I5: 40%
+    (count === 3 && wins.includes('I2') && wins.includes('I3') && wins.includes('I5') && !wins.includes('I4')) // I2+I3+I5: 63%
+  );
+
+  let tier;
+  if (count >= 4 || hasI4I5) {
+    tier = 'DOMINANT';   // 100% historical
+  } else if (hasKillerPair && !isDanger) {
+    tier = 'STRONG';     // 96-99% historical
+  } else if (count >= 2 && !isDanger) {
+    tier = 'MODEST';     // 70-80% historical
+  } else if (count >= 1) {
+    tier = 'CONDITIONAL'; // 40-70%, needs Sonnet justification
+  } else {
+    tier = 'NO ENTRY';   // 0 indicators
+  }
+
+  // Pairs found (for logging/display)
+  const pairs = [];
+  if (hasI4I5) pairs.push('I4+I5');
+  if (hasI3I4) pairs.push('I3+I4');
+  if (hasI3I5) pairs.push('I3+I5');
+
+  return { tier, combo, count, indicatorsWon: wins, indicatorsLost: loses, indicatorsEven: even, pairs, isDanger };
 }
 
 // ── QUARTER DATA HELPERS ──────────────────────────────────────────────────────
@@ -4173,6 +4230,7 @@ export default async function(req) {
             log(`${matchup}: compute returned null (no stats yet?)`);
             continue;
           }
+          const conviction = computeConviction(ind);
 
           // Fetch ESPN WP (no rate limit, non-blocking)
           let espnWP = null;
@@ -4271,7 +4329,7 @@ export default async function(req) {
             } catch (e) { /* non-fatal — snapshot still saves without tp/ls */ }
           }
           // DIAGNOSTIC: log ind shape before INSERT to catch null fields
-          log(`${matchup}: SNAP IND — Q${currentPeriod} ${clock} score:${ind.score} team:${ind.controlTeam} I1:${ind.I1?.score} I2:${ind.I2?.score} I3:${ind.I3?.score} I4:${ind.I4?.score} I5:${ind.I5?.score} hPts:${ind.homePts} aPts:${ind.awayPts} tp:${snapTp?.classification||'null'} ls:${snapLs?.classification||'null'}`);
+          log(`${matchup}: SNAP IND — Q${currentPeriod} ${clock} score:${ind.score} team:${ind.controlTeam} I1:${ind.I1?.score} I2:${ind.I2?.score} I3:${ind.I3?.score} I4:${ind.I4?.score} I5:${ind.I5?.score} conv:${conviction.tier}(${conviction.combo}) hPts:${ind.homePts} aPts:${ind.awayPts} tp:${snapTp?.classification||'null'} ls:${snapLs?.classification||'null'}`);
           // Capture raw stats that fed computeServer for audit/debugging
           var rawStatsJson = null;
           try {
@@ -4609,6 +4667,8 @@ export default async function(req) {
                   lsClass: lsForBWC?.classification || wbLsClass || null,
                   ctrlSust, oppSust: oppSustTier,
                   windowScore: wbWindowScore,
+                  convictionTier: conviction.tier, convictionCombo: conviction.combo,
+                  convictionPairs: conviction.pairs?.join(', ') || '',
                   i1: ind.I1?.score?.toFixed(2), i2: ind.I2?.score?.toFixed(2),
                   i3: ind.I3?.score?.toFixed(2), i4: ind.I4?.score?.toFixed(2),
                   i5: ind.I5?.score?.toFixed(2),
@@ -4730,8 +4790,8 @@ export default async function(req) {
                 // Always save to alerts table — including suppressed candidates for accuracy tracking
                 const tpRatio = tpForBuy?.conservative?.ratio ?? null;
                 try {
-                  await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, tp_ratio, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5)
-                    VALUES (${game.id}, ${league}, ${alertType}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal}, ${tpForBuy?.classification || null}, ${lsForBWC?.classification || null}, ${ctrlSust}, ${oppSustTier}, ${wbWindowScore}, ${tpRatio}, ${alertTier}, ${agentDecision}, ${agentReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null})`;
+                  await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, tp_ratio, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo)
+                    VALUES (${game.id}, ${league}, ${alertType}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal}, ${tpForBuy?.classification || null}, ${lsForBWC?.classification || null}, ${ctrlSust}, ${oppSustTier}, ${wbWindowScore}, ${tpRatio}, ${alertTier}, ${agentDecision}, ${agentReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${conviction.tier}, ${conviction.combo})`;
                 } catch (e) { log(`${matchup}: alert save failed: ${e.message}`); }
                 log(`${matchup}: ${alertEmoji} ${alertType} ${alertTier} ${agentDecision} — ${ind.controlTeam} ${ind.score.toFixed(2)} ${ctrlTrailing ? 'trailing' : 'leading'} by ${margin}${ctrlEdge != null ? ', edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}${oppSustTier ? ', opp ' + oppSustTier : ''}`);
               }
