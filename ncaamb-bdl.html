@@ -5059,7 +5059,34 @@ function buildTrajectory(game, hA, aA, hs, as, H, A, hS, aS, qDs, periods){
 // FLOOR HELPER — safe accessor for sonnetIndicators/clientInd/serverFloor
 // Guards against truthy objects with score:undefined
 // ══════════════════════════════════════════════════════════════════════════════
-function getFloor(cs){if(!cs)return null;if(cs.sonnetIndicators&&cs.sonnetIndicators.score!=null)return cs.sonnetIndicators;if(cs.clientInd&&cs.clientInd.score!=null)return cs.clientInd;if(cs._serverFloor&&cs._serverFloor.score!=null)return cs._serverFloor;if(cs.rollingWindow&&cs.rollingWindow.available&&cs.rollingWindow.score!=null)return{score:cs.rollingWindow.score,controlTeam:cs.rollingWindow.controlTeam,I1:cs.rollingWindow.I1,I2:cs.rollingWindow.I2,I3:cs.rollingWindow.I3,I4:cs.rollingWindow.I4,I5:cs.rollingWindow.I5,source:cs.rollingWindow.source||'window'};return null;}
+function getFloor(cs){if(!cs)return null;if(cs.clientInd&&cs.clientInd.score!=null)return cs.clientInd;if(cs._serverFloor&&cs._serverFloor.score!=null)return cs._serverFloor;if(cs.rollingWindow&&cs.rollingWindow.available&&cs.rollingWindow.score!=null)return{score:cs.rollingWindow.score,controlTeam:cs.rollingWindow.controlTeam,I1:cs.rollingWindow.I1,I2:cs.rollingWindow.I2,I3:cs.rollingWindow.I3,I4:cs.rollingWindow.I4,I5:cs.rollingWindow.I5,source:cs.rollingWindow.source||'window'};return null;}
+
+function computeConviction(ind){
+  if(!ind||ind.score==null)return{tier:'NO ENTRY',combo:'NONE',count:0,indicatorsWon:[],indicatorsLost:[],pairs:[],isDanger:false};
+  var ctrlHome=ind.controlTeam===(ind.homeAlias||'HOME');
+  var wins=[],loses=[],even=[];
+  var keys=[['I1',ind.I1],['I2',ind.I2],['I3',ind.I3],['I4',ind.I4],['I5',ind.I5]];
+  keys.forEach(function(kv){
+    var k=kv[0],val=kv[1];
+    if(!val||val.score==null){even.push(k);return;}
+    var cs2=ctrlHome?val.score:1-val.score;
+    if(cs2>0.5)wins.push(k);else if(cs2<0.5)loses.push(k);else even.push(k);
+  });
+  var count=wins.length;
+  function has(a,b){return wins.indexOf(a)>=0&&wins.indexOf(b)>=0;}
+  var combo=count>0?wins.join('+'):'NONE';
+  var hasI4I5=has('I4','I5'),hasI3I4=has('I3','I4'),hasI3I5=has('I3','I5');
+  var hasKillerPair=hasI4I5||hasI3I4||hasI3I5;
+  var isDanger=(count===2&&wins.indexOf('I1')>=0&&wins.indexOf('I5')>=0&&wins.indexOf('I3')<0&&wins.indexOf('I4')<0)||(count===3&&wins.indexOf('I1')>=0&&wins.indexOf('I2')>=0&&wins.indexOf('I5')>=0&&wins.indexOf('I3')<0&&wins.indexOf('I4')<0)||(count===3&&wins.indexOf('I2')>=0&&wins.indexOf('I3')>=0&&wins.indexOf('I5')>=0&&wins.indexOf('I4')<0);
+  var tier;
+  if(count>=4||hasI4I5)tier='DOMINANT';
+  else if(hasKillerPair&&!isDanger)tier='STRONG';
+  else if(count>=2&&!isDanger)tier='MODEST';
+  else if(count>=1)tier='CONDITIONAL';
+  else tier='NO ENTRY';
+  var pairs=[];if(hasI4I5)pairs.push('I4+I5');if(hasI3I4)pairs.push('I3+I4');if(hasI3I5)pairs.push('I3+I5');
+  return{tier:tier,combo:combo,count:count,indicatorsWon:wins,indicatorsLost:loses,indicatorsEven:even,pairs:pairs,isDanger:isDanger};
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // DECISION SYNTHESIZER — resolves all signals into one actionable read
