@@ -111,8 +111,13 @@ export default async function handler(req) {
       log(`Already processed ${today.dateStr}, skipping`);
       return new Response(JSON.stringify({ ok: true, message: 'Already processed' }));
     }
+    // Claim the row immediately to prevent duplicate cron runs
+    await sql`INSERT INTO learnings (date, games_analyzed, alerts_scored, findings) VALUES (${today.dateStr}, 0, 0, 'Processing...')`;
   } catch (e) {
-    // Table may not exist yet, continue
+    if (e.message && e.message.includes('duplicate') || e.message.includes('unique')) {
+      log(`Race condition caught — another invocation claimed ${today.dateStr}`);
+      return new Response(JSON.stringify({ ok: true, message: 'Already claimed' }));
+    }
     log(`Learnings table check: ${e.message}`);
   }
 
@@ -128,10 +133,8 @@ export default async function handler(req) {
 
   if (alerts.length === 0) {
     log('No alerts to analyze');
-    // Save empty learning record so we don't re-run
     try {
-      await sql`INSERT INTO learnings (date, games_analyzed, alerts_scored, accuracy_overall, accuracy_by_type, agent_accuracy, findings, patterns, recommendations)
-        VALUES (${today.dateStr}, 0, 0, null, '{}', '{}', 'No alerts fired today.', '[]', '[]')`;
+      await sql`UPDATE learnings SET findings = 'No alerts fired today.' WHERE date = ${today.dateStr}`;
     } catch (e) { log(`Save empty learning: ${e.message}`); }
     return new Response(JSON.stringify({ ok: true, message: 'No alerts' }));
   }
@@ -353,8 +356,12 @@ RECOMMENDATIONS:
   const uniqueGames = new Set(scoredAlerts.map(a => a.game_id));
 
   try {
-    await sql`INSERT INTO learnings (date, games_analyzed, alerts_scored, accuracy_overall, accuracy_by_type, agent_accuracy, findings, patterns, recommendations)
-      VALUES (${today.dateStr}, ${uniqueGames.size}, ${scoredAlerts.length}, ${accuracyOverall}, ${JSON.stringify(byType)}, ${JSON.stringify(agentStats)}, ${findings}, ${patterns}, ${recommendations})`;
+    await sql`UPDATE learnings SET
+      games_analyzed = ${uniqueGames.size}, alerts_scored = ${scoredAlerts.length},
+      accuracy_overall = ${accuracyOverall}, accuracy_by_type = ${JSON.stringify(byType)},
+      agent_accuracy = ${JSON.stringify(agentStats)}, findings = ${findings},
+      patterns = ${patterns}, recommendations = ${recommendations}
+      WHERE date = ${today.dateStr}`;
     log(`Learning saved for ${today.dateStr}`);
   } catch (e) {
     log(`Learning save failed: ${e.message}`);

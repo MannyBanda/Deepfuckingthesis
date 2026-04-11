@@ -2143,6 +2143,13 @@ exports.handler = async (event) => {
       }) };
     }
 
+    if (action === 'delete_learning') {
+      const date = params.date;
+      if (!date) return { statusCode: 400, headers, body: JSON.stringify({ error: 'date required' }) };
+      const result = await sql`DELETE FROM learnings WHERE date = ${date}`;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, deleted: result.count }) };
+    }
+
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Unknown action: ' + action }) };
 
   } catch (err) {
