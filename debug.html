@@ -228,13 +228,29 @@ function renderAlerts(alerts, summary, filterType, filterDate) {
   // Summary card
   var accColor = summary.accuracy >= 75 ? '#00ff88' : summary.accuracy >= 50 ? '#ffd166' : '#ff5252';
   var html = '<h2>🎯 ALERT ACCURACY' + (filterType ? ' — ' + filterType : '') + (filterDate ? ' — ' + filterDate : '') + '</h2>';
+  // Split into delivered vs suppressed, actionable vs transitional
+  var ACTIONABLE = ['BUY','WINDOW BUY','BUY WINDOW CLOSING','RECOVERY PATH','VARIANCE BREAKING'];
+  var deliveredAlerts = alerts.filter(function(a){ return a.agent_decision !== 'SUPPRESS' && a.agent_decision !== 'FALLBACK_DROP'; });
+  var suppressedAlerts = alerts.filter(function(a){ return a.agent_decision === 'SUPPRESS' || a.agent_decision === 'FALLBACK_DROP'; });
+  var deliveredActionable = deliveredAlerts.filter(function(a){ return ACTIONABLE.indexOf(a.alert_type) >= 0; });
+  var deliveredTransitional = deliveredAlerts.filter(function(a){ return ACTIONABLE.indexOf(a.alert_type) < 0; });
+  var daResolved = deliveredActionable.filter(function(a){ return a.correct !== null; });
+  var daCorrect = daResolved.filter(function(a){ return a.correct === true; }).length;
+  var daAcc = daResolved.length > 0 ? Math.round(daCorrect / daResolved.length * 100) : null;
+  var daColor = daAcc >= 75 ? '#00ff88' : daAcc >= 50 ? '#ffd166' : daAcc != null ? '#ff5252' : '#64748b';
+  var agentSaves = suppressedAlerts.filter(function(a){ return a.correct === false; }).length;
+  var agentMisses = suppressedAlerts.filter(function(a){ return a.correct === true; }).length;
+  var transHeld = deliveredTransitional.filter(function(a){ return a.correct === true; }).length;
+  var transTotal = deliveredTransitional.filter(function(a){ return a.correct !== null; }).length;
+
   html += '<div class="card" style="display:flex;gap:20px;align-items:center;flex-wrap:wrap">';
-  html += '<div style="text-align:center"><div style="font-size:28px;font-weight:800;color:' + accColor + '">' + (summary.accuracy != null ? summary.accuracy + '%' : '—') + '</div><div style="font-size:9px;color:#64748b">ACCURACY</div></div>';
+  html += '<div style="text-align:center"><div style="font-size:28px;font-weight:800;color:' + daColor + '">' + (daAcc != null ? daAcc + '%' : '—') + '</div><div style="font-size:9px;color:#64748b">DELIVERED</div></div>';
   html += '<div style="font-size:11px;color:#94a3b8;line-height:1.8">';
-  html += 'Total: <span style="color:#e2e8f0;font-weight:600">' + summary.total + '</span> &nbsp;';
-  html += 'Resolved: <span style="color:#e2e8f0;font-weight:600">' + summary.resolved + '</span> &nbsp;';
-  html += 'Correct: <span style="color:#00ff88;font-weight:600">' + summary.correct + '</span> &nbsp;';
-  html += 'Wrong: <span style="color:#ff5252;font-weight:600">' + (summary.resolved - summary.correct) + '</span>';
+  html += 'Delivered: <span style="color:#00ff88;font-weight:600">' + daCorrect + '/' + daResolved.length + '</span> &nbsp;';
+  html += 'Agent saves: <span style="color:#60a5fa;font-weight:600">' + agentSaves + '</span> &nbsp;';
+  if (agentMisses > 0) html += 'Missed winners: <span style="color:#ff5252;font-weight:600">' + agentMisses + '</span> &nbsp;';
+  html += 'Lead alerts: <span style="color:#64748b;font-weight:600">' + transHeld + '/' + transTotal + ' held</span> &nbsp;';
+  html += '<br>Raw: <span style="color:#64748b">' + summary.correct + '/' + summary.resolved + ' (' + (summary.accuracy != null ? summary.accuracy + '%' : '—') + ')</span>';
   html += '</div></div>';
 
   // Per-type breakdown
@@ -289,15 +305,19 @@ function renderAlerts(alerts, summary, filterType, filterDate) {
   html += '<div class="card" style="overflow-x:auto">';
   html += '<table style="width:100%;border-collapse:collapse;font-size:10px">';
   html += '<tr style="color:#64748b;border-bottom:1px solid #1e293b;text-align:left">';
-  html += '<th style="padding:4px">Result</th><th style="padding:4px">Type</th><th style="padding:4px">Game</th>';
+  html += '<th style="padding:4px">Result</th><th style="padding:4px">Agent</th><th style="padding:4px">Type</th><th style="padding:4px">Game</th>';
   html += '<th style="padding:4px">Q</th><th style="padding:4px">Clock</th><th style="padding:4px">Ctrl</th>';
   html += '<th style="padding:4px">Floor</th><th style="padding:4px">Margin</th><th style="padding:4px">Edge</th>';
   html += '<th style="padding:4px">ML</th><th style="padding:4px">TP</th><th style="padding:4px">LS</th>';
   html += '<th style="padding:4px">Ctrl Sust</th><th style="padding:4px">Opp Sust</th><th style="padding:4px">Final</th>';
   html += '</tr>';
   alerts.forEach(function(a) {
-    var resultIcon = a.correct === true ? '✅' : a.correct === false ? '❌' : '⏳';
-    var rowBg = a.correct === false ? 'rgba(255,82,82,.06)' : '';
+    var isSuppressed = a.agent_decision === 'SUPPRESS' || a.agent_decision === 'FALLBACK_DROP';
+    var isTransitional = a.alert_type === 'LEAD LOST' || a.alert_type === 'LEAD CRUMBLING';
+    var resultIcon = isSuppressed
+      ? (a.correct === false ? '<span title="Correctly blocked">🛡️</span>' : a.correct === true ? '<span title="Blocked a winner">⚠️</span>' : '⏳')
+      : a.correct === true ? '✅' : a.correct === false ? '❌' : '⏳';
+    var rowBg = isSuppressed ? 'rgba(100,116,139,.08)' : a.correct === false && !isTransitional ? 'rgba(255,82,82,.06)' : isTransitional && a.correct === false ? 'rgba(148,163,184,.04)' : '';
     var matchup = (a.matchup || (a.away_alias + '@' + a.home_alias));
     var finalScore = a.home_pts != null ? a.away_alias + ' ' + a.away_pts + '-' + a.home_pts + ' ' + a.home_alias : '—';
     var typeColors = {
@@ -306,8 +326,15 @@ function renderAlerts(alerts, summary, filterType, filterDate) {
       'LEAD LOST': '#ff5252', 'VARIANCE BREAKING': '#fbbf24'
     };
     var tc = typeColors[a.alert_type] || '#94a3b8';
+    if (isTransitional) tc = '#64748b';
+    // Agent decision badge
+    var agentColors = {'SEND':'#00ff88','DOWNGRADE':'#ffd166','SUPPRESS':'#ff5252','FALLBACK_SEND':'#60a5fa','FALLBACK_DROP':'#94a3b8'};
+    var agentLabel = a.agent_decision || (isTransitional ? '—' : '—');
+    var agentCol = agentColors[a.agent_decision] || '#64748b';
+    var tierLabel = a.alert_tier === 'CANDIDATE' ? 'C' : a.alert_tier === 'FIRED' ? 'F' : '';
     html += '<tr style="border-bottom:1px solid #1e293b11;background:' + rowBg + '">';
     html += '<td style="padding:4px;text-align:center">' + resultIcon + '</td>';
+    html += '<td style="padding:4px;font-size:9px;white-space:nowrap"><span style="color:' + agentCol + '">' + agentLabel + '</span>' + (tierLabel ? ' <span style="color:#64748b;font-size:8px">' + tierLabel + '</span>' : '') + '</td>';
     html += '<td style="padding:4px;color:' + tc + ';font-weight:600;white-space:nowrap">' + a.alert_type + '</td>';
     html += '<td style="padding:4px;white-space:nowrap">' + matchup + '</td>';
     html += '<td style="padding:4px">Q' + (a.period || '?') + '</td>';
