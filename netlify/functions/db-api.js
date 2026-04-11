@@ -2146,8 +2146,13 @@ exports.handler = async (event) => {
     if (action === 'delete_learning') {
       const date = params.date;
       if (!date) return { statusCode: 400, headers, body: JSON.stringify({ error: 'date required' }) };
-      const result = await sql`DELETE FROM learnings WHERE date = ${date}`;
-      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, deleted: result.count }) };
+      const deleted = await sql`DELETE FROM learnings WHERE date = ${date} RETURNING date`;
+      if (deleted.length === 0) {
+        // Show what dates exist so we can debug
+        const existing = await sql`SELECT date FROM learnings ORDER BY date DESC LIMIT 10`;
+        return { statusCode: 200, headers, body: JSON.stringify({ ok: false, message: 'No row found for ' + date, existing_dates: existing.map(r => r.date) }) };
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, deleted: deleted.length }) };
     }
 
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Unknown action: ' + action }) };
