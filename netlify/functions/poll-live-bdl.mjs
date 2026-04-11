@@ -186,7 +186,7 @@ ${ctx.priorAlerts || 'None'}
 
 QUARTER PERFORMANCE:
 ${ctx.quarterSummary || 'N/A'}
-
+${ctx.learningsContext ? '\n' + ctx.learningsContext + '\n' : ''}
 RULES:
 - FIRED alerts passed all mechanical thresholds. You should SEND unless you see a clear structural contradiction. Check the indicator breakdown:
   • I4 COMBO YES (I4 + another agrees): highest conviction — SEND with confidence
@@ -291,7 +291,31 @@ async function gatherAgentContext(sql, gameId, matchup) {
       }
     }
   } catch (e) { /* non-fatal */ }
-  return { floorHistory, priorAlerts, quarterSummary };
+  // Historical accuracy from nightly learning agent (min 3 nights for reliability)
+  let learningsContext = '';
+  try {
+    const learn = await sql`SELECT date, accuracy_overall, accuracy_by_type, agent_accuracy, patterns, recommendations
+      FROM learnings WHERE accuracy_overall IS NOT NULL ORDER BY date DESC LIMIT 5`;
+    if (learn.length >= 3) {
+      const lines = learn.map(l => {
+        const byType = typeof l.accuracy_by_type === 'string' ? JSON.parse(l.accuracy_by_type) : l.accuracy_by_type || {};
+        const agent = typeof l.agent_accuracy === 'string' ? JSON.parse(l.agent_accuracy) : l.agent_accuracy || {};
+        const typeStr = Object.entries(byType).map(([k,v]) => `${k}:${v.correct}/${v.total}`).join(' ');
+        return `${l.date}: ${l.accuracy_overall}% delivered | ${typeStr} | saves:${agent.saves || 0} missed:${agent.missed_winners || 0}`;
+      });
+      // Extract latest patterns and recommendations
+      const latestPatterns = typeof learn[0].patterns === 'string' ? JSON.parse(learn[0].patterns) : learn[0].patterns || [];
+      const latestRecs = typeof learn[0].recommendations === 'string' ? JSON.parse(learn[0].recommendations) : learn[0].recommendations || [];
+      learningsContext = 'NIGHTLY RESULTS (last ' + learn.length + ' nights):\n' + lines.join('\n');
+      if (latestPatterns.length > 0) {
+        learningsContext += '\n\nPATTERNS IDENTIFIED:\n' + latestPatterns.slice(0, 3).map(p => typeof p === 'string' ? p : p.pattern || JSON.stringify(p)).join('\n');
+      }
+      if (latestRecs.length > 0) {
+        learningsContext += '\n\nRECOMMENDATIONS:\n' + latestRecs.slice(0, 3).map(r => typeof r === 'string' ? r : r.action || JSON.stringify(r)).join('\n');
+      }
+    }
+  } catch (e) { /* non-fatal — learnings table may not exist */ }
+  return { floorHistory, priorAlerts, quarterSummary, learningsContext };
 }
 
 function today() {
@@ -3243,6 +3267,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           floorHistory: agentCtx.floorHistory,
           priorAlerts: agentCtx.priorAlerts,
           quarterSummary: agentCtx.quarterSummary,
+          learningsContext: agentCtx.learningsContext,
           // Sonnet context for enriched alert body
           sonnetFWP: parsed.fwp,
           sonnetNarrative: parsed.narrative,
@@ -4491,6 +4516,7 @@ export default async function(req) {
                   floorHistory: agentCtx.floorHistory,
                   priorAlerts: agentCtx.priorAlerts,
                   quarterSummary: agentCtx.quarterSummary,
+                  learningsContext: agentCtx.learningsContext,
                 });
 
                 let agentDecision = null;
