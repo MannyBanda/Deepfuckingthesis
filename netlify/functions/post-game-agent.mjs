@@ -126,12 +126,13 @@ export default async function handler(req) {
     log(`Learnings table check: ${e.message}`);
   }
 
-  // Get today's alerts
+  // Get today's alerts — filter by GAME date, not alert timestamp
+  // (late-night MST games have UTC timestamps on the next calendar day)
   const alerts = await sql`
-    SELECT a.*, g.away_alias, g.home_alias
+    SELECT a.*, g.away_alias, g.home_alias, g.date as game_date
     FROM alerts a
     JOIN games g ON a.game_id = g.id
-    WHERE a.ts::date = ${today.dateStr}::date
+    WHERE g.date = ${today.dateStr}
     ORDER BY a.ts
   `;
   log(`Found ${alerts.length} alerts for ${today.dateStr}`);
