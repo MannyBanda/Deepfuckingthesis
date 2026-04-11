@@ -3563,14 +3563,14 @@ export default async function(req) {
       let allGames;
       if (boxOnly) {
         // Games that have PBP — include pbp_json for PBP-derived fields
-        // force=1 re-processes all, otherwise only games missing box_score_json
+        // force=1 re-processes all (ordered by oldest saved_at so freshly updated go last)
         allGames = await sql`
           SELECT g.id, g.home_alias, g.away_alias, g.date, p.pbp_json
           FROM games g
           JOIN game_pbp p ON p.game_id = g.id
           WHERE g.league = 'nba' AND g.home_pts IS NOT NULL AND g.home_pts > 0
           AND (${force} OR p.box_score_json IS NULL)
-          ORDER BY g.date DESC LIMIT ${maxGames}
+          ORDER BY p.saved_at ASC LIMIT ${maxGames}
         `;
       } else if (force) {
         allGames = await sql`
