@@ -165,9 +165,9 @@ export default async function handler(req) {
   const ACTIONABLE_TYPES = ['BUY', 'WINDOW BUY', 'BUY WINDOW CLOSING', 'RECOVERY PATH', 'VARIANCE BREAKING'];
   const TRANSITIONAL_TYPES = ['LEAD LOST', 'LEAD CRUMBLING'];
 
-  // Delivered = agent said SEND or DOWNGRADE (actually reached ntfy)
-  const delivered = scoredAlerts.filter(a => a.agent_decision === 'SEND' || a.agent_decision === 'DOWNGRADE');
-  const suppressed = scoredAlerts.filter(a => a.agent_decision === 'SUPPRESS');
+  // Delivered = actually reached ntfy (everything except SUPPRESS and FALLBACK_DROP)
+  const delivered = scoredAlerts.filter(a => a.agent_decision !== 'SUPPRESS' && a.agent_decision !== 'FALLBACK_DROP');
+  const suppressed = scoredAlerts.filter(a => a.agent_decision === 'SUPPRESS' || a.agent_decision === 'FALLBACK_DROP');
 
   // Delivered actionable — THE headline number
   const deliveredActionable = delivered.filter(a => ACTIONABLE_TYPES.includes(a.alert_type));
