@@ -263,12 +263,18 @@ async function gatherAgentContext(sql, gameId, matchup) {
     }
   } catch (e) { /* non-fatal */ }
   try {
-    const alerts = await sql`SELECT alert_type, period, clock, floor_score, margin, is_trailing, ctrl_sust, opp_sust
+    const alerts = await sql`SELECT alert_type, alert_tier, period, clock, floor_score, margin, is_trailing, ctrl_sust, opp_sust, agent_decision, agent_reasoning, conviction_tier, conviction_combo, edge, tp_class
       FROM alerts WHERE game_id = ${gameId} ORDER BY ts DESC LIMIT 5`;
     if (alerts.length > 0) {
-      priorAlerts = alerts.map(a =>
-        `${a.alert_type} Q${a.period} ${a.clock}: floor ${Number(a.floor_score).toFixed(2)}, margin ${a.margin} ${a.is_trailing ? 'trailing' : 'leading'}, sust ${a.ctrl_sust}/${a.opp_sust}`
-      ).join('\n');
+      priorAlerts = alerts.map(a => {
+        let line = `${a.alert_type}${a.alert_tier ? '['+a.alert_tier+']' : ''} Q${a.period} ${a.clock}: floor ${Number(a.floor_score).toFixed(2)}, margin ${a.margin} ${a.is_trailing ? 'trailing' : 'leading'}, sust ${a.ctrl_sust}/${a.opp_sust}`;
+        if (a.conviction_tier) line += `, conv ${a.conviction_tier}(${a.conviction_combo || '?'})`;
+        if (a.edge != null) line += `, edge ${a.edge > 0 ? '+' : ''}${Number(a.edge).toFixed(1)}%`;
+        if (a.tp_class) line += `, TP ${a.tp_class}`;
+        if (a.agent_decision) line += ` → ${a.agent_decision}`;
+        if (a.agent_reasoning) line += `: ${a.agent_reasoning.substring(0, 120)}`;
+        return line;
+      }).join('\n');
     }
   } catch (e) { /* non-fatal */ }
   try {
