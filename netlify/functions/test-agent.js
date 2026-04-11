@@ -47,7 +47,7 @@ RULES:
 - EARLY GAME (Q1-Q2): FIRED + I4 COMBO YES = SEND. CANDIDATE + I4 COMBO YES = SEND.
   CANDIDATE + I4 COMBO NO = extra scrutiny, SEND only if floor 0.75+ with strong sust.
 - BWC: verify edge is real and lead is secure.
-- Be skeptical of high floors (0.75+) at small margins (1-3 pts).
+- ANCHORED FLOOR CHECK: If team is TRAILING with floor 0.75+ but margin only 1-3 pts AND floor is declining, verify recent quarters still favor control team. Does NOT apply to leading teams (BWC/WB).
 
 Respond in EXACTLY this format:
 DECISION: [SEND|SUPPRESS|DOWNGRADE]
