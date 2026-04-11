@@ -65,7 +65,7 @@ function scoreAlert(alert, games) {
 
   // Alert-type-specific accuracy
   let correct = false;
-  if (['BUY', 'WINDOW BUY', 'RECOVERY PATH'].includes(alert.alert_type)) {
+  if (['BUY', 'WINDOW BUY', 'RECOVERY PATH', 'AUTO_ANALYSIS'].includes(alert.alert_type)) {
     correct = ctrlWon; // Control team should win
   } else if (alert.alert_type === 'BUY WINDOW CLOSING') {
     correct = ctrlWon; // BWC = control team leading, should hold
@@ -169,7 +169,7 @@ export default async function handler(req) {
   });
 
   // Compute accuracy breakdowns — split actionable vs transitional
-  const ACTIONABLE_TYPES = ['BUY', 'WINDOW BUY', 'BUY WINDOW CLOSING', 'RECOVERY PATH', 'VARIANCE BREAKING'];
+  const ACTIONABLE_TYPES = ['BUY', 'WINDOW BUY', 'BUY WINDOW CLOSING', 'RECOVERY PATH', 'VARIANCE BREAKING', 'AUTO_ANALYSIS'];
   const TRANSITIONAL_TYPES = ['LEAD LOST', 'LEAD CRUMBLING'];
 
   // Delivered = actually reached ntfy (everything except SUPPRESS and FALLBACK_DROP)
@@ -392,7 +392,7 @@ RECOMMENDATIONS:
 
     // Per-type breakdown (delivered only, actionable)
     const typeLines = [];
-    ['BUY', 'WINDOW BUY', 'BUY WINDOW CLOSING', 'RECOVERY PATH'].forEach(t => {
+    ['BUY', 'WINDOW BUY', 'BUY WINDOW CLOSING', 'RECOVERY PATH', 'AUTO_ANALYSIS'].forEach(t => {
       const b = byType[t];
       if (b) typeLines.push(`${t}: ${b.correct}/${b.total}`);
     });

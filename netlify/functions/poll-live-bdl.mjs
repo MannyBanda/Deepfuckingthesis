@@ -3201,12 +3201,26 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
         const ctrlSust = sust?.[ctrlIsHome ? 'home' : 'away']?.tier || null;
         const oppSust = sust?.[ctrlIsHome ? 'away' : 'home']?.tier || null;
 
+        // Compute edge/ML from odds (same as mechanical alert path)
+        let aaEdge = null, aaML = null;
+        if (odds && (odds.homeML || odds.awayML)) {
+          aaML = ctrlIsHome ? odds.homeML : odds.awayML;
+          const aaMIP = mlToProb(aaML);
+          if (aaMIP != null) {
+            aaEdge = (ind.score * 100) - (aaMIP * 100);
+            aaEdge = Math.round(aaEdge * 10) / 10;
+          }
+        }
+
+        // Gather agent context (floor history + prior alerts)
+        const agentCtx = await gatherAgentContext(sql, game.id, matchup);
+
         const agentResult = await runAlertAgent({
           alertType: 'AUTO_ANALYSIS', alertTier: 'ANALYSIS',
           controlTeam: ind.controlTeam, floor: ind.score.toFixed(2),
           margin, isTrailing: ctrlTrailing,
           period, clock, minsLeft: (period <= 4 ? ((4 - period) * 12 + parseFloat(clock?.split(':')[0] || 0)) : parseFloat(clock?.split(':')[0] || 0)).toFixed(1),
-          edge: null, ml: null, spread: odds?.homeSpread || null,
+          edge: aaEdge, ml: aaML, spread: odds?.homeSpread || null,
           tpClass, lsClass, ctrlSust, oppSust: oppSust,
           windowScore: clientCtx?.rollingWindow?.score || null,
           convictionTier: calConviction.tier, convictionCombo: calConviction.combo,
@@ -3220,8 +3234,9 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           i4Decisive: calConviction.indicatorsWon?.includes('I4') || calConviction.indicatorsLost?.includes('I4'),
           i4Won: calConviction.indicatorsWon?.includes('I4'),
           i4Combo: calConviction.indicatorsWon?.includes('I4') && calConviction.count >= 2,
-          floorHistory: '', priorAlerts: '',
-          quarterSummary: '',
+          floorHistory: agentCtx.floorHistory,
+          priorAlerts: agentCtx.priorAlerts,
+          quarterSummary: agentCtx.quarterSummary,
           // Sonnet context for enriched alert body
           sonnetFWP: parsed.fwp,
           sonnetNarrative: parsed.narrative,
@@ -3230,27 +3245,51 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           triggerType: 'auto_analysis',
         });
 
-        if (agentResult?.decision === 'SEND') {
-          const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${period} ${clock}`;
-          const ntfyTitle = `[${calConviction.tier}] ${ind.controlTeam} — ${matchup}`;
-          const ntfyBody = scoreLine
-            + (parsed.narrative ? `\n${parsed.narrative}` : `\nStructural control: ${ind.controlTeam} ${ind.score.toFixed(2)}`)
-            + (parsed.fwp ? `\nFWP: ${parsed.fwp}` : '')
-            + (parsed.risk && parsed.risk !== 'NONE' ? `\nRisk: ${parsed.risk}` : '')
-            + `\n[${triggerTag} · ${calConviction.combo}]`;
-          await sendNtfy(ntfyTitle, ntfyBody, calConviction.tier === 'DOMINANT' ? 5 : 4);
-          log(`${matchup}: ${triggerTag} agent SEND — ${calConviction.tier}`);
-        } else if (agentResult?.decision === 'DOWNGRADE') {
-          const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${period} ${clock}`;
-          const ntfyTitle = `WATCH ${ind.controlTeam} — ${matchup}`;
-          const ntfyBody = scoreLine
-            + (parsed.narrative ? `\n${parsed.narrative}` : '')
-            + (parsed.fwp ? `\nFWP: ${parsed.fwp}` : '')
-            + `\n[${triggerTag} · ${calConviction.tier}]`;
-          await sendNtfy(ntfyTitle, ntfyBody, 3);
-          log(`${matchup}: ${triggerTag} agent WATCH — ${agentResult.reasoning}`);
+        const aaDecision = agentResult?.decision || 'SUPPRESS';
+        const aaReasoning = agentResult?.reasoning || '';
+
+        // Always INSERT to alerts table for accuracy tracking
+        try {
+          await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo)
+            VALUES (${game.id}, ${league}, ${'AUTO_ANALYSIS'}, ${period}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${aaEdge}, ${aaML ? parseInt(aaML) : null}, ${odds?.homeSpread ? parseFloat(odds.homeSpread) : null}, ${tpClass}, ${lsClass}, ${ctrlSust}, ${oppSust}, ${clientCtx?.rollingWindow?.score ?? null}, ${'ANALYSIS'}, ${aaDecision}, ${aaReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${calConviction.tier}, ${calConviction.combo})`;
+        } catch (e) { log(`${matchup}: ${triggerTag} alert save failed: ${e.message}`); }
+
+        // Check if mechanical alert already sent for this game+period (dedup ntfy)
+        let mechAlreadySent = false;
+        try {
+          const mechCheck = await sql`SELECT 1 FROM alerts WHERE game_id = ${game.id} AND period = ${period} AND alert_type != 'AUTO_ANALYSIS' AND agent_decision IN ('SEND', 'DOWNGRADE', 'FALLBACK_SEND') LIMIT 1`;
+          mechAlreadySent = mechCheck.length > 0;
+        } catch (e) { /* non-fatal */ }
+
+        if (aaDecision === 'SEND') {
+          if (mechAlreadySent) {
+            log(`${matchup}: ${triggerTag} agent SEND — ntfy suppressed (mechanical alert already sent Q${period})`);
+          } else {
+            const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${period} ${clock}`;
+            const ntfyTitle = `[${calConviction.tier}] ${ind.controlTeam} — ${matchup}`;
+            const ntfyBody = scoreLine
+              + (parsed.narrative ? `\n${parsed.narrative}` : `\nStructural control: ${ind.controlTeam} ${ind.score.toFixed(2)}`)
+              + (parsed.fwp ? `\nFWP: ${parsed.fwp}` : '')
+              + (parsed.risk && parsed.risk !== 'NONE' ? `\nRisk: ${parsed.risk}` : '')
+              + `\n[${triggerTag} · ${calConviction.combo}]`;
+            await sendNtfy(ntfyTitle, ntfyBody, calConviction.tier === 'DOMINANT' ? 5 : 4);
+            log(`${matchup}: ${triggerTag} agent SEND — ${calConviction.tier}`);
+          }
+        } else if (aaDecision === 'DOWNGRADE') {
+          if (mechAlreadySent) {
+            log(`${matchup}: ${triggerTag} agent WATCH — ntfy suppressed (mechanical alert already sent Q${period})`);
+          } else {
+            const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${period} ${clock}`;
+            const ntfyTitle = `WATCH ${ind.controlTeam} — ${matchup}`;
+            const ntfyBody = scoreLine
+              + (parsed.narrative ? `\n${parsed.narrative}` : '')
+              + (parsed.fwp ? `\nFWP: ${parsed.fwp}` : '')
+              + `\n[${triggerTag} · ${calConviction.tier}]`;
+            await sendNtfy(ntfyTitle, ntfyBody, 3);
+            log(`${matchup}: ${triggerTag} agent WATCH — ${aaReasoning}`);
+          }
         } else {
-          log(`${matchup}: ${triggerTag} agent silent — ${agentResult?.reasoning || 'no signal'}`);
+          log(`${matchup}: ${triggerTag} agent silent — ${aaReasoning || 'no signal'}`);
         }
       } catch (e) {
         log(`${matchup}: ${triggerTag} agent routing failed: ${e.message}`);

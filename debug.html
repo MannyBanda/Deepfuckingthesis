@@ -229,7 +229,7 @@ function renderAlerts(alerts, summary, filterType, filterDate) {
   var accColor = summary.accuracy >= 75 ? '#00ff88' : summary.accuracy >= 50 ? '#ffd166' : '#ff5252';
   var html = '<h2>🎯 ALERT ACCURACY' + (filterType ? ' — ' + filterType : '') + (filterDate ? ' — ' + filterDate : '') + '</h2>';
   // Split into delivered vs suppressed, actionable vs transitional
-  var ACTIONABLE = ['BUY','WINDOW BUY','BUY WINDOW CLOSING','RECOVERY PATH','VARIANCE BREAKING'];
+  var ACTIONABLE = ['BUY','WINDOW BUY','BUY WINDOW CLOSING','RECOVERY PATH','VARIANCE BREAKING','AUTO_ANALYSIS'];
   var deliveredAlerts = alerts.filter(function(a){ return a.agent_decision !== 'SUPPRESS' && a.agent_decision !== 'FALLBACK_DROP'; });
   var suppressedAlerts = alerts.filter(function(a){ return a.agent_decision === 'SUPPRESS' || a.agent_decision === 'FALLBACK_DROP'; });
   var deliveredActionable = deliveredAlerts.filter(function(a){ return ACTIONABLE.indexOf(a.alert_type) >= 0; });
@@ -323,7 +323,7 @@ function renderAlerts(alerts, summary, filterType, filterDate) {
     var typeColors = {
       'BUY': '#00ff88', 'LEAN BUY': '#ffd166', 'BUY WINDOW CLOSING': '#60a5fa',
       'WINDOW BUY': '#a78bfa', 'RECOVERY PATH': '#38bdf8', 'LEAD CRUMBLING': '#f472b6',
-      'LEAD LOST': '#ff5252', 'VARIANCE BREAKING': '#fbbf24'
+      'LEAD LOST': '#ff5252', 'VARIANCE BREAKING': '#fbbf24', 'AUTO_ANALYSIS': '#67e8f9'
     };
     var tc = typeColors[a.alert_type] || '#94a3b8';
     if (isTransitional) tc = '#64748b';
