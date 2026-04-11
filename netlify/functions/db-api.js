@@ -1210,6 +1210,112 @@ exports.handler = async (event) => {
     }
 
     // ═══════════════════════════════════════════════════════
+    // INDICATOR_COMBOS — win rate by indicator combination
+    // ═══════════════════════════════════════════════════════
+    if (action === 'indicator_combos') {
+      const league = params.league || 'nba';
+      const minPeriod = parseInt(params.min_period) || 3; // default: Q3+ snapshots
+      // Get latest snapshot per game with i1-i5, join with final outcomes
+      const rows = await sql`
+        WITH latest AS (
+          SELECT DISTINCT ON (s.game_id)
+            s.game_id, s.floor_score, s.floor_team, s.period, s.i1, s.i2, s.i3, s.i4, s.i5,
+            s.tp_class, s.ls_class, s.sust_json
+          FROM snapshots s
+          WHERE s.source = 'server' AND s.i1 IS NOT NULL AND s.period >= ${minPeriod}
+          ORDER BY s.game_id, s.ts DESC
+        )
+        SELECT l.*, g.matchup, g.winner, g.home_alias, g.away_alias, g.home_pts, g.away_pts, g.date
+        FROM latest l JOIN games g ON l.game_id = g.id
+        WHERE g.winner IS NOT NULL AND g.league = ${league}
+        ORDER BY g.date DESC
+      `;
+
+      // For each game, determine which indicators control team wins (score > 0.5)
+      const games = rows.map(r => {
+        const wins = [];
+        const loses = [];
+        if (r.i1 !== null && r.i1 > 0.5) wins.push('I1'); else if (r.i1 !== null) loses.push('I1');
+        if (r.i2 !== null && r.i2 > 0.5) wins.push('I2'); else if (r.i2 !== null) loses.push('I2');
+        if (r.i3 !== null && r.i3 > 0.5) wins.push('I3'); else if (r.i3 !== null) loses.push('I3');
+        if (r.i4 !== null && r.i4 > 0.5) wins.push('I4'); else if (r.i4 !== null) loses.push('I4');
+        if (r.i5 !== null && r.i5 > 0.5) wins.push('I5'); else if (r.i5 !== null) loses.push('I5');
+        const comboKey = wins.length > 0 ? wins.join('+') : 'NONE';
+        const ctrlWon = r.winner === r.floor_team;
+        return {
+          game_id: r.game_id, matchup: r.matchup, date: r.date,
+          floor: r.floor_score, floor_team: r.floor_team, winner: r.winner,
+          ctrl_won: ctrlWon, combo: comboKey, ind_won: wins.length,
+          i1: r.i1, i2: r.i2, i3: r.i3, i4: r.i4, i5: r.i5,
+          wins, loses
+        };
+      });
+
+      // Group by combo
+      const combos = {};
+      for (const g of games) {
+        if (!combos[g.combo]) combos[g.combo] = { combo: g.combo, total: 0, ctrl_won: 0, games: [] };
+        combos[g.combo].total++;
+        if (g.ctrl_won) combos[g.combo].ctrl_won++;
+        combos[g.combo].games.push({ matchup: g.matchup, date: g.date, floor: g.floor, winner: g.winner, floor_team: g.floor_team });
+      }
+      // Win rate + sort
+      const comboList = Object.values(combos).map(c => ({
+        ...c, win_pct: Math.round(c.ctrl_won / c.total * 100),
+        games: c.games.slice(0, 5) // limit game examples
+      })).sort((a, b) => b.total - a.total);
+
+      // Also: group by indicator count won
+      const byCount = {};
+      for (const g of games) {
+        const k = g.ind_won;
+        if (!byCount[k]) byCount[k] = { count: k, total: 0, ctrl_won: 0 };
+        byCount[k].total++;
+        if (g.ctrl_won) byCount[k].ctrl_won++;
+      }
+      const countList = Object.values(byCount).map(c => ({
+        ...c, win_pct: Math.round(c.ctrl_won / c.total * 100)
+      })).sort((a, b) => a.count - b.count);
+
+      // Pairwise: for each pair of indicators, win rate when BOTH won
+      const pairs = {};
+      for (const g of games) {
+        for (let i = 0; i < g.wins.length; i++) {
+          for (let j = i + 1; j < g.wins.length; j++) {
+            const pk = g.wins[i] + '+' + g.wins[j];
+            if (!pairs[pk]) pairs[pk] = { pair: pk, total: 0, ctrl_won: 0 };
+            pairs[pk].total++;
+            if (g.ctrl_won) pairs[pk].ctrl_won++;
+          }
+        }
+      }
+      const pairList = Object.values(pairs).map(p => ({
+        ...p, win_pct: Math.round(p.ctrl_won / p.total * 100)
+      })).sort((a, b) => b.win_pct - a.win_pct);
+
+      // Single indicator win rates
+      const singles = {};
+      for (const ind of ['I1','I2','I3','I4','I5']) {
+        singles[ind] = { ind, won_total: 0, won_ctrl_won: 0, lost_total: 0, lost_ctrl_won: 0 };
+      }
+      for (const g of games) {
+        for (const w of g.wins) { singles[w].won_total++; if (g.ctrl_won) singles[w].won_ctrl_won++; }
+        for (const l of g.loses) { singles[l].lost_total++; if (g.ctrl_won) singles[l].lost_ctrl_won++; }
+      }
+      const singleList = Object.values(singles).map(s => ({
+        ...s,
+        won_pct: s.won_total > 0 ? Math.round(s.won_ctrl_won / s.won_total * 100) : null,
+        lost_pct: s.lost_total > 0 ? Math.round(s.lost_ctrl_won / s.lost_total * 100) : null,
+      }));
+
+      return { statusCode: 200, headers, body: JSON.stringify({
+        total_games: games.length, min_period: minPeriod,
+        by_count: countList, by_combo: comboList, by_pair: pairList, by_single: singleList,
+        all_games: games
+      }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
     // GET_GAMES — list all games for a league
     // ═══════════════════════════════════════════════════════
     if (action === 'get_games') {
