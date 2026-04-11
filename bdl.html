@@ -1080,9 +1080,11 @@ function applyAutoAnalysesToCards(){
         controlTeam: a.control_team || '?',
         controlScore: a.control_score || null,
         verdict: '',
-        entry: a.entry || '—',
-        conviction: a.conviction || '—',
-        signal: a.signal || '—',
+        entry: a.entry || null,
+        conviction: a.conviction || null,
+        convictionTier: a.conviction_tier || null,
+        convictionCombo: a.conviction_combo || null,
+        signal: a.signal || null,
         leadTeam: leadTeam, trailTeam: trailTeam,
         leadSust: leadTier, trailSust: trailTier,
         thesisStatus: '',
@@ -1129,6 +1131,8 @@ function applyAutoAnalysesToCards(){
       var autoDecision = {
         entry: latest.entry || null,
         conviction: latest.conviction || null,
+        convictionTier: latest.conviction_tier || null,
+        convictionCombo: latest.conviction_combo || null,
         signal: latest.signal || null,
         signalType: latest.signal || null,
         sustainability: latest.sustainability || null,
@@ -1137,6 +1141,7 @@ function applyAutoAnalysesToCards(){
         edge: latest.edge || null,
         edgeNum: null,
         prediction: null, // will be extracted from raw text below
+        narrative: null, risk: null, closing: null, disagreement: null,
         homeValue: pred ? pred.homeValue : null,
         awayValue: pred ? pred.awayValue : null,
         source: 'auto',
@@ -1174,10 +1179,19 @@ function applyAutoAnalysesToCards(){
         // Extract spread analysis
         var spLine = latest.raw_text.match(/SPREAD\s*ANALYSIS:\s*(.+)/i);
         if(spLine) autoDecision.spreadAnalysis = spLine[1].trim();
+        // Extract v2 fields (NARRATIVE, RISK, CLOSING, DISAGREEMENT)
+        var narLine = latest.raw_text.match(/NARRATIVE:\s*([\s\S]*?)(?:\n(?:Sustainability|Lead Source|DISAGREEMENT|RISK|CLOSING|FWP|EDGE):|$)/);
+        if(narLine) autoDecision.narrative = narLine[1].trim();
+        var riskLine = latest.raw_text.match(/RISK:\s*(.+?)(?:\n|$)/);
+        if(riskLine) autoDecision.risk = riskLine[1].trim();
+        var closLine = latest.raw_text.match(/CLOSING:\s*(.+?)(?:\n|$)/);
+        if(closLine) autoDecision.closing = closLine[1].trim();
+        var disLine = latest.raw_text.match(/DISAGREEMENT:\s*(.+?)(?:\n|$)/);
+        if(disLine){ autoDecision.disagreement = disLine[1].trim(); if(autoDecision.disagreement.toUpperCase()==='NONE') autoDecision.disagreement = null; }
       }
 
       // Only set if we got meaningful data
-      if(autoDecision.conviction || autoDecision.prediction || (autoDecision.homeValue && autoDecision.awayValue)){
+      if(autoDecision.conviction || autoDecision.prediction || autoDecision.fwp || (autoDecision.homeValue && autoDecision.awayValue)){
         cs.prediction = autoDecision;
         cs.analysisTime = new Date(latestTime);
         if(latest.raw_text && latest.raw_text.length > 20){
@@ -1214,7 +1228,7 @@ function applyAutoAnalysesToCards(){
         persistAnalysis(gid, cs);
         applied++;
         addLog(gid, '📡 Auto '+((latest.trigger||'q?').replace('auto_','').toUpperCase())+' analysis hydrated — '
-          +(autoDecision.conviction||'?')+' '+(autoDecision.signalType||'?')
+          +(autoDecision.convictionTier||autoDecision.conviction||'?')+' '+(autoDecision.convictionCombo||autoDecision.signalType||'?')
           +' ('+autos.length+' quarter checkpoints)', true);
       }
     } else if(newAutos.length > 0){
@@ -1955,10 +1969,11 @@ function captureCalibration(game){
 
   // Get last Sonnet prediction
   const pred = cs.prediction;
-  let fwpTeam = null, fwpValue = null, entrySignal = null, conviction = null;
+  let fwpTeam = null, fwpValue = null;
+  // Mechanical conviction (replaces old Sonnet conviction/entry)
+  const calInd = getFloor(cs) || computeAny(game);
+  const calConv = computeConviction(calInd);
   if(pred){
-    entrySignal = pred.entry || null;
-    conviction = pred.conviction || null;
     if(pred.homeValue && pred.awayValue){
       if(pred.homeValue.fwp >= pred.awayValue.fwp){
         fwpTeam = hA; fwpValue = pred.homeValue.fwp;
@@ -1994,7 +2009,7 @@ function captureCalibration(game){
     winner: winner, margin: Math.abs(margin),
     thesisTeam: thesisTeam, thesisCorrect: thesisTeam ? thesisTeam === winner : null,
     fwpTeam: fwpTeam, fwpValue: fwpValue, fwpCorrect: fwpTeam ? fwpTeam === winner : null,
-    entry: entrySignal, conviction: conviction,
+    conviction_tier: calConv.tier, conviction_combo: calConv.combo,
     homeSpread: homeSpread,
     homeCovered: spreadCovered?.home ?? null,
     awayCovered: spreadCovered?.away ?? null,
@@ -2411,14 +2426,14 @@ function exportCalibrationCSV(){
   try{ log = JSON.parse(localStorage.getItem('nba4:calibration')||'[]'); }catch(e){}
   if(log.length === 0){ alert('No calibration data yet. Games must reach FINAL with a card open to capture.'); return; }
 
-  var headers = ['date','matchup','home_pts','away_pts','winner','margin','thesis_team','thesis_correct','fwp_team','fwp_value','fwp_correct','entry_signal','conviction','home_spread','home_covered','away_covered','classification'];
+  var headers = ['date','matchup','home_pts','away_pts','winner','margin','thesis_team','thesis_correct','fwp_team','fwp_value','fwp_correct','conviction_tier','conviction_combo','home_spread','home_covered','away_covered','classification'];
   var rows = [headers.join(',')];
   log.forEach(function(e){
     var row = [
       e.date||'', e.matchup||'', e.homePoints||'', e.awayPoints||'',
       e.winner||'', e.margin||'', e.thesisTeam||'', e.thesisCorrect===null?'':e.thesisCorrect,
       e.fwpTeam||'', e.fwpValue!=null?e.fwpValue.toFixed(1):'', e.fwpCorrect===null?'':e.fwpCorrect,
-      e.entry||'', e.conviction||'', e.homeSpread!=null?e.homeSpread:'',
+      e.conviction_tier||e.conviction||'', e.conviction_combo||'', e.homeSpread!=null?e.homeSpread:'',
       e.homeCovered===null?'':e.homeCovered, e.awayCovered===null?'':e.awayCovered,
       e.classification||''
     ];
@@ -3151,25 +3166,19 @@ async function triggerAnalysis(game){
         }
       }
 
-      // ── CONVICTION OVERRIDE — client score is authoritative, Sonnet can downgrade only ──
-      if(parsed?.score && decision.conviction){
-        const convictionRank = {'DOMINANT':4, 'STRONG':3, 'EARNED':2, 'CONDITIONAL':1, 'NO ENTRY':0};
-        const scoreVerdict = getVerdict(parsed.score);
-        // Map verdict labels to conviction labels (DOMINANT→DOMINANT, STRONG→STRONG, EARNED→EARNED, NO EDGE→CONDITIONAL, WAIT→NO ENTRY)
-        const verdictToConviction = {'DOMINANT':'DOMINANT', 'STRONG':'STRONG', 'EARNED':'EARNED', 'NO EDGE':'CONDITIONAL', 'WAIT':'NO ENTRY'};
-        const scoreConviction = verdictToConviction[scoreVerdict?.label] || 'CONDITIONAL';
-        const scoreRank = convictionRank[scoreConviction] ?? 1;
-        const sonnetRank = convictionRank[decision.conviction] ?? 1;
-        // Sonnet can downgrade (qualitative caution) but not upgrade (arithmetic error)
-        if(sonnetRank > scoreRank){
-          console.log('CONVICTION OVERRIDE: Sonnet said ' + decision.conviction + ' but score ' + parsed.score.toFixed(2) + ' implies ' + scoreConviction + ' — using ' + scoreConviction);
-          decision.conviction = scoreConviction;
-          decision.convictionOverride = true;
-        } else if(sonnetRank < scoreRank){
-          console.log('CONVICTION DOWNGRADE (Sonnet caution): Score implies ' + scoreConviction + ' but Sonnet says ' + decision.conviction + ' — keeping Sonnet');
-        }
+      // Compute mechanical conviction from indicators (authoritative — replaces old Sonnet conviction)
+      if(parsed?.score){
+        var _convInd = parsed;
+        _convInd.controlTeam = parsed.controlTeam;
+        _convInd.homeAlias = hAlias;
+        var _mechConv = computeConviction(_convInd);
+        decision.convictionTier = _mechConv.tier;
+        decision.convictionCombo = _mechConv.combo;
+        decision.convictionCount = _mechConv.count;
+        decision.convictionDanger = _mechConv.isDanger;
+        decision.convictionPairs = _mechConv.pairs;
       }
-      console.log('Decision parsed:', decision.conviction, decision.entry, decision.prediction);
+      console.log('Decision parsed:', (decision.convictionTier||decision.conviction||'?'), decision.fwp, decision.prediction);
       // Track edge history for entry timing
       if(decision.edgeNum !== null || decision.fwp){
         cs.edgeHistory.push({
@@ -3205,6 +3214,8 @@ async function triggerAnalysis(game){
         verdict: getVerdict(parsed?.score)?.label||'?',
         entry: decision.entry||null,
         conviction: decision.conviction||null,
+        convictionTier: decision.convictionTier||null,
+        convictionCombo: decision.convictionCombo||null,
         signal: decision.signalType||null,
         buyTeam: decision.buyTeam||null,
         leadSust: leadSustTier||null,
@@ -3212,7 +3223,10 @@ async function triggerAnalysis(game){
         leadTeam: leadAlias,
         trailTeam: trailAlias,
         thesisStatus: decision.thesisStatus||null,
-        keyRead: decision.prediction||'',
+        keyRead: decision.narrative||decision.prediction||'',
+        narrative: decision.narrative||null,
+        risk: decision.risk||null,
+        disagreement: decision.disagreement||null,
         fwp: decision.fwp||null,
         edge: decision.edge||null,
       });
@@ -3244,7 +3258,7 @@ async function triggerAnalysis(game){
         game_id: game.id, period: game.period||0, clock: game.clock||'',
         control_team: parsed?.controlTeam||decision?.buyTeam||null, control_score: parsed?.score||null,
         fwp: decision?.fwp||null, edge: decision?.edge||null,
-        entry: decision?.entry||null, conviction: decision?.conviction||null,
+        entry: decision?.entry||null, conviction: decision?.convictionTier||decision?.conviction||null,
         signal: decision?.signalType||null,
         sustainability: (decision?.sustainability||'').substring(0,200),
         lead_source: decision?.leadSource||null,
@@ -3255,6 +3269,8 @@ async function triggerAnalysis(game){
         trigger: 'manual',
         home_pts: game.home_points||game.home?.points||null,
         away_pts: game.away_points||game.away?.points||null,
+        conviction_tier: decision?.convictionTier||null,
+        conviction_combo: decision?.convictionCombo||null,
       };
       fetch(FN+'db-api?action=save_analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(_aSnap)}).catch(function(){});
     }
@@ -4712,8 +4728,18 @@ function parseSonnetDecision(text){
       const buyMatch = d.signalType.match(/BUY\s+(\w+)/i);
       d.buyTeam = buyMatch ? buyMatch[1].toUpperCase() : null;
     }
-    // Need at least prediction or conviction to be valid
-    if(!d.prediction && !d.conviction) return null;
+    // ── Sonnet v2 fields ──
+    const riskMatch = text.match(/RISK:\s*(.+?)(?:\n|$)/);
+    d.risk = riskMatch ? riskMatch[1].trim() : null;
+    const closingMatch = text.match(/CLOSING:\s*(.+?)(?:\n|$)/);
+    d.closing = closingMatch ? closingMatch[1].trim() : null;
+    const narrativeMatch = text.match(/NARRATIVE:\s*([\s\S]*?)(?:\n(?:Sustainability|Lead Source|DISAGREEMENT|RISK|CLOSING|FWP|EDGE):|$)/);
+    d.narrative = narrativeMatch ? narrativeMatch[1].trim() : null;
+    const disagreeMatch = text.match(/DISAGREEMENT:\s*(.+?)(?:\n|$)/);
+    d.disagreement = disagreeMatch ? disagreeMatch[1].trim() : null;
+    if(d.disagreement && d.disagreement.toUpperCase() === 'NONE') d.disagreement = null;
+    // Need at least prediction, conviction, or FWP to be valid (v2 has no conviction/prediction)
+    if(!d.prediction && !d.conviction && !d.fwp) return null;
     return d;
   }catch(e){
     console.warn('Decision parse failed:', e.message);
@@ -8909,7 +8935,9 @@ function renderConfidenceTable(){
     const fwp = pred?.fwp || null;
     const edge = pred?.edgeNum ?? null;
     const entry = pred?.entry || null;
-    const conviction = pred?.conviction || null;
+    const conviction = pred?.convictionTier || pred?.conviction || null;
+    const convictionCombo = pred?.convictionCombo || null;
+    const disagreement = pred?.disagreement || null;
     const thesisStatus = pred?.thesisStatus || null;
     // Sustainability from audit (server-side)
     let sustHome = null, sustAway = null;
@@ -8952,10 +8980,10 @@ function renderConfidenceTable(){
     const lsClass = lsData?.classification || null;
     const lsConSwing = lsData?.conservative?.totalSwing || null;
     const lsLead = lsData?.lead || null;
-    const row = {matchup, team, score, verdict, gameId:g.id, state, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, hA, aA, entryIf:p.entry||null, passIf:p.pass||null, fwpTeamAlias, fwpTeamEdge, fwpTeamFwp, fwpTeamEntry, signal, windowScore, windowTeam, gapVal, accelLabel, combinedReadLabel, tpClass, tpConSwing, tpDeficit, lsClass, lsConSwing, lsLead};
+    const row = {matchup, team, score, verdict, gameId:g.id, state, fwp, edge, entry, conviction, convictionCombo, disagreement, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, hA, aA, entryIf:p.entry||null, passIf:p.pass||null, fwpTeamAlias, fwpTeamEdge, fwpTeamFwp, fwpTeamEntry, signal, windowScore, windowTeam, gapVal, accelLabel, combinedReadLabel, tpClass, tpConSwing, tpDeficit, lsClass, lsConSwing, lsLead};
     // Persist live data to cache whenever we have analysis results or fresh live sustainability
     if(pred || si || (state==='LIVE' && (sustHome || sustAway))){
-      persistConfRow(g.id, {team, score, verdict, fwp, edge, entry, conviction, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, state, fwpTeamAlias, fwpTeamEdge, fwpTeamFwp, fwpTeamEntry, signal:csPred?.signalType||null, ts:Date.now()});
+      persistConfRow(g.id, {team, score, verdict, fwp, edge, entry, conviction, convictionCombo, disagreement, thesisStatus, sustHome, sustAway, homeScore, awayScore, period, clock, state, fwpTeamAlias, fwpTeamEdge, fwpTeamFwp, fwpTeamEntry, signal:csPred?.signalType||null, ts:Date.now()});
     } else {
       // Fall back to cached data if no live cardState (e.g. page refresh, card not mounted)
       const cached = confCache[g.id];
@@ -9032,9 +9060,10 @@ function renderConfidenceTable(){
   };
   const edgeStr = (e) => e===null||e===undefined?'':'<span style="color:'+(e>=5?'var(--green)':e>=1?'var(--yellow)':e>=0?'var(--t3)':'var(--red)')+'">'+(e>=0?'+':'')+e.toFixed(1)+'%</span>';
   const entryColor = (e) => e==='OPTIMAL WINDOW'?'var(--green)':e==='WINDOW OPEN'?'var(--g2)':e==='WINDOW CLOSING'?'var(--yellow)':e==='FADE'?'var(--red)':'var(--t3)';
-  const convColor = (c) => ({DOMINANT:'var(--green)',STRONG:'var(--g2)',EARNED:'var(--yellow)',CONDITIONAL:'var(--amber)'})[c]||'var(--t3)';
+  const convColor = (c) => ({DOMINANT:'var(--green)',STRONG:'var(--g2)',MODEST:'var(--yellow)',EARNED:'var(--yellow)',CONDITIONAL:'var(--amber)','NO ENTRY':'var(--red)'})[c]||'var(--t3)';
   const tsColor = (s) => s==='CONFIRMED'?'var(--green)':s==='DEVELOPING'?'var(--g2)':s==='CONTESTED'?'var(--amber)':s==='DENIED'?'var(--red)':s==='FLIPPED'?'#a78bfa':'var(--t3)';
   const entryClass = (e) => e==='OPTIMAL WINDOW'?'ct-optimal':e==='WINDOW OPEN'?'ct-window':e==='WINDOW CLOSING'?'ct-closing':e==='FADE'?'ct-counter':'';
+  const convClass = (c) => c==='DOMINANT'?'ct-optimal':c==='STRONG'?'ct-window':c==='MODEST'||c==='EARNED'?'ct-closing':'';
   const liveCount = rows.filter(r=>r.state==='LIVE').length;
   const preCount = rows.filter(r=>r.state==='PRE').length;
   const finalCount = rows.filter(r=>r.state==='FINAL').length;
@@ -9046,10 +9075,10 @@ function renderConfidenceTable(){
   }
   html += '</div>';
   if(!confCollapsed){
-  html += '<div class="ct-scroll"><table><tr><th style="text-align:center;position:sticky;left:0;z-index:2;background:var(--c1);border-right:1px solid var(--b1)">SCORE</th><th style="text-align:center">SUST</th><th style="text-align:center">FWP</th><th style="text-align:center">EDGE</th><th style="text-align:center">ENTRY</th><th style="text-align:center">FLOOR</th><th style="text-align:center">RECOVERY</th><th style="text-align:center">WINDOW</th><th style="text-align:center">GAP</th><th style="text-align:center">THESIS</th></tr>';
+  html += '<div class="ct-scroll"><table><tr><th style="text-align:center;position:sticky;left:0;z-index:2;background:var(--c1);border-right:1px solid var(--b1)">SCORE</th><th style="text-align:center">SUST</th><th style="text-align:center">FWP</th><th style="text-align:center">EDGE</th><th style="text-align:center">CONV</th><th style="text-align:center">FLOOR</th><th style="text-align:center">RECOVERY</th><th style="text-align:center">WINDOW</th><th style="text-align:center">GAP</th><th style="text-align:center">THESIS</th></tr>';
   for(const r of rows){
     const isFinal = r.state==='FINAL';
-    const rowClass = 'ct-row'+(isFinal?' ct-final':' '+entryClass(r.entry));
+    const rowClass = 'ct-row'+(isFinal?' ct-final':' '+convClass(r.conviction));
     // State badge (own line above score)
     let stateBadge = '';
     if(r.state==='LIVE'){
@@ -9120,14 +9149,12 @@ function renderConfidenceTable(){
     } else if(r.fwp){
       fwpStr = '<span style="color:var(--t1);font-weight:600">'+esc(r.team||'')+' '+esc(r.fwp)+'</span>';
     }
-    // Entry signal for highest FWP team
-    let entryStr = '<span style="color:var(--t3)">&#8212;</span>';
-    if(r.fwpTeamEntry){
-      const shortEntry = r.fwpTeamEntry.replace('WINDOW ','W/');
-      entryStr = '<span style="color:'+entryColor(r.fwpTeamEntry)+'">'+esc(shortEntry)+'</span>';
-    } else if(r.signal){
-      const sigCol = r.signal.startsWith('BUY')?'var(--green)':r.signal==='FADE'?'var(--red)':'var(--t3)';
-      entryStr = '<span style="color:'+sigCol+'">'+esc(r.signal)+'</span>';
+    // Conviction tier + combo (mechanical)
+    let convStr = '<span style="color:var(--t3)">&#8212;</span>';
+    if(r.conviction){
+      var _ccol = ({DOMINANT:'var(--green)',STRONG:'var(--g2)',MODEST:'var(--yellow)',EARNED:'var(--yellow)',CONDITIONAL:'var(--amber)','NO ENTRY':'var(--red)'})[r.conviction]||'var(--t3)';
+      var _cshort = ({DOMINANT:'DOM',STRONG:'STR',MODEST:'MOD',EARNED:'ERN',CONDITIONAL:'CND','NO ENTRY':'—'})[r.conviction]||r.conviction;
+      convStr = '<div style="line-height:1.2"><span style="color:'+_ccol+';font-weight:700">'+_cshort+'</span>'+(r.convictionCombo&&r.convictionCombo!=='NONE'?'<div style="font-size:4.5px;color:var(--t3)">'+esc(r.convictionCombo)+'</div>':'')+(r.disagreement?'<span style="color:var(--red);font-size:5px" title="Sonnet disagrees">&#9679;</span>':'')+'</div>';
     }
     // Thesis status
     const tsStr = r.thesisStatus ? '<span style="color:'+tsColor(r.thesisStatus)+'">'+esc(r.thesisStatus)+'</span>' : '<span style="color:var(--t3)">&#8212;</span>';
@@ -9136,7 +9163,7 @@ function renderConfidenceTable(){
       + '<td style="font-size:5.5px;text-align:center;white-space:nowrap">'+sustStr+'</td>'
       + '<td style="font-size:7px;text-align:center;white-space:nowrap">'+fwpStr+'</td>'
       + '<td style="font-size:7px;text-align:center;white-space:nowrap">'+edgeDispStr+'</td>'
-      + '<td style="font-size:6px;text-align:center;white-space:nowrap">'+entryStr+'</td>'
+      + '<td style="font-size:6px;text-align:center;white-space:nowrap">'+convStr+'</td>'
       + '<td class="ct-score" style="color:'+vColor(r.verdict)+'">'+r.score.toFixed(2)+'<div class="ct-verdict" style="color:'+vColor(r.verdict)+'">'+esc(r.team||'')+'</div></td>'
       + '<td style="text-align:center;font-size:7px;white-space:nowrap">'+(r.tpConSwing!=null?'<span style="font-weight:600;color:'+(r.tpConSwing>=r.tpDeficit?'var(--green)':r.tpConSwing>=r.tpDeficit*0.6?'var(--yellow)':'var(--red)')+'">'+fmtSwing(r.tpConSwing)+'</span><span style="color:var(--t3);font-size:5.5px"> vs '+r.tpDeficit+'</span>':r.lsClass!=null?'<span style="font-weight:600;font-size:5.5px;color:'+(r.lsClass==='SAFE'?'var(--green)':r.lsClass==='CUSHIONED'?'var(--g2)':r.lsClass==='AT RISK'?'var(--amber)':'var(--red)')+'">'+r.lsClass+'</span><span style="color:var(--t3);font-size:5px"> '+fmtSwing(r.lsConSwing)+' vs '+r.lsLead+'</span>':'<span style="color:var(--t3)">&#8212;</span>')+'</td>'
       + '<td style="text-align:center;font-size:7px">'+(r.windowScore!=null?'<span style="font-weight:600;color:'+(r.windowScore>=0.75?'var(--g2)':r.windowScore>=0.60?'var(--yellow)':'var(--t3)')+'">'+r.windowScore.toFixed(2)+'</span>':'<span style="color:var(--t3)">&#8212;</span>')+'</td>'
@@ -10165,7 +10192,8 @@ function renderCard(game){
         else if(av.edge > hv.edge && av.edge >= 5){ bestTeam = aA; bestEdge = av; }
       }
       var entryColor = pred.entry==='OPTIMAL WINDOW'?'var(--green)':pred.entry==='WINDOW OPEN'?'var(--g2)':pred.entry==='WINDOW CLOSING'?'var(--yellow)':pred.entry==='FADE'?'var(--red)':'var(--t3)';
-      var convColor = ({DOMINANT:'var(--green)',STRONG:'var(--g2)',EARNED:'var(--yellow)',CONDITIONAL:'var(--amber)'})[pred.conviction]||'var(--t3)';
+      var _convTier = pred.convictionTier||pred.conviction||null;
+      var convColor = ({DOMINANT:'var(--green)',STRONG:'var(--g2)',MODEST:'var(--yellow)',EARNED:'var(--yellow)',CONDITIONAL:'var(--amber)'})[_convTier]||'var(--t3)';
       // Edge history
       var eh = cs.edgeHistory.filter(function(e){return e.edgeNum!==null&&e.edgeNum!==undefined;});
       var peakEdge = null, edgeTrend = '';
@@ -10219,18 +10247,34 @@ function renderCard(game){
         html+='<div class="dv-row"><span class="dv-label">EDGE</span><span class="dv-val" style="color:'+legEdgeColor+'">'+esc(pred.edge||'—')+'</span><span class="dv-sub">FWP '+esc(pred.fwp||'—')+'</span><span class="dv-sub">MIP '+esc(pred.mip||'N/A')+'</span></div>';
       }
 
-      // Signal bar (entry + conviction + buy team)
-      var sigType = pred.signalType || (pred.entry==='OPTIMAL WINDOW'||pred.entry==='WINDOW OPEN'?(bestTeam?'BUY '+bestTeam:'WINDOW'):pred.entry==='FADE'?'FADE':pred.entry==='NO WINDOW'?'NO VALUE':'PASS');
-      var sigNote = pred.signalNote || pred.prediction || '';
-      var sigIcon = sigType.startsWith('BUY')?'&#9889; ':sigType==='NO VALUE'?'&#9675; ':sigType==='COUNTER'?'&#10005; ':'&#9675; ';
-      var sigCol = sigType.startsWith('BUY')?'var(--green)':sigType==='COUNTER'?'var(--red)':'var(--t3)';
-      html+='<div style="margin-top:6px;padding:5px 7px;border-radius:4px;border:1px solid '+(bestTeam?'var(--green)':'var(--b1)')+';background:'+(bestTeam?'rgba(0,200,83,.06)':'rgba(255,255,255,.02)')+';display:flex;align-items:center;gap:6px">';
-      html+='<span style="font-size:6.5px;font-weight:700;letter-spacing:.8px;color:'+sigCol+';white-space:nowrap">'+sigIcon+esc(sigType)+'</span>';
-      html+='<span style="font-size:6.5px;color:var(--t2)">'+esc(sigNote)+'</span>';
+      // ── CONVICTION STRIP (mechanical — authoritative) ──
+      var _ct = pred.convictionTier||pred.conviction||null;
+      var _cc = pred.convictionCombo||null;
+      var _ctColor = ({DOMINANT:'var(--green)',STRONG:'var(--g2)',MODEST:'var(--yellow)',EARNED:'var(--yellow)',CONDITIONAL:'var(--amber)','NO ENTRY':'var(--red)'})[_ct]||'var(--t3)';
+      var _ctIcon = _ct==='DOMINANT'?'&#9733; ':_ct==='STRONG'?'&#9650; ':_ct==='MODEST'?'&#9679; ':_ct==='CONDITIONAL'?'&#9651; ':_ct==='NO ENTRY'?'&#9675; ':'';
+      var _ctDanger = pred.convictionDanger;
+      html+='<div style="margin-top:6px;padding:5px 7px;border-radius:4px;border:1px solid '+_ctColor+';background:rgba(255,255,255,.02);display:flex;align-items:center;gap:6px;flex-wrap:wrap">';
+      html+='<span style="font-size:7px;font-weight:700;letter-spacing:.8px;color:'+_ctColor+';white-space:nowrap">'+_ctIcon+esc(_ct||'—')+'</span>';
+      if(_cc && _cc!=='NONE') html+='<span style="font-size:6px;color:var(--t2);font-weight:600;letter-spacing:.5px">'+esc(_cc)+'</span>';
+      if(_ctDanger) html+='<span style="font-size:5px;color:var(--red);border:1px solid var(--red);padding:0 3px;border-radius:2px">DANGER COMBO</span>';
+      if(pred.convictionPairs && pred.convictionPairs.length>0) html+='<span style="font-size:5px;color:var(--g2);margin-left:auto">'+pred.convictionPairs.join(' ')+'</span>';
       html+='</div>';
 
-      // Entry + Conviction tags
-      html+='<div class="dv-row" style="margin-top:5px"><span class="dv-label">ENTRY</span><span class="dv-tag" style="color:'+entryColor+';border-color:'+entryColor+'">'+esc(pred.entry||'—')+'</span><span class="dv-tag" style="color:'+convColor+';border-color:'+convColor+';margin-left:4px">'+esc(pred.conviction||'—')+'</span></div>';
+      // ── NARRATIVE (Sonnet v2 — plain English read) ──
+      var _narr = pred.narrative||pred.prediction||null;
+      if(_narr){
+        html+='<div style="font-size:6.5px;color:var(--t1);margin-top:4px;padding:4px 6px;line-height:1.4;background:rgba(255,255,255,.02);border-radius:3px;border-left:2px solid var(--b2)">'+esc(_narr)+'</div>';
+      }
+      // ── RISK (Sonnet v2) ──
+      var _risk = pred.risk||null;
+      if(_risk && _risk.toUpperCase()!=='NONE'){
+        html+='<div style="font-size:5.5px;color:var(--amber);margin-top:2px;padding:2px 6px"><span style="letter-spacing:.5px">RISK:</span> '+esc(_risk)+'</div>';
+      }
+      // ── DISAGREEMENT (Sonnet v2 — flags where Sonnet disagrees with mechanical) ──
+      var _disagree = pred.disagreement||null;
+      if(_disagree){
+        html+='<div style="font-size:5.5px;color:var(--red);margin-top:2px;padding:3px 6px;border:1px solid rgba(255,77,77,.3);border-radius:3px;background:rgba(255,77,77,.05)"><span style="letter-spacing:.5px;font-weight:600">DISAGREE:</span> '+esc(_disagree)+'</div>';
+      }
 
       // Spread analysis (from Sonnet)
       if(pred.spreadAnalysis){
@@ -10498,6 +10542,9 @@ function renderCard(game){
         var ne = nh[ni];
         var nCtrlCol = ne.controlScore>=0.75?'var(--green)':ne.controlScore>=0.60?'var(--g2)':ne.controlScore>=0.45?'var(--yellow)':'var(--t3)';
         var nEntCol = ne.entry==='OPTIMAL WINDOW'?'var(--green)':ne.entry==='WINDOW OPEN'?'var(--g2)':ne.entry==='WINDOW CLOSING'?'var(--yellow)':ne.entry==='FADE'?'var(--red)':'var(--t3)';
+        // Conviction tier (mechanical — prefer over old Sonnet entry/conviction)
+        var _nConvTier = ne.convictionTier||ne.conviction||null;
+        var _nConvCol = ({DOMINANT:'var(--green)',STRONG:'var(--g2)',MODEST:'var(--yellow)',EARNED:'var(--yellow)',CONDITIONAL:'var(--amber)','NO ENTRY':'var(--red)'})[_nConvTier]||nEntCol;
         var nLsCol = sustColor(ne.leadSust);
         var nTsCol = sustColor(ne.trailSust);
         var isLatest = ni===nh.length-1;
@@ -10509,7 +10556,7 @@ function renderCard(game){
         html+='<div style="display:flex;align-items:center;gap:3px;margin-bottom:2px"><span style="font-size:7px;font-weight:700;color:'+nCtrlCol+'">'+(ne.controlTeam||'?')+'</span><span style="font-size:8px;font-weight:700;color:'+nCtrlCol+'">'+(ne.controlScore?ne.controlScore.toFixed(2):'?')+'</span></div>';
         html+='<div style="display:flex;gap:2px;align-items:center;margin-bottom:2px"><span style="font-size:5px;color:'+nLsCol+';border:1px solid '+nLsCol+';padding:0 2px;border-radius:2px">'+(ne.leadTeam||'L')+' '+(ne.leadSust?ne.leadSust.substring(0,4).toUpperCase():'?')+'</span>';
         html+='<span style="font-size:5px;color:'+nTsCol+';border:1px solid '+nTsCol+';padding:0 2px;border-radius:2px">'+(ne.trailTeam||'T')+' '+(ne.trailSust?ne.trailSust.substring(0,4).toUpperCase():'?')+'</span></div>';
-        html+='<div style="font-size:5px;color:'+nEntCol+';letter-spacing:.3px">'+(ne.entry?ne.entry.replace('WINDOW ','W/'):ne.conviction||'—')+'</div>';
+        html+='<div style="font-size:5px;color:'+_nConvCol+';letter-spacing:.3px;font-weight:600">'+esc(_nConvTier||'—')+(ne.convictionCombo&&ne.convictionCombo!=='NONE'?' <span style="font-weight:400;color:var(--t3)">'+esc(ne.convictionCombo)+'</span>':'')+(ne.disagreement?'<span style="color:var(--red)"> &#9679;</span>':'')+'</div>';
         html+='</div>';
       }
       html+='</div>';
@@ -12064,7 +12111,7 @@ function runClientQA(gameId){
     } else {
       meh('Edge', 'edgeNum is null/NaN — prediction exists but edge not computed');
     }
-    ok('Prediction', (pred.signalType||'?') + ' | entry: ' + (pred.entry||'?') + ' | conviction: ' + (pred.conviction||'?'));
+    ok('Prediction', 'conv: ' + (pred.convictionTier||pred.conviction||'?') + ' (' + (pred.convictionCombo||'?') + ')' + (pred.narrative ? ' | narrative: yes' : '') + (pred.disagreement ? ' | DISAGREE' : ''));
   } else {
     meh('Prediction', 'Not hydrated — no Sonnet analysis yet');
   }

@@ -821,12 +821,14 @@ exports.handler = async (event) => {
       await sql`
         INSERT INTO analyses (game_id, period, clock, control_team, control_score,
           fwp, edge, entry, conviction, signal, sustainability, lead_source, raw_text,
-          prediction_json, indicators_json, narrative_json, "trigger", home_pts, away_pts)
+          prediction_json, indicators_json, narrative_json, "trigger", home_pts, away_pts,
+          conviction_tier, conviction_combo)
         VALUES (${a.game_id}, ${a.period}, ${a.clock}, ${a.control_team}, ${a.control_score},
           ${a.fwp}, ${a.edge}, ${a.entry}, ${a.conviction}, ${a.signal},
           ${a.sustainability}, ${a.lead_source}, ${a.raw_text},
           ${a.prediction_json || null}, ${a.indicators_json || null}, ${a.narrative_json || null},
-          ${a.trigger || 'manual'}, ${a.home_pts || null}, ${a.away_pts || null})
+          ${a.trigger || 'manual'}, ${a.home_pts || null}, ${a.away_pts || null},
+          ${a.conviction_tier || null}, ${a.conviction_combo || null})
       `;
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
     }
@@ -1055,7 +1057,8 @@ exports.handler = async (event) => {
         SELECT game_id, ts, period, clock,
           control_team, control_score, fwp, edge, entry, conviction, signal,
           sustainability, lead_source, prediction_json, indicators_json, raw_text,
-          "trigger", home_pts, away_pts, context_layers, prompt_chars
+          "trigger", home_pts, away_pts, context_layers, prompt_chars,
+          conviction_tier, conviction_combo
         FROM analyses
         WHERE game_id = ANY(${gameIds}) AND "trigger" LIKE 'auto_q%'
         ORDER BY game_id, ts ASC

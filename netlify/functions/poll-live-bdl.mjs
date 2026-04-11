@@ -2966,7 +2966,7 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
   if (analysisHistory && analysisHistory.length > 0) {
     p += `\nGAME NARRATIVE (prior reads this game):\n`;
     analysisHistory.forEach((h, i) => {
-      p += `${i + 1}. Q${h.period || '?'} ${h.clock || ''} | ${h.controlTeam || '?'} ${h.controlScore != null ? h.controlScore.toFixed(2) : '?'} | ${h.entry || '-'}/${h.conviction || '-'} | ${h.signal || '-'}\n`;
+      p += `${i + 1}. Q${h.period || '?'} ${h.clock || ''} | ${h.controlTeam || '?'} ${h.controlScore != null ? h.controlScore.toFixed(2) : '?'} | conv:${h.conviction_tier || h.conviction || '-'}(${h.conviction_combo || '-'})\n`;
     });
   }
 
@@ -3032,7 +3032,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
     let analysisHistory = null;
     try {
       const rows = await sql`
-        SELECT period, clock, control_team, control_score, fwp, entry, conviction, signal, sustainability
+        SELECT period, clock, control_team, control_score, fwp, entry, conviction, signal, sustainability, conviction_tier, conviction_combo
         FROM analyses WHERE game_id = ${game.id}
         ORDER BY ts ASC LIMIT 5
       `;
@@ -3041,6 +3041,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           period: r.period, clock: r.clock,
           controlTeam: r.control_team, controlScore: r.control_score,
           entry: r.entry, conviction: r.conviction,
+          conviction_tier: r.conviction_tier || null, conviction_combo: r.conviction_combo || null,
           signal: r.signal, verdict: '',
           leadSust: '', trailSust: '',
         }));
@@ -3901,7 +3902,7 @@ export default async function(req) {
               let fwpTeam = null, fwpValue = null, conviction = null, entrySignal = null;
               try {
                 const aRows = await sql`
-                  SELECT prediction_json, conviction, entry FROM analyses
+                  SELECT prediction_json, conviction, entry, conviction_tier FROM analyses
                   WHERE game_id = ${game.id} AND "trigger" LIKE 'auto_q%'
                   ORDER BY ts DESC LIMIT 1
                 `;
@@ -3912,7 +3913,7 @@ export default async function(req) {
                     if (pred.homeValue.fwp >= pred.awayValue.fwp) { fwpTeam = hA; fwpValue = pred.homeValue.fwp; }
                     else { fwpTeam = aA; fwpValue = pred.awayValue.fwp; }
                   }
-                  conviction = aRows[0].conviction || null;
+                  conviction = aRows[0].conviction_tier || aRows[0].conviction || null;
                   entrySignal = aRows[0].entry || null;
                 }
               } catch (e) { /* no auto analyses */ }
