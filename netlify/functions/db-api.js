@@ -314,6 +314,11 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS alert_tier TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS agent_decision TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS agent_reasoning TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS i1 REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS i2 REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS i3 REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS i4 REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS i5 REAL`; } catch(e) {}
 
       // ── LEARNINGS table (post-game agent nightly analysis) ──
       await sql`CREATE TABLE IF NOT EXISTS learnings (

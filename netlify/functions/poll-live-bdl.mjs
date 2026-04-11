@@ -4637,8 +4637,8 @@ export default async function(req) {
                 // Always save to alerts table — including suppressed candidates for accuracy tracking
                 const tpRatio = tpForBuy?.conservative?.ratio ?? null;
                 try {
-                  await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, tp_ratio, alert_tier, agent_decision, agent_reasoning)
-                    VALUES (${game.id}, ${league}, ${alertType}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal}, ${tpForBuy?.classification || null}, ${lsForBWC?.classification || null}, ${ctrlSust}, ${oppSustTier}, ${wbWindowScore}, ${tpRatio}, ${alertTier}, ${agentDecision}, ${agentReasoning})`;
+                  await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, tp_ratio, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5)
+                    VALUES (${game.id}, ${league}, ${alertType}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal}, ${tpForBuy?.classification || null}, ${lsForBWC?.classification || null}, ${ctrlSust}, ${oppSustTier}, ${wbWindowScore}, ${tpRatio}, ${alertTier}, ${agentDecision}, ${agentReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null})`;
                 } catch (e) { log(`${matchup}: alert save failed: ${e.message}`); }
                 log(`${matchup}: ${alertEmoji} ${alertType} ${alertTier} ${agentDecision} — ${ind.controlTeam} ${ind.score.toFixed(2)} ${ctrlTrailing ? 'trailing' : 'leading'} by ${margin}${ctrlEdge != null ? ', edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}${oppSustTier ? ', opp ' + oppSustTier : ''}`);
               }
