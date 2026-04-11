@@ -99,8 +99,11 @@ export default async function handler(req) {
   log('Post-game learning agent starting...');
 
   const sql = neon(process.env.DATABASE_URL);
-  const today = getArizonaDate();
-  log(`Processing date: ${today.dateStr} (Arizona time)`);
+  // Allow date override via query param for reprocessing
+  const url = new URL(req.url, 'https://localhost');
+  const dateOverride = url.searchParams.get('date');
+  const today = dateOverride ? { dateStr: dateOverride } : getArizonaDate();
+  log(`Processing date: ${today.dateStr}${dateOverride ? ' (manual override)' : ' (Arizona time)'}`);
 
   // ── 1. COLLECT ──────────────────────────────────────────────────────────
 
