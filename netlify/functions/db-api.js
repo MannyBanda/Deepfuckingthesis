@@ -2143,30 +2143,6 @@ exports.handler = async (event) => {
       }) };
     }
 
-    // ═══════════════════════════════════════════════════════
-    // PURGE PRE-REDESIGN DATA (before Apr 10 2026)
-    // ═══════════════════════════════════════════════════════
-    if (action === 'purge_pre_redesign') {
-      const cutoff = '2026-04-10T00:00:00Z';
-      const alertsDel = await sql`DELETE FROM alerts WHERE ts < ${cutoff}`;
-      const analysesDel = await sql`DELETE FROM analyses WHERE ts < ${cutoff}`;
-      const learningsDel = await sql`DELETE FROM learnings WHERE ts < ${cutoff}`;
-      const gamesReset = await sql`
-        UPDATE games SET
-          winner = NULL, thesis_team = NULL, thesis_correct = NULL,
-          fwp_team = NULL, fwp_value = NULL, fwp_correct = NULL,
-          home_covered = NULL, away_covered = NULL
-        WHERE date < '2026-04-10'
-      `;
-      return { statusCode: 200, headers, body: JSON.stringify({
-        ok: true,
-        alerts_deleted: alertsDel.count,
-        analyses_deleted: analysesDel.count,
-        learnings_deleted: learningsDel.count,
-        games_reset: gamesReset.count,
-      }) };
-    }
-
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Unknown action: ' + action }) };
 
   } catch (err) {
