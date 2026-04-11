@@ -4052,10 +4052,19 @@ function computePossessionWindow(game, windowSize){
   // I4: Game Control (window point diff as proxy — no biggest_lead in PBP possessions)
   var hPts=0,aPts=0; hP.forEach(function(p){hPts+=p.points;}); aP.forEach(function(p){aPts+=p.points;});
   var pDiff=hPts-aPts;
+  var hTrans=0,aTrans=0; // legacy — not used in new I1 but return object references
+  var hLineups=0,aLineups=0; // legacy — not used in new I4 but return object references
   var i4=(Math.abs(pDiff)>3?(pDiff>0?1:-1):0);
   var wI4={score:i4>0?1:i4===0?.5:0, detail:'Window \u0394:'+(pDiff>0?'+':'')+pDiff};
 
   // I5: Sustained Execution (EVEN — runs not available in possession-window format)
+  var hPPP=hP.length>0?hPts/hP.length:0, aPPP=aP.length>0?aPts/aP.length:0;
+  var timeSpanMin=0;
+  if(win.length>=2&&win[0].startClock&&win[win.length-1].endClock){
+    var pc=function(c,q){if(!c)return 0;var pts=c.split(':');var m=(parseInt(pts[0])||0)+(parseInt(pts[1])||0)/60;var el=0;for(var i=1;i<q;i++)el+=(i<=4?12:5);return el+((q<=4?12:5)-m);};
+    timeSpanMin=Math.max(0.5,pc(win[win.length-1].endClock,win[win.length-1].quarter)-pc(win[0].startClock,win[0].quarter));
+  }
+  var pace=timeSpanMin>0?(windowSize/timeSpanMin)*48:0;
   var wI5={score:.5, detail:'Runs N/A (possession window)'};
 
   // Composite
