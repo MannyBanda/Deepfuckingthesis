@@ -3562,13 +3562,14 @@ export default async function(req) {
 
       let allGames;
       if (boxOnly) {
-        // Games that have PBP but no box_score_json
+        // Games that have PBP — include pbp_json for PBP-derived fields
+        // force=1 re-processes all, otherwise only games missing box_score_json
         allGames = await sql`
-          SELECT g.id, g.home_alias, g.away_alias, g.date
+          SELECT g.id, g.home_alias, g.away_alias, g.date, p.pbp_json
           FROM games g
           JOIN game_pbp p ON p.game_id = g.id
           WHERE g.league = 'nba' AND g.home_pts IS NOT NULL AND g.home_pts > 0
-          AND (p.box_score_json IS NULL)
+          AND (${force} OR p.box_score_json IS NULL)
           ORDER BY g.date DESC LIMIT ${maxGames}
         `;
       } else if (force) {
@@ -3658,7 +3659,15 @@ export default async function(req) {
             let pbpResult = null;
             let pbpSave = null;
 
-            if (!boxOnly) {
+            if (boxOnly) {
+              // Read existing pbp_json for PBP-derived fields (paint, rim, biggest_lead, POT, runs6)
+              try {
+                const existingPbp = game.pbp_json ? (typeof game.pbp_json === 'string' ? JSON.parse(game.pbp_json) : game.pbp_json) : null;
+                if (existingPbp) {
+                  pbpResult = existingPbp; // has .home, .away, ._bdl, .runs6
+                }
+              } catch(e) { /* proceed without PBP data */ }
+            } else {
               // Fetch plays for PBP
               const playsResp = await bdlFetch(`/nba/v1/plays?game_id=${bdlGame.id}&per_page=500`);
               const plays = playsResp?.data || [];
@@ -3682,6 +3691,7 @@ export default async function(req) {
               away: aggTeamStats(awayPlayers, pbpResult?.away, { pot: bdlPbp.potAway || 0, scp: bdlPbp.scpAway || 0, biggestLead: bdlPbp.biggestLeadAway || 0 }),
               home_pts: bdlGame.home_team_score || 0,
               away_pts: bdlGame.visitor_team_score || 0,
+              runs6: pbpResult?.runs6 ? { home: (pbpResult.runs6.filter ? pbpResult.runs6.filter(r=>r.team===hA).length : pbpResult.runs6.home || 0), away: (pbpResult.runs6.filter ? pbpResult.runs6.filter(r=>r.team===aA).length : pbpResult.runs6.away || 0), total: (Array.isArray(pbpResult.runs6) ? pbpResult.runs6.length : (pbpResult.runs6.total || 0)) } : null,
             };
             // Compute oppp/dppp
             if (boxStats.home.poss > 0) {
