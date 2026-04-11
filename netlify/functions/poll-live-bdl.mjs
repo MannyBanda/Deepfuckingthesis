@@ -3564,13 +3564,14 @@ export default async function(req) {
       if (boxOnly) {
         // Games that have PBP — include pbp_json for PBP-derived fields
         // force=1 re-processes all (ordered by oldest saved_at so freshly updated go last)
+        // Limit to batchSize so each run processes a new set
         allGames = await sql`
           SELECT g.id, g.home_alias, g.away_alias, g.date, p.pbp_json
           FROM games g
           JOIN game_pbp p ON p.game_id = g.id
           WHERE g.league = 'nba' AND g.home_pts IS NOT NULL AND g.home_pts > 0
           AND (${force} OR p.box_score_json IS NULL)
-          ORDER BY p.saved_at ASC LIMIT ${maxGames}
+          ORDER BY p.saved_at ASC LIMIT ${batchSize}
         `;
       } else if (force) {
         allGames = await sql`
@@ -3624,6 +3625,7 @@ export default async function(req) {
 
       let filled = 0, failed = 0, skipped = 0;
       const errors = [];
+      // box_only+force: query already limited to batchSize and ordered by saved_at ASC for pagination
       const sortedDates = Object.keys(byDate).sort().reverse();
 
       for (const dateStr of sortedDates) {
