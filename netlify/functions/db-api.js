@@ -1210,46 +1210,123 @@ exports.handler = async (event) => {
     }
 
     // ═══════════════════════════════════════════════════════
-    // INDICATOR_COMBOS — win rate by indicator combination
+    // INDICATOR_COMBOS — recompute new indicators from historical raw stats, measure win rate by combination
     // ═══════════════════════════════════════════════════════
     if (action === 'indicator_combos') {
       const league = params.league || 'nba';
-      const minPeriod = parseInt(params.min_period) || 3; // default: Q3+ snapshots
-      // Get latest snapshot per game with i1-i5, join with final outcomes
+      const minPeriod = parseInt(params.min_period) || 3;
+
+      // Get last snapshot per game with raw_stats_json + game_pbp for runs6
       const rows = await sql`
         WITH latest AS (
           SELECT DISTINCT ON (s.game_id)
-            s.game_id, s.floor_score, s.floor_team, s.period, s.i1, s.i2, s.i3, s.i4, s.i5,
-            s.tp_class, s.ls_class, s.sust_json
+            s.game_id, s.period, s.raw_stats_json, s.floor_team,
+            s.home_pts as snap_home_pts, s.away_pts as snap_away_pts
           FROM snapshots s
-          WHERE s.source = 'server' AND s.i1 IS NOT NULL AND s.period >= ${minPeriod}
+          WHERE s.source = 'server' AND s.raw_stats_json IS NOT NULL AND s.period >= ${minPeriod}
           ORDER BY s.game_id, s.ts DESC
         )
-        SELECT l.*, g.matchup, g.winner, g.home_alias, g.away_alias, g.home_pts, g.away_pts, g.date
-        FROM latest l JOIN games g ON l.game_id = g.id
+        SELECT l.*, g.matchup, g.winner, g.home_alias, g.away_alias, g.home_pts, g.away_pts, g.date,
+               p.data as pbp_data
+        FROM latest l
+        JOIN games g ON l.game_id = g.id
+        LEFT JOIN game_pbp p ON l.game_id = p.game_id
         WHERE g.winner IS NOT NULL AND g.league = ${league}
         ORDER BY g.date DESC
       `;
 
-      // For each game, determine which indicators control team wins (score > 0.5)
-      const games = rows.map(r => {
-        const wins = [];
-        const loses = [];
-        if (r.i1 !== null && r.i1 > 0.5) wins.push('I1'); else if (r.i1 !== null) loses.push('I1');
-        if (r.i2 !== null && r.i2 > 0.5) wins.push('I2'); else if (r.i2 !== null) loses.push('I2');
-        if (r.i3 !== null && r.i3 > 0.5) wins.push('I3'); else if (r.i3 !== null) loses.push('I3');
-        if (r.i4 !== null && r.i4 > 0.5) wins.push('I4'); else if (r.i4 !== null) loses.push('I4');
-        if (r.i5 !== null && r.i5 > 0.5) wins.push('I5'); else if (r.i5 !== null) loses.push('I5');
+      // Weights
+      const W = { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 };
+
+      const games = [];
+      let parseErrors = 0;
+
+      for (const r of rows) {
+        let raw;
+        try { raw = typeof r.raw_stats_json === 'string' ? JSON.parse(r.raw_stats_json) : r.raw_stats_json; }
+        catch(e) { parseErrors++; continue; }
+        if (!raw?.home || !raw?.away) { parseErrors++; continue; }
+
+        const h = raw.home, a = raw.away;
+        const hA = r.home_alias, aA = r.away_alias;
+
+        // I1 — Disruption (steals+blocks diff ±1) + POT (±4)
+        const hDisrupt = (h.stl||0) + (h.blk||0), aDisrupt = (a.stl||0) + (a.blk||0);
+        const i1subA = (hDisrupt - aDisrupt) > 1 ? 1 : (hDisrupt - aDisrupt) < -1 ? -1 : 0;
+        const i1subB = (h.pot||0) - (a.pot||0) > 4 ? 1 : (a.pot||0) - (h.pot||0) > 4 ? -1 : 0;
+        const i1raw = i1subA + i1subB; // skipping chaos layer (needs detailed PBP)
+        const I1 = i1raw > 0 ? 1 : i1raw === 0 ? 0.5 : 0;
+
+        // I2 — Interior (paint ±6, rim FG% ±10%)
+        const paintDiff = (h.paint||0) - (a.paint||0);
+        const i2subA = paintDiff > 6 ? 1 : paintDiff < -6 ? -1 : 0;
+        const hRimPct = (h.atRimA||0) >= 6 ? (h.atRimM||0)/(h.atRimA) : null;
+        const aRimPct = (a.atRimA||0) >= 6 ? (a.atRimM||0)/(a.atRimA) : null;
+        let i2subB = 0;
+        if (hRimPct != null && aRimPct != null) {
+          if (hRimPct - aRimPct > 0.10) i2subB = 1;
+          else if (aRimPct - hRimPct > 0.10) i2subB = -1;
+        }
+        const I2 = (i2subA + i2subB) > 0 ? 1 : (i2subA + i2subB) < 0 ? 0 : 0.5;
+
+        // I3 — Shot Quality (eFG% ±2%, assist ratio ±5%)
+        const hFGA = h.fga || 1, aFGA = a.fga || 1;
+        const hEFG = ((h.fgm||0) + 0.5*(h.fg3m||0)) / hFGA;
+        const aEFG = ((a.fgm||0) + 0.5*(a.fg3m||0)) / aFGA;
+        const hAR = ((h.ast||0) / (h.fgm||1)) * 100;
+        const aAR = ((a.ast||0) / (a.fgm||1)) * 100;
+        const i3raw = (hEFG > aEFG + 0.02 ? 1 : hEFG < aEFG - 0.02 ? -1 : 0)
+                    + (hAR > aAR + 5 ? 1 : hAR < aAR - 5 ? -1 : 0);
+        const I3 = i3raw > 0 ? 1 : i3raw === 0 ? 0.5 : 0;
+
+        // I4 — Game Control (biggest_lead ±4)
+        const bigLeadDiff = (h.bigLead||0) - (a.bigLead||0);
+        const i4subA = bigLeadDiff > 4 ? 1 : bigLeadDiff < -4 ? -1 : 0;
+        // Skip sub-B (Q4/season prior) — just use biggest_lead for historical
+        const I4 = i4subA > 0 ? 1 : i4subA === 0 ? 0.5 : 0;
+
+        // I5 — Run share from raw_stats_json or game_pbp
+        let I5 = 0.5;
+        let pbp = null;
+        try { pbp = r.pbp_data ? (typeof r.pbp_data === 'string' ? JSON.parse(r.pbp_data) : r.pbp_data) : null; } catch(e) {}
+        const runs6 = raw.runs6 || pbp?.runs6 || pbp?._bdl?.runs6;
+        if (runs6) {
+          const hRuns = typeof runs6.home === 'number' ? runs6.home : (Array.isArray(runs6) ? runs6.filter(r2=>r2.team===hA).length : 0);
+          const aRuns = typeof runs6.away === 'number' ? runs6.away : (Array.isArray(runs6) ? runs6.filter(r2=>r2.team===aA).length : 0);
+          const total = hRuns + aRuns;
+          if (total >= 4) {
+            const share = hRuns / total;
+            I5 = share > 0.55 ? 1 : share < 0.45 ? 0 : 0.5;
+          }
+        }
+
+        // Composite
+        const composite = I1*W.I1 + I2*W.I2 + I3*W.I3 + I4*W.I4 + I5*W.I5;
+        const ctrlHome = composite >= 0.5;
+        const ctrlTeam = ctrlHome ? hA : aA;
+        const floor = ctrlHome ? composite : 1 - composite;
+
+        // Which indicators does control team win?
+        const indScores = { I1, I2, I3, I4, I5 };
+        const wins = [], loses = [];
+        for (const [k, v] of Object.entries(indScores)) {
+          const ctrlScore = ctrlHome ? v : 1 - v;
+          if (ctrlScore > 0.5) wins.push(k);
+          else if (ctrlScore < 0.5) loses.push(k);
+        }
+
         const comboKey = wins.length > 0 ? wins.join('+') : 'NONE';
-        const ctrlWon = r.winner === r.floor_team;
-        return {
+        const ctrlWon = r.winner === ctrlTeam;
+
+        games.push({
           game_id: r.game_id, matchup: r.matchup, date: r.date,
-          floor: r.floor_score, floor_team: r.floor_team, winner: r.winner,
+          floor: Math.round(floor*100)/100, ctrl_team: ctrlTeam, winner: r.winner,
           ctrl_won: ctrlWon, combo: comboKey, ind_won: wins.length,
-          i1: r.i1, i2: r.i2, i3: r.i3, i4: r.i4, i5: r.i5,
+          i1: Math.round(I1*10)/10, i2: Math.round(I2*10)/10,
+          i3: Math.round(I3*10)/10, i4: Math.round(I4*10)/10, i5: Math.round(I5*10)/10,
           wins, loses
-        };
-      });
+        });
+      }
 
       // Group by combo
       const combos = {};
@@ -1257,15 +1334,14 @@ exports.handler = async (event) => {
         if (!combos[g.combo]) combos[g.combo] = { combo: g.combo, total: 0, ctrl_won: 0, games: [] };
         combos[g.combo].total++;
         if (g.ctrl_won) combos[g.combo].ctrl_won++;
-        combos[g.combo].games.push({ matchup: g.matchup, date: g.date, floor: g.floor, winner: g.winner, floor_team: g.floor_team });
+        combos[g.combo].games.push({ matchup: g.matchup, date: g.date, floor: g.floor, winner: g.winner, ctrl: g.ctrl_team });
       }
-      // Win rate + sort
       const comboList = Object.values(combos).map(c => ({
         ...c, win_pct: Math.round(c.ctrl_won / c.total * 100),
-        games: c.games.slice(0, 5) // limit game examples
+        games: c.games.slice(0, 5)
       })).sort((a, b) => b.total - a.total);
 
-      // Also: group by indicator count won
+      // By count
       const byCount = {};
       for (const g of games) {
         const k = g.ind_won;
@@ -1277,7 +1353,7 @@ exports.handler = async (event) => {
         ...c, win_pct: Math.round(c.ctrl_won / c.total * 100)
       })).sort((a, b) => a.count - b.count);
 
-      // Pairwise: for each pair of indicators, win rate when BOTH won
+      // Pairwise
       const pairs = {};
       for (const g of games) {
         for (let i = 0; i < g.wins.length; i++) {
@@ -1293,7 +1369,7 @@ exports.handler = async (event) => {
         ...p, win_pct: Math.round(p.ctrl_won / p.total * 100)
       })).sort((a, b) => b.win_pct - a.win_pct);
 
-      // Single indicator win rates
+      // Singles
       const singles = {};
       for (const ind of ['I1','I2','I3','I4','I5']) {
         singles[ind] = { ind, won_total: 0, won_ctrl_won: 0, lost_total: 0, lost_ctrl_won: 0 };
@@ -1309,7 +1385,8 @@ exports.handler = async (event) => {
       }));
 
       return { statusCode: 200, headers, body: JSON.stringify({
-        total_games: games.length, min_period: minPeriod,
+        total_games: games.length, parse_errors: parseErrors, min_period: minPeriod,
+        note: 'I1 excludes chaos layer (no detailed PBP), I3 excludes CS3, I4 uses biggest_lead only (no Q4 sub-B). These are minor adjustments.',
         by_count: countList, by_combo: comboList, by_pair: pairList, by_single: singleList,
         all_games: games
       }) };
