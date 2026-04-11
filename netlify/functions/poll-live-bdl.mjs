@@ -3571,7 +3571,7 @@ export default async function(req) {
           JOIN game_pbp p ON p.game_id = g.id
           WHERE g.league = 'nba' AND g.home_pts IS NOT NULL AND g.home_pts > 0
           AND (${force} OR p.box_score_json IS NULL)
-          ORDER BY p.saved_at ASC LIMIT ${batchSize}
+          ORDER BY p.saved_at ASC, g.date ASC LIMIT ${batchSize}
         `;
       } else if (force) {
         allGames = await sql`
@@ -3654,7 +3654,12 @@ export default async function(req) {
             return (bh === hA && ba === aA);
           });
 
-          if (!bdlGame) { skipped++; continue; }
+          if (!bdlGame) {
+            skipped++;
+            // Bump saved_at so this game rotates to end of queue
+            try { await sql`UPDATE game_pbp SET saved_at = NOW() WHERE game_id = ${game.id}`; } catch(e) {}
+            continue;
+          }
 
           try {
             // Build box_score_json from BDL player data
