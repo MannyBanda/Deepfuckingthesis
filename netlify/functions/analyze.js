@@ -832,10 +832,10 @@ exports.handler = async function(event) {
     if (subMetricArrows && (subMetricArrows.home || subMetricArrows.away)) {
       arrowSection = '\nDIRECTIONAL ARROWS:\n';
       var arrowOrder = [
-        {header: 'I2 RIM PRESSURE', keys: ['paint','atRim','fta']},
-        {header: 'I1 POSSESSION', keys: ['steals','tos']},
+        {header: 'I2 INTERIOR', keys: ['paint','atRim','fta']},
+        {header: 'I1 DISRUPTION', keys: ['steals','tos']},
         {header: 'I3 SHOT QUALITY', keys: ['fg3aShare','astRatio']},
-        {header: 'I5 TEMPO', keys: ['poss']},
+        {header: 'I5 EXECUTION', keys: ['poss']},
       ];
       arrowSection += String('').padEnd(12) + String(homeTeam||'HOME').padEnd(18) + String(awayTeam||'AWAY') + '\n';
       arrowOrder.forEach(function(grp) {

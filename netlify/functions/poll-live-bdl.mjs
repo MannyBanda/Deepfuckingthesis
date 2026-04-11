@@ -3042,10 +3042,10 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, calibrationN
   if (ctx?.subMetricArrows && (ctx.subMetricArrows.home || ctx.subMetricArrows.away)) {
     p += `\nDIRECTIONAL ARROWS:\n`;
     const arrowOrder = [
-      { header: 'I2 RIM PRESSURE', keys: ['paint', 'atRim', 'fta'] },
-      { header: 'I1 POSSESSION', keys: ['steals', 'tos'] },
+      { header: 'I2 INTERIOR', keys: ['paint', 'atRim', 'fta'] },
+      { header: 'I1 DISRUPTION', keys: ['steals', 'tos'] },
       { header: 'I3 SHOT QUALITY', keys: ['fg3aShare', 'astRatio'] },
-      { header: 'I5 TEMPO', keys: ['poss'] },
+      { header: 'I5 EXECUTION', keys: ['poss'] },
     ];
     p += `${''.padEnd(12)}${hA.padEnd(18)}${aA}\n`;
     arrowOrder.forEach(grp => {
