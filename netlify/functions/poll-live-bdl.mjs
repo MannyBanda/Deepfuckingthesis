@@ -53,164 +53,82 @@ const W = { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 };
 const SR_DELAY_MS = 1400; // respect trial tier rate limit
 
 // ── SONNET SYSTEM PROMPT (same as analyze.js) ────────────────────────────────
-const SONNET_SYSTEM_PROMPT = 'You are an elite NBA live-game analyst providing real-time control assessment and outcome prediction for sports betting.\n\n'
-+ 'CORE TASK: Determine which team structurally controls this game, assess whether each team\'s production is sustainable, evaluate whether control is compounding or fading, and identify the best entry — on EITHER team — using pre-computed data and your own reasoning.\n\n'
-+ 'FIVE INDICATORS (score each 0.00-1.00 for the controlling team):\n'
-+ 'I1 Disruption & Conversion (10%): Steals + blocks differential, points off turnovers differential\n'
-+ 'I2 Interior Control (15%): Paint volume differential, rim FG% efficiency differential\n'
-+ 'I3 Shot Quality & Creation (20%): eFG%, assist ratio (65%+ sustainable, <50% isolation-dependent), shot diet\n'
-+ 'I4 Game Control (30%): Biggest lead differential, closing quarter differential\n'
-+ 'I5 Sustained Execution (25%): Run share — which team generates more scoring runs (6+ consecutive pts)\n\n'
-+ 'CONTROL: 0.90+ DOMINANT | 0.75-0.89 STRONG | 0.60-0.74 EARNED | 0.45-0.59 NO EDGE | <0.45 WAIT\n\n'
-+ 'YOU RECEIVE PRE-COMPUTED DATA LAYERS:\n\n'
-+ '1. 3PT SUSTAINABILITY AUDIT (per team):\n'
-+ '   - PERSONNEL AUDIT: What % of 3PM came from ELITE (38%+ season) vs NON-SHOOTERS (<33%)\n'
-+ '   - BAYESIAN REGRESSION: Sample-size-aware posterior expected 3PT% and regression probability\n'
-+ '   - SHOT TYPE: Assist ratio proxy — catch-and-shoot (durable) vs pull-up/isolation (fragile)\n'
-+ '   - COMPOSITE TIER: LOCKED IN / COLD / DURABLE / MIXED / FRAGILE / UNSUSTAINABLE\n'
-+ '   - COLD = at/below 3PT baseline BUT also converting poorly from 2PT (below league avg). Whole offense is broken, not just 3PT variance. Regression upward is unreliable — do NOT project shooting improvement.\n\n'
-+ '2. LEAD COMPOSITION (both teams):\n'
-+ '   - Structural points (Paint + FT) vs Variance points (3PT + Mid-range)\n'
-+ '   - MARGIN DURABILITY: is the lead structurally sourced, variance sourced, or mixed\n\n'
-+ '3. STRUCTURAL FLOOR (cumulative I1-I5):\n'
-+ '   - Dashboard\'s client-side indicator scores on ALL game data from tip to now\n'
-+ '   - This is "who has controlled this game overall"\n'
-+ '   - AUTHORITATIVE SOURCE: When DASHBOARD SCORES are provided, use them as your I1-I5 baseline.\n'
-+ '     They include PBP chaos enrichment (forced vs unforced TOs), at-rim paint fallback\n'
-+ '     (when SR delays points_in_the_paint), and Pythagorean cap. The raw game JSON does NOT\n'
-+ '     include these enhancements. Only diverge from dashboard scores with stated reasoning.\n\n'
-+ '4. ROLLING WINDOW (cross-fade, activates Q2+):\n'
-+ '   - I1-I5 scored on a sliding ~2-quarter window with cross-fade weighting\n'
-+ '   - The oldest quarter fades out as the current quarter builds in (e.g. Q4: Q2 fading + Q3 anchor + Q4 live)\n'
-+ '   - This is "who is controlling the game RIGHT NOW" — never stale\n\n'
-+ '5. GAP ACCELERATION (when window available):\n'
-+ '   - Gap = window score minus floor score. Positive = window stronger than cumulative (edge compounding)\n'
-+ '   - Tracked across check-ins. Classification:\n'
-+ '     GROWING = gap widening (edge compounding) | DECLINING = gap narrowing (edge fading)\n'
-+ '     STABLE = no clear trend | FLIPPED = control changing hands | TOO EARLY = insufficient data\n\n'
-+ '6. DIRECTIONAL ARROWS (both teams, per quarter):\n'
-+ '   - Raw sub-metric trends across completed quarters, grouped by indicator:\n'
-+ '     I2: Paint pts, At-rim att, FTA | I1: Steals, Blocks, POT | I3: 3PA share, Assist ratio | I5: Run share\n'
-+ '   - Each metric: RISING (▲), FALLING (▼), or FLAT (▬) with per-quarter values\n'
-+ '   - ADJUSTMENT SIGNAL derived from arrow pattern:\n'
-+ '     INTERIOR PIVOT = structural arrows rising + variance falling (team adjusting toward rim)\n'
-+ '     STRUCTURAL EROSION = structural arrows falling (interior game fading)\n'
-+ '     VARIANCE SHIFT = moving toward perimeter (less durable production)\n'
-+ '     STRUCTURAL ACCEL = multiple structural inputs compounding\n\n'
-+ '7. EVENT FLAGS (player-level, not absorbed by indicator math):\n'
-+ '   - Trag1 (Role Player Heater): non-star shooting far above season norms — variance signal\n'
-+ '   - Trag2 (Star Process): star cold but process intact/declining — forward regression read\n'
-+ '   - Trag3 (Foul Gate): key player in foul trouble — forward indicator degradation\n'
-+ '   - Trag4 (Closing Lineup): who is on the floor generating the current read\n\n'
-+ '8. DEPTH AUDIT (PBP, when available): 3PT assisted/unassisted, forced/unforced TOs, shot zones, scoring runs\n\n'
+const SONNET_SYSTEM_PROMPT = 'You are an NBA structural analyst. You receive pre-computed mechanical indicators as GROUND TRUTH — do not recompute them. Your job: synthesize a predictive read, compute FWP, identify risks, and write a plain-English narrative.\n\n'
++ 'GROUND TRUTH (provided by the mechanical engine — do NOT override):\n'
++ '  - I1-I5 indicator scores with team labels and who wins each\n'
++ '  - Composite floor score and control team\n'
++ '  - Mechanical conviction tier: DOMINANT / STRONG / MODEST / CONDITIONAL / NO ENTRY\n'
++ '    Based on which indicator COMBINATIONS the control team wins (171-game validated):\n'
++ '    DOMINANT = I4+I5 pair (100% win rate) OR 4+ indicators\n'
++ '    STRONG = I3+I4 (99%) or I3+I5 (96%) pair without I4+I5\n'
++ '    MODEST = 2+ indicators but missing killer pairs (I4+I5, I3+I4, I3+I5). 70-80% win rate.\n'
++ '    CONDITIONAL = 1 indicator only. 40-70%. Needs strong contextual justification.\n'
++ '    NO ENTRY = 0 indicators\n'
++ '  - Sustainability tiers (with player-level shooter breakdown)\n'
++ '  - TP (Throughput) and LS (Lead Safety) classifications\n'
++ '  - Per-quarter stats flow showing trends\n\n'
++ 'YOUR ANALYTICAL JOBS:\n'
++ '1. FWP (Framework Win Probability) — game-state-aware win probability.\n'
++ '   Factor in: score margin, quarter, time remaining, structural control, closing dynamics, team identity.\n'
++ '   FWP reflects who you predict WINS — not who currently leads. A team trailing on variance with DOMINANT conviction can have >50% FWP.\n'
++ '   Output BOTH teams with alias labels. Must sum to ~100%.\n'
++ '   COHERENCE: Higher conviction → FWP should reflect greater certainty for control team (all else equal).\n\n'
++ '2. NARRATIVE — plain English structural read for non-technical subscribers.\n'
++ '   Lead with the action: what should the reader do or watch for?\n'
++ '   Explain the structural edge in simple terms. Translate indicator language.\n'
++ '   Name specific stats that drive the read (e.g., "DEN dominating paint 48-22 and controlling runs 7 to 3").\n'
++ '   2-3 sentences max.\n\n'
++ '3. RISK FLAGS — what could go wrong despite the structural read.\n'
++ '   Look for: foul trouble on key players, quarter-over-quarter trend erosion, sustainability concerns,\n'
++ '   closing lineup questions, momentum shifts the indicators haven\'t fully captured.\n'
++ '   If conviction is DOMINANT and no real risk exists, say "NONE — structural dominance across all dimensions."\n'
++ '   1-2 sentences.\n\n'
++ '4. CLOSING PROJECTION — how does this game resolve from here?\n'
++ '   Given the structural state, margin, and time remaining, what happens?\n'
++ '   Be specific: "DEN closes on a 12-4 run in the final 4 minutes as POR\'s shooting regresses."\n'
++ '   1 sentence.\n\n'
++ '5. DISAGREEMENT — if your contextual read of the reference data conflicts with mechanical conviction,\n'
++ '   flag it here with reasoning. You cannot change the conviction tier, but you can explain why\n'
++ '   you think the situation is better or worse than the tier suggests.\n'
++ '   Examples: "Floor is 0.85 STRONG but biggest lead was built in Q1 and control is eroding every quarter."\n'
++ '   "Conviction is MODEST but this team\'s 4th-foul situation on their rim protector will collapse I2 by Q4."\n'
++ '   Say "NONE" if you agree with mechanical conviction.\n\n'
++ 'REFERENCE DATA (available for your analysis — use as needed, do not recompute indicators from it):\n'
++ '  - Per-quarter stats breakdown with team labels\n'
++ '  - Raw box score stats (paint, steals, assists, 3PT, etc.)\n'
++ '  - PBP run data and scoring patterns\n'
++ '  - Sustainability audit detail (personnel tiers, Bayesian regression, shot type proxy)\n'
++ '  - Lead composition (structural vs variance points)\n'
++ '  - Odds and spread data\n'
++ '  - ESPN Win Probability\n'
++ '  - Team WP Identity Profiles (COMEBACK, FRONTRUNNER, VOLATILE, CLOSER, STEADY)\n'
++ '  - Rolling window (recent ~2-quarter control trend)\n'
++ '  - Gap acceleration (is edge compounding or fading)\n'
++ '  - Directional arrows (per-quarter sub-metric trends)\n'
++ '  - Bonus status\n\n'
 + 'DATA QUALITY NOTE — PAINT POINTS:\n'
-+ '   SR often delays or zeros out `points_in_the_paint` in the game summary JSON.\n'
-+ '   When you see 0 paint points in the JSON, DO NOT conclude paint data is missing.\n'
-+ '   Use these as the AUTHORITATIVE paint/rim signal (in priority order):\n'
-+ '   1. DEPTH AUDIT rim section (AT-RIM made/att per team) — most reliable\n'
-+ '   2. LEAD COMPOSITION structural points — pre-computed with at-rim proxy fallback\n'
-+ '   3. Raw JSON `points_in_the_paint` — only trust when non-zero\n'
-+ '   A team shooting 78% at the rim on 19 attempts is dominating I2 regardless of what the JSON paint field says.\n\n'
-+ '9. BONUS STATUS RULE:\n'
-+ '   - "TeamX IN BONUS" means TeamX BENEFITS — they get free throws on every foul. This is PURE UPSIDE for TeamX.\n'
-+ '   - The OPPONENT is penalized: they cannot play physical defense, their players risk fouling out, their interior defense is compromised.\n'
-+ '   - The bonus is NEVER a "trap" or disadvantage for the team that has it. Do not describe it as risky for the team in the bonus.\n'
-+ '   - When ONE team is in the bonus before the 4:00 mark of any quarter, treat as STRUCTURAL I2 MULTIPLIER.\n'
-+ '     Every drive and paint touch generates free throws. This compounds every possession and cannot be undone.\n'
-+ '     Elevate I2 weight and factor this into FWP — the team in the bonus has guaranteed foul leverage.\n'
-+ '   - When BOTH teams are in the bonus, the advantage NEUTRALIZES — both sides benefit equally from foul calls.\n'
-+ '   - This is especially critical in Q4 where foul leverage directly impacts closing possessions.\n\n'
-+ '10. TEAM WP IDENTITY PROFILES (when provided):\n'
-+ '   - Historical win probability curve analysis from last 20 games per team.\n'
-+ '   - IDENTITY TYPES: COMEBACK (routinely recovers from large deficits), FRONTRUNNER (dominates from ahead, rarely collapses),\n'
-+ '     VOLATILE (wild WP swings — capable of both comebacks and collapses), CLOSER (strong finishing),\n'
-+ '     STEADY (consistent, predictable WP curves).\n'
-+ '   - USE FOR FWP: A COMEBACK team trailing by 12 has higher FWP than a STEADY team in the same position.\n'
-+ '     A FRONTRUNNER leading by 10 has higher FWP than a VOLATILE team with the same lead.\n'
-+ '   - USE FOR ENTRY: A COMEBACK team trailing on variance is a STRONGER buy signal than their current score suggests.\n'
-+ '     A team with high collapse rate protecting a variance-sourced lead is a WEAKER hold.\n'
-+ '   - QUARTER SURGES: If a team\'s best surge quarter is Q3 and you\'re evaluating in Q2, factor in the likely Q3 push.\n'
-+ '   - DO NOT override structural control reads with identity alone — identity modifies conviction and FWP, not indicators.\n\n'
-+ 'HOW TO USE THE LAYERS TOGETHER:\n'
-+ '   The STRUCTURAL FLOOR answers "who should win." The ROLLING WINDOW answers "who is winning now." The GAP answers "is the edge compounding or fading."\n'
-+ '   The ARROWS show HOW — is the team adjusting its approach (interior pivot, variance shift).\n'
-+ '   The EVENT FLAGS explain WHY — personnel events the math can\'t capture.\n'
-+ '   SUSTAINABILITY + LEAD COMPOSITION answer "is the scoreline real."\n\n'
-+ '   COMBINED READ (pre-computed from floor × window × acceleration):\n'
-+ '   DOMINANT = floor 0.75+ / window 0.80+ / growing or stable\n'
-+ '   STRONG = floor 0.75+ / window 0.75+\n'
-+ '   EMERGING = floor 0.60-0.74 / window 0.75+ / growing\n'
-+ '   EARNED = floor 0.60+ / window 0.60+\n'
-+ '   ERODING = floor 0.75+ / window 0.60-0.74 / declining\n'
-+ '   COLLAPSING = floor 0.75+ / window <0.60\n'
-+ '   FADING = floor 0.60-0.74 / window <0.60\n'
-+ '   SHIFT = floor and window disagree on control team\n'
-+ '   NO EDGE = neither team has structural control\n\n'
-+ 'ENTRY STRATEGY — FIND THE STRUCTURAL EDGE AT VALUE PRICE:\n'
-+ '   Evaluate BOTH teams. Pre-game thesis is context, not permanent anchor.\n'
-+ '   Core strategy: buy structural control when trailing on variance. Applies either direction.\n'
-+ '   ENTRY SIGNALS:\n'
-+ '   OPTIMAL WINDOW = structurally dominant + TRAILING + opponent FRAGILE/UNSUSTAINABLE + variance-sourced lead + gap GROWING\n'
-+ '   WINDOW OPEN = structural edge + trailing or at value + opponent MIXED sustainability\n'
-+ '   WINDOW CLOSING = structural edge team now LEADING + variance cooling\n'
-+ '   NO WINDOW = no structural edge, or dominant team at full price\n'
-+ '   FADE = structural read says do not buy either team\n\n'
-+ '   CRITICAL: A team leading AND priced beyond -400 ML has NO VALUE regardless of structural control.\n\n'
-+ '   STRUCTURAL TEAM SUSTAINABILITY CHECK:\n'
-+ '   Before signaling BUY, check the sustainability tier of the team you are recommending.\n'
-+ '   If the structural control team\'s own 3PT sustainability is FRAGILE or UNSUSTAINABLE, downgrade:\n'
-+ '   - BUY with DOMINANT/STRONG conviction → CAUTION (CONDITIONAL conviction)\n'
-+ '   - The structural edge (I1+I2) is real, but fragile shooting undermines closing ability\n'
-+ '   - Exception: if control is 0.85+ AND driven entirely by I1+I2 (paint/FT/TO), shooting fragility is less material\n'
-+ '   This prevents recommending a team whose own production is at risk of regressing.\n\n'
-+ '   SUSTAINABILITY ATTRIBUTION CHECK:\n'
-+ '   In the SIGNAL line, verify which team\'s sustainability you reference matches the tiers above.\n'
-+ '   If TeamA is UNSUSTAINABLE and TeamB is LOCKED IN, do NOT say "unsustainable TeamB variance."\n'
-+ '   The UNSUSTAINABLE label belongs to the team whose shooting is above baseline, not the LOCKED IN team.\n'
-+ '   Cross-check before outputting: the team you call unsustainable must match the UNSUSTAINABLE/FRAGILE tier.\n\n'
-+ 'FWP (Framework Win Probability) IS GAME-STATE-AWARE:\n'
-+ '   FWP = probability of WINNING given score, time, AND structural control. NOT the control score.\n'
-+ '   Factor in: score margin, quarter, time remaining, combined read trajectory. BE ACCURATE.\n'
-+ '   OUTPUT BOTH TEAMS with alias labels. The two values must sum to ~100%.\n'
-+ '   Example: FWP: MEM 72% / LAC 28%\n'
-+ '   FWP reflects who you predict WINS — not who is currently ahead. A team trailing by 6 on unsustainable variance can have higher FWP than the leader.\n'
-+ '   COHERENCE: If you signal BUY TeamB, TeamB FWP MUST be > 50%. If you signal PASS, FWP still reflects your honest win probability assessment.\n\n'
-+ 'CONVICTION GUIDELINES:\n'
-+ '  DOMINANT = control 0.85+ driven by I1+I2, opponent unsustainable, gap GROWING\n'
-+ '  STRONG = control 0.70+, lead composition supports read, gap STABLE or GROWING\n'
-+ '  EARNED = control 0.60+ with edge, may have mixed sustainability\n'
-+ '  CONDITIONAL = edge exists but gap DECLINING, sustainability concerns, or lead composition tension\n'
-+ '  NO ENTRY = no structural edge for either team, or no value at current price\n'
-+ '  State which indicators drive your score. I1+I2 (50% weight) warrants higher conviction than I4+I5 (30%).\n\n'
-+ 'OUTPUT FORMAT (follow exactly):\n\n'
-+ 'DECISION:\n'
-+ 'EDGE: [+X% | No market data] | FWP: [AwayAlias X% / HomeAlias Y%] | MIP: [X% | N/A]\n'
-+ 'ENTRY: [OPTIMAL WINDOW | WINDOW OPEN | WINDOW CLOSING | NO WINDOW | FADE]\n'
-+ 'CONVICTION: [DOMINANT | STRONG | EARNED | CONDITIONAL | NO ENTRY]\n'
-+ 'SIGNAL: [BUY TeamAlias | NO VALUE | PASS] — [1-line reason naming both teams]\n'
++ '  SR often delays or zeros out points_in_the_paint in the game summary JSON.\n'
++ '  Use DEPTH AUDIT rim section or LEAD COMPOSITION structural points as the authoritative paint signal.\n\n'
++ 'SUSTAINABILITY RULES:\n'
++ '  - LOCKED IN/DURABLE = shooting is at or below baseline from players who CAN shoot. Sustainable.\n'
++ '  - COLD = below 3PT baseline AND below 2PT baseline. Whole offense broken. Do NOT project improvement.\n'
++ '  - FRAGILE/UNSUSTAINABLE = shooting above baseline, driven by non-shooters or unsustainable volume.\n'
++ '  - When referencing sustainability in your narrative, verify which team has which tier.\n'
++ '    Do NOT attribute UNSUSTAINABLE to the wrong team.\n\n'
++ 'BONUS STATUS RULE:\n'
++ '  "TeamX IN BONUS" = TeamX BENEFITS (free throws on every foul). Pure upside for TeamX.\n'
++ '  When one team is in bonus before 4:00 of any quarter: structural I2 multiplier.\n'
++ '  When BOTH in bonus: advantage neutralizes.\n\n'
++ 'OUTPUT FORMAT (follow exactly — each field on its own line):\n\n'
++ 'FWP: [AwayAlias] XX% / [HomeAlias] YY%\n'
++ 'EDGE: [+X% | No market data]\n'
++ 'RISK: [1-2 sentences identifying what could undermine the structural read, or NONE]\n'
++ 'CLOSING: [1-sentence projection of how the game resolves]\n'
++ 'NARRATIVE: [2-3 sentence plain English read for subscribers — lead with action, explain structural edge, name key stats]\n'
 + 'Sustainability: [TeamA]: [tier] | [TeamB]: [tier]\n'
 + 'Lead Source: [STRUCTURAL | VARIANCE | MIXED | EVEN] — [1-line]\n'
-+ 'SPREAD ANALYSIS: [1-line]\n'
-+ 'Team Quality: [context for both teams]\n'
-+ 'Clutch: [Tier X] — [CLEAR|WATCH|FIRES|NEUTRALIZED]\n'
-+ 'Prediction: [1-line decisive call]\n\n'
-+ 'EVIDENCE:\n'
-+ 'CONTROL: [Team] [score] — [level]\n'
-+ 'COMBINED READ: [DOMINANT|STRONG|EMERGING|EARNED|ERODING|FADING|COLLAPSING|SHIFT|NO EDGE] — [note]\n\n'
-+ 'I1 Disruption & Conversion (10%): [team] [score] — [explanation]\n'
-+ 'I2 Interior Control (15%): [team] [score] — [explanation]\n'
-+ 'I3 Shot Quality & Creation (20%): [team] [score] — [explanation]\n'
-+ 'I4 Game Control (30%): [team] [score] — [explanation]\n'
-+ 'I5 Sustained Execution (25%): [team] [score] — [explanation]\n\n'
-+ 'EVENT FLAGS:\n'
-+ 'Trag1 — Role Player Heater: [detail or CLEAR]\n'
-+ 'Trag2 — Star Process: [detail or CLEAR]\n'
-+ 'Trag3 — Foul Gate: [detail or CLEAR]\n'
-+ 'Trag4 — Closing Lineup: [detail or CLEAR]\n\n'
-+ 'THESIS STATUS: [CONFIRMED|DEVELOPING|CONTESTED|DENIED|FLIPPED] — [note]\n'
-+ 'FLIPPED = thesis was wrong AND the other team has emerged as the structural edge with a valid entry.\n'
-+ 'DIVERGENCE NOTES: [where your scores differ from dashboard and why]\n\n'
-+ 'Be concise. 1 line per indicator. Decisive when clear. Passing is correct when it is not.';
++ 'DISAGREEMENT: [NONE | 1-2 sentences explaining where you disagree with mechanical conviction and why]\n\n'
++ 'Be concise. Decisive when the indicators are clear. Your value is context and projection, not recomputing what the engine already knows.';
 // ── HELPERS ─────────────────────────────────────────────────────────────────
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -2657,17 +2575,12 @@ function parseAnalysisText(text, homeAlias, awayAlias) {
     conviction: null, signal: null,
     sustainability: null, leadSource: null,
     predictionJson: null, indicatorsJson: null,
+    // New v2 fields
+    risk: null, closing: null, narrative: null, disagreement: null,
   };
   if (!text) return result;
 
-  // CONTROL: Team 0.XX — LEVEL
-  const controlMatch = text.match(/CONTROL:\s*(\w+)\s+([\d.]+)/);
-  if (controlMatch) {
-    result.controlTeam = controlMatch[1];
-    result.controlScore = parseFloat(controlMatch[2]);
-  }
-
-  // FWP: AWAY XX% / HOME YY%
+  // ── FWP (both old and new format) ──
   const fwpMatch = text.match(/FWP:\s*(\w+)\s+([\d.]+)%\s*\/\s*(\w+)\s+([\d.]+)%/);
   if (fwpMatch) {
     result.fwp = `${fwpMatch[1]} ${fwpMatch[2]}% / ${fwpMatch[3]} ${fwpMatch[4]}%`;
@@ -2679,31 +2592,48 @@ function parseAnalysisText(text, homeAlias, awayAlias) {
     };
   }
 
-  // EDGE
+  // ── EDGE (both formats) ──
   const edgeMatch = text.match(/EDGE:\s*([^\n|]+)/);
   if (edgeMatch) result.edge = edgeMatch[1].trim();
 
-  // ENTRY
-  const entryMatch = text.match(/ENTRY:\s*(OPTIMAL WINDOW|WINDOW OPEN|WINDOW CLOSING|NO WINDOW|FADE)/);
-  if (entryMatch) result.entry = entryMatch[1];
-
-  // CONVICTION
-  const convMatch = text.match(/CONVICTION:\s*(DOMINANT|STRONG|EARNED|CONDITIONAL|NO ENTRY)/);
-  if (convMatch) result.conviction = convMatch[1];
-
-  // SIGNAL (full line)
-  const sigMatch = text.match(/SIGNAL:\s*(.+?)(?:\n|$)/);
-  if (sigMatch) result.signal = sigMatch[1].trim();
-
-  // Sustainability
+  // ── Sustainability (both formats) ──
   const sustMatch = text.match(/Sustainability:\s*(.+?)(?:\n|$)/);
   if (sustMatch) result.sustainability = sustMatch[1].trim();
 
-  // Lead Source
+  // ── Lead Source (both formats) ──
   const leadMatch = text.match(/Lead Source:\s*(.+?)(?:\n|$)/);
   if (leadMatch) result.leadSource = leadMatch[1].trim();
 
-  // Per-indicator scores
+  // ── NEW v2 fields ──
+  const riskMatch = text.match(/RISK:\s*(.+?)(?:\n|$)/);
+  if (riskMatch) result.risk = riskMatch[1].trim();
+
+  const closingMatch = text.match(/CLOSING:\s*(.+?)(?:\n|$)/);
+  if (closingMatch) result.closing = closingMatch[1].trim();
+
+  const narrativeMatch = text.match(/NARRATIVE:\s*([\s\S]*?)(?:\n(?:Sustainability|Lead Source|DISAGREEMENT|RISK|CLOSING|FWP|EDGE):|$)/);
+  if (narrativeMatch) result.narrative = narrativeMatch[1].trim();
+
+  const disagreeMatch = text.match(/DISAGREEMENT:\s*(.+?)(?:\n|$)/);
+  if (disagreeMatch) result.disagreement = disagreeMatch[1].trim();
+
+  // ── BACKWARD COMPAT: old format fields (pre-v2 analyses) ──
+  const controlMatch = text.match(/CONTROL:\s*(\w+)\s+([\d.]+)/);
+  if (controlMatch) {
+    result.controlTeam = controlMatch[1];
+    result.controlScore = parseFloat(controlMatch[2]);
+  }
+
+  const entryMatch = text.match(/ENTRY:\s*(OPTIMAL WINDOW|WINDOW OPEN|WINDOW CLOSING|NO WINDOW|FADE)/);
+  if (entryMatch) result.entry = entryMatch[1];
+
+  const convMatch = text.match(/CONVICTION:\s*(DOMINANT|STRONG|EARNED|MODEST|CONDITIONAL|NO ENTRY)/);
+  if (convMatch) result.conviction = convMatch[1];
+
+  const sigMatch = text.match(/SIGNAL:\s*(.+?)(?:\n|$)/);
+  if (sigMatch) result.signal = sigMatch[1].trim();
+
+  // Old format indicator lines (backward compat for historical analyses)
   const indicators = {};
   const indRe = /I(\d)\s+[^:]+:\s*(\w+)\s+([\d.]+)\s*—\s*(.+?)(?:\n|$)/g;
   let m;
@@ -2715,225 +2645,43 @@ function parseAnalysisText(text, homeAlias, awayAlias) {
   return result;
 }
 
-// ── TEAM CALIBRATION LOOKUP ──────────────────────────────────────────────────
-// Builds per-team floor accuracy stats from Q2+Q3 calibration snapshots.
-// Called once per poll startup, cached for the slate.
-// Returns { [teamAlias]: { q2: {...}, q3: {...}, combined: {...} } }
-
-async function buildCalibrationLookup(sql, league) {
-  try {
-    // Query both Q2 and Q3 calibration snapshots for finalized games
-    const rows = await sql`
-      SELECT
-        g.home_alias, g.away_alias, g.winner, g.home_pts, g.away_pts,
-        s.floor_score, s.floor_team, s.home_pts AS snap_home, s.away_pts AS snap_away,
-        s.source
-      FROM games g
-      INNER JOIN snapshots s ON s.game_id = g.id
-        AND s.source IN ('calibration_q1', 'calibration_q2', 'calibration_q3')
-      WHERE g.league = ${league} AND g.winner IS NOT NULL
-      ORDER BY g.date DESC
-    `;
-
-    if (rows.length === 0) return null;
-
-    const teams = {};
-    const leagueStats = { q2: { total: 0, wins: 0, buckets: {} }, q3: { total: 0, wins: 0, buckets: {} } };
-    const bucketKeys = ['50-59', '60-69', '70-79', '80+'];
-
-    for (const r of rows) {
-      const ft = r.floor_team;
-      if (!ft || !r.floor_score) continue;
-
-      // Determine quarter from source tag
-      // calibration_q2 = Q2 end (halftime) = "Q2" in dashboard (77% accuracy)
-      // calibration_q3 = Q3 end = "Q3" in dashboard (74% accuracy)
-      // calibration_q1 = Q1 end = excluded (too early, 69%)
-      const qKey = r.source === 'calibration_q2' ? 'q2' : r.source === 'calibration_q3' ? 'q3' : null;
-      if (!qKey) continue;
-
-      const ftIsHome = ft === r.home_alias;
-      const ftWon = r.winner === ft;
-      const ftPtsAtSnap = ftIsHome ? r.snap_home : r.snap_away;
-      const oppPtsAtSnap = ftIsHome ? r.snap_away : r.snap_home;
-      const wasTrailing = oppPtsAtSnap > ftPtsAtSnap;
-      const wasLeading = ftPtsAtSnap > oppPtsAtSnap;
-
-      // Floor bucket
-      const fs = r.floor_score;
-      const bucket = fs >= 0.80 ? '80+' : fs >= 0.70 ? '70-79' : fs >= 0.60 ? '60-69' : '50-59';
-
-      // Initialize team entry
-      if (!teams[ft]) {
-        teams[ft] = {
-          q2: { games: 0, wins: 0, trailing: 0, trailingRecovered: 0, leading: 0, leadingHeld: 0, buckets: {} },
-          q3: { games: 0, wins: 0, trailing: 0, trailingRecovered: 0, leading: 0, leadingHeld: 0, buckets: {} },
-        };
-        for (const bk of bucketKeys) {
-          teams[ft].q2.buckets[bk] = { games: 0, wins: 0 };
-          teams[ft].q3.buckets[bk] = { games: 0, wins: 0 };
-        }
-      }
-
-      const tq = teams[ft][qKey];
-      tq.games++;
-      if (ftWon) tq.wins++;
-      tq.buckets[bucket].games++;
-      if (ftWon) tq.buckets[bucket].wins++;
-
-      if (wasTrailing) {
-        tq.trailing++;
-        if (ftWon) tq.trailingRecovered++;
-      }
-      if (wasLeading) {
-        tq.leading++;
-        if (ftWon) tq.leadingHeld++;
-      }
-
-      // League stats
-      if (!leagueStats[qKey].buckets[bucket]) leagueStats[qKey].buckets[bucket] = { games: 0, wins: 0 };
-      leagueStats[qKey].total++;
-      if (ftWon) leagueStats[qKey].wins++;
-      leagueStats[qKey].buckets[bucket].games++;
-      if (ftWon) leagueStats[qKey].buckets[bucket].wins++;
-    }
-
-    return { teams, leagueStats, totalGames: rows.length };
-  } catch (e) {
-    return null;
-  }
-}
-
-// Format team calibration for Sonnet prompt
-function formatTeamCalibration(calLookup, hA, aA, triggerTag) {
-  if (!calLookup || !calLookup.teams) return null;
-
-  const ls = calLookup.leagueStats;
-  const q2Rate = ls.q2.total > 0 ? Math.round(ls.q2.wins / ls.q2.total * 100) : '?';
-  const q3Rate = ls.q3.total > 0 ? Math.round(ls.q3.wins / ls.q3.total * 100) : '?';
-  const q2_70 = ls.q2.buckets?.['70-79'] || { games: 0, wins: 0 };
-  const q3_70 = ls.q3.buckets?.['70-79'] || { games: 0, wins: 0 };
-  const q2_80 = ls.q2.buckets?.['80+'] || { games: 0, wins: 0 };
-  const q3_80 = ls.q3.buckets?.['80+'] || { games: 0, wins: 0 };
-
-  // Determine which quarter this analysis targets
-  // auto_q1 fires at Q1→Q2: Q2 cal closest. auto_q2 fires at Q2→Q3: Q2 cal IS this moment. auto_q3: Q3 cal IS this moment.
-  const primaryQ = triggerTag === 'auto_q3' ? 'q3' : 'q2';
-  const primaryLabel = primaryQ === 'q2' ? 'Q2' : 'Q3';
-
-  let p = `\nTEAM CALIBRATION (Q2+Q3 boundary snapshots, ${ls.q2.total + ls.q3.total} readings):\n`;
-  p += `League baselines:\n`;
-  p += `  Q2: Overall ${q2Rate}% | Floor 0.70+ ${q2_70.games + q2_80.games > 0 ? Math.round((q2_70.wins + q2_80.wins) / (q2_70.games + q2_80.games) * 100) : '?'}%\n`;
-  p += `  Q3: Overall ${q3Rate}% | Floor 0.70+ ${q3_70.games + q3_80.games > 0 ? Math.round((q3_70.wins + q3_80.wins) / (q3_70.games + q3_80.games) * 100) : '?'}%\n`;
-  p += `This analysis point: ${primaryLabel} data is primary.\n\n`;
-
-  for (const { alias, side } of [{ alias: hA, side: 'HOME' }, { alias: aA, side: 'AWAY' }]) {
-    const t = calLookup.teams[alias];
-    if (!t) {
-      p += `[${side}] ${alias}: No calibration data yet\n`;
-      continue;
-    }
-
-    const q2 = t.q2, q3 = t.q3;
-    const totalGames = q2.games + q3.games;
-    const totalWins = q2.wins + q3.wins;
-
-    p += `[${side}] ${alias} (${totalGames} samples: ${q2.games} Q2, ${q3.games} Q3):\n`;
-
-    // Show each quarter separately
-    for (const [qKey, qLabel, qData] of [['q2', 'Q2', q2], ['q3', 'Q3', q3]]) {
-      if (qData.games === 0) {
-        p += `  ${qLabel}: No data\n`;
-        continue;
-      }
-      const winRate = Math.round(qData.wins / qData.games * 100);
-      const bk70 = (qData.buckets['70-79']?.games || 0) + (qData.buckets['80+']?.games || 0);
-      const bk70w = (qData.buckets['70-79']?.wins || 0) + (qData.buckets['80+']?.wins || 0);
-      const bk70Rate = bk70 > 0 ? Math.round(bk70w / bk70 * 100) : null;
-
-      // Compare to league baseline
-      const leagueQ = ls[qKey];
-      const leagueRate = leagueQ.total > 0 ? Math.round(leagueQ.wins / leagueQ.total * 100) : null;
-      const deviation = leagueRate != null ? winRate - leagueRate : null;
-      const devStr = deviation != null && Math.abs(deviation) >= 15 && qData.games >= 5
-        ? (deviation > 0 ? ` ✅ +${deviation}pts vs league` : ` ⚠️ ${deviation}pts vs league`)
-        : '';
-
-      let line = `  ${qLabel} (${qData.games}g): ${qData.wins}-${qData.games - qData.wins} (${winRate}%)${devStr}`;
-      if (bk70 > 0 && bk70Rate != null) line += ` | Floor 0.70+: ${bk70w}/${bk70} (${bk70Rate}%)`;
-      p += line + '\n';
-
-      // Trailing/leading breakdown
-      if (qData.trailing > 0) {
-        p += `    Trailing recovery: ${qData.trailingRecovered}/${qData.trailing}${qData.trailing >= 3 && qData.trailingRecovered === 0 ? ' ⚠️' : ''}\n`;
-      }
-      if (qData.leading > 0) {
-        p += `    Leading hold: ${qData.leadingHeld}/${qData.leading}\n`;
-      }
-    }
-    p += '\n';
-  }
-
-  p += `INSTRUCTIONS: Weight the ${primaryLabel} column more heavily — it matches this analysis point. `;
-  p += `Adjust FWP proportionally to deviation from league baseline. `;
-  p += `A team 20+ pts below baseline → reduce FWP by 10-15%. `;
-  p += `40+ pts below → reduce by 15-25%. `;
-  p += `Never zero out — structural edge still exists, conversion rate is lower. `;
-  p += `Teams with <5 samples at a quarter: note insufficient data, use league baseline.\n`;
-
-  return p;
-}
-
-// Get calibration warning line for alert body (one-liner when team deviates significantly)
-function getCalibrationWarning(calLookup, teamAlias, floorScore, isTrailing) {
-  if (!calLookup?.teams?.[teamAlias]) return '';
-  const t = calLookup.teams[teamAlias];
-  const combined = { games: t.q2.games + t.q3.games, wins: t.q2.wins + t.q3.wins };
-  if (combined.games < 5) return '';
-
-  const bucket = floorScore >= 0.70 ? '70+' : floorScore >= 0.60 ? '60+' : null;
-  if (!bucket) return '';
-
-  let bGames, bWins;
-  if (bucket === '70+') {
-    bGames = (t.q2.buckets['70-79']?.games||0) + (t.q2.buckets['80+']?.games||0) + (t.q3.buckets['70-79']?.games||0) + (t.q3.buckets['80+']?.games||0);
-    bWins = (t.q2.buckets['70-79']?.wins||0) + (t.q2.buckets['80+']?.wins||0) + (t.q3.buckets['70-79']?.wins||0) + (t.q3.buckets['80+']?.wins||0);
-  } else {
-    bGames = combined.games;
-    bWins = combined.wins;
-  }
-  if (bGames < 5) return '';
-
-  const teamRate = Math.round(bWins / bGames * 100);
-  const leagueRate = 82; // hardcoded from data — floor 0.70+ league avg
-  const deviation = teamRate - leagueRate;
-
-  if (Math.abs(deviation) < 15) return '';
-
-  if (isTrailing) {
-    const trailGames = t.q2.trailing + t.q3.trailing;
-    const trailWins = t.q2.trailingRecovered + t.q3.trailingRecovered;
-    if (trailGames >= 3) {
-      return `\n⚠️ ${teamAlias} trailing recovery: ${trailWins}/${trailGames} (floor ${bucket} at ${teamRate}% vs league ${leagueRate}%)`;
-    }
-  }
-
-  return deviation < -15 ? `\n⚠️ ${teamAlias} floor ${bucket} at ${teamRate}% (league ${leagueRate}%)` : '';
-}
-
-// ── FORMAT SONNET PROMPT ──────────────────────────────────────────────────────
 // Single function that formats ALL data layers into prompt text.
 // Matches analyze.js quality — no more "payload ghost" layers.
 
-function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, calibrationNote, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary, teamCalibration }) {
+function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary, conviction }) {
   let p = `${aA} @ ${hA} | Q${period} ${clock} | ${score}\n\n`;
+
+  // ── GROUND TRUTH (mechanical engine output — do not override) ──
+  if (ind) {
+    const ctrlHome = ind.controlTeam === hA;
+    const i1ctrl = ctrlHome ? ind.I1?.score : (ind.I1?.score != null ? 1 - ind.I1.score : null);
+    const i2ctrl = ctrlHome ? ind.I2?.score : (ind.I2?.score != null ? 1 - ind.I2.score : null);
+    const i3ctrl = ctrlHome ? ind.I3?.score : (ind.I3?.score != null ? 1 - ind.I3.score : null);
+    const i4ctrl = ctrlHome ? ind.I4?.score : (ind.I4?.score != null ? 1 - ind.I4.score : null);
+    const i5ctrl = ctrlHome ? ind.I5?.score : (ind.I5?.score != null ? 1 - ind.I5.score : null);
+    p += `GROUND TRUTH (mechanical engine — do not override):\n`;
+    p += `Control: ${ind.controlTeam} ${ind.score?.toFixed(2)} | `;
+    p += `Conviction: ${conviction?.tier || 'N/A'} (${conviction?.combo || 'N/A'})`;
+    if (conviction?.pairs?.length > 0) p += ` | Killer pairs: ${conviction.pairs.join(', ')}`;
+    if (conviction?.isDanger) p += ` | ⚠ DANGER COMBO`;
+    p += `\n`;
+    p += `I1 Disruption: ${ind.I1?.leader || 'EVEN'} ${i1ctrl?.toFixed(1) || '?'} | `;
+    p += `I2 Interior: ${ind.I2?.leader || 'EVEN'} ${i2ctrl?.toFixed(1) || '?'} | `;
+    p += `I3 Shot Quality: ${ind.I3?.leader || 'EVEN'} ${i3ctrl?.toFixed(1) || '?'} | `;
+    p += `I4 Game Control: ${ind.I4?.leader || 'EVEN'} ${i4ctrl?.toFixed(1) || '?'} | `;
+    p += `I5 Execution: ${ind.I5?.leader || 'EVEN'} ${i5ctrl?.toFixed(1) || '?'}\n`;
+    if (conviction) {
+      p += `Indicators won by ${ind.controlTeam}: ${conviction.indicatorsWon?.join('+') || 'NONE'}`;
+      if (conviction.indicatorsLost?.length > 0) p += ` | Lost: ${conviction.indicatorsLost.join('+')}`;
+      p += `\n`;
+    }
+    p += `\n`;
+  }
 
   // Thesis
   if (thesis) p += `THESIS:\n${thesis}\n`;
   p += '\n';
 
-  // Team calibration DISABLED — re-accumulating clean data after server-client parity fix
-  // if (teamCalibration) p += teamCalibration;
 
   // Game meta
   if (ctx?.gameMeta) {
@@ -3234,7 +2982,7 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, calibrationN
 // analyze function with the full SR summary + server-computed layers.
 // Result is saved as a tagged 'auto_q3' analysis row — gold standard metric.
 
-async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, leadComp, espnWP, odds, matchup, hA, aA, period, clock, trigger, calLookup) {
+async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, leadComp, espnWP, odds, matchup, hA, aA, period, clock, trigger) {
   const triggerTag = trigger || 'auto_q3';
 
   try {
@@ -3300,7 +3048,6 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
     } catch (e) { /* no history */ }
 
     // ── 5. Fetch calibration context for prompt ──
-    let calibrationNote = null;
     try {
       const gs = await sql`
         SELECT COUNT(*) as total,
@@ -3312,7 +3059,6 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       `;
       const s = gs[0];
       if (s && s.total >= 3) {
-        calibrationNote = `CALIBRATION (${s.total} games): FWP ${s.fwp_ok}/${s.fwp_total} (${s.fwp_total > 0 ? (s.fwp_ok/s.fwp_total*100).toFixed(0) : '?'}%), thesis ${s.thesis_ok}/${s.thesis_total}`;
       }
     } catch (e) { /* no calibration */ }
 
@@ -3344,17 +3090,16 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
     } catch (e) { /* quarter_data not available */ }
 
     // Build team calibration prompt section
-    const teamCalibration = formatTeamCalibration(calLookup, hA, aA, triggerTag);
 
+    const calConviction = computeConviction(ind);
     const userPrompt = formatSonnetPrompt({
       hA, aA, period, clock, score: scoreLine,
-      thesis: thesis ? thesis + (calibrationNote ? '\n\n' + calibrationNote : '') : calibrationNote || null,
-      calibrationNote: null, // already merged into thesis above
+      thesis: thesis || null,
       sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory,
       ctx: clientCtx || {},
       quarterDataFromDB,
       summary,
-      teamCalibration,
+      conviction: calConviction,
     });
 
     // ── Compute prompt layer inventory for diagnostics ──
@@ -3426,61 +3171,88 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
         INSERT INTO analyses (game_id, period, clock, control_team, control_score,
           fwp, edge, entry, conviction, signal, sustainability, lead_source, raw_text,
           prediction_json, indicators_json, "trigger", home_pts, away_pts,
-          context_layers, prompt_chars)
-        VALUES (${game.id}, ${period}, ${clock}, ${parsed.controlTeam}, ${parsed.controlScore},
-          ${parsed.fwp}, ${parsed.edge}, ${parsed.entry}, ${parsed.conviction}, ${parsed.signal},
+          context_layers, prompt_chars, conviction_tier, conviction_combo)
+        VALUES (${game.id}, ${period}, ${clock}, ${parsed.controlTeam || ind.controlTeam}, ${parsed.controlScore || ind.score},
+          ${parsed.fwp}, ${parsed.edge}, ${parsed.entry}, ${parsed.conviction || calConviction.tier}, ${parsed.signal},
           ${parsed.sustainability}, ${parsed.leadSource}, ${result.analysis},
           ${parsed.predictionJson ? JSON.stringify(parsed.predictionJson) : null},
           ${parsed.indicatorsJson ? JSON.stringify(parsed.indicatorsJson) : null},
           ${triggerTag}, ${ind.homePts || null}, ${ind.awayPts || null},
-          ${contextLayersStr}, ${promptChars})
+          ${contextLayersStr}, ${promptChars}, ${calConviction.tier}, ${calConviction.combo})
       `;
     } catch (e) {
       log(`${matchup}: ${triggerTag} CAL — analysis save failed: ${e.message}`);
     }
 
-    log(`${matchup}: ★ ${triggerTag.toUpperCase()} CALIBRATION COMPLETE — ${parsed.controlTeam || '?'} ${parsed.controlScore || '?'} | ${parsed.signal || '?'} | FWP: ${parsed.fwp || '?'}`);
+    log(`${matchup}: ★ ${triggerTag.toUpperCase()} CALIBRATION COMPLETE — conv:${calConviction.tier}(${calConviction.combo}) | FWP: ${parsed.fwp || '?'}${parsed.risk ? ' | Risk: ' + parsed.risk.substring(0, 60) : ''}`);
 
-    // ── 10. Push notification for actionable signals ──
-    // Gate on TP class + clock — fail-closed (suppress if TP computation fails)
-    const entry = (parsed.entry || '').toUpperCase();
-    const signal = (parsed.signal || '');
-    const isBuy = signal.toUpperCase().includes('BUY');
-    const isOptimal = entry === 'OPTIMAL WINDOW';
-    const isOpen = entry === 'WINDOW OPEN';
-    if (isBuy || isOptimal || isOpen) {
-      // ── TP gate: suppress when no recovery path (fail-closed) ──
-      let tpSuppressed = false;
+    // ── 10. Route through alert agent (unified path — no independent ntfy push) ──
+    // Agent decides BUY or WATCH based on mechanical conviction + Sonnet context
+    if (calConviction.tier !== 'NO ENTRY' && ind.score >= 0.55) {
       try {
+        const margin = Math.abs((ind.homePts || 0) - (ind.awayPts || 0));
+        const ctrlIsHome = ind.controlTeam === hA;
+        const ctrlPts = ctrlIsHome ? ind.homePts : ind.awayPts;
+        const oppPts = ctrlIsHome ? ind.awayPts : ind.homePts;
+        const ctrlTrailing = ctrlPts < oppPts;
         const tpClass = clientCtx?.throughput?.classification || null;
-        if (tpClass === 'UNLIKELY' || tpClass === 'NO PATH') {
-          tpSuppressed = true;
-          log(`${matchup}: ${triggerTag} ntfy SUPPRESSED — TP=${tpClass} (no recovery path)`);
+        const lsClass = clientCtx?.leadSafety?.classification || null;
+        const ctrlSust = sust?.[ctrlIsHome ? 'home' : 'away']?.tier || null;
+        const oppSust = sust?.[ctrlIsHome ? 'away' : 'home']?.tier || null;
+
+        const agentResult = await runAlertAgent({
+          alertType: 'AUTO_ANALYSIS', alertTier: 'ANALYSIS',
+          controlTeam: ind.controlTeam, floor: ind.score.toFixed(2),
+          margin, isTrailing: ctrlTrailing,
+          period, clock, minsLeft: (period <= 4 ? ((4 - period) * 12 + parseFloat(clock?.split(':')[0] || 0)) : parseFloat(clock?.split(':')[0] || 0)).toFixed(1),
+          edge: null, ml: null, spread: odds?.homeSpread || null,
+          tpClass, lsClass, ctrlSust, oppSust: oppSust,
+          windowScore: clientCtx?.rollingWindow?.score || null,
+          convictionTier: calConviction.tier, convictionCombo: calConviction.combo,
+          convictionPairs: calConviction.pairs?.join(', ') || '',
+          i1: ind.I1?.score?.toFixed(2), i2: ind.I2?.score?.toFixed(2),
+          i3: ind.I3?.score?.toFixed(2), i4: ind.I4?.score?.toFixed(2),
+          i5: ind.I5?.score?.toFixed(2),
+          indicatorsWon: calConviction.count,
+          indWon: calConviction.indicatorsWon?.join('+') || '',
+          indLost: calConviction.indicatorsLost?.join('+') || '',
+          i4Decisive: calConviction.indicatorsWon?.includes('I4') || calConviction.indicatorsLost?.includes('I4'),
+          i4Won: calConviction.indicatorsWon?.includes('I4'),
+          i4Combo: calConviction.indicatorsWon?.includes('I4') && calConviction.count >= 2,
+          floorHistory: '', priorAlerts: '',
+          quarterSummary: '',
+          // Sonnet context for enriched alert body
+          sonnetFWP: parsed.fwp,
+          sonnetNarrative: parsed.narrative,
+          sonnetRisk: parsed.risk,
+          sonnetDisagreement: parsed.disagreement,
+          triggerType: 'auto_analysis',
+        });
+
+        if (agentResult?.decision === 'SEND') {
+          const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${period} ${clock}`;
+          const ntfyTitle = `[${calConviction.tier}] ${ind.controlTeam} — ${matchup}`;
+          const ntfyBody = scoreLine
+            + (parsed.narrative ? `\n${parsed.narrative}` : `\nStructural control: ${ind.controlTeam} ${ind.score.toFixed(2)}`)
+            + (parsed.fwp ? `\nFWP: ${parsed.fwp}` : '')
+            + (parsed.risk && parsed.risk !== 'NONE' ? `\nRisk: ${parsed.risk}` : '')
+            + `\n[${triggerTag} · ${calConviction.combo}]`;
+          await sendNtfy(ntfyTitle, ntfyBody, calConviction.tier === 'DOMINANT' ? 5 : 4);
+          log(`${matchup}: ${triggerTag} agent SEND — ${calConviction.tier}`);
+        } else if (agentResult?.decision === 'DOWNGRADE') {
+          const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${period} ${clock}`;
+          const ntfyTitle = `WATCH ${ind.controlTeam} — ${matchup}`;
+          const ntfyBody = scoreLine
+            + (parsed.narrative ? `\n${parsed.narrative}` : '')
+            + (parsed.fwp ? `\nFWP: ${parsed.fwp}` : '')
+            + `\n[${triggerTag} · ${calConviction.tier}]`;
+          await sendNtfy(ntfyTitle, ntfyBody, 3);
+          log(`${matchup}: ${triggerTag} agent WATCH — ${agentResult.reasoning}`);
+        } else {
+          log(`${matchup}: ${triggerTag} agent silent — ${agentResult?.reasoning || 'no signal'}`);
         }
       } catch (e) {
-        // Fail-closed: if TP check throws, suppress
-        tpSuppressed = true;
-        log(`${matchup}: ${triggerTag} ntfy SUPPRESSED — TP gate threw: ${e.message}`);
-      }
-
-      if (!tpSuppressed) {
-        // ── Floor gate: suppress BUY push when Sonnet's floor < 0.65 ──
-        const sonnetFloor = parseFloat(parsed.controlScore) || 0;
-        if (isBuy && sonnetFloor < 0.65) {
-          log(`${matchup}: ${triggerTag} ntfy SUPPRESSED — Sonnet floor ${sonnetFloor.toFixed(2)} < 0.65 (analysis saved, no push)`);
-        } else {
-        const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${period} ${clock}`;
-        const ctrlTeam = parsed.controlTeam || '?';
-        const ntfyTitle = `${signal || entry} — ${matchup}`;
-        const ntfyBody = scoreLine
-          + `\nSonnet says: ${ctrlTeam} has structural control (${parsed.controlScore || '?'})`
-          + (parsed.fwp ? `\nWin probability: ${parsed.fwp}` : '')
-          + `\nEntry: ${entry} | Conviction: ${parsed.conviction || '?'}`
-          + (parsed.sustainability ? `\nShooting: ${parsed.sustainability}` : '')
-          + `\n[AI analysis — ${triggerTag}]`;
-        const ntfyPriority = isOptimal ? 5 : 4;
-        await sendNtfy(ntfyTitle, ntfyBody, ntfyPriority);
-        } // close floor gate else
+        log(`${matchup}: ${triggerTag} agent routing failed: ${e.message}`);
       }
     }
   } catch (e) {
@@ -3593,10 +3365,11 @@ export default async function(req) {
       if (ctx && ind) {
         const prompt = formatSonnetPrompt({
           hA, aA, period, clock, score: result.score,
-          thesis: null, calibrationNote: null,
+          thesis: null,
           sust, leadComp, ind, clutchData: null, odds: null,
           espnWP: null, wpProfiles: null, analysisHistory: null,
           ctx, quarterDataFromDB: ctx.quarterDiffs || null, summary,
+          conviction: computeConviction(ind),
         });
         result.promptLength = prompt.length;
         result.promptFirst500 = prompt.substring(0, 500);
@@ -4046,13 +3819,6 @@ export default async function(req) {
           }
         } catch (e) { log(`BDL lineups failed: ${e.message}`); }
       }
-
-      // ── 3b. Build team calibration lookup (once per slate) ──
-      let calLookup = null;
-      try {
-        calLookup = await buildCalibrationLookup(sql, league);
-        if (calLookup) log(`Calibration: ${Object.keys(calLookup.teams).length} teams, ${calLookup.leagueStats.q2.total + calLookup.leagueStats.q3.total} readings`);
-      } catch (e) { log(`Calibration lookup failed: ${e.message}`); }
 
       // ── 4. Process each potentially live game — BDL box_scores + plays ──
       // Fetch plays for all live games in parallel (BDL: 600 req/min)
@@ -5085,7 +4851,7 @@ export default async function(req) {
                 // Fire Sonnet analysis only for NBA (NCAAMB: snapshot + context only)
                 if (t.sonnet) {
                   pendingAnalyses.push(
-                    fireCalibrationAnalysis(sql, game, league, summary, ind, sust, leadComp, espnWP, odds, matchup, hA, aA, currentPeriod, clock, t.trigger, calLookup)
+                    fireCalibrationAnalysis(sql, game, league, summary, ind, sust, leadComp, espnWP, odds, matchup, hA, aA, currentPeriod, clock, t.trigger)
                       .catch(e => log(`${matchup}: ${t.label} CAL analysis async error: ${e.message}`))
                   );
                 }
