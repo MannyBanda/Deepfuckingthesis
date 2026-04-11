@@ -36,13 +36,15 @@ async function fetchFinalScores(dateStr) {
     });
     if (!resp.ok) { log(`BDL scores ${resp.status}`); return []; }
     const data = await resp.json();
-    return (data.data || []).map(g => ({
+    const games = (data.data || []).map(g => ({
       home: g.home_team?.abbreviation,
       away: g.visitor_team?.abbreviation,
-      homeScore: g.home_team_score,
-      awayScore: g.visitor_team_score,
+      homeScore: Number(g.home_team_score) || 0,
+      awayScore: Number(g.visitor_team_score) || 0,
       status: g.status,
     }));
+    games.forEach(g => log(`  BDL: ${g.away} ${g.awayScore} @ ${g.home} ${g.homeScore} [${g.status}]`));
+    return games;
   } catch (e) { log(`BDL fetch error: ${e.message}`); return []; }
 }
 
@@ -56,8 +58,8 @@ function scoreAlert(alert, games) {
   if (!game || game.status !== 'Final') return null;
 
   const ctrlIsHome = game.home === alert.control_team;
-  const ctrlFinalPts = ctrlIsHome ? game.homeScore : game.awayScore;
-  const oppFinalPts = ctrlIsHome ? game.awayScore : game.homeScore;
+  const ctrlFinalPts = Number(ctrlIsHome ? game.homeScore : game.awayScore) || 0;
+  const oppFinalPts = Number(ctrlIsHome ? game.awayScore : game.homeScore) || 0;
   const ctrlWon = ctrlFinalPts > oppFinalPts;
   const finalMargin = ctrlFinalPts - oppFinalPts;
 
@@ -160,6 +162,10 @@ export default async function handler(req) {
   }).filter(a => a.result !== null);
 
   log(`Scored ${scoredAlerts.length}/${alerts.length} alerts (rest had no final score)`);
+  // Diagnostic: log first 10 scored alerts with details
+  scoredAlerts.slice(0, 10).forEach(a => {
+    log(`  ${a.alert_type} ${a.control_team} agent:${a.agent_decision||'NULL'} → ${a.result.correct ? 'CORRECT' : 'WRONG'} (ctrl ${a.result.ctrlWon ? 'won' : 'lost'} by ${a.result.finalMargin})`);
+  });
 
   // Compute accuracy breakdowns — split actionable vs transitional
   const ACTIONABLE_TYPES = ['BUY', 'WINDOW BUY', 'BUY WINDOW CLOSING', 'RECOVERY PATH', 'VARIANCE BREAKING'];
@@ -426,6 +432,10 @@ RECOMMENDATIONS:
     alerts: scoredAlerts.length,
     accuracy: accuracyOverall,
     agentStats,
+    diagnostics: scoredAlerts.slice(0, 15).map(a => ({
+      type: a.alert_type, ctrl: a.control_team, agent: a.agent_decision,
+      correct: a.result.correct, ctrlWon: a.result.ctrlWon, margin: a.result.finalMargin,
+    })),
   }));
 }
 
