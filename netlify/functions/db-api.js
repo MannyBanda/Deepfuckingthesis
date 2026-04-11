@@ -319,6 +319,7 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS i3 REAL`; } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS i4 REAL`; } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS i5 REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE game_pbp ADD COLUMN IF NOT EXISTS box_score_json JSONB`; } catch(e) {}
 
       // ── LEARNINGS table (post-game agent nightly analysis) ──
       await sql`CREATE TABLE IF NOT EXISTS learnings (
@@ -1210,54 +1211,43 @@ exports.handler = async (event) => {
     }
 
     // ═══════════════════════════════════════════════════════
-    // INDICATOR_COMBOS — recompute new indicators from historical raw stats, measure win rate by combination
+    // INDICATOR_COMBOS — recompute new indicators from historical box scores + PBP, measure win rate by combination
     // ═══════════════════════════════════════════════════════
     if (action === 'indicator_combos') {
       const league = params.league || 'nba';
-      const minPeriod = parseInt(params.min_period) || 3;
 
-      // Get last snapshot per game with raw_stats_json + game_pbp for runs6
+      // Pull from game_pbp (box_score_json + pbp_json) joined with games for outcomes
       const rows = await sql`
-        WITH latest AS (
-          SELECT DISTINCT ON (s.game_id)
-            s.game_id, s.period, s.raw_stats_json, s.floor_team,
-            s.home_pts as snap_home_pts, s.away_pts as snap_away_pts
-          FROM snapshots s
-          WHERE s.source = 'server' AND s.raw_stats_json IS NOT NULL AND s.period >= ${minPeriod}
-          ORDER BY s.game_id, s.ts DESC
-        )
-        SELECT l.*, g.matchup, g.winner, g.home_alias, g.away_alias, g.home_pts, g.away_pts, g.date,
-               p.data as pbp_data
-        FROM latest l
-        JOIN games g ON l.game_id = g.id
-        LEFT JOIN game_pbp p ON l.game_id = p.game_id
+        SELECT p.game_id, p.home_alias, p.away_alias, p.box_score_json, p.pbp_json,
+               g.matchup, g.winner, g.home_pts, g.away_pts, g.date
+        FROM game_pbp p
+        JOIN games g ON p.game_id = g.id
         WHERE g.winner IS NOT NULL AND g.league = ${league}
+        AND p.box_score_json IS NOT NULL
         ORDER BY g.date DESC
       `;
 
-      // Weights
       const W = { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 };
-
       const games = [];
       let parseErrors = 0;
 
       for (const r of rows) {
-        let raw;
-        try { raw = typeof r.raw_stats_json === 'string' ? JSON.parse(r.raw_stats_json) : r.raw_stats_json; }
-        catch(e) { parseErrors++; continue; }
-        if (!raw?.home || !raw?.away) { parseErrors++; continue; }
+        let box, pbp;
+        try { box = typeof r.box_score_json === 'string' ? JSON.parse(r.box_score_json) : r.box_score_json; } catch(e) { parseErrors++; continue; }
+        try { pbp = r.pbp_json ? (typeof r.pbp_json === 'string' ? JSON.parse(r.pbp_json) : r.pbp_json) : null; } catch(e) { pbp = null; }
+        if (!box?.home || !box?.away) { parseErrors++; continue; }
 
-        const h = raw.home, a = raw.away;
+        const h = box.home, a = box.away;
         const hA = r.home_alias, aA = r.away_alias;
 
-        // I1 — Disruption (steals+blocks diff ±1) + POT (±4)
+        // I1 — Disruption (steals+blocks diff +/-1) + POT (+/-4)
         const hDisrupt = (h.stl||0) + (h.blk||0), aDisrupt = (a.stl||0) + (a.blk||0);
         const i1subA = (hDisrupt - aDisrupt) > 1 ? 1 : (hDisrupt - aDisrupt) < -1 ? -1 : 0;
         const i1subB = (h.pot||0) - (a.pot||0) > 4 ? 1 : (a.pot||0) - (h.pot||0) > 4 ? -1 : 0;
-        const i1raw = i1subA + i1subB; // skipping chaos layer (needs detailed PBP)
+        const i1raw = i1subA + i1subB;
         const I1 = i1raw > 0 ? 1 : i1raw === 0 ? 0.5 : 0;
 
-        // I2 — Interior (paint ±6, rim FG% ±10%)
+        // I2 — Interior (paint +/-6, rim FG% +/-10%)
         const paintDiff = (h.paint||0) - (a.paint||0);
         const i2subA = paintDiff > 6 ? 1 : paintDiff < -6 ? -1 : 0;
         const hRimPct = (h.atRimA||0) >= 6 ? (h.atRimM||0)/(h.atRimA) : null;
@@ -1269,7 +1259,7 @@ exports.handler = async (event) => {
         }
         const I2 = (i2subA + i2subB) > 0 ? 1 : (i2subA + i2subB) < 0 ? 0 : 0.5;
 
-        // I3 — Shot Quality (eFG% ±2%, assist ratio ±5%)
+        // I3 — Shot Quality (eFG% +/-2%, assist ratio +/-5%)
         const hFGA = h.fga || 1, aFGA = a.fga || 1;
         const hEFG = ((h.fgm||0) + 0.5*(h.fg3m||0)) / hFGA;
         const aEFG = ((a.fgm||0) + 0.5*(a.fg3m||0)) / aFGA;
@@ -1279,20 +1269,28 @@ exports.handler = async (event) => {
                     + (hAR > aAR + 5 ? 1 : hAR < aAR - 5 ? -1 : 0);
         const I3 = i3raw > 0 ? 1 : i3raw === 0 ? 0.5 : 0;
 
-        // I4 — Game Control (biggest_lead ±4)
+        // I4 — Game Control (biggest_lead +/-4 + Q4 margin from scoreLog)
         const bigLeadDiff = (h.bigLead||0) - (a.bigLead||0);
         const i4subA = bigLeadDiff > 4 ? 1 : bigLeadDiff < -4 ? -1 : 0;
-        // Skip sub-B (Q4/season prior) — just use biggest_lead for historical
-        const I4 = i4subA > 0 ? 1 : i4subA === 0 ? 0.5 : 0;
+        let i4subB = 0;
+        const scoreLog = pbp?._bdl?.scoreLog;
+        if (scoreLog && scoreLog.length > 0) {
+          const q4plays = scoreLog.filter(s => s.q === 4);
+          if (q4plays.length > 0) {
+            let q4h = 0, q4a = 0;
+            q4plays.forEach(s => { if (s.team === hA) q4h += s.pts; else q4a += s.pts; });
+            const q4diff = q4h - q4a;
+            i4subB = q4diff > 2 ? 1 : q4diff < -2 ? -1 : 0;
+          }
+        }
+        const I4 = (i4subA + i4subB) > 0 ? 1 : (i4subA + i4subB) === 0 ? 0.5 : 0;
 
-        // I5 — Run share from raw_stats_json or game_pbp
+        // I5 — Run share from PBP
         let I5 = 0.5;
-        let pbp = null;
-        try { pbp = r.pbp_data ? (typeof r.pbp_data === 'string' ? JSON.parse(r.pbp_data) : r.pbp_data) : null; } catch(e) {}
-        const runs6 = raw.runs6 || pbp?.runs6 || pbp?._bdl?.runs6;
-        if (runs6) {
-          const hRuns = typeof runs6.home === 'number' ? runs6.home : (Array.isArray(runs6) ? runs6.filter(r2=>r2.team===hA).length : 0);
-          const aRuns = typeof runs6.away === 'number' ? runs6.away : (Array.isArray(runs6) ? runs6.filter(r2=>r2.team===aA).length : 0);
+        const runs6 = pbp?.runs6;
+        if (runs6 && Array.isArray(runs6)) {
+          const hRuns = runs6.filter(r2 => r2.team === hA).length;
+          const aRuns = runs6.filter(r2 => r2.team === aA).length;
           const total = hRuns + aRuns;
           if (total >= 4) {
             const share = hRuns / total;
@@ -1306,7 +1304,6 @@ exports.handler = async (event) => {
         const ctrlTeam = ctrlHome ? hA : aA;
         const floor = ctrlHome ? composite : 1 - composite;
 
-        // Which indicators does control team win?
         const indScores = { I1, I2, I3, I4, I5 };
         const wins = [], loses = [];
         for (const [k, v] of Object.entries(indScores)) {
@@ -1385,8 +1382,7 @@ exports.handler = async (event) => {
       }));
 
       return { statusCode: 200, headers, body: JSON.stringify({
-        total_games: games.length, parse_errors: parseErrors, min_period: minPeriod,
-        note: 'I1 excludes chaos layer (no detailed PBP), I3 excludes CS3, I4 uses biggest_lead only (no Q4 sub-B). These are minor adjustments.',
+        total_games: games.length, parse_errors: parseErrors,
         by_count: countList, by_combo: comboList, by_pair: pairList, by_single: singleList,
         all_games: games
       }) };

@@ -2441,11 +2441,19 @@ async function computeServerContext(sql, game, league, summary, ind, espnWP, hA,
           totalShots: pbpResult.totalShots, totalTOs: pbpResult.totalTOs,
           runs: pbpResult.runs,
         };
+        // Build box_score_json from summary stats
+        const _hs = summary.home?.statistics || {}, _as = summary.away?.statistics || {};
+        const liveBoxJson = JSON.stringify({
+          home: { stl: _hs.steals||0, blk: _hs.blocks||0, oreb: _hs.offensive_rebounds||0, to: _hs.turnovers||_hs.total_turnovers||0, fta: _hs.free_throws_att||0, ftm: _hs.free_throws_made||0, fgm: _hs.field_goals_made||0, fga: _hs.field_goals_att||0, fg3m: _hs.three_points_made||0, fg3a: _hs.three_points_att||0, fg2m: _hs.two_points_made||0, fg2a: _hs.two_points_att||0, ast: _hs.assists||0, pts: _hs.points||0, pf: _hs.personal_fouls||0, atRimM: _hs.field_goals_at_rim_made||0, atRimA: _hs.field_goals_at_rim_att||0, paintM: _hs.points_in_paint_made||0, paintA: _hs.points_in_paint_att||0, paint: _hs.points_in_the_paint||_hs.points_in_paint||0, pot: _hs.points_off_turnovers||0, scp: _hs.second_chance_points||_hs.second_chance_pts||0, fbp: _hs.fast_break_points||0, fd: _hs.fouls_drawn||0, bigLead: _hs.biggest_lead||0, bench: _hs.bench_points||0, poss: _hs.possessions||0, oppp: _hs.offensive_points_per_possession||0, dppp: _hs.defensive_points_per_possession||0 },
+          away: { stl: _as.steals||0, blk: _as.blocks||0, oreb: _as.offensive_rebounds||0, to: _as.turnovers||_as.total_turnovers||0, fta: _as.free_throws_att||0, ftm: _as.free_throws_made||0, fgm: _as.field_goals_made||0, fga: _as.field_goals_att||0, fg3m: _as.three_points_made||0, fg3a: _as.three_points_att||0, fg2m: _as.two_points_made||0, fg2a: _as.two_points_att||0, ast: _as.assists||0, pts: _as.points||0, pf: _as.personal_fouls||0, atRimM: _as.field_goals_at_rim_made||0, atRimA: _as.field_goals_at_rim_att||0, paintM: _as.points_in_paint_made||0, paintA: _as.points_in_paint_att||0, paint: _as.points_in_the_paint||_as.points_in_paint||0, pot: _as.points_off_turnovers||0, scp: _as.second_chance_points||_as.second_chance_pts||0, fbp: _as.fast_break_points||0, fd: _as.fouls_drawn||0, bigLead: _as.biggest_lead||0, bench: _as.bench_points||0, poss: _as.possessions||0, oppp: _as.offensive_points_per_possession||0, dppp: _as.defensive_points_per_possession||0 },
+          home_pts: summary.home?.points||0, away_pts: summary.away?.points||0,
+        });
         await sql`
-          INSERT INTO game_pbp (game_id, league, home_alias, away_alias, total_shots, total_tos, pbp_json, saved_at)
-          VALUES (${game.id}, ${league}, ${hA}, ${aA}, ${pbpResult.totalShots || 0}, ${pbpResult.totalTOs || 0}, ${JSON.stringify(pbpSave)}, NOW())
+          INSERT INTO game_pbp (game_id, league, home_alias, away_alias, total_shots, total_tos, pbp_json, box_score_json, saved_at)
+          VALUES (${game.id}, ${league}, ${hA}, ${aA}, ${pbpResult.totalShots || 0}, ${pbpResult.totalTOs || 0}, ${JSON.stringify(pbpSave)}, ${liveBoxJson}, NOW())
           ON CONFLICT (game_id) DO UPDATE SET
-            pbp_json = ${JSON.stringify(pbpSave)}, total_shots = ${pbpResult.totalShots || 0},
+            pbp_json = ${JSON.stringify(pbpSave)}, box_score_json = ${liveBoxJson},
+            total_shots = ${pbpResult.totalShots || 0},
             total_tos = ${pbpResult.totalTOs || 0}, saved_at = NOW()
         `;
       } catch (e) { /* non-fatal */ }
@@ -3546,14 +3554,24 @@ export default async function(req) {
 
   // ── BACKFILL PBP: fetch historical plays from BDL, save to game_pbp ──
   if (url.searchParams.get('action') === 'backfill_pbp') {
-    const maxGames = parseInt(url.searchParams.get('max') || '200');
-    const batchSize = 50;
+    const maxGames = parseInt(url.searchParams.get('max') || '500');
+    const batchSize = parseInt(url.searchParams.get('batch') || '50');
     try {
-      // All finished games missing PBP or with incomplete PBP (no scoreLog)
       const force = url.searchParams.get('force') === '1';
+      const boxOnly = url.searchParams.get('box_only') === '1'; // just add box_score_json to existing rows
+
       let allGames;
-      if (force) {
-        // Re-process ALL finished games — overwrites stale/incomplete PBP
+      if (boxOnly) {
+        // Games that have PBP but no box_score_json
+        allGames = await sql`
+          SELECT g.id, g.home_alias, g.away_alias, g.date
+          FROM games g
+          JOIN game_pbp p ON p.game_id = g.id
+          WHERE g.league = 'nba' AND g.home_pts IS NOT NULL AND g.home_pts > 0
+          AND (p.box_score_json IS NULL)
+          ORDER BY g.date DESC LIMIT ${maxGames}
+        `;
+      } else if (force) {
         allGames = await sql`
           SELECT g.id, g.home_alias, g.away_alias, g.date
           FROM games g
@@ -3580,6 +3598,29 @@ export default async function(req) {
         byDate[g.date].push(g);
       });
 
+      // Helper: aggregate BDL player stats into team-level raw stats (mirrors raw_stats_json shape)
+      function aggTeamStats(players, pbpSide, bdlObj) {
+        const sum = (k) => (players || []).reduce((a, p) => a + (p[k] || 0), 0);
+        return {
+          stl: sum('stl'), blk: sum('blk'), oreb: sum('oreb'),
+          to: sum('turnover'), fta: sum('fta'), ftm: sum('ftm'),
+          fgm: sum('fgm'), fga: sum('fga'),
+          fg3m: sum('fg3m'), fg3a: sum('fg3a'),
+          fg2m: sum('fgm') - sum('fg3m'), fg2a: sum('fga') - sum('fg3a'),
+          ast: sum('ast'), pts: sum('pts'), pf: sum('pf'),
+          atRimM: pbpSide?.rim?.made || 0, atRimA: pbpSide?.rim?.att || 0,
+          paintM: (pbpSide?.rim?.made || 0) + (pbpSide?.paint?.made || 0),
+          paintA: (pbpSide?.rim?.att || 0) + (pbpSide?.paint?.att || 0),
+          paint: ((pbpSide?.rim?.made || 0) + (pbpSide?.paint?.made || 0)) * 2,
+          pot: bdlObj?.pot || 0, scp: bdlObj?.scp || 0,
+          fbp: 0, fd: 0,
+          bigLead: bdlObj?.biggestLead || 0,
+          bench: 0, // can't easily derive without starter IDs
+          poss: +(sum('fga') - sum('oreb') + sum('turnover') + 0.4 * sum('fta')).toFixed(1),
+          oppp: 0, dppp: 0,
+        };
+      }
+
       let filled = 0, failed = 0, skipped = 0;
       const errors = [];
       const sortedDates = Object.keys(byDate).sort().reverse();
@@ -3588,7 +3629,7 @@ export default async function(req) {
         if (filled >= batchSize) break;
         const gamesOnDate = byDate[dateStr];
 
-        // Fetch BDL box_scores for this date to get BDL game IDs
+        // Fetch BDL box_scores for this date
         let boxGames = [];
         try {
           const boxResp = await bdlFetch(`/nba/v1/box_scores?date=${dateStr}`);
@@ -3612,28 +3653,63 @@ export default async function(req) {
 
           if (!bdlGame) { skipped++; continue; }
 
-          // Fetch plays
           try {
-            const playsResp = await bdlFetch(`/nba/v1/plays?game_id=${bdlGame.id}&per_page=500`);
-            const plays = playsResp?.data || [];
-            if (plays.length < 10) { skipped++; continue; }
+            // Build box_score_json from BDL player data
+            let pbpResult = null;
+            let pbpSave = null;
 
-            const pbpResult = parseBDLPBPServer(plays, hA, aA);
-            const pbpSave = {
-              home: pbpResult.home, away: pbpResult.away,
-              totalShots: pbpResult.totalShots, totalTOs: pbpResult.totalTOs,
-              runs: pbpResult.runs, runs6: pbpResult.runs6,
-              perQuarter: pbpResult.perQuarter,
-              _bdl: pbpResult._bdl,
+            if (!boxOnly) {
+              // Fetch plays for PBP
+              const playsResp = await bdlFetch(`/nba/v1/plays?game_id=${bdlGame.id}&per_page=500`);
+              const plays = playsResp?.data || [];
+              if (plays.length < 10) { skipped++; continue; }
+              pbpResult = parseBDLPBPServer(plays, hA, aA);
+              pbpSave = {
+                home: pbpResult.home, away: pbpResult.away,
+                totalShots: pbpResult.totalShots, totalTOs: pbpResult.totalTOs,
+                runs: pbpResult.runs, runs6: pbpResult.runs6,
+                perQuarter: pbpResult.perQuarter,
+                _bdl: pbpResult._bdl,
+              };
+            }
+
+            // Aggregate box score stats
+            const homePlayers = bdlGame.home_team?.players || [];
+            const awayPlayers = bdlGame.visitor_team?.players || [];
+            const bdlPbp = pbpResult?._bdl || pbpSave?._bdl || {};
+            const boxStats = {
+              home: aggTeamStats(homePlayers, pbpResult?.home, { pot: bdlPbp.potHome || 0, scp: bdlPbp.scpHome || 0, biggestLead: bdlPbp.biggestLeadHome || 0 }),
+              away: aggTeamStats(awayPlayers, pbpResult?.away, { pot: bdlPbp.potAway || 0, scp: bdlPbp.scpAway || 0, biggestLead: bdlPbp.biggestLeadAway || 0 }),
+              home_pts: bdlGame.home_team_score || 0,
+              away_pts: bdlGame.visitor_team_score || 0,
             };
+            // Compute oppp/dppp
+            if (boxStats.home.poss > 0) {
+              boxStats.home.oppp = +(boxStats.home.pts / boxStats.home.poss).toFixed(2);
+              boxStats.home.dppp = +(boxStats.away.pts / boxStats.home.poss).toFixed(2);
+            }
+            if (boxStats.away.poss > 0) {
+              boxStats.away.oppp = +(boxStats.away.pts / boxStats.away.poss).toFixed(2);
+              boxStats.away.dppp = +(boxStats.home.pts / boxStats.away.poss).toFixed(2);
+            }
+            const boxJson = JSON.stringify(boxStats);
 
-            await sql`
-              INSERT INTO game_pbp (game_id, league, home_alias, away_alias, total_shots, total_tos, pbp_json, saved_at)
-              VALUES (${game.id}, ${'nba'}, ${hA}, ${aA}, ${pbpResult.totalShots || 0}, ${pbpResult.totalTOs || 0}, ${JSON.stringify(pbpSave)}, NOW())
-              ON CONFLICT (game_id) DO UPDATE SET
-                pbp_json = ${JSON.stringify(pbpSave)}, total_shots = ${pbpResult.totalShots || 0},
-                total_tos = ${pbpResult.totalTOs || 0}, saved_at = NOW()
-            `;
+            if (boxOnly) {
+              // Just update box_score_json on existing row
+              await sql`
+                UPDATE game_pbp SET box_score_json = ${boxJson}, saved_at = NOW()
+                WHERE game_id = ${game.id}
+              `;
+            } else {
+              await sql`
+                INSERT INTO game_pbp (game_id, league, home_alias, away_alias, total_shots, total_tos, pbp_json, box_score_json, saved_at)
+                VALUES (${game.id}, ${'nba'}, ${hA}, ${aA}, ${pbpResult.totalShots || 0}, ${pbpResult.totalTOs || 0}, ${JSON.stringify(pbpSave)}, ${boxJson}, NOW())
+                ON CONFLICT (game_id) DO UPDATE SET
+                  pbp_json = ${JSON.stringify(pbpSave)}, box_score_json = ${boxJson},
+                  total_shots = ${pbpResult.totalShots || 0},
+                  total_tos = ${pbpResult.totalTOs || 0}, saved_at = NOW()
+              `;
+            }
             filled++;
           } catch (e) {
             failed++;
