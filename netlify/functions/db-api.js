@@ -2146,7 +2146,7 @@ exports.handler = async (event) => {
     if (action === 'test_pipeline') {
       // Write test alerts with known game_id prefix for pipeline verification
       const testGameId = 'TEST_PIPELINE_001';
-      const testDate = '2026-04-09';
+      const testDate = '2099-01-01';
       
       // Ensure test game exists
       await sql`INSERT INTO games (id, date, league, matchup, home_alias, away_alias, winner, home_pts, away_pts, margin)
@@ -2198,7 +2198,7 @@ exports.handler = async (event) => {
       const alertsDel = await sql`DELETE FROM alerts WHERE game_id = ${testGameId} RETURNING id`;
       const gamesDel = await sql`DELETE FROM games WHERE id = ${testGameId} RETURNING id`;
       // Also clean any learnings that scored this data
-      const learnDel = await sql`DELETE FROM learnings WHERE date = '2026-04-09' RETURNING date`;
+      const learnDel = await sql`DELETE FROM learnings WHERE date = '2099-01-01' RETURNING date`;
       return { statusCode: 200, headers, body: JSON.stringify({
         ok: true,
         alerts_deleted: alertsDel.length,
