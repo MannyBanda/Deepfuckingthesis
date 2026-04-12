@@ -98,7 +98,7 @@ RULES:
 - TRACKING with NOTIFY=NO is the most common output. Most cycles, nothing changed enough to notify. Don't over-notify.
 - CONFIRMED requires a concrete signal: score flip (trailing → leading), floor rose 0.05+, or opponent sustainability broke. Not just "looks fine."
 - FADING requires floor trending DOWN across 3+ snapshots, not just one dip.
-- INVALIDATED means the structural THESIS is broken (floor collapsed, I4 flipped decisively). A BUY team still trailing is NOT invalidated if the floor holds — that's the whole BUY thesis.
+- INVALIDATED means the structural THESIS is broken. Specific triggers: floor dropped below 0.45, OR I4 flipped to opponent (below 0.40), OR TP is NO PATH. Any ONE of these is sufficient for INVALIDATED — don't call it FADING when the floor is sub-0.45 with I4 lost. A BUY team still trailing is NOT invalidated if the floor holds above 0.50 — that's the whole BUY thesis.
 - For BWC: CONFIRMED = lead grew + LS improved. FADING = lead shrinking. INVALIDATED = lead lost.
 - For WINDOW BUY: CONFIRMED = full-game floor rose toward window read. FADING = window advantage didn't translate.
 - STABILIZED requires lead to have held or grown after LEAD AT RISK. Lead merely not shrinking further is TRACKING, not STABILIZED.
