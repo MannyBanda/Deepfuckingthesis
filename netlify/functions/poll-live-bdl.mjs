@@ -4714,11 +4714,11 @@ export default async function(req) {
                   game._lastLsAlert = lsAlertKey;
                   const tScoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
                   await sendNtfy(
-                    `LEAD CRUMBLING — ${matchup}`,
+                    `LEAD AT RISK — ${matchup}`,
                     tScoreLine
-                      + `\n${ind.controlTeam} leads by ${marginT} but lead is ${lsClass === 'CRITICAL' ? 'critically vulnerable' : 'at risk'}`
-                      + `\nOpponent projects to close gap with ${ls.remainingPoss} possessions left`
-                      + `\nIf holding ${ind.controlTeam}, watch for exit`,
+                      + `\n${ind.controlTeam} leads by ${marginT} but the lead is ${lsClass === 'CRITICAL' ? 'under serious pressure' : 'showing cracks'}`
+                      + `\nOpponent projects to close the gap with ${ls.remainingPoss} possessions left`
+                      + `\nIf holding ${ind.controlTeam}, watch for momentum shift`,
                     5
                   );
                   log(`${matchup}: LEAD CRUMBLING — LS ${lsClass}, leading ${marginT}, floor ${ind.score.toFixed(2)}`);
