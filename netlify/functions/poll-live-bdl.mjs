@@ -724,62 +724,47 @@ RULES:
 async function processMonitorResults(sql, parsed, conditions, league) {
   if (!parsed) return;
 
+  // ── DRY RUN MODE ──────────────────────────────────────────────────────
+  // Monitor runs and logs decisions, but does NOT send ntfy or write to DB.
+  // Flip to false once monitor accuracy is validated from log data.
+  var MONITOR_DRY_RUN = true;
+
   // Process position assessments
   for (var pos of parsed.positions) {
     var activeAlert = conditions.activeAlerts.find(a => a.alertId === pos.alertId);
     if (!activeAlert) continue;
 
-    // Update monitor_status on parent alert row
-    try {
-      await sql`UPDATE alerts SET
-        monitor_status = ${pos.status},
-        monitor_reasoning = ${pos.reasoning},
-        monitor_ts = NOW()
-        WHERE id = ${pos.alertId}`;
-    } catch (e) { log(`Monitor: update alert ${pos.alertId} failed: ${e.message}`); }
+    var monitorAlertType = activeAlert.alertType.replace(/ /g, '_') + '_' + pos.status;
+    if (monitorAlertType.startsWith('BUY_WINDOW_CLOSING_')) monitorAlertType = 'BWC_' + pos.status;
+    else if (monitorAlertType.startsWith('WINDOW_BUY_')) monitorAlertType = 'WB_' + pos.status;
 
-    // If NOTIFY=YES, insert new monitor alert row and send ntfy
     if (pos.notify && pos.body && pos.body.length > 10) {
-      // Determine alert_type from parent type + status
-      var monitorAlertType = activeAlert.alertType.replace(/ /g, '_') + '_' + pos.status;
-      // Normalize: BUY_CONFIRMED, BUY_FADING, BUY_INVALIDATED, BUY_WINDOW_CLOSING_CONFIRMED, etc.
-      // Simplify BWC types
-      if (monitorAlertType.startsWith('BUY_WINDOW_CLOSING_')) {
-        monitorAlertType = 'BWC_' + pos.status;
-      } else if (monitorAlertType.startsWith('WINDOW_BUY_')) {
-        monitorAlertType = 'WB_' + pos.status;
-      }
-
-      // Dedup: one per parent + status
-      var dedupKey = `${activeAlert.gameId}_${monitorAlertType}_${pos.alertId}`;
-      var existing = await sql`SELECT 1 FROM alerts WHERE game_id = ${activeAlert.gameId}
-        AND alert_type = ${monitorAlertType} AND parent_alert_id = ${pos.alertId} LIMIT 1`;
-      if (existing.length > 0) {
-        log(`Monitor: ${monitorAlertType} already sent for alert ${pos.alertId}, skipping`);
-        continue;
-      }
-
-      // Determine ntfy priority and title
-      var priority = pos.status === 'INVALIDATED' ? 5 : 4;
       var emoji = pos.status === 'CONFIRMED' ? '✅' : pos.status === 'FADING' ? '⚠️' : '🔴';
-      var titleVerb = pos.status === 'CONFIRMED' ? 'TRACKING' :
-                      pos.status === 'FADING' ? 'CAUTION' : 'EDGE LOST';
-      var ntfyTitle = `${emoji} ${titleVerb} — ${activeAlert.controlTeam}`;
+      log(`Monitor: ${MONITOR_DRY_RUN ? '[DRY RUN] ' : ''}${emoji} ${monitorAlertType} for ${activeAlert.matchup} (parent=${pos.alertId}) — ${pos.reasoning}`);
 
-      await sendNtfy(ntfyTitle, pos.body, priority);
+      if (!MONITOR_DRY_RUN) {
+        // Update parent alert row
+        try {
+          await sql`UPDATE alerts SET monitor_status = ${pos.status}, monitor_reasoning = ${pos.reasoning}, monitor_ts = NOW() WHERE id = ${pos.alertId}`;
+        } catch (e) { log(`Monitor: update alert ${pos.alertId} failed: ${e.message}`); }
 
-      try {
-        await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team,
-          floor_score, margin, is_trailing, parent_alert_id, monitor_status, monitor_reasoning, ntfy_sent)
-          VALUES (${activeAlert.gameId}, ${league}, ${monitorAlertType}, ${activeAlert.currentPeriod},
-            ${activeAlert.currentClock}, ${activeAlert.controlTeam}, ${activeAlert.currentFloor},
-            ${Math.abs(activeAlert.currentMargin)}, ${activeAlert.currentMargin < 0},
-            ${pos.alertId}, ${pos.status}, ${pos.reasoning}, ${true})`;
-      } catch (e) { log(`Monitor: insert ${monitorAlertType} failed: ${e.message}`); }
+        // Dedup check
+        var existing = await sql`SELECT 1 FROM alerts WHERE game_id = ${activeAlert.gameId} AND alert_type = ${monitorAlertType} AND parent_alert_id = ${pos.alertId} LIMIT 1`;
+        if (existing.length > 0) { log(`Monitor: ${monitorAlertType} already sent, skipping`); continue; }
 
-      log(`Monitor: ${emoji} ${monitorAlertType} for ${activeAlert.matchup} (parent=${pos.alertId})`);
+        // Send ntfy
+        var priority = pos.status === 'INVALIDATED' ? 5 : 4;
+        var titleVerb = pos.status === 'CONFIRMED' ? 'TRACKING' : pos.status === 'FADING' ? 'CAUTION' : 'EDGE LOST';
+        await sendNtfy(`${emoji} ${titleVerb} — ${activeAlert.controlTeam}`, pos.body, priority);
+
+        // Insert alert row
+        try {
+          await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, parent_alert_id, monitor_status, monitor_reasoning, ntfy_sent)
+            VALUES (${activeAlert.gameId}, ${league}, ${monitorAlertType}, ${activeAlert.currentPeriod}, ${activeAlert.currentClock}, ${activeAlert.controlTeam}, ${activeAlert.currentFloor}, ${Math.abs(activeAlert.currentMargin)}, ${activeAlert.currentMargin < 0}, ${pos.alertId}, ${pos.status}, ${pos.reasoning}, ${true})`;
+        } catch (e) { log(`Monitor: insert ${monitorAlertType} failed: ${e.message}`); }
+      }
     } else {
-      log(`Monitor: ${activeAlert.matchup} → ${pos.status} (no notify)`);
+      log(`Monitor: ${MONITOR_DRY_RUN ? '[DRY RUN] ' : ''}${activeAlert.matchup} → ${pos.status} (no notify)`);
     }
   }
 
@@ -788,87 +773,56 @@ async function processMonitorResults(sql, parsed, conditions, league) {
     var threatAlert = conditions.leadThreats.find(t => t.alertId === threat.alertId);
     if (!threatAlert) continue;
 
-    try {
-      await sql`UPDATE alerts SET
-        monitor_status = ${threat.status},
-        monitor_reasoning = ${threat.reasoning},
-        monitor_ts = NOW()
-        WHERE id = ${threat.alertId}`;
-    } catch (e) { /* non-fatal */ }
+    var tEmoji = threat.status === 'STABILIZED' ? '✅' : threat.status === 'ESCALATING' ? '🔴' : 'ℹ️';
+    var threatType = 'LEAD_' + threat.status;
 
     if (threat.notify && threat.body && threat.body.length > 10) {
-      var threatType = 'LEAD_' + threat.status;
-      var existing2 = await sql`SELECT 1 FROM alerts WHERE game_id = ${threatAlert.gameId}
-        AND alert_type = ${threatType} AND parent_alert_id = ${threat.alertId} LIMIT 1`;
-      if (existing2.length > 0) continue;
+      log(`Monitor: ${MONITOR_DRY_RUN ? '[DRY RUN] ' : ''}${tEmoji} ${threatType} for ${threatAlert.matchup} — ${threat.reasoning}`);
 
-      var tEmoji = threat.status === 'STABILIZED' ? '✅' : threat.status === 'ESCALATING' ? '🔴' : 'ℹ️';
-      var tTitle = threat.status === 'STABILIZED'
-        ? `✅ LEAD STABLE — ${threatAlert.controlTeam}`
-        : `🔴 LEAD PRESSURE — ${threatAlert.controlTeam}`;
-      var tPriority = threat.status === 'ESCALATING' ? 4 : 3;
-
-      await sendNtfy(tTitle, threat.body, tPriority);
-
-      try {
-        await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team,
-          floor_score, margin, is_trailing, parent_alert_id, monitor_status, monitor_reasoning, ntfy_sent)
-          VALUES (${threatAlert.gameId}, ${league}, ${threatType}, ${null}, ${null},
-            ${threatAlert.controlTeam}, ${null}, ${Math.abs(threatAlert.currentMargin)},
-            ${threatAlert.currentMargin < 0}, ${threat.alertId}, ${threat.status}, ${threat.reasoning}, ${true})`;
-      } catch (e) { log(`Monitor: insert ${threatType} failed: ${e.message}`); }
-
-      log(`Monitor: ${tEmoji} ${threatType} for ${threatAlert.matchup}`);
+      if (!MONITOR_DRY_RUN) {
+        try { await sql`UPDATE alerts SET monitor_status = ${threat.status}, monitor_reasoning = ${threat.reasoning}, monitor_ts = NOW() WHERE id = ${threat.alertId}`; } catch (e) { /* non-fatal */ }
+        var existing2 = await sql`SELECT 1 FROM alerts WHERE game_id = ${threatAlert.gameId} AND alert_type = ${threatType} AND parent_alert_id = ${threat.alertId} LIMIT 1`;
+        if (existing2.length > 0) continue;
+        var tTitle = threat.status === 'STABILIZED' ? `✅ LEAD STABLE — ${threatAlert.controlTeam}` : `🔴 LEAD PRESSURE — ${threatAlert.controlTeam}`;
+        await sendNtfy(tTitle, threat.body, threat.status === 'ESCALATING' ? 4 : 3);
+        try {
+          await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, parent_alert_id, monitor_status, monitor_reasoning, ntfy_sent)
+            VALUES (${threatAlert.gameId}, ${league}, ${threatType}, ${null}, ${null}, ${threatAlert.controlTeam}, ${null}, ${Math.abs(threatAlert.currentMargin)}, ${threatAlert.currentMargin < 0}, ${threat.alertId}, ${threat.status}, ${threat.reasoning}, ${true})`;
+        } catch (e) { log(`Monitor: insert ${threatType} failed: ${e.message}`); }
+      }
     }
   }
 
   // Process slate focus
   if (parsed.slateFocus && parsed.slateFocus.notify && parsed.slateFocus.body) {
-    // Dedup: one SLATE_FOCUS per 10 minutes
-    var recentFocus = await sql`SELECT 1 FROM alerts WHERE league = ${league}
-      AND alert_type = 'SLATE_FOCUS' AND ts > NOW() - INTERVAL '10 minutes' LIMIT 1`;
-    if (recentFocus.length === 0) {
-      await sendNtfy('🎯 SLATE FOCUS', parsed.slateFocus.body, 3);
-      try {
-        await sql`INSERT INTO alerts (game_id, league, alert_type, control_team, ntfy_sent, monitor_reasoning)
-          VALUES (${'slate'}, ${league}, ${'SLATE_FOCUS'}, ${null}, ${true}, ${parsed.slateFocus.focus})`;
-      } catch (e) { /* non-fatal */ }
-      log(`Monitor: 🎯 SLATE_FOCUS sent`);
+    log(`Monitor: ${MONITOR_DRY_RUN ? '[DRY RUN] ' : ''}🎯 SLATE_FOCUS — ${parsed.slateFocus.focus}`);
+    if (!MONITOR_DRY_RUN) {
+      var recentFocus = await sql`SELECT 1 FROM alerts WHERE league = ${league} AND alert_type = 'SLATE_FOCUS' AND ts > NOW() - INTERVAL '10 minutes' LIMIT 1`;
+      if (recentFocus.length === 0) {
+        await sendNtfy('🎯 SLATE FOCUS', parsed.slateFocus.body, 3);
+        try { await sql`INSERT INTO alerts (game_id, league, alert_type, control_team, ntfy_sent, monitor_reasoning) VALUES (${'slate'}, ${league}, ${'SLATE_FOCUS'}, ${null}, ${true}, ${parsed.slateFocus.focus})`; } catch (e) { /* non-fatal */ }
+      }
     }
   }
 
   // Process emerging signals
   for (var em of parsed.emerging) {
     if (!em.notify || !em.body || em.confidence === 'LOW') continue;
+    var emGame = conditions.emergingCandidates.find(c => c.matchup === em.matchup) || conditions.liveGames.find(g => g.matchup === em.matchup);
+    if (!emGame) { log(`Monitor: EMERGING ${em.signal} for ${em.matchup} — game not found`); continue; }
 
-    // Find the game ID from emerging candidates or live games
-    var emGame = conditions.emergingCandidates.find(c => c.matchup === em.matchup)
-      || conditions.liveGames.find(g => g.matchup === em.matchup);
-    if (!emGame) {
-      log(`Monitor: EMERGING ${em.signal} for ${em.matchup} — game not found, skipping`);
-      continue;
+    log(`Monitor: ${MONITOR_DRY_RUN ? '[DRY RUN] ' : ''}📈 EMERGING ${em.signal} for ${em.matchup} (${em.confidence}) — ${em.detail}`);
+
+    if (!MONITOR_DRY_RUN) {
+      var emDedupCheck = await sql`SELECT 1 FROM alerts WHERE game_id = ${emGame.gameId} AND alert_type = 'MONITOR_EMERGING' AND emerging_signal = ${em.signal} LIMIT 1`;
+      if (emDedupCheck.length > 0) { log(`Monitor: EMERGING ${em.signal} already sent, skipping`); continue; }
+      var controlTeam = em.controlTeam || emGame.controlTeam || null;
+      await sendNtfy(`📈 ${em.signal.replace(/_/g, ' ')} — ${em.matchup}`, em.body, 3);
+      try {
+        await sql`INSERT INTO alerts (game_id, league, alert_type, control_team, floor_score, margin, is_trailing, emerging_signal, monitor_reasoning, ntfy_sent)
+          VALUES (${emGame.gameId}, ${league}, ${'MONITOR_EMERGING'}, ${controlTeam}, ${emGame.floor}, ${Math.abs(emGame.margin)}, ${emGame.margin < 0}, ${em.signal}, ${em.detail}, ${true})`;
+      } catch (e) { log(`Monitor: insert EMERGING failed: ${e.message}`); }
     }
-
-    // Dedup: one per signal type per game
-    var emDedupCheck = await sql`SELECT 1 FROM alerts WHERE game_id = ${emGame.gameId}
-      AND alert_type = 'MONITOR_EMERGING' AND emerging_signal = ${em.signal} LIMIT 1`;
-    if (emDedupCheck.length > 0) {
-      log(`Monitor: EMERGING ${em.signal} for ${em.matchup} already sent, skipping`);
-      continue;
-    }
-
-    var controlTeam = em.controlTeam || emGame.controlTeam || null;
-    await sendNtfy(`📈 ${em.signal.replace(/_/g, ' ')} — ${em.matchup}`, em.body, 3);
-
-    try {
-      await sql`INSERT INTO alerts (game_id, league, alert_type, control_team, floor_score,
-        margin, is_trailing, emerging_signal, monitor_reasoning, ntfy_sent)
-        VALUES (${emGame.gameId}, ${league}, ${'MONITOR_EMERGING'}, ${controlTeam},
-          ${emGame.floor}, ${Math.abs(emGame.margin)}, ${emGame.margin < 0},
-          ${em.signal}, ${em.detail}, ${true})`;
-    } catch (e) { log(`Monitor: insert EMERGING failed: ${e.message}`); }
-
-    log(`Monitor: 📈 EMERGING ${em.signal} for ${em.matchup} (${em.confidence})`);
   }
 }
 
