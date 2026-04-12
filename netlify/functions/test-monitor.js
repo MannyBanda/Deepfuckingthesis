@@ -443,8 +443,8 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
           reasoning = match.reasoning;
         } else {
           actual = 'Alert ID not found in response';
-          // Dump all parsed positions for debugging
-          reasoning = 'Parsed positions: ' + JSON.stringify(positions);
+          // Dump raw text and parsed positions for debugging
+          reasoning = 'Raw: ' + r.text.substring(0, 500);
         }
       } else if (s.expected.emergingSignal) {
         // Emerging test — match by signal type
@@ -455,7 +455,7 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
           actual = `${match.signal} ${match.confidence} notify=${match.notify}`;
         } else {
           actual = 'Emerging signal not found';
-          reasoning = 'Parsed emerging: ' + JSON.stringify(emerging);
+          reasoning = 'Raw: ' + r.text.substring(0, 500);
         }
       }
 
