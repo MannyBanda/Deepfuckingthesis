@@ -27,6 +27,9 @@
 [functions."poll-live-bdl"]
   timeout = 120
 
+[functions."test-monitor"]
+  timeout = 120
+
 [[headers]]
   for = "/*"
   [headers.values]

@@ -138,11 +138,21 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       quarterSummary:'Q1: 24-30\nQ2: 20-22\nQ3: 18-18',
       learningsContext:'NIGHTLY RESULTS (last 3 nights):\n2026-04-12: 92% | BUY:5/5 BWC:2/3 | saves:4 missed:1\n2026-04-11: 88% | BUY:3/4 WB:2/2 | saves:6 missed:2\n2026-04-10: 100% | BUY:3/3 BWC:11/11 | saves:1 missed:6\n\nPATTERNS:\nI4 COMBO YES alerts hitting at 98% across all tiers\n\nRECOMMENDATIONS:\nI4 COMBO YES should be near-automatic SEND regardless of tier'
     }},
+    '8': { name: 'FIRED BWC after prior BUY was CONFIRMED by monitor', expected: 'SEND', ctx: {
+      alertType:'BUY WINDOW CLOSING', alertTier:'FIRED', controlTeam:'SAC', floor:'0.71', margin:5, isTrailing:false,
+      period:3, clock:'4:00', minsLeft:'16.0', convictionTier:'STRONG', convictionCombo:'I1+I3+I4', convictionPairs:'I3+I4',
+      edge:8.5, ml:'-180', spread:'-4.5', tpClass:null, lsClass:'CUSHIONED', ctrlSust:'DURABLE', oppSust:'FRAGILE',
+      i1:'0.75', i2:'0.55', i3:'0.80', i4:'0.82', i5:'0.60', indicatorsWon:4, indWon:'I1+I3+I4+I5', indLost:'',
+      i4Decisive:true, i4Won:true, i4Combo:true,
+      floorHistory:'Q3 6:00: SAC 0.72 (68-64) LS:CUSHIONED\nQ3 12:00: SAC 0.70 (58-56) LS:CUSHIONED\nQ2 6:00: SAC 0.68 (42-48) TP:PROBABLE',
+      priorAlerts:'BUY[FIRED] Q2 4:30: floor 0.72, margin 6 trailing, sust DURABLE/FRAGILE, conv STRONG(I1+I4+I5) → SEND\n  └── Monitor: CONFIRMED — SAC took the lead, floor holding at 0.70, I4 still won, structural thesis intact',
+      quarterSummary:'Q1: 24-30 pts, paint 16-10, TO 2-5\nQ2: 24-18 pts\nQ3: 20-16 pts'
+    }},
   };
 
   let testKeys = [];
   if (testParam === 'all') testKeys = Object.keys(scenarios);
-  else if (testParam === 'fired') testKeys = ['1', '4', '7'];
+  else if (testParam === 'fired') testKeys = ['1', '4', '7', '8'];
   else if (testParam === 'candidate') testKeys = ['2', '3', '6'];
   else if (testParam === 'auto') testKeys = ['5'];
   else if (scenarios[testParam]) testKeys = [testParam];
