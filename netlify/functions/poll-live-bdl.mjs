@@ -3279,18 +3279,21 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
         const aaDecision = agentResult?.decision || 'SUPPRESS';
         const aaReasoning = agentResult?.reasoning || '';
 
-        // Always INSERT to alerts table for accuracy tracking
-        try {
-          await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo)
-            VALUES (${game.id}, ${league}, ${'AUTO_ANALYSIS'}, ${period}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${aaEdge}, ${aaML ? parseInt(aaML) : null}, ${odds?.homeSpread ? parseFloat(odds.homeSpread) : null}, ${tpClass}, ${lsClass}, ${ctrlSust}, ${oppSust}, ${clientCtx?.rollingWindow?.score ?? null}, ${'ANALYSIS'}, ${aaDecision}, ${aaReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${calConviction.tier}, ${calConviction.combo})`;
-        } catch (e) { log(`${matchup}: ${triggerTag} alert save failed: ${e.message}`); }
-
         // Check if mechanical alert already sent for this game+period (dedup ntfy)
         let mechAlreadySent = false;
         try {
           const mechCheck = await sql`SELECT 1 FROM alerts WHERE game_id = ${game.id} AND period = ${period} AND alert_type != 'AUTO_ANALYSIS' AND agent_decision IN ('SEND', 'DOWNGRADE', 'FALLBACK_SEND') LIMIT 1`;
           mechAlreadySent = mechCheck.length > 0;
         } catch (e) { /* non-fatal */ }
+
+        // Determine if ntfy will actually send
+        const aaNtfySent = (aaDecision === 'SEND' || aaDecision === 'DOWNGRADE') && !mechAlreadySent;
+
+        // Always INSERT to alerts table for accuracy tracking
+        try {
+          await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent)
+            VALUES (${game.id}, ${league}, ${'AUTO_ANALYSIS'}, ${period}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${aaEdge}, ${aaML ? parseInt(aaML) : null}, ${odds?.homeSpread ? parseFloat(odds.homeSpread) : null}, ${tpClass}, ${lsClass}, ${ctrlSust}, ${oppSust}, ${clientCtx?.rollingWindow?.score ?? null}, ${'ANALYSIS'}, ${aaDecision}, ${aaReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${calConviction.tier}, ${calConviction.combo}, ${aaNtfySent})`;
+        } catch (e) { log(`${matchup}: ${triggerTag} alert save failed: ${e.message}`); }
 
         if (aaDecision === 'SEND') {
           if (mechAlreadySent) {
@@ -4628,8 +4631,8 @@ export default async function(req) {
                 // Always save to alerts table — including suppressed candidates for accuracy tracking
                 const tpRatio = tpForBuy?.conservative?.ratio ?? null;
                 try {
-                  await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, tp_ratio, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo)
-                    VALUES (${game.id}, ${league}, ${alertType}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal}, ${tpForBuy?.classification || null}, ${lsForBWC?.classification || null}, ${ctrlSust}, ${oppSustTier}, ${wbWindowScore}, ${tpRatio}, ${alertTier}, ${agentDecision}, ${agentReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${conviction.tier}, ${conviction.combo})`;
+                  await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, tp_ratio, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent)
+                    VALUES (${game.id}, ${league}, ${alertType}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal}, ${tpForBuy?.classification || null}, ${lsForBWC?.classification || null}, ${ctrlSust}, ${oppSustTier}, ${wbWindowScore}, ${tpRatio}, ${alertTier}, ${agentDecision}, ${agentReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${conviction.tier}, ${conviction.combo}, ${shouldSend})`;
                 } catch (e) { log(`${matchup}: alert save failed: ${e.message}`); }
                 log(`${matchup}: ${alertEmoji} ${alertType} ${alertTier} ${agentDecision} — ${ind.controlTeam} ${ind.score.toFixed(2)} ${ctrlTrailing ? 'trailing' : 'leading'} by ${margin}${ctrlEdge != null ? ', edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}${oppSustTier ? ', opp ' + oppSustTier : ''}`);
               }
@@ -4697,7 +4700,7 @@ export default async function(req) {
                         5
                       );
                       log(`${matchup}: RECOVERY PATH — TP ${tpClass}, floor ${ind.score.toFixed(2)}, trailing ${marginT}, ML ${rpML}${rpEdge != null ? ', edge ' + rpEdge + '%' : ''}`);
-                      try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, tp_class, ls_class, ctrl_sust, opp_sust, tp_ratio) VALUES (${game.id}, ${league}, ${'RECOVERY PATH'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${true}, ${rpEdge}, ${rpML ? parseInt(rpML) : null}, ${tpClass}, ${lsClass}, ${sust?.[ctrlIsHome ? 'home' : 'away']?.tier || null}, ${sust?.[ctrlIsHome ? 'away' : 'home']?.tier || null}, ${tp?.conservative?.ratio ?? null})`; } catch(e) {}
+                      try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, tp_class, ls_class, ctrl_sust, opp_sust, tp_ratio, ntfy_sent) VALUES (${game.id}, ${league}, ${'RECOVERY PATH'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${true}, ${rpEdge}, ${rpML ? parseInt(rpML) : null}, ${tpClass}, ${lsClass}, ${sust?.[ctrlIsHome ? 'home' : 'away']?.tier || null}, ${sust?.[ctrlIsHome ? 'away' : 'home']?.tier || null}, ${tp?.conservative?.ratio ?? null}, ${true})`; } catch(e) {}
                     }
                   } else {
                     log(`${matchup}: RECOVERY PATH skipped — ML gate (ML ${rpML}, edge ${rpEdge}%)`);
@@ -4722,7 +4725,7 @@ export default async function(req) {
                     5
                   );
                   log(`${matchup}: LEAD CRUMBLING — LS ${lsClass}, leading ${marginT}, floor ${ind.score.toFixed(2)}`);
-                  try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, tp_class, ls_class) VALUES (${game.id}, ${league}, ${'LEAD CRUMBLING'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${false}, ${tpClass}, ${lsClass})`; } catch(e) {}
+                  try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, tp_class, ls_class, ntfy_sent) VALUES (${game.id}, ${league}, ${'LEAD CRUMBLING'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${false}, ${tpClass}, ${lsClass}, ${true})`; } catch(e) {}
                   // Write suppression timestamp for BWC/BUY alerts
                   try {
                     if (ctrlIsHome) {
@@ -4749,7 +4752,7 @@ export default async function(req) {
                     5
                   );
                   log(`${matchup}: LEAD LOST — ${prevLsClass} -> tied/trailing`);
-                  try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, tp_class, ls_class) VALUES (${game.id}, ${league}, ${'LEAD LOST'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${oppPtsT > ctrlPtsT}, ${tpClass}, ${lsClass})`; } catch(e) {}
+                  try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, tp_class, ls_class, ntfy_sent) VALUES (${game.id}, ${league}, ${'LEAD LOST'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${oppPtsT > ctrlPtsT}, ${tpClass}, ${lsClass}, ${true})`; } catch(e) {}
                   try {
                     if (ctrlIsHome) {
                       await sql`UPDATE games SET home_lead_degraded_at = NOW() WHERE id = ${game.id}`;
@@ -4780,7 +4783,7 @@ export default async function(req) {
                       4
                     );
                     log(`${matchup}: VARIANCE BREAKING — ${oppAlias} ${prevOppSust} -> ${oppSustNow}`);
-                    try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, opp_sust) VALUES (${game.id}, ${league}, ${'VARIANCE BREAKING'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${true}, ${oppSustNow})`; } catch(e) {}
+                    try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, opp_sust, ntfy_sent) VALUES (${game.id}, ${league}, ${'VARIANCE BREAKING'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${true}, ${oppSustNow}, ${true})`; } catch(e) {}
                   }
                 }
               }

@@ -189,9 +189,10 @@ export default async function handler(req) {
   const ACTIONABLE_TYPES = ['BUY', 'WINDOW BUY', 'BUY WINDOW CLOSING', 'RECOVERY PATH', 'VARIANCE BREAKING', 'AUTO_ANALYSIS'];
   const TRANSITIONAL_TYPES = ['LEAD LOST', 'LEAD CRUMBLING'];
 
-  // Delivered = actually reached ntfy (everything except SUPPRESS and FALLBACK_DROP)
-  const delivered = scoredAlerts.filter(a => a.agent_decision !== 'SUPPRESS' && a.agent_decision !== 'FALLBACK_DROP');
-  const suppressed = scoredAlerts.filter(a => a.agent_decision === 'SUPPRESS' || a.agent_decision === 'FALLBACK_DROP');
+  // Delivered = ntfy actually sent to user. Prefer ntfy_sent column, fall back to agent_decision for old data.
+  const delivered = scoredAlerts.filter(a => a.ntfy_sent === true || (a.ntfy_sent == null && a.agent_decision !== 'SUPPRESS' && a.agent_decision !== 'FALLBACK_DROP'));
+  const suppressed = scoredAlerts.filter(a => a.agent_decision === 'SUPPRESS');
+  const deduped = scoredAlerts.filter(a => a.ntfy_sent === false && a.agent_decision !== 'SUPPRESS');
 
   // Delivered actionable — THE headline number
   const deliveredActionable = delivered.filter(a => ACTIONABLE_TYPES.includes(a.alert_type));
@@ -231,6 +232,7 @@ export default async function handler(req) {
     delivered_total: deliveredActionable.length,
     saves: agentSaves,
     missed_winners: agentMisses,
+    deduped: deduped.length,
     transitional_held: deliveredTransitionalHeld,
     transitional_total: deliveredTransitional.length,
     raw_correct: rawCorrect,

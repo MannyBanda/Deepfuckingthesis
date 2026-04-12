@@ -322,6 +322,7 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE game_pbp ADD COLUMN IF NOT EXISTS box_score_json JSONB`; } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS conviction_tier TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS conviction_combo TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS ntfy_sent BOOLEAN`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS conviction_tier TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS conviction_combo TEXT`; } catch(e) {}
 
