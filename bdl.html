@@ -8237,7 +8237,7 @@ function computeRollingWindow(game){
   return {
     available: true,
     windowQuarters: windowLabel,
-    windowPossessions: (hPoss||0)+(aPoss||0),
+    windowPossessions: (hW.possessions||0)+(aW.possessions||0),
     home: hW, away: aW,
     I1:wI1, I2:wI2, I3:wI3, I4:wI4, I5:wI5,
     score, controlTeam,
