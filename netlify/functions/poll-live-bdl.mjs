@@ -5515,6 +5515,9 @@ export default async function(req) {
               if (monitorResult) {
                 await processMonitorResults(sql, monitorResult, monitorable, league);
               }
+              // Only update throttle timestamp when NOT in dry-run
+              // (processMonitorResults controls MONITOR_DRY_RUN internally,
+              //  but we still want throttling to work so Sonnet isn't called every poll)
               try {
                 await sql`UPDATE poll_state SET monitor_last_run = NOW()
                   WHERE league = ${league} AND date = ${dateKey}`;
