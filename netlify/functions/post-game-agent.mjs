@@ -129,7 +129,8 @@ export default async function handler(req) {
   // Get today's alerts — filter by GAME date, not alert timestamp
   // (late-night MST games have UTC timestamps on the next calendar day)
   const alerts = await sql`
-    SELECT a.*, g.away_alias, g.home_alias, g.date as game_date
+    SELECT a.*, g.away_alias, g.home_alias, g.date as game_date,
+      g.winner as game_winner, g.home_pts as game_home_pts, g.away_pts as game_away_pts
     FROM alerts a
     JOIN games g ON a.game_id = g.id
     WHERE g.date = ${today.dateStr}
@@ -145,13 +146,29 @@ export default async function handler(req) {
     return new Response(JSON.stringify({ ok: true, message: 'No alerts' }));
   }
 
-  // Fetch final scores
-  const finalScores = await fetchFinalScores(today.dateStr);
+  // Fetch final scores from BDL, fall back to games table if unavailable
+  let finalScores = await fetchFinalScores(today.dateStr);
   log(`BDL returned ${finalScores.length} games`);
 
   if (finalScores.length === 0) {
-    log('No final scores available yet');
-    return new Response(JSON.stringify({ ok: true, message: 'No final scores' }));
+    // Fallback: build scores from games table (already joined on alerts)
+    const gameMap = {};
+    alerts.forEach(a => {
+      if (a.game_winner && !gameMap[a.game_id]) {
+        gameMap[a.game_id] = {
+          home: a.home_alias, away: a.away_alias,
+          homeScore: Number(a.game_home_pts) || 0, awayScore: Number(a.game_away_pts) || 0,
+          status: 'Final',
+        };
+      }
+    });
+    finalScores = Object.values(gameMap);
+    if (finalScores.length > 0) {
+      log(`BDL empty — using games table fallback (${finalScores.length} games)`);
+    } else {
+      log('No final scores available from BDL or games table');
+      return new Response(JSON.stringify({ ok: true, message: 'No final scores' }));
+    }
   }
 
   // ── 2. SCORE ────────────────────────────────────────────────────────────
