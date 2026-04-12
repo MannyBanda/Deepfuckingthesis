@@ -21,9 +21,10 @@ export default async function handler(req) {
           + `  Sent: Q${a.periodAtAlert} ${a.clockAtAlert} (${a.minutesSinceSent} min ago)\n`
           + `  At alert: floor ${a.floorAtAlert.toFixed(2)}, margin ${a.marginAtAlert}, ML ${a.mlAtAlert || '?'}, conviction ${a.convictionAtAlert || '?'}\n`
           + `  Now: floor ${a.currentFloor.toFixed(2)} (${floorDir}${floorDelta}), margin ${a.currentMargin}, Q${a.currentPeriod} ${a.currentClock}\n`
-          + `  I4 now: ${a.currentI4 != null ? a.currentI4.toFixed(2) : '?'} | TP: ${a.currentTpClass || '?'} | LS: ${a.currentLsClass || '?'}\n`
+          + `  I4 now: ${a.currentI4 != null ? a.currentI4.toFixed(2) + ' (1.00=ctrl dominant, 0.00=opp dominant)' : '?'} | TP: ${a.currentTpClass || '?'} | LS: ${a.currentLsClass || '?'}\n`
           + `  Floor trajectory: ${a.floorTrajectory.map(f => f.toFixed(2)).join(' → ')}\n`
-          + `  Score flip: ${a.tookLead ? 'YES — team took the lead' : a.lostLead ? 'YES — team LOST the lead' : 'No'}`;
+          + `  Score flip: ${a.tookLead ? 'YES — team took the lead' : a.lostLead ? 'YES — team LOST the lead' : 'No'}\n`
+          + `  INVALIDATED thresholds: floor ${a.currentFloor.toFixed(2)} ${a.currentFloor < 0.45 ? '< 0.45 YES' : '>= 0.45 NO'} | I4 ${a.currentI4 != null ? a.currentI4.toFixed(2) : '?'} ${a.currentI4 != null && a.currentI4 < 0.40 ? '< 0.40 YES' : '>= 0.40 NO'} | TP ${a.currentTpClass === 'NO PATH' ? 'NO PATH YES' : (a.currentTpClass || '?') + ' NO'}`;
       }).join('\n\n');
     }
 
