@@ -21,10 +21,11 @@ export default async function handler(req) {
           + `  Sent: Q${a.periodAtAlert} ${a.clockAtAlert} (${a.minutesSinceSent} min ago)\n`
           + `  At alert: floor ${a.floorAtAlert.toFixed(2)}, margin ${a.marginAtAlert}, ML ${a.mlAtAlert || '?'}, conviction ${a.convictionAtAlert || '?'}\n`
           + `  Now: floor ${a.currentFloor.toFixed(2)} (${floorDir}${floorDelta}), margin ${a.currentMargin}, Q${a.currentPeriod} ${a.currentClock}\n`
-          + `  I4 now: ${a.currentI4 != null ? a.currentI4.toFixed(2) + ' (1.00=ctrl dominant, 0.00=opp dominant)' : '?'} | TP: ${a.currentTpClass || '?'} | LS: ${a.currentLsClass || '?'}\n`
+          + `  I4 now: ${a.currentI4 != null ? a.currentI4.toFixed(2) + ' (' + a.controlTeam + ' wins I4 if > 0.55, loses if < 0.45)' : '?'} | TP: ${a.currentTpClass || '?'} | LS: ${a.currentLsClass || '?'}\n`
           + `  Floor trajectory: ${a.floorTrajectory.map(f => f.toFixed(2)).join(' → ')}\n`
           + `  Score flip: ${a.tookLead ? 'YES — team took the lead' : a.lostLead ? 'YES — team LOST the lead' : 'No'}\n`
-          + `  INVALIDATED thresholds: floor ${a.currentFloor.toFixed(2)} ${a.currentFloor < 0.45 ? '< 0.45 YES' : '>= 0.45 NO'} | I4 ${a.currentI4 != null ? a.currentI4.toFixed(2) : '?'} ${a.currentI4 != null && a.currentI4 < 0.40 ? '< 0.40 YES' : '>= 0.40 NO'} | TP ${a.currentTpClass === 'NO PATH' ? 'NO PATH YES' : (a.currentTpClass || '?') + ' NO'}`;
+          + `  INVALIDATED CHECK: floor=${a.currentFloor.toFixed(2)} ${a.currentFloor < 0.45 ? 'BELOW 0.45 → TRIGGER' : 'ABOVE 0.45 → no trigger'} | I4=${a.currentI4 != null ? a.currentI4.toFixed(2) : '?'} ${a.currentI4 != null && a.currentI4 < 0.40 ? 'BELOW 0.40 → TRIGGER' : 'ABOVE 0.40 → no trigger'} | TP=${a.currentTpClass || '?'} ${a.currentTpClass === 'NO PATH' ? '→ TRIGGER' : '→ no trigger'}\n`
+          + `  VERDICT: ${(a.currentFloor < 0.45 || (a.currentI4 != null && a.currentI4 < 0.40) || a.currentTpClass === 'NO PATH') ? 'INVALIDATED — at least one trigger met' : 'NOT INVALIDATED — zero triggers met, use TRACKING/CONFIRMED/FADING only'}`;
       }).join('\n\n');
     }
 
@@ -99,7 +100,7 @@ RULES:
 - TRACKING with NOTIFY=NO is the most common output. Most cycles, nothing changed enough to notify. Don't over-notify.
 - CONFIRMED requires a concrete signal: score flip (trailing → leading), floor rose 0.05+, or opponent sustainability broke. Not just "looks fine."
 - FADING requires floor trending DOWN across 3+ snapshots, not just one dip.
-- INVALIDATED means the structural THESIS is broken. Specific triggers: floor dropped below 0.45, OR I4 flipped to opponent (below 0.40), OR TP is NO PATH. Any ONE of these is sufficient for INVALIDATED — don't call it FADING when the floor is sub-0.45 with I4 lost. A BUY team still trailing is NOT invalidated if the floor holds above 0.50 — that's the whole BUY thesis.
+- INVALIDATED: check the VERDICT line on each position. If VERDICT says 'NOT INVALIDATED', you MUST NOT use INVALIDATED status — use TRACKING, CONFIRMED, or FADING instead. The VERDICT is pre-computed and authoritative. Do not override it with your own threshold math.
 - For BWC: CONFIRMED = lead grew + LS improved. FADING = lead shrinking. INVALIDATED = lead lost.
 - For WINDOW BUY: CONFIRMED = full-game floor rose toward window read. FADING = window advantage didn't translate.
 - STABILIZED: lead threat has resolved. Specific triggers: lead grew by 3+ points since LEAD AT RISK, OR LS improved from AT RISK/CRITICAL to CUSHIONED/SAFE. Either trigger alone is sufficient — a lead growing from 8 to 14 with LS upgrading to SAFE is definitively STABILIZED, not TRACKING. Only use TRACKING if the lead is unchanged and LS has not improved.
