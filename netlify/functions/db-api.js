@@ -2143,6 +2143,70 @@ exports.handler = async (event) => {
       }) };
     }
 
+    if (action === 'test_pipeline') {
+      // Write test alerts with known game_id prefix for pipeline verification
+      const testGameId = 'TEST_PIPELINE_001';
+      const testDate = '2026-04-09';
+      
+      // Ensure test game exists
+      await sql`INSERT INTO games (id, date, league, matchup, home_alias, away_alias, winner, home_pts, away_pts, margin)
+        VALUES (${testGameId}, ${testDate}, 'nba', 'TEST@PIPE', 'PIPE', 'TEST', 'PIPE', 110, 102, 8)
+        ON CONFLICT (id) DO UPDATE SET winner = 'PIPE', home_pts = 110, away_pts = 102, margin = 8`;
+
+      // Write test alerts covering all paths
+      const testAlerts = [
+        { type: 'BUY', tier: 'FIRED', agent: 'SEND', ctrl: 'PIPE', floor: 0.72, margin: 6, trailing: true, period: 3, clock: '4:00' },
+        { type: 'BUY', tier: 'CANDIDATE', agent: 'SUPPRESS', ctrl: 'PIPE', floor: 0.58, margin: 8, trailing: true, period: 2, clock: '8:00' },
+        { type: 'BUY WINDOW CLOSING', tier: 'FIRED', agent: 'SEND', ctrl: 'PIPE', floor: 0.80, margin: 4, trailing: false, period: 3, clock: '6:00' },
+        { type: 'AUTO_ANALYSIS', tier: 'ANALYSIS', agent: 'SEND', ctrl: 'PIPE', floor: 0.75, margin: 3, trailing: false, period: 2, clock: '12:00' },
+        { type: 'AUTO_ANALYSIS', tier: 'ANALYSIS', agent: 'SUPPRESS', ctrl: 'PIPE', floor: 0.55, margin: 1, trailing: true, period: 1, clock: '6:00' },
+        { type: 'LEAD CRUMBLING', tier: null, agent: null, ctrl: 'PIPE', floor: 0.65, margin: 5, trailing: false, period: 4, clock: '3:00' },
+        { type: 'LEAD LOST', tier: null, agent: null, ctrl: 'PIPE', floor: 0.60, margin: 0, trailing: false, period: 4, clock: '1:00' },
+        { type: 'WINDOW BUY', tier: 'CANDIDATE', agent: 'SEND', ctrl: 'TEST', floor: 0.50, margin: 3, trailing: false, period: 3, clock: '5:00' },
+      ];
+
+      let inserted = 0;
+      for (const a of testAlerts) {
+        try {
+          await sql`INSERT INTO alerts (game_id, league, alert_type, alert_tier, agent_decision, control_team, floor_score, margin, is_trailing, period, clock, conviction_tier, conviction_combo, i1, i2, i3, i4, i5)
+            VALUES (${testGameId}, 'nba', ${a.type}, ${a.tier}, ${a.agent}, ${a.ctrl}, ${a.floor}, ${a.margin}, ${a.trailing}, ${a.period}, ${a.clock}, 'STRONG', 'I3+I4', 0.7, 0.6, 0.8, 0.9, 0.5)`;
+          inserted++;
+        } catch (e) { /* skip dupes */ }
+      }
+
+      // Expected results:
+      // PIPE won → BUY FIRED SEND = correct, BUY CANDIDATE SUPPRESS = correct block (would have won),
+      // BWC SEND = correct, AUTO_ANALYSIS SEND = correct, AUTO_ANALYSIS SUPPRESS = missed winner,
+      // LEAD CRUMBLING = ctrl won so "didn't hold" (correct = false), LEAD LOST = same
+      // WINDOW BUY for TEST team SEND = wrong (TEST lost)
+
+      return { statusCode: 200, headers, body: JSON.stringify({
+        ok: true, inserted, testGameId, testDate,
+        expected: {
+          delivered_actionable: '5 (3 PIPE SEND + 1 AUTO_ANALYSIS SEND + 1 TEST WB SEND)',
+          delivered_correct: '4 (PIPE won, TEST lost)',
+          agent_saves: '1 (BUY CANDIDATE SUPPRESS, would have won = missed winner)',
+          transitional: '2 (LEAD CRUMBLING + LEAD LOST, both did not hold)',
+        },
+        next_step: 'Run: post-game-agent?date=' + testDate + ' then check nightly results',
+        cleanup: 'Run: db-api?action=cleanup_test',
+      }) };
+    }
+
+    if (action === 'cleanup_test') {
+      const testGameId = 'TEST_PIPELINE_001';
+      const alertsDel = await sql`DELETE FROM alerts WHERE game_id = ${testGameId} RETURNING id`;
+      const gamesDel = await sql`DELETE FROM games WHERE id = ${testGameId} RETURNING id`;
+      // Also clean any learnings that scored this data
+      const learnDel = await sql`DELETE FROM learnings WHERE date = '2026-04-09' RETURNING date`;
+      return { statusCode: 200, headers, body: JSON.stringify({
+        ok: true,
+        alerts_deleted: alertsDel.length,
+        games_deleted: gamesDel.length,
+        learnings_deleted: learnDel.length,
+      }) };
+    }
+
     if (action === 'delete_learning') {
       const date = params.date;
       if (!date) return { statusCode: 400, headers, body: JSON.stringify({ error: 'date required' }) };
