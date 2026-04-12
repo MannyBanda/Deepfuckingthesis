@@ -616,7 +616,7 @@ RULES:
 - INVALIDATED means the structural THESIS is broken. Specific triggers: floor dropped below 0.45, OR I4 flipped to opponent (below 0.40), OR TP is NO PATH. Any ONE of these is sufficient for INVALIDATED — don't call it FADING when the floor is sub-0.45 with I4 lost. A BUY team still trailing is NOT invalidated if the floor holds above 0.50 — that's the whole BUY thesis.
 - For BWC: CONFIRMED = lead grew + LS improved. FADING = lead shrinking. INVALIDATED = lead lost.
 - For WINDOW BUY: CONFIRMED = full-game floor rose toward window read. FADING = window advantage didn't translate.
-- STABILIZED requires lead to have held or grown after LEAD AT RISK. Lead merely not shrinking further is TRACKING, not STABILIZED.
+- STABILIZED: lead threat has resolved. Specific triggers: lead grew by 3+ points since LEAD AT RISK, OR LS improved from AT RISK/CRITICAL to CUSHIONED/SAFE. Either trigger alone is sufficient — a lead growing from 8 to 14 with LS upgrading to SAFE is definitively STABILIZED, not TRACKING. Only use TRACKING if the lead is unchanged and LS has not improved.
 - EMERGING MOMENTUM requires 4+ snapshots of consistent floor improvement. A single jump is noise.
 - EMERGING only for signals mechanical thresholds CAN'T catch — trajectory, cross-game, gradual cascades. If mechanical BUY would fire within 1-2 polls anyway, skip.
 - EMERGING bodies must frame as exploratory: "building momentum" not "BUY now."
