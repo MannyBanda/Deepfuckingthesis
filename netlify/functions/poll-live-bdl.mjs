@@ -651,14 +651,15 @@ RULES:
     // Parse structured response
     var parsed = { positions: [], threats: [], slateFocus: null, emerging: [] };
 
-    // Parse position assessments
-    var alertBlocks = text.split(/(?=ALERT_ID:)/);
+    // Parse position assessments — resilient to Sonnet format variations
+    // (ALERT_ID vs Alert ID, #200 vs 200, markdown bold, etc.)
+    var alertBlocks = text.split(/(?=(?:\*{0,2})ALERT[_ ]ID(?:\*{0,2})\s*:)/i);
     alertBlocks.forEach(block => {
-      var idMatch = block.match(/ALERT_ID:\s*(\d+)/);
-      var statusMatch = block.match(/STATUS:\s*(TRACKING|CONFIRMED|FADING|INVALIDATED|ESCALATING|STABILIZED|RESOLVED)/i);
-      var notifyMatch = block.match(/NOTIFY:\s*(YES|NO)/i);
-      var reasonMatch = block.match(/REASONING:\s*(.+?)(?:\n|$)/i);
-      var bodyMatch = block.match(/BODY:\s*([\s\S]*?)(?=(?:ALERT_ID:|SLATE_FOCUS:|EMERGING_GAME:|$))/i);
+      var idMatch = block.match(/ALERT[_ ]ID\s*(?:\*{0,2})\s*:\s*#?(\d+)/i);
+      var statusMatch = block.match(/STATUS\s*(?:\*{0,2})\s*:\s*(?:\*{0,2})\s*(TRACKING|CONFIRMED|FADING|INVALIDATED|ESCALATING|STABILIZED|RESOLVED)/i);
+      var notifyMatch = block.match(/NOTIFY\s*(?:\*{0,2})\s*:\s*(?:\*{0,2})\s*(YES|NO)/i);
+      var reasonMatch = block.match(/REASONING\s*(?:\*{0,2})\s*:\s*(.+?)(?:\n|$)/i);
+      var bodyMatch = block.match(/BODY\s*(?:\*{0,2})\s*:\s*([\s\S]*?)(?=(?:(?:\*{0,2})ALERT[_ ]ID|SLATE[_ ]?FOCUS|EMERGING[_ ]GAME|$))/i);
       if (idMatch && statusMatch) {
         var item = {
           alertId: parseInt(idMatch[1]),
@@ -676,10 +677,10 @@ RULES:
       }
     });
 
-    // Parse slate focus
-    var slateMatch = text.match(/SLATE_FOCUS:\s*(.+?)(?:\n|$)/i);
-    var slateNotify = text.match(/SLATE_NOTIFY:\s*(YES|NO)/i);
-    var slateBody = text.match(/SLATE_BODY:\s*([\s\S]*?)(?=(?:EMERGING_GAME:|$))/i);
+    // Parse slate focus — resilient to format variations
+    var slateMatch = text.match(/SLATE[_ ]?FOCUS\s*(?:\*{0,2})\s*:\s*(.+?)(?:\n|$)/i);
+    var slateNotify = text.match(/SLATE[_ ]?NOTIFY\s*(?:\*{0,2})\s*:\s*(?:\*{0,2})\s*(YES|NO)/i);
+    var slateBody = text.match(/SLATE[_ ]?BODY\s*(?:\*{0,2})\s*:\s*([\s\S]*?)(?=(?:(?:\*{0,2})EMERGING[_ ]GAME|$))/i);
     if (slateMatch) {
       parsed.slateFocus = {
         focus: slateMatch[1].trim(),
@@ -688,16 +689,16 @@ RULES:
       };
     }
 
-    // Parse emerging signals
-    var emergingBlocks = text.split(/(?=EMERGING_GAME:)/);
+    // Parse emerging signals — resilient to format variations
+    var emergingBlocks = text.split(/(?=(?:\*{0,2})EMERGING[_ ]GAME(?:\*{0,2})\s*:)/i);
     emergingBlocks.forEach(block => {
-      var gameMatch = block.match(/EMERGING_GAME:\s*(.+?)(?:\n|$)/i);
-      var signalMatch = block.match(/EMERGING_SIGNAL:\s*(MOMENTUM|CONVERGENCE|SUSTAINABILITY_CASCADE|RELATIVE_VALUE|FLOOR_MARGIN_DIVERGENCE)/i);
-      var detailMatch = block.match(/EMERGING_DETAIL:\s*(.+?)(?:\n|$)/i);
-      var confMatch = block.match(/EMERGING_CONFIDENCE:\s*(LOW|MODERATE|HIGH)/i);
-      var eNotify = block.match(/EMERGING_NOTIFY:\s*(YES|NO)/i);
-      var eBody = block.match(/EMERGING_BODY:\s*([\s\S]*?)(?=(?:EMERGING_GAME:|EMERGING_CTRL:|$))/i);
-      var eCtrl = block.match(/EMERGING_CTRL:\s*(\S+)/i);
+      var gameMatch = block.match(/EMERGING[_ ]GAME\s*(?:\*{0,2})\s*:\s*(.+?)(?:\n|$)/i);
+      var signalMatch = block.match(/EMERGING[_ ]SIGNAL\s*(?:\*{0,2})\s*:\s*(?:\*{0,2})\s*(MOMENTUM|CONVERGENCE|SUSTAINABILITY_CASCADE|RELATIVE_VALUE|FLOOR_MARGIN_DIVERGENCE)/i);
+      var detailMatch = block.match(/EMERGING[_ ]DETAIL\s*(?:\*{0,2})\s*:\s*(.+?)(?:\n|$)/i);
+      var confMatch = block.match(/EMERGING[_ ]CONFIDENCE\s*(?:\*{0,2})\s*:\s*(?:\*{0,2})\s*(LOW|MODERATE|HIGH)/i);
+      var eNotify = block.match(/EMERGING[_ ]NOTIFY\s*(?:\*{0,2})\s*:\s*(?:\*{0,2})\s*(YES|NO)/i);
+      var eBody = block.match(/EMERGING[_ ]BODY\s*(?:\*{0,2})\s*:\s*([\s\S]*?)(?=(?:(?:\*{0,2})EMERGING[_ ]GAME|EMERGING[_ ]CTRL|$))/i);
+      var eCtrl = block.match(/EMERGING[_ ]CTRL\s*(?:\*{0,2})\s*:\s*(\S+)/i);
       if (gameMatch && signalMatch) {
         parsed.emerging.push({
           matchup: gameMatch[1].trim(),

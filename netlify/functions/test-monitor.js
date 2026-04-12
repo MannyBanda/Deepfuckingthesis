@@ -189,12 +189,14 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
 
   function parseMonitorPositions(text) {
     var results = [];
-    var blocks = text.split(/(?=ALERT_ID:)/);
+    // Split on any variation: ALERT_ID, Alert ID, **ALERT_ID**, etc.
+    var blocks = text.split(/(?=(?:\*{0,2})ALERT[_ ]ID(?:\*{0,2})\s*:)/i);
     blocks.forEach(block => {
-      var idMatch = block.match(/ALERT_ID:\s*(\d+)/);
-      var statusMatch = block.match(/STATUS:\s*(TRACKING|CONFIRMED|FADING|INVALIDATED|ESCALATING|STABILIZED|RESOLVED)/i);
-      var notifyMatch = block.match(/NOTIFY:\s*(YES|NO)/i);
-      var reasonMatch = block.match(/REASONING:\s*(.+?)(?:\n|$)/i);
+      // Match: ALERT_ID: 200, Alert ID: #200, **ALERT_ID:** 200, etc.
+      var idMatch = block.match(/ALERT[_ ]ID\s*(?:\*{0,2})\s*:\s*#?(\d+)/i);
+      var statusMatch = block.match(/STATUS\s*(?:\*{0,2})\s*:\s*(?:\*{0,2})\s*(TRACKING|CONFIRMED|FADING|INVALIDATED|ESCALATING|STABILIZED|RESOLVED)/i);
+      var notifyMatch = block.match(/NOTIFY\s*(?:\*{0,2})\s*:\s*(?:\*{0,2})\s*(YES|NO)/i);
+      var reasonMatch = block.match(/REASONING\s*(?:\*{0,2})\s*:\s*(.+?)(?:\n|$)/i);
       if (idMatch && statusMatch) {
         results.push({
           alertId: parseInt(idMatch[1]),
@@ -209,12 +211,12 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
 
   function parseEmerging(text) {
     var results = [];
-    var blocks = text.split(/(?=EMERGING_GAME:)/);
+    var blocks = text.split(/(?=(?:\*{0,2})EMERGING[_ ]GAME(?:\*{0,2})\s*:)/i);
     blocks.forEach(block => {
-      var gameMatch = block.match(/EMERGING_GAME:\s*(.+?)(?:\n|$)/i);
-      var signalMatch = block.match(/EMERGING_SIGNAL:\s*(MOMENTUM|CONVERGENCE|SUSTAINABILITY_CASCADE|RELATIVE_VALUE|FLOOR_MARGIN_DIVERGENCE)/i);
-      var confMatch = block.match(/EMERGING_CONFIDENCE:\s*(LOW|MODERATE|HIGH)/i);
-      var eNotify = block.match(/EMERGING_NOTIFY:\s*(YES|NO)/i);
+      var gameMatch = block.match(/EMERGING[_ ]GAME\s*(?:\*{0,2})\s*:\s*(.+?)(?:\n|$)/i);
+      var signalMatch = block.match(/EMERGING[_ ]SIGNAL\s*(?:\*{0,2})\s*:\s*(?:\*{0,2})\s*(MOMENTUM|CONVERGENCE|SUSTAINABILITY_CASCADE|RELATIVE_VALUE|FLOOR_MARGIN_DIVERGENCE)/i);
+      var confMatch = block.match(/EMERGING[_ ]CONFIDENCE\s*(?:\*{0,2})\s*:\s*(?:\*{0,2})\s*(LOW|MODERATE|HIGH)/i);
+      var eNotify = block.match(/EMERGING[_ ]NOTIFY\s*(?:\*{0,2})\s*:\s*(?:\*{0,2})\s*(YES|NO)/i);
       if (gameMatch && signalMatch) {
         results.push({
           matchup: gameMatch[1].trim(),
