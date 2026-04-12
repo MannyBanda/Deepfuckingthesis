@@ -217,12 +217,14 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       var signalMatch = block.match(/EMERGING[_ ]SIGNAL\s*(?:\*{0,2})\s*:\s*(?:\*{0,2})\s*(MOMENTUM|CONVERGENCE|SUSTAINABILITY_CASCADE|RELATIVE_VALUE|FLOOR_MARGIN_DIVERGENCE)/i);
       var confMatch = block.match(/EMERGING[_ ]CONFIDENCE\s*(?:\*{0,2})\s*:\s*(?:\*{0,2})\s*(LOW|MODERATE|HIGH)/i);
       var eNotify = block.match(/EMERGING[_ ]NOTIFY\s*(?:\*{0,2})\s*:\s*(?:\*{0,2})\s*(YES|NO)/i);
+      var detailMatch = block.match(/EMERGING[_ ]DETAIL\s*(?:\*{0,2})\s*:\s*(.+?)(?:\n|$)/i);
       if (gameMatch && signalMatch) {
         results.push({
           matchup: gameMatch[1].trim(),
           signal: signalMatch[1].toUpperCase(),
           confidence: confMatch ? confMatch[1].toUpperCase() : 'LOW',
           notify: eNotify ? eNotify[1].toUpperCase() === 'YES' : false,
+          detail: detailMatch ? detailMatch[1].trim() : '',
         });
       }
     });
@@ -455,6 +457,7 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
         if (match) {
           pass = match.confidence !== 'LOW' ? 'PASS' : 'FAIL';
           actual = `${match.signal} ${match.confidence} notify=${match.notify}`;
+          reasoning = match.detail;
         } else {
           actual = 'Emerging signal not found';
           reasoning = 'Raw: ' + r.text.substring(0, 500);
