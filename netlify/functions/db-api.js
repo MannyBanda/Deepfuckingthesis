@@ -323,6 +323,12 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS conviction_tier TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS conviction_combo TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS ntfy_sent BOOLEAN`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS monitor_status TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS monitor_reasoning TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS monitor_ts TIMESTAMPTZ`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS parent_alert_id INTEGER`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS emerging_signal TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE poll_state ADD COLUMN IF NOT EXISTS monitor_last_run TIMESTAMPTZ`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS conviction_tier TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS conviction_combo TEXT`; } catch(e) {}
 

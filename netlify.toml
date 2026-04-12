@@ -24,6 +24,9 @@
 [functions."test-agent"]
   timeout = 60
 
+[functions."poll-live-bdl"]
+  timeout = 120
+
 [[headers]]
   for = "/*"
   [headers.values]
