@@ -393,6 +393,85 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
         quarterSummary: 'Q1: 28-24 pts, paint 16-10, TO 2-4\nQ2: 24-18 pts\nQ3: 14-30 pts (BOS takeover)\nQ4: 12-14 pts',
       },
     },
+
+    // ── REAL DATA: SAC@GSW Apr 10 — GSW peak run (Q4 10:50) ───────────────
+    // SAC had BUY-level control from Q2 5:23 (floor 0.86, I4 1.00).
+    // GSW went on a 13-2 run to go up 95-84. Floor dropped 0.73→0.52, I4 went 1.00→0.50.
+    // SAC won 124-118. This tests whether the monitor correctly calls FADING (not INVALIDATED).
+
+    '8': {
+      name: 'REAL DATA SAC@GSW: GSW peak run — floor dropped, I4 went even — should FADE',
+      type: 'monitor',
+      expected: { alertId: 300, status: 'FADING', notify: true },
+      ctx: {
+        activeAlerts: [{
+          alertId: 300, gameId: 'gsw_sac', matchup: 'GSW@SAC', alertType: 'BUY', alertTier: 'CANDIDATE',
+          controlTeam: 'SAC', floorAtAlert: 0.73, marginAtAlert: 1, edgeAtAlert: 28.0,
+          mlAtAlert: '+500', convictionAtAlert: 'STRONG',
+          periodAtAlert: 3, clockAtAlert: '0:53', minutesSinceSent: 14,
+          // Q4 10:50: GSW up 95-84, floor flipped to GSW 0.52, I4 dropped to 0.50
+          currentFloor: 0.52, currentMargin: -11, currentPeriod: 4, currentClock: '10:50',
+          currentI4: 0.50, currentTpClass: 'UNLIKELY', currentLsClass: null,
+          floorTrajectory: [0.73, 0.73, 0.60, 0.53, 0.52],
+          controlTeamLeading: false, tookLead: false, lostLead: true,
+        }],
+        leadThreats: [],
+        liveGames: [
+          { gameId: 'gsw_sac', matchup: 'GSW@SAC', floor: 0.52, controlTeam: 'SAC', margin: -11, period: 4, clock: '10:50', hasActiveAlert: true },
+        ],
+        emergingCandidates: [],
+      },
+    },
+
+    // ── REAL DATA: SAC@GSW Apr 10 — SAC recovery (Q4 6:48) ────────────────
+    // SAC fought back from down 11 to tie 98-98. Floor recovered 0.52→0.65, I4 snapped back to 1.00.
+    // Monitor previously called FADING. Now the thesis is rebuilding. Should call CONFIRMED.
+
+    '9': {
+      name: 'REAL DATA SAC@GSW: SAC recovery to tie — floor + I4 rebuilt — should CONFIRM',
+      type: 'monitor',
+      expected: { alertId: 300, status: 'CONFIRMED', notify: true },
+      ctx: {
+        activeAlerts: [{
+          alertId: 300, gameId: 'gsw_sac', matchup: 'GSW@SAC', alertType: 'BUY', alertTier: 'CANDIDATE',
+          controlTeam: 'SAC', floorAtAlert: 0.73, marginAtAlert: 1, edgeAtAlert: 28.0,
+          mlAtAlert: '+500', convictionAtAlert: 'STRONG',
+          periodAtAlert: 3, clockAtAlert: '0:53', minutesSinceSent: 22,
+          // Q4 6:48: Tied 98-98, floor back to SAC 0.65, I4 back to 1.00
+          currentFloor: 0.65, currentMargin: 0, currentPeriod: 4, currentClock: '6:48',
+          currentI4: 1.00, currentTpClass: null, currentLsClass: null,
+          floorTrajectory: [0.52, 0.53, 0.53, 0.65, 0.65],
+          controlTeamLeading: false, tookLead: false, lostLead: false,
+        }],
+        leadThreats: [],
+        liveGames: [
+          { gameId: 'gsw_sac', matchup: 'GSW@SAC', floor: 0.65, controlTeam: 'SAC', margin: 0, period: 4, clock: '6:48', hasActiveAlert: true },
+        ],
+        emergingCandidates: [],
+      },
+    },
+
+    // ── REAL DATA: Alert agent reads monitor FADING→CONFIRMED arc ──────────
+    // New CANDIDATE BUY fires at Q4 6:48 (tied). Prior alerts show BUY → FADING → CONFIRMED.
+    // The structural thesis weathered GSW's run and rebuilt. Agent should SEND with confidence.
+
+    '10': {
+      name: 'REAL DATA alert agent: CANDIDATE BUY after FADING→CONFIRMED arc — should SEND',
+      type: 'alertagent',
+      expected: 'SEND',
+      ctx: {
+        alertType: 'BUY', alertTier: 'CANDIDATE', controlTeam: 'SAC', floor: '0.65', margin: 0, isTrailing: false,
+        period: 4, clock: '6:48', minsLeft: '6.8', convictionTier: 'STRONG', convictionCombo: 'I1+I4',
+        convictionPairs: 'I4+I5', edge: 15, ml: '+180', spread: '+3.5',
+        tpClass: null, lsClass: null, ctrlSust: 'DURABLE', oppSust: 'FRAGILE',
+        i1: '0.70', i2: '0.55', i3: '0.50', i4: '1.00', i5: '0.60',
+        indicatorsWon: 3, indWon: 'I1+I4+I5', indLost: '',
+        i4Decisive: true, i4Won: true, i4Combo: true,
+        floorHistory: 'Q4 6:48: SAC 0.65 (98-98) TP:?\nQ4 8:56: SAC 0.53 (92-95) TP:STRONG RECOVERY\nQ4 10:50: GSW 0.52 (84-95) I4:0.50\nQ3 0:53: SAC 0.73 (82-83) TP:STRONG RECOVERY',
+        priorAlerts: 'BUY[CANDIDATE] Q3 0:53: floor 0.73, margin 1 leading, conv STRONG(I1+I4+I5) → SEND\n  └── Monitor: FADING (Q4 10:50) — floor dropped to 0.52, I4 went even, GSW on 13-2 run\n  └── Monitor: CONFIRMED (Q4 6:48) — SAC fought back to tie, floor recovered to 0.65, I4 back to 1.00',
+        quarterSummary: 'Q1: 32-27 pts (GSW-SAC)\nQ2: 19-36 pts (SAC dominant)\nQ3: 38-19 pts (GSW surge)\nQ4: 9-16 pts (SAC clawing back)',
+      },
+    },
   };
 
   // ── TEST RUNNER ─────────────────────────────────────────────────────────
@@ -402,7 +481,8 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
   else if (testParam === 'positions') testKeys = ['1', '2', '3', '4'];
   else if (testParam === 'threats') testKeys = ['5'];
   else if (testParam === 'emerging') testKeys = ['6'];
-  else if (testParam === 'alertagent') testKeys = ['7'];
+  else if (testParam === 'alertagent') testKeys = ['7', '10'];
+  else if (testParam === 'realdata') testKeys = ['8', '9', '10'];
   else if (scenarios[testParam]) testKeys = [testParam];
   else return new Response(JSON.stringify({ error: 'Unknown test: ' + testParam }));
 
