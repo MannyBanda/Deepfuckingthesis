@@ -186,7 +186,23 @@ ${ctx.priorAlerts || 'None'}
 
 QUARTER PERFORMANCE:
 ${ctx.quarterSummary || 'N/A'}
-${ctx.learningsContext ? '\n' + ctx.learningsContext + '\n' : ''}
+${ctx.learningsContext ? '\n' + ctx.learningsContext + '\n' : ''}${ctx.priorPosition ? `
+POSITION UPDATE CONTEXT:
+This is a position update for a previously sent alert — NOT a new signal.
+Prior alert: ${ctx.priorPosition.alertType} for ${ctx.priorPosition.controlTeam} at Q${ctx.priorPosition.period} ${ctx.priorPosition.clock} (${ctx.priorPosition.minutesSince} min ago)
+  Floor then: ${ctx.priorPosition.floor} → now: ${ctx.floor} | Margin then: ${ctx.priorPosition.margin} → now: ${ctx.margin}
+  Conviction then: ${ctx.priorPosition.conviction}(${ctx.priorPosition.combo}) → now: ${ctx.convictionTier}(${ctx.convictionCombo})
+  Sust then: ${ctx.priorPosition.ctrlSust}/${ctx.priorPosition.oppSust} → now: ${ctx.ctrlSust}/${ctx.oppSust}
+  Control team ${ctx.priorPosition.sameTeam ? 'UNCHANGED' : 'SHIFTED — was ' + ctx.priorPosition.controlTeam + ', now ' + ctx.controlTeam}
+
+YOUR JOB: Assess whether the prior position is HOLDING, IMPROVING, or DETERIORATING.
+- SEND if meaningful new info the bettor should know: floor shift >0.10, conviction upgrade/downgrade, lead expanding/contracting significantly, sustainability flip, or control team change
+- SUPPRESS if conditions essentially unchanged — do not spam "still winning" updates
+- If control team SHIFTED from the prior alert: this is critical info, strongly favor SEND to warn the bettor
+- Your BODY must reference the prior alert and explain what changed. Lead with the position status.
+  Example BODY: "Your Q2 BWC position is secure — floor climbed from 0.83 to 1.00, conviction upgraded to DOMINANT. Lead expanded to 12."
+  Example BODY: "Your Q2 BWC position at risk — control shifted to opponent, floor dropped from 0.75 to 0.55. Consider exiting."
+` : ''}
 RULES:
 - FIRED alerts passed all mechanical thresholds. You should SEND unless you see a clear structural contradiction. Check the indicator breakdown:
   • I4 COMBO YES (I4 + another agrees): highest conviction — SEND with confidence
@@ -3758,6 +3774,34 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           }
         }
 
+        // ── 10a. POSITION GATE — auto-analysis only sends as position updates ──
+        // Query for most recent SENT actionable alert for this game
+        const POSITION_TYPES = ['BUY', 'BUY WINDOW CLOSING', 'WINDOW BUY', 'RECOVERY PATH', 'LEAD CRUMBLING', 'LEAD LOST', 'VARIANCE BREAKING'];
+        let priorPosition = null;
+        try {
+          const priorRows = await sql`
+            SELECT alert_type, period, clock, control_team, floor_score, margin,
+              is_trailing, edge, ml, conviction_tier, conviction_combo, ts,
+              ctrl_sust, opp_sust, agent_reasoning
+            FROM alerts
+            WHERE game_id = ${game.id} AND ntfy_sent = true
+              AND alert_type = ANY(${POSITION_TYPES})
+            ORDER BY ts DESC LIMIT 1`;
+          if (priorRows.length > 0) priorPosition = priorRows[0];
+        } catch (e) { /* non-fatal — fall back to suppress */ }
+
+        if (!priorPosition) {
+          // No prior actionable position — suppress without calling agent (save Sonnet API call)
+          const aaReasoning = 'No prior actionable alert sent for this game — auto-analysis suppressed (position gate)';
+          try {
+            await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent)
+              VALUES (${game.id}, ${league}, ${'AUTO_ANALYSIS'}, ${period}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${aaEdge}, ${aaML ? parseInt(aaML) : null}, ${odds?.homeSpread ? parseFloat(odds.homeSpread) : null}, ${tpClass}, ${lsClass}, ${ctrlSust}, ${oppSust}, ${clientCtx?.rollingWindow?.score ?? null}, ${'ANALYSIS'}, ${'SUPPRESS'}, ${aaReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${calConviction.tier}, ${calConviction.combo}, ${false})`;
+          } catch (e) { log(`${matchup}: ${triggerTag} position-gate alert save failed: ${e.message}`); }
+          log(`${matchup}: ${triggerTag} suppressed — no prior actionable position`);
+        } else {
+        // Prior position exists — route through agent as position update
+        const priorMinutesSince = Math.round((Date.now() - new Date(priorPosition.ts).getTime()) / 60000);
+
         // Gather agent context (floor history + prior alerts)
         const agentCtx = await gatherAgentContext(sql, game.id, matchup);
 
@@ -3792,6 +3836,22 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           sonnetRisk: parsed.risk,
           sonnetDisagreement: parsed.disagreement,
           triggerType: 'auto_analysis',
+          // Position update context
+          priorPosition: priorPosition ? {
+            alertType: priorPosition.alert_type,
+            controlTeam: priorPosition.control_team,
+            floor: Number(priorPosition.floor_score).toFixed(2),
+            margin: priorPosition.margin,
+            isTrailing: priorPosition.is_trailing,
+            period: priorPosition.period,
+            clock: priorPosition.clock,
+            conviction: priorPosition.conviction_tier,
+            combo: priorPosition.conviction_combo,
+            ctrlSust: priorPosition.ctrl_sust,
+            oppSust: priorPosition.opp_sust,
+            minutesSince: priorMinutesSince,
+            sameTeam: priorPosition.control_team === ind.controlTeam,
+          } : null,
         });
 
         const aaDecision = agentResult?.decision || 'SUPPRESS';
@@ -3818,31 +3878,43 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
             log(`${matchup}: ${triggerTag} agent SEND — ntfy suppressed (mechanical alert already sent Q${period})`);
           } else {
             const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${period} ${clock}`;
-            const ntfyTitle = `[${calConviction.tier}] ${ind.controlTeam} — ${matchup}`;
+            // Position-update title and body
+            const pp = priorPosition;
+            const sameTeam = pp.control_team === ind.controlTeam;
+            const floorDelta = ind.score - Number(pp.floor_score);
+            const statusWord = !sameTeam ? 'AT RISK' : floorDelta > 0.1 ? 'IMPROVING' : floorDelta < -0.1 ? 'FADING' : 'HOLDING';
+            const ntfyTitle = `UPDATE: ${pp.control_team} ${pp.alert_type} Q${pp.period} ${statusWord}`;
+            // Agent writes the body via BODY: response, use it if available
+            const agentBody = agentResult?.body || '';
             const ntfyBody = scoreLine
-              + (parsed.narrative ? `\n${parsed.narrative}` : `\nStructural control: ${ind.controlTeam} ${ind.score.toFixed(2)}`)
-              + (parsed.fwp ? `\nFWP: ${parsed.fwp}` : '')
-              + (parsed.risk && parsed.risk !== 'NONE' ? `\nRisk: ${parsed.risk}` : '')
-              + `\n[${triggerTag} · ${calConviction.combo}]`;
+              + (agentBody ? `\n${agentBody}` : (
+                `\nYour Q${pp.period} ${pp.alert_type} position`
+                + (sameTeam ? `: floor ${Number(pp.floor_score).toFixed(2)} -> ${ind.score.toFixed(2)}, ${statusWord.toLowerCase()}`
+                  : `: control shifted to ${ind.controlTeam} — position at risk`)
+                + (parsed.risk && parsed.risk !== 'NONE' ? `\nRisk: ${parsed.risk}` : '')
+              ))
+              + `\n[position update · ${triggerTag}]`;
             await sendNtfy(ntfyTitle, ntfyBody, calConviction.tier === 'DOMINANT' ? 5 : 4);
-            log(`${matchup}: ${triggerTag} agent SEND — ${calConviction.tier}`);
+            log(`${matchup}: ${triggerTag} position update SEND — ${statusWord} (prior: ${pp.alert_type} Q${pp.period})`);
           }
         } else if (aaDecision === 'DOWNGRADE') {
           if (mechAlreadySent) {
             log(`${matchup}: ${triggerTag} agent WATCH — ntfy suppressed (mechanical alert already sent Q${period})`);
           } else {
             const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${period} ${clock}`;
-            const ntfyTitle = `WATCH ${ind.controlTeam} — ${matchup}`;
+            const pp = priorPosition;
+            const ntfyTitle = `WATCH: ${pp.control_team} ${pp.alert_type} Q${pp.period} — ${matchup}`;
+            const agentBody = agentResult?.body || '';
             const ntfyBody = scoreLine
-              + (parsed.narrative ? `\n${parsed.narrative}` : '')
-              + (parsed.fwp ? `\nFWP: ${parsed.fwp}` : '')
-              + `\n[${triggerTag} · ${calConviction.tier}]`;
+              + (agentBody ? `\n${agentBody}` : `\nYour Q${pp.period} position needs attention`)
+              + `\n[position update · ${triggerTag}]`;
             await sendNtfy(ntfyTitle, ntfyBody, 3);
-            log(`${matchup}: ${triggerTag} agent WATCH — ${aaReasoning}`);
+            log(`${matchup}: ${triggerTag} position update WATCH — ${aaReasoning}`);
           }
         } else {
           log(`${matchup}: ${triggerTag} agent silent — ${aaReasoning || 'no signal'}`);
         }
+        } // ← close prior position else block
       } catch (e) {
         log(`${matchup}: ${triggerTag} agent routing failed: ${e.message}`);
       }

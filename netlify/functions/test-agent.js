@@ -108,15 +108,17 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       priorAlerts:'BWC[FIRED] Q3 12:00: floor 0.80, margin 8 leading -> SEND\nLEAD CRUMBLING Q4 10:00: floor 0.68, margin 4',
       quarterSummary:'Q1: 28-24\nQ2: 28-24\nQ3: 16-24 pts (opponent surge)\nQ4: 12-18 pts'
     }},
-    '5': { name: 'AUTO_ANALYSIS Q3 with prior Q2 analysis (cross-alert)', expected: 'SEND', ctx: {
+    '5': { name: 'AUTO_ANALYSIS position update — prior BWC holding, floor improved', expected: 'SEND', ctx: {
       alertType:'AUTO_ANALYSIS', alertTier:'ANALYSIS', controlTeam:'ORL', floor:'0.83', margin:5, isTrailing:false,
       period:3, clock:'12:00', minsLeft:'12.0', convictionTier:'DOMINANT', convictionCombo:'I1+I2+I3+I4', convictionPairs:'I3+I4',
       edge:18.5, ml:'-280', spread:'-6.5', tpClass:null, lsClass:'SAFE', ctrlSust:'LOCKED IN', oppSust:'FRAGILE',
       i1:'0.85', i2:'0.90', i3:'0.80', i4:'0.95', i5:'0.70', indicatorsWon:5, indWon:'I1+I2+I3+I4+I5', indLost:'',
       i4Decisive:true, i4Won:true, i4Combo:true,
       floorHistory:'Q2 6:00: ORL 0.78 (48-44) LS:CUSHIONED\nQ2 12:00: ORL 0.72 (28-26) LS:CUSHIONED',
-      priorAlerts:'AUTO_ANALYSIS[ANALYSIS] Q2 12:00: floor 0.72, margin 2 leading, sust LOCKED IN/FRAGILE, conv STRONG(I1+I3+I4) -> SEND: ORL dominant control, opponent unsustainable',
-      quarterSummary:'Q1: 28-26 pts, paint 18-10, TO 2-5\nQ2: 20-18 pts'
+      priorAlerts:'BWC[FIRED] Q2 6:00: floor 0.72, margin 4 leading, sust LOCKED IN/FRAGILE, conv STRONG(I1+I3+I4) -> SEND',
+      quarterSummary:'Q1: 28-26 pts, paint 18-10, TO 2-5\nQ2: 20-18 pts',
+      triggerType:'auto_analysis',
+      priorPosition: { alertType:'BUY WINDOW CLOSING', controlTeam:'ORL', floor:'0.72', margin:4, isTrailing:false, period:2, clock:'6:00', conviction:'STRONG', combo:'I1+I3+I4', ctrlSust:'LOCKED IN', oppSust:'FRAGILE', minutesSince:35, sameTeam:true },
     }},
     '6': { name: 'CANDIDATE WINDOW BUY floor 0.83 (ORL missed case fix)', expected: 'SEND', ctx: {
       alertType:'WINDOW BUY', alertTier:'CANDIDATE', controlTeam:'ORL', floor:'0.83', margin:3, isTrailing:false,
@@ -148,13 +150,37 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       priorAlerts:'BUY[FIRED] Q2 4:30: floor 0.72, margin 6 trailing, sust DURABLE/FRAGILE, conv STRONG(I1+I4+I5) → SEND\n  └── Monitor: CONFIRMED — SAC took the lead, floor holding at 0.70, I4 still won, structural thesis intact',
       quarterSummary:'Q1: 24-30 pts, paint 16-10, TO 2-5\nQ2: 24-18 pts\nQ3: 20-16 pts'
     }},
+    '9': { name: 'AUTO_ANALYSIS position update — control shifted, warn bettor', expected: 'SEND', ctx: {
+      alertType:'AUTO_ANALYSIS', alertTier:'ANALYSIS', controlTeam:'GSW', floor:'0.62', margin:3, isTrailing:false,
+      period:4, clock:'12:00', minsLeft:'12.0', convictionTier:'MODEST', convictionCombo:'I3+I5', convictionPairs:'',
+      edge:4.2, ml:'-160', spread:'-2.5', tpClass:null, lsClass:'AT RISK', ctrlSust:'MIXED', oppSust:'LOCKED IN',
+      i1:'0.50', i2:'0.40', i3:'0.70', i4:'0.50', i5:'0.65', indicatorsWon:2, indWon:'I3+I5', indLost:'I2',
+      i4Decisive:false, i4Won:false, i4Combo:false,
+      floorHistory:'Q3 6:00: LAC 0.75 (82-78) LS:CUSHIONED\nQ3 12:00: LAC 0.68 (66-64) LS:SAFE',
+      priorAlerts:'BWC[FIRED] Q2 6:00: floor 0.75, margin 4 leading, sust LOCKED IN/COLD, conv CONDITIONAL(I1+I2+I5) -> SEND',
+      quarterSummary:'Q1: 28-26\nQ2: 30-24\nQ3: 24-30 (opponent surge)',
+      triggerType:'auto_analysis',
+      priorPosition: { alertType:'BUY WINDOW CLOSING', controlTeam:'LAC', floor:'0.75', margin:4, isTrailing:false, period:2, clock:'6:00', conviction:'CONDITIONAL', combo:'I1+I2+I5', ctrlSust:'LOCKED IN', oppSust:'COLD', minutesSince:55, sameTeam:false },
+    }},
+    '10': { name: 'AUTO_ANALYSIS position update — nothing changed, suppress spam', expected: 'SUPPRESS', ctx: {
+      alertType:'AUTO_ANALYSIS', alertTier:'ANALYSIS', controlTeam:'MIN', floor:'0.85', margin:8, isTrailing:false,
+      period:4, clock:'12:00', minsLeft:'12.0', convictionTier:'DOMINANT', convictionCombo:'I1+I2+I3+I4+I5', convictionPairs:'I4+I5,I3+I4',
+      edge:12, ml:'-500', spread:'-7.5', tpClass:null, lsClass:'SAFE', ctrlSust:'LOCKED IN', oppSust:'COLD',
+      i1:'1.00', i2:'1.00', i3:'1.00', i4:'1.00', i5:'1.00', indicatorsWon:5, indWon:'I1+I2+I3+I4+I5', indLost:'',
+      i4Decisive:true, i4Won:true, i4Combo:true,
+      floorHistory:'Q3 6:00: MIN 0.85 (92-84) LS:SAFE\nQ3 12:00: MIN 0.83 (68-62) LS:SAFE',
+      priorAlerts:'BWC[FIRED] Q2 6:00: floor 0.83, margin 5 leading, sust LOCKED IN/COLD, conv STRONG(I2+I3+I4) -> SEND\nAUTO_ANALYSIS[ANALYSIS] Q3 12:00: floor 0.85, margin 8 leading -> SEND: position holding',
+      quarterSummary:'Q1: 30-28\nQ2: 28-24\nQ3: 34-32',
+      triggerType:'auto_analysis',
+      priorPosition: { alertType:'BUY WINDOW CLOSING', controlTeam:'MIN', floor:'0.83', margin:5, isTrailing:false, period:2, clock:'6:00', conviction:'STRONG', combo:'I2+I3+I4', ctrlSust:'LOCKED IN', oppSust:'COLD', minutesSince:70, sameTeam:true },
+    }},
   };
 
   let testKeys = [];
   if (testParam === 'all') testKeys = Object.keys(scenarios);
   else if (testParam === 'fired') testKeys = ['1', '4', '7', '8'];
   else if (testParam === 'candidate') testKeys = ['2', '3', '6'];
-  else if (testParam === 'auto') testKeys = ['5'];
+  else if (testParam === 'auto') testKeys = ['5', '9', '10'];
   else if (scenarios[testParam]) testKeys = [testParam];
   else return new Response(JSON.stringify({ error: 'Unknown test: ' + testParam }));
 
