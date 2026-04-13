@@ -37,9 +37,18 @@ QUARTER PERFORMANCE:
 ${ctx.quarterSummary || 'N/A'}
 ${ctx.learningsContext ? '\n' + ctx.learningsContext + '\n' : ''}${ctx.priorPosition ? `
 POSITION UPDATE CONTEXT:
+This is a position update for a previously sent alert — NOT a new signal.
 Prior alert: ${ctx.priorPosition.alertType} for ${ctx.priorPosition.controlTeam} at Q${ctx.priorPosition.period} ${ctx.priorPosition.clock} (${ctx.priorPosition.minutesSince} min ago)
   Floor then: ${ctx.priorPosition.floor} -> now: ${ctx.floor} | Margin then: ${ctx.priorPosition.margin} -> now: ${ctx.margin}
-  Control team ${ctx.priorPosition.sameTeam ? 'UNCHANGED' : 'SHIFTED'}
+  Conviction then: ${ctx.priorPosition.conviction || 'N/A'}(${ctx.priorPosition.combo || 'N/A'}) -> now: ${ctx.convictionTier}(${ctx.convictionCombo})
+  Sust then: ${ctx.priorPosition.ctrlSust || 'N/A'}/${ctx.priorPosition.oppSust || 'N/A'} -> now: ${ctx.ctrlSust}/${ctx.oppSust}
+  Control team ${ctx.priorPosition.sameTeam ? 'UNCHANGED' : 'SHIFTED — was ' + ctx.priorPosition.controlTeam + ', now ' + ctx.controlTeam}
+
+YOUR JOB: Assess whether the prior position is HOLDING, IMPROVING, or DETERIORATING.
+- SEND if meaningful new info the bettor should know: floor shift >0.10, conviction upgrade/downgrade, lead expanding/contracting significantly, sustainability flip, or control team change
+- SUPPRESS if conditions essentially unchanged — do not spam "still winning" updates
+- If control team SHIFTED from the prior alert: this is critical info, strongly favor SEND to warn the bettor
+- Your BODY must reference the prior alert and explain what changed. Lead with the position status.
 ` : ''}
 RULES:
 - FIRED alerts: SEND unless clear structural contradiction. I4 COMBO YES = SEND. I4 COMBO NO = SUPPRESS unless 4/5 indicators. I1+I2 only = effort-based, DOWNGRADE. Floor trending DOWN = consider SUPPRESS.
