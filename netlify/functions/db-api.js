@@ -163,9 +163,11 @@ exports.handler = async (event) => {
       // Per-side transition alert tracking (fixes control-flip false fires)
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_home_tp_class TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_home_ls_class TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_home_ls_margin INTEGER`; } catch(e) {}
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_home_opp_sust TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_away_tp_class TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_away_ls_class TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_away_ls_margin INTEGER`; } catch(e) {}
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_away_opp_sust TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS home_lead_degraded_at TIMESTAMPTZ`; } catch(e) {}
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS away_lead_degraded_at TIMESTAMPTZ`; } catch(e) {}

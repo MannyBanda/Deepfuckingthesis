@@ -4917,11 +4917,20 @@ export default async function(req) {
 
             if (ind.score >= 0.65 && ctrlTrailing && margin >= 1 && margin <= 15 && currentPeriod >= 2 && alertMinsLeft >= 1.0) {
               // TP computed above — passed to agent as context, NOT used as gate
-              alertType = 'BUY';
-              alertTier = 'FIRED';
-              alertEmoji = '🟢';
-              alertPriority = 5;
-            } else if (ind.score >= 0.60 && ctrlLeading && margin >= 2 && currentPeriod >= 2) {
+              // ML gate: heavy favorites trailing have no betting value
+              const buyMLNum = ctrlML ? parseFloat(ctrlML) : null;
+              if (buyMLNum !== null && buyMLNum < -400) {
+                log(`${matchup}: BUY suppressed — ML ${ctrlML} (line cemented, no value)`);
+              } else if (buyMLNum !== null && buyMLNum < -250) {
+                log(`${matchup}: BUY downgraded to CANDIDATE — ML ${ctrlML} (heavy favorite trailing)`);
+                // Falls through to CANDIDATE block below
+              } else {
+                alertType = 'BUY';
+                alertTier = 'FIRED';
+                alertEmoji = '🟢';
+                alertPriority = 5;
+              }
+            } else if (ind.score >= 0.60 && ctrlLeading && margin >= 2 && currentPeriod >= 2 && alertMinsLeft >= 1.0) {
               // BWC with ML gate — no value betting heavy favorites
               const ctrlMLNum = ctrlML ? parseFloat(ctrlML) : null;
               if (ctrlMLNum !== null && ctrlMLNum < -250) {
@@ -4943,7 +4952,14 @@ export default async function(req) {
               } else if (garbageLine) {
                 log(`${matchup}: BWC skipped — line dead (garbage MLs)`);
               } else if (ctrlMLNum === null) {
-                log(`${matchup}: BWC skipped — no odds data`);
+                // No odds data — route to agent as CANDIDATE if structural gates pass
+                const lsClass = lsForBWC?.classification || null;
+                if (lsClass !== 'AT RISK' && lsClass !== 'CRITICAL' && ctrlSust !== 'FRAGILE' && ctrlSust !== 'UNSUSTAINABLE') {
+                  alertType = 'BUY WINDOW CLOSING'; alertTier = 'CANDIDATE'; alertEmoji = '🔵'; alertPriority = 3;
+                  log(`${matchup}: BWC CANDIDATE — no odds data, routing to agent`);
+                } else {
+                  log(`${matchup}: BWC skipped — no odds + structural concern (LS:${lsClass} sust:${ctrlSust})`);
+                }
               }
             }
 
@@ -4953,7 +4969,7 @@ export default async function(req) {
             if (!alertType && currentPeriod >= 2 && ind.controlTeam && ind.controlTeam !== 'Neither') {
               const inRange = ctrlMargin >= -15 && ctrlMargin <= 5;
               const floorBaseline = ind.score >= 0.45;
-              const sustGood = ctrlSust === 'LOCKED IN' || ctrlSust === 'DURABLE';
+              const sustGood = ctrlSust === 'LOCKED IN' || ctrlSust === 'DURABLE' || ctrlSust === 'COLD';
               // Clock gate: suppress WB with < 1 min left in game (unbettable) — uses shared alertMinsLeft
               if (alertMinsLeft < 1.0 && inRange && floorBaseline && sustGood) log(`${matchup}: WINDOW BUY suppressed — ${alertMinsLeft.toFixed(1)} min left (< 1 min clock gate)`);
               if (inRange && floorBaseline && sustGood && alertMinsLeft >= 1.0) {
@@ -5005,6 +5021,14 @@ export default async function(req) {
                   alertType = 'BUY'; alertTier = 'CANDIDATE'; alertEmoji = '🟢'; alertPriority = 4;
                   log(`${matchup}: BUY CANDIDATE — margin ${margin} above 15-pt cap`);
               }
+              // CANDIDATE BUY: heavy favorite trailing (ML -250 to -400, line shopping opportunity)
+              if (!alertType && ind.score >= 0.65 && ctrlTrailing && margin >= 1 && margin <= 15) {
+                const buyMLNum = ctrlML ? parseFloat(ctrlML) : null;
+                if (buyMLNum !== null && buyMLNum >= -400 && buyMLNum < -250) {
+                  alertType = 'BUY'; alertTier = 'CANDIDATE'; alertEmoji = '🟢'; alertPriority = 4;
+                  log(`${matchup}: BUY CANDIDATE — ML ${ctrlML} heavy favorite (line shopping opportunity)`);
+                }
+              }
               // (REMOVED: CANDIDATE BUY TP CONTESTED — dead code after TP gate removal.
               //  Floor ≥0.65 trailing with TP CONTESTED now fires as FIRED BUY directly.)
               // CANDIDATE BWC: ctrl sust FRAGILE (normally blocks FIRED BWC)
@@ -5050,10 +5074,23 @@ export default async function(req) {
             }
 
             if (alertType) {
-              const alertKey = `${game.id}_${alertType}_${alertTier}_Q${currentPeriod}`;
-              if (!game._lastAlert || game._lastAlert !== alertKey) {
-                game._lastAlert = alertKey;
-                cacheUpdated = true;
+              // Per-type dedup: re-fire after 5 min OR if floor improved by 0.10+
+              if (!game._alertHistory) game._alertHistory = {};
+              const dedupKey = alertType; // per-type, not per-quarter
+              const lastFired = game._alertHistory[dedupKey];
+              const minsSinceLast = lastFired ? (Date.now() - lastFired.ts) / 60000 : Infinity;
+              const floorDelta = lastFired ? ind.score - lastFired.floor : Infinity;
+              const dedupPass = minsSinceLast >= 5 || floorDelta >= 0.10;
+
+              if (!dedupPass) {
+                log(`${matchup}: ${alertType} deduped — ${minsSinceLast.toFixed(1)}min since last, floor delta ${floorDelta >= 0 ? '+' : ''}${floorDelta.toFixed(2)}`);
+                alertType = null;
+              }
+            }
+
+            if (alertType) {
+              game._alertHistory[alertType] = { ts: Date.now(), floor: ind.score, period: currentPeriod };
+              cacheUpdated = true;
                 const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
                 const oppAlias = ctrlIsHome ? aA : hA;
 
@@ -5214,7 +5251,6 @@ export default async function(req) {
                     VALUES (${game.id}, ${league}, ${alertType}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal}, ${tpForBuy?.classification || null}, ${lsForBWC?.classification || null}, ${ctrlSust}, ${oppSustTier}, ${wbWindowScore}, ${tpRatio}, ${alertTier}, ${agentDecision}, ${agentReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${conviction.tier}, ${conviction.combo}, ${shouldSend})`;
                 } catch (e) { log(`${matchup}: alert save failed: ${e.message}`); }
                 log(`${matchup}: ${alertEmoji} ${alertType} ${alertTier} ${agentDecision} — ${ind.controlTeam} ${ind.score.toFixed(2)} ${ctrlTrailing ? 'trailing' : 'leading'} by ${margin}${ctrlEdge != null ? ', edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}${oppSustTier ? ', opp ' + oppSustTier : ''}`);
-              }
             }
           }
           // ── TRANSITION ALERTS (throughput/lead safety/sustainability) ──────
@@ -5232,8 +5268,8 @@ export default async function(req) {
 
               // Read per-side previous values (home reads home prev, away reads away prev)
               const prevRows = await sql`SELECT
-                prev_home_tp_class, prev_home_ls_class, prev_home_opp_sust,
-                prev_away_tp_class, prev_away_ls_class, prev_away_opp_sust
+                prev_home_tp_class, prev_home_ls_class, prev_home_ls_margin, prev_home_opp_sust,
+                prev_away_tp_class, prev_away_ls_class, prev_away_ls_margin, prev_away_opp_sust
                 FROM games WHERE id = ${game.id}`;
               const prev = prevRows.length > 0 ? prevRows[0] : {};
               const sidePrefix = ctrlIsHome ? 'prev_home' : 'prev_away';
@@ -5290,7 +5326,7 @@ export default async function(req) {
               // ALERT 2: LEAD CRUMBLING (state alert) / LEAD LOST (transition)
               // LEAD CRUMBLING: leading 5+ pts + LS vulnerable + floor >= 0.55
               // Leads < 5 fluctuate naturally — only alert when a meaningful lead is structurally threatened
-              if (ctrlPtsT > oppPtsT && marginT >= 5 && (lsClass === 'AT RISK' || lsClass === 'CRITICAL') && ind.score >= 0.55) {
+              if (ctrlPtsT > oppPtsT && marginT >= 5 && (lsClass === 'AT RISK' || lsClass === 'CRITICAL') && ind.score >= 0.55 && alertMinsLeft >= 1.0) {
                 const lsAlertKey = `${game.id}_LS_CRUMBLE_Q${currentPeriod}`;
                 if (!game._lastLsAlert || game._lastLsAlert !== lsAlertKey) {
                   game._lastLsAlert = lsAlertKey;
@@ -5315,9 +5351,10 @@ export default async function(req) {
                   } catch (e) { /* non-fatal */ }
                 }
               }
-              // LEAD LOST: had any lead state before, now tied/trailing
+              // LEAD LOST: had meaningful lead (≥4) before, now tied/trailing
               const hadLead = prevLsClass !== null;
-              if (hadLead && oppPtsT >= ctrlPtsT) {
+              const prevMargin = Number(prev[`${sidePrefix}_ls_margin`]) || 0;
+              if (hadLead && prevMargin >= 4 && oppPtsT >= ctrlPtsT && alertMinsLeft >= 1.0) {
                 const lostKey = `${game.id}_LS_LOST_Q${currentPeriod}`;
                 if (!game._lastLsLostAlert || game._lastLsLostAlert !== lostKey) {
                   game._lastLsLostAlert = lostKey;
@@ -5343,7 +5380,7 @@ export default async function(req) {
               }
 
               // ALERT 3: OPPONENT VARIANCE BREAKING
-              if (oppPtsT > ctrlPtsT && marginT >= 1 && ind.score >= 0.65) {
+              if (oppPtsT > ctrlPtsT && marginT >= 1 && ind.score >= 0.65 && alertMinsLeft >= 1.0) {
                 const wasStable = prevOppSust === 'LOCKED IN' || prevOppSust === 'DURABLE';
                 const nowBreaking = oppSustNow === 'FRAGILE' || oppSustNow === 'UNSUSTAINABLE';
                 if (wasStable && nowBreaking) {
@@ -5372,12 +5409,14 @@ export default async function(req) {
                 await sql`UPDATE games SET
                   prev_home_tp_class = ${tpClass},
                   prev_home_ls_class = ${lsClass},
+                  prev_home_ls_margin = ${ls?.lead || null},
                   prev_home_opp_sust = ${oppSustNow}
                   WHERE id = ${game.id}`;
               } else {
                 await sql`UPDATE games SET
                   prev_away_tp_class = ${tpClass},
                   prev_away_ls_class = ${lsClass},
+                  prev_away_ls_margin = ${ls?.lead || null},
                   prev_away_opp_sust = ${oppSustNow}
                   WHERE id = ${game.id}`;
               }
