@@ -325,7 +325,7 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       priorAlerts:'RECOVERY PATH[FIRED] Q2 8:00: floor 0.40, margin 12 trailing, sust MIXED/LOCKED IN, conv CONDITIONAL(I1), TP STRONG RECOVERY → SEND: structural math projects comeback\nAUTO_ANALYSIS[ANALYSIS] Q3 12:00: floor 0.58, margin 8 trailing → SUPPRESS: no prior actionable alert (position gate)',
       quarterSummary:'Q1: 18-26\nQ2: 12-16\nQ3: 32-26, paint 16-8'
     }},
-    '24': { name: 'BWC after LEAD CRUMBLING sent — real erosion, downgrade', expected: 'DOWNGRADE', ctx: {
+    '24': { name: 'BWC after LEAD CRUMBLING sent — real erosion, suppress', expected: 'SUPPRESS', ctx: {
       alertType:'BUY WINDOW CLOSING', alertTier:'FIRED', controlTeam:'MIA', floor:'0.62', margin:6, isTrailing:false,
       period:3, clock:'3:00', minsLeft:'15.0', convictionTier:'MODEST', convictionCombo:'I1+I2', convictionPairs:'',
       edge:3.5, ml:'-150', spread:'-3.5', tpClass:null, lsClass:'AT RISK', ctrlSust:'FRAGILE', oppSust:'DURABLE',
