@@ -59,6 +59,9 @@ RULES:
 - ANCHORED FLOOR CHECK: trailing 0.75+ but margin 1-3 with declining floor = verify. Does NOT apply to leading teams.
 - EARLY GAME (Q1-Q2): I4 COMBO YES = SEND. I4 COMBO NO = extra scrutiny.
 - TP (Throughput Projection) is context, not a veto. It estimates deficit recovery from structural rates. Limitation: anchored to cumulative stats, misses momentum shifts. TP NO PATH at 1-3 point deficits is often a false negative. TP STRONG/PROBABLE adds confidence. TP UNLIKELY/NO PATH is a caution flag, not a stop sign.
+- RECOVERY PATH: math projects a comeback. SEND if structural indicators (especially I4) back the TP math — I4 COMBO YES + rising floor means the engine is real. SUPPRESS if TP is anchored from early-game cumulative stats that have since eroded — floor declining + I4 COMBO NO means the opponent actually has game control despite favorable TP math.
+- LEAD CRUMBLING: warning that a structural team's lead is vulnerable. SEND if floor is declining AND sustainability is shifting AND indicator count is dropping — real structural erosion. SUPPRESS if I4 still favors control team, sustainability holds, and LS AT RISK is from a hot opponent run (noise), not structural collapse.
+- VARIANCE BREAKING: opponent's shooting is regressing. SEND if structural edge is clear (I4 COMBO YES, 3+ indicators) and the sustainability shift is meaningful. SUPPRESS if structural edge is thin (I4 EVEN, 1-2 indicators) or the sustainability drop is a borderline tier flip.
 
 Respond in EXACTLY this format:
 DECISION: [SEND|SUPPRESS|DOWNGRADE]
@@ -246,6 +249,69 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       priorAlerts:'BWC[FIRED] Q3 6:00: floor 0.75, margin 8 -> SEND\nLEAD CRUMBLING Q3 2:00: floor 0.68, margin 4, LS AT RISK -> SUPPRESS: structural holds, I4 dominant, LS noise from hot Q3 run',
       quarterSummary:'Q1: 28-22\nQ2: 30-26\nQ3: 18-26\nQ4: 14-10'
     }},
+
+    // ═══ TRANSITION ALERT SCENARIOS (17-22) ═══
+
+    '17': { name: 'RECOVERY PATH SEND — I4 COMBO YES, TP STRONG, floor rising', expected: 'SEND', ctx: {
+      alertType:'RECOVERY PATH', alertTier:'FIRED', controlTeam:'DEN', floor:'0.55', margin:8, isTrailing:true,
+      period:3, clock:'6:00', minsLeft:'18.0', convictionTier:'STRONG', convictionCombo:'I1+I3+I4', convictionPairs:'I3+I4',
+      edge:30, ml:'+320', spread:'+8.5', tpClass:'STRONG RECOVERY', lsClass:null, ctrlSust:'DURABLE', oppSust:'FRAGILE',
+      i1:'0.75', i2:'0.50', i3:'0.80', i4:'0.85', i5:'0.50', indicatorsWon:3, indWon:'I1+I3+I4', indLost:'',
+      i4Decisive:true, i4Won:true, i4Combo:true,
+      floorHistory:'Q3 9:00: DEN 0.50 (52-62) TP:PROBABLE\nQ2 6:00: DEN 0.45 (34-44) TP:CONTESTED',
+      priorAlerts:'None',
+      quarterSummary:'Q1: 18-26\nQ2: 16-18\nQ3: 18-18, paint 14-8'
+    }},
+    '18': { name: 'RECOVERY PATH SUPPRESS — TP STRONG but I4 COMBO NO, floor declining', expected: 'SUPPRESS', ctx: {
+      alertType:'RECOVERY PATH', alertTier:'FIRED', controlTeam:'WAS', floor:'0.42', margin:10, isTrailing:true,
+      period:3, clock:'4:00', minsLeft:'16.0', convictionTier:'CONDITIONAL', convictionCombo:'I1', convictionPairs:'',
+      edge:15, ml:'+400', spread:'+10.5', tpClass:'STRONG RECOVERY', lsClass:null, ctrlSust:'COLD', oppSust:'LOCKED IN',
+      i1:'0.70', i2:'0.40', i3:'0.35', i4:'0.30', i5:'0.45', indicatorsWon:1, indWon:'I1', indLost:'I2+I3+I4',
+      i4Decisive:true, i4Won:false, i4Combo:false,
+      floorHistory:'Q3 8:00: WAS 0.48 (48-58) TP:PROBABLE\nQ2 6:00: WAS 0.52 (32-38) TP:STRONG RECOVERY',
+      priorAlerts:'None',
+      quarterSummary:'Q1: 18-22\nQ2: 14-16\nQ3: 16-20'
+    }},
+    '19': { name: 'LEAD CRUMBLING SEND — floor declining, sust shifting, I4 EVEN', expected: 'SEND', ctx: {
+      alertType:'LEAD CRUMBLING', alertTier:'FIRED', controlTeam:'MIA', floor:'0.60', margin:6, isTrailing:false,
+      period:3, clock:'4:00', minsLeft:'16.0', convictionTier:'MODEST', convictionCombo:'I1+I2', convictionPairs:'',
+      edge:null, ml:null, spread:null, tpClass:null, lsClass:'CRITICAL', ctrlSust:'FRAGILE', oppSust:'LOCKED IN',
+      i1:'0.65', i2:'0.60', i3:'0.45', i4:'0.50', i5:'0.45', indicatorsWon:2, indWon:'I1+I2', indLost:'I3+I5',
+      i4Decisive:false, i4Won:false, i4Combo:false,
+      floorHistory:'Q3 8:00: MIA 0.68 (68-62) LS:AT RISK\nQ2 6:00: MIA 0.75 (48-40) LS:SAFE\nQ2 12:00: MIA 0.78 (28-20) LS:SAFE',
+      priorAlerts:'BWC[FIRED] Q2 6:00: floor 0.75, margin 8 -> SEND',
+      quarterSummary:'Q1: 28-20\nQ2: 20-20\nQ3: 20-22'
+    }},
+    '20': { name: 'LEAD CRUMBLING SUPPRESS — I4 dominant, sust holds, hot quarter noise', expected: 'SUPPRESS', ctx: {
+      alertType:'LEAD CRUMBLING', alertTier:'FIRED', controlTeam:'BOS', floor:'0.78', margin:8, isTrailing:false,
+      period:3, clock:'6:00', minsLeft:'18.0', convictionTier:'STRONG', convictionCombo:'I2+I3+I4', convictionPairs:'I3+I4',
+      edge:null, ml:null, spread:null, tpClass:null, lsClass:'AT RISK', ctrlSust:'LOCKED IN', oppSust:'COLD',
+      i1:'0.50', i2:'0.80', i3:'0.75', i4:'0.90', i5:'0.60', indicatorsWon:4, indWon:'I2+I3+I4+I5', indLost:'',
+      i4Decisive:true, i4Won:true, i4Combo:true,
+      floorHistory:'Q3 9:00: BOS 0.80 (72-64) LS:CUSHIONED\nQ2 6:00: BOS 0.82 (50-40) LS:SAFE',
+      priorAlerts:'BWC[FIRED] Q2 6:00: floor 0.82, margin 10 -> SEND',
+      quarterSummary:'Q1: 28-20\nQ2: 22-20\nQ3: 22-24'
+    }},
+    '21': { name: 'VARIANCE BREAKING SEND — opponent sust dropped, strong structural edge', expected: 'SEND', ctx: {
+      alertType:'VARIANCE BREAKING', alertTier:'FIRED', controlTeam:'PHX', floor:'0.72', margin:5, isTrailing:true,
+      period:3, clock:'3:00', minsLeft:'15.0', convictionTier:'STRONG', convictionCombo:'I1+I4+I5', convictionPairs:'I4+I5',
+      edge:22, ml:'+200', spread:'+5.5', tpClass:'PROBABLE', lsClass:null, ctrlSust:'DURABLE', oppSust:'FRAGILE',
+      i1:'0.80', i2:'0.55', i3:'0.50', i4:'0.85', i5:'0.70', indicatorsWon:3, indWon:'I1+I4+I5', indLost:'I3',
+      i4Decisive:true, i4Won:true, i4Combo:true,
+      floorHistory:'Q3 6:00: PHX 0.70 (62-67) TP:PROBABLE\nQ2 6:00: PHX 0.65 (40-48)',
+      priorAlerts:'None',
+      quarterSummary:'Q1: 22-28\nQ2: 18-20\nQ3: 22-19'
+    }},
+    '22': { name: 'VARIANCE BREAKING SUPPRESS — thin edge, I4 EVEN, borderline flip', expected: 'SUPPRESS', ctx: {
+      alertType:'VARIANCE BREAKING', alertTier:'FIRED', controlTeam:'CHA', floor:'0.58', margin:3, isTrailing:true,
+      period:3, clock:'8:00', minsLeft:'20.0', convictionTier:'CONDITIONAL', convictionCombo:'I2', convictionPairs:'',
+      edge:5, ml:'+130', spread:'+3.5', tpClass:'CONTESTED', lsClass:null, ctrlSust:'MIXED', oppSust:'FRAGILE',
+      i1:'0.50', i2:'0.65', i3:'0.50', i4:'0.50', i5:'0.45', indicatorsWon:1, indWon:'I2', indLost:'I5',
+      i4Decisive:false, i4Won:false, i4Combo:false,
+      floorHistory:'Q3 10:00: CHA 0.55 (48-52)\nQ2 6:00: CHA 0.52 (30-34)',
+      priorAlerts:'None',
+      quarterSummary:'Q1: 16-18\nQ2: 14-16\nQ3: 18-18'
+    }},
   };
 
   let testKeys = [];
@@ -253,7 +319,8 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
   else if (testParam === 'fired') testKeys = ['1', '4', '7', '8', '11', '12', '15', '16'];
   else if (testParam === 'candidate') testKeys = ['2', '3', '6', '13', '14'];
   else if (testParam === 'auto') testKeys = ['5', '9', '10'];
-  else if (testParam === 'new') testKeys = ['11', '12', '13', '14', '15', '16'];
+  else if (testParam === 'transition') testKeys = ['17', '18', '19', '20', '21', '22'];
+  else if (testParam === 'new') testKeys = ['17', '18', '19', '20', '21', '22'];
   else if (scenarios[testParam]) testKeys = [testParam];
   else return new Response(JSON.stringify({ error: 'Unknown test: ' + testParam }));
 
