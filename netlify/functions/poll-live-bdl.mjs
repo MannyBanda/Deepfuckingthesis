@@ -289,7 +289,9 @@ async function gatherAgentContext(sql, gameId, matchup) {
   } catch (e) { /* non-fatal */ }
   try {
     const alerts = await sql`SELECT alert_type, alert_tier, period, clock, floor_score, margin, is_trailing, ctrl_sust, opp_sust, agent_decision, agent_reasoning, conviction_tier, conviction_combo, edge, tp_class
-      FROM alerts WHERE game_id = ${gameId} ORDER BY ts DESC LIMIT 5`;
+      FROM alerts WHERE game_id = ${gameId}
+        AND NOT (alert_type = 'AUTO_ANALYSIS' AND agent_decision = 'SUPPRESS')
+      ORDER BY ts DESC LIMIT 5`;
     if (alerts.length > 0) {
       // Try to get monitor columns — may not exist yet
       let monitorData = {};

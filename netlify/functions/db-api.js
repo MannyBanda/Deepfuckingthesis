@@ -2162,42 +2162,61 @@ exports.handler = async (event) => {
         VALUES (${testGameId}, ${testDate}, 'nba', 'TEST@PIPE', 'PIPE', 'TEST', 'PIPE', 110, 102, 8)
         ON CONFLICT (id) DO UPDATE SET winner = 'PIPE', home_pts = 110, away_pts = 102, margin = 8`;
 
-      // Write test alerts covering all paths
+      // Clean any prior test data for this game
+      await sql`DELETE FROM alerts WHERE game_id = ${testGameId}`;
+
+      // Write test alerts covering all paths including transition alerts through agent
       const testAlerts = [
-        { type: 'BUY', tier: 'FIRED', agent: 'SEND', ctrl: 'PIPE', floor: 0.72, margin: 6, trailing: true, period: 3, clock: '4:00' },
-        { type: 'BUY', tier: 'CANDIDATE', agent: 'SUPPRESS', ctrl: 'PIPE', floor: 0.58, margin: 8, trailing: true, period: 2, clock: '8:00' },
-        { type: 'BUY WINDOW CLOSING', tier: 'FIRED', agent: 'SEND', ctrl: 'PIPE', floor: 0.80, margin: 4, trailing: false, period: 3, clock: '6:00' },
-        { type: 'AUTO_ANALYSIS', tier: 'ANALYSIS', agent: 'SEND', ctrl: 'PIPE', floor: 0.75, margin: 3, trailing: false, period: 2, clock: '12:00' },
-        { type: 'AUTO_ANALYSIS', tier: 'ANALYSIS', agent: 'SUPPRESS', ctrl: 'PIPE', floor: 0.55, margin: 1, trailing: true, period: 1, clock: '6:00' },
-        { type: 'LEAD CRUMBLING', tier: null, agent: null, ctrl: 'PIPE', floor: 0.65, margin: 5, trailing: false, period: 4, clock: '3:00' },
-        { type: 'LEAD LOST', tier: null, agent: null, ctrl: 'PIPE', floor: 0.60, margin: 0, trailing: false, period: 4, clock: '1:00' },
-        { type: 'WINDOW BUY', tier: 'CANDIDATE', agent: 'SEND', ctrl: 'TEST', floor: 0.50, margin: 3, trailing: false, period: 3, clock: '5:00' },
+        { type: 'BUY', tier: 'FIRED', agent: 'SEND', ctrl: 'PIPE', floor: 0.72, margin: 6, trailing: true, period: 3, clock: '4:00', reasoning: 'I4 COMBO YES, structural case strong' },
+        { type: 'BUY', tier: 'CANDIDATE', agent: 'SUPPRESS', ctrl: 'PIPE', floor: 0.58, margin: 8, trailing: true, period: 2, clock: '8:00', reasoning: 'I4 COMBO NO, weak structural case' },
+        { type: 'BUY WINDOW CLOSING', tier: 'FIRED', agent: 'SEND', ctrl: 'PIPE', floor: 0.80, margin: 4, trailing: false, period: 3, clock: '6:00', reasoning: 'dominant structural case' },
+        { type: 'AUTO_ANALYSIS', tier: 'ANALYSIS', agent: 'SEND', ctrl: 'PIPE', floor: 0.75, margin: 3, trailing: false, period: 2, clock: '12:00', reasoning: 'BWC position holding, floor +0.07' },
+        { type: 'AUTO_ANALYSIS', tier: 'ANALYSIS', agent: 'SUPPRESS', ctrl: 'PIPE', floor: 0.55, margin: 1, trailing: true, period: 1, clock: '6:00', reasoning: 'No prior actionable alert (position gate)' },
+        { type: 'RECOVERY PATH', tier: 'FIRED', agent: 'SEND', ctrl: 'PIPE', floor: 0.45, margin: 10, trailing: true, period: 2, clock: '10:00', reasoning: 'I4 COMBO YES, TP STRONG backs structural math' },
+        { type: 'LEAD CRUMBLING', tier: 'FIRED', agent: 'SUPPRESS', ctrl: 'PIPE', floor: 0.78, margin: 8, trailing: false, period: 3, clock: '8:00', reasoning: 'I4 dominant, sust holds, hot quarter noise' },
+        { type: 'LEAD CRUMBLING', tier: 'FIRED', agent: 'SEND', ctrl: 'PIPE', floor: 0.65, margin: 5, trailing: false, period: 4, clock: '3:00', reasoning: 'real erosion, floor -0.13, I4 EVEN' },
+        { type: 'LEAD LOST', tier: null, agent: null, ctrl: 'PIPE', floor: 0.60, margin: 0, trailing: false, period: 4, clock: '1:00', reasoning: null },
+        { type: 'VARIANCE BREAKING', tier: 'FIRED', agent: 'SEND', ctrl: 'TEST', floor: 0.68, margin: 4, trailing: true, period: 3, clock: '5:00', reasoning: 'opponent sust collapsed, I4 COMBO YES' },
       ];
 
       let inserted = 0;
       for (const a of testAlerts) {
         try {
-          await sql`INSERT INTO alerts (game_id, league, alert_type, alert_tier, agent_decision, control_team, floor_score, margin, is_trailing, period, clock, conviction_tier, conviction_combo, i1, i2, i3, i4, i5)
-            VALUES (${testGameId}, 'nba', ${a.type}, ${a.tier}, ${a.agent}, ${a.ctrl}, ${a.floor}, ${a.margin}, ${a.trailing}, ${a.period}, ${a.clock}, 'STRONG', 'I3+I4', 0.7, 0.6, 0.8, 0.9, 0.5)`;
+          await sql`INSERT INTO alerts (game_id, league, alert_type, alert_tier, agent_decision, agent_reasoning, control_team, floor_score, margin, is_trailing, period, clock, conviction_tier, conviction_combo, i1, i2, i3, i4, i5, ntfy_sent)
+            VALUES (${testGameId}, 'nba', ${a.type}, ${a.tier}, ${a.agent}, ${a.reasoning}, ${a.ctrl}, ${a.floor}, ${a.margin}, ${a.trailing}, ${a.period}, ${a.clock}, 'STRONG', 'I3+I4', 0.7, 0.6, 0.8, 0.9, 0.5, ${a.agent === 'SEND' || a.agent === null})`;
           inserted++;
         } catch (e) { /* skip dupes */ }
       }
 
-      // Expected results:
-      // PIPE won → BUY FIRED SEND = correct, BUY CANDIDATE SUPPRESS = correct block (would have won),
-      // BWC SEND = correct, AUTO_ANALYSIS SEND = correct, AUTO_ANALYSIS SUPPRESS = missed winner,
-      // LEAD CRUMBLING = ctrl won so "didn't hold" (correct = false), LEAD LOST = same
-      // WINDOW BUY for TEST team SEND = wrong (TEST lost)
+      // Verify: what would gatherAgentContext see? (excludes AUTO_ANALYSIS SUPPRESS)
+      const agentWouldSee = await sql`SELECT alert_type, alert_tier, agent_decision, agent_reasoning, period, clock, floor_score, conviction_tier
+        FROM alerts WHERE game_id = ${testGameId}
+          AND NOT (alert_type = 'AUTO_ANALYSIS' AND agent_decision = 'SUPPRESS')
+        ORDER BY ts DESC LIMIT 5`;
+
+      // Verify: transition alerts have agent columns populated
+      const transitionCheck = await sql`SELECT alert_type, alert_tier, agent_decision, agent_reasoning, conviction_tier, conviction_combo, i1, i2, i3, i4, i5
+        FROM alerts WHERE game_id = ${testGameId}
+          AND alert_type IN ('RECOVERY PATH', 'LEAD CRUMBLING', 'VARIANCE BREAKING')
+        ORDER BY ts DESC`;
+
+      const autoSuppressed = await sql`SELECT alert_type, agent_decision FROM alerts WHERE game_id = ${testGameId} AND alert_type = 'AUTO_ANALYSIS' AND agent_decision = 'SUPPRESS'`;
 
       return { statusCode: 200, headers, body: JSON.stringify({
         ok: true, inserted, testGameId, testDate,
-        expected: {
-          delivered_actionable: '5 (3 PIPE SEND + 1 AUTO_ANALYSIS SEND + 1 TEST WB SEND)',
-          delivered_correct: '4 (PIPE won, TEST lost)',
-          agent_saves: '1 (BUY CANDIDATE SUPPRESS, would have won = missed winner)',
-          transitional: '2 (LEAD CRUMBLING + LEAD LOST, both did not hold)',
+        verification: {
+          agent_would_see: agentWouldSee.map(a => `${a.alert_type}[${a.alert_tier}] Q${a.period} ${a.clock} → ${a.agent_decision}`),
+          agent_would_see_count: agentWouldSee.length,
+          auto_suppress_filtered: autoSuppressed.length + ' AUTO_ANALYSIS SUPPRESS excluded from agent context',
+          transition_alerts_with_agent: transitionCheck.map(a => ({
+            type: a.alert_type,
+            tier: a.alert_tier,
+            decision: a.agent_decision,
+            reasoning: a.agent_reasoning?.substring(0, 80),
+            has_conviction: !!a.conviction_tier,
+            has_indicators: a.i1 != null && a.i4 != null,
+          })),
         },
-        next_step: 'Run: post-game-agent?date=' + testDate + ' then check nightly results',
         cleanup: 'Run: db-api?action=cleanup_test',
       }) };
     }
