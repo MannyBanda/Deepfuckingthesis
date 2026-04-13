@@ -181,7 +181,7 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       floorHistory:'Q3 6:00: MIN 0.85 (92-84) LS:SAFE\nQ3 12:00: MIN 0.83 (68-62)',
       priorAlerts:'BWC[FIRED] Q2 6:00: floor 0.83, margin 5 -> SEND\nAUTO_ANALYSIS Q3 12:00: floor 0.85, margin 8 -> SEND',
       quarterSummary:'Q1: 30-28\nQ2: 28-24\nQ3: 34-32',
-      priorPosition: { alertType:'BUY WINDOW CLOSING', controlTeam:'MIN', floor:'0.83', margin:5, isTrailing:false, period:2, clock:'6:00', conviction:'STRONG', combo:'I2+I3+I4', ctrlSust:'LOCKED IN', oppSust:'COLD', minutesSince:70, sameTeam:true },
+      priorPosition: { alertType:'BUY WINDOW CLOSING', controlTeam:'MIN', floor:'0.84', margin:7, isTrailing:false, period:2, clock:'6:00', conviction:'DOMINANT', combo:'I1+I2+I3+I4+I5', ctrlSust:'LOCKED IN', oppSust:'COLD', minutesSince:70, sameTeam:true },
     }},
 
     // ═══ NEW SCENARIOS (11-16) — TP gate removal, ML gates, null ML, LEAD CRUMBLING context ═══
