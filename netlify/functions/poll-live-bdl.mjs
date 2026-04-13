@@ -438,7 +438,7 @@ async function getMonitorableConditions(sql, league, dateKey, cachedGames) {
         currentMargin: currentMargin,
         currentPeriod: Number(snap.period),
         currentClock: snap.clock,
-        currentI4: snap.i4 != null ? Number(snap.i4) : null,
+        currentI4: snap.i4 != null ? (ctrlIsHome ? Number(snap.i4) : 1 - Number(snap.i4)) : null,
         currentTpClass: snap.tp_class,
         currentLsClass: snap.ls_class,
         floorTrajectory: traj.floors,
@@ -3770,9 +3770,11 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           windowScore: clientCtx?.rollingWindow?.score || null,
           convictionTier: calConviction.tier, convictionCombo: calConviction.combo,
           convictionPairs: calConviction.pairs?.join(', ') || '',
-          i1: ind.I1?.score?.toFixed(2), i2: ind.I2?.score?.toFixed(2),
-          i3: ind.I3?.score?.toFixed(2), i4: ind.I4?.score?.toFixed(2),
-          i5: ind.I5?.score?.toFixed(2),
+          i1: (ctrlIsHome ? ind.I1?.score : ind.I1?.score != null ? 1 - ind.I1.score : null)?.toFixed(2),
+          i2: (ctrlIsHome ? ind.I2?.score : ind.I2?.score != null ? 1 - ind.I2.score : null)?.toFixed(2),
+          i3: (ctrlIsHome ? ind.I3?.score : ind.I3?.score != null ? 1 - ind.I3.score : null)?.toFixed(2),
+          i4: (ctrlIsHome ? ind.I4?.score : ind.I4?.score != null ? 1 - ind.I4.score : null)?.toFixed(2),
+          i5: (ctrlIsHome ? ind.I5?.score : ind.I5?.score != null ? 1 - ind.I5.score : null)?.toFixed(2),
           indicatorsWon: calConviction.count,
           indWon: calConviction.indicatorsWon?.join('+') || '',
           indLost: calConviction.indicatorsLost?.join('+') || '',
@@ -5008,13 +5010,18 @@ export default async function(req) {
 
                 // ── AGENT REASONING GATE ──────────────────────────────────────
                 // Compute which indicators the control team wins
+                // CRITICAL: raw scores are HOME-relative (1=home wins, 0=away wins)
+                // Must invert for away control teams — same logic as computeConviction
                 const indNames = ['I1','I2','I3','I4','I5'];
                 const indScores = [ind.I1, ind.I2, ind.I3, ind.I4, ind.I5];
-                const indWon = indNames.filter((n, i) => indScores[i] && indScores[i].score >= 0.55);
-                const indLost = indNames.filter((n, i) => indScores[i] && indScores[i].score <= 0.45);
+                const _ctrlIsHomeAgent = ind.controlTeam === hA;
+                const _ctrlScore = (s) => s == null ? 0.5 : (_ctrlIsHomeAgent ? s : 1 - s);
+                const indWon = indNames.filter((n, i) => indScores[i] && _ctrlScore(indScores[i].score) >= 0.55);
+                const indLost = indNames.filter((n, i) => indScores[i] && _ctrlScore(indScores[i].score) <= 0.45);
                 const indicatorsWon = indWon.length;
-                const i4Decisive = ind.I4 && ind.I4.score !== 0.5;
-                const i4Won = ind.I4 && ind.I4.score >= 0.55;
+                const _i4Ctrl = _ctrlScore(ind.I4?.score);
+                const i4Decisive = ind.I4 && _i4Ctrl !== 0.5;
+                const i4Won = ind.I4 && _i4Ctrl >= 0.55;
                 const i4Combo = i4Won && indWon.length >= 2; // I4 + at least one other = historically 98-100%
 
                 // Gather DB context for agent
@@ -5032,9 +5039,9 @@ export default async function(req) {
                   windowScore: wbWindowScore,
                   convictionTier: conviction.tier, convictionCombo: conviction.combo,
                   convictionPairs: conviction.pairs?.join(', ') || '',
-                  i1: ind.I1?.score?.toFixed(2), i2: ind.I2?.score?.toFixed(2),
-                  i3: ind.I3?.score?.toFixed(2), i4: ind.I4?.score?.toFixed(2),
-                  i5: ind.I5?.score?.toFixed(2),
+                  i1: _ctrlScore(ind.I1?.score)?.toFixed(2), i2: _ctrlScore(ind.I2?.score)?.toFixed(2),
+                  i3: _ctrlScore(ind.I3?.score)?.toFixed(2), i4: _ctrlScore(ind.I4?.score)?.toFixed(2),
+                  i5: _ctrlScore(ind.I5?.score)?.toFixed(2),
                   indicatorsWon,
                   indWon: indWon.join('+'),
                   indLost: indLost.join('+'),
