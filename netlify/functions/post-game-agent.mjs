@@ -208,6 +208,10 @@ export default async function handler(req) {
   const suppressed = scoredAlerts.filter(a => a.agent_decision === 'SUPPRESS');
   const deduped = scoredAlerts.filter(a => a.ntfy_sent === false && a.agent_decision !== 'SUPPRESS');
 
+  // Split suppressed: agent decisions vs position-gate (never reached agent)
+  const positionGated = suppressed.filter(a => a.agent_reasoning && a.agent_reasoning.includes('position gate'));
+  const agentSuppressed = suppressed.filter(a => !a.agent_reasoning || !a.agent_reasoning.includes('position gate'));
+
   // Delivered actionable — THE headline number
   const deliveredActionable = delivered.filter(a => ACTIONABLE_TYPES.includes(a.alert_type));
   const deliveredActionableCorrect = deliveredActionable.filter(a => a.result.correct).length;
@@ -216,10 +220,14 @@ export default async function handler(req) {
   const deliveredTransitional = delivered.filter(a => TRANSITIONAL_TYPES.includes(a.alert_type));
   const deliveredTransitionalHeld = deliveredTransitional.filter(a => a.result.correct).length;
 
-  // Agent saves — suppressed alerts that would have been wrong
-  const agentSaves = suppressed.filter(a => !a.result.correct).length;
-  // Agent misses — suppressed alerts that would have been right
-  const agentMisses = suppressed.filter(a => a.result.correct).length;
+  // Agent saves — agent suppressed alerts that would have been wrong
+  const agentSaves = agentSuppressed.filter(a => !a.result.correct).length;
+  // Agent misses — agent suppressed alerts that would have been right
+  const agentMisses = agentSuppressed.filter(a => a.result.correct).length;
+  // Dedup correct — deduped alerts that were correct (not a miss, signal already delivered)
+  const dedupCorrect = deduped.filter(a => a.result.correct).length;
+  // Position-gated correct — gated alerts that were correct (not a miss, no prior position)
+  const posGatedCorrect = positionGated.filter(a => a.result.correct).length;
 
   // Overall accuracy = delivered actionable only
   const accuracyOverall = deliveredActionable.length > 0
@@ -247,6 +255,9 @@ export default async function handler(req) {
     saves: agentSaves,
     missed_winners: agentMisses,
     deduped: deduped.length,
+    dedup_correct: dedupCorrect,
+    position_gated: positionGated.length,
+    position_gated_correct: posGatedCorrect,
     transitional_held: deliveredTransitionalHeld,
     transitional_total: deliveredTransitional.length,
     raw_correct: rawCorrect,
@@ -287,9 +298,9 @@ export default async function handler(req) {
   const candidatesSent = candidates.filter(a => a.agent_decision === 'SEND' || a.agent_decision === 'DOWNGRADE');
   const candidatesSentCorrect = candidatesSent.filter(a => a.result.correct);
 
-  log(`Delivered accuracy: ${accuracyOverall}% (${deliveredActionableCorrect}/${deliveredActionable.length}) | Agent saves: ${agentSaves} | Raw: ${rawCorrect}/${rawTotal}`);
+  log(`Delivered accuracy: ${accuracyOverall}% (${deliveredActionableCorrect}/${deliveredActionable.length}) | Agent saves: ${agentSaves} misses: ${agentMisses} | Raw: ${rawCorrect}/${rawTotal}`);
   log(`By type: ${JSON.stringify(byType)}`);
-  log(`Agent: sent_correct=${agentStats.sent_correct}, sent_wrong=${agentStats.sent_wrong}, suppressed_correct=${agentStats.suppressed_correct}, suppressed_missed=${agentStats.suppressed_missed}`);
+  log(`Agent: saves=${agentSaves}, missed_winners=${agentMisses}, deduped=${deduped.length}(${dedupCorrect} correct), position_gated=${positionGated.length}(${posGatedCorrect} correct)`);
   log(`Cascades: ${cascadeGames.length}, Conflicts: ${conflictGames.length}, TP failures: ${tpFailures.length}`);
   log(`Candidates sent: ${candidatesSent.length}/${candidates.length}, correct: ${candidatesSentCorrect.length}`);
 
@@ -321,9 +332,16 @@ Delivered actionable: ${accuracyOverall}% (${deliveredActionableCorrect}/${deliv
 Raw mechanical (all alerts): ${rawTotal > 0 ? Math.round((rawCorrect / rawTotal) * 100) : '?'}% (${rawCorrect}/${rawTotal})
 Agent saves (suppressed losers): ${agentSaves}
 Agent missed winners (suppressed winners): ${agentMisses}
+Deduped (signal already sent, blocked duplicate): ${deduped.length} (${dedupCorrect} would have been correct — NOT agent misses)
+Position-gated (auto-analysis with no prior actionable alert): ${positionGated.length} (${posGatedCorrect} would have been correct — NOT agent misses, these never reached the agent)
 Transitional alerts (LEAD LOST/CRUMBLING): ${deliveredTransitionalHeld}/${deliveredTransitional.length} held
 By type (delivered only): ${JSON.stringify(byType)}
 Candidates sent: ${candidatesSent.length}/${candidates.length}, correct: ${candidatesSentCorrect.length}
+
+NOTE ON CATEGORIES:
+- Agent saves/misses: ONLY alerts where the agent made a SUPPRESS decision. This is the agent's track record.
+- Deduped: alerts where agent said SEND but ntfy was blocked because the same signal was already delivered. Correct system behavior, not a miss.
+- Position-gated: auto-analyses suppressed because no prior BUY/BWC/WB/RP was sent for that game. These are informational calibration data, not betting signals. Do NOT treat as missed opportunities.
 
 SCORED ALERTS:
 ${alertSummary}
@@ -430,12 +448,24 @@ RECOMMENDATIONS:
       if (b) typeLines.push(`${t}: ${b.correct}/${b.total}`);
     });
 
-    // Agent value line
+    // Agent value line — only agent SUPPRESS decisions
     let agentLine = '';
     if (agentSaves > 0 || agentMisses > 0) {
       agentLine = `\nThe AI filter blocked ${agentSaves + agentMisses} signals`;
       if (agentSaves > 0) agentLine += ` — ${agentSaves} would have lost`;
       if (agentMisses > 0) agentLine += `, ${agentMisses} would have won`;
+    }
+
+    // Dedup line — signal already delivered, system correctly blocked duplicate
+    let dedupLine = '';
+    if (deduped.length > 0) {
+      dedupLine = `\n${deduped.length} deduped (signal already sent)`;
+    }
+
+    // Position-gated line — auto-analyses with no prior actionable alert
+    let gatedLine = '';
+    if (positionGated.length > 0) {
+      gatedLine = `\n${positionGated.length} auto-analyses gated (no prior position)`;
     }
 
     // Transitional line (gray tier — informational)
@@ -447,6 +477,8 @@ RECOMMENDATIONS:
     const body = headline
       + (typeLines.length > 0 ? '\n' + typeLines.join(' | ') : '')
       + agentLine
+      + dedupLine
+      + gatedLine
       + transLine;
 
     try {
