@@ -4653,37 +4653,47 @@ function parseSonnetDecision(text){
   if(!text) return null;
   try{
     const d = {};
+
+    // ── FWP: standalone line (v2 format) or inside EDGE line (v1 format) ──
+    // v2: "FWP: GSW 64% / LAC 36%"  (its own line, before EDGE)
+    // v1: "EDGE: +12% | FWP: GSW 64% / LAC 36%"  (combined on EDGE line)
+    const fwpLine = (text.match(/^FWP:\s*(.+)/im)||[])[1]||'';
+    if(fwpLine) d.fwpRaw = fwpLine.trim().replace(/\|.*$/,'').trim();
+
     // Parse EDGE line — extract fields independently (FWP and MIP can appear in any order)
     const edgeLine = (text.match(/EDGE:\s*(.+)/i)||[])[1]||'';
     if(edgeLine){
-      // Extract FWP block: "FWP: PHI 25% / CLE 75%" or "FWP: 72%"
-      const fwpMatch = edgeLine.match(/FWP:\s*([^|]+)/i);
-      if(fwpMatch) d.fwpRaw = fwpMatch[1].trim().replace(/\|.*$/,'').trim();
+      // v1 fallback: Extract FWP from inside EDGE line if not already found
+      if(!d.fwpRaw){
+        const fwpMatch = edgeLine.match(/FWP:\s*([^|]+)/i);
+        if(fwpMatch) d.fwpRaw = fwpMatch[1].trim().replace(/\|.*$/,'').trim();
+      }
       // Extract MIP block: "MIP: 26%" or "MIP: N/A"
       const mipMatch = edgeLine.match(/MIP:\s*([^|]+)/i);
       if(mipMatch) d.mip = mipMatch[1].trim().replace(/\|.*$/,'').trim();
       // Extract EDGE value: everything before first | or FWP/MIP keyword
       const edgeVal = edgeLine.replace(/\|?\s*(FWP|MIP):.*/i,'').replace(/\|.*$/,'').trim();
       if(edgeVal){ d.edge = edgeVal; const en = parseFloat(edgeVal.replace(/[+%]/g,'')); d.edgeNum = isNaN(en)?null:en; }
-      // Parse two-sided FWP: "MEM 72% / LAC 28%" or "PHI 25% / CLE 75%"
-      if(d.fwpRaw){
-        const twoSidedMatch = d.fwpRaw.match(/([A-Z]{2,4})\s+([\d.]+)%?\s*\/\s*([A-Z]{2,4})\s+([\d.]+)%?/i);
-        if(twoSidedMatch){
-          d.fwpTeam1 = twoSidedMatch[1].toUpperCase();
-          d.fwpVal1 = parseFloat(twoSidedMatch[2]);
-          d.fwpTeam2 = twoSidedMatch[3].toUpperCase();
-          d.fwpVal2 = parseFloat(twoSidedMatch[4]);
-          d.fwp = d.fwpRaw;
-          d.fwpLabeled = true;
-        } else {
-          const singleMatch = d.fwpRaw.match(/([A-Z]{2,4})?\s*([\d.]+)%?/i);
-          if(singleMatch){
-            d.fwpSingleTeam = singleMatch[1] ? singleMatch[1].toUpperCase() : null;
-            d.fwpSingleVal = parseFloat(singleMatch[2]);
-          }
-          d.fwp = d.fwpRaw;
-          d.fwpLabeled = false;
+    }
+    // Parse two-sided FWP: "MEM 72% / LAC 28%" or "PHI 25% / CLE 75%"
+    // Runs regardless of where fwpRaw came from (standalone FWP line or inside EDGE line)
+    if(d.fwpRaw){
+      const twoSidedMatch = d.fwpRaw.match(/([A-Z]{2,4})\s+([\d.]+)%?\s*\/\s*([A-Z]{2,4})\s+([\d.]+)%?/i);
+      if(twoSidedMatch){
+        d.fwpTeam1 = twoSidedMatch[1].toUpperCase();
+        d.fwpVal1 = parseFloat(twoSidedMatch[2]);
+        d.fwpTeam2 = twoSidedMatch[3].toUpperCase();
+        d.fwpVal2 = parseFloat(twoSidedMatch[4]);
+        d.fwp = d.fwpRaw;
+        d.fwpLabeled = true;
+      } else {
+        const singleMatch = d.fwpRaw.match(/([A-Z]{2,4})?\s*([\d.]+)%?/i);
+        if(singleMatch){
+          d.fwpSingleTeam = singleMatch[1] ? singleMatch[1].toUpperCase() : null;
+          d.fwpSingleVal = parseFloat(singleMatch[2]);
         }
+        d.fwp = d.fwpRaw;
+        d.fwpLabeled = false;
       }
     }
     // Parse ENTRY line
