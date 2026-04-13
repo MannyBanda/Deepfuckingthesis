@@ -312,11 +312,75 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       priorAlerts:'None',
       quarterSummary:'Q1: 16-18\nQ2: 14-16\nQ3: 18-18'
     }},
+
+    // ═══ CROSS-TYPE PRIOR CHAIN SCENARIOS (23-28) ═══
+
+    '23': { name: 'BUY after RECOVERY PATH sent — RP confirms comeback engine', expected: 'SEND', ctx: {
+      alertType:'BUY', alertTier:'FIRED', controlTeam:'SAC', floor:'0.68', margin:5, isTrailing:true,
+      period:3, clock:'4:00', minsLeft:'16.0', convictionTier:'STRONG', convictionCombo:'I1+I3+I4', convictionPairs:'I3+I4',
+      edge:28, ml:'+180', spread:'+4.5', tpClass:'STRONG RECOVERY', lsClass:null, ctrlSust:'DURABLE', oppSust:'FRAGILE',
+      i1:'0.75', i2:'0.50', i3:'0.80', i4:'0.85', i5:'0.50', indicatorsWon:3, indWon:'I1+I3+I4', indLost:'',
+      i4Decisive:true, i4Won:true, i4Combo:true,
+      floorHistory:'Q3 8:00: SAC 0.65 (62-68) TP:PROBABLE\nQ3 12:00: SAC 0.58 (52-60) TP:CONTESTED\nQ2 6:00: SAC 0.40 (30-42) TP:STRONG RECOVERY',
+      priorAlerts:'RECOVERY PATH[FIRED] Q2 8:00: floor 0.40, margin 12 trailing, sust MIXED/LOCKED IN, conv CONDITIONAL(I1), TP STRONG RECOVERY → SEND: structural math projects comeback\nAUTO_ANALYSIS[ANALYSIS] Q3 12:00: floor 0.58, margin 8 trailing → SUPPRESS: no prior actionable alert (position gate)',
+      quarterSummary:'Q1: 18-26\nQ2: 12-16\nQ3: 32-26, paint 16-8'
+    }},
+    '24': { name: 'BWC after LEAD CRUMBLING sent — real erosion, do not chase', expected: 'SUPPRESS', ctx: {
+      alertType:'BUY WINDOW CLOSING', alertTier:'FIRED', controlTeam:'MIA', floor:'0.62', margin:6, isTrailing:false,
+      period:3, clock:'3:00', minsLeft:'15.0', convictionTier:'MODEST', convictionCombo:'I1+I2', convictionPairs:'',
+      edge:3.5, ml:'-150', spread:'-3.5', tpClass:null, lsClass:'AT RISK', ctrlSust:'FRAGILE', oppSust:'DURABLE',
+      i1:'0.65', i2:'0.60', i3:'0.45', i4:'0.50', i5:'0.45', indicatorsWon:2, indWon:'I1+I2', indLost:'I3+I5',
+      i4Decisive:false, i4Won:false, i4Combo:false,
+      floorHistory:'Q3 6:00: MIA 0.68 (68-62) LS:AT RISK\nQ3 12:00: MIA 0.72 (56-48) LS:CUSHIONED\nQ2 6:00: MIA 0.78 (40-32) LS:SAFE',
+      priorAlerts:'LEAD CRUMBLING[FIRED] Q3 8:00: floor 0.68, margin 8 leading, sust MIXED/DURABLE, conv MODEST(I1+I2), LS AT RISK → SEND: real structural erosion, floor declining -0.10, I4 lost, sust shifting to opponent\nBWC[FIRED] Q2 6:00: floor 0.78, margin 8 leading, sust LOCKED IN/COLD, conv STRONG(I2+I3+I4), edge +12.5% → SEND',
+      quarterSummary:'Q1: 22-16\nQ2: 18-16\nQ3: 28-30'
+    }},
+    '25': { name: 'BUY after VARIANCE BREAKING sent — VB confirms variance thesis', expected: 'SEND', ctx: {
+      alertType:'BUY', alertTier:'FIRED', controlTeam:'PHX', floor:'0.70', margin:4, isTrailing:true,
+      period:3, clock:'2:00', minsLeft:'14.0', convictionTier:'STRONG', convictionCombo:'I1+I4+I5', convictionPairs:'I4+I5',
+      edge:25, ml:'+165', spread:'+4.5', tpClass:'PROBABLE', lsClass:null, ctrlSust:'DURABLE', oppSust:'UNSUSTAINABLE',
+      i1:'0.80', i2:'0.55', i3:'0.50', i4:'0.85', i5:'0.75', indicatorsWon:3, indWon:'I1+I4+I5', indLost:'I3',
+      i4Decisive:true, i4Won:true, i4Combo:true,
+      floorHistory:'Q3 6:00: PHX 0.68 (66-72) TP:PROBABLE\nQ3 12:00: PHX 0.62 (52-60) TP:CONTESTED\nQ2 6:00: PHX 0.55 (36-46)',
+      priorAlerts:'VARIANCE BREAKING[FIRED] Q3 6:00: floor 0.68, margin 6 trailing, sust DURABLE/FRAGILE, conv MODEST(I1+I4) → SEND: opponent shooting regressing, structural edge clear with I4 dominant\nRECOVERY PATH[FIRED] Q2 8:00: floor 0.48, margin 10 trailing, conv CONDITIONAL(I1), TP STRONG RECOVERY → SEND',
+      quarterSummary:'Q1: 20-28\nQ2: 16-18\nQ3: 30-26'
+    }},
+    '26': { name: 'LEAD CRUMBLING after BWC sent — warn about existing position', expected: 'SEND', ctx: {
+      alertType:'LEAD CRUMBLING', alertTier:'FIRED', controlTeam:'BOS', floor:'0.65', margin:5, isTrailing:false,
+      period:3, clock:'3:00', minsLeft:'15.0', convictionTier:'MODEST', convictionCombo:'I2+I3', convictionPairs:'',
+      edge:null, ml:null, spread:null, tpClass:null, lsClass:'CRITICAL', ctrlSust:'MIXED', oppSust:'LOCKED IN',
+      i1:'0.50', i2:'0.65', i3:'0.60', i4:'0.50', i5:'0.45', indicatorsWon:2, indWon:'I2+I3', indLost:'I5',
+      i4Decisive:false, i4Won:false, i4Combo:false,
+      floorHistory:'Q3 6:00: BOS 0.72 (70-64) LS:AT RISK\nQ2 6:00: BOS 0.80 (48-38) LS:SAFE\nQ2 12:00: BOS 0.82 (26-18) LS:SAFE',
+      priorAlerts:'BWC[FIRED] Q2 6:00: floor 0.80, margin 10 leading, sust LOCKED IN/COLD, conv STRONG(I2+I3+I4), edge +15.2% → SEND: dominant structural case\nAUTO_ANALYSIS[ANALYSIS] Q3 12:00: floor 0.72, margin 6 leading → SEND: floor dropped -0.08 from prior BWC, conviction downgraded to MODEST',
+      quarterSummary:'Q1: 26-18\nQ2: 22-20\nQ3: 22-26'
+    }},
+    '27': { name: 'AUTO_ANALYSIS after BUY sent + LC sent — conflicting chain', expected: 'SEND', ctx: {
+      alertType:'AUTO_ANALYSIS', alertTier:'ANALYSIS', controlTeam:'DEN', floor:'0.62', margin:2, isTrailing:false,
+      period:4, clock:'12:00', minsLeft:'12.0', convictionTier:'MODEST', convictionCombo:'I1+I4', convictionPairs:'',
+      edge:2.5, ml:'-130', spread:'-2.5', tpClass:null, lsClass:'AT RISK', ctrlSust:'MIXED', oppSust:'DURABLE',
+      i1:'0.70', i2:'0.50', i3:'0.45', i4:'0.70', i5:'0.50', indicatorsWon:2, indWon:'I1+I4', indLost:'I3',
+      i4Decisive:true, i4Won:true, i4Combo:true,
+      floorHistory:'Q3 6:00: DEN 0.68 (78-74) LS:CUSHIONED\nQ3 12:00: DEN 0.70 (62-56)\nQ2 6:00: DEN 0.65 (40-48) TP:PROBABLE',
+      priorAlerts:'LEAD CRUMBLING[FIRED] Q3 2:00: floor 0.65, margin 4 leading, sust MIXED/DURABLE, conv MODEST(I1+I4), LS AT RISK → SEND: real erosion, floor dropped from 0.70, sust shifting\nBUY[FIRED] Q2 8:00: floor 0.70, margin 8 trailing, sust DURABLE/FRAGILE, conv STRONG(I1+I3+I4), edge +22% → SEND: I4 COMBO YES, structural case strong\nAUTO_ANALYSIS[ANALYSIS] Q3 12:00: floor 0.70, margin 6 leading → SEND: BUY position tracking, DEN took lead',
+      quarterSummary:'Q1: 20-28\nQ2: 20-20\nQ3: 22-18\nQ4: 0-0',
+      priorPosition: { alertType:'BUY', controlTeam:'DEN', floor:'0.70', margin:8, isTrailing:true, period:2, clock:'8:00', conviction:'STRONG', combo:'I1+I3+I4', ctrlSust:'DURABLE', oppSust:'FRAGILE', minutesSince:50, sameTeam:true },
+    }},
+    '28': { name: 'RECOVERY PATH after opponent BWC — different teams, dont confuse', expected: 'SUPPRESS', ctx: {
+      alertType:'RECOVERY PATH', alertTier:'FIRED', controlTeam:'LAL', floor:'0.35', margin:8, isTrailing:true,
+      period:3, clock:'6:00', minsLeft:'18.0', convictionTier:'CONDITIONAL', convictionCombo:'I1', convictionPairs:'',
+      edge:12, ml:'+300', spread:'+8.5', tpClass:'STRONG RECOVERY', lsClass:null, ctrlSust:'COLD', oppSust:'LOCKED IN',
+      i1:'0.70', i2:'0.40', i3:'0.35', i4:'0.30', i5:'0.45', indicatorsWon:1, indWon:'I1', indLost:'I2+I3+I4',
+      i4Decisive:true, i4Won:false, i4Combo:false,
+      floorHistory:'Q3 9:00: LAL 0.38 (52-62) TP:PROBABLE\nQ2 6:00: LAL 0.42 (34-44) TP:STRONG RECOVERY\nQ2 12:00: LAL 0.35 (18-28)',
+      priorAlerts:'BWC[FIRED] Q2 8:00: floor 0.78, margin 10 leading, sust LOCKED IN/COLD, conv STRONG(I2+I3+I4), edge +18% → SEND: MIN dominant structural case\nAUTO_ANALYSIS[ANALYSIS] Q3 12:00: floor 0.80, margin 12 leading → SEND: MIN BWC position strengthening',
+      quarterSummary:'Q1: 18-28\nQ2: 16-16\nQ3: 18-18'
+    }},
   };
 
   let testKeys = [];
   if (testParam === 'all') testKeys = Object.keys(scenarios);
-  // Batches of 3 — use ?test=b1 through ?test=b8
+  // Batches of 3 — use ?test=b1 through ?test=b10
   else if (testParam === 'b1') testKeys = ['1', '2', '3'];
   else if (testParam === 'b2') testKeys = ['4', '5', '6'];
   else if (testParam === 'b3') testKeys = ['7', '8', '9'];
@@ -324,7 +388,9 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
   else if (testParam === 'b5') testKeys = ['13', '14', '15'];
   else if (testParam === 'b6') testKeys = ['16', '17', '18'];
   else if (testParam === 'b7') testKeys = ['19', '20', '21'];
-  else if (testParam === 'b8') testKeys = ['22'];
+  else if (testParam === 'b8') testKeys = ['22', '23', '24'];
+  else if (testParam === 'b9') testKeys = ['25', '26', '27'];
+  else if (testParam === 'b10') testKeys = ['28'];
   // Individual: ?test=5
   else if (scenarios[testParam]) testKeys = [testParam];
   else return new Response(JSON.stringify({ error: 'Unknown test: ' + testParam }));
