@@ -212,6 +212,10 @@ export default async function handler(req) {
   const positionGated = suppressed.filter(a => a.agent_reasoning && a.agent_reasoning.includes('position gate'));
   const agentSuppressed = suppressed.filter(a => !a.agent_reasoning || !a.agent_reasoning.includes('position gate'));
 
+  // Split agent suppressions: structural calls vs dedup (agent correctly blocked noise)
+  const agentDedup = agentSuppressed.filter(a => a.agent_reasoning && (a.agent_reasoning.toLowerCase().includes('duplicate') || a.agent_reasoning.toLowerCase().includes('already') && a.agent_reasoning.toLowerCase().includes('sent')));
+  const agentStructural = agentSuppressed.filter(a => !a.agent_reasoning || !(a.agent_reasoning.toLowerCase().includes('duplicate') || a.agent_reasoning.toLowerCase().includes('already') && a.agent_reasoning.toLowerCase().includes('sent')));
+
   // Delivered actionable — THE headline number
   const deliveredActionable = delivered.filter(a => ACTIONABLE_TYPES.includes(a.alert_type));
   const deliveredActionableCorrect = deliveredActionable.filter(a => a.result.correct).length;
@@ -220,11 +224,13 @@ export default async function handler(req) {
   const deliveredTransitional = delivered.filter(a => TRANSITIONAL_TYPES.includes(a.alert_type));
   const deliveredTransitionalHeld = deliveredTransitional.filter(a => a.result.correct).length;
 
-  // Agent saves — agent suppressed alerts that would have been wrong
-  const agentSaves = agentSuppressed.filter(a => !a.result.correct).length;
-  // Agent misses — agent suppressed alerts that would have been right
-  const agentMisses = agentSuppressed.filter(a => a.result.correct).length;
-  // Dedup correct — deduped alerts that were correct (not a miss, signal already delivered)
+  // Agent saves — structural suppression that would have been wrong
+  const agentSaves = agentStructural.filter(a => !a.result.correct).length;
+  // Agent misses — structural suppression that would have been right
+  const agentMisses = agentStructural.filter(a => a.result.correct).length;
+  // Agent dedup correct — dedup suppressions that were correct (not a miss, signal already delivered)
+  const agentDedupCorrect = agentDedup.filter(a => a.result.correct).length;
+  // Dedup correct — system deduped alerts that were correct
   const dedupCorrect = deduped.filter(a => a.result.correct).length;
   // Position-gated correct — gated alerts that were correct (not a miss, no prior position)
   const posGatedCorrect = positionGated.filter(a => a.result.correct).length;
@@ -254,6 +260,8 @@ export default async function handler(req) {
     delivered_total: deliveredActionable.length,
     saves: agentSaves,
     missed_winners: agentMisses,
+    agent_dedup: agentDedup.length,
+    agent_dedup_correct: agentDedupCorrect,
     deduped: deduped.length,
     dedup_correct: dedupCorrect,
     position_gated: positionGated.length,
@@ -300,7 +308,7 @@ export default async function handler(req) {
 
   log(`Delivered accuracy: ${accuracyOverall}% (${deliveredActionableCorrect}/${deliveredActionable.length}) | Agent saves: ${agentSaves} misses: ${agentMisses} | Raw: ${rawCorrect}/${rawTotal}`);
   log(`By type: ${JSON.stringify(byType)}`);
-  log(`Agent: saves=${agentSaves}, missed_winners=${agentMisses}, deduped=${deduped.length}(${dedupCorrect} correct), position_gated=${positionGated.length}(${posGatedCorrect} correct)`);
+  log(`Agent: saves=${agentSaves}, missed=${agentMisses}, agent_dedup=${agentDedup.length}(${agentDedupCorrect} correct), sys_dedup=${deduped.length}(${dedupCorrect} correct), pos_gated=${positionGated.length}(${posGatedCorrect} correct)`);
   log(`Cascades: ${cascadeGames.length}, Conflicts: ${conflictGames.length}, TP failures: ${tpFailures.length}`);
   log(`Candidates sent: ${candidatesSent.length}/${candidates.length}, correct: ${candidatesSentCorrect.length}`);
 
@@ -331,17 +339,19 @@ ACCURACY SUMMARY:
 Delivered actionable: ${accuracyOverall}% (${deliveredActionableCorrect}/${deliveredActionable.length})
 Raw mechanical (all alerts): ${rawTotal > 0 ? Math.round((rawCorrect / rawTotal) * 100) : '?'}% (${rawCorrect}/${rawTotal})
 Agent saves (suppressed losers): ${agentSaves}
-Agent missed winners (suppressed winners): ${agentMisses}
-Deduped (signal already sent, blocked duplicate): ${deduped.length} (${dedupCorrect} would have been correct — NOT agent misses)
-Position-gated (auto-analysis with no prior actionable alert): ${positionGated.length} (${posGatedCorrect} would have been correct — NOT agent misses, these never reached the agent)
+Agent missed winners (structural suppression, would have won): ${agentMisses}
+Agent dedup (suppressed duplicate signals): ${agentDedup.length} (${agentDedupCorrect} correct — NOT misses, signal already delivered)
+System deduped (agent said SEND, system blocked): ${deduped.length} (${dedupCorrect} correct — NOT misses)
+Position-gated (auto-analysis with no prior actionable alert): ${positionGated.length} (${posGatedCorrect} correct — never reached agent)
 Transitional alerts (LEAD LOST/CRUMBLING): ${deliveredTransitionalHeld}/${deliveredTransitional.length} held
 By type (delivered only): ${JSON.stringify(byType)}
 Candidates sent: ${candidatesSent.length}/${candidates.length}, correct: ${candidatesSentCorrect.length}
 
 NOTE ON CATEGORIES:
-- Agent saves/misses: ONLY alerts where the agent made a SUPPRESS decision. This is the agent's track record.
-- Deduped: alerts where agent said SEND but ntfy was blocked because the same signal was already delivered. Correct system behavior, not a miss.
-- Position-gated: auto-analyses suppressed because no prior BUY/BWC/WB/RP was sent for that game. These are informational calibration data, not betting signals. Do NOT treat as missed opportunities.
+- Agent saves/misses: ONLY structural SUPPRESS decisions where the agent evaluated the signal and rejected it. This is the true agent accuracy measure.
+- Agent dedup: agent said SUPPRESS citing "duplicate" — the same signal was already sent earlier. Correct noise prevention, not a miss.
+- System deduped: agent said SEND but system blocked because a mechanical alert already sent that period. Correct behavior.
+- Position-gated: auto-analyses suppressed because no prior BUY/BWC/WB/RP was sent for that game. Informational calibration data, not betting signals. Do NOT treat as missed opportunities.
 
 SCORED ALERTS:
 ${alertSummary}
@@ -448,7 +458,7 @@ RECOMMENDATIONS:
       if (b) typeLines.push(`${t}: ${b.correct}/${b.total}`);
     });
 
-    // Agent value line — only agent SUPPRESS decisions
+    // Agent value line — only structural SUPPRESS decisions
     let agentLine = '';
     if (agentSaves > 0 || agentMisses > 0) {
       agentLine = `\nThe AI filter blocked ${agentSaves + agentMisses} signals`;
@@ -456,10 +466,16 @@ RECOMMENDATIONS:
       if (agentMisses > 0) agentLine += `, ${agentMisses} would have won`;
     }
 
-    // Dedup line — signal already delivered, system correctly blocked duplicate
+    // Agent dedup line — agent correctly blocked duplicate signals
+    let agentDedupLine = '';
+    if (agentDedup.length > 0) {
+      agentDedupLine = `\n${agentDedup.length} duplicates blocked by AI`;
+    }
+
+    // System dedup line — agent said SEND but system blocked
     let dedupLine = '';
     if (deduped.length > 0) {
-      dedupLine = `\n${deduped.length} deduped (signal already sent)`;
+      dedupLine = `\n${deduped.length} system deduped`;
     }
 
     // Position-gated line — auto-analyses with no prior actionable alert
@@ -477,6 +493,7 @@ RECOMMENDATIONS:
     const body = headline
       + (typeLines.length > 0 ? '\n' + typeLines.join(' | ') : '')
       + agentLine
+      + agentDedupLine
       + dedupLine
       + gatedLine
       + transLine;
