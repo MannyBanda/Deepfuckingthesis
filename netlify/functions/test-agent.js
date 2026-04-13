@@ -376,11 +376,54 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       priorAlerts:'BWC[FIRED] Q2 8:00: floor 0.78, margin 10 leading, sust LOCKED IN/COLD, conv STRONG(I2+I3+I4), edge +18% → SEND: MIN dominant structural case\nAUTO_ANALYSIS[ANALYSIS] Q3 12:00: floor 0.80, margin 12 leading → SEND: MIN BWC position strengthening',
       quarterSummary:'Q1: 18-28\nQ2: 16-16\nQ3: 18-18'
     }},
+
+    // ═══ DEEP PRIOR CHAIN SCENARIOS — 5 priors each (29-32) ═══
+
+    '29': { name: 'CONTROL: BWC with 5 clean priors — simple escalation', expected: 'SEND', ctx: {
+      alertType:'BUY WINDOW CLOSING', alertTier:'FIRED', controlTeam:'OKC', floor:'0.82', margin:10, isTrailing:false,
+      period:4, clock:'8:00', minsLeft:'8.0', convictionTier:'DOMINANT', convictionCombo:'I1+I2+I3+I4', convictionPairs:'I3+I4',
+      edge:14.5, ml:'-320', spread:'-8.5', tpClass:null, lsClass:'SAFE', ctrlSust:'LOCKED IN', oppSust:'COLD',
+      i1:'0.85', i2:'0.90', i3:'0.80', i4:'0.95', i5:'0.70', indicatorsWon:5, indWon:'I1+I2+I3+I4+I5', indLost:'',
+      i4Decisive:true, i4Won:true, i4Combo:true,
+      floorHistory:'Q4 12:00: OKC 0.80 (88-78) LS:SAFE\nQ3 6:00: OKC 0.78 (72-66) LS:SAFE\nQ3 12:00: OKC 0.75 (56-52) LS:CUSHIONED',
+      priorAlerts:'AUTO_ANALYSIS[ANALYSIS] Q3 12:00: floor 0.82, margin 12 leading, sust LOCKED IN/COLD → SEND: BWC position strengthening, floor +0.07 from entry\nBWC[FIRED] Q3 12:00: floor 0.78, margin 8 leading, sust LOCKED IN/COLD, conv STRONG(I2+I3+I4), edge +12% → SEND: structural dominance confirmed\nAUTO_ANALYSIS[ANALYSIS] Q2 12:00: floor 0.72, margin 6 leading → SEND: BUY position converted, OKC took lead\nBUY[FIRED] Q2 6:00: floor 0.70, margin 4 trailing, sust DURABLE/FRAGILE, conv STRONG(I1+I3+I4), edge +22%, TP PROBABLE → SEND: I4 COMBO YES, structural case strong\nRECOVERY PATH[FIRED] Q2 10:00: floor 0.45, margin 8 trailing, sust MIXED/LOCKED IN, conv CONDITIONAL(I1), TP STRONG RECOVERY → SEND: math projects comeback',
+      quarterSummary:'Q1: 22-30\nQ2: 26-18\nQ3: 30-30\nQ4: 10-0'
+    }},
+    '30': { name: 'HARD: BUY after full arc — BWC to collapse to VB recovery', expected: 'SEND', ctx: {
+      alertType:'BUY', alertTier:'FIRED', controlTeam:'SAC', floor:'0.68', margin:4, isTrailing:true,
+      period:4, clock:'9:00', minsLeft:'9.0', convictionTier:'STRONG', convictionCombo:'I1+I3+I4', convictionPairs:'I3+I4',
+      edge:32, ml:'+220', spread:'+5.5', tpClass:'PROBABLE', lsClass:null, ctrlSust:'DURABLE', oppSust:'UNSUSTAINABLE',
+      i1:'0.75', i2:'0.50', i3:'0.80', i4:'0.85', i5:'0.55', indicatorsWon:3, indWon:'I1+I3+I4', indLost:'',
+      i4Decisive:true, i4Won:true, i4Combo:true,
+      floorHistory:'Q4 12:00: SAC 0.65 (78-84) TP:PROBABLE\nQ3 6:00: SAC 0.55 (62-72) TP:CONTESTED\nQ3 12:00: SAC 0.70 (52-56)',
+      priorAlerts:'VARIANCE BREAKING[FIRED] Q4 12:00: floor 0.65, margin 6 trailing, sust DURABLE/UNSUSTAINABLE → SEND: opponent 3PT% collapsed from 48% to 29%, variance thesis confirmed\nLEAD LOST Q3 4:00: floor 0.60, margin 0 → SAC lost lead, was CUSHIONED\nLEAD CRUMBLING[FIRED] Q3 8:00: floor 0.68, margin 4 leading, sust DURABLE/LOCKED IN, conv MODEST(I1+I4), LS CRITICAL → SEND: real erosion, floor -0.12 from BWC, sust shifting\nAUTO_ANALYSIS[ANALYSIS] Q3 12:00: floor 0.70, margin 6 leading → SEND: BWC position holding but floor dipped from 0.80\nBWC[FIRED] Q2 6:00: floor 0.80, margin 10 leading, sust LOCKED IN/FRAGILE, conv DOMINANT(I1+I2+I3+I4), edge +18% → SEND: dominant structural case',
+      quarterSummary:'Q1: 26-18\nQ2: 22-20\nQ3: 14-26\nQ4: 16-20'
+    }},
+    '31': { name: 'HARD: BUY after 3 suppressions then I4 flips — conditions changed', expected: 'SEND', ctx: {
+      alertType:'BUY', alertTier:'FIRED', controlTeam:'ATL', floor:'0.72', margin:6, isTrailing:true,
+      period:3, clock:'3:00', minsLeft:'15.0', convictionTier:'STRONG', convictionCombo:'I2+I3+I4', convictionPairs:'I3+I4',
+      edge:28, ml:'+250', spread:'+6.5', tpClass:'PROBABLE', lsClass:null, ctrlSust:'DURABLE', oppSust:'FRAGILE',
+      i1:'0.50', i2:'0.75', i3:'0.80', i4:'0.85', i5:'0.55', indicatorsWon:3, indWon:'I2+I3+I4', indLost:'',
+      i4Decisive:true, i4Won:true, i4Combo:true,
+      floorHistory:'Q3 6:00: ATL 0.68 (58-66) TP:PROBABLE\nQ3 12:00: ATL 0.62 (48-58) TP:CONTESTED\nQ2 6:00: ATL 0.55 (32-42)',
+      priorAlerts:'BUY[FIRED] Q3 6:00: floor 0.62, margin 8 trailing, sust MIXED/LOCKED IN, conv CONDITIONAL(I1), I4 COMBO NO → SUPPRESS: only 1/5 indicators, I4 favors opponent, structural case weak\nRECOVERY PATH[FIRED] Q2 8:00: floor 0.48, margin 10 trailing, sust COLD/LOCKED IN, conv CONDITIONAL(I1), TP STRONG RECOVERY → SEND: math projects comeback despite weak floor\nAUTO_ANALYSIS[ANALYSIS] Q2 12:00: floor 0.55, margin 10 trailing → SUPPRESS: no prior actionable position (position gate)\nWINDOW BUY[CANDIDATE] Q2 10:00: floor 0.52, margin 8 trailing, sust COLD/LOCKED IN, conv CONDITIONAL(I1) → SUPPRESS: CANDIDATE with I4 COMBO NO, only 1/5 indicators\nBUY[CANDIDATE] Q2 6:00: floor 0.50, margin 12 trailing, sust COLD/LOCKED IN, conv CONDITIONAL(I1) → SUPPRESS: floor below 0.55 with I4 COMBO NO',
+      quarterSummary:'Q1: 16-24\nQ2: 16-18\nQ3: 26-24, paint 16-6'
+    }},
+    '32': { name: 'EXTREME: false dawn — narrative says recovery but numbers say no', expected: 'SUPPRESS', ctx: {
+      alertType:'WINDOW BUY', alertTier:'FIRED', controlTeam:'MEM', floor:'0.55', margin:2, isTrailing:false,
+      period:4, clock:'8:00', minsLeft:'8.0', convictionTier:'MODEST', convictionCombo:'I1+I4', convictionPairs:'',
+      edge:1.8, ml:'-115', spread:'-1.5', tpClass:null, lsClass:'AT RISK', ctrlSust:'COLD', oppSust:'MIXED',
+      i1:'0.65', i2:'0.50', i3:'0.45', i4:'0.70', i5:'0.45', indicatorsWon:2, indWon:'I1+I4', indLost:'I3+I5',
+      i4Decisive:true, i4Won:true, i4Combo:true,
+      floorHistory:'Q4 12:00: MEM 0.58 (80-80) LS:AT RISK\nQ3 6:00: MEM 0.48 (66-72) TP:CONTESTED\nQ3 12:00: MEM 0.55 (54-58)',
+      priorAlerts:'VARIANCE BREAKING[FIRED] Q3 2:00: floor 0.52, margin 4 trailing, sust COLD/FRAGILE → SEND: opponent shooting regressing, was LOCKED IN now FRAGILE\nLEAD LOST Q3 6:00: floor 0.60, margin 0 → MEM lost lead, was CUSHIONED\nLEAD CRUMBLING[FIRED] Q3 10:00: floor 0.65, margin 4 leading, sust DURABLE/LOCKED IN, conv MODEST(I1+I2), LS CRITICAL → SEND: floor dropped -0.15 from BWC, I4 lost, real erosion\nAUTO_ANALYSIS[ANALYSIS] Q2 12:00: floor 0.80, margin 12 leading → SEND: BWC position dominant, floor climbing\nBWC[FIRED] Q2 6:00: floor 0.78, margin 10 leading, sust LOCKED IN/FRAGILE, conv DOMINANT(I1+I2+I3+I4), edge +22% → SEND: dominant structural case across all indicators',
+      quarterSummary:'Q1: 28-18\nQ2: 24-22\nQ3: 14-30\nQ4: 14-10'
+    }},
   };
 
   let testKeys = [];
   if (testParam === 'all') testKeys = Object.keys(scenarios);
-  // Batches of 3 — use ?test=b1 through ?test=b10
+  // Batches of 3 — use ?test=b1 through ?test=b11
   else if (testParam === 'b1') testKeys = ['1', '2', '3'];
   else if (testParam === 'b2') testKeys = ['4', '5', '6'];
   else if (testParam === 'b3') testKeys = ['7', '8', '9'];
@@ -390,7 +433,8 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
   else if (testParam === 'b7') testKeys = ['19', '20', '21'];
   else if (testParam === 'b8') testKeys = ['22', '23', '24'];
   else if (testParam === 'b9') testKeys = ['25', '26', '27'];
-  else if (testParam === 'b10') testKeys = ['28'];
+  else if (testParam === 'b10') testKeys = ['28', '29', '30'];
+  else if (testParam === 'b11') testKeys = ['31', '32'];
   // Individual: ?test=5 or comma-separated: ?test=19,20,26
   else if (testParam.includes(',')) testKeys = testParam.split(',').filter(k => scenarios[k.trim()]).map(k => k.trim());
   else if (scenarios[testParam]) testKeys = [testParam];
