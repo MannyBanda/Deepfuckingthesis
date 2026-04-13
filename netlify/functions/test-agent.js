@@ -391,7 +391,8 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
   else if (testParam === 'b8') testKeys = ['22', '23', '24'];
   else if (testParam === 'b9') testKeys = ['25', '26', '27'];
   else if (testParam === 'b10') testKeys = ['28'];
-  // Individual: ?test=5
+  // Individual: ?test=5 or comma-separated: ?test=19,20,26
+  else if (testParam.includes(',')) testKeys = testParam.split(',').filter(k => scenarios[k.trim()]).map(k => k.trim());
   else if (scenarios[testParam]) testKeys = [testParam];
   else return new Response(JSON.stringify({ error: 'Unknown test: ' + testParam }));
 
