@@ -60,7 +60,7 @@ RULES:
 - EARLY GAME (Q1-Q2): I4 COMBO YES = SEND. I4 COMBO NO = extra scrutiny.
 - TP (Throughput Projection) is context, not a veto. It estimates deficit recovery from structural rates. Limitation: anchored to cumulative stats, misses momentum shifts. TP NO PATH at 1-3 point deficits is often a false negative. TP STRONG/PROBABLE adds confidence. TP UNLIKELY/NO PATH is a caution flag, not a stop sign.
 - RECOVERY PATH: math projects a comeback. SEND if structural indicators (especially I4) back the TP math — I4 COMBO YES + rising floor means the engine is real. SUPPRESS if TP is anchored from early-game cumulative stats that have since eroded — floor declining + I4 COMBO NO means the opponent actually has game control despite favorable TP math.
-- LEAD CRUMBLING: warning that a structural team's lead is vulnerable. SEND if floor is declining AND sustainability is shifting AND indicator count is dropping — real structural erosion. SUPPRESS if I4 still favors control team, sustainability holds, and LS AT RISK is from a hot opponent run (noise), not structural collapse.
+- LEAD CRUMBLING: WARNING alert — INVERTS normal indicator logic. For entry alerts, strong indicators = SEND. For LEAD CRUMBLING, strong indicators = lead is SAFE = SUPPRESS. I4 COMBO YES + 3+ indicators + LOCKED IN/DURABLE = SUPPRESS (noise). I4 EVEN/NO + declining floor + sust shifting = SEND (real erosion). Floor dropped 0.10+ + conviction downgraded = SEND. If a prior BWC/BUY was SENT for this team in priorAlerts: lean SEND — subscriber has a position to protect.
 - VARIANCE BREAKING: opponent's shooting is regressing. SEND if structural edge is clear (I4 COMBO YES, 3+ indicators) and the sustainability shift is meaningful. SUPPRESS if structural edge is thin (I4 EVEN, 1-2 indicators) or the sustainability drop is a borderline tier flip.
 
 Respond in EXACTLY this format:
@@ -325,7 +325,7 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       priorAlerts:'RECOVERY PATH[FIRED] Q2 8:00: floor 0.40, margin 12 trailing, sust MIXED/LOCKED IN, conv CONDITIONAL(I1), TP STRONG RECOVERY → SEND: structural math projects comeback\nAUTO_ANALYSIS[ANALYSIS] Q3 12:00: floor 0.58, margin 8 trailing → SUPPRESS: no prior actionable alert (position gate)',
       quarterSummary:'Q1: 18-26\nQ2: 12-16\nQ3: 32-26, paint 16-8'
     }},
-    '24': { name: 'BWC after LEAD CRUMBLING sent — real erosion, do not chase', expected: 'SUPPRESS', ctx: {
+    '24': { name: 'BWC after LEAD CRUMBLING sent — real erosion, downgrade', expected: 'DOWNGRADE', ctx: {
       alertType:'BUY WINDOW CLOSING', alertTier:'FIRED', controlTeam:'MIA', floor:'0.62', margin:6, isTrailing:false,
       period:3, clock:'3:00', minsLeft:'15.0', convictionTier:'MODEST', convictionCombo:'I1+I2', convictionPairs:'',
       edge:3.5, ml:'-150', spread:'-3.5', tpClass:null, lsClass:'AT RISK', ctrlSust:'FRAGILE', oppSust:'DURABLE',
