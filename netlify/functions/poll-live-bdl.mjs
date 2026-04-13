@@ -218,7 +218,6 @@ RULES:
 - EARLY GAME NOTE (Q1-Q2): Indicator samples are smaller early — steals/blocks counts are low, run share may not be populated yet, and biggest_lead gaps can form from a single early run. This does NOT mean early signals are unreliable. The new indicator formulas have proven predictive even in Q2. For Q1-Q2 FIRED alerts: I4 COMBO YES = SEND with confidence. I4 COMBO NO = apply normal scrutiny (don't auto-reject, just verify the structural case). For Q1-Q2 CANDIDATE alerts: I4 COMBO YES = SEND. I4 COMBO NO = apply extra scrutiny but still SEND if floor is strong (0.75+) and sustainability favors control team. Q3+ alerts have the most data — highest confidence.
 - CANDIDATE BUYs at floor 0.55-0.65: only SEND if I4 COMBO is YES (I4 decisive + at least one other indicator agrees — this pattern is 98-100% accurate historically). Without I4 COMBO, require very strong sustainability case to justify SEND.
 - CANDIDATE BUYs with negative ML (heavy favorite trailing): the CANDIDATE tier reflects the ML gate (-250 to -400), NOT structural weakness. Evaluate the structural case as if it were FIRED — if I4 COMBO YES + STRONG/DOMINANT conviction, SEND so the subscriber can shop for favorable lines. Note the heavy ML in the BODY.
-- CANDIDATE BWC with null odds: the CANDIDATE tier reflects missing odds data, NOT structural weakness. Evaluate the structural case independently — if indicators, conviction, and sustainability are strong, SEND. Note in the BODY that odds are unavailable and the subscriber should verify line availability.
 - TP (Throughput Projection) is context, not a veto. It estimates whether a trailing team's structural production rate can close the deficit in remaining possessions. Limitation: TP uses cumulative game stats, so early-game dominance by either team anchors the rates even after momentum shifts. TP NO PATH at 1-3 point deficits is often a false negative — the game is essentially tied regardless of what the projection math says. TP STRONG RECOVERY or PROBABLE adds confidence. TP UNLIKELY or NO PATH is a caution flag, not a stop sign.
 
 Respond in EXACTLY this format:
@@ -4954,14 +4953,8 @@ export default async function(req) {
               } else if (garbageLine) {
                 log(`${matchup}: BWC skipped — line dead (garbage MLs)`);
               } else if (ctrlMLNum === null) {
-                // No odds data — route to agent as CANDIDATE if structural gates pass
-                const lsClass = lsForBWC?.classification || null;
-                if (lsClass !== 'AT RISK' && lsClass !== 'CRITICAL' && ctrlSust !== 'FRAGILE' && ctrlSust !== 'UNSUSTAINABLE') {
-                  alertType = 'BUY WINDOW CLOSING'; alertTier = 'CANDIDATE'; alertEmoji = '🔵'; alertPriority = 3;
-                  log(`${matchup}: BWC CANDIDATE — no odds data, routing to agent`);
-                } else {
-                  log(`${matchup}: BWC skipped — no odds + structural concern (LS:${lsClass} sust:${ctrlSust})`);
-                }
+                // No odds data — can't verify value, subscriber can't act. Silent suppress, no DB insert.
+                log(`${matchup}: BWC skipped — no odds data (floor ${ind.score.toFixed(2)}, ${ctrlSust})`);
               }
             }
 

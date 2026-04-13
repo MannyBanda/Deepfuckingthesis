@@ -46,7 +46,6 @@ RULES:
 - CANDIDATE alerts: SEND only if structural case is compelling.
 - CANDIDATE BUYs floor 0.55-0.65: only SEND if I4 COMBO YES.
 - CANDIDATE BUYs with negative ML (heavy favorite trailing): CANDIDATE tier reflects the ML gate, NOT structural weakness. Evaluate as if FIRED — I4 COMBO YES + STRONG conviction = SEND for line shopping. Note heavy ML in BODY.
-- CANDIDATE BWC with null odds: CANDIDATE tier reflects missing odds, NOT structural weakness. Evaluate structural case independently. If strong, SEND and note odds unavailable in BODY.
 - BWC + I4 EVEN: NOT a suppress signal when 3+ indicators + LOCKED IN/DURABLE/COLD sust.
 - ANCHORED FLOOR CHECK: trailing 0.75+ but margin 1-3 with declining floor = verify. Does NOT apply to leading teams.
 - EARLY GAME (Q1-Q2): I4 COMBO YES = SEND. I4 COMBO NO = extra scrutiny.
@@ -208,15 +207,15 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       priorAlerts:'None',
       quarterSummary:'Q1: 18-24\nQ2: 20-20\nQ3: 24-19'
     }},
-    '14': { name: 'NEW: CANDIDATE BWC null ML (structural evaluation only)', expected: 'SEND', ctx: {
-      alertType:'BUY WINDOW CLOSING', alertTier:'CANDIDATE', controlTeam:'POR', floor:'0.82', margin:10, isTrailing:false,
-      period:3, clock:'6:00', minsLeft:'18.0', convictionTier:'DOMINANT', convictionCombo:'I1+I2+I3+I4', convictionPairs:'I3+I4',
-      edge:null, ml:null, spread:null, tpClass:null, lsClass:'SAFE', ctrlSust:'LOCKED IN', oppSust:'FRAGILE',
-      i1:'0.80', i2:'0.85', i3:'0.80', i4:'0.90', i5:'0.50', indicatorsWon:4, indWon:'I1+I2+I3+I4', indLost:'',
-      i4Decisive:true, i4Won:true, i4Combo:true,
-      floorHistory:'Q3 9:00: POR 0.80 (72-62) LS:SAFE\nQ2 6:00: POR 0.75 (46-38) LS:SAFE',
+    '14': { name: 'NEW: CANDIDATE BWC FRAGILE sust (lead built on variance)', expected: 'SUPPRESS', ctx: {
+      alertType:'BUY WINDOW CLOSING', alertTier:'CANDIDATE', controlTeam:'POR', floor:'0.65', margin:6, isTrailing:false,
+      period:3, clock:'6:00', minsLeft:'18.0', convictionTier:'MODEST', convictionCombo:'I1+I3', convictionPairs:'',
+      edge:5.5, ml:'-180', spread:'-4.5', tpClass:null, lsClass:'CUSHIONED', ctrlSust:'FRAGILE', oppSust:'DURABLE',
+      i1:'0.70', i2:'0.50', i3:'0.75', i4:'0.50', i5:'0.50', indicatorsWon:2, indWon:'I1+I3', indLost:'',
+      i4Decisive:false, i4Won:false, i4Combo:false,
+      floorHistory:'Q3 9:00: POR 0.68 (72-66) LS:CUSHIONED\nQ2 6:00: POR 0.65 (46-40)',
       priorAlerts:'None',
-      quarterSummary:'Q1: 22-18, paint 16-8\nQ2: 24-20, paint 14-10\nQ3: 26-24'
+      quarterSummary:'Q1: 22-18, 3PT 5/9\nQ2: 24-22, 3PT 6/11\nQ3: 26-26'
     }},
     '15': { name: 'NEW: BUY + TP UNLIKELY but I4 COMBO YES (trust indicators over TP)', expected: 'SEND', ctx: {
       alertType:'BUY', alertTier:'FIRED', controlTeam:'MIL', floor:'0.73', margin:7, isTrailing:true,
