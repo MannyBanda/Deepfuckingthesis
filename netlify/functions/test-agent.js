@@ -316,11 +316,16 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
 
   let testKeys = [];
   if (testParam === 'all') testKeys = Object.keys(scenarios);
-  else if (testParam === 'fired') testKeys = ['1', '4', '7', '8', '11', '12', '15', '16'];
-  else if (testParam === 'candidate') testKeys = ['2', '3', '6', '13', '14'];
-  else if (testParam === 'auto') testKeys = ['5', '9', '10'];
-  else if (testParam === 'transition') testKeys = ['17', '18', '19', '20', '21', '22'];
-  else if (testParam === 'new') testKeys = ['17', '18', '19', '20', '21', '22'];
+  // Batches of 3 — use ?test=b1 through ?test=b8
+  else if (testParam === 'b1') testKeys = ['1', '2', '3'];
+  else if (testParam === 'b2') testKeys = ['4', '5', '6'];
+  else if (testParam === 'b3') testKeys = ['7', '8', '9'];
+  else if (testParam === 'b4') testKeys = ['10', '11', '12'];
+  else if (testParam === 'b5') testKeys = ['13', '14', '15'];
+  else if (testParam === 'b6') testKeys = ['16', '17', '18'];
+  else if (testParam === 'b7') testKeys = ['19', '20', '21'];
+  else if (testParam === 'b8') testKeys = ['22'];
+  // Individual: ?test=5
   else if (scenarios[testParam]) testKeys = [testParam];
   else return new Response(JSON.stringify({ error: 'Unknown test: ' + testParam }));
 
