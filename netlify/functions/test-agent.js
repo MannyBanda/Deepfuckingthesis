@@ -209,14 +209,14 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       quarterSummary:'Q1: 18-24\nQ2: 20-20\nQ3: 24-19'
     }},
     '14': { name: 'NEW: CANDIDATE BWC null ML (structural evaluation only)', expected: 'SEND', ctx: {
-      alertType:'BUY WINDOW CLOSING', alertTier:'CANDIDATE', controlTeam:'POR', floor:'0.75', margin:8, isTrailing:false,
-      period:3, clock:'6:00', minsLeft:'18.0', convictionTier:'STRONG', convictionCombo:'I3+I4', convictionPairs:'I3+I4',
-      edge:null, ml:null, spread:null, tpClass:null, lsClass:'SAFE', ctrlSust:'DURABLE', oppSust:'FRAGILE',
-      i1:'0.50', i2:'0.60', i3:'0.80', i4:'0.85', i5:'0.50', indicatorsWon:3, indWon:'I2+I3+I4', indLost:'',
+      alertType:'BUY WINDOW CLOSING', alertTier:'CANDIDATE', controlTeam:'POR', floor:'0.82', margin:10, isTrailing:false,
+      period:3, clock:'6:00', minsLeft:'18.0', convictionTier:'DOMINANT', convictionCombo:'I1+I2+I3+I4', convictionPairs:'I3+I4',
+      edge:null, ml:null, spread:null, tpClass:null, lsClass:'SAFE', ctrlSust:'LOCKED IN', oppSust:'FRAGILE',
+      i1:'0.80', i2:'0.85', i3:'0.80', i4:'0.90', i5:'0.50', indicatorsWon:4, indWon:'I1+I2+I3+I4', indLost:'',
       i4Decisive:true, i4Won:true, i4Combo:true,
-      floorHistory:'Q3 9:00: POR 0.72 (68-60) LS:SAFE\nQ2 6:00: POR 0.68 (42-36)',
+      floorHistory:'Q3 9:00: POR 0.80 (72-62) LS:SAFE\nQ2 6:00: POR 0.75 (46-38) LS:SAFE',
       priorAlerts:'None',
-      quarterSummary:'Q1: 20-18\nQ2: 22-18\nQ3: 26-24'
+      quarterSummary:'Q1: 22-18, paint 16-8\nQ2: 24-20, paint 14-10\nQ3: 26-24'
     }},
     '15': { name: 'NEW: BUY + TP UNLIKELY but I4 COMBO YES (trust indicators over TP)', expected: 'SEND', ctx: {
       alertType:'BUY', alertTier:'FIRED', controlTeam:'MIL', floor:'0.73', margin:7, isTrailing:true,
