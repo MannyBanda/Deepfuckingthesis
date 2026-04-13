@@ -409,7 +409,7 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       priorAlerts:'BUY[FIRED] Q3 6:00: floor 0.62, margin 8 trailing, sust MIXED/LOCKED IN, conv CONDITIONAL(I1), I4 COMBO NO → SUPPRESS: only 1/5 indicators, I4 favors opponent, structural case weak\nRECOVERY PATH[FIRED] Q2 8:00: floor 0.48, margin 10 trailing, sust COLD/LOCKED IN, conv CONDITIONAL(I1), TP STRONG RECOVERY → SEND: math projects comeback despite weak floor\nAUTO_ANALYSIS[ANALYSIS] Q2 12:00: floor 0.55, margin 10 trailing → SUPPRESS: no prior actionable position (position gate)\nWINDOW BUY[CANDIDATE] Q2 10:00: floor 0.52, margin 8 trailing, sust COLD/LOCKED IN, conv CONDITIONAL(I1) → SUPPRESS: CANDIDATE with I4 COMBO NO, only 1/5 indicators\nBUY[CANDIDATE] Q2 6:00: floor 0.50, margin 12 trailing, sust COLD/LOCKED IN, conv CONDITIONAL(I1) → SUPPRESS: floor below 0.55 with I4 COMBO NO',
       quarterSummary:'Q1: 16-24\nQ2: 16-18\nQ3: 26-24, paint 16-6'
     }},
-    '32': { name: 'EXTREME: false dawn — narrative says recovery but numbers say no', expected: 'SUPPRESS', ctx: {
+    '32': { name: 'EXTREME: false dawn — I4 COMBO YES overrides narrative pressure', expected: 'SEND', ctx: {
       alertType:'WINDOW BUY', alertTier:'FIRED', controlTeam:'MEM', floor:'0.55', margin:2, isTrailing:false,
       period:4, clock:'8:00', minsLeft:'8.0', convictionTier:'MODEST', convictionCombo:'I1+I4', convictionPairs:'',
       edge:1.8, ml:'-115', spread:'-1.5', tpClass:null, lsClass:'AT RISK', ctrlSust:'COLD', oppSust:'MIXED',
