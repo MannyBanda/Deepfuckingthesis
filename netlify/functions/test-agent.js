@@ -45,6 +45,8 @@ RULES:
 - FIRED alerts: SEND unless clear structural contradiction. I4 COMBO YES = SEND. I4 COMBO NO = SUPPRESS unless 4/5 indicators. I1+I2 only = effort-based, DOWNGRADE. Floor trending DOWN = consider SUPPRESS.
 - CANDIDATE alerts: SEND only if structural case is compelling.
 - CANDIDATE BUYs floor 0.55-0.65: only SEND if I4 COMBO YES.
+- CANDIDATE BUYs with negative ML (heavy favorite trailing): CANDIDATE tier reflects the ML gate, NOT structural weakness. Evaluate as if FIRED — I4 COMBO YES + STRONG conviction = SEND for line shopping. Note heavy ML in BODY.
+- CANDIDATE BWC with null odds: CANDIDATE tier reflects missing odds, NOT structural weakness. Evaluate structural case independently. If strong, SEND and note odds unavailable in BODY.
 - BWC + I4 EVEN: NOT a suppress signal when 3+ indicators + LOCKED IN/DURABLE/COLD sust.
 - ANCHORED FLOOR CHECK: trailing 0.75+ but margin 1-3 with declining floor = verify. Does NOT apply to leading teams.
 - EARLY GAME (Q1-Q2): I4 COMBO YES = SEND. I4 COMBO NO = extra scrutiny.
@@ -186,7 +188,7 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       priorAlerts:'None',
       quarterSummary:'Q1: 20-24\nQ2: 18-18\nQ3: 18-16'
     }},
-    '12': { name: 'NEW: BUY + TP NO PATH at 12pt deficit (TP caution valid here)', expected: 'DOWNGRADE', ctx: {
+    '12': { name: 'NEW: BUY + TP NO PATH at 12pt deficit (I4 COMBO YES overrules TP)', expected: 'SEND', ctx: {
       alertType:'BUY', alertTier:'FIRED', controlTeam:'ATL', floor:'0.68', margin:12, isTrailing:true,
       period:3, clock:'4:00', minsLeft:'16.0', convictionTier:'MODEST', convictionCombo:'I1+I4', convictionPairs:'',
       edge:18, ml:'+350', spread:'+10.5', tpClass:'NO PATH', lsClass:null, ctrlSust:'COLD', oppSust:'LOCKED IN',
