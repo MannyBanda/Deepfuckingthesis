@@ -263,9 +263,15 @@ async function gatherAgentContext(sql, gameId, matchup) {
     }
   } catch (e) { /* non-fatal */ }
   try {
-    const alerts = await sql`SELECT alert_type, alert_tier, period, clock, floor_score, margin, is_trailing, ctrl_sust, opp_sust, agent_decision, agent_reasoning, conviction_tier, conviction_combo, edge, tp_class, monitor_status, monitor_reasoning
+    const alerts = await sql`SELECT alert_type, alert_tier, period, clock, floor_score, margin, is_trailing, ctrl_sust, opp_sust, agent_decision, agent_reasoning, conviction_tier, conviction_combo, edge, tp_class
       FROM alerts WHERE game_id = ${gameId} ORDER BY ts DESC LIMIT 5`;
     if (alerts.length > 0) {
+      // Try to get monitor columns — may not exist yet
+      let monitorData = {};
+      try {
+        const mRows = await sql`SELECT id, monitor_status, monitor_reasoning FROM alerts WHERE game_id = ${gameId} AND monitor_status IS NOT NULL`;
+        mRows.forEach(m => { monitorData[m.id] = m; });
+      } catch (e) { /* monitor columns may not exist */ }
       priorAlerts = alerts.map(a => {
         let line = `${a.alert_type}${a.alert_tier ? '['+a.alert_tier+']' : ''} Q${a.period} ${a.clock}: floor ${Number(a.floor_score).toFixed(2)}, margin ${a.margin} ${a.is_trailing ? 'trailing' : 'leading'}, sust ${a.ctrl_sust}/${a.opp_sust}`;
         if (a.conviction_tier) line += `, conv ${a.conviction_tier}(${a.conviction_combo || '?'})`;
@@ -273,7 +279,8 @@ async function gatherAgentContext(sql, gameId, matchup) {
         if (a.tp_class) line += `, TP ${a.tp_class}`;
         if (a.agent_decision) line += ` → ${a.agent_decision}`;
         if (a.agent_reasoning) line += `: ${a.agent_reasoning.substring(0, 120)}`;
-        if (a.monitor_status) line += `\n  └── Monitor: ${a.monitor_status}${a.monitor_reasoning ? ' — ' + a.monitor_reasoning.substring(0, 100) : ''}`;
+        const md = monitorData[a.id];
+        if (md?.monitor_status) line += `\n  └── Monitor: ${md.monitor_status}${md.monitor_reasoning ? ' — ' + md.monitor_reasoning.substring(0, 100) : ''}`;
         return line;
       }).join('\n');
     }
@@ -4178,9 +4185,17 @@ export default async function(req) {
       let pollState = null;
       try {
         const psRows = await sql`
-          SELECT first_tip, last_tip, game_count, all_final, schedule_json, monitor_last_run
+          SELECT first_tip, last_tip, game_count, all_final, schedule_json
           FROM poll_state WHERE league = ${league} AND date = ${dateKey}
         `;
+        if (psRows.length > 0) pollState = psRows[0];
+        // monitor_last_run — separate query so missing column doesn't kill the main SELECT
+        if (pollState) {
+          try {
+            const mlr = await sql`SELECT monitor_last_run FROM poll_state WHERE league = ${league} AND date = ${dateKey}`;
+            if (mlr.length > 0) pollState.monitor_last_run = mlr[0].monitor_last_run;
+          } catch (e) { /* column may not exist yet — non-fatal */ }
+        }
         if (psRows.length > 0) pollState = psRows[0];
       } catch (e) {
         // Table may not exist yet — proceed to fetch schedule
