@@ -217,6 +217,7 @@ RULES:
 - ANCHORED FLOOR CHECK: If team is TRAILING with floor 0.75+ but margin only 1-3 pts AND floor is declining from recent snapshots, the floor may be anchored from earlier dominance that has eroded. Verify recent quarters still favor control team before SEND. This rule does NOT apply to leading teams (BWC/WINDOW BUY) — a high floor with a small lead is a valid structural read.
 - EARLY GAME NOTE (Q1-Q2): Indicator samples are smaller early — steals/blocks counts are low, run share may not be populated yet, and biggest_lead gaps can form from a single early run. This does NOT mean early signals are unreliable. The new indicator formulas have proven predictive even in Q2. For Q1-Q2 FIRED alerts: I4 COMBO YES = SEND with confidence. I4 COMBO NO = apply normal scrutiny (don't auto-reject, just verify the structural case). For Q1-Q2 CANDIDATE alerts: I4 COMBO YES = SEND. I4 COMBO NO = apply extra scrutiny but still SEND if floor is strong (0.75+) and sustainability favors control team. Q3+ alerts have the most data — highest confidence.
 - CANDIDATE BUYs at floor 0.55-0.65: only SEND if I4 COMBO is YES (I4 decisive + at least one other indicator agrees — this pattern is 98-100% accurate historically). Without I4 COMBO, require very strong sustainability case to justify SEND.
+- TP (Throughput Projection) is an informational model, NOT a veto. It projects whether a trailing team can close a deficit based on structural production rates (paint + FT + points off turnovers + second chance). Known limitation: TP is anchored to cumulative game stats and can miss momentum shifts. A team trailing by 1-3 points with a 0.75+ floor and TP NO PATH is often a false negative — the team is essentially tied and the struct rate math doesn't handle small deficits or momentum reversals well. Weight TP alongside indicators, conviction, and sustainability. TP STRONG RECOVERY or PROBABLE adds confidence to BUY signals. TP UNLIKELY or NO PATH is a caution flag, not a stop sign.
 
 Respond in EXACTLY this format:
 DECISION: [SEND|SUPPRESS|DOWNGRADE]
@@ -4915,18 +4916,11 @@ export default async function(req) {
             }
 
             if (ind.score >= 0.65 && ctrlTrailing && margin >= 1 && margin <= 15 && currentPeriod >= 2 && alertMinsLeft >= 1.0) {
-              // Throughput gate (fail-closed): suppress if no path OR computation failed
-              const tpClass = tpForBuy?.classification || null;
-              if (!tpForBuy) {
-                log(`${matchup}: BUY suppressed — throughput computation failed/null (fail-closed)`);
-              } else if (tpClass === 'UNLIKELY' || tpClass === 'NO PATH') {
-                log(`${matchup}: BUY suppressed — throughput ${tpClass} (exp swing ${Math.round(tpForBuy.expected.totalSwing)} vs deficit ${margin})`);
-              } else {
-                alertType = 'BUY';
-                alertTier = 'FIRED';
-                alertEmoji = '🟢';
-                alertPriority = 5;
-              }
+              // TP computed above — passed to agent as context, NOT used as gate
+              alertType = 'BUY';
+              alertTier = 'FIRED';
+              alertEmoji = '🟢';
+              alertPriority = 5;
             } else if (ind.score >= 0.60 && ctrlLeading && margin >= 2 && currentPeriod >= 2) {
               // BWC with ML gate — no value betting heavy favorites
               const ctrlMLNum = ctrlML ? parseFloat(ctrlML) : null;
@@ -4955,7 +4949,7 @@ export default async function(req) {
 
             // ── WINDOW BUY: windows show structural takeover even when cumulative floor is below BUY threshold ──
             // Fires when QTR window ≥ 0.75, trailing/tied/leading ≤ 5, sustainability LOCKED/DURABLE, floor ≥ 0.45
-            var wbTpClass = null, wbLsClass = null, tpPass = false, lsPass = false, ctrlMargin = ctrlPtsA - oppPtsA, wbWindowScore = null;
+            var wbTpClass = null, wbLsClass = null, ctrlMargin = ctrlPtsA - oppPtsA, wbWindowScore = null;
             if (!alertType && currentPeriod >= 2 && ind.controlTeam && ind.controlTeam !== 'Neither') {
               const inRange = ctrlMargin >= -15 && ctrlMargin <= 5;
               const floorBaseline = ind.score >= 0.45;
@@ -4968,27 +4962,17 @@ export default async function(req) {
                   const wbWindow = computeServerWindow(wbQd, currentPeriod, clock, summary, hA, aA, league);
                   if (wbWindow && wbWindow.available && wbWindow.score >= 0.75 && wbWindow.controlTeam === ind.controlTeam) {
                     wbWindowScore = wbWindow.score;
-                    // TP OR LS gate when trailing: either math says recoverable, or opponent lead is crumbling
-                    let wbBlocked = false;
+                    // Compute TP + LS for agent context when trailing (not used as gates)
                     if (ctrlMargin < 0) {
-                      // TP check: can the deficit be closed?
                       const wbTp = tpForBuy || (function(){ try { return computeThroughputServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat); } catch(e){ return null; } })();
                       wbTpClass = wbTp?.classification || null;
-                      tpPass = wbTp && wbTpClass !== 'UNLIKELY' && wbTpClass !== 'NO PATH';
-                      // LS check: is the opponent's lead vulnerable? (compute from opponent's perspective)
                       try {
                         const oppInd = { ...ind, controlTeam: ctrlIsHome ? aA : hA };
                         const oppLs = computeLeadSafetyServer(summary, oppInd, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat);
                         wbLsClass = oppLs?.classification || null;
-                        lsPass = wbLsClass === 'AT RISK' || wbLsClass === 'CRITICAL';
-                        if (lsPass) log(`${matchup}: WINDOW BUY LS gate passed — opponent lead ${wbLsClass}`);
-                      } catch (e) { /* LS check failed, rely on TP */ }
-                      if (!tpPass && !lsPass) {
-                        wbBlocked = true;
-                        log(`${matchup}: WINDOW BUY suppressed — TP:${wbTpClass || 'failed'} LS:opponent lead not vulnerable`);
-                      }
+                      } catch (e) { /* LS check failed — non-fatal */ }
                     }
-                    if (!wbBlocked) {
+                    {
                       // ML gate: suppress when heavy favorite (no betting value)
                       const wbMLNum = ctrlML ? parseFloat(ctrlML) : null;
                       if (wbMLNum !== null && wbMLNum < -250) {
@@ -5010,27 +4994,19 @@ export default async function(req) {
             // These failed a soft gate but might still have value.
             // Only checked if no FIRED alert exists for this cycle.
             if (!alertType && currentPeriod >= 2 && ind.controlTeam && ind.controlTeam !== 'Neither' && alertMinsLeft >= 1.0 && !leadDegradedSuppressed) {
-              const tpClass = tpForBuy?.classification || null;
 
               // CANDIDATE BUY: floor 0.55-0.65 (below FIRED threshold)
               if (ind.score >= 0.55 && ind.score < 0.65 && ctrlTrailing && margin >= 1 && margin <= 15) {
-                if (!tpClass || (tpClass !== 'UNLIKELY' && tpClass !== 'NO PATH')) {
                   alertType = 'BUY'; alertTier = 'CANDIDATE'; alertEmoji = '🟢'; alertPriority = 4;
                   log(`${matchup}: BUY CANDIDATE — floor ${ind.score.toFixed(2)} below 0.65 threshold`);
-                }
               }
               // CANDIDATE BUY: margin 16-20 (above FIRED range)
               if (!alertType && ind.score >= 0.65 && ctrlTrailing && margin >= 16 && margin <= 20) {
-                if (tpClass && tpClass !== 'UNLIKELY' && tpClass !== 'NO PATH') {
                   alertType = 'BUY'; alertTier = 'CANDIDATE'; alertEmoji = '🟢'; alertPriority = 4;
                   log(`${matchup}: BUY CANDIDATE — margin ${margin} above 15-pt cap`);
-                }
               }
-              // CANDIDATE BUY: TP CONTESTED (normally blocks FIRED BUY)
-              if (!alertType && ind.score >= 0.65 && ctrlTrailing && margin >= 1 && margin <= 15 && tpClass === 'CONTESTED') {
-                alertType = 'BUY'; alertTier = 'CANDIDATE'; alertEmoji = '🟢'; alertPriority = 4;
-                log(`${matchup}: BUY CANDIDATE — TP CONTESTED (FIRED requires better throughput)`);
-              }
+              // (REMOVED: CANDIDATE BUY TP CONTESTED — dead code after TP gate removal.
+              //  Floor ≥0.65 trailing with TP CONTESTED now fires as FIRED BUY directly.)
               // CANDIDATE BWC: ctrl sust FRAGILE (normally blocks FIRED BWC)
               if (!alertType && ind.score >= 0.60 && ctrlLeading && margin >= 2) {
                 const ctrlMLNum = ctrlML ? parseFloat(ctrlML) : null;
@@ -5220,7 +5196,7 @@ export default async function(req) {
                         + `\nFull-game score hasn't caught up yet (floor ${ind.score.toFixed(2)})`
                         + `\n${ind.controlTeam} shooting is sustainable (${ctrlSust})`
                         + (wbLsClass === 'AT RISK' || wbLsClass === 'CRITICAL' ? `\n${oppAlias}'s lead is crumbling (${wbLsClass})` : '')
-                        + (wbTpClass && tpPass ? `\nComeback math supports recovery (${wbTpClass})` : '')
+                        + (wbTpClass && (wbTpClass === 'STRONG RECOVERY' || wbTpClass === 'PROBABLE' || wbTpClass === 'CONTESTED') ? `\nComeback math supports recovery (${wbTpClass})` : '')
                         + (ctrlEdge != null ? `\nEdge: ${ctrlEdge > 0 ? '+' : ''}${ctrlEdge}% over market` : '')
                         + calWarn + vtWarn;
                     } else {
