@@ -179,6 +179,7 @@ export default async function handler(req) {
       log(`BDL empty — using games table fallback (${finalScores.length} games)`);
     } else {
       log('No final scores available from BDL or games table');
+      try { await sql`UPDATE learnings SET findings = 'No final scores available.' WHERE date = ${today.dateStr}`; } catch(e) {}
       return new Response(JSON.stringify({ ok: true, message: 'No final scores' }));
     }
   }
