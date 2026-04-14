@@ -486,6 +486,38 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       quarterSummary:'Q1: 18-26\nQ2: 20-24\nQ3: 14-16',
       monitorContext: 'Q3 6:00: MOMENTUM RISING (3 polls, +0.04) | OPP SUST: STABLE (DURABLE) | FLOOR-MARGIN: DIVERGING\n  OBS: POR structural edge is thin — floor rose from 0.54 to 0.58 but margin grew from -12 to -14. PHX paint dominance is only 22-18, not the commanding gap you\'d expect for a 0.58 floor. POR is generating turnovers (8 steals) but can\'t convert — points off turnovers only 8 vs PHX 14.\n  RISK: PHX shooting remains DURABLE at 36% from 3 on 28 attempts — this is not variance, this is baseline-level production. POR I3 is losing and their own sustainability is MIXED. The floor read is being propped by I1 turnover generation that isn\'t converting to scoring. Structural edge is effort-based, not talent-based.\nQ3 3:00: MOMENTUM STABLE | OPP SUST: STABLE (DURABLE) | FLOOR-MARGIN: DIVERGING\n  OBS: Momentum stalled. Floor flatlined at 0.58, margin now -14. POR generation advantage hasn\'t translated for 3 straight polls. PHX defense adjusting.\n  RISK: Same structural concerns. The monitor has observed divergence for 6+ minutes — floor says POR controls but the game says PHX does. Effort-based edge not converting.'
     }},
+
+    // ── ADVERSARIAL: I4 COMBO YES UNDER MAXIMUM PRESSURE (37-38) ─────────
+
+    '37': { name: 'ADVERSARIAL: FIRED BUY + DOMINANT + I4 YES — but monitor screaming, auto-analysis says broken', expected: '?', ctx: {
+      alertType: 'BUY', alertTier: 'FIRED', controlTeam: 'DAL', floor: 0.73, margin: 14,
+      isTrailing: true, period: 3, clock: '2:00', minsLeft: 14,
+      edge: 25.0, ml: '+520', spread: '-7.5', tpClass: 'PROBABLE', lsClass: null,
+      ctrlSust: 'DURABLE', oppSust: 'DURABLE', windowScore: null,
+      i1: 0.72, i2: 0.70, i3: 0.55, i4: 0.78, i5: 0.68,
+      indicatorsWon: 4, indWon: 'I1+I2+I4+I5', indLost: '',
+      i4Decisive: true, i4Won: true, i4Combo: true,
+      convictionTier: 'DOMINANT', convictionCombo: 'I1+I2+I4+I5',
+      floorHistory:'Q3 2:00: DAL 0.73 (58-72) TP:PROBABLE\nQ3 6:00: DAL 0.70 (52-66) TP:PROBABLE\nQ3 10:00: DAL 0.67 (46-58) TP:CONTESTED\nQ2 4:00: DAL 0.64 (38-48) TP:CONTESTED\nQ2 8:00: DAL 0.60 (30-38) TP:UNLIKELY',
+      priorAlerts:'AUTO_ANALYSIS Q3 12:00: floor 0.65, margin 10 trailing → SEND: "DAL structural thesis is compromised. Floor reads 0.65 but margin has grown from -8 to -12 since Q2. Paint gap 26-20 looks commanding but LAC is converting at elite efficiency — 52% eFG on contested looks. DAL turnovers at 12 are feeding LAC transition. The structural edge is real but the opponent is not regressing."',
+      quarterSummary:'Q1: 18-24, paint 14-10, TO 3-5\nQ2: 20-24, paint 12-10, TO 5-3\nQ3: 20-24, paint 10-12, TO 4-2',
+      monitorContext: 'Q3 8:00: MOMENTUM RISING (6 polls, +0.10) | OPP SUST: STABLE (DURABLE) | FLOOR-MARGIN: DIVERGING\n  OBS: DAL floor has risen steadily from 0.60 to 0.70 across 20 minutes of game time, but margin has worsened from -8 to -14 in the same window. This is a textbook divergence — the structural read says DAL dominates but the scoreboard disagrees emphatically. LAC paint defense has adjusted since Q2, cutting DAL paint advantage from 14-10 to 10-12 in Q3.\n  RISK: LAC shooting is DURABLE at 42% from 3 on 30 attempts — this is NOT variance, this is elite perimeter execution on high volume. DAL turnovers have climbed from 3 (Q1) to 12 cumulative, feeding 16 LAC points off turnovers. The floor is being propped by cumulative Q1-Q2 dominance that has fully eroded in Q3. I2 paint edge has FLIPPED in the current quarter.\nQ3 4:00: MOMENTUM RISING (8 polls, +0.13) | OPP SUST: STABLE (DURABLE) | FLOOR-MARGIN: DIVERGING\n  OBS: Divergence has persisted for 8 consecutive polls (~24 minutes). Floor now 0.73 but margin -14. DAL Q3 is being outscored 20-24 — the quarter-level data directly contradicts the cumulative floor. LAC bench has outscored DAL bench 24-8.\n  RISK: This is the exact failure mode where cumulative floor anchoring produces false signals. DAL dominated Q1-Q2 structurally but LAC has adjusted. Q3 paint is 10-12 (flipped), Q3 turnovers are 4-2 (DAL advantage gone). The floor of 0.73 reflects a game that no longer exists. Prior auto-analysis flagged this at Q3 12:00 — nothing has improved since.\nQ3 1:00: MOMENTUM STABLE | OPP SUST: STABLE (DURABLE) | FLOOR-MARGIN: DIVERGING\n  OBS: Floor plateaued at 0.73, margin still -14. 25+ minutes of divergence. Every structural advantage DAL had in Q1-Q2 has eroded or flipped in Q3. LAC is the better team in the current quarter by every metric.\n  RISK: I4 COMBO YES is anchored to cumulative biggest_lead (DAL had a 4pt lead in Q1) and pre-Q4 season scoring margin. The live game has moved past both of those inputs. If this were computed fresh from Q3 data alone, I4 would be EVEN or LOST.'
+    }},
+
+    '38': { name: 'REALISTIC 2%: FIRED BUY + DOMINANT + I4 YES — opponent talent ceiling exceeds structural read', expected: '?', ctx: {
+      alertType: 'BUY', alertTier: 'FIRED', controlTeam: 'CLE', floor: 0.68, margin: 8,
+      isTrailing: true, period: 4, clock: '8:00', minsLeft: 8,
+      edge: 15.0, ml: '+300', spread: '-4.5', tpClass: 'PROBABLE', lsClass: null,
+      ctrlSust: 'DURABLE', oppSust: 'LOCKED IN', windowScore: null,
+      i1: 0.65, i2: 0.68, i3: 0.52, i4: 0.72, i5: 0.62,
+      indicatorsWon: 3, indWon: 'I1+I2+I4', indLost: 'I3',
+      i4Decisive: true, i4Won: true, i4Combo: true,
+      convictionTier: 'STRONG', convictionCombo: 'I3+I4',
+      floorHistory:'Q4 8:00: CLE 0.68 (78-86) TP:PROBABLE\nQ3 6:00: CLE 0.70 (70-78) TP:PROBABLE\nQ3 12:00: CLE 0.72 (60-66) TP:PROBABLE\nQ2 6:00: CLE 0.65 (42-48) TP:CONTESTED',
+      priorAlerts:'BUY[FIRED] Q3 10:00: floor 0.72, margin 6 trailing → SEND\nAUTO_ANALYSIS Q3 12:00: floor 0.70 → SEND: "CLE structural control clear — paint 34-22, I4 decisive. But BOS shooting is LOCKED IN at 44% from 3 on 32 attempts. This is not regression territory — BOS has 4 shooters above 40% tonight. The structural edge is real but the opponent may simply be better at converting."',
+      quarterSummary:'Q1: 22-26, paint 14-8, TO 3-5\nQ2: 20-22, paint 10-8, TO 2-3\nQ3: 18-22, paint 10-6, TO 3-2\nQ4: 8-10',
+      monitorContext: 'Q4 10:00: MOMENTUM FALLING (3 polls, -0.04) | OPP SUST: STABLE (LOCKED IN) | FLOOR-MARGIN: DIVERGING\n  OBS: CLE floor has dropped from 0.72 to 0.68 entering Q4 while trailing by 8. BOS shooting remains LOCKED IN — 44% from 3 on 34 attempts with 4 players above 40%. This is not a hot streak, this is a team executing within its talent ceiling. CLE paint dominance (34-22) is real but BOS is getting equivalent value from the perimeter.\n  RISK: BOS sust LOCKED IN is the critical factor. CLE structural control depends on BOS regression that is not coming. The sustainability model says LOCKED IN because BOS is shooting BELOW their season 3PT% with good shot quality (high assist ratio, catch-and-shoot heavy). I4 COMBO YES is based on biggest_lead gap and season scoring margin — but BOS Q3+Q4 scoring has been better than CLE in both quarters. Floor declining from 0.72 suggests the cumulative edge is eroding as BOS talent asserts itself.\nQ4 6:00: MOMENTUM FALLING (5 polls, -0.06) | OPP SUST: STABLE (LOCKED IN) | FLOOR-MARGIN: DIVERGING\n  OBS: Floor now 0.68, down from 0.72 peak. Margin unchanged at -8, but CLE was outscored 8-10 in early Q4. BOS sustainability has been LOCKED IN for the entire second half with zero degradation. CLE paint advantage has shrunk to 34-24 as BOS adjusted interior defense.\n  RISK: This matches the known TP limitation — structRate can\\'t distinguish effort from talent. CLE hustle metrics (steals, OREB) are strong but BOS is simply executing at a higher talent level. The structural read says CLE should close the gap. The talent read says BOS won\\'t let them.'
+    }},
   };
 
   let testKeys = [];
@@ -504,6 +536,7 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
   else if (testParam === 'b11') testKeys = ['31', '32'];
   else if (testParam === 'b12') testKeys = ['33', '34', '35'];
   else if (testParam === 'monitor') testKeys = ['33', '34', '35', '36'];
+  else if (testParam === 'adversarial') testKeys = ['37', '38'];
   // Individual: ?test=5 or comma-separated: ?test=19,20,26
   else if (testParam.includes(',')) testKeys = testParam.split(',').filter(k => scenarios[k.trim()]).map(k => k.trim());
   else if (scenarios[testParam]) testKeys = [testParam];
@@ -516,15 +549,18 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
     const r = await callAgent(s.ctx);
     results.push({
       test: key, name: s.name, expected: s.expected, actual: r.decision,
-      pass: r.decision === s.expected ? 'PASS' : 'FAIL',
+      pass: s.expected === '?' ? 'OBSERVE' : (r.decision === s.expected ? 'PASS' : 'FAIL'),
       reasoning: r.reasoning,
       tokens: r.tokens ? r.tokens.input_tokens + 'in/' + r.tokens.output_tokens + 'out' : '?',
     });
     if (testKeys.length > 1) await new Promise(r => setTimeout(r, 500));
   }
 
+  var gradedResults = results.filter(r => r.pass !== 'OBSERVE');
+  var observeCount = results.filter(r => r.pass === 'OBSERVE').length;
+
   return new Response(JSON.stringify({
-    summary: results.filter(r => r.pass === 'PASS').length + '/' + results.length + ' passed',
+    summary: gradedResults.filter(r => r.pass === 'PASS').length + '/' + gradedResults.length + ' passed' + (observeCount > 0 ? ' + ' + observeCount + ' observed' : ''),
     results,
   }, null, 2), { headers: { 'Content-Type': 'application/json' } });
 }
