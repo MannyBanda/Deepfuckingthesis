@@ -1504,6 +1504,33 @@ exports.handler = async (event) => {
     }
 
     // ═══════════════════════════════════════════════════════
+    // PREGAME_RAW_STATS — final snapshot raw_stats_json for calibration
+    // Returns per-game final stats (steals, blocks, POT, paint, etc) + outcome
+    // ═══════════════════════════════════════════════════════
+    if (action === 'pregame_raw_stats') {
+      const league = params.league || 'nba';
+      try {
+        const rows = await sql`
+          SELECT g.id, g.date, g.matchup, g.home_alias, g.away_alias,
+                 g.home_pts, g.away_pts, g.winner, g.margin,
+                 s.raw_stats_json, s.i1, s.i2, s.i3, s.i4, s.i5,
+                 s.floor_score, s.floor_team, s.period
+          FROM games g
+          INNER JOIN LATERAL (
+            SELECT * FROM snapshots
+            WHERE game_id = g.id AND source = 'server'
+              AND raw_stats_json IS NOT NULL AND period >= 3
+            ORDER BY ts DESC LIMIT 1
+          ) s ON true
+          WHERE g.league = ${league} AND g.winner IS NOT NULL
+          ORDER BY g.date DESC
+        `;
+        return { statusCode: 200, headers, body: JSON.stringify({ games: rows, count: rows.length }) };
+      } catch (e) {
+        return { statusCode: 200, headers, body: JSON.stringify({ games: [], error: e.message }) };
+      }
+    }
+
     // GET_GAMES — list all games for a league
     // ═══════════════════════════════════════════════════════
     if (action === 'get_games') {
