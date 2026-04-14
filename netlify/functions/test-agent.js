@@ -525,14 +525,15 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
   let testKeys = [];
   if (testParam === 'all') testKeys = Object.keys(scenarios);
   // Batches of 3 — use ?test=b1 through ?test=b11
-  else if (testParam === 'b1') testKeys = ['1', '2', '3', '4', '5'];
-  else if (testParam === 'b2') testKeys = ['6', '7', '8', '9', '10'];
-  else if (testParam === 'b3') testKeys = ['11', '12', '13', '14', '15'];
-  else if (testParam === 'b4') testKeys = ['16', '17', '18', '19', '20'];
-  else if (testParam === 'b5') testKeys = ['21', '22', '23', '24', '25'];
-  else if (testParam === 'b6') testKeys = ['26', '27', '28', '29', '30'];
-  else if (testParam === 'b7') testKeys = ['31', '32', '33', '34', '35'];
-  else if (testParam === 'b8') testKeys = ['36', '37', '38'];
+  else if (testParam === 'b1') testKeys = ['1', '2', '3', '4'];
+  else if (testParam === 'b2') testKeys = ['5', '6', '7', '8'];
+  else if (testParam === 'b3') testKeys = ['9', '10', '11', '12'];
+  else if (testParam === 'b4') testKeys = ['13', '14', '15', '16'];
+  else if (testParam === 'b5') testKeys = ['17', '18', '19', '20'];
+  else if (testParam === 'b6') testKeys = ['21', '22', '23', '24'];
+  else if (testParam === 'b7') testKeys = ['25', '26', '27', '28'];
+  else if (testParam === 'b8') testKeys = ['29', '30', '31', '32'];
+  else if (testParam === 'b9') testKeys = ['33', '34', '35', '36'];
   else if (testParam === 'monitor') testKeys = ['33', '34', '35', '36'];
   else if (testParam === 'adversarial') testKeys = ['37', '38'];
   // Individual: ?test=5 or comma-separated: ?test=19,20,26
