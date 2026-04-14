@@ -487,7 +487,7 @@ function computeMonitorTrends(gameData) {
         var curr = liveFloors[k] - liveFloors[k - 1];
         if ((prev > 0.01 && curr < -0.01) || (prev < -0.01 && curr > 0.01)) changes++;
       }
-      if (changes >= 2 && !dir) dir = 'OSCILLATING';
+      if (changes >= 2 && streak <= 1) dir = 'OSCILLATING';
     }
     momentumDir = dir || 'STABLE';
     momentumStreak = streak;

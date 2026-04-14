@@ -60,7 +60,7 @@ export default async function handler(req) {
           var curr = liveFloors[k] - liveFloors[k - 1];
           if ((prev > 0.01 && curr < -0.01) || (prev < -0.01 && curr > 0.01)) changes++;
         }
-        if (changes >= 2 && !dir) dir = 'OSCILLATING';
+        if (changes >= 2 && streak <= 1) dir = 'OSCILLATING';
       }
       momentumDir = dir || 'STABLE';
       momentumStreak = streak;
@@ -120,9 +120,9 @@ export default async function handler(req) {
       gameData: {
         ctrlIsHome: false,
         snapHistory: [
-          snap(2, '8:00', 0.52, 45, 40), snap(2, '6:00', 0.55, 48, 43),
-          snap(2, '4:00', 0.58, 51, 47), snap(2, '2:00', 0.61, 54, 49),
-          snap(3, '10:00', 0.64, 58, 54), snap(3, '8:00', 0.67, 62, 57),
+          snap(2, '8:00', 0.52, 45, 40), snap(2, '6:00', 0.55, 48, 44),
+          snap(2, '4:00', 0.58, 51, 49), snap(2, '2:00', 0.61, 54, 53),
+          snap(3, '10:00', 0.64, 57, 58), snap(3, '8:00', 0.67, 60, 63),
         ],
       },
       expected: { momentum: 'RISING', streak: 5, sustArc: 'STABLE', floorMarginRel: 'CONVERGING' },
