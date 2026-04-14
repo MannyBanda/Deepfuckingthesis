@@ -1249,6 +1249,83 @@ exports.handler = async (event) => {
     }
 
     // ═══════════════════════════════════════════════════════
+    // GET_MONITOR_OBSERVATIONS — query monitor agent v2 observations
+    // Supports: game_id, date, league filters
+    // Used by: debug.html, console scripts, future alert agent wire-up validation
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_monitor_observations') {
+      const league = params.league || 'nba';
+      const gameId = params.game_id || null;
+      const date = params.date || null; // YYYY-MM-DD
+      const limit = parseInt(params.limit) || 100;
+      const latestPerGame = params.latest_per_game ? parseInt(params.latest_per_game) : null;
+
+      let rows;
+      if (gameId) {
+        // Single game — all observations ordered chronologically
+        rows = await sql`
+          SELECT mo.*, g.matchup, g.home_alias, g.away_alias, g.home_pts, g.away_pts, g.winner, g.date
+          FROM monitor_observations mo
+          JOIN games g ON mo.game_id = g.id
+          WHERE mo.game_id = ${gameId} AND mo.league = ${league}
+          ORDER BY mo.ts ASC LIMIT ${limit}`;
+      } else if (date) {
+        // Slate date — all observations for games on that date
+        rows = await sql`
+          SELECT mo.*, g.matchup, g.home_alias, g.away_alias, g.home_pts, g.away_pts, g.winner, g.date
+          FROM monitor_observations mo
+          JOIN games g ON mo.game_id = g.id
+          WHERE g.date = ${date} AND mo.league = ${league}
+          ORDER BY mo.ts ASC LIMIT ${limit}`;
+      } else if (latestPerGame) {
+        // Latest N per game — used for alert agent wire-up validation
+        rows = await sql`
+          SELECT mo.*, g.matchup, g.home_alias, g.away_alias, g.home_pts, g.away_pts, g.winner, g.date
+          FROM (
+            SELECT *, ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY ts DESC) as rn
+            FROM monitor_observations WHERE league = ${league}
+          ) mo
+          JOIN games g ON mo.game_id = g.id
+          WHERE mo.rn <= ${latestPerGame}
+          ORDER BY mo.game_id, mo.ts DESC LIMIT ${limit}`;
+      } else {
+        // Recent observations (all games, newest first)
+        rows = await sql`
+          SELECT mo.*, g.matchup, g.home_alias, g.away_alias, g.home_pts, g.away_pts, g.winner, g.date
+          FROM monitor_observations mo
+          JOIN games g ON mo.game_id = g.id
+          WHERE mo.league = ${league}
+          ORDER BY mo.ts DESC LIMIT ${limit}`;
+      }
+
+      // Build summary
+      const gameIds = [...new Set(rows.map(r => r.game_id))];
+      const timeRange = rows.length > 0
+        ? { earliest: rows[0].ts, latest: rows[rows.length - 1].ts }
+        : null;
+
+      // Format agent-ready context per game (for wire-up testing)
+      const agentContext = {};
+      gameIds.forEach(gid => {
+        const gameObs = rows.filter(r => r.game_id === gid).sort((a, b) => new Date(b.ts) - new Date(a.ts));
+        agentContext[gid] = gameObs.map(o => {
+          const momLabel = `${o.momentum_direction || 'STABLE'}`
+            + (o.momentum_streak > 0 ? ` (${o.momentum_streak} polls, ${o.momentum_delta >= 0 ? '+' : ''}${Number(o.momentum_delta || 0).toFixed(2)})` : '');
+          const sustLabel = `${o.sust_arc || 'STABLE'}${o.sust_arc_detail ? ' (' + o.sust_arc_detail + ')' : ''}`;
+          return `Q${o.period} ${o.clock}: MOMENTUM ${momLabel} | OPP SUST: ${sustLabel} | FLOOR-MARGIN: ${o.floor_margin_rel || 'ALIGNED'}`
+            + `\n  OBS: ${o.narrative || ''}`
+            + `\n  RISK: ${o.risk_factors || ''}`;
+        }).join('\n');
+      });
+
+      return { statusCode: 200, headers, body: JSON.stringify({
+        observations: rows,
+        summary: { count: rows.length, games: gameIds.length, gameIds, timeRange },
+        agentContext,
+      }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
     // INDICATOR_COMBOS — recompute new indicators from historical box scores + PBP, measure win rate by combination
     // ═══════════════════════════════════════════════════════
     if (action === 'indicator_combos') {
