@@ -3112,12 +3112,24 @@ async function loadLearnings(limit) {
 
     // Agent accuracy summary (across all nights)
     var totalSentCorrect = 0, totalSentWrong = 0, totalSuppCorrect = 0, totalSuppMissed = 0;
+    var totalTransAgent = { rp_sent: 0, rp_sent_correct: 0, rp_supp: 0, rp_supp_correct: 0, lc_sent: 0, lc_sent_correct: 0, lc_supp: 0, lc_supp_correct: 0, vb_sent: 0, vb_sent_correct: 0, vb_supp: 0, vb_supp_correct: 0 };
     rows.forEach(function(r) {
       var aa = r.agent_accuracy || {};
-      totalSentCorrect += aa.sent_correct || 0;
-      totalSentWrong += aa.sent_wrong || 0;
-      totalSuppCorrect += aa.suppressed_correct || 0;
-      totalSuppMissed += aa.suppressed_missed || 0;
+      totalSentCorrect += aa.delivered_correct || 0;
+      totalSentWrong += (aa.delivered_total || 0) - (aa.delivered_correct || 0);
+      totalSuppCorrect += aa.saves || 0;
+      totalSuppMissed += aa.missed_winners || 0;
+      // Transition agent cumulative
+      var ta = aa.transition_agent || {};
+      var rp = ta['RECOVERY PATH'] || {};
+      totalTransAgent.rp_sent += rp.sent || 0; totalTransAgent.rp_sent_correct += rp.sent_correct || 0;
+      totalTransAgent.rp_supp += rp.suppressed || 0; totalTransAgent.rp_supp_correct += rp.suppressed_correct || 0;
+      var lc = ta['LEAD CRUMBLING'] || {};
+      totalTransAgent.lc_sent += lc.sent || 0; totalTransAgent.lc_sent_correct += lc.sent_correct || 0;
+      totalTransAgent.lc_supp += lc.suppressed || 0; totalTransAgent.lc_supp_correct += lc.suppressed_correct || 0;
+      var vb = ta['VARIANCE BREAKING'] || {};
+      totalTransAgent.vb_sent += vb.sent || 0; totalTransAgent.vb_sent_correct += vb.sent_correct || 0;
+      totalTransAgent.vb_supp += vb.suppressed || 0; totalTransAgent.vb_supp_correct += vb.suppressed_correct || 0;
     });
     var totalAgentDecisions = totalSentCorrect + totalSentWrong + totalSuppCorrect + totalSuppMissed;
     if (totalAgentDecisions > 0) {
@@ -3128,6 +3140,26 @@ async function loadLearnings(limit) {
       h += '<div class="row"><span class="label">Sent incorrectly</span><span class="val red">' + totalSentWrong + '</span></div>';
       h += '<div class="row"><span class="label">Good suppressions (would have been wrong)</span><span class="val green">' + totalSuppCorrect + '</span></div>';
       h += '<div class="row"><span class="label">Missed opportunities (suppressed winner)</span><span class="val red">' + totalSuppMissed + '</span></div>';
+      h += '</div>';
+    }
+
+    // Transition agent accuracy (cumulative) — RP/LC/VB through alert agent
+    var totalTransDecisions = totalTransAgent.rp_sent + totalTransAgent.rp_supp + totalTransAgent.lc_sent + totalTransAgent.lc_supp + totalTransAgent.vb_sent + totalTransAgent.vb_supp;
+    if (totalTransDecisions > 0) {
+      h += '<div class="card"><div style="font-size:11px;color:#c084fc;font-weight:700;margin-bottom:6px">TRANSITION AGENT (cumulative)</div>';
+      function transRow(label, sent, sentCorrect, supp, suppCorrect) {
+        var total = sent + supp;
+        if (total === 0) return '';
+        return '<div style="font-size:10px;padding:2px 0;border-bottom:1px solid #1e293b22">'
+          + '<span style="color:#e2e8f0;font-weight:600;width:130px;display:inline-block">' + label + '</span> '
+          + '<span style="color:#00ff88">' + sentCorrect + '/' + sent + ' sent</span> · '
+          + '<span style="color:#ffd166">' + suppCorrect + '/' + supp + ' saves</span>'
+          + '</div>';
+      }
+      h += transRow('RECOVERY PATH', totalTransAgent.rp_sent, totalTransAgent.rp_sent_correct, totalTransAgent.rp_supp, totalTransAgent.rp_supp_correct);
+      h += transRow('LEAD CRUMBLING', totalTransAgent.lc_sent, totalTransAgent.lc_sent_correct, totalTransAgent.lc_supp, totalTransAgent.lc_supp_correct);
+      h += transRow('VARIANCE BREAKING', totalTransAgent.vb_sent, totalTransAgent.vb_sent_correct, totalTransAgent.vb_supp, totalTransAgent.vb_supp_correct);
+      h += '<div style="font-size:9px;color:#64748b;margin-top:4px">LC uses inverted logic: strong indicators = SUPPRESS (lead safe)</div>';
       h += '</div>';
     }
 
@@ -3155,12 +3187,45 @@ async function loadLearnings(limit) {
       }
 
       // Agent stats for this night
-      if ((aa.sent_correct || 0) + (aa.sent_wrong || 0) + (aa.suppressed_correct || 0) + (aa.suppressed_missed || 0) > 0) {
+      var sentCorrect = aa.delivered_correct || 0;
+      var sentWrong = (aa.delivered_total || 0) - sentCorrect;
+      var suppCorrect = aa.saves || 0;
+      var suppMissed = aa.missed_winners || 0;
+      if (sentCorrect + sentWrong + suppCorrect + suppMissed > 0) {
         h += '<div style="font-size:10px;color:#64748b;margin-bottom:4px">Agent: ';
-        h += '<span style="color:#00ff88">' + (aa.sent_correct || 0) + ' good sends</span> · ';
-        h += '<span style="color:#ff5252">' + (aa.sent_wrong || 0) + ' bad sends</span> · ';
-        h += '<span style="color:#00ff88">' + (aa.suppressed_correct || 0) + ' good suppresses</span> · ';
-        h += '<span style="color:#ff5252">' + (aa.suppressed_missed || 0) + ' missed opps</span>';
+        h += '<span style="color:#00ff88">' + sentCorrect + ' good sends</span> · ';
+        h += '<span style="color:#ff5252">' + sentWrong + ' bad sends</span> · ';
+        h += '<span style="color:#00ff88">' + suppCorrect + ' good suppresses</span> · ';
+        h += '<span style="color:#ff5252">' + suppMissed + ' missed opps</span>';
+        h += '</div>';
+      }
+
+      // Transition agent stats for this night
+      var ta = aa.transition_agent || {};
+      var taTypes = ['RECOVERY PATH', 'LEAD CRUMBLING', 'VARIANCE BREAKING'];
+      var taTotal = 0;
+      taTypes.forEach(function(t) { taTotal += (ta[t] || {}).total || 0; });
+      if (taTotal > 0) {
+        h += '<div style="font-size:10px;color:#c084fc;margin-bottom:4px">Transition: ';
+        var taParts = [];
+        taTypes.forEach(function(t) {
+          var s = ta[t] || {};
+          if ((s.total || 0) > 0) {
+            var label = t === 'RECOVERY PATH' ? 'RP' : t === 'LEAD CRUMBLING' ? 'LC' : 'VB';
+            taParts.push(label + ' ' + (s.sent_correct || 0) + '/' + (s.sent || 0) + ' sent, ' + (s.suppressed_correct || 0) + '/' + (s.suppressed || 0) + ' saves');
+          }
+        });
+        h += taParts.join(' · ');
+        h += '</div>';
+      }
+
+      // Alert chains for this night
+      var chains = aa.chains || 0;
+      var chainPatterns = aa.chain_patterns || {};
+      var chainKeys = Object.keys(chainPatterns);
+      if (chains > 0) {
+        h += '<div style="font-size:10px;color:#38bdf8;margin-bottom:4px">Chains: ' + chains + ' — ';
+        h += chainKeys.map(function(k) { return k + '(' + chainPatterns[k] + ')'; }).join(', ');
         h += '</div>';
       }
 

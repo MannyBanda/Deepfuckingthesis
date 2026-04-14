@@ -268,17 +268,97 @@ export default async function handler(req) {
     position_gated_correct: posGatedCorrect,
     transitional_held: deliveredTransitionalHeld,
     transitional_total: deliveredTransitional.length,
+    transition_agent: transitionAgentStats,
+    chains: alertChains.length,
+    chain_patterns: alertChains.reduce((acc, c) => { acc[c.pattern] = (acc[c.pattern] || 0) + 1; return acc; }, {}),
     raw_correct: rawCorrect,
     raw_total: rawTotal,
   };
 
-  // Detect cascade games (3+ wrong alerts from same game)
+  // ── Transition agent stats (RP/LC/VB now route through alert agent) ──
+  const TRANSITION_AGENT_TYPES = ['RECOVERY PATH', 'LEAD CRUMBLING', 'VARIANCE BREAKING'];
+  const transitionAgentAlerts = scoredAlerts.filter(a => TRANSITION_AGENT_TYPES.includes(a.alert_type) && a.agent_decision);
+  const transitionAgentStats = {};
+  TRANSITION_AGENT_TYPES.forEach(t => {
+    const ofType = transitionAgentAlerts.filter(a => a.alert_type === t);
+    const sent = ofType.filter(a => a.agent_decision === 'SEND');
+    const suppressed = ofType.filter(a => a.agent_decision === 'SUPPRESS');
+    transitionAgentStats[t] = {
+      sent: sent.length, sent_correct: sent.filter(a => a.result.correct).length,
+      suppressed: suppressed.length, suppressed_correct: suppressed.filter(a => !a.result.correct).length,
+      total: ofType.length,
+    };
+  });
+
+  // ── Alert chain detection within games ──
   const gameAlerts = {};
   scoredAlerts.forEach(a => {
     if (!gameAlerts[a.game_id]) gameAlerts[a.game_id] = { matchup: a.matchup, alerts: [], wrong: 0 };
     gameAlerts[a.game_id].alerts.push(a);
     if (!a.result.correct) gameAlerts[a.game_id].wrong++;
   });
+
+  // Detect alert chains — chronological sequences of related alerts within a game
+  const alertChains = [];
+  Object.entries(gameAlerts).forEach(([gameId, g]) => {
+    // Sort by timestamp
+    const sorted = [...g.alerts].sort((a, b) => new Date(a.ts) - new Date(b.ts));
+    if (sorted.length < 2) return;
+
+    // Group by control team
+    const byTeam = {};
+    sorted.forEach(a => {
+      if (!byTeam[a.control_team]) byTeam[a.control_team] = [];
+      byTeam[a.control_team].push(a);
+    });
+
+    Object.entries(byTeam).forEach(([team, teamAlerts]) => {
+      if (teamAlerts.length < 2) return;
+
+      // Build the chain: sequence of alert types with agent decisions
+      const chain = teamAlerts.map(a => ({
+        type: a.alert_type, period: a.period, clock: a.clock,
+        decision: a.agent_decision || (a.ntfy_sent ? 'DIRECT' : 'UNKNOWN'),
+        correct: a.result?.correct,
+        floor: Number(a.floor_score).toFixed(2),
+        margin: a.margin,
+      }));
+
+      // Classify the chain pattern
+      const types = chain.map(c => c.type);
+      const decisions = chain.map(c => c.decision);
+      const suppressCount = decisions.filter(d => d === 'SUPPRESS').length;
+      const finalSend = decisions[decisions.length - 1] === 'SEND' || decisions[decisions.length - 1] === 'DIRECT';
+
+      // Detect notable patterns
+      let pattern = null;
+      if (types.includes('VARIANCE BREAKING') && (types.includes('BUY') || types.includes('WINDOW BUY'))) {
+        pattern = 'VB_TO_ENTRY';
+      } else if (types.includes('RECOVERY PATH') && (types.includes('BUY') || types.includes('WINDOW BUY'))) {
+        pattern = 'RP_TO_ENTRY';
+      } else if (types.includes('LEAD CRUMBLING') && types.includes('LEAD LOST')) {
+        pattern = 'LC_TO_LOST';
+      } else if (types.includes('BUY WINDOW CLOSING') && types.includes('LEAD CRUMBLING')) {
+        pattern = 'BWC_TO_LC';
+      } else if (suppressCount >= 2 && finalSend) {
+        pattern = 'SUPPRESS_CHAIN_TO_SEND';
+      } else if (types.filter(t => t === 'AUTO_ANALYSIS').length >= 2) {
+        pattern = 'MULTI_UPDATE';
+      }
+
+      if (pattern || teamAlerts.length >= 3) {
+        const allCorrect = chain.every(c => c.correct);
+        const allWrong = chain.every(c => !c.correct);
+        alertChains.push({
+          matchup: g.matchup, team, pattern: pattern || 'MULTI_ALERT',
+          chain, chainLength: chain.length,
+          outcome: allCorrect ? 'ALL_CORRECT' : allWrong ? 'ALL_WRONG' : 'MIXED',
+          suppressions: suppressCount,
+        });
+      }
+    });
+  });
+
   const cascadeGames = Object.values(gameAlerts).filter(g => g.wrong >= 3);
 
   // Detect conflicting signal games (both teams got alerts)
@@ -309,6 +389,8 @@ export default async function handler(req) {
   log(`Delivered accuracy: ${accuracyOverall}% (${deliveredActionableCorrect}/${deliveredActionable.length}) | Agent saves: ${agentSaves} misses: ${agentMisses} | Raw: ${rawCorrect}/${rawTotal}`);
   log(`By type: ${JSON.stringify(byType)}`);
   log(`Agent: saves=${agentSaves}, missed=${agentMisses}, agent_dedup=${agentDedup.length}(${agentDedupCorrect} correct), sys_dedup=${deduped.length}(${dedupCorrect} correct), pos_gated=${positionGated.length}(${posGatedCorrect} correct)`);
+  log(`Transition agent: ${JSON.stringify(transitionAgentStats)}`);
+  log(`Alert chains: ${alertChains.length} detected — ${JSON.stringify(agentStats.chain_patterns)}`);
   log(`Cascades: ${cascadeGames.length}, Conflicts: ${conflictGames.length}, TP failures: ${tpFailures.length}`);
   log(`Candidates sent: ${candidatesSent.length}/${candidates.length}, correct: ${candidatesSentCorrect.length}`);
 
@@ -333,6 +415,19 @@ export default async function handler(req) {
       return `${g.matchup}: alerts for both ${teams.join(' and ')} — ${g.alerts.map(a => `${a.alert_type} ${a.control_team}(${a.result.correct ? '✓' : '✗'})`).join(', ')}`;
     }).join('\n');
 
+    // Build chain summary for Sonnet
+    const chainSummary = alertChains.length > 0 ? alertChains.map(c => {
+      const steps = c.chain.map(s => `${s.type}(agent:${s.decision},${s.correct ? '✓' : '✗'}) Q${s.period} floor:${s.floor} margin:${s.margin}`).join(' → ');
+      return `${c.matchup} ${c.team} [${c.pattern}]: ${steps} — ${c.outcome}`;
+    }).join('\n') : '';
+
+    // Build transition agent summary
+    const transAgentSummary = TRANSITION_AGENT_TYPES.map(t => {
+      const s = transitionAgentStats[t];
+      if (s.total === 0) return null;
+      return `${t}: ${s.sent} sent (${s.sent_correct} correct), ${s.suppressed} suppressed (${s.suppressed_correct} correct saves)`;
+    }).filter(Boolean).join('\n');
+
     const prompt = `You are the post-game learning agent for a live NBA betting alert system. Analyze tonight's results and identify patterns.
 
 ACCURACY SUMMARY:
@@ -347,6 +442,13 @@ Transitional alerts (LEAD LOST/CRUMBLING): ${deliveredTransitionalHeld}/${delive
 By type (delivered only): ${JSON.stringify(byType)}
 Candidates sent: ${candidatesSent.length}/${candidates.length}, correct: ${candidatesSentCorrect.length}
 
+TRANSITION ALERTS THROUGH AGENT:
+RECOVERY PATH, LEAD CRUMBLING, and VARIANCE BREAKING now route through the alert reasoning agent (same as BUY/BWC/WB). LEAD LOST remains direct-fire.
+- LEAD CRUMBLING uses INVERTED indicator logic: strong indicators = lead is safe = SUPPRESS. Weak indicators = real danger = SEND.
+- RECOVERY PATH: agent evaluates whether TP math is backed by structural indicators (I4 COMBO, rising floor).
+- VARIANCE BREAKING: agent checks if structural edge is real (I4 COMBO YES, 3+ indicators) before sending.
+${transAgentSummary || 'No transition alerts went through agent tonight.'}
+
 NOTE ON CATEGORIES:
 - Agent saves/misses: ONLY structural SUPPRESS decisions where the agent evaluated the signal and rejected it. This is the true agent accuracy measure.
 - Agent dedup: agent said SUPPRESS citing "duplicate" — the same signal was already sent earlier. Correct noise prevention, not a miss.
@@ -360,15 +462,17 @@ ${cascadeGames.length > 0 ? `CASCADE GAMES (3+ wrong alerts):\n${cascadeDetail}`
 
 ${conflictGames.length > 0 ? `CONFLICTING SIGNALS (both teams got alerts):\n${conflictDetail}` : 'No conflicting signals.'}
 
+${alertChains.length > 0 ? `ALERT CHAINS (multi-alert sequences within games):\n${chainSummary}\nPatterns: VB_TO_ENTRY = variance broke then entry fired, RP_TO_ENTRY = recovery path then entry, LC_TO_LOST = lead crumbled then lost, BWC_TO_LC = window closing then crumbling, SUPPRESS_CHAIN_TO_SEND = multiple suppressions before a send, MULTI_UPDATE = multiple position updates, MULTI_ALERT = 3+ alerts same team same game` : 'No multi-alert chains detected.'}
+
 TP GATE FAILURES (TP passed but alert was wrong): ${tpFailures.length}/${scoredAlerts.filter(a => !a.result.correct).length} wrong alerts
 
 Respond in EXACTLY this format:
 
 FINDINGS:
-[2-4 paragraph analysis of tonight's slate. What worked, what didn't, why. Be specific — name games, alert types, patterns.]
+[2-4 paragraph analysis of tonight's slate. What worked, what didn't, why. Be specific — name games, alert types, patterns. Include transition agent accuracy and whether the inverted LC logic made correct calls.]
 
 PATTERNS:
-[JSON array of pattern objects, each with "pattern" (string description), "confidence" (high/medium/low), "games" (array of matchup strings that exhibited it), "impact" (how many alerts affected)]
+[JSON array of pattern objects, each with "pattern" (string description), "confidence" (high/medium/low), "games" (array of matchup strings that exhibited it), "impact" (how many alerts affected). Include chain patterns if detected — did VB→BUY chains cash? Did SUPPRESS_CHAIN_TO_SEND indicate the agent was properly waiting for confirmation?]
 
 RECOMMENDATIONS:
 [JSON array of recommendation objects, each with "action" (specific threshold/gate change), "rationale" (why), "expected_impact" (what would change)]`;
@@ -383,7 +487,7 @@ RECOMMENDATIONS:
         },
         body: JSON.stringify({
           model: 'claude-sonnet-4-20250514',
-          max_tokens: 1500,
+          max_tokens: 2000,
           messages: [{ role: 'user', content: prompt }],
         }),
       });
@@ -453,7 +557,7 @@ RECOMMENDATIONS:
 
     // Per-type breakdown (delivered only, actionable)
     const typeLines = [];
-    ['BUY', 'WINDOW BUY', 'BUY WINDOW CLOSING', 'RECOVERY PATH', 'AUTO_ANALYSIS'].forEach(t => {
+    ['BUY', 'WINDOW BUY', 'BUY WINDOW CLOSING', 'RECOVERY PATH', 'VARIANCE BREAKING', 'AUTO_ANALYSIS'].forEach(t => {
       const b = byType[t];
       if (b) typeLines.push(`${t}: ${b.correct}/${b.total}`);
     });
@@ -490,13 +594,32 @@ RECOMMENDATIONS:
       transLine = `\nLead alerts: ${deliveredTransitionalHeld}/${deliveredTransitional.length} held`;
     }
 
+    // Transition agent line — RP/LC/VB through agent
+    let transAgentLine = '';
+    const transAgentTotal = transitionAgentAlerts.length;
+    if (transAgentTotal > 0) {
+      const transAgentSent = transitionAgentAlerts.filter(a => a.agent_decision === 'SEND').length;
+      const transAgentSuppressed = transAgentTotal - transAgentSent;
+      const transAgentSaves = transitionAgentAlerts.filter(a => a.agent_decision === 'SUPPRESS' && !a.result.correct).length;
+      transAgentLine = `\nTransition alerts: ${transAgentSent} sent, ${transAgentSuppressed} filtered (${transAgentSaves} saves)`;
+    }
+
+    // Chain line — multi-alert sequences
+    let chainLine = '';
+    if (alertChains.length > 0) {
+      const correctChains = alertChains.filter(c => c.outcome === 'ALL_CORRECT').length;
+      chainLine = `\nAlert chains: ${alertChains.length} detected, ${correctChains} fully correct`;
+    }
+
     const body = headline
       + (typeLines.length > 0 ? '\n' + typeLines.join(' | ') : '')
       + agentLine
       + agentDedupLine
       + dedupLine
       + gatedLine
-      + transLine;
+      + transLine
+      + transAgentLine
+      + chainLine;
 
     try {
       await fetch(`https://ntfy.sh/${topic}`, {
@@ -515,6 +638,8 @@ RECOMMENDATIONS:
     alerts: scoredAlerts.length,
     accuracy: accuracyOverall,
     agentStats,
+    transitionAgent: transitionAgentStats,
+    chains: alertChains.map(c => ({ matchup: c.matchup, team: c.team, pattern: c.pattern, length: c.chainLength, outcome: c.outcome })),
     diagnostics: scoredAlerts.slice(0, 15).map(a => ({
       type: a.alert_type, ctrl: a.control_team, agent: a.agent_decision,
       correct: a.result.correct, ctrlWon: a.result.ctrlWon, margin: a.result.finalMargin,
