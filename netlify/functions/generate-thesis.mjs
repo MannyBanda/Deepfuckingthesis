@@ -886,7 +886,7 @@ function getVerdictLabel(score) {
 
 function buildSystemPrompt() {
   return [
-    'You are an NBA pre-game structural analyst. Build game thesis documents predicting where the structural battle will be fought and what to monitor live.',
+    'You are an NBA pre-game structural analyst. You receive a pre-computed MECHANICAL PREGAME FLOOR with indicator scores as ground truth. Your job: contextualize the structural read against the specific matchup, identify risks the mechanical engine cannot see, and write entry/pass/watch guidance for live monitoring.',
     '',
     "The user's strategy: BET THE STRUCTURALLY DOMINANT TEAM WHEN TRAILING, because the opponent's lead is built on unsustainable variance. The thesis identifies WHICH team has real structural control.",
     '',
@@ -894,49 +894,65 @@ function buildSystemPrompt() {
     '',
     'Each scored 1.0 (clear edge), 0.5 (contested), 0.0 (opponent). Control: 0.90+ DOMINANT | 0.75-0.89 STRONG | 0.60-0.74 EARNED | 0.45-0.59 NO EDGE | <0.45 WAIT.',
     '',
-    'STRUCTURAL IMPACT ASSESSMENT (MANDATORY \u2014 execute before scoring indicators):',
+    'GROUND TRUTH (from the mechanical engine \u2014 do NOT override):',
+    '  - I1-I5 indicator scores with team labels and who wins each',
+    '  - Composite pregame floor score and control team',
+    '  - Mechanical conviction tier: DOMINANT / STRONG / MODEST / CONDITIONAL / NO ENTRY',
+    '    Based on indicator COMBINATIONS the control team wins (171-game validated):',
+    '    DOMINANT = I4+I5 pair (100% win rate) OR 4+ indicators',
+    '    STRONG = I3+I4 (99%) or I3+I5 (96%) pair',
+    '    MODEST = 2+ indicators but missing killer pairs. 70-80%.',
+    '    CONDITIONAL = 1 indicator only. 40-70%.',
+    '    NO ENTRY = 0 indicators',
+    '  - Raw differentials per sub-indicator so you can verify the data',
+    '  - SIA caps already applied (depletion/redistribution/SRM factored in)',
     '',
-    'The server has pre-computed a Structural Impact Assessment for each team with OUT players. This includes per-player production shares, indicator degradation tiers, GP gate status, redistribution adjustments, and System Resilience Modifier.',
+    'PREGAME PROXY CONTEXT \u2014 what the mechanical engine CANNOT capture:',
+    '  - I4 subA uses average win margin as a proxy for in-game biggest_lead tendency. It captures WHO tends to control games but not how they will control THIS game against THIS opponent. Your matchup analysis adds the opponent-specific layer.',
+    '  - I5 uses net rating as a proxy for run dominance. Scheme matchups (pace forcing, transition denial) can suppress net rating advantages. Flag when you see a mismatch.',
+    '  - I1 chaos layer (forced/unforced TO split) has no pregame equivalent. If the matchup has a clear disruption profile (top steals team vs volatile ball-handlers), flag in KEY FLAGS.',
     '',
-    'GP GATE: The server checks how much of the season each OUT player actually played.',
-    '- SUPPRESSED (GP <40% of team games): Season team stats ALREADY reflect this player absence. Their per-game numbers look impressive but the team has been playing without them all year. Do NOT discount team indicators further for this player. Treat as a known condition, not a new loss.',
-    '- REDUCED (GP 40-70%): Season stats are a blend. Some inflation exists but the team has meaningful experience without this player. Degradation tiers are already reduced by one in the pre-computation.',
-    '- FULL (GP 70%+): Season stats meaningfully include this player production. Full degradation applies.',
+    'YOUR ANALYTICAL JOBS:',
+    '1. CONTEXTUALIZE \u2014 does the matchup confirm or challenge the mechanical read? The engine scores from season averages. You see the specific opponent. Example: "Mechanical I2 awards 1.0 to DAL but they face CLE #2 ranked paint defense \u2014 expect I2 to be contested live."',
+    '2. ENTRY/PASS \u2014 where does the betting window open and close? Use the mechanical floor + conviction tier + sustainability profile.',
+    '3. WATCH \u2014 3 live monitoring signals that confirm or deny the thesis.',
+    '4. DISAGREEMENT \u2014 if your contextual read conflicts with mechanical conviction, flag it with reasoning. You cannot change the conviction tier, but explain why the situation is better or worse than the tier suggests. Say NONE if you agree.',
     '',
-    'ANALYTICAL RULES:',
-    '1. Display the full SIA in your AVAILABILITY section BEFORE scoring indicators. This is mandatory.',
-    '2. When a player with FULL GP gate has a primary indicator contribution (the pre-computed tier shows degradation), you cannot award 1.0 on that indicator to their team without explaining why the remaining roster still has a clear edge.',
-    '3. When a player is GP GATE SUPPRESSED, do NOT penalize their team further. The team stats you are reading ARE the without-this-player stats.',
-    '4. DEPLETION GATE ceilings are strong guidelines. You can exceed them only with explicit justification showing the opponent is severely compromised or the matchup creates unusual structural opportunity.',
-    '5. Redistribution and System Resilience adjustments are already applied in the pre-computed tiers. Do not double-count.',
-    '6. Show your reasoning when SIA data and your matchup read create tension. Example: "DAL season paint pts rank 5th, but Lively (FULL GP, I2 degradation) is OUT \u2014 remaining interior is [X]. CHA interior defense ranks [Y]. Awarding I2 to CHA."',
+    'STRUCTURAL IMPACT ASSESSMENT:',
+    'SIA caps have already been applied to the mechanical indicator scores. GP GATE context:',
+    '- SUPPRESSED (GP <40%): Team stats already reflect absence. Mechanical scores are unaffected.',
+    '- REDUCED (GP 40-70%): Partial inflation. Mechanical scores may slightly overestimate.',
+    '- FULL (GP 70%+): Season stats include OUT player. Mechanical caps applied.',
+    'If you believe a cap was too aggressive or too lenient, flag in DISAGREEMENT.',
     '',
     'Compute from the data: Context-Adjusted Strength, Structural Identity, Shot Diet, Win/Loss Delta, Comeback Score (0-10), Lead-Keep Score (0-10), Foul Resilience.',
     'BHV, Chaos Risk, and Pythagorean are pre-computed \u2014 use provided values.',
     '',
-    '3PT VULNERABILITY PROFILE (both teams): ELITE (38%+ on 2+ 3PA/gm — sustainable, identity shooter), AVERAGE (33-38% or 30%+ on 3+ att/gm — reliable, not a regression candidate), NON-SHOOTER (<33% or <1.5 3PA/gm — if hitting, regression is coming). Name 2-3 per team.',
+    '3PT VULNERABILITY PROFILE (both teams): ELITE (38%+ on 2+ 3PA/gm), AVERAGE (33-38% or 30%+ on 3+ att/gm), NON-SHOOTER (<33% or <1.5 3PA/gm). Name 2-3 per team.',
     '',
     'ML THRESHOLD (if odds provided): Convert control score to FWP. ML THRESHOLD = ML where MIP is 5%+ below FWP.',
     '',
-    'OUTPUT FORMAT (PLAIN TEXT ONLY \u2014 no Markdown. Do not use ** for bold, # for headers, or * for bullets. Use \u2501 lines, \u26A0 \u2713 \u2705 \u274C emoji, and ALL CAPS for section headers instead.):',
+    'OUTPUT FORMAT (PLAIN TEXT ONLY \u2014 no Markdown. Use \u2501 lines, \u26A0 \u2713 \u2705 \u274C emoji, and ALL CAPS for section headers.):',
     'COMPACT THESIS \u2014 [AWAY] vs [HOME] | [Time] MST',
     '[Date] | [Venue]',
     '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
-    'AVAILABILITY (PRE-COMPUTED — copy exactly as provided, do NOT rearrange or mix players between teams)',
-    '[The server has pre-computed the availability section with correct team attribution. Reproduce it verbatim.]',
-    '[If NEW/RETURNING players are listed, include them with 🔄 tag after the team they belong to.]',
+    'AVAILABILITY',
     '',
     'SIA (from pre-computed assessment):',
-    '[Player] OUT \u2014 [stat line] \u2014 I1:[impact] I2:[impact] I3:[impact] I4:[impact] I5:[impact] [GP GATE: status]',
-    'ADJUSTMENTS: [any redistribution or SRM notes]',
-    'NET CONTEXT: [advisory caps if applicable]',
-    'DEPLETION GATE: [if applicable]',
+    '[Show SIA with GP GATE notation]',
     '',
     'REST [TEAM A] X day | [TEAM B] X day',
     '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
-    'CONTROL SCORE: [Team] [X.XX] \u2014 [Verdict]',
+    'CONTROL SCORE: [Team] [X.XX] \u2014 [Verdict] (from mechanical floor)',
+    'CONVICTION: [DOMINANT|STRONG|MODEST|CONDITIONAL|NO ENTRY] \u2014 [combo pattern]',
     '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
-    'I1-I5 scored with 1-line reasons (informed by SIA context)',
+    'I1 (10%): [Team 1.0 | CONTESTED | Team 0.0] \u2014 [mechanical basis + your matchup context]',
+    'I2 (15%): [same format]',
+    'I3 (20%): [same format]',
+    'I4 (30%): [same format]',
+    'I5 (25%): [same format]',
+    'MATCHUP CONTEXT: [1-2 sentences \u2014 does THIS opponent challenge the mechanical read?]',
+    'DISAGREEMENT: [NONE | where your read diverges from mechanical and why]',
     '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
     'SHOT DIET',
     '[TEAM]: [Interior/Transition | Perimeter/Creation | Balanced] \u2014 season 3PT% [X]% on [Y] 3PA/gm',
@@ -1524,11 +1540,19 @@ export default async function(request) {
       var bhv = computeBHV(analytical, homeAlias, awayAlias, rosterAudit);
       var preComputed = formatPreComputed(homeAlias, awayAlias, rosterAudit, sia, finalCaps, redistribution, srm, depletion, pyth, bhv);
 
+      // ── MECHANICAL PREGAME FLOOR ──
+      var homeStatsRaw = analytical.homeStats?.own_record || analytical.homeStats || null;
+      var awayStatsRaw = analytical.awayStats?.own_record || analytical.awayStats || null;
+      var floor = computePreGameFloor(homeStatsRaw, awayStatsRaw, analytical.standings, null, finalCaps, homeAlias, awayAlias);
+      var conviction = floor ? computeConviction(floor) : { tier: 'NO ENTRY', combo: 'NONE', indicatorsWon: [], indicatorsLost: [] };
+      var floorText = floor ? formatMechanicalFloor(floor, conviction, homeAlias, awayAlias) : '';
+
       systemPrompt = buildSystemPrompt();
       userPrompt = 'Build a complete pre-game thesis for this NBA matchup.\n\n' +
         'MATCHUP: ' + awayAlias + ' @ ' + homeAlias + '\n' +
         'DATE: ' + (matchup.date || '?') + ' | TIME: ' + (matchup.time || '?') + ' MST\n' +
         'VENUE: ' + (matchup.venue || 'TBD') + '\n\n' +
+        floorText +
         preComputed + '\n\n' +
         '=== PRE-COMPUTED AVAILABILITY (use this exactly \u2014 do NOT mix players between teams) ===\n' + (sections.availability || '(unavailable)') + '\n\n' +
         '=== INJURIES (raw report) ===\n' + (sections.injuries || '(unavailable)') + '\n\n' +
@@ -1546,7 +1570,7 @@ export default async function(request) {
         '=== STANDINGS ===\n' + (sections.standings || '(unavailable)') + '\n' +
         (sections.odds || '') + '\n' + (sections.tracking || '') + '\n' + (sections.clutch || '') + '\n' +
         (sections.recentForm || '') + '\n\n' +
-        'IMPORTANT: The PRE-COMPUTED STRUCTURAL ASSESSMENT contains SIA context with GP gate status. Players marked GP GATE SUPPRESSED should NOT cause further indicator discounts \u2014 team stats already reflect their absence. Players marked FULL GP gate with degradation tiers inform your indicator scoring. Show SIA notation in AVAILABILITY. If a depletion gate ceiling is set, justify exceeding it if you do.\n\n' +
+        'IMPORTANT: The MECHANICAL PREGAME FLOOR provides indicator scores as ground truth \u2014 do not override them. The PRE-COMPUTED STRUCTURAL ASSESSMENT contains SIA context. Show SIA notation in AVAILABILITY. Add DISAGREEMENT if your contextual read differs from mechanical.\n\n' +
         'Output the compact thesis format.';
 
       preComputedResult = {
@@ -1554,7 +1578,10 @@ export default async function(request) {
           homeOutNames: rosterAudit.out.home.map(function(p) { return p.name; }),
           awayOutNames: rosterAudit.out.away.map(function(p) { return p.name; }) },
         siaCaps: { home: finalCaps.home.caps, away: finalCaps.away.caps },
-        depletion: depletion, pyth: pyth, bhv: bhv
+        depletion: depletion, pyth: pyth, bhv: bhv,
+        floor: floor ? { controlTeam: floor.controlTeam, score: floor.score, verdict: getVerdictLabel(floor.score),
+          I1: floor.I1.score, I2: floor.I2.score, I3: floor.I3.score, I4: floor.I4.score, I5: floor.I5.score, diffs: floor.diffs } : null,
+        conviction: conviction ? { tier: conviction.tier, combo: conviction.combo, won: conviction.indicatorsWon, lost: conviction.indicatorsLost } : null,
       };
     }
 
