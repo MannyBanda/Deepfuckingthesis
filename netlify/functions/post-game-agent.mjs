@@ -75,18 +75,6 @@ function scoreAlert(alert, games) {
     correct = !ctrlWon; // Lead lost = warning was correct
   } else if (alert.alert_type === 'VARIANCE BREAKING') {
     correct = ctrlWon; // Variance broke = control team should come back
-  } else if (alert.alert_type === 'BUY_CONFIRMED' || alert.alert_type === 'BWC_CONFIRMED' || alert.alert_type === 'WB_CONFIRMED') {
-    correct = ctrlWon; // Confirmation should predict a win
-  } else if (alert.alert_type === 'BUY_FADING' || alert.alert_type === 'BWC_FADING' || alert.alert_type === 'WB_FADING') {
-    correct = !ctrlWon; // Fading alert was right if ctrl team lost
-  } else if (alert.alert_type === 'BUY_INVALIDATED' || alert.alert_type === 'BWC_INVALIDATED' || alert.alert_type === 'WB_INVALIDATED') {
-    correct = !ctrlWon; // Invalidation was right if ctrl team lost
-  } else if (alert.alert_type === 'LEAD_STABILIZED') {
-    correct = ctrlWon; // Stabilization means the lead should hold
-  } else if (alert.alert_type === 'LEAD_ESCALATING') {
-    correct = !ctrlWon; // Escalation was right if ctrl team lost
-  } else if (alert.alert_type === 'MONITOR_EMERGING') {
-    correct = ctrlWon; // Emerging signal was right if ctrl team won
   }
 
   // Spread accuracy
@@ -199,10 +187,8 @@ export default async function handler(req) {
   });
 
   // Compute accuracy breakdowns — split actionable vs transitional
-  const ACTIONABLE_TYPES = ['BUY', 'WINDOW BUY', 'BUY WINDOW CLOSING', 'RECOVERY PATH', 'VARIANCE BREAKING', 'AUTO_ANALYSIS',
-    'BUY_CONFIRMED', 'BWC_CONFIRMED', 'WB_CONFIRMED', 'BUY_FADING', 'BWC_FADING', 'WB_FADING',
-    'BUY_INVALIDATED', 'BWC_INVALIDATED', 'WB_INVALIDATED', 'MONITOR_EMERGING'];
-  const TRANSITIONAL_TYPES = ['LEAD LOST', 'LEAD CRUMBLING', 'LEAD_STABILIZED', 'LEAD_ESCALATING', 'SLATE_FOCUS'];
+  const ACTIONABLE_TYPES = ['BUY', 'WINDOW BUY', 'BUY WINDOW CLOSING', 'RECOVERY PATH', 'VARIANCE BREAKING', 'AUTO_ANALYSIS'];
+  const TRANSITIONAL_TYPES = ['LEAD LOST', 'LEAD CRUMBLING'];
 
   // Delivered = ntfy actually sent to user. Prefer ntfy_sent column, fall back to agent_decision for old data.
   const delivered = scoredAlerts.filter(a => a.ntfy_sent === true || (a.ntfy_sent == null && a.agent_decision !== 'SUPPRESS' && a.agent_decision !== 'FALLBACK_DROP'));

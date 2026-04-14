@@ -334,6 +334,28 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS conviction_tier TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS conviction_combo TEXT`; } catch(e) {}
 
+      // ── MONITOR OBSERVATIONS table (game narration by monitor agent) ──
+      await sql`CREATE TABLE IF NOT EXISTS monitor_observations (
+        id SERIAL PRIMARY KEY,
+        game_id TEXT NOT NULL,
+        league TEXT DEFAULT 'nba',
+        period INTEGER,
+        clock TEXT,
+        ts TIMESTAMPTZ DEFAULT NOW(),
+        control_team TEXT,
+        floor_score REAL,
+        margin INTEGER,
+        momentum_direction TEXT,
+        momentum_streak INTEGER,
+        momentum_delta REAL,
+        sust_arc TEXT,
+        sust_arc_detail TEXT,
+        floor_margin_rel TEXT,
+        narrative TEXT,
+        risk_factors TEXT,
+        raw_inputs JSONB
+      )`;
+
       // ── LEARNINGS table (post-game agent nightly analysis) ──
       await sql`CREATE TABLE IF NOT EXISTS learnings (
         id SERIAL PRIMARY KEY,
