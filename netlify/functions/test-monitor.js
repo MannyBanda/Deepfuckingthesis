@@ -1,7 +1,13 @@
-// test-monitor.js — Structured test of the monitor agent
-// Hit: /.netlify/functions/test-monitor?test=all (default)
-// Or:  ?test=1  ?test=2  etc. for individual scenarios
-// Or:  ?test=positions  ?test=threats  ?test=emerging  ?test=alertagent  for groups
+// test-monitor.js — Monitor Agent v2 test suite
+// Tests mechanical trend computation + Sonnet narrator quality
+//
+// Usage:
+//   ?test=all          — run all tests
+//   ?test=trends       — mechanical trend tests only (no Sonnet)
+//   ?test=narrator     — Sonnet narrator tests only
+//   ?test=t1           — individual trend test
+//   ?test=n1           — individual narrator test
+//   ?test=t1,n2        — comma-separated
 
 export default async function handler(req) {
   const url = new URL(req.url, 'https://x.com');
@@ -9,560 +15,432 @@ export default async function handler(req) {
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   if (!anthropicKey) return new Response(JSON.stringify({ error: 'No API key' }), { status: 500 });
 
-  // ── MONITOR PROMPT BUILDER ──────────────────────────────────────────────
-
-  function buildMonitorPrompt(ctx) {
-    var positionsBlock = '';
-    if (ctx.activeAlerts && ctx.activeAlerts.length > 0) {
-      positionsBlock = 'ACTIVE POSITIONS:\n' + ctx.activeAlerts.map(a => {
-        var floorDelta = (a.currentFloor - a.floorAtAlert).toFixed(2);
-        var floorDir = Number(floorDelta) >= 0 ? '+' : '';
-        return `Alert #${a.alertId}: ${a.alertType} ${a.controlTeam} (${a.matchup})\n`
-          + `  Sent: Q${a.periodAtAlert} ${a.clockAtAlert} (${a.minutesSinceSent} min ago)\n`
-          + `  At alert: floor ${a.floorAtAlert.toFixed(2)}, margin ${a.marginAtAlert}, ML ${a.mlAtAlert || '?'}, conviction ${a.convictionAtAlert || '?'}\n`
-          + `  Now: floor ${a.currentFloor.toFixed(2)} (${floorDir}${floorDelta}), margin ${a.currentMargin}, Q${a.currentPeriod} ${a.currentClock}\n`
-          + `  I4 now: ${a.currentI4 != null ? a.currentI4.toFixed(2) + ' (' + a.controlTeam + ' wins I4 if > 0.55, loses if < 0.45)' : '?'} | TP: ${a.currentTpClass || '?'} | LS: ${a.currentLsClass || '?'}\n`
-          + `  Floor trajectory: ${a.floorTrajectory.map(f => f.toFixed(2)).join(' → ')}\n`
-          + `  Score flip: ${a.tookLead ? 'YES — team took the lead' : a.lostLead ? 'YES — team LOST the lead' : 'No'}\n`
-          + `  INVALIDATED CHECK: floor=${a.currentFloor.toFixed(2)} ${a.currentFloor < 0.45 ? 'BELOW 0.45 → TRIGGER' : 'ABOVE 0.45 → no trigger'} | I4=${a.currentI4 != null ? a.currentI4.toFixed(2) : '?'} ${a.currentI4 != null && a.currentI4 < 0.40 ? 'BELOW 0.40 → TRIGGER' : 'ABOVE 0.40 → no trigger'} | TP=${a.currentTpClass || '?'} ${a.currentTpClass === 'NO PATH' ? '→ TRIGGER' : '→ no trigger'}\n`
-          + `  VERDICT: ${(a.currentFloor < 0.45 || (a.currentI4 != null && a.currentI4 < 0.40) || a.currentTpClass === 'NO PATH') ? 'INVALIDATED — at least one trigger met' : 'NOT INVALIDATED — zero triggers met, use TRACKING/CONFIRMED/FADING only'}`;
-      }).join('\n\n');
-    }
-
-    var threatsBlock = '';
-    if (ctx.leadThreats && ctx.leadThreats.length > 0) {
-      threatsBlock = '\nLEAD THREATS:\n' + ctx.leadThreats.map(t => {
-        return `Alert #${t.alertId}: ${t.alertType} ${t.controlTeam} (${t.matchup})\n`
-          + `  ${t.minutesSinceSent} min ago: leading by ${t.marginAtAlert}, LS ${t.lsAtAlert}\n`
-          + `  Now: margin ${t.currentMargin}, LS ${t.currentLsClass || '?'}`;
-      }).join('\n');
-    }
-
-    var slateBlock = '\nFULL SLATE:\n' + (ctx.liveGames || []).map(g => {
-      var marker = g.hasActiveAlert ? ' [ACTIVE POSITION]' : '';
-      return `${g.matchup}: ${g.controlTeam} floor ${g.floor.toFixed(2)}, ${g.margin >= 0 ? 'leading' : 'trailing'} by ${Math.abs(g.margin)}, Q${g.period} ${g.clock}${marker}`;
-    }).join('\n');
-
-    var emergingBlock = '';
-    if (ctx.emergingCandidates && ctx.emergingCandidates.length > 0) {
-      emergingBlock = '\nEMERGING SCAN CANDIDATES (games without recent mechanical alerts):\n'
-        + ctx.emergingCandidates.map(e => {
-          return `${e.matchup}: ${e.controlTeam} floor ${e.floor.toFixed(2)}, margin ${e.margin >= 0 ? '+' : ''}${e.margin}, Q${e.period} ${e.clock}\n`
-            + `  I4: ${e.i4 != null ? e.i4.toFixed(2) : '?'} | Floor trajectory: ${e.floorTrajectory.map(f => f.toFixed(2)).join(' → ')}`;
-        }).join('\n');
-    }
-
-    var hasMultipleGames = (ctx.liveGames || []).length >= 2;
-    var hasEmerging = (ctx.emergingCandidates || []).length > 0;
-
-    return `You are a live betting position monitor. The user has active bets based on previously-sent alerts. Your job is to assess how each position is evolving and whether the user needs an update. You also scan for emerging opportunities the mechanical threshold system can't catch.
-
-${positionsBlock}
-${threatsBlock}
-${slateBlock}
-${emergingBlock}
-
-For each ACTIVE POSITION, respond with:
-ALERT_ID: [id]
-STATUS: [TRACKING|CONFIRMED|FADING|INVALIDATED]
-REASONING: [1-2 sentences]
-NOTIFY: [YES|NO — only YES for meaningful status changes, not routine tracking]
-BODY: [if NOTIFY=YES: plain-English update for the bettor. Lead with what changed.]
-
-For each LEAD THREAT, respond with:
-ALERT_ID: [id]
-STATUS: [ESCALATING|STABILIZED|RESOLVED]
-NOTIFY: [YES|NO]
-BODY: [if YES: plain-English update]
-
-${hasMultipleGames ? `If there's a meaningful prioritization across games:
-SLATE_FOCUS: [Which game deserves attention and why. 1-2 sentences.]
-SLATE_NOTIFY: [YES|NO — only YES if actionable]
-SLATE_BODY: [if YES: plain-English slate summary]` : ''}
-
-${hasEmerging ? `Look for EMERGING opportunities — signals the mechanical system can't catch:
-- MOMENTUM: Floor rising steadily across 4+ snapshots, trajectory IS the signal
-- CONVERGENCE: Recent-window dominance converting to full-game floor improvement
-- SUSTAINABILITY_CASCADE: Opponent shooting degrading gradually across tiers (no single-step flip)
-- RELATIVE_VALUE: One game has dramatically better ML/edge for comparable conviction vs another
-- FLOOR_MARGIN_DIVERGENCE: Floor 0.65+ but margin getting worse across 5+ snapshots
-
-For each EMERGING signal found:
-EMERGING_GAME: [matchup]
-EMERGING_SIGNAL: [type]
-EMERGING_DETAIL: [What you see and why it matters. 1-2 sentences.]
-EMERGING_CONFIDENCE: [LOW|MODERATE|HIGH]
-EMERGING_NOTIFY: [YES|NO — only YES for MODERATE+ confidence]
-EMERGING_BODY: [if YES: plain-English alert. Frame as exploratory, not a confirmed BUY.]
-EMERGING_CTRL: [control team abbreviation]` : ''}
-
-RULES:
-- TRACKING with NOTIFY=NO is the most common output. Most cycles, nothing changed enough to notify. Don't over-notify.
-- CONFIRMED requires a concrete signal: score flip (trailing → leading), floor rose 0.05+, or opponent sustainability broke. Not just "looks fine."
-- FADING requires floor trending DOWN across 3+ snapshots, not just one dip.
-- INVALIDATED: check the VERDICT line on each position. If VERDICT says 'NOT INVALIDATED', you MUST NOT use INVALIDATED status — use TRACKING, CONFIRMED, or FADING instead. The VERDICT is pre-computed and authoritative. Do not override it with your own threshold math.
-- For BWC: CONFIRMED = lead grew + LS improved. FADING = lead shrinking. INVALIDATED = lead lost.
-- For WINDOW BUY: CONFIRMED = full-game floor rose toward window read. FADING = window advantage didn't translate.
-- STABILIZED: lead threat has resolved. Specific triggers: lead grew by 3+ points since LEAD AT RISK, OR LS improved from AT RISK/CRITICAL to CUSHIONED/SAFE. Either trigger alone is sufficient — a lead growing from 8 to 14 with LS upgrading to SAFE is definitively STABILIZED, not TRACKING. Only use TRACKING if the lead is unchanged and LS has not improved.
-- EMERGING MOMENTUM requires 4+ snapshots of consistent floor improvement. A single jump is noise.
-- EMERGING only for signals mechanical thresholds CAN'T catch — trajectory, cross-game, gradual cascades. If mechanical BUY would fire within 1-2 polls anyway, skip.
-- EMERGING bodies must frame as exploratory: "building momentum" not "BUY now."
-- If no EMERGING signals exist, omit the EMERGING section entirely.`;
-  }
-
-  // ── ALERT AGENT PROMPT BUILDER (for integration test) ───────────────────
-
-  function buildAlertAgentPrompt(ctx) {
-    return `You are a live NBA betting alert quality agent. A mechanical system has identified a potential betting signal. Your job is to assess whether it should be sent to the bettor.
-
-ALERT:
-Type: ${ctx.alertType} (${ctx.alertTier})
-Control team: ${ctx.controlTeam} | Floor: ${ctx.floor} | Margin: ${ctx.margin} (${ctx.isTrailing ? 'trailing' : 'leading'})
-Period: Q${ctx.period} ${ctx.clock} | Minutes left: ${ctx.minsLeft}
-Mechanical Conviction: ${ctx.convictionTier || 'N/A'} (${ctx.convictionCombo || 'N/A'}) ${ctx.convictionPairs ? '| Killer pairs: ' + ctx.convictionPairs : ''}
-Edge: ${ctx.edge != null ? ctx.edge + '%' : 'N/A'} | ML: ${ctx.ml || 'N/A'} | Spread: ${ctx.spread || 'N/A'}
-TP: ${ctx.tpClass || 'N/A'} | LS: ${ctx.lsClass || 'N/A'}
-Ctrl sust: ${ctx.ctrlSust || 'N/A'} | Opp sust: ${ctx.oppSust || 'N/A'}
-Window score: ${ctx.windowScore || 'N/A'}
-
-INDICATORS (control-team-relative):
-I1 Disruption: ${ctx.i1} | I2 Interior: ${ctx.i2} | I3 Shot Quality: ${ctx.i3} | I4 Game Control: ${ctx.i4} | I5 Execution: ${ctx.i5}
-Indicators won: ${ctx.indWon || 'none'} (${ctx.indicatorsWon}/5) | Lost: ${ctx.indLost || 'none'}
-I4 COMBO: ${ctx.i4Combo ? 'YES' : ctx.i4Won ? 'PARTIAL' : ctx.i4Decisive ? 'NO' : 'EVEN'}
-
-FLOOR TRAJECTORY (recent snapshots, newest first):
-${ctx.floorHistory || 'No prior snapshots'}
-
-PRIOR ALERTS THIS GAME:
-${ctx.priorAlerts || 'None'}
-
-QUARTER PERFORMANCE:
-${ctx.quarterSummary || 'N/A'}
-
-RULES:
-- FIRED alerts passed all mechanical thresholds. You should SEND unless you see a clear structural contradiction.
-  I4 COMBO YES: highest conviction, SEND with confidence.
-  I4 COMBO NO (opponent has game control): SUPPRESS or DOWNGRADE unless 4/5 indicators.
-  Floor driven by I1+I2 without I4/I5: effort-based, DOWNGRADE unless strong sust.
-  Floor trending DOWN: fading control, consider SUPPRESS.
-- CANDIDATE alerts: SEND only if structural case is compelling.
-- CANDIDATE BUYs floor 0.55-0.65: only SEND if I4 COMBO YES.
-- EARLY GAME (Q1-Q2): FIRED + I4 COMBO YES = SEND. CANDIDATE + I4 COMBO YES = SEND.
-  CANDIDATE + I4 COMBO NO = extra scrutiny, SEND only if floor 0.75+ with strong sust.
-- BWC: verify edge is real and lead is secure.
-- ANCHORED FLOOR CHECK: If team is TRAILING with floor 0.75+ but margin only 1-3 pts AND floor is declining, verify recent quarters still favor control team. Does NOT apply to leading teams (BWC/WB).
-- Pay close attention to Monitor annotations on prior alerts. If a prior BUY was INVALIDATED by the monitor, be very skeptical of new BUY signals for the same team. If CONFIRMED, increase confidence.
-
-Respond in EXACTLY this format:
-DECISION: [SEND|SUPPRESS|DOWNGRADE]
-REASONING: [1-2 sentences explaining why]
-BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
-  }
-
-  // ── API CALLER ──────────────────────────────────────────────────────────
-
-  async function callMonitor(ctx) {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 1200, messages: [{ role: 'user', content: buildMonitorPrompt(ctx) }] }),
-    });
-    if (!resp.ok) return { error: 'API ' + resp.status };
-    const data = await resp.json();
-    const text = data.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
-    return { text, tokens: data.usage };
-  }
-
-  async function callAlertAgent(ctx) {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 500, messages: [{ role: 'user', content: buildAlertAgentPrompt(ctx) }] }),
-    });
-    if (!resp.ok) return { decision: 'ERROR', reasoning: 'API ' + resp.status };
-    const data = await resp.json();
-    const text = data.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
-    const dm = text.match(/DECISION:\s*(SEND|SUPPRESS|DOWNGRADE)/i);
-    const rm = text.match(/REASONING:\s*(.+?)(?:\n|$)/i);
-    return { decision: dm ? dm[1].toUpperCase() : 'PARSE_FAIL', reasoning: rm ? rm[1].trim() : text.substring(0, 150), tokens: data.usage };
-  }
-
-  // ── PARSERS ─────────────────────────────────────────────────────────────
-
-  function parseMonitorPositions(text) {
-    var results = [];
-    // Split on any variation: ALERT_ID, Alert ID, **ALERT_ID**, etc.
-    var blocks = text.split(/(?=(?:\*{0,2})ALERT[_ ]ID(?:\*{0,2})\s*:)/i);
-    blocks.forEach(block => {
-      // Match: ALERT_ID: 200, Alert ID: #200, **ALERT_ID:** 200, etc.
-      var idMatch = block.match(/ALERT[_ ]ID\s*(?:\*{0,2})\s*:\s*#?(\d+)/i);
-      var statusMatch = block.match(/STATUS\s*(?:\*{0,2})\s*:\s*(?:\*{0,2})\s*(TRACKING|CONFIRMED|FADING|INVALIDATED|ESCALATING|STABILIZED|RESOLVED)/i);
-      var notifyMatch = block.match(/NOTIFY\s*(?:\*{0,2})\s*:\s*(?:\*{0,2})\s*(YES|NO)/i);
-      var reasonMatch = block.match(/REASONING\s*(?:\*{0,2})\s*:\s*(.+?)(?:\n|$)/i);
-      if (idMatch && statusMatch) {
-        results.push({
-          alertId: parseInt(idMatch[1]),
-          status: statusMatch[1].toUpperCase(),
-          notify: notifyMatch ? notifyMatch[1].toUpperCase() === 'YES' : false,
-          reasoning: reasonMatch ? reasonMatch[1].trim() : '',
-        });
+  // ── INLINE computeMonitorTrends (mirrors poll-live-bdl.mjs) ──────────
+  function computeMonitorTrends(gameData) {
+    var snaps = gameData.snapHistory;
+    var ctrlIsHome = gameData.ctrlIsHome;
+    var liveSnaps = [snaps[0]];
+    var stalePollCount = 0;
+    for (var i = 1; i < snaps.length; i++) {
+      if (snaps[i].period === snaps[i-1].period && snaps[i].clock === snaps[i-1].clock) {
+        stalePollCount++;
+      } else {
+        liveSnaps.push(snaps[i]);
       }
+    }
+    var liveFloors = liveSnaps.map(s => Number(s.floor_score));
+    var liveMargins = liveSnaps.map(s => {
+      var h = Number(s.home_pts || 0), a = Number(s.away_pts || 0);
+      return ctrlIsHome ? h - a : a - h;
     });
-    return results;
-  }
 
-  function parseEmerging(text) {
-    var results = [];
-    var blocks = text.split(/(?=(?:\*{0,2})EMERGING[_ ]GAME(?:\*{0,2})\s*:)/i);
-    blocks.forEach(block => {
-      var gameMatch = block.match(/EMERGING[_ ]GAME\s*(?:\*{0,2})\s*:\s*(.+?)(?:\n|$)/i);
-      var signalMatch = block.match(/EMERGING[_ ]SIGNAL\s*(?:\*{0,2})\s*:\s*(?:\*{0,2})\s*(MOMENTUM|CONVERGENCE|SUSTAINABILITY_CASCADE|RELATIVE_VALUE|FLOOR_MARGIN_DIVERGENCE)/i);
-      var confMatch = block.match(/EMERGING[_ ]CONFIDENCE\s*(?:\*{0,2})\s*:\s*(?:\*{0,2})\s*(LOW|MODERATE|HIGH)/i);
-      var eNotify = block.match(/EMERGING[_ ]NOTIFY\s*(?:\*{0,2})\s*:\s*(?:\*{0,2})\s*(YES|NO)/i);
-      var detailMatch = block.match(/EMERGING[_ ]DETAIL\s*(?:\*{0,2})\s*:\s*(.+?)(?:\n|$)/i);
-      if (gameMatch && signalMatch) {
-        results.push({
-          matchup: gameMatch[1].trim(),
-          signal: signalMatch[1].toUpperCase(),
-          confidence: confMatch ? confMatch[1].toUpperCase() : 'LOW',
-          notify: eNotify ? eNotify[1].toUpperCase() === 'YES' : false,
-          detail: detailMatch ? detailMatch[1].trim() : '',
-        });
+    var momentumDir = 'STABLE', momentumStreak = 0, momentumDelta = 0;
+    if (stalePollCount >= 3 && liveSnaps.length <= 2) {
+      momentumDir = 'STALE';
+      momentumStreak = stalePollCount;
+    } else if (liveFloors.length >= 2) {
+      var dir = null, streak = 0;
+      for (var j = liveFloors.length - 1; j > 0; j--) {
+        var diff = liveFloors[j] - liveFloors[j - 1];
+        if (diff > 0.01) {
+          if (dir === 'RISING' || dir === null) { dir = 'RISING'; streak++; }
+          else break;
+        } else if (diff < -0.01) {
+          if (dir === 'FALLING' || dir === null) { dir = 'FALLING'; streak++; }
+          else break;
+        } else {
+          if (dir === null) { streak++; }
+          else break;
+        }
       }
-    });
-    return results;
+      if (liveFloors.length >= 4) {
+        var changes = 0;
+        for (var k = 2; k < liveFloors.length; k++) {
+          var prev = liveFloors[k - 1] - liveFloors[k - 2];
+          var curr = liveFloors[k] - liveFloors[k - 1];
+          if ((prev > 0.01 && curr < -0.01) || (prev < -0.01 && curr > 0.01)) changes++;
+        }
+        if (changes >= 2 && !dir) dir = 'OSCILLATING';
+      }
+      momentumDir = dir || 'STABLE';
+      momentumStreak = streak;
+      momentumDelta = liveFloors.length >= 2
+        ? Math.round((liveFloors[liveFloors.length - 1] - liveFloors[Math.max(0, liveFloors.length - 1 - streak)]) * 100) / 100
+        : 0;
+    }
+
+    var sustTiers = { 'LOCKED IN': 5, 'DURABLE': 4, 'MIXED': 3, 'COLD': 2, 'FRAGILE': 1, 'UNSUSTAINABLE': 0 };
+    var oppSustHistory = liveSnaps.map(s => s.opp_sust).filter(Boolean);
+    var sustArcDir = 'STABLE', sustArcDetail = '';
+    if (oppSustHistory.length >= 2) {
+      var firstSust = sustTiers[oppSustHistory[0]] ?? 3;
+      var lastSust = sustTiers[oppSustHistory[oppSustHistory.length - 1]] ?? 3;
+      sustArcDir = lastSust < firstSust ? 'DEGRADING' : lastSust > firstSust ? 'IMPROVING' : 'STABLE';
+      var seenTiers = [];
+      oppSustHistory.forEach(t => { if (seenTiers[seenTiers.length - 1] !== t) seenTiers.push(t); });
+      sustArcDetail = seenTiers.join(' \u2192 ');
+    }
+
+    var floorMarginRel = 'ALIGNED';
+    if (liveFloors.length >= 3 && liveMargins.length >= 3) {
+      var floorChange = liveFloors[liveFloors.length - 1] - liveFloors[0];
+      var marginChange = liveMargins[liveMargins.length - 1] - liveMargins[0];
+      var floorUp = floorChange > 0.03, floorDown = floorChange < -0.03;
+      var marginUp = marginChange > 2, marginDown = marginChange < -2;
+      if ((floorUp && marginDown) || (floorDown && marginUp)) floorMarginRel = 'DIVERGING';
+      else if ((floorUp && marginUp) || (floorDown && marginDown)) floorMarginRel = 'CONVERGING';
+    }
+
+    return {
+      momentum: { direction: momentumDir, streak: momentumStreak, delta: momentumDelta },
+      sustArc: { direction: sustArcDir, detail: sustArcDetail },
+      floorMarginRel: floorMarginRel,
+      stalePollCount: stalePollCount,
+      liveFloors: liveFloors,
+    };
   }
 
-  // ── SCENARIOS ───────────────────────────────────────────────────────────
+  // Helper: make a snapshot row
+  function snap(period, clock, floor, homePts, awayPts, opts = {}) {
+    return {
+      period, clock, floor_score: floor, home_pts: homePts, away_pts: awayPts,
+      i1: opts.i1 ?? 0.5, i2: opts.i2 ?? 0.5, i3: opts.i3 ?? 0.5,
+      i4: opts.i4 ?? 0.5, i5: opts.i5 ?? 0.5,
+      tp_class: opts.tp ?? null, ls_class: opts.ls ?? null,
+      ctrl_sust: opts.ctrlSust ?? 'DURABLE', opp_sust: opts.oppSust ?? 'MIXED',
+      floor_team: opts.floorTeam ?? 'DAL',
+    };
+  }
 
-  const scenarios = {
+  // ── TREND TEST SCENARIOS (mechanical, no Sonnet) ─────────────────────
 
-    // ── POSITION TRACKING ──────────────────────────────────────────────
-
-    '1': {
-      name: 'BUY team took the lead — should CONFIRM',
-      type: 'monitor',
-      expected: { alertId: 200, status: 'CONFIRMED', notify: true },
-      ctx: {
-        activeAlerts: [{
-          alertId: 200, gameId: 'g1', matchup: 'SAC@DEN', alertType: 'BUY', alertTier: 'FIRED',
-          controlTeam: 'SAC', floorAtAlert: 0.72, marginAtAlert: -8, edgeAtAlert: 22.5,
-          mlAtAlert: '+350', convictionAtAlert: 'STRONG',
-          periodAtAlert: 2, clockAtAlert: '4:30', minutesSinceSent: 14,
-          currentFloor: 0.70, currentMargin: 3, currentPeriod: 3, currentClock: '6:22',
-          currentI4: 0.68, currentTpClass: null, currentLsClass: 'CUSHIONED',
-          floorTrajectory: [0.72, 0.71, 0.69, 0.70, 0.70],
-          controlTeamLeading: true, tookLead: true, lostLead: false,
-        }],
-        leadThreats: [],
-        liveGames: [
-          { gameId: 'g1', matchup: 'SAC@DEN', floor: 0.70, controlTeam: 'SAC', margin: 3, period: 3, clock: '6:22', hasActiveAlert: true },
+  const trendTests = {
+    't1': {
+      name: 'MOMENTUM RISING — steady climb across 6 polls',
+      gameData: {
+        ctrlIsHome: false,
+        snapHistory: [
+          snap(2, '8:00', 0.52, 45, 40), snap(2, '6:00', 0.55, 48, 43),
+          snap(2, '4:00', 0.58, 51, 47), snap(2, '2:00', 0.61, 54, 49),
+          snap(3, '10:00', 0.64, 58, 54), snap(3, '8:00', 0.67, 62, 57),
         ],
-        emergingCandidates: [],
       },
+      expected: { momentum: 'RISING', streak: 5, sustArc: 'STABLE', floorMarginRel: 'CONVERGING' },
     },
-
-    '2': {
-      name: 'BUY floor collapsing + I4 flipped — should INVALIDATE',
-      type: 'monitor',
-      expected: { alertId: 210, status: 'INVALIDATED', notify: true },
-      ctx: {
-        activeAlerts: [{
-          alertId: 210, gameId: 'g2', matchup: 'MIA@BOS', alertType: 'BUY', alertTier: 'FIRED',
-          controlTeam: 'MIA', floorAtAlert: 0.68, marginAtAlert: -5, edgeAtAlert: 15.0,
-          mlAtAlert: '+220', convictionAtAlert: 'STRONG',
-          periodAtAlert: 2, clockAtAlert: '8:00', minutesSinceSent: 20,
-          currentFloor: 0.42, currentMargin: -16, currentPeriod: 3, currentClock: '2:15',
-          currentI4: 0.30, currentTpClass: 'NO PATH', currentLsClass: null,
-          floorTrajectory: [0.68, 0.62, 0.55, 0.48, 0.42],
-          controlTeamLeading: false, tookLead: false, lostLead: false,
-        }],
-        leadThreats: [],
-        liveGames: [
-          { gameId: 'g2', matchup: 'MIA@BOS', floor: 0.42, controlTeam: 'MIA', margin: -16, period: 3, clock: '2:15', hasActiveAlert: true },
+    't2': {
+      name: 'MOMENTUM FALLING — floor collapsing',
+      gameData: {
+        ctrlIsHome: true,
+        snapHistory: [
+          snap(2, '6:00', 0.70, 50, 42), snap(2, '4:00', 0.66, 52, 48),
+          snap(2, '2:00', 0.62, 54, 53), snap(3, '10:00', 0.57, 56, 58),
+          snap(3, '8:00', 0.53, 58, 64),
         ],
-        emergingCandidates: [],
       },
+      expected: { momentum: 'FALLING', sustArc: 'STABLE', floorMarginRel: 'CONVERGING' },
     },
-
-    '3': {
-      name: 'BUY floor declining gradually — should FADE',
-      type: 'monitor',
-      expected: { alertId: 220, status: 'FADING', notify: true },
-      ctx: {
-        activeAlerts: [{
-          alertId: 220, gameId: 'g3', matchup: 'DAL@LAC', alertType: 'BUY', alertTier: 'FIRED',
-          controlTeam: 'DAL', floorAtAlert: 0.72, marginAtAlert: -6, edgeAtAlert: 18.0,
-          mlAtAlert: '+280', convictionAtAlert: 'STRONG',
-          periodAtAlert: 2, clockAtAlert: '6:00', minutesSinceSent: 15,
-          currentFloor: 0.56, currentMargin: -10, currentPeriod: 3, currentClock: '4:00',
-          currentI4: 0.52, currentTpClass: 'CONTESTED', currentLsClass: null,
-          floorTrajectory: [0.72, 0.68, 0.64, 0.60, 0.56],
-          controlTeamLeading: false, tookLead: false, lostLead: false,
-        }],
-        leadThreats: [],
-        liveGames: [
-          { gameId: 'g3', matchup: 'DAL@LAC', floor: 0.56, controlTeam: 'DAL', margin: -10, period: 3, clock: '4:00', hasActiveAlert: true },
+    't3': {
+      name: 'STALE — halftime, 4 identical polls',
+      gameData: {
+        ctrlIsHome: true,
+        snapHistory: [
+          snap(2, '0:00', 0.62, 50, 45),
+          snap(2, '0:00', 0.62, 50, 45), snap(2, '0:00', 0.62, 50, 45),
+          snap(2, '0:00', 0.62, 50, 45), snap(2, '0:00', 0.62, 50, 45),
         ],
-        emergingCandidates: [],
       },
+      expected: { momentum: 'STALE', stalePollCount: 4 },
     },
-
-    '4': {
-      name: 'BUY stable, no change — should TRACK with NOTIFY=NO',
-      type: 'monitor',
-      expected: { alertId: 230, status: 'TRACKING', notify: false },
-      ctx: {
-        activeAlerts: [{
-          alertId: 230, gameId: 'g4', matchup: 'PHX@GSW', alertType: 'BUY', alertTier: 'FIRED',
-          controlTeam: 'PHX', floorAtAlert: 0.67, marginAtAlert: -4, edgeAtAlert: 12.0,
-          mlAtAlert: '+180', convictionAtAlert: 'STRONG',
-          periodAtAlert: 3, clockAtAlert: '8:00', minutesSinceSent: 5,
-          currentFloor: 0.66, currentMargin: -3, currentPeriod: 3, currentClock: '5:30',
-          currentI4: 0.65, currentTpClass: 'PROBABLE', currentLsClass: null,
-          floorTrajectory: [0.67, 0.67, 0.66, 0.66],
-          controlTeamLeading: false, tookLead: false, lostLead: false,
-        }],
-        leadThreats: [],
-        liveGames: [
-          { gameId: 'g4', matchup: 'PHX@GSW', floor: 0.66, controlTeam: 'PHX', margin: -3, period: 3, clock: '5:30', hasActiveAlert: true },
+    't4': {
+      name: 'DIVERGING — floor rising but margin getting worse (away ctrl)',
+      gameData: {
+        ctrlIsHome: false,
+        snapHistory: [
+          snap(2, '6:00', 0.55, 48, 40), snap(2, '4:00', 0.59, 52, 42),
+          snap(2, '2:00', 0.62, 56, 43), snap(3, '10:00', 0.65, 60, 44),
+          snap(3, '8:00', 0.68, 65, 45),
         ],
-        emergingCandidates: [],
       },
+      expected: { momentum: 'RISING', floorMarginRel: 'DIVERGING' },
     },
-
-    // ── LEAD THREAT ────────────────────────────────────────────────────
-
-    '5': {
-      name: 'LEAD CRUMBLING but lead grew back — should STABILIZE',
-      type: 'monitor',
-      expected: { alertId: 240, status: 'STABILIZED', notify: true },
-      ctx: {
-        activeAlerts: [],
-        leadThreats: [{
-          alertId: 240, gameId: 'g5', matchup: 'CLE@ORL', alertType: 'LEAD CRUMBLING',
-          controlTeam: 'CLE', marginAtAlert: 8, currentMargin: 14,
-          lsAtAlert: 'AT RISK', currentLsClass: 'SAFE', minutesSinceSent: 8,
-        }],
-        liveGames: [
-          { gameId: 'g5', matchup: 'CLE@ORL', floor: 0.75, controlTeam: 'CLE', margin: 14, period: 4, clock: '4:00', hasActiveAlert: false },
+    't5': {
+      name: 'OSCILLATING — floor bouncing up and down',
+      gameData: {
+        ctrlIsHome: true,
+        snapHistory: [
+          snap(2, '8:00', 0.55, 40, 38), snap(2, '6:00', 0.62, 44, 40),
+          snap(2, '4:00', 0.54, 46, 46), snap(2, '2:00', 0.63, 50, 47),
+          snap(3, '10:00', 0.56, 52, 52), snap(3, '8:00', 0.64, 56, 53),
         ],
-        emergingCandidates: [],
       },
+      expected: { momentum: 'OSCILLATING' },
     },
-
-    // ── EMERGING MOMENTUM ──────────────────────────────────────────────
-
-    '6': {
-      name: 'Floor rising steadily 4+ snapshots — should flag MOMENTUM',
-      type: 'monitor',
-      expected: { emergingSignal: 'MOMENTUM', emergingMatchup: 'MEM@NOP' },
-      ctx: {
-        activeAlerts: [],
-        leadThreats: [],
-        liveGames: [
-          { gameId: 'g6', matchup: 'MEM@NOP', floor: 0.63, controlTeam: 'MEM', margin: -5, period: 3, clock: '6:00', hasActiveAlert: false },
-          { gameId: 'g7', matchup: 'ATL@IND', floor: 0.52, controlTeam: 'ATL', margin: 1, period: 2, clock: '4:00', hasActiveAlert: false },
+    't6': {
+      name: 'SUST ARC DEGRADING — opponent shooting regressing across 4 tiers',
+      gameData: {
+        ctrlIsHome: true,
+        snapHistory: [
+          snap(2, '8:00', 0.55, 40, 42, { oppSust: 'LOCKED IN' }),
+          snap(2, '6:00', 0.58, 44, 44, { oppSust: 'LOCKED IN' }),
+          snap(2, '4:00', 0.60, 48, 46, { oppSust: 'DURABLE' }),
+          snap(2, '2:00', 0.62, 51, 48, { oppSust: 'MIXED' }),
+          snap(3, '10:00', 0.64, 55, 50, { oppSust: 'FRAGILE' }),
         ],
-        emergingCandidates: [{
-          gameId: 'g6', matchup: 'MEM@NOP', floor: 0.63, controlTeam: 'MEM',
-          margin: -5, period: 3, clock: '6:00',
-          i4: 0.72, floorTrajectory: [0.45, 0.49, 0.53, 0.58, 0.63],
-        }, {
-          gameId: 'g7', matchup: 'ATL@IND', floor: 0.52, controlTeam: 'ATL',
-          margin: 1, period: 2, clock: '4:00',
-          i4: 0.50, floorTrajectory: [0.50, 0.51, 0.52, 0.52],
-        }],
       },
+      expected: { sustArc: 'DEGRADING' },
     },
+  };
 
-    // ── ALERT AGENT INTEGRATION: monitor context changes agent behavior ──
+  // ── NARRATOR TEST SCENARIOS (calls Sonnet) ──────────────────────────
 
-    '7': {
-      name: 'Alert agent: CANDIDATE BUY after prior BUY was INVALIDATED — should SUPPRESS',
-      type: 'alertagent',
-      expected: 'SUPPRESS',
-      ctx: {
-        alertType: 'BUY', alertTier: 'CANDIDATE', controlTeam: 'MIA', floor: '0.58', margin: 8, isTrailing: true,
-        period: 4, clock: '6:00', minsLeft: '6.0', convictionTier: 'CONDITIONAL', convictionCombo: 'I1',
-        convictionPairs: '', edge: 8, ml: '+250', spread: '+6.5',
-        tpClass: 'CONTESTED', lsClass: null, ctrlSust: 'MIXED', oppSust: 'DURABLE',
-        i1: '0.65', i2: '0.45', i3: '0.40', i4: '0.38', i5: '0.50',
-        indicatorsWon: 1, indWon: 'I1', indLost: 'I3+I4',
-        i4Decisive: true, i4Won: false, i4Combo: false,
-        floorHistory: 'Q4 8:00: MIA 0.55 (78-88) TP:CONTESTED\nQ3 6:00: MIA 0.48 (62-76) TP:UNLIKELY\nQ3 12:00: MIA 0.42 (52-68) TP:NO PATH',
-        priorAlerts: 'BUY[FIRED] Q2 8:00: floor 0.68, margin 5 trailing, sust DURABLE/FRAGILE, conv STRONG(I3+I4) → SEND\n  └── Monitor: INVALIDATED — floor collapsed to 0.42, I4 flipped decisively to BOS, structural thesis broken\nAUTO_ANALYSIS[ANALYSIS] Q3 12:00: floor 0.42, margin 16 trailing → SEND: BOS has seized structural control',
-        quarterSummary: 'Q1: 28-24 pts, paint 16-10, TO 2-4\nQ2: 24-18 pts\nQ3: 14-30 pts (BOS takeover)\nQ4: 12-14 pts',
-      },
-    },
-
-    // ── REAL DATA: SAC@GSW Apr 10 — GSW peak run (Q4 10:50) ───────────────
-    // SAC had BUY-level control from Q2 5:23 (floor 0.86, I4 1.00).
-    // GSW went on a 13-2 run to go up 95-84. Floor dropped 0.73→0.52, I4 went 1.00→0.50.
-    // SAC won 124-118. This tests whether the monitor correctly calls FADING (not INVALIDATED).
-
-    '8': {
-      name: 'REAL DATA SAC@GSW: GSW peak run — floor dropped, I4 went even — should FADE',
-      type: 'monitor',
-      expected: { alertId: 300, status: 'FADING', notify: true },
-      ctx: {
-        activeAlerts: [{
-          alertId: 300, gameId: 'gsw_sac', matchup: 'GSW@SAC', alertType: 'BUY', alertTier: 'CANDIDATE',
-          controlTeam: 'SAC', floorAtAlert: 0.73, marginAtAlert: 1, edgeAtAlert: 28.0,
-          mlAtAlert: '+500', convictionAtAlert: 'STRONG',
-          periodAtAlert: 3, clockAtAlert: '0:53', minutesSinceSent: 14,
-          // Q4 10:50: GSW up 95-84, floor flipped to GSW 0.52, I4 dropped to 0.50
-          currentFloor: 0.52, currentMargin: -11, currentPeriod: 4, currentClock: '10:50',
-          currentI4: 0.50, currentTpClass: 'UNLIKELY', currentLsClass: null,
-          floorTrajectory: [0.73, 0.73, 0.60, 0.53, 0.52],
-          controlTeamLeading: false, tookLead: false, lostLead: true,
-        }],
-        leadThreats: [],
-        liveGames: [
-          { gameId: 'gsw_sac', matchup: 'GSW@SAC', floor: 0.52, controlTeam: 'SAC', margin: -11, period: 4, clock: '10:50', hasActiveAlert: true },
+  const narratorTests = {
+    'n1': {
+      name: 'Narrator: rising momentum + opp degrading — should narrate building edge for both teams',
+      gameData: {
+        gameId: 'test1', matchup: 'DAL@BOS', homeAlias: 'BOS', awayAlias: 'DAL',
+        controlTeam: 'DAL', ctrlIsHome: false, floor: 0.68, margin: -3,
+        period: 3, clock: '6:00',
+        snapHistory: [
+          snap(2, '6:00', 0.52, 45, 40, { i1: 0.6, i2: 0.7, i3: 0.5, i4: 0.8, i5: 0.6, oppSust: 'LOCKED IN', floorTeam: 'DAL' }),
+          snap(2, '4:00', 0.56, 48, 43, { i1: 0.6, i2: 0.7, i3: 0.5, i4: 0.8, i5: 0.6, oppSust: 'DURABLE', floorTeam: 'DAL' }),
+          snap(2, '2:00', 0.60, 52, 47, { i1: 0.65, i2: 0.72, i3: 0.52, i4: 0.8, i5: 0.6, oppSust: 'MIXED', floorTeam: 'DAL' }),
+          snap(3, '10:00', 0.64, 58, 54, { i1: 0.65, i2: 0.75, i3: 0.55, i4: 0.82, i5: 0.62, oppSust: 'MIXED', floorTeam: 'DAL' }),
+          snap(3, '8:00', 0.66, 62, 58, { i1: 0.68, i2: 0.75, i3: 0.55, i4: 0.82, i5: 0.62, oppSust: 'FRAGILE', tp: 'PROBABLE', floorTeam: 'DAL' }),
+          snap(3, '6:00', 0.68, 65, 62, { i1: 0.7, i2: 0.78, i3: 0.55, i4: 0.85, i5: 0.65, oppSust: 'FRAGILE', tp: 'PROBABLE', ctrlSust: 'DURABLE', floorTeam: 'DAL' }),
         ],
-        emergingCandidates: [],
-      },
-    },
-
-    // ── REAL DATA: SAC@GSW Apr 10 — SAC recovery (Q4 6:48) ────────────────
-    // SAC fought back from down 11 to tie 98-98. Floor recovered 0.52→0.65, I4 snapped back to 1.00.
-    // Monitor previously called FADING. Now the thesis is rebuilding. Should call CONFIRMED.
-
-    '9': {
-      name: 'REAL DATA SAC@GSW: SAC recovery to tie — floor + I4 rebuilt — should CONFIRM',
-      type: 'monitor',
-      expected: { alertId: 300, status: 'CONFIRMED', notify: true },
-      ctx: {
-        activeAlerts: [{
-          alertId: 300, gameId: 'gsw_sac', matchup: 'GSW@SAC', alertType: 'BUY', alertTier: 'CANDIDATE',
-          controlTeam: 'SAC', floorAtAlert: 0.73, marginAtAlert: 1, edgeAtAlert: 28.0,
-          mlAtAlert: '+500', convictionAtAlert: 'STRONG',
-          periodAtAlert: 3, clockAtAlert: '0:53', minutesSinceSent: 22,
-          // Q4 6:48: Tied 98-98, floor back to SAC 0.65, I4 back to 1.00
-          currentFloor: 0.65, currentMargin: 0, currentPeriod: 4, currentClock: '6:48',
-          currentI4: 1.00, currentTpClass: null, currentLsClass: null,
-          floorTrajectory: [0.52, 0.53, 0.53, 0.65, 0.65],
-          controlTeamLeading: false, tookLead: false, lostLead: false,
-        }],
-        leadThreats: [],
-        liveGames: [
-          { gameId: 'gsw_sac', matchup: 'GSW@SAC', floor: 0.65, controlTeam: 'SAC', margin: 0, period: 4, clock: '6:48', hasActiveAlert: true },
+        recentAlerts: [
+          { alert_type: 'WINDOW BUY', period: 2, clock: '4:00', floor_score: 0.56, margin: -5, agent_decision: 'SEND' },
         ],
-        emergingCandidates: [],
+        rawInputs: {
+          home: { paint: 18, fta: 8, to: 5, stl: 3, fg3a: 28, fg3m: 9, oreb: 4, pot: 6, fbp: 4, scp: 4, bigLead: 12, bench: 22, poss: 72 },
+          away: { paint: 30, fta: 16, to: 7, stl: 8, fg3a: 19, fg3m: 6, oreb: 9, pot: 12, fbp: 10, scp: 8, bigLead: 0, bench: 14, poss: 72 },
+        },
+      },
+      check: (obs) => {
+        var hasObservation = obs.observation && obs.observation.length > 20;
+        var hasRisk = obs.atRisk && obs.atRisk.length > 20;
+        var hasCtrl = obs.controlTeam === 'DAL';
+        return { pass: hasObservation && hasRisk && hasCtrl,
+          detail: `obs=${hasObservation} risk=${hasRisk} ctrl=${obs.controlTeam}` };
       },
     },
-
-    // ── REAL DATA: Alert agent reads monitor FADING→CONFIRMED arc ──────────
-    // New CANDIDATE BUY fires at Q4 6:48 (tied). Prior alerts show BUY → FADING → CONFIRMED.
-    // The structural thesis weathered GSW's run and rebuilt. Agent should SEND with confidence.
-
-    '10': {
-      name: 'REAL DATA alert agent: CANDIDATE BUY after FADING→CONFIRMED arc — should SEND',
-      type: 'alertagent',
-      expected: 'SEND',
-      ctx: {
-        alertType: 'BUY', alertTier: 'CANDIDATE', controlTeam: 'SAC', floor: '0.65', margin: 0, isTrailing: false,
-        period: 4, clock: '6:48', minsLeft: '6.8', convictionTier: 'STRONG', convictionCombo: 'I1+I4',
-        convictionPairs: 'I4+I5', edge: 15, ml: '+180', spread: '+3.5',
-        tpClass: null, lsClass: null, ctrlSust: 'DURABLE', oppSust: 'FRAGILE',
-        i1: '0.70', i2: '0.55', i3: '0.50', i4: '1.00', i5: '0.60',
-        indicatorsWon: 3, indWon: 'I1+I4+I5', indLost: '',
-        i4Decisive: true, i4Won: true, i4Combo: true,
-        floorHistory: 'Q4 6:48: SAC 0.65 (98-98) TP:?\nQ4 8:56: SAC 0.53 (92-95) TP:STRONG RECOVERY\nQ4 10:50: GSW 0.52 (84-95) I4:0.50\nQ3 0:53: SAC 0.73 (82-83) TP:STRONG RECOVERY',
-        priorAlerts: 'BUY[CANDIDATE] Q3 0:53: floor 0.73, margin 1 leading, conv STRONG(I1+I4+I5) → SEND\n  └── Monitor: FADING (Q4 10:50) — floor dropped to 0.52, I4 went even, GSW on 13-2 run\n  └── Monitor: CONFIRMED (Q4 6:48) — SAC fought back to tie, floor recovered to 0.65, I4 back to 1.00',
-        quarterSummary: 'Q1: 32-27 pts (GSW-SAC)\nQ2: 19-36 pts (SAC dominant)\nQ3: 38-19 pts (GSW surge)\nQ4: 9-16 pts (SAC clawing back)',
+    'n2': {
+      name: 'Narrator: stale data at halftime — should flag data not updating',
+      gameData: {
+        gameId: 'test2', matchup: 'MIA@PHI', homeAlias: 'PHI', awayAlias: 'MIA',
+        controlTeam: 'MIA', ctrlIsHome: false, floor: 0.60, margin: -2,
+        period: 2, clock: '0:00',
+        snapHistory: [
+          snap(2, '2:00', 0.58, 48, 44, { oppSust: 'DURABLE', floorTeam: 'MIA' }),
+          snap(2, '0:00', 0.60, 50, 46, { oppSust: 'DURABLE', floorTeam: 'MIA' }),
+          snap(2, '0:00', 0.60, 50, 46, { oppSust: 'DURABLE', floorTeam: 'MIA' }),
+          snap(2, '0:00', 0.60, 50, 46, { oppSust: 'DURABLE', floorTeam: 'MIA' }),
+          snap(2, '0:00', 0.60, 50, 46, { oppSust: 'DURABLE', floorTeam: 'MIA' }),
+        ],
+        recentAlerts: [],
+        rawInputs: {
+          home: { paint: 16, fta: 10, to: 6, stl: 4, fg3a: 20, fg3m: 7, oreb: 5, pot: 8, fbp: 6, scp: 4, bigLead: 8, bench: 12, poss: 55 },
+          away: { paint: 22, fta: 12, to: 4, stl: 6, fg3a: 16, fg3m: 5, oreb: 7, pot: 10, fbp: 8, scp: 6, bigLead: 2, bench: 10, poss: 55 },
+        },
+      },
+      check: (obs) => {
+        var mentionsStale = /stale|halftime|half|timeout|not updat|break|pre.?break|hasn.?t.*updat/i.test(obs.observation || '');
+        return { pass: mentionsStale, detail: `mentionsStale=${mentionsStale}` };
+      },
+    },
+    'n3': {
+      name: 'Narrator: divergence — floor high but losing by more, should flag disconnect',
+      gameData: {
+        gameId: 'test3', matchup: 'SAC@LAC', homeAlias: 'LAC', awayAlias: 'SAC',
+        controlTeam: 'SAC', ctrlIsHome: false, floor: 0.72, margin: -10,
+        period: 3, clock: '4:00',
+        snapHistory: [
+          snap(2, '6:00', 0.62, 42, 38, { oppSust: 'DURABLE', floorTeam: 'SAC' }),
+          snap(2, '4:00', 0.65, 46, 39, { oppSust: 'DURABLE', floorTeam: 'SAC' }),
+          snap(2, '2:00', 0.67, 50, 40, { oppSust: 'MIXED', floorTeam: 'SAC' }),
+          snap(3, '8:00', 0.70, 56, 42, { oppSust: 'MIXED', floorTeam: 'SAC' }),
+          snap(3, '6:00', 0.71, 62, 44, { oppSust: 'MIXED', floorTeam: 'SAC' }),
+          snap(3, '4:00', 0.72, 68, 46, { oppSust: 'MIXED', tp: 'CONTESTED', floorTeam: 'SAC' }),
+        ],
+        recentAlerts: [
+          { alert_type: 'BUY', period: 2, clock: '6:00', floor_score: 0.62, margin: -4, agent_decision: 'SEND' },
+        ],
+        rawInputs: {
+          home: { paint: 32, fta: 18, to: 3, stl: 8, fg3a: 30, fg3m: 14, oreb: 2, pot: 4, fbp: 12, scp: 2, bigLead: 16, bench: 28, poss: 74 },
+          away: { paint: 28, fta: 14, to: 9, stl: 3, fg3a: 22, fg3m: 6, oreb: 8, pot: 14, fbp: 6, scp: 10, bigLead: 0, bench: 10, poss: 74 },
+        },
+      },
+      check: (obs) => {
+        var mentionsDivergence = /diverg|disconnect|despite|floor.*margin|margin.*worse|losing.*more|gap.*grow|widen|structur.*doesn.?t.*match/i.test(obs.observation + ' ' + obs.atRisk);
+        return { pass: mentionsDivergence, detail: `mentionsDivergence=${mentionsDivergence}` };
       },
     },
   };
 
-  // ── TEST RUNNER ─────────────────────────────────────────────────────────
+  // ── BUILD NARRATOR PROMPT ────────────────────────────────────────────
 
-  let testKeys = [];
-  if (testParam === 'all') testKeys = Object.keys(scenarios);
-  else if (testParam === 'positions') testKeys = ['1', '2', '3', '4'];
-  else if (testParam === 'threats') testKeys = ['5'];
-  else if (testParam === 'emerging') testKeys = ['6'];
-  else if (testParam === 'alertagent') testKeys = ['7', '10'];
-  else if (testParam === 'realdata') testKeys = ['8', '9', '10'];
-  else if (scenarios[testParam]) testKeys = [testParam];
-  else return new Response(JSON.stringify({ error: 'Unknown test: ' + testParam }));
+  function buildNarratorPrompt(gameData) {
+    var t = computeMonitorTrends(gameData);
+    var snaps = gameData.snapHistory;
+    var latest = snaps[snaps.length - 1];
 
-  const results = [];
-  for (const key of testKeys) {
-    const s = scenarios[key];
-    console.log('Test ' + key + ': ' + s.name);
+    var floorTraj = snaps.map(s =>
+      `Q${s.period} ${s.clock}: ${Number(s.floor_score).toFixed(2)} (${s.away_pts}-${s.home_pts})`
+    ).join('\n    ');
 
-    if (s.type === 'alertagent') {
-      // Alert agent integration test
-      const r = await callAlertAgent(s.ctx);
-      results.push({
-        test: key, name: s.name, type: 'alertagent',
-        expected: s.expected, actual: r.decision,
-        pass: r.decision === s.expected ? 'PASS' : 'FAIL',
-        reasoning: r.reasoning,
-        tokens: r.tokens ? r.tokens.input_tokens + 'in/' + r.tokens.output_tokens + 'out' : '?',
-      });
-    } else {
-      // Monitor test
-      const r = await callMonitor(s.ctx);
-      if (r.error) {
-        results.push({ test: key, name: s.name, type: 'monitor', pass: 'ERROR', error: r.error });
-        continue;
-      }
+    var i1 = latest.i1 != null ? (gameData.ctrlIsHome ? Number(latest.i1) : 1 - Number(latest.i1)) : null;
+    var i2 = latest.i2 != null ? (gameData.ctrlIsHome ? Number(latest.i2) : 1 - Number(latest.i2)) : null;
+    var i3 = latest.i3 != null ? (gameData.ctrlIsHome ? Number(latest.i3) : 1 - Number(latest.i3)) : null;
+    var i4 = latest.i4 != null ? (gameData.ctrlIsHome ? Number(latest.i4) : 1 - Number(latest.i4)) : null;
+    var i5 = latest.i5 != null ? (gameData.ctrlIsHome ? Number(latest.i5) : 1 - Number(latest.i5)) : null;
 
-      const positions = parseMonitorPositions(r.text);
-      const emerging = parseEmerging(r.text);
+    var momLabel = `${t.momentum.direction}`;
+    if (t.momentum.direction === 'STALE') momLabel += ` (${t.stalePollCount} identical polls — halftime/timeout)`;
+    else if (t.momentum.streak > 0) momLabel += ` (${t.momentum.streak} polls, ${t.momentum.delta >= 0 ? '+' : ''}${t.momentum.delta.toFixed(2)})`;
 
-      let pass = 'FAIL';
-      let actual = '';
-      let reasoning = '';
-
-      if (s.expected.alertId) {
-        // Position/threat test — match by alertId
-        const match = positions.find(p => p.alertId === s.expected.alertId);
-        if (match) {
-          const statusOk = match.status === s.expected.status;
-          const notifyOk = match.notify === s.expected.notify;
-          pass = statusOk && notifyOk ? 'PASS' : 'FAIL';
-          actual = `${match.status} notify=${match.notify}`;
-          reasoning = match.reasoning;
-        } else {
-          actual = 'Alert ID not found in response';
-          // Dump raw text and parsed positions for debugging
-          reasoning = 'Raw: ' + r.text.substring(0, 500);
-        }
-      } else if (s.expected.emergingSignal) {
-        // Emerging test — match by signal type
-        const match = emerging.find(e => e.signal === s.expected.emergingSignal
-          && e.matchup.includes(s.expected.emergingMatchup.split('@')[0]));
-        if (match) {
-          pass = match.confidence !== 'LOW' ? 'PASS' : 'FAIL';
-          actual = `${match.signal} ${match.confidence} notify=${match.notify}`;
-          reasoning = match.detail;
-        } else {
-          actual = 'Emerging signal not found';
-          reasoning = 'Raw: ' + r.text.substring(0, 500);
-        }
-      }
-
-      results.push({
-        test: key, name: s.name, type: 'monitor',
-        expected: s.expected.alertId
-          ? `${s.expected.status} notify=${s.expected.notify}`
-          : `${s.expected.emergingSignal}`,
-        actual,
-        pass,
-        reasoning,
-        tokens: r.tokens ? r.tokens.input_tokens + 'in/' + r.tokens.output_tokens + 'out' : '?',
-      });
+    var rawBlock = '';
+    if (gameData.rawInputs) {
+      var ctrl = gameData.ctrlIsHome ? gameData.rawInputs.home : gameData.rawInputs.away;
+      var opp = gameData.ctrlIsHome ? gameData.rawInputs.away : gameData.rawInputs.home;
+      var ctrlAlias = gameData.controlTeam;
+      var oppAlias = gameData.ctrlIsHome ? gameData.awayAlias : gameData.homeAlias;
+      rawBlock = `\n  Raw inputs (${ctrlAlias} / ${oppAlias}):`
+        + `\n    Paint: ${ctrl?.paint || 0} / ${opp?.paint || 0} | FTA: ${ctrl?.fta || 0} / ${opp?.fta || 0} | TO: ${ctrl?.to || 0} / ${opp?.to || 0} | STL: ${ctrl?.stl || 0} / ${opp?.stl || 0}`
+        + `\n    3PA: ${ctrl?.fg3a || 0} / ${opp?.fg3a || 0} | 3PM: ${ctrl?.fg3m || 0} / ${opp?.fg3m || 0} (${ctrl?.fg3a > 0 ? Math.round(ctrl.fg3m / ctrl.fg3a * 100) : 0}% / ${opp?.fg3a > 0 ? Math.round(opp.fg3m / opp.fg3a * 100) : 0}%)`
+        + `\n    OREB: ${ctrl?.oreb || 0} / ${opp?.oreb || 0} | POT: ${ctrl?.pot || 0} / ${opp?.pot || 0} | FBP: ${ctrl?.fbp || 0} / ${opp?.fbp || 0} | SCP: ${ctrl?.scp || 0} / ${opp?.scp || 0}`
+        + `\n    BigLead: ${ctrlAlias} ${ctrl?.bigLead || 0} / ${oppAlias} ${opp?.bigLead || 0} | Bench: ${ctrl?.bench || 0} / ${opp?.bench || 0} | Poss: ${ctrl?.poss || 0}`;
     }
 
-    if (testKeys.length > 1) await new Promise(r => setTimeout(r, 500));
+    var alertsBlock = '';
+    if (gameData.recentAlerts && gameData.recentAlerts.length > 0) {
+      alertsBlock = '\n  Recent alerts: ' + gameData.recentAlerts.map(a =>
+        `${a.alert_type} Q${a.period} ${a.clock} floor:${Number(a.floor_score).toFixed(2)} margin:${a.margin} \u2192 ${a.agent_decision || 'DIRECT'}`
+      ).join(' | ');
+    }
+
+    var gameBlock = `GAME: ${gameData.matchup}\n`
+      + `  Score: ${gameData.awayAlias} ${latest.away_pts}, ${gameData.homeAlias} ${latest.home_pts} (Q${gameData.period} ${gameData.clock})\n`
+      + `  ${gameData.controlTeam} controls floor at ${gameData.floor.toFixed(2)}, ${gameData.margin >= 0 ? 'leading' : 'trailing'} by ${Math.abs(gameData.margin)}\n`
+      + `  Trend: MOMENTUM ${momLabel} | OPP SUST: ${t.sustArc.direction}${t.sustArc.detail ? ' (' + t.sustArc.detail + ')' : ''} | FLOOR-MARGIN: ${t.floorMarginRel}\n`
+      + `  Indicators (${gameData.controlTeam}-relative): I1=${i1 != null ? i1.toFixed(2) : '?'} I2=${i2 != null ? i2.toFixed(2) : '?'} I3=${i3 != null ? i3.toFixed(2) : '?'} I4=${i4 != null ? i4.toFixed(2) : '?'} I5=${i5 != null ? i5.toFixed(2) : '?'}\n`
+      + `  TP: ${latest.tp_class || '?'} | LS: ${latest.ls_class || '?'} | Ctrl sust: ${latest.ctrl_sust || '?'} | Opp sust: ${latest.opp_sust || '?'}\n`
+      + `  Floor trajectory:\n    ${floorTraj}`
+      + rawBlock
+      + alertsBlock;
+
+    return `You are a live game observer for a sports betting intelligence system. Your job is to narrate what's happening in each game \u2014 what's stable, what's shifting, what's at risk of flipping. You are NOT making bet recommendations or saying SEND or SUPPRESS.
+
+You see both teams. The control team holds the structural floor edge, but the opponent's story is equally important.
+
+${gameBlock}
+
+For each game, respond with:
+GAME: [matchup]
+OBSERVATION: [2-4 sentences. Narrate BOTH teams. Focus on what's shifting. If trend says STALE, note data hasn't updated.]
+AT_RISK: [Which structural edges look fragile? Read the raw inputs. Be specific. Speak to both teams.]
+CTRL_TEAM: [abbreviation]
+
+RULES:
+- Observer only. No SEND, SUPPRESS, BUY, SELL.
+- Pre-computed trend labels are ground truth. Reference them, don't recalculate.
+- Read raw inputs to assess what's underneath the indicators.
+- AT_RISK is your most important output. Be specific about inputs and what would cause a flip.
+- 2-4 sentences per section max.`;
   }
 
-  return new Response(JSON.stringify({
-    summary: results.filter(r => r.pass === 'PASS').length + '/' + results.length + ' passed',
-    results,
-  }, null, 2), { headers: { 'Content-Type': 'application/json' } });
+  // ── RUN TESTS ──────────────────────────────────────────────────────────
+
+  var testKeys = [];
+  if (testParam === 'all') testKeys = [...Object.keys(trendTests), ...Object.keys(narratorTests)];
+  else if (testParam === 'trends') testKeys = Object.keys(trendTests);
+  else if (testParam === 'narrator') testKeys = Object.keys(narratorTests);
+  else testKeys = testParam.split(',').map(s => s.trim());
+
+  var results = [];
+
+  // Run trend tests (no Sonnet)
+  for (var tk of testKeys.filter(k => trendTests[k])) {
+    var tt = trendTests[tk];
+    var trends = computeMonitorTrends(tt.gameData);
+    var pass = true;
+    var details = [];
+
+    if (tt.expected.momentum && trends.momentum.direction !== tt.expected.momentum) {
+      pass = false; details.push(`momentum: expected ${tt.expected.momentum}, got ${trends.momentum.direction}`);
+    } else if (tt.expected.momentum) { details.push(`momentum: ${trends.momentum.direction} \u2713`); }
+
+    if (tt.expected.streak != null && trends.momentum.streak !== tt.expected.streak) {
+      pass = false; details.push(`streak: expected ${tt.expected.streak}, got ${trends.momentum.streak}`);
+    }
+
+    if (tt.expected.sustArc && trends.sustArc.direction !== tt.expected.sustArc) {
+      pass = false; details.push(`sustArc: expected ${tt.expected.sustArc}, got ${trends.sustArc.direction}`);
+    } else if (tt.expected.sustArc) { details.push(`sustArc: ${trends.sustArc.direction} \u2713`); }
+
+    if (tt.expected.sustDetail && trends.sustArc.detail !== tt.expected.sustDetail) {
+      pass = false; details.push(`sustDetail: expected "${tt.expected.sustDetail}", got "${trends.sustArc.detail}"`);
+    } else if (tt.expected.sustDetail) { details.push(`sustDetail: \u2713`); }
+
+    if (tt.expected.floorMarginRel && trends.floorMarginRel !== tt.expected.floorMarginRel) {
+      pass = false; details.push(`floorMarginRel: expected ${tt.expected.floorMarginRel}, got ${trends.floorMarginRel}`);
+    } else if (tt.expected.floorMarginRel) { details.push(`floorMarginRel: ${trends.floorMarginRel} \u2713`); }
+
+    if (tt.expected.stalePollCount != null && trends.stalePollCount !== tt.expected.stalePollCount) {
+      pass = false; details.push(`stalePollCount: expected ${tt.expected.stalePollCount}, got ${trends.stalePollCount}`);
+    } else if (tt.expected.stalePollCount != null) { details.push(`stalePollCount: ${trends.stalePollCount} \u2713`); }
+
+    results.push({
+      test: tk, name: tt.name, type: 'trend',
+      pass: pass ? 'PASS' : 'FAIL',
+      detail: details.join(' | '),
+      computed: { momentum: trends.momentum, sustArc: trends.sustArc, floorMarginRel: trends.floorMarginRel, stalePollCount: trends.stalePollCount },
+    });
+  }
+
+  // Run narrator tests (calls Sonnet)
+  for (var nk of testKeys.filter(k => narratorTests[k])) {
+    var nt = narratorTests[nk];
+    var prompt = buildNarratorPrompt(nt.gameData);
+
+    try {
+      var resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 500, messages: [{ role: 'user', content: prompt }] }),
+      });
+      var data = await resp.json();
+      var text = data.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+
+      var obsMatch = text.match(/OBSERVATION\s*(?:\*{0,2})\s*:?\s*([\s\S]*?)(?=(?:\*{0,2})AT[_ ]?RISK(?:\*{0,2})\s*:|(?:\*{0,2})CTRL[_ ]?TEAM(?:\*{0,2})\s*:|$)/i);
+      var riskMatch = text.match(/AT[_ ]?RISK\s*(?:\*{0,2})\s*:?\s*([\s\S]*?)(?=(?:\*{0,2})CTRL[_ ]?TEAM(?:\*{0,2})\s*:|(?:\*{0,2})GAME(?:\*{0,2})\s*:|$)/i);
+      var ctrlMatch = text.match(/CTRL[_ ]?TEAM\s*(?:\*{0,2})\s*:?\s*(\S+)/i);
+
+      var obs = {
+        observation: obsMatch ? obsMatch[1].trim() : '',
+        atRisk: riskMatch ? riskMatch[1].trim() : '',
+        controlTeam: ctrlMatch ? ctrlMatch[1].trim() : '',
+      };
+
+      var checkResult = nt.check(obs);
+      var tokens = data.usage ? `${data.usage.input_tokens}in/${data.usage.output_tokens}out` : '?';
+
+      results.push({
+        test: nk, name: nt.name, type: 'narrator',
+        pass: checkResult.pass ? 'PASS' : 'FAIL',
+        detail: checkResult.detail,
+        observation: obs.observation.substring(0, 200),
+        atRisk: obs.atRisk.substring(0, 200),
+        controlTeam: obs.controlTeam,
+        tokens: tokens,
+      });
+    } catch (e) {
+      results.push({ test: nk, name: nt.name, type: 'narrator', pass: 'ERROR', detail: e.message });
+    }
+  }
+
+  var passed = results.filter(r => r.pass === 'PASS').length;
+  var total = results.length;
+  return new Response(JSON.stringify({ summary: `${passed}/${total} passed`, results }, null, 2), {
+    headers: { 'Content-Type': 'application/json' },
+  });
 }
