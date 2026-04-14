@@ -35,7 +35,12 @@ ${ctx.priorAlerts || 'None'}
 
 QUARTER PERFORMANCE:
 ${ctx.quarterSummary || 'N/A'}
-${ctx.learningsContext ? '\n' + ctx.learningsContext + '\n' : ''}${ctx.priorPosition ? `
+${ctx.learningsContext ? '\n' + ctx.learningsContext + '\n' : ''}${ctx.monitorContext ? `
+MONITOR OBSERVATIONS (from continuous game observer, most recent first):
+${ctx.monitorContext}
+
+NOTE: Monitor observations provide trajectory context — momentum, sustainability arcs, risk factors — from continuous 3-minute polling between alerts. Use them to inform your reasoning about the game's arc, but they do not override mechanical FIRED thresholds. A FIRED alert with strong indicators is still a SEND even if the monitor notes a risk factor. For CANDIDATE alerts, monitor context can tip the decision.
+` : ''}${ctx.priorPosition ? `
 POSITION UPDATE CONTEXT:
 This is a position update for a previously sent alert — NOT a new signal.
 Prior alert: ${ctx.priorPosition.alertType} for ${ctx.priorPosition.controlTeam} at Q${ctx.priorPosition.period} ${ctx.priorPosition.clock} (${ctx.priorPosition.minutesSince} min ago)
@@ -419,6 +424,68 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       priorAlerts:'VARIANCE BREAKING[FIRED] Q3 2:00: floor 0.52, margin 4 trailing, sust COLD/FRAGILE → SEND: opponent shooting regressing, was LOCKED IN now FRAGILE\nLEAD LOST Q3 6:00: floor 0.60, margin 0 → MEM lost lead, was CUSHIONED\nLEAD CRUMBLING[FIRED] Q3 10:00: floor 0.65, margin 4 leading, sust DURABLE/LOCKED IN, conv MODEST(I1+I2), LS CRITICAL → SEND: floor dropped -0.15 from BWC, I4 lost, real erosion\nAUTO_ANALYSIS[ANALYSIS] Q2 12:00: floor 0.80, margin 12 leading → SEND: BWC position dominant, floor climbing\nBWC[FIRED] Q2 6:00: floor 0.78, margin 10 leading, sust LOCKED IN/FRAGILE, conv DOMINANT(I1+I2+I3+I4), edge +22% → SEND: dominant structural case across all indicators',
       quarterSummary:'Q1: 28-18\nQ2: 24-22\nQ3: 14-30\nQ4: 14-10'
     }},
+
+    // ── MONITOR CONTEXT INTEGRATION (33-36) ──────────────────────────────
+
+    '33': { name: 'MONITOR REINFORCEMENT: FIRED BUY + monitor confirms rising momentum — should SEND', expected: 'SEND', ctx: {
+      alertType: 'BUY', alertTier: 'FIRED', controlTeam: 'MIL', floor: 0.72, margin: 6,
+      isTrailing: true, period: 3, clock: '4:30', minsLeft: 16.5,
+      edge: 18.5, ml: '+280', spread: '-4.5', tpClass: 'PROBABLE', lsClass: null,
+      ctrlSust: 'DURABLE', oppSust: 'FRAGILE', windowScore: null,
+      i1: 0.70, i2: 0.75, i3: 0.60, i4: 0.82, i5: 0.68,
+      indicatorsWon: 4, indWon: 'I1+I2+I4+I5', indLost: '',
+      i4Decisive: true, i4Won: true, i4Combo: true,
+      convictionTier: 'DOMINANT', convictionCombo: 'I1+I2+I4+I5',
+      floorHistory:'Q3 4:30: MIL 0.72 (68-74) TP:PROBABLE\nQ3 8:00: MIL 0.68 (60-68) TP:PROBABLE\nQ2 4:00: MIL 0.62 (48-56) TP:CONTESTED\nQ2 8:00: MIL 0.58 (40-48) TP:UNLIKELY',
+      priorAlerts:'WINDOW BUY[FIRED] Q2 6:00: floor 0.60, margin 8 trailing → SEND',
+      quarterSummary:'Q1: 20-28\nQ2: 28-28\nQ3: 20-18',
+      monitorContext: 'Q3 6:00: MOMENTUM RISING (5 polls, +0.14) | OPP SUST: DEGRADING (LOCKED IN → DURABLE → FRAGILE) | FLOOR-MARGIN: CONVERGING\n  OBS: MIL has built structural dominance steadily from Q2 mid through Q3. Paint gap 32-18 and turnover forcing (9 steals vs 4) anchor the floor rise. BOS shooting has cratered from 42% 3PT in Q1 to 28% since.\n  RISK: MIL turnovers at 8 are manageable but rising. BOS bench scoring (24) is keeping them afloat despite starter regression. If BOS goes small to counter paint pressure, I2 edge could narrow.\nQ3 3:00: MOMENTUM RISING (7 polls, +0.16) | OPP SUST: DEGRADING (FRAGILE) | FLOOR-MARGIN: CONVERGING\n  OBS: Structural momentum confirmed. MIL closed the gap from -8 to -6 while floor rose to 0.72. BOS sustainability has fully degraded to FRAGILE. Paint dominance holding.\n  RISK: Same risks as prior observation. BOS 3PT regression is the key driver — if they hit 2-3 straight the sust arc reverses fast.'
+    }},
+
+    '34': { name: 'MONITOR TIPPING: CANDIDATE BUY + monitor shows sustained momentum — should SEND', expected: 'SEND', ctx: {
+      alertType: 'BUY', alertTier: 'CANDIDATE', controlTeam: 'ATL', floor: 0.60, margin: 5,
+      isTrailing: true, period: 3, clock: '6:00', minsLeft: 18,
+      edge: 12.0, ml: '+180', spread: '-2.5', tpClass: 'CONTESTED', lsClass: null,
+      ctrlSust: 'DURABLE', oppSust: 'MIXED', windowScore: null,
+      i1: 0.62, i2: 0.58, i3: 0.55, i4: 0.68, i5: 0.60,
+      indicatorsWon: 3, indWon: 'I1+I4+I5', indLost: 'I3',
+      i4Decisive: true, i4Won: true, i4Combo: true,
+      convictionTier: 'STRONG', convictionCombo: 'I1+I4+I5',
+      floorHistory:'Q3 6:00: ATL 0.60 (55-60) TP:CONTESTED\nQ3 10:00: ATL 0.57 (48-54) TP:CONTESTED\nQ2 4:00: ATL 0.54 (40-46) TP:UNLIKELY',
+      priorAlerts:'None',
+      quarterSummary:'Q1: 20-24\nQ2: 20-22\nQ3: 15-14',
+      monitorContext: 'Q3 8:00: MOMENTUM RISING (6 polls, +0.10) | OPP SUST: DEGRADING (DURABLE → MIXED) | FLOOR-MARGIN: CONVERGING\n  OBS: ATL has steadily built structural control from 0.50 to 0.58 across Q2 into Q3. Paint edge 24-16 is translating to real scoring. CLE 3PT volume (26 attempts) is high but conversion has dropped from 38% to 31%.\n  RISK: ATL I3 is losing — shot quality below CLE. If CLE adjusts defensively at the paint, ATL structural edge narrows to I4+I5 only. CLE bench rotation coming could stabilize their shooting.\nQ3 4:00: MOMENTUM RISING (8 polls, +0.12) | OPP SUST: DEGRADING (MIXED) | FLOOR-MARGIN: CONVERGING\n  OBS: Structural build continues. Floor now 0.60, margin closed from -8 to -5. Paint gap widened to 28-16. CLE shooting still declining.\n  RISK: CLE timeout — potential tactical adjustment. I3 loss remains concerning if CLE goes small. Momentum has been consistent enough that a 1-2 poll dip would be correction, not reversal.'
+    }},
+
+    '35': { name: 'MONITOR CONTRADICTION: FIRED BUY but monitor flags divergence — should still SEND (FIRED override)', expected: 'SEND', ctx: {
+      alertType: 'BUY', alertTier: 'FIRED', controlTeam: 'SAC', floor: 0.70, margin: 12,
+      isTrailing: true, period: 3, clock: '3:00', minsLeft: 15,
+      edge: 20.0, ml: '+450', spread: '-6.5', tpClass: 'PROBABLE', lsClass: null,
+      ctrlSust: 'DURABLE', oppSust: 'DURABLE', windowScore: null,
+      i1: 0.72, i2: 0.68, i3: 0.58, i4: 0.75, i5: 0.65,
+      indicatorsWon: 4, indWon: 'I1+I2+I4+I5', indLost: '',
+      i4Decisive: true, i4Won: true, i4Combo: true,
+      convictionTier: 'DOMINANT', convictionCombo: 'I1+I2+I4+I5',
+      floorHistory:'Q3 3:00: SAC 0.70 (60-72) TP:PROBABLE\nQ3 6:00: SAC 0.68 (56-68) TP:PROBABLE\nQ3 10:00: SAC 0.65 (50-62) TP:CONTESTED\nQ2 4:00: SAC 0.62 (42-52) TP:CONTESTED',
+      priorAlerts:'None',
+      quarterSummary:'Q1: 22-30\nQ2: 20-22\nQ3: 18-20',
+      monitorContext: 'Q3 6:00: MOMENTUM RISING (4 polls, +0.08) | OPP SUST: STABLE (DURABLE) | FLOOR-MARGIN: DIVERGING\n  OBS: SAC floor has climbed 0.62 to 0.70 but margin has WORSENED from -10 to -12. SAC is winning the structural battle (paint 30-20, steals 8-3) but LAC is converting at the rim and hitting contested 3s at 40% on 25 attempts. The structural edge isn\'t translating to scoreboard movement.\n  RISK: DIVERGENCE is the headline. SAC owns paint and transition but LAC\'s 40% 3PT on volume (25 attempts) is propping their lead. If LAC shooting is sustainable (DURABLE sust suggests it might be), the floor read may be misleading. SAC turnovers at 10 are a concern — each one gives LAC a transition opportunity that compounds the margin gap.'
+    }},
+
+    '36': { name: 'MONITOR CONTRADICTION: CANDIDATE BUY + monitor flags divergence + opp sust stable — should SUPPRESS', expected: 'SUPPRESS', ctx: {
+      alertType: 'BUY', alertTier: 'CANDIDATE', controlTeam: 'POR', floor: 0.58, margin: 14,
+      isTrailing: true, period: 3, clock: '5:00', minsLeft: 17,
+      edge: 8.0, ml: '+550', spread: '-8.5', tpClass: 'CONTESTED', lsClass: null,
+      ctrlSust: 'MIXED', oppSust: 'DURABLE', windowScore: null,
+      i1: 0.60, i2: 0.55, i3: 0.48, i4: 0.62, i5: 0.55,
+      indicatorsWon: 2, indWon: 'I1+I4', indLost: 'I3',
+      i4Decisive: true, i4Won: true, i4Combo: false,
+      convictionTier: 'MODEST', convictionCombo: 'I1+I4',
+      floorHistory:'Q3 5:00: POR 0.58 (52-66) TP:CONTESTED\nQ3 8:00: POR 0.56 (48-60) TP:UNLIKELY\nQ2 4:00: POR 0.54 (38-50) TP:UNLIKELY',
+      priorAlerts:'None',
+      quarterSummary:'Q1: 18-26\nQ2: 20-24\nQ3: 14-16',
+      monitorContext: 'Q3 6:00: MOMENTUM RISING (3 polls, +0.04) | OPP SUST: STABLE (DURABLE) | FLOOR-MARGIN: DIVERGING\n  OBS: POR structural edge is thin — floor rose from 0.54 to 0.58 but margin grew from -12 to -14. PHX paint dominance is only 22-18, not the commanding gap you\'d expect for a 0.58 floor. POR is generating turnovers (8 steals) but can\'t convert — points off turnovers only 8 vs PHX 14.\n  RISK: PHX shooting remains DURABLE at 36% from 3 on 28 attempts — this is not variance, this is baseline-level production. POR I3 is losing and their own sustainability is MIXED. The floor read is being propped by I1 turnover generation that isn\'t converting to scoring. Structural edge is effort-based, not talent-based.\nQ3 3:00: MOMENTUM STABLE | OPP SUST: STABLE (DURABLE) | FLOOR-MARGIN: DIVERGING\n  OBS: Momentum stalled. Floor flatlined at 0.58, margin now -14. POR generation advantage hasn\'t translated for 3 straight polls. PHX defense adjusting.\n  RISK: Same structural concerns. The monitor has observed divergence for 6+ minutes — floor says POR controls but the game says PHX does. Effort-based edge not converting.'
+    }},
   };
 
   let testKeys = [];
@@ -435,6 +502,8 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
   else if (testParam === 'b9') testKeys = ['25', '26', '27'];
   else if (testParam === 'b10') testKeys = ['28', '29', '30'];
   else if (testParam === 'b11') testKeys = ['31', '32'];
+  else if (testParam === 'b12') testKeys = ['33', '34', '35'];
+  else if (testParam === 'monitor') testKeys = ['33', '34', '35', '36'];
   // Individual: ?test=5 or comma-separated: ?test=19,20,26
   else if (testParam.includes(',')) testKeys = testParam.split(',').filter(k => scenarios[k.trim()]).map(k => k.trim());
   else if (scenarios[testParam]) testKeys = [testParam];
