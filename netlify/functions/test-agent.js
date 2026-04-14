@@ -63,6 +63,7 @@ RULES:
 - BWC + I4 EVEN: NOT a suppress signal when 3+ indicators + LOCKED IN/DURABLE/COLD sust.
 - ANCHORED FLOOR CHECK: trailing 0.75+ but margin 1-3 with declining floor = verify. Does NOT apply to leading teams.
 - EARLY GAME (Q1-Q2): I4 COMBO YES = SEND. I4 COMBO NO = extra scrutiny.
+- MONITOR OVERRIDE PROTECTION: I4 COMBO YES + FIRED is ALWAYS a SEND. Monitor observations CANNOT downgrade a FIRED alert with I4 COMBO YES to SUPPRESS — this rule is absolute. However, if monitor context shows persistent divergence (floor-margin DIVERGING 5+ polls), opponent sustainability LOCKED IN with zero degradation, or prior auto-analysis flagging thesis erosion, you MUST add a CAUTION line to your BODY: "CAUTION: [specific concern from monitor]." This preserves the signal while flagging the risk for the bettor to size their position.
 - TP (Throughput Projection) is context, not a veto. It estimates deficit recovery from structural rates. Limitation: anchored to cumulative stats, misses momentum shifts. TP NO PATH at 1-3 point deficits is often a false negative. TP STRONG/PROBABLE adds confidence. TP UNLIKELY/NO PATH is a caution flag, not a stop sign.
 - RECOVERY PATH: math projects a comeback. SEND if structural indicators (especially I4) back the TP math — I4 COMBO YES + rising floor means the engine is real. SUPPRESS if TP is anchored from early-game cumulative stats that have since eroded — floor declining + I4 COMBO NO means the opponent actually has game control despite favorable TP math.
 - LEAD CRUMBLING: WARNING alert — INVERTS normal indicator logic. For entry alerts, strong indicators = SEND. For LEAD CRUMBLING, strong indicators = lead is SAFE = SUPPRESS. I4 COMBO YES + 3+ indicators + LOCKED IN/DURABLE = SUPPRESS (noise). I4 EVEN/NO + declining floor + sust shifting = SEND (real erosion). Floor dropped 0.10+ + conviction downgraded = SEND. If a prior BWC/BUY was SENT for this team in priorAlerts: lean SEND — subscriber has a position to protect.
@@ -85,7 +86,8 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
     const text = data.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
     const dm = text.match(/DECISION:\s*(SEND|SUPPRESS|DOWNGRADE)/i);
     const rm = text.match(/REASONING:\s*(.+?)(?:\n|$)/i);
-    return { decision: dm ? dm[1].toUpperCase() : 'PARSE_FAIL', reasoning: rm ? rm[1].trim() : text.substring(0, 150), tokens: data.usage };
+    const bm = text.match(/BODY:\s*([\s\S]*?)$/i);
+    return { decision: dm ? dm[1].toUpperCase() : 'PARSE_FAIL', reasoning: rm ? rm[1].trim() : text.substring(0, 150), body: bm ? bm[1].trim() : '', tokens: data.usage };
   }
 
   const scenarios = {
@@ -489,7 +491,7 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
 
     // ── ADVERSARIAL: I4 COMBO YES UNDER MAXIMUM PRESSURE (37-38) ─────────
 
-    '37': { name: 'ADVERSARIAL: FIRED BUY + DOMINANT + I4 YES — but monitor screaming, auto-analysis says broken', expected: '?', ctx: {
+    '37': { name: 'ADVERSARIAL: FIRED BUY + DOMINANT + I4 YES — monitor screaming but must SEND with CAUTION', expected: 'SEND', expectCaution: true, ctx: {
       alertType: 'BUY', alertTier: 'FIRED', controlTeam: 'DAL', floor: 0.73, margin: 14,
       isTrailing: true, period: 3, clock: '2:00', minsLeft: 14,
       edge: 25.0, ml: '+520', spread: '-7.5', tpClass: 'PROBABLE', lsClass: null,
@@ -504,7 +506,7 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       monitorContext: 'Q3 8:00: MOMENTUM RISING (6 polls, +0.10) | OPP SUST: STABLE (DURABLE) | FLOOR-MARGIN: DIVERGING\n  OBS: DAL floor has risen steadily from 0.60 to 0.70 across 20 minutes of game time, but margin has worsened from -8 to -14 in the same window. This is a textbook divergence — the structural read says DAL dominates but the scoreboard disagrees emphatically. LAC paint defense has adjusted since Q2, cutting DAL paint advantage from 14-10 to 10-12 in Q3.\n  RISK: LAC shooting is DURABLE at 42% from 3 on 30 attempts — this is NOT variance, this is elite perimeter execution on high volume. DAL turnovers have climbed from 3 (Q1) to 12 cumulative, feeding 16 LAC points off turnovers. The floor is being propped by cumulative Q1-Q2 dominance that has fully eroded in Q3. I2 paint edge has FLIPPED in the current quarter.\nQ3 4:00: MOMENTUM RISING (8 polls, +0.13) | OPP SUST: STABLE (DURABLE) | FLOOR-MARGIN: DIVERGING\n  OBS: Divergence has persisted for 8 consecutive polls (~24 minutes). Floor now 0.73 but margin -14. DAL Q3 is being outscored 20-24 — the quarter-level data directly contradicts the cumulative floor. LAC bench has outscored DAL bench 24-8.\n  RISK: This is the exact failure mode where cumulative floor anchoring produces false signals. DAL dominated Q1-Q2 structurally but LAC has adjusted. Q3 paint is 10-12 (flipped), Q3 turnovers are 4-2 (DAL advantage gone). The floor of 0.73 reflects a game that no longer exists. Prior auto-analysis flagged this at Q3 12:00 — nothing has improved since.\nQ3 1:00: MOMENTUM STABLE | OPP SUST: STABLE (DURABLE) | FLOOR-MARGIN: DIVERGING\n  OBS: Floor plateaued at 0.73, margin still -14. 25+ minutes of divergence. Every structural advantage DAL had in Q1-Q2 has eroded or flipped in Q3. LAC is the better team in the current quarter by every metric.\n  RISK: I4 COMBO YES is anchored to cumulative biggest_lead (DAL had a 4pt lead in Q1) and pre-Q4 season scoring margin. The live game has moved past both of those inputs. If this were computed fresh from Q3 data alone, I4 would be EVEN or LOST.'
     }},
 
-    '38': { name: 'REALISTIC 2%: FIRED BUY + DOMINANT + I4 YES — opponent talent ceiling exceeds structural read', expected: '?', ctx: {
+    '38': { name: 'REALISTIC 2%: FIRED BUY + DOMINANT + I4 YES — talent ceiling, must SEND with CAUTION', expected: 'SEND', expectCaution: true, ctx: {
       alertType: 'BUY', alertTier: 'FIRED', controlTeam: 'CLE', floor: 0.68, margin: 8,
       isTrailing: true, period: 4, clock: '8:00', minsLeft: 8,
       edge: 15.0, ml: '+300', spread: '-4.5', tpClass: 'PROBABLE', lsClass: null,
@@ -549,8 +551,10 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
     const r = await callAgent(s.ctx);
     results.push({
       test: key, name: s.name, expected: s.expected, actual: r.decision,
-      pass: s.expected === '?' ? 'OBSERVE' : (r.decision === s.expected ? 'PASS' : 'FAIL'),
+      pass: s.expected === '?' ? 'OBSERVE' : (r.decision === s.expected ? (s.expectCaution && !(/CAUTION/i.test(r.body)) ? 'FAIL' : 'PASS') : 'FAIL'),
       reasoning: r.reasoning,
+      body: s.expectCaution ? r.body.substring(0, 200) : undefined,
+      hasCaution: s.expectCaution ? /CAUTION/i.test(r.body) : undefined,
       tokens: r.tokens ? r.tokens.input_tokens + 'in/' + r.tokens.output_tokens + 'out' : '?',
     });
     if (testKeys.length > 1) await new Promise(r => setTimeout(r, 500));
