@@ -255,27 +255,6 @@ export default async function handler(req) {
   const rawCorrect = scoredAlerts.filter(a => a.result.correct).length;
   const rawTotal = scoredAlerts.length;
 
-  // Agent decision accuracy
-  const agentStats = {
-    delivered_correct: deliveredActionableCorrect,
-    delivered_total: deliveredActionable.length,
-    saves: agentSaves,
-    missed_winners: agentMisses,
-    agent_dedup: agentDedup.length,
-    agent_dedup_correct: agentDedupCorrect,
-    deduped: deduped.length,
-    dedup_correct: dedupCorrect,
-    position_gated: positionGated.length,
-    position_gated_correct: posGatedCorrect,
-    transitional_held: deliveredTransitionalHeld,
-    transitional_total: deliveredTransitional.length,
-    transition_agent: transitionAgentStats,
-    chains: alertChains.length,
-    chain_patterns: alertChains.reduce((acc, c) => { acc[c.pattern] = (acc[c.pattern] || 0) + 1; return acc; }, {}),
-    raw_correct: rawCorrect,
-    raw_total: rawTotal,
-  };
-
   // ── Transition agent stats (RP/LC/VB now route through alert agent) ──
   const TRANSITION_AGENT_TYPES = ['RECOVERY PATH', 'LEAD CRUMBLING', 'VARIANCE BREAKING'];
   const transitionAgentAlerts = scoredAlerts.filter(a => TRANSITION_AGENT_TYPES.includes(a.alert_type) && a.agent_decision);
@@ -367,6 +346,27 @@ export default async function handler(req) {
     const teams = new Set(g.alerts.map(a => a.control_team));
     return teams.size > 1;
   });
+
+  // Agent decision accuracy
+  const agentStats = {
+    delivered_correct: deliveredActionableCorrect,
+    delivered_total: deliveredActionable.length,
+    saves: agentSaves,
+    missed_winners: agentMisses,
+    agent_dedup: agentDedup.length,
+    agent_dedup_correct: agentDedupCorrect,
+    deduped: deduped.length,
+    dedup_correct: dedupCorrect,
+    position_gated: positionGated.length,
+    position_gated_correct: posGatedCorrect,
+    transitional_held: deliveredTransitionalHeld,
+    transitional_total: deliveredTransitional.length,
+    transition_agent: transitionAgentStats,
+    chains: alertChains.length,
+    chain_patterns: alertChains.reduce((acc, c) => { acc[c.pattern] = (acc[c.pattern] || 0) + 1; return acc; }, {}),
+    raw_correct: rawCorrect,
+    raw_total: rawTotal,
+  };
 
   // TP gate failures
   const tpFailures = scoredAlerts.filter(a =>
