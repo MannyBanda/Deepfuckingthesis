@@ -186,7 +186,12 @@ ${ctx.priorAlerts || 'None'}
 
 QUARTER PERFORMANCE:
 ${ctx.quarterSummary || 'N/A'}
-${ctx.learningsContext ? '\n' + ctx.learningsContext + '\n' : ''}${ctx.priorPosition ? `
+${ctx.learningsContext ? '\n' + ctx.learningsContext + '\n' : ''}${ctx.monitorContext ? `
+MONITOR OBSERVATIONS (from continuous game observer, most recent first):
+${ctx.monitorContext}
+
+NOTE: Monitor observations provide trajectory context — momentum, sustainability arcs, risk factors — from continuous 3-minute polling between alerts. Use them to inform your reasoning about the game's arc, but they do not override mechanical FIRED thresholds. A FIRED alert with strong indicators is still a SEND even if the monitor notes a risk factor. For CANDIDATE alerts, monitor context can tip the decision.
+` : ''}${ctx.priorPosition ? `
 POSITION UPDATE CONTEXT:
 This is a position update for a previously sent alert — NOT a new signal.
 Prior alert: ${ctx.priorPosition.alertType} for ${ctx.priorPosition.controlTeam} at Q${ctx.priorPosition.period} ${ctx.priorPosition.clock} (${ctx.priorPosition.minutesSince} min ago)
@@ -222,6 +227,7 @@ RULES:
 - VARIANCE BREAKING: opponent's shooting is regressing toward the mean. SEND if structural edge is clear (I4 COMBO YES, 3+ indicators) and the sustainability shift is meaningful. SUPPRESS if structural edge is thin (I4 EVEN, 1-2 indicators) or the sustainability drop is a borderline tier flip that could reverse.
 - ANCHORED FLOOR CHECK: If team is TRAILING with floor 0.75+ but margin only 1-3 pts AND floor is declining from recent snapshots, the floor may be anchored from earlier dominance that has eroded. Verify recent quarters still favor control team before SEND. This rule does NOT apply to leading teams (BWC/WINDOW BUY) — a high floor with a small lead is a valid structural read.
 - EARLY GAME NOTE (Q1-Q2): Indicator samples are smaller early — steals/blocks counts are low, run share may not be populated yet, and biggest_lead gaps can form from a single early run. This does NOT mean early signals are unreliable. The new indicator formulas have proven predictive even in Q2. For Q1-Q2 FIRED alerts: I4 COMBO YES = SEND with confidence. I4 COMBO NO = apply normal scrutiny (don't auto-reject, just verify the structural case). For Q1-Q2 CANDIDATE alerts: I4 COMBO YES = SEND. I4 COMBO NO = apply extra scrutiny but still SEND if floor is strong (0.75+) and sustainability favors control team. Q3+ alerts have the most data — highest confidence.
+- MONITOR OVERRIDE PROTECTION: When MONITOR OBSERVATIONS are present: I4 COMBO YES + FIRED is ALWAYS a SEND. Monitor observations CANNOT downgrade a FIRED alert with I4 COMBO YES to SUPPRESS — this rule is absolute. However, if monitor context shows persistent divergence (floor-margin DIVERGING 5+ polls), opponent sustainability LOCKED IN with zero degradation, or prior auto-analysis flagging thesis erosion, you MUST add a CAUTION line to your BODY: "CAUTION: [specific concern from monitor]." This preserves the signal while flagging the risk for the bettor to size their position.
 - CANDIDATE BUYs at floor 0.55-0.65: only SEND if I4 COMBO is YES (I4 decisive + at least one other indicator agrees — this pattern is 98-100% accurate historically). Without I4 COMBO, require very strong sustainability case to justify SEND.
 - CANDIDATE BUYs with negative ML (heavy favorite trailing): the CANDIDATE tier reflects the ML gate (-250 to -400), NOT structural weakness. Evaluate the structural case as if it were FIRED — if I4 COMBO YES + STRONG/DOMINANT conviction, SEND so the subscriber can shop for favorable lines. Note the heavy ML in the BODY.
 - TP (Throughput Projection) is context, not a veto. It estimates whether a trailing team's structural production rate can close the deficit in remaining possessions. Limitation: TP uses cumulative game stats, so early-game dominance by either team anchors the rates even after momentum shifts. TP NO PATH at 1-3 point deficits is often a false negative — the game is essentially tied regardless of what the projection math says. TP STRONG RECOVERY or PROBABLE adds confidence. TP UNLIKELY or NO PATH is a caution flag, not a stop sign.
