@@ -391,10 +391,17 @@ async function getMonitorData(sql, league, cachedGames) {
     // Build per-game data
     liveGames.forEach(g => {
       var snaps = snapsByGame[g.id];
-      if (!snaps || snaps.length < 2) return; // need at least 2 snapshots
+      if (!snaps || snaps.length < 2) return;
+      // Filter stale polls (identical period+clock from halftime/timeouts)
+      var liveSnaps = [snaps[0]];
+      for (var si = 1; si < snaps.length; si++) {
+        if (!(snaps[si].period === snaps[si-1].period && snaps[si].clock === snaps[si-1].clock)) {
+          liveSnaps.push(snaps[si]);
+        }
+      }
+      if (liveSnaps.length < 5) return; // need 5 live snapshots for meaningful trends
       var latest = snaps[snaps.length - 1];
       var period = Number(latest.period || 0);
-      if (period < 2) return; // too early for meaningful observation
 
       var ctrlIsHome = latest.floor_team === g.homeAlias;
       var ctrlPts = ctrlIsHome ? Number(latest.home_pts || 0) : Number(latest.away_pts || 0);
