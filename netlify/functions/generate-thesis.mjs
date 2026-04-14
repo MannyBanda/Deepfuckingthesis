@@ -1,14 +1,41 @@
-// Pre-Game Thesis Generation via Claude Sonnet — Smart Compute Layer v2.1
-// Pre-computes: Roster Audit (with GP gate), Structural Impact Assessment,
-// Role Redistribution, System Resilience Modifier, Depletion Gate,
-// Pythagorean, BHV + Chaos Risk
-// Then sends pre-computed context to Sonnet for synthesis into compact thesis format.
+// Pre-Game Thesis Generation via Claude Sonnet — Smart Compute Layer v3.0
+// v3.0: Pregame Agent (scheduled auto-generation), mechanical pregame floor,
+//       judge/jury Sonnet architecture, indicator weights aligned to live system.
+// v2.1: GP GATE, SIA guardrails, show-your-work requirements.
 //
-// v2.1 CHANGES:
-// - GP GATE: Players who have played <40% of team games get SIA SUPPRESSED
-//   (season stats already reflect their absence). 40-70% = REDUCED by one tier.
-// - System prompt updated from hard caps to analytical guardrails with
-//   show-your-work requirements. Sonnet exercises judgment, not mechanical overrides.
+// DUAL MODE:
+//   POST = client-triggered manual generation (SSE streaming)
+//   Scheduled cron = auto-triggered pregame agent (DB write + ntfy)
+
+import { neon } from '@neondatabase/serverless';
+
+// ── INDICATOR WEIGHTS (aligned with live system — poll-live-bdl.mjs) ────────
+var W = { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 };
+
+// ── NBA TEAM IDS (SR UUIDs — stable) ────────────────────────────────────────
+var SR_TEAM_IDS = {
+  ATL:'583ecb8f-fb46-11e1-82cb-f4ce4684ea4c',BOS:'583eccfa-fb46-11e1-82cb-f4ce4684ea4c',
+  BKN:'583ec9d6-fb46-11e1-82cb-f4ce4684ea4c',CHA:'583ec97e-fb46-11e1-82cb-f4ce4684ea4c',
+  CHI:'583ec5fd-fb46-11e1-82cb-f4ce4684ea4c',CLE:'583ec773-fb46-11e1-82cb-f4ce4684ea4c',
+  DAL:'583ecf50-fb46-11e1-82cb-f4ce4684ea4c',DEN:'583ed102-fb46-11e1-82cb-f4ce4684ea4c',
+  DET:'583ec928-fb46-11e1-82cb-f4ce4684ea4c',GSW:'583ec825-fb46-11e1-82cb-f4ce4684ea4c',
+  HOU:'583ecb3a-fb46-11e1-82cb-f4ce4684ea4c',IND:'583ec7cd-fb46-11e1-82cb-f4ce4684ea4c',
+  LAC:'583ecdfb-fb46-11e1-82cb-f4ce4684ea4c',LAL:'583ecae2-fb46-11e1-82cb-f4ce4684ea4c',
+  MEM:'583eca88-fb46-11e1-82cb-f4ce4684ea4c',MIA:'583ecea6-fb46-11e1-82cb-f4ce4684ea4c',
+  MIL:'583ecefd-fb46-11e1-82cb-f4ce4684ea4c',MIN:'583eca2f-fb46-11e1-82cb-f4ce4684ea4c',
+  NOP:'583ecc9a-fb46-11e1-82cb-f4ce4684ea4c',NYK:'583ec70e-fb46-11e1-82cb-f4ce4684ea4c',
+  OKC:'583ecfff-fb46-11e1-82cb-f4ce4684ea4c',ORL:'583ed157-fb46-11e1-82cb-f4ce4684ea4c',
+  PHI:'583ec87d-fb46-11e1-82cb-f4ce4684ea4c',PHX:'583ecfa8-fb46-11e1-82cb-f4ce4684ea4c',
+  POR:'583ed056-fb46-11e1-82cb-f4ce4684ea4c',SAC:'583ed0ac-fb46-11e1-82cb-f4ce4684ea4c',
+  SAS:'583ecd4f-fb46-11e1-82cb-f4ce4684ea4c',TOR:'583ecda6-fb46-11e1-82cb-f4ce4684ea4c',
+  UTA:'583ece50-fb46-11e1-82cb-f4ce4684ea4c',WAS:'583ec8d4-fb46-11e1-82cb-f4ce4684ea4c',
+};
+
+var BDL_TEAM_IDS = {
+  ATL:1,BOS:2,BKN:3,CHA:4,CHI:5,CLE:6,DAL:7,DEN:8,DET:9,GSW:10,
+  HOU:11,IND:12,LAC:13,LAL:14,MEM:15,MIA:16,MIL:17,MIN:18,NOP:19,NYK:20,
+  OKC:21,ORL:22,PHI:23,PHX:24,POR:25,SAC:26,SAS:27,TOR:28,UTA:29,WAS:30,
+};
 
 // ══════════════════════════════════════════════════════════════════════════════
 // HELPER UTILITIES
@@ -647,6 +674,213 @@ function formatPreComputed(homeAlias, awayAlias, rosterAudit, sia, finalCaps, re
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// 10a. MECHANICAL PREGAME FLOOR (new — aligned with live computeServer weights)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Computes I1-I5 from SR season team stats using pregame proxies.
+// Returns same shape as computeServer() so computeConviction() works unchanged.
+function computePreGameFloor(homeStats, awayStats, standings, seasonQ4, siaCaps, homeAlias, awayAlias) {
+  if (!homeStats || !awayStats) return null;
+
+  // Extract per-game averages (SR season stats 'average' or 'statistics' sub-object)
+  function avg(stats) {
+    var a = stats.average || stats.statistics || stats;
+    var t = stats.total || {};
+    var gp = t.games_played || a.games_played || 1;
+    return {
+      stl: a.steals || (t.steals ? t.steals/gp : 0),
+      blk: a.blocks || (t.blocks ? t.blocks/gp : 0),
+      pot: a.points_off_turnovers || (t.points_off_turnovers ? t.points_off_turnovers/gp : 0),
+      paint: a.points_in_paint || a.points_in_the_paint || (t.points_in_paint ? t.points_in_paint/gp : 0),
+      paintM: a.points_in_paint_made || (t.points_in_paint_made ? t.points_in_paint_made/gp : 0),
+      paintA: a.points_in_paint_att || (t.points_in_paint_att ? t.points_in_paint_att/gp : 0),
+      fgm: a.field_goals_made || (t.field_goals_made ? t.field_goals_made/gp : 0),
+      fga: a.field_goals_att || (t.field_goals_att ? t.field_goals_att/gp : 0),
+      fg3m: a.three_points_made || (t.three_points_made ? t.three_points_made/gp : 0),
+      ast: a.assists || (t.assists ? t.assists/gp : 0),
+      pts: a.points || (t.points ? t.points/gp : 0),
+      ptsA: a.points_against || (t.points_against ? t.points_against/gp : 0),
+      oreb: a.off_rebounds || a.offensive_rebounds || (t.offensive_rebounds ? t.offensive_rebounds/gp : 0),
+      to: a.turnovers || (t.turnovers ? t.turnovers/gp : 0),
+      fta: a.free_throws_att || (t.free_throws_att ? t.free_throws_att/gp : 0),
+      gp: gp,
+    };
+  }
+
+  var h = avg(homeStats);
+  var a = avg(awayStats);
+  var diffs = {}; // store raw diffs for Sonnet context
+
+  // I1 — Disruption & Conversion (pregame: stl+blk ±1, POT ±2)
+  var hDisrupt = h.stl + h.blk, aDisrupt = a.stl + a.blk;
+  diffs.i1subA_diff = +(hDisrupt - aDisrupt).toFixed(1);
+  var i1subA = diffs.i1subA_diff > 1 ? 1 : diffs.i1subA_diff < -1 ? -1 : 0;
+  diffs.i1subB_diff = +(h.pot - a.pot).toFixed(1);
+  var i1subB = diffs.i1subB_diff > 2 ? 1 : diffs.i1subB_diff < -2 ? -1 : 0;
+  var i1raw = i1subA + i1subB;
+  var I1 = { score: i1raw > 0 ? 1 : i1raw === 0 ? 0.5 : 0, leader: i1raw > 0 ? homeAlias : i1raw < 0 ? awayAlias : 'EVEN' };
+
+  // I2 — Interior Control (pregame: paint ±4, paint FG% ±0.05)
+  diffs.i2subA_diff = +(h.paint - a.paint).toFixed(1);
+  var i2subA = diffs.i2subA_diff > 4 ? 1 : diffs.i2subA_diff < -4 ? -1 : 0;
+  var hPaintPct = h.paintA >= 3 ? h.paintM / h.paintA : null;
+  var aPaintPct = a.paintA >= 3 ? a.paintM / a.paintA : null;
+  var i2subB = 0;
+  if (hPaintPct != null && aPaintPct != null) {
+    diffs.i2subB_diff = +((hPaintPct - aPaintPct) * 100).toFixed(1);
+    if (hPaintPct - aPaintPct > 0.05) i2subB = 1;
+    else if (aPaintPct - hPaintPct > 0.05) i2subB = -1;
+  } else { diffs.i2subB_diff = null; }
+  var i2raw = i2subA + i2subB;
+  var I2 = { score: i2raw > 0 ? 1 : i2raw < 0 ? 0 : 0.5, leader: i2raw > 0 ? homeAlias : i2raw < 0 ? awayAlias : 'EVEN' };
+
+  // I3 — Shot Quality & Creation (pregame: eFG ±0.02, AR ±3)
+  var hEFG = (h.fgm + 0.5 * h.fg3m) / (h.fga || 1);
+  var aEFG = (a.fgm + 0.5 * a.fg3m) / (a.fga || 1);
+  diffs.i3sub1_diff = +((hEFG - aEFG) * 100).toFixed(1);
+  var hAR = (h.ast / (h.fgm || 1)) * 100;
+  var aAR = (a.ast / (a.fgm || 1)) * 100;
+  diffs.i3sub2_diff = +(hAR - aAR).toFixed(1);
+  var i3raw = (hEFG > aEFG + 0.02 ? 1 : hEFG < aEFG - 0.02 ? -1 : 0)
+            + (hAR > aAR + 3 ? 1 : hAR < aAR - 3 ? -1 : 0);
+  var I3 = { score: i3raw > 0 ? 1 : i3raw === 0 ? 0.5 : 0, leader: i3raw > 0 ? homeAlias : i3raw < 0 ? awayAlias : 'EVEN' };
+
+  // I4 — Game Control (pregame: avg win margin ±2.5, Q4 margin ±2)
+  var hMargin = h.pts - h.ptsA;
+  var aMargin = a.pts - a.ptsA;
+  diffs.i4subA_diff = +(hMargin - aMargin).toFixed(1);
+  var i4subA = diffs.i4subA_diff > 2.5 ? 1 : diffs.i4subA_diff < -2.5 ? -1 : 0;
+  var i4subB = 0;
+  if (seasonQ4) {
+    var sznQ4diff = (seasonQ4[homeAlias] || 0) - (seasonQ4[awayAlias] || 0);
+    diffs.i4subB_diff = +sznQ4diff.toFixed(1);
+    i4subB = sznQ4diff > 2 ? 1 : sznQ4diff < -2 ? -1 : 0;
+  } else { diffs.i4subB_diff = null; }
+  var i4raw = i4subA + i4subB;
+  var I4 = { score: i4raw > 0 ? 1 : i4raw === 0 ? 0.5 : 0, leader: i4raw > 0 ? homeAlias : i4raw < 0 ? awayAlias : 'EVEN' };
+
+  // I5 — Sustained Execution (pregame: net rating ±3)
+  var hPoss = h.fga - h.oreb + h.to + 0.44 * h.fta;
+  var aPoss = a.fga - a.oreb + a.to + 0.44 * a.fta;
+  var hOrtg = hPoss > 0 ? (h.pts / hPoss * 100) : 100;
+  var hDrtg = aPoss > 0 ? (a.pts / aPoss * 100) : 100; // opponent pts on opponent poss
+  var aOrtg = aPoss > 0 ? (a.pts / aPoss * 100) : 100;
+  var aDrtg = hPoss > 0 ? (h.pts / hPoss * 100) : 100;
+  var hNet = hOrtg - hDrtg, aNet = aOrtg - aDrtg;
+  diffs.i5_diff = +(hNet - aNet).toFixed(1);
+  var I5 = { score: diffs.i5_diff > 3 ? 1 : diffs.i5_diff < -3 ? 0 : 0.5,
+             leader: diffs.i5_diff > 3 ? homeAlias : diffs.i5_diff < -3 ? awayAlias : 'EVEN' };
+
+  // Apply SIA caps if provided
+  if (siaCaps) {
+    ['home', 'away'].forEach(function(side) {
+      var caps = siaCaps[side]?.caps;
+      if (!caps) return;
+      var inds = { I1: I1, I2: I2, I3: I3, I4: I4, I5: I5 };
+      var alias = side === 'home' ? homeAlias : awayAlias;
+      Object.keys(caps).forEach(function(k) {
+        if (caps[k] != null && inds[k]) {
+          // Cap means this team's score on this indicator can't exceed caps[k]
+          // If this team is winning the indicator (leader === alias), clamp
+          if (inds[k].leader === alias && inds[k].score > caps[k]) {
+            inds[k].score = caps[k];
+            if (caps[k] === 0.5) inds[k].leader = 'EVEN';
+            else if (caps[k] === 0) inds[k].leader = alias === homeAlias ? awayAlias : homeAlias;
+          }
+        }
+      });
+    });
+  }
+
+  // Composite
+  var raw = I1.score * W.I1 + I2.score * W.I2 + I3.score * W.I3 + I4.score * W.I4 + I5.score * W.I5;
+  var controlHome = raw >= 0.5;
+  var controlTeam = controlHome ? homeAlias : awayAlias;
+  var score = controlHome ? raw : 1 - raw;
+
+  return {
+    controlTeam: controlTeam,
+    score: Math.round(score * 100) / 100,
+    I1: I1, I2: I2, I3: I3, I4: I4, I5: I5,
+    homeAlias: homeAlias, awayAlias: awayAlias,
+    diffs: diffs,
+    homeAvgs: h, awayAvgs: a,
+    homeNet: +hNet.toFixed(1), awayNet: +aNet.toFixed(1),
+  };
+}
+
+// ── CONVICTION ENGINE (from poll-live-bdl.mjs — combo-pattern-driven, 171 games) ──
+function computeConviction(ind) {
+  if (!ind || ind.score == null) return { tier: 'NO ENTRY', combo: 'NONE', indicatorsWon: [], indicatorsLost: [], count: 0, pairs: [] };
+  var ctrlHome = ind.controlTeam === ind.homeAlias;
+
+  var wins = [], loses = [], even = [];
+  ['I1','I2','I3','I4','I5'].forEach(function(k) {
+    var s = ind[k]?.score;
+    if (s == null) return;
+    var ctrlScore = ctrlHome ? s : 1 - s;
+    if (ctrlScore > 0.5) wins.push(k);
+    else if (ctrlScore < 0.5) loses.push(k);
+    else even.push(k);
+  });
+
+  var count = wins.length;
+  var pairs = [];
+  for (var i = 0; i < wins.length; i++) {
+    for (var j = i + 1; j < wins.length; j++) {
+      pairs.push(wins[i] + '+' + wins[j]);
+    }
+  }
+
+  var tier = 'NO ENTRY';
+  var combo = wins.length > 0 ? wins.join('+') : 'NONE';
+
+  if (count >= 4 || pairs.indexOf('I4+I5') >= 0) tier = 'DOMINANT';
+  else if (pairs.indexOf('I3+I4') >= 0 || pairs.indexOf('I3+I5') >= 0) tier = 'STRONG';
+  else if (count >= 2) tier = 'MODEST';
+  else if (count === 1) tier = 'CONDITIONAL';
+
+  return { tier: tier, combo: combo, indicatorsWon: wins, indicatorsLost: loses, count: count, pairs: pairs };
+}
+
+// Format mechanical floor for inclusion in user prompt
+function formatMechanicalFloor(floor, conviction, homeAlias, awayAlias) {
+  if (!floor) return '';
+  var d = floor.diffs;
+  var lines = [
+    '=== MECHANICAL PREGAME FLOOR (ground truth \u2014 do NOT override indicator scores) ===',
+    'CONTROL TEAM: ' + floor.controlTeam,
+    'FLOOR: ' + floor.score.toFixed(2) + ' \u2014 ' + getVerdictLabel(floor.score),
+    'CONVICTION: ' + conviction.tier + ' \u2014 ' + conviction.combo,
+    'INDICATORS WON: ' + (conviction.indicatorsWon.join(', ') || 'NONE'),
+    'INDICATORS LOST: ' + (conviction.indicatorsLost.join(', ') || 'NONE'),
+    '',
+    'RAW DIFFERENTIALS (' + homeAlias + ' minus ' + awayAlias + ', per-game season averages):',
+    '  I1 subA: steals+blocks diff = ' + (d.i1subA_diff >= 0 ? '+' : '') + d.i1subA_diff + ' (threshold \u00B11) \u2192 ' + floor.I1.leader,
+    '  I1 subB: POT diff = ' + (d.i1subB_diff >= 0 ? '+' : '') + d.i1subB_diff + ' (threshold \u00B12) \u2192 ' + (d.i1subB_diff > 2 ? homeAlias : d.i1subB_diff < -2 ? awayAlias : 'EVEN'),
+    '  I2 subA: paint pts diff = ' + (d.i2subA_diff >= 0 ? '+' : '') + d.i2subA_diff + ' (threshold \u00B14) \u2192 ' + (d.i2subA_diff > 4 ? homeAlias : d.i2subA_diff < -4 ? awayAlias : 'EVEN'),
+    '  I2 subB: paint FG% diff = ' + (d.i2subB_diff != null ? (d.i2subB_diff >= 0 ? '+' : '') + d.i2subB_diff + '% (threshold \u00B15%)' : 'N/A'),
+    '  I3 sub1: eFG% diff = ' + (d.i3sub1_diff >= 0 ? '+' : '') + d.i3sub1_diff + '% (threshold \u00B12%)',
+    '  I3 sub2: assist ratio diff = ' + (d.i3sub2_diff >= 0 ? '+' : '') + d.i3sub2_diff + ' (threshold \u00B13)',
+    '  I4 subA: avg win margin diff = ' + (d.i4subA_diff >= 0 ? '+' : '') + d.i4subA_diff + ' (threshold \u00B12.5)',
+    '  I4 subB: Q4 margin diff = ' + (d.i4subB_diff != null ? (d.i4subB_diff >= 0 ? '+' : '') + d.i4subB_diff + ' (threshold \u00B12)' : 'N/A'),
+    '  I5: net rating diff = ' + (d.i5_diff >= 0 ? '+' : '') + d.i5_diff + ' (threshold \u00B13)',
+    '',
+    'NET RATINGS: ' + homeAlias + ' ' + (floor.homeNet >= 0 ? '+' : '') + floor.homeNet + ' | ' + awayAlias + ' ' + (floor.awayNet >= 0 ? '+' : '') + floor.awayNet,
+    '',
+  ];
+  return lines.join('\n');
+}
+
+function getVerdictLabel(score) {
+  if (score >= 0.90) return 'DOMINANT';
+  if (score >= 0.75) return 'STRONG';
+  if (score >= 0.60) return 'EARNED';
+  if (score >= 0.45) return 'NO EDGE';
+  return 'WAIT';
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // 10. SYSTEM PROMPT
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -656,7 +890,7 @@ function buildSystemPrompt() {
     '',
     "The user's strategy: BET THE STRUCTURALLY DOMINANT TEAM WHEN TRAILING, because the opponent's lead is built on unsustainable variance. The thesis identifies WHICH team has real structural control.",
     '',
-    'INDICATORS (weighted): I1 Possession & Transition (25%) \u2014 TO margin, steals, OREBs, POT, SCP, FBP. I2 Rim Pressure & Foul (25%) \u2014 paint pts, at-rim rates, FTA, blocks. I3 Shot Quality & Creation (20%) \u2014 assist ratio, eFG%, shot zones. I4 Lineup Integrity (20%) \u2014 bench depth, biggest lead, win/loss delta. I5 Tempo & Efficiency (10%) \u2014 pace, pts/possession.',
+    'INDICATORS (weighted): I1 Possession & Transition (10%) \u2014 TO margin, steals, OREBs, POT, SCP, FBP. I2 Rim Pressure & Foul (15%) \u2014 paint pts, at-rim rates, FTA, blocks. I3 Shot Quality & Creation (20%) \u2014 assist ratio, eFG%, shot zones. I4 Game Control (30%) \u2014 win margin tendency, bench depth, biggest lead, Q4 closing. I5 Sustained Execution (25%) \u2014 net rating, tempo, run dominance.',
     '',
     'Each scored 1.0 (clear edge), 0.5 (contested), 0.0 (opponent). Control: 0.90+ DOMINANT | 0.75-0.89 STRONG | 0.60-0.74 EARNED | 0.45-0.59 NO EDGE | <0.45 WAIT.',
     '',
@@ -745,7 +979,7 @@ function buildNCAAMBSystemPrompt() {
     '',
     "The user's strategy: BET THE STRUCTURALLY DOMINANT TEAM WHEN TRAILING, because the opponent's lead is built on unsustainable variance. The thesis identifies WHICH team has real structural control.",
     '',
-    'INDICATORS (weighted): I1 Possession & Transition (25%) \u2014 TO margin, steals, OREBs, POT, SCP, FBP. I2 Rim Pressure & Foul (25%) \u2014 paint pts, at-rim rates, FTA, blocks. I3 Shot Quality & Creation (20%) \u2014 assist ratio, eFG%, shot zones. I4 Lineup Integrity (20%) \u2014 depth, bench contribution, rotation quality. I5 Tempo & Efficiency (10%) \u2014 pace, pts/possession.',
+    'INDICATORS (weighted): I1 Possession & Transition (10%) \u2014 TO margin, steals, OREBs, POT, SCP, FBP. I2 Rim Pressure & Foul (15%) \u2014 paint pts, at-rim rates, FTA, blocks. I3 Shot Quality & Creation (20%) \u2014 assist ratio, eFG%, shot zones. I4 Game Control (30%) \u2014 depth, win margin tendency, rotation quality. I5 Sustained Execution (25%) \u2014 net rating, tempo, run dominance.',
     '',
     'Each scored 1.0 (clear edge), 0.5 (contested), 0.0 (opponent). Control: 0.90+ DOMINANT | 0.75-0.89 STRONG | 0.60-0.74 EARNED | 0.45-0.59 NO EDGE | <0.45 WAIT.',
     '',
@@ -783,10 +1017,394 @@ function buildNCAAMBSystemPrompt() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// 12. AUTO MODE — Pregame Agent Infrastructure
+// ══════════════════════════════════════════════════════════════════════════════
+
+var LEAGUE_CFG = {
+  nba: { srBase: 'https://api.sportradar.com/nba/trial/v8/en/', srKeyEnv: 'SR_API_KEY', season: '2025' },
+  ncaamb: { srBase: 'https://api.sportradar.com/ncaamb/trial/v8/en/', srKeyEnv: 'SR_NCAAMB_KEY', season: '2025' },
+};
+
+async function srFetchDirect(league, path) {
+  var cfg = LEAGUE_CFG[league] || LEAGUE_CFG.nba;
+  var key = process.env[cfg.srKeyEnv];
+  if (!key) throw new Error('Missing ' + cfg.srKeyEnv);
+  var url = cfg.srBase + path + (path.includes('?') ? '&' : '?') + 'api_key=' + key;
+  var resp = await fetch(url);
+  if (resp.status === 429) throw new Error('SR rate limited');
+  if (!resp.ok) throw new Error('SR ' + resp.status + ' on ' + path.split('?')[0]);
+  return resp.json();
+}
+
+async function bdlFetchDirect(path) {
+  var key = process.env.BDL_API_KEY;
+  var resp = await fetch('https://api.balldontlie.io' + path, { headers: { Authorization: key } });
+  if (!resp.ok) throw new Error('BDL ' + resp.status);
+  return resp.json();
+}
+
+async function sendNtfy(title, body) {
+  var topic = process.env.NTFY_TOPIC || 'manny_nba_control';
+  try {
+    await fetch('https://ntfy.sh/' + topic, {
+      method: 'POST', body: body,
+      headers: { Title: title.replace(/[^\x20-\x7E]/g, ''), Priority: '3', Tags: 'clipboard' },
+    });
+  } catch (e) { console.log('ntfy error:', e.message); }
+}
+
+async function loadSeasonQ4Auto(sql, league) {
+  try {
+    var rows = await sql`
+      SELECT home_alias, away_alias, quarter_data
+      FROM games WHERE league = ${league} AND home_pts IS NOT NULL AND home_pts > 0
+      AND quarter_data IS NOT NULL ORDER BY date DESC LIMIT 200
+    `;
+    var teamQ4 = {};
+    for (var r of rows) {
+      var qd = typeof r.quarter_data === 'string' ? JSON.parse(r.quarter_data) : r.quarter_data;
+      if (!qd?.diffs?.['4']) continue;
+      var hQ4 = qd.diffs['4']?.home?.points, aQ4 = qd.diffs['4']?.away?.points;
+      if (hQ4 == null || aQ4 == null) continue;
+      var margin = hQ4 - aQ4;
+      if (!teamQ4[r.home_alias]) teamQ4[r.home_alias] = [];
+      if (!teamQ4[r.away_alias]) teamQ4[r.away_alias] = [];
+      teamQ4[r.home_alias].push(margin);
+      teamQ4[r.away_alias].push(-margin);
+    }
+    var result = {};
+    for (var team of Object.keys(teamQ4)) {
+      if (teamQ4[team].length >= 3) result[team] = teamQ4[team].reduce(function(a,b){return a+b;},0) / teamQ4[team].length;
+    }
+    return result;
+  } catch (e) { return {}; }
+}
+
+// ── AUTO TRIM FUNCTIONS (simplified from client-side) ──────────────────────
+
+function autoTrimProfile(p) {
+  if (!p) return '(unavailable)';
+  return (p.players||[]).filter(function(pl){return pl.status==='ACT'||pl.status==='SUS'||pl.status==='NWT'||pl.status==='OUT'||pl.status==='INJ';})
+    .map(function(pl){var inj=pl.injuries?JSON.stringify(pl.injuries):'';return (pl.full_name||'?')+' ['+(pl.primary_position||'?')+'] '+(pl.status||'?')+(inj?' — '+inj:'');}).join('\n');
+}
+
+function autoTrimStats(s) {
+  if (!s) return '(unavailable)';
+  var own = s.own_record || s;
+  var teamStats = own.statistics || s.statistics || {};
+  var oppStats = (s.opponents||{}).statistics || {};
+  var players = (own.players||s.players||[]).sort(function(a,b){return (b.average?.minutes||0)-(a.average?.minutes||0);}).slice(0,10)
+    .map(function(pl){var a=pl.average||{};return (pl.full_name||'?')+' ['+(pl.primary_position||'?')+'] '+(a.minutes||0)+'mpg '+(a.points||0)+'ppg '+(a.assists||0)+'apg '+(a.steals||0)+'spg '+(a.turnovers||0)+'to FG:'+(a.field_goals_made||0)+'/'+(a.field_goals_att||0)+' 3P:'+(a.three_points_made||0)+'/'+(a.three_points_att||0);});
+  var t = teamStats;
+  var teamLine = 'Team: '+(t.points||0)+'ppg '+(t.assists||0)+'apg '+(t.steals||0)+'spg '+(t.blocks||0)+'bpg '+(t.turnovers||t.total_turnovers||0)+'to POT:'+(t.points_off_turnovers||0)+' Paint:'+(t.points_in_the_paint||t.points_in_paint||0)+' OREB:'+(t.offensive_rebounds||0)+' FTA:'+(t.free_throws_att||0);
+  var oppLine = oppStats ? 'Opp allowed: '+(oppStats.points||0)+'ppg Paint:'+(oppStats.points_in_the_paint||oppStats.points_in_paint||0)+' FTA:'+(oppStats.free_throws_att||0)+' Stl:'+(oppStats.steals||0) : '';
+  return teamLine + '\n' + oppLine + '\nTop players:\n' + players.join('\n');
+}
+
+function autoTrimDepth(d) {
+  if (!d) return '(unavailable)';
+  var pos = [];
+  if (d.positions && Array.isArray(d.positions)) pos = d.positions;
+  else if (d.positions && typeof d.positions === 'object') {
+    Object.keys(d.positions).forEach(function(name){
+      var val = d.positions[name]; var players = Array.isArray(val) ? val : (val?.players || []);
+      if (players.length > 0) pos.push({name:name, players:players});
+    });
+  }
+  if (pos.length === 0) return JSON.stringify(d).substring(0,2000);
+  return pos.map(function(p){return (p.name||'?')+': '+(p.players||[]).map(function(pl){return (pl.depth||'?')+'. '+(pl.full_name||'?');}).join(', ');}).join('\n');
+}
+
+function autoTrimStandings(s) {
+  if (!s) return '(unavailable)';
+  var teams = [];
+  (s.conferences||[]).forEach(function(conf){(conf.divisions||[]).forEach(function(div){(div.teams||[]).forEach(function(t){
+    teams.push((t.name||'?')+' '+(t.wins||0)+'-'+(t.losses||0)+' ('+(t.win_pct||0).toFixed(3)+') PF:'+(t.calc_points?.for||'?')+' PA:'+(t.calc_points?.against||'?'));
+  });});});
+  return teams.join('\n');
+}
+
+function autoTrimInjuries(inj) {
+  if (!inj) return '(unavailable)';
+  return (inj.teams||[]).filter(function(t){return (t.players||[]).length>0;})
+    .map(function(t){return (t.alias||'?')+': '+(t.players||[]).map(function(p){
+      var li=(Array.isArray(p.injuries)?p.injuries:[])[0]||{};
+      return (p.full_name||'?')+' ['+(p.primary_position||'?')+'] '+(li.status||p.status||'?')+' — '+(li.desc||li.comment||'?');
+    }).join('; ');}).join('\n');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 13. PREGAME AGENT — auto-generate theses before tip
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function runPregameAgent() {
+  var logs = [];
+  function log(msg) { logs.push(msg); console.log('[PREGAME] ' + msg); }
+  log('Pregame agent starting...');
+
+  var sql = neon(process.env.DATABASE_URL);
+  var apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) { log('ERROR: Missing ANTHROPIC_API_KEY'); return { logs: logs, generated: 0 }; }
+
+  // 1. Get today's schedule from poll_state
+  var now = new Date();
+  var mst = new Date(now.toLocaleString('en-US', { timeZone: 'America/Phoenix' }));
+  var dateKey = mst.toISOString().split('T')[0];
+
+  var league = 'nba'; // MVP: NBA only
+  var pollRows;
+  try {
+    pollRows = await sql`SELECT schedule_json FROM poll_state WHERE league = ${league} AND date = ${dateKey} LIMIT 1`;
+  } catch (e) { log('poll_state query failed: ' + e.message); return { logs: logs, generated: 0 }; }
+
+  if (!pollRows || pollRows.length === 0 || !pollRows[0].schedule_json) {
+    log('No schedule found for ' + dateKey + ' — nothing to do');
+    return { logs: logs, generated: 0 };
+  }
+
+  var schedule = typeof pollRows[0].schedule_json === 'string' ? JSON.parse(pollRows[0].schedule_json) : pollRows[0].schedule_json;
+  log('Schedule: ' + schedule.length + ' games on ' + dateKey);
+
+  // 2. Find games tipping in 5-15 minutes
+  var candidates = [];
+  for (var g of schedule) {
+    if (!g.scheduled) continue;
+    var tip = new Date(g.scheduled);
+    var minsTilTip = (tip - now) / 60000;
+    if (minsTilTip >= 5 && minsTilTip <= 15) {
+      candidates.push({ game: g, minsTilTip: Math.round(minsTilTip) });
+    }
+  }
+
+  if (candidates.length === 0) {
+    log('No games tipping in 5-15 minutes — nothing to do');
+    return { logs: logs, generated: 0 };
+  }
+  log('Candidates: ' + candidates.map(function(c) { return c.game.away_alias + '@' + c.game.home_alias + ' (' + c.minsTilTip + 'min)'; }).join(', '));
+
+  // 3. Check which don't have theses yet
+  var gameIds = candidates.map(function(c) { return c.game.id; });
+  var existingRows;
+  try {
+    existingRows = await sql`SELECT game_id FROM theses WHERE game_id = ANY(${gameIds})`;
+  } catch (e) { existingRows = []; }
+  var existingSet = new Set((existingRows || []).map(function(r) { return r.game_id; }));
+
+  var toGenerate = candidates.filter(function(c) { return !existingSet.has(c.game.id); });
+  if (toGenerate.length === 0) {
+    log('All candidates already have theses — nothing to do');
+    return { logs: logs, generated: 0 };
+  }
+  log('Generating theses for ' + toGenerate.length + ' games');
+
+  // 4. Fetch shared data (once per invocation)
+  var injuries = null, standings = null, seasonQ4 = {};
+  try {
+    injuries = await srFetchDirect(league, 'league/injuries.json');
+    await new Promise(function(r) { setTimeout(r, 1100); });
+    standings = await srFetchDirect(league, 'seasons/' + LEAGUE_CFG[league].season + '/REG/standings.json');
+    await new Promise(function(r) { setTimeout(r, 1100); });
+  } catch (e) { log('Shared SR fetch error: ' + e.message); }
+
+  try { seasonQ4 = await loadSeasonQ4Auto(sql, league); } catch (e) {}
+
+  // 5. Process each game (cap at 3 per invocation)
+  var generated = [];
+  for (var c of toGenerate.slice(0, 3)) {
+    var game = c.game;
+    var hA = game.home_alias, aA = game.away_alias;
+    var matchup = aA + ' @ ' + hA;
+    log('Processing: ' + matchup);
+
+    var hId = SR_TEAM_IDS[hA], aId = SR_TEAM_IDS[aA];
+    if (!hId || !aId) { log('Unknown team alias: ' + hA + ' or ' + aA); continue; }
+
+    try {
+      // Fetch per-game SR data (10 calls with 1.1s delays for rate limit)
+      var srCalls = [
+        { key: 'homeProfile', path: 'teams/' + hId + '/profile.json' },
+        { key: 'awayProfile', path: 'teams/' + aId + '/profile.json' },
+        { key: 'homeDepth', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + hId + '/depth_chart.json' },
+        { key: 'awayDepth', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + aId + '/depth_chart.json' },
+        { key: 'homeStats', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + hId + '/statistics.json' },
+        { key: 'awayStats', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + aId + '/statistics.json' },
+        { key: 'homeSplitsGame', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + hId + '/splits/game.json' },
+        { key: 'awaySplitsGame', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + aId + '/splits/game.json' },
+        { key: 'homeSplitsSchedule', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + hId + '/splits/schedule.json' },
+        { key: 'awaySplitsSchedule', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + aId + '/splits/schedule.json' },
+      ];
+
+      var collected = {};
+      for (var call of srCalls) {
+        try {
+          collected[call.key] = await srFetchDirect(league, call.path);
+        } catch (e) {
+          log('  SR ' + call.key + ' failed: ' + e.message);
+          collected[call.key] = null;
+        }
+        await new Promise(function(r) { setTimeout(r, 1100); });
+      }
+
+      // BDL odds
+      var oddsText = '';
+      try {
+        var tipDate = new Date(game.scheduled).toISOString().split('T')[0];
+        var bdlGames = await bdlFetchDirect('/nba/v1/games?dates[]=' + tipDate);
+        var bdlGame = (bdlGames.data||[]).find(function(bg) {
+          return (bg.home_team?.abbreviation === hA && (bg.visitor_team?.abbreviation === aA || bg.away_team?.abbreviation === aA));
+        });
+        if (bdlGame?.id) {
+          await new Promise(function(r) { setTimeout(r, 200); });
+          var oddsResp = await bdlFetchDirect('/nba/v1/odds?game_id=' + bdlGame.id);
+          var oddsArr = oddsResp.data || [];
+          if (oddsArr.length > 0) {
+            var book = oddsArr[0];
+            oddsText = '\n=== ODDS ===\nSpread: ' + (book.spread_home_value||'?') + ' | ML: ' + (book.moneyline_home_odds||'?') + '/' + (book.moneyline_away_odds||'?') + ' | O/U: ' + (book.total_value||'?') + '\n';
+          }
+        }
+      } catch (e) { log('  BDL odds failed (non-fatal): ' + e.message); }
+
+      // Build sections (trimmed text for Sonnet)
+      var sections = {
+        injuries: autoTrimInjuries(injuries),
+        homeRoster: autoTrimProfile(collected.homeProfile),
+        awayRoster: autoTrimProfile(collected.awayProfile),
+        homeDepth: autoTrimDepth(collected.homeDepth),
+        awayDepth: autoTrimDepth(collected.awayDepth),
+        homeStats: autoTrimStats(collected.homeStats),
+        awayStats: autoTrimStats(collected.awayStats),
+        homeSplitsGame: collected.homeSplitsGame ? JSON.stringify(collected.homeSplitsGame).substring(0, 8000) : '(unavailable)',
+        awaySplitsGame: collected.awaySplitsGame ? JSON.stringify(collected.awaySplitsGame).substring(0, 8000) : '(unavailable)',
+        homeSplitsSchedule: collected.homeSplitsSchedule ? JSON.stringify(collected.homeSplitsSchedule).substring(0, 8000) : '(unavailable)',
+        awaySplitsSchedule: collected.awaySplitsSchedule ? JSON.stringify(collected.awaySplitsSchedule).substring(0, 8000) : '(unavailable)',
+        standings: autoTrimStandings(standings),
+        odds: oddsText,
+      };
+
+      // Build analytical object for SIA pipeline
+      var analytical = { standings: standings, league: league };
+      if (collected.homeProfile) analytical.homeProfile = collected.homeProfile;
+      if (collected.awayProfile) analytical.awayProfile = collected.awayProfile;
+      if (collected.homeStats) analytical.homeSeasonStats = collected.homeStats;
+      if (collected.awayStats) analytical.awaySeasonStats = collected.awayStats;
+
+      // Run SIA pipeline
+      var rosterAudit = computeRosterAudit(analytical, hA, aA);
+      var sia = computeSIA(rosterAudit, analytical, hA, aA);
+      var redistribution = computeRedistribution(rosterAudit, sia, analytical, hA, aA);
+      var srm = computeSRM(rosterAudit, analytical);
+      var finalCaps = applyAdjustments(sia, redistribution, srm);
+      var depletion = computeDepletionGate(rosterAudit);
+      var pyth = computePythagorean(standings, hA, aA);
+      var bhv = computeBHV(analytical, hA, aA, rosterAudit);
+      var preComputed = formatPreComputed(hA, aA, rosterAudit, sia, finalCaps, redistribution, srm, depletion, pyth, bhv);
+
+      // Compute mechanical pregame floor
+      var homeStatsRaw = collected.homeStats?.own_record || collected.homeStats;
+      var awayStatsRaw = collected.awayStats?.own_record || collected.awayStats;
+      var floor = computePreGameFloor(homeStatsRaw, awayStatsRaw, standings, seasonQ4, finalCaps, hA, aA);
+      var conviction = floor ? computeConviction(floor) : { tier: 'NO ENTRY', combo: 'NONE', indicatorsWon: [], indicatorsLost: [] };
+      var floorText = floor ? formatMechanicalFloor(floor, conviction, hA, aA) : '';
+
+      log('  Floor: ' + (floor ? floor.controlTeam + ' ' + floor.score.toFixed(2) + ' ' + getVerdictLabel(floor.score) + ' | ' + conviction.tier + ' (' + conviction.combo + ')' : 'FAILED'));
+
+      // Build prompt
+      var tipTime = new Date(game.scheduled).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Phoenix' });
+      var systemPrompt = buildSystemPrompt();
+      var userPrompt = 'Build a complete pre-game thesis for this NBA matchup.\n\n' +
+        'MATCHUP: ' + aA + ' @ ' + hA + '\n' +
+        'DATE: ' + dateKey + ' | TIME: ' + tipTime + ' MST\n' +
+        'VENUE: ' + (game.venue || 'TBD') + '\n\n' +
+        floorText +
+        preComputed + '\n\n' +
+        '=== INJURIES ===\n' + sections.injuries + '\n\n' +
+        '=== ' + hA + ' ROSTER ===\n' + sections.homeRoster + '\n\n' +
+        '=== ' + aA + ' ROSTER ===\n' + sections.awayRoster + '\n\n' +
+        '=== ' + hA + ' DEPTH CHART ===\n' + sections.homeDepth + '\n\n' +
+        '=== ' + aA + ' DEPTH CHART ===\n' + sections.awayDepth + '\n\n' +
+        '=== ' + hA + ' SEASON STATS ===\n' + sections.homeStats + '\n\n' +
+        '=== ' + aA + ' SEASON STATS ===\n' + sections.awayStats + '\n\n' +
+        '=== ' + hA + ' SPLITS (Game) ===\n' + sections.homeSplitsGame + '\n\n' +
+        '=== ' + aA + ' SPLITS (Game) ===\n' + sections.awaySplitsGame + '\n\n' +
+        '=== ' + hA + ' SPLITS (Schedule) ===\n' + sections.homeSplitsSchedule + '\n\n' +
+        '=== ' + aA + ' SPLITS (Schedule) ===\n' + sections.awaySplitsSchedule + '\n\n' +
+        '=== STANDINGS ===\n' + sections.standings + '\n' +
+        sections.odds + '\n\n' +
+        'IMPORTANT: The PRE-COMPUTED STRUCTURAL ASSESSMENT contains SIA context. The MECHANICAL PREGAME FLOOR provides indicator scores as ground truth \u2014 do not override them. Show SIA notation in AVAILABILITY. Add DISAGREEMENT if your contextual read differs from the mechanical floor.\n\n' +
+        'Output the compact thesis format.';
+
+      // Call Sonnet (non-streaming for auto mode)
+      var anthropicResp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 2000, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
+      });
+
+      if (!anthropicResp.ok) {
+        var errText = await anthropicResp.text();
+        log('  Sonnet error: ' + anthropicResp.status + ' ' + errText.substring(0, 200));
+        continue;
+      }
+
+      var sonnetData = await anthropicResp.json();
+      var thesis = sonnetData.content.filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('\n');
+
+      // Save to DB
+      await sql`
+        INSERT INTO theses (game_id, league, text, created_at)
+        VALUES (${game.id}, ${league}, ${thesis}, NOW())
+        ON CONFLICT (game_id) DO UPDATE SET text = ${thesis}, created_at = NOW()
+      `;
+
+      generated.push({
+        matchup: matchup,
+        floor: floor ? floor.score.toFixed(2) : '?',
+        verdict: floor ? getVerdictLabel(floor.score) : '?',
+        conviction: conviction.tier,
+        controlTeam: floor ? floor.controlTeam : '?',
+      });
+      log('  Thesis saved for ' + matchup);
+
+    } catch (e) {
+      log('  ERROR processing ' + matchup + ': ' + e.message);
+    }
+  }
+
+  // 6. Send ntfy summary
+  if (generated.length > 0) {
+    var ntfyTitle = 'DFT Pre-Game: ' + generated.length + ' ' + (generated.length === 1 ? 'thesis' : 'theses') + ' ready';
+    var ntfyBody = generated.map(function(g) {
+      return g.matchup + '\nFloor: ' + g.controlTeam + ' ' + g.floor + ' ' + g.verdict + ' (' + g.conviction + ')';
+    }).join('\n\n');
+    await sendNtfy(ntfyTitle, ntfyBody);
+    log('ntfy sent: ' + ntfyTitle);
+  }
+
+  return { logs: logs, generated: generated.length };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // MAIN HANDLER — Netlify Functions v2 with streaming
 // ══════════════════════════════════════════════════════════════════════════════
 
 export default async function(request) {
+  // AUTO MODE — triggered by cron schedule (GET request, no body)
+  if (request.method !== 'POST' && request.method !== 'OPTIONS') {
+    try {
+      var result = await runPregameAgent();
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+      });
+    } catch (e) {
+      return new Response(JSON.stringify({ error: e.message }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+      });
+    }
+  }
+
+  // MANUAL MODE — existing POST handler below
   var corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type',
@@ -1031,3 +1649,10 @@ export default async function(request) {
     });
   }
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SCHEDULE CONFIG — auto-generate theses before tip
+// ══════════════════════════════════════════════════════════════════════════════
+export const config = {
+  schedule: "*/5 * * * *",  // every 5 minutes — checks for games tipping in 5-15 min
+};

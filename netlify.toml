@@ -7,7 +7,7 @@
   external_node_modules = []
 
 [functions."generate-thesis"]
-  timeout = 60
+  timeout = 120
 
 [functions."analyze"]
   timeout = 60
