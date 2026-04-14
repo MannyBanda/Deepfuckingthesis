@@ -1543,7 +1543,9 @@ export default async function(request) {
       // ── MECHANICAL PREGAME FLOOR ──
       var homeStatsRaw = analytical.homeStats?.own_record || analytical.homeStats || null;
       var awayStatsRaw = analytical.awayStats?.own_record || analytical.awayStats || null;
-      var floor = computePreGameFloor(homeStatsRaw, awayStatsRaw, analytical.standings, null, finalCaps, homeAlias, awayAlias);
+      var seasonQ4 = null;
+      try { var sql = neon(process.env.DATABASE_URL); seasonQ4 = await loadSeasonQ4Auto(sql, league); } catch (e) { /* non-fatal — I4 subB defaults to EVEN */ }
+      var floor = computePreGameFloor(homeStatsRaw, awayStatsRaw, analytical.standings, seasonQ4, finalCaps, homeAlias, awayAlias);
       var conviction = floor ? computeConviction(floor) : { tier: 'NO ENTRY', combo: 'NONE', indicatorsWon: [], indicatorsLost: [] };
       var floorText = floor ? formatMechanicalFloor(floor, conviction, homeAlias, awayAlias) : '';
 
