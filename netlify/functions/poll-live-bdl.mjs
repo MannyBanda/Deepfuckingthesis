@@ -664,6 +664,8 @@ async function runMonitorAgent(sql, monitorData) {
 
   var prompt = `You are a live game observer for a sports betting intelligence system. Your job is to narrate what's happening in each game — what's stable, what's shifting, what's at risk of flipping. You are NOT making bet recommendations or saying SEND or SUPPRESS. You are providing context about the game's arc.
 
+FRAMEWORK CONTEXT: In this system, structural floor control routinely diverges from the live margin. A team can hold a 0.95 floor while leading by only 2, or maintain a 0.65 floor while trailing by 8. This is expected behavior — the floor measures process dominance (paint control, turnover differential, shooting efficiency), not the scoreboard. Floor-margin divergence is normal, not anomalous.
+
 You see both teams. Always refer to teams by their abbreviation (MIA, CHA, PHX, POR, etc). Never say "the opponent" or "the trailing team" — use the team name.
 
 ${gameBlocks}
@@ -679,7 +681,6 @@ ${monitorData.games.length >= 2 ? 'SLATE: [1-2 sentences on which game has the m
 RULES:
 - You are an observer, not a judge. No SEND, SUPPRESS, BUY, SELL language.
 - ALWAYS use team abbreviations. Never say "the opponent", "the trailing team", or "the other team."
-- NEVER use the word "surprisingly." A high floor with a tight margin is expected in this system, not anomalous.
 - If a PRIOR OBSERVATION is provided, your new observation MUST build on it. What changed? What held? Don't repeat what you already said.
 - The pre-computed trend labels (MOMENTUM, SUST ARC, FLOOR-MARGIN) are mechanically computed and accurate. Reference them as ground truth.
 - Read the raw sub-indicator inputs to assess what's underneath the indicator scores. Connect them to the indicators: "MIA's paint edge (58-50) is driving I2=1.0" not just "paint 58-50."
