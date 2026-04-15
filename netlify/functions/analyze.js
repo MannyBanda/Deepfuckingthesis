@@ -487,6 +487,7 @@ exports.handler = async function(event) {
     var combinedRead = body.combinedRead;
     var wpProfiles = body.wpProfiles || null;
     var espnWP = body.espnWP || null;
+    var monitorContext = body.monitorContext || null;
     if (!summaryData) {
       return { statusCode: 400, headers: headers, body: JSON.stringify({ error: 'summaryData required' }) };
     }
@@ -804,12 +805,23 @@ exports.handler = async function(event) {
       espnWPSection += 'Common valid divergences: sustainability concern ESPN misses, structural control not reflected in score, foul trouble.\n';
     }
 
+    // ── MONITOR OBSERVATION ──
+    var monitorSection = '';
+    if (monitorContext) {
+      monitorSection = '\nMONITOR OBSERVATION (continuous 3-minute game observer — most recent read):\n'
+        + monitorContext + '\n'
+        + 'USE: The monitor tracks momentum, sustainability arcs, and floor-margin dynamics between snapshots. '
+        + 'Reference its trajectory reads in your NARRATIVE and RISK. '
+        + 'If the monitor flags a specific flip scenario in its Risk section, address it. '
+        + 'Monitor observations do NOT override your ground truth indicators.\n';
+    }
+
     // ── BUILD PROMPT ──
     var userPrompt = awayTeam + ' @ ' + homeTeam + ' | ' + period + ' | ' + score + '\n\n'
       + (thesis ? 'THESIS:\n' + thesis + '\n' : 'No thesis.')
       + '\n' + clutchSection + oddsSection + bonusSection + trackingSection + sustainabilitySection + leadCompSection
       + windowSection + quarterSection + gapSection + combinedReadSection + arrowSection + adjustmentSection
-      + pbpSection + edgeSection + narrativeSection + wpSection + espnWPSection
+      + pbpSection + edgeSection + narrativeSection + wpSection + espnWPSection + monitorSection
       + '\nGAME DATA:\n' + JSON.stringify(summaryData);
 
     var resp = await fetch('https://api.anthropic.com/v1/messages', {

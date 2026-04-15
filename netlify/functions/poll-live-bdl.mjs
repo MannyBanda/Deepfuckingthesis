@@ -3165,7 +3165,7 @@ function parseAnalysisText(text, homeAlias, awayAlias) {
 // Single function that formats ALL data layers into prompt text.
 // Matches analyze.js quality — no more "payload ghost" layers.
 
-function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary, conviction }) {
+function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary, conviction, monitorContext }) {
   let p = `${aA} @ ${hA} | Q${period} ${clock} | ${score}\n\n`;
 
   // ── GROUND TRUTH (mechanical engine output — do not override) ──
@@ -3487,6 +3487,16 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
     });
   }
 
+  // Monitor observation (game-arc context from continuous 3-minute observer)
+  if (monitorContext) {
+    p += `\nMONITOR OBSERVATION (continuous 3-minute game observer — most recent read):\n`;
+    p += monitorContext + '\n';
+    p += 'USE: The monitor tracks momentum, sustainability arcs, and floor-margin dynamics between snapshots. ';
+    p += 'Reference its trajectory reads in your NARRATIVE and RISK. ';
+    p += 'If the monitor flags a specific flip scenario in its Risk section, address it. ';
+    p += 'Monitor observations do NOT override your ground truth indicators.\n';
+  }
+
   // Full game data
   p += `\nGAME DATA:\n${JSON.stringify(summary)}`;
 
@@ -3610,6 +3620,25 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
     // Build team calibration prompt section
 
     const calConviction = computeConviction(ind);
+
+    // Latest monitor observation for game-arc context
+    let monitorContext = null;
+    try {
+      const monObs = await sql`
+        SELECT narrative, risk_factors, momentum_direction, momentum_streak, momentum_delta,
+               sust_arc, sust_arc_detail, floor_margin_rel, floor_score, margin, period, clock, control_team
+        FROM monitor_observations
+        WHERE game_id = ${game.id}
+        ORDER BY ts DESC LIMIT 1`;
+      if (monObs.length > 0) {
+        const m = monObs[0];
+        monitorContext = `Q${m.period} ${m.clock} | ${m.control_team} floor ${Number(m.floor_score).toFixed(2)}, margin ${m.margin}\n`
+          + `Momentum: ${m.momentum_direction}(${m.momentum_streak}, ${m.momentum_delta >= 0 ? '+' : ''}${Number(m.momentum_delta).toFixed(2)}) | Sust arc: ${m.sust_arc}${m.sust_arc_detail ? ' (' + m.sust_arc_detail + ')' : ''} | Floor-margin: ${m.floor_margin_rel}\n`
+          + `Observation: ${m.narrative}\n`
+          + `Risk: ${m.risk_factors}`;
+      }
+    } catch (e) { /* non-fatal */ }
+
     const userPrompt = formatSonnetPrompt({
       hA, aA, period, clock, score: scoreLine,
       thesis: thesis || null,
@@ -3618,6 +3647,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       quarterDataFromDB,
       summary,
       conviction: calConviction,
+      monitorContext,
     });
 
     // ── Compute prompt layer inventory for diagnostics ──
@@ -3646,6 +3676,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       ctx.gameMeta ? 'gameMeta' : null,
       ctx.edgeHistory ? 'edgeHistory' : null,
       ctx.trackingData ? 'tracking' : null,
+      monitorContext ? 'monitor' : null,
     ].filter(Boolean);
     const contextLayersStr = `${layerInventory.length}L: ${layerInventory.join(',')}`;
     const promptChars = userPrompt.length;
