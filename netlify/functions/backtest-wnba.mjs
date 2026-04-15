@@ -256,8 +256,9 @@ async function phaseStatus(sql) {
   };
 }
 
-async function phaseDiagnose(sql) {
+async function phaseDiagnose(sql, url) {
   const startTime = Date.now();
+  const checkLimit = parseInt(url?.searchParams?.get('n') || '10');
   
   // 1. Get all distinct BDL team abbreviations from the DB
   const bdlTeams = await sql`
@@ -286,7 +287,7 @@ async function phaseDiagnose(sql) {
     SELECT game_id, date, home_alias, away_alias, margin_bucket
     FROM wnba_backtest WHERE sr_summary IS NULL
     ORDER BY date
-    LIMIT 200
+    LIMIT ${checkLimit}
   `;
 
   const schedCache = {};
@@ -943,7 +944,7 @@ export default async (req) => {
       case 'init':    result = await phaseInit(sql); break;
       case 'reset':   result = await phaseReset(sql); break;
       case 'status':  result = await phaseStatus(sql); break;
-      case 'diagnose': result = await phaseDiagnose(sql); break;
+      case 'diagnose': result = await phaseDiagnose(sql, url); break;
       case 'collect': result = await phaseCollect(sql); break;
       case 'sample':  result = await phaseSample(sql, url); break;
       case 'compute': result = await phaseCompute(sql); break;
