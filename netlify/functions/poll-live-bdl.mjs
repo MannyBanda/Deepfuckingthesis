@@ -5054,22 +5054,23 @@ export default async function(req) {
             }
 
             if (alertType) {
-              // Per-type dedup: re-fire after 5 min OR if floor improved by 0.10+
+              // Per-type dedup: re-fire after 5 min OR floor improved by 0.10+ OR edge jumped 20+pp
               if (!game._alertHistory) game._alertHistory = {};
               const dedupKey = alertType; // per-type, not per-quarter
               const lastFired = game._alertHistory[dedupKey];
               const minsSinceLast = lastFired ? (Date.now() - lastFired.ts) / 60000 : Infinity;
               const floorDelta = lastFired ? ind.score - lastFired.floor : Infinity;
-              const dedupPass = minsSinceLast >= 5 || floorDelta >= 0.10;
+              const edgeDelta = (lastFired && lastFired.edge != null && ctrlEdge != null) ? ctrlEdge - lastFired.edge : Infinity;
+              const dedupPass = minsSinceLast >= 5 || floorDelta >= 0.10 || edgeDelta >= 20;
 
               if (!dedupPass) {
-                log(`${matchup}: ${alertType} deduped — ${minsSinceLast.toFixed(1)}min since last, floor delta ${floorDelta >= 0 ? '+' : ''}${floorDelta.toFixed(2)}`);
+                log(`${matchup}: ${alertType} deduped — ${minsSinceLast.toFixed(1)}min since last, floor delta ${floorDelta >= 0 ? '+' : ''}${floorDelta.toFixed(2)}, edge delta ${edgeDelta >= 0 ? '+' : ''}${edgeDelta.toFixed(1)}pp`);
                 alertType = null;
               }
             }
 
             if (alertType) {
-              game._alertHistory[alertType] = { ts: Date.now(), floor: ind.score, period: currentPeriod };
+              game._alertHistory[alertType] = { ts: Date.now(), floor: ind.score, period: currentPeriod, edge: ctrlEdge };
               cacheUpdated = true;
                 const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
                 const oppAlias = ctrlIsHome ? aA : hA;
