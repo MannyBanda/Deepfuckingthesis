@@ -2934,6 +2934,23 @@ async function triggerAnalysis(game){
       if(proxyClutch){ clutchPayload = proxyClutch; cs.clutchTier = 2; }
     }
 
+    // Fetch latest monitor observation for game-arc context
+    var monitorContext = null;
+    try {
+      const _monRes = await fetch(FN+'db-api?action=get_monitor_observations&game_id='+encodeURIComponent(game.id)+'&limit=50');
+      if (_monRes.ok) {
+        const _monData = await _monRes.json();
+        const _obs = _monData.observations;
+        if (_obs && _obs.length > 0) {
+          const m = _obs[_obs.length - 1]; // latest (results are ASC)
+          monitorContext = 'Q'+m.period+' '+m.clock+' | '+m.control_team+' floor '+Number(m.floor_score).toFixed(2)+', margin '+m.margin+'\n'
+            + 'Momentum: '+m.momentum_direction+'('+m.momentum_streak+', '+(m.momentum_delta>=0?'+':'')+Number(m.momentum_delta).toFixed(2)+') | Sust arc: '+m.sust_arc+(m.sust_arc_detail?' ('+m.sust_arc_detail+')':'')+' | Floor-margin: '+m.floor_margin_rel+'\n'
+            + 'Observation: '+m.narrative+'\n'
+            + 'Risk: '+m.risk_factors;
+        }
+      }
+    } catch(e) { /* non-fatal — monitor may not have observations yet */ }
+
     // Client-side timeout: prevent fetch from hanging forever (AbortController is safe in browsers)
     addLog(game.id, '⚡ Pre-flight done — calling Sonnet…', true);
     const _ac = new AbortController();
@@ -3011,6 +3028,7 @@ async function triggerAnalysis(game){
           dataPoints: cs.espnWP.dataPoints || 0,
           homeAlias: cs.espnWP.homeAlias || '', awayAlias: cs.espnWP.awayAlias || '',
         } : null,
+        monitorContext: monitorContext,
       })
     });
     clearTimeout(_acTimer);
