@@ -1485,6 +1485,118 @@ let _serverBoxScoreTime = 0;
 let _serverLineupsCache = {};       // bdlGameId → lineups array
 let _seasonQ4Cache = null;          // { teamAlias: avgQ4margin, ... }
 let _seasonQ4Time = 0;
+const _thesisAttempted = new Set();  // game IDs already attempted for fallback thesis
+
+// ── FALLBACK THESIS — generate when pregame cron missed the window ──
+async function generateFallbackThesis(sql, game, league, ind, conviction, summary, matchup, hA, aA) {
+  if (_thesisAttempted.has(game.id)) return;
+  _thesisAttempted.add(game.id);
+
+  // Only generate in Q1 — after that it's not useful
+  const period = summary.quarter || summary.half || (summary.home?.periods || []).length || 0;
+  if (period > 1) { log(`${matchup}: fallback thesis skipped — already Q${period}`); return; }
+
+  // Check if thesis already exists
+  try {
+    const existing = await sql`SELECT game_id FROM theses WHERE game_id = ${game.id}`;
+    if (existing.length > 0) return;
+  } catch (e) { return; }
+
+  log(`${matchup}: No pregame thesis found — generating fallback...`);
+
+  // Fetch injuries (1 SR call — non-fatal if fails)
+  let injuryText = 'No injury data available';
+  try {
+    const injuries = await srFetch(league, 'league/injuries.json');
+    if (injuries?.players) {
+      const relevant = injuries.players.filter(p => p.team?.alias === hA || p.team?.alias === aA);
+      if (relevant.length > 0) {
+        injuryText = relevant.map(p =>
+          `${p.team?.alias} ${p.full_name}: ${p.status} (${p.injury?.description || 'undisclosed'})`
+        ).join('\n');
+      } else {
+        injuryText = 'No injuries reported for either team';
+      }
+    }
+  } catch (e) { /* non-fatal — proceed without injuries */ }
+
+  // Build indicator summary
+  const indLines = ['I1','I2','I3','I4','I5'].map(k => {
+    const i = ind[k];
+    return i ? `${k}: ${i.score?.toFixed(2)} ${i.leader}` : `${k}: N/A`;
+  }).join('\n');
+
+  // Extract key stats from summary
+  const hS = summary.home?.statistics || {};
+  const aS = summary.away?.statistics || {};
+  const statsContext = `${hA}: Paint ${hS.points_in_paint||'?'}, FTA ${hS.free_throws_att||'?'}, 3PA ${hS.three_points_att||'?'}, TO ${hS.turnovers||'?'}, AST ${hS.assists||'?'}
+${aA}: Paint ${aS.points_in_paint||'?'}, FTA ${aS.free_throws_att||'?'}, 3PA ${aS.three_points_att||'?'}, TO ${aS.turnovers||'?'}, AST ${aS.assists||'?'}`;
+
+  const prompt = `You are a structural sports betting analyst for an NBA live betting system.
+Generate a concise pregame thesis for ${aA} @ ${hA}. This is a LATE thesis — the game just started.
+Focus on the structural matchup and what to watch for during live betting.
+
+INJURIES:
+${injuryText}
+
+EARLY GAME STRUCTURAL READ (from mechanical engine):
+Control: ${ind.controlTeam} ${ind.score?.toFixed(2)}
+Conviction: ${conviction.tier} (${conviction.combo})
+${indLines}
+
+EARLY STATS:
+${statsContext}
+
+OUTPUT FORMAT (plain text, no Markdown):
+FALLBACK THESIS — ${aA} @ ${hA}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CONTROL SCORE: [Team] [X.XX] — [verdict]
+CONVICTION: ${conviction.tier} — ${conviction.combo}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STRUCTURAL EDGE: [2-3 sentences — which team controls structure and why]
+MATCHUP CONTEXT: [1-2 sentences — key matchup dynamics]
+INJURY IMPACT: [1 sentence]
+WATCH FOR: [What confirms or invalidates the thesis]
+DISAGREEMENT: NONE or [where early data challenges the read]
+
+Keep it under 300 words. Use team aliases (${hA}, ${aA}).`;
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) { log(`${matchup}: no ANTHROPIC_API_KEY for fallback thesis`); return; }
+
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+
+    if (!resp.ok) { log(`${matchup}: fallback thesis Anthropic ${resp.status}`); return; }
+
+    const data = await resp.json();
+    const thesisText = data.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+    if (!thesisText || thesisText.length < 50) { log(`${matchup}: fallback thesis too short`); return; }
+
+    await sql`
+      INSERT INTO theses (game_id, league, text, created_at)
+      VALUES (${game.id}, ${league}, ${thesisText}, NOW())
+      ON CONFLICT (game_id) DO NOTHING
+    `;
+
+    await sendNtfy(
+      `${aA}@${hA} Thesis (late)`,
+      thesisText.substring(0, 500)
+    );
+
+    log(`${matchup}: ★ FALLBACK THESIS generated (${thesisText.length} chars)`);
+  } catch (e) {
+    log(`${matchup}: fallback thesis failed: ${e.message}`);
+  }
+}
 
 // Load season Q4 margins from games table (cached per hour)
 async function loadSeasonQ4(sql, league) {
@@ -4656,6 +4768,14 @@ export default async function(req) {
             continue;
           }
           const conviction = computeConviction(ind);
+
+          // ── FALLBACK THESIS — catch games where pregame cron missed the window ──
+          if (!_thesisAttempted.has(game.id)) {
+            pendingAnalyses.push(
+              generateFallbackThesis(sql, game, league, ind, conviction, summary, matchup, hA, aA)
+                .catch(e => log(`${matchup}: fallback thesis error: ${e.message}`))
+            );
+          }
 
           // Fetch ESPN WP (no rate limit, non-blocking)
           let espnWP = null;
