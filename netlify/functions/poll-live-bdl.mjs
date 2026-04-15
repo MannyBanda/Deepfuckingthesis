@@ -215,8 +215,8 @@ YOUR JOB: Assess whether the prior position is HOLDING, IMPROVING, or DETERIORAT
 - SUPPRESS if conditions essentially unchanged — do not spam "still winning" updates
 - If control team SHIFTED from the prior alert: this is critical info, strongly favor SEND to warn the bettor
 - Your BODY must reference the prior alert and explain what changed. Lead with the position status.
-  Example BODY: "Your Q2 BWC position is secure — floor climbed from 0.83 to 1.00, conviction upgraded to DOMINANT. Lead expanded to 12."
-  Example BODY: "Your Q2 BWC position at risk — control shifted to opponent, floor dropped from 0.75 to 0.55. Consider exiting."
+  Example BODY: "Your Q2 position is holding — structural control climbed to 100%, conviction upgraded to DOMINANT. Lead expanded to 12."
+  Example BODY: "Your Q2 position at risk — control shifted to opponent, structural control dropped from 75% to 55%. Consider exiting."
 ` : ''}
 RULES:
 - FIRED alerts passed all mechanical thresholds. You should SEND unless you see a clear structural contradiction. Check the indicator breakdown:
@@ -242,10 +242,22 @@ RULES:
 - CANDIDATE BUYs with negative ML (heavy favorite trailing): the CANDIDATE tier reflects the ML gate (-250 to -400), NOT structural weakness. Evaluate the structural case as if it were FIRED — if I4 COMBO YES + STRONG/DOMINANT conviction, SEND so the subscriber can shop for favorable lines. Note the heavy ML in the BODY.
 - TP (Throughput Projection) is context, not a veto. It estimates whether a trailing team's structural production rate can close the deficit in remaining possessions. Limitation: TP uses cumulative game stats, so early-game dominance by either team anchors the rates even after momentum shifts. TP NO PATH at 1-3 point deficits is often a false negative — the game is essentially tied regardless of what the projection math says. TP STRONG RECOVERY or PROBABLE adds confidence. TP UNLIKELY or NO PATH is a caution flag, not a stop sign.
 
+BODY RULES (the BODY is read by non-technical bettors on their phone — translate your technical reasoning into basketball language while keeping structural data):
+- Translate indicators into basketball, then include indicator codes in parentheses:
+  "POR dominates inside and controls game flow — DOMINANT, 4/5 structural categories (I1, I2, I3, I4) at 95% control"
+  I1 = turnovers/steals, I2 = paint/interior, I3 = shot quality/creation, I4 = game flow/control, I5 = pace/execution
+- Say "X/5 structural categories (codes)" instead of just listing codes without context
+- "Floor 0.95" → "95% structural control" or "dominant across the board"
+- Conviction tiers (DOMINANT/STRONG/MODEST), sustainability tiers (LOCKED IN/DURABLE/COLD/FRAGILE), and edge % stay as-is — they are plain English
+- TP → "comeback math favors/doesn't favor [TEAM]" or "projects X-point swing"
+- LS → "lead is secure" / "lead is under pressure"
+- Lead with score + action, explain WHY in basketball terms with structural data, end with what to watch
+- 2-4 sentences max. Do NOT lose structural metrics — keep conviction, edge %, sustainability, indicator count. Just make them readable.
+
 Respond in EXACTLY this format:
 DECISION: [SEND|SUPPRESS|DOWNGRADE]
-REASONING: [1-2 sentences explaining why]
-BODY: [If SEND/DOWNGRADE: enhanced plain-English alert body for the bettor. If SUPPRESS: leave blank]`;
+REASONING: [1-2 sentences — technical, for internal logging. Use I1-I5 codes, floor scores, conviction details freely.]
+BODY: [If SEND/DOWNGRADE: plain-English alert body following BODY RULES above. If SUPPRESS: leave blank]`;
 
   try {
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
