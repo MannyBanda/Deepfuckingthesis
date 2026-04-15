@@ -362,7 +362,7 @@ async function gatherAgentContext(sql, gameId, matchup) {
 async function getMonitorData(sql, league, cachedGames) {
   var result = { hasWork: false, games: [] };
   try {
-    var liveGames = cachedGames.filter(g => g.status === 'in_progress' || g.status === 'halftime');
+    var liveGames = cachedGames.filter(g => g.status === 'inprogress' || g.status === 'in_progress' || g.status === 'halftime');
     if (liveGames.length === 0) return result;
     var liveGameIds = liveGames.map(g => g.id);
 
