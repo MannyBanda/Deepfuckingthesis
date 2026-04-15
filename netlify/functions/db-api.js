@@ -1233,27 +1233,38 @@ exports.handler = async (event) => {
       // For SENT alerts: BUY/BWC/WB/RP correct = control team WON
       //                  LEAD CRUMBLING/LEAD LOST correct = control team LOST (warning validated)
       // For SUPPRESSED alerts: invert — suppressing a BUY on a losing team IS correct
-      // Position gate suppresses (no prior position) excluded from accuracy
+      // Position gate and dedup suppresses excluded from accuracy tracking (neutral)
+      const DEDUP_PATTERNS = ['duplicate', 'already sent', 'already SENT', 'bettor already has', 'already received', 'already been alerted', 'already correctly suppressed', 'resending'];
       const alerts = rows.map(r => {
-        if (!r.winner) return { ...r, correct: null };
-        // Exclude procedural suppresses from accuracy tracking
-        if (r.agent_decision === 'SUPPRESS' && r.agent_reasoning && r.agent_reasoning.includes('position gate')) {
-          return { ...r, correct: null };
+        if (!r.winner) return { ...r, correct: null, suppress_category: null };
+        // Classify suppress category
+        var suppressCat = null;
+        if (r.agent_decision === 'SUPPRESS' && r.agent_reasoning) {
+          if (r.agent_reasoning.includes('position gate')) suppressCat = 'position_gate';
+          else if (DEDUP_PATTERNS.some(p => r.agent_reasoning.toLowerCase().includes(p.toLowerCase()))) suppressCat = 'dedup';
+          else suppressCat = 'structural';
+        }
+        // Position gate and dedup suppresses are neutral — not scored
+        if (suppressCat === 'position_gate' || suppressCat === 'dedup') {
+          return { ...r, correct: null, suppress_category: suppressCat };
         }
         var inverted = r.alert_type === 'LEAD CRUMBLING' || r.alert_type === 'LEAD LOST';
         var ctrlWon = r.winner === r.control_team;
         var signalCorrect = inverted ? !ctrlWon : ctrlWon;
         // For SUPPRESS/DOWNGRADE: correctness inverts — suppressing a bad signal is good
         var wasSuppressed = r.agent_decision === 'SUPPRESS';
-        return { ...r, correct: wasSuppressed ? !signalCorrect : signalCorrect };
+        return { ...r, correct: wasSuppressed ? !signalCorrect : signalCorrect, suppress_category: suppressCat };
       });
       const total = alerts.length;
       const resolved = alerts.filter(a => a.correct !== null);
       const correct = resolved.filter(a => a.correct).length;
+      // Suppress category breakdown
+      const suppressions = { dedup: 0, position_gate: 0, structural: 0 };
+      alerts.forEach(a => { if (a.suppress_category) suppressions[a.suppress_category]++; });
 
       return { statusCode: 200, headers, body: JSON.stringify({
         alerts,
-        summary: { total, resolved: resolved.length, correct, accuracy: resolved.length > 0 ? Math.round(correct / resolved.length * 100) : null }
+        summary: { total, resolved: resolved.length, correct, accuracy: resolved.length > 0 ? Math.round(correct / resolved.length * 100) : null, suppressions }
       }) };
     }
 
