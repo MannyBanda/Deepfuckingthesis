@@ -30,6 +30,12 @@
 [functions."test-monitor"]
   timeout = 120
 
+[functions."backtest-wnba"]
+  timeout = 120
+
+[functions."validate-wnba"]
+  timeout = 120
+
 [[headers]]
   for = "/*"
   [headers.values]
