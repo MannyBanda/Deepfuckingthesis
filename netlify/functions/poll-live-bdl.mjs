@@ -436,7 +436,7 @@ async function getMonitorData(sql, league, cachedGames) {
       // Parse latest raw stats for sub-indicator inputs
       var rawInputs = null;
       try {
-        var rawJson = snaps.find(s => s.raw_stats_json)?.raw_stats_json;
+        var rawJson = latest.raw_stats_json;
         if (rawJson) rawInputs = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
       } catch (e) { /* non-fatal */ }
 
