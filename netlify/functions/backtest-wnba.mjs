@@ -620,6 +620,147 @@ async function phaseReport(sql) {
   };
 }
 
+// ── EXPLORE PHASE — Raw stat correlation analysis ────────────────────────────
+// Instead of testing NBA indicators, find what ACTUALLY predicts WNBA wins
+async function phaseExplore(sql) {
+  const games = await sql`
+    SELECT * FROM wnba_backtest WHERE sr_summary IS NOT NULL
+  `;
+
+  if (games.length < 20) {
+    return { status: 'error', message: `Only ${games.length} games with SR data. Run ?phase=sample more times to get 50+.` };
+  }
+
+  // Define raw stat differentials to test (positive = home advantage)
+  const statDefs = [
+    // Disruption & transition
+    { key: 'steals_diff', extract: (hs, as) => (hs.steals || 0) - (as.steals || 0) },
+    { key: 'blocks_diff', extract: (hs, as) => (hs.blocks || 0) - (as.blocks || 0) },
+    { key: 'disruption_combined', extract: (hs, as) => ((hs.steals||0)+(hs.blocks||0)) - ((as.steals||0)+(as.blocks||0)) },
+    { key: 'turnovers_diff', extract: (hs, as) => (hs.total_turnovers || 0) - (as.total_turnovers || 0) },
+    { key: 'pot_diff', extract: (hs, as) => (hs.points_off_turnovers || 0) - (as.points_off_turnovers || 0) },
+    { key: 'oreb_diff', extract: (hs, as) => (hs.offensive_rebounds || 0) - (as.offensive_rebounds || 0) },
+    { key: 'fastbreak_diff', extract: (hs, as) => (hs.fast_break_pts || 0) - (as.fast_break_pts || 0) },
+    { key: 'second_chance_diff', extract: (hs, as) => (hs.second_chance_pts || 0) - (as.second_chance_pts || 0) },
+    // Interior
+    { key: 'paint_diff', extract: (hs, as) => (hs.points_in_the_paint || hs.points_in_paint || 0) - (as.points_in_the_paint || as.points_in_paint || 0) },
+    { key: 'fta_diff', extract: (hs, as) => (hs.free_throws_att || 0) - (as.free_throws_att || 0) },
+    { key: 'rim_made_diff', extract: (hs, as) => (hs.field_goals_at_rim_made || 0) - (as.field_goals_at_rim_made || 0) },
+    { key: 'fouls_drawn_diff', extract: (hs, as) => (hs.fouls_drawn || 0) - (as.fouls_drawn || 0) },
+    { key: 'pf_diff', extract: (hs, as) => (hs.personal_fouls || 0) - (as.personal_fouls || 0) },
+    // Shot quality
+    { key: 'efg_diff', extract: (hs, as) => {
+      const hFGA = hs.field_goals_att || 1, aFGA = as.field_goals_att || 1;
+      return ((hs.field_goals_made||0)+0.5*(hs.three_points_made||0))/hFGA - ((as.field_goals_made||0)+0.5*(as.three_points_made||0))/aFGA;
+    }},
+    { key: 'ast_diff', extract: (hs, as) => (hs.assists || 0) - (as.assists || 0) },
+    { key: 'ast_ratio_diff', extract: (hs, as) => {
+      return (hs.assists||0) / (hs.field_goals_made||1) * 100 - (as.assists||0) / (as.field_goals_made||1) * 100;
+    }},
+    { key: 'fg_pct_diff', extract: (hs, as) => (hs.field_goals_pct || 0) - (as.field_goals_pct || 0) },
+    { key: 'three_pct_diff', extract: (hs, as) => (hs.three_points_pct || 0) - (as.three_points_pct || 0) },
+    { key: 'three_made_diff', extract: (hs, as) => (hs.three_points_made || 0) - (as.three_points_made || 0) },
+    { key: 'ts_pct_diff', extract: (hs, as) => (hs.true_shooting_pct || 0) - (as.true_shooting_pct || 0) },
+    // Game control
+    { key: 'biggest_lead_diff', extract: (hs, as) => (hs.biggest_lead || 0) - (as.biggest_lead || 0) },
+    { key: 'bench_pts_diff', extract: (hs, as) => (hs.bench_points || 0) - (as.bench_points || 0) },
+    { key: 'last_q_scoring_diff', extract: (hs, as, g) => {
+      const hS = g.sr_summary?.home?.scoring || [];
+      const aS = g.sr_summary?.away?.scoring || [];
+      if (hS.length < 4) return null;
+      return (hS[hS.length-1]?.points || 0) - (aS[aS.length-1]?.points || 0);
+    }},
+    // Tempo & efficiency (CAUTION: outcome-correlated for completed games)
+    { key: 'off_rating_diff_OUTCOME', extract: (hs, as) => (hs.offensive_rating || hs.offensive_points_per_possession || 0) - (as.offensive_rating || as.offensive_points_per_possession || 0) },
+    { key: 'net_rating_diff_OUTCOME', extract: (hs, as) => {
+      const hNet = (hs.offensive_rating||hs.offensive_points_per_possession||0) - (hs.defensive_rating||hs.defensive_points_per_possession||0);
+      const aNet = (as.offensive_rating||as.offensive_points_per_possession||0) - (as.defensive_rating||as.defensive_points_per_possession||0);
+      return hNet - aNet;
+    }},
+    // Composite / other
+    { key: 'total_reb_diff', extract: (hs, as) => ((hs.defensive_rebounds||0)+(hs.offensive_rebounds||0)) - ((as.defensive_rebounds||0)+(as.offensive_rebounds||0)) },
+    { key: 'ast_to_ratio_diff', extract: (hs, as) => (hs.assists_turnover_ratio || 0) - (as.assists_turnover_ratio || 0) },
+    { key: 'most_unanswered_diff', extract: (hs, as) => (hs.most_unanswered || 0) - (as.most_unanswered || 0) },
+  ];
+
+  // Process all games
+  const statData = {};
+  for (const sd of statDefs) statData[sd.key] = [];
+
+  let processed = 0;
+  for (const g of games) {
+    const summary = g.sr_summary;
+    if (!summary?.home?.statistics || !summary?.away?.statistics) continue;
+    const hs = summary.home.statistics;
+    const as = summary.away.statistics;
+    const homeWon = g.home_score > g.away_score;
+
+    for (const sd of statDefs) {
+      try {
+        const val = sd.extract(hs, as, g);
+        if (val == null || isNaN(val)) continue;
+        // Store winner-relative: positive = winner had more
+        const winnerRelative = homeWon ? val : -val;
+        statData[sd.key].push({ raw: val, winnerRel: winnerRelative, homeWon });
+      } catch (e) { /* skip */ }
+    }
+    processed++;
+  }
+
+  // Compute predictiveness for each stat
+  const avg = arr => arr.length > 0 ? arr.reduce((s, v) => s + v, 0) / arr.length : 0;
+  const rankings = [];
+
+  for (const [key, entries] of Object.entries(statData)) {
+    if (entries.length < 20) continue;
+
+    let correctDir = 0, wrongDir = 0, neutral = 0;
+    const winnerVals = [], loserVals = [];
+
+    for (const e of entries) {
+      if (e.winnerRel > 0) correctDir++;
+      else if (e.winnerRel < 0) wrongDir++;
+      else neutral++;
+      winnerVals.push(e.winnerRel);
+    }
+
+    const decidedGames = correctDir + wrongDir;
+    const directionalPct = decidedGames > 0 ? Math.round(correctDir / decidedGames * 1000) / 10 : 50;
+
+    rankings.push({
+      stat: key,
+      games: entries.length,
+      directionalAccuracy: directionalPct,
+      avgWinnerAdvantage: Math.round(avg(winnerVals) * 100) / 100,
+      correctDir,
+      wrongDir,
+      neutral,
+      isOutcomeStat: key.includes('OUTCOME'),
+    });
+  }
+
+  rankings.sort((a, b) => b.directionalAccuracy - a.directionalAccuracy);
+
+  // Group into tiers (exclude outcome stats from tier classification)
+  const structural = rankings.filter(r => !r.isOutcomeStat);
+  const outcome = rankings.filter(r => r.isOutcomeStat);
+
+  return {
+    gamesAnalyzed: processed,
+    totalStats: rankings.length,
+    structural_rankings: structural,
+    outcome_stats_for_reference: outcome,
+    tiers: {
+      'highly_predictive_70pct_plus': structural.filter(r => r.directionalAccuracy >= 70).map(r => `${r.stat}: ${r.directionalAccuracy}%`),
+      'moderately_predictive_60_to_70pct': structural.filter(r => r.directionalAccuracy >= 60 && r.directionalAccuracy < 70).map(r => `${r.stat}: ${r.directionalAccuracy}%`),
+      'weak_55_to_60pct': structural.filter(r => r.directionalAccuracy >= 55 && r.directionalAccuracy < 60).map(r => `${r.stat}: ${r.directionalAccuracy}%`),
+      'noise_below_55pct': structural.filter(r => r.directionalAccuracy < 55).map(r => `${r.stat}: ${r.directionalAccuracy}%`),
+    },
+    methodology: 'For each stat, we compute the home-away differential. Then we ask: when this stat favors a team, how often does that team win? Ties excluded. 50% = coin flip.',
+    caveat: 'Stats marked _OUTCOME are circular for completed games (net rating = who scored more). Use structural stats only for indicator design.',
+  };
+}
+
 // ── HANDLER ──────────────────────────────────────────────────────────────────
 export default async (req) => {
   const sql = neon(process.env.DATABASE_URL);
@@ -634,8 +775,9 @@ export default async (req) => {
       case 'sample':  result = await phaseSample(sql, url); break;
       case 'compute': result = await phaseCompute(sql); break;
       case 'report':  result = await phaseReport(sql); break;
+      case 'explore': result = await phaseExplore(sql); break;
       default:
-        result = { error: `Unknown phase: ${phase}. Use init, collect, sample, compute, or report.` };
+        result = { error: `Unknown phase: ${phase}. Use init, collect, sample, compute, explore, or report.` };
     }
     return new Response(JSON.stringify(result, null, 2), {
       headers: { 'Content-Type': 'application/json' },
