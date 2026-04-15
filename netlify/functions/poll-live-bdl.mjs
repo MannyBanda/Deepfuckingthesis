@@ -653,13 +653,13 @@ async function runMonitorAgent(sql, monitorData) {
     return `GAME: ${g.matchup}\n`
       + `  Score: ${g.awayAlias} ${latest.away_pts}, ${g.homeAlias} ${latest.home_pts} (Q${g.period} ${g.clock})\n`
       + `  ${g.controlTeam} controls floor at ${g.floor.toFixed(2)}, ${g.margin >= 0 ? 'leading' : 'trailing'} by ${Math.abs(g.margin)}\n`
+      + priorBlock
       + `  Trend: MOMENTUM ${momLabel} | OPP SUST: ${t.sustArc.direction}${t.sustArc.detail ? ' (' + t.sustArc.detail + ')' : ''} | FLOOR-MARGIN: ${t.floorMarginRel}\n`
       + `  Indicators (${g.controlTeam}-relative): I1=${i1 != null ? i1.toFixed(2) : '?'} I2=${i2 != null ? i2.toFixed(2) : '?'} I3=${i3 != null ? i3.toFixed(2) : '?'} I4=${i4 != null ? i4.toFixed(2) : '?'} I5=${i5 != null ? i5.toFixed(2) : '?'}\n`
       + `  TP: ${latest.tp_class || '?'} | LS: ${latest.ls_class || '?'} | Ctrl sust: ${latest.ctrl_sust || '?'} | Opp sust: ${latest.opp_sust || '?'}\n`
       + `  Floor trajectory:\n    ${floorTraj}`
       + rawBlock
-      + alertsBlock
-      + priorBlock;
+      + alertsBlock;
   }).join('\n\n');
 
   var prompt = `You are a live game observer for a sports betting intelligence system. Your job is to narrate what's happening in each game — what's stable, what's shifting, what's at risk of flipping. You are NOT making bet recommendations or saying SEND or SUPPRESS. You are providing context about the game's arc.
@@ -672,7 +672,7 @@ ${gameBlocks}
 
 For each game, respond with:
 GAME: [matchup]
-OBSERVATION: [2-4 sentences. What has CHANGED since your prior observation? If you have a prior observation below, build on it — don't restart the narrative. Name both teams. Focus on what's shifting, not what's static. If trend says STALE, note that data hasn't updated.]
+OBSERVATION: [2-4 sentences. If a PRIOR OBSERVATION is shown, you MUST start by stating what has changed since then — don't restart the narrative. Name both teams. Focus on what's shifting, not what's static. If trend says STALE, note that data hasn't updated.]
 AT_RISK: [What specific scenario flips the structural read in the next 3 minutes? Be concrete: "If CHA hits 2 more threes while MIA goes cold from the paint, I2 drops below 0.60 and the floor flips." Don't just list stats — describe what breaks and what holds. Name the indicators you're reading through.]
 CTRL_TEAM: [abbreviation]
 
@@ -681,7 +681,7 @@ ${monitorData.games.length >= 2 ? 'SLATE: [1-2 sentences on which game has the m
 RULES:
 - You are an observer, not a judge. No SEND, SUPPRESS, BUY, SELL language.
 - ALWAYS use team abbreviations. Never say "the opponent", "the trailing team", or "the other team."
-- If a PRIOR OBSERVATION is provided, your new observation MUST build on it. What changed? What held? Don't repeat what you already said.
+- If a PRIOR OBSERVATION is provided, your OBSERVATION must open with what changed. Never restate the game situation from scratch — the prior observation already did that.
 - The pre-computed trend labels (MOMENTUM, SUST ARC, FLOOR-MARGIN) are mechanically computed and accurate. Reference them as ground truth.
 - Read the raw sub-indicator inputs to assess what's underneath the indicator scores. Connect them to the indicators: "MIA's paint edge (58-50) is driving I2=1.0" not just "paint 58-50."
 - AT_RISK must describe a specific scenario that flips the read, not list stats. What would have to happen in the next few minutes?
