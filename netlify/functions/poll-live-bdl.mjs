@@ -1512,17 +1512,17 @@ const _thesisAttempted = new Set();  // game IDs already attempted for fallback 
 // ── FALLBACK THESIS — generate when pregame cron missed the window ──
 async function generateFallbackThesis(sql, game, league, ind, conviction, summary, matchup, hA, aA) {
   if (_thesisAttempted.has(game.id)) return;
-  _thesisAttempted.add(game.id);
+  _thesisAttempted.add(game.id);  // prevent concurrent calls in warm container
 
-  // Only generate in Q1 — after that it's not useful
+  // Generate in Q1 or Q2 — after Q2 the thesis adds minimal value
   const period = summary.quarter || summary.half || (summary.home?.periods || []).length || 0;
-  if (period > 1) { log(`${matchup}: fallback thesis skipped — already Q${period}`); return; }
+  if (period > 2) { log(`${matchup}: fallback thesis skipped — already Q${period}`); _thesisAttempted.delete(game.id); return; }
 
   // Check if thesis already exists
   try {
     const existing = await sql`SELECT game_id FROM theses WHERE game_id = ${game.id}`;
-    if (existing.length > 0) return;
-  } catch (e) { return; }
+    if (existing.length > 0) return;  // thesis exists — keep in Set (permanent skip)
+  } catch (e) { _thesisAttempted.delete(game.id); return; }
 
   log(`${matchup}: No pregame thesis found — generating fallback...`);
 
@@ -1597,11 +1597,11 @@ Keep it under 300 words. Use team aliases (${hA}, ${aA}).`;
       }),
     });
 
-    if (!resp.ok) { log(`${matchup}: fallback thesis Anthropic ${resp.status}`); return; }
+    if (!resp.ok) { log(`${matchup}: fallback thesis Anthropic ${resp.status}`); _thesisAttempted.delete(game.id); return; }
 
     const data = await resp.json();
     const thesisText = data.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
-    if (!thesisText || thesisText.length < 50) { log(`${matchup}: fallback thesis too short`); return; }
+    if (!thesisText || thesisText.length < 50) { log(`${matchup}: fallback thesis too short`); _thesisAttempted.delete(game.id); return; }
 
     await sql`
       INSERT INTO theses (game_id, league, text, created_at)
@@ -1615,7 +1615,9 @@ Keep it under 300 words. Use team aliases (${hA}, ${aA}).`;
     );
 
     log(`${matchup}: ★ FALLBACK THESIS generated (${thesisText.length} chars)`);
+    // SUCCESS — _thesisAttempted keeps game.id (permanent skip in warm container)
   } catch (e) {
+    _thesisAttempted.delete(game.id);  // allow retry on next invocation
     log(`${matchup}: fallback thesis failed: ${e.message}`);
   }
 }
@@ -5214,6 +5216,19 @@ export default async function(req) {
                 log(`${matchup}: ${alertType} deduped — ${minsSinceLast.toFixed(1)}min since last, floor delta ${floorDelta >= 0 ? '+' : ''}${floorDelta.toFixed(2)}, edge delta ${edgeDelta >= 0 ? '+' : ''}${edgeDelta.toFixed(1)}pp`);
                 alertType = null;
               }
+            }
+
+            // DB-level dedup — catch race condition from overlapping */1 cron invocations
+            // In-memory dedup resets if schedule_json cache wasn't written yet by prior invocation
+            // 2-min window covers max overlap; only checks ntfy_sent=true so SUPPRESS doesn't block
+            if (alertType) {
+              try {
+                const dbDedup = await sql`SELECT 1 FROM alerts WHERE game_id = ${game.id} AND alert_type = ${alertType} AND ntfy_sent = true AND ts > NOW() - INTERVAL '2 minutes' LIMIT 1`;
+                if (dbDedup.length > 0) {
+                  log(`${matchup}: ${alertType} DB-deduped — concurrent invocation already sent`);
+                  alertType = null;
+                }
+              } catch(e) { /* non-fatal — fail-open, proceed without DB dedup */ }
             }
 
             if (alertType) {
