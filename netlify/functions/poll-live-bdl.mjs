@@ -373,7 +373,7 @@ async function getMonitorData(sql, league, cachedGames) {
       FROM (
         SELECT *, ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY ts DESC) as rn
         FROM snapshots WHERE game_id = ANY(${liveGameIds})
-      ) sub WHERE rn <= 20
+      ) sub WHERE rn <= 40
       ORDER BY game_id, rn DESC`;
     // Extract ctrl_sust/opp_sust from sust_json for each snapshot
     // (needs game aliases to determine home/away → deferred to per-game loop below)
@@ -420,6 +420,8 @@ async function getMonitorData(sql, league, cachedGames) {
           liveSnaps.push(snaps[si]);
         }
       }
+      // Cap to last 20 live snapshots for consistent trend window
+      if (liveSnaps.length > 20) liveSnaps = liveSnaps.slice(-20);
       if (liveSnaps.length < 5) {
         log(`Monitor: ${aA}@${hA} skipped — ${liveSnaps.length} live / ${snaps.length} total snapshots (need 5 live)`);
         return;
