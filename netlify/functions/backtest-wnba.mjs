@@ -41,7 +41,7 @@ const SR_TO_BDL = {
   NYL: 'NY', WAS: 'WSH', LVA: 'LV', CON: 'CT',
   ATL: 'ATL', IND: 'IND', CHI: 'CHI', MIN: 'MIN',
   PHX: 'PHX', SEA: 'SEA', DAL: 'DAL', LAS: 'LA',
-  PDX: 'POR', TOY: 'TOR', GSV: 'GSV',
+  PDX: 'POR', TOY: 'TOR', GSV: 'GS',
 };
 function bdlAlias(srAlias) { return SR_TO_BDL[srAlias] || srAlias; }
 
@@ -311,115 +311,100 @@ async function phaseSample(sql, url) {
     return { status: 'ok', message: 'No more games to sample — all have SR data', totalWithSR: Number(total[0].count) };
   }
 
-  // Group by date for efficient SR schedule fetching
-  const dateGames = {};
-  for (const g of sampleGames) {
-    const d = g.date;
-    if (!dateGames[d]) dateGames[d] = [];
-    dateGames[d].push(g);
-  }
-
   let fetched = 0, errors = 0, skippedTimeout = 0;
   const errorDetails = [];
+  const schedCache = {}; // date string → SR games array
 
-  for (const [dateStr, games] of Object.entries(dateGames)) {
-    // Time budget check
+  // Helper: fetch SR schedule with caching
+  async function getSchedule(dateStr) {
+    if (schedCache[dateStr] !== undefined) return schedCache[dateStr];
+    const [y, m, d] = dateStr.split('-');
+    const resp = await srFetch(`games/${y}/${m}/${d}/schedule.json`);
+    await delay(1200);
+    schedCache[dateStr] = resp?.games || [];
+    return schedCache[dateStr];
+  }
+
+  // Helper: get date ± offset as YYYY-MM-DD
+  function offsetDate(dateStr, offset) {
+    const d = new Date(`${dateStr}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + offset);
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
+  }
+
+  // Helper: try to find an SR game matching BDL aliases
+  function findSRMatch(srGames, bdlHome, bdlAway) {
+    return srGames.find(sg => {
+      const srHome = sg.home?.alias;
+      const srAway = sg.away?.alias;
+      if (bdlAlias(srHome) === bdlHome && bdlAlias(srAway) === bdlAway) return true;
+      if (srHome === bdlHome && srAway === bdlAway) return true;
+      return false;
+    });
+  }
+
+  // Process each game individually with date±1 fallback
+  for (const g of sampleGames) {
     if (Date.now() - startTime > TIME_BUDGET_MS) {
-      skippedTimeout += games.length;
-      console.log(`Time budget exceeded — skipping ${dateStr}`);
+      skippedTimeout++;
       continue;
     }
 
-    const [year, month, day] = dateStr.split('-');
-    
-    // Try the exact date first, then ±1 day for UTC offset issues
-    let schedGames = null;
-    let matchedDate = dateStr;
+    const bdlDate = g.date;
+    let srGame = null;
+    let matchedDate = null;
+
+    // Try date, date+1, date-1
     for (const offset of [0, 1, -1]) {
-      const d = new Date(`${dateStr}T12:00:00Z`);
-      d.setUTCDate(d.getUTCDate() + offset);
-      const y = d.getUTCFullYear(), m = String(d.getUTCMonth()+1).padStart(2,'0'), dd = String(d.getUTCDate()).padStart(2,'0');
-      const tryDate = `${y}/${m}/${dd}`;
-      const resp = await srFetch(`games/${tryDate}/schedule.json`);
-      await delay(1200);
-      if (resp?.games?.length > 0) {
-        schedGames = resp.games;
-        matchedDate = `${y}-${m}-${dd}`;
+      const tryDate = offsetDate(bdlDate, offset);
+      const srGames = await getSchedule(tryDate);
+      const match = findSRMatch(srGames, g.home_alias, g.away_alias);
+      if (match) {
+        srGame = match;
+        matchedDate = tryDate;
         break;
       }
-      if (offset === 0 && !resp?.games) {
-        // No games on exact date — try next offset
-        continue;
-      }
     }
 
-    if (!schedGames) {
-      const detail = games.map(g => `${g.away_alias}@${g.home_alias}`).join(', ');
-      errorDetails.push({ date: dateStr, reason: 'no_sr_schedule', games: detail });
-      errors += games.length;
+    if (!srGame) {
+      // Show what we found across all 3 dates for debugging
+      const dates = [0, 1, -1].map(o => offsetDate(bdlDate, o));
+      const allAvailable = dates.flatMap(d => (schedCache[d] || []).map(sg => `${sg.away?.alias}@${sg.home?.alias} (${d})`));
+      errorDetails.push({
+        bdlDate,
+        reason: 'no_match_across_3_dates',
+        bdlGame: `${g.away_alias}@${g.home_alias}`,
+        searchedDates: dates,
+        srAvailable: allAvailable.slice(0, 15),
+      });
+      errors++;
       continue;
     }
 
-    // Match each BDL game to an SR game
-    for (const g of games) {
-      if (Date.now() - startTime > TIME_BUDGET_MS) {
-        skippedTimeout++;
-        continue;
-      }
-
-      // Find SR game by matching team aliases — try both directions of mapping
-      const srGame = schedGames.find(sg => {
-        const srHome = sg.home?.alias;
-        const srAway = sg.away?.alias;
-        const bdlHome = g.home_alias;
-        const bdlAway = g.away_alias;
-        // SR→BDL mapping
-        if (bdlAlias(srHome) === bdlHome && bdlAlias(srAway) === bdlAway) return true;
-        // Direct match
-        if (srHome === bdlHome && srAway === bdlAway) return true;
-        return false;
-      });
-
-      if (!srGame) {
-        // Log available SR games for debugging
-        const srAvailable = schedGames.map(sg => `${sg.away?.alias}@${sg.home?.alias}`).join(', ');
-        errorDetails.push({
-          date: dateStr, matchedDate,
-          reason: 'alias_mismatch',
-          bdlGame: `${g.away_alias}@${g.home_alias}`,
-          srAvailable,
-          bdlHome: g.home_alias, bdlAway: g.away_alias,
-        });
-        errors++;
-        continue;
-      }
-
-      if (srGame.status !== 'closed') {
-        console.log(`SR game ${srGame.id} not closed (${srGame.status})`);
-        errors++;
-        continue;
-      }
-
-      // Fetch game summary
-      const summaryResp = await srFetch(`games/${srGame.id}/summary.json`);
-      await delay(1200);
-
-      if (!summaryResp) {
-        console.log(`SR summary failed for ${srGame.id}`);
-        errors++;
-        continue;
-      }
-
-      // Save SR summary + game ID
-      await sql`
-        UPDATE wnba_backtest
-        SET sr_summary = ${JSON.stringify(summaryResp)},
-            sr_game_id = ${srGame.id}
-        WHERE game_id = ${g.game_id}
-      `;
-      fetched++;
-      console.log(`✓ ${g.away_alias}@${g.home_alias} (${dateStr}) — SR ${srGame.id}`);
+    if (srGame.status !== 'closed') {
+      errors++;
+      continue;
     }
+
+    // Fetch game summary
+    const summaryResp = await srFetch(`games/${srGame.id}/summary.json`);
+    await delay(1200);
+
+    if (!summaryResp) {
+      console.log(`SR summary failed for ${srGame.id}`);
+      errors++;
+      continue;
+    }
+
+    // Save SR summary + game ID
+    await sql`
+      UPDATE wnba_backtest
+      SET sr_summary = ${JSON.stringify(summaryResp)},
+          sr_game_id = ${srGame.id}
+      WHERE game_id = ${g.game_id}
+    `;
+    fetched++;
+    console.log(`✓ ${g.away_alias}@${g.home_alias} (${bdlDate}→${matchedDate}) — SR ${srGame.id}`);
   }
 
   const ready = await sql`SELECT COUNT(*) as count FROM wnba_backtest WHERE sr_summary IS NOT NULL`;
@@ -431,8 +416,8 @@ async function phaseSample(sql, url) {
     errors,
     skippedTimeout,
     totalWithSR: Number(ready[0].count),
-    uniqueDates: Object.keys(dateGames).length,
-    srCallsMade: fetched + Object.keys(dateGames).length,
+    uniqueDates: Object.keys(schedCache).length,
+    srCallsMade: fetched + Object.keys(schedCache).length,
     elapsed: `${Math.round((Date.now() - startTime) / 1000)}s`,
     errorDetails: errorDetails.slice(0, 20),
     note: skippedTimeout > 0 ? 'Re-run ?phase=sample to continue fetching (idempotent — only fetches games missing SR data)' : 'All selected games fetched',
