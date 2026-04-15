@@ -217,6 +217,90 @@ export default async (req) => {
     }
   }
 
+  // ============ ESPN ENDPOINTS ============
+  results.espn = [];
+  const ESPN_BASE = 'https://site.api.espn.com/apis/site/v2/sports/basketball/wnba';
+  
+  // 1. Scoreboard (current/recent)
+  try {
+    const sbR = await fetch(`${ESPN_BASE}/scoreboard`);
+    const sbJson = sbR.ok ? await sbR.json() : null;
+    const espnResult = {
+      endpoint: 'Scoreboard (today)',
+      status: sbR.status,
+      error: sbR.ok ? null : await sbR.text(),
+    };
+    if (sbJson) {
+      espnResult.eventCount = sbJson.events?.length || 0;
+      espnResult.topKeys = Object.keys(sbJson);
+      if (sbJson.events?.[0]) {
+        const evt = sbJson.events[0];
+        espnResult.eventKeys = Object.keys(evt);
+        // Check for odds
+        const comp = evt.competitions?.[0];
+        espnResult.hasOdds = !!comp?.odds;
+        espnResult.oddsData = comp?.odds || null;
+        espnResult.hasSituation = !!comp?.situation;
+        espnResult.hasWinProbability = !!(comp?.situation?.lastPlay?.probability);
+        espnResult.competitionKeys = comp ? Object.keys(comp) : [];
+        espnResult.sampleCompetitors = comp?.competitors?.map(c => ({
+          team: c.team?.abbreviation,
+          homeAway: c.homeAway,
+          score: c.score,
+          winner: c.winner
+        }));
+      }
+    }
+    results.espn.push(espnResult);
+  } catch(e) { results.espn.push({ endpoint: 'Scoreboard', error: e.message }); }
+
+  // 2. Scoreboard with a specific date (2025 season game)
+  try {
+    const sbR2 = await fetch(`${ESPN_BASE}/scoreboard?dates=20250517`);
+    const sbJson2 = sbR2.ok ? await sbR2.json() : null;
+    const espnResult2 = {
+      endpoint: 'Scoreboard (2025-05-17)',
+      status: sbR2.status,
+      error: sbR2.ok ? null : await sbR2.text(),
+    };
+    if (sbJson2) {
+      espnResult2.eventCount = sbJson2.events?.length || 0;
+      if (sbJson2.events?.[0]) {
+        const evt = sbJson2.events[0];
+        const comp = evt.competitions?.[0];
+        espnResult2.hasOdds = !!comp?.odds;
+        espnResult2.oddsKeys = comp?.odds?.[0] ? Object.keys(comp.odds[0]) : [];
+        espnResult2.oddsSample = comp?.odds?.[0] || null;
+        espnResult2.teams = comp?.competitors?.map(c => c.team?.abbreviation);
+        espnResult2.competitionKeys = comp ? Object.keys(comp) : [];
+      }
+    }
+    results.espn.push(espnResult2);
+  } catch(e) { results.espn.push({ endpoint: 'Scoreboard (2025-05-17)', error: e.message }); }
+
+  // 3. Win probability endpoint
+  // ESPN WP: https://sports.core.api.espn.com/v2/sports/basketball/leagues/wnba/events/{id}/competitions/{id}/probabilities
+  // We need an ESPN event ID first
+  try {
+    const sbR3 = await fetch(`${ESPN_BASE}/scoreboard?dates=20250517`);
+    const sbJson3 = sbR3.ok ? await sbR3.json() : null;
+    if (sbJson3?.events?.[0]) {
+      const espnEventId = sbJson3.events[0].id;
+      const compId = sbJson3.events[0].competitions?.[0]?.id;
+      const wpUrl = `https://sports.core.api.espn.com/v2/sports/basketball/leagues/wnba/events/${espnEventId}/competitions/${compId}/probabilities?limit=5`;
+      const wpR = await fetch(wpUrl);
+      const wpJson = wpR.ok ? await wpR.json() : null;
+      results.espn.push({
+        endpoint: `Win Probability (event ${espnEventId})`,
+        status: wpR.status,
+        error: wpR.ok ? null : (await wpR.text?.() || 'error'),
+        itemCount: wpJson?.items?.length || wpJson?.count || 0,
+        sampleItem: wpJson?.items?.[0] || null,
+        topKeys: wpJson ? Object.keys(wpJson) : []
+      });
+    }
+  } catch(e) { results.espn.push({ endpoint: 'Win Probability', error: e.message }); }
+
   // ============ SR ENDPOINTS (if key provided) ============
   if (SR_BASE) {
     console.log('Starting SR validation...');
@@ -302,6 +386,12 @@ export default async (req) => {
       total: results.sr.length,
       success: results.sr.filter(r => r.status === 200).length,
       failed: results.sr.filter(r => r.status && r.status !== 200).map(r => `${r.endpoint}: ${r.status} ${r.error?.substring(0, 100) || ''}`),
+    },
+    espn: {
+      total: results.espn.length,
+      success: results.espn.filter(r => r.status === 200).length,
+      hasOdds: results.espn.some(r => r.hasOdds),
+      hasWinProbability: results.espn.some(r => r.itemCount > 0),
     }
   };
 
