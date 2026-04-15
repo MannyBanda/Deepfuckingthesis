@@ -5169,6 +5169,13 @@ export default async function(req) {
               const marginT = Math.abs(ctrlPtsT - oppPtsT);
               const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA}`;
 
+              // Clock computation for transition alert time gates (same formula as mechanical alerts)
+              const tClockParts = clock.replace(/^[A-Za-z]+\s*/, '').split(':');
+              const tPeriodMins = league === 'ncaamb' ? 20 : 12;
+              const tClockMins = tClockParts.length === 2 ? (parseInt(tClockParts[0]) || 0) + ((parseInt(tClockParts[1]) || 0) / 60) : tPeriodMins;
+              const tTotalPeriods = league === 'ncaamb' ? 2 : 4;
+              const alertMinsLeft = tClockMins + (Math.max(0, tTotalPeriods - currentPeriod) * tPeriodMins);
+
               // ── Shared agent context for transition alerts ──
               const tCtrlSust = sust?.[ctrlIsHome ? 'home' : 'away']?.tier || null;
               const _tCtrlScore = (s) => s == null ? 0.5 : (ctrlIsHome ? s : 1 - s);
