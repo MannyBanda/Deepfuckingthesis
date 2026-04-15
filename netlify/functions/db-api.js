@@ -1234,7 +1234,7 @@ exports.handler = async (event) => {
       //                  LEAD CRUMBLING/LEAD LOST correct = control team LOST (warning validated)
       // For SUPPRESSED alerts: invert — suppressing a BUY on a losing team IS correct
       // Position gate and dedup suppresses excluded from accuracy tracking (neutral)
-      const DEDUP_PATTERNS = ['duplicate', 'already sent', 'already SENT', 'bettor already has', 'already received', 'already been alerted', 'already correctly suppressed', 'resending'];
+      const DEDUP_PATTERNS = ['duplicate', 'already sent', 'already SENT', 'bettor already has', 'already received', 'already been alerted', 'already correctly suppressed', 'resending', 'no meaningful change', 'zero meaningful change', 'below the 0.10 threshold', 'nothing new', 'no new actionable'];
       const alerts = rows.map(r => {
         if (!r.winner) return { ...r, correct: null, suppress_category: null };
         // Classify suppress category

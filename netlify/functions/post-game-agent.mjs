@@ -200,8 +200,10 @@ export default async function handler(req) {
   const agentSuppressed = suppressed.filter(a => !a.agent_reasoning || !a.agent_reasoning.includes('position gate'));
 
   // Split agent suppressions: structural calls vs dedup (agent correctly blocked noise)
-  const agentDedup = agentSuppressed.filter(a => a.agent_reasoning && (a.agent_reasoning.toLowerCase().includes('duplicate') || a.agent_reasoning.toLowerCase().includes('already') && a.agent_reasoning.toLowerCase().includes('sent')));
-  const agentStructural = agentSuppressed.filter(a => !a.agent_reasoning || !(a.agent_reasoning.toLowerCase().includes('duplicate') || a.agent_reasoning.toLowerCase().includes('already') && a.agent_reasoning.toLowerCase().includes('sent')));
+  const DEDUP_PATTERNS = ['duplicate', 'already sent', 'already SENT', 'bettor already has', 'already received', 'already been alerted', 'already correctly suppressed', 'resending', 'no meaningful change', 'zero meaningful change', 'below the 0.10 threshold', 'nothing new', 'no new actionable'];
+  const isDedup = (r) => r && DEDUP_PATTERNS.some(p => r.toLowerCase().includes(p.toLowerCase()));
+  const agentDedup = agentSuppressed.filter(a => isDedup(a.agent_reasoning));
+  const agentStructural = agentSuppressed.filter(a => !isDedup(a.agent_reasoning));
 
   // Delivered actionable — THE headline number
   const deliveredActionable = delivered.filter(a => ACTIONABLE_TYPES.includes(a.alert_type));
