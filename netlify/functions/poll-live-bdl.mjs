@@ -165,17 +165,19 @@ async function runAlertAgent(ctx) {
 
 ALERT:
 Type: ${ctx.alertType} (${ctx.alertTier})
-Control team: ${ctx.controlTeam} | Floor: ${ctx.floor} | Margin: ${ctx.margin} (${ctx.isTrailing ? 'trailing' : 'leading'})
+Control team: ${ctx.controlTeam} | Floor: ${ctx.floor} (weighted I1-I5 composite, 0-1) | Margin: ${ctx.margin} (${ctx.isTrailing ? 'trailing' : 'leading'})
 Period: Q${ctx.period} ${ctx.clock} | Minutes left: ${ctx.minsLeft}
-Mechanical Conviction: ${ctx.convictionTier || 'N/A'} (${ctx.convictionCombo || 'N/A'}) ${ctx.convictionPairs ? '| Killer pairs: ' + ctx.convictionPairs : ''}
-Edge: ${ctx.edge != null ? ctx.edge + '%' : 'N/A'} | ML: ${ctx.ml || 'N/A'} | Spread: ${ctx.spread || 'N/A'}
-TP: ${ctx.tpClass || 'N/A'} | LS: ${ctx.lsClass || 'N/A'}
+Conviction: ${ctx.convictionTier || 'N/A'} (${ctx.convictionCombo || 'N/A'}) ${ctx.convictionPairs ? '| Killer pairs: ' + ctx.convictionPairs : ''}
+  (DOMINANT=4+ ind or I4+I5/I3+I4 pair, STRONG=I3+I4/I3+I5 pair, MODEST=2+ no killer pairs, CONDITIONAL=1 ind)
+Edge: ${ctx.edge != null ? ctx.edge + '%' : 'N/A'} (floor minus market implied probability) | ML: ${ctx.ml || 'N/A'} | Spread: ${ctx.spread || 'N/A'}
+TP: ${ctx.tpClass || 'N/A'} (trailing team comeback path: STRONG>PROBABLE>CONTESTED>UNLIKELY>NO PATH)
+LS: ${ctx.lsClass || 'N/A'} (leading team margin safety: SAFE>CUSHIONED>AT RISK>CRITICAL)
 Ctrl sust: ${ctx.ctrlSust || 'N/A'} | Opp sust: ${ctx.oppSust || 'N/A'}
 Window score: ${ctx.windowScore || 'N/A'}
 
-INDICATORS (control-team-relative):
+INDICATORS (control-team-relative, scale: 1.0=ctrl dominates, 0.0=opponent dominates, 0.5=even):
 I1 Disruption: ${ctx.i1} | I2 Interior: ${ctx.i2} | I3 Shot Quality: ${ctx.i3} | I4 Game Control: ${ctx.i4} | I5 Execution: ${ctx.i5}
-Indicators won: ${ctx.indWon || 'none'} (${ctx.indicatorsWon}/5) | Lost: ${ctx.indLost || 'none'}
+Indicators won (≥0.55): ${ctx.indWon || 'none'} (${ctx.indicatorsWon}/5) | Lost (≤0.45): ${ctx.indLost || 'none'}
 I4 COMBO: ${ctx.i4Combo ? 'YES — I4 + another indicator agree (98-100% historically)' : ctx.i4Won ? 'PARTIAL — I4 won but no other decisive' : ctx.i4Decisive ? 'NO — I4 favors opponent' : 'EVEN — I4 undecided'}
 
 FLOOR TRAJECTORY (recent snapshots, newest first):
@@ -657,10 +659,10 @@ async function runMonitorAgent(sql, monitorData) {
         + `\n    3PA: ${ctrl?.fg3a || 0} / ${opp?.fg3a || 0}`
         + ` | 3PM: ${ctrl?.fg3m || 0} / ${opp?.fg3m || 0}`
         + ` (${ctrl?.fg3a > 0 ? Math.round(ctrl.fg3m / ctrl.fg3a * 100) : 0}% / ${opp?.fg3a > 0 ? Math.round(opp.fg3m / opp.fg3a * 100) : 0}%)`
-        + `\n    OREB: ${ctrl?.oreb || 0} / ${opp?.oreb || 0}`
-        + ` | POT: ${ctrl?.pot || 0} / ${opp?.pot || 0}`
-        + ` | FBP: ${ctrl?.fbp || 0} / ${opp?.fbp || 0}`
-        + ` | SCP: ${ctrl?.scp || 0} / ${opp?.scp || 0}`
+        + `\n    Off reb: ${ctrl?.oreb || 0} / ${opp?.oreb || 0}`
+        + ` | Pts off TO: ${ctrl?.pot || 0} / ${opp?.pot || 0}`
+        + ` | Fast break: ${ctrl?.fbp || 0} / ${opp?.fbp || 0}`
+        + ` | 2nd chance: ${ctrl?.scp || 0} / ${opp?.scp || 0}`
         + `\n    Biggest lead: ${ctrlAlias} ${ctrl?.bigLead || 0} / ${oppAlias} ${opp?.bigLead || 0}`
         + ` | Bench: ${ctrl?.bench || 0} / ${opp?.bench || 0}`
         + ` | Poss: ${ctrl?.poss || 0}`;
@@ -682,11 +684,11 @@ async function runMonitorAgent(sql, monitorData) {
 
     return `GAME: ${g.matchup}\n`
       + `  Score: ${g.awayAlias} ${latest.away_pts}, ${g.homeAlias} ${latest.home_pts} (Q${g.period} ${g.clock})\n`
-      + `  ${g.controlTeam} controls floor at ${g.floor.toFixed(2)}, ${g.margin >= 0 ? 'leading' : 'trailing'} by ${Math.abs(g.margin)}\n`
+      + `  ${g.controlTeam} controls floor at ${g.floor.toFixed(2)} (weighted I1-I5 composite, 0-1), ${g.margin >= 0 ? 'leading' : 'trailing'} by ${Math.abs(g.margin)}\n`
       + priorBlock
       + `  Trend: MOMENTUM ${momLabel} | OPP SUST: ${t.sustArc.direction}${t.sustArc.detail ? ' (' + t.sustArc.detail + ')' : ''} | FLOOR-MARGIN: ${t.floorMarginRel}\n`
-      + `  Indicators (${g.controlTeam}-relative): I1=${i1 != null ? i1.toFixed(2) : '?'} I2=${i2 != null ? i2.toFixed(2) : '?'} I3=${i3 != null ? i3.toFixed(2) : '?'} I4=${i4 != null ? i4.toFixed(2) : '?'} I5=${i5 != null ? i5.toFixed(2) : '?'}\n`
-      + `  TP: ${latest.tp_class || '?'} | LS: ${latest.ls_class || '?'} | Ctrl sust: ${latest.ctrl_sust || '?'} | Opp sust: ${latest.opp_sust || '?'}\n`
+      + `  Indicators (${g.controlTeam}-relative, 1.0=ctrl dominates, 0.0=opp dominates): I1=${i1 != null ? i1.toFixed(2) : '?'} I2=${i2 != null ? i2.toFixed(2) : '?'} I3=${i3 != null ? i3.toFixed(2) : '?'} I4=${i4 != null ? i4.toFixed(2) : '?'} I5=${i5 != null ? i5.toFixed(2) : '?'}\n`
+      + `  TP: ${latest.tp_class || '?'} (comeback path) | LS: ${latest.ls_class || '?'} (margin safety) | Ctrl sust: ${latest.ctrl_sust || '?'} | Opp sust: ${latest.opp_sust || '?'}\n`
       + `  Floor trajectory:\n    ${floorTraj}`
       + rawBlock
       + alertsBlock;
@@ -3297,11 +3299,12 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
     const i4ctrl = ctrlHome ? ind.I4?.score : (ind.I4?.score != null ? 1 - ind.I4.score : null);
     const i5ctrl = ctrlHome ? ind.I5?.score : (ind.I5?.score != null ? 1 - ind.I5.score : null);
     p += `GROUND TRUTH (mechanical engine — do not override):\n`;
-    p += `Control: ${ind.controlTeam} ${ind.score?.toFixed(2)} | `;
+    p += `Control: ${ind.controlTeam} ${ind.score?.toFixed(2)} (floor = weighted I1-I5 composite, 0-1) | `;
     p += `Conviction: ${conviction?.tier || 'N/A'} (${conviction?.combo || 'N/A'})`;
     if (conviction?.pairs?.length > 0) p += ` | Killer pairs: ${conviction.pairs.join(', ')}`;
     if (conviction?.isDanger) p += ` | ⚠ DANGER COMBO`;
     p += `\n`;
+    p += `(Indicator scale: 1.0=ctrl dominates, 0.0=opponent dominates, 0.5=even. Won ≥0.55, lost ≤0.45)\n`;
     p += `I1 Disruption: ${ind.I1?.leader || 'EVEN'} ${i1ctrl?.toFixed(1) || '?'} | `;
     p += `I2 Interior: ${ind.I2?.leader || 'EVEN'} ${i2ctrl?.toFixed(1) || '?'} | `;
     p += `I3 Shot Quality: ${ind.I3?.leader || 'EVEN'} ${i3ctrl?.toFixed(1) || '?'} | `;
@@ -3323,7 +3326,7 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
   // Game meta
   if (ctx?.gameMeta) {
     const m = ctx.gameMeta;
-    p += `GAME META: LC:${m.leadChanges} TT:${m.timesTied} Foulouts:${m.hFoulouts}/${m.aFoulouts}\n`;
+    p += `GAME META: Lead changes: ${m.leadChanges} | Times tied: ${m.timesTied} | Foulouts: ${m.hFoulouts}/${m.aFoulouts} (home/away)\n`;
   }
 
   // 3PT Sustainability (rich format with personnel details)
@@ -3341,9 +3344,9 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
           p += `    ${pl.name}: ${pl.live3m}/${pl.live3a} (${pl.livePct}%) vs szn ${pl.sznStr} [${pl.tierLabel}]${pl.hot ? ' HOT' : ''}\n`;
         });
       }
-      p += `  Regression: prior ${t.seasonPrior || '?'}% | posterior ${t.posteriorMean || '?'}% | pull ${t.regressionPull || '?'}% — ${t.regressionGrade || '?'} (${t.regressionProb || '?'}%)\n`;
+      p += `  Regression (Bayesian): prior ${t.seasonPrior || '?'}% (season avg) | posterior ${t.posteriorMean || '?'}% (updated estimate) | pull ${t.regressionPull || '?'}% toward mean — ${t.regressionGrade || '?'} (${t.regressionProb || '?'}% prob of regressing)\n`;
       p += `  Shot type: ${t.shotTypeNote || '?'} — ${t.shotTypeGrade || '?'}\n`;
-      p += `  -> TIER: ${t.tier} (composite ${t.composite || '?'})\n`;
+      p += `  -> TIER: ${t.tier} (composite ${t.composite || '?'} — personnel 40%, regression 35%, shot type 25%)\n`;
     });
   }
 
@@ -3475,7 +3478,7 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
     const acc = ctx.acceleration;
     if (acc.entries && acc.entries.length > 0) {
       const last = acc.entries[acc.entries.length - 1];
-      p += `\nGAP ACCELERATION:\n`;
+      p += `\nGAP ACCELERATION (gap = floor score difference between teams, positive = ctrl advantage):\n`;
       p += `Gap: ${last.gap >= 0 ? '+' : ''}${last.gap != null ? last.gap.toFixed(3) : '?'} | Acceleration: ${acc.accel} (${acc.consecutive} consecutive)\n`;
       p += `History: ${acc.entries.slice(-5).map(e => `${e.gap >= 0 ? '+' : ''}${e.gap != null ? e.gap.toFixed(2) : '?'} (${e.score})`).join(' -> ')}\n`;
     } else {
@@ -3485,12 +3488,12 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
 
   // Combined read (with supporting data)
   if (ctx?.combinedRead?.read) {
-    p += `\nCOMBINED READ: ${ctx.combinedRead.read} — ${ctx.combinedRead.note || ''}\n`;
+    p += `\nCOMBINED READ (cumulative + rolling window synthesis): ${ctx.combinedRead.read} — ${ctx.combinedRead.note || ''}\n`;
   }
 
   // Sub-metric arrows (directional trends)
   if (ctx?.subMetricArrows && (ctx.subMetricArrows.home || ctx.subMetricArrows.away)) {
-    p += `\nDIRECTIONAL ARROWS:\n`;
+    p += `\nDIRECTIONAL ARROWS (quarter-over-quarter trends, ▲=rising ▼=falling ▬=flat, values in parens are per-quarter raw stats):\n`;
     const arrowOrder = [
       { header: 'I2 INTERIOR', keys: ['paint', 'atRim', 'fta'] },
       { header: 'I1 DISRUPTION', keys: ['steals', 'tos'] },
@@ -3567,7 +3570,7 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
 
   // Edge history
   if (ctx?.edgeHistory && ctx.edgeHistory.length > 0) {
-    p += `\nEDGE HISTORY:\n${ctx.edgeHistory.map(e => `${e.time || '?'} | ${e.edge || '?'} FWP ${e.fwp || '?'} | ${e.control || '?'} ${e.score || ''}`).join('\n')}\n`;
+    p += `\nEDGE HISTORY (edge = FWP minus market implied prob, FWP = your prior Framework Win Probability):\n${ctx.edgeHistory.map(e => `${e.time || '?'} | ${e.edge || '?'} FWP ${e.fwp || '?'} | ${e.control || '?'} ${e.score || ''}`).join('\n')}\n`;
   }
 
   // Volume threat

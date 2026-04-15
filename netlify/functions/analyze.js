@@ -366,7 +366,8 @@ function formatLeadComposition(comp) {
 var SYSTEM_PROMPT = 'You are an NBA structural analyst. You receive pre-computed mechanical indicators as GROUND TRUTH — do not recompute them. Your job: synthesize a predictive read, compute FWP, identify risks, and write a plain-English narrative.\n\n'
 + 'GROUND TRUTH (provided by the mechanical engine — do NOT override):\n'
 + '  - I1-I5 indicator scores with team labels and who wins each\n'
-+ '  - Composite floor score and control team\n'
++ '    (Scale: 1.0 = control team dominates, 0.0 = opponent dominates, 0.5 = even. Won ≥0.55, lost ≤0.45)\n'
++ '  - Composite floor score (weighted I1-I5, 0-1) and control team\n'
 + '  - Mechanical conviction tier: DOMINANT / STRONG / MODEST / CONDITIONAL / NO ENTRY\n'
 + '    Based on which indicator COMBINATIONS the control team wins (171-game validated):\n'
 + '    DOMINANT = I4+I5 pair (100% win rate) OR 4+ indicators\n'
@@ -599,7 +600,7 @@ exports.handler = async function(event) {
     // ── EDGE HISTORY ──
     var edgeSection = '';
     if (edgeHistory && edgeHistory.length > 0) {
-      edgeSection = '\nEDGE HISTORY:\n' + edgeHistory.map(function(e) { return (e.time||'?') + ' | ' + (e.edge||'?') + ' FWP ' + (e.fwp||'?') + ' | ' + (e.control||'?') + ' ' + (e.score||'?'); }).join('\n') + '\n';
+      edgeSection = '\nEDGE HISTORY (edge = FWP minus market implied prob, FWP = your prior Framework Win Probability):\n' + edgeHistory.map(function(e) { return (e.time||'?') + ' | ' + (e.edge||'?') + ' FWP ' + (e.fwp||'?') + ' | ' + (e.control||'?') + ' ' + (e.score||'?'); }).join('\n') + '\n';
     }
 
     // ── ANALYSIS HISTORY (game narrative across prior calls) ──
@@ -741,7 +742,7 @@ exports.handler = async function(event) {
     var gapSection = '';
     if (acceleration && acceleration.entries && acceleration.entries.length > 0) {
       var lastEntry = acceleration.entries[acceleration.entries.length - 1];
-      gapSection = '\nGAP ACCELERATION:\n';
+      gapSection = '\nGAP ACCELERATION (gap = floor score difference between teams, positive = ctrl advantage):\n';
       gapSection += 'Gap: ' + (lastEntry.gap >= 0 ? '+' : '') + (lastEntry.gap != null ? lastEntry.gap.toFixed(3) : '?') + ' | Acceleration: ' + acceleration.accel + ' (' + acceleration.consecutive + ' consecutive)\n';
       gapSection += 'History: ' + acceleration.entries.slice(-5).map(function(e) { return (e.gap >= 0 ? '+' : '') + (e.gap != null ? e.gap.toFixed(2) : '?') + ' (' + e.score + ')'; }).join(' → ') + '\n';
     } else if (acceleration) {
@@ -750,7 +751,7 @@ exports.handler = async function(event) {
 
     var arrowSection = '';
     if (subMetricArrows && (subMetricArrows.home || subMetricArrows.away)) {
-      arrowSection = '\nDIRECTIONAL ARROWS:\n';
+      arrowSection = '\nDIRECTIONAL ARROWS (quarter-over-quarter trends, ▲=rising ▼=falling ▬=flat, values in parens are per-quarter raw stats):\n';
       var arrowOrder = [
         {header: 'I2 INTERIOR', keys: ['paint','atRim','fta']},
         {header: 'I1 DISRUPTION', keys: ['steals','tos']},
@@ -778,7 +779,7 @@ exports.handler = async function(event) {
 
     var combinedReadSection = '';
     if (combinedRead && combinedRead.read) {
-      combinedReadSection = '\nCOMBINED READ: ' + combinedRead.read + ' — ' + (combinedRead.note || '') + '\n';
+      combinedReadSection = '\nCOMBINED READ (cumulative + rolling window synthesis): ' + combinedRead.read + ' — ' + (combinedRead.note || '') + '\n';
     }
 
     // ── WP IDENTITY PROFILES (from DB — weekly batch) ──
