@@ -215,6 +215,12 @@ async function phaseInit(sql) {
   return { status: 'ok', message: 'wnba_backtest table created' };
 }
 
+async function phaseReset(sql) {
+  await sql`DROP TABLE IF EXISTS wnba_backtest`;
+  const init = await phaseInit(sql);
+  return { status: 'ok', message: 'wnba_backtest dropped and recreated. Run collect → sample → compute → explore.' };
+}
+
 async function phaseCollect(sql) {
   // Pull all 2025 WNBA games from BDL, paginate
   // This ONLY saves game metadata — no per-game stats calls (those come from SR in sample phase)
@@ -788,6 +794,7 @@ export default async (req) => {
     let result;
     switch (phase) {
       case 'init':    result = await phaseInit(sql); break;
+      case 'reset':   result = await phaseReset(sql); break;
       case 'collect': result = await phaseCollect(sql); break;
       case 'sample':  result = await phaseSample(sql, url); break;
       case 'compute': result = await phaseCompute(sql); break;
