@@ -369,12 +369,14 @@ async function getMonitorData(sql, league, cachedGames) {
     // Snapshot history — last 20 per game (wider window survives halftime stale polls)
     var snapRows = await sql`
       SELECT game_id, floor_score, floor_team, period, clock, home_pts, away_pts,
-             i1, i2, i3, i4, i5, tp_class, ls_class, ctrl_sust, opp_sust, raw_stats_json, sust_json
+             i1, i2, i3, i4, i5, tp_class, ls_class, raw_stats_json, sust_json
       FROM (
         SELECT *, ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY ts DESC) as rn
         FROM snapshots WHERE game_id = ANY(${liveGameIds})
       ) sub WHERE rn <= 20
       ORDER BY game_id, rn DESC`;
+    // Extract ctrl_sust/opp_sust from sust_json for each snapshot
+    // (needs game aliases to determine home/away → deferred to per-game loop below)
     // Group by game (oldest first within each game)
     var snapsByGame = {};
     snapRows.forEach(s => {
@@ -415,6 +417,18 @@ async function getMonitorData(sql, league, cachedGames) {
       var ctrlIsHome = latest.floor_team === g.homeAlias;
       var ctrlPts = ctrlIsHome ? Number(latest.home_pts || 0) : Number(latest.away_pts || 0);
       var oppPts = ctrlIsHome ? Number(latest.away_pts || 0) : Number(latest.home_pts || 0);
+
+      // Extract ctrl_sust/opp_sust from sust_json for each snapshot
+      snaps.forEach(function(s) {
+        try {
+          var sj = s.sust_json ? (typeof s.sust_json === 'string' ? JSON.parse(s.sust_json) : s.sust_json) : null;
+          if (sj) {
+            var sCtrlHome = s.floor_team === g.homeAlias;
+            s.ctrl_sust = sj[sCtrlHome ? 'home' : 'away']?.tier || null;
+            s.opp_sust = sj[sCtrlHome ? 'away' : 'home']?.tier || null;
+          } else { s.ctrl_sust = null; s.opp_sust = null; }
+        } catch(e) { s.ctrl_sust = null; s.opp_sust = null; }
+      });
 
       // Parse latest raw stats for sub-indicator inputs
       var rawInputs = null;
