@@ -3,14 +3,14 @@
 // Add ?sr_key=YOUR_KEY to also validate SR endpoints
 // Delete this file after validation
 
-const BDL_KEY = process.env.BDL_API_KEY;
+let BDL_KEY_ACTIVE = process.env.BDL_API_KEY;
 const BDL_BASE = 'https://api.balldontlie.io/wnba/v1';
 
 async function bdlFetch(path, label) {
   const url = `${BDL_BASE}${path}`;
   const result = { endpoint: label, url, status: null, error: null, shape: null, sample: null, count: null };
   try {
-    const r = await fetch(url, { headers: { Authorization: BDL_KEY } });
+    const r = await fetch(url, { headers: { Authorization: BDL_KEY_ACTIVE } });
     result.status = r.status;
     if (!r.ok) { result.error = await r.text(); return result; }
     const json = await r.json();
@@ -31,9 +31,10 @@ async function bdlFetch(path, label) {
   }
 }
 
-async function srFetch(baseUrl, path, label) {
-  const url = `${baseUrl}${path}`;
-  const result = { endpoint: label, url, status: null, error: null, shape: null, sample: null };
+async function srFetch(baseUrl, apiKey, path, label) {
+  const url = `${baseUrl}${path}?api_key=${apiKey}`;
+  const safeUrl = `${baseUrl}${path}?api_key=***`;
+  const result = { endpoint: label, url: safeUrl, status: null, error: null, shape: null, sample: null };
   try {
     const r = await fetch(url, { headers: { Accept: 'application/json' } });
     result.status = r.status;
@@ -114,8 +115,13 @@ async function srFetch(baseUrl, path, label) {
 export default async (req) => {
   const url = new URL(req.url);
   const srKey = url.searchParams.get('sr_key');
+  const bdlKeyOverride = url.searchParams.get('bdl_key');
   const SR_BASE = srKey ? `https://api.sportradar.com/wnba/trial/v8/en/` : null;
-  const results = { bdl: [], sr: [], timestamp: new Date().toISOString() };
+  
+  // Allow BDL key override for testing
+  if (bdlKeyOverride) BDL_KEY_ACTIVE = bdlKeyOverride;
+  
+  const results = { bdl: [], sr: [], timestamp: new Date().toISOString(), bdlKeyUsed: BDL_KEY_ACTIVE ? `${BDL_KEY_ACTIVE.substring(0,4)}...${BDL_KEY_ACTIVE.substring(BDL_KEY_ACTIVE.length-4)}` : 'MISSING' };
 
   // ============ BDL ENDPOINTS ============
   console.log('Starting BDL validation...');
@@ -195,27 +201,26 @@ export default async (req) => {
     const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
     // 1. Teams list
-    results.sr.push(await srFetch(SR_BASE, 'league/teams.json', 'Teams'));
+    results.sr.push(await srFetch(SR_BASE, srKey, 'league/teams.json', 'Teams'));
     await delay(1100);
 
     // 2. Seasons
-    results.sr.push(await srFetch(SR_BASE, 'league/seasons.json', 'Seasons'));
+    results.sr.push(await srFetch(SR_BASE, srKey, 'league/seasons.json', 'Seasons'));
     await delay(1100);
 
-    // 3. Schedule (try a known WNBA date from 2025 season - June 2025)
-    results.sr.push(await srFetch(SR_BASE, 'games/2025/06/15/schedule.json', 'Schedule (Jun 15 2025)'));
+    // 3. Schedule (WNBA 2025 season: May-Sep)
+    results.sr.push(await srFetch(SR_BASE, srKey, 'games/2025/05/17/schedule.json', 'Schedule (May 17 2025)'));
     await delay(1100);
 
-    // Try another date if empty
-    results.sr.push(await srFetch(SR_BASE, 'games/2025/07/01/schedule.json', 'Schedule (Jul 1 2025)'));
+    results.sr.push(await srFetch(SR_BASE, srKey, 'games/2025/08/01/schedule.json', 'Schedule (Aug 1 2025)'));
     await delay(1100);
 
     // 4. Standings
-    results.sr.push(await srFetch(SR_BASE, 'seasons/2025/REG/standings.json', 'Standings (2025)'));
+    results.sr.push(await srFetch(SR_BASE, srKey, 'seasons/2025/REG/standings.json', 'Standings (2025)'));
     await delay(1100);
 
     // 5. Daily Injuries
-    results.sr.push(await srFetch(SR_BASE, 'league/injuries.json', 'Daily Injuries'));
+    results.sr.push(await srFetch(SR_BASE, srKey, 'league/injuries.json', 'Daily Injuries'));
     await delay(1100);
 
     // Find a completed game ID from schedule results
@@ -232,11 +237,11 @@ export default async (req) => {
       console.log(`Found SR game: ${srGameId}`);
 
       // 6. Game Summary
-      results.sr.push(await srFetch(SR_BASE, `games/${srGameId}/summary.json`, `Game Summary (${srGameId})`));
+      results.sr.push(await srFetch(SR_BASE, srKey, `games/${srGameId}/summary.json`, `Game Summary (${srGameId})`));
       await delay(1100);
 
       // 7. PBP
-      results.sr.push(await srFetch(SR_BASE, `games/${srGameId}/pbp.json`, `PBP (${srGameId})`));
+      results.sr.push(await srFetch(SR_BASE, srKey, `games/${srGameId}/pbp.json`, `PBP (${srGameId})`));
       await delay(1100);
     } else {
       results.sr.push({ endpoint: 'Game Summary', error: 'No closed game ID found from schedule' });
@@ -247,16 +252,16 @@ export default async (req) => {
     const teamList = results.sr.find(r => r.endpoint === 'Teams');
     const srTeamId = teamList?.teams?.[0]?.id;
     if (srTeamId) {
-      results.sr.push(await srFetch(SR_BASE, `teams/${srTeamId}/profile.json`, `Team Profile (${srTeamId})`));
+      results.sr.push(await srFetch(SR_BASE, srKey, `teams/${srTeamId}/profile.json`, `Team Profile (${srTeamId})`));
       await delay(1100);
 
       // 9. Team seasonal stats
-      results.sr.push(await srFetch(SR_BASE, `seasons/2025/REG/teams/${srTeamId}/statistics.json`, `Team Stats (${srTeamId})`));
+      results.sr.push(await srFetch(SR_BASE, srKey, `seasons/2025/REG/teams/${srTeamId}/statistics.json`, `Team Stats (${srTeamId})`));
       await delay(1100);
     }
 
     // 10. Rankings
-    results.sr.push(await srFetch(SR_BASE, 'seasons/2025/REG/rankings.json', 'Rankings (2025)'));
+    results.sr.push(await srFetch(SR_BASE, srKey, 'seasons/2025/REG/rankings.json', 'Rankings (2025)'));
   } else {
     results.sr.push({ note: 'SR validation skipped — add ?sr_key=YOUR_KEY to URL' });
   }
