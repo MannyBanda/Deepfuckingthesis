@@ -216,9 +216,20 @@ async function phaseInit(sql) {
 }
 
 async function phaseReset(sql) {
-  await sql`DROP TABLE IF EXISTS wnba_backtest`;
-  const init = await phaseInit(sql);
-  return { status: 'ok', message: 'wnba_backtest dropped and recreated. Run collect → sample → compute → explore.' };
+  const before = await sql`SELECT COUNT(*) as total, COUNT(sr_summary) as with_sr FROM wnba_backtest`;
+  await sql`
+    UPDATE wnba_backtest SET
+      sr_summary = NULL, sr_game_id = NULL,
+      indicators = NULL, conviction_tier = NULL, conviction_combo = NULL,
+      conviction_detail = NULL, ctrl_team_won = NULL, computed_at = NULL
+  `;
+  return {
+    status: 'ok',
+    message: 'SR summaries + computed indicators cleared. BDL game data preserved.',
+    gamesKept: Number(before[0]?.total || 0),
+    srCleared: Number(before[0]?.with_sr || 0),
+    nextStep: 'Run ?phase=sample&n=40 to start fresh SR collection',
+  };
 }
 
 async function phaseCollect(sql) {
