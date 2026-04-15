@@ -398,6 +398,9 @@ async function getMonitorData(sql, league, cachedGames) {
 
     // Build per-game data
     liveGames.forEach(g => {
+      // Cached games use underscored field names (home_alias, away_alias)
+      var hA = g.home_alias || g.homeAlias || '';
+      var aA = g.away_alias || g.awayAlias || '';
       var snaps = snapsByGame[g.id];
       if (!snaps || snaps.length < 2) return;
       // Filter stale polls (identical period+clock from halftime/timeouts)
@@ -408,13 +411,13 @@ async function getMonitorData(sql, league, cachedGames) {
         }
       }
       if (liveSnaps.length < 5) {
-        log(`Monitor: ${g.matchup || g.id} skipped — ${liveSnaps.length} live / ${snaps.length} total snapshots (need 5 live)`);
+        log(`Monitor: ${aA}@${hA} skipped — ${liveSnaps.length} live / ${snaps.length} total snapshots (need 5 live)`);
         return;
       }
       var latest = snaps[snaps.length - 1];
       var period = Number(latest.period || 0);
 
-      var ctrlIsHome = latest.floor_team === g.homeAlias;
+      var ctrlIsHome = latest.floor_team === hA;
       var ctrlPts = ctrlIsHome ? Number(latest.home_pts || 0) : Number(latest.away_pts || 0);
       var oppPts = ctrlIsHome ? Number(latest.away_pts || 0) : Number(latest.home_pts || 0);
 
@@ -423,7 +426,7 @@ async function getMonitorData(sql, league, cachedGames) {
         try {
           var sj = s.sust_json ? (typeof s.sust_json === 'string' ? JSON.parse(s.sust_json) : s.sust_json) : null;
           if (sj) {
-            var sCtrlHome = s.floor_team === g.homeAlias;
+            var sCtrlHome = s.floor_team === hA;
             s.ctrl_sust = sj[sCtrlHome ? 'home' : 'away']?.tier || null;
             s.opp_sust = sj[sCtrlHome ? 'away' : 'home']?.tier || null;
           } else { s.ctrl_sust = null; s.opp_sust = null; }
@@ -439,9 +442,9 @@ async function getMonitorData(sql, league, cachedGames) {
 
       result.games.push({
         gameId: g.id,
-        matchup: g.matchup || `${g.awayAlias}@${g.homeAlias}`,
-        homeAlias: g.homeAlias,
-        awayAlias: g.awayAlias,
+        matchup: `${aA}@${hA}`,
+        homeAlias: hA,
+        awayAlias: aA,
         controlTeam: latest.floor_team,
         ctrlIsHome: ctrlIsHome,
         floor: Number(latest.floor_score),
