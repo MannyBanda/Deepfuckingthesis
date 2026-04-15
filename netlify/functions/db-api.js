@@ -2361,6 +2361,25 @@ exports.handler = async (event) => {
       }) };
     }
 
+    if (action === 'get_monitor_observations') {
+      const gameId = params.game_id;
+      const date = params.date;
+      const latest = params.latest_per_game;
+      const league = params.league || 'nba';
+      const limit = Math.min(parseInt(params.limit) || 50, 200);
+      let rows;
+      if (gameId) {
+        rows = await sql`SELECT * FROM monitor_observations WHERE game_id = ${gameId} ORDER BY ts DESC LIMIT ${limit}`;
+      } else if (latest) {
+        rows = await sql`SELECT DISTINCT ON (game_id) * FROM monitor_observations WHERE league = ${league} ORDER BY game_id, ts DESC`;
+      } else if (date) {
+        rows = await sql`SELECT * FROM monitor_observations WHERE ts::date = ${date}::date AND league = ${league} ORDER BY ts DESC LIMIT ${limit}`;
+      } else {
+        rows = await sql`SELECT * FROM monitor_observations WHERE league = ${league} ORDER BY ts DESC LIMIT ${limit}`;
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, count: rows.length, observations: rows }) };
+    }
+
     if (action === 'delete_learning') {
       const date = params.date;
       if (!date) return { statusCode: 400, headers, body: JSON.stringify({ error: 'date required' }) };
