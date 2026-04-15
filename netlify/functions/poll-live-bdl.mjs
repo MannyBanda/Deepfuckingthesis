@@ -750,7 +750,8 @@ async function saveMonitorObservations(sql, result, monitorData, league) {
           ${t.momentum.direction}, ${t.momentum.streak}, ${t.momentum.delta},
           ${t.sustArc.direction}, ${t.sustArc.detail}, ${t.floorMarginRel},
           ${obs.observation}, ${obs.atRisk},
-          ${gameData.rawInputs ? JSON.stringify(gameData.rawInputs) : null})`;
+          ${gameData.rawInputs ? JSON.stringify(gameData.rawInputs) : null})
+        ON CONFLICT (game_id, period, clock) DO NOTHING`;
     } catch (e) {
       log(`Monitor: save observation failed for ${obs.matchup}: ${e.message}`);
     }

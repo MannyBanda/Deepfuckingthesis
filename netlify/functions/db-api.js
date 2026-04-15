@@ -353,7 +353,8 @@ exports.handler = async (event) => {
         floor_margin_rel TEXT,
         narrative TEXT,
         risk_factors TEXT,
-        raw_inputs JSONB
+        raw_inputs JSONB,
+        UNIQUE(game_id, period, clock)
       )`;
 
       // ── LEARNINGS table (post-game agent nightly analysis) ──
@@ -371,6 +372,7 @@ exports.handler = async (event) => {
         ts TIMESTAMPTZ DEFAULT NOW()
       )`;
       try { await sql`CREATE INDEX IF NOT EXISTS idx_learnings_date ON learnings (date)`; } catch(e) {}
+      try { await sql`ALTER TABLE monitor_observations ADD CONSTRAINT monitor_obs_game_period_clock_uniq UNIQUE (game_id, period, clock)`; } catch(e) { /* already exists */ }
 
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'Schema initialized' }) };
     }
