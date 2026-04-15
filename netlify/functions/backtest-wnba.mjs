@@ -17,7 +17,9 @@ const BDL_KEY = process.env.BDL_API_KEY;
 const SR_BASE = 'https://api.sportradar.com/wnba/trial/v8/en/';
 const SR_KEY = process.env.SR_API_KEY; // same key covers NBA + WNBA
 
-const W = { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 };
+// ── WNBA INDICATOR WEIGHTS ───────────────────────────────────────────────────
+// I1 Disruption 15%, I2 Perimeter+FT 20%, I3 Shot Quality 30%, I4 Game Control 25%, I5 Momentum 10%
+const W = { I1: 0.15, I2: 0.20, I3: 0.30, I4: 0.25, I5: 0.10 };
 
 // ── BDL FETCH ────────────────────────────────────────────────────────────────
 async function bdlFetch(path) {
@@ -45,7 +47,9 @@ const SR_TO_BDL = {
 };
 function bdlAlias(srAlias) { return SR_TO_BDL[srAlias] || srAlias; }
 
-// ── computeServer (copied from poll-live-bdl.mjs — Netlify bundles separately) ──
+// ── computeServer — WNBA-specific indicators ────────────────────────────────
+// Designed from 126-game explore analysis on stratified 2025 sample.
+// Key diff from NBA: shot quality is anchor (not paint), turnovers inverse, paint is noise.
 function computeServer(summary) {
   const H = summary.home, A = summary.away;
   if (!H || !A) return null;
@@ -54,84 +58,79 @@ function computeServer(summary) {
   const hS = H.points || 0, aS = A.points || 0;
   if (hS === 0 && aS === 0) return null;
 
-  // I1 — Disruption & Conversion
+  // I1 — Disruption & Conversion (15%)
+  // Sub-A: disruption combined steals+blocks (±2)
   const hDisrupt = (hs.steals || 0) + (hs.blocks || 0);
   const aDisrupt = (as.steals || 0) + (as.blocks || 0);
   const disruptDiff = hDisrupt - aDisrupt;
-  const i1subA = disruptDiff > 1 ? 1 : disruptDiff < -1 ? -1 : 0;
+  const i1subA = disruptDiff > 2 ? 1 : disruptDiff < -2 ? -1 : 0;
+  // Sub-B: POT diff (±3)
   const hPOT = hs.points_off_turnovers || 0, aPOT = as.points_off_turnovers || 0;
   const potDiff = hPOT - aPOT;
-  const i1subB = potDiff > 4 ? 1 : potDiff < -4 ? -1 : 0;
+  const i1subB = potDiff > 3 ? 1 : potDiff < -3 ? -1 : 0;
   const i1raw = i1subA + i1subB;
-  const I1 = { score: i1raw > 0 ? 1 : i1raw === 0 ? 0.5 : 0, leader: i1raw > 0 ? hA : i1raw < 0 ? aA : 'EVEN' };
+  const I1 = { score: i1raw > 0 ? 1 : i1raw === 0 ? 0.5 : 0, leader: i1raw > 0 ? hA : i1raw < 0 ? aA : 'EVEN',
+    detail: { disruptDiff, potDiff } };
 
-  // I2 — Interior Control
-  const hPaint = hs.points_in_the_paint || hs.points_in_paint || 0;
-  const aPaint = as.points_in_the_paint || as.points_in_paint || 0;
-  const paintDiff = hPaint - aPaint;
-  let i2subA = 0;
-  if (paintDiff > 6) i2subA = 1;
-  else if (paintDiff < -6) i2subA = -1;
-  const hRimM = hs.field_goals_at_rim_made || 0, hRimA = hs.field_goals_at_rim_att || 0;
-  const aRimM = as.field_goals_at_rim_made || 0, aRimA = as.field_goals_at_rim_att || 0;
-  const hRimPct = hRimA >= 6 ? hRimM / hRimA : null;
-  const aRimPct = aRimA >= 6 ? aRimM / aRimA : null;
-  let i2subB = 0;
-  if (hRimPct != null && aRimPct != null) {
-    if (hRimPct - aRimPct > 0.10) i2subB = 1;
-    else if (aRimPct - hRimPct > 0.10) i2subB = -1;
-  }
+  // I2 — Perimeter & FT Access (20%)
+  // Sub-A: 3PT% diff (±3%)
+  const h3Pct = hs.three_points_pct || 0, a3Pct = as.three_points_pct || 0;
+  const threePctDiff = h3Pct - a3Pct;
+  const i2subA = threePctDiff > 3 ? 1 : threePctDiff < -3 ? -1 : 0;
+  // Sub-B: FTA diff (±2)
+  const hFTA = hs.free_throws_att || 0, aFTA = as.free_throws_att || 0;
+  const ftaDiff = hFTA - aFTA;
+  const i2subB = ftaDiff > 2 ? 1 : ftaDiff < -2 ? -1 : 0;
   const i2raw = i2subA + i2subB;
-  const I2 = { score: i2raw > 0 ? 1 : i2raw < 0 ? 0 : 0.5, leader: i2raw > 0 ? hA : i2raw < 0 ? aA : 'EVEN' };
+  const I2 = { score: i2raw > 0 ? 1 : i2raw === 0 ? 0.5 : 0, leader: i2raw > 0 ? hA : i2raw < 0 ? aA : 'EVEN',
+    detail: { threePctDiff: Math.round(threePctDiff * 10) / 10, ftaDiff } };
 
-  // I3 — Shot Quality & Creation
+  // I3 — Shot Quality (30% — WNBA anchor)
+  // Sub-A: eFG diff (±0.03)
   const hFGA = hs.field_goals_att || 1, aFGA = as.field_goals_att || 1;
   const hEFG = ((hs.field_goals_made || 0) + 0.5 * (hs.three_points_made || 0)) / hFGA;
   const aEFG = ((as.field_goals_made || 0) + 0.5 * (as.three_points_made || 0)) / aFGA;
+  const efgDiff = hEFG - aEFG;
+  const i3subA = efgDiff > 0.03 ? 1 : efgDiff < -0.03 ? -1 : 0;
+  // Sub-B: assists diff (±2)
   const hAst = hs.assists || 0, aAst = as.assists || 0;
-  const hFGM = hs.field_goals_made || 1, aFGM = as.field_goals_made || 1;
-  const hAR = (hAst / hFGM) * 100, aAR = (aAst / aFGM) * 100;
-  // No PBP in backtest — skip C&S 3PM component
-  const i3raw = (hEFG > aEFG + 0.02 ? 1 : hEFG < aEFG - 0.02 ? -1 : 0)
-              + (hAR > aAR + 5 ? 1 : hAR < aAR - 5 ? -1 : 0);
-  const I3 = { score: i3raw > 0 ? 1 : i3raw === 0 ? 0.5 : 0, leader: i3raw > 0 ? hA : i3raw < 0 ? aA : 'EVEN' };
+  const astDiff = hAst - aAst;
+  const i3subB = astDiff > 2 ? 1 : astDiff < -2 ? -1 : 0;
+  const i3raw = i3subA + i3subB;
+  const I3 = { score: i3raw > 0 ? 1 : i3raw === 0 ? 0.5 : 0, leader: i3raw > 0 ? hA : i3raw < 0 ? aA : 'EVEN',
+    detail: { efgDiff: Math.round(efgDiff * 1000) / 1000, astDiff } };
 
-  // I4 — Game Control
+  // I4 — Game Control (25%)
+  // Sub-A: biggest_lead diff (±4)
   const hBigLead = hs.biggest_lead || 0, aBigLead = as.biggest_lead || 0;
   const bigLeadDiff = hBigLead - aBigLead;
   const i4subA = bigLeadDiff > 4 ? 1 : bigLeadDiff < -4 ? -1 : 0;
-  // I4 subB — last quarter scoring diff (completed games always have 4+ periods)
+  // Sub-B: last Q scoring diff (±2)
   let i4subB = 0;
-  // Build periods from scoring arrays
   const hScoring = H.scoring || [];
   const aScoring = A.scoring || [];
   if (hScoring.length >= 4) {
-    const lastQ = hScoring.length; // last quarter/OT
-    const hLastPts = hScoring[lastQ - 1]?.points || 0;
-    const aLastPts = aScoring[lastQ - 1]?.points || 0;
-    const lastQDiff = hLastPts - aLastPts;
+    const lastQ = hScoring.length;
+    const lastQDiff = (hScoring[lastQ - 1]?.points || 0) - (aScoring[lastQ - 1]?.points || 0);
     i4subB = lastQDiff > 2 ? 1 : lastQDiff < -2 ? -1 : 0;
   }
   const i4raw = i4subA + i4subB;
-  const I4 = { score: i4raw > 0 ? 1 : i4raw === 0 ? 0.5 : 0, leader: i4raw > 0 ? hA : i4raw < 0 ? aA : 'EVEN' };
+  const I4 = { score: i4raw > 0 ? 1 : i4raw === 0 ? 0.5 : 0, leader: i4raw > 0 ? hA : i4raw < 0 ? aA : 'EVEN',
+    detail: { bigLeadDiff, i4subB } };
 
-  // I5 — Sustained Execution
-  // Backtest v1: use offensive/defensive rating differential as proxy (no PBP runs)
-  let I5 = { score: 0.5, leader: 'EVEN' };
-  const hOffRtg = hs.offensive_rating || hs.offensive_points_per_possession || 0;
-  const aOffRtg = as.offensive_rating || as.offensive_points_per_possession || 0;
-  const hDefRtg = hs.defensive_rating || hs.defensive_points_per_possession || 0;
-  const aDefRtg = as.defensive_rating || as.defensive_points_per_possession || 0;
-  if (hOffRtg > 0 && aOffRtg > 0) {
-    const hNetRtg = hOffRtg - hDefRtg;
-    const aNetRtg = aOffRtg - aDefRtg;
-    const netDiff = hNetRtg - aNetRtg;
-    I5 = {
-      score: netDiff > 3 ? 1 : netDiff < -3 ? 0 : 0.5,
-      leader: netDiff > 3 ? hA : netDiff < -3 ? aA : 'EVEN',
-      source: 'net_rating'
-    };
-  }
+  // I5 — Momentum (10%)
+  // Sub-A: fastbreak pts diff (±3)
+  const hFB = hs.fast_break_pts || 0, aFB = as.fast_break_pts || 0;
+  const fbDiff = hFB - aFB;
+  const i5subA = fbDiff > 3 ? 1 : fbDiff < -3 ? -1 : 0;
+  // Sub-B: total rebounds diff (±3)
+  const hReb = (hs.offensive_rebounds || 0) + (hs.defensive_rebounds || 0);
+  const aReb = (as.offensive_rebounds || 0) + (as.defensive_rebounds || 0);
+  const rebDiff = hReb - aReb;
+  const i5subB = rebDiff > 3 ? 1 : rebDiff < -3 ? -1 : 0;
+  const i5raw = i5subA + i5subB;
+  const I5 = { score: i5raw > 0 ? 1 : i5raw === 0 ? 0.5 : 0, leader: i5raw > 0 ? hA : i5raw < 0 ? aA : 'EVEN',
+    detail: { fbDiff, rebDiff } };
 
   // Composite
   const raw = I1.score * W.I1 + I2.score * W.I2 + I3.score * W.I3 + I4.score * W.I4 + I5.score * W.I5;
@@ -148,7 +147,8 @@ function computeServer(summary) {
   };
 }
 
-// ── computeConviction (copied from poll-live-bdl.mjs) ────────────────────────
+// ── computeConviction — WNBA combo patterns ────────────────────────────────
+// I3 = shot quality anchor, I4 = game control. Killer pairs: I3+I4, I3+I2, I4+I2.
 function computeConviction(ind) {
   if (!ind || ind.score == null) return { tier: 'NO ENTRY', combo: 'NONE', indicatorsWon: [], indicatorsLost: [], count: 0, pairs: [] };
   const ctrlHome = ind.controlTeam === ind.homeAlias;
@@ -163,25 +163,23 @@ function computeConviction(ind) {
   const count = wins.length;
   const has = (a, b) => wins.includes(a) && wins.includes(b);
   const combo = count > 0 ? wins.join('+') : 'NONE';
-  const hasI4I5 = has('I4', 'I5');
   const hasI3I4 = has('I3', 'I4');
-  const hasI3I5 = has('I3', 'I5');
-  const hasKillerPair = hasI4I5 || hasI3I4 || hasI3I5;
+  const hasI3I2 = has('I3', 'I2');
+  const hasI4I2 = has('I4', 'I2');
+  const hasKillerPair = hasI3I4 || hasI3I2 || hasI4I2;
   const isDanger = (
-    (count === 2 && wins.includes('I1') && wins.includes('I5') && !wins.includes('I3') && !wins.includes('I4')) ||
-    (count === 3 && wins.includes('I1') && wins.includes('I2') && wins.includes('I5') && !wins.includes('I3') && !wins.includes('I4')) ||
-    (count === 3 && wins.includes('I2') && wins.includes('I3') && wins.includes('I5') && !wins.includes('I4'))
+    (count === 2 && wins.includes('I1') && wins.includes('I5') && !wins.includes('I3') && !wins.includes('I4'))
   );
   let tier;
-  if (count >= 4 || hasI4I5) tier = 'DOMINANT';
-  else if (hasKillerPair && !isDanger) tier = 'STRONG';
+  if (count >= 4 || (hasI3I4 && count >= 3)) tier = 'DOMINANT';
+  else if (hasKillerPair) tier = 'STRONG';
   else if (count >= 2 && !isDanger) tier = 'MODEST';
   else if (count >= 1) tier = 'CONDITIONAL';
   else tier = 'NO ENTRY';
   const pairs = [];
-  if (hasI4I5) pairs.push('I4+I5');
   if (hasI3I4) pairs.push('I3+I4');
-  if (hasI3I5) pairs.push('I3+I5');
+  if (hasI3I2) pairs.push('I3+I2');
+  if (hasI4I2) pairs.push('I4+I2');
   return { tier, combo, count, indicatorsWon: wins, indicatorsLost: loses, indicatorsEven: even, pairs, isDanger };
 }
 
@@ -597,7 +595,7 @@ async function phaseCompute(sql) {
       if (!ind) { errors++; continue; }
 
       const conviction = computeConviction(ind);
-      const ctrlTeamWon = ind.controlTeam === g.winner;
+      const ctrlTeamWon = bdlAlias(ind.controlTeam) === g.winner || ind.controlTeam === g.winner;
 
       await sql`
         UPDATE wnba_backtest SET
