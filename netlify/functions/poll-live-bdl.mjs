@@ -111,7 +111,7 @@ const SONNET_SYSTEM_PROMPT = 'You are an NBA structural analyst. You receive pre
 + '  Use DEPTH AUDIT rim section or LEAD COMPOSITION structural points as the authoritative paint signal.\n\n'
 + 'SUSTAINABILITY RULES:\n'
 + '  - LOCKED IN/DURABLE = shooting is at or below baseline from players who CAN shoot. Sustainable.\n'
-+ '  - STALLED = 3PT sustainable but 2PT% below baseline — interior scoring stalled. Perimeter production is real but paint/FT engine may be compromised.\n'
++ '  - STALLED = 3PT below 95% of season baseline AND 2PT% below 85% of league baseline — genuine offensive collapse, not a cold stretch. Regression unreliable.\n'
 + '  - FRAGILE/UNSUSTAINABLE = shooting above baseline, driven by non-shooters or unsustainable volume.\n'
 + '  - When referencing sustainability in your narrative, verify which team has which tier.\n'
 + '    Do NOT attribute UNSUSTAINABLE to the wrong team.\n\n'
@@ -227,7 +227,7 @@ RULES:
 - CANDIDATE alerts failed a soft threshold but might still have value. You should SEND only if the structural case is compelling despite the threshold miss.
 - BUY/WINDOW BUY: the thesis is "structurally dominant team is trailing due to unsustainable opponent variance." Verify the control team actually dominates AND the opponent's lead is variance-driven.
 - BWC (Buy Window Closing): the thesis is "market hasn't priced in structural dominance yet." Verify edge is real and lead is secure.
-  • BWC + I4 EVEN: Unlike BUY (where the team must TAKE control back), BWC teams already HOLD the lead. I4 EVEN is NOT a suppress signal for BWC when 3+ other indicators favor the control team and sustainability is LOCKED IN, DURABLE, or STALLED. STALLED means 2PT% dipped below baseline but 3PT is sustainable — structural control is intact, a lead built on paint and transition doesn't need hot shooting to hold. Only suppress BWC on I4 EVEN if fewer than 3 indicators won OR sustainability is FRAGILE/UNSUSTAINABLE OR floor is unstable (dropped 0.15+ in recent snapshots).
+  • BWC + I4 EVEN: Unlike BUY (where the team must TAKE control back), BWC teams already HOLD the lead. I4 EVEN is NOT a suppress signal for BWC when 3+ other indicators favor the control team and sustainability is LOCKED IN, DURABLE, or STALLED. STALLED means both shooting dimensions are significantly below baseline — but a lead built on paint and transition doesn't need hot shooting to hold. Only suppress BWC on I4 EVEN if fewer than 3 indicators won OR sustainability is FRAGILE/UNSUSTAINABLE OR floor is unstable (dropped 0.15+ in recent snapshots).
 - RECOVERY PATH: math projects a comeback. SEND if structural indicators (especially I4) back the TP math — I4 COMBO YES + rising floor means the engine is real. SUPPRESS if TP is anchored from early-game cumulative stats that have since eroded — floor declining + I4 COMBO NO means the opponent actually has game control despite favorable TP math. DOWNGRADE if math works but structural case is modest (2/5 indicators, CONDITIONAL conviction).
 - LEAD CRUMBLING: WARNING alert — INVERTS normal indicator logic. For entry alerts (BUY/BWC), strong indicators = SEND. For LEAD CRUMBLING, strong indicators = lead is SAFE = SUPPRESS. The question is: "is this lead actually in danger, or is LS just reacting to a hot opponent quarter?"
   • I4 COMBO YES + 3+ indicators + LOCKED IN/DURABLE sust → SUPPRESS: structural foundation is solid, this is noise not a real crumble
@@ -2117,7 +2117,7 @@ function computeServerWindow(qd, currentPeriod, clock, summary, hA, aA, league) 
 // Ported from analyze.js. Pure function of SR summary data.
 // No tracking data server-side — degrades gracefully (uses assist ratio only).
 
-function computeSustainability(summary) {
+function computeSustainability(summary, league) {
   if (!summary) return null;
 
   function auditTeam(teamData, teamAlias) {
@@ -2271,12 +2271,14 @@ function computeSustainability(summary) {
       regressionGrade = 'MINIMAL';
       personnelGrade = 'N/A (at baseline)';
     }
-    // STALLED: 3PT at/below baseline (sustainable) but 2PT% below baseline — interior scoring stalled
+    // STALLED: 3PT below 95% of season baseline AND 2PT below 85% of league baseline — genuine offensive collapse
     if (tier === 'LOCKED IN') {
       var fg2m = (stats.field_goals_made || 0) - team3PM;
       var fg2a = teamFGA - team3PA;
-      var twoPointBase = seasonPrior3Pct < 34 ? 0.49 : 0.52;
-      if (fg2a >= 6 && fg2m / fg2a < twoPointBase) {
+      var twoPointBase = league === 'ncaamb' ? 0.49 : 0.52;
+      var threeBelow95 = live3Pct < seasonPrior3Pct * 0.95;
+      var twoBelowExtreme = fg2a >= 6 && fg2m / fg2a < twoPointBase * 0.85;
+      if (threeBelow95 && twoBelowExtreme) {
         tier = 'STALLED';
       }
     }
@@ -4123,7 +4125,7 @@ export default async function(req) {
 
       // Compute indicators + sustainability
       const ind = computeServer(summary, pbpResult, _seasonQ4Cache || {});
-      const sust = computeSustainability(summary);
+      const sust = computeSustainability(summary, league);
       const leadComp = computeLeadComposition(summary);
 
       // Compute server context
@@ -4834,7 +4836,7 @@ export default async function(req) {
           }
 
           // Compute sustainability + lead composition
-          const sust = computeSustainability(summary);
+          const sust = computeSustainability(summary, league);
           const leadComp = computeLeadComposition(summary);
 
           // Compute volume threat (needs PBP + sust + game time)

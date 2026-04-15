@@ -5227,7 +5227,7 @@ function synthesize(game){
       if(ctrlSust === 'UNSUSTAINABLE' || ctrlSust === 'FRAGILE'){
         lines.push(fTeam + ' own shooting is ' + ctrlSust + ' — comeback capacity limited.');
       } else if(ctrlSust === 'STALLED'){
-        lines.push(fTeam + ' interior STALLED — 2PT% below baseline, but 3PT is sustainable. Paint/transition engine may be weaker.');
+        lines.push(fTeam + ' STALLED — offensive collapse, both 2PT and 3PT well below baseline. Regression unreliable.');
       } else if(ctrlSust === 'LOCKED' || ctrlSust === 'DURABLE'){
         lines.push(fTeam + ' shooting ' + ctrlSust + ' — has the fuel to close gap.');
       }
@@ -5772,13 +5772,13 @@ function computeSustainabilityClient(teamData, baselines, teamAlias, side, track
   const seasonBaseline = baselines.teamSeason3Pct?.[side]||36.0;
   console.log('SUST['+teamAlias+']:', 'team3PA='+team3PA, 'team3PM='+team3PM, 'FGA='+teamFGA, 'live3Pct='+live3Pct.toFixed(1), 'baseline='+seasonBaseline.toFixed(1), 'statsKeys='+Object.keys(stats).slice(0,8).join(','));
 
-  // Auto-override: shooting at or below baseline → LOCKED (or STALLED if 2PT% also bad)
+  // Auto-override: shooting at or below baseline → LOCKED (or STALLED if extreme collapse)
   if(live3Pct <= seasonBaseline+2) {
     var fg2m = (stats.field_goals_made||0) - team3PM;
     var fg2a = teamFGA - team3PA;
-    var stalledTier = (fg2a >= 6 && fg2m / fg2a < 0.49) ? 'STALLED' : 'LOCKED';
+    var stalledTier = (live3Pct < seasonBaseline * 0.95 && fg2a >= 6 && fg2m / fg2a < 0.49 * 0.85) ? 'STALLED' : 'LOCKED';
     var stalledReason = stalledTier === 'STALLED'
-      ? 'STALLED — 3PT sustainable ('+live3Pct.toFixed(0)+'% vs '+seasonBaseline.toFixed(0)+'% szn) but 2PT% below baseline ('+(fg2m/fg2a*100).toFixed(0)+'%)'
+      ? 'STALLED — 3PT below 95% of baseline ('+live3Pct.toFixed(0)+'% vs '+seasonBaseline.toFixed(0)+'% szn) AND 2PT% collapsed ('+(fg2m/fg2a*100).toFixed(0)+'%)'
       : 'Shooting at/below baseline ('+live3Pct.toFixed(0)+'% vs '+seasonBaseline.toFixed(0)+'% szn)';
     return {tier:stalledTier, reason:stalledReason, personnel:'N/A', regression:'N/A', shotType:'N/A', autoLocked:true};
   }
@@ -5904,11 +5904,11 @@ function computeSustainabilityClient(teamData, baselines, teamAlias, side, track
   else if(composite>=2.8) tier='MIXED';
   else if(composite>=1.8) tier='FRAGILE';
   else tier='UNSUSTAINABLE';
-  // STALLED: 3PT sustainable (LOCKED) but 2PT% below baseline — interior stalled
+  // STALLED: 3PT below 95% of baseline AND 2PT% below 85% of league baseline — genuine collapse
   if(tier === 'LOCKED') {
     var fg2m = (stats.field_goals_made||0) - team3PM;
     var fg2a = teamFGA - team3PA;
-    if(fg2a >= 6 && fg2m / fg2a < 0.49) tier = 'STALLED';
+    if(live3Pct < seasonBaseline * 0.95 && fg2a >= 6 && fg2m / fg2a < 0.49 * 0.85) tier = 'STALLED';
   }
 
   // Build reason line

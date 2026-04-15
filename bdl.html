@@ -6127,7 +6127,7 @@ function synthesize(game){
       if(ctrlSust === 'UNSUSTAINABLE' || ctrlSust === 'FRAGILE'){
         lines.push(fTeam + ' own shooting is ' + ctrlSust + ' — comeback capacity limited.');
       } else if(ctrlSust === 'STALLED'){
-        lines.push(fTeam + ' interior STALLED — 2PT% below baseline, but 3PT is sustainable. Paint/transition engine may be weaker.');
+        lines.push(fTeam + ' STALLED — offensive collapse, both 2PT and 3PT well below baseline. Regression unreliable.');
       } else if(ctrlSust === 'LOCKED' || ctrlSust === 'DURABLE'){
         lines.push(fTeam + ' shooting ' + ctrlSust + ' — has the fuel to close gap.');
       }
@@ -6851,7 +6851,7 @@ function computeSustainabilityDirect(summary, homeAlias, awayAlias){
     if(tier === 'LOCKED IN'){
       var fg2m = (stats.field_goals_made || 0) - team3PM;
       var fg2a = teamFGA - team3PA;
-      if(fg2a >= 6 && fg2m / fg2a < 0.52) tier = 'STALLED';
+      if(live3Pct < seasonPrior3Pct * 0.95 && fg2a >= 6 && fg2m / fg2a < 0.52 * 0.85) tier = 'STALLED';
     }
     if(team3PA < 5) tier='TOO EARLY';
 
