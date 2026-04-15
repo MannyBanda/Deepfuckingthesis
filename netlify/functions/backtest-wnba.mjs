@@ -38,7 +38,7 @@ const delay = ms => new Promise(r => setTimeout(r, ms));
 
 // ── SR alias → BDL alias mapping ────────────────────────────────────────────
 const SR_TO_BDL = {
-  NYL: 'NY', WAS: 'WSH', LVA: 'LV', CON: 'CT',
+  NYL: 'NY', WAS: 'WSH', LVA: 'LV', CON: 'CON',
   ATL: 'ATL', IND: 'IND', CHI: 'CHI', MIN: 'MIN',
   PHX: 'PHX', SEA: 'SEA', DAL: 'DAL', LAS: 'LA',
   PDX: 'POR', TOY: 'TOR', GSV: 'GS',
