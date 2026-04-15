@@ -396,6 +396,16 @@ async function getMonitorData(sql, league, cachedGames) {
       if (alertsByGame[a.game_id].length < 3) alertsByGame[a.game_id].push(a);
     });
 
+    // Prior monitor observations — latest per game for continuity
+    var priorObsRows = await sql`
+      SELECT DISTINCT ON (game_id) game_id, narrative, risk_factors, period, clock
+      FROM monitor_observations
+      WHERE game_id = ANY(${liveGameIds})
+      ORDER BY game_id, ts DESC`;
+    var priorObsByGame = {};
+    priorObsRows.forEach(o => { priorObsByGame[o.game_id] = o; });
+
+
     // Build per-game data
     liveGames.forEach(g => {
       // Cached games use underscored field names (home_alias, away_alias)
@@ -454,6 +464,7 @@ async function getMonitorData(sql, league, cachedGames) {
         snapHistory: snaps,
         recentAlerts: alertsByGame[g.id] || [],
         rawInputs: rawInputs,
+        priorObs: priorObsByGame[g.id] || null,
       });
     });
 
@@ -633,6 +644,12 @@ async function runMonitorAgent(sql, monitorData) {
       ).join(' | ');
     }
 
+    // Prior observation for continuity
+    var priorBlock = '';
+    if (g.priorObs) {
+      priorBlock = `\n  YOUR PRIOR OBSERVATION (Q${g.priorObs.period} ${g.priorObs.clock}):\n    ${(g.priorObs.narrative || '').substring(0, 300)}`;
+    }
+
     return `GAME: ${g.matchup}\n`
       + `  Score: ${g.awayAlias} ${latest.away_pts}, ${g.homeAlias} ${latest.home_pts} (Q${g.period} ${g.clock})\n`
       + `  ${g.controlTeam} controls floor at ${g.floor.toFixed(2)}, ${g.margin >= 0 ? 'leading' : 'trailing'} by ${Math.abs(g.margin)}\n`
@@ -641,29 +658,32 @@ async function runMonitorAgent(sql, monitorData) {
       + `  TP: ${latest.tp_class || '?'} | LS: ${latest.ls_class || '?'} | Ctrl sust: ${latest.ctrl_sust || '?'} | Opp sust: ${latest.opp_sust || '?'}\n`
       + `  Floor trajectory:\n    ${floorTraj}`
       + rawBlock
-      + alertsBlock;
+      + alertsBlock
+      + priorBlock;
   }).join('\n\n');
 
   var prompt = `You are a live game observer for a sports betting intelligence system. Your job is to narrate what's happening in each game — what's stable, what's shifting, what's at risk of flipping. You are NOT making bet recommendations or saying SEND or SUPPRESS. You are providing context about the game's arc.
 
-You see both teams. The control team holds the structural floor edge, but the opponent's story is equally important — their shooting trends, their adjustments, their momentum are what determine whether the structural edge holds or erodes.
+You see both teams. Always refer to teams by their abbreviation (MIA, CHA, PHX, POR, etc). Never say "the opponent" or "the trailing team" — use the team name.
 
 ${gameBlocks}
 
 For each game, respond with:
 GAME: [matchup]
-OBSERVATION: [2-4 sentences. What's the story of this game right now? Narrate BOTH teams. What's changed since the last alert or quarter break? Focus on what's shifting, not what's static. If trend says STALE, note that data hasn't updated and your observation is based on pre-break state.]
-AT_RISK: [Which structural edges look fragile and why? Read the raw inputs underneath the indicators. A high I2 with paint 28-18 is different from I2 with paint 20-16. What would it take for the read to flip? Which edges look locked in? Speak to both teams.]
+OBSERVATION: [2-4 sentences. What has CHANGED since your prior observation? If you have a prior observation below, build on it — don't restart the narrative. Name both teams. Focus on what's shifting, not what's static. If trend says STALE, note that data hasn't updated.]
+AT_RISK: [What specific scenario flips the structural read in the next 3 minutes? Be concrete: "If CHA hits 2 more threes while MIA goes cold from the paint, I2 drops below 0.60 and the floor flips." Don't just list stats — describe what breaks and what holds. Name the indicators you're reading through.]
 CTRL_TEAM: [abbreviation]
 
 ${monitorData.games.length >= 2 ? 'SLATE: [1-2 sentences on which game has the most interesting structural story right now and why]' : ''}
 
 RULES:
 - You are an observer, not a judge. No SEND, SUPPRESS, BUY, SELL language.
-- The pre-computed trend labels (MOMENTUM, SUST ARC, FLOOR-MARGIN) are mechanically computed and accurate. Reference them as ground truth — don't recalculate them.
-- Read the raw sub-indicator inputs to assess what's underneath the indicator scores. Paint gaps, turnover differentials, 3PT volume and accuracy — these tell you whether an indicator edge is structural or fragile.
-- AT_RISK is your most important output. Be specific about which inputs you're reading and what would cause a flip.
-- Every sentence should convey information the mechanical system can't derive from a single snapshot.
+- ALWAYS use team abbreviations. Never say "the opponent", "the trailing team", or "the other team."
+- NEVER use the word "surprisingly." A high floor with a tight margin is expected in this system, not anomalous.
+- If a PRIOR OBSERVATION is provided, your new observation MUST build on it. What changed? What held? Don't repeat what you already said.
+- The pre-computed trend labels (MOMENTUM, SUST ARC, FLOOR-MARGIN) are mechanically computed and accurate. Reference them as ground truth.
+- Read the raw sub-indicator inputs to assess what's underneath the indicator scores. Connect them to the indicators: "MIA's paint edge (58-50) is driving I2=1.0" not just "paint 58-50."
+- AT_RISK must describe a specific scenario that flips the read, not list stats. What would have to happen in the next few minutes?
 - Keep it concise. 2-4 sentences per section, no more.`;
 
   try {
