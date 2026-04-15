@@ -253,6 +253,7 @@ function renderAlerts(alerts, summary, filterType, filterDate) {
   if (dedupedAlerts.length > 0) html += 'Deduped: <span style="color:#94a3b8;font-weight:600">' + dedupedAlerts.length + '</span> &nbsp;';
   html += 'Lead alerts: <span style="color:#64748b;font-weight:600">' + transHeld + '/' + transTotal + ' held</span> &nbsp;';
   html += '<br>Raw: <span style="color:#64748b">' + summary.correct + '/' + summary.resolved + ' (' + (summary.accuracy != null ? summary.accuracy + '%' : '—') + ')</span>';
+  if (summary.suppressions) html += ' &nbsp;<span style="color:#475569;font-size:9px">Dedup:' + summary.suppressions.dedup + ' PosGate:' + summary.suppressions.position_gate + ' Structural:' + summary.suppressions.structural + '</span>';
   html += '</div></div>';
 
   // Per-type breakdown
@@ -313,16 +314,22 @@ function renderAlerts(alerts, summary, filterType, filterDate) {
   html += '<th style="padding:4px">ML</th><th style="padding:4px">TP</th><th style="padding:4px">LS</th>';
   html += '<th style="padding:4px">Ctrl Sust</th><th style="padding:4px">Opp Sust</th><th style="padding:4px">Final</th>';
   html += '</tr>';
-  alerts.forEach(function(a) {
+  alerts.forEach(function(a, i) {
     var isSuppressed = a.agent_decision === 'SUPPRESS' || a.agent_decision === 'FALLBACK_DROP';
     var isDeduped = a.ntfy_sent === false && !isSuppressed;
+    var isAgentDedup = a.suppress_category === 'dedup';
+    var isPosGate = a.suppress_category === 'position_gate';
     var isTransitional = a.alert_type === 'LEAD LOST' || a.alert_type === 'LEAD CRUMBLING';
-    var resultIcon = isSuppressed
+    var resultIcon = isAgentDedup
+      ? '<span title="Agent dedup (neutral)">🔁</span>'
+      : isPosGate
+      ? '<span title="Position gate (neutral)">⏳</span>'
+      : isSuppressed
       ? (a.correct === false ? '<span title="Correctly blocked">🛡️</span>' : a.correct === true ? '<span title="Blocked a winner">⚠️</span>' : '⏳')
       : isDeduped
       ? '<span title="Agent approved but deduped (mechanical already sent)">🔁</span>'
       : a.correct === true ? '✅' : a.correct === false ? '❌' : '⏳';
-    var rowBg = isSuppressed ? 'rgba(100,116,139,.08)' : isDeduped ? 'rgba(96,165,250,.06)' : a.correct === false && !isTransitional ? 'rgba(255,82,82,.06)' : isTransitional && a.correct === false ? 'rgba(148,163,184,.04)' : '';
+    var rowBg = isAgentDedup || isPosGate ? 'rgba(100,116,139,.04)' : isSuppressed ? 'rgba(100,116,139,.08)' : isDeduped ? 'rgba(96,165,250,.06)' : a.correct === false && !isTransitional ? 'rgba(255,82,82,.06)' : isTransitional && a.correct === false ? 'rgba(148,163,184,.04)' : '';
     var matchup = (a.matchup || (a.away_alias + '@' + a.home_alias));
     var finalScore = a.home_pts != null ? a.away_alias + ' ' + a.away_pts + '-' + a.home_pts + ' ' + a.home_alias : '—';
     var typeColors = {
@@ -337,7 +344,10 @@ function renderAlerts(alerts, summary, filterType, filterDate) {
     var agentLabel = a.agent_decision || (isTransitional ? '—' : '—');
     var agentCol = agentColors[a.agent_decision] || '#64748b';
     var tierLabel = a.alert_tier === 'CANDIDATE' ? 'C' : a.alert_tier === 'FIRED' ? 'F' : '';
-    html += '<tr style="border-bottom:1px solid #1e293b11;background:' + rowBg + '">';
+    var reasonId = 'reason-' + (a.id || i);
+    var hasReason = a.agent_reasoning ? true : false;
+    var trClick = hasReason ? ' onclick="var el=document.getElementById(\'' + reasonId + '\');el.style.display=el.style.display===\'none\'?\'table-row\':\'none\'" title="Click to show agent reasoning"' : '';
+    html += '<tr style="border-bottom:1px solid #1e293b11;background:' + rowBg + (hasReason ? ';cursor:pointer' : '') + '"' + trClick + '>';
     html += '<td style="padding:4px;text-align:center">' + resultIcon + '</td>';
     html += '<td style="padding:4px;font-size:9px;white-space:nowrap"><span style="color:' + agentCol + '">' + agentLabel + '</span>' + (tierLabel ? ' <span style="color:#64748b;font-size:8px">' + tierLabel + '</span>' : '') + '</td>';
     html += '<td style="padding:4px;color:' + tc + ';font-weight:600;white-space:nowrap">' + a.alert_type + '</td>';
@@ -355,6 +365,13 @@ function renderAlerts(alerts, summary, filterType, filterDate) {
     html += '<td style="padding:4px;font-size:9px">' + (a.opp_sust || '—') + '</td>';
     html += '<td style="padding:4px;font-size:9px;white-space:nowrap">' + finalScore + '</td>';
     html += '</tr>';
+    // Expandable reasoning row (toggled by clicking the alert row above)
+    if (hasReason) {
+      html += '<tr id="' + reasonId + '" style="display:none"><td colspan="16" style="padding:6px 8px 10px 24px;font-size:10px;color:#94a3b8;line-height:1.5;border-bottom:1px solid #1e293b22;background:rgba(15,23,42,.5)">';
+      html += '<span style="color:#64748b;font-weight:600;font-size:9px;letter-spacing:.5px">AGENT REASONING:</span><br>';
+      html += a.agent_reasoning.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      html += '</td></tr>';
+    }
   });
   html += '</table></div>';
 
