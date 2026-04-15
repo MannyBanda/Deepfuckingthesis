@@ -69,7 +69,7 @@ export default async function handler(req) {
         : 0;
     }
 
-    var sustTiers = { 'LOCKED IN': 5, 'DURABLE': 4, 'MIXED': 3, 'COLD': 2, 'FRAGILE': 1, 'UNSUSTAINABLE': 0 };
+    var sustTiers = { 'LOCKED IN': 5, 'DURABLE': 4, 'MIXED': 3, 'STALLED': 2, 'FRAGILE': 1, 'UNSUSTAINABLE': 0 };
     var oppSustHistory = liveSnaps.map(s => s.opp_sust).filter(Boolean);
     var sustArcDir = 'STABLE', sustArcDetail = '';
     if (oppSustHistory.length >= 2) {

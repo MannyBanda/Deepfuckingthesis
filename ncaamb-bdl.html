@@ -2359,7 +2359,7 @@ async function triggerAnalysis(game){
       if(decision.sustainability && (!cs.clientSustainability || !cs.clientSustainability.home?.tier || !cs.clientSustainability.away?.tier)){
         var _sonnetSust = {home:{tier:null}, away:{tier:null}};
         var _sustStr = decision.sustainability;
-        var _sustTiers = ['LOCKED IN','LOCKED','COLD','DURABLE','MIXED','FRAGILE','UNSUSTAINABLE','TOO EARLY'];
+        var _sustTiers = ['LOCKED IN','LOCKED','STALLED','DURABLE','MIXED','FRAGILE','UNSUSTAINABLE','TOO EARLY'];
         _sustTiers.forEach(function(t){
           var hPat = new RegExp(hAlias+'[:\\s]+'+t,'i');
           var aPat = new RegExp(aAlias+'[:\\s]+'+t,'i');
@@ -4746,7 +4746,7 @@ function compute(game){
     if(_pred && _pred.sustainability){
       var _sustText = _pred.sustainability;
       var _parsedSust = {home:{tier:null}, away:{tier:null}};
-      var _tiers = ['LOCKED IN','LOCKED','COLD','DURABLE','MIXED','FRAGILE','UNSUSTAINABLE','TOO EARLY'];
+      var _tiers = ['LOCKED IN','LOCKED','STALLED','DURABLE','MIXED','FRAGILE','UNSUSTAINABLE','TOO EARLY'];
       _tiers.forEach(function(t){
         var hPat = new RegExp(hA+'[:\\s]+'+t,'i');
         var aPat = new RegExp(aA+'[:\\s]+'+t,'i');
@@ -5226,8 +5226,8 @@ function synthesize(game){
     if(ctrlSust){
       if(ctrlSust === 'UNSUSTAINABLE' || ctrlSust === 'FRAGILE'){
         lines.push(fTeam + ' own shooting is ' + ctrlSust + ' — comeback capacity limited.');
-      } else if(ctrlSust === 'COLD'){
-        lines.push(fTeam + ' shooting COLD — can\'t convert from 2PT or 3PT. Regression unreliable.');
+      } else if(ctrlSust === 'STALLED'){
+        lines.push(fTeam + ' interior STALLED — 2PT% below baseline, but 3PT is sustainable. Paint/transition engine may be weaker.');
       } else if(ctrlSust === 'LOCKED' || ctrlSust === 'DURABLE'){
         lines.push(fTeam + ' shooting ' + ctrlSust + ' — has the fuel to close gap.');
       }
@@ -5772,15 +5772,15 @@ function computeSustainabilityClient(teamData, baselines, teamAlias, side, track
   const seasonBaseline = baselines.teamSeason3Pct?.[side]||36.0;
   console.log('SUST['+teamAlias+']:', 'team3PA='+team3PA, 'team3PM='+team3PM, 'FGA='+teamFGA, 'live3Pct='+live3Pct.toFixed(1), 'baseline='+seasonBaseline.toFixed(1), 'statsKeys='+Object.keys(stats).slice(0,8).join(','));
 
-  // Auto-override: shooting at or below baseline → LOCKED (or COLD if 2PT% also bad)
+  // Auto-override: shooting at or below baseline → LOCKED (or STALLED if 2PT% also bad)
   if(live3Pct <= seasonBaseline+2) {
     var fg2m = (stats.field_goals_made||0) - team3PM;
     var fg2a = teamFGA - team3PA;
-    var coldTier = (fg2a >= 6 && fg2m / fg2a < 0.49) ? 'COLD' : 'LOCKED';
-    var coldReason = coldTier === 'COLD'
-      ? 'COLD — at/below 3PT baseline ('+live3Pct.toFixed(0)+'% vs '+seasonBaseline.toFixed(0)+'% szn) AND poor 2PT conversion ('+(fg2m/fg2a*100).toFixed(0)+'%)'
+    var stalledTier = (fg2a >= 6 && fg2m / fg2a < 0.49) ? 'STALLED' : 'LOCKED';
+    var stalledReason = stalledTier === 'STALLED'
+      ? 'STALLED — 3PT sustainable ('+live3Pct.toFixed(0)+'% vs '+seasonBaseline.toFixed(0)+'% szn) but 2PT% below baseline ('+(fg2m/fg2a*100).toFixed(0)+'%)'
       : 'Shooting at/below baseline ('+live3Pct.toFixed(0)+'% vs '+seasonBaseline.toFixed(0)+'% szn)';
-    return {tier:coldTier, reason:coldReason, personnel:'N/A', regression:'N/A', shotType:'N/A', autoLocked:true};
+    return {tier:stalledTier, reason:stalledReason, personnel:'N/A', regression:'N/A', shotType:'N/A', autoLocked:true};
   }
 
   // Personnel audit (40%)
@@ -5904,11 +5904,11 @@ function computeSustainabilityClient(teamData, baselines, teamAlias, side, track
   else if(composite>=2.8) tier='MIXED';
   else if(composite>=1.8) tier='FRAGILE';
   else tier='UNSUSTAINABLE';
-  // COLD: LOCKED but can't convert from 2 either
+  // STALLED: 3PT sustainable (LOCKED) but 2PT% below baseline — interior stalled
   if(tier === 'LOCKED') {
     var fg2m = (stats.field_goals_made||0) - team3PM;
     var fg2a = teamFGA - team3PA;
-    if(fg2a >= 6 && fg2m / fg2a < 0.49) tier = 'COLD';
+    if(fg2a >= 6 && fg2m / fg2a < 0.49) tier = 'STALLED';
   }
 
   // Build reason line
@@ -7856,7 +7856,7 @@ function renderConfidenceTable(){
       const sustColor = (s) => {
         if(!s) return 'var(--t3)';
         const u = s.toUpperCase();
-        if(u === 'COLD') return '#60a5fa';
+        if(u === 'STALLED') return '#60a5fa';
         if(u.includes('LOCKED')) return 'var(--green)';
         if(u.includes('DURABLE')) return 'var(--g2)';
         if(u.includes('MIXED')) return 'var(--yellow)';
@@ -8776,7 +8776,7 @@ function renderCard(game){
     // Client-side sustainability fallback
     var leadCSust = cSust ? (leadTeam===hA ? cSust.home : cSust.away) : null;
     var trailCSust = cSust ? (trailTeam===hA ? cSust.home : cSust.away) : null;
-    function sustColor(tier){ if(!tier) return 'var(--t3)'; var t=(tier||'').toUpperCase(); return t==='COLD'?'#60a5fa':t.includes('LOCKED')?'var(--green)':t.includes('DURABLE')?'var(--g2)':t.includes('MIXED')?'var(--yellow)':t.includes('FRAGILE')?'var(--amber)':t.includes('UNSUST')?'var(--red)':'var(--t3)'; }
+    function sustColor(tier){ if(!tier) return 'var(--t3)'; var t=(tier||'').toUpperCase(); return t==='STALLED'?'#60a5fa':t.includes('LOCKED')?'var(--green)':t.includes('DURABLE')?'var(--g2)':t.includes('MIXED')?'var(--yellow)':t.includes('FRAGILE')?'var(--amber)':t.includes('UNSUST')?'var(--red)':'var(--t3)'; }
     function sustDetail(t){ if(!t||!t.personnelGrade) return ''; return 'P:'+t.personnelGrade.substring(0,3)+' R:'+t.regressionGrade.substring(0,3)+' S:'+t.shotTypeGrade.substring(0,3); }
     // Use Sonnet audit when available, fall back to client audit
     var showSonnetSust = leadSA;

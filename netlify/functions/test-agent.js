@@ -60,7 +60,7 @@ RULES:
 - CANDIDATE alerts: SEND only if structural case is compelling.
 - CANDIDATE BUYs floor 0.55-0.65: only SEND if I4 COMBO YES.
 - CANDIDATE BUYs with negative ML (heavy favorite trailing): CANDIDATE tier reflects the ML gate, NOT structural weakness. Evaluate as if FIRED — I4 COMBO YES + STRONG conviction = SEND for line shopping. Note heavy ML in BODY.
-- BWC + I4 EVEN: NOT a suppress signal when 3+ indicators + LOCKED IN/DURABLE/COLD sust.
+- BWC + I4 EVEN: NOT a suppress signal when 3+ indicators + LOCKED IN/DURABLE/STALLED sust.
 - ANCHORED FLOOR CHECK: trailing 0.75+ but margin 1-3 with declining floor = verify. Does NOT apply to leading teams.
 - EARLY GAME (Q1-Q2): I4 COMBO YES = SEND. I4 COMBO NO = extra scrutiny.
 - MONITOR OVERRIDE PROTECTION: I4 COMBO YES + FIRED is ALWAYS a SEND. Monitor observations CANNOT downgrade a FIRED alert with I4 COMBO YES to SUPPRESS — this rule is absolute. However, if monitor context shows persistent divergence (floor-margin DIVERGING 5+ polls), opponent sustainability LOCKED IN with zero degradation, or prior auto-analysis flagging thesis erosion, you MUST add a CAUTION line to your BODY: "CAUTION: [specific concern from monitor]." This preserves the signal while flagging the risk for the bettor to size their position.
@@ -114,7 +114,7 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
     '3': { name: 'CANDIDATE BUY Q2 I4 COMBO NO floor 0.58', expected: 'SUPPRESS', ctx: {
       alertType:'BUY', alertTier:'CANDIDATE', controlTeam:'CLE', floor:'0.58', margin:5, isTrailing:true,
       period:2, clock:'8:30', minsLeft:'32.5', convictionTier:'CONDITIONAL', convictionCombo:'I1', convictionPairs:'',
-      edge:12, ml:'+180', spread:'+5.5', tpClass:'CONTESTED', lsClass:null, ctrlSust:'COLD', oppSust:'LOCKED IN',
+      edge:12, ml:'+180', spread:'+5.5', tpClass:'CONTESTED', lsClass:null, ctrlSust:'STALLED', oppSust:'LOCKED IN',
       i1:'0.70', i2:'0.45', i3:'0.40', i4:'0.30', i5:'0.50', indicatorsWon:1, indWon:'I1', indLost:'I2+I3+I4',
       i4Decisive:true, i4Won:false, i4Combo:false,
       floorHistory:'Q2 10:00: CLE 0.55 (22-28)',
@@ -180,18 +180,18 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       floorHistory:'Q3 6:00: LAC 0.75 (82-78) LS:CUSHIONED\nQ3 12:00: LAC 0.68 (66-64)',
       priorAlerts:'BWC[FIRED] Q2 6:00: floor 0.75, margin 4 leading -> SEND',
       quarterSummary:'Q1: 28-26\nQ2: 30-24\nQ3: 24-30',
-      priorPosition: { alertType:'BUY WINDOW CLOSING', controlTeam:'LAC', floor:'0.75', margin:4, isTrailing:false, period:2, clock:'6:00', conviction:'CONDITIONAL', combo:'I1+I2+I5', ctrlSust:'LOCKED IN', oppSust:'COLD', minutesSince:55, sameTeam:false },
+      priorPosition: { alertType:'BUY WINDOW CLOSING', controlTeam:'LAC', floor:'0.75', margin:4, isTrailing:false, period:2, clock:'6:00', conviction:'CONDITIONAL', combo:'I1+I2+I5', ctrlSust:'LOCKED IN', oppSust:'STALLED', minutesSince:55, sameTeam:false },
     }},
     '10': { name: 'AUTO_ANALYSIS — nothing changed, suppress spam', expected: 'SUPPRESS', ctx: {
       alertType:'AUTO_ANALYSIS', alertTier:'ANALYSIS', controlTeam:'MIN', floor:'0.85', margin:8, isTrailing:false,
       period:4, clock:'12:00', minsLeft:'12.0', convictionTier:'DOMINANT', convictionCombo:'I1+I2+I3+I4+I5', convictionPairs:'I4+I5,I3+I4',
-      edge:12, ml:'-500', spread:'-7.5', tpClass:null, lsClass:'SAFE', ctrlSust:'LOCKED IN', oppSust:'COLD',
+      edge:12, ml:'-500', spread:'-7.5', tpClass:null, lsClass:'SAFE', ctrlSust:'LOCKED IN', oppSust:'STALLED',
       i1:'1.00', i2:'1.00', i3:'1.00', i4:'1.00', i5:'1.00', indicatorsWon:5, indWon:'I1+I2+I3+I4+I5', indLost:'',
       i4Decisive:true, i4Won:true, i4Combo:true,
       floorHistory:'Q3 6:00: MIN 0.85 (92-84) LS:SAFE\nQ3 12:00: MIN 0.83 (68-62)',
       priorAlerts:'BWC[FIRED] Q2 6:00: floor 0.83, margin 5 -> SEND\nAUTO_ANALYSIS Q3 12:00: floor 0.85, margin 8 -> SEND',
       quarterSummary:'Q1: 30-28\nQ2: 28-24\nQ3: 34-32',
-      priorPosition: { alertType:'BUY WINDOW CLOSING', controlTeam:'MIN', floor:'0.84', margin:7, isTrailing:false, period:2, clock:'6:00', conviction:'DOMINANT', combo:'I1+I2+I3+I4+I5', ctrlSust:'LOCKED IN', oppSust:'COLD', minutesSince:70, sameTeam:true },
+      priorPosition: { alertType:'BUY WINDOW CLOSING', controlTeam:'MIN', floor:'0.84', margin:7, isTrailing:false, period:2, clock:'6:00', conviction:'DOMINANT', combo:'I1+I2+I3+I4+I5', ctrlSust:'LOCKED IN', oppSust:'STALLED', minutesSince:70, sameTeam:true },
     }},
 
     // ═══ NEW SCENARIOS (11-16) — TP gate removal, ML gates, null ML, LEAD CRUMBLING context ═══
@@ -209,7 +209,7 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
     '12': { name: 'NEW: BUY + TP NO PATH at 12pt deficit (I4 COMBO YES overrules TP)', expected: 'SEND', ctx: {
       alertType:'BUY', alertTier:'FIRED', controlTeam:'ATL', floor:'0.68', margin:12, isTrailing:true,
       period:3, clock:'4:00', minsLeft:'16.0', convictionTier:'MODEST', convictionCombo:'I1+I4', convictionPairs:'',
-      edge:18, ml:'+350', spread:'+10.5', tpClass:'NO PATH', lsClass:null, ctrlSust:'COLD', oppSust:'LOCKED IN',
+      edge:18, ml:'+350', spread:'+10.5', tpClass:'NO PATH', lsClass:null, ctrlSust:'STALLED', oppSust:'LOCKED IN',
       i1:'0.70', i2:'0.50', i3:'0.45', i4:'0.70', i5:'0.50', indicatorsWon:2, indWon:'I1+I4', indLost:'I3',
       i4Decisive:true, i4Won:true, i4Combo:true,
       floorHistory:'Q3 8:00: ATL 0.72 (52-64) TP:UNLIKELY\nQ3 12:00: ATL 0.70 (42-54) TP:NO PATH\nQ2 6:00: ATL 0.65 (28-38) TP:NO PATH',
@@ -239,7 +239,7 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
     '15': { name: 'NEW: BUY + TP UNLIKELY but I4 COMBO YES (trust indicators over TP)', expected: 'SEND', ctx: {
       alertType:'BUY', alertTier:'FIRED', controlTeam:'MIL', floor:'0.73', margin:7, isTrailing:true,
       period:3, clock:'3:00', minsLeft:'15.0', convictionTier:'STRONG', convictionCombo:'I1+I3+I4', convictionPairs:'I3+I4',
-      edge:25, ml:'+220', spread:'+6.5', tpClass:'UNLIKELY', lsClass:null, ctrlSust:'DURABLE', oppSust:'COLD',
+      edge:25, ml:'+220', spread:'+6.5', tpClass:'UNLIKELY', lsClass:null, ctrlSust:'DURABLE', oppSust:'STALLED',
       i1:'0.75', i2:'0.50', i3:'0.80', i4:'0.85', i5:'0.50', indicatorsWon:3, indWon:'I1+I3+I4', indLost:'',
       i4Decisive:true, i4Won:true, i4Combo:true,
       floorHistory:'Q3 6:00: MIL 0.70 (62-69) TP:UNLIKELY\nQ2 6:00: MIL 0.68 (40-48)',
@@ -249,7 +249,7 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
     '16': { name: 'NEW: BWC after agent-suppressed LEAD CRUMBLING (structural held)', expected: 'SEND', ctx: {
       alertType:'BUY WINDOW CLOSING', alertTier:'FIRED', controlTeam:'CLE', floor:'0.72', margin:6, isTrailing:false,
       period:4, clock:'9:00', minsLeft:'9.0', convictionTier:'STRONG', convictionCombo:'I2+I3+I4', convictionPairs:'I3+I4',
-      edge:8.2, ml:'-210', spread:'-5.5', tpClass:null, lsClass:'CUSHIONED', ctrlSust:'DURABLE', oppSust:'COLD',
+      edge:8.2, ml:'-210', spread:'-5.5', tpClass:null, lsClass:'CUSHIONED', ctrlSust:'DURABLE', oppSust:'STALLED',
       i1:'0.50', i2:'0.75', i3:'0.80', i4:'0.85', i5:'0.50', indicatorsWon:3, indWon:'I2+I3+I4', indLost:'',
       i4Decisive:true, i4Won:true, i4Combo:true,
       floorHistory:'Q4 12:00: CLE 0.70 (90-84) LS:CUSHIONED\nQ3 6:00: CLE 0.75 (76-68) LS:SAFE\nQ3 12:00: CLE 0.78 (58-48)',
@@ -272,7 +272,7 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
     '18': { name: 'RECOVERY PATH SUPPRESS — TP STRONG but I4 COMBO NO, floor declining', expected: 'SUPPRESS', ctx: {
       alertType:'RECOVERY PATH', alertTier:'FIRED', controlTeam:'WAS', floor:'0.42', margin:10, isTrailing:true,
       period:3, clock:'4:00', minsLeft:'16.0', convictionTier:'CONDITIONAL', convictionCombo:'I1', convictionPairs:'',
-      edge:15, ml:'+400', spread:'+10.5', tpClass:'STRONG RECOVERY', lsClass:null, ctrlSust:'COLD', oppSust:'LOCKED IN',
+      edge:15, ml:'+400', spread:'+10.5', tpClass:'STRONG RECOVERY', lsClass:null, ctrlSust:'STALLED', oppSust:'LOCKED IN',
       i1:'0.70', i2:'0.40', i3:'0.35', i4:'0.30', i5:'0.45', indicatorsWon:1, indWon:'I1', indLost:'I2+I3+I4',
       i4Decisive:true, i4Won:false, i4Combo:false,
       floorHistory:'Q3 8:00: WAS 0.48 (48-58) TP:PROBABLE\nQ2 6:00: WAS 0.52 (32-38) TP:STRONG RECOVERY',
@@ -292,7 +292,7 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
     '20': { name: 'LEAD CRUMBLING SUPPRESS — I4 dominant, sust holds, hot quarter noise', expected: 'SUPPRESS', ctx: {
       alertType:'LEAD CRUMBLING', alertTier:'FIRED', controlTeam:'BOS', floor:'0.78', margin:8, isTrailing:false,
       period:3, clock:'6:00', minsLeft:'18.0', convictionTier:'STRONG', convictionCombo:'I2+I3+I4', convictionPairs:'I3+I4',
-      edge:null, ml:null, spread:null, tpClass:null, lsClass:'AT RISK', ctrlSust:'LOCKED IN', oppSust:'COLD',
+      edge:null, ml:null, spread:null, tpClass:null, lsClass:'AT RISK', ctrlSust:'LOCKED IN', oppSust:'STALLED',
       i1:'0.50', i2:'0.80', i3:'0.75', i4:'0.90', i5:'0.60', indicatorsWon:4, indWon:'I2+I3+I4+I5', indLost:'',
       i4Decisive:true, i4Won:true, i4Combo:true,
       floorHistory:'Q3 9:00: BOS 0.80 (72-64) LS:CUSHIONED\nQ2 6:00: BOS 0.82 (50-40) LS:SAFE',
@@ -339,7 +339,7 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       i1:'0.65', i2:'0.60', i3:'0.45', i4:'0.50', i5:'0.45', indicatorsWon:2, indWon:'I1+I2', indLost:'I3+I5',
       i4Decisive:false, i4Won:false, i4Combo:false,
       floorHistory:'Q3 6:00: MIA 0.68 (68-62) LS:AT RISK\nQ3 12:00: MIA 0.72 (56-48) LS:CUSHIONED\nQ2 6:00: MIA 0.78 (40-32) LS:SAFE',
-      priorAlerts:'LEAD CRUMBLING[FIRED] Q3 8:00: floor 0.68, margin 8 leading, sust MIXED/DURABLE, conv MODEST(I1+I2), LS AT RISK → SEND: real structural erosion, floor declining -0.10, I4 lost, sust shifting to opponent\nBWC[FIRED] Q2 6:00: floor 0.78, margin 8 leading, sust LOCKED IN/COLD, conv STRONG(I2+I3+I4), edge +12.5% → SEND',
+      priorAlerts:'LEAD CRUMBLING[FIRED] Q3 8:00: floor 0.68, margin 8 leading, sust MIXED/DURABLE, conv MODEST(I1+I2), LS AT RISK → SEND: real structural erosion, floor declining -0.10, I4 lost, sust shifting to opponent\nBWC[FIRED] Q2 6:00: floor 0.78, margin 8 leading, sust LOCKED IN/STALLED, conv STRONG(I2+I3+I4), edge +12.5% → SEND',
       quarterSummary:'Q1: 22-16\nQ2: 18-16\nQ3: 28-30'
     }},
     '25': { name: 'BUY after VARIANCE BREAKING sent — VB confirms variance thesis', expected: 'SEND', ctx: {
@@ -359,7 +359,7 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       i1:'0.50', i2:'0.65', i3:'0.60', i4:'0.50', i5:'0.45', indicatorsWon:2, indWon:'I2+I3', indLost:'I5',
       i4Decisive:false, i4Won:false, i4Combo:false,
       floorHistory:'Q3 6:00: BOS 0.72 (70-64) LS:AT RISK\nQ2 6:00: BOS 0.80 (48-38) LS:SAFE\nQ2 12:00: BOS 0.82 (26-18) LS:SAFE',
-      priorAlerts:'BWC[FIRED] Q2 6:00: floor 0.80, margin 10 leading, sust LOCKED IN/COLD, conv STRONG(I2+I3+I4), edge +15.2% → SEND: dominant structural case\nAUTO_ANALYSIS[ANALYSIS] Q3 12:00: floor 0.72, margin 6 leading → SEND: floor dropped -0.08 from prior BWC, conviction downgraded to MODEST',
+      priorAlerts:'BWC[FIRED] Q2 6:00: floor 0.80, margin 10 leading, sust LOCKED IN/STALLED, conv STRONG(I2+I3+I4), edge +15.2% → SEND: dominant structural case\nAUTO_ANALYSIS[ANALYSIS] Q3 12:00: floor 0.72, margin 6 leading → SEND: floor dropped -0.08 from prior BWC, conviction downgraded to MODEST',
       quarterSummary:'Q1: 26-18\nQ2: 22-20\nQ3: 22-26'
     }},
     '27': { name: 'AUTO_ANALYSIS after BUY sent + LC sent — conflicting chain', expected: 'SEND', ctx: {
@@ -376,11 +376,11 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
     '28': { name: 'RECOVERY PATH after opponent BWC — different teams, dont confuse', expected: 'SUPPRESS', ctx: {
       alertType:'RECOVERY PATH', alertTier:'FIRED', controlTeam:'LAL', floor:'0.35', margin:8, isTrailing:true,
       period:3, clock:'6:00', minsLeft:'18.0', convictionTier:'CONDITIONAL', convictionCombo:'I1', convictionPairs:'',
-      edge:12, ml:'+300', spread:'+8.5', tpClass:'STRONG RECOVERY', lsClass:null, ctrlSust:'COLD', oppSust:'LOCKED IN',
+      edge:12, ml:'+300', spread:'+8.5', tpClass:'STRONG RECOVERY', lsClass:null, ctrlSust:'STALLED', oppSust:'LOCKED IN',
       i1:'0.70', i2:'0.40', i3:'0.35', i4:'0.30', i5:'0.45', indicatorsWon:1, indWon:'I1', indLost:'I2+I3+I4',
       i4Decisive:true, i4Won:false, i4Combo:false,
       floorHistory:'Q3 9:00: LAL 0.38 (52-62) TP:PROBABLE\nQ2 6:00: LAL 0.42 (34-44) TP:STRONG RECOVERY\nQ2 12:00: LAL 0.35 (18-28)',
-      priorAlerts:'BWC[FIRED] Q2 8:00: floor 0.78, margin 10 leading, sust LOCKED IN/COLD, conv STRONG(I2+I3+I4), edge +18% → SEND: MIN dominant structural case\nAUTO_ANALYSIS[ANALYSIS] Q3 12:00: floor 0.80, margin 12 leading → SEND: MIN BWC position strengthening',
+      priorAlerts:'BWC[FIRED] Q2 8:00: floor 0.78, margin 10 leading, sust LOCKED IN/STALLED, conv STRONG(I2+I3+I4), edge +18% → SEND: MIN dominant structural case\nAUTO_ANALYSIS[ANALYSIS] Q3 12:00: floor 0.80, margin 12 leading → SEND: MIN BWC position strengthening',
       quarterSummary:'Q1: 18-28\nQ2: 16-16\nQ3: 18-18'
     }},
 
@@ -389,11 +389,11 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
     '29': { name: 'CONTROL: BWC with 5 clean priors — simple escalation', expected: 'SEND', ctx: {
       alertType:'BUY WINDOW CLOSING', alertTier:'FIRED', controlTeam:'OKC', floor:'0.82', margin:10, isTrailing:false,
       period:4, clock:'8:00', minsLeft:'8.0', convictionTier:'DOMINANT', convictionCombo:'I1+I2+I3+I4', convictionPairs:'I3+I4',
-      edge:14.5, ml:'-320', spread:'-8.5', tpClass:null, lsClass:'SAFE', ctrlSust:'LOCKED IN', oppSust:'COLD',
+      edge:14.5, ml:'-320', spread:'-8.5', tpClass:null, lsClass:'SAFE', ctrlSust:'LOCKED IN', oppSust:'STALLED',
       i1:'0.85', i2:'0.90', i3:'0.80', i4:'0.95', i5:'0.70', indicatorsWon:5, indWon:'I1+I2+I3+I4+I5', indLost:'',
       i4Decisive:true, i4Won:true, i4Combo:true,
       floorHistory:'Q4 12:00: OKC 0.80 (88-78) LS:SAFE\nQ3 6:00: OKC 0.78 (72-66) LS:SAFE\nQ3 12:00: OKC 0.75 (56-52) LS:CUSHIONED',
-      priorAlerts:'AUTO_ANALYSIS[ANALYSIS] Q3 12:00: floor 0.82, margin 12 leading, sust LOCKED IN/COLD → SEND: BWC position strengthening, floor +0.07 from entry\nBWC[FIRED] Q3 12:00: floor 0.78, margin 8 leading, sust LOCKED IN/COLD, conv STRONG(I2+I3+I4), edge +12% → SEND: structural dominance confirmed\nAUTO_ANALYSIS[ANALYSIS] Q2 12:00: floor 0.72, margin 6 leading → SEND: BUY position converted, OKC took lead\nBUY[FIRED] Q2 6:00: floor 0.70, margin 4 trailing, sust DURABLE/FRAGILE, conv STRONG(I1+I3+I4), edge +22%, TP PROBABLE → SEND: I4 COMBO YES, structural case strong\nRECOVERY PATH[FIRED] Q2 10:00: floor 0.45, margin 8 trailing, sust MIXED/LOCKED IN, conv CONDITIONAL(I1), TP STRONG RECOVERY → SEND: math projects comeback',
+      priorAlerts:'AUTO_ANALYSIS[ANALYSIS] Q3 12:00: floor 0.82, margin 12 leading, sust LOCKED IN/STALLED → SEND: BWC position strengthening, floor +0.07 from entry\nBWC[FIRED] Q3 12:00: floor 0.78, margin 8 leading, sust LOCKED IN/STALLED, conv STRONG(I2+I3+I4), edge +12% → SEND: structural dominance confirmed\nAUTO_ANALYSIS[ANALYSIS] Q2 12:00: floor 0.72, margin 6 leading → SEND: BUY position converted, OKC took lead\nBUY[FIRED] Q2 6:00: floor 0.70, margin 4 trailing, sust DURABLE/FRAGILE, conv STRONG(I1+I3+I4), edge +22%, TP PROBABLE → SEND: I4 COMBO YES, structural case strong\nRECOVERY PATH[FIRED] Q2 10:00: floor 0.45, margin 8 trailing, sust MIXED/LOCKED IN, conv CONDITIONAL(I1), TP STRONG RECOVERY → SEND: math projects comeback',
       quarterSummary:'Q1: 22-30\nQ2: 26-18\nQ3: 30-30\nQ4: 10-0'
     }},
     '30': { name: 'HARD: BUY after full arc — BWC to collapse to VB recovery', expected: 'SEND', ctx: {
@@ -413,17 +413,17 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
       i1:'0.50', i2:'0.75', i3:'0.80', i4:'0.85', i5:'0.55', indicatorsWon:3, indWon:'I2+I3+I4', indLost:'',
       i4Decisive:true, i4Won:true, i4Combo:true,
       floorHistory:'Q3 6:00: ATL 0.68 (58-66) TP:PROBABLE\nQ3 12:00: ATL 0.62 (48-58) TP:CONTESTED\nQ2 6:00: ATL 0.55 (32-42)',
-      priorAlerts:'BUY[FIRED] Q3 6:00: floor 0.62, margin 8 trailing, sust MIXED/LOCKED IN, conv CONDITIONAL(I1), I4 COMBO NO → SUPPRESS: only 1/5 indicators, I4 favors opponent, structural case weak\nRECOVERY PATH[FIRED] Q2 8:00: floor 0.48, margin 10 trailing, sust COLD/LOCKED IN, conv CONDITIONAL(I1), TP STRONG RECOVERY → SEND: math projects comeback despite weak floor\nAUTO_ANALYSIS[ANALYSIS] Q2 12:00: floor 0.55, margin 10 trailing → SUPPRESS: no prior actionable position (position gate)\nWINDOW BUY[CANDIDATE] Q2 10:00: floor 0.52, margin 8 trailing, sust COLD/LOCKED IN, conv CONDITIONAL(I1) → SUPPRESS: CANDIDATE with I4 COMBO NO, only 1/5 indicators\nBUY[CANDIDATE] Q2 6:00: floor 0.50, margin 12 trailing, sust COLD/LOCKED IN, conv CONDITIONAL(I1) → SUPPRESS: floor below 0.55 with I4 COMBO NO',
+      priorAlerts:'BUY[FIRED] Q3 6:00: floor 0.62, margin 8 trailing, sust MIXED/LOCKED IN, conv CONDITIONAL(I1), I4 COMBO NO → SUPPRESS: only 1/5 indicators, I4 favors opponent, structural case weak\nRECOVERY PATH[FIRED] Q2 8:00: floor 0.48, margin 10 trailing, sust STALLED/LOCKED IN, conv CONDITIONAL(I1), TP STRONG RECOVERY → SEND: math projects comeback despite weak floor\nAUTO_ANALYSIS[ANALYSIS] Q2 12:00: floor 0.55, margin 10 trailing → SUPPRESS: no prior actionable position (position gate)\nWINDOW BUY[CANDIDATE] Q2 10:00: floor 0.52, margin 8 trailing, sust STALLED/LOCKED IN, conv CONDITIONAL(I1) → SUPPRESS: CANDIDATE with I4 COMBO NO, only 1/5 indicators\nBUY[CANDIDATE] Q2 6:00: floor 0.50, margin 12 trailing, sust STALLED/LOCKED IN, conv CONDITIONAL(I1) → SUPPRESS: floor below 0.55 with I4 COMBO NO',
       quarterSummary:'Q1: 16-24\nQ2: 16-18\nQ3: 26-24, paint 16-6'
     }},
     '32': { name: 'EXTREME: false dawn — I4 COMBO YES overrides narrative pressure', expected: 'SEND', ctx: {
       alertType:'WINDOW BUY', alertTier:'FIRED', controlTeam:'MEM', floor:'0.55', margin:2, isTrailing:false,
       period:4, clock:'8:00', minsLeft:'8.0', convictionTier:'MODEST', convictionCombo:'I1+I4', convictionPairs:'',
-      edge:1.8, ml:'-115', spread:'-1.5', tpClass:null, lsClass:'AT RISK', ctrlSust:'COLD', oppSust:'MIXED',
+      edge:1.8, ml:'-115', spread:'-1.5', tpClass:null, lsClass:'AT RISK', ctrlSust:'STALLED', oppSust:'MIXED',
       i1:'0.65', i2:'0.50', i3:'0.45', i4:'0.70', i5:'0.45', indicatorsWon:2, indWon:'I1+I4', indLost:'I3+I5',
       i4Decisive:true, i4Won:true, i4Combo:true,
       floorHistory:'Q4 12:00: MEM 0.58 (80-80) LS:AT RISK\nQ3 6:00: MEM 0.48 (66-72) TP:CONTESTED\nQ3 12:00: MEM 0.55 (54-58)',
-      priorAlerts:'VARIANCE BREAKING[FIRED] Q3 2:00: floor 0.52, margin 4 trailing, sust COLD/FRAGILE → SEND: opponent shooting regressing, was LOCKED IN now FRAGILE\nLEAD LOST Q3 6:00: floor 0.60, margin 0 → MEM lost lead, was CUSHIONED\nLEAD CRUMBLING[FIRED] Q3 10:00: floor 0.65, margin 4 leading, sust DURABLE/LOCKED IN, conv MODEST(I1+I2), LS CRITICAL → SEND: floor dropped -0.15 from BWC, I4 lost, real erosion\nAUTO_ANALYSIS[ANALYSIS] Q2 12:00: floor 0.80, margin 12 leading → SEND: BWC position dominant, floor climbing\nBWC[FIRED] Q2 6:00: floor 0.78, margin 10 leading, sust LOCKED IN/FRAGILE, conv DOMINANT(I1+I2+I3+I4), edge +22% → SEND: dominant structural case across all indicators',
+      priorAlerts:'VARIANCE BREAKING[FIRED] Q3 2:00: floor 0.52, margin 4 trailing, sust STALLED/FRAGILE → SEND: opponent shooting regressing, was LOCKED IN now FRAGILE\nLEAD LOST Q3 6:00: floor 0.60, margin 0 → MEM lost lead, was CUSHIONED\nLEAD CRUMBLING[FIRED] Q3 10:00: floor 0.65, margin 4 leading, sust DURABLE/LOCKED IN, conv MODEST(I1+I2), LS CRITICAL → SEND: floor dropped -0.15 from BWC, I4 lost, real erosion\nAUTO_ANALYSIS[ANALYSIS] Q2 12:00: floor 0.80, margin 12 leading → SEND: BWC position dominant, floor climbing\nBWC[FIRED] Q2 6:00: floor 0.78, margin 10 leading, sust LOCKED IN/FRAGILE, conv DOMINANT(I1+I2+I3+I4), edge +22% → SEND: dominant structural case across all indicators',
       quarterSummary:'Q1: 28-18\nQ2: 24-22\nQ3: 14-30\nQ4: 14-10'
     }},
 

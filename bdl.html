@@ -1209,7 +1209,7 @@ function applyAutoAnalysesToCards(){
           var _g = games.find(function(x){return x.id===gid;});
           var _hA = _g?.home?.alias||'', _aA = _g?.away?.alias||'';
           var _autoSust = {home:{tier:null}, away:{tier:null}};
-          var _validTiers = ['LOCKED IN','LOCKED','COLD','DURABLE','MIXED','FRAGILE','UNSUSTAINABLE','TOO EARLY'];
+          var _validTiers = ['LOCKED IN','LOCKED','STALLED','DURABLE','MIXED','FRAGILE','UNSUSTAINABLE','TOO EARLY'];
           _sustParts.forEach(function(part){
             var m = part.match(/^(\w+)\s*:\s*(.+)/);
             if(!m) return;
@@ -3171,7 +3171,7 @@ async function triggerAnalysis(game){
       if(decision.sustainability && (!cs.clientSustainability || !cs.clientSustainability.home?.tier || !cs.clientSustainability.away?.tier)){
         var _sonnetSust = {home:{tier:null}, away:{tier:null}};
         var _sustStr = decision.sustainability;
-        var _sustTiers = ['LOCKED IN','LOCKED','COLD','DURABLE','MIXED','FRAGILE','UNSUSTAINABLE','TOO EARLY'];
+        var _sustTiers = ['LOCKED IN','LOCKED','STALLED','DURABLE','MIXED','FRAGILE','UNSUSTAINABLE','TOO EARLY'];
         _sustTiers.forEach(function(t){
           var hPat = new RegExp(hAlias+'[:\\s]+'+t,'i');
           var aPat = new RegExp(aAlias+'[:\\s]+'+t,'i');
@@ -5685,7 +5685,7 @@ function compute(game){
     if(_pred && _pred.sustainability){
       var _sustText = _pred.sustainability;
       var _parsedSust = {home:{tier:null}, away:{tier:null}};
-      var _tiers = ['LOCKED IN','LOCKED','COLD','DURABLE','MIXED','FRAGILE','UNSUSTAINABLE','TOO EARLY'];
+      var _tiers = ['LOCKED IN','LOCKED','STALLED','DURABLE','MIXED','FRAGILE','UNSUSTAINABLE','TOO EARLY'];
       _tiers.forEach(function(t){
         var hPat = new RegExp(hA+'[:\\s]+'+t,'i');
         var aPat = new RegExp(aA+'[:\\s]+'+t,'i');
@@ -6126,8 +6126,8 @@ function synthesize(game){
     if(ctrlSust){
       if(ctrlSust === 'UNSUSTAINABLE' || ctrlSust === 'FRAGILE'){
         lines.push(fTeam + ' own shooting is ' + ctrlSust + ' — comeback capacity limited.');
-      } else if(ctrlSust === 'COLD'){
-        lines.push(fTeam + ' shooting COLD — can\'t convert from 2PT or 3PT. Regression unreliable.');
+      } else if(ctrlSust === 'STALLED'){
+        lines.push(fTeam + ' interior STALLED — 2PT% below baseline, but 3PT is sustainable. Paint/transition engine may be weaker.');
       } else if(ctrlSust === 'LOCKED' || ctrlSust === 'DURABLE'){
         lines.push(fTeam + ' shooting ' + ctrlSust + ' — has the fuel to close gap.');
       }
@@ -6851,7 +6851,7 @@ function computeSustainabilityDirect(summary, homeAlias, awayAlias){
     if(tier === 'LOCKED IN'){
       var fg2m = (stats.field_goals_made || 0) - team3PM;
       var fg2a = teamFGA - team3PA;
-      if(fg2a >= 6 && fg2m / fg2a < 0.52) tier = 'COLD';
+      if(fg2a >= 6 && fg2m / fg2a < 0.52) tier = 'STALLED';
     }
     if(team3PA < 5) tier='TOO EARLY';
 
@@ -9153,7 +9153,7 @@ function renderConfidenceTable(){
       const sustColor = (s) => {
         if(!s) return 'var(--t3)';
         const u = s.toUpperCase();
-        if(u === 'COLD') return '#60a5fa';
+        if(u === 'STALLED') return '#60a5fa';
         if(u.includes('LOCKED')) return 'var(--green)';
         if(u.includes('DURABLE')) return 'var(--g2)';
         if(u.includes('MIXED')) return 'var(--yellow)';
@@ -10182,7 +10182,7 @@ function renderCard(game){
     // Client-side sustainability fallback
     var leadCSust = cSust ? (leadTeam===hA ? cSust.home : cSust.away) : null;
     var trailCSust = cSust ? (trailTeam===hA ? cSust.home : cSust.away) : null;
-    function sustColor(tier){ if(!tier) return 'var(--t3)'; var t=(tier||'').toUpperCase(); return t==='COLD'?'#60a5fa':t.includes('LOCKED')?'var(--green)':t.includes('DURABLE')?'var(--g2)':t.includes('MIXED')?'var(--yellow)':t.includes('FRAGILE')?'var(--amber)':t.includes('UNSUST')?'var(--red)':'var(--t3)'; }
+    function sustColor(tier){ if(!tier) return 'var(--t3)'; var t=(tier||'').toUpperCase(); return t==='STALLED'?'#60a5fa':t.includes('LOCKED')?'var(--green)':t.includes('DURABLE')?'var(--g2)':t.includes('MIXED')?'var(--yellow)':t.includes('FRAGILE')?'var(--amber)':t.includes('UNSUST')?'var(--red)':'var(--t3)'; }
     function sustDetail(t){ if(!t||!t.personnelGrade) return ''; return 'P:'+t.personnelGrade.substring(0,3)+' R:'+t.regressionGrade.substring(0,3)+' S:'+t.shotTypeGrade.substring(0,3); }
     // Use Sonnet audit when available, fall back to client audit
     var showSonnetSust = leadSA;

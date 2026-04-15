@@ -422,7 +422,7 @@ var SYSTEM_PROMPT = 'You are an NBA structural analyst. You receive pre-computed
 + '  Use DEPTH AUDIT rim section or LEAD COMPOSITION structural points as the authoritative paint signal.\n\n'
 + 'SUSTAINABILITY RULES:\n'
 + '  - LOCKED IN/DURABLE = shooting is at or below baseline from players who CAN shoot. Sustainable.\n'
-+ '  - COLD = below 3PT baseline AND below 2PT baseline. Whole offense broken. Do NOT project improvement.\n'
++ '  - STALLED = 3PT sustainable but 2PT% below baseline — interior scoring stalled. Perimeter production is real but paint/FT engine may be compromised.\n'
 + '  - FRAGILE/UNSUSTAINABLE = shooting above baseline, driven by non-shooters or unsustainable volume.\n'
 + '  - When referencing sustainability in your narrative, verify which team has which tier.\n'
 + '    Do NOT attribute UNSUSTAINABLE to the wrong team.\n\n'

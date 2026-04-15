@@ -111,7 +111,7 @@ const SONNET_SYSTEM_PROMPT = 'You are an NBA structural analyst. You receive pre
 + '  Use DEPTH AUDIT rim section or LEAD COMPOSITION structural points as the authoritative paint signal.\n\n'
 + 'SUSTAINABILITY RULES:\n'
 + '  - LOCKED IN/DURABLE = shooting is at or below baseline from players who CAN shoot. Sustainable.\n'
-+ '  - COLD = below 3PT baseline AND below 2PT baseline. Whole offense broken. Do NOT project improvement.\n'
++ '  - STALLED = 3PT sustainable but 2PT% below baseline — interior scoring stalled. Perimeter production is real but paint/FT engine may be compromised.\n'
 + '  - FRAGILE/UNSUSTAINABLE = shooting above baseline, driven by non-shooters or unsustainable volume.\n'
 + '  - When referencing sustainability in your narrative, verify which team has which tier.\n'
 + '    Do NOT attribute UNSUSTAINABLE to the wrong team.\n\n'
@@ -227,7 +227,7 @@ RULES:
 - CANDIDATE alerts failed a soft threshold but might still have value. You should SEND only if the structural case is compelling despite the threshold miss.
 - BUY/WINDOW BUY: the thesis is "structurally dominant team is trailing due to unsustainable opponent variance." Verify the control team actually dominates AND the opponent's lead is variance-driven.
 - BWC (Buy Window Closing): the thesis is "market hasn't priced in structural dominance yet." Verify edge is real and lead is secure.
-  • BWC + I4 EVEN: Unlike BUY (where the team must TAKE control back), BWC teams already HOLD the lead. I4 EVEN is NOT a suppress signal for BWC when 3+ other indicators favor the control team and sustainability is LOCKED IN, DURABLE, or COLD. COLD means shooting dipped but structural control is intact — a lead built on paint and transition doesn't need hot shooting to hold. Only suppress BWC on I4 EVEN if fewer than 3 indicators won OR sustainability is FRAGILE/UNSUSTAINABLE OR floor is unstable (dropped 0.15+ in recent snapshots).
+  • BWC + I4 EVEN: Unlike BUY (where the team must TAKE control back), BWC teams already HOLD the lead. I4 EVEN is NOT a suppress signal for BWC when 3+ other indicators favor the control team and sustainability is LOCKED IN, DURABLE, or STALLED. STALLED means 2PT% dipped below baseline but 3PT is sustainable — structural control is intact, a lead built on paint and transition doesn't need hot shooting to hold. Only suppress BWC on I4 EVEN if fewer than 3 indicators won OR sustainability is FRAGILE/UNSUSTAINABLE OR floor is unstable (dropped 0.15+ in recent snapshots).
 - RECOVERY PATH: math projects a comeback. SEND if structural indicators (especially I4) back the TP math — I4 COMBO YES + rising floor means the engine is real. SUPPRESS if TP is anchored from early-game cumulative stats that have since eroded — floor declining + I4 COMBO NO means the opponent actually has game control despite favorable TP math. DOWNGRADE if math works but structural case is modest (2/5 indicators, CONDITIONAL conviction).
 - LEAD CRUMBLING: WARNING alert — INVERTS normal indicator logic. For entry alerts (BUY/BWC), strong indicators = SEND. For LEAD CRUMBLING, strong indicators = lead is SAFE = SUPPRESS. The question is: "is this lead actually in danger, or is LS just reacting to a hot opponent quarter?"
   • I4 COMBO YES + 3+ indicators + LOCKED IN/DURABLE sust → SUPPRESS: structural foundation is solid, this is noise not a real crumble
@@ -248,7 +248,7 @@ BODY RULES (the BODY is read by non-technical bettors on their phone — transla
   I1 = turnovers/steals, I2 = paint/interior, I3 = shot quality/creation, I4 = game flow/control, I5 = pace/execution
 - Say "X/5 structural categories (codes)" instead of just listing codes without context
 - "Floor 0.95" → "95% structural control" or "dominant across the board"
-- Conviction tiers (DOMINANT/STRONG/MODEST), sustainability tiers (LOCKED IN/DURABLE/COLD/FRAGILE), and edge % stay as-is — they are plain English
+- Conviction tiers (DOMINANT/STRONG/MODEST), sustainability tiers (LOCKED IN/DURABLE/STALLED/FRAGILE), and edge % stay as-is — they are plain English
 - TP → "comeback math favors/doesn't favor [TEAM]" or "projects X-point swing"
 - LS → "lead is secure" / "lead is under pressure"
 - Lead with score + action, explain WHY in basketball terms with structural data, end with what to watch
@@ -585,7 +585,7 @@ function computeMonitorTrends(gameData) {
   }
 
   // ── Sustainability arc (opponent, from live polls) ──
-  var sustTiers = { 'LOCKED IN': 5, 'DURABLE': 4, 'MIXED': 3, 'COLD': 2, 'FRAGILE': 1, 'UNSUSTAINABLE': 0 };
+  var sustTiers = { 'LOCKED IN': 5, 'DURABLE': 4, 'MIXED': 3, 'STALLED': 2, 'FRAGILE': 1, 'UNSUSTAINABLE': 0 };
   var oppSustHistory = liveSnaps.map(s => s.opp_sust).filter(Boolean);
   var ctrlSustHistory = liveSnaps.map(s => s.ctrl_sust).filter(Boolean);
   var sustArcDir = 'STABLE', sustArcDetail = '';
@@ -2271,14 +2271,13 @@ function computeSustainability(summary) {
       regressionGrade = 'MINIMAL';
       personnelGrade = 'N/A (at baseline)';
     }
-    // COLD: at/below 3PT baseline but can't convert from 2 either
-    // Regression is unreliable when the whole offense is broken
+    // STALLED: 3PT at/below baseline (sustainable) but 2PT% below baseline — interior scoring stalled
     if (tier === 'LOCKED IN') {
       var fg2m = (stats.field_goals_made || 0) - team3PM;
       var fg2a = teamFGA - team3PA;
       var twoPointBase = seasonPrior3Pct < 34 ? 0.49 : 0.52;
       if (fg2a >= 6 && fg2m / fg2a < twoPointBase) {
-        tier = 'COLD';
+        tier = 'STALLED';
       }
     }
     // Override: too few attempts
@@ -5095,7 +5094,7 @@ export default async function(req) {
             if (!alertType && currentPeriod >= 2 && ind.controlTeam && ind.controlTeam !== 'Neither') {
               const inRange = ctrlMargin >= -15 && ctrlMargin <= 5;
               const floorBaseline = ind.score >= 0.45;
-              const sustGood = ctrlSust === 'LOCKED IN' || ctrlSust === 'DURABLE' || ctrlSust === 'COLD';
+              const sustGood = ctrlSust === 'LOCKED IN' || ctrlSust === 'DURABLE' || ctrlSust === 'STALLED';
               // Clock gate: suppress WB with < 1 min left in game (unbettable) — uses shared alertMinsLeft
               if (alertMinsLeft < 1.0 && inRange && floorBaseline && sustGood) log(`${matchup}: WINDOW BUY suppressed — ${alertMinsLeft.toFixed(1)} min left (< 1 min clock gate)`);
               if (inRange && floorBaseline && sustGood && alertMinsLeft >= 1.0) {
