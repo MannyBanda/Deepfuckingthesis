@@ -436,25 +436,36 @@ async function phaseCollect(sql) {
 
 async function phaseSample(sql, url) {
   const sampleSize = parseInt(url.searchParams.get('n') || '25');
+  const stratify = url.searchParams.get('stratify') !== '0';
   const startTime = Date.now();
   const TIME_BUDGET_MS = 100000; // 100s of 120s timeout — leave margin
 
-  // Stratified sample: pick from each margin bucket proportionally
-  // Close games are most important for indicator validation
-  const sampleGames = await sql`
-    WITH ranked AS (
-      SELECT *, ROW_NUMBER() OVER (PARTITION BY margin_bucket ORDER BY RANDOM()) as rn,
-             COUNT(*) OVER (PARTITION BY margin_bucket) as bucket_total
-      FROM wnba_backtest
+  let sampleGames;
+  if (stratify) {
+    // Stratified sample: oversample close games
+    sampleGames = await sql`
+      WITH ranked AS (
+        SELECT *, ROW_NUMBER() OVER (PARTITION BY margin_bucket ORDER BY RANDOM()) as rn,
+               COUNT(*) OVER (PARTITION BY margin_bucket) as bucket_total
+        FROM wnba_backtest
+        WHERE sr_summary IS NULL
+      )
+      SELECT * FROM ranked
+      WHERE (margin_bucket = 'close' AND rn <= ${Math.ceil(sampleSize * 0.5)})
+         OR (margin_bucket = 'comfortable' AND rn <= ${Math.ceil(sampleSize * 0.3)})
+         OR (margin_bucket = 'blowout' AND rn <= ${Math.ceil(sampleSize * 0.2)})
+      ORDER BY margin_bucket, rn
+      LIMIT ${sampleSize}
+    `;
+  } else {
+    // Random sample — natural distribution
+    sampleGames = await sql`
+      SELECT * FROM wnba_backtest
       WHERE sr_summary IS NULL
-    )
-    SELECT * FROM ranked
-    WHERE (margin_bucket = 'close' AND rn <= ${Math.ceil(sampleSize * 0.5)})
-       OR (margin_bucket = 'comfortable' AND rn <= ${Math.ceil(sampleSize * 0.3)})
-       OR (margin_bucket = 'blowout' AND rn <= ${Math.ceil(sampleSize * 0.2)})
-    ORDER BY margin_bucket, rn
-    LIMIT ${sampleSize}
-  `;
+      ORDER BY RANDOM()
+      LIMIT ${sampleSize}
+    `;
+  }
 
   console.log(`Sample: ${sampleGames.length} games selected for SR fetch`);
 
