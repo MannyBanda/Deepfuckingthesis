@@ -426,7 +426,10 @@ async function getMonitorData(sql, league, cachedGames) {
         log(`Monitor: ${aA}@${hA} skipped — ${liveSnaps.length} live / ${snaps.length} total snapshots (need 5 live)`);
         return;
       }
-      var latest = snaps[snaps.length - 1];
+      // Trend window: last 8 live snapshots — tight, point-in-time reads
+      // Prior observation carries historical context, so trends should reflect current phase only
+      var trendSnaps = liveSnaps.slice(-8);
+      var latest = trendSnaps[trendSnaps.length - 1];
       var period = Number(latest.period || 0);
 
       var ctrlIsHome = latest.floor_team === hA;
@@ -463,7 +466,7 @@ async function getMonitorData(sql, league, cachedGames) {
         margin: ctrlPts - oppPts,
         period: period,
         clock: latest.clock,
-        snapHistory: snaps,
+        snapHistory: trendSnaps,
         recentAlerts: alertsByGame[g.id] || [],
         rawInputs: rawInputs,
         priorObs: priorObsByGame[g.id] || null,
