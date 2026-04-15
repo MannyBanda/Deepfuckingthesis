@@ -219,16 +219,40 @@ async function phaseReset(sql) {
   const before = await sql`SELECT COUNT(*) as total, COUNT(sr_summary) as with_sr FROM wnba_backtest`;
   await sql`
     UPDATE wnba_backtest SET
-      sr_summary = NULL, sr_game_id = NULL,
-      indicators = NULL, conviction_tier = NULL, conviction_combo = NULL,
-      conviction_detail = NULL, ctrl_team_won = NULL, computed_at = NULL
+      sr_summary = ${null}, sr_game_id = ${null},
+      indicators = ${null}, conviction_tier = ${null}, conviction_combo = ${null},
+      conviction_detail = ${null}, ctrl_team_won = ${null}, computed_at = ${null}
   `;
+  const after = await sql`SELECT COUNT(*) as total, COUNT(sr_summary) as with_sr, COUNT(CASE WHEN sr_summary IS NULL THEN 1 END) as null_sr FROM wnba_backtest`;
   return {
     status: 'ok',
     message: 'SR summaries + computed indicators cleared. BDL game data preserved.',
     gamesKept: Number(before[0]?.total || 0),
     srCleared: Number(before[0]?.with_sr || 0),
+    afterReset: { total: Number(after[0].total), withSR: Number(after[0].with_sr), nullSR: Number(after[0].null_sr) },
     nextStep: 'Run ?phase=sample&n=40 to start fresh SR collection',
+  };
+}
+
+async function phaseStatus(sql) {
+  const counts = await sql`
+    SELECT 
+      COUNT(*) as total,
+      COUNT(sr_summary) as with_sr,
+      COUNT(indicators) as computed,
+      COUNT(CASE WHEN sr_summary IS NULL THEN 1 END) as needs_sr
+    FROM wnba_backtest
+  `;
+  const buckets = await sql`
+    SELECT margin_bucket, COUNT(*) as total, COUNT(sr_summary) as with_sr 
+    FROM wnba_backtest GROUP BY margin_bucket ORDER BY total DESC
+  `;
+  return {
+    total: Number(counts[0].total),
+    withSR: Number(counts[0].with_sr),
+    computed: Number(counts[0].computed),
+    needsSR: Number(counts[0].needs_sr),
+    buckets: buckets.map(r => ({ bucket: r.margin_bucket, total: Number(r.total), withSR: Number(r.with_sr) })),
   };
 }
 
@@ -806,6 +830,7 @@ export default async (req) => {
     switch (phase) {
       case 'init':    result = await phaseInit(sql); break;
       case 'reset':   result = await phaseReset(sql); break;
+      case 'status':  result = await phaseStatus(sql); break;
       case 'collect': result = await phaseCollect(sql); break;
       case 'sample':  result = await phaseSample(sql, url); break;
       case 'compute': result = await phaseCompute(sql); break;
