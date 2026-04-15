@@ -534,6 +534,7 @@ BODY: [If SEND/DOWNGRADE: enhanced alert body. If SUPPRESS: leave blank]`;
   else if (testParam === 'b7') testKeys = ['25', '26', '27', '28'];
   else if (testParam === 'b8') testKeys = ['29', '30', '31', '32'];
   else if (testParam === 'b9') testKeys = ['33', '34', '35', '36'];
+  else if (testParam === 'b10') testKeys = ['37', '38'];
   else if (testParam === 'monitor') testKeys = ['33', '34', '35', '36'];
   else if (testParam === 'adversarial') testKeys = ['37', '38'];
   // Individual: ?test=5 or comma-separated: ?test=19,20,26

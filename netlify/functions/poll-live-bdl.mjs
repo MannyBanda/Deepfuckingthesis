@@ -348,7 +348,24 @@ async function gatherAgentContext(sql, gameId, matchup) {
       }
     }
   } catch (e) { /* non-fatal — learnings table may not exist */ }
-  return { floorHistory, priorAlerts, quarterSummary, learningsContext };
+  // Latest monitor observation for game-arc context
+  let monitorContext = '';
+  try {
+    const monObs = await sql`
+      SELECT narrative, risk_factors, momentum_direction, momentum_streak, momentum_delta,
+             sust_arc, sust_arc_detail, floor_margin_rel, floor_score, margin, period, clock, control_team
+      FROM monitor_observations
+      WHERE game_id = ${gameId}
+      ORDER BY ts DESC LIMIT 1`;
+    if (monObs.length > 0) {
+      const m = monObs[0];
+      monitorContext = `Q${m.period} ${m.clock} | ${m.control_team} floor ${Number(m.floor_score).toFixed(2)}, margin ${m.margin}\n`
+        + `Momentum: ${m.momentum_direction}(${m.momentum_streak}, ${m.momentum_delta >= 0 ? '+' : ''}${Number(m.momentum_delta).toFixed(2)}) | Sust arc: ${m.sust_arc}${m.sust_arc_detail ? ' (' + m.sust_arc_detail + ')' : ''} | Floor-margin: ${m.floor_margin_rel}\n`
+        + `Observation: ${m.narrative}\n`
+        + `Risk: ${m.risk_factors}`;
+    }
+  } catch (e) { /* non-fatal — monitor_observations table may not exist */ }
+  return { floorHistory, priorAlerts, quarterSummary, learningsContext, monitorContext };
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -3768,6 +3785,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           priorAlerts: agentCtx.priorAlerts,
           quarterSummary: agentCtx.quarterSummary,
           learningsContext: agentCtx.learningsContext,
+          monitorContext: agentCtx.monitorContext,
           // Sonnet context for enriched alert body
           sonnetFWP: parsed.fwp,
           sonnetNarrative: parsed.narrative,
@@ -5067,6 +5085,7 @@ export default async function(req) {
                   priorAlerts: agentCtx.priorAlerts,
                   quarterSummary: agentCtx.quarterSummary,
                   learningsContext: agentCtx.learningsContext,
+                  monitorContext: agentCtx.monitorContext,
                 });
 
                 let agentDecision = null;
@@ -5279,6 +5298,7 @@ export default async function(req) {
                         i4Decisive: tI4Decisive, i4Won: tI4Won, i4Combo: tI4Combo,
                         floorHistory: rpAgentCtx.floorHistory, priorAlerts: rpAgentCtx.priorAlerts,
                         quarterSummary: rpAgentCtx.quarterSummary, learningsContext: rpAgentCtx.learningsContext,
+                        monitorContext: rpAgentCtx.monitorContext,
                       });
 
                       let rpDecision = null, rpReasoning = '', rpShouldSend = false, rpPriority = 5;
@@ -5338,6 +5358,7 @@ export default async function(req) {
                     i4Decisive: tI4Decisive, i4Won: tI4Won, i4Combo: tI4Combo,
                     floorHistory: lcAgentCtx.floorHistory, priorAlerts: lcAgentCtx.priorAlerts,
                     quarterSummary: lcAgentCtx.quarterSummary, learningsContext: lcAgentCtx.learningsContext,
+                    monitorContext: lcAgentCtx.monitorContext,
                   });
 
                   let lcDecision = null, lcReasoning = '', lcShouldSend = false, lcPriority = 5;
@@ -5445,6 +5466,7 @@ export default async function(req) {
                       i4Decisive: tI4Decisive, i4Won: tI4Won, i4Combo: tI4Combo,
                       floorHistory: vbAgentCtx.floorHistory, priorAlerts: vbAgentCtx.priorAlerts,
                       quarterSummary: vbAgentCtx.quarterSummary, learningsContext: vbAgentCtx.learningsContext,
+                      monitorContext: vbAgentCtx.monitorContext,
                     });
 
                     let vbDecision = null, vbReasoning = '', vbShouldSend = false, vbPriority = 4;
