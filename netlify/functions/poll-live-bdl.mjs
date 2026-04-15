@@ -191,6 +191,14 @@ MONITOR OBSERVATIONS (from continuous game observer, most recent first):
 ${ctx.monitorContext}
 
 NOTE: Monitor observations provide trajectory context — momentum, sustainability arcs, risk factors — from continuous 3-minute polling between alerts. Use them to inform your reasoning about the game's arc, but they do not override mechanical FIRED thresholds. A FIRED alert with strong indicators is still a SEND even if the monitor notes a risk factor. For CANDIDATE alerts, monitor context can tip the decision.
+
+FIELD DEFINITIONS:
+- margin: score difference from control team perspective (positive = leading, negative = trailing)
+- Momentum: direction(streak, delta). Direction = RISING/FALLING/FLAT. Streak = consecutive polls in this direction (6 = six straight polls trending this way). Delta = floor change over that streak (+0.08 = floor rose 0.08 over 6 polls).
+- Sust arc: sustainability trajectory for control team. STABLE/IMPROVING/DEGRADING/VOLATILE. Detail in parens shows both teams' tiers.
+- Floor-margin: relationship between structural floor and live score. ALIGNED = floor and margin agree (high floor + leading, or low floor + trailing). DIVERGING = floor says one thing, score says another (high floor but trailing = variance, the setup we bet on).
+- Observation: narrative summary of game arc from the monitor agent.
+- Risk: specific risk factors the monitor identified (e.g. foul trouble, opponent run, clutch matchup concerns).
 ` : ''}${ctx.priorPosition ? `
 POSITION UPDATE CONTEXT:
 This is a position update for a previously sent alert — NOT a new signal.
@@ -3603,8 +3611,11 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
   if (monitorContext) {
     p += `\nMONITOR OBSERVATION (continuous 3-minute game observer — most recent read):\n`;
     p += monitorContext + '\n';
-    p += 'USE: The monitor tracks momentum, sustainability arcs, and floor-margin dynamics between snapshots. ';
-    p += 'Reference its trajectory reads in your NARRATIVE and RISK. ';
+    p += 'FIELD DEFINITIONS: margin = score diff from ctrl team perspective. ';
+    p += 'Momentum direction(streak, delta): streak = consecutive polls trending this way, delta = floor change over streak. ';
+    p += 'Sust arc: STABLE/IMPROVING/DEGRADING/VOLATILE for ctrl team sustainability. ';
+    p += 'Floor-margin: ALIGNED (floor agrees with score) or DIVERGING (floor says one thing, score says another — the setup we bet on).\n';
+    p += 'USE: Reference trajectory reads in your NARRATIVE and RISK. ';
     p += 'If the monitor flags a specific flip scenario in its Risk section, address it. ';
     p += 'Monitor observations do NOT override your ground truth indicators.\n';
   }

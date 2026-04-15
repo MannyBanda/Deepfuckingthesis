@@ -810,8 +810,11 @@ exports.handler = async function(event) {
     if (monitorContext) {
       monitorSection = '\nMONITOR OBSERVATION (continuous 3-minute game observer — most recent read):\n'
         + monitorContext + '\n'
-        + 'USE: The monitor tracks momentum, sustainability arcs, and floor-margin dynamics between snapshots. '
-        + 'Reference its trajectory reads in your NARRATIVE and RISK. '
+        + 'FIELD DEFINITIONS: margin = score diff from ctrl team perspective. '
+        + 'Momentum direction(streak, delta): streak = consecutive polls trending this way, delta = floor change over streak. '
+        + 'Sust arc: STABLE/IMPROVING/DEGRADING/VOLATILE for ctrl team sustainability. '
+        + 'Floor-margin: ALIGNED (floor agrees with score) or DIVERGING (floor says one thing, score says another — the setup we bet on).\n'
+        + 'USE: Reference trajectory reads in your NARRATIVE and RISK. '
         + 'If the monitor flags a specific flip scenario in its Risk section, address it. '
         + 'Monitor observations do NOT override your ground truth indicators.\n';
     }
