@@ -217,10 +217,11 @@ async function phaseInit(sql) {
 
 async function phaseCollect(sql) {
   // Pull all 2025 WNBA games from BDL, paginate
+  // This ONLY saves game metadata — no per-game stats calls (those come from SR in sample phase)
   const allGames = [];
   let cursor = null;
   let pages = 0;
-  const MAX_PAGES = 30; // safety valve
+  const MAX_PAGES = 30;
 
   while (pages < MAX_PAGES) {
     let path = `/wnba/v1/games?seasons[]=2025&per_page=100`;
@@ -229,7 +230,7 @@ async function phaseCollect(sql) {
     if (!resp?.data || resp.data.length === 0) break;
     
     for (const g of resp.data) {
-      if (g.status !== 'post' && g.status !== 'Final') continue; // completed only
+      if (g.status !== 'post' && g.status !== 'Final') continue;
       allGames.push(g);
     }
     
@@ -240,7 +241,7 @@ async function phaseCollect(sql) {
 
   console.log(`BDL: fetched ${allGames.length} completed 2025 games (${pages} pages)`);
 
-  // For each game, fetch team_stats and save to DB
+  // Save game metadata to DB (no stats calls — fast)
   let saved = 0, errors = 0;
   for (const g of allGames) {
     try {
@@ -250,23 +251,10 @@ async function phaseCollect(sql) {
       const margin = Math.abs(g.home_score - g.away_score);
       const bucket = margin >= 15 ? 'blowout' : margin >= 8 ? 'comfortable' : margin >= 1 ? 'close' : 'tie';
 
-      // Fetch team stats for this game
-      const tsResp = await bdlFetch(`/wnba/v1/team_stats?game_ids[]=${g.id}`);
-      let homeStats = null, awayStats = null;
-      if (tsResp?.data) {
-        for (const ts of tsResp.data) {
-          if (ts.team?.abbreviation === homeAbbr) homeStats = ts;
-          else if (ts.team?.abbreviation === awayAbbr) awayStats = ts;
-        }
-      }
-
-      // Use BDL game ID as primary key (stable, unique)
       await sql`
-        INSERT INTO wnba_backtest (game_id, bdl_game_id, date, home_alias, away_alias, home_score, away_score, winner, margin, margin_bucket, bdl_home_stats, bdl_away_stats)
-        VALUES (${`bdl_${g.id}`}, ${g.id}, ${g.date?.substring(0, 10)}, ${homeAbbr}, ${awayAbbr}, ${g.home_score}, ${g.away_score}, ${winner}, ${margin}, ${bucket}, ${homeStats ? JSON.stringify(homeStats) : null}, ${awayStats ? JSON.stringify(awayStats) : null})
+        INSERT INTO wnba_backtest (game_id, bdl_game_id, date, home_alias, away_alias, home_score, away_score, winner, margin, margin_bucket)
+        VALUES (${`bdl_${g.id}`}, ${g.id}, ${g.date?.substring(0, 10)}, ${homeAbbr}, ${awayAbbr}, ${g.home_score}, ${g.away_score}, ${winner}, ${margin}, ${bucket})
         ON CONFLICT (game_id) DO UPDATE SET
-          bdl_home_stats = EXCLUDED.bdl_home_stats,
-          bdl_away_stats = EXCLUDED.bdl_away_stats,
           home_score = EXCLUDED.home_score,
           away_score = EXCLUDED.away_score,
           winner = EXCLUDED.winner,
@@ -280,7 +268,6 @@ async function phaseCollect(sql) {
     }
   }
 
-  // Summary stats
   const buckets = await sql`
     SELECT margin_bucket, COUNT(*) as count FROM wnba_backtest GROUP BY margin_bucket ORDER BY count DESC
   `;
@@ -291,11 +278,14 @@ async function phaseCollect(sql) {
     saved,
     errors,
     buckets: buckets.map(r => ({ bucket: r.margin_bucket, count: Number(r.count) })),
+    nextStep: 'Run ?phase=sample to fetch SR summaries for a stratified sample',
   };
 }
 
 async function phaseSample(sql, url) {
-  const sampleSize = parseInt(url.searchParams.get('n') || '50');
+  const sampleSize = parseInt(url.searchParams.get('n') || '25');
+  const startTime = Date.now();
+  const TIME_BUDGET_MS = 100000; // 100s of 120s timeout — leave margin
 
   // Stratified sample: pick from each margin bucket proportionally
   // Close games are most important for indicator validation
@@ -316,8 +306,12 @@ async function phaseSample(sql, url) {
 
   console.log(`Sample: ${sampleGames.length} games selected for SR fetch`);
 
-  // We need SR game IDs. BDL→SR matching via schedule date + team aliases.
-  // Fetch SR schedule for each unique game date, find matching game IDs
+  if (sampleGames.length === 0) {
+    const total = await sql`SELECT COUNT(*) as count FROM wnba_backtest WHERE sr_summary IS NOT NULL`;
+    return { status: 'ok', message: 'No more games to sample — all have SR data', totalWithSR: Number(total[0].count) };
+  }
+
+  // Group by date for efficient SR schedule fetching
   const dateGames = {};
   for (const g of sampleGames) {
     const d = g.date;
@@ -325,13 +319,19 @@ async function phaseSample(sql, url) {
     dateGames[d].push(g);
   }
 
-  let fetched = 0, errors = 0;
+  let fetched = 0, errors = 0, skippedTimeout = 0;
 
   for (const [dateStr, games] of Object.entries(dateGames)) {
-    // Fetch SR schedule for this date
+    // Time budget check
+    if (Date.now() - startTime > TIME_BUDGET_MS) {
+      skippedTimeout += games.length;
+      console.log(`Time budget exceeded — skipping ${dateStr}`);
+      continue;
+    }
+
     const [year, month, day] = dateStr.split('-');
     const schedResp = await srFetch(`games/${year}/${month}/${day}/schedule.json`);
-    await delay(1200); // respect 1 req/s
+    await delay(1200);
 
     if (!schedResp?.games) {
       console.log(`SR schedule empty for ${dateStr}`);
@@ -341,6 +341,12 @@ async function phaseSample(sql, url) {
 
     // Match each BDL game to an SR game
     for (const g of games) {
+      // Time check before each summary fetch
+      if (Date.now() - startTime > TIME_BUDGET_MS) {
+        skippedTimeout++;
+        continue;
+      }
+
       // Find SR game by matching team aliases
       const srGame = schedResp.games.find(sg => {
         const srHome = sg.home?.alias;
@@ -392,9 +398,13 @@ async function phaseSample(sql, url) {
     attempted: sampleGames.length,
     fetched,
     errors,
+    skippedTimeout,
     totalWithSR: Number(ready[0].count),
     uniqueDates: Object.keys(dateGames).length,
-    srCallsMade: fetched + Object.keys(dateGames).length, // summaries + schedules
+    srCallsMade: fetched + Object.keys(dateGames).length,
+    elapsed: `${Math.round((Date.now() - startTime) / 1000)}s`,
+    note: skippedTimeout > 0 ? 'Re-run ?phase=sample to continue fetching (idempotent — only fetches games missing SR data)' : 'All selected games fetched',
+    nextStep: 'Run ?phase=compute to calculate indicators',
   };
 }
 
