@@ -366,14 +366,14 @@ async function getMonitorData(sql, league, cachedGames) {
     if (liveGames.length === 0) return result;
     var liveGameIds = liveGames.map(g => g.id);
 
-    // Snapshot history — last 8 per game (floor, indicators, sust, raw stats, TP/LS)
+    // Snapshot history — last 20 per game (wider window survives halftime stale polls)
     var snapRows = await sql`
       SELECT game_id, floor_score, floor_team, period, clock, home_pts, away_pts,
              i1, i2, i3, i4, i5, tp_class, ls_class, ctrl_sust, opp_sust, raw_stats_json, sust_json
       FROM (
         SELECT *, ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY ts DESC) as rn
         FROM snapshots WHERE game_id = ANY(${liveGameIds})
-      ) sub WHERE rn <= 8
+      ) sub WHERE rn <= 20
       ORDER BY game_id, rn DESC`;
     // Group by game (oldest first within each game)
     var snapsByGame = {};
@@ -405,7 +405,10 @@ async function getMonitorData(sql, league, cachedGames) {
           liveSnaps.push(snaps[si]);
         }
       }
-      if (liveSnaps.length < 5) return; // need 5 live snapshots for meaningful trends
+      if (liveSnaps.length < 5) {
+        log(`Monitor: ${g.matchup || g.id} skipped — ${liveSnaps.length} live / ${snaps.length} total snapshots (need 5 live)`);
+        return;
+      }
       var latest = snaps[snaps.length - 1];
       var period = Number(latest.period || 0);
 
