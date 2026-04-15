@@ -256,6 +256,118 @@ async function phaseStatus(sql) {
   };
 }
 
+async function phaseDiagnose(sql) {
+  const startTime = Date.now();
+  
+  // 1. Get all distinct BDL team abbreviations from the DB
+  const bdlTeams = await sql`
+    SELECT DISTINCT abbr FROM (
+      SELECT home_alias as abbr FROM wnba_backtest
+      UNION
+      SELECT away_alias as abbr FROM wnba_backtest
+    ) t ORDER BY abbr
+  `;
+  const bdlAbbrs = bdlTeams.map(r => r.abbr);
+
+  // 2. Show reverse lookup — for each BDL abbr, which SR alias maps to it?
+  const reverseMap = {};
+  for (const [sr, bdl] of Object.entries(SR_TO_BDL)) {
+    if (!reverseMap[bdl]) reverseMap[bdl] = [];
+    reverseMap[bdl].push(sr);
+  }
+  const coverage = bdlAbbrs.map(a => ({
+    bdlAbbr: a,
+    srMapsFrom: reverseMap[a] || ['(identity — no mapping needed, or MISSING)'],
+    inMap: !!reverseMap[a] || Object.values(SR_TO_BDL).includes(a),
+  }));
+
+  // 3. Try matching ALL unmatched games — schedule calls only, no summaries
+  const unmatched = await sql`
+    SELECT game_id, date, home_alias, away_alias, margin_bucket
+    FROM wnba_backtest WHERE sr_summary IS NULL
+    ORDER BY date
+    LIMIT 200
+  `;
+
+  const schedCache = {};
+  async function getSchedule(dateStr) {
+    if (schedCache[dateStr] !== undefined) return schedCache[dateStr];
+    const [y, m, d] = dateStr.split('-');
+    const resp = await srFetch(`games/${y}/${m}/${d}/schedule.json`);
+    await delay(1200);
+    schedCache[dateStr] = resp?.games || [];
+    return schedCache[dateStr];
+  }
+  function offsetDate(dateStr, offset) {
+    const d = new Date(`${dateStr}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + offset);
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
+  }
+  function findMatch(srGames, bdlHome, bdlAway) {
+    return srGames.find(sg => {
+      const srHome = sg.home?.alias, srAway = sg.away?.alias;
+      if (bdlAlias(srHome) === bdlHome && bdlAlias(srAway) === bdlAway) return true;
+      if (srHome === bdlHome && srAway === bdlAway) return true;
+      return false;
+    });
+  }
+
+  const failures = [];
+  let matched = 0;
+  const TIME_BUDGET = 90000;
+
+  for (const g of unmatched) {
+    if (Date.now() - startTime > TIME_BUDGET) break;
+    
+    let found = false;
+    for (const offset of [0, 1, -1]) {
+      const tryDate = offsetDate(g.date, offset);
+      const srGames = await getSchedule(tryDate);
+      if (findMatch(srGames, g.home_alias, g.away_alias)) {
+        found = true;
+        matched++;
+        break;
+      }
+    }
+
+    if (!found) {
+      const dates = [0, 1, -1].map(o => offsetDate(g.date, o));
+      const allSR = dates.flatMap(d => (schedCache[d] || []).map(sg => `${sg.away?.alias}@${sg.home?.alias}`));
+      // Dedupe
+      const uniqueSR = [...new Set(allSR)];
+      failures.push({
+        bdlGame: `${g.away_alias}@${g.home_alias}`,
+        bdlDate: g.date,
+        bucket: g.margin_bucket,
+        searchedDates: dates,
+        srGamesFound: uniqueSR,
+      });
+    }
+  }
+
+  // 4. Analyze failure patterns
+  const failedTeams = {};
+  for (const f of failures) {
+    const teams = f.bdlGame.split('@');
+    for (const t of teams) {
+      if (!failedTeams[t]) failedTeams[t] = 0;
+      failedTeams[t]++;
+    }
+  }
+
+  return {
+    bdlTeams: bdlAbbrs,
+    aliasCoverage: coverage,
+    gamesChecked: Math.min(unmatched.length, matched + failures.length),
+    matched,
+    failed: failures.length,
+    failedTeams: Object.entries(failedTeams).sort((a,b) => b[1]-a[1]).map(([t,c]) => `${t}: ${c} failures`),
+    failures: failures.slice(0, 30),
+    elapsed: `${Math.round((Date.now() - startTime) / 1000)}s`,
+    scheduleDatesCached: Object.keys(schedCache).length,
+  };
+}
+
 async function phaseCollect(sql) {
   // Pull all 2025 WNBA games from BDL, paginate
   // This ONLY saves game metadata — no per-game stats calls (those come from SR in sample phase)
@@ -831,6 +943,7 @@ export default async (req) => {
       case 'init':    result = await phaseInit(sql); break;
       case 'reset':   result = await phaseReset(sql); break;
       case 'status':  result = await phaseStatus(sql); break;
+      case 'diagnose': result = await phaseDiagnose(sql); break;
       case 'collect': result = await phaseCollect(sql); break;
       case 'sample':  result = await phaseSample(sql, url); break;
       case 'compute': result = await phaseCompute(sql); break;
