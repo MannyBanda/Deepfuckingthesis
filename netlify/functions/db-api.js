@@ -372,7 +372,13 @@ exports.handler = async (event) => {
         ts TIMESTAMPTZ DEFAULT NOW()
       )`;
       try { await sql`CREATE INDEX IF NOT EXISTS idx_learnings_date ON learnings (date)`; } catch(e) {}
-      try { await sql`ALTER TABLE monitor_observations ADD CONSTRAINT monitor_obs_game_period_clock_uniq UNIQUE (game_id, period, clock)`; } catch(e) { /* already exists */ }
+      try {
+        // Must remove existing duplicates before adding unique constraint
+        await sql`DELETE FROM monitor_observations WHERE id NOT IN (
+          SELECT MIN(id) FROM monitor_observations GROUP BY game_id, period, clock
+        )`;
+        await sql`ALTER TABLE monitor_observations ADD CONSTRAINT monitor_obs_game_period_clock_uniq UNIQUE (game_id, period, clock)`;
+      } catch(e) { /* constraint may already exist */ }
 
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'Schema initialized' }) };
     }
