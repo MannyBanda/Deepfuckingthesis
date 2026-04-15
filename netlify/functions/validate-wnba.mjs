@@ -193,6 +193,30 @@ export default async (req) => {
     results.bdl.push(await bdlFetch(`/box_scores?game_ids[]=${useGameId}`, `Box Scores (game ${useGameId})`));
   }
 
+  // 13. Odds — test multiple paths with absolute URLs
+  const BDL_RAW = 'https://api.balldontlie.io';
+  if (useGameId) {
+    const oddsPaths = [
+      { path: `/wnba/v1/odds?game_ids[]=${useGameId}`, label: '/wnba/v1/odds' },
+      { path: `/nba/v2/odds?game_ids[]=${useGameId}`, label: '/nba/v2/odds (cross-league)' },
+      { path: `/wnba/v2/odds?game_ids[]=${useGameId}`, label: '/wnba/v2/odds' },
+    ];
+    for (const op of oddsPaths) {
+      try {
+        const oddsR = await fetch(`${BDL_RAW}${op.path}`, { headers: { Authorization: BDL_KEY_ACTIVE } });
+        const body = oddsR.ok ? await oddsR.json() : await oddsR.text();
+        results.bdl.push({
+          endpoint: `Odds ${op.label} (game ${useGameId})`,
+          status: oddsR.status,
+          error: oddsR.ok ? null : (typeof body === 'string' ? body.substring(0, 200) : null),
+          sample: oddsR.ok ? body.data?.[0] || null : null,
+          count: oddsR.ok ? body.data?.length : null,
+          shape: oddsR.ok && body.data?.[0] ? Object.keys(body.data[0]) : null
+        });
+      } catch(e) { results.bdl.push({ endpoint: `Odds ${op.label}`, error: e.message }); }
+    }
+  }
+
   // ============ SR ENDPOINTS (if key provided) ============
   if (SR_BASE) {
     console.log('Starting SR validation...');
