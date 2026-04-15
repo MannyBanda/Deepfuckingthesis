@@ -15,7 +15,7 @@ import { neon } from '@neondatabase/serverless';
 const BDL_BASE = 'https://api.balldontlie.io';
 const BDL_KEY = process.env.BDL_API_KEY;
 const SR_BASE = 'https://api.sportradar.com/wnba/trial/v8/en/';
-const SR_KEY = process.env.SR_API_KEY; // same key covers NBA + WNBA
+const SR_KEY = process.env.SR_WNBA_KEY || process.env.SR_API_KEY; // prefer dedicated WNBA key
 
 // ── WNBA INDICATOR WEIGHTS ───────────────────────────────────────────────────
 // I1 Disruption 15%, I2 Perimeter+FT 20%, I3 Shot Quality 30%, I4 Game Control 25%, I5 Momentum 10%
