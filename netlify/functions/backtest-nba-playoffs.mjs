@@ -407,6 +407,36 @@ async function phaseInspect(sql, url) {
   if (row.length === 0) return { error: 'No matching row' };
   const r = row[0];
 
+  // Also fetch raw BDL plays so we can see actual play shape live
+  let samplePlays = null;
+  try {
+    const resp = await bdlFetch(`/nba/v1/plays?game_id=${r.bdl_game_id}&per_page=500`);
+    const plays = resp?.data || [];
+    if (plays.length > 0) {
+      // Sort by order like the parser does
+      const sorted = plays.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+      samplePlays = {
+        count: plays.length,
+        first3: sorted.slice(0, 3),
+        middle: sorted[Math.floor(sorted.length / 2)],
+        last3: sorted.slice(-3),
+        // Scoring plays distribution
+        shootingCount: plays.filter(p => p.shooting_play).length,
+        scoringCount: plays.filter(p => p.scoring_play).length,
+        turnoverCount: plays.filter(p => (p.type || '').toLowerCase().includes('turnover')).length,
+        // Home/away score progression (check if they ever change)
+        scoreProgression: {
+          maxHomeScore: Math.max(...plays.map(p => p.home_score ?? 0)),
+          maxAwayScore: Math.max(...plays.map(p => p.away_score ?? 0)),
+          finalHomeScore: sorted[sorted.length - 1]?.home_score,
+          finalAwayScore: sorted[sorted.length - 1]?.away_score,
+        },
+      };
+    }
+  } catch (e) {
+    samplePlays = { error: e.message };
+  }
+
   return {
     basics: {
       gid: r.bdl_game_id,
@@ -421,6 +451,7 @@ async function phaseInspect(sql, url) {
     indicators: r.indicators,
     conviction: r.conviction,
     ctrl_team_won: r.ctrl_team_won,
+    raw_bdl_plays: samplePlays,
   };
 }
 
@@ -1010,20 +1041,28 @@ async function phaseCompute(sql, url) {
   const TIME_BUDGET_MS = 100000;
   const CONCURRENCY = 20;
   const force = url?.searchParams?.get('force') === '1';
+  const batchSize = parseInt(url?.searchParams?.get('n') || '400');
 
-  // Normal: only pick up uncomputed rows. Force: recompute all.
+  // Normal: only pick up uncomputed rows (indicators IS NULL).
+  // Force: pick rows that have pbp_derived but look broken (all-zero biggest_lead,
+  //   which is the smoking gun for the old parser bug). This is safe to re-run:
+  //   real data has hBigLead > 0 always so those rows are skipped.
   const rows = force
     ? await sql`
         SELECT bdl_game_id, home_alias, away_alias, home_pts, away_pts, winner_alias,
                team_stats, pbp_derived
         FROM nba_backtest
         WHERE team_stats IS NOT NULL AND pbp_derived IS NOT NULL
+          AND (pbp_derived->>'hBigLead' = '0' AND pbp_derived->>'aBigLead' = '0')
+        ORDER BY bdl_game_id
+        LIMIT ${batchSize}
       `
     : await sql`
         SELECT bdl_game_id, home_alias, away_alias, home_pts, away_pts, winner_alias,
                team_stats, pbp_derived
         FROM nba_backtest
         WHERE team_stats IS NOT NULL AND pbp_derived IS NOT NULL AND indicators IS NULL
+        LIMIT ${batchSize}
       `;
 
   if (rows.length === 0) {
@@ -1077,19 +1116,31 @@ async function phaseCompute(sql, url) {
     }
   }
 
-  const remaining = await sql`
+  // Count both unprocessed rows and suspicious-looking computed rows
+  const uncomputed = await sql`
     SELECT COUNT(*) AS n FROM nba_backtest
     WHERE team_stats IS NOT NULL AND pbp_derived IS NOT NULL AND indicators IS NULL
   `;
+  const suspicious = await sql`
+    SELECT COUNT(*) AS n FROM nba_backtest
+    WHERE team_stats IS NOT NULL AND pbp_derived IS NOT NULL
+      AND (pbp_derived->>'hBigLead' = '0' AND pbp_derived->>'aBigLead' = '0')
+  `;
+
+  const nextRun = force
+    ? (suspicious[0].n > 0 ? `?phase=compute&force=1&n=${batchSize} again` : '?phase=report')
+    : (uncomputed[0].n > 0 ? '?phase=compute again' : '?phase=report');
 
   return {
     status: 'ok',
+    mode: force ? 'force (re-parse suspicious rows)' : 'normal',
     computed,
     errors,
     total: rows.length,
-    remaining: Number(remaining[0].n),
+    uncomputedRemaining: Number(uncomputed[0].n),
+    suspiciousRemaining: Number(suspicious[0].n),
     elapsedMs: Date.now() - startTime,
-    nextStep: remaining[0].n > 0 ? '?phase=compute again' : '?phase=report',
+    nextStep: nextRun,
   };
 }
 
