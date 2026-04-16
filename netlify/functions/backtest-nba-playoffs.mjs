@@ -1026,9 +1026,13 @@ async function phasePbp(sql, url) {
 
       const pbpDerived = parsePbpForBacktest(plays, hA, aA);
 
+      // Neon-serverless binds strings to JSONB columns natively. The ::jsonb
+      // cast was silently breaking the write (resulting in empty/zero pbp_derived).
+      // Match the pattern used by poll-live-bdl.mjs which works in production.
+      const pbpJson = JSON.stringify(pbpDerived);
       await sql`
         UPDATE nba_backtest
-        SET pbp_derived = ${JSON.stringify(pbpDerived)}::jsonb,
+        SET pbp_derived = ${pbpJson},
             pbp_available = true
         WHERE bdl_game_id = ${gid}
       `;
@@ -1049,21 +1053,31 @@ async function phasePbp(sql, url) {
     }
   }
 
-  const remaining = await sql`
+  // Detailed breakdown of remaining rows so we understand what's left
+  const remainingNull = await sql`
     SELECT COUNT(*) AS n FROM nba_backtest
     WHERE team_stats IS NOT NULL AND pbp_derived IS NULL
+  `;
+  const remainingZero = await sql`
+    SELECT COUNT(*) AS n FROM nba_backtest
+    WHERE team_stats IS NOT NULL AND pbp_derived IS NOT NULL
+      AND pbp_derived->>'hBigLead' = '0' AND pbp_derived->>'aBigLead' = '0'
   `;
 
   return {
     status: 'ok',
+    mode: force ? 'force (pick null + zero-value rows)' : 'normal (null only)',
     processed: games.length,
     updated,
     failed,
     concurrency,
     failLog,
-    remaining: Number(remaining[0].n),
+    remainingNull: Number(remainingNull[0].n),
+    remainingZeroValues: Number(remainingZero[0].n),
     elapsedMs: Date.now() - startTime,
-    nextStep: remaining[0].n > 0 ? `?phase=pbp&n=${batchSize}&c=${concurrency} again` : '?phase=compute',
+    nextStep: (remainingNull[0].n > 0 || (force && remainingZero[0].n > 0))
+      ? `?phase=pbp&n=${batchSize}&c=${concurrency}${force ? '&force=1' : ''} again`
+      : '?phase=compute',
   };
 }
 
