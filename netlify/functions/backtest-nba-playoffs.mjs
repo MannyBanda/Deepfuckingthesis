@@ -275,7 +275,94 @@ async function phaseReset(sql) {
   };
 }
 
-// ── PHASE: DIAGNOSE — fetch a single game's plays, dump raw response ─────────
+// ── PHASE: INVENTORY — check what's usable in existing game_pbp / games tables
+async function phaseInventory(sql) {
+  // Count games with both PBP and box_score_json in game_pbp (the only ones we can use)
+  const counts = await sql`
+    SELECT 
+      COUNT(*) FILTER (WHERE p.pbp_json IS NOT NULL) AS with_pbp,
+      COUNT(*) FILTER (WHERE p.box_score_json IS NOT NULL) AS with_box,
+      COUNT(*) FILTER (WHERE p.pbp_json IS NOT NULL AND p.box_score_json IS NOT NULL) AS with_both,
+      COUNT(*) FILTER (WHERE p.pbp_json IS NOT NULL AND p.box_score_json IS NOT NULL AND g.home_pts IS NOT NULL AND g.home_pts > 0) AS complete,
+      MIN(g.date) AS earliest_date,
+      MAX(g.date) AS latest_date
+    FROM game_pbp p
+    LEFT JOIN games g ON g.id = p.game_id
+    WHERE p.league = 'nba'
+  `;
+
+  // Check by date bucket to see distribution
+  const byMonth = await sql`
+    SELECT TO_CHAR(g.date, 'YYYY-MM') AS month, COUNT(*) AS n
+    FROM game_pbp p
+    JOIN games g ON g.id = p.game_id
+    WHERE p.league = 'nba' AND p.pbp_json IS NOT NULL AND p.box_score_json IS NOT NULL
+      AND g.home_pts IS NOT NULL AND g.home_pts > 0
+    GROUP BY month
+    ORDER BY month
+  `;
+
+  // Check playoff vs regular season via date
+  const playoffDates = await sql`
+    SELECT COUNT(*) AS n FROM game_pbp p
+    JOIN games g ON g.id = p.game_id
+    WHERE p.league = 'nba' AND p.pbp_json IS NOT NULL AND p.box_score_json IS NOT NULL
+      AND g.home_pts IS NOT NULL AND g.home_pts > 0
+      AND ((g.date >= '2025-04-19' AND g.date <= '2025-06-30') OR (g.date >= '2026-04-15'))
+  `;
+
+  // Sample a row to see what's actually in pbp_json and box_score_json
+  const sample = await sql`
+    SELECT p.game_id, g.date, g.home_alias, g.away_alias, g.home_pts, g.away_pts,
+           p.pbp_json, p.box_score_json
+    FROM game_pbp p
+    JOIN games g ON g.id = p.game_id
+    WHERE p.league = 'nba' AND p.pbp_json IS NOT NULL AND p.box_score_json IS NOT NULL
+    ORDER BY g.date DESC LIMIT 1
+  `;
+
+  let pbpShape = null, boxShape = null;
+  if (sample.length > 0) {
+    const pbp = typeof sample[0].pbp_json === 'string' ? JSON.parse(sample[0].pbp_json) : sample[0].pbp_json;
+    const box = typeof sample[0].box_score_json === 'string' ? JSON.parse(sample[0].box_score_json) : sample[0].box_score_json;
+    pbpShape = {
+      topKeys: Object.keys(pbp || {}),
+      hasHome: !!pbp?.home,
+      hasAway: !!pbp?.away,
+      hasRuns6: Array.isArray(pbp?.runs6) ? `array len ${pbp.runs6.length}` : (pbp?.runs6 ? 'object' : 'missing'),
+      has_bdl: !!pbp?._bdl,
+      homeKeys: pbp?.home ? Object.keys(pbp.home) : null,
+      _bdlKeys: pbp?._bdl ? Object.keys(pbp._bdl) : null,
+    };
+    boxShape = {
+      topKeys: Object.keys(box || {}),
+      hasHome: !!box?.home,
+      hasAway: !!box?.away,
+      homeKeys: box?.home ? Object.keys(box.home) : null,
+    };
+  }
+
+  return {
+    totals: {
+      with_pbp: Number(counts[0].with_pbp),
+      with_box: Number(counts[0].with_box),
+      with_both: Number(counts[0].with_both),
+      complete_with_scores: Number(counts[0].complete),
+      earliest: counts[0].earliest_date,
+      latest: counts[0].latest_date,
+    },
+    playoff_window_games: Number(playoffDates[0].n),
+    byMonth: byMonth.map(r => ({ month: r.month, games: Number(r.n) })),
+    sampleGame: sample.length > 0 ? {
+      id: sample[0].game_id,
+      date: sample[0].date,
+      matchup: `${sample[0].away_alias}@${sample[0].home_alias}`,
+      score: `${sample[0].away_pts}-${sample[0].home_pts}`,
+    } : null,
+    pbpJsonShape: pbpShape,
+    boxScoreJsonShape: boxShape,
+  };
+}
 // Usage: ?phase=diagnose                (tests one from each game_type)
 //        ?phase=diagnose&gid=15882375   (specific game ID)
 async function phaseDiagnose(sql, url) {
@@ -1109,6 +1196,7 @@ export default async (req) => {
       case 'reset':             result = await phaseReset(sql); break;
       case 'status':            result = await phaseStatus(sql); break;
       case 'diagnose':          result = await phaseDiagnose(sql, url); break;
+      case 'inventory':         result = await phaseInventory(sql); break;
       case 'collect':           // backward-compat alias for collect_playoffs
       case 'collect_playoffs':  result = await phaseCollectPlayoffs(sql); break;
       case 'collect_regular':   result = await phaseCollectRegular(sql); break;
