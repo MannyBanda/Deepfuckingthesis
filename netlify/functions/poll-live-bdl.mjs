@@ -166,6 +166,7 @@ async function runAlertAgent(ctx) {
 ALERT:
 Type: ${ctx.alertType} (${ctx.alertTier})
 Control team: ${ctx.controlTeam} | Floor: ${ctx.floor} (weighted I1-I5 composite, 0-1) | Margin: ${ctx.margin} (${ctx.isTrailing ? 'trailing' : 'leading'})
+Score: ${ctx.score || 'N/A'}
 Period: Q${ctx.period} ${ctx.clock} | Minutes left: ${ctx.minsLeft}
 Conviction: ${ctx.convictionTier || 'N/A'} (${ctx.convictionCombo || 'N/A'}) ${ctx.convictionPairs ? '| Killer pairs: ' + ctx.convictionPairs : ''}
   (DOMINANT=4+ ind or I4+I5/I3+I4 pair, STRONG=I3+I4/I3+I5 pair, MODEST=2+ no killer pairs, CONDITIONAL=1 ind)
@@ -3937,6 +3938,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           controlTeam: ind.controlTeam, floor: ind.score.toFixed(2),
           margin, isTrailing: ctrlTrailing,
           period, clock, minsLeft: (period <= 4 ? ((4 - period) * 12 + parseFloat(clock?.split(':')[0] || 0)) : parseFloat(clock?.split(':')[0] || 0)).toFixed(1),
+          score: `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${period} ${clock}`,
           edge: aaEdge, ml: aaML, spread: odds?.homeSpread || null,
           tpClass, lsClass, ctrlSust, oppSust: oppSust,
           windowScore: clientCtx?.rollingWindow?.score || null,
@@ -5261,6 +5263,7 @@ export default async function(req) {
                   controlTeam: ind.controlTeam, floor: ind.score.toFixed(2),
                   margin, isTrailing: ctrlTrailing,
                   period: currentPeriod, clock, minsLeft: alertMinsLeft.toFixed(1),
+                  score: scoreLine,
                   edge: ctrlEdge, ml: ctrlML, spread: spreadVal,
                   tpClass: tpForBuy?.classification || wbTpClass || null,
                   lsClass: lsForBWC?.classification || wbLsClass || null,
@@ -5481,6 +5484,7 @@ export default async function(req) {
                         controlTeam: ind.controlTeam, floor: ind.score.toFixed(2),
                         margin: marginT, isTrailing: true,
                         period: currentPeriod, clock, minsLeft: alertMinsLeft.toFixed(1),
+                        score: tScoreLine,
                         edge: rpEdge, ml: rpML, spread: spreadVal,
                         tpClass, lsClass, ctrlSust: tCtrlSust, oppSust: oppSustNow,
                         convictionTier: conviction.tier, convictionCombo: conviction.combo,
@@ -5541,6 +5545,7 @@ export default async function(req) {
                     controlTeam: ind.controlTeam, floor: ind.score.toFixed(2),
                     margin: marginT, isTrailing: false,
                     period: currentPeriod, clock, minsLeft: alertMinsLeft.toFixed(1),
+                    score: tScoreLine,
                     edge: null, ml: null, spread: spreadVal,
                     tpClass, lsClass, ctrlSust: tCtrlSust, oppSust: oppSustNow,
                     convictionTier: conviction.tier, convictionCombo: conviction.combo,
@@ -5649,6 +5654,7 @@ export default async function(req) {
                       controlTeam: ind.controlTeam, floor: ind.score.toFixed(2),
                       margin: marginT, isTrailing: true,
                       period: currentPeriod, clock, minsLeft: alertMinsLeft.toFixed(1),
+                      score: tScoreLine,
                       edge: vbEdge, ml: vbML, spread: spreadVal,
                       tpClass, lsClass, ctrlSust: tCtrlSust, oppSust: oppSustNow,
                       convictionTier: conviction.tier, convictionCombo: conviction.combo,
