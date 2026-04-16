@@ -461,6 +461,26 @@ async function bdlFetch(path, retries = 2) {
   }
 }
 
+// Paginate through ALL plays for a game. BDL PerPageParam max is 100 (spec),
+// though some endpoints silently accept higher values. To be safe, we request
+// per_page=100 and follow next_cursor until exhausted.
+async function bdlFetchAllPlays(gid) {
+  const allPlays = [];
+  let cursor = null;
+  const MAX_PAGES = 15; // safety valve: 15 × 100 = 1,500 plays max
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const params = `game_id=${gid}&per_page=100${cursor ? `&cursor=${cursor}` : ''}`;
+    const resp = await bdlFetch(`/nba/v1/plays?${params}`);
+    const plays = resp?.data || [];
+    allPlays.push(...plays);
+    cursor = resp?.meta?.next_cursor;
+    if (!cursor || plays.length === 0) break;
+    // Small delay between pages to respect rate limits
+    if (page > 0) await new Promise(r => setTimeout(r, 100));
+  }
+  return allPlays;
+}
+
 // ── PHASE: INIT ─────────────────────────────────────────────────────────────
 async function phaseInit(sql, url) {
   const confirm = url?.searchParams?.get('confirm');
@@ -504,7 +524,7 @@ async function phaseSnapshot(sql, url) {
   const startTime = Date.now();
   const TIME_BUDGET_MS = 100000;
   const batchSize = parseInt(url.searchParams.get('n') || '200');
-  const concurrency = Math.min(parseInt(url.searchParams.get('c') || '8'), 20);
+  const concurrency = Math.min(parseInt(url.searchParams.get('c') || '4'), 20);
   const force = url.searchParams.get('force') === '1';
   const offsetParam = parseInt(url.searchParams.get('offset') || '0');
   const dryRun = url.searchParams.get('dry') === '1';
@@ -573,8 +593,7 @@ async function phaseSnapshot(sql, url) {
   async function processGame(g) {
     const { bdl_game_id: gid, home_alias: hA, away_alias: aA, winner_alias, margin } = g;
     try {
-      const resp = await bdlFetch(`/nba/v1/plays?game_id=${gid}&per_page=500`);
-      const plays = resp?.data || [];
+      const plays = await bdlFetchAllPlays(gid);
       if (plays.length === 0) {
         return { ok: false, gid, reason: 'no plays' };
       }
@@ -587,6 +606,11 @@ async function phaseSnapshot(sql, url) {
       for (const snap of snapshots) {
         const h = snap.team_stats.home, a = snap.team_stats.away;
         const marginAtSnap = (h.pts || 0) - (a.pts || 0);
+
+        // Compute ctrl_team_won at snapshot time so it's never NULL.
+        // We need indicators to know which team controls — but indicators
+        // aren't computed yet in the snapshot phase. We'll set it during
+        // the compute phase instead. Set to NULL here, compute fills it.
         await sql`
           INSERT INTO nba_snapshot_backtest (
             game_id, checkpoint, period, clock_sec,
@@ -604,11 +628,15 @@ async function phaseSnapshot(sql, url) {
           ON CONFLICT (game_id, checkpoint) DO UPDATE SET
             team_stats = EXCLUDED.team_stats,
             pbp_derived = EXCLUDED.pbp_derived,
-            margin_at_snapshot = EXCLUDED.margin_at_snapshot
+            margin_at_snapshot = EXCLUDED.margin_at_snapshot,
+            indicators = NULL,
+            conviction = NULL,
+            ctrl_team_won = NULL,
+            computed_at = NULL
         `;
       }
 
-      return { ok: true, gid, snapshots: snapshots.length };
+      return { ok: true, gid, snapshots: snapshots.length, plays: plays.length };
     } catch (e) {
       return { ok: false, gid, reason: e.message };
     }
@@ -951,6 +979,23 @@ async function phaseStatus(sql) {
   };
 }
 
+// ── PHASE: WIPE_INDICATORS — clear stale compute data for clean recompute ──
+async function phaseWipeIndicators(sql) {
+  const result = await sql`
+    UPDATE nba_snapshot_backtest
+    SET indicators = NULL, conviction = NULL, ctrl_team_won = NULL, computed_at = NULL
+    WHERE indicators IS NOT NULL
+  `;
+  const remaining = await sql`SELECT COUNT(*) AS n FROM nba_snapshot_backtest WHERE indicators IS NULL`;
+  return {
+    status: 'ok',
+    message: 'Wiped all indicators/conviction/ctrl_team_won',
+    rows_wiped: result.count || 'unknown',
+    rows_needing_compute: Number(remaining[0].n),
+    nextStep: '?phase=compute',
+  };
+}
+
 // ── PHASE: INSPECT — show all snapshots for one game ────────────────────────
 async function phaseInspect(sql, url) {
   const gid = url?.searchParams?.get('gid');
@@ -1007,9 +1052,10 @@ export default async (req) => {
       case 'report_alert_sim':  result = await reportAlertSim(sql); break;
       case 'report_all':        result = await phaseReportAll(sql); break;
       case 'status':            result = await phaseStatus(sql); break;
+      case 'wipe_indicators':    result = await phaseWipeIndicators(sql); break;
       case 'inspect':           result = await phaseInspect(sql, url); break;
       default:
-        result = { error: `Unknown phase: ${phase}. Use init, snapshot, compute, report_all, report_calibration, report_time, report_alert_sim, status, inspect.` };
+        result = { error: `Unknown phase: ${phase}. Use init, snapshot, compute, wipe_indicators, report_all, report_calibration, report_time, report_alert_sim, status, inspect.` };
     }
     return new Response(JSON.stringify(result, null, 2), {
       headers: { 'Content-Type': 'application/json' },
