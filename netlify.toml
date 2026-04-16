@@ -39,6 +39,9 @@
 [functions."backtest-nba-playoffs"]
   timeout = 120
 
+[functions."backtest-nba-snapshots"]
+  timeout = 120
+
 [[headers]]
   for = "/*"
   [headers.values]
