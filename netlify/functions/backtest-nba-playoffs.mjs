@@ -782,7 +782,7 @@ async function phaseBoxscores(sql, url) {
 
         const updated = await sql`
           UPDATE nba_backtest
-          SET team_stats = ${JSON.stringify({ home: h, away: a })}::jsonb
+          SET team_stats = ${JSON.stringify({ home: h, away: a })}
           WHERE bdl_game_id = ${bdlGameId}
         `;
         if (updated.length || updated.count) gamesUpdated++;
@@ -1090,16 +1090,17 @@ async function phaseCompute(sql, url) {
   const batchSize = parseInt(url?.searchParams?.get('n') || '400');
 
   // Normal: only pick up uncomputed rows (indicators IS NULL).
-  // Force: pick rows that have pbp_derived but look broken (all-zero biggest_lead,
-  //   which is the smoking gun for the old parser bug). This is safe to re-run:
-  //   real data has hBigLead > 0 always so those rows are skipped.
+  // Force: pick rows whose INDICATORS are stale — i.e., indicators.raw shows
+  //   hBigLead=0 AND aBigLead=0 (legacy from when pbp_derived was empty).
+  //   Real indicators.raw has these as positive numbers in >99% of games.
   const rows = force
     ? await sql`
         SELECT bdl_game_id, home_alias, away_alias, home_pts, away_pts, winner_alias,
                team_stats, pbp_derived
         FROM nba_backtest
         WHERE team_stats IS NOT NULL AND pbp_derived IS NOT NULL
-          AND (pbp_derived->>'hBigLead' = '0' AND pbp_derived->>'aBigLead' = '0')
+          AND (indicators IS NULL
+               OR (indicators->'raw'->>'hBigLead' = '0' AND indicators->'raw'->>'aBigLead' = '0'))
         ORDER BY bdl_game_id
         LIMIT ${batchSize}
       `
@@ -1140,8 +1141,8 @@ async function phaseCompute(sql, url) {
 
       await sql`
         UPDATE nba_backtest
-        SET indicators = ${JSON.stringify(ind)}::jsonb,
-            conviction = ${JSON.stringify(conv)}::jsonb,
+        SET indicators = ${JSON.stringify(ind)},
+            conviction = ${JSON.stringify(conv)},
             ctrl_team_won = ${ctrlWon},
             computed_at = NOW()
         WHERE bdl_game_id = ${row.bdl_game_id}
