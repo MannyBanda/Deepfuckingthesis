@@ -552,11 +552,12 @@ async function phaseSnapshot(sql, url) {
       const snapshots = walkAndSnapshot(plays, hA, aA);
       if (snapshots.length === 0) return { ok: false, gid, reason: 'no snapshots emitted' };
 
-      // Insert all snapshots in a single batch (parallel)
-      await Promise.all(snapshots.map(snap => {
+      // Insert snapshots sequentially per game. 8 inserts per game × 8-way
+      // game concurrency = 64 total in-flight at peak, not 1,600.
+      for (const snap of snapshots) {
         const h = snap.team_stats.home, a = snap.team_stats.away;
         const marginAtSnap = (h.pts || 0) - (a.pts || 0);
-        return sql`
+        await sql`
           INSERT INTO nba_snapshot_backtest (
             game_id, checkpoint, period, clock_sec,
             home_alias, away_alias, margin_at_snapshot,
@@ -575,7 +576,7 @@ async function phaseSnapshot(sql, url) {
             pbp_derived = EXCLUDED.pbp_derived,
             margin_at_snapshot = EXCLUDED.margin_at_snapshot
         `;
-      }));
+      }
 
       return { ok: true, gid, snapshots: snapshots.length };
     } catch (e) {
