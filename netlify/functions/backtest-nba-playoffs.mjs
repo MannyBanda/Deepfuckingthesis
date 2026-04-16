@@ -276,55 +276,73 @@ async function phaseReset(sql) {
 }
 
 // ── PHASE: DIAGNOSE — fetch a single game's plays, dump raw response ─────────
-// Usage: ?phase=diagnose                (uses oldest game in DB)
+// Usage: ?phase=diagnose                (tests one from each game_type)
 //        ?phase=diagnose&gid=15882375   (specific game ID)
 async function phaseDiagnose(sql, url) {
-  let gid = url.searchParams.get('gid');
-  if (!gid) {
-    const row = await sql`
-      SELECT bdl_game_id, date, home_alias, away_alias, game_type
-      FROM nba_backtest
-      WHERE pbp_derived IS NULL AND team_stats IS NOT NULL
-      ORDER BY date ASC LIMIT 1
-    `;
-    if (row.length === 0) return { error: 'No rows needing PBP' };
-    gid = row[0].bdl_game_id;
-  }
-
   if (!BDL_KEY) return { error: 'BDL_KEY missing from env' };
 
-  const path = `/nba/v1/plays?game_id=${gid}&per_page=500`;
-  const resp = await fetch(`${BDL_BASE}${path}`, { headers: { Authorization: BDL_KEY } });
-  const status = resp.status;
-  const headers = {};
-  resp.headers.forEach((v, k) => { headers[k] = v; });
+  const gidParam = url.searchParams.get('gid');
 
-  let body;
-  const ct = resp.headers.get('content-type') || '';
-  if (ct.includes('application/json')) {
-    try { body = await resp.json(); }
-    catch (e) { body = { _parseError: e.message }; }
-  } else {
-    body = await resp.text();
+  async function probe(gid, label) {
+    const path = `/nba/v1/plays?game_id=${gid}&per_page=500`;
+    try {
+      const resp = await fetch(`${BDL_BASE}${path}`, { headers: { Authorization: BDL_KEY } });
+      const body = await resp.json().catch(() => ({}));
+      return {
+        label,
+        gid,
+        status: resp.status,
+        dataLength: Array.isArray(body?.data) ? body.data.length : 'not array',
+        firstPlay: Array.isArray(body?.data) && body.data.length > 0 ? body.data[0] : null,
+        rateLimitRemaining: resp.headers.get('x-ratelimit-remaining'),
+      };
+    } catch (e) {
+      return { label, gid, error: e.message };
+    }
   }
 
-  const diagnostic = {
-    requestedGameId: gid,
-    fullUrl: `${BDL_BASE}${path}`,
-    keyPresent: !!BDL_KEY,
-    keyPrefix: BDL_KEY ? BDL_KEY.substring(0, 8) + '...' : null,
-    httpStatus: status,
-    responseHeaders: headers,
-    bodyType: typeof body,
-    bodyKeys: body && typeof body === 'object' ? Object.keys(body) : null,
-    dataIsArray: Array.isArray(body?.data),
-    dataLength: Array.isArray(body?.data) ? body.data.length : 'n/a',
-    firstPlay: Array.isArray(body?.data) && body.data.length > 0 ? body.data[0] : null,
-    meta: body?.meta || null,
-    rawBody: typeof body === 'string' ? body.substring(0, 500) : body,
-  };
+  // Single-game mode (existing behavior)
+  if (gidParam) {
+    return await probe(gidParam, 'specified');
+  }
 
-  return diagnostic;
+  // Multi-game mode — test one from each game_type, plus a very recent live game from existing games table
+  const probes = [];
+
+  // One from each game_type in our backtest table (oldest to newest)
+  const types = ['playoff_2024', 'regular', 'playoff_2025'];
+  for (const t of types) {
+    const row = await sql`
+      SELECT bdl_game_id, date FROM nba_backtest
+      WHERE game_type = ${t}
+      ORDER BY date ${t === 'playoff_2025' ? sql`DESC` : sql`ASC`}
+      LIMIT 1
+    `;
+    if (row.length > 0) {
+      probes.push(await probe(row[0].bdl_game_id, `${t} (${row[0].date})`));
+    }
+  }
+
+  // And one very recent game from the live games table (if it exists)
+  try {
+    const recent = await sql`
+      SELECT id, date FROM games
+      WHERE league = 'nba' AND home_pts IS NOT NULL
+      ORDER BY date DESC LIMIT 1
+    `;
+    if (recent.length > 0) {
+      probes.push(await probe(recent[0].id, `recent_live (${recent[0].date})`));
+    }
+  } catch (e) {
+    probes.push({ label: 'recent_live', error: 'games table query failed: ' + e.message });
+  }
+
+  return {
+    keyPresent: true,
+    keyPrefix: BDL_KEY.substring(0, 8) + '...',
+    probes,
+    interpretation: 'If all dataLength=0 → BDL has retention limits on historical plays. If recent_live > 0 → confirmed retention issue.',
+  };
 }
 
 async function phaseStatus(sql) {
