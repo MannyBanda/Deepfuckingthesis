@@ -323,18 +323,30 @@ async function phaseDiagnose(sql, url) {
     }
   }
 
-  // And one very recent game from the live games table (if it exists)
+  // Probe a very recent BDL game ID (pull from BDL /games endpoint directly)
+  // We can't use the `games` table because it stores SR UUIDs, not BDL integer IDs.
   try {
-    const recent = await sql`
-      SELECT id, date FROM games
-      WHERE league = 'nba' AND home_pts IS NOT NULL
-      ORDER BY date DESC LIMIT 1
-    `;
-    if (recent.length > 0) {
-      probes.push(await probe(recent[0].id, `recent_live (${recent[0].date})`));
+    // Look back up to 30 days for a completed BDL game
+    const today = new Date();
+    let foundRecent = null;
+    for (let daysBack = 1; daysBack <= 30; daysBack++) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - daysBack);
+      const dStr = d.toISOString().substring(0, 10);
+      const resp = await bdlFetch(`/nba/v1/games?dates[]=${dStr}&per_page=25`);
+      const games = (resp?.data || []).filter(g => g.home_team_score > 0);
+      if (games.length > 0) {
+        foundRecent = { id: games[0].id, date: dStr };
+        break;
+      }
+    }
+    if (foundRecent) {
+      probes.push(await probe(foundRecent.id, `recent_bdl (${foundRecent.date})`));
+    } else {
+      probes.push({ label: 'recent_bdl', error: 'No completed BDL games found in last 30 days' });
     }
   } catch (e) {
-    probes.push({ label: 'recent_live', error: 'games table query failed: ' + e.message });
+    probes.push({ label: 'recent_bdl', error: e.message });
   }
 
   return {
