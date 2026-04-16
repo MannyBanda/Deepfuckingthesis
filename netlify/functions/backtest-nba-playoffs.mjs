@@ -433,32 +433,44 @@ async function phaseCollectRegular(sql) {
 
   console.log(`BDL: fetched ${allGames.length} completed regular season games (${pages} pages)`);
 
-  let saved = 0, errors = 0;
+  // Build rows with dedup by game id
+  const rowMap = new Map();
+  let skipped = 0;
   for (const g of allGames) {
+    const homeAbbr = g.home_team?.abbreviation || g.home_team?.team?.abbreviation || '';
+    const awayAbbr = g.visitor_team?.abbreviation || g.visitor_team?.team?.abbreviation || g.away_team?.abbreviation || '';
+    const homePts = g.home_team_score || 0;
+    const awayPts = g.visitor_team_score || 0;
+    const margin = homePts - awayPts;
+    const marginAbs = Math.abs(margin);
+    const winner = margin > 0 ? homeAbbr : awayAbbr;
+    const date = (g.date || '').substring(0, 10);
+
+    if (!homeAbbr || !awayAbbr) { skipped++; continue; }
+
+    rowMap.set(g.id, {
+      id: g.id, date,
+      homeAbbr, awayAbbr, homePts, awayPts, margin, marginAbs, winner,
+    });
+  }
+
+  // Parallel INSERT with concurrency cap. Each query is independent,
+  // so this cuts wall-clock time from ~60s (sequential) to ~2-3s (20-way parallel).
+  const rows = [...rowMap.values()];
+  const CONCURRENCY = 20;
+  let saved = 0, errors = 0;
+  const errorLog = [];
+
+  async function insertOne(r) {
     try {
-      const homeAbbr = g.home_team?.abbreviation || g.home_team?.team?.abbreviation || '';
-      const awayAbbr = g.visitor_team?.abbreviation || g.visitor_team?.team?.abbreviation || g.away_team?.abbreviation || '';
-      const homePts = g.home_team_score || 0;
-      const awayPts = g.visitor_team_score || 0;
-      const margin = homePts - awayPts;
-      const marginAbs = Math.abs(margin);
-      const winner = margin > 0 ? homeAbbr : awayAbbr;
-      const date = (g.date || '').substring(0, 10);
-
-      if (!homeAbbr || !awayAbbr) {
-        console.log(`collect_regular skip game ${g.id}: missing team aliases`);
-        errors++;
-        continue;
-      }
-
       await sql`
         INSERT INTO nba_backtest (
           bdl_game_id, season, game_type, playoff_year, playoff_round, date,
           home_alias, away_alias, home_pts, away_pts, margin, margin_abs, winner_alias
         )
         VALUES (
-          ${g.id}, ${REGULAR_SEASON}, 'regular', NULL, NULL, ${date},
-          ${homeAbbr}, ${awayAbbr}, ${homePts}, ${awayPts}, ${margin}, ${marginAbs}, ${winner}
+          ${r.id}, ${REGULAR_SEASON}, 'regular', NULL, NULL, ${r.date},
+          ${r.homeAbbr}, ${r.awayAbbr}, ${r.homePts}, ${r.awayPts}, ${r.margin}, ${r.marginAbs}, ${r.winner}
         )
         ON CONFLICT (bdl_game_id) DO UPDATE SET
           game_type = EXCLUDED.game_type,
@@ -468,10 +480,21 @@ async function phaseCollectRegular(sql) {
           margin_abs = EXCLUDED.margin_abs,
           winner_alias = EXCLUDED.winner_alias
       `;
-      saved++;
+      return { ok: true };
     } catch (e) {
-      console.log(`collect_regular save error game ${g.id}: ${e.message}`);
-      errors++;
+      return { ok: false, id: r.id, error: e.message };
+    }
+  }
+
+  for (let i = 0; i < rows.length; i += CONCURRENCY) {
+    const slice = rows.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(slice.map(insertOne));
+    for (const r of results) {
+      if (r.ok) saved++;
+      else {
+        errors++;
+        if (errorLog.length < 5) errorLog.push(`${r.id}: ${r.error}`);
+      }
     }
   }
 
@@ -481,7 +504,9 @@ async function phaseCollectRegular(sql) {
     status: 'ok',
     gamesFound: allGames.length,
     saved,
+    skipped,
     errors,
+    errorLog,
     pages,
     byGameType: byType.map(r => ({ type: r.game_type, total: Number(r.total) })),
     nextStep: '?phase=boxscores',
@@ -723,16 +748,26 @@ async function phasePbp(sql, url) {
 }
 
 // ── PHASE: COMPUTE — run computeServer + computeConviction on every row ──────
-async function phaseCompute(sql) {
+async function phaseCompute(sql, url) {
+  const startTime = Date.now();
+  const TIME_BUDGET_MS = 100000;
+  const CONCURRENCY = 20;
+
+  // Only pick up rows not yet computed — makes it resumable
   const rows = await sql`
     SELECT bdl_game_id, home_alias, away_alias, home_pts, away_pts, winner_alias,
            team_stats, pbp_derived
     FROM nba_backtest
-    WHERE team_stats IS NOT NULL AND pbp_derived IS NOT NULL
+    WHERE team_stats IS NOT NULL AND pbp_derived IS NOT NULL AND indicators IS NULL
   `;
 
+  if (rows.length === 0) {
+    return { status: 'ok', message: 'All ready rows are already computed', nextStep: '?phase=report' };
+  }
+
   let computed = 0, errors = 0;
-  for (const row of rows) {
+
+  async function computeOne(row) {
     try {
       const ts = row.team_stats;
       const pd = row.pbp_derived;
@@ -748,7 +783,7 @@ async function phaseCompute(sql) {
         q4hPts: pd.q4hPts, q4aPts: pd.q4aPts,
       });
 
-      if (!ind) { errors++; continue; }
+      if (!ind) return { ok: false };
 
       const conv = computeConviction(ind);
       const ctrlWon = row.winner_alias === ind.controlTeam;
@@ -761,19 +796,35 @@ async function phaseCompute(sql) {
             computed_at = NOW()
         WHERE bdl_game_id = ${row.bdl_game_id}
       `;
-      computed++;
+      return { ok: true };
     } catch (e) {
-      console.log(`compute error ${row.bdl_game_id}: ${e.message}`);
-      errors++;
+      return { ok: false, err: e.message };
     }
   }
+
+  for (let i = 0; i < rows.length; i += CONCURRENCY) {
+    if (Date.now() - startTime > TIME_BUDGET_MS) break;
+    const slice = rows.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(slice.map(computeOne));
+    for (const r of results) {
+      if (r.ok) computed++;
+      else errors++;
+    }
+  }
+
+  const remaining = await sql`
+    SELECT COUNT(*) AS n FROM nba_backtest
+    WHERE team_stats IS NOT NULL AND pbp_derived IS NOT NULL AND indicators IS NULL
+  `;
 
   return {
     status: 'ok',
     computed,
     errors,
     total: rows.length,
-    nextStep: '?phase=report',
+    remaining: Number(remaining[0].n),
+    elapsedMs: Date.now() - startTime,
+    nextStep: remaining[0].n > 0 ? '?phase=compute again' : '?phase=report',
   };
 }
 
@@ -980,7 +1031,7 @@ export default async (req) => {
       case 'collect_regular':   result = await phaseCollectRegular(sql); break;
       case 'boxscores':         result = await phaseBoxscores(sql, url); break;
       case 'pbp':               result = await phasePbp(sql, url); break;
-      case 'compute':           result = await phaseCompute(sql); break;
+      case 'compute':           result = await phaseCompute(sql, url); break;
       case 'report':            result = await phaseReport(sql); break;
       default:
         result = { error: `Unknown phase: ${phase}. Use init, collect_playoffs, collect_regular, boxscores, pbp, compute, report, status, reset.` };
