@@ -505,21 +505,33 @@ async function phaseSnapshot(sql, url) {
   const TIME_BUDGET_MS = 100000;
   const batchSize = parseInt(url.searchParams.get('n') || '200');
   const concurrency = Math.min(parseInt(url.searchParams.get('c') || '8'), 20);
+  const force = url.searchParams.get('force') === '1';
 
-  // Pick games from nba_backtest that have team_stats and ctrl_team_won computed.
-  // Skip games that already have snapshots (resumable).
-  const games = await sql`
-    SELECT bt.bdl_game_id, bt.home_alias, bt.away_alias,
-           bt.home_pts, bt.away_pts, bt.winner_alias, bt.margin
-    FROM nba_backtest bt
-    LEFT JOIN nba_snapshot_backtest snap
-      ON snap.game_id = bt.bdl_game_id AND snap.checkpoint = 'Q4_END'
-    WHERE bt.team_stats IS NOT NULL
-      AND bt.game_type = 'regular'
-      AND snap.game_id IS NULL
-    ORDER BY bt.date ASC
-    LIMIT ${batchSize}
-  `;
+  // Normal: pick games without Q4_END snapshot (resumable).
+  // Force: re-snapshot ALL games (INSERT...ON CONFLICT DO UPDATE refreshes
+  //   team_stats + pbp_derived). Use after walker bug fixes.
+  const games = force
+    ? await sql`
+        SELECT bt.bdl_game_id, bt.home_alias, bt.away_alias,
+               bt.home_pts, bt.away_pts, bt.winner_alias, bt.margin
+        FROM nba_backtest bt
+        WHERE bt.team_stats IS NOT NULL AND bt.game_type = 'regular'
+        ORDER BY bt.date ASC
+        LIMIT ${batchSize}
+        OFFSET ${parseInt(url.searchParams.get('offset') || '0')}
+      `
+    : await sql`
+        SELECT bt.bdl_game_id, bt.home_alias, bt.away_alias,
+               bt.home_pts, bt.away_pts, bt.winner_alias, bt.margin
+        FROM nba_backtest bt
+        LEFT JOIN nba_snapshot_backtest snap
+          ON snap.game_id = bt.bdl_game_id AND snap.checkpoint = 'Q4_END'
+        WHERE bt.team_stats IS NOT NULL
+          AND bt.game_type = 'regular'
+          AND snap.game_id IS NULL
+        ORDER BY bt.date ASC
+        LIMIT ${batchSize}
+      `;
 
   if (games.length === 0) {
     return { status: 'ok', message: 'No more games to snapshot', nextStep: '?phase=compute&force=1' };
@@ -588,16 +600,28 @@ async function phaseSnapshot(sql, url) {
     WHERE bt.team_stats IS NOT NULL AND bt.game_type = 'regular' AND snap.game_id IS NULL
   `;
 
+  const nextOffset = parseInt(url.searchParams.get('offset') || '0') + games.length;
+  const totalGames = await sql`SELECT COUNT(*) AS n FROM nba_backtest WHERE team_stats IS NOT NULL AND game_type = 'regular'`;
+
   return {
     status: 'ok',
+    mode: force ? 'force (re-snapshot all)' : 'normal (only games without snapshots)',
     gamesProcessed: games.length,
     gamesDone,
     snapshotsWritten,
     failed,
     failLog,
-    remainingGames: Number(remaining[0].n),
+    remainingGames: force
+      ? Math.max(0, Number(totalGames[0].n) - nextOffset)
+      : Number(remaining[0].n),
     elapsedMs: Date.now() - startTime,
-    nextStep: remaining[0].n > 0 ? `?phase=snapshot&n=${batchSize}&c=${concurrency} again` : '?phase=compute&force=1',
+    nextStep: force
+      ? (nextOffset < Number(totalGames[0].n)
+          ? `?phase=snapshot&force=1&n=${batchSize}&c=${concurrency}&offset=${nextOffset}`
+          : '?phase=compute&force=1')
+      : (remaining[0].n > 0
+          ? `?phase=snapshot&n=${batchSize}&c=${concurrency} again`
+          : '?phase=compute&force=1'),
   };
 }
 
