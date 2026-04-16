@@ -1,20 +1,26 @@
-// NBA Playoffs Backtest — Indicator Validation Against 2024 + 2025 Postseasons
+// NBA Backtest — Indicator Validation Across Playoffs + Regular Season
 // BDL-only (60 calls/s). Uses the exact same methodology as the 171-game
 // regular season validation (combo-sim-console.js).
 //
+// Game types:
+//   - playoff_2024:  2023-24 postseason (calendar year 2024)
+//   - playoff_2025:  2024-25 postseason (calendar year 2025)
+//   - regular:       2024-25 regular season (BDL season=2024)
+//
 // Phases:
-//   ?phase=init       — Create nba_playoffs_backtest table
-//   ?phase=collect    — BDL: pull all postseason games for seasons[]=2023,2024
-//   ?phase=boxscores  — BDL: pull box_scores by date (team stat aggregation)
-//   ?phase=pbp&n=50   — BDL: pull plays for games missing it (chunked, resumable)
-//   ?phase=compute    — Run computeServer + computeConviction on cached data
-//   ?phase=report     — Return stratified accuracy report (vs regular season baseline)
-//   ?phase=status     — Progress (rows, missing pbp, computed)
-//   ?phase=reset      — Clear computed columns (keep BDL data)
+//   ?phase=init              — Create nba_backtest table (+ migrate old name)
+//   ?phase=collect_playoffs  — BDL: pull postseason games (seasons 2023, 2024)
+//   ?phase=collect_regular   — BDL: pull 2024-25 regular season games (~1,230)
+//   ?phase=boxscores         — BDL: aggregate team stats from box_scores by date
+//   ?phase=pbp&n=200&c=8     — BDL: plays per game, concurrent batches (default c=8)
+//   ?phase=compute           — Run computeServer + computeConviction on cached data
+//   ?phase=report            — Stratified accuracy (by game_type + close-games slice)
+//   ?phase=status            — Progress summary
+//   ?phase=reset             — Clear computed columns (keep BDL-collected data)
 //
 // BDL season convention (confirmed):
-//   season=2023 = 2023-24 regular season → 2024 playoffs (calendar year)
-//   season=2024 = 2024-25 regular season → 2025 playoffs (calendar year)
+//   season=2023 = 2023-24 regular → 2024 playoffs
+//   season=2024 = 2024-25 regular → 2025 playoffs
 
 import { neon } from '@neondatabase/serverless';
 
@@ -183,18 +189,28 @@ function computeConviction(ind) {
 // ── PHASE HANDLERS ───────────────────────────────────────────────────────────
 
 async function phaseInit(sql) {
+  // Migrate old table name if it exists and new one doesn't
+  const oldExists = await sql`SELECT to_regclass('nba_playoffs_backtest') AS t`;
+  const newExists = await sql`SELECT to_regclass('nba_backtest') AS t`;
+  if (oldExists[0].t && !newExists[0].t) {
+    console.log('Migrating nba_playoffs_backtest → nba_backtest');
+    await sql`ALTER TABLE nba_playoffs_backtest RENAME TO nba_backtest`;
+  }
+
   await sql`
-    CREATE TABLE IF NOT EXISTS nba_playoffs_backtest (
+    CREATE TABLE IF NOT EXISTS nba_backtest (
       bdl_game_id INTEGER PRIMARY KEY,
       season INTEGER,
-      playoff_year INTEGER,
-      playoff_round TEXT,
+      game_type TEXT,                -- 'regular' | 'playoff_2024' | 'playoff_2025'
+      playoff_year INTEGER,          -- nullable for regular season
+      playoff_round TEXT,            -- nullable for regular season
       date TEXT,
       home_alias TEXT,
       away_alias TEXT,
       home_pts INTEGER,
       away_pts INTEGER,
-      margin INTEGER,
+      margin INTEGER,                -- home - away (signed)
+      margin_abs INTEGER,            -- |margin|, derived for fast close-game filtering
       winner_alias TEXT,
       team_stats JSONB,
       pbp_derived JSONB,
@@ -205,16 +221,43 @@ async function phaseInit(sql) {
       computed_at TIMESTAMPTZ
     )
   `;
-  await sql`CREATE INDEX IF NOT EXISTS idx_nba_po_year ON nba_playoffs_backtest(playoff_year)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_nba_po_round ON nba_playoffs_backtest(playoff_round)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_nba_po_tier ON nba_playoffs_backtest((conviction->>'tier'))`;
-  return { status: 'ok', message: 'nba_playoffs_backtest table created', nextStep: '?phase=collect' };
+
+  // Add new columns if migrating from old schema
+  await sql`ALTER TABLE nba_backtest ADD COLUMN IF NOT EXISTS game_type TEXT`;
+  await sql`ALTER TABLE nba_backtest ADD COLUMN IF NOT EXISTS margin_abs INTEGER`;
+
+  // Backfill game_type from playoff_year for any pre-existing rows
+  const backfilled = await sql`
+    UPDATE nba_backtest
+    SET game_type = CASE
+      WHEN playoff_year = 2024 THEN 'playoff_2024'
+      WHEN playoff_year = 2025 THEN 'playoff_2025'
+      ELSE 'regular'
+    END
+    WHERE game_type IS NULL
+  `;
+
+  // Backfill margin_abs from margin
+  await sql`UPDATE nba_backtest SET margin_abs = ABS(margin) WHERE margin_abs IS NULL AND margin IS NOT NULL`;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_nba_bt_type ON nba_backtest(game_type)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_nba_bt_year ON nba_backtest(playoff_year)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_nba_bt_round ON nba_backtest(playoff_round)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_nba_bt_tier ON nba_backtest((conviction->>'tier'))`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_nba_bt_close ON nba_backtest(margin_abs)`;
+
+  return {
+    status: 'ok',
+    message: 'nba_backtest table ready',
+    migrated: oldExists[0].t && !newExists[0].t ? 'renamed from nba_playoffs_backtest' : 'none',
+    nextStep: '?phase=collect_playoffs or ?phase=collect_regular',
+  };
 }
 
 async function phaseReset(sql) {
-  const before = await sql`SELECT COUNT(*) AS total, COUNT(team_stats) AS with_box, COUNT(pbp_derived) AS with_pbp, COUNT(indicators) AS computed FROM nba_playoffs_backtest`;
+  const before = await sql`SELECT COUNT(*) AS total, COUNT(team_stats) AS with_box, COUNT(pbp_derived) AS with_pbp, COUNT(indicators) AS computed FROM nba_backtest`;
   await sql`
-    UPDATE nba_playoffs_backtest SET
+    UPDATE nba_backtest SET
       team_stats = NULL, pbp_derived = NULL,
       indicators = NULL, conviction = NULL, ctrl_team_won = NULL,
       pbp_available = false, computed_at = NULL
@@ -241,15 +284,19 @@ async function phaseStatus(sql) {
       COUNT(indicators) AS computed,
       COUNT(CASE WHEN team_stats IS NULL THEN 1 END) AS needs_box,
       COUNT(CASE WHEN pbp_derived IS NULL THEN 1 END) AS needs_pbp
-    FROM nba_playoffs_backtest
+    FROM nba_backtest
   `;
-  const byYear = await sql`
-    SELECT playoff_year, COUNT(*) AS total, COUNT(indicators) AS computed
-    FROM nba_playoffs_backtest GROUP BY playoff_year ORDER BY playoff_year
+  const byType = await sql`
+    SELECT game_type, COUNT(*) AS total,
+           COUNT(team_stats) AS with_box,
+           COUNT(pbp_derived) AS with_pbp,
+           COUNT(indicators) AS computed
+    FROM nba_backtest GROUP BY game_type ORDER BY game_type
   `;
   const byRound = await sql`
     SELECT playoff_round, COUNT(*) AS total, COUNT(indicators) AS computed
-    FROM nba_playoffs_backtest GROUP BY playoff_round ORDER BY playoff_round
+    FROM nba_backtest WHERE playoff_round IS NOT NULL
+    GROUP BY playoff_round ORDER BY playoff_round
   `;
   return {
     total: Number(counts[0].total),
@@ -258,18 +305,24 @@ async function phaseStatus(sql) {
     computed: Number(counts[0].computed),
     needsBox: Number(counts[0].needs_box),
     needsPbp: Number(counts[0].needs_pbp),
-    byYear: byYear.map(r => ({ year: r.playoff_year, total: Number(r.total), computed: Number(r.computed) })),
+    byGameType: byType.map(r => ({
+      type: r.game_type,
+      total: Number(r.total),
+      withBox: Number(r.with_box),
+      withPbp: Number(r.with_pbp),
+      computed: Number(r.computed),
+    })),
     byRound: byRound.map(r => ({ round: r.playoff_round, total: Number(r.total), computed: Number(r.computed) })),
   };
 }
 
-// ── PHASE: COLLECT — pull game list from BDL /games endpoint ─────────────────
-async function phaseCollect(sql) {
+// ── PHASE: COLLECT_PLAYOFFS — pull postseason games from BDL /games ──────────
+async function phaseCollectPlayoffs(sql) {
   const allGames = [];
   for (const season of SEASONS) {
     let cursor = null;
     let pages = 0;
-    const MAX_PAGES = 10; // ~85 games per postseason, 100/page → 1 page enough, 10 is safe upper bound
+    const MAX_PAGES = 10;
 
     while (pages < MAX_PAGES) {
       let path = `/nba/v1/games?seasons[]=${season}&postseason=true&per_page=100`;
@@ -278,7 +331,6 @@ async function phaseCollect(sql) {
       if (!resp?.data || resp.data.length === 0) break;
 
       for (const g of resp.data) {
-        // Only include completed games
         const status = (g.status || '').toLowerCase();
         const isFinal = status === 'final' || status.includes('final') || (g.home_team_score > 0 && g.visitor_team_score > 0);
         if (!isFinal) continue;
@@ -296,61 +348,143 @@ async function phaseCollect(sql) {
   let saved = 0, errors = 0;
   for (const g of allGames) {
     try {
-      // BDL schema: home_team, visitor_team. Defensive against older/varied response shapes.
       const homeAbbr = g.home_team?.abbreviation || g.home_team?.team?.abbreviation || '';
       const awayAbbr = g.visitor_team?.abbreviation || g.visitor_team?.team?.abbreviation || g.away_team?.abbreviation || '';
       const homePts = g.home_team_score || 0;
       const awayPts = g.visitor_team_score || 0;
       const margin = homePts - awayPts;
+      const marginAbs = Math.abs(margin);
       const winner = margin > 0 ? homeAbbr : awayAbbr;
       const date = (g.date || '').substring(0, 10);
       const playoffYear = g._season + 1; // season=2023 → 2024 playoffs
+      const gameType = `playoff_${playoffYear}`;
       const playoffRound = inferRound(date, playoffYear);
 
       if (!homeAbbr || !awayAbbr) {
-        console.log(`collect skip game ${g.id}: missing team aliases (home=${homeAbbr}, away=${awayAbbr})`);
+        console.log(`collect_playoffs skip game ${g.id}: missing team aliases`);
         errors++;
         continue;
       }
 
       await sql`
-        INSERT INTO nba_playoffs_backtest (
-          bdl_game_id, season, playoff_year, playoff_round, date,
-          home_alias, away_alias, home_pts, away_pts, margin, winner_alias
+        INSERT INTO nba_backtest (
+          bdl_game_id, season, game_type, playoff_year, playoff_round, date,
+          home_alias, away_alias, home_pts, away_pts, margin, margin_abs, winner_alias
         )
         VALUES (
-          ${g.id}, ${g._season}, ${playoffYear}, ${playoffRound}, ${date},
-          ${homeAbbr}, ${awayAbbr}, ${homePts}, ${awayPts}, ${margin}, ${winner}
+          ${g.id}, ${g._season}, ${gameType}, ${playoffYear}, ${playoffRound}, ${date},
+          ${homeAbbr}, ${awayAbbr}, ${homePts}, ${awayPts}, ${margin}, ${marginAbs}, ${winner}
         )
         ON CONFLICT (bdl_game_id) DO UPDATE SET
+          game_type = EXCLUDED.game_type,
           home_pts = EXCLUDED.home_pts,
           away_pts = EXCLUDED.away_pts,
           margin = EXCLUDED.margin,
+          margin_abs = EXCLUDED.margin_abs,
           winner_alias = EXCLUDED.winner_alias,
           playoff_round = EXCLUDED.playoff_round
       `;
       saved++;
     } catch (e) {
-      console.log(`collect save error game ${g.id}: ${e.message}`);
+      console.log(`collect_playoffs save error game ${g.id}: ${e.message}`);
       errors++;
     }
   }
 
-  const byYear = await sql`
-    SELECT playoff_year, COUNT(*) AS total FROM nba_playoffs_backtest GROUP BY playoff_year ORDER BY playoff_year
-  `;
-  const byRound = await sql`
-    SELECT playoff_round, COUNT(*) AS total FROM nba_playoffs_backtest GROUP BY playoff_round ORDER BY playoff_round
-  `;
+  const byType = await sql`SELECT game_type, COUNT(*) AS total FROM nba_backtest GROUP BY game_type ORDER BY game_type`;
+  const byRound = await sql`SELECT playoff_round, COUNT(*) AS total FROM nba_backtest WHERE playoff_round IS NOT NULL GROUP BY playoff_round ORDER BY playoff_round`;
 
   return {
     status: 'ok',
     gamesFound: allGames.length,
     saved,
     errors,
-    byYear: byYear.map(r => ({ year: r.playoff_year, total: Number(r.total) })),
+    byGameType: byType.map(r => ({ type: r.game_type, total: Number(r.total) })),
     byRound: byRound.map(r => ({ round: r.playoff_round, total: Number(r.total) })),
-    nextStep: '?phase=boxscores to hydrate team stats',
+    nextStep: 'Optionally ?phase=collect_regular, then ?phase=boxscores',
+  };
+}
+
+// ── PHASE: COLLECT_REGULAR — pull 2024-25 regular season games (~1,230) ──────
+async function phaseCollectRegular(sql) {
+  const REGULAR_SEASON = 2024; // BDL convention: 2024 = 2024-25 regular season
+  const allGames = [];
+  let cursor = null;
+  let pages = 0;
+  const MAX_PAGES = 20; // 1,230 games / 100 per page = 13 pages, 20 is safe upper bound
+
+  while (pages < MAX_PAGES) {
+    let path = `/nba/v1/games?seasons[]=${REGULAR_SEASON}&postseason=false&per_page=100`;
+    if (cursor) path += `&cursor=${cursor}`;
+    const resp = await bdlFetch(path);
+    if (!resp?.data || resp.data.length === 0) break;
+
+    for (const g of resp.data) {
+      const status = (g.status || '').toLowerCase();
+      const isFinal = status === 'final' || status.includes('final') || (g.home_team_score > 0 && g.visitor_team_score > 0);
+      if (!isFinal) continue;
+      allGames.push(g);
+    }
+
+    cursor = resp.meta?.next_cursor;
+    pages++;
+    if (!cursor) break;
+  }
+
+  console.log(`BDL: fetched ${allGames.length} completed regular season games (${pages} pages)`);
+
+  let saved = 0, errors = 0;
+  for (const g of allGames) {
+    try {
+      const homeAbbr = g.home_team?.abbreviation || g.home_team?.team?.abbreviation || '';
+      const awayAbbr = g.visitor_team?.abbreviation || g.visitor_team?.team?.abbreviation || g.away_team?.abbreviation || '';
+      const homePts = g.home_team_score || 0;
+      const awayPts = g.visitor_team_score || 0;
+      const margin = homePts - awayPts;
+      const marginAbs = Math.abs(margin);
+      const winner = margin > 0 ? homeAbbr : awayAbbr;
+      const date = (g.date || '').substring(0, 10);
+
+      if (!homeAbbr || !awayAbbr) {
+        console.log(`collect_regular skip game ${g.id}: missing team aliases`);
+        errors++;
+        continue;
+      }
+
+      await sql`
+        INSERT INTO nba_backtest (
+          bdl_game_id, season, game_type, playoff_year, playoff_round, date,
+          home_alias, away_alias, home_pts, away_pts, margin, margin_abs, winner_alias
+        )
+        VALUES (
+          ${g.id}, ${REGULAR_SEASON}, 'regular', NULL, NULL, ${date},
+          ${homeAbbr}, ${awayAbbr}, ${homePts}, ${awayPts}, ${margin}, ${marginAbs}, ${winner}
+        )
+        ON CONFLICT (bdl_game_id) DO UPDATE SET
+          game_type = EXCLUDED.game_type,
+          home_pts = EXCLUDED.home_pts,
+          away_pts = EXCLUDED.away_pts,
+          margin = EXCLUDED.margin,
+          margin_abs = EXCLUDED.margin_abs,
+          winner_alias = EXCLUDED.winner_alias
+      `;
+      saved++;
+    } catch (e) {
+      console.log(`collect_regular save error game ${g.id}: ${e.message}`);
+      errors++;
+    }
+  }
+
+  const byType = await sql`SELECT game_type, COUNT(*) AS total FROM nba_backtest GROUP BY game_type ORDER BY game_type`;
+
+  return {
+    status: 'ok',
+    gamesFound: allGames.length,
+    saved,
+    errors,
+    pages,
+    byGameType: byType.map(r => ({ type: r.game_type, total: Number(r.total) })),
+    nextStep: '?phase=boxscores',
   };
 }
 
@@ -361,7 +495,7 @@ async function phaseBoxscores(sql, url) {
 
   // Get unique dates with games still missing team_stats
   const dates = await sql`
-    SELECT DISTINCT date FROM nba_playoffs_backtest
+    SELECT DISTINCT date FROM nba_backtest
     WHERE team_stats IS NULL
     ORDER BY date
   `;
@@ -402,12 +536,11 @@ async function phaseBoxscores(sql, url) {
           ast: sum(aPlayers, 'ast'), pts: sum(aPlayers, 'pts'),
         };
 
-        // Match by game_id — try both common key names
         const bdlGameId = bs.id || bs.game_id;
         if (!bdlGameId) continue;
 
         const updated = await sql`
-          UPDATE nba_playoffs_backtest
+          UPDATE nba_backtest
           SET team_stats = ${JSON.stringify({ home: h, away: a })}::jsonb
           WHERE bdl_game_id = ${bdlGameId}
         `;
@@ -419,11 +552,10 @@ async function phaseBoxscores(sql, url) {
       errorLog.push(`${date}: ${e.message}`);
     }
 
-    // Tiny courtesy delay — BDL is 60/s but no need to hammer
     await delay(50);
   }
 
-  const remaining = await sql`SELECT COUNT(*) AS n FROM nba_playoffs_backtest WHERE team_stats IS NULL`;
+  const remaining = await sql`SELECT COUNT(*) AS n FROM nba_backtest WHERE team_stats IS NULL`;
 
   return {
     status: 'ok',
@@ -436,16 +568,93 @@ async function phaseBoxscores(sql, url) {
   };
 }
 
-// ── PHASE: PBP — pull plays per game, derive paint/rim/biggest_lead/runs/POT ─
+// ── PBP parser — shared helper ──────────────────────────────────────────────
+function parsePbpForBacktest(plays, hA, aA) {
+  let hPaint = 0, aPaint = 0, hRimM = 0, hRimA = 0, aRimM = 0, aRimA = 0;
+  let hBigLead = 0, aBigLead = 0, hPOT = 0, aPOT = 0;
+  let hScore = 0, aScore = 0;
+  let q4hPts = 0, q4aPts = 0;
+  const scoreLog = [];
+  const runs6 = [];
+  let runTeam = null, runPts = 0;
+
+  for (const p of plays) {
+    const team = p.team?.abbreviation || '';
+    const pts = p.scoring_play ? (p.points_scored || 0) : 0;
+    const desc = (p.play_type || p.description || '').toLowerCase();
+    const period = p.period || 0;
+
+    if (pts > 0) {
+      if (team === hA) hScore += pts; else if (team === aA) aScore += pts;
+      scoreLog.push({ team, pts, q: period, hScore, aScore });
+
+      if (period === 4) {
+        if (team === hA) q4hPts += pts;
+        else if (team === aA) q4aPts += pts;
+      }
+
+      const margin = hScore - aScore;
+      if (margin > hBigLead) hBigLead = margin;
+      if (-margin > aBigLead) aBigLead = -margin;
+
+      const isRim = desc.includes('dunk') || desc.includes('layup') || desc.includes('tip');
+      const isPaint = isRim || desc.includes('paint') || desc.includes('hook') || desc.includes('floater');
+      if (isPaint && pts === 2) {
+        if (team === hA) { hPaint += 2; if (isRim) hRimM++; }
+        else if (team === aA) { aPaint += 2; if (isRim) aRimM++; }
+      }
+
+      if (team === runTeam) { runPts += pts; }
+      else { if (runPts >= 6 && runTeam) runs6.push({ team: runTeam }); runTeam = team; runPts = pts; }
+    }
+
+    if (desc.includes('miss') && (desc.includes('dunk') || desc.includes('layup') || desc.includes('tip'))) {
+      if (team === hA) hRimA++;
+      else if (team === aA) aRimA++;
+    }
+  }
+  if (runPts >= 6 && runTeam) runs6.push({ team: runTeam });
+  hRimA += hRimM;
+  aRimA += aRimM;
+
+  let lastTO = null;
+  for (const p of plays) {
+    const team = p.team?.abbreviation || '';
+    const desc = (p.play_type || p.description || '').toLowerCase();
+    if (desc.includes('turnover') || p.play_type === 'turnover') {
+      lastTO = team;
+    } else if (p.scoring_play && lastTO && team !== lastTO) {
+      if (team === hA) hPOT += (p.points_scored || 0);
+      else if (team === aA) aPOT += (p.points_scored || 0);
+      lastTO = null;
+    } else if (p.scoring_play) {
+      lastTO = null;
+    }
+  }
+
+  const hRuns = runs6.filter(r => r.team === hA).length;
+  const aRuns = runs6.filter(r => r.team === aA).length;
+
+  return {
+    hPaint, aPaint, hRimM, hRimA, aRimM, aRimA,
+    hBigLead, aBigLead, hPOT, aPOT,
+    q4hPts, q4aPts,
+    runs6: { h: hRuns, a: aRuns, total: hRuns + aRuns, detail: runs6 },
+    totalPlays: plays.length,
+  };
+}
+
+// ── PHASE: PBP — pull plays per game, concurrent batches ─────────────────────
 async function phasePbp(sql, url) {
   const startTime = Date.now();
   const TIME_BUDGET_MS = 100000;
-  const batchSize = parseInt(url.searchParams.get('n') || '50');
+  const batchSize = parseInt(url.searchParams.get('n') || '200');
+  const concurrency = Math.min(parseInt(url.searchParams.get('c') || '8'), 20); // cap at 20
 
   // Games with team_stats but no pbp_derived
   const games = await sql`
     SELECT bdl_game_id, home_alias, away_alias
-    FROM nba_playoffs_backtest
+    FROM nba_backtest
     WHERE team_stats IS NOT NULL AND pbp_derived IS NULL
     ORDER BY date ASC
     LIMIT ${batchSize}
@@ -458,118 +667,45 @@ async function phasePbp(sql, url) {
   let updated = 0, failed = 0;
   const failLog = [];
 
-  for (const g of games) {
-    if (Date.now() - startTime > TIME_BUDGET_MS) break;
-
+  // Process game in a single concurrency slot
+  async function processGame(g) {
     const { bdl_game_id: gid, home_alias: hA, away_alias: aA } = g;
-
     try {
       const resp = await bdlFetch(`/nba/v1/plays?game_id=${gid}&per_page=500`);
       const plays = resp?.data || [];
 
       if (plays.length === 0) {
-        // No PBP available — mark pbp_available=false but leave pbp_derived null
-        await sql`UPDATE nba_playoffs_backtest SET pbp_available = false WHERE bdl_game_id = ${gid}`;
-        failed++; failLog.push(`${gid}: no plays`);
-        continue;
+        await sql`UPDATE nba_backtest SET pbp_available = false WHERE bdl_game_id = ${gid}`;
+        return { ok: false, gid, reason: 'no plays' };
       }
 
-      // Parse PBP — same logic as combo-sim-console.js:98-155
-      let hPaint = 0, aPaint = 0, hRimM = 0, hRimA = 0, aRimM = 0, aRimA = 0;
-      let hBigLead = 0, aBigLead = 0, hPOT = 0, aPOT = 0;
-      let hScore = 0, aScore = 0;
-      let q4hPts = 0, q4aPts = 0;
-      const scoreLog = [];
-      const runs6 = [];
-      let runTeam = null, runPts = 0;
-
-      for (const p of plays) {
-        const team = p.team?.abbreviation || '';
-        const pts = p.scoring_play ? (p.points_scored || 0) : 0;
-        const desc = (p.play_type || p.description || '').toLowerCase();
-        const period = p.period || 0;
-
-        if (pts > 0) {
-          if (team === hA) hScore += pts; else if (team === aA) aScore += pts;
-          scoreLog.push({ team, pts, q: period, hScore, aScore });
-
-          // Q4 margin (sub-B for I4)
-          if (period === 4) {
-            if (team === hA) q4hPts += pts;
-            else if (team === aA) q4aPts += pts;
-          }
-
-          const margin = hScore - aScore;
-          if (margin > hBigLead) hBigLead = margin;
-          if (-margin > aBigLead) aBigLead = -margin;
-
-          // Paint/rim classification
-          const isRim = desc.includes('dunk') || desc.includes('layup') || desc.includes('tip');
-          const isPaint = isRim || desc.includes('paint') || desc.includes('hook') || desc.includes('floater');
-          if (isPaint && pts === 2) {
-            if (team === hA) { hPaint += 2; if (isRim) hRimM++; }
-            else if (team === aA) { aPaint += 2; if (isRim) aRimM++; }
-          }
-
-          // Runs
-          if (team === runTeam) { runPts += pts; }
-          else { if (runPts >= 6 && runTeam) runs6.push({ team: runTeam }); runTeam = team; runPts = pts; }
-        }
-
-        // Rim misses
-        if (desc.includes('miss') && (desc.includes('dunk') || desc.includes('layup') || desc.includes('tip'))) {
-          if (team === hA) hRimA++;
-          else if (team === aA) aRimA++;
-        }
-      }
-      if (runPts >= 6 && runTeam) runs6.push({ team: runTeam });
-      hRimA += hRimM; // total attempts = makes + misses
-      aRimA += aRimM;
-
-      // POT: scoring play immediately after opponent TO
-      let lastTO = null;
-      for (const p of plays) {
-        const team = p.team?.abbreviation || '';
-        const desc = (p.play_type || p.description || '').toLowerCase();
-        if (desc.includes('turnover') || p.play_type === 'turnover') {
-          lastTO = team;
-        } else if (p.scoring_play && lastTO && team !== lastTO) {
-          if (team === hA) hPOT += (p.points_scored || 0);
-          else if (team === aA) aPOT += (p.points_scored || 0);
-          lastTO = null;
-        } else if (p.scoring_play) {
-          lastTO = null;
-        }
-      }
-
-      const hRuns = runs6.filter(r => r.team === hA).length;
-      const aRuns = runs6.filter(r => r.team === aA).length;
-
-      const pbpDerived = {
-        hPaint, aPaint, hRimM, hRimA, aRimM, aRimA,
-        hBigLead, aBigLead, hPOT, aPOT,
-        q4hPts, q4aPts,
-        runs6: { h: hRuns, a: aRuns, total: hRuns + aRuns, detail: runs6 },
-        totalPlays: plays.length,
-      };
+      const pbpDerived = parsePbpForBacktest(plays, hA, aA);
 
       await sql`
-        UPDATE nba_playoffs_backtest
+        UPDATE nba_backtest
         SET pbp_derived = ${JSON.stringify(pbpDerived)}::jsonb,
             pbp_available = true
         WHERE bdl_game_id = ${gid}
       `;
-      updated++;
+      return { ok: true, gid };
     } catch (e) {
-      failed++;
-      failLog.push(`${gid}: ${e.message}`);
+      return { ok: false, gid, reason: e.message };
     }
+  }
 
-    await delay(50);
+  // Run in concurrency-limited batches
+  for (let i = 0; i < games.length; i += concurrency) {
+    if (Date.now() - startTime > TIME_BUDGET_MS) break;
+    const slice = games.slice(i, i + concurrency);
+    const results = await Promise.all(slice.map(processGame));
+    for (const r of results) {
+      if (r.ok) updated++;
+      else { failed++; if (failLog.length < 10) failLog.push(`${r.gid}: ${r.reason}`); }
+    }
   }
 
   const remaining = await sql`
-    SELECT COUNT(*) AS n FROM nba_playoffs_backtest
+    SELECT COUNT(*) AS n FROM nba_backtest
     WHERE team_stats IS NOT NULL AND pbp_derived IS NULL
   `;
 
@@ -578,9 +714,11 @@ async function phasePbp(sql, url) {
     processed: games.length,
     updated,
     failed,
-    failLog: failLog.slice(0, 10),
+    concurrency,
+    failLog,
     remaining: Number(remaining[0].n),
-    nextStep: remaining[0].n > 0 ? `?phase=pbp&n=${batchSize} again` : '?phase=compute',
+    elapsedMs: Date.now() - startTime,
+    nextStep: remaining[0].n > 0 ? `?phase=pbp&n=${batchSize}&c=${concurrency} again` : '?phase=compute',
   };
 }
 
@@ -589,7 +727,7 @@ async function phaseCompute(sql) {
   const rows = await sql`
     SELECT bdl_game_id, home_alias, away_alias, home_pts, away_pts, winner_alias,
            team_stats, pbp_derived
-    FROM nba_playoffs_backtest
+    FROM nba_backtest
     WHERE team_stats IS NOT NULL AND pbp_derived IS NOT NULL
   `;
 
@@ -616,7 +754,7 @@ async function phaseCompute(sql) {
       const ctrlWon = row.winner_alias === ind.controlTeam;
 
       await sql`
-        UPDATE nba_playoffs_backtest
+        UPDATE nba_backtest
         SET indicators = ${JSON.stringify(ind)}::jsonb,
             conviction = ${JSON.stringify(conv)}::jsonb,
             ctrl_team_won = ${ctrlWon},
@@ -640,19 +778,10 @@ async function phaseCompute(sql) {
 }
 
 // ── PHASE: REPORT — stratified accuracy breakdown ────────────────────────────
-async function phaseReport(sql) {
-  const rows = await sql`
-    SELECT bdl_game_id, playoff_year, playoff_round, date,
-           home_alias, away_alias, home_pts, away_pts, margin, winner_alias,
-           indicators, conviction, ctrl_team_won
-    FROM nba_playoffs_backtest
-    WHERE indicators IS NOT NULL
-    ORDER BY date
-  `;
-
-  if (rows.length === 0) {
-    return { error: 'No computed rows. Run ?phase=compute first.' };
-  }
+// Computes the full indicator/tier/pair breakdown for an arbitrary subset of
+// rows. Called once per population cut (overall, per game_type, close games).
+function analyzeRows(rows, label) {
+  if (rows.length === 0) return { label, total: 0, empty: true };
 
   const total = rows.length;
   const correct = rows.filter(r => r.ctrl_team_won).length;
@@ -674,13 +803,8 @@ async function phaseReport(sql) {
       pct: Math.round(v.correct / v.total * 1000) / 10,
     };
   }
-  // Add regular-season baselines
-  if (byTierReport.DOMINANT) byTierReport.DOMINANT.baseline_reg_season = '100%';
-  if (byTierReport.STRONG) byTierReport.STRONG.baseline_reg_season = '96-99%';
-  if (byTierReport.MODEST) byTierReport.MODEST.baseline_reg_season = '70-80%';
-  if (byTierReport.CONDITIONAL) byTierReport.CONDITIONAL.baseline_reg_season = '40-70%';
 
-  // By single indicator won (ctrl team won this indicator)
+  // Per-indicator single-won
   const singles = { I1: { correct: 0, total: 0 }, I2: { correct: 0, total: 0 },
                     I3: { correct: 0, total: 0 }, I4: { correct: 0, total: 0 },
                     I5: { correct: 0, total: 0 } };
@@ -701,10 +825,8 @@ async function phaseReport(sql) {
       pct: v.total > 0 ? Math.round(v.correct / v.total * 1000) / 10 : null,
     };
   }
-  // I4 baseline is 98% regular season
-  singlesReport.I4.baseline_reg_season = '98%';
 
-  // By killer pair
+  // Killer pairs
   const killerPairs = { 'I4+I5': { correct: 0, total: 0 }, 'I3+I4': { correct: 0, total: 0 }, 'I3+I5': { correct: 0, total: 0 } };
   for (const r of rows) {
     const pairs = r.conviction?.pairs || [];
@@ -723,13 +845,60 @@ async function phaseReport(sql) {
       pct: v.total > 0 ? Math.round(v.correct / v.total * 1000) / 10 : null,
     };
   }
-  pairsReport['I4+I5'].baseline_reg_season = '100%';
-  pairsReport['I3+I4'].baseline_reg_season = '99%';
-  pairsReport['I3+I5'].baseline_reg_season = '96%';
 
-  // By round
-  const byRound = {};
+  // Danger combos
+  const dangerRows = rows.filter(r => r.conviction?.isDanger);
+  const dangerCorrect = dangerRows.filter(r => r.ctrl_team_won).length;
+  const dangerReport = {
+    count: dangerRows.length,
+    correct: dangerCorrect,
+    pct: dangerRows.length > 0 ? Math.round(dangerCorrect / dangerRows.length * 1000) / 10 : null,
+  };
+
+  return {
+    label,
+    overall: { correct, total, pct: overallPct },
+    by_tier: byTierReport,
+    by_indicator_single_won: singlesReport,
+    by_killer_pair: pairsReport,
+    danger_combos: dangerReport,
+  };
+}
+
+async function phaseReport(sql) {
+  const rows = await sql`
+    SELECT bdl_game_id, game_type, playoff_year, playoff_round, date,
+           home_alias, away_alias, home_pts, away_pts, margin, margin_abs, winner_alias,
+           indicators, conviction, ctrl_team_won
+    FROM nba_backtest
+    WHERE indicators IS NOT NULL
+    ORDER BY date
+  `;
+
+  if (rows.length === 0) {
+    return { error: 'No computed rows. Run ?phase=compute first.' };
+  }
+
+  // Split by game type
+  const byType = { regular: [], playoff_2024: [], playoff_2025: [], unknown: [] };
   for (const r of rows) {
+    const t = r.game_type || 'unknown';
+    if (byType[t]) byType[t].push(r);
+    else byType.unknown.push(r);
+  }
+
+  // Close games slice (margin_abs ≤ 8)
+  const closeAll = rows.filter(r => r.margin_abs != null && r.margin_abs <= 8);
+  const closeByType = {
+    regular:       closeAll.filter(r => r.game_type === 'regular'),
+    playoff_2024:  closeAll.filter(r => r.game_type === 'playoff_2024'),
+    playoff_2025:  closeAll.filter(r => r.game_type === 'playoff_2025'),
+  };
+
+  // By round (playoffs only)
+  const playoffRows = [...byType.playoff_2024, ...byType.playoff_2025];
+  const byRound = {};
+  for (const r of playoffRows) {
     const rd = r.playoff_round || 'UNK';
     if (!byRound[rd]) byRound[rd] = { correct: 0, total: 0 };
     byRound[rd].total++;
@@ -740,66 +909,57 @@ async function phaseReport(sql) {
     byRoundReport[rd] = { correct: v.correct, total: v.total, pct: Math.round(v.correct / v.total * 1000) / 10 };
   }
 
-  // By year
-  const byYear = {};
-  for (const r of rows) {
-    const y = r.playoff_year || 0;
-    if (!byYear[y]) byYear[y] = { correct: 0, total: 0 };
-    byYear[y].total++;
-    if (r.ctrl_team_won) byYear[y].correct++;
-  }
-  const byYearReport = {};
-  for (const [y, v] of Object.entries(byYear)) {
-    byYearReport[y] = { correct: v.correct, total: v.total, pct: Math.round(v.correct / v.total * 1000) / 10 };
-  }
-
-  // Danger combos
-  const dangerReport = { count: 0, correct: 0, examples: [] };
-  for (const r of rows) {
-    if (r.conviction?.isDanger) {
-      dangerReport.count++;
-      if (r.ctrl_team_won) dangerReport.correct++;
-      if (dangerReport.examples.length < 10) {
-        dangerReport.examples.push({
-          date: r.date, matchup: `${r.away_alias}@${r.home_alias}`,
-          ctrl: r.indicators?.controlTeam, won: r.winner_alias,
-          combo: r.conviction?.combo,
-        });
-      }
-    }
-  }
-  dangerReport.pct = dangerReport.count > 0 ? Math.round(dangerReport.correct / dangerReport.count * 1000) / 10 : null;
-
-  // Wrong games (for diagnosis)
+  // Wrong games — limit to most interesting: high-tier + close games
   const wrong = rows.filter(r => !r.ctrl_team_won).map(r => ({
     date: r.date,
+    game_type: r.game_type,
     matchup: `${r.away_alias}@${r.home_alias}`,
     score: `${r.away_pts}-${r.home_pts}`,
+    margin_abs: r.margin_abs,
     ctrl: r.indicators?.controlTeam,
     won: r.winner_alias,
     floor: r.indicators?.score,
     tier: r.conviction?.tier,
     combo: r.conviction?.combo,
     round: r.playoff_round,
-    year: r.playoff_year,
     indicators: { I1: r.indicators?.I1, I2: r.indicators?.I2, I3: r.indicators?.I3, I4: r.indicators?.I4, I5: r.indicators?.I5 },
   }));
+  // Prioritize: DOMINANT/STRONG wrong calls first, then close games
+  wrong.sort((a, b) => {
+    const tierRank = { DOMINANT: 0, STRONG: 1, MODEST: 2, CONDITIONAL: 3, 'NO ENTRY': 4 };
+    const ta = tierRank[a.tier] ?? 5, tb = tierRank[b.tier] ?? 5;
+    if (ta !== tb) return ta - tb;
+    return a.margin_abs - b.margin_abs;
+  });
 
   return {
-    total,
     overall: {
-      correct,
-      total,
-      pct: overallPct,
-      baseline_reg_season: '93.4%',
+      total: rows.length,
+      correct: rows.filter(r => r.ctrl_team_won).length,
+      pct: Math.round(rows.filter(r => r.ctrl_team_won).length / rows.length * 1000) / 10,
+      baseline_reg_season: '93.4% (171-game console sim)',
     },
-    by_tier: byTierReport,
-    by_indicator_single_won: singlesReport,
-    by_killer_pair: pairsReport,
-    by_round: byRoundReport,
-    by_year: byYearReport,
-    danger_combos: dangerReport,
-    wrong_games: wrong,
+    by_game_type: {
+      regular:       analyzeRows(byType.regular,       'regular season 2024-25'),
+      playoff_2024:  analyzeRows(byType.playoff_2024,  '2024 playoffs'),
+      playoff_2025:  analyzeRows(byType.playoff_2025,  '2025 playoffs'),
+    },
+    close_games_margin_le_8: {
+      all:           analyzeRows(closeAll,                  'all close games'),
+      regular:       analyzeRows(closeByType.regular,       'close regular season'),
+      playoff_2024:  analyzeRows(closeByType.playoff_2024,  'close 2024 playoffs'),
+      playoff_2025:  analyzeRows(closeByType.playoff_2025,  'close 2025 playoffs'),
+    },
+    playoff_by_round: byRoundReport,
+    baselines_reg_season_console: {
+      DOMINANT: '100% (77 games)',
+      STRONG:   '96-99% (I3+I4 99%, I3+I5 96%)',
+      MODEST:   '70-80%',
+      I4_single_won: '98%',
+      'I4+I5_pair': '100%',
+    },
+    wrong_games_top_20: wrong.slice(0, 20),
+    wrong_games_total: wrong.length,
   };
 }
 
@@ -812,16 +972,18 @@ export default async (req) => {
   try {
     let result;
     switch (phase) {
-      case 'init':      result = await phaseInit(sql); break;
-      case 'reset':     result = await phaseReset(sql); break;
-      case 'status':    result = await phaseStatus(sql); break;
-      case 'collect':   result = await phaseCollect(sql); break;
-      case 'boxscores': result = await phaseBoxscores(sql, url); break;
-      case 'pbp':       result = await phasePbp(sql, url); break;
-      case 'compute':   result = await phaseCompute(sql); break;
-      case 'report':    result = await phaseReport(sql); break;
+      case 'init':              result = await phaseInit(sql); break;
+      case 'reset':             result = await phaseReset(sql); break;
+      case 'status':            result = await phaseStatus(sql); break;
+      case 'collect':           // backward-compat alias for collect_playoffs
+      case 'collect_playoffs':  result = await phaseCollectPlayoffs(sql); break;
+      case 'collect_regular':   result = await phaseCollectRegular(sql); break;
+      case 'boxscores':         result = await phaseBoxscores(sql, url); break;
+      case 'pbp':               result = await phasePbp(sql, url); break;
+      case 'compute':           result = await phaseCompute(sql); break;
+      case 'report':            result = await phaseReport(sql); break;
       default:
-        result = { error: `Unknown phase: ${phase}. Use init, collect, boxscores, pbp, compute, report, status, reset.` };
+        result = { error: `Unknown phase: ${phase}. Use init, collect_playoffs, collect_regular, boxscores, pbp, compute, report, status, reset.` };
     }
     return new Response(JSON.stringify(result, null, 2), {
       headers: { 'Content-Type': 'application/json' },
