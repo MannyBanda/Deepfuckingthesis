@@ -542,30 +542,29 @@ async function phaseSnapshot(sql, url) {
         `;
     dbg.checkpoints.push({ step: 'select_complete', ms: Date.now() - startTime, gamesFound: games.length });
   } catch (e) {
-    return new Response(JSON.stringify({
+    return {
       error: 'SELECT failed',
       stage: 'games_query',
       mode: force ? 'force' : 'normal',
       message: e.message,
       stack: e.stack?.split('\n').slice(0, 5),
       dbg,
-    }, null, 2), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    };
   }
 
   if (games.length === 0) {
-    return new Response(JSON.stringify({ status: 'ok', message: 'No more games to snapshot', nextStep: '?phase=compute&force=1', dbg }, null, 2),
-      { headers: { 'Content-Type': 'application/json' } });
+    return { status: 'ok', message: 'No more games to snapshot', nextStep: '?phase=compute&force=1', dbg };
   }
 
   // Dry run: just return what we'd process, no BDL/DB writes.
   if (dryRun) {
-    return new Response(JSON.stringify({
+    return {
       status: 'ok',
       mode: 'dry-run',
       gamesFound: games.length,
       firstFew: games.slice(0, 3),
       dbg,
-    }, null, 2), { headers: { 'Content-Type': 'application/json' } });
+    };
   }
 
   let gamesDone = 0, snapshotsWritten = 0, failed = 0;
