@@ -1960,6 +1960,176 @@ async function phaseInspect(sql, url) {
   };
 }
 
+// ── REPORT: OPPONENT PROFILE ────────────────────────────────────────────────
+async function reportOpponentProfile(sql) {
+  const rows = await sql`
+    SELECT indicators, conviction, margin_at_snapshot AS margin, ctrl_team_won, checkpoint
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+  `;
+
+  // For each snapshot, determine which indicators the OPPONENT won
+  // I1-I5 are home-relative: I=1 means home won, I=0 means away won
+  // If ctrl is home: opponent won when I=0, opponent even when I=0.5
+  // If ctrl is away: opponent won when I=1, opponent even when I=0.5
+
+  function getOppIndicators(ind) {
+    var ctrlHome = ind.controlTeam === ind.homeAlias;
+    var result = {};
+    for (var k of ['I1','I2','I3','I4','I5']) {
+      var v = parseFloat(ind[k]);
+      if (ctrlHome) {
+        result[k] = v === 0 ? 'won' : v === 0.5 ? 'even' : 'lost';
+      } else {
+        result[k] = v === 1 ? 'won' : v === 0.5 ? 'even' : 'lost';
+      }
+    }
+    return result;
+  }
+
+  // ── Section 1: Individual opponent indicators vs BUY accuracy ──
+  // BUY condition: floor >= 0.65, trailing (margin < 0, >= -15)
+  var allSnaps = [];
+  for (var r of rows) {
+    var ind = typeof r.indicators === 'string' ? JSON.parse(r.indicators) : r.indicators;
+    var conv = typeof r.conviction === 'string' ? JSON.parse(r.conviction) : r.conviction;
+    if (!ind || ind.score == null) continue;
+    var opp = getOppIndicators(ind);
+    var oppCount = 0;
+    for (var k of ['I1','I2','I3','I4','I5']) { if (opp[k] === 'won') oppCount++; }
+    allSnaps.push({
+      floor: parseFloat(ind.score),
+      margin: r.margin,
+      won: !!r.ctrl_team_won,
+      tier: conv?.tier,
+      opp, oppCount,
+      checkpoint: r.checkpoint,
+    });
+  }
+
+  var buySnaps = allSnaps.filter(function(s) { return s.floor >= 0.65 && s.margin < 0 && s.margin >= -15; });
+
+  // Individual opponent indicators
+  var oppIndividual = {};
+  for (var k of ['I1','I2','I3','I4','I5']) {
+    oppIndividual[k] = {};
+    for (var state of ['won','even','lost']) {
+      var group = buySnaps.filter(function(s) { return s.opp[k] === state; });
+      var wins = group.filter(function(s) { return s.won; }).length;
+      oppIndividual[k][state] = { n: group.length, wins: wins, pct: group.length > 0 ? Math.round(wins/group.length*1000)/10 : null };
+    }
+  }
+
+  // ── Section 2: Opponent indicator COUNT vs BUY accuracy ──
+  var oppCountBuckets = {};
+  for (var s of buySnaps) {
+    var label = s.oppCount + ' opp indicators';
+    if (!oppCountBuckets[label]) oppCountBuckets[label] = { n: 0, wins: 0 };
+    oppCountBuckets[label].n++;
+    if (s.won) oppCountBuckets[label].wins++;
+  }
+  for (var k2 of Object.keys(oppCountBuckets)) {
+    oppCountBuckets[k2].pct = Math.round(oppCountBuckets[k2].wins / oppCountBuckets[k2].n * 1000) / 10;
+  }
+
+  // ── Section 3: Opponent indicator COMBOS (which won) vs BUY accuracy ──
+  var oppCombos = {};
+  for (var s2 of buySnaps) {
+    var wonList = [];
+    for (var k3 of ['I1','I2','I3','I4','I5']) { if (s2.opp[k3] === 'won') wonList.push(k3); }
+    var comboKey = wonList.length === 0 ? 'NONE' : wonList.join('+');
+    if (!oppCombos[comboKey]) oppCombos[comboKey] = { n: 0, wins: 0 };
+    oppCombos[comboKey].n++;
+    if (s2.won) oppCombos[comboKey].wins++;
+  }
+  for (var kc of Object.keys(oppCombos)) {
+    oppCombos[kc].pct = Math.round(oppCombos[kc].wins / oppCombos[kc].n * 1000) / 10;
+  }
+  // Sort by n desc
+  var oppCombosSorted = Object.entries(oppCombos)
+    .sort(function(a,b) { return b[1].n - a[1].n; })
+    .map(function(e) { return { combo: e[0], n: e[1].n, wins: e[1].wins, pct: e[1].pct }; });
+
+  // ── Section 4: Opponent indicators × deficit depth ──
+  var defBuckets = [
+    { label: 'trail_10+', test: function(m) { return m <= -10; } },
+    { label: 'trail_5-9', test: function(m) { return m >= -9 && m <= -5; } },
+    { label: 'trail_1-4', test: function(m) { return m >= -4 && m <= -1; } },
+  ];
+  var oppByDeficit = {};
+  for (var db of defBuckets) {
+    oppByDeficit[db.label] = {};
+    var dbSnaps = buySnaps.filter(function(s) { return db.test(s.margin); });
+    for (var oc = 0; oc <= 5; oc++) {
+      var ocSnaps = dbSnaps.filter(function(s) { return s.oppCount === oc; });
+      var ocWins = ocSnaps.filter(function(s) { return s.won; }).length;
+      if (ocSnaps.length > 0) {
+        oppByDeficit[db.label][oc + ' opp ind'] = { n: ocSnaps.length, wins: ocWins, pct: Math.round(ocWins/ocSnaps.length*1000)/10 };
+      }
+    }
+  }
+
+  // ── Section 5: Close-game zone (margin -5 to +5) opponent profile (ALL snaps, not just BUY) ──
+  var closeSnaps = allSnaps.filter(function(s) { return s.margin >= -5 && s.margin <= 5; });
+  var closeOppCount = {};
+  for (var cc = 0; cc <= 5; cc++) {
+    var ccSnaps = closeSnaps.filter(function(s) { return s.oppCount === cc; });
+    var ccWins = ccSnaps.filter(function(s) { return s.won; }).length;
+    if (ccSnaps.length > 0) {
+      closeOppCount[cc + ' opp ind'] = { n: ccSnaps.length, wins: ccWins, pct: Math.round(ccWins/ccSnaps.length*1000)/10 };
+    }
+  }
+
+  // ── Section 6: "BUY killers" — opponent combos with worst ctrl win rate (n >= 20) ──
+  var killers = oppCombosSorted.filter(function(c) { return c.n >= 20; })
+    .sort(function(a,b) { return a.pct - b.pct; })
+    .slice(0, 10);
+
+  // ── Section 7: Opponent I4 specifically (since ctrl I4 is our best predictor) ──
+  // When opponent has I4, how does that change things?
+  var oppI4Impact = {};
+  for (var state2 of ['won','even','lost']) {
+    var i4group = buySnaps.filter(function(s) { return s.opp.I4 === state2; });
+    var i4wins = i4group.filter(function(s) { return s.won; }).length;
+    oppI4Impact[state2] = {
+      n: i4group.length, wins: i4wins,
+      pct: i4group.length > 0 ? Math.round(i4wins/i4group.length*1000)/10 : null,
+    };
+    // Sub-cut by deficit
+    var sub = {};
+    for (var db2 of defBuckets) {
+      var dbGroup = i4group.filter(function(s) { return db2.test(s.margin); });
+      var dbWins = dbGroup.filter(function(s) { return s.won; }).length;
+      if (dbGroup.length > 0) sub[db2.label] = { n: dbGroup.length, wins: dbWins, pct: Math.round(dbWins/dbGroup.length*1000)/10 };
+    }
+    oppI4Impact[state2].by_deficit = sub;
+  }
+
+  // ── Section 8: BWC opponent profile ──
+  var bwcSnaps = allSnaps.filter(function(s) { return s.floor >= 0.60 && s.margin >= 2; });
+  var bwcOppCount = {};
+  for (var bc = 0; bc <= 5; bc++) {
+    var bcSnaps = bwcSnaps.filter(function(s) { return s.oppCount === bc; });
+    var bcWins = bcSnaps.filter(function(s) { return s.won; }).length;
+    if (bcSnaps.length > 0) {
+      bwcOppCount[bc + ' opp ind'] = { n: bcSnaps.length, wins: bcWins, pct: Math.round(bcWins/bcSnaps.length*1000)/10 };
+    }
+  }
+
+  return {
+    description: 'Opponent indicator profile vs BUY/BWC alert accuracy. Opponent indicators inverted from home-relative I1-I5.',
+    buy_eligible: { total: buySnaps.length, win_rate: Math.round(buySnaps.filter(function(s){return s.won;}).length/buySnaps.length*1000)/10 },
+    opponent_individual_indicators: oppIndividual,
+    opponent_indicator_count: oppCountBuckets,
+    opponent_combos: oppCombosSorted,
+    opponent_by_deficit: oppByDeficit,
+    close_game_opponent_profile: { zone: 'margin -5 to +5', total: closeSnaps.length, by_opp_count: closeOppCount },
+    buy_killers_worst_combos: killers,
+    opponent_I4_deep_dive: oppI4Impact,
+    bwc_opponent_profile: { total: bwcSnaps.length, by_opp_count: bwcOppCount },
+  };
+}
+
 // ── HANDLER ─────────────────────────────────────────────────────────────────
 export default async (req) => {
   const sql = neon(process.env.DATABASE_URL);
@@ -1987,6 +2157,7 @@ export default async (req) => {
       case 'report_velocity_at_alert': result = await reportVelocityAtAlert(sql); break;
       case 'report_consecutive_holds': result = await reportConsecutiveHolds(sql); break;
       case 'report_flip_recovery': result = await reportFlipRecovery(sql); break;
+      case 'report_opponent_profile': result = await reportOpponentProfile(sql); break;
       case 'report_all':        result = await phaseReportAll(sql); break;
       case 'status':            result = await phaseStatus(sql); break;
       case 'wipe_indicators':    result = await phaseWipeIndicators(sql); break;
