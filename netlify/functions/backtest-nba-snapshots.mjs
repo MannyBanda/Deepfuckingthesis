@@ -725,13 +725,26 @@ async function phaseCompute(sql, url) {
   }
 
   const CONCURRENCY = 20;
+  const errLog = [];
   for (let i = 0; i < rows.length; i += CONCURRENCY) {
     if (Date.now() - startTime > TIME_BUDGET_MS) break;
     const slice = rows.slice(i, i + CONCURRENCY);
-    const results = await Promise.all(slice.map(computeOne));
-    for (const r of results) {
+    const results = await Promise.all(slice.map(async (row, idx) => {
+      const r = await computeOne(row);
+      return { r, row, idx: i + idx };
+    }));
+    for (const { r, row } of results) {
       if (r.ok) computed++;
-      else errors++;
+      else {
+        errors++;
+        if (errLog.length < 5) {
+          errLog.push({
+            game_id: row.game_id,
+            checkpoint: row.checkpoint,
+            err: r.err,
+          });
+        }
+      }
     }
   }
 
@@ -744,6 +757,7 @@ async function phaseCompute(sql, url) {
     status: 'ok',
     computed,
     errors,
+    errLog,
     total: rows.length,
     remaining: Number(remaining[0].n),
     elapsedMs: Date.now() - startTime,
