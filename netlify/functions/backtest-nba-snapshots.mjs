@@ -757,7 +757,7 @@ async function phaseCompute(sql, url) {
     }
   }
 
-  const CONCURRENCY = 20;
+  const CONCURRENCY = Math.min(parseInt(url?.searchParams?.get('c') || '5'), 20);
   const errLog = [];
   for (let i = 0; i < rows.length; i += CONCURRENCY) {
     if (Date.now() - startTime > TIME_BUDGET_MS) break;
