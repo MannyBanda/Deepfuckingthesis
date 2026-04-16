@@ -397,7 +397,39 @@ async function phaseInventory(sql) {
   };
 }
 
-// ── PHASE: INSPECT — dump one computed row's raw data for debugging ─────────
+// ── PHASE: REPARSE_ONE — fetch + parse one game, show result without DB write ──
+// Used to verify the parser works on a specific game in isolation.
+async function phaseReparseOne(sql, url) {
+  const gid = url?.searchParams?.get('gid') || '18447977';
+  const row = await sql`SELECT bdl_game_id, home_alias, away_alias, date FROM nba_backtest WHERE bdl_game_id = ${gid}`;
+  if (row.length === 0) return { error: `No row for gid=${gid}` };
+  const { home_alias: hA, away_alias: aA, date } = row[0];
+
+  const resp = await bdlFetch(`/nba/v1/plays?game_id=${gid}&per_page=500`);
+  const plays = resp?.data || [];
+  if (plays.length === 0) return { error: 'No plays from BDL' };
+
+  const parsed = parsePbpForBacktest(plays, hA, aA);
+
+  // Also run some micro-checks
+  const homeScoringPlays = plays.filter(p => p.scoring_play && p.team?.abbreviation === hA).length;
+  const awayScoringPlays = plays.filter(p => p.scoring_play && p.team?.abbreviation === aA).length;
+  const shootingPlayTypes = [...new Set(plays.filter(p => p.shooting_play).map(p => p.type))];
+
+  return {
+    gid, hA, aA, date,
+    playsCount: plays.length,
+    parser_output: parsed,
+    sanity_checks: {
+      home_scoring_plays: homeScoringPlays,
+      away_scoring_plays: awayScoringPlays,
+      total_shooting_types_seen: shootingPlayTypes.length,
+      sample_shooting_types: shootingPlayTypes.slice(0, 15),
+      max_home_score: Math.max(...plays.map(p => p.home_score ?? 0)),
+      max_away_score: Math.max(...plays.map(p => p.away_score ?? 0)),
+    },
+  };
+}
 async function phaseInspect(sql, url) {
   const gid = url?.searchParams?.get('gid');
   const row = gid
@@ -1323,6 +1355,7 @@ export default async (req) => {
       case 'retention':         result = await phaseRetention(sql, url); break;
       case 'inventory':         result = await phaseInventory(sql); break;
       case 'inspect':           result = await phaseInspect(sql, url); break;
+      case 'reparse_one':       result = await phaseReparseOne(sql, url); break;
       case 'collect':           // alias for backward-compat
       case 'collect_regular':   result = await phaseCollectRegular(sql); break;
       case 'collect_playoffs':  result = await phaseCollectPlayoffs(sql); break;
