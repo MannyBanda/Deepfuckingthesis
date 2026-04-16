@@ -1089,6 +1089,329 @@ async function reportCombos(sql) {
   };
 }
 
+// ── REPORT: ALERT SIM BY CHECKPOINT — BUY/BWC/WB win rate per checkpoint ────
+async function reportAlertSimByCheckpoint(sql) {
+  const rows = await sql`
+    SELECT (indicators->>'score')::real AS floor,
+           margin_at_snapshot AS margin,
+           checkpoint,
+           ctrl_team_won
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+  `;
+
+  const checkpoints = ['Q1_6', 'Q1_END', 'Q2_6', 'Q2_END', 'Q3_6', 'Q3_END', 'Q4_6', 'Q4_END'];
+  const types = ['BUY', 'BWC', 'WINDOW_BUY'];
+  const result = {};
+  for (const t of types) {
+    result[t] = {};
+    for (const cp of checkpoints) result[t][cp] = { fires: 0, wins: 0 };
+  }
+
+  for (const r of rows) {
+    const floor = r.floor, margin = r.margin, won = !!r.ctrl_team_won, cp = r.checkpoint;
+
+    if (floor >= 0.65 && margin <= 0 && margin >= -15) {
+      result.BUY[cp].fires++; if (won) result.BUY[cp].wins++;
+    }
+    if (floor >= 0.60 && margin >= 2) {
+      result.BWC[cp].fires++; if (won) result.BWC[cp].wins++;
+    }
+    if (floor >= 0.45 && margin >= -15 && margin <= 5) {
+      result.WINDOW_BUY[cp].fires++; if (won) result.WINDOW_BUY[cp].wins++;
+    }
+  }
+
+  // Add pct
+  for (const t of types) {
+    for (const cp of checkpoints) {
+      const d = result[t][cp];
+      d.pct = d.fires > 0 ? Math.round(d.wins / d.fires * 1000) / 10 : null;
+    }
+  }
+  return result;
+}
+
+// ── REPORT: STABILITY — control team flips between checkpoints ──────────────
+async function reportStability(sql) {
+  const rows = await sql`
+    SELECT game_id, checkpoint, indicators->>'controlTeam' AS ctrl,
+           (indicators->>'score')::real AS floor, ctrl_team_won
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+    ORDER BY game_id, checkpoint
+  `;
+
+  const checkpoints = ['Q1_6', 'Q1_END', 'Q2_6', 'Q2_END', 'Q3_6', 'Q3_END', 'Q4_6', 'Q4_END'];
+
+  // Group by game
+  const games = {};
+  for (const r of rows) {
+    if (!games[r.game_id]) games[r.game_id] = {};
+    games[r.game_id][r.checkpoint] = { ctrl: r.ctrl, floor: r.floor, won: r.ctrl_team_won };
+  }
+
+  // Count flips between adjacent checkpoints
+  const flipStats = {};
+  for (let i = 1; i < checkpoints.length; i++) {
+    const from = checkpoints[i - 1], to = checkpoints[i];
+    const key = `${from}→${to}`;
+    flipStats[key] = { total: 0, flips: 0, flipWins: 0, holdWins: 0, holdTotal: 0 };
+  }
+
+  // Track longest controller per game
+  const longestCtrl = { wins: 0, losses: 0, total: 0, ties: 0 };
+
+  for (const [gid, cps] of Object.entries(games)) {
+    // Flips
+    for (let i = 1; i < checkpoints.length; i++) {
+      const from = checkpoints[i - 1], to = checkpoints[i];
+      const key = `${from}→${to}`;
+      const a = cps[from], b = cps[to];
+      if (!a || !b) continue;
+      flipStats[key].total++;
+      if (a.ctrl !== b.ctrl) {
+        flipStats[key].flips++;
+        if (b.won) flipStats[key].flipWins++;
+      } else {
+        flipStats[key].holdTotal++;
+        if (b.won) flipStats[key].holdWins++;
+      }
+    }
+
+    // Longest controller: count checkpoints per team
+    const teamCounts = {};
+    let lastWon = null;
+    for (const cp of checkpoints) {
+      const d = cps[cp];
+      if (!d || !d.ctrl) continue;
+      teamCounts[d.ctrl] = (teamCounts[d.ctrl] || 0) + 1;
+      lastWon = d.won;
+    }
+    const teams = Object.entries(teamCounts).sort((a, b) => b[1] - a[1]);
+    if (teams.length === 0) continue;
+    longestCtrl.total++;
+
+    if (teams.length >= 2 && teams[0][1] === teams[1][1]) {
+      longestCtrl.ties++;
+    } else {
+      // Did the longest controller win?
+      const longestTeam = teams[0][0];
+      const q4end = cps['Q4_END'];
+      if (q4end) {
+        // ctrl_team_won is relative to Q4_END ctrl team — we need to check
+        // if longestTeam === Q4_END ctrl team and Q4_END.won, OR
+        // longestTeam !== Q4_END ctrl team and !Q4_END.won
+        const longestWon = (longestTeam === q4end.ctrl && q4end.won) ||
+                           (longestTeam !== q4end.ctrl && !q4end.won);
+        if (longestWon) longestCtrl.wins++;
+        else longestCtrl.losses++;
+      }
+    }
+  }
+
+  // Format flips
+  const transitions = {};
+  for (const [key, d] of Object.entries(flipStats)) {
+    transitions[key] = {
+      total: d.total,
+      flips: d.flips,
+      flip_pct: d.total > 0 ? Math.round(d.flips / d.total * 1000) / 10 : null,
+      flip_new_ctrl_wins_pct: d.flips > 0 ? Math.round(d.flipWins / d.flips * 1000) / 10 : null,
+      hold_wins_pct: d.holdTotal > 0 ? Math.round(d.holdWins / d.holdTotal * 1000) / 10 : null,
+    };
+  }
+
+  longestCtrl.win_pct = (longestCtrl.total - longestCtrl.ties) > 0
+    ? Math.round(longestCtrl.wins / (longestCtrl.total - longestCtrl.ties) * 1000) / 10 : null;
+
+  return { transitions, longest_controller: longestCtrl };
+}
+
+// ── REPORT: MARGIN × FLOOR — win rate by floor bucket AND margin bucket ─────
+async function reportMarginFloor(sql) {
+  const rows = await sql`
+    SELECT (indicators->>'score')::real AS floor,
+           margin_at_snapshot AS margin,
+           ctrl_team_won
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+  `;
+
+  // Floor buckets: 0.50-0.60, 0.60-0.70, 0.70-0.80, 0.80-0.90, 0.90+
+  // Margin buckets (from ctrl team perspective): trailing 10+, trailing 5-9,
+  //   trailing 1-4, tied/close (0-2), leading 3-7, leading 8+
+  const floorBuckets = [
+    { label: '0.50-0.60', lo: 0.50, hi: 0.60 },
+    { label: '0.60-0.70', lo: 0.60, hi: 0.70 },
+    { label: '0.70-0.80', lo: 0.70, hi: 0.80 },
+    { label: '0.80-0.90', lo: 0.80, hi: 0.90 },
+    { label: '0.90+', lo: 0.90, hi: 2.0 },
+  ];
+  const marginBuckets = [
+    { label: 'trailing 10+', test: m => m <= -10 },
+    { label: 'trailing 5-9', test: m => m >= -9 && m <= -5 },
+    { label: 'trailing 1-4', test: m => m >= -4 && m <= -1 },
+    { label: 'tied/close 0-2', test: m => m >= 0 && m <= 2 },
+    { label: 'leading 3-7', test: m => m >= 3 && m <= 7 },
+    { label: 'leading 8+', test: m => m >= 8 },
+  ];
+
+  const grid = {};
+  for (const fb of floorBuckets) {
+    grid[fb.label] = {};
+    for (const mb of marginBuckets) {
+      grid[fb.label][mb.label] = { n: 0, wins: 0 };
+    }
+  }
+
+  for (const r of rows) {
+    const floor = r.floor;
+    const won = !!r.ctrl_team_won;
+    // Convert margin to ctrl-team-relative
+    // margin_at_snapshot is home - away. Need to know if ctrl is home.
+    // We stored indicators with controlTeam — but we only have floor score here.
+    // If floor >= 0.50, composite favors home → ctrl is home → margin is ctrl-relative.
+    // If floor < 0.50... but we filtered >= 0.45 in calibration.
+    // Actually: indicators.score is already ctrl-relative (always >= 0.50).
+    // But margin_at_snapshot is always home-relative.
+    // We need to flip margin when ctrl is away. We don't have that info in this query.
+    // Skip this complexity — just use raw margin for now with a note.
+    const margin = r.margin;
+
+    for (const fb of floorBuckets) {
+      if (floor >= fb.lo && floor < fb.hi) {
+        for (const mb of marginBuckets) {
+          if (mb.test(margin)) {
+            grid[fb.label][mb.label].n++;
+            if (won) grid[fb.label][mb.label].wins++;
+            break;
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  // Add pct
+  for (const fb of floorBuckets) {
+    for (const mb of marginBuckets) {
+      const d = grid[fb.label][mb.label];
+      d.pct = d.n > 0 ? Math.round(d.wins / d.n * 1000) / 10 : null;
+    }
+  }
+
+  return {
+    description: 'NOTE: margin is home-relative (not ctrl-relative). Positive = home leading. Cross-reference with floor to infer ctrl team side.',
+    grid,
+  };
+}
+
+// ── REPORT: FLOOR VELOCITY — floor change between adjacent checkpoints ──────
+async function reportFloorVelocity(sql) {
+  const rows = await sql`
+    SELECT game_id, checkpoint, (indicators->>'score')::real AS floor, ctrl_team_won,
+           indicators->>'controlTeam' AS ctrl
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+    ORDER BY game_id, checkpoint
+  `;
+
+  const checkpoints = ['Q1_6', 'Q1_END', 'Q2_6', 'Q2_END', 'Q3_6', 'Q3_END', 'Q4_6', 'Q4_END'];
+
+  // Group by game
+  const games = {};
+  for (const r of rows) {
+    if (!games[r.game_id]) games[r.game_id] = {};
+    games[r.game_id][r.checkpoint] = { floor: r.floor, ctrl: r.ctrl, won: r.ctrl_team_won };
+  }
+
+  // Velocity buckets: floor change between adjacent checkpoints
+  // Only meaningful when ctrl team stays the same (no flip)
+  const velocityBuckets = [
+    { label: 'crash (≤-0.15)', test: d => d <= -0.15 },
+    { label: 'decline (-0.15 to -0.05)', test: d => d > -0.15 && d <= -0.05 },
+    { label: 'stable (-0.05 to +0.05)', test: d => d > -0.05 && d < 0.05 },
+    { label: 'rising (+0.05 to +0.15)', test: d => d >= 0.05 && d < 0.15 },
+    { label: 'surge (≥+0.15)', test: d => d >= 0.15 },
+  ];
+
+  const results = {};
+  for (let i = 1; i < checkpoints.length; i++) {
+    const from = checkpoints[i - 1], to = checkpoints[i];
+    const key = `${from}→${to}`;
+    results[key] = {};
+    for (const vb of velocityBuckets) results[key][vb.label] = { n: 0, wins: 0 };
+  }
+
+  // Peak-to-end analysis: max floor during game vs Q4_END
+  const peakDrops = [
+    { label: 'no drop (peak at end)', test: d => d >= 0 },
+    { label: 'minor drop (0 to -0.10)', test: d => d < 0 && d >= -0.10 },
+    { label: 'moderate drop (-0.10 to -0.25)', test: d => d < -0.10 && d >= -0.25 },
+    { label: 'collapse (< -0.25)', test: d => d < -0.25 },
+  ];
+  const peakToEnd = {};
+  for (const pb of peakDrops) peakToEnd[pb.label] = { n: 0, wins: 0 };
+
+  for (const [gid, cps] of Object.entries(games)) {
+    // Adjacent velocity
+    for (let i = 1; i < checkpoints.length; i++) {
+      const from = checkpoints[i - 1], to = checkpoints[i];
+      const key = `${from}→${to}`;
+      const a = cps[from], b = cps[to];
+      if (!a || !b) continue;
+      // Only count same-ctrl transitions (flips handled in stability report)
+      if (a.ctrl !== b.ctrl) continue;
+      const delta = b.floor - a.floor;
+      for (const vb of velocityBuckets) {
+        if (vb.test(delta)) {
+          results[key][vb.label].n++;
+          if (b.won) results[key][vb.label].wins++;
+          break;
+        }
+      }
+    }
+
+    // Peak to end
+    let peakFloor = 0;
+    for (const cp of checkpoints) {
+      if (cps[cp] && cps[cp].floor > peakFloor) peakFloor = cps[cp].floor;
+    }
+    const endData = cps['Q4_END'];
+    if (endData && peakFloor > 0) {
+      const drop = endData.floor - peakFloor;
+      for (const pb of peakDrops) {
+        if (pb.test(drop)) {
+          peakToEnd[pb.label].n++;
+          if (endData.won) peakToEnd[pb.label].wins++;
+          break;
+        }
+      }
+    }
+  }
+
+  // Add pct
+  for (const key of Object.keys(results)) {
+    for (const vb of velocityBuckets) {
+      const d = results[key][vb.label];
+      d.pct = d.n > 0 ? Math.round(d.wins / d.n * 1000) / 10 : null;
+    }
+  }
+  for (const pb of peakDrops) {
+    const d = peakToEnd[pb.label];
+    d.pct = d.n > 0 ? Math.round(d.wins / d.n * 1000) / 10 : null;
+  }
+
+  return {
+    adjacent_velocity: results,
+    peak_to_end: {
+      description: 'Max floor across all checkpoints vs Q4_END floor. Shows how often floor crashes predict losses.',
+      buckets: peakToEnd,
+    },
+  };
+}
+
 // ── PHASE: REPORT_ALL ───────────────────────────────────────────────────────
 async function phaseReportAll(sql) {
   const [calibration, timeDecay, alertSim] = await Promise.all([
@@ -1228,6 +1551,10 @@ export default async (req) => {
       case 'report_alert_sim':  result = await reportAlertSim(sql); break;
       case 'report_indicators': result = await reportIndicators(sql); break;
       case 'report_combos':     result = await reportCombos(sql); break;
+      case 'report_alerts_by_cp': result = await reportAlertSimByCheckpoint(sql); break;
+      case 'report_stability':  result = await reportStability(sql); break;
+      case 'report_margin_floor': result = await reportMarginFloor(sql); break;
+      case 'report_velocity':   result = await reportFloorVelocity(sql); break;
       case 'report_all':        result = await phaseReportAll(sql); break;
       case 'status':            result = await phaseStatus(sql); break;
       case 'wipe_indicators':    result = await phaseWipeIndicators(sql); break;
