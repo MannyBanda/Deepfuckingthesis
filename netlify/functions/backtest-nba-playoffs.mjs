@@ -746,69 +746,156 @@ async function phaseBoxscores(sql, url) {
   };
 }
 
-// ── PBP parser — shared helper ──────────────────────────────────────────────
+// ── PBP parser — BDL plays (mirrors working live parser in poll-live-bdl.mjs) ──
+// BDL play fields: type, text, scoring_play, shooting_play, score_value,
+//   team.abbreviation, period, home_score, away_score, coordinate_x/y, order
+const BDL_BASKET_X = 25, BDL_BASKET_Y = 1.5;
+const BDL_RIM_RADIUS = 4, BDL_PAINT_RADIUS = 9, BDL_THREE_RADIUS = 22, BDL_CORNER_Y_MAX = 9;
+const BDL_RIM_SET = new Set(['layup shot','driving layup shot','running layup shot','cutting layup shot','reverse layup shot','finger roll layup','layup shot putback','putback layup shot','driving reverse layup shot','running reverse layup shot','dunk shot','driving dunk shot','running dunk shot','cutting dunk shot','alley oop dunk shot','putback dunk shot','running alley oop dunk shot','tip shot','tip dunk shot']);
+const BDL_PAINT_SET = new Set(['driving floating jump shot','floating jump shot','driving hook shot','hook shot','running hook shot','driving finger roll layup','turnaround hook shot']);
+
+function bdlCoordsValid(x, y) { return x != null && y != null && x > -1000 && y > -1000 && x < 1000 && y < 1000; }
+function bdlDistFromBasket(x, y) { return Math.sqrt(Math.pow(x - BDL_BASKET_X, 2) + Math.pow(y - BDL_BASKET_Y, 2)); }
+
+function classifyZone(x, y, shotType, text, scoreValue) {
+  const tl = (shotType || '').toLowerCase().trim();
+  const tx = (text || '').toLowerCase();
+  const is3 = scoreValue === 3 || tx.includes('three point');
+  if (BDL_RIM_SET.has(tl)) return 'rim';
+  if (BDL_PAINT_SET.has(tl)) return 'paint';
+  if (is3) return 'three';
+  if (bdlCoordsValid(x, y)) {
+    const d = bdlDistFromBasket(x, y);
+    if (d < BDL_RIM_RADIUS) return 'rim';
+    if (d < BDL_PAINT_RADIUS) return 'paint';
+    if (d >= BDL_THREE_RADIUS) return 'three';
+    return 'mid';
+  }
+  const dm = tx.match(/(\d+)-foot/);
+  if (dm) { const dd = parseInt(dm[1]); if (dd <= 4) return 'rim'; if (dd <= 9) return 'paint'; if (dd >= 22) return 'three'; return 'mid'; }
+  if (tl.includes('layup') || tl.includes('dunk') || tl.includes('tip')) return 'rim';
+  if (tl.includes('hook') || tl.includes('float')) return 'paint';
+  return 'mid';
+}
+
 function parsePbpForBacktest(plays, hA, aA) {
   let hPaint = 0, aPaint = 0, hRimM = 0, hRimA = 0, aRimM = 0, aRimA = 0;
   let hBigLead = 0, aBigLead = 0, hPOT = 0, aPOT = 0;
-  let hScore = 0, aScore = 0;
   let q4hPts = 0, q4aPts = 0;
   const scoreLog = [];
   const runs6 = [];
+  let pendPOT = null, lastPeriod = 0;
+
+  // Sort by order (BDL's canonical play order) — same as live parser
+  const sorted = plays.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+
+  for (const ev of sorted) {
+    const type = (ev.type || '').trim();
+    const tl = type.toLowerCase();
+    const text = (ev.text || '').replace(/\n/g, ' ').trim();
+    const tx = text.toLowerCase();
+    const tAbbr = ev.team?.abbreviation || '';
+    const team = tAbbr === hA ? hA : tAbbr === aA ? aA : tAbbr || '?';
+    const period = ev.period || 0;
+
+    // Reset pending POT on quarter change
+    if (period !== lastPeriod && lastPeriod > 0) pendPOT = null;
+    lastPeriod = period;
+
+    // Track biggest_lead directly from home_score/away_score (cumulative in every play)
+    const hs = ev.home_score, as = ev.away_score;
+    if (hs != null && as != null) {
+      const mg = hs - as;
+      if (mg > hBigLead) hBigLead = mg;
+      if (-mg > aBigLead) aBigLead = -mg;
+    }
+
+    if (tl.includes('substitution') || tx.includes('enters the game for')) continue;
+
+    // Shooting plays — includes free throws
+    if (ev.shooting_play) {
+      const made = !!ev.scoring_play;
+      const is3 = ev.score_value === 3 || tx.includes('three point');
+
+      // Free throws: score_value is null, pts = 1 if made
+      if (tl.includes('free throw')) {
+        if (made) {
+          const pts = 1;
+          if (team === hA) { /* hScore tracked via home_score above */ }
+          scoreLog.push({ team, pts, q: period });
+          // POT credit for FT
+          if (pendPOT === team) {
+            if (team === hA) hPOT += pts;
+            else if (team === aA) aPOT += pts;
+          }
+        }
+        // Last FT of trip clears pending POT
+        const ftM = type.match(/(\d+)\s*of\s*(\d+)/i);
+        if (ftM && ftM[1] === ftM[2] && made) pendPOT = null;
+        continue;
+      }
+
+      // Field goals
+      const pts = made ? (ev.score_value || (is3 ? 3 : 2)) : 0;
+      const zone = classifyZone(ev.coordinate_x, ev.coordinate_y, type, text, ev.score_value);
+
+      // Rim attempts (both makes and misses count)
+      if (zone === 'rim') {
+        if (team === hA) { hRimA++; if (made) hRimM++; }
+        else if (team === aA) { aRimA++; if (made) aRimM++; }
+      }
+      // Paint includes rim
+      if (zone === 'rim' || zone === 'paint') {
+        if (made && pts === 2) {
+          if (team === hA) hPaint += 2;
+          else if (team === aA) aPaint += 2;
+        }
+      }
+
+      if (made) {
+        scoreLog.push({ team, pts, q: period });
+        if (period === 4) {
+          if (team === hA) q4hPts += pts;
+          else if (team === aA) q4aPts += pts;
+        }
+        // POT credit
+        if (pendPOT === team) {
+          if (team === hA) hPOT += pts;
+          else if (team === aA) aPOT += pts;
+        }
+        pendPOT = null;
+      }
+      continue;
+    }
+
+    // Turnover — next scoring play by OTHER team is a POT
+    if (tl.includes('turnover')) {
+      pendPOT = team === hA ? aA : hA;
+      continue;
+    }
+
+    // Offensive foul resets POT (counts as a TO)
+    if (tl.includes('foul') && tl.includes('offensive')) {
+      pendPOT = team === hA ? aA : hA;
+      continue;
+    }
+
+    if (tl.includes('end period') || tl.includes('end game')) {
+      pendPOT = null;
+    }
+  }
+
+  // Runs: 6+ consecutive points for one team without opponent scoring
   let runTeam = null, runPts = 0;
-
-  for (const p of plays) {
-    const team = p.team?.abbreviation || '';
-    const pts = p.scoring_play ? (p.points_scored || 0) : 0;
-    const desc = (p.play_type || p.description || '').toLowerCase();
-    const period = p.period || 0;
-
-    if (pts > 0) {
-      if (team === hA) hScore += pts; else if (team === aA) aScore += pts;
-      scoreLog.push({ team, pts, q: period, hScore, aScore });
-
-      if (period === 4) {
-        if (team === hA) q4hPts += pts;
-        else if (team === aA) q4aPts += pts;
-      }
-
-      const margin = hScore - aScore;
-      if (margin > hBigLead) hBigLead = margin;
-      if (-margin > aBigLead) aBigLead = -margin;
-
-      const isRim = desc.includes('dunk') || desc.includes('layup') || desc.includes('tip');
-      const isPaint = isRim || desc.includes('paint') || desc.includes('hook') || desc.includes('floater');
-      if (isPaint && pts === 2) {
-        if (team === hA) { hPaint += 2; if (isRim) hRimM++; }
-        else if (team === aA) { aPaint += 2; if (isRim) aRimM++; }
-      }
-
-      if (team === runTeam) { runPts += pts; }
-      else { if (runPts >= 6 && runTeam) runs6.push({ team: runTeam }); runTeam = team; runPts = pts; }
-    }
-
-    if (desc.includes('miss') && (desc.includes('dunk') || desc.includes('layup') || desc.includes('tip'))) {
-      if (team === hA) hRimA++;
-      else if (team === aA) aRimA++;
+  for (const s of scoreLog) {
+    if (s.team === runTeam) { runPts += s.pts; }
+    else {
+      if (runPts >= 6 && runTeam) runs6.push({ team: runTeam, pts: runPts });
+      runTeam = s.team;
+      runPts = s.pts;
     }
   }
-  if (runPts >= 6 && runTeam) runs6.push({ team: runTeam });
-  hRimA += hRimM;
-  aRimA += aRimM;
-
-  let lastTO = null;
-  for (const p of plays) {
-    const team = p.team?.abbreviation || '';
-    const desc = (p.play_type || p.description || '').toLowerCase();
-    if (desc.includes('turnover') || p.play_type === 'turnover') {
-      lastTO = team;
-    } else if (p.scoring_play && lastTO && team !== lastTO) {
-      if (team === hA) hPOT += (p.points_scored || 0);
-      else if (team === aA) aPOT += (p.points_scored || 0);
-      lastTO = null;
-    } else if (p.scoring_play) {
-      lastTO = null;
-    }
-  }
+  if (runPts >= 6 && runTeam) runs6.push({ team: runTeam, pts: runPts });
 
   const hRuns = runs6.filter(r => r.team === hA).length;
   const aRuns = runs6.filter(r => r.team === aA).length;
@@ -819,6 +906,7 @@ function parsePbpForBacktest(plays, hA, aA) {
     q4hPts, q4aPts,
     runs6: { h: hRuns, a: aRuns, total: hRuns + aRuns, detail: runs6 },
     totalPlays: plays.length,
+    totalScoringEvents: scoreLog.length,
   };
 }
 
@@ -827,19 +915,35 @@ async function phasePbp(sql, url) {
   const startTime = Date.now();
   const TIME_BUDGET_MS = 100000;
   const batchSize = parseInt(url.searchParams.get('n') || '200');
-  const concurrency = Math.min(parseInt(url.searchParams.get('c') || '8'), 20); // cap at 20
+  const concurrency = Math.min(parseInt(url.searchParams.get('c') || '8'), 20);
+  const force = url.searchParams.get('force') === '1';
 
-  // Games with team_stats but no pbp_derived
-  const games = await sql`
-    SELECT bdl_game_id, home_alias, away_alias
-    FROM nba_backtest
-    WHERE team_stats IS NOT NULL AND pbp_derived IS NULL
-    ORDER BY date ASC
-    LIMIT ${batchSize}
-  `;
+  // Normal mode: games with team_stats but no pbp_derived
+  // Force mode: re-process rows where indicators were all zeros (bad parse)
+  const games = force
+    ? await sql`
+        SELECT bdl_game_id, home_alias, away_alias
+        FROM nba_backtest
+        WHERE team_stats IS NOT NULL
+          AND (pbp_derived IS NULL
+               OR (pbp_derived->>'hBigLead' = '0' AND pbp_derived->>'aBigLead' = '0'))
+        ORDER BY date ASC
+        LIMIT ${batchSize}
+      `
+    : await sql`
+        SELECT bdl_game_id, home_alias, away_alias
+        FROM nba_backtest
+        WHERE team_stats IS NOT NULL AND pbp_derived IS NULL
+        ORDER BY date ASC
+        LIMIT ${batchSize}
+      `;
 
   if (games.length === 0) {
-    return { status: 'ok', message: 'All games with team_stats have PBP', nextStep: '?phase=compute' };
+    return {
+      status: 'ok',
+      message: force ? 'No rows needing reprocess' : 'All games with team_stats have PBP',
+      nextStep: '?phase=compute',
+    };
   }
 
   let updated = 0, failed = 0;
@@ -905,14 +1009,22 @@ async function phaseCompute(sql, url) {
   const startTime = Date.now();
   const TIME_BUDGET_MS = 100000;
   const CONCURRENCY = 20;
+  const force = url?.searchParams?.get('force') === '1';
 
-  // Only pick up rows not yet computed — makes it resumable
-  const rows = await sql`
-    SELECT bdl_game_id, home_alias, away_alias, home_pts, away_pts, winner_alias,
-           team_stats, pbp_derived
-    FROM nba_backtest
-    WHERE team_stats IS NOT NULL AND pbp_derived IS NOT NULL AND indicators IS NULL
-  `;
+  // Normal: only pick up uncomputed rows. Force: recompute all.
+  const rows = force
+    ? await sql`
+        SELECT bdl_game_id, home_alias, away_alias, home_pts, away_pts, winner_alias,
+               team_stats, pbp_derived
+        FROM nba_backtest
+        WHERE team_stats IS NOT NULL AND pbp_derived IS NOT NULL
+      `
+    : await sql`
+        SELECT bdl_game_id, home_alias, away_alias, home_pts, away_pts, winner_alias,
+               team_stats, pbp_derived
+        FROM nba_backtest
+        WHERE team_stats IS NOT NULL AND pbp_derived IS NOT NULL AND indicators IS NULL
+      `;
 
   if (rows.length === 0) {
     return { status: 'ok', message: 'All ready rows are already computed', nextStep: '?phase=report' };
