@@ -275,6 +275,58 @@ async function phaseReset(sql) {
   };
 }
 
+// ── PHASE: DIAGNOSE — fetch a single game's plays, dump raw response ─────────
+// Usage: ?phase=diagnose                (uses oldest game in DB)
+//        ?phase=diagnose&gid=15882375   (specific game ID)
+async function phaseDiagnose(sql, url) {
+  let gid = url.searchParams.get('gid');
+  if (!gid) {
+    const row = await sql`
+      SELECT bdl_game_id, date, home_alias, away_alias, game_type
+      FROM nba_backtest
+      WHERE pbp_derived IS NULL AND team_stats IS NOT NULL
+      ORDER BY date ASC LIMIT 1
+    `;
+    if (row.length === 0) return { error: 'No rows needing PBP' };
+    gid = row[0].bdl_game_id;
+  }
+
+  if (!BDL_KEY) return { error: 'BDL_KEY missing from env' };
+
+  const path = `/nba/v1/plays?game_id=${gid}&per_page=500`;
+  const resp = await fetch(`${BDL_BASE}${path}`, { headers: { Authorization: BDL_KEY } });
+  const status = resp.status;
+  const headers = {};
+  resp.headers.forEach((v, k) => { headers[k] = v; });
+
+  let body;
+  const ct = resp.headers.get('content-type') || '';
+  if (ct.includes('application/json')) {
+    try { body = await resp.json(); }
+    catch (e) { body = { _parseError: e.message }; }
+  } else {
+    body = await resp.text();
+  }
+
+  const diagnostic = {
+    requestedGameId: gid,
+    fullUrl: `${BDL_BASE}${path}`,
+    keyPresent: !!BDL_KEY,
+    keyPrefix: BDL_KEY ? BDL_KEY.substring(0, 8) + '...' : null,
+    httpStatus: status,
+    responseHeaders: headers,
+    bodyType: typeof body,
+    bodyKeys: body && typeof body === 'object' ? Object.keys(body) : null,
+    dataIsArray: Array.isArray(body?.data),
+    dataLength: Array.isArray(body?.data) ? body.data.length : 'n/a',
+    firstPlay: Array.isArray(body?.data) && body.data.length > 0 ? body.data[0] : null,
+    meta: body?.meta || null,
+    rawBody: typeof body === 'string' ? body.substring(0, 500) : body,
+  };
+
+  return diagnostic;
+}
+
 async function phaseStatus(sql) {
   const counts = await sql`
     SELECT 
@@ -1026,6 +1078,7 @@ export default async (req) => {
       case 'init':              result = await phaseInit(sql); break;
       case 'reset':             result = await phaseReset(sql); break;
       case 'status':            result = await phaseStatus(sql); break;
+      case 'diagnose':          result = await phaseDiagnose(sql, url); break;
       case 'collect':           // backward-compat alias for collect_playoffs
       case 'collect_playoffs':  result = await phaseCollectPlayoffs(sql); break;
       case 'collect_regular':   result = await phaseCollectRegular(sql); break;
