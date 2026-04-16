@@ -1412,6 +1412,432 @@ async function reportFloorVelocity(sql) {
   };
 }
 
+// ── REPORT: LOSING ALERT AUTOPSY — profile BUY failures ─────────────────────
+async function reportLosingAutopsy(sql) {
+  const rows = await sql`
+    SELECT game_id, checkpoint, margin_at_snapshot AS margin,
+           (indicators->>'score')::real AS floor,
+           indicators->>'controlTeam' AS ctrl,
+           indicators->>'I1' AS i1, indicators->>'I2' AS i2,
+           indicators->>'I3' AS i3, indicators->>'I4' AS i4, indicators->>'I5' AS i5,
+           (conviction->>'tier') AS tier, (conviction->>'combo') AS combo,
+           (conviction->>'count')::int AS ind_count,
+           ctrl_team_won
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+  `;
+
+  // BUY condition: floor >= 0.65, margin <= 0, margin >= -15
+  const buyAlerts = rows.filter(r => r.floor >= 0.65 && r.margin <= 0 && r.margin >= -15);
+  const winners = buyAlerts.filter(r => r.ctrl_team_won);
+  const losers = buyAlerts.filter(r => !r.ctrl_team_won);
+
+  function profileGroup(group) {
+    if (group.length === 0) return {};
+    const tiers = {}, deficits = {}, i4status = { won: 0, even: 0, lost: 0 }, indCounts = {};
+    let floorSum = 0;
+    for (const r of group) {
+      // Tier
+      tiers[r.tier] = (tiers[r.tier] || 0) + 1;
+      // Deficit bucket
+      const m = r.margin;
+      const db = m <= -10 ? 'trail_10+' : m <= -5 ? 'trail_5-9' : 'trail_1-4';
+      deficits[db] = (deficits[db] || 0) + 1;
+      // I4 — convert to ctrl-relative
+      const ctrlHome = r.ctrl === r.checkpoint; // not reliable, use raw
+      const i4raw = parseFloat(r.i4);
+      // Since floor >= 0.50, composite favors ctrl = home when score stored as-is
+      // Actually indicators are stored home-relative. Score is ctrl-relative.
+      // I4 = 1 means home wins I4. If ctrl is home, that's good. If ctrl is away, I4=1 means ctrl LOST I4.
+      // We don't have homeAlias in this query... use score >= 0.5 as proxy for ctrl=home
+      // Actually we do: indicators.homeAlias. Let me just check if I4 >= 0.5
+      if (i4raw === 1) i4status.won++;
+      else if (i4raw === 0) i4status.lost++;
+      else i4status.even++;
+      // Indicator count
+      const ic = r.ind_count || 0;
+      indCounts[ic] = (indCounts[ic] || 0) + 1;
+      floorSum += r.floor;
+    }
+    return {
+      n: group.length,
+      avg_floor: Math.round(floorSum / group.length * 100) / 100,
+      tiers: Object.fromEntries(Object.entries(tiers).sort((a,b) => b[1]-a[1]).map(([k,v]) => [k, { n: v, pct: Math.round(v/group.length*1000)/10 }])),
+      deficit_buckets: deficits,
+      i4_raw_status: i4status,
+      indicator_counts: Object.fromEntries(Object.entries(indCounts).sort((a,b) => Number(a[0])-Number(b[0])).map(([k,v]) => [k, { n: v, pct: Math.round(v/group.length*1000)/10 }])),
+    };
+  }
+
+  // By checkpoint
+  const checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  const byCheckpoint = {};
+  for (const cp of checkpoints) {
+    const cpLosers = losers.filter(r => r.checkpoint === cp);
+    const cpAll = buyAlerts.filter(r => r.checkpoint === cp);
+    byCheckpoint[cp] = { total_buys: cpAll.length, losers: cpLosers.length, loser_pct: cpAll.length > 0 ? Math.round(cpLosers.length/cpAll.length*1000)/10 : null };
+  }
+
+  return {
+    total_buy_alerts: buyAlerts.length,
+    winners: profileGroup(winners),
+    losers: profileGroup(losers),
+    by_checkpoint: byCheckpoint,
+  };
+}
+
+// ── REPORT: CONVICTION × DEFICIT DEPTH ──────────────────────────────────────
+async function reportConvictionDeficit(sql) {
+  const rows = await sql`
+    SELECT margin_at_snapshot AS margin,
+           (conviction->>'tier') AS tier,
+           ctrl_team_won
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+  `;
+
+  const tiers = ['DOMINANT','STRONG','MODEST','CONDITIONAL','NO ENTRY'];
+  const deficits = [
+    { label: 'trailing 10+', test: m => m <= -10 },
+    { label: 'trailing 5-9', test: m => m >= -9 && m <= -5 },
+    { label: 'trailing 1-4', test: m => m >= -4 && m <= -1 },
+    { label: 'tied 0-2', test: m => m >= 0 && m <= 2 },
+    { label: 'leading 3-7', test: m => m >= 3 && m <= 7 },
+    { label: 'leading 8+', test: m => m >= 8 },
+  ];
+
+  const grid = {};
+  for (const t of tiers) {
+    grid[t] = {};
+    for (const d of deficits) grid[t][d.label] = { n: 0, wins: 0 };
+  }
+
+  for (const r of rows) {
+    const t = r.tier;
+    if (!grid[t]) continue;
+    for (const d of deficits) {
+      if (d.test(r.margin)) {
+        grid[t][d.label].n++;
+        if (r.ctrl_team_won) grid[t][d.label].wins++;
+        break;
+      }
+    }
+  }
+
+  for (const t of tiers) {
+    for (const d of deficits) {
+      const v = grid[t][d.label];
+      v.pct = v.n > 0 ? Math.round(v.wins / v.n * 1000) / 10 : null;
+    }
+  }
+
+  return { description: 'Margin is home-relative. Conviction tier × deficit depth.', grid };
+}
+
+// ── REPORT: I4 SUB-COMPONENT SPLIT ──────────────────────────────────────────
+async function reportI4Split(sql) {
+  const rows = await sql`
+    SELECT checkpoint, pbp_derived, indicators, ctrl_team_won
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+      AND pbp_derived IS NOT NULL
+  `;
+
+  const checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  // subA = biggest_lead gap (±4), subB = Q4 scoring diff (±2)
+  // Re-derive from pbp_derived
+  const combos = {}; // 'A+B+' → {n, wins} etc
+  const byCheckpoint = {};
+  for (const cp of checkpoints) byCheckpoint[cp] = {};
+
+  for (const r of rows) {
+    const pd = typeof r.pbp_derived === 'string' ? JSON.parse(r.pbp_derived) : r.pbp_derived;
+    const ind = typeof r.indicators === 'string' ? JSON.parse(r.indicators) : r.indicators;
+    if (!pd || !ind || ind.score == null) continue;
+
+    const hBL = pd.hBigLead || 0, aBL = pd.aBigLead || 0;
+    const blDiff = hBL - aBL;
+    const subA = blDiff > 4 ? 1 : blDiff < -4 ? -1 : 0;
+
+    const q4h = pd.q4hPts, q4a = pd.q4aPts;
+    let subB = 0;
+    if (q4h != null && q4a != null) {
+      const q4diff = q4h - q4a;
+      subB = q4diff > 2 ? 1 : q4diff < -2 ? -1 : 0;
+    }
+
+    // Convert to labels
+    const aLabel = subA > 0 ? 'A_home' : subA < 0 ? 'A_away' : 'A_even';
+    const bLabel = subB > 0 ? 'B_home' : subB < 0 ? 'B_away' : 'B_even';
+    const key = `${aLabel}|${bLabel}`;
+    const won = !!r.ctrl_team_won;
+
+    if (!combos[key]) combos[key] = { n: 0, wins: 0 };
+    combos[key].n++;
+    if (won) combos[key].wins++;
+
+    if (!byCheckpoint[r.checkpoint][key]) byCheckpoint[r.checkpoint][key] = { n: 0, wins: 0 };
+    byCheckpoint[r.checkpoint][key].n++;
+    if (won) byCheckpoint[r.checkpoint][key].wins++;
+  }
+
+  // Format
+  const formatted = Object.entries(combos)
+    .sort((a,b) => b[1].n - a[1].n)
+    .map(([k,v]) => ({
+      combo: k,
+      n: v.n,
+      wins: v.wins,
+      pct: v.n > 0 ? Math.round(v.wins/v.n*1000)/10 : null,
+    }));
+
+  // Key question: when subA and subB disagree, what happens?
+  const agreement = { agree: { n: 0, wins: 0 }, disagree: { n: 0, wins: 0 }, mixed: { n: 0, wins: 0 } };
+  for (const [k, v] of Object.entries(combos)) {
+    const [a, b] = k.split('|');
+    const aDir = a.includes('home') ? 1 : a.includes('away') ? -1 : 0;
+    const bDir = b.includes('home') ? 1 : b.includes('away') ? -1 : 0;
+    if (aDir !== 0 && bDir !== 0 && aDir === bDir) { agreement.agree.n += v.n; agreement.agree.wins += v.wins; }
+    else if (aDir !== 0 && bDir !== 0 && aDir !== bDir) { agreement.disagree.n += v.n; agreement.disagree.wins += v.wins; }
+    else { agreement.mixed.n += v.n; agreement.mixed.wins += v.wins; }
+  }
+  for (const v of Object.values(agreement)) {
+    v.pct = v.n > 0 ? Math.round(v.wins/v.n*1000)/10 : null;
+  }
+
+  return {
+    description: 'I4 subA = biggest_lead gap (±4 threshold). I4 subB = Q4 scoring diff (±2). Home-relative. Agreement = both favor same side.',
+    all_combos: formatted,
+    agreement_analysis: agreement,
+  };
+}
+
+// ── REPORT: VELOCITY AT ALERT TIME ──────────────────────────────────────────
+async function reportVelocityAtAlert(sql) {
+  const rows = await sql`
+    SELECT game_id, checkpoint, (indicators->>'score')::real AS floor,
+           margin_at_snapshot AS margin,
+           indicators->>'controlTeam' AS ctrl, ctrl_team_won
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+    ORDER BY game_id, checkpoint
+  `;
+
+  const checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  const games = {};
+  for (const r of rows) {
+    if (!games[r.game_id]) games[r.game_id] = {};
+    games[r.game_id][r.checkpoint] = r;
+  }
+
+  const velocityBuckets = [
+    { label: 'crashing (3+ declining)', test: v => v <= -3 },
+    { label: 'declining (1-2 declining)', test: v => v >= -2 && v <= -1 },
+    { label: 'stable/new', test: v => v === 0 },
+    { label: 'rising (1-2 rising)', test: v => v >= 1 && v <= 2 },
+    { label: 'surging (3+ rising)', test: v => v >= 3 },
+  ];
+
+  // For each snapshot that meets BUY conditions, compute "velocity score":
+  // count how many of the last 3 checkpoints had rising vs declining floor (same ctrl)
+  const result = {};
+  for (const vb of velocityBuckets) result[vb.label] = { n: 0, wins: 0 };
+
+  for (const [gid, cps] of Object.entries(games)) {
+    for (let i = 0; i < checkpoints.length; i++) {
+      const cp = checkpoints[i];
+      const snap = cps[cp];
+      if (!snap) continue;
+      if (!(snap.floor >= 0.65 && snap.margin <= 0 && snap.margin >= -15)) continue;
+
+      // Compute velocity: look back up to 3 checkpoints
+      let velocityScore = 0;
+      for (let j = 1; j <= Math.min(3, i); j++) {
+        const prev = cps[checkpoints[i - j]];
+        const curr = j === 1 ? snap : cps[checkpoints[i - j + 1]];
+        if (!prev || !curr) continue;
+        if (prev.ctrl !== curr.ctrl) break; // flip = stop looking back
+        const delta = curr.floor - prev.floor;
+        if (delta > 0.03) velocityScore++;
+        else if (delta < -0.03) velocityScore--;
+      }
+
+      for (const vb of velocityBuckets) {
+        if (vb.test(velocityScore)) {
+          result[vb.label].n++;
+          if (snap.ctrl_team_won) result[vb.label].wins++;
+          break;
+        }
+      }
+    }
+  }
+
+  for (const v of Object.values(result)) {
+    v.pct = v.n > 0 ? Math.round(v.wins/v.n*1000)/10 : null;
+  }
+
+  return { description: 'BUY-eligible snapshots profiled by floor velocity (count of rising vs declining checkpoints in last 3). Positive = rising floor.', buckets: result };
+}
+
+// ── REPORT: CONSECUTIVE HOLDS AT ALERT TIME ─────────────────────────────────
+async function reportConsecutiveHolds(sql) {
+  const rows = await sql`
+    SELECT game_id, checkpoint, (indicators->>'score')::real AS floor,
+           margin_at_snapshot AS margin,
+           indicators->>'controlTeam' AS ctrl, ctrl_team_won
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+    ORDER BY game_id, checkpoint
+  `;
+
+  const checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  const games = {};
+  for (const r of rows) {
+    if (!games[r.game_id]) games[r.game_id] = {};
+    games[r.game_id][r.checkpoint] = r;
+  }
+
+  // Hold buckets
+  const holdBuckets = [
+    { label: '1 (just took control)', min: 1, max: 1 },
+    { label: '2-3', min: 2, max: 3 },
+    { label: '4-5', min: 4, max: 5 },
+    { label: '6+', min: 6, max: 99 },
+  ];
+
+  // All snapshots (not just BUY)
+  const allResult = {};
+  const buyResult = {};
+  for (const hb of holdBuckets) {
+    allResult[hb.label] = { n: 0, wins: 0 };
+    buyResult[hb.label] = { n: 0, wins: 0 };
+  }
+
+  for (const [gid, cps] of Object.entries(games)) {
+    for (let i = 0; i < checkpoints.length; i++) {
+      const cp = checkpoints[i];
+      const snap = cps[cp];
+      if (!snap || !snap.ctrl) continue;
+
+      // Count consecutive holds backward
+      let holds = 1;
+      for (let j = i - 1; j >= 0; j--) {
+        const prev = cps[checkpoints[j]];
+        if (!prev || prev.ctrl !== snap.ctrl) break;
+        holds++;
+      }
+
+      for (const hb of holdBuckets) {
+        if (holds >= hb.min && holds <= hb.max) {
+          allResult[hb.label].n++;
+          if (snap.ctrl_team_won) allResult[hb.label].wins++;
+
+          // Also check BUY eligibility
+          if (snap.floor >= 0.65 && snap.margin <= 0 && snap.margin >= -15) {
+            buyResult[hb.label].n++;
+            if (snap.ctrl_team_won) buyResult[hb.label].wins++;
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  for (const v of Object.values(allResult)) v.pct = v.n > 0 ? Math.round(v.wins/v.n*1000)/10 : null;
+  for (const v of Object.values(buyResult)) v.pct = v.n > 0 ? Math.round(v.wins/v.n*1000)/10 : null;
+
+  return {
+    all_snapshots: allResult,
+    buy_eligible_only: buyResult,
+  };
+}
+
+// ── REPORT: FLIP RECOVERY RATE ──────────────────────────────────────────────
+async function reportFlipRecovery(sql) {
+  const rows = await sql`
+    SELECT game_id, checkpoint, indicators->>'controlTeam' AS ctrl, ctrl_team_won
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+    ORDER BY game_id, checkpoint
+  `;
+
+  const checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  const games = {};
+  for (const r of rows) {
+    if (!games[r.game_id]) games[r.game_id] = {};
+    games[r.game_id][r.checkpoint] = r;
+  }
+
+  // For each flip, track: does the original controller recover within 1, 2, 3 checkpoints?
+  let totalFlips = 0;
+  const recovery = { within_1: 0, within_2: 0, within_3: 0, never: 0 };
+  const flipOutcomes = {
+    recovered_won: 0, recovered_lost: 0,
+    stayed_flipped_won: 0, stayed_flipped_lost: 0,
+  };
+
+  for (const [gid, cps] of Object.entries(games)) {
+    for (let i = 1; i < checkpoints.length; i++) {
+      const prev = cps[checkpoints[i-1]];
+      const curr = cps[checkpoints[i]];
+      if (!prev || !curr || !prev.ctrl || !curr.ctrl) continue;
+      if (prev.ctrl === curr.ctrl) continue;
+
+      // This is a flip. Original controller = prev.ctrl
+      totalFlips++;
+      const originalCtrl = prev.ctrl;
+      let recovered = false;
+      let recoveryWindow = 0;
+
+      for (let j = i + 1; j < checkpoints.length; j++) {
+        const future = cps[checkpoints[j]];
+        if (!future || !future.ctrl) break;
+        if (future.ctrl === originalCtrl) {
+          recovered = true;
+          recoveryWindow = j - i;
+          if (recoveryWindow <= 1) recovery.within_1++;
+          else if (recoveryWindow <= 2) recovery.within_2++;
+          else recovery.within_3++;
+          break;
+        }
+      }
+      if (!recovered) recovery.never++;
+
+      // Track outcomes
+      const q4end = cps['Q4_END'];
+      if (q4end) {
+        const originalWon = (originalCtrl === q4end.ctrl && q4end.ctrl_team_won) ||
+                            (originalCtrl !== q4end.ctrl && !q4end.ctrl_team_won);
+        if (recovered) {
+          if (originalWon) flipOutcomes.recovered_won++;
+          else flipOutcomes.recovered_lost++;
+        } else {
+          if (originalWon) flipOutcomes.stayed_flipped_won++;
+          else flipOutcomes.stayed_flipped_lost++;
+        }
+      }
+    }
+  }
+
+  const recoveredTotal = recovery.within_1 + recovery.within_2 + recovery.within_3;
+  return {
+    total_flips: totalFlips,
+    recovery_rate: {
+      within_1_checkpoint: { n: recovery.within_1, pct: totalFlips > 0 ? Math.round(recovery.within_1/totalFlips*1000)/10 : null },
+      within_2_checkpoints: { n: recovery.within_2, pct: totalFlips > 0 ? Math.round(recovery.within_2/totalFlips*1000)/10 : null },
+      within_3_checkpoints: { n: recovery.within_3, pct: totalFlips > 0 ? Math.round(recovery.within_3/totalFlips*1000)/10 : null },
+      never_recovered: { n: recovery.never, pct: totalFlips > 0 ? Math.round(recovery.never/totalFlips*1000)/10 : null },
+      total_recovered_pct: totalFlips > 0 ? Math.round(recoveredTotal/totalFlips*1000)/10 : null,
+    },
+    outcomes: {
+      recovered_and_won: { n: flipOutcomes.recovered_won, pct: recoveredTotal > 0 ? Math.round(flipOutcomes.recovered_won/recoveredTotal*1000)/10 : null },
+      recovered_and_lost: { n: flipOutcomes.recovered_lost, pct: recoveredTotal > 0 ? Math.round(flipOutcomes.recovered_lost/recoveredTotal*1000)/10 : null },
+      stayed_flipped_new_ctrl_won: { n: flipOutcomes.stayed_flipped_won, pct: recovery.never > 0 ? Math.round(flipOutcomes.stayed_flipped_won/recovery.never*1000)/10 : null },
+      stayed_flipped_new_ctrl_lost: { n: flipOutcomes.stayed_flipped_lost, pct: recovery.never > 0 ? Math.round(flipOutcomes.stayed_flipped_lost/recovery.never*1000)/10 : null },
+    },
+  };
+}
+
 // ── PHASE: REPORT_ALL ───────────────────────────────────────────────────────
 async function phaseReportAll(sql) {
   const [calibration, timeDecay, alertSim] = await Promise.all([
@@ -1555,6 +1981,12 @@ export default async (req) => {
       case 'report_stability':  result = await reportStability(sql); break;
       case 'report_margin_floor': result = await reportMarginFloor(sql); break;
       case 'report_velocity':   result = await reportFloorVelocity(sql); break;
+      case 'report_autopsy':    result = await reportLosingAutopsy(sql); break;
+      case 'report_conviction_deficit': result = await reportConvictionDeficit(sql); break;
+      case 'report_i4_split':   result = await reportI4Split(sql); break;
+      case 'report_velocity_at_alert': result = await reportVelocityAtAlert(sql); break;
+      case 'report_consecutive_holds': result = await reportConsecutiveHolds(sql); break;
+      case 'report_flip_recovery': result = await reportFlipRecovery(sql); break;
       case 'report_all':        result = await phaseReportAll(sql); break;
       case 'status':            result = await phaseStatus(sql); break;
       case 'wipe_indicators':    result = await phaseWipeIndicators(sql); break;
