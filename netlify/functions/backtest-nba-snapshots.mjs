@@ -717,7 +717,7 @@ async function phaseCompute(sql, url) {
     return { status: 'ok', message: 'Nothing to compute', nextStep: '?phase=report_all' };
   }
 
-  let computed = 0, errors = 0;
+  let computed = 0, errors = 0, noData = 0;
 
   async function computeOne(row) {
     try {
@@ -734,7 +734,19 @@ async function phaseCompute(sql, url) {
         q4hPts: pd.q4hPts, q4aPts: pd.q4aPts,
       });
 
-      if (!ind) return { ok: false, err: 'computeServer returned null' };
+      if (!ind) {
+        // Zero-state snapshot (BDL missing PBP for this period).
+        // Mark as computed with no_data flag so it doesn't block future runs.
+        await sql`
+          UPDATE nba_snapshot_backtest
+          SET indicators = ${JSON.stringify({ no_data: true })},
+              conviction = ${JSON.stringify({ tier: 'NO_DATA', combo: 'NONE' })},
+              ctrl_team_won = NULL,
+              computed_at = NOW()
+          WHERE game_id = ${row.game_id} AND checkpoint = ${row.checkpoint}
+        `;
+        return { ok: true, no_data: true };
+      }
 
       const conv = computeConviction(ind);
 
@@ -767,7 +779,7 @@ async function phaseCompute(sql, url) {
       return { r, row, idx: i + idx };
     }));
     for (const { r, row } of results) {
-      if (r.ok) computed++;
+      if (r.ok) { computed++; if (r.no_data) noData++; }
       else {
         errors++;
         if (errLog.length < 5) {
@@ -789,6 +801,7 @@ async function phaseCompute(sql, url) {
   return {
     status: 'ok',
     computed,
+    noData,
     errors,
     errLog,
     total: rows.length,
@@ -829,7 +842,7 @@ async function reportTimeDecay(sql) {
            COUNT(*) AS n,
            SUM(CASE WHEN ctrl_team_won THEN 1 ELSE 0 END) AS wins
     FROM nba_snapshot_backtest
-    WHERE indicators IS NOT NULL
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
     GROUP BY checkpoint, period
     ORDER BY period, checkpoint
   `;
@@ -848,7 +861,7 @@ async function reportTimeDecay(sql) {
            COUNT(*) AS n,
            SUM(CASE WHEN ctrl_team_won THEN 1 ELSE 0 END) AS wins
     FROM nba_snapshot_backtest
-    WHERE indicators IS NOT NULL
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
     GROUP BY checkpoint, tier
     ORDER BY checkpoint, tier
   `;
@@ -875,7 +888,7 @@ async function reportAlertSim(sql) {
            checkpoint,
            ctrl_team_won
     FROM nba_snapshot_backtest
-    WHERE indicators IS NOT NULL
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
   `;
 
   // NOTE: these are structurally-reduced proxies for the production alerts.
@@ -931,7 +944,7 @@ async function phaseReportAll(sql) {
            COUNT(DISTINCT game_id) AS games,
            SUM(CASE WHEN ctrl_team_won THEN 1 ELSE 0 END) AS wins
     FROM nba_snapshot_backtest
-    WHERE indicators IS NOT NULL
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
   `;
 
   return {
