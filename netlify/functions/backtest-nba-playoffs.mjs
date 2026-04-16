@@ -275,7 +275,74 @@ async function phaseReset(sql) {
   };
 }
 
-// ── PHASE: INVENTORY — check what's usable in existing game_pbp / games tables
+// ── PHASE: RETENTION — probe BDL plays retention cliff ──────────────────────
+// Binary-search across recent dates to find oldest date where plays still work.
+async function phaseRetention(sql, url) {
+  if (!BDL_KEY) return { error: 'BDL_KEY missing' };
+
+  // Probe these dates: today, 1w, 2w, 1m, 2m, 3m, 6m, 9m, 12m back
+  const today = new Date();
+  const daysBack = [1, 7, 14, 30, 60, 90, 120, 180, 270, 365];
+
+  const probes = [];
+  for (const db of daysBack) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - db);
+    const dStr = d.toISOString().substring(0, 10);
+
+    // Find a completed game on that date (or nearest day)
+    let game = null;
+    for (let offset = 0; offset <= 2; offset++) {
+      const tryDate = new Date(d);
+      tryDate.setDate(tryDate.getDate() - offset);
+      const tryStr = tryDate.toISOString().substring(0, 10);
+      const resp = await bdlFetch(`/nba/v1/games?dates[]=${tryStr}&per_page=25`);
+      const finished = (resp?.data || []).filter(g => g.home_team_score > 0);
+      if (finished.length > 0) {
+        game = { id: finished[0].id, date: tryStr };
+        break;
+      }
+    }
+
+    if (!game) {
+      probes.push({ daysBack: db, target: dStr, error: 'no completed games found within 2d window' });
+      continue;
+    }
+
+    // Probe plays for this game
+    const playsResp = await bdlFetch(`/nba/v1/plays?game_id=${game.id}&per_page=500`);
+    const plays = playsResp?.data || [];
+
+    probes.push({
+      daysBack: db,
+      date: game.date,
+      gameId: game.id,
+      plays: plays.length,
+      hasData: plays.length > 0,
+    });
+  }
+
+  // Find cliff — oldest date where hasData is true
+  const working = probes.filter(p => p.hasData);
+  const failing = probes.filter(p => p.hasData === false);
+  const oldestWorking = working.length > 0 ? working[working.length - 1] : null;
+  const newestFailing = failing.length > 0 ? failing[0] : null;
+
+  return {
+    probes,
+    cliff: {
+      oldestWorkingDate: oldestWorking?.date,
+      oldestWorkingDaysBack: oldestWorking?.daysBack,
+      newestFailingDate: newestFailing?.date,
+      newestFailingDaysBack: newestFailing?.daysBack,
+    },
+    interpretation: oldestWorking && newestFailing
+      ? `Retention window is between ${oldestWorking.daysBack}d and ${newestFailing.daysBack}d. Plays work back to ~${oldestWorking.date}.`
+      : working.length === 0
+        ? 'No historical plays accessible via BDL.'
+        : 'All probed dates have plays — retention is at least 365 days.',
+  };
+}
 async function phaseInventory(sql) {
   // Count games with both PBP and box_score_json in game_pbp (the only ones we can use)
   const counts = await sql`
@@ -1197,6 +1264,7 @@ export default async (req) => {
       case 'reset':             result = await phaseReset(sql); break;
       case 'status':            result = await phaseStatus(sql); break;
       case 'diagnose':          result = await phaseDiagnose(sql, url); break;
+      case 'retention':         result = await phaseRetention(sql, url); break;
       case 'inventory':         result = await phaseInventory(sql); break;
       case 'collect':           // backward-compat alias for collect_playoffs
       case 'collect_playoffs':  result = await phaseCollectPlayoffs(sql); break;
