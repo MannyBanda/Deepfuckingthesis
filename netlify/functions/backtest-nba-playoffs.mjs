@@ -292,8 +292,9 @@ async function phaseInventory(sql) {
   `;
 
   // Check by date bucket to see distribution
+  // (games.date is stored as TEXT like '2026-04-15', not DATE — use substring)
   const byMonth = await sql`
-    SELECT TO_CHAR(g.date, 'YYYY-MM') AS month, COUNT(*) AS n
+    SELECT SUBSTRING(g.date FROM 1 FOR 7) AS month, COUNT(*) AS n
     FROM game_pbp p
     JOIN games g ON g.id = p.game_id
     WHERE p.league = 'nba' AND p.pbp_json IS NOT NULL AND p.box_score_json IS NOT NULL
