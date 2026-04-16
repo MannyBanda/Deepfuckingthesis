@@ -931,6 +931,164 @@ async function reportAlertSim(sql) {
   return out;
 }
 
+// ── REPORT: INDICATORS — per-indicator win rate by checkpoint ────────────────
+async function reportIndicators(sql) {
+  // Pull all computed snapshots with real data
+  const rows = await sql`
+    SELECT checkpoint, indicators, ctrl_team_won
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+  `;
+
+  // For each indicator, bucket by value (0, 0.5, 1) relative to ctrl team
+  const indicators = ['I1', 'I2', 'I3', 'I4', 'I5'];
+  const checkpoints = ['Q1_6', 'Q1_END', 'Q2_6', 'Q2_END', 'Q3_6', 'Q3_END', 'Q4_6', 'Q4_END'];
+
+  // Per-indicator overall (all checkpoints)
+  const byIndicator = {};
+  for (const ind of indicators) {
+    byIndicator[ind] = { won: { n: 0, wins: 0 }, even: { n: 0, wins: 0 }, lost: { n: 0, wins: 0 } };
+  }
+
+  // Per-indicator × checkpoint
+  const byIndicatorCheckpoint = {};
+  for (const ind of indicators) {
+    byIndicatorCheckpoint[ind] = {};
+    for (const cp of checkpoints) {
+      byIndicatorCheckpoint[ind][cp] = { won: { n: 0, wins: 0 }, even: { n: 0, wins: 0 }, lost: { n: 0, wins: 0 } };
+    }
+  }
+
+  for (const row of rows) {
+    const data = typeof row.indicators === 'string' ? JSON.parse(row.indicators) : row.indicators;
+    const won = !!row.ctrl_team_won;
+    const ctrlHome = data.controlTeam === data.homeAlias;
+
+    for (const ind of indicators) {
+      const raw = data[ind];
+      if (raw == null) continue;
+      // Convert to ctrl-team-relative
+      const val = ctrlHome ? raw : 1 - raw;
+      const bucket = val === 1 ? 'won' : val === 0 ? 'lost' : 'even';
+
+      byIndicator[ind][bucket].n++;
+      if (won) byIndicator[ind][bucket].wins++;
+
+      if (byIndicatorCheckpoint[ind][row.checkpoint]) {
+        byIndicatorCheckpoint[ind][row.checkpoint][bucket].n++;
+        if (won) byIndicatorCheckpoint[ind][row.checkpoint][bucket].wins++;
+      }
+    }
+  }
+
+  // Format output
+  const summary = {};
+  for (const ind of indicators) {
+    summary[ind] = {};
+    for (const b of ['won', 'even', 'lost']) {
+      const d = byIndicator[ind][b];
+      summary[ind][b] = { n: d.n, wins: d.wins, pct: d.n > 0 ? Math.round(d.wins / d.n * 1000) / 10 : null };
+    }
+  }
+
+  const byCheckpoint = {};
+  for (const ind of indicators) {
+    byCheckpoint[ind] = {};
+    for (const cp of checkpoints) {
+      byCheckpoint[ind][cp] = {};
+      for (const b of ['won', 'even', 'lost']) {
+        const d = byIndicatorCheckpoint[ind][cp][b];
+        byCheckpoint[ind][cp][b] = { n: d.n, wins: d.wins, pct: d.n > 0 ? Math.round(d.wins / d.n * 1000) / 10 : null };
+      }
+    }
+  }
+
+  return { summary, by_checkpoint: byCheckpoint };
+}
+
+// ── REPORT: COMBOS — indicator combo win rate by checkpoint ──────────────────
+async function reportCombos(sql) {
+  const rows = await sql`
+    SELECT checkpoint, indicators, conviction, ctrl_team_won
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+  `;
+
+  const comboCounts = {};  // combo string → { n, wins, by_checkpoint: { cp → {n, wins} } }
+  const pairCounts = {};   // pair string → { n, wins, by_checkpoint }
+  const checkpoints = ['Q1_6', 'Q1_END', 'Q2_6', 'Q2_END', 'Q3_6', 'Q3_END', 'Q4_6', 'Q4_END'];
+  const indicators = ['I1', 'I2', 'I3', 'I4', 'I5'];
+
+  for (const row of rows) {
+    const data = typeof row.indicators === 'string' ? JSON.parse(row.indicators) : row.indicators;
+    const conv = typeof row.conviction === 'string' ? JSON.parse(row.conviction) : row.conviction;
+    const won = !!row.ctrl_team_won;
+    const ctrlHome = data.controlTeam === data.homeAlias;
+
+    // Determine which indicators ctrl team won
+    const wonInds = [];
+    for (const ind of indicators) {
+      const raw = data[ind];
+      if (raw == null) continue;
+      const val = ctrlHome ? raw : 1 - raw;
+      if (val === 1) wonInds.push(ind);
+    }
+
+    const combo = wonInds.length > 0 ? wonInds.join('+') : 'NONE';
+
+    // Track combo
+    if (!comboCounts[combo]) {
+      comboCounts[combo] = { n: 0, wins: 0, by_checkpoint: {} };
+      for (const cp of checkpoints) comboCounts[combo].by_checkpoint[cp] = { n: 0, wins: 0 };
+    }
+    comboCounts[combo].n++;
+    if (won) comboCounts[combo].wins++;
+    if (comboCounts[combo].by_checkpoint[row.checkpoint]) {
+      comboCounts[combo].by_checkpoint[row.checkpoint].n++;
+      if (won) comboCounts[combo].by_checkpoint[row.checkpoint].wins++;
+    }
+
+    // Track pairs
+    for (let i = 0; i < wonInds.length; i++) {
+      for (let j = i + 1; j < wonInds.length; j++) {
+        const pair = `${wonInds[i]}+${wonInds[j]}`;
+        if (!pairCounts[pair]) {
+          pairCounts[pair] = { n: 0, wins: 0, by_checkpoint: {} };
+          for (const cp of checkpoints) pairCounts[pair].by_checkpoint[cp] = { n: 0, wins: 0 };
+        }
+        pairCounts[pair].n++;
+        if (won) pairCounts[pair].wins++;
+        if (pairCounts[pair].by_checkpoint[row.checkpoint]) {
+          pairCounts[pair].by_checkpoint[row.checkpoint].n++;
+          if (won) pairCounts[pair].by_checkpoint[row.checkpoint].wins++;
+        }
+      }
+    }
+  }
+
+  // Format: sort by frequency, add pct
+  const formatGroup = (counts) => {
+    return Object.entries(counts)
+      .sort((a, b) => b[1].n - a[1].n)
+      .map(([k, v]) => ({
+        combo: k,
+        n: v.n,
+        wins: v.wins,
+        pct: v.n > 0 ? Math.round(v.wins / v.n * 1000) / 10 : null,
+        by_checkpoint: Object.fromEntries(
+          Object.entries(v.by_checkpoint)
+            .filter(([, d]) => d.n > 0)
+            .map(([cp, d]) => [cp, { n: d.n, wins: d.wins, pct: Math.round(d.wins / d.n * 1000) / 10 }])
+        ),
+      }));
+  };
+
+  return {
+    combos: formatGroup(comboCounts),
+    pairs: formatGroup(pairCounts),
+  };
+}
+
 // ── PHASE: REPORT_ALL ───────────────────────────────────────────────────────
 async function phaseReportAll(sql) {
   const [calibration, timeDecay, alertSim] = await Promise.all([
@@ -1068,6 +1226,8 @@ export default async (req) => {
       case 'report_calibration': result = { calibration: await reportCalibration(sql) }; break;
       case 'report_time':       result = await reportTimeDecay(sql); break;
       case 'report_alert_sim':  result = await reportAlertSim(sql); break;
+      case 'report_indicators': result = await reportIndicators(sql); break;
+      case 'report_combos':     result = await reportCombos(sql); break;
       case 'report_all':        result = await phaseReportAll(sql); break;
       case 'status':            result = await phaseStatus(sql); break;
       case 'wipe_indicators':    result = await phaseWipeIndicators(sql); break;
