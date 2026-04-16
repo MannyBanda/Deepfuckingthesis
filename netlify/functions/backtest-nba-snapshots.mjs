@@ -258,6 +258,11 @@ function walkAndSnapshot(plays, hA, aA) {
       }
 
       if (made && team) {
+        // Accumulate team points — THIS was missing, causing all state.pts to
+        // only count free throws (the fix is here).
+        if (team === hA) state.h.pts += pts;
+        else state.a.pts += pts;
+
         state.scoreLog.push({ team, pts, q: period });
         if (period === 4) {
           if (team === hA) state.q4hPts += pts;
