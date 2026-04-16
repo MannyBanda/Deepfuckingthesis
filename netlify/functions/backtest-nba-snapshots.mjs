@@ -506,35 +506,66 @@ async function phaseSnapshot(sql, url) {
   const batchSize = parseInt(url.searchParams.get('n') || '200');
   const concurrency = Math.min(parseInt(url.searchParams.get('c') || '8'), 20);
   const force = url.searchParams.get('force') === '1';
+  const offsetParam = parseInt(url.searchParams.get('offset') || '0');
+  const dryRun = url.searchParams.get('dry') === '1';
+
+  // Diagnostics
+  const dbg = { force, batchSize, concurrency, offsetParam, dryRun, checkpoints: [] };
+  dbg.checkpoints.push({ step: 'entered_handler', ms: Date.now() - startTime });
 
   // Normal: pick games without Q4_END snapshot (resumable).
   // Force: re-snapshot ALL games (INSERT...ON CONFLICT DO UPDATE refreshes
   //   team_stats + pbp_derived). Use after walker bug fixes.
-  const games = force
-    ? await sql`
-        SELECT bt.bdl_game_id, bt.home_alias, bt.away_alias,
-               bt.home_pts, bt.away_pts, bt.winner_alias, bt.margin
-        FROM nba_backtest bt
-        WHERE bt.team_stats IS NOT NULL AND bt.game_type = 'regular'
-        ORDER BY bt.date ASC
-        LIMIT ${batchSize}
-        OFFSET ${parseInt(url.searchParams.get('offset') || '0')}
-      `
-    : await sql`
-        SELECT bt.bdl_game_id, bt.home_alias, bt.away_alias,
-               bt.home_pts, bt.away_pts, bt.winner_alias, bt.margin
-        FROM nba_backtest bt
-        LEFT JOIN nba_snapshot_backtest snap
-          ON snap.game_id = bt.bdl_game_id AND snap.checkpoint = 'Q4_END'
-        WHERE bt.team_stats IS NOT NULL
-          AND bt.game_type = 'regular'
-          AND snap.game_id IS NULL
-        ORDER BY bt.date ASC
-        LIMIT ${batchSize}
-      `;
+  let games;
+  try {
+    games = force
+      ? await sql`
+          SELECT bt.bdl_game_id, bt.home_alias, bt.away_alias,
+                 bt.home_pts, bt.away_pts, bt.winner_alias, bt.margin
+          FROM nba_backtest bt
+          WHERE bt.team_stats IS NOT NULL AND bt.game_type = 'regular'
+          ORDER BY bt.date ASC
+          LIMIT ${batchSize}
+          OFFSET ${offsetParam}
+        `
+      : await sql`
+          SELECT bt.bdl_game_id, bt.home_alias, bt.away_alias,
+                 bt.home_pts, bt.away_pts, bt.winner_alias, bt.margin
+          FROM nba_backtest bt
+          LEFT JOIN nba_snapshot_backtest snap
+            ON snap.game_id = bt.bdl_game_id AND snap.checkpoint = 'Q4_END'
+          WHERE bt.team_stats IS NOT NULL
+            AND bt.game_type = 'regular'
+            AND snap.game_id IS NULL
+          ORDER BY bt.date ASC
+          LIMIT ${batchSize}
+        `;
+    dbg.checkpoints.push({ step: 'select_complete', ms: Date.now() - startTime, gamesFound: games.length });
+  } catch (e) {
+    return new Response(JSON.stringify({
+      error: 'SELECT failed',
+      stage: 'games_query',
+      mode: force ? 'force' : 'normal',
+      message: e.message,
+      stack: e.stack?.split('\n').slice(0, 5),
+      dbg,
+    }, null, 2), { status: 500, headers: { 'Content-Type': 'application/json' } });
+  }
 
   if (games.length === 0) {
-    return { status: 'ok', message: 'No more games to snapshot', nextStep: '?phase=compute&force=1' };
+    return new Response(JSON.stringify({ status: 'ok', message: 'No more games to snapshot', nextStep: '?phase=compute&force=1', dbg }, null, 2),
+      { headers: { 'Content-Type': 'application/json' } });
+  }
+
+  // Dry run: just return what we'd process, no BDL/DB writes.
+  if (dryRun) {
+    return new Response(JSON.stringify({
+      status: 'ok',
+      mode: 'dry-run',
+      gamesFound: games.length,
+      firstFew: games.slice(0, 3),
+      dbg,
+    }, null, 2), { headers: { 'Content-Type': 'application/json' } });
   }
 
   let gamesDone = 0, snapshotsWritten = 0, failed = 0;
