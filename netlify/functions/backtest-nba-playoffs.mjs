@@ -396,6 +396,34 @@ async function phaseInventory(sql) {
     boxScoreJsonShape: boxShape,
   };
 }
+
+// ── PHASE: INSPECT — dump one computed row's raw data for debugging ─────────
+async function phaseInspect(sql, url) {
+  const gid = url?.searchParams?.get('gid');
+  const row = gid
+    ? await sql`SELECT * FROM nba_backtest WHERE bdl_game_id = ${gid} LIMIT 1`
+    : await sql`SELECT * FROM nba_backtest WHERE indicators IS NOT NULL ORDER BY date DESC LIMIT 1`;
+
+  if (row.length === 0) return { error: 'No matching row' };
+  const r = row[0];
+
+  return {
+    basics: {
+      gid: r.bdl_game_id,
+      date: r.date,
+      matchup: `${r.away_alias}@${r.home_alias}`,
+      score: `${r.away_pts}-${r.home_pts}`,
+      margin: r.margin,
+      winner: r.winner_alias,
+    },
+    team_stats: r.team_stats,
+    pbp_derived: r.pbp_derived,
+    indicators: r.indicators,
+    conviction: r.conviction,
+    ctrl_team_won: r.ctrl_team_won,
+  };
+}
+
 // Usage: ?phase=diagnose                (tests oldest + newest in DB, plus recent BDL game)
 //        ?phase=diagnose&gid=15882375   (specific game ID)
 async function phaseDiagnose(sql, url) {
@@ -1131,6 +1159,7 @@ export default async (req) => {
       case 'diagnose':          result = await phaseDiagnose(sql, url); break;
       case 'retention':         result = await phaseRetention(sql, url); break;
       case 'inventory':         result = await phaseInventory(sql); break;
+      case 'inspect':           result = await phaseInspect(sql, url); break;
       case 'collect':           // alias for backward-compat
       case 'collect_regular':   result = await phaseCollectRegular(sql); break;
       case 'collect_playoffs':  result = await phaseCollectPlayoffs(sql); break;
