@@ -461,22 +461,27 @@ async function bdlFetch(path, retries = 2) {
   }
 }
 
-// Paginate through ALL plays for a game. BDL PerPageParam max is 100 (spec),
-// though some endpoints silently accept higher values. To be safe, we request
-// per_page=100 and follow next_cursor until exhausted.
+// Fetch ALL plays for a game. Try per_page=500 first (BDL NBA plays
+// accepts this despite spec saying max 100). Only paginate via next_cursor
+// if the response indicates more pages exist.
 async function bdlFetchAllPlays(gid) {
-  const allPlays = [];
-  let cursor = null;
-  const MAX_PAGES = 15; // safety valve: 15 × 100 = 1,500 plays max
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const params = `game_id=${gid}&per_page=100${cursor ? `&cursor=${cursor}` : ''}`;
-    const resp = await bdlFetch(`/nba/v1/plays?${params}`);
+  // First request: grab as many as possible in one shot
+  const first = await bdlFetch(`/nba/v1/plays?game_id=${gid}&per_page=500`);
+  const allPlays = first?.data || [];
+  let cursor = first?.meta?.next_cursor;
+
+  // If there's no next_cursor, we got everything (vast majority of games)
+  if (!cursor) return allPlays;
+
+  // Rare case: >500 plays (OT games, high-event games). Follow cursor.
+  const MAX_EXTRA_PAGES = 10;
+  for (let page = 0; page < MAX_EXTRA_PAGES; page++) {
+    const resp = await bdlFetch(`/nba/v1/plays?game_id=${gid}&per_page=500&cursor=${cursor}`);
     const plays = resp?.data || [];
     allPlays.push(...plays);
     cursor = resp?.meta?.next_cursor;
     if (!cursor || plays.length === 0) break;
-    // Small delay between pages to respect rate limits
-    if (page > 0) await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 100));
   }
   return allPlays;
 }
@@ -524,7 +529,7 @@ async function phaseSnapshot(sql, url) {
   const startTime = Date.now();
   const TIME_BUDGET_MS = 100000;
   const batchSize = parseInt(url.searchParams.get('n') || '200');
-  const concurrency = Math.min(parseInt(url.searchParams.get('c') || '4'), 20);
+  const concurrency = Math.min(parseInt(url.searchParams.get('c') || '8'), 20);
   const force = url.searchParams.get('force') === '1';
   const offsetParam = parseInt(url.searchParams.get('offset') || '0');
   const dryRun = url.searchParams.get('dry') === '1';
