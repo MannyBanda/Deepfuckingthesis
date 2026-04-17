@@ -530,77 +530,100 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
 // ── CONTEXT PACKAGE ASSEMBLY ──
 
 function assembleContextPackage(snap, cr, lt, erosion, bwcState, v2Alerts, allSnaps, idx, hA, aA, useMonitor = false) {
-  // Floor history (last 5 snapshots before current)
+  // Floor history (last 5 raw snapshots before current — agent reads these directly)
   const histStart = Math.max(0, idx - 5);
-  const trendSnaps = allSnaps.slice(histStart, idx + 1);
-  const floorHistory = trendSnaps.map(s => {
+  const rawWindow = allSnaps.slice(histStart, idx + 1);
+  const floorHistory = rawWindow.map(s => {
     const ft = s.floor_team || '?';
     return `Q${s.period} ${s.clock}: ${ft} ${Number(s.floor_score || 0).toFixed(2)} (${s.away_pts}-${s.home_pts}) TP:${s.tp_class || '?'} LS:${s.ls_class || '?'}`;
   }).reverse().join('\n');
 
-  // ── Inline trend signals (same window as floor history, no lag) ──
+  // ── Inline trend signals (deduped window, no stale polls) ──
   let trendSignals = null;
-  if (useMonitor && trendSnaps.length >= 3) {
-    // Opp sustainability arc — how opponent sust changed over window
-    const sustTiers = { 'LOCKED IN': 5, 'DURABLE': 4, 'MIXED': 3, 'STALLED': 2, 'COLD': 2, 'FRAGILE': 1, 'UNSUSTAINABLE': 0 };
-    const oppSustHistory = trendSnaps.map(s => {
-      try {
-        const sj = s.sust_json ? (typeof s.sust_json === 'string' ? JSON.parse(s.sust_json) : s.sust_json) : null;
-        if (sj) {
-          const sCtrlHome = (s.floor_team || '') === hA;
-          return sj[sCtrlHome ? 'away' : 'home']?.tier || null;
-        }
-      } catch (e) {}
-      return null;
-    }).filter(Boolean);
+  if (useMonitor) {
+    // Pull wider raw window (20 snapshots), dedup consecutive same-period+clock,
+    // then take last 8 unique data points. Mirrors production monitor approach.
+    const wideStart = Math.max(0, idx - 19);
+    const wideRaw = allSnaps.slice(wideStart, idx + 1);
 
-    let sustArc = 'STABLE', sustArcDetail = '';
-    if (oppSustHistory.length >= 2) {
-      const firstVal = sustTiers[oppSustHistory[0]] ?? 3;
-      const lastVal = sustTiers[oppSustHistory[oppSustHistory.length - 1]] ?? 3;
-      sustArc = lastVal < firstVal ? 'DEGRADING' : lastVal > firstVal ? 'IMPROVING' : 'STABLE';
-      const seen = [];
-      oppSustHistory.forEach(t => { if (seen[seen.length - 1] !== t) seen.push(t); });
-      sustArcDetail = seen.join(' → ');
-    }
-
-    // Floor-margin relationship — are structural edge and scoreboard moving together?
-    const floors = trendSnaps.map(s => Number(s.floor_score || 0));
-    const margins = trendSnaps.map(s => {
-      const h = Number(s.home_pts || 0), a = Number(s.away_pts || 0);
-      return cr.ctrlIsHome ? h - a : a - h;
-    });
-    let floorMarginRel = 'ALIGNED';
-    if (floors.length >= 3 && margins.length >= 3) {
-      const floorChange = floors[floors.length - 1] - floors[0];
-      const marginChange = margins[margins.length - 1] - margins[0];
-      const floorUp = floorChange > 0.03, floorDown = floorChange < -0.03;
-      const marginUp = marginChange > 2, marginDown = marginChange < -2;
-      if ((floorUp && marginDown) || (floorDown && marginUp)) floorMarginRel = 'DIVERGING';
-      else if ((floorUp && marginUp) || (floorDown && marginDown)) floorMarginRel = 'CONVERGING';
-    }
-
-    // Momentum — pre-digested label so agent doesn't have to count floor trajectory
-    let momDir = null, momStreak = 0;
-    for (let j = floors.length - 1; j > 0; j--) {
-      const diff = floors[j] - floors[j - 1];
-      if (diff > 0.01) {
-        if (momDir === 'RISING' || momDir === null) { momDir = 'RISING'; momStreak++; }
-        else break;
-      } else if (diff < -0.01) {
-        if (momDir === 'FALLING' || momDir === null) { momDir = 'FALLING'; momStreak++; }
-        else break;
-      } else {
-        if (momDir === null) momStreak++;
-        else break;
+    // Dedup: collapse consecutive snapshots with identical period+clock (halftime, timeouts)
+    const deduped = [wideRaw[0]];
+    for (let i = 1; i < wideRaw.length; i++) {
+      if (!(wideRaw[i].period === wideRaw[i - 1].period && wideRaw[i].clock === wideRaw[i - 1].clock)) {
+        deduped.push(wideRaw[i]);
       }
     }
-    momDir = momDir || 'STABLE';
-    const momDelta = momStreak > 0
-      ? Math.round((floors[floors.length - 1] - floors[Math.max(0, floors.length - 1 - momStreak)]) * 100) / 100
-      : 0;
+    // Last 8 unique snapshots
+    const trendSnaps = deduped.length > 8 ? deduped.slice(-8) : deduped;
 
-    trendSignals = { sustArc, sustArcDetail, floorMarginRel, momentum: `${momDir}(${momStreak}, ${momDelta >= 0 ? '+' : ''}${momDelta.toFixed(2)})` };
+    if (trendSnaps.length >= 3) {
+      // Opp sustainability arc — how opponent sust changed over window
+      const sustTiers = { 'LOCKED IN': 5, 'DURABLE': 4, 'MIXED': 3, 'STALLED': 2, 'COLD': 2, 'FRAGILE': 1, 'UNSUSTAINABLE': 0 };
+      const oppSustHistory = trendSnaps.map(s => {
+        try {
+          const sj = s.sust_json ? (typeof s.sust_json === 'string' ? JSON.parse(s.sust_json) : s.sust_json) : null;
+          if (sj) {
+            const sCtrlHome = (s.floor_team || '') === hA;
+            return sj[sCtrlHome ? 'away' : 'home']?.tier || null;
+          }
+        } catch (e) {}
+        return null;
+      }).filter(Boolean);
+
+      let sustArc = 'STABLE', sustArcDetail = '';
+      if (oppSustHistory.length >= 2) {
+        const firstVal = sustTiers[oppSustHistory[0]] ?? 3;
+        const lastVal = sustTiers[oppSustHistory[oppSustHistory.length - 1]] ?? 3;
+        sustArc = lastVal < firstVal ? 'DEGRADING' : lastVal > firstVal ? 'IMPROVING' : 'STABLE';
+        const seen = [];
+        oppSustHistory.forEach(t => { if (seen[seen.length - 1] !== t) seen.push(t); });
+        sustArcDetail = seen.join(' → ');
+      }
+
+      // Floor-margin relationship — are structural edge and scoreboard moving together?
+      const floors = trendSnaps.map(s => Number(s.floor_score || 0));
+      const margins = trendSnaps.map(s => {
+        const h = Number(s.home_pts || 0), a = Number(s.away_pts || 0);
+        return cr.ctrlIsHome ? h - a : a - h;
+      });
+      let floorMarginRel = 'ALIGNED';
+      if (floors.length >= 3 && margins.length >= 3) {
+        const floorChange = floors[floors.length - 1] - floors[0];
+        const marginChange = margins[margins.length - 1] - margins[0];
+        const floorUp = floorChange > 0.03, floorDown = floorChange < -0.03;
+        const marginUp = marginChange > 2, marginDown = marginChange < -2;
+        if ((floorUp && marginDown) || (floorDown && marginUp)) floorMarginRel = 'DIVERGING';
+        else if ((floorUp && marginUp) || (floorDown && marginDown)) floorMarginRel = 'CONVERGING';
+      }
+
+      // Momentum — pre-digested label so agent doesn't have to count floor trajectory
+      let momDir = null, momStreak = 0;
+      for (let j = floors.length - 1; j > 0; j--) {
+        const diff = floors[j] - floors[j - 1];
+        if (diff > 0.01) {
+          if (momDir === 'RISING' || momDir === null) { momDir = 'RISING'; momStreak++; }
+          else break;
+        } else if (diff < -0.01) {
+          if (momDir === 'FALLING' || momDir === null) { momDir = 'FALLING'; momStreak++; }
+          else break;
+        } else {
+          if (momDir === null) momStreak++;
+          else break;
+        }
+      }
+      momDir = momDir || 'STABLE';
+      const momDelta = momStreak > 0
+        ? Math.round((floors[floors.length - 1] - floors[Math.max(0, floors.length - 1 - momStreak)]) * 100) / 100
+        : 0;
+
+      trendSignals = {
+        sustArc, sustArcDetail, floorMarginRel,
+        momentum: `${momDir}(${momStreak}, ${momDelta >= 0 ? '+' : ''}${momDelta.toFixed(2)})`,
+        windowSize: trendSnaps.length,
+        dedupedFrom: wideRaw.length,
+        removed: wideRaw.length - deduped.length,
+      };
+    }
   }
 
   // Prior v2 alert reasoning trail (compounding pattern)
@@ -875,7 +898,7 @@ ${ctx.floorHistory}
 PRIOR ALERT REASONING TRAIL:
 ${ctx.priorAlertTrail}
 ${ctx.trendSignals ? `
-TREND SIGNALS (computed from same 6-snapshot window as floor trajectory above):
+TREND SIGNALS (last ${ctx.trendSignals.windowSize} unique game moments, stale polls from halftime/timeouts filtered):
 Floor momentum: ${ctx.trendSignals.momentum}
 Opponent sustainability arc: ${ctx.trendSignals.sustArc}${ctx.trendSignals.sustArcDetail ? ' (' + ctx.trendSignals.sustArcDetail + ')' : ''}
 Floor-margin relationship: ${ctx.trendSignals.floorMarginRel}
