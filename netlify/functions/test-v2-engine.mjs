@@ -258,6 +258,8 @@ async function replayGame(sql, gameId, mode, triggerIdx = null) {
   let lastRecoverTs = null;
   let lastAnyBwcTs = null;  // Universal cooldown — 3min between ANY BWC transitions
   const BWC_COOLDOWN_MS = 3 * 60 * 1000;  // 3 minutes
+  let lastBuyTs = null;     // BUY cooldown — 3min between BUY fires
+  const BUY_COOLDOWN_MS = 3 * 60 * 1000;
 
   for (let idx = 0; idx < snapshots.length; idx++) {
     const snap = snapshots[idx];
@@ -476,11 +478,14 @@ async function replayGame(sql, gameId, mode, triggerIdx = null) {
     if (period >= 2 && cr.floor >= 0.55 && cr.margin < 0 && cr.margin >= -15) {
       // Clock gate: suppress < 1 min remaining (hard gate from production)
       const clockMin = parseFloat(cr.clock) || 0;
-      if (clockMin >= 1.0) {
+      const snapTs = snap.ts ? new Date(snap.ts).getTime() : Date.now();
+      const msSinceLastBuy = lastBuyTs ? (snapTs - lastBuyTs) : Infinity;
+      if (clockMin >= 1.0 && msSinceLastBuy >= BUY_COOLDOWN_MS) {
         const buyTier = cr.floor >= 0.65 ? 'FIRED' : 'CANDIDATE';
         const buyKey = `BUY_${buyTier}_Q${period}_${cr.margin}`;
         if (buyKey !== lastTriggerKey) {
           lastTriggerKey = buyKey;
+          lastBuyTs = snapTs;
           const triggerPoint = {
             type: 'BUY_TRIGGER',
             alertType: 'BUY',
