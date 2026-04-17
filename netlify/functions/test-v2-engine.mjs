@@ -541,9 +541,9 @@ function assembleContextPackage(snap, cr, lt, erosion, bwcState, v2Alerts, allSn
   // ── Inline trend signals (deduped window, no stale polls) ──
   let trendSignals = null;
   if (useMonitor) {
-    // Pull wider raw window (20 snapshots), dedup consecutive same-period+clock,
-    // then take last 8 unique data points. Mirrors production monitor approach.
-    const wideStart = Math.max(0, idx - 19);
+    // Pull wider raw window (40 snapshots — halftime alone is ~28 stale polls),
+    // dedup consecutive same-period+clock, then take last 6 unique data points.
+    const wideStart = Math.max(0, idx - 39);
     const wideRaw = allSnaps.slice(wideStart, idx + 1);
 
     // Dedup: collapse consecutive snapshots with identical period+clock (halftime, timeouts)
