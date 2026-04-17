@@ -896,8 +896,15 @@ async function runAgentTests(sql, gameId, triggers, v2Alerts, matchup, triggerId
     const ctx = t.contextPackage;
 
     // Rebuild priorAlertTrail from v2Alerts (may have stored decisions injected)
+    // Clock comparison must be numeric — NBA clocks count down, higher = earlier in quarter
+    const parseClockSecs = (c) => {
+      if (!c) return 0;
+      const parts = String(c).split(':');
+      return (parseInt(parts[0]) || 0) * 60 + (parseInt(parts[1]) || 0);
+    };
+    const triggerClockSecs = parseClockSecs(t.clock);
     const currentTrailAlerts = v2Alerts.filter(a =>
-      a.period < t.period || (a.period === t.period && a.clock > t.clock)
+      a.period < t.period || (a.period === t.period && parseClockSecs(a.clock) > triggerClockSecs)
     );
     ctx.priorAlertTrail = currentTrailAlerts.length > 0
       ? currentTrailAlerts.map(a =>
