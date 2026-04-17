@@ -544,6 +544,7 @@ function assembleContextPackage(snap, cr, lt, erosion, bwcState, v2Alerts, allSn
     erosionLevel: erosion.level,
     consecutiveHolds: lt.ctrl_team_holds || 0,
     bwcState: bwcState || 'none',
+    bwcTeam: lt.bwc_fired?.team || null,
     bwcFirePeriod: lt.bwc_fired?.period || null,
     bwcFireFloor: lt.bwc_fired?.floor || null,
 
@@ -753,6 +754,7 @@ ALERT:
 Type: ${t.alertType} (FIRED)
 Control team: ${ctx.ctrlTeam} | Floor: ${ctx.floor.toFixed(2)} | Margin: ${ctx.margin} (${ctx.margin < 0 ? 'trailing' : ctx.margin > 0 ? 'leading' : 'tied'})
 Period: Q${ctx.period} ${ctx.clock}
+${ctx.bwcTeam ? 'BWC team (subscriber position): ' + ctx.bwcTeam + (ctx.bwcTeam !== ctx.ctrlTeam ? ' (NOT current ctrl team — ctrl flipped to ' + ctx.ctrlTeam + ')' : '') : ''}
 
 INDICATORS (control-team-relative):
 I1 Disruption: ${ctx.i1} | I2 Interior: ${ctx.i2} | I3 Shot Quality: ${ctx.i3} | I4 Game Control: ${ctx.i4} | I5 Execution: ${ctx.i5}
@@ -777,10 +779,12 @@ PRIOR ALERT REASONING TRAIL:
 ${ctx.priorAlertTrail}
 
 RULES:
-- VALUE: team PREVIOUSLY held a structural lead (BWC fired Q${ctx.bwcFirePeriod || '?'}) but lost it while retaining structural control. Thesis: "structural edge that built the lead is intact — dip is temporary, plus-money entry." Verify: floor vs BWC fire floor, how lead was lost, deficit depth (1-4 best), timing (Q2-Q3 > Q4).
-- EXIT: BWC team lost structural control. Ctrl flipped. Frame around the full arc — reference prior reasoning.
-- BUY WINDOW CLOSING: structural lead is holding. SEND if subscriber can act (ML > -250). SUPPRESS if no value but WRITE THOROUGH REASONING for context compounding.
-- BUY: structurally dominant team trailing with no prior BWC. Standard evaluation.
+- VALUE: team PREVIOUSLY held a structural lead (BWC fired Q${ctx.bwcFirePeriod || '?'}) but lost it while retaining structural control. Thesis: "structural edge that built the lead is intact — dip is temporary, plus-money entry." Verify: floor vs BWC fire floor, how lead was lost, deficit depth (1-4 best), timing (Q2-Q3 > Q4). SUPPRESS if erosion is COLLAPSE AND structural indicators (I1/I4) have flipped to opponent.
+- THESIS_ALIVE: BWC team regained structural control AFTER an EXIT. This is a deep-value play — floor erosion is EXPECTED and is WHY plus-money exists. DO NOT treat floor level or erosion as primary factors. Weight hierarchy: (1) WHICH indicators does the BWC team still hold? I1 Disruption + I4 Game Control = structural core retained. (2) Is opponent's edge variance-based? oppI3Won=true means opponent is shooting well, not structurally dominant — this is the thesis. (3) TP path — STRONG RECOVERY or PROBABLE = mechanical path exists. (4) Deficit depth and timing. Floor being below BWC fire floor is the ENTRY SIGNAL, not a red flag. SUPPRESS only if: BWC team lost I1+I4 (structural core gone), OR opponent has non-I3 structural indicators (I1/I2/I4), OR TP is NO PATH/UNLIKELY with < 3 min left.
+- EXIT: BWC team (${ctx.bwcFirePeriod ? 'the team that fired BWC in Q' + ctx.bwcFirePeriod : 'original BWC team'}) lost structural control. The SUBSCRIBER'S POSITION is on the BWC team, NOT the current control team. Frame the exit around the BWC team losing their edge. Reference the full arc from prior alerts.
+- BWC_EDGE: lead compressing — this is a POSITION UPDATE, not a buy signal. Tell the subscriber their lead is tightening. Do NOT frame as a "value entry" or "buy the dip" — the team is still leading, the window is narrowing.
+- POSITION_SAFE / POSITION_RECOVERING: recovery updates. Suppress if nothing actionable changed since last alert. Write reasoning for compounding.
+- BUY: structurally dominant team trailing with no prior BWC. Standard evaluation — floor, indicators, TP, deficit depth.
 - REASONING AS JOURNAL: Even when SUPPRESS, write thorough reasoning. It feeds subsequent decisions.
 
 Respond in EXACTLY this format:
