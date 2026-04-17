@@ -553,8 +553,8 @@ function assembleContextPackage(snap, cr, lt, erosion, bwcState, v2Alerts, allSn
         deduped.push(wideRaw[i]);
       }
     }
-    // Last 8 unique snapshots
-    const trendSnaps = deduped.length > 8 ? deduped.slice(-8) : deduped;
+    // Last 6 unique snapshots (~6-10 min of actual game time)
+    const trendSnaps = deduped.length > 6 ? deduped.slice(-6) : deduped;
 
     if (trendSnaps.length >= 3) {
       // Opp sustainability arc — how opponent sust changed over window
