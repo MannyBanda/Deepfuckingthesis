@@ -804,7 +804,7 @@ BODY: [If SEND: plain-English alert. If SUPPRESS: blank]`;
         },
         body: JSON.stringify({
           model: 'claude-opus-4-6',
-          max_tokens: 500,
+          max_tokens: 600,
           messages: [{ role: 'user', content: prompt }],
         }),
       });
