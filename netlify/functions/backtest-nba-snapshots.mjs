@@ -2104,6 +2104,81 @@ async function phaseValidate(sql) {
   };
 }
 
+// ── DIAGNOSTIC: BUY COUNT GAP — why alert_sim (502) != validation SQL (394) ─
+async function diagnoseBuyGap(sql) {
+  // Method A: JS-side filtering (same as alert_sim)
+  var jsRows = await sql`
+    SELECT game_id, checkpoint,
+           (indicators->>'score')::real AS floor,
+           margin_at_snapshot AS margin,
+           indicators->>'controlTeam' AS ctrl,
+           home_alias,
+           ctrl_team_won
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+  `;
+
+  var jsBuys = [];
+  for (var r of jsRows) {
+    var ctrlHome = r.ctrl === r.home_alias;
+    var ctrlMargin = ctrlHome ? r.margin : -r.margin;
+    if (r.floor >= 0.65 && ctrlMargin <= 0 && ctrlMargin >= -15) {
+      jsBuys.push({ gid: r.game_id, cp: r.checkpoint, floor: r.floor, margin: r.margin, ctrlMargin: ctrlMargin, ctrl: r.ctrl, home: r.home_alias, ctrlHome: ctrlHome });
+    }
+  }
+
+  // Method B: SQL-side filtering (same as validation)
+  var sqlBuys = await sql`
+    SELECT game_id, checkpoint,
+           (indicators->>'score')::real AS floor,
+           margin_at_snapshot AS margin,
+           indicators->>'controlTeam' AS ctrl,
+           home_alias,
+           CASE WHEN indicators->>'controlTeam' = home_alias
+                THEN margin_at_snapshot ELSE -margin_at_snapshot END AS ctrl_margin
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+      AND (indicators->>'score')::real >= 0.65
+      AND CASE WHEN indicators->>'controlTeam' = home_alias
+              THEN margin_at_snapshot ELSE -margin_at_snapshot END <= 0
+      AND CASE WHEN indicators->>'controlTeam' = home_alias
+              THEN margin_at_snapshot ELSE -margin_at_snapshot END >= -15
+  `;
+
+  // Build lookup sets
+  var jsSet = new Set(jsBuys.map(function(r) { return r.gid + '_' + r.cp; }));
+  var sqlSet = new Set(sqlBuys.map(function(r) { return r.game_id + '_' + r.checkpoint; }));
+
+  // Find differences
+  var inJsNotSql = jsBuys.filter(function(r) { return !sqlSet.has(r.gid + '_' + r.cp); });
+  var inSqlNotJs = sqlBuys.filter(function(r) { return !jsSet.has(r.game_id + '_' + r.checkpoint); });
+
+  // Analyze the JS-only rows: what do they look like?
+  var jsOnlyFloorDist = {};
+  var jsOnlyMarginDist = {};
+  for (var j of inJsNotSql) {
+    var fBucket = Math.floor(j.floor * 100) / 100;
+    jsOnlyFloorDist[fBucket] = (jsOnlyFloorDist[fBucket] || 0) + 1;
+    jsOnlyMarginDist[j.ctrlMargin] = (jsOnlyMarginDist[j.ctrlMargin] || 0) + 1;
+  }
+
+  return {
+    js_side_count: jsBuys.length,
+    sql_side_count: sqlBuys.length,
+    gap: jsBuys.length - sqlBuys.length,
+    in_js_not_sql: inJsNotSql.length,
+    in_sql_not_js: inSqlNotJs.length,
+    js_only_samples: inJsNotSql.slice(0, 20).map(function(r) {
+      return { gid: r.gid, cp: r.cp, floor: r.floor, margin: r.margin, ctrlMargin: r.ctrlMargin, ctrl: r.ctrl, home: r.home, ctrlHome: r.ctrlHome };
+    }),
+    sql_only_samples: inSqlNotJs.slice(0, 10).map(function(r) {
+      return { gid: r.game_id, cp: r.checkpoint, floor: r.floor, margin: r.margin, ctrlMargin: r.ctrl_margin, ctrl: r.ctrl, home: r.home_alias };
+    }),
+    js_only_floor_distribution: jsOnlyFloorDist,
+    js_only_margin_distribution: jsOnlyMarginDist,
+  };
+}
+
 // ── PHASE: STATUS ───────────────────────────────────────────────────────────
 async function phaseStatus(sql) {
   const counts = await sql`
@@ -2725,6 +2800,7 @@ export default async (req) => {
         break;
       }
       case 'validate': result = await phaseValidate(sql); break;
+      case 'diagnose_buy_gap': result = await diagnoseBuyGap(sql); break;
       case 'report_all':        result = await phaseReportAll(sql); break;
       case 'status':            result = await phaseStatus(sql); break;
       case 'wipe_indicators':    result = await phaseWipeIndicators(sql); break;
