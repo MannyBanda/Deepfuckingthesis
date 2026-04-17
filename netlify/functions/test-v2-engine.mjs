@@ -210,7 +210,13 @@ async function replayGame(sql, gameId, mode, triggerIdx = null) {
   const matchup = game.matchup || `${aA}@${hA}`;
 
   // 2. Load all snapshots chronologically
-  const snapshots = await sql`SELECT * FROM snapshots WHERE game_id = ${gameId} ORDER BY ts ASC`;
+  // Filter out Sonnet-injected snapshots (no raw_stats_json) — these have AI-assigned indicator
+  // scores that masquerade as mechanical compute, causing false ctrl flips at quarter boundaries.
+  // See: GSW@SAC Q3 0:00 → Q4 12:00 diagnosis (Apr 17 session 3).
+  const allSnapshots = await sql`SELECT * FROM snapshots WHERE game_id = ${gameId} ORDER BY ts ASC`;
+  const snapshots = allSnapshots.filter(s => s.raw_stats_json != null);
+  const filteredCount = allSnapshots.length - snapshots.length;
+  if (filteredCount > 0) log(`Filtered ${filteredCount} Sonnet-injected snapshots (no raw_stats_json)`);
 
   // 3. Load production alerts for comparison
   const prodAlerts = await sql`

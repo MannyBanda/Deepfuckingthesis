@@ -171,7 +171,8 @@ Monitor enriches agent context but has no veto authority. Must earn trust from l
 
 ## Known Issues / Future Work
 
-- `max_tokens` at 500 truncates BWC_EDGE bodies with RISK lines. Bump to 600.
+- **CRITICAL — Sonnet snapshot injection (diagnosed Apr 17):** Auto-analysis at quarter boundaries writes Sonnet-assigned indicator scores to the snapshots table as if they were mechanical compute output. These snapshots have NO `raw_stats_json` and contain suspiciously uniform indicator values (e.g., I1:0.2 I2:0.1 I3:0.3 I4:0.1 I5:0.2). This causes false ctrl flips — e.g., GSW@SAC Q3 0:00 → Q4 12:00 showed EXIT→THESIS_ALIVE with zero game action because a Sonnet snapshot briefly asserted GSW control between two mechanical SAC snapshots. **Test harness fix:** filter snapshots where `raw_stats_json IS NULL`. **Production fix needed:** trace where in `poll-live-bdl.mjs` auto-analysis results get saved to the snapshots table and stop it from writing indicator scores as snapshot rows. This is the same class of bug as the client Sonnet indicator injection that was previously fixed.
+- ~~`max_tokens` at 500 truncates BWC_EDGE bodies with RISK lines. Bump to 600.~~ DONE (session 3).
 - Monitor enrichment (Test 6) not yet wired to test harness.
 - Velocity guard (Test 7) — auto-analysis suppression at COLLAPSE — not yet tested.
 - COLD→STALLED rename agreed, deferred.
