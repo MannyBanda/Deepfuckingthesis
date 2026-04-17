@@ -200,6 +200,10 @@ async function replayGame(sql, gameId, mode) {
 
   let bwcFirstFired = false;
   let lastTriggerKey = null;  // dedup
+  let bwcCandidateTeam = null;  // team being evaluated for BWC (pre-fire)
+  let bwcCandidateHolds = 0;    // consecutive holds for BWC candidate
+  let erosionHoldCount = 0;     // hysteresis: how many snaps in current erosion level
+  let prevErosionLevel = 'STABLE';
 
   for (let idx = 0; idx < snapshots.length; idx++) {
     const snap = snapshots[idx];
@@ -232,34 +236,51 @@ async function replayGame(sql, gameId, mode) {
 
     // ── CHECK TRIGGER CONDITIONS ──
 
-    // First BWC fire detection
+    // First BWC fire detection — requires 3 consecutive holds at BWC-eligible conditions
     if (!bwcFirstFired && period >= 2 && cr.floor >= 0.60 && cr.margin >= 2) {
-      bwcFirstFired = true;
-      lt.bwc_fired = {
-        team: cr.ctrlTeam,
-        period, clock: cr.clock,
-        floor: cr.floor,
-      };
-      lt._prev_bwc_state = 'LOCK';
-      bwcState = 'LOCK';
+      if (bwcCandidateTeam === cr.ctrlTeam) {
+        bwcCandidateHolds++;
+      } else {
+        bwcCandidateTeam = cr.ctrlTeam;
+        bwcCandidateHolds = 1;
+      }
 
-      const triggerPoint = {
-        type: 'BWC_FIRST_FIRE',
-        snapIdx: idx, period, clock: cr.clock,
-        ctrlTeam: cr.ctrlTeam, floor: cr.floor,
-        margin: cr.margin, bwcState: 'LOCK',
-        erosion: erosion.level,
-      };
-      triggers.push(triggerPoint);
-      timeline.push({ ...triggerPoint, ts: snap.ts });
+      if (bwcCandidateHolds >= 3) {
+        bwcFirstFired = true;
+        const initialState = cr.margin >= 3 ? 'LOCK' : 'EDGE';
+        lt.bwc_fired = {
+          team: cr.ctrlTeam,
+          period, clock: cr.clock,
+          floor: cr.floor,
+        };
+        lt._prev_bwc_state = initialState;
+        bwcState = initialState;
 
-      // Record as v2 alert for compounding
-      v2Alerts.push({
-        alertType: 'BUY WINDOW CLOSING', bwcState: 'LOCK',
-        period, clock: cr.clock, floor: cr.floor, margin: cr.margin,
-        ctrlTeam: cr.ctrlTeam, reasoning: '[INITIAL BWC FIRE — structural lead established]',
-        decision: 'SEND',
-      });
+        const triggerPoint = {
+          type: 'BWC_FIRST_FIRE',
+          snapIdx: idx, period, clock: cr.clock,
+          ctrlTeam: cr.ctrlTeam, floor: cr.floor,
+          margin: cr.margin, bwcState: initialState,
+          erosion: erosion.level,
+          holdsAtFire: bwcCandidateHolds,
+        };
+        triggers.push(triggerPoint);
+        timeline.push({ ...triggerPoint, ts: snap.ts });
+
+        // Record as v2 alert for compounding
+        v2Alerts.push({
+          alertType: 'BUY WINDOW CLOSING', bwcState: initialState,
+          period, clock: cr.clock, floor: cr.floor, margin: cr.margin,
+          ctrlTeam: cr.ctrlTeam, reasoning: `[INITIAL BWC FIRE — structural lead established after ${bwcCandidateHolds} holds]`,
+          decision: 'SEND',
+        });
+      }
+    } else if (!bwcFirstFired) {
+      // Reset candidate if conditions not met
+      if (cr.ctrlTeam !== bwcCandidateTeam) {
+        bwcCandidateTeam = null;
+        bwcCandidateHolds = 0;
+      }
     }
 
     // BWC state transitions (after first fire)
@@ -321,15 +342,23 @@ async function replayGame(sql, gameId, mode) {
       }
     }
 
-    // Erosion transitions
+    // Erosion transitions with hysteresis
+    // Once in CAUTION/COLLAPSE, stay there for at least 2 snapshots before returning to STABLE
     if (bwcFirstFired) {
-      const prevErosionInTimeline = timeline.filter(t => t.type === 'EROSION_TRANSITION');
-      const prevErosionLevel = prevErosionInTimeline.length > 0
-        ? prevErosionInTimeline[prevErosionInTimeline.length - 1].erosionLevel : 'STABLE';
-      if (erosion.level !== prevErosionLevel) {
+      let effectiveErosion = erosion.level;
+
+      // Hysteresis: if we were at CAUTION/COLLAPSE and raw says STABLE, check hold count
+      if ((prevErosionLevel === 'CAUTION' || prevErosionLevel === 'COLLAPSE') && effectiveErosion === 'STABLE') {
+        if (erosionHoldCount < 2) {
+          effectiveErosion = prevErosionLevel; // hold the elevated level
+        }
+      }
+
+      if (effectiveErosion !== prevErosionLevel) {
+        erosionHoldCount = 1; // reset hold on transition
         const triggerPoint = {
           type: 'EROSION_TRANSITION',
-          fromLevel: prevErosionLevel, erosionLevel: erosion.level,
+          fromLevel: prevErosionLevel, erosionLevel: effectiveErosion,
           snapIdx: idx, period, clock: cr.clock,
           ctrlTeam: cr.ctrlTeam, floor: cr.floor,
           margin: cr.margin,
@@ -340,6 +369,9 @@ async function replayGame(sql, gameId, mode) {
         };
         triggers.push(triggerPoint);
         timeline.push({ ...triggerPoint, ts: snap.ts });
+        prevErosionLevel = effectiveErosion;
+      } else {
+        erosionHoldCount++;
       }
     }
 
