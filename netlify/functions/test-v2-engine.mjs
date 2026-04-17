@@ -366,8 +366,10 @@ async function replayGame(sql, gameId, mode, triggerIdx = null) {
           const lastState = lastFiredAlert.bwcState || null;
 
           // Universal cooldown: 3min between ANY BWC transitions (prevents trail pollution)
+          // THESIS_ALIVE exempt — EXIT→VALUE is always a significant state change worth evaluating
           const msSinceAnyBwc = lastAnyBwcTs ? (snapTs - lastAnyBwcTs) : Infinity;
-          const cooldownPassed = msSinceAnyBwc >= BWC_COOLDOWN_MS;
+          const cooldownExempt = alertType === 'THESIS_ALIVE';
+          const cooldownPassed = cooldownExempt || msSinceAnyBwc >= BWC_COOLDOWN_MS;
 
           // Gate: cooldown must pass, THEN different state always fires, same state needs material change.
           const stateChanged = bwcState !== lastState;
