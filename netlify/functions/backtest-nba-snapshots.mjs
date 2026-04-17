@@ -2023,6 +2023,12 @@ async function reportBWCErosion(sql) {
       erosion: newErosionSet(),
       by_timing: {},
       ctrl_at_worst: { retained: { n:0, wins:0 }, lost: { n:0, wins:0 } },
+      ctrl_by_bucket: {
+        'compressed_3-7': { retained: {n:0,wins:0}, lost: {n:0,wins:0} },
+        'tight_1-2':     { retained: {n:0,wins:0}, lost: {n:0,wins:0} },
+        'tied_0':        { retained: {n:0,wins:0}, lost: {n:0,wins:0} },
+        'lost_lead':     { retained: {n:0,wins:0}, lost: {n:0,wins:0} },
+      },
       erosion_by_qtr: { Q2:{n:0,wins:0}, Q3:{n:0,wins:0}, Q4:{n:0,wins:0} },
       details: [],
     };
@@ -2109,6 +2115,12 @@ async function reportBWCErosion(sql) {
         if (ctrlAtMin) { res.ctrl_at_worst.retained.n++; if (fire.won) res.ctrl_at_worst.retained.wins++; }
         else { res.ctrl_at_worst.lost.n++; if (fire.won) res.ctrl_at_worst.lost.wins++; }
 
+        // Per-bucket ctrl retention
+        if (res.ctrl_by_bucket[bucket]) {
+          if (ctrlAtMin) { res.ctrl_by_bucket[bucket].retained.n++; if (fire.won) res.ctrl_by_bucket[bucket].retained.wins++; }
+          else { res.ctrl_by_bucket[bucket].lost.n++; if (fire.won) res.ctrl_by_bucket[bucket].lost.wins++; }
+        }
+
         var worstQ = 'Q' + cpPeriod[minCp];
         if (res.erosion_by_qtr[worstQ]) { res.erosion_by_qtr[worstQ].n++; if (fire.won) res.erosion_by_qtr[worstQ].wins++; }
 
@@ -2179,6 +2191,12 @@ async function reportBWCErosion(sql) {
       ctrl_at_worst: {
         retained: formatCtrl(res.ctrl_at_worst.retained),
         lost: formatCtrl(res.ctrl_at_worst.lost),
+      },
+      ctrl_by_erosion_bucket: {
+        'compressed_3-7': { retained: formatCtrl(res.ctrl_by_bucket['compressed_3-7'].retained), lost: formatCtrl(res.ctrl_by_bucket['compressed_3-7'].lost) },
+        'tight_1-2': { retained: formatCtrl(res.ctrl_by_bucket['tight_1-2'].retained), lost: formatCtrl(res.ctrl_by_bucket['tight_1-2'].lost) },
+        'tied_0': { retained: formatCtrl(res.ctrl_by_bucket['tied_0'].retained), lost: formatCtrl(res.ctrl_by_bucket['tied_0'].lost) },
+        'lost_lead': { retained: formatCtrl(res.ctrl_by_bucket['lost_lead'].retained), lost: formatCtrl(res.ctrl_by_bucket['lost_lead'].lost) },
       },
       by_fire_timing: byTimingFormatted,
       erosion_by_period: erosionQtrFormatted,
