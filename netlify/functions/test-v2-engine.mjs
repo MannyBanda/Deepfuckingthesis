@@ -114,6 +114,47 @@ function updateLiveTracking(lt, cr) {
   return lt;
 }
 
+// State rank for directional classification (higher = better for thesis team)
+const STATE_RANK = { 'LOCK': 4, 'EDGE': 3, 'VALUE': 2, 'EXIT': 1, 'DEEP_TRAIL': 0 };
+
+function classifyTransition(fromState, toState) {
+  const fromRank = STATE_RANK[fromState] ?? -1;
+  const toRank = STATE_RANK[toState] ?? -1;
+  if (toRank < fromRank) return 'DEGRADING';
+  if (toRank > fromRank) return 'RECOVERING';
+  return 'LATERAL';
+}
+
+function computeExitSeverity(cr, lt, bwcTeam) {
+  // At EXIT, the opponent holds control. Assess how structural their position is.
+  const oppHolds = lt.ctrl_team_holds || 0;
+  const oppFloor = cr.floor; // current ctrl team (opponent) floor
+  const thesisPeak = lt.bwc_fired?.floor || 0;
+
+  // Opponent structural indicators (from ctrl-relative, but ctrl IS the opponent now)
+  const oppHasI1 = cr.ctrlIndicators.includes('I1');
+  const oppHasI2 = cr.ctrlIndicators.includes('I2');
+  const oppHasI4 = cr.ctrlIndicators.includes('I4');
+  const oppStructuralIndicators = cr.ctrlIndicatorCount; // these are the OPPONENT's won indicators
+  const oppOnlyI3 = cr.ctrlIndicatorCount === 1 && cr.ctrlIndicators.includes('I3');
+
+  let severity = 'TEMPORARY';
+  let reason = '';
+
+  if (oppHolds >= 5 && oppFloor >= 0.70 && oppStructuralIndicators >= 2 && !oppOnlyI3) {
+    severity = 'STRUCTURAL_TAKEOVER';
+    reason = `Opponent floor ${oppFloor.toFixed(2)}, ${oppHolds} holds, ${oppStructuralIndicators} indicators (${cr.ctrlIndicators.join('+')})`;
+  } else if (oppHolds >= 3 && (oppHasI1 || oppHasI4) && oppFloor >= 0.60) {
+    severity = 'CONCERNING';
+    reason = `Opponent has structural indicators (${cr.ctrlIndicators.join('+')}) with ${oppHolds} holds`;
+  } else {
+    reason = `Opponent floor ${oppFloor.toFixed(2)}, ${oppHolds} holds` +
+      (oppOnlyI3 ? ', only I3 (variance)' : oppStructuralIndicators === 0 ? ', no indicators won' : '');
+  }
+
+  return { severity, reason, oppFloor, oppHolds, oppIndicators: cr.ctrlIndicators.join('+') || 'none' };
+}
+
 function computeBwcState(lt, cr) {
   const bwcFired = lt.bwc_fired;
   if (!bwcFired || !cr.ctrlTeam) return null;
@@ -205,6 +246,11 @@ async function replayGame(sql, gameId, mode) {
   let erosionHoldCount = 0;     // hysteresis: how many snaps in current erosion level
   let prevErosionLevel = 'STABLE';
 
+  // Material change gate for re-fires
+  let lastFiredAlert = {};  // { alertType, period, clock, floor, margin, ts, bwcState }
+  let lastDegradeTs = null;
+  let lastRecoverTs = null;
+
   for (let idx = 0; idx < snapshots.length; idx++) {
     const snap = snapshots[idx];
     const period = parsePeriod(snap);
@@ -283,61 +329,93 @@ async function replayGame(sql, gameId, mode) {
       }
     }
 
-    // BWC state transitions (after first fire)
+    // BWC state transitions — directional filtering + material change gate
     if (bwcFirstFired && bwcState && bwcState !== prevBwcState) {
-      const transitionKey = `${bwcState}_Q${period}`;
-      // Dedup: only fire on actual state changes
-      if (transitionKey !== lastTriggerKey) {
-        lastTriggerKey = transitionKey;
+      const direction = classifyTransition(prevBwcState, bwcState);
+      const bwcTeam = lt.bwc_fired.team;
 
+      // Skip LATERAL transitions entirely (same rank = noise)
+      // Skip DEEP_TRAIL (BUY handles these)
+      if (direction !== 'LATERAL' && bwcState !== 'DEEP_TRAIL') {
+
+        // Determine alert type from state + direction
         let alertType = null;
-        if (bwcState === 'LOCK' || bwcState === 'EDGE') {
-          alertType = 'BUY WINDOW CLOSING';
-        } else if (bwcState === 'VALUE') {
-          alertType = 'VALUE';
-        } else if (bwcState === 'EXIT') {
-          alertType = 'EXIT';
+        if (direction === 'DEGRADING') {
+          if (bwcState === 'EDGE') alertType = 'BWC_EDGE';         // lead compressing
+          else if (bwcState === 'VALUE') alertType = 'VALUE';       // lead lost, ctrl retained
+          else if (bwcState === 'EXIT') alertType = 'EXIT';         // ctrl flipped
+        } else if (direction === 'RECOVERING') {
+          if (bwcState === 'LOCK') alertType = 'POSITION_SAFE';    // full recovery
+          else if (bwcState === 'EDGE') alertType = 'POSITION_RECOVERING'; // retook lead
+          else if (bwcState === 'VALUE') alertType = 'THESIS_ALIVE'; // regained ctrl from EXIT
         }
 
         if (alertType) {
-          const triggerPoint = {
-            type: `BWC_TRANSITION`,
-            alertType,
-            fromState: prevBwcState, toState: bwcState,
-            snapIdx: idx, period, clock: cr.clock,
-            ctrlTeam: cr.ctrlTeam, floor: cr.floor,
-            margin: cr.margin, bwcState,
-            erosion: erosion.level,
-            peakFloor: erosion.peakFloor,
-            peakDelta: erosion.peakDelta,
-            holds: lt.ctrl_team_holds,
-            oppIndicatorCount: cr.oppIndicatorCount,
-            oppIndicatorsWon: cr.oppIndicators.join('+') || 'none',
-            ctrlIndicatorCount: cr.ctrlIndicatorCount,
-            ctrlIndicatorsWon: cr.ctrlIndicators.join('+') || 'none',
-            oppI3Won: cr.oppI3Won,
-            ctrlSust: cr.ctrlSust, oppSust: cr.oppSust,
-            tpClass: cr.tpClass, lsClass: cr.lsClass,
-          };
+          // Material change gate: same direction re-fire needs meaningful delta
+          const snapTs = snap.ts ? new Date(snap.ts).getTime() : Date.now();
+          const lastSameDir = direction === 'DEGRADING' ? lastDegradeTs : lastRecoverTs;
+          const msSinceLast = lastSameDir ? (snapTs - lastSameDir) : Infinity;
+          const lastFloor = lastFiredAlert.floor || 0;
+          const lastMargin = lastFiredAlert.margin || 0;
+          const floorDelta = Math.abs(cr.floor - lastFloor);
+          const marginDelta = Math.abs(cr.margin - lastMargin);
+          const lastState = lastFiredAlert.bwcState || null;
 
-          // Assemble context package (mode >= context)
-          if (mode !== 'mechanical') {
-            triggerPoint.contextPackage = assembleContextPackage(
-              snap, cr, lt, erosion, bwcState, v2Alerts, snapshots, idx, hA, aA
-            );
+          // Gate: different state always fires. Same state needs material change.
+          const stateChanged = bwcState !== lastState;
+          const materialChange = floorDelta >= 0.10 || marginDelta >= 5 || msSinceLast >= 5 * 60 * 1000;
+          const shouldFire = stateChanged || materialChange;
+
+          if (shouldFire) {
+            const triggerPoint = {
+              type: 'BWC_TRANSITION',
+              alertType, direction,
+              fromState: prevBwcState, toState: bwcState,
+              snapIdx: idx, period, clock: cr.clock,
+              ctrlTeam: cr.ctrlTeam, floor: cr.floor,
+              margin: cr.margin, bwcState,
+              erosion: erosion.level,
+              peakFloor: erosion.peakFloor,
+              peakDelta: erosion.peakDelta,
+              holds: lt.ctrl_team_holds,
+              oppIndicatorCount: cr.oppIndicatorCount,
+              oppIndicatorsWon: cr.oppIndicators.join('+') || 'none',
+              ctrlIndicatorCount: cr.ctrlIndicatorCount,
+              ctrlIndicatorsWon: cr.ctrlIndicators.join('+') || 'none',
+              oppI3Won: cr.oppI3Won,
+              ctrlSust: cr.ctrlSust, oppSust: cr.oppSust,
+              tpClass: cr.tpClass, lsClass: cr.lsClass,
+            };
+
+            // EXIT severity — assess opponent's structural position
+            if (bwcState === 'EXIT') {
+              triggerPoint.exitSeverity = computeExitSeverity(cr, lt, bwcTeam);
+            }
+
+            // Context package (mode >= context)
+            if (mode !== 'mechanical') {
+              triggerPoint.contextPackage = assembleContextPackage(
+                snap, cr, lt, erosion, bwcState, v2Alerts, snapshots, idx, hA, aA
+              );
+            }
+
+            triggers.push(triggerPoint);
+            timeline.push({ ...triggerPoint, ts: snap.ts });
+
+            // Update gate tracking
+            lastFiredAlert = { alertType, floor: cr.floor, margin: cr.margin, bwcState, period, clock: cr.clock };
+            if (direction === 'DEGRADING') lastDegradeTs = snapTs;
+            else lastRecoverTs = snapTs;
+
+            // Record for compounding
+            v2Alerts.push({
+              alertType, bwcState, direction,
+              period, clock: cr.clock, floor: cr.floor, margin: cr.margin,
+              ctrlTeam: cr.ctrlTeam,
+              reasoning: `[${direction}: ${prevBwcState} → ${bwcState}${bwcState === 'EXIT' ? ' (' + (triggerPoint.exitSeverity?.severity || '') + ')' : ''}]`,
+              decision: 'PENDING',
+            });
           }
-
-          triggers.push(triggerPoint);
-          timeline.push({ ...triggerPoint, ts: snap.ts });
-
-          // Record for compounding
-          v2Alerts.push({
-            alertType, bwcState,
-            period, clock: cr.clock, floor: cr.floor, margin: cr.margin,
-            ctrlTeam: cr.ctrlTeam,
-            reasoning: `[v2 state transition: ${prevBwcState} → ${bwcState}]`,
-            decision: alertType === 'EXIT' ? 'SEND' : 'PENDING',
-          });
         }
       }
     }
@@ -565,16 +643,21 @@ function buildReport(gameId, game, matchup, lt, triggers, timeline, stateLog, pr
       hadCaution, hadCollapse,
     },
 
-    // Test 3: VALUE/EXIT
+    // Test 3: Directional alerts
     test3_triggers: {
-      valueTriggers: valueTriggers.map(t => ({
+      degrading: bwcTransitions.filter(t => t.direction === 'DEGRADING').map(t => ({
+        alert: t.alertType,
         time: `Q${t.period} ${t.clock}`,
+        transition: `${t.fromState} → ${t.toState}`,
         margin: t.margin, floor: t.floor,
         oppIndicators: t.oppIndicatorsWon,
         ctrlSust: t.ctrlSust, erosion: t.erosion,
+        exitSeverity: t.exitSeverity || null,
       })),
-      exitTriggers: exitTriggers.map(t => ({
+      recovering: bwcTransitions.filter(t => t.direction === 'RECOVERING').map(t => ({
+        alert: t.alertType,
         time: `Q${t.period} ${t.clock}`,
+        transition: `${t.fromState} → ${t.toState}`,
         margin: t.margin, floor: t.floor,
       })),
       buyTriggers: buyTriggers.map(t => ({
@@ -583,6 +666,11 @@ function buildReport(gameId, game, matchup, lt, triggers, timeline, stateLog, pr
         oppIndicators: t.oppIndicatorsWon,
       })),
       valueCorrect, exitCorrect,
+      summary: {
+        degradingCount: bwcTransitions.filter(t => t.direction === 'DEGRADING').length,
+        recoveringCount: bwcTransitions.filter(t => t.direction === 'RECOVERING').length,
+        filteredOut: stateLog.filter(s => s.bwcState).length - bwcTransitions.length,
+      },
     },
 
     // Test 4: Context packages (present if mode >= context)
@@ -613,11 +701,13 @@ function buildReport(gameId, game, matchup, lt, triggers, timeline, stateLog, pr
     keyMoments: timeline.map(t => ({
       type: t.type,
       alert: t.alertType || t.erosionLevel || null,
+      direction: t.direction || null,
       time: `Q${t.period} ${t.clock}`,
       state: t.bwcState || t.toState || null,
       floor: typeof t.floor === 'number' ? t.floor.toFixed(2) : null,
       margin: t.margin,
       erosion: t.erosion || t.erosionLevel || null,
+      exitSeverity: t.exitSeverity?.severity || null,
     })),
   };
 }
@@ -631,7 +721,9 @@ async function runAgentTests(triggers, v2Alerts, matchup) {
   const results = [];
   // Only test triggers that have context packages AND are alert types
   const testable = triggers.filter(t =>
-    t.contextPackage && (t.alertType === 'VALUE' || t.alertType === 'EXIT' || t.alertType === 'BUY' || t.alertType === 'BUY WINDOW CLOSING')
+    t.contextPackage && (t.alertType === 'VALUE' || t.alertType === 'EXIT' || t.alertType === 'BUY'
+      || t.alertType === 'BWC_EDGE' || t.alertType === 'POSITION_SAFE' || t.alertType === 'THESIS_ALIVE'
+      || t.alertType === 'POSITION_RECOVERING')
   );
 
   log(`${matchup}: running ${testable.length} agent tests`);
