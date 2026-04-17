@@ -1,7 +1,7 @@
 # V2 Agent Rules — Living Spec
 
 **Purpose:** Single source of truth for every agent prompt decision. Read this when wiring to production.
-**Last updated:** April 17, 2026 (session 2)
+**Last updated:** April 17, 2026 (session 3)
 
 ---
 
@@ -11,10 +11,11 @@
 **When:** Structurally dominant team trailing. Fires for ANY ctrl team trailing, including the BWC team.
 **Tiers:** FIRED (floor ≥ 0.65), CANDIDATE (floor 0.55-0.65).
 **Default:** Agent decides SEND/SUPPRESS.
-**Rule:** Standard evaluation — floor, indicators, TP, deficit depth. When `bwcTeamMatch: YES`, the agent has BWC lifecycle context and should reference the position arc. BUY coexists with lifecycle alerts — lifecycle tracks position health for holders, BUY identifies entry/re-entry opportunities at plus-money.
-**Gates:** Period ≥ 2, trailing 1-15, clock ≥ 1:00.
-**SUPPRESS when:** TP NO PATH, < 2 indicators won, ctrl sust COLD/MIXED with opp DURABLE/LOCKED IN, floor declining.
-**Validated:** GSW@SAC trigger 0 (SUPPRESS — GSW weak case, TP NO PATH). POR@DEN trigger 0 (SEND — DEN +700). POR@DEN trigger 8 (SEND — DEN +750, trailing 15). MIA@CHA trigger 0 (SUPPRESS — CHA only I4, sust COLD).
+**Sweet spot:** Deficit 1-7 points. Deeper deficits need exceptionally strong structural case.
+**Rule:** Standard evaluation — floor, indicators, TP, deficit depth. When `bwcTeamMatch: YES`, the agent has BWC lifecycle context and should reference the position arc ("SAC is in VALUE lifecycle, BWC fired Q2"). BUY coexists with lifecycle alerts — lifecycle tracks position health for holders, BUY identifies entry/re-entry opportunities at plus-money. A BUY with BWC context is a "warm BUY" (thesis history backing it); a BUY with no BWC lifecycle is a "cold BUY" (structurally interesting but unproven).
+**Gates:** Period ≥ 2, trailing 1-15, clock ≥ 1:00, 3-min cooldown between BUY fires.
+**SUPPRESS when:** TP NO PATH/UNLIKELY in Q4, < 2 indicators won, ctrl sust COLD/MIXED with opp DURABLE/LOCKED IN, floor declining, deficit > 7 without exceptional structural case.
+**Validated:** GSW@SAC Q2 11:48 CANDIDATE (SUPPRESS — GSW only I3, opp has I1, TP NO PATH). GSW@SAC Q2 10:44 FIRED (SUPPRESS — GSW I2+I3 only, variance-driven). GSW@SAC Q4 12:00 CANDIDATE bwcTeamMatch:YES (SEND — +700 money shot, I1+I4 retained, BWC lifecycle context). POR@DEN Q4 10:02 FIRED (SUPPRESS — trailing 15, outside sweet spot, opp DURABLE). POR@DEN Q4 4:19 FIRED (SUPPRESS — trailing 9, TP UNLIKELY, "cold BUY" with no BWC lifecycle). MIA@CHA Q2 BUY (SUPPRESS — CHA only I4, sust COLD).
 
 ### BWC_EDGE (LOCK → EDGE)
 **When:** BWC team's lead compressed to 1-2. Subscriber already holds position.
@@ -27,7 +28,7 @@
 ### VALUE (EDGE → VALUE, or LOCK → VALUE)
 **When:** BWC team lost lead but retains structural control. Trailing 1-7 or tied.
 **Default:** Agent decides SEND/SUPPRESS.
-**Rule:** Thesis = "structural edge that built the lead is intact — dip is temporary, plus-money entry." Verify: floor vs BWC fire floor, how lead was lost, deficit depth (1-4 best), timing (Q2-Q3 > Q4). If prior BWC_EDGE alerts flagged a RISK, reference whether it materialized.
+**Rule:** Thesis = "structural edge that built the lead is intact — dip is temporary, plus-money entry." Verify: floor vs BWC fire floor, how lead was lost, deficit depth (1-7 best), timing (Q2-Q3 > Q4). If prior BWC_EDGE alerts flagged a RISK, reference whether it materialized.
 **SUPPRESS when:** Erosion COLLAPSE AND structural indicators (I1/I4) flipped to opponent.
 **Validated:** POR@PHX trigger 1 (SEND — floor 0.95, 4/5 indicators, textbook). MIA@CHA trigger 5 (SEND — tied, 4/5 indicators, bad beat OT loss by 1).
 
@@ -54,13 +55,13 @@
 **Rule:** The SUBSCRIBER'S POSITION is on the BWC team, NOT the current control team. Frame the exit around the BWC team losing their edge. Reference the full arc from prior alerts.
 **Body must:** Name BWC team as subscriber's position, explain what structural shift happened, reference the lifecycle arc.
 **Rationale:** Without explicit team reference, the body could confuse which team the subscriber is on (GSW@LAC pre-fix named wrong team).
-**Validated:** GSW@LAC trigger 6 (SEND — "LAC position, structural edge gone, GSW took over I2+I3+I1").
+**Validated:** GSW@LAC trigger 6 (SEND — "LAC position, structural edge gone, GSW took over I2+I3+I1"). ORL@PHI Q2 5:42 EXIT TEMPORARY (SEND — PHI floor collapsed 0.73→0.38, ORL seized I2 with LOCKED IN sust; PHI recovered and won 109-97 but EXIT was correct at decision time).
 
 ### POSITION_SAFE (→ LOCK) and POSITION_RECOVERING (→ EDGE)
 **When:** BWC team recovering from degraded state.
 **Default:** SEND if prior alerts flagged risks or concerns. SUPPRESS if nothing changed and no prior risk to update on.
 **Rule:** Include whether prior RISK materialized. Write reasoning for compounding either way.
-**Validated:** Not yet individually tested (pending GSW@SAC chain completion).
+**Validated:** GSW@SAC Q3 7:59 POSITION_SAFE (SEND — prior RISK didn't materialize, floor 0.80, 4/5 indicators). ORL@PHI Q2 0:42 EXIT→LOCK recovery. ORL@PHI Q4 7:21 final recovery (SEND — floor surged to 0.80, 4/5 indicators after full EXIT→recovery→EDGE→recovery cycle).
 
 ### BUY WINDOW CLOSING (initial BWC fire)
 **When:** First detection of structural lead — 3+ consecutive holds, floor ≥ 0.60, leading 2+, period ≥ 2.
@@ -174,8 +175,11 @@ Monitor enriches agent context but has no veto authority. Must earn trust from l
 
 ## Known Issues / Future Work
 
-- **CRITICAL — Sonnet snapshot injection (diagnosed Apr 17):** Auto-analysis at quarter boundaries writes Sonnet-assigned indicator scores to the snapshots table as if they were mechanical compute output. These snapshots have NO `raw_stats_json` and contain suspiciously uniform indicator values (e.g., I1:0.2 I2:0.1 I3:0.3 I4:0.1 I5:0.2). This causes false ctrl flips — e.g., GSW@SAC Q3 0:00 → Q4 12:00 showed EXIT→THESIS_ALIVE with zero game action because a Sonnet snapshot briefly asserted GSW control between two mechanical SAC snapshots. **Test harness fix:** filter snapshots where `raw_stats_json IS NULL`. **Production fix needed:** trace where in `poll-live-bdl.mjs` auto-analysis results get saved to the snapshots table and stop it from writing indicator scores as snapshot rows. This is the same class of bug as the client Sonnet indicator injection that was previously fixed.
+- **CRITICAL — Sonnet snapshot injection (diagnosed Apr 17):** Auto-analysis at quarter boundaries writes Sonnet-assigned indicator scores to the snapshots table as if they were mechanical compute output. These snapshots have NO `raw_stats_json` and contain suspiciously uniform indicator values (e.g., I1:0.2 I2:0.1 I3:0.3 I4:0.1 I5:0.2). 252 contaminated snapshots across 9 test games (13.3% of all data). Worst: GSW@LAC 4/12 at 59 (29%). **Test harness fix:** filter snapshots where `raw_stats_json IS NULL`. **Production fix needed:** trace where in `poll-live-bdl.mjs` auto-analysis results get saved to the snapshots table and stop it from writing indicator scores as snapshot rows.
 - ~~`max_tokens` at 500 truncates BWC_EDGE bodies with RISK lines. Bump to 600.~~ DONE (session 3).
+- ~~Score display bug — agent misread away-home score format.~~ FIXED (session 3, added explicit score line to prompt).
+- ~~BUY gate blocking BWC team — `!isBwcGame` guard prevented +700 money shot.~~ FIXED (session 3, BWC restriction removed).
+- POR@DEN has 13 BUY triggers in no-BWC game — may need tighter mechanical gating for BUY-only archetype or stronger cooldown.
 - Monitor enrichment (Test 6) not yet wired to test harness.
 - Velocity guard (Test 7) — auto-analysis suppression at COLLAPSE — not yet tested.
 - COLD→STALLED rename agreed, deferred.
