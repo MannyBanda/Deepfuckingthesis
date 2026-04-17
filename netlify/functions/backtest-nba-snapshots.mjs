@@ -2493,6 +2493,17 @@ export default async (req) => {
       case 'report_flip_recovery': result = await reportFlipRecovery(sql); break;
       case 'report_opponent_profile': result = await reportOpponentProfile(sql); break;
       case 'report_tier_sim': result = await reportTierSim(sql); break;
+      case 'report_buy_deep': {
+        const [convDef, autopsy, marginFloor, alertsByCp, oppProfile] = await Promise.all([
+          reportConvictionDeficit(sql),
+          reportLosingAutopsy(sql),
+          reportMarginFloor(sql),
+          reportAlertSimByCheckpoint(sql),
+          reportOpponentProfile(sql),
+        ]);
+        result = { conviction_deficit: convDef, autopsy, margin_floor: marginFloor, alerts_by_checkpoint: alertsByCp, opponent_profile: oppProfile };
+        break;
+      }
       case 'report_all':        result = await phaseReportAll(sql); break;
       case 'status':            result = await phaseStatus(sql); break;
       case 'wipe_indicators':    result = await phaseWipeIndicators(sql); break;
