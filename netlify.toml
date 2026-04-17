@@ -42,6 +42,9 @@
 [functions."backtest-nba-snapshots"]
   timeout = 120
 
+[functions."test-v2-engine"]
+  timeout = 120
+
 [[headers]]
   for = "/*"
   [headers.values]
