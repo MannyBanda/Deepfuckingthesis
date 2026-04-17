@@ -527,109 +527,61 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
   return report;
 }
 
-// ── MONITOR TREND COMPUTATION ──
-// Computes the same signals as production computeMonitorTrends() from replay snapshots.
-// These are the signals the monitor uniquely produces that v2 context packages don't have:
-// - Momentum direction/streak/delta (labeled trend vs raw floor history)
-// - Sustainability arc (opp sust trajectory, not just point-in-time)
-// - Floor-margin relationship (ALIGNED/DIVERGING/CONVERGING)
-
-function computeMonitorContext(allSnaps, idx, hA, aA, ctrlTeam, ctrlIsHome) {
-  // Use last 8 snapshots up to current index (same window as production monitor)
-  const start = Math.max(0, idx - 7);
-  const trendSnaps = allSnaps.slice(start, idx + 1);
-  if (trendSnaps.length < 3) return null;
-
-  const floors = trendSnaps.map(s => Number(s.floor_score || 0));
-  const margins = trendSnaps.map(s => {
-    const h = Number(s.home_pts || 0), a = Number(s.away_pts || 0);
-    return ctrlIsHome ? h - a : a - h;
-  });
-
-  // ── Momentum ──
-  let dir = null, streak = 0;
-  for (let j = floors.length - 1; j > 0; j--) {
-    const diff = floors[j] - floors[j - 1];
-    if (diff > 0.01) {
-      if (dir === 'RISING' || dir === null) { dir = 'RISING'; streak++; }
-      else break;
-    } else if (diff < -0.01) {
-      if (dir === 'FALLING' || dir === null) { dir = 'FALLING'; streak++; }
-      else break;
-    } else {
-      if (dir === null) { streak++; }
-      else break;
-    }
-  }
-  // Check for oscillation
-  if (floors.length >= 4) {
-    let changes = 0;
-    for (let k = 2; k < floors.length; k++) {
-      const prev = floors[k - 1] - floors[k - 2];
-      const curr = floors[k] - floors[k - 1];
-      if ((prev > 0.01 && curr < -0.01) || (prev < -0.01 && curr > 0.01)) changes++;
-    }
-    if (changes >= 2 && streak <= 1) dir = 'OSCILLATING';
-  }
-  const momentumDir = dir || 'STABLE';
-  const momentumDelta = streak > 0
-    ? Math.round((floors[floors.length - 1] - floors[Math.max(0, floors.length - 1 - streak)]) * 100) / 100
-    : 0;
-
-  // ── Sustainability arc (opponent) ──
-  const sustTiers = { 'LOCKED IN': 5, 'DURABLE': 4, 'MIXED': 3, 'STALLED': 2, 'COLD': 2, 'FRAGILE': 1, 'UNSUSTAINABLE': 0 };
-  const oppSustHistory = trendSnaps.map(s => {
-    try {
-      const sj = s.sust_json ? (typeof s.sust_json === 'string' ? JSON.parse(s.sust_json) : s.sust_json) : null;
-      if (sj) {
-        const sCtrlHome = (s.floor_team || '') === hA;
-        return sj[sCtrlHome ? 'away' : 'home']?.tier || null;
-      }
-    } catch (e) {}
-    return null;
-  }).filter(Boolean);
-
-  let sustArcDir = 'STABLE', sustArcDetail = '';
-  if (oppSustHistory.length >= 2) {
-    const firstVal = sustTiers[oppSustHistory[0]] ?? 3;
-    const lastVal = sustTiers[oppSustHistory[oppSustHistory.length - 1]] ?? 3;
-    sustArcDir = lastVal < firstVal ? 'DEGRADING' : lastVal > firstVal ? 'IMPROVING' : 'STABLE';
-    const seen = [];
-    oppSustHistory.forEach(t => { if (seen[seen.length - 1] !== t) seen.push(t); });
-    sustArcDetail = seen.join(' → ');
-  }
-
-  // ── Floor-margin relationship ──
-  let floorMarginRel = 'ALIGNED';
-  if (floors.length >= 3 && margins.length >= 3) {
-    const floorChange = floors[floors.length - 1] - floors[0];
-    const marginChange = margins[margins.length - 1] - margins[0];
-    const floorUp = floorChange > 0.03, floorDown = floorChange < -0.03;
-    const marginUp = marginChange > 2, marginDown = marginChange < -2;
-    if ((floorUp && marginDown) || (floorDown && marginUp)) floorMarginRel = 'DIVERGING';
-    else if ((floorUp && marginUp) || (floorDown && marginDown)) floorMarginRel = 'CONVERGING';
-  }
-
-  return {
-    momentum: `${momentumDir}(${streak}, ${momentumDelta >= 0 ? '+' : ''}${momentumDelta.toFixed(2)})`,
-    momentumDir,
-    momentumStreak: streak,
-    momentumDelta,
-    sustArc: sustArcDir,
-    sustArcDetail,
-    floorMarginRel,
-  };
-}
-
 // ── CONTEXT PACKAGE ASSEMBLY ──
 
 function assembleContextPackage(snap, cr, lt, erosion, bwcState, v2Alerts, allSnaps, idx, hA, aA, useMonitor = false) {
   // Floor history (last 5 snapshots before current)
   const histStart = Math.max(0, idx - 5);
-  const floorHistory = allSnaps.slice(histStart, idx + 1).map(s => {
+  const trendSnaps = allSnaps.slice(histStart, idx + 1);
+  const floorHistory = trendSnaps.map(s => {
     const ft = s.floor_team || '?';
     return `Q${s.period} ${s.clock}: ${ft} ${Number(s.floor_score || 0).toFixed(2)} (${s.away_pts}-${s.home_pts}) TP:${s.tp_class || '?'} LS:${s.ls_class || '?'}`;
   }).reverse().join('\n');
+
+  // ── Inline trend signals (same window as floor history, no lag) ──
+  let trendSignals = null;
+  if (useMonitor && trendSnaps.length >= 3) {
+    // Opp sustainability arc — how opponent sust changed over window
+    const sustTiers = { 'LOCKED IN': 5, 'DURABLE': 4, 'MIXED': 3, 'STALLED': 2, 'COLD': 2, 'FRAGILE': 1, 'UNSUSTAINABLE': 0 };
+    const oppSustHistory = trendSnaps.map(s => {
+      try {
+        const sj = s.sust_json ? (typeof s.sust_json === 'string' ? JSON.parse(s.sust_json) : s.sust_json) : null;
+        if (sj) {
+          const sCtrlHome = (s.floor_team || '') === hA;
+          return sj[sCtrlHome ? 'away' : 'home']?.tier || null;
+        }
+      } catch (e) {}
+      return null;
+    }).filter(Boolean);
+
+    let sustArc = 'STABLE', sustArcDetail = '';
+    if (oppSustHistory.length >= 2) {
+      const firstVal = sustTiers[oppSustHistory[0]] ?? 3;
+      const lastVal = sustTiers[oppSustHistory[oppSustHistory.length - 1]] ?? 3;
+      sustArc = lastVal < firstVal ? 'DEGRADING' : lastVal > firstVal ? 'IMPROVING' : 'STABLE';
+      const seen = [];
+      oppSustHistory.forEach(t => { if (seen[seen.length - 1] !== t) seen.push(t); });
+      sustArcDetail = seen.join(' → ');
+    }
+
+    // Floor-margin relationship — are structural edge and scoreboard moving together?
+    const floors = trendSnaps.map(s => Number(s.floor_score || 0));
+    const margins = trendSnaps.map(s => {
+      const h = Number(s.home_pts || 0), a = Number(s.away_pts || 0);
+      return cr.ctrlIsHome ? h - a : a - h;
+    });
+    let floorMarginRel = 'ALIGNED';
+    if (floors.length >= 3 && margins.length >= 3) {
+      const floorChange = floors[floors.length - 1] - floors[0];
+      const marginChange = margins[margins.length - 1] - margins[0];
+      const floorUp = floorChange > 0.03, floorDown = floorChange < -0.03;
+      const marginUp = marginChange > 2, marginDown = marginChange < -2;
+      if ((floorUp && marginDown) || (floorDown && marginUp)) floorMarginRel = 'DIVERGING';
+      else if ((floorUp && marginUp) || (floorDown && marginDown)) floorMarginRel = 'CONVERGING';
+    }
+
+    trendSignals = { sustArc, sustArcDetail, floorMarginRel };
+  }
 
   // Prior v2 alert reasoning trail (compounding pattern)
   const priorAlertTrail = v2Alerts.map(a =>
@@ -675,10 +627,8 @@ function assembleContextPackage(snap, cr, lt, erosion, bwcState, v2Alerts, allSn
     floorHistory,
     priorAlertTrail: priorAlertTrail || 'None',
 
-    // Monitor enrichment (only when &monitor=true)
-    monitorContext: useMonitor
-      ? computeMonitorContext(allSnaps, idx, hA, aA, cr.ctrlTeam, cr.ctrlIsHome)
-      : null,
+    // Inline trend signals (same window as floor history — only when &monitor=true)
+    trendSignals,
   };
 }
 
@@ -904,11 +854,11 @@ ${ctx.floorHistory}
 
 PRIOR ALERT REASONING TRAIL:
 ${ctx.priorAlertTrail}
-${ctx.monitorContext ? `
-MONITOR OBSERVATION (continuous game observer — mechanically computed trends):
-Momentum: ${ctx.monitorContext.momentum} | Floor-margin: ${ctx.monitorContext.floorMarginRel}
-Opp sustainability arc: ${ctx.monitorContext.sustArc}${ctx.monitorContext.sustArcDetail ? ' (' + ctx.monitorContext.sustArcDetail + ')' : ''}
-NOTE: These trends are computed from the last 8 snapshots. Momentum labels what the floor trajectory already shows. Floor-margin DIVERGING means the structural edge (floor) and the scoreboard (margin) are moving in opposite directions — this is expected in DFT (process dominance precedes score). Use these signals as supplemental context, not as primary decision factors.` : ''}
+${ctx.trendSignals ? `
+TREND SIGNALS (computed from same 6-snapshot window as floor trajectory above):
+Opponent sustainability arc: ${ctx.trendSignals.sustArc}${ctx.trendSignals.sustArcDetail ? ' (' + ctx.trendSignals.sustArcDetail + ')' : ''}
+Floor-margin relationship: ${ctx.trendSignals.floorMarginRel}
+NOTE: Floor-margin DIVERGING means structural edge and scoreboard are moving in opposite directions — in DFT, this is expected (process dominance precedes score). CONVERGING means both declining or both rising together.` : ''}
 
 RULES:
 - VALUE: team PREVIOUSLY held a structural lead (BWC fired Q${ctx.bwcFirePeriod || '?'}) but lost it while retaining structural control. Thesis: "structural edge that built the lead is intact — dip is temporary, plus-money entry." Verify: floor vs BWC fire floor, how lead was lost, deficit depth (1-7 best), timing (Q2-Q3 > Q4). If prior BWC_EDGE alerts flagged a RISK, reference whether it materialized. SUPPRESS if erosion is COLLAPSE AND structural indicators (I1/I4) have flipped to opponent.
@@ -960,9 +910,9 @@ BODY: [If SEND: plain-English alert. If SUPPRESS: blank]`;
         referencesOpponentProfile: text.includes('opponent') || text.includes('I1') || text.includes('counter-indicator'),
         referencesErosion: text.includes('erosion') || text.includes('peak') || text.includes('CAUTION') || text.includes('COLLAPSE'),
         referencesBwcLifecycle: text.includes('BWC') || text.includes('LOCK') || text.includes('lifecycle') || text.includes('prior'),
-        monitorPresent: !!ctx.monitorContext,
-        referencesMonitor: text.includes('momentum') || text.includes('DIVERGING') || text.includes('CONVERGING') || text.includes('RISING') || text.includes('FALLING') || text.includes('sust arc') || text.includes('sustainability arc'),
-        monitorData: ctx.monitorContext || null,
+        monitorPresent: !!ctx.trendSignals,
+        referencesMonitor: text.includes('DIVERGING') || text.includes('CONVERGING') || text.includes('sustainability arc') || text.includes('sust arc') || text.includes('DEGRADING') || text.includes('IMPROVING'),
+        monitorData: ctx.trendSignals || null,
         tokens: data.usage,
       };
       results.push(result);
