@@ -1886,6 +1886,227 @@ async function phaseReportAll(sql) {
 
 // ── PHASE: STATUS ───────────────────────────────────────────────────────────
 async function phaseStatus(sql) {
+
+// ── PHASE: VALIDATE — comprehensive data integrity checks ──────────────────
+async function phaseValidate(sql) {
+  var checks = {};
+
+  // ── 1. ctrl_team_won vs final_margin consistency at Q4_END ──
+  // At Q4_END, ctrl_team_won should match: ctrl=home AND final>0, or ctrl=away AND final<0
+  var q4rows = await sql`
+    SELECT game_id, checkpoint, final_margin,
+           indicators->>'controlTeam' AS ctrl,
+           home_alias, away_alias,
+           ctrl_team_won
+    FROM nba_snapshot_backtest
+    WHERE checkpoint = 'Q4_END'
+      AND indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+      AND final_margin IS NOT NULL
+  `;
+  var ctrlWonMismatches = [];
+  for (var r of q4rows) {
+    var ctrlIsHome = r.ctrl === r.home_alias;
+    var homeWon = r.final_margin > 0;
+    var expectedCtrlWon = (ctrlIsHome && homeWon) || (!ctrlIsHome && !homeWon);
+    if (!!r.ctrl_team_won !== expectedCtrlWon) {
+      ctrlWonMismatches.push({ game_id: r.game_id, ctrl: r.ctrl, home: r.home_alias, final_margin: r.final_margin, stored: r.ctrl_team_won, expected: expectedCtrlWon });
+    }
+  }
+  checks.ctrl_team_won_integrity = {
+    status: ctrlWonMismatches.length === 0 ? 'PASS' : 'FAIL',
+    q4end_checked: q4rows.length,
+    mismatches: ctrlWonMismatches.length,
+    samples: ctrlWonMismatches.slice(0, 5),
+  };
+
+  // ── 2. final_margin nulls ──
+  var nullFinals = await sql`
+    SELECT COUNT(*) AS n FROM nba_snapshot_backtest
+    WHERE final_margin IS NULL AND indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+  `;
+  checks.final_margin_nulls = {
+    status: Number(nullFinals[0].n) === 0 ? 'PASS' : 'FAIL',
+    null_count: Number(nullFinals[0].n),
+  };
+
+  // ── 3. final_margin = 0 (ties — shouldn't exist in NBA) ──
+  var tiedGames = await sql`
+    SELECT COUNT(DISTINCT game_id) AS n FROM nba_snapshot_backtest WHERE final_margin = 0
+  `;
+  checks.tied_games = {
+    status: Number(tiedGames[0].n) === 0 ? 'PASS' : 'WARN',
+    count: Number(tiedGames[0].n),
+    note: 'NBA games cannot tie. Non-zero = data issue.',
+  };
+
+  // ── 4. Floor always >= 0.50 (ctrl-relative) ──
+  var badFloors = await sql`
+    SELECT COUNT(*) AS n FROM nba_snapshot_backtest
+    WHERE (indicators->>'score')::real < 0.50
+      AND indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+  `;
+  checks.floor_always_gte_50 = {
+    status: Number(badFloors[0].n) === 0 ? 'PASS' : 'FAIL',
+    violations: Number(badFloors[0].n),
+  };
+
+  // ── 5. indicators JSONB has controlTeam and homeAlias populated ──
+  var missingCtrl = await sql`
+    SELECT COUNT(*) AS n FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+      AND (indicators->>'controlTeam' IS NULL OR indicators->>'homeAlias' IS NULL)
+  `;
+  checks.ctrl_and_home_alias_populated = {
+    status: Number(missingCtrl[0].n) === 0 ? 'PASS' : 'FAIL',
+    missing: Number(missingCtrl[0].n),
+  };
+
+  // ── 6. margin_at_snapshot = home_pts - away_pts verification ──
+  // Sample 100 random snapshots, check margin_at_snapshot matches team_stats
+  var sampleRows = await sql`
+    SELECT game_id, checkpoint, margin_at_snapshot,
+           (team_stats->'home'->>'pts')::int AS h_pts,
+           (team_stats->'away'->>'pts')::int AS a_pts
+    FROM nba_snapshot_backtest
+    WHERE team_stats IS NOT NULL
+    ORDER BY random()
+    LIMIT 100
+  `;
+  var marginMismatches = [];
+  for (var s of sampleRows) {
+    var expected = (s.h_pts || 0) - (s.a_pts || 0);
+    if (s.margin_at_snapshot !== expected) {
+      marginMismatches.push({ game_id: s.game_id, cp: s.checkpoint, stored: s.margin_at_snapshot, computed: expected, h: s.h_pts, a: s.a_pts });
+    }
+  }
+  checks.margin_at_snapshot_accuracy = {
+    status: marginMismatches.length === 0 ? 'PASS' : 'FAIL',
+    sampled: sampleRows.length,
+    mismatches: marginMismatches.length,
+    samples: marginMismatches.slice(0, 5),
+  };
+
+  // ── 7. BUY count reconciliation: <= 0 vs < 0 ──
+  var buyCountBroken = await sql`
+    SELECT
+      COUNT(*) FILTER (WHERE (indicators->>'score')::real >= 0.65
+        AND CASE WHEN indicators->>'controlTeam' = home_alias
+            THEN margin_at_snapshot ELSE -margin_at_snapshot END <= 0
+        AND CASE WHEN indicators->>'controlTeam' = home_alias
+            THEN margin_at_snapshot ELSE -margin_at_snapshot END >= -15
+      ) AS buy_lte0,
+      COUNT(*) FILTER (WHERE (indicators->>'score')::real >= 0.65
+        AND CASE WHEN indicators->>'controlTeam' = home_alias
+            THEN margin_at_snapshot ELSE -margin_at_snapshot END < 0
+        AND CASE WHEN indicators->>'controlTeam' = home_alias
+            THEN margin_at_snapshot ELSE -margin_at_snapshot END >= -15
+      ) AS buy_lt0,
+      COUNT(*) FILTER (WHERE (indicators->>'score')::real >= 0.65
+        AND CASE WHEN indicators->>'controlTeam' = home_alias
+            THEN margin_at_snapshot ELSE -margin_at_snapshot END = 0
+      ) AS buy_tied
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+  `;
+  var bRow = buyCountBroken[0];
+  checks.buy_filter_reconciliation = {
+    status: 'INFO',
+    buy_lte0_includes_ties: Number(bRow.buy_lte0),
+    buy_lt0_strict_trailing: Number(bRow.buy_lt0),
+    tied_with_floor_065: Number(bRow.buy_tied),
+    note: 'Production BUY = strictly trailing (< 0). alert_sim uses <= 0 (bug). Gap = tied snapshots.',
+  };
+
+  // ── 8. Q4_END ctrl_team_won vs ctrlMargin direction ──
+  // If ctrl won the game AND ctrl controls at Q4_END, ctrlMargin should be positive
+  var q4margin = await sql`
+    SELECT
+      COUNT(*) AS total,
+      COUNT(*) FILTER (WHERE ctrl_team_won = true AND
+        CASE WHEN indicators->>'controlTeam' = home_alias
+          THEN margin_at_snapshot ELSE -margin_at_snapshot END > 0
+      ) AS won_and_leading,
+      COUNT(*) FILTER (WHERE ctrl_team_won = true AND
+        CASE WHEN indicators->>'controlTeam' = home_alias
+          THEN margin_at_snapshot ELSE -margin_at_snapshot END <= 0
+      ) AS won_but_trailing_or_tied,
+      COUNT(*) FILTER (WHERE ctrl_team_won = false AND
+        CASE WHEN indicators->>'controlTeam' = home_alias
+          THEN margin_at_snapshot ELSE -margin_at_snapshot END > 0
+      ) AS lost_but_leading
+    FROM nba_snapshot_backtest
+    WHERE checkpoint = 'Q4_END'
+      AND indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+  `;
+  var qm = q4margin[0];
+  checks.q4end_margin_vs_outcome = {
+    status: 'INFO',
+    total: Number(qm.total),
+    won_and_leading: Number(qm.won_and_leading),
+    won_but_trailing_or_tied: Number(qm.won_but_trailing_or_tied),
+    lost_but_leading: Number(qm.lost_but_leading),
+    note: 'At Q4_END, ctrl team that won should almost always be leading. won_but_trailing = ctrl flipped late.',
+  };
+
+  // ── 9. Snapshot coverage ──
+  var coverage = await sql`
+    SELECT checkpoint, COUNT(*) AS n,
+           COUNT(DISTINCT game_id) AS games,
+           COUNT(*) FILTER (WHERE ctrl_team_won IS NULL) AS null_outcome
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+    GROUP BY checkpoint ORDER BY checkpoint
+  `;
+  checks.snapshot_coverage = coverage.map(function(c) {
+    return { checkpoint: c.checkpoint, snapshots: Number(c.n), games: Number(c.games), null_outcome: Number(c.null_outcome) };
+  });
+
+  // ── 10. Conviction tier distribution (sanity) ──
+  var tierDist = await sql`
+    SELECT conviction->>'tier' AS tier, COUNT(*) AS n
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+    GROUP BY conviction->>'tier'
+    ORDER BY n DESC
+  `;
+  checks.conviction_distribution = tierDist.map(function(t) { return { tier: t.tier, n: Number(t.n) }; });
+
+  // ── 11. Home vs away ctrl team distribution ──
+  var ctrlSide = await sql`
+    SELECT
+      COUNT(*) FILTER (WHERE indicators->>'controlTeam' = home_alias) AS ctrl_home,
+      COUNT(*) FILTER (WHERE indicators->>'controlTeam' = away_alias) AS ctrl_away,
+      COUNT(*) FILTER (WHERE indicators->>'controlTeam' != home_alias
+                         AND indicators->>'controlTeam' != away_alias) AS ctrl_neither
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+  `;
+  var cs = ctrlSide[0];
+  checks.ctrl_team_side_distribution = {
+    ctrl_home: Number(cs.ctrl_home),
+    ctrl_away: Number(cs.ctrl_away),
+    ctrl_neither: Number(cs.ctrl_neither),
+    home_pct: Math.round(Number(cs.ctrl_home) / (Number(cs.ctrl_home) + Number(cs.ctrl_away)) * 1000) / 10,
+    note: 'Should be roughly 55-60% home (home advantage). ctrl_neither should be 0.',
+  };
+
+  // ── Summary ──
+  var failures = Object.entries(checks).filter(function(e) { return e[1].status === 'FAIL'; });
+  var warnings = Object.entries(checks).filter(function(e) { return e[1].status === 'WARN'; });
+
+  return {
+    summary: {
+      total_checks: Object.keys(checks).length,
+      passed: Object.entries(checks).filter(function(e) { return e[1].status === 'PASS'; }).length,
+      failed: failures.length,
+      warnings: warnings.length,
+      info: Object.entries(checks).filter(function(e) { return e[1].status === 'INFO'; }).length,
+      verdict: failures.length === 0 ? 'DATA CLEAN — safe to build on' : 'ISSUES FOUND — investigate before building',
+    },
+    checks,
+  };
+}
+
   const counts = await sql`
     SELECT COUNT(*) AS total,
            COUNT(DISTINCT game_id) AS games,
@@ -2504,6 +2725,7 @@ export default async (req) => {
         result = { conviction_deficit: convDef, autopsy, margin_floor: marginFloor, alerts_by_checkpoint: alertsByCp, opponent_profile: oppProfile };
         break;
       }
+      case 'validate': result = await phaseValidate(sql); break;
       case 'report_all':        result = await phaseReportAll(sql); break;
       case 'status':            result = await phaseStatus(sql); break;
       case 'wipe_indicators':    result = await phaseWipeIndicators(sql); break;
