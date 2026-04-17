@@ -550,6 +550,11 @@ function assembleContextPackage(snap, cr, lt, erosion, bwcState, v2Alerts, allSn
     bwcFirePeriod: lt.bwc_fired?.period || null,
     bwcFireFloor: lt.bwc_fired?.floor || null,
 
+    // Score context
+    homeAlias: hA, awayAlias: aA,
+    homePts: cr.homePts, awayPts: cr.awayPts,
+    ctrlIsHome: cr.ctrlIsHome,
+
     // Sustainability
     ctrlSust: cr.ctrlSust, oppSust: cr.oppSust,
     tpClass: cr.tpClass, lsClass: cr.lsClass,
@@ -755,6 +760,7 @@ async function runAgentTests(triggers, v2Alerts, matchup, triggerIdx = null) {
 ALERT:
 Type: ${t.alertType} (FIRED)
 Control team: ${ctx.ctrlTeam} | Floor: ${ctx.floor.toFixed(2)} | Margin: ${ctx.margin} (${ctx.margin < 0 ? 'trailing' : ctx.margin > 0 ? 'leading' : 'tied'})
+Score: ${ctx.awayAlias} ${ctx.awayPts} - ${ctx.homeAlias} ${ctx.homePts} (${ctx.ctrlTeam} is ${ctx.ctrlIsHome ? 'HOME' : 'AWAY'})
 Period: Q${ctx.period} ${ctx.clock}
 ${ctx.bwcTeam ? 'BWC team (subscriber position): ' + ctx.bwcTeam + (ctx.bwcTeam !== ctx.ctrlTeam ? ' (NOT current ctrl team — ctrl flipped to ' + ctx.ctrlTeam + ')' : '') : ''}
 
