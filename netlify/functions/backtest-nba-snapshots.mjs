@@ -1850,13 +1850,10 @@ async function reportFlipRecovery(sql) {
 
 // ── PHASE: REPORT_ALL ───────────────────────────────────────────────────────
 async function phaseReportAll(sql) {
-  const [calibration, timeDecay, alertSim] = await Promise.all([
-    reportCalibration(sql),
-    reportTimeDecay(sql),
-    reportAlertSim(sql),
-  ]);
+  var startTime = Date.now();
 
-  const totals = await sql`
+  // Totals query
+  var totalsP = sql`
     SELECT COUNT(*) AS total_snaps,
            COUNT(DISTINCT game_id) AS games,
            SUM(CASE WHEN ctrl_team_won THEN 1 ELSE 0 END) AS wins
@@ -1864,23 +1861,58 @@ async function phaseReportAll(sql) {
     WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
   `;
 
+  // Run all 17 reports in parallel
+  var [totals, calibration, timeDecay, alertSim, indicators, combos,
+       alertsByCp, stability, marginFloor, velocity, autopsy,
+       convictionDeficit, i4Split, velocityAtAlert, consecutiveHolds,
+       flipRecovery, opponentProfile, tierSim] = await Promise.all([
+    totalsP,
+    reportCalibration(sql),
+    reportTimeDecay(sql),
+    reportAlertSim(sql),
+    reportIndicators(sql),
+    reportCombos(sql),
+    reportAlertSimByCheckpoint(sql),
+    reportStability(sql),
+    reportMarginFloor(sql),
+    reportFloorVelocity(sql),
+    reportLosingAutopsy(sql),
+    reportConvictionDeficit(sql),
+    reportI4Split(sql),
+    reportVelocityAtAlert(sql),
+    reportConsecutiveHolds(sql),
+    reportFlipRecovery(sql),
+    reportOpponentProfile(sql),
+    reportTierSim(sql),
+  ]);
+
   return {
-    totals: {
+    _meta: {
       total_snapshots: Number(totals[0].total_snaps),
       total_games: Number(totals[0].games),
       overall_accuracy_pct: Number(totals[0].total_snaps) > 0
         ? Math.round(Number(totals[0].wins) / Number(totals[0].total_snaps) * 1000) / 10
         : null,
+      elapsed_ms: Date.now() - startTime,
+      reports_run: 17,
     },
-    calibration: {
-      description: 'Per-0.05 floor bucket: predicted_midpoint is bucket center; delta is (actual - predicted). Positive delta = underconfident; negative = overconfident.',
-      buckets: calibration,
-    },
+    calibration: calibration,
     time_decay: timeDecay,
-    alert_sim: {
-      description: 'Simulated BUY/BWC/WB firing based purely on snapshot floor + margin. Does NOT model sust/TP/LS/ML gates from production.',
-      simulations: alertSim,
-    },
+    alert_sim: alertSim,
+    indicators: indicators,
+    combos: combos,
+    alerts_by_checkpoint: alertsByCp,
+    stability: stability,
+    margin_floor: marginFloor,
+    floor_velocity: velocity,
+    autopsy: autopsy,
+    conviction_deficit: convictionDeficit,
+    i4_split: i4Split,
+    velocity_at_alert: velocityAtAlert,
+    consecutive_holds: consecutiveHolds,
+    flip_recovery: flipRecovery,
+    opponent_profile: opponentProfile,
+    tier_sim: tierSim,
   };
 }
 
@@ -2314,7 +2346,7 @@ async function reportOpponentProfile(sql) {
     });
   }
 
-  var buySnaps = allSnaps.filter(function(s) { return s.floor >= 0.65 && s.ctrlMargin < 0 && s.ctrlMargin >= -15; });
+  var buySnaps = allSnaps.filter(function(s) { return s.floor >= 0.65 && s.ctrlMargin <= 0 && s.ctrlMargin >= -15; });
 
   // Individual opponent indicators
   var oppIndividual = {};
