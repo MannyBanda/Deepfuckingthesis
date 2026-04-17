@@ -858,11 +858,7 @@ export const handler = async (event) => {
 
           // Score pass/fail
           const t1Pass = report.test1_bwcStateMachine?.pass !== false;
-          const t3NoFalseValue = report.test3_triggers?.valueTriggers?.every(v =>
-            // VALUE shouldn't fire while ctrl team is leading
-            true // basic structural check passed during replay
-          );
-          if (t1Pass && t3NoFalseValue) {
+          if (t1Pass) {
             summary.passed++;
           } else {
             summary.failed++;
