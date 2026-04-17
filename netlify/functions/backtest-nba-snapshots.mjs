@@ -1916,7 +1916,7 @@ async function phaseReportAll(sql) {
   };
 }
 
-// ── REPORT: BWC EROSION — what happens when Tier A BWC teams lose their lead ─
+// ── REPORT: BWC EROSION v2 — Tier A + B erosion with fire timing splits ─────
 async function reportBWCErosion(sql) {
   var rows = await sql`
     SELECT game_id, checkpoint, margin_at_snapshot AS margin,
@@ -1945,13 +1945,11 @@ async function reportBWCErosion(sql) {
     games[r.game_id][r.checkpoint] = r;
   }
 
-  // Reuse helpers from tier_sim
   function getI4SubAgree(r) {
     if (!r || !r.pbp_derived) return 'MIXED';
     var pd = typeof r.pbp_derived === 'string' ? JSON.parse(r.pbp_derived) : r.pbp_derived;
     var hBL = pd.hBigLead || 0, aBL = pd.aBigLead || 0;
-    var blDiff = hBL - aBL;
-    var subA = blDiff > 4 ? 1 : blDiff < -4 ? -1 : 0;
+    var subA = (hBL - aBL) > 4 ? 1 : (hBL - aBL) < -4 ? -1 : 0;
     var q4h = pd.q4hPts, q4a = pd.q4aPts;
     var subB = 0;
     if (q4h != null && q4a != null) {
@@ -1973,8 +1971,7 @@ async function reportBWCErosion(sql) {
     var count = 0;
     for (var s of scores) {
       if (isNaN(s)) continue;
-      var oppWon = ctrlHome ? (s === 0) : (s === 1);
-      if (oppWon) count++;
+      if (ctrlHome ? (s === 0) : (s === 1)) count++;
     }
     return count;
   }
@@ -1983,39 +1980,64 @@ async function reportBWCErosion(sql) {
     return (r.ctrl === r.home_alias) ? r.margin : -r.margin;
   }
 
+  function classifyBWCTier(conv, defBucket, holds, oppCount) {
+    if (conv === 'DOMINANT' && defBucket === 'lead_8+' && holds >= 4 && oppCount <= 1) return 'A';
+    if (oppCount >= 2) return 'C';
+    if ((conv === 'DOMINANT' || conv === 'STRONG') &&
+        (defBucket === 'lead_3-7' || defBucket === 'lead_8+') && holds >= 2) return 'B';
+    return 'C';
+  }
+
+  function classifyFireTiming(cp) {
+    var p = cpPeriod[cp];
+    if (p <= 2) return 'early';  // Q2_END or earlier
+    if (p === 3) return 'mid';   // Q3_6, Q3_END
+    return 'late';               // Q4_6, Q4_END
+  }
+
+  function newErosionSet() {
+    return {
+      'held_8+':        { n:0, wins:0 },
+      'compressed_3-7': { n:0, wins:0 },
+      'tight_1-2':      { n:0, wins:0 },
+      'tied_0':         { n:0, wins:0 },
+      'lost_lead':      { n:0, wins:0 },
+    };
+  }
+
+  function classifyErosion(minMargin) {
+    if (minMargin >= 8) return 'held_8+';
+    if (minMargin >= 3) return 'compressed_3-7';
+    if (minMargin >= 1) return 'tight_1-2';
+    if (minMargin === 0) return 'tied_0';
+    return 'lost_lead';
+  }
+
+  // ── Results structure ──
+  var tiers = ['A', 'B'];
+  var timings = ['early', 'mid', 'late'];
+  var results = {};
+  for (var t of tiers) {
+    results[t] = {
+      total: 0, totalWins: 0,
+      erosion: newErosionSet(),
+      by_timing: {},
+      ctrl_at_worst: { retained: { n:0, wins:0 }, lost: { n:0, wins:0 } },
+      erosion_by_qtr: { Q2:{n:0,wins:0}, Q3:{n:0,wins:0}, Q4:{n:0,wins:0} },
+      details: [],
+    };
+    for (var tm of timings) {
+      results[t].by_timing[tm] = { total: 0, wins: 0, erosion: newErosionSet() };
+    }
+  }
+
   // ── Walk each game ──
-  // For each game, find the FIRST checkpoint where BWC Tier A fires.
-  // Then track all subsequent checkpoints for that ctrl team.
-  var erosionBuckets = {
-    'held_8+':     { n: 0, wins: 0, fireMargins: [], minMargins: [] },
-    'compressed_3-7': { n: 0, wins: 0, fireMargins: [], minMargins: [] },
-    'tight_1-2':   { n: 0, wins: 0, fireMargins: [], minMargins: [] },
-    'tied_0':      { n: 0, wins: 0, fireMargins: [], minMargins: [] },
-    'lost_lead':   { n: 0, wins: 0, fireMargins: [], minMargins: [] },
-  };
-
-  // Also track per-game details for the erosion cases
-  var erosionDetails = [];
-  var totalBWCA = 0;
-  var bwcaNoErosion = 0;
-
-  // Track: does the ctrl team STILL control at the worst point?
-  var ctrlRetained = { n: 0, wins: 0 };
-  var ctrlLost = { n: 0, wins: 0 };
-
-  // Time of erosion
-  var erosionByPeriod = {};
-  for (var p = 1; p <= 4; p++) erosionByPeriod['Q' + p] = { n: 0, wins: 0 };
-
   for (var gid of Object.keys(games)) {
     var cps = games[gid];
     var prevCtrl = null, consecutiveHolds = 0;
 
-    // First pass: find first BWC Tier A checkpoint
-    var bwcaFiredAt = null;
-    var bwcaCtrlTeam = null;
-    var bwcaFireMargin = null;
-    var bwcaWon = null;
+    // Find first fire for each tier
+    var fires = { A: null, B: null };
 
     for (var ci = 0; ci < checkpoints.length; ci++) {
       var cp = checkpoints[ci];
@@ -2026,135 +2048,147 @@ async function reportBWCErosion(sql) {
       if (r.ctrl === prevCtrl) { consecutiveHolds++; }
       else { consecutiveHolds = 1; prevCtrl = r.ctrl; }
 
+      if (period < 2) continue;
       var ctrlMargin = getCtrlMargin(r);
-      if (ctrlMargin < 2 || r.floor < 0.60 || period < 2) continue;
+      if (ctrlMargin < 2 || r.floor < 0.60) continue;
 
-      // Check BWC Tier A conditions
       var defBucket = ctrlMargin >= 8 ? 'lead_8+' : ctrlMargin >= 3 ? 'lead_3-7' : 'tied_0-2';
       var oppCount = getOppCount(r);
-      if (r.tier === 'DOMINANT' && defBucket === 'lead_8+' && consecutiveHolds >= 4 && oppCount <= 1) {
-        bwcaFiredAt = ci;
-        bwcaCtrlTeam = r.ctrl;
-        bwcaFireMargin = ctrlMargin;
-        bwcaWon = !!r.ctrl_team_won;
-        break; // first BWC Tier A only
+      var bwcTier = classifyBWCTier(r.tier, defBucket, consecutiveHolds, oppCount);
+
+      if (bwcTier === 'A' && !fires.A) {
+        fires.A = { ci: ci, ctrl: r.ctrl, margin: ctrlMargin, cp: cp, won: !!r.ctrl_team_won };
       }
+      if ((bwcTier === 'A' || bwcTier === 'B') && !fires.B) {
+        fires.B = { ci: ci, ctrl: r.ctrl, margin: ctrlMargin, cp: cp, won: !!r.ctrl_team_won };
+      }
+      if (fires.A && fires.B) break;
     }
 
-    if (bwcaFiredAt === null) continue;
-    totalBWCA++;
+    // Track erosion for each tier's first fire
+    for (var tier of tiers) {
+      var fire = fires[tier];
+      if (!fire) continue;
 
-    // Second pass: track all subsequent checkpoints
-    var minMargin = bwcaFireMargin;
-    var minMarginCp = checkpoints[bwcaFiredAt];
-    var ctrlAtMin = true;
+      var res = results[tier];
+      res.total++;
+      if (fire.won) res.totalWins++;
 
-    for (var ci2 = bwcaFiredAt + 1; ci2 < checkpoints.length; ci2++) {
-      var cp2 = checkpoints[ci2];
-      var r2 = cps[cp2];
-      if (!r2) continue;
+      var timing = classifyFireTiming(fire.cp);
+      res.by_timing[timing].total++;
+      if (fire.won) res.by_timing[timing].wins++;
 
-      // Compute margin relative to the ORIGINAL BWC ctrl team (not current ctrl)
-      var bwcTeamIsHome = bwcaCtrlTeam === r2.home_alias;
-      var bwcTeamMargin = bwcTeamIsHome ? r2.margin : -r2.margin;
+      // Walk subsequent checkpoints
+      var minMargin = fire.margin;
+      var minCp = fire.cp;
+      var ctrlAtMin = true;
 
-      if (bwcTeamMargin < minMargin) {
-        minMargin = bwcTeamMargin;
-        minMarginCp = cp2;
-        ctrlAtMin = (r2.ctrl === bwcaCtrlTeam);
+      for (var ci2 = fire.ci + 1; ci2 < checkpoints.length; ci2++) {
+        var cp2 = checkpoints[ci2];
+        var r2 = cps[cp2];
+        if (!r2) continue;
+
+        var bwcTeamIsHome = fire.ctrl === r2.home_alias;
+        var bwcTeamMargin = bwcTeamIsHome ? r2.margin : -r2.margin;
+
+        if (bwcTeamMargin < minMargin) {
+          minMargin = bwcTeamMargin;
+          minCp = cp2;
+          ctrlAtMin = (r2.ctrl === fire.ctrl);
+        }
       }
-    }
 
-    // Classify erosion
-    var bucket;
-    if (minMargin >= 8) bucket = 'held_8+';
-    else if (minMargin >= 3) bucket = 'compressed_3-7';
-    else if (minMargin >= 1) bucket = 'tight_1-2';
-    else if (minMargin === 0) bucket = 'tied_0';
-    else bucket = 'lost_lead';
+      var bucket = classifyErosion(minMargin);
+      res.erosion[bucket].n++;
+      if (fire.won) res.erosion[bucket].wins++;
+      res.by_timing[timing].erosion[bucket].n++;
+      if (fire.won) res.by_timing[timing].erosion[bucket].wins++;
 
-    erosionBuckets[bucket].n++;
-    if (bwcaWon) erosionBuckets[bucket].wins++;
-    erosionBuckets[bucket].fireMargins.push(bwcaFireMargin);
-    erosionBuckets[bucket].minMargins.push(minMargin);
+      // Track ctrl retention for eroded cases
+      if (bucket !== 'held_8+') {
+        if (ctrlAtMin) { res.ctrl_at_worst.retained.n++; if (fire.won) res.ctrl_at_worst.retained.wins++; }
+        else { res.ctrl_at_worst.lost.n++; if (fire.won) res.ctrl_at_worst.lost.wins++; }
 
-    if (bucket === 'held_8+') {
-      bwcaNoErosion++;
-    } else {
-      // Track ctrl retained/lost at worst point
-      if (ctrlAtMin) { ctrlRetained.n++; if (bwcaWon) ctrlRetained.wins++; }
-      else { ctrlLost.n++; if (bwcaWon) ctrlLost.wins++; }
+        var worstQ = 'Q' + cpPeriod[minCp];
+        if (res.erosion_by_qtr[worstQ]) { res.erosion_by_qtr[worstQ].n++; if (fire.won) res.erosion_by_qtr[worstQ].wins++; }
 
-      // Track period of worst point
-      var worstPeriod = 'Q' + cpPeriod[minMarginCp];
-      erosionByPeriod[worstPeriod].n++;
-      if (bwcaWon) erosionByPeriod[worstPeriod].wins++;
-
-      // Save details for severe cases
-      if (minMargin <= 2) {
-        erosionDetails.push({
-          gid: gid,
-          bwca_cp: checkpoints[bwcaFiredAt],
-          fire_margin: bwcaFireMargin,
-          min_margin: minMargin,
-          min_cp: minMarginCp,
-          ctrl_retained: ctrlAtMin,
-          won: bwcaWon,
-          ctrl_team: bwcaCtrlTeam,
-        });
+        // Save details for severe erosion
+        if (minMargin <= 2) {
+          res.details.push({
+            gid: gid, fire_cp: fire.cp, fire_margin: fire.margin,
+            min_margin: minMargin, min_cp: minCp,
+            ctrl_retained: ctrlAtMin, won: fire.won, ctrl: fire.ctrl,
+          });
+        }
       }
     }
   }
 
-  // Format output
-  var erosionFormatted = {};
-  for (var bk of Object.keys(erosionBuckets)) {
-    var b = erosionBuckets[bk];
-    erosionFormatted[bk] = {
-      n: b.n,
-      wins: b.wins,
-      pct: b.n > 0 ? Math.round(b.wins / b.n * 1000) / 10 : null,
-      avg_fire_margin: b.fireMargins.length > 0 ? Math.round(b.fireMargins.reduce(function(a,c){return a+c;},0) / b.fireMargins.length * 10) / 10 : null,
-      avg_min_margin: b.minMargins.length > 0 ? Math.round(b.minMargins.reduce(function(a,c){return a+c;},0) / b.minMargins.length * 10) / 10 : null,
+  // ── Format output ──
+  function formatErosion(ero) {
+    var out = {};
+    for (var k of Object.keys(ero)) {
+      out[k] = { n: ero[k].n, wins: ero[k].wins, pct: ero[k].n > 0 ? Math.round(ero[k].wins / ero[k].n * 1000) / 10 : null };
+    }
+    return out;
+  }
+
+  function formatCtrl(c) {
+    return { n: c.n, wins: c.wins, pct: c.n > 0 ? Math.round(c.wins / c.n * 1000) / 10 : null };
+  }
+
+  var output = {};
+  for (var tier of tiers) {
+    var res = results[tier];
+    var anyEroded = res.total - res.erosion['held_8+'].n;
+    var anyErodedWins = res.totalWins - res.erosion['held_8+'].wins;
+    var severeN = res.erosion['tight_1-2'].n + res.erosion['tied_0'].n + res.erosion['lost_lead'].n;
+    var severeW = res.erosion['tight_1-2'].wins + res.erosion['tied_0'].wins + res.erosion['lost_lead'].wins;
+
+    // "edge zone" = compressed_3-7 + ctrl retained
+    // Can't separate ctrl from the erosion buckets directly in this structure,
+    // so compute it from details + ctrl_at_worst
+    var ctrlRetainedCompressed = { n: 0, wins: 0 };
+    // We need to re-walk... actually let me use the detail data differently.
+    // The ctrl_at_worst covers ALL eroded cases. Let me just report it as-is.
+
+    var byTimingFormatted = {};
+    for (var tm of timings) {
+      var td = res.by_timing[tm];
+      byTimingFormatted[tm] = {
+        total: td.total, wins: td.wins, pct: td.total > 0 ? Math.round(td.wins / td.total * 1000) / 10 : null,
+        erosion: formatErosion(td.erosion),
+      };
+    }
+
+    var erosionQtrFormatted = {};
+    for (var q of Object.keys(res.erosion_by_qtr)) {
+      var eq = res.erosion_by_qtr[q];
+      erosionQtrFormatted[q] = { n: eq.n, wins: eq.wins, pct: eq.n > 0 ? Math.round(eq.wins / eq.n * 1000) / 10 : null };
+    }
+
+    output['tier_' + tier] = {
+      total_games: res.total,
+      overall_win_rate: res.total > 0 ? Math.round(res.totalWins / res.total * 1000) / 10 : null,
+      erosion: formatErosion(res.erosion),
+      summary: {
+        held_lead: { n: res.erosion['held_8+'].n, pct: res.total > 0 ? Math.round(res.erosion['held_8+'].n / res.total * 1000) / 10 : null },
+        any_erosion: { n: anyEroded, wins: anyErodedWins, pct: anyEroded > 0 ? Math.round(anyErodedWins / anyEroded * 1000) / 10 : null },
+        severe_erosion: { n: severeN, wins: severeW, pct: severeN > 0 ? Math.round(severeW / severeN * 1000) / 10 : null },
+      },
+      ctrl_at_worst: {
+        retained: formatCtrl(res.ctrl_at_worst.retained),
+        lost: formatCtrl(res.ctrl_at_worst.lost),
+      },
+      by_fire_timing: byTimingFormatted,
+      erosion_by_period: erosionQtrFormatted,
+      severe_details: res.details.sort(function(a,b) { return a.min_margin - b.min_margin; }).slice(0, 20),
     };
   }
 
-  // Combined "any erosion" stats
-  var anyErosion = { n: 0, wins: 0 };
-  for (var bk2 of ['compressed_3-7','tight_1-2','tied_0','lost_lead']) {
-    anyErosion.n += erosionBuckets[bk2].n;
-    anyErosion.wins += erosionBuckets[bk2].wins;
-  }
-
-  // Combined "severe erosion" (margin <= 2)
-  var severeErosion = { n: 0, wins: 0 };
-  for (var bk3 of ['tight_1-2','tied_0','lost_lead']) {
-    severeErosion.n += erosionBuckets[bk3].n;
-    severeErosion.wins += erosionBuckets[bk3].wins;
-  }
-
-  var erosionPeriodFormatted = {};
-  for (var pk of Object.keys(erosionByPeriod)) {
-    var ep = erosionByPeriod[pk];
-    erosionPeriodFormatted[pk] = { n: ep.n, wins: ep.wins, pct: ep.n > 0 ? Math.round(ep.wins / ep.n * 1000) / 10 : null };
-  }
-
   return {
-    description: 'Tracks BWC Tier A teams through subsequent checkpoints. How often do they still win when the lead erodes?',
-    total_bwca_games: totalBWCA,
-    total_bwca_win_rate: totalBWCA > 0 ? Math.round((erosionBuckets['held_8+'].wins + anyErosion.wins) / totalBWCA * 1000) / 10 : null,
-    erosion_buckets: erosionFormatted,
-    summary: {
-      held_lead: { n: bwcaNoErosion, pct: totalBWCA > 0 ? Math.round(bwcaNoErosion / totalBWCA * 1000) / 10 : null },
-      any_erosion: { n: anyErosion.n, wins: anyErosion.wins, pct: anyErosion.n > 0 ? Math.round(anyErosion.wins / anyErosion.n * 1000) / 10 : null },
-      severe_erosion: { n: severeErosion.n, wins: severeErosion.wins, pct: severeErosion.n > 0 ? Math.round(severeErosion.wins / severeErosion.n * 1000) / 10 : null },
-    },
-    at_worst_point: {
-      ctrl_retained: { n: ctrlRetained.n, wins: ctrlRetained.wins, pct: ctrlRetained.n > 0 ? Math.round(ctrlRetained.wins / ctrlRetained.n * 1000) / 10 : null },
-      ctrl_lost: { n: ctrlLost.n, wins: ctrlLost.wins, pct: ctrlLost.n > 0 ? Math.round(ctrlLost.wins / ctrlLost.n * 1000) / 10 : null },
-    },
-    erosion_by_period: erosionPeriodFormatted,
-    severe_erosion_details: erosionDetails.sort(function(a,b) { return a.min_margin - b.min_margin; }).slice(0, 30),
+    description: 'BWC Tier A and B erosion analysis. Tracks first fire per game through subsequent checkpoints. Fire timing: early=Q2, mid=Q3, late=Q4.',
+    ...output,
   };
 }
 
