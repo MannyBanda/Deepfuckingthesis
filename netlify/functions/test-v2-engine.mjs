@@ -250,6 +250,8 @@ async function replayGame(sql, gameId, mode) {
   let lastFiredAlert = {};  // { alertType, period, clock, floor, margin, ts, bwcState }
   let lastDegradeTs = null;
   let lastRecoverTs = null;
+  let lastAnyBwcTs = null;  // Universal cooldown — 3min between ANY BWC transitions
+  const BWC_COOLDOWN_MS = 3 * 60 * 1000;  // 3 minutes
 
   for (let idx = 0; idx < snapshots.length; idx++) {
     const snap = snapshots[idx];
@@ -320,6 +322,8 @@ async function replayGame(sql, gameId, mode) {
           ctrlTeam: cr.ctrlTeam, reasoning: `[INITIAL BWC FIRE — structural lead established after ${bwcCandidateHolds} holds]`,
           decision: 'SEND',
         });
+        lastAnyBwcTs = snap.ts ? new Date(snap.ts).getTime() : Date.now();
+        lastFiredAlert = { alertType: 'BUY WINDOW CLOSING', floor: cr.floor, margin: cr.margin, bwcState: initialState, period, clock: cr.clock };
       }
     } else if (!bwcFirstFired) {
       // Reset candidate if conditions not met
@@ -361,10 +365,14 @@ async function replayGame(sql, gameId, mode) {
           const marginDelta = Math.abs(cr.margin - lastMargin);
           const lastState = lastFiredAlert.bwcState || null;
 
-          // Gate: different state always fires. Same state needs material change.
+          // Universal cooldown: 3min between ANY BWC transitions (prevents trail pollution)
+          const msSinceAnyBwc = lastAnyBwcTs ? (snapTs - lastAnyBwcTs) : Infinity;
+          const cooldownPassed = msSinceAnyBwc >= BWC_COOLDOWN_MS;
+
+          // Gate: cooldown must pass, THEN different state always fires, same state needs material change.
           const stateChanged = bwcState !== lastState;
           const materialChange = floorDelta >= 0.10 || marginDelta >= 5 || msSinceLast >= 5 * 60 * 1000;
-          const shouldFire = stateChanged || materialChange;
+          const shouldFire = cooldownPassed && (stateChanged || materialChange);
 
           if (shouldFire) {
             const triggerPoint = {
@@ -404,6 +412,7 @@ async function replayGame(sql, gameId, mode) {
 
             // Update gate tracking
             lastFiredAlert = { alertType, floor: cr.floor, margin: cr.margin, bwcState, period, clock: cr.clock };
+            lastAnyBwcTs = snapTs;
             if (direction === 'DEGRADING') lastDegradeTs = snapTs;
             else lastRecoverTs = snapTs;
 
