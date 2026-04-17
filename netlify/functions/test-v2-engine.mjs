@@ -858,6 +858,12 @@ async function runAgentTests(triggers, v2Alerts, matchup, triggerIdx = null, use
   // If trigger_idx specified, only test that one (avoids Netlify timeout)
   if (triggerIdx != null && triggerIdx >= 0 && triggerIdx < testable.length) {
     testable = [testable[triggerIdx]];
+  } else if (triggerIdx != null && typeof triggerIdx === 'string' && triggerIdx.includes('-')) {
+    // Range: trigger_idx=0-6 runs triggers 0 through 6 inclusive (for batched compounding)
+    const [start, end] = triggerIdx.split('-').map(Number);
+    if (!isNaN(start) && !isNaN(end) && start >= 0 && end < testable.length) {
+      testable = testable.slice(start, end + 1);
+    }
   }
   const totalTestable = triggers.filter(t => t.contextPackage && t.alertType).length;
 
@@ -1031,7 +1037,9 @@ export const handler = async (event) => {
     }
 
     if (params.game_id) {
-      const triggerIdx = params.trigger_idx != null ? parseInt(params.trigger_idx) : null;
+      const triggerIdx = params.trigger_idx != null
+        ? (params.trigger_idx.includes('-') ? params.trigger_idx : parseInt(params.trigger_idx))
+        : null;
       const useMonitor = params.monitor === 'true';
       const report = await replayGame(sql, params.game_id, mode, triggerIdx, useMonitor);
       return { statusCode: 200, headers, body: JSON.stringify({ mode, monitor: useMonitor, report }, null, 2) };
