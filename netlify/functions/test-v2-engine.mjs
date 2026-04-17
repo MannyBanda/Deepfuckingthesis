@@ -580,7 +580,27 @@ function assembleContextPackage(snap, cr, lt, erosion, bwcState, v2Alerts, allSn
       else if ((floorUp && marginUp) || (floorDown && marginDown)) floorMarginRel = 'CONVERGING';
     }
 
-    trendSignals = { sustArc, sustArcDetail, floorMarginRel };
+    // Momentum — pre-digested label so agent doesn't have to count floor trajectory
+    let momDir = null, momStreak = 0;
+    for (let j = floors.length - 1; j > 0; j--) {
+      const diff = floors[j] - floors[j - 1];
+      if (diff > 0.01) {
+        if (momDir === 'RISING' || momDir === null) { momDir = 'RISING'; momStreak++; }
+        else break;
+      } else if (diff < -0.01) {
+        if (momDir === 'FALLING' || momDir === null) { momDir = 'FALLING'; momStreak++; }
+        else break;
+      } else {
+        if (momDir === null) momStreak++;
+        else break;
+      }
+    }
+    momDir = momDir || 'STABLE';
+    const momDelta = momStreak > 0
+      ? Math.round((floors[floors.length - 1] - floors[Math.max(0, floors.length - 1 - momStreak)]) * 100) / 100
+      : 0;
+
+    trendSignals = { sustArc, sustArcDetail, floorMarginRel, momentum: `${momDir}(${momStreak}, ${momDelta >= 0 ? '+' : ''}${momDelta.toFixed(2)})` };
   }
 
   // Prior v2 alert reasoning trail (compounding pattern)
@@ -856,6 +876,7 @@ PRIOR ALERT REASONING TRAIL:
 ${ctx.priorAlertTrail}
 ${ctx.trendSignals ? `
 TREND SIGNALS (computed from same 6-snapshot window as floor trajectory above):
+Floor momentum: ${ctx.trendSignals.momentum}
 Opponent sustainability arc: ${ctx.trendSignals.sustArc}${ctx.trendSignals.sustArcDetail ? ' (' + ctx.trendSignals.sustArcDetail + ')' : ''}
 Floor-margin relationship: ${ctx.trendSignals.floorMarginRel}
 NOTE: Floor-margin DIVERGING means structural edge and scoreboard are moving in opposite directions — in DFT, this is expected (process dominance precedes score). CONVERGING means both declining or both rising together.` : ''}
@@ -911,7 +932,7 @@ BODY: [If SEND: plain-English alert. If SUPPRESS: blank]`;
         referencesErosion: text.includes('erosion') || text.includes('peak') || text.includes('CAUTION') || text.includes('COLLAPSE'),
         referencesBwcLifecycle: text.includes('BWC') || text.includes('LOCK') || text.includes('lifecycle') || text.includes('prior'),
         monitorPresent: !!ctx.trendSignals,
-        referencesMonitor: text.includes('DIVERGING') || text.includes('CONVERGING') || text.includes('sustainability arc') || text.includes('sust arc') || text.includes('DEGRADING') || text.includes('IMPROVING'),
+        referencesMonitor: text.includes('DIVERGING') || text.includes('CONVERGING') || text.includes('sustainability arc') || text.includes('sust arc') || text.includes('DEGRADING') || text.includes('IMPROVING') || text.includes('momentum') || text.includes('RISING') || text.includes('FALLING'),
         monitorData: ctx.trendSignals || null,
         tokens: data.usage,
       };
