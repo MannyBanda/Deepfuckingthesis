@@ -413,7 +413,7 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
             // Context package (mode >= context)
             if (mode !== 'mechanical') {
               triggerPoint.contextPackage = assembleContextPackage(
-                snap, cr, lt, erosion, bwcState, v2Alerts, snapshots, idx, hA, aA
+                snap, cr, lt, erosion, bwcState, v2Alerts, snapshots, idx, hA, aA, useMonitor
               );
             }
 
