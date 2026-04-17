@@ -2130,6 +2130,328 @@ async function reportOpponentProfile(sql) {
   };
 }
 
+// ── REPORT: TIER SIMULATION ─────────────────────────────────────────────────
+// Simulates the full tiered alert system against backtest data.
+// Walks each game's checkpoints in order to compute temporal metrics
+// (consecutive holds, velocity, I4 sub-agreement, peak/trough) then
+// classifies each BUY/BWC-eligible snapshot into Tier A/B/C.
+async function reportTierSim(sql) {
+  var rows = await sql`
+    SELECT game_id, checkpoint, margin_at_snapshot AS margin,
+           (indicators->>'score')::real AS floor,
+           indicators->>'controlTeam' AS ctrl,
+           indicators->>'homeAlias' AS home_alias,
+           indicators->>'awayAlias' AS away_alias,
+           (indicators->>'I1')::text AS i1raw, (indicators->>'I2')::text AS i2raw,
+           (indicators->>'I3')::text AS i3raw, (indicators->>'I4')::text AS i4raw,
+           (indicators->>'I5')::text AS i5raw,
+           (conviction->>'tier') AS tier,
+           (conviction->>'combo') AS combo,
+           (conviction->>'count')::int AS ind_count,
+           pbp_derived,
+           ctrl_team_won
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+    ORDER BY game_id, checkpoint
+  `;
+
+  var checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  var cpPeriod = { 'Q1_6':1,'Q1_END':1,'Q2_6':2,'Q2_END':2,'Q3_6':3,'Q3_END':3,'Q4_6':4,'Q4_END':4 };
+
+  // Group by game
+  var games = {};
+  for (var r of rows) {
+    if (!games[r.game_id]) games[r.game_id] = {};
+    games[r.game_id][r.checkpoint] = r;
+  }
+
+  // ── Helper: compute I4 sub-agreement from pbp_derived ──
+  function getI4SubAgree(r) {
+    if (!r || !r.pbp_derived) return 'MIXED';
+    var pd = typeof r.pbp_derived === 'string' ? JSON.parse(r.pbp_derived) : r.pbp_derived;
+    var hBL = pd.hBigLead || 0, aBL = pd.aBigLead || 0;
+    var blDiff = hBL - aBL;
+    var subA = blDiff > 4 ? 1 : blDiff < -4 ? -1 : 0;
+    var q4h = pd.q4hPts, q4a = pd.q4aPts;
+    var subB = 0;
+    if (q4h != null && q4a != null) {
+      var q4diff = q4h - q4a;
+      subB = q4diff > 2 ? 1 : q4diff < -2 ? -1 : 0;
+    }
+    // Convert to ctrl-relative
+    var ctrlHome = r.ctrl === r.home_alias;
+    var ctrlSubA = ctrlHome ? subA : -subA;
+    var ctrlSubB = ctrlHome ? subB : -subB;
+    if (ctrlSubA > 0 && ctrlSubB > 0) return 'AGREE';
+    if (ctrlSubA < 0 && ctrlSubB < 0) return 'DISAGREE'; // both favor opponent = I4 lost
+    if ((ctrlSubA > 0 && ctrlSubB < 0) || (ctrlSubA < 0 && ctrlSubB > 0)) return 'DISAGREE';
+    return 'MIXED';
+  }
+
+  // ── Helper: classify deficit ──
+  function classifyDeficit(margin, isTrailing) {
+    if (!isTrailing && margin >= 8) return 'lead_8+';
+    if (!isTrailing && margin >= 3) return 'lead_3-7';
+    if (Math.abs(margin) <= 2) return 'tied_0-2';
+    if (isTrailing && margin >= 10) return 'trail_10+';
+    if (isTrailing && margin >= 5) return 'trail_5-9';
+    if (isTrailing && margin >= 1) return 'trail_1-4';
+    return 'tied_0-2';
+  }
+
+  // ── Helper: opponent indicators count ──
+  function getOppIndicatorCount(r) {
+    if (!r) return 0;
+    var ctrlHome = r.ctrl === r.home_alias;
+    var count = 0;
+    // I values are stored as the raw score object string like "{"score":1,"leader":"HOME"}"
+    // But in our query we extract as text. The indicators->>I1 returns the JSON object as text.
+    // Actually, looking at the schema, indicators is JSONB with I1/I2/I3/I4/I5 as numbers.
+    // In our query: (indicators->>'I1')::text gives us the score number as string.
+    // Wait — looking at the compute phase, indicators is stored as full object:
+    // { controlTeam, score, I1:{score,leader}, I2:{score,leader}... }
+    // So indicators->>'I1' returns the JSON object {"score":1,"leader":"HOME"}
+    // We need to parse it. Actually let me re-check...
+    // From the backtest computeServer (line 393): returns { I1, I2, I3, I4, I5 } where each is {score, leader}
+    // BUT the backtest computeServer (line 341) returns simpler objects:
+    // I1 = (i1subA + i1subB) > 0 ? 1 : ... — just a number!
+    // So in the backtest, I1-I5 are plain numbers, not objects.
+    // indicators->>'I1' is a string number like "1" or "0.5" or "0"
+    var scores = [parseFloat(r.i1raw), parseFloat(r.i2raw), parseFloat(r.i3raw),
+                  parseFloat(r.i4raw), parseFloat(r.i5raw)];
+    for (var s of scores) {
+      if (isNaN(s)) continue;
+      // Home-relative: 1=home won, 0=away won
+      // If ctrl is home: opp won when score=0
+      // If ctrl is away: opp won when score=1
+      var oppWon = ctrlHome ? (s === 0) : (s === 1);
+      if (oppWon) count++;
+    }
+    return count;
+  }
+
+  // ── Helper: computeBuyTier (mirrors production spec) ──
+  function computeBuyTier(p) {
+    var alertType = p.alertType, conv = p.convictionTier, deficit = p.deficitBucket;
+    var i4sa = p.i4SubAgree, holds = p.consecutiveHolds, vel = p.velocityDir;
+    var period = p.period, closeGame = p.isCloseGame, oppCount = p.oppIndicatorCount;
+
+    // Override: DOMINANT + trail_10+
+    if (conv === 'DOMINANT' && deficit === 'trail_10+') return 'A';
+
+    // BWC path
+    if (alertType === 'BWC') {
+      if (conv === 'DOMINANT' && deficit === 'lead_8+' && holds >= 4 && oppCount <= 1) return 'A';
+      if (oppCount >= 2) return 'C';
+      if ((conv === 'DOMINANT' || conv === 'STRONG') &&
+          (deficit === 'lead_3-7' || deficit === 'lead_8+') && holds >= 2) return 'B';
+      return 'C';
+    }
+
+    // WINDOW BUY always C
+    if (alertType === 'WB') return 'C';
+
+    // Close game override
+    if (closeGame) {
+      if (i4sa === 'AGREE' && holds >= 4 && (vel === 'rising' || vel === 'surging') && period >= 3) return 'B';
+      return 'C';
+    }
+
+    // BUY standard tiers
+    // Tier A
+    if ((conv === 'DOMINANT' || conv === 'STRONG') &&
+        (deficit === 'trail_5-9' || deficit === 'trail_10+') &&
+        i4sa === 'AGREE' && holds >= 4 && period >= 2) return 'A';
+
+    // Tier B
+    if ((conv === 'DOMINANT' || conv === 'STRONG') &&
+        (deficit === 'trail_5-9' || deficit === 'trail_10+') &&
+        i4sa !== 'DISAGREE' && holds >= 2) return 'B';
+    if (conv === 'MODEST' && deficit === 'trail_10+' && i4sa === 'AGREE') return 'B';
+    if ((conv === 'DOMINANT' || conv === 'STRONG') && deficit === 'trail_5-9' && holds >= 2) return 'B';
+
+    // Tier C
+    return 'C';
+  }
+
+  // ── Walk each game's checkpoints ──
+  var buyResults = { A: { n:0, wins:0 }, B: { n:0, wins:0 }, C: { n:0, wins:0 } };
+  var bwcResults = { A: { n:0, wins:0 }, B: { n:0, wins:0 }, C: { n:0, wins:0 } };
+  var buyByCheckpoint = {};
+  var bwcByCheckpoint = {};
+  for (var cp of checkpoints) {
+    buyByCheckpoint[cp] = { A: {n:0,wins:0}, B: {n:0,wins:0}, C: {n:0,wins:0} };
+    bwcByCheckpoint[cp] = { A: {n:0,wins:0}, B: {n:0,wins:0}, C: {n:0,wins:0} };
+  }
+
+  // Tier × deficit cross-cut (BUY only)
+  var buyTierDeficit = {};
+  for (var t of ['A','B','C']) {
+    buyTierDeficit[t] = {};
+    for (var d of ['trail_10+','trail_5-9','trail_1-4']) buyTierDeficit[t][d] = {n:0,wins:0};
+  }
+
+  // Close game analysis
+  var closeGameTiers = { B: {n:0,wins:0}, C: {n:0,wins:0} };
+
+  // Detailed tier A/B/C reason distribution
+  var tierReasons = { A: {}, B: {}, C: {} };
+
+  for (var gid of Object.keys(games)) {
+    var cps = games[gid];
+    var prevCtrl = null, consecutiveHolds = 0;
+    var peakFloor = 0, troughFloor = 1;
+    var floorHistory = [];
+
+    for (var ci = 0; ci < checkpoints.length; ci++) {
+      var cp = checkpoints[ci];
+      var r = cps[cp];
+      if (!r) continue;
+
+      var period = cpPeriod[cp];
+
+      // Update consecutive holds
+      if (r.ctrl === prevCtrl) {
+        consecutiveHolds++;
+      } else {
+        consecutiveHolds = 1;
+        prevCtrl = r.ctrl;
+        // Reset peak/trough for new ctrl team
+        peakFloor = r.floor;
+        troughFloor = r.floor;
+      }
+
+      // Update peak/trough for current ctrl team
+      if (r.floor > peakFloor) peakFloor = r.floor;
+      if (r.floor < troughFloor) troughFloor = r.floor;
+
+      // Velocity from last 3 checkpoints
+      floorHistory.push(r.floor);
+      var velocityDir = 'stable';
+      if (floorHistory.length >= 3) {
+        var recent = floorHistory.slice(-4); // last 4 entries = 3 transitions
+        var rises = 0, declines = 0;
+        for (var vi = recent.length - 1; vi > 0; vi--) {
+          if (recent[vi] > recent[vi-1] + 0.01) rises++;
+          else if (recent[vi] < recent[vi-1] - 0.01) declines++;
+        }
+        if (rises >= 3) velocityDir = 'surging';
+        else if (rises > declines) velocityDir = 'rising';
+        else if (declines >= 3) velocityDir = 'crashing';
+        else if (declines > rises) velocityDir = 'declining';
+      }
+
+      var margin = Math.abs(r.margin);
+      var isTrailing = r.margin < 0; // margin is home-relative, ctrl may be away
+      // Actually need to determine if CTRL team is trailing
+      var ctrlHome = r.ctrl === r.home_alias;
+      var ctrlMargin = ctrlHome ? r.margin : -r.margin;
+      var ctrlTrailing = ctrlMargin < 0;
+      var absMargin = Math.abs(ctrlMargin);
+      var deficitBucket = classifyDeficit(absMargin, ctrlTrailing);
+      var closeGame = Math.abs(ctrlMargin) <= 5;
+      var i4sa = getI4SubAgree(r);
+      var oppCount = getOppIndicatorCount(r);
+
+      // ── BUY eligible: floor >= 0.65, trailing, margin 1-15 ──
+      if (r.floor >= 0.65 && ctrlTrailing && absMargin >= 1 && absMargin <= 15 && period >= 2) {
+        var buyTier = computeBuyTier({
+          alertType: 'BUY', convictionTier: r.tier, deficitBucket: deficitBucket,
+          i4SubAgree: i4sa, consecutiveHolds: consecutiveHolds,
+          velocityDir: velocityDir, period: period,
+          isCloseGame: closeGame, oppIndicatorCount: oppCount,
+        });
+        buyResults[buyTier].n++;
+        if (r.ctrl_team_won) buyResults[buyTier].wins++;
+        buyByCheckpoint[cp][buyTier].n++;
+        if (r.ctrl_team_won) buyByCheckpoint[cp][buyTier].wins++;
+        // Deficit cross-cut
+        if (buyTierDeficit[buyTier][deficitBucket]) {
+          buyTierDeficit[buyTier][deficitBucket].n++;
+          if (r.ctrl_team_won) buyTierDeficit[buyTier][deficitBucket].wins++;
+        }
+        // Close game tracking
+        if (closeGame && (buyTier === 'B' || buyTier === 'C')) {
+          closeGameTiers[buyTier].n++;
+          if (r.ctrl_team_won) closeGameTiers[buyTier].wins++;
+        }
+      }
+
+      // ── BWC eligible: floor >= 0.60, leading 2+ ──
+      if (r.floor >= 0.60 && !ctrlTrailing && ctrlMargin >= 2 && period >= 2) {
+        var bwcTier = computeBuyTier({
+          alertType: 'BWC', convictionTier: r.tier, deficitBucket: deficitBucket,
+          i4SubAgree: i4sa, consecutiveHolds: consecutiveHolds,
+          velocityDir: velocityDir, period: period,
+          isCloseGame: closeGame, oppIndicatorCount: oppCount,
+        });
+        bwcResults[bwcTier].n++;
+        if (r.ctrl_team_won) bwcResults[bwcTier].wins++;
+        bwcByCheckpoint[cp][bwcTier].n++;
+        if (r.ctrl_team_won) bwcByCheckpoint[cp][bwcTier].wins++;
+      }
+    }
+  }
+
+  // Add pct to all result buckets
+  function addPct(obj) {
+    for (var k of Object.keys(obj)) {
+      if (obj[k].n != null) {
+        obj[k].pct = obj[k].n > 0 ? Math.round(obj[k].wins / obj[k].n * 1000) / 10 : null;
+      } else if (typeof obj[k] === 'object') {
+        addPct(obj[k]);
+      }
+    }
+  }
+  addPct(buyResults);
+  addPct(bwcResults);
+  addPct(buyByCheckpoint);
+  addPct(bwcByCheckpoint);
+  addPct(buyTierDeficit);
+  addPct(closeGameTiers);
+
+  // Summary comparison: what would accuracy be if we ONLY sent Tier A? A+B?
+  var buyAOnly = buyResults.A;
+  var buyAB = { n: buyResults.A.n + buyResults.B.n, wins: buyResults.A.wins + buyResults.B.wins };
+  buyAB.pct = buyAB.n > 0 ? Math.round(buyAB.wins / buyAB.n * 1000) / 10 : null;
+  var buyAll = { n: buyResults.A.n + buyResults.B.n + buyResults.C.n,
+                 wins: buyResults.A.wins + buyResults.B.wins + buyResults.C.wins };
+  buyAll.pct = buyAll.n > 0 ? Math.round(buyAll.wins / buyAll.n * 1000) / 10 : null;
+
+  var bwcAOnly = bwcResults.A;
+  var bwcAB = { n: bwcResults.A.n + bwcResults.B.n, wins: bwcResults.A.wins + bwcResults.B.wins };
+  bwcAB.pct = bwcAB.n > 0 ? Math.round(bwcAB.wins / bwcAB.n * 1000) / 10 : null;
+
+  // Volume impact: how many alerts LOST by suppressing Tier C?
+  var buyVolumeImpact = {
+    current_fires: buyAll.n,
+    current_accuracy: buyAll.pct,
+    tier_a_only: { fires: buyResults.A.n, accuracy: buyResults.A.pct, pct_of_current: Math.round(buyResults.A.n / buyAll.n * 1000) / 10 },
+    tier_ab: { fires: buyAB.n, accuracy: buyAB.pct, pct_of_current: Math.round(buyAB.n / buyAll.n * 1000) / 10 },
+    tier_c_suppressed: { fires: buyResults.C.n, accuracy: buyResults.C.pct, pct_of_losers_removed: buyResults.C.n > 0 ? Math.round((buyResults.C.n - buyResults.C.wins) / (buyAll.n - buyAll.wins) * 1000) / 10 : null },
+  };
+
+  return {
+    description: 'Simulates tiered alert classification against 9,861 backtest snapshots. Temporal metrics (holds, velocity) computed from checkpoint sequence. I4 sub-agreement from pbp_derived.',
+    buy_by_tier: buyResults,
+    bwc_by_tier: bwcResults,
+    buy_by_checkpoint: buyByCheckpoint,
+    bwc_by_checkpoint: bwcByCheckpoint,
+    buy_tier_x_deficit: buyTierDeficit,
+    close_game_tiers: closeGameTiers,
+    buy_volume_impact: buyVolumeImpact,
+    headline: {
+      buy_tier_a_accuracy: buyResults.A.pct,
+      buy_tier_ab_accuracy: buyAB.pct,
+      buy_all_accuracy: buyAll.pct,
+      bwc_tier_a_accuracy: bwcResults.A.pct,
+      bwc_tier_ab_accuracy: bwcAB.pct,
+      buy_tier_c_would_suppress: buyResults.C.n,
+      buy_tier_c_correct_kills: buyResults.C.n - buyResults.C.wins,
+    },
+  };
+}
+
 // ── HANDLER ─────────────────────────────────────────────────────────────────
 export default async (req) => {
   const sql = neon(process.env.DATABASE_URL);
@@ -2158,6 +2480,7 @@ export default async (req) => {
       case 'report_consecutive_holds': result = await reportConsecutiveHolds(sql); break;
       case 'report_flip_recovery': result = await reportFlipRecovery(sql); break;
       case 'report_opponent_profile': result = await reportOpponentProfile(sql); break;
+      case 'report_tier_sim': result = await reportTierSim(sql); break;
       case 'report_all':        result = await phaseReportAll(sql); break;
       case 'status':            result = await phaseStatus(sql); break;
       case 'wipe_indicators':    result = await phaseWipeIndicators(sql); break;
