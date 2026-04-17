@@ -470,34 +470,41 @@ async function replayGame(sql, gameId, mode, triggerIdx = null) {
       }
     }
 
-    // BUY trigger (no prior BWC, or BWC for different team)
-    const bwcTeam = lt.bwc_fired?.team || null;
-    const isBwcGame = bwcTeam === cr.ctrlTeam;
-    if (!isBwcGame && period >= 2 && cr.floor >= 0.65 && cr.margin < 0 && cr.margin >= -15) {
-      const buyKey = `BUY_Q${period}_${cr.margin}`;
-      if (buyKey !== lastTriggerKey) {
-        lastTriggerKey = buyKey;
-        const triggerPoint = {
-          type: 'BUY_TRIGGER',
-          alertType: 'BUY',
-          snapIdx: idx, period, clock: cr.clock,
-          ctrlTeam: cr.ctrlTeam, floor: cr.floor,
-          margin: cr.margin,
-          oppIndicatorCount: cr.oppIndicatorCount,
-          oppIndicatorsWon: cr.oppIndicators.join('+') || 'none',
-          ctrlIndicatorCount: cr.ctrlIndicatorCount,
-          oppI3Won: cr.oppI3Won,
-          erosion: erosion.level,
-          ctrlSust: cr.ctrlSust, oppSust: cr.oppSust,
-          tpClass: cr.tpClass, lsClass: cr.lsClass,
-        };
-        if (mode !== 'mechanical') {
-          triggerPoint.contextPackage = assembleContextPackage(
-            snap, cr, lt, erosion, bwcState, v2Alerts, snapshots, idx, hA, aA
-          );
+    // BUY trigger — fires for ANY structurally dominant team trailing, including BWC team.
+    // BWC lifecycle (VALUE, THESIS_ALIVE) tracks position health for holders.
+    // BUY identifies entry/re-entry opportunities at plus-money. They coexist.
+    if (period >= 2 && cr.floor >= 0.55 && cr.margin < 0 && cr.margin >= -15) {
+      // Clock gate: suppress < 1 min remaining (hard gate from production)
+      const clockMin = parseFloat(cr.clock) || 0;
+      if (clockMin >= 1.0) {
+        const buyTier = cr.floor >= 0.65 ? 'FIRED' : 'CANDIDATE';
+        const buyKey = `BUY_${buyTier}_Q${period}_${cr.margin}`;
+        if (buyKey !== lastTriggerKey) {
+          lastTriggerKey = buyKey;
+          const triggerPoint = {
+            type: 'BUY_TRIGGER',
+            alertType: 'BUY',
+            buyTier,
+            snapIdx: idx, period, clock: cr.clock,
+            ctrlTeam: cr.ctrlTeam, floor: cr.floor,
+            margin: cr.margin,
+            oppIndicatorCount: cr.oppIndicatorCount,
+            oppIndicatorsWon: cr.oppIndicators.join('+') || 'none',
+            ctrlIndicatorCount: cr.ctrlIndicatorCount,
+            oppI3Won: cr.oppI3Won,
+            erosion: erosion.level,
+            ctrlSust: cr.ctrlSust, oppSust: cr.oppSust,
+            tpClass: cr.tpClass, lsClass: cr.lsClass,
+            bwcTeamMatch: (lt.bwc_fired?.team === cr.ctrlTeam) ? 'YES' : 'NO',
+          };
+          if (mode !== 'mechanical') {
+            triggerPoint.contextPackage = assembleContextPackage(
+              snap, cr, lt, erosion, bwcState, v2Alerts, snapshots, idx, hA, aA
+            );
+          }
+          triggers.push(triggerPoint);
+          timeline.push({ ...triggerPoint, ts: snap.ts });
         }
-        triggers.push(triggerPoint);
-        timeline.push({ ...triggerPoint, ts: snap.ts });
       }
     }
 
@@ -685,8 +692,10 @@ function buildReport(gameId, game, matchup, lt, triggers, timeline, stateLog, pr
       })),
       buyTriggers: buyTriggers.map(t => ({
         time: `Q${t.period} ${t.clock}`,
+        tier: t.buyTier || 'FIRED',
         margin: t.margin, floor: t.floor,
         oppIndicators: t.oppIndicatorsWon,
+        bwcTeamMatch: t.bwcTeamMatch || 'N/A',
       })),
       valueCorrect, exitCorrect,
       summary: {
@@ -764,7 +773,7 @@ async function runAgentTests(triggers, v2Alerts, matchup, triggerIdx = null) {
     const prompt = `You are a live NBA betting alert quality agent. A mechanical system has identified a potential betting signal. Your job is to assess whether it should be sent to the bettor.
 
 ALERT:
-Type: ${t.alertType} (FIRED)
+Type: ${t.alertType} (${t.buyTier || 'FIRED'})
 Control team: ${ctx.ctrlTeam} | Floor: ${ctx.floor.toFixed(2)} | Margin: ${ctx.margin} (${ctx.margin < 0 ? 'trailing' : ctx.margin > 0 ? 'leading' : 'tied'})
 Score: ${ctx.awayAlias} ${ctx.awayPts} - ${ctx.homeAlias} ${ctx.homePts} (${ctx.ctrlTeam} is ${ctx.ctrlIsHome ? 'HOME' : 'AWAY'})
 Period: Q${ctx.period} ${ctx.clock}

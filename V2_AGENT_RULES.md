@@ -8,9 +8,11 @@
 ## Alert Type Taxonomy
 
 ### BUY
-**When:** Structurally dominant team trailing, NO prior BWC. Never led.
+**When:** Structurally dominant team trailing. Fires for ANY ctrl team trailing, including the BWC team.
+**Tiers:** FIRED (floor ≥ 0.65), CANDIDATE (floor 0.55-0.65).
 **Default:** Agent decides SEND/SUPPRESS.
-**Rule:** Standard evaluation — floor, indicators, TP, deficit depth. No BWC lifecycle to reference.
+**Rule:** Standard evaluation — floor, indicators, TP, deficit depth. When `bwcTeamMatch: YES`, the agent has BWC lifecycle context and should reference the position arc. BUY coexists with lifecycle alerts — lifecycle tracks position health for holders, BUY identifies entry/re-entry opportunities at plus-money.
+**Gates:** Period ≥ 2, trailing 1-15, clock ≥ 1:00.
 **SUPPRESS when:** TP NO PATH, < 2 indicators won, ctrl sust COLD/MIXED with opp DURABLE/LOCKED IN, floor declining.
 **Validated:** GSW@SAC trigger 0 (SUPPRESS — GSW weak case, TP NO PATH). POR@DEN trigger 0 (SEND — DEN +700). POR@DEN trigger 8 (SEND — DEN +750, trailing 15). MIA@CHA trigger 0 (SUPPRESS — CHA only I4, sust COLD).
 
@@ -160,9 +162,10 @@ Q3 3:37 BWC_EDGE → Prior floor risk not yet triggered, but margin down to 1
 3. **Agent** decides SEND/SUPPRESS (Opus, sees engine + monitor + trail)
 
 ### BUY vs Lifecycle
-- **BUY** = structurally dominant team trailing, never held a lead. No BWC lifecycle.
-- **After BWC fires** = lifecycle takes over. VALUE/EXIT/THESIS_ALIVE replace BUY for the BWC team.
-- Both coexist cleanly. Different game states, different alert types.
+- **BUY** = structurally dominant team trailing at plus-money. Fires for ANY team, including BWC team. Identifies entry/re-entry opportunities.
+- **BWC Lifecycle** (VALUE, EXIT, THESIS_ALIVE, BWC_EDGE) = tracks position health for someone already holding. Fired only for the BWC team.
+- **They coexist.** A subscriber might get a BWC_EDGE (position update) AND a BUY CANDIDATE (entry signal) near the same moment. Different purposes: lifecycle says "your position is X," BUY says "there's an entry at Y odds."
+- **Forcing function:** GSW@SAC Q4 12:00 — v1 correctly fired BUY CANDIDATE at +700. v2 initially blocked it with `!isBwcGame` guard, causing the money shot to fall through the cracks. Fixed session 3.
 
 ### Monitor Role (deferred — Test 6)
 Monitor enriches agent context but has no veto authority. Must earn trust from live data before being given override power. Current role: reinforcing witness.
