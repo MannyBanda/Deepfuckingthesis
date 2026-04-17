@@ -1884,9 +1884,6 @@ async function phaseReportAll(sql) {
   };
 }
 
-// ── PHASE: STATUS ───────────────────────────────────────────────────────────
-async function phaseStatus(sql) {
-
 // ── PHASE: VALIDATE — comprehensive data integrity checks ──────────────────
 async function phaseValidate(sql) {
   var checks = {};
@@ -2107,6 +2104,8 @@ async function phaseValidate(sql) {
   };
 }
 
+// ── PHASE: STATUS ───────────────────────────────────────────────────────────
+async function phaseStatus(sql) {
   const counts = await sql`
     SELECT COUNT(*) AS total,
            COUNT(DISTINCT game_id) AS games,
