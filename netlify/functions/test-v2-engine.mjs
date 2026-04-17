@@ -201,7 +201,7 @@ function parsePeriod(snap) {
 
 // ── REPLAY ENGINE ──
 
-async function replayGame(sql, gameId, mode) {
+async function replayGame(sql, gameId, mode, triggerIdx = null) {
   // 1. Load game metadata
   const gameRows = await sql`SELECT * FROM games WHERE id = ${gameId}`;
   if (gameRows.length === 0) return { error: `Game ${gameId} not found` };
@@ -501,7 +501,7 @@ async function replayGame(sql, gameId, mode) {
 
   // 7. If mode=agent, run API calls at trigger points
   if (mode === 'agent') {
-    report.agentResults = await runAgentTests(triggers, v2Alerts, matchup);
+    report.agentResults = await runAgentTests(triggers, v2Alerts, matchup, triggerIdx);
   }
 
   return report;
@@ -723,19 +723,25 @@ function buildReport(gameId, game, matchup, lt, triggers, timeline, stateLog, pr
 
 // ── AGENT API CALLS (mode=agent) ──
 
-async function runAgentTests(triggers, v2Alerts, matchup) {
+async function runAgentTests(triggers, v2Alerts, matchup, triggerIdx = null) {
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   if (!anthropicKey) return { error: 'No ANTHROPIC_API_KEY' };
 
   const results = [];
   // Only test triggers that have context packages AND are alert types
-  const testable = triggers.filter(t =>
+  let testable = triggers.filter(t =>
     t.contextPackage && (t.alertType === 'VALUE' || t.alertType === 'EXIT' || t.alertType === 'BUY'
       || t.alertType === 'BWC_EDGE' || t.alertType === 'POSITION_SAFE' || t.alertType === 'THESIS_ALIVE'
       || t.alertType === 'POSITION_RECOVERING')
   );
 
-  log(`${matchup}: running ${testable.length} agent tests`);
+  // If trigger_idx specified, only test that one (avoids Netlify timeout)
+  if (triggerIdx != null && triggerIdx >= 0 && triggerIdx < testable.length) {
+    testable = [testable[triggerIdx]];
+  }
+  const totalTestable = triggers.filter(t => t.contextPackage && t.alertType).length;
+
+  log(`${matchup}: running ${testable.length} of ${totalTestable} agent tests${triggerIdx != null ? ` (trigger_idx=${triggerIdx})` : ''}`);
 
   for (const t of testable) {
     const ctx = t.contextPackage;
@@ -835,7 +841,14 @@ BODY: [If SEND: plain-English alert. If SUPPRESS: blank]`;
     }
   }
 
-  return results;
+  return {
+    triggerIndex: triggerIdx,
+    totalTestable,
+    availableTriggers: triggers
+      .filter(t => t.contextPackage && t.alertType)
+      .map((t, i) => `${i}: ${t.alertType}[${t.bwcState || '-'}] Q${t.period} ${t.clock}`),
+    results,
+  };
 }
 
 // ── HANDLER ──
@@ -885,7 +898,8 @@ export const handler = async (event) => {
     }
 
     if (params.game_id) {
-      const report = await replayGame(sql, params.game_id, mode);
+      const triggerIdx = params.trigger_idx != null ? parseInt(params.trigger_idx) : null;
+      const report = await replayGame(sql, params.game_id, mode, triggerIdx);
       return { statusCode: 200, headers, body: JSON.stringify({ mode, report }, null, 2) };
     }
 
