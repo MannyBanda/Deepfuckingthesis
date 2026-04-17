@@ -521,7 +521,7 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
 
   // 7. If mode=agent, run API calls at trigger points
   if (mode === 'agent') {
-    report.agentResults = await runAgentTests(triggers, v2Alerts, matchup, triggerIdx, useMonitor);
+    report.agentResults = await runAgentTests(sql, gameId, triggers, v2Alerts, matchup, triggerIdx, useMonitor);
   }
 
   return report;
@@ -843,34 +843,67 @@ function buildReport(gameId, game, matchup, lt, triggers, timeline, stateLog, pr
 
 // ── AGENT API CALLS (mode=agent) ──
 
-async function runAgentTests(triggers, v2Alerts, matchup, triggerIdx = null, useMonitor = false) {
+async function runAgentTests(sql, gameId, triggers, v2Alerts, matchup, triggerIdx = null, useMonitor = false) {
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   if (!anthropicKey) return { error: 'No ANTHROPIC_API_KEY' };
 
   const results = [];
   // Only test triggers that have context packages AND are alert types
-  let testable = triggers.filter(t =>
+  let allTestable = triggers.filter(t =>
     t.contextPackage && (t.alertType === 'VALUE' || t.alertType === 'EXIT' || t.alertType === 'BUY'
       || t.alertType === 'BWC_EDGE' || t.alertType === 'POSITION_SAFE' || t.alertType === 'THESIS_ALIVE'
       || t.alertType === 'POSITION_RECOVERING')
   );
 
-  // If trigger_idx specified, only test that one (avoids Netlify timeout)
-  if (triggerIdx != null && triggerIdx >= 0 && triggerIdx < testable.length) {
+  // Load stored decisions from prior runs (for compounding across calls)
+  let storedDecisions = [];
+  try {
+    storedDecisions = await sql`SELECT trigger_idx, decision, reasoning, body
+      FROM test_decisions WHERE game_id = ${gameId} AND monitor = ${useMonitor}
+      ORDER BY trigger_idx ASC`;
+  } catch (e) { log(`No stored decisions: ${e.message}`); }
+
+  // Inject stored decisions into v2Alerts for prior trail compounding
+  const storedMap = {};
+  storedDecisions.forEach(d => { storedMap[d.trigger_idx] = d; });
+  allTestable.forEach((t, i) => {
+    if (storedMap[i]) {
+      const matching = v2Alerts.find(a =>
+        a.alertType === t.alertType && a.period === t.period && a.clock === t.clock
+      );
+      if (matching) {
+        matching.decision = storedMap[i].decision;
+        matching.reasoning = (storedMap[i].reasoning || '').substring(0, 150);
+      }
+    }
+  });
+
+  // Select which triggers to run
+  let testable = allTestable;
+  if (triggerIdx != null && typeof triggerIdx === 'number' && triggerIdx >= 0 && triggerIdx < testable.length) {
     testable = [testable[triggerIdx]];
   } else if (triggerIdx != null && typeof triggerIdx === 'string' && triggerIdx.includes('-')) {
-    // Range: trigger_idx=0-6 runs triggers 0 through 6 inclusive (for batched compounding)
     const [start, end] = triggerIdx.split('-').map(Number);
     if (!isNaN(start) && !isNaN(end) && start >= 0 && end < testable.length) {
       testable = testable.slice(start, end + 1);
     }
   }
-  const totalTestable = triggers.filter(t => t.contextPackage && t.alertType).length;
+  const totalTestable = allTestable.length;
 
-  log(`${matchup}: running ${testable.length} of ${totalTestable} agent tests${triggerIdx != null ? ` (trigger_idx=${triggerIdx})` : ''}`);
+  log(`${matchup}: running ${testable.length} of ${totalTestable} agent tests, ${storedDecisions.length} stored decisions loaded`);
 
   for (const t of testable) {
     const ctx = t.contextPackage;
+
+    // Rebuild priorAlertTrail from v2Alerts (may have stored decisions injected)
+    const currentTrailAlerts = v2Alerts.filter(a =>
+      a.period < t.period || (a.period === t.period && a.clock > t.clock)
+    );
+    ctx.priorAlertTrail = currentTrailAlerts.length > 0
+      ? currentTrailAlerts.map(a =>
+          `${a.alertType}[${a.bwcState || '-'}] Q${a.period} ${a.clock}: floor ${a.floor.toFixed(2)}, margin ${a.margin} → ${a.decision}: ${a.reasoning}`
+        ).reverse().slice(0, 5).join('\n')
+      : 'None';
 
     // Build the v2 agent prompt with enriched context
     const prompt = `You are a live NBA betting alert quality agent. A mechanical system has identified a potential betting signal. Your job is to assess whether it should be sent to the bettor.
@@ -957,6 +990,7 @@ BODY: [If SEND: plain-English alert. If SUPPRESS: blank]`;
         decision: decisionMatch ? decisionMatch[1].toUpperCase() : 'PARSE_FAIL',
         reasoning: reasoningMatch ? reasoningMatch[1].trim() : text.substring(0, 200),
         body: bodyMatch ? bodyMatch[1].trim() : '',
+        priorTrailUsed: ctx.priorAlertTrail.substring(0, 200),
         referencesOpponentProfile: text.includes('opponent') || text.includes('I1') || text.includes('counter-indicator'),
         referencesErosion: text.includes('erosion') || text.includes('peak') || text.includes('CAUTION') || text.includes('COLLAPSE'),
         referencesBwcLifecycle: text.includes('BWC') || text.includes('LOCK') || text.includes('lifecycle') || text.includes('prior'),
@@ -974,6 +1008,17 @@ BODY: [If SEND: plain-English alert. If SUPPRESS: blank]`;
         matching.reasoning = result.reasoning.substring(0, 150);
       }
 
+      // Save decision to DB for cross-request compounding
+      const tIdx = allTestable.indexOf(t);
+      if (tIdx >= 0) {
+        try {
+          await sql`INSERT INTO test_decisions (game_id, trigger_idx, monitor, decision, reasoning, body)
+            VALUES (${gameId}, ${tIdx}, ${useMonitor}, ${result.decision}, ${result.reasoning.substring(0, 500)}, ${result.body.substring(0, 1000)})
+            ON CONFLICT (game_id, trigger_idx, monitor) DO UPDATE SET
+              decision = EXCLUDED.decision, reasoning = EXCLUDED.reasoning, body = EXCLUDED.body, ts = NOW()`;
+        } catch (e) { log(`Failed to save decision: ${e.message}`); }
+      }
+
       log(`${matchup}: ${result.trigger} → ${result.decision}`);
     } catch (e) {
       results.push({ trigger: `${t.alertType} Q${t.period}`, error: e.message });
@@ -983,9 +1028,11 @@ BODY: [If SEND: plain-English alert. If SUPPRESS: blank]`;
   return {
     triggerIndex: triggerIdx,
     totalTestable,
+    storedDecisions: storedDecisions.length,
+    storedSummary: storedDecisions.map(d => `${d.trigger_idx}: ${d.decision}`),
     availableTriggers: triggers
       .filter(t => t.contextPackage && t.alertType)
-      .map((t, i) => `${i}: ${t.alertType}[${t.bwcState || '-'}] Q${t.period} ${t.clock}`),
+      .map((t, i) => `${i}: ${t.alertType}[${t.bwcState || '-'}] Q${t.period} ${t.clock}${storedMap[i] ? ' ✅' : ''}`),
     results,
   };
 }
@@ -1041,6 +1088,17 @@ export const handler = async (event) => {
         ? (params.trigger_idx.includes('-') ? params.trigger_idx : parseInt(params.trigger_idx))
         : null;
       const useMonitor = params.monitor === 'true';
+
+      // Ensure test_decisions table exists + handle reset
+      await sql`CREATE TABLE IF NOT EXISTS test_decisions (
+        game_id TEXT NOT NULL, trigger_idx INTEGER NOT NULL, monitor BOOLEAN DEFAULT false,
+        decision TEXT, reasoning TEXT, body TEXT, ts TIMESTAMP DEFAULT NOW(),
+        PRIMARY KEY (game_id, trigger_idx, monitor)
+      )`;
+      if (params.reset === 'true') {
+        await sql`DELETE FROM test_decisions WHERE game_id = ${params.game_id} AND monitor = ${useMonitor}`;
+      }
+
       const report = await replayGame(sql, params.game_id, mode, triggerIdx, useMonitor);
       return { statusCode: 200, headers, body: JSON.stringify({ mode, monitor: useMonitor, report }, null, 2) };
     }
