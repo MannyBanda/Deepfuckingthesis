@@ -1916,6 +1916,248 @@ async function phaseReportAll(sql) {
   };
 }
 
+// ── REPORT: BWC EROSION — what happens when Tier A BWC teams lose their lead ─
+async function reportBWCErosion(sql) {
+  var rows = await sql`
+    SELECT game_id, checkpoint, margin_at_snapshot AS margin,
+           (indicators->>'score')::real AS floor,
+           indicators->>'controlTeam' AS ctrl,
+           indicators->>'homeAlias' AS home_alias,
+           indicators->>'awayAlias' AS away_alias,
+           (indicators->>'I1')::text AS i1raw, (indicators->>'I2')::text AS i2raw,
+           (indicators->>'I3')::text AS i3raw, (indicators->>'I4')::text AS i4raw,
+           (indicators->>'I5')::text AS i5raw,
+           (conviction->>'tier') AS tier,
+           (conviction->>'count')::int AS ind_count,
+           pbp_derived,
+           ctrl_team_won
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+    ORDER BY game_id, checkpoint
+  `;
+
+  var checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  var cpPeriod = { 'Q1_6':1,'Q1_END':1,'Q2_6':2,'Q2_END':2,'Q3_6':3,'Q3_END':3,'Q4_6':4,'Q4_END':4 };
+
+  var games = {};
+  for (var r of rows) {
+    if (!games[r.game_id]) games[r.game_id] = {};
+    games[r.game_id][r.checkpoint] = r;
+  }
+
+  // Reuse helpers from tier_sim
+  function getI4SubAgree(r) {
+    if (!r || !r.pbp_derived) return 'MIXED';
+    var pd = typeof r.pbp_derived === 'string' ? JSON.parse(r.pbp_derived) : r.pbp_derived;
+    var hBL = pd.hBigLead || 0, aBL = pd.aBigLead || 0;
+    var blDiff = hBL - aBL;
+    var subA = blDiff > 4 ? 1 : blDiff < -4 ? -1 : 0;
+    var q4h = pd.q4hPts, q4a = pd.q4aPts;
+    var subB = 0;
+    if (q4h != null && q4a != null) {
+      var q4diff = q4h - q4a;
+      subB = q4diff > 2 ? 1 : q4diff < -2 ? -1 : 0;
+    }
+    var ctrlHome = r.ctrl === r.home_alias;
+    var ctrlSubA = ctrlHome ? subA : -subA;
+    var ctrlSubB = ctrlHome ? subB : -subB;
+    if (ctrlSubA > 0 && ctrlSubB > 0) return 'AGREE';
+    if (ctrlSubA < 0 || ctrlSubB < 0) return 'DISAGREE';
+    return 'MIXED';
+  }
+
+  function getOppCount(r) {
+    var ctrlHome = r.ctrl === r.home_alias;
+    var scores = [parseFloat(r.i1raw), parseFloat(r.i2raw), parseFloat(r.i3raw),
+                  parseFloat(r.i4raw), parseFloat(r.i5raw)];
+    var count = 0;
+    for (var s of scores) {
+      if (isNaN(s)) continue;
+      var oppWon = ctrlHome ? (s === 0) : (s === 1);
+      if (oppWon) count++;
+    }
+    return count;
+  }
+
+  function getCtrlMargin(r) {
+    return (r.ctrl === r.home_alias) ? r.margin : -r.margin;
+  }
+
+  // ── Walk each game ──
+  // For each game, find the FIRST checkpoint where BWC Tier A fires.
+  // Then track all subsequent checkpoints for that ctrl team.
+  var erosionBuckets = {
+    'held_8+':     { n: 0, wins: 0, fireMargins: [], minMargins: [] },
+    'compressed_3-7': { n: 0, wins: 0, fireMargins: [], minMargins: [] },
+    'tight_1-2':   { n: 0, wins: 0, fireMargins: [], minMargins: [] },
+    'tied_0':      { n: 0, wins: 0, fireMargins: [], minMargins: [] },
+    'lost_lead':   { n: 0, wins: 0, fireMargins: [], minMargins: [] },
+  };
+
+  // Also track per-game details for the erosion cases
+  var erosionDetails = [];
+  var totalBWCA = 0;
+  var bwcaNoErosion = 0;
+
+  // Track: does the ctrl team STILL control at the worst point?
+  var ctrlRetained = { n: 0, wins: 0 };
+  var ctrlLost = { n: 0, wins: 0 };
+
+  // Time of erosion
+  var erosionByPeriod = {};
+  for (var p = 1; p <= 4; p++) erosionByPeriod['Q' + p] = { n: 0, wins: 0 };
+
+  for (var gid of Object.keys(games)) {
+    var cps = games[gid];
+    var prevCtrl = null, consecutiveHolds = 0;
+
+    // First pass: find first BWC Tier A checkpoint
+    var bwcaFiredAt = null;
+    var bwcaCtrlTeam = null;
+    var bwcaFireMargin = null;
+    var bwcaWon = null;
+
+    for (var ci = 0; ci < checkpoints.length; ci++) {
+      var cp = checkpoints[ci];
+      var r = cps[cp];
+      if (!r) continue;
+
+      var period = cpPeriod[cp];
+      if (r.ctrl === prevCtrl) { consecutiveHolds++; }
+      else { consecutiveHolds = 1; prevCtrl = r.ctrl; }
+
+      var ctrlMargin = getCtrlMargin(r);
+      if (ctrlMargin < 2 || r.floor < 0.60 || period < 2) continue;
+
+      // Check BWC Tier A conditions
+      var defBucket = ctrlMargin >= 8 ? 'lead_8+' : ctrlMargin >= 3 ? 'lead_3-7' : 'tied_0-2';
+      var oppCount = getOppCount(r);
+      if (r.tier === 'DOMINANT' && defBucket === 'lead_8+' && consecutiveHolds >= 4 && oppCount <= 1) {
+        bwcaFiredAt = ci;
+        bwcaCtrlTeam = r.ctrl;
+        bwcaFireMargin = ctrlMargin;
+        bwcaWon = !!r.ctrl_team_won;
+        break; // first BWC Tier A only
+      }
+    }
+
+    if (bwcaFiredAt === null) continue;
+    totalBWCA++;
+
+    // Second pass: track all subsequent checkpoints
+    var minMargin = bwcaFireMargin;
+    var minMarginCp = checkpoints[bwcaFiredAt];
+    var ctrlAtMin = true;
+
+    for (var ci2 = bwcaFiredAt + 1; ci2 < checkpoints.length; ci2++) {
+      var cp2 = checkpoints[ci2];
+      var r2 = cps[cp2];
+      if (!r2) continue;
+
+      // Compute margin relative to the ORIGINAL BWC ctrl team (not current ctrl)
+      var bwcTeamIsHome = bwcaCtrlTeam === r2.home_alias;
+      var bwcTeamMargin = bwcTeamIsHome ? r2.margin : -r2.margin;
+
+      if (bwcTeamMargin < minMargin) {
+        minMargin = bwcTeamMargin;
+        minMarginCp = cp2;
+        ctrlAtMin = (r2.ctrl === bwcaCtrlTeam);
+      }
+    }
+
+    // Classify erosion
+    var bucket;
+    if (minMargin >= 8) bucket = 'held_8+';
+    else if (minMargin >= 3) bucket = 'compressed_3-7';
+    else if (minMargin >= 1) bucket = 'tight_1-2';
+    else if (minMargin === 0) bucket = 'tied_0';
+    else bucket = 'lost_lead';
+
+    erosionBuckets[bucket].n++;
+    if (bwcaWon) erosionBuckets[bucket].wins++;
+    erosionBuckets[bucket].fireMargins.push(bwcaFireMargin);
+    erosionBuckets[bucket].minMargins.push(minMargin);
+
+    if (bucket === 'held_8+') {
+      bwcaNoErosion++;
+    } else {
+      // Track ctrl retained/lost at worst point
+      if (ctrlAtMin) { ctrlRetained.n++; if (bwcaWon) ctrlRetained.wins++; }
+      else { ctrlLost.n++; if (bwcaWon) ctrlLost.wins++; }
+
+      // Track period of worst point
+      var worstPeriod = 'Q' + cpPeriod[minMarginCp];
+      erosionByPeriod[worstPeriod].n++;
+      if (bwcaWon) erosionByPeriod[worstPeriod].wins++;
+
+      // Save details for severe cases
+      if (minMargin <= 2) {
+        erosionDetails.push({
+          gid: gid,
+          bwca_cp: checkpoints[bwcaFiredAt],
+          fire_margin: bwcaFireMargin,
+          min_margin: minMargin,
+          min_cp: minMarginCp,
+          ctrl_retained: ctrlAtMin,
+          won: bwcaWon,
+          ctrl_team: bwcaCtrlTeam,
+        });
+      }
+    }
+  }
+
+  // Format output
+  var erosionFormatted = {};
+  for (var bk of Object.keys(erosionBuckets)) {
+    var b = erosionBuckets[bk];
+    erosionFormatted[bk] = {
+      n: b.n,
+      wins: b.wins,
+      pct: b.n > 0 ? Math.round(b.wins / b.n * 1000) / 10 : null,
+      avg_fire_margin: b.fireMargins.length > 0 ? Math.round(b.fireMargins.reduce(function(a,c){return a+c;},0) / b.fireMargins.length * 10) / 10 : null,
+      avg_min_margin: b.minMargins.length > 0 ? Math.round(b.minMargins.reduce(function(a,c){return a+c;},0) / b.minMargins.length * 10) / 10 : null,
+    };
+  }
+
+  // Combined "any erosion" stats
+  var anyErosion = { n: 0, wins: 0 };
+  for (var bk2 of ['compressed_3-7','tight_1-2','tied_0','lost_lead']) {
+    anyErosion.n += erosionBuckets[bk2].n;
+    anyErosion.wins += erosionBuckets[bk2].wins;
+  }
+
+  // Combined "severe erosion" (margin <= 2)
+  var severeErosion = { n: 0, wins: 0 };
+  for (var bk3 of ['tight_1-2','tied_0','lost_lead']) {
+    severeErosion.n += erosionBuckets[bk3].n;
+    severeErosion.wins += erosionBuckets[bk3].wins;
+  }
+
+  var erosionPeriodFormatted = {};
+  for (var pk of Object.keys(erosionByPeriod)) {
+    var ep = erosionByPeriod[pk];
+    erosionPeriodFormatted[pk] = { n: ep.n, wins: ep.wins, pct: ep.n > 0 ? Math.round(ep.wins / ep.n * 1000) / 10 : null };
+  }
+
+  return {
+    description: 'Tracks BWC Tier A teams through subsequent checkpoints. How often do they still win when the lead erodes?',
+    total_bwca_games: totalBWCA,
+    total_bwca_win_rate: totalBWCA > 0 ? Math.round((erosionBuckets['held_8+'].wins + anyErosion.wins) / totalBWCA * 1000) / 10 : null,
+    erosion_buckets: erosionFormatted,
+    summary: {
+      held_lead: { n: bwcaNoErosion, pct: totalBWCA > 0 ? Math.round(bwcaNoErosion / totalBWCA * 1000) / 10 : null },
+      any_erosion: { n: anyErosion.n, wins: anyErosion.wins, pct: anyErosion.n > 0 ? Math.round(anyErosion.wins / anyErosion.n * 1000) / 10 : null },
+      severe_erosion: { n: severeErosion.n, wins: severeErosion.wins, pct: severeErosion.n > 0 ? Math.round(severeErosion.wins / severeErosion.n * 1000) / 10 : null },
+    },
+    at_worst_point: {
+      ctrl_retained: { n: ctrlRetained.n, wins: ctrlRetained.wins, pct: ctrlRetained.n > 0 ? Math.round(ctrlRetained.wins / ctrlRetained.n * 1000) / 10 : null },
+      ctrl_lost: { n: ctrlLost.n, wins: ctrlLost.wins, pct: ctrlLost.n > 0 ? Math.round(ctrlLost.wins / ctrlLost.n * 1000) / 10 : null },
+    },
+    erosion_by_period: erosionPeriodFormatted,
+    severe_erosion_details: erosionDetails.sort(function(a,b) { return a.min_margin - b.min_margin; }).slice(0, 30),
+  };
+}
+
 // ── PHASE: VALIDATE — comprehensive data integrity checks ──────────────────
 async function phaseValidate(sql) {
   var checks = {};
@@ -2820,6 +3062,7 @@ export default async (req) => {
       case 'report_flip_recovery': result = await reportFlipRecovery(sql); break;
       case 'report_opponent_profile': result = await reportOpponentProfile(sql); break;
       case 'report_tier_sim': result = await reportTierSim(sql); break;
+      case 'report_bwc_erosion': result = await reportBWCErosion(sql); break;
       case 'report_buy_deep': {
         const [convDef, autopsy, marginFloor, alertsByCp, oppProfile] = await Promise.all([
           reportConvictionDeficit(sql),
