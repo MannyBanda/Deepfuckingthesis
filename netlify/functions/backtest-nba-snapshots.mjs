@@ -2213,6 +2213,234 @@ async function reportBWCErosion(sql) {
   };
 }
 
+// ── REPORT: VALUE PLAY — deep dive on lost_lead + ctrl_retained ─────────────
+// Answers: is there a deficit depth cutoff? Does timing gate viability?
+async function reportValuePlay(sql) {
+  var rows = await sql`
+    SELECT game_id, checkpoint, margin_at_snapshot AS margin,
+           (indicators->>'score')::real AS floor,
+           indicators->>'controlTeam' AS ctrl,
+           indicators->>'homeAlias' AS home_alias,
+           indicators->>'awayAlias' AS away_alias,
+           (indicators->>'I1')::text AS i1raw, (indicators->>'I2')::text AS i2raw,
+           (indicators->>'I3')::text AS i3raw, (indicators->>'I4')::text AS i4raw,
+           (indicators->>'I5')::text AS i5raw,
+           (conviction->>'tier') AS tier,
+           pbp_derived,
+           ctrl_team_won
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+    ORDER BY game_id, checkpoint
+  `;
+
+  var checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  var cpPeriod = { 'Q1_6':1,'Q1_END':1,'Q2_6':2,'Q2_END':2,'Q3_6':3,'Q3_END':3,'Q4_6':4,'Q4_END':4 };
+
+  var games = {};
+  for (var r of rows) {
+    if (!games[r.game_id]) games[r.game_id] = {};
+    games[r.game_id][r.checkpoint] = r;
+  }
+
+  function getOppCount(r) {
+    var ctrlHome = r.ctrl === r.home_alias;
+    var scores = [parseFloat(r.i1raw), parseFloat(r.i2raw), parseFloat(r.i3raw),
+                  parseFloat(r.i4raw), parseFloat(r.i5raw)];
+    var count = 0;
+    for (var s of scores) { if (!isNaN(s) && (ctrlHome ? (s === 0) : (s === 1))) count++; }
+    return count;
+  }
+
+  function classifyBWCTier(conv, defBucket, holds, oppCount) {
+    if (conv === 'DOMINANT' && defBucket === 'lead_8+' && holds >= 4 && oppCount <= 1) return 'A';
+    if (oppCount >= 2) return 'C';
+    if ((conv === 'DOMINANT' || conv === 'STRONG') &&
+        (defBucket === 'lead_3-7' || defBucket === 'lead_8+') && holds >= 2) return 'B';
+    return 'C';
+  }
+
+  // Collect all lost_lead + ctrl_retained cases with detail
+  var valuePlays = [];
+
+  for (var gid of Object.keys(games)) {
+    var cps = games[gid];
+    var prevCtrl = null, consecutiveHolds = 0;
+
+    // Find first BWC fire (any tier)
+    var bwcFire = null;
+    for (var ci = 0; ci < checkpoints.length; ci++) {
+      var cp = checkpoints[ci];
+      var r = cps[cp];
+      if (!r) continue;
+      var period = cpPeriod[cp];
+      if (r.ctrl === prevCtrl) { consecutiveHolds++; }
+      else { consecutiveHolds = 1; prevCtrl = r.ctrl; }
+      if (period < 2) continue;
+      var ctrlHome = r.ctrl === r.home_alias;
+      var ctrlMargin = ctrlHome ? r.margin : -r.margin;
+      if (ctrlMargin < 2 || r.floor < 0.60) continue;
+      var defBucket = ctrlMargin >= 8 ? 'lead_8+' : ctrlMargin >= 3 ? 'lead_3-7' : 'tied_0-2';
+      var oppCount = getOppCount(r);
+      var bwcTier = classifyBWCTier(r.tier, defBucket, consecutiveHolds, oppCount);
+      if (bwcTier !== 'C' || (ctrlMargin >= 2 && r.floor >= 0.60 && period >= 2)) {
+        bwcFire = { ci: ci, ctrl: r.ctrl, margin: ctrlMargin, cp: cp, won: !!r.ctrl_team_won, tier: bwcTier, firePeriod: period };
+        break;
+      }
+    }
+
+    if (!bwcFire) continue;
+
+    // Walk subsequent checkpoints, find EACH checkpoint where BWC team is trailing
+    for (var ci2 = bwcFire.ci + 1; ci2 < checkpoints.length; ci2++) {
+      var cp2 = checkpoints[ci2];
+      var r2 = cps[cp2];
+      if (!r2) continue;
+
+      var bwcTeamIsHome = bwcFire.ctrl === r2.home_alias;
+      var bwcTeamMargin = bwcTeamIsHome ? r2.margin : -r2.margin;
+      var ctrlRetained = (r2.ctrl === bwcFire.ctrl);
+
+      if (bwcTeamMargin < 0) {
+        valuePlays.push({
+          gid: gid,
+          bwcTier: bwcFire.tier,
+          fire_cp: bwcFire.cp,
+          fire_margin: bwcFire.margin,
+          fire_period: bwcFire.firePeriod,
+          trail_cp: cp2,
+          trail_period: cpPeriod[cp2],
+          deficit: bwcTeamMargin,
+          ctrl_retained: ctrlRetained,
+          floor_at_trail: r2.floor,
+          won: bwcFire.won,
+        });
+      }
+    }
+  }
+
+  // ── Analysis: deficit depth × ctrl_retained ──
+  var depthBuckets = [
+    { label: 'trail_1-4', test: function(d) { return d >= -4; } },
+    { label: 'trail_5-9', test: function(d) { return d >= -9; } },
+    { label: 'trail_10-15', test: function(d) { return d >= -15; } },
+    { label: 'trail_16+', test: function(d) { return d < -15; } },
+  ];
+
+  var byDepth = {};
+  for (var db of depthBuckets) {
+    byDepth[db.label] = { retained: {n:0,wins:0}, lost: {n:0,wins:0} };
+  }
+
+  for (var vp of valuePlays) {
+    for (var db of depthBuckets) {
+      if (db.test(vp.deficit)) {
+        var side = vp.ctrl_retained ? 'retained' : 'lost';
+        byDepth[db.label][side].n++;
+        if (vp.won) byDepth[db.label][side].wins++;
+        break;
+      }
+    }
+  }
+
+  // ── Analysis: period of trailing checkpoint × ctrl_retained ──
+  var byPeriod = {};
+  for (var p = 2; p <= 4; p++) {
+    byPeriod['Q' + p] = { retained: {n:0,wins:0}, lost: {n:0,wins:0} };
+  }
+
+  for (var vp of valuePlays) {
+    var qKey = 'Q' + vp.trail_period;
+    if (!byPeriod[qKey]) continue;
+    var side = vp.ctrl_retained ? 'retained' : 'lost';
+    byPeriod[qKey][side].n++;
+    if (vp.won) byPeriod[qKey][side].wins++;
+  }
+
+  // ── Cross-cut: depth × period (ctrl_retained ONLY) ──
+  var crossCut = {};
+  for (var db of depthBuckets) {
+    crossCut[db.label] = {};
+    for (var p = 2; p <= 4; p++) {
+      crossCut[db.label]['Q' + p] = { n: 0, wins: 0 };
+    }
+  }
+
+  for (var vp of valuePlays) {
+    if (!vp.ctrl_retained) continue;
+    var qKey = 'Q' + vp.trail_period;
+    for (var db of depthBuckets) {
+      if (db.test(vp.deficit)) {
+        crossCut[db.label][qKey].n++;
+        if (vp.won) crossCut[db.label][qKey].wins++;
+        break;
+      }
+    }
+  }
+
+  // ── Analysis: floor at trailing checkpoint (ctrl_retained only) ──
+  var byFloor = [
+    { label: '0.50-0.60', lo: 0.50, hi: 0.60 },
+    { label: '0.60-0.70', lo: 0.60, hi: 0.70 },
+    { label: '0.70-0.80', lo: 0.70, hi: 0.80 },
+    { label: '0.80+', lo: 0.80, hi: 2.0 },
+  ];
+  var floorDist = {};
+  for (var fb of byFloor) floorDist[fb.label] = { n: 0, wins: 0 };
+
+  for (var vp of valuePlays) {
+    if (!vp.ctrl_retained) continue;
+    for (var fb of byFloor) {
+      if (vp.floor_at_trail >= fb.lo && vp.floor_at_trail < fb.hi) {
+        floorDist[fb.label].n++;
+        if (vp.won) floorDist[fb.label].wins++;
+        break;
+      }
+    }
+  }
+
+  // ── Format helper ──
+  function fmt(o) {
+    return { n: o.n, wins: o.wins, pct: o.n > 0 ? Math.round(o.wins / o.n * 1000) / 10 : null };
+  }
+
+  // ── Format output ──
+  var depthFormatted = {};
+  for (var k of Object.keys(byDepth)) {
+    depthFormatted[k] = { retained: fmt(byDepth[k].retained), lost: fmt(byDepth[k].lost) };
+  }
+
+  var periodFormatted = {};
+  for (var k of Object.keys(byPeriod)) {
+    periodFormatted[k] = { retained: fmt(byPeriod[k].retained), lost: fmt(byPeriod[k].lost) };
+  }
+
+  var crossFormatted = {};
+  for (var dk of Object.keys(crossCut)) {
+    crossFormatted[dk] = {};
+    for (var pk of Object.keys(crossCut[dk])) {
+      crossFormatted[dk][pk] = fmt(crossCut[dk][pk]);
+    }
+  }
+
+  var floorFormatted = {};
+  for (var fk of Object.keys(floorDist)) floorFormatted[fk] = fmt(floorDist[fk]);
+
+  // Totals
+  var totalRetained = valuePlays.filter(function(v) { return v.ctrl_retained; });
+  var totalLost = valuePlays.filter(function(v) { return !v.ctrl_retained; });
+
+  return {
+    description: 'Deep dive on BWC teams that lost their lead. Every trailing checkpoint after a BWC fire. Deficit depth × period × ctrl retention × floor.',
+    total_trailing_snapshots: valuePlays.length,
+    retained_total: fmt({ n: totalRetained.length, wins: totalRetained.filter(function(v){return v.won;}).length }),
+    lost_total: fmt({ n: totalLost.length, wins: totalLost.filter(function(v){return v.won;}).length }),
+    by_deficit_depth: depthFormatted,
+    by_period: periodFormatted,
+    cross_cut_depth_x_period_ctrl_retained: crossFormatted,
+    floor_at_trailing_checkpoint_ctrl_retained: floorFormatted,
+  };
+}
+
 // ── PHASE: VALIDATE — comprehensive data integrity checks ──────────────────
 async function phaseValidate(sql) {
   var checks = {};
@@ -3118,6 +3346,7 @@ export default async (req) => {
       case 'report_opponent_profile': result = await reportOpponentProfile(sql); break;
       case 'report_tier_sim': result = await reportTierSim(sql); break;
       case 'report_bwc_erosion': result = await reportBWCErosion(sql); break;
+      case 'report_value_play': result = await reportValuePlay(sql); break;
       case 'report_buy_deep': {
         const [convDef, autopsy, marginFloor, alertsByCp, oppProfile] = await Promise.all([
           reportConvictionDeficit(sql),
