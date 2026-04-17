@@ -885,6 +885,8 @@ async function reportAlertSim(sql) {
     SELECT (indicators->>'score')::real AS floor,
            (conviction->>'tier') AS tier,
            margin_at_snapshot AS margin,
+           indicators->>'controlTeam' AS ctrl,
+           home_alias,
            checkpoint,
            ctrl_team_won
     FROM nba_snapshot_backtest
@@ -892,11 +894,10 @@ async function reportAlertSim(sql) {
   `;
 
   // NOTE: these are structurally-reduced proxies for the production alerts.
-  //   BUY      = floor >= 0.65 AND margin <= 0 AND margin >= -15
-  //   BWC      = floor >= 0.60 AND margin >= 2  (edge proxy skipped)
-  //   WINDOW_BUY = floor >= 0.45 AND margin in [-15, 5]
-  // The live production alerts add sust/TP/LS/ML gates we don't have at this layer.
-  // Forward win rate = ctrl_team_won given the trigger condition.
+  //   BUY      = floor >= 0.65 AND ctrl trailing 1-15
+  //   BWC      = floor >= 0.60 AND ctrl leading 2+  (edge proxy skipped)
+  //   WINDOW_BUY = floor >= 0.45 AND ctrlMargin in [-15, 5]
+  // margin_at_snapshot is HOME-RELATIVE. Must convert to ctrl-relative.
 
   const sim = {
     BUY: { fires: 0, wins: 0 },
@@ -906,16 +907,17 @@ async function reportAlertSim(sql) {
 
   for (const r of rows) {
     const floor = r.floor;
-    const margin = r.margin;
+    const ctrlHome = r.ctrl === r.home_alias;
+    const ctrlMargin = ctrlHome ? r.margin : -r.margin;
     const won = !!r.ctrl_team_won;
 
-    if (floor >= 0.65 && margin <= 0 && margin >= -15) {
+    if (floor >= 0.65 && ctrlMargin <= 0 && ctrlMargin >= -15) {
       sim.BUY.fires++; if (won) sim.BUY.wins++;
     }
-    if (floor >= 0.60 && margin >= 2) {
+    if (floor >= 0.60 && ctrlMargin >= 2) {
       sim.BWC.fires++; if (won) sim.BWC.wins++;
     }
-    if (floor >= 0.45 && margin >= -15 && margin <= 5) {
+    if (floor >= 0.45 && ctrlMargin >= -15 && ctrlMargin <= 5) {
       sim.WINDOW_BUY.fires++; if (won) sim.WINDOW_BUY.wins++;
     }
   }
@@ -1094,6 +1096,8 @@ async function reportAlertSimByCheckpoint(sql) {
   const rows = await sql`
     SELECT (indicators->>'score')::real AS floor,
            margin_at_snapshot AS margin,
+           indicators->>'controlTeam' AS ctrl,
+           home_alias,
            checkpoint,
            ctrl_team_won
     FROM nba_snapshot_backtest
@@ -1109,15 +1113,17 @@ async function reportAlertSimByCheckpoint(sql) {
   }
 
   for (const r of rows) {
-    const floor = r.floor, margin = r.margin, won = !!r.ctrl_team_won, cp = r.checkpoint;
+    const floor = r.floor, won = !!r.ctrl_team_won, cp = r.checkpoint;
+    const ctrlHome = r.ctrl === r.home_alias;
+    const ctrlMargin = ctrlHome ? r.margin : -r.margin;
 
-    if (floor >= 0.65 && margin <= 0 && margin >= -15) {
+    if (floor >= 0.65 && ctrlMargin <= 0 && ctrlMargin >= -15) {
       result.BUY[cp].fires++; if (won) result.BUY[cp].wins++;
     }
-    if (floor >= 0.60 && margin >= 2) {
+    if (floor >= 0.60 && ctrlMargin >= 2) {
       result.BWC[cp].fires++; if (won) result.BWC[cp].wins++;
     }
-    if (floor >= 0.45 && margin >= -15 && margin <= 5) {
+    if (floor >= 0.45 && ctrlMargin >= -15 && ctrlMargin <= 5) {
       result.WINDOW_BUY[cp].fires++; if (won) result.WINDOW_BUY[cp].wins++;
     }
   }
@@ -1233,6 +1239,8 @@ async function reportMarginFloor(sql) {
   const rows = await sql`
     SELECT (indicators->>'score')::real AS floor,
            margin_at_snapshot AS margin,
+           indicators->>'controlTeam' AS ctrl,
+           home_alias,
            ctrl_team_won
     FROM nba_snapshot_backtest
     WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
@@ -1268,21 +1276,13 @@ async function reportMarginFloor(sql) {
   for (const r of rows) {
     const floor = r.floor;
     const won = !!r.ctrl_team_won;
-    // Convert margin to ctrl-team-relative
-    // margin_at_snapshot is home - away. Need to know if ctrl is home.
-    // We stored indicators with controlTeam — but we only have floor score here.
-    // If floor >= 0.50, composite favors home → ctrl is home → margin is ctrl-relative.
-    // If floor < 0.50... but we filtered >= 0.45 in calibration.
-    // Actually: indicators.score is already ctrl-relative (always >= 0.50).
-    // But margin_at_snapshot is always home-relative.
-    // We need to flip margin when ctrl is away. We don't have that info in this query.
-    // Skip this complexity — just use raw margin for now with a note.
-    const margin = r.margin;
+    const ctrlHome = r.ctrl === r.home_alias;
+    const ctrlMargin = ctrlHome ? r.margin : -r.margin;
 
     for (const fb of floorBuckets) {
       if (floor >= fb.lo && floor < fb.hi) {
         for (const mb of marginBuckets) {
-          if (mb.test(margin)) {
+          if (mb.test(ctrlMargin)) {
             grid[fb.label][mb.label].n++;
             if (won) grid[fb.label][mb.label].wins++;
             break;
@@ -1302,7 +1302,7 @@ async function reportMarginFloor(sql) {
   }
 
   return {
-    description: 'NOTE: margin is home-relative (not ctrl-relative). Positive = home leading. Cross-reference with floor to infer ctrl team side.',
+    description: 'Ctrl-relative margin × floor grid. Negative = ctrl team trailing. Positive = ctrl team leading.',
     grid,
   };
 }
@@ -1418,6 +1418,7 @@ async function reportLosingAutopsy(sql) {
     SELECT game_id, checkpoint, margin_at_snapshot AS margin,
            (indicators->>'score')::real AS floor,
            indicators->>'controlTeam' AS ctrl,
+           home_alias,
            indicators->>'I1' AS i1, indicators->>'I2' AS i2,
            indicators->>'I3' AS i3, indicators->>'I4' AS i4, indicators->>'I5' AS i5,
            (conviction->>'tier') AS tier, (conviction->>'combo') AS combo,
@@ -1427,8 +1428,12 @@ async function reportLosingAutopsy(sql) {
     WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
   `;
 
-  // BUY condition: floor >= 0.65, margin <= 0, margin >= -15
-  const buyAlerts = rows.filter(r => r.floor >= 0.65 && r.margin <= 0 && r.margin >= -15);
+  // BUY condition: floor >= 0.65, ctrl trailing 1-15 (ctrl-relative margin)
+  const buyAlerts = rows.filter(r => {
+    const ctrlHome = r.ctrl === r.home_alias;
+    const ctrlMargin = ctrlHome ? r.margin : -r.margin;
+    return r.floor >= 0.65 && ctrlMargin <= 0 && ctrlMargin >= -15;
+  });
   const winners = buyAlerts.filter(r => r.ctrl_team_won);
   const losers = buyAlerts.filter(r => !r.ctrl_team_won);
 
@@ -1439,20 +1444,17 @@ async function reportLosingAutopsy(sql) {
     for (const r of group) {
       // Tier
       tiers[r.tier] = (tiers[r.tier] || 0) + 1;
-      // Deficit bucket
-      const m = r.margin;
-      const db = m <= -10 ? 'trail_10+' : m <= -5 ? 'trail_5-9' : 'trail_1-4';
+      // Deficit bucket — ctrl-relative
+      const ctrlHome = r.ctrl === r.home_alias;
+      const ctrlMargin = ctrlHome ? r.margin : -r.margin;
+      const absM = Math.abs(ctrlMargin);
+      const db = absM >= 10 ? 'trail_10+' : absM >= 5 ? 'trail_5-9' : 'trail_1-4';
       deficits[db] = (deficits[db] || 0) + 1;
-      // I4 — convert to ctrl-relative
-      const ctrlHome = r.ctrl === r.checkpoint; // not reliable, use raw
+      // I4 — ctrl-relative
       const i4raw = parseFloat(r.i4);
-      // Since floor >= 0.50, composite favors ctrl = home when score stored as-is
-      // Actually indicators are stored home-relative. Score is ctrl-relative.
-      // I4 = 1 means home wins I4. If ctrl is home, that's good. If ctrl is away, I4=1 means ctrl LOST I4.
-      // We don't have homeAlias in this query... use score >= 0.5 as proxy for ctrl=home
-      // Actually we do: indicators.homeAlias. Let me just check if I4 >= 0.5
-      if (i4raw === 1) i4status.won++;
-      else if (i4raw === 0) i4status.lost++;
+      const ctrlI4 = ctrlHome ? i4raw : 1 - i4raw;
+      if (ctrlI4 === 1) i4status.won++;
+      else if (ctrlI4 === 0) i4status.lost++;
       else i4status.even++;
       // Indicator count
       const ic = r.ind_count || 0;
@@ -1464,7 +1466,7 @@ async function reportLosingAutopsy(sql) {
       avg_floor: Math.round(floorSum / group.length * 100) / 100,
       tiers: Object.fromEntries(Object.entries(tiers).sort((a,b) => b[1]-a[1]).map(([k,v]) => [k, { n: v, pct: Math.round(v/group.length*1000)/10 }])),
       deficit_buckets: deficits,
-      i4_raw_status: i4status,
+      i4_ctrl_status: i4status,
       indicator_counts: Object.fromEntries(Object.entries(indCounts).sort((a,b) => Number(a[0])-Number(b[0])).map(([k,v]) => [k, { n: v, pct: Math.round(v/group.length*1000)/10 }])),
     };
   }
@@ -1491,6 +1493,8 @@ async function reportConvictionDeficit(sql) {
   const rows = await sql`
     SELECT margin_at_snapshot AS margin,
            (conviction->>'tier') AS tier,
+           indicators->>'controlTeam' AS ctrl,
+           home_alias,
            ctrl_team_won
     FROM nba_snapshot_backtest
     WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
@@ -1515,8 +1519,10 @@ async function reportConvictionDeficit(sql) {
   for (const r of rows) {
     const t = r.tier;
     if (!grid[t]) continue;
+    const ctrlHome = r.ctrl === r.home_alias;
+    const ctrlMargin = ctrlHome ? r.margin : -r.margin;
     for (const d of deficits) {
-      if (d.test(r.margin)) {
+      if (d.test(ctrlMargin)) {
         grid[t][d.label].n++;
         if (r.ctrl_team_won) grid[t][d.label].wins++;
         break;
@@ -1531,7 +1537,7 @@ async function reportConvictionDeficit(sql) {
     }
   }
 
-  return { description: 'Margin is home-relative. Conviction tier × deficit depth.', grid };
+  return { description: 'Ctrl-relative margin. Conviction tier × deficit depth.', grid };
 }
 
 // ── REPORT: I4 SUB-COMPONENT SPLIT ──────────────────────────────────────────
@@ -1617,7 +1623,7 @@ async function reportVelocityAtAlert(sql) {
   const rows = await sql`
     SELECT game_id, checkpoint, (indicators->>'score')::real AS floor,
            margin_at_snapshot AS margin,
-           indicators->>'controlTeam' AS ctrl, ctrl_team_won
+           indicators->>'controlTeam' AS ctrl, home_alias, ctrl_team_won
     FROM nba_snapshot_backtest
     WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
     ORDER BY game_id, checkpoint
@@ -1648,7 +1654,9 @@ async function reportVelocityAtAlert(sql) {
       const cp = checkpoints[i];
       const snap = cps[cp];
       if (!snap) continue;
-      if (!(snap.floor >= 0.65 && snap.margin <= 0 && snap.margin >= -15)) continue;
+      const ctrlHome = snap.ctrl === snap.home_alias;
+      const ctrlMargin = ctrlHome ? snap.margin : -snap.margin;
+      if (!(snap.floor >= 0.65 && ctrlMargin <= 0 && ctrlMargin >= -15)) continue;
 
       // Compute velocity: look back up to 3 checkpoints
       let velocityScore = 0;
@@ -1684,7 +1692,7 @@ async function reportConsecutiveHolds(sql) {
   const rows = await sql`
     SELECT game_id, checkpoint, (indicators->>'score')::real AS floor,
            margin_at_snapshot AS margin,
-           indicators->>'controlTeam' AS ctrl, ctrl_team_won
+           indicators->>'controlTeam' AS ctrl, home_alias, ctrl_team_won
     FROM nba_snapshot_backtest
     WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
     ORDER BY game_id, checkpoint
@@ -1732,8 +1740,10 @@ async function reportConsecutiveHolds(sql) {
           allResult[hb.label].n++;
           if (snap.ctrl_team_won) allResult[hb.label].wins++;
 
-          // Also check BUY eligibility
-          if (snap.floor >= 0.65 && snap.margin <= 0 && snap.margin >= -15) {
+          // Also check BUY eligibility — ctrl-relative margin
+          const ctrlHome2 = snap.ctrl === snap.home_alias;
+          const ctrlMargin2 = ctrlHome2 ? snap.margin : -snap.margin;
+          if (snap.floor >= 0.65 && ctrlMargin2 <= 0 && ctrlMargin2 >= -15) {
             buyResult[hb.label].n++;
             if (snap.ctrl_team_won) buyResult[hb.label].wins++;
           }
@@ -1997,9 +2007,11 @@ async function reportOpponentProfile(sql) {
     var opp = getOppIndicators(ind);
     var oppCount = 0;
     for (var k of ['I1','I2','I3','I4','I5']) { if (opp[k] === 'won') oppCount++; }
+    var ctrlHome = ind.controlTeam === ind.homeAlias;
+    var ctrlMargin = ctrlHome ? r.margin : -r.margin;
     allSnaps.push({
       floor: parseFloat(ind.score),
-      margin: r.margin,
+      ctrlMargin: ctrlMargin,
       won: !!r.ctrl_team_won,
       tier: conv?.tier,
       opp, oppCount,
@@ -2007,7 +2019,7 @@ async function reportOpponentProfile(sql) {
     });
   }
 
-  var buySnaps = allSnaps.filter(function(s) { return s.floor >= 0.65 && s.margin < 0 && s.margin >= -15; });
+  var buySnaps = allSnaps.filter(function(s) { return s.floor >= 0.65 && s.ctrlMargin < 0 && s.ctrlMargin >= -15; });
 
   // Individual opponent indicators
   var oppIndividual = {};
@@ -2059,7 +2071,7 @@ async function reportOpponentProfile(sql) {
   var oppByDeficit = {};
   for (var db of defBuckets) {
     oppByDeficit[db.label] = {};
-    var dbSnaps = buySnaps.filter(function(s) { return db.test(s.margin); });
+    var dbSnaps = buySnaps.filter(function(s) { return db.test(s.ctrlMargin); });
     for (var oc = 0; oc <= 5; oc++) {
       var ocSnaps = dbSnaps.filter(function(s) { return s.oppCount === oc; });
       var ocWins = ocSnaps.filter(function(s) { return s.won; }).length;
@@ -2070,7 +2082,7 @@ async function reportOpponentProfile(sql) {
   }
 
   // ── Section 5: Close-game zone (margin -5 to +5) opponent profile (ALL snaps, not just BUY) ──
-  var closeSnaps = allSnaps.filter(function(s) { return s.margin >= -5 && s.margin <= 5; });
+  var closeSnaps = allSnaps.filter(function(s) { return s.ctrlMargin >= -5 && s.ctrlMargin <= 5; });
   var closeOppCount = {};
   for (var cc = 0; cc <= 5; cc++) {
     var ccSnaps = closeSnaps.filter(function(s) { return s.oppCount === cc; });
@@ -2098,7 +2110,7 @@ async function reportOpponentProfile(sql) {
     // Sub-cut by deficit
     var sub = {};
     for (var db2 of defBuckets) {
-      var dbGroup = i4group.filter(function(s) { return db2.test(s.margin); });
+      var dbGroup = i4group.filter(function(s) { return db2.test(s.ctrlMargin); });
       var dbWins = dbGroup.filter(function(s) { return s.won; }).length;
       if (dbGroup.length > 0) sub[db2.label] = { n: dbGroup.length, wins: dbWins, pct: Math.round(dbWins/dbGroup.length*1000)/10 };
     }
@@ -2106,7 +2118,7 @@ async function reportOpponentProfile(sql) {
   }
 
   // ── Section 8: BWC opponent profile ──
-  var bwcSnaps = allSnaps.filter(function(s) { return s.floor >= 0.60 && s.margin >= 2; });
+  var bwcSnaps = allSnaps.filter(function(s) { return s.floor >= 0.60 && s.ctrlMargin >= 2; });
   var bwcOppCount = {};
   for (var bc = 0; bc <= 5; bc++) {
     var bcSnaps = bwcSnaps.filter(function(s) { return s.oppCount === bc; });
@@ -2117,7 +2129,7 @@ async function reportOpponentProfile(sql) {
   }
 
   return {
-    description: 'Opponent indicator profile vs BUY/BWC alert accuracy. Opponent indicators inverted from home-relative I1-I5.',
+    description: 'Opponent indicator profile vs BUY/BWC alert accuracy. Ctrl-relative margin. Opponent indicators inverted from home-relative I1-I5.',
     buy_eligible: { total: buySnaps.length, win_rate: Math.round(buySnaps.filter(function(s){return s.won;}).length/buySnaps.length*1000)/10 },
     opponent_individual_indicators: oppIndividual,
     opponent_indicator_count: oppCountBuckets,
