@@ -1,8 +1,8 @@
 # Alert System v2 — Test Harness Handoff
 
-**Date:** April 17, 2026 (updated end of session 3)
-**File:** `netlify/functions/test-v2-engine.mjs` (~955 lines)
-**HEAD:** `e9c3dec` on `main`
+**Date:** April 17, 2026 (updated end of session 6)
+**File:** `netlify/functions/test-v2-engine.mjs` (~1,120 lines)
+**HEAD:** `8b3c620` on `main`
 **Deployed:** Yes (Netlify auto-deploy)
 
 ---
@@ -103,9 +103,9 @@ Verified on 3 games: GSW@LAC 4/15, POR@PHX 4/14, GSW@SAC 4/10. Each context pack
 `trigger_idx` param added for single-trigger agent testing (avoids Netlify timeout).
 Usage: `?game_id=X&mode=agent&trigger_idx=N`
 
-### Test 5: Agent Prompt Quality — ✅ VALIDATED (31/31 triggers, 0 wrong)
+### Test 5: Agent Prompt Quality — ✅ VALIDATED (41/41 triggers, 0 wrong)
 
-**Session 3 commits (7 total):**
+**Sessions 1-3 commits (7 total):**
 
 1. `e038fd4` — Bump max_tokens 500→600
 2. `4ca9f41` — Add score line to agent prompt (away-home with team side label)
@@ -145,6 +145,24 @@ Usage: `?game_id=X&mode=agent&trigger_idx=N`
 | ORL@PHI | EXIT Q2 5:42 | SEND | ✅ | TEMPORARY — PHI recovered, correct at decision time |
 | **Total** | **31 triggers** | **0 wrong** | **✅** | **6 games, every archetype covered** |
 
+**Session 6 — Sequential Compounding (GSW@SAC full arc with trend signals):**
+
+| Game | Trigger | Decision | Correct? | Refs Trends? |
+|------|---------|----------|----------|-------------|
+| GSW@SAC | BUY CAND Q2 11:48 (GSW) | SUPPRESS | ✅ | No |
+| GSW@SAC | BUY FIRED Q2 10:44 (GSW) | SUPPRESS | ✅ | No |
+| GSW@SAC | BUY CAND Q2 8:52 (GSW) | SUPPRESS | ✅ | Yes (FALLING) |
+| GSW@SAC | BWC_EDGE Q3 8:58 | SEND | ✅ | No |
+| GSW@SAC | POSITION_SAFE Q3 7:59 | SEND | ✅ | No |
+| GSW@SAC | BWC_EDGE Q3 6:17 | SEND | ✅ | No |
+| GSW@SAC | BWC_EDGE Q3 3:37 | SEND | ✅ | No |
+| GSW@SAC | BUY FIRED Q3 2:31 (SAC warm) | SEND | ✅ | No |
+| GSW@SAC | POSITION_RECOVERING Q3 1:43 | SEND | ✅ | No |
+| GSW@SAC | **BUY CAND Q4 12:00 (+700)** | **SEND** | **✅** | **Yes (CONVERGING)** |
+| **Total** | **10 triggers** | **0 wrong** | **✅** | **2/10 referenced, 0 load-bearing** |
+
+**Cumulative: 41/41 correct across sessions 1-6 (0 wrong decisions).**
+
 **Archetypes validated:**
 - BWC → collapse → EXIT (GSW@LAC 4/15) ✅
 - BWC → LEAD_LOST → BUY +700 (GSW@SAC) ✅ — full 15-trigger chain
@@ -158,9 +176,21 @@ Usage: `?game_id=X&mode=agent&trigger_idx=N`
 - DAL@SAS: blowout (BWC EDGE/VALUE cycling, SAS won by 19+)
 - GSW@LAC 4/12: BWC → LEAD_LOST → recovers (similar to ORL@PHI)
 
-### Test 6: Monitor Enrichment — ⬜ NOT STARTED (non-blocking)
+### Test 6: Monitor / Trend Signal Validation — ✅ RESOLVED (monitor killed)
 
-Compare v1 vs v2 monitor prompts at 5-6 key moments. ~$1-2. Non-blocking for v2 ship.
+Tested whether monitor agent or inline trend signals (momentum, sustArc, floorMarginRel) improve agent decisions. GSW@SAC full arc: 14 triggers, 10 tested with sequential compounding via `test_decisions` table. **0 decisions changed from baseline.** Trend signals referenced 2/10 times (reinforcing only, never load-bearing). Agent reads what it needs from indicators + erosion + floor trajectory + prior trail.
+
+**Commits (8 total, session 6):**
+1. `bc82e92` — Test 6: Monitor enrichment A/B (`computeMonitorContext`, `&monitor=true`)
+2. `001eddc` — Fix: thread `useMonitor` through BWC transition code path
+3. `c5d3981` — Refactor: inline trend signals, kill separate monitor path (-51 lines)
+4. `8eb69ca` — Add momentum back to inline trend signals
+5. `6b2c300`→`f8d217c`→`42d76b1` — Dedup stale polls, window 6 deduped, raw 40
+6. `0b4b680` — Trigger range batching (`trigger_idx=0-6`)
+7. `2f2bb5c` — Sequential compounding via `test_decisions` table
+8. `7e0ce3a` — Fix clock comparison (numeric, not string)
+
+**Verdict:** Kill monitor. Do NOT wire trend signals to production. Two-layer authority (engine + agent).
 
 ### Test 7: Velocity Guard — ⬜ NOT STARTED
 
@@ -194,22 +224,23 @@ Base URL: `https://poetic-starlight-aa8938.netlify.app/.netlify/functions`
 
 | File | Lines | Role |
 |------|-------|------|
-| `netlify/functions/test-v2-engine.mjs` | ~925 | Test harness (this work) |
+| `netlify/functions/test-v2-engine.mjs` | ~1,120 | Test harness (sessions 1-6) |
 | `netlify/functions/poll-live-bdl.mjs` | ~5,800+ | Production polling (v1 — will be modified for v2) |
-| `TIERED_ALERT_SPEC.md` | 877 | v2 spec (needs rewrite based on test findings) |
-| `V2_TEST_HANDOFF.md` | — | This document |
+| `V2_AGENT_RULES.md` | ~256 | **Canonical agent rules — single source of truth** |
+| `V2_TEST_HANDOFF.md` | — | This document (test plan + results) |
+| `TIERED_ALERT_SPEC.md` | 877 | Old v2 spec (needs full rewrite from agent rules) |
 | `netlify/functions/backtest-nba-snapshots.mjs` | ~3,300 | Phase 2 backtest engine |
 
 ---
 
-## Immediate Next Steps (Session 4)
+## Immediate Next Steps (Session 7)
 
-1. **Sonnet snapshot injection — production fix.** Trace where in `poll-live-bdl.mjs` auto-analysis writes to snapshots table and stop it. 252 contaminated snapshots (13.3%) across 9 games. Test harness has workaround but production still polluted.
-2. **Wire v2 to production.** Agent prompt validated at 31/31 — ready to replace v1 alert agent in `poll-live-bdl.mjs`. This is the main deliverable.
-3. **POR@DEN BUY noise.** 13 BUY triggers in a no-BWC game. Options: tighter mechanical gate for cold BUYs, indicator count minimum, or per-period cap. Low priority — agent suppresses correctly.
-4. **Test 6: Monitor enrichment.** Compare agent decisions with/without monitor context at key moments. Non-blocking.
-5. **Test 7: Velocity guard.** GSW@LAC Q4 12:00 auto-analysis with COLLAPSE erosion — would agent suppress "strengthening" update?
-6. **TIERED_ALERT_SPEC.md rewrite.** Old spec built on bad data. Replace with V2_AGENT_RULES.md as canonical source.
+1. **Write finalized spec.** `TIERED_ALERT_SPEC.md` full rewrite from V2_AGENT_RULES.md + test results (41/41). This is the build blueprint.
+2. **Wire v2 to production.** Agent prompt validated — replace v1 alert agent in `poll-live-bdl.mjs`. Main deliverable.
+3. **Sonnet snapshot injection — production fix.** Trace where in `poll-live-bdl.mjs` auto-analysis writes to snapshots table and stop it. 252 contaminated snapshots (13.3%).
+4. **Deprecate monitor agent.** Remove monitor Sonnet calls from poll loop, `gatherAgentContext`, `formatSonnetPrompt`. Keep `monitor_observations` table for now (historical data).
+5. **POR@DEN BUY noise.** 13 BUY triggers in no-BWC game. Low priority — agent suppresses correctly.
+6. **Test 7: Velocity guard.** GSW@LAC Q4 12:00 auto-analysis with COLLAPSE erosion.
 
 ---
 
@@ -243,8 +274,22 @@ Base URL: `https://poetic-starlight-aa8938.netlify.app/.netlify/functions`
 
 ---
 
+## Architecture Decisions Made Session 6
+
+**19. Kill the monitor agent.** The separate Sonnet-based monitor (narrating game state every 3 polls to `monitor_observations` table) is dead. Its three unique signals (momentum, sust arc, floor-margin relationship) are mechanical computations on snapshot data — they don't require Sonnet. Tested as inline trend signals; proven redundant. 0/10 decisions changed.
+
+**20. Two-layer authority.** Was three-layer (engine → monitor → agent). Now two-layer (engine → agent). Engine computes I1-I5, floor, erosion, BWC state, conviction. Agent (Opus) decides SEND/SUPPRESS from engine output + floor trajectory + prior trail.
+
+**21. Sequential compounding via DB.** `test_decisions` table stores agent decisions across requests (PRIMARY KEY game_id, trigger_idx, monitor). Each trigger loads all prior stored decisions, injects into priorAlertTrail with real reasoning. Produces richer body text but same decisions as isolated tests.
+
+**22. Snapshot dedup for trend signals.** Pull 40 raw snapshots, dedup consecutive same-period+clock entries, take last 6 unique. Halftime alone generates ~28 stale polls at same clock — must widen raw window and dedup. (Moot for production since trend signals not being wired, but pattern documented for future snapshot windowing.)
+
+**23. Clock comparison must be numeric.** `parseClockSecs()` required — string comparison of clocks is wrong ("6:58" > "10:44" lexicographically). Bug caused SAC's BWC fire at Q2 6:58 to leak into Q2 10:44 trail as "prior" alert. Fixed with numeric seconds conversion.
+
+---
+
 ## Deferred Decisions
 
 - **COLD→STALLED rename:** Agreed, deferred — touches many files.
-- **Spec rewrite:** `TIERED_ALERT_SPEC.md` needs full rewrite based on test findings + new directional filtering architecture. Do after tests validate.
-- **Monitor as veto authority:** Monitor must earn trust from live data before being given override power. Current role: enrichment context for agent, not override.
+- **Spec rewrite:** `TIERED_ALERT_SPEC.md` needs full rewrite based on test findings + V2_AGENT_RULES.md. Priority for session 7.
+- ~~**Monitor as veto authority:** Monitor must earn trust from live data before being given override power.~~ **KILLED (Test 6).** Monitor proven redundant — 0 decisions changed. Two-layer authority (engine + agent). Do not wire to production.
