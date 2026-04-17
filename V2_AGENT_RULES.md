@@ -1,7 +1,7 @@
 # V2 Agent Rules — Living Spec
 
 **Purpose:** Single source of truth for every agent prompt decision. Read this when wiring to production.
-**Last updated:** April 17, 2026 (session 3)
+**Last updated:** April 17, 2026 (session 6 — monitor/trend signal verdict)
 
 ---
 
@@ -15,7 +15,7 @@
 **Rule:** Standard evaluation — floor, indicators, TP, deficit depth. When `bwcTeamMatch: YES`, the agent has BWC lifecycle context and should reference the position arc ("SAC is in VALUE lifecycle, BWC fired Q2"). BUY coexists with lifecycle alerts — lifecycle tracks position health for holders, BUY identifies entry/re-entry opportunities at plus-money. A BUY with BWC context is a "warm BUY" (thesis history backing it); a BUY with no BWC lifecycle is a "cold BUY" (structurally interesting but unproven).
 **Gates:** Period ≥ 2, trailing 1-15, clock ≥ 1:00, 3-min cooldown between BUY fires.
 **SUPPRESS when:** TP NO PATH/UNLIKELY in Q4, < 2 indicators won, ctrl sust COLD/MIXED with opp DURABLE/LOCKED IN, floor declining, deficit > 7 without exceptional structural case.
-**Validated:** GSW@SAC Q2 11:48 CANDIDATE (SUPPRESS — GSW only I3, opp has I1, TP NO PATH). GSW@SAC Q2 10:44 FIRED (SUPPRESS — GSW I2+I3 only, variance-driven). GSW@SAC Q4 12:00 CANDIDATE bwcTeamMatch:YES (SEND — +700 money shot, I1+I4 retained, BWC lifecycle context). POR@DEN Q4 10:02 FIRED (SUPPRESS — trailing 15, outside sweet spot, opp DURABLE). POR@DEN Q4 4:19 FIRED (SUPPRESS — trailing 9, TP UNLIKELY, "cold BUY" with no BWC lifecycle). MIA@CHA Q2 BUY (SUPPRESS — CHA only I4, sust COLD).
+**Validated:** GSW@SAC Q2 11:48 CANDIDATE (SUPPRESS — GSW only I3, opp has I1, TP NO PATH). GSW@SAC Q2 10:44 FIRED (SUPPRESS — GSW I2+I3 only, variance-driven). GSW@SAC Q2 8:52 CANDIDATE (SUPPRESS — FALLING momentum, CAUTION erosion, NO PATH; first trigger where trend signal was referenced but not load-bearing). GSW@SAC Q3 2:31 FIRED bwcTeamMatch:YES (SEND — warm BUY, SAC trailing 1, floor 0.73 above BWC fire 0.68, I1+I4+I5, STRONG RECOVERY, VALUE lifecycle; compounding trail references prior BWC_EDGE chain). GSW@SAC Q4 12:00 CANDIDATE bwcTeamMatch:YES (SEND — +700 money shot, I1+I4 retained, BWC lifecycle context). POR@DEN Q4 10:02 FIRED (SUPPRESS — trailing 15, outside sweet spot, opp DURABLE). POR@DEN Q4 4:19 FIRED (SUPPRESS — trailing 9, TP UNLIKELY, "cold BUY" with no BWC lifecycle). MIA@CHA Q2 BUY (SUPPRESS — CHA only I4, sust COLD).
 
 ### BWC_EDGE (LOCK → EDGE)
 **When:** BWC team's lead compressed to 1-2. Subscriber already holds position.
@@ -23,7 +23,7 @@
 **Rule:** Position update with RISK line. Frame as reassurance, not action signal. MUST include specific forward-looking RISK concern. If prior alerts flagged a RISK, reference whether it materialized.
 **Body format:** Status (2-3 sentences) + "RISK: [specific concern with indicators/thresholds that would trigger next state change]"
 **Rationale:** Subscriber wants to know their position is holding. Silence = anxiety. RISK line creates accountability chain — each alert references prior risks, building a narrative your brother can follow on ntfy.
-**Validated:** GSW@SAC trigger 1 (SEND + RISK: FRAGILE sust flagged). GSW@SAC trigger 5 (SEND — prior FRAGILE risk materialized, new RISK: floor approaching fire floor).
+**Validated:** GSW@SAC trigger 1 (SEND + RISK: FRAGILE sust flagged). GSW@SAC trigger 5 (SEND — prior FRAGILE risk materialized, new RISK: floor approaching fire floor). GSW@SAC full arc (triggers 3-6, all SEND — compounding trail builds RISK chain across Q3, each alert references prior risk materialization, body quality excellent without trend signals).
 
 ### VALUE (EDGE → VALUE, or LOCK → VALUE)
 **When:** BWC team lost lead but retains structural control. Trailing 1-7 or tied.
@@ -47,7 +47,7 @@
 **SUPPRESS only if:** BWC team lost I1+I4 (structural core gone), OR opponent has non-I3 structural indicators (I1/I2/I4), OR TP NO PATH/UNLIKELY with < 3 min left.
 **Cooldown:** EXEMPT from 3-min universal cooldown. EXIT→VALUE is always significant.
 **Rationale:** Without exemption, +700 SAC entry at Q4 12:00 was eaten by cooldown from Q3 0:00 EXIT.
-**Validated:** GSW@SAC trigger 10 (SEND — Q4 12:00, +700, I1+I4, oppI3). GSW@SAC trigger 11 (SEND — Q4 8:56, I1+I4, STRONG RECOVERY). MIA@CHA trigger 2 (SUPPRESS — I4 lost, structural core broken, TP NO PATH).
+**Validated:** GSW@SAC trigger 10 (SEND — Q4 12:00, +700, I1+I4, oppI3). GSW@SAC trigger 11 (SEND — Q4 8:56, I1+I4, STRONG RECOVERY). GSW@SAC trigger 9 full-compounding (SEND — Q4 12:00 with 9 prior stored decisions, full BWC lifecycle trail from Q2 through Q3 collapse; body honestly flags COLLAPSE erosion + "higher-risk VALUE entry," references prior RISK chain; same decision as isolated test but richer context). MIA@CHA trigger 2 (SUPPRESS — I4 lost, structural core broken, TP NO PATH).
 
 ### EXIT (VALUE → EXIT, EDGE → EXIT, LOCK → EXIT)
 **When:** BWC team lost structural control. Ctrl flipped to opponent.
@@ -61,7 +61,7 @@
 **When:** BWC team recovering from degraded state.
 **Default:** SEND if prior alerts flagged risks or concerns. SUPPRESS if nothing changed and no prior risk to update on.
 **Rule:** Include whether prior RISK materialized. Write reasoning for compounding either way.
-**Validated:** GSW@SAC Q3 7:59 POSITION_SAFE (SEND — prior RISK didn't materialize, floor 0.80, 4/5 indicators). ORL@PHI Q2 0:42 EXIT→LOCK recovery. ORL@PHI Q4 7:21 final recovery (SEND — floor surged to 0.80, 4/5 indicators after full EXIT→recovery→EDGE→recovery cycle).
+**Validated:** GSW@SAC Q3 7:59 POSITION_SAFE (SEND — prior BWC_EDGE RISK addressed, floor stabilized 0.80, 4/5 indicators, compounding trail references trigger 3 reasoning). GSW@SAC Q3 1:43 POSITION_RECOVERING (SEND — recovery confirmed after VALUE dip, prior margin compression resolved, opp sust DEGRADING from LOCKED IN→MIXED). ORL@PHI Q2 0:42 EXIT→LOCK recovery. ORL@PHI Q4 7:21 final recovery (SEND — floor surged to 0.80, 4/5 indicators after full EXIT→recovery→EDGE→recovery cycle).
 
 ### BUY WINDOW CLOSING (initial BWC fire)
 **When:** First detection of structural lead — 3+ consecutive holds, floor ≥ 0.60, leading 2+, period ≥ 2.
@@ -157,10 +157,9 @@ Q3 3:37 BWC_EDGE → Prior floor risk not yet triggered, but margin down to 1
 
 ## Architecture Principles (from prior specs)
 
-### Three-Layer Authority
-1. **Engine** computes I1-I5, floor, conviction (mechanical, immutable)
-2. **Monitor** narrates game state (Sonnet, observational — not in test harness yet)
-3. **Agent** decides SEND/SUPPRESS (Opus, sees engine + monitor + trail)
+### Two-Layer Authority (was Three-Layer — monitor killed Test 6)
+1. **Engine** computes I1-I5, floor, conviction, erosion, BWC state machine (mechanical, immutable)
+2. **Agent** decides SEND/SUPPRESS (Opus, sees engine output + floor trajectory + prior alert trail)
 
 ### BUY vs Lifecycle
 - **BUY** = structurally dominant team trailing at plus-money. Fires for ANY team, including BWC team. Identifies entry/re-entry opportunities.
@@ -168,8 +167,38 @@ Q3 3:37 BWC_EDGE → Prior floor risk not yet triggered, but margin down to 1
 - **They coexist.** A subscriber might get a BWC_EDGE (position update) AND a BUY CANDIDATE (entry signal) near the same moment. Different purposes: lifecycle says "your position is X," BUY says "there's an entry at Y odds."
 - **Forcing function:** GSW@SAC Q4 12:00 — v1 correctly fired BUY CANDIDATE at +700. v2 initially blocked it with `!isBwcGame` guard, causing the money shot to fall through the cracks. Fixed session 3.
 
-### Monitor Role (deferred — Test 6)
-Monitor enriches agent context but has no veto authority. Must earn trust from live data before being given override power. Current role: reinforcing witness.
+### Monitor Role — KILLED (Test 6, Apr 17)
+
+**Verdict:** The separate monitor agent is dead. Trend signals (momentum, sustArc, floorMarginRel) were tested as inline mechanical computations on the v2 context package across GSW@SAC full arc (14 triggers, 10 tested with compounding).
+
+**Test results:**
+- **10/10 correct decisions** with trend signals + sequential compounding
+- **0 decisions changed** from baseline (31/31 without trend signals in sessions 1-3)
+- Trend signals referenced in **2 of 10** triggers (triggers 2 and 9)
+- In both cases, trend signals **reinforced** a decision already determined by indicators + erosion + BWC lifecycle
+- Agent independently derived the same insights from raw data (floor trajectory, indicator counts, erosion level) without labels
+
+**What was tested:**
+- `momentum`: RISING/FALLING/STABLE with streak count + delta (computed from 6 deduped snapshots)
+- `sustArc`: IMPROVING/DEGRADING/STABLE of opponent sustainability over snapshot window
+- `floorMarginRel`: ALIGNED/DIVERGING/CONVERGING — whether floor and margin move together
+
+**Why it doesn't matter:**
+The v2 context package already contains everything the agent needs: 6-snapshot floor history with scores, erosion level + peak delta, indicator scores, opponent profile, BWC lifecycle state, and prior alert trail with reasoning. The agent reads what it needs from these fields directly. Pre-digested labels like "FALLING(5, -0.05)" don't save meaningful reasoning steps — the agent counts from the floor trajectory in the same prompt.
+
+**Architectural wins from killing monitor:**
+- Eliminates cadence mismatch (monitor every 3 polls vs mechanical every poll)
+- Eliminates window mismatch (monitor 8 snapshots vs context 6)
+- Eliminates perspective mismatch (monitor ctrl team may differ from current poll)
+- Saves ~$2-3/hour Sonnet cost during live games
+- Removes `monitor_observations` table writes (DB load reduction)
+- Simplifies production wiring — no monitor prompt, no observation storage, no injection pipeline
+
+**Production implications:**
+- Do NOT wire `computeMonitorContext()` or `trendSignals` to production
+- Do NOT pass `&monitor=true` in production alert calls
+- The `monitor_observations` table and existing monitor agent code in `poll-live-bdl.mjs` can be deprecated
+- Monitor context injection in `gatherAgentContext`, `formatSonnetPrompt`, `fireCalibrationAnalysis`, and `analyze.js` POST body can be removed when convenient
 
 ---
 
@@ -179,11 +208,49 @@ Monitor enriches agent context but has no veto authority. Must earn trust from l
 - ~~`max_tokens` at 500 truncates BWC_EDGE bodies with RISK lines. Bump to 600.~~ DONE (session 3).
 - ~~Score display bug — agent misread away-home score format.~~ FIXED (session 3, added explicit score line to prompt).
 - ~~BUY gate blocking BWC team — `!isBwcGame` guard prevented +700 money shot.~~ FIXED (session 3, BWC restriction removed).
+- ~~Monitor enrichment (Test 6).~~ RESOLVED — trend signals tested, proven redundant, monitor killed. See Architecture Principles.
 - POR@DEN has 13 BUY triggers in no-BWC game — may need tighter mechanical gating for BUY-only archetype or stronger cooldown.
-- Monitor enrichment (Test 6) not yet wired to test harness.
 - Velocity guard (Test 7) — auto-analysis suppression at COLLAPSE — not yet tested.
 - COLD→STALLED rename agreed, deferred.
 - Empirical calibration of 20%/35% erosion multipliers from live data.
 - BWC ntfy titles with state tag: "BWC LOCK", "BWC EDGE".
 - Dashboard: BWC lifecycle timeline visualization.
 - WNBA/NCAAMB: VALUE/EXIT port.
+- **NEXT:** Wire v2 engine to production `poll-live-bdl.mjs`. Write finalized spec from test results (sessions 1-6: 9/9 mechanical, 41/41 agent decisions correct across 6 games).
+
+---
+
+## Test Results Summary (sessions 1-6)
+
+### Mechanical Engine: 9/9 (100%)
+
+All games: BWC state machine, erosion transitions, trigger filtering, context package assembly — zero errors.
+
+### Agent Decisions: 41/41 (100%)
+
+| Game | Archetype | Triggers | Correct | Notes |
+|------|-----------|----------|---------|-------|
+| GSW@SAC 4/10 | BWC→LEAD_LOST→BUY(+700) | 14 | 10/10* | Full compounding arc tested. Money shot SEND ✅ |
+| POR@PHX 4/11 | BWC dominant | 3 | 3/3 | Clean BWC lifecycle |
+| MIA@CHA 4/14 | BWC→EXIT→bad beat | 6 | 6/6 | EXIT SUPPRESS + OT loss by 1 |
+| ORL@PHI 4/14 | BWC→EXIT→recovery | 7 | 7/7 | Full EXIT→LOCK→EXIT→recovery cycle |
+| GSW@LAC 4/12 | BWC→COLLAPSE | 7 | 7/7 | LAC collapse correctly identified |
+| POR@DEN 4/13 | No BWC (BUY only) | 8 | 8/8 | All cold BUYs correctly suppressed |
+
+*GSW@SAC: 10 of 14 tested with full sequential compounding; remaining 4 (Q4 BWC lifecycle) deferred — all are BWC_EDGE/POSITION_RECOVERING with SEND-by-rule.
+
+### Monitor/Trend Signals (Test 6): NOT NEEDED
+
+- Baseline without signals: 31/31 correct (sessions 1-3)
+- With trend signals + compounding: 10/10 correct (session 6)
+- Decisions changed by trend signals: **0**
+- Trend signals referenced: 2/10 (reinforcing only, never load-bearing)
+- **Verdict: Kill monitor. Do not wire trend signals to production.**
+
+### Key Compounding Findings (Test 6)
+
+- Sequential compounding via `test_decisions` table works — agent reads prior reasoning and builds on it
+- Clock comparison bug found and fixed (string vs numeric — "6:58" > "10:44" lexicographically)
+- BWC transition code path had missing `useMonitor` threading — second `assembleContextPackage` call site
+- Dedup stale polls: 40 raw → dedup consecutive same-period+clock → take last 6 unique
+- Prior alert trail with real reasoning (not PENDING stubs) produces richer body text but same decisions
