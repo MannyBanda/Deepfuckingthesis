@@ -2014,7 +2014,7 @@ async function reportBWCErosion(sql) {
   }
 
   // ── Results structure ──
-  var tiers = ['A', 'B'];
+  var tiers = ['A', 'B', 'C'];
   var timings = ['early', 'mid', 'late'];
   var results = {};
   for (var t of tiers) {
@@ -2043,7 +2043,7 @@ async function reportBWCErosion(sql) {
     var prevCtrl = null, consecutiveHolds = 0;
 
     // Find first fire for each tier
-    var fires = { A: null, B: null };
+    var fires = { A: null, B: null, C: null };
 
     for (var ci = 0; ci < checkpoints.length; ci++) {
       var cp = checkpoints[ci];
@@ -2068,7 +2068,10 @@ async function reportBWCErosion(sql) {
       if ((bwcTier === 'A' || bwcTier === 'B') && !fires.B) {
         fires.B = { ci: ci, ctrl: r.ctrl, margin: ctrlMargin, cp: cp, won: !!r.ctrl_team_won };
       }
-      if (fires.A && fires.B) break;
+      if ((bwcTier === 'A' || bwcTier === 'B' || bwcTier === 'C') && !fires.C) {
+        fires.C = { ci: ci, ctrl: r.ctrl, margin: ctrlMargin, cp: cp, won: !!r.ctrl_team_won };
+      }
+      if (fires.A && fires.B && fires.C) break;
     }
 
     // Track erosion for each tier's first fire
