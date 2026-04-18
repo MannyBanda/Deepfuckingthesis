@@ -1,877 +1,876 @@
-# Tiered Alert System — Build Specification
+# Alert System v2 — Production Build Specification
 
-**Version:** 1.0
-**Date:** April 16, 2026
-**Based on:** Phase 2 backtest (1,235 games / 9,861 snapshots / 15 reports)
-**Status:** ARCHITECTURE COMPLETE — ready to implement
-
----
-
-## Problem Statement
-
-The indicator system is highly predictive (87.8% at Q4_END, DOMINANT 97.6%) but the alert layer fires too many losers. BUY is 69% overall, WINDOW BUY 62.4%. The goal is 95% per alert by mechanically filtering losers before the agent sees them, using backtest-proven quality signals.
-
-## Key Backtest Findings Driving This Spec
-
-- **Deficit depth > conviction** for BUY: DOMINANT trailing 10+ = 93.8%, trailing 1-4 = 54.7%
-- **Close games (±5 margin) are coin flips** regardless of conviction (49-59%)
-- **I4 sub-agreement** = strongest quality filter: agree 96.7% vs disagree 75.7%
-- **Consecutive holds 6+** = 88.3% (all snaps) vs holds=1 = 61.5%
-- **Floor velocity surging** = 84.4% vs stable/new = 64.6%
-- **Peak-to-end 0.25+ drop** = 72.2% (cash-out territory)
-- **BWC** is strongest signal overall (67-94% by checkpoint)
-- **Opponent indicators** don't add a BUY gate (floor threshold self-selects), but BWC with 2+ opp indicators drops to 68.2%
-- **Opponent I3 won** (shooting quality) = 84.7% ctrl win rate — variance IS the opportunity
+**Version:** 2.0
+**Date:** April 17, 2026
+**Status:** VALIDATED — ready to wire to production
+**Evidence:** 9/9 mechanical, 41/41 agent decisions correct across 6 games, 6 test sessions
+**Replaces:** TIERED_ALERT_SPEC v1.0 (pre-harness, invalidated by test data)
+**Source:** V2_TEST_RESULTS.md, V2_AGENT_RULES.md, V2_TEST_HANDOFF.md, test-v2-engine.mjs (~1,120 lines)
 
 ---
 
-## Files Affected
+## 1. Problem Statement
 
-| File | Lines (current) | Changes | Risk |
+v1 fires disconnected alerts with no narrative continuity. Subscribers get "BUY SAC" then
+"LEAD LOST SAC" then "BUY WINDOW CLOSING SAC" with no thread connecting them.
+
+**Forcing function:** GSW@LAC 4/15 — LAC 0.93 floor at Q4 10:23, collapsed to 0.52 by Q4 8:16,
+lost 121-126. v1 auto-analysis sent "DOMINANT strengthening" at Q4 12:00 right before collapse.
+Zero cash-out signals fired. $1,300 loss.
+
+v2 replaces flat alerts with a BWC state machine tracking one thesis team through
+LOCK → EDGE → VALUE → EXIT states. Each alert references prior alerts, building a compounding
+narrative arc.
+
+---
+
+## 2. Architecture
+
+### Two-Layer Authority (was three — monitor killed in Test 6)
+
+1. **Engine** — computes I1-I5, floor, conviction, erosion, BWC state machine. Mechanical, immutable.
+2. **Agent** (Opus 4.6) — decides SEND/SUPPRESS, writes plain-English body. Sees engine output +
+   floor trajectory + prior alert reasoning trail. Cannot override mechanical scores.
+
+### BWC State Machine
+
+Single thesis team. First team to demonstrate 3+ consecutive holds at BWC-eligible conditions
+(floor ≥ 0.60, leading 2+, period ≥ 2) becomes the BWC team. All subsequent alerts track this
+team's lifecycle:
+
+```
+LOCK (leading 3+) ←→ EDGE (leading 1-2) ←→ VALUE (tied/trailing 1-7, ctrl retained) ←→ EXIT (ctrl flipped)
+                                                                                    ↕
+                                                                              DEEP_TRAIL (trailing 8+)
+```
+
+Transitions classified as:
+- **DEGRADING** (subscriber needs to act): LOCK→EDGE, EDGE→VALUE, *→EXIT
+- **RECOVERING** (position validation): EXIT→VALUE (THESIS_ALIVE), VALUE→EDGE, *→LOCK
+- **LATERAL** (noise, filtered): same-rank transitions
+
+### Alert Types
+
+| Type | When | Default | Agent? |
 |---|---|---|---|
-| `poll-live-bdl.mjs` | 5,957 | Heavy — L1/L2/L3/L4 all touch this | HIGH |
-| `db-api.js` | 2,430 | Schema migrations only | LOW |
-| `analyze.js` | 862 | Velocity guard on client auto-analysis | LOW |
-| `bdl.html` | ~12,300 | None in this spec | NONE |
-| `debug.html` | ~3,200 | None in this spec | NONE |
+| BUY WINDOW CLOSING | Initial BWC fire (3-hold minimum) | SEND | Yes — establishes position |
+| BWC_EDGE | LOCK→EDGE (lead compressing to 1-2) | ALWAYS SEND | Yes — must include RISK line |
+| VALUE | Lead lost, ctrl retained (tied/trailing 1-7) | Agent decides | Yes |
+| EXIT | Ctrl flipped to opponent | ALWAYS SEND | Yes — cash-out signal |
+| THESIS_ALIVE | EXIT→VALUE (regained ctrl after losing it) | Agent decides | Yes — cooldown exempt |
+| POSITION_SAFE | Recovery to LOCK | SEND if prior risk | Yes |
+| POSITION_RECOVERING | Recovery to EDGE | SEND if prior risk | Yes |
+| BUY | Dominant team trailing, any game | Agent decides | Yes — warm/cold distinction |
+
+### BUY Coexists with Lifecycle
+
+BUY fires for ANY structurally dominant team trailing — including the BWC team. After BWC fires,
+lifecycle alerts (VALUE, EXIT, THESIS_ALIVE) track position health. BUY identifies entry/re-entry
+at plus-money. A BUY with BWC context = "warm BUY" (thesis history). BUY without = "cold BUY"
+(unproven, higher bar).
+
+### What Dies
+
+| v1 Alert | Replacement |
+|---|---|
+| WINDOW BUY (54% accuracy) | Killed — no replacement |
+| LEAN BUY (17% accuracy) | Killed (already dead) |
+| RECOVERY PATH | THESIS_ALIVE (EXIT→VALUE) |
+| LEAD CRUMBLING | BWC_EDGE (LOCK→EDGE) + erosion detection |
+| LEAD LOST | VALUE (lead lost, ctrl retained) or EXIT (ctrl lost) |
+| VARIANCE BREAKING | Agent context on opponent sustainability — not a separate type |
+| Monitor agent (Sonnet) | Killed — proven redundant in Test 6 (0/41 decisions changed) |
 
 ---
 
-## LAYER 1: New Metrics (Compute Layer)
+## 3. Files Affected
 
-### L1.1 — I4 Sub-Agreement
-
-**What:** Expose I4 subA and subB scores from `computeServer()`, compute agreement in `computeConviction()`.
-
-**Current code (poll-live-bdl.mjs lines 1740-1753):**
-```js
-// I4 — Game Control
-const hBigLead = hs.biggest_lead || 0, aBigLead = as.biggest_lead || 0;
-const bigLeadDiff = hBigLead - aBigLead;
-const i4subA = bigLeadDiff > 4 ? 1 : bigLeadDiff < -4 ? -1 : 0;
-let i4subB = 0;
-// ... computes i4subB from periods/seasonQ4 ...
-const i4raw = i4subA + i4subB;
-const I4 = { score: i4raw > 0 ? 1 : i4raw === 0 ? 0.5 : 0, leader: ... };
-```
-
-**Change:** Add `i4subA` and `i4subB` to the I4 object returned by `computeServer()`.
-
-**Current return (line ~1773):**
-```js
-return {
-  controlTeam, score, I1, I2, I3, I4, I5,
-  homeAlias: hA, awayAlias: aA, homePts: hS, awayPts: aS,
-};
-```
-
-**New return:**
-```js
-// I4 object changes from:
-const I4 = { score: ..., leader: ... };
-// to:
-const I4 = { score: ..., leader: ..., subA: i4subA, subB: i4subB };
-```
-
-**Then in `computeConviction()` (line ~1779), add I4 sub-agreement computation:**
-
-**Current return (line ~1833):**
-```js
-return { tier, combo, count, indicatorsWon: wins, indicatorsLost: loses,
-         indicatorsEven: even, pairs, isDanger };
-```
-
-**New return:**
-```js
-// Compute I4 sub-agreement
-const ctrlI4subA = ctrlHome ? ind.I4.subA : -ind.I4.subA;
-const ctrlI4subB = ctrlHome ? ind.I4.subB : -ind.I4.subB;
-const i4SubAgree = (ctrlI4subA > 0 && ctrlI4subB > 0) ? 'AGREE'
-                 : (ctrlI4subA < 0 || ctrlI4subB < 0) && (ctrlI4subA > 0 || ctrlI4subB > 0) ? 'DISAGREE'
-                 : 'MIXED';  // one or both are 0
-
-return { tier, combo, count, indicatorsWon: wins, indicatorsLost: loses,
-         indicatorsEven: even, pairs, isDanger, i4SubAgree };
-```
-
-**Cascading implications:**
-- `conviction` object is used in ~15 places in poll-live-bdl.mjs. Adding a new field is additive — no existing code breaks.
-- The backtest `computeConviction` (backtest-nba-snapshots.mjs line ~405) is a SEPARATE copy. Does NOT need this change (backtest already has its own I4 split report).
-- Alert agent ctx already passes `conviction.tier`, `conviction.combo`. New field `conviction.i4SubAgree` needs to be added to the agent ctx object (see L3).
-- Client-side `computeConviction` in `bdl.html` is also a separate copy. NOT touched in this spec. Can be synced later.
-
-**Mitigation:** Test with `node -c`. The I4 object shape change ({score, leader} → {score, leader, subA, subB}) is additive. Grep for `ind.I4.score` and `ind.I4.leader` to confirm no destructuring breaks.
-
-```bash
-grep -n "I4\.score\|I4\.leader\|I4\.subA\|I4\.subB" netlify/functions/poll-live-bdl.mjs
-```
+| File | Lines (current) | Net Change | Risk |
+|---|---|---|---|
+| `poll-live-bdl.mjs` | 5,957 | ~-470 (add ~300, remove ~770) | HIGH |
+| `db-api.js` | 2,430 | +15 | LOW |
+| `analyze.js` | 862 | -20 | LOW |
+| `bdl.html` | ~12,235 | -15 | LOW |
+| `post-game-agent.mjs` | ~270 | ~5 | LOW |
 
 ---
 
-### L1.2 — Per-Game Live Tracking State
+## 4. DB Schema Changes (`db-api.js`)
 
-**What:** Track peak floor, trough floor, consecutive holds per game. Persisted to DB so Netlify cold starts don't lose state.
+### 4a. New column on `games` table
 
-**Storage decision:** JSONB column on `games` table. The `games` table already has per-game live state (`prev_tp_class`, `prev_ctrl_team`, etc. — see db-api.js lines 156-166). Adding `live_tracking JSONB` is consistent.
+Insert after line 173 (after `away_lead_degraded_at` ALTER):
 
-**Schema change (db-api.js):**
 ```js
-// Add after line 166 (existing ALTER TABLE games block):
 try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS live_tracking JSONB`; } catch(e) {}
 ```
 
-**JSONB shape:**
+**JSONB shape** (written every poll cycle per game):
+
 ```json
 {
   "home_peak_floor": 0.93,
   "home_peak_time": "Q3 2:15",
-  "home_trough_floor": 0.42,
-  "home_trough_time": "Q1 8:30",
   "away_peak_floor": 0.71,
   "away_peak_time": "Q2 6:44",
-  "away_trough_floor": 0.55,
-  "away_trough_time": "Q1 11:00",
   "ctrl_team_current": "LAC",
   "ctrl_team_holds": 8,
-  "last_floor": 0.85
+  "bwc_fired": {
+    "team": "SAC",
+    "period": 2,
+    "clock": "6:58",
+    "floor": 0.68
+  },
+  "_prev_bwc_state": "EDGE",
+  "_bwc_candidate": null,
+  "_bwc_candidate_holds": 0,
+  "_last_any_bwc_ts": 1713400000000,
+  "_last_buy_ts": null,
+  "_last_fired_state": "EDGE",
+  "_last_fired_floor": 0.71,
+  "_last_fired_margin": 2,
+  "_last_fired_ts": 1713400000000
 }
 ```
 
-**Write location (poll-live-bdl.mjs):** After snapshot INSERT (~line 4940), before alert checks (~line 5040). This is the natural insertion point — we have `ind` (with controlTeam, score), `currentPeriod`, `clock`.
+**Cascading:** None. New column, read/write only by new poll code. If column doesn't exist
+pre-migration, SELECT returns null, code initializes fresh.
 
-**Implementation:**
+### 4b. New columns on `alerts` table
+
+Insert after line 333 (after `emerging_signal` ALTER):
+
 ```js
-// ── L1.2: Update per-game live tracking state ──
-let liveTracking = null;
+try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS bwc_state TEXT`; } catch(e) {}
+try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS erosion_level TEXT`; } catch(e) {}
+try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS peak_floor REAL`; } catch(e) {}
+try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS exit_severity TEXT`; } catch(e) {}
+```
+
+**Cascading:** Additive. No existing queries break. Alert accuracy queries in debug.html and
+post-game-agent group by `alert_type` — new types auto-appear.
+
+### 4c. Dead columns (DO NOT remove — historical data exists)
+
+Mark as deprecated in a comment. These columns are no longer written to by v2 code but contain
+historical v1 data that post-game analysis may reference:
+
+**On `games` table:**
+- `prev_home_tp_class`, `prev_home_ls_class`, `prev_home_ls_margin`, `prev_home_opp_sust`
+- `prev_away_tp_class`, `prev_away_ls_class`, `prev_away_ls_margin`, `prev_away_opp_sust`
+- `home_lead_degraded_at`, `away_lead_degraded_at`
+- `prev_tp_class`, `prev_ls_class`, `prev_opp_sust` (old single-side tracking)
+- `prev_tp_exp`, `prev_ls_exp`, `prev_ctrl_team`
+
+**On `alerts` table:**
+- `monitor_status`, `monitor_reasoning`, `monitor_ts`, `parent_alert_id`, `emerging_signal`
+
+**On `poll_state` table:**
+- `monitor_last_run`
+
+---
+
+## 5. Snapshot Contamination Fix (`poll-live-bdl.mjs`)
+
+### Root cause (diagnosed from live DB data)
+
+Two sources of non-mechanical snapshots:
+
+1. **Calibration snapshots** (source = `calibration_q1`/`calibration_q2`/`auto_q3` etc) at line 5783.
+   Indicator values ARE correct (0/0.5/1 from `computeServer`). Missing `raw_stats_json` column.
+   Fix: add the column to the INSERT.
+
+2. **Client snapshots** (source = `client`). Written by the dashboard when the Analyze button is
+   pressed. Contain **Sonnet-derived weighted indicator scores** (e.g., I1:0.25, I2:0.10) that are
+   NOT mechanical 0/0.5/1 values. These masquerade as real snapshots and cause false control flips
+   when replayed by the v2 engine.
+
+### Fix 1: Add `raw_stats_json` to calibration snapshot INSERT
+
+**Current** (line 5783-5794) — columns list ends with `ls_exp_swing)`.
+
+**Change:** Add `, raw_stats_json` to column list and `${rawStatsJson}` to values. The
+`rawStatsJson` variable is computed at line 4910 as `var` (function-scoped in the handler) and is
+accessible at line 5783.
+
+**Cascading:** None. Additive column in INSERT. Calibration snapshots now have the same audit trail
+as polling snapshots.
+
+### Fix 2: v2 engine snapshot reads filter by source
+
+All v2 code that reads snapshots for state computation (floor trajectory, prior context) must use:
+```sql
+WHERE source = 'server'
+```
+This excludes both client-written Sonnet snapshots AND calibration snapshots from before the fix.
+
+**Applies to:**
+- `gatherAgentContext` floor history query (line ~310) — add `AND source = 'server'`
+- Any new snapshot queries added for v2 context assembly
+
+The client snapshot write path itself is unchanged — it's useful for the dashboard. The v2 engine
+simply ignores non-server snapshots.
+
+---
+
+## 6. New Mechanical Functions (`poll-live-bdl.mjs`)
+
+Add as standalone functions above the main handler. Source of truth: test harness lines 80-191,
+validated 9/9. Copy and adapt (harness uses array iteration; production reads from `live_tracking`
+JSONB).
+
+### 6a. `updateLiveTracking(lt, ctrlTeam, floor, period, clock, homeAlias)`
+
+Updates peak floor and consecutive holds. Called every poll cycle after `computeServer`.
+
+```js
+function updateLiveTracking(lt, ctrlTeam, floor, period, clock, homeAlias) {
+  if (!lt) lt = {};
+  const side = ctrlTeam === homeAlias ? 'home' : 'away';
+  const peakKey = side + '_peak_floor';
+  const timeStr = 'Q' + period + ' ' + clock;
+
+  if (!lt[peakKey] || floor > lt[peakKey]) {
+    lt[peakKey] = floor;
+    lt[side + '_peak_time'] = timeStr;
+  }
+
+  if (lt.ctrl_team_current === ctrlTeam) {
+    lt.ctrl_team_holds = (lt.ctrl_team_holds || 0) + 1;
+  } else {
+    lt.ctrl_team_current = ctrlTeam;
+    lt.ctrl_team_holds = 1;
+  }
+
+  return lt;
+}
+```
+
+**Cascading:** None. New standalone function.
+
+### 6b. `computeBwcState(lt, ctrlTeam, margin)`
+
+Returns current BWC state or null if BWC hasn't fired.
+
+```js
+function computeBwcState(lt, ctrlTeam, margin) {
+  const bwcFired = lt.bwc_fired;
+  if (!bwcFired || !ctrlTeam) return null;
+
+  if (bwcFired.team === ctrlTeam) {
+    if (margin >= 3) return 'LOCK';
+    if (margin >= 1) return 'EDGE';
+    if (margin >= -7) return 'VALUE';   // tied or trailing 1-7
+    return 'DEEP_TRAIL';                // trailing 8+
+  } else {
+    return 'EXIT';                      // ctrl flipped to opponent
+  }
+}
+```
+
+### 6c. `classifyTransition(fromState, toState)`
+
+```js
+const STATE_RANK = { 'LOCK': 4, 'EDGE': 3, 'VALUE': 2, 'EXIT': 1, 'DEEP_TRAIL': 0 };
+
+function classifyTransition(fromState, toState) {
+  const fromRank = STATE_RANK[fromState] ?? -1;
+  const toRank = STATE_RANK[toState] ?? -1;
+  if (toRank < fromRank) return 'DEGRADING';
+  if (toRank > fromRank) return 'RECOVERING';
+  return 'LATERAL';
+}
+```
+
+### 6d. `computeErosion(lt, floor, homeAlias, ctrlTeam)`
+
+Peak-relative erosion detection. CAUTION at 40% edge erosion, COLLAPSE at 70%.
+
+```js
+function computeErosion(lt, floor, homeAlias, ctrlTeam) {
+  const side = ctrlTeam === homeAlias ? 'home' : 'away';
+  const peakFloor = lt[side + '_peak_floor'] || null;
+  if (!peakFloor || floor >= peakFloor) {
+    return { level: 'STABLE', peakFloor, peakDelta: 0 };
+  }
+  const peakDelta = floor - peakFloor;
+  const edgeAboveCoinFlip = peakFloor - 0.50;
+  if (edgeAboveCoinFlip <= 0) {
+    return { level: 'STABLE', peakFloor, peakDelta };
+  }
+  const cautionDelta = -(edgeAboveCoinFlip * 0.40);
+  const collapseDelta = -(edgeAboveCoinFlip * 0.70);
+  let level = 'STABLE';
+  if (peakDelta <= collapseDelta) level = 'COLLAPSE';
+  else if (peakDelta <= cautionDelta) level = 'CAUTION';
+  return { level, peakFloor, peakDelta, cautionDelta, collapseDelta };
+}
+```
+
+### 6e. `computeExitSeverity(ctrlIndicators, ctrlIndicatorCount, ctrlFloor, holds)`
+
+At EXIT, the current ctrl team IS the opponent. Assesses how structural their position is.
+
+```js
+function computeExitSeverity(ctrlIndicators, ctrlIndicatorCount, ctrlFloor, holds) {
+  const oppOnlyI3 = ctrlIndicatorCount === 1 && ctrlIndicators.includes('I3');
+  const oppHasI1 = ctrlIndicators.includes('I1');
+  const oppHasI4 = ctrlIndicators.includes('I4');
+
+  if (holds >= 5 && ctrlFloor >= 0.70 && ctrlIndicatorCount >= 2 && !oppOnlyI3) {
+    return { severity: 'STRUCTURAL_TAKEOVER',
+      reason: 'Opponent floor ' + ctrlFloor.toFixed(2) + ', ' + holds + ' holds, '
+        + ctrlIndicatorCount + ' indicators (' + ctrlIndicators.join('+') + ')' };
+  }
+  if (holds >= 3 && (oppHasI1 || oppHasI4) && ctrlFloor >= 0.60) {
+    return { severity: 'CONCERNING',
+      reason: 'Opponent structural indicators (' + ctrlIndicators.join('+') + ') with '
+        + holds + ' holds' };
+  }
+  return { severity: 'TEMPORARY',
+    reason: 'Opponent floor ' + ctrlFloor.toFixed(2) + ', ' + holds + ' holds'
+      + (oppOnlyI3 ? ', only I3 (variance)'
+        : ctrlIndicatorCount === 0 ? ', no indicators won' : '') };
+}
+```
+
+**All five functions: zero cascading implications. New standalone code.**
+
+---
+
+## 7. BWC Trigger Detection + Context Assembly (`poll-live-bdl.mjs`)
+
+### 7a. Where it goes
+
+The new BWC trigger detection block replaces the existing mechanical alert block
+(lines ~5041-5401) and transition alerts block (lines ~5403-5714). Both blocks are removed entirely
+and replaced with a single unified block.
+
+### 7b. Per-poll-cycle flow (new code, ~200 lines)
+
+```
+1. Read live_tracking from games table
+2. Call updateLiveTracking(lt, ctrlTeam, floor, period, clock, hA)
+3. Compute BWC state: computeBwcState(lt, ctrlTeam, ctrlMargin)
+4. Compute erosion: computeErosion(lt, floor, hA, ctrlTeam)
+5. Check BWC first fire conditions (3-hold, floor ≥ 0.60, leading 2+, period ≥ 2)
+6. If BWC previously fired: check state transitions → fire lifecycle alerts
+7. Check BUY triggers (FIRED ≥ 0.65, CANDIDATE 0.55-0.65, trailing 1-15, period ≥ 2)
+8. For each trigger: assemble context package → call runAlertAgent → ntfy + DB
+9. Write live_tracking back to games table
+```
+
+### 7c. Initial BWC fire detection
+
+```js
+// BWC candidate tracking — persisted in live_tracking
+if (!lt.bwc_fired && period >= 2 && floor >= 0.60 && ctrlMargin >= 2) {
+  if (lt._bwc_candidate === ctrlTeam) {
+    lt._bwc_candidate_holds = (lt._bwc_candidate_holds || 0) + 1;
+  } else {
+    lt._bwc_candidate = ctrlTeam;
+    lt._bwc_candidate_holds = 1;
+  }
+
+  if (lt._bwc_candidate_holds >= 3) {
+    lt.bwc_fired = { team: ctrlTeam, period, clock, floor };
+    const initialState = ctrlMargin >= 3 ? 'LOCK' : 'EDGE';
+    lt._prev_bwc_state = initialState;
+    // → route through agent as "BUY WINDOW CLOSING" (initial fire)
+    // → save to alerts table with bwc_state = initialState
+    // → record in game._v2Alerts for compounding trail
+  }
+} else if (!lt.bwc_fired && ctrlTeam !== lt._bwc_candidate) {
+  lt._bwc_candidate = null;
+  lt._bwc_candidate_holds = 0;
+}
+```
+
+**Cascading:** `lt._bwc_candidate*` fields persist in `live_tracking` JSONB across cold starts.
+If a game spans a deploy, the candidate tracking picks up where it left off.
+
+### 7d. State transition detection (after BWC fires)
+
+```js
+if (lt.bwc_fired) {
+  const bwcState = computeBwcState(lt, ctrlTeam, ctrlMargin);
+  const prevState = lt._prev_bwc_state;
+
+  if (bwcState && prevState && bwcState !== prevState) {
+    const direction = classifyTransition(prevState, bwcState);
+
+    // Skip LATERAL and DEEP_TRAIL (BUY handles deep trails)
+    if (direction !== 'LATERAL' && bwcState !== 'DEEP_TRAIL') {
+
+      // Map state + direction → alert type
+      let alertType = null;
+      if (direction === 'DEGRADING') {
+        if (bwcState === 'EDGE') alertType = 'BWC_EDGE';
+        else if (bwcState === 'VALUE') alertType = 'VALUE';
+        else if (bwcState === 'EXIT') alertType = 'EXIT';
+      } else if (direction === 'RECOVERING') {
+        if (bwcState === 'LOCK') alertType = 'POSITION_SAFE';
+        else if (bwcState === 'EDGE') alertType = 'POSITION_RECOVERING';
+        else if (bwcState === 'VALUE') alertType = 'THESIS_ALIVE';
+      }
+
+      if (alertType) {
+        // Apply gates (cooldown, material change) → assemble context → agent → ntfy → DB
+      }
+    }
+  }
+
+  lt._prev_bwc_state = bwcState;
+}
+```
+
+### 7e. Mechanical gates
+
+**3-minute universal cooldown** (all BWC transitions):
+```js
+const BWC_COOLDOWN_MS = 180000;
+const msSinceAnyBwc = lt._last_any_bwc_ts ? (Date.now() - lt._last_any_bwc_ts) : Infinity;
+const cooldownExempt = alertType === 'THESIS_ALIVE';  // EXIT→VALUE always fires
+const cooldownPassed = cooldownExempt || msSinceAnyBwc >= BWC_COOLDOWN_MS;
+```
+
+**Material change gate** (prevents same-direction re-fires without meaningful delta):
+```js
+const stateChanged = bwcState !== lt._last_fired_state;
+const floorDelta = Math.abs(floor - (lt._last_fired_floor || 0));
+const marginDelta = Math.abs(ctrlMargin - (lt._last_fired_margin || 0));
+const timeDelta = lt._last_fired_ts ? (Date.now() - lt._last_fired_ts) : Infinity;
+const materialChange = floorDelta >= 0.10 || marginDelta >= 5 || timeDelta >= 300000;
+const shouldFire = cooldownPassed && (stateChanged || materialChange);
+```
+
+**BUY triggers** (separate cooldown):
+```js
+const BUY_COOLDOWN_MS = 180000;
+if (period >= 2 && floor >= 0.55 && ctrlTrailing && margin >= 1 && margin <= 15
+    && alertMinsLeft >= 1.0) {
+  const msSinceLastBuy = lt._last_buy_ts ? (Date.now() - lt._last_buy_ts) : Infinity;
+  if (msSinceLastBuy >= BUY_COOLDOWN_MS) {
+    const buyTier = floor >= 0.65 ? 'FIRED' : 'CANDIDATE';
+    const bwcTeamMatch = lt.bwc_fired?.team === ctrlTeam;
+    // → assemble context with bwcTeamMatch flag → agent
+  }
+}
+```
+
+**Clock gate:** < 1 min remaining = suppress (unchanged from v1, uses `alertMinsLeft`).
+
+**Cascading:** All gate timestamps persist in `live_tracking` JSONB. Survives cold starts.
+
+### 7f. Context package assembly
+
+Built per-trigger, passed to agent. Shape matches harness `assembleContextPackage` (lines 532-675):
+
+```js
+const ctx = {
+  // Engine data
+  floor, margin: ctrlMargin, period, clock, ctrlTeam,
+  i1, i2, i3, i4, i5,                          // control-team-relative (0-1)
+  ctrlIndicators: indWon.join('+') || 'none',   // e.g., "I1+I4+I5"
+  ctrlIndicatorCount: indWon.length,
+
+  // Opponent profile
+  oppIndicatorCount, oppIndicatorsWon: oppIndWon.join('+') || 'none',
+  oppI3Won: oppIndWon.length === 1 && oppIndWon[0] === 'I3',
+
+  // Position health
+  peakFloor: erosion.peakFloor,
+  peakDelta: erosion.peakDelta,
+  erosionLevel: erosion.level,
+  consecutiveHolds: lt.ctrl_team_holds || 0,
+  bwcState,
+  bwcTeam: lt.bwc_fired?.team || null,
+  bwcFirePeriod: lt.bwc_fired?.period || null,
+  bwcFireFloor: lt.bwc_fired?.floor || null,
+
+  // Score context
+  homeAlias: hA, awayAlias: aA,
+  homePts: ind.homePts, awayPts: ind.awayPts,
+  ctrlIsHome: ctrlTeam === hA,
+
+  // Sustainability + TP/LS
+  ctrlSust, oppSust, tpClass, lsClass,
+
+  // Trail data (from DB queries)
+  floorHistory,      // last 5 server snapshots, formatted
+  priorAlertTrail,   // last 5 v2 alerts for this game, with reasoning
+};
+```
+
+**Floor history query:**
+```sql
+SELECT period, clock, floor_score, floor_team, home_pts, away_pts, tp_class, ls_class
+FROM snapshots WHERE game_id = $1 AND source = 'server'
+ORDER BY ts DESC LIMIT 5
+```
+
+**Prior alert trail query:**
+```sql
+SELECT alert_type, bwc_state, period, clock, floor_score, margin,
+       agent_decision, agent_reasoning
+FROM alerts WHERE game_id = $1 AND alert_type != 'AUTO_ANALYSIS'
+ORDER BY ts DESC LIMIT 5
+```
+
+---
+
+## 8. Agent Prompt Rewrite (`poll-live-bdl.mjs`)
+
+### 8a. `runAlertAgent()` (lines 160-280) — FULL REWRITE
+
+Replace the entire prompt string. Do not attempt to merge v1 and v2 prompts.
+
+**Function signature unchanged:**
+```js
+async function runAlertAgent(ctx) { ... }
+```
+
+**New prompt** (source: harness lines 916-965, validated 41/41):
+
+```
+You are a live NBA betting alert quality agent. A mechanical system has identified a
+potential betting signal. Your job is to assess whether it should be sent to the bettor.
+
+ALERT:
+Type: {alertType} ({alertTier})
+Control team: {ctrlTeam} | Floor: {floor} | Margin: {margin} (trailing/leading/tied)
+Score: {awayAlias} {awayPts} - {homeAlias} {homePts} ({ctrlTeam} is HOME/AWAY)
+Period: Q{period} {clock}
+BWC team (subscriber position): {bwcTeam} (NOT current ctrl team — ctrl flipped to {ctrlTeam})
+
+INDICATORS (control-team-relative):
+I1-I5 scores, won count, sust, TP, LS
+
+OPPONENT PROFILE:
+Won count, which indicators, oppI3Won flag with guidance text
+
+POSITION HEALTH:
+Peak floor, delta, erosion level, consecutive holds, BWC lifecycle state + fire info
+
+FLOOR TRAJECTORY:
+Last 5 server snapshots with TP/LS
+
+PRIOR ALERT REASONING TRAIL:
+Last 5 alerts with decisions and reasoning
+
+RULES:
+- VALUE: structural edge intact, dip temporary, plus-money entry. 1-7 sweet spot.
+- THESIS_ALIVE: deep-value — erosion is EXPECTED. Weight I1+I4 core, oppI3Won, TP path.
+- EXIT: cash-out. Frame around BWC team losing edge. Reference arc.
+- BWC_EDGE: ALWAYS SEND. Status + RISK line. Accountability chain.
+- POSITION_SAFE/RECOVERING: SEND if prior risk to update on.
+- BUY: trailing team, floor/indicators/TP/deficit depth. 1-7 sweet spot.
+- REASONING AS JOURNAL: thorough even when SUPPRESS.
+
+Respond: DECISION / REASONING / BODY
+```
+
+(Full prompt text in Section 8 of the raw spec file — too long to inline here.
+See test-v2-engine.mjs lines 916-965 for exact validated text.)
+
+**Model:** `claude-opus-4-6`
+**max_tokens:** 600
+
+**Fallback:** Agent failure → FIRED sends with mechanical fallback body, CANDIDATE drops.
+
+### 8b. What the new prompt removes vs v1
+
+| v1 Prompt Element | Status |
+|---|---|
+| I4 COMBO YES/NO rules | Replaced by indicator counting + oppI3Won |
+| MONITOR OVERRIDE PROTECTION | Removed (monitor killed) |
+| LEAN BUY / WINDOW BUY rules | Removed (killed) |
+| RECOVERY PATH / LEAD CRUMBLING / VARIANCE BREAKING rules | Replaced by lifecycle |
+| ANCHORED FLOOR CHECK | Replaced by erosion detection |
+| `ctx.monitorContext` | Removed |
+| `ctx.learningsContext` | Removed (prior alert trail replaces it) |
+| `ctx.windowScore` | Removed |
+| `ctx.i4Combo`, `ctx.i4Decisive` | Removed |
+
+### 8c. Call sites audit
+
+**v1 call sites (5) → v2 call sites (3):**
+
+| Call Site | v1 | v2 |
+|---|---|---|
+| Mechanical alerts (~line 5261) | Active | **REPLACED** by v2 lifecycle triggers |
+| RECOVERY PATH (~line 5482) | Active | **REMOVED** |
+| LEAD CRUMBLING (~line 5544) | Active | **REMOVED** |
+| VARIANCE BREAKING (~line 5653) | Active | **REMOVED** |
+| Auto-analysis (~line 3936) | Active | **KEPT** (separate system) |
+| v2 BWC lifecycle triggers | — | **NEW** |
+| v2 BUY triggers | — | **NEW** |
+
+**Auto-analysis compatibility:** The auto-analysis call at line 3936 passes v1-shaped ctx with
+fields like `ctx.i4Combo`, `ctx.monitorContext`. These fields don't appear in the v2 prompt
+template string — they're harmlessly ignored. Fields that ARE used (`ctx.alertType`, `ctx.floor`,
+`ctx.margin`, etc.) are already present. **No changes needed to auto-analysis ctx construction.**
+
+**Verification post-build:** grep for all `runAlertAgent(` calls. Must find exactly 3:
+auto-analysis (~line 3936), v2 lifecycle triggers (new), v2 BUY triggers (new).
+
+---
+
+## 9. Auto-Analysis Enhancement (`poll-live-bdl.mjs`)
+
+### 9a. Pass `live_tracking` to `fireCalibrationAnalysis`
+
+**Current signature** (line 3654):
+```js
+async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, leadComp,
+  espnWP, odds, matchup, hA, aA, period, clock, trigger)
+```
+
+**New signature** — add `liveTracking` parameter:
+```js
+async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, leadComp,
+  espnWP, odds, matchup, hA, aA, period, clock, trigger, liveTracking)
+```
+
+**Call site** (line 5835) — add `lt` as final argument:
+```js
+fireCalibrationAnalysis(sql, game, league, summary, ind, sust, leadComp,
+  espnWP, odds, matchup, hA, aA, currentPeriod, clock, t.trigger, lt)
+```
+
+**Usage inside function:** Before the agent call (~line 3936), compute erosion/BWC state and
+format into the agent's context so auto-analysis Sonnet sees the position health:
+
+```js
+let erosionContext = '';
+if (liveTracking?.bwc_fired) {
+  const ero = computeErosion(liveTracking, ind.score, hA, ind.controlTeam);
+  const bState = computeBwcState(liveTracking, ind.controlTeam, margin);
+  erosionContext = '\nBWC STATE: ' + (bState || 'none') + ' | Erosion: ' + ero.level
+    + (ero.peakFloor ? ' (peak ' + ero.peakFloor.toFixed(2) + ', delta '
+      + ero.peakDelta.toFixed(3) + ')' : '')
+    + ' | Holds: ' + (liveTracking.ctrl_team_holds || 0);
+}
+```
+
+This fixes the GSW@LAC failure mode — agent sees COLLAPSE and reframes naturally.
+
+### 9b. POSITION_TYPES update (line 3907)
+
+**Current:**
+```js
+const POSITION_TYPES = ['BUY', 'BUY WINDOW CLOSING', 'WINDOW BUY', 'RECOVERY PATH',
+  'LEAD CRUMBLING', 'LEAD LOST', 'VARIANCE BREAKING'];
+```
+
+**New** (keep v1 types for historical lookback — prior alerts may have those types):
+```js
+const POSITION_TYPES = ['BUY', 'BUY WINDOW CLOSING', 'BWC_EDGE', 'VALUE', 'EXIT',
+  'THESIS_ALIVE', 'POSITION_SAFE', 'POSITION_RECOVERING',
+  'WINDOW BUY', 'RECOVERY PATH', 'LEAD CRUMBLING', 'LEAD LOST', 'VARIANCE BREAKING'];
+```
+
+---
+
+## 10. Code to Remove
+
+### 10a. Monitor agent (~350 lines in `poll-live-bdl.mjs`)
+
+**Functions to delete:**
+- `getMonitorData()` — line ~395 to ~625
+- `runMonitorAgent()` — line ~626 to ~810
+- `saveMonitorObservations()` — line ~810 to ~830
+
+**Block to delete:**
+- Monitor execution, lines 5899-5926 (section 6 in poll loop)
+
+**References to remove in `gatherAgentContext()` (lines 308-391):**
+- Lines 374-391: `monitorContext` fetch from `monitor_observations` table
+- Line 391: `monitorContext` in return object → remove from return
+
+**References to remove in `fireCalibrationAnalysis()` (lines 3654-4055):**
+- Lines 3766-3782: `monitorContext` fetch from `monitor_observations`
+- Line 3792: `monitorContext` in `formatSonnetPrompt` call → set to null or remove
+- Line 3821: `monitorContext ? 'monitor' : null` in layer inventory → remove
+
+**Reference to remove in `formatSonnetPrompt()` (line 3306+):**
+- Lines 3630-3633: `if (monitorContext) { ... }` block → delete
+
+**Cascading to other files:**
+
+`analyze.js`:
+- Line 491: `var monitorContext = body.monitorContext || null;` → delete
+- Lines 810-828: monitor section construction + injection → delete
+
+`bdl.html`:
+- Lines 2938-2946: fetch from `get_monitor_observations` → delete
+- Line 3031: `monitorContext: monitorContext,` in analyze POST body → delete
+
+**What stays:**
+- `monitor_observations` TABLE — do not drop. Historical data exists.
+- `get_monitor_observations` endpoint in `db-api.js` — harmless, leave for now.
+
+### 10b. v1 mechanical alert block (~360 lines, lines ~5041-5401)
+
+**Delete entirely.** This includes:
+- Lead degraded suppression logic (5024-5039)
+- BUY FIRED detection (5055-5069)
+- BWC FIRED detection (5070-5094)
+- WINDOW BUY detection (5097-5136)
+- All 6 CANDIDATE sub-type detections (5140-5199)
+- Lead degraded suppression gate (5201-5205)
+- Per-type in-memory dedup `game._alertHistory` (5207-5221)
+- DB-level dedup 2-min window (5223-5234)
+- Agent routing, ntfy formatting, DB write for v1 alerts (5236-5401)
+
+**What survives (move above v2 block as shared computation):**
+- Clock gate: `alertMinsLeft` computation (lines 5043-5048)
+- Odds/edge: `ctrlML`, `ctrlEdge`, `spreadVal` (lines ~4980-5018)
+- TP for BUY context: `tpForBuy` computation (lines 5019-5022)
+- Indicator win/loss: `indWon`, `indLost` arrays (lines 5246-5256)
+
+### 10c. v1 transition alerts block (~310 lines, lines ~5403-5714)
+
+**Delete entirely.** This includes:
+- TP/LS computation for transitions (5408-5414)
+- Per-side prev_ column reads (5416-5425)
+- RECOVERY PATH detection + agent routing (5451-5523)
+- LEAD CRUMBLING detection + agent routing (5528-5593)
+- LEAD LOST detection (5594-5620)
+- VARIANCE BREAKING detection + agent routing (5622-5693)
+- Per-side prev_ column writes (5696-5710)
+
+**Cascading:** `computeThroughputServer` and `computeLeadSafetyServer` are still called for
+snapshot persistence (line 4900-4904). Only the transition alert usage is removed. The functions
+themselves stay.
+
+---
+
+## 11. ntfy Title/Body Format (v2)
+
+### BWC Lifecycle alerts
+
+| Type | Title Format |
+|---|---|
+| BWC initial fire | `WINDOW CLOSING: {team} ML {ml}` |
+| BWC_EDGE | `EDGE: {bwcTeam} — {matchup}` |
+| VALUE | `VALUE: {bwcTeam} ML {ml} — {matchup}` |
+| EXIT | `EXIT: {bwcTeam} position — {matchup}` |
+| THESIS_ALIVE | `THESIS ALIVE: {bwcTeam} ML {ml} — {matchup}` |
+| POSITION_SAFE | `POSITION SAFE: {bwcTeam} — {matchup}` |
+| POSITION_RECOVERING | `RECOVERING: {bwcTeam} — {matchup}` |
+
+### BUY alerts
+
+| Tier | Title Format |
+|---|---|
+| FIRED | `BUY {team} ML {ml}` |
+| CANDIDATE | `BUY [CANDIDATE] {team} ML {ml}` |
+
+**Body:** Always agent-written (plain English). Prefixed with score line.
+Mechanical fallback body used only when agent fails.
+
+---
+
+## 12. `live_tracking` Write/Read Cycle
+
+### Read (start of each game's processing)
+
+```js
+let lt = {};
 try {
   const ltRows = await sql`SELECT live_tracking FROM games WHERE id = ${game.id}`;
-  liveTracking = ltRows[0]?.live_tracking;
-  if (typeof liveTracking === 'string') liveTracking = JSON.parse(liveTracking);
-} catch(e) { /* non-fatal */ }
-if (!liveTracking) liveTracking = {};
+  if (ltRows[0]?.live_tracking) {
+    lt = typeof ltRows[0].live_tracking === 'string'
+      ? JSON.parse(ltRows[0].live_tracking) : ltRows[0].live_tracking;
+  }
+} catch(e) { /* non-fatal — initialize fresh */ }
+```
 
-// Determine which side is ctrl
-const ctrlSide = ind.controlTeam === hA ? 'home' : 'away';
-const oppSide = ctrlSide === 'home' ? 'away' : 'home';
-const timeStr = `Q${currentPeriod} ${clock}`;
+### Write (end of each game's processing, after all alert checks)
 
-// Update peak/trough for CTRL team
-const peakKey = ctrlSide + '_peak_floor';
-const troughKey = ctrlSide + '_trough_floor';
-if (!liveTracking[peakKey] || ind.score > liveTracking[peakKey]) {
-  liveTracking[peakKey] = ind.score;
-  liveTracking[ctrlSide + '_peak_time'] = timeStr;
-}
-if (!liveTracking[troughKey] || ind.score < liveTracking[troughKey]) {
-  liveTracking[troughKey] = ind.score;
-  liveTracking[ctrlSide + '_trough_time'] = timeStr;
-}
-
-// Update peak/trough for OPP team (when opp had control, their floor = 1 - ind.score... 
-// Actually NO — we only track peaks when a team IS the ctrl team.
-// The opp team's peak was set when THEY were ctrl in a prior poll.
-// So we only update the current ctrl team's peak/trough.
-
-// Consecutive holds
-if (liveTracking.ctrl_team_current === ind.controlTeam) {
-  liveTracking.ctrl_team_holds = (liveTracking.ctrl_team_holds || 0) + 1;
-} else {
-  liveTracking.ctrl_team_current = ind.controlTeam;
-  liveTracking.ctrl_team_holds = 1;
-}
-liveTracking.last_floor = ind.score;
-
-// Write back
+```js
 try {
-  await sql`UPDATE games SET live_tracking = ${JSON.stringify(liveTracking)} WHERE id = ${game.id}`;
-} catch(e) { log(`${matchup}: live_tracking write failed: ${e.message}`); }
+  await sql`UPDATE games SET live_tracking = ${JSON.stringify(lt)} WHERE id = ${game.id}`;
+} catch(e) { log(matchup + ': live_tracking write failed: ' + e.message); }
 ```
 
-**Cascading implications:**
-- One extra SELECT + UPDATE per poll cycle per game. Minimal perf impact (poll already does 5-10 queries per game).
-- `live_tracking` is read BEFORE alert checks but AFTER snapshot INSERT. This means the tracking reflects the CURRENT poll's data, which is what we want for alert tier classification.
-- On game finalization (line ~4660, `gameStatus === 'closed'`), live_tracking persists — no cleanup needed. It's per-game state that's useful for post-game analysis too.
-- If the column doesn't exist yet (pre-migration), the SELECT returns null, and we initialize fresh. Safe.
+### Fields that persist across cold starts
 
-**Risk:** The UPDATE to `games` table happens every 60s per live game. This is fine — Neon handles this easily, and we're already doing multiple writes per game per poll.
+| Field | Purpose |
+|---|---|
+| `bwc_fired` | Who, when, at what floor |
+| `_prev_bwc_state` | For transition detection |
+| `ctrl_team_current` | Current control team |
+| `ctrl_team_holds` | Consecutive holds count |
+| `home_peak_floor` / `away_peak_floor` | Peak tracking for erosion |
+| `_bwc_candidate` / `_bwc_candidate_holds` | Pre-fire tracking |
+| `_last_any_bwc_ts` | Universal cooldown timestamp |
+| `_last_buy_ts` | BUY cooldown timestamp |
+| `_last_fired_state` / `_last_fired_floor` / `_last_fired_margin` / `_last_fired_ts` | Material change gate |
 
 ---
 
-### L1.3 — Velocity Direction
+## 13. Build Order
 
-**What:** Compute floor direction from last 5 snapshots. Pure computation, no storage needed — snapshots already fetched in `gatherAgentContext()`.
-
-**Current code (gatherAgentContext, line 311-316):**
-```js
-const snaps = await sql`SELECT floor_score, floor_team, period, clock, ...
-  FROM snapshots WHERE game_id = ${gameId} ORDER BY ts DESC LIMIT 5`;
-if (snaps.length > 0) {
-  floorHistory = snaps.map(s => `Q${s.period} ${s.clock}: ...`).join('\n');
-}
-```
-
-**Change:** After computing `floorHistory`, also compute velocity:
-
-```js
-let velocityDir = 'stable', velocityCount = 0;
-if (snaps.length >= 3) {
-  // snaps are newest-first. Compare consecutive pairs.
-  let rises = 0, declines = 0;
-  for (let i = 0; i < Math.min(snaps.length - 1, 4); i++) {
-    const newer = Number(snaps[i].floor_score);
-    const older = Number(snaps[i + 1].floor_score);
-    if (newer > older + 0.01) rises++;
-    else if (newer < older - 0.01) declines++;
-  }
-  if (rises >= 3) velocityDir = 'surging';
-  else if (rises > declines) velocityDir = 'rising';
-  else if (declines >= 3) velocityDir = 'crashing';
-  else if (declines > rises) velocityDir = 'declining';
-  else velocityDir = 'stable';
-  velocityCount = rises - declines; // positive = net rising
-}
-```
-
-**Return value change:** `gatherAgentContext` currently returns `{ floorHistory, priorAlerts, quarterSummary, learningsContext, monitorContext }`. Add `velocityDir, velocityCount`:
-
-```js
-return { floorHistory, priorAlerts, quarterSummary, learningsContext,
-         monitorContext, velocityDir, velocityCount };
-```
-
-**Cascading implications:**
-- `gatherAgentContext` is called in 5 places (grep confirms: lines 3936, 5261, 5482, 5543, 5652 — but line 3936 is auto-analysis which stores to `agentCtx` var, and lines 5261/5482/5543/5652 are the alert agent call sites). All 5 already destructure the return value. New fields are additive — existing destructuring still works.
-- However, the auto-analysis call at line 3936 uses `agentCtx.floorHistory` etc. The new fields will be available but unused until we wire them into the agent prompt (L3).
-
-**Risk:** Minimal. Pure additive computation on data already fetched.
-
----
-
-### L1.4 — Deficit Bucket Classification
-
-**What:** Pure function that classifies margin into backtest-proven buckets.
-
-**New function (add near computeConviction, ~line 1835):**
-
-```js
-function classifyDeficit(margin, isTrailing) {
-  if (!isTrailing && margin >= 8) return 'lead_8+';
-  if (!isTrailing && margin >= 3) return 'lead_3-7';
-  if (Math.abs(margin) <= 2) return 'tied_0-2';
-  if (isTrailing && margin >= 10) return 'trail_10+';
-  if (isTrailing && margin >= 5) return 'trail_5-9';
-  if (isTrailing && margin >= 1) return 'trail_1-4';
-  return 'tied_0-2'; // fallback
-}
-
-function isCloseGame(margin) {
-  return Math.abs(margin) <= 5;
-}
-```
-
-**Cascading implications:** None — new pure functions, called only from L2 code.
-
----
-
-### L1.5 — Opponent Indicators Won
-
-**What:** Compute which indicators the opponent holds. Uses the same inversion logic already in place at the agent call site (lines 5250-5260).
-
-**Current code (lines 5250-5260) — already computes ctrl-relative scores:**
-```js
-const indNames = ['I1','I2','I3','I4','I5'];
-const indScores = [ind.I1, ind.I2, ind.I3, ind.I4, ind.I5];
-const _ctrlIsHomeAgent = ind.controlTeam === hA;
-const _ctrlScore = (s) => s == null ? 0.5 : (_ctrlIsHomeAgent ? s : 1 - s);
-const indWon = indNames.filter((n, i) => indScores[i] && _ctrlScore(indScores[i].score) >= 0.55);
-const indLost = indNames.filter((n, i) => indScores[i] && _ctrlScore(indScores[i].score) <= 0.45);
-```
-
-**Change:** `indLost` already represents opponent indicators won (from ctrl team's perspective, "lost" = opponent won). We just need to compute `oppIndicatorCount` and check for I2 specifically:
-
-```js
-const oppIndicatorCount = indLost.length;
-const oppHasI2 = indLost.includes('I2');
-const oppHasI4 = indLost.includes('I4');
-```
-
-**Cascading implications:** These variables exist at the right scope (inside the `if (alertType)` block at line 5207). They're available for L2 tier classification and L3 agent context.
-
----
-
-## LAYER 2: BUY Tier Classification
-
-### L2.1 — `computeBuyTier()` Function
-
-**What:** New function that takes Layer 1 metrics and returns tier A/B/C with reason string.
-
-**Location:** Add after `classifyDeficit()` (~line 1840).
-
-```js
-function computeBuyTier({ alertType, convictionTier, deficitBucket, i4SubAgree,
-                           consecutiveHolds, velocityDir, period, floor,
-                           isCloseGame, oppIndicatorCount }) {
-  // ── TIER A: High confidence (93-97% target) ──
-  
-  // Override: DOMINANT + trail_10+ always Tier A
-  if (convictionTier === 'DOMINANT' && deficitBucket === 'trail_10+') {
-    return { tier: 'A', reason: 'DOMINANT + deep deficit (93.8% backtest)' };
-  }
-  
-  // BWC path
-  if (alertType === 'BUY WINDOW CLOSING') {
-    // BWC Tier A: DOMINANT + lead_8+ + holds 4+ + 0-1 opp indicators
-    if (convictionTier === 'DOMINANT' && deficitBucket === 'lead_8+' &&
-        consecutiveHolds >= 4 && oppIndicatorCount <= 1) {
-      return { tier: 'A', reason: 'BWC DOMINANT leading 8+, durable holds, clean opp profile' };
-    }
-    // BWC with 2+ opp indicators: downgrade one tier
-    if (oppIndicatorCount >= 2) {
-      // BWC Tier C if 2+ opp indicators
-      if (convictionTier === 'DOMINANT' || convictionTier === 'STRONG') {
-        return { tier: 'C', reason: `BWC downgraded — ${oppIndicatorCount} opponent indicators (68% backtest)` };
-      }
-      return { tier: 'C', reason: `BWC weak conviction + ${oppIndicatorCount} opponent indicators` };
-    }
-    // BWC Tier B: DOMINANT/STRONG + lead_3+ + holds 2+
-    if ((convictionTier === 'DOMINANT' || convictionTier === 'STRONG') &&
-        (deficitBucket === 'lead_3-7' || deficitBucket === 'lead_8+') &&
-        consecutiveHolds >= 2) {
-      return { tier: 'B', reason: 'BWC solid conviction + lead + established holds' };
-    }
-    // BWC default: Tier C
-    return { tier: 'C', reason: 'BWC below Tier B threshold' };
-  }
-  
-  // WINDOW BUY: always Tier C
-  if (alertType === 'WINDOW BUY') {
-    return { tier: 'C', reason: 'WINDOW BUY — agent-only territory (62% backtest baseline)' };
-  }
-  
-  // ── Close game override ──
-  if (isCloseGame) {
-    // Close games can reach Tier B ONLY with full stacked confirmation
-    if (i4SubAgree === 'AGREE' && consecutiveHolds >= 4 &&
-        (velocityDir === 'rising' || velocityDir === 'surging') && period >= 3) {
-      return { tier: 'B', reason: 'Close game with full stacked confirmation (I4 agree + holds 4+ + rising + Q3+)' };
-    }
-    return { tier: 'C', reason: `Close game (margin ±5) — ${convictionTier} is ${deficitBucket}, framework unreliable here` };
-  }
-  
-  // ── BUY Standard tiers ──
-  
-  // Tier A requirements: ALL of these
-  if ((convictionTier === 'DOMINANT' || convictionTier === 'STRONG') &&
-      (deficitBucket === 'trail_5-9' || deficitBucket === 'trail_10+') &&
-      i4SubAgree === 'AGREE' && consecutiveHolds >= 4 && period >= 2) {
-    return { tier: 'A', reason: `${convictionTier} + ${deficitBucket} + I4 agree + ${consecutiveHolds} holds` };
-  }
-  
-  // Tier B: meets MOST of Tier A
-  if ((convictionTier === 'DOMINANT' || convictionTier === 'STRONG') &&
-      (deficitBucket === 'trail_5-9' || deficitBucket === 'trail_10+')) {
-    // Has conviction + deficit but missing a quality signal
-    if (i4SubAgree !== 'DISAGREE' && consecutiveHolds >= 2) {
-      return { tier: 'B', reason: `${convictionTier} + ${deficitBucket}, quality signals partial (I4:${i4SubAgree}, holds:${consecutiveHolds})` };
-    }
-  }
-  if (convictionTier === 'MODEST' && deficitBucket === 'trail_10+' && i4SubAgree === 'AGREE') {
-    return { tier: 'B', reason: 'MODEST but deep deficit + I4 agree (80.5% base, boosted)' };
-  }
-  if ((convictionTier === 'DOMINANT' || convictionTier === 'STRONG') &&
-      deficitBucket === 'trail_5-9' && consecutiveHolds >= 2) {
-    return { tier: 'B', reason: `${convictionTier} trailing 5-9 with established holds` };
-  }
-  
-  // ── Tier C: everything else ──
-  let reason = '';
-  if (deficitBucket === 'trail_1-4') reason = `Shallow deficit (trail 1-4) — 52-59% regardless of conviction`;
-  else if (consecutiveHolds <= 1) reason = `Just took control (holds=${consecutiveHolds}) — 61% baseline`;
-  else if (convictionTier === 'CONDITIONAL') reason = `CONDITIONAL conviction — insufficient structural evidence`;
-  else if (i4SubAgree === 'DISAGREE') reason = `I4 sub-components disagree (75.7% vs 96.7% when agree)`;
-  else reason = `Below Tier B threshold: ${convictionTier} ${deficitBucket} I4:${i4SubAgree} holds:${consecutiveHolds}`;
-  
-  return { tier: 'C', reason };
-}
-```
-
-**Call site:** Inside the `if (alertType)` block (line ~5207), AFTER the indicator computation (lines 5250-5260) and BEFORE the agent call (line 5261). We need `liveTracking` to be available here too.
-
-**New code inserted at ~line 5260 (after indLost computation, before agentCtx):**
-```js
-// L2: Compute BUY tier
-const deficitBucket = classifyDeficit(margin, ctrlTrailing);
-const closeGame = isCloseGame(margin);
-const buyTier = computeBuyTier({
-  alertType,
-  convictionTier: conviction.tier,
-  deficitBucket,
-  i4SubAgree: conviction.i4SubAgree,
-  consecutiveHolds: liveTracking?.ctrl_team_holds || 1,
-  velocityDir: agentCtx.velocityDir || 'stable',
-  period: currentPeriod,
-  floor: ind.score,
-  isCloseGame: closeGame,
-  oppIndicatorCount: indLost.length,
-});
-```
-
-**ORDERING DEPENDENCY:** `agentCtx` is gathered AFTER the tier computation in current code (line 5268: `const agentCtx = await gatherAgentContext(...)`). But `computeBuyTier` needs `velocityDir` from `agentCtx`. 
-
-**Fix:** Move `gatherAgentContext()` call ABOVE `computeBuyTier()`. Currently it's at line 5268. Move to ~line 5258, right after indicator computation.
-
-**Before (current order):**
-```
-5250: indicator computation (indWon, indLost, i4Won, etc.)
-5268: const agentCtx = await gatherAgentContext(...)
-5271: const agentResult = await runAlertAgent({...})
-```
-
-**After (new order):**
-```
-5250: indicator computation
-5258: const agentCtx = await gatherAgentContext(...)  ← moved up
-5260: const buyTier = computeBuyTier({...})            ← NEW
-5270: const agentResult = await runAlertAgent({...})   ← receives buyTier
-```
-
-**Cascading implications:**
-- Moving `gatherAgentContext` up by ~10 lines is safe — it only depends on `sql`, `game.id`, `matchup`, all available earlier.
-- `buyTier` object needs to be passed into the agent context (L3).
-- `liveTracking` variable from L1.2 is computed earlier in the poll cycle (after snapshot INSERT). It's in scope at the alert check block.
-
-**CRITICAL: liveTracking scope.** L1.2 writes `liveTracking` at ~line 4940. Alert checks start at ~line 5040. The `liveTracking` variable must be declared with `let` at a scope visible to both. Currently, the snapshot INSERT and alert checks are within the same `try` block inside the per-game for loop (line 4637). So `liveTracking` declared at line ~4935 is in scope at line ~5260. **Verified safe.**
-
----
-
-### L2.2 — Hard Suppress on Tier C Trailing 1-4
-
-**What:** Mechanical gate that suppresses BUY FIRED for trailing 1-4 when conviction is STRONG or below. This removes ~45% of loser volume.
-
-**Current code does not check deficit depth for BUY FIRED.** The BUY FIRED block (line 5056) checks: `ind.score >= 0.65 && ctrlTrailing && margin >= 1 && margin <= 15 && currentPeriod >= 2 && alertMinsLeft >= 1.0`.
-
-**Change:** Do NOT add a hard suppress at the FIRED gate level. Instead, let `computeBuyTier` classify it as Tier C, and let the agent see the Tier C default-SUPPRESS instruction. Reason: a hard suppress loses data — we want the alert logged to the DB for accuracy tracking. The tier system preserves observability.
-
-**Alternative approach (if we want to be more aggressive):** Add a hard suppress ONLY for the most obvious cases: `CONDITIONAL` or `MODEST` at trailing 1-2. But even this should wait until we see how the agent handles Tier C instructions.
-
-**Decision: No hard suppress. Tier C + agent instructions handles it.**
-
----
-
-## LAYER 3: Agent Prompt Overhaul
-
-### L3.1 — Framework Context Constant
-
-**What:** Static string prepended to every agent call, encoding phase 2 backtest knowledge.
-
-**Location:** New constant at top of file, after `sendNtfy` function (~line 155).
-
-```js
-const FRAMEWORK_CONTEXT = `FRAMEWORK CONTEXT (from 1,235-game backtest, 9,861 snapshots):
-...
-// Full text from Layer 3 spec above — ~40 lines
-`;
-```
-
-**Size consideration:** This adds ~2,000 tokens to every agent call. Current prompt is ~1,500 tokens of instructions + ~500 tokens of dynamic data. Total ~4,000 tokens input. Opus 4.6 handles this easily within the 500-token output budget.
-
----
-
-### L3.2 — Agent Prompt Rewrite
-
-**What:** Replace the current inline prompt string in `runAlertAgent()` (lines 162-274, ~112 lines) with a structured three-section prompt.
-
-**Current prompt structure (lines 162-274):**
-```
-"You are a live NBA betting alert quality agent..."
-ALERT: [dynamic data]
-INDICATORS: [dynamic data]
-FLOOR TRAJECTORY: [dynamic data]
-...extensive inline RULES block (~80 lines)...
-BODY RULES: ...
-"Respond in EXACTLY this format: DECISION/REASONING/BODY"
-```
-
-**New prompt structure:**
-```
-Section 1: FRAMEWORK_CONTEXT constant (static, ~40 lines)
-Section 2: DECISION_RULES string built from buyTier (tier-specific, ~30 lines)
-Section 3: CURRENT_ALERT template (dynamic data, ~40 lines)
-```
-
-**Key change:** The current RULES block (lines 223-274) is replaced with tier-specific decision rules. Most of the current rules are still valid but get reorganized by tier.
-
-**Rules that STAY (move to Framework Context or Decision Rules):**
-- I4 COMBO logic (lines 224-227) — stays, enhanced with I4 sub-agreement data
-- BODY RULES (lines 261-274) — stays verbatim
-- MONITOR OVERRIDE PROTECTION (line 241) — stays, enhanced with tier interaction
-- TP as context not veto (line 244-247) — stays
-
-**Rules that are REPLACED:**
-- FIRED vs CANDIDATE generic rules (lines 223-228) — replaced with tier-specific rules
-- EARLY GAME NOTE (line 240) — replaced by period being a tier input
-- CANDIDATE BUY floor 0.55-0.65 rule (line 242) — subsumed by Tier C
-- ANCHORED FLOOR CHECK (line 239) — replaced by peak-to-current delta metric
-
-**Rules that are REMOVED (dead/superseded):**
-- LEAN BUY references (killed long ago, but mentioned in prompt) — clean up
-- Generic "SEND unless clear contradiction" for FIRED — replaced by tier-specific defaults
-
-**New ctx fields passed to `runAlertAgent`:**
-```js
-const agentResult = await runAlertAgent({
-  // ... all existing fields ...
-  // NEW fields:
-  buyTier: buyTier.tier,        // 'A', 'B', 'C'
-  buyTierReason: buyTier.reason, // human-readable classification reason
-  deficitBucket,                 // 'trail_10+', 'trail_5-9', etc.
-  i4SubAgree: conviction.i4SubAgree,  // 'AGREE', 'DISAGREE', 'MIXED'
-  consecutiveHolds: liveTracking?.ctrl_team_holds || 1,
-  velocityDir: agentCtx.velocityDir,
-  velocityCount: agentCtx.velocityCount,
-  peakFloor: liveTracking?.[ctrlSide + '_peak_floor'] || null,
-  peakFloorTime: liveTracking?.[ctrlSide + '_peak_time'] || null,
-  troughFloor: liveTracking?.[ctrlSide + '_trough_floor'] || null,
-  peakTroughSpread: peakFloor && troughFloor ? (peakFloor - troughFloor).toFixed(2) : null,
-  isCloseGame: closeGame,
-  oppIndicatorCount: indLost.length,
-  oppI2: oppHasI2,
-});
-```
-
-**Cascading implications:**
-- `runAlertAgent` receives these as `ctx.*` — the prompt template string references them. No other function uses `ctx`.
-- The 5 call sites for `runAlertAgent` (line 3936 auto-analysis, 5261 main, 5482 RP, 5543 LC, 5652 VB) need to be checked:
-  - **Main (5261):** Gets all new fields. ✓
-  - **Auto-analysis (3936):** Needs new fields too. But auto-analysis is a POSITION UPDATE, not a tier-classified alert. It should receive `buyTier: null` and skip tier rules. The prompt should handle null tier gracefully.
-  - **RP (5482):** RECOVERY PATH bypasses the tier system (transition alert). Pass `buyTier: null`.
-  - **LC (5543):** LEAD CRUMBLING. Pass `buyTier: null`.
-  - **VB (5652):** VARIANCE BREAKING. Pass `buyTier: null`.
-  
-  For null tier, the prompt falls back to the existing type-specific rules (RP, LC, VB rules from current prompt, retained in Framework Context).
-
-**CRITICAL: The prompt must handle `buyTier: null` for non-BUY/BWC/WB alerts.** Add a conditional in the prompt template:
-
-```js
-const tierBlock = ctx.buyTier
-  ? `\nTIER: ${ctx.buyTier} — ${ctx.buyTierReason}\n${TIER_RULES[ctx.buyTier]}`
-  : ''; // Transition alerts skip tier system
-```
-
----
-
-### L3.3 — Alert Agent Call Sites Audit
-
-All 5 `runAlertAgent` call sites and their required changes:
-
-| Line | Type | Change Needed |
-|---|---|---|
-| 3936 | AUTO_ANALYSIS | Add new fields with `buyTier: null`. Add velocity guard (L4.3) |
-| 5261 | BUY/BWC/WB FIRED+CANDIDATE | Full new fields including `buyTier` |
-| 5482 | RECOVERY PATH | Add new fields with `buyTier: null` |
-| 5543 | LEAD CRUMBLING | Add new fields with `buyTier: null` |
-| 5652 | VARIANCE BREAKING | Add new fields with `buyTier: null` |
-
-For lines 5482, 5543, 5652 — these also call `gatherAgentContext` (via the shared `transitionAgentCtx` at line 5439). The new `velocityDir` and `velocityCount` will be available from that shared context. `liveTracking` is also in scope. Safe to add the new fields.
-
----
-
-### L3.4 — Alerts Table: New Columns
-
-**What:** Store tier classification for accuracy tracking and post-game analysis.
-
-**Schema change (db-api.js):**
-```js
-try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS buy_tier TEXT`; } catch(e) {}
-try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS buy_tier_reason TEXT`; } catch(e) {}
-try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS i4_sub_agree TEXT`; } catch(e) {}
-try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS consecutive_holds INTEGER`; } catch(e) {}
-try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS velocity_dir TEXT`; } catch(e) {}
-try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS deficit_bucket TEXT`; } catch(e) {}
-```
-
-**Write location:** The alert INSERT (line ~5310+) already writes conviction_tier, agent_decision, etc. Add the new columns to the same INSERT.
-
-**Cascading implications:** All alert INSERTs (5 call sites) need the new columns. The main one at ~5310 and the transition alert INSERTs at ~5520, ~5570, ~5610, ~5660.
-
----
-
-## LAYER 4: Monitor Enhancement + Cash-Out
-
-### L4.1 — Mechanical Cash-Out Trigger (60s Path)
-
-**What:** Every poll cycle, check if a prior SENT alert's ctrl team has dropped 0.25+ from peak. Fire ntfy directly, no agent.
-
-**Location:** After live_tracking update (~line 4940), before alert threshold checks (~line 5040). This catches collapses BEFORE we check for new BUY/BWC signals.
-
-```js
-// ── L4.1: Mechanical CASH_OUT check ──
-if (liveTracking && ind.controlTeam) {
-  const ctrlSide = ind.controlTeam === hA ? 'home' : 'away';
-  const peakFloor = liveTracking[ctrlSide + '_peak_floor'];
-  if (peakFloor) {
-    const peakDelta = ind.score - peakFloor;
-    if (peakDelta <= -0.25) {
-      // Check for prior SENT alert for this ctrl team
-      try {
-        const priorSent = await sql`
-          SELECT alert_type, floor_score, period, clock, ts
-          FROM alerts WHERE game_id = ${game.id}
-            AND control_team = ${ind.controlTeam}
-            AND ntfy_sent = true
-            AND alert_type IN ('BUY', 'BUY WINDOW CLOSING', 'WINDOW BUY')
-          ORDER BY ts DESC LIMIT 1`;
-        if (priorSent.length > 0) {
-          // Dedup: one CASH_OUT per game per quarter
-          const cashOutDedup = await sql`
-            SELECT 1 FROM alerts WHERE game_id = ${game.id}
-              AND alert_type = 'CASH_OUT' AND period = ${currentPeriod} LIMIT 1`;
-          if (cashOutDedup.length === 0) {
-            const prior = priorSent[0];
-            const body = `Your ${prior.alert_type} position on ${ind.controlTeam} is at risk.\n`
-              + `Entered at Q${prior.period} ${prior.clock} (floor ${Number(prior.floor_score).toFixed(0)}%).\n`
-              + `Floor dropped from peak ${(peakFloor*100).toFixed(0)}% to ${(ind.score*100).toFixed(0)}% — `
-              + `a ${Math.abs(peakDelta*100).toFixed(0)}-point structural collapse.\n`
-              + `Consider closing your position.\n`
-              + `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
-            await sendNtfy(`⚠️ CASH OUT — ${ind.controlTeam}`, body, 5);
-            await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock,
-              control_team, floor_score, margin, is_trailing, alert_tier,
-              agent_decision, agent_reasoning, ntfy_sent,
-              i1, i2, i3, i4, i5, conviction_tier, conviction_combo)
-              VALUES (${game.id}, ${league}, ${'CASH_OUT'}, ${currentPeriod}, ${clock},
-              ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${'MECHANICAL'},
-              ${'SEND'}, ${'Peak delta ' + peakDelta.toFixed(2) + ' exceeds -0.25 threshold'},
-              ${true},
-              ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null},
-              ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null},
-              ${conviction.tier}, ${conviction.combo})`;
-            log(`${matchup}: CASH_OUT FIRED — peak ${peakFloor.toFixed(2)} → current ${ind.score.toFixed(2)}, delta ${peakDelta.toFixed(2)}`);
-          }
-        }
-      } catch(e) { log(`${matchup}: CASH_OUT check error: ${e.message}`); }
-    }
-  }
-}
-```
-
-**Cascading implications:**
-- `CASH_OUT` is a new `alert_type` value. Post-game scoring agent (post-game-agent.mjs) needs to handle it — mark as CORRECT if the ctrl team's lead eroded further or they lost, INCORRECT if they recovered and won comfortably. Add to the scoring logic.
-- Debug page alert accuracy section needs to display CASH_OUT alerts. Since it reads from the `alerts` table generically, it should work without changes, but the type filter dropdowns may need updating.
-- The `POSITION_TYPES` array (line 3907) that gates auto-analysis position updates should include 'CASH_OUT'.
-
----
-
-### L4.2 — Auto-Analysis Velocity Guard
-
-**What:** Suppress auto-analysis ntfy when floor has dropped 0.15+ from peak.
-
-**Location:** Inside `fireCalibrationAnalysis()`, after the position gate check (line ~3930), before routing to the agent (line ~3936).
-
-**Current flow:**
-```
-3920: check for priorPosition
-3922: if (!priorPosition) → suppress (position gate)
-3930: else → route through agent as position update
-3936: const agentResult = await runAlertAgent({...})
-```
-
-**New flow (insert between 3922 and 3930):**
-```js
-// L4.2: Velocity guard — suppress reinforcement when floor is dropping
-if (priorPosition) {
-  let velocityGuardTriggered = false;
-  try {
-    const ltRows = await sql`SELECT live_tracking FROM games WHERE id = ${game.id}`;
-    const lt = ltRows[0]?.live_tracking;
-    if (lt) {
-      const parsed = typeof lt === 'string' ? JSON.parse(lt) : lt;
-      const ctrlSide = ind.controlTeam === hA ? 'home' : 'away';
-      const peakFloor = parsed[ctrlSide + '_peak_floor'];
-      if (peakFloor && (ind.score - peakFloor) <= -0.15) {
-        velocityGuardTriggered = true;
-        log(`${matchup}: ${triggerTag} velocity guard — floor dropped ${(ind.score - peakFloor).toFixed(2)} from peak ${peakFloor.toFixed(2)}`);
-      }
-    }
-  } catch(e) { /* non-fatal */ }
-  
-  if (velocityGuardTriggered) {
-    // Still save to DB but don't send ntfy
-    const aaReasoning = `Velocity guard: floor dropped ${(ind.score - peakFloor).toFixed(2)} from peak — suppressing reinforcement`;
-    try {
-      await sql`INSERT INTO alerts (...) VALUES (...ntfy_sent=${false}...)`;
-    } catch(e) {}
-    // Skip the agent call entirely — no point reasoning about a position we won't reinforce
-  } else {
-    // ... existing agent call path ...
-  }
-}
-```
-
-**NOTE:** The `peakFloor` variable from the try block is out of scope in the `if (velocityGuardTriggered)` block. Need to hoist it:
-
-```js
-let velocityGuardTriggered = false;
-let peakFloorForGuard = null;
-// ... compute inside try ...
-peakFloorForGuard = peakFloor;
-velocityGuardTriggered = true;
-```
-
-**Cascading implications:**
-- The auto-analysis INSERT needs the same new columns as L3.4 (`buy_tier`, etc.) but they can be null for auto-analysis.
-- The agent is NOT called when velocity guard triggers. This saves an Opus API call (~$0.02 per call).
-
----
-
-### L4.3 — Monitor Prompt Enhancement (Erosion Detection)
-
-**What:** Add Layer 1 metrics to monitor prompt and erosion detection instructions.
-
-**Location:** `runMonitorAgent()` (line 626) and `getMonitorData()` (line 402).
-
-**`getMonitorData` change:** Currently fetches snapshots and builds per-game data. Add: query `live_tracking` from games table for each live game. Add the tracking data to the per-game object passed to the monitor.
-
-```js
-// In getMonitorData, after building per-game snapshot data:
-// Fetch live tracking for all live games
-const trackingRows = await sql`
-  SELECT id, live_tracking FROM games WHERE id = ANY(${liveGameIds})`;
-const trackingMap = {};
-for (const r of trackingRows) {
-  trackingMap[r.id] = typeof r.live_tracking === 'string'
-    ? JSON.parse(r.live_tracking) : r.live_tracking;
-}
-// Add to each game's data object
-game.liveTracking = trackingMap[game.id] || {};
-```
-
-**Monitor prompt change:** Add erosion detection section to the system prompt. Currently the monitor prompt (inside `runMonitorAgent`, line ~640) is a long template string. Add a new section after the existing SLATE block:
-
-```
-EROSION DETECTION:
-For each ACTIVE POSITION, assess erosion using:
-- Peak-to-current delta: {peakDelta} (approaching -0.25 = cash-out zone)
-- Consecutive holds trend: {holdsHistory}
-- Velocity direction: {velocityDir}
-- Opponent indicators: {oppIndicators}
-If peak delta is between -0.15 and -0.25 with declining holds or diverging I4,
-flag EROSION_WARNING in your observation.
-```
-
-**monitor_observations table changes (db-api.js):**
-```js
-try { await sql`ALTER TABLE monitor_observations ADD COLUMN IF NOT EXISTS erosion_signals INT DEFAULT 0`; } catch(e) {}
-try { await sql`ALTER TABLE monitor_observations ADD COLUMN IF NOT EXISTS proposed_alert_type TEXT`; } catch(e) {}
-try { await sql`ALTER TABLE monitor_observations ADD COLUMN IF NOT EXISTS proposal_urgency TEXT`; } catch(e) {}
-```
-
-**Cascading implications:**
-- The monitor observation INSERT (inside `runMonitorAgent`) needs the new columns.
-- The alert agent reads monitor observations via `gatherAgentContext` (lines 395-405). The new columns are available but the agent prompt doesn't reference them until the monitor→agent proposal path is built.
-- Monitor→agent proposal path is a FUTURE item (spec'd in Layer 4 architecture but can be deferred to a follow-up session since the mechanical cash-out at -0.25 handles the urgent case).
-
----
-
-## DEAD CODE TO CLEAN UP
-
-| Location | Description | Action |
-|---|---|---|
-| Line 5163 | Comment about removed CANDIDATE BUY TP CONTESTED | Delete comment |
-| Prompt line ~233 | LEAD CRUMBLING rules reference | Update when THESIS ERODING rename ships |
-| Various | `LEAN BUY` referenced nowhere in code but may appear in prompt | Grep and clean |
-| `game._alertHistory` | In-memory dedup that resets on cold start | Keep — serves as fast path before DB dedup |
-
-**Grep verification:**
-```bash
-grep -n "LEAN" netlify/functions/poll-live-bdl.mjs  # Should find nothing
-grep -n "LEAN" bdl.html                              # May find client references
-```
-
----
-
-## BUILD ORDER
-
-| Step | Layer | Description | Files | Est. Lines |
+| Step | What | Lines Δ | Risk | Verification |
 |---|---|---|---|---|
-| 1 | L1.1 | I4 sub-agreement in computeServer + computeConviction | poll-live-bdl.mjs | ~15 |
-| 2 | L1.4 | classifyDeficit + isCloseGame functions | poll-live-bdl.mjs | ~15 |
-| 3 | DB | Schema migrations (live_tracking, new alert columns, monitor columns) | db-api.js | ~15 |
-| 4 | L1.2 | Per-game live tracking state (read/write in poll loop) | poll-live-bdl.mjs | ~40 |
-| 5 | L1.3 | Velocity computation in gatherAgentContext | poll-live-bdl.mjs | ~20 |
-| 6 | L2.1 | computeBuyTier function | poll-live-bdl.mjs | ~80 |
-| 7 | L3.1 | FRAMEWORK_CONTEXT constant | poll-live-bdl.mjs | ~50 |
-| 8 | L3.2 | Agent prompt rewrite (replace lines 162-274) | poll-live-bdl.mjs | ~200 (net ~+90) |
-| 9 | L3.3 | Wire new fields to all 5 runAlertAgent call sites | poll-live-bdl.mjs | ~50 |
-| 10 | L3.4 | New columns in alert INSERT (all 5+ INSERT sites) | poll-live-bdl.mjs | ~30 |
-| 11 | L4.1 | Mechanical CASH_OUT trigger | poll-live-bdl.mjs | ~40 |
-| 12 | L4.2 | Auto-analysis velocity guard | poll-live-bdl.mjs | ~25 |
-| 13 | L4.3 | Monitor prompt enhancement | poll-live-bdl.mjs | ~30 |
-| 14 | — | Syntax check, push, deploy, run ?action=init | all | — |
+| 1 | DB columns (`db-api.js` Section 4) | +15 | LOW | `?action=init`, no errors |
+| 2 | `raw_stats_json` in calibration INSERT (Section 5, Fix 1) | +1 | LOW | Next quarter boundary saves with raw data |
+| 3 | v2 mechanical functions (Section 6) as new standalone functions | +80 | LOW | `node -c` syntax check |
+| 4 | `live_tracking` read/write cycle + `updateLiveTracking` calls (Section 12) | +30 | LOW | Check DB for `live_tracking` JSONB after 1 poll |
+| 5 | v2 trigger detection + context assembly AFTER v1 block, flag-gated: logs but no ntfy/agent (Section 7) | +200 | MEDIUM | Logs show triggers at correct moments |
+| 6 | Rewrite `runAlertAgent` prompt (Section 8) | ±100 | MEDIUM | v1 alerts use new prompt — verify decisions |
+| 7 | Enable v2 agent+ntfy, delete v1 mechanical+transition blocks (Sections 10b, 10c) | -670 | HIGH | Full slate monitoring |
+| 8 | Delete monitor agent code (Section 10a) | -350 | MEDIUM | No live dependency |
+| 9 | Clean up analyze.js + bdl.html monitor refs (Section 10a cascading) | -35 | LOW | Client analysis still works |
 
-**Total: ~610 lines new/modified code.**
-
-Steps 1-6 can ship as one commit (Layer 1 + Layer 2 — no behavior change, just new computation).
-Steps 7-10 ship as one commit (Layer 3 — agent prompt overhaul).
-Steps 11-13 ship as one commit (Layer 4 — cash-out + velocity guard + monitor).
-Step 14 after each commit.
+**Steps 1-4:** One commit. No behavioral change — new code isn't called by alert paths yet.
+**Step 5:** Separate commit. v2 logging alongside v1. Zero subscriber impact.
+**Step 6:** With Step 5 or separate. New prompt applies to v1 alert routing too.
+**Step 7:** The cutover. One commit: remove v1 blocks, enable v2 sends. **No overlap window.**
+**Steps 8-9:** Cleanup after Step 7 validated on a live slate.
 
 ---
 
-## TESTING STRATEGY
+## 14. Testing Strategy
 
-**After Steps 1-6 (L1+L2):**
-- Deploy, wait for live games
-- Console script to verify: `fetch('/api?action=get_latest_snapshots&game_id=XXX')` and check that `live_tracking` JSONB is populated
-- Grep server logs for `SNAP IND` lines — verify I4 subA/subB values visible
-- No alert behavior changes — existing alerts fire exactly as before
+### Pre-deploy (today's blowout)
 
-**After Steps 7-10 (L3):**
-- Run `test-agent.js` — existing 38 scenarios. Some may need updating if the prompt format changed the expected parse pattern (DECISION/REASONING/BODY format stays the same, so parsing should be stable).
-- Add new test scenarios for each tier:
-  - Tier A DOMINANT trail_10+ → expect SEND
-  - Tier C close game MODEST trail_2 → expect SUPPRESS
-  - Tier B STRONG trail_7 I4 agree holds=3 → expect SEND
-- Watch first live slate with new prompt — compare agent decisions to old behavior
+1. Deploy Steps 1-5 during current game
+2. Watch server logs for v2 trigger output — BWC state machine, erosion, triggers
+3. No subscriber impact (v2 logging only, v1 still active and sending)
 
-**After Steps 11-13 (L4):**
-- Verify CASH_OUT by checking: does `alerts` table get CASH_OUT rows after a peak-to-current drop > 0.25?
-- Verify velocity guard by checking: does auto-analysis get suppressed with `velocity_guard` reasoning when floor drops 0.15+ from peak?
-- Monitor logs should show erosion_signals count in observations
+### First live game
 
----
+1. Deploy Step 6 (new agent prompt) before tip
+2. v1 block still fires — v2 logs alongside for comparison
+3. Compare v1 decisions vs v2 trigger points in server logs
+4. If v2 triggers match expectations → deploy Step 7 (cutover) before next game
 
-## RISK REGISTER
+### Validation criteria for Step 7 cutover
 
-| Risk | Impact | Mitigation |
-|---|---|---|
-| I4 object shape change breaks downstream | Alerts stop computing | Grep for `.I4.score`, `.I4.leader`. Additive change — no destructuring breaks. |
-| `live_tracking` SELECT adds latency | Poll cycle slower | Single SELECT by PK, <5ms. Already doing 5-10 queries per game. |
-| Agent prompt too long (token overflow) | Agent fails/truncates | Framework context ~2K tokens + dynamic ~500 = ~2.5K. Well within limits. Agent output capped at 500 tokens. |
-| Tier C suppresses too aggressively | Miss valid close-game signals | Agent can still SEND Tier C with stacked confirmation. Tier C is a DEFAULT, not a hard gate. |
-| CASH_OUT fires on normal late-game compression | False cash-out alerts | Peak delta threshold -0.25 is calibrated from backtest (72.2% win rate at that level = 28% loss). Only fires if prior SENT exists. |
-| Concurrent poll invocations write conflicting live_tracking | State corruption | Last-write-wins is acceptable — floor/peak values converge within 1 poll cycle. |
-| gatherAgentContext moved earlier changes timing | Stale data | Moves by ~10 lines within same synchronous block. Data hasn't changed. |
+- BWC fires for correct team (structurally dominant, leading, 3+ holds)
+- State transitions match game flow (lead compressed → EDGE, lost → VALUE, ctrl lost → EXIT)
+- Erosion fires CAUTION/COLLAPSE at correct thresholds
+- BUY triggers fire for trailing teams with warm/cold distinction
+- Agent SEND/SUPPRESS decisions are reasonable
+- No double ntfy (v1 removed before v2 enabled — single commit guarantees this)
+
+### Post-cutover
+
+- Post-game agent scores v2 types automatically (dynamic grouping)
+- Manual review of first 3-5 games
+- Monitor no-BWC games (POR@DEN archetype) for BUY noise
 
 ---
 
-## POST-DEPLOY MONITORING
+## 15. Deferred Items (NOT in this spec)
 
-After first full slate with new system:
-1. Query alerts table: `SELECT buy_tier, agent_decision, COUNT(*) FROM alerts WHERE date = 'YYYY-MM-DD' GROUP BY 1, 2`
-2. Verify tier distribution: expect ~40% Tier A, ~30% Tier B, ~30% Tier C
-3. Verify Tier A alerts are mostly SEND, Tier C mostly SUPPRESS
-4. Check CASH_OUT alerts: did any fire? Were they appropriate?
-5. Check velocity guard: grep logs for "velocity guard" — how many auto-analyses were suppressed?
-6. Compare nightly accuracy to pre-change baselines
-
----
-
-## FUTURE WORK (NOT IN THIS SPEC)
-
-- THESIS ERODING alert type (rename LEAD CRUMBLING) — separate spec
-- Monitor → agent proposal path (monitor proposes alerts, agent gates them)
-- Client-side sync of `computeConviction` with I4 sub-agreement
-- Debug page Section 8: tier accuracy dashboard
-- BWC rename
-- Playoff-specific tier calibration (once N > 20 playoff games)
+- COLD → STALLED sustainability tier rename
+- Empirical calibration of 20%/35% erosion multipliers from live data
+- BWC lifecycle timeline visualization on dashboard
+- WNBA/NCAAMB port of v2 alerts
+- `buy_tier`/`buy_reason` columns on alerts — superseded by `bwc_state`/`erosion_level`
+- POR@DEN BUY noise (13 triggers in no-BWC game) — accepted, monitor in production
+- Dashboard alert type filter updates for v2 types (deferrable — new types show in "all" view)
