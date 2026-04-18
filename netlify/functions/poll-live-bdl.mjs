@@ -152,6 +152,62 @@ async function sendNtfy(title, body, priority = 4) {
 }
 
 // ── ALERT REASONING AGENT ────────────────────────────────────────────────
+// ── V2 AGENT PROMPT (validated 41/41 across 6 games) ──────────────────────
+// Used by v2 BWC lifecycle + BUY triggers. At cutover (Step 7), runAlertAgent
+// switches from v1 prompt to this. Until then, v1 path uses v1 prompt below.
+function buildV2AgentPrompt(ctx) {
+  return `You are a live NBA betting alert quality agent. A mechanical system has identified a potential betting signal. Your job is to assess whether it should be sent to the bettor.
+
+ALERT:
+Type: ${ctx.alertType} (${ctx.alertTier || 'FIRED'})
+Control team: ${ctx.ctrlTeam} | Floor: ${ctx.floor} | Margin: ${ctx.margin} (${ctx.margin < 0 ? 'trailing' : ctx.margin > 0 ? 'leading' : 'tied'})
+Score: ${ctx.awayAlias} ${ctx.awayPts} - ${ctx.homeAlias} ${ctx.homePts} (${ctx.ctrlTeam} is ${ctx.ctrlIsHome ? 'HOME' : 'AWAY'})
+Period: Q${ctx.period} ${ctx.clock}
+${ctx.bwcTeam ? 'BWC team (subscriber position): ' + ctx.bwcTeam + (ctx.bwcTeam !== ctx.ctrlTeam ? ' (NOT current ctrl team — ctrl flipped to ' + ctx.ctrlTeam + ')' : '') : ''}
+
+INDICATORS (control-team-relative):
+I1 Disruption: ${ctx.i1} | I2 Interior: ${ctx.i2} | I3 Shot Quality: ${ctx.i3} | I4 Game Control: ${ctx.i4} | I5 Execution: ${ctx.i5}
+Indicators won: ${ctx.ctrlIndicators} (${ctx.ctrlIndicatorCount}/5)
+Ctrl sust: ${ctx.ctrlSust || 'N/A'} | Opp sust: ${ctx.oppSust || 'N/A'}
+TP: ${ctx.tpClass || 'N/A'} | LS: ${ctx.lsClass || 'N/A'}
+
+OPPONENT PROFILE:
+Opponent indicators won: ${ctx.oppIndicatorCount} (${ctx.oppIndicatorsWon})
+${ctx.oppI3Won ? 'Opponent I3 (shot quality) won — EXPECTED variance, not structural. Does NOT invalidate buy thesis.' : ''}
+${ctx.oppIndicatorCount >= 1 && !ctx.oppI3Won ? 'WARNING: Opponent structural counter-indicators (' + ctx.oppIndicatorsWon + '), not just variance.' : ''}
+
+POSITION HEALTH:
+Peak floor: ${ctx.peakFloor != null ? Number(ctx.peakFloor).toFixed(2) : 'N/A'} | Delta: ${ctx.peakDelta != null ? Number(ctx.peakDelta).toFixed(3) : 'N/A'} | Erosion: ${ctx.erosionLevel}
+Consecutive holds: ${ctx.consecutiveHolds}
+BWC lifecycle: ${ctx.bwcState}${ctx.bwcFirePeriod ? ' (BWC fired Q' + ctx.bwcFirePeriod + ', floor ' + (ctx.bwcFireFloor != null ? Number(ctx.bwcFireFloor).toFixed(2) : '?') + ')' : ''}
+
+FLOOR TRAJECTORY:
+${ctx.floorHistory || 'No prior snapshots'}
+
+PRIOR ALERT REASONING TRAIL:
+${ctx.priorAlertTrail || 'None'}
+
+RULES:
+- VALUE: team PREVIOUSLY held a structural lead (BWC fired Q${ctx.bwcFirePeriod || '?'}) but lost it while retaining structural control. Thesis: "structural edge that built the lead is intact — dip is temporary, plus-money entry." Verify: floor vs BWC fire floor, how lead was lost, deficit depth (1-7 best), timing (Q2-Q3 > Q4). If prior BWC_EDGE alerts flagged a RISK, reference whether it materialized. SUPPRESS if erosion is COLLAPSE AND structural indicators (I1/I4) have flipped to opponent.
+- THESIS_ALIVE: BWC team regained structural control AFTER an EXIT. This is a deep-value play — floor erosion is EXPECTED and is WHY plus-money exists. DO NOT treat floor level or erosion as primary factors. Weight hierarchy: (1) WHICH indicators does the BWC team still hold? I1 Disruption + I4 Game Control = structural core retained. (2) Is opponent's edge variance-based? oppI3Won=true means opponent is shooting well, not structurally dominant — this is the thesis. (3) TP path — STRONG RECOVERY or PROBABLE = mechanical path exists. (4) Deficit depth and timing. Floor being below BWC fire floor is the ENTRY SIGNAL, not a red flag. SUPPRESS only if: BWC team lost I1+I4 (structural core gone), OR opponent has non-I3 structural indicators (I1/I2/I4), OR TP is NO PATH/UNLIKELY with < 3 min left.
+- EXIT: BWC team (${ctx.bwcFirePeriod ? 'the team that fired BWC in Q' + ctx.bwcFirePeriod : 'original BWC team'}) lost structural control. The SUBSCRIBER'S POSITION is on the BWC team, NOT the current control team. Frame the exit around the BWC team losing their edge. Reference the full arc from prior alerts.
+- BWC_EDGE: ALWAYS SEND. This is a position update for a subscriber already holding. Frame as reassurance: structural picture holding, lead compressing. Do NOT frame as a buy signal. MUST include a RISK line at the end of the body — identify the ONE specific thing that could flip this position next (e.g., indicator about to flip, sustainability degrading, erosion approaching threshold). If prior alerts flagged a RISK, reference whether it materialized or not. The RISK line creates accountability across the alert chain. Format body as: status update (2-3 sentences) + "RISK: [specific forward-looking concern]"
+- POSITION_SAFE / POSITION_RECOVERING: SEND as reassurance if prior alerts flagged risks or concerns. Include whether prior RISK materialized. SUPPRESS only if nothing changed AND no prior risk to update on. Write reasoning for compounding either way.
+- BUY: structurally dominant team trailing. Standard evaluation — floor, indicators, TP, deficit depth (1-7 sweet spot; deeper deficits need stronger structural case). When bwcTeamMatch is noted, the team has BWC lifecycle context — reference the position arc. This is a "warm BUY" (thesis history). Without BWC context = "cold BUY" (unproven, higher bar for SEND).
+- REASONING AS JOURNAL: Even when SUPPRESS, write thorough reasoning. It feeds subsequent decisions.
+
+BODY RULES (read by non-technical bettors on their phone):
+- Lead with score + action, explain WHY in basketball terms with structural data, end with what to watch.
+- Translate indicators: I1=turnovers/steals, I2=paint/interior, I3=shot quality, I4=game flow, I5=pace/execution.
+- Say "X/5 structural categories (codes)" not just codes. Include conviction, edge %, sustainability tiers.
+- 2-4 sentences max. Keep structural metrics but make them readable.
+
+Respond in EXACTLY this format:
+DECISION: [SEND|SUPPRESS|DOWNGRADE]
+REASONING: [2-3 sentences — reference opponent profile, erosion, BWC lifecycle, prior alerts]
+BODY: [If SEND: plain-English alert. If SUPPRESS: blank]`;
+}
+
 // Sonnet-powered reasoning layer for alert quality assessment.
 // Receives frontloaded context (all mechanical data + DB history),
 // returns SEND / SUPPRESS / DOWNGRADE decision with reasoning.
@@ -5105,13 +5161,94 @@ export default async function(req) {
             const v2BwcState = computeBwcState(lt, ind.controlTeam, _v2Margin);
             const v2Erosion = computeErosion(lt, ind.score, hA, ind.controlTeam);
 
-            // State transition detection (v2 logging only — no alerts yet)
+            // ── V2 TRIGGER DETECTION: cooldowns, gates, context assembly (logging only) ──
             if (lt.bwc_fired && v2BwcState && lt._prev_bwc_state && v2BwcState !== lt._prev_bwc_state) {
               const v2Dir = classifyTransition(lt._prev_bwc_state, v2BwcState);
-              if (v2Dir !== 'LATERAL') {
-                log(`${matchup}: v2 transition ${lt._prev_bwc_state}→${v2BwcState} (${v2Dir}) floor=${ind.score.toFixed(2)} margin=${_v2Margin} erosion=${v2Erosion.level}`);
+
+              if (v2Dir !== 'LATERAL' && v2BwcState !== 'DEEP_TRAIL') {
+                // Map state + direction → alert type
+                var v2AlertType = null;
+                if (v2Dir === 'DEGRADING') {
+                  if (v2BwcState === 'EDGE') v2AlertType = 'BWC_EDGE';
+                  else if (v2BwcState === 'VALUE') v2AlertType = 'VALUE';
+                  else if (v2BwcState === 'EXIT') v2AlertType = 'EXIT';
+                } else if (v2Dir === 'RECOVERING') {
+                  if (v2BwcState === 'LOCK') v2AlertType = 'POSITION_SAFE';
+                  else if (v2BwcState === 'EDGE') v2AlertType = 'POSITION_RECOVERING';
+                  else if (v2BwcState === 'VALUE') v2AlertType = 'THESIS_ALIVE';
+                }
+
+                if (v2AlertType) {
+                  // Cooldown gate
+                  const _v2Now = Date.now();
+                  const _v2MsSinceAnyBwc = lt._last_any_bwc_ts ? (_v2Now - lt._last_any_bwc_ts) : Infinity;
+                  const _v2CooldownExempt = v2AlertType === 'THESIS_ALIVE';
+                  const _v2CooldownPassed = _v2CooldownExempt || _v2MsSinceAnyBwc >= 180000;
+
+                  // Material change gate
+                  const _v2StateChanged = v2BwcState !== lt._last_fired_state;
+                  const _v2FloorDelta = Math.abs(ind.score - (lt._last_fired_floor || 0));
+                  const _v2MarginDelta = Math.abs(_v2Margin - (lt._last_fired_margin || 0));
+                  const _v2TimeDelta = lt._last_fired_ts ? (_v2Now - lt._last_fired_ts) : Infinity;
+                  const _v2MaterialChange = _v2FloorDelta >= 0.10 || _v2MarginDelta >= 5 || _v2TimeDelta >= 300000;
+                  const _v2ShouldFire = _v2CooldownPassed && (_v2StateChanged || _v2MaterialChange);
+
+                  if (_v2ShouldFire) {
+                    // Exit severity
+                    var _v2ExitSev = null;
+                    if (v2BwcState === 'EXIT') {
+                      const _v2IndNames = ['I1','I2','I3','I4','I5'];
+                      const _v2IndScores = [ind.I1, ind.I2, ind.I3, ind.I4, ind.I5];
+                      const _v2CtrlScore = (s) => s == null ? 0.5 : (_v2CtrlIsHome ? s : 1 - s);
+                      const _v2OppInd = _v2IndNames.filter((n, i) => _v2IndScores[i] && _v2CtrlScore(_v2IndScores[i].score) >= 0.55);
+                      _v2ExitSev = computeExitSeverity(_v2OppInd, _v2OppInd.length, ind.score, lt.ctrl_team_holds || 0);
+                    }
+
+                    // Compute ctrl-relative indicators for context
+                    const _v2IndNames = ['I1','I2','I3','I4','I5'];
+                    const _v2IndScores = [ind.I1, ind.I2, ind.I3, ind.I4, ind.I5];
+                    const _v2CtrlScoreFn = (s) => s == null ? 0.5 : (_v2CtrlIsHome ? s : 1 - s);
+                    const _v2CtrlInd = _v2IndNames.filter((n, i) => _v2IndScores[i] && _v2CtrlScoreFn(_v2IndScores[i].score) >= 0.55);
+                    const _v2OppIndW = _v2IndNames.filter((n, i) => _v2IndScores[i] && _v2CtrlScoreFn(_v2IndScores[i].score) <= 0.45);
+                    const _v2OppI3Won = _v2OppIndW.length >= 1 && _v2OppIndW.includes('I3');
+
+                    log(`${matchup}: ▶ V2 TRIGGER ${v2AlertType} [${lt._prev_bwc_state}→${v2BwcState}] floor=${ind.score.toFixed(2)} margin=${_v2Margin} erosion=${v2Erosion.level} ctrl=${_v2CtrlInd.join('+')||'none'}(${_v2CtrlInd.length}/5) opp=${_v2OppIndW.join('+')||'none'} oppI3=${_v2OppI3Won}${_v2ExitSev ? ' exit=' + _v2ExitSev.severity : ''} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||lsForBWC?.classification||'-'}`);
+
+                    // Update gate timestamps
+                    lt._last_any_bwc_ts = _v2Now;
+                    lt._last_fired_state = v2BwcState;
+                    lt._last_fired_floor = ind.score;
+                    lt._last_fired_margin = _v2Margin;
+                    lt._last_fired_ts = _v2Now;
+                  } else {
+                    log(`${matchup}: v2 ${v2AlertType} GATED — cooldown=${!_v2CooldownPassed ? 'BLOCKED(' + Math.round(_v2MsSinceAnyBwc/1000) + 's)' : 'ok'} material=${!_v2MaterialChange && !_v2StateChanged ? 'BLOCKED' : 'ok'}`);
+                  }
+                }
               }
             }
+
+            // ── V2 BUY TRIGGERS ──
+            if (currentPeriod >= 2 && ind.score >= 0.55 && ctrlTrailing && margin >= 1 && margin <= 15
+                && alertMinsLeft >= 1.0 && ind.controlTeam !== 'Neither') {
+              const _v2Now = Date.now();
+              const _v2MsSinceLastBuy = lt._last_buy_ts ? (_v2Now - lt._last_buy_ts) : Infinity;
+              if (_v2MsSinceLastBuy >= 180000) {
+                const _v2BuyTier = ind.score >= 0.65 ? 'FIRED' : 'CANDIDATE';
+                const _v2BwcTeamMatch = lt.bwc_fired?.team === ind.controlTeam;
+
+                // Compute ctrl-relative indicators
+                const _v2IndNames = ['I1','I2','I3','I4','I5'];
+                const _v2IndScores = [ind.I1, ind.I2, ind.I3, ind.I4, ind.I5];
+                const _v2CtrlScoreFn = (s) => s == null ? 0.5 : (_v2CtrlIsHome ? s : 1 - s);
+                const _v2CtrlInd = _v2IndNames.filter((n, i) => _v2IndScores[i] && _v2CtrlScoreFn(_v2IndScores[i].score) >= 0.55);
+                const _v2OppIndW = _v2IndNames.filter((n, i) => _v2IndScores[i] && _v2CtrlScoreFn(_v2IndScores[i].score) <= 0.45);
+
+                log(`${matchup}: ▶ V2 BUY ${_v2BuyTier} floor=${ind.score.toFixed(2)} trail=${margin} bwcMatch=${_v2BwcTeamMatch} ctrl=${_v2CtrlInd.join('+')||'none'}(${_v2CtrlInd.length}/5) opp=${_v2OppIndW.join('+')||'none'} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||'-'} ml=${ctrlML||'-'}`);
+
+                lt._last_buy_ts = _v2Now;
+              }
+            }
+
             if (lt.bwc_fired) {
               lt._prev_bwc_state = v2BwcState;
               log(`${matchup}: v2 state=${v2BwcState || '-'} erosion=${v2Erosion.level} peak=${v2Erosion.peakFloor?.toFixed(2) || '-'} holds=${lt.ctrl_team_holds || 0} bwcTeam=${lt.bwc_fired.team}`);
