@@ -213,11 +213,11 @@ BODY: [If SEND: plain-English alert. If SUPPRESS: blank]`;
 // returns SEND / SUPPRESS / DOWNGRADE decision with reasoning.
 // FIRED alerts fall through to ntfy on agent failure (safe default).
 // CANDIDATE alerts are dropped on agent failure (conservative default).
-async function runAlertAgent(ctx) {
+async function runAlertAgent(ctx, overridePrompt, maxTokens) {
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   if (!anthropicKey) { log(`Agent: no API key, skipping`); return null; }
 
-  const prompt = `You are a live NBA betting alert quality agent. A mechanical system has identified a potential betting signal. Your job is to assess whether it should be sent to the bettor.
+  const prompt = overridePrompt || `You are a live NBA betting alert quality agent. A mechanical system has identified a potential betting signal. Your job is to assess whether it should be sent to the bettor.
 
 ALERT:
 Type: ${ctx.alertType} (${ctx.alertTier})
@@ -245,20 +245,7 @@ ${ctx.priorAlerts || 'None'}
 
 QUARTER PERFORMANCE:
 ${ctx.quarterSummary || 'N/A'}
-${ctx.learningsContext ? '\n' + ctx.learningsContext + '\n' : ''}${ctx.monitorContext ? `
-MONITOR OBSERVATIONS (from continuous game observer, most recent first):
-${ctx.monitorContext}
-
-NOTE: Monitor observations provide trajectory context — momentum, sustainability arcs, risk factors — from continuous 3-minute polling between alerts. Use them to inform your reasoning about the game's arc, but they do not override mechanical FIRED thresholds. A FIRED alert with strong indicators is still a SEND even if the monitor notes a risk factor. For CANDIDATE alerts, monitor context can tip the decision.
-
-FIELD DEFINITIONS:
-- margin: score difference from control team perspective (positive = leading, negative = trailing)
-- Momentum: direction(streak, delta). Direction = RISING/FALLING/FLAT. Streak = consecutive polls in this direction (6 = six straight polls trending this way). Delta = floor change over that streak (+0.08 = floor rose 0.08 over 6 polls).
-- Sust arc: sustainability trajectory for control team. STABLE/IMPROVING/DEGRADING/VOLATILE. Detail in parens shows both teams' tiers.
-- Floor-margin: relationship between structural floor and live score. ALIGNED = floor and margin agree (high floor + leading, or low floor + trailing). DIVERGING = floor says one thing, score says another (high floor but trailing = variance, the setup we bet on).
-- Observation: narrative summary of game arc from the monitor agent.
-- Risk: specific risk factors the monitor identified (e.g. foul trouble, opponent run, clutch matchup concerns).
-` : ''}${ctx.priorPosition ? `
+${ctx.learningsContext ? '\n' + ctx.learningsContext + '\n' : ''}${ctx.priorPosition ? `
 POSITION UPDATE CONTEXT:
 This is a position update for a previously sent alert — NOT a new signal.
 Prior alert: ${ctx.priorPosition.alertType} for ${ctx.priorPosition.controlTeam} at Q${ctx.priorPosition.period} ${ctx.priorPosition.clock} (${ctx.priorPosition.minutesSince} min ago)
@@ -294,7 +281,6 @@ RULES:
 - VARIANCE BREAKING: opponent's shooting is regressing toward the mean. SEND if structural edge is clear (I4 COMBO YES, 3+ indicators) and the sustainability shift is meaningful. SUPPRESS if structural edge is thin (I4 EVEN, 1-2 indicators) or the sustainability drop is a borderline tier flip that could reverse.
 - ANCHORED FLOOR CHECK: If team is TRAILING with floor 0.75+ but margin only 1-3 pts AND floor is declining from recent snapshots, the floor may be anchored from earlier dominance that has eroded. Verify recent quarters still favor control team before SEND. This rule does NOT apply to leading teams (BWC/WINDOW BUY) — a high floor with a small lead is a valid structural read.
 - EARLY GAME NOTE (Q1-Q2): Indicator samples are smaller early — steals/blocks counts are low, run share may not be populated yet, and biggest_lead gaps can form from a single early run. This does NOT mean early signals are unreliable. The new indicator formulas have proven predictive even in Q2. For Q1-Q2 FIRED alerts: I4 COMBO YES = SEND with confidence. I4 COMBO NO = apply normal scrutiny (don't auto-reject, just verify the structural case). For Q1-Q2 CANDIDATE alerts: I4 COMBO YES = SEND. I4 COMBO NO = apply extra scrutiny but still SEND if floor is strong (0.75+) and sustainability favors control team. Q3+ alerts have the most data — highest confidence.
-- MONITOR OVERRIDE PROTECTION: When MONITOR OBSERVATIONS are present: I4 COMBO YES + FIRED is ALWAYS a SEND. Monitor observations CANNOT downgrade a FIRED alert with I4 COMBO YES to SUPPRESS — this rule is absolute. However, if monitor context shows persistent divergence (floor-margin DIVERGING 5+ polls), opponent sustainability LOCKED IN with zero degradation, or prior auto-analysis flagging thesis erosion, you MUST add a CAUTION line to your BODY: "CAUTION: [specific concern from monitor]." This preserves the signal while flagging the risk for the bettor to size their position.
 - CANDIDATE BUYs at floor 0.55-0.65: only SEND if I4 COMBO is YES (I4 decisive + at least one other indicator agrees — this pattern is 98-100% accurate historically). Without I4 COMBO, require very strong sustainability case to justify SEND.
 - CANDIDATE BUYs with negative ML (heavy favorite trailing): the CANDIDATE tier reflects the ML gate (-250 to -400), NOT structural weakness. Evaluate the structural case as if it were FIRED — if I4 COMBO YES + STRONG/DOMINANT conviction, SEND so the subscriber can shop for favorable lines. Note the heavy ML in the BODY.
 - TP (Throughput Projection) is context, not a veto. It estimates whether a trailing team's structural production rate can close the deficit in remaining possessions. Limitation: TP uses cumulative game stats, so early-game dominance by either team anchors the rates even after momentum shifts. TP NO PATH at 1-3 point deficits is often a false negative — the game is essentially tied regardless of what the projection math says. TP STRONG RECOVERY or PROBABLE adds confidence. TP UNLIKELY or NO PATH is a caution flag, not a stop sign.
@@ -326,7 +312,7 @@ BODY: [If SEND/DOWNGRADE: plain-English alert body following BODY RULES above. I
       },
       body: JSON.stringify({
         model: 'claude-opus-4-6',
-        max_tokens: 500,
+        max_tokens: maxTokens || 500,
         messages: [{ role: 'user', content: prompt }],
       }),
     });
@@ -365,7 +351,7 @@ async function gatherAgentContext(sql, gameId, matchup) {
   let floorHistory = '', priorAlerts = '', quarterSummary = '';
   try {
     const snaps = await sql`SELECT floor_score, floor_team, period, clock, home_pts, away_pts, i1, i2, i3, i4, i5, tp_class, ls_class
-      FROM snapshots WHERE game_id = ${gameId} ORDER BY ts DESC LIMIT 5`;
+      FROM snapshots WHERE game_id = ${gameId} AND source = 'server' ORDER BY ts DESC LIMIT 5`;
     if (snaps.length > 0) {
       floorHistory = snaps.map(s =>
         `Q${s.period} ${s.clock}: ${s.floor_team} ${Number(s.floor_score).toFixed(2)} (${s.away_pts}-${s.home_pts}) TP:${s.tp_class || '?'} LS:${s.ls_class || '?'}`
@@ -427,24 +413,7 @@ async function gatherAgentContext(sql, gameId, matchup) {
       }
     }
   } catch (e) { /* non-fatal — learnings table may not exist */ }
-  // Latest monitor observation for game-arc context
-  let monitorContext = '';
-  try {
-    const monObs = await sql`
-      SELECT narrative, risk_factors, momentum_direction, momentum_streak, momentum_delta,
-             sust_arc, sust_arc_detail, floor_margin_rel, floor_score, margin, period, clock, control_team
-      FROM monitor_observations
-      WHERE game_id = ${gameId}
-      ORDER BY ts DESC LIMIT 1`;
-    if (monObs.length > 0) {
-      const m = monObs[0];
-      monitorContext = `Q${m.period} ${m.clock} | ${m.control_team} floor ${Number(m.floor_score).toFixed(2)}, margin ${m.margin}\n`
-        + `Momentum: ${m.momentum_direction}(${m.momentum_streak}, ${m.momentum_delta >= 0 ? '+' : ''}${Number(m.momentum_delta).toFixed(2)}) | Sust arc: ${m.sust_arc}${m.sust_arc_detail ? ' (' + m.sust_arc_detail + ')' : ''} | Floor-margin: ${m.floor_margin_rel}\n`
-        + `Observation: ${m.narrative}\n`
-        + `Risk: ${m.risk_factors}`;
-    }
-  } catch (e) { /* non-fatal — monitor_observations table may not exist */ }
-  return { floorHistory, priorAlerts, quarterSummary, learningsContext, monitorContext };
+  return { floorHistory, priorAlerts, quarterSummary, learningsContext };
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -3446,7 +3415,7 @@ function parseAnalysisText(text, homeAlias, awayAlias) {
 // Single function that formats ALL data layers into prompt text.
 // Matches analyze.js quality — no more "payload ghost" layers.
 
-function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary, conviction, monitorContext }) {
+function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary, conviction }) {
   let p = `${aA} @ ${hA} | Q${period} ${clock} | ${score}\n\n`;
 
   // ── GROUND TRUTH (mechanical engine output — do not override) ──
@@ -3769,19 +3738,6 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
     });
   }
 
-  // Monitor observation (game-arc context from continuous 3-minute observer)
-  if (monitorContext) {
-    p += `\nMONITOR OBSERVATION (continuous 3-minute game observer — most recent read):\n`;
-    p += monitorContext + '\n';
-    p += 'FIELD DEFINITIONS: margin = score diff from ctrl team perspective. ';
-    p += 'Momentum direction(streak, delta): streak = consecutive polls trending this way, delta = floor change over streak. ';
-    p += 'Sust arc: STABLE/IMPROVING/DEGRADING/VOLATILE for ctrl team sustainability. ';
-    p += 'Floor-margin: ALIGNED (floor agrees with score) or DIVERGING (floor says one thing, score says another — the setup we bet on).\n';
-    p += 'USE: Reference trajectory reads in your NARRATIVE and RISK. ';
-    p += 'If the monitor flags a specific flip scenario in its Risk section, address it. ';
-    p += 'Monitor observations do NOT override your ground truth indicators.\n';
-  }
-
   // Full game data
   p += `\nGAME DATA:\n${JSON.stringify(summary)}`;
 
@@ -3906,24 +3862,6 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
 
     const calConviction = computeConviction(ind);
 
-    // Latest monitor observation for game-arc context
-    let monitorContext = null;
-    try {
-      const monObs = await sql`
-        SELECT narrative, risk_factors, momentum_direction, momentum_streak, momentum_delta,
-               sust_arc, sust_arc_detail, floor_margin_rel, floor_score, margin, period, clock, control_team
-        FROM monitor_observations
-        WHERE game_id = ${game.id}
-        ORDER BY ts DESC LIMIT 1`;
-      if (monObs.length > 0) {
-        const m = monObs[0];
-        monitorContext = `Q${m.period} ${m.clock} | ${m.control_team} floor ${Number(m.floor_score).toFixed(2)}, margin ${m.margin}\n`
-          + `Momentum: ${m.momentum_direction}(${m.momentum_streak}, ${m.momentum_delta >= 0 ? '+' : ''}${Number(m.momentum_delta).toFixed(2)}) | Sust arc: ${m.sust_arc}${m.sust_arc_detail ? ' (' + m.sust_arc_detail + ')' : ''} | Floor-margin: ${m.floor_margin_rel}\n`
-          + `Observation: ${m.narrative}\n`
-          + `Risk: ${m.risk_factors}`;
-      }
-    } catch (e) { /* non-fatal */ }
-
     const userPrompt = formatSonnetPrompt({
       hA, aA, period, clock, score: scoreLine,
       thesis: thesis || null,
@@ -3932,7 +3870,6 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       quarterDataFromDB,
       summary,
       conviction: calConviction,
-      monitorContext,
     });
 
     // ── Compute prompt layer inventory for diagnostics ──
@@ -3961,7 +3898,6 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       ctx.gameMeta ? 'gameMeta' : null,
       ctx.edgeHistory ? 'edgeHistory' : null,
       ctx.trackingData ? 'tracking' : null,
-      monitorContext ? 'monitor' : null,
     ].filter(Boolean);
     const contextLayersStr = `${layerInventory.length}L: ${layerInventory.join(',')}`;
     const promptChars = userPrompt.length;
@@ -4047,7 +3983,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
 
         // ── 10a. POSITION GATE — auto-analysis only sends as position updates ──
         // Query for most recent SENT actionable alert for this game
-        const POSITION_TYPES = ['BUY', 'BUY WINDOW CLOSING', 'WINDOW BUY', 'RECOVERY PATH', 'LEAD CRUMBLING', 'LEAD LOST', 'VARIANCE BREAKING'];
+        const POSITION_TYPES = ['BUY', 'BUY WINDOW CLOSING', 'WINDOW BUY', 'RECOVERY PATH', 'LEAD CRUMBLING', 'LEAD LOST', 'VARIANCE BREAKING', 'POSITION_OPEN', 'BWC_EDGE', 'VALUE', 'EXIT', 'THESIS_ALIVE', 'POSITION_RECOVERING', 'POSITION_SAFE'];
         let priorPosition = null;
         try {
           const priorRows = await sql`
@@ -4102,7 +4038,6 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           priorAlerts: agentCtx.priorAlerts,
           quarterSummary: agentCtx.quarterSummary,
           learningsContext: agentCtx.learningsContext,
-          monitorContext: agentCtx.monitorContext,
           // Sonnet context for enriched alert body
           sonnetFWP: parsed.fwp,
           sonnetNarrative: parsed.narrative,
@@ -4536,14 +4471,6 @@ export default async function(req) {
           SELECT first_tip, last_tip, game_count, all_final, schedule_json
           FROM poll_state WHERE league = ${league} AND date = ${dateKey}
         `;
-        if (psRows.length > 0) pollState = psRows[0];
-        // monitor_last_run — separate query so missing column doesn't kill the main SELECT
-        if (pollState) {
-          try {
-            const mlr = await sql`SELECT monitor_last_run FROM poll_state WHERE league = ${league} AND date = ${dateKey}`;
-            if (mlr.length > 0) pollState.monitor_last_run = mlr[0].monitor_last_run;
-          } catch (e) { /* column may not exist yet — non-fatal */ }
-        }
         if (psRows.length > 0) pollState = psRows[0];
       } catch (e) {
         // Table may not exist yet — proceed to fetch schedule
@@ -5151,6 +5078,7 @@ export default async function(req) {
               if (lt._bwc_candidate_holds >= 3) {
                 lt.bwc_fired = { team: ind.controlTeam, period: currentPeriod, clock, floor: ind.score };
                 lt._prev_bwc_state = _v2Margin >= 3 ? 'LOCK' : 'EDGE';
+                lt._just_established = true;
                 log(`${matchup}: ★ V2 BWC FIRED — ${ind.controlTeam} floor ${ind.score.toFixed(2)} margin ${_v2Margin} state ${lt._prev_bwc_state}`);
               }
             } else if (!lt.bwc_fired && ind.controlTeam !== lt._bwc_candidate) {
@@ -5161,7 +5089,206 @@ export default async function(req) {
             const v2BwcState = computeBwcState(lt, ind.controlTeam, _v2Margin);
             const v2Erosion = computeErosion(lt, ind.score, hA, ind.controlTeam);
 
-            // ── V2 TRIGGER DETECTION: cooldowns, gates, context assembly (logging only) ──
+            // ── SHARED COMPUTATIONS (control-team-relative, used by all alert paths) ──
+            const ctrlSide = ind.controlTeam === hA ? 'home' : 'away';
+            const oppSide = ctrlSide === 'home' ? 'away' : 'home';
+            const ctrlSust = sust?.[ctrlSide]?.tier || null;
+            const oppSustTier = sust?.[oppSide]?.tier || null;
+            const ctrlIsHome = ind.controlTeam === hA;
+            const ctrlPtsA = ctrlIsHome ? ind.homePts : ind.awayPts;
+            const oppPtsA = ctrlIsHome ? ind.awayPts : ind.homePts;
+            const ctrlTrailing = oppPtsA > ctrlPtsA;
+            const ctrlLeading = ctrlPtsA > oppPtsA;
+            const margin = Math.abs(ctrlPtsA - oppPtsA);
+
+            // Compute edge: floor (structural win prob) minus market implied probability
+            let ctrlEdge = null;
+            let ctrlML = null;
+            let garbageLine = false;
+            if (odds && (odds.homeML || odds.awayML)) {
+              const hML = parseFloat(odds.homeML), aML = parseFloat(odds.awayML);
+              garbageLine = (Math.abs(hML) >= 50000 || Math.abs(aML) >= 50000 || hML === aML);
+              if (!garbageLine) {
+                ctrlML = ctrlIsHome ? odds.homeML : odds.awayML;
+                const ctrlMIP = mlToProb(ctrlML);
+                if (ctrlMIP != null) {
+                  ctrlEdge = (ind.score * 100) - (ctrlMIP * 100);
+                  ctrlEdge = Math.round(ctrlEdge * 10) / 10;
+                }
+              }
+            }
+
+            // Compute lead safety for BWC context
+            let lsForBWC = null;
+            if (ctrlLeading && margin >= 2) {
+              lsForBWC = computeLeadSafetyServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat);
+            }
+
+            // Compute throughput for BUY context
+            let tpForBuy = null;
+            if (ctrlTrailing && margin >= 1) {
+              try { tpForBuy = computeThroughputServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat); }
+              catch (e) { log(`${matchup}: throughput compute failed in alert gate: ${e.message}`); }
+            }
+
+            // Clock computation for alert time gates
+            const alertClockParts = clock.replace(/^[A-Za-z]+\s*/, '').split(':');
+            const alertPeriodMins = league === 'ncaamb' ? 20 : 12;
+            const alertClockMins = alertClockParts.length === 2 ? (parseInt(alertClockParts[0]) || 0) + ((parseInt(alertClockParts[1]) || 0) / 60) : alertPeriodMins;
+            const alertTotalPeriods = league === 'ncaamb' ? 2 : 4;
+            const alertMinsLeft = alertClockMins + (Math.max(0, alertTotalPeriods - currentPeriod) * alertPeriodMins);
+
+            // Ctrl-relative indicator computation (shared by all alert paths)
+            const _indNames = ['I1','I2','I3','I4','I5'];
+            const _indScores = [ind.I1, ind.I2, ind.I3, ind.I4, ind.I5];
+            const _ctrlScoreFn = (s) => s == null ? 0.5 : (ctrlIsHome ? s : 1 - s);
+            const _ctrlInd = _indNames.filter((n, i) => _indScores[i] && _ctrlScoreFn(_indScores[i].score) >= 0.55);
+            const _oppIndW = _indNames.filter((n, i) => _indScores[i] && _ctrlScoreFn(_indScores[i].score) <= 0.45);
+            const _oppI3Won = _oppIndW.length >= 1 && _oppIndW.includes('I3');
+
+            // ── V2 ALERT ROUTING HELPER ──
+            // Assembles context, calls agent with v2 prompt, sends ntfy, writes DB
+            async function routeV2Alert(v2Type, v2Tier, v2ExitSev, v2IsBuy) {
+              // Map alert type → ntfy title
+              const V2_TITLE_MAP = {
+                'POSITION_OPEN': 'POSITION OPEN',
+                'BWC_EDGE': 'HOLDING',
+                'VALUE': 'RE-ENTRY VALUE',
+                'EXIT': 'EXIT',
+                'THESIS_ALIVE': 'SECOND CHANCE',
+                'POSITION_RECOVERING': 'STRENGTHENING',
+                'POSITION_SAFE': 'POSITION SAFE',
+                'BUY': 'BUY',
+              };
+
+              const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
+              const mlStr = ctrlML ? ` ML ${ctrlML}` : '';
+              const tierTag = v2Tier === 'CANDIDATE' ? ' [CANDIDATE]' : '';
+              const bwcTeam = lt.bwc_fired?.team || null;
+
+              // ntfy title
+              let ntfyTitle;
+              if (v2IsBuy) {
+                ntfyTitle = `BUY${tierTag} ${ind.controlTeam}${mlStr}`;
+              } else if (v2Type === 'EXIT') {
+                ntfyTitle = `EXIT${v2ExitSev ? ' (' + v2ExitSev.severity + ')' : ''} — ${matchup}`;
+              } else {
+                ntfyTitle = `${V2_TITLE_MAP[v2Type] || v2Type}${tierTag} — ${bwcTeam || ind.controlTeam}${mlStr}`;
+              }
+
+              // Gather DB context (floor history with source=server, prior alerts)
+              const agentCtx = await gatherAgentContext(sql, game.id, matchup);
+
+              // Build v2 agent prompt context
+              const v2Ctx = {
+                alertType: v2Type, alertTier: v2Tier,
+                ctrlTeam: ind.controlTeam, floor: ind.score.toFixed(2),
+                margin: _v2Margin, // signed: positive = leading
+                awayAlias: aA, homeAlias: hA,
+                awayPts: ind.awayPts, homePts: ind.homePts,
+                ctrlIsHome,
+                period: currentPeriod, clock,
+                bwcTeam,
+                i1: _ctrlScoreFn(ind.I1?.score)?.toFixed(2),
+                i2: _ctrlScoreFn(ind.I2?.score)?.toFixed(2),
+                i3: _ctrlScoreFn(ind.I3?.score)?.toFixed(2),
+                i4: _ctrlScoreFn(ind.I4?.score)?.toFixed(2),
+                i5: _ctrlScoreFn(ind.I5?.score)?.toFixed(2),
+                ctrlIndicators: _ctrlInd.join('+') || 'none',
+                ctrlIndicatorCount: _ctrlInd.length,
+                ctrlSust, oppSust: oppSustTier,
+                tpClass: tpForBuy?.classification || null,
+                lsClass: lsForBWC?.classification || null,
+                oppIndicatorCount: _oppIndW.length,
+                oppIndicatorsWon: _oppIndW.join('+') || 'none',
+                oppI3Won: _oppI3Won,
+                peakFloor: v2Erosion.peakFloor,
+                peakDelta: v2Erosion.peakDelta,
+                erosionLevel: v2Erosion.level,
+                consecutiveHolds: lt.ctrl_team_holds || 0,
+                bwcState: v2BwcState || lt._prev_bwc_state,
+                bwcFirePeriod: lt.bwc_fired?.period,
+                bwcFireFloor: lt.bwc_fired?.floor,
+                floorHistory: agentCtx.floorHistory,
+                priorAlertTrail: agentCtx.priorAlerts,
+              };
+
+              const v2Prompt = buildV2AgentPrompt(v2Ctx);
+              const agentResult = await runAlertAgent(v2Ctx, v2Prompt, 600);
+
+              let agentDecision = null, agentReasoning = '', shouldSend = false;
+              let alertPriority = v2Type === 'EXIT' ? 5 : v2Type === 'BUY' ? 5 : 4;
+
+              if (agentResult) {
+                agentDecision = agentResult.decision;
+                agentReasoning = agentResult.reasoning;
+                if (agentDecision === 'SEND') {
+                  shouldSend = true;
+                } else if (agentDecision === 'DOWNGRADE') {
+                  shouldSend = true;
+                  alertPriority = Math.max(2, alertPriority - 1);
+                } else {
+                  shouldSend = false;
+                }
+                log(`${matchup}: Agent ${agentDecision} ${v2Tier} ${v2Type} — ${agentReasoning}`);
+                if (agentResult.usage) {
+                  log(`${matchup}: Agent tokens — in:${agentResult.usage.input_tokens} out:${agentResult.usage.output_tokens}`);
+                }
+              } else {
+                // Agent failed — FIRED sends as-is, CANDIDATE drops
+                shouldSend = (v2Tier === 'FIRED');
+                agentDecision = v2Tier === 'FIRED' ? 'FALLBACK_SEND' : 'FALLBACK_DROP';
+                log(`${matchup}: Agent unavailable — ${agentDecision} for ${v2Tier} ${v2Type}`);
+              }
+
+              // DB-level dedup — catch concurrent invocations
+              try {
+                const dbDedup = await sql`SELECT 1 FROM alerts WHERE game_id = ${game.id} AND alert_type = ${v2Type} AND ntfy_sent = true AND ts > NOW() - INTERVAL '2 minutes' LIMIT 1`;
+                if (dbDedup.length > 0) {
+                  log(`${matchup}: ${v2Type} DB-deduped — concurrent invocation already sent`);
+                  shouldSend = false;
+                }
+              } catch(e) { /* non-fatal — fail-open */ }
+
+              if (shouldSend) {
+                const ntfyBody = (agentResult?.body && agentResult.body.length > 20)
+                  ? scoreLine + '\n' + agentResult.body
+                  : scoreLine + '\n' + ind.controlTeam + ' structural floor ' + ind.score.toFixed(2)
+                    + ', ' + _ctrlInd.length + '/5 indicators (' + (_ctrlInd.join('+') || 'none') + ')'
+                    + (ctrlEdge != null ? '\nEdge: ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '% over market' : '');
+                await sendNtfy(ntfyTitle, ntfyBody, alertPriority);
+              }
+
+              // Always save to alerts table
+              try {
+                await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team,
+                  floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class,
+                  ctrl_sust, opp_sust, alert_tier, agent_decision, agent_reasoning,
+                  i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent,
+                  bwc_state, erosion_level, peak_floor, exit_severity)
+                  VALUES (${game.id}, ${league}, ${v2Type}, ${currentPeriod}, ${clock}, ${ind.controlTeam},
+                  ${ind.score}, ${margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal},
+                  ${tpForBuy?.classification || null}, ${lsForBWC?.classification || null},
+                  ${ctrlSust}, ${oppSustTier}, ${v2Tier}, ${agentDecision}, ${agentReasoning},
+                  ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null},
+                  ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null},
+                  ${conviction.tier}, ${conviction.combo}, ${shouldSend},
+                  ${v2BwcState || lt._prev_bwc_state}, ${v2Erosion.level},
+                  ${v2Erosion.peakFloor ?? null}, ${v2ExitSev?.severity ?? null})`;
+              } catch (e) { log(`${matchup}: v2 alert save failed: ${e.message}`); }
+
+              log(`${matchup}: ${shouldSend ? '★' : '○'} ${v2Type} ${v2Tier} ${agentDecision} — ${ind.controlTeam} ${ind.score.toFixed(2)} ${ctrlTrailing ? 'trailing' : 'leading'} by ${margin}${ctrlEdge != null ? ', edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}`);
+            }
+
+            // ── V2 INITIAL BWC FIRE (POSITION OPEN) ──
+            if (lt._just_established) {
+              delete lt._just_established;
+              if (alertMinsLeft >= 1.0) {
+                await routeV2Alert('POSITION_OPEN', 'FIRED', null, false);
+              }
+            }
+
+            // ── V2 BWC STATE TRANSITIONS ──
             if (lt.bwc_fired && v2BwcState && lt._prev_bwc_state && v2BwcState !== lt._prev_bwc_state) {
               const v2Dir = classifyTransition(lt._prev_bwc_state, v2BwcState);
 
@@ -5193,26 +5320,17 @@ export default async function(req) {
                   const _v2MaterialChange = _v2FloorDelta >= 0.10 || _v2MarginDelta >= 5 || _v2TimeDelta >= 300000;
                   const _v2ShouldFire = _v2CooldownPassed && (_v2StateChanged || _v2MaterialChange);
 
-                  if (_v2ShouldFire) {
-                    // Exit severity
+                  if (_v2ShouldFire && alertMinsLeft >= 1.0 && ind.controlTeam !== 'Neither') {
+                    // Exit severity for EXIT alerts
                     var _v2ExitSev = null;
                     if (v2BwcState === 'EXIT') {
-                      const _v2IndNames = ['I1','I2','I3','I4','I5'];
-                      const _v2IndScores = [ind.I1, ind.I2, ind.I3, ind.I4, ind.I5];
-                      const _v2CtrlScore = (s) => s == null ? 0.5 : (_v2CtrlIsHome ? s : 1 - s);
-                      const _v2OppInd = _v2IndNames.filter((n, i) => _v2IndScores[i] && _v2CtrlScore(_v2IndScores[i].score) >= 0.55);
-                      _v2ExitSev = computeExitSeverity(_v2OppInd, _v2OppInd.length, ind.score, lt.ctrl_team_holds || 0);
+                      const _oppInd = _indNames.filter((n, i) => _indScores[i] && _ctrlScoreFn(_indScores[i].score) >= 0.55);
+                      _v2ExitSev = computeExitSeverity(_oppInd, _oppInd.length, ind.score, lt.ctrl_team_holds || 0);
                     }
 
-                    // Compute ctrl-relative indicators for context
-                    const _v2IndNames = ['I1','I2','I3','I4','I5'];
-                    const _v2IndScores = [ind.I1, ind.I2, ind.I3, ind.I4, ind.I5];
-                    const _v2CtrlScoreFn = (s) => s == null ? 0.5 : (_v2CtrlIsHome ? s : 1 - s);
-                    const _v2CtrlInd = _v2IndNames.filter((n, i) => _v2IndScores[i] && _v2CtrlScoreFn(_v2IndScores[i].score) >= 0.55);
-                    const _v2OppIndW = _v2IndNames.filter((n, i) => _v2IndScores[i] && _v2CtrlScoreFn(_v2IndScores[i].score) <= 0.45);
-                    const _v2OppI3Won = _v2OppIndW.length >= 1 && _v2OppIndW.includes('I3');
+                    log(`${matchup}: ▶ V2 TRIGGER ${v2AlertType} [${lt._prev_bwc_state}→${v2BwcState}] floor=${ind.score.toFixed(2)} margin=${_v2Margin} erosion=${v2Erosion.level} ctrl=${_ctrlInd.join('+')||'none'}(${_ctrlInd.length}/5) opp=${_oppIndW.join('+')||'none'} oppI3=${_oppI3Won}${_v2ExitSev ? ' exit=' + _v2ExitSev.severity : ''} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||lsForBWC?.classification||'-'}`);
 
-                    log(`${matchup}: ▶ V2 TRIGGER ${v2AlertType} [${lt._prev_bwc_state}→${v2BwcState}] floor=${ind.score.toFixed(2)} margin=${_v2Margin} erosion=${v2Erosion.level} ctrl=${_v2CtrlInd.join('+')||'none'}(${_v2CtrlInd.length}/5) opp=${_v2OppIndW.join('+')||'none'} oppI3=${_v2OppI3Won}${_v2ExitSev ? ' exit=' + _v2ExitSev.severity : ''} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||lsForBWC?.classification||'-'}`);
+                    await routeV2Alert(v2AlertType, 'FIRED', _v2ExitSev, false);
 
                     // Update gate timestamps
                     lt._last_any_bwc_ts = _v2Now;
@@ -5220,7 +5338,7 @@ export default async function(req) {
                     lt._last_fired_floor = ind.score;
                     lt._last_fired_margin = _v2Margin;
                     lt._last_fired_ts = _v2Now;
-                  } else {
+                  } else if (!_v2ShouldFire) {
                     log(`${matchup}: v2 ${v2AlertType} GATED — cooldown=${!_v2CooldownPassed ? 'BLOCKED(' + Math.round(_v2MsSinceAnyBwc/1000) + 's)' : 'ok'} material=${!_v2MaterialChange && !_v2StateChanged ? 'BLOCKED' : 'ok'}`);
                   }
                 }
@@ -5234,757 +5352,29 @@ export default async function(req) {
               const _v2MsSinceLastBuy = lt._last_buy_ts ? (_v2Now - lt._last_buy_ts) : Infinity;
               if (_v2MsSinceLastBuy >= 180000) {
                 const _v2BuyTier = ind.score >= 0.65 ? 'FIRED' : 'CANDIDATE';
-                const _v2BwcTeamMatch = lt.bwc_fired?.team === ind.controlTeam;
 
-                // Compute ctrl-relative indicators
-                const _v2IndNames = ['I1','I2','I3','I4','I5'];
-                const _v2IndScores = [ind.I1, ind.I2, ind.I3, ind.I4, ind.I5];
-                const _v2CtrlScoreFn = (s) => s == null ? 0.5 : (_v2CtrlIsHome ? s : 1 - s);
-                const _v2CtrlInd = _v2IndNames.filter((n, i) => _v2IndScores[i] && _v2CtrlScoreFn(_v2IndScores[i].score) >= 0.55);
-                const _v2OppIndW = _v2IndNames.filter((n, i) => _v2IndScores[i] && _v2CtrlScoreFn(_v2IndScores[i].score) <= 0.45);
+                // ML gate: heavy favorites have no betting value
+                const buyMLNum = ctrlML ? parseFloat(ctrlML) : null;
+                if (buyMLNum !== null && buyMLNum < -400) {
+                  log(`${matchup}: BUY suppressed — ML ${ctrlML} (line cemented, no value)`);
+                } else {
+                  // Downgrade to CANDIDATE if ML heavy (-250 to -400)
+                  const buyTier = (buyMLNum !== null && buyMLNum < -250) ? 'CANDIDATE' : _v2BuyTier;
 
-                log(`${matchup}: ▶ V2 BUY ${_v2BuyTier} floor=${ind.score.toFixed(2)} trail=${margin} bwcMatch=${_v2BwcTeamMatch} ctrl=${_v2CtrlInd.join('+')||'none'}(${_v2CtrlInd.length}/5) opp=${_v2OppIndW.join('+')||'none'} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||'-'} ml=${ctrlML||'-'}`);
+                  log(`${matchup}: ▶ V2 BUY ${buyTier} floor=${ind.score.toFixed(2)} trail=${margin} bwcMatch=${lt.bwc_fired?.team === ind.controlTeam} ctrl=${_ctrlInd.join('+')||'none'}(${_ctrlInd.length}/5) opp=${_oppIndW.join('+')||'none'} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||'-'} ml=${ctrlML||'-'}`);
 
-                lt._last_buy_ts = _v2Now;
-              }
-            }
-
-            if (lt.bwc_fired) {
-              lt._prev_bwc_state = v2BwcState;
-              log(`${matchup}: v2 state=${v2BwcState || '-'} erosion=${v2Erosion.level} peak=${v2Erosion.peakFloor?.toFixed(2) || '-'} holds=${lt.ctrl_team_holds || 0} bwcTeam=${lt.bwc_fired.team}`);
-            }
-
-            const ctrlSide = ind.controlTeam === hA ? 'home' : 'away';
-            const oppSide = ctrlSide === 'home' ? 'away' : 'home';
-            const ctrlSust = sust?.[ctrlSide]?.tier || null;
-            const oppSustTier = sust?.[oppSide]?.tier || null;
-            const ctrlIsHome = ind.controlTeam === hA;
-            const ctrlPtsA = ctrlIsHome ? ind.homePts : ind.awayPts;
-            const oppPtsA = ctrlIsHome ? ind.awayPts : ind.homePts;
-            const ctrlTrailing = oppPtsA > ctrlPtsA;
-            const ctrlLeading = ctrlPtsA > oppPtsA;
-            const margin = Math.abs(ctrlPtsA - oppPtsA);
-            const oppFragile = oppSustTier === 'FRAGILE' || oppSustTier === 'UNSUSTAINABLE';
-
-            // Compute edge for BWC gate: floor (structural win prob) minus MIP
-            let ctrlEdge = null;
-            let ctrlML = null;
-            let garbageLine = false;
-            if (odds && (odds.homeML || odds.awayML)) {
-              const hML = parseFloat(odds.homeML), aML = parseFloat(odds.awayML);
-              garbageLine = (Math.abs(hML) >= 50000 || Math.abs(aML) >= 50000 || hML === aML);
-              if (!garbageLine) {
-                ctrlML = ctrlIsHome ? odds.homeML : odds.awayML;
-                const ctrlMIP = mlToProb(ctrlML);
-                if (ctrlMIP != null) {
-                  ctrlEdge = (ind.score * 100) - (ctrlMIP * 100);
-                  ctrlEdge = Math.round(ctrlEdge * 10) / 10;
+                  await routeV2Alert('BUY', buyTier, null, true);
+                  lt._last_buy_ts = _v2Now;
                 }
               }
-            }
-
-            // Compute lead safety for BWC downgrade check
-            let lsForBWC = null;
-            if (ctrlLeading && margin >= 2) {
-              lsForBWC = computeLeadSafetyServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat);
-            }
-
-            // Compute throughput for BUY gate — is the deficit recoverable?
-            let tpForBuy = null;
-            if (ctrlTrailing && margin >= 1) {
-              try { tpForBuy = computeThroughputServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat); }
-              catch (e) { log(`${matchup}: throughput compute failed in alert gate: ${e.message}`); }
-            }
-
-            // ── LEAD DEGRADED SUPPRESSION: skip all alerts if lead crumbled within 5 min ──
-            let leadDegradedSuppressed = false;
-            try {
-              const degradedCol = ctrlIsHome ? 'home_lead_degraded_at' : 'away_lead_degraded_at';
-              const degRows = await sql`SELECT home_lead_degraded_at, away_lead_degraded_at FROM games WHERE id = ${game.id}`;
-              if (degRows.length > 0) {
-                const degradedAt = degRows[0][degradedCol];
-                if (degradedAt) {
-                  const msSince = Date.now() - new Date(degradedAt).getTime();
-                  if (msSince < 5 * 60 * 1000) {
-                    leadDegradedSuppressed = true;
-                    log(`${matchup}: alerts suppressed — lead degraded ${Math.round(msSince / 1000)}s ago (5min window)`);
-                  }
-                }
-              }
-            } catch (e) { /* non-fatal — proceed without suppression */ }
-
-            let alertType = null, alertTier = null, alertEmoji = '', alertPriority = 4;
-
-            // Shared clock computation for alert time gates
-            const alertClockParts = clock.replace(/^[A-Za-z]+\s*/, '').split(':');
-            const alertPeriodMins = league === 'ncaamb' ? 20 : 12;
-            const alertClockMins = alertClockParts.length === 2 ? (parseInt(alertClockParts[0]) || 0) + ((parseInt(alertClockParts[1]) || 0) / 60) : alertPeriodMins;
-            const alertTotalPeriods = league === 'ncaamb' ? 2 : 4;
-            const alertMinsLeft = alertClockMins + (Math.max(0, alertTotalPeriods - currentPeriod) * alertPeriodMins);
-
-            // Log clock gate suppression for BUY
-            if (ind.score >= 0.65 && ctrlTrailing && margin >= 1 && margin <= 15 && currentPeriod >= 2 && alertMinsLeft < 1.0) {
+            } else if (ind.score >= 0.65 && ctrlTrailing && margin >= 1 && margin <= 15 && currentPeriod >= 2 && alertMinsLeft < 1.0) {
               log(`${matchup}: BUY suppressed — ${alertMinsLeft.toFixed(1)} min left (< 1 min clock gate)`);
             }
 
-            if (ind.score >= 0.65 && ctrlTrailing && margin >= 1 && margin <= 15 && currentPeriod >= 2 && alertMinsLeft >= 1.0) {
-              // TP computed above — passed to agent as context, NOT used as gate
-              // ML gate: heavy favorites trailing have no betting value
-              const buyMLNum = ctrlML ? parseFloat(ctrlML) : null;
-              if (buyMLNum !== null && buyMLNum < -400) {
-                log(`${matchup}: BUY suppressed — ML ${ctrlML} (line cemented, no value)`);
-              } else if (buyMLNum !== null && buyMLNum < -250) {
-                log(`${matchup}: BUY downgraded to CANDIDATE — ML ${ctrlML} (heavy favorite trailing)`);
-                // Falls through to CANDIDATE block below
-              } else {
-                alertType = 'BUY';
-                alertTier = 'FIRED';
-                alertEmoji = '🟢';
-                alertPriority = 5;
-              }
-            } else if (ind.score >= 0.60 && ctrlLeading && margin >= 2 && currentPeriod >= 2 && alertMinsLeft >= 1.0) {
-              // BWC with ML gate — no value betting heavy favorites
-              const ctrlMLNum = ctrlML ? parseFloat(ctrlML) : null;
-              if (ctrlMLNum !== null && ctrlMLNum < -250) {
-                log(`${matchup}: BWC suppressed — ML ${ctrlML} (heavy favorite, no value)`);
-              } else if (ctrlMLNum !== null) {
-                // Check lead safety — downgrade to WATCH if AT RISK/CRITICAL
-                const lsClass = lsForBWC?.classification || null;
-                if (lsClass === 'AT RISK' || lsClass === 'CRITICAL') {
-                  // Don't fire BWC — lead is eroding, not actionable
-                  log(`${matchup}: BWC suppressed — lead ${lsClass}, edge +${ctrlEdge}%`);
-                } else if (ctrlSust === 'FRAGILE' || ctrlSust === 'UNSUSTAINABLE') {
-                  log(`${matchup}: BWC suppressed — ctrl sust ${ctrlSust} (lead built on variance)`);
-                } else {
-                  alertType = 'BUY WINDOW CLOSING';
-                  alertTier = 'FIRED';
-                  alertEmoji = '🔵';
-                  alertPriority = 3;
-                }
-              } else if (garbageLine) {
-                log(`${matchup}: BWC skipped — line dead (garbage MLs)`);
-              } else if (ctrlMLNum === null) {
-                // No odds data — can't verify value, subscriber can't act. Silent suppress, no DB insert.
-                log(`${matchup}: BWC skipped — no odds data (floor ${ind.score.toFixed(2)}, ${ctrlSust})`);
-              }
-            }
-
-            // ── WINDOW BUY: windows show structural takeover even when cumulative floor is below BUY threshold ──
-            // Fires when QTR window ≥ 0.75, trailing/tied/leading ≤ 5, sustainability LOCKED/DURABLE, floor ≥ 0.45
-            var wbTpClass = null, wbLsClass = null, ctrlMargin = ctrlPtsA - oppPtsA, wbWindowScore = null;
-            if (!alertType && currentPeriod >= 2 && ind.controlTeam && ind.controlTeam !== 'Neither') {
-              const inRange = ctrlMargin >= -15 && ctrlMargin <= 5;
-              const floorBaseline = ind.score >= 0.45;
-              const sustGood = ctrlSust === 'LOCKED IN' || ctrlSust === 'DURABLE' || ctrlSust === 'STALLED';
-              // Clock gate: suppress WB with < 1 min left in game (unbettable) — uses shared alertMinsLeft
-              if (alertMinsLeft < 1.0 && inRange && floorBaseline && sustGood) log(`${matchup}: WINDOW BUY suppressed — ${alertMinsLeft.toFixed(1)} min left (< 1 min clock gate)`);
-              if (inRange && floorBaseline && sustGood && alertMinsLeft >= 1.0) {
-                try {
-                  const wbQd = await readQuarterData(sql, game.id);
-                  const wbWindow = computeServerWindow(wbQd, currentPeriod, clock, summary, hA, aA, league);
-                  if (wbWindow && wbWindow.available && wbWindow.score >= 0.75 && wbWindow.controlTeam === ind.controlTeam) {
-                    wbWindowScore = wbWindow.score;
-                    // Compute TP + LS for agent context when trailing (not used as gates)
-                    if (ctrlMargin < 0) {
-                      const wbTp = tpForBuy || (function(){ try { return computeThroughputServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat); } catch(e){ return null; } })();
-                      wbTpClass = wbTp?.classification || null;
-                      try {
-                        const oppInd = { ...ind, controlTeam: ctrlIsHome ? aA : hA };
-                        const oppLs = computeLeadSafetyServer(summary, oppInd, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat);
-                        wbLsClass = oppLs?.classification || null;
-                      } catch (e) { /* LS check failed — non-fatal */ }
-                    }
-                    {
-                      // ML gate: suppress when heavy favorite (no betting value)
-                      const wbMLNum = ctrlML ? parseFloat(ctrlML) : null;
-                      if (wbMLNum !== null && wbMLNum < -250) {
-                        log(`${matchup}: WINDOW BUY suppressed — ML ${ctrlML} (heavy favorite, no value)`);
-                      } else {
-                      alertType = 'WINDOW BUY';
-                      alertTier = 'FIRED';
-                      alertEmoji = '🪟';
-                      alertPriority = 4;
-                      log(`${matchup}: WINDOW BUY — ${ind.controlTeam} floor:${ind.score.toFixed(2)} margin:${ctrlMargin} sust:${ctrlSust} tp:${wbTpClass} ls:${wbLsClass}`);
-                      }
-                    }
-                  }
-                } catch (e) { log(`${matchup}: WINDOW BUY check failed: ${e.message}`); }
-              }
-            }
-
-            // ── CANDIDATE DETECTION: borderline signals for agent reasoning ──────
-            // These failed a soft gate but might still have value.
-            // Only checked if no FIRED alert exists for this cycle.
-            if (!alertType && currentPeriod >= 2 && ind.controlTeam && ind.controlTeam !== 'Neither' && alertMinsLeft >= 1.0 && !leadDegradedSuppressed) {
-
-              // CANDIDATE BUY: floor 0.55-0.65 (below FIRED threshold)
-              if (ind.score >= 0.55 && ind.score < 0.65 && ctrlTrailing && margin >= 1 && margin <= 15) {
-                  alertType = 'BUY'; alertTier = 'CANDIDATE'; alertEmoji = '🟢'; alertPriority = 4;
-                  log(`${matchup}: BUY CANDIDATE — floor ${ind.score.toFixed(2)} below 0.65 threshold`);
-              }
-              // CANDIDATE BUY: margin 16-20 (above FIRED range)
-              if (!alertType && ind.score >= 0.65 && ctrlTrailing && margin >= 16 && margin <= 20) {
-                  alertType = 'BUY'; alertTier = 'CANDIDATE'; alertEmoji = '🟢'; alertPriority = 4;
-                  log(`${matchup}: BUY CANDIDATE — margin ${margin} above 15-pt cap`);
-              }
-              // CANDIDATE BUY: heavy favorite trailing (ML -250 to -400, line shopping opportunity)
-              if (!alertType && ind.score >= 0.65 && ctrlTrailing && margin >= 1 && margin <= 15) {
-                const buyMLNum = ctrlML ? parseFloat(ctrlML) : null;
-                if (buyMLNum !== null && buyMLNum >= -400 && buyMLNum < -250) {
-                  alertType = 'BUY'; alertTier = 'CANDIDATE'; alertEmoji = '🟢'; alertPriority = 4;
-                  log(`${matchup}: BUY CANDIDATE — ML ${ctrlML} heavy favorite (line shopping opportunity)`);
-                }
-              }
-              // (REMOVED: CANDIDATE BUY TP CONTESTED — dead code after TP gate removal.
-              //  Floor ≥0.65 trailing with TP CONTESTED now fires as FIRED BUY directly.)
-              // CANDIDATE BWC: ctrl sust FRAGILE (normally blocks FIRED BWC)
-              if (!alertType && ind.score >= 0.60 && ctrlLeading && margin >= 2) {
-                const ctrlMLNum = ctrlML ? parseFloat(ctrlML) : null;
-                if (ctrlMLNum !== null && ctrlMLNum >= -400 && (ctrlSust === 'FRAGILE')) {
-                  const lsClass = lsForBWC?.classification || null;
-                  if (lsClass !== 'AT RISK' && lsClass !== 'CRITICAL') {
-                    alertType = 'BUY WINDOW CLOSING'; alertTier = 'CANDIDATE'; alertEmoji = '🔵'; alertPriority = 3;
-                    log(`${matchup}: BWC CANDIDATE — ctrl sust ${ctrlSust} (FIRED requires MIXED+)`);
-                  }
-                }
-              }
-              // CANDIDATE BWC: ML < -250 but > -400 (normally blocks FIRED BWC)
-              if (!alertType && ind.score >= 0.60 && ctrlLeading && margin >= 2) {
-                const ctrlMLNum = ctrlML ? parseFloat(ctrlML) : null;
-                if (ctrlMLNum !== null && ctrlMLNum < -250 && ctrlMLNum >= -400 && ctrlSust !== 'FRAGILE' && ctrlSust !== 'UNSUSTAINABLE') {
-                  const lsClass = lsForBWC?.classification || null;
-                  if (lsClass !== 'AT RISK' && lsClass !== 'CRITICAL' && ctrlEdge > 5) {
-                    alertType = 'BUY WINDOW CLOSING'; alertTier = 'CANDIDATE'; alertEmoji = '🔵'; alertPriority = 3;
-                    log(`${matchup}: BWC CANDIDATE — ML ${ctrlML} heavy but edge ${ctrlEdge}%`);
-                  }
-                }
-              }
-              // CANDIDATE WINDOW BUY: sust MIXED (FIRED requires LOCKED/DURABLE)
-              if (!alertType && ind.score >= 0.45 && ctrlMargin >= -15 && ctrlMargin <= 5 && ctrlSust === 'MIXED') {
-                try {
-                  const wbQd = await readQuarterData(sql, game.id);
-                  const wbWindow = computeServerWindow(wbQd, currentPeriod, clock, summary, hA, aA, league);
-                  if (wbWindow && wbWindow.available && wbWindow.score >= 0.75 && wbWindow.controlTeam === ind.controlTeam) {
-                    wbWindowScore = wbWindow.score;
-                    alertType = 'WINDOW BUY'; alertTier = 'CANDIDATE'; alertEmoji = '🪟'; alertPriority = 4;
-                    log(`${matchup}: WINDOW BUY CANDIDATE — sust MIXED (FIRED requires LOCKED/DURABLE)`);
-                  }
-                } catch (e) { /* non-fatal */ }
-              }
-            }
-
-            // Suppress all alerts if lead degraded within 5 min window
-            if (leadDegradedSuppressed && alertType) {
-              log(`${matchup}: ${alertType} nullified — lead degraded suppression active`);
-              alertType = null;
-            }
-
-            if (alertType) {
-              // Per-type dedup: re-fire after 5 min OR floor improved by 0.10+ OR edge jumped 20+pp
-              if (!game._alertHistory) game._alertHistory = {};
-              const dedupKey = alertType; // per-type, not per-quarter
-              const lastFired = game._alertHistory[dedupKey];
-              const minsSinceLast = lastFired ? (Date.now() - lastFired.ts) / 60000 : Infinity;
-              const floorDelta = lastFired ? ind.score - lastFired.floor : Infinity;
-              const edgeDelta = (lastFired && lastFired.edge != null && ctrlEdge != null) ? ctrlEdge - lastFired.edge : Infinity;
-              const dedupPass = minsSinceLast >= 5 || floorDelta >= 0.10 || edgeDelta >= 20;
-
-              if (!dedupPass) {
-                log(`${matchup}: ${alertType} deduped — ${minsSinceLast.toFixed(1)}min since last, floor delta ${floorDelta >= 0 ? '+' : ''}${floorDelta.toFixed(2)}, edge delta ${edgeDelta >= 0 ? '+' : ''}${edgeDelta.toFixed(1)}pp`);
-                alertType = null;
-              }
-            }
-
-            // DB-level dedup — catch race condition from overlapping */1 cron invocations
-            // In-memory dedup resets if schedule_json cache wasn't written yet by prior invocation
-            // 2-min window covers max overlap; only checks ntfy_sent=true so SUPPRESS doesn't block
-            if (alertType) {
-              try {
-                const dbDedup = await sql`SELECT 1 FROM alerts WHERE game_id = ${game.id} AND alert_type = ${alertType} AND ntfy_sent = true AND ts > NOW() - INTERVAL '2 minutes' LIMIT 1`;
-                if (dbDedup.length > 0) {
-                  log(`${matchup}: ${alertType} DB-deduped — concurrent invocation already sent`);
-                  alertType = null;
-                }
-              } catch(e) { /* non-fatal — fail-open, proceed without DB dedup */ }
-            }
-
-            if (alertType) {
-              game._alertHistory[alertType] = { ts: Date.now(), floor: ind.score, period: currentPeriod, edge: ctrlEdge };
-              cacheUpdated = true;
-                const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
-                const oppAlias = ctrlIsHome ? aA : hA;
-
-                // ── AGENT REASONING GATE ──────────────────────────────────────
-                // Compute which indicators the control team wins
-                // CRITICAL: raw scores are HOME-relative (1=home wins, 0=away wins)
-                // Must invert for away control teams — same logic as computeConviction
-                const indNames = ['I1','I2','I3','I4','I5'];
-                const indScores = [ind.I1, ind.I2, ind.I3, ind.I4, ind.I5];
-                const _ctrlIsHomeAgent = ind.controlTeam === hA;
-                const _ctrlScore = (s) => s == null ? 0.5 : (_ctrlIsHomeAgent ? s : 1 - s);
-                const indWon = indNames.filter((n, i) => indScores[i] && _ctrlScore(indScores[i].score) >= 0.55);
-                const indLost = indNames.filter((n, i) => indScores[i] && _ctrlScore(indScores[i].score) <= 0.45);
-                const indicatorsWon = indWon.length;
-                const _i4Ctrl = _ctrlScore(ind.I4?.score);
-                const i4Decisive = ind.I4 && _i4Ctrl !== 0.5;
-                const i4Won = ind.I4 && _i4Ctrl >= 0.55;
-                const i4Combo = i4Won && indWon.length >= 2; // I4 + at least one other = historically 98-100%
-
-                // Gather DB context for agent
-                const agentCtx = await gatherAgentContext(sql, game.id, matchup);
-
-                const agentResult = await runAlertAgent({
-                  alertType, alertTier,
-                  controlTeam: ind.controlTeam, floor: ind.score.toFixed(2),
-                  margin, isTrailing: ctrlTrailing,
-                  period: currentPeriod, clock, minsLeft: alertMinsLeft.toFixed(1),
-                  score: scoreLine,
-                  edge: ctrlEdge, ml: ctrlML, spread: spreadVal,
-                  tpClass: tpForBuy?.classification || wbTpClass || null,
-                  lsClass: lsForBWC?.classification || wbLsClass || null,
-                  ctrlSust, oppSust: oppSustTier,
-                  windowScore: wbWindowScore,
-                  convictionTier: conviction.tier, convictionCombo: conviction.combo,
-                  convictionPairs: conviction.pairs?.join(', ') || '',
-                  i1: _ctrlScore(ind.I1?.score)?.toFixed(2), i2: _ctrlScore(ind.I2?.score)?.toFixed(2),
-                  i3: _ctrlScore(ind.I3?.score)?.toFixed(2), i4: _ctrlScore(ind.I4?.score)?.toFixed(2),
-                  i5: _ctrlScore(ind.I5?.score)?.toFixed(2),
-                  indicatorsWon,
-                  indWon: indWon.join('+'),
-                  indLost: indLost.join('+'),
-                  i4Decisive, i4Won, i4Combo,
-                  floorHistory: agentCtx.floorHistory,
-                  priorAlerts: agentCtx.priorAlerts,
-                  quarterSummary: agentCtx.quarterSummary,
-                  learningsContext: agentCtx.learningsContext,
-                  monitorContext: agentCtx.monitorContext,
-                });
-
-                let agentDecision = null;
-                let agentReasoning = '';
-                let shouldSend = false;
-
-                if (agentResult) {
-                  agentDecision = agentResult.decision;
-                  agentReasoning = agentResult.reasoning;
-                  if (agentDecision === 'SEND') {
-                    shouldSend = true;
-                    log(`${matchup}: Agent SEND ${alertTier} ${alertType} — ${agentReasoning}`);
-                  } else if (agentDecision === 'DOWNGRADE') {
-                    shouldSend = true;
-                    alertPriority = Math.max(2, alertPriority - 1);
-                    log(`${matchup}: Agent DOWNGRADE ${alertTier} ${alertType} — ${agentReasoning}`);
-                  } else {
-                    shouldSend = false;
-                    log(`${matchup}: Agent SUPPRESS ${alertTier} ${alertType} — ${agentReasoning}`);
-                  }
-                  if (agentResult.usage) {
-                    log(`${matchup}: Agent tokens — in:${agentResult.usage.input_tokens} out:${agentResult.usage.output_tokens}`);
-                  }
-                } else {
-                  // Agent failed — FIRED sends as-is (safe fallback), CANDIDATE drops
-                  shouldSend = (alertTier === 'FIRED');
-                  agentDecision = alertTier === 'FIRED' ? 'FALLBACK_SEND' : 'FALLBACK_DROP';
-                  log(`${matchup}: Agent unavailable — ${agentDecision} for ${alertTier} ${alertType}`);
-                }
-
-                if (shouldSend) {
-                  // Build ntfy message — use agent body if available, else mechanical body
-                  let ntfyTitle, ntfyBody;
-                  const tierTag = alertTier === 'CANDIDATE' ? ' [CANDIDATE]' : '';
-
-                  // Always build mechanical title (team + ML in header)
-                  if (alertType === 'BUY') {
-                    const mlStr = ctrlML ? `${ind.controlTeam} ML ${ctrlML}` : ind.controlTeam;
-                    ntfyTitle = `BUY${tierTag} ${mlStr}`;
-                  } else if (alertType === 'BUY WINDOW CLOSING') {
-                    const mlStr = ctrlML ? `${ind.controlTeam} ML ${ctrlML}` : ind.controlTeam;
-                    ntfyTitle = `WINDOW CLOSING${tierTag} -- ${mlStr}`;
-                  } else if (alertType === 'WINDOW BUY') {
-                    const mlStr = ctrlML ? `${ind.controlTeam} ML ${ctrlML}` : ind.controlTeam;
-                    ntfyTitle = `WINDOW BUY${tierTag} -- ${mlStr}`;
-                  } else {
-                    ntfyTitle = `${alertType}${tierTag} -- ${matchup}`;
-                  }
-
-                  if (agentResult?.body && agentResult.body.length > 20) {
-                    // Agent-enhanced body with mechanical title
-                    ntfyBody = scoreLine + '\n' + agentResult.body;
-                  } else {
-                    // Mechanical fallback body
-                    const calWarn = '';
-                    const oppVT = gameVolumeThreat ? (ctrlIsHome ? gameVolumeThreat.away : gameVolumeThreat.home) : null;
-                    const vtWarn = oppVT?.active ? `\n${oppAlias} on pace for ${oppVT.projected3PA} threes at ${oppVT.live3Pct}% — volume threat` : '';
-                    const sustExplain = (function(){
-                      if (!oppSustTier && !ctrlSust) return '';
-                      const oppDesc = oppSustTier === 'FRAGILE' || oppSustTier === 'UNSUSTAINABLE'
-                        ? `${oppAlias}'s shooting is unsustainable (${oppSustTier})`
-                        : oppSustTier === 'LOCKED IN' || oppSustTier === 'DURABLE'
-                        ? `${oppAlias}'s shooting looks sustainable (${oppSustTier})`
-                        : oppSustTier ? `${oppAlias} shooting: ${oppSustTier}` : '';
-                      const ctrlDesc = ctrlSust === 'LOCKED IN' || ctrlSust === 'DURABLE'
-                        ? `${ind.controlTeam}'s shooting is sustainable (${ctrlSust})`
-                        : ctrlSust === 'FRAGILE' || ctrlSust === 'UNSUSTAINABLE'
-                        ? `${ind.controlTeam}'s shooting looks shaky (${ctrlSust})`
-                        : '';
-                      return (oppDesc ? '\n' + oppDesc : '') + (ctrlDesc ? '\n' + ctrlDesc : '');
-                    })();
-
-                    if (alertType === 'BUY') {
-                      ntfyBody = scoreLine
-                        + `\n${ind.controlTeam} trails by ${margin} but controls the game structurally (${ind.score.toFixed(2)})`
-                        + (tpForBuy ? `\nMath projects a ${fmtSwing(tpForBuy.expected.totalSwing)}-point swing with ${tpForBuy.remainingPoss} possessions left` : '')
-                        + (ctrlEdge != null ? `\nEdge: ${ctrlEdge > 0 ? '+' : ''}${ctrlEdge}% over market` : '')
-                        + sustExplain + calWarn + vtWarn
-                        + (spreadVal != null ? `\nSpread: ${spreadVal}` : '');
-                    } else if (alertType === 'BUY WINDOW CLOSING') {
-                      const lsClass = lsForBWC?.classification || null;
-                      const lsDesc = lsClass === 'SAFE' ? 'Lead is mechanically safe'
-                        : lsClass === 'CUSHIONED' ? 'Lead has a comfortable cushion'
-                        : lsClass ? `Lead safety: ${lsClass}` : '';
-                      ntfyBody = scoreLine
-                        + `\n${ind.controlTeam} leads by ${margin} with structural dominance (${ind.score.toFixed(2)})`
-                        + `\nMarket hasn't caught up — ${ctrlEdge > 0 ? '+' : ''}${ctrlEdge}% edge remaining`
-                        + (lsDesc ? '\n' + lsDesc : '')
-                        + `\nLine will tighten soon, act now or pass`
-                        + sustExplain + calWarn + vtWarn;
-                    } else if (alertType === 'WINDOW BUY') {
-                      const stateDesc = ctrlMargin > 0 ? `leads by ${ctrlMargin}` : ctrlMargin === 0 ? 'is tied' : `trails by ${Math.abs(ctrlMargin)}`;
-                      ntfyBody = scoreLine
-                        + `\n${ind.controlTeam} ${stateDesc} but has taken over the recent window`
-                        + `\nFull-game score hasn't caught up yet (floor ${ind.score.toFixed(2)})`
-                        + `\n${ind.controlTeam} shooting is sustainable (${ctrlSust})`
-                        + (wbLsClass === 'AT RISK' || wbLsClass === 'CRITICAL' ? `\n${oppAlias}'s lead is crumbling (${wbLsClass})` : '')
-                        + (wbTpClass && (wbTpClass === 'STRONG RECOVERY' || wbTpClass === 'PROBABLE' || wbTpClass === 'CONTESTED') ? `\nComeback math supports recovery (${wbTpClass})` : '')
-                        + (ctrlEdge != null ? `\nEdge: ${ctrlEdge > 0 ? '+' : ''}${ctrlEdge}% over market` : '')
-                        + calWarn + vtWarn;
-                    } else {
-                      ntfyBody = scoreLine + `\n${ind.controlTeam} ${ind.score.toFixed(2)}`;
-                    }
-                  }
-
-                  await sendNtfy(ntfyTitle, ntfyBody, alertPriority);
-                }
-
-                // Always save to alerts table — including suppressed candidates for accuracy tracking
-                const tpRatio = tpForBuy?.conservative?.ratio ?? null;
-                try {
-                  await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, tp_ratio, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent)
-                    VALUES (${game.id}, ${league}, ${alertType}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal}, ${tpForBuy?.classification || null}, ${lsForBWC?.classification || null}, ${ctrlSust}, ${oppSustTier}, ${wbWindowScore}, ${tpRatio}, ${alertTier}, ${agentDecision}, ${agentReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${conviction.tier}, ${conviction.combo}, ${shouldSend})`;
-                } catch (e) { log(`${matchup}: alert save failed: ${e.message}`); }
-                log(`${matchup}: ${alertEmoji} ${alertType} ${alertTier} ${agentDecision} — ${ind.controlTeam} ${ind.score.toFixed(2)} ${ctrlTrailing ? 'trailing' : 'leading'} by ${margin}${ctrlEdge != null ? ', edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}${oppSustTier ? ', opp ' + oppSustTier : ''}`);
-            }
-          }
-          // ── TRANSITION ALERTS (throughput/lead safety/sustainability) ──────
-          // Per-side tracking: each team's prev values are independent, so
-          // control flips never cross-contaminate transition comparisons.
-          if (currentPeriod >= 2) {
-            try {
-              const tp = computeThroughputServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat);
-              const ls = computeLeadSafetyServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat);
-              const ctrlIsHome = ind.controlTeam === hA;
-              const oppSide = ctrlIsHome ? 'away' : 'home';
-              const oppSustNow = sust?.[oppSide]?.tier || null;
-              const tpClass = tp?.classification || null;
-              const lsClass = ls?.classification || null;
-
-              // Read per-side previous values (home reads home prev, away reads away prev)
-              const prevRows = await sql`SELECT
-                prev_home_tp_class, prev_home_ls_class, prev_home_ls_margin, prev_home_opp_sust,
-                prev_away_tp_class, prev_away_ls_class, prev_away_ls_margin, prev_away_opp_sust
-                FROM games WHERE id = ${game.id}`;
-              const prev = prevRows.length > 0 ? prevRows[0] : {};
-              const sidePrefix = ctrlIsHome ? 'prev_home' : 'prev_away';
-              const prevTpClass = prev[`${sidePrefix}_tp_class`] || null;
-              const prevLsClass = prev[`${sidePrefix}_ls_class`] || null;
-              const prevOppSust = prev[`${sidePrefix}_opp_sust`] || null;
-
-              const ctrlPtsT = ctrlIsHome ? ind.homePts : ind.awayPts;
-              const oppPtsT = ctrlIsHome ? ind.awayPts : ind.homePts;
-              const marginT = Math.abs(ctrlPtsT - oppPtsT);
-              const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA}`;
-
-              // Clock computation for transition alert time gates (same formula as mechanical alerts)
-              const tClockParts = clock.replace(/^[A-Za-z]+\s*/, '').split(':');
-              const tPeriodMins = league === 'ncaamb' ? 20 : 12;
-              const tClockMins = tClockParts.length === 2 ? (parseInt(tClockParts[0]) || 0) + ((parseInt(tClockParts[1]) || 0) / 60) : tPeriodMins;
-              const tTotalPeriods = league === 'ncaamb' ? 2 : 4;
-              const alertMinsLeft = tClockMins + (Math.max(0, tTotalPeriods - currentPeriod) * tPeriodMins);
-
-              // ── Shared agent context for transition alerts ──
-              const tCtrlSust = sust?.[ctrlIsHome ? 'home' : 'away']?.tier || null;
-              const _tCtrlScore = (s) => s == null ? 0.5 : (ctrlIsHome ? s : 1 - s);
-              const tIndNames = ['I1','I2','I3','I4','I5'];
-              const tIndScores = [ind.I1, ind.I2, ind.I3, ind.I4, ind.I5];
-              const tIndWon = tIndNames.filter((n, idx) => tIndScores[idx] && _tCtrlScore(tIndScores[idx].score) >= 0.55);
-              const tIndLost = tIndNames.filter((n, idx) => tIndScores[idx] && _tCtrlScore(tIndScores[idx].score) <= 0.45);
-              const _tI4Ctrl = _tCtrlScore(ind.I4?.score);
-              const tI4Decisive = ind.I4 && _tI4Ctrl !== 0.5;
-              const tI4Won = ind.I4 && _tI4Ctrl >= 0.55;
-              const tI4Combo = tI4Won && tIndWon.length >= 2;
-
-              // ALERT 1: RECOVERY PATH (state alert — no transition required)
-              // Gate: TP strong + floor ≥ 0.30 + trailing 1-15 + ML > -250 OR edge > 10% + clock > 1 min
-              if (oppPtsT > ctrlPtsT && marginT >= 1 && marginT <= 15 && ind.score >= 0.30 && alertMinsLeft >= 1.0) {
-                const tpStrong = tpClass === 'STRONG RECOVERY' || tpClass === 'PROBABLE';
-                if (tpStrong) {
-                  // ML / edge gate: only alert when there's actionable value
-                  let rpML = null, rpEdge = null, rpGatePass = false;
-                  if (odds && (odds.homeML || odds.awayML)) {
-                    const hML = parseFloat(odds.homeML), aML = parseFloat(odds.awayML);
-                    const garbageOdds = (Math.abs(hML) >= 50000 || Math.abs(aML) >= 50000 || hML === aML);
-                    if (!garbageOdds) {
-                      rpML = ctrlIsHome ? odds.homeML : odds.awayML;
-                      const rpMLNum = parseFloat(rpML);
-                      const rpMIP = mlToProb(rpMLNum);
-                      if (rpMIP != null) rpEdge = Math.round(((ind.score * 100) - (rpMIP * 100)) * 10) / 10;
-                      rpGatePass = rpMLNum > -250 || (rpEdge != null && rpEdge > 10);
-                    }
-                  }
-                  if (rpGatePass) {
-                    const tpAlertKey = `${game.id}_TP_RECOVERY_Q${currentPeriod}`;
-                    if (!game._lastTpAlert || game._lastTpAlert !== tpAlertKey) {
-                      game._lastTpAlert = tpAlertKey;
-                      const tScoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
-                      const mlStr = rpML ? ` (ML ${rpML > 0 ? '+' : ''}${rpML})` : '';
-                      const rpFallbackBody = tScoreLine
-                        + `\n${ind.controlTeam} trails by ${marginT} — comeback math is favorable${mlStr}`
-                        + `\nProjects ${fmtSwing(tp.expected.totalSwing)}-point swing with ${tp.remainingPoss} possessions left`
-                        + `\n${ind.controlTeam} structural floor: ${ind.score.toFixed(2)}${rpEdge != null ? ' | edge ' + (rpEdge > 0 ? '+' : '') + rpEdge + '%' : ''}`;
-
-                      // Route through alert agent
-                      const rpAgentCtx = await gatherAgentContext(sql, game.id, matchup);
-                      const rpAgentResult = await runAlertAgent({
-                        alertType: 'RECOVERY PATH', alertTier: 'FIRED',
-                        controlTeam: ind.controlTeam, floor: ind.score.toFixed(2),
-                        margin: marginT, isTrailing: true,
-                        period: currentPeriod, clock, minsLeft: alertMinsLeft.toFixed(1),
-                        score: tScoreLine,
-                        edge: rpEdge, ml: rpML, spread: spreadVal,
-                        tpClass, lsClass, ctrlSust: tCtrlSust, oppSust: oppSustNow,
-                        convictionTier: conviction.tier, convictionCombo: conviction.combo,
-                        convictionPairs: conviction.pairs?.join(', ') || '',
-                        i1: _tCtrlScore(ind.I1?.score)?.toFixed(2), i2: _tCtrlScore(ind.I2?.score)?.toFixed(2),
-                        i3: _tCtrlScore(ind.I3?.score)?.toFixed(2), i4: _tCtrlScore(ind.I4?.score)?.toFixed(2),
-                        i5: _tCtrlScore(ind.I5?.score)?.toFixed(2),
-                        indicatorsWon: tIndWon.length, indWon: tIndWon.join('+'), indLost: tIndLost.join('+'),
-                        i4Decisive: tI4Decisive, i4Won: tI4Won, i4Combo: tI4Combo,
-                        floorHistory: rpAgentCtx.floorHistory, priorAlerts: rpAgentCtx.priorAlerts,
-                        quarterSummary: rpAgentCtx.quarterSummary, learningsContext: rpAgentCtx.learningsContext,
-                        monitorContext: rpAgentCtx.monitorContext,
-                      });
-
-                      let rpDecision = null, rpReasoning = '', rpShouldSend = false, rpPriority = 5;
-                      if (rpAgentResult) {
-                        rpDecision = rpAgentResult.decision;
-                        rpReasoning = rpAgentResult.reasoning;
-                        if (rpDecision === 'SEND') { rpShouldSend = true; }
-                        else if (rpDecision === 'DOWNGRADE') { rpShouldSend = true; rpPriority = 4; }
-                        else { rpShouldSend = false; }
-                        log(`${matchup}: Agent ${rpDecision} RECOVERY PATH — ${rpReasoning}`);
-                      } else {
-                        rpShouldSend = true; rpDecision = 'FALLBACK_SEND'; rpReasoning = 'Agent unavailable';
-                        log(`${matchup}: RECOVERY PATH agent unavailable — fallback SEND`);
-                      }
-
-                      if (rpShouldSend) {
-                        const rpBody = (rpAgentResult?.body && rpAgentResult.body.length > 20) ? rpAgentResult.body : rpFallbackBody;
-                        await sendNtfy(`RECOVERY PATH — ${matchup}`, rpBody, rpPriority);
-                      }
-                      log(`${matchup}: RECOVERY PATH — TP ${tpClass}, floor ${ind.score.toFixed(2)}, trailing ${marginT}, ML ${rpML}${rpEdge != null ? ', edge ' + rpEdge + '%' : ''}`);
-                      try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, tp_ratio, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent) VALUES (${game.id}, ${league}, ${'RECOVERY PATH'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${true}, ${rpEdge}, ${rpML ? parseInt(rpML) : null}, ${spreadVal}, ${tpClass}, ${lsClass}, ${tCtrlSust}, ${oppSustNow}, ${tp?.conservative?.ratio ?? null}, ${'FIRED'}, ${rpDecision}, ${rpReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${conviction.tier}, ${conviction.combo}, ${rpShouldSend})`; } catch(e) {}
-                    }
-                  } else {
-                    log(`${matchup}: RECOVERY PATH skipped — ML gate (ML ${rpML}, edge ${rpEdge}%)`);
-                  }
-                }
-              }
-
-              // ALERT 2: LEAD CRUMBLING (state alert) / LEAD LOST (transition)
-              // LEAD CRUMBLING: leading 5+ pts + LS vulnerable + floor >= 0.55
-              // Leads < 5 fluctuate naturally — only alert when a meaningful lead is structurally threatened
-              if (ctrlPtsT > oppPtsT && marginT >= 5 && (lsClass === 'AT RISK' || lsClass === 'CRITICAL') && ind.score >= 0.55 && alertMinsLeft >= 1.0) {
-                const lsAlertKey = `${game.id}_LS_CRUMBLE_Q${currentPeriod}`;
-                if (!game._lastLsAlert || game._lastLsAlert !== lsAlertKey) {
-                  game._lastLsAlert = lsAlertKey;
-                  const tScoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
-                  const lcFallbackBody = tScoreLine
-                    + `\n${ind.controlTeam} leads by ${marginT} but the lead is ${lsClass === 'CRITICAL' ? 'under serious pressure' : 'showing cracks'}`
-                    + `\nOpponent projects to close the gap with ${ls.remainingPoss} possessions left`
-                    + `\nIf holding ${ind.controlTeam}, watch for momentum shift`;
-
-                  // Route through alert agent
-                  const lcAgentCtx = await gatherAgentContext(sql, game.id, matchup);
-                  const lcAgentResult = await runAlertAgent({
-                    alertType: 'LEAD CRUMBLING', alertTier: 'FIRED',
-                    controlTeam: ind.controlTeam, floor: ind.score.toFixed(2),
-                    margin: marginT, isTrailing: false,
-                    period: currentPeriod, clock, minsLeft: alertMinsLeft.toFixed(1),
-                    score: tScoreLine,
-                    edge: null, ml: null, spread: spreadVal,
-                    tpClass, lsClass, ctrlSust: tCtrlSust, oppSust: oppSustNow,
-                    convictionTier: conviction.tier, convictionCombo: conviction.combo,
-                    convictionPairs: conviction.pairs?.join(', ') || '',
-                    i1: _tCtrlScore(ind.I1?.score)?.toFixed(2), i2: _tCtrlScore(ind.I2?.score)?.toFixed(2),
-                    i3: _tCtrlScore(ind.I3?.score)?.toFixed(2), i4: _tCtrlScore(ind.I4?.score)?.toFixed(2),
-                    i5: _tCtrlScore(ind.I5?.score)?.toFixed(2),
-                    indicatorsWon: tIndWon.length, indWon: tIndWon.join('+'), indLost: tIndLost.join('+'),
-                    i4Decisive: tI4Decisive, i4Won: tI4Won, i4Combo: tI4Combo,
-                    floorHistory: lcAgentCtx.floorHistory, priorAlerts: lcAgentCtx.priorAlerts,
-                    quarterSummary: lcAgentCtx.quarterSummary, learningsContext: lcAgentCtx.learningsContext,
-                    monitorContext: lcAgentCtx.monitorContext,
-                  });
-
-                  let lcDecision = null, lcReasoning = '', lcShouldSend = false, lcPriority = 5;
-                  if (lcAgentResult) {
-                    lcDecision = lcAgentResult.decision;
-                    lcReasoning = lcAgentResult.reasoning;
-                    if (lcDecision === 'SEND') { lcShouldSend = true; }
-                    else if (lcDecision === 'DOWNGRADE') { lcShouldSend = true; lcPriority = 4; }
-                    else { lcShouldSend = false; }
-                    log(`${matchup}: Agent ${lcDecision} LEAD CRUMBLING — ${lcReasoning}`);
-                  } else {
-                    lcShouldSend = true; lcDecision = 'FALLBACK_SEND'; lcReasoning = 'Agent unavailable';
-                    log(`${matchup}: LEAD CRUMBLING agent unavailable — fallback SEND`);
-                  }
-
-                  if (lcShouldSend) {
-                    const lcBody = (lcAgentResult?.body && lcAgentResult.body.length > 20) ? lcAgentResult.body : lcFallbackBody;
-                    await sendNtfy(`LEAD AT RISK — ${matchup}`, lcBody, lcPriority);
-                  }
-                  log(`${matchup}: LEAD CRUMBLING — LS ${lsClass}, leading ${marginT}, floor ${ind.score.toFixed(2)}`);
-                  try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, spread, tp_class, ls_class, ctrl_sust, opp_sust, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent) VALUES (${game.id}, ${league}, ${'LEAD CRUMBLING'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${false}, ${spreadVal}, ${tpClass}, ${lsClass}, ${tCtrlSust}, ${oppSustNow}, ${'FIRED'}, ${lcDecision}, ${lcReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${conviction.tier}, ${conviction.combo}, ${lcShouldSend})`; } catch(e) {}
-                  // Write suppression timestamp ONLY when agent sends — phantom crumbling shouldn't block BWC
-                  if (lcShouldSend) {
-                    try {
-                      if (ctrlIsHome) {
-                        await sql`UPDATE games SET home_lead_degraded_at = NOW() WHERE id = ${game.id}`;
-                      } else {
-                        await sql`UPDATE games SET away_lead_degraded_at = NOW() WHERE id = ${game.id}`;
-                      }
-                    } catch (e) { /* non-fatal */ }
-                  }
-                }
-              }
-              // LEAD LOST: had meaningful lead (≥4) before, now tied/trailing
-              const hadLead = prevLsClass !== null;
-              const prevMargin = Number(prev[`${sidePrefix}_ls_margin`]) || 0;
-              if (hadLead && prevMargin >= 4 && oppPtsT >= ctrlPtsT && alertMinsLeft >= 1.0) {
-                const lostKey = `${game.id}_LS_LOST_Q${currentPeriod}`;
-                if (!game._lastLsLostAlert || game._lastLsLostAlert !== lostKey) {
-                  game._lastLsLostAlert = lostKey;
-                  const tScoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
-                  await sendNtfy(
-                    `LEAD LOST — ${matchup}`,
-                    tScoreLine
-                      + `\n${ind.controlTeam} lost their lead — was ${prevLsClass}`
-                      + `\n${ctrlPtsT === oppPtsT ? 'Game is now TIED' : ind.controlTeam + ' now trails by ' + marginT}`
-                      + `\nStructural read may still hold, but the cushion is gone`,
-                    5
-                  );
-                  log(`${matchup}: LEAD LOST — ${prevLsClass} -> tied/trailing`);
-                  try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, tp_class, ls_class, ntfy_sent) VALUES (${game.id}, ${league}, ${'LEAD LOST'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${oppPtsT > ctrlPtsT}, ${tpClass}, ${lsClass}, ${true})`; } catch(e) {}
-                  try {
-                    if (ctrlIsHome) {
-                      await sql`UPDATE games SET home_lead_degraded_at = NOW() WHERE id = ${game.id}`;
-                    } else {
-                      await sql`UPDATE games SET away_lead_degraded_at = NOW() WHERE id = ${game.id}`;
-                    }
-                  } catch (e) { /* non-fatal */ }
-                }
-              }
-
-              // ALERT 3: OPPONENT VARIANCE BREAKING
-              if (oppPtsT > ctrlPtsT && marginT >= 1 && ind.score >= 0.65 && alertMinsLeft >= 1.0) {
-                const wasStable = prevOppSust === 'LOCKED IN' || prevOppSust === 'DURABLE';
-                const nowBreaking = oppSustNow === 'FRAGILE' || oppSustNow === 'UNSUSTAINABLE';
-                if (wasStable && nowBreaking) {
-                  const sustAlertKey = `${game.id}_SUST_BREAK_Q${currentPeriod}`;
-                  if (!game._lastSustAlert || game._lastSustAlert !== sustAlertKey) {
-                    game._lastSustAlert = sustAlertKey;
-                    const oppAlias = ctrlIsHome ? aA : hA;
-                    const tScoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
-                    const vbFallbackBody = tScoreLine
-                      + `\n${oppAlias}'s shooting is cooling off (was sustainable, now ${oppSustNow === 'UNSUSTAINABLE' ? 'unsustainable' : 'fragile'})`
-                      + `\n${ind.controlTeam} trails by ${marginT} with structural control (${ind.score.toFixed(2)})`
-                      + `\n${oppAlias}'s lead was built on hot shooting — that's fading`
-                      + `\nWatch for BUY opportunity as lead erodes`;
-
-                    // Compute edge for agent context
-                    let vbML = null, vbEdge = null;
-                    if (odds && (odds.homeML || odds.awayML)) {
-                      const hML = parseFloat(odds.homeML), aML = parseFloat(odds.awayML);
-                      const garbageOdds = (Math.abs(hML) >= 50000 || Math.abs(aML) >= 50000 || hML === aML);
-                      if (!garbageOdds) {
-                        vbML = ctrlIsHome ? odds.homeML : odds.awayML;
-                        const vbMIP = mlToProb(parseFloat(vbML));
-                        if (vbMIP != null) vbEdge = Math.round(((ind.score * 100) - (vbMIP * 100)) * 10) / 10;
-                      }
-                    }
-
-                    // Route through alert agent
-                    const vbAgentCtx = await gatherAgentContext(sql, game.id, matchup);
-                    const vbAgentResult = await runAlertAgent({
-                      alertType: 'VARIANCE BREAKING', alertTier: 'FIRED',
-                      controlTeam: ind.controlTeam, floor: ind.score.toFixed(2),
-                      margin: marginT, isTrailing: true,
-                      period: currentPeriod, clock, minsLeft: alertMinsLeft.toFixed(1),
-                      score: tScoreLine,
-                      edge: vbEdge, ml: vbML, spread: spreadVal,
-                      tpClass, lsClass, ctrlSust: tCtrlSust, oppSust: oppSustNow,
-                      convictionTier: conviction.tier, convictionCombo: conviction.combo,
-                      convictionPairs: conviction.pairs?.join(', ') || '',
-                      i1: _tCtrlScore(ind.I1?.score)?.toFixed(2), i2: _tCtrlScore(ind.I2?.score)?.toFixed(2),
-                      i3: _tCtrlScore(ind.I3?.score)?.toFixed(2), i4: _tCtrlScore(ind.I4?.score)?.toFixed(2),
-                      i5: _tCtrlScore(ind.I5?.score)?.toFixed(2),
-                      indicatorsWon: tIndWon.length, indWon: tIndWon.join('+'), indLost: tIndLost.join('+'),
-                      i4Decisive: tI4Decisive, i4Won: tI4Won, i4Combo: tI4Combo,
-                      floorHistory: vbAgentCtx.floorHistory, priorAlerts: vbAgentCtx.priorAlerts,
-                      quarterSummary: vbAgentCtx.quarterSummary, learningsContext: vbAgentCtx.learningsContext,
-                      monitorContext: vbAgentCtx.monitorContext,
-                    });
-
-                    let vbDecision = null, vbReasoning = '', vbShouldSend = false, vbPriority = 4;
-                    if (vbAgentResult) {
-                      vbDecision = vbAgentResult.decision;
-                      vbReasoning = vbAgentResult.reasoning;
-                      if (vbDecision === 'SEND') { vbShouldSend = true; }
-                      else if (vbDecision === 'DOWNGRADE') { vbShouldSend = true; vbPriority = 3; }
-                      else { vbShouldSend = false; }
-                      log(`${matchup}: Agent ${vbDecision} VARIANCE BREAKING — ${vbReasoning}`);
-                    } else {
-                      vbShouldSend = true; vbDecision = 'FALLBACK_SEND'; vbReasoning = 'Agent unavailable';
-                      log(`${matchup}: VARIANCE BREAKING agent unavailable — fallback SEND`);
-                    }
-
-                    if (vbShouldSend) {
-                      const vbBody = (vbAgentResult?.body && vbAgentResult.body.length > 20) ? vbAgentResult.body : vbFallbackBody;
-                      await sendNtfy(`VARIANCE BREAKING — ${matchup}`, vbBody, vbPriority);
-                    }
-                    log(`${matchup}: VARIANCE BREAKING — ${oppAlias} ${prevOppSust} -> ${oppSustNow}`);
-                    try { await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent) VALUES (${game.id}, ${league}, ${'VARIANCE BREAKING'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${marginT}, ${true}, ${vbEdge}, ${vbML ? parseInt(vbML) : null}, ${spreadVal}, ${tpClass}, ${lsClass}, ${tCtrlSust}, ${oppSustNow}, ${'FIRED'}, ${vbDecision}, ${vbReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${conviction.tier}, ${conviction.combo}, ${vbShouldSend})`; } catch(e) {}
-                  }
-                }
-              }
-
-              // Write current values to THIS SIDE's prev columns only
-              if (ctrlIsHome) {
-                await sql`UPDATE games SET
-                  prev_home_tp_class = ${tpClass},
-                  prev_home_ls_class = ${lsClass},
-                  prev_home_ls_margin = ${ls?.lead || null},
-                  prev_home_opp_sust = ${oppSustNow}
-                  WHERE id = ${game.id}`;
-              } else {
-                await sql`UPDATE games SET
-                  prev_away_tp_class = ${tpClass},
-                  prev_away_ls_class = ${lsClass},
-                  prev_away_ls_margin = ${ls?.lead || null},
-                  prev_away_opp_sust = ${oppSustNow}
-                  WHERE id = ${game.id}`;
-              }
-            } catch (e) {
-              log(`${matchup}: transition alert error: ${e.message}`);
+            // ── V2 STATE LOGGING ──
+            if (lt.bwc_fired) {
+              lt._prev_bwc_state = v2BwcState;
+              log(`${matchup}: v2 state=${v2BwcState || '-'} erosion=${v2Erosion.level} peak=${v2Erosion.peakFloor?.toFixed(2) || '-'} holds=${lt.ctrl_team_holds || 0} bwcTeam=${lt.bwc_fired.team}`);
             }
           }
 
@@ -6175,35 +5565,6 @@ export default async function(req) {
 
       if (liveCount === 0 && potentiallyLive.length > 0) {
         log(`${league.toUpperCase()}: ${potentiallyLive.length} games checked, none currently live`);
-      }
-
-      // ── 6. MONITOR AGENT — game narrator & context enricher ──
-      // Runs every 3 minutes, observes arc of live games, writes to monitor_observations
-      if (liveCount > 0) {
-        try {
-          var monitorThrottlePassed = true;
-          if (pollState && pollState.monitor_last_run) {
-            var msSinceLastMonitor = Date.now() - new Date(pollState.monitor_last_run).getTime();
-            monitorThrottlePassed = msSinceLastMonitor >= 180000; // 3 min
-          }
-          if (monitorThrottlePassed) {
-            var monitorData = await getMonitorData(sql, league, cachedGames);
-            if (monitorData.hasWork) {
-              log(`Monitor: ${monitorData.games.length} games to observe`);
-              var monitorResult = await runMonitorAgent(sql, monitorData);
-              if (monitorResult) {
-                await saveMonitorObservations(sql, monitorResult, monitorData, league);
-              }
-              // Update throttle timestamp so Sonnet isn't called every poll
-              try {
-                await sql`UPDATE poll_state SET monitor_last_run = NOW()
-                  WHERE league = ${league} AND date = ${dateKey}`;
-              } catch (e) { /* non-fatal */ }
-            }
-          }
-        } catch (e) {
-          log(`Monitor: error — ${e.message}`);
-        }
       }
 
     } catch (e) {
