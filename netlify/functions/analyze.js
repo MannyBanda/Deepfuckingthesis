@@ -488,7 +488,6 @@ exports.handler = async function(event) {
     var combinedRead = body.combinedRead;
     var wpProfiles = body.wpProfiles || null;
     var espnWP = body.espnWP || null;
-    var monitorContext = body.monitorContext || null;
     if (!summaryData) {
       return { statusCode: 400, headers: headers, body: JSON.stringify({ error: 'summaryData required' }) };
     }
@@ -806,26 +805,12 @@ exports.handler = async function(event) {
       espnWPSection += 'Common valid divergences: sustainability concern ESPN misses, structural control not reflected in score, foul trouble.\n';
     }
 
-    // ── MONITOR OBSERVATION ──
-    var monitorSection = '';
-    if (monitorContext) {
-      monitorSection = '\nMONITOR OBSERVATION (continuous 3-minute game observer — most recent read):\n'
-        + monitorContext + '\n'
-        + 'FIELD DEFINITIONS: margin = score diff from ctrl team perspective. '
-        + 'Momentum direction(streak, delta): streak = consecutive polls trending this way, delta = floor change over streak. '
-        + 'Sust arc: STABLE/IMPROVING/DEGRADING/VOLATILE for ctrl team sustainability. '
-        + 'Floor-margin: ALIGNED (floor agrees with score) or DIVERGING (floor says one thing, score says another — the setup we bet on).\n'
-        + 'USE: Reference trajectory reads in your NARRATIVE and RISK. '
-        + 'If the monitor flags a specific flip scenario in its Risk section, address it. '
-        + 'Monitor observations do NOT override your ground truth indicators.\n';
-    }
-
     // ── BUILD PROMPT ──
     var userPrompt = awayTeam + ' @ ' + homeTeam + ' | ' + period + ' | ' + score + '\n\n'
       + (thesis ? 'THESIS:\n' + thesis + '\n' : 'No thesis.')
       + '\n' + clutchSection + oddsSection + bonusSection + trackingSection + sustainabilitySection + leadCompSection
       + windowSection + quarterSection + gapSection + combinedReadSection + arrowSection + adjustmentSection
-      + pbpSection + edgeSection + narrativeSection + wpSection + espnWPSection + monitorSection
+      + pbpSection + edgeSection + narrativeSection + wpSection + espnWPSection
       + '\nGAME DATA:\n' + JSON.stringify(summaryData);
 
     var resp = await fetch('https://api.anthropic.com/v1/messages', {
