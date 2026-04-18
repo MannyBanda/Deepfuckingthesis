@@ -3316,6 +3316,341 @@ async function reportTierSim(sql) {
   };
 }
 
+// ── REPORT: BUY PROFILE — what separates winning BUYs from losing BUYs ──────
+async function reportBuyProfile(sql) {
+  const rows = await sql`
+    SELECT game_id, checkpoint,
+           margin_at_snapshot AS margin,
+           (indicators->>'score')::real AS floor,
+           indicators->>'controlTeam' AS ctrl,
+           home_alias,
+           indicators->>'I1' AS i1, indicators->>'I2' AS i2,
+           indicators->>'I3' AS i3, indicators->>'I4' AS i4, indicators->>'I5' AS i5,
+           (conviction->>'tier') AS tier,
+           ctrl_team_won
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+    ORDER BY game_id, checkpoint
+  `;
+
+  const cpOrder = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  const cpIndex = {};
+  for (let i = 0; i < cpOrder.length; i++) cpIndex[cpOrder[i]] = i;
+
+  // ── Build game-indexed lookup for prior-checkpoint floor delta ──
+  const byGame = {};
+  for (const r of rows) {
+    if (!byGame[r.game_id]) byGame[r.game_id] = {};
+    byGame[r.game_id][r.checkpoint] = r;
+  }
+
+  // ── Helper: ctrl-relative indicator state ──
+  function ctrlInd(r, key) {
+    const raw = parseFloat(r[key.toLowerCase()]);
+    if (isNaN(raw)) return null;
+    const ctrlHome = r.ctrl === r.home_alias;
+    const v = ctrlHome ? raw : 1 - raw;
+    return v === 1 ? 'won' : v === 0 ? 'lost' : 'even';
+  }
+
+  // ── Helper: opponent indicator state (inverse of ctrl) ──
+  function oppInd(r, key) {
+    const raw = parseFloat(r[key.toLowerCase()]);
+    if (isNaN(raw)) return null;
+    const ctrlHome = r.ctrl === r.home_alias;
+    const v = ctrlHome ? raw : 1 - raw;
+    return v === 0 ? 'won' : v === 1 ? 'lost' : 'even';
+  }
+
+  // ── Enrich each row with derived fields ──
+  const enriched = [];
+  for (const r of rows) {
+    const ctrlHome = r.ctrl === r.home_alias;
+    const ctrlMargin = ctrlHome ? r.margin : -r.margin;
+
+    // BUY eligible: floor >= 0.65, trailing 1-15
+    if (r.floor < 0.65 || ctrlMargin > 0 || ctrlMargin < -15) continue;
+
+    // Ctrl indicators won
+    const ctrlWon = [];
+    const oppWon = [];
+    for (const k of ['I1','I2','I3','I4','I5']) {
+      if (ctrlInd(r, k) === 'won') ctrlWon.push(k);
+      if (oppInd(r, k) === 'won') oppWon.push(k);
+    }
+
+    // Floor delta from prior checkpoint
+    const cpIdx = cpIndex[r.checkpoint];
+    let floorDelta = null;
+    if (cpIdx > 0) {
+      const priorCp = cpOrder[cpIdx - 1];
+      const priorRow = byGame[r.game_id]?.[priorCp];
+      if (priorRow && priorRow.floor != null) {
+        floorDelta = Math.round((r.floor - priorRow.floor) * 1000) / 1000;
+      }
+    }
+
+    enriched.push({
+      game_id: r.game_id,
+      checkpoint: r.checkpoint,
+      floor: r.floor,
+      ctrlMargin,
+      won: !!r.ctrl_team_won,
+      tier: r.tier,
+      ctrlWon,
+      ctrlCombo: ctrlWon.length > 0 ? ctrlWon.join('+') : 'NONE',
+      ctrlCount: ctrlWon.length,
+      oppWon,
+      oppCombo: oppWon.length > 0 ? oppWon.join('+') : 'NONE',
+      oppCount: oppWon.length,
+      floorDelta,
+      defBucket: Math.abs(ctrlMargin) >= 10 ? 'trail_10+' : Math.abs(ctrlMargin) >= 5 ? 'trail_5-9' : 'trail_1-4',
+      periodBucket: r.checkpoint.startsWith('Q1') ? 'Q1' : r.checkpoint.startsWith('Q2') ? 'Q2' : r.checkpoint.startsWith('Q3') ? 'Q3' : 'Q4',
+    });
+  }
+
+  const total = enriched.length;
+  const totalWins = enriched.filter(s => s.won).length;
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // SECTION 1: Control-team indicator combos for BUY
+  // ══════════════════════════════════════════════════════════════════════════
+  const comboCounts = {};
+  for (const s of enriched) {
+    if (!comboCounts[s.ctrlCombo]) comboCounts[s.ctrlCombo] = { n: 0, wins: 0 };
+    comboCounts[s.ctrlCombo].n++;
+    if (s.won) comboCounts[s.ctrlCombo].wins++;
+  }
+  const ctrlCombos = Object.entries(comboCounts)
+    .sort((a, b) => b[1].n - a[1].n)
+    .map(([combo, v]) => ({ combo, n: v.n, wins: v.wins, pct: Math.round(v.wins / v.n * 1000) / 10 }));
+
+  // Also do pairs
+  const pairCounts = {};
+  for (const s of enriched) {
+    for (let i = 0; i < s.ctrlWon.length; i++) {
+      for (let j = i + 1; j < s.ctrlWon.length; j++) {
+        const pair = s.ctrlWon[i] + '+' + s.ctrlWon[j];
+        if (!pairCounts[pair]) pairCounts[pair] = { n: 0, wins: 0 };
+        pairCounts[pair].n++;
+        if (s.won) pairCounts[pair].wins++;
+      }
+    }
+  }
+  const ctrlPairs = Object.entries(pairCounts)
+    .sort((a, b) => b[1].n - a[1].n)
+    .map(([pair, v]) => ({ pair, n: v.n, wins: v.wins, pct: Math.round(v.wins / v.n * 1000) / 10 }));
+
+  // Single indicator impact
+  const singleImpact = {};
+  for (const k of ['I1','I2','I3','I4','I5']) {
+    for (const state of ['won','even','lost']) {
+      const group = enriched.filter(s => ctrlInd({ i1: '', i2: '', i3: '', i4: '', i5: '', ctrl: 'x', home_alias: 'x', ...s }, k) === state);
+      // Re-derive from ctrlWon
+      let grp;
+      if (state === 'won') grp = enriched.filter(s => s.ctrlWon.includes(k));
+      else if (state === 'lost') grp = enriched.filter(s => s.oppWon.includes(k));
+      else grp = enriched.filter(s => !s.ctrlWon.includes(k) && !s.oppWon.includes(k));
+
+      const w = grp.filter(s => s.won).length;
+      if (!singleImpact[k]) singleImpact[k] = {};
+      singleImpact[k][state] = { n: grp.length, wins: w, pct: grp.length > 0 ? Math.round(w / grp.length * 1000) / 10 : null };
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // SECTION 2: Floor trajectory at BUY moment
+  // ══════════════════════════════════════════════════════════════════════════
+  const withDelta = enriched.filter(s => s.floorDelta !== null);
+  const deltaBuckets = [
+    { label: 'rising_strong (>+0.10)', test: d => d > 0.10 },
+    { label: 'rising_mild (+0.01 to +0.10)', test: d => d > 0 && d <= 0.10 },
+    { label: 'stable (-0.01 to +0.01)', test: d => d >= -0.01 && d <= 0.01 },  // intentional overlap at 0, handle order
+    { label: 'declining_mild (-0.10 to -0.01)', test: d => d < -0.01 && d >= -0.10 },
+    { label: 'declining_strong (<-0.10)', test: d => d < -0.10 },
+  ];
+  // Fix stable bucket — needs to not match rising_mild or declining_mild
+  const floorTrajectory = {};
+  for (const s of withDelta) {
+    let label;
+    if (s.floorDelta > 0.10) label = 'rising_strong';
+    else if (s.floorDelta > 0.01) label = 'rising_mild';
+    else if (s.floorDelta >= -0.01) label = 'stable';
+    else if (s.floorDelta >= -0.10) label = 'declining_mild';
+    else label = 'declining_strong';
+
+    if (!floorTrajectory[label]) floorTrajectory[label] = { n: 0, wins: 0 };
+    floorTrajectory[label].n++;
+    if (s.won) floorTrajectory[label].wins++;
+  }
+  for (const k of Object.keys(floorTrajectory)) {
+    floorTrajectory[k].pct = Math.round(floorTrajectory[k].wins / floorTrajectory[k].n * 1000) / 10;
+  }
+
+  // Floor delta by checkpoint (does trajectory matter more at certain points?)
+  const trajectoryByCheckpoint = {};
+  for (const s of withDelta) {
+    if (!trajectoryByCheckpoint[s.checkpoint]) trajectoryByCheckpoint[s.checkpoint] = { rising: { n: 0, wins: 0 }, stable: { n: 0, wins: 0 }, declining: { n: 0, wins: 0 } };
+    const bucket = s.floorDelta > 0.01 ? 'rising' : s.floorDelta < -0.01 ? 'declining' : 'stable';
+    trajectoryByCheckpoint[s.checkpoint][bucket].n++;
+    if (s.won) trajectoryByCheckpoint[s.checkpoint][bucket].wins++;
+  }
+  for (const cp of Object.keys(trajectoryByCheckpoint)) {
+    for (const b of ['rising', 'stable', 'declining']) {
+      const v = trajectoryByCheckpoint[cp][b];
+      v.pct = v.n > 0 ? Math.round(v.wins / v.n * 1000) / 10 : null;
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // SECTION 3: Multivariate "golden BUY" stacks
+  // ══════════════════════════════════════════════════════════════════════════
+  function stackWinRate(filter, label) {
+    const group = enriched.filter(filter);
+    const wins = group.filter(s => s.won).length;
+    return { label, n: group.length, wins, pct: group.length > 0 ? Math.round(wins / group.length * 1000) / 10 : null };
+  }
+
+  const stacks = [
+    // Baseline
+    stackWinRate(() => true, 'ALL BUY-eligible'),
+
+    // Deficit
+    stackWinRate(s => s.defBucket === 'trail_1-4', 'trail 1-4'),
+    stackWinRate(s => s.defBucket === 'trail_5-9', 'trail 5-9'),
+    stackWinRate(s => s.defBucket === 'trail_10+', 'trail 10+'),
+
+    // Indicator count
+    stackWinRate(s => s.ctrlCount >= 3, '3+ ctrl indicators'),
+    stackWinRate(s => s.ctrlCount >= 4, '4+ ctrl indicators'),
+    stackWinRate(s => s.ctrlCount <= 2, '≤2 ctrl indicators'),
+
+    // Opponent profile
+    stackWinRate(s => s.oppCount === 0, 'opponent 0 indicators'),
+    stackWinRate(s => s.oppCount <= 1, 'opponent ≤1 indicator'),
+    stackWinRate(s => s.oppWon.includes('I1'), 'opponent I1 won'),
+    stackWinRate(s => s.oppWon.includes('I2'), 'opponent I2 won'),
+    stackWinRate(s => s.oppWon.includes('I1') || s.oppWon.includes('I2'), 'opponent I1 OR I2 won'),
+    stackWinRate(s => s.oppCount >= 1 && !s.oppWon.includes('I1') && !s.oppWon.includes('I2'), 'opponent indicator(s) but NOT I1/I2'),
+
+    // Two-factor stacks
+    stackWinRate(s => s.defBucket === 'trail_1-4' && s.ctrlCount >= 3, 'trail 1-4 + 3+ ind'),
+    stackWinRate(s => s.defBucket === 'trail_1-4' && s.oppCount <= 1, 'trail 1-4 + opp ≤1'),
+    stackWinRate(s => s.ctrlCount >= 3 && s.oppCount <= 1, '3+ ind + opp ≤1'),
+    stackWinRate(s => s.defBucket === 'trail_1-4' && !(s.oppWon.includes('I1') || s.oppWon.includes('I2')), 'trail 1-4 + no opp I1/I2'),
+    stackWinRate(s => s.ctrlCount >= 3 && !(s.oppWon.includes('I1') || s.oppWon.includes('I2')), '3+ ind + no opp I1/I2'),
+
+    // Three-factor stacks (golden BUY candidates)
+    stackWinRate(s => s.defBucket === 'trail_1-4' && s.ctrlCount >= 3 && s.oppCount <= 1, 'trail 1-4 + 3+ ind + opp ≤1'),
+    stackWinRate(s => s.defBucket === 'trail_1-4' && s.ctrlCount >= 3 && !(s.oppWon.includes('I1') || s.oppWon.includes('I2')), 'trail 1-4 + 3+ ind + no opp I1/I2'),
+    stackWinRate(s => s.defBucket === 'trail_1-4' && s.ctrlCount >= 4, 'trail 1-4 + 4+ ind'),
+    stackWinRate(s => s.defBucket === 'trail_1-4' && s.ctrlCount >= 3 && s.oppCount === 0, 'trail 1-4 + 3+ ind + opp 0'),
+
+    // With floor trajectory (subset with delta available)
+    stackWinRate(s => s.floorDelta != null && s.floorDelta > 0.01, 'rising floor (>+0.01)'),
+    stackWinRate(s => s.floorDelta != null && s.floorDelta < -0.01, 'declining floor (<-0.01)'),
+    stackWinRate(s => s.defBucket === 'trail_1-4' && s.ctrlCount >= 3 && s.floorDelta != null && s.floorDelta > 0.01, 'trail 1-4 + 3+ ind + rising floor'),
+    stackWinRate(s => s.defBucket === 'trail_1-4' && s.ctrlCount >= 3 && !(s.oppWon.includes('I1') || s.oppWon.includes('I2')) && s.floorDelta != null && s.floorDelta > 0.01, 'trail 1-4 + 3+ ind + no opp I1/I2 + rising'),
+
+    // I4-specific stacks (testing whether I4 adds discriminating power for BUY)
+    stackWinRate(s => s.ctrlWon.includes('I4'), 'ctrl I4 won'),
+    stackWinRate(s => s.oppWon.includes('I4'), 'opp I4 won'),
+    stackWinRate(s => !s.ctrlWon.includes('I4') && !s.oppWon.includes('I4'), 'I4 even'),
+    stackWinRate(s => s.ctrlWon.includes('I4') && s.ctrlWon.includes('I5'), 'ctrl I4+I5'),
+    stackWinRate(s => s.ctrlWon.includes('I4') && s.defBucket === 'trail_1-4', 'ctrl I4 won + trail 1-4'),
+    stackWinRate(s => s.oppWon.includes('I4') && s.defBucket === 'trail_1-4', 'opp I4 won + trail 1-4'),
+  ];
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // SECTION 4: Checkpoint × deficit interaction
+  // ══════════════════════════════════════════════════════════════════════════
+  const cpDefGrid = {};
+  const defLabels = ['trail_1-4', 'trail_5-9', 'trail_10+'];
+  const periodLabels = ['Q1', 'Q2', 'Q3', 'Q4'];
+  for (const p of periodLabels) {
+    cpDefGrid[p] = {};
+    for (const d of defLabels) {
+      const group = enriched.filter(s => s.periodBucket === p && s.defBucket === d);
+      const wins = group.filter(s => s.won).length;
+      cpDefGrid[p][d] = { n: group.length, wins, pct: group.length > 0 ? Math.round(wins / group.length * 1000) / 10 : null };
+    }
+    // Period totals
+    const pGroup = enriched.filter(s => s.periodBucket === p);
+    const pWins = pGroup.filter(s => s.won).length;
+    cpDefGrid[p].total = { n: pGroup.length, wins: pWins, pct: pGroup.length > 0 ? Math.round(pWins / pGroup.length * 1000) / 10 : null };
+  }
+
+  // Also by individual checkpoint (Q2_6, Q2_END, etc.) for trail_1-4 only
+  const cpDetailTrail14 = {};
+  for (const cp of cpOrder) {
+    const group = enriched.filter(s => s.checkpoint === cp && s.defBucket === 'trail_1-4');
+    const wins = group.filter(s => s.won).length;
+    cpDetailTrail14[cp] = { n: group.length, wins, pct: group.length > 0 ? Math.round(wins / group.length * 1000) / 10 : null };
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // SECTION 5: Winners vs Losers comparison table
+  // ══════════════════════════════════════════════════════════════════════════
+  function profileWL(group) {
+    const n = group.length;
+    if (n === 0) return {};
+    let floorSum = 0, deltaSum = 0, deltaCount = 0;
+    const defDist = {}, cpDist = {}, indCountDist = {}, oppCountDist = {};
+    for (const s of group) {
+      floorSum += s.floor;
+      if (s.floorDelta != null) { deltaSum += s.floorDelta; deltaCount++; }
+      defDist[s.defBucket] = (defDist[s.defBucket] || 0) + 1;
+      cpDist[s.periodBucket] = (cpDist[s.periodBucket] || 0) + 1;
+      indCountDist[s.ctrlCount] = (indCountDist[s.ctrlCount] || 0) + 1;
+      oppCountDist[s.oppCount] = (oppCountDist[s.oppCount] || 0) + 1;
+    }
+    return {
+      n,
+      avg_floor: Math.round(floorSum / n * 100) / 100,
+      avg_floor_delta: deltaCount > 0 ? Math.round(deltaSum / deltaCount * 1000) / 1000 : null,
+      deficit_dist: Object.fromEntries(Object.entries(defDist).map(([k, v]) => [k, { n: v, pct: Math.round(v / n * 1000) / 10 }])),
+      period_dist: Object.fromEntries(Object.entries(cpDist).map(([k, v]) => [k, { n: v, pct: Math.round(v / n * 1000) / 10 }])),
+      ctrl_indicator_count: Object.fromEntries(Object.entries(indCountDist).sort((a, b) => Number(a[0]) - Number(b[0])).map(([k, v]) => [k, { n: v, pct: Math.round(v / n * 1000) / 10 }])),
+      opp_indicator_count: Object.fromEntries(Object.entries(oppCountDist).sort((a, b) => Number(a[0]) - Number(b[0])).map(([k, v]) => [k, { n: v, pct: Math.round(v / n * 1000) / 10 }])),
+      has_opp_I1_or_I2: Math.round(group.filter(s => s.oppWon.includes('I1') || s.oppWon.includes('I2')).length / n * 1000) / 10,
+    };
+  }
+
+  const winners = enriched.filter(s => s.won);
+  const losers = enriched.filter(s => !s.won);
+
+  return {
+    description: 'BUY profile analysis — what separates winning BUYs from losing BUYs. BUY eligible = floor >= 0.65, ctrl trailing 1-15.',
+    baseline: { total, wins: totalWins, pct: Math.round(totalWins / total * 1000) / 10 },
+    section_1_ctrl_combos: {
+      description: 'Control team indicator combinations for BUY-eligible snapshots',
+      combos: ctrlCombos,
+      pairs: ctrlPairs,
+      single_indicator_impact: singleImpact,
+    },
+    section_2_floor_trajectory: {
+      description: 'Floor delta from prior checkpoint at BUY-eligible moment',
+      snapshots_with_delta: withDelta.length,
+      by_delta_bucket: floorTrajectory,
+      by_checkpoint: trajectoryByCheckpoint,
+    },
+    section_3_golden_stacks: {
+      description: 'Multivariate combinations — do discriminators compound?',
+      stacks: stacks.filter(s => s.n > 0),
+    },
+    section_4_checkpoint_deficit: {
+      description: 'Period × deficit depth interaction for BUY',
+      grid: cpDefGrid,
+      trail_1_4_by_checkpoint: cpDetailTrail14,
+    },
+    section_5_winner_vs_loser: {
+      description: 'Side-by-side profile comparison',
+      winners: profileWL(winners),
+      losers: profileWL(losers),
+    },
+  };
+}
+
 // ── HANDLER ─────────────────────────────────────────────────────────────────
 export default async (req) => {
   const sql = neon(process.env.DATABASE_URL);
@@ -3347,6 +3682,7 @@ export default async (req) => {
       case 'report_tier_sim': result = await reportTierSim(sql); break;
       case 'report_bwc_erosion': result = await reportBWCErosion(sql); break;
       case 'report_value_play': result = await reportValuePlay(sql); break;
+      case 'report_buy_profile': result = await reportBuyProfile(sql); break;
       case 'report_buy_deep': {
         const [convDef, autopsy, marginFloor, alertsByCp, oppProfile] = await Promise.all([
           reportConvictionDeficit(sql),
