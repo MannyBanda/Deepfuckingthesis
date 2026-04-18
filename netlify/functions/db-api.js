@@ -171,6 +171,8 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_away_opp_sust TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS home_lead_degraded_at TIMESTAMPTZ`; } catch(e) {}
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS away_lead_degraded_at TIMESTAMPTZ`; } catch(e) {}
+      // v2 BWC state machine — per-game live tracking state
+      try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS live_tracking JSONB`; } catch(e) {}
 
       // WP profile table — team-level win probability curve analysis
       await sql`
@@ -330,6 +332,11 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS monitor_ts TIMESTAMPTZ`; } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS parent_alert_id INTEGER`; } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS emerging_signal TEXT`; } catch(e) {}
+      // v2 BWC state machine columns
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS bwc_state TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS erosion_level TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS peak_floor REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS exit_severity TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE poll_state ADD COLUMN IF NOT EXISTS monitor_last_run TIMESTAMPTZ`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS conviction_tier TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS conviction_combo TEXT`; } catch(e) {}

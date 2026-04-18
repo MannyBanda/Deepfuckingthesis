@@ -1660,6 +1660,93 @@ async function loadSeasonQ4(sql, league) {
   }
 }
 
+// ── V2 BWC STATE MACHINE — mechanical functions (validated 9/9 games) ────────
+
+const STATE_RANK = { 'LOCK': 4, 'EDGE': 3, 'VALUE': 2, 'EXIT': 1, 'DEEP_TRAIL': 0 };
+
+function updateLiveTracking(lt, ctrlTeam, floor, period, clock, homeAlias) {
+  if (!lt) lt = {};
+  const side = ctrlTeam === homeAlias ? 'home' : 'away';
+  const peakKey = side + '_peak_floor';
+  const timeStr = 'Q' + period + ' ' + clock;
+
+  if (!lt[peakKey] || floor > lt[peakKey]) {
+    lt[peakKey] = floor;
+    lt[side + '_peak_time'] = timeStr;
+  }
+
+  if (lt.ctrl_team_current === ctrlTeam) {
+    lt.ctrl_team_holds = (lt.ctrl_team_holds || 0) + 1;
+  } else {
+    lt.ctrl_team_current = ctrlTeam;
+    lt.ctrl_team_holds = 1;
+  }
+
+  return lt;
+}
+
+function computeBwcState(lt, ctrlTeam, margin) {
+  const bwcFired = lt.bwc_fired;
+  if (!bwcFired || !ctrlTeam) return null;
+
+  if (bwcFired.team === ctrlTeam) {
+    if (margin >= 3) return 'LOCK';
+    if (margin >= 1) return 'EDGE';
+    if (margin >= -7) return 'VALUE';
+    return 'DEEP_TRAIL';
+  } else {
+    return 'EXIT';
+  }
+}
+
+function classifyTransition(fromState, toState) {
+  const fromRank = STATE_RANK[fromState] ?? -1;
+  const toRank = STATE_RANK[toState] ?? -1;
+  if (toRank < fromRank) return 'DEGRADING';
+  if (toRank > fromRank) return 'RECOVERING';
+  return 'LATERAL';
+}
+
+function computeErosion(lt, floor, homeAlias, ctrlTeam) {
+  const side = ctrlTeam === homeAlias ? 'home' : 'away';
+  const peakFloor = lt[side + '_peak_floor'] || null;
+  if (!peakFloor || floor >= peakFloor) {
+    return { level: 'STABLE', peakFloor, peakDelta: 0 };
+  }
+  const peakDelta = floor - peakFloor;
+  const edgeAboveCoinFlip = peakFloor - 0.50;
+  if (edgeAboveCoinFlip <= 0) {
+    return { level: 'STABLE', peakFloor, peakDelta };
+  }
+  const cautionDelta = -(edgeAboveCoinFlip * 0.40);
+  const collapseDelta = -(edgeAboveCoinFlip * 0.70);
+  var level = 'STABLE';
+  if (peakDelta <= collapseDelta) level = 'COLLAPSE';
+  else if (peakDelta <= cautionDelta) level = 'CAUTION';
+  return { level, peakFloor, peakDelta, cautionDelta, collapseDelta };
+}
+
+function computeExitSeverity(ctrlIndicators, ctrlIndicatorCount, ctrlFloor, holds) {
+  const oppOnlyI3 = ctrlIndicatorCount === 1 && ctrlIndicators.includes('I3');
+  const oppHasI1 = ctrlIndicators.includes('I1');
+  const oppHasI4 = ctrlIndicators.includes('I4');
+
+  if (holds >= 5 && ctrlFloor >= 0.70 && ctrlIndicatorCount >= 2 && !oppOnlyI3) {
+    return { severity: 'STRUCTURAL_TAKEOVER',
+      reason: 'Opponent floor ' + ctrlFloor.toFixed(2) + ', ' + holds + ' holds, '
+        + ctrlIndicatorCount + ' indicators (' + ctrlIndicators.join('+') + ')' };
+  }
+  if (holds >= 3 && (oppHasI1 || oppHasI4) && ctrlFloor >= 0.60) {
+    return { severity: 'CONCERNING',
+      reason: 'Opponent structural indicators (' + ctrlIndicators.join('+') + ') with '
+        + holds + ' holds' };
+  }
+  return { severity: 'TEMPORARY',
+    reason: 'Opponent floor ' + ctrlFloor.toFixed(2) + ', ' + holds + ' holds'
+      + (oppOnlyI3 ? ', only I3 (variance)'
+        : ctrlIndicatorCount === 0 ? ', no indicators won' : '') };
+}
+
 // ── SERVER-SIDE COMPUTE (I1–I5) ─────────────────────────────────────────────
 // Pure function. No cardState, no DOM, no PBP, no baselines.
 // Input: SR game summary JSON. Output: indicator scores + composite.
@@ -4979,6 +5066,57 @@ export default async function(req) {
           // BUY:  floor ≥ 0.65, trailing 1-15, Q2+, throughput not UNLIKELY/NO PATH
           // BWC:  floor ≥ 0.60, leading 2+, Q2+, edge > 0, lead safety not AT RISK/CRITICAL
           {
+            // ── V2 LIVE TRACKING: read state, update peaks/holds, compute BWC + erosion ──
+            var lt = {};
+            try {
+              const ltRows = await sql`SELECT live_tracking FROM games WHERE id = ${game.id}`;
+              if (ltRows[0]?.live_tracking) {
+                lt = typeof ltRows[0].live_tracking === 'string'
+                  ? JSON.parse(ltRows[0].live_tracking) : ltRows[0].live_tracking;
+              }
+            } catch(e) { /* non-fatal — initialize fresh */ }
+
+            lt = updateLiveTracking(lt, ind.controlTeam, ind.score, currentPeriod, clock, hA);
+
+            // Quick ctrl-relative margin for v2 state machine (full margin computed below)
+            const _v2CtrlIsHome = ind.controlTeam === hA;
+            const _v2CtrlPts = _v2CtrlIsHome ? ind.homePts : ind.awayPts;
+            const _v2OppPts = _v2CtrlIsHome ? ind.awayPts : ind.homePts;
+            const _v2Margin = _v2CtrlPts - _v2OppPts; // positive = leading
+
+            // ── V2 BWC candidate tracking (3-hold minimum for initial fire) ──
+            if (!lt.bwc_fired && currentPeriod >= 2 && ind.score >= 0.60 && _v2Margin >= 2) {
+              if (lt._bwc_candidate === ind.controlTeam) {
+                lt._bwc_candidate_holds = (lt._bwc_candidate_holds || 0) + 1;
+              } else {
+                lt._bwc_candidate = ind.controlTeam;
+                lt._bwc_candidate_holds = 1;
+              }
+              if (lt._bwc_candidate_holds >= 3) {
+                lt.bwc_fired = { team: ind.controlTeam, period: currentPeriod, clock, floor: ind.score };
+                lt._prev_bwc_state = _v2Margin >= 3 ? 'LOCK' : 'EDGE';
+                log(`${matchup}: ★ V2 BWC FIRED — ${ind.controlTeam} floor ${ind.score.toFixed(2)} margin ${_v2Margin} state ${lt._prev_bwc_state}`);
+              }
+            } else if (!lt.bwc_fired && ind.controlTeam !== lt._bwc_candidate) {
+              lt._bwc_candidate = null;
+              lt._bwc_candidate_holds = 0;
+            }
+
+            const v2BwcState = computeBwcState(lt, ind.controlTeam, _v2Margin);
+            const v2Erosion = computeErosion(lt, ind.score, hA, ind.controlTeam);
+
+            // State transition detection (v2 logging only — no alerts yet)
+            if (lt.bwc_fired && v2BwcState && lt._prev_bwc_state && v2BwcState !== lt._prev_bwc_state) {
+              const v2Dir = classifyTransition(lt._prev_bwc_state, v2BwcState);
+              if (v2Dir !== 'LATERAL') {
+                log(`${matchup}: v2 transition ${lt._prev_bwc_state}→${v2BwcState} (${v2Dir}) floor=${ind.score.toFixed(2)} margin=${_v2Margin} erosion=${v2Erosion.level}`);
+              }
+            }
+            if (lt.bwc_fired) {
+              lt._prev_bwc_state = v2BwcState;
+              log(`${matchup}: v2 state=${v2BwcState || '-'} erosion=${v2Erosion.level} peak=${v2Erosion.peakFloor?.toFixed(2) || '-'} holds=${lt.ctrl_team_holds || 0} bwcTeam=${lt.bwc_fired.team}`);
+            }
+
             const ctrlSide = ind.controlTeam === hA ? 'home' : 'away';
             const oppSide = ctrlSide === 'home' ? 'away' : 'home';
             const ctrlSust = sust?.[ctrlSide]?.tier || null;
@@ -5712,6 +5850,12 @@ export default async function(req) {
               log(`${matchup}: transition alert error: ${e.message}`);
             }
           }
+
+          // ── V2 LIVE TRACKING: persist state to DB ──
+          try {
+            await sql`UPDATE games SET live_tracking = ${JSON.stringify(lt)} WHERE id = ${game.id}`;
+          } catch(e) { log(`${matchup}: live_tracking write failed: ${e.message}`); }
+
           // ── QUARTER-BOUNDARY CALIBRATION SNAPSHOTS ─────────────────
           // Detect Q1→Q2, Q2→Q3, Q3→Q4 transitions. Fire ONCE each per game:
           //   1. Save calibration-tagged snapshot (all data layers fresh from this cycle)
@@ -5785,13 +5929,13 @@ export default async function(req) {
                       floor_score, floor_team, espn_wp_home, espn_wp_away,
                       spread, deficit, trailing_team, lead_sust, lead_class,
                       i1, i2, i3, i4, i5, source, sust_json,
-                      tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing)
+                      tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json)
                     VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
                       ${ind.score}, ${ind.controlTeam}, ${espnWP?.home || null}, ${espnWP?.away || null},
                       ${spreadVal}, ${deficit}, ${trailingTeam}, ${leadSust}, ${leadClass},
                       ${ind.I1.score}, ${ind.I2.score}, ${ind.I3.score}, ${ind.I4.score}, ${ind.I5.score},
                       ${t.tag}, ${sustJson},
-                      ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null})
+                      ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson})
                   `;
                   log(`${matchup}: ${t.label} CAL snapshot saved — floor ${ind.controlTeam} ${ind.score} | sust:${leadSust || '?'} class:${leadClass || '?'} | WP:${espnWP?.home || '?'}% | spd:${spreadVal != null ? spreadVal : 'N/A'}`);
                 } catch (e) {
