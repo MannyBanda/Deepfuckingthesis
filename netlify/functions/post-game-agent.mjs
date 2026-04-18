@@ -65,7 +65,15 @@ function scoreAlert(alert, games) {
 
   // Alert-type-specific accuracy
   let correct = false;
-  if (['BUY', 'WINDOW BUY', 'RECOVERY PATH', 'AUTO_ANALYSIS'].includes(alert.alert_type)) {
+  // V2 types
+  if (['POSITION_OPEN', 'BWC_EDGE', 'POSITION_RECOVERING', 'POSITION_SAFE'].includes(alert.alert_type)) {
+    correct = ctrlWon; // Hold signals — ctrl team should win
+  } else if (['VALUE', 'THESIS_ALIVE'].includes(alert.alert_type)) {
+    correct = ctrlWon; // Entry signals — ctrl team should win
+  } else if (alert.alert_type === 'EXIT') {
+    correct = !ctrlWon; // Exit warning — ctrl lost edge, alert correct if ctrl loses
+  // V1 types (backward compat during transition)
+  } else if (['BUY', 'WINDOW BUY', 'RECOVERY PATH', 'AUTO_ANALYSIS'].includes(alert.alert_type)) {
     correct = ctrlWon; // Control team should win
   } else if (alert.alert_type === 'BUY WINDOW CLOSING') {
     correct = ctrlWon; // BWC = control team leading, should hold
@@ -186,9 +194,29 @@ export default async function handler(req) {
     log(`  ${a.alert_type} ${a.control_team} agent:${a.agent_decision||'NULL'} → ${a.result.correct ? 'CORRECT' : 'WRONG'} (ctrl ${a.result.ctrlWon ? 'won' : 'lost'} by ${a.result.finalMargin})`);
   });
 
-  // Compute accuracy breakdowns — split actionable vs transitional
-  const ACTIONABLE_TYPES = ['BUY', 'WINDOW BUY', 'BUY WINDOW CLOSING', 'RECOVERY PATH', 'VARIANCE BREAKING', 'AUTO_ANALYSIS'];
-  const TRANSITIONAL_TYPES = ['LEAD LOST', 'LEAD CRUMBLING'];
+  // ── V2 type classifications ──
+  // Entry types = the money metric (subscriber opened a position based on this)
+  const ENTRY_TYPES = ['BUY', 'VALUE', 'THESIS_ALIVE'];
+  // Hold types = position updates for existing holders
+  const HOLD_TYPES = ['POSITION_OPEN', 'BWC_EDGE', 'POSITION_RECOVERING', 'POSITION_SAFE', 'AUTO_ANALYSIS'];
+  // Exit types = cash-out signals (correct when ctrl LOSES)
+  const EXIT_TYPES = ['EXIT'];
+  // V1 backward compat (transition period — will coexist with V2 until cutover stabilizes)
+  const V1_ACTIONABLE = ['WINDOW BUY', 'BUY WINDOW CLOSING', 'RECOVERY PATH', 'VARIANCE BREAKING'];
+  const V1_TRANSITIONAL = ['LEAD LOST', 'LEAD CRUMBLING'];
+  // Combined: all types that go to ntfy
+  const ALL_KNOWN = [...ENTRY_TYPES, ...HOLD_TYPES, ...EXIT_TYPES, ...V1_ACTIONABLE, ...V1_TRANSITIONAL];
+
+  // Readable name map — subscriber-facing labels
+  const READABLE = {
+    'POSITION_OPEN': 'Position Open', 'BWC_EDGE': 'Holding', 'VALUE': 'Entry Value',
+    'EXIT': 'Exit', 'THESIS_ALIVE': 'Second Chance', 'POSITION_RECOVERING': 'Strengthening',
+    'POSITION_SAFE': 'Position Safe', 'AUTO_ANALYSIS': 'Position Update',
+    'BUY': 'Buy', 'BUY WINDOW CLOSING': 'Buy Window Closing', 'WINDOW BUY': 'Window Buy',
+    'RECOVERY PATH': 'Recovery Path', 'VARIANCE BREAKING': 'Variance Breaking',
+    'LEAD LOST': 'Lead Lost', 'LEAD CRUMBLING': 'Lead Crumbling',
+  };
+  const readable = (t) => READABLE[t] || t;
 
   // Delivered = ntfy actually sent to user. Prefer ntfy_sent column, fall back to agent_decision for old data.
   const delivered = scoredAlerts.filter(a => a.ntfy_sent === true || (a.ntfy_sent == null && a.agent_decision !== 'SUPPRESS' && a.agent_decision !== 'FALLBACK_DROP'));
@@ -205,13 +233,31 @@ export default async function handler(req) {
   const agentDedup = agentSuppressed.filter(a => isDedup(a.agent_reasoning));
   const agentStructural = agentSuppressed.filter(a => !isDedup(a.agent_reasoning));
 
-  // Delivered actionable — THE headline number
-  const deliveredActionable = delivered.filter(a => ACTIONABLE_TYPES.includes(a.alert_type));
-  const deliveredActionableCorrect = deliveredActionable.filter(a => a.result.correct).length;
+  // ── HEADLINE: Entry accuracy (the money metric) ──
+  const deliveredEntry = delivered.filter(a => ENTRY_TYPES.includes(a.alert_type));
+  const deliveredEntryCorrect = deliveredEntry.filter(a => a.result.correct).length;
+  const entryAccuracy = deliveredEntry.length > 0
+    ? Math.round((deliveredEntryCorrect / deliveredEntry.length) * 100) : null;
 
-  // Delivered transitional — informational only
-  const deliveredTransitional = delivered.filter(a => TRANSITIONAL_TYPES.includes(a.alert_type));
-  const deliveredTransitionalHeld = deliveredTransitional.filter(a => a.result.correct).length;
+  // ── HOLD accuracy (position updates — system trust metric) ──
+  const deliveredHold = delivered.filter(a => HOLD_TYPES.includes(a.alert_type));
+  const deliveredHoldCorrect = deliveredHold.filter(a => a.result.correct).length;
+
+  // ── EXIT accuracy (correct when ctrl lost) ──
+  const deliveredExit = delivered.filter(a => EXIT_TYPES.includes(a.alert_type));
+  const deliveredExitCorrect = deliveredExit.filter(a => a.result.correct).length;
+
+  // ── V1 compat: old actionable + transitional (transition period) ──
+  const deliveredV1Actionable = delivered.filter(a => V1_ACTIONABLE.includes(a.alert_type));
+  const deliveredV1ActionableCorrect = deliveredV1Actionable.filter(a => a.result.correct).length;
+  const deliveredV1Transitional = delivered.filter(a => V1_TRANSITIONAL.includes(a.alert_type));
+  const deliveredV1TransitionalHeld = deliveredV1Transitional.filter(a => a.result.correct).length;
+
+  // Combined delivered headline: entry + V1 actionable (transition period blended number)
+  const deliveredActionable = [...deliveredEntry, ...deliveredV1Actionable];
+  const deliveredActionableCorrect = deliveredEntryCorrect + deliveredV1ActionableCorrect;
+  const accuracyOverall = deliveredActionable.length > 0
+    ? Math.round((deliveredActionableCorrect / deliveredActionable.length) * 100) : entryAccuracy;
 
   // Agent saves — structural suppression that would have been wrong
   const agentSaves = agentStructural.filter(a => !a.result.correct).length;
@@ -224,16 +270,13 @@ export default async function handler(req) {
   // Position-gated correct — gated alerts that were correct (not a miss, no prior position)
   const posGatedCorrect = positionGated.filter(a => a.result.correct).length;
 
-  // Overall accuracy = delivered actionable only
-  const accuracyOverall = deliveredActionable.length > 0
-    ? Math.round((deliveredActionableCorrect / deliveredActionable.length) * 100) : null;
-
-  // By type (delivered only)
+  // By type (delivered only, using readable names)
   const byType = {};
   delivered.forEach(a => {
-    if (!byType[a.alert_type]) byType[a.alert_type] = { correct: 0, total: 0 };
-    byType[a.alert_type].total++;
-    if (a.result.correct) byType[a.alert_type].correct++;
+    const label = readable(a.alert_type);
+    if (!byType[label]) byType[label] = { correct: 0, total: 0 };
+    byType[label].total++;
+    if (a.result.correct) byType[label].correct++;
   });
   Object.keys(byType).forEach(k => {
     byType[k].pct = Math.round((byType[k].correct / byType[k].total) * 100);
@@ -243,22 +286,8 @@ export default async function handler(req) {
   const rawCorrect = scoredAlerts.filter(a => a.result.correct).length;
   const rawTotal = scoredAlerts.length;
 
-  // ── Transition agent stats (RP/LC/VB now route through alert agent) ──
-  const TRANSITION_AGENT_TYPES = ['RECOVERY PATH', 'LEAD CRUMBLING', 'VARIANCE BREAKING'];
-  const transitionAgentAlerts = scoredAlerts.filter(a => TRANSITION_AGENT_TYPES.includes(a.alert_type) && a.agent_decision);
-  const transitionAgentStats = {};
-  TRANSITION_AGENT_TYPES.forEach(t => {
-    const ofType = transitionAgentAlerts.filter(a => a.alert_type === t);
-    const sent = ofType.filter(a => a.agent_decision === 'SEND');
-    const suppressed = ofType.filter(a => a.agent_decision === 'SUPPRESS');
-    transitionAgentStats[t] = {
-      sent: sent.length, sent_correct: sent.filter(a => a.result.correct).length,
-      suppressed: suppressed.length, suppressed_correct: suppressed.filter(a => !a.result.correct).length,
-      total: ofType.length,
-    };
-  });
-
-  // ── Alert chain detection within games ──
+  // ── BWC LIFECYCLE STATS ──
+  // Group all alerts by game_id, find games where POSITION_OPEN fired
   const gameAlerts = {};
   scoredAlerts.forEach(a => {
     if (!gameAlerts[a.game_id]) gameAlerts[a.game_id] = { matchup: a.matchup, alerts: [], wrong: 0 };
@@ -266,14 +295,76 @@ export default async function handler(req) {
     if (!a.result.correct) gameAlerts[a.game_id].wrong++;
   });
 
-  // Detect alert chains — chronological sequences of related alerts within a game
+  const BWC_LIFECYCLE_TYPES = ['POSITION_OPEN', 'BWC_EDGE', 'VALUE', 'EXIT', 'THESIS_ALIVE', 'POSITION_RECOVERING', 'POSITION_SAFE'];
+  const lifecycleGames = {};
+  Object.entries(gameAlerts).forEach(([gameId, g]) => {
+    const sorted = [...g.alerts].sort((a, b) => new Date(a.ts) - new Date(b.ts));
+    // Group by control team
+    const byTeam = {};
+    sorted.forEach(a => {
+      if (!byTeam[a.control_team]) byTeam[a.control_team] = [];
+      byTeam[a.control_team].push(a);
+    });
+    Object.entries(byTeam).forEach(([team, teamAlerts]) => {
+      const lifecycleAlerts = teamAlerts.filter(a => BWC_LIFECYCLE_TYPES.includes(a.alert_type));
+      if (lifecycleAlerts.length === 0) return;
+      const hasOpen = lifecycleAlerts.some(a => a.alert_type === 'POSITION_OPEN');
+      if (!hasOpen) return;
+      const terminal = lifecycleAlerts[lifecycleAlerts.length - 1];
+      const hasExit = lifecycleAlerts.some(a => a.alert_type === 'EXIT');
+      const key = `${gameId}_${team}`;
+      lifecycleGames[key] = {
+        matchup: g.matchup, team, alerts: lifecycleAlerts,
+        terminalType: terminal.alert_type,
+        collapsed: hasExit,
+        ctrlWon: terminal.result?.ctrlWon,
+        peakFloor: Math.max(...lifecycleAlerts.map(a => Number(a.peak_floor) || Number(a.floor_score) || 0)),
+        worstErosion: lifecycleAlerts.reduce((worst, a) => {
+          const rank = { 'STEADY': 0, 'MINOR': 1, 'MODERATE': 2, 'SEVERE': 3, 'COLLAPSE': 4 };
+          return (rank[a.erosion_level] || 0) > (rank[worst] || 0) ? a.erosion_level : worst;
+        }, 'STEADY'),
+      };
+    });
+  });
+
+  const lifecycleStats = {
+    opened: Object.keys(lifecycleGames).length,
+    held: Object.values(lifecycleGames).filter(g => !g.collapsed).length,
+    collapsed: Object.values(lifecycleGames).filter(g => g.collapsed).length,
+    held_correct: Object.values(lifecycleGames).filter(g => !g.collapsed && g.ctrlWon).length,
+    collapsed_correct: Object.values(lifecycleGames).filter(g => g.collapsed && !g.ctrlWon).length,
+    by_terminal: {},
+  };
+  Object.values(lifecycleGames).forEach(g => {
+    const t = readable(g.terminalType);
+    if (!lifecycleStats.by_terminal[t]) lifecycleStats.by_terminal[t] = { total: 0, correct: 0 };
+    lifecycleStats.by_terminal[t].total++;
+    const isCorrect = g.collapsed ? !g.ctrlWon : g.ctrlWon;
+    if (isCorrect) lifecycleStats.by_terminal[t].correct++;
+  });
+
+  // ── EROSION ACCURACY ──
+  const erosionAccuracy = {};
+  scoredAlerts.filter(a => a.erosion_level).forEach(a => {
+    if (!erosionAccuracy[a.erosion_level]) erosionAccuracy[a.erosion_level] = { total: 0, ctrlWon: 0 };
+    erosionAccuracy[a.erosion_level].total++;
+    if (a.result.ctrlWon) erosionAccuracy[a.erosion_level].ctrlWon++;
+  });
+
+  // ── EXIT SEVERITY ACCURACY ──
+  const exitSevAccuracy = {};
+  scoredAlerts.filter(a => a.alert_type === 'EXIT' && a.exit_severity).forEach(a => {
+    if (!exitSevAccuracy[a.exit_severity]) exitSevAccuracy[a.exit_severity] = { total: 0, correct: 0 };
+    exitSevAccuracy[a.exit_severity].total++;
+    if (!a.result.ctrlWon) exitSevAccuracy[a.exit_severity].correct++; // EXIT correct = ctrl lost
+  });
+
+  // ── Alert chain detection within games ──
   const alertChains = [];
   Object.entries(gameAlerts).forEach(([gameId, g]) => {
-    // Sort by timestamp
     const sorted = [...g.alerts].sort((a, b) => new Date(a.ts) - new Date(b.ts));
     if (sorted.length < 2) return;
 
-    // Group by control team
     const byTeam = {};
     sorted.forEach(a => {
       if (!byTeam[a.control_team]) byTeam[a.control_team] = [];
@@ -283,35 +374,55 @@ export default async function handler(req) {
     Object.entries(byTeam).forEach(([team, teamAlerts]) => {
       if (teamAlerts.length < 2) return;
 
-      // Build the chain: sequence of alert types with agent decisions
       const chain = teamAlerts.map(a => ({
         type: a.alert_type, period: a.period, clock: a.clock,
         decision: a.agent_decision || (a.ntfy_sent ? 'DIRECT' : 'UNKNOWN'),
         correct: a.result?.correct,
         floor: Number(a.floor_score).toFixed(2),
         margin: a.margin,
+        erosion: a.erosion_level || null,
+        bwcState: a.bwc_state || null,
       }));
 
-      // Classify the chain pattern
       const types = chain.map(c => c.type);
       const decisions = chain.map(c => c.decision);
       const suppressCount = decisions.filter(d => d === 'SUPPRESS').length;
-      const finalSend = decisions[decisions.length - 1] === 'SEND' || decisions[decisions.length - 1] === 'DIRECT';
 
-      // Detect notable patterns
+      // V2 chain patterns
       let pattern = null;
-      if (types.includes('VARIANCE BREAKING') && (types.includes('BUY') || types.includes('WINDOW BUY'))) {
+      const hasOpen = types.includes('POSITION_OPEN');
+      const hasExit = types.includes('EXIT');
+      const hasValue = types.includes('VALUE');
+      const hasThesisAlive = types.includes('THESIS_ALIVE');
+      const hasBuy = types.includes('BUY');
+      const hasEdge = types.includes('BWC_EDGE');
+      const hasSafe = types.includes('POSITION_SAFE');
+
+      if (hasOpen && hasExit && hasThesisAlive) {
+        pattern = 'LIFECYCLE_RECOVERY'; // full arc: open → exit → second chance
+      } else if (hasOpen && hasExit) {
+        pattern = 'LIFECYCLE_COLLAPSE'; // open → ... → exit
+      } else if (hasOpen && (hasSafe || types.includes('POSITION_RECOVERING'))) {
+        pattern = 'LIFECYCLE_HOLD'; // open → held through to safe/strengthening
+      } else if (hasBuy && hasOpen) {
+        pattern = 'BUY_THEN_LIFECYCLE'; // trail buy → took lead → BWC lifecycle
+      } else if (hasExit && hasThesisAlive) {
+        pattern = 'EXIT_TO_SECOND_CHANCE'; // exit → thesis alive (without open in this team's chain)
+      } else if (types.filter(t => t === 'BWC_EDGE').length >= 2) {
+        pattern = 'MULTI_HOLD_UPDATE'; // multiple holding updates
+      } else if (types.filter(t => t === 'AUTO_ANALYSIS').length >= 2) {
+        pattern = 'MULTI_UPDATE';
+      // V1 compat patterns
+      } else if (types.includes('VARIANCE BREAKING') && (hasBuy || types.includes('WINDOW BUY'))) {
         pattern = 'VB_TO_ENTRY';
-      } else if (types.includes('RECOVERY PATH') && (types.includes('BUY') || types.includes('WINDOW BUY'))) {
+      } else if (types.includes('RECOVERY PATH') && (hasBuy || types.includes('WINDOW BUY'))) {
         pattern = 'RP_TO_ENTRY';
       } else if (types.includes('LEAD CRUMBLING') && types.includes('LEAD LOST')) {
         pattern = 'LC_TO_LOST';
       } else if (types.includes('BUY WINDOW CLOSING') && types.includes('LEAD CRUMBLING')) {
         pattern = 'BWC_TO_LC';
-      } else if (suppressCount >= 2 && finalSend) {
-        pattern = 'SUPPRESS_CHAIN_TO_SEND';
-      } else if (types.filter(t => t === 'AUTO_ANALYSIS').length >= 2) {
-        pattern = 'MULTI_UPDATE';
+      } else if (suppressCount >= 2) {
+        pattern = 'SUPPRESS_CHAIN';
       }
 
       if (pattern || teamAlerts.length >= 3) {
@@ -337,8 +448,18 @@ export default async function handler(req) {
 
   // Agent decision accuracy
   const agentStats = {
-    delivered_correct: deliveredActionableCorrect,
-    delivered_total: deliveredActionable.length,
+    entry_correct: deliveredEntryCorrect,
+    entry_total: deliveredEntry.length,
+    hold_correct: deliveredHoldCorrect,
+    hold_total: deliveredHold.length,
+    exit_correct: deliveredExitCorrect,
+    exit_total: deliveredExit.length,
+    // V1 compat
+    v1_actionable_correct: deliveredV1ActionableCorrect,
+    v1_actionable_total: deliveredV1Actionable.length,
+    v1_transitional_held: deliveredV1TransitionalHeld,
+    v1_transitional_total: deliveredV1Transitional.length,
+    // Agent filter stats
     saves: agentSaves,
     missed_winners: agentMisses,
     agent_dedup: agentDedup.length,
@@ -347,9 +468,11 @@ export default async function handler(req) {
     dedup_correct: dedupCorrect,
     position_gated: positionGated.length,
     position_gated_correct: posGatedCorrect,
-    transitional_held: deliveredTransitionalHeld,
-    transitional_total: deliveredTransitional.length,
-    transition_agent: transitionAgentStats,
+    // Lifecycle
+    lifecycle: lifecycleStats,
+    erosion: erosionAccuracy,
+    exit_severity: exitSevAccuracy,
+    // Chains
     chains: alertChains.length,
     chain_patterns: alertChains.reduce((acc, c) => { acc[c.pattern] = (acc[c.pattern] || 0) + 1; return acc; }, {}),
     raw_correct: rawCorrect,
@@ -367,7 +490,7 @@ export default async function handler(req) {
   const sustMisreads = scoredAlerts.filter(a =>
     !a.result.correct &&
     (a.ctrl_sust === 'LOCKED IN' || a.ctrl_sust === 'DURABLE') &&
-    ['BUY', 'WINDOW BUY', 'BUY WINDOW CLOSING'].includes(a.alert_type)
+    [...ENTRY_TYPES, ...HOLD_TYPES, ...V1_ACTIONABLE, 'BUY WINDOW CLOSING'].includes(a.alert_type)
   );
 
   // CANDIDATE performance
@@ -375,10 +498,12 @@ export default async function handler(req) {
   const candidatesSent = candidates.filter(a => a.agent_decision === 'SEND' || a.agent_decision === 'DOWNGRADE');
   const candidatesSentCorrect = candidatesSent.filter(a => a.result.correct);
 
-  log(`Delivered accuracy: ${accuracyOverall}% (${deliveredActionableCorrect}/${deliveredActionable.length}) | Agent saves: ${agentSaves} misses: ${agentMisses} | Raw: ${rawCorrect}/${rawTotal}`);
+  log(`Entry accuracy: ${entryAccuracy != null ? entryAccuracy + '%' : '-'} (${deliveredEntryCorrect}/${deliveredEntry.length}) | Combined: ${accuracyOverall}% | Agent saves: ${agentSaves} misses: ${agentMisses} | Raw: ${rawCorrect}/${rawTotal}`);
   log(`By type: ${JSON.stringify(byType)}`);
+  log(`Hold: ${deliveredHoldCorrect}/${deliveredHold.length} | Exit: ${deliveredExitCorrect}/${deliveredExit.length}`);
+  log(`Lifecycle: ${JSON.stringify(lifecycleStats)}`);
+  log(`Erosion: ${JSON.stringify(erosionAccuracy)} | Exit severity: ${JSON.stringify(exitSevAccuracy)}`);
   log(`Agent: saves=${agentSaves}, missed=${agentMisses}, agent_dedup=${agentDedup.length}(${agentDedupCorrect} correct), sys_dedup=${deduped.length}(${dedupCorrect} correct), pos_gated=${positionGated.length}(${posGatedCorrect} correct)`);
-  log(`Transition agent: ${JSON.stringify(transitionAgentStats)}`);
   log(`Alert chains: ${alertChains.length} detected — ${JSON.stringify(agentStats.chain_patterns)}`);
   log(`Cascades: ${cascadeGames.length}, Conflicts: ${conflictGames.length}, TP failures: ${tpFailures.length}`);
   log(`Candidates sent: ${candidatesSent.length}/${candidates.length}, correct: ${candidatesSentCorrect.length}`);
@@ -392,57 +517,85 @@ export default async function handler(req) {
     const alertSummary = scoredAlerts.map(a => {
       const r = a.result;
       const agentTag = a.alert_tier === 'CANDIDATE' ? ` [CANDIDATE, agent:${a.agent_decision}]` : ` [FIRED, agent:${a.agent_decision}]`;
-      return `${a.matchup} Q${a.period} ${a.clock}: ${a.alert_type}${agentTag} — ${a.control_team} floor:${Number(a.floor_score).toFixed(2)} margin:${a.margin} ${a.is_trailing ? 'trailing' : 'leading'} | TP:${a.tp_class || '?'} LS:${a.ls_class || '?'} sust:${a.ctrl_sust || '?'}/${a.opp_sust || '?'} edge:${a.edge || '?'}% | RESULT: ${r.correct ? 'CORRECT' : 'WRONG'} (final margin: ${r.finalMargin > 0 ? '+' : ''}${r.finalMargin})${a.agent_reasoning ? ' | Agent reasoning: ' + a.agent_reasoning : ''}`;
+      const v2Fields = a.bwc_state || a.erosion_level ? ` | bwc_state:${a.bwc_state || '-'} erosion:${a.erosion_level || '-'} peak:${a.peak_floor ? Number(a.peak_floor).toFixed(2) : '-'} exit_sev:${a.exit_severity || '-'}` : '';
+      return `${a.matchup} Q${a.period} ${a.clock}: ${readable(a.alert_type)}${agentTag} — ${a.control_team} floor:${Number(a.floor_score).toFixed(2)} margin:${a.margin} ${a.is_trailing ? 'trailing' : 'leading'} | TP:${a.tp_class || '?'} LS:${a.ls_class || '?'} sust:${a.ctrl_sust || '?'}/${a.opp_sust || '?'} edge:${a.edge || '?'}%${v2Fields} | RESULT: ${r.correct ? 'CORRECT' : 'WRONG'} (final margin: ${r.finalMargin > 0 ? '+' : ''}${r.finalMargin})${a.agent_reasoning ? ' | Agent reasoning: ' + a.agent_reasoning : ''}`;
     }).join('\n');
 
     const cascadeDetail = cascadeGames.map(g =>
-      `${g.matchup}: ${g.wrong} wrong alerts — ${g.alerts.map(a => `${a.alert_type}(${a.result.correct ? '✓' : '✗'})`).join(', ')}`
+      `${g.matchup}: ${g.wrong} wrong alerts — ${g.alerts.map(a => `${readable(a.alert_type)}(${a.result.correct ? '✓' : '✗'})`).join(', ')}`
     ).join('\n');
 
     const conflictDetail = conflictGames.map(g => {
       const teams = [...new Set(g.alerts.map(a => a.control_team))];
-      return `${g.matchup}: alerts for both ${teams.join(' and ')} — ${g.alerts.map(a => `${a.alert_type} ${a.control_team}(${a.result.correct ? '✓' : '✗'})`).join(', ')}`;
+      return `${g.matchup}: alerts for both ${teams.join(' and ')} — ${g.alerts.map(a => `${readable(a.alert_type)} ${a.control_team}(${a.result.correct ? '✓' : '✗'})`).join(', ')}`;
     }).join('\n');
 
     // Build chain summary for Sonnet
     const chainSummary = alertChains.length > 0 ? alertChains.map(c => {
-      const steps = c.chain.map(s => `${s.type}(agent:${s.decision},${s.correct ? '✓' : '✗'}) Q${s.period} floor:${s.floor} margin:${s.margin}`).join(' → ');
+      const steps = c.chain.map(s => `${readable(s.type)}(agent:${s.decision},${s.correct ? '✓' : '✗'}) Q${s.period} floor:${s.floor} margin:${s.margin}${s.erosion ? ' erosion:' + s.erosion : ''}`).join(' → ');
       return `${c.matchup} ${c.team} [${c.pattern}]: ${steps} — ${c.outcome}`;
     }).join('\n') : '';
 
-    // Build transition agent summary
-    const transAgentSummary = TRANSITION_AGENT_TYPES.map(t => {
-      const s = transitionAgentStats[t];
-      if (s.total === 0) return null;
-      return `${t}: ${s.sent} sent (${s.sent_correct} correct), ${s.suppressed} suppressed (${s.suppressed_correct} correct saves)`;
-    }).filter(Boolean).join('\n');
+    // Lifecycle summary for Sonnet
+    const lifecycleSummary = Object.keys(lifecycleGames).length > 0
+      ? Object.values(lifecycleGames).map(g => {
+        const arc = g.alerts.map(a => readable(a.alert_type)).join(' → ');
+        return `${g.matchup} ${g.team}: ${arc} | peak floor:${g.peakFloor.toFixed(2)} worst erosion:${g.worstErosion} | ctrl ${g.ctrlWon ? 'WON' : 'LOST'}`;
+      }).join('\n')
+      : 'No BWC lifecycle games tonight.';
 
-    const prompt = `You are the post-game learning agent for a live NBA betting alert system. Analyze tonight's results and identify patterns.
+    // Erosion summary
+    const erosionSummary = Object.keys(erosionAccuracy).length > 0
+      ? Object.entries(erosionAccuracy).map(([level, s]) => `${level}: ctrl won ${s.ctrlWon}/${s.total} (${Math.round(s.ctrlWon/s.total*100)}%)`).join(', ')
+      : 'No erosion data.';
+
+    // Exit severity summary
+    const exitSevSummary = Object.keys(exitSevAccuracy).length > 0
+      ? Object.entries(exitSevAccuracy).map(([sev, s]) => `${sev}: ${s.correct}/${s.total} correctly warned`).join(', ')
+      : 'No exit alerts tonight.';
+
+    const prompt = `You are the post-game learning agent for a live NBA betting alert system (V2 architecture). Analyze tonight's results and identify patterns.
+
+ALERT SYSTEM ARCHITECTURE (V2):
+The system generates three categories of alerts:
+- ENTRY signals (Buy, Entry Value, Second Chance) — subscriber should open a position. This is the headline accuracy metric.
+- HOLD signals (Position Open, Holding, Strengthening, Position Safe, Position Update) — updates for subscribers already in a position. System trust metric.
+- EXIT signals (Exit) — subscriber should close their position. Correct when the team loses.
+
+BWC STATE MACHINE: When a structurally dominant team takes the lead, a Position Open alert fires and the BWC lifecycle begins. The system tracks the position through states:
+LOCK (lead 3+) → EDGE (lead 1-2) → VALUE (lost lead, ctrl retained) → EXIT (ctrl lost)
+Improving transitions reverse this path. Each alert carries erosion_level (STEADY/MINOR/MODERATE/SEVERE/COLLAPSE) and peak_floor.
 
 ACCURACY SUMMARY:
-Delivered actionable: ${accuracyOverall}% (${deliveredActionableCorrect}/${deliveredActionable.length})
+Entry accuracy (headline): ${entryAccuracy != null ? entryAccuracy + '%' : '-'} (${deliveredEntryCorrect}/${deliveredEntry.length})
+Hold accuracy: ${deliveredHold.length > 0 ? Math.round(deliveredHoldCorrect/deliveredHold.length*100) + '%' : '-'} (${deliveredHoldCorrect}/${deliveredHold.length})
+Exit accuracy: ${deliveredExit.length > 0 ? Math.round(deliveredExitCorrect/deliveredExit.length*100) + '%' : '-'} (${deliveredExitCorrect}/${deliveredExit.length})
+${deliveredV1Actionable.length > 0 ? `V1 actionable (transition compat): ${deliveredV1ActionableCorrect}/${deliveredV1Actionable.length}` : ''}
 Raw mechanical (all alerts): ${rawTotal > 0 ? Math.round((rawCorrect / rawTotal) * 100) : '?'}% (${rawCorrect}/${rawTotal})
 Agent saves (suppressed losers): ${agentSaves}
 Agent missed winners (structural suppression, would have won): ${agentMisses}
 Agent dedup (suppressed duplicate signals): ${agentDedup.length} (${agentDedupCorrect} correct — NOT misses, signal already delivered)
 System deduped (agent said SEND, system blocked): ${deduped.length} (${dedupCorrect} correct — NOT misses)
-Position-gated (auto-analysis with no prior actionable alert): ${positionGated.length} (${posGatedCorrect} correct — never reached agent)
-Transitional alerts (LEAD LOST/CRUMBLING): ${deliveredTransitionalHeld}/${deliveredTransitional.length} held
+Position-gated (no prior actionable alert): ${positionGated.length} (${posGatedCorrect} correct — never reached agent)
 By type (delivered only): ${JSON.stringify(byType)}
 Candidates sent: ${candidatesSent.length}/${candidates.length}, correct: ${candidatesSentCorrect.length}
 
-TRANSITION ALERTS THROUGH AGENT:
-RECOVERY PATH, LEAD CRUMBLING, and VARIANCE BREAKING now route through the alert reasoning agent (same as BUY/BWC/WB). LEAD LOST remains direct-fire.
-- LEAD CRUMBLING uses INVERTED indicator logic: strong indicators = lead is safe = SUPPRESS. Weak indicators = real danger = SEND.
-- RECOVERY PATH: agent evaluates whether TP math is backed by structural indicators (I4 COMBO, rising floor).
-- VARIANCE BREAKING: agent checks if structural edge is real (I4 COMBO YES, 3+ indicators) before sending.
-${transAgentSummary || 'No transition alerts went through agent tonight.'}
+BWC LIFECYCLE:
+${lifecycleSummary}
+Summary: ${lifecycleStats.opened} opened, ${lifecycleStats.held} held (${lifecycleStats.held_correct} ctrl won), ${lifecycleStats.collapsed} collapsed to Exit (${lifecycleStats.collapsed_correct} correctly warned)
+
+EROSION ACCURACY:
+${erosionSummary}
+Question: Did erosion level predict outcome? Is STEADY safe and COLLAPSE fatal?
+
+EXIT SEVERITY:
+${exitSevSummary}
 
 NOTE ON CATEGORIES:
-- Agent saves/misses: ONLY structural SUPPRESS decisions where the agent evaluated the signal and rejected it. This is the true agent accuracy measure.
-- Agent dedup: agent said SUPPRESS citing "duplicate" — the same signal was already sent earlier. Correct noise prevention, not a miss.
-- System deduped: agent said SEND but system blocked because a mechanical alert already sent that period. Correct behavior.
-- Position-gated: auto-analyses suppressed because no prior BUY/BWC/WB/RP was sent for that game. Informational calibration data, not betting signals. Do NOT treat as missed opportunities.
+- Agent saves/misses: ONLY structural SUPPRESS decisions where the agent evaluated the signal and rejected it. True agent accuracy measure.
+- Agent dedup: agent said SUPPRESS citing "duplicate" — signal already delivered. Correct noise prevention, not a miss.
+- System deduped: agent said SEND but system blocked (mechanical dedup). Correct behavior.
+- Position-gated: suppressed because no prior entry signal for that game. Not missed opportunities.
 
 SCORED ALERTS:
 ${alertSummary}
@@ -451,17 +604,17 @@ ${cascadeGames.length > 0 ? `CASCADE GAMES (3+ wrong alerts):\n${cascadeDetail}`
 
 ${conflictGames.length > 0 ? `CONFLICTING SIGNALS (both teams got alerts):\n${conflictDetail}` : 'No conflicting signals.'}
 
-${alertChains.length > 0 ? `ALERT CHAINS (multi-alert sequences within games):\n${chainSummary}\nPatterns: VB_TO_ENTRY = variance broke then entry fired, RP_TO_ENTRY = recovery path then entry, LC_TO_LOST = lead crumbled then lost, BWC_TO_LC = window closing then crumbling, SUPPRESS_CHAIN_TO_SEND = multiple suppressions before a send, MULTI_UPDATE = multiple position updates, MULTI_ALERT = 3+ alerts same team same game` : 'No multi-alert chains detected.'}
+${alertChains.length > 0 ? `ALERT CHAINS (multi-alert sequences within games):\n${chainSummary}\nPatterns: LIFECYCLE_HOLD = position held through, LIFECYCLE_COLLAPSE = position degraded to exit, LIFECYCLE_RECOVERY = exit then second chance, BUY_THEN_LIFECYCLE = trail buy into BWC lifecycle, EXIT_TO_SECOND_CHANCE = exit reversed, MULTI_HOLD_UPDATE = multiple holding updates, SUPPRESS_CHAIN = multiple suppressions` : 'No multi-alert chains detected.'}
 
 TP GATE FAILURES (TP passed but alert was wrong): ${tpFailures.length}/${scoredAlerts.filter(a => !a.result.correct).length} wrong alerts
 
 Respond in EXACTLY this format:
 
 FINDINGS:
-[2-4 paragraph analysis of tonight's slate. What worked, what didn't, why. Be specific — name games, alert types, patterns. Include transition agent accuracy and whether the inverted LC logic made correct calls.]
+[2-4 paragraph analysis of tonight's slate. What worked, what didn't, why. Be specific — name games, alert types, lifecycle arcs. Evaluate whether erosion levels predicted correctly. Did EXIT alerts fire at the right time? Did the lifecycle tell a coherent story within each game?]
 
 PATTERNS:
-[JSON array of pattern objects, each with "pattern" (string description), "confidence" (high/medium/low), "games" (array of matchup strings that exhibited it), "impact" (how many alerts affected). Include chain patterns if detected — did VB→BUY chains cash? Did SUPPRESS_CHAIN_TO_SEND indicate the agent was properly waiting for confirmation?]
+[JSON array of pattern objects, each with "pattern" (string description), "confidence" (high/medium/low), "games" (array of matchup strings that exhibited it), "impact" (how many alerts affected). Include lifecycle patterns — did LIFECYCLE_COLLAPSE arcs end with ctrl losing? Did LIFECYCLE_HOLD arcs cash?]
 
 RECOMMENDATIONS:
 [JSON array of recommendation objects, each with "action" (specific threshold/gate change), "rationale" (why), "expected_impact" (what would change)]`;
@@ -496,7 +649,6 @@ RECOMMENDATIONS:
         if (recsMatch) {
           try {
             let recsText = recsMatch[1].trim();
-            // Extract just the JSON array
             const arrMatch = recsText.match(/\[[\s\S]*\]/);
             if (arrMatch) { recommendations = arrMatch[0]; JSON.parse(recommendations); }
           } catch { recommendations = '[]'; }
@@ -505,14 +657,14 @@ RECOMMENDATIONS:
         log(`Sonnet analysis complete (${data.usage?.input_tokens}in/${data.usage?.output_tokens}out)`);
       } else {
         log(`Sonnet ${resp.status}`);
-        findings = `Agent analysis unavailable (API ${resp.status}). Delivered: ${accuracyOverall}% (${deliveredActionableCorrect}/${deliveredActionable.length}).`;
+        findings = `Agent analysis unavailable (API ${resp.status}). Entry: ${entryAccuracy != null ? entryAccuracy + '%' : '-'} (${deliveredEntryCorrect}/${deliveredEntry.length}).`;
       }
     } catch (e) {
       log(`Sonnet error: ${e.message}`);
-      findings = `Agent analysis failed: ${e.message}. Delivered: ${accuracyOverall}% (${deliveredActionableCorrect}/${deliveredActionable.length}).`;
+      findings = `Agent analysis failed: ${e.message}. Entry: ${entryAccuracy != null ? entryAccuracy + '%' : '-'} (${deliveredEntryCorrect}/${deliveredEntry.length}).`;
     }
   } else {
-    findings = `No API key or no scored alerts. Delivered: ${accuracyOverall}% (${deliveredActionableCorrect}/${deliveredActionable.length}).`;
+    findings = `No API key or no scored alerts. Entry: ${entryAccuracy != null ? entryAccuracy + '%' : '-'} (${deliveredEntryCorrect}/${deliveredEntry.length}).`;
   }
 
   // ── 4. STORE ────────────────────────────────────────────────────────────
@@ -536,64 +688,80 @@ RECOMMENDATIONS:
   const topic = process.env.NTFY_TOPIC;
   if (topic && scoredAlerts.length > 0) {
     // Build plain English summary
-    const pct = accuracyOverall != null ? accuracyOverall : 0;
+    const pct = entryAccuracy != null ? entryAccuracy : (accuracyOverall != null ? accuracyOverall : 0);
     const emoji = pct >= 80 ? '🟢' : pct >= 60 ? '🟡' : '🔴';
 
-    // Headline: delivered actionable accuracy
-    const headline = deliveredActionable.length > 0
-      ? `${emoji} ${deliveredActionableCorrect}/${deliveredActionable.length} alerts hit tonight (${pct}%)`
-      : `No actionable alerts sent tonight`;
+    // Headline: entry accuracy (the money metric)
+    let headline;
+    if (deliveredEntry.length > 0) {
+      headline = `${emoji} ${deliveredEntryCorrect}/${deliveredEntry.length} entry signals hit tonight (${pct}%)`;
+    } else if (deliveredActionable.length > 0) {
+      // Transition period: V1 types only
+      const combinedPct = accuracyOverall != null ? accuracyOverall : 0;
+      headline = `${emoji} ${deliveredActionableCorrect}/${deliveredActionable.length} alerts hit tonight (${combinedPct}%)`;
+    } else {
+      headline = `No entry signals sent tonight`;
+    }
 
-    // Per-type breakdown (delivered only, actionable)
+    // Per-type breakdown (entry types with readable names)
     const typeLines = [];
-    ['BUY', 'WINDOW BUY', 'BUY WINDOW CLOSING', 'RECOVERY PATH', 'VARIANCE BREAKING', 'AUTO_ANALYSIS'].forEach(t => {
-      const b = byType[t];
-      if (b) typeLines.push(`${t}: ${b.correct}/${b.total}`);
+    ENTRY_TYPES.forEach(t => {
+      const label = readable(t);
+      const b = byType[label];
+      if (b) typeLines.push(`${label}: ${b.correct}/${b.total}`);
     });
+    // V1 compat types
+    V1_ACTIONABLE.forEach(t => {
+      const label = readable(t);
+      const b = byType[label];
+      if (b) typeLines.push(`${label}: ${b.correct}/${b.total}`);
+    });
+
+    // Lifecycle line
+    let lifecycleLine = '';
+    if (lifecycleStats.opened > 0) {
+      lifecycleLine = `\nBWC lifecycle: ${lifecycleStats.opened} opened, ${lifecycleStats.held} held, ${lifecycleStats.collapsed} collapsed`;
+    }
+
+    // Exit line
+    let exitLine = '';
+    if (deliveredExit.length > 0) {
+      exitLine = `\nExit alerts: ${deliveredExitCorrect}/${deliveredExit.length} correctly warned`;
+    }
 
     // Agent value line — only structural SUPPRESS decisions
     let agentLine = '';
     if (agentSaves > 0 || agentMisses > 0) {
-      agentLine = `\nThe AI filter blocked ${agentSaves + agentMisses} signals`;
+      agentLine = `\nAI filter blocked ${agentSaves + agentMisses} signals`;
       if (agentSaves > 0) agentLine += ` — ${agentSaves} would have lost`;
       if (agentMisses > 0) agentLine += `, ${agentMisses} would have won`;
     }
 
-    // Agent dedup line — agent correctly blocked duplicate signals
+    // Agent dedup line
     let agentDedupLine = '';
     if (agentDedup.length > 0) {
       agentDedupLine = `\n${agentDedup.length} duplicates blocked by AI`;
     }
 
-    // System dedup line — agent said SEND but system blocked
+    // System dedup line
     let dedupLine = '';
     if (deduped.length > 0) {
       dedupLine = `\n${deduped.length} system deduped`;
     }
 
-    // Position-gated line — auto-analyses with no prior actionable alert
+    // Position-gated line
     let gatedLine = '';
     if (positionGated.length > 0) {
-      gatedLine = `\n${positionGated.length} auto-analyses gated (no prior position)`;
+      gatedLine = `\n${positionGated.length} position updates gated (no prior entry)`;
     }
 
-    // Transitional line (gray tier — informational)
+    // V1 transitional line (backward compat)
     let transLine = '';
-    if (deliveredTransitional.length > 0) {
-      transLine = `\nLead alerts: ${deliveredTransitionalHeld}/${deliveredTransitional.length} held`;
+    if (deliveredV1Transitional.length > 0) {
+      transLine = `\nLead alerts: ${deliveredV1TransitionalHeld}/${deliveredV1Transitional.length} held`;
     }
 
-    // Transition agent line — RP/LC/VB through agent
-    let transAgentLine = '';
-    const transAgentTotal = transitionAgentAlerts.length;
-    if (transAgentTotal > 0) {
-      const transAgentSent = transitionAgentAlerts.filter(a => a.agent_decision === 'SEND').length;
-      const transAgentSuppressed = transAgentTotal - transAgentSent;
-      const transAgentSaves = transitionAgentAlerts.filter(a => a.agent_decision === 'SUPPRESS' && !a.result.correct).length;
-      transAgentLine = `\nTransition alerts: ${transAgentSent} sent, ${transAgentSuppressed} filtered (${transAgentSaves} saves)`;
-    }
-
-    // Chain line — multi-alert sequences
+    // Chain line
     let chainLine = '';
     if (alertChains.length > 0) {
       const correctChains = alertChains.filter(c => c.outcome === 'ALL_CORRECT').length;
@@ -602,12 +770,13 @@ RECOMMENDATIONS:
 
     const body = headline
       + (typeLines.length > 0 ? '\n' + typeLines.join(' | ') : '')
+      + lifecycleLine
+      + exitLine
       + agentLine
       + agentDedupLine
       + dedupLine
       + gatedLine
       + transLine
-      + transAgentLine
       + chainLine;
 
     try {
@@ -626,12 +795,14 @@ RECOMMENDATIONS:
     date: today.dateStr,
     alerts: scoredAlerts.length,
     accuracy: accuracyOverall,
+    entryAccuracy,
     agentStats,
-    transitionAgent: transitionAgentStats,
+    lifecycle: lifecycleStats,
     chains: alertChains.map(c => ({ matchup: c.matchup, team: c.team, pattern: c.pattern, length: c.chainLength, outcome: c.outcome })),
     diagnostics: scoredAlerts.slice(0, 15).map(a => ({
       type: a.alert_type, ctrl: a.control_team, agent: a.agent_decision,
       correct: a.result.correct, ctrlWon: a.result.ctrlWon, margin: a.result.finalMargin,
+      erosion: a.erosion_level || null, bwcState: a.bwc_state || null,
     })),
   }));
 }

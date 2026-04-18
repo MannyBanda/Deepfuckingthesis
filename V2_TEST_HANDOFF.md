@@ -57,7 +57,7 @@
 |---|---|
 | Initial BWC fire | POSITION OPEN |
 | LOCK→EDGE | HOLDING |
-| Lead lost, ctrl retained | RE-ENTRY VALUE |
+| Lead lost, ctrl retained | ENTRY VALUE |
 | Ctrl flipped | EXIT |
 | EXIT→VALUE | SECOND CHANCE |
 | VALUE→EDGE | STRENGTHENING |
