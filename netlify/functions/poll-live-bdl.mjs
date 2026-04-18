@@ -143,7 +143,7 @@ async function sendNtfy(title, body, priority = 4) {
     await fetch(`https://ntfy.sh/${topic}`, {
       method: 'POST',
       headers: { 'Title': asciiTitle || 'DFT Alert', 'Priority': String(priority), 'Tags': 'basketball' },
-      body: title + '\n' + body,
+      body: body,
     });
     log(`NTFY sent: ${title}`);
   } catch (e) {
@@ -3653,8 +3653,9 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
             const pp = priorPosition;
             const sameTeam = pp.control_team === ind.controlTeam;
             const floorDelta = ind.score - Number(pp.floor_score);
-            const statusWord = !sameTeam ? 'AT RISK' : floorDelta > 0.1 ? 'IMPROVING' : floorDelta < -0.1 ? 'FADING' : 'HOLDING';
-            const ntfyTitle = `UPDATE: ${pp.control_team} ${pp.alert_type} Q${pp.period} ${statusWord}`;
+            const statusWord = !sameTeam ? 'At Risk' : floorDelta > 0.1 ? 'Improving' : floorDelta < -0.1 ? 'Fading' : 'Holding';
+            const _alertReadable = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Holding','VALUE':'Re-Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','WINDOW BUY':'Window Buy','RECOVERY PATH':'Recovery Path'}[pp.alert_type] || pp.alert_type;
+            const ntfyTitle = `UPDATE: Your Q${pp.period} ${_alertReadable} on ${pp.control_team} is ${statusWord}`;
             // Agent writes the body via BODY: response, use it if available
             const agentBody = agentResult?.body || '';
             const ntfyBody = scoreLine
@@ -3674,7 +3675,8 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           } else {
             const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${period} ${clock}`;
             const pp = priorPosition;
-            const ntfyTitle = `WATCH: ${pp.control_team} ${pp.alert_type} Q${pp.period} — ${matchup}`;
+            const _alertReadableW = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Holding','VALUE':'Re-Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','WINDOW BUY':'Window Buy','RECOVERY PATH':'Recovery Path'}[pp.alert_type] || pp.alert_type;
+            const ntfyTitle = `WATCH: Your Q${pp.period} ${_alertReadableW} on ${pp.control_team} Needs Attention`;
             const agentBody = agentResult?.body || '';
             const ntfyBody = scoreLine
               + (agentBody ? `\n${agentBody}` : `\nYour Q${pp.period} position needs attention`)
