@@ -1,9 +1,98 @@
-# Alert System v2 — Test Harness Handoff
+# Alert System v2 — Production Handoff
 
-**Date:** April 17, 2026 (updated end of session 6)
-**File:** `netlify/functions/test-v2-engine.mjs` (~1,120 lines)
-**HEAD:** `8b3c620` on `main`
+**Date:** April 17, 2026 (updated end of spec+build session)
+**HEAD:** `5b3a9b1` on `main`
 **Deployed:** Yes (Netlify auto-deploy)
+
+---
+
+## Current State: Steps 1-6 DEPLOYED, Step 7 (Cutover) NEXT
+
+### What's Live in Production
+
+| Step | What | Status |
+|---|---|---|
+| 1 | DB schema: `live_tracking` JSONB on games, 4 alert columns | ✅ DEPLOYED |
+| 2 | `raw_stats_json` added to calibration snapshot INSERT | ✅ DEPLOYED |
+| 3 | 5 v2 mechanical functions (updateLiveTracking, computeBwcState, classifyTransition, computeErosion, computeExitSeverity) | ✅ DEPLOYED |
+| 4 | live_tracking read/write cycle + BWC candidate tracking | ✅ DEPLOYED |
+| 5 | Full trigger detection with cooldowns/gates (logging only, `▶` prefix) | ✅ DEPLOYED |
+| 6 | `buildV2AgentPrompt()` function written (NOT wired to runAlertAgent yet) | ✅ DEPLOYED |
+| 7 | **CUTOVER: remove v1 blocks, wire v2 agent+ntfy** | ⬜ NEXT SESSION |
+| 8 | Kill monitor agent code (~350 lines) | ⬜ After Step 7 |
+| 9 | Clean up analyze.js + bdl.html monitor refs | ⬜ After Step 8 |
+
+### Validated in Production
+
+- CHA@ORL blowout: `★ V2 BWC FIRED — ORL floor 1.00 margin 27 state LOCK` — correct
+- live_tracking persists across cold starts (holds incrementing each poll)
+- v1 alerts continue firing unchanged alongside v2 logging
+
+### Step 7 Cutover (One Commit)
+
+**Add (~100 lines):**
+- Wire v2 lifecycle triggers to call `runAlertAgent` using `buildV2AgentPrompt`
+- Wire v2 BUY triggers to call `runAlertAgent` using `buildV2AgentPrompt`
+- ntfy title/body formatting for v2 alert types
+- DB INSERT for v2 alerts (with bwc_state, erosion_level, peak_floor, exit_severity)
+- Floor history query with `WHERE source = 'server'` filter
+- Prior alert trail query for compounding
+- Pass `lt` (live_tracking) to `fireCalibrationAnalysis` for erosion context
+
+**Remove (~670 lines):**
+- v1 mechanical alert block (lines ~5162-5541): BUY/BWC/WINDOW BUY/CANDIDATE detection, dedup, agent routing, ntfy, DB write
+- v1 transition alerts block (lines ~5541-5852): RECOVERY PATH, LEAD CRUMBLING, LEAD LOST, VARIANCE BREAKING, per-side prev_ column read/write
+- Lead degraded suppression logic
+
+**Keep from v1 block (move above v2):**
+- Clock gate: `alertMinsLeft` computation
+- Odds/edge: `ctrlML`, `ctrlEdge`, `spreadVal`
+- TP for BUY: `tpForBuy` computation
+
+**POSITION_TYPES update** (line ~3907): Add v2 types to auto-analysis position lookup.
+
+### Alert Naming Convention (Agreed, Apply During Cutover)
+
+| State Machine | Alert Name (ntfy title) |
+|---|---|
+| Initial BWC fire | POSITION OPEN |
+| LOCK→EDGE | HOLDING |
+| Lead lost, ctrl retained | RE-ENTRY VALUE |
+| Ctrl flipped | EXIT |
+| EXIT→VALUE | SECOND CHANCE |
+| VALUE→EDGE | STRENGTHENING |
+| Any→LOCK | POSITION SAFE |
+| Trailing, standalone | BUY |
+
+### Snapshot Contamination (Diagnosed This Session)
+
+Root cause: `source = 'client'` snapshots written by dashboard Analyze button contain
+Sonnet-derived weighted indicator scores (I1:0.25, I2:0.10) — NOT 0/0.5/1 mechanical values.
+Fix: all v2 snapshot reads use `WHERE source = 'server'`. Calibration snapshots (source=auto_q3
+etc) have correct values, just were missing raw_stats_json (now fixed).
+
+### Key Files
+
+| File | Lines | Role |
+|---|---|---|
+| `netlify/functions/poll-live-bdl.mjs` | 6,238 | Production (v1 active + v2 logging) |
+| `netlify/functions/test-v2-engine.mjs` | ~1,120 | Test harness (reference for v2 logic) |
+| `TIERED_ALERT_SPEC.md` | 876 | v2 build spec (line-level changes) |
+| `V2_AGENT_RULES.md` | 256 | Agent decision rules (validated) |
+| `V2_TEST_RESULTS.md` | 376 | Test findings (41/41 scorecard) |
+
+### Key Learnings From This Session
+
+1. **Spec before build:** Traced every alert path, every state variable, every function call before writing spec. Found snapshot contamination root cause (client Sonnet scores, not calibration) by querying live DB data.
+2. **Build order matters:** Steps 1-4 are zero-risk infra. Step 5 logs alongside v1. Step 7 is atomic cutover — v1 removed and v2 enabled in one commit, no overlap window.
+3. **Auto-analysis needs erosion context:** Pass `live_tracking` to `fireCalibrationAnalysis` so Sonnet sees COLLAPSE when writing position updates. Fixes the "DOMINANT strengthening right before collapse" failure.
+4. **Monitor still running:** Burning Sonnet tokens every 3 min. Steps 8-9 kill it after cutover validates.
+
+---
+
+## Historical Context (Sessions 1-6)
+
+Below is the test harness history from prior sessions.
 
 ---
 
