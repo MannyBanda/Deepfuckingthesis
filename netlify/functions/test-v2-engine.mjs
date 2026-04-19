@@ -863,6 +863,12 @@ async function runAgentTests(sql, gameId, triggers, v2Alerts, matchup, triggerId
       ORDER BY trigger_idx ASC`;
   } catch (e) { log(`No stored decisions: ${e.message}`); }
 
+  // Load game_context for structural stress data (rolling window, combined read, per-quarter)
+  let gameContextRows = [];
+  try {
+    gameContextRows = await sql`SELECT period, context_json FROM game_context WHERE game_id = ${gameId} ORDER BY period ASC`;
+  } catch (e) { log(`No game_context: ${e.message}`); }
+
   // Inject stored decisions into v2Alerts for prior trail compounding
   const storedMap = {};
   storedDecisions.forEach(d => { storedMap[d.trigger_idx] = d; });
@@ -912,7 +918,66 @@ async function runAgentTests(sql, gameId, triggers, v2Alerts, matchup, triggerId
         ).reverse().slice(0, 5).join('\n')
       : 'None';
 
-    // Build the v2 agent prompt with enriched context
+    // ── Build structural stress section from game_context DB data ──
+    let stress = '';
+    const gcMatch = gameContextRows
+      .filter(r => Number(r.period) <= t.period)
+      .sort((a, b) => Number(b.period) - Number(a.period))[0];
+    let gcCtx = null;
+    if (gcMatch) {
+      try { gcCtx = typeof gcMatch.context_json === 'string' ? JSON.parse(gcMatch.context_json) : gcMatch.context_json; }
+      catch (e) { /* bad JSON */ }
+    }
+    if (gcCtx && gcCtx.rollingWindow && gcCtx.rollingWindow.available) {
+      const rw = gcCtx.rollingWindow;
+      const wLabel = rw.windowQuarters ? rw.windowQuarters.join('+') : '?';
+      stress += `STRUCTURAL STRESS (rolling window vs cumulative — does the recent game agree with the floor?):\n`;
+      stress += `Window (${wLabel}, ${rw.windowPossessions || '?'} poss): ${rw.controlTeam} ${rw.score != null ? rw.score.toFixed(2) : '?'}\n`;
+      ['I1','I2','I3','I4','I5'].forEach(k => {
+        const i = rw[k];
+        if (i && i.score != null) stress += `  ${k}: ${i.score.toFixed(1)} — ${i.detail || ''}\n`;
+      });
+      stress += `Data quality: ${rw.dataQuality || '?'}\n`;
+    } else {
+      stress += `STRUCTURAL STRESS: Window not yet available\n`;
+    }
+    if (gcCtx && gcCtx.combinedRead && gcCtx.combinedRead.read) {
+      stress += `Combined read: ${gcCtx.combinedRead.read} — ${gcCtx.combinedRead.note || ''}\n`;
+    }
+    if (gcCtx && gcCtx.combinedRead && (gcCtx.combinedRead.read === 'COLLAPSING' || gcCtx.combinedRead.read === 'FLIPPED')) {
+      const wCtrl = gcCtx.rollingWindow ? gcCtx.rollingWindow.controlTeam || '?' : '?';
+      stress += `WARNING: Rolling window DISAGREES with cumulative floor. Recent quarters favor ${wCtrl}. Cumulative indicators may be anchored from earlier quarters that no longer reflect game state.\n`;
+    }
+    if (gcCtx && gcCtx.acceleration && gcCtx.acceleration.entries && gcCtx.acceleration.entries.length > 0) {
+      const acc = gcCtx.acceleration;
+      const last = acc.entries[acc.entries.length - 1];
+      stress += `Gap: ${last.gap >= 0 ? '+' : ''}${last.gap != null ? last.gap.toFixed(3) : '?'} | Acceleration: ${acc.accel} (${acc.consecutive} consecutive)\n`;
+      stress += `History: ${acc.entries.slice(-5).map(e => (e.gap >= 0 ? '+' : '') + (e.gap != null ? e.gap.toFixed(2) : '?') + ' (' + e.score + ')').join(' -> ')}\n`;
+    } else if (gcCtx && gcCtx.acceleration) {
+      stress += `Acceleration: ${gcCtx.acceleration.accel || 'TOO EARLY'}\n`;
+    }
+    if (gcCtx && gcCtx.quarterDiffs && Object.keys(gcCtx.quarterDiffs).length > 0) {
+      stress += `Per-quarter breakdown:\n`;
+      const qdKeys = Object.keys(gcCtx.quarterDiffs).map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
+      for (const qk of qdKeys) {
+        const d = gcCtx.quarterDiffs[qk];
+        if (!d || !d.home || !d.away) continue;
+        const h = d.home, a = d.away;
+        const hPaint = h.points_in_the_paint || h.points_in_paint || 0;
+        const aPaint = a.points_in_the_paint || a.points_in_paint || 0;
+        stress += '  Q' + qk + ' (' + ctx.homeAlias + ' vs ' + ctx.awayAlias + '):'
+          + ' Paint ' + ctx.homeAlias + ':' + hPaint + ' ' + ctx.awayAlias + ':' + aPaint
+          + ' | FTA ' + ctx.homeAlias + ':' + (h.free_throws_att||0) + ' ' + ctx.awayAlias + ':' + (a.free_throws_att||0)
+          + ' | 3P ' + ctx.homeAlias + ':' + (h.three_points_made||0) + '/' + (h.three_points_att||0) + ' ' + ctx.awayAlias + ':' + (a.three_points_made||0) + '/' + (a.three_points_att||0)
+          + ' | AST ' + ctx.homeAlias + ':' + (h.assists||0) + ' ' + ctx.awayAlias + ':' + (a.assists||0)
+          + ' | TO ' + ctx.homeAlias + ':' + (h.turnovers||h.total_turnovers||0) + ' ' + ctx.awayAlias + ':' + (a.turnovers||a.total_turnovers||0)
+          + ' | STL ' + ctx.homeAlias + ':' + (h.steals||0) + ' ' + ctx.awayAlias + ':' + (a.steals||0)
+          + (h.possessions ? ' | Poss ' + ctx.homeAlias + ':' + (h.possessions||0) + ' ' + ctx.awayAlias + ':' + (a.possessions||0) : '')
+          + '\n';
+      }
+    }
+
+    // Build the v2 agent prompt with enriched context (matches production buildV2AgentPrompt)
     const prompt = `You are a live NBA betting alert quality agent. A mechanical system has identified a potential betting signal. Your job is to assess whether it should be sent to the bettor.
 
 ALERT:
@@ -938,6 +1003,7 @@ Peak floor: ${ctx.peakFloor?.toFixed(2) || 'N/A'} | Delta: ${ctx.peakDelta?.toFi
 Consecutive holds: ${ctx.consecutiveHolds}
 BWC lifecycle: ${ctx.bwcState}${ctx.bwcFirePeriod ? ' (BWC fired Q' + ctx.bwcFirePeriod + ', floor ' + (ctx.bwcFireFloor?.toFixed(2) || '?') + ')' : ''}
 
+${stress}
 FLOOR TRAJECTORY:
 ${ctx.floorHistory}
 
@@ -956,8 +1022,21 @@ RULES:
 - EXIT: BWC team (${ctx.bwcFirePeriod ? 'the team that fired BWC in Q' + ctx.bwcFirePeriod : 'original BWC team'}) lost structural control. The SUBSCRIBER'S POSITION is on the BWC team, NOT the current control team. Frame the exit around the BWC team losing their edge. Reference the full arc from prior alerts.
 - BWC_EDGE: ALWAYS SEND. This is a position update for a subscriber already holding. Frame as reassurance: structural picture holding, lead compressing. Do NOT frame as a buy signal. MUST include a RISK line at the end of the body — identify the ONE specific thing that could flip this position next (e.g., indicator about to flip, sustainability degrading, erosion approaching threshold). If prior alerts flagged a RISK, reference whether it materialized or not. The RISK line creates accountability across the alert chain. Format body as: status update (2-3 sentences) + "RISK: [specific forward-looking concern]"
 - POSITION_SAFE / POSITION_RECOVERING: SEND as reassurance if prior alerts flagged risks or concerns. Include whether prior RISK materialized. SUPPRESS only if nothing changed AND no prior risk to update on. Write reasoning for compounding either way.
-- BUY: structurally dominant team trailing with no prior BWC. Standard evaluation — floor, indicators, TP, deficit depth (1-7 sweet spot; deeper deficits need stronger structural case).
+- BUY: structurally dominant team trailing. Standard evaluation — floor, indicators, TP, deficit depth (1-7 sweet spot; deeper deficits need stronger structural case). When bwcTeamMatch is noted, the team has BWC lifecycle context — reference the position arc. This is a "warm BUY" (thesis history). Without BWC context = "cold BUY" (unproven, higher bar for SEND).
+- BUY EVIDENCE (from 9,861-snapshot backtest, 502 BUY-eligible):
+  WHAT WINS: trail 1-4 (44.6%) > trail 5-9 (25%) > trail 10+ (0%). 3+ ctrl indicators (45.6%) > <=2 (36.6%). Opp 0 indicators (48.6%) vs opp I1 or I2 won (28.5%). Best stack: trail 1-4 + 3+ ind + opp 0 indicators = 57.4% (n=115).
+  POWER PAIRS: I1+I2 (55.2%, n=134) is the BUY anchor — physical dominance while trailing. I1+I4 (52.4%). TRAP: I3+I4 (38.9%, n=149) — the BWC killer combo is the WORST BUY pair.
+  I3 INVERSION: ctrl I3 won = 37.3%. ctrl I3 LOST (opp shooting well) = 49%. When the BUY team has shot quality but is STILL trailing, they are losing for reasons shooting cannot fix. When trailing BECAUSE of poor shooting, that is the variance the thesis exploits.
+  OPPONENT KILLS: opp I1 (disruption) -> 28.8%. opp I2 (paint) -> 30.6%. opp I1 OR I2 -> 28.5%. These are STRUCTURAL threats. opp I3 only -> thesis intact (variance).
+  TIMING: Q4 trail 5-9 = 14.8% — hard suppress. Q4 trail 1-4 = 43% — still viable.
+- STRUCTURAL STRESS CHECK: When combined read is COLLAPSING, FLIPPED, or SHIFT, the cumulative floor may be anchored from earlier-quarter dominance that has since eroded. The rolling window shows who is winning RECENT quarters. If the window control team disagrees with the cumulative control team, treat all entry signals (BUY, VALUE, THESIS_ALIVE) with extreme skepticism — the structural thesis may have inverted even though cumulative indicators have not caught up. For BWC lifecycle alerts (HOLDING, POSITION_SAFE), flag the stress divergence honestly: "Your position opened at X floor, but recent play favors [opponent]." COLLAPSING + trailing = near-automatic SUPPRESS for entry signals. REINFORCING (DOMINANT/STRONG combined read) = cumulative floor is trustworthy, proceed normally. This check does NOT apply to EXIT alerts (always SEND regardless of window).
 - REASONING AS JOURNAL: Even when SUPPRESS, write thorough reasoning. It feeds subsequent decisions.
+
+BODY RULES (read by non-technical bettors on their phone):
+- Lead with score + action, explain WHY in basketball terms with structural data, end with what to watch.
+- Translate indicators: I1=turnovers/steals, I2=paint/interior, I3=shot quality, I4=game flow, I5=pace/execution.
+- Say "X/5 structural categories (codes)" not just codes. Include conviction, edge %, sustainability tiers.
+- 2-4 sentences max. Keep structural metrics but make them readable.
 
 Respond in EXACTLY this format:
 DECISION: [SEND|SUPPRESS|DOWNGRADE]
@@ -1004,6 +1083,9 @@ BODY: [If SEND: plain-English alert. If SUPPRESS: blank]`;
         monitorPresent: !!ctx.trendSignals,
         referencesMonitor: text.includes('DIVERGING') || text.includes('CONVERGING') || text.includes('sustainability arc') || text.includes('sust arc') || text.includes('DEGRADING') || text.includes('IMPROVING') || text.includes('momentum') || text.includes('RISING') || text.includes('FALLING'),
         monitorData: ctx.trendSignals || null,
+        stressPresent: stress.length > 50,
+        stressCombinedRead: gcCtx?.combinedRead?.read || null,
+        referencesStress: text.includes('window') || text.includes('COLLAPSING') || text.includes('FLIPPED') || text.includes('combined read') || text.includes('rolling') || text.includes('recent quarters') || text.includes('structural stress') || text.includes('anchored'),
         tokens: data.usage,
       };
       results.push(result);
