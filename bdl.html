@@ -5585,8 +5585,12 @@ function compute(game){
   // I4 — Game Control
   const periods = s.periods||[];
   const hBigLead = hs.biggest_lead||0, aBigLead = as.biggest_lead||0;
-  const bigLeadDiff = hBigLead - aBigLead;
-  const i4subA = bigLeadDiff > 4 ? 1 : bigLeadDiff < -4 ? -1 : 0;
+  let i4subA = 0;
+  if (hBigLead >= aBigLead + 2) {
+    i4subA = (aBigLead >= 0.75 * hBigLead) ? 0 : 1;
+  } else if (aBigLead >= hBigLead + 2) {
+    i4subA = (hBigLead >= 0.75 * aBigLead) ? 0 : -1;
+  }
   let i4subB = 0;
   if (periods.length >= 4) {
     const lastP = periods[periods.length - 1];
@@ -8182,8 +8186,9 @@ function computeRollingWindow(game){
 
   const hCumBigLead=game.summary?.home?.statistics?.biggest_lead||0;
   const aCumBigLead=game.summary?.away?.statistics?.biggest_lead||0;
-  const wBLdiff=hCumBigLead-aCumBigLead;
-  const wi4subA=wBLdiff>4?1:wBLdiff<-4?-1:0;
+  let wi4subA=0;
+  if(hCumBigLead>=aCumBigLead+2){wi4subA=(aCumBigLead>=0.75*hCumBigLead)?0:1;}
+  else if(aCumBigLead>=hCumBigLead+2){wi4subA=(hCumBigLead>=0.75*aCumBigLead)?0:-1;}
   const hPts=hW.points||0, aPts=aW.points||0;
   const pDiff=hPts-aPts;
   const wi4subB=pDiff>4?1:pDiff<-4?-1:0;

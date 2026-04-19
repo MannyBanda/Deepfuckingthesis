@@ -236,6 +236,7 @@ POSITION HEALTH:
 Peak floor: ${ctx.peakFloor != null ? Number(ctx.peakFloor).toFixed(2) : 'N/A'} | Delta: ${ctx.peakDelta != null ? Number(ctx.peakDelta).toFixed(3) : 'N/A'} | Erosion: ${ctx.erosionLevel}
 Consecutive holds: ${ctx.consecutiveHolds}
 BWC lifecycle: ${ctx.bwcState}${ctx.bwcFirePeriod ? ' (BWC fired Q' + ctx.bwcFirePeriod + ', floor ' + (ctx.bwcFireFloor != null ? Number(ctx.bwcFireFloor).toFixed(2) : '?') + ')' : ''}
+${ctx.poRank ? 'Graduation: ' + ctx.poRank + '-Rank' + (ctx.graduationPeriod ? ' (graduated Q' + ctx.graduationPeriod + ')' : '') + ' | Control flips: ' + ctx.ctrlFlips : ctx.ctrlFlips != null ? 'Pre-graduation tracking | Control flips: ' + ctx.ctrlFlips : ''}
 
 ${stress}
 FLOOR TRAJECTORY:
@@ -245,6 +246,8 @@ PRIOR ALERT REASONING TRAIL:
 ${ctx.priorAlertTrail || 'None'}
 
 RULES:
+- TRACKING: First structural signal — the system just identified ${ctx.ctrlTeam} as structurally interesting (3 consecutive holds, floor ${ctx.floor}, margin ${ctx.margin}). This is NOT a position recommendation — the subscriber learns a game is on the radar. ALWAYS SEND unless the game is clearly meaningless (garbage time, both teams eliminated, period 4 with < 2 min left). Body should explain: which team, what structural picture (indicators, floor, margin), and that we are watching for the edge to develop. Frame as: "Watching [TEAM] — [why they look structurally dominant]. Will update if this develops into a position." Keep it short — this is a heads-up, not a thesis.
+- POSITION_OPEN: The team has GRADUATED — earned a higher structural rank through sustained dominance.${ctx.poRank === 'S' ? ' S-Rank (98%+): Wire-to-wire structural dominance, zero control flips. ALWAYS SEND.' : ctx.poRank === 'A' ? ' A-Rank (74-93%): Earned structural graduation — DOMINANT conviction, lead 8+, 4+ holds, opponent <=1 indicator. SEND unless extreme concern.' : ctx.poRank === 'B' ? ' B-Rank (67-80%): Qualified structural edge — DOMINANT/STRONG conviction, lead 3+, 2+ holds. Evaluate case carefully but default to SEND.' : ''} This IS a position recommendation. Body should reference the arc from TRACKING (if prior alert exists), explain the graduation criteria met, current structural picture, and frame as: "Position open on [TEAM] — [rank] structural edge confirmed." Include odds/ML if available.
 - VALUE: team PREVIOUSLY held a structural lead (BWC fired Q${ctx.bwcFirePeriod || '?'}) but lost it while retaining structural control. Thesis: "structural edge that built the lead is intact — dip is temporary, plus-money entry." Verify: floor vs BWC fire floor, how lead was lost, deficit depth (1-7 best), timing (Q2-Q3 > Q4). If prior BWC_EDGE alerts flagged a RISK, reference whether it materialized. SUPPRESS if erosion is COLLAPSE AND structural indicators (I1/I4) have flipped to opponent.
 - THESIS_ALIVE: BWC team regained structural control AFTER an EXIT. This is a deep-value play — floor erosion is EXPECTED and is WHY plus-money exists. DO NOT treat floor level or erosion as primary factors. Weight hierarchy: (1) WHICH indicators does the BWC team still hold? I1 Disruption + I4 Game Control = structural core retained. (2) Is opponent's edge variance-based? oppI3Won=true means opponent is shooting well, not structurally dominant — this is the thesis. (3) TP path — STRONG RECOVERY or PROBABLE = mechanical path exists. (4) Deficit depth and timing. Floor being below BWC fire floor is the ENTRY SIGNAL, not a red flag. SUPPRESS only if: BWC team lost I1+I4 (structural core gone), OR opponent has non-I3 structural indicators (I1/I2/I4), OR TP is NO PATH/UNLIKELY with < 3 min left.
 - EXIT: BWC team (${ctx.bwcFirePeriod ? 'the team that fired BWC in Q' + ctx.bwcFirePeriod : 'original BWC team'}) lost structural control. The SUBSCRIBER'S POSITION is on the BWC team, NOT the current control team. Frame the exit around the BWC team losing their edge. Reference the full arc from prior alerts.
@@ -1332,6 +1335,7 @@ function updateLiveTracking(lt, ctrlTeam, floor, period, clock, homeAlias) {
   } else {
     lt.ctrl_team_current = ctrlTeam;
     lt.ctrl_team_holds = 1;
+    lt.ctrl_flips = (lt.ctrl_flips || 0) + 1;
   }
 
   return lt;
@@ -1357,6 +1361,17 @@ function classifyTransition(fromState, toState) {
   if (toRank < fromRank) return 'DEGRADING';
   if (toRank > fromRank) return 'RECOVERING';
   return 'LATERAL';
+}
+
+// ── RANK CLASSIFICATION — graduation-based POSITION OPEN ──────
+// Mirrors backtest classifyBWCTier exactly. Must stay in sync.
+function classifyRank(convictionTier, ctrlMargin, consecutiveHolds, oppIndicatorCount) {
+  if (convictionTier === 'DOMINANT' && ctrlMargin >= 8
+      && consecutiveHolds >= 4 && oppIndicatorCount <= 1) return 'A';
+  if (oppIndicatorCount >= 2) return 'C';
+  if ((convictionTier === 'DOMINANT' || convictionTier === 'STRONG')
+      && ctrlMargin >= 3 && consecutiveHolds >= 2) return 'B';
+  return 'C';
 }
 
 function computeErosion(lt, floor, homeAlias, ctrlTeam) {
@@ -1465,8 +1480,13 @@ function computeServer(summary, pbpData, seasonQ4) {
 
   // I4 — Game Control
   const hBigLead = hs.biggest_lead || 0, aBigLead = as.biggest_lead || 0;
-  const bigLeadDiff = hBigLead - aBigLead;
-  const i4subA = bigLeadDiff > 4 ? 1 : bigLeadDiff < -4 ? -1 : 0;
+  // Flip: need ≥2 gap. Contested: opponent within 75% of leader's biggest lead.
+  let i4subA = 0;
+  if (hBigLead >= aBigLead + 2) {
+    i4subA = (aBigLead >= 0.75 * hBigLead) ? 0 : 1;
+  } else if (aBigLead >= hBigLead + 2) {
+    i4subA = (hBigLead >= 0.75 * aBigLead) ? 0 : -1;
+  }
   let i4subB = 0;
   const periods = summary.periods || [];
   if (periods.length >= 4) {
@@ -1818,8 +1838,12 @@ function computeServerWindow(qd, currentPeriod, clock, summary, hA, aA, league) 
 
   // I4 — Game Control (cumulative biggest_lead + window scoring margin)
   const hBigLead = homeStats.biggest_lead || 0, aBigLead = awayStats.biggest_lead || 0;
-  const wBigLeadDiff = hBigLead - aBigLead;
-  const wi4subA = wBigLeadDiff > 4 ? 1 : wBigLeadDiff < -4 ? -1 : 0;
+  let wi4subA = 0;
+  if (hBigLead >= aBigLead + 2) {
+    wi4subA = (aBigLead >= 0.75 * hBigLead) ? 0 : 1;
+  } else if (aBigLead >= hBigLead + 2) {
+    wi4subA = (hBigLead >= 0.75 * aBigLead) ? 0 : -1;
+  }
   const margins = windowQs.map(wq => ((wq.diff?.home?.points || 0) - (wq.diff?.away?.points || 0)));
   const marginSum = margins.reduce((a, b) => a + b, 0);
   const wi4subB = marginSum > 4 ? 1 : marginSum < -4 ? -1 : 0;
@@ -4784,6 +4808,7 @@ export default async function(req) {
             async function routeV2Alert(v2Type, v2Tier, v2ExitSev, v2IsBuy) {
               // Map alert type → ntfy title
               const V2_TITLE_MAP = {
+                'TRACKING': 'TRACKING',
                 'POSITION_OPEN': 'POSITION OPEN',
                 'BWC_EDGE': 'HOLDING',
                 'VALUE': 'ENTRY VALUE',
@@ -4801,7 +4826,12 @@ export default async function(req) {
 
               // ntfy title
               let ntfyTitle;
-              if (v2IsBuy) {
+              if (v2Type === 'TRACKING') {
+                ntfyTitle = `TRACKING — ${bwcTeam || ind.controlTeam} Q${currentPeriod} ${clock}`;
+              } else if (v2Type === 'POSITION_OPEN') {
+                const rankStr = lt.po_fired?.rank ? ` (${lt.po_fired.rank})` : '';
+                ntfyTitle = `POSITION OPEN${rankStr} — ${bwcTeam || ind.controlTeam}${mlStr}`;
+              } else if (v2IsBuy) {
                 ntfyTitle = `BUY${tierTag} ${ind.controlTeam}${mlStr}`;
               } else if (v2Type === 'EXIT') {
                 ntfyTitle = `EXIT${v2ExitSev ? ' (' + v2ExitSev.severity + ')' : ''} — ${matchup}`;
@@ -4856,6 +4886,11 @@ export default async function(req) {
                 quarterDiffs: alertCtx?.quarterDiffs || null,
                 accelData: alertCtx?.acceleration || null,
                 combinedRead: alertCtx?.combinedRead || null,
+                // Graduation context
+                poRank: lt.po_fired?.rank || null,
+                graduationPeriod: lt.graduation?.[lt.bwc_fired?.team]?.period || null,
+                graduationFloor: lt.graduation?.[lt.bwc_fired?.team]?.floor || null,
+                ctrlFlips: lt.ctrl_flips || 0,
               };
 
               const v2Prompt = buildV2AgentPrompt(v2Ctx);
@@ -4925,16 +4960,99 @@ export default async function(req) {
               log(`${matchup}: ${shouldSend ? '★' : '○'} ${v2Type} ${v2Tier} ${agentDecision} — ${ind.controlTeam} ${ind.score.toFixed(2)} ${ctrlTrailing ? 'trailing' : 'leading'} by ${margin}${ctrlEdge != null ? ', edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}`);
             }
 
-            // ── V2 INITIAL BWC FIRE (POSITION OPEN) ──
+            // ── V2 TRACKING ALERT (fires at BWC establishment) ──
             if (lt._just_established) {
               delete lt._just_established;
               if (alertMinsLeft >= 1.0) {
-                await routeV2Alert('POSITION_OPEN', 'FIRED', null, false);
+                await routeV2Alert('TRACKING', 'FIRED', null, false);
+                log(`${matchup}: ★ TRACKING — ${lt.bwc_fired.team} Q${currentPeriod} ${clock}`);
               }
             }
 
-            // ── V2 BWC STATE TRANSITIONS ──
-            if (lt.bwc_fired && v2BwcState && lt._prev_bwc_state && v2BwcState !== lt._prev_bwc_state) {
+            // ── V2 GRADUATION DETECTION (fires POSITION OPEN at rank upgrade) ──
+            if (lt.bwc_fired && !lt.po_fired) {
+              if (!lt.graduation) lt.graduation = {};
+              const bwcTeam = lt.bwc_fired.team;
+              if (!lt.graduation[bwcTeam]) lt.graduation[bwcTeam] = { rank: 'C' };
+
+              // Compute rank only when BWC team has control
+              if (ind.controlTeam === bwcTeam) {
+                const gradConviction = computeConviction(ind);
+                const oppCount = _oppIndW.length;
+                const curRank = classifyRank(
+                  gradConviction.tier, _v2Margin, lt.ctrl_team_holds || 0, oppCount
+                );
+                lt.rank_current = curRank;
+
+                const prevRank = lt.graduation[bwcTeam].rank || 'C';
+                const RANK_ORDER = { C: 0, B: 1, A: 2 };
+
+                // Graduation = rank improved from previous peak
+                if (RANK_ORDER[curRank] > RANK_ORDER[prevRank]) {
+                  lt.graduation[bwcTeam] = {
+                    rank: curRank, period: currentPeriod, clock,
+                    floor: ind.score, margin: _v2Margin
+                  };
+                  log(`${matchup}: ▲ GRADUATION ${bwcTeam} ${prevRank}→${curRank} Q${currentPeriod} ${clock}`);
+                }
+
+                // Check if POSITION OPEN should fire
+                const gRank = lt.graduation[bwcTeam].rank;
+                let poShouldFire = false;
+
+                // A-Rank: fires at any checkpoint
+                if (gRank === 'A') poShouldFire = true;
+
+                // B-Rank: requires Q3_6+ (period > 3, or period 3 with clock ≤ 6:00)
+                if (gRank === 'B') {
+                  const cm = String(clock).match(/(\d+):(\d+)/);
+                  const clockSec = cm ? parseInt(cm[1]) * 60 + parseInt(cm[2]) : 720;
+                  const pastQ3_6 = currentPeriod > 3 || (currentPeriod === 3 && clockSec <= 360);
+                  if (pastQ3_6) poShouldFire = true;
+                }
+
+                if (poShouldFire && alertMinsLeft >= 1.0) {
+                  const isWireToWire = (lt.ctrl_flips || 0) === 0;
+                  const poRank = (gRank === 'A' && isWireToWire) ? 'S' : gRank;
+
+                  lt.po_fired = {
+                    team: bwcTeam, rank: poRank,
+                    period: currentPeriod, clock
+                  };
+                  await routeV2Alert('POSITION_OPEN', 'FIRED', null, false);
+                  log(`${matchup}: ★ POSITION OPEN — ${bwcTeam} ${poRank}-Rank Q${currentPeriod} ${clock}`);
+                }
+              }
+
+              // ── Opponent graduation tracking (log only, Phase 1) ──
+              if (ind.controlTeam !== bwcTeam) {
+                const oppTeam = ind.controlTeam;
+                if (_v2Margin >= 2 && ind.score >= 0.50) {
+                  lt.opp_bwc_holds = (lt.opp_bwc_holds || 0) + 1;
+                  if (lt.opp_bwc_holds >= 3 && !lt.graduation[oppTeam]) {
+                    const oppConv = computeConviction(ind);
+                    const oppOppCount = _ctrlInd.length;
+                    const oppRank = classifyRank(
+                      oppConv.tier, _v2Margin, lt.opp_bwc_holds, oppOppCount
+                    );
+                    if (oppRank === 'B' || oppRank === 'A') {
+                      lt.graduation[oppTeam] = {
+                        rank: oppRank, period: currentPeriod, clock,
+                        floor: ind.score, margin: _v2Margin
+                      };
+                      log(`${matchup}: ⚠ OPP GRADUATION ${oppTeam} → ${oppRank}-Rank Q${currentPeriod} ${clock}`);
+                    }
+                  }
+                } else {
+                  lt.opp_bwc_holds = 0;
+                }
+              } else {
+                lt.opp_bwc_holds = 0;
+              }
+            }
+
+            // ── V2 BWC STATE TRANSITIONS (gated on POSITION OPEN having fired) ──
+            if (lt.bwc_fired && lt.po_fired && v2BwcState && lt._prev_bwc_state && v2BwcState !== lt._prev_bwc_state) {
               const v2Dir = classifyTransition(lt._prev_bwc_state, v2BwcState);
 
               if (v2Dir !== 'LATERAL' && v2BwcState !== 'DEEP_TRAIL') {
