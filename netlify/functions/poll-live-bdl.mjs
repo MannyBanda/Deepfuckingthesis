@@ -156,6 +156,62 @@ async function sendNtfy(title, body, priority = 4) {
 // Used by v2 BWC lifecycle + BUY triggers. At cutover (Step 7), runAlertAgent
 // switches from v1 prompt to this. Until then, v1 path uses v1 prompt below.
 function buildV2AgentPrompt(ctx) {
+  // Build structural stress section (rolling window, combined read, gap acceleration, per-quarter data)
+  // Same format as formatSonnetPrompt so agent sees identical data layers as auto-analysis
+  let stress = '';
+  const rw = ctx.windowData;
+  if (rw && rw.available) {
+    const wLabel = rw.windowQuarters ? rw.windowQuarters.join('+') : '?';
+    stress += `STRUCTURAL STRESS (rolling window vs cumulative — does the recent game agree with the floor?):\n`;
+    stress += `Window (${wLabel}, ${rw.windowPossessions || '?'} poss): ${rw.controlTeam} ${rw.score != null ? rw.score.toFixed(2) : '?'}\n`;
+    ['I1','I2','I3','I4','I5'].forEach(k => {
+      const i = rw[k];
+      if (i && i.score != null) stress += `  ${k}: ${i.score.toFixed(1)} — ${i.detail || ''}\n`;
+    });
+    stress += `Data quality: ${rw.dataQuality || '?'}\n`;
+  } else {
+    stress += `STRUCTURAL STRESS: Window not yet available\n`;
+  }
+  // Combined read
+  if (ctx.combinedRead && ctx.combinedRead.read) {
+    stress += `Combined read: ${ctx.combinedRead.read} — ${ctx.combinedRead.note || ''}\n`;
+  }
+  // Warning for COLLAPSING/FLIPPED
+  if (ctx.combinedRead && (ctx.combinedRead.read === 'COLLAPSING' || ctx.combinedRead.read === 'FLIPPED')) {
+    const wCtrl = rw ? rw.controlTeam || '?' : '?';
+    stress += `WARNING: Rolling window DISAGREES with cumulative floor. Recent quarters favor ${wCtrl}. Cumulative indicators may be anchored from earlier quarters that no longer reflect game state.\n`;
+  }
+  // Gap acceleration with history (same format as formatSonnetPrompt)
+  if (ctx.accelData && ctx.accelData.entries && ctx.accelData.entries.length > 0) {
+    const acc = ctx.accelData;
+    const last = acc.entries[acc.entries.length - 1];
+    stress += `Gap: ${last.gap >= 0 ? '+' : ''}${last.gap != null ? last.gap.toFixed(3) : '?'} | Acceleration: ${acc.accel} (${acc.consecutive} consecutive)\n`;
+    stress += `History: ${acc.entries.slice(-5).map(e => (e.gap >= 0 ? '+' : '') + (e.gap != null ? e.gap.toFixed(2) : '?') + ' (' + e.score + ')').join(' -> ')}\n`;
+  } else if (ctx.accelData) {
+    stress += `Acceleration: ${ctx.accelData.accel || 'TOO EARLY'}\n`;
+  }
+  // Per-quarter breakdown (same format as formatSonnetPrompt lines 3161-3169)
+  if (ctx.quarterDiffs && Object.keys(ctx.quarterDiffs).length > 0) {
+    stress += `Per-quarter breakdown:\n`;
+    const qdKeys = Object.keys(ctx.quarterDiffs).map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
+    for (const qk of qdKeys) {
+      const d = ctx.quarterDiffs[qk];
+      if (!d || !d.home || !d.away) continue;
+      const h = d.home, a = d.away;
+      const hPaint = h.points_in_the_paint || h.points_in_paint || 0;
+      const aPaint = a.points_in_the_paint || a.points_in_paint || 0;
+      stress += '  Q' + qk + ' (' + ctx.homeAlias + ' vs ' + ctx.awayAlias + '):'
+        + ' Paint ' + ctx.homeAlias + ':' + hPaint + ' ' + ctx.awayAlias + ':' + aPaint
+        + ' | FTA ' + ctx.homeAlias + ':' + (h.free_throws_att||0) + ' ' + ctx.awayAlias + ':' + (a.free_throws_att||0)
+        + ' | 3P ' + ctx.homeAlias + ':' + (h.three_points_made||0) + '/' + (h.three_points_att||0) + ' ' + ctx.awayAlias + ':' + (a.three_points_made||0) + '/' + (a.three_points_att||0)
+        + ' | AST ' + ctx.homeAlias + ':' + (h.assists||0) + ' ' + ctx.awayAlias + ':' + (a.assists||0)
+        + ' | TO ' + ctx.homeAlias + ':' + (h.turnovers||h.total_turnovers||0) + ' ' + ctx.awayAlias + ':' + (a.turnovers||a.total_turnovers||0)
+        + ' | STL ' + ctx.homeAlias + ':' + (h.steals||0) + ' ' + ctx.awayAlias + ':' + (a.steals||0)
+        + (h.possessions ? ' | Poss ' + ctx.homeAlias + ':' + (h.possessions||0) + ' ' + ctx.awayAlias + ':' + (a.possessions||0) : '')
+        + '\n';
+    }
+  }
+
   return `You are a live NBA betting alert quality agent. A mechanical system has identified a potential betting signal. Your job is to assess whether it should be sent to the bettor.
 
 ALERT:
@@ -181,6 +237,7 @@ Peak floor: ${ctx.peakFloor != null ? Number(ctx.peakFloor).toFixed(2) : 'N/A'} 
 Consecutive holds: ${ctx.consecutiveHolds}
 BWC lifecycle: ${ctx.bwcState}${ctx.bwcFirePeriod ? ' (BWC fired Q' + ctx.bwcFirePeriod + ', floor ' + (ctx.bwcFireFloor != null ? Number(ctx.bwcFireFloor).toFixed(2) : '?') + ')' : ''}
 
+${stress}
 FLOOR TRAJECTORY:
 ${ctx.floorHistory || 'No prior snapshots'}
 
@@ -200,6 +257,7 @@ RULES:
   I3 INVERSION: ctrl I3 won = 37.3%. ctrl I3 LOST (opp shooting well) = 49%. When the BUY team has shot quality but is STILL trailing, they are losing for reasons shooting cannot fix. When trailing BECAUSE of poor shooting, that is the variance the thesis exploits.
   OPPONENT KILLS: opp I1 (disruption) -> 28.8%. opp I2 (paint) -> 30.6%. opp I1 OR I2 -> 28.5%. These are STRUCTURAL threats. opp I3 only -> thesis intact (variance).
   TIMING: Q4 trail 5-9 = 14.8% — hard suppress. Q4 trail 1-4 = 43% — still viable.
+- STRUCTURAL STRESS CHECK: When combined read is COLLAPSING, FLIPPED, or SHIFT, the cumulative floor may be anchored from earlier-quarter dominance that has since eroded. The rolling window shows who is winning RECENT quarters. If the window control team disagrees with the cumulative control team, treat all entry signals (BUY, VALUE, THESIS_ALIVE) with extreme skepticism — the structural thesis may have inverted even though cumulative indicators have not caught up. For BWC lifecycle alerts (HOLDING, POSITION_SAFE), flag the stress divergence honestly: "Your position opened at X floor, but recent play favors [opponent]." COLLAPSING + trailing = near-automatic SUPPRESS for entry signals. REINFORCING (DOMINANT/STRONG combined read) = cumulative floor is trustworthy, proceed normally. This check does NOT apply to EXIT alerts (always SEND regardless of window).
 - REASONING AS JOURNAL: Even when SUPPRESS, write thorough reasoning. It feeds subsequent decisions.
 
 BODY RULES (read by non-technical bettors on their phone):
@@ -4717,6 +4775,10 @@ export default async function(req) {
             const _oppIndW = _indNames.filter((n, i) => _indScores[i] && _ctrlScoreFn(_indScores[i].score) <= 0.45);
             const _oppI3Won = _oppIndW.length >= 1 && _oppIndW.includes('I3');
 
+            // Lazy-computed server context for alert agent (rolling window, combined read, per-quarter data)
+            // Computed on first routeV2Alert call, cached for subsequent calls in same cycle
+            let alertCtx = null;
+
             // ── V2 ALERT ROUTING HELPER ──
             // Assembles context, calls agent with v2 prompt, sends ntfy, writes DB
             async function routeV2Alert(v2Type, v2Tier, v2ExitSev, v2IsBuy) {
@@ -4750,6 +4812,13 @@ export default async function(req) {
               // Gather DB context (floor history with source=server, prior alerts)
               const agentCtx = await gatherAgentContext(sql, game.id, matchup);
 
+              // Lazy-compute server context (rolling window, combined read, per-quarter data)
+              if (!alertCtx) {
+                try {
+                  alertCtx = await computeServerContext(sql, game, league, summary, ind, espnWP, hA, aA, currentPeriod, clock, matchup, sust, odds);
+                } catch (e) { log(`${matchup}: alert context compute failed: ${e.message}`); }
+              }
+
               // Build v2 agent prompt context
               const v2Ctx = {
                 alertType: v2Type, alertTier: v2Tier,
@@ -4782,6 +4851,11 @@ export default async function(req) {
                 bwcFireFloor: lt.bwc_fired?.floor,
                 floorHistory: agentCtx.floorHistory,
                 priorAlertTrail: agentCtx.priorAlerts,
+                // Structural stress context (from computeServerContext)
+                windowData: alertCtx?.rollingWindow || null,
+                quarterDiffs: alertCtx?.quarterDiffs || null,
+                accelData: alertCtx?.acceleration || null,
+                combinedRead: alertCtx?.combinedRead || null,
               };
 
               const v2Prompt = buildV2AgentPrompt(v2Ctx);
@@ -4834,13 +4908,13 @@ export default async function(req) {
               try {
                 await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team,
                   floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class,
-                  ctrl_sust, opp_sust, alert_tier, agent_decision, agent_reasoning,
+                  ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning,
                   i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent,
                   bwc_state, erosion_level, peak_floor, exit_severity)
                   VALUES (${game.id}, ${league}, ${v2Type}, ${currentPeriod}, ${clock}, ${ind.controlTeam},
                   ${ind.score}, ${margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal},
                   ${tpForBuy?.classification || null}, ${lsForBWC?.classification || null},
-                  ${ctrlSust}, ${oppSustTier}, ${v2Tier}, ${agentDecision}, ${agentReasoning},
+                  ${ctrlSust}, ${oppSustTier}, ${alertCtx?.rollingWindow?.score ?? null}, ${v2Tier}, ${agentDecision}, ${agentReasoning},
                   ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null},
                   ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null},
                   ${conviction.tier}, ${conviction.combo}, ${shouldSend},
