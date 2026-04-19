@@ -5959,6 +5959,437 @@ async function reportProductionReplay(sql, url) {
   return result;
 }
 
+// ── REPORT: DUAL TRACKING SIM — validate dual tracking + oppCount + I4 threshold ──
+// ?phase=report_dual_tracking_sim             — full dataset
+// ?phase=report_dual_tracking_sim&close=1     — final margin ≤ 8 only
+// ══════════════════════════════════════════════════════════════════════════════
+async function reportDualTrackingSim(sql, url) {
+  var closeOnly = url?.searchParams?.get('close') === '1';
+  var marginFilter = closeOnly ? 8 : 999;
+
+  var rows = await sql`
+    SELECT game_id, checkpoint, margin_at_snapshot AS margin,
+           indicators, pbp_derived, ctrl_team_won, final_margin
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+      AND pbp_derived IS NOT NULL
+      AND ABS(final_margin) <= ${marginFilter}
+    ORDER BY game_id, checkpoint
+  `;
+
+  var checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  var cpIdx = {}; for (var ci = 0; ci < checkpoints.length; ci++) cpIdx[checkpoints[ci]] = ci;
+  var Wt = { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 };
+
+  // Group by game
+  var gameMap = {};
+  for (var r of rows) {
+    var ind = typeof r.indicators === 'string' ? JSON.parse(r.indicators) : r.indicators;
+    var pd = typeof r.pbp_derived === 'string' ? JSON.parse(r.pbp_derived) : r.pbp_derived;
+    if (!ind || !pd) continue;
+    if (!gameMap[r.game_id]) gameMap[r.game_id] = [];
+    gameMap[r.game_id].push({
+      checkpoint: r.checkpoint,
+      margin: r.margin,
+      ctrl_team_won: r.ctrl_team_won,
+      final_margin: r.final_margin,
+      homeAlias: ind.homeAlias,
+      awayAlias: ind.awayAlias,
+      I1: ind.I1, I2: ind.I2, I3: ind.I3, I4: ind.I4, I5: ind.I5,
+      storedCtrl: ind.controlTeam,
+      storedFloor: ind.score,
+      hBigLead: pd.hBigLead || 0, aBigLead: pd.aBigLead || 0,
+      q4hPts: pd.q4hPts, q4aPts: pd.q4aPts,
+    });
+  }
+
+  // ── Recompute I4 with new biggest-lead rule ──
+  function computeNewI4(hBigLead, aBigLead, q4hPts, q4aPts) {
+    var subA = 0;
+    if (hBigLead >= aBigLead + 2) {
+      subA = (aBigLead >= 0.75 * hBigLead) ? 0 : 1;
+    } else if (aBigLead >= hBigLead + 2) {
+      subA = (hBigLead >= 0.75 * aBigLead) ? 0 : -1;
+    }
+    var subB = 0;
+    if (q4hPts != null && q4aPts != null) {
+      var q4d = q4hPts - q4aPts;
+      subB = q4d > 2 ? 1 : q4d < -2 ? -1 : 0;
+    }
+    var raw = subA + subB;
+    return raw > 0 ? 1 : raw === 0 ? 0.5 : 0;
+  }
+
+  // ── Recompute control/floor/conviction from indicator set ──
+  function recompute(snap, useNewI4) {
+    var i4 = useNewI4 ? computeNewI4(snap.hBigLead, snap.aBigLead, snap.q4hPts, snap.q4aPts) : snap.I4;
+    var composite = snap.I1 * Wt.I1 + snap.I2 * Wt.I2 + snap.I3 * Wt.I3 + i4 * Wt.I4 + snap.I5 * Wt.I5;
+    var ctrlHome = composite >= 0.5;
+    var ctrl = ctrlHome ? snap.homeAlias : snap.awayAlias;
+    var floor = ctrlHome ? composite : 1 - composite;
+    floor = Math.round(floor * 100) / 100;
+    // Margin relative to ctrl team
+    var ctrlMargin = ctrlHome ? snap.margin : -snap.margin;
+    // Indicators relative to ctrl team
+    var vals = [
+      { k: 'I1', v: ctrlHome ? snap.I1 : 1 - snap.I1 },
+      { k: 'I2', v: ctrlHome ? snap.I2 : 1 - snap.I2 },
+      { k: 'I3', v: ctrlHome ? snap.I3 : 1 - snap.I3 },
+      { k: 'I4', v: ctrlHome ? i4 : 1 - i4 },
+      { k: 'I5', v: ctrlHome ? snap.I5 : 1 - snap.I5 },
+    ];
+    var won = vals.filter(function(x) { return x.v === 1; }).map(function(x) { return x.k; });
+    var lost = vals.filter(function(x) { return x.v === 0; }).map(function(x) { return x.k; });
+    var count = won.length;
+    var oppCount = lost.length;
+    // Conviction tier
+    var killerPairs = ['I4+I5','I3+I4','I3+I5'];
+    var hasPair = false;
+    for (var pi = 0; pi < won.length; pi++) {
+      for (var pj = pi + 1; pj < won.length; pj++) {
+        var pair = won[pi] + '+' + won[pj];
+        if (killerPairs.indexOf(pair) >= 0) { hasPair = true; break; }
+      }
+      if (hasPair) break;
+    }
+    var tier;
+    if ((won.indexOf('I4') >= 0 && won.indexOf('I5') >= 0) || count >= 4) tier = 'DOMINANT';
+    else if ((won.indexOf('I3') >= 0 && won.indexOf('I4') >= 0) || (won.indexOf('I3') >= 0 && won.indexOf('I5') >= 0)) tier = 'STRONG';
+    else if (count >= 2) tier = 'MODEST';
+    else if (count === 1) tier = 'CONDITIONAL';
+    else tier = 'NO ENTRY';
+    // Winner determination: did the ctrl team win?
+    // ctrl_team_won in DB is relative to stored ctrl. Adjust if our ctrl differs.
+    var ctrlWon;
+    if (ctrl === snap.storedCtrl) ctrlWon = snap.ctrl_team_won;
+    else ctrlWon = !snap.ctrl_team_won;
+    return { ctrl: ctrl, floor: floor, ctrlMargin: ctrlMargin, tier: tier, count: count, oppCount: oppCount, won: won, hasPair: hasPair, ctrlWon: ctrlWon };
+  }
+
+  // ── Rank classification with parameterized oppCount threshold ──
+  function classifyRankSim(tier, lead, holds, oppCount, oppThresh) {
+    if (tier === 'DOMINANT' && lead >= 8 && holds >= 4 && oppCount <= 1) return 'A';
+    if (oppCount >= oppThresh) return 'C';
+    if ((tier === 'DOMINANT' || tier === 'STRONG') && lead >= 3 && holds >= 2) return 'B';
+    return 'C';
+  }
+
+  // ── Walk one game under one config → per-team graduation state ──
+  function walkGame(snaps, useNewI4, oppThresh) {
+    var homeA = snaps[0].homeAlias, awayA = snaps[0].awayAlias;
+    var cpMap = {};
+    for (var s of snaps) cpMap[s.checkpoint] = s;
+    // Per-team tracking
+    var teams = [homeA, awayA];
+    var holds = {}; holds[homeA] = 0; holds[awayA] = 0;
+    var bwcFired = {}; bwcFired[homeA] = false; bwcFired[awayA] = false;
+    var bwcCp = {}; bwcCp[homeA] = null; bwcCp[awayA] = null;
+    var curRank = {}; curRank[homeA] = null; curRank[awayA] = null;
+    var gradCp = {}; gradCp[homeA] = null; gradCp[awayA] = null;
+    var gradRank = {}; gradRank[homeA] = null; gradRank[awayA] = null;
+    var gradFloor = {}; gradFloor[homeA] = null; gradFloor[awayA] = null;
+    var gradTier = {}; gradTier[homeA] = null; gradTier[awayA] = null;
+    var gradHolds = {}; gradHolds[homeA] = 0; gradHolds[awayA] = 0;
+    var prevCtrl = null;
+    var firstBWCTeam = null;
+    var winner = null; // which team alias won the game
+    var ctrlWonFinal = null;
+
+    for (var ci = 0; ci < checkpoints.length; ci++) {
+      var cpLabel = checkpoints[ci];
+      var snap = cpMap[cpLabel];
+      if (!snap) continue;
+      var rc = recompute(snap, useNewI4);
+      ctrlWonFinal = rc.ctrlWon; // last checkpoint's ctrl perspective
+      // Determine winner alias from final checkpoint
+      if (ci === checkpoints.length - 1 || !cpMap[checkpoints[ci + 1]]) {
+        // This is the last available checkpoint for this game
+        winner = rc.ctrlWon ? rc.ctrl : (rc.ctrl === homeA ? awayA : homeA);
+      }
+      var curTeam = rc.ctrl;
+      var othTeam = curTeam === homeA ? awayA : homeA;
+      // Update consecutive holds
+      if (curTeam === prevCtrl) {
+        holds[curTeam]++;
+      } else {
+        holds[curTeam] = 1;
+        holds[othTeam] = 0;
+      }
+      prevCtrl = curTeam;
+      // BWC eligibility: period >= 2 (Q2_6+), floor >= 0.60, margin >= 2, 3+ holds
+      var periodOK = cpIdx[cpLabel] >= 2; // Q2_6 = index 2
+      var bwcEligible = periodOK && rc.floor >= 0.60 && rc.ctrlMargin >= 2 && holds[curTeam] >= 3;
+      if (bwcEligible) {
+        if (!bwcFired[curTeam]) {
+          bwcFired[curTeam] = true;
+          bwcCp[curTeam] = cpLabel;
+          if (!firstBWCTeam) firstBWCTeam = curTeam;
+        }
+        // Classify rank
+        var rank = classifyRankSim(rc.tier, rc.ctrlMargin, holds[curTeam], rc.oppCount, oppThresh);
+        var prevRank = curRank[curTeam];
+        curRank[curTeam] = rank;
+        // Detect graduation (rank upgrade from C)
+        if (!gradCp[curTeam]) {
+          if ((prevRank === 'C' || prevRank === null) && (rank === 'B' || rank === 'A')) {
+            gradCp[curTeam] = cpLabel;
+            gradRank[curTeam] = rank;
+            gradFloor[curTeam] = rc.floor;
+            gradTier[curTeam] = rc.tier;
+            gradHolds[curTeam] = holds[curTeam];
+          } else if (prevRank === 'B' && rank === 'A') {
+            gradCp[curTeam] = cpLabel;
+            gradRank[curTeam] = rank;
+            gradFloor[curTeam] = rc.floor;
+            gradTier[curTeam] = rc.tier;
+            gradHolds[curTeam] = holds[curTeam];
+          }
+        }
+        // Check for rank upgrade even after initial graduation
+        if (gradCp[curTeam] && gradRank[curTeam] === 'B' && rank === 'A') {
+          gradRank[curTeam] = 'A';
+          gradCp[curTeam] = cpLabel; // update to A graduation checkpoint
+        }
+      } else {
+        // Not BWC eligible — don't update rank but don't reset graduation
+        curRank[curTeam] = null;
+      }
+    }
+    // Determine winner from final_margin if we didn't get it from ctrl
+    if (!winner && snaps.length > 0) {
+      var fm = snaps[0].final_margin; // home - away
+      winner = fm > 0 ? homeA : awayA;
+    }
+    return {
+      homeA: homeA, awayA: awayA, winner: winner,
+      firstBWCTeam: firstBWCTeam,
+      bwcFired: bwcFired, bwcCp: bwcCp,
+      gradCp: gradCp, gradRank: gradRank, gradFloor: gradFloor,
+      gradTier: gradTier, gradHolds: gradHolds,
+    };
+  }
+
+  // ── Apply PO strategy to game walk result ──
+  function applyStrategy(gw, strategy) {
+    var homeA = gw.homeA, awayA = gw.awayA;
+    var poTeam = null, poCp = null, poRank = null;
+
+    if (strategy === 'single_anchor') {
+      // Only the first BWC team can graduate
+      var anchor = gw.firstBWCTeam;
+      if (anchor && gw.gradCp[anchor]) {
+        poTeam = anchor;
+        poCp = gw.gradCp[anchor];
+        poRank = gw.gradRank[anchor];
+      }
+    } else if (strategy === 'first_to_grad') {
+      // First team to graduate gets PO
+      var hCp = gw.gradCp[homeA], aCp = gw.gradCp[awayA];
+      if (hCp && aCp) {
+        poTeam = cpIdx[hCp] <= cpIdx[aCp] ? homeA : awayA;
+        poCp = cpIdx[hCp] <= cpIdx[aCp] ? hCp : aCp;
+      } else if (hCp) { poTeam = homeA; poCp = hCp; }
+      else if (aCp) { poTeam = awayA; poCp = aCp; }
+      if (poTeam) poRank = gw.gradRank[poTeam];
+    } else if (strategy === 'only_one_grad') {
+      // PO only if exactly one team graduated (in the entire game)
+      var hGrad = !!gw.gradCp[homeA], aGrad = !!gw.gradCp[awayA];
+      if (hGrad && !aGrad) { poTeam = homeA; poCp = gw.gradCp[homeA]; poRank = gw.gradRank[homeA]; }
+      else if (aGrad && !hGrad) { poTeam = awayA; poCp = gw.gradCp[awayA]; poRank = gw.gradRank[awayA]; }
+      // Both graduated → suppress
+    } else if (strategy === 'stronger_grad') {
+      // If both graduated, compare rank > floor > holds. If only one, use them.
+      var hGr = !!gw.gradCp[homeA], aGr = !!gw.gradCp[awayA];
+      if (hGr && !aGr) { poTeam = homeA; }
+      else if (aGr && !hGr) { poTeam = awayA; }
+      else if (hGr && aGr) {
+        // Compare: rank first (A > B), then floor, then holds
+        var hR = gw.gradRank[homeA], aR = gw.gradRank[awayA];
+        var rankVal = { A: 3, B: 2, C: 1 };
+        if ((rankVal[hR] || 0) > (rankVal[aR] || 0)) poTeam = homeA;
+        else if ((rankVal[aR] || 0) > (rankVal[hR] || 0)) poTeam = awayA;
+        else if ((gw.gradFloor[homeA] || 0) > (gw.gradFloor[awayA] || 0)) poTeam = homeA;
+        else if ((gw.gradFloor[awayA] || 0) > (gw.gradFloor[homeA] || 0)) poTeam = awayA;
+        else if ((gw.gradHolds[homeA] || 0) > (gw.gradHolds[awayA] || 0)) poTeam = homeA;
+        else poTeam = awayA; // fallback to away (arbitrary)
+      }
+      if (poTeam) { poCp = gw.gradCp[poTeam]; poRank = gw.gradRank[poTeam]; }
+    }
+
+    return { poTeam: poTeam, poCp: poCp, poRank: poRank };
+  }
+
+  // ── Run simulation ──
+  var configs = [
+    { name: 'old_i4_opp2', newI4: false, oppThresh: 2 },
+    { name: 'old_i4_opp3', newI4: false, oppThresh: 3 },
+    { name: 'new_i4_opp2', newI4: true, oppThresh: 2 },
+    { name: 'new_i4_opp3', newI4: true, oppThresh: 3 },
+  ];
+  var strategyNames = ['single_anchor', 'first_to_grad', 'only_one_grad', 'stronger_grad'];
+
+  function mkBucket() { return { n: 0, wins: 0 }; }
+  function ph(b) { return { n: b.n, wins: b.wins, pct: b.n > 0 ? Math.round(b.wins / b.n * 1000) / 10 : null }; }
+
+  // Accumulators: results[config][strategy] = { po_fired, po_correct, no_po, by_rank, by_cp, both_grad, only_one_grad }
+  var acc = {};
+  for (var cfg of configs) {
+    acc[cfg.name] = {};
+    for (var strat of strategyNames) {
+      acc[cfg.name][strat] = {
+        po: mkBucket(),
+        no_po: mkBucket(),
+        by_rank: { A: mkBucket(), B: mkBucket() },
+        by_cp: {},
+        both_graduated: 0,
+        only_one_graduated: 0,
+        neither_graduated: 0,
+      };
+      for (var cp of checkpoints) acc[cfg.name][strat].by_cp[cp] = mkBucket();
+    }
+  }
+
+  // Track marginal changes between configs
+  var marginal = {
+    opp2_to_opp3_old_i4: { gained: mkBucket(), lost: mkBucket(), changed: 0 },
+    opp2_to_opp3_new_i4: { gained: mkBucket(), lost: mkBucket(), changed: 0 },
+    old_to_new_i4_opp2: { gained: mkBucket(), lost: mkBucket(), changed: 0 },
+    old_to_new_i4_opp3: { gained: mkBucket(), lost: mkBucket(), changed: 0 },
+  };
+
+  var totalGames = 0;
+
+  for (var gid in gameMap) {
+    var snaps = gameMap[gid];
+    if (snaps.length < 3) continue; // need meaningful data
+    totalGames++;
+
+    // Walk game under each config
+    var walks = {};
+    for (var cfg of configs) {
+      walks[cfg.name] = walkGame(snaps, cfg.newI4, cfg.oppThresh);
+    }
+    var winner = walks[configs[0].name].winner;
+
+    // Apply each strategy to each config's walk
+    var decisions = {};
+    for (var cfg of configs) {
+      decisions[cfg.name] = {};
+      var gw = walks[cfg.name];
+      var hGrad = !!gw.gradCp[gw.homeA], aGrad = !!gw.gradCp[gw.awayA];
+
+      for (var strat of strategyNames) {
+        var d = applyStrategy(gw, strat);
+        decisions[cfg.name][strat] = d;
+        var a = acc[cfg.name][strat];
+
+        // Count graduation patterns
+        if (hGrad && aGrad) a.both_graduated++;
+        else if (hGrad || aGrad) a.only_one_graduated++;
+        else a.neither_graduated++;
+
+        if (d.poTeam) {
+          var correct = d.poTeam === winner;
+          a.po.n++; if (correct) a.po.wins++;
+          if (d.poRank && a.by_rank[d.poRank]) { a.by_rank[d.poRank].n++; if (correct) a.by_rank[d.poRank].wins++; }
+          if (d.poCp && a.by_cp[d.poCp]) { a.by_cp[d.poCp].n++; if (correct) a.by_cp[d.poCp].wins++; }
+        } else {
+          a.no_po.n++;
+          // Track: did the winner actually graduate? (missed opportunity)
+          if (gw.gradCp[winner]) a.no_po.wins++; // wins = "missed opportunities" here
+        }
+      }
+    }
+
+    // ── Marginal analysis: compare configs pairwise on first_to_grad strategy ──
+    function compareMarginal(mKey, cfgA, cfgB) {
+      var dA = decisions[cfgA]['first_to_grad'];
+      var dB = decisions[cfgB]['first_to_grad'];
+      if (dA.poTeam !== dB.poTeam || (!!dA.poTeam !== !!dB.poTeam)) {
+        marginal[mKey].changed++;
+        // Gained: B has PO but A doesn't
+        if (!dA.poTeam && dB.poTeam) {
+          marginal[mKey].gained.n++;
+          if (dB.poTeam === winner) marginal[mKey].gained.wins++;
+        }
+        // Lost: A has PO but B doesn't
+        if (dA.poTeam && !dB.poTeam) {
+          marginal[mKey].lost.n++;
+          if (dA.poTeam === winner) marginal[mKey].lost.wins++;
+        }
+      }
+    }
+    compareMarginal('opp2_to_opp3_old_i4', 'old_i4_opp2', 'old_i4_opp3');
+    compareMarginal('opp2_to_opp3_new_i4', 'new_i4_opp2', 'new_i4_opp3');
+    compareMarginal('old_to_new_i4_opp2', 'old_i4_opp2', 'new_i4_opp2');
+    compareMarginal('old_to_new_i4_opp3', 'old_i4_opp3', 'new_i4_opp3');
+  }
+
+  // ── Format output ──
+  var output = {
+    meta: {
+      total_games: totalGames,
+      dataset: closeOnly ? 'close (final margin ≤ 8)' : 'full',
+      configs: configs.map(function(c) { return c.name; }),
+      strategies: strategyNames,
+    },
+    results: {},
+    marginal_analysis: {},
+  };
+
+  for (var cfg of configs) {
+    output.results[cfg.name] = {};
+    for (var strat of strategyNames) {
+      var a = acc[cfg.name][strat];
+      var cpFormatted = {};
+      for (var cp of checkpoints) {
+        if (a.by_cp[cp].n > 0) cpFormatted[cp] = ph(a.by_cp[cp]);
+      }
+      output.results[cfg.name][strat] = {
+        po_fired: ph(a.po),
+        no_po: { n: a.no_po.n, missed_opportunities: a.no_po.wins },
+        by_rank: { A: ph(a.by_rank.A), B: ph(a.by_rank.B) },
+        by_checkpoint: cpFormatted,
+        graduation_patterns: {
+          both_graduated: a.both_graduated,
+          only_one_graduated: a.only_one_graduated,
+          neither_graduated: a.neither_graduated,
+        },
+      };
+    }
+  }
+
+  // Format marginal
+  for (var mKey in marginal) {
+    var m = marginal[mKey];
+    output.marginal_analysis[mKey] = {
+      total_changed: m.changed,
+      gained_po: ph(m.gained),
+      lost_po: ph(m.lost),
+    };
+  }
+
+  // ── Head-to-head comparison table: best config × strategy combo ──
+  var headToHead = [];
+  for (var cfg of configs) {
+    for (var strat of strategyNames) {
+      var a = acc[cfg.name][strat];
+      headToHead.push({
+        config: cfg.name,
+        strategy: strat,
+        po_n: a.po.n,
+        po_pct: a.po.n > 0 ? Math.round(a.po.wins / a.po.n * 1000) / 10 : null,
+        silence_n: a.no_po.n,
+        coverage: totalGames > 0 ? Math.round(a.po.n / totalGames * 1000) / 10 : null,
+      });
+    }
+  }
+  headToHead.sort(function(a, b) { return (b.po_pct || 0) - (a.po_pct || 0); });
+  output.head_to_head = headToHead;
+
+  return output;
+}
+
 // ── HANDLER ─────────────────────────────────────────────────────────────────
 export default async (req) => {
   const sql = neon(process.env.DATABASE_URL);
@@ -5994,6 +6425,7 @@ export default async (req) => {
       case 'report_tier_journey': result = await reportTierJourney(sql, url); break;
       case 'report_position_open': result = await reportPositionOpen(sql, url); break;
       case 'report_production_replay': result = await reportProductionReplay(sql, url); break;
+      case 'report_dual_tracking_sim': result = await reportDualTrackingSim(sql, url); break;
       case 'report_buy_deep': {
         const [convDef, autopsy, marginFloor, alertsByCp, oppProfile] = await Promise.all([
           reportConvictionDeficit(sql),
