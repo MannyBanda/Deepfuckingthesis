@@ -3651,6 +3651,482 @@ async function reportBuyProfile(sql) {
   };
 }
 
+// ── REPORT: TIER JOURNEY — Floor trajectory, tier persistence, BWC lifecycle ─
+// ?phase=report_tier_journey          — full dataset
+// ?phase=report_tier_journey&close=1  — final margin ≤ 8 only
+async function reportTierJourney(sql, url) {
+  var closeOnly = url?.searchParams?.get('close') === '1';
+  var marginFilter = closeOnly ? 8 : 999;
+
+  var rows = await sql`
+    SELECT game_id, checkpoint, margin_at_snapshot AS margin,
+           (indicators->>'score')::real AS floor,
+           indicators->>'controlTeam' AS ctrl,
+           indicators->>'homeAlias' AS home_alias,
+           indicators->>'awayAlias' AS away_alias,
+           (indicators->>'I1')::text AS i1raw, (indicators->>'I2')::text AS i2raw,
+           (indicators->>'I3')::text AS i3raw, (indicators->>'I4')::text AS i4raw,
+           (indicators->>'I5')::text AS i5raw,
+           (conviction->>'tier') AS conv_tier,
+           (conviction->>'count')::int AS ind_count,
+           pbp_derived,
+           ctrl_team_won, final_margin
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+      AND ABS(final_margin) <= ${marginFilter}
+    ORDER BY game_id, checkpoint
+  `;
+
+  var checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+
+  // Group by game
+  var games = {};
+  for (var r of rows) {
+    if (!games[r.game_id]) games[r.game_id] = [];
+    games[r.game_id].push(r);
+  }
+
+  // ── Helpers (same as reportBWCErosion) ──
+  function getCtrlMargin(r) {
+    return (r.ctrl === r.home_alias) ? r.margin : -r.margin;
+  }
+
+  function getOppCount(r) {
+    var ctrlHome = r.ctrl === r.home_alias;
+    var scores = [parseFloat(r.i1raw), parseFloat(r.i2raw), parseFloat(r.i3raw),
+                  parseFloat(r.i4raw), parseFloat(r.i5raw)];
+    var count = 0;
+    for (var s of scores) {
+      if (isNaN(s)) continue;
+      if (ctrlHome ? (s === 0) : (s === 1)) count++;
+    }
+    return count;
+  }
+
+  function classifyBWCTier(conv, lead, holds, oppCount) {
+    if (conv === 'DOMINANT' && lead >= 8 && holds >= 4 && oppCount <= 1) return 'A';
+    if (oppCount >= 2) return 'C';
+    if ((conv === 'DOMINANT' || conv === 'STRONG') && lead >= 3 && holds >= 2) return 'B';
+    return 'C';
+  }
+
+  function classifyDeficit(ctrlMargin) {
+    if (ctrlMargin >= 8) return 'lead_8+';
+    if (ctrlMargin >= 3) return 'lead_3-7';
+    if (ctrlMargin >= 1) return 'lead_1-2';
+    if (ctrlMargin >= -2) return 'tied';
+    if (ctrlMargin >= -4) return 'trail_1-4';
+    if (ctrlMargin >= -9) return 'trail_5-9';
+    return 'trail_10+';
+  }
+
+  // ── Per-game analysis ──
+  // Section 1: Tier trajectory (tier at each checkpoint for BWC-eligible teams)
+  var tierAtFire = { A: { n: 0, wins: 0 }, B: { n: 0, wins: 0 }, C: { n: 0, wins: 0 } };
+  var tierAtFireByCp = {};
+  for (var cp of checkpoints) tierAtFireByCp[cp] = { A: { n:0,wins:0 }, B: { n:0,wins:0 }, C: { n:0,wins:0 } };
+
+  // Section 2: Tier graduation tracking
+  var graduations = {
+    c_to_b: { n: 0, wins: 0 },
+    c_to_a: { n: 0, wins: 0 },
+    b_to_a: { n: 0, wins: 0 },
+    stayed_c: { n: 0, wins: 0 },
+    stayed_b: { n: 0, wins: 0 },
+    born_a: { n: 0, wins: 0 },   // first fire was already A
+    born_b: { n: 0, wins: 0 },   // first fire was already B
+  };
+
+  // Section 3: Tier persistence (how many checkpoints at peak tier)
+  var persistenceBuckets = {
+    '1 cp': { n: 0, wins: 0 },
+    '2-3 cp': { n: 0, wins: 0 },
+    '4-5 cp': { n: 0, wins: 0 },
+    '6+ cp': { n: 0, wins: 0 },
+  };
+
+  // Section 4: First BWC team analysis — did the first BWC team win?
+  var firstBWC = { same_team_won: 0, different_team_won: 0, total: 0, flip_counts: {} };
+
+  // Section 5: Floor trajectory of winning vs losing BWC teams
+  var floorTrajectory = { winners: [], losers: [] };
+
+  // Section 6: Control path (wire-to-wire vs contested)
+  var controlPath = {
+    wire_to_wire: { n: 0, wins: 0 },   // same ctrl all checkpoints, never trailed
+    early_lock: { n: 0, wins: 0 },      // ctrl settled by Q2_END, no flip after
+    contested: { n: 0, wins: 0 },       // ctrl flipped at least once
+    late_flip: { n: 0, wins: 0 },       // ctrl flipped in Q3+
+  };
+
+  // Section 7: Early signals — Q1/Q2 profile of teams that eventually reached A
+  var earlySignals = {
+    eventual_A: { q1_floors: [], q2_floors: [], q1_convictions: {}, q1_leads: [] },
+    eventual_B: { q1_floors: [], q2_floors: [], q1_convictions: {}, q1_leads: [] },
+    stayed_C: { q1_floors: [], q2_floors: [], q1_convictions: {}, q1_leads: [] },
+  };
+
+  // Section 8: Floor hold quality between checkpoints
+  var floorHolds = {
+    stable: { n: 0, wins: 0 },    // floor delta ≤ 0.03
+    growing: { n: 0, wins: 0 },   // floor delta > 0.03
+    eroding: { n: 0, wins: 0 },   // floor delta < -0.03
+    collapsing: { n: 0, wins: 0 }, // floor delta < -0.10
+  };
+
+  // Section 9: Floor plateau detection
+  var plateaus = {
+    plateaued: { n: 0, wins: 0 },      // ±0.03 for 3+ consecutive checkpoints
+    still_building: { n: 0, wins: 0 },  // rising trend in last 3 checkpoints
+    declining: { n: 0, wins: 0 },       // declining trend in last 3 checkpoints
+  };
+
+  // Section 10: One-sided vs fought games
+  var gameNature = {
+    one_sided: { n: 0, wins: 0 },    // ctrl team led at every checkpoint
+    fought: { n: 0, wins: 0 },       // ctrl team trailed at some point
+    comeback: { n: 0, wins: 0 },     // ctrl team trailed 5+ at some point
+  };
+
+  var totalGames = 0;
+
+  for (var [gid, snaps] of Object.entries(games)) {
+    // Build checkpoint map
+    var cpMap = {};
+    for (var s of snaps) cpMap[s.checkpoint] = s;
+
+    // Need at least Q2_6 to analyze BWC
+    if (!cpMap['Q2_6']) continue;
+
+    // Walk checkpoints, compute tier at each
+    var tierSeq = [];
+    var floorSeq = [];
+    var ctrlSeq = [];
+    var marginSeq = [];
+    var holdCount = 0;
+    var prevCtrl = null;
+    var firstFireCp = null;
+    var firstFireTier = null;
+    var firstFireTeam = null;
+    var peakTier = 'C';
+    var peakTierCps = 0;
+    var currentTierRun = 0;
+    var currentTier = null;
+    var won = null;
+    var ctrlFlips = 0;
+    var lastFlipCp = null;
+
+    for (var ci = 0; ci < checkpoints.length; ci++) {
+      var cpLabel = checkpoints[ci];
+      var snap = cpMap[cpLabel];
+      if (!snap || !snap.ctrl) {
+        tierSeq.push(null);
+        floorSeq.push(null);
+        ctrlSeq.push(null);
+        marginSeq.push(null);
+        continue;
+      }
+
+      won = snap.ctrl_team_won;
+      var ctrlMargin = getCtrlMargin(snap);
+      var oppCount = getOppCount(snap);
+
+      // Track ctrl flips
+      if (prevCtrl && prevCtrl !== snap.ctrl) {
+        ctrlFlips++;
+        lastFlipCp = cpLabel;
+      }
+
+      // Consecutive holds
+      if (prevCtrl === snap.ctrl) holdCount++;
+      else holdCount = 1;
+      prevCtrl = snap.ctrl;
+
+      // Is this BWC-eligible? (ctrl team leading 2+, floor ≥ 0.50)
+      var bwcEligible = ctrlMargin >= 2 && snap.floor >= 0.50;
+      var tier = null;
+      if (bwcEligible) {
+        tier = classifyBWCTier(snap.conv_tier, ctrlMargin, holdCount, oppCount);
+
+        // Track first fire
+        if (!firstFireCp) {
+          firstFireCp = cpLabel;
+          firstFireTier = tier;
+          firstFireTeam = snap.ctrl;
+          tierAtFire[tier].n++;
+          if (won) tierAtFire[tier].wins++;
+          tierAtFireByCp[cpLabel][tier].n++;
+          if (won) tierAtFireByCp[cpLabel][tier].wins++;
+        }
+
+        // Track peak tier
+        var tierRank = { A: 3, B: 2, C: 1 };
+        if (tierRank[tier] > (tierRank[peakTier] || 0)) peakTier = tier;
+
+        // Track current tier persistence
+        if (tier === currentTier) currentTierRun++;
+        else { currentTierRun = 1; currentTier = tier; }
+        if (tier === peakTier) peakTierCps++;
+      }
+
+      tierSeq.push(tier);
+      floorSeq.push(snap.floor);
+      ctrlSeq.push(snap.ctrl);
+      marginSeq.push(ctrlMargin);
+    }
+
+    // Skip games where BWC never fired
+    if (!firstFireCp) continue;
+    totalGames++;
+
+    // ── Section 2: Graduation tracking ──
+    // Walk tier sequence to find graduation
+    var tiers = tierSeq.filter(t => t !== null);
+    if (tiers.length > 0) {
+      var first = tiers[0];
+      var best = tiers.reduce((a, b) => {
+        var rank = { A: 3, B: 2, C: 1 };
+        return (rank[b] || 0) > (rank[a] || 0) ? b : a;
+      }, tiers[0]);
+
+      if (first === 'C' && best === 'A') { graduations.c_to_a.n++; if (won) graduations.c_to_a.wins++; }
+      else if (first === 'C' && best === 'B') { graduations.c_to_b.n++; if (won) graduations.c_to_b.wins++; }
+      else if (first === 'B' && best === 'A') { graduations.b_to_a.n++; if (won) graduations.b_to_a.wins++; }
+      else if (first === 'C' && best === 'C') { graduations.stayed_c.n++; if (won) graduations.stayed_c.wins++; }
+      else if (first === 'B' && best === 'B') { graduations.stayed_b.n++; if (won) graduations.stayed_b.wins++; }
+      else if (first === 'A') { graduations.born_a.n++; if (won) graduations.born_a.wins++; }
+      if (first === 'B' && best === 'B') { graduations.born_b.n++; if (won) graduations.born_b.wins++; }
+    }
+
+    // ── Section 3: Peak tier persistence ──
+    if (peakTierCps === 1) { persistenceBuckets['1 cp'].n++; if (won) persistenceBuckets['1 cp'].wins++; }
+    else if (peakTierCps <= 3) { persistenceBuckets['2-3 cp'].n++; if (won) persistenceBuckets['2-3 cp'].wins++; }
+    else if (peakTierCps <= 5) { persistenceBuckets['4-5 cp'].n++; if (won) persistenceBuckets['4-5 cp'].wins++; }
+    else { persistenceBuckets['6+ cp'].n++; if (won) persistenceBuckets['6+ cp'].wins++; }
+
+    // ── Section 4: First BWC team analysis ──
+    firstBWC.total++;
+    // Did the first BWC team win? ctrl_team_won is relative to Q4_END ctrl.
+    // We need to check if firstFireTeam won the game.
+    var q4end = cpMap['Q4_END'];
+    var firstTeamWon = false;
+    if (q4end) {
+      // If firstFireTeam is Q4_END's ctrl team and ctrl_team_won, OR
+      // firstFireTeam is NOT Q4_END's ctrl team and !ctrl_team_won
+      firstTeamWon = (firstFireTeam === q4end.ctrl && q4end.ctrl_team_won) ||
+                     (firstFireTeam !== q4end.ctrl && !q4end.ctrl_team_won);
+    }
+    if (firstTeamWon) firstBWC.same_team_won++;
+    else firstBWC.different_team_won++;
+
+    // Track flip counts
+    var flipKey = String(ctrlFlips);
+    firstBWC.flip_counts[flipKey] = firstBWC.flip_counts[flipKey] || { n: 0, first_team_won: 0 };
+    firstBWC.flip_counts[flipKey].n++;
+    if (firstTeamWon) firstBWC.flip_counts[flipKey].first_team_won++;
+
+    // ── Section 5: Floor trajectory ──
+    var validFloors = floorSeq.filter(f => f !== null);
+    if (validFloors.length >= 3) {
+      var trajObj = {
+        floors: floorSeq,
+        tiers: tierSeq,
+        first_fire_cp: firstFireCp,
+        peak_tier: peakTier,
+        final_margin: snaps[0].final_margin,
+      };
+      if (firstTeamWon) floorTrajectory.winners.push(trajObj);
+      else floorTrajectory.losers.push(trajObj);
+    }
+
+    // ── Section 6: Control path classification ──
+    var validCtrls = [];
+    var validMargins = [];
+    for (var ci2 = 0; ci2 < checkpoints.length; ci2++) {
+      if (ctrlSeq[ci2] !== null) { validCtrls.push(ctrlSeq[ci2]); validMargins.push(marginSeq[ci2]); }
+    }
+    var allSameCtrl = validCtrls.every(c => c === validCtrls[0]);
+    var neverTrailed = validMargins.every(m => m >= 0);
+
+    if (allSameCtrl && neverTrailed) {
+      controlPath.wire_to_wire.n++; if (firstTeamWon) controlPath.wire_to_wire.wins++;
+    } else if (ctrlFlips === 0 || (lastFlipCp && checkpoints.indexOf(lastFlipCp) <= 3)) {
+      controlPath.early_lock.n++; if (firstTeamWon) controlPath.early_lock.wins++;
+    } else if (lastFlipCp && checkpoints.indexOf(lastFlipCp) >= 4) {
+      controlPath.late_flip.n++; if (firstTeamWon) controlPath.late_flip.wins++;
+    } else {
+      controlPath.contested.n++; if (firstTeamWon) controlPath.contested.wins++;
+    }
+
+    // ── Section 7: Early signals ──
+    var q1_6 = cpMap['Q1_6'];
+    var q2_6 = cpMap['Q2_6'];
+    var bucket = peakTier === 'A' ? 'eventual_A' : peakTier === 'B' ? 'eventual_B' : 'stayed_C';
+    if (q1_6 && q1_6.floor) {
+      earlySignals[bucket].q1_floors.push(q1_6.floor);
+      var q1conv = q1_6.conv_tier || 'NONE';
+      earlySignals[bucket].q1_convictions[q1conv] = (earlySignals[bucket].q1_convictions[q1conv] || 0) + 1;
+      earlySignals[bucket].q1_leads.push(getCtrlMargin(q1_6));
+    }
+    if (q2_6 && q2_6.floor) {
+      earlySignals[bucket].q2_floors.push(q2_6.floor);
+    }
+
+    // ── Section 8: Floor hold quality (checkpoint-to-checkpoint) ──
+    for (var fi = 1; fi < floorSeq.length; fi++) {
+      if (floorSeq[fi] === null || floorSeq[fi - 1] === null) continue;
+      // Only count transitions where the team was BWC-eligible at both checkpoints
+      if (tierSeq[fi] === null || tierSeq[fi - 1] === null) continue;
+      var delta = floorSeq[fi] - floorSeq[fi - 1];
+      if (delta < -0.10) { floorHolds.collapsing.n++; if (won) floorHolds.collapsing.wins++; }
+      else if (delta < -0.03) { floorHolds.eroding.n++; if (won) floorHolds.eroding.wins++; }
+      else if (delta > 0.03) { floorHolds.growing.n++; if (won) floorHolds.growing.wins++; }
+      else { floorHolds.stable.n++; if (won) floorHolds.stable.wins++; }
+    }
+
+    // ── Section 9: Floor plateau detection (last 3 BWC-eligible checkpoints) ──
+    var eligibleFloors = [];
+    for (var pi = 0; pi < floorSeq.length; pi++) {
+      if (floorSeq[pi] !== null && tierSeq[pi] !== null) eligibleFloors.push(floorSeq[pi]);
+    }
+    if (eligibleFloors.length >= 3) {
+      var last3 = eligibleFloors.slice(-3);
+      var d1 = last3[1] - last3[0], d2 = last3[2] - last3[1];
+      if (Math.abs(d1) <= 0.03 && Math.abs(d2) <= 0.03) {
+        plateaus.plateaued.n++; if (won) plateaus.plateaued.wins++;
+      } else if (d1 > 0 && d2 > 0) {
+        plateaus.still_building.n++; if (won) plateaus.still_building.wins++;
+      } else if (d1 < 0 && d2 < 0) {
+        plateaus.declining.n++; if (won) plateaus.declining.wins++;
+      } else {
+        // Mixed — count as plateaued for simplicity
+        plateaus.plateaued.n++; if (won) plateaus.plateaued.wins++;
+      }
+    }
+
+    // ── Section 10: Game nature ──
+    var everTrailed = validMargins.some(m => m < 0);
+    var deepTrail = validMargins.some(m => m <= -5);
+    if (!everTrailed) {
+      gameNature.one_sided.n++; if (firstTeamWon) gameNature.one_sided.wins++;
+    } else if (deepTrail) {
+      gameNature.comeback.n++; if (firstTeamWon) gameNature.comeback.wins++;
+    } else {
+      gameNature.fought.n++; if (firstTeamWon) gameNature.fought.wins++;
+    }
+  }
+
+  // ── Aggregate helpers ──
+  function pct(obj) {
+    for (var k in obj) {
+      if (obj[k] && typeof obj[k].n === 'number') {
+        obj[k].pct = obj[k].n > 0 ? Math.round(obj[k].wins / obj[k].n * 1000) / 10 : null;
+      }
+    }
+    return obj;
+  }
+
+  function avgArr(arr) {
+    if (!arr || arr.length === 0) return null;
+    return Math.round(arr.reduce((a, b) => a + b, 0) / arr.length * 1000) / 1000;
+  }
+
+  function medianArr(arr) {
+    if (!arr || arr.length === 0) return null;
+    var sorted = arr.slice().sort((a, b) => a - b);
+    var mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+
+  // Aggregate floor trajectories into avg per checkpoint
+  function avgTrajectory(list) {
+    var result = {};
+    for (var ci3 = 0; ci3 < checkpoints.length; ci3++) {
+      var vals = list.map(t => t.floors[ci3]).filter(f => f !== null);
+      result[checkpoints[ci3]] = { avg: avgArr(vals), median: medianArr(vals), n: vals.length };
+    }
+    return result;
+  }
+
+  // ── Early signals: compute stats ──
+  for (var esKey of ['eventual_A', 'eventual_B', 'stayed_C']) {
+    var es = earlySignals[esKey];
+    es.q1_floor_avg = avgArr(es.q1_floors);
+    es.q1_floor_median = medianArr(es.q1_floors);
+    es.q2_floor_avg = avgArr(es.q2_floors);
+    es.q2_floor_median = medianArr(es.q2_floors);
+    es.q1_lead_avg = avgArr(es.q1_leads);
+    es.n = es.q1_floors.length;
+    // Remove raw arrays from output to keep response manageable
+    delete es.q1_floors;
+    delete es.q2_floors;
+    delete es.q1_leads;
+  }
+
+  // ── First BWC flip count stats ──
+  for (var fk in firstBWC.flip_counts) {
+    var fc = firstBWC.flip_counts[fk];
+    fc.first_team_win_pct = fc.n > 0 ? Math.round(fc.first_team_won / fc.n * 1000) / 10 : null;
+  }
+
+  return {
+    _meta: {
+      filter: closeOnly ? 'close games only (final margin ≤ 8)' : 'all games',
+      total_games_analyzed: totalGames,
+      total_games_in_dataset: Object.keys(games).length,
+    },
+    section_1_tier_at_first_fire: {
+      description: 'What tier was the BWC team when it first fired?',
+      overall: pct(tierAtFire),
+      by_checkpoint: Object.fromEntries(
+        Object.entries(tierAtFireByCp).map(([k, v]) => [k, pct(v)])
+          .filter(([k, v]) => v.A.n + v.B.n + v.C.n > 0)
+      ),
+    },
+    section_2_tier_graduation: {
+      description: 'Did the team graduate from its first-fire tier to a higher one? Win rate by path.',
+      paths: pct(graduations),
+    },
+    section_3_peak_tier_persistence: {
+      description: 'How many checkpoints did the team spend at its peak tier?',
+      buckets: pct(persistenceBuckets),
+    },
+    section_4_first_bwc_team: {
+      description: 'Did the FIRST team to achieve BWC status win the game? How often did control flip?',
+      first_team_won_pct: firstBWC.total > 0 ? Math.round(firstBWC.same_team_won / firstBWC.total * 1000) / 10 : null,
+      total: firstBWC.total,
+      same_team_won: firstBWC.same_team_won,
+      different_team_won: firstBWC.different_team_won,
+      by_flip_count: firstBWC.flip_counts,
+    },
+    section_5_floor_trajectory: {
+      description: 'Average floor at each checkpoint for winning vs losing BWC teams.',
+      winners: { n: floorTrajectory.winners.length, trajectory: avgTrajectory(floorTrajectory.winners) },
+      losers: { n: floorTrajectory.losers.length, trajectory: avgTrajectory(floorTrajectory.losers) },
+    },
+    section_6_control_path: {
+      description: 'How was control established? Wire-to-wire vs contested vs late flip.',
+      paths: pct(controlPath),
+    },
+    section_7_early_signals: {
+      description: 'Q1/Q2 profile of teams that eventually reached each peak tier.',
+      profiles: earlySignals,
+    },
+    section_8_floor_hold_quality: {
+      description: 'Floor delta between consecutive BWC-eligible checkpoints.',
+      transitions: pct(floorHolds),
+    },
+    section_9_floor_plateau: {
+      description: 'Is the floor plateaued (±0.03 for 3+ cp), still building, or declining?',
+      states: pct(plateaus),
+    },
+    section_10_game_nature: {
+      description: 'Did the BWC team lead throughout, or did they trail at some point?',
+      paths: pct(gameNature),
+    },
+  };
+}
+
 // ── HANDLER ─────────────────────────────────────────────────────────────────
 export default async (req) => {
   const sql = neon(process.env.DATABASE_URL);
@@ -3683,6 +4159,7 @@ export default async (req) => {
       case 'report_bwc_erosion': result = await reportBWCErosion(sql); break;
       case 'report_value_play': result = await reportValuePlay(sql); break;
       case 'report_buy_profile': result = await reportBuyProfile(sql); break;
+      case 'report_tier_journey': result = await reportTierJourney(sql, url); break;
       case 'report_buy_deep': {
         const [convDef, autopsy, marginFloor, alertsByCp, oppProfile] = await Promise.all([
           reportConvictionDeficit(sql),
