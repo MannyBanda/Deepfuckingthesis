@@ -1800,6 +1800,40 @@ exports.handler = async (event) => {
     }
 
     // ═══════════════════════════════════════════════════════
+    // SNAPSHOT_DIAGNOSTIC — production snapshot coverage for graduation replay
+    // ═══════════════════════════════════════════════════════
+    if (action === 'snapshot_diagnostic') {
+      const rows = await sql`
+        SELECT s.game_id, g.matchup, g.home_alias, g.away_alias, g.winner, g.margin,
+               g.date,
+               COUNT(*) AS total_snaps,
+               COUNT(*) FILTER (WHERE s.source = 'server') AS server_snaps,
+               COUNT(*) FILTER (WHERE s.raw_stats_json IS NOT NULL) AS with_raw_stats,
+               MIN(s.period) AS min_period, MAX(s.period) AS max_period,
+               MIN(s.floor_score) AS min_floor, MAX(s.floor_score) AS max_floor,
+               COUNT(DISTINCT s.floor_team) AS ctrl_teams_seen
+        FROM snapshots s
+        JOIN games g ON g.id = s.game_id
+        WHERE g.winner IS NOT NULL OR g.margin IS NOT NULL
+        GROUP BY s.game_id, g.matchup, g.home_alias, g.away_alias, g.winner, g.margin, g.date
+        HAVING COUNT(*) FILTER (WHERE s.source = 'server') >= 10
+        ORDER BY g.date DESC
+      `;
+      return { statusCode: 200, headers, body: JSON.stringify({
+        games_with_10_plus_server_snaps: rows.length,
+        games: rows.map(r => ({
+          game_id: r.game_id, matchup: r.matchup, date: r.date,
+          winner: r.winner, margin: r.margin,
+          server_snaps: Number(r.server_snaps), with_raw_stats: Number(r.with_raw_stats),
+          total_snaps: Number(r.total_snaps),
+          periods: `${r.min_period}-${r.max_period}`,
+          floor_range: `${r.min_floor}-${r.max_floor}`,
+          ctrl_teams_seen: Number(r.ctrl_teams_seen),
+        }))
+      })};
+    }
+
+    // ═══════════════════════════════════════════════════════
     // GET_LATEST_SNAPSHOTS — latest snapshot per game (batch)
     // Used by confidence table to show floor/window/gap for unmounted games
     // ═══════════════════════════════════════════════════════
