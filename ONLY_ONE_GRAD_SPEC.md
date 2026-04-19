@@ -199,25 +199,24 @@ This produces three possible outputs:
 
 The agent now sees the arc (floor at graduation vs current floor) and knows whether PO was suppressed.
 
-### Site 4c — BUY rules in agent prompt (line ~256)
+### Site 4c — BUY graduation context in agent prompt (after line ~262)
 
-Replace the BUY rule with graduation confidence tiers:
+**Append** graduation confidence context after the existing BUY + BUY EVIDENCE rules. Do NOT replace or modify existing BUY rules.
 
 ```
-BEFORE:
-- BUY: structurally dominant team trailing. Standard evaluation — floor, indicators, TP, deficit depth (1-7 sweet spot; deeper deficits need stronger structural case). When bwcTeamMatch is noted, the team has BWC lifecycle context — reference the position arc. This is a "warm BUY" (thesis history). Without BWC context = "cold BUY" (unproven, higher bar for SEND).
+INSERT AFTER the existing "TIMING: Q4 trail 5-9 = 14.8% — hard suppress. Q4 trail 1-4 = 43% — still viable." line:
 
-AFTER:
-- BUY: structurally dominant team trailing. Standard evaluation — floor, indicators, TP, deficit depth (1-4 sweet spot; 5-9 needs very strong structural case; 10+ near-automatic SUPPRESS). When BWC team matches BUY team, graduation rank provides confidence tiers:
-  • A-Rank graduated BUY (trail 1-4): HIGHEST confidence warm BUY — team proved sustained dominance, trailing is likely variance. Default SEND unless erosion is COLLAPSE or structural stress is COLLAPSING/FLIPPED.
-  • B-Rank graduated BUY (trail 1-4): MODERATE confidence — structural edge confirmed but not overwhelming. Evaluate indicators, TP, and floor delta from graduation carefully.
-  • Tracked but not graduated (trail 1-4): System identified structural interest but edge never separated. Lower confidence. Require strong floor (0.70+) and favorable TP.
-  • Cold BUY (no BWC context): Unproven. Higher bar for SEND — require 3+ indicators, STRONG/DOMINANT conviction, shallow deficit.
-  CRITICAL: Graduation rank reflects PEAK structural state, not CURRENT state. If floor has dropped significantly from graduation floor (shown in Graduation line), the game may have shifted. CAUTION/COLLAPSE erosion with graduated rank does NOT increase confidence — the graduation was earned in a different game state. Weight the delta, not the badge.
-  DEFICIT DEPTH: trail 1-4 = viable entry window. trail 5-9 = structural thesis may be wrong, SUPPRESS unless A-Rank + REINFORCING stress read. trail 10+ = SUPPRESS (graduated team down 10+ = structural read was incorrect).
+  GRADUATION CONFIDENCE LAYER (additional context — does not override BUY evidence above):
+  When BWC team matches BUY team, graduation rank provides confidence context:
+  • A-Rank graduated + trail 1-4: Highest confidence warm BUY — sustained dominance proven, trailing is likely variance.
+  • B-Rank graduated + trail 1-4: Moderate confidence — structural edge confirmed but not overwhelming.
+  • Tracked but not graduated + trail 1-4: System identified structural interest but edge never separated. Lower confidence — require strong floor (0.70+) and favorable TP.
+  • Cold BUY (no BWC context): Unproven — rely on standard BUY evidence above.
+  CRITICAL: Graduation rank reflects PEAK structural state, not CURRENT state. Check the Graduation line for floor delta (floor at graduation vs now). If floor dropped significantly, the game may have shifted. CAUTION/COLLAPSE erosion with a graduated rank does NOT increase confidence — weight the delta, not the badge.
+  DEFICIT DEPTH + GRADUATION: trail 5-9 with graduation = structural thesis may be wrong, apply extra scrutiny. trail 10+ with graduation = near-automatic SUPPRESS (the structural read was incorrect regardless of rank).
 ```
 
-**Cascading implication:** The agent now has explicit graduated BUY confidence tiers AND a deficit depth framework that aligns with the backtest (trail 1-4 = 43-52% vs trail 5+ = 9-24%). The warning about graduation being backward-looking prevents the agent from treating A-Rank as an override for bad current data.
+**Cascading implication:** None. The existing BUY rules, BUY EVIDENCE section (power pairs, I3 inversion, opponent kills, timing), and STRUCTURAL STRESS CHECK all remain exactly as-is. The graduation layer is additive context the agent can weigh alongside existing evidence.
 
 ---
 
