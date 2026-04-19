@@ -236,7 +236,7 @@ POSITION HEALTH:
 Peak floor: ${ctx.peakFloor != null ? Number(ctx.peakFloor).toFixed(2) : 'N/A'} | Delta: ${ctx.peakDelta != null ? Number(ctx.peakDelta).toFixed(3) : 'N/A'} | Erosion: ${ctx.erosionLevel}
 Consecutive holds: ${ctx.consecutiveHolds}
 BWC lifecycle: ${ctx.bwcState}${ctx.bwcFirePeriod ? ' (BWC fired Q' + ctx.bwcFirePeriod + ', floor ' + (ctx.bwcFireFloor != null ? Number(ctx.bwcFireFloor).toFixed(2) : '?') + ')' : ''}
-${ctx.poRank ? 'Graduation: ' + ctx.poRank + '-Rank' + (ctx.graduationPeriod ? ' (graduated Q' + ctx.graduationPeriod + ')' : '') + ' | Control flips: ' + ctx.ctrlFlips : ctx.ctrlFlips != null ? 'Pre-graduation tracking | Control flips: ' + ctx.ctrlFlips : ''}
+${ctx.poRank ? 'Graduation: ' + ctx.poRank + '-Rank (graduated Q' + (ctx.graduationPeriod || '?') + ', floor was ' + (ctx.graduationFloor != null ? Number(ctx.graduationFloor).toFixed(2) : '?') + ', now ' + ctx.floor + ') | Control flips: ' + ctx.ctrlFlips : ctx.graduationRank ? 'Graduation: ' + ctx.graduationRank + '-Rank (graduated Q' + (ctx.graduationPeriod || '?') + ', floor was ' + (ctx.graduationFloor != null ? Number(ctx.graduationFloor).toFixed(2) : '?') + ', now ' + ctx.floor + ') — PO SUPPRESSED (opponent also graduated) | Control flips: ' + ctx.ctrlFlips : ctx.ctrlFlips != null ? 'Pre-graduation tracking | Control flips: ' + ctx.ctrlFlips : ''}
 
 ${stress}
 FLOOR TRAJECTORY:
@@ -260,6 +260,14 @@ RULES:
   I3 INVERSION: ctrl I3 won = 37.3%. ctrl I3 LOST (opp shooting well) = 49%. When the BUY team has shot quality but is STILL trailing, they are losing for reasons shooting cannot fix. When trailing BECAUSE of poor shooting, that is the variance the thesis exploits.
   OPPONENT KILLS: opp I1 (disruption) -> 28.8%. opp I2 (paint) -> 30.6%. opp I1 OR I2 -> 28.5%. These are STRUCTURAL threats. opp I3 only -> thesis intact (variance).
   TIMING: Q4 trail 5-9 = 14.8% — hard suppress. Q4 trail 1-4 = 43% — still viable.
+  GRADUATION CONFIDENCE LAYER (additional context — does not override BUY evidence above):
+  When BWC team matches BUY team, graduation rank provides confidence context:
+  • A-Rank graduated + trail 1-4: Highest confidence warm BUY — sustained dominance proven, trailing is likely variance.
+  • B-Rank graduated + trail 1-4: Moderate confidence — structural edge confirmed but not overwhelming.
+  • Tracked but not graduated + trail 1-4: System identified structural interest but edge never separated. Lower confidence — require strong floor (0.70+) and favorable TP.
+  • Cold BUY (no BWC context): Unproven — rely on standard BUY evidence above.
+  CRITICAL: Graduation rank reflects PEAK structural state, not CURRENT state. Check the Graduation line for floor delta (floor at graduation vs now). If floor dropped significantly, the game may have shifted. CAUTION/COLLAPSE erosion with a graduated rank does NOT increase confidence — weight the delta, not the badge.
+  DEFICIT DEPTH + GRADUATION: trail 5-9 with graduation = structural thesis may be wrong, apply extra scrutiny. trail 10+ with graduation = near-automatic SUPPRESS (the structural read was incorrect regardless of rank).
 - STRUCTURAL STRESS CHECK: When combined read is COLLAPSING, FLIPPED, or SHIFT, the cumulative floor may be anchored from earlier-quarter dominance that has since eroded. The rolling window shows who is winning RECENT quarters. If the window control team disagrees with the cumulative control team, treat all entry signals (BUY, VALUE, THESIS_ALIVE) with extreme skepticism — the structural thesis may have inverted even though cumulative indicators have not caught up. For BWC lifecycle alerts (HOLDING, POSITION_SAFE), flag the stress divergence honestly: "Your position opened at X floor, but recent play favors [opponent]." COLLAPSING + trailing = near-automatic SUPPRESS for entry signals. REINFORCING (DOMINANT/STRONG combined read) = cumulative floor is trustworthy, proceed normally. This check does NOT apply to EXIT alerts (always SEND regardless of window).
 - REASONING AS JOURNAL: Even when SUPPRESS, write thorough reasoning. It feeds subsequent decisions.
 
@@ -1368,7 +1376,7 @@ function classifyTransition(fromState, toState) {
 function classifyRank(convictionTier, ctrlMargin, consecutiveHolds, oppIndicatorCount) {
   if (convictionTier === 'DOMINANT' && ctrlMargin >= 8
       && consecutiveHolds >= 4 && oppIndicatorCount <= 1) return 'A';
-  if (oppIndicatorCount >= 2) return 'C';
+  if (oppIndicatorCount >= 3) return 'C';
   if ((convictionTier === 'DOMINANT' || convictionTier === 'STRONG')
       && ctrlMargin >= 3 && consecutiveHolds >= 2) return 'B';
   return 'C';
@@ -4890,6 +4898,7 @@ export default async function(req) {
                 poRank: lt.po_fired?.rank || null,
                 graduationPeriod: lt.graduation?.[lt.bwc_fired?.team]?.period || null,
                 graduationFloor: lt.graduation?.[lt.bwc_fired?.team]?.floor || null,
+                graduationRank: lt.graduation?.[lt.bwc_fired?.team]?.rank || null,
                 ctrlFlips: lt.ctrl_flips || 0,
               };
 
@@ -5011,6 +5020,16 @@ export default async function(req) {
                   if (pastQ3_6) poShouldFire = true;
                 }
 
+                // only_one_grad: suppress PO if opponent has also graduated
+                if (poShouldFire) {
+                  const oppTeamForPO = bwcTeam === hA ? aA : hA;
+                  const oppGradForPO = lt.graduation?.[oppTeamForPO];
+                  if (oppGradForPO && (oppGradForPO.rank === 'B' || oppGradForPO.rank === 'A')) {
+                    poShouldFire = false;
+                    log(`${matchup}: ✗ PO SUPPRESSED (both graduated) — ${bwcTeam} ${gRank} vs ${oppTeamForPO} ${oppGradForPO.rank}`);
+                  }
+                }
+
                 if (poShouldFire && alertMinsLeft >= 1.0) {
                   const isWireToWire = (lt.ctrl_flips || 0) === 0;
                   const poRank = (gRank === 'A' && isWireToWire) ? 'S' : gRank;
@@ -5024,23 +5043,27 @@ export default async function(req) {
                 }
               }
 
-              // ── Opponent graduation tracking (log only, Phase 1) ──
+              // ── Opponent graduation tracking (used by PO suppression) ──
               if (ind.controlTeam !== bwcTeam) {
                 const oppTeam = ind.controlTeam;
-                if (_v2Margin >= 2 && ind.score >= 0.50) {
+                if (_v2Margin >= 2 && ind.score >= 0.60 && currentPeriod >= 2) {
                   lt.opp_bwc_holds = (lt.opp_bwc_holds || 0) + 1;
-                  if (lt.opp_bwc_holds >= 3 && !lt.graduation[oppTeam]) {
+                  if (lt.opp_bwc_holds >= 3) {
                     const oppConv = computeConviction(ind);
-                    const oppOppCount = _ctrlInd.length;
+                    const oppOppCount = _oppIndW.length;
                     const oppRank = classifyRank(
                       oppConv.tier, _v2Margin, lt.opp_bwc_holds, oppOppCount
                     );
                     if (oppRank === 'B' || oppRank === 'A') {
-                      lt.graduation[oppTeam] = {
-                        rank: oppRank, period: currentPeriod, clock,
-                        floor: ind.score, margin: _v2Margin
-                      };
-                      log(`${matchup}: ⚠ OPP GRADUATION ${oppTeam} → ${oppRank}-Rank Q${currentPeriod} ${clock}`);
+                      const prevOppRank = lt.graduation?.[oppTeam]?.rank || null;
+                      const OPP_RANK_ORDER = { C: 0, B: 1, A: 2 };
+                      if (!prevOppRank || (OPP_RANK_ORDER[oppRank] || 0) > (OPP_RANK_ORDER[prevOppRank] || 0)) {
+                        lt.graduation[oppTeam] = {
+                          rank: oppRank, period: currentPeriod, clock,
+                          floor: ind.score, margin: _v2Margin
+                        };
+                        log(`${matchup}: ⚠ OPP GRADUATION ${oppTeam} ${prevOppRank || 'C'}→${oppRank}-Rank Q${currentPeriod} ${clock}`);
+                      }
                     }
                   }
                 } else {
