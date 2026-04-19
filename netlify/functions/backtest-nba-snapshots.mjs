@@ -4284,6 +4284,578 @@ async function reportTierJourney(sql, url) {
   };
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// PRODUCTION REPLAY — 60-second resolution graduation analysis from live snapshots
+// ?phase=report_production_replay             — full dataset
+// ?phase=report_production_replay&close=1     — final margin ≤ 8 only
+// ?phase=report_production_replay&game=GAMEID — single game deep-dive
+// ══════════════════════════════════════════════════════════════════════════════
+async function reportProductionReplay(sql, url) {
+  var closeOnly = url?.searchParams?.get('close') === '1';
+  var singleGame = url?.searchParams?.get('game') || null;
+  var marginFilter = closeOnly ? 8 : 999;
+  var t0 = Date.now();
+
+  // ── 1. Pull server snapshots from live snapshots table ──
+  var snapQuery;
+  if (singleGame) {
+    snapQuery = await sql`
+      SELECT s.game_id, s.ts, s.period, s.clock, s.home_pts, s.away_pts,
+             s.floor_score, s.floor_team, s.i1, s.i2, s.i3, s.i4, s.i5,
+             g.winner, g.margin, g.home_alias, g.away_alias, g.matchup, g.date
+      FROM snapshots s
+      JOIN games g ON g.id = s.game_id
+      WHERE s.source = 'server'
+        AND s.game_id = ${singleGame}
+        AND s.floor_score IS NOT NULL
+        AND s.floor_team IS NOT NULL
+      ORDER BY s.ts
+    `;
+  } else {
+    snapQuery = await sql`
+      SELECT s.game_id, s.ts, s.period, s.clock, s.home_pts, s.away_pts,
+             s.floor_score, s.floor_team, s.i1, s.i2, s.i3, s.i4, s.i5,
+             g.winner, g.margin, g.home_alias, g.away_alias, g.matchup, g.date
+      FROM snapshots s
+      JOIN games g ON g.id = s.game_id
+      WHERE s.source = 'server'
+        AND g.winner IS NOT NULL
+        AND s.floor_score IS NOT NULL
+        AND s.floor_team IS NOT NULL
+        AND ABS(g.margin) <= ${marginFilter}
+      ORDER BY s.game_id, s.ts
+    `;
+  }
+
+  // ── 2. Group by game, filter 10+ server snaps ──
+  var gameMap = {};
+  for (var r of snapQuery) {
+    if (!gameMap[r.game_id]) gameMap[r.game_id] = [];
+    gameMap[r.game_id].push(r);
+  }
+
+  var gameIds = Object.keys(gameMap).filter(gid => gameMap[gid].length >= 10);
+
+  // ── Helper: parse clock string to seconds remaining in period ──
+  function clockToSec(clockStr) {
+    if (!clockStr) return 0;
+    var clean = String(clockStr).replace(/^Q\d+\s*/i, '').trim();
+    var parts = clean.split(':');
+    if (parts.length === 2) return parseInt(parts[0]) * 60 + parseInt(parts[1]);
+    if (parts.length === 1) return parseInt(parts[0]) || 0;
+    return 0;
+  }
+
+  // ── Helper: game-seconds elapsed (0 = game start, 2880 = end of regulation) ──
+  function gameSecondsElapsed(period, clockStr) {
+    var p = Math.max(1, Math.min(4, Number(period) || 1));
+    var remaining = clockToSec(clockStr);
+    return (p - 1) * 720 + (720 - remaining);
+  }
+
+  // ── Helper: seconds → "Q3 8:42" style label ──
+  function secToLabel(gameSec) {
+    var q = Math.floor(gameSec / 720) + 1;
+    var inQ = gameSec % 720;
+    var remaining = 720 - inQ;
+    var m = Math.floor(remaining / 60);
+    var s = remaining % 60;
+    return 'Q' + q + ' ' + m + ':' + String(s).padStart(2, '0');
+  }
+
+  // ── Helper: conviction + opp count from snapshot indicators ──
+  function computeFromSnap(snap) {
+    var ctrlHome = snap.floor_team === snap.home_alias;
+    var scores = [
+      { key: 'I1', raw: parseFloat(snap.i1) },
+      { key: 'I2', raw: parseFloat(snap.i2) },
+      { key: 'I3', raw: parseFloat(snap.i3) },
+      { key: 'I4', raw: parseFloat(snap.i4) },
+      { key: 'I5', raw: parseFloat(snap.i5) },
+    ];
+    var wins = [], oppCount = 0;
+    for (var s of scores) {
+      if (isNaN(s.raw)) continue;
+      var ctrlScore = ctrlHome ? s.raw : 1 - s.raw;
+      if (ctrlScore > 0.5) wins.push(s.key);
+      else if (ctrlScore < 0.5) oppCount++;
+    }
+    var count = wins.length;
+    var has = function(a, b) { return wins.includes(a) && wins.includes(b); };
+    var hasI4I5 = has('I4', 'I5');
+    var hasI3I4 = has('I3', 'I4');
+    var hasI3I5 = has('I3', 'I5');
+    var hasKillerPair = hasI4I5 || hasI3I4 || hasI3I5;
+    var isDanger = (
+      (count === 2 && wins.includes('I1') && wins.includes('I5') && !wins.includes('I3') && !wins.includes('I4')) ||
+      (count === 3 && wins.includes('I1') && wins.includes('I2') && wins.includes('I5') && !wins.includes('I3') && !wins.includes('I4')) ||
+      (count === 3 && wins.includes('I2') && wins.includes('I3') && wins.includes('I5') && !wins.includes('I4'))
+    );
+    var tier;
+    if (count >= 4 || hasI4I5) tier = 'DOMINANT';
+    else if (hasKillerPair && !isDanger) tier = 'STRONG';
+    else if (count >= 2 && !isDanger) tier = 'MODEST';
+    else if (count >= 1) tier = 'CONDITIONAL';
+    else tier = 'NO ENTRY';
+    return { convTier: tier, oppCount, indWon: count, wins };
+  }
+
+  // ── Helper: BWC tier classification (same as tier journey) ──
+  function classifyTier(conv, lead, holds, oppCount) {
+    if (conv === 'DOMINANT' && lead >= 8 && holds >= 4 && oppCount <= 1) return 'A';
+    if (oppCount >= 2) return 'C';
+    if ((conv === 'DOMINANT' || conv === 'STRONG') && lead >= 3 && holds >= 2) return 'B';
+    return 'C';
+  }
+
+  // ── Helper: ctrl-relative margin (positive = ctrl leading) ──
+  function getCtrlMargin(snap) {
+    var homeMargin = Number(snap.home_pts) - Number(snap.away_pts);
+    return snap.floor_team === snap.home_alias ? homeMargin : -homeMargin;
+  }
+
+  // ── Helper: percentile from sorted array ──
+  function percentile(arr, p) {
+    if (!arr.length) return null;
+    var sorted = arr.slice().sort(function(a, b) { return a - b; });
+    var idx = (p / 100) * (sorted.length - 1);
+    var lo = Math.floor(idx), hi = Math.ceil(idx);
+    if (lo === hi) return sorted[lo];
+    return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+  }
+
+  function pctHelper(bucket) {
+    return { n: bucket.n, wins: bucket.wins, pct: bucket.n > 0 ? Math.round(bucket.wins / bucket.n * 1000) / 10 : null };
+  }
+
+  // ── 3. Replay graduation at 60-second resolution ──
+  var allGradTimingB = [];    // game-seconds when first reached B
+  var allGradTimingA = [];    // game-seconds when first reached A
+  var allFirstBWC = [];       // game-seconds when first BWC-eligible
+  var allOscillations = [];   // oscillation count per game
+  var allPeakHoldSec = [];    // longest continuous hold at peak tier, in seconds
+  var allPeakHoldMinBucket = { '0-2': {n:0,wins:0}, '2-5': {n:0,wins:0}, '5-10': {n:0,wins:0}, '10-20': {n:0,wins:0}, '20+': {n:0,wins:0} };
+  var oscByType = { B_to_C: 0, A_to_B: 0, A_to_C: 0 };
+  var oscWinRate = { zero: {n:0,wins:0}, one: {n:0,wins:0}, two_plus: {n:0,wins:0} };
+
+  // Graduation timing: checkpoint-equivalent buckets (game seconds → nearest 6-min checkpoint)
+  var gradBByQuarter = { Q1: {n:0,wins:0}, Q2: {n:0,wins:0}, Q3: {n:0,wins:0}, Q4: {n:0,wins:0} };
+  var gradAByQuarter = { Q1: {n:0,wins:0}, Q2: {n:0,wins:0}, Q3: {n:0,wins:0}, Q4: {n:0,wins:0} };
+
+  // Hold time vs checkpoint comparison: for games that graduated, map hold-minutes to checkpoint-equivalent
+  var holdMinVsCheckpointBuckets = {
+    '1cp_equiv': {n:0,wins:0}, '2cp_equiv': {n:0,wins:0}, '3cp_equiv': {n:0,wins:0}, '4cp_plus_equiv': {n:0,wins:0}
+  };
+
+  // Wire-to-wire at 60s: did ctrl team at first BWC stay ctrl to end?
+  var wireToWire = {n:0,wins:0};
+  var notWireToWire = {n:0,wins:0};
+
+  // Floor at graduation buckets
+  var floorAtGrad = {
+    '0.50-0.59': {n:0,wins:0}, '0.60-0.69': {n:0,wins:0}, '0.70-0.79': {n:0,wins:0},
+    '0.80-0.89': {n:0,wins:0}, '0.90+': {n:0,wins:0}
+  };
+
+  // Margin at graduation buckets
+  var marginAtGrad = {
+    'lead_1-2': {n:0,wins:0}, 'lead_3-7': {n:0,wins:0}, 'lead_8-14': {n:0,wins:0}, 'lead_15+': {n:0,wins:0}
+  };
+
+  // Section: time-to-graduate from first BWC fire (in seconds)
+  var timeFromFireToB = [];
+  var timeFromFireToA = [];
+
+  // Section: early graduation signal — did floor surge predict graduation?
+  var earlyFloorSurge = { surged: {n:0,wins:0}, flat: {n:0,wins:0}, dropped: {n:0,wins:0} };
+
+  // Single-game deep dive accumulator
+  var singleGameTimeline = null;
+
+  var totalGames = 0;
+  var totalSnaps = 0;
+
+  for (var gid of gameIds) {
+    var snaps = gameMap[gid];
+    if (snaps.length < 10) continue;
+    totalGames++;
+    totalSnaps += snaps.length;
+
+    var won = snaps[0].winner === snaps[0].floor_team;
+    // Determine if ctrl_team_won: the ctrl team at the LAST snapshot — did they win?
+    var lastSnap = snaps[snaps.length - 1];
+    var lastCtrl = lastSnap.floor_team;
+    won = lastSnap.winner === lastCtrl;
+    // Actually: winner is stored on games. Use first snapshot's winner field.
+    // winner = the team that won. We track the first BWC team and whether THEY won.
+    var gameWinner = snaps[0].winner;
+
+    // ── Per-game replay ──
+    var prevCtrl = null;
+    var holdCount = 0;  // consecutive snapshots with same ctrl team
+    var firstBWCSec = null;
+    var firstBWCTeam = null;
+    var firstBTierSec = null;
+    var firstATierSec = null;
+    var currentTier = null;
+    var peakTier = null;
+    var peakTierRank = 0;
+    var oscillations = 0;
+    var prevBWCTier = null;
+    var tierRankMap = { A: 3, B: 2, C: 1 };
+
+    // Continuous hold tracking
+    var currentHoldStart = null;  // game-sec when current peak-tier run started
+    var longestPeakHoldSec = 0;
+    var currentPeakRunStart = null;
+    var inPeakRun = false;
+
+    // Floor tracking for surge detection
+    var floorAt360 = null;  // floor at ~6 min elapsed (Q1 6:00)
+    var floorAt720 = null;  // floor at ~12 min elapsed (Q1 end)
+
+    // Graduation moment data
+    var gradFloor = null;
+    var gradMargin = null;
+    var gradGameSec = null;
+
+    // Timeline for single-game mode
+    var timeline = [];
+
+    for (var si = 0; si < snaps.length; si++) {
+      var snap = snaps[si];
+      var gameSec = gameSecondsElapsed(snap.period, snap.clock);
+      var ctrlMargin = getCtrlMargin(snap);
+      var floor = parseFloat(snap.floor_score);
+
+      // Floor tracking at known game-seconds
+      if (floorAt360 === null && gameSec >= 360) floorAt360 = floor;
+      if (floorAt720 === null && gameSec >= 720) floorAt720 = floor;
+
+      // Consecutive ctrl holds
+      if (prevCtrl === snap.floor_team) {
+        holdCount++;
+      } else {
+        holdCount = 1;
+      }
+      prevCtrl = snap.floor_team;
+
+      // Compute conviction + opp count
+      var comp = computeFromSnap(snap);
+
+      // BWC eligibility: ctrl team leading 2+, floor >= 0.50
+      var bwcEligible = ctrlMargin >= 2 && floor >= 0.50;
+      var tier = null;
+
+      if (bwcEligible) {
+        tier = classifyTier(comp.convTier, ctrlMargin, holdCount, comp.oppCount);
+
+        // First BWC fire
+        if (firstBWCSec === null) {
+          firstBWCSec = gameSec;
+          firstBWCTeam = snap.floor_team;
+        }
+
+        // First B
+        if (firstBTierSec === null && (tier === 'B' || tier === 'A')) {
+          firstBTierSec = gameSec;
+        }
+
+        // First A
+        if (firstATierSec === null && tier === 'A') {
+          firstATierSec = gameSec;
+        }
+
+        // Oscillation detection: tier went DOWN from previous BWC-eligible snapshot
+        if (prevBWCTier !== null && tier !== prevBWCTier) {
+          var prevRank = tierRankMap[prevBWCTier] || 0;
+          var curRank = tierRankMap[tier] || 0;
+          if (curRank < prevRank) {
+            oscillations++;
+            if (prevBWCTier === 'B' && tier === 'C') oscByType.B_to_C++;
+            else if (prevBWCTier === 'A' && tier === 'B') oscByType.A_to_B++;
+            else if (prevBWCTier === 'A' && tier === 'C') oscByType.A_to_C++;
+          }
+        }
+        prevBWCTier = tier;
+
+        // Track peak tier
+        var curRank2 = tierRankMap[tier] || 0;
+        if (curRank2 > peakTierRank) {
+          peakTier = tier;
+          peakTierRank = curRank2;
+          gradFloor = floor;
+          gradMargin = ctrlMargin;
+          gradGameSec = gameSec;
+        }
+
+        // Continuous hold at peak tier
+        if (tier === peakTier && peakTierRank > 0) {
+          if (!inPeakRun) {
+            currentPeakRunStart = gameSec;
+            inPeakRun = true;
+          }
+        } else {
+          if (inPeakRun && currentPeakRunStart !== null) {
+            var runLen = gameSec - currentPeakRunStart;
+            if (runLen > longestPeakHoldSec) longestPeakHoldSec = runLen;
+          }
+          inPeakRun = false;
+          currentPeakRunStart = null;
+        }
+      } else {
+        // Not BWC-eligible — if we were in a peak run, close it
+        if (inPeakRun && currentPeakRunStart !== null) {
+          var runLen2 = gameSec - currentPeakRunStart;
+          if (runLen2 > longestPeakHoldSec) longestPeakHoldSec = runLen2;
+        }
+        inPeakRun = false;
+        currentPeakRunStart = null;
+        // Reset prevBWCTier when not eligible
+        prevBWCTier = null;
+      }
+
+      if (singleGame) {
+        timeline.push({
+          ts: snap.ts, gameSec, period: snap.period, clock: snap.clock,
+          floor, ctrlMargin, ctrl: snap.floor_team,
+          conv: comp.convTier, indWon: comp.indWon, oppInd: comp.oppCount,
+          tier, bwcEligible, holdCount, oscillations
+        });
+      }
+    }
+
+    // Close any open peak run at game end
+    if (inPeakRun && currentPeakRunStart !== null) {
+      var finalSec = gameSecondsElapsed(lastSnap.period, lastSnap.clock);
+      var finalRun = finalSec - currentPeakRunStart;
+      if (finalRun > longestPeakHoldSec) longestPeakHoldSec = finalRun;
+    }
+
+    // ── Aggregate per-game results ──
+    if (firstBWCSec === null) continue; // no BWC-eligible snapshots — skip
+
+    // Determine if firstBWCTeam won
+    var firstTeamWon = firstBWCTeam === gameWinner;
+
+    // Graduation timing
+    if (firstBWCSec !== null) allFirstBWC.push(firstBWCSec);
+    if (firstBTierSec !== null) {
+      allGradTimingB.push(firstBTierSec);
+      var q = Math.floor(firstBTierSec / 720);
+      var qLabel = ['Q1','Q2','Q3','Q4'][Math.min(q, 3)];
+      gradBByQuarter[qLabel].n++;
+      if (firstTeamWon) gradBByQuarter[qLabel].wins++;
+
+      // Time from first BWC to B graduation
+      timeFromFireToB.push(firstBTierSec - firstBWCSec);
+    }
+    if (firstATierSec !== null) {
+      allGradTimingA.push(firstATierSec);
+      var q2 = Math.floor(firstATierSec / 720);
+      var qLabel2 = ['Q1','Q2','Q3','Q4'][Math.min(q2, 3)];
+      gradAByQuarter[qLabel2].n++;
+      if (firstTeamWon) gradAByQuarter[qLabel2].wins++;
+
+      timeFromFireToA.push(firstATierSec - firstBWCSec);
+    }
+
+    // Oscillations
+    allOscillations.push(oscillations);
+    if (oscillations === 0) { oscWinRate.zero.n++; if (firstTeamWon) oscWinRate.zero.wins++; }
+    else if (oscillations === 1) { oscWinRate.one.n++; if (firstTeamWon) oscWinRate.one.wins++; }
+    else { oscWinRate.two_plus.n++; if (firstTeamWon) oscWinRate.two_plus.wins++; }
+
+    // Peak hold time
+    allPeakHoldSec.push(longestPeakHoldSec);
+    var holdMin = longestPeakHoldSec / 60;
+    var holdBucket;
+    if (holdMin < 2) holdBucket = '0-2';
+    else if (holdMin < 5) holdBucket = '2-5';
+    else if (holdMin < 10) holdBucket = '5-10';
+    else if (holdMin < 20) holdBucket = '10-20';
+    else holdBucket = '20+';
+    allPeakHoldMinBucket[holdBucket].n++;
+    if (firstTeamWon) allPeakHoldMinBucket[holdBucket].wins++;
+
+    // Hold time → checkpoint equivalent (6min per cp)
+    var cpEquiv = Math.floor(longestPeakHoldSec / 360);
+    if (cpEquiv === 0) { holdMinVsCheckpointBuckets['1cp_equiv'].n++; if (firstTeamWon) holdMinVsCheckpointBuckets['1cp_equiv'].wins++; }
+    else if (cpEquiv === 1) { holdMinVsCheckpointBuckets['2cp_equiv'].n++; if (firstTeamWon) holdMinVsCheckpointBuckets['2cp_equiv'].wins++; }
+    else if (cpEquiv === 2) { holdMinVsCheckpointBuckets['3cp_equiv'].n++; if (firstTeamWon) holdMinVsCheckpointBuckets['3cp_equiv'].wins++; }
+    else { holdMinVsCheckpointBuckets['4cp_plus_equiv'].n++; if (firstTeamWon) holdMinVsCheckpointBuckets['4cp_plus_equiv'].wins++; }
+
+    // Wire-to-wire: did first BWC team stay ctrl at last snapshot?
+    if (firstBWCTeam === lastCtrl) {
+      wireToWire.n++; if (firstTeamWon) wireToWire.wins++;
+    } else {
+      notWireToWire.n++; if (firstTeamWon) notWireToWire.wins++;
+    }
+
+    // Floor at graduation
+    if (gradFloor !== null && peakTier) {
+      var fb;
+      if (gradFloor < 0.60) fb = '0.50-0.59';
+      else if (gradFloor < 0.70) fb = '0.60-0.69';
+      else if (gradFloor < 0.80) fb = '0.70-0.79';
+      else if (gradFloor < 0.90) fb = '0.80-0.89';
+      else fb = '0.90+';
+      floorAtGrad[fb].n++;
+      if (firstTeamWon) floorAtGrad[fb].wins++;
+    }
+
+    // Margin at graduation
+    if (gradMargin !== null) {
+      var mb;
+      if (gradMargin <= 2) mb = 'lead_1-2';
+      else if (gradMargin <= 7) mb = 'lead_3-7';
+      else if (gradMargin <= 14) mb = 'lead_8-14';
+      else mb = 'lead_15+';
+      marginAtGrad[mb].n++;
+      if (firstTeamWon) marginAtGrad[mb].wins++;
+    }
+
+    // Early floor surge: compare floor at ~6min vs ~12min
+    if (floorAt360 !== null && floorAt720 !== null) {
+      var delta = floorAt720 - floorAt360;
+      if (delta > 0.08) { earlyFloorSurge.surged.n++; if (firstTeamWon) earlyFloorSurge.surged.wins++; }
+      else if (delta < -0.05) { earlyFloorSurge.dropped.n++; if (firstTeamWon) earlyFloorSurge.dropped.wins++; }
+      else { earlyFloorSurge.flat.n++; if (firstTeamWon) earlyFloorSurge.flat.wins++; }
+    }
+
+    if (singleGame) singleGameTimeline = timeline;
+  }
+
+  // ── 4. Build output ──
+  var result = {
+    _meta: {
+      description: 'Production replay: 60-second resolution graduation analysis from live server snapshots',
+      total_games: totalGames,
+      total_snaps: totalSnaps,
+      avg_snaps_per_game: totalGames > 0 ? Math.round(totalSnaps / totalGames) : 0,
+      close_games_only: closeOnly,
+      elapsed_ms: Date.now() - t0,
+    },
+
+    section_1_graduation_timing: {
+      description: 'Game-seconds when graduation first occurs. 720=Q1 end, 1440=Q2 end, 2160=Q3 end, 2880=Q4 end.',
+      first_bwc_eligible: {
+        n: allFirstBWC.length,
+        median_sec: percentile(allFirstBWC, 50),
+        p25_sec: percentile(allFirstBWC, 25),
+        p75_sec: percentile(allFirstBWC, 75),
+        median_label: secToLabel(percentile(allFirstBWC, 50) || 0),
+      },
+      first_tier_b: {
+        n: allGradTimingB.length,
+        median_sec: percentile(allGradTimingB, 50),
+        p25_sec: percentile(allGradTimingB, 25),
+        p75_sec: percentile(allGradTimingB, 75),
+        median_label: secToLabel(percentile(allGradTimingB, 50) || 0),
+        pct_of_bwc_eligible: allFirstBWC.length > 0 ? Math.round(allGradTimingB.length / allFirstBWC.length * 1000) / 10 : null,
+      },
+      first_tier_a: {
+        n: allGradTimingA.length,
+        median_sec: percentile(allGradTimingA, 50),
+        p25_sec: percentile(allGradTimingA, 25),
+        p75_sec: percentile(allGradTimingA, 75),
+        median_label: secToLabel(percentile(allGradTimingA, 50) || 0),
+        pct_of_bwc_eligible: allFirstBWC.length > 0 ? Math.round(allGradTimingA.length / allFirstBWC.length * 1000) / 10 : null,
+      },
+      by_quarter_b: { Q1: pctHelper(gradBByQuarter.Q1), Q2: pctHelper(gradBByQuarter.Q2), Q3: pctHelper(gradBByQuarter.Q3), Q4: pctHelper(gradBByQuarter.Q4) },
+      by_quarter_a: { Q1: pctHelper(gradAByQuarter.Q1), Q2: pctHelper(gradAByQuarter.Q2), Q3: pctHelper(gradAByQuarter.Q3), Q4: pctHelper(gradAByQuarter.Q4) },
+    },
+
+    section_2_time_from_fire_to_graduation: {
+      description: 'Seconds from first BWC eligibility to graduation. 0 = graduated on first eligible snapshot.',
+      fire_to_b: {
+        n: timeFromFireToB.length,
+        median_sec: percentile(timeFromFireToB, 50),
+        p25_sec: percentile(timeFromFireToB, 25),
+        p75_sec: percentile(timeFromFireToB, 75),
+        instant_graduation_n: timeFromFireToB.filter(function(t) { return t <= 60; }).length,
+        instant_graduation_pct: timeFromFireToB.length > 0 ? Math.round(timeFromFireToB.filter(function(t) { return t <= 60; }).length / timeFromFireToB.length * 1000) / 10 : null,
+      },
+      fire_to_a: {
+        n: timeFromFireToA.length,
+        median_sec: percentile(timeFromFireToA, 50),
+        p25_sec: percentile(timeFromFireToA, 25),
+        p75_sec: percentile(timeFromFireToA, 75),
+        instant_graduation_n: timeFromFireToA.filter(function(t) { return t <= 60; }).length,
+        instant_graduation_pct: timeFromFireToA.length > 0 ? Math.round(timeFromFireToA.filter(function(t) { return t <= 60; }).length / timeFromFireToA.length * 1000) / 10 : null,
+      },
+    },
+
+    section_3_oscillation: {
+      description: 'Micro-graduation oscillation: how often does tier bounce DOWN after upgrading? At 60s resolution.',
+      total_oscillations: allOscillations.reduce(function(a, b) { return a + b; }, 0),
+      avg_per_game: totalGames > 0 ? Math.round(allOscillations.reduce(function(a, b) { return a + b; }, 0) / totalGames * 100) / 100 : 0,
+      by_type: oscByType,
+      by_oscillation_count: {
+        zero: pctHelper(oscWinRate.zero),
+        one: pctHelper(oscWinRate.one),
+        two_plus: pctHelper(oscWinRate.two_plus),
+      },
+    },
+
+    section_4_continuous_hold_time: {
+      description: 'Longest continuous hold at peak tier (in real minutes, not checkpoint count). Win rate by hold duration.',
+      median_hold_sec: percentile(allPeakHoldSec, 50),
+      p25_hold_sec: percentile(allPeakHoldSec, 25),
+      p75_hold_sec: percentile(allPeakHoldSec, 75),
+      median_hold_min: percentile(allPeakHoldSec, 50) != null ? Math.round(percentile(allPeakHoldSec, 50) / 60 * 10) / 10 : null,
+      by_duration: {
+        '0-2 min': pctHelper(allPeakHoldMinBucket['0-2']),
+        '2-5 min': pctHelper(allPeakHoldMinBucket['2-5']),
+        '5-10 min': pctHelper(allPeakHoldMinBucket['5-10']),
+        '10-20 min': pctHelper(allPeakHoldMinBucket['10-20']),
+        '20+ min': pctHelper(allPeakHoldMinBucket['20+']),
+      },
+    },
+
+    section_5_hold_time_vs_checkpoints: {
+      description: 'Peak hold time mapped to checkpoint equivalents (1 cp ≈ 6 min). Compare with tier journey checkpoint-count data.',
+      by_cp_equivalent: {
+        '<1 cp (0-6 min)': pctHelper(holdMinVsCheckpointBuckets['1cp_equiv']),
+        '1-2 cp (6-12 min)': pctHelper(holdMinVsCheckpointBuckets['2cp_equiv']),
+        '2-3 cp (12-18 min)': pctHelper(holdMinVsCheckpointBuckets['3cp_equiv']),
+        '3+ cp (18+ min)': pctHelper(holdMinVsCheckpointBuckets['4cp_plus_equiv']),
+      },
+    },
+
+    section_6_wire_to_wire: {
+      description: 'First BWC team stays ctrl at last snapshot = wire-to-wire.',
+      wire_to_wire: pctHelper(wireToWire),
+      flipped: pctHelper(notWireToWire),
+    },
+
+    section_7_conditions_at_graduation: {
+      floor_at_graduation: Object.fromEntries(Object.entries(floorAtGrad).map(function(e) { return [e[0], pctHelper(e[1])]; })),
+      margin_at_graduation: Object.fromEntries(Object.entries(marginAtGrad).map(function(e) { return [e[0], pctHelper(e[1])]; })),
+    },
+
+    section_8_early_floor_surge: {
+      description: 'Floor delta from Q1-6min to Q1-end as predictor. Surge > +0.08, drop < -0.05.',
+      surged: pctHelper(earlyFloorSurge.surged),
+      flat: pctHelper(earlyFloorSurge.flat),
+      dropped: pctHelper(earlyFloorSurge.dropped),
+    },
+  };
+
+  if (singleGame && singleGameTimeline) {
+    result.single_game_timeline = {
+      game_id: singleGame,
+      matchup: snapQuery[0]?.matchup || null,
+      winner: snapQuery[0]?.winner || null,
+      final_margin: snapQuery[0]?.margin || null,
+      snapshots: singleGameTimeline.length,
+      timeline: singleGameTimeline,
+    };
+  }
+
+  return result;
+}
+
 // ── HANDLER ─────────────────────────────────────────────────────────────────
 export default async (req) => {
   const sql = neon(process.env.DATABASE_URL);
@@ -4317,6 +4889,7 @@ export default async (req) => {
       case 'report_value_play': result = await reportValuePlay(sql); break;
       case 'report_buy_profile': result = await reportBuyProfile(sql); break;
       case 'report_tier_journey': result = await reportTierJourney(sql, url); break;
+      case 'report_production_replay': result = await reportProductionReplay(sql, url); break;
       case 'report_buy_deep': {
         const [convDef, autopsy, marginFloor, alertsByCp, oppProfile] = await Promise.all([
           reportConvictionDeficit(sql),
