@@ -6092,18 +6092,26 @@ async function reportDualTrackingSim(sql, url) {
     var gradHolds = {}; gradHolds[homeA] = 0; gradHolds[awayA] = 0;
     var prevCtrl = null;
     var firstBWCTeam = null;
-    var winner = null; // which team alias won the game
+    var winner = null;
     var ctrlWonFinal = null;
+
+    // Track last-known state per team (for opponent context at first graduation)
+    var lastState = {};
+    lastState[homeA] = { floor: null, tier: null, margin: null, oppCount: null, cp: null, indWon: null };
+    lastState[awayA] = { floor: null, tier: null, margin: null, oppCount: null, cp: null, indWon: null };
+    // Track cumulative hold peaks (did they ever have a strong run?)
+    var peakHolds = {}; peakHolds[homeA] = 0; peakHolds[awayA] = 0;
+
+    var firstGradTeam = null;
+    var firstGradContext = null; // snapshot of opponent state at first graduation
 
     for (var ci = 0; ci < checkpoints.length; ci++) {
       var cpLabel = checkpoints[ci];
       var snap = cpMap[cpLabel];
       if (!snap) continue;
       var rc = recompute(snap, useNewI4);
-      ctrlWonFinal = rc.ctrlWon; // last checkpoint's ctrl perspective
-      // Determine winner alias from final checkpoint
+      ctrlWonFinal = rc.ctrlWon;
       if (ci === checkpoints.length - 1 || !cpMap[checkpoints[ci + 1]]) {
-        // This is the last available checkpoint for this game
         winner = rc.ctrlWon ? rc.ctrl : (rc.ctrl === homeA ? awayA : homeA);
       }
       var curTeam = rc.ctrl;
@@ -6115,9 +6123,17 @@ async function reportDualTrackingSim(sql, url) {
         holds[curTeam] = 1;
         holds[othTeam] = 0;
       }
+      if (holds[curTeam] > peakHolds[curTeam]) peakHolds[curTeam] = holds[curTeam];
       prevCtrl = curTeam;
+
+      // Save last-known state for the controlling team
+      lastState[curTeam] = {
+        floor: rc.floor, tier: rc.tier, margin: rc.ctrlMargin,
+        oppCount: rc.oppCount, cp: cpLabel, indWon: rc.won.slice(),
+      };
+
       // BWC eligibility: period >= 2 (Q2_6+), floor >= 0.60, margin >= 2, 3+ holds
-      var periodOK = cpIdx[cpLabel] >= 2; // Q2_6 = index 2
+      var periodOK = cpIdx[cpLabel] >= 2;
       var bwcEligible = periodOK && rc.floor >= 0.60 && rc.ctrlMargin >= 2 && holds[curTeam] >= 3;
       if (bwcEligible) {
         if (!bwcFired[curTeam]) {
@@ -6127,45 +6143,86 @@ async function reportDualTrackingSim(sql, url) {
         }
         // Classify rank
         var rank = classifyRankSim(rc.tier, rc.ctrlMargin, holds[curTeam], rc.oppCount, oppThresh);
-        var prevRank = curRank[curTeam];
+        var prevRankVal = curRank[curTeam];
         curRank[curTeam] = rank;
-        // Detect graduation (rank upgrade from C)
+        // Detect graduation (rank upgrade)
+        var justGraduated = false;
         if (!gradCp[curTeam]) {
-          if ((prevRank === 'C' || prevRank === null) && (rank === 'B' || rank === 'A')) {
+          if ((prevRankVal === 'C' || prevRankVal === null) && (rank === 'B' || rank === 'A')) {
             gradCp[curTeam] = cpLabel;
             gradRank[curTeam] = rank;
             gradFloor[curTeam] = rc.floor;
             gradTier[curTeam] = rc.tier;
             gradHolds[curTeam] = holds[curTeam];
-          } else if (prevRank === 'B' && rank === 'A') {
+            justGraduated = true;
+          } else if (prevRankVal === 'B' && rank === 'A') {
             gradCp[curTeam] = cpLabel;
             gradRank[curTeam] = rank;
             gradFloor[curTeam] = rc.floor;
             gradTier[curTeam] = rc.tier;
             gradHolds[curTeam] = holds[curTeam];
+            justGraduated = true;
           }
         }
-        // Check for rank upgrade even after initial graduation
+        // Rank upgrade after initial graduation
         if (gradCp[curTeam] && gradRank[curTeam] === 'B' && rank === 'A') {
           gradRank[curTeam] = 'A';
-          gradCp[curTeam] = cpLabel; // update to A graduation checkpoint
+          gradCp[curTeam] = cpLabel;
+        }
+
+        // ── Capture opponent context at moment of FIRST graduation in this game ──
+        if (justGraduated && !firstGradTeam) {
+          firstGradTeam = curTeam;
+          var opp = othTeam;
+          var oppLast = lastState[opp];
+          firstGradContext = {
+            gradTeam: curTeam, gradRank: rank, gradCp: cpLabel,
+            gradFloor: rc.floor, gradMargin: rc.ctrlMargin, gradTier: rc.tier,
+            gradHolds: holds[curTeam],
+            // Opponent structural state
+            oppTeam: opp,
+            oppCurrentHolds: holds[opp],         // 0 since ctrl team has control
+            oppPeakHolds: peakHolds[opp],         // best consecutive run so far
+            oppHadBWC: bwcFired[opp],             // did opp already achieve BWC?
+            oppBestRank: curRank[opp] || gradRank[opp] || 'none',
+            oppIndicators: rc.oppCount,           // how many ind the opp currently owns
+            // Opponent's last-known state (from when THEY had control)
+            oppLastFloor: oppLast.floor,
+            oppLastTier: oppLast.tier,
+            oppLastMargin: oppLast.margin,
+            oppLastCp: oppLast.cp,
+            oppLastIndWon: oppLast.indWon,
+            // Recency: how many checkpoints ago did opp have control?
+            oppRecency: oppLast.cp ? ci - cpIdx[oppLast.cp] : null,
+          };
         }
       } else {
-        // Not BWC eligible — don't update rank but don't reset graduation
         curRank[curTeam] = null;
       }
     }
-    // Determine winner from final_margin if we didn't get it from ctrl
     if (!winner && snaps.length > 0) {
-      var fm = snaps[0].final_margin; // home - away
+      var fm = snaps[0].final_margin;
       winner = fm > 0 ? homeA : awayA;
     }
+
+    // Enrich firstGradContext with outcome data
+    if (firstGradContext) {
+      var opp = firstGradContext.oppTeam;
+      firstGradContext.oppEventuallyGrad = !!gradCp[opp];
+      firstGradContext.oppFinalRank = gradRank[opp] || 'none';
+      firstGradContext.oppGradCp = gradCp[opp] || null;
+      firstGradContext.cpGap = (gradCp[opp] && firstGradContext.gradCp)
+        ? cpIdx[gradCp[opp]] - cpIdx[firstGradContext.gradCp] : null;
+      firstGradContext.firstTeamWon = firstGradContext.gradTeam === winner;
+    }
+
     return {
       homeA: homeA, awayA: awayA, winner: winner,
       firstBWCTeam: firstBWCTeam,
       bwcFired: bwcFired, bwcCp: bwcCp,
       gradCp: gradCp, gradRank: gradRank, gradFloor: gradFloor,
       gradTier: gradTier, gradHolds: gradHolds,
+      firstGradContext: firstGradContext,
     };
   }
 
@@ -6259,6 +6316,9 @@ async function reportDualTrackingSim(sql, url) {
 
   var totalGames = 0;
 
+  // Collect opponent context at first graduation (for target config new_i4_opp3)
+  var firstGradContexts = [];
+
   for (var gid in gameMap) {
     var snaps = gameMap[gid];
     if (snaps.length < 3) continue; // need meaningful data
@@ -6323,6 +6383,105 @@ async function reportDualTrackingSim(sql, url) {
     compareMarginal('opp2_to_opp3_new_i4', 'new_i4_opp2', 'new_i4_opp3');
     compareMarginal('old_to_new_i4_opp2', 'old_i4_opp2', 'new_i4_opp2');
     compareMarginal('old_to_new_i4_opp3', 'old_i4_opp3', 'new_i4_opp3');
+
+    // Collect firstGradContext from target config for opponent-state analysis
+    var targetWalk = walks['new_i4_opp3'];
+    if (targetWalk.firstGradContext) {
+      firstGradContexts.push(targetWalk.firstGradContext);
+    }
+  }
+
+  // ── Opponent context analysis at first graduation ──
+  // Question: can we predict at first graduation whether the opponent will also graduate?
+  var fgAnalysis = {
+    total: firstGradContexts.length,
+    first_grad_won: mkBucket(),
+    opp_eventually_graduated: mkBucket(),
+    // Bucket by opponent signals at first graduation moment
+    by_opp_had_bwc: { yes: mkBucket(), no: mkBucket() },
+    by_opp_peak_holds: { '0': mkBucket(), '1': mkBucket(), '2': mkBucket(), '3+': mkBucket() },
+    by_opp_indicators: { '0': mkBucket(), '1': mkBucket(), '2+': mkBucket() },
+    by_opp_recency: { recent_1: mkBucket(), recent_2: mkBucket(), stale_3plus: mkBucket(), never: mkBucket() },
+    by_opp_last_floor: { 'none': mkBucket(), 'below_60': mkBucket(), '60_69': mkBucket(), '70_79': mkBucket(), '80_plus': mkBucket() },
+    // Combined danger signals
+    by_danger_level: { low: mkBucket(), medium: mkBucket(), high: mkBucket() },
+    // Second graduation outcomes (when opponent DID graduate)
+    second_grad_outcomes: {
+      total: 0, second_team_won: 0,
+      by_cp_gap: { '0': mkBucket(), '1': mkBucket(), '2-3': mkBucket(), '4+': mkBucket() },
+      by_opp_final_rank: { A: mkBucket(), B: mkBucket() },
+    },
+    // "Wait" strategy sim: if we delayed PO when danger=high, what happens?
+    wait_strategy: {
+      would_delay: 0, delay_correct: 0, // delayed = opp DID graduate and won
+      would_fire: 0, fire_correct: 0,    // fired = opp didn't graduate, first team won
+    },
+  };
+
+  for (var fg of firstGradContexts) {
+    var firstWon = fg.firstTeamWon;
+    fgAnalysis.first_grad_won.n++; if (firstWon) fgAnalysis.first_grad_won.wins++;
+    fgAnalysis.opp_eventually_graduated.n++; if (fg.oppEventuallyGrad) fgAnalysis.opp_eventually_graduated.wins++;
+
+    // By opponent had BWC
+    var bwcKey = fg.oppHadBWC ? 'yes' : 'no';
+    fgAnalysis.by_opp_had_bwc[bwcKey].n++; if (firstWon) fgAnalysis.by_opp_had_bwc[bwcKey].wins++;
+
+    // By opponent peak holds
+    var phKey = fg.oppPeakHolds >= 3 ? '3+' : String(fg.oppPeakHolds);
+    fgAnalysis.by_opp_peak_holds[phKey].n++; if (firstWon) fgAnalysis.by_opp_peak_holds[phKey].wins++;
+
+    // By opponent indicator count at first graduation
+    var indKey = fg.oppIndicators >= 2 ? '2+' : String(fg.oppIndicators);
+    fgAnalysis.by_opp_indicators[indKey].n++; if (firstWon) fgAnalysis.by_opp_indicators[indKey].wins++;
+
+    // By opponent recency (how recently they had control)
+    var recKey = fg.oppRecency === null ? 'never'
+      : fg.oppRecency <= 1 ? 'recent_1'
+      : fg.oppRecency <= 2 ? 'recent_2' : 'stale_3plus';
+    fgAnalysis.by_opp_recency[recKey].n++; if (firstWon) fgAnalysis.by_opp_recency[recKey].wins++;
+
+    // By opponent last floor
+    var lfKey = 'none';
+    if (fg.oppLastFloor !== null) {
+      if (fg.oppLastFloor >= 0.80) lfKey = '80_plus';
+      else if (fg.oppLastFloor >= 0.70) lfKey = '70_79';
+      else if (fg.oppLastFloor >= 0.60) lfKey = '60_69';
+      else lfKey = 'below_60';
+    }
+    fgAnalysis.by_opp_last_floor[lfKey].n++; if (firstWon) fgAnalysis.by_opp_last_floor[lfKey].wins++;
+
+    // Combined danger level
+    var dangerScore = 0;
+    if (fg.oppHadBWC) dangerScore += 2;
+    if (fg.oppPeakHolds >= 2) dangerScore += 1;
+    if (fg.oppIndicators >= 2) dangerScore += 2;
+    if (fg.oppRecency !== null && fg.oppRecency <= 1) dangerScore += 1;
+    if (fg.oppLastFloor !== null && fg.oppLastFloor >= 0.65) dangerScore += 1;
+    var dangerKey = dangerScore >= 4 ? 'high' : dangerScore >= 2 ? 'medium' : 'low';
+    fgAnalysis.by_danger_level[dangerKey].n++; if (firstWon) fgAnalysis.by_danger_level[dangerKey].wins++;
+
+    // Second graduation outcomes
+    if (fg.oppEventuallyGrad) {
+      var sg = fgAnalysis.second_grad_outcomes;
+      sg.total++;
+      if (!firstWon) sg.second_team_won++;
+      var gapKey = fg.cpGap === 0 ? '0' : fg.cpGap === 1 ? '1' : fg.cpGap <= 3 ? '2-3' : '4+';
+      sg.by_cp_gap[gapKey].n++; if (!firstWon) sg.by_cp_gap[gapKey].wins++; // wins = second team won
+      if (fg.oppFinalRank === 'A' || fg.oppFinalRank === 'B') {
+        sg.by_opp_final_rank[fg.oppFinalRank].n++;
+        if (!firstWon) sg.by_opp_final_rank[fg.oppFinalRank].wins++;
+      }
+    }
+
+    // Wait strategy: if danger=high, delay and see if opp graduates → bet second team
+    if (dangerKey === 'high') {
+      fgAnalysis.wait_strategy.would_delay++;
+      if (fg.oppEventuallyGrad && !firstWon) fgAnalysis.wait_strategy.delay_correct++;
+    } else {
+      fgAnalysis.wait_strategy.would_fire++;
+      if (firstWon) fgAnalysis.wait_strategy.fire_correct++;
+    }
   }
 
   // ── Format output ──
@@ -6386,6 +6545,68 @@ async function reportDualTrackingSim(sql, url) {
   }
   headToHead.sort(function(a, b) { return (b.po_pct || 0) - (a.po_pct || 0); });
   output.head_to_head = headToHead;
+
+  // Add opponent-at-first-grad analysis
+  output.opponent_at_first_grad = {
+    config_used: 'new_i4_opp3',
+    total_games_with_graduation: fgAnalysis.total,
+    first_grad_win_rate: ph(fgAnalysis.first_grad_won),
+    opp_graduation_rate: ph(fgAnalysis.opp_eventually_graduated),
+    by_opp_had_bwc: { yes: ph(fgAnalysis.by_opp_had_bwc.yes), no: ph(fgAnalysis.by_opp_had_bwc.no) },
+    by_opp_peak_holds: {
+      '0': ph(fgAnalysis.by_opp_peak_holds['0']),
+      '1': ph(fgAnalysis.by_opp_peak_holds['1']),
+      '2': ph(fgAnalysis.by_opp_peak_holds['2']),
+      '3+': ph(fgAnalysis.by_opp_peak_holds['3+']),
+    },
+    by_opp_indicators: {
+      '0': ph(fgAnalysis.by_opp_indicators['0']),
+      '1': ph(fgAnalysis.by_opp_indicators['1']),
+      '2+': ph(fgAnalysis.by_opp_indicators['2+']),
+    },
+    by_opp_recency: {
+      recent_1: ph(fgAnalysis.by_opp_recency.recent_1),
+      recent_2: ph(fgAnalysis.by_opp_recency.recent_2),
+      stale_3plus: ph(fgAnalysis.by_opp_recency.stale_3plus),
+      never: ph(fgAnalysis.by_opp_recency.never),
+    },
+    by_opp_last_floor: {
+      none: ph(fgAnalysis.by_opp_last_floor['none']),
+      below_60: ph(fgAnalysis.by_opp_last_floor['below_60']),
+      '60_69': ph(fgAnalysis.by_opp_last_floor['60_69']),
+      '70_79': ph(fgAnalysis.by_opp_last_floor['70_79']),
+      '80_plus': ph(fgAnalysis.by_opp_last_floor['80_plus']),
+    },
+    by_danger_level: {
+      low: ph(fgAnalysis.by_danger_level.low),
+      medium: ph(fgAnalysis.by_danger_level.medium),
+      high: ph(fgAnalysis.by_danger_level.high),
+    },
+    second_graduation_detail: {
+      total: fgAnalysis.second_grad_outcomes.total,
+      second_team_won_pct: fgAnalysis.second_grad_outcomes.total > 0
+        ? Math.round(fgAnalysis.second_grad_outcomes.second_team_won / fgAnalysis.second_grad_outcomes.total * 1000) / 10 : null,
+      by_checkpoint_gap: {
+        same_cp: ph(fgAnalysis.second_grad_outcomes.by_cp_gap['0']),
+        '1_cp_later': ph(fgAnalysis.second_grad_outcomes.by_cp_gap['1']),
+        '2_3_cp_later': ph(fgAnalysis.second_grad_outcomes.by_cp_gap['2-3']),
+        '4_plus_cp_later': ph(fgAnalysis.second_grad_outcomes.by_cp_gap['4+']),
+      },
+      by_opp_rank: {
+        A: ph(fgAnalysis.second_grad_outcomes.by_opp_final_rank.A),
+        B: ph(fgAnalysis.second_grad_outcomes.by_opp_final_rank.B),
+      },
+    },
+    wait_strategy_sim: {
+      description: 'If danger=high → delay PO, wait for second grad. Otherwise fire immediately.',
+      would_delay: fgAnalysis.wait_strategy.would_delay,
+      delay_correct_pct: fgAnalysis.wait_strategy.would_delay > 0
+        ? Math.round(fgAnalysis.wait_strategy.delay_correct / fgAnalysis.wait_strategy.would_delay * 1000) / 10 : null,
+      would_fire: fgAnalysis.wait_strategy.would_fire,
+      fire_correct_pct: fgAnalysis.wait_strategy.would_fire > 0
+        ? Math.round(fgAnalysis.wait_strategy.fire_correct / fgAnalysis.wait_strategy.would_fire * 1000) / 10 : null,
+    },
+  };
 
   return output;
 }
