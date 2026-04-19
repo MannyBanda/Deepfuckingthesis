@@ -4587,6 +4587,374 @@ async function reportTierJourney(sql, url) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// POSITION OPEN ANALYSIS — Mean floor as primary signal for PO firing rules
+// ?phase=report_position_open          — full dataset
+// ?phase=report_position_open&close=1  — final margin ≤ 8 only
+// ══════════════════════════════════════════════════════════════════════════════
+async function reportPositionOpen(sql, url) {
+  var closeOnly = url?.searchParams?.get('close') === '1';
+  var marginFilter = closeOnly ? 8 : 999;
+
+  var rows = await sql`
+    SELECT game_id, checkpoint, margin_at_snapshot AS margin,
+           (indicators->>'score')::real AS floor,
+           indicators->>'controlTeam' AS ctrl,
+           indicators->>'homeAlias' AS home_alias,
+           indicators->>'awayAlias' AS away_alias,
+           (indicators->>'I1')::text AS i1raw, (indicators->>'I2')::text AS i2raw,
+           (indicators->>'I3')::text AS i3raw, (indicators->>'I4')::text AS i4raw,
+           (indicators->>'I5')::text AS i5raw,
+           (conviction->>'tier') AS conv_tier,
+           (conviction->>'count')::int AS ind_count,
+           ctrl_team_won, final_margin
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+      AND ABS(final_margin) <= ${marginFilter}
+    ORDER BY game_id, checkpoint
+  `;
+
+  var checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  var cpIdx = {}; for (var i = 0; i < checkpoints.length; i++) cpIdx[checkpoints[i]] = i;
+
+  // Group by game
+  var gameMap = {};
+  for (var r of rows) {
+    if (!gameMap[r.game_id]) gameMap[r.game_id] = [];
+    gameMap[r.game_id].push(r);
+  }
+
+  function getCtrlMargin(r) { return (r.ctrl === r.home_alias) ? r.margin : -r.margin; }
+  function getOppCount(r) {
+    var ctrlHome = r.ctrl === r.home_alias;
+    var scores = [parseFloat(r.i1raw), parseFloat(r.i2raw), parseFloat(r.i3raw),
+                  parseFloat(r.i4raw), parseFloat(r.i5raw)];
+    var c = 0;
+    for (var s of scores) { if (isNaN(s)) continue; if (ctrlHome ? (s === 0) : (s === 1)) c++; }
+    return c;
+  }
+  function classifyBWCTier(conv, lead, holds, oppCount) {
+    if (conv === 'DOMINANT' && lead >= 8 && holds >= 4 && oppCount <= 1) return 'A';
+    if (oppCount >= 2) return 'C';
+    if ((conv === 'DOMINANT' || conv === 'STRONG') && lead >= 3 && holds >= 2) return 'B';
+    return 'C';
+  }
+  function ph(b) { return { n: b.n, wins: b.wins, pct: b.n > 0 ? Math.round(b.wins / b.n * 1000) / 10 : null }; }
+  function avgArr(a) { if (!a.length) return null; return Math.round(a.reduce(function(x,y){return x+y;},0) / a.length * 1000) / 1000; }
+  function medArr(a) { if (!a.length) return null; var s = a.slice().sort(function(x,y){return x-y;}); var m = Math.floor(s.length/2); return s.length%2 ? s[m] : (s[m-1]+s[m])/2; }
+
+  // ── Section 1: Mean floor sole gate — sweep thresholds ──
+  // At each checkpoint, for the BWC team: compute running mean floor across all BWC-eligible cps.
+  // Record win rate for games where mean floor crosses each threshold.
+  var meanFloorGates = {};
+  var thresholds = [0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90];
+  for (var t of thresholds) meanFloorGates[t.toFixed(2)] = { n: 0, wins: 0 };
+
+  // ── Section 2: Mean floor × zero flips ──
+  var meanFloorZeroFlips = {};
+  for (var t of thresholds) meanFloorZeroFlips[t.toFixed(2)] = { n: 0, wins: 0 };
+  var meanFloorWithFlips = {};
+  for (var t of thresholds) meanFloorWithFlips[t.toFixed(2)] = { n: 0, wins: 0 };
+
+  // ── Section 3: Mean floor × margin window (at first crossing) ──
+  var meanFloorMargin = {};
+  for (var t of thresholds) {
+    meanFloorMargin[t.toFixed(2)] = {
+      lead_1_4: { n:0, wins:0 }, lead_5_8: { n:0, wins:0 },
+      lead_9_plus: { n:0, wins:0 }, trailing_or_tied: { n:0, wins:0 }
+    };
+  }
+
+  // ── Section 4: Mean floor × minimum checkpoint ──
+  var meanFloorByCp = {};
+  for (var t of thresholds) {
+    meanFloorByCp[t.toFixed(2)] = {};
+    for (var cp of checkpoints) meanFloorByCp[t.toFixed(2)][cp] = { n: 0, wins: 0 };
+  }
+
+  // ── Section 5: Combined rules comparison ──
+  // Each rule: { label, minMeanFloor, zeroFlips, minCp (index), marginMin, marginMax, trackOpp }
+  var rules = [
+    { label: 'MF≥0.75 only',             mf: 0.75, zf: false, minCp: 0, mMin: -99, mMax: 999 },
+    { label: 'MF≥0.75 + 0 flips',        mf: 0.75, zf: true,  minCp: 0, mMin: -99, mMax: 999 },
+    { label: 'MF≥0.75 + 0 flips + lead 1-8', mf: 0.75, zf: true, minCp: 0, mMin: 1, mMax: 8 },
+    { label: 'MF≥0.75 + 0 flips + Q3_6+',    mf: 0.75, zf: true, minCp: 4, mMin: -99, mMax: 999 },
+    { label: 'MF≥0.75 + 0 flips + lead 1-8 + Q3_6+', mf: 0.75, zf: true, minCp: 4, mMin: 1, mMax: 8 },
+    { label: 'MF≥0.80 only',             mf: 0.80, zf: false, minCp: 0, mMin: -99, mMax: 999 },
+    { label: 'MF≥0.80 + 0 flips',        mf: 0.80, zf: true,  minCp: 0, mMin: -99, mMax: 999 },
+    { label: 'MF≥0.80 + 0 flips + lead 1-8', mf: 0.80, zf: true, minCp: 0, mMin: 1, mMax: 8 },
+    { label: 'MF≥0.80 + 0 flips + Q2_END+',  mf: 0.80, zf: true, minCp: 3, mMin: -99, mMax: 999 },
+    { label: 'MF≥0.80 + 0 flips + lead 1-8 + Q2_END+', mf: 0.80, zf: true, minCp: 3, mMin: 1, mMax: 8 },
+    { label: 'MF≥0.70 + 0 flips + Q3_6+',    mf: 0.70, zf: true, minCp: 4, mMin: -99, mMax: 999 },
+    { label: 'MF≥0.70 + 0 flips + lead 1-8 + Q3_6+', mf: 0.70, zf: true, minCp: 4, mMin: 1, mMax: 8 },
+    { label: 'Grad B + Q3_6+ (current proposal)', mf: 0, zf: false, minCp: 4, mMin: -99, mMax: 999, gradGate: 'B' },
+    { label: 'Grad A any cp (current proposal)',   mf: 0, zf: false, minCp: 0, mMin: -99, mMax: 999, gradGate: 'A' },
+  ];
+  var ruleResults = [];
+  for (var ri = 0; ri < rules.length; ri++) ruleResults.push({ n: 0, wins: 0, first_cp_dist: {} });
+
+  // ── Section 6: Opponent graduation interaction ──
+  var oppGradInteraction = {
+    opp_not_graduated: { n: 0, wins: 0 },   // PO team graduated, opp hasn't
+    opp_also_graduated: { n: 0, wins: 0 },  // both graduated
+    second_team_anchor: { n: 0, wins: 0 },  // anchor flipped to 2nd team
+  };
+
+  // ── Section 7: First PO per game — when would each rule first fire? ──
+  // (captured per-rule in ruleResults[i].first_cp_dist)
+
+  // ── Section 8: Mean floor at each checkpoint as running average ──
+  var runningMFByCp = {};
+  for (var cp of checkpoints) runningMFByCp[cp] = { floors: [], wins: 0, n: 0 };
+
+  var totalGames = 0;
+  var totalBWCGames = 0;
+
+  // ── GAME LOOP ──
+  for (var [gid, snaps] of Object.entries(gameMap)) {
+    var cpMap = {};
+    for (var s of snaps) cpMap[s.checkpoint] = s;
+    if (!cpMap['Q2_6']) continue;
+    totalGames++;
+
+    var homeA = snaps[0].home_alias;
+    var awayA = snaps[0].away_alias;
+    var won = null;
+    var prevCtrl = null;
+    var holdCount = 0;
+    var ctrlFlips = 0;
+    var bwcFloors = [];        // running list of floors at BWC-eligible checkpoints
+    var firstBWCTeam = null;
+    var firstMeanFloorCross = {};  // threshold → first checkpoint it was crossed (per game, one count)
+
+    // Per-team tracking for graduation comparison
+    var ptHolds = {}; ptHolds[homeA] = 0; ptHolds[awayA] = 0;
+    var ptFirstB = {}; ptFirstB[homeA] = null; ptFirstB[awayA] = null;
+    var ptFirstA = {}; ptFirstA[homeA] = null; ptFirstA[awayA] = null;
+    var ptFloors = {}; ptFloors[homeA] = []; ptFloors[awayA] = [];
+
+    // Per-rule: first cp this game where rule fires
+    var ruleFired = [];
+    for (var ri = 0; ri < rules.length; ri++) ruleFired.push(null);
+
+    var anyBWC = false;
+
+    for (var ci = 0; ci < checkpoints.length; ci++) {
+      var cpLabel = checkpoints[ci];
+      var snap = cpMap[cpLabel];
+      if (!snap || !snap.ctrl) continue;
+
+      won = snap.ctrl_team_won;
+      var ctrlMargin = getCtrlMargin(snap);
+      var oppCount = getOppCount(snap);
+
+      // Track flips
+      if (prevCtrl && prevCtrl !== snap.ctrl) ctrlFlips++;
+      if (prevCtrl === snap.ctrl) holdCount++;
+      else holdCount = 1;
+      prevCtrl = snap.ctrl;
+
+      // Per-team holds
+      var curT = snap.ctrl;
+      var othT = curT === homeA ? awayA : homeA;
+      ptHolds[curT]++;
+      if (holdCount === 1) ptHolds[othT] = 0;
+
+      // BWC eligible?
+      var bwcEligible = ctrlMargin >= 2 && snap.floor >= 0.50;
+      if (!bwcEligible) continue;
+      anyBWC = true;
+
+      if (!firstBWCTeam) firstBWCTeam = snap.ctrl;
+
+      var tier = classifyBWCTier(snap.conv_tier, ctrlMargin, holdCount, oppCount);
+
+      // Per-team graduation
+      if (ptFirstB[curT] === null && (tier === 'B' || tier === 'A')) ptFirstB[curT] = cpLabel;
+      if (ptFirstA[curT] === null && tier === 'A') ptFirstA[curT] = cpLabel;
+      ptFloors[curT].push(snap.floor);
+
+      // Running mean floor for current BWC team
+      bwcFloors.push(snap.floor);
+      var meanFloor = bwcFloors.reduce(function(a,b){return a+b;}, 0) / bwcFloors.length;
+
+      // Section 8: running MF by checkpoint
+      runningMFByCp[cpLabel].n++;
+      runningMFByCp[cpLabel].floors.push(meanFloor);
+      if (won) runningMFByCp[cpLabel].wins++;
+
+      // Section 1 & 2 & 3 & 4: mean floor threshold crossings (first time per game)
+      for (var t of thresholds) {
+        var tk = t.toFixed(2);
+        if (meanFloor >= t && !firstMeanFloorCross[tk]) {
+          firstMeanFloorCross[tk] = cpLabel;
+
+          // Section 1: sole gate
+          meanFloorGates[tk].n++;
+          if (won) meanFloorGates[tk].wins++;
+
+          // Section 2: zero flips split
+          if (ctrlFlips === 0) { meanFloorZeroFlips[tk].n++; if (won) meanFloorZeroFlips[tk].wins++; }
+          else { meanFloorWithFlips[tk].n++; if (won) meanFloorWithFlips[tk].wins++; }
+
+          // Section 3: margin window at crossing
+          var mb;
+          if (ctrlMargin >= 9) mb = 'lead_9_plus';
+          else if (ctrlMargin >= 5) mb = 'lead_5_8';
+          else if (ctrlMargin >= 1) mb = 'lead_1_4';
+          else mb = 'trailing_or_tied';
+          meanFloorMargin[tk][mb].n++;
+          if (won) meanFloorMargin[tk][mb].wins++;
+
+          // Section 4: by checkpoint
+          meanFloorByCp[tk][cpLabel].n++;
+          if (won) meanFloorByCp[tk][cpLabel].wins++;
+        }
+      }
+
+      // Section 5: Combined rules — check each rule at this checkpoint
+      for (var ri = 0; ri < rules.length; ri++) {
+        if (ruleFired[ri] !== null) continue; // already fired this game
+        var rule = rules[ri];
+
+        // Checkpoint minimum
+        if (ci < rule.minCp) continue;
+        // Margin window
+        if (ctrlMargin < rule.mMin || ctrlMargin > rule.mMax) continue;
+        // Zero flips
+        if (rule.zf && ctrlFlips > 0) continue;
+        // Graduation gate (for comparison rules)
+        if (rule.gradGate === 'B' && tier !== 'B' && tier !== 'A') continue;
+        if (rule.gradGate === 'A' && tier !== 'A') continue;
+        // Mean floor
+        if (!rule.gradGate && meanFloor < rule.mf) continue;
+
+        // Rule fires!
+        ruleFired[ri] = cpLabel;
+        ruleResults[ri].n++;
+        if (won) ruleResults[ri].wins++;
+        if (!ruleResults[ri].first_cp_dist[cpLabel]) ruleResults[ri].first_cp_dist[cpLabel] = 0;
+        ruleResults[ri].first_cp_dist[cpLabel]++;
+      }
+    }
+
+    if (!anyBWC) continue;
+    totalBWCGames++;
+
+    // Section 6: Opponent graduation interaction
+    // Determine winner alias
+    var winnerAlias = null;
+    if (won !== null) {
+      // won = ctrl_team_won, so we need to figure out who the ctrl team was at last checkpoint
+      // Use the firstBWCTeam as anchor reference
+      var anchorTeam = firstBWCTeam;
+      var oppTeam = anchorTeam === homeA ? awayA : homeA;
+
+      // Did anchor's opponent also graduate?
+      if (ptFirstB[anchorTeam] !== null) {
+        if (ptFirstB[oppTeam] === null) {
+          // Only anchor graduated
+          oppGradInteraction.opp_not_graduated.n++;
+          if (won) oppGradInteraction.opp_not_graduated.wins++;
+        } else {
+          // Both graduated
+          oppGradInteraction.opp_also_graduated.n++;
+          if (won) oppGradInteraction.opp_also_graduated.wins++;
+
+          // Did the second team to graduate end up winning?
+          var anchorBIdx = cpIdx[ptFirstB[anchorTeam]] || 0;
+          var oppBIdx = cpIdx[ptFirstB[oppTeam]] || 0;
+          if (oppBIdx > anchorBIdx) {
+            // Opponent graduated second — did they win?
+            oppGradInteraction.second_team_anchor.n++;
+            // won is from perspective of CTRL team, which may vary
+            // We need: did the second-to-graduate team win?
+            // Since we track per-team, check if opponent is the actual winner
+            // won = ctrl_team_won at last snapshot. But ctrl could be either team.
+            // Simplify: use last snap's ctrl alignment
+            var lastSnap = snaps[snaps.length - 1];
+            var lastCtrl = lastSnap?.ctrl;
+            var oppWon = (lastCtrl === oppTeam && lastSnap?.ctrl_team_won) ||
+                         (lastCtrl !== oppTeam && !lastSnap?.ctrl_team_won);
+            if (oppWon) oppGradInteraction.second_team_anchor.wins++;
+          }
+        }
+      }
+    }
+  }
+
+  // ── Build output ──
+  var ruleComparison = [];
+  for (var ri = 0; ri < rules.length; ri++) {
+    ruleComparison.push({
+      rule: rules[ri].label,
+      ...ph(ruleResults[ri]),
+      first_fire_distribution: ruleResults[ri].first_cp_dist,
+    });
+  }
+
+  // Section 8: running mean floor trajectory
+  var mfTrajectory = {};
+  for (var cp of checkpoints) {
+    mfTrajectory[cp] = {
+      n: runningMFByCp[cp].n,
+      avg_mean_floor: avgArr(runningMFByCp[cp].floors),
+      median_mean_floor: medArr(runningMFByCp[cp].floors),
+      win_rate: runningMFByCp[cp].n > 0 ? Math.round(runningMFByCp[cp].wins / runningMFByCp[cp].n * 1000) / 10 : null,
+    };
+  }
+
+  return {
+    _meta: {
+      filter: closeOnly ? 'close games only (final margin ≤ 8)' : 'all games',
+      total_games: totalGames,
+      total_bwc_games: totalBWCGames,
+    },
+
+    section_1_mean_floor_sole_gate: {
+      description: 'Win rate when mean floor first crosses each threshold (one count per game). Tests mean floor as standalone PO signal.',
+      thresholds: Object.fromEntries(Object.entries(meanFloorGates).map(function(e) { return [e[0], ph(e[1])]; })),
+    },
+
+    section_2_mean_floor_x_flips: {
+      description: 'Mean floor gate split by zero flips vs 1+ flips at crossing. Tests whether zero-flip gate adds value.',
+      zero_flips: Object.fromEntries(Object.entries(meanFloorZeroFlips).map(function(e) { return [e[0], ph(e[1])]; })),
+      with_flips: Object.fromEntries(Object.entries(meanFloorWithFlips).map(function(e) { return [e[0], ph(e[1])]; })),
+    },
+
+    section_3_mean_floor_x_margin: {
+      description: 'Mean floor × margin window at first crossing. Where is the value window (enough lead to be real, not so much the line is dead)?',
+      by_threshold: Object.fromEntries(Object.entries(meanFloorMargin).map(function(e) {
+        return [e[0], Object.fromEntries(Object.entries(e[1]).map(function(f) { return [f[0], ph(f[1])]; }))];
+      })),
+    },
+
+    section_4_mean_floor_x_checkpoint: {
+      description: 'Mean floor × checkpoint where threshold first crossed. When does crossing happen and does later crossing = better accuracy?',
+      by_threshold: Object.fromEntries(Object.entries(meanFloorByCp).map(function(e) {
+        return [e[0], Object.fromEntries(Object.entries(e[1]).map(function(f) { return [f[0], ph(f[1])]; }))];
+      })),
+    },
+
+    section_5_combined_rules: {
+      description: 'Head-to-head comparison of proposed PO firing rules. n = games where rule fires, pct = win rate when it fires. Includes graduation-based rules for comparison.',
+      rules: ruleComparison,
+    },
+
+    section_6_opponent_graduation: {
+      description: 'Does opponent also graduating change the signal? second_team_anchor = when opp graduated 2nd, did THEY win?',
+      opp_not_graduated: ph(oppGradInteraction.opp_not_graduated),
+      opp_also_graduated: ph(oppGradInteraction.opp_also_graduated),
+      second_team_to_graduate_wins: ph(oppGradInteraction.second_team_anchor),
+    },
+
+    section_7_mean_floor_trajectory: {
+      description: 'Running mean floor trajectory across checkpoints for all BWC-eligible games. Shows when mean floor stabilizes.',
+      by_checkpoint: mfTrajectory,
+    },
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // PRODUCTION REPLAY — 60-second resolution graduation analysis from live snapshots
 // ?phase=report_production_replay             — full dataset
 // ?phase=report_production_replay&close=1     — final margin ≤ 8 only
@@ -5624,6 +5992,7 @@ export default async (req) => {
       case 'report_value_play': result = await reportValuePlay(sql); break;
       case 'report_buy_profile': result = await reportBuyProfile(sql); break;
       case 'report_tier_journey': result = await reportTierJourney(sql, url); break;
+      case 'report_position_open': result = await reportPositionOpen(sql, url); break;
       case 'report_production_replay': result = await reportProductionReplay(sql, url); break;
       case 'report_buy_deep': {
         const [convDef, autopsy, marginFloor, alertsByCp, oppProfile] = await Promise.all([
