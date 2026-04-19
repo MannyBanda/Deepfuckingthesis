@@ -4507,6 +4507,24 @@ async function reportProductionReplay(sql, url) {
   var perWindowQuality = {};
   for (var wl of cpLabels) perWindowQuality[wl] = { floors: [], wins: [], mins: [], stddevs: [] };
 
+  // ── Section 11: Winner backtrace — start from winners, trace their graduation ──
+  var winnerProfile = {
+    total_winners: 0,
+    graduated_a: 0, graduated_b_only: 0, stayed_c: 0, never_bwc: 0,
+    was_first_to_grad_b: 0, was_second_to_grad_b: 0, was_only_to_grad_b: 0,
+    was_first_to_grad_a: 0, was_second_to_grad_a: 0, was_only_to_grad_a: 0,
+    was_first_bwc_team: 0,
+    // Timing arrays for percentiles
+    firstBWC_sec: [], gradB_sec: [], gradA_sec: [],
+    fireToGradB_sec: [], fireToGradA_sec: [],
+    floorAtGradB: [], floorAtGradA: [],
+    marginAtGradB: [], marginAtGradA: [],
+  };
+  var winnerGradBByQ = { Q1:{n:0}, Q2:{n:0}, Q3:{n:0}, Q4:{n:0} };
+  var winnerGradAByQ = { Q1:{n:0}, Q2:{n:0}, Q3:{n:0}, Q4:{n:0} };
+  var winnerPath = { c_to_a: 0, c_to_b: 0, b_to_a: 0, born_a: 0, born_b: 0, stayed_c: 0, never_bwc: 0 };
+  var winnerCtrlPath = { wire_to_wire: 0, took_over: 0, recaptured: 0 };
+
   var totalGames = 0;
   var totalSnaps = 0;
 
@@ -4561,8 +4579,8 @@ async function reportProductionReplay(sql, url) {
     var homeAlias = snaps[0].home_alias;
     var awayAlias = snaps[0].away_alias;
     var perTeam = {};
-    perTeam[homeAlias] = { holds: 0, firstB: null, firstA: null };
-    perTeam[awayAlias] = { holds: 0, firstB: null, firstA: null };
+    perTeam[homeAlias] = { holds: 0, firstB: null, firstA: null, firstBWC: null, floorAtB: null, marginAtB: null, floorAtA: null, marginAtA: null };
+    perTeam[awayAlias] = { holds: 0, firstB: null, firstA: null, firstBWC: null, floorAtB: null, marginAtB: null, floorAtA: null, marginAtA: null };
 
     // Inter-checkpoint floor collection: floors grouped by checkpoint window
     var windowFloors = {};
@@ -4629,11 +4647,18 @@ async function reportProductionReplay(sql, url) {
 
         // Per-team graduation: track which team reached B/A first
         if (perTeam[snap.floor_team]) {
+          if (perTeam[snap.floor_team].firstBWC === null) {
+            perTeam[snap.floor_team].firstBWC = gameSec;
+          }
           if (perTeam[snap.floor_team].firstB === null && (tier === 'B' || tier === 'A')) {
             perTeam[snap.floor_team].firstB = gameSec;
+            perTeam[snap.floor_team].floorAtB = floor;
+            perTeam[snap.floor_team].marginAtB = ctrlMargin;
           }
           if (perTeam[snap.floor_team].firstA === null && tier === 'A') {
             perTeam[snap.floor_team].firstA = gameSec;
+            perTeam[snap.floor_team].floorAtA = floor;
+            perTeam[snap.floor_team].marginAtA = ctrlMargin;
           }
         }
 
@@ -4908,6 +4933,99 @@ async function reportProductionReplay(sql, url) {
       meanMinSpreadBuckets[msb].n++;
       if (firstTeamWon) meanMinSpreadBuckets[msb].wins++;
     }
+
+    // ── Winner backtrace ──
+    var winTeam = gameWinner;
+    var loseTeam = winTeam === homeAlias ? awayAlias : homeAlias;
+    var wGrad = perTeam[winTeam];
+    var lGrad = perTeam[loseTeam];
+
+    if (wGrad && winTeam) {
+      winnerProfile.total_winners++;
+
+      // Was winner the first BWC team?
+      if (firstBWCTeam === winTeam) winnerProfile.was_first_bwc_team++;
+
+      // Winner's firstBWC timing
+      if (wGrad.firstBWC !== null) winnerProfile.firstBWC_sec.push(wGrad.firstBWC);
+
+      // Winner's graduation path
+      if (wGrad.firstA !== null) {
+        winnerProfile.graduated_a++;
+        winnerProfile.gradA_sec.push(wGrad.firstA);
+        winnerProfile.floorAtGradA.push(wGrad.floorAtA);
+        winnerProfile.marginAtGradA.push(wGrad.marginAtA);
+        var waQ = ['Q1','Q2','Q3','Q4'][Math.min(Math.floor(wGrad.firstA / 720), 3)];
+        winnerGradAByQ[waQ].n++;
+
+        if (wGrad.firstBWC !== null) winnerProfile.fireToGradA_sec.push(wGrad.firstA - wGrad.firstBWC);
+
+        // Also track B timing if they went through B on the way to A
+        if (wGrad.firstB !== null) {
+          winnerProfile.gradB_sec.push(wGrad.firstB);
+          winnerProfile.floorAtGradB.push(wGrad.floorAtB);
+          winnerProfile.marginAtGradB.push(wGrad.marginAtB);
+          if (wGrad.firstBWC !== null) winnerProfile.fireToGradB_sec.push(wGrad.firstB - wGrad.firstBWC);
+          var wbQ2 = ['Q1','Q2','Q3','Q4'][Math.min(Math.floor(wGrad.firstB / 720), 3)];
+          winnerGradBByQ[wbQ2].n++;
+        }
+
+        // Was winner first or second to A?
+        if (lGrad && lGrad.firstA !== null) {
+          if (wGrad.firstA <= lGrad.firstA) winnerProfile.was_first_to_grad_a++;
+          else winnerProfile.was_second_to_grad_a++;
+        } else {
+          winnerProfile.was_only_to_grad_a++;
+        }
+
+        // Path classification for A graduates
+        if (wGrad.firstB !== null && wGrad.firstB < wGrad.firstA) {
+          // Had B before A
+          if (wGrad.firstBWC !== null && wGrad.firstBWC < wGrad.firstB) winnerPath.c_to_a++;
+          else winnerPath.b_to_a++;
+        } else {
+          winnerPath.born_a++;
+        }
+      } else if (wGrad.firstB !== null) {
+        winnerProfile.graduated_b_only++;
+        winnerProfile.gradB_sec.push(wGrad.firstB);
+        winnerProfile.floorAtGradB.push(wGrad.floorAtB);
+        winnerProfile.marginAtGradB.push(wGrad.marginAtB);
+        var wbQ = ['Q1','Q2','Q3','Q4'][Math.min(Math.floor(wGrad.firstB / 720), 3)];
+        winnerGradBByQ[wbQ].n++;
+
+        if (wGrad.firstBWC !== null) winnerProfile.fireToGradB_sec.push(wGrad.firstB - wGrad.firstBWC);
+
+        // Was winner first or second to B?
+        if (lGrad && lGrad.firstB !== null) {
+          if (wGrad.firstB <= lGrad.firstB) winnerProfile.was_first_to_grad_b++;
+          else winnerProfile.was_second_to_grad_b++;
+        } else {
+          winnerProfile.was_only_to_grad_b++;
+        }
+
+        // Path for B-only
+        if (wGrad.firstBWC !== null && wGrad.firstBWC < wGrad.firstB) winnerPath.c_to_b++;
+        else winnerPath.born_b++;
+      } else if (wGrad.firstBWC !== null) {
+        winnerProfile.stayed_c++;
+        winnerPath.stayed_c++;
+      } else {
+        winnerProfile.never_bwc++;
+        winnerPath.never_bwc++;
+      }
+
+      // Winner ctrl path: wire-to-wire, took over, or recaptured
+      if (firstBWCTeam === winTeam && lastSnap.floor_team === winTeam) {
+        winnerCtrlPath.wire_to_wire++;
+      } else if (firstBWCTeam !== winTeam && wGrad.firstBWC !== null) {
+        // Winner wasn't first BWC team but eventually got ctrl
+        winnerCtrlPath.took_over++;
+      } else if (firstBWCTeam === winTeam && lastSnap.floor_team !== winTeam) {
+        // Winner was first but lost ctrl by end
+        winnerCtrlPath.recaptured++;
+      }
+    }
   }
 
   // ── 4. Build output ──
@@ -5081,6 +5199,79 @@ async function reportProductionReplay(sql, url) {
           win_rate: Math.round(winCount / d.floors.length * 1000) / 10,
         }];
       })),
+    },
+
+    section_11_winner_backtrace: {
+      description: 'Start from WINNERS and trace their graduation patterns backward. How did the winning team get there?',
+      total_winners: winnerProfile.total_winners,
+      graduation_distribution: {
+        graduated_to_a: winnerProfile.graduated_a,
+        graduated_to_b_only: winnerProfile.graduated_b_only,
+        stayed_c: winnerProfile.stayed_c,
+        never_bwc_eligible: winnerProfile.never_bwc,
+        pct_graduated_a: winnerProfile.total_winners > 0 ? Math.round(winnerProfile.graduated_a / winnerProfile.total_winners * 1000) / 10 : null,
+        pct_graduated_b_plus: winnerProfile.total_winners > 0 ? Math.round((winnerProfile.graduated_a + winnerProfile.graduated_b_only) / winnerProfile.total_winners * 1000) / 10 : null,
+      },
+      graduation_path: winnerPath,
+      winner_was_first_bwc_team: {
+        n: winnerProfile.was_first_bwc_team,
+        pct: winnerProfile.total_winners > 0 ? Math.round(winnerProfile.was_first_bwc_team / winnerProfile.total_winners * 1000) / 10 : null,
+      },
+      ctrl_path: winnerCtrlPath,
+      anchor_reliability: {
+        description: 'Of winners who graduated to B: were they the FIRST, SECOND, or ONLY team to graduate?',
+        first_to_b: winnerProfile.was_first_to_grad_b,
+        second_to_b: winnerProfile.was_second_to_grad_b,
+        only_to_b: winnerProfile.was_only_to_grad_b,
+        first_to_a: winnerProfile.was_first_to_grad_a,
+        second_to_a: winnerProfile.was_second_to_grad_a,
+        only_to_a: winnerProfile.was_only_to_grad_a,
+      },
+      winner_timing: {
+        first_bwc: {
+          n: winnerProfile.firstBWC_sec.length,
+          median_sec: percentile(winnerProfile.firstBWC_sec, 50),
+          median_label: secToLabel(percentile(winnerProfile.firstBWC_sec, 50) || 0),
+          p25_sec: percentile(winnerProfile.firstBWC_sec, 25),
+          p75_sec: percentile(winnerProfile.firstBWC_sec, 75),
+        },
+        grad_b: {
+          n: winnerProfile.gradB_sec.length,
+          median_sec: percentile(winnerProfile.gradB_sec, 50),
+          median_label: secToLabel(percentile(winnerProfile.gradB_sec, 50) || 0),
+        },
+        grad_a: {
+          n: winnerProfile.gradA_sec.length,
+          median_sec: percentile(winnerProfile.gradA_sec, 50),
+          median_label: secToLabel(percentile(winnerProfile.gradA_sec, 50) || 0),
+        },
+        fire_to_grad_b: {
+          n: winnerProfile.fireToGradB_sec.length,
+          median_sec: percentile(winnerProfile.fireToGradB_sec, 50),
+        },
+        fire_to_grad_a: {
+          n: winnerProfile.fireToGradA_sec.length,
+          median_sec: percentile(winnerProfile.fireToGradA_sec, 50),
+        },
+      },
+      winner_grad_b_by_quarter: winnerGradBByQ,
+      winner_grad_a_by_quarter: winnerGradAByQ,
+      conditions_at_graduation: {
+        b_graduates: {
+          n: winnerProfile.floorAtGradB.length,
+          median_floor: percentile(winnerProfile.floorAtGradB, 50),
+          median_margin: percentile(winnerProfile.marginAtGradB, 50),
+          p25_floor: percentile(winnerProfile.floorAtGradB, 25),
+          p75_floor: percentile(winnerProfile.floorAtGradB, 75),
+        },
+        a_graduates: {
+          n: winnerProfile.floorAtGradA.length,
+          median_floor: percentile(winnerProfile.floorAtGradA, 50),
+          median_margin: percentile(winnerProfile.marginAtGradA, 50),
+          p25_floor: percentile(winnerProfile.floorAtGradA, 25),
+          p75_floor: percentile(winnerProfile.floorAtGradA, 75),
+        },
+      },
     },
   };
 
