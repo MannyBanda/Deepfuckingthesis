@@ -6319,9 +6319,15 @@ async function reportDualTrackingSim(sql, url) {
   // Collect opponent context at first graduation (for target config new_i4_opp3)
   var firstGradContexts = [];
 
+  // Post-signal trailing analysis: does the PO team ever trail after the signal?
+  var trailingData = {
+    at_graduation: [], // { signalTeam, signalCp, isHome, won, rank, snapshots_after[] }
+    at_tracking: [],   // same shape but signal = BWC fire (tracking)
+  };
+
   for (var gid in gameMap) {
     var snaps = gameMap[gid];
-    if (snaps.length < 3) continue; // need meaningful data
+    if (snaps.length < 3) continue;
     totalGames++;
 
     // Walk game under each config
@@ -6389,7 +6395,117 @@ async function reportDualTrackingSim(sql, url) {
     if (targetWalk.firstGradContext) {
       firstGradContexts.push(targetWalk.firstGradContext);
     }
+
+    // ── Post-signal trailing analysis ──
+    // Build checkpoint margin map from raw snapshots
+    var cpMargins = {};
+    for (var s of snaps) cpMargins[s.checkpoint] = s.margin; // home - away
+
+    // PO at graduation (first_to_grad on new_i4_opp3)
+    var gradDecision = decisions['new_i4_opp3']['first_to_grad'];
+    if (gradDecision.poTeam && gradDecision.poCp) {
+      var gIsHome = gradDecision.poTeam === targetWalk.homeA;
+      var gSignalCpIdx = cpIdx[gradDecision.poCp];
+      var gAfter = [];
+      for (var ai = gSignalCpIdx + 1; ai < checkpoints.length; ai++) {
+        var m = cpMargins[checkpoints[ai]];
+        if (m !== undefined) {
+          var teamMargin = gIsHome ? m : -m;
+          gAfter.push({ cp: checkpoints[ai], teamMargin: teamMargin });
+        }
+      }
+      trailingData.at_graduation.push({
+        signalTeam: gradDecision.poTeam, signalCp: gradDecision.poCp,
+        rank: gradDecision.poRank, isHome: gIsHome,
+        won: gradDecision.poTeam === winner, after: gAfter,
+      });
+    }
+
+    // PO at tracking (first BWC fire on new_i4_opp3)
+    var tw = targetWalk;
+    if (tw.firstBWCTeam && tw.bwcCp[tw.firstBWCTeam]) {
+      var tIsHome = tw.firstBWCTeam === tw.homeA;
+      var tSignalCpIdx = cpIdx[tw.bwcCp[tw.firstBWCTeam]];
+      var tAfter = [];
+      for (var ai2 = tSignalCpIdx + 1; ai2 < checkpoints.length; ai2++) {
+        var m2 = cpMargins[checkpoints[ai2]];
+        if (m2 !== undefined) {
+          var teamMargin2 = tIsHome ? m2 : -m2;
+          tAfter.push({ cp: checkpoints[ai2], teamMargin: teamMargin2 });
+        }
+      }
+      trailingData.at_tracking.push({
+        signalTeam: tw.firstBWCTeam, signalCp: tw.bwcCp[tw.firstBWCTeam],
+        rank: tw.gradRank[tw.firstBWCTeam] || 'C', isHome: tIsHome,
+        won: tw.firstBWCTeam === winner, after: tAfter,
+      });
+    }
   }
+
+  // ── Post-signal trailing analysis ──
+  function analyzeTrailing(entries) {
+    var result = {
+      total: entries.length,
+      correct: 0,
+      ever_trailed: 0,
+      trailed_and_won: mkBucket(),     // trailed then won = successful BUY window
+      never_trailed_and_won: mkBucket(), // won without trailing = no entry window
+      by_deepest_deficit: {
+        'never_trailed': mkBucket(),
+        'trail_1_4': mkBucket(),
+        'trail_5_9': mkBucket(),
+        'trail_10_plus': mkBucket(),
+      },
+      by_signal_cp: {},
+      by_rank: { A: { total: 0, trailed: 0, won: 0 }, B: { total: 0, trailed: 0, won: 0 }, C: { total: 0, trailed: 0, won: 0 } },
+      trailing_checkpoint_count: { '0': mkBucket(), '1': mkBucket(), '2_3': mkBucket(), '4_plus': mkBucket() },
+    };
+    for (var cp of checkpoints) result.by_signal_cp[cp] = { total: 0, trailed: 0, won: 0 };
+
+    for (var e of entries) {
+      if (e.won) result.correct++;
+      var deepest = 0;
+      var trailingCps = 0;
+      for (var a of e.after) {
+        if (a.teamMargin < 0) {
+          trailingCps++;
+          if (-a.teamMargin > deepest) deepest = -a.teamMargin;
+        }
+      }
+      var trailed = deepest > 0;
+      if (trailed) result.ever_trailed++;
+
+      // Trailed and won = BUY window that worked
+      if (trailed) { result.trailed_and_won.n++; if (e.won) result.trailed_and_won.wins++; }
+      else { result.never_trailed_and_won.n++; if (e.won) result.never_trailed_and_won.wins++; }
+
+      // By deepest deficit
+      var defKey = !trailed ? 'never_trailed' : deepest <= 4 ? 'trail_1_4' : deepest <= 9 ? 'trail_5_9' : 'trail_10_plus';
+      result.by_deepest_deficit[defKey].n++; if (e.won) result.by_deepest_deficit[defKey].wins++;
+
+      // By signal checkpoint
+      if (result.by_signal_cp[e.signalCp]) {
+        result.by_signal_cp[e.signalCp].total++;
+        if (trailed) result.by_signal_cp[e.signalCp].trailed++;
+        if (e.won) result.by_signal_cp[e.signalCp].won++;
+      }
+
+      // By rank
+      var rk = e.rank || 'C';
+      if (!result.by_rank[rk]) result.by_rank[rk] = { total: 0, trailed: 0, won: 0 };
+      result.by_rank[rk].total++;
+      if (trailed) result.by_rank[rk].trailed++;
+      if (e.won) result.by_rank[rk].won++;
+
+      // By trailing checkpoint count
+      var tcKey = trailingCps === 0 ? '0' : trailingCps === 1 ? '1' : trailingCps <= 3 ? '2_3' : '4_plus';
+      result.trailing_checkpoint_count[tcKey].n++; if (e.won) result.trailing_checkpoint_count[tcKey].wins++;
+    }
+    return result;
+  }
+
+  var trailGrad = analyzeTrailing(trailingData.at_graduation);
+  var trailTrack = analyzeTrailing(trailingData.at_tracking);
 
   // ── Opponent context analysis at first graduation ──
   // Question: can we predict at first graduation whether the opponent will also graduate?
@@ -6545,6 +6661,61 @@ async function reportDualTrackingSim(sql, url) {
   }
   headToHead.sort(function(a, b) { return (b.po_pct || 0) - (a.po_pct || 0); });
   output.head_to_head = headToHead;
+
+  // Add opponent-at-first-grad analysis
+  function fmtTrailing(t) {
+    var byCpFormatted = {};
+    for (var cp of checkpoints) {
+      if (t.by_signal_cp[cp] && t.by_signal_cp[cp].total > 0) {
+        var sc = t.by_signal_cp[cp];
+        byCpFormatted[cp] = {
+          n: sc.total, trailed: sc.trailed,
+          trail_pct: Math.round(sc.trailed / sc.total * 1000) / 10,
+          won: sc.won, win_pct: Math.round(sc.won / sc.total * 1000) / 10,
+        };
+      }
+    }
+    var byRankFormatted = {};
+    for (var rk in t.by_rank) {
+      if (t.by_rank[rk].total > 0) {
+        var r = t.by_rank[rk];
+        byRankFormatted[rk] = {
+          n: r.total, trailed: r.trailed,
+          trail_pct: Math.round(r.trailed / r.total * 1000) / 10,
+          won: r.won, win_pct: Math.round(r.won / r.total * 1000) / 10,
+        };
+      }
+    }
+    return {
+      total_signals: t.total,
+      accuracy: t.total > 0 ? Math.round(t.correct / t.total * 1000) / 10 : null,
+      ever_trailed_pct: t.total > 0 ? Math.round(t.ever_trailed / t.total * 1000) / 10 : null,
+      entry_window: {
+        trailed_then_won: ph(t.trailed_and_won),
+        never_trailed_won: ph(t.never_trailed_and_won),
+      },
+      by_deepest_deficit: {
+        never_trailed: ph(t.by_deepest_deficit.never_trailed),
+        trail_1_4: ph(t.by_deepest_deficit.trail_1_4),
+        trail_5_9: ph(t.by_deepest_deficit.trail_5_9),
+        trail_10_plus: ph(t.by_deepest_deficit.trail_10_plus),
+      },
+      by_signal_checkpoint: byCpFormatted,
+      by_rank: byRankFormatted,
+      trailing_checkpoint_count: {
+        '0': ph(t.trailing_checkpoint_count['0']),
+        '1': ph(t.trailing_checkpoint_count['1']),
+        '2_3': ph(t.trailing_checkpoint_count['2_3']),
+        '4_plus': ph(t.trailing_checkpoint_count['4_plus']),
+      },
+    };
+  }
+
+  output.post_signal_trailing = {
+    config_used: 'new_i4_opp3',
+    po_at_graduation: fmtTrailing(trailGrad),
+    po_at_tracking: fmtTrailing(trailTrack),
+  };
 
   // Add opponent-at-first-grad analysis
   output.opponent_at_first_grad = {
