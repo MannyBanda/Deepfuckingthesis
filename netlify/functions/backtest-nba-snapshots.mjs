@@ -3790,6 +3790,43 @@ async function reportTierJourney(sql, url) {
 
   var totalGames = 0;
 
+  // Section 11: Graduation timing — when does team first reach peak tier?
+  var gradTiming = {};
+  for (var cp of checkpoints) gradTiming[cp] = { to_a: { n:0,wins:0 }, to_b: { n:0,wins:0 } };
+
+  // Section 12: Conditions at graduation (floor + margin + lead bucket)
+  var gradConditions = {
+    to_a: { floors: [], margins: [], leads: [] },
+    to_b: { floors: [], margins: [], leads: [] },
+  };
+
+  // Section 13: Q1→Q2 floor acceleration as standalone predictor
+  var accelBuckets = {
+    'surge (>0.08)': { n: 0, wins: 0, grad_a: 0, grad_b: 0 },
+    'climb (0.04-0.08)': { n: 0, wins: 0, grad_a: 0, grad_b: 0 },
+    'flat (-0.02 to 0.04)': { n: 0, wins: 0, grad_a: 0, grad_b: 0 },
+    'declining (<-0.02)': { n: 0, wins: 0, grad_a: 0, grad_b: 0 },
+  };
+
+  // Section 14: Value window — graduated tier × margin at graduation
+  var valueWindow = {
+    a_lead_1_4: { n:0, wins:0 },
+    a_lead_5_8: { n:0, wins:0 },
+    a_lead_9_plus: { n:0, wins:0 },
+    b_lead_1_4: { n:0, wins:0 },
+    b_lead_5_8: { n:0, wins:0 },
+    b_lead_9_plus: { n:0, wins:0 },
+  };
+
+  // Section 15: Time-to-graduate (checkpoints from first fire to peak tier)
+  var timeToGrad = {
+    '0 (born at peak)': { n:0, wins:0 },
+    '1 cp': { n:0, wins:0 },
+    '2 cp': { n:0, wins:0 },
+    '3 cp': { n:0, wins:0 },
+    '4+ cp': { n:0, wins:0 },
+  };
+
   for (var [gid, snaps] of Object.entries(games)) {
     // Build checkpoint map
     var cpMap = {};
@@ -3815,6 +3852,11 @@ async function reportTierJourney(sql, url) {
     var won = null;
     var ctrlFlips = 0;
     var lastFlipCp = null;
+    var gradCp = null;      // checkpoint where peak tier was first reached
+    var gradCpIdx = null;
+    var gradFloor = null;
+    var gradMargin = null;
+    var firstFireCpIdx = null;
 
     for (var ci = 0; ci < checkpoints.length; ci++) {
       var cpLabel = checkpoints[ci];
@@ -3851,6 +3893,7 @@ async function reportTierJourney(sql, url) {
         // Track first fire
         if (!firstFireCp) {
           firstFireCp = cpLabel;
+          firstFireCpIdx = ci;
           firstFireTier = tier;
           firstFireTeam = snap.ctrl;
           tierAtFire[tier].n++;
@@ -3861,7 +3904,13 @@ async function reportTierJourney(sql, url) {
 
         // Track peak tier
         var tierRank = { A: 3, B: 2, C: 1 };
-        if (tierRank[tier] > (tierRank[peakTier] || 0)) peakTier = tier;
+        if (tierRank[tier] > (tierRank[peakTier] || 0)) {
+          peakTier = tier;
+          gradCp = cpLabel;
+          gradCpIdx = ci;
+          gradFloor = snap.floor;
+          gradMargin = ctrlMargin;
+        }
 
         // Track current tier persistence
         if (tier === currentTier) currentTierRun++;
@@ -4014,6 +4063,63 @@ async function reportTierJourney(sql, url) {
     } else {
       gameNature.fought.n++; if (firstTeamWon) gameNature.fought.wins++;
     }
+
+    // ── Section 11: Graduation timing ──
+    if (gradCp && peakTier !== firstFireTier) {
+      var gradKey = peakTier === 'A' ? 'to_a' : 'to_b';
+      gradTiming[gradCp][gradKey].n++;
+      if (won) gradTiming[gradCp][gradKey].wins++;
+
+      // Section 12: Conditions at graduation
+      gradConditions[gradKey].floors.push(gradFloor);
+      gradConditions[gradKey].margins.push(gradMargin);
+      var leadBucket = gradMargin >= 9 ? '9+' : gradMargin >= 5 ? '5-8' : '1-4';
+      gradConditions[gradKey].leads.push(leadBucket);
+    }
+
+    // ── Section 13: Q1→Q2 floor acceleration predictor ──
+    var q1end = cpMap['Q1_END'];
+    var q2end = cpMap['Q2_END'];
+    if (q1end && q2end && q1end.floor && q2end.floor) {
+      var accel = q2end.floor - q1end.floor;
+      var aKey;
+      if (accel > 0.08) aKey = 'surge (>0.08)';
+      else if (accel >= 0.04) aKey = 'climb (0.04-0.08)';
+      else if (accel >= -0.02) aKey = 'flat (-0.02 to 0.04)';
+      else aKey = 'declining (<-0.02)';
+      accelBuckets[aKey].n++;
+      if (firstTeamWon) accelBuckets[aKey].wins++;
+      if (peakTier === 'A') accelBuckets[aKey].grad_a++;
+      else if (peakTier === 'B') accelBuckets[aKey].grad_b++;
+    }
+
+    // ── Section 14: Value window — graduated tier × margin at graduation ──
+    if (gradCp && gradMargin != null) {
+      var vwKey = null;
+      if (peakTier === 'A') {
+        if (gradMargin <= 4) vwKey = 'a_lead_1_4';
+        else if (gradMargin <= 8) vwKey = 'a_lead_5_8';
+        else vwKey = 'a_lead_9_plus';
+      } else if (peakTier === 'B') {
+        if (gradMargin <= 4) vwKey = 'b_lead_1_4';
+        else if (gradMargin <= 8) vwKey = 'b_lead_5_8';
+        else vwKey = 'b_lead_9_plus';
+      }
+      if (vwKey) {
+        valueWindow[vwKey].n++;
+        if (won) valueWindow[vwKey].wins++;
+      }
+    }
+
+    // ── Section 15: Time-to-graduate (checkpoints from first fire to peak) ──
+    if (gradCpIdx != null && firstFireCpIdx != null) {
+      var cpsToGrad = gradCpIdx - firstFireCpIdx;
+      if (cpsToGrad === 0) { timeToGrad['0 (born at peak)'].n++; if (won) timeToGrad['0 (born at peak)'].wins++; }
+      else if (cpsToGrad === 1) { timeToGrad['1 cp'].n++; if (won) timeToGrad['1 cp'].wins++; }
+      else if (cpsToGrad === 2) { timeToGrad['2 cp'].n++; if (won) timeToGrad['2 cp'].wins++; }
+      else if (cpsToGrad === 3) { timeToGrad['3 cp'].n++; if (won) timeToGrad['3 cp'].wins++; }
+      else { timeToGrad['4+ cp'].n++; if (won) timeToGrad['4+ cp'].wins++; }
+    }
   }
 
   // ── Aggregate helpers ──
@@ -4123,6 +4229,57 @@ async function reportTierJourney(sql, url) {
     section_10_game_nature: {
       description: 'Did the BWC team lead throughout, or did they trail at some point?',
       paths: pct(gameNature),
+    },
+    section_11_graduation_timing: {
+      description: 'At which checkpoint did the team first reach its peak tier?',
+      by_checkpoint: Object.fromEntries(
+        Object.entries(gradTiming).map(([k, v]) => [k, pct(v)])
+          .filter(([k, v]) => v.to_a.n + v.to_b.n > 0)
+      ),
+    },
+    section_12_conditions_at_graduation: {
+      description: 'Floor, margin, and lead bucket when the team graduated to its peak tier.',
+      to_a: {
+        n: gradConditions.to_a.floors.length,
+        avg_floor: avgArr(gradConditions.to_a.floors),
+        median_floor: medianArr(gradConditions.to_a.floors),
+        avg_margin: avgArr(gradConditions.to_a.margins),
+        median_margin: medianArr(gradConditions.to_a.margins),
+        lead_distribution: gradConditions.to_a.leads.reduce((acc, l) => { acc[l] = (acc[l]||0)+1; return acc; }, {}),
+      },
+      to_b: {
+        n: gradConditions.to_b.floors.length,
+        avg_floor: avgArr(gradConditions.to_b.floors),
+        median_floor: medianArr(gradConditions.to_b.floors),
+        avg_margin: avgArr(gradConditions.to_b.margins),
+        median_margin: medianArr(gradConditions.to_b.margins),
+        lead_distribution: gradConditions.to_b.leads.reduce((acc, l) => { acc[l] = (acc[l]||0)+1; return acc; }, {}),
+      },
+    },
+    section_13_acceleration_predictor: {
+      description: 'Q1_END→Q2_END floor acceleration as predictor of graduation and win rate.',
+      buckets: (() => {
+        var out = {};
+        for (var ak in accelBuckets) {
+          var ab = accelBuckets[ak];
+          out[ak] = {
+            n: ab.n,
+            wins: ab.wins,
+            win_pct: ab.n > 0 ? Math.round(ab.wins / ab.n * 1000) / 10 : null,
+            grad_a_pct: ab.n > 0 ? Math.round(ab.grad_a / ab.n * 1000) / 10 : null,
+            grad_b_pct: ab.n > 0 ? Math.round(ab.grad_b / ab.n * 1000) / 10 : null,
+          };
+        }
+        return out;
+      })(),
+    },
+    section_14_value_window: {
+      description: 'Graduated tier × lead at graduation. Where is accuracy highest at moderate leads?',
+      grid: pct(valueWindow),
+    },
+    section_15_time_to_graduate: {
+      description: 'How many checkpoints from first fire to reaching peak tier?',
+      buckets: pct(timeToGrad),
     },
   };
 }
