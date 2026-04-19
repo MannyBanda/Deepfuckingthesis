@@ -3827,6 +3827,48 @@ async function reportTierJourney(sql, url) {
     '4+ cp': { n:0, wins:0 },
   };
 
+  // Section 16: First team to GRADUATE (per-team independent tracking)
+  var firstToGradB = { n: 0, won: 0 };
+  var firstToGradA = { n: 0, won: 0 };
+  var bothGradB = { n: 0, first_won: 0 };
+  var onlyOneGradB = { n: 0, won: 0 };
+  var firstGradBByQ = {};
+  var firstGradAByQ = {};
+  for (var _cp of checkpoints) { firstGradBByQ[_cp] = {n:0,wins:0}; firstGradAByQ[_cp] = {n:0,wins:0}; }
+
+  // Section 17: Floor quality across checkpoint sequence
+  var meanFloorBuckets = {
+    '0.50-0.59': {n:0,wins:0}, '0.60-0.69': {n:0,wins:0}, '0.70-0.79': {n:0,wins:0},
+    '0.80-0.89': {n:0,wins:0}, '0.90+': {n:0,wins:0}
+  };
+  var minFloorBuckets = {
+    '<0.40': {n:0,wins:0}, '0.40-0.49': {n:0,wins:0}, '0.50-0.59': {n:0,wins:0},
+    '0.60-0.69': {n:0,wins:0}, '0.70+': {n:0,wins:0}
+  };
+  var floorVarianceBuckets = {
+    'tight (<0.03)': {n:0,wins:0}, 'moderate (0.03-0.08)': {n:0,wins:0},
+    'volatile (0.08-0.15)': {n:0,wins:0}, 'chaotic (0.15+)': {n:0,wins:0}
+  };
+  var meanMinSpreadBuckets = {
+    'tight (<0.05)': {n:0,wins:0}, 'moderate (0.05-0.10)': {n:0,wins:0},
+    'gapped (0.10-0.20)': {n:0,wins:0}, 'dangerous (0.20+)': {n:0,wins:0}
+  };
+
+  // Section 18: Winner backtrace
+  var winnerProfile = {
+    total: 0, graduated_a: 0, graduated_b_only: 0, stayed_c: 0, never_bwc: 0,
+    was_first_bwc_team: 0,
+    was_first_to_grad_b: 0, was_second_to_grad_b: 0, was_only_to_grad_b: 0,
+    was_first_to_grad_a: 0, was_second_to_grad_a: 0, was_only_to_grad_a: 0,
+    gradB_cps: [], gradA_cps: [], floorAtGradB: [], floorAtGradA: [],
+    marginAtGradB: [], marginAtGradA: [],
+  };
+  var winnerGradBByCp = {};
+  var winnerGradAByCp = {};
+  for (var _cp2 of checkpoints) { winnerGradBByCp[_cp2] = {n:0}; winnerGradAByCp[_cp2] = {n:0}; }
+  var winnerPath = { c_to_a: 0, c_to_b: 0, b_to_a: 0, born_a: 0, born_b: 0, stayed_c: 0, never_bwc: 0 };
+  var winnerCtrlPath = { wire_to_wire: 0, took_over: 0 };
+
   for (var [gid, snaps] of Object.entries(games)) {
     // Build checkpoint map
     var cpMap = {};
@@ -3858,6 +3900,20 @@ async function reportTierJourney(sql, url) {
     var gradMargin = null;
     var firstFireCpIdx = null;
 
+    // Per-team graduation tracking
+    var homeA = snaps[0].home_alias;
+    var awayA = snaps[0].away_alias;
+    var ptHolds = {};  // per-team consecutive checkpoint holds
+    ptHolds[homeA] = 0; ptHolds[awayA] = 0;
+    var ptFirstB = {}; ptFirstB[homeA] = null; ptFirstB[awayA] = null;
+    var ptFirstA = {}; ptFirstA[homeA] = null; ptFirstA[awayA] = null;
+    var ptFirstBWC = {}; ptFirstBWC[homeA] = null; ptFirstBWC[awayA] = null;
+    var ptFloorAtB = {}; ptFloorAtB[homeA] = null; ptFloorAtB[awayA] = null;
+    var ptMarginAtB = {}; ptMarginAtB[homeA] = null; ptMarginAtB[awayA] = null;
+    var ptFloorAtA = {}; ptFloorAtA[homeA] = null; ptFloorAtA[awayA] = null;
+    var ptMarginAtA = {}; ptMarginAtA[homeA] = null; ptMarginAtA[awayA] = null;
+    var ptFirstBTier = {}; ptFirstBTier[homeA] = null; ptFirstBTier[awayA] = null;
+
     for (var ci = 0; ci < checkpoints.length; ci++) {
       var cpLabel = checkpoints[ci];
       var snap = cpMap[cpLabel];
@@ -3884,11 +3940,31 @@ async function reportTierJourney(sql, url) {
       else holdCount = 1;
       prevCtrl = snap.ctrl;
 
+      // Per-team hold tracking
+      var curT = snap.ctrl;
+      var othT = curT === homeA ? awayA : homeA;
+      ptHolds[curT]++;
+      if (holdCount === 1) ptHolds[othT] = 0; // ctrl just changed
+
       // Is this BWC-eligible? (ctrl team leading 2+, floor ≥ 0.50)
       var bwcEligible = ctrlMargin >= 2 && snap.floor >= 0.50;
       var tier = null;
       if (bwcEligible) {
         tier = classifyBWCTier(snap.conv_tier, ctrlMargin, holdCount, oppCount);
+
+        // Per-team graduation tracking
+        if (ptFirstBWC[curT] === null) ptFirstBWC[curT] = cpLabel;
+        if (ptFirstB[curT] === null && (tier === 'B' || tier === 'A')) {
+          ptFirstB[curT] = cpLabel;
+          ptFloorAtB[curT] = snap.floor;
+          ptMarginAtB[curT] = ctrlMargin;
+          ptFirstBTier[curT] = tier;
+        }
+        if (ptFirstA[curT] === null && tier === 'A') {
+          ptFirstA[curT] = cpLabel;
+          ptFloorAtA[curT] = snap.floor;
+          ptMarginAtA[curT] = ctrlMargin;
+        }
 
         // Track first fire
         if (!firstFireCp) {
@@ -4120,6 +4196,156 @@ async function reportTierJourney(sql, url) {
       else if (cpsToGrad === 3) { timeToGrad['3 cp'].n++; if (won) timeToGrad['3 cp'].wins++; }
       else { timeToGrad['4+ cp'].n++; if (won) timeToGrad['4+ cp'].wins++; }
     }
+
+    // ── Section 16: First team to GRADUATE ──
+    // Determine game winner
+    var gameWinner = null;
+    if (q4end) {
+      gameWinner = q4end.ctrl_team_won ? q4end.ctrl : (q4end.ctrl === homeA ? awayA : homeA);
+    }
+
+    // First team to reach B
+    var fb_home = ptFirstB[homeA], fb_away = ptFirstB[awayA];
+    var firstBTeam = null;
+    if (fb_home && fb_away) {
+      var hIdx = checkpoints.indexOf(fb_home), aIdx = checkpoints.indexOf(fb_away);
+      firstBTeam = hIdx <= aIdx ? homeA : awayA;
+      bothGradB.n++;
+      if (firstBTeam === gameWinner) bothGradB.first_won++;
+    } else if (fb_home) {
+      firstBTeam = homeA;
+      onlyOneGradB.n++; if (firstBTeam === gameWinner) onlyOneGradB.won++;
+    } else if (fb_away) {
+      firstBTeam = awayA;
+      onlyOneGradB.n++; if (firstBTeam === gameWinner) onlyOneGradB.won++;
+    }
+    if (firstBTeam && gameWinner) {
+      firstToGradB.n++;
+      if (firstBTeam === gameWinner) firstToGradB.won++;
+      var fbCp = ptFirstB[firstBTeam];
+      if (fbCp) { firstGradBByQ[fbCp].n++; if (firstBTeam === gameWinner) firstGradBByQ[fbCp].wins++; }
+    }
+
+    // First team to reach A
+    var fa_home = ptFirstA[homeA], fa_away = ptFirstA[awayA];
+    var firstATeam = null;
+    if (fa_home && fa_away) {
+      var hIdxA = checkpoints.indexOf(fa_home), aIdxA = checkpoints.indexOf(fa_away);
+      firstATeam = hIdxA <= aIdxA ? homeA : awayA;
+    } else if (fa_home) { firstATeam = homeA; }
+    else if (fa_away) { firstATeam = awayA; }
+    if (firstATeam && gameWinner) {
+      firstToGradA.n++;
+      if (firstATeam === gameWinner) firstToGradA.won++;
+      var faCp = ptFirstA[firstATeam];
+      if (faCp) { firstGradAByQ[faCp].n++; if (firstATeam === gameWinner) firstGradAByQ[faCp].wins++; }
+    }
+
+    // ── Section 17: Floor quality across checkpoint sequence ──
+    var bwcFloors = [];
+    for (var qi = 0; qi < floorSeq.length; qi++) {
+      if (floorSeq[qi] !== null && tierSeq[qi] !== null) bwcFloors.push(floorSeq[qi]);
+    }
+    if (bwcFloors.length >= 3) {
+      var fSum = 0, fMin = 999, fMax = -999;
+      for (var fk2 = 0; fk2 < bwcFloors.length; fk2++) {
+        fSum += bwcFloors[fk2];
+        if (bwcFloors[fk2] < fMin) fMin = bwcFloors[fk2];
+        if (bwcFloors[fk2] > fMax) fMax = bwcFloors[fk2];
+      }
+      var fMean = fSum / bwcFloors.length;
+      var fVar = 0;
+      for (var fk3 = 0; fk3 < bwcFloors.length; fk3++) fVar += (bwcFloors[fk3] - fMean) * (bwcFloors[fk3] - fMean);
+      var fStd = Math.sqrt(fVar / bwcFloors.length);
+      var fSpread = fMean - fMin;
+
+      // Mean floor bucket
+      var mfb2;
+      if (fMean < 0.60) mfb2 = '0.50-0.59'; else if (fMean < 0.70) mfb2 = '0.60-0.69';
+      else if (fMean < 0.80) mfb2 = '0.70-0.79'; else if (fMean < 0.90) mfb2 = '0.80-0.89'; else mfb2 = '0.90+';
+      meanFloorBuckets[mfb2].n++; if (firstTeamWon) meanFloorBuckets[mfb2].wins++;
+
+      // Min floor bucket
+      var mnb2;
+      if (fMin < 0.40) mnb2 = '<0.40'; else if (fMin < 0.50) mnb2 = '0.40-0.49';
+      else if (fMin < 0.60) mnb2 = '0.50-0.59'; else if (fMin < 0.70) mnb2 = '0.60-0.69'; else mnb2 = '0.70+';
+      minFloorBuckets[mnb2].n++; if (firstTeamWon) minFloorBuckets[mnb2].wins++;
+
+      // Variance bucket
+      var vb2;
+      if (fStd < 0.03) vb2 = 'tight (<0.03)'; else if (fStd < 0.08) vb2 = 'moderate (0.03-0.08)';
+      else if (fStd < 0.15) vb2 = 'volatile (0.08-0.15)'; else vb2 = 'chaotic (0.15+)';
+      floorVarianceBuckets[vb2].n++; if (firstTeamWon) floorVarianceBuckets[vb2].wins++;
+
+      // Mean-min spread bucket
+      var msb2;
+      if (fSpread < 0.05) msb2 = 'tight (<0.05)'; else if (fSpread < 0.10) msb2 = 'moderate (0.05-0.10)';
+      else if (fSpread < 0.20) msb2 = 'gapped (0.10-0.20)'; else msb2 = 'dangerous (0.20+)';
+      meanMinSpreadBuckets[msb2].n++; if (firstTeamWon) meanMinSpreadBuckets[msb2].wins++;
+    }
+
+    // ── Section 18: Winner backtrace ──
+    if (gameWinner) {
+      var wTeam = gameWinner;
+      winnerProfile.total++;
+      if (firstFireTeam === wTeam) winnerProfile.was_first_bwc_team++;
+
+      if (ptFirstA[wTeam] !== null) {
+        winnerProfile.graduated_a++;
+        winnerProfile.gradA_cps.push(checkpoints.indexOf(ptFirstA[wTeam]));
+        winnerProfile.floorAtGradA.push(ptFloorAtA[wTeam]);
+        winnerProfile.marginAtGradA.push(ptMarginAtA[wTeam]);
+        winnerGradAByCp[ptFirstA[wTeam]].n++;
+
+        // Also track B if they went through it
+        if (ptFirstB[wTeam] !== null) {
+          winnerProfile.gradB_cps.push(checkpoints.indexOf(ptFirstB[wTeam]));
+          winnerProfile.floorAtGradB.push(ptFloorAtB[wTeam]);
+          winnerProfile.marginAtGradB.push(ptMarginAtB[wTeam]);
+          winnerGradBByCp[ptFirstB[wTeam]].n++;
+        }
+
+        // Was winner first/second/only to A?
+        var lTeam = wTeam === homeA ? awayA : homeA;
+        if (ptFirstA[lTeam] !== null) {
+          var wIdx = checkpoints.indexOf(ptFirstA[wTeam]), lIdx = checkpoints.indexOf(ptFirstA[lTeam]);
+          if (wIdx <= lIdx) winnerProfile.was_first_to_grad_a++;
+          else winnerProfile.was_second_to_grad_a++;
+        } else { winnerProfile.was_only_to_grad_a++; }
+
+        // Path
+        if (ptFirstB[wTeam] && checkpoints.indexOf(ptFirstB[wTeam]) < checkpoints.indexOf(ptFirstA[wTeam])) {
+          if (ptFirstBWC[wTeam] && checkpoints.indexOf(ptFirstBWC[wTeam]) < checkpoints.indexOf(ptFirstB[wTeam])) winnerPath.c_to_a++;
+          else winnerPath.b_to_a++;
+        } else { winnerPath.born_a++; }
+
+      } else if (ptFirstB[wTeam] !== null) {
+        winnerProfile.graduated_b_only++;
+        winnerProfile.gradB_cps.push(checkpoints.indexOf(ptFirstB[wTeam]));
+        winnerProfile.floorAtGradB.push(ptFloorAtB[wTeam]);
+        winnerProfile.marginAtGradB.push(ptMarginAtB[wTeam]);
+        winnerGradBByCp[ptFirstB[wTeam]].n++;
+
+        var lTeam2 = wTeam === homeA ? awayA : homeA;
+        if (ptFirstB[lTeam2] !== null) {
+          var wIdx2 = checkpoints.indexOf(ptFirstB[wTeam]), lIdx2 = checkpoints.indexOf(ptFirstB[lTeam2]);
+          if (wIdx2 <= lIdx2) winnerProfile.was_first_to_grad_b++;
+          else winnerProfile.was_second_to_grad_b++;
+        } else { winnerProfile.was_only_to_grad_b++; }
+
+        if (ptFirstBWC[wTeam] && checkpoints.indexOf(ptFirstBWC[wTeam]) < checkpoints.indexOf(ptFirstB[wTeam])) winnerPath.c_to_b++;
+        else winnerPath.born_b++;
+
+      } else if (ptFirstBWC[wTeam] !== null) {
+        winnerProfile.stayed_c++; winnerPath.stayed_c++;
+      } else {
+        winnerProfile.never_bwc++; winnerPath.never_bwc++;
+      }
+
+      // Ctrl path
+      if (firstFireTeam === wTeam && q4end && q4end.ctrl === wTeam) winnerCtrlPath.wire_to_wire++;
+      else if (ptFirstBWC[wTeam] !== null) winnerCtrlPath.took_over++;
+    }
   }
 
   // ── Aggregate helpers ──
@@ -4280,6 +4506,82 @@ async function reportTierJourney(sql, url) {
     section_15_time_to_graduate: {
       description: 'How many checkpoints from first fire to reaching peak tier?',
       buckets: pct(timeToGrad),
+    },
+
+    section_16_first_to_graduate: {
+      description: 'Which team GRADUATED to B/A first (per-team tracking)? Did that team win?',
+      first_to_b: {
+        n: firstToGradB.n, won: firstToGradB.won,
+        pct: firstToGradB.n > 0 ? Math.round(firstToGradB.won / firstToGradB.n * 1000) / 10 : null,
+      },
+      first_to_a: {
+        n: firstToGradA.n, won: firstToGradA.won,
+        pct: firstToGradA.n > 0 ? Math.round(firstToGradA.won / firstToGradA.n * 1000) / 10 : null,
+      },
+      both_graduated_b: {
+        n: bothGradB.n, first_won: bothGradB.first_won,
+        pct: bothGradB.n > 0 ? Math.round(bothGradB.first_won / bothGradB.n * 1000) / 10 : null,
+        description: 'Both teams reached B — did the first to get there win?',
+      },
+      only_one_graduated_b: {
+        n: onlyOneGradB.n, won: onlyOneGradB.won,
+        pct: onlyOneGradB.n > 0 ? Math.round(onlyOneGradB.won / onlyOneGradB.n * 1000) / 10 : null,
+        description: 'Only one team reached B — did they win?',
+      },
+      first_b_by_checkpoint: pct(firstGradBByQ),
+      first_a_by_checkpoint: pct(firstGradAByQ),
+    },
+
+    section_17_floor_quality: {
+      description: 'Floor quality across BWC-eligible checkpoint sequence. Mean, min, variance, spread — which separates winners?',
+      by_mean_floor: pct(meanFloorBuckets),
+      by_min_floor: pct(minFloorBuckets),
+      by_variance: pct(floorVarianceBuckets),
+      by_mean_min_spread: pct(meanMinSpreadBuckets),
+    },
+
+    section_18_winner_backtrace: {
+      description: 'Start from WINNERS — trace their graduation patterns backward.',
+      total_winners: winnerProfile.total,
+      graduation_distribution: {
+        graduated_to_a: winnerProfile.graduated_a,
+        graduated_to_b_only: winnerProfile.graduated_b_only,
+        stayed_c: winnerProfile.stayed_c,
+        never_bwc: winnerProfile.never_bwc,
+        pct_graduated_a: winnerProfile.total > 0 ? Math.round(winnerProfile.graduated_a / winnerProfile.total * 1000) / 10 : null,
+        pct_graduated_b_plus: winnerProfile.total > 0 ? Math.round((winnerProfile.graduated_a + winnerProfile.graduated_b_only) / winnerProfile.total * 1000) / 10 : null,
+      },
+      graduation_path: winnerPath,
+      winner_was_first_bwc_team: {
+        n: winnerProfile.was_first_bwc_team,
+        pct: winnerProfile.total > 0 ? Math.round(winnerProfile.was_first_bwc_team / winnerProfile.total * 1000) / 10 : null,
+      },
+      ctrl_path: winnerCtrlPath,
+      anchor_reliability: {
+        description: 'Of winners who graduated: were they FIRST, SECOND, or ONLY team to graduate?',
+        first_to_b: winnerProfile.was_first_to_grad_b,
+        second_to_b: winnerProfile.was_second_to_grad_b,
+        only_to_b: winnerProfile.was_only_to_grad_b,
+        first_to_a: winnerProfile.was_first_to_grad_a,
+        second_to_a: winnerProfile.was_second_to_grad_a,
+        only_to_a: winnerProfile.was_only_to_grad_a,
+      },
+      winner_grad_b_by_checkpoint: winnerGradBByCp,
+      winner_grad_a_by_checkpoint: winnerGradAByCp,
+      conditions_at_graduation: {
+        b_graduates: {
+          n: winnerProfile.floorAtGradB.length,
+          median_floor: medianArr(winnerProfile.floorAtGradB),
+          avg_floor: avgArr(winnerProfile.floorAtGradB),
+          median_margin: medianArr(winnerProfile.marginAtGradB),
+        },
+        a_graduates: {
+          n: winnerProfile.floorAtGradA.length,
+          median_floor: medianArr(winnerProfile.floorAtGradA),
+          avg_floor: avgArr(winnerProfile.floorAtGradA),
+          median_margin: medianArr(winnerProfile.marginAtGradA),
+        },
+      },
     },
   };
 }
