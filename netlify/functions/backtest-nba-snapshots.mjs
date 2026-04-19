@@ -4472,6 +4472,41 @@ async function reportProductionReplay(sql, url) {
   // Single-game deep dive accumulator
   var singleGameTimeline = null;
 
+  // ── Section 9: First team to GRADUATE (not just first BWC fire) ──
+  var firstToGradB = { n: 0, won: 0 };
+  var firstToGradA = { n: 0, won: 0 };
+  var bothGradB = { n: 0, first_won: 0 };  // both teams reached B
+  var onlyOneGradB = { n: 0, won: 0 };      // only one team graduated to B
+  var firstGradBByQ = { Q1:{n:0,wins:0}, Q2:{n:0,wins:0}, Q3:{n:0,wins:0}, Q4:{n:0,wins:0} };
+  var firstGradAByQ = { Q1:{n:0,wins:0}, Q2:{n:0,wins:0}, Q3:{n:0,wins:0}, Q4:{n:0,wins:0} };
+
+  // ── Section 10: Inter-checkpoint floor quality ──
+  // Checkpoint boundaries at 6-min intervals (game-seconds)
+  var cpBoundaries = [0, 360, 720, 1080, 1440, 1800, 2160, 2520, 2880];
+  var cpLabels = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+
+  // Aggregate buckets for inter-checkpoint quality metrics
+  var meanFloorBuckets = {
+    '0.50-0.59': {n:0,wins:0}, '0.60-0.69': {n:0,wins:0}, '0.70-0.79': {n:0,wins:0},
+    '0.80-0.89': {n:0,wins:0}, '0.90+': {n:0,wins:0}
+  };
+  var minFloorBuckets = {
+    '<0.40': {n:0,wins:0}, '0.40-0.49': {n:0,wins:0}, '0.50-0.59': {n:0,wins:0},
+    '0.60-0.69': {n:0,wins:0}, '0.70+': {n:0,wins:0}
+  };
+  var floorVarianceBuckets = {
+    'tight (<0.03)': {n:0,wins:0}, 'moderate (0.03-0.08)': {n:0,wins:0},
+    'volatile (0.08-0.15)': {n:0,wins:0}, 'chaotic (0.15+)': {n:0,wins:0}
+  };
+  // Mean-min spread: how far does floor dip below average?
+  var meanMinSpreadBuckets = {
+    'tight (<0.05)': {n:0,wins:0}, 'moderate (0.05-0.10)': {n:0,wins:0},
+    'gapped (0.10-0.20)': {n:0,wins:0}, 'dangerous (0.20+)': {n:0,wins:0}
+  };
+  // Per-checkpoint-window quality (aggregated across games)
+  var perWindowQuality = {};
+  for (var wl of cpLabels) perWindowQuality[wl] = { floors: [], wins: [], mins: [], stddevs: [] };
+
   var totalGames = 0;
   var totalSnaps = 0;
 
@@ -4522,6 +4557,17 @@ async function reportProductionReplay(sql, url) {
     // Timeline for single-game mode
     var timeline = [];
 
+    // Per-team graduation tracking (both teams independently)
+    var homeAlias = snaps[0].home_alias;
+    var awayAlias = snaps[0].away_alias;
+    var perTeam = {};
+    perTeam[homeAlias] = { holds: 0, firstB: null, firstA: null };
+    perTeam[awayAlias] = { holds: 0, firstB: null, firstA: null };
+
+    // Inter-checkpoint floor collection: floors grouped by checkpoint window
+    var windowFloors = {};
+    for (var wli = 0; wli < cpLabels.length; wli++) windowFloors[cpLabels[wli]] = [];
+
     for (var si = 0; si < snaps.length; si++) {
       var snap = snaps[si];
       var gameSec = gameSecondsElapsed(snap.period, snap.clock);
@@ -4539,6 +4585,21 @@ async function reportProductionReplay(sql, url) {
         holdCount = 1;
       }
       prevCtrl = snap.floor_team;
+
+      // Per-team hold tracking
+      var curTeam = snap.floor_team;
+      var otherTeam = curTeam === homeAlias ? awayAlias : homeAlias;
+      if (perTeam[curTeam]) perTeam[curTeam].holds++;
+      // Reset other team's holds when ctrl just changed (holdCount reset to 1)
+      if (holdCount === 1 && perTeam[otherTeam]) perTeam[otherTeam].holds = 0;
+
+      // Collect floor into checkpoint window
+      var winIdx = -1;
+      for (var wi = 0; wi < cpBoundaries.length - 1; wi++) {
+        if (gameSec >= cpBoundaries[wi] && gameSec < cpBoundaries[wi + 1]) { winIdx = wi; break; }
+      }
+      if (winIdx === -1 && gameSec >= cpBoundaries[cpBoundaries.length - 1]) winIdx = cpBoundaries.length - 2;
+      if (winIdx >= 0 && winIdx < cpLabels.length) windowFloors[cpLabels[winIdx]].push(floor);
 
       // Compute conviction + opp count
       var comp = computeFromSnap(snap);
@@ -4564,6 +4625,16 @@ async function reportProductionReplay(sql, url) {
         // First A
         if (firstATierSec === null && tier === 'A') {
           firstATierSec = gameSec;
+        }
+
+        // Per-team graduation: track which team reached B/A first
+        if (perTeam[snap.floor_team]) {
+          if (perTeam[snap.floor_team].firstB === null && (tier === 'B' || tier === 'A')) {
+            perTeam[snap.floor_team].firstB = gameSec;
+          }
+          if (perTeam[snap.floor_team].firstA === null && tier === 'A') {
+            perTeam[snap.floor_team].firstA = gameSec;
+          }
         }
 
         // Oscillation detection: tier went DOWN from previous BWC-eligible snapshot
@@ -4724,6 +4795,119 @@ async function reportProductionReplay(sql, url) {
     }
 
     if (singleGame) singleGameTimeline = timeline;
+
+    // ── Per-team graduation aggregation ──
+    var hGrad = perTeam[homeAlias] || {};
+    var aGrad = perTeam[awayAlias] || {};
+
+    // First team to graduate to B
+    var firstBTeam = null;
+    if (hGrad.firstB !== null && aGrad.firstB !== null) {
+      firstBTeam = hGrad.firstB <= aGrad.firstB ? homeAlias : awayAlias;
+      bothGradB.n++;
+      if (firstBTeam === gameWinner) bothGradB.first_won++;
+    } else if (hGrad.firstB !== null) {
+      firstBTeam = homeAlias;
+      onlyOneGradB.n++;
+      if (firstBTeam === gameWinner) onlyOneGradB.won++;
+    } else if (aGrad.firstB !== null) {
+      firstBTeam = awayAlias;
+      onlyOneGradB.n++;
+      if (firstBTeam === gameWinner) onlyOneGradB.won++;
+    }
+    if (firstBTeam) {
+      firstToGradB.n++;
+      if (firstBTeam === gameWinner) firstToGradB.won++;
+      var fbQ = Math.floor((hGrad.firstB !== null && (aGrad.firstB === null || hGrad.firstB <= aGrad.firstB) ? hGrad.firstB : aGrad.firstB) / 720);
+      var fbQLabel = ['Q1','Q2','Q3','Q4'][Math.min(fbQ, 3)];
+      firstGradBByQ[fbQLabel].n++;
+      if (firstBTeam === gameWinner) firstGradBByQ[fbQLabel].wins++;
+    }
+
+    // First team to graduate to A
+    var firstATeam = null;
+    if (hGrad.firstA !== null && aGrad.firstA !== null) {
+      firstATeam = hGrad.firstA <= aGrad.firstA ? homeAlias : awayAlias;
+    } else if (hGrad.firstA !== null) {
+      firstATeam = homeAlias;
+    } else if (aGrad.firstA !== null) {
+      firstATeam = awayAlias;
+    }
+    if (firstATeam) {
+      firstToGradA.n++;
+      if (firstATeam === gameWinner) firstToGradA.won++;
+      var faQ = Math.floor((hGrad.firstA !== null && (aGrad.firstA === null || hGrad.firstA <= aGrad.firstA) ? hGrad.firstA : aGrad.firstA) / 720);
+      var faQLabel = ['Q1','Q2','Q3','Q4'][Math.min(faQ, 3)];
+      firstGradAByQ[faQLabel].n++;
+      if (firstATeam === gameWinner) firstGradAByQ[faQLabel].wins++;
+    }
+
+    // ── Inter-checkpoint quality aggregation ──
+    // For the ctrl team at each checkpoint window: compute mean, min, stddev of floor
+    var ctrlTeamWon = firstBWCTeam === gameWinner; // use firstBWCTeam's perspective for floor quality
+    for (var wli2 = 0; wli2 < cpLabels.length; wli2++) {
+      var wLabel = cpLabels[wli2];
+      var wFloors = windowFloors[wLabel];
+      if (wFloors.length < 2) continue;
+
+      var sum = 0, min = 999, max = -999;
+      for (var fi = 0; fi < wFloors.length; fi++) {
+        sum += wFloors[fi];
+        if (wFloors[fi] < min) min = wFloors[fi];
+        if (wFloors[fi] > max) max = wFloors[fi];
+      }
+      var mean = sum / wFloors.length;
+      var variance = 0;
+      for (var fi2 = 0; fi2 < wFloors.length; fi2++) {
+        variance += (wFloors[fi2] - mean) * (wFloors[fi2] - mean);
+      }
+      var stddev = Math.sqrt(variance / wFloors.length);
+      var meanMinSpread = mean - min;
+
+      // Track per-window aggregates
+      perWindowQuality[wLabel].floors.push(mean);
+      perWindowQuality[wLabel].wins.push(firstTeamWon ? 1 : 0);
+      perWindowQuality[wLabel].mins.push(min);
+      perWindowQuality[wLabel].stddevs.push(stddev);
+
+      // Bucket by mean floor
+      var mfb;
+      if (mean < 0.60) mfb = '0.50-0.59';
+      else if (mean < 0.70) mfb = '0.60-0.69';
+      else if (mean < 0.80) mfb = '0.70-0.79';
+      else if (mean < 0.90) mfb = '0.80-0.89';
+      else mfb = '0.90+';
+      meanFloorBuckets[mfb].n++;
+      if (firstTeamWon) meanFloorBuckets[mfb].wins++;
+
+      // Bucket by min floor
+      var mnb;
+      if (min < 0.40) mnb = '<0.40';
+      else if (min < 0.50) mnb = '0.40-0.49';
+      else if (min < 0.60) mnb = '0.50-0.59';
+      else if (min < 0.70) mnb = '0.60-0.69';
+      else mnb = '0.70+';
+      minFloorBuckets[mnb].n++;
+      if (firstTeamWon) minFloorBuckets[mnb].wins++;
+
+      // Bucket by stddev
+      var vb;
+      if (stddev < 0.03) vb = 'tight (<0.03)';
+      else if (stddev < 0.08) vb = 'moderate (0.03-0.08)';
+      else if (stddev < 0.15) vb = 'volatile (0.08-0.15)';
+      else vb = 'chaotic (0.15+)';
+      floorVarianceBuckets[vb].n++;
+      if (firstTeamWon) floorVarianceBuckets[vb].wins++;
+
+      // Bucket by mean-min spread
+      var msb;
+      if (meanMinSpread < 0.05) msb = 'tight (<0.05)';
+      else if (meanMinSpread < 0.10) msb = 'moderate (0.05-0.10)';
+      else if (meanMinSpread < 0.20) msb = 'gapped (0.10-0.20)';
+      else msb = 'dangerous (0.20+)';
+      meanMinSpreadBuckets[msb].n++;
+      if (firstTeamWon) meanMinSpreadBuckets[msb].wins++;
+    }
   }
 
   // ── 4. Build output ──
@@ -4839,6 +5023,64 @@ async function reportProductionReplay(sql, url) {
       surged: pctHelper(earlyFloorSurge.surged),
       flat: pctHelper(earlyFloorSurge.flat),
       dropped: pctHelper(earlyFloorSurge.dropped),
+    },
+
+    section_9_first_to_graduate: {
+      description: 'Which team GRADUATED to B (or A) first? Did that team win? This is the POSITION OPEN anchor question.',
+      first_to_b: {
+        n: firstToGradB.n,
+        won: firstToGradB.won,
+        pct: firstToGradB.n > 0 ? Math.round(firstToGradB.won / firstToGradB.n * 1000) / 10 : null,
+      },
+      first_to_a: {
+        n: firstToGradA.n,
+        won: firstToGradA.won,
+        pct: firstToGradA.n > 0 ? Math.round(firstToGradA.won / firstToGradA.n * 1000) / 10 : null,
+      },
+      both_graduated_b: {
+        n: bothGradB.n,
+        first_won: bothGradB.first_won,
+        pct: bothGradB.n > 0 ? Math.round(bothGradB.first_won / bothGradB.n * 1000) / 10 : null,
+        description: 'Both teams reached B — did the first one to get there win?',
+      },
+      only_one_graduated_b: {
+        n: onlyOneGradB.n,
+        won: onlyOneGradB.won,
+        pct: onlyOneGradB.n > 0 ? Math.round(onlyOneGradB.won / onlyOneGradB.n * 1000) / 10 : null,
+        description: 'Only one team reached B — did they win?',
+      },
+      first_b_by_quarter: {
+        Q1: pctHelper(firstGradBByQ.Q1), Q2: pctHelper(firstGradBByQ.Q2),
+        Q3: pctHelper(firstGradBByQ.Q3), Q4: pctHelper(firstGradBByQ.Q4),
+      },
+      first_a_by_quarter: {
+        Q1: pctHelper(firstGradAByQ.Q1), Q2: pctHelper(firstGradAByQ.Q2),
+        Q3: pctHelper(firstGradAByQ.Q3), Q4: pctHelper(firstGradAByQ.Q4),
+      },
+    },
+
+    section_10_intercheckpoint_floor_quality: {
+      description: 'Floor quality BETWEEN 6-min checkpoints from ~60s snapshots. Mean, min, variance as quality gates.',
+      by_mean_floor: Object.fromEntries(Object.entries(meanFloorBuckets).map(function(e) { return [e[0], pctHelper(e[1])]; })),
+      by_min_floor: Object.fromEntries(Object.entries(minFloorBuckets).map(function(e) { return [e[0], pctHelper(e[1])]; })),
+      by_variance: Object.fromEntries(Object.entries(floorVarianceBuckets).map(function(e) { return [e[0], pctHelper(e[1])]; })),
+      by_mean_min_spread: Object.fromEntries(Object.entries(meanMinSpreadBuckets).map(function(e) { return [e[0], pctHelper(e[1])]; })),
+      per_window_summary: Object.fromEntries(cpLabels.map(function(wl) {
+        var d = perWindowQuality[wl];
+        if (d.floors.length === 0) return [wl, { n: 0 }];
+        var avgMean = d.floors.reduce(function(a,b){return a+b;},0) / d.floors.length;
+        var avgMin = d.mins.reduce(function(a,b){return a+b;},0) / d.mins.length;
+        var avgStd = d.stddevs.reduce(function(a,b){return a+b;},0) / d.stddevs.length;
+        var winCount = d.wins.reduce(function(a,b){return a+b;},0);
+        return [wl, {
+          n: d.floors.length,
+          avg_mean_floor: Math.round(avgMean * 1000) / 1000,
+          avg_min_floor: Math.round(avgMin * 1000) / 1000,
+          avg_stddev: Math.round(avgStd * 1000) / 1000,
+          avg_mean_min_spread: Math.round((avgMean - avgMin) * 1000) / 1000,
+          win_rate: Math.round(winCount / d.floors.length * 1000) / 10,
+        }];
+      })),
     },
   };
 
