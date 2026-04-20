@@ -3900,6 +3900,43 @@ async function reportTierJourney(sql, url) {
   var winnerPath = { c_to_a: 0, c_to_b: 0, b_to_a: 0, born_a: 0, born_b: 0, stayed_c: 0, never_bwc: 0 };
   var winnerCtrlPath = { wire_to_wire: 0, took_over: 0 };
 
+  // Section 19: Mean floor × tier
+  var s19_mfTier = {};
+  ['A','B'].forEach(function(t) { [0.70,0.75,0.80,0.85].forEach(function(mf) {
+    s19_mfTier[t+'_mf'+mf.toFixed(2)] = {n:0,wins:0};
+  }); });
+
+  // Section 20: Mean floor × checkpoint count at peak
+  var s20_mfCp = {};
+  [0.70,0.75,0.80].forEach(function(mf) { [2,3,4,5,6].forEach(function(cp) {
+    s20_mfCp['mf'+mf.toFixed(2)+'_cp'+cp] = {n:0,wins:0};
+  }); });
+
+  // Section 21: Mean floor × only_one_grad
+  var s21_mfGrad = {};
+  [0.70,0.75,0.80].forEach(function(mf) {
+    s21_mfGrad[mf.toFixed(2)] = { only_one: {n:0,wins:0}, both: {n:0,wins:0} };
+  });
+
+  // Section 22: PO gate simulation
+  var s22_poGate = {};
+  [0.70,0.75,0.80,0.85].forEach(function(mf) {
+    s22_poGate[mf.toFixed(2)] = {
+      would_fire: {n:0,wins:0}, would_suppress: {n:0,wins:0},
+      winners_lost: 0, bad_pos_prevented: 0
+    };
+  });
+
+  // Section 23: Rolling mean floor by checkpoint (winners vs losers)
+  var s23_rollingMF = { winners: {}, losers: {} };
+  checkpoints.forEach(function(cp) { s23_rollingMF.winners[cp] = []; s23_rollingMF.losers[cp] = []; });
+
+  // Section 24: Mean floor + min floor combined gate
+  var s24_mfMinF = {};
+  [0.75,0.80].forEach(function(mf) { [0.60,0.65,0.70].forEach(function(mn) {
+    s24_mfMinF['mf'+mf.toFixed(2)+'_min'+mn.toFixed(2)] = {n:0,wins:0};
+  }); });
+
   for (var [gid, snaps] of Object.entries(games)) {
     // Build checkpoint map
     var cpMap = {};
@@ -4313,6 +4350,83 @@ async function reportTierJourney(sql, url) {
       if (fSpread < 0.05) msb2 = 'tight (<0.05)'; else if (fSpread < 0.10) msb2 = 'moderate (0.05-0.10)';
       else if (fSpread < 0.20) msb2 = 'gapped (0.10-0.20)'; else msb2 = 'dangerous (0.20+)';
       meanMinSpreadBuckets[msb2].n++; if (firstTeamWon) meanMinSpreadBuckets[msb2].wins++;
+
+      // ── Section 19: Mean floor × tier ──
+      var graduated19 = peakTier === 'A' || peakTier === 'B';
+      if (graduated19) {
+        for (var mft19 of [0.70,0.75,0.80,0.85]) {
+          var k19 = peakTier + '_mf' + mft19.toFixed(2);
+          if (fMean >= mft19) { s19_mfTier[k19].n++; if (firstTeamWon) s19_mfTier[k19].wins++; }
+        }
+      }
+
+      // ── Section 20: Mean floor × checkpoint count at peak ──
+      if (graduated19) {
+        for (var mft20 of [0.70,0.75,0.80]) {
+          for (var cpc20 of [2,3,4,5,6]) {
+            if (fMean >= mft20 && peakTierCps >= cpc20) {
+              var k20 = 'mf' + mft20.toFixed(2) + '_cp' + cpc20;
+              s20_mfCp[k20].n++; if (firstTeamWon) s20_mfCp[k20].wins++;
+            }
+          }
+        }
+      }
+
+      // ── Section 21: Mean floor × only_one_grad ──
+      if (graduated19) {
+        var bothGrad21 = ptFirstB[homeA] !== null && ptFirstB[awayA] !== null;
+        for (var mft21 of [0.70,0.75,0.80]) {
+          if (fMean >= mft21) {
+            var bucket21 = bothGrad21 ? 'both' : 'only_one';
+            s21_mfGrad[mft21.toFixed(2)][bucket21].n++;
+            if (firstTeamWon) s21_mfGrad[mft21.toFixed(2)][bucket21].wins++;
+          }
+        }
+      }
+
+      // ── Section 22: PO gate simulation ──
+      if (graduated19) {
+        for (var mft22 of [0.70,0.75,0.80,0.85]) {
+          if (fMean >= mft22) {
+            s22_poGate[mft22.toFixed(2)].would_fire.n++;
+            if (firstTeamWon) s22_poGate[mft22.toFixed(2)].would_fire.wins++;
+          } else {
+            s22_poGate[mft22.toFixed(2)].would_suppress.n++;
+            if (firstTeamWon) {
+              s22_poGate[mft22.toFixed(2)].would_suppress.wins++;
+              s22_poGate[mft22.toFixed(2)].winners_lost++;
+            } else {
+              s22_poGate[mft22.toFixed(2)].bad_pos_prevented++;
+            }
+          }
+        }
+      }
+
+      // ── Section 23: Rolling mean floor by checkpoint ──
+      var runSum23 = 0, runCount23 = 0;
+      for (var ci23 = 0; ci23 < checkpoints.length; ci23++) {
+        if (floorSeq[ci23] !== null && tierSeq[ci23] !== null) {
+          runSum23 += floorSeq[ci23];
+          runCount23++;
+        }
+        if (runCount23 > 0) {
+          var runMean23 = runSum23 / runCount23;
+          var target23 = firstTeamWon ? s23_rollingMF.winners : s23_rollingMF.losers;
+          target23[checkpoints[ci23]].push(runMean23);
+        }
+      }
+
+      // ── Section 24: Mean floor + min floor combined gate ──
+      if (graduated19) {
+        for (var mft24 of [0.75,0.80]) {
+          for (var mnft24 of [0.60,0.65,0.70]) {
+            if (fMean >= mft24 && fMin >= mnft24) {
+              var k24 = 'mf' + mft24.toFixed(2) + '_min' + mnft24.toFixed(2);
+              s24_mfMinF[k24].n++; if (firstTeamWon) s24_mfMinF[k24].wins++;
+            }
+          }
+        }
+      }
     }
 
     // ── Section 18: Winner backtrace ──
@@ -4613,6 +4727,65 @@ async function reportTierJourney(sql, url) {
           median_margin: medianArr(winnerProfile.marginAtGradA),
         },
       },
+    },
+
+    section_19_mean_floor_x_tier: {
+      description: 'Mean floor threshold × graduated tier. Which MF gate works for each rank?',
+      grid: pct(s19_mfTier),
+    },
+
+    section_20_mean_floor_x_cp_count: {
+      description: 'Mean floor threshold × checkpoints sustained at peak tier.',
+      grid: pct(s20_mfCp),
+    },
+
+    section_21_mean_floor_x_only_one_grad: {
+      description: 'Mean floor × whether only one team or both teams graduated.',
+      thresholds: Object.fromEntries(
+        Object.entries(s21_mfGrad).map(function(e) {
+          var oo = e[1].only_one, bo = e[1].both;
+          return [e[0], {
+            only_one: { n: oo.n, wins: oo.wins, pct: oo.n > 0 ? Math.round(oo.wins / oo.n * 1000) / 10 : null },
+            both: { n: bo.n, wins: bo.wins, pct: bo.n > 0 ? Math.round(bo.wins / bo.n * 1000) / 10 : null },
+          }];
+        })
+      ),
+    },
+
+    section_22_po_gate_simulation: {
+      description: 'If PO required mean floor >= threshold, how many fire, how many correct winners lost, how many bad positions prevented?',
+      thresholds: Object.fromEntries(
+        Object.entries(s22_poGate).map(function(e) {
+          var d = e[1];
+          return [e[0], {
+            would_fire: { n: d.would_fire.n, wins: d.would_fire.wins, pct: d.would_fire.n > 0 ? Math.round(d.would_fire.wins / d.would_fire.n * 1000) / 10 : null },
+            would_suppress: { n: d.would_suppress.n, wins: d.would_suppress.wins },
+            winners_lost: d.winners_lost,
+            bad_positions_prevented: d.bad_pos_prevented,
+          }];
+        })
+      ),
+    },
+
+    section_23_rolling_mean_floor: {
+      description: 'Average running mean floor at each checkpoint for winners vs losers. Shows when mean floor diverges enough to trust.',
+      winners: Object.fromEntries(
+        checkpoints.map(function(cp) {
+          var vals = s23_rollingMF.winners[cp];
+          return [cp, { avg: vals.length > 0 ? Math.round(vals.reduce(function(a,b){return a+b;},0) / vals.length * 1000) / 1000 : null, n: vals.length }];
+        })
+      ),
+      losers: Object.fromEntries(
+        checkpoints.map(function(cp) {
+          var vals = s23_rollingMF.losers[cp];
+          return [cp, { avg: vals.length > 0 ? Math.round(vals.reduce(function(a,b){return a+b;},0) / vals.length * 1000) / 1000 : null, n: vals.length }];
+        })
+      ),
+    },
+
+    section_24_mean_floor_plus_min_floor: {
+      description: 'Combined gate: mean floor >= X AND min floor >= Y. Does adding a min floor guard improve accuracy?',
+      grid: pct(s24_mfMinF),
     },
   };
 }
