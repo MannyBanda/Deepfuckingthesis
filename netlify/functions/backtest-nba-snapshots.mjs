@@ -6999,6 +6999,709 @@ async function reportDualTrackingSim(sql, url) {
   return output;
 }
 
+// ── REPORT: BUY JOURNEY — Trailing team structural control lifecycle ────────
+// ?phase=report_buy_journey          — full dataset
+// ?phase=report_buy_journey&close=1  — competitive games only
+//
+// Mirrors reportTierJourney but from the TRAILING team's perspective.
+// BUY-eligible = ctrl team trailing (ctrlMargin < 0), floor >= 0.50.
+// Answers: when trailing teams have structural control, what predicts comebacks?
+
+async function reportBuyJourney(sql, url) {
+  var closeOnly = url?.searchParams?.get('close') === '1';
+
+  var rows = await sql`
+    SELECT game_id, checkpoint, margin_at_snapshot AS margin,
+           (indicators->>'score')::real AS floor,
+           indicators->>'controlTeam' AS ctrl,
+           indicators->>'homeAlias' AS home_alias,
+           indicators->>'awayAlias' AS away_alias,
+           (indicators->>'I1')::text AS i1raw, (indicators->>'I2')::text AS i2raw,
+           (indicators->>'I3')::text AS i3raw, (indicators->>'I4')::text AS i4raw,
+           (indicators->>'I5')::text AS i5raw,
+           (conviction->>'tier') AS conv_tier,
+           (conviction->>'count')::int AS ind_count,
+           pbp_derived,
+           ctrl_team_won, final_margin
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+    ORDER BY game_id, checkpoint
+  `;
+
+  var checkpoints = CP_LABELS;
+
+  // Group by game
+  var games = {};
+  for (var r of rows) {
+    if (!games[r.game_id]) games[r.game_id] = [];
+    games[r.game_id].push(r);
+  }
+
+  // Competitive game filter
+  var Q3_CPS = new Set(['Q3_9','Q3_6','Q3_3','Q3_END']);
+  var Q4_CPS = new Set(['Q4_9','Q4_6','Q4_3','Q4_END']);
+  if (closeOnly) {
+    for (var gid of Object.keys(games)) {
+      var snaps = games[gid];
+      var competitive = snaps.some(function(s) {
+        var absM = Math.abs(s.margin);
+        if (Q3_CPS.has(s.checkpoint) && absM <= 5) return true;
+        if (Q4_CPS.has(s.checkpoint) && absM <= 7) return true;
+        return false;
+      });
+      if (!competitive) delete games[gid];
+    }
+  }
+
+  // ── Helpers ──
+  function getCtrlMargin(r) {
+    return (r.ctrl === r.home_alias) ? r.margin : -r.margin;
+  }
+
+  function getCtrlIndCount(r) {
+    var ctrlHome = r.ctrl === r.home_alias;
+    var scores = [parseFloat(r.i1raw), parseFloat(r.i2raw), parseFloat(r.i3raw),
+                  parseFloat(r.i4raw), parseFloat(r.i5raw)];
+    var count = 0;
+    for (var s of scores) {
+      if (isNaN(s)) continue;
+      if (ctrlHome ? (s === 1) : (s === 0)) count++;
+    }
+    return count;
+  }
+
+  function getOppCount(r) {
+    var ctrlHome = r.ctrl === r.home_alias;
+    var scores = [parseFloat(r.i1raw), parseFloat(r.i2raw), parseFloat(r.i3raw),
+                  parseFloat(r.i4raw), parseFloat(r.i5raw)];
+    var count = 0;
+    for (var s of scores) {
+      if (isNaN(s)) continue;
+      if (ctrlHome ? (s === 0) : (s === 1)) count++;
+    }
+    return count;
+  }
+
+  function ctrlIndState(r, key) {
+    var raw = parseFloat(r[key.toLowerCase()]);
+    if (isNaN(raw)) return null;
+    var ctrlHome = r.ctrl === r.home_alias;
+    var v = ctrlHome ? raw : 1 - raw;
+    return v === 1 ? 'won' : v === 0 ? 'lost' : 'even';
+  }
+
+  function deficitBucket(deficit) {
+    if (deficit <= 2) return 'trail_1-2';
+    if (deficit <= 4) return 'trail_3-4';
+    if (deficit <= 7) return 'trail_5-7';
+    if (deficit <= 10) return 'trail_8-10';
+    return 'trail_11+';
+  }
+
+  function floorBucket(f) {
+    if (f >= 0.90) return '0.90+';
+    if (f >= 0.80) return '0.80-0.89';
+    if (f >= 0.70) return '0.70-0.79';
+    if (f >= 0.60) return '0.60-0.69';
+    return '0.50-0.59';
+  }
+
+  var pct = function(obj) {
+    var out = {};
+    for (var k in obj) {
+      var v = obj[k];
+      if (v && typeof v === 'object' && 'n' in v && 'wins' in v) {
+        out[k] = { n: v.n, wins: v.wins, pct: v.n > 0 ? Math.round(v.wins / v.n * 1000) / 10 : null };
+      } else {
+        out[k] = v;
+      }
+    }
+    return out;
+  };
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // SECTION ACCUMULATORS
+  // ══════════════════════════════════════════════════════════════════════════
+
+  var totalGames = 0;
+  var totalBuyGames = 0;
+
+  // S1: First BUY-eligible fire by checkpoint
+  var s1_firstFireByCp = {};
+  for (var cp of checkpoints) s1_firstFireByCp[cp] = { n: 0, wins: 0 };
+
+  // S2: Floor at first fire
+  var s2_floorAtFire = {
+    '0.50-0.59': {n:0,wins:0}, '0.60-0.69': {n:0,wins:0}, '0.70-0.79': {n:0,wins:0},
+    '0.80-0.89': {n:0,wins:0}, '0.90+': {n:0,wins:0},
+  };
+
+  // S3: Deficit at first fire
+  var s3_deficitAtFire = {
+    'trail_1-2': {n:0,wins:0}, 'trail_3-4': {n:0,wins:0}, 'trail_5-7': {n:0,wins:0},
+    'trail_8-10': {n:0,wins:0}, 'trail_11+': {n:0,wins:0},
+  };
+
+  // S4: Peak floor while trailing
+  var s4_peakFloor = {
+    '0.50-0.59': {n:0,wins:0}, '0.60-0.69': {n:0,wins:0}, '0.70-0.79': {n:0,wins:0},
+    '0.80-0.89': {n:0,wins:0}, '0.90+': {n:0,wins:0},
+  };
+
+  // S5: Floor progression — mean floor at each checkpoint for winners vs losers
+  var s5_floorProg = { winners: {}, losers: {} };
+  for (var cp of checkpoints) { s5_floorProg.winners[cp] = []; s5_floorProg.losers[cp] = []; }
+
+  // S6: Deficit progression — mean ctrl-relative margin at each cp
+  var s6_deficitProg = { winners: {}, losers: {} };
+  for (var cp of checkpoints) { s6_deficitProg.winners[cp] = []; s6_deficitProg.losers[cp] = []; }
+
+  // S7: Max consecutive BUY-eligible holds
+  var s7_consHolds = {
+    '1 cp': {n:0,wins:0}, '2-3 cp': {n:0,wins:0}, '4-5 cp': {n:0,wins:0},
+    '6-7 cp': {n:0,wins:0}, '8+ cp': {n:0,wins:0},
+  };
+
+  // S8: Floor velocity while trailing
+  var s8_velocity = {
+    'surging (>+0.08)': {n:0,wins:0}, 'rising (+0.03 to +0.08)': {n:0,wins:0},
+    'stable (-0.03 to +0.03)': {n:0,wins:0}, 'declining (-0.03 to -0.08)': {n:0,wins:0},
+    'collapsing (<-0.08)': {n:0,wins:0},
+  };
+
+  // S9: Floor x deficit grid (checkpoint-level)
+  var floorBuckets = ['0.50-0.59','0.60-0.69','0.70-0.79','0.80-0.89','0.90+'];
+  var defBuckets = ['trail_1-2','trail_3-4','trail_5-7','trail_8-10','trail_11+'];
+  var s9_grid = {};
+  for (var fb of floorBuckets) { s9_grid[fb] = {}; for (var db of defBuckets) s9_grid[fb][db] = {n:0,wins:0}; }
+
+  // S10: Indicator count while trailing (checkpoint-level)
+  var s10_indCount = { '0': {n:0,wins:0}, '1': {n:0,wins:0}, '2': {n:0,wins:0},
+    '3': {n:0,wins:0}, '4': {n:0,wins:0}, '5': {n:0,wins:0} };
+
+  // S11: Conviction tier while trailing
+  var s11_conviction = {};
+
+  // S12: Individual indicator impact
+  var s12_indImpact = {};
+  for (var ind of ['I1','I2','I3','I4','I5']) {
+    s12_indImpact[ind] = { won: {n:0,wins:0}, even: {n:0,wins:0}, lost: {n:0,wins:0} };
+  }
+
+  // S13: Indicator pairs
+  var s13_pairs = {};
+
+  // S14: Opponent indicator count
+  var s14_oppCount = { '0': {n:0,wins:0}, '1': {n:0,wins:0}, '2+': {n:0,wins:0} };
+
+  // S15: Win rate by checkpoint
+  var s15_byCp = {};
+  for (var cp of checkpoints) s15_byCp[cp] = { n: 0, wins: 0 };
+
+  // S16: Comeback path
+  var s16_comeback = {
+    took_lead: { n: 0, wins: 0 },
+    never_led: { n: 0, wins: 0 },
+    took_lead_by_q: {},
+  };
+  for (var cp of checkpoints) s16_comeback.took_lead_by_q[cp] = { n: 0, wins: 0 };
+
+  // S17: Winner backtrace
+  var s17_backtrace = {
+    total_winners: 0,
+    avg_floor_at_first_fire: [],
+    avg_deficit_at_first_fire: [],
+    avg_peak_floor: [],
+    avg_ind_count_at_first_fire: [],
+    first_fire_cp_dist: {},
+    took_lead: 0,
+    never_led_but_won: 0,
+    comeback_q_dist: {},
+  };
+  for (var cp of checkpoints) {
+    s17_backtrace.first_fire_cp_dist[cp] = 0;
+    s17_backtrace.comeback_q_dist[cp] = 0;
+  }
+
+  // S18: Floor threshold sweep (game-level: peak floor while trailing)
+  var s18_floorSweep = {};
+  for (var t = 0.50; t <= 0.90; t += 0.05) {
+    s18_floorSweep[t.toFixed(2)] = { n: 0, wins: 0 };
+  }
+
+  // S19: Combined gates sweep
+  var s19_combined = {};
+  var floorGates = [0.55, 0.60, 0.65, 0.70, 0.75, 0.80];
+  var indGates = [1, 2, 3, 4];
+  var defGates = [4, 7, 10, 15];
+  for (var fg of floorGates) {
+    for (var ig of indGates) {
+      for (var dg of defGates) {
+        s19_combined['f' + fg.toFixed(2) + '_i' + ig + '_d' + dg] = { n:0, wins:0 };
+      }
+    }
+  }
+
+  // S20: Total checkpoints spent as trailing ctrl
+  var s20_trailDuration = {
+    '1 cp': {n:0,wins:0}, '2-3 cp': {n:0,wins:0}, '4-5 cp': {n:0,wins:0},
+    '6-8 cp': {n:0,wins:0}, '9+ cp': {n:0,wins:0},
+  };
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // GAME WALK
+  // ══════════════════════════════════════════════════════════════════════════
+
+  for (var [gid, snaps] of Object.entries(games)) {
+    var cpMap = {};
+    for (var s of snaps) cpMap[s.checkpoint] = s;
+    if (!cpMap['Q1_END']) continue;
+    totalGames++;
+
+    var homeA = snaps[0].home_alias;
+    var awayA = snaps[0].away_alias;
+
+    // ── Identify BUY-eligible checkpoints ──
+    var buyCheckpoints = [];
+    var firstBuyTeam = null;
+    var firstBuyCp = null;
+    var firstBuyCpIdx = null;
+    var firstBuyFloor = null;
+    var firstBuyDeficit = null;
+    var firstBuyIndCount = null;
+    var peakFloorWhileTrailing = 0;
+    var maxConsecutiveHolds = 0;
+    var currentRunLength = 0;
+    var prevBuyTeam = null;
+    var prevBuyFloor = null;
+    var totalBuyCheckpoints = 0;
+    var tookLead = false;
+    var tookLeadCp = null;
+    var won = null;
+
+    for (var ci = 0; ci < checkpoints.length; ci++) {
+      var cpLabel = checkpoints[ci];
+      var snap = cpMap[cpLabel];
+      if (!snap || !snap.ctrl) continue;
+
+      var ctrlMargin = getCtrlMargin(snap);
+      var isBuyEligible = ctrlMargin < 0 && snap.floor >= 0.50;
+
+      if (isBuyEligible) {
+        var deficit = Math.abs(ctrlMargin);
+        var indCount = getCtrlIndCount(snap);
+        var oppCount = getOppCount(snap);
+        won = snap.ctrl_team_won;
+
+        buyCheckpoints.push({
+          cpLabel: cpLabel, cpIdx: ci, snap: snap,
+          ctrlMargin: ctrlMargin, floor: snap.floor, deficit: deficit,
+          indCount: indCount, oppCount: oppCount,
+        });
+
+        // First fire tracking
+        if (!firstBuyTeam) {
+          firstBuyTeam = snap.ctrl;
+          firstBuyCp = cpLabel;
+          firstBuyCpIdx = ci;
+          firstBuyFloor = snap.floor;
+          firstBuyDeficit = deficit;
+          firstBuyIndCount = indCount;
+        }
+
+        // Peak floor
+        if (snap.floor > peakFloorWhileTrailing) peakFloorWhileTrailing = snap.floor;
+
+        // Consecutive holds
+        if (snap.ctrl === prevBuyTeam) {
+          currentRunLength++;
+        } else {
+          currentRunLength = 1;
+        }
+        if (currentRunLength > maxConsecutiveHolds) maxConsecutiveHolds = currentRunLength;
+        prevBuyTeam = snap.ctrl;
+
+        // S8: Floor velocity
+        if (prevBuyFloor !== null && snap.ctrl === firstBuyTeam) {
+          var delta = snap.floor - prevBuyFloor;
+          var velKey;
+          if (delta > 0.08) velKey = 'surging (>+0.08)';
+          else if (delta > 0.03) velKey = 'rising (+0.03 to +0.08)';
+          else if (delta > -0.03) velKey = 'stable (-0.03 to +0.03)';
+          else if (delta > -0.08) velKey = 'declining (-0.03 to -0.08)';
+          else velKey = 'collapsing (<-0.08)';
+          s8_velocity[velKey].n++;
+          if (won) s8_velocity[velKey].wins++;
+        }
+        if (snap.ctrl === firstBuyTeam) prevBuyFloor = snap.floor;
+
+        totalBuyCheckpoints++;
+
+        // ── Checkpoint-level accumulators ──
+
+        // S9: Floor x deficit grid
+        var fb = floorBucket(snap.floor);
+        var db = deficitBucket(deficit);
+        s9_grid[fb][db].n++;
+        if (won) s9_grid[fb][db].wins++;
+
+        // S10: Indicator count
+        s10_indCount[String(Math.min(indCount, 5))].n++;
+        if (won) s10_indCount[String(Math.min(indCount, 5))].wins++;
+
+        // S11: Conviction
+        var convKey = snap.conv_tier || 'UNKNOWN';
+        if (!s11_conviction[convKey]) s11_conviction[convKey] = {n:0,wins:0};
+        s11_conviction[convKey].n++;
+        if (won) s11_conviction[convKey].wins++;
+
+        // S12: Individual indicators
+        for (var ind of ['I1','I2','I3','I4','I5']) {
+          var state = ctrlIndState(snap, ind + 'raw');
+          if (state) { s12_indImpact[ind][state].n++; if (won) s12_indImpact[ind][state].wins++; }
+        }
+
+        // S13: Indicator pairs
+        var indStates = {};
+        for (var ind of ['I1','I2','I3','I4','I5']) indStates[ind] = ctrlIndState(snap, ind + 'raw');
+        var indArr = ['I1','I2','I3','I4','I5'];
+        for (var a = 0; a < indArr.length; a++) {
+          for (var b = a + 1; b < indArr.length; b++) {
+            if (indStates[indArr[a]] === 'won' && indStates[indArr[b]] === 'won') {
+              var pairKey = indArr[a] + '+' + indArr[b];
+              if (!s13_pairs[pairKey]) s13_pairs[pairKey] = {n:0,wins:0};
+              s13_pairs[pairKey].n++;
+              if (won) s13_pairs[pairKey].wins++;
+            }
+          }
+        }
+        // Golden stack
+        if (indCount >= 3 && oppCount === 0 && deficit <= 4) {
+          if (!s13_pairs['golden_3i_0opp_t14']) s13_pairs['golden_3i_0opp_t14'] = {n:0,wins:0};
+          s13_pairs['golden_3i_0opp_t14'].n++;
+          if (won) s13_pairs['golden_3i_0opp_t14'].wins++;
+        }
+
+        // S14: Opponent indicator count
+        var oppKey = oppCount >= 2 ? '2+' : String(oppCount);
+        s14_oppCount[oppKey].n++;
+        if (won) s14_oppCount[oppKey].wins++;
+
+        // S15: Win rate by checkpoint
+        s15_byCp[cpLabel].n++;
+        if (won) s15_byCp[cpLabel].wins++;
+
+        // S19: Combined gates
+        for (var fg of floorGates) {
+          if (snap.floor < fg) continue;
+          for (var ig of indGates) {
+            if (indCount < ig) continue;
+            for (var dg of defGates) {
+              if (deficit > dg) continue;
+              var gateKey = 'f' + fg.toFixed(2) + '_i' + ig + '_d' + dg;
+              s19_combined[gateKey].n++;
+              if (won) s19_combined[gateKey].wins++;
+            }
+          }
+        }
+      }
+
+      // Track if the first BUY team took the lead later
+      if (firstBuyTeam && !tookLead && snap.ctrl === firstBuyTeam && ctrlMargin > 0) {
+        tookLead = true;
+        tookLeadCp = cpLabel;
+      }
+
+      // Floor/deficit progression for first BUY team
+      if (firstBuyTeam && snap.ctrl === firstBuyTeam) {
+        var target = snap.ctrl_team_won ? s5_floorProg.winners : s5_floorProg.losers;
+        target[cpLabel].push(snap.floor);
+        var dtarget = snap.ctrl_team_won ? s6_deficitProg.winners : s6_deficitProg.losers;
+        dtarget[cpLabel].push(ctrlMargin);
+      }
+    }
+
+    // Skip games with no BUY-eligible checkpoints
+    if (buyCheckpoints.length === 0) continue;
+    totalBuyGames++;
+
+    // Determine if first BUY team won
+    var firstBuyWon = false;
+    for (var bc of buyCheckpoints) {
+      if (bc.snap.ctrl === firstBuyTeam) {
+        firstBuyWon = bc.snap.ctrl_team_won;
+        break;
+      }
+    }
+
+    // ── Game-level accumulators ──
+
+    // S1
+    s1_firstFireByCp[firstBuyCp].n++;
+    if (firstBuyWon) s1_firstFireByCp[firstBuyCp].wins++;
+
+    // S2
+    s2_floorAtFire[floorBucket(firstBuyFloor)].n++;
+    if (firstBuyWon) s2_floorAtFire[floorBucket(firstBuyFloor)].wins++;
+
+    // S3
+    s3_deficitAtFire[deficitBucket(firstBuyDeficit)].n++;
+    if (firstBuyWon) s3_deficitAtFire[deficitBucket(firstBuyDeficit)].wins++;
+
+    // S4
+    s4_peakFloor[floorBucket(peakFloorWhileTrailing)].n++;
+    if (firstBuyWon) s4_peakFloor[floorBucket(peakFloorWhileTrailing)].wins++;
+
+    // S7
+    var holdKey;
+    if (maxConsecutiveHolds <= 1) holdKey = '1 cp';
+    else if (maxConsecutiveHolds <= 3) holdKey = '2-3 cp';
+    else if (maxConsecutiveHolds <= 5) holdKey = '4-5 cp';
+    else if (maxConsecutiveHolds <= 7) holdKey = '6-7 cp';
+    else holdKey = '8+ cp';
+    s7_consHolds[holdKey].n++;
+    if (firstBuyWon) s7_consHolds[holdKey].wins++;
+
+    // S16
+    if (tookLead) {
+      s16_comeback.took_lead.n++;
+      if (firstBuyWon) s16_comeback.took_lead.wins++;
+      s16_comeback.took_lead_by_q[tookLeadCp].n++;
+      if (firstBuyWon) s16_comeback.took_lead_by_q[tookLeadCp].wins++;
+    } else {
+      s16_comeback.never_led.n++;
+      if (firstBuyWon) s16_comeback.never_led.wins++;
+    }
+
+    // S17
+    if (firstBuyWon) {
+      s17_backtrace.total_winners++;
+      s17_backtrace.avg_floor_at_first_fire.push(firstBuyFloor);
+      s17_backtrace.avg_deficit_at_first_fire.push(firstBuyDeficit);
+      s17_backtrace.avg_peak_floor.push(peakFloorWhileTrailing);
+      s17_backtrace.avg_ind_count_at_first_fire.push(firstBuyIndCount);
+      s17_backtrace.first_fire_cp_dist[firstBuyCp]++;
+      if (tookLead) {
+        s17_backtrace.took_lead++;
+        s17_backtrace.comeback_q_dist[tookLeadCp]++;
+      } else {
+        s17_backtrace.never_led_but_won++;
+      }
+    }
+
+    // S18
+    for (var t = 0.50; t <= 0.90; t += 0.05) {
+      if (peakFloorWhileTrailing >= t) {
+        s18_floorSweep[t.toFixed(2)].n++;
+        if (firstBuyWon) s18_floorSweep[t.toFixed(2)].wins++;
+      }
+    }
+
+    // S20
+    var durKey;
+    if (totalBuyCheckpoints <= 1) durKey = '1 cp';
+    else if (totalBuyCheckpoints <= 3) durKey = '2-3 cp';
+    else if (totalBuyCheckpoints <= 5) durKey = '4-5 cp';
+    else if (totalBuyCheckpoints <= 8) durKey = '6-8 cp';
+    else durKey = '9+ cp';
+    s20_trailDuration[durKey].n++;
+    if (firstBuyWon) s20_trailDuration[durKey].wins++;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // OUTPUT ASSEMBLY
+  // ══════════════════════════════════════════════════════════════════════════
+
+  function avg(arr) { return arr.length > 0 ? Math.round(arr.reduce((a,b)=>a+b,0) / arr.length * 100) / 100 : null; }
+  function med(arr) {
+    if (arr.length === 0) return null;
+    var sorted = arr.slice().sort((a,b) => a - b);
+    var mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 !== 0 ? Math.round(sorted[mid]*100)/100 : Math.round((sorted[mid-1]+sorted[mid])/2*100)/100;
+  }
+
+  // Build floor/deficit progression output
+  var floorProgOut = { winners: {}, losers: {} };
+  var defProgOut = { winners: {}, losers: {} };
+  for (var cp of checkpoints) {
+    floorProgOut.winners[cp] = { n: s5_floorProg.winners[cp].length, mean: avg(s5_floorProg.winners[cp]) };
+    floorProgOut.losers[cp] = { n: s5_floorProg.losers[cp].length, mean: avg(s5_floorProg.losers[cp]) };
+    defProgOut.winners[cp] = { n: s6_deficitProg.winners[cp].length, mean: avg(s6_deficitProg.winners[cp]) };
+    defProgOut.losers[cp] = { n: s6_deficitProg.losers[cp].length, mean: avg(s6_deficitProg.losers[cp]) };
+  }
+
+  // Filter combined gates to n >= 10, sort by win rate
+  var s19_filtered = {};
+  for (var k in s19_combined) {
+    if (s19_combined[k].n >= 10) {
+      s19_filtered[k] = {
+        n: s19_combined[k].n, wins: s19_combined[k].wins,
+        pct: Math.round(s19_combined[k].wins / s19_combined[k].n * 1000) / 10
+      };
+    }
+  }
+  var s19_sorted = Object.entries(s19_filtered)
+    .sort((a,b) => b[1].pct - a[1].pct)
+    .reduce((obj, [k,v]) => { obj[k] = v; return obj; }, {});
+
+  // S12 output
+  var s12_out = {};
+  for (var ind in s12_indImpact) {
+    s12_out[ind] = {};
+    for (var state in s12_indImpact[ind]) {
+      var v = s12_indImpact[ind][state];
+      s12_out[ind][state] = { n: v.n, wins: v.wins, pct: v.n > 0 ? Math.round(v.wins / v.n * 1000) / 10 : null };
+    }
+  }
+
+  // S13 output
+  var s13_out = Object.entries(s13_pairs)
+    .filter(([k,v]) => v.n >= 5)
+    .sort((a,b) => b[1].n - a[1].n)
+    .reduce((obj, [k,v]) => {
+      obj[k] = { n: v.n, wins: v.wins, pct: Math.round(v.wins / v.n * 1000) / 10 };
+      return obj;
+    }, {});
+
+  // S17 output
+  var s17_out = {
+    total_winners: s17_backtrace.total_winners,
+    total_buy_games: totalBuyGames,
+    win_rate: totalBuyGames > 0 ? Math.round(s17_backtrace.total_winners / totalBuyGames * 1000) / 10 : null,
+    avg_floor_at_first_fire: avg(s17_backtrace.avg_floor_at_first_fire),
+    median_floor_at_first_fire: med(s17_backtrace.avg_floor_at_first_fire),
+    avg_deficit_at_first_fire: avg(s17_backtrace.avg_deficit_at_first_fire),
+    median_deficit_at_first_fire: med(s17_backtrace.avg_deficit_at_first_fire),
+    avg_peak_floor: avg(s17_backtrace.avg_peak_floor),
+    avg_ind_count: avg(s17_backtrace.avg_ind_count_at_first_fire),
+    first_fire_cp_dist: s17_backtrace.first_fire_cp_dist,
+    took_lead_pct: s17_backtrace.total_winners > 0
+      ? Math.round(s17_backtrace.took_lead / s17_backtrace.total_winners * 1000) / 10 : null,
+    never_led_but_won: s17_backtrace.never_led_but_won,
+    comeback_checkpoint_dist: s17_backtrace.comeback_q_dist,
+  };
+
+  return {
+    _meta: {
+      filter: closeOnly ? 'competitive games (within 5 in Q3, within 7 in Q4)' : 'all games',
+      total_games_analyzed: totalGames,
+      total_games_with_buy_eligible: totalBuyGames,
+      buy_eligible_pct: totalGames > 0 ? Math.round(totalBuyGames / totalGames * 1000) / 10 : null,
+    },
+
+    section_1_first_fire: {
+      description: 'At which checkpoint does a trailing ctrl team first appear? Win rate = did that team win the game.',
+      by_checkpoint: pct(s1_firstFireByCp),
+    },
+
+    section_2_floor_at_first_fire: {
+      description: 'Floor bucket at the first BUY-eligible checkpoint. Higher floor while trailing = stronger structural thesis.',
+      by_floor: pct(s2_floorAtFire),
+    },
+
+    section_3_deficit_at_first_fire: {
+      description: 'How far behind is the ctrl team at first fire? Shallower deficits = more realistic comebacks.',
+      by_deficit: pct(s3_deficitAtFire),
+    },
+
+    section_4_peak_floor_while_trailing: {
+      description: 'Highest floor the ctrl team achieved at any BUY-eligible checkpoint. The graduation equivalent — how strong did structural control get while behind?',
+      by_peak_floor: pct(s4_peakFloor),
+    },
+
+    section_5_floor_progression: {
+      description: 'Mean floor at each checkpoint for the first BUY team, split by outcome. Shows whether winning trailing teams build floor faster.',
+      progression: floorProgOut,
+    },
+
+    section_6_deficit_progression: {
+      description: 'Mean ctrl-relative margin at each checkpoint for the first BUY team, split by outcome. Negative = trailing. Shows whether deficit narrows for winners.',
+      progression: defProgOut,
+    },
+
+    section_7_consecutive_trailing_holds: {
+      description: 'Max consecutive checkpoints maintaining ctrl while trailing. Persistence = conviction strength.',
+      by_hold_count: pct(s7_consHolds),
+    },
+
+    section_8_floor_velocity: {
+      description: 'Floor delta between consecutive BUY-eligible checkpoints. Is the structural thesis strengthening or weakening?',
+      by_velocity: pct(s8_velocity),
+    },
+
+    section_9_floor_x_deficit: {
+      description: 'The money grid. Floor bucket x deficit bucket -> win rate. Every BUY-eligible snapshot.',
+      grid: (function() {
+        var out = {};
+        for (var fb of floorBuckets) {
+          out[fb] = {};
+          for (var db of defBuckets) {
+            var v = s9_grid[fb][db];
+            out[fb][db] = { n: v.n, wins: v.wins, pct: v.n > 0 ? Math.round(v.wins / v.n * 1000) / 10 : null };
+          }
+        }
+        return out;
+      })(),
+    },
+
+    section_10_indicator_count: {
+      description: 'How many indicators (I1-I5) does the ctrl team win while trailing? More indicators = stronger structural argument.',
+      by_count: pct(s10_indCount),
+    },
+
+    section_11_conviction: {
+      description: 'Conviction tier (DOMINANT/STRONG/etc) while trailing -> win rate.',
+      by_conviction: pct(s11_conviction),
+    },
+
+    section_12_individual_indicators: {
+      description: 'Each indicator won/even/lost by ctrl team while trailing -> win rate. Which indicators matter most for comebacks?',
+      by_indicator: s12_out,
+    },
+
+    section_13_indicator_pairs: {
+      description: 'Indicator pair combinations while trailing (both won) -> win rate. Includes golden_3i_0opp_t14 = 3+ indicators + 0 opp indicators + trail 1-4.',
+      pairs: s13_out,
+    },
+
+    section_14_opponent_indicators: {
+      description: 'How many indicators does the OPPONENT win while trailing ctrl has structural control? More opp indicators = weaker thesis.',
+      by_opp_count: pct(s14_oppCount),
+    },
+
+    section_15_win_rate_by_checkpoint: {
+      description: 'Win rate of BUY-eligible snapshots at each checkpoint. Time-based accuracy curve — does being trailing ctrl matter more in Q2 vs Q4?',
+      by_checkpoint: pct(s15_byCp),
+    },
+
+    section_16_comeback_path: {
+      description: 'Did the first BUY team ever take the lead? When? Taking the lead is confirmation the structural thesis converted.',
+      took_lead: pct({ took_lead: s16_comeback.took_lead, never_led: s16_comeback.never_led }),
+      lead_taken_at: pct(s16_comeback.took_lead_by_q),
+    },
+
+    section_17_winner_backtrace: {
+      description: 'Profile of trailing ctrl teams that WON. What do successful comebacks look like?',
+      profile: s17_out,
+    },
+
+    section_18_floor_threshold_sweep: {
+      description: 'Peak floor while trailing >= threshold -> win rate + volume. Where does floor become predictive for comebacks?',
+      thresholds: pct(s18_floorSweep),
+    },
+
+    section_19_combined_gates: {
+      description: 'Floor >= X + indicators >= Y + deficit <= Z -> win rate. Best combined gates for BUY filtering. Format: fX.XX_iY_dZ. Only combos with n>=10, sorted by win rate.',
+      gates: s19_sorted,
+    },
+
+    section_20_trailing_duration: {
+      description: 'Total checkpoints spent as trailing ctrl team -> win rate. Does prolonged trailing-with-control predict anything?',
+      by_duration: pct(s20_trailDuration),
+    },
+  };
+}
+
 // ── HANDLER ─────────────────────────────────────────────────────────────────
 export default async (req) => {
   const sql = neon(process.env.DATABASE_URL);
@@ -7035,6 +7738,7 @@ export default async (req) => {
       case 'report_position_open': result = await reportPositionOpen(sql, url); break;
       case 'report_production_replay': result = await reportProductionReplay(sql, url); break;
       case 'report_dual_tracking_sim': result = await reportDualTrackingSim(sql, url); break;
+      case 'report_buy_journey': result = await reportBuyJourney(sql, url); break;
       case 'report_buy_deep': {
         const [convDef, autopsy, marginFloor, alertsByCp, oppProfile] = await Promise.all([
           reportConvictionDeficit(sql),
