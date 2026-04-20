@@ -1,6 +1,6 @@
 // NBA Snapshot Backtest — In-game indicator accuracy
-// Walks each game's PBP and emits 8 checkpoint snapshots:
-//   Q1@6:00, Q1_END, Q2@6:00, Q2_END, Q3@6:00, Q3_END, Q4@6:00, Q4_END
+// Walks each game's PBP and emits 14 checkpoint snapshots (3-min intervals from Q2):
+//   Q1@6:00, Q1_END, Q2@9:00, Q2@6:00, Q2@3:00, Q2_END, Q3@9:00, Q3@6:00, Q3@3:00, Q3_END, Q4@9:00, Q4@6:00, Q4@3:00, Q4_END
 //
 // For each snapshot, we compute cumulative team_stats + pbp_derived THROUGH
 // that moment, then run the same computeServer + computeConviction we use for
@@ -30,18 +30,25 @@ const BDL_KEY = process.env.BDL_API_KEY;
 
 const W = { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 };
 
-// Checkpoint definitions — 8 per game
+// Checkpoint definitions — 14 per game (3-min intervals from Q2 onward)
 // clock_remaining = seconds left in that period (720 = 12:00 start, 0 = end)
 const CHECKPOINTS = [
   { label: 'Q1_6', period: 1, clockSec: 360 },
   { label: 'Q1_END', period: 1, clockSec: 0 },
+  { label: 'Q2_9', period: 2, clockSec: 540 },
   { label: 'Q2_6', period: 2, clockSec: 360 },
+  { label: 'Q2_3', period: 2, clockSec: 180 },
   { label: 'Q2_END', period: 2, clockSec: 0 },
+  { label: 'Q3_9', period: 3, clockSec: 540 },
   { label: 'Q3_6', period: 3, clockSec: 360 },
+  { label: 'Q3_3', period: 3, clockSec: 180 },
   { label: 'Q3_END', period: 3, clockSec: 0 },
+  { label: 'Q4_9', period: 4, clockSec: 540 },
   { label: 'Q4_6', period: 4, clockSec: 360 },
+  { label: 'Q4_3', period: 4, clockSec: 180 },
   { label: 'Q4_END', period: 4, clockSec: 0 },
 ];
+const CP_LABELS = CHECKPOINTS.map(c => c.label);
 
 // ── PBP zone classification ─────────────────────────────────────────────────
 const BDL_BASKET_X = 25, BDL_BASKET_Y = 1.5;
@@ -367,8 +374,13 @@ function computeServer({ h, a, hA, aA, hPaint, aPaint, hRimM, hRimA, aRimM, aRim
               + (hAR > aAR + 5 ? 1 : hAR < aAR - 5 ? -1 : 0);
   const I3 = i3raw > 0 ? 1 : i3raw === 0 ? 0.5 : 0;
 
-  const blDiff = hBigLead - aBigLead;
-  const i4subA = blDiff > 4 ? 1 : blDiff < -4 ? -1 : 0;
+  // Flip: need ≥2 gap. Contested: opponent within 75% of leader's biggest lead.
+  let i4subA = 0;
+  if (hBigLead >= aBigLead + 2) {
+    i4subA = (aBigLead >= 0.75 * hBigLead) ? 0 : 1;
+  } else if (aBigLead >= hBigLead + 2) {
+    i4subA = (hBigLead >= 0.75 * aBigLead) ? 0 : -1;
+  }
   let i4subB = 0;
   if (q4hPts != null && q4aPts != null) {
     const q4diff = q4hPts - q4aPts;
@@ -524,7 +536,7 @@ async function phaseInit(sql, url) {
   };
 }
 
-// ── PHASE: SNAPSHOT — walk PBP, emit 8 checkpoints per game ─────────────────
+// ── PHASE: SNAPSHOT — walk PBP, emit 14 checkpoints per game ────────────────
 async function phaseSnapshot(sql, url) {
   const startTime = Date.now();
   const TIME_BUDGET_MS = 100000;
@@ -944,7 +956,7 @@ async function reportIndicators(sql) {
 
   // For each indicator, bucket by value (0, 0.5, 1) relative to ctrl team
   const indicators = ['I1', 'I2', 'I3', 'I4', 'I5'];
-  const checkpoints = ['Q1_6', 'Q1_END', 'Q2_6', 'Q2_END', 'Q3_6', 'Q3_END', 'Q4_6', 'Q4_END'];
+  const checkpoints = CP_LABELS;
 
   // Per-indicator overall (all checkpoints)
   const byIndicator = {};
@@ -1018,7 +1030,7 @@ async function reportCombos(sql) {
 
   const comboCounts = {};  // combo string → { n, wins, by_checkpoint: { cp → {n, wins} } }
   const pairCounts = {};   // pair string → { n, wins, by_checkpoint }
-  const checkpoints = ['Q1_6', 'Q1_END', 'Q2_6', 'Q2_END', 'Q3_6', 'Q3_END', 'Q4_6', 'Q4_END'];
+  const checkpoints = CP_LABELS;
   const indicators = ['I1', 'I2', 'I3', 'I4', 'I5'];
 
   for (const row of rows) {
@@ -1104,7 +1116,7 @@ async function reportAlertSimByCheckpoint(sql) {
     WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
   `;
 
-  const checkpoints = ['Q1_6', 'Q1_END', 'Q2_6', 'Q2_END', 'Q3_6', 'Q3_END', 'Q4_6', 'Q4_END'];
+  const checkpoints = CP_LABELS;
   const types = ['BUY', 'BWC', 'WINDOW_BUY'];
   const result = {};
   for (const t of types) {
@@ -1148,7 +1160,7 @@ async function reportStability(sql) {
     ORDER BY game_id, checkpoint
   `;
 
-  const checkpoints = ['Q1_6', 'Q1_END', 'Q2_6', 'Q2_END', 'Q3_6', 'Q3_END', 'Q4_6', 'Q4_END'];
+  const checkpoints = CP_LABELS;
 
   // Group by game
   const games = {};
@@ -1317,7 +1329,7 @@ async function reportFloorVelocity(sql) {
     ORDER BY game_id, checkpoint
   `;
 
-  const checkpoints = ['Q1_6', 'Q1_END', 'Q2_6', 'Q2_END', 'Q3_6', 'Q3_END', 'Q4_6', 'Q4_END'];
+  const checkpoints = CP_LABELS;
 
   // Group by game
   const games = {};
@@ -1472,7 +1484,7 @@ async function reportLosingAutopsy(sql) {
   }
 
   // By checkpoint
-  const checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  const checkpoints = CP_LABELS;
   const byCheckpoint = {};
   for (const cp of checkpoints) {
     const cpLosers = losers.filter(r => r.checkpoint === cp);
@@ -1549,7 +1561,7 @@ async function reportI4Split(sql) {
       AND pbp_derived IS NOT NULL
   `;
 
-  const checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  const checkpoints = CP_LABELS;
   // subA = biggest_lead gap (±4), subB = Q4 scoring diff (±2)
   // Re-derive from pbp_derived
   const combos = {}; // 'A+B+' → {n, wins} etc
@@ -1562,8 +1574,9 @@ async function reportI4Split(sql) {
     if (!pd || !ind || ind.score == null) continue;
 
     const hBL = pd.hBigLead || 0, aBL = pd.aBigLead || 0;
-    const blDiff = hBL - aBL;
-    const subA = blDiff > 4 ? 1 : blDiff < -4 ? -1 : 0;
+    let subA = 0;
+    if (hBL >= aBL + 2) { subA = (aBL >= 0.75 * hBL) ? 0 : 1; }
+    else if (aBL >= hBL + 2) { subA = (hBL >= 0.75 * aBL) ? 0 : -1; }
 
     const q4h = pd.q4hPts, q4a = pd.q4aPts;
     let subB = 0;
@@ -1629,7 +1642,7 @@ async function reportVelocityAtAlert(sql) {
     ORDER BY game_id, checkpoint
   `;
 
-  const checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  const checkpoints = CP_LABELS;
   const games = {};
   for (const r of rows) {
     if (!games[r.game_id]) games[r.game_id] = {};
@@ -1698,7 +1711,7 @@ async function reportConsecutiveHolds(sql) {
     ORDER BY game_id, checkpoint
   `;
 
-  const checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  const checkpoints = CP_LABELS;
   const games = {};
   for (const r of rows) {
     if (!games[r.game_id]) games[r.game_id] = {};
@@ -1771,7 +1784,7 @@ async function reportFlipRecovery(sql) {
     ORDER BY game_id, checkpoint
   `;
 
-  const checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  const checkpoints = CP_LABELS;
   const games = {};
   for (const r of rows) {
     if (!games[r.game_id]) games[r.game_id] = {};
@@ -1936,8 +1949,8 @@ async function reportBWCErosion(sql) {
     ORDER BY game_id, checkpoint
   `;
 
-  var checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
-  var cpPeriod = { 'Q1_6':1,'Q1_END':1,'Q2_6':2,'Q2_END':2,'Q3_6':3,'Q3_END':3,'Q4_6':4,'Q4_END':4 };
+  var checkpoints = CP_LABELS;
+  var cpPeriod = Object.fromEntries(CHECKPOINTS.map(c => [c.label, c.period]));
 
   var games = {};
   for (var r of rows) {
@@ -1949,7 +1962,9 @@ async function reportBWCErosion(sql) {
     if (!r || !r.pbp_derived) return 'MIXED';
     var pd = typeof r.pbp_derived === 'string' ? JSON.parse(r.pbp_derived) : r.pbp_derived;
     var hBL = pd.hBigLead || 0, aBL = pd.aBigLead || 0;
-    var subA = (hBL - aBL) > 4 ? 1 : (hBL - aBL) < -4 ? -1 : 0;
+    var subA = 0;
+    if (hBL >= aBL + 2) { subA = (aBL >= 0.75 * hBL) ? 0 : 1; }
+    else if (aBL >= hBL + 2) { subA = (hBL >= 0.75 * aBL) ? 0 : -1; }
     var q4h = pd.q4hPts, q4a = pd.q4aPts;
     var subB = 0;
     if (q4h != null && q4a != null) {
@@ -1982,7 +1997,7 @@ async function reportBWCErosion(sql) {
 
   function classifyBWCTier(conv, defBucket, holds, oppCount) {
     if (conv === 'DOMINANT' && defBucket === 'lead_8+' && holds >= 4 && oppCount <= 1) return 'A';
-    if (oppCount >= 2) return 'C';
+    if (oppCount >= 3) return 'C';
     if ((conv === 'DOMINANT' || conv === 'STRONG') &&
         (defBucket === 'lead_3-7' || defBucket === 'lead_8+') && holds >= 2) return 'B';
     return 'C';
@@ -2233,8 +2248,8 @@ async function reportValuePlay(sql) {
     ORDER BY game_id, checkpoint
   `;
 
-  var checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
-  var cpPeriod = { 'Q1_6':1,'Q1_END':1,'Q2_6':2,'Q2_END':2,'Q3_6':3,'Q3_END':3,'Q4_6':4,'Q4_END':4 };
+  var checkpoints = CP_LABELS;
+  var cpPeriod = Object.fromEntries(CHECKPOINTS.map(c => [c.label, c.period]));
 
   var games = {};
   for (var r of rows) {
@@ -2253,7 +2268,7 @@ async function reportValuePlay(sql) {
 
   function classifyBWCTier(conv, defBucket, holds, oppCount) {
     if (conv === 'DOMINANT' && defBucket === 'lead_8+' && holds >= 4 && oppCount <= 1) return 'A';
-    if (oppCount >= 2) return 'C';
+    if (oppCount >= 3) return 'C';
     if ((conv === 'DOMINANT' || conv === 'STRONG') &&
         (defBucket === 'lead_3-7' || defBucket === 'lead_8+') && holds >= 2) return 'B';
     return 'C';
@@ -3019,8 +3034,8 @@ async function reportTierSim(sql) {
     ORDER BY game_id, checkpoint
   `;
 
-  var checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
-  var cpPeriod = { 'Q1_6':1,'Q1_END':1,'Q2_6':2,'Q2_END':2,'Q3_6':3,'Q3_END':3,'Q4_6':4,'Q4_END':4 };
+  var checkpoints = CP_LABELS;
+  var cpPeriod = Object.fromEntries(CHECKPOINTS.map(c => [c.label, c.period]));
 
   // Group by game
   var games = {};
@@ -3034,8 +3049,9 @@ async function reportTierSim(sql) {
     if (!r || !r.pbp_derived) return 'MIXED';
     var pd = typeof r.pbp_derived === 'string' ? JSON.parse(r.pbp_derived) : r.pbp_derived;
     var hBL = pd.hBigLead || 0, aBL = pd.aBigLead || 0;
-    var blDiff = hBL - aBL;
-    var subA = blDiff > 4 ? 1 : blDiff < -4 ? -1 : 0;
+    var subA = 0;
+    if (hBL >= aBL + 2) { subA = (aBL >= 0.75 * hBL) ? 0 : 1; }
+    else if (aBL >= hBL + 2) { subA = (hBL >= 0.75 * aBL) ? 0 : -1; }
     var q4h = pd.q4hPts, q4a = pd.q4aPts;
     var subB = 0;
     if (q4h != null && q4a != null) {
@@ -3106,7 +3122,7 @@ async function reportTierSim(sql) {
     // BWC path
     if (alertType === 'BWC') {
       if (conv === 'DOMINANT' && deficit === 'lead_8+' && holds >= 4 && oppCount <= 1) return 'A';
-      if (oppCount >= 2) return 'C';
+      if (oppCount >= 3) return 'C';
       if ((conv === 'DOMINANT' || conv === 'STRONG') &&
           (deficit === 'lead_3-7' || deficit === 'lead_8+') && holds >= 2) return 'B';
       return 'C';
@@ -3333,7 +3349,7 @@ async function reportBuyProfile(sql) {
     ORDER BY game_id, checkpoint
   `;
 
-  const cpOrder = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  const cpOrder = CP_LABELS;
   const cpIndex = {};
   for (let i = 0; i < cpOrder.length; i++) cpIndex[cpOrder[i]] = i;
 
@@ -3677,7 +3693,7 @@ async function reportTierJourney(sql, url) {
     ORDER BY game_id, checkpoint
   `;
 
-  var checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  var checkpoints = CP_LABELS;
 
   // Group by game
   var games = {};
@@ -3705,7 +3721,7 @@ async function reportTierJourney(sql, url) {
 
   function classifyBWCTier(conv, lead, holds, oppCount) {
     if (conv === 'DOMINANT' && lead >= 8 && holds >= 4 && oppCount <= 1) return 'A';
-    if (oppCount >= 2) return 'C';
+    if (oppCount >= 3) return 'C';
     if ((conv === 'DOMINANT' || conv === 'STRONG') && lead >= 3 && holds >= 2) return 'B';
     return 'C';
   }
@@ -4613,7 +4629,7 @@ async function reportPositionOpen(sql, url) {
     ORDER BY game_id, checkpoint
   `;
 
-  var checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  var checkpoints = CP_LABELS;
   var cpIdx = {}; for (var i = 0; i < checkpoints.length; i++) cpIdx[checkpoints[i]] = i;
 
   // Group by game
@@ -4634,7 +4650,7 @@ async function reportPositionOpen(sql, url) {
   }
   function classifyBWCTier(conv, lead, holds, oppCount) {
     if (conv === 'DOMINANT' && lead >= 8 && holds >= 4 && oppCount <= 1) return 'A';
-    if (oppCount >= 2) return 'C';
+    if (oppCount >= 3) return 'C';
     if ((conv === 'DOMINANT' || conv === 'STRONG') && lead >= 3 && holds >= 2) return 'B';
     return 'C';
   }
@@ -5073,7 +5089,7 @@ async function reportProductionReplay(sql, url) {
   // ── Helper: BWC tier classification (same as tier journey) ──
   function classifyTier(conv, lead, holds, oppCount) {
     if (conv === 'DOMINANT' && lead >= 8 && holds >= 4 && oppCount <= 1) return 'A';
-    if (oppCount >= 2) return 'C';
+    if (oppCount >= 3) return 'C';
     if ((conv === 'DOMINANT' || conv === 'STRONG') && lead >= 3 && holds >= 2) return 'B';
     return 'C';
   }
@@ -5153,7 +5169,7 @@ async function reportProductionReplay(sql, url) {
   // ── Section 10: Inter-checkpoint floor quality ──
   // Checkpoint boundaries at 6-min intervals (game-seconds)
   var cpBoundaries = [0, 360, 720, 1080, 1440, 1800, 2160, 2520, 2880];
-  var cpLabels = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  var cpLabels = CP_LABELS;
 
   // Aggregate buckets for inter-checkpoint quality metrics
   var meanFloorBuckets = {
@@ -5977,7 +5993,7 @@ async function reportDualTrackingSim(sql, url) {
     ORDER BY game_id, checkpoint
   `;
 
-  var checkpoints = ['Q1_6','Q1_END','Q2_6','Q2_END','Q3_6','Q3_END','Q4_6','Q4_END'];
+  var checkpoints = CP_LABELS;
   var cpIdx = {}; for (var ci = 0; ci < checkpoints.length; ci++) cpIdx[checkpoints[ci]] = ci;
   var Wt = { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 };
 
