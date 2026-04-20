@@ -73,10 +73,10 @@ const GRAD_CHECKPOINTS = [
 
 ```javascript
 const LANE_THRESHOLDS = {
-  underdog:       { mfGate: 0.70, minFGate: 0.60 },  // pregame ML > +100
-  tossup:         { mfGate: 0.75, minFGate: 0.65 },  // pregame ML -100 to +100
-  favorite:       { mfGate: 0.75, minFGate: 0.65 },  // pregame ML -101 to -250
-  heavy_favorite: { mfGate: 0.80, minFGate: 0.65 },  // pregame ML -251 or worse
+  underdog:       { mfGate: 0.70, minFGate: 0.60 },  // pregame ML > +100 (<50% implied — market says they lose)
+  tossup:         { mfGate: 0.75, minFGate: 0.65 },  // pregame ML +100 to -150 (50-60% implied — competitive game)
+  favorite:       { mfGate: 0.75, minFGate: 0.65 },  // pregame ML -151 to -300 (60-75% implied — clear favorite)
+  heavy_favorite: { mfGate: 0.80, minFGate: 0.65 },  // pregame ML -301 or worse (75%+ implied — heavy chalk)
 };
 ```
 
@@ -278,8 +278,8 @@ if (lt.bwc_fired && lt.pregame_ml == null && odds) {
   const ml = lt.pregame_ml;
   if (ml == null) lt.lane = 'tossup'; // no odds available, default
   else if (ml > 100) lt.lane = 'underdog';
-  else if (ml >= -100) lt.lane = 'tossup';
-  else if (ml >= -250) lt.lane = 'favorite';
+  else if (ml >= -150) lt.lane = 'tossup';
+  else if (ml >= -300) lt.lane = 'favorite';
   else lt.lane = 'heavy_favorite';
   
   log(`${matchup}: 🏷 Lane: ${lt.lane} (pregame ML ${ml > 0 ? '+' : ''}${ml})`);
@@ -379,9 +379,9 @@ if (lt.cp_graduation && !lt.po_fired && ind.controlTeam === bwcTeam) {
 | Lane | A-Rank Gate | B-Rank Gate | C-Rank |
 |------|------------|------------|--------|
 | Underdog (+101+) | MF≥0.70 + minF≥0.60 | MF≥0.70 + minF≥0.60 + Q3_6+ | No PO |
-| Toss-up (-100 to +100) | MF≥0.75 + minF≥0.65 | MF≥0.75 + minF≥0.65 + Q3_6+ | No PO |
-| Favorite (-101 to -250) | MF≥0.75 + minF≥0.65 | MF≥0.75 + minF≥0.65 + Q3_6+ | No PO |
-| Heavy Fav (-251+) | MF≥0.80 + minF≥0.65 | MF≥0.80 + minF≥0.65 + Q3_6+ | No PO |
+| Toss-up (+100 to -150) | MF≥0.75 + minF≥0.65 | MF≥0.75 + minF≥0.65 + Q3_6+ | No PO |
+| Favorite (-151 to -300) | MF≥0.75 + minF≥0.65 | MF≥0.75 + minF≥0.65 + Q3_6+ | No PO |
+| Heavy Fav (-301+) | MF≥0.80 + minF≥0.65 | MF≥0.80 + minF≥0.65 + Q3_6+ | No PO |
 
 All lanes also require: only_one_grad (opponent NOT graduated B+), alertMinsLeft >= 1.0.
 
