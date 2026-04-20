@@ -3669,10 +3669,9 @@ async function reportBuyProfile(sql) {
 
 // ── REPORT: TIER JOURNEY — Floor trajectory, tier persistence, BWC lifecycle ─
 // ?phase=report_tier_journey          — full dataset
-// ?phase=report_tier_journey&close=1  — final margin ≤ 8 only
+// ?phase=report_tier_journey&close=1  — competitive games (within 5 in Q3, within 7 in Q4)
 async function reportTierJourney(sql, url) {
   var closeOnly = url?.searchParams?.get('close') === '1';
-  var marginFilter = closeOnly ? 8 : 999;
 
   var rows = await sql`
     SELECT game_id, checkpoint, margin_at_snapshot AS margin,
@@ -3689,7 +3688,6 @@ async function reportTierJourney(sql, url) {
            ctrl_team_won, final_margin
     FROM nba_snapshot_backtest
     WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
-      AND ABS(final_margin) <= ${marginFilter}
     ORDER BY game_id, checkpoint
   `;
 
@@ -3700,6 +3698,23 @@ async function reportTierJourney(sql, url) {
   for (var r of rows) {
     if (!games[r.game_id]) games[r.game_id] = [];
     games[r.game_id].push(r);
+  }
+
+  // Competitive game filter: within 5 at any Q3 checkpoint, OR within 7 at any Q4 checkpoint
+  var Q3_CPS = new Set(['Q3_9','Q3_6','Q3_3','Q3_END']);
+  var Q4_CPS = new Set(['Q4_9','Q4_6','Q4_3','Q4_END']);
+  if (closeOnly) {
+    var allGameIds = Object.keys(games);
+    for (var gid of allGameIds) {
+      var snaps = games[gid];
+      var competitive = snaps.some(function(s) {
+        var absM = Math.abs(s.margin);
+        if (Q3_CPS.has(s.checkpoint) && absM <= 5) return true;
+        if (Q4_CPS.has(s.checkpoint) && absM <= 7) return true;
+        return false;
+      });
+      if (!competitive) delete games[gid];
+    }
   }
 
   // ── Helpers (same as reportBWCErosion) ──
@@ -4419,7 +4434,7 @@ async function reportTierJourney(sql, url) {
 
   return {
     _meta: {
-      filter: closeOnly ? 'close games only (final margin ≤ 8)' : 'all games',
+      filter: closeOnly ? 'competitive games (within 5 in Q3, within 7 in Q4)' : 'all games',
       total_games_analyzed: totalGames,
       total_games_in_dataset: Object.keys(games).length,
     },
@@ -4605,11 +4620,10 @@ async function reportTierJourney(sql, url) {
 // ══════════════════════════════════════════════════════════════════════════════
 // POSITION OPEN ANALYSIS — Mean floor as primary signal for PO firing rules
 // ?phase=report_position_open          — full dataset
-// ?phase=report_position_open&close=1  — final margin ≤ 8 only
+// ?phase=report_position_open&close=1  — competitive games (within 5 in Q3, within 7 in Q4)
 // ══════════════════════════════════════════════════════════════════════════════
 async function reportPositionOpen(sql, url) {
   var closeOnly = url?.searchParams?.get('close') === '1';
-  var marginFilter = closeOnly ? 8 : 999;
 
   var rows = await sql`
     SELECT game_id, checkpoint, margin_at_snapshot AS margin,
@@ -4625,7 +4639,6 @@ async function reportPositionOpen(sql, url) {
            ctrl_team_won, final_margin
     FROM nba_snapshot_backtest
     WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
-      AND ABS(final_margin) <= ${marginFilter}
     ORDER BY game_id, checkpoint
   `;
 
@@ -4637,6 +4650,21 @@ async function reportPositionOpen(sql, url) {
   for (var r of rows) {
     if (!gameMap[r.game_id]) gameMap[r.game_id] = [];
     gameMap[r.game_id].push(r);
+  }
+
+  // Competitive game filter
+  var Q3_CPS_PO = new Set(['Q3_9','Q3_6','Q3_3','Q3_END']);
+  var Q4_CPS_PO = new Set(['Q4_9','Q4_6','Q4_3','Q4_END']);
+  if (closeOnly) {
+    for (var gid of Object.keys(gameMap)) {
+      var competitive = gameMap[gid].some(function(s) {
+        var absM = Math.abs(s.margin);
+        if (Q3_CPS_PO.has(s.checkpoint) && absM <= 5) return true;
+        if (Q4_CPS_PO.has(s.checkpoint) && absM <= 7) return true;
+        return false;
+      });
+      if (!competitive) delete gameMap[gid];
+    }
   }
 
   function getCtrlMargin(r) { return (r.ctrl === r.home_alias) ? r.margin : -r.margin; }
@@ -4921,7 +4949,7 @@ async function reportPositionOpen(sql, url) {
 
   return {
     _meta: {
-      filter: closeOnly ? 'close games only (final margin ≤ 8)' : 'all games',
+      filter: closeOnly ? 'competitive games (within 5 in Q3, within 7 in Q4)' : 'all games',
       total_games: totalGames,
       total_bwc_games: totalBWCGames,
     },
