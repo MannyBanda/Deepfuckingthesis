@@ -1,7 +1,7 @@
 # Checkpoint-Based Graduation System — Implementation Spec
 
-**Date:** April 20, 2026 (v2 — rewritten with production validation)  
-**Status:** APPROVED — ready to build  
+**Date:** April 20, 2026 (v3 — gates locked from graduation_sim backtest)  
+**Status:** LOCKED — gates validated, ready to build  
 **File affected:** `netlify/functions/poll-live-bdl.mjs` (sole file)  
 **Depends on:** V2 BWC Alert Engine Steps 1-6 (deployed), existing graduation code (deployed)  
 **Replaces:** Current 60s-poll watermark graduation (lines ~4981-5075)
@@ -83,16 +83,16 @@ const GRAD_CHECKPOINTS = [
 
 ### 3.2 Lane thresholds
 
-ML boundaries calibrated to actual implied probability bands. A -105 and -135 line are both coin flips — they belong in toss-up, not favorite. minF lowered to 0.58 across all lanes: production floor computation produces lower values than backtest, and the original 0.65 gate was catching early-checkpoint noise on correct calls (DET@ORL: one checkpoint at 0.60 while leading by 14 permanently blocked a team that won by 16).
+**LOCKED (graduation_sim v2 backtest, Apr 20):** MF gate set to 0.65 across all lanes. The graduation_sim sweep proved MF has zero discriminative power in competitive games between 0.60 and 0.85 (accuracy flat at 78-81%). MF 0.65 is a sanity check ("you have SOME structural presence"), not a quality filter — rank classification and flip mechanism carry all the weight. Dropping from 0.75 to 0.65 added 114 competitive POs with zero accuracy loss (77.3% → 77.0%).
 
-**⚠ OPEN DECISION: heavy_favorite MF gate.** Production showed 0/5 heavy favorite BWC games produced a PO, but all 5 BWC teams won. The 0.80 gate is unreachable — floor computation structurally compresses for heavy favorites (SAC@POR: leading 10-20 all game, MF peaked at 0.783). Recommendation: drop to 0.75 to match toss-up. Heavy favorites winning is expected — the edge value is lower — but blanket suppression of a 100% correct lane is worse. See §13 for full data.
+minF 0.58 across all lanes: production floor computation produces lower values than backtest, and the original 0.65 gate was catching early-checkpoint noise on correct calls.
 
 ```javascript
 const LANE_THRESHOLDS = {
-  underdog:       { mfGate: 0.70, minFGate: 0.58 },  // pregame ML > +100 (<50% implied)
-  tossup:         { mfGate: 0.75, minFGate: 0.58 },  // pregame ML +100 to -150 (50-60% implied)
-  favorite:       { mfGate: 0.72, minFGate: 0.58 },  // pregame ML -151 to -300 (60-75% implied)
-  heavy_favorite: { mfGate: 0.75, minFGate: 0.58 },  // pregame ML -301 or worse (75%+ implied)
+  underdog:       { mfGate: 0.65, minFGate: 0.58 },  // pregame ML > +100 (<50% implied)
+  tossup:         { mfGate: 0.65, minFGate: 0.58 },  // pregame ML +100 to -150 (50-60% implied)
+  favorite:       { mfGate: 0.65, minFGate: 0.58 },  // pregame ML -151 to -300 (60-75% implied)
+  heavy_favorite: { mfGate: 0.65, minFGate: 0.58 },  // pregame ML -301 or worse (75%+ implied)
 };
 ```
 
@@ -398,10 +398,11 @@ if (lt.cp_graduation && !lt.po_fired && ind.controlTeam === bwcTeam) {
     poBlockReason = 'C-Rank — no PO';
   }
 
-  // Fire PO
+  // Fire PO — S-rank is POST-HOC only (assigned at game end if A + zero ctrl flips)
+  // At fire time, all A-grades fire as 'A'. Backtest showed S-at-fire contaminated
+  // with games that had control flip AFTER PO fired (58.5% accuracy vs true W2W 85.6%).
   if (poShouldFire && alertMinsLeft >= 1.0) {
-    const isWireToWire = (lt.ctrl_flips || 0) === 0;
-    const poRank = (gRank === 'A' && isWireToWire) ? 'S' : gRank;
+    const poRank = gRank; // A or B, never S at fire time
 
     lt.po_fired = {
       team: bwcTeam, rank: poRank,
@@ -424,22 +425,22 @@ if (lt.cp_graduation && !lt.po_fired && ind.controlTeam === bwcTeam) {
 
 | Lane | ML Range | A-Rank Gate | B-Rank Gate | C-Rank |
 |------|----------|------------|------------|--------|
-| Underdog | +101+ | MF≥0.70 + minF≥0.58 | MF≥0.70 + minF≥0.58 + Q3_6+ | No PO |
-| Toss-up | +100 to -150 | MF≥0.75 + minF≥0.58 | MF≥0.75 + minF≥0.58 + Q3_6+ | No PO |
-| Favorite | -151 to -300 | MF≥0.72 + minF≥0.58 | MF≥0.72 + minF≥0.58 + Q3_6+ | No PO |
-| Heavy Fav | -301+ | MF≥0.75 + minF≥0.58 | MF≥0.75 + minF≥0.58 + Q3_6+ | No PO |
+| Underdog | +101+ | MF≥0.65 + minF≥0.58 | MF≥0.65 + minF≥0.58 + Q3_6+ | No PO |
+| Toss-up | +100 to -150 | MF≥0.65 + minF≥0.58 | MF≥0.65 + minF≥0.58 + Q3_6+ | No PO |
+| Favorite | -151 to -300 | MF≥0.65 + minF≥0.58 | MF≥0.65 + minF≥0.58 + Q3_6+ | No PO |
+| Heavy Fav | -301+ | MF≥0.65 + minF≥0.58 | MF≥0.65 + minF≥0.58 + Q3_6+ | No PO |
 
-All lanes also require: `alertMinsLeft >= 1.0`. No `only_one_grad` suppression — replaced by the latest-to-graduate flip mechanism (§8.4). If the opponent graduates more recently, they get PO via flip.
+All lanes also require: `alertMinsLeft >= 1.0`. S-rank is **post-hoc only** — assigned at game end when A-rank PO + zero ctrl flips at final checkpoint. No `only_one_grad` suppression — replaced by the latest-to-graduate flip mechanism (§8.4).
 
-**Production data behind these gates:**
+**Backtest validation (graduation_sim v2, 1,230 games / 774 competitive):**
 
-| Gate | Original | Updated | Why |
-|------|----------|---------|-----|
-| minF all lanes | 0.60-0.65 | **0.58** | DET@ORL: single CP at 0.60 while leading by 14 permanently blocked a ✅ PO. Floor computation noise, not structural signal. |
-| Favorite MF | 0.75 | **0.72** | Slightly above underdog (0.70). Production favorites cluster MF 0.72-0.78. |
-| Heavy fav MF | 0.80 | **0.75** | 0.80 unreachable in production — 5/5 heavy fav BWC teams won, 0 POs fired. Floor computation compresses for dominant favorites (SAC@POR: leading 10-20 all game, MF peaked 0.783). |
-| Toss-up ML boundary | ±100 | **+100 to -150** | A -105/-135 line is a coin flip (52-57% implied), not a favorite. |
-| Favorite ML boundary | -101 to -250 | **-151 to -300** | Matches actual market perception of "clear favorite." |
+| Gate | Value | Rationale |
+|------|-------|-----------|
+| MF all lanes | **0.65** | Sensitivity sweep: accuracy flat 78-81% across 0.60-0.85 in competitive games. MF is a sanity check, not a quality filter. 0.75→0.65 added 114 POs at zero accuracy loss. |
+| minF all lanes | **0.58** | Floor computation noise; original 0.65 blocked correct calls (DET@ORL). |
+| B-rank timing | **Q3_6+** | Validated over relative confirmation (N=0-4 CPs: 58-66%). Q3_6 correlates with game progress, not just elapsed time. B @ Q3_6+ = 77.2% vs B immediate = 58.1%. |
+| S-rank | **Post-hoc** | S-at-fire contaminated: 58.5% competitive (A-with-flips). True W2W (post-hoc) = 85.6%. |
+| Flip criteria | **Graduated B+** | Current > lighter (75.8%) > lightest (72.5%). Graduation requirement filters low-quality flips. |
 
 ### 8.4 Latest-to-Graduate Flip
 
@@ -624,9 +625,8 @@ Replace the existing PO prompt section (~line 250):
 
 ```
 - POSITION_OPEN: The team has GRADUATED through the checkpoint system — sustained structural rank confirmed across multiple 3-minute evaluation windows.
-  ${ctx.bwcFlipped ? '🔄 BWC FLIP: The system originally tracked ' + ctx.originalBwcTeam + ' but they FAILED to graduate (peak C). ' + ctx.bwcTeam + ' then graduated ' + ctx.poRank + '-Rank — taking structural control away from a previously dominant team. This is one of the strongest signals in the system (74-86% win rate). The floor appears modest because cumulative stats are anchored by ' + ctx.originalBwcTeam + "'s early dominance, but " + ctx.bwcTeam + " is holding control DESPITE that headwind. ALWAYS SEND."
-  : ctx.poRank === 'S' ? 'S-Rank (98%+): Wire-to-wire structural dominance. ALWAYS SEND.' 
-  : ctx.poRank === 'A' ? 'A-Rank: Sustained DOMINANT conviction with lead 8+. ' + mfTrajStr + ' across ' + ctx.cpEligibleCount + ' checkpoints.'
+  ${ctx.bwcFlipped ? '🔄 BWC FLIP: The system originally tracked ' + ctx.originalBwcTeam + ' but they FAILED to graduate (peak C). ' + ctx.bwcTeam + ' then graduated ' + ctx.poRank + '-Rank — taking structural control away from a previously dominant team. This is one of the strongest signals in the system (80% win rate in competitive games, 96.4% for A-rank flips). The floor appears modest because cumulative stats are anchored by ' + ctx.originalBwcTeam + "'s early dominance, but " + ctx.bwcTeam + " is holding control DESPITE that headwind. ALWAYS SEND."
+  : ctx.poRank === 'A' ? 'A-Rank: Sustained DOMINANT conviction with lead 8+. ' + mfTrajStr + ' across ' + ctx.cpEligibleCount + ' checkpoints. ⚠ A-RANK CONTROL FLIP WARNING: If ctrl_flips > 0, this A-rank may be stale — backtest shows A-with-flips is 58.5% in competitive games vs A-without-flips at 85.6%. Check structural stress and per-quarter breakdown carefully. A-rank that lost and regained control is NOT the same as A-rank that held throughout.'
   : ctx.poRank === 'B' ? 'B-Rank: Sustained DOMINANT/STRONG conviction with lead 3+. ' + mfTrajStr + ' across ' + ctx.cpEligibleCount + ' checkpoints.'
   : ''}
   ${!ctx.bwcFlipped ? 'Lane: ' + (ctx.lane || 'unknown') + '. ' + (ctx.lane === 'underdog' ? 'UNDERDOG graduation — market has not priced structural control. Edge is structural floor vs implied probability. ALWAYS SEND.' : ctx.lane === 'heavy_favorite' ? 'Heavy favorite — PO confirms structural read but line may offer limited edge. Frame as position confirmation, not direct entry.' : 'Evaluate edge: floor vs current ML implied probability.') : ''}
@@ -813,6 +813,37 @@ Example outputs:
 | Q2_END | 0.728 | 0.717 | 0.011 |
 | Q3_6 | 0.735 | 0.723 | 0.012 |
 | Q4_END | 0.750 | 0.731 | 0.019 |
+
+### Graduation Sim v2 — Full Spec Backtest (LOCKED GATES: MF 0.65, minF 0.58)
+
+**Overall:**
+
+| Dataset | PO Fires | Accuracy | Coverage |
+|---------|----------|----------|----------|
+| Full season (1,230) | 1,155 | **85.8%** | 93.9% |
+| Competitive (774) | 704 | **77.0%** | 91.0% |
+
+**By rank (fire-time, S is post-hoc):**
+
+| Rank | Full (n / %) | Competitive (n / %) |
+|------|-------------|---------------------|
+| A | 593 / 90.2% | 247 / 76.5% |
+| B | 562 / 81.1% | 457 / 77.2% |
+| S post-hoc | 401 / **95.5%** | 125 / **85.6%** |
+| A-with-flips | 156 / 75.0% | 94 / **58.5%** ← agent target |
+
+**Flip analysis (competitive):**
+
+| Metric | Value |
+|--------|-------|
+| Flip accuracy | 285 @ **80.0%** vs standard 74.9% |
+| A-rank flips | 28 @ **96.4%** |
+| B-rank flips | 257 @ 78.2% |
+| Net gain from flips | +171 correct calls |
+| Flip losses (original was right) | 57 (100% Type 2) |
+| Flip criteria comparison | Current 80% > lighter 75.8% > lightest 72.5% |
+
+**Key finding — A-with-flips at 58.5%:** 94 competitive games where A-rank fired but control later flipped. This is the #1 loss bucket. Agent must see ctrl_flip count and apply heavy scrutiny when A-rank has lost and regained control.
 
 ---
 
