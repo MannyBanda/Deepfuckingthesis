@@ -108,9 +108,9 @@ All stored in the existing `live_tracking` JSONB column on `games` table. No sch
 | `lt.next_cp_idx` | `integer` | `0` | Index into GRAD_CHECKPOINTS for next expected checkpoint |
 | `lt.cp_holds` | `integer` | `0` | Consecutive checkpoints where BWC team has control |
 | `lt.cp_peak_rank` | `string` | `'C'` | Watermark rank from checkpoint evaluations |
-| `lt.cp_graduation` | `{rank, cp_label, floor, margin, period, clock}` | `null` | When/where graduation happened |
+| `lt.cp_graduation` | `{rank, cp_label, cp_idx, floor, margin, period, clock}` | `null` | When/where graduation happened (cp_idx for recency comparison) |
 | `lt.cp_opp_holds` | `integer` | `0` | Consecutive checkpoints where opponent has control |
-| `lt.cp_opp_graduation` | `{rank, cp_label, floor, margin}` | `null` | Opponent graduation (for only_one_grad) |
+| `lt.cp_opp_graduation` | `{rank, cp_label, cp_idx, floor, margin}` | `null` | Opponent graduation (cp_idx for recency comparison via §8.4) |
 | `lt.cp_mean_floor` | `number` | `null` | Running mean of eligible checkpoint floors |
 | `lt.cp_min_floor` | `number` | `null` | Running min of eligible checkpoint floors |
 | `lt.cp_eligible_count` | `integer` | `0` | Count of eligible checkpoints |
@@ -201,7 +201,7 @@ if (lt.bwc_fired) {
       if (CP_RANK_ORDER[cpRank] > CP_RANK_ORDER[prevPeak]) {
         lt.cp_peak_rank = cpRank;
         lt.cp_graduation = {
-          rank: cpRank, cp_label: nextCp.label,
+          rank: cpRank, cp_label: nextCp.label, cp_idx: lt.next_cp_idx,
           floor: ind.score, margin: cpMargin,
           period: currentPeriod, clock: clock,
         };
@@ -218,7 +218,7 @@ if (lt.bwc_fired) {
         const CP_RANK_ORDER = { C: 0, B: 1, A: 2 };
         if (CP_RANK_ORDER[oppRank] > (CP_RANK_ORDER[prevOppRank] || 0)) {
           lt.cp_opp_graduation = {
-            rank: oppRank, cp_label: nextCp.label,
+            rank: oppRank, cp_label: nextCp.label, cp_idx: lt.next_cp_idx,
             floor: ind.score, margin: cpMargin,
           };
           log(`${matchup}: ⚠ CP OPP GRADUATION ${ind.controlTeam} → ${oppRank}-Rank @ ${nextCp.label}`);
@@ -398,15 +398,6 @@ if (lt.cp_graduation && !lt.po_fired && ind.controlTeam === bwcTeam) {
     poBlockReason = 'C-Rank — no PO';
   }
 
-  // only_one_grad check
-  if (poShouldFire) {
-    if (lt.cp_opp_graduation && (lt.cp_opp_graduation.rank === 'B' || lt.cp_opp_graduation.rank === 'A')) {
-      poShouldFire = false;
-      poBlockReason = `opponent also graduated (${lt.cp_opp_graduation.rank}-Rank @ ${lt.cp_opp_graduation.cp_label})`;
-      log(`${matchup}: ✗ PO SUPPRESSED — both graduated: ${bwcTeam} ${gRank} vs opp ${lt.cp_opp_graduation.rank}`);
-    }
-  }
-
   // Fire PO
   if (poShouldFire && alertMinsLeft >= 1.0) {
     const isWireToWire = (lt.ctrl_flips || 0) === 0;
@@ -438,7 +429,7 @@ if (lt.cp_graduation && !lt.po_fired && ind.controlTeam === bwcTeam) {
 | Favorite | -151 to -300 | MF≥0.72 + minF≥0.58 | MF≥0.72 + minF≥0.58 + Q3_6+ | No PO |
 | Heavy Fav | -301+ | MF≥0.75 + minF≥0.58 | MF≥0.75 + minF≥0.58 + Q3_6+ | No PO |
 
-All lanes also require: `only_one_grad` (opponent NOT graduated B+), `alertMinsLeft >= 1.0`.
+All lanes also require: `alertMinsLeft >= 1.0`. No `only_one_grad` suppression — replaced by the latest-to-graduate flip mechanism (§8.4). If the opponent graduates more recently, they get PO via flip.
 
 **Production data behind these gates:**
 
@@ -450,83 +441,132 @@ All lanes also require: `only_one_grad` (opponent NOT graduated B+), `alertMinsL
 | Toss-up ML boundary | ±100 | **+100 to -150** | A -105/-135 line is a coin flip (52-57% implied), not a favorite. |
 | Favorite ML boundary | -101 to -250 | **-151 to -300** | Matches actual market perception of "clear favorite." |
 
-### 8.4 Opponent Position Open (BWC Flip)
+### 8.4 Latest-to-Graduate Flip
 
-When the BWC team fails to graduate and the opponent does, the system has identified the wrong team. The backtest confirms this is one of the strongest signals in the system: when only one team graduates, they win 74.2% close / 85.8% full. When the second team to be tracked graduates, they have an exponentially higher chance of winning.
+The second team to graduate wins ~84.5% of the time. This is not a coin flip — it's one of the strongest signals in the system. The latest team to graduate has battle-tested their structural control against a previously superior opponent. They took it away.
 
-**Why the opponent's floor is lower and that's fine:** The opponent's cumulative floor is suppressed by design — the BWC team dominated early, and the opponent's cumulative stats still carry the weight of that deficit. An opponent holding 0.60 floor DESPITE that cumulative headwind is battle-tested structural control. They won't flip the cumulative floor to 0.80 because the early data drags it down, but if they hold momentum, they ride it to the end. The floor understates their actual control — the confirmation signal is the BWC team's FAILURE to graduate, not the opponent's absolute floor value.
+This mechanism handles ALL opponent graduation scenarios under one rule:
+- BWC team never graduated (peak C), opponent graduates → flip
+- Both teams graduated, opponent graduated more recently → flip
+- PO already fired on BWC team, opponent graduates later → EXIT on BWC, then flip PO to opponent
+
+**Why the opponent's floor is lower and that's fine:** The opponent's cumulative floor is suppressed by cumulative anchoring — the BWC team dominated early, and the opponent's stats still carry that weight. An opponent holding 0.60 DESPITE that headwind is battle-tested structural control. They won't flip the cumulative floor to 0.80 because the early data drags it down, but if they hold momentum, they ride it to the end. The floor understates their actual control.
 
 **Fires when ALL are true:**
-1. BWC team has NOT graduated (peak rank C — `lt.cp_peak_rank === 'C'`)
-2. Opponent has graduated B+ (`lt.cp_opp_graduation` exists with rank B or A)
+1. Opponent has graduated B+ (`lt.cp_opp_graduation` exists with rank B or A)
+2. Opponent graduated MORE RECENTLY than BWC team (by checkpoint index), OR BWC team never graduated (peak C)
 3. Opponent has held control at 2+ consecutive checkpoints (`lt.cp_opp_holds >= 2`)
-4. Opponent currently has control at the checkpoint being evaluated (`ind.controlTeam !== bwcTeam`)
-5. Opponent MF ≥ 0.55 (lightweight gate — just confirms sustained eligibility, not structural quality)
-6. `lt.po_fired` is not already set, `alertMinsLeft >= 1.0`
+4. Opponent currently has control (`ind.controlTeam !== bwcTeam`)
+5. Opponent MF ≥ 0.55 (lightweight gate — floor is battle-tested, conviction comes from the flip itself)
+6. PO has not already been flipped to this opponent (`!lt.po_fired || lt.po_fired.team !== oppTeam`)
+7. `alertMinsLeft >= 1.0`
 
 **No minF gate** for opponent PO — the cumulative anchor makes minimum floor values meaningless.
 
-**When it fires — BWC flip:**
+**"More recently" comparison:** Both `cp_graduation` and `cp_opp_graduation` store `cp_idx` (index into GRAD_CHECKPOINTS at time of graduation). Opponent is more recent if `cp_opp_graduation.cp_idx > cp_graduation.cp_idx`. If BWC team never graduated (`cp_peak_rank === 'C'`), opponent is automatically more recent.
 
 ```javascript
-// ── OPPONENT POSITION OPEN (BWC team failed, opponent graduated) ──
-if (!lt.po_fired && lt.cp_peak_rank === 'C' && lt.cp_opp_graduation
+// ── LATEST-TO-GRADUATE FLIP ──
+// Runs AFTER §8.2 standard PO evaluation, at each checkpoint
+const oppTeam = ind.controlTeam !== bwcTeam ? ind.controlTeam : null;
+if (oppTeam && lt.cp_opp_graduation
     && (lt.cp_opp_graduation.rank === 'B' || lt.cp_opp_graduation.rank === 'A')
-    && lt.cp_opp_holds >= 2 && ind.controlTeam !== bwcTeam && alertMinsLeft >= 1.0) {
+    && lt.cp_opp_holds >= 2
+    && (!lt.po_fired || lt.po_fired.team !== oppTeam)
+    && alertMinsLeft >= 1.0) {
 
-  // Compute opponent's MF from their eligible checkpoints
-  const oppTeam = ind.controlTeam;
-  const oppEligible = lt.checkpoints.filter(cp =>
-    cp.team === oppTeam && cp.floor >= 0.60 && cp.margin >= 2
-  );
-  const oppMF = oppEligible.length > 0
-    ? Math.round((oppEligible.reduce((s, cp) => s + cp.floor, 0) / oppEligible.length) * 1000) / 1000
-    : null;
+  // Check "more recent" — opponent graduated after BWC team (or BWC never graduated)
+  const bwcGradIdx = lt.cp_graduation?.cp_idx ?? -1; // -1 if never graduated
+  const oppGradIdx = lt.cp_opp_graduation.cp_idx;
+  const oppIsMoreRecent = oppGradIdx > bwcGradIdx;
 
-  if (oppMF != null && oppMF >= 0.55) {
-    // Flip BWC to opponent
-    lt.original_bwc_team = lt.bwc_fired.team;
-    lt.bwc_flipped = true;
-    lt.bwc_fired.team = oppTeam;
+  if (oppIsMoreRecent) {
+    // Compute opponent's MF from their eligible checkpoints
+    const oppEligible = lt.checkpoints.filter(cp =>
+      cp.team === oppTeam && cp.floor >= 0.60 && cp.margin >= 2
+    );
+    const oppMF = oppEligible.length > 0
+      ? Math.round((oppEligible.reduce((s, cp) => s + cp.floor, 0) / oppEligible.length) * 1000) / 1000
+      : null;
 
-    const oppRank = lt.cp_opp_graduation.rank;
-    lt.po_fired = {
-      team: oppTeam, rank: oppRank,
-      period: currentPeriod, clock: clock,
-      mean_floor: oppMF,
-      min_floor: null,
-      lane: lt.lane,
-      checkpoint_count: oppEligible.length,
-      flipped: true,
-      original_bwc_team: lt.original_bwc_team,
-    };
+    if (oppMF != null && oppMF >= 0.55) {
+      // Record original BWC team before flipping
+      if (!lt.original_bwc_team) lt.original_bwc_team = lt.bwc_fired.team;
+      lt.bwc_flipped = true;
+      lt.bwc_fired.team = oppTeam;
 
-    await routeV2Alert('POSITION_OPEN', 'FIRED', null, false);
-    log(`${matchup}: ★ OPPONENT POSITION OPEN — ${oppTeam} ${oppRank}-Rank (flipped from ${lt.original_bwc_team}) | oppMF=${oppMF.toFixed(3)} | ${oppEligible.length} opp CPs`);
+      const oppRank = lt.cp_opp_graduation.rank;
+      const hadPriorPO = lt.po_fired && lt.po_fired.team !== oppTeam;
+
+      lt.po_fired = {
+        team: oppTeam, rank: oppRank,
+        period: currentPeriod, clock: clock,
+        mean_floor: oppMF,
+        min_floor: null,
+        lane: lt.lane,
+        checkpoint_count: oppEligible.length,
+        flipped: true,
+        original_bwc_team: lt.original_bwc_team,
+      };
+
+      await routeV2Alert('POSITION_OPEN', 'FIRED', null, false);
+      log(`${matchup}: ★ FLIP PO — ${oppTeam} ${oppRank}-Rank (${hadPriorPO ? 'supersedes prior PO on' : 'flipped from'} ${lt.original_bwc_team}) | oppMF=${oppMF.toFixed(3)} | ${oppEligible.length} opp CPs`);
+    }
   }
 }
 ```
 
-**Location:** Inside the checkpoint capture while loop (§5.2), AFTER the standard PO evaluation (§8.2), as a separate block. Only runs if standard PO did not fire.
+**Location:** Inside the checkpoint capture while loop (§5.2), AFTER the standard PO evaluation (§8.2).
 
-**State machine after flip:** By updating `lt.bwc_fired.team` to the opponent, `computeBwcState()` naturally tracks the correct team going forward. When DEN has control, it returns LOCK/EDGE (not EXIT). When MIN regains control, it returns EXIT. The state transitions (HOLDING, VALUE, EXIT, etc.) are now relative to the graduated opponent, which is correct.
+**State machine after flip:** By updating `lt.bwc_fired.team` to the opponent, `computeBwcState()` naturally tracks the correct team going forward. When the new team has control → LOCK/EDGE. When original team regains control → EXIT.
 
-**BUY suppression context after flip:** Once opponent PO fires, any subsequent BUY on the original BWC team would see in the agent prompt: "⚠ BWC FLIPPED — the system originally tracked [MIN] but they failed to graduate while [DEN] graduated B-Rank. Structural thesis has inverted. BUY on [MIN] is counter to the confirmed structural direction."
+**No flip-flopping:** Graduation is a watermark — once a team graduates, they can't re-graduate at a higher checkpoint index. So the original BWC team can't become "more recent" again after the flip. The flip is permanent.
+
+**Alert journey examples:**
+
+**Scenario 1 — BWC never graduated, opponent takes over (MIN@DEN):**
+1. TRACKING fires on MIN (Q2 10:41)
+2. MIN never graduates (peak C, floor collapses)
+3. DEN graduates B @ Q3_3 → **FLIP PO fires on DEN** 🔄
+4. State transitions now track DEN (HOLDING, SAFE, etc.)
+5. BUY on MIN sees: "BWC FLIPPED — structural thesis inverted"
+
+**Scenario 2 — Both graduate, opponent is more recent:**
+1. TRACKING fires on Team A (Q2)
+2. Team A graduates B @ Q2_END → PO fires on Team A (B, blocked until Q3_6 by timing gate... or if A-rank, fires immediately)
+3. Team B takes over Q3 → EXIT fires on Team A
+4. Team B graduates B @ Q3_6 (more recent than Team A's Q2_END) → **FLIP PO fires on Team B** 🔄
+5. Subscriber got: TRACKING → PO(A) → EXIT → PO(B) 🔄 — clear narrative
+
+**Scenario 3 — BWC graduated A early, opponent graduates later:**
+1. TRACKING fires on Team A (Q2)
+2. Team A graduates A @ Q2_6 → PO fires on Team A (A-rank, fires immediately)
+3. Team A leads through Q2-Q3 → HOLDING alerts
+4. Team B takes over mid-Q3 → EXIT fires on Team A
+5. Team B graduates B @ Q3_END (more recent cp_idx than Team A's Q2_6) → **FLIP PO fires on Team B** 🔄
+6. Even though Team A had higher rank (A vs B), Team B's more recent graduation reflects current structural reality — data shows second-to-graduate wins 84.5%
 
 **New `lt` fields:**
 
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|
-| `lt.bwc_flipped` | `boolean` | `false` | Whether BWC team was flipped via opponent graduation |
+| `lt.bwc_flipped` | `boolean` | `false` | Whether BWC team was flipped via latest-to-graduate |
 | `lt.original_bwc_team` | `string` | `null` | Original BWC team before flip (for logging/context) |
 
-**MIN@DEN walkthrough with this logic:**
-1. Q2 10:41: BWC fires on MIN (floor 0.78, margin 4)
-2. Q1_END–Q3_9: MIN holds BWC but floor collapses 0.78→0.48, never graduates (peak C)
-3. Q3_6: DEN takes control (floor 0.60, margin 9, STRONG). cp_opp_holds = 1
-4. Q3_3: DEN holds (floor 0.60, margin 13, STRONG). cp_opp_holds = 2. DEN graduates B-rank. Opponent PO conditions met: MIN peak C ✓, DEN graduated B ✓, opp_holds >= 2 ✓, oppMF 0.60 >= 0.55 ✓
-5. **OPPONENT PO fires on DEN B-Rank.** BWC flipped from MIN to DEN.
-6. Q4 BUY alerts on MIN would see: "BWC FLIPPED — MIN failed to graduate, DEN graduated B-Rank" → agent has strong suppression context for all 5 of those wrong SENDs
+**Update to `cp_graduation` and `cp_opp_graduation` objects:** Both now include `cp_idx` (index into GRAD_CHECKPOINTS) for recency comparison:
+
+```javascript
+lt.cp_graduation = {
+  rank: cpRank, cp_label: nextCp.label, cp_idx: lt.next_cp_idx,
+  floor: ind.score, margin: cpMargin,
+  period: currentPeriod, clock: clock,
+};
+// Same for cp_opp_graduation:
+lt.cp_opp_graduation = {
+  rank: oppRank, cp_label: nextCp.label, cp_idx: lt.next_cp_idx,
+  floor: ind.score, margin: cpMargin,
+};
+```
 
 ---
 
@@ -600,11 +640,25 @@ Replace the existing GRADUATION CONFIDENCE LAYER section (~line 262):
 ```
   CHECKPOINT GRADUATION CONTEXT (additional data for BUY evaluation — does not override BUY evidence above):
   ${ctx.cpGraduation
-    ? 'Team GRADUATED ' + ctx.cpPeakRank + '-Rank @ ' + ctx.cpGraduation.cp_label + '. ' + mfTrajStr
+    ? 'BWC team (' + ctx.bwcTeam + ') GRADUATED ' + ctx.cpPeakRank + '-Rank @ ' + ctx.cpGraduation.cp_label + '. ' + mfTrajStr
     : ctx.cpEligibleCount > 0
-      ? 'Pre-graduation: ' + ctx.cpEligibleCount + ' eligible checkpoints. ' + mfTrajStr
-      : 'No checkpoint data — cold BUY with no BWC context.'
+      ? 'BWC team (' + ctx.bwcTeam + ') pre-graduation: ' + ctx.cpEligibleCount + ' eligible checkpoints. ' + mfTrajStr
+      : ctx.bwcTeam 
+        ? 'BWC team (' + ctx.bwcTeam + ') tracked but no eligible checkpoints — structural interest identified but never confirmed.'
+        : 'No BWC context — cold BUY.'
   }
+  ${ctx.cpOppGraduation ? 'Opponent graduated ' + ctx.cpOppGraduation.rank + '-Rank @ ' + ctx.cpOppGraduation.cp_label + (ctx.cpOppGraduation.cp_idx > (ctx.cpGraduation?.cp_idx ?? -1) ? ' (MORE RECENT than BWC graduation — opponent is structurally ascending)' : '') : ''}
+  ${ctx.bwcFlipped ? '⚠ BWC FLIPPED: System originally tracked ' + ctx.originalBwcTeam + ' → structural control transferred to ' + ctx.bwcTeam + '. Latest-to-graduate wins 84.5% historically.' : ''}
+  
+  BWC LIFECYCLE STATUS FOR BUY DECISIONS:
+  The BUY team's relationship to the BWC lifecycle determines baseline confidence:
+  
+  • BUY team = current BWC team WITH active PO: "Warm BUY" — graduated team trailing is the thesis working. MF trajectory tells you if the structural edge is holding.
+  • BUY team = current BWC team WITHOUT PO (graduated but gates blocked): Structural edge confirmed mechanically but quality didn't meet PO gates. Moderate confidence — rely on standard BUY evidence with graduation as supporting context.
+  • BUY team = BWC team but NEVER graduated (tracked, no graduation): System identified structural interest but edge never separated. Lower confidence. Rely entirely on standard BUY evidence. MF trajectory may show INSUFFICIENT.
+  • BUY team = original BWC team but BWC was FLIPPED to opponent: Near-automatic SUPPRESS. This team LOST structural control to the opponent. You are buying against the confirmed structural direction. The team that took it away from them graduated more recently and wins 84.5% of the time.
+  • BUY team = opponent of BWC team (not flipped): Evaluate independently. If opponent has graduated, their structural case is strong — they earned it against the BWC team.
+  • No BWC context at all: Cold BUY — rely entirely on standard BUY evidence above.
   
   HOW TO USE MF TRAJECTORY ON BUY DECISIONS:
   • RISING = structural thesis is building, not fading. Trailing is more likely variance. Increases BUY confidence.
@@ -617,8 +671,6 @@ Replace the existing GRADUATION CONFIDENCE LAYER section (~line 262):
   • Heavy favorite + DECLINING MF = lowest confidence — expected dominance is fading, position may be compromised.
   
   DEFICIT DEPTH + GRADUATION: trail 5-9 with graduation = structural thesis may be wrong, apply extra scrutiny regardless of trajectory. Trail 10+ with graduation = near-automatic SUPPRESS (the structural read was incorrect regardless of rank).
-  
-  ${ctx.bwcFlipped ? '⚠ BWC FLIPPED: The system originally tracked ' + ctx.originalBwcTeam + ' but they failed to graduate while ' + ctx.bwcTeam + ' graduated ' + ctx.poRank + '-Rank. Structural thesis has INVERTED. Any BUY on ' + ctx.originalBwcTeam + ' is counter to the confirmed structural direction — the team you are evaluating a BUY on is the team that LOST structural control. Near-automatic SUPPRESS unless extreme circumstances (opponent foul trouble, key injury).' : ''}
 ```
 
 ---
