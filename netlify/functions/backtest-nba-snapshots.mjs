@@ -7704,11 +7704,11 @@ async function reportBuyJourney(sql, url) {
 
 
 // ══════════════════════════════════════════════════════════════════════════════
-// GRADUATION SIM — replays full CHECKPOINT_GRADUATION_SPEC v3 rules
+// GRADUATION SIM v2 — full CHECKPOINT_GRADUATION_SPEC v3 rules + enhancements
 // ?phase=report_graduation_sim             — all games
 // ?phase=report_graduation_sim&close=1     — competitive games only
 // ?phase=report_graduation_sim&detail=1    — include per-game detail list
-// ?phase=report_graduation_sim&lane=tossup — override lane (default: tossup)
+// ?phase=report_graduation_sim&mf=0.65     — override MF gate
 // ══════════════════════════════════════════════════════════════════════════════
 async function reportGraduationSim(sql, url) {
   var closeOnly = url?.searchParams?.get('close') === '1';
@@ -7746,16 +7746,14 @@ async function reportGraduationSim(sql, url) {
 
   var checkpoints = CP_LABELS;
   var cpIdx = {}; for (var i = 0; i < checkpoints.length; i++) cpIdx[checkpoints[i]] = i;
-  var Q3_6_IDX = cpIdx['Q3_6']; // = 7
+  var Q3_6_IDX = cpIdx['Q3_6'];
 
-  // Group by game
   var gameMap = {};
   for (var r of rows) {
     if (!gameMap[r.game_id]) gameMap[r.game_id] = [];
     gameMap[r.game_id].push(r);
   }
 
-  // Competitive filter
   var Q3_CPS = new Set(['Q3_9','Q3_6','Q3_3','Q3_END']);
   var Q4_CPS = new Set(['Q4_9','Q4_6','Q4_3','Q4_END']);
   if (closeOnly) {
@@ -7786,26 +7784,25 @@ async function reportGraduationSim(sql, url) {
     return 'C';
   }
   function ph(b) { return { n: b.n, wins: b.wins, pct: b.n > 0 ? Math.round(b.wins / b.n * 1000) / 10 : null }; }
-
   function teamWon(team, homeAlias, finalMargin) {
-    if (finalMargin === 0) return false; // tie = no winner
+    if (finalMargin === 0) return false;
     var homeWon = finalMargin > 0;
     return (team === homeAlias) ? homeWon : !homeWon;
   }
 
   // ── Accumulators ──
-  var totalGames = 0;
-  var totalBWCGames = 0;
+  var totalGames = 0, totalBWCGames = 0, no_bwc = 0;
   var poFired = { n: 0, wins: 0 };
-  var poByRank = { S: {n:0,wins:0}, A: {n:0,wins:0}, B: {n:0,wins:0} };
+  // S-rank is POST-HOC only now — all A-grades fire as 'A'
+  var poByRank = { A: {n:0,wins:0}, B: {n:0,wins:0} };
+  var postHocS = { n: 0, wins: 0 }; // A-rank + zero ctrl flips at game end
+  var postHocA = { n: 0, wins: 0 }; // A-rank with flips (not W2W)
   var poByCheckpoint = {};
   for (var cp of checkpoints) poByCheckpoint[cp] = {n:0,wins:0};
   var poFlipped = { n: 0, wins: 0 };
   var poNotFlipped = { n: 0, wins: 0 };
-  var graduated_blocked = { n: 0, wins: 0 }; // graduated but MF/minF blocked
-  var graduated_blocked_reasons = {};
-  var never_graduated = { n: 0, wins: 0 }; // BWC game but no team graduated
-  var no_bwc = 0; // no BWC-eligible checkpoints at all
+  var graduated_blocked = { n: 0, wins: 0 };
+  var never_graduated = { n: 0, wins: 0 };
 
   // Margin at PO fire
   var poMarginBuckets = {
@@ -7814,48 +7811,68 @@ async function reportGraduationSim(sql, url) {
     'trailing_or_tied': {n:0,wins:0}
   };
 
-  // MF sensitivity sweep — test spec rules at different MF gates
+  // MF sensitivity sweep
   var mfSweep = {};
   var sweepThresholds = [0.60, 0.65, 0.70, 0.72, 0.75, 0.78, 0.80, 0.85];
   for (var t of sweepThresholds) mfSweep[t.toFixed(2)] = {n:0,wins:0};
 
-  // Wire-to-wire breakdown
-  var wireToWire = {n:0,wins:0};
-  var notWireToWire = {n:0,wins:0};
-
-  // PO rank × margin at fire
-  var rankMargin = {
-    S: { 'lead_1_4':{n:0,wins:0}, 'lead_5_8':{n:0,wins:0}, 'lead_9_plus':{n:0,wins:0} },
-    A: { 'lead_1_4':{n:0,wins:0}, 'lead_5_8':{n:0,wins:0}, 'lead_9_plus':{n:0,wins:0} },
-    B: { 'lead_1_4':{n:0,wins:0}, 'lead_5_8':{n:0,wins:0}, 'lead_9_plus':{n:0,wins:0} },
+  // Conviction cross-tab at PO fire
+  var convByRank = {
+    A: { DOMINANT:{n:0,wins:0}, STRONG:{n:0,wins:0}, MODEST:{n:0,wins:0}, CONDITIONAL:{n:0,wins:0}, other:{n:0,wins:0} },
+    B: { DOMINANT:{n:0,wins:0}, STRONG:{n:0,wins:0}, MODEST:{n:0,wins:0}, CONDITIONAL:{n:0,wins:0}, other:{n:0,wins:0} },
   };
 
-  // Detail list (optional)
+  // ── Flip deep analysis ──
+  var flipByCheckpoint = {};
+  for (var cp of checkpoints) flipByCheckpoint[cp] = {n:0,wins:0};
+  var flipByRank = { A: {n:0,wins:0}, B: {n:0,wins:0} };
+  var flipLossOrigin = { type1_both_wrong: 0, type2_original_was_right: 0, total_flip_losses: 0 };
+
+  // ── B confirmation window sweep ──
+  // For each N (0,1,2,3,4): B fires N checkpoints after graduation, not at fixed Q3_6
+  var bConfirmNs = [0, 1, 2, 3, 4];
+  var bConfirmSweep = {};
+  for (var n of bConfirmNs) bConfirmSweep[n] = { n: 0, wins: 0 };
+
+  // ── Flip criteria comparison ──
+  // Track alongside main sim: lighter flip criteria
+  var flipCriteria = {
+    current: { n: 0, wins: 0 },    // graduated B+, 2+ holds, MF>=0.55, more recent
+    lighter: { n: 0, wins: 0 },    // BWC-eligible (floor>=0.60, margin>=2), 2+ holds, more recent ctrl
+    lightest: { n: 0, wins: 0 },   // BWC-eligible, 1+ hold (just took control back)
+  };
+
+  // Detail list
   var detailList = [];
 
   // ── GAME LOOP ──
   for (var [gid, snaps] of Object.entries(gameMap)) {
     var cpMap = {};
     for (var s of snaps) cpMap[s.checkpoint] = s;
-    if (!cpMap['Q2_6']) continue; // need enough data
+    if (!cpMap['Q2_6']) continue;
     totalGames++;
 
     var homeA = snaps[0].home_alias;
     var awayA = snaps[0].away_alias;
     var finalM = snaps[0].final_margin;
 
-    // ── Per-team state ──
     var teamState = {};
     teamState[homeA] = { cpHolds: 0, eligibleFloors: [], peakRank: 'C', gradCpIdx: null, gradRank: null };
     teamState[awayA] = { cpHolds: 0, eligibleFloors: [], peakRank: 'C', gradCpIdx: null, gradRank: null };
 
-    var bwcTeam = null;     // first team to be BWC-eligible
+    var bwcTeam = null;
     var ctrlFlips = 0;
     var prevCtrl = null;
 
-    // PO result for this game
-    var gamePO = null;       // { team, rank, cpLabel, cpIdx, mf, minF, flipped, margin }
-    var gameBlocked = null;  // { rank, reason, team, mf, minF }
+    var gamePO = null;
+    var gameBlocked = null;
+
+    // B confirmation sweep trackers (per-N)
+    var bConfirmFired = {};
+    for (var bn of bConfirmNs) bConfirmFired[bn] = null;
+
+    // Flip criteria trackers (per-criteria, per-game)
+    var flipCriteriaFired = { current: null, lighter: null, lightest: null };
 
     for (var ci = 0; ci < checkpoints.length; ci++) {
       var cpLabel = checkpoints[ci];
@@ -7867,25 +7884,19 @@ async function reportGraduationSim(sql, url) {
       var ctrlTeam = snap.ctrl;
       var oppTeam = ctrlTeam === homeA ? awayA : homeA;
 
-      // Track control flips
       if (prevCtrl && prevCtrl !== ctrlTeam) ctrlFlips++;
       prevCtrl = ctrlTeam;
 
-      // ── Per-team checkpoint holds ──
       teamState[ctrlTeam].cpHolds++;
-      teamState[oppTeam].cpHolds = 0; // reset opponent counter
+      teamState[oppTeam].cpHolds = 0;
 
-      // BWC eligibility check: floor >= 0.60 AND ctrl margin >= 2
       var bwcEligible = snap.floor >= 0.60 && ctrlMargin >= 2;
       if (!bwcEligible) continue;
 
-      // Establish BWC team on first eligible checkpoint
       if (!bwcTeam) bwcTeam = ctrlTeam;
 
-      // Record eligible floor for current control team
       teamState[ctrlTeam].eligibleFloors.push(snap.floor);
 
-      // ── Rank classification (for current control team) ──
       var holds = teamState[ctrlTeam].cpHolds;
       var rank = classifyBWCTier(snap.conv_tier, ctrlMargin, holds, oppCount);
 
@@ -7896,96 +7907,117 @@ async function reportGraduationSim(sql, url) {
         teamState[ctrlTeam].gradRank = rank;
       }
 
-      // ── Compute MF / minF for BWC team ──
+      // ── BWC team PO evaluation ──
       if (ctrlTeam === bwcTeam) {
         var bwcFloors = teamState[bwcTeam].eligibleFloors;
         var mf = bwcFloors.reduce(function(a,b){return a+b;},0) / bwcFloors.length;
         var minF = Math.min.apply(null, bwcFloors);
 
-        // ── MF Sensitivity Sweep (run at every eligible CP, first-fire per threshold) ──
-        // (handled after PO evaluation below)
-
-        // ── Standard PO evaluation (if BWC team graduated and PO not yet fired) ──
         if (!gamePO && teamState[bwcTeam].gradRank) {
           var gRank = teamState[bwcTeam].gradRank;
 
+          // A-rank: fire at any checkpoint (NO S classification at fire time)
           if (gRank === 'A') {
             if (mf >= gates.mfGate && minF >= gates.minFGate) {
-              var isW2W = ctrlFlips === 0;
-              var poRank = isW2W ? 'S' : 'A';
-              gamePO = { team: bwcTeam, rank: poRank, cpLabel: cpLabel, cpIdx: ci,
-                         mf: mf, minF: minF, margin: ctrlMargin, flipped: false };
-              gameBlocked = null; // PO fires, clear any prior block
+              gamePO = { team: bwcTeam, rank: 'A', cpLabel: cpLabel, cpIdx: ci,
+                         mf: mf, minF: minF, margin: ctrlMargin, flipped: false,
+                         conv: snap.conv_tier };
+              gameBlocked = null;
             } else {
               gameBlocked = { rank: gRank, team: bwcTeam, mf: mf, minF: minF,
                 reason: 'A-Rank MF ' + mf.toFixed(3) + (mf < gates.mfGate ? ' < ' + gates.mfGate : '') +
                         (minF < gates.minFGate ? ' | minF ' + minF.toFixed(2) + ' < ' + gates.minFGate : '') };
             }
           }
+          // B-rank: Q3_6+ gate
           if (gRank === 'B') {
             var pastQ3_6 = ci >= Q3_6_IDX;
             if (pastQ3_6 && mf >= gates.mfGate && minF >= gates.minFGate) {
               gamePO = { team: bwcTeam, rank: 'B', cpLabel: cpLabel, cpIdx: ci,
-                         mf: mf, minF: minF, margin: ctrlMargin, flipped: false };
+                         mf: mf, minF: minF, margin: ctrlMargin, flipped: false,
+                         conv: snap.conv_tier };
               gameBlocked = null;
             } else {
-              var reason = !pastQ3_6 
+              var reason = !pastQ3_6
                 ? 'B-Rank waiting Q3_6+ (at ' + cpLabel + ')'
                 : 'B-Rank MF ' + mf.toFixed(3) + (mf < gates.mfGate ? ' < ' + gates.mfGate : '') +
                   (minF < gates.minFGate ? ' | minF ' + minF.toFixed(2) + ' < ' + gates.minFGate : '');
               gameBlocked = { rank: gRank, team: bwcTeam, mf: mf, minF: minF, reason: reason };
             }
           }
-          // C-Rank: no PO
         }
-      }
 
-      // ── Latest-to-graduate FLIP check ──
-      // Runs when opponent has control and has graduated B+
-      if (!gamePO && ctrlTeam !== bwcTeam && bwcTeam) {
-        var oppState = teamState[ctrlTeam]; // "opponent" of BWC = current ctrl
-        if (oppState.gradRank && (oppState.gradRank === 'B' || oppState.gradRank === 'A')) {
-          // Check: graduated more recently than BWC team (or BWC never graduated)
-          var bwcGradIdx = teamState[bwcTeam].gradCpIdx;
-          var oppGradIdx = oppState.gradCpIdx;
-          var oppIsMoreRecent = bwcGradIdx === null || oppGradIdx > bwcGradIdx;
-
-          // Check: opponent has 2+ consecutive holds at checkpoint level
-          var oppHolds = oppState.cpHolds;
-
-          // Compute opponent MF
-          var oppFloors = oppState.eligibleFloors;
-          var oppMF = oppFloors.length > 0
-            ? oppFloors.reduce(function(a,b){return a+b;},0) / oppFloors.length
-            : null;
-
-          if (oppIsMoreRecent && oppHolds >= 2 && oppMF !== null && oppMF >= 0.55) {
-            gamePO = { team: ctrlTeam, rank: oppState.gradRank, cpLabel: cpLabel, cpIdx: ci,
-                       mf: oppMF, minF: null, margin: ctrlMargin, flipped: true,
-                       original_bwc: bwcTeam };
-            // Clear any prior block (flip supersedes)
-            gameBlocked = null;
+        // ── B confirmation window sweep (parallel tracker) ──
+        if (teamState[bwcTeam].gradRank === 'B' || teamState[bwcTeam].gradRank === 'A') {
+          if (teamState[bwcTeam].gradRank === 'B') {
+            var cpsSinceGrad = ci - teamState[bwcTeam].gradCpIdx;
+            for (var bn of bConfirmNs) {
+              if (bConfirmFired[bn] === null && cpsSinceGrad >= bn && mf >= gates.mfGate && minF >= gates.minFGate) {
+                bConfirmFired[bn] = { team: bwcTeam, ci: ci };
+              }
+            }
           }
         }
       }
 
-      // Also check: if PO already fired on BWC team, but opponent graduated more recently → flip
+      // ── FLIP EVALUATION (main sim — current criteria) ──
+      // Check when opponent has control
+      if (ctrlTeam !== bwcTeam && bwcTeam) {
+        var oppState = teamState[ctrlTeam];
+
+        // ── Current criteria: graduated B+, 2+ holds, MF>=0.55, more recent ──
+        if (oppState.gradRank && (oppState.gradRank === 'B' || oppState.gradRank === 'A')) {
+          var bwcGradIdx = teamState[bwcTeam].gradCpIdx;
+          var oppGradIdx = oppState.gradCpIdx;
+          var oppIsMoreRecent = bwcGradIdx === null || oppGradIdx > bwcGradIdx;
+
+          var oppFloors = oppState.eligibleFloors;
+          var oppMF = oppFloors.length > 0
+            ? oppFloors.reduce(function(a,b){return a+b;},0) / oppFloors.length : null;
+
+          if (oppIsMoreRecent && oppState.cpHolds >= 2 && oppMF !== null && oppMF >= 0.55) {
+            // Flip fires — overwrite PO (or create if none existed)
+            if (!gamePO || gamePO.team !== ctrlTeam) {
+              var prevPOTeam = gamePO ? gamePO.team : bwcTeam;
+              gamePO = { team: ctrlTeam, rank: oppState.gradRank, cpLabel: cpLabel, cpIdx: ci,
+                         mf: oppMF, minF: null, margin: ctrlMargin, flipped: true,
+                         original_bwc: prevPOTeam, conv: snap.conv_tier };
+              gameBlocked = null;
+            }
+          }
+
+          // Track for criteria comparison (current)
+          if (oppIsMoreRecent && oppState.cpHolds >= 2 && oppMF !== null && oppMF >= 0.55) {
+            if (!flipCriteriaFired.current) flipCriteriaFired.current = { team: ctrlTeam };
+          }
+        }
+
+        // ── Lighter criteria: BWC-eligible + 2+ holds (no graduation required) ──
+        if (oppState.cpHolds >= 2) {
+          if (!flipCriteriaFired.lighter) flipCriteriaFired.lighter = { team: ctrlTeam };
+        }
+
+        // ── Lightest criteria: BWC-eligible + 1+ hold (just has control) ──
+        if (oppState.cpHolds >= 1) {
+          if (!flipCriteriaFired.lightest) flipCriteriaFired.lightest = { team: ctrlTeam };
+        }
+      }
+
+      // Also: flip when PO already exists on different team
       if (gamePO && !gamePO.flipped && ctrlTeam !== gamePO.team && bwcTeam) {
         var oppState2 = teamState[ctrlTeam];
         if (oppState2.gradRank && (oppState2.gradRank === 'B' || oppState2.gradRank === 'A')) {
-          // Compare GRADUATION indices, not PO fire indices
-          var origGradIdx = teamState[gamePO.team]?.gradCpIdx ?? -1;
+          var origGradIdx2 = teamState[gamePO.team]?.gradCpIdx ?? -1;
           var oppGradIdx2 = oppState2.gradCpIdx;
-          var oppHolds2 = oppState2.cpHolds;
           var oppFloors2 = oppState2.eligibleFloors;
           var oppMF2 = oppFloors2.length > 0
-            ? oppFloors2.reduce(function(a,b){return a+b;},0) / oppFloors2.length
-            : null;
+            ? oppFloors2.reduce(function(a,b){return a+b;},0) / oppFloors2.length : null;
 
-          if (oppGradIdx2 > origGradIdx && oppHolds2 >= 2 && oppMF2 !== null && oppMF2 >= 0.55) {
+          if (oppGradIdx2 > origGradIdx2 && oppState2.cpHolds >= 2 && oppMF2 !== null && oppMF2 >= 0.55) {
+            var prevTeam = gamePO.team;
             gamePO = { team: ctrlTeam, rank: oppState2.gradRank, cpLabel: cpLabel, cpIdx: ci,
                        mf: oppMF2, minF: null, margin: ctrlMargin, flipped: true,
-                       original_bwc: bwcTeam };
+                       original_bwc: prevTeam, conv: snap.conv_tier };
           }
         }
       }
@@ -7997,79 +8029,87 @@ async function reportGraduationSim(sql, url) {
 
     if (gamePO) {
       var poWon = teamWon(gamePO.team, homeA, finalM);
-
       poFired.n++; if (poWon) poFired.wins++;
+
+      // Rank (A or B only at fire time)
       poByRank[gamePO.rank].n++; if (poWon) poByRank[gamePO.rank].wins++;
+
+      // Post-hoc S: A-rank + zero ctrl flips at game end
+      if (gamePO.rank === 'A' && !gamePO.flipped) {
+        if (ctrlFlips === 0) { postHocS.n++; if (poWon) postHocS.wins++; }
+        else { postHocA.n++; if (poWon) postHocA.wins++; }
+      }
+
       poByCheckpoint[gamePO.cpLabel].n++; if (poWon) poByCheckpoint[gamePO.cpLabel].wins++;
 
-      if (gamePO.flipped) { poFlipped.n++; if (poWon) poFlipped.wins++; }
-      else { poNotFlipped.n++; if (poWon) poNotFlipped.wins++; }
+      if (gamePO.flipped) {
+        poFlipped.n++; if (poWon) poFlipped.wins++;
+        flipByCheckpoint[gamePO.cpLabel].n++; if (poWon) flipByCheckpoint[gamePO.cpLabel].wins++;
+        flipByRank[gamePO.rank].n++; if (poWon) flipByRank[gamePO.rank].wins++;
+
+        // Flip loss origin
+        if (!poWon) {
+          flipLossOrigin.total_flip_losses++;
+          var originalWon = teamWon(gamePO.original_bwc, homeA, finalM);
+          if (originalWon) flipLossOrigin.type2_original_was_right++;
+          else flipLossOrigin.type1_both_wrong++;
+        }
+      } else {
+        poNotFlipped.n++; if (poWon) poNotFlipped.wins++;
+      }
 
       // Margin bucket
       var m = gamePO.margin;
-      var mBucket;
-      if (m <= 0) mBucket = 'trailing_or_tied';
-      else if (m <= 4) mBucket = 'lead_1_4';
-      else if (m <= 8) mBucket = 'lead_5_8';
-      else if (m <= 12) mBucket = 'lead_9_12';
-      else mBucket = 'lead_13_plus';
+      var mBucket = m <= 0 ? 'trailing_or_tied' : m <= 4 ? 'lead_1_4' : m <= 8 ? 'lead_5_8' : m <= 12 ? 'lead_9_12' : 'lead_13_plus';
       poMarginBuckets[mBucket].n++; if (poWon) poMarginBuckets[mBucket].wins++;
 
-      // Rank × margin
-      var rmBucket = m <= 4 ? 'lead_1_4' : m <= 8 ? 'lead_5_8' : 'lead_9_plus';
-      if (rankMargin[gamePO.rank]) {
-        rankMargin[gamePO.rank][rmBucket].n++;
-        if (poWon) rankMargin[gamePO.rank][rmBucket].wins++;
+      // Conviction cross-tab
+      var convKey = gamePO.conv || 'other';
+      if (!convByRank[gamePO.rank]) convKey = 'other';
+      if (convByRank[gamePO.rank]) {
+        var cb = convByRank[gamePO.rank][convKey] || convByRank[gamePO.rank].other;
+        cb.n++; if (poWon) cb.wins++;
       }
-
-      // Wire-to-wire
-      if (ctrlFlips === 0) { wireToWire.n++; if (poWon) wireToWire.wins++; }
-      else { notWireToWire.n++; if (poWon) notWireToWire.wins++; }
 
       if (showDetail) {
         detailList.push({
           game_id: gid, matchup: awayA + '@' + homeA,
           po_team: gamePO.team, rank: gamePO.rank, cp: gamePO.cpLabel,
-          mf: Math.round(gamePO.mf * 1000) / 1000, minF: gamePO.minF ? Math.round(gamePO.minF * 1000) / 1000 : null,
-          margin: gamePO.margin, flipped: gamePO.flipped,
+          mf: Math.round(gamePO.mf * 1000) / 1000, margin: gamePO.margin,
+          conv: gamePO.conv, flipped: gamePO.flipped,
           original_bwc: gamePO.original_bwc || null,
+          postHocS: gamePO.rank === 'A' && !gamePO.flipped && ctrlFlips === 0,
           ctrl_flips: ctrlFlips, won: poWon, final_margin: finalM,
         });
       }
     } else if (gameBlocked) {
-      // Graduated but gates blocked
       var blockedTeamWon = teamWon(gameBlocked.team, homeA, finalM);
       graduated_blocked.n++; if (blockedTeamWon) graduated_blocked.wins++;
-      var rKey = gameBlocked.reason.substring(0, 40);
-      if (!graduated_blocked_reasons[rKey]) graduated_blocked_reasons[rKey] = {n:0,wins:0};
-      graduated_blocked_reasons[rKey].n++; if (blockedTeamWon) graduated_blocked_reasons[rKey].wins++;
-
-      if (showDetail) {
-        detailList.push({
-          game_id: gid, matchup: awayA + '@' + homeA,
-          po_team: null, rank: gameBlocked.rank, cp: null,
-          mf: gameBlocked.mf ? Math.round(gameBlocked.mf * 1000) / 1000 : null,
-          minF: gameBlocked.minF ? Math.round(gameBlocked.minF * 1000) / 1000 : null,
-          margin: null, flipped: false, blocked: true,
-          block_reason: gameBlocked.reason,
-          would_have_been_correct: blockedTeamWon,
-          ctrl_flips: ctrlFlips, final_margin: finalM,
-        });
-      }
     } else {
-      // Never graduated — no team reached B or A
-      // Determine if BWC team won
       var bwcWon = teamWon(bwcTeam, homeA, finalM);
       never_graduated.n++; if (bwcWon) never_graduated.wins++;
     }
 
+    // ── B confirmation window sweep results ──
+    for (var bn of bConfirmNs) {
+      if (bConfirmFired[bn]) {
+        var bcWon = teamWon(bConfirmFired[bn].team, homeA, finalM);
+        bConfirmSweep[bn].n++; if (bcWon) bConfirmSweep[bn].wins++;
+      }
+    }
+
+    // ── Flip criteria comparison results ──
+    for (var fcKey of ['current', 'lighter', 'lightest']) {
+      if (flipCriteriaFired[fcKey]) {
+        var fcWon = teamWon(flipCriteriaFired[fcKey].team, homeA, finalM);
+        flipCriteria[fcKey].n++; if (fcWon) flipCriteria[fcKey].wins++;
+      }
+    }
+
     // ── MF Sensitivity Sweep ──
-    // Re-simulate with each sweep threshold to see PO volume/accuracy
     for (var st of sweepThresholds) {
       var stKey = st.toFixed(2);
-      // Replay simplified: did any team graduate + did MF cross threshold?
-      var anyGrad = false;
-      var sweepTeam = null;
+      var anyGrad = false, sweepTeam = null;
       for (var team of [homeA, awayA]) {
         if (teamState[team].gradRank && (teamState[team].gradRank === 'A' || teamState[team].gradRank === 'B')) {
           var tFloors = teamState[team].eligibleFloors;
@@ -8077,12 +8117,8 @@ async function reportGraduationSim(sql, url) {
             var tMF = tFloors.reduce(function(a,b){return a+b;},0) / tFloors.length;
             var tMinF = Math.min.apply(null, tFloors);
             if (tMF >= st && tMinF >= 0.58) {
-              // Check timing gate for B-rank
               if (teamState[team].gradRank === 'A' || teamState[team].gradCpIdx >= Q3_6_IDX) {
-                if (!anyGrad) {
-                  anyGrad = true;
-                  sweepTeam = team;
-                }
+                if (!anyGrad) { anyGrad = true; sweepTeam = team; }
               }
             }
           }
@@ -8099,73 +8135,95 @@ async function reportGraduationSim(sql, url) {
   var result = {
     _meta: {
       filter: closeOnly ? 'competitive games (within 5 in Q3, within 7 in Q4)' : 'all games',
-      lane: activeLane,
-      gates: gates,
-      total_games: totalGames,
-      total_bwc_games: totalBWCGames,
-      no_bwc_games: no_bwc,
+      lane: activeLane, gates: gates,
+      total_games: totalGames, total_bwc_games: totalBWCGames, no_bwc_games: no_bwc,
     },
 
     section_1_overall: {
-      description: 'Overall PO accuracy under full spec rules. Games where PO fires vs total BWC games.',
+      description: 'Overall PO accuracy. S dissolved into A at fire time; S is post-hoc only.',
       po_fired: ph(poFired),
       po_coverage: totalBWCGames > 0 ? Math.round(poFired.n / totalBWCGames * 1000) / 10 + '%' : null,
       graduated_but_blocked: ph(graduated_blocked),
       never_graduated: ph(never_graduated),
-      fire_plus_block_plus_never: poFired.n + graduated_blocked.n + never_graduated.n,
     },
 
     section_2_by_rank: {
-      description: 'PO accuracy broken down by rank. S = wire-to-wire A. A = graduated A (with flips). B = graduated B, Q3_6+.',
-      S: ph(poByRank.S),
+      description: 'Rank at fire time (A or B only). S is post-hoc — see section 3.',
       A: ph(poByRank.A),
       B: ph(poByRank.B),
     },
 
-    section_3_flip_analysis: {
-      description: 'Flipped POs (latest-to-graduate took over) vs standard POs.',
+    section_3_post_hoc_s: {
+      description: 'S = A-rank (non-flipped) with zero ctrl flips at game end. Post-hoc only, not assigned at fire time.',
+      S_post_hoc: ph(postHocS),
+      A_with_flips: ph(postHocA),
+      note: 'A-rank total = S_post_hoc + A_with_flips + A-rank flipped POs',
+    },
+
+    section_4_flip_deep: {
+      description: 'Flip analysis: when, to which rank, and loss origin (Type 2 = original PO team actually won).',
       standard_po: ph(poNotFlipped),
       flipped_po: ph(poFlipped),
       flip_rate: poFired.n > 0 ? Math.round(poFlipped.n / poFired.n * 1000) / 10 + '%' : null,
+      flip_by_rank: {
+        A: ph(flipByRank.A),
+        B: ph(flipByRank.B),
+      },
+      flip_by_checkpoint: Object.fromEntries(
+        Object.entries(flipByCheckpoint).filter(function(e) { return e[1].n > 0; }).map(function(e) { return [e[0], ph(e[1])]; })
+      ),
+      flip_loss_origin: {
+        total_flip_losses: flipLossOrigin.total_flip_losses,
+        type1_both_wrong: flipLossOrigin.type1_both_wrong,
+        type2_original_was_right: flipLossOrigin.type2_original_was_right,
+        type2_pct: flipLossOrigin.total_flip_losses > 0
+          ? Math.round(flipLossOrigin.type2_original_was_right / flipLossOrigin.total_flip_losses * 1000) / 10 + '%'
+          : null,
+        interpretation: 'Type 1 = both teams wrong, flip did not hurt. Type 2 = original was correct, flip actively damaged accuracy.',
+      },
     },
 
-    section_4_by_checkpoint: {
-      description: 'When does PO fire? Distribution across checkpoints.',
+    section_5_flip_criteria_comparison: {
+      description: 'Flip with different triggering criteria. Current = graduated B+, 2+ holds, MF>=0.55. Lighter = BWC-eligible + 2+ holds (no graduation). Lightest = BWC-eligible + 1 hold.',
+      current_graduated: ph(flipCriteria.current),
+      lighter_eligible_2holds: ph(flipCriteria.lighter),
+      lightest_eligible_1hold: ph(flipCriteria.lightest),
+    },
+
+    section_6_b_confirmation_window: {
+      description: 'B-rank with relative confirmation: PO fires N checkpoints after B graduation (not fixed Q3_6). Compare to find optimal confirmation depth.',
+      by_n: Object.fromEntries(bConfirmNs.map(function(n) {
+        return ['N=' + n + '_cps_after_grad', ph(bConfirmSweep[n])];
+      })),
+      note: 'N=0 = fire immediately at graduation. N=2 = fire 2 checkpoints later. Current spec uses fixed Q3_6 gate instead.',
+    },
+
+    section_7_conviction_cross_tab: {
+      description: 'Conviction tier at the checkpoint where PO fired, cross-tabbed by rank.',
+      A: Object.fromEntries(
+        Object.entries(convByRank.A).filter(function(e) { return e[1].n > 0; }).map(function(e) { return [e[0], ph(e[1])]; })
+      ),
+      B: Object.fromEntries(
+        Object.entries(convByRank.B).filter(function(e) { return e[1].n > 0; }).map(function(e) { return [e[0], ph(e[1])]; })
+      ),
+    },
+
+    section_8_by_checkpoint: {
+      description: 'When does PO fire?',
       checkpoints: Object.fromEntries(
         Object.entries(poByCheckpoint).filter(function(e) { return e[1].n > 0; }).map(function(e) { return [e[0], ph(e[1])]; })
       ),
     },
 
-    section_5_margin_at_fire: {
-      description: 'What lead did PO team have when PO fired?',
+    section_9_margin_at_fire: {
+      description: 'Lead at PO fire.',
       buckets: Object.fromEntries(
         Object.entries(poMarginBuckets).filter(function(e) { return e[1].n > 0; }).map(function(e) { return [e[0], ph(e[1])]; })
       ),
     },
 
-    section_6_rank_x_margin: {
-      description: 'Rank × margin at PO fire — where is each rank most reliable?',
-      S: Object.fromEntries(Object.entries(rankMargin.S).filter(function(e){return e[1].n>0;}).map(function(e){return [e[0],ph(e[1])];})),
-      A: Object.fromEntries(Object.entries(rankMargin.A).filter(function(e){return e[1].n>0;}).map(function(e){return [e[0],ph(e[1])];})),
-      B: Object.fromEntries(Object.entries(rankMargin.B).filter(function(e){return e[1].n>0;}).map(function(e){return [e[0],ph(e[1])];})),
-    },
-
-    section_7_wire_to_wire: {
-      description: 'Wire-to-wire (0 ctrl flips) vs games with flips.',
-      wire_to_wire: ph(wireToWire),
-      with_flips: ph(notWireToWire),
-    },
-
-    section_8_blocked_reasons: {
-      description: 'Why did graduated games get blocked?',
-      total_blocked: ph(graduated_blocked),
-      by_reason: Object.fromEntries(
-        Object.entries(graduated_blocked_reasons).map(function(e) { return [e[0], ph(e[1])]; })
-      ),
-    },
-
-    section_9_mf_sensitivity: {
-      description: 'Volume and accuracy at different MF gate thresholds (holding minF=0.58, same rank/timing rules).',
+    section_10_mf_sensitivity: {
+      description: 'Volume and accuracy at different MF gate thresholds.',
       by_threshold: Object.fromEntries(
         Object.entries(mfSweep).map(function(e) { return [e[0], ph(e[1])]; })
       ),
@@ -8173,10 +8231,9 @@ async function reportGraduationSim(sql, url) {
   };
 
   if (showDetail && detailList.length > 0) {
-    // Sort by game_id
     detailList.sort(function(a,b) { return a.game_id - b.game_id; });
-    result.section_10_detail = {
-      description: 'Per-game detail. Shows PO decisions and outcomes.',
+    result.section_11_detail = {
+      description: 'Per-game detail.',
       count: detailList.length,
       games: detailList,
     };
@@ -8184,6 +8241,7 @@ async function reportGraduationSim(sql, url) {
 
   return result;
 }
+
 
 
 // ── HANDLER ─────────────────────────────────────────────────────────────────
