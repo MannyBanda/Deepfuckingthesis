@@ -7724,6 +7724,8 @@ async function reportGraduationSim(sql, url) {
   };
   var activeLane = laneOverride || 'tossup';
   var gates = LANE_THRESHOLDS[activeLane] || LANE_THRESHOLDS.tossup;
+  var mfOverride = url?.searchParams?.get('mf');
+  if (mfOverride) gates = { mfGate: parseFloat(mfOverride), minFGate: gates.minFGate };
 
   var rows = await sql`
     SELECT game_id, checkpoint, margin_at_snapshot AS margin,
