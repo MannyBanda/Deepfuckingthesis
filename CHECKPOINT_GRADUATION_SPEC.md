@@ -116,6 +116,8 @@ All stored in the existing `live_tracking` JSONB column on `games` table. No sch
 | `lt.cp_eligible_count` | `integer` | `0` | Count of eligible checkpoints |
 | `lt.pregame_ml` | `integer` | `null` | BWC team's pregame ML (captured at first odds reading) |
 | `lt.lane` | `string` | `null` | 'underdog' / 'tossup' / 'favorite' / 'heavy_favorite' |
+| `lt.bwc_flipped` | `boolean` | `false` | Whether BWC team was flipped via opponent graduation |
+| `lt.original_bwc_team` | `string` | `null` | Original BWC team before flip (for logging/context) |
 
 Existing `lt` fields that STAY unchanged:
 - `lt.bwc_fired` — still fires at 3 consecutive 60s holds (BWC establishment)
@@ -448,6 +450,84 @@ All lanes also require: `only_one_grad` (opponent NOT graduated B+), `alertMinsL
 | Toss-up ML boundary | ±100 | **+100 to -150** | A -105/-135 line is a coin flip (52-57% implied), not a favorite. |
 | Favorite ML boundary | -101 to -250 | **-151 to -300** | Matches actual market perception of "clear favorite." |
 
+### 8.4 Opponent Position Open (BWC Flip)
+
+When the BWC team fails to graduate and the opponent does, the system has identified the wrong team. The backtest confirms this is one of the strongest signals in the system: when only one team graduates, they win 74.2% close / 85.8% full. When the second team to be tracked graduates, they have an exponentially higher chance of winning.
+
+**Why the opponent's floor is lower and that's fine:** The opponent's cumulative floor is suppressed by design — the BWC team dominated early, and the opponent's cumulative stats still carry the weight of that deficit. An opponent holding 0.60 floor DESPITE that cumulative headwind is battle-tested structural control. They won't flip the cumulative floor to 0.80 because the early data drags it down, but if they hold momentum, they ride it to the end. The floor understates their actual control — the confirmation signal is the BWC team's FAILURE to graduate, not the opponent's absolute floor value.
+
+**Fires when ALL are true:**
+1. BWC team has NOT graduated (peak rank C — `lt.cp_peak_rank === 'C'`)
+2. Opponent has graduated B+ (`lt.cp_opp_graduation` exists with rank B or A)
+3. Opponent has held control at 2+ consecutive checkpoints (`lt.cp_opp_holds >= 2`)
+4. Opponent currently has control at the checkpoint being evaluated (`ind.controlTeam !== bwcTeam`)
+5. Opponent MF ≥ 0.55 (lightweight gate — just confirms sustained eligibility, not structural quality)
+6. `lt.po_fired` is not already set, `alertMinsLeft >= 1.0`
+
+**No minF gate** for opponent PO — the cumulative anchor makes minimum floor values meaningless.
+
+**When it fires — BWC flip:**
+
+```javascript
+// ── OPPONENT POSITION OPEN (BWC team failed, opponent graduated) ──
+if (!lt.po_fired && lt.cp_peak_rank === 'C' && lt.cp_opp_graduation
+    && (lt.cp_opp_graduation.rank === 'B' || lt.cp_opp_graduation.rank === 'A')
+    && lt.cp_opp_holds >= 2 && ind.controlTeam !== bwcTeam && alertMinsLeft >= 1.0) {
+
+  // Compute opponent's MF from their eligible checkpoints
+  const oppTeam = ind.controlTeam;
+  const oppEligible = lt.checkpoints.filter(cp =>
+    cp.team === oppTeam && cp.floor >= 0.60 && cp.margin >= 2
+  );
+  const oppMF = oppEligible.length > 0
+    ? Math.round((oppEligible.reduce((s, cp) => s + cp.floor, 0) / oppEligible.length) * 1000) / 1000
+    : null;
+
+  if (oppMF != null && oppMF >= 0.55) {
+    // Flip BWC to opponent
+    lt.original_bwc_team = lt.bwc_fired.team;
+    lt.bwc_flipped = true;
+    lt.bwc_fired.team = oppTeam;
+
+    const oppRank = lt.cp_opp_graduation.rank;
+    lt.po_fired = {
+      team: oppTeam, rank: oppRank,
+      period: currentPeriod, clock: clock,
+      mean_floor: oppMF,
+      min_floor: null,
+      lane: lt.lane,
+      checkpoint_count: oppEligible.length,
+      flipped: true,
+      original_bwc_team: lt.original_bwc_team,
+    };
+
+    await routeV2Alert('POSITION_OPEN', 'FIRED', null, false);
+    log(`${matchup}: ★ OPPONENT POSITION OPEN — ${oppTeam} ${oppRank}-Rank (flipped from ${lt.original_bwc_team}) | oppMF=${oppMF.toFixed(3)} | ${oppEligible.length} opp CPs`);
+  }
+}
+```
+
+**Location:** Inside the checkpoint capture while loop (§5.2), AFTER the standard PO evaluation (§8.2), as a separate block. Only runs if standard PO did not fire.
+
+**State machine after flip:** By updating `lt.bwc_fired.team` to the opponent, `computeBwcState()` naturally tracks the correct team going forward. When DEN has control, it returns LOCK/EDGE (not EXIT). When MIN regains control, it returns EXIT. The state transitions (HOLDING, VALUE, EXIT, etc.) are now relative to the graduated opponent, which is correct.
+
+**BUY suppression context after flip:** Once opponent PO fires, any subsequent BUY on the original BWC team would see in the agent prompt: "⚠ BWC FLIPPED — the system originally tracked [MIN] but they failed to graduate while [DEN] graduated B-Rank. Structural thesis has inverted. BUY on [MIN] is counter to the confirmed structural direction."
+
+**New `lt` fields:**
+
+| Field | Type | Default | Purpose |
+|-------|------|---------|---------|
+| `lt.bwc_flipped` | `boolean` | `false` | Whether BWC team was flipped via opponent graduation |
+| `lt.original_bwc_team` | `string` | `null` | Original BWC team before flip (for logging/context) |
+
+**MIN@DEN walkthrough with this logic:**
+1. Q2 10:41: BWC fires on MIN (floor 0.78, margin 4)
+2. Q1_END–Q3_9: MIN holds BWC but floor collapses 0.78→0.48, never graduates (peak C)
+3. Q3_6: DEN takes control (floor 0.60, margin 9, STRONG). cp_opp_holds = 1
+4. Q3_3: DEN holds (floor 0.60, margin 13, STRONG). cp_opp_holds = 2. DEN graduates B-rank. Opponent PO conditions met: MIN peak C ✓, DEN graduated B ✓, opp_holds >= 2 ✓, oppMF 0.60 >= 0.55 ✓
+5. **OPPONENT PO fires on DEN B-Rank.** BWC flipped from MIN to DEN.
+6. Q4 BUY alerts on MIN would see: "BWC FLIPPED — MIN failed to graduate, DEN graduated B-Rank" → agent has strong suppression context for all 5 of those wrong SENDs
+
 ---
 
 ## 9. Agent Context: MF Trajectory (replaces BUY confidence tiers)
@@ -473,6 +553,8 @@ cpOppGraduation: lt.cp_opp_graduation || null,
 lane: lt.lane || null,
 pregameML: lt.pregame_ml || null,
 mfTrajectory: lt.bwc_fired ? computeMFTrajectory(lt.checkpoints || [], lt.bwc_fired.team) : null,
+bwcFlipped: lt.bwc_flipped || false,
+originalBwcTeam: lt.original_bwc_team || null,
 ```
 
 ### 9.3 Agent prompt: graduation context line
@@ -502,11 +584,12 @@ Replace the existing PO prompt section (~line 250):
 
 ```
 - POSITION_OPEN: The team has GRADUATED through the checkpoint system — sustained structural rank confirmed across multiple 3-minute evaluation windows.
-  ${ctx.poRank === 'S' ? 'S-Rank (98%+): Wire-to-wire structural dominance. ALWAYS SEND.' 
+  ${ctx.bwcFlipped ? '🔄 BWC FLIP: The system originally tracked ' + ctx.originalBwcTeam + ' but they FAILED to graduate (peak C). ' + ctx.bwcTeam + ' then graduated ' + ctx.poRank + '-Rank — taking structural control away from a previously dominant team. This is one of the strongest signals in the system (74-86% win rate). The floor appears modest because cumulative stats are anchored by ' + ctx.originalBwcTeam + "'s early dominance, but " + ctx.bwcTeam + " is holding control DESPITE that headwind. ALWAYS SEND."
+  : ctx.poRank === 'S' ? 'S-Rank (98%+): Wire-to-wire structural dominance. ALWAYS SEND.' 
   : ctx.poRank === 'A' ? 'A-Rank: Sustained DOMINANT conviction with lead 8+. ' + mfTrajStr + ' across ' + ctx.cpEligibleCount + ' checkpoints.'
   : ctx.poRank === 'B' ? 'B-Rank: Sustained DOMINANT/STRONG conviction with lead 3+. ' + mfTrajStr + ' across ' + ctx.cpEligibleCount + ' checkpoints.'
   : ''}
-  Lane: ${ctx.lane || 'unknown'}. ${ctx.lane === 'underdog' ? 'UNDERDOG graduation — market has not priced structural control. Edge is structural floor vs implied probability. ALWAYS SEND.' : ctx.lane === 'heavy_favorite' ? 'Heavy favorite — PO confirms structural read but line may offer limited edge. Frame as position confirmation, not direct entry.' : 'Evaluate edge: floor vs current ML implied probability.'}
+  ${!ctx.bwcFlipped ? 'Lane: ' + (ctx.lane || 'unknown') + '. ' + (ctx.lane === 'underdog' ? 'UNDERDOG graduation — market has not priced structural control. Edge is structural floor vs implied probability. ALWAYS SEND.' : ctx.lane === 'heavy_favorite' ? 'Heavy favorite — PO confirms structural read but line may offer limited edge. Frame as position confirmation, not direct entry.' : 'Evaluate edge: floor vs current ML implied probability.') : ''}
   This IS a position recommendation.
 ```
 
@@ -534,6 +617,8 @@ Replace the existing GRADUATION CONFIDENCE LAYER section (~line 262):
   • Heavy favorite + DECLINING MF = lowest confidence — expected dominance is fading, position may be compromised.
   
   DEFICIT DEPTH + GRADUATION: trail 5-9 with graduation = structural thesis may be wrong, apply extra scrutiny regardless of trajectory. Trail 10+ with graduation = near-automatic SUPPRESS (the structural read was incorrect regardless of rank).
+  
+  ${ctx.bwcFlipped ? '⚠ BWC FLIPPED: The system originally tracked ' + ctx.originalBwcTeam + ' but they failed to graduate while ' + ctx.bwcTeam + ' graduated ' + ctx.poRank + '-Rank. Structural thesis has INVERTED. Any BUY on ' + ctx.originalBwcTeam + ' is counter to the confirmed structural direction — the team you are evaluating a BUY on is the team that LOST structural control. Near-automatic SUPPRESS unless extreme circumstances (opponent foul trouble, key injury).' : ''}
 ```
 
 ---
@@ -546,7 +631,8 @@ In `routeV2Alert` (~line 4816), update POSITION_OPEN title:
 if (v2Type === 'POSITION_OPEN') {
   const rankStr = lt.po_fired?.rank ? ` (${lt.po_fired.rank})` : '';
   const laneStr = lt.lane === 'underdog' ? ' 🐶' : lt.lane === 'heavy_favorite' ? ' 🏠' : '';
-  ntfyTitle = `POSITION OPEN${rankStr}${laneStr} — ${bwcTeam || ind.controlTeam}${mlStr}`;
+  const flipStr = lt.po_fired?.flipped ? ' 🔄' : '';
+  ntfyTitle = `POSITION OPEN${rankStr}${laneStr}${flipStr} — ${bwcTeam || ind.controlTeam}${mlStr}`;
 }
 ```
 
@@ -555,6 +641,7 @@ Example outputs:
 - `POSITION OPEN (B) — PHI ML -140`
 - `POSITION OPEN (S) — OKC ML -280`
 - `POSITION OPEN (A) 🏠 — BOS ML -350`
+- `POSITION OPEN (B) 🔄 — DEN ML -280` (flipped from original BWC team)
 
 ---
 
@@ -685,12 +772,13 @@ Example outputs:
 4. Add checkpoint capture block (§5.2, before existing graduation detection, ~line 4980)
 5. Remove old graduation detection + opponent tracking blocks (lines ~4981-5074)
 6. Add PO evaluation inside checkpoint capture block (§8.2)
-7. Update v2Ctx with new checkpoint fields + mfTrajectory (§9.2, ~line 4861)
-8. Update `buildV2AgentPrompt` — graduation context line + PO rule + BUY trajectory section (§9.3-9.5)
-9. Update ntfy title for POSITION_OPEN (§10, in routeV2Alert)
-10. `node -c netlify/functions/poll-live-bdl.mjs` — syntax check
-11. Commit + push + Netlify deploy
-12. Verify with live game: checkpoint capture logs, lane classification, MF trajectory in agent reasoning
+7. Add opponent PO evaluation after standard PO (§8.4)
+8. Update v2Ctx with new checkpoint fields + mfTrajectory + flip context (§9.2, ~line 4861)
+9. Update `buildV2AgentPrompt` — graduation context line + PO rule + BUY trajectory section + flip context (§9.3-9.5)
+10. Update ntfy title for POSITION_OPEN with flip indicator (§10, in routeV2Alert)
+11. `node -c netlify/functions/poll-live-bdl.mjs` — syntax check
+12. Commit + push + Netlify deploy
+13. Verify with live game: checkpoint capture logs, lane classification, MF trajectory in agent reasoning, opponent graduation tracking
 
 ---
 
@@ -708,10 +796,13 @@ Example outputs:
 - [ ] For a dominant team: checkpoints accumulate, graduation fires, PO fires with MF/minF in log
 - [ ] For a contested game: PO blocked with reason logged (`MF 0.68 < 0.75`)
 - [ ] For both-graduated: PO suppressed with `✗ PO SUPPRESSED — both graduated` in log
+- [ ] For BWC team failing + opponent graduating: opponent PO fires with `★ OPPONENT POSITION OPEN` log, `bwc_flipped=true`
+- [ ] After flip: state transitions track the new BWC team (DEN gets LOCK/EDGE, MIN gets EXIT)
+- [ ] After flip: BUY on original BWC team sees "BWC FLIPPED" in agent reasoning
 - [ ] TRACKING still fires at BWC establishment (unchanged)
 - [ ] State transition alerts still gated on `lt.po_fired`
 - [ ] BUY agent reasoning references MF trajectory (RISING/FLAT/DECLINING), not confidence labels
-- [ ] MF trajectory direction logged correctly (check agent_reasoning in alerts table)
+- [ ] ntfy title shows 🔄 for flipped POs
 
 ### Regression
 - [ ] BUY mechanical gates unchanged (floor/margin/trailing/ML)
