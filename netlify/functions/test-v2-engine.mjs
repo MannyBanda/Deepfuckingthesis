@@ -1580,6 +1580,12 @@ async function replayWithConfig(sql, gameId, config, diffOnly) {
   let rAlertTriggers = [];
   let rLastBuyTs = null;
   const BUY_COOLDOWN = 3 * 60 * 1000;
+  const BWC_COOLDOWN = 3 * 60 * 1000;
+
+  // BWC transition gate tracking
+  let rLastFiredAlert = {};
+  let rLastDegradeTs = null, rLastRecoverTs = null, rLastAnyBwcTs = null;
+  let rPositionClosed = false;
 
   for (let idx = 0; idx < snapshots.length; idx++) {
     const snap = snapshots[idx];
@@ -1777,6 +1783,64 @@ async function replayWithConfig(sql, gameId, config, diffOnly) {
       }
     }
 
+    // ── BWC STATE TRANSITION TRIGGERS ──
+    if (rBwcFirstFired && rBwcState && rPrevBwcState && rBwcState !== rPrevBwcState) {
+      const rDir = classifyTransition(rPrevBwcState, rBwcState);
+
+      if (rDir !== 'LATERAL' && rBwcState !== 'DEEP_TRAIL') {
+        let rTransAlertType = null;
+        if (rDir === 'DEGRADING') {
+          if (rBwcState === 'EDGE') rTransAlertType = 'BWC_EDGE';
+          else if (rBwcState === 'VALUE') rTransAlertType = 'VALUE';
+          else if (rBwcState === 'EXIT') rTransAlertType = 'EXIT';
+        } else if (rDir === 'RECOVERING') {
+          if (rBwcState === 'LOCK') rTransAlertType = 'POSITION_SAFE';
+          else if (rBwcState === 'EDGE') rTransAlertType = 'POSITION_RECOVERING';
+          else if (rBwcState === 'VALUE') rTransAlertType = 'THESIS_ALIVE';
+        }
+
+        if (rTransAlertType) {
+          // Post-EXIT position gate
+          if (rPositionClosed && !['EXIT', 'THESIS_ALIVE'].includes(rTransAlertType)) {
+            rAlertTriggers.push({ type: rTransAlertType, gated: 'position_closed', idx, period, clock, floor: rc.floor, margin: rMargin, from: rPrevBwcState, to: rBwcState });
+          } else {
+            // Cooldown + material change gates
+            const snapTs = snap.ts ? new Date(snap.ts).getTime() : Date.now();
+            const msSinceAnyBwc = rLastAnyBwcTs ? (snapTs - rLastAnyBwcTs) : Infinity;
+            const cooldownExempt = rTransAlertType === 'THESIS_ALIVE';
+            const cooldownPassed = cooldownExempt || msSinceAnyBwc >= BWC_COOLDOWN;
+
+            const stateChanged = rBwcState !== rLastFiredAlert.bwcState;
+            const floorDelta = Math.abs(rc.floor - (rLastFiredAlert.floor || 0));
+            const marginDelta = Math.abs(rMargin - (rLastFiredAlert.margin || 0));
+            const lastSameDir = rDir === 'DEGRADING' ? rLastDegradeTs : rLastRecoverTs;
+            const timeDelta = lastSameDir ? (snapTs - lastSameDir) : Infinity;
+            const materialChange = floorDelta >= 0.10 || marginDelta >= 5 || timeDelta >= 300000;
+            const shouldFire = cooldownPassed && (stateChanged || materialChange);
+
+            if (shouldFire) {
+              rAlertTriggers.push({
+                type: rTransAlertType, tier: 'FIRED', direction: rDir,
+                from: rPrevBwcState, to: rBwcState,
+                idx, period, clock, floor: rc.floor, margin: rMargin,
+                conv: rConv.tier, ctrl: rc.controlTeam,
+              });
+
+              // Position gate: EXIT closes, THESIS_ALIVE re-opens
+              if (rTransAlertType === 'EXIT') rPositionClosed = true;
+              else if (rTransAlertType === 'THESIS_ALIVE') rPositionClosed = false;
+
+              // Update gate tracking
+              rLastFiredAlert = { alertType: rTransAlertType, floor: rc.floor, margin: rMargin, bwcState: rBwcState };
+              rLastAnyBwcTs = snapTs;
+              if (rDir === 'DEGRADING') rLastDegradeTs = snapTs;
+              else rLastRecoverTs = snapTs;
+            }
+          }
+        }
+      }
+    }
+
     // ── BUY CHECK (recomputed) ──
     const clockMin = parseFloat(clock) || 0;
     const snapTs = snap.ts ? new Date(snap.ts).getTime() : Date.now();
@@ -1832,6 +1896,10 @@ async function replayWithConfig(sql, gameId, config, diffOnly) {
   const recomputedBuyAlerts = rAlertTriggers.filter(a => a.type === 'BUY');
   const storedPOAlerts = prodAlerts.filter(a => a.alert_type === 'POSITION_OPEN');
   const recomputedPOAlerts = rAlertTriggers.filter(a => a.type === 'POSITION_OPEN');
+  const storedExitAlerts = prodAlerts.filter(a => a.alert_type === 'EXIT');
+  const recomputedExitAlerts = rAlertTriggers.filter(a => a.type === 'EXIT' && !a.gated);
+  const recomputedGated = rAlertTriggers.filter(a => a.gated);
+  const recomputedTransitions = rAlertTriggers.filter(a => ['BWC_EDGE', 'VALUE', 'EXIT', 'THESIS_ALIVE', 'POSITION_SAFE', 'POSITION_RECOVERING'].includes(a.type));
 
   // ── BUILD SUMMARY ──
   const totalSnaps = snapshots.length;
@@ -1879,6 +1947,11 @@ async function replayWithConfig(sql, gameId, config, diffOnly) {
       recomputed_buy_count: recomputedBuyAlerts.length,
       stored_po_count: storedPOAlerts.length,
       recomputed_po_count: recomputedPOAlerts.length,
+      stored_exit_count: storedExitAlerts.length,
+      recomputed_exit_count: recomputedExitAlerts.length,
+      recomputed_transitions: recomputedTransitions.length,
+      position_gated: recomputedGated.length,
+      position_gated_details: recomputedGated.length > 0 ? recomputedGated : undefined,
       recomputed_triggers: rAlertTriggers,
       stored_alerts: prodAlerts.map(a => ({ type: a.alert_type, tier: a.alert_tier, period: a.period, clock: a.clock, floor: a.floor_score, margin: a.margin, decision: a.agent_decision })),
     },
