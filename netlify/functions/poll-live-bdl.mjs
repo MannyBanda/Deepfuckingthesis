@@ -5520,9 +5520,9 @@ export default async function(req) {
                 }
 
                 if (v2AlertType) {
-                  // Post-EXIT position gate: suppress position-update alerts after EXIT sent
-                  // Only THESIS_ALIVE (re-entry) and EXIT (always send) pass through
-                  if (lt.position_closed && !['EXIT', 'THESIS_ALIVE'].includes(v2AlertType)) {
+                  // Post-EXIT position gate: suppress all position alerts after EXIT sent
+                  // Only THESIS_ALIVE (re-entry) passes through — EXIT on a closed position is noise
+                  if (lt.position_closed && v2AlertType !== 'THESIS_ALIVE') {
                     log(`${matchup}: ${v2AlertType} GATED — position closed after EXIT (subscriber already out). Only THESIS_ALIVE or new BUY can re-open.`);
                   } else {
 

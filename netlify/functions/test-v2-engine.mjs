@@ -2235,8 +2235,9 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
 
       for (const t of selected) {
         // Dynamic position gate: position-update alerts are gated when position is closed
-        // Only EXIT, THESIS_ALIVE, POSITION_OPEN, and BUY pass through
-        const posGateExempt = ['EXIT', 'THESIS_ALIVE', 'POSITION_OPEN', 'BUY'].includes(t.type);
+        // Only THESIS_ALIVE (re-entry), POSITION_OPEN (re-graduation), and BUY pass through
+        // EXIT on a closed position is noise — subscriber already knows to be out
+        const posGateExempt = ['THESIS_ALIVE', 'POSITION_OPEN', 'BUY'].includes(t.type);
         if (agentPositionClosed && !posGateExempt) {
           agentRuns.push({
             trigger: `${t.type} Q${t.period} ${t.clock}`,
