@@ -5088,6 +5088,7 @@ export default async function(req) {
                 pregameML: lt.pregame_ml || null,
                 mfTrajectory: lt.bwc_fired ? computeMFTrajectory(lt.checkpoints || [], lt.bwc_fired.team) : null,
                 bwcFlipped: lt.bwc_flipped || false,
+                positionClosed: lt.position_closed || false,
                 originalBwcTeam: lt.original_bwc_team || null,
                 // Flip buy context (BUY fires for opponent after EXIT sent on BWC team)
                 isFlipBuy: !!(v2IsBuy && lt._flipBuyContext),
@@ -5138,6 +5139,16 @@ export default async function(req) {
                     + ', ' + _ctrlInd.length + '/5 indicators (' + (_ctrlInd.join('+') || 'none') + ')'
                     + (ctrlEdge != null ? '\nEdge: ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '% over market' : '');
                 await sendNtfy(ntfyTitle, ntfyBody, alertPriority);
+
+                // Post-EXIT position gate: close position when EXIT SENT, re-open on THESIS_ALIVE SENT
+                if (v2Type === 'EXIT') {
+                  lt.position_closed = true;
+                  lt.position_closed_ts = Date.now();
+                  log(`${matchup}: Position CLOSED — EXIT sent, suppressing BWC_EDGE/POSITION_SAFE/RECOVERING/VALUE until re-entry`);
+                } else if (v2Type === 'THESIS_ALIVE') {
+                  lt.position_closed = false;
+                  log(`${matchup}: Position RE-OPENED — THESIS_ALIVE sent, position updates resume`);
+                }
               }
 
               // Always save to alerts table
@@ -5490,6 +5501,12 @@ export default async function(req) {
                 }
 
                 if (v2AlertType) {
+                  // Post-EXIT position gate: suppress position-update alerts after EXIT sent
+                  // Only THESIS_ALIVE (re-entry) and EXIT (always send) pass through
+                  if (lt.position_closed && !['EXIT', 'THESIS_ALIVE'].includes(v2AlertType)) {
+                    log(`${matchup}: ${v2AlertType} GATED — position closed after EXIT (subscriber already out). Only THESIS_ALIVE or new BUY can re-open.`);
+                  } else {
+
                   // Cooldown gate
                   const _v2Now = Date.now();
                   const _v2MsSinceAnyBwc = lt._last_any_bwc_ts ? (_v2Now - lt._last_any_bwc_ts) : Infinity;
@@ -5525,6 +5542,7 @@ export default async function(req) {
                   } else if (!_v2ShouldFire) {
                     log(`${matchup}: v2 ${v2AlertType} GATED — cooldown=${!_v2CooldownPassed ? 'BLOCKED(' + Math.round(_v2MsSinceAnyBwc/1000) + 's)' : 'ok'} material=${!_v2MaterialChange && !_v2StateChanged ? 'BLOCKED' : 'ok'}`);
                   }
+                  } // close position gate else
                 }
               }
             }
