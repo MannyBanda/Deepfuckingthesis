@@ -803,7 +803,7 @@ ${ctx.cpGraduation
   ? 'Graduation: ' + ctx.cpPeakRank + '-Rank (graduated @ ' + ctx.cpGraduation.cp_label + ', floor was ' + Number(ctx.cpGraduation.floor).toFixed(2) + ') | ' + mfTrajStr + ' | MF=' + (ctx.cpMeanFloor?.toFixed(3) || '?') + ' minF=' + (ctx.cpMinFloor?.toFixed(2) || '?') + ' (' + ctx.cpEligibleCount + ' eligible CPs)'
     + (ctx.cpOppGraduation ? ' | OPPONENT ALSO GRADUATED ' + ctx.cpOppGraduation.rank + '-Rank @ ' + ctx.cpOppGraduation.cp_label : '')
   : 'Pre-graduation (' + (ctx.cpEligibleCount || 0) + ' eligible CPs, MF=' + (ctx.cpMeanFloor?.toFixed(3) || '?') + ' ' + mfTrajStr + ')'
-} | Lane: ${ctx.lane || 'unknown'} (pregame ML ${ctx.pregameML || '?'}) | CP flips: ${ctx.cpCtrlFlips} | Control flips (60s): ${ctx.ctrlFlips}
+} | Lane: ${ctx.lane || 'unknown'} (pregame ML ${ctx.pregameML || '?'}) | CP flips: ${ctx.cpCtrlFlips} | Control flips (game total): ${ctx.ctrlFlips}
 
 ${stress}
 FLOOR TRAJECTORY:
@@ -1965,7 +1965,7 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
           if (gRank === 'A' && rMF >= mfGate && rMinF >= minFGate) {
             rPoFired = true;
             const bg = captureBwcGrad(rc);
-            rAlertTriggers.push({ type: 'POSITION_OPEN', rank: gRank, idx, period, clock, floor: rc.floor, margin: rMargin, mf: rMF, cpFlips: rCpCtrlFlips, reopened_position: rPositionClosed || undefined,
+            rAlertTriggers.push({ type: 'POSITION_OPEN', rank: gRank, idx, period, clock, floor: rc.floor, margin: rMargin, ctrl: rc.controlTeam, mf: rMF, cpFlips: rCpCtrlFlips, reopened_position: rPositionClosed || undefined,
               _state: captureState(rc, rConv, snap), ...bg,
             });
             if (rPositionClosed) rPositionClosed = false;
@@ -1977,7 +1977,7 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
             if (gameSec >= bConfirmSec && rMF >= mfGate && rMinF >= minFGate) {
               rPoFired = true;
               const bg = captureBwcGrad(rc);
-              rAlertTriggers.push({ type: 'POSITION_OPEN', rank: gRank, idx, period, clock, floor: rc.floor, margin: rMargin, mf: rMF, cpFlips: rCpCtrlFlips, reopened_position: rPositionClosed || undefined,
+              rAlertTriggers.push({ type: 'POSITION_OPEN', rank: gRank, idx, period, clock, floor: rc.floor, margin: rMargin, ctrl: rc.controlTeam, mf: rMF, cpFlips: rCpCtrlFlips, reopened_position: rPositionClosed || undefined,
                 _state: captureState(rc, rConv, snap), ...bg,
               });
               if (rPositionClosed) rPositionClosed = false;
