@@ -211,6 +211,14 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
   const hA = game.home_alias, aA = game.away_alias;
   const matchup = game.matchup || `${aA}@${hA}`;
 
+  // Load stored production live_tracking for graduation/lane context
+  let storedLT = null;
+  try {
+    storedLT = game.live_tracking
+      ? (typeof game.live_tracking === 'string' ? JSON.parse(game.live_tracking) : game.live_tracking)
+      : null;
+  } catch (e) { /* non-fatal */ }
+
   // 2. Load all snapshots chronologically
   // Filter out Sonnet-injected snapshots (no raw_stats_json) — these have AI-assigned indicator
   // scores that masquerade as mechanical compute, causing false ctrl flips at quarter boundaries.
@@ -415,7 +423,7 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
             // Context package (mode >= context)
             if (mode !== 'mechanical') {
               triggerPoint.contextPackage = assembleContextPackage(
-                snap, cr, lt, erosion, bwcState, v2Alerts, snapshots, idx, hA, aA, useMonitor
+                snap, cr, lt, erosion, bwcState, v2Alerts, snapshots, idx, hA, aA, useMonitor, storedLT
               );
             }
 
@@ -506,7 +514,7 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
           };
           if (mode !== 'mechanical') {
             triggerPoint.contextPackage = assembleContextPackage(
-              snap, cr, lt, erosion, bwcState, v2Alerts, snapshots, idx, hA, aA, useMonitor
+              snap, cr, lt, erosion, bwcState, v2Alerts, snapshots, idx, hA, aA, useMonitor, storedLT
             );
           }
           triggers.push(triggerPoint);
@@ -531,7 +539,223 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
 
 // ── CONTEXT PACKAGE ASSEMBLY ──
 
-function assembleContextPackage(snap, cr, lt, erosion, bwcState, v2Alerts, allSnaps, idx, hA, aA, useMonitor = false) {
+// MF trajectory — copied from production poll-live-bdl.mjs
+function computeMFTrajectory(checkpoints, bwcTeam) {
+  const eligible = checkpoints.filter(cp =>
+    cp.team === bwcTeam && cp.floor >= 0.60 && cp.margin >= 2
+  );
+  if (eligible.length < 2) return { direction: 'INSUFFICIENT', floors: eligible.map(cp => cp.floor) };
+  const mid = Math.floor(eligible.length / 2);
+  const firstHalf = eligible.slice(0, mid);
+  const secondHalf = eligible.slice(mid);
+  const firstAvg = firstHalf.reduce((s, cp) => s + cp.floor, 0) / firstHalf.length;
+  const secondAvg = secondHalf.reduce((s, cp) => s + cp.floor, 0) / secondHalf.length;
+  const delta = secondAvg - firstAvg;
+  let direction;
+  if (delta > 0.04) direction = 'RISING';
+  else if (delta < -0.04) direction = 'DECLINING';
+  else direction = 'FLAT';
+  return { direction, delta: Math.round(delta * 1000) / 1000, floors: eligible.map(cp => cp.floor),
+    firstAvg: Math.round(firstAvg * 1000) / 1000, secondAvg: Math.round(secondAvg * 1000) / 1000 };
+}
+
+
+// ── buildV2AgentPrompt — copied from production poll-live-bdl.mjs for 1:1 prompt parity ──
+function buildV2AgentPrompt(ctx) {
+  // Build structural stress section (rolling window, combined read, gap acceleration, per-quarter data)
+  // Same format as formatSonnetPrompt so agent sees identical data layers as auto-analysis
+  let stress = '';
+  const rw = ctx.windowData;
+  if (rw && rw.available) {
+    const wLabel = rw.windowQuarters ? rw.windowQuarters.join('+') : '?';
+    stress += `STRUCTURAL STRESS (rolling window vs cumulative — does the recent game agree with the floor?):\n`;
+    stress += `Window (${wLabel}, ${rw.windowPossessions || '?'} poss): ${rw.controlTeam} ${rw.score != null ? rw.score.toFixed(2) : '?'}\n`;
+    ['I1','I2','I3','I4','I5'].forEach(k => {
+      const i = rw[k];
+      if (i && i.score != null) stress += `  ${k}: ${i.score.toFixed(1)} — ${i.detail || ''}\n`;
+    });
+    stress += `Data quality: ${rw.dataQuality || '?'}\n`;
+  } else {
+    stress += `STRUCTURAL STRESS: Window not yet available\n`;
+  }
+  // Combined read
+  if (ctx.combinedRead && ctx.combinedRead.read) {
+    stress += `Combined read: ${ctx.combinedRead.read} — ${ctx.combinedRead.note || ''}\n`;
+  }
+  // Warning for COLLAPSING/FLIPPED
+  if (ctx.combinedRead && (ctx.combinedRead.read === 'COLLAPSING' || ctx.combinedRead.read === 'FLIPPED')) {
+    const wCtrl = rw ? rw.controlTeam || '?' : '?';
+    stress += `WARNING: Rolling window DISAGREES with cumulative floor. Recent quarters favor ${wCtrl}. Cumulative indicators may be anchored from earlier quarters that no longer reflect game state.\n`;
+  }
+  // Gap acceleration with history (same format as formatSonnetPrompt)
+  if (ctx.accelData && ctx.accelData.entries && ctx.accelData.entries.length > 0) {
+    const acc = ctx.accelData;
+    const last = acc.entries[acc.entries.length - 1];
+    stress += `Gap: ${last.gap >= 0 ? '+' : ''}${last.gap != null ? last.gap.toFixed(3) : '?'} | Acceleration: ${acc.accel} (${acc.consecutive} consecutive)\n`;
+    stress += `History: ${acc.entries.slice(-5).map(e => (e.gap >= 0 ? '+' : '') + (e.gap != null ? e.gap.toFixed(2) : '?') + ' (' + e.score + ')').join(' -> ')}\n`;
+  } else if (ctx.accelData) {
+    stress += `Acceleration: ${ctx.accelData.accel || 'TOO EARLY'}\n`;
+  }
+  // Per-quarter breakdown (same format as formatSonnetPrompt lines 3161-3169)
+  if (ctx.quarterDiffs && Object.keys(ctx.quarterDiffs).length > 0) {
+    stress += `Per-quarter breakdown:\n`;
+    const qdKeys = Object.keys(ctx.quarterDiffs).map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
+    for (const qk of qdKeys) {
+      const d = ctx.quarterDiffs[qk];
+      if (!d || !d.home || !d.away) continue;
+      const h = d.home, a = d.away;
+      const hPaint = h.points_in_the_paint || h.points_in_paint || 0;
+      const aPaint = a.points_in_the_paint || a.points_in_paint || 0;
+      stress += '  Q' + qk + ' (' + ctx.homeAlias + ' vs ' + ctx.awayAlias + '):'
+        + ' Paint ' + ctx.homeAlias + ':' + hPaint + ' ' + ctx.awayAlias + ':' + aPaint
+        + ' | FTA ' + ctx.homeAlias + ':' + (h.free_throws_att||0) + ' ' + ctx.awayAlias + ':' + (a.free_throws_att||0)
+        + ' | 3P ' + ctx.homeAlias + ':' + (h.three_points_made||0) + '/' + (h.three_points_att||0) + ' ' + ctx.awayAlias + ':' + (a.three_points_made||0) + '/' + (a.three_points_att||0)
+        + ' | AST ' + ctx.homeAlias + ':' + (h.assists||0) + ' ' + ctx.awayAlias + ':' + (a.assists||0)
+        + ' | TO ' + ctx.homeAlias + ':' + (h.turnovers||h.total_turnovers||0) + ' ' + ctx.awayAlias + ':' + (a.turnovers||a.total_turnovers||0)
+        + ' | STL ' + ctx.homeAlias + ':' + (h.steals||0) + ' ' + ctx.awayAlias + ':' + (a.steals||0)
+        + (h.possessions ? ' | Poss ' + ctx.homeAlias + ':' + (h.possessions||0) + ' ' + ctx.awayAlias + ':' + (a.possessions||0) : '')
+        + '\n';
+    }
+  }
+
+  // MF trajectory string for prompt sections
+  const mfTraj = ctx.mfTrajectory;
+  const mfTrajStr = mfTraj
+    ? `MF ${mfTraj.direction} (${mfTraj.floors.map(f => f.toFixed(2)).join(' -> ')})${mfTraj.direction !== 'INSUFFICIENT' ? ' delta=' + (mfTraj.delta > 0 ? '+' : '') + mfTraj.delta.toFixed(3) : ''}`
+    : 'No trajectory data';
+
+  return `You are a live NBA betting alert quality agent. A mechanical system has identified a potential betting signal. Your job is to assess whether it should be sent to the bettor.
+
+ALERT:
+Type: ${ctx.alertType} (${ctx.alertTier || 'FIRED'})
+Control team: ${ctx.ctrlTeam} | Floor: ${ctx.floor} | Margin: ${ctx.margin} (${ctx.margin < 0 ? 'trailing' : ctx.margin > 0 ? 'leading' : 'tied'})
+Score: ${ctx.awayAlias} ${ctx.awayPts} - ${ctx.homeAlias} ${ctx.homePts} (${ctx.ctrlTeam} is ${ctx.ctrlIsHome ? 'HOME' : 'AWAY'})
+Period: Q${ctx.period} ${ctx.clock}
+${ctx.bwcTeam ? 'BWC team (subscriber position): ' + ctx.bwcTeam + (ctx.bwcTeam !== ctx.ctrlTeam ? ' (NOT current ctrl team — ctrl flipped to ' + ctx.ctrlTeam + ')' : '') : ''}
+${ctx.isFlipBuy ? `
+FLIP BUY CONTEXT:
+An EXIT alert was SENT for ${ctx.flipBuyContext.exitTeam} at Q${ctx.flipBuyContext.exitPeriod} ${ctx.flipBuyContext.exitClock} (floor was ${ctx.flipBuyContext.exitFloor?.toFixed(2) || '?'}, margin ${ctx.flipBuyContext.exitMargin || '?'}).
+The structural edge has been confirmed as flipped — this BUY is NOT counter-betting. It is an independent structural signal on the team that took control away from the original position.
+The EXIT + BUY firing simultaneously is TWO independent signals corroborating the same structural reversal.
+Evaluate ${ctx.ctrlTeam}'s structural case on its own merit. The position gate is LIFTED — the subscriber was already told to exit ${ctx.flipBuyContext.exitTeam}.` : ''}
+
+INDICATORS (control-team-relative):
+I1 Disruption: ${ctx.i1} | I2 Interior: ${ctx.i2} | I3 Shot Quality: ${ctx.i3} | I4 Game Control: ${ctx.i4} | I5 Execution: ${ctx.i5}
+Indicators won: ${ctx.ctrlIndicators} (${ctx.ctrlIndicatorCount}/5)
+Ctrl sust: ${ctx.ctrlSust || 'N/A'} | Opp sust: ${ctx.oppSust || 'N/A'}
+TP: ${ctx.tpClass || 'N/A'} | LS: ${ctx.lsClass || 'N/A'}
+
+OPPONENT PROFILE:
+Opponent indicators won: ${ctx.oppIndicatorCount} (${ctx.oppIndicatorsWon})
+${ctx.oppI3Won ? 'Opponent I3 (shot quality) won — EXPECTED variance, not structural. Does NOT invalidate buy thesis.' : ''}
+${ctx.oppIndicatorCount >= 1 && !ctx.oppI3Won ? 'WARNING: Opponent structural counter-indicators (' + ctx.oppIndicatorsWon + '), not just variance.' : ''}
+
+POSITION HEALTH:
+Peak floor: ${ctx.peakFloor != null ? Number(ctx.peakFloor).toFixed(2) : 'N/A'} | Delta: ${ctx.peakDelta != null ? Number(ctx.peakDelta).toFixed(3) : 'N/A'} | Erosion: ${ctx.erosionLevel}
+Consecutive holds: ${ctx.consecutiveHolds}
+BWC lifecycle: ${ctx.bwcState}${ctx.bwcFirePeriod ? ' (BWC fired Q' + ctx.bwcFirePeriod + ', floor ' + (ctx.bwcFireFloor != null ? Number(ctx.bwcFireFloor).toFixed(2) : '?') + ')' : ''}
+${ctx.cpGraduation 
+  ? 'Graduation: ' + ctx.cpPeakRank + '-Rank (graduated @ ' + ctx.cpGraduation.cp_label + ', floor was ' + Number(ctx.cpGraduation.floor).toFixed(2) + ') | ' + mfTrajStr + ' | MF=' + (ctx.cpMeanFloor?.toFixed(3) || '?') + ' minF=' + (ctx.cpMinFloor?.toFixed(2) || '?') + ' (' + ctx.cpEligibleCount + ' eligible CPs)'
+    + (ctx.cpOppGraduation ? ' | OPPONENT ALSO GRADUATED ' + ctx.cpOppGraduation.rank + '-Rank @ ' + ctx.cpOppGraduation.cp_label : '')
+  : 'Pre-graduation (' + (ctx.cpEligibleCount || 0) + ' eligible CPs, MF=' + (ctx.cpMeanFloor?.toFixed(3) || '?') + ' ' + mfTrajStr + ')'
+} | Lane: ${ctx.lane || 'unknown'} (pregame ML ${ctx.pregameML || '?'}) | CP flips: ${ctx.cpCtrlFlips} | Control flips (60s): ${ctx.ctrlFlips}
+
+${stress}
+FLOOR TRAJECTORY:
+${ctx.floorHistory || 'No prior snapshots'}
+
+PRIOR ALERT REASONING TRAIL:
+${ctx.priorAlertTrail || 'None'}
+
+RULES:
+- TRACKING: First structural signal — the system just identified ${ctx.ctrlTeam} as structurally interesting (3 consecutive holds, floor ${ctx.floor}, margin ${ctx.margin}). This is NOT a position recommendation — the subscriber learns a game is on the radar. ALWAYS SEND unless the game is clearly meaningless (garbage time, both teams eliminated, period 4 with < 2 min left). Body should explain: which team, what structural picture (indicators, floor, margin), and that we are watching for the edge to develop. Frame as: "Watching [TEAM] — [why they look structurally dominant]. Will update if this develops into a position." Keep it short — this is a heads-up, not a thesis.
+- POSITION_OPEN: The team has GRADUATED through the checkpoint system — sustained structural rank confirmed across multiple 3-minute evaluation windows.
+  ${ctx.bwcFlipped ? 'BWC FLIP: The system originally tracked ' + ctx.originalBwcTeam + ' but they FAILED to graduate (peak C). ' + ctx.bwcTeam + ' then graduated ' + ctx.poRank + '-Rank — taking structural control away from a previously dominant team. This is one of the strongest signals in the system (74-86% win rate). The floor appears modest because cumulative stats are anchored by ' + ctx.originalBwcTeam + "'s early dominance, but " + ctx.bwcTeam + " is holding control DESPITE that headwind. ALWAYS SEND."
+  : ctx.poRank === 'A' && ctx.cpCtrlFlips === 0 ? 'A-Rank WIRE-TO-WIRE (85.6%): Zero checkpoint-level control flips — structural dominance unchallenged. ' + mfTrajStr + ' across ' + ctx.cpEligibleCount + ' checkpoints. ALWAYS SEND.'
+  : ctx.poRank === 'A' ? 'A-Rank: Sustained DOMINANT conviction with lead 8+. ' + mfTrajStr + ' across ' + ctx.cpEligibleCount + ' checkpoints. CP flips: ' + ctx.cpCtrlFlips + (ctx.cpCtrlFlips >= 2 ? ' (multiple flips — A-with-flips is 58.5% in competitive games. Apply extra scrutiny: check structural stress, per-quarter breakdown, whether indicators that powered graduation are still held.)' : '') + '.'
+  : ctx.poRank === 'B' ? 'B-Rank: Sustained DOMINANT/STRONG conviction with lead 3+. ' + mfTrajStr + ' across ' + ctx.cpEligibleCount + ' checkpoints.'
+  : ''}
+  ${!ctx.bwcFlipped ? 'Lane: ' + (ctx.lane || 'unknown') + '. ' + (ctx.lane === 'underdog' ? 'UNDERDOG graduation — market has not priced structural control. Edge is structural floor vs implied probability. ALWAYS SEND.' : ctx.lane === 'heavy_favorite' ? 'Heavy favorite — PO confirms structural read but line may offer limited edge. Frame as position confirmation, not direct entry.' : 'Evaluate edge: floor vs current ML implied probability.') : ''}
+  This IS a position recommendation. Body should reference the arc from TRACKING (if prior alert exists), explain the graduation criteria met, current structural picture, and frame as: "Position open on [TEAM] — [rank] structural edge confirmed." Include odds/ML if available.
+- VALUE: team PREVIOUSLY held a structural lead (BWC fired Q${ctx.bwcFirePeriod || '?'}) but lost it while retaining structural control. Thesis: "structural edge that built the lead is intact — dip is temporary, plus-money entry." Verify: floor vs BWC fire floor, how lead was lost, deficit depth (1-7 best), timing (Q2-Q3 > Q4). If prior BWC_EDGE alerts flagged a RISK, reference whether it materialized. SUPPRESS if erosion is COLLAPSE AND structural indicators (I1/I4) have flipped to opponent.
+- THESIS_ALIVE: BWC team regained structural control AFTER an EXIT. This is a deep-value play — floor erosion is EXPECTED and is WHY plus-money exists. DO NOT treat floor level or erosion as primary factors. Weight hierarchy: (1) WHICH indicators does the BWC team still hold? I1 Disruption + I4 Game Control = structural core retained. (2) Is opponent's edge variance-based? oppI3Won=true means opponent is shooting well, not structurally dominant — this is the thesis. (3) TP path — STRONG RECOVERY or PROBABLE = mechanical path exists. (4) Deficit depth and timing. Floor being below BWC fire floor is the ENTRY SIGNAL, not a red flag. SUPPRESS only if: BWC team lost I1+I4 (structural core gone), OR opponent has non-I3 structural indicators (I1/I2/I4), OR TP is NO PATH/UNLIKELY with < 3 min left.
+- EXIT: BWC team (${ctx.bwcFirePeriod ? 'the team that fired BWC in Q' + ctx.bwcFirePeriod : 'original BWC team'}) lost structural control. The SUBSCRIBER'S POSITION is on the BWC team, NOT the current control team. Frame the exit around the BWC team losing their edge. Reference the full arc from prior alerts.
+- BWC_EDGE: SEND by default — this is a position update for a subscriber already holding. Frame as reassurance: structural picture holding, lead compressing. Do NOT frame as a buy signal. MAY SUPPRESS if structural stress override applies (see STRUCTURAL STRESS CHECK). MUST include a RISK line at the end of the body — identify the ONE specific thing that could flip this position next (e.g., indicator about to flip, sustainability degrading, erosion approaching threshold). If prior alerts flagged a RISK, reference whether it materialized or not. The RISK line creates accountability across the alert chain. Format body as: status update (2-3 sentences) + "RISK: [specific forward-looking concern]"
+- POSITION_SAFE / POSITION_RECOVERING: SEND as reassurance if prior alerts flagged risks or concerns. Include whether prior RISK materialized. SUPPRESS only if nothing changed AND no prior risk to update on. Write reasoning for compounding either way.
+- BUY: structurally dominant team trailing. Standard evaluation — floor, indicators, TP, deficit depth (1-7 sweet spot; deeper deficits need stronger structural case). When bwcTeamMatch is noted, the team has BWC lifecycle context — reference the position arc. This is a "warm BUY" (thesis history). Without BWC context = "cold BUY" (unproven, higher bar for SEND).
+- BUY EVIDENCE (from 9,861-snapshot backtest, 502 BUY-eligible):
+  WHAT WINS: trail 1-4 (44.6%) > trail 5-9 (25%) > trail 10+ (0%). 3+ ctrl indicators (45.6%) > <=2 (36.6%). Opp 0 indicators (48.6%) vs opp I1 or I2 won (28.5%). Best stack: trail 1-4 + 3+ ind + opp 0 indicators = 57.4% (n=115).
+  POWER PAIRS: I1+I2 (55.2%, n=134) is the BUY anchor — physical dominance while trailing. I1+I4 (52.4%). TRAP: I3+I4 (38.9%, n=149) — the BWC killer combo is the WORST BUY pair.
+  I3 INVERSION: ctrl I3 won = 37.3%. ctrl I3 LOST (opp shooting well) = 49%. When the BUY team has shot quality but is STILL trailing, they are losing for reasons shooting cannot fix. When trailing BECAUSE of poor shooting, that is the variance the thesis exploits.
+  OPPONENT KILLS: opp I1 (disruption) -> 28.8%. opp I2 (paint) -> 30.6%. opp I1 OR I2 -> 28.5%. These are STRUCTURAL threats. opp I3 only -> thesis intact (variance).
+  TIMING: Q4 trail 5-9 = 14.8% — hard suppress. Q4 trail 1-4 = 43% — still viable.
+  CHECKPOINT GRADUATION CONTEXT (additional data for BUY evaluation — does not override BUY evidence above):
+  ${ctx.cpGraduation
+    ? 'BWC team (' + ctx.bwcTeam + ') GRADUATED ' + ctx.cpPeakRank + '-Rank @ ' + ctx.cpGraduation.cp_label + '. ' + mfTrajStr
+    : ctx.cpEligibleCount > 0
+      ? 'BWC team (' + ctx.bwcTeam + ') pre-graduation: ' + ctx.cpEligibleCount + ' eligible checkpoints. ' + mfTrajStr
+      : ctx.bwcTeam
+        ? 'BWC team (' + ctx.bwcTeam + ') tracked but no eligible checkpoints — structural interest identified but never confirmed.'
+        : 'No BWC context — cold BUY.'
+  }
+  ${ctx.cpOppGraduation ? 'Opponent graduated ' + ctx.cpOppGraduation.rank + '-Rank @ ' + ctx.cpOppGraduation.cp_label + (ctx.cpOppGraduation.cp_idx > (ctx.cpGraduation?.cp_idx ?? -1) ? ' (MORE RECENT than BWC graduation — opponent is structurally ascending)' : '') : ''}
+  ${ctx.bwcFlipped ? 'BWC FLIPPED: System originally tracked ' + ctx.originalBwcTeam + ' -> structural control transferred to ' + ctx.bwcTeam + '. Latest-to-graduate wins 84.5% historically.' : ''}
+  
+  BWC LIFECYCLE STATUS FOR BUY DECISIONS:
+  The BUY team's relationship to the BWC lifecycle determines baseline confidence:
+  
+  - BUY team = current BWC team WITH active PO: "Warm BUY" — graduated team trailing is the thesis working. MF trajectory tells you if the structural edge is holding.
+  - BUY team = current BWC team WITHOUT PO (graduated but gates blocked): Structural edge confirmed mechanically but quality didn't meet PO gates. Moderate confidence — rely on standard BUY evidence with graduation as supporting context.
+  - BUY team = BWC team but NEVER graduated (tracked, no graduation): System identified structural interest but edge never separated. Lower confidence. Rely entirely on standard BUY evidence. MF trajectory may show INSUFFICIENT.
+  - BUY team = original BWC team but BWC was FLIPPED to opponent: Near-automatic SUPPRESS. This team LOST structural control to the opponent. You are buying against the confirmed structural direction. The team that took it away from them graduated more recently and wins 84.5% of the time.
+  - BUY team = opponent of BWC team (not flipped): Evaluate independently. If opponent has graduated, their structural case is strong — they earned it against the BWC team.
+  - No BWC context at all: Cold BUY — rely entirely on standard BUY evidence above.
+  
+  FLIP BUY (EXIT + opponent BUY = structural reversal):
+  When FLIP BUY CONTEXT is present above, the system has confirmed the structural reversal from TWO independent directions: EXIT confirmed the original position is dead, AND BUY independently identified the new control team as structurally dominant. This is NOT counter-betting — it is the highest-conviction structural signal because both the protective system (EXIT) and the offensive system (BUY) agree.
+  
+  SEND if: BUY team controls 2+ indicators AND at least one is I1 (disruption) or I2 (interior) — these are structural, not variance.
+  SEND if: combined read = FLIPPED — the rolling window confirms the structural reversal.
+  LEAN SEND if: combined read = COLLAPSING AND BUY team controls I1 or I2 — reversal in progress, structural indicators confirm direction.
+  SUPPRESS if: BUY team's only advantage is I3 (shot quality) — variance on both sides, no confirmed structural reversal.
+  SUPPRESS if: combined read = ERODING only — EXIT may have been premature, edge hasn't fully transferred. Wait for stronger confirmation.
+  SUPPRESS if: deficit > 9 or < 1 min remaining — structural reversal confirmed but no betting window.
+  
+  Body MUST frame as structural reversal: "STRUCTURAL FLIP — your [exitTeam] position was exited at [time] because structural control shifted to [buyTeam]. [buyTeam] now independently qualifies as a BUY — [specific indicators]. This is not a counter-bet — the system independently confirmed the structural edge reversed."
+  
+  HOW TO USE MF TRAJECTORY ON BUY DECISIONS:
+  - RISING = structural thesis is building, not fading. Trailing is more likely variance. Increases BUY confidence.
+  - FLAT = structural edge is real but not separating. Apply standard BUY scrutiny from evidence above.
+  - DECLINING = the game may have shifted since graduation. The rank badge is stale. Extra skepticism — check if indicators that powered graduation are still held.
+  - INSUFFICIENT = fewer than 2 eligible checkpoints. Rely on standard BUY evidence.
+  
+  LANE AMPLIFIERS:
+  - Underdog + RISING MF = highest confidence — market hasn't priced sustained structural control, and it's getting stronger.
+  - Heavy favorite + DECLINING MF = lowest confidence — expected dominance is fading, position may be compromised.
+  
+  DEFICIT DEPTH + GRADUATION: trail 5-9 with graduation = structural thesis may be wrong, apply extra scrutiny regardless of trajectory. Trail 10+ with graduation = near-automatic SUPPRESS (the structural read was incorrect regardless of rank).
+- STRUCTURAL STRESS CHECK: When combined read is COLLAPSING, FLIPPED, or SHIFT, the cumulative floor may be anchored from earlier-quarter dominance that has since eroded. The rolling window shows who is winning RECENT quarters.
+  For entry signals (BUY, VALUE, THESIS_ALIVE): COLLAPSING + trailing = near-automatic SUPPRESS. SHIFT = extreme skepticism.
+  For position alerts (POSITION_OPEN, BWC_EDGE, POSITION_SAFE, POSITION_RECOVERING): When the rolling window is SIGNIFICANTLY weaker than the cumulative floor, you MAY SUPPRESS or DOWNGRADE — this OVERRIDES the per-alert-type ALWAYS SEND rules above. The graduation badge does not guarantee current structural control. Evaluate whether the indicators that powered graduation are still held in recent quarters using the per-quarter breakdown. If recent quarters show the opponent winning paint, disruption, or game control, the graduation is stale.
+  DOWNGRADE is preferred over SUPPRESS for POSITION_OPEN (subscriber should know graduation happened but that it is contested).
+  BWC_EDGE and POSITION_SAFE may fully SUPPRESS (these are updates to existing positions — no value in reassuring the subscriber about a position that is structurally compromised).
+  EXEMPT from stress override: EXIT (always SEND), TRACKING (always SEND), A-Rank WIRE-TO-WIRE with 0 flips (strongest signal, stress override should not touch).
+  REINFORCING (DOMINANT/STRONG combined read) = cumulative floor is trustworthy, proceed normally with per-alert-type rules.
+- REASONING AS JOURNAL: Even when SUPPRESS, write thorough reasoning. It feeds subsequent decisions.
+
+BODY RULES (read by non-technical bettors on their phone):
+- Lead with score + action, explain WHY in basketball terms with structural data, end with what to watch.
+- Translate indicators: I1=turnovers/steals, I2=paint/interior, I3=shot quality, I4=game flow, I5=pace/execution.
+- Say "X/5 structural categories (codes)" not just codes. Include conviction, edge %, sustainability tiers.
+- 2-4 sentences max. Keep structural metrics but make them readable.
+
+Respond in EXACTLY this format:
+DECISION: [SEND|SUPPRESS|DOWNGRADE]
+REASONING: [2-3 sentences — reference opponent profile, erosion, BWC lifecycle, prior alerts]
+BODY: [If SEND: plain-English alert. If SUPPRESS: blank]`;
+}
+
+function assembleContextPackage(snap, cr, lt, erosion, bwcState, v2Alerts, allSnaps, idx, hA, aA, useMonitor = false, storedLT = null) {
   // Floor history (last 5 raw snapshots before current — agent reads these directly)
   const histStart = Math.max(0, idx - 5);
   const rawWindow = allSnaps.slice(histStart, idx + 1);
@@ -674,6 +898,27 @@ function assembleContextPackage(snap, cr, lt, erosion, bwcState, v2Alerts, allSn
 
     // Inline trend signals (same window as floor history — only when &monitor=true)
     trendSignals,
+
+    // Graduation/lane/flip context from stored production live_tracking
+    poRank: storedLT?.po_fired?.rank || null,
+    graduationPeriod: storedLT?.graduation?.[storedLT?.bwc_fired?.team]?.period || null,
+    graduationFloor: storedLT?.graduation?.[storedLT?.bwc_fired?.team]?.floor || null,
+    graduationRank: storedLT?.graduation?.[storedLT?.bwc_fired?.team]?.rank || null,
+    ctrlFlips: storedLT?.ctrl_flips || 0,
+    cpMeanFloor: storedLT?.cp_mean_floor || null,
+    cpMinFloor: storedLT?.cp_min_floor || null,
+    cpEligibleCount: storedLT?.cp_eligible_count || 0,
+    cpPeakRank: storedLT?.cp_peak_rank || null,
+    cpGraduation: storedLT?.cp_graduation || null,
+    cpOppGraduation: storedLT?.cp_opp_graduation || null,
+    cpCtrlFlips: storedLT?.cp_ctrl_flips || 0,
+    lane: storedLT?.lane || null,
+    pregameML: storedLT?.pregame_ml || null,
+    mfTrajectory: storedLT?.bwc_fired ? computeMFTrajectory(storedLT?.checkpoints || [], storedLT.bwc_fired.team) : null,
+    bwcFlipped: storedLT?.bwc_flipped || false,
+    originalBwcTeam: storedLT?.original_bwc_team || null,
+    isFlipBuy: false,
+    flipBuyContext: null,
   };
 }
 
@@ -854,7 +1099,7 @@ async function runAgentTests(sql, gameId, triggers, v2Alerts, matchup, triggerId
   let allTestable = triggers.filter(t =>
     t.contextPackage && (t.alertType === 'VALUE' || t.alertType === 'EXIT' || t.alertType === 'BUY'
       || t.alertType === 'BWC_EDGE' || t.alertType === 'POSITION_SAFE' || t.alertType === 'THESIS_ALIVE'
-      || t.alertType === 'POSITION_RECOVERING')
+      || t.alertType === 'POSITION_RECOVERING' || t.alertType === 'TRACKING' || t.alertType === 'POSITION_OPEN')
   );
 
   // Load stored decisions from prior runs (for compounding across calls)
@@ -920,8 +1165,7 @@ async function runAgentTests(sql, gameId, triggers, v2Alerts, matchup, triggerId
         ).reverse().slice(0, 5).join('\n')
       : 'None';
 
-    // ── Build structural stress section from game_context DB data ──
-    let stress = '';
+    // ── Enrich ctx with game_context stress data + trigger metadata for buildV2AgentPrompt ──
     const gcMatch = gameContextRows
       .filter(r => Number(r.period) <= t.period)
       .sort((a, b) => Number(b.period) - Number(a.period))[0];
@@ -930,126 +1174,18 @@ async function runAgentTests(sql, gameId, triggers, v2Alerts, matchup, triggerId
       try { gcCtx = typeof gcMatch.context_json === 'string' ? JSON.parse(gcMatch.context_json) : gcMatch.context_json; }
       catch (e) { /* bad JSON */ }
     }
-    if (gcCtx && gcCtx.rollingWindow && gcCtx.rollingWindow.available) {
-      const rw = gcCtx.rollingWindow;
-      const wLabel = rw.windowQuarters ? rw.windowQuarters.join('+') : '?';
-      stress += `STRUCTURAL STRESS (rolling window vs cumulative — does the recent game agree with the floor?):\n`;
-      stress += `Window (${wLabel}, ${rw.windowPossessions || '?'} poss): ${rw.controlTeam} ${rw.score != null ? rw.score.toFixed(2) : '?'}\n`;
-      ['I1','I2','I3','I4','I5'].forEach(k => {
-        const i = rw[k];
-        if (i && i.score != null) stress += `  ${k}: ${i.score.toFixed(1)} — ${i.detail || ''}\n`;
-      });
-      stress += `Data quality: ${rw.dataQuality || '?'}\n`;
-    } else {
-      stress += `STRUCTURAL STRESS: Window not yet available\n`;
-    }
-    if (gcCtx && gcCtx.combinedRead && gcCtx.combinedRead.read) {
-      stress += `Combined read: ${gcCtx.combinedRead.read} — ${gcCtx.combinedRead.note || ''}\n`;
-    }
-    if (gcCtx && gcCtx.combinedRead && (gcCtx.combinedRead.read === 'COLLAPSING' || gcCtx.combinedRead.read === 'FLIPPED')) {
-      const wCtrl = gcCtx.rollingWindow ? gcCtx.rollingWindow.controlTeam || '?' : '?';
-      stress += `WARNING: Rolling window DISAGREES with cumulative floor. Recent quarters favor ${wCtrl}. Cumulative indicators may be anchored from earlier quarters that no longer reflect game state.\n`;
-    }
-    if (gcCtx && gcCtx.acceleration && gcCtx.acceleration.entries && gcCtx.acceleration.entries.length > 0) {
-      const acc = gcCtx.acceleration;
-      const last = acc.entries[acc.entries.length - 1];
-      stress += `Gap: ${last.gap >= 0 ? '+' : ''}${last.gap != null ? last.gap.toFixed(3) : '?'} | Acceleration: ${acc.accel} (${acc.consecutive} consecutive)\n`;
-      stress += `History: ${acc.entries.slice(-5).map(e => (e.gap >= 0 ? '+' : '') + (e.gap != null ? e.gap.toFixed(2) : '?') + ' (' + e.score + ')').join(' -> ')}\n`;
-    } else if (gcCtx && gcCtx.acceleration) {
-      stress += `Acceleration: ${gcCtx.acceleration.accel || 'TOO EARLY'}\n`;
-    }
-    if (gcCtx && gcCtx.quarterDiffs && Object.keys(gcCtx.quarterDiffs).length > 0) {
-      stress += `Per-quarter breakdown:\n`;
-      const qdKeys = Object.keys(gcCtx.quarterDiffs).map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
-      for (const qk of qdKeys) {
-        const d = gcCtx.quarterDiffs[qk];
-        if (!d || !d.home || !d.away) continue;
-        const h = d.home, a = d.away;
-        const hPaint = h.points_in_the_paint || h.points_in_paint || 0;
-        const aPaint = a.points_in_the_paint || a.points_in_paint || 0;
-        stress += '  Q' + qk + ' (' + ctx.homeAlias + ' vs ' + ctx.awayAlias + '):'
-          + ' Paint ' + ctx.homeAlias + ':' + hPaint + ' ' + ctx.awayAlias + ':' + aPaint
-          + ' | FTA ' + ctx.homeAlias + ':' + (h.free_throws_att||0) + ' ' + ctx.awayAlias + ':' + (a.free_throws_att||0)
-          + ' | 3P ' + ctx.homeAlias + ':' + (h.three_points_made||0) + '/' + (h.three_points_att||0) + ' ' + ctx.awayAlias + ':' + (a.three_points_made||0) + '/' + (a.three_points_att||0)
-          + ' | AST ' + ctx.homeAlias + ':' + (h.assists||0) + ' ' + ctx.awayAlias + ':' + (a.assists||0)
-          + ' | TO ' + ctx.homeAlias + ':' + (h.turnovers||h.total_turnovers||0) + ' ' + ctx.awayAlias + ':' + (a.turnovers||a.total_turnovers||0)
-          + ' | STL ' + ctx.homeAlias + ':' + (h.steals||0) + ' ' + ctx.awayAlias + ':' + (a.steals||0)
-          + (h.possessions ? ' | Poss ' + ctx.homeAlias + ':' + (h.possessions||0) + ' ' + ctx.awayAlias + ':' + (a.possessions||0) : '')
-          + '\n';
-      }
-    }
 
-    // Build the v2 agent prompt with enriched context (matches production buildV2AgentPrompt)
-    const prompt = `You are a live NBA betting alert quality agent. A mechanical system has identified a potential betting signal. Your job is to assess whether it should be sent to the bettor.
+    // Set alert metadata on ctx
+    ctx.alertType = t.alertType;
+    ctx.alertTier = t.buyTier || 'FIRED';
 
-ALERT:
-Type: ${t.alertType} (${t.buyTier || 'FIRED'})
-Control team: ${ctx.ctrlTeam} | Floor: ${ctx.floor.toFixed(2)} | Margin: ${ctx.margin} (${ctx.margin < 0 ? 'trailing' : ctx.margin > 0 ? 'leading' : 'tied'})
-Score: ${ctx.awayAlias} ${ctx.awayPts} - ${ctx.homeAlias} ${ctx.homePts} (${ctx.ctrlTeam} is ${ctx.ctrlIsHome ? 'HOME' : 'AWAY'})
-Period: Q${ctx.period} ${ctx.clock}
-${ctx.bwcTeam ? 'BWC team (subscriber position): ' + ctx.bwcTeam + (ctx.bwcTeam !== ctx.ctrlTeam ? ' (NOT current ctrl team — ctrl flipped to ' + ctx.ctrlTeam + ')' : '') : ''}
+    // Pass game_context structural stress data through ctx for buildV2AgentPrompt
+    ctx.windowData = gcCtx?.rollingWindow || null;
+    ctx.quarterDiffs = gcCtx?.quarterDiffs || null;
+    ctx.accelData = gcCtx?.acceleration || null;
+    ctx.combinedRead = gcCtx?.combinedRead || null;
 
-INDICATORS (control-team-relative):
-I1 Disruption: ${ctx.i1} | I2 Interior: ${ctx.i2} | I3 Shot Quality: ${ctx.i3} | I4 Game Control: ${ctx.i4} | I5 Execution: ${ctx.i5}
-Indicators won: ${ctx.ctrlIndicators} (${ctx.ctrlIndicatorCount}/5)
-Ctrl sust: ${ctx.ctrlSust || 'N/A'} | Opp sust: ${ctx.oppSust || 'N/A'}
-TP: ${ctx.tpClass || 'N/A'} | LS: ${ctx.lsClass || 'N/A'}
-
-OPPONENT PROFILE:
-Opponent indicators won: ${ctx.oppIndicatorCount} (${ctx.oppIndicatorsWon})
-${ctx.oppI3Won ? 'Opponent I3 (shot quality) won — EXPECTED variance, not structural. Does NOT invalidate buy thesis.' : ''}
-${ctx.oppIndicatorCount >= 1 && !ctx.oppI3Won ? 'WARNING: Opponent structural counter-indicators (' + ctx.oppIndicatorsWon + '), not just variance.' : ''}
-
-POSITION HEALTH:
-Peak floor: ${ctx.peakFloor?.toFixed(2) || 'N/A'} | Delta: ${ctx.peakDelta?.toFixed(3) || 'N/A'} | Erosion: ${ctx.erosionLevel}
-Consecutive holds: ${ctx.consecutiveHolds}
-BWC lifecycle: ${ctx.bwcState}${ctx.bwcFirePeriod ? ' (BWC fired Q' + ctx.bwcFirePeriod + ', floor ' + (ctx.bwcFireFloor?.toFixed(2) || '?') + ')' : ''}
-
-${stress}
-FLOOR TRAJECTORY:
-${ctx.floorHistory}
-
-PRIOR ALERT REASONING TRAIL:
-${ctx.priorAlertTrail}
-${ctx.trendSignals ? `
-TREND SIGNALS (last ${ctx.trendSignals.windowSize} unique game moments, stale polls from halftime/timeouts filtered):
-Floor momentum: ${ctx.trendSignals.momentum}
-Opponent sustainability arc: ${ctx.trendSignals.sustArc}${ctx.trendSignals.sustArcDetail ? ' (' + ctx.trendSignals.sustArcDetail + ')' : ''}
-Floor-margin relationship: ${ctx.trendSignals.floorMarginRel}
-NOTE: Floor-margin DIVERGING means structural edge and scoreboard are moving in opposite directions — in DFT, this is expected (process dominance precedes score). CONVERGING means both declining or both rising together.` : ''}
-
-RULES:
-- VALUE: team PREVIOUSLY held a structural lead (BWC fired Q${ctx.bwcFirePeriod || '?'}) but lost it while retaining structural control. Thesis: "structural edge that built the lead is intact — dip is temporary, plus-money entry." Verify: floor vs BWC fire floor, how lead was lost, deficit depth (1-7 best), timing (Q2-Q3 > Q4). If prior BWC_EDGE alerts flagged a RISK, reference whether it materialized. SUPPRESS if erosion is COLLAPSE AND structural indicators (I1/I4) have flipped to opponent.
-- THESIS_ALIVE: BWC team regained structural control AFTER an EXIT. This is a deep-value play — floor erosion is EXPECTED and is WHY plus-money exists. DO NOT treat floor level or erosion as primary factors. Weight hierarchy: (1) WHICH indicators does the BWC team still hold? I1 Disruption + I4 Game Control = structural core retained. (2) Is opponent's edge variance-based? oppI3Won=true means opponent is shooting well, not structurally dominant — this is the thesis. (3) TP path — STRONG RECOVERY or PROBABLE = mechanical path exists. (4) Deficit depth and timing. Floor being below BWC fire floor is the ENTRY SIGNAL, not a red flag. SUPPRESS only if: BWC team lost I1+I4 (structural core gone), OR opponent has non-I3 structural indicators (I1/I2/I4), OR TP is NO PATH/UNLIKELY with < 3 min left.
-- EXIT: BWC team (${ctx.bwcFirePeriod ? 'the team that fired BWC in Q' + ctx.bwcFirePeriod : 'original BWC team'}) lost structural control. The SUBSCRIBER'S POSITION is on the BWC team, NOT the current control team. Frame the exit around the BWC team losing their edge. Reference the full arc from prior alerts.
-- BWC_EDGE: SEND by default — this is a position update for a subscriber already holding. Frame as reassurance: structural picture holding, lead compressing. Do NOT frame as a buy signal. MAY SUPPRESS if structural stress override applies (see STRUCTURAL STRESS CHECK). MUST include a RISK line at the end of the body — identify the ONE specific thing that could flip this position next (e.g., indicator about to flip, sustainability degrading, erosion approaching threshold). If prior alerts flagged a RISK, reference whether it materialized or not. The RISK line creates accountability across the alert chain. Format body as: status update (2-3 sentences) + "RISK: [specific forward-looking concern]"
-- POSITION_SAFE / POSITION_RECOVERING: SEND as reassurance if prior alerts flagged risks or concerns. Include whether prior RISK materialized. SUPPRESS only if nothing changed AND no prior risk to update on. Write reasoning for compounding either way.
-- BUY: structurally dominant team trailing. Standard evaluation — floor, indicators, TP, deficit depth (1-7 sweet spot; deeper deficits need stronger structural case). When bwcTeamMatch is noted, the team has BWC lifecycle context — reference the position arc. This is a "warm BUY" (thesis history). Without BWC context = "cold BUY" (unproven, higher bar for SEND).
-- BUY EVIDENCE (from 9,861-snapshot backtest, 502 BUY-eligible):
-  WHAT WINS: trail 1-4 (44.6%) > trail 5-9 (25%) > trail 10+ (0%). 3+ ctrl indicators (45.6%) > <=2 (36.6%). Opp 0 indicators (48.6%) vs opp I1 or I2 won (28.5%). Best stack: trail 1-4 + 3+ ind + opp 0 indicators = 57.4% (n=115).
-  POWER PAIRS: I1+I2 (55.2%, n=134) is the BUY anchor — physical dominance while trailing. I1+I4 (52.4%). TRAP: I3+I4 (38.9%, n=149) — the BWC killer combo is the WORST BUY pair.
-  I3 INVERSION: ctrl I3 won = 37.3%. ctrl I3 LOST (opp shooting well) = 49%. When the BUY team has shot quality but is STILL trailing, they are losing for reasons shooting cannot fix. When trailing BECAUSE of poor shooting, that is the variance the thesis exploits.
-  OPPONENT KILLS: opp I1 (disruption) -> 28.8%. opp I2 (paint) -> 30.6%. opp I1 OR I2 -> 28.5%. These are STRUCTURAL threats. opp I3 only -> thesis intact (variance).
-  TIMING: Q4 trail 5-9 = 14.8% — hard suppress. Q4 trail 1-4 = 43% — still viable.
-- STRUCTURAL STRESS CHECK: When combined read is COLLAPSING, FLIPPED, or SHIFT, the cumulative floor may be anchored from earlier-quarter dominance that has since eroded. The rolling window shows who is winning RECENT quarters.
-  For entry signals (BUY, VALUE, THESIS_ALIVE): COLLAPSING + trailing = near-automatic SUPPRESS. SHIFT = extreme skepticism.
-  For position alerts (POSITION_OPEN, BWC_EDGE, POSITION_SAFE, POSITION_RECOVERING): When the rolling window is SIGNIFICANTLY weaker than the cumulative floor, you MAY SUPPRESS or DOWNGRADE — this OVERRIDES the per-alert-type ALWAYS SEND rules above. The graduation badge does not guarantee current structural control. Evaluate whether the indicators that powered graduation are still held in recent quarters using the per-quarter breakdown. If recent quarters show the opponent winning paint, disruption, or game control, the graduation is stale.
-  DOWNGRADE is preferred over SUPPRESS for POSITION_OPEN (subscriber should know graduation happened but that it is contested).
-  BWC_EDGE and POSITION_SAFE may fully SUPPRESS (these are updates to existing positions — no value in reassuring the subscriber about a position that is structurally compromised).
-  EXEMPT from stress override: EXIT (always SEND), TRACKING (always SEND), A-Rank WIRE-TO-WIRE with 0 flips (strongest signal, stress override should not touch).
-  REINFORCING (DOMINANT/STRONG combined read) = cumulative floor is trustworthy, proceed normally with per-alert-type rules.
-- REASONING AS JOURNAL: Even when SUPPRESS, write thorough reasoning. It feeds subsequent decisions.
-
-BODY RULES (read by non-technical bettors on their phone):
-- Lead with score + action, explain WHY in basketball terms with structural data, end with what to watch.
-- Translate indicators: I1=turnovers/steals, I2=paint/interior, I3=shot quality, I4=game flow, I5=pace/execution.
-- Say "X/5 structural categories (codes)" not just codes. Include conviction, edge %, sustainability tiers.
-- 2-4 sentences max. Keep structural metrics but make them readable.
-
-Respond in EXACTLY this format:
-DECISION: [SEND|SUPPRESS|DOWNGRADE]
-REASONING: [2-3 sentences — reference opponent profile, erosion, BWC lifecycle, prior alerts]
-BODY: [If SEND: plain-English alert. If SUPPRESS: blank]`;
+    const prompt = buildV2AgentPrompt(ctx);
 
     try {
       const resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -1091,7 +1227,7 @@ BODY: [If SEND: plain-English alert. If SUPPRESS: blank]`;
         monitorPresent: !!ctx.trendSignals,
         referencesMonitor: text.includes('DIVERGING') || text.includes('CONVERGING') || text.includes('sustainability arc') || text.includes('sust arc') || text.includes('DEGRADING') || text.includes('IMPROVING') || text.includes('momentum') || text.includes('RISING') || text.includes('FALLING'),
         monitorData: ctx.trendSignals || null,
-        stressPresent: stress.length > 50,
+        stressPresent: !!(gcCtx?.rollingWindow?.available),
         stressCombinedRead: gcCtx?.combinedRead?.read || null,
         referencesStress: text.includes('window') || text.includes('COLLAPSING') || text.includes('FLIPPED') || text.includes('combined read') || text.includes('rolling') || text.includes('recent quarters') || text.includes('structural stress') || text.includes('anchored'),
         tokens: data.usage,
