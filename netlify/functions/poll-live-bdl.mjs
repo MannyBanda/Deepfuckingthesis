@@ -226,6 +226,12 @@ Control team: ${ctx.ctrlTeam} | Floor: ${ctx.floor} | Margin: ${ctx.margin} (${c
 Score: ${ctx.awayAlias} ${ctx.awayPts} - ${ctx.homeAlias} ${ctx.homePts} (${ctx.ctrlTeam} is ${ctx.ctrlIsHome ? 'HOME' : 'AWAY'})
 Period: Q${ctx.period} ${ctx.clock}
 ${ctx.bwcTeam ? 'BWC team (subscriber position): ' + ctx.bwcTeam + (ctx.bwcTeam !== ctx.ctrlTeam ? ' (NOT current ctrl team — ctrl flipped to ' + ctx.ctrlTeam + ')' : '') : ''}
+${ctx.isFlipBuy ? `
+FLIP BUY CONTEXT:
+An EXIT alert was SENT for ${ctx.flipBuyContext.exitTeam} at Q${ctx.flipBuyContext.exitPeriod} ${ctx.flipBuyContext.exitClock} (floor was ${ctx.flipBuyContext.exitFloor?.toFixed(2) || '?'}, margin ${ctx.flipBuyContext.exitMargin || '?'}).
+The structural edge has been confirmed as flipped — this BUY is NOT counter-betting. It is an independent structural signal on the team that took control away from the original position.
+The EXIT + BUY firing simultaneously is TWO independent signals corroborating the same structural reversal.
+Evaluate ${ctx.ctrlTeam}'s structural case on its own merit. The position gate is LIFTED — the subscriber was already told to exit ${ctx.flipBuyContext.exitTeam}.` : ''}
 
 INDICATORS (control-team-relative):
 I1 Disruption: ${ctx.i1} | I2 Interior: ${ctx.i2} | I3 Shot Quality: ${ctx.i3} | I4 Game Control: ${ctx.i4} | I5 Execution: ${ctx.i5}
@@ -298,6 +304,18 @@ RULES:
   - BUY team = original BWC team but BWC was FLIPPED to opponent: Near-automatic SUPPRESS. This team LOST structural control to the opponent. You are buying against the confirmed structural direction. The team that took it away from them graduated more recently and wins 84.5% of the time.
   - BUY team = opponent of BWC team (not flipped): Evaluate independently. If opponent has graduated, their structural case is strong — they earned it against the BWC team.
   - No BWC context at all: Cold BUY — rely entirely on standard BUY evidence above.
+  
+  FLIP BUY (EXIT + opponent BUY = structural reversal):
+  When FLIP BUY CONTEXT is present above, the system has confirmed the structural reversal from TWO independent directions: EXIT confirmed the original position is dead, AND BUY independently identified the new control team as structurally dominant. This is NOT counter-betting — it is the highest-conviction structural signal because both the protective system (EXIT) and the offensive system (BUY) agree.
+  
+  SEND if: BUY team controls 2+ indicators AND at least one is I1 (disruption) or I2 (interior) — these are structural, not variance.
+  SEND if: combined read = FLIPPED — the rolling window confirms the structural reversal.
+  LEAN SEND if: combined read = COLLAPSING AND BUY team controls I1 or I2 — reversal in progress, structural indicators confirm direction.
+  SUPPRESS if: BUY team's only advantage is I3 (shot quality) — variance on both sides, no confirmed structural reversal.
+  SUPPRESS if: combined read = ERODING only — EXIT may have been premature, edge hasn't fully transferred. Wait for stronger confirmation.
+  SUPPRESS if: deficit > 9 or < 1 min remaining — structural reversal confirmed but no betting window.
+  
+  Body MUST frame as structural reversal: "STRUCTURAL FLIP — your [exitTeam] position was exited at [time] because structural control shifted to [buyTeam]. [buyTeam] now independently qualifies as a BUY — [specific indicators]. This is not a counter-bet — the system independently confirmed the structural edge reversed."
   
   HOW TO USE MF TRAJECTORY ON BUY DECISIONS:
   - RISING = structural thesis is building, not fading. Trailing is more likely variance. Increases BUY confidence.
@@ -4989,7 +5007,8 @@ export default async function(req) {
                 const flipTag = lt.po_fired?.flipped ? ' [FLIP]' : '';
                 ntfyTitle = `POSITION OPEN${rankStr}${laneTag}${flipTag} — ${bwcTeam || ind.controlTeam}${mlStr}`;
               } else if (v2IsBuy) {
-                ntfyTitle = `BUY${tierTag} ${ind.controlTeam}${mlStr}`;
+                const flipTag = lt._flipBuyContext ? ' [FLIP]' : '';
+                ntfyTitle = `BUY${tierTag}${flipTag} ${ind.controlTeam}${mlStr}`;
               } else if (v2Type === 'EXIT') {
                 ntfyTitle = `EXIT${v2ExitSev ? ' (' + v2ExitSev.severity + ')' : ''} — ${matchup}`;
               } else {
@@ -5062,6 +5081,9 @@ export default async function(req) {
                 mfTrajectory: lt.bwc_fired ? computeMFTrajectory(lt.checkpoints || [], lt.bwc_fired.team) : null,
                 bwcFlipped: lt.bwc_flipped || false,
                 originalBwcTeam: lt.original_bwc_team || null,
+                // Flip buy context (BUY fires for opponent after EXIT sent on BWC team)
+                isFlipBuy: !!(v2IsBuy && lt._flipBuyContext),
+                flipBuyContext: lt._flipBuyContext || null,
               };
 
               const v2Prompt = buildV2AgentPrompt(v2Ctx);
@@ -5513,9 +5535,34 @@ export default async function(req) {
                   log(`${matchup}: BUY suppressed — ML ${ctrlML} (line cemented, no value)`);
                 } else {
                   // Downgrade to CANDIDATE if ML heavy (-250 to -400)
-                  const buyTier = (buyMLNum !== null && buyMLNum < -250) ? 'CANDIDATE' : _v2BuyTier;
+                  let buyTier = (buyMLNum !== null && buyMLNum < -250) ? 'CANDIDATE' : _v2BuyTier;
 
-                  log(`${matchup}: ▶ V2 BUY ${buyTier} floor=${ind.score.toFixed(2)} trail=${margin} bwcMatch=${lt.bwc_fired?.team === ind.controlTeam} ctrl=${_ctrlInd.join('+')||'none'}(${_ctrlInd.length}/5) opp=${_oppIndW.join('+')||'none'} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||'-'} ml=${ctrlML||'-'}`);
+                  // ── FLIP BUY DETECTION ──
+                  // When BUY fires for opponent of BWC team AND an EXIT was already SENT,
+                  // this is a structural reversal — not counter-betting. Two independent signals
+                  // (EXIT on team A + BUY on team B) corroborate the same structural flip.
+                  // Upgrade CANDIDATE → FIRED when EXIT confirms the flip.
+                  lt._flipBuyContext = null;
+                  if (lt.bwc_fired && lt.bwc_fired.team !== ind.controlTeam) {
+                    try {
+                      const exitRows = await sql`SELECT period, clock, control_team, floor_score, margin, ts
+                        FROM alerts WHERE game_id = ${game.id} AND alert_type = 'EXIT' AND ntfy_sent = true
+                        ORDER BY ts DESC LIMIT 1`;
+                      if (exitRows.length > 0) {
+                        lt._flipBuyContext = {
+                          exitPeriod: exitRows[0].period, exitClock: exitRows[0].clock,
+                          exitTeam: lt.bwc_fired.team, exitFloor: Number(exitRows[0].floor_score),
+                          exitMargin: exitRows[0].margin, exitTs: exitRows[0].ts
+                        };
+                        if (buyTier === 'CANDIDATE') {
+                          buyTier = 'FIRED';
+                          log(`${matchup}: FLIP BUY upgrade CANDIDATE → FIRED (EXIT sent for ${lt.bwc_fired.team} at Q${exitRows[0].period} ${exitRows[0].clock})`);
+                        }
+                      }
+                    } catch(e) { /* non-fatal */ }
+                  }
+
+                  log(`${matchup}: ▶ V2 BUY ${buyTier}${lt._flipBuyContext ? ' [FLIP]' : ''} floor=${ind.score.toFixed(2)} trail=${margin} bwcMatch=${lt.bwc_fired?.team === ind.controlTeam} ctrl=${_ctrlInd.join('+')||'none'}(${_ctrlInd.length}/5) opp=${_oppIndW.join('+')||'none'} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||'-'} ml=${ctrlML||'-'}`);
 
                   await routeV2Alert('BUY', buyTier, null, true);
                   lt._last_buy_ts = _v2Now;
