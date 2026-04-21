@@ -2958,11 +2958,14 @@ async function triggerAnalysis(game){
           awayDouble: game.summary?.away?.double_bonus || false,
         },
         dashboardScores: dashInd ? {
-          controlTeam: dashInd.controlTeam, score: dashInd.score,
-          I1: dashInd.I1.score+' '+dashInd.I1.leader, I2: dashInd.I2.score+' '+dashInd.I2.leader,
-          I3: dashInd.I3.score+' '+dashInd.I3.leader, I4: dashInd.I4.score+' '+dashInd.I4.leader,
-          I5: dashInd.I5.score+' '+dashInd.I5.leader, dataQuality: dashInd.dataQuality,
+          controlTeam: dashInd.controlTeam, homeAlias: game.home?.alias||'HOME', score: dashInd.score,
+          I1: { score: dashInd.I1.score, leader: dashInd.I1.leader, detail: dashInd.I1.detail },
+          I2: { score: dashInd.I2.score, leader: dashInd.I2.leader, detail: dashInd.I2.detail },
+          I3: { score: dashInd.I3.score, leader: dashInd.I3.leader, detail: dashInd.I3.detail },
+          I4: { score: dashInd.I4.score, leader: dashInd.I4.leader, detail: dashInd.I4.detail },
+          I5: { score: dashInd.I5.score, leader: dashInd.I5.leader, detail: dashInd.I5.detail },
         } : null,
+        conviction: dashInd ? (function(){ var c = computeConviction(dashInd); return { tier: c.tier, combo: c.combo, indicatorsWon: c.indicatorsWon, indicatorsLost: c.indicatorsLost, pairs: c.pairs, isDanger: c.isDanger }; })() : null,
         clutchData: clutchPayload,
         oddsData: cs.oddsData || null,
         edgeHistory: cs.edgeHistory.length > 0 ? cs.edgeHistory : null,
@@ -3010,6 +3013,10 @@ async function triggerAnalysis(game){
           opening: cs.espnWP.opening || null,
           dataPoints: cs.espnWP.dataPoints || 0,
           homeAlias: cs.espnWP.homeAlias || '', awayAlias: cs.espnWP.awayAlias || '',
+        } : null,
+        volumeThreat: cs.volumeThreat ? {
+          home: cs.volumeThreat.home ? { active: cs.volumeThreat.home.active||false, mitigated: cs.volumeThreat.home.mitigated||false, projected3PA: cs.volumeThreat.home.projected3PA, live3PA: cs.volumeThreat.home.live3PA, live3Pct: cs.volumeThreat.home.live3Pct, baseline: cs.volumeThreat.home.baseline, cs3PM: cs.volumeThreat.home.cs3PM, discount: cs.volumeThreat.home.discount, vtBonus: cs.volumeThreat.home.vtBonus, mitRatio: cs.volumeThreat.home.mitRatio } : null,
+          away: cs.volumeThreat.away ? { active: cs.volumeThreat.away.active||false, mitigated: cs.volumeThreat.away.mitigated||false, projected3PA: cs.volumeThreat.away.projected3PA, live3PA: cs.volumeThreat.away.live3PA, live3Pct: cs.volumeThreat.away.live3Pct, baseline: cs.volumeThreat.away.baseline, cs3PM: cs.volumeThreat.away.cs3PM, discount: cs.volumeThreat.away.discount, vtBonus: cs.volumeThreat.away.vtBonus, mitRatio: cs.volumeThreat.away.mitRatio } : null,
         } : null,
       })
     });

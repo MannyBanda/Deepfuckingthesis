@@ -202,7 +202,7 @@ function buildV2AgentPrompt(ctx) {
       const aPaint = a.points_in_the_paint || a.points_in_paint || 0;
       stress += '  Q' + qk + ' (' + ctx.homeAlias + ' vs ' + ctx.awayAlias + '):'
         + ' Paint ' + ctx.homeAlias + ':' + hPaint + ' ' + ctx.awayAlias + ':' + aPaint
-        + ' | FTA ' + ctx.homeAlias + ':' + (h.free_throws_att||0) + ' ' + ctx.awayAlias + ':' + (a.free_throws_att||0)
+        + ' | FT ' + ctx.homeAlias + ':' + (h.free_throws_made||0) + '/' + (h.free_throws_att||0) + ' ' + ctx.awayAlias + ':' + (a.free_throws_made||0) + '/' + (a.free_throws_att||0)
         + ' | 3P ' + ctx.homeAlias + ':' + (h.three_points_made||0) + '/' + (h.three_points_att||0) + ' ' + ctx.awayAlias + ':' + (a.three_points_made||0) + '/' + (a.three_points_att||0)
         + ' | AST ' + ctx.homeAlias + ':' + (h.assists||0) + ' ' + ctx.awayAlias + ':' + (a.assists||0)
         + ' | TO ' + ctx.homeAlias + ':' + (h.turnovers||h.total_turnovers||0) + ' ' + ctx.awayAlias + ':' + (a.turnovers||a.total_turnovers||0)
@@ -3240,7 +3240,7 @@ function parseAnalysisText(text, homeAlias, awayAlias) {
 // Single function that formats ALL data layers into prompt text.
 // Matches analyze.js quality — no more "payload ghost" layers.
 
-function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary, conviction }) {
+function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary, conviction, graduationCtx, priorAlertTrail }) {
   let p = `${aA} @ ${hA} | Q${period} ${clock} | ${score}\n\n`;
 
   // ── GROUND TRUTH (mechanical engine output — do not override) ──
@@ -3280,6 +3280,45 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
   if (ctx?.gameMeta) {
     const m = ctx.gameMeta;
     p += `GAME META: Lead changes: ${m.leadChanges} | Times tied: ${m.timesTied} | Foulouts: ${m.hFoulouts}/${m.aFoulouts} (home/away)\n`;
+  }
+
+  // TP/LS classifications
+  if (ctx?.throughput) {
+    const tp = ctx.throughput;
+    p += `THROUGHPUT (trailing team comeback projection): ${tp.classification}\n`;
+    p += `  Deficit: ${tp.deficit} | Expected swing: ${Math.round(tp.expected.totalSwing)} pts | Remaining poss: ${tp.remainingPoss || '?'}\n`;
+    p += `  Ctrl structRate: ${tp.ctrlStructRate?.toFixed(2) || '?'} | Opp structRate: ${tp.oppStructRate?.toFixed(2) || '?'}`;
+    if (tp.trend) p += ` | Trend: ${tp.trend}${tp.trendDelta != null ? ' (' + (tp.trendDelta > 0 ? '+' : '') + tp.trendDelta.toFixed(1) + ')' : ''}`;
+    p += `\n`;
+  }
+  if (ctx?.leadSafety) {
+    const ls = ctx.leadSafety;
+    p += `LEAD SAFETY (leading team margin security): ${ls.classification}\n`;
+    p += `  Lead: ${ls.lead} | Expected opp recovery: ${Math.round(ls.expected.totalSwing)} pts | Remaining poss: ${ls.remainingPoss || '?'}`;
+    if (ls.trend) p += ` | Trend: ${ls.trend}${ls.trendDelta != null ? ' (' + (ls.trendDelta > 0 ? '+' : '') + ls.trendDelta.toFixed(1) + ')' : ''}`;
+    p += `\n`;
+  }
+
+  // Graduation / BWC lifecycle context
+  if (graduationCtx) {
+    const gc = graduationCtx;
+    p += `\nBWC LIFECYCLE:\n`;
+    p += `BWC team: ${gc.bwcTeam} (fired Q${gc.bwcFirePeriod}, floor ${gc.bwcFireFloor != null ? Number(gc.bwcFireFloor).toFixed(2) : '?'})`;
+    if (gc.lane) p += ` | Lane: ${gc.lane} (pregame ML ${gc.pregameML || '?'})`;
+    p += `\n`;
+    if (gc.cpGraduation) {
+      const mfStr = gc.mfTrajectory
+        ? `MF ${gc.mfTrajectory.direction} (${gc.mfTrajectory.floors.map(f => f.toFixed(2)).join(' -> ')})`
+        : 'No MF data';
+      p += `Graduation: ${gc.cpPeakRank}-Rank @ ${gc.cpGraduation.cp_label} | ${mfStr} | MF=${gc.cpMeanFloor?.toFixed(3) || '?'} | ${gc.cpEligibleCount} eligible CPs\n`;
+      if (gc.cpOppGraduation) p += `Opponent graduated: ${gc.cpOppGraduation.rank}-Rank @ ${gc.cpOppGraduation.cp_label}\n`;
+    } else {
+      p += `Pre-graduation (${gc.cpEligibleCount} eligible CPs, MF=${gc.cpMeanFloor?.toFixed(3) || '?'})\n`;
+    }
+    p += `CP flips: ${gc.cpCtrlFlips} | Game ctrl flips: ${gc.ctrlFlips}\n`;
+    if (gc.bwcFlipped) p += `BWC FLIPPED: Originally ${gc.originalBwcTeam}, flipped to ${gc.bwcTeam}\n`;
+    if (gc.positionClosed) p += `POSITION CLOSED: EXIT was previously sent\n`;
+    p += `BWC state: ${gc.bwcState || 'unknown'}\n`;
   }
 
   // 3PT Sustainability (rich format with personnel details)
@@ -3416,7 +3455,7 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
       const aPaint = a.points_in_the_paint || a.points_in_paint || 0;
       p += `  Q${qk} (${hA} vs ${aA}):`
         + ` Paint ${hA}:${hPaint} ${aA}:${aPaint}`
-        + ` | FTA ${hA}:${h.free_throws_att||0} ${aA}:${a.free_throws_att||0}`
+        + ` | FT ${hA}:${h.free_throws_made||0}/${h.free_throws_att||0} ${aA}:${a.free_throws_made||0}/${a.free_throws_att||0}`
         + ` | 3P ${hA}:${h.three_points_made||0}/${h.three_points_att||0} ${aA}:${a.three_points_made||0}/${a.three_points_att||0}`
         + ` | AST ${hA}:${h.assists||0} ${aA}:${a.assists||0}`
         + ` | TO ${hA}:${h.turnovers||h.total_turnovers||0} ${aA}:${a.turnovers||a.total_turnovers||0}`
@@ -3563,6 +3602,11 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
     });
   }
 
+  // Prior alert trail (what the subscriber was told)
+  if (priorAlertTrail) {
+    p += `\nSUBSCRIBER ALERT TRAIL (what the bettor was told):\n${priorAlertTrail}\n`;
+  }
+
   // Full game data
   p += `\nGAME DATA:\n${JSON.stringify(summary)}`;
 
@@ -3683,6 +3727,60 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       }
     } catch (e) { /* quarter_data not available */ }
 
+    // Build graduation context from live_tracking
+    let graduationCtx = null;
+    try {
+      const ltRows = await sql`SELECT live_tracking FROM games WHERE id = ${game.id}`;
+      if (ltRows.length > 0 && ltRows[0].live_tracking) {
+        const lt = typeof ltRows[0].live_tracking === 'string'
+          ? JSON.parse(ltRows[0].live_tracking) : ltRows[0].live_tracking;
+        if (lt.bwc_fired) {
+          graduationCtx = {
+            bwcTeam: lt.bwc_fired.team,
+            bwcFirePeriod: lt.bwc_fired.period,
+            bwcFireFloor: lt.bwc_fired.floor,
+            bwcState: lt.bwc_state || null,
+            positionClosed: lt.position_closed || false,
+            lane: lt.lane || null,
+            pregameML: lt.pregame_ml || null,
+            cpPeakRank: lt.cp_peak_rank || null,
+            cpGraduation: lt.cp_graduation || null,
+            cpOppGraduation: lt.cp_opp_graduation || null,
+            cpMeanFloor: lt.cp_mean_floor || null,
+            cpEligibleCount: lt.cp_eligible_count || 0,
+            cpCtrlFlips: lt.cp_ctrl_flips || 0,
+            ctrlFlips: lt.ctrl_flips || 0,
+            bwcFlipped: lt.bwc_flipped || false,
+            originalBwcTeam: lt.original_bwc_team || null,
+            mfTrajectory: computeMFTrajectory(lt.checkpoints || [], lt.bwc_fired.team),
+          };
+        }
+      }
+    } catch (e) { /* non-fatal — live_tracking may not exist */ }
+
+    // Fetch prior alert trail
+    let priorAlertTrail = null;
+    try {
+      const alertRows = await sql`SELECT alert_type, alert_tier, period, clock, floor_score, margin, is_trailing,
+        ctrl_sust, opp_sust, agent_decision, agent_reasoning, conviction_tier, conviction_combo, edge, tp_class, control_team
+        FROM alerts WHERE game_id = ${game.id}
+          AND NOT (alert_type = 'AUTO_ANALYSIS' AND agent_decision = 'SUPPRESS')
+        ORDER BY ts DESC LIMIT 5`;
+      if (alertRows.length > 0) {
+        priorAlertTrail = alertRows.map(a => {
+          let line = `${a.alert_type}${a.alert_tier ? '['+a.alert_tier+']' : ''} Q${a.period} ${a.clock}: `
+            + `${a.control_team || '?'} floor ${Number(a.floor_score).toFixed(2)}, margin ${a.margin} ${a.is_trailing ? 'trailing' : 'leading'}, `
+            + `sust ${a.ctrl_sust}/${a.opp_sust}`;
+          if (a.conviction_tier) line += `, conv ${a.conviction_tier}(${a.conviction_combo || '?'})`;
+          if (a.edge != null) line += `, edge ${a.edge > 0 ? '+' : ''}${Number(a.edge).toFixed(1)}%`;
+          if (a.tp_class) line += `, TP ${a.tp_class}`;
+          if (a.agent_decision) line += ` \u2192 ${a.agent_decision}`;
+          if (a.agent_reasoning) line += `: ${a.agent_reasoning.substring(0, 120)}`;
+          return line;
+        }).join('\n');
+      }
+    } catch (e) { /* non-fatal */ }
+
     // Build team calibration prompt section
 
     const calConviction = computeConviction(ind);
@@ -3695,6 +3793,8 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       quarterDataFromDB,
       summary,
       conviction: calConviction,
+      graduationCtx,
+      priorAlertTrail,
     });
 
     // ── Compute prompt layer inventory for diagnostics ──
@@ -3718,11 +3818,15 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       ctx.subMetricArrows ? 'arrows' : null,
       ctx.adjustment ? 'adjustment' : null,
       (ctx.volumeThreat?.home?.active || ctx.volumeThreat?.away?.active) ? 'volumeThreat' : null,
+      ctx.throughput ? 'tp' : null,
+      ctx.leadSafety ? 'ls' : null,
       ctx.mip ? 'mip' : null,
       ctx.bonusStatus ? 'bonus' : null,
       ctx.gameMeta ? 'gameMeta' : null,
       ctx.edgeHistory ? 'edgeHistory' : null,
       ctx.trackingData ? 'tracking' : null,
+      graduationCtx ? 'graduation' : null,
+      priorAlertTrail ? 'alertTrail' : null,
     ].filter(Boolean);
     const contextLayersStr = `${layerInventory.length}L: ${layerInventory.join(',')}`;
     const promptChars = userPrompt.length;

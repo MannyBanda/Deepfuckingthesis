@@ -488,6 +488,11 @@ exports.handler = async function(event) {
     var combinedRead = body.combinedRead;
     var wpProfiles = body.wpProfiles || null;
     var espnWP = body.espnWP || null;
+    var dashboardScores = body.dashboardScores || null;
+    var conviction = body.conviction || null;
+    var throughputData = body.throughput || null;
+    var leadSafetyData = body.leadSafety || null;
+    var volumeThreatData = body.volumeThreat || null;
     if (!summaryData) {
       return { statusCode: 400, headers: headers, body: JSON.stringify({ error: 'summaryData required' }) };
     }
@@ -728,7 +733,7 @@ exports.handler = async function(event) {
         var aPaint = a.points_in_the_paint || a.points_in_paint || 0;
         quarterSection += '  ' + label + ' (' + hAlias + ' vs ' + aAlias + '):'
           + ' Paint ' + hAlias + ':' + hPaint + ' ' + aAlias + ':' + aPaint
-          + ' | FTA ' + hAlias + ':' + (h.free_throws_att||0) + ' ' + aAlias + ':' + (a.free_throws_att||0)
+          + ' | FT ' + hAlias + ':' + (h.free_throws_made||0) + '/' + (h.free_throws_att||0) + ' ' + aAlias + ':' + (a.free_throws_made||0) + '/' + (a.free_throws_att||0)
           + ' | 3P ' + hAlias + ':' + (h.three_points_made||0) + '/' + (h.three_points_att||0) + ' ' + aAlias + ':' + (a.three_points_made||0) + '/' + (a.three_points_att||0)
           + ' | AST ' + hAlias + ':' + (h.assists||0) + ' ' + aAlias + ':' + (a.assists||0)
           + ' | TO ' + hAlias + ':' + (h.turnovers||h.total_turnovers||0) + ' ' + aAlias + ':' + (a.turnovers||a.total_turnovers||0)
@@ -805,12 +810,99 @@ exports.handler = async function(event) {
       espnWPSection += 'Common valid divergences: sustainability concern ESPN misses, structural control not reflected in score, foul trouble.\n';
     }
 
+    // ── GROUND TRUTH (mechanical indicators — matches formatSonnetPrompt) ──
+    var groundTruthSection = '';
+    if (dashboardScores && dashboardScores.controlTeam) {
+      var ctrlHome = dashboardScores.controlTeam === homeTeam;
+      function ctrlScore(ind) {
+        if (!ind || ind.score == null) return null;
+        return ctrlHome ? ind.score : 1 - ind.score;
+      }
+      var i1c = ctrlScore(dashboardScores.I1);
+      var i2c = ctrlScore(dashboardScores.I2);
+      var i3c = ctrlScore(dashboardScores.I3);
+      var i4c = ctrlScore(dashboardScores.I4);
+      var i5c = ctrlScore(dashboardScores.I5);
+      groundTruthSection = 'GROUND TRUTH (mechanical engine — do not override):\n';
+      groundTruthSection += 'Control: ' + dashboardScores.controlTeam + ' '
+        + (dashboardScores.score != null ? Number(dashboardScores.score).toFixed(2) : '?')
+        + ' (floor = weighted I1-I5 composite, 0-1) | ';
+      groundTruthSection += 'Conviction: ' + (conviction ? conviction.tier : 'N/A')
+        + ' (' + (conviction ? conviction.combo : 'N/A') + ')';
+      if (conviction && conviction.pairs && conviction.pairs.length > 0) {
+        groundTruthSection += ' | Killer pairs: ' + conviction.pairs.join(', ');
+      }
+      if (conviction && conviction.isDanger) groundTruthSection += ' | DANGER COMBO';
+      groundTruthSection += '\n';
+      groundTruthSection += '(Indicator scale: 1.0=ctrl dominates, 0.0=opponent dominates, 0.5=even. Won >=0.55, lost <=0.45)\n';
+      groundTruthSection += 'I1 Disruption: ' + (dashboardScores.I1 ? dashboardScores.I1.leader || 'EVEN' : '?') + ' ' + (i1c != null ? i1c.toFixed(1) : '?') + ' | ';
+      groundTruthSection += 'I2 Interior: ' + (dashboardScores.I2 ? dashboardScores.I2.leader || 'EVEN' : '?') + ' ' + (i2c != null ? i2c.toFixed(1) : '?') + ' | ';
+      groundTruthSection += 'I3 Shot Quality: ' + (dashboardScores.I3 ? dashboardScores.I3.leader || 'EVEN' : '?') + ' ' + (i3c != null ? i3c.toFixed(1) : '?') + ' | ';
+      groundTruthSection += 'I4 Game Control: ' + (dashboardScores.I4 ? dashboardScores.I4.leader || 'EVEN' : '?') + ' ' + (i4c != null ? i4c.toFixed(1) : '?') + ' | ';
+      groundTruthSection += 'I5 Execution: ' + (dashboardScores.I5 ? dashboardScores.I5.leader || 'EVEN' : '?') + ' ' + (i5c != null ? i5c.toFixed(1) : '?') + '\n';
+      if (conviction && conviction.indicatorsWon) {
+        groundTruthSection += 'Indicators won by ' + dashboardScores.controlTeam + ': '
+          + (conviction.indicatorsWon.length > 0 ? conviction.indicatorsWon.join('+') : 'NONE');
+        if (conviction.indicatorsLost && conviction.indicatorsLost.length > 0) {
+          groundTruthSection += ' | Lost: ' + conviction.indicatorsLost.join('+');
+        }
+        groundTruthSection += '\n';
+      }
+      groundTruthSection += '\n';
+    }
+
+    // ── THROUGHPUT / LEAD SAFETY ──
+    var tpLsSection = '';
+    if (throughputData) {
+      tpLsSection += '\nTHROUGHPUT (trailing team comeback projection): ' + throughputData.classification + '\n';
+      tpLsSection += '  Deficit: ' + throughputData.deficit + ' | Expected swing: ' + throughputData.expected + ' pts | Remaining poss: ' + (throughputData.remainingPoss || '?') + '\n';
+      tpLsSection += '  Ctrl structRate: ' + (throughputData.ctrlStructRate != null ? Number(throughputData.ctrlStructRate).toFixed(2) : '?')
+        + ' | Opp structRate: ' + (throughputData.oppStructRate != null ? Number(throughputData.oppStructRate).toFixed(2) : '?') + '\n';
+    }
+    if (leadSafetyData) {
+      tpLsSection += '\nLEAD SAFETY (leading team margin security): ' + leadSafetyData.classification + '\n';
+      tpLsSection += '  Lead: ' + leadSafetyData.lead + ' | Expected opp recovery: ' + leadSafetyData.expected + ' pts | Remaining poss: ' + (leadSafetyData.remainingPoss || '?') + '\n';
+    }
+
+    // ── VOLUME THREAT ──
+    var volumeSection = '';
+    if (volumeThreatData) {
+      var hVT = volumeThreatData.home, aVT = volumeThreatData.away;
+      if ((hVT && hVT.active) || (aVT && aVT.active) || (hVT && hVT.mitigated) || (aVT && aVT.mitigated)) {
+        volumeSection = '\nVOLUME THREAT DETECTION:\n';
+        if (hVT && hVT.active) {
+          volumeSection += homeTeam + ': ACTIVE — projected ' + hVT.projected3PA + ' 3PA (live ' + hVT.live3PA + '), '
+            + hVT.live3Pct + '% (szn ' + hVT.baseline + '%), C&S 3PM: ' + hVT.cs3PM + '\n';
+          volumeSection += '  Scheme-driven perimeter production at baseline. This is structural offense, not variance.\n';
+          volumeSection += '  Floor discount: ' + Math.round(hVT.discount * 100) + '% | TP/LS structRate bonus: ' + hVT.vtBonus
+            + (hVT.mitigated && aVT ? ' (partially mitigated — ' + awayTeam + ' has ' + aVT.live3PA + ' 3PA, ratio:' + hVT.mitRatio + ')' : '') + '\n';
+        } else if (hVT && hVT.mitigated) {
+          volumeSection += homeTeam + ': MITIGATED — projected ' + hVT.projected3PA + ' 3PA but ' + awayTeam
+            + ' matching volume (' + (aVT ? aVT.live3PA : '?') + ' 3PA, ratio:' + hVT.mitRatio + '). Shared game profile.\n';
+        }
+        if (aVT && aVT.active) {
+          volumeSection += awayTeam + ': ACTIVE — projected ' + aVT.projected3PA + ' 3PA (live ' + aVT.live3PA + '), '
+            + aVT.live3Pct + '% (szn ' + aVT.baseline + '%), C&S 3PM: ' + aVT.cs3PM + '\n';
+          volumeSection += '  Scheme-driven perimeter production at baseline. This is structural offense, not variance.\n';
+          volumeSection += '  Floor discount: ' + Math.round(aVT.discount * 100) + '% | TP/LS structRate bonus: ' + aVT.vtBonus
+            + (aVT.mitigated && hVT ? ' (partially mitigated — ' + homeTeam + ' has ' + hVT.live3PA + ' 3PA, ratio:' + aVT.mitRatio + ')' : '') + '\n';
+        } else if (aVT && aVT.mitigated) {
+          volumeSection += awayTeam + ': MITIGATED — projected ' + aVT.projected3PA + ' 3PA but ' + homeTeam
+            + ' matching volume (' + (hVT ? hVT.live3PA : '?') + ' 3PA, ratio:' + aVT.mitRatio + '). Shared game profile.\n';
+        }
+        if ((hVT && hVT.active) || (aVT && aVT.active)) {
+          volumeSection += 'HOW TO USE: A team with active volume threat has a structural perimeter counter-engine. The control team\'s structural edge is overstated — discount conviction and FWP accordingly. Do NOT treat baseline-rate 3PT shooting from a volume threat team as variance to regress.\n';
+        }
+      }
+    }
+
     // ── BUILD PROMPT ──
     var userPrompt = awayTeam + ' @ ' + homeTeam + ' | ' + period + ' | ' + score + '\n\n'
+      + groundTruthSection
       + (thesis ? 'THESIS:\n' + thesis + '\n' : 'No thesis.')
-      + '\n' + clutchSection + oddsSection + bonusSection + trackingSection + sustainabilitySection + leadCompSection
+      + '\n' + clutchSection + oddsSection + tpLsSection + bonusSection + trackingSection + sustainabilitySection + leadCompSection
       + windowSection + quarterSection + gapSection + combinedReadSection + arrowSection + adjustmentSection
-      + pbpSection + edgeSection + narrativeSection + wpSection + espnWPSection
+      + pbpSection + volumeSection + edgeSection + narrativeSection + wpSection + espnWPSection
       + '\nGAME DATA:\n' + JSON.stringify(summaryData);
 
     var resp = await fetch('https://api.anthropic.com/v1/messages', {
