@@ -1766,7 +1766,8 @@ async function replayWithConfig(sql, gameId, config, diffOnly) {
 
           if (gRank === 'A' && rMF >= mfGate && rMinF >= minFGate) {
             rPoFired = true;
-            rAlertTriggers.push({ type: 'POSITION_OPEN', rank: gRank, idx, period, clock, floor: rc.floor, margin: rMargin, mf: rMF, cpFlips: rCpCtrlFlips });
+            rAlertTriggers.push({ type: 'POSITION_OPEN', rank: gRank, idx, period, clock, floor: rc.floor, margin: rMargin, mf: rMF, cpFlips: rCpCtrlFlips, reopened_position: rPositionClosed || undefined });
+            if (rPositionClosed) rPositionClosed = false;
           }
           if (gRank === 'B') {
             // B-rank confirmation gate
@@ -1774,7 +1775,8 @@ async function replayWithConfig(sql, gameId, config, diffOnly) {
             const bConfirmSec = REPLAY_GRAD_CHECKPOINTS.find(cp => cp.label === bConfirmCp)?.gameSec || 1800;
             if (gameSec >= bConfirmSec && rMF >= mfGate && rMinF >= minFGate) {
               rPoFired = true;
-              rAlertTriggers.push({ type: 'POSITION_OPEN', rank: gRank, idx, period, clock, floor: rc.floor, margin: rMargin, mf: rMF, cpFlips: rCpCtrlFlips });
+              rAlertTriggers.push({ type: 'POSITION_OPEN', rank: gRank, idx, period, clock, floor: rc.floor, margin: rMargin, mf: rMF, cpFlips: rCpCtrlFlips, reopened_position: rPositionClosed || undefined });
+              if (rPositionClosed) rPositionClosed = false;
             }
           }
         }

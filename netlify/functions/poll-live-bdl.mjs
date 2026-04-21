@@ -5145,9 +5145,9 @@ export default async function(req) {
                   lt.position_closed = true;
                   lt.position_closed_ts = Date.now();
                   log(`${matchup}: Position CLOSED — EXIT sent, suppressing BWC_EDGE/POSITION_SAFE/RECOVERING/VALUE until re-entry`);
-                } else if (v2Type === 'THESIS_ALIVE') {
+                } else if (v2Type === 'THESIS_ALIVE' || v2Type === 'POSITION_OPEN') {
                   lt.position_closed = false;
-                  log(`${matchup}: Position RE-OPENED — THESIS_ALIVE sent, position updates resume`);
+                  log(`${matchup}: Position RE-OPENED — ${v2Type} sent, position updates resume`);
                 }
               }
 
