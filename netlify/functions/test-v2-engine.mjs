@@ -272,6 +272,29 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
   const BUY_COOLDOWN_MS = 3 * 60 * 1000;
   let positionClosed = false; // Tracks post-EXIT position gate for agent context
 
+  // Graduation state (mirrors production checkpoint system)
+  let gradCheckpoints = [];
+  let gradNextCpIdx = 0;
+  let gradCpHolds = 0, gradCpOppHolds = 0;
+  let gradCpPeakRank = 'C', gradCpGraduation = null, gradCpOppGraduation = null;
+  let gradCpCtrlFlips = 0;
+  let gradPoFired = false;
+
+  // Conviction from won indicator list (lightweight version of production computeConviction)
+  function convictionFromWins(wins) {
+    const count = wins.length;
+    const has = (a, b) => wins.includes(a) && wins.includes(b);
+    const hasI4I5 = has('I4', 'I5'), hasI3I4 = has('I3', 'I4'), hasI3I5 = has('I3', 'I5');
+    const isDanger = (count === 2 && wins.includes('I1') && wins.includes('I5') && !wins.includes('I3') && !wins.includes('I4'))
+      || (count === 3 && wins.includes('I1') && wins.includes('I2') && wins.includes('I5') && !wins.includes('I3') && !wins.includes('I4'))
+      || (count === 3 && wins.includes('I2') && wins.includes('I3') && wins.includes('I5') && !wins.includes('I4'));
+    if (count >= 4 || hasI4I5) return 'DOMINANT';
+    if ((hasI3I4 || hasI3I5) && !isDanger) return 'STRONG';
+    if (count >= 2 && !isDanger) return 'MODEST';
+    if (count >= 1) return 'CONDITIONAL';
+    return 'NO ENTRY';
+  }
+
   for (let idx = 0; idx < snapshots.length; idx++) {
     const snap = snapshots[idx];
     const period = parsePeriod(snap);
@@ -322,6 +345,13 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
         };
         lt._prev_bwc_state = initialState;
         bwcState = initialState;
+
+        // Initialize graduation checkpoint tracking
+        const _fireGameSec = snapToGameSec(period, cr.clock);
+        gradNextCpIdx = 0;
+        while (gradNextCpIdx < REPLAY_GRAD_CHECKPOINTS.length && REPLAY_GRAD_CHECKPOINTS[gradNextCpIdx].gameSec <= _fireGameSec) {
+          gradNextCpIdx++;
+        }
 
         const triggerPoint = {
           type: 'BWC_FIRST_FIRE',
@@ -452,6 +482,114 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
             else if (alertType === 'POSITION_OPEN') positionClosed = false;
           }
         }
+      }
+    }
+
+    // ── GRADUATION CHECKPOINTS (mirrors production checkpoint system) ──
+    if (bwcFirstFired && gradNextCpIdx < REPLAY_GRAD_CHECKPOINTS.length) {
+      const bwcTeam = lt.bwc_fired.team;
+      const _gameSec = snapToGameSec(period, cr.clock);
+
+      while (gradNextCpIdx < REPLAY_GRAD_CHECKPOINTS.length) {
+        const nextCp = REPLAY_GRAD_CHECKPOINTS[gradNextCpIdx];
+        if (_gameSec < nextCp.gameSec) break;
+
+        const cpConvTier = convictionFromWins(cr.ctrlIndicators);
+        const cpOppCount = cr.oppIndicatorCount;
+        const cpEntry = { label: nextCp.label, floor: cr.floor, team: cr.ctrlTeam, margin: cr.margin, conv: cpConvTier, oppCount: cpOppCount, period, clock: cr.clock };
+
+        // Checkpoint-level control flip
+        if (gradCheckpoints.length > 0 && gradCheckpoints[gradCheckpoints.length - 1].team !== cpEntry.team) {
+          gradCpCtrlFlips++;
+        }
+        gradCheckpoints.push(cpEntry);
+
+        const RANK_ORDER = { C: 0, B: 1, A: 2 };
+
+        // Update cp holds
+        if (cr.ctrlTeam === bwcTeam) { gradCpHolds++; gradCpOppHolds = 0; }
+        else { gradCpHolds = 0; gradCpOppHolds = (cr.margin >= 2 && cr.floor >= 0.60) ? gradCpOppHolds + 1 : 0; }
+
+        // BWC team rank classification
+        if (cr.ctrlTeam === bwcTeam && cr.margin >= 2 && cr.floor >= 0.60) {
+          const cpRank = replayClassifyRank(cpConvTier, cr.margin, gradCpHolds, cpOppCount);
+          if (RANK_ORDER[cpRank] > (RANK_ORDER[gradCpPeakRank] || 0)) {
+            gradCpPeakRank = cpRank;
+            gradCpGraduation = { rank: cpRank, cp_label: nextCp.label, cp_idx: gradNextCpIdx, floor: cr.floor, margin: cr.margin };
+          }
+        }
+
+        // Opponent rank
+        if (cr.ctrlTeam !== bwcTeam && gradCpOppHolds >= 2 && cr.margin >= 2 && cr.floor >= 0.60) {
+          const oppRank = replayClassifyRank(cpConvTier, cr.margin, gradCpOppHolds, cpOppCount);
+          if ((oppRank === 'B' || oppRank === 'A') && RANK_ORDER[oppRank] > (RANK_ORDER[gradCpOppGraduation?.rank] || 0)) {
+            gradCpOppGraduation = { rank: oppRank, cp_label: nextCp.label, cp_idx: gradNextCpIdx, floor: cr.floor, margin: cr.margin };
+          }
+        }
+
+        // MF stats
+        const eligible = gradCheckpoints.filter(cp => cp.team === bwcTeam && cp.floor >= 0.60 && cp.margin >= 2);
+        const gradMF = eligible.length > 0 ? eligible.reduce((s, cp) => s + cp.floor, 0) / eligible.length : null;
+        const gradMinF = eligible.length > 0 ? Math.min(...eligible.map(cp => cp.floor)) : null;
+
+        // ── POSITION OPEN CHECK ──
+        if (gradCpGraduation && !gradPoFired && cr.ctrlTeam === bwcTeam) {
+          const gRank = gradCpGraduation.rank;
+          const MF_GATE = 0.65, MIN_F_GATE = 0.58; // NBA defaults
+          const B_CONFIRM_SEC = 1800; // Q3_6
+
+          let poFires = false;
+          if (gRank === 'A' && gradMF >= MF_GATE && gradMinF >= MIN_F_GATE) poFires = true;
+          if (gRank === 'B' && _gameSec >= B_CONFIRM_SEC && gradMF >= MF_GATE && gradMinF >= MIN_F_GATE) poFires = true;
+
+          if (poFires) {
+            gradPoFired = true;
+            const mfTraj = computeMFTrajectory(gradCheckpoints, bwcTeam);
+            const triggerPoint = {
+              type: 'GRADUATION_PO',
+              alertType: 'POSITION_OPEN',
+              snapIdx: idx, period, clock: cr.clock,
+              ctrlTeam: cr.ctrlTeam, floor: cr.floor, margin: cr.margin,
+              bwcState,
+              poRank: gRank, mf: gradMF, minF: gradMinF,
+              cpFlips: gradCpCtrlFlips, cpEligible: eligible.length,
+              mfTrajectory: mfTraj,
+              positionClosed,
+            };
+            if (mode !== 'mechanical') {
+              triggerPoint.contextPackage = assembleContextPackage(
+                snap, cr, lt, erosion, bwcState, v2Alerts, snapshots, idx, hA, aA, useMonitor, storedLT, positionClosed
+              );
+              // Enrich context with graduation data
+              if (triggerPoint.contextPackage) {
+                triggerPoint.contextPackage.poRank = gRank;
+                triggerPoint.contextPackage.cpPeakRank = gradCpPeakRank;
+                triggerPoint.contextPackage.cpGraduation = gradCpGraduation;
+                triggerPoint.contextPackage.cpOppGraduation = gradCpOppGraduation;
+                triggerPoint.contextPackage.cpMeanFloor = gradMF ? Math.round(gradMF * 1000) / 1000 : null;
+                triggerPoint.contextPackage.cpMinFloor = gradMinF ? Math.round(gradMinF * 1000) / 1000 : null;
+                triggerPoint.contextPackage.cpEligibleCount = eligible.length;
+                triggerPoint.contextPackage.cpCtrlFlips = gradCpCtrlFlips;
+                triggerPoint.contextPackage.mfTrajectory = mfTraj;
+              }
+            }
+            triggers.push(triggerPoint);
+            timeline.push({ ...triggerPoint, ts: snap.ts });
+
+            // PO clears position gate
+            if (positionClosed) positionClosed = false;
+
+            v2Alerts.push({
+              alertType: 'POSITION_OPEN', bwcState, direction: null,
+              period, clock: cr.clock, floor: cr.floor, margin: cr.margin,
+              ctrlTeam: cr.ctrlTeam,
+              reasoning: `[GRADUATION PO: ${gRank}-Rank @ ${gradCpGraduation.cp_label}, MF=${gradMF?.toFixed(3)}, ${gradCpCtrlFlips} cp flips${positionClosed ? ', RE-ENTRY (position was closed)' : ''}]`,
+              decision: 'PENDING',
+            });
+          }
+        }
+
+        gradNextCpIdx++;
       }
     }
 
