@@ -2202,12 +2202,17 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
       const testable = rAlertTriggers.filter(t => !t.gated && t._state);
       let selected = testable;
       if (triggerIdx != null) {
-        const ti = parseInt(triggerIdx);
-        if (!isNaN(ti) && ti >= 0 && ti < testable.length) {
-          selected = [testable[ti]];
+        const tiStr = String(triggerIdx);
+        if (tiStr.includes('-')) {
+          const [start, end] = tiStr.split('-').map(Number);
+          if (!isNaN(start) && !isNaN(end) && start >= 0 && end < testable.length) {
+            selected = testable.slice(start, end + 1);
+          } else { selected = []; }
         } else {
-          // Out of range — return trigger list without running any
-          selected = [];
+          const ti = parseInt(triggerIdx);
+          if (!isNaN(ti) && ti >= 0 && ti < testable.length) {
+            selected = [testable[ti]];
+          } else { selected = []; }
         }
       }
 
