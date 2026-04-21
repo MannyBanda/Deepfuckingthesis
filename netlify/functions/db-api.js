@@ -337,6 +337,16 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS erosion_level TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS peak_floor REAL`; } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS exit_severity TEXT`; } catch(e) {}
+      // v2 graduation + learning agent columns
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS graduation_rank TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS mf_trajectory TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS combined_read TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS cp_eligible_count INTEGER`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS cp_ctrl_flips INTEGER`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS lane TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS position_closed BOOLEAN`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS is_flip_buy BOOLEAN`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS cp_mean_floor REAL`; } catch(e) {}
       try { await sql`ALTER TABLE poll_state ADD COLUMN IF NOT EXISTS monitor_last_run TIMESTAMPTZ`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS conviction_tier TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS conviction_combo TEXT`; } catch(e) {}
@@ -379,13 +389,7 @@ exports.handler = async (event) => {
         ts TIMESTAMPTZ DEFAULT NOW()
       )`;
       try { await sql`CREATE INDEX IF NOT EXISTS idx_learnings_date ON learnings (date)`; } catch(e) {}
-      try {
-        // Must remove existing duplicates before adding unique constraint
-        await sql`DELETE FROM monitor_observations WHERE id NOT IN (
-          SELECT MIN(id) FROM monitor_observations GROUP BY game_id, period, clock
-        )`;
-        await sql`ALTER TABLE monitor_observations ADD CONSTRAINT monitor_obs_game_period_clock_uniq UNIQUE (game_id, period, clock)`;
-      } catch(e) { /* constraint may already exist */ }
+      try { await sql`ALTER TABLE learnings ADD COLUMN IF NOT EXISTS scoring_version TEXT DEFAULT 'v1'`; } catch(e) {}
 
       await sql`CREATE TABLE IF NOT EXISTS replay_configs (
         name TEXT PRIMARY KEY,

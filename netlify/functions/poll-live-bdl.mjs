@@ -5159,6 +5159,7 @@ export default async function(req) {
               }
 
               // Build v2 agent prompt context
+              const mfTraj = lt.bwc_fired ? computeMFTrajectory(lt.checkpoints || [], lt.bwc_fired.team) : null;
               const v2Ctx = {
                 alertType: v2Type, alertTier: v2Tier,
                 ctrlTeam: ind.controlTeam, floor: ind.score.toFixed(2),
@@ -5211,7 +5212,7 @@ export default async function(req) {
                 cpCtrlFlips: lt.cp_ctrl_flips || 0,
                 lane: lt.lane || null,
                 pregameML: lt.pregame_ml || null,
-                mfTrajectory: lt.bwc_fired ? computeMFTrajectory(lt.checkpoints || [], lt.bwc_fired.team) : null,
+                mfTrajectory: mfTraj,
                 bwcFlipped: lt.bwc_flipped || false,
                 positionClosed: lt.position_closed || false,
                 originalBwcTeam: lt.original_bwc_team || null,
@@ -5282,7 +5283,9 @@ export default async function(req) {
                   floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class,
                   ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning,
                   i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent,
-                  bwc_state, erosion_level, peak_floor, exit_severity)
+                  bwc_state, erosion_level, peak_floor, exit_severity,
+                  graduation_rank, mf_trajectory, combined_read, cp_eligible_count,
+                  cp_ctrl_flips, lane, position_closed, is_flip_buy, cp_mean_floor)
                   VALUES (${game.id}, ${league}, ${v2Type}, ${currentPeriod}, ${clock}, ${ind.controlTeam},
                   ${ind.score}, ${margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal},
                   ${tpForBuy?.classification || null}, ${lsForBWC?.classification || null},
@@ -5291,7 +5294,12 @@ export default async function(req) {
                   ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null},
                   ${conviction.tier}, ${conviction.combo}, ${shouldSend},
                   ${v2BwcState || lt._prev_bwc_state}, ${v2Erosion.level},
-                  ${v2Erosion.peakFloor ?? null}, ${v2ExitSev?.severity ?? null})`;
+                  ${v2Erosion.peakFloor ?? null}, ${v2ExitSev?.severity ?? null},
+                  ${lt.po_fired?.rank || null}, ${mfTraj?.direction || null},
+                  ${alertCtx?.combinedRead?.read || null}, ${lt.cp_eligible_count || null},
+                  ${lt.cp_ctrl_flips || null}, ${lt.lane || null},
+                  ${lt.position_closed || false}, ${!!(v2IsBuy && lt._flipBuyContext)},
+                  ${lt.cp_mean_floor || null})`;
               } catch (e) { log(`${matchup}: v2 alert save failed: ${e.message}`); }
 
               log(`${matchup}: ${shouldSend ? '★' : '○'} ${v2Type} ${v2Tier} ${agentDecision} — ${ind.controlTeam} ${ind.score.toFixed(2)} ${ctrlTrailing ? 'trailing' : 'leading'} by ${margin}${ctrlEdge != null ? ', edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}`);
