@@ -270,6 +270,7 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
   const BWC_COOLDOWN_MS = 3 * 60 * 1000;  // 3 minutes
   let lastBuyTs = null;     // BUY cooldown — 3min between BUY fires
   const BUY_COOLDOWN_MS = 3 * 60 * 1000;
+  let positionClosed = false; // Tracks post-EXIT position gate for agent context
 
   for (let idx = 0; idx < snapshots.length; idx++) {
     const snap = snapshots[idx];
@@ -423,7 +424,7 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
             // Context package (mode >= context)
             if (mode !== 'mechanical') {
               triggerPoint.contextPackage = assembleContextPackage(
-                snap, cr, lt, erosion, bwcState, v2Alerts, snapshots, idx, hA, aA, useMonitor, storedLT
+                snap, cr, lt, erosion, bwcState, v2Alerts, snapshots, idx, hA, aA, useMonitor, storedLT, positionClosed
               );
             }
 
@@ -444,6 +445,11 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
               reasoning: `[${direction}: ${prevBwcState} → ${bwcState}${bwcState === 'EXIT' ? ' (' + (triggerPoint.exitSeverity?.severity || '') + ')' : ''}]`,
               decision: 'PENDING',
             });
+
+            // Track position gate for agent context
+            if (alertType === 'EXIT') positionClosed = true;
+            else if (alertType === 'THESIS_ALIVE') positionClosed = false;
+            else if (alertType === 'POSITION_OPEN') positionClosed = false;
           }
         }
       }
@@ -514,7 +520,7 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
           };
           if (mode !== 'mechanical') {
             triggerPoint.contextPackage = assembleContextPackage(
-              snap, cr, lt, erosion, bwcState, v2Alerts, snapshots, idx, hA, aA, useMonitor, storedLT
+              snap, cr, lt, erosion, bwcState, v2Alerts, snapshots, idx, hA, aA, useMonitor, storedLT, positionClosed
             );
           }
           triggers.push(triggerPoint);
@@ -654,6 +660,7 @@ POSITION HEALTH:
 Peak floor: ${ctx.peakFloor != null ? Number(ctx.peakFloor).toFixed(2) : 'N/A'} | Delta: ${ctx.peakDelta != null ? Number(ctx.peakDelta).toFixed(3) : 'N/A'} | Erosion: ${ctx.erosionLevel}
 Consecutive holds: ${ctx.consecutiveHolds}
 BWC lifecycle: ${ctx.bwcState}${ctx.bwcFirePeriod ? ' (BWC fired Q' + ctx.bwcFirePeriod + ', floor ' + (ctx.bwcFireFloor != null ? Number(ctx.bwcFireFloor).toFixed(2) : '?') + ')' : ''}
+${ctx.positionClosed ? 'POSITION STATE: CLOSED — an EXIT was previously SENT. The subscriber was told to exit this position. Any SEND decision on a position alert (POSITION_OPEN, THESIS_ALIVE) will RE-OPEN the position for the subscriber.' : ''}
 ${ctx.cpGraduation 
   ? 'Graduation: ' + ctx.cpPeakRank + '-Rank (graduated @ ' + ctx.cpGraduation.cp_label + ', floor was ' + Number(ctx.cpGraduation.floor).toFixed(2) + ') | ' + mfTrajStr + ' | MF=' + (ctx.cpMeanFloor?.toFixed(3) || '?') + ' minF=' + (ctx.cpMinFloor?.toFixed(2) || '?') + ' (' + ctx.cpEligibleCount + ' eligible CPs)'
     + (ctx.cpOppGraduation ? ' | OPPONENT ALSO GRADUATED ' + ctx.cpOppGraduation.rank + '-Rank @ ' + ctx.cpOppGraduation.cp_label : '')
@@ -676,6 +683,7 @@ RULES:
   : ctx.poRank === 'B' ? 'B-Rank: Sustained DOMINANT/STRONG conviction with lead 3+. ' + mfTrajStr + ' across ' + ctx.cpEligibleCount + ' checkpoints.'
   : ''}
   ${!ctx.bwcFlipped ? 'Lane: ' + (ctx.lane || 'unknown') + '. ' + (ctx.lane === 'underdog' ? 'UNDERDOG graduation — market has not priced structural control. Edge is structural floor vs implied probability. ALWAYS SEND.' : ctx.lane === 'heavy_favorite' ? 'Heavy favorite — PO confirms structural read but line may offer limited edge. Frame as position confirmation, not direct entry.' : 'Evaluate edge: floor vs current ML implied probability.') : ''}
+  ${ctx.positionClosed ? 'POST-EXIT RE-ENTRY: The subscriber was told to EXIT this position earlier in the game. If you SEND this POSITION_OPEN, you are telling them to RE-ENTER — this must clear a HIGHER bar than a normal PO. The structural thesis PREVIOUSLY FAILED (that is why EXIT fired). For re-entry to be justified: (1) graduation must show RISING or FLAT MF trajectory with 3+ eligible checkpoints — the team rebuilt control over sustained evaluation windows AFTER the EXIT, (2) structural stress combined read must be REINFORCING or DOMINANT — not COLLAPSING/SHIFT/ERODING, (3) the indicators that powered the EXIT (opponent gaining I1/I2/I4) must have flipped BACK to the BWC team in the per-quarter breakdown. If ANY of these fail, SUPPRESS — the graduation badge is stale anchoring from pre-EXIT dominance, not evidence of current control. DOWNGRADE is acceptable if graduation is mechanically real but stress is mixed.' : ''}
   This IS a position recommendation. Body should reference the arc from TRACKING (if prior alert exists), explain the graduation criteria met, current structural picture, and frame as: "Position open on [TEAM] — [rank] structural edge confirmed." Include odds/ML if available.
 - VALUE: team PREVIOUSLY held a structural lead (BWC fired Q${ctx.bwcFirePeriod || '?'}) but lost it while retaining structural control. Thesis: "structural edge that built the lead is intact — dip is temporary, plus-money entry." Verify: floor vs BWC fire floor, how lead was lost, deficit depth (1-7 best), timing (Q2-Q3 > Q4). If prior BWC_EDGE alerts flagged a RISK, reference whether it materialized. SUPPRESS if erosion is COLLAPSE AND structural indicators (I1/I4) have flipped to opponent.
 - THESIS_ALIVE: BWC team regained structural control AFTER an EXIT. This is a deep-value play — floor erosion is EXPECTED and is WHY plus-money exists. DO NOT treat floor level or erosion as primary factors. Weight hierarchy: (1) WHICH indicators does the BWC team still hold? I1 Disruption + I4 Game Control = structural core retained. (2) Is opponent's edge variance-based? oppI3Won=true means opponent is shooting well, not structurally dominant — this is the thesis. (3) TP path — STRONG RECOVERY or PROBABLE = mechanical path exists. (4) Deficit depth and timing. Floor being below BWC fire floor is the ENTRY SIGNAL, not a red flag. SUPPRESS only if: BWC team lost I1+I4 (structural core gone), OR opponent has non-I3 structural indicators (I1/I2/I4), OR TP is NO PATH/UNLIKELY with < 3 min left.
@@ -755,7 +763,7 @@ REASONING: [2-3 sentences — reference opponent profile, erosion, BWC lifecycle
 BODY: [If SEND: plain-English alert. If SUPPRESS: blank]`;
 }
 
-function assembleContextPackage(snap, cr, lt, erosion, bwcState, v2Alerts, allSnaps, idx, hA, aA, useMonitor = false, storedLT = null) {
+function assembleContextPackage(snap, cr, lt, erosion, bwcState, v2Alerts, allSnaps, idx, hA, aA, useMonitor = false, storedLT = null, positionClosed = false) {
   // Floor history (last 5 raw snapshots before current — agent reads these directly)
   const histStart = Math.max(0, idx - 5);
   const rawWindow = allSnaps.slice(histStart, idx + 1);
@@ -919,6 +927,7 @@ function assembleContextPackage(snap, cr, lt, erosion, bwcState, v2Alerts, allSn
     originalBwcTeam: storedLT?.original_bwc_team || null,
     isFlipBuy: false,
     flipBuyContext: null,
+    positionClosed,
   };
 }
 
