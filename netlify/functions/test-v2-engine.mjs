@@ -1893,6 +1893,15 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
         rlt._prev_bwc_state = rBwcState;
         rlt.checkpoints = [];
         rlt.next_cp_idx = 0;
+
+        // TRACKING trigger — first structural signal at BWC establishment
+        rAlertTriggers.push({
+          type: 'TRACKING', tier: 'FIRED', idx, period, clock,
+          floor: rc.floor, margin: rMargin, conv: rConv.tier, ctrl: rc.controlTeam,
+          positionClosedAtTrigger: rPositionClosed,
+          _state: captureState(rc, rConv, snap), ...captureBwcGrad(rc),
+        });
+
         // Skip past checkpoints already elapsed
         while (rlt.next_cp_idx < REPLAY_GRAD_CHECKPOINTS.length && REPLAY_GRAD_CHECKPOINTS[rlt.next_cp_idx].gameSec <= gameSec) {
           rlt.next_cp_idx++;
@@ -2022,9 +2031,11 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
 
         if (rTransAlertType) {
           // Post-EXIT position gate
-          if (rPositionClosed && !['EXIT', 'THESIS_ALIVE'].includes(rTransAlertType)) {
-            rAlertTriggers.push({ type: rTransAlertType, gated: 'position_closed', idx, period, clock, floor: rc.floor, margin: rMargin, from: rPrevBwcState, to: rBwcState });
-          } else {
+          // Position gate is tracked but NOT enforced at collection time.
+          // Instead, positionClosed state is carried on each trigger as metadata.
+          // The agent execution phase handles gating dynamically, so if THESIS_ALIVE
+          // SENDS, subsequent triggers see positionClosed=false.
+          {
             // Cooldown + material change gates
             const snapTs = snap.ts ? new Date(snap.ts).getTime() : Date.now();
             const msSinceAnyBwc = rLastAnyBwcTs ? (snapTs - rLastAnyBwcTs) : Infinity;
@@ -2047,6 +2058,7 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
                 from: rPrevBwcState, to: rBwcState,
                 idx, period, clock, floor: rc.floor, margin: rMargin,
                 conv: rConv.tier, ctrl: rc.controlTeam,
+                positionClosedAtTrigger: rPositionClosed,
                 _state: captureState(rc, rConv, snap), ...bg,
               });
 
@@ -2075,14 +2087,14 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
         && clockMin >= config.alerts.clock_gate_min
         && (!rLastBuyTs || (snapTs - rLastBuyTs) >= BUY_COOLDOWN)) {
       rLastBuyTs = snapTs;
-      rAlertTriggers.push({ type: 'BUY', tier: 'FIRED', idx, period, clock, floor: rc.floor, margin: rMargin, conv: rConv.tier, ctrl: rc.controlTeam, _state: captureState(rc, rConv, snap), ...captureBwcGrad(rc) });
+      rAlertTriggers.push({ type: 'BUY', tier: 'FIRED', idx, period, clock, floor: rc.floor, margin: rMargin, conv: rConv.tier, ctrl: rc.controlTeam, positionClosedAtTrigger: rPositionClosed, _state: captureState(rc, rConv, snap), ...captureBwcGrad(rc) });
     } else if (period >= config.alerts.buy_period_min && rc.floor >= (config.alerts.buy_floor_min - 0.10)
         && rc.floor < config.alerts.buy_floor_min
         && rTrailing && Math.abs(rMargin) <= config.alerts.buy_margin_max
         && clockMin >= config.alerts.clock_gate_min
         && (!rLastBuyTs || (snapTs - rLastBuyTs) >= BUY_COOLDOWN)) {
       rLastBuyTs = snapTs;
-      rAlertTriggers.push({ type: 'BUY', tier: 'CANDIDATE', idx, period, clock, floor: rc.floor, margin: rMargin, conv: rConv.tier, ctrl: rc.controlTeam, _state: captureState(rc, rConv, snap), ...captureBwcGrad(rc) });
+      rAlertTriggers.push({ type: 'BUY', tier: 'CANDIDATE', idx, period, clock, floor: rc.floor, margin: rMargin, conv: rConv.tier, ctrl: rc.controlTeam, positionClosedAtTrigger: rPositionClosed, _state: captureState(rc, rConv, snap), ...captureBwcGrad(rc) });
     }
 
     // ── FLOOR LOG (for agent floor history) ──
@@ -2219,8 +2231,35 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
       log(`[replay-agent] ${matchup}: running ${selected.length} of ${testable.length} triggers`);
       const agentRuns = [];
       const v2TrailAlerts = []; // for compounding
+      let agentPositionClosed = false; // Dynamic position gate — updated by agent decisions
 
       for (const t of selected) {
+        // Dynamic position gate: position-update alerts are gated when position is closed
+        // Only EXIT, THESIS_ALIVE, POSITION_OPEN, and BUY pass through
+        const posGateExempt = ['EXIT', 'THESIS_ALIVE', 'POSITION_OPEN', 'BUY'].includes(t.type);
+        if (agentPositionClosed && !posGateExempt) {
+          agentRuns.push({
+            trigger: `${t.type} Q${t.period} ${t.clock}`,
+            alertType: t.type, period: t.period, clock: t.clock,
+            decision: 'GATED',
+            reasoning: 'Position closed after EXIT — only THESIS_ALIVE, POSITION_OPEN, or BUY can re-open.',
+            positionClosed: true,
+            dynamicGated: true,
+          });
+          v2TrailAlerts.push({
+            alertType: t.type, bwcState: t.to,
+            period: t.period, clock: t.clock,
+            floor: t.floor, storedFloor: t.floor, margin: t.margin,
+            decision: 'GATED',
+            reasoning: 'Position closed — gated',
+          });
+          log(`[replay-agent] ${t.type} Q${t.period} ${t.clock} → GATED (position closed)`);
+          continue;
+        }
+
+        // Override positionClosed on the trigger with dynamic tracking
+        if (t._bwc) t._bwc.positionClosed = agentPositionClosed;
+
         // Build floor history from floorLog
         const histEnd = floorLog.findIndex(f => f.idx >= t.idx);
         const histSlice = floorLog.slice(Math.max(0, (histEnd > 0 ? histEnd : floorLog.length) - 5), histEnd > 0 ? histEnd + 1 : floorLog.length);
@@ -2298,7 +2337,7 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
           lane: game.live_tracking?.lane || null,
           pregameML: game.live_tracking?.pregame_ml || null,
           mfTrajectory: grad.mfTrajectory || null,
-          bwcFlipped: false, positionClosed: bwc.positionClosed || false,
+          bwcFlipped: false, positionClosed: agentPositionClosed,
           originalBwcTeam: null,
           isFlipBuy: false, flipBuyContext: null,
         };
@@ -2324,7 +2363,7 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
             trigger: `${t.type} Q${t.period} ${t.clock}`,
             alertType: t.type, period: t.period, clock: t.clock,
             bwcState: bwc.state || t.to || null,
-            positionClosed: bwc.positionClosed || false,
+            positionClosed: agentPositionClosed,
             decision: decisionMatch ? decisionMatch[1].toUpperCase() : 'PARSE_FAIL',
             reasoning: reasoningMatch ? reasoningMatch[1].trim() : text.substring(0, 200),
             body: bodyMatch ? bodyMatch[1].trim() : '',
@@ -2348,6 +2387,12 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
           });
 
           log(`[replay-agent] ${t.type} Q${t.period} ${t.clock} → ${result.decision}`);
+
+          // Dynamic position gate: update based on agent decision
+          if (result.decision === 'SEND') {
+            if (t.type === 'EXIT') agentPositionClosed = true;
+            else if (t.type === 'THESIS_ALIVE' || t.type === 'POSITION_OPEN') agentPositionClosed = false;
+          }
         } catch (e) {
           agentRuns.push({ trigger: `${t.type} Q${t.period} ${t.clock}`, error: e.message });
         }
