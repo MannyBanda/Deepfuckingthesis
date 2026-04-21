@@ -1878,15 +1878,15 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
     const peakKey = side + '_peak_floor';
     if (!rlt[peakKey] || rc.floor > rlt[peakKey]) rlt[peakKey] = rc.floor;
 
-    // BWC candidate detection
-    if (!rBwcFirstFired && period >= 2 && rc.floor >= config.alerts.bwc_floor_min && rMargin >= config.alerts.bwc_lead_min) {
+    // BWC candidate detection — Q1 hold accumulation allowed, fire gated on Q2+
+    if (!rBwcFirstFired && rc.floor >= config.alerts.bwc_floor_min && rMargin >= config.alerts.bwc_lead_min) {
       if (rBwcCandidateTeam === rc.controlTeam) {
         rBwcCandidateHolds++;
       } else {
         rBwcCandidateTeam = rc.controlTeam;
         rBwcCandidateHolds = 1;
       }
-      if (rBwcCandidateHolds >= 3) {
+      if (rBwcCandidateHolds >= 3 && period >= 2) {
         rBwcFirstFired = true;
         rlt.bwc_fired = { team: rc.controlTeam, period, clock, floor: rc.floor };
         rBwcState = rMargin >= 3 ? 'LOCK' : 'EDGE';
