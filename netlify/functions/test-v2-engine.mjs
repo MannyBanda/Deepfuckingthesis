@@ -477,9 +477,8 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
             });
 
             // Track position gate for agent context
+            // Only EXIT sets position closed. THESIS_ALIVE/PO only clear when agent SENDS.
             if (alertType === 'EXIT') positionClosed = true;
-            else if (alertType === 'THESIS_ALIVE') positionClosed = false;
-            else if (alertType === 'POSITION_OPEN') positionClosed = false;
           }
         }
       }
@@ -576,8 +575,7 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
             triggers.push(triggerPoint);
             timeline.push({ ...triggerPoint, ts: snap.ts });
 
-            // PO clears position gate
-            if (positionClosed) positionClosed = false;
+            // positionClosed stays true — only agent SEND should clear
 
             v2Alerts.push({
               alertType: 'POSITION_OPEN', bwcState, direction: null,
@@ -1985,7 +1983,7 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
             rAlertTriggers.push({ type: 'POSITION_OPEN', rank: gRank, idx, period, clock, floor: rc.floor, margin: rMargin, ctrl: rc.controlTeam, mf: rMF, cpFlips: rCpCtrlFlips, reopened_position: rPositionClosed || undefined,
               _state: captureState(rc, rConv, snap), ...bg,
             });
-            if (rPositionClosed) rPositionClosed = false;
+            // rPositionClosed stays true — only agent SEND should clear (post-collection)
           }
           if (gRank === 'B') {
             // B-rank confirmation gate
@@ -1997,7 +1995,7 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
               rAlertTriggers.push({ type: 'POSITION_OPEN', rank: gRank, idx, period, clock, floor: rc.floor, margin: rMargin, ctrl: rc.controlTeam, mf: rMF, cpFlips: rCpCtrlFlips, reopened_position: rPositionClosed || undefined,
                 _state: captureState(rc, rConv, snap), ...bg,
               });
-              if (rPositionClosed) rPositionClosed = false;
+              // rPositionClosed stays true — only agent SEND should clear (post-collection)
             }
           }
         }
@@ -2052,9 +2050,11 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
                 _state: captureState(rc, rConv, snap), ...bg,
               });
 
-              // Position gate: EXIT closes, THESIS_ALIVE re-opens
+              // Position gate: EXIT closes position. THESIS_ALIVE/POSITION_OPEN only re-open
+              // when agent decides SEND — since we collect triggers before running agent,
+              // we can only SET position_closed here, not clear it. Agent context carries
+              // positionClosed flag for THESIS_ALIVE/PO re-entry evaluation.
               if (rTransAlertType === 'EXIT') rPositionClosed = true;
-              else if (rTransAlertType === 'THESIS_ALIVE') rPositionClosed = false;
 
               // Update gate tracking
               rLastFiredAlert = { alertType: rTransAlertType, floor: rc.floor, margin: rMargin, bwcState: rBwcState };
