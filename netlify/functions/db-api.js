@@ -387,6 +387,14 @@ exports.handler = async (event) => {
         await sql`ALTER TABLE monitor_observations ADD CONSTRAINT monitor_obs_game_period_clock_uniq UNIQUE (game_id, period, clock)`;
       } catch(e) { /* constraint may already exist */ }
 
+      await sql`CREATE TABLE IF NOT EXISTS replay_configs (
+        name TEXT PRIMARY KEY,
+        league TEXT NOT NULL DEFAULT 'nba',
+        config_json JSONB NOT NULL,
+        description TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )`;
+
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'Schema initialized' }) };
     }
 
@@ -2460,6 +2468,41 @@ exports.handler = async (event) => {
         return { statusCode: 200, headers, body: JSON.stringify({ ok: false, message: 'No row found for ' + date, existing_dates: existing.map(r => r.date) }) };
       }
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, deleted: deleted.length }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // REPLAY CONFIG PRESETS — CRUD for named replay configs
+    // ═══════════════════════════════════════════════════════
+    if (action === 'list_presets') {
+      const rows = await sql`SELECT name, league, config_json, description, created_at FROM replay_configs ORDER BY created_at DESC`;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, presets: rows }) };
+    }
+
+    if (action === 'save_preset' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      const { name, league, config, description } = body;
+      if (!name || !config) return { statusCode: 400, headers, body: JSON.stringify({ error: 'name and config required' }) };
+      const configJson = typeof config === 'string' ? config : JSON.stringify(config);
+      await sql`INSERT INTO replay_configs (name, league, config_json, description)
+        VALUES (${name}, ${league || 'nba'}, ${configJson}::jsonb, ${description || null})
+        ON CONFLICT (name) DO UPDATE SET league = ${league || 'nba'}, config_json = ${configJson}::jsonb,
+          description = ${description || null}, created_at = NOW()`;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, saved: name }) };
+    }
+
+    if (action === 'delete_preset') {
+      const name = params.name;
+      if (!name) return { statusCode: 400, headers, body: JSON.stringify({ error: 'name required' }) };
+      await sql`DELETE FROM replay_configs WHERE name = ${name}`;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, deleted: name }) };
+    }
+
+    if (action === 'get_preset') {
+      const name = params.name;
+      if (!name) return { statusCode: 400, headers, body: JSON.stringify({ error: 'name required' }) };
+      const rows = await sql`SELECT * FROM replay_configs WHERE name = ${name}`;
+      if (rows.length === 0) return { statusCode: 404, headers, body: JSON.stringify({ error: 'Preset not found: ' + name }) };
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, preset: rows[0] }) };
     }
 
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Unknown action: ' + action }) };

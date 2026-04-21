@@ -1270,6 +1270,624 @@ async function runAgentTests(sql, gameId, triggers, v2Alerts, matchup, triggerId
   };
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// REPLAY MODE — recompute indicators from raw_stats_json with configurable params
+// Full cascade: indicators → floor → VT → TP/LS → BWC state → graduation → alerts
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── LEAGUE DEFAULTS ──
+const LEAGUE_DEFAULTS = {
+  nba: {
+    weights: { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 },
+    i1: { disrupt_gap: 1, pot_gap: 4, chaos_gap: 4 },
+    i2: { paint_gap: 6, rim_pct_gap: 0.10, rim_min_att: 6 },
+    i3: { efg_gap: 0.02, ar_gap: 5, cs3_gap: 2 },
+    i4: { bigLead_gap: 2, bigLead_contested_ratio: 0.75, q4_gap: 2 },
+    i5: { run_share_hi: 0.55, run_share_lo: 0.45, min_total_runs: 4 },
+    vt: { projected_threshold: 34, min_3pa: 15, deviation_floor: -5, deviation_ceiling: 15, discount_base: 0.25, discount_scale: 0.15, discount_cap: 0.50, mitigation_floor: 0.70, vt_bonus_scaling: 0.50 },
+    tp: { baseline_2pt: 0.52, quality_floor: 0.75, min_fg2a: 6, degradation_24: 0.70, degradation_18: 0.85 },
+    floor: { control_threshold: 0.50 },
+    alerts: { buy_floor_min: 0.65, buy_margin_max: 15, buy_period_min: 2, buy_ml_suppress: -400, buy_ml_candidate: -250, bwc_floor_min: 0.60, bwc_lead_min: 2, window_buy_floor_min: 0.45, window_buy_margin_min: -15, window_buy_margin_max: 5, window_buy_qtr_window_min: 0.75, recovery_floor_min: 0.30, clock_gate_min: 1.0 },
+    graduation: { mf_gate: 0.65, min_floor: 0.58, b_rank_confirm_cp: 'Q3_6', flip_mf_min: 0.55, flip_min_holds: 2 },
+  },
+  wnba: {
+    weights: { I1: 0.15, I2: 0.20, I3: 0.30, I4: 0.25, I5: 0.10 },
+    i1: { disrupt_gap: 1, pot_gap: 4, chaos_gap: 4 },
+    i2: { paint_gap: 4, rim_pct_gap: 0.10, rim_min_att: 6 },
+    i3: { efg_gap: 0.02, ar_gap: 5, cs3_gap: 2 },
+    i4: { bigLead_gap: 2, bigLead_contested_ratio: 0.75, q4_gap: 2 },
+    i5: { run_share_hi: 0.55, run_share_lo: 0.45, min_total_runs: 4 },
+    vt: { projected_threshold: 28, min_3pa: 10, deviation_floor: -5, deviation_ceiling: 15, discount_base: 0.25, discount_scale: 0.15, discount_cap: 0.50, mitigation_floor: 0.70, vt_bonus_scaling: 0.50 },
+    tp: { baseline_2pt: 0.48, quality_floor: 0.75, min_fg2a: 6, degradation_24: 0.70, degradation_18: 0.85 },
+    floor: { control_threshold: 0.50 },
+    alerts: { buy_floor_min: 0.60, buy_margin_max: 15, buy_period_min: 2, buy_ml_suppress: -400, buy_ml_candidate: -250, bwc_floor_min: 0.55, bwc_lead_min: 2, window_buy_floor_min: 0.45, window_buy_margin_min: -15, window_buy_margin_max: 5, window_buy_qtr_window_min: 0.75, recovery_floor_min: 0.30, clock_gate_min: 1.0 },
+    graduation: { mf_gate: 0.60, min_floor: 0.55, b_rank_confirm_cp: 'Q3_6', flip_mf_min: 0.55, flip_min_holds: 2 },
+  },
+  ncaamb: {
+    weights: { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 },
+    i1: { disrupt_gap: 1, pot_gap: 4, chaos_gap: 4 },
+    i2: { paint_gap: 6, rim_pct_gap: 0.10, rim_min_att: 6 },
+    i3: { efg_gap: 0.02, ar_gap: 5, cs3_gap: 2 },
+    i4: { bigLead_gap: 2, bigLead_contested_ratio: 0.75, q4_gap: 2 },
+    i5: { run_share_hi: 0.55, run_share_lo: 0.45, min_total_runs: 4 },
+    vt: { projected_threshold: 34, min_3pa: 15, deviation_floor: -5, deviation_ceiling: 15, discount_base: 0.25, discount_scale: 0.15, discount_cap: 0.50, mitigation_floor: 0.70, vt_bonus_scaling: 0.50 },
+    tp: { baseline_2pt: 0.49, quality_floor: 0.75, min_fg2a: 6, degradation_24: 0.70, degradation_18: 0.85 },
+    floor: { control_threshold: 0.50 },
+    alerts: { buy_floor_min: 0.65, buy_margin_max: 15, buy_period_min: 2, buy_ml_suppress: -400, buy_ml_candidate: -250, bwc_floor_min: 0.60, bwc_lead_min: 2, window_buy_floor_min: 0.45, window_buy_margin_min: -15, window_buy_margin_max: 5, window_buy_qtr_window_min: 0.75, recovery_floor_min: 0.30, clock_gate_min: 1.0 },
+    graduation: { mf_gate: 0.65, min_floor: 0.58, b_rank_confirm_cp: 'Q3_6', flip_mf_min: 0.55, flip_min_holds: 2 },
+  },
+};
+
+// Deep merge: user config overrides league defaults per-section
+function mergeConfig(...sources) {
+  const result = {};
+  for (const src of sources) {
+    if (!src) continue;
+    for (const [key, val] of Object.entries(src)) {
+      if (val && typeof val === 'object' && !Array.isArray(val) && result[key] && typeof result[key] === 'object') {
+        result[key] = { ...result[key], ...val };
+      } else {
+        result[key] = val;
+      }
+    }
+  }
+  return result;
+}
+
+function buildConfig(league, preset, inline) {
+  const base = LEAGUE_DEFAULTS[league] || LEAGUE_DEFAULTS.nba;
+  return mergeConfig(base, preset, inline);
+}
+
+// ── RECOMPUTE INDICATORS (pure function) ──
+// Takes raw_stats_json fields + config → returns full indicator set
+function recomputeIndicators(raw, config, context) {
+  const h = raw.home, a = raw.away;
+  const fallbacks = [];
+
+  // I1 — Disruption & Conversion
+  const hDisrupt = (h.stl || 0) + (h.blk || 0);
+  const aDisrupt = (a.stl || 0) + (a.blk || 0);
+  const disruptDiff = hDisrupt - aDisrupt;
+  const i1subA = disruptDiff > config.i1.disrupt_gap ? 1 : disruptDiff < -config.i1.disrupt_gap ? -1 : 0;
+  const potDiff = (h.pot || 0) - (a.pot || 0);
+  const i1subB = potDiff > config.i1.pot_gap ? 1 : potDiff < -config.i1.pot_gap ? -1 : 0;
+  let i1raw = i1subA + i1subB;
+
+  // Chaos layer — needs forced/unforced TOs from PBP enrichment
+  let i1chaos = null;
+  if (h.forced_to != null && a.forced_to != null) {
+    // h.forced_to = home team's TOs that were forced (by away). So away's forcing ability = h.forced_to
+    const hForcingAbility = a.forced_to || 0; // home forces away's TOs
+    const aForcingAbility = h.forced_to || 0; // away forces home's TOs
+    const hUnforced = h.unforced_to || 0;
+    const aUnforced = a.unforced_to || 0;
+    if (hForcingAbility >= aForcingAbility + config.i1.chaos_gap) i1raw += 0.5;
+    else if (aForcingAbility >= hForcingAbility + config.i1.chaos_gap) i1raw -= 0.5;
+    else if (hUnforced >= aUnforced + config.i1.chaos_gap) i1raw -= 0.5;
+    else if (aUnforced >= hUnforced + config.i1.chaos_gap) i1raw += 0.5;
+    i1chaos = { hForcing: hForcingAbility, aForcing: aForcingAbility, hUnforced, aUnforced };
+  } else {
+    fallbacks.push('i1_chaos');
+  }
+  const I1 = { score: i1raw > 0 ? 1 : i1raw === 0 ? 0.5 : 0, leader: i1raw > 0 ? 'home' : i1raw < 0 ? 'away' : 'EVEN', subA: i1subA, subB: i1subB, chaos: i1chaos, raw: i1raw };
+
+  // I2 — Interior Control
+  const paintDiff = (h.paint || 0) - (a.paint || 0);
+  const i2subA = paintDiff > config.i2.paint_gap ? 1 : paintDiff < -config.i2.paint_gap ? -1 : 0;
+  const hRimPct = (h.atRimA || 0) >= config.i2.rim_min_att ? (h.atRimM || 0) / h.atRimA : null;
+  const aRimPct = (a.atRimA || 0) >= config.i2.rim_min_att ? (a.atRimM || 0) / a.atRimA : null;
+  let i2subB = 0;
+  if (hRimPct != null && aRimPct != null) {
+    i2subB = (hRimPct - aRimPct) > config.i2.rim_pct_gap ? 1 : (aRimPct - hRimPct) > config.i2.rim_pct_gap ? -1 : 0;
+  }
+  const i2raw = i2subA + i2subB;
+  const I2 = { score: i2raw > 0 ? 1 : i2raw < 0 ? 0 : 0.5, leader: i2raw > 0 ? 'home' : i2raw < 0 ? 'away' : 'EVEN', subA: i2subA, subB: i2subB, raw: i2raw };
+
+  // I3 — Shot Quality & Creation
+  const hFGA = h.fga || 1, aFGA = a.fga || 1;
+  const hEFG = ((h.fgm || 0) + 0.5 * (h.fg3m || 0)) / hFGA;
+  const aEFG = ((a.fgm || 0) + 0.5 * (a.fg3m || 0)) / aFGA;
+  const hFGM = h.fgm || 1, aFGM = a.fgm || 1;
+  const hAR = ((h.ast || 0) / hFGM) * 100, aAR = ((a.ast || 0) / aFGM) * 100;
+  const i3subEFG = hEFG > aEFG + config.i3.efg_gap ? 1 : hEFG < aEFG - config.i3.efg_gap ? -1 : 0;
+  const i3subAR = hAR > aAR + config.i3.ar_gap ? 1 : hAR < aAR - config.i3.ar_gap ? -1 : 0;
+  let i3subCS3 = 0;
+  if (h.assisted_3pm != null && a.assisted_3pm != null) {
+    const hCS3 = h.assisted_3pm || 0, aCS3 = a.assisted_3pm || 0;
+    i3subCS3 = hCS3 > aCS3 + config.i3.cs3_gap ? 1 : hCS3 < aCS3 - config.i3.cs3_gap ? -1 : 0;
+  } else {
+    fallbacks.push('i3_cs3');
+  }
+  const i3raw = i3subEFG + i3subAR + i3subCS3;
+  const I3 = { score: i3raw > 0 ? 1 : i3raw === 0 ? 0.5 : 0, leader: i3raw > 0 ? 'home' : i3raw < 0 ? 'away' : 'EVEN', subEFG: i3subEFG, subAR: i3subAR, subCS3: i3subCS3, raw: i3raw };
+
+  // I4 — Game Control
+  const hBigLead = h.bigLead || 0, aBigLead = a.bigLead || 0;
+  let i4subA = 0;
+  if (hBigLead >= aBigLead + config.i4.bigLead_gap) {
+    i4subA = (aBigLead >= config.i4.bigLead_contested_ratio * hBigLead) ? 0 : 1;
+  } else if (aBigLead >= hBigLead + config.i4.bigLead_gap) {
+    i4subA = (hBigLead >= config.i4.bigLead_contested_ratio * aBigLead) ? 0 : -1;
+  }
+  // I4 subB — Q4+ uses live Q4 diff from context, pre-Q4 falls back to stored
+  let i4subB = 0;
+  if (context.q4ScoringDiff != null) {
+    i4subB = context.q4ScoringDiff > config.i4.q4_gap ? 1 : context.q4ScoringDiff < -config.i4.q4_gap ? -1 : 0;
+  } else if (context.seasonQ4Diff != null) {
+    i4subB = context.seasonQ4Diff > config.i4.q4_gap ? 1 : context.seasonQ4Diff < -config.i4.q4_gap ? -1 : 0;
+  } else {
+    fallbacks.push('i4_subB');
+  }
+  const i4raw = i4subA + i4subB;
+  const I4 = { score: i4raw > 0 ? 1 : i4raw === 0 ? 0.5 : 0, leader: i4raw > 0 ? 'home' : i4raw < 0 ? 'away' : 'EVEN', subA: i4subA, subB: i4subB, raw: i4raw };
+
+  // I5 — Sustained Execution (run share)
+  let I5 = { score: 0.5, leader: 'EVEN', runShare: null, raw: 0 };
+  if (raw.runs6) {
+    const hRuns = raw.runs6.home || 0, aRuns = raw.runs6.away || 0;
+    const totalRuns = raw.runs6.total || (hRuns + aRuns);
+    if (totalRuns >= config.i5.min_total_runs) {
+      const runShare = hRuns / totalRuns;
+      I5 = {
+        score: runShare > config.i5.run_share_hi ? 1 : runShare < config.i5.run_share_lo ? 0 : 0.5,
+        leader: runShare > config.i5.run_share_hi ? 'home' : runShare < config.i5.run_share_lo ? 'away' : 'EVEN',
+        runShare: Math.round(runShare * 1000) / 1000,
+        raw: runShare > config.i5.run_share_hi ? 1 : runShare < config.i5.run_share_lo ? -1 : 0,
+      };
+    }
+  }
+
+  // Composite
+  const W = config.weights;
+  const raw_composite = I1.score * W.I1 + I2.score * W.I2 + I3.score * W.I3 + I4.score * W.I4 + I5.score * W.I5;
+  const controlHome = raw_composite >= config.floor.control_threshold;
+  const controlTeam = controlHome ? context.hA : context.aA;
+  const floor = controlHome ? raw_composite : 1 - raw_composite;
+
+  // Resolve leaders from home/away to team aliases
+  function resolveLeader(l) { return l === 'home' ? context.hA : l === 'away' ? context.aA : 'EVEN'; }
+  I1.leader = resolveLeader(I1.leader);
+  I2.leader = resolveLeader(I2.leader);
+  I3.leader = resolveLeader(I3.leader);
+  I4.leader = resolveLeader(I4.leader);
+  I5.leader = resolveLeader(I5.leader);
+
+  return {
+    I1, I2, I3, I4, I5,
+    composite: Math.round(raw_composite * 100) / 100,
+    controlTeam,
+    floor: Math.round(floor * 100) / 100,
+    homeAlias: context.hA,
+    awayAlias: context.aA,
+    fallbacks,
+  };
+}
+
+// ── RECOMPUTE CONVICTION (from recomputed indicators) ──
+function recomputeConviction(ind) {
+  if (!ind || ind.floor == null) return { tier: 'NO ENTRY', combo: 'NONE', count: 0, indicatorsWon: [], indicatorsLost: [], pairs: [] };
+  const ctrlHome = ind.controlTeam === ind.homeAlias;
+  const wins = [], loses = [], even = [];
+  for (const [key, val] of [['I1', ind.I1], ['I2', ind.I2], ['I3', ind.I3], ['I4', ind.I4], ['I5', ind.I5]]) {
+    if (!val) { even.push(key); continue; }
+    const ctrlScore = ctrlHome ? val.score : 1 - val.score;
+    if (ctrlScore > 0.5) wins.push(key);
+    else if (ctrlScore < 0.5) loses.push(key);
+    else even.push(key);
+  }
+  const count = wins.length;
+  const has = (a, b) => wins.includes(a) && wins.includes(b);
+  const combo = count > 0 ? wins.join('+') : 'NONE';
+  const hasI4I5 = has('I4', 'I5'), hasI3I4 = has('I3', 'I4'), hasI3I5 = has('I3', 'I5');
+  const hasKillerPair = hasI4I5 || hasI3I4 || hasI3I5;
+  const isDanger = (
+    (count === 2 && wins.includes('I1') && wins.includes('I5') && !wins.includes('I3') && !wins.includes('I4')) ||
+    (count === 3 && wins.includes('I1') && wins.includes('I2') && wins.includes('I5') && !wins.includes('I3') && !wins.includes('I4')) ||
+    (count === 3 && wins.includes('I2') && wins.includes('I3') && wins.includes('I5') && !wins.includes('I4'))
+  );
+  let tier;
+  if (count >= 4 || hasI4I5) tier = 'DOMINANT';
+  else if (hasKillerPair && !isDanger) tier = 'STRONG';
+  else if (count >= 2 && !isDanger) tier = 'MODEST';
+  else if (count >= 1) tier = 'CONDITIONAL';
+  else tier = 'NO ENTRY';
+  const pairs = [];
+  if (hasI4I5) pairs.push('I4+I5');
+  if (hasI3I4) pairs.push('I3+I4');
+  if (hasI3I5) pairs.push('I3+I5');
+  return { tier, combo, count, indicatorsWon: wins, indicatorsLost: loses, indicatorsEven: even, pairs, isDanger };
+}
+
+// ── REPLAY WITH CONFIG ──
+// Full cascade: raw_stats_json → indicators → floor → BWC → graduation → alerts
+const REPLAY_GRAD_CHECKPOINTS = [
+  { label: 'Q2_9', period: 2, clockSec: 540, gameSec: 900 },
+  { label: 'Q2_6', period: 2, clockSec: 360, gameSec: 1080 },
+  { label: 'Q2_3', period: 2, clockSec: 180, gameSec: 1260 },
+  { label: 'Q2_END', period: 2, clockSec: 0, gameSec: 1440 },
+  { label: 'Q3_9', period: 3, clockSec: 540, gameSec: 1620 },
+  { label: 'Q3_6', period: 3, clockSec: 360, gameSec: 1800 },
+  { label: 'Q3_3', period: 3, clockSec: 180, gameSec: 1980 },
+  { label: 'Q3_END', period: 3, clockSec: 0, gameSec: 2160 },
+  { label: 'Q4_9', period: 4, clockSec: 540, gameSec: 2340 },
+  { label: 'Q4_6', period: 4, clockSec: 360, gameSec: 2520 },
+  { label: 'Q4_3', period: 4, clockSec: 180, gameSec: 2700 },
+];
+
+function snapToGameSec(period, clock) {
+  const parts = (clock || '0:00').split(':');
+  const min = parseInt(parts[0]) || 0;
+  const sec = parseInt(parts[1]) || 0;
+  const clockSec = min * 60 + sec;
+  return (period - 1) * 720 + (720 - clockSec);
+}
+
+function replayClassifyRank(convictionTier, ctrlMargin, consecutiveHolds, oppIndicatorCount) {
+  if (convictionTier === 'DOMINANT' && ctrlMargin >= 8 && consecutiveHolds >= 4 && oppIndicatorCount <= 1) return 'A';
+  if (oppIndicatorCount >= 3) return 'C';
+  if ((convictionTier === 'DOMINANT' || convictionTier === 'STRONG') && ctrlMargin >= 3 && consecutiveHolds >= 2) return 'B';
+  return 'C';
+}
+
+async function replayWithConfig(sql, gameId, config, diffOnly) {
+  // 1. Load game + snapshots
+  const gameRows = await sql`SELECT * FROM games WHERE id = ${gameId}`;
+  if (gameRows.length === 0) return { error: 'Game not found: ' + gameId };
+  const game = gameRows[0];
+  const hA = game.home_alias, aA = game.away_alias;
+  const matchup = game.matchup || (aA + '@' + hA);
+
+  const allSnaps = await sql`SELECT * FROM snapshots WHERE game_id = ${gameId} AND source = 'server' ORDER BY ts ASC`;
+  const snapshots = allSnaps.filter(s => s.raw_stats_json != null);
+  if (snapshots.length === 0) return { error: 'No snapshots with raw_stats_json for ' + matchup };
+  log(`[replay] ${matchup}: ${snapshots.length} snapshots (${allSnaps.length - snapshots.length} filtered)`);
+
+  // Load production alerts for comparison
+  const prodAlerts = await sql`
+    SELECT alert_type, alert_tier, period, clock, floor_score, margin, is_trailing,
+           control_team, agent_decision, conviction_tier, tp_class, ctrl_sust, ntfy_sent, ts
+    FROM alerts WHERE game_id = ${gameId} ORDER BY ts ASC`;
+
+  // 2. Derive Q4 scoring diff from snapshot sequence (for I4 subB)
+  // Find the last pre-Q4 score to compute Q4 diff at each Q4+ snapshot
+  let lastPreQ4Home = null, lastPreQ4Away = null;
+  for (const s of snapshots) {
+    const p = parsePeriod(s);
+    if (p < 4) { lastPreQ4Home = Number(s.home_pts); lastPreQ4Away = Number(s.away_pts); }
+  }
+
+  // 3. Replay loop — recompute + cascade
+  const rows = [];       // per-snapshot comparison
+  const divergences = { I1: 0, I2: 0, I3: 0, I4: 0, I5: 0, floor: 0, control: 0 };
+  let controlFlips = [];
+
+  // BWC state machine (recomputed)
+  let rlt = {}; // replay live_tracking
+  let rBwcState = null, rPrevBwcState = null;
+  let rBwcFirstFired = false;
+  let rBwcCandidateTeam = null, rBwcCandidateHolds = 0;
+
+  // Graduation state (recomputed)
+  let rCheckpoints = [];
+  let rNextCpIdx = 0;
+  let rCpHolds = 0, rCpOppHolds = 0;
+  let rCpPeakRank = 'C', rCpGraduation = null, rCpOppGraduation = null;
+  let rCpCtrlFlips = 0;
+  let rPoFired = false;
+
+  // Alert tracking (recomputed)
+  let rAlertTriggers = [];
+  let rLastBuyTs = null;
+  const BUY_COOLDOWN = 3 * 60 * 1000;
+
+  for (let idx = 0; idx < snapshots.length; idx++) {
+    const snap = snapshots[idx];
+    const period = parsePeriod(snap);
+    if (period < 1) continue;
+
+    const raw = typeof snap.raw_stats_json === 'string' ? JSON.parse(snap.raw_stats_json) : snap.raw_stats_json;
+    if (!raw || !raw.home || !raw.away) continue;
+
+    const clock = snap.clock || '0:00';
+    const homePts = Number(snap.home_pts), awayPts = Number(snap.away_pts);
+    const gameSec = snapToGameSec(period, clock);
+
+    // Build context for I4 subB
+    let q4ScoringDiff = null;
+    if (period >= 4 && lastPreQ4Home != null) {
+      const hQ4 = homePts - lastPreQ4Home;
+      const aQ4 = awayPts - lastPreQ4Away;
+      q4ScoringDiff = hQ4 - aQ4;
+    }
+
+    const recompCtx = { period, clock, hA, aA, q4ScoringDiff, seasonQ4Diff: null, gameSec };
+
+    // ── RECOMPUTE ──
+    const rc = recomputeIndicators(raw, config, recompCtx);
+    const rConv = recomputeConviction(rc);
+    const ctrlIsHome = rc.controlTeam === hA;
+    const ctrlPts = ctrlIsHome ? homePts : awayPts;
+    const oppPts = ctrlIsHome ? awayPts : homePts;
+    const rMargin = ctrlPts - oppPts;
+    const rTrailing = rMargin < 0;
+
+    // Stored values for comparison
+    const storedFloor = Number(snap.floor_score) || 0;
+    const storedCtrl = snap.floor_team || null;
+    const storedI1 = snap.i1 != null ? Number(snap.i1) : null;
+    const storedI2 = snap.i2 != null ? Number(snap.i2) : null;
+    const storedI3 = snap.i3 != null ? Number(snap.i3) : null;
+    const storedI4 = snap.i4 != null ? Number(snap.i4) : null;
+    const storedI5 = snap.i5 != null ? Number(snap.i5) : null;
+
+    // Compare (stored indicators are HOME-relative)
+    const rcI1Home = ctrlIsHome ? rc.I1.score : 1 - rc.I1.score;
+    const rcI2Home = ctrlIsHome ? rc.I2.score : 1 - rc.I2.score;
+    const rcI3Home = ctrlIsHome ? rc.I3.score : 1 - rc.I3.score;
+    const rcI4Home = ctrlIsHome ? rc.I4.score : 1 - rc.I4.score;
+    const rcI5Home = ctrlIsHome ? rc.I5.score : 1 - rc.I5.score;
+
+    const i1Changed = storedI1 != null && Math.abs(rcI1Home - storedI1) > 0.01;
+    const i2Changed = storedI2 != null && Math.abs(rcI2Home - storedI2) > 0.01;
+    const i3Changed = storedI3 != null && Math.abs(rcI3Home - storedI3) > 0.01;
+    const i4Changed = storedI4 != null && Math.abs(rcI4Home - storedI4) > 0.01;
+    const i5Changed = storedI5 != null && Math.abs(rcI5Home - storedI5) > 0.01;
+    const floorDelta = rc.floor - storedFloor;
+    const controlChanged = storedCtrl && rc.controlTeam !== storedCtrl;
+
+    if (i1Changed) divergences.I1++;
+    if (i2Changed) divergences.I2++;
+    if (i3Changed) divergences.I3++;
+    if (i4Changed) divergences.I4++;
+    if (i5Changed) divergences.I5++;
+    if (Math.abs(floorDelta) > 0.01) divergences.floor++;
+    if (controlChanged) { divergences.control++; controlFlips.push({ idx, period, clock, from: storedCtrl, to: rc.controlTeam }); }
+
+    const anyDivergence = i1Changed || i2Changed || i3Changed || i4Changed || i5Changed || Math.abs(floorDelta) > 0.01 || controlChanged;
+
+    // ── BWC STATE MACHINE (recomputed) ──
+    // Update tracking
+    if (!rlt.ctrl_team_current || rlt.ctrl_team_current !== rc.controlTeam) {
+      rlt.ctrl_flips = (rlt.ctrl_flips || 0) + 1;
+      rlt.ctrl_team_current = rc.controlTeam;
+      rlt.ctrl_team_holds = 1;
+    } else {
+      rlt.ctrl_team_holds = (rlt.ctrl_team_holds || 0) + 1;
+    }
+    const side = ctrlIsHome ? 'home' : 'away';
+    const peakKey = side + '_peak_floor';
+    if (!rlt[peakKey] || rc.floor > rlt[peakKey]) rlt[peakKey] = rc.floor;
+
+    // BWC candidate detection
+    if (!rBwcFirstFired && period >= 2 && rc.floor >= config.alerts.bwc_floor_min && rMargin >= config.alerts.bwc_lead_min) {
+      if (rBwcCandidateTeam === rc.controlTeam) {
+        rBwcCandidateHolds++;
+      } else {
+        rBwcCandidateTeam = rc.controlTeam;
+        rBwcCandidateHolds = 1;
+      }
+      if (rBwcCandidateHolds >= 3) {
+        rBwcFirstFired = true;
+        rlt.bwc_fired = { team: rc.controlTeam, period, clock, floor: rc.floor };
+        rBwcState = rMargin >= 3 ? 'LOCK' : 'EDGE';
+        rlt._prev_bwc_state = rBwcState;
+        rlt.checkpoints = [];
+        rlt.next_cp_idx = 0;
+        // Skip past checkpoints already elapsed
+        while (rlt.next_cp_idx < REPLAY_GRAD_CHECKPOINTS.length && REPLAY_GRAD_CHECKPOINTS[rlt.next_cp_idx].gameSec <= gameSec) {
+          rlt.next_cp_idx++;
+        }
+      }
+    } else if (!rBwcFirstFired && rBwcCandidateTeam && rc.controlTeam !== rBwcCandidateTeam) {
+      rBwcCandidateTeam = null;
+      rBwcCandidateHolds = 0;
+    }
+
+    // BWC state updates
+    if (rBwcFirstFired) {
+      const bwcTeam = rlt.bwc_fired.team;
+      if (rc.controlTeam === bwcTeam) {
+        rBwcState = rMargin >= 3 ? 'LOCK' : rMargin >= 1 ? 'EDGE' : rMargin >= -7 ? 'VALUE' : 'DEEP_TRAIL';
+      } else {
+        rBwcState = 'EXIT';
+      }
+
+      // ── GRADUATION CHECKPOINTS ──
+      while (rlt.next_cp_idx < REPLAY_GRAD_CHECKPOINTS.length) {
+        const nextCp = REPLAY_GRAD_CHECKPOINTS[rlt.next_cp_idx];
+        if (gameSec < nextCp.gameSec) break;
+
+        // Capture checkpoint
+        const cpOppCount = rConv.indicatorsLost.length;
+        const cpEntry = {
+          label: nextCp.label, floor: rc.floor, team: rc.controlTeam,
+          margin: rMargin, conv: rConv.tier, oppCount: cpOppCount,
+          period, clock,
+        };
+
+        // Checkpoint-level control flip
+        if (rCheckpoints.length > 0 && rCheckpoints[rCheckpoints.length - 1].team !== cpEntry.team) {
+          rCpCtrlFlips++;
+        }
+        rCheckpoints.push(cpEntry);
+
+        // Update cp holds
+        if (rc.controlTeam === bwcTeam) {
+          rCpHolds++;
+          rCpOppHolds = 0;
+        } else {
+          rCpHolds = 0;
+          if (rMargin >= 2 && rc.floor >= config.alerts.bwc_floor_min) {
+            rCpOppHolds++;
+          } else {
+            rCpOppHolds = 0;
+          }
+        }
+
+        // BWC team rank classification
+        if (rc.controlTeam === bwcTeam && rMargin >= 2 && rc.floor >= config.alerts.bwc_floor_min) {
+          const cpRank = replayClassifyRank(rConv.tier, rMargin, rCpHolds, cpOppCount);
+          const RANK_ORDER = { C: 0, B: 1, A: 2 };
+          if (RANK_ORDER[cpRank] > (RANK_ORDER[rCpPeakRank] || 0)) {
+            rCpPeakRank = cpRank;
+            rCpGraduation = { rank: cpRank, cp_label: nextCp.label, cp_idx: rlt.next_cp_idx, floor: rc.floor, margin: rMargin };
+          }
+        }
+
+        // Opponent rank
+        if (rc.controlTeam !== bwcTeam && rCpOppHolds >= 2 && rMargin >= 2 && rc.floor >= config.alerts.bwc_floor_min) {
+          const oppRank = replayClassifyRank(rConv.tier, rMargin, rCpOppHolds, cpOppCount);
+          if (oppRank === 'B' || oppRank === 'A') {
+            const prevOppRank = rCpOppGraduation?.rank || 'C';
+            const RANK_ORDER = { C: 0, B: 1, A: 2 };
+            if (RANK_ORDER[oppRank] > (RANK_ORDER[prevOppRank] || 0)) {
+              rCpOppGraduation = { rank: oppRank, cp_label: nextCp.label, cp_idx: rlt.next_cp_idx, floor: rc.floor, margin: rMargin };
+            }
+          }
+        }
+
+        // MF stats
+        const eligible = rCheckpoints.filter(cp => cp.team === bwcTeam && cp.floor >= config.alerts.bwc_floor_min && cp.margin >= 2);
+        const rMF = eligible.length > 0 ? eligible.reduce((s, cp) => s + cp.floor, 0) / eligible.length : null;
+        const rMinF = eligible.length > 0 ? Math.min(...eligible.map(cp => cp.floor)) : null;
+
+        // ── POSITION OPEN CHECK ──
+        if (rCpGraduation && !rPoFired && rc.controlTeam === bwcTeam) {
+          const gRank = rCpGraduation.rank;
+          const mfGate = config.graduation.mf_gate;
+          const minFGate = config.graduation.min_floor;
+
+          if (gRank === 'A' && rMF >= mfGate && rMinF >= minFGate) {
+            rPoFired = true;
+            rAlertTriggers.push({ type: 'POSITION_OPEN', rank: gRank, idx, period, clock, floor: rc.floor, margin: rMargin, mf: rMF, cpFlips: rCpCtrlFlips });
+          }
+          if (gRank === 'B') {
+            // B-rank confirmation gate
+            const bConfirmCp = config.graduation.b_rank_confirm_cp || 'Q3_6';
+            const bConfirmSec = REPLAY_GRAD_CHECKPOINTS.find(cp => cp.label === bConfirmCp)?.gameSec || 1800;
+            if (gameSec >= bConfirmSec && rMF >= mfGate && rMinF >= minFGate) {
+              rPoFired = true;
+              rAlertTriggers.push({ type: 'POSITION_OPEN', rank: gRank, idx, period, clock, floor: rc.floor, margin: rMargin, mf: rMF, cpFlips: rCpCtrlFlips });
+            }
+          }
+        }
+
+        rlt.next_cp_idx++;
+      }
+    }
+
+    // ── BUY CHECK (recomputed) ──
+    const clockMin = parseFloat(clock) || 0;
+    const snapTs = snap.ts ? new Date(snap.ts).getTime() : Date.now();
+    if (period >= config.alerts.buy_period_min && rc.floor >= config.alerts.buy_floor_min
+        && rTrailing && Math.abs(rMargin) <= config.alerts.buy_margin_max
+        && clockMin >= config.alerts.clock_gate_min
+        && (!rLastBuyTs || (snapTs - rLastBuyTs) >= BUY_COOLDOWN)) {
+      rLastBuyTs = snapTs;
+      rAlertTriggers.push({ type: 'BUY', tier: 'FIRED', idx, period, clock, floor: rc.floor, margin: rMargin, conv: rConv.tier, ctrl: rc.controlTeam });
+    } else if (period >= config.alerts.buy_period_min && rc.floor >= (config.alerts.buy_floor_min - 0.10)
+        && rc.floor < config.alerts.buy_floor_min
+        && rTrailing && Math.abs(rMargin) <= config.alerts.buy_margin_max
+        && clockMin >= config.alerts.clock_gate_min
+        && (!rLastBuyTs || (snapTs - rLastBuyTs) >= BUY_COOLDOWN)) {
+      rLastBuyTs = snapTs;
+      rAlertTriggers.push({ type: 'BUY', tier: 'CANDIDATE', idx, period, clock, floor: rc.floor, margin: rMargin, conv: rConv.tier, ctrl: rc.controlTeam });
+    }
+
+    // ── BUILD ROW ──
+    const indicatorsChanged = [i1Changed && 'I1', i2Changed && 'I2', i3Changed && 'I3', i4Changed && 'I4', i5Changed && 'I5'].filter(Boolean);
+
+    if (!diffOnly || anyDivergence) {
+      rows.push({
+        idx, period, clock,
+        home_pts: homePts, away_pts: awayPts,
+        stored: {
+          floor: storedFloor, controlTeam: storedCtrl,
+          I1: storedI1, I2: storedI2, I3: storedI3, I4: storedI4, I5: storedI5,
+          tp: snap.tp_class || null, ls: snap.ls_class || null,
+        },
+        recomputed: {
+          floor: rc.floor, controlTeam: rc.controlTeam,
+          I1: rcI1Home, I2: rcI2Home, I3: rcI3Home, I4: rcI4Home, I5: rcI5Home,
+          conviction: rConv.tier,
+          bwcState: rBwcFirstFired ? rBwcState : null,
+          graduation: rCpGraduation ? rCpGraduation.rank : null,
+          fallbacks: rc.fallbacks.length > 0 ? rc.fallbacks : undefined,
+        },
+        divergence: anyDivergence ? {
+          floor_delta: Math.round(floorDelta * 1000) / 1000,
+          indicators_changed: indicatorsChanged.length > 0 ? indicatorsChanged : undefined,
+          control_flipped: controlChanged || undefined,
+          bwc_state: rBwcFirstFired ? rBwcState : undefined,
+        } : undefined,
+      });
+    }
+
+    rPrevBwcState = rBwcState;
+  }
+
+  // ── COMPARE ALERTS ──
+  const storedBuyAlerts = prodAlerts.filter(a => a.alert_type === 'BUY');
+  const recomputedBuyAlerts = rAlertTriggers.filter(a => a.type === 'BUY');
+  const storedPOAlerts = prodAlerts.filter(a => a.alert_type === 'POSITION_OPEN');
+  const recomputedPOAlerts = rAlertTriggers.filter(a => a.type === 'POSITION_OPEN');
+
+  // ── BUILD SUMMARY ──
+  const totalSnaps = snapshots.length;
+  const divergedSnaps = rows.filter(r => r.divergence).length;
+
+  const summary = {
+    game: matchup,
+    game_id: gameId,
+    config_diff: Object.keys(config).length > 0 ? 'custom' : 'league defaults',
+    total_snapshots: totalSnaps,
+    snapshots_diverged: divergedSnaps,
+    divergence_rate: totalSnaps > 0 ? (divergedSnaps / totalSnaps * 100).toFixed(1) + '%' : '0%',
+
+    indicator_changes: {
+      I1: { changed: divergences.I1, pct: (divergences.I1 / totalSnaps * 100).toFixed(1) + '%' },
+      I2: { changed: divergences.I2, pct: (divergences.I2 / totalSnaps * 100).toFixed(1) + '%' },
+      I3: { changed: divergences.I3, pct: (divergences.I3 / totalSnaps * 100).toFixed(1) + '%' },
+      I4: { changed: divergences.I4, pct: (divergences.I4 / totalSnaps * 100).toFixed(1) + '%' },
+      I5: { changed: divergences.I5, pct: (divergences.I5 / totalSnaps * 100).toFixed(1) + '%' },
+    },
+
+    floor_impact: {
+      diverged_snaps: divergences.floor,
+      control_flips: controlFlips.length,
+      flip_details: controlFlips,
+    },
+
+    bwc_impact: {
+      bwc_fired: rBwcFirstFired,
+      bwc_team: rlt.bwc_fired?.team || null,
+      bwc_fire_period: rlt.bwc_fired?.period || null,
+      stored_bwc_fire: prodAlerts.find(a => a.alert_type === 'BUY WINDOW CLOSING' || a.alert_type === 'TRACKING')?.period || null,
+    },
+
+    graduation_impact: {
+      recomputed_graduation: rCpGraduation,
+      recomputed_opp_graduation: rCpOppGraduation,
+      po_fired: rPoFired,
+      cp_flips: rCpCtrlFlips,
+      checkpoints_captured: rCheckpoints.length,
+    },
+
+    alert_impact: {
+      stored_buy_count: storedBuyAlerts.length,
+      recomputed_buy_count: recomputedBuyAlerts.length,
+      stored_po_count: storedPOAlerts.length,
+      recomputed_po_count: recomputedPOAlerts.length,
+      recomputed_triggers: rAlertTriggers,
+      stored_alerts: prodAlerts.map(a => ({ type: a.alert_type, tier: a.alert_tier, period: a.period, clock: a.clock, floor: a.floor_score, margin: a.margin, decision: a.agent_decision })),
+    },
+  };
+
+  return { summary, snapshots: rows, checkpoints: rCheckpoints };
+}
+
+
 // ── HANDLER ──
 
 export const handler = async (event) => {
@@ -1284,6 +1902,64 @@ export const handler = async (event) => {
     const dbUrl = process.env.DATABASE_URL;
     if (!dbUrl) return { statusCode: 500, headers, body: JSON.stringify({ error: 'DATABASE_URL not configured' }) };
     const sql = neon(dbUrl);
+
+    // ── PRESET MANAGEMENT (action= routes) ──
+    if (params.action === 'list_presets') {
+      const rows = await sql`SELECT name, league, config_json, description, created_at FROM replay_configs ORDER BY created_at DESC`;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, presets: rows }, null, 2) };
+    }
+    if (params.action === 'save_preset') {
+      const body = event.httpMethod === 'POST' ? JSON.parse(event.body || '{}') : {};
+      const name = body.name || params.name;
+      const league = body.league || params.league || 'nba';
+      const description = body.description || params.description || null;
+      let configJson = body.config || (params.config ? JSON.parse(Buffer.from(params.config, 'base64').toString()) : null);
+      if (!name || !configJson) return { statusCode: 400, headers, body: JSON.stringify({ error: 'name and config required' }) };
+      const configStr = typeof configJson === 'string' ? configJson : JSON.stringify(configJson);
+      await sql`INSERT INTO replay_configs (name, league, config_json, description)
+        VALUES (${name}, ${league}, ${configStr}::jsonb, ${description})
+        ON CONFLICT (name) DO UPDATE SET league = ${league}, config_json = ${configStr}::jsonb, description = ${description}, created_at = NOW()`;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, saved: name }) };
+    }
+    if (params.action === 'delete_preset') {
+      if (!params.name) return { statusCode: 400, headers, body: JSON.stringify({ error: 'name required' }) };
+      await sql`DELETE FROM replay_configs WHERE name = ${params.name}`;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, deleted: params.name }) };
+    }
+    if (params.action === 'get_preset') {
+      if (!params.name) return { statusCode: 400, headers, body: JSON.stringify({ error: 'name required' }) };
+      const rows = await sql`SELECT * FROM replay_configs WHERE name = ${params.name}`;
+      if (rows.length === 0) return { statusCode: 404, headers, body: JSON.stringify({ error: 'Not found: ' + params.name }) };
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, preset: rows[0] }, null, 2) };
+    }
+
+    // ── REPLAY MODE ──
+    if (mode === 'replay') {
+      if (!params.game_id) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id required for mode=replay' }) };
+
+      // Build config: league defaults → preset → inline overrides
+      const league = params.league || 'nba';
+      let presetConfig = null;
+      if (params.preset) {
+        const presetRows = await sql`SELECT config_json FROM replay_configs WHERE name = ${params.preset}`;
+        if (presetRows.length > 0) {
+          presetConfig = typeof presetRows[0].config_json === 'string' ? JSON.parse(presetRows[0].config_json) : presetRows[0].config_json;
+        } else {
+          return { statusCode: 404, headers, body: JSON.stringify({ error: 'Preset not found: ' + params.preset }) };
+        }
+      }
+      let inlineConfig = null;
+      if (params.config) {
+        try { inlineConfig = JSON.parse(Buffer.from(params.config, 'base64').toString()); }
+        catch (e) { return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid base64 config: ' + e.message }) }; }
+      }
+
+      const finalConfig = buildConfig(league, presetConfig, inlineConfig);
+      const diffOnly = params.diff_only === 'true';
+
+      const result = await replayWithConfig(sql, params.game_id, finalConfig, diffOnly);
+      return { statusCode: 200, headers, body: JSON.stringify({ mode: 'replay', league, preset: params.preset || null, config: finalConfig, ...result }, null, 2) };
+    }
 
     if (params.all === 'true') {
       // Run all 9 test games
@@ -1338,7 +2014,9 @@ export const handler = async (event) => {
 
     // Default: list available games
     return { statusCode: 200, headers, body: JSON.stringify({
-      usage: '?all=true or ?game_id=X, mode=mechanical|context|agent, monitor=true for monitor enrichment',
+      usage: '?all=true or ?game_id=X, mode=mechanical|context|agent|replay, monitor=true for monitor enrichment',
+      replay_usage: '?mode=replay&game_id=X&league=nba&preset=NAME&config=BASE64_JSON&diff_only=true',
+      preset_actions: '?action=list_presets | save_preset | delete_preset&name=X | get_preset&name=X',
       testGames: Object.entries(TEST_GAMES).map(([id, m]) => ({ id, ...m })),
     }, null, 2) };
 
