@@ -2186,7 +2186,12 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
       let selected = testable;
       if (triggerIdx != null) {
         const ti = parseInt(triggerIdx);
-        if (!isNaN(ti) && ti >= 0 && ti < testable.length) selected = [testable[ti]];
+        if (!isNaN(ti) && ti >= 0 && ti < testable.length) {
+          selected = [testable[ti]];
+        } else {
+          // Out of range — return trigger list without running any
+          selected = [];
+        }
       }
 
       log(`[replay-agent] ${matchup}: running ${selected.length} of ${testable.length} triggers`);
