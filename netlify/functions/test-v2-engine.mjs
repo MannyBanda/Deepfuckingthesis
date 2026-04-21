@@ -1677,7 +1677,7 @@ function replayClassifyRank(convictionTier, ctrlMargin, consecutiveHolds, oppInd
   return 'C';
 }
 
-async function replayWithConfig(sql, gameId, config, diffOnly) {
+async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false, floorSource = 'stored', triggerIdx = null) {
   // 1. Load game + snapshots
   const gameRows = await sql`SELECT * FROM games WHERE id = ${gameId}`;
   if (gameRows.length === 0) return { error: 'Game not found: ' + gameId };
@@ -1733,6 +1733,57 @@ async function replayWithConfig(sql, gameId, config, diffOnly) {
   let rLastFiredAlert = {};
   let rLastDegradeTs = null, rLastRecoverTs = null, rLastAnyBwcTs = null;
   let rPositionClosed = false;
+
+  // State capture helper for agent integration
+  function captureState(rc, rConv, snap) {
+    const sj = snap.sust_json ? (typeof snap.sust_json === 'string' ? JSON.parse(snap.sust_json) : snap.sust_json) : null;
+    const ctrlIsHome = rc.controlTeam === hA;
+    return {
+      i1: (ctrlIsHome ? rc.I1.score : 1 - rc.I1.score).toFixed(2),
+      i2: (ctrlIsHome ? rc.I2.score : 1 - rc.I2.score).toFixed(2),
+      i3: (ctrlIsHome ? rc.I3.score : 1 - rc.I3.score).toFixed(2),
+      i4: (ctrlIsHome ? rc.I4.score : 1 - rc.I4.score).toFixed(2),
+      i5: (ctrlIsHome ? rc.I5.score : 1 - rc.I5.score).toFixed(2),
+      ctrlIndicators: rConv.indicatorsWon.join('+') || 'none',
+      ctrlIndicatorCount: rConv.indicatorsWon.length,
+      oppIndicatorsWon: rConv.indicatorsLost.join('+') || 'none',
+      oppIndicatorCount: rConv.indicatorsLost.length,
+      oppI3Won: rConv.indicatorsLost.includes('I3'),
+      ctrlSust: ctrlIsHome ? (sj?.home?.tier || null) : (sj?.away?.tier || null),
+      oppSust: ctrlIsHome ? (sj?.away?.tier || null) : (sj?.home?.tier || null),
+      tpClass: snap.tp_class || null, lsClass: snap.ls_class || null,
+      convictionTier: rConv.tier, convictionCombo: rConv.combo, convictionPairs: rConv.pairs?.join(', ') || '',
+    };
+  }
+
+  function captureBwcGrad(rc) {
+    const bwcTeam = rlt.bwc_fired?.team;
+    const side = bwcTeam === hA ? 'home' : bwcTeam === aA ? 'away' : (rc.controlTeam === hA ? 'home' : 'away');
+    const peak = rlt[side + '_peak_floor'] || null;
+    const currentFloor = (bwcTeam === rc.controlTeam) ? rc.floor : (1 - rc.floor);  // BWC team's floor
+    const peakDelta = peak ? currentFloor - peak : 0;
+    const edge = (peak || 0) - 0.50;
+    const erosionLevel = edge > 0 && peakDelta <= -(edge * 0.70) ? 'COLLAPSE' : edge > 0 && peakDelta <= -(edge * 0.40) ? 'CAUTION' : 'STABLE';
+    const elig = rCheckpoints.filter(cp => cp.team === (rlt.bwc_fired?.team) && cp.floor >= 0.60 && cp.margin >= 2);
+    const mf = elig.length > 0 ? elig.reduce((s, cp) => s + cp.floor, 0) / elig.length : null;
+    const minF = elig.length > 0 ? Math.min(...elig.map(cp => cp.floor)) : null;
+    const mfTraj = rlt.bwc_fired ? computeMFTrajectory(rCheckpoints, rlt.bwc_fired.team) : null;
+    return {
+      _bwc: { team: rlt.bwc_fired?.team, firePeriod: rlt.bwc_fired?.period, fireFloor: rlt.bwc_fired?.floor, state: rBwcState, holds: rlt.ctrl_team_holds || 0, ctrlFlips: rlt.ctrl_flips || 0, peakFloor: peak, peakDelta, erosionLevel, positionClosed: rPositionClosed },
+      _grad: { graduation: rCpGraduation, oppGraduation: rCpOppGraduation, peakRank: rCpPeakRank, mf, minF, cpFlips: rCpCtrlFlips, eligibleCount: elig.length, mfTrajectory: mfTraj, poFired: rPoFired },
+    };
+  }
+
+  // Floor history tracking (for agent context)
+  const floorLog = []; // {idx, period, clock, storedFloor, storedTeam, recomputedFloor, recomputedTeam, homePts, awayPts, tp, ls}
+
+  // Load game_context for structural stress (stored — not recomputed)
+  let gameContextRows = [];
+  if (runAgent) {
+    try {
+      gameContextRows = await sql`SELECT period, context_json FROM game_context WHERE game_id = ${gameId} ORDER BY period ASC`;
+    } catch (e) { log(`[replay] No game_context: ${e.message}`); }
+  }
 
   for (let idx = 0; idx < snapshots.length; idx++) {
     const snap = snapshots[idx];
@@ -1913,7 +1964,10 @@ async function replayWithConfig(sql, gameId, config, diffOnly) {
 
           if (gRank === 'A' && rMF >= mfGate && rMinF >= minFGate) {
             rPoFired = true;
-            rAlertTriggers.push({ type: 'POSITION_OPEN', rank: gRank, idx, period, clock, floor: rc.floor, margin: rMargin, mf: rMF, cpFlips: rCpCtrlFlips, reopened_position: rPositionClosed || undefined });
+            const bg = captureBwcGrad(rc);
+            rAlertTriggers.push({ type: 'POSITION_OPEN', rank: gRank, idx, period, clock, floor: rc.floor, margin: rMargin, mf: rMF, cpFlips: rCpCtrlFlips, reopened_position: rPositionClosed || undefined,
+              _state: captureState(rc, rConv, snap), ...bg,
+            });
             if (rPositionClosed) rPositionClosed = false;
           }
           if (gRank === 'B') {
@@ -1922,7 +1976,10 @@ async function replayWithConfig(sql, gameId, config, diffOnly) {
             const bConfirmSec = REPLAY_GRAD_CHECKPOINTS.find(cp => cp.label === bConfirmCp)?.gameSec || 1800;
             if (gameSec >= bConfirmSec && rMF >= mfGate && rMinF >= minFGate) {
               rPoFired = true;
-              rAlertTriggers.push({ type: 'POSITION_OPEN', rank: gRank, idx, period, clock, floor: rc.floor, margin: rMargin, mf: rMF, cpFlips: rCpCtrlFlips, reopened_position: rPositionClosed || undefined });
+              const bg = captureBwcGrad(rc);
+              rAlertTriggers.push({ type: 'POSITION_OPEN', rank: gRank, idx, period, clock, floor: rc.floor, margin: rMargin, mf: rMF, cpFlips: rCpCtrlFlips, reopened_position: rPositionClosed || undefined,
+                _state: captureState(rc, rConv, snap), ...bg,
+              });
               if (rPositionClosed) rPositionClosed = false;
             }
           }
@@ -1968,11 +2025,14 @@ async function replayWithConfig(sql, gameId, config, diffOnly) {
             const shouldFire = cooldownPassed && (stateChanged || materialChange);
 
             if (shouldFire) {
+              const bg = captureBwcGrad(rc);
+
               rAlertTriggers.push({
                 type: rTransAlertType, tier: 'FIRED', direction: rDir,
                 from: rPrevBwcState, to: rBwcState,
                 idx, period, clock, floor: rc.floor, margin: rMargin,
                 conv: rConv.tier, ctrl: rc.controlTeam,
+                _state: captureState(rc, rConv, snap), ...bg,
               });
 
               // Position gate: EXIT closes, THESIS_ALIVE re-opens
@@ -1998,15 +2058,24 @@ async function replayWithConfig(sql, gameId, config, diffOnly) {
         && clockMin >= config.alerts.clock_gate_min
         && (!rLastBuyTs || (snapTs - rLastBuyTs) >= BUY_COOLDOWN)) {
       rLastBuyTs = snapTs;
-      rAlertTriggers.push({ type: 'BUY', tier: 'FIRED', idx, period, clock, floor: rc.floor, margin: rMargin, conv: rConv.tier, ctrl: rc.controlTeam });
+      rAlertTriggers.push({ type: 'BUY', tier: 'FIRED', idx, period, clock, floor: rc.floor, margin: rMargin, conv: rConv.tier, ctrl: rc.controlTeam, _state: captureState(rc, rConv, snap), ...captureBwcGrad(rc) });
     } else if (period >= config.alerts.buy_period_min && rc.floor >= (config.alerts.buy_floor_min - 0.10)
         && rc.floor < config.alerts.buy_floor_min
         && rTrailing && Math.abs(rMargin) <= config.alerts.buy_margin_max
         && clockMin >= config.alerts.clock_gate_min
         && (!rLastBuyTs || (snapTs - rLastBuyTs) >= BUY_COOLDOWN)) {
       rLastBuyTs = snapTs;
-      rAlertTriggers.push({ type: 'BUY', tier: 'CANDIDATE', idx, period, clock, floor: rc.floor, margin: rMargin, conv: rConv.tier, ctrl: rc.controlTeam });
+      rAlertTriggers.push({ type: 'BUY', tier: 'CANDIDATE', idx, period, clock, floor: rc.floor, margin: rMargin, conv: rConv.tier, ctrl: rc.controlTeam, _state: captureState(rc, rConv, snap), ...captureBwcGrad(rc) });
     }
+
+    // ── FLOOR LOG (for agent floor history) ──
+    floorLog.push({
+      idx, period, clock,
+      storedFloor, storedCtrl,
+      recomputedFloor: rc.floor, recomputedTeam: rc.controlTeam,
+      homePts, awayPts,
+      tp: snap.tp_class || null, ls: snap.ls_class || null,
+    });
 
     // ── BUILD ROW ──
     const indicatorsChanged = [i1Changed && 'I1', i2Changed && 'I2', i3Changed && 'I3', i4Changed && 'I4', i5Changed && 'I5'].filter(Boolean);
@@ -2106,7 +2175,168 @@ async function replayWithConfig(sql, gameId, config, diffOnly) {
     },
   };
 
-  return { summary, snapshots: rows, checkpoints: rCheckpoints };
+  // ── AGENT INTEGRATION (mode=replay with agent=true) ──
+  let agentResults = null;
+  if (runAgent) {
+    const anthropicKey = process.env.ANTHROPIC_API_KEY;
+    if (!anthropicKey) {
+      agentResults = { error: 'No ANTHROPIC_API_KEY' };
+    } else {
+      const testable = rAlertTriggers.filter(t => !t.gated && t._state);
+      let selected = testable;
+      if (triggerIdx != null) {
+        const ti = parseInt(triggerIdx);
+        if (!isNaN(ti) && ti >= 0 && ti < testable.length) selected = [testable[ti]];
+      }
+
+      log(`[replay-agent] ${matchup}: running ${selected.length} of ${testable.length} triggers`);
+      const agentRuns = [];
+      const v2TrailAlerts = []; // for compounding
+
+      for (const t of selected) {
+        // Build floor history from floorLog
+        const histEnd = floorLog.findIndex(f => f.idx >= t.idx);
+        const histSlice = floorLog.slice(Math.max(0, (histEnd > 0 ? histEnd : floorLog.length) - 5), histEnd > 0 ? histEnd + 1 : floorLog.length);
+        const floorHistory = histSlice.map(f => {
+          const fl = floorSource === 'recomputed' ? f.recomputedFloor : f.storedFloor;
+          const ft = floorSource === 'recomputed' ? f.recomputedTeam : f.storedCtrl;
+          return `Q${f.period} ${f.clock}: ${ft} ${Number(fl).toFixed(2)} (${f.awayPts}-${f.homePts}) TP:${f.tp || '?'} LS:${f.ls || '?'}`;
+        }).reverse().join('\n');
+
+        // Build prior alert trail from v2TrailAlerts
+        const parseClockSecs = (c) => { const p = String(c || '0:00').split(':'); return (parseInt(p[0])||0)*60 + (parseInt(p[1])||0); };
+        const tClockSecs = parseClockSecs(t.clock);
+        const priorAlerts = v2TrailAlerts.filter(a => a.period < t.period || (a.period === t.period && parseClockSecs(a.clock) > tClockSecs));
+        const priorAlertTrail = priorAlerts.length > 0
+          ? priorAlerts.map(a => {
+              const fl = floorSource === 'recomputed' ? a.floor : a.storedFloor;
+              return `${a.alertType}[${a.bwcState||'-'}] Q${a.period} ${a.clock}: floor ${Number(fl).toFixed(2)}, margin ${a.margin} → ${a.decision}: ${a.reasoning}`;
+            }).reverse().slice(0, 5).join('\n')
+          : 'None';
+
+        // Load structural stress from game_context
+        const gcMatch = gameContextRows
+          .filter(r => Number(r.period) <= t.period)
+          .sort((a, b) => Number(b.period) - Number(a.period))[0];
+        let gcCtx = null;
+        if (gcMatch) {
+          try { gcCtx = typeof gcMatch.context_json === 'string' ? JSON.parse(gcMatch.context_json) : gcMatch.context_json; }
+          catch (e) { /* bad JSON */ }
+        }
+
+        // Build v2Ctx from recomputed data + stored supporting data
+        const s = t._state;
+        const bwc = t._bwc || {};
+        const grad = t._grad || {};
+        const v2Ctx = {
+          alertType: t.type, alertTier: t.tier || 'FIRED',
+          ctrlTeam: t.ctrl || t.floor_team, floor: Number(t.floor).toFixed(2),
+          margin: t.margin,
+          awayAlias: aA, homeAlias: hA,
+          awayPts: floorLog.find(f => f.idx === t.idx)?.awayPts || 0,
+          homePts: floorLog.find(f => f.idx === t.idx)?.homePts || 0,
+          ctrlIsHome: (t.ctrl || t.floor_team) === hA,
+          period: t.period, clock: t.clock,
+          bwcTeam: bwc.team || rlt.bwc_fired?.team || null,
+          // Indicators (ctrl-relative, recomputed)
+          i1: s.i1, i2: s.i2, i3: s.i3, i4: s.i4, i5: s.i5,
+          ctrlIndicators: s.ctrlIndicators, ctrlIndicatorCount: s.ctrlIndicatorCount,
+          ctrlSust: s.ctrlSust, oppSust: s.oppSust,
+          tpClass: s.tpClass, lsClass: s.lsClass,
+          oppIndicatorCount: s.oppIndicatorCount, oppIndicatorsWon: s.oppIndicatorsWon, oppI3Won: s.oppI3Won,
+          convictionTier: s.convictionTier, convictionCombo: s.convictionCombo, convictionPairs: s.convictionPairs,
+          // Position health (recomputed)
+          peakFloor: bwc.peakFloor || null, peakDelta: bwc.peakDelta || null,
+          erosionLevel: bwc.erosionLevel || 'STABLE',
+          consecutiveHolds: bwc.holds || 0,
+          bwcState: bwc.state || t.to || null,
+          bwcFirePeriod: bwc.firePeriod || null, bwcFireFloor: bwc.fireFloor || null,
+          // Floor + prior trail
+          floorHistory, priorAlertTrail,
+          // Structural stress (stored)
+          windowData: gcCtx?.rollingWindow || null,
+          quarterDiffs: gcCtx?.quarterDiffs || null,
+          accelData: gcCtx?.acceleration || null,
+          combinedRead: gcCtx?.combinedRead || null,
+          // Graduation (recomputed)
+          poRank: grad.poFired ? grad.peakRank : null,
+          cpMeanFloor: grad.mf ? Math.round(grad.mf * 1000) / 1000 : null,
+          cpMinFloor: grad.minF ? Math.round(grad.minF * 1000) / 1000 : null,
+          cpEligibleCount: grad.eligibleCount || 0,
+          cpPeakRank: grad.peakRank || null,
+          cpGraduation: grad.graduation || null,
+          cpOppGraduation: grad.oppGraduation || null,
+          cpCtrlFlips: grad.cpFlips || 0,
+          ctrlFlips: bwc.ctrlFlips || 0,
+          lane: game.live_tracking?.lane || null,
+          pregameML: game.live_tracking?.pregame_ml || null,
+          mfTrajectory: grad.mfTrajectory || null,
+          bwcFlipped: false, positionClosed: bwc.positionClosed || false,
+          originalBwcTeam: null,
+          isFlipBuy: false, flipBuyContext: null,
+        };
+
+        const prompt = buildV2AgentPrompt(v2Ctx);
+
+        try {
+          const resp = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' },
+            body: JSON.stringify({ model: 'claude-opus-4-6', max_tokens: 600, messages: [{ role: 'user', content: prompt }] }),
+          });
+
+          if (!resp.ok) { agentRuns.push({ trigger: `${t.type} Q${t.period} ${t.clock}`, error: `API ${resp.status}` }); continue; }
+          const data = await resp.json();
+          const text = data.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+
+          const decisionMatch = text.match(/DECISION:\s*(SEND|SUPPRESS|DOWNGRADE)/i);
+          const reasoningMatch = text.match(/REASONING:\s*([\s\S]*?)(?=BODY:|$)/i);
+          const bodyMatch = text.match(/BODY:\s*([\s\S]*)/i);
+
+          const result = {
+            trigger: `${t.type} Q${t.period} ${t.clock}`,
+            alertType: t.type, period: t.period, clock: t.clock,
+            bwcState: bwc.state || t.to || null,
+            positionClosed: bwc.positionClosed || false,
+            decision: decisionMatch ? decisionMatch[1].toUpperCase() : 'PARSE_FAIL',
+            reasoning: reasoningMatch ? reasoningMatch[1].trim() : text.substring(0, 200),
+            body: bodyMatch ? bodyMatch[1].trim() : '',
+            floorSource,
+            stressPresent: !!(gcCtx?.rollingWindow?.available),
+            stressCombinedRead: gcCtx?.combinedRead?.read || null,
+            referencesStress: text.includes('window') || text.includes('COLLAPSING') || text.includes('FLIPPED') || text.includes('combined read') || text.includes('rolling'),
+            referencesPositionClosed: text.includes('EXIT') || text.includes('re-entry') || text.includes('RE-ENTRY') || text.includes('position closed') || text.includes('CLOSED'),
+            tokens: data.usage,
+          };
+          agentRuns.push(result);
+
+          // Update trail for compounding
+          const storedFloorAtTrigger = floorLog.find(f => f.idx === t.idx)?.storedFloor || t.floor;
+          v2TrailAlerts.push({
+            alertType: t.type, bwcState: bwc.state || t.to,
+            period: t.period, clock: t.clock,
+            floor: t.floor, storedFloor: storedFloorAtTrigger, margin: t.margin,
+            decision: result.decision,
+            reasoning: result.reasoning.substring(0, 150),
+          });
+
+          log(`[replay-agent] ${t.type} Q${t.period} ${t.clock} → ${result.decision}`);
+        } catch (e) {
+          agentRuns.push({ trigger: `${t.type} Q${t.period} ${t.clock}`, error: e.message });
+        }
+      }
+
+      agentResults = {
+        totalTestable: testable.length,
+        ran: selected.length,
+        floorSource,
+        triggers: testable.map((t, i) => `[${i}] ${t.type} Q${t.period} ${t.clock} floor=${Number(t.floor).toFixed(2)} margin=${t.margin}`),
+        results: agentRuns,
+      };
+    }
+  }
+
+  return { summary, snapshots: rows, checkpoints: rCheckpoints, agentResults };
 }
 
 
@@ -2178,9 +2408,12 @@ export const handler = async (event) => {
 
       const finalConfig = buildConfig(league, presetConfig, inlineConfig);
       const diffOnly = params.diff_only === 'true';
+      const runAgent = params.agent === 'true';
+      const floorSource = params.floor_source || 'stored';
+      const replayTriggerIdx = params.trigger_idx != null ? params.trigger_idx : null;
 
-      const result = await replayWithConfig(sql, params.game_id, finalConfig, diffOnly);
-      return { statusCode: 200, headers, body: JSON.stringify({ mode: 'replay', league, preset: params.preset || null, config: finalConfig, ...result }, null, 2) };
+      const result = await replayWithConfig(sql, params.game_id, finalConfig, diffOnly, runAgent, floorSource, replayTriggerIdx);
+      return { statusCode: 200, headers, body: JSON.stringify({ mode: 'replay', league, preset: params.preset || null, config: finalConfig, agent: runAgent, floor_source: floorSource, ...result }, null, 2) };
     }
 
     if (params.all === 'true') {
