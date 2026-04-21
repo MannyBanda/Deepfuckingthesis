@@ -2280,10 +2280,12 @@ function computeVolumeThreat(summary, pbpAudit, sust, league, minsElapsed) {
     // Pace-adjusted projection to full game
     var projected3PA = minsElapsed > 5 ? live3PA * (GAME_MINUTES / minsElapsed) : live3PA * 2;
 
-    // Check thresholds: projected >= 34, conversion within [-5%, +15%] of baseline, min 8 attempts
+    // Check thresholds: projected >= 34, conversion within [-5%, +15%] of baseline, min 15 attempts
+    // Min gate raised from 8 → 15: small-sample VT in Q1 was nuking floors before cross-side
+    // mitigation had enough data to detect shared game profiles (MIN@DEN G2: 8 3PA triggered 47% discount)
     var deviation = live3Pct - baseline;
     var withinRange = deviation >= -5 && deviation <= 15;
-    var active = projected3PA >= 34 && withinRange && live3PA >= 8;
+    var active = projected3PA >= 34 && withinRange && live3PA >= 15;
 
     // Discount for floor modifier — scales with projected volume
     var discount = 0;
