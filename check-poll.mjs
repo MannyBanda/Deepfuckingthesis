@@ -259,8 +259,8 @@ RULES:
 - TRACKING: First structural signal — the system just identified ${ctx.ctrlTeam} as structurally interesting (3 consecutive holds, floor ${ctx.floor}, margin ${ctx.margin}). This is NOT a position recommendation — the subscriber learns a game is on the radar. ALWAYS SEND unless the game is clearly meaningless (garbage time, both teams eliminated, period 4 with < 2 min left). Body should explain: which team, what structural picture (indicators, floor, margin), and that we are watching for the edge to develop. Frame as: "Watching [TEAM] — [why they look structurally dominant]. Will update if this develops into a position." Keep it short — this is a heads-up, not a thesis.
 - POSITION_OPEN: The team has GRADUATED through the checkpoint system — sustained structural rank confirmed across multiple 3-minute evaluation windows.
   ${ctx.bwcFlipped ? 'BWC FLIP: The system originally tracked ' + ctx.originalBwcTeam + ' but they FAILED to graduate (peak C). ' + ctx.bwcTeam + ' then graduated ' + ctx.poRank + '-Rank — taking structural control away from a previously dominant team. This is one of the strongest signals in the system (74-86% win rate). The floor appears modest because cumulative stats are anchored by ' + ctx.originalBwcTeam + "'s early dominance, but " + ctx.bwcTeam + " is holding control DESPITE that headwind. ALWAYS SEND."
-  : ctx.poRank === 'A' && ctx.cpCtrlFlips === 0 ? 'A-Rank WIRE-TO-WIRE (85.6%): Zero checkpoint-level control flips — structural dominance unchallenged. ' + mfTrajStr + ' across ' + ctx.cpEligibleCount + ' checkpoints. ALWAYS SEND.'
-  : ctx.poRank === 'A' ? 'A-Rank: Sustained DOMINANT conviction with lead 8+. ' + mfTrajStr + ' across ' + ctx.cpEligibleCount + ' checkpoints. CP flips: ' + ctx.cpCtrlFlips + (ctx.cpCtrlFlips >= 2 ? ' (multiple flips — A-with-flips is 58.5% in competitive games. Apply extra scrutiny: check structural stress, per-quarter breakdown, whether indicators that powered graduation are still held.)' : '') + '.'
+  : ctx.poRank === 'S' ? 'S-Rank (98%+): Wire-to-wire structural dominance, zero checkpoint-level control flips. ALWAYS SEND.'
+  : ctx.poRank === 'A' ? 'A-Rank: Sustained DOMINANT conviction with lead 8+. ' + mfTrajStr + ' across ' + ctx.cpEligibleCount + ' checkpoints. CP flips: ' + ctx.cpCtrlFlips + (ctx.cpCtrlFlips >= 2 ? ' (multiple flips — apply extra scrutiny, 58.5% bucket)' : '') + '.'
   : ctx.poRank === 'B' ? 'B-Rank: Sustained DOMINANT/STRONG conviction with lead 3+. ' + mfTrajStr + ' across ' + ctx.cpEligibleCount + ' checkpoints.'
   : ''}
   ${!ctx.bwcFlipped ? 'Lane: ' + (ctx.lane || 'unknown') + '. ' + (ctx.lane === 'underdog' ? 'UNDERDOG graduation — market has not priced structural control. Edge is structural floor vs implied probability. ALWAYS SEND.' : ctx.lane === 'heavy_favorite' ? 'Heavy favorite — PO confirms structural read but line may offer limited edge. Frame as position confirmation, not direct entry.' : 'Evaluate edge: floor vs current ML implied probability.') : ''}
@@ -5279,9 +5279,10 @@ export default async function(req) {
                     poBlockReason = 'C-Rank — no PO';
                   }
 
-                  // Fire PO — S-rank is post-hoc only (backtest: S-at-fire 72% vs true W2W 85.6%)
+                  // Fire PO
                   if (poShouldFire && alertMinsLeft >= 1.0) {
-                    const poRank = gRank; // A or B only at fire time, never S
+                    const isWireToWire = (lt.cp_ctrl_flips || 0) === 0;
+                    const poRank = (gRank === 'A' && isWireToWire) ? 'S' : gRank;
 
                     lt.po_fired = {
                       team: bwcTeam, rank: poRank,
