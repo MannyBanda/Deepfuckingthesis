@@ -831,11 +831,20 @@ function renderCard(id){
       if(hasDisagree)html+='<div class="signal-card disagree"><div class="sc-label">Disagreement</div><div class="sc-body">'+esc(pred.disagreement)+'</div></div>';
       if(hasClosing)html+='<div class="signal-card closing"><div class="sc-label">Closing</div><div class="sc-body">'+esc(pred.closing)+'</div></div>';
       html+='</div></div>';
+      // Analyze / Re-analyze button
+      if(state==='LIVE'||state==='HALF'){
+        if(cs.analyzing)html+='<div style="margin-top:8px;text-align:center"><button class="analyze-btn" disabled style="opacity:0.6;color:var(--amber);border-color:var(--amber);background:rgba(251,191,36,0.08)">\u23f3 Analyzing\u2026</button></div>';
+        else html+='<div style="margin-top:8px;text-align:center"><button class="analyze-btn" onclick="triggerAnalysis(\''+id+'\')" style="color:var(--amber);border-color:var(--amber);background:rgba(251,191,36,0.08)">\u26a1 Re-Analyze</button></div>';
+      }
       html+='</div>';
     } else {
       // Fallback — no analysis yet
       html+='<div class="sonnet-signal"><div class="ss-fallback">';
-      html+='<div class="ss-fallback-text">Awaiting Sonnet analysis</div>';
+      if(cs.analyzing)html+='<div class="ss-fallback-text">\u23f3 Running Sonnet analysis\u2026</div>';
+      else{
+        html+='<div class="ss-fallback-text">No analysis yet</div>';
+        if(state==='LIVE'||state==='HALF'||state==='FINAL')html+='<button class="analyze-btn" onclick="triggerAnalysis(\''+id+'\')" style="margin-top:8px">\u26a1 Analyze</button>';
+      }
       html+='</div></div>';
     }
   }
@@ -1281,6 +1290,129 @@ function toggleColl(gameId,section){
   var key=gameId+'_'+section;
   _collOpen[key]=!_collOpen[key];
   renderCard(gameId);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ANALYZE — trigger manual Sonnet analysis
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Build minimal SR-shaped summary from BDL box score for analyze.js
+function buildV3Summary(boxScore){
+  var hTeam=boxScore.home_team?.team||boxScore.home_team||{};
+  var aTeam=boxScore.visitor_team?.team||boxScore.visitor_team||{};
+  var hA=hTeam.abbreviation||'HOME',aA=aTeam.abbreviation||'AWAY';
+  var hPlayers=boxScore.home_team?.players||[];
+  var aPlayers=boxScore.visitor_team?.players||[];
+
+  function rollup(players){
+    var s={field_goals_made:0,field_goals_att:0,three_points_made:0,three_points_att:0,two_points_made:0,two_points_att:0,free_throws_made:0,free_throws_att:0,assists:0,steals:0,blocks:0,offensive_rebounds:0,defensive_rebounds:0,rebounds:0,turnovers:0,total_turnovers:0,personal_fouls:0,points:0,bench_points:0};
+    players.forEach(function(p){s.field_goals_made+=p.fgm||0;s.field_goals_att+=p.fga||0;s.three_points_made+=p.fg3m||0;s.three_points_att+=p.fg3a||0;s.free_throws_made+=p.ftm||0;s.free_throws_att+=p.fta||0;s.assists+=p.ast||0;s.steals+=p.stl||0;s.blocks+=p.blk||0;s.offensive_rebounds+=p.oreb||0;s.defensive_rebounds+=p.dreb||0;s.rebounds+=p.reb||0;s.turnovers+=p.turnover||0;s.personal_fouls+=p.pf||0;s.points+=p.pts||0;});
+    s.total_turnovers=s.turnovers;s.two_points_made=s.field_goals_made-s.three_points_made;s.two_points_att=s.field_goals_att-s.three_points_att;
+    var fga=s.field_goals_att||1;
+    s.field_goals_pct=+(s.field_goals_made/fga*100).toFixed(1);
+    s.three_points_pct=s.three_points_att>0?+(s.three_points_made/s.three_points_att*100).toFixed(1):0;
+    s.two_points_pct=s.two_points_att>0?+(s.two_points_made/s.two_points_att*100).toFixed(1):0;
+    s.free_throws_pct=s.free_throws_att>0?+(s.free_throws_made/s.free_throws_att*100).toFixed(1):0;
+    s.effective_fg_pct=+((s.field_goals_made+0.5*s.three_points_made)/fga*100).toFixed(1);
+    s.possessions=+(fga-s.offensive_rebounds+s.turnovers+0.4*s.free_throws_att).toFixed(1);
+    s.offensive_points_per_possession=s.possessions>0?+(s.points/s.possessions).toFixed(2):0;
+    s.points_in_paint=0;s.points_in_the_paint=0;s.points_off_turnovers=0;s.second_chance_pts=0;s.fast_break_pts=0;s.biggest_lead=0;
+    return s;
+  }
+  function mapPlayers(pArr){return pArr.map(function(p){var pl=p.player||{};return{full_name:((pl.first_name||'')+' '+(pl.last_name||'')).trim(),position:pl.position||'',played:(p.min&&p.min!=='0')||(p.pts>0),active:true,starter:p.starter||false,statistics:{minutes:p.min||'0',field_goals_made:p.fgm||0,field_goals_att:p.fga||0,three_points_made:p.fg3m||0,three_points_att:p.fg3a||0,three_points_pct:p.fg3_pct||0,free_throws_made:p.ftm||0,free_throws_att:p.fta||0,assists:p.ast||0,steals:p.stl||0,blocks:p.blk||0,turnovers:p.turnover||0,personal_fouls:p.pf||0,points:p.pts||0}};});}
+  var hStats=rollup(hPlayers),aStats=rollup(aPlayers);
+  hStats.defensive_points_per_possession=hStats.possessions>0?+(aStats.points/hStats.possessions).toFixed(2):0;
+  aStats.defensive_points_per_possession=aStats.possessions>0?+(hStats.points/aStats.possessions).toFixed(2):0;
+  return{
+    _dataSource:'BDL',status:'inprogress',quarter:boxScore.period||0,clock:normalizeBdlClock(boxScore.time,boxScore.status),
+    home:{name:hTeam.name||'',alias:hA,points:boxScore.home_team_score||hStats.points,statistics:hStats,players:mapPlayers(hPlayers),bonus:boxScore.home_in_bonus||false},
+    away:{name:aTeam.name||'',alias:aA,points:boxScore.visitor_team_score||aStats.points,statistics:aStats,players:mapPlayers(aPlayers),bonus:boxScore.visitor_in_bonus||false}
+  };
+}
+
+async function triggerAnalysis(gameId){
+  var cs=cardState[gameId];if(!cs)return;
+  if(cs.analyzing&&cs._analyzeStart&&(Date.now()-cs._analyzeStart>60000))cs.analyzing=false;
+  if(cs.analyzing)return;
+  cs.analyzing=true;cs._analyzeStart=Date.now();
+  renderCard(gameId);
+
+  var g=games.find(function(x){return x.id===gameId;});
+  var hA=g?.home?.alias||'HOME',aA=g?.away?.alias||'AWAY';
+
+  try{
+    // 1. Fetch BDL box score for summaryData
+    var bdlId=bdlGameMap[gameId];
+    var summaryData=null;
+    if(bdlId){
+      try{
+        var boxRes=await bdl('box_scores',{game_id:String(bdlId)});
+        var boxArr=boxRes.data||[];
+        if(boxArr.length>0)summaryData=buildV3Summary(boxArr[0]);
+      }catch(e){console.warn('[ANALYZE] BDL box score fetch failed:',e.message);}
+    }
+    if(!summaryData){cs.analyzing=false;renderCard(gameId);console.error('[ANALYZE] No summary data available');return;}
+
+    // 2. Build payload from cardState
+    var period=g?.period?'Q'+g.period:'';
+    var score=aA+' '+(g?.awayPoints||0)+' - '+hA+' '+(g?.homePoints||0);
+    var payload={
+      summaryData:summaryData,
+      homeTeam:hA,awayTeam:aA,
+      period:period,score:score,
+      gameClock:g?.clock||null,gamePeriod:g?.period||0,
+      bonusStatus:{home:summaryData.home.bonus||false,away:summaryData.away.bonus||false,homeDouble:false,awayDouble:false},
+      oddsData:cs.oddsData||null,
+      analysisHistory:cs.analysisHistory&&cs.analysisHistory.length>0?cs.analysisHistory:null,
+      trackingData:cs.trackingData||null,
+      pbpAudit:cs.pbpAudit?{home:cs.pbpAudit.home,away:cs.pbpAudit.away,homeAlias:cs.pbpAudit.homeAlias,awayAlias:cs.pbpAudit.awayAlias,runs:cs.pbpAudit.runs}:null,
+      rollingWindow:cs.rollingWindow||null,
+      quarterDiffs:cs._serverQuarterDiffs||null,
+      combinedRead:cs.combinedRead||null,
+      throughput:cs.throughput?{classification:cs.throughput.classification,deficit:cs.throughput.deficit,remainingPoss:cs.throughput.remainingPoss,fTeam:cs.throughput.fTeam}:null,
+      leadSafety:cs.leadSafety?{classification:cs.leadSafety.classification,lead:cs.leadSafety.lead,fTeam:cs.leadSafety.fTeam}:null,
+      volumeThreat:cs.volumeThreat||null,
+      espnWP:cs.espnWP?{home:cs.espnWP.home,away:cs.espnWP.away,homeAlias:cs.espnWP.homeAlias,awayAlias:cs.espnWP.awayAlias}:null,
+    };
+
+    // 3. Call analyze.js
+    var ac=new AbortController();var acTimer=setTimeout(function(){ac.abort();},40000);
+    var resp=await fetch(FN+'analyze',{method:'POST',signal:ac.signal,headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    clearTimeout(acTimer);
+    if(!resp.ok){var errD=await resp.json().catch(function(){return{error:'HTTP '+resp.status};});throw new Error(errD.error||'Analysis failed');}
+    var data=await resp.json();
+
+    // 4. Parse response
+    var decision=parseSonnetDecision(data.analysis);
+    if(decision){
+      cs.prediction=cs.prediction||{};
+      if(decision.fwpLabeled&&decision.fwpTeam1&&decision.fwpTeam2){
+        var hUp=hA.toUpperCase(),aUp=aA.toUpperCase();
+        if(decision.fwpTeam1===hUp){cs.prediction.homeFWP=decision.fwpVal1;cs.prediction.awayFWP=decision.fwpVal2;}
+        else if(decision.fwpTeam1===aUp){cs.prediction.awayFWP=decision.fwpVal1;cs.prediction.homeFWP=decision.fwpVal2;}
+        cs.prediction.homeValue=cs.prediction.homeValue||{};cs.prediction.awayValue=cs.prediction.awayValue||{};
+        cs.prediction.homeValue.fwp=cs.prediction.homeFWP;cs.prediction.awayValue.fwp=cs.prediction.awayFWP;
+        if(decision.edgeNum!=null){
+          var winTeam=cs.prediction.homeFWP>cs.prediction.awayFWP?'home':'away';
+          cs.prediction[winTeam+'Value'].edge=decision.edgeNum;
+        }
+      }
+      if(decision.narrative)cs.prediction.narrative=decision.narrative;
+      if(decision.risk)cs.prediction.risk=decision.risk;
+      if(decision.closing)cs.prediction.closing=decision.closing;
+      if(decision.disagreement)cs.prediction.disagreement=decision.disagreement;
+      if(decision.conviction)cs.prediction.convictionTier=decision.conviction;
+      cs.prediction.fwpRaw=decision.fwp||cs.prediction.fwpRaw;
+    }
+    cs.analysis=data.analysis;
+    cs.sustainabilityAudit=data.sustainabilityAudit||null;
+    console.log('[ANALYZE] Complete for',hA,'@',aA);
+  }catch(e){
+    console.error('[ANALYZE] Failed:',e.message);
+  }finally{
+    cs.analyzing=false;
+    renderCard(gameId);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
