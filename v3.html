@@ -685,6 +685,8 @@ function maybeResyncSnapshots(){
   games.forEach(function(g,i){
     if(getState(g)==='LIVE'){
       setTimeout(function(){hydrateFromServerSnapshots(g.id);},i*200);
+      // Refresh PBP for LIVE games (force=true to update scoring comp + margin flow)
+      setTimeout(function(){fetchPBPFromDB(g.id,true);},i*200+100);
     }
   });
   // Also refresh auto-analyses
@@ -2121,17 +2123,17 @@ function buildScoringCompForCard(gameId){
 }
 
 // ── FETCH PBP DATA FROM DB ──
-async function fetchPBPFromDB(gameId){
+async function fetchPBPFromDB(gameId,force){
   if(!dbReady)return;
   var cs=cardState[gameId];if(!cs)return;
-  if(cs.pbpAudit)return; // already have it
+  if(cs.pbpAudit&&!force)return; // already have it (skip for FINAL)
   try{
     var r=await fetch(FN+'db-api?action=get_pbp&game_id='+encodeURIComponent(gameId));
     if(!r.ok)return;var data=await r.json();
     if(data.pbp&&(data.pbp.scoringEvents||data.pbp.runs)){
       cs.pbpAudit=data.pbp;
       cs.pbpTime=new Date(data.saved_at||Date.now());
-      console.log('[PBP] Loaded from DB for',gameId);
+      console.log('[PBP] '+(force?'Refreshed':'Loaded')+' from DB for',gameId,data.pbp.scoringEvents?data.pbp.scoringEvents.length+' events':'');
       buildScoringCompForCard(gameId);
       renderCard(gameId);
     }
