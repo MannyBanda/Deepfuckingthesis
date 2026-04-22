@@ -2109,12 +2109,27 @@ function renderMarginFlowSection(id,cs,hA,aA){
 // TOAST — Entry Signal + Line Shopping
 // ══════════════════════════════════════════════════════════════════════════════
 
-var BOOKS={
+var BOOK_LINKS={
   draftkings:{name:'DraftKings',app:'draftkings://',web:'https://sportsbook.draftkings.com'},
   fanduel:{name:'FanDuel',app:'fanduel://',web:'https://sportsbook.fanduel.com'},
   caesars:{name:'Caesars',app:'caesarssportsbook://',web:'https://www.caesars.com/sportsbook'},
   bet365:{name:'Bet365',app:'bet365://',web:'https://www.bet365.com'},
-  betrivers:{name:'BetRivers',app:'betrivers://',web:'https://www.betrivers.com'}
+  betrivers:{name:'BetRivers',app:'betrivers://',web:'https://www.betrivers.com'},
+  betmgm:{name:'BetMGM',app:'betmgm://',web:'https://sports.betmgm.com'},
+  bovada:{name:'Bovada',app:'',web:'https://www.bovada.lv'},
+  pinnacle:{name:'Pinnacle',app:'',web:'https://www.pinnacle.com'},
+  mybookieag:{name:'MyBookie',app:'',web:'https://www.mybookie.ag'},
+  williamhill_us:{name:'William Hill',app:'',web:'https://www.williamhill.com'},
+  betway:{name:'Betway',app:'betway://',web:'https://www.betway.com'},
+  fanatics:{name:'Fanatics',app:'fanatics://',web:'https://sportsbook.fanatics.com'},
+  espnbet:{name:'ESPN BET',app:'',web:'https://www.espnbet.com'},
+  betonlineag:{name:'BetOnline',app:'',web:'https://www.betonline.ag'},
+  lowvig:{name:'LowVig',app:'',web:'https://www.lowvig.ag'},
+  betus:{name:'BetUS',app:'',web:'https://www.betus.com.pa'},
+  superbook:{name:'SuperBook',app:'',web:'https://co.superbook.com'},
+  betparx:{name:'BetParx',app:'',web:'https://www.betparx.com'},
+  fliff:{name:'Fliff',app:'',web:'https://www.getfliff.com'},
+  hardrockbet:{name:'Hard Rock',app:'',web:'https://www.hardrockbet.com'}
 };
 var ENTRY_TYPES={'BUY':1,'WINDOW_BUY':1,'BWC_EDGE':1,'POSITION_OPEN':1,'RE_ENTRY_VALUE':1};
 var _seenAlertIds=new Set();
@@ -2122,6 +2137,7 @@ var _toastAlert=null;
 var _toastGameId=null;
 var _latestSendAlert=null;
 var _toastVisible=false;
+var _oddsApiCache=null; // cached Odds API response
 
 async function pollAlerts(){
   if(!dbReady)return;
@@ -2131,7 +2147,6 @@ async function pollAlerts(){
     if(!r.ok)return;var data=await r.json();
     var alerts=data.alerts||data||[];
     if(!Array.isArray(alerts))return;
-    // Update alertCache for drawer game log
     _alertCache={};
     alerts.forEach(function(a){
       if(!a.game_id)return;
@@ -2139,39 +2154,31 @@ async function pollAlerts(){
       _alertCache[a.game_id].push(a);
     });
     _alertsFetched=true;
-    // Find new SEND alerts for toast
     var newSend=null;
     alerts.forEach(function(a){
       if(a.agent_decision==='SEND'&&!_seenAlertIds.has(a.id)){
         _seenAlertIds.add(a.id);
-        // Track latest send for manual button
         _latestSendAlert=a;
-        // Only auto-toast for entry types
         if(ENTRY_TYPES[a.alert_type])newSend=a;
       }
     });
-    // Also seed latestSendAlert if first poll
     if(!_latestSendAlert){
       for(var i=alerts.length-1;i>=0;i--){
         if(alerts[i].agent_decision==='SEND'){_latestSendAlert=alerts[i];break;}
       }
     }
-    // Update badge
     var badge=document.getElementById('toast-badge');
     if(_latestSendAlert&&badge){badge.textContent='';badge.classList.add('show');}
-    // Auto-show toast for new entry signal
-    if(newSend)fireToast(newSend);
+    // Auto-show toast for new entry signal (alert info only, no odds fetch)
+    if(newSend)fireToast(newSend,false);
   }catch(e){console.warn('[TOAST] Alert poll failed:',e.message);}
 }
 
-async function fireToast(alert){
-  _toastAlert=alert;_toastGameId=alert.game_id;
+function renderToastHeader(alert){
   var g=games.find(function(x){return x.id===alert.game_id;});
   var hA=g?.home?.alias||'HOME',aA=g?.away?.alias||'AWAY';
   var betTeam=alert.floor_team||alert.control_team||'?';
-  var isHome=betTeam.toUpperCase()===hA.toUpperCase();
 
-  // Header
   document.getElementById('toast-label').textContent='Entry Signal';
   var typeLabel=(alert.alert_type||'').replace(/_/g,' ');
   if(alert.alert_tier)typeLabel+=' \u00b7 '+alert.alert_tier;
@@ -2179,75 +2186,118 @@ async function fireToast(alert){
   if(time)typeLabel+=' \u00b7 '+time;
   document.getElementById('toast-alert-info').textContent=typeLabel;
 
-  // Game line — meticulous about which team
   var margin=alert.margin!=null?Math.abs(alert.margin):'?';
   var trailing=alert.margin!=null&&alert.margin<0;
   var gameText=betTeam+(trailing?' trailing '+margin:' leading '+margin);
   gameText+=' \u00b7 '+aA+'@'+hA;
   if(alert.floor_score!=null)gameText+=' \u00b7 Floor '+Number(alert.floor_score).toFixed(2);
   document.getElementById('toast-game').textContent=gameText;
+}
 
-  // Show toast immediately, load odds async
+function fireToast(alert,withOdds){
+  _toastAlert=alert;_toastGameId=alert.game_id;
+  renderToastHeader(alert);
   var oddsEl=document.getElementById('toast-odds');
-  oddsEl.innerHTML='<div class="toast-no-odds">Loading odds\u2026</div>';
-  showToastEl();
+  if(withOdds){
+    oddsEl.innerHTML='<div class="toast-no-odds">Loading odds\u2026</div>';
+    showToastEl();
+    fetchLineShop(alert);
+  } else {
+    oddsEl.innerHTML='<div class="toast-no-odds" style="cursor:pointer" onclick="showToast()">\u26a1 Tap for line shopping</div>';
+    showToastEl();
+  }
+}
 
-  // Fetch multi-vendor odds
-  var bdlId=bdlGameMap[alert.game_id];
-  if(!bdlId){oddsEl.innerHTML='<div class="toast-no-odds">No odds data</div>';return;}
+async function fetchLineShop(alert){
+  var oddsEl=document.getElementById('toast-odds');
+  var g=games.find(function(x){return x.id===alert.game_id;});
+  if(!g){oddsEl.innerHTML='<div class="toast-no-odds">Game not found</div>';return;}
+
+  var hA=g.home?.alias||'HOME',aA=g.away?.alias||'AWAY';
+  var hName=g.home?.name||'',aName=g.away?.name||'';
+  var betTeam=alert.floor_team||alert.control_team||'?';
+  var isHome=betTeam.toUpperCase()===hA.toUpperCase();
+  // The team name to match in Odds API outcomes
+  var betFullName=isHome?(g.home?.market||'')+' '+hName:(g.away?.market||'')+' '+aName;
+
   try{
-    var oddsRes=await bdl('odds',{game_id:String(bdlId)});
-    var oddsArr=oddsRes.data||[];
-    console.log('[TOAST] Vendors returned:',oddsArr.map(function(o){return o.vendor;}).join(', '));
-    if(oddsArr.length===0){oddsEl.innerHTML='<div class="toast-no-odds">No odds available</div>';return;}
+    // Use cached response if <60s old
+    if(!_oddsApiCache||Date.now()-_oddsApiCache.ts>60000){
+      var r=await fetch(FN+'odds-api');
+      if(!r.ok){var errD=await r.json().catch(function(){return{};});throw new Error(errD.error||'HTTP '+r.status);}
+      var data=await r.json();
+      _oddsApiCache={ts:Date.now(),games:data.games||[],credits:data.credits};
+      if(data.credits)console.log('[ODDS API] Credits remaining:',data.credits.remaining,'used:',data.credits.used);
+    }
 
-    // Filter to our books, extract the bet team's ML
+    // Match our game in The Odds API response
+    var match=null;
+    _oddsApiCache.games.forEach(function(og){
+      // Match by team names — check if our team names appear in the API team names
+      var ogHome=(og.home_team||'').toLowerCase();
+      var ogAway=(og.away_team||'').toLowerCase();
+      if((ogHome.includes(hName.toLowerCase())||hName.toLowerCase().includes(ogHome.split(' ').pop()))
+        &&(ogAway.includes(aName.toLowerCase())||aName.toLowerCase().includes(ogAway.split(' ').pop()))){
+        match=og;
+      }
+    });
+
+    if(!match){oddsEl.innerHTML='<div class="toast-no-odds">Game not found in odds feed</div>';return;}
+
+    // Extract bet team's ML from each bookmaker
     var rows=[];
-    oddsArr.forEach(function(o){
-      var bk=BOOKS[o.vendor];if(!bk)return;
-      var ml=isHome?o.moneyline_home_odds:o.moneyline_away_odds;
-      if(ml==null)return;
-      rows.push({vendor:o.vendor,name:bk.name,app:bk.app,web:bk.web,ml:Number(ml)});
+    (match.bookmakers||[]).forEach(function(bk){
+      var mkt=(bk.markets||[]).find(function(m){return m.key==='h2h';});
+      if(!mkt)return;
+      // Find the outcome for our bet team
+      var outcome=null;
+      (mkt.outcomes||[]).forEach(function(o){
+        var oName=o.name.toLowerCase();
+        if(isHome&&oName===match.home_team.toLowerCase())outcome=o;
+        else if(!isHome&&oName===match.away_team.toLowerCase())outcome=o;
+      });
+      if(!outcome||outcome.price==null)return;
+      var bkInfo=BOOK_LINKS[bk.key]||{name:bk.title||bk.key,app:'',web:''};
+      rows.push({key:bk.key,name:bkInfo.name,app:bkInfo.app,web:bkInfo.web,ml:Number(outcome.price)});
     });
 
     if(rows.length===0){oddsEl.innerHTML='<div class="toast-no-odds">No ML odds for '+esc(betTeam)+'</div>';return;}
 
-    // Sort by best ML (highest value = best payout)
     rows.sort(function(a,b){return b.ml-a.ml;});
     var bestML=rows[0].ml;
 
     var html='<div class="toast-odds-grid">';
-    html+='<div style="padding:0 8px 4px;font-family:var(--mono);font-size:10px;color:var(--fg-dim)">'+esc(betTeam)+' ML across books</div>';
+    html+='<div style="padding:0 8px 6px;font-family:var(--mono);font-size:10px;color:var(--fg-dim)">'+esc(betTeam)+' ML \u00b7 '+rows.length+' books</div>';
     rows.forEach(function(r){
       var isBest=r.ml===bestML&&rows.length>1;
       var mlStr=r.ml>0?'+'+r.ml:String(r.ml);
-      html+='<div class="toast-odds-row'+(isBest?' best':'')+'" onclick="openBook(\''+esc(r.app)+'\',\''+esc(r.web)+'\')">';
+      var hasLink=r.app||r.web;
+      html+='<div class="toast-odds-row'+(isBest?' best':'')+'"'+(hasLink?' onclick="openBook(\''+esc(r.app||'')+'\',\''+esc(r.web)+'\')"':'')+'>';
       html+='<span class="toast-book">'+esc(r.name)+'</span>';
       html+='<span class="toast-ml-val">'+esc(mlStr)+'</span>';
       if(isBest)html+='<span class="toast-best-tag">BEST</span>';
-      html+='<span class="toast-open">Open \u2192</span>';
+      if(hasLink)html+='<span class="toast-open">Open \u2192</span>';
       html+='</div>';
     });
     html+='</div>';
     oddsEl.innerHTML=html;
   }catch(e){
-    oddsEl.innerHTML='<div class="toast-no-odds">Odds fetch failed</div>';
-    console.warn('[TOAST] Odds error:',e.message);
+    oddsEl.innerHTML='<div class="toast-no-odds">Odds fetch failed: '+esc(e.message)+'</div>';
+    console.warn('[TOAST] Odds API error:',e.message);
   }
 }
 
 function showToastEl(){
   var t=document.getElementById('toast');
   t.classList.remove('show');
-  // Force reflow for re-animation
   void t.offsetWidth;
   t.classList.add('show');
   _toastVisible=true;
 }
 
 function showToast(){
-  // Manual trigger via ⚡ button — show latest SEND alert
-  if(_latestSendAlert){fireToast(_latestSendAlert);}
+  // Manual trigger via ⚡ — show latest alert WITH odds
+  if(_latestSendAlert){fireToast(_latestSendAlert,true);}
   else{
     document.getElementById('toast-label').textContent='No Alerts';
     document.getElementById('toast-alert-info').textContent='No SEND alerts today';
