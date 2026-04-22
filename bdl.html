@@ -1370,6 +1370,16 @@ async function syncThesesFromDB(){
     }
   }catch(e){ console.warn('[DB] Thesis sync failed:', e.message); }
 }
+var _lastThesisResync = 0;
+// Periodic thesis re-sync — picks up pregame-agent-generated theses without page refresh.
+// Runs every 2 min, only when PRE games are missing theses.
+function maybeResyncTheses(){
+  if(!dbReady || Date.now() - _lastThesisResync < 120000) return;
+  var missing = games.some(function(g){ return getState(g) === 'PRE' && !theses[g.id]; });
+  if(!missing) return;
+  _lastThesisResync = Date.now();
+  syncThesesFromDB();
+}
 
 // ── ESPN Win Probability Integration ──
 const ESPN_ALIAS_MAP = {NOP:'NO',GSW:'GS',NYK:'NY',SAS:'SA',PHX:'PHO',BKN:'BKN'};
@@ -2459,6 +2469,9 @@ function exportCalibrationCSV(){
 var _bdlBoxScoreCache = { data: null, time: 0, date: '' };
 
 async function refreshLiveCards(){
+  // Periodic thesis re-sync — picks up pregame-agent theses without page refresh
+  maybeResyncTheses();
+
   // Signal server that client is actively polling (fire-and-forget)
   if(dbReady){
     fetch(FN+'db-api?action=heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},
