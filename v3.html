@@ -1464,7 +1464,7 @@ function renderDrawer(gameId){
     html+='</div>';
 
     function fmtF(v){if(v==null)return'--';var s=Number(v).toFixed(2);return s.replace(/^0\./,'.');}
-    function indDot(v){if(v==null)return'<span style="color:var(--fg-dim)">\u25cf</span>';var n=Number(v);if(n>=0.6)return'<span style="color:var(--green)">\u25cf</span>';if(n<=0.4)return'<span style="color:var(--coral)">\u25cf</span>';return'<span style="color:var(--fg-dim)">\u25cf</span>';}
+    function indDot(v,flip){if(v==null)return'<span style="color:var(--fg-dim)">\u25cf</span>';var n=flip?1-Number(v):Number(v);if(n>=0.6)return'<span style="color:var(--green)">\u25cf</span>';if(n<=0.4)return'<span style="color:var(--coral)">\u25cf</span>';return'<span style="color:var(--fg-dim)">\u25cf</span>';}
 
     html+='<div style="overflow-x:auto"><table class="qd-grid" style="font-size:10px"><thead><tr>';
     if(sc2.time)html+='<th>Time</th>';if(sc2.score)html+='<th>Score</th>';if(sc2.floor)html+='<th>Floor</th>';
@@ -1482,6 +1482,8 @@ function renderDrawer(gameId){
       var aKey='Q'+(s.period||'')+'_'+(s.clock||'');
       var matchAlert=alertLookup[aKey]||null;
       if(!matchAlert){var closest=null,minDist=999;(_alertCache[gameId]||[]).forEach(function(a){if(a.period===s.period){var sCk=parseInt((s.clock||'0').replace(':',''))||0;var aCk=parseInt((a.clock||'0').replace(':',''))||0;var dist=Math.abs(sCk-aCk);if(dist<minDist&&dist<200){minDist=dist;closest=a;}}});matchAlert=closest;}
+      // Flip indicators when control team is away (scores are home-relative)
+      var flipInd=s.floor_team&&s.floor_team!==hA;
 
       html+='<tr style="'+(isLatest?'border:1px solid var(--green-border);background:rgba(52,211,153,0.04)':'')+'">';
       if(sc2.time)html+='<td style="white-space:nowrap;font-size:9px">'+esc(qc)+'</td>';
@@ -1490,7 +1492,7 @@ function renderDrawer(gameId){
       var mfIdx=sampled.length-1-ri;
       if(sc2.mf)html+='<td>'+fmtF(mfMap[mfIdx])+'</td>';
       if(sc2.peak)html+='<td>'+fmtF(pkMap[mfIdx])+'</td>';
-      if(sc2.ind)html+='<td style="text-align:center;letter-spacing:2px">'+indDot(s.i1)+indDot(s.i2)+indDot(s.i3)+indDot(s.i4)+indDot(s.i5)+'</td>';
+      if(sc2.ind)html+='<td style="text-align:center;letter-spacing:2px">'+indDot(s.i1,flipInd)+indDot(s.i2,flipInd)+indDot(s.i3,flipInd)+indDot(s.i4,flipInd)+indDot(s.i5,flipInd)+'</td>';
       if(sc2.tp)html+='<td style="font-size:9px">'+(s.tp_class?esc(s.tp_class).substring(0,4):'--')+'</td>';
       if(sc2.ls)html+='<td style="font-size:9px">'+(s.ls_class?esc(s.ls_class).substring(0,4):'--')+'</td>';
       if(sc2.grad)html+='<td style="font-size:9px">'+(matchAlert&&matchAlert.graduation_rank?esc(matchAlert.graduation_rank):'--')+'</td>';
