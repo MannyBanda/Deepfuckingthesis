@@ -183,7 +183,7 @@ const FN = '/.netlify/functions/';
 const W = {I1:.10, I2:.15, I3:.20, I4:.30, I5:.25};
 
 // ── STATE ──
-var games = [], selIds = [], pollTimer = null, dateOffset = 0;
+var games = [], activeGameId = null, pollTimer = null, dateOffset = 0;
 var pollInterval = 90000;
 const cardState = {};
 const theses = JSON.parse(localStorage.getItem('nba4:theses')||'{}');
@@ -252,7 +252,7 @@ function getSlateDate(offset){
 function switchDate(offset){
   dateOffset=offset;
   document.querySelectorAll('.date-tab').forEach(function(tab,i){tab.classList.toggle('active',(i===0&&offset===-1)||(i===1&&offset===0)||(i===2&&offset===1));});
-  selIds=[];
+  activeGameId=null;
   document.getElementById('swipe').innerHTML='';
   document.getElementById('dots').innerHTML='';
   clearInterval(pollTimer);loadSchedule();
@@ -329,6 +329,7 @@ async function loadSchedule(){
     }catch(e){console.warn('[BDL] Status update failed:',e.message);}
 
     renderPills();
+    mountAllCards();
     if(Object.keys(standingsCache).length===0)fetchStandings();
     fetchEspnScoreboard();
 
@@ -343,14 +344,12 @@ async function loadSchedule(){
 
 // ── BASIC POLL (Phase 1 — score updates only) ──
 async function refreshLiveCards(){
-  if(selIds.length===0)return;
   var d=getSlateDate(dateOffset);
   try{
     var box=await bdl('box_scores',{date:d.str});var arr=box.data||[];
     var updated=false;
-    selIds.forEach(function(gid){
-      var bdlId=bdlGameMap[gid];if(!bdlId)return;
-      var g=games.find(function(x){return x.id===gid;});if(!g)return;
+    games.forEach(function(g){
+      var bdlId=bdlGameMap[g.id];if(!bdlId)return;
       var b=arr.find(function(x){return x.id===bdlId;});if(!b)return;
       g.status=normalizeBdlStatus(b.status,b);
       g.homePoints=b.home_team_score||g.homePoints;
@@ -359,7 +358,7 @@ async function refreshLiveCards(){
       g.clock=normalizeBdlClock(b.time,b.status)||g.clock;
       updated=true;
     });
-    if(updated){renderPills();selIds.forEach(function(gid){renderCard(gid);});}
+    if(updated){renderPills();games.forEach(function(g){renderCard(g.id);});}
   }catch(e){console.warn('[POLL]',e.message);}
 }
 
@@ -370,73 +369,82 @@ async function refreshLiveCards(){
 function renderPills(){
   var html='';
   games.forEach(function(g){
-    var gs=getState(g),sel=selIds.includes(g.id);
-    var cls='chip'+(sel?' sel':'')+(gs==='LIVE'?' live':'')+(gs==='FINAL'?' done':'');
+    var gs=getState(g);
+    var isActive=activeGameId===g.id;
+    var cls='chip'+(isActive?' sel':'')+(gs==='LIVE'?' live':'')+(gs==='FINAL'?' done':'');
     var label=(g.away?.alias||'?')+'@'+(g.home?.alias||'?');
     if(gs==='LIVE')label+=' Q'+(g.period||'?');
     else if(gs==='FINAL')label+=' F';
     else try{label+=' '+new Date(g.scheduled).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/Phoenix'});}catch(e){}
-    html+='<button class="'+cls+'" onclick="toggleGame(\''+g.id+'\')">'+esc(label)+'</button>';
+    html+='<button class="'+cls+'" onclick="scrollToGame(\''+g.id+'\')">'+esc(label)+'</button>';
   });
   document.getElementById('pills').innerHTML=html;
-  document.getElementById('empty').style.display=selIds.length?'none':'block';
-  renderSwipeDots();
 }
 
-function toggleGame(id){
-  if(selIds.includes(id)){selIds=selIds.filter(function(x){return x!==id;});}
-  else if(selIds.length<5){selIds.push(id);mountCard(id);}
-  // Remove cards no longer selected
-  document.querySelectorAll('.swipe-card').forEach(function(el){
-    var cid=el.dataset.gameId;if(!selIds.includes(cid))el.remove();
-  });
-  renderPills();
-  selIds.forEach(function(gid){renderCard(gid);});
-  // Scroll to selected card
+function scrollToGame(id){
   var target=document.querySelector('.swipe-card[data-game-id="'+id+'"]');
-  if(target)target.scrollIntoView({behavior:'smooth',inline:'center',block:'nearest'});
+  if(target){
+    target.scrollIntoView({behavior:'smooth',inline:'center',block:'nearest'});
+    activeGameId=id;
+    renderPills();
+    renderSwipeDots();
+  }
 }
 
-function mountCard(id){
-  if(document.querySelector('.swipe-card[data-game-id="'+id+'"]'))return;
-  if(!cardState[id])cardState[id]={logs:[],espnWP:null,espnWPHistory:null};
-  var div=document.createElement('div');
-  div.className='swipe-card';div.dataset.gameId=id;
-  div.innerHTML='<article class="game-card" id="card-'+id+'"></article>';
-  document.getElementById('swipe').appendChild(div);
-  renderCard(id);
-  // Fetch ESPN WP for this game
-  fetchEspnWP(id);
+function mountAllCards(){
+  var swipe=document.getElementById('swipe');
+  swipe.innerHTML='';
+  games.forEach(function(g){
+    if(!cardState[g.id])cardState[g.id]={logs:[],espnWP:null,espnWPHistory:null};
+    var div=document.createElement('div');
+    div.className='swipe-card';div.dataset.gameId=g.id;
+    div.innerHTML='<article class="game-card" id="card-'+g.id+'"></article>';
+    swipe.appendChild(div);
+    renderCard(g.id);
+  });
+  // Set first game as active
+  if(games.length>0){activeGameId=games[0].id;}
+  renderSwipeDots();
+  document.getElementById('empty').style.display=games.length?'none':'block';
+  // Fetch ESPN WP for all games (staggered to avoid rate limits)
+  games.forEach(function(g,i){
+    setTimeout(function(){fetchEspnWP(g.id);},i*200);
+  });
 }
 
 function renderSwipeDots(){
   var html='';
-  selIds.forEach(function(gid,i){
-    html+='<span class="swipe-dot'+(i===0?' active':'')+'"></span>';
+  games.forEach(function(g){
+    html+='<span class="swipe-dot'+(g.id===activeGameId?' active':'')+'"></span>';
   });
   document.getElementById('dots').innerHTML=html;
 }
 
-// Update swipe dots on scroll
+// Track which card is centered via scroll
+var _scrollDebounce=null;
 document.getElementById('swipe').addEventListener('scroll',function(){
-  var container=this;var cards=container.querySelectorAll('.swipe-card');
-  var scrollLeft=container.scrollLeft;var containerWidth=container.offsetWidth;
-  var closestIdx=0,closestDist=Infinity;
-  cards.forEach(function(card,i){
-    var dist=Math.abs(card.offsetLeft-scrollLeft);
-    if(dist<closestDist){closestDist=dist;closestIdx=i;}
-  });
-  document.querySelectorAll('.swipe-dot').forEach(function(dot,i){
-    dot.classList.toggle('active',i===closestIdx);
-  });
-  // Sync pill selection highlight
-  if(cards[closestIdx]){
-    var visibleId=cards[closestIdx].dataset.gameId;
-    // Update pill styling to show which card is centered
-    document.querySelectorAll('.chip').forEach(function(chip){
-      // Don't change selection state, just visual focus
+  clearTimeout(_scrollDebounce);
+  _scrollDebounce=setTimeout(function(){
+    var container=document.getElementById('swipe');
+    var cards=container.querySelectorAll('.swipe-card');
+    var scrollLeft=container.scrollLeft;
+    var closestIdx=0,closestDist=Infinity;
+    cards.forEach(function(card,i){
+      var dist=Math.abs(card.offsetLeft-scrollLeft);
+      if(dist<closestDist){closestDist=dist;closestIdx=i;}
     });
-  }
+    if(cards[closestIdx]){
+      var newActive=cards[closestIdx].dataset.gameId;
+      if(newActive!==activeGameId){
+        activeGameId=newActive;
+        renderPills();
+        renderSwipeDots();
+        // Scroll the active pill into view in the pill strip
+        var activePill=document.querySelector('.chip.sel');
+        if(activePill)activePill.scrollIntoView({behavior:'smooth',inline:'center',block:'nearest'});
+      }
+    }
+  },80);
 });
 
 function renderCard(id){
