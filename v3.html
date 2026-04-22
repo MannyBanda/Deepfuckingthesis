@@ -2235,8 +2235,10 @@ function fireToast(alert){
   oddsEl.innerHTML='<div class="toast-no-odds">Loading odds\u2026</div>';
   showToastEl();
   fetchLineShop(alert);
-  // Start 20s odds refresh while toast is open
-  startToastOddsPoll();
+  // Only poll live odds for non-FINAL games
+  var g=games.find(function(x){return x.id===alert.game_id;});
+  if(g&&getState(g)!=='FINAL')startToastOddsPoll();
+  else stopToastOddsPoll();
 }
 
 async function fetchLineShop(alert){
@@ -2252,11 +2254,17 @@ async function fetchLineShop(alert){
   var betFullName=isHome?(g.home?.market||'')+' '+hName:(g.away?.market||'')+' '+aName;
 
   try{
-    var r=await fetch(FN+'odds-api');
+    // For completed games, use historical endpoint with game's scheduled time
+    var gs=getState(g);
+    var oddsUrl=FN+'odds-api';
+    if(gs==='FINAL'&&g.scheduled){
+      oddsUrl+=('?date='+encodeURIComponent(g.scheduled));
+    }
+    var r=await fetch(oddsUrl);
     if(!r.ok){var errD=await r.json().catch(function(){return{};});throw new Error(errD.error||'HTTP '+r.status);}
     var data=await r.json();
     var oddsGames=data.games||[];
-    if(data.credits)console.log('[ODDS API] Credits remaining:',data.credits.remaining,'used:',data.credits.used);
+    if(data.credits)console.log('[ODDS API]'+(data.historical?' (historical)':'')+' Credits remaining:',data.credits.remaining,'used:',data.credits.used);
 
     // Match our game in The Odds API response — exact match on "Market Name" (e.g., "Boston Celtics")
     var homeFullName=((g.home?.market||'')+' '+hName).trim().toLowerCase();
@@ -2269,9 +2277,7 @@ async function fetchLineShop(alert){
     });
 
     if(!match){
-      var gs=getState(g);
-      if(gs==='FINAL')oddsEl.innerHTML='<div class="toast-no-odds">Game completed \u2014 live odds no longer available</div>';
-      else oddsEl.innerHTML='<div class="toast-no-odds">Game not found in odds feed</div>';
+      oddsEl.innerHTML='<div class="toast-no-odds">Game not found in odds feed'+(gs==='FINAL'?' (historical)':'')+'</div>';
       return;
     }
 
