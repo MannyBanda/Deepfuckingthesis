@@ -1234,21 +1234,27 @@ async function runPregameAgent() {
       var sonnetData = await anthropicResp.json();
       var thesis = sonnetData.content.filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('\n');
 
-      // Save to DB
-      await sql`
+      // Save to DB — DO NOTHING so first write wins (prevents duplicate ntfy on overlapping invocations)
+      var insertResult = await sql`
         INSERT INTO theses (game_id, league, text, created_at)
         VALUES (${game.id}, ${league}, ${thesis}, NOW())
-        ON CONFLICT (game_id) DO UPDATE SET text = ${thesis}, created_at = NOW()
+        ON CONFLICT (game_id) DO NOTHING
+        RETURNING game_id
       `;
 
-      generated.push({
-        matchup: matchup,
-        floor: floor ? floor.score.toFixed(2) : '?',
-        verdict: floor ? getVerdictLabel(floor.score) : '?',
-        conviction: conviction.tier,
-        controlTeam: floor ? floor.controlTeam : '?',
-      });
-      log('  Thesis saved for ' + matchup);
+      // Only count + notify if we actually inserted (not a duplicate)
+      if (insertResult.length > 0) {
+        generated.push({
+          matchup: matchup,
+          floor: floor ? floor.score.toFixed(2) : '?',
+          verdict: floor ? getVerdictLabel(floor.score) : '?',
+          conviction: conviction.tier,
+          controlTeam: floor ? floor.controlTeam : '?',
+        });
+        log('  Thesis saved for ' + matchup);
+      } else {
+        log('  Thesis already exists for ' + matchup + ' — skipped');
+      }
 
     } catch (e) {
       log('  ERROR processing ' + matchup + ': ' + e.message);
