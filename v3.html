@@ -502,11 +502,10 @@ async function loadSchedule(){
       syncAnalysesFromDB();
       syncCalibrationAnalyses();
       syncLatestSnapshotsFromDB();
-      // Scoring comp + PBP for collapsibles (staggered)
+      // PBP for margin flow + scoring comp (staggered)
       games.forEach(function(g,i){
         var gs=getState(g);
         if(gs!=='PRE'){
-          setTimeout(function(){fetchBdlStats(g.id);},500+i*200);
           setTimeout(function(){fetchPBPFromDB(g.id);},800+i*200);
         }
       });
@@ -1194,67 +1193,37 @@ function selectRun(gameId,ri){
   renderCard(gameId);
 }
 
-// ── SCORING COMPOSITION (from BDL box score stats) ──
-function computeScoringComp(stats,total){
-  if(!stats||total===0)return null;
-  var paint=Number(stats.pts_paint||stats.points_in_the_paint||stats.points_in_paint||0);
-  var ftm=Number(stats.ftm||stats.free_throws_made||0);
-  var fta=Number(stats.fta||stats.free_throws_att||0);
-  var tpm=Number(stats.tpm||stats.three_points_made||stats.fg3m||0);
-  var tpa=Number(stats.tpa||stats.three_points_att||stats.fg3a||0);
-  var three=tpm*3;
-  var midOther=Math.max(0,total-paint-ftm-three);
-  var structural=paint+ftm;
-  var variance=three+midOther;
-  var sPct=total>0?Math.round(structural/total*100):0;
-  return{total:total,paint:paint,ft:ftm,fta:fta,three:three,tpm:tpm,tpa:tpa,midOther:midOther,structural:structural,variance:variance,sPct:sPct,vPct:100-sPct};
+// ── SCORING COMPOSITION (from PBP audit zone data) ──
+function computeScoringComp(pbp,hA,aA,hPts,aPts){
+  if(!pbp||!pbp.home||!pbp.away)return null;
+  function breakdown(side,total){
+    var rim=side.rim||{m:0,a:0};var paint=side.paint||{m:0,a:0};
+    var mid=side.mid||{m:0,a:0};var corner3=side.corner3||{m:0,a:0};var above3=side.above3||{m:0,a:0};
+    var paintPts=(rim.m+paint.m)*2;
+    var threePts=(corner3.m+above3.m)*3;
+    var midPts=mid.m*2;
+    // FT isn't in PBP zones — derive from total
+    var ftPts=Math.max(0,total-paintPts-threePts-midPts);
+    var structural=paintPts+ftPts;
+    var variance=threePts+midPts;
+    var sPct=total>0?Math.round(structural/total*100):0;
+    return{total:total,paint:paintPts,ft:ftPts,three:threePts,midOther:midPts,
+      structural:structural,variance:variance,sPct:sPct,vPct:100-sPct,
+      rimM:rim.m,rimA:rim.a,paintM:paint.m,paintA:paint.a,
+      tpm:corner3.m+above3.m,tpa:corner3.a+above3.a};
+  }
+  var h=breakdown(pbp.home,hPts);var a=breakdown(pbp.away,aPts);
+  h.team=hA;a.team=aA;
+  return{home:h,away:a,structuralDelta:h.structural-a.structural,varianceDelta:h.variance-a.variance,leadTeam:hPts>=aPts?hA:aA};
 }
 
-// ── FETCH BDL STATS FOR SCORING COMP ──
-async function fetchBdlStats(gameId){
-  var cs=cardState[gameId];if(!cs)return;
-  var bdlId=bdlGameMap[gameId];if(!bdlId)return;
-  try{
-    var r=await bdl('box_score',{game_id:String(bdlId)});
-    if(!r)return;
-    var hStats=null,aStats=null,hPts=0,aPts=0;
-    // BDL box_score response structure
-    if(r.data){
-      hPts=r.data.home_team_score||0;aPts=r.data.visitor_team_score||0;
-      // Team stats from player aggregation
-      var players=r.data.players||[];
-      var hId=r.data.home_team?.id;
-      var hAgg={pts_paint:0,ftm:0,fta:0,tpm:0,tpa:0};
-      var aAgg={pts_paint:0,ftm:0,fta:0,tpm:0,tpa:0};
-      players.forEach(function(p){
-        var s=p;
-        var isHome=p.team?.id===hId;
-        var agg=isHome?hAgg:aAgg;
-        agg.ftm+=Number(s.ftm||0);agg.fta+=Number(s.fta||0);
-        agg.tpm+=Number(s.fg3m||s.tpm||0);agg.tpa+=Number(s.fg3a||s.tpa||0);
-      });
-      // Points in paint from team-level stats (BDL puts these on the box score)
-      if(r.data.home_team_stats)hAgg.pts_paint=Number(r.data.home_team_stats.pts_paint||r.data.home_team_stats.points_in_the_paint||0);
-      if(r.data.visitor_team_stats)aAgg.pts_paint=Number(r.data.visitor_team_stats.pts_paint||r.data.visitor_team_stats.points_in_the_paint||0);
-      hStats=hAgg;aStats=aAgg;
-    }
-    if(hStats&&aStats){
-      var g=games.find(function(x){return x.id===gameId;});if(!g)return;
-      var hComp=computeScoringComp(hStats,hPts);
-      var aComp=computeScoringComp(aStats,aPts);
-      if(hComp&&aComp){
-        hComp.team=g.home?.alias||'HOME';aComp.team=g.away?.alias||'AWAY';
-        var margin=hPts-aPts;
-        cs.scoringComp={
-          home:hComp,away:aComp,
-          structuralDelta:hComp.structural-aComp.structural,
-          varianceDelta:hComp.variance-aComp.variance,
-          leadTeam:margin>=0?hComp.team:aComp.team
-        };
-        renderCard(gameId);
-      }
-    }
-  }catch(e){console.warn('[SC] Stats fetch failed:',e.message);}
+// ── BUILD SCORING COMP FROM AVAILABLE DATA ──
+function buildScoringCompForCard(gameId){
+  var cs=cardState[gameId];if(!cs||!cs.pbpAudit)return;
+  var g=games.find(function(x){return x.id===gameId;});if(!g)return;
+  var hA=g.home?.alias||'HOME',aA=g.away?.alias||'AWAY';
+  var sc=computeScoringComp(cs.pbpAudit,hA,aA,g.homePoints||0,g.awayPoints||0);
+  if(sc){cs.scoringComp=sc;renderCard(gameId);}
 }
 
 // ── FETCH PBP DATA FROM DB ──
@@ -1269,6 +1238,7 @@ async function fetchPBPFromDB(gameId){
       cs.pbpAudit=data.pbp;
       cs.pbpTime=new Date(data.saved_at||Date.now());
       console.log('[PBP] Loaded from DB for',gameId);
+      buildScoringCompForCard(gameId);
       renderCard(gameId);
     }
   }catch(e){console.warn('[PBP] DB fetch failed:',e.message);}
