@@ -2312,25 +2312,32 @@ async function fetchLineShop(alert){
 
     rows.sort(function(a,b){return b.ml-a.ml;});
     var totalBooks=rows.length;
-    rows=rows.slice(0,7);
     var bestML=rows[0].ml;
 
     var html='<div class="toast-odds-grid">';
     html+='<div style="padding:2px 8px 8px;display:flex;align-items:baseline;gap:6px">';
     html+='<span style="font-family:var(--mono);font-size:16px;font-weight:700;color:var(--green)">'+esc(betTeam)+' ML</span>';
-    html+='<span style="font-family:var(--mono);font-size:10px;color:var(--fg-dim)">top 7 of '+totalBooks+'</span>';
+    html+='<span style="font-family:var(--mono);font-size:10px;color:var(--fg-dim)">'+totalBooks+' books</span>';
     html+='</div>';
-    rows.forEach(function(r){
-      var isBest=r.ml===bestML&&rows.length>1;
+    function oddsRow(r){
+      var isBest=r.ml===bestML&&totalBooks>1;
       var mlStr=r.ml>0?'+'+r.ml:String(r.ml);
-      var hasLink=r.app||r.web;
-      html+='<div class="toast-odds-row'+(isBest?' best':'')+'"'+(hasLink?' onclick="openBook(\''+esc(r.app||'')+'\',\''+esc(r.web)+'\')"':'')+'>';
-      html+='<span class="toast-book">'+esc(r.name)+'</span>';
-      html+='<span class="toast-ml-val">'+esc(mlStr)+'</span>';
-      if(isBest)html+='<span class="toast-best-tag">BEST</span>';
-      if(hasLink)html+='<span class="toast-open">Open \u2192</span>';
+      var hasLink=r.web;
+      var h='<div class="toast-odds-row'+(isBest?' best':'')+'"'+(hasLink?' onclick="openBook(\'\',\''+esc(r.web)+'\')"':'')+'>';
+      h+='<span class="toast-book">'+esc(r.name)+'</span>';
+      h+='<span class="toast-ml-val">'+esc(mlStr)+'</span>';
+      if(isBest)h+='<span class="toast-best-tag">BEST</span>';
+      if(hasLink)h+='<span class="toast-open">Open \u2192</span>';
+      h+='</div>';
+      return h;
+    }
+    rows.slice(0,7).forEach(function(r){html+=oddsRow(r);});
+    if(totalBooks>7){
+      html+='<div id="toast-more-rows" style="display:none">';
+      rows.slice(7).forEach(function(r){html+=oddsRow(r);});
       html+='</div>';
-    });
+      html+='<div id="toast-more-btn" style="text-align:center;padding:6px 0 2px;cursor:pointer;font-family:var(--sans);font-size:11px;font-weight:600;color:var(--green)" onclick="toggleToastMore()">Show all '+totalBooks+' \u25bc</div>';
+    }
     html+='</div>';
     oddsEl.innerHTML=html;
   }catch(e){
@@ -2398,6 +2405,15 @@ function stopToastOddsPoll(){
 function openBook(appUrl,webUrl){
   // Use web URL directly — iOS Universal Links will open the app if installed
   if(webUrl)window.open(webUrl,'_blank');
+}
+
+function toggleToastMore(){
+  var rows=document.getElementById('toast-more-rows');
+  var btn=document.getElementById('toast-more-btn');
+  if(!rows||!btn)return;
+  var showing=rows.style.display!=='none';
+  rows.style.display=showing?'none':'block';
+  btn.textContent=showing?'Show all \u25bc':'Show less \u25b2';
 }
 
 function toastScrollToGame(){
