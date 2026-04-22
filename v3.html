@@ -286,6 +286,18 @@ input,textarea,select{font-size:16px!important;}
 .gl-badge.correct{color:var(--green);background:var(--green-dim);}
 .gl-badge.incorrect{color:var(--coral);background:var(--coral-dim);}
 
+/* Narrative scroll */
+.narr-scroll{display:flex;gap:10px;overflow-x:auto;scrollbar-width:none;padding-bottom:4px;}
+.narr-scroll::-webkit-scrollbar{display:none;}
+.narr-card{flex:0 0 260px;padding:12px;background:var(--bg-surface-2);border:1px solid var(--hairline);border-radius:var(--r-inner);display:flex;flex-direction:column;gap:6px;}
+.narr-card:last-child{border-color:var(--green-border);}
+.narr-top{display:flex;align-items:center;justify-content:space-between;gap:6px;}
+.narr-time{font-family:var(--mono);font-size:11px;color:var(--fg-dim);}
+.narr-score{font-family:var(--mono);font-size:16px;font-weight:600;color:var(--fg-primary);font-feature-settings:"tnum";}
+.narr-floor{font-family:var(--mono);font-size:14px;font-weight:600;}
+.narr-detail{font-family:var(--mono);font-size:10px;color:var(--fg-tertiary);}
+.narr-pill{font-family:var(--sans);font-size:10px;font-weight:600;padding:3px 8px;border-radius:var(--r-pill);white-space:nowrap;align-self:flex-start;}
+
 /* Quarter dominance grid */
 .qd-grid{width:100%;border-collapse:separate;border-spacing:0;font-family:var(--mono);font-size:12px;font-feature-settings:"tnum";}
 .qd-grid th{font-family:var(--sans);font-size:9px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:var(--fg-dim);text-align:center;padding:0 4px 8px;}
@@ -1033,6 +1045,7 @@ async function hydrateFromServerSnapshots(gameId){
     var snaps=data.snapshots||[];if(snaps.length===0)return;
     var usable=snaps.filter(function(s){return s.floor_score!=null;});
     if(usable.length===0)return;
+    cs._allSnapshots=usable; // store full array for drawer history
     var latest=usable[usable.length-1];
 
     // Server floor
@@ -1296,55 +1309,43 @@ function renderDrawer(gameId){
   var g=games.find(function(x){return x.id===gameId;});if(!g)return;
   var cs=cardState[gameId]||{};
   var hA=g.home?.alias||'HOME',aA=g.away?.alias||'AWAY';
+  var floor=getFloor(cs);var ctrlTeam=floor?floor.controlTeam:hA;
   var html='';
 
-  // ═══ GAME LOG ═══
-  html+='<div class="drawer-section">';
-  html+='<div class="drawer-section-title">Game Log</div>';
-  var alerts=_alertCache[gameId]||[];
-  if(alerts.length>0){
-    // Sort by time ascending
-    var sorted=alerts.slice().sort(function(a,b){return new Date(a.ts)-new Date(b.ts);});
-    sorted.forEach(function(a){
-      var isSend=a.agent_decision==='SEND';
-      var isSuppress=a.agent_decision==='SUPPRESS';
-      html+='<div class="gl-row'+(isSuppress?' suppressed':'')+'">';
-      html+='<div class="gl-head">';
-      html+='<span class="gl-type '+(isSend?'send':'suppress')+'">'+esc(a.alert_type||'?')+(a.alert_tier?' · '+esc(a.alert_tier):'')+'</span>';
-      var time='';
-      if(a.period)time+='Q'+a.period;
-      if(a.clock)time+=' '+a.clock;
-      if(a.floor_score!=null)time+=' · '+Number(a.floor_score).toFixed(2);
-      html+='<span class="gl-meta">'+esc(time)+'</span>';
-      html+='</div>';
-      // Agent decision + reasoning
-      html+='<div style="margin-bottom:3px">';
-      html+='<span class="gl-badge '+(isSend?'correct':'incorrect')+'">'+esc(a.agent_decision||'?')+'</span>';
-      if(a.correct!=null){
-        html+='<span class="gl-badge '+(a.correct?'correct':'incorrect')+'">'+(a.correct?'CORRECT':'WRONG')+'</span>';
-      }
-      if(a.conviction_tier)html+='<span style="font-family:var(--mono);font-size:9px;color:var(--fg-dim)">'+esc(a.conviction_tier)+(a.conviction_combo?' · '+esc(a.conviction_combo):'')+'</span>';
-      html+='</div>';
-      if(a.agent_reasoning){
-        html+='<div class="gl-reasoning">'+esc(a.agent_reasoning)+'</div>';
+  // ═══ 1. GAME NARRATIVE (horizontal scroll) ═══
+  var history=cs.analysisHistory||[];
+  if(history.length>0){
+    html+='<div class="drawer-section">';
+    html+='<div style="display:flex;align-items:center;justify-content:space-between"><div class="drawer-section-title">Game Narrative \u00b7 '+history.length+' reads</div>';
+    html+='<span style="font-family:var(--mono);font-size:10px;color:var(--fg-dim)">Q'+(history[0].period||'?')+' \u2192 Q'+(history[history.length-1].period||'?')+'</span></div>';
+    html+='<div class="narr-scroll">';
+    history.forEach(function(h,i){
+      var isLatest=i===history.length-1;
+      html+='<div class="narr-card" style="'+(isLatest?'border-color:var(--green-border)':'')+'">';
+      html+='<div class="narr-top"><span class="narr-time">Q'+(h.period||'?')+' '+(h.clock||'')+'</span></div>';
+      if(h.score)html+='<span class="narr-score">'+esc(h.score)+'</span>';
+      if(h.controlTeam&&h.controlScore!=null)html+='<span class="narr-floor" style="color:var(--green)">'+esc(h.controlTeam)+' '+Number(h.controlScore).toFixed(2)+'</span>';
+      var detail='';
+      if(h.conviction)detail+=h.conviction;
+      if(h.convictionCombo)detail+=' \u00b7 '+h.convictionCombo;
+      if(h.entry)detail+=(detail?' \u00b7 ':'')+h.entry;
+      if(detail)html+='<span class="narr-detail">'+esc(detail)+'</span>';
+      if(h.conviction){
+        var pCol=h.conviction==='DOMINANT'?'var(--green)':h.conviction==='STRONG'?'var(--green)':h.conviction==='EARNED'?'var(--amber)':'var(--fg-dim)';
+        html+='<span class="narr-pill" style="color:'+pCol+';background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.2)">'+esc(h.conviction)+'</span>';
       }
       html+='</div>';
     });
-  } else {
-    html+='<div style="text-align:center;font-family:var(--sans);font-size:12px;color:var(--fg-dim);padding:16px 0">No alerts for this game</div>';
+    html+='</div></div>';
   }
-  html+='</div>';
 
-  // ═══ QUARTER DOMINANCE GRID ═══
+  // ═══ 2. QUARTER DOMINANCE GRID ═══
   html+='<div class="drawer-section">';
   html+='<div class="drawer-section-title">Quarter Dominance</div>';
   var diffs=cs._serverQuarterDiffs;
   if(diffs){
-    var floor=getFloor(cs);
-    var ctrlTeam=floor?floor.controlTeam:hA;
     var ctrlIsHome=ctrlTeam===hA;
     html+='<div style="font-family:var(--mono);font-size:9px;color:var(--fg-dim);margin-bottom:6px">\u2190 from '+esc(ctrlTeam)+' perspective</div>';
-
     var statDefs=[
       {label:'PNT',get:function(d){return d.points_in_the_paint||d.points_in_paint||0;}},
       {label:'FTA',get:function(d){return d.free_throws_att||0;}},
@@ -1354,21 +1355,20 @@ function renderDrawer(gameId){
       {label:'AST',get:function(d){return d.assists||0;}}
     ];
     var keys=Object.keys(diffs).map(Number).filter(function(n){return !isNaN(n);}).sort(function(a,b){return a-b;});
-
     html+='<table class="qd-grid"><thead><tr><th></th>';
     statDefs.forEach(function(s){html+='<th>'+s.label+'</th>';});
     html+='</tr></thead><tbody>';
-
-    // Per-quarter delta accumulation for trend
     var deltas={};statDefs.forEach(function(s){deltas[s.label]=[];});
-
     keys.forEach(function(qk){
       var d=diffs[qk];if(!d||!d.home||!d.away)return;
       var rw=cs.rollingWindow;var isPartial=(rw&&rw.partial_quarter===qk);
       html+='<tr><td>Q'+qk+(isPartial?'*':'')+'</td>';
       statDefs.forEach(function(s){
         var hVal=s.get(d.home);var aVal=s.get(d.away);
-        var delta=ctrlIsHome?(s.invert?aVal-hVal:hVal-aVal):(s.invert?hVal-aVal:aVal-hVal);
+        // Delta from control team perspective
+        var rawDelta=ctrlIsHome?hVal-aVal:aVal-hVal;
+        // For TO: invert so positive = fewer TOs = good
+        var delta=s.invert?-rawDelta:rawDelta;
         deltas[s.label].push(delta);
         var cls=delta>0?'pos':delta<0?'neg':'even';
         var txt=delta>0?'+'+delta:delta===0?'\u00b7':''+delta;
@@ -1376,14 +1376,11 @@ function renderDrawer(gameId){
       });
       html+='</tr>';
     });
-
-    // Trend row
     if(keys.length>=2){
       html+='<tr><td class="qd-trend" style="color:var(--fg-dim)">TREND</td>';
       statDefs.forEach(function(s){
         var arr=deltas[s.label];if(arr.length<2){html+='<td class="qd-trend qd-cell even">\u25ac</td>';return;}
-        var latest=arr[arr.length-1];
-        var avg=arr.reduce(function(a,b){return a+b;},0)/arr.length;
+        var latest=arr[arr.length-1];var avg=arr.reduce(function(a,b){return a+b;},0)/arr.length;
         var trend=latest>avg+0.5?'up':latest<avg-0.5?'down':'flat';
         var sym=trend==='up'?'\u25b2':trend==='down'?'\u25bc':'\u25ac';
         var col=trend==='up'?'pos':trend==='down'?'neg':'even';
@@ -1397,29 +1394,38 @@ function renderDrawer(gameId){
   }
   html+='</div>';
 
-  // ═══ SNAPSHOT HISTORY ═══
+  // ═══ 3. SNAPSHOT HISTORY (from DB snapshots) ═══
   html+='<div class="drawer-section">';
   html+='<div class="drawer-section-title">Snapshot History</div>';
-  if(cs.gapLog&&cs.gapLog.length>0){
-    // Not implemented yet — placeholder
-  }
-  // Use alerts as a timeline proxy
-  if(alerts.length>0){
-    html+='<div style="overflow-x:auto"><table class="qd-grid" style="font-size:11px;min-width:500px"><thead><tr>';
-    html+='<th>Time</th><th>Score</th><th>Margin</th><th>Floor</th><th>Alert</th><th>Decision</th>';
+  var allSnaps=cs._allSnapshots;
+  if(allSnaps&&allSnaps.length>0){
+    // Sample: show every 3rd snapshot + first + last to keep table manageable
+    var sampled=[];
+    allSnaps.forEach(function(s,i){
+      if(i===0||i===allSnaps.length-1||i%3===0)sampled.push(s);
+    });
+    // Compute running mean floor
+    var floorSum=0;
+    html+='<div style="overflow-x:auto"><table class="qd-grid" style="font-size:10px;min-width:700px"><thead><tr>';
+    html+='<th>Time</th><th>Score</th><th>Floor</th><th>MF</th><th>Peak</th><th>I1</th><th>I2</th><th>I3</th><th>I4</th><th>I5</th><th>TP</th><th>LS</th>';
     html+='</tr></thead><tbody>';
-    var sorted2=alerts.slice().sort(function(a,b){return new Date(a.ts)-new Date(b.ts);});
-    sorted2.forEach(function(a){
-      var qc='Q'+(a.period||'?')+' '+(a.clock||'');
-      var margin=a.margin!=null?a.margin:'--';
-      var mSign=a.is_trailing?'-':'+';
+    sampled.forEach(function(s,i){
+      var qc='Q'+(s.period||'?')+' '+(s.clock||'');
+      var score=(s.away_pts||'?')+'-'+(s.home_pts||'?');
+      var f=s.floor_score!=null?Number(s.floor_score).toFixed(2):'--';
+      floorSum+=(s.floor_score||0);
+      var mf=((i+1)>0?(floorSum/(i+1)):0).toFixed(2);
+      // Peak floor = max floor seen so far
+      var peak=allSnaps.slice(0,allSnaps.indexOf(s)+1).reduce(function(mx,x){return(x.floor_score||0)>mx?(x.floor_score||0):mx;},0).toFixed(2);
       html+='<tr>';
-      html+='<td style="white-space:nowrap">'+esc(qc)+'</td>';
-      html+='<td>--</td>';
-      html+='<td>'+(a.margin!=null?(a.is_trailing?'-':'')+Math.abs(a.margin):'--')+'</td>';
-      html+='<td>'+(a.floor_score!=null?Number(a.floor_score).toFixed(2):'--')+'</td>';
-      html+='<td style="font-size:10px">'+esc(a.alert_type||'')+'</td>';
-      html+='<td class="'+(a.agent_decision==='SEND'?'qd-cell pos':'qd-cell neg')+'">'+esc(a.agent_decision||'')+'</td>';
+      html+='<td style="white-space:nowrap;font-size:9px">'+esc(qc)+'</td>';
+      html+='<td>'+esc(score)+'</td>';
+      html+='<td style="color:var(--green)">'+f+'</td>';
+      html+='<td>'+mf+'</td>';
+      html+='<td>'+peak+'</td>';
+      for(var ii=1;ii<=5;ii++){var iv=s['i'+ii];html+='<td>'+(iv!=null?Number(iv).toFixed(1):'--')+'</td>';}
+      html+='<td style="font-size:9px">'+(s.tp_class?esc(s.tp_class).substring(0,4):'--')+'</td>';
+      html+='<td style="font-size:9px">'+(s.ls_class?esc(s.ls_class).substring(0,4):'--')+'</td>';
       html+='</tr>';
     });
     html+='</tbody></table></div>';
@@ -1428,7 +1434,35 @@ function renderDrawer(gameId){
   }
   html+='</div>';
 
-  // Bottom padding for safe area
+  // ═══ 4. GAME LOG (bottom) ═══
+  html+='<div class="drawer-section">';
+  html+='<div class="drawer-section-title">Game Log</div>';
+  var alerts=_alertCache[gameId]||[];
+  if(alerts.length>0){
+    var sorted=alerts.slice().sort(function(a,b){return new Date(a.ts)-new Date(b.ts);});
+    sorted.forEach(function(a){
+      var isSend=a.agent_decision==='SEND';
+      var isSuppress=a.agent_decision==='SUPPRESS';
+      html+='<div class="gl-row'+(isSuppress?' suppressed':'')+'">';
+      html+='<div class="gl-head">';
+      html+='<span class="gl-type '+(isSend?'send':'suppress')+'">'+esc(a.alert_type||'?')+(a.alert_tier?' \u00b7 '+esc(a.alert_tier):'')+'</span>';
+      var time='';if(a.period)time+='Q'+a.period;if(a.clock)time+=' '+a.clock;
+      if(a.floor_score!=null)time+=' \u00b7 '+Number(a.floor_score).toFixed(2);
+      html+='<span class="gl-meta">'+esc(time)+'</span>';
+      html+='</div>';
+      html+='<div style="margin-bottom:3px">';
+      html+='<span class="gl-badge '+(isSend?'correct':'incorrect')+'">'+esc(a.agent_decision||'?')+'</span>';
+      if(a.correct!=null)html+='<span class="gl-badge '+(a.correct?'correct':'incorrect')+'">'+(a.correct?'CORRECT':'WRONG')+'</span>';
+      if(a.conviction_tier)html+='<span style="font-family:var(--mono);font-size:9px;color:var(--fg-dim)"> '+esc(a.conviction_tier)+(a.conviction_combo?' \u00b7 '+esc(a.conviction_combo):'')+'</span>';
+      html+='</div>';
+      if(a.agent_reasoning)html+='<div class="gl-reasoning">'+esc(a.agent_reasoning)+'</div>';
+      html+='</div>';
+    });
+  } else {
+    html+='<div style="text-align:center;font-family:var(--sans);font-size:12px;color:var(--fg-dim);padding:16px 0">No alerts for this game</div>';
+  }
+  html+='</div>';
+
   html+='<div style="height:40px"></div>';
   el.innerHTML=html;
 }
