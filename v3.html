@@ -2161,7 +2161,7 @@ var _toastAlert=null;
 var _toastGameId=null;
 var _latestSendAlert=null;
 var _toastVisible=false;
-var _oddsApiCache=null; // cached Odds API response
+var _toastOddsTimer=null;
 
 async function pollAlerts(){
   if(!dbReady)return;
@@ -2193,8 +2193,7 @@ async function pollAlerts(){
     }
     var badge=document.getElementById('toast-badge');
     if(_latestSendAlert&&badge){badge.textContent='';badge.classList.add('show');}
-    // Auto-show toast for new entry signal (alert info only, no odds fetch)
-    if(newSend)fireToast(newSend,false);
+    if(newSend)fireToast(newSend);
   }catch(e){console.warn('[TOAST] Alert poll failed:',e.message);}
 }
 
@@ -2218,18 +2217,15 @@ function renderToastHeader(alert){
   document.getElementById('toast-game').textContent=gameText;
 }
 
-function fireToast(alert,withOdds){
+function fireToast(alert){
   _toastAlert=alert;_toastGameId=alert.game_id;
   renderToastHeader(alert);
   var oddsEl=document.getElementById('toast-odds');
-  if(withOdds){
-    oddsEl.innerHTML='<div class="toast-no-odds">Loading odds\u2026</div>';
-    showToastEl();
-    fetchLineShop(alert);
-  } else {
-    oddsEl.innerHTML='<div class="toast-no-odds" style="cursor:pointer" onclick="showToast()">\u26a1 Tap for line shopping</div>';
-    showToastEl();
-  }
+  oddsEl.innerHTML='<div class="toast-no-odds">Loading odds\u2026</div>';
+  showToastEl();
+  fetchLineShop(alert);
+  // Start 20s odds refresh while toast is open
+  startToastOddsPoll();
 }
 
 async function fetchLineShop(alert){
@@ -2245,18 +2241,15 @@ async function fetchLineShop(alert){
   var betFullName=isHome?(g.home?.market||'')+' '+hName:(g.away?.market||'')+' '+aName;
 
   try{
-    // Use cached response if <60s old
-    if(!_oddsApiCache||Date.now()-_oddsApiCache.ts>60000){
-      var r=await fetch(FN+'odds-api');
-      if(!r.ok){var errD=await r.json().catch(function(){return{};});throw new Error(errD.error||'HTTP '+r.status);}
-      var data=await r.json();
-      _oddsApiCache={ts:Date.now(),games:data.games||[],credits:data.credits};
-      if(data.credits)console.log('[ODDS API] Credits remaining:',data.credits.remaining,'used:',data.credits.used);
-    }
+    var r=await fetch(FN+'odds-api');
+    if(!r.ok){var errD=await r.json().catch(function(){return{};});throw new Error(errD.error||'HTTP '+r.status);}
+    var data=await r.json();
+    var oddsGames=data.games||[];
+    if(data.credits)console.log('[ODDS API] Credits remaining:',data.credits.remaining,'used:',data.credits.used);
 
     // Match our game in The Odds API response
     var match=null;
-    _oddsApiCache.games.forEach(function(og){
+    oddsGames.forEach(function(og){
       // Match by team names — check if our team names appear in the API team names
       var ogHome=(og.home_team||'').toLowerCase();
       var ogAway=(og.away_team||'').toLowerCase();
@@ -2320,8 +2313,7 @@ function showToastEl(){
 }
 
 function showToast(){
-  // Manual trigger via ⚡ — show latest alert WITH odds
-  if(_latestSendAlert){fireToast(_latestSendAlert,true);}
+  if(_latestSendAlert){fireToast(_latestSendAlert);}
   else{
     document.getElementById('toast-label').textContent='No Alerts';
     document.getElementById('toast-alert-info').textContent='No SEND alerts today';
@@ -2334,6 +2326,19 @@ function showToast(){
 function dismissToast(){
   document.getElementById('toast').classList.remove('show');
   _toastVisible=false;
+  stopToastOddsPoll();
+}
+
+function startToastOddsPoll(){
+  stopToastOddsPoll();
+  _toastOddsTimer=setInterval(function(){
+    if(_toastAlert&&_toastVisible)fetchLineShop(_toastAlert);
+    else stopToastOddsPoll();
+  },20000);
+}
+
+function stopToastOddsPoll(){
+  if(_toastOddsTimer){clearInterval(_toastOddsTimer);_toastOddsTimer=null;}
 }
 
 function openBook(appUrl,webUrl){
