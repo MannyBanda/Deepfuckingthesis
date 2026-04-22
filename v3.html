@@ -595,6 +595,7 @@ async function loadSchedule(){
       syncAnalysesFromDB();
       syncCalibrationAnalyses();
       syncLatestSnapshotsFromDB();
+      syncThesesFromDB();
       // PBP for margin flow + scoring comp (staggered)
       games.forEach(function(g,i){
         var gs=getState(g);
@@ -866,11 +867,16 @@ function renderCard(id){
       }
       html+='</div>';
     } else {
-      // Fallback — no analysis yet
+      // Fallback — no analysis yet, show thesis if available
+      var thesis=theses[id];
       html+='<div class="sonnet-signal"><div class="ss-fallback">';
       if(cs.analyzing)html+='<div class="ss-fallback-text">\u23f3 Running Sonnet analysis\u2026</div>';
       else{
-        html+='<div class="ss-fallback-text">No analysis yet</div>';
+        if(thesis){
+          html+='<div class="ss-fallback-text" style="-webkit-line-clamp:4;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden;font-size:12px;line-height:1.5;color:var(--fg-secondary)">'+esc(thesis)+'</div>';
+        } else {
+          html+='<div class="ss-fallback-text">No analysis yet</div>';
+        }
         if(state==='LIVE'||state==='HALF'||state==='FINAL')html+='<button class="analyze-btn" onclick="triggerAnalysis(\''+id+'\')" style="margin-top:8px">\u26a1 Analyze</button>';
       }
       html+='</div></div>';
@@ -1272,6 +1278,23 @@ async function syncLatestSnapshotsFromDB(){
   }catch(e){console.warn('[DB] Snapshot sync failed:',e.message);}
 }
 
+async function syncThesesFromDB(){
+  if(!dbReady)return;
+  try{
+    var ids=games.map(function(g){return g.id;}).join(',');if(!ids)return;
+    var r=await fetch(FN+'db-api?action=get_theses&game_ids='+encodeURIComponent(ids));
+    if(!r.ok)return;var data=await r.json();
+    var t=data.theses||{};
+    Object.keys(t).forEach(function(gid){theses[gid]=t[gid];});
+    var count=Object.keys(t).length;
+    if(count>0){
+      console.log('[DB] Loaded',count,'theses');
+      // Re-render cards that now have thesis data
+      games.forEach(function(g){if(t[g.id])renderCard(g.id);});
+    }
+  }catch(e){console.warn('[DB] Thesis sync failed:',e.message);}
+}
+
 // ── PARSE SONNET DECISION ──
 function parseSonnetDecision(text){
   if(!text)return null;
@@ -1389,6 +1412,7 @@ async function triggerAnalysis(gameId){
     var score=aA+' '+(g?.awayPoints||0)+' - '+hA+' '+(g?.homePoints||0);
     var payload={
       summaryData:summaryData,
+      thesis:theses[gameId]||'',
       homeTeam:hA,awayTeam:aA,
       period:period,score:score,
       gameClock:g?.clock||null,gamePeriod:g?.period||0,
