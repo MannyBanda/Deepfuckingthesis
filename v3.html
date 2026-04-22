@@ -1162,7 +1162,8 @@ function applyAutoAnalysesToCards(){
         controlTeam:a.control_team||'?',controlScore:a.control_score||null,
         conviction:a.conviction||null,convictionTier:a.conviction_tier||null,
         convictionCombo:a.conviction_combo||null,entry:a.entry||null,
-        signal:a.signal||null,score:scoreStr,source:src
+        signal:a.signal||null,score:scoreStr,source:src,
+        sustainability:a.sustainability||null
       });
       newEntries++;
     });
@@ -1357,6 +1358,18 @@ function renderDrawer(gameId){
         var pCol=h.conviction==='DOMINANT'?'var(--green)':h.conviction==='STRONG'?'var(--green)':h.conviction==='EARNED'?'var(--amber)':'var(--fg-dim)';
         html+='<span class="narr-pill" style="color:'+pCol+';background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.2)">'+esc(h.conviction)+'</span>';
       }
+      // Sustainability badges
+      if(h.sustainability){
+        var sp=h.sustainability.split('|').map(function(s){return s.trim();});
+        html+='<div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:1px">';
+        sp.forEach(function(part){
+          var m=part.match(/^(\w+)\s*:\s*(.+)/);if(!m)return;
+          var tm=m[1].trim(),tier=m[2].trim().toUpperCase();
+          var sc=tier.includes('LOCKED')||tier.includes('DURABLE')?'locked':tier.includes('MIXED')||tier.includes('STALLED')?'mixed':tier.includes('FRAGILE')||tier.includes('UNSUSTAINABLE')?'fragile':'mixed';
+          html+='<span class="sust-tier '+sc+'" style="font-size:8px;padding:1px 5px">'+esc(tm)+' '+esc(tier.substring(0,4))+'</span>';
+        });
+        html+='</div>';
+      }
       html+='</div>';
     });
     html+='</div></div>';
@@ -1440,46 +1453,50 @@ function renderDrawer(gameId){
       if(!alertLookup[key])alertLookup[key]=a;
     });
 
+    // Column toggle state
+    if(!cs._snapCols)cs._snapCols={time:true,score:true,floor:true,mf:true,peak:true,ind:true,tp:true,ls:true,grad:true,spread:true,alert:true,dec:true};
+    var sc2=cs._snapCols;
+    html+='<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">';
+    var colDefs=[{k:'time',l:'Time'},{k:'score',l:'Score'},{k:'floor',l:'Floor'},{k:'mf',l:'MF'},{k:'peak',l:'Peak'},{k:'ind',l:'I1-I5'},{k:'tp',l:'TP'},{k:'ls',l:'LS'},{k:'grad',l:'Grad'},{k:'spread',l:'Sprd'},{k:'alert',l:'Alert'},{k:'dec',l:'Dec'}];
+    colDefs.forEach(function(c){
+      html+='<button onclick="toggleSnapCol(\''+gameId+'\',\''+c.k+'\')" style="font-family:var(--mono);font-size:8px;padding:2px 5px;border-radius:4px;border:1px solid '+(sc2[c.k]?'var(--green-border)':'var(--hairline)')+';background:'+(sc2[c.k]?'var(--green-dim)':'transparent')+';color:'+(sc2[c.k]?'var(--green)':'var(--fg-dim)')+';cursor:pointer">'+c.l+'</button>';
+    });
+    html+='</div>';
+
     function fmtF(v){if(v==null)return'--';var s=Number(v).toFixed(2);return s.replace(/^0\./,'.');}
     function indDot(v){if(v==null)return'<span style="color:var(--fg-dim)">\u25cf</span>';var n=Number(v);if(n>=0.6)return'<span style="color:var(--green)">\u25cf</span>';if(n<=0.4)return'<span style="color:var(--coral)">\u25cf</span>';return'<span style="color:var(--fg-dim)">\u25cf</span>';}
 
-    html+='<div style="overflow-x:auto"><table class="qd-grid" style="font-size:10px;min-width:780px"><thead><tr>';
-    html+='<th>Time</th><th>Score</th><th>Floor</th><th>MF</th><th>Peak</th><th style="text-align:center">I1-I5</th><th>TP</th><th>LS</th><th>Alert</th><th>Decision</th>';
+    html+='<div style="overflow-x:auto"><table class="qd-grid" style="font-size:10px"><thead><tr>';
+    if(sc2.time)html+='<th>Time</th>';if(sc2.score)html+='<th>Score</th>';if(sc2.floor)html+='<th>Floor</th>';
+    if(sc2.mf)html+='<th>MF</th>';if(sc2.peak)html+='<th>Peak</th>';
+    if(sc2.ind)html+='<th style="text-align:center">I1-I5</th>';
+    if(sc2.tp)html+='<th>TP</th>';if(sc2.ls)html+='<th>LS</th>';
+    if(sc2.grad)html+='<th>Grad</th>';if(sc2.spread)html+='<th>Sprd</th>';
+    if(sc2.alert)html+='<th>Alert</th>';if(sc2.dec)html+='<th>Dec</th>';
     html+='</tr></thead><tbody>';
     sampled.forEach(function(s,ri){
       var origIdx=allSnaps.indexOf(s);
       var isLatest=ri===0;
       var qc='Q'+(s.period||'?')+' '+(s.clock||'');
       var score=(s.away_pts||'?')+'\u2013'+(s.home_pts||'?');
-      // Cross-reference alerts
       var aKey='Q'+(s.period||'')+'_'+(s.clock||'');
       var matchAlert=alertLookup[aKey]||null;
-      // Find closest alert within same period
-      if(!matchAlert){
-        var closest=null,minDist=999;
-        (_alertCache[gameId]||[]).forEach(function(a){
-          if(a.period===s.period){
-            var sClock=parseInt((s.clock||'0').replace(':',''))||0;
-            var aClock=parseInt((a.clock||'0').replace(':',''))||0;
-            var dist=Math.abs(sClock-aClock);
-            if(dist<minDist&&dist<200){minDist=dist;closest=a;}
-          }
-        });
-        matchAlert=closest;
-      }
+      if(!matchAlert){var closest=null,minDist=999;(_alertCache[gameId]||[]).forEach(function(a){if(a.period===s.period){var sCk=parseInt((s.clock||'0').replace(':',''))||0;var aCk=parseInt((a.clock||'0').replace(':',''))||0;var dist=Math.abs(sCk-aCk);if(dist<minDist&&dist<200){minDist=dist;closest=a;}}});matchAlert=closest;}
 
       html+='<tr style="'+(isLatest?'border:1px solid var(--green-border);background:rgba(52,211,153,0.04)':'')+'">';
-      html+='<td style="white-space:nowrap;font-size:9px">'+esc(qc)+'</td>';
-      html+='<td>'+esc(score)+'</td>';
-      html+='<td style="color:var(--green)">'+fmtF(s.floor_score)+'</td>';
-      var mfIdx=sampled.length-1-ri;html+='<td>'+fmtF(mfMap[mfIdx])+'</td>';
-      html+='<td>'+fmtF(pkMap[mfIdx])+'</td>';
-      // I1-I5 as dots
-      html+='<td style="text-align:center;letter-spacing:2px">'+indDot(s.i1)+indDot(s.i2)+indDot(s.i3)+indDot(s.i4)+indDot(s.i5)+'</td>';
-      html+='<td style="font-size:9px">'+(s.tp_class?esc(s.tp_class).substring(0,4):'--')+'</td>';
-      html+='<td style="font-size:9px">'+(s.ls_class?esc(s.ls_class).substring(0,4):'--')+'</td>';
-      html+='<td style="font-size:9px">'+(matchAlert?esc(matchAlert.alert_type||'').substring(0,6):'--')+'</td>';
-      html+='<td style="font-size:9px" class="'+(matchAlert?(matchAlert.agent_decision==='SEND'?'qd-cell pos':'qd-cell neg'):'')+'">'+(matchAlert?esc(matchAlert.agent_decision||''):'--')+'</td>';
+      if(sc2.time)html+='<td style="white-space:nowrap;font-size:9px">'+esc(qc)+'</td>';
+      if(sc2.score)html+='<td>'+esc(score)+'</td>';
+      if(sc2.floor)html+='<td style="color:var(--green)">'+fmtF(s.floor_score)+'</td>';
+      var mfIdx=sampled.length-1-ri;
+      if(sc2.mf)html+='<td>'+fmtF(mfMap[mfIdx])+'</td>';
+      if(sc2.peak)html+='<td>'+fmtF(pkMap[mfIdx])+'</td>';
+      if(sc2.ind)html+='<td style="text-align:center;letter-spacing:2px">'+indDot(s.i1)+indDot(s.i2)+indDot(s.i3)+indDot(s.i4)+indDot(s.i5)+'</td>';
+      if(sc2.tp)html+='<td style="font-size:9px">'+(s.tp_class?esc(s.tp_class).substring(0,4):'--')+'</td>';
+      if(sc2.ls)html+='<td style="font-size:9px">'+(s.ls_class?esc(s.ls_class).substring(0,4):'--')+'</td>';
+      if(sc2.grad)html+='<td style="font-size:9px">'+(matchAlert&&matchAlert.graduation_rank?esc(matchAlert.graduation_rank):'--')+'</td>';
+      if(sc2.spread)html+='<td style="font-size:9px">'+(s.spread!=null?s.spread:'--')+'</td>';
+      if(sc2.alert)html+='<td style="font-size:9px">'+(matchAlert?esc(matchAlert.alert_type||'').substring(0,6):'--')+'</td>';
+      if(sc2.dec)html+='<td style="font-size:9px" class="'+(matchAlert?(matchAlert.agent_decision==='SEND'?'qd-cell pos':'qd-cell neg':'')+'">'+(matchAlert?esc(matchAlert.agent_decision||''):'--')+'</td>';
       html+='</tr>';
     });
     html+='</tbody></table></div>';
@@ -1493,7 +1510,7 @@ function renderDrawer(gameId){
   html+='<div class="drawer-section-title">Game Log</div>';
   var alerts=_alertCache[gameId]||[];
   if(alerts.length>0){
-    var sorted=alerts.slice().sort(function(a,b){return new Date(a.ts)-new Date(b.ts);});
+    var sorted=alerts.slice().sort(function(a,b){return new Date(b.ts)-new Date(a.ts);});
     sorted.forEach(function(a){
       var isSend=a.agent_decision==='SEND';
       var isSuppress=a.agent_decision==='SUPPRESS';
@@ -1526,6 +1543,14 @@ var _selectedRun={};
 function selectRun(gameId,ri){
   _selectedRun[gameId]=_selectedRun[gameId]===ri?null:ri;
   renderCard(gameId);
+}
+
+// ── SNAPSHOT COLUMN TOGGLE ──
+function toggleSnapCol(gameId,col){
+  var cs=cardState[gameId];if(!cs)return;
+  if(!cs._snapCols)cs._snapCols={time:true,score:true,floor:true,mf:true,peak:true,ind:true,tp:true,ls:true,grad:true,spread:true,alert:true,dec:true};
+  cs._snapCols[col]=!cs._snapCols[col];
+  renderDrawer(gameId);
 }
 
 // ── SCORING COMPOSITION (from PBP audit zone data) ──
