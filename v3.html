@@ -2258,10 +2258,12 @@ async function fetchLineShop(alert){
     var gs=getState(g);
     var oddsUrl=FN+'odds-api';
     if(gs==='FINAL'&&g.scheduled){
-      oddsUrl+=('?date='+encodeURIComponent(g.scheduled));
+      // Normalize to ISO Z format (The Odds API requires this)
+      var histDate=new Date(g.scheduled).toISOString();
+      oddsUrl+=('?date='+encodeURIComponent(histDate));
     }
     var r=await fetch(oddsUrl);
-    if(!r.ok){var errD=await r.json().catch(function(){return{};});throw new Error(errD.error||'HTTP '+r.status);}
+    if(!r.ok){var errD=await r.json().catch(function(){return{};});console.warn('[ODDS API] Error detail:',errD.detail||errD.error);throw new Error(errD.error||'HTTP '+r.status);}
     var data=await r.json();
     var oddsGames=data.games||[];
     if(data.credits)console.log('[ODDS API]'+(data.historical?' (historical)':'')+' Credits remaining:',data.credits.remaining,'used:',data.credits.used);
