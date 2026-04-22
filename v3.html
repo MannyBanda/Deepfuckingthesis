@@ -1145,7 +1145,30 @@ function applyAutoAnalysesToCards(){
     var latest=autos[autos.length-1];
     var latestTime=new Date(latest.ts).getTime();
     var localTime=cs.analysisTime?cs.analysisTime.getTime():0;
-    if(latestTime<=localTime&&cs.prediction)return;
+
+    // Always build analysisHistory from auto analyses (even if prediction is up to date)
+    if(!cs.analysisHistory)cs.analysisHistory=[];
+    var existingTriggers={};cs.analysisHistory.forEach(function(h){if(h.source)existingTriggers[h.source]=true;});
+    var newEntries=0;
+    autos.forEach(function(a){
+      var src='auto_'+(a.trigger||'q?');
+      if(existingTriggers[src])return;
+      var scoreStr='';
+      if(a.home_pts!=null&&a.away_pts!=null)scoreStr=a.away_pts+'-'+a.home_pts;
+      else if(a.raw_text){var sm=a.raw_text.match(/(\d+)\s*[-\u2013]\s*(\d+)/);if(sm)scoreStr=sm[0];}
+      cs.analysisHistory.push({
+        time:a.ts?new Date(a.ts).toLocaleTimeString():'?',
+        period:a.period||'?',clock:a.clock||'',
+        controlTeam:a.control_team||'?',controlScore:a.control_score||null,
+        conviction:a.conviction||null,convictionTier:a.conviction_tier||null,
+        convictionCombo:a.conviction_combo||null,entry:a.entry||null,
+        signal:a.signal||null,score:scoreStr,source:src
+      });
+      newEntries++;
+    });
+    if(newEntries>0)cs.analysisHistory.sort(function(a,b){return(a.time||'').localeCompare(b.time||'');});
+
+    if(latestTime<=localTime&&cs.prediction){if(newEntries>0)applied++;return;}
 
     var pred=null,ind=null;
     if(latest.prediction_json){try{pred=typeof latest.prediction_json==='string'?JSON.parse(latest.prediction_json):latest.prediction_json;}catch(e){}}
@@ -1181,26 +1204,6 @@ function applyAutoAnalysesToCards(){
       cs.prediction=d;cs.analysisTime=new Date(latestTime);
       if(latest.raw_text&&latest.raw_text.length>20)cs.analysis=latest.raw_text;
       if(ind)cs.sonnetIndicators=ind;
-
-      // Build analysisHistory from all auto analyses
-      if(!cs.analysisHistory)cs.analysisHistory=[];
-      var existingTriggers={};cs.analysisHistory.forEach(function(h){if(h.source)existingTriggers[h.source]=true;});
-      autos.forEach(function(a){
-        var src='auto_'+(a.trigger||'q?');
-        if(existingTriggers[src])return;
-        var scoreStr='';
-        if(a.home_pts!=null&&a.away_pts!=null)scoreStr=a.away_pts+'-'+a.home_pts;
-        else if(a.raw_text){var sm=a.raw_text.match(/(\d+)\s*[-\u2013]\s*(\d+)/);if(sm)scoreStr=sm[0];}
-        cs.analysisHistory.push({
-          time:a.ts?new Date(a.ts).toLocaleTimeString():'?',
-          period:a.period||'?',clock:a.clock||'',
-          controlTeam:a.control_team||'?',controlScore:a.control_score||null,
-          conviction:a.conviction||null,convictionTier:a.conviction_tier||null,
-          convictionCombo:a.conviction_combo||null,entry:a.entry||null,
-          signal:a.signal||null,score:scoreStr,source:src
-        });
-      });
-      cs.analysisHistory.sort(function(a,b){return(a.time||'').localeCompare(b.time||'');});
 
       // Sustainability from auto analysis
       if(latest.sustainability){
