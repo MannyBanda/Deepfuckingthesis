@@ -2306,10 +2306,12 @@ async function fetchLineShop(alert){
     if(rows.length===0){oddsEl.innerHTML='<div class="toast-no-odds">No ML odds for '+esc(betTeam)+'</div>';return;}
 
     rows.sort(function(a,b){return b.ml-a.ml;});
+    var totalBooks=rows.length;
+    rows=rows.slice(0,7);
     var bestML=rows[0].ml;
 
     var html='<div class="toast-odds-grid">';
-    html+='<div style="padding:0 8px 6px;font-family:var(--mono);font-size:10px;color:var(--fg-dim)">'+esc(betTeam)+' ML \u00b7 '+rows.length+' books</div>';
+    html+='<div style="padding:0 8px 6px;font-family:var(--mono);font-size:10px;color:var(--fg-dim)">'+esc(betTeam)+' ML \u00b7 top 7 of '+totalBooks+' books</div>';
     rows.forEach(function(r){
       var isBest=r.ml===bestML&&rows.length>1;
       var mlStr=r.ml>0?'+'+r.ml:String(r.ml);
@@ -2386,15 +2388,8 @@ function stopToastOddsPoll(){
 }
 
 function openBook(appUrl,webUrl){
-  // Try app scheme first, fall back to web after 1.5s if app didn't open
-  var t=Date.now();
-  window.location=appUrl;
-  setTimeout(function(){
-    // If less than 2s elapsed and page is still visible, app didn't open
-    if(!document.hidden&&Date.now()-t<3000){
-      window.open(webUrl,'_blank');
-    }
-  },1500);
+  // Use web URL directly — iOS Universal Links will open the app if installed
+  if(webUrl)window.open(webUrl,'_blank');
 }
 
 function toastScrollToGame(){
