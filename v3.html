@@ -2165,7 +2165,12 @@ var BOOK_LINKS={
   superbook:{name:'SuperBook',app:'',web:'https://co.superbook.com'},
   betparx:{name:'BetParx',app:'',web:'https://www.betparx.com'},
   fliff:{name:'Fliff',app:'',web:'https://www.getfliff.com'},
-  hardrockbet:{name:'Hard Rock',app:'',web:'https://www.hardrockbet.com'}
+  hardrockbet:{name:'Hard Rock',app:'',web:'https://www.hardrockbet.com'},
+  ballybet:{name:'Bally Bet',app:'',web:'https://www.ballybet.com'},
+  rebet:{name:'ReBet',app:'',web:'https://www.rebet.app'},
+  betanything:{name:'BetAnything',app:'',web:'https://www.betanything.com'},
+  hard_rock_bet_az:{name:'Hard Rock (AZ)',app:'',web:'https://www.hardrockbet.com'},
+  hard_rock_bet_fl:{name:'Hard Rock (FL)',app:'',web:'https://www.hardrockbet.com'}
 };
 var ENTRY_TYPES={'BUY':1,'WINDOW_BUY':1,'BWC_EDGE':1,'POSITION_OPEN':1,'RE_ENTRY_VALUE':1};
 var _seenAlertIds=new Set();
@@ -2311,7 +2316,10 @@ async function fetchLineShop(alert){
     var bestML=rows[0].ml;
 
     var html='<div class="toast-odds-grid">';
-    html+='<div style="padding:0 8px 6px;font-family:var(--mono);font-size:10px;color:var(--fg-dim)">'+esc(betTeam)+' ML \u00b7 top 7 of '+totalBooks+' books</div>';
+    html+='<div style="padding:2px 8px 8px;display:flex;align-items:baseline;gap:6px">';
+    html+='<span style="font-family:var(--mono);font-size:16px;font-weight:700;color:var(--green)">'+esc(betTeam)+' ML</span>';
+    html+='<span style="font-family:var(--mono);font-size:10px;color:var(--fg-dim)">top 7 of '+totalBooks+'</span>';
+    html+='</div>';
     rows.forEach(function(r){
       var isBest=r.ml===bestML&&rows.length>1;
       var mlStr=r.ml>0?'+'+r.ml:String(r.ml);
