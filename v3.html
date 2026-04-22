@@ -715,9 +715,10 @@ document.getElementById('swipe').addEventListener('scroll',function(){
         activeGameId=newActive;
         renderPills();
         renderSwipeDots();
-        // Scroll the active pill into view in the pill strip
         var activePill=document.querySelector('.chip.sel');
         if(activePill)activePill.scrollIntoView({behavior:'smooth',inline:'center',block:'nearest'});
+        // Update toast for new game if toast is visible
+        if(_toastVisible)updateToastForGame(newActive);
       }
     }
   },80);
@@ -2173,6 +2174,7 @@ var _toastGameId=null;
 var _latestSendAlert=null;
 var _toastVisible=false;
 var _toastOddsTimer=null;
+var _dismissedAlertIds=new Set();
 
 async function pollAlerts(){
   if(!dbReady)return;
@@ -2194,7 +2196,8 @@ async function pollAlerts(){
       if(a.agent_decision==='SEND'&&!_seenAlertIds.has(a.id)){
         _seenAlertIds.add(a.id);
         _latestSendAlert=a;
-        if(ENTRY_TYPES[a.alert_type])newSend=a;
+        // Only auto-toast for entry types that haven't been dismissed
+        if(ENTRY_TYPES[a.alert_type]&&!_dismissedAlertIds.has(a.id))newSend=a;
       }
     });
     if(!_latestSendAlert){
@@ -2349,6 +2352,25 @@ function dismissToast(){
   document.getElementById('toast').classList.remove('show');
   _toastVisible=false;
   stopToastOddsPoll();
+  // Remember this alert was dismissed — don't auto-show it again
+  if(_toastAlert&&_toastAlert.id)_dismissedAlertIds.add(_toastAlert.id);
+}
+
+function updateToastForGame(gameId){
+  // Find latest SEND alert for this game
+  var gameAlerts=_alertCache[gameId]||[];
+  var latest=null;
+  for(var i=gameAlerts.length-1;i>=0;i--){
+    if(gameAlerts[i].agent_decision==='SEND'){latest=gameAlerts[i];break;}
+  }
+  if(latest){
+    fireToast(latest);
+  } else {
+    // No alerts for this game — dismiss toast
+    document.getElementById('toast').classList.remove('show');
+    _toastVisible=false;
+    stopToastOddsPoll();
+  }
 }
 
 function startToastOddsPoll(){
