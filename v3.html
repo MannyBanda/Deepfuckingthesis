@@ -425,6 +425,7 @@ var dbSnapshotCache = {};
 var _ssExpanded = {}; // track expanded sonnet signal per game
 var _lastThesisResync = 0;
 var _lastSnapshotResync = 0;
+var _lastEspnWPRefresh = 0;
 
 // ── UTILS ──
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/`/g,'&#96;').replace(/\$\{/g,'&#36;{');}
@@ -655,6 +656,8 @@ async function refreshLiveCards(){
   maybeResyncTheses();
   // Periodic server snapshot re-hydration (every 60s for LIVE games)
   maybeResyncSnapshots();
+  // ESPN WP refresh for LIVE games (every 30s)
+  maybeRefreshEspnWP();
 }
 
 // ── PERIODIC RE-SYNC HELPERS ──
@@ -678,6 +681,18 @@ function maybeResyncSnapshots(){
   });
   // Also refresh auto-analyses
   syncCalibrationAnalyses();
+}
+
+function maybeRefreshEspnWP(){
+  if(Date.now()-_lastEspnWPRefresh<30000)return;
+  var hasLive=games.some(function(g){return getState(g)==='LIVE';});
+  if(!hasLive)return;
+  _lastEspnWPRefresh=Date.now();
+  games.forEach(function(g,i){
+    if(getState(g)==='LIVE'&&espnGameMap[g.id]){
+      setTimeout(function(){fetchEspnWP(g.id);},i*300);
+    }
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1042,10 +1057,10 @@ function renderCard(id){
 // ── ESPN WP CHART SVG ──
 function renderWPChart(cs,hA,aA){
   var hist=cs.espnWPHistory;
-  if(!hist||hist.length<5)return'<div class="wp-canvas" style="height:40px"></div>';
+  if(!hist||hist.length<2)return'<div class="wp-canvas" style="height:40px"></div>';
   var W=600,H=80;
   var pts=hist.filter(function(p){return p.homeWP!=null;});
-  if(pts.length<3)return'<div class="wp-canvas" style="height:40px"></div>';
+  if(pts.length<2)return'<div class="wp-canvas" style="height:40px"></div>';
   var pathD='',fillD='M0,'+H/2;
   for(var i=0;i<pts.length;i++){
     var px=(i/(pts.length-1))*W;
