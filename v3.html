@@ -601,11 +601,12 @@ async function loadSchedule(){
       syncCalibrationAnalyses();
       syncLatestSnapshotsFromDB();
       syncThesesFromDB();
-      // PBP for margin flow + scoring comp (staggered)
+      // PBP for margin flow + scoring comp, odds for ML (staggered)
       games.forEach(function(g,i){
         var gs=getState(g);
         if(gs!=='PRE'){
           setTimeout(function(){fetchPBPFromDB(g.id);},800+i*200);
+          setTimeout(function(){fetchOddsHistory(g.id);},1000+i*200);
         }
       });
       // Initial alert poll for toast (fires after hydration)
@@ -1144,8 +1145,8 @@ async function fetchEspnWP(gameId){
       var g=games.find(function(x){return x.id===gameId;});
       var homeWP=Math.round(data.current.homeWinPct*100);
       cs.espnWP={home:homeWP,away:100-homeWP,opening:data.opening?Math.round(data.opening.homeWinPct*100):null};
-      if(data.plays&&data.plays.length>0){
-        cs.espnWPHistory=data.plays.map(function(p){return{homeWP:p.homeWinPct};});
+      if(data.wpHistory&&data.wpHistory.length>0){
+        cs.espnWPHistory=data.wpHistory;
         // Persist for FINAL games so chart survives page reloads
         if(g&&getState(g)==='FINAL'){
           try{localStorage.setItem('nba4:wpHist:'+gameId,JSON.stringify(cs.espnWPHistory));}catch(e){}
@@ -1838,7 +1839,18 @@ async function fetchOddsHistory(gameId){
     var r=await fetch(FN+'db-api?action=get_odds&game_id='+encodeURIComponent(gameId));
     if(!r.ok)return;var data=await r.json();
     cs._oddsHistory=data.odds||[];
-    if(cs._oddsHistory.length>0){console.log('[ODDS] Loaded',cs._oddsHistory.length,'entries for',gameId);renderDrawer(gameId);}
+    if(cs._oddsHistory.length>0){
+      // Populate ML from latest odds entry into oddsData for value read table
+      var latest=cs._oddsHistory[cs._oddsHistory.length-1];
+      if(!cs.oddsData)cs.oddsData={homeSpread:null,homeML:null,awayML:null,total:null,source:'db-odds'};
+      if(latest.home_ml!=null)cs.oddsData.homeML=String(latest.home_ml);
+      if(latest.away_ml!=null)cs.oddsData.awayML=String(latest.away_ml);
+      if(latest.home_spread!=null&&!cs.oddsData.homeSpread)cs.oddsData.homeSpread=String(latest.home_spread);
+      if(latest.total!=null&&!cs.oddsData.total)cs.oddsData.total=String(latest.total);
+      console.log('[ODDS] Loaded',cs._oddsHistory.length,'entries for',gameId,'ML:'+cs.oddsData.homeML+'/'+cs.oddsData.awayML);
+      renderCard(gameId);
+      if(_drawerGameId===gameId)renderDrawer(gameId);
+    }
   }catch(e){console.warn('[ODDS] Fetch failed:',e.message);}
 }
 function closeDrawer(){
