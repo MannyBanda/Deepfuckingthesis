@@ -8245,166 +8245,113 @@ async function reportGraduationSim(sql, url) {
 
 
 // ── BUY EXIT TRIGGER SIMULATION ─────────────────────────────────────────────
-// Tests 4 EXIT thresholds (A/D/B/C) on BUY-eligible games using live server
-// snapshots at 60s resolution. Measures precision, EV, and FLIP BUY signal
-// accuracy by lane (underdog/tossup/favorite/heavy_favorite).
+// Tests 4 EXIT thresholds (A/D/B/C) on BUY-eligible games using backtest
+// checkpoint data (~1,230 games). Measures precision, flip signal accuracy,
+// and reclaim analysis. Lane breakdown requires odds (future enhancement).
 // Usage: ?phase=report_buy_exit_sim  or  ?phase=report_buy_exit_sim&close=1
 async function reportBuyExitSim(sql, url) {
   var closeOnly = url?.searchParams?.get('close') === '1';
   var t0 = Date.now();
 
-  // ── 1. Pull server snapshots (all finished games) ──
-  var snapQuery = await sql`
-    SELECT s.game_id, s.ts, s.period, s.clock, s.home_pts, s.away_pts,
-           s.floor_score, s.floor_team, s.i1, s.i2, s.i3, s.i4, s.i5,
-           g.winner, g.margin, g.home_alias, g.away_alias, g.matchup, g.date
-    FROM snapshots s
-    JOIN games g ON g.id = s.game_id
-    WHERE s.source = 'server'
-      AND g.winner IS NOT NULL
-      AND s.floor_score IS NOT NULL
-      AND s.floor_team IS NOT NULL
-    ORDER BY s.game_id, s.ts
+  // ── 1. Pull all backtest snapshots ──
+  var rows = await sql`
+    SELECT game_id, checkpoint,
+           margin_at_snapshot AS margin,
+           (indicators->>'score')::real AS floor,
+           indicators->>'controlTeam' AS ctrl,
+           indicators->>'homeAlias' AS home_alias,
+           indicators->>'awayAlias' AS away_alias,
+           ctrl_team_won, final_margin
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+    ORDER BY game_id, checkpoint
   `;
 
-  // ── 2. Pull odds for lane classification ──
-  var oddsQuery = await sql`
-    SELECT DISTINCT ON (game_id) game_id, home_ml, away_ml
-    FROM odds_history
-    ORDER BY game_id, ts ASC
-  `;
-  var oddsMap = {};
-  for (var o of oddsQuery) {
-    oddsMap[o.game_id] = { home_ml: Number(o.home_ml), away_ml: Number(o.away_ml) };
+  var checkpoints = CP_LABELS;
+  var cpIndex = {};
+  for (var ci = 0; ci < checkpoints.length; ci++) cpIndex[checkpoints[ci]] = ci;
+
+  // ── 2. Group by game ──
+  var games = {};
+  for (var r of rows) {
+    if (!games[r.game_id]) games[r.game_id] = [];
+    games[r.game_id].push(r);
   }
 
-  // ── 3. Group by game, filter 10+ server snaps ──
-  var gameMap = {};
-  for (var r of snapQuery) {
-    if (!gameMap[r.game_id]) gameMap[r.game_id] = [];
-    gameMap[r.game_id].push(r);
-  }
-  var gameIds = Object.keys(gameMap).filter(function(gid) { return gameMap[gid].length >= 10; });
+  // ── 3. Competitive game filter (close=1): within 5 in Q3, within 7 in Q4 ──
+  var Q3_CPS = new Set(['Q3_9', 'Q3_6', 'Q3_3', 'Q3_END']);
+  var Q4_CPS = new Set(['Q4_9', 'Q4_6', 'Q4_3', 'Q4_END']);
+  var allGameIds = Object.keys(games);
 
-  // ── 3b. Competitive game filter (close=1): within 5 in Q3, within 7 in Q4 ──
   if (closeOnly) {
-    gameIds = gameIds.filter(function(gid) {
-      return gameMap[gid].some(function(s) {
-        var absM = Math.abs(Number(s.home_pts) - Number(s.away_pts));
-        var p = Number(s.period);
-        if (p === 3 && absM <= 5) return true;
-        if (p === 4 && absM <= 7) return true;
+    for (var gid of allGameIds) {
+      var competitive = games[gid].some(function(s) {
+        var absM = Math.abs(s.margin);
+        if (Q3_CPS.has(s.checkpoint) && absM <= 5) return true;
+        if (Q4_CPS.has(s.checkpoint) && absM <= 7) return true;
         return false;
       });
-    });
+      if (!competitive) delete games[gid];
+    }
   }
+
+  var gameIds = Object.keys(games);
 
   // ── Helpers ──
-  function clockToSec(clockStr) {
-    if (!clockStr) return 0;
-    var clean = String(clockStr).replace(/^Q\d+\s*/i, '').trim();
-    var parts = clean.split(':');
-    if (parts.length === 2) return parseInt(parts[0]) * 60 + parseInt(parts[1]);
-    if (parts.length === 1) return parseInt(parts[0]) || 0;
-    return 0;
-  }
-
-  function gameSecondsElapsed(period, clockStr) {
-    var p = Math.max(1, Math.min(4, Number(period) || 1));
-    var remaining = clockToSec(clockStr);
-    return (p - 1) * 720 + (720 - remaining);
-  }
-
-  function classifyLane(ml) {
-    if (ml == null || isNaN(ml)) return null;
-    if (ml > 100) return 'underdog';
-    if (ml >= -150) return 'tossup';
-    if (ml >= -300) return 'favorite';
-    return 'heavy_favorite';
-  }
-
-  function mlPayout(ml) {
-    if (ml == null || isNaN(ml)) return null;
-    return ml > 0 ? ml / 100 : ml < 0 ? 100 / Math.abs(ml) : 1;
+  function getCtrlMargin(r) {
+    return (r.ctrl === r.home_alias) ? r.margin : -r.margin;
   }
 
   // ── 4. Process each game ──
   var results = [];
 
   for (var gid of gameIds) {
-    var snaps = gameMap[gid];
+    var snaps = games[gid];
+    // Sort by checkpoint order
+    snaps.sort(function(a, b) { return (cpIndex[a.checkpoint] || 0) - (cpIndex[b.checkpoint] || 0); });
+
     var meta = snaps[0];
 
-    // Find first BUY-eligible snapshot: floor >= 0.55, ctrl trailing, period >= 2
+    // Find first BUY-eligible checkpoint: floor >= 0.55, ctrl trailing, Q2+
     var buySnap = null;
     var buyIdx = -1;
     for (var i = 0; i < snaps.length; i++) {
       var s = snaps[i];
-      if (Number(s.period) < 2) continue;
-      if (Number(s.floor_score) < 0.55) continue;
-      var ctrlIsHome = s.floor_team === meta.home_alias;
-      var ctrlPts = ctrlIsHome ? Number(s.home_pts) : Number(s.away_pts);
-      var oppPts = ctrlIsHome ? Number(s.away_pts) : Number(s.home_pts);
-      if (ctrlPts >= oppPts) continue;
+      if (!s.checkpoint.startsWith('Q2') && !s.checkpoint.startsWith('Q3') && !s.checkpoint.startsWith('Q4')) continue;
+      if (s.floor < 0.55) continue;
+      var ctrlM = getCtrlMargin(s);
+      if (ctrlM >= 0) continue; // not trailing
       buySnap = s;
       buyIdx = i;
       break;
     }
     if (!buySnap) continue;
 
-    var buyTeam = buySnap.floor_team;
+    var buyTeam = buySnap.ctrl;
+    var buyFloor = buySnap.floor;
+    var buyMargin = Math.abs(getCtrlMargin(buySnap));
+    var buyTeamWon = buySnap.ctrl_team_won;
+    // ctrl_team_won is relative to ctrl at THAT checkpoint — need to verify it's the buy team
+    // Actually ctrl_team_won tracks whether the ctrl team at snapshot time won the game
+    // Since buyTeam = ctrl at buySnap, buyTeamWon = buySnap.ctrl_team_won
+    // But if ctrl changes later, we need to check if buyTeam won from any snap where buyTeam is ctrl
+    // Safest: check final_margin + team identity
     var buyIsHome = buyTeam === meta.home_alias;
-    var odds = oddsMap[gid] || null;
-    var buyML = odds ? (buyIsHome ? odds.home_ml : odds.away_ml) : null;
-    var lane = classifyLane(buyML);
-    var payout = mlPayout(buyML);
-    var buyFloor = Number(buySnap.floor_score);
-    var buyMargin = Math.abs(
-      (buyIsHome ? Number(buySnap.home_pts) : Number(buySnap.away_pts)) -
-      (buyIsHome ? Number(buySnap.away_pts) : Number(buySnap.home_pts))
-    );
-    var buyTeamWon = meta.winner === buyTeam;
-    var buyGameSec = gameSecondsElapsed(buySnap.period, buySnap.clock);
+    var finalM = meta.final_margin; // home - away
+    var buyTeamWonFinal = buyIsHome ? finalM > 0 : finalM < 0;
 
-    // ── Track opponent control runs (for reclaim analysis) ──
-    var oppRuns = [];
-    var currentRun = null;
-    for (var j = buyIdx + 1; j < snaps.length; j++) {
-      var snap = snaps[j];
-      if (snap.floor_team !== buyTeam) {
-        if (!currentRun) {
-          currentRun = {
-            startIdx: j, startPeriod: snap.period, startClock: snap.clock,
-            startGameSec: gameSecondsElapsed(snap.period, snap.clock),
-            peakFloor: Number(snap.floor_score), snapCount: 1,
-          };
-        } else {
-          currentRun.snapCount++;
-          if (Number(snap.floor_score) > currentRun.peakFloor) {
-            currentRun.peakFloor = Number(snap.floor_score);
-          }
-        }
-        currentRun.endIdx = j;
-        currentRun.endPeriod = snap.period;
-        currentRun.endClock = snap.clock;
-        currentRun.endGameSec = gameSecondsElapsed(snap.period, snap.clock);
-      } else {
-        if (currentRun) { oppRuns.push(currentRun); currentRun = null; }
-      }
-    }
-    if (currentRun) oppRuns.push(currentRun);
-
-    // ── Find first trigger for each threshold ──
+    // ── Find EXIT triggers: opponent takes control at various floor thresholds ──
     var triggerA = null, triggerD = null, triggerB = null, triggerC = null;
+
     for (var j = buyIdx + 1; j < snaps.length; j++) {
       var snap = snaps[j];
-      if (snap.floor_team === buyTeam) continue;
-      var oppFloor = Number(snap.floor_score);
-      var gSec = gameSecondsElapsed(snap.period, snap.clock);
-      if (!triggerA) triggerA = { idx: j, period: snap.period, clock: snap.clock, oppFloor: oppFloor, gameSec: gSec };
-      if (!triggerD && oppFloor >= 0.50) triggerD = { idx: j, period: snap.period, clock: snap.clock, oppFloor: oppFloor, gameSec: gSec };
-      if (!triggerB && oppFloor >= 0.60) triggerB = { idx: j, period: snap.period, clock: snap.clock, oppFloor: oppFloor, gameSec: gSec };
-      if (!triggerC && oppFloor >= 0.65) triggerC = { idx: j, period: snap.period, clock: snap.clock, oppFloor: oppFloor, gameSec: gSec };
+      if (!snap.ctrl || snap.ctrl === buyTeam) continue; // same team still controls
+      var oppFloor = snap.floor;
+
+      if (!triggerA) triggerA = { idx: j, checkpoint: snap.checkpoint, oppFloor: oppFloor, oppTeam: snap.ctrl };
+      if (!triggerD && oppFloor >= 0.50) triggerD = { idx: j, checkpoint: snap.checkpoint, oppFloor: oppFloor, oppTeam: snap.ctrl };
+      if (!triggerB && oppFloor >= 0.60) triggerB = { idx: j, checkpoint: snap.checkpoint, oppFloor: oppFloor, oppTeam: snap.ctrl };
+      if (!triggerC && oppFloor >= 0.65) triggerC = { idx: j, checkpoint: snap.checkpoint, oppFloor: oppFloor, oppTeam: snap.ctrl };
       if (triggerA && triggerD && triggerB && triggerC) break;
     }
 
@@ -8412,34 +8359,38 @@ async function reportBuyExitSim(sql, url) {
     function checkReclaim(trigInfo) {
       if (!trigInfo) return { reclaimed: false };
       for (var k = trigInfo.idx + 1; k < snaps.length; k++) {
-        if (snaps[k].floor_team === buyTeam) {
-          return {
-            reclaimed: true, reclaimGameSec: gameSecondsElapsed(snaps[k].period, snaps[k].clock),
-            reclaimFloor: Number(snaps[k].floor_score),
-            holdDurationSec: gameSecondsElapsed(snaps[k].period, snaps[k].clock) - trigInfo.gameSec,
-          };
+        if (snaps[k].ctrl === buyTeam) {
+          var holdCPs = k - trigInfo.idx;
+          return { reclaimed: true, reclaimCP: snaps[k].checkpoint, holdCheckpoints: holdCPs };
         }
       }
       return { reclaimed: false };
     }
 
-    var oppTeam = buyIsHome ? meta.away_alias : meta.home_alias;
-    var oppWon = meta.winner === oppTeam;
+    // Track opponent run stats
+    var oppRuns = 0;
+    var longestOppRun = 0;
+    var currentOppRun = 0;
+    var peakOppFloor = 0;
+    for (var j = buyIdx + 1; j < snaps.length; j++) {
+      if (snaps[j].ctrl && snaps[j].ctrl !== buyTeam) {
+        currentOppRun++;
+        if (snaps[j].floor > peakOppFloor) peakOppFloor = snaps[j].floor;
+      } else {
+        if (currentOppRun > 0) { oppRuns++; if (currentOppRun > longestOppRun) longestOppRun = currentOppRun; }
+        currentOppRun = 0;
+      }
+    }
+    if (currentOppRun > 0) { oppRuns++; if (currentOppRun > longestOppRun) longestOppRun = currentOppRun; }
 
     results.push({
-      gameId: gid, matchup: meta.matchup, date: meta.date,
-      buyTeam: buyTeam, buyFloor: buyFloor, buyMargin: buyMargin,
-      buyPeriod: Number(buySnap.period), buyClock: buySnap.clock, buyGameSec: buyGameSec,
-      buyTeamWon: buyTeamWon, winner: meta.winner, finalMargin: meta.margin,
-      lane: lane, buyML: buyML, payout: payout, hasOdds: odds !== null,
-      serverSnaps: snaps.length,
-      oppRuns: oppRuns.length,
-      longestOppRun: oppRuns.length > 0 ? Math.max.apply(null, oppRuns.map(function(r) { return r.snapCount; })) : 0,
-      peakOppFloor: oppRuns.length > 0 ? Math.max.apply(null, oppRuns.map(function(r) { return r.peakFloor; })) : 0,
+      gameId: gid, buyTeam: buyTeam, buyFloor: buyFloor, buyMargin: buyMargin,
+      buyCP: buySnap.checkpoint, buyTeamWon: buyTeamWonFinal,
+      finalMargin: finalM, homeAlias: meta.home_alias, awayAlias: meta.away_alias,
+      oppRuns: oppRuns, longestOppRun: longestOppRun, peakOppFloor: peakOppFloor,
       triggerA: triggerA, triggerD: triggerD, triggerB: triggerB, triggerC: triggerC,
       reclaimA: checkReclaim(triggerA), reclaimD: checkReclaim(triggerD),
       reclaimB: checkReclaim(triggerB), reclaimC: checkReclaim(triggerC),
-      oppWon: oppWon,
     });
   }
 
@@ -8456,13 +8407,7 @@ async function reportBuyExitSim(sql, url) {
     if (n === 0) return null;
     var wins = subset.filter(function(r) { return r.buyTeamWon; }).length;
     var losses = n - wins;
-    var winRate = (wins / n * 100).toFixed(1);
-    var withOdds = subset.filter(function(r) { return r.hasOdds && r.payout != null; });
-    var noExitEV = withOdds.reduce(function(s, r) { return s + (r.buyTeamWon ? r.payout : -1); }, 0);
-    var avgML = withOdds.length > 0
-      ? Math.round(withOdds.reduce(function(s, r) { return s + r.buyML; }, 0) / withOdds.length) : null;
-    var avgPayout = withOdds.length > 0
-      ? +(withOdds.reduce(function(s, r) { return s + r.payout; }, 0) / withOdds.length).toFixed(2) : null;
+    var winRate = +(wins / n * 100).toFixed(1);
 
     var tStats = [];
     for (var t of triggerDefs) {
@@ -8475,97 +8420,123 @@ async function reportBuyExitSim(sql, url) {
       var heldLost = notExited.filter(function(r) { return !r.buyTeamWon; }).length;
       var precision = exited.length > 0 ? +(correctExit / exited.length * 100).toFixed(1) : null;
       var exitRate = +(exited.length / n * 100).toFixed(1);
-      var notExitedOdds = notExited.filter(function(r) { return r.hasOdds && r.payout != null; });
-      var triggerEV = notExitedOdds.reduce(function(s, r) { return s + (r.buyTeamWon ? r.payout : -1); }, 0);
-      // FLIP BUY: opponent win rate from exit trigger point
-      var flipN = exited.length;
-      var flipCorrect = exited.filter(function(r) { return r.oppWon; }).length;
-      var flipRate = flipN > 0 ? +(flipCorrect / flipN * 100).toFixed(1) : null;
+
+      // FLIP BUY: opponent win rate from exit trigger point = precision (same thing)
+      var flipRate = precision;
+
+      // Win rate of held games (no exit fired)
+      var heldWinRate = notExited.length > 0 ? +(heldWon / notExited.length * 100).toFixed(1) : null;
 
       tStats.push({
         trigger: t.name, exits: exited.length, exitRate: exitRate, total: n,
         correct: correctExit, false: falseExit, falseReclaim: falseReclaim,
-        heldWon: heldWon, heldLost: heldLost, precision: precision,
-        ev: withOdds.length > 0 ? +triggerEV.toFixed(2) : null,
-        evDelta: withOdds.length > 0 ? +(triggerEV - noExitEV).toFixed(2) : null,
-        flipSignalN: flipN, flipCorrect: flipCorrect, flipRate: flipRate,
+        heldWon: heldWon, heldLost: heldLost, heldWinRate: heldWinRate,
+        precision: precision, flipRate: flipRate,
       });
     }
 
-    // Lane-modulated EXIT: fav+hf=A, tossup=B, underdog=D, no-odds=D
-    var lm = { exits: 0, correct: 0, false: 0, heldWon: 0, heldLost: 0, ev: 0 };
-    for (var r of subset) {
-      var tKey = (r.lane === 'heavy_favorite' || r.lane === 'favorite') ? 'triggerA'
-        : r.lane === 'tossup' ? 'triggerB' : 'triggerD';
-      var fired = r[tKey] != null;
-      if (fired) { lm.exits++; if (!r.buyTeamWon) lm.correct++; else lm.false++; }
-      else { if (r.buyTeamWon) lm.heldWon++; else lm.heldLost++; }
-      if (r.hasOdds && r.payout != null) lm.ev += fired ? 0 : (r.buyTeamWon ? r.payout : -1);
-    }
-    lm.precision = lm.exits > 0 ? +(lm.correct / lm.exits * 100).toFixed(1) : null;
-    lm.ev = +lm.ev.toFixed(2);
-
     return {
       label: label, n: n, wins: wins, losses: losses, winRate: winRate,
-      withOdds: withOdds.length, avgML: avgML, avgPayout: avgPayout,
-      noExitEV: withOdds.length > 0 ? +noExitEV.toFixed(2) : null,
       triggers: tStats,
-      laneModulated: lm,
     };
   }
 
   var overall = computeStats(results, 'ALL');
-  var byLane = {};
-  for (var l of ['underdog', 'tossup', 'favorite', 'heavy_favorite']) {
-    var sub = results.filter(function(r) { return r.lane === l; });
-    if (sub.length > 0) byLane[l] = computeStats(sub, l);
+
+  // ── Buy floor buckets ──
+  var byBuyFloor = {};
+  for (var fb of ['0.55-0.64', '0.65-0.74', '0.75+']) {
+    var sub = results.filter(function(r) {
+      if (fb === '0.55-0.64') return r.buyFloor >= 0.55 && r.buyFloor < 0.65;
+      if (fb === '0.65-0.74') return r.buyFloor >= 0.65 && r.buyFloor < 0.75;
+      return r.buyFloor >= 0.75;
+    });
+    if (sub.length > 0) byBuyFloor[fb] = computeStats(sub, fb);
   }
-  var noOdds = results.filter(function(r) { return !r.hasOdds; });
-  var noOddsStats = noOdds.length > 0 ? computeStats(noOdds, 'no_odds') : null;
+
+  // ── Buy deficit buckets ──
+  var byDeficit = {};
+  for (var db of ['trail_1-4', 'trail_5-9', 'trail_10+']) {
+    var sub = results.filter(function(r) {
+      if (db === 'trail_1-4') return r.buyMargin >= 1 && r.buyMargin <= 4;
+      if (db === 'trail_5-9') return r.buyMargin >= 5 && r.buyMargin <= 9;
+      return r.buyMargin >= 10;
+    });
+    if (sub.length > 0) byDeficit[db] = computeStats(sub, db);
+  }
+
+  // ── Buy checkpoint buckets ──
+  var byBuyCP = {};
+  for (var cp of ['Q2', 'Q3', 'Q4']) {
+    var sub = results.filter(function(r) { return r.buyCP.startsWith(cp); });
+    if (sub.length > 0) byBuyCP[cp] = computeStats(sub, cp);
+  }
+
+  // ── Opponent run analysis (no flip vs 1+ flips) ──
+  var noFlip = results.filter(function(r) { return r.oppRuns === 0; });
+  var hasFlip = results.filter(function(r) { return r.oppRuns >= 1; });
+  var flipProfile = {
+    noFlip: computeStats(noFlip, 'no_opp_runs'),
+    hasFlip: computeStats(hasFlip, '1_plus_opp_runs'),
+    by_opp_peak_floor: {},
+  };
+  for (var pf of ['<0.50', '0.50-0.59', '0.60-0.69', '0.70+']) {
+    var sub = hasFlip.filter(function(r) {
+      if (pf === '<0.50') return r.peakOppFloor < 0.50;
+      if (pf === '0.50-0.59') return r.peakOppFloor >= 0.50 && r.peakOppFloor < 0.60;
+      if (pf === '0.60-0.69') return r.peakOppFloor >= 0.60 && r.peakOppFloor < 0.70;
+      return r.peakOppFloor >= 0.70;
+    });
+    if (sub.length > 0) flipProfile.by_opp_peak_floor[pf] = computeStats(sub, pf);
+  }
 
   // ── 6. Reclaim analysis ──
   var reclaimAnalysis = {};
   for (var t of triggerDefs) {
     var rGames = results.filter(function(r) { return r[t.key] != null && r[t.reclaim].reclaimed; });
-    var holdDurs = rGames.map(function(r) { return r[t.reclaim].holdDurationSec; }).sort(function(a, b) { return a - b; });
+    var holdCPs = rGames.map(function(r) { return r[t.reclaim].holdCheckpoints; }).sort(function(a, b) { return a - b; });
     var rWins = rGames.filter(function(r) { return r.buyTeamWon; }).length;
     reclaimAnalysis[t.name] = {
       count: rGames.length,
-      medianHoldSec: holdDurs.length > 0 ? holdDurs[Math.floor(holdDurs.length / 2)] : null,
-      avgHoldSec: holdDurs.length > 0 ? Math.round(holdDurs.reduce(function(s, v) { return s + v; }, 0) / holdDurs.length) : null,
-      maxHoldSec: holdDurs.length > 0 ? holdDurs[holdDurs.length - 1] : null,
+      medianHoldCPs: holdCPs.length > 0 ? holdCPs[Math.floor(holdCPs.length / 2)] : null,
+      avgHoldCPs: holdCPs.length > 0 ? +(holdCPs.reduce(function(s, v) { return s + v; }, 0) / holdCPs.length).toFixed(1) : null,
+      maxHoldCPs: holdCPs.length > 0 ? holdCPs[holdCPs.length - 1] : null,
       reclaimWinRate: rGames.length > 0 ? +(rWins / rGames.length * 100).toFixed(1) : null,
     };
   }
 
-  // ── 7. False exit detail ──
+  // ── 7. False exit detail (top 20 by buy floor) ──
   var falseExits = [];
   for (var r of results) {
     if (!r.buyTeamWon) continue;
     for (var t of triggerDefs) {
       if (r[t.key]) {
         falseExits.push({
-          trigger: t.name, matchup: r.matchup, date: r.date, lane: r.lane,
-          buyML: r.buyML, payout: r.payout,
-          exitQ: 'Q' + r[t.key].period, exitClock: r[t.key].clock,
-          oppFloor: r[t.key].oppFloor, reclaimed: r[t.reclaim].reclaimed,
-          holdDurationSec: r[t.reclaim].reclaimed ? r[t.reclaim].holdDurationSec : null,
+          trigger: t.name, gameId: r.gameId, buyTeam: r.buyTeam,
+          homeAlias: r.homeAlias, awayAlias: r.awayAlias,
+          buyFloor: r.buyFloor, buyMargin: r.buyMargin, buyCP: r.buyCP,
+          exitCP: r[t.key].checkpoint, oppFloor: r[t.key].oppFloor,
+          reclaimed: r[t.reclaim].reclaimed,
+          holdCPs: r[t.reclaim].reclaimed ? r[t.reclaim].holdCheckpoints : null,
         });
       }
     }
   }
+  falseExits.sort(function(a, b) { return b.buyFloor - a.buyFloor; });
 
   return {
     scope: closeOnly ? 'competitive_games_within_5_Q3_within_7_Q4' : 'full_season',
-    totalGamesProcessed: gameIds.length,
+    totalGamesInDataset: allGameIds.length,
+    totalGamesAfterFilter: gameIds.length,
     buyEligibleGames: results.length,
-    gamesWithOdds: results.filter(function(r) { return r.hasOdds; }).length,
-    gamesWithoutOdds: noOdds.length,
+    checkpointResolution: '3-minute intervals (14 checkpoints per game)',
     overall: overall,
-    byLane: byLane,
-    noOdds: noOddsStats,
+    byBuyFloor: byBuyFloor,
+    byDeficit: byDeficit,
+    byBuyCheckpoint: byBuyCP,
+    flipProfile: flipProfile,
     reclaimAnalysis: reclaimAnalysis,
-    falseExitDetail: falseExits,
+    falseExitDetail: falseExits.slice(0, 30),
     proposedSpec: {
       heavy_favorite: 'Trigger A (any flip)',
       favorite: 'Trigger A (any flip)',
