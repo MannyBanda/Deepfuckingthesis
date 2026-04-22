@@ -1399,7 +1399,7 @@ function renderMarginFlowSection(id,cs,hA,aA){
 
   // SVG margin chart
   if(sEvts.length>=4){
-    var W=600,H=140,PL=24,PR=10,PT=18,PB=18;
+    var W=600,H=220,PL=28,PR=10,PT=20,PB=20;
     var mid=PT+(H-PT-PB)/2;
     var maxAbs=Math.max.apply(null,sEvts.map(function(e){return Math.abs(e.m);}));
     if(maxAbs<4)maxAbs=4;
@@ -1420,7 +1420,7 @@ function renderMarginFlowSection(id,cs,hA,aA){
       return{x1:x1,x2:x2,ri:ri,isA:isA,active:active,tm:run.team,pts:run.pts,opp:run.oppPts||0};
     });
 
-    var svg='<div class="mf-canvas"><svg class="mf-svg" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none">';
+    var svg='<div class="mf-canvas"><svg class="mf-svg" viewBox="0 0 '+W+' '+H+'" style="aspect-ratio:'+W+'/'+H+'">';
     // Run regions (behind everything)
     runRegions.forEach(function(r){
       var bg=r.active?(r.isA?'rgba(248,113,113,0.15)':'rgba(52,211,153,0.15)'):(r.isA?'rgba(248,113,113,0.05)':'rgba(52,211,153,0.05)');
@@ -1430,44 +1430,44 @@ function renderMarginFlowSection(id,cs,hA,aA){
     // Quarter dividers
     qDivs.forEach(function(q){
       svg+='<line x1="'+q.x.toFixed(1)+'" y1="'+(PT-2)+'" x2="'+q.x.toFixed(1)+'" y2="'+(H-PB+2)+'" stroke="rgba(255,255,255,0.06)" stroke-dasharray="3,4"/>';
-      svg+='<text x="'+q.x.toFixed(1)+'" y="'+(PT-6)+'" text-anchor="middle" fill="rgba(255,255,255,0.15)" font-size="9" font-family="var(--mono)">'+q.label+'</text>';
+      svg+='<text x="'+q.x.toFixed(1)+'" y="'+(PT-6)+'" text-anchor="middle" fill="rgba(255,255,255,0.2)" font-size="11" font-family="var(--mono)">'+q.label+'</text>';
     });
     // Zero line
-    svg+='<line x1="'+PL+'" y1="'+mid+'" x2="'+(W-PR)+'" y2="'+mid+'" stroke="rgba(255,255,255,0.06)" stroke-dasharray="2,3"/>';
+    svg+='<line x1="'+PL+'" y1="'+mid+'" x2="'+(W-PR)+'" y2="'+mid+'" stroke="rgba(255,255,255,0.08)" stroke-dasharray="3,4"/>';
     // Team labels
-    svg+='<text x="4" y="'+(PT+6)+'" fill="rgba(52,211,153,0.4)" font-size="9" font-weight="600" font-family="var(--mono)">'+esc(hA)+'</text>';
-    svg+='<text x="4" y="'+(H-PB+12)+'" fill="rgba(248,113,113,0.4)" font-size="9" font-weight="600" font-family="var(--mono)">'+esc(aA)+'</text>';
+    svg+='<text x="4" y="'+(PT+8)+'" fill="rgba(52,211,153,0.5)" font-size="11" font-weight="600" font-family="var(--mono)">'+esc(hA)+'</text>';
+    svg+='<text x="4" y="'+(H-PB+14)+'" fill="rgba(248,113,113,0.5)" font-size="11" font-weight="600" font-family="var(--mono)">'+esc(aA)+'</text>';
     // Margin path
-    svg+='<path d="'+pathD+'" fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="1.5" stroke-linejoin="round"/>';
+    svg+='<path d="'+pathD+'" fill="none" stroke="rgba(255,255,255,0.35)" stroke-width="2" stroke-linejoin="round"/>';
     // Shot markers
     sEvts.forEach(function(ev,i){
       var x=PL+i*xs,y=mid+ev.m*ys;
       var isA=ev.tm===aA;
       var c=isA?'var(--coral)':'var(--green)';
       if(ev.type==='3PT'){
-        svg+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="3.5" fill="none" stroke="'+c+'" stroke-width="1" opacity="0.7"/>';
-        svg+='<line x1="'+(x-4.5).toFixed(1)+'" y1="'+y.toFixed(1)+'" x2="'+(x+4.5).toFixed(1)+'" y2="'+y.toFixed(1)+'" stroke="'+c+'" stroke-width="0.5" opacity="0.5"/>';
-        svg+='<line x1="'+x.toFixed(1)+'" y1="'+(y-4.5).toFixed(1)+'" x2="'+x.toFixed(1)+'" y2="'+(y+4.5).toFixed(1)+'" stroke="'+c+'" stroke-width="0.5" opacity="0.5"/>';
+        svg+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="5.5" fill="none" stroke="'+c+'" stroke-width="1.4" opacity="0.8"/>';
+        svg+='<line x1="'+(x-7).toFixed(1)+'" y1="'+y.toFixed(1)+'" x2="'+(x+7).toFixed(1)+'" y2="'+y.toFixed(1)+'" stroke="'+c+'" stroke-width="0.7" opacity="0.6"/>';
+        svg+='<line x1="'+x.toFixed(1)+'" y1="'+(y-7).toFixed(1)+'" x2="'+x.toFixed(1)+'" y2="'+(y+7).toFixed(1)+'" stroke="'+c+'" stroke-width="0.7" opacity="0.6"/>';
       } else if(ev.type==='FT'){
-        svg+='<rect x="'+(x-2).toFixed(1)+'" y="'+(y-2).toFixed(1)+'" width="4" height="4" rx="0.5" fill="'+c+'" opacity="0.45"/>';
+        svg+='<rect x="'+(x-3).toFixed(1)+'" y="'+(y-3).toFixed(1)+'" width="6" height="6" rx="1" fill="'+c+'" opacity="0.55"/>';
       } else {
-        svg+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="2.8" fill="'+c+'" opacity="0.65"/>';
+        svg+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="4.5" fill="'+c+'" opacity="0.7"/>';
       }
     });
     // Current margin label
     if(sEvts.length>0){
       var last=sEvts[sEvts.length-1];
       var lx=PL+(sEvts.length-1)*xs;var ly=mid+last.m*ys;
-      svg+='<text x="'+(lx-8).toFixed(1)+'" y="'+(ly+(last.m>0?14:-8)).toFixed(1)+'" text-anchor="middle" fill="var(--fg-primary)" font-size="11" font-weight="700" font-family="var(--mono)">'+(last.m>0?'+':'')+last.m+'</text>';
+      svg+='<text x="'+(lx-10).toFixed(1)+'" y="'+(ly+(last.m>0?16:-10)).toFixed(1)+'" text-anchor="middle" fill="var(--fg-primary)" font-size="13" font-weight="700" font-family="var(--mono)">'+(last.m>0?'+':'')+last.m+'</text>';
     }
     svg+='</svg></div>';
     html+=svg;
 
     // Legend
     html+='<div class="mf-legend">';
-    html+='<span><svg width="8" height="8"><circle cx="4" cy="4" r="2.5" fill="var(--fg-dim)"/></svg> 2PT</span>';
-    html+='<span><svg width="10" height="10"><circle cx="5" cy="5" r="3" fill="none" stroke="var(--fg-dim)" stroke-width="0.8"/><line x1="1.5" y1="5" x2="8.5" y2="5" stroke="var(--fg-dim)" stroke-width="0.4"/><line x1="5" y1="1.5" x2="5" y2="8.5" stroke="var(--fg-dim)" stroke-width="0.4"/></svg> 3PT</span>';
-    html+='<span><svg width="7" height="7"><rect x="1" y="1" width="5" height="5" rx="0.5" fill="var(--fg-dim)" opacity="0.55"/></svg> FT</span>';
+    html+='<span><svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="var(--fg-dim)"/></svg> 2PT</span>';
+    html+='<span><svg width="14" height="14"><circle cx="7" cy="7" r="4.5" fill="none" stroke="var(--fg-dim)" stroke-width="1"/><line x1="2" y1="7" x2="12" y2="7" stroke="var(--fg-dim)" stroke-width="0.5"/><line x1="7" y1="2" x2="7" y2="12" stroke="var(--fg-dim)" stroke-width="0.5"/></svg> 3PT</span>';
+    html+='<span><svg width="10" height="10"><rect x="2" y="2" width="6" height="6" rx="1" fill="var(--fg-dim)" opacity="0.55"/></svg> FT</span>';
     html+='</div>';
   }
 
