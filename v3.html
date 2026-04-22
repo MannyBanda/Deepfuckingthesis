@@ -1390,13 +1390,17 @@ async function triggerAnalysis(gameId){
       cs.prediction=cs.prediction||{};
       if(decision.fwpLabeled&&decision.fwpTeam1&&decision.fwpTeam2){
         var hUp=hA.toUpperCase(),aUp=aA.toUpperCase();
+        cs.prediction.fwpLabeled=true;cs.prediction.fwpTeam1=decision.fwpTeam1;cs.prediction.fwpVal1=decision.fwpVal1;cs.prediction.fwpTeam2=decision.fwpTeam2;cs.prediction.fwpVal2=decision.fwpVal2;
         if(decision.fwpTeam1===hUp){cs.prediction.homeFWP=decision.fwpVal1;cs.prediction.awayFWP=decision.fwpVal2;}
         else if(decision.fwpTeam1===aUp){cs.prediction.awayFWP=decision.fwpVal1;cs.prediction.homeFWP=decision.fwpVal2;}
         cs.prediction.homeValue=cs.prediction.homeValue||{};cs.prediction.awayValue=cs.prediction.awayValue||{};
         cs.prediction.homeValue.fwp=cs.prediction.homeFWP;cs.prediction.awayValue.fwp=cs.prediction.awayFWP;
         if(decision.edgeNum!=null){
           var winTeam=cs.prediction.homeFWP>cs.prediction.awayFWP?'home':'away';
+          var loseTeam=winTeam==='home'?'away':'home';
           cs.prediction[winTeam+'Value'].edge=decision.edgeNum;
+          cs.prediction[loseTeam+'Value']=cs.prediction[loseTeam+'Value']||{};
+          cs.prediction[loseTeam+'Value'].edge=-decision.edgeNum;
         }
       }
       if(decision.narrative)cs.prediction.narrative=decision.narrative;
@@ -1404,6 +1408,8 @@ async function triggerAnalysis(gameId){
       if(decision.closing)cs.prediction.closing=decision.closing;
       if(decision.disagreement)cs.prediction.disagreement=decision.disagreement;
       if(decision.conviction)cs.prediction.convictionTier=decision.conviction;
+      if(decision.edgeNum!=null)cs.prediction.edgeNum=decision.edgeNum;
+      if(decision.edge)cs.prediction.edge=decision.edge;
       cs.prediction.fwpRaw=decision.fwp||cs.prediction.fwpRaw;
     }
     cs.analysis=data.analysis;
