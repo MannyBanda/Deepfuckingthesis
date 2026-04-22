@@ -1,6 +1,6 @@
 # V3 Dashboard Build — Session Summary (Apr 22, 2026)
 
-## Current State (2,465 lines, deployed at /v3.html)
+## Current State (2,641 lines, deployed at /v3.html)
 
 ### Phase 1: Shell + Navigation ✅
 - Geist font family, dark design system with green accent
@@ -70,10 +70,22 @@
 - Bet365 added to vendor list in bdl-enrich.js (though not returned by BDL/Odds API)
 - BetMGM removed from BDL vendor priority order
 
+#### Client-Side BDL Compute (NEW this session)
+- **`computeClientIndicators(boxScore, gameId)`**: Rolls up per-player BDL stats to team totals, computes I1-I5 with server-matching thresholds
+- **I1** (Disruption): steals+blocks differential, chaos layer from cached PBP forced/unforced TOs. POT unavailable from BDL box scores.
+- **I2** (Interior): Paint from PBP rim cache (rim.made × 2 + paint.made × 2). No at-rim efficiency without SR data.
+- **I3** (Shot Quality): Full — eFG%, assist ratio, catch-and-shoot 3s from PBP cache
+- **I4** (Game Control): Score differential proxy (no biggest_lead from BDL), quarter delta from line_score
+- **I5** (Sustained Execution): Run share from PBP cache runs6, defaults EVEN without PBP
+- **Wired into `refreshLiveCards()`**: every 10s for LIVE games → `cs.clientInd` → `getFloor()` picks it up
+- **`maybeResyncTheses()`**: 2min throttle, auto-hydrates pregame agent theses for PRE games
+- **`maybeResyncSnapshots()`**: 60s throttle, re-fetches server snapshots + auto-analyses for LIVE games
+- **Scoring comp rebuilds** on score changes when PBP cache is loaded
+
 ## What's NOT Done Yet
 
 ### Phase 5 Remaining — Polish & Features
-- **Client-side BDL compute loop** — currently all data comes from DB (server snapshots). Need to port `fetchSummaryBDL` → `parseBDLPBP` → indicator computation for real-time live updates between server polls.
+- ~~**Client-side BDL compute loop**~~ ✅ SHIPPED — `computeClientIndicators()` runs every 10s for LIVE games
 - **Confidence table** — on-demand via ≡ menu, all games' structural state in one view
 - **Team colors** — 30-team color lookup for abbreviations throughout
 - **Depth Audit** — half-court SVG shot zones (deferred, complex)
@@ -99,8 +111,10 @@
 | `triggerAnalysis` | ✅ | Manual Opus analysis with thesis context |
 | `pollAlerts` | ✅ | 10s alert polling for toast |
 | `fetchLineShop` | ✅ | The Odds API integration with historical support |
-| `computeIndicatorsBDL` | ❌ | Not ported — using server snapshots instead |
-| `fetchSummaryBDL` | ❌ | Not ported — needed for real-time live updates |
+| `computeClientIndicators` | ✅ | **NEW** Real-time I1-I5 from BDL box score, PBP-enriched |
+| `maybeResyncTheses` | ✅ | **NEW** 2min throttle, auto-hydrates pregame theses |
+| `maybeResyncSnapshots` | ✅ | **NEW** 60s throttle, refreshes server data for LIVE games |
+| `fetchSummaryBDL` | ❌ | Not needed — computeClientIndicators works directly from box scores |
 | `parseBDLPBP` | ❌ | Not ported — PBP comes from DB |
 
 ### Design Decisions Locked
@@ -115,7 +129,7 @@
 - RISK/NONE nulled at parser level (same as disagreement)
 
 ### Files Modified This Session
-- `v3.html` — 2,465 lines (Phase 1-5)
+- `v3.html` — 2,641 lines (Phase 1-5 + client compute)
 - `netlify/functions/odds-api.js` — NEW (The Odds API proxy with historical support)
 - `netlify/functions/analyze.js` — model upgrade to Opus 4.6
 - `netlify/functions/poll-live-bdl.mjs` — model upgrade to Opus 4.6
