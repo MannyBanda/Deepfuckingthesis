@@ -832,7 +832,7 @@ function renderCard(id){
       if(hasClosing)html+='<div class="signal-card closing"><div class="sc-label">Closing</div><div class="sc-body">'+esc(pred.closing)+'</div></div>';
       html+='</div></div>';
       // Analyze / Re-analyze button
-      if(state==='LIVE'||state==='HALF'){
+      if(state==='LIVE'||state==='HALF'||state==='FINAL'){
         if(cs.analyzing)html+='<div style="margin-top:8px;text-align:center"><button class="analyze-btn" disabled style="opacity:0.6;color:var(--amber);border-color:var(--amber);background:rgba(251,191,36,0.08)">\u23f3 Analyzing\u2026</button></div>';
         else html+='<div style="margin-top:8px;text-align:center"><button class="analyze-btn" onclick="triggerAnalysis(\''+id+'\')" style="color:var(--amber);border-color:var(--amber);background:rgba(251,191,36,0.08)">\u26a1 Re-Analyze</button></div>';
       }
