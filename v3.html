@@ -205,6 +205,51 @@ input,textarea,select{font-size:16px!important;}
 .window-cell-delta.pos{color:var(--green);}
 .window-cell-delta.neg{color:var(--coral);}
 
+/* ═══ COLLAPSIBLES ═══ */
+.collapsible{border-top:1px solid var(--hairline);}
+.coll-header{display:flex;align-items:center;gap:8px;padding:12px 16px;cursor:pointer;transition:background .12s ease;}
+.coll-header:active{background:var(--bg-surface-2);}
+.coll-chevron{font-size:9px;color:var(--fg-dim);transition:transform .2s ease;flex:0 0 auto;}
+.coll-chevron.open{transform:rotate(90deg);}
+.coll-title{font-family:var(--sans);font-size:10.5px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:var(--fg-secondary);}
+.coll-summary{font-family:var(--mono);font-size:10px;color:var(--fg-dim);margin-left:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.coll-body{display:grid;grid-template-rows:0fr;transition:grid-template-rows .25s ease;overflow:hidden;}
+.coll-body.open{grid-template-rows:1fr;}
+.coll-inner{overflow:hidden;padding:0 16px;}
+.coll-body.open .coll-inner{padding-bottom:14px;}
+
+/* Scoring comp bars */
+.sc-team-row{margin-bottom:10px;}
+.sc-team-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;}
+.sc-team-name{font-family:var(--sans);font-size:11px;font-weight:600;color:var(--fg-primary);}
+.sc-team-sv{font-family:var(--mono);font-size:10px;color:var(--fg-tertiary);}
+.sc-bar{height:20px;border-radius:4px;overflow:hidden;display:flex;background:var(--bg-surface-3);}
+.sc-seg{height:100%;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:8px;font-weight:600;color:rgba(255,255,255,0.85);min-width:2px;}
+.sc-seg.paint{background:var(--green);}
+.sc-seg.ft{background:var(--green-soft);color:rgba(0,0,0,0.6);}
+.sc-seg.three{background:var(--amber);}
+.sc-seg.mid{background:var(--fg-dim);}
+.sc-legend{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;font-family:var(--mono);font-size:9.5px;color:var(--fg-tertiary);}
+.sc-legend span{display:flex;align-items:center;gap:3px;}
+.sc-legend-dot{width:8px;height:8px;border-radius:2px;flex:0 0 auto;}
+.sc-delta{margin-top:10px;padding:8px 10px;background:var(--bg-surface-2);border:1px solid var(--hairline);border-radius:var(--r-inner);display:flex;align-items:center;justify-content:space-between;}
+.sc-delta-label{font-family:var(--sans);font-size:10px;font-weight:500;color:var(--fg-secondary);}
+.sc-delta-val{font-family:var(--mono);font-size:12px;font-weight:600;font-feature-settings:"tnum";}
+
+/* Margin flow */
+.mf-canvas{position:relative;width:100%;margin:4px 0 6px;}
+.mf-svg{width:100%;display:block;}
+.mf-legend{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;font-family:var(--mono);font-size:9px;color:var(--fg-dim);margin-top:4px;}
+.mf-legend span{display:flex;align-items:center;gap:3px;}
+.run-list{margin-top:8px;}
+.run-row{display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:6px;cursor:pointer;transition:all .12s ease;margin-bottom:4px;border:1px solid transparent;}
+.run-row:active{background:var(--bg-surface-3);}
+.run-row.active{background:var(--green-dim);border-color:var(--green-border);}
+.run-team{font-family:var(--sans);font-size:11px;font-weight:700;min-width:28px;}
+.run-score{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--fg-primary);min-width:36px;}
+.run-bar{flex:1;height:12px;border-radius:3px;overflow:hidden;display:flex;background:var(--bg-surface-3);}
+.run-qtr{font-family:var(--mono);font-size:10px;color:var(--fg-dim);min-width:20px;text-align:right;}
+
 /* ═══ LOADING / ERROR ═══ */
 .loading{display:none;padding:40px;text-align:center;font-family:var(--mono);font-size:12px;color:var(--fg-tertiary);}
 .loading.show{display:block;}
@@ -457,6 +502,14 @@ async function loadSchedule(){
       syncAnalysesFromDB();
       syncCalibrationAnalyses();
       syncLatestSnapshotsFromDB();
+      // Scoring comp + PBP for collapsibles (staggered)
+      games.forEach(function(g,i){
+        var gs=getState(g);
+        if(gs!=='PRE'){
+          setTimeout(function(){fetchBdlStats(g.id);},500+i*200);
+          setTimeout(function(){fetchPBPFromDB(g.id);},800+i*200);
+        }
+      });
     }
 
     // Start polling for today
@@ -808,6 +861,14 @@ function renderCard(id){
     }
   }
 
+  // ═══ COLLAPSIBLE SECTIONS ═══
+  if(state!=='PRE'){
+    // Scoring Composition
+    html+=renderScoringCompSection(id,cs,hA,aA);
+    // Margin Flow + Scoring Runs
+    html+=renderMarginFlowSection(id,cs,hA,aA);
+  }
+
   el.innerHTML=html;
 }
 
@@ -1116,6 +1177,283 @@ function parseSonnetDecision(text){
 function toggleSonnetSignal(gameId){
   _ssExpanded[gameId]=!_ssExpanded[gameId];
   renderCard(gameId);
+}
+
+// ── COLLAPSIBLE TOGGLE ──
+var _collOpen={};
+function toggleColl(gameId,section){
+  var key=gameId+'_'+section;
+  _collOpen[key]=!_collOpen[key];
+  renderCard(gameId);
+}
+
+// ── SELECTED RUN (margin flow cross-interaction) ──
+var _selectedRun={};
+function selectRun(gameId,ri){
+  _selectedRun[gameId]=_selectedRun[gameId]===ri?null:ri;
+  renderCard(gameId);
+}
+
+// ── SCORING COMPOSITION (from BDL box score stats) ──
+function computeScoringComp(stats,total){
+  if(!stats||total===0)return null;
+  var paint=Number(stats.pts_paint||stats.points_in_the_paint||stats.points_in_paint||0);
+  var ftm=Number(stats.ftm||stats.free_throws_made||0);
+  var fta=Number(stats.fta||stats.free_throws_att||0);
+  var tpm=Number(stats.tpm||stats.three_points_made||stats.fg3m||0);
+  var tpa=Number(stats.tpa||stats.three_points_att||stats.fg3a||0);
+  var three=tpm*3;
+  var midOther=Math.max(0,total-paint-ftm-three);
+  var structural=paint+ftm;
+  var variance=three+midOther;
+  var sPct=total>0?Math.round(structural/total*100):0;
+  return{total:total,paint:paint,ft:ftm,fta:fta,three:three,tpm:tpm,tpa:tpa,midOther:midOther,structural:structural,variance:variance,sPct:sPct,vPct:100-sPct};
+}
+
+// ── FETCH BDL STATS FOR SCORING COMP ──
+async function fetchBdlStats(gameId){
+  var cs=cardState[gameId];if(!cs)return;
+  var bdlId=bdlGameMap[gameId];if(!bdlId)return;
+  try{
+    var r=await bdl('box_score',{game_id:String(bdlId)});
+    if(!r)return;
+    var hStats=null,aStats=null,hPts=0,aPts=0;
+    // BDL box_score response structure
+    if(r.data){
+      hPts=r.data.home_team_score||0;aPts=r.data.visitor_team_score||0;
+      // Team stats from player aggregation
+      var players=r.data.players||[];
+      var hId=r.data.home_team?.id;
+      var hAgg={pts_paint:0,ftm:0,fta:0,tpm:0,tpa:0};
+      var aAgg={pts_paint:0,ftm:0,fta:0,tpm:0,tpa:0};
+      players.forEach(function(p){
+        var s=p;
+        var isHome=p.team?.id===hId;
+        var agg=isHome?hAgg:aAgg;
+        agg.ftm+=Number(s.ftm||0);agg.fta+=Number(s.fta||0);
+        agg.tpm+=Number(s.fg3m||s.tpm||0);agg.tpa+=Number(s.fg3a||s.tpa||0);
+      });
+      // Points in paint from team-level stats (BDL puts these on the box score)
+      if(r.data.home_team_stats)hAgg.pts_paint=Number(r.data.home_team_stats.pts_paint||r.data.home_team_stats.points_in_the_paint||0);
+      if(r.data.visitor_team_stats)aAgg.pts_paint=Number(r.data.visitor_team_stats.pts_paint||r.data.visitor_team_stats.points_in_the_paint||0);
+      hStats=hAgg;aStats=aAgg;
+    }
+    if(hStats&&aStats){
+      var g=games.find(function(x){return x.id===gameId;});if(!g)return;
+      var hComp=computeScoringComp(hStats,hPts);
+      var aComp=computeScoringComp(aStats,aPts);
+      if(hComp&&aComp){
+        hComp.team=g.home?.alias||'HOME';aComp.team=g.away?.alias||'AWAY';
+        var margin=hPts-aPts;
+        cs.scoringComp={
+          home:hComp,away:aComp,
+          structuralDelta:hComp.structural-aComp.structural,
+          varianceDelta:hComp.variance-aComp.variance,
+          leadTeam:margin>=0?hComp.team:aComp.team
+        };
+        renderCard(gameId);
+      }
+    }
+  }catch(e){console.warn('[SC] Stats fetch failed:',e.message);}
+}
+
+// ── FETCH PBP DATA FROM DB ──
+async function fetchPBPFromDB(gameId){
+  if(!dbReady)return;
+  var cs=cardState[gameId];if(!cs)return;
+  if(cs.pbpAudit)return; // already have it
+  try{
+    var r=await fetch(FN+'db-api?action=get_pbp&game_id='+encodeURIComponent(gameId));
+    if(!r.ok)return;var data=await r.json();
+    if(data.pbp&&(data.pbp.scoringEvents||data.pbp.runs)){
+      cs.pbpAudit=data.pbp;
+      cs.pbpTime=new Date(data.saved_at||Date.now());
+      console.log('[PBP] Loaded from DB for',gameId);
+      renderCard(gameId);
+    }
+  }catch(e){console.warn('[PBP] DB fetch failed:',e.message);}
+}
+
+// ── RENDER SCORING COMPOSITION ──
+function renderScoringCompSection(id,cs,hA,aA){
+  var sc=cs.scoringComp;if(!sc||!sc.home||!sc.away)return'';
+  var h=sc.home,a=sc.away;
+  var summary='S:V '+h.sPct+'/'+h.vPct+' vs '+a.sPct+'/'+a.vPct;
+  var isOpen=_collOpen[id+'_sc']||false;
+
+  var html='<div class="collapsible">';
+  html+='<div class="coll-header" onclick="toggleColl(\''+id+'\',\'sc\')">';
+  html+='<span class="coll-chevron'+(isOpen?' open':'')+'">\u25b8</span>';
+  html+='<span class="coll-title">Scoring Comp</span>';
+  html+='<span class="coll-summary">'+esc(summary)+'</span>';
+  html+='</div>';
+  html+='<div class="coll-body'+(isOpen?' open':'')+'">';
+  html+='<div class="coll-inner">';
+
+  // Home team bar
+  html+=scoringBar(h);
+  // Away team bar
+  html+=scoringBar(a);
+
+  // Legend
+  html+='<div class="sc-legend">';
+  html+='<span><span class="sc-legend-dot" style="background:var(--green)"></span>Paint</span>';
+  html+='<span><span class="sc-legend-dot" style="background:var(--green-soft)"></span>FT</span>';
+  html+='<span><span class="sc-legend-dot" style="background:var(--amber)"></span>3PT</span>';
+  html+='<span><span class="sc-legend-dot" style="background:var(--fg-dim)"></span>Mid</span>';
+  html+='</div>';
+
+  // Structural delta
+  var sDelta=sc.structuralDelta;
+  var sTeam=sDelta>=0?hA:aA;
+  var sCol=sDelta>=0?'var(--green)':'var(--coral)';
+  html+='<div class="sc-delta"><span class="sc-delta-label">Structural edge</span>';
+  html+='<span class="sc-delta-val" style="color:'+sCol+'">'+esc(sTeam)+' +'+(Math.abs(sDelta))+'</span></div>';
+
+  html+='</div></div></div>';
+  return html;
+}
+
+function scoringBar(tm){
+  var t=tm.total||1;
+  var html='<div class="sc-team-row">';
+  html+='<div class="sc-team-head"><span class="sc-team-name">'+esc(tm.team)+'</span>';
+  html+='<span class="sc-team-sv">S:'+tm.sPct+'% V:'+tm.vPct+'%</span></div>';
+  html+='<div class="sc-bar">';
+  if(tm.paint>0)html+='<div class="sc-seg paint" style="width:'+(tm.paint/t*100)+'%">'+(tm.paint>=6?tm.paint:'')+'</div>';
+  if(tm.ft>0)html+='<div class="sc-seg ft" style="width:'+(tm.ft/t*100)+'%">'+(tm.ft>=6?tm.ft:'')+'</div>';
+  if(tm.three>0)html+='<div class="sc-seg three" style="width:'+(tm.three/t*100)+'%">'+(tm.three>=6?tm.three:'')+'</div>';
+  if(tm.midOther>0)html+='<div class="sc-seg mid" style="width:'+(tm.midOther/t*100)+'%">'+(tm.midOther>=6?tm.midOther:'')+'</div>';
+  html+='</div></div>';
+  return html;
+}
+
+// ── RENDER MARGIN FLOW + SCORING RUNS ──
+function renderMarginFlowSection(id,cs,hA,aA){
+  var pbp=cs.pbpAudit;if(!pbp)return'';
+  var sEvts=pbp.scoringEvents||[];var runs=pbp.runs||[];
+  if(sEvts.length<4&&runs.length===0)return'';
+
+  var bigRun=runs.length>0?runs.reduce(function(a,b){return b.pts>a.pts?b:a;},runs[0]):null;
+  var summary=runs.length+' runs'+(bigRun?' \u00b7 '+bigRun.team+' '+bigRun.pts+'-'+(bigRun.oppPts||0):'');
+  var isOpen=_collOpen[id+'_mf']||false;
+  var selRun=_selectedRun[id];
+
+  var html='<div class="collapsible">';
+  html+='<div class="coll-header" onclick="toggleColl(\''+id+'\',\'mf\')">';
+  html+='<span class="coll-chevron'+(isOpen?' open':'')+'">\u25b8</span>';
+  html+='<span class="coll-title">Margin Flow</span>';
+  html+='<span class="coll-summary">'+esc(summary)+'</span>';
+  html+='</div>';
+  html+='<div class="coll-body'+(isOpen?' open':'')+'">';
+  html+='<div class="coll-inner">';
+
+  // SVG margin chart
+  if(sEvts.length>=4){
+    var W=600,H=140,PL=24,PR=10,PT=18,PB=18;
+    var mid=PT+(H-PT-PB)/2;
+    var maxAbs=Math.max.apply(null,sEvts.map(function(e){return Math.abs(e.m);}));
+    if(maxAbs<4)maxAbs=4;
+    var xs=(W-PL-PR)/Math.max(sEvts.length-1,1);
+    var ys=((H-PT-PB)/2)/maxAbs;
+    var pathD=sEvts.map(function(e,i){return(i===0?'M':'L')+(PL+i*xs).toFixed(1)+','+(mid+e.m*ys).toFixed(1);}).join(' ');
+
+    // Quarter dividers
+    var qDivs=[];
+    for(var qi=1;qi<sEvts.length;qi++){if(sEvts[qi].q!==sEvts[qi-1].q)qDivs.push({x:PL+(qi-0.5)*xs,label:'Q'+sEvts[qi].q});}
+
+    // Run regions
+    var runRegions=runs.map(function(run,ri){
+      var fi=run.si!=null?run.si:0;var li=run.ei!=null?run.ei:fi;
+      if(fi>=sEvts.length)fi=sEvts.length-1;if(li>=sEvts.length)li=sEvts.length-1;
+      var x1=PL+Math.max(0,fi-0.5)*xs;var x2=PL+Math.min(sEvts.length-1,li+0.5)*xs;
+      var isA=run.team===aA;var active=selRun===ri;
+      return{x1:x1,x2:x2,ri:ri,isA:isA,active:active,tm:run.team,pts:run.pts,opp:run.oppPts||0};
+    });
+
+    var svg='<div class="mf-canvas"><svg class="mf-svg" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none">';
+    // Run regions (behind everything)
+    runRegions.forEach(function(r){
+      var bg=r.active?(r.isA?'rgba(248,113,113,0.15)':'rgba(52,211,153,0.15)'):(r.isA?'rgba(248,113,113,0.05)':'rgba(52,211,153,0.05)');
+      var brd=r.active?(r.isA?'var(--coral)':'var(--green)'):'transparent';
+      svg+='<rect x="'+r.x1.toFixed(1)+'" y="'+(PT-2)+'" width="'+Math.max(r.x2-r.x1,4).toFixed(1)+'" height="'+(H-PT-PB+4)+'" fill="'+bg+'" rx="2" onclick="selectRun(\''+id+'\','+r.ri+')" style="cursor:pointer"/>';
+    });
+    // Quarter dividers
+    qDivs.forEach(function(q){
+      svg+='<line x1="'+q.x.toFixed(1)+'" y1="'+(PT-2)+'" x2="'+q.x.toFixed(1)+'" y2="'+(H-PB+2)+'" stroke="rgba(255,255,255,0.06)" stroke-dasharray="3,4"/>';
+      svg+='<text x="'+q.x.toFixed(1)+'" y="'+(PT-6)+'" text-anchor="middle" fill="rgba(255,255,255,0.15)" font-size="9" font-family="var(--mono)">'+q.label+'</text>';
+    });
+    // Zero line
+    svg+='<line x1="'+PL+'" y1="'+mid+'" x2="'+(W-PR)+'" y2="'+mid+'" stroke="rgba(255,255,255,0.06)" stroke-dasharray="2,3"/>';
+    // Team labels
+    svg+='<text x="4" y="'+(PT+6)+'" fill="rgba(52,211,153,0.4)" font-size="9" font-weight="600" font-family="var(--mono)">'+esc(hA)+'</text>';
+    svg+='<text x="4" y="'+(H-PB+12)+'" fill="rgba(248,113,113,0.4)" font-size="9" font-weight="600" font-family="var(--mono)">'+esc(aA)+'</text>';
+    // Margin path
+    svg+='<path d="'+pathD+'" fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="1.5" stroke-linejoin="round"/>';
+    // Shot markers
+    sEvts.forEach(function(ev,i){
+      var x=PL+i*xs,y=mid+ev.m*ys;
+      var isA=ev.tm===aA;
+      var c=isA?'var(--coral)':'var(--green)';
+      if(ev.type==='3PT'){
+        svg+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="3.5" fill="none" stroke="'+c+'" stroke-width="1" opacity="0.7"/>';
+        svg+='<line x1="'+(x-4.5).toFixed(1)+'" y1="'+y.toFixed(1)+'" x2="'+(x+4.5).toFixed(1)+'" y2="'+y.toFixed(1)+'" stroke="'+c+'" stroke-width="0.5" opacity="0.5"/>';
+        svg+='<line x1="'+x.toFixed(1)+'" y1="'+(y-4.5).toFixed(1)+'" x2="'+x.toFixed(1)+'" y2="'+(y+4.5).toFixed(1)+'" stroke="'+c+'" stroke-width="0.5" opacity="0.5"/>';
+      } else if(ev.type==='FT'){
+        svg+='<rect x="'+(x-2).toFixed(1)+'" y="'+(y-2).toFixed(1)+'" width="4" height="4" rx="0.5" fill="'+c+'" opacity="0.45"/>';
+      } else {
+        svg+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="2.8" fill="'+c+'" opacity="0.65"/>';
+      }
+    });
+    // Current margin label
+    if(sEvts.length>0){
+      var last=sEvts[sEvts.length-1];
+      var lx=PL+(sEvts.length-1)*xs;var ly=mid+last.m*ys;
+      svg+='<text x="'+(lx-8).toFixed(1)+'" y="'+(ly+(last.m>0?14:-8)).toFixed(1)+'" text-anchor="middle" fill="var(--fg-primary)" font-size="11" font-weight="700" font-family="var(--mono)">'+(last.m>0?'+':'')+last.m+'</text>';
+    }
+    svg+='</svg></div>';
+    html+=svg;
+
+    // Legend
+    html+='<div class="mf-legend">';
+    html+='<span><svg width="8" height="8"><circle cx="4" cy="4" r="2.5" fill="var(--fg-dim)"/></svg> 2PT</span>';
+    html+='<span><svg width="10" height="10"><circle cx="5" cy="5" r="3" fill="none" stroke="var(--fg-dim)" stroke-width="0.8"/><line x1="1.5" y1="5" x2="8.5" y2="5" stroke="var(--fg-dim)" stroke-width="0.4"/><line x1="5" y1="1.5" x2="5" y2="8.5" stroke="var(--fg-dim)" stroke-width="0.4"/></svg> 3PT</span>';
+    html+='<span><svg width="7" height="7"><rect x="1" y="1" width="5" height="5" rx="0.5" fill="var(--fg-dim)" opacity="0.55"/></svg> FT</span>';
+    html+='</div>';
+  }
+
+  // Scoring runs list
+  if(runs.length>0){
+    html+='<div class="run-list">';
+    var sorted=runs.slice().sort(function(a,b){return b.pts-a.pts;});
+    var maxRP=sorted[0].pts||1;
+    sorted.forEach(function(run,i){
+      var ri=runs.indexOf(run);
+      var isA=run.team===aA;
+      var tc=isA?'var(--coral)':'var(--green)';
+      var active=selRun===ri;
+      // Mechanism bar segments
+      var mc={};(run.mechanism||[]).forEach(function(m){mc[m]=(mc[m]||0)+1;});
+      var tot=(run.mechanism||[]).length||1;
+      html+='<div class="run-row'+(active?' active':'')+'" onclick="selectRun(\''+id+'\','+ri+')">';
+      html+='<span class="run-team" style="color:'+tc+'">'+esc(run.team)+'</span>';
+      html+='<span class="run-score">'+run.pts+'-'+(run.oppPts||0)+'</span>';
+      html+='<div class="run-bar">';
+      ['2PT','FT','3PT'].forEach(function(m){
+        var ct=mc[m]||0;if(ct===0)return;
+        var w=ct/tot*100;
+        var col=m==='2PT'?'var(--green)':m==='FT'?'var(--green-soft)':'var(--amber)';
+        html+='<div style="width:'+w+'%;height:100%;background:'+col+'"></div>';
+      });
+      html+='</div>';
+      html+='<span class="run-qtr">Q'+(run.q||'?')+'</span>';
+      html+='</div>';
+    });
+    html+='</div>';
+  }
+
+  html+='</div></div></div>';
+  return html;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
