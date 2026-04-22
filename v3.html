@@ -58,34 +58,35 @@ input,textarea,select{font-size:16px!important;}
 .schedule-meta .accent{color:var(--fg-secondary);}
 
 /* ═══ SWIPE CONTAINER ═══ */
-.swipe-container{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;gap:16px;padding-bottom:4px;}
+.swipe-container{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;gap:0;padding-bottom:4px;width:100%;}
 .swipe-container::-webkit-scrollbar{display:none;}
-.swipe-card{min-width:100%;scroll-snap-align:center;flex-shrink:0;}
+.swipe-card{flex:0 0 100%;scroll-snap-align:center;overflow:hidden;}
 .swipe-dots{display:flex;justify-content:center;gap:8px;padding:12px 0 4px;}
 .swipe-dot{width:6px;height:6px;border-radius:999px;background:var(--fg-dim);transition:all .2s ease;}
 .swipe-dot.active{width:8px;height:8px;background:var(--green);}
 
 /* ═══ GAME CARD ═══ */
-.game-card{background:var(--bg-surface);border:1px solid var(--hairline);border-radius:var(--r-card);box-shadow:inset 0 1px 0 rgba(255,255,255,0.03),0 1px 2px rgba(0,0,0,0.4),0 8px 24px -12px rgba(0,0,0,0.5);overflow:hidden;}
+.game-card{background:var(--bg-surface);border:1px solid var(--hairline);border-radius:var(--r-card);box-shadow:inset 0 1px 0 rgba(255,255,255,0.03),0 1px 2px rgba(0,0,0,0.4),0 8px 24px -12px rgba(0,0,0,0.5);overflow:hidden;max-width:100%;}
 
 /* HERO */
-.hero{padding:22px 22px 18px;background:radial-gradient(500px 220px at 50% -40%,rgba(52,211,153,0.06),transparent 70%);}
-.hero-meta{display:flex;align-items:center;justify-content:space-between;font-family:var(--sans);font-size:11px;font-weight:500;letter-spacing:0.08em;text-transform:uppercase;color:var(--fg-tertiary);margin-bottom:18px;}
-.hero-meta .status{color:var(--fg-secondary);font-family:var(--mono);letter-spacing:0.04em;}
-.score-row{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:16px;}
-.team{display:flex;flex-direction:column;gap:2px;}
+.hero{padding:18px 16px 16px;background:radial-gradient(500px 220px at 50% -40%,rgba(52,211,153,0.06),transparent 70%);}
+.hero-meta{display:flex;align-items:center;justify-content:space-between;font-family:var(--sans);font-size:10px;font-weight:500;letter-spacing:0.08em;text-transform:uppercase;color:var(--fg-tertiary);margin-bottom:14px;gap:8px;overflow:hidden;}
+.hero-meta span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
+.hero-meta .status{color:var(--fg-secondary);font-family:var(--mono);letter-spacing:0.04em;white-space:nowrap;}
+.score-row{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;}
+.team{display:flex;flex-direction:column;gap:2px;min-width:0;}
 .team.is-right{text-align:right;align-items:flex-end;}
 .team-abbr{font-family:var(--sans);font-weight:600;font-size:15px;letter-spacing:0.03em;}
-.team-sub{font-family:var(--sans);font-size:11px;color:var(--fg-tertiary);font-weight:400;}
-.score{font-family:var(--mono);font-weight:500;font-size:38px;font-feature-settings:"tnum";letter-spacing:-0.02em;color:var(--fg-primary);white-space:nowrap;}
-.score .em-dash{color:var(--fg-dim);margin:0 6px;font-weight:400;}
+.team-sub{font-family:var(--sans);font-size:10px;color:var(--fg-tertiary);font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.score{font-family:var(--mono);font-weight:500;font-size:32px;font-feature-settings:"tnum";letter-spacing:-0.02em;color:var(--fg-primary);white-space:nowrap;}
+.score .em-dash{color:var(--fg-dim);margin:0 4px;font-weight:400;}
 .pre-countdown{padding:20px 22px;text-align:center;}
 .pre-countdown .label{font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:var(--fg-tertiary);margin-bottom:6px;}
 .pre-countdown .time{font-family:var(--mono);font-size:28px;font-weight:500;color:var(--fg-secondary);}
 .pre-countdown .sub{font-family:var(--sans);font-size:11px;color:var(--fg-dim);margin-top:8px;}
 
 /* ═══ ESPN WP ═══ */
-.wp-chart{padding:14px 22px 8px;border-top:1px solid var(--hairline);}
+.wp-chart{padding:12px 16px 8px;border-top:1px solid var(--hairline);}
 .wp-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;}
 .wp-head-left{display:flex;align-items:baseline;gap:8px;font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:var(--fg-tertiary);}
 .wp-head-left .wp-val{font-family:var(--mono);font-weight:600;font-size:14px;letter-spacing:-0.01em;color:var(--fg-primary);text-transform:none;font-feature-settings:"tnum";}
@@ -97,7 +98,7 @@ input,textarea,select{font-size:16px!important;}
 .wp-qlabels span{text-align:center;}
 
 /* ═══ SECTION ═══ */
-.section{padding:18px 22px;border-top:1px solid var(--hairline);}
+.section{padding:16px;border-top:1px solid var(--hairline);}
 .section-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:12px;}
 .section-title{font-family:var(--sans);font-size:10.5px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:var(--fg-secondary);}
 .section-aside{font-family:var(--mono);font-size:11px;color:var(--fg-tertiary);}
@@ -110,7 +111,7 @@ input,textarea,select{font-size:16px!important;}
 .value-table td:first-child{text-align:left;font-family:var(--sans);font-weight:500;color:var(--fg-primary);letter-spacing:0.04em;}
 
 /* Placeholder sections */
-.placeholder{padding:20px 22px;border-top:1px solid var(--hairline);text-align:center;}
+.placeholder{padding:16px;border-top:1px solid var(--hairline);text-align:center;}
 .placeholder .ph-label{font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:var(--fg-dim);margin-bottom:6px;}
 .placeholder .ph-text{font-family:var(--sans);font-size:12px;color:var(--fg-tertiary);}
 
@@ -251,7 +252,10 @@ function getSlateDate(offset){
 function switchDate(offset){
   dateOffset=offset;
   document.querySelectorAll('.date-tab').forEach(function(tab,i){tab.classList.toggle('active',(i===0&&offset===-1)||(i===1&&offset===0)||(i===2&&offset===1));});
-  selIds=[];clearInterval(pollTimer);loadSchedule();
+  selIds=[];
+  document.getElementById('swipe').innerHTML='';
+  document.getElementById('dots').innerHTML='';
+  clearInterval(pollTimer);loadSchedule();
 }
 
 async function buildBdlGameMap(dateStr){
