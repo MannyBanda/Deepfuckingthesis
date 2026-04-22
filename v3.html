@@ -1251,25 +1251,28 @@ function buildScoringCompForCard(gameId){
   var hA=g.home?.alias||'HOME',aA=g.away?.alias||'AWAY';
   var sc=computeScoringComp(cs.pbpAudit,hA,aA,g.homePoints||0,g.awayPoints||0);
   if(!sc)return;
-  // Compute trend arrows from quarter diffs
-  var diffs=cs._serverQuarterDiffs;
-  if(diffs){
-    var keys=Object.keys(diffs).map(Number).filter(function(n){return !isNaN(n);}).sort(function(a,b){return a-b;});
-    if(keys.length>=2){
-      var latestQ=keys[keys.length-1];
-      var d=diffs[latestQ];
-      if(d&&d.home&&d.away){
-        // Latest quarter structural/variance per team
-        var hPaintQ=(d.home.points_in_the_paint||d.home.points_in_paint||0);
-        var aPaintQ=(d.away.points_in_the_paint||d.away.points_in_paint||0);
-        var hFtQ=(d.home.free_throws_made||0);var aFtQ=(d.away.free_throws_made||0);
-        var h3Q=(d.home.three_points_made||0)*3;var a3Q=(d.away.three_points_made||0)*3;
-        var qStructDelta=(hPaintQ+hFtQ)-(aPaintQ+aFtQ);
-        var qVarDelta=h3Q-a3Q;
-        // Compare to cumulative
-        sc.structTrend=qStructDelta>sc.structuralDelta/keys.length+2?'up':qStructDelta<sc.structuralDelta/keys.length-2?'down':'flat';
-        sc.varTrend=qVarDelta>sc.varianceDelta/keys.length+2?'up':qVarDelta<sc.varianceDelta/keys.length-2?'down':'flat';
-        sc.trendQ='Q'+latestQ;
+  // Compute trend arrows from current quarter scoring events vs cumulative
+  var sEvts=cs.pbpAudit?cs.pbpAudit.scoringEvents:null;
+  if(sEvts&&sEvts.length>=4){
+    var maxQ=0;sEvts.forEach(function(e){if(e.q>maxQ)maxQ=e.q;});
+    if(maxQ>=2){
+      var curQEvts=sEvts.filter(function(e){return e.q===maxQ;});
+      if(curQEvts.length>=2){
+        // Current quarter structural/variance per team
+        var hStructQ=0,aStructQ=0,hVarQ=0,aVarQ=0;
+        curQEvts.forEach(function(e){
+          var isH=e.tm===sc.home.team;
+          if(e.type==='3PT'){if(isH)hVarQ+=e.pts;else aVarQ+=e.pts;}
+          else{if(isH)hStructQ+=e.pts;else aStructQ+=e.pts;}
+        });
+        var qSDelta=hStructQ-aStructQ;
+        var qVDelta=hVarQ-aVarQ;
+        // Per-quarter average from cumulative (normalize by quarters played)
+        var avgS=sc.structuralDelta/maxQ;
+        var avgV=sc.varianceDelta/maxQ;
+        sc.structTrend=qSDelta>avgS+2?'up':qSDelta<avgS-2?'down':'flat';
+        sc.varTrend=qVDelta>avgV+2?'up':qVDelta<avgV-2?'down':'flat';
+        sc.trendQ='Q'+maxQ;
       }
     }
   }
