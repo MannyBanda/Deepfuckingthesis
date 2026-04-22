@@ -2261,8 +2261,8 @@ async function fetchLineShop(alert){
     var gs=getState(g);
     var oddsUrl=FN+'odds-api';
     if(gs==='FINAL'&&g.scheduled){
-      // Normalize to ISO Z format (The Odds API requires this)
-      var histDate=new Date(g.scheduled).toISOString();
+      // Normalize to ISO Z format without milliseconds (Odds API requires YYYY-MM-DDTHH:MM:SSZ)
+      var histDate=new Date(g.scheduled).toISOString().replace(/\.\d{3}Z$/,'Z');
       oddsUrl+=('?date='+encodeURIComponent(histDate));
     }
     var r=await fetch(oddsUrl);
