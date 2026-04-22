@@ -249,7 +249,9 @@ Peak floor: ${ctx.peakFloor != null ? Number(ctx.peakFloor).toFixed(2) : 'N/A'} 
 Consecutive holds: ${ctx.consecutiveHolds}
 BWC lifecycle: ${ctx.bwcState}${ctx.bwcFirePeriod ? ' (BWC fired Q' + ctx.bwcFirePeriod + ', floor ' + (ctx.bwcFireFloor != null ? Number(ctx.bwcFireFloor).toFixed(2) : '?') + ')' : ''}
 ${ctx.positionClosed ? 'POSITION STATE: CLOSED — an EXIT was previously SENT. The subscriber was told to exit this position. Any SEND decision on a recovery alert (POSITION_OPEN, POSITION_SAFE, POSITION_RECOVERING, THESIS_ALIVE) will RE-OPEN the position. This requires ELEVATED SCRUTINY — the thesis previously failed. See POST-EXIT RE-ENTRY rules on each alert type below.' : ''}
-${ctx.cpGraduation 
+${ctx.poRank === 'BUY'
+  ? 'Position opened by BUY signal at Q' + (ctx.buyOpenPeriod || '?') + ' (no checkpoint graduation).' + (ctx.cpGraduation ? ' Checkpoint progress: team reached ' + ctx.cpPeakRank + '-Rank but PO gates not yet met. MF=' + (ctx.cpMeanFloor?.toFixed(3) || '?') + ' (' + ctx.cpEligibleCount + ' eligible CPs). If PO fires, position upgrades from BUY to graduated rank.' : ctx.cpEligibleCount > 0 ? ' Checkpoint progress: ' + ctx.cpEligibleCount + ' eligible CPs, MF=' + (ctx.cpMeanFloor?.toFixed(3) || '?') + '.' : '') + ' EXIT threshold is timing-dependent — see BUY-OPENED EXIT rules below.'
+  : ctx.cpGraduation 
   ? 'Graduation: ' + ctx.cpPeakRank + '-Rank (graduated @ ' + ctx.cpGraduation.cp_label + ', floor was ' + Number(ctx.cpGraduation.floor).toFixed(2) + ') | ' + mfTrajStr + ' | MF=' + (ctx.cpMeanFloor?.toFixed(3) || '?') + ' minF=' + (ctx.cpMinFloor?.toFixed(2) || '?') + ' (' + ctx.cpEligibleCount + ' eligible CPs)'
     + (ctx.cpOppGraduation ? ' | OPPONENT ALSO GRADUATED ' + ctx.cpOppGraduation.rank + '-Rank @ ' + ctx.cpOppGraduation.cp_label : '')
   : 'Pre-graduation (' + (ctx.cpEligibleCount || 0) + ' eligible CPs, MF=' + (ctx.cpMeanFloor?.toFixed(3) || '?') + ' ' + mfTrajStr + ')'
@@ -354,7 +356,13 @@ ${ctx.positionClosed ? '  POST-EXIT RECOVERY: Position is CLOSED — the subscri
   For position alerts (POSITION_OPEN, BWC_EDGE, POSITION_SAFE, POSITION_RECOVERING): When the rolling window is SIGNIFICANTLY weaker than the cumulative floor, you MAY SUPPRESS or DOWNGRADE — this OVERRIDES the per-alert-type ALWAYS SEND rules above. The graduation badge does not guarantee current structural control. Evaluate whether the indicators that powered graduation are still held in recent quarters using the per-quarter breakdown. If recent quarters show the opponent winning paint, disruption, or game control, the graduation is stale.
   DOWNGRADE is preferred over SUPPRESS for POSITION_OPEN (subscriber should know graduation happened but that it is contested).
   BWC_EDGE and POSITION_SAFE may fully SUPPRESS (these are updates to existing positions — no value in reassuring the subscriber about a position that is structurally compromised).
-  EXEMPT from stress override: EXIT (always SEND), TRACKING (always SEND), A-Rank WIRE-TO-WIRE with 0 flips (strongest signal, stress override should not touch).
+  EXEMPT from stress override: EXIT on GRADUATED positions (always SEND), TRACKING (always SEND), A-Rank WIRE-TO-WIRE with 0 flips (strongest signal, stress override should not touch).
+  EXIT on BUY-OPENED positions (poRank = BUY): Position was opened by a BUY signal, not checkpoint graduation. EXIT is NOT automatic. Apply timing-based opponent floor thresholds:
+    BUY opened Q4: Any control flip is meaningful (91% precision). SEND.
+    BUY opened Q3: Opponent must show >= 0.60 floor for EXIT to be warranted (79% precision). Below 0.60 = noise flip, SUPPRESS.
+    BUY opened Q2: Opponent must show >= 0.60 floor (68% precision). Lean SUPPRESS unless opponent holds structural indicators (I1, I2, or I4).
+    LANE ADJUSTMENT for underdogs (lane = underdog, ML > +100): Raise opponent floor threshold by +0.05 to preserve high-payout positions. Q3 BUY: opponent needs 0.65. Q2 BUY: opponent needs 0.65. Q4 BUY: opponent needs 0.55.
+    FLIP BUY SIGNAL: When EXIT on a BUY-opened position AND opponent floor >= 0.65, note in the body that structural reversal suggests a potential entry on the opponent side.
   REINFORCING (DOMINANT/STRONG combined read) = cumulative floor is trustworthy, proceed normally with per-alert-type rules.
 - REASONING AS JOURNAL: Even when SUPPRESS, write thorough reasoning. It feeds subsequent decisions.
 
@@ -5219,6 +5227,8 @@ export default async function(req) {
                 // Flip buy context (BUY fires for opponent after EXIT sent on BWC team)
                 isFlipBuy: !!(v2IsBuy && lt._flipBuyContext),
                 flipBuyContext: lt._flipBuyContext || null,
+                // BUY-opened position context
+                buyOpenPeriod: lt._buy_open_period || null,
               };
 
               const v2Prompt = buildV2AgentPrompt(v2Ctx);
@@ -5274,6 +5284,56 @@ export default async function(req) {
                 } else if (['THESIS_ALIVE', 'POSITION_OPEN', 'POSITION_RECOVERING', 'POSITION_SAFE'].includes(v2Type)) {
                   lt.position_closed = false;
                   log(`${matchup}: Position RE-OPENED — ${v2Type} sent, position updates resume`);
+                } else if (v2IsBuy) {
+                  // BUY SEND opens position — activate V2 state machine for exit protection
+                  const buyTeam = ind.controlTeam;
+
+                  // Ensure bwc_fired tracks the buy team
+                  if (!lt.bwc_fired) {
+                    // Cold BUY — no prior BWC tracking
+                    lt.bwc_fired = { team: buyTeam, period: currentPeriod, clock, floor: ind.score };
+                    // Initialize checkpoint tracking
+                    const cpClockMatchBuy = String(clock).match(/(\d+):(\d+)/);
+                    const cpClockSecBuy = cpClockMatchBuy ? parseInt(cpClockMatchBuy[1]) * 60 + parseInt(cpClockMatchBuy[2]) : 720;
+                    const currentGameSecBuy = (currentPeriod - 1) * 720 + (720 - cpClockSecBuy);
+                    lt.next_cp_idx = 0;
+                    while (lt.next_cp_idx < GRAD_CHECKPOINTS.length && GRAD_CHECKPOINTS[lt.next_cp_idx].gameSec <= currentGameSecBuy) {
+                      lt.next_cp_idx++;
+                    }
+                    log(`${matchup}: Cold BUY — bwc_fired created for ${buyTeam}, checkpoint tracking initialized`);
+                  } else if (lt.bwc_fired.team !== buyTeam) {
+                    // BUY on different team — flip BWC tracking
+                    lt.original_bwc_team = lt.original_bwc_team || lt.bwc_fired.team;
+                    lt.bwc_fired = { team: buyTeam, period: currentPeriod, clock, floor: ind.score };
+                    lt.bwc_flipped = true;
+                    // Clear stale graduation data from old team
+                    lt.checkpoints = [];
+                    lt.cp_graduation = null;
+                    lt.cp_opp_graduation = null;
+                    lt.cp_peak_rank = null;
+                    lt.cp_mean_floor = null;
+                    lt.cp_min_floor = null;
+                    lt.cp_eligible_count = 0;
+                    lt.cp_ctrl_flips = 0;
+                    // Re-initialize checkpoint index
+                    const cpClockMatchFlip = String(clock).match(/(\d+):(\d+)/);
+                    const cpClockSecFlip = cpClockMatchFlip ? parseInt(cpClockMatchFlip[1]) * 60 + parseInt(cpClockMatchFlip[2]) : 720;
+                    const currentGameSecFlip = (currentPeriod - 1) * 720 + (720 - cpClockSecFlip);
+                    lt.next_cp_idx = 0;
+                    while (lt.next_cp_idx < GRAD_CHECKPOINTS.length && GRAD_CHECKPOINTS[lt.next_cp_idx].gameSec <= currentGameSecFlip) {
+                      lt.next_cp_idx++;
+                    }
+                    log(`${matchup}: BUY flipped BWC ${lt.original_bwc_team} → ${buyTeam}, stale graduation data cleared`);
+                  }
+
+                  // Open or re-open position
+                  if (!lt.po_fired || lt.po_fired.team !== buyTeam) {
+                    lt.po_fired = { team: buyTeam, rank: 'BUY', period: currentPeriod, clock, flipped: false };
+                    lt._prev_bwc_state = computeBwcState(lt, ind.controlTeam, _v2Margin);
+                    log(`${matchup}: Position OPENED via BUY — ${buyTeam} (rank: BUY, seeded state: ${lt._prev_bwc_state})`);
+                  }
+                  lt.position_closed = false;
+                  lt._buy_open_period = currentPeriod;
                 }
               }
 
@@ -5419,7 +5479,7 @@ export default async function(req) {
                 lt.cp_eligible_count = cpFloorStats.eligibleCount;
 
                 // ── POSITION OPEN EVALUATION (checkpoint-gated) ──
-                if (lt.cp_graduation && !lt.po_fired && ind.controlTeam === bwcTeam) {
+                if (lt.cp_graduation && (!lt.po_fired || lt.po_fired.rank === 'BUY') && ind.controlTeam === bwcTeam) {
                   const gRank = lt.cp_graduation.rank;
                   const gates = getLaneGates(lt.lane || 'tossup');
 
@@ -5735,7 +5795,7 @@ export default async function(req) {
 
             // ── V2 STATE LOGGING ──
             if (lt.bwc_fired) {
-              lt._prev_bwc_state = v2BwcState;
+              if (v2BwcState) lt._prev_bwc_state = v2BwcState;
               log(`${matchup}: v2 state=${v2BwcState || '-'} erosion=${v2Erosion.level} peak=${v2Erosion.peakFloor?.toFixed(2) || '-'} holds=${lt.ctrl_team_holds || 0} bwcTeam=${lt.bwc_fired.team}`);
             }
           }
