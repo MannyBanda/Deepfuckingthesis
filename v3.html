@@ -76,7 +76,9 @@ input,textarea,select{font-size:16px!important;}
 .score-row{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:6px;}
 .team{display:flex;flex-direction:column;gap:2px;min-width:0;overflow:hidden;}
 .team.is-right{text-align:right;align-items:flex-end;}
-.team-abbr{font-family:var(--sans);font-weight:600;font-size:15px;letter-spacing:0.03em;white-space:nowrap;}
+.team-abbr{font-family:var(--sans);font-weight:600;font-size:15px;letter-spacing:0.03em;white-space:nowrap;display:flex;align-items:baseline;gap:4px;}
+.team.is-right .team-abbr{justify-content:flex-end;}
+.team-rank{font-size:10px;font-weight:500;color:var(--fg-tertiary);letter-spacing:0.02em;}
 .team-sub{font-family:var(--sans);font-size:10px;color:var(--fg-tertiary);font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;}
 .score{font-family:var(--mono);font-weight:500;font-size:28px;font-feature-settings:"tnum";letter-spacing:-0.02em;color:var(--fg-primary);white-space:nowrap;padding:0 2px;}
 .score .em-dash{color:var(--fg-dim);margin:0 3px;font-weight:400;}
@@ -592,13 +594,13 @@ function renderCard(id){
   if(state==='PRE'){
     var ms=new Date(g.scheduled)-new Date();
     var h=Math.max(0,Math.floor(ms/3600000)),m=Math.max(0,Math.floor((ms%3600000)/60000));
-    html+='<div class="score-row"><div class="team"><span class="team-abbr">'+esc(aA)+'</span><span class="team-sub">'+esc(g.away?.name||'')+(aRank?' \u00b7 '+ordinal(aRank.confRank)+' '+aRank.conf:'')+'</span></div>';
+    html+='<div class="score-row"><div class="team"><span class="team-abbr">'+esc(aA)+(aRank?'<span class="team-rank">'+ordinal(aRank.confRank)+'</span>':'')+'</span><span class="team-sub">'+esc(g.away?.name||'')+'</span></div>';
     html+='<div class="score" style="font-size:20px;color:var(--fg-dim)">'+esc((h>0?h+'h ':'')+ m+'m')+'</div>';
-    html+='<div class="team is-right"><span class="team-abbr">'+esc(hA)+'</span><span class="team-sub">'+esc(g.home?.name||'')+(hRank?' \u00b7 '+ordinal(hRank.confRank)+' '+hRank.conf:'')+'</span></div></div>';
+    html+='<div class="team is-right"><span class="team-abbr">'+esc(hA)+(hRank?'<span class="team-rank">'+ordinal(hRank.confRank)+'</span>':'')+'</span><span class="team-sub">'+esc(g.home?.name||'')+'</span></div></div>';
   } else {
-    html+='<div class="score-row"><div class="team"><span class="team-abbr">'+esc(aA)+'</span><span class="team-sub">'+esc(g.away?.name||'')+(aRank?' \u00b7 '+ordinal(aRank.confRank)+' '+aRank.conf:'')+'</span></div>';
+    html+='<div class="score-row"><div class="team"><span class="team-abbr">'+esc(aA)+(aRank?'<span class="team-rank">'+ordinal(aRank.confRank)+'</span>':'')+'</span><span class="team-sub">'+esc(g.away?.name||'')+'</span></div>';
     html+='<div class="score">'+(g.awayPoints??'\u2014')+'<span class="em-dash">\u2014</span>'+(g.homePoints??'\u2014')+'</div>';
-    html+='<div class="team is-right"><span class="team-abbr">'+esc(hA)+'</span><span class="team-sub">'+esc(g.home?.name||'')+(hRank?' \u00b7 '+ordinal(hRank.confRank)+' '+hRank.conf:'')+'</span></div></div>';
+    html+='<div class="team is-right"><span class="team-abbr">'+esc(hA)+(hRank?'<span class="team-rank">'+ordinal(hRank.confRank)+'</span>':'')+'</span><span class="team-sub">'+esc(g.home?.name||'')+'</span></div></div>';
   }
   html+='</div>';
 
@@ -635,8 +637,8 @@ function renderCard(id){
         if(pred.fwpTeam1===hA){hFwp=pred.fwpVal1+'%';aFwp=(pred.fwpVal2||'--')+'%';winnerTeam=pred.fwpVal1>=pred.fwpVal2?hA:aA;}
         else{aFwp=pred.fwpVal1+'%';hFwp=(pred.fwpVal2||'--')+'%';winnerTeam=pred.fwpVal1>=pred.fwpVal2?aA:hA;}
       } else if(pred.fwp){hFwp=esc(pred.fwp);winnerTeam=hA;}
-      if(pred.homeValue){hFwp=(pred.homeValue.fwp||hFwp);hEdge=pred.homeValue.edge!=null?(pred.homeValue.edge>0?'+':'')+pred.homeValue.edge+'%':'--';hML=pred.homeValue.ml||'--';hSprd=pred.homeValue.spread||'--';}
-      if(pred.awayValue){aFwp=(pred.awayValue.fwp||aFwp);aEdge=pred.awayValue.edge!=null?(pred.awayValue.edge>0?'+':'')+pred.awayValue.edge+'%':'--';aML=pred.awayValue.ml||'--';aSprd=pred.awayValue.spread||'--';}
+      if(pred.homeValue){var _hf=pred.homeValue.fwp;hFwp=_hf!=null?(String(_hf).includes('%')?_hf:_hf+'%'):hFwp;hEdge=pred.homeValue.edge!=null?(pred.homeValue.edge>0?'+':'')+pred.homeValue.edge+'%':'--';hML=pred.homeValue.ml||'--';hSprd=pred.homeValue.spread||'--';}
+      if(pred.awayValue){var _af=pred.awayValue.fwp;aFwp=_af!=null?(String(_af).includes('%')?_af:_af+'%'):aFwp;aEdge=pred.awayValue.edge!=null?(pred.awayValue.edge>0?'+':'')+pred.awayValue.edge+'%':'--';aML=pred.awayValue.ml||'--';aSprd=pred.awayValue.spread||'--';}
       if(pred.edge&&hEdge==='--'){hEdge=esc(pred.edge);}
       // Odds from cs.oddsData fallback
       var od=cs.oddsData;
@@ -648,10 +650,19 @@ function renderCard(id){
       }
       if(!winnerTeam&&pred.edgeNum!=null)winnerTeam=pred.edgeNum>=0?hA:aA;
 
+      // Edge color helper
+      function edgeHtml(val){
+        if(val==='--')return'--';
+        var n=parseFloat(String(val).replace(/[+%]/g,''));
+        if(isNaN(n))return esc(val);
+        var col=n>0?'var(--green)':n<0?'var(--coral)':'var(--fg-secondary)';
+        return'<span style="color:'+col+'">'+esc(val)+'</span>';
+      }
+
       html+='<table class="vr-table"><thead><tr><th></th><th>FWP</th><th>Edge</th><th>ML</th><th>Spread</th></tr></thead><tbody>';
       var aWin=winnerTeam===aA,hWin=winnerTeam===hA;
-      html+='<tr class="'+(aWin?'winner':'')+'"><td>'+(aWin?'<span class="vr-arrow">\u25b6</span>':'')+esc(aA)+'</td><td>'+aFwp+'</td><td>'+aEdge+'</td><td>'+aML+'</td><td>'+aSprd+'</td></tr>';
-      html+='<tr class="'+(hWin?'winner':'')+'"><td>'+(hWin?'<span class="vr-arrow">\u25b6</span>':'')+esc(hA)+'</td><td>'+hFwp+'</td><td>'+hEdge+'</td><td>'+hML+'</td><td>'+hSprd+'</td></tr>';
+      html+='<tr class="'+(aWin?'winner':'')+'"><td>'+(aWin?'<span class="vr-arrow">\u25b6</span>':'')+esc(aA)+'</td><td>'+aFwp+'</td><td>'+edgeHtml(aEdge)+'</td><td>'+aML+'</td><td>'+aSprd+'</td></tr>';
+      html+='<tr class="'+(hWin?'winner':'')+'"><td>'+(hWin?'<span class="vr-arrow">\u25b6</span>':'')+esc(hA)+'</td><td>'+hFwp+'</td><td>'+edgeHtml(hEdge)+'</td><td>'+hML+'</td><td>'+hSprd+'</td></tr>';
       html+='</tbody></table>';
 
       // Conviction bar
