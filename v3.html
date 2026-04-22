@@ -1457,11 +1457,57 @@ async function fetchOddsHistory(gameId){
   }catch(e){console.warn('[ODDS] Fetch failed:',e.message);}
 }
 function closeDrawer(){
+  var dr=document.getElementById('drawer');
+  dr.style.transition='';
+  dr.style.transform='';
+  dr.classList.remove('open');
   document.getElementById('drawer-scrim').classList.remove('open');
-  document.getElementById('drawer').classList.remove('open');
   document.body.classList.remove('is-locked');
   _drawerGameId=null;
 }
+
+// ── SWIPE-DOWN-TO-DISMISS ──
+(function(){
+  var drawer,startY,dy,dragging;
+  document.addEventListener('DOMContentLoaded',function(){
+    drawer=document.getElementById('drawer');
+    drawer.addEventListener('touchstart',function(e){
+      startY=e.touches[0].clientY;dy=0;dragging=false;
+    },{passive:true});
+    drawer.addEventListener('touchmove',function(e){
+      var curY=e.touches[0].clientY;dy=curY-startY;
+      if(drawer.scrollTop<=0&&dy>0){
+        if(!dragging){dragging=true;drawer.style.transition='none';}
+        drawer.style.transform='translateY('+dy+'px)';
+        e.preventDefault();
+      } else if(dragging&&dy<=0){
+        // scrolled back up — cancel drag
+        dragging=false;drawer.style.transition='';drawer.style.transform='';
+      }
+    },{passive:false});
+    drawer.addEventListener('touchend',function(){
+      if(!dragging){return;}
+      if(dy>120){
+        // Animate to bottom then clean up
+        drawer.style.transition='transform .25s ease';
+        drawer.style.transform='translateY(100%)';
+        setTimeout(function(){
+          drawer.style.transition='';drawer.style.transform='';
+          drawer.classList.remove('open');
+          document.getElementById('drawer-scrim').classList.remove('open');
+          document.body.classList.remove('is-locked');
+          _drawerGameId=null;
+        },260);
+      } else {
+        // Snap back
+        drawer.style.transition='transform .2s ease';
+        drawer.style.transform='translateY(0)';
+        setTimeout(function(){drawer.style.transition='';drawer.style.transform='';},210);
+      }
+      dragging=false;dy=0;
+    },{passive:true});
+  });
+})();
 
 async function fetchAlerts(){
   if(!dbReady)return;
