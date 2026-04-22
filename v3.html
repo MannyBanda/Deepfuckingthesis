@@ -1301,6 +1301,19 @@ function openDrawer(gameId){
   renderDrawer(gameId);
   // Fetch alerts if not cached
   if(!_alertsFetched)fetchAlerts();
+  // Fetch odds history for this game
+  if(!cs._oddsHistory)fetchOddsHistory(gameId);
+}
+
+async function fetchOddsHistory(gameId){
+  if(!dbReady)return;
+  var cs=cardState[gameId];if(!cs)return;
+  try{
+    var r=await fetch(FN+'db-api?action=get_odds&game_id='+encodeURIComponent(gameId));
+    if(!r.ok)return;var data=await r.json();
+    cs._oddsHistory=data.odds||[];
+    if(cs._oddsHistory.length>0){console.log('[ODDS] Loaded',cs._oddsHistory.length,'entries for',gameId);renderDrawer(gameId);}
+  }catch(e){console.warn('[ODDS] Fetch failed:',e.message);}
 }
 function closeDrawer(){
   document.getElementById('drawer-scrim').classList.remove('open');
@@ -1454,10 +1467,10 @@ function renderDrawer(gameId){
     });
 
     // Column toggle state
-    if(!cs._snapCols)cs._snapCols={time:true,score:true,floor:true,mf:true,peak:true,ind:true,tp:true,ls:true,grad:true,spread:true,alert:true,dec:true};
+    if(!cs._snapCols)cs._snapCols={time:true,score:true,floor:true,mf:true,peak:true,ind:true,tp:true,ls:true,grad:true,ml:true,alert:true,dec:true};
     var sc2=cs._snapCols;
     html+='<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">';
-    var colDefs=[{k:'time',l:'Time'},{k:'score',l:'Score'},{k:'floor',l:'Floor'},{k:'mf',l:'MF'},{k:'peak',l:'Peak'},{k:'ind',l:'I1-I5'},{k:'tp',l:'TP'},{k:'ls',l:'LS'},{k:'grad',l:'Grad'},{k:'spread',l:'Sprd'},{k:'alert',l:'Alert'},{k:'dec',l:'Dec'}];
+    var colDefs=[{k:'time',l:'Time'},{k:'score',l:'Score'},{k:'floor',l:'Floor'},{k:'mf',l:'MF'},{k:'peak',l:'Peak'},{k:'ind',l:'I1-I5'},{k:'tp',l:'TP'},{k:'ls',l:'LS'},{k:'grad',l:'Grad'},{k:'ml',l:'ML'},{k:'alert',l:'Alert'},{k:'dec',l:'Dec'}];
     colDefs.forEach(function(c){
       html+='<button onclick="toggleSnapCol(\''+gameId+'\',\''+c.k+'\')" style="font-family:var(--mono);font-size:8px;padding:2px 5px;border-radius:4px;border:1px solid '+(sc2[c.k]?'var(--green-border)':'var(--hairline)')+';background:'+(sc2[c.k]?'var(--green-dim)':'transparent')+';color:'+(sc2[c.k]?'var(--green)':'var(--fg-dim)')+';cursor:pointer">'+c.l+'</button>';
     });
@@ -1471,7 +1484,7 @@ function renderDrawer(gameId){
     if(sc2.mf)html+='<th>MF</th>';if(sc2.peak)html+='<th>Peak</th>';
     if(sc2.ind)html+='<th style="text-align:center">I1-I5</th>';
     if(sc2.tp)html+='<th>TP</th>';if(sc2.ls)html+='<th>LS</th>';
-    if(sc2.grad)html+='<th>Grad</th>';if(sc2.spread)html+='<th>Sprd</th>';
+    if(sc2.grad)html+='<th>Grad</th>';if(sc2.ml)html+='<th>ML</th>';
     if(sc2.alert)html+='<th>Alert</th>';if(sc2.dec)html+='<th>Dec</th>';
     html+='</tr></thead><tbody>';
     sampled.forEach(function(s,ri){
@@ -1496,7 +1509,19 @@ function renderDrawer(gameId){
       if(sc2.tp)html+='<td style="font-size:9px">'+(s.tp_class?esc(s.tp_class).substring(0,4):'--')+'</td>';
       if(sc2.ls)html+='<td style="font-size:9px">'+(s.ls_class?esc(s.ls_class).substring(0,4):'--')+'</td>';
       if(sc2.grad)html+='<td style="font-size:9px">'+(matchAlert&&matchAlert.graduation_rank?esc(matchAlert.graduation_rank):'--')+'</td>';
-      if(sc2.spread)html+='<td style="font-size:9px">'+(s.spread!=null?s.spread:'--')+'</td>';
+      if(sc2.ml){
+        // Find closest odds entry by timestamp
+        var mlText='--';
+        var oddsArr=cs._oddsHistory;
+        if(oddsArr&&oddsArr.length>0){
+          var sTs=new Date(s.ts||0).getTime();
+          var bestOdds=oddsArr[0],bestDist=Math.abs(new Date(oddsArr[0].ts).getTime()-sTs);
+          for(var oi=1;oi<oddsArr.length;oi++){var od=Math.abs(new Date(oddsArr[oi].ts).getTime()-sTs);if(od<bestDist){bestDist=od;bestOdds=oddsArr[oi];}}
+          if(bestOdds.home_ml!=null&&bestOdds.away_ml!=null)mlText=bestOdds.away_ml+'/'+bestOdds.home_ml;
+          else if(bestOdds.home_ml!=null)mlText='H:'+bestOdds.home_ml;
+        }
+        html+='<td style="font-size:8px;white-space:nowrap">'+esc(mlText)+'</td>';
+      }
       if(sc2.alert)html+='<td style="font-size:9px">'+(matchAlert?esc(matchAlert.alert_type||'').substring(0,6):'--')+'</td>';
       if(sc2.dec)html+='<td style="font-size:9px" class="'+(matchAlert?(matchAlert.agent_decision==='SEND'?'qd-cell pos':'qd-cell neg'):'')+'\">'+(matchAlert?esc(matchAlert.agent_decision||''):'--')+'</td>';
       html+='</tr>';
@@ -1550,7 +1575,7 @@ function selectRun(gameId,ri){
 // ── SNAPSHOT COLUMN TOGGLE ──
 function toggleSnapCol(gameId,col){
   var cs=cardState[gameId];if(!cs)return;
-  if(!cs._snapCols)cs._snapCols={time:true,score:true,floor:true,mf:true,peak:true,ind:true,tp:true,ls:true,grad:true,spread:true,alert:true,dec:true};
+  if(!cs._snapCols)cs._snapCols={time:true,score:true,floor:true,mf:true,peak:true,ind:true,tp:true,ls:true,grad:true,ml:true,alert:true,dec:true};
   cs._snapCols[col]=!cs._snapCols[col];
   renderDrawer(gameId);
 }
