@@ -8251,10 +8251,9 @@ async function reportGraduationSim(sql, url) {
 // Usage: ?phase=report_buy_exit_sim  or  ?phase=report_buy_exit_sim&close=1
 async function reportBuyExitSim(sql, url) {
   var closeOnly = url?.searchParams?.get('close') === '1';
-  var marginFilter = closeOnly ? 8 : 999;
   var t0 = Date.now();
 
-  // ── 1. Pull server snapshots ──
+  // ── 1. Pull server snapshots (all finished games) ──
   var snapQuery = await sql`
     SELECT s.game_id, s.ts, s.period, s.clock, s.home_pts, s.away_pts,
            s.floor_score, s.floor_team, s.i1, s.i2, s.i3, s.i4, s.i5,
@@ -8265,7 +8264,6 @@ async function reportBuyExitSim(sql, url) {
       AND g.winner IS NOT NULL
       AND s.floor_score IS NOT NULL
       AND s.floor_team IS NOT NULL
-      AND ABS(g.margin) <= ${marginFilter}
     ORDER BY s.game_id, s.ts
   `;
 
@@ -8287,6 +8285,19 @@ async function reportBuyExitSim(sql, url) {
     gameMap[r.game_id].push(r);
   }
   var gameIds = Object.keys(gameMap).filter(function(gid) { return gameMap[gid].length >= 10; });
+
+  // ── 3b. Competitive game filter (close=1): within 5 in Q3, within 7 in Q4 ──
+  if (closeOnly) {
+    gameIds = gameIds.filter(function(gid) {
+      return gameMap[gid].some(function(s) {
+        var absM = Math.abs(Number(s.home_pts) - Number(s.away_pts));
+        var p = Number(s.period);
+        if (p === 3 && absM <= 5) return true;
+        if (p === 4 && absM <= 7) return true;
+        return false;
+      });
+    });
+  }
 
   // ── Helpers ──
   function clockToSec(clockStr) {
@@ -8545,7 +8556,7 @@ async function reportBuyExitSim(sql, url) {
   }
 
   return {
-    scope: closeOnly ? 'close_games_margin_le_8' : 'full_season',
+    scope: closeOnly ? 'competitive_games_within_5_Q3_within_7_Q4' : 'full_season',
     totalGamesProcessed: gameIds.length,
     buyEligibleGames: results.length,
     gamesWithOdds: results.filter(function(r) { return r.hasOdds; }).length,
