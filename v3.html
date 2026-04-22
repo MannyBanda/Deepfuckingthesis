@@ -423,6 +423,8 @@ var dbAnalysisCache = {};
 var autoAnalysisCache = {};
 var dbSnapshotCache = {};
 var _ssExpanded = {}; // track expanded sonnet signal per game
+var _lastThesisResync = 0;
+var _lastSnapshotResync = 0;
 
 // ── UTILS ──
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/`/g,'&#96;').replace(/\$\{/g,'&#36;{');}
@@ -616,7 +618,7 @@ async function loadSchedule(){
   finally{showLoading(false);}
 }
 
-// ── BASIC POLL (Phase 1 — score updates only) ──
+// ── POLL (10s — score updates + client-side indicator compute) ──
 async function refreshLiveCards(){
   var d=getSlateDate(dateOffset);
   try{
@@ -631,11 +633,51 @@ async function refreshLiveCards(){
       g.period=b.period||g.period;
       g.clock=normalizeBdlClock(b.time,b.status)||g.clock;
       updated=true;
+      // Client-side indicator compute for LIVE games
+      var gs=getState(g);
+      if(gs==='LIVE'){
+        var cs=cardState[g.id];
+        if(cs){
+          var ind=computeClientIndicators(b,g.id);
+          if(ind){
+            cs.clientInd=ind;
+            // Rebuild scoring comp if PBP available (scores changed)
+            if(cs.pbpAudit)buildScoringCompForCard(g.id);
+          }
+        }
+      }
     });
     if(updated){renderPills();games.forEach(function(g){renderCard(g.id);});}
   }catch(e){console.warn('[POLL]',e.message);}
   // Poll alerts for toast
   pollAlerts();
+  // Periodic thesis re-sync (picks up pregame agent theses)
+  maybeResyncTheses();
+  // Periodic server snapshot re-hydration (every 60s for LIVE games)
+  maybeResyncSnapshots();
+}
+
+// ── PERIODIC RE-SYNC HELPERS ──
+function maybeResyncTheses(){
+  if(!dbReady||Date.now()-_lastThesisResync<120000)return;
+  var missing=games.some(function(g){return getState(g)==='PRE'&&!theses[g.id];});
+  if(!missing)return;
+  _lastThesisResync=Date.now();
+  syncThesesFromDB();
+}
+
+function maybeResyncSnapshots(){
+  if(!dbReady||Date.now()-_lastSnapshotResync<60000)return;
+  var hasLive=games.some(function(g){return getState(g)==='LIVE';});
+  if(!hasLive)return;
+  _lastSnapshotResync=Date.now();
+  games.forEach(function(g,i){
+    if(getState(g)==='LIVE'){
+      setTimeout(function(){hydrateFromServerSnapshots(g.id);},i*200);
+    }
+  });
+  // Also refresh auto-analyses
+  syncCalibrationAnalyses();
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1391,6 +1433,140 @@ function buildV3Summary(boxScore){
     _dataSource:'BDL',status:'inprogress',quarter:boxScore.period||0,clock:normalizeBdlClock(boxScore.time,boxScore.status),
     home:{name:hTeam.name||'',alias:hA,points:boxScore.home_team_score||hStats.points,statistics:hStats,players:mapPlayers(hPlayers),bonus:boxScore.home_in_bonus||false},
     away:{name:aTeam.name||'',alias:aA,points:boxScore.visitor_team_score||aStats.points,statistics:aStats,players:mapPlayers(aPlayers),bonus:boxScore.visitor_in_bonus||false}
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CLIENT-SIDE BDL INDICATOR COMPUTE — real-time I1-I5 from box score data
+// Thresholds match server computeServer() exactly
+// ══════════════════════════════════════════════════════════════════════════════
+
+function computeClientIndicators(boxScore, gameId){
+  var g=games.find(function(x){return x.id===gameId;});if(!g)return null;
+  var cs=cardState[gameId];if(!cs)return null;
+  var gs=getState(g);if(gs==='PRE')return null;
+
+  var hA=g.home?.alias||'HOME',aA=g.away?.alias||'AWAY';
+  var hS=boxScore.home_team_score||0,aS=boxScore.visitor_team_score||0;
+  if(hS===0&&aS===0)return null;
+
+  // Roll up player stats to team totals
+  var hPlayers=boxScore.home_team?.players||[];
+  var aPlayers=boxScore.visitor_team?.players||[];
+  function rollup(players){
+    var s={fgm:0,fga:0,tpm:0,tpa:0,ftm:0,fta:0,ast:0,stl:0,blk:0,oreb:0,dreb:0,to:0,pf:0,pts:0};
+    players.forEach(function(p){
+      s.fgm+=p.fgm||0;s.fga+=p.fga||0;s.tpm+=p.fg3m||0;s.tpa+=p.fg3a||0;
+      s.ftm+=p.ftm||0;s.fta+=p.fta||0;s.ast+=p.ast||0;s.stl+=p.stl||0;
+      s.blk+=p.blk||0;s.oreb+=p.oreb||0;s.dreb+=p.dreb||0;
+      s.to+=p.turnover||0;s.pf+=p.pf||0;s.pts+=p.pts||0;
+    });
+    s.poss=+(s.fga-s.oreb+s.to+0.4*s.fta).toFixed(1);
+    return s;
+  }
+  var hs=rollup(hPlayers),as=rollup(aPlayers);
+  var pbp=cs.pbpAudit||null;
+
+  // ── I1: Disruption & Conversion ──
+  var hDisrupt=(hs.stl)+(hs.blk),aDisrupt=(as.stl)+(as.blk);
+  var disruptDiff=hDisrupt-aDisrupt;
+  var i1subA=disruptDiff>1?1:disruptDiff<-1?-1:0;
+  // POT not available from BDL box scores — use 0
+  var i1subB=0;
+  var i1raw=i1subA+i1subB;
+  // Chaos layer from cached PBP
+  if(pbp&&pbp.home&&pbp.away){
+    var hForced=pbp.away.tos?pbp.away.tos.forced||0:0;
+    var aForced=pbp.home.tos?pbp.home.tos.forced||0:0;
+    var hUnforced=pbp.home.tos?pbp.home.tos.unforced||0:0;
+    var aUnforced=pbp.away.tos?pbp.away.tos.unforced||0:0;
+    if(hForced>=aForced+4)i1raw+=0.5;
+    else if(aForced>=hForced+4)i1raw-=0.5;
+    else if(hUnforced>=aUnforced+4)i1raw-=0.5;
+    else if(aUnforced>=hUnforced+4)i1raw+=0.5;
+  }
+  var I1={score:i1raw>0?1:i1raw===0?0.5:0,leader:i1raw>0?hA:i1raw<0?aA:'EVEN'};
+
+  // ── I2: Interior Control ──
+  // Paint points not in BDL box score player data — use PBP cache
+  var hPaint=0,aPaint=0;
+  if(pbp){
+    if(pbp.home&&pbp.home.rim)hPaint=(pbp.home.rim.made||0)*2;
+    if(pbp.away&&pbp.away.rim)aPaint=(pbp.away.rim.made||0)*2;
+    // Add paint zone if available
+    if(pbp.home&&pbp.home.paint)hPaint+=(pbp.home.paint.made||0)*2;
+    if(pbp.away&&pbp.away.paint)aPaint+=(pbp.away.paint.made||0)*2;
+  }
+  var paintDiff=hPaint-aPaint;
+  var i2subA=paintDiff>6?1:paintDiff<-6?-1:0;
+  // No at-rim efficiency from BDL — sub B stays 0
+  var i2subB=0;
+  var i2raw=i2subA+i2subB;
+  var I2={score:i2raw>0?1:i2raw<0?0:0.5,leader:i2raw>0?hA:i2raw<0?aA:'EVEN'};
+
+  // ── I3: Shot Quality & Creation ──
+  var hFGA=hs.fga||1,aFGA=as.fga||1;
+  var hEFG=(hs.fgm+0.5*hs.tpm)/hFGA;
+  var aEFG=(as.fgm+0.5*as.tpm)/aFGA;
+  var hFGM=hs.fgm||1,aFGM=as.fgm||1;
+  var hAR=(hs.ast/hFGM)*100,aAR=(as.ast/aFGM)*100;
+  // Catch-and-shoot 3s from PBP cache
+  var hCS3=pbp&&pbp.home&&pbp.home.threes?pbp.home.threes.assisted||0:0;
+  var aCS3=pbp&&pbp.away&&pbp.away.threes?pbp.away.threes.assisted||0:0;
+  var i3raw=(hEFG>aEFG+0.02?1:hEFG<aEFG-0.02?-1:0)
+           +(hAR>aAR+5?1:hAR<aAR-5?-1:0)
+           +(hCS3>aCS3+2?1:hCS3<aCS3-2?-1:0);
+  var I3={score:i3raw>0?1:i3raw===0?0.5:0,leader:i3raw>0?hA:i3raw<0?aA:'EVEN'};
+
+  // ── I4: Game Control ──
+  // No biggest_lead from BDL — use score differential as proxy
+  var scoreDiff=hS-aS;
+  var absDiff=Math.abs(scoreDiff);
+  var i4subA=absDiff>8?(scoreDiff>0?1:-1):0;
+  // Quarter delta from box score period
+  var i4subB=0;
+  var period=boxScore.period||0;
+  if(period>=4){
+    // Estimate current quarter delta from cumulative quarter scores
+    // BDL provides period scores in line_score arrays
+    var hLine=boxScore.home_team?.line_score||[];
+    var aLine=boxScore.visitor_team?.line_score||[];
+    if(hLine.length>=period&&aLine.length>=period){
+      var lastQH=hLine[hLine.length-1]||0,lastQA=aLine[aLine.length-1]||0;
+      var lastQDiff=lastQH-lastQA;
+      i4subB=lastQDiff>2?1:lastQDiff<-2?-1:0;
+    }
+  }
+  var i4raw=i4subA+i4subB;
+  var I4={score:i4raw>0?1:i4raw===0?0.5:0,leader:i4raw>0?hA:i4raw<0?aA:'EVEN'};
+
+  // ── I5: Sustained Execution (run share from PBP) ──
+  var I5={score:0.5,leader:'EVEN'};
+  var runs6=pbp?pbp.runs6||null:null;
+  if(runs6){
+    var hRuns=0,aRuns=0;
+    runs6.forEach(function(r){if(r.team===hA)hRuns++;else if(r.team===aA)aRuns++;});
+    var totalRuns=hRuns+aRuns;
+    if(totalRuns>=4){
+      var runShare=hRuns/totalRuns;
+      I5={score:runShare>0.55?1:runShare<0.45?0:0.5,
+          leader:runShare>0.55?hA:runShare<0.45?aA:'EVEN'};
+    }
+  }
+
+  // ── Composite ──
+  var raw=I1.score*W.I1+I2.score*W.I2+I3.score*W.I3+I4.score*W.I4+I5.score*W.I5;
+  var controlHome=raw>=0.5;
+  var cTeam=controlHome?hA:aA;
+  var score=controlHome?raw:1-raw;
+  score=Math.round(score*100)/100;
+
+  return{
+    score:score,controlTeam:cTeam,
+    I1:I1,I2:I2,I3:I3,I4:I4,I5:I5,
+    homeAlias:hA,awayAlias:aA,
+    source:'client-bdl',
+    dataQuality:pbp?'ENHANCED':'PARTIAL'
   };
 }
 
