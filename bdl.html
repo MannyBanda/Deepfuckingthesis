@@ -1880,7 +1880,7 @@ async function loadSchedule(){
 
     // 3. Remove per-game data older than 48 hours (analysis, depth, tracking, structural, snap, gap, srCache)
     var maxAge = 48*60*60*1000;
-    var perGamePrefixes = ['nba4:analysis:','nba4:depth:','nba4:tracking:','nba4:structural:','nba4:snap:','nba4:gap:','nba4:srCache:'];
+    var perGamePrefixes = ['nba4:analysis:','nba4:depth:','nba4:tracking:','nba4:structural:','nba4:snap:','nba4:gap:','nba4:srCache:','nba4:wpHist:'];
     allKeys.forEach(function(k){
       var isGameKey = perGamePrefixes.some(function(p){ return k.key.startsWith(p); });
       if(!isGameKey) return;

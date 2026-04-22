@@ -2666,6 +2666,66 @@ function toastScrollToGame(){
 })();
 
 // ══════════════════════════════════════════════════════════════════════════════
+// LOCALSTORAGE CLEANUP — purge stale per-game data on boot
+// ══════════════════════════════════════════════════════════════════════════════
+(function cleanupStorage(){
+  try{
+    var now=Date.now(),keysToRemove=[],totalSize=0,allKeys=[];
+    for(var i=0;i<localStorage.length;i++){
+      var key=localStorage.key(i);
+      if(!key||!key.startsWith('nba4:'))continue;
+      var size=(localStorage.getItem(key)||'').length;
+      allKeys.push({key:key,size:size});totalSize+=size;
+    }
+    // Remove old schedule caches (keep today + yesterday)
+    var today=new Date(),yesterday=new Date(today);yesterday.setDate(yesterday.getDate()-1);
+    var keepDates=[today.toISOString().slice(0,10),yesterday.toISOString().slice(0,10)];
+    allKeys.forEach(function(k){
+      if(k.key.startsWith('nba4:schedule:')&&!keepDates.some(function(d){return k.key.includes(d);}))keysToRemove.push(k.key);
+    });
+    // Remove per-game data older than 48h
+    var maxAge=48*60*60*1000;
+    var perGamePrefixes=['nba4:analysis:','nba4:wpHist:'];
+    allKeys.forEach(function(k){
+      var isGameKey=perGamePrefixes.some(function(p){return k.key.startsWith(p);});
+      if(!isGameKey)return;
+      try{
+        var raw=localStorage.getItem(k.key);
+        if(!raw||raw.length<5){keysToRemove.push(k.key);return;}
+        var val=JSON.parse(raw);
+        var ts=val.analysisTime||0;
+        // wpHist has no timestamp — check if game ID is stale via deferred cleanup
+        if(ts>0&&(now-ts)>maxAge)keysToRemove.push(k.key);
+        // Aggressive: if storage > 3MB, shorten to 24h
+        if(totalSize>3*1024*1024&&ts>0&&(now-ts)>24*60*60*1000)keysToRemove.push(k.key);
+      }catch(e){keysToRemove.push(k.key);}
+    });
+    // Deferred: prune per-game keys for games not on today/yesterday slate
+    setTimeout(function(){
+      try{
+        var currentGameIds=new Set(games.map(function(g){return g.id;}));
+        if(currentGameIds.size===0)return;
+        var extraRemoved=0;
+        perGamePrefixes.forEach(function(pfx){
+          for(var j=localStorage.length-1;j>=0;j--){
+            var pk=localStorage.key(j);
+            if(!pk||!pk.startsWith(pfx))continue;
+            var gid=pk.substring(pfx.length);
+            if(!currentGameIds.has(gid)){
+              try{localStorage.removeItem(pk);extraRemoved++;}catch(e){}
+            }
+          }
+        });
+        if(extraRemoved>0)console.log('[CLEANUP] Removed '+extraRemoved+' stale per-game keys');
+      }catch(e){}
+    },15000);
+    keysToRemove.forEach(function(k){try{localStorage.removeItem(k);}catch(e){};});
+    if(keysToRemove.length>0)console.log('[CLEANUP] Removed '+keysToRemove.length+' stale entries');
+    console.log('[STORAGE] ~'+(totalSize/1024).toFixed(0)+'KB across '+allKeys.length+' nba4 keys');
+  }catch(e){console.warn('[CLEANUP]',e.message);}
+})();
+
+// ══════════════════════════════════════════════════════════════════════════════
 // BOOT
 // ══════════════════════════════════════════════════════════════════════════════
 window.__nbaBooted = true;
