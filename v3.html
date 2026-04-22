@@ -966,6 +966,7 @@ async function hydrateFromServerSnapshots(gameId){
     if(qdResp.ok){
       var qdData=await qdResp.json();
       var qd=qdData.quarter_data;
+      if(qd&&qd.diffs){cs._serverQuarterDiffs=qd.diffs;}
       if(qd&&qd.window&&qd.window.available){
         cs.rollingWindow=qd.window;cs.rollingWindow.source='server-qd';
       }
@@ -1249,7 +1250,30 @@ function buildScoringCompForCard(gameId){
   var g=games.find(function(x){return x.id===gameId;});if(!g)return;
   var hA=g.home?.alias||'HOME',aA=g.away?.alias||'AWAY';
   var sc=computeScoringComp(cs.pbpAudit,hA,aA,g.homePoints||0,g.awayPoints||0);
-  if(sc){cs.scoringComp=sc;renderCard(gameId);}
+  if(!sc)return;
+  // Compute trend arrows from quarter diffs
+  var diffs=cs._serverQuarterDiffs;
+  if(diffs){
+    var keys=Object.keys(diffs).map(Number).filter(function(n){return !isNaN(n);}).sort(function(a,b){return a-b;});
+    if(keys.length>=2){
+      var latestQ=keys[keys.length-1];
+      var d=diffs[latestQ];
+      if(d&&d.home&&d.away){
+        // Latest quarter structural/variance per team
+        var hPaintQ=(d.home.points_in_the_paint||d.home.points_in_paint||0);
+        var aPaintQ=(d.away.points_in_the_paint||d.away.points_in_paint||0);
+        var hFtQ=(d.home.free_throws_made||0);var aFtQ=(d.away.free_throws_made||0);
+        var h3Q=(d.home.three_points_made||0)*3;var a3Q=(d.away.three_points_made||0)*3;
+        var qStructDelta=(hPaintQ+hFtQ)-(aPaintQ+aFtQ);
+        var qVarDelta=h3Q-a3Q;
+        // Compare to cumulative
+        sc.structTrend=qStructDelta>sc.structuralDelta/keys.length+2?'up':qStructDelta<sc.structuralDelta/keys.length-2?'down':'flat';
+        sc.varTrend=qVarDelta>sc.varianceDelta/keys.length+2?'up':qVarDelta<sc.varianceDelta/keys.length-2?'down':'flat';
+        sc.trendQ='Q'+latestQ;
+      }
+    }
+  }
+  cs.scoringComp=sc;renderCard(gameId);
 }
 
 // ── FETCH PBP DATA FROM DB ──
@@ -1297,14 +1321,25 @@ function renderScoringCompSection(id,cs,hA,aA){
   html+='<span><span class="sc-legend-dot" style="background:var(--fg-dim)"></span>Mid</span>';
   html+='</div>';
 
-  // Structural + Variance deltas
+  // Structural + Variance deltas with trend arrows
   var sD=sc.structuralDelta,vD=sc.varianceDelta;
   var sTeam=sD>=0?sc.home.team:sc.away.team;
   var vTeam=vD>=0?sc.home.team:sc.away.team;
+  var sArrow='',vArrow='';
+  if(sc.structTrend){
+    var sAc=sc.structTrend==='up'?'var(--green)':sc.structTrend==='down'?'var(--coral)':'var(--fg-dim)';
+    var sAs=sc.structTrend==='up'?'\u25b2':sc.structTrend==='down'?'\u25bc':'\u25ac';
+    sArrow=' <span style="color:'+sAc+';font-size:10px;margin-left:4px" title="'+esc(sc.trendQ||'')+' trend">'+sAs+'</span>';
+  }
+  if(sc.varTrend){
+    var vAc=sc.varTrend==='up'?'var(--amber)':sc.varTrend==='down'?'var(--green)':'var(--fg-dim)';
+    var vAs=sc.varTrend==='up'?'\u25b2':sc.varTrend==='down'?'\u25bc':'\u25ac';
+    vArrow=' <span style="color:'+vAc+';font-size:10px;margin-left:4px" title="'+esc(sc.trendQ||'')+' trend">'+vAs+'</span>';
+  }
   html+='<div class="sc-delta"><span class="sc-delta-label">Structural</span>';
-  html+='<span class="sc-delta-val" style="color:var(--green)">'+esc(sTeam)+' +'+Math.abs(Math.round(sD))+'</span></div>';
+  html+='<span class="sc-delta-val" style="color:var(--green)">'+esc(sTeam)+' +'+Math.abs(Math.round(sD))+sArrow+'</span></div>';
   html+='<div class="sc-delta" style="margin-top:4px"><span class="sc-delta-label">Variance</span>';
-  html+='<span class="sc-delta-val" style="color:var(--amber)">'+esc(vTeam)+' +'+Math.abs(Math.round(vD))+'</span></div>';
+  html+='<span class="sc-delta-val" style="color:var(--amber)">'+esc(vTeam)+' +'+Math.abs(Math.round(vD))+vArrow+'</span></div>';
 
   // Lead source classification
   if(sc.durability){
