@@ -9,6 +9,9 @@
 [functions."generate-thesis"]
   timeout = 120
 
+[functions."pregame-agent"]
+  timeout = 120
+
 [functions."analyze"]
   timeout = 60
 
