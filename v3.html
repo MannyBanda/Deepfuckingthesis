@@ -647,6 +647,14 @@ async function refreshLiveCards(){
           }
         }
       }
+      // Persist ESPN WP history when game goes FINAL
+      if(gs==='FINAL'){
+        var cs2=cardState[g.id];
+        if(cs2&&cs2.espnWPHistory&&cs2.espnWPHistory.length>10&&!cs2._wpSaved){
+          cs2._wpSaved=true;
+          try{localStorage.setItem('nba4:wpHist:'+g.id,JSON.stringify(cs2.espnWPHistory));}catch(e){}
+        }
+      }
     });
     if(updated){renderPills();games.forEach(function(g){renderCard(g.id);});}
   }catch(e){console.warn('[POLL]',e.message);}
@@ -739,7 +747,14 @@ function mountAllCards(){
   if(games.length>0){activeGameId=games[0].id;}
   renderSwipeDots();
   document.getElementById('empty').style.display=games.length?'none':'block';
-  // Fetch ESPN WP for all games (staggered to avoid rate limits)
+  // Restore ESPN WP history from localStorage, then fetch fresh for games that need it
+  games.forEach(function(g){
+    var cs=cardState[g.id];if(!cs)return;
+    if(!cs.espnWPHistory){
+      try{var saved=localStorage.getItem('nba4:wpHist:'+g.id);if(saved){cs.espnWPHistory=JSON.parse(saved);}}catch(e){}
+    }
+  });
+  // Fetch ESPN WP for all games (staggered — includes FINAL for chart)
   games.forEach(function(g,i){
     setTimeout(function(){fetchEspnWP(g.id);},i*200);
   });
@@ -1099,6 +1114,10 @@ async function fetchEspnWP(gameId){
       cs.espnWP={home:homeWP,away:100-homeWP,opening:data.opening?Math.round(data.opening.homeWinPct*100):null};
       if(data.plays&&data.plays.length>0){
         cs.espnWPHistory=data.plays.map(function(p){return{homeWP:p.homeWinPct};});
+        // Persist for FINAL games so chart survives page reloads
+        if(g&&getState(g)==='FINAL'){
+          try{localStorage.setItem('nba4:wpHist:'+gameId,JSON.stringify(cs.espnWPHistory));}catch(e){}
+        }
       }
       renderCard(gameId);
     }
