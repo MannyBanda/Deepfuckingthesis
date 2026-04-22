@@ -426,6 +426,8 @@ var _ssExpanded = {}; // track expanded sonnet signal per game
 var _lastThesisResync = 0;
 var _lastSnapshotResync = 0;
 var _lastEspnWPRefresh = 0;
+var _livePBPQueue = [];
+var _pbpPlayCount = {}; // gameId → last play count (fingerprint to skip redundant parsing)
 
 // ── UTILS ──
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/`/g,'&#96;').replace(/\$\{/g,'&#36;{');}
@@ -642,9 +644,9 @@ async function refreshLiveCards(){
           var ind=computeClientIndicators(b,g.id);
           if(ind){
             cs.clientInd=ind;
-            // Rebuild scoring comp if PBP available (scores changed)
-            if(cs.pbpAudit)buildScoringCompForCard(g.id);
           }
+          // Queue direct BDL plays fetch for this LIVE game
+          _livePBPQueue.push({gameId:g.id,bdlId:bdlId});
         }
       }
       // Persist ESPN WP history when game goes FINAL
@@ -657,6 +659,11 @@ async function refreshLiveCards(){
       }
     });
     if(updated){renderPills();games.forEach(function(g){renderCard(g.id);});}
+    // Fetch BDL plays for LIVE games (direct client-side, 10s cadence)
+    _livePBPQueue.forEach(function(item,idx){
+      setTimeout(function(){fetchLivePBP(item.gameId,item.bdlId);},idx*100);
+    });
+    _livePBPQueue=[];
   }catch(e){console.warn('[POLL]',e.message);}
   // Poll alerts for toast
   pollAlerts();
@@ -703,6 +710,29 @@ function maybeRefreshEspnWP(){
       setTimeout(function(){fetchEspnWP(g.id);},i*300);
     }
   });
+}
+
+async function fetchLivePBP(gameId,bdlId){
+  var cs=cardState[gameId];if(!cs)return;
+  var g=games.find(function(x){return x.id===gameId;});if(!g)return;
+  var hA=g.home?.alias||'HOME',aA=g.away?.alias||'AWAY';
+  try{
+    var data=await bdl('plays',{game_id:String(bdlId)});
+    var plays=data.data||[];
+    if(plays.length===0)return;
+    // Fingerprint: skip if play count unchanged
+    var prev=_pbpPlayCount[gameId]||0;
+    if(plays.length===prev)return;
+    _pbpPlayCount[gameId]=plays.length;
+    // Parse PBP
+    var pbp=parseBDLPBP(plays,hA,aA);
+    if(pbp&&pbp.totalShots>0){
+      cs.pbpAudit=pbp;
+      cs.pbpTime=new Date();
+      buildScoringCompForCard(gameId);
+      renderCard(gameId);
+    }
+  }catch(e){console.warn('[PBP-LIVE]',e.message);}
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1604,6 +1634,85 @@ function computeClientIndicators(boxScore, gameId){
     source:'client-bdl',
     dataQuality:pbp?'ENHANCED':'PARTIAL'
   };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// BDL PLAY-BY-PLAY PARSER — client-side, ported from bdl.html
+// ══════════════════════════════════════════════════════════════════════════════
+
+var BDL_BASKET_X=25,BDL_BASKET_Y=1.5,BDL_RIM_RADIUS=4,BDL_PAINT_RADIUS=9,BDL_THREE_RADIUS=22,BDL_CORNER_Y_MAX=9;
+function bdlCoordsValid(x,y){return x!=null&&y!=null&&x>-1000&&y>-1000&&x<1000&&y<1000;}
+function bdlDistFromBasket(x,y){return Math.sqrt(Math.pow(x-BDL_BASKET_X,2)+Math.pow(y-BDL_BASKET_Y,2));}
+var BDL_RIM_TYPES=['layup shot','driving layup shot','running layup shot','cutting layup shot','reverse layup shot','finger roll layup','layup shot putback','putback layup shot','driving reverse layup shot','running reverse layup shot','dunk shot','driving dunk shot','running dunk shot','cutting dunk shot','alley oop dunk shot','putback dunk shot','running alley oop dunk shot','tip shot','tip dunk shot'];
+var BDL_PAINT_TYPES=['driving floating jump shot','floating jump shot','driving hook shot','hook shot','running hook shot','driving finger roll layup','turnaround hook shot'];
+var BDL_RIM_SET=null,BDL_PAINT_SET=null;
+function ensureTypeSets(){if(!BDL_RIM_SET){BDL_RIM_SET=new Set(BDL_RIM_TYPES);BDL_PAINT_SET=new Set(BDL_PAINT_TYPES);}}
+function coordinateToZone(x,y,shotType,text,scoreValue){
+  ensureTypeSets();var tl=(shotType||'').toLowerCase().trim();var tx=(text||'').toLowerCase();var is3=scoreValue===3||tx.includes('three point');
+  if(BDL_RIM_SET.has(tl))return'rim';if(BDL_PAINT_SET.has(tl))return'paint';
+  if(is3){if(bdlCoordsValid(x,y)&&y<BDL_CORNER_Y_MAX)return'corner3';return'above3';}
+  if(bdlCoordsValid(x,y)){var d=bdlDistFromBasket(x,y);if(d<BDL_RIM_RADIUS)return'rim';if(d<BDL_PAINT_RADIUS)return'paint';if(d>=BDL_THREE_RADIUS){return y<BDL_CORNER_Y_MAX?'corner3':'above3';}return'mid';}
+  var dm=tx.match(/(\d+)-foot/);if(dm){var dd=parseInt(dm[1]);if(dd<=4)return'rim';if(dd<=9)return'paint';if(dd>=22)return'above3';return'mid';}
+  if(tl.includes('layup')||tl.includes('dunk')||tl.includes('tip'))return'rim';if(tl.includes('hook')||tl.includes('float'))return'paint';return'mid';
+}
+function bdlExtractPlayer(t){if(!t)return'?';var c=t.replace(/\n/g,' ').trim();var m=c.match(/^([A-Z][a-zA-Z'.]+(?:[\s-][A-Z][a-zA-Z'.]+)*(?:\s+(?:Jr\.|Sr\.|III|II|IV))?)\s+(?:makes|misses|personal|shooting|loose|bad|offensive|defensive|lost|out|traveling|turnover|flagrant|double|blocks|steals|enters|steps|kicked)/i);if(m)return m[1].trim();var m2=c.match(/^(.+?)\s+(?:makes|misses|personal|shooting|offensive|defensive|bad|loose|lost|blocks|steals)/i);if(m2)return m2[1].trim();return c.split(/\s+/).slice(0,2).join(' ');}
+function bdlExtractAssist(t){if(!t)return null;var m=t.match(/\(([^)]+?)\s+assists?\)/i);return m?m[1].trim():null;}
+function bdlExtractBlock(t){if(!t)return null;var m=t.match(/\(([^)]+?)\s+blocks?\)/i);if(m)return m[1].trim();var m2=t.match(/([A-Z][a-zA-Z'.]+(?:[\s-][A-Z][a-zA-Z'.]+)*)\s+blocks\s/i);return m2?m2[1].trim():null;}
+function bdlExtractSteal(t){if(!t)return null;var m=t.match(/\(([^)]+?)\s+steals?\)/i);return m?m[1].trim():null;}
+function bdlExtractDistance(t){if(!t)return null;var m=t.match(/(\d+)-foot/i);return m?parseInt(m[1]):null;}
+function bdlClassifyContext(type,assisted,isThree){var t=(type||'').toLowerCase();if(t.includes('driving')||t.includes('layup')||t.includes('dunk'))return'drive';if(t.includes('pullup')||t.includes('pull-up')||t.includes('step back')||t.includes('fadeaway')||t.includes('fade away'))return'pullup';if(t.includes('putback')||t.includes('tip'))return'putback';if(t.includes('cutting')||t.includes('alley'))return'cut';if(t.includes('hook')||t.includes('float')||t.includes('runner'))return'floater';if(t.includes('running')&&!t.includes('pullup'))return'transition';if(assisted&&isThree)return'catch-shoot';return'halfcourt';}
+function bdlClassifyTO(type,text){var t=(type||'').toLowerCase();var tx=(text||'').toLowerCase();if(tx.includes('steal'))return{forced:true,type:t};if(t.includes('bad pass'))return{forced:true,type:t};if(t.includes('traveling')||t.includes('out of bounds')||t.includes('3-second')||t.includes('shot clock')||t.includes('offensive foul')||t.includes('double dribble')||t.includes('backcourt')||t.includes('5-second')||t.includes('kicked ball'))return{forced:false,type:t};if(t.includes('lost ball'))return{forced:null,type:t};return{forced:null,type:t};}
+
+function parseBDLPBP(plays,homeAbbr,awayAbbr){
+  if(!plays||!Array.isArray(plays)||plays.length===0)return{home:null,away:null,homeAlias:homeAbbr,awayAlias:awayAbbr,totalShots:0,totalTOs:0,runs:[],raw:{shots:[],turnovers:[]},scoringEvents:[],runs6:[]};
+  var hA=homeAbbr,aA=awayAbbr;
+  var shots=[],turnovers=[],scoreLog=[],scoringEvents=[];var hScore=0,aScore=0;var bigH=0,bigA=0;
+  var pendPOT=null,pendOREB=null,potH=0,potA=0,scpH=0,scpA=0,lastP=0;
+  var sorted=plays.slice().sort(function(a,b){return(a.order||0)-(b.order||0);});
+  sorted.forEach(function(ev){
+    var type=(ev.type||'').trim(),tl=type.toLowerCase(),text=(ev.text||'').replace(/\n/g,' ').trim(),tx=text.toLowerCase();
+    var tAbbr=ev.team?.abbreviation||'',team=tAbbr===hA?hA:tAbbr===aA?aA:tAbbr||'?';
+    var player=bdlExtractPlayer(text),clock=ev.clock||null,quarter=ev.period||0;
+    var hs2=ev.home_score!=null?ev.home_score:null,as2=ev.away_score!=null?ev.away_score:null;
+    if(quarter!==lastP&&lastP>0){pendPOT=null;pendOREB=null;}lastP=quarter;
+    if(hs2!=null&&as2!=null){var mg=hs2-as2;if(mg>bigH)bigH=mg;if(-mg>bigA)bigA=-mg;}
+    if(tl.includes('substitution')||tx.includes('enters the game for'))return;
+    if(ev.shooting_play){
+      var made=ev.scoring_play||false,is3=ev.score_value===3||tx.includes('three point'),pts=made?(ev.score_value||(is3?3:2)):0;
+      var zone=coordinateToZone(ev.coordinate_x,ev.coordinate_y,type,text,ev.score_value);
+      if(tl.includes('free throw')){
+        pts=made?1:0;
+        if(made){if(team===hA)hScore+=1;else aScore+=1;scoreLog.push({team:team,pts:1,q:quarter});scoringEvents.push({tm:team,p:player,pts:1,type:'FT',ck:clock,q:quarter,m:aScore-hScore});if(pendOREB===team){if(team===hA)scpH+=1;else scpA+=1;}if(pendPOT===team){if(team===hA)potH+=1;else potA+=1;}}
+        var ftM=type.match(/(\d+)\s*of\s*(\d+)/i);if(ftM&&ftM[1]===ftM[2]&&made){pendOREB=null;pendPOT=null;}
+        return;
+      }
+      var assisted=false;if(made&&bdlExtractAssist(text))assisted=true;
+      var context=bdlClassifyContext(type,assisted,is3);
+      shots.push({p:player,tm:team,z:zone,m:made,a:assisted,q:quarter,ctx:context,is3:is3,x:ev.coordinate_x||null,y:ev.coordinate_y||null});
+      if(made){if(team===hA)hScore+=pts;else aScore+=pts;scoreLog.push({team:team,pts:pts,q:quarter});scoringEvents.push({tm:team,p:player,pts:pts,type:is3?'3PT':'2PT',ck:clock,q:quarter,m:aScore-hScore});if(pendOREB===team){if(team===hA)scpH+=pts;else scpA+=pts;}if(pendPOT===team){if(team===hA)potH+=pts;else potA+=pts;}pendOREB=null;pendPOT=null;}
+      return;
+    }
+    if(tl.includes('turnover')){var tc=bdlClassifyTO(type,text);turnovers.push({p:player,tm:team,q:quarter,forced:tc.forced,type:tc.type});pendOREB=null;pendPOT=team===hA?aA:hA;return;}
+    if(tl.includes('rebound')){var isOff=tl.includes('offensive');if(isOff)pendOREB=team;else{pendOREB=null;pendPOT=null;}return;}
+    if(tl.includes('foul')&&tl.includes('offensive')){pendOREB=null;pendPOT=team===hA?aA:hA;return;}
+  });
+  // Runs (8+ pts or 3+ scores)
+  var runs=[],rTm=null,rPts=0,rSt=0,rCt=0,rST=[];
+  for(var i=0;i<scoreLog.length;i++){var s=scoreLog[i];if(s.team===rTm){rPts+=s.pts;rCt++;rST.push(s.pts===3?'3PT':s.pts===1?'FT':'2PT');}else{if(rPts>=8||rCt>=3)runs.push({team:rTm,pts:rPts,count:rCt,q:scoreLog[rSt]?.q,mechanism:rST.slice(),si:rSt,ei:i-1});rTm=s.team;rPts=s.pts;rSt=i;rCt=1;rST=[s.pts===3?'3PT':s.pts===1?'FT':'2PT'];}}
+  if(rPts>=8||rCt>=3)runs.push({team:rTm,pts:rPts,count:rCt,q:scoreLog[rSt]?.q,mechanism:rST.slice(),si:rSt,ei:scoreLog.length-1});
+  runs.sort(function(a,b){return b.ei-a.ei;});
+  // Runs6 for I5
+  var runs6=[];var r6T=null,r6P=0;for(var ri=0;ri<scoreLog.length;ri++){var sl=scoreLog[ri];if(sl.team===r6T){r6P+=sl.pts;}else{if(r6P>=6&&r6T)runs6.push({team:r6T,pts:r6P});r6T=sl.team;r6P=sl.pts;}}if(r6P>=6&&r6T)runs6.push({team:r6T,pts:r6P});
+  // Aggregate per-team zone data
+  function teamShots(tm){return shots.filter(function(s){return s.tm===tm;});}
+  function aggTeam(tm){
+    var s=teamShots(tm);var th=s.filter(function(x){return x.is3;}),ri=s.filter(function(x){return x.z==='rim';}),pa=s.filter(function(x){return x.z==='paint';}),mi=s.filter(function(x){return x.z==='mid';});
+    var thM=th.filter(function(x){return x.m;}),riM=ri.filter(function(x){return x.m;}),paM=pa.filter(function(x){return x.m;}),miM=mi.filter(function(x){return x.m;});
+    var tms=turnovers.filter(function(t){return t.tm===tm;}),fo=tms.filter(function(t){return t.forced===true;}).length,uf=tms.filter(function(t){return t.forced===false;}).length,uk=tms.filter(function(t){return t.forced===null;}).length;
+    return{threes:{made:thM.length,att:th.length,assisted:thM.filter(function(x){return x.a;}).length,pct:th.length>0?(thM.length/th.length*100).toFixed(1):'0',byPlayer:[]},rim:{made:riM.length,att:ri.length,pct:ri.length>0?(riM.length/ri.length*100).toFixed(1):'0'},paint:{made:paM.length,att:pa.length,pct:pa.length>0?(paM.length/pa.length*100).toFixed(1):'0'},mid:{made:miM.length,att:mi.length,pct:mi.length>0?(miM.length/mi.length*100).toFixed(1):'0'},tos:{total:tms.length,forced:fo,unforced:uf,unknown:uk},shotDiet:{total:s.length,threePct:s.length>0?(th.length/s.length*100).toFixed(1):'0',rimPct:s.length>0?(ri.length/s.length*100).toFixed(1):'0',midPct:s.length>0?(mi.length/s.length*100).toFixed(1):'0'}};
+  }
+  var home=aggTeam(hA),away=aggTeam(aA);
+  return{home:home,away:away,homeAlias:hA,awayAlias:aA,totalShots:shots.length,totalTOs:turnovers.length,runs:runs,runs6:runs6,raw:{shots:shots,turnovers:turnovers},scoringEvents:scoringEvents,_bdl:{potHome:potH,potAway:potA,scpHome:scpH,scpAway:scpA,biggestLeadHome:bigH,biggestLeadAway:bigA,scoreLog:scoreLog}};
 }
 
 async function triggerAnalysis(gameId){
