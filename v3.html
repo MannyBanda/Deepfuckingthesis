@@ -1496,7 +1496,7 @@ function renderDrawer(gameId){
       if(sc2.grad)html+='<td style="font-size:9px">'+(matchAlert&&matchAlert.graduation_rank?esc(matchAlert.graduation_rank):'--')+'</td>';
       if(sc2.spread)html+='<td style="font-size:9px">'+(s.spread!=null?s.spread:'--')+'</td>';
       if(sc2.alert)html+='<td style="font-size:9px">'+(matchAlert?esc(matchAlert.alert_type||'').substring(0,6):'--')+'</td>';
-      if(sc2.dec)html+='<td style="font-size:9px" class="'+(matchAlert?(matchAlert.agent_decision==='SEND'?'qd-cell pos':'qd-cell neg':'')+'">'+(matchAlert?esc(matchAlert.agent_decision||''):'--')+'</td>';
+      if(sc2.dec)html+='<td style="font-size:9px" class="'+(matchAlert?(matchAlert.agent_decision==='SEND'?'qd-cell pos':'qd-cell neg'):'')+'\">'+(matchAlert?esc(matchAlert.agent_decision||''):'--')+'</td>';
       html+='</tr>';
     });
     html+='</tbody></table></div>';
