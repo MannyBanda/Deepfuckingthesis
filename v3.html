@@ -263,7 +263,7 @@ input,textarea,select{font-size:16px!important;}
 .drawer.open{transform:translateY(0);}
 .drawer-handle{display:flex;justify-content:center;padding:10px 0 6px;position:sticky;top:0;background:var(--bg-surface);z-index:1;}
 .drawer-handle-bar{width:36px;height:4px;border-radius:2px;background:var(--hairline-strong);}
-.drawer-head{padding:4px 20px 14px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:28px;background:var(--bg-surface);z-index:1;}
+.drawer-head{padding:4px 20px 14px;display:flex;align-items:center;justify-content:space-between;}
 .drawer-title{font-family:var(--sans);font-size:14px;font-weight:600;color:var(--fg-primary);}
 .drawer-close{width:30px;height:30px;display:grid;place-items:center;background:var(--bg-surface-2);border:1px solid var(--hairline);border-radius:999px;color:var(--fg-tertiary);font-size:16px;cursor:pointer;}
 .drawer-section{padding:0 20px 20px;}
@@ -1182,6 +1182,26 @@ function applyAutoAnalysesToCards(){
       if(latest.raw_text&&latest.raw_text.length>20)cs.analysis=latest.raw_text;
       if(ind)cs.sonnetIndicators=ind;
 
+      // Build analysisHistory from all auto analyses
+      if(!cs.analysisHistory)cs.analysisHistory=[];
+      var existingTriggers={};cs.analysisHistory.forEach(function(h){if(h.source)existingTriggers[h.source]=true;});
+      autos.forEach(function(a){
+        var src='auto_'+(a.trigger||'q?');
+        if(existingTriggers[src])return;
+        var scoreStr='';
+        if(a.home_pts!=null&&a.away_pts!=null)scoreStr=a.away_pts+'-'+a.home_pts;
+        else if(a.raw_text){var sm=a.raw_text.match(/(\d+)\s*[-\u2013]\s*(\d+)/);if(sm)scoreStr=sm[0];}
+        cs.analysisHistory.push({
+          time:a.ts?new Date(a.ts).toLocaleTimeString():'?',
+          period:a.period||'?',clock:a.clock||'',
+          controlTeam:a.control_team||'?',controlScore:a.control_score||null,
+          conviction:a.conviction||null,convictionTier:a.conviction_tier||null,
+          convictionCombo:a.conviction_combo||null,entry:a.entry||null,
+          signal:a.signal||null,score:scoreStr,source:src
+        });
+      });
+      cs.analysisHistory.sort(function(a,b){return(a.time||'').localeCompare(b.time||'');});
+
       // Sustainability from auto analysis
       if(latest.sustainability){
         var _sp=latest.sustainability.split('|').map(function(s){return s.trim();});
@@ -1399,33 +1419,64 @@ function renderDrawer(gameId){
   html+='<div class="drawer-section-title">Snapshot History</div>';
   var allSnaps=cs._allSnapshots;
   if(allSnaps&&allSnaps.length>0){
-    // Sample: show every 3rd snapshot + first + last to keep table manageable
+    // Sample every 3rd + first + last, then REVERSE (most recent first)
     var sampled=[];
     allSnaps.forEach(function(s,i){
       if(i===0||i===allSnaps.length-1||i%3===0)sampled.push(s);
     });
-    // Compute running mean floor
-    var floorSum=0;
-    html+='<div style="overflow-x:auto"><table class="qd-grid" style="font-size:10px;min-width:700px"><thead><tr>';
-    html+='<th>Time</th><th>Score</th><th>Floor</th><th>MF</th><th>Peak</th><th>I1</th><th>I2</th><th>I3</th><th>I4</th><th>I5</th><th>TP</th><th>LS</th>';
+    // Precompute cumulative MF and peak for each sampled snapshot
+    var mfMap={},pkMap={},fSum=0,fPk=0;
+    allSnaps.forEach(function(s,i){
+      fSum+=(s.floor_score||0);fPk=Math.max(fPk,s.floor_score||0);
+      var idx=sampled.indexOf(s);if(idx>=0){mfMap[idx]=(fSum/(i+1));pkMap[idx]=fPk;}
+    });
+    sampled.reverse(); // most recent first
+    // Build alert lookup by period+clock for cross-reference
+    var alertLookup={};((_alertCache[gameId]||[])).forEach(function(a){
+      var key='Q'+(a.period||'')+'_'+(a.clock||'');
+      if(!alertLookup[key])alertLookup[key]=a;
+    });
+
+    function fmtF(v){if(v==null)return'--';var s=Number(v).toFixed(2);return s.replace(/^0\./,'.');}
+    function indDot(v){if(v==null)return'<span style="color:var(--fg-dim)">\u25cf</span>';var n=Number(v);if(n>=0.6)return'<span style="color:var(--green)">\u25cf</span>';if(n<=0.4)return'<span style="color:var(--coral)">\u25cf</span>';return'<span style="color:var(--fg-dim)">\u25cf</span>';}
+
+    html+='<div style="overflow-x:auto"><table class="qd-grid" style="font-size:10px;min-width:780px"><thead><tr>';
+    html+='<th>Time</th><th>Score</th><th>Floor</th><th>MF</th><th>Peak</th><th style="text-align:center">I1-I5</th><th>TP</th><th>LS</th><th>Alert</th><th>Decision</th>';
     html+='</tr></thead><tbody>';
-    sampled.forEach(function(s,i){
+    sampled.forEach(function(s,ri){
+      var origIdx=allSnaps.indexOf(s);
+      var isLatest=ri===0;
       var qc='Q'+(s.period||'?')+' '+(s.clock||'');
-      var score=(s.away_pts||'?')+'-'+(s.home_pts||'?');
-      var f=s.floor_score!=null?Number(s.floor_score).toFixed(2):'--';
-      floorSum+=(s.floor_score||0);
-      var mf=((i+1)>0?(floorSum/(i+1)):0).toFixed(2);
-      // Peak floor = max floor seen so far
-      var peak=allSnaps.slice(0,allSnaps.indexOf(s)+1).reduce(function(mx,x){return(x.floor_score||0)>mx?(x.floor_score||0):mx;},0).toFixed(2);
-      html+='<tr>';
+      var score=(s.away_pts||'?')+'\u2013'+(s.home_pts||'?');
+      // Cross-reference alerts
+      var aKey='Q'+(s.period||'')+'_'+(s.clock||'');
+      var matchAlert=alertLookup[aKey]||null;
+      // Find closest alert within same period
+      if(!matchAlert){
+        var closest=null,minDist=999;
+        (_alertCache[gameId]||[]).forEach(function(a){
+          if(a.period===s.period){
+            var sClock=parseInt((s.clock||'0').replace(':',''))||0;
+            var aClock=parseInt((a.clock||'0').replace(':',''))||0;
+            var dist=Math.abs(sClock-aClock);
+            if(dist<minDist&&dist<200){minDist=dist;closest=a;}
+          }
+        });
+        matchAlert=closest;
+      }
+
+      html+='<tr style="'+(isLatest?'border:1px solid var(--green-border);background:rgba(52,211,153,0.04)':'')+'">';
       html+='<td style="white-space:nowrap;font-size:9px">'+esc(qc)+'</td>';
       html+='<td>'+esc(score)+'</td>';
-      html+='<td style="color:var(--green)">'+f+'</td>';
-      html+='<td>'+mf+'</td>';
-      html+='<td>'+peak+'</td>';
-      for(var ii=1;ii<=5;ii++){var iv=s['i'+ii];html+='<td>'+(iv!=null?Number(iv).toFixed(1):'--')+'</td>';}
+      html+='<td style="color:var(--green)">'+fmtF(s.floor_score)+'</td>';
+      var mfIdx=sampled.length-1-ri;html+='<td>'+fmtF(mfMap[mfIdx])+'</td>';
+      html+='<td>'+fmtF(pkMap[mfIdx])+'</td>';
+      // I1-I5 as dots
+      html+='<td style="text-align:center;letter-spacing:2px">'+indDot(s.i1)+indDot(s.i2)+indDot(s.i3)+indDot(s.i4)+indDot(s.i5)+'</td>';
       html+='<td style="font-size:9px">'+(s.tp_class?esc(s.tp_class).substring(0,4):'--')+'</td>';
       html+='<td style="font-size:9px">'+(s.ls_class?esc(s.ls_class).substring(0,4):'--')+'</td>';
+      html+='<td style="font-size:9px">'+(matchAlert?esc(matchAlert.alert_type||'').substring(0,6):'--')+'</td>';
+      html+='<td style="font-size:9px" class="'+(matchAlert?(matchAlert.agent_decision==='SEND'?'qd-cell pos':'qd-cell neg'):'')+'">'+(matchAlert?esc(matchAlert.agent_decision||''):'--')+'</td>';
       html+='</tr>';
     });
     html+='</tbody></table></div>';
