@@ -331,7 +331,7 @@ input,textarea,select{font-size:16px!important;}
 .toast-game:active{color:var(--green);}
 .toast-team-ml{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--green);}
 .toast-odds-grid{border-top:1px solid var(--hairline);padding:6px 10px 10px;}
-.toast-odds-row{display:flex;align-items:center;padding:7px 8px;border-radius:var(--r-inner);transition:background .1s ease;text-decoration:none;color:inherit;}
+.toast-odds-row{display:flex;align-items:center;padding:7px 8px;border-radius:var(--r-inner);transition:background .1s ease;cursor:pointer;}
 .toast-odds-row:active{background:rgba(52,211,153,0.08);}
 .toast-odds-row.best{background:rgba(52,211,153,0.05);}
 .toast-book{flex:1;font-family:var(--sans);font-size:12px;font-weight:500;color:var(--fg-secondary);}
@@ -2110,11 +2110,11 @@ function renderMarginFlowSection(id,cs,hA,aA){
 // ══════════════════════════════════════════════════════════════════════════════
 
 var BOOKS={
-  draftkings:{name:'DraftKings',link:'https://sportsbook.draftkings.com'},
-  fanduel:{name:'FanDuel',link:'https://sportsbook.fanduel.com'},
-  caesars:{name:'Caesars',link:'https://www.caesars.com/sportsbook'},
-  bet365:{name:'Bet365',link:'https://www.bet365.com'},
-  betrivers:{name:'BetRivers',link:'https://www.betrivers.com'}
+  draftkings:{name:'DraftKings',app:'draftkings://',web:'https://sportsbook.draftkings.com'},
+  fanduel:{name:'FanDuel',app:'fanduel://',web:'https://sportsbook.fanduel.com'},
+  caesars:{name:'Caesars',app:'caesarssportsbook://',web:'https://www.caesars.com/sportsbook'},
+  bet365:{name:'Bet365',app:'bet365://',web:'https://www.bet365.com'},
+  betrivers:{name:'BetRivers',app:'betrivers://',web:'https://www.betrivers.com'}
 };
 var ENTRY_TYPES={'BUY':1,'WINDOW_BUY':1,'BWC_EDGE':1,'POSITION_OPEN':1,'RE_ENTRY_VALUE':1};
 var _seenAlertIds=new Set();
@@ -2198,6 +2198,7 @@ async function fireToast(alert){
   try{
     var oddsRes=await bdl('odds',{game_id:String(bdlId)});
     var oddsArr=oddsRes.data||[];
+    console.log('[TOAST] Vendors returned:',oddsArr.map(function(o){return o.vendor;}).join(', '));
     if(oddsArr.length===0){oddsEl.innerHTML='<div class="toast-no-odds">No odds available</div>';return;}
 
     // Filter to our books, extract the bet team's ML
@@ -2206,7 +2207,7 @@ async function fireToast(alert){
       var bk=BOOKS[o.vendor];if(!bk)return;
       var ml=isHome?o.moneyline_home_odds:o.moneyline_away_odds;
       if(ml==null)return;
-      rows.push({vendor:o.vendor,name:bk.name,link:bk.link,ml:Number(ml)});
+      rows.push({vendor:o.vendor,name:bk.name,app:bk.app,web:bk.web,ml:Number(ml)});
     });
 
     if(rows.length===0){oddsEl.innerHTML='<div class="toast-no-odds">No ML odds for '+esc(betTeam)+'</div>';return;}
@@ -2220,12 +2221,12 @@ async function fireToast(alert){
     rows.forEach(function(r){
       var isBest=r.ml===bestML&&rows.length>1;
       var mlStr=r.ml>0?'+'+r.ml:String(r.ml);
-      html+='<a class="toast-odds-row'+(isBest?' best':'')+'" href="'+esc(r.link)+'" target="_blank" rel="noopener">';
+      html+='<div class="toast-odds-row'+(isBest?' best':'')+'" onclick="openBook(\''+esc(r.app)+'\',\''+esc(r.web)+'\')">';
       html+='<span class="toast-book">'+esc(r.name)+'</span>';
       html+='<span class="toast-ml-val">'+esc(mlStr)+'</span>';
       if(isBest)html+='<span class="toast-best-tag">BEST</span>';
       html+='<span class="toast-open">Open \u2192</span>';
-      html+='</a>';
+      html+='</div>';
     });
     html+='</div>';
     oddsEl.innerHTML=html;
@@ -2259,6 +2260,18 @@ function showToast(){
 function dismissToast(){
   document.getElementById('toast').classList.remove('show');
   _toastVisible=false;
+}
+
+function openBook(appUrl,webUrl){
+  // Try app scheme first, fall back to web after 1.5s if app didn't open
+  var t=Date.now();
+  window.location=appUrl;
+  setTimeout(function(){
+    // If less than 2s elapsed and page is still visible, app didn't open
+    if(!document.hidden&&Date.now()-t<3000){
+      window.open(webUrl,'_blank');
+    }
+  },1500);
 }
 
 function toastScrollToGame(){
