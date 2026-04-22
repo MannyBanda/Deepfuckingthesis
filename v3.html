@@ -1302,7 +1302,7 @@ function openDrawer(gameId){
   // Fetch alerts if not cached
   if(!_alertsFetched)fetchAlerts();
   // Fetch odds history for this game
-  if(!cs._oddsHistory)fetchOddsHistory(gameId);
+  var _cs=cardState[gameId];if(!_cs||!_cs._oddsHistory)fetchOddsHistory(gameId);
 }
 
 async function fetchOddsHistory(gameId){
@@ -1681,7 +1681,15 @@ async function fetchPBPFromDB(gameId){
 function renderScoringCompSection(id,cs,hA,aA){
   var sc=cs.scoringComp;if(!sc||!sc.home||!sc.away)return'';
   var h=sc.home,a=sc.away;
-  var summary='S:V '+h.sPct+'/'+h.vPct+' vs '+a.sPct+'/'+a.vPct;
+  var sD=sc.structuralDelta||0,vD=sc.varianceDelta||0;
+  var sTeam=sD>=0?sc.home.team:sc.away.team;
+  var vTeam=vD>=0?sc.home.team:sc.away.team;
+  var sAbs=Math.abs(Math.round(sD)),vAbs=Math.abs(Math.round(vD));
+  // Trend arrows for summary
+  var sTrA='',vTrA='';
+  if(sc.structTrend)sTrA=sc.structTrend==='up'?' \u25b2':sc.structTrend==='down'?' \u25bc':' \u25ac';
+  if(sc.varTrend)vTrA=sc.varTrend==='up'?' \u25b2':sc.varTrend==='down'?' \u25bc':' \u25ac';
+  var summary='S: '+sTeam+' +'+sAbs+sTrA+' \u00b7 V: '+vTeam+' +'+vAbs+vTrA;
   var isOpen=_collOpen[id+'_sc']||false;
 
   var html='<div class="collapsible">';
@@ -1705,9 +1713,6 @@ function renderScoringCompSection(id,cs,hA,aA){
   html+='</div>';
 
   // Structural + Variance deltas with trend arrows
-  var sD=sc.structuralDelta,vD=sc.varianceDelta;
-  var sTeam=sD>=0?sc.home.team:sc.away.team;
-  var vTeam=vD>=0?sc.home.team:sc.away.team;
   var sArrow='',vArrow='';
   if(sc.structTrend){
     var sAc=sc.structTrend==='up'?'var(--green)':sc.structTrend==='down'?'var(--coral)':'var(--fg-dim)';
