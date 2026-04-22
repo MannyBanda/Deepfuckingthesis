@@ -2143,7 +2143,7 @@ var BOOK_LINKS={
   bovada:{name:'Bovada',app:'',web:'https://www.bovada.lv'},
   pinnacle:{name:'Pinnacle',app:'',web:'https://www.pinnacle.com'},
   mybookieag:{name:'MyBookie',app:'',web:'https://www.mybookie.ag'},
-  williamhill_us:{name:'William Hill',app:'',web:'https://www.williamhill.com'},
+  williamhill_us:{name:'Caesars',app:'caesarssportsbook://',web:'https://www.caesars.com/sportsbook'},
   betway:{name:'Betway',app:'betway://',web:'https://www.betway.com'},
   fanatics:{name:'Fanatics',app:'fanatics://',web:'https://sportsbook.fanatics.com'},
   espnbet:{name:'ESPN BET',app:'',web:'https://www.espnbet.com'},
@@ -2247,14 +2247,12 @@ async function fetchLineShop(alert){
     var oddsGames=data.games||[];
     if(data.credits)console.log('[ODDS API] Credits remaining:',data.credits.remaining,'used:',data.credits.used);
 
-    // Match our game in The Odds API response
+    // Match our game in The Odds API response — exact match on "Market Name" (e.g., "Boston Celtics")
+    var homeFullName=((g.home?.market||'')+' '+hName).trim().toLowerCase();
+    var awayFullName=((g.away?.market||'')+' '+aName).trim().toLowerCase();
     var match=null;
     oddsGames.forEach(function(og){
-      // Match by team names — check if our team names appear in the API team names
-      var ogHome=(og.home_team||'').toLowerCase();
-      var ogAway=(og.away_team||'').toLowerCase();
-      if((ogHome.includes(hName.toLowerCase())||hName.toLowerCase().includes(ogHome.split(' ').pop()))
-        &&(ogAway.includes(aName.toLowerCase())||aName.toLowerCase().includes(ogAway.split(' ').pop()))){
+      if((og.home_team||'').toLowerCase()===homeFullName&&(og.away_team||'').toLowerCase()===awayFullName){
         match=og;
       }
     });
