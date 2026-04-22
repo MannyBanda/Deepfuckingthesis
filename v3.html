@@ -831,7 +831,7 @@ function renderCard(id){
 
   // ═══ SONNET SIGNAL ═══
   if(state==='PRE'){
-    html+='<div class="placeholder"><div class="ph-label">Thesis</div><div class="ph-text">Indicators activate at tip</div></div>';
+    html+='<div class="placeholder"><div class="ph-label">Analysis</div><div class="ph-text">Sonnet analysis activates at tip</div></div>';
   } else {
     var pred=cs.prediction;
     var hasClosing=pred&&pred.closing;
@@ -867,16 +867,11 @@ function renderCard(id){
       }
       html+='</div>';
     } else {
-      // Fallback — no analysis yet, show thesis if available
-      var thesis=theses[id];
+      // Fallback — no analysis yet
       html+='<div class="sonnet-signal"><div class="ss-fallback">';
       if(cs.analyzing)html+='<div class="ss-fallback-text">\u23f3 Running Sonnet analysis\u2026</div>';
       else{
-        if(thesis){
-          html+='<div class="ss-fallback-text" style="-webkit-line-clamp:4;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden;font-size:12px;line-height:1.5;color:var(--fg-secondary)">'+esc(thesis)+'</div>';
-        } else {
-          html+='<div class="ss-fallback-text">No analysis yet</div>';
-        }
+        html+='<div class="ss-fallback-text">No analysis yet</div>';
         if(state==='LIVE'||state==='HALF'||state==='FINAL')html+='<button class="analyze-btn" onclick="triggerAnalysis(\''+id+'\')" style="margin-top:8px">\u26a1 Analyze</button>';
       }
       html+='</div></div>';
@@ -980,6 +975,22 @@ function renderCard(id){
     html+=renderMarginFlowSection(id,cs,hA,aA);
     // Deep Dive button
     html+='<div class="deep-dive-btn" onclick="openDrawer(\''+id+'\')">Deep Dive \u2192</div>';
+  }
+
+  // ═══ THESIS (every card) ═══
+  var thesis=theses[id];
+  if(thesis){
+    var thesisOpen=state==='PRE'||(_collOpen[id+'_thesis']!=null?_collOpen[id+'_thesis']:false);
+    // Default open for PRE on first render
+    if(state==='PRE'&&_collOpen[id+'_thesis']==null)_collOpen[id+'_thesis']=true;
+    html+='<div class="collapsible">';
+    html+='<div class="coll-header" onclick="toggleColl(\''+id+'\',\'thesis\')">';
+    html+='<span class="coll-chevron'+(thesisOpen?' open':'')+'">\u25b8</span>';
+    html+='<span class="coll-title">Pre-Game Thesis</span>';
+    html+='</div>';
+    html+='<div class="coll-body'+(thesisOpen?' open':'')+'">';
+    html+='<div class="coll-inner" style="font-family:var(--sans);font-size:12px;line-height:1.55;color:var(--fg-secondary);white-space:pre-wrap">'+esc(thesis)+'</div>';
+    html+='</div></div>';
   }
 
   el.innerHTML=html;
@@ -2257,7 +2268,12 @@ async function fetchLineShop(alert){
       }
     });
 
-    if(!match){oddsEl.innerHTML='<div class="toast-no-odds">Game not found in odds feed</div>';return;}
+    if(!match){
+      var gs=getState(g);
+      if(gs==='FINAL')oddsEl.innerHTML='<div class="toast-no-odds">Game completed \u2014 live odds no longer available</div>';
+      else oddsEl.innerHTML='<div class="toast-no-odds">Game not found in odds feed</div>';
+      return;
+    }
 
     // Extract bet team's ML from each bookmaker
     var rows=[];
