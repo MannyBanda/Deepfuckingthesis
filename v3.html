@@ -73,13 +73,13 @@ input,textarea,select{font-size:16px!important;}
 .hero-meta{display:flex;align-items:center;justify-content:space-between;font-family:var(--sans);font-size:10px;font-weight:500;letter-spacing:0.08em;text-transform:uppercase;color:var(--fg-tertiary);margin-bottom:14px;gap:8px;overflow:hidden;}
 .hero-meta span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
 .hero-meta .status{color:var(--fg-secondary);font-family:var(--mono);letter-spacing:0.04em;white-space:nowrap;}
-.score-row{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;}
-.team{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.score-row{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:6px;}
+.team{display:flex;flex-direction:column;gap:2px;min-width:0;overflow:hidden;}
 .team.is-right{text-align:right;align-items:flex-end;}
-.team-abbr{font-family:var(--sans);font-weight:600;font-size:15px;letter-spacing:0.03em;}
-.team-sub{font-family:var(--sans);font-size:10px;color:var(--fg-tertiary);font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.score{font-family:var(--mono);font-weight:500;font-size:32px;font-feature-settings:"tnum";letter-spacing:-0.02em;color:var(--fg-primary);white-space:nowrap;}
-.score .em-dash{color:var(--fg-dim);margin:0 4px;font-weight:400;}
+.team-abbr{font-family:var(--sans);font-weight:600;font-size:15px;letter-spacing:0.03em;white-space:nowrap;}
+.team-sub{font-family:var(--sans);font-size:10px;color:var(--fg-tertiary);font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;}
+.score{font-family:var(--mono);font-weight:500;font-size:28px;font-feature-settings:"tnum";letter-spacing:-0.02em;color:var(--fg-primary);white-space:nowrap;padding:0 2px;}
+.score .em-dash{color:var(--fg-dim);margin:0 3px;font-weight:400;}
 .pre-countdown{padding:20px 22px;text-align:center;}
 .pre-countdown .label{font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:var(--fg-tertiary);margin-bottom:6px;}
 .pre-countdown .time{font-family:var(--mono);font-size:28px;font-weight:500;color:var(--fg-secondary);}
@@ -123,10 +123,10 @@ input,textarea,select{font-size:16px!important;}
 .vr-table{width:100%;border-collapse:separate;border-spacing:0;font-family:var(--mono);font-size:13px;font-feature-settings:"tnum";}
 .vr-table th{font-family:var(--sans);font-size:9.5px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:var(--fg-dim);text-align:right;padding:0 0 8px;}
 .vr-table th:first-child{text-align:left;}
-.vr-table td{padding:8px 0;text-align:right;color:var(--fg-secondary);border-top:1px solid var(--hairline);}
+.vr-table td{padding:8px 6px;text-align:right;color:var(--fg-secondary);border-top:1px solid var(--hairline);}
 .vr-table td:first-child{text-align:left;font-family:var(--sans);font-weight:500;letter-spacing:0.04em;}
-.vr-table tr.winner td{color:var(--fg-primary);}
-.vr-table tr.winner td:first-child{color:var(--green);}
+.vr-table tr.winner td{color:var(--fg-primary);background:rgba(52,211,153,0.08);}
+.vr-table tr.winner td:first-child{color:var(--green);font-weight:600;}
 .vr-arrow{color:var(--green);font-size:10px;margin-right:2px;}
 .conviction-bar{margin-top:10px;padding:8px 12px;background:var(--green-dim);border:1px solid var(--green-border);border-radius:var(--r-inner);display:flex;align-items:center;justify-content:space-between;gap:8px;}
 .conv-pill{font-family:var(--sans);font-size:11px;font-weight:600;color:var(--green);white-space:nowrap;}
@@ -156,6 +156,8 @@ input,textarea,select{font-size:16px!important;}
 .signal-card.risk .sc-label{color:var(--amber);}
 .signal-card.disagree{border-left:2px solid var(--coral);background:rgba(248,113,113,0.04);}
 .signal-card.disagree .sc-label{color:var(--coral);}
+.signal-card.narrative{border-left:2px solid var(--green);background:rgba(52,211,153,0.04);}
+.signal-card.narrative .sc-label{color:var(--green);}
 .ss-fallback{padding:12px 14px;background:rgba(52,211,153,0.04);border-left:2px solid var(--green-border);border-radius:0 var(--r-inner) var(--r-inner) 0;text-align:center;}
 .ss-fallback-text{font-family:var(--sans);font-size:12px;color:var(--fg-tertiary);margin-bottom:8px;}
 .analyze-btn{font-family:var(--sans);font-size:12px;font-weight:600;color:var(--green);background:var(--green-dim);border:1px solid var(--green-border);padding:8px 16px;border-radius:var(--r-button);cursor:pointer;transition:all .15s ease;}
@@ -672,14 +674,16 @@ function renderCard(id){
   } else {
     var pred=cs.prediction;
     var hasClosing=pred&&pred.closing;
+    var hasNarrative=pred&&pred.narrative;
     var hasRisk=pred&&pred.risk&&pred.risk.toUpperCase()!=='NONE';
     var hasDisagree=pred&&pred.disagreement;
     var isOpen=_ssExpanded[id]||false;
-    if(hasClosing){
+    var collapsedText=hasNarrative?pred.narrative:(hasClosing?pred.closing:null);
+    if(collapsedText){
       html+='<div class="sonnet-signal">';
       html+='<div class="ss-collapsed" onclick="toggleSonnetSignal(\''+id+'\')">';
       html+='<span class="ss-chevron'+(isOpen?' open':'')+'">\u25b8</span>';
-      html+='<div class="ss-text'+(isOpen?' expanded':'')+'">'+esc(pred.closing)+'</div>';
+      html+='<div class="ss-text'+(isOpen?' expanded':'')+'">'+esc(collapsedText)+'</div>';
       if(hasRisk||hasDisagree){
         html+='<div class="ss-badges">';
         if(hasRisk)html+='<span class="ss-badge risk">\u26a0 Risk</span>';
@@ -687,13 +691,13 @@ function renderCard(id){
         html+='</div>';
       }
       html+='</div>';
-      // Expanded signal cards
+      // Expanded signal cards — order: narrative > risk > disagreement > closing
       html+='<div class="ss-expanded'+(isOpen?' open':'')+'">';
       html+='<div class="ss-expanded-inner">';
-      html+='<div class="signal-card closing"><div class="sc-label">Closing</div><div class="sc-body">'+esc(pred.closing)+'</div></div>';
+      if(hasNarrative)html+='<div class="signal-card narrative"><div class="sc-label">Narrative</div><div class="sc-body">'+esc(pred.narrative)+'</div></div>';
       if(hasRisk)html+='<div class="signal-card risk"><div class="sc-label">Risk</div><div class="sc-body">'+esc(pred.risk)+'</div></div>';
       if(hasDisagree)html+='<div class="signal-card disagree"><div class="sc-label">Disagreement</div><div class="sc-body">'+esc(pred.disagreement)+'</div></div>';
-      if(pred.narrative){html+='<div class="signal-card closing" style="border-left-color:var(--fg-dim);background:var(--bg-surface-2);"><div class="sc-label" style="color:var(--fg-dim);">Narrative</div><div class="sc-body">'+esc(pred.narrative)+'</div></div>';}
+      if(hasClosing)html+='<div class="signal-card closing"><div class="sc-label">Closing</div><div class="sc-body">'+esc(pred.closing)+'</div></div>';
       html+='</div></div>';
       html+='</div>';
     } else {
