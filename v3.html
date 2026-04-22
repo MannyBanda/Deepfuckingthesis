@@ -1346,9 +1346,11 @@ async function triggerAnalysis(gameId){
     var summaryData=null;
     if(bdlId){
       try{
-        var boxRes=await bdl('box_scores',{game_id:String(bdlId)});
+        var d=getSlateDate(dateOffset);
+        var boxRes=await bdl('box_scores',{date:d.str});
         var boxArr=boxRes.data||[];
-        if(boxArr.length>0)summaryData=buildV3Summary(boxArr[0]);
+        var match=boxArr.find(function(b){return b.id===bdlId;});
+        if(match)summaryData=buildV3Summary(match);
       }catch(e){console.warn('[ANALYZE] BDL box score fetch failed:',e.message);}
     }
     if(!summaryData){cs.analyzing=false;renderCard(gameId);console.error('[ANALYZE] No summary data available');return;}
