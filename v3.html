@@ -256,6 +256,47 @@ input,textarea,select{font-size:16px!important;}
 .run-bar{flex:1;height:12px;border-radius:3px;overflow:hidden;display:flex;background:var(--bg-surface-3);}
 .run-qtr{font-family:var(--mono);font-size:10px;color:var(--fg-dim);min-width:20px;text-align:right;}
 
+/* ═══ DRAWER ═══ */
+.drawer-scrim{position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:40;opacity:0;pointer-events:none;transition:opacity .25s ease;}
+.drawer-scrim.open{opacity:1;pointer-events:auto;}
+.drawer{position:fixed;left:0;right:0;bottom:0;max-height:92vh;background:var(--bg-surface);border-top:1px solid var(--hairline-strong);border-radius:20px 20px 0 0;z-index:50;transform:translateY(100%);transition:transform .3s var(--ease);overflow-y:auto;-webkit-overflow-scrolling:touch;}
+.drawer.open{transform:translateY(0);}
+.drawer-handle{display:flex;justify-content:center;padding:10px 0 6px;position:sticky;top:0;background:var(--bg-surface);z-index:1;}
+.drawer-handle-bar{width:36px;height:4px;border-radius:2px;background:var(--hairline-strong);}
+.drawer-head{padding:4px 20px 14px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:28px;background:var(--bg-surface);z-index:1;}
+.drawer-title{font-family:var(--sans);font-size:14px;font-weight:600;color:var(--fg-primary);}
+.drawer-close{width:30px;height:30px;display:grid;place-items:center;background:var(--bg-surface-2);border:1px solid var(--hairline);border-radius:999px;color:var(--fg-tertiary);font-size:16px;cursor:pointer;}
+.drawer-section{padding:0 20px 20px;}
+.drawer-section-title{font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:var(--fg-secondary);margin-bottom:10px;}
+
+/* Deep dive button */
+.deep-dive-btn{display:flex;align-items:center;justify-content:center;gap:6px;margin:12px 16px 6px;padding:10px;background:var(--bg-surface-2);border:1px solid var(--hairline);border-radius:var(--r-inner);cursor:pointer;font-family:var(--sans);font-size:12px;font-weight:500;color:var(--fg-secondary);transition:all .12s ease;}
+.deep-dive-btn:active{background:var(--bg-surface-3);color:var(--fg-primary);}
+
+/* Game log */
+.gl-row{padding:8px 10px;background:var(--bg-surface-2);border:1px solid var(--hairline);border-radius:var(--r-inner);margin-bottom:6px;}
+.gl-row.suppressed{opacity:0.5;}
+.gl-head{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:4px;}
+.gl-type{font-family:var(--mono);font-size:11px;font-weight:600;}
+.gl-type.send{color:var(--green);}
+.gl-type.suppress{color:var(--coral);}
+.gl-meta{font-family:var(--mono);font-size:10px;color:var(--fg-dim);}
+.gl-reasoning{font-family:var(--sans);font-size:12px;line-height:1.45;color:var(--fg-secondary);}
+.gl-badge{display:inline-block;font-family:var(--mono);font-size:9px;font-weight:600;padding:2px 6px;border-radius:4px;margin-right:4px;}
+.gl-badge.correct{color:var(--green);background:var(--green-dim);}
+.gl-badge.incorrect{color:var(--coral);background:var(--coral-dim);}
+
+/* Quarter dominance grid */
+.qd-grid{width:100%;border-collapse:separate;border-spacing:0;font-family:var(--mono);font-size:12px;font-feature-settings:"tnum";}
+.qd-grid th{font-family:var(--sans);font-size:9px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:var(--fg-dim);text-align:center;padding:0 4px 8px;}
+.qd-grid th:first-child{text-align:left;}
+.qd-grid td{text-align:center;padding:6px 4px;border-top:1px solid var(--hairline);}
+.qd-grid td:first-child{text-align:left;font-weight:600;color:var(--fg-secondary);}
+.qd-cell.pos{color:var(--green);}
+.qd-cell.neg{color:var(--coral);}
+.qd-cell.even{color:var(--fg-dim);}
+.qd-trend{border-top:2px solid var(--hairline-strong)!important;font-size:10px;}
+
 /* ═══ LOADING / ERROR ═══ */
 .loading{display:none;padding:40px;text-align:center;font-family:var(--mono);font-size:12px;color:var(--fg-tertiary);}
 .loading.show{display:block;}
@@ -311,6 +352,16 @@ body.is-locked{overflow:hidden;}
     <span class="toast-body" id="toast-body"></span>
   </div>
   <button class="toast-close" onclick="hideToast()">&times;</button>
+</div>
+
+<div class="drawer-scrim" id="drawer-scrim" onclick="closeDrawer()"></div>
+<div class="drawer" id="drawer">
+  <div class="drawer-handle"><div class="drawer-handle-bar"></div></div>
+  <div class="drawer-head">
+    <span class="drawer-title" id="drawer-title">Deep Dive</span>
+    <button class="drawer-close" onclick="closeDrawer()">&times;</button>
+  </div>
+  <div id="drawer-content"></div>
 </div>
 
 <script>
@@ -872,6 +923,8 @@ function renderCard(id){
     html+=renderScoringCompSection(id,cs,hA,aA);
     // Margin Flow + Scoring Runs
     html+=renderMarginFlowSection(id,cs,hA,aA);
+    // Deep Dive button
+    html+='<div class="deep-dive-btn" onclick="openDrawer(\''+id+'\')">Deep Dive \u2192</div>';
   }
 
   el.innerHTML=html;
@@ -1191,6 +1244,193 @@ function toggleColl(gameId,section){
   var key=gameId+'_'+section;
   _collOpen[key]=!_collOpen[key];
   renderCard(gameId);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PHASE 4 — DRAWER
+// ══════════════════════════════════════════════════════════════════════════════
+
+var _drawerGameId=null;
+var _alertCache={}; // {gameId: [{alert_type, agent_decision, agent_reasoning, ...}]}
+var _alertsFetched=false;
+
+function openDrawer(gameId){
+  _drawerGameId=gameId;
+  var g=games.find(function(x){return x.id===gameId;});
+  if(g)document.getElementById('drawer-title').textContent=(g.away?.alias||'')+' @ '+(g.home?.alias||'')+' — Deep Dive';
+  document.getElementById('drawer-scrim').classList.add('open');
+  document.getElementById('drawer').classList.add('open');
+  document.body.classList.add('is-locked');
+  renderDrawer(gameId);
+  // Fetch alerts if not cached
+  if(!_alertsFetched)fetchAlerts();
+}
+function closeDrawer(){
+  document.getElementById('drawer-scrim').classList.remove('open');
+  document.getElementById('drawer').classList.remove('open');
+  document.body.classList.remove('is-locked');
+  _drawerGameId=null;
+}
+
+async function fetchAlerts(){
+  if(!dbReady)return;
+  var d=getSlateDate(dateOffset);
+  try{
+    var r=await fetch(FN+'db-api?action=get_alerts&date='+d.str+'&limit=200');
+    if(!r.ok)return;var data=await r.json();
+    var alerts=data.alerts||data||[];
+    if(!Array.isArray(alerts))return;
+    alerts.forEach(function(a){
+      if(!a.game_id)return;
+      if(!_alertCache[a.game_id])_alertCache[a.game_id]=[];
+      _alertCache[a.game_id].push(a);
+    });
+    _alertsFetched=true;
+    console.log('[ALERTS] Cached',alerts.length,'alerts for',d.str);
+    if(_drawerGameId)renderDrawer(_drawerGameId);
+  }catch(e){console.warn('[ALERTS] Fetch failed:',e.message);}
+}
+
+function renderDrawer(gameId){
+  var el=document.getElementById('drawer-content');if(!el)return;
+  var g=games.find(function(x){return x.id===gameId;});if(!g)return;
+  var cs=cardState[gameId]||{};
+  var hA=g.home?.alias||'HOME',aA=g.away?.alias||'AWAY';
+  var html='';
+
+  // ═══ GAME LOG ═══
+  html+='<div class="drawer-section">';
+  html+='<div class="drawer-section-title">Game Log</div>';
+  var alerts=_alertCache[gameId]||[];
+  if(alerts.length>0){
+    // Sort by time ascending
+    var sorted=alerts.slice().sort(function(a,b){return new Date(a.ts)-new Date(b.ts);});
+    sorted.forEach(function(a){
+      var isSend=a.agent_decision==='SEND';
+      var isSuppress=a.agent_decision==='SUPPRESS';
+      html+='<div class="gl-row'+(isSuppress?' suppressed':'')+'">';
+      html+='<div class="gl-head">';
+      html+='<span class="gl-type '+(isSend?'send':'suppress')+'">'+esc(a.alert_type||'?')+(a.alert_tier?' · '+esc(a.alert_tier):'')+'</span>';
+      var time='';
+      if(a.period)time+='Q'+a.period;
+      if(a.clock)time+=' '+a.clock;
+      if(a.floor_score!=null)time+=' · '+Number(a.floor_score).toFixed(2);
+      html+='<span class="gl-meta">'+esc(time)+'</span>';
+      html+='</div>';
+      // Agent decision + reasoning
+      html+='<div style="margin-bottom:3px">';
+      html+='<span class="gl-badge '+(isSend?'correct':'incorrect')+'">'+esc(a.agent_decision||'?')+'</span>';
+      if(a.correct!=null){
+        html+='<span class="gl-badge '+(a.correct?'correct':'incorrect')+'">'+(a.correct?'CORRECT':'WRONG')+'</span>';
+      }
+      if(a.conviction_tier)html+='<span style="font-family:var(--mono);font-size:9px;color:var(--fg-dim)">'+esc(a.conviction_tier)+(a.conviction_combo?' · '+esc(a.conviction_combo):'')+'</span>';
+      html+='</div>';
+      if(a.agent_reasoning){
+        html+='<div class="gl-reasoning">'+esc(a.agent_reasoning)+'</div>';
+      }
+      html+='</div>';
+    });
+  } else {
+    html+='<div style="text-align:center;font-family:var(--sans);font-size:12px;color:var(--fg-dim);padding:16px 0">No alerts for this game</div>';
+  }
+  html+='</div>';
+
+  // ═══ QUARTER DOMINANCE GRID ═══
+  html+='<div class="drawer-section">';
+  html+='<div class="drawer-section-title">Quarter Dominance</div>';
+  var diffs=cs._serverQuarterDiffs;
+  if(diffs){
+    var floor=getFloor(cs);
+    var ctrlTeam=floor?floor.controlTeam:hA;
+    var ctrlIsHome=ctrlTeam===hA;
+    html+='<div style="font-family:var(--mono);font-size:9px;color:var(--fg-dim);margin-bottom:6px">\u2190 from '+esc(ctrlTeam)+' perspective</div>';
+
+    var statDefs=[
+      {label:'PNT',get:function(d){return d.points_in_the_paint||d.points_in_paint||0;}},
+      {label:'FTA',get:function(d){return d.free_throws_att||0;}},
+      {label:'3PM',get:function(d){return d.three_points_made||0;}},
+      {label:'TO',get:function(d){return d.turnovers||d.total_turnovers||0;},invert:true},
+      {label:'STL',get:function(d){return d.steals||0;}},
+      {label:'AST',get:function(d){return d.assists||0;}}
+    ];
+    var keys=Object.keys(diffs).map(Number).filter(function(n){return !isNaN(n);}).sort(function(a,b){return a-b;});
+
+    html+='<table class="qd-grid"><thead><tr><th></th>';
+    statDefs.forEach(function(s){html+='<th>'+s.label+'</th>';});
+    html+='</tr></thead><tbody>';
+
+    // Per-quarter delta accumulation for trend
+    var deltas={};statDefs.forEach(function(s){deltas[s.label]=[];});
+
+    keys.forEach(function(qk){
+      var d=diffs[qk];if(!d||!d.home||!d.away)return;
+      var rw=cs.rollingWindow;var isPartial=(rw&&rw.partial_quarter===qk);
+      html+='<tr><td>Q'+qk+(isPartial?'*':'')+'</td>';
+      statDefs.forEach(function(s){
+        var hVal=s.get(d.home);var aVal=s.get(d.away);
+        var delta=ctrlIsHome?(s.invert?aVal-hVal:hVal-aVal):(s.invert?hVal-aVal:aVal-hVal);
+        deltas[s.label].push(delta);
+        var cls=delta>0?'pos':delta<0?'neg':'even';
+        var txt=delta>0?'+'+delta:delta===0?'\u00b7':''+delta;
+        html+='<td class="qd-cell '+cls+'">'+txt+'</td>';
+      });
+      html+='</tr>';
+    });
+
+    // Trend row
+    if(keys.length>=2){
+      html+='<tr><td class="qd-trend" style="color:var(--fg-dim)">TREND</td>';
+      statDefs.forEach(function(s){
+        var arr=deltas[s.label];if(arr.length<2){html+='<td class="qd-trend qd-cell even">\u25ac</td>';return;}
+        var latest=arr[arr.length-1];
+        var avg=arr.reduce(function(a,b){return a+b;},0)/arr.length;
+        var trend=latest>avg+0.5?'up':latest<avg-0.5?'down':'flat';
+        var sym=trend==='up'?'\u25b2':trend==='down'?'\u25bc':'\u25ac';
+        var col=trend==='up'?'pos':trend==='down'?'neg':'even';
+        html+='<td class="qd-trend qd-cell '+col+'">'+sym+'</td>';
+      });
+      html+='</tr>';
+    }
+    html+='</tbody></table>';
+  } else {
+    html+='<div style="text-align:center;font-family:var(--sans);font-size:12px;color:var(--fg-dim);padding:16px 0">Quarter data not available</div>';
+  }
+  html+='</div>';
+
+  // ═══ SNAPSHOT HISTORY ═══
+  html+='<div class="drawer-section">';
+  html+='<div class="drawer-section-title">Snapshot History</div>';
+  if(cs.gapLog&&cs.gapLog.length>0){
+    // Not implemented yet — placeholder
+  }
+  // Use alerts as a timeline proxy
+  if(alerts.length>0){
+    html+='<div style="overflow-x:auto"><table class="qd-grid" style="font-size:11px;min-width:500px"><thead><tr>';
+    html+='<th>Time</th><th>Score</th><th>Margin</th><th>Floor</th><th>Alert</th><th>Decision</th>';
+    html+='</tr></thead><tbody>';
+    var sorted2=alerts.slice().sort(function(a,b){return new Date(a.ts)-new Date(b.ts);});
+    sorted2.forEach(function(a){
+      var qc='Q'+(a.period||'?')+' '+(a.clock||'');
+      var margin=a.margin!=null?a.margin:'--';
+      var mSign=a.is_trailing?'-':'+';
+      html+='<tr>';
+      html+='<td style="white-space:nowrap">'+esc(qc)+'</td>';
+      html+='<td>--</td>';
+      html+='<td>'+(a.margin!=null?(a.is_trailing?'-':'')+Math.abs(a.margin):'--')+'</td>';
+      html+='<td>'+(a.floor_score!=null?Number(a.floor_score).toFixed(2):'--')+'</td>';
+      html+='<td style="font-size:10px">'+esc(a.alert_type||'')+'</td>';
+      html+='<td class="'+(a.agent_decision==='SEND'?'qd-cell pos':'qd-cell neg')+'">'+esc(a.agent_decision||'')+'</td>';
+      html+='</tr>';
+    });
+    html+='</tbody></table></div>';
+  } else {
+    html+='<div style="text-align:center;font-family:var(--sans);font-size:12px;color:var(--fg-dim);padding:16px 0">No snapshot data</div>';
+  }
+  html+='</div>';
+
+  // Bottom padding for safe area
+  html+='<div style="height:40px"></div>';
+  el.innerHTML=html;
 }
 
 // ── SELECTED RUN (margin flow cross-interaction) ──
