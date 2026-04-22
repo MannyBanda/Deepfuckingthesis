@@ -1197,11 +1197,15 @@ function selectRun(gameId,ri){
 function computeScoringComp(pbp,hA,aA,hPts,aPts){
   if(!pbp||!pbp.home||!pbp.away)return null;
   function breakdown(side,total){
-    var rim=side.rim||{m:0,a:0};var paint=side.paint||{m:0,a:0};
-    var mid=side.mid||{m:0,a:0};var corner3=side.corner3||{m:0,a:0};var above3=side.above3||{m:0,a:0};
-    var paintPts=(rim.m+paint.m)*2;
-    var threePts=(corner3.m+above3.m)*3;
-    var midPts=mid.m*2;
+    // PBP audit structure: side.rim.{made,att}, side.paint.{made,att}, side.mid.{made,att}, side.threes.{made,att,corner:{made,att},above:{made,att}}
+    var rimM=side.rim?side.rim.made||0:0;
+    var paintM=side.paint?side.paint.made||0:0;
+    var midM=side.mid?side.mid.made||0:0;
+    var threeM=side.threes?side.threes.made||0:0;
+    var threeA=side.threes?side.threes.att||0:0;
+    var paintPts=(rimM+paintM)*2;
+    var threePts=threeM*3;
+    var midPts=midM*2;
     // FT isn't in PBP zones — derive from total
     var ftPts=Math.max(0,total-paintPts-threePts-midPts);
     var structural=paintPts+ftPts;
@@ -1209,8 +1213,7 @@ function computeScoringComp(pbp,hA,aA,hPts,aPts){
     var sPct=total>0?Math.round(structural/total*100):0;
     return{total:total,paint:paintPts,ft:ftPts,three:threePts,midOther:midPts,
       structural:structural,variance:variance,sPct:sPct,vPct:100-sPct,
-      rimM:rim.m,rimA:rim.a,paintM:paint.m,paintA:paint.a,
-      tpm:corner3.m+above3.m,tpa:corner3.a+above3.a};
+      tpm:threeM,tpa:threeA};
   }
   var h=breakdown(pbp.home,hPts);var a=breakdown(pbp.away,aPts);
   h.team=hA;a.team=aA;
