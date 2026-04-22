@@ -807,7 +807,7 @@ function renderCard(id){
     var pred=cs.prediction;
     var hasClosing=pred&&pred.closing;
     var hasNarrative=pred&&pred.narrative;
-    var hasRisk=pred&&pred.risk&&pred.risk.toUpperCase()!=='NONE';
+    var hasRisk=pred&&pred.risk;
     var hasDisagree=pred&&pred.disagreement;
     var isOpen=_ssExpanded[id]||false;
     var collapsedText=hasNarrative?pred.narrative:(hasClosing?pred.closing:null);
@@ -1202,7 +1202,7 @@ function applyAutoAnalysesToCards(){
       var predLine=t.match(/Prediction:\s*(.+)/i);if(predLine)d.prediction=predLine[1].trim();
       var sigLine=t.match(/SIGNAL:\s*(BUY\s+\w+|NO VALUE|PASS)\s*(?:[---]\s*(.+))?/i);
       if(sigLine){d.signalType=sigLine[1].trim().toUpperCase();d.signalNote=sigLine[2]?sigLine[2].trim():'';}
-      var riskLine=t.match(/RISK:\s*(.+?)(?:\n|$)/);if(riskLine)d.risk=riskLine[1].trim();
+      var riskLine=t.match(/RISK:\s*(.+?)(?:\n|$)/);if(riskLine){d.risk=riskLine[1].trim();if(d.risk.toUpperCase().startsWith('NONE'))d.risk=null;}
       var closLine=t.match(/CLOSING:\s*(.+?)(?:\n|$)/);if(closLine)d.closing=closLine[1].trim();
       var disLine=t.match(/DISAGREEMENT:\s*(.+?)(?:\n|$)/);
       if(disLine){d.disagreement=disLine[1].trim();if(d.disagreement.toUpperCase()==='NONE')d.disagreement=null;}
@@ -1268,6 +1268,7 @@ function parseSonnetDecision(text){
     var sigM=text.match(/SIGNAL:\s*(BUY\s+\w+|NO VALUE|PASS)\s*(?:[---]\s*(.+))?/i);
     if(sigM){d.signalType=sigM[1].trim().toUpperCase();d.signalNote=sigM[2]?sigM[2].trim():'';}
     var riskM=text.match(/RISK:\s*(.+?)(?:\n|$)/);d.risk=riskM?riskM[1].trim():null;
+    if(d.risk&&d.risk.toUpperCase().startsWith('NONE'))d.risk=null;
     var closM=text.match(/CLOSING:\s*(.+?)(?:\n|$)/);d.closing=closM?closM[1].trim():null;
     var narM=text.match(/NARRATIVE:\s*([\s\S]*?)(?:\n(?:Sustainability|Lead Source|DISAGREEMENT|RISK|CLOSING|FWP|EDGE):|$)/);d.narrative=narM?narM[1].trim():null;
     var disM=text.match(/DISAGREEMENT:\s*(.+?)(?:\n|$)/);d.disagreement=disM?disM[1].trim():null;
