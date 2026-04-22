@@ -244,7 +244,7 @@ exports.handler = async function(event) {
 
         // Vendor preference: DK > FD > Caesars > BetMGM > BetRivers > first
         var preferred = null;
-        var vendorOrder = ['draftkings', 'fanduel', 'caesars', 'betmgm', 'betrivers'];
+        var vendorOrder = ['draftkings', 'fanduel', 'caesars', 'bet365', 'betrivers'];
         for (var v = 0; v < vendorOrder.length; v++) {
           for (var o = 0; o < odds.length; o++) {
             if (odds[o].vendor === vendorOrder[v]) { preferred = odds[o]; break; }

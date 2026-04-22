@@ -316,14 +316,33 @@ input,textarea,select{font-size:16px!important;}
 .empty{display:none;padding:60px 20px;text-align:center;font-family:var(--sans);font-size:13px;color:var(--fg-dim);letter-spacing:0.04em;}
 
 /* ═══ TOAST ═══ */
-.toast{position:fixed;left:16px;right:16px;bottom:20px;max-width:560px;margin:0 auto;background:var(--bg-surface-2);border:1px solid var(--green-border);border-radius:14px;padding:12px 14px;display:none;flex-wrap:wrap;align-items:center;gap:10px;box-shadow:0 0 0 1px rgba(52,211,153,0.08),0 8px 32px -8px rgba(0,0,0,0.6),0 0 24px -8px rgba(52,211,153,0.35);z-index:30;animation:toastIn 0.6s var(--ease);}
+.toast{position:fixed;left:12px;right:12px;bottom:16px;max-width:480px;margin:0 auto;background:var(--bg-surface-2);border:1px solid var(--green-border);border-radius:16px;display:none;flex-direction:column;box-shadow:0 0 0 1px rgba(52,211,153,0.08),0 8px 32px -8px rgba(0,0,0,0.6),0 0 24px -8px rgba(52,211,153,0.35);z-index:60;animation:toastIn 0.5s var(--ease);}
 .toast.show{display:flex;}
-@keyframes toastIn{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}
-.toast-dot{width:8px;height:8px;border-radius:999px;background:var(--green);box-shadow:0 0 12px var(--green);flex:0 0 auto;animation:pulse 1.8s ease-in-out infinite;}
-.toast-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;}
+@keyframes toastIn{from{opacity:0;transform:translateY(30px);}to{opacity:1;transform:translateY(0);}}
+.toast-handle{display:flex;justify-content:center;padding:8px 0 2px;}
+.toast-handle-bar{width:32px;height:3px;border-radius:2px;background:var(--hairline-strong);}
+.toast-head{display:flex;align-items:flex-start;gap:10px;padding:4px 14px 6px;}
+.toast-dot{width:8px;height:8px;border-radius:999px;background:var(--green);box-shadow:0 0 12px var(--green);flex:0 0 auto;margin-top:4px;animation:pulse 1.8s ease-in-out infinite;}
+.toast-head-text{flex:1;min-width:0;}
 .toast-label{font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:var(--green);}
-.toast-body{font-family:var(--sans);font-size:13px;font-weight:500;color:var(--fg-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.toast-close{width:28px;height:28px;display:grid;place-items:center;background:transparent;border:1px solid var(--hairline);color:var(--fg-tertiary);border-radius:999px;cursor:pointer;font-size:16px;}
+.toast-alert-info{font-family:var(--mono);font-size:11px;color:var(--fg-secondary);margin-top:1px;}
+.toast-close{width:28px;height:28px;display:grid;place-items:center;background:transparent;border:1px solid var(--hairline);color:var(--fg-tertiary);border-radius:999px;cursor:pointer;font-size:16px;flex:0 0 auto;}
+.toast-game{padding:0 14px 8px;font-family:var(--sans);font-size:13px;font-weight:500;color:var(--fg-primary);cursor:pointer;line-height:1.4;}
+.toast-game:active{color:var(--green);}
+.toast-team-ml{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--green);}
+.toast-odds-grid{border-top:1px solid var(--hairline);padding:6px 10px 10px;}
+.toast-odds-row{display:flex;align-items:center;padding:7px 8px;border-radius:var(--r-inner);transition:background .1s ease;text-decoration:none;color:inherit;}
+.toast-odds-row:active{background:rgba(52,211,153,0.08);}
+.toast-odds-row.best{background:rgba(52,211,153,0.05);}
+.toast-book{flex:1;font-family:var(--sans);font-size:12px;font-weight:500;color:var(--fg-secondary);}
+.toast-ml-val{font-family:var(--mono);font-size:14px;font-weight:600;color:var(--fg-primary);min-width:65px;text-align:right;}
+.toast-odds-row.best .toast-ml-val{color:var(--green);}
+.toast-best-tag{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--green);margin-left:6px;}
+.toast-open{font-family:var(--sans);font-size:10px;font-weight:600;color:var(--green);margin-left:10px;white-space:nowrap;}
+.toast-no-odds{padding:10px 14px;font-family:var(--sans);font-size:12px;color:var(--fg-dim);text-align:center;}
+.chrome-badge{position:absolute;top:-4px;right:-4px;width:16px;height:16px;border-radius:999px;background:var(--green);color:var(--bg-surface);font-family:var(--mono);font-size:9px;font-weight:700;place-items:center;display:none;}
+.chrome-badge.show{display:grid;}
+.icon-btn{position:relative;}
 
 body.is-locked{overflow:hidden;}
 </style>
@@ -336,7 +355,7 @@ body.is-locked{overflow:hidden;}
   <div class="wordmark"><span class="dot"></span><span>DFT</span></div>
   <div class="chrome-actions">
     <button class="icon-btn" title="WP Profiles">WP</button>
-    <button class="icon-btn" title="Upload Clutch">&#9889;</button>
+    <button class="icon-btn" id="toast-btn" title="Alerts" onclick="showToast()">&#9889;<span class="chrome-badge" id="toast-badge"></span></button>
     <button class="icon-btn" title="Menu">&#9776;</button>
   </div>
 </div>
@@ -358,12 +377,17 @@ body.is-locked{overflow:hidden;}
 </div>
 
 <div class="toast" id="toast">
-  <span class="toast-dot"></span>
-  <div class="toast-text">
-    <span class="toast-label" id="toast-label">Entry Signal</span>
-    <span class="toast-body" id="toast-body"></span>
+  <div class="toast-handle"><div class="toast-handle-bar"></div></div>
+  <div class="toast-head">
+    <div class="toast-dot"></div>
+    <div class="toast-head-text">
+      <div class="toast-label" id="toast-label">Entry Signal</div>
+      <div class="toast-alert-info" id="toast-alert-info"></div>
+    </div>
+    <button class="toast-close" onclick="dismissToast()">&times;</button>
   </div>
-  <button class="toast-close" onclick="hideToast()">&times;</button>
+  <div class="toast-game" id="toast-game" onclick="toastScrollToGame()"></div>
+  <div id="toast-odds"></div>
 </div>
 
 <div class="drawer-scrim" id="drawer-scrim" onclick="closeDrawer()"></div>
@@ -388,7 +412,7 @@ const W = {I1:.10, I2:.15, I3:.20, I4:.30, I5:.25};
 
 // ── STATE ──
 var games = [], activeGameId = null, pollTimer = null, dateOffset = 0;
-var pollInterval = 90000;
+var pollInterval = 10000;
 const cardState = {};
 const theses = JSON.parse(localStorage.getItem('nba4:theses')||'{}');
 const standingsCache = {};
@@ -578,6 +602,8 @@ async function loadSchedule(){
           setTimeout(function(){fetchPBPFromDB(g.id);},800+i*200);
         }
       });
+      // Initial alert poll for toast (fires after hydration)
+      setTimeout(function(){pollAlerts();},1500);
     }
 
     // Start polling for today
@@ -607,6 +633,8 @@ async function refreshLiveCards(){
     });
     if(updated){renderPills();games.forEach(function(g){renderCard(g.id);});}
   }catch(e){console.warn('[POLL]',e.message);}
+  // Poll alerts for toast
+  pollAlerts();
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2076,6 +2104,201 @@ function renderMarginFlowSection(id,cs,hA,aA){
   html+='</div></div></div>';
   return html;
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TOAST — Entry Signal + Line Shopping
+// ══════════════════════════════════════════════════════════════════════════════
+
+var BOOKS={
+  draftkings:{name:'DraftKings',link:'https://sportsbook.draftkings.com'},
+  fanduel:{name:'FanDuel',link:'https://sportsbook.fanduel.com'},
+  caesars:{name:'Caesars',link:'https://www.caesars.com/sportsbook'},
+  bet365:{name:'Bet365',link:'https://www.bet365.com'},
+  betrivers:{name:'BetRivers',link:'https://www.betrivers.com'}
+};
+var ENTRY_TYPES={'BUY':1,'WINDOW_BUY':1,'BWC_EDGE':1,'POSITION_OPEN':1,'RE_ENTRY_VALUE':1};
+var _seenAlertIds=new Set();
+var _toastAlert=null;
+var _toastGameId=null;
+var _latestSendAlert=null;
+var _toastVisible=false;
+
+async function pollAlerts(){
+  if(!dbReady)return;
+  var d=getSlateDate(dateOffset);
+  try{
+    var r=await fetch(FN+'db-api?action=get_alerts&date='+d.str+'&limit=200');
+    if(!r.ok)return;var data=await r.json();
+    var alerts=data.alerts||data||[];
+    if(!Array.isArray(alerts))return;
+    // Update alertCache for drawer game log
+    _alertCache={};
+    alerts.forEach(function(a){
+      if(!a.game_id)return;
+      if(!_alertCache[a.game_id])_alertCache[a.game_id]=[];
+      _alertCache[a.game_id].push(a);
+    });
+    _alertsFetched=true;
+    // Find new SEND alerts for toast
+    var newSend=null;
+    alerts.forEach(function(a){
+      if(a.agent_decision==='SEND'&&!_seenAlertIds.has(a.id)){
+        _seenAlertIds.add(a.id);
+        // Track latest send for manual button
+        _latestSendAlert=a;
+        // Only auto-toast for entry types
+        if(ENTRY_TYPES[a.alert_type])newSend=a;
+      }
+    });
+    // Also seed latestSendAlert if first poll
+    if(!_latestSendAlert){
+      for(var i=alerts.length-1;i>=0;i--){
+        if(alerts[i].agent_decision==='SEND'){_latestSendAlert=alerts[i];break;}
+      }
+    }
+    // Update badge
+    var badge=document.getElementById('toast-badge');
+    if(_latestSendAlert&&badge){badge.textContent='';badge.classList.add('show');}
+    // Auto-show toast for new entry signal
+    if(newSend)fireToast(newSend);
+  }catch(e){console.warn('[TOAST] Alert poll failed:',e.message);}
+}
+
+async function fireToast(alert){
+  _toastAlert=alert;_toastGameId=alert.game_id;
+  var g=games.find(function(x){return x.id===alert.game_id;});
+  var hA=g?.home?.alias||'HOME',aA=g?.away?.alias||'AWAY';
+  var betTeam=alert.floor_team||alert.control_team||'?';
+  var isHome=betTeam.toUpperCase()===hA.toUpperCase();
+
+  // Header
+  document.getElementById('toast-label').textContent='Entry Signal';
+  var typeLabel=(alert.alert_type||'').replace(/_/g,' ');
+  if(alert.alert_tier)typeLabel+=' \u00b7 '+alert.alert_tier;
+  var time='';if(alert.period)time+='Q'+alert.period;if(alert.clock)time+=' '+alert.clock;
+  if(time)typeLabel+=' \u00b7 '+time;
+  document.getElementById('toast-alert-info').textContent=typeLabel;
+
+  // Game line — meticulous about which team
+  var margin=alert.margin!=null?Math.abs(alert.margin):'?';
+  var trailing=alert.margin!=null&&alert.margin<0;
+  var gameText=betTeam+(trailing?' trailing '+margin:' leading '+margin);
+  gameText+=' \u00b7 '+aA+'@'+hA;
+  if(alert.floor_score!=null)gameText+=' \u00b7 Floor '+Number(alert.floor_score).toFixed(2);
+  document.getElementById('toast-game').textContent=gameText;
+
+  // Show toast immediately, load odds async
+  var oddsEl=document.getElementById('toast-odds');
+  oddsEl.innerHTML='<div class="toast-no-odds">Loading odds\u2026</div>';
+  showToastEl();
+
+  // Fetch multi-vendor odds
+  var bdlId=bdlGameMap[alert.game_id];
+  if(!bdlId){oddsEl.innerHTML='<div class="toast-no-odds">No odds data</div>';return;}
+  try{
+    var oddsRes=await bdl('odds',{game_id:String(bdlId)});
+    var oddsArr=oddsRes.data||[];
+    if(oddsArr.length===0){oddsEl.innerHTML='<div class="toast-no-odds">No odds available</div>';return;}
+
+    // Filter to our books, extract the bet team's ML
+    var rows=[];
+    oddsArr.forEach(function(o){
+      var bk=BOOKS[o.vendor];if(!bk)return;
+      var ml=isHome?o.moneyline_home_odds:o.moneyline_away_odds;
+      if(ml==null)return;
+      rows.push({vendor:o.vendor,name:bk.name,link:bk.link,ml:Number(ml)});
+    });
+
+    if(rows.length===0){oddsEl.innerHTML='<div class="toast-no-odds">No ML odds for '+esc(betTeam)+'</div>';return;}
+
+    // Sort by best ML (highest value = best payout)
+    rows.sort(function(a,b){return b.ml-a.ml;});
+    var bestML=rows[0].ml;
+
+    var html='<div class="toast-odds-grid">';
+    html+='<div style="padding:0 8px 4px;font-family:var(--mono);font-size:10px;color:var(--fg-dim)">'+esc(betTeam)+' ML across books</div>';
+    rows.forEach(function(r){
+      var isBest=r.ml===bestML&&rows.length>1;
+      var mlStr=r.ml>0?'+'+r.ml:String(r.ml);
+      html+='<a class="toast-odds-row'+(isBest?' best':'')+'" href="'+esc(r.link)+'" target="_blank" rel="noopener">';
+      html+='<span class="toast-book">'+esc(r.name)+'</span>';
+      html+='<span class="toast-ml-val">'+esc(mlStr)+'</span>';
+      if(isBest)html+='<span class="toast-best-tag">BEST</span>';
+      html+='<span class="toast-open">Open \u2192</span>';
+      html+='</a>';
+    });
+    html+='</div>';
+    oddsEl.innerHTML=html;
+  }catch(e){
+    oddsEl.innerHTML='<div class="toast-no-odds">Odds fetch failed</div>';
+    console.warn('[TOAST] Odds error:',e.message);
+  }
+}
+
+function showToastEl(){
+  var t=document.getElementById('toast');
+  t.classList.remove('show');
+  // Force reflow for re-animation
+  void t.offsetWidth;
+  t.classList.add('show');
+  _toastVisible=true;
+}
+
+function showToast(){
+  // Manual trigger via ⚡ button — show latest SEND alert
+  if(_latestSendAlert){fireToast(_latestSendAlert);}
+  else{
+    document.getElementById('toast-label').textContent='No Alerts';
+    document.getElementById('toast-alert-info').textContent='No SEND alerts today';
+    document.getElementById('toast-game').textContent='Alerts will appear here when signals fire';
+    document.getElementById('toast-odds').innerHTML='';
+    showToastEl();
+  }
+}
+
+function dismissToast(){
+  document.getElementById('toast').classList.remove('show');
+  _toastVisible=false;
+}
+
+function toastScrollToGame(){
+  if(_toastGameId){
+    dismissToast();
+    scrollToGame(_toastGameId);
+  }
+}
+
+// Toast swipe-down-to-dismiss
+(function(){
+  var toast,tStartY,tDy,tDragging;
+  document.addEventListener('DOMContentLoaded',function(){
+    toast=document.getElementById('toast');
+    toast.addEventListener('touchstart',function(e){
+      tStartY=e.touches[0].clientY;tDy=0;tDragging=false;
+    },{passive:true});
+    toast.addEventListener('touchmove',function(e){
+      tDy=e.touches[0].clientY-tStartY;
+      if(tDy>0){
+        if(!tDragging){tDragging=true;toast.style.transition='none';}
+        toast.style.transform='translateY('+tDy+'px)';
+        e.preventDefault();
+      }
+    },{passive:false});
+    toast.addEventListener('touchend',function(){
+      if(!tDragging)return;
+      if(tDy>80){
+        toast.style.transition='transform .2s ease';
+        toast.style.transform='translateY(100%)';
+        setTimeout(function(){toast.style.transition='';toast.style.transform='';dismissToast();},210);
+      } else {
+        toast.style.transition='transform .2s ease';
+        toast.style.transform='translateY(0)';
+        setTimeout(function(){toast.style.transition='';toast.style.transform='';},210);
+      }
+      tDragging=false;tDy=0;
+    },{passive:true});
+  });
+})();
 
 // ══════════════════════════════════════════════════════════════════════════════
 // BOOT
