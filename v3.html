@@ -2447,12 +2447,16 @@ function renderDrawer(gameId){
       statDefs.forEach(function(s){
         var arr=deltas[s.label];if(arr.length<2){html+='<td class="qd-trend qd-cell even">\u25ac</td>';return;}
         var cumSum=arr.reduce(function(a,b){return a+b;},0);
-        // For inverted stats (TO): negative cumSum = good = up arrow
-        var effective=s.invert?-cumSum:cumSum;
-        var trend=effective>0.5?'up':effective<-0.5?'down':'flat';
-        var sym=trend==='up'?'\u25b2':trend==='down'?'\u25bc':'\u25ac';
-        var col=trend==='up'?'pos':trend==='down'?'neg':'even';
-        html+='<td class="qd-trend qd-cell '+col+'">'+sym+'</td>';
+        var lastQ=arr[arr.length-1];
+        // For inverted stats (TO): negative = good (green)
+        var cumEff=s.invert?-cumSum:cumSum;
+        var lastEff=s.invert?-lastQ:lastQ;
+        var cumCls=cumEff>0?'pos':cumEff<0?'neg':'even';
+        var arrow=lastEff>0.5?'\u25b2':lastEff<-0.5?'\u25bc':'';
+        var arrowCls=lastEff>0.5?'pos':lastEff<-0.5?'neg':'';
+        var txt=(cumSum>0?'+':'')+cumSum;
+        if(cumSum===0)txt='\u00b7';
+        html+='<td class="qd-trend qd-cell '+cumCls+'">'+txt+(arrow?'<span style="font-size:7px;margin-left:1px" class="'+arrowCls+'">'+arrow+'</span>':'')+'</td>';
       });
       html+='</tr>';
     }
