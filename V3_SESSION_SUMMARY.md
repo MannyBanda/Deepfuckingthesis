@@ -1,6 +1,6 @@
 # V3 Dashboard Build — Session Summary (Apr 22, 2026)
 
-## Current State (2,641 lines, deployed at /v3.html)
+## Current State (2,857 lines, deployed at /v3.html)
 
 ### Phase 1: Shell + Navigation ✅
 - Geist font family, dark design system with green accent
@@ -77,45 +77,74 @@
 - **I3** (Shot Quality): Full — eFG%, assist ratio, catch-and-shoot 3s from PBP cache
 - **I4** (Game Control): Score differential proxy (no biggest_lead from BDL), quarter delta from line_score
 - **I5** (Sustained Execution): Run share from PBP cache runs6, defaults EVEN without PBP
-- **Wired into `refreshLiveCards()`**: every 10s for LIVE games → `cs.clientInd` → `getFloor()` picks it up
+- **Important: client compute is FALLBACK only** — server floor (SR-enriched) takes priority in getFloor() chain
 - **`maybeResyncTheses()`**: 2min throttle, auto-hydrates pregame agent theses for PRE games
-- **`maybeResyncSnapshots()`**: 60s throttle, re-fetches server snapshots + auto-analyses for LIVE games
-- **Scoring comp rebuilds** on score changes when PBP cache is loaded
+- **`maybeResyncSnapshots()`**: 60s throttle, re-fetches server snapshots + auto-analyses for LIVE games (NO PBP refresh — BDL direct is authoritative)
+
+#### Direct BDL Plays Fetch (NEW this session)
+- **`parseBDLPBP(plays, homeAbbr, awayAbbr)`**: Full PBP parser ported from bdl.html — zone classification, shot context, TO classification (forced/unforced), run detection (8+ pts or 3+ scores), runs6 for I5
+- **All helpers ported**: coordinateToZone, bdlExtractPlayer/Assist/Block/Steal/Distance, bdlClassifyContext, bdlClassifyTO, BDL_RIM/PAINT type sets
+- **`fetchLivePBP(gameId, bdlId)`**: Fetches BDL plays per LIVE game every 10s poll cycle
+- **Fingerprinted by play count** — skips parsing when nothing changed
+- **Authoritative for LIVE games** — DB PBP refresh removed from maybeResyncSnapshots to prevent data flipping
+- DB PBP (`fetchPBPFromDB`) still used for FINAL games and initial hydration
+
+#### ESPN WP Chart Fix (this session)
+- Fixed property name: `data.wpHistory` not `data.plays` (proxy returns wpHistory with homeWP already mapped)
+- Chart minimum lowered from 5 to 2 data points (shows even early Q1)
+- **30s live refresh** via `maybeRefreshEspnWP()` — chart fills in over time for LIVE games
+- **FINAL persistence**: WP history saved to localStorage on game completion, restored on page load
+- localStorage cleanup includes `nba4:wpHist:*` keys (48h TTL, slate-based pruning)
+
+#### ML + Edge Fixes (this session)
+- **ML display**: `fetchOddsHistory` now populates `cs.oddsData.homeML/awayML` from latest odds_history entry; fetched during initial hydration (not just drawer open)
+- **Edge stripped**: parenthetical removed in `edgeHtml()` renderer — shows `+0.8%` not `+0.8% (DET FWP 82% vs MIP 81.2%)`
+
+#### Structural Read Fix (this session)
+- **getFloor() chain reordered**: `sonnet > serverFloor > clientInd > window` (was clientInd above serverFloor)
+- **Server floor always updates**: Removed `!cs.clientInd` gate on snapshot hydration — server SR-enriched data takes priority
+- **Root cause**: Client compute from BDL box scores alone is degraded (no paint, POT, biggest_lead) — was producing ORL 0.55 while server had DET 0.68-0.77
+
+#### localStorage Cleanup (this session)
+- Boot-time IIFE: removes old schedule caches (today+yesterday only), per-game keys older than 48h, aggressive 24h at 3MB+
+- Deferred 15s: prunes per-game keys for games not on current slate
+- Both v3.html and bdl.html clean `nba4:wpHist:*` keys
 
 ## What's NOT Done Yet
 
 ### Phase 5 Remaining — Polish & Features
-- ~~**Client-side BDL compute loop**~~ ✅ SHIPPED — `computeClientIndicators()` runs every 10s for LIVE games
+- ~~**Client-side BDL compute loop**~~ ✅ SHIPPED
+- ~~**ESPN WP chart for FINAL games**~~ ✅ SHIPPED (localStorage persistence + fetch on load)
 - **Confidence table** — on-demand via ≡ menu, all games' structural state in one view
 - **Team colors** — 30-team color lookup for abbreviations throughout
 - **Depth Audit** — half-court SVG shot zones (deferred, complex)
 - **Demo mode + presets** — for testing without live games
-- **ESPN WP chart for FINAL games** — needs WP history cached
 - **Sust column** in snapshot history table — available in `sust_json`, not parsed
 - **Erosion column** in snapshot history — available in alerts, not cross-referenced
 
 ### Key Functions Ported to v3
 | Function | Status | Notes |
 |----------|--------|-------|
-| `getFloor` | ✅ | Fallback chain: sonnet → client → server → window |
+| `getFloor` | ✅ | Chain: sonnet → serverFloor → clientInd → window |
 | `parseSonnetDecision` | ✅ | FWP, edge, conviction, v2 fields, RISK/NONE null handling |
-| `hydrateFromServerSnapshots` | ✅ | Floor, WP, odds, sust, quarter diffs, full snapshot array |
+| `hydrateFromServerSnapshots` | ✅ | Floor always updates (no clientInd gate), WP, odds, sust, quarter diffs |
 | `syncAnalysesFromDB` | ✅ | Manual analyses |
 | `syncCalibrationAnalyses` | ✅ | Auto Q1/Q2/Q3 analyses |
 | `applyAutoAnalysesToCards` | ✅ | Prediction + analysisHistory from autos |
 | `syncThesesFromDB` | ✅ | Theses from DB, re-renders on load |
-| `fetchPBPFromDB` | ✅ | PBP from `get_pbp` action |
+| `fetchPBPFromDB` | ✅ | PBP from DB — FINAL games + initial load only (force param for refresh) |
 | `computeScoringComp` | ✅ | From PBP zone data |
-| `fetchOddsHistory` | ✅ | ML odds from `get_odds` action |
+| `fetchOddsHistory` | ✅ | ML + spread from odds_history, populates cs.oddsData, fetched on load |
 | `buildV3Summary` | ✅ | Lightweight BDL box score → SR-shaped summary |
 | `triggerAnalysis` | ✅ | Manual Opus analysis with thesis context |
 | `pollAlerts` | ✅ | 10s alert polling for toast |
 | `fetchLineShop` | ✅ | The Odds API integration with historical support |
-| `computeClientIndicators` | ✅ | **NEW** Real-time I1-I5 from BDL box score, PBP-enriched |
-| `maybeResyncTheses` | ✅ | **NEW** 2min throttle, auto-hydrates pregame theses |
-| `maybeResyncSnapshots` | ✅ | **NEW** 60s throttle, refreshes server data for LIVE games |
-| `fetchSummaryBDL` | ❌ | Not needed — computeClientIndicators works directly from box scores |
-| `parseBDLPBP` | ❌ | Not ported — PBP comes from DB |
+| `computeClientIndicators` | ✅ | Real-time I1-I5 from BDL box score (fallback when no server data) |
+| `parseBDLPBP` | ✅ | **NEW** Full PBP parser + all helpers ported from bdl.html |
+| `fetchLivePBP` | ✅ | **NEW** Direct BDL plays fetch every 10s, fingerprinted |
+| `maybeResyncTheses` | ✅ | 2min throttle, auto-hydrates pregame theses |
+| `maybeResyncSnapshots` | ✅ | 60s throttle, server snapshots + auto-analyses (NO PBP for LIVE) |
+| `maybeRefreshEspnWP` | ✅ | **NEW** 30s throttle, ESPN WP chart refresh for LIVE games |
 
 ### Design Decisions Locked
 - All games open by default, no selection
@@ -127,9 +156,13 @@
 - Toast: auto on SEND, follows swipe, dismissed memory, top 7 + expandable, 10s refresh, Universal Links
 - Thesis: dedicated collapsible, open for PRE, collapsed for LIVE/FINAL
 - RISK/NONE nulled at parser level (same as disagreement)
+- **Server floor > client compute** in getFloor() — SR-enriched data always preferred
+- **BDL direct fetch authoritative for LIVE PBP** — DB PBP only for FINAL/initial load
+- **Edge display: number only**, no parenthetical explanation
 
 ### Files Modified This Session
-- `v3.html` — 2,641 lines (Phase 1-5 + client compute)
+- `v3.html` — 2,857 lines (Phase 1-5 + client compute + PBP parser + fixes)
+- `bdl.html` — added `nba4:wpHist:` to localStorage cleanup prefixes
 - `netlify/functions/odds-api.js` — NEW (The Odds API proxy with historical support)
 - `netlify/functions/analyze.js` — model upgrade to Opus 4.6
 - `netlify/functions/poll-live-bdl.mjs` — model upgrade to Opus 4.6
