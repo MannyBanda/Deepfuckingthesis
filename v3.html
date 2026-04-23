@@ -2744,6 +2744,16 @@ async function fetchPBPFromDB(gameId,force){
     var r=await fetch(FN+'db-api?action=get_pbp&game_id='+encodeURIComponent(gameId));
     if(!r.ok)return;var data=await r.json();
     if(data.pbp){
+      // Hydrate box score from DB if not already loaded (for evidence panel)
+      if(!cs._lastBoxScore&&data.box_score){
+        var db=data.box_score;
+        cs._lastBoxScore={
+          home_team_score:db.home_pts||0,visitor_team_score:db.away_pts||0,
+          home_team:{players:[{stl:db.home.stl||0,blk:db.home.blk||0,turnover:db.home.to||0,fta:db.home.fta||0,ftm:db.home.ftm||0,fgm:db.home.fgm||0,fga:db.home.fga||0,fg3m:db.home.fg3m||0,fg3a:db.home.fg3a||0,ast:db.home.ast||0,pts:db.home.pts||0,oreb:db.home.oreb||0,pf:db.home.pf||0}]},
+          visitor_team:{players:[{stl:db.away.stl||0,blk:db.away.blk||0,turnover:db.away.to||0,fta:db.away.fta||0,ftm:db.away.ftm||0,fgm:db.away.fgm||0,fga:db.away.fga||0,fg3m:db.away.fg3m||0,fg3a:db.away.fg3a||0,ast:db.away.ast||0,pts:db.away.pts||0,oreb:db.away.oreb||0,pf:db.away.pf||0}]},
+          _fromDB:true
+        };
+      }
       // Check if DB has full raw shot data (needed for shot zones + margin flow)
       if(data.pbp.raw&&data.pbp.raw.shots&&data.pbp.raw.shots.length>0){
         cs.pbpAudit=data.pbp;

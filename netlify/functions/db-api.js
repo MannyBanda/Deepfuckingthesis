@@ -430,12 +430,13 @@ exports.handler = async (event) => {
       if (!game_id) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id required' }) };
 
       const rows = await sql`
-        SELECT pbp_json, saved_at FROM game_pbp WHERE game_id = ${game_id} LIMIT 1
+        SELECT pbp_json, box_score_json, saved_at FROM game_pbp WHERE game_id = ${game_id} LIMIT 1
       `;
       if (rows.length === 0) return { statusCode: 200, headers, body: JSON.stringify({ pbp: null }) };
 
       const pbp = typeof rows[0].pbp_json === 'string' ? JSON.parse(rows[0].pbp_json) : rows[0].pbp_json;
-      return { statusCode: 200, headers, body: JSON.stringify({ pbp, saved_at: rows[0].saved_at }) };
+      const boxScore = rows[0].box_score_json ? (typeof rows[0].box_score_json === 'string' ? JSON.parse(rows[0].box_score_json) : rows[0].box_score_json) : null;
+      return { statusCode: 200, headers, body: JSON.stringify({ pbp, box_score: boxScore, saved_at: rows[0].saved_at }) };
     }
 
     // ═══════════════════════════════════════════════════════
