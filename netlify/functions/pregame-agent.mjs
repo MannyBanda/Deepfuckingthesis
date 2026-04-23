@@ -1018,9 +1018,14 @@ async function runPregameAgent() {
   if (!apiKey) { log('ERROR: Missing ANTHROPIC_API_KEY'); return { logs: logs, generated: 0 }; }
 
   // 1. Get today's schedule from poll_state
+  // MUST match poll-live-bdl.mjs today() — ET-based, before 6 AM = yesterday
   var now = new Date();
-  var mst = new Date(now.toLocaleString('en-US', { timeZone: 'America/Phoenix' }));
-  var dateKey = mst.toISOString().split('T')[0];
+  var et = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+  if (et.getUTCHours() < 6) {
+    et.setUTCDate(et.getUTCDate() - 1);
+  }
+  var pad = function(n) { return String(n).padStart(2, '0'); };
+  var dateKey = et.getUTCFullYear() + '-' + pad(et.getUTCMonth() + 1) + '-' + pad(et.getUTCDate());
 
   var league = 'nba'; // MVP: NBA only
   var pollRows;
