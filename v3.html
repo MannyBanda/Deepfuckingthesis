@@ -1645,7 +1645,7 @@ function applyAutoAnalysesToCards(){
 
     // Extract v2 fields from raw text
     if(latest.raw_text){
-      var t=latest.raw_text;
+      var t=latest.raw_text.replace(/\r\n/g,'\n').replace(/\r/g,'\n');
       var predLine=t.match(/Prediction:\s*(.+)/i);if(predLine)d.prediction=predLine[1].trim();
       var sigLine=t.match(/SIGNAL:\s*(BUY\s+\w+|NO VALUE|PASS)\s*(?:[---]\s*(.+))?/i);
       if(sigLine){d.signalType=sigLine[1].trim().toUpperCase();d.signalNote=sigLine[2]?sigLine[2].trim():'';}
@@ -1655,6 +1655,8 @@ function applyAutoAnalysesToCards(){
       if(disLine){d.disagreement=disLine[1].trim();if(d.disagreement.toUpperCase()==='NONE')d.disagreement=null;}
       var narLine=t.match(/NARRATIVE:\s*([\s\S]*?)(?:\n(?:Sustainability|Lead Source|DISAGREEMENT|RISK|CLOSING|FWP|EDGE):|$)/);
       if(narLine)d.narrative=narLine[1].trim();
+      // Fallback: if NARRATIVE not found, try simpler pattern
+      if(!d.narrative){var narSimple=t.match(/NARRATIVE:\s*(.+)/);if(narSimple)d.narrative=narSimple[1].trim();}
     }
 
     if(d.conviction||d.prediction||d.fwp||(d.homeValue&&d.awayValue)){
