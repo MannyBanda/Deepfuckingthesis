@@ -2490,7 +2490,7 @@ function renderDrawer(gameId){
     });
 
     // Column toggle state
-    if(!cs._snapCols)cs._snapCols={time:true,score:true,margin:true,floor:true,mf:true,peak:true,eros:true,ind:true,tp:true,ls:true,sust:true,grad:true,ml:true,alert:true,dec:true};
+    if(!cs._snapCols)cs._snapCols={time:true,score:true,margin:true,floor:true,mf:true,peak:true,eros:false,ind:true,tp:false,ls:false,sust:false,grad:true,ml:true,alert:true,dec:true};
     var sc2=cs._snapCols;
     html+='<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;align-items:center">';
     var colDefs=[{k:'time',l:'Time'},{k:'score',l:'Score'},{k:'margin',l:'Margin'},{k:'floor',l:'Floor'},{k:'mf',l:'MF'},{k:'peak',l:'Peak'},{k:'eros',l:'Eros'},{k:'ind',l:'I1-I5'},{k:'tp',l:'TP'},{k:'ls',l:'LS'},{k:'sust',l:'Sust'},{k:'grad',l:'Grad'},{k:'ml',l:'ML'},{k:'alert',l:'Alert'},{k:'dec',l:'Dec'}];
@@ -2498,8 +2498,8 @@ function renderDrawer(gameId){
       html+='<button onclick="toggleSnapCol(\''+gameId+'\',\''+c.k+'\')" style="font-family:var(--mono);font-size:8px;padding:2px 5px;border-radius:4px;border:1px solid '+(sc2[c.k]?'var(--green-border)':'var(--hairline)')+';background:'+(sc2[c.k]?'var(--green-dim)':'transparent')+';color:'+(sc2[c.k]?'var(--green)':'var(--fg-dim)')+';cursor:pointer">'+c.l+'</button>';
     });
     // Hide All / Show All toggle
-    var allOff=colDefs.every(function(c){return c.k==='time'||c.k==='score'||!sc2[c.k];});
-    html+='<button onclick="snapColsMinimal(\''+gameId+'\')" style="font-family:var(--mono);font-size:8px;padding:2px 5px;border-radius:4px;border:1px solid '+(allOff?'var(--amber-border)':'var(--hairline)')+';background:'+(allOff?'var(--amber-dim)':'transparent')+';color:'+(allOff?'var(--amber)':'var(--fg-dim)')+';cursor:pointer">'+(allOff?'Show All':'Hide All')+'</button>';
+    var allOn=colDefs.every(function(c){return sc2[c.k];});
+    html+='<button onclick="snapColsMinimal(\''+gameId+'\')" style="font-family:var(--mono);font-size:8px;padding:2px 5px;border-radius:4px;border:1px solid '+(allOn?'var(--hairline)':'var(--amber-border)')+';background:'+(allOn?'transparent':'var(--amber-dim)')+';color:'+(allOn?'var(--fg-dim)':'var(--amber)')+';cursor:pointer">'+(allOn?'Hide All':'Show All')+'</button>';
     html+='</div>';
 
     function fmtF(v){if(v==null)return'--';var s=Number(v).toFixed(2);return s.replace(/^0\./,'.');}
@@ -2633,16 +2633,15 @@ function toggleSnapCol(gameId,col){
 }
 function snapColsMinimal(gameId){
   var cs=cardState[gameId];if(!cs)return;
-  // Check if already minimal (only time+score on)
   var sc=cs._snapCols||{};
-  var isMinimal=Object.keys(sc).every(function(k){return k==='time'||k==='score'||!sc[k];});
-  if(isMinimal){
-    // Show All — restore defaults
-    cs._snapCols={time:true,score:true,margin:true,floor:true,mf:true,peak:true,eros:true,ind:true,tp:true,ls:true,sust:true,grad:true,ml:true,alert:true,dec:true};
-  } else {
+  var allOn=Object.keys(sc).every(function(k){return sc[k];});
+  if(allOn){
     // Hide All — only time+score
     var cols={};Object.keys(sc).forEach(function(k){cols[k]=(k==='time'||k==='score');});
     cs._snapCols=cols;
+  } else {
+    // Show All — everything visible
+    cs._snapCols={time:true,score:true,margin:true,floor:true,mf:true,peak:true,eros:true,ind:true,tp:true,ls:true,sust:true,grad:true,ml:true,alert:true,dec:true};
   }
   renderDrawer(gameId);
 }
