@@ -315,6 +315,25 @@ input,textarea,select{font-size:16px!important;}
 .err-msg{display:none;padding:12px 16px;margin:0 16px 12px;background:var(--coral-dim);border:1px solid var(--coral-border);border-radius:var(--r-inner);font-family:var(--mono);font-size:11px;color:var(--coral);}
 .empty{display:none;padding:60px 20px;text-align:center;font-family:var(--sans);font-size:13px;color:var(--fg-dim);letter-spacing:0.04em;}
 
+/* ═══ CONFIDENCE TABLE ═══ */
+#conf-table{padding:8px 12px 12px;margin:0 16px 10px;background:var(--bg-surface);border:1px solid var(--hairline);border-radius:var(--r-card);}
+.ct-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+.ct-title{font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:var(--fg-tertiary);}
+.ct-meta{font-family:var(--mono);font-size:9px;color:var(--fg-dim);}
+.ct-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+.ct-grid{border-collapse:collapse;font-family:var(--mono);font-size:10px;white-space:nowrap;width:100%;min-width:580px;}
+.ct-grid th{font-family:var(--sans);font-size:8px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--fg-dim);text-align:center;padding:2px 6px 6px;}
+.ct-grid th:first-child{text-align:left;position:sticky;left:0;z-index:2;background:var(--bg-surface);}
+.ct-grid td{text-align:center;padding:5px 6px;border-top:1px solid var(--hairline);}
+.ct-grid td:first-child{text-align:left;position:sticky;left:0;z-index:1;background:var(--bg-surface);border-right:1px solid var(--hairline);}
+.ct-grid tr{cursor:pointer;transition:background .1s ease;}
+.ct-grid tr:active{background:rgba(52,211,153,0.06);}
+.ct-grid .ct-final td{opacity:0.45;}
+.ct-badge{font-family:var(--mono);font-size:7px;font-weight:600;letter-spacing:0.06em;padding:1px 4px;border-radius:3px;}
+.ct-badge.live{background:rgba(52,211,153,0.15);color:var(--green);}
+.ct-badge.pre{background:var(--bg-surface-3);color:var(--fg-dim);}
+.ct-badge.fin{background:var(--bg-surface-3);color:var(--fg-dim);}
+
 /* ═══ TOAST ═══ */
 .toast{position:fixed;left:12px;right:12px;bottom:16px;max-width:480px;margin:0 auto;background:var(--bg-surface-2);border:1px solid var(--green-border);border-radius:16px;display:none;flex-direction:column;box-shadow:0 0 0 1px rgba(52,211,153,0.08),0 8px 32px -8px rgba(0,0,0,0.6),0 0 24px -8px rgba(52,211,153,0.35);z-index:60;animation:toastIn 0.5s var(--ease);}
 .toast.show{display:flex;}
@@ -356,7 +375,7 @@ body.is-locked{overflow:hidden;}
   <div class="chrome-actions">
     <button class="icon-btn" title="WP Profiles">WP</button>
     <button class="icon-btn" id="toast-btn" title="Alerts" onclick="showToast()">&#9889;<span class="chrome-badge" id="toast-badge"></span></button>
-    <button class="icon-btn" title="Menu">&#9776;</button>
+    <button class="icon-btn" title="Menu" onclick="toggleConfTable()">&#9776;</button>
   </div>
 </div>
 
@@ -367,6 +386,7 @@ body.is-locked{overflow:hidden;}
 </div>
 
 <div id="pills" class="pill-strip"></div>
+<div id="conf-table" style="display:none"></div>
 
 <div class="container">
   <div id="schedule-meta" class="schedule-meta"></div>
@@ -2255,6 +2275,93 @@ function snapColsMinimal(gameId){
     cs._snapCols=cols;
   }
   renderDrawer(gameId);
+}
+
+// ── CONFIDENCE TABLE ──
+var _confVisible=false;
+function toggleConfTable(){
+  _confVisible=!_confVisible;
+  var el=document.getElementById('conf-table');
+  if(_confVisible){renderConfTable();el.style.display='block';}
+  else{el.style.display='none';}
+}
+function renderConfTable(){
+  var el=document.getElementById('conf-table');if(!el)return;
+  var rows=[];
+  games.forEach(function(g){
+    var cs=cardState[g.id]||{};
+    var hA=g.home?.alias||'HOME',aA=g.away?.alias||'AWAY';
+    var state=getState(g);
+    // Floor
+    var floor=getFloor(cs);
+    var floorTeam=floor?floor.controlTeam:'?';
+    var floorScore=floor?floor.score:0;
+    var verdict=getVerdict(floorScore);
+    // Prediction
+    var pred=cs.prediction||{};
+    var fwpTeam=null,fwpVal=null,edgeNum=null;
+    if(pred.fwpTeam1){
+      var v1=pred.fwpVal1||0,v2=pred.fwpVal2||0;
+      if(v1>=v2){fwpTeam=pred.fwpTeam1;fwpVal=v1;}else{fwpTeam=pred.fwpTeam2||pred.fwpTeam1;fwpVal=v2;}
+    }
+    if(pred.homeValue&&pred.awayValue){
+      if(pred.homeValue.fwp>=pred.awayValue.fwp){fwpTeam=pred.homeValue.team||hA;fwpVal=pred.homeValue.fwp;edgeNum=pred.homeValue.edge;}
+      else{fwpTeam=pred.awayValue.team||aA;fwpVal=pred.awayValue.fwp;edgeNum=pred.awayValue.edge;}
+    }
+    var conv=pred.convictionTier||pred.conviction||null;
+    // Sust
+    var sustTier='--';
+    var sa=cs.sustainabilityAudit||cs.clientSustainability;
+    if(sa){
+      var ctrlSide=floorTeam===hA?'home':'away';
+      var st=sa[ctrlSide]&&sa[ctrlSide].tier?sa[ctrlSide].tier:sa[ctrlSide]&&sa[ctrlSide].overall?sa[ctrlSide].overall:null;
+      if(st)sustTier=st;
+    }
+    // TP/LS from latest snapshot
+    var tpCls='--',lsCls='--';
+    var snaps=cs._allSnapshots;
+    if(snaps&&snaps.length>0){var ls=snaps[snaps.length-1];tpCls=ls.tp_class||'--';lsCls=ls.ls_class||'--';}
+    // ML
+    var ml='--';
+    if(cs.oddsData){
+      var isFloorHome=floorTeam===hA;
+      var mlVal=isFloorHome?cs.oddsData.homeML:cs.oddsData.awayML;
+      if(mlVal!=null)ml=Number(mlVal)>0?'+'+mlVal:String(mlVal);
+    }
+    rows.push({gameId:g.id,hA:hA,aA:aA,state:state,hPts:g.homePoints,aPts:g.awayPoints,period:g.period,clock:g.clock,floorTeam:floorTeam,floorScore:floorScore,verdict:verdict,fwpTeam:fwpTeam,fwpVal:fwpVal,edgeNum:edgeNum,conv:conv,sustTier:sustTier,tpCls:tpCls,lsCls:lsCls,ml:ml});
+  });
+  // Sort: LIVE first, then PRE, then FINAL; within each by floor desc
+  var so={LIVE:0,PRE:1,FINAL:2};
+  rows.sort(function(a,b){var sa2=so[a.state]??1,sb2=so[b.state]??1;if(sa2!==sb2)return sa2-sb2;return b.floorScore-a.floorScore;});
+  var liveN=rows.filter(function(r){return r.state==='LIVE';}).length;
+  var html='<div class="ct-head"><span class="ct-title">Confidence Table</span><span class="ct-meta">'+rows.length+' games'+(liveN?' \u00b7 '+liveN+' live':'')+'</span></div>';
+  html+='<div class="ct-scroll"><table class="ct-grid"><thead><tr>';
+  html+='<th>Game</th><th>Floor</th><th>FWP</th><th>Edge</th><th>Conv</th><th>TP</th><th>LS</th><th>Sust</th><th>ML</th>';
+  html+='</tr></thead><tbody>';
+  rows.forEach(function(r){
+    var badge=r.state==='LIVE'?'<span class="ct-badge live">Q'+(r.period||'?')+'</span> ':r.state==='FINAL'?'<span class="ct-badge fin">F</span> ':'';
+    var scoreStr=r.hPts!=null?r.aPts+'\u2013'+r.hPts:'';
+    var vColor=r.verdict?r.verdict.label==='DOMINANT'?'var(--green)':r.verdict.label==='STRONG'?'var(--green)':r.verdict.label==='EARNED'?'var(--amber)':'var(--fg-dim)':'var(--fg-dim)';
+    var fwpStr=r.fwpVal!=null?'<span style="color:'+tc(r.fwpTeam)+'">'+esc(r.fwpTeam)+'</span> '+r.fwpVal+'%':'--';
+    var edgeStr='--';if(r.edgeNum!=null){var ec=r.edgeNum>=5?'var(--green)':r.edgeNum>=1?'var(--amber)':'var(--fg-dim)';edgeStr='<span style="color:'+ec+'">'+(r.edgeNum>=0?'+':'')+r.edgeNum.toFixed(1)+'%</span>';}
+    var convColor=r.conv==='DOMINANT'?'var(--green)':r.conv==='STRONG'?'var(--green)':r.conv==='MODEST'||r.conv==='EARNED'?'var(--amber)':'var(--fg-dim)';
+    var tpShort=r.tpCls!=='--'?r.tpCls.substring(0,4):r.tpCls;var tpColor=r.tpCls.includes('STRONG')?'var(--green)':r.tpCls.includes('PROB')?'var(--green)':r.tpCls.includes('CONTEST')?'var(--amber)':'var(--fg-dim)';
+    var lsShort=r.lsCls!=='--'?r.lsCls.substring(0,4):r.lsCls;var lsColor=r.lsCls.includes('SAFE')?'var(--green)':r.lsCls.includes('CUSH')?'var(--green)':r.lsCls.includes('RISK')?'var(--amber)':r.lsCls.includes('CRIT')?'var(--coral)':'var(--fg-dim)';
+    var sustShort=r.sustTier!=='--'?r.sustTier.substring(0,4):r.sustTier;var sustColor=r.sustTier.includes('LOCK')?'var(--green)':r.sustTier.includes('DUR')?'var(--green)':r.sustTier.includes('MIX')?'var(--fg-secondary)':r.sustTier.includes('FRAG')||r.sustTier.includes('UNS')?'var(--coral)':'var(--fg-dim)';
+    html+='<tr class="'+(r.state==='FINAL'?'ct-final':'')+'" onclick="toggleConfTable();scrollToGame(\''+r.gameId+'\')">';
+    html+='<td>'+badge+'<span style="color:'+tc(r.aA)+'">'+esc(r.aA)+'</span><span style="color:var(--fg-dim)">@</span><span style="color:'+tc(r.hA)+'">'+esc(r.hA)+'</span>'+(scoreStr?' <span style="color:var(--fg-tertiary);font-size:9px">'+scoreStr+'</span>':'')+'</td>';
+    html+='<td><span style="color:'+tc(r.floorTeam)+'">'+esc(r.floorTeam)+'</span> <span style="color:'+vColor+'">'+r.floorScore.toFixed(2)+'</span></td>';
+    html+='<td>'+fwpStr+'</td>';
+    html+='<td>'+edgeStr+'</td>';
+    html+='<td style="color:'+convColor+'">'+esc(r.conv||'--')+'</td>';
+    html+='<td style="color:'+tpColor+'">'+esc(tpShort)+'</td>';
+    html+='<td style="color:'+lsColor+'">'+esc(lsShort)+'</td>';
+    html+='<td style="color:'+sustColor+'">'+esc(sustShort)+'</td>';
+    html+='<td>'+esc(r.ml)+'</td>';
+    html+='</tr>';
+  });
+  html+='</tbody></table></div>';
+  el.innerHTML=html;
 }
 
 // ── SCORING COMPOSITION (from PBP audit zone data) ──
