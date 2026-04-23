@@ -646,6 +646,7 @@ async function refreshLiveCards(){
           if(ind){
             cs.clientInd=ind;
           }
+          cs._lastBoxScore=b;
           // Queue direct BDL plays fetch for this LIVE game
           _livePBPQueue.push({gameId:g.id,bdlId:bdlId});
         }
@@ -1197,6 +1198,7 @@ async function hydrateFromServerSnapshots(gameId){
       var qdData=await qdResp.json();
       var qd=qdData.quarter_data;
       if(qd&&qd.diffs){cs._serverQuarterDiffs=qd.diffs;}
+      if(qd&&qd.boundaries){cs._serverQDBoundaries=qd.boundaries;}
       if(qd&&qd.window&&qd.window.available){
         cs.rollingWindow=qd.window;cs.rollingWindow.source='server-qd';
       }
@@ -2010,7 +2012,38 @@ function renderDrawer(gameId){
       });
       html+='</tr>';
     });
-    if(keys.length>=2){
+    // ── LIVE QUARTER PARTIAL ──
+    var g2=games.find(function(x){return x.id===gameId;});
+    var isLive=g2&&getState(g2)==='LIVE';
+    if(isLive&&cs._lastBoxScore&&cs._serverQDBoundaries){
+      var lastBK=Math.max.apply(null,keys);
+      var lastBound=cs._serverQDBoundaries[String(lastBK)];
+      if(lastBound&&lastBound.home&&lastBound.away){
+        var hPl=cs._lastBoxScore.home_team?.players||[];
+        var aPl=cs._lastBoxScore.visitor_team?.players||[];
+        function qdRollup(players){var s={steals:0,turnovers:0,total_turnovers:0,free_throws_att:0,three_points_made:0,assists:0,points_in_the_paint:0};players.forEach(function(p){s.steals+=p.stl||0;s.turnovers+=p.turnover||0;s.free_throws_att+=p.fta||0;s.three_points_made+=p.fg3m||0;s.assists+=p.ast||0;});s.total_turnovers=s.turnovers;return s;}
+        var hCum=qdRollup(hPl),aCum=qdRollup(aPl);
+        function qdDiff(cum,bound){var d={};['steals','turnovers','total_turnovers','free_throws_att','three_points_made','assists','points_in_the_paint'].forEach(function(k){d[k]=(cum[k]||0)-(bound[k]||0);});return d;}
+        var liveHome=qdDiff(hCum,lastBound.home);
+        var liveAway=qdDiff(aCum,lastBound.away);
+        var curQ=g2.period||lastBK+1;
+        html+='<tr style="border-top:2px solid var(--green-border);background:rgba(52,211,153,0.04)">';
+        html+='<td style="white-space:nowrap"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);margin-right:4px;animation:pulse 1.8s ease-in-out infinite"></span>Q'+curQ+'</td>';
+        statDefs.forEach(function(s){
+          var hVal=s.get(liveHome);var aVal=s.get(liveAway);
+          var rawDelta=ctrlIsHome?hVal-aVal:aVal-hVal;
+          var delta=s.invert?-rawDelta:rawDelta;
+          deltas[s.label].push(delta);
+          var cls=delta>0?'pos':delta<0?'neg':'even';
+          var txt=delta>0?'+'+delta:delta===0?'\u00b7':''+delta;
+          if(s.label==='PNT'&&hVal===0&&aVal===0){txt='--';cls='even';}
+          html+='<td class="qd-cell '+cls+'">'+txt+'</td>';
+        });
+        html+='</tr>';
+      }
+    }
+    var hasTrend=deltas[statDefs[0].label].length>=2;
+    if(hasTrend){
       html+='<tr><td class="qd-trend" style="color:var(--fg-dim)">TREND</td>';
       statDefs.forEach(function(s){
         var arr=deltas[s.label];if(arr.length<2){html+='<td class="qd-trend qd-cell even">\u25ac</td>';return;}
