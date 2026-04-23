@@ -941,6 +941,704 @@ async function phaseExplore(sql) {
   };
 }
 
+// ── CUMULATIVE INDICATOR ENGINE ──────────────────────────────────────────────
+// Computes WNBA indicators cumulatively through quarter `throughQ` (1-4).
+// Uses SR per-period stats summed up to that quarter boundary.
+function computeCumulativeAtQuarter(summary, throughQ) {
+  const H = summary.home, A = summary.away;
+  if (!H || !A) return null;
+  const hPeriods = H.statistics?.periods || [];
+  const aPeriods = A.statistics?.periods || [];
+  if (hPeriods.length < throughQ || aPeriods.length < throughQ) return null;
+
+  const hA = H.alias || H.name || 'HOME', aA = A.alias || A.name || 'AWAY';
+
+  // Sum stats across periods 1..throughQ
+  const sum = (periods, field) => {
+    let s = 0;
+    for (let i = 0; i < throughQ; i++) s += Number(periods[i]?.[field] || 0);
+    return s;
+  };
+  const maxField = (periods, field) => {
+    let m = 0;
+    for (let i = 0; i < throughQ; i++) m = Math.max(m, Number(periods[i]?.[field] || 0));
+    return m;
+  };
+
+  // Cumulative stats
+  const hs = {
+    steals: sum(hPeriods, 'steals'), blocks: sum(hPeriods, 'blocks'),
+    points_off_turnovers: sum(hPeriods, 'points_off_turnovers'),
+    three_points_made: sum(hPeriods, 'three_points_made'), three_points_att: sum(hPeriods, 'three_points_att'),
+    free_throws_att: sum(hPeriods, 'free_throws_att'),
+    field_goals_made: sum(hPeriods, 'field_goals_made'), field_goals_att: sum(hPeriods, 'field_goals_att'),
+    assists: sum(hPeriods, 'assists'),
+    biggest_lead: maxField(hPeriods, 'biggest_lead'),
+    fast_break_pts: sum(hPeriods, 'fast_break_pts'),
+    offensive_rebounds: sum(hPeriods, 'offensive_rebounds'), defensive_rebounds: sum(hPeriods, 'defensive_rebounds'),
+  };
+  const as = {
+    steals: sum(aPeriods, 'steals'), blocks: sum(aPeriods, 'blocks'),
+    points_off_turnovers: sum(aPeriods, 'points_off_turnovers'),
+    three_points_made: sum(aPeriods, 'three_points_made'), three_points_att: sum(aPeriods, 'three_points_att'),
+    free_throws_att: sum(aPeriods, 'free_throws_att'),
+    field_goals_made: sum(aPeriods, 'field_goals_made'), field_goals_att: sum(aPeriods, 'field_goals_att'),
+    assists: sum(aPeriods, 'assists'),
+    biggest_lead: maxField(aPeriods, 'biggest_lead'),
+    fast_break_pts: sum(aPeriods, 'fast_break_pts'),
+    offensive_rebounds: sum(aPeriods, 'offensive_rebounds'), defensive_rebounds: sum(aPeriods, 'defensive_rebounds'),
+  };
+
+  // Cumulative scoring for current-Q scoring diff (I4-B)
+  const hScoring = H.scoring || [];
+  const aScoring = A.scoring || [];
+  const lastQPts_h = hScoring[throughQ - 1]?.points || 0;
+  const lastQPts_a = aScoring[throughQ - 1]?.points || 0;
+
+  // Cumulative score
+  let hPts = 0, aPts = 0;
+  for (let i = 0; i < throughQ; i++) {
+    hPts += hScoring[i]?.points || 0;
+    aPts += aScoring[i]?.points || 0;
+  }
+
+  // I1 — Disruption
+  const disruptDiff = (hs.steals + hs.blocks) - (as.steals + as.blocks);
+  const i1subA = disruptDiff > 2 ? 1 : disruptDiff < -2 ? -1 : 0;
+  const potDiff = hs.points_off_turnovers - as.points_off_turnovers;
+  const i1subB = potDiff > 3 ? 1 : potDiff < -3 ? -1 : 0;
+  const i1raw = i1subA + i1subB;
+  const I1 = { score: i1raw > 0 ? 1 : i1raw === 0 ? 0.5 : 0, leader: i1raw > 0 ? hA : i1raw < 0 ? aA : 'EVEN' };
+
+  // I2 — Perimeter & FT
+  const h3Pct = hs.three_points_att > 0 ? (hs.three_points_made / hs.three_points_att) * 100 : 0;
+  const a3Pct = as.three_points_att > 0 ? (as.three_points_made / as.three_points_att) * 100 : 0;
+  const threePctDiff = h3Pct - a3Pct;
+  const i2subA = threePctDiff > 3 ? 1 : threePctDiff < -3 ? -1 : 0;
+  const ftaDiff = hs.free_throws_att - as.free_throws_att;
+  const i2subB = ftaDiff > 2 ? 1 : ftaDiff < -2 ? -1 : 0;
+  const i2raw = i2subA + i2subB;
+  const I2 = { score: i2raw > 0 ? 1 : i2raw === 0 ? 0.5 : 0, leader: i2raw > 0 ? hA : i2raw < 0 ? aA : 'EVEN' };
+
+  // I3 — Shot Quality (anchor)
+  const hFGA = hs.field_goals_att || 1, aFGA = as.field_goals_att || 1;
+  const hEFG = (hs.field_goals_made + 0.5 * hs.three_points_made) / hFGA;
+  const aEFG = (as.field_goals_made + 0.5 * as.three_points_made) / aFGA;
+  const efgDiff = hEFG - aEFG;
+  const i3subA = efgDiff > 0.03 ? 1 : efgDiff < -0.03 ? -1 : 0;
+  const astDiff = hs.assists - as.assists;
+  const i3subB = astDiff > 2 ? 1 : astDiff < -2 ? -1 : 0;
+  const i3raw = i3subA + i3subB;
+  const I3 = { score: i3raw > 0 ? 1 : i3raw === 0 ? 0.5 : 0, leader: i3raw > 0 ? hA : i3raw < 0 ? aA : 'EVEN' };
+
+  // I4 — Game Control
+  const bigLeadDiff = hs.biggest_lead - as.biggest_lead;
+  const i4subA = bigLeadDiff > 4 ? 1 : bigLeadDiff < -4 ? -1 : 0;
+  const lastQDiff = lastQPts_h - lastQPts_a;
+  const i4subB = lastQDiff > 2 ? 1 : lastQDiff < -2 ? -1 : 0;
+  const i4raw = i4subA + i4subB;
+  const I4 = { score: i4raw > 0 ? 1 : i4raw === 0 ? 0.5 : 0, leader: i4raw > 0 ? hA : i4raw < 0 ? aA : 'EVEN' };
+
+  // I5 — Momentum
+  const fbDiff = hs.fast_break_pts - as.fast_break_pts;
+  const i5subA = fbDiff > 3 ? 1 : fbDiff < -3 ? -1 : 0;
+  const hReb = hs.offensive_rebounds + hs.defensive_rebounds;
+  const aReb = as.offensive_rebounds + as.defensive_rebounds;
+  const rebDiff = hReb - aReb;
+  const i5subB = rebDiff > 3 ? 1 : rebDiff < -3 ? -1 : 0;
+  const i5raw = i5subA + i5subB;
+  const I5 = { score: i5raw > 0 ? 1 : i5raw === 0 ? 0.5 : 0, leader: i5raw > 0 ? hA : i5raw < 0 ? aA : 'EVEN' };
+
+  // Composite
+  const raw = I1.score * W.I1 + I2.score * W.I2 + I3.score * W.I3 + I4.score * W.I4 + I5.score * W.I5;
+  const controlHome = raw >= 0.5;
+  const controlTeam = controlHome ? hA : aA;
+  const score = controlHome ? raw : 1 - raw;
+
+  return {
+    controlTeam, score: Math.round(score * 100) / 100,
+    I1, I2, I3, I4, I5,
+    homeAlias: hA, awayAlias: aA, homePts: hPts, awayPts: aPts,
+    quarter: throughQ, margin: hPts - aPts,
+  };
+}
+
+// Helper: compute conviction from indicators (reuse existing)
+function computeConvictionFromInd(ind) {
+  return computeConviction(ind);
+}
+
+// ── REPORT: QUARTER JOURNEY ─────────────────────────────────────────────────
+// Track control team, floor, and conviction at each quarter boundary.
+// Answers: How stable is WNBA structural control across quarters?
+async function reportQuarterJourney(sql) {
+  const games = await sql`SELECT * FROM wnba_backtest WHERE sr_summary IS NOT NULL`;
+  if (games.length === 0) return { error: 'No SR data' };
+
+  let totalGames = 0;
+  let flipGames = 0;           // Games where control team changed between any quarters
+  const flipPatterns = {};      // e.g., "Q1:MIN Q2:MIN Q3:SEA Q4:SEA" → count
+  const floorByQ = { Q1: [], Q2: [], Q3: [], Q4: [] };
+  const ctrlWonByQ = { Q1: { n: 0, wins: 0 }, Q2: { n: 0, wins: 0 }, Q3: { n: 0, wins: 0 }, Q4: { n: 0, wins: 0 } };
+  const holdPatterns = { wire_to_wire: 0, one_flip: 0, two_flips: 0, three_flips: 0 };
+  const wireToWireWins = { n: 0, wins: 0 };
+  const flippedWins = { n: 0, wins: 0 };
+  // Track: if Q2 ctrl team wins at full game
+  const q2CtrlWins = { n: 0, wins: 0 };
+  const q3CtrlWins = { n: 0, wins: 0 };
+
+  for (const g of games) {
+    const summary = g.sr_summary;
+    const quarters = [];
+    let valid = true;
+    for (let q = 1; q <= 4; q++) {
+      const ind = computeCumulativeAtQuarter(summary, q);
+      if (!ind) { valid = false; break; }
+      quarters.push(ind);
+    }
+    if (!valid || quarters.length < 4) continue;
+    totalGames++;
+
+    const winner = g.winner;
+    const ctrlTeams = quarters.map(q => q.controlTeam);
+    const floors = quarters.map(q => q.score);
+
+    // Track floors
+    for (let i = 0; i < 4; i++) {
+      const qLabel = `Q${i + 1}`;
+      floorByQ[qLabel].push(floors[i]);
+      const ctrlWon = bdlAlias(ctrlTeams[i]) === winner || ctrlTeams[i] === winner;
+      ctrlWonByQ[qLabel].n++;
+      if (ctrlWon) ctrlWonByQ[qLabel].wins++;
+    }
+
+    // Count flips
+    let flips = 0;
+    for (let i = 1; i < 4; i++) {
+      if (ctrlTeams[i] !== ctrlTeams[i - 1]) flips++;
+    }
+    if (flips === 0) holdPatterns.wire_to_wire++;
+    else if (flips === 1) holdPatterns.one_flip++;
+    else if (flips === 2) holdPatterns.two_flips++;
+    else holdPatterns.three_flips++;
+
+    if (flips > 0) flipGames++;
+
+    // Wire-to-wire accuracy
+    const finalCtrlWon = bdlAlias(ctrlTeams[3]) === winner || ctrlTeams[3] === winner;
+    if (flips === 0) {
+      wireToWireWins.n++;
+      if (finalCtrlWon) wireToWireWins.wins++;
+    } else {
+      flippedWins.n++;
+      if (finalCtrlWon) flippedWins.wins++;
+    }
+
+    // Q2/Q3 ctrl → final win
+    const q2CtrlWon = bdlAlias(ctrlTeams[1]) === winner || ctrlTeams[1] === winner;
+    q2CtrlWins.n++;
+    if (q2CtrlWon) q2CtrlWins.wins++;
+
+    const q3CtrlWon = bdlAlias(ctrlTeams[2]) === winner || ctrlTeams[2] === winner;
+    q3CtrlWins.n++;
+    if (q3CtrlWon) q3CtrlWins.wins++;
+
+    // Track pattern
+    const pattern = ctrlTeams.map((t, i) => `Q${i + 1}:${t}`).join(' ');
+    flipPatterns[pattern] = (flipPatterns[pattern] || 0) + 1;
+  }
+
+  const avg = arr => arr.length > 0 ? Math.round((arr.reduce((s, v) => s + v, 0) / arr.length) * 1000) / 1000 : 0;
+  const pct = (w, n) => n > 0 ? Math.round(w / n * 1000) / 10 : 0;
+
+  return {
+    totalGames,
+    flipRate: pct(flipGames, totalGames),
+    holdPatterns,
+    wireToWire: { ...wireToWireWins, pct: pct(wireToWireWins.wins, wireToWireWins.n) },
+    flipped: { ...flippedWins, pct: pct(flippedWins.wins, flippedWins.n) },
+    ctrlAccuracyByQuarter: {
+      Q1: { ...ctrlWonByQ.Q1, pct: pct(ctrlWonByQ.Q1.wins, ctrlWonByQ.Q1.n) },
+      Q2: { ...ctrlWonByQ.Q2, pct: pct(ctrlWonByQ.Q2.wins, ctrlWonByQ.Q2.n) },
+      Q3: { ...ctrlWonByQ.Q3, pct: pct(ctrlWonByQ.Q3.wins, ctrlWonByQ.Q3.n) },
+      Q4: { ...ctrlWonByQ.Q4, pct: pct(ctrlWonByQ.Q4.wins, ctrlWonByQ.Q4.n) },
+    },
+    q2CtrlWinsGame: { ...q2CtrlWins, pct: pct(q2CtrlWins.wins, q2CtrlWins.n) },
+    q3CtrlWinsGame: { ...q3CtrlWins, pct: pct(q3CtrlWins.wins, q3CtrlWins.n) },
+    avgFloorByQ: {
+      Q1: avg(floorByQ.Q1), Q2: avg(floorByQ.Q2), Q3: avg(floorByQ.Q3), Q4: avg(floorByQ.Q4),
+    },
+    topPatterns: Object.entries(flipPatterns).sort((a, b) => b[1] - a[1]).slice(0, 15).map(([p, c]) => ({ pattern: p, count: c })),
+  };
+}
+
+// ── REPORT: GRADUATION SIM ──────────────────────────────────────────────────
+// Simulate checkpoint graduation using quarter boundaries.
+// Tests multiple MF/minF gates to find optimal WNBA thresholds.
+async function reportGraduationSim(sql) {
+  const games = await sql`SELECT * FROM wnba_backtest WHERE sr_summary IS NOT NULL`;
+  if (games.length === 0) return { error: 'No SR data' };
+
+  // MF gates to test
+  const mfGates = [0.55, 0.58, 0.60, 0.62, 0.65, 0.68, 0.70];
+  const minFGates = [0.50, 0.55, 0.58, 0.60];
+
+  // For each game, compute indicators at Q1-Q4 boundaries
+  const gameData = [];
+  for (const g of games) {
+    const quarters = [];
+    let valid = true;
+    for (let q = 1; q <= 4; q++) {
+      const ind = computeCumulativeAtQuarter(g.sr_summary, q);
+      if (!ind) { valid = false; break; }
+      const conv = computeConvictionFromInd(ind);
+      quarters.push({ ...ind, conviction: conv.tier, indicatorsWon: conv.indicatorsWon, combo: conv.combo });
+    }
+    if (!valid || quarters.length < 4) continue;
+
+    const winner = g.winner;
+    const margin = Math.abs(g.margin);
+    gameData.push({ quarters, winner, margin, marginBucket: g.margin_bucket, gameId: g.game_id,
+      homeAlias: quarters[0].homeAlias, awayAlias: quarters[0].awayAlias });
+  }
+
+  // Simulate graduation for each MF/minF combo
+  const results = {};
+  for (const mfGate of mfGates) {
+    for (const minFGate of minFGates) {
+      if (minFGate > mfGate) continue; // minF can't exceed MF gate
+
+      const key = `MF${mfGate}_minF${minFGate}`;
+      let graduated = 0, gradWins = 0, neverGrad = 0, neverGradWins = 0;
+      const byCheckpoint = {};
+      const byRank = { S: { n: 0, wins: 0 }, A: { n: 0, wins: 0 }, B: { n: 0, wins: 0 } };
+      let flipped = 0, flippedWins = 0, standard = 0, standardWins = 0;
+
+      for (const gd of gameData) {
+        const { quarters, winner } = gd;
+        const floors = quarters.map(q => q.score);
+        const ctrlTeams = quarters.map(q => q.controlTeam);
+        const convictions = quarters.map(q => q.conviction);
+
+        // Check graduation at each quarter boundary (Q1=checkpoint 0, Q2=1, Q3=2, Q4=3)
+        // Graduation requires: MF >= gate, minF >= gate, conviction >= STRONG, leading (margin > 0)
+        let gradQ = -1;
+        let gradTeam = null;
+        let gradRank = null;
+        let isFlip = false;
+
+        // Track per-team checkpoint history
+        const teamCheckpoints = {};
+        for (let q = 0; q < 4; q++) {
+          const ctrl = ctrlTeams[q];
+          const floor = floors[q];
+          const conv = convictions[q];
+          const margin = quarters[q].margin;
+          const ctrlHome = ctrl === quarters[q].homeAlias;
+          const ctrlLeading = ctrlHome ? margin > 0 : margin < 0;
+          const ctrlMargin = ctrlHome ? margin : -margin;
+
+          if (!teamCheckpoints[ctrl]) teamCheckpoints[ctrl] = [];
+          teamCheckpoints[ctrl].push({ q, floor, conv, ctrlLeading, ctrlMargin });
+
+          // Check if this team graduates
+          if (gradQ < 0) {
+            const cps = teamCheckpoints[ctrl];
+            if (cps.length >= 2) {  // Need at least 2 checkpoints to graduate
+              const cpFloors = cps.map(c => c.floor);
+              const mf = cpFloors.reduce((s, v) => s + v, 0) / cpFloors.length;
+              const minF = Math.min(...cpFloors);
+
+              if (mf >= mfGate && minF >= minFGate && ctrlLeading) {
+                // Determine rank
+                const hasLead8 = ctrlMargin >= 8;
+                const hasDominant = cps.some(c => c.conv === 'DOMINANT');
+                const hasStrong = cps.some(c => c.conv === 'STRONG' || c.conv === 'DOMINANT');
+
+                if (hasDominant && hasLead8) gradRank = 'A';
+                else if (hasStrong) gradRank = 'B';
+                else continue; // Don't graduate without at least STRONG
+
+                gradQ = q;
+                gradTeam = ctrl;
+
+                // Check if another team had prior checkpoints (flip)
+                for (const [otherTeam, otherCps] of Object.entries(teamCheckpoints)) {
+                  if (otherTeam !== ctrl && otherCps.length >= 2) {
+                    const otherMF = otherCps.map(c => c.floor).reduce((s, v) => s + v, 0) / otherCps.length;
+                    if (otherMF >= minFGate) isFlip = true;
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // Also check wire-to-wire (S-rank): same ctrl team Q1-Q4, A-rank quality
+        if (gradQ >= 0 && ctrlTeams.every(t => t === ctrlTeams[0]) && gradRank === 'A') {
+          gradRank = 'S';
+        }
+
+        const ctrlWon = gradTeam ? (bdlAlias(gradTeam) === winner || gradTeam === winner) : false;
+
+        if (gradQ >= 0) {
+          graduated++;
+          if (ctrlWon) gradWins++;
+          const cpLabel = `Q${gradQ + 1}`;
+          if (!byCheckpoint[cpLabel]) byCheckpoint[cpLabel] = { n: 0, wins: 0 };
+          byCheckpoint[cpLabel].n++;
+          if (ctrlWon) byCheckpoint[cpLabel].wins++;
+
+          byRank[gradRank].n++;
+          if (ctrlWon) byRank[gradRank].wins++;
+
+          if (isFlip) { flipped++; if (ctrlWon) flippedWins++; }
+          else { standard++; if (ctrlWon) standardWins++; }
+        } else {
+          neverGrad++;
+          // For never-graduated, check if final ctrl team won
+          const finalCtrl = ctrlTeams[3];
+          const finalWon = bdlAlias(finalCtrl) === winner || finalCtrl === winner;
+          if (finalWon) neverGradWins++;
+        }
+      }
+
+      const pct = (w, n) => n > 0 ? Math.round(w / n * 1000) / 10 : 0;
+      results[key] = {
+        mfGate, minFGate,
+        graduated, gradPct: pct(gradWins, graduated),
+        coverage: pct(graduated, gameData.length),
+        neverGrad, neverGradPct: pct(neverGradWins, neverGrad),
+        byRank: {
+          S: { ...byRank.S, pct: pct(byRank.S.wins, byRank.S.n) },
+          A: { ...byRank.A, pct: pct(byRank.A.wins, byRank.A.n) },
+          B: { ...byRank.B, pct: pct(byRank.B.wins, byRank.B.n) },
+        },
+        byCheckpoint: Object.fromEntries(
+          Object.entries(byCheckpoint).map(([k, v]) => [k, { ...v, pct: pct(v.wins, v.n) }])
+        ),
+        flip: { standard, standardPct: pct(standardWins, standard), flipped, flippedPct: pct(flippedWins, flipped) },
+      };
+    }
+  }
+
+  // Sort by graduated accuracy descending
+  const ranked = Object.values(results)
+    .filter(r => r.graduated >= 20) // minimum sample
+    .sort((a, b) => {
+      // Optimize for accuracy * coverage
+      const scoreA = (a.gradPct / 100) * (a.coverage / 100);
+      const scoreB = (b.gradPct / 100) * (b.coverage / 100);
+      return scoreB - scoreA;
+    });
+
+  return {
+    totalGames: gameData.length,
+    note: 'Quarter boundaries as checkpoints (Q1-Q4). Graduation requires 2+ checkpoints, MF >= gate, minF >= gate, team leading, conviction >= STRONG.',
+    bestCombos: ranked.slice(0, 10).map(r => ({
+      gates: `MF=${r.mfGate} minF=${r.minFGate}`,
+      accuracy: r.gradPct + '%',
+      coverage: r.coverage + '%',
+      score: Math.round((r.gradPct / 100) * (r.coverage / 100) * 1000) / 10,
+      graduated: r.graduated,
+      byRank: r.byRank,
+    })),
+    allResults: results,
+  };
+}
+
+// ── REPORT: CLOSE GAME ──────────────────────────────────────────────────────
+// Test different close game filter definitions for WNBA.
+// WNBA has lower scoring (10-min Q), so NBA's "within 5 Q3, within 7 Q4" may need tightening.
+async function reportCloseGame(sql) {
+  const games = await sql`SELECT * FROM wnba_backtest WHERE sr_summary IS NOT NULL`;
+  if (games.length === 0) return { error: 'No SR data' };
+
+  const gameData = [];
+  for (const g of games) {
+    const quarters = [];
+    let valid = true;
+    for (let q = 1; q <= 4; q++) {
+      const ind = computeCumulativeAtQuarter(g.sr_summary, q);
+      if (!ind) { valid = false; break; }
+      quarters.push(ind);
+    }
+    if (!valid) continue;
+    gameData.push({
+      quarters, winner: g.winner, margin: Math.abs(g.margin),
+      q3Margin: quarters[2] ? Math.abs(quarters[2].margin) : null,
+      q4Margin: Math.abs(g.margin),
+      fullGameCtrl: quarters[3]?.controlTeam,
+      fullGameFloor: quarters[3]?.score,
+      fullGameConv: computeConvictionFromInd(quarters[3])?.tier,
+      ctrlWon: bdlAlias(quarters[3]?.controlTeam) === g.winner || quarters[3]?.controlTeam === g.winner,
+    });
+  }
+
+  // Test definitions
+  const filters = [
+    { name: 'NBA standard (Q3≤5, Q4≤7)', q3max: 5, q4max: 7 },
+    { name: 'NBA standard Q4 only (≤7)', q3max: 999, q4max: 7 },
+    { name: 'Tight (Q3≤4, Q4≤6)', q3max: 4, q4max: 6 },
+    { name: 'Tighter (Q3≤3, Q4≤5)', q3max: 3, q4max: 5 },
+    { name: 'Final margin ≤5', q3max: 999, q4max: 5 },
+    { name: 'Final margin ≤7', q3max: 999, q4max: 7 },
+    { name: 'Final margin ≤10', q3max: 999, q4max: 10 },
+  ];
+
+  const pct = (w, n) => n > 0 ? Math.round(w / n * 1000) / 10 : 0;
+
+  const results = filters.map(f => {
+    const close = gameData.filter(gd => {
+      if (f.q3max < 999 && gd.q3Margin != null && gd.q3Margin > f.q3max) return false;
+      if (gd.q4Margin > f.q4max) return false;
+      return true;
+    });
+    const wins = close.filter(gd => gd.ctrlWon).length;
+
+    // Per-conviction tier in close games
+    const byTier = {};
+    for (const gd of close) {
+      const t = gd.fullGameConv || 'UNKNOWN';
+      if (!byTier[t]) byTier[t] = { n: 0, wins: 0 };
+      byTier[t].n++;
+      if (gd.ctrlWon) byTier[t].wins++;
+    }
+    for (const v of Object.values(byTier)) v.pct = pct(v.wins, v.n);
+
+    return {
+      filter: f.name,
+      games: close.length,
+      pctOfTotal: pct(close.length, gameData.length),
+      accuracy: pct(wins, close.length),
+      byTier,
+    };
+  });
+
+  // Margin distribution
+  const marginDist = {};
+  for (const gd of gameData) {
+    const bucket = gd.margin <= 3 ? '1-3' : gd.margin <= 5 ? '4-5' : gd.margin <= 7 ? '6-7'
+      : gd.margin <= 10 ? '8-10' : gd.margin <= 14 ? '11-14' : '15+';
+    if (!marginDist[bucket]) marginDist[bucket] = { n: 0, wins: 0 };
+    marginDist[bucket].n++;
+    if (gd.ctrlWon) marginDist[bucket].wins++;
+  }
+  for (const v of Object.values(marginDist)) v.pct = pct(v.wins, v.n);
+
+  return {
+    totalGames: gameData.length,
+    note: 'WNBA has 10-min quarters (vs NBA 12). Lower scoring means tighter margins. Testing which close-game filter best isolates competitive games.',
+    results,
+    marginDistribution: marginDist,
+  };
+}
+
+// ── REPORT: TRAILING PROFILE ────────────────────────────────────────────────
+// BUY profile equivalent — when control team trails, how often do they win?
+// Uses per-quarter data to identify trailing scenarios.
+async function reportTrailingProfile(sql) {
+  const games = await sql`SELECT * FROM wnba_backtest WHERE sr_summary IS NOT NULL`;
+  if (games.length === 0) return { error: 'No SR data' };
+
+  const pct = (w, n) => n > 0 ? Math.round(w / n * 1000) / 10 : 0;
+
+  // For each game at each quarter boundary, check: is ctrl team trailing?
+  const trailingBuckets = {};
+  const byIndicatorCount = {};
+  const byConviction = {};
+  const byDeficit = {};
+  const goldenStack = { n: 0, wins: 0 }; // trail 1-4, 3+ indicators, opp 0
+
+  for (const g of games) {
+    for (let q = 2; q <= 4; q++) { // Start at Q2 (Q1 too early)
+      const ind = computeCumulativeAtQuarter(g.sr_summary, q);
+      if (!ind) continue;
+
+      const conv = computeConvictionFromInd(ind);
+      const ctrlHome = ind.controlTeam === ind.homeAlias;
+      const ctrlMargin = ctrlHome ? ind.margin : -ind.margin;
+
+      // Only interested in trailing ctrl team
+      if (ctrlMargin >= 0) continue;
+      const deficit = Math.abs(ctrlMargin);
+
+      const ctrlWon = bdlAlias(ind.controlTeam) === g.winner || ind.controlTeam === g.winner;
+
+      // Track by quarter
+      const qKey = `Q${q}`;
+      if (!trailingBuckets[qKey]) trailingBuckets[qKey] = { n: 0, wins: 0 };
+      trailingBuckets[qKey].n++;
+      if (ctrlWon) trailingBuckets[qKey].wins++;
+
+      // Track by indicator count
+      const iKey = `${conv.count}_indicators`;
+      if (!byIndicatorCount[iKey]) byIndicatorCount[iKey] = { n: 0, wins: 0 };
+      byIndicatorCount[iKey].n++;
+      if (ctrlWon) byIndicatorCount[iKey].wins++;
+
+      // Track by conviction tier
+      if (!byConviction[conv.tier]) byConviction[conv.tier] = { n: 0, wins: 0 };
+      byConviction[conv.tier].n++;
+      if (ctrlWon) byConviction[conv.tier].wins++;
+
+      // Track by deficit range
+      const dKey = deficit <= 4 ? '1-4' : deficit <= 7 ? '5-7' : deficit <= 10 ? '8-10' : deficit <= 15 ? '11-15' : '16+';
+      if (!byDeficit[dKey]) byDeficit[dKey] = { n: 0, wins: 0 };
+      byDeficit[dKey].n++;
+      if (ctrlWon) byDeficit[dKey].wins++;
+
+      // Golden stack: trail 1-4, 3+ indicators, opponent has 0 indicators won
+      const oppIndicators = conv.indicatorsLost?.length || 0; // ctrl lost = opp won
+      if (deficit >= 1 && deficit <= 4 && conv.count >= 3 && oppIndicators === 0) {
+        goldenStack.n++;
+        if (ctrlWon) goldenStack.wins++;
+      }
+    }
+  }
+
+  // Add pct to all buckets
+  for (const v of Object.values(trailingBuckets)) v.pct = pct(v.wins, v.n);
+  for (const v of Object.values(byIndicatorCount)) v.pct = pct(v.wins, v.n);
+  for (const v of Object.values(byConviction)) v.pct = pct(v.wins, v.n);
+  for (const v of Object.values(byDeficit)) v.pct = pct(v.wins, v.n);
+  goldenStack.pct = pct(goldenStack.wins, goldenStack.n);
+
+  // I3 inversion check — does ctrl team winning I3 while trailing hurt?
+  const i3Won = { n: 0, wins: 0 };
+  const i3Lost = { n: 0, wins: 0 };
+  for (const g of games) {
+    for (let q = 2; q <= 4; q++) {
+      const ind = computeCumulativeAtQuarter(g.sr_summary, q);
+      if (!ind) continue;
+      const ctrlHome = ind.controlTeam === ind.homeAlias;
+      const ctrlMargin = ctrlHome ? ind.margin : -ind.margin;
+      if (ctrlMargin >= 0) continue;
+
+      const ctrlWon = bdlAlias(ind.controlTeam) === g.winner || ind.controlTeam === g.winner;
+      const i3score = ctrlHome ? ind.I3.score : 1 - ind.I3.score;
+      if (i3score > 0.5) { i3Won.n++; if (ctrlWon) i3Won.wins++; }
+      else if (i3score < 0.5) { i3Lost.n++; if (ctrlWon) i3Lost.wins++; }
+    }
+  }
+  i3Won.pct = pct(i3Won.wins, i3Won.n);
+  i3Lost.pct = pct(i3Lost.wins, i3Lost.n);
+
+  return {
+    note: 'Ctrl team trailing at Q2/Q3/Q4 boundaries. Measures comeback rate by deficit, indicators, conviction.',
+    trailingByQuarter: trailingBuckets,
+    byIndicatorCount,
+    byConviction,
+    byDeficit,
+    goldenStack,
+    i3Inversion: {
+      ctrlWinsI3: i3Won,
+      ctrlLosesI3: i3Lost,
+      note: 'In NBA, ctrl team winning I3 while trailing is NEGATIVE (37.3%). Check if same pattern in WNBA.',
+    },
+  };
+}
+
+// ── REPORT: INDICATOR STABILITY ─────────────────────────────────────────────
+// How stable are individual indicators across quarters?
+// If I3 leads at Q2, does it hold through Q4?
+async function reportIndicatorStability(sql) {
+  const games = await sql`SELECT * FROM wnba_backtest WHERE sr_summary IS NOT NULL`;
+  if (games.length === 0) return { error: 'No SR data' };
+
+  const pct = (w, n) => n > 0 ? Math.round(w / n * 1000) / 10 : 0;
+  const indicators = ['I1', 'I2', 'I3', 'I4', 'I5'];
+
+  // For each indicator, track: if team leads at Q(n), probability they lead at Q4
+  const stability = {};
+  for (const iKey of indicators) {
+    stability[iKey] = {
+      q1_to_q4: { n: 0, held: 0 },
+      q2_to_q4: { n: 0, held: 0 },
+      q3_to_q4: { n: 0, held: 0 },
+      flipRate: { n: 0, flips: 0 }, // total quarter-to-quarter flips
+      evenRate: { q1: 0, q2: 0, q3: 0, q4: 0, total: 0 },
+    };
+  }
+
+  let totalGames = 0;
+  for (const g of games) {
+    const quarters = [];
+    let valid = true;
+    for (let q = 1; q <= 4; q++) {
+      const ind = computeCumulativeAtQuarter(g.sr_summary, q);
+      if (!ind) { valid = false; break; }
+      quarters.push(ind);
+    }
+    if (!valid) continue;
+    totalGames++;
+
+    for (const iKey of indicators) {
+      // Get indicator leader at each quarter
+      const leaders = quarters.map(q => q[iKey]?.leader || 'EVEN');
+
+      // Track EVEN rates
+      for (let q = 0; q < 4; q++) {
+        if (leaders[q] === 'EVEN') stability[iKey].evenRate[`q${q + 1}`]++;
+      }
+      stability[iKey].evenRate.total++;
+
+      // Stability: Q(n) leader holds through Q4
+      const q4Leader = leaders[3];
+      if (q4Leader !== 'EVEN') {
+        if (leaders[0] !== 'EVEN') {
+          stability[iKey].q1_to_q4.n++;
+          if (leaders[0] === q4Leader) stability[iKey].q1_to_q4.held++;
+        }
+        if (leaders[1] !== 'EVEN') {
+          stability[iKey].q2_to_q4.n++;
+          if (leaders[1] === q4Leader) stability[iKey].q2_to_q4.held++;
+        }
+        if (leaders[2] !== 'EVEN') {
+          stability[iKey].q3_to_q4.n++;
+          if (leaders[2] === q4Leader) stability[iKey].q3_to_q4.held++;
+        }
+      }
+
+      // Quarter-to-quarter flips
+      for (let q = 1; q < 4; q++) {
+        if (leaders[q] !== 'EVEN' && leaders[q - 1] !== 'EVEN') {
+          stability[iKey].flipRate.n++;
+          if (leaders[q] !== leaders[q - 1]) stability[iKey].flipRate.flips++;
+        }
+      }
+    }
+  }
+
+  // Compute percentages
+  const report = {};
+  for (const iKey of indicators) {
+    const s = stability[iKey];
+    report[iKey] = {
+      q1_holds_to_q4: { ...s.q1_to_q4, pct: pct(s.q1_to_q4.held, s.q1_to_q4.n) },
+      q2_holds_to_q4: { ...s.q2_to_q4, pct: pct(s.q2_to_q4.held, s.q2_to_q4.n) },
+      q3_holds_to_q4: { ...s.q3_to_q4, pct: pct(s.q3_to_q4.held, s.q3_to_q4.n) },
+      flipRate: { ...s.flipRate, pct: pct(s.flipRate.flips, s.flipRate.n) },
+      evenRate: {
+        Q1: pct(s.evenRate.q1, totalGames), Q2: pct(s.evenRate.q2, totalGames),
+        Q3: pct(s.evenRate.q3, totalGames), Q4: pct(s.evenRate.q4, totalGames),
+      },
+    };
+  }
+
+  return {
+    totalGames,
+    note: 'Stability = if indicator leader at Q(n) is same leader at Q4 (full game). Higher = more stable/reliable early signal.',
+    indicators: report,
+    summary: indicators.map(i => ({
+      indicator: i,
+      q2_stability: report[i].q2_holds_to_q4.pct + '%',
+      q3_stability: report[i].q3_holds_to_q4.pct + '%',
+      flipRate: report[i].flipRate.pct + '%',
+    })),
+  };
+}
+
 // ── HANDLER ──────────────────────────────────────────────────────────────────
 export default async (req) => {
   const sql = neon(process.env.DATABASE_URL);
@@ -959,8 +1657,13 @@ export default async (req) => {
       case 'compute': result = await phaseCompute(sql); break;
       case 'report':  result = await phaseReport(sql); break;
       case 'explore': result = await phaseExplore(sql); break;
+      case 'report_quarter_journey': result = await reportQuarterJourney(sql); break;
+      case 'report_graduation_sim': result = await reportGraduationSim(sql); break;
+      case 'report_close_game': result = await reportCloseGame(sql); break;
+      case 'report_trailing_profile': result = await reportTrailingProfile(sql); break;
+      case 'report_indicator_stability': result = await reportIndicatorStability(sql); break;
       default:
-        result = { error: `Unknown phase: ${phase}. Use init, collect, sample, compute, explore, or report.` };
+        result = { error: `Unknown phase: ${phase}. Use init, collect, sample, compute, explore, report, report_quarter_journey, report_graduation_sim, report_close_game, report_trailing_profile, report_indicator_stability.` };
     }
     return new Response(JSON.stringify(result, null, 2), {
       headers: { 'Content-Type': 'application/json' },
