@@ -1251,11 +1251,14 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
   function evRow(label,hVal,aVal,opts){
     opts=opts||{};var inv=opts.invert;
     var hCol='var(--fg-primary)',aCol='var(--fg-primary)';
-    if(hVal!==aVal){
-      if(inv){hCol=hVal<aVal?'var(--green)':'var(--coral)';aCol=aVal<hVal?'var(--green)':'var(--coral)';}
-      else{hCol=hVal>aVal?'var(--green)':'var(--coral)';aCol=aVal>hVal?'var(--green)':'var(--coral)';}
+    if(String(hVal)!==String(aVal)){
+      var hN=parseFloat(String(hVal).replace(/[%\/]/g,'')),aN=parseFloat(String(aVal).replace(/[%\/]/g,''));
+      if(!isNaN(hN)&&!isNaN(aN)&&hN!==aN){
+        if(inv){hCol=hN<aN?'var(--green)':'var(--coral)';aCol=aN<hN?'var(--green)':'var(--coral)';}
+        else{hCol=hN>aN?'var(--green)':'var(--coral)';aCol=aN>hN?'var(--green)':'var(--coral)';}
+      }
     }
-    return'<div class="ind-ev-row"><span class="ind-ev-label">'+label+'</span><div class="ind-ev-vals"><span class="ind-ev-val" style="color:'+tc(hA)+'">'+hA+'</span><span class="ind-ev-val" style="color:'+hCol+'">'+hVal+'</span><span style="color:var(--fg-dim)">-</span><span class="ind-ev-val" style="color:'+aCol+'">'+aVal+'</span><span class="ind-ev-val" style="color:'+tc(aA)+'">'+aA+'</span></div></div>';
+    return'<div class="ind-ev-row"><span class="ind-ev-label">'+label+'</span><div class="ind-ev-vals"><span class="ind-ev-val" style="color:'+hCol+'">'+hA+'</span><span class="ind-ev-val" style="color:'+hCol+'">'+hVal+'</span><span style="color:var(--fg-dim)">-</span><span class="ind-ev-val" style="color:'+aCol+'">'+aVal+'</span><span class="ind-ev-val" style="color:'+aCol+'">'+aA+'</span></div></div>';
   }
   if(box){
     var hPl=box.home_team?.players||[],aPl=box.visitor_team?.players||[];
@@ -1266,7 +1269,9 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
       html+=evRow('Turnovers',sum(hPl,'turnover'),sum(aPl,'turnover'),{invert:true});
       if(pbp){
         var hF=pbp.home&&pbp.home.tos?pbp.home.tos.forced||0:0,aF=pbp.away&&pbp.away.tos?pbp.away.tos.forced||0:0;
-        html+=evRow('Forced TO',aF,hF);// opponent's forced = my steals equivalent
+        html+=evRow('Forced TO',aF,hF);
+        var hUF=pbp.home&&pbp.home.tos?pbp.home.tos.unforced||0:0,aUF=pbp.away&&pbp.away.tos?pbp.away.tos.unforced||0:0;
+        html+=evRow('Unforced TO',hUF,aUF,{invert:true});
       }
     } else if(indKey==='I2'){
       if(pbp){
@@ -1291,10 +1296,26 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
       var aAR=aFGM>0?Math.round(sum(aPl,'ast')/aFGM*100):0;
       html+=evRow('Ast Ratio',hAR+'%',aAR+'%');
     } else if(indKey==='I4'){
-      html+=evRow('Score',box.home_team_score||0,box.visitor_team_score||0);
+      // Biggest lead from PBP if available
+      if(pbp&&pbp._bdl){
+        html+=evRow('Big Lead',pbp._bdl.biggestLeadHome||0,pbp._bdl.biggestLeadAway||0);
+      }
+      // Per-quarter margins
       var hLine=box.home_team?.line_score||[],aLine=box.visitor_team?.line_score||[];
       for(var qi=0;qi<Math.max(hLine.length,aLine.length);qi++){
-        html+=evRow('Q'+(qi+1),hLine[qi]||0,aLine[qi]||0);
+        var hQ=hLine[qi]||0,aQ=aLine[qi]||0;
+        var diff=hQ-aQ;
+        html+=evRow('Q'+(qi+1),hQ+' ('+(diff>=0?'+':'')+diff+')',aQ+' ('+((-diff)>=0?'+':'')+(-diff)+')');
+      }
+      // Lead changes + ties from scoring events
+      if(pbp&&pbp.scoringEvents){
+        var lc=0,tt=0,prevLead=0;
+        pbp.scoringEvents.forEach(function(e){
+          if(e.m===0)tt++;
+          if((prevLead>0&&e.m<0)||(prevLead<0&&e.m>0))lc++;
+          prevLead=e.m;
+        });
+        html+='<div class="ind-ev-row"><span class="ind-ev-label">Lead Chg / Ties</span><div class="ind-ev-vals" style="color:var(--fg-secondary)">'+lc+' lead changes \u00b7 '+tt+' ties</div></div>';
       }
     } else if(indKey==='I5'){
       if(pbp&&pbp.runs6){
@@ -1302,6 +1323,14 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
         html+=evRow('Runs (6+)',hR6,aR6);
         var share=hR6+aR6>0?Math.round(hR6/(hR6+aR6)*100):50;
         html+=evRow('Run Share',share+'%',(100-share)+'%');
+      }
+      if(pbp&&pbp.runs&&pbp.runs.length>0){
+        html+='<div class="ind-ev-row" style="border-bottom:none"><span class="ind-ev-label">Top Runs</span><div class="ind-ev-vals" style="flex-direction:column;gap:2px">';
+        pbp.runs.slice(0,4).forEach(function(r){
+          var rc=r.team===hA?'var(--green)':'var(--coral)';
+          html+='<span style="color:'+rc+'">'+esc(r.team)+' '+r.pts+'-'+(r.oppPts||0)+' Q'+r.q+'</span>';
+        });
+        html+='</div></div>';
       }
       var hFGM2=sum(hPl,'fgm'),hFGA2=sum(hPl,'fga'),aFGM2=sum(aPl,'fgm'),aFGA2=sum(aPl,'fga');
       html+=evRow('FG%',hFGA2>0?(hFGM2/hFGA2*100).toFixed(1)+'%':'--',aFGA2>0?(aFGM2/aFGA2*100).toFixed(1)+'%':'--');
