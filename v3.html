@@ -1306,12 +1306,15 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
         var diff=hQ-aQ;
         html+=evRow('Q'+(qi+1),hQ+' ('+(diff>=0?'+':'')+diff+')',aQ+' ('+((-diff)>=0?'+':'')+(-diff)+')');
       }
-      // SubA verdict: score gap vs ±8 threshold
-      var curDiff=(box.home_team_score||0)-(box.visitor_team_score||0);
-      var absCur=Math.abs(curDiff);
-      var subAWin=absCur>8?(curDiff>0?hA:aA):'EVEN';
-      html+='<div class="ind-ev-row"><span class="ind-ev-label">SubA: Gap (±8)</span><div class="ind-ev-vals" style="color:var(--fg-secondary)">'+(absCur>8?'<span style="color:var(--green)">'+esc(subAWin)+'</span> (\u00b1'+absCur+')':'EVEN (\u00b1'+absCur+')')+'</div></div>';
-      // SubB verdict: Q4 quarter delta vs ±2 threshold
+      // SubA verdict: biggest lead comparison (75% threshold, >=2 gap)
+      var evBLH=pbp&&pbp._bdl?pbp._bdl.biggestLeadHome||0:0;
+      var evBLA=pbp&&pbp._bdl?pbp._bdl.biggestLeadAway||0:0;
+      var subAWin='EVEN';
+      if(evBLH>=evBLA+2&&evBLA<0.75*evBLH)subAWin=hA;
+      else if(evBLA>=evBLH+2&&evBLH<0.75*evBLA)subAWin=aA;
+      var pctNote=evBLH>evBLA?(evBLH>0?Math.round(evBLA/evBLH*100):0):(evBLA>0?Math.round(evBLH/evBLA*100):0);
+      html+='<div class="ind-ev-row"><span class="ind-ev-label">SubA: Big Lead</span><div class="ind-ev-vals" style="color:var(--fg-secondary)">'+(subAWin!=='EVEN'?'<span style="color:var(--green)">'+esc(subAWin)+'</span> ('+pctNote+'% of leader)':'EVEN ('+pctNote+'%)')+'</div></div>';
+      // SubB verdict: Q4 quarter delta vs ±2 threshold / season prior pre-Q4
       var per=box.period||hLine.length||0;
       if(per>=4&&hLine.length>=per&&aLine.length>=per){
         var lastH=hLine[hLine.length-1]||0,lastA=aLine[aLine.length-1]||0;
@@ -1319,7 +1322,7 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
         var subBWin=qDelta>2?hA:qDelta<-2?aA:'EVEN';
         html+='<div class="ind-ev-row"><span class="ind-ev-label">SubB: Q'+per+' (\u00b12)</span><div class="ind-ev-vals" style="color:var(--fg-secondary)">'+(subBWin!=='EVEN'?'<span style="color:var(--green)">'+esc(subBWin)+'</span> ('+(qDelta>=0?'+':'')+qDelta+')':'EVEN ('+(qDelta>=0?'+':'')+qDelta+')')+'</div></div>';
       } else {
-        html+='<div class="ind-ev-row"><span class="ind-ev-label">SubB: Qtr \u0394</span><div class="ind-ev-vals" style="color:var(--fg-dim)">Q4 only</div></div>';
+        html+='<div class="ind-ev-row"><span class="ind-ev-label">SubB: Qtr \u0394</span><div class="ind-ev-vals" style="color:var(--fg-dim)">season Q4 prior (server)</div></div>';
       }
       // Lead changes + ties from scoring events
       if(pbp&&pbp.scoringEvents){
@@ -1774,10 +1777,15 @@ function computeClientIndicators(boxScore, gameId){
   var I3={score:i3raw>0?1:i3raw===0?0.5:0,leader:i3raw>0?hA:i3raw<0?aA:'EVEN'};
 
   // ── I4: Game Control ──
-  // No biggest_lead from BDL — use score differential as proxy
-  var scoreDiff=hS-aS;
-  var absDiff=Math.abs(scoreDiff);
-  var i4subA=absDiff>8?(scoreDiff>0?1:-1):0;
+  // SubA: biggest lead comparison (75% threshold, ≥2 gap)
+  var hBigLead=pbp&&pbp._bdl?pbp._bdl.biggestLeadHome||0:0;
+  var aBigLead=pbp&&pbp._bdl?pbp._bdl.biggestLeadAway||0:0;
+  var i4subA=0;
+  if(hBigLead>=aBigLead+2){
+    i4subA=(aBigLead>=0.75*hBigLead)?0:1;
+  } else if(aBigLead>=hBigLead+2){
+    i4subA=(hBigLead>=0.75*aBigLead)?0:-1;
+  }
   // Quarter delta from box score period
   var i4subB=0;
   var period=boxScore.period||0;
