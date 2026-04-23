@@ -760,6 +760,7 @@ async function fetchLivePBP(gameId,bdlId){
     if(pbp&&pbp.totalShots>0){
       cs.pbpAudit=pbp;
       cs.pbpTime=new Date();
+      cs.pbpWindow=computePBPWindow(pbp,hA,aA);
       buildScoringCompForCard(gameId);
       renderCard(gameId);
     }
@@ -1688,6 +1689,69 @@ var BDL_RIM_TYPES=['layup shot','driving layup shot','running layup shot','cutti
 var BDL_PAINT_TYPES=['driving floating jump shot','floating jump shot','driving hook shot','hook shot','running hook shot','driving finger roll layup','turnaround hook shot'];
 var BDL_RIM_SET=null,BDL_PAINT_SET=null;
 function ensureTypeSets(){if(!BDL_RIM_SET){BDL_RIM_SET=new Set(BDL_RIM_TYPES);BDL_PAINT_SET=new Set(BDL_PAINT_TYPES);}}
+// ── PBP WINDOW — lightweight I1-I5 from last ~30 possessions ──
+function computePBPWindow(pbp,hA,aA){
+  if(!pbp||!pbp.raw||!pbp.raw.shots)return{available:false,reason:'No raw shots'};
+  var shots=pbp.raw.shots,tos=pbp.raw.turnovers||[];
+  // Build chronological event stream (shots + TOs), take last ~30 possessions worth
+  // Estimate: ~1.2 events per possession → 36 events ≈ 30 possessions
+  var winSize=36;
+  var allEvents=[];
+  shots.forEach(function(s,i){allEvents.push({type:'shot',i:i,data:s});});
+  tos.forEach(function(t,i){allEvents.push({type:'to',i:shots.length+i,data:t});});
+  if(allEvents.length<12)return{available:false,reason:'TOO EARLY ('+allEvents.length+' events)'};
+  // Use natural order (shots/TOs are already chronological from parser)
+  var win=allEvents.slice(-winSize);
+  var possCount=win.length;
+
+  // Split by team
+  var hShots=win.filter(function(e){return e.type==='shot'&&e.data.tm===hA;});
+  var aShots=win.filter(function(e){return e.type==='shot'&&e.data.tm===aA;});
+  var hTOs=win.filter(function(e){return e.type==='to'&&e.data.tm===hA;});
+  var aTOs=win.filter(function(e){return e.type==='to'&&e.data.tm===aA;});
+
+  // I1: Disruption — steals diff (TOs where forced=true are opponent steals)
+  var hForcedTO=hTOs.filter(function(e){return e.data.forced===true;}).length;
+  var aForcedTO=aTOs.filter(function(e){return e.data.forced===true;}).length;
+  var hStl=aForcedTO,aStl=hForcedTO;// my forced TOs = opponent's steals
+  var i1=hStl>aStl?1:hStl<aStl?0:0.5;
+
+  // I2: Interior — paint+rim makes
+  var hPaint=0,aPaint=0;
+  hShots.forEach(function(e){if((e.data.z==='rim'||e.data.z==='paint')&&e.data.m)hPaint++;});
+  aShots.forEach(function(e){if((e.data.z==='rim'||e.data.z==='paint')&&e.data.m)aPaint++;});
+  var i2=hPaint>aPaint+1?1:hPaint<aPaint-1?0:0.5;
+
+  // I3: Shot quality — eFG + assist ratio
+  var hFGM=0,hFGA2=0,h3M=0,hAst2=0,aFGM=0,aFGA2=0,a3M=0,aAst2=0;
+  hShots.forEach(function(e){hFGA2++;if(e.data.m){hFGM++;if(e.data.is3)h3M++;if(e.data.a)hAst2++;}});
+  aShots.forEach(function(e){aFGA2++;if(e.data.m){aFGM++;if(e.data.is3)a3M++;if(e.data.a)aAst2++;}});
+  var hEFG=hFGA2>0?(hFGM+0.5*h3M)/hFGA2:0,aEFG=aFGA2>0?(aFGM+0.5*a3M)/aFGA2:0;
+  var i3=hEFG>aEFG+0.03?1:hEFG<aEFG-0.03?0:0.5;
+
+  // I4: Game control — point diff in window
+  var hPts=0,aPts=0;
+  hShots.forEach(function(e){if(e.data.m)hPts+=e.data.is3?3:2;});
+  aShots.forEach(function(e){if(e.data.m)aPts+=e.data.is3?3:2;});
+  var pDiff=hPts-aPts;
+  var i4=pDiff>3?1:pDiff<-3?0:0.5;
+
+  // I5: Efficiency — PPP
+  var hPoss=hShots.length+hTOs.length,aPoss=aShots.length+aTOs.length;
+  var hPPP=hPoss>0?hPts/hPoss:0,aPPP=aPoss>0?aPts/aPoss:0;
+  var i5=hPPP>aPPP+0.05?1:hPPP<aPPP-0.05?0:0.5;
+
+  // Composite
+  var Wt={I1:0.10,I2:0.15,I3:0.20,I4:0.30,I5:0.25};
+  var raw=i1*Wt.I1+i2*Wt.I2+i3*Wt.I3+i4*Wt.I4+i5*Wt.I5;
+  var controlHome=raw>=0.5;
+  var score=controlHome?raw:1-raw;
+  var controlTeam=controlHome?hA:aA;
+
+  return{available:true,score:score,controlTeam:controlTeam,possessions:possCount,
+    I1:{score:i1},I2:{score:i2},I3:{score:i3},I4:{score:i4},I5:{score:i5}};
+}
+
 function coordinateToZone(x,y,shotType,text,scoreValue){
   ensureTypeSets();var tl=(shotType||'').toLowerCase().trim();var tx=(text||'').toLowerCase();var is3=scoreValue===3||tx.includes('three point');
   if(BDL_RIM_SET.has(tl))return'rim';if(BDL_PAINT_SET.has(tl))return'paint';
@@ -2575,6 +2639,7 @@ async function fetchPBPFromDB(gameId,force){
       if(data.pbp.raw&&data.pbp.raw.shots&&data.pbp.raw.shots.length>0){
         cs.pbpAudit=data.pbp;
         cs.pbpTime=new Date(data.saved_at||Date.now());
+        cs.pbpWindow=computePBPWindow(data.pbp,data.pbp.homeAlias||'HOME',data.pbp.awayAlias||'AWAY');
         console.log('[PBP] Loaded from DB (with raw shots) for',gameId);
         buildScoringCompForCard(gameId);
         renderCard(gameId);
@@ -2602,6 +2667,7 @@ async function fetchPBPFromDB(gameId,force){
         if(pbp&&pbp.totalShots>0){
           cs.pbpAudit=pbp;
           cs.pbpTime=new Date();
+          cs.pbpWindow=computePBPWindow(pbp,hA,aA);
           console.log('[PBP] Fetched BDL plays directly for',gameId,pbp.totalShots,'shots');
           buildScoringCompForCard(gameId);
           renderCard(gameId);
