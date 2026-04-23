@@ -2305,6 +2305,188 @@ async function reportCPClose(sql) {
   };
 }
 
+// ── REPORT: RECONSTRUCTION VALIDATION ────────────────────────────────────────
+// Compare PBP full-game reconstruction to SR full-game indicators for 203 overlap games.
+// Answers: is the PBP parsing faithful, or is data quality inflating the gap?
+async function reportReconstructionValidation(sql) {
+  const games = await sql`
+    SELECT game_id, home_alias, away_alias, winner, margin, indicators, bdl_pbp
+    FROM wnba_backtest
+    WHERE indicators IS NOT NULL AND bdl_pbp IS NOT NULL AND bdl_pbp != '[]'::jsonb
+  `;
+  if (games.length === 0) return { error: 'No games with both SR indicators and BDL PBP.' };
+
+  const pct = (w, n) => n > 0 ? Math.round(w / n * 1000) / 10 : 0;
+  let total = 0, ctrlAgree = 0, convAgree = 0;
+  const indAgree = { I1: 0, I2: 0, I3: 0, I4: 0, I5: 0 };
+  const indN = { I1: 0, I2: 0, I3: 0, I4: 0, I5: 0 };
+  const floorDiffs = [];
+  const disagrees = [];
+  // Per-indicator stat comparison
+  const statDiffs = { stl: [], blk: [], pot: [], fg3pct: [], fta: [], efg: [], ast: [], bigLead: [], reb: [] };
+
+  for (const g of games) {
+    const srInd = g.indicators;
+    const plays = g.bdl_pbp;
+    if (!srInd || !plays || plays.length === 0) continue;
+
+    // Reconstruct full game from PBP
+    const sorted = plays.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+    const mk = () => ({ fgm: 0, fga: 0, fg3m: 0, fg3a: 0, ftm: 0, fta: 0,
+      oreb: 0, dreb: 0, ast: 0, stl: 0, blk: 0, tov: 0, pf: 0, pot: 0 });
+    const h = mk(), a = mk();
+    let bigH = 0, bigA = 0, pendPOT = null, lastPeriod = 0;
+
+    for (const ev of sorted) {
+      const period = ev.period || 1;
+      if (period !== lastPeriod) { pendPOT = null; lastPeriod = period; }
+      const tm = ev.team?.abbreviation || '';
+      if (!tm) continue;
+      const isH = tm === g.home_alias;
+      const s = isH ? h : a;
+      const opp = isH ? g.away_alias : g.home_alias;
+      const type = (ev.type || '').toLowerCase();
+      const text = (ev.text || '').toLowerCase();
+
+      if (ev.home_score != null && ev.away_score != null) {
+        const mg = ev.home_score - ev.away_score;
+        if (mg > bigH) bigH = mg;
+        if (-mg > bigA) bigA = -mg;
+      }
+      if (type.includes('substitution') || text.includes('enters the game')) continue;
+
+      if (type.includes('free throw')) {
+        s.fta++;
+        if (ev.scoring_play || text.includes('makes')) { s.ftm++; if (pendPOT === tm) s.pot += 1; }
+        continue;
+      }
+      const isShotType = type.includes('shot') || type.includes('layup') || type.includes('dunk') ||
+        type.includes('hook') || type.includes('tip') || type.includes('alley') || type.includes('finger roll') ||
+        type.includes('pullup') || type.includes('driving') || type.includes('fadeaway') ||
+        type.includes('float') || type.includes('runner') || type.includes('step back') ||
+        type.includes('turnaround') || type.includes('cutting') || type.includes('putback');
+      const isMadeFG = ev.scoring_play && ev.score_value >= 2;
+      if (isShotType || isMadeFG || (text.includes('misses') && !type.includes('free throw'))) {
+        const is3 = ev.score_value === 3 || type.includes('three point') || type.includes('3-point') || type.includes('3pt');
+        s.fga++; if (is3) s.fg3a++;
+        if (isMadeFG || text.includes('makes')) {
+          s.fgm++; if (is3) s.fg3m++;
+          if (text.includes('assist')) s.ast++;
+          if (pendPOT === tm) s.pot += (is3 ? 3 : 2);
+          pendPOT = null;
+        }
+        continue;
+      }
+      if (type.includes('turnover') || type.includes('offensive foul')) { s.tov++; pendPOT = opp; continue; }
+      if (type.includes('rebound')) {
+        if (type.includes('offensive') || text.includes('offensive')) s.oreb++;
+        else { s.dreb++; pendPOT = null; }
+        continue;
+      }
+      if (type.includes('steal')) { s.stl++; continue; }
+      if (type.includes('block')) { s.blk++; continue; }
+      if (type.includes('foul') && !type.includes('offensive')) { s.pf++; continue; }
+    }
+
+    // Build snapshot and compute indicators
+    const lastPlay = sorted[sorted.length - 1];
+    const cpSnap = {
+      home: { ...h, biggest_lead: bigH, three_points_pct: h.fg3a > 0 ? h.fg3m / h.fg3a * 100 : 0 },
+      away: { ...a, biggest_lead: bigA, three_points_pct: a.fg3a > 0 ? a.fg3m / a.fg3a * 100 : 0 },
+      homeScore: lastPlay?.home_score || 0, awayScore: lastPlay?.away_score || 0,
+      margin: (lastPlay?.home_score || 0) - (lastPlay?.away_score || 0),
+    };
+    const pbpInd = computeAtCheckpoint(cpSnap, g.home_alias, g.away_alias);
+    const pbpConv = computeConviction(pbpInd);
+    const srConv = computeConviction(srInd);
+    total++;
+
+    // Compare control team
+    if (pbpInd.controlTeam === srInd.controlTeam) ctrlAgree++;
+
+    // Compare conviction
+    if (pbpConv.tier === srConv.tier) convAgree++;
+
+    // Compare each indicator leader
+    for (const ik of ['I1', 'I2', 'I3', 'I4', 'I5']) {
+      const srLeader = srInd[ik]?.leader || 'EVEN';
+      const pbpLeader = pbpInd[ik]?.leader || 'EVEN';
+      indN[ik]++;
+      if (srLeader === pbpLeader) indAgree[ik]++;
+    }
+
+    // Floor diff
+    const floorDiff = Math.abs(pbpInd.score - srInd.score);
+    floorDiffs.push(floorDiff);
+
+    // Raw stat comparison for diagnostics
+    const srS = srInd;
+    // SR uses full stats object, PBP uses reconstructed
+    // Compare key sub-metric inputs
+    const srHome = srS.I1?.detail || {};
+    statDiffs.stl.push(Math.abs((h.stl + h.blk) - (a.stl + a.blk) - (srHome.disruptDiff || 0)));
+    statDiffs.pot.push(Math.abs((h.pot - a.pot) - (srHome.potDiff || 0)));
+    const srI2 = srS.I2?.detail || {};
+    const pbp3Diff = (h.fg3a > 0 ? h.fg3m / h.fg3a * 100 : 0) - (a.fg3a > 0 ? a.fg3m / a.fg3a * 100 : 0);
+    statDiffs.fg3pct.push(Math.abs(pbp3Diff - (srI2.threePctDiff || 0)));
+    statDiffs.fta.push(Math.abs((h.fta - a.fta) - (srI2.ftaDiff || 0)));
+    const srI3 = srS.I3?.detail || {};
+    const hEFG = h.fga > 0 ? (h.fgm + 0.5 * h.fg3m) / h.fga : 0;
+    const aEFG = a.fga > 0 ? (a.fgm + 0.5 * a.fg3m) / a.fga : 0;
+    statDiffs.efg.push(Math.abs((hEFG - aEFG) - (srI3.efgDiff || 0)));
+    statDiffs.ast.push(Math.abs((h.ast - a.ast) - (srI3.astDiff || 0)));
+    const srI4 = srS.I4?.detail || {};
+    statDiffs.bigLead.push(Math.abs((bigH - bigA) - (srI4.bigLeadDiff || 0)));
+    statDiffs.reb.push(Math.abs((h.oreb + h.dreb - a.oreb - a.dreb)));
+
+    // Log disagreements for inspection
+    if (pbpInd.controlTeam !== srInd.controlTeam) {
+      disagrees.push({
+        game: `${g.away_alias}@${g.home_alias}`,
+        srCtrl: srInd.controlTeam, pbpCtrl: pbpInd.controlTeam,
+        srFloor: srInd.score, pbpFloor: pbpInd.score,
+        srConv: srConv.tier, pbpConv: pbpConv.tier,
+        indicators: ['I1','I2','I3','I4','I5'].map(ik => ({
+          ind: ik, sr: srInd[ik]?.leader, pbp: pbpInd[ik]?.leader,
+          agree: srInd[ik]?.leader === pbpInd[ik]?.leader,
+        })),
+        statGaps: {
+          disruption: Math.abs((h.stl+h.blk)-(a.stl+a.blk) - (srHome.disruptDiff||0)),
+          pot: Math.abs((h.pot-a.pot) - (srHome.potDiff||0)),
+          efg: Math.round(Math.abs((hEFG-aEFG) - (srI3.efgDiff||0)) * 1000) / 1000,
+          assists: Math.abs((h.ast-a.ast) - (srI3.astDiff||0)),
+          bigLead: Math.abs((bigH-bigA) - (srI4.bigLeadDiff||0)),
+          fta: Math.abs((h.fta-a.fta) - (srI2.ftaDiff||0)),
+        },
+      });
+    }
+  }
+
+  const avg = arr => arr.length > 0 ? Math.round(arr.reduce((s, v) => s + v, 0) / arr.length * 100) / 100 : 0;
+  const med = arr => { if (arr.length === 0) return 0; const s = arr.slice().sort((a,b)=>a-b); return s[Math.floor(s.length/2)]; };
+
+  return {
+    totalOverlap: total,
+    controlTeamAgreement: { agree: ctrlAgree, total, pct: pct(ctrlAgree, total) },
+    convictionAgreement: { agree: convAgree, total, pct: pct(convAgree, total) },
+    indicatorAgreement: Object.fromEntries(
+      ['I1','I2','I3','I4','I5'].map(ik => [ik, { agree: indAgree[ik], total: indN[ik], pct: pct(indAgree[ik], indN[ik]) }])
+    ),
+    floorDiff: { avg: avg(floorDiffs), median: med(floorDiffs), max: Math.round(Math.max(...floorDiffs) * 100) / 100 },
+    statDiffs: {
+      note: 'Average absolute difference between PBP-reconstructed and SR values for key sub-metrics',
+      disruption_diff: avg(statDiffs.stl),
+      pot_diff: avg(statDiffs.pot),
+      fg3pct_diff: avg(statDiffs.fg3pct),
+      fta_diff: avg(statDiffs.fta),
+      efg_diff: avg(statDiffs.efg),
+      assists_diff: avg(statDiffs.ast),
+      biggest_lead_diff: avg(statDiffs.bigLead),
+    },
+    controlDisagrees: disagrees.slice(0, 15),
+  };
+}
+
 // ── HANDLER ──────────────────────────────────────────────────────────────────
 export default async (req) => {
   const sql = neon(process.env.DATABASE_URL);
@@ -2335,6 +2517,7 @@ export default async (req) => {
       case 'report_cp_trailing': result = await reportCPTrailing(sql); break;
       case 'report_cp_stability': result = await reportCPStability(sql); break;
       case 'report_cp_close':   result = await reportCPClose(sql); break;
+      case 'report_validate_reconstruction': result = await reportReconstructionValidation(sql); break;
       default:
         result = { error: `Unknown phase: ${phase}. Phases: init, collect, sample, compute, report, explore, collect_pbp, compute_checkpoints, report_cp_journey, report_cp_graduation, report_cp_trailing, report_cp_stability, report_cp_close` };
     }
