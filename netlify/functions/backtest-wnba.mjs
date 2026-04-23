@@ -1947,7 +1947,7 @@ async function phaseComputeCheckpoints(sql) {
 
 // Report: CP Journey — control stability at 2.5-min granularity
 async function reportCPJourney(sql) {
-  const games = await sql`SELECT * FROM wnba_backtest WHERE checkpoint_data IS NOT NULL`;
+  const games = await sql`SELECT game_id, checkpoint_data, winner, home_alias, away_alias, margin, margin_bucket FROM wnba_backtest WHERE checkpoint_data IS NOT NULL`;
   if (games.length === 0) return { error: 'No checkpoint data. Run compute_checkpoints first.' };
 
   const pct = (w, n) => n > 0 ? Math.round(w / n * 1000) / 10 : 0;
@@ -2003,7 +2003,7 @@ async function reportCPJourney(sql) {
 
 // Report: CP Graduation Sim — test MF/minF gates at 2.5-min granularity
 async function reportCPGraduation(sql) {
-  const games = await sql`SELECT * FROM wnba_backtest WHERE checkpoint_data IS NOT NULL`;
+  const games = await sql`SELECT game_id, checkpoint_data, winner, home_alias, away_alias, margin, margin_bucket FROM wnba_backtest WHERE checkpoint_data IS NOT NULL`;
   if (games.length === 0) return { error: 'No checkpoint data.' };
 
   const pct = (w, n) => n > 0 ? Math.round(w / n * 1000) / 10 : 0;
@@ -2111,7 +2111,7 @@ async function reportCPGraduation(sql) {
 
 // Report: CP Trailing Profile — BUY profile at 2.5-min checkpoints
 async function reportCPTrailing(sql) {
-  const games = await sql`SELECT * FROM wnba_backtest WHERE checkpoint_data IS NOT NULL`;
+  const games = await sql`SELECT game_id, checkpoint_data, winner, home_alias, away_alias, margin, margin_bucket FROM wnba_backtest WHERE checkpoint_data IS NOT NULL`;
   if (games.length === 0) return { error: 'No checkpoint data.' };
 
   const pct = (w, n) => n > 0 ? Math.round(w / n * 1000) / 10 : 0;
@@ -2177,7 +2177,7 @@ async function reportCPTrailing(sql) {
 
 // Report: CP Indicator Stability — per-indicator hold rates at 2.5-min granularity
 async function reportCPStability(sql) {
-  const games = await sql`SELECT * FROM wnba_backtest WHERE checkpoint_data IS NOT NULL`;
+  const games = await sql`SELECT game_id, checkpoint_data, winner, home_alias, away_alias, margin, margin_bucket FROM wnba_backtest WHERE checkpoint_data IS NOT NULL`;
   if (games.length === 0) return { error: 'No checkpoint data.' };
 
   const pct = (w, n) => n > 0 ? Math.round(w / n * 1000) / 10 : 0;
@@ -2261,7 +2261,7 @@ async function reportCPStability(sql) {
 
 // Report: CP Close Game — test close-game filters with checkpoint data
 async function reportCPClose(sql) {
-  const games = await sql`SELECT * FROM wnba_backtest WHERE checkpoint_data IS NOT NULL`;
+  const games = await sql`SELECT game_id, checkpoint_data, winner, home_alias, away_alias, margin, margin_bucket FROM wnba_backtest WHERE checkpoint_data IS NOT NULL`;
   if (games.length === 0) return { error: 'No checkpoint data.' };
 
   const pct = (w, n) => n > 0 ? Math.round(w / n * 1000) / 10 : 0;
