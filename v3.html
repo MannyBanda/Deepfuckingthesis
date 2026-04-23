@@ -820,8 +820,10 @@ document.getElementById('swipe').addEventListener('scroll',function(){
         renderSwipeDots();
         var activePill=document.querySelector('.chip.sel');
         if(activePill)activePill.scrollIntoView({behavior:'smooth',inline:'center',block:'nearest'});
-        // Update toast for new game if toast is visible
-        if(_toastVisible)updateToastForGame(newActive);
+        // Update toast for new game if toast is visible (skip FINAL)
+        var swG=games.find(function(x){return x.id===newActive;});
+        if(_toastVisible&&swG&&getState(swG)!=='FINAL')updateToastForGame(newActive);
+        else if(_toastVisible&&swG&&getState(swG)==='FINAL'){document.getElementById('toast').classList.remove('show');_toastVisible=false;stopToastOddsPoll();}
       }
     }
   },80);
@@ -2533,8 +2535,11 @@ async function pollAlerts(){
       if(a.agent_decision==='SEND'&&!_seenAlertIds.has(a.id)){
         _seenAlertIds.add(a.id);
         _latestSendAlert=a;
-        // Only auto-toast for entry types that haven't been dismissed
-        if(ENTRY_TYPES[a.alert_type]&&!_dismissedAlertIds.has(a.id))newSend=a;
+        // Only auto-toast for: entry types, not dismissed, active game, not FINAL
+        if(ENTRY_TYPES[a.alert_type]&&!_dismissedAlertIds.has(a.id)&&a.game_id===activeGameId){
+          var ag=games.find(function(x){return x.id===a.game_id;});
+          if(!ag||getState(ag)!=='FINAL')newSend=a;
+        }
       }
     });
     if(!_latestSendAlert){
