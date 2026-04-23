@@ -693,8 +693,6 @@ function maybeResyncSnapshots(){
   games.forEach(function(g,i){
     if(getState(g)==='LIVE'){
       setTimeout(function(){hydrateFromServerSnapshots(g.id);},i*200);
-      // Refresh PBP for LIVE games (force=true to update scoring comp + margin flow)
-      setTimeout(function(){fetchPBPFromDB(g.id,true);},i*200+100);
     }
   });
   // Also refresh auto-analyses
@@ -1179,8 +1177,8 @@ function restoreAnalysis(id){try{var raw=localStorage.getItem('nba4:analysis:'+i
 function getFloor(cs){
   if(!cs)return null;
   if(cs.sonnetIndicators&&cs.sonnetIndicators.score!=null)return cs.sonnetIndicators;
-  if(cs.clientInd&&cs.clientInd.score!=null)return cs.clientInd;
   if(cs._serverFloor&&cs._serverFloor.score!=null)return cs._serverFloor;
+  if(cs.clientInd&&cs.clientInd.score!=null)return cs.clientInd;
   if(cs.rollingWindow&&cs.rollingWindow.available&&cs.rollingWindow.score!=null)return{score:cs.rollingWindow.score,controlTeam:cs.rollingWindow.controlTeam,I1:cs.rollingWindow.I1,I2:cs.rollingWindow.I2,I3:cs.rollingWindow.I3,I4:cs.rollingWindow.I4,I5:cs.rollingWindow.I5,source:cs.rollingWindow.source||'window'};
   return null;
 }
@@ -1213,8 +1211,8 @@ async function hydrateFromServerSnapshots(gameId){
     cs._allSnapshots=usable; // store full array for drawer history
     var latest=usable[usable.length-1];
 
-    // Server floor
-    if(!cs.clientInd&&!cs.sonnetIndicators&&latest.floor_score!=null){
+    // Server floor — always update from latest snapshot (server has SR-enriched data)
+    if(latest.floor_score!=null){
       cs._serverFloor={
         score:latest.floor_score,controlTeam:latest.floor_team,
         I1:{score:latest.i1,leader:latest.floor_team},I2:{score:latest.i2,leader:latest.floor_team},
