@@ -1250,13 +1250,12 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
 
   function evRow(label,hVal,aVal,opts){
     opts=opts||{};var inv=opts.invert;
+    var hCmp=opts.cmpH!=null?opts.cmpH:parseFloat(String(hVal).replace(/[%]/g,''));
+    var aCmp=opts.cmpA!=null?opts.cmpA:parseFloat(String(aVal).replace(/[%]/g,''));
     var hCol='var(--fg-primary)',aCol='var(--fg-primary)';
-    if(String(hVal)!==String(aVal)){
-      var hN=parseFloat(String(hVal).replace(/[%\/]/g,'')),aN=parseFloat(String(aVal).replace(/[%\/]/g,''));
-      if(!isNaN(hN)&&!isNaN(aN)&&hN!==aN){
-        if(inv){hCol=hN<aN?'var(--green)':'var(--coral)';aCol=aN<hN?'var(--green)':'var(--coral)';}
-        else{hCol=hN>aN?'var(--green)':'var(--coral)';aCol=aN>hN?'var(--green)':'var(--coral)';}
-      }
+    if(!isNaN(hCmp)&&!isNaN(aCmp)&&hCmp!==aCmp){
+      if(inv){hCol=hCmp<aCmp?'var(--green)':'var(--coral)';aCol=aCmp<hCmp?'var(--green)':'var(--coral)';}
+      else{hCol=hCmp>aCmp?'var(--green)':'var(--coral)';aCol=aCmp>hCmp?'var(--green)':'var(--coral)';}
     }
     return'<div class="ind-ev-row"><span class="ind-ev-label">'+label+'</span><div class="ind-ev-vals"><span class="ind-ev-val" style="color:'+hCol+'">'+hA+'</span><span class="ind-ev-val" style="color:'+hCol+'">'+hVal+'</span><span style="color:var(--fg-dim)">-</span><span class="ind-ev-val" style="color:'+aCol+'">'+aVal+'</span><span class="ind-ev-val" style="color:'+aCol+'">'+aA+'</span></div></div>';
   }
@@ -1275,12 +1274,12 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
       }
     } else if(indKey==='I2'){
       if(pbp){
-        var hRim=(pbp.home.rim?pbp.home.rim.made:0)+'/'+(pbp.home.rim?pbp.home.rim.att:0);
-        var aRim=(pbp.away.rim?pbp.away.rim.made:0)+'/'+(pbp.away.rim?pbp.away.rim.att:0);
-        html+=evRow('Rim FG',hRim,aRim);
-        var hPnt=(pbp.home.paint?pbp.home.paint.made:0)+'/'+(pbp.home.paint?pbp.home.paint.att:0);
-        var aPnt=(pbp.away.paint?pbp.away.paint.made:0)+'/'+(pbp.away.paint?pbp.away.paint.att:0);
-        html+=evRow('Paint FG',hPnt,aPnt);
+        var hRimM=pbp.home.rim?pbp.home.rim.made:0,hRimA2=pbp.home.rim?pbp.home.rim.att:0;
+        var aRimM=pbp.away.rim?pbp.away.rim.made:0,aRimA2=pbp.away.rim?pbp.away.rim.att:0;
+        html+=evRow('Rim FG',hRimM+'/'+hRimA2,aRimM+'/'+aRimA2,{cmpH:hRimA2>0?hRimM/hRimA2:0,cmpA:aRimA2>0?aRimM/aRimA2:0});
+        var hPntM=pbp.home.paint?pbp.home.paint.made:0,hPntA2=pbp.home.paint?pbp.home.paint.att:0;
+        var aPntM=pbp.away.paint?pbp.away.paint.made:0,aPntA2=pbp.away.paint?pbp.away.paint.att:0;
+        html+=evRow('Paint FG',hPntM+'/'+hPntA2,aPntM+'/'+aPntA2,{cmpH:hPntA2>0?hPntM/hPntA2:0,cmpA:aPntA2>0?aPntM/aPntA2:0});
       }
       html+=evRow('FTA',sum(hPl,'fta'),sum(aPl,'fta'));
       html+=evRow('FTM',sum(hPl,'ftm'),sum(aPl,'ftm'));
@@ -1290,7 +1289,7 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
       var hEFG=hFGA>0?((hFGM+0.5*h3M)/hFGA*100).toFixed(1):'--';
       var aEFG=aFGA>0?((aFGM+0.5*a3M)/aFGA*100).toFixed(1):'--';
       html+=evRow('eFG%',hEFG+'%',aEFG+'%');
-      html+=evRow('3PT',h3M+'/'+h3A,a3M+'/'+a3A);
+      html+=evRow('3PT',h3M+'/'+h3A,a3M+'/'+a3A,{cmpH:h3A>0?h3M/h3A:0,cmpA:a3A>0?a3M/a3A:0});
       html+=evRow('Assists',sum(hPl,'ast'),sum(aPl,'ast'));
       var hAR=hFGM>0?Math.round(sum(hPl,'ast')/hFGM*100):0;
       var aAR=aFGM>0?Math.round(sum(aPl,'ast')/aFGM*100):0;
