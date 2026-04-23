@@ -1299,5 +1299,5 @@ export default async function handler(req) {
 }
 
 export const config = {
-  schedule: "*/5 * * * *",  // every 5 minutes — checks for games tipping in 30-75 min
+  schedule: "*/1 * * * *",  // every 1 minute — matches poll-live pattern (proven reliable). Exits fast when no candidates.
 };
