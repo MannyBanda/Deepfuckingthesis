@@ -1065,6 +1065,19 @@ function renderCard(id){
     var hasDisagree=pred&&pred.disagreement;
     var isOpen=_ssExpanded[id]||false;
     var collapsedText=hasNarrative?pred.narrative:(hasClosing?pred.closing:null);
+    // Fallback: build summary from auto analysis fields if narrative/closing missing
+    if(!collapsedText&&pred&&(pred.conviction||pred.signal||pred.entry)){
+      var parts=[];
+      if(pred.convictionTier)parts.push(pred.convictionTier);
+      if(pred.conviction)parts.push(pred.conviction);
+      if(pred.entry&&pred.entry!=='N/A')parts.push(pred.entry);
+      if(pred.signal)parts.push(pred.signal);
+      if(parts.length>0)collapsedText=parts.join(' \u00b7 ');
+    }
+    // Last resort: use raw analysis text
+    if(!collapsedText&&cs.analysis&&cs.analysis.length>20){
+      collapsedText=cs.analysis.substring(0,200)+(cs.analysis.length>200?'\u2026':'');
+    }
     if(collapsedText){
       html+='<div class="sonnet-signal">';
       html+='<div class="ss-collapsed" onclick="toggleSonnetSignal(\''+id+'\')">';
