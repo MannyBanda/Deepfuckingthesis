@@ -827,7 +827,7 @@ function toggleDemo(){
   if(demoMode){
     clearInterval(pollTimer);
     games=DEMO_GAMES.map(function(d){return Object.assign({},d);});
-    cardState={};activeGameId=null;
+    Object.keys(cardState).forEach(function(k){delete cardState[k];});activeGameId=null;
     mountAllCards();renderPills();renderDemoStrip();
     // Hydrate from DB (staggered)
     games.forEach(function(g,i){
