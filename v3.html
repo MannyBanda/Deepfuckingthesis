@@ -1110,6 +1110,8 @@ function renderCard(id){
   if(state!=='PRE'){
     // Scoring Composition
     html+=renderScoringCompSection(id,cs,hA,aA);
+    // Depth Audit · Shot Zones
+    html+=renderDepthAuditSection(id,cs,hA,aA);
     // Margin Flow + Scoring Runs
     html+=renderMarginFlowSection(id,cs,hA,aA);
     // Deep Dive button
@@ -2362,6 +2364,129 @@ function renderConfTable(){
   });
   html+='</tbody></table></div>';
   el.innerHTML=html;
+}
+
+// ── DEPTH AUDIT · SHOT ZONES ──
+function renderDepthAuditSection(id,cs,hA,aA){
+  var pbp=cs.pbpAudit;
+  if(!pbp||!pbp.home||!pbp.away)return'';
+  var isOpen=_collOpen[id+'_da']||false;
+  var html='<div class="collapsible">';
+  html+='<div class="coll-header" onclick="toggleColl(\''+id+'\',\'da\')">';
+  html+='<span class="coll-chevron'+(isOpen?' open':'')+'">\u25b8</span>';
+  html+='<span class="coll-title">Depth Audit \u00b7 Shot Zones</span>';
+  var totalH=(pbp.home.shotDiet?pbp.home.shotDiet.total:0),totalA=(pbp.away.shotDiet?pbp.away.shotDiet.total:0);
+  html+='<span class="coll-meta">'+totalH+'/'+totalA+' FGA</span>';
+  html+='</div>';
+  html+='<div class="coll-body'+(isOpen?' open':'')+'">';
+  if(isOpen){
+    // Team toggle — stored in cardState
+    if(!cs._daTeam)cs._daTeam='home';
+    var showTeam=cs._daTeam;
+    var showAlias=showTeam==='home'?hA:aA;
+    var otherAlias=showTeam==='home'?aA:hA;
+    var side=showTeam==='home'?pbp.home:pbp.away;
+    html+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">';
+    html+='<button onclick="toggleDATeam(\''+id+'\')" style="font-family:var(--mono);font-size:10px;font-weight:600;padding:4px 10px;border-radius:var(--r-pill);border:1px solid var(--hairline-strong);background:var(--bg-surface-3);color:'+tc(showAlias)+';cursor:pointer">'+esc(showAlias)+'</button>';
+    html+='<span style="font-family:var(--mono);font-size:9px;color:var(--fg-dim)">tap to switch to '+esc(otherAlias)+'</span></div>';
+    html+=renderShotCourt(side,showAlias,pbp.raw?pbp.raw.shots:null,showTeam==='home'?hA:aA);
+  }
+  html+='</div></div>';
+  return html;
+}
+function toggleDATeam(gameId){
+  var cs=cardState[gameId];if(!cs)return;
+  cs._daTeam=cs._daTeam==='home'?'away':'home';
+  renderCard(gameId);
+}
+function renderShotCourt(side,alias,rawShots,teamAlias){
+  // Half-court SVG 500×470
+  var W=500,H=470,CX=250,BY=52;// basket center
+  function zoneColor(made,att){if(att===0)return'rgba(255,255,255,0.04)';var pct=made/att;if(pct>=0.55)return'rgba(52,211,153,0.25)';if(pct>=0.45)return'rgba(52,211,153,0.12)';if(pct>=0.35)return'rgba(245,181,68,0.15)';return'rgba(248,113,113,0.15)';}
+  function zoneStroke(made,att){if(att===0)return'rgba(255,255,255,0.06)';var pct=made/att;if(pct>=0.55)return'rgba(52,211,153,0.4)';if(pct>=0.45)return'rgba(52,211,153,0.2)';if(pct>=0.35)return'rgba(245,181,68,0.3)';return'rgba(248,113,113,0.3)';}
+  function statLabel(made,att){if(att===0)return'--';return made+'/'+att+' ('+Math.round(made/att*100)+'%)';}
+  var rim=side.rim||{made:0,att:0},paint=side.paint||{made:0,att:0},mid=side.mid||{made:0,att:0},threes=side.threes||{made:0,att:0};
+  // Split threes into corner3 and above3 from raw shots if available
+  var c3={made:0,att:0},a3={made:0,att:0};
+  if(rawShots){
+    rawShots.filter(function(s){return s.tm===teamAlias&&s.is3;}).forEach(function(s){
+      if(s.z==='corner3'){c3.att++;if(s.m)c3.made++;}
+      else{a3.att++;if(s.m)a3.made++;}
+    });
+  } else {a3=threes;}
+
+  var svg='<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;max-width:400px;display:block;margin:0 auto">';
+  // Court background
+  svg+='<rect width="'+W+'" height="'+H+'" rx="4" fill="var(--bg-surface-3)"/>';
+  // Court outline
+  svg+='<rect x="10" y="10" width="480" height="450" rx="0" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1.5"/>';
+
+  // ── ZONE FILLS (bottom to top: rim → paint → mid → 3pt) ──
+
+  // Above-break 3 zone (full court minus inside arc)
+  svg+='<path d="M10 10 L490 10 L490 460 L10 460 Z M'+CX+' '+BY+' m-237,0 a237,237 0 0,0 474,0" fill="'+zoneColor(a3.made,a3.att)+'" stroke="'+zoneStroke(a3.made,a3.att)+'" stroke-width="1" fill-rule="evenodd"/>';
+  // Corner 3 — left
+  svg+='<rect x="10" y="10" width="80" height="140" fill="'+zoneColor(c3.made,c3.att)+'" stroke="'+zoneStroke(c3.made,c3.att)+'" stroke-width="1"/>';
+  // Corner 3 — right
+  svg+='<rect x="410" y="10" width="80" height="140" fill="'+zoneColor(c3.made,c3.att)+'" stroke="'+zoneStroke(c3.made,c3.att)+'" stroke-width="1"/>';
+  // Mid-range zone (inside arc, outside paint)
+  svg+='<path d="M'+CX+' '+BY+' m-237,0 a237,237 0 0,1 474,0 L410 10 L410 190 L90 190 L90 10 Z" fill="'+zoneColor(mid.made,mid.att)+'" stroke="'+zoneStroke(mid.made,mid.att)+'" stroke-width="1" fill-rule="evenodd"/>';
+  // Paint zone (rectangle)
+  svg+='<rect x="170" y="10" width="160" height="190" fill="'+zoneColor(paint.made,paint.att)+'" stroke="'+zoneStroke(paint.made,paint.att)+'" stroke-width="1"/>';
+  // Rim zone (circle)
+  svg+='<circle cx="'+CX+'" cy="'+BY+'" r="40" fill="'+zoneColor(rim.made,rim.att)+'" stroke="'+zoneStroke(rim.made,rim.att)+'" stroke-width="1.5"/>';
+
+  // ── COURT LINES ──
+  // Paint outline
+  svg+='<rect x="170" y="10" width="160" height="190" fill="none" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>';
+  // Free throw circle
+  svg+='<circle cx="'+CX+'" cy="200" r="60" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1" stroke-dasharray="4,4"/>';
+  // Three-point arc
+  svg+='<path d="M90 10 L90 150 A237,237 0 0,0 410,150 L410 10" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="1.5"/>';
+  // Backboard + rim
+  svg+='<line x1="220" y1="40" x2="280" y2="40" stroke="rgba(255,255,255,0.2)" stroke-width="2"/>';
+  svg+='<circle cx="'+CX+'" cy="'+BY+'" r="9" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>';
+
+  // ── SHOT DOTS (raw shots) ──
+  if(rawShots){
+    var teamShots=rawShots.filter(function(s){return s.tm===teamAlias;});
+    teamShots.forEach(function(s){
+      if(s.x==null||s.y==null)return;
+      // BDL coords: x=0-100 baseline-to-baseline, y=0-50 sideline-to-sideline
+      // Map to SVG: flip so baseline is bottom (y=10), top is y=460
+      var sx=10+(s.y/50)*480;// y maps to horizontal
+      var sy=10+(1-s.x/50)*450;// x maps to vertical, inverted
+      if(sy<10||sy>460||sx<10||sx>490)return;
+      var dotColor=s.m?'rgba(52,211,153,0.7)':'rgba(248,113,113,0.5)';
+      var dotR=s.m?3.5:2.5;
+      svg+='<circle cx="'+sx.toFixed(1)+'" cy="'+sy.toFixed(1)+'" r="'+dotR+'" fill="'+dotColor+'" stroke="none"/>';
+    });
+  }
+
+  // ── ZONE LABELS ──
+  var fSz='font-family:var(--mono);font-weight:600;text-anchor:middle;fill:var(--fg-primary)';
+  var fSzS='font-family:var(--mono);font-weight:400;text-anchor:middle;fill:var(--fg-secondary)';
+  // Rim
+  svg+='<text x="'+CX+'" y="'+(BY-4)+'" style="font-size:11px;'+fSz+'">'+statLabel(rim.made,rim.att)+'</text>';
+  svg+='<text x="'+CX+'" y="'+(BY+12)+'" style="font-size:8px;'+fSzS+'">RIM</text>';
+  // Paint
+  svg+='<text x="'+CX+'" y="140" style="font-size:10px;'+fSz+'">'+statLabel(paint.made,paint.att)+'</text>';
+  svg+='<text x="'+CX+'" y="155" style="font-size:8px;'+fSzS+'">PAINT</text>';
+  // Mid
+  svg+='<text x="'+CX+'" y="280" style="font-size:10px;'+fSz+'">'+statLabel(mid.made,mid.att)+'</text>';
+  svg+='<text x="'+CX+'" y="295" style="font-size:8px;'+fSzS+'">MID</text>';
+  // Above-break 3
+  svg+='<text x="'+CX+'" y="380" style="font-size:10px;'+fSz+'">'+statLabel(a3.made,a3.att)+'</text>';
+  svg+='<text x="'+CX+'" y="395" style="font-size:8px;'+fSzS+'">3PT</text>';
+  // Corner 3 left
+  svg+='<text x="50" y="75" style="font-size:9px;'+fSz+'">'+statLabel(c3.made,c3.att)+'</text>';
+  svg+='<text x="50" y="90" style="font-size:7px;'+fSzS+'">C3</text>';
+  // Corner 3 right
+  svg+='<text x="450" y="75" style="font-size:9px;'+fSz+'">'+statLabel(c3.made,c3.att)+'</text>';
+  svg+='<text x="450" y="90" style="font-size:7px;'+fSzS+'">C3</text>';
+
+  svg+='</svg>';
+  return svg;
 }
 
 // ── SCORING COMPOSITION (from PBP audit zone data) ──
