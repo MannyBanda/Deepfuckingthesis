@@ -2052,23 +2052,26 @@ function renderDrawer(gameId){
     });
 
     // Column toggle state
-    if(!cs._snapCols)cs._snapCols={time:true,score:true,floor:true,mf:true,peak:true,ind:true,tp:true,ls:true,grad:true,ml:true,alert:true,dec:true};
+    if(!cs._snapCols)cs._snapCols={time:true,score:true,margin:false,floor:true,mf:true,peak:true,eros:false,ind:true,tp:true,ls:true,sust:false,grad:true,ml:true,alert:true,dec:true};
     var sc2=cs._snapCols;
-    html+='<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">';
-    var colDefs=[{k:'time',l:'Time'},{k:'score',l:'Score'},{k:'floor',l:'Floor'},{k:'mf',l:'MF'},{k:'peak',l:'Peak'},{k:'ind',l:'I1-I5'},{k:'tp',l:'TP'},{k:'ls',l:'LS'},{k:'grad',l:'Grad'},{k:'ml',l:'ML'},{k:'alert',l:'Alert'},{k:'dec',l:'Dec'}];
+    html+='<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;align-items:center">';
+    var colDefs=[{k:'time',l:'Time'},{k:'score',l:'Score'},{k:'margin',l:'Margin'},{k:'floor',l:'Floor'},{k:'mf',l:'MF'},{k:'peak',l:'Peak'},{k:'eros',l:'Eros'},{k:'ind',l:'I1-I5'},{k:'tp',l:'TP'},{k:'ls',l:'LS'},{k:'sust',l:'Sust'},{k:'grad',l:'Grad'},{k:'ml',l:'ML'},{k:'alert',l:'Alert'},{k:'dec',l:'Dec'}];
     colDefs.forEach(function(c){
       html+='<button onclick="toggleSnapCol(\''+gameId+'\',\''+c.k+'\')" style="font-family:var(--mono);font-size:8px;padding:2px 5px;border-radius:4px;border:1px solid '+(sc2[c.k]?'var(--green-border)':'var(--hairline)')+';background:'+(sc2[c.k]?'var(--green-dim)':'transparent')+';color:'+(sc2[c.k]?'var(--green)':'var(--fg-dim)')+';cursor:pointer">'+c.l+'</button>';
     });
+    // Hide All / Show All toggle
+    var allOff=colDefs.every(function(c){return c.k==='time'||c.k==='score'||!sc2[c.k];});
+    html+='<button onclick="snapColsMinimal(\''+gameId+'\')" style="font-family:var(--mono);font-size:8px;padding:2px 5px;border-radius:4px;border:1px solid '+(allOff?'var(--amber-border)':'var(--hairline)')+';background:'+(allOff?'var(--amber-dim)':'transparent')+';color:'+(allOff?'var(--amber)':'var(--fg-dim)')+';cursor:pointer">'+(allOff?'Show All':'Hide All')+'</button>';
     html+='</div>';
 
     function fmtF(v){if(v==null)return'--';var s=Number(v).toFixed(2);return s.replace(/^0\./,'.');}
     function indDot(v,flip){if(v==null)return'<span style="color:var(--fg-dim)">\u25cf</span>';var n=flip?1-Number(v):Number(v);if(n>=0.6)return'<span style="color:var(--green)">\u25cf</span>';if(n<=0.4)return'<span style="color:var(--coral)">\u25cf</span>';return'<span style="color:var(--fg-dim)">\u25cf</span>';}
 
     html+='<div style="overflow-x:auto"><table class="qd-grid" style="font-size:10px"><thead><tr>';
-    if(sc2.time)html+='<th>Time</th>';if(sc2.score)html+='<th>Score</th>';if(sc2.floor)html+='<th>Floor</th>';
-    if(sc2.mf)html+='<th>MF</th>';if(sc2.peak)html+='<th>Peak</th>';
+    if(sc2.time)html+='<th>Time</th>';if(sc2.score)html+='<th>Score</th>';if(sc2.margin)html+='<th>+/-</th>';if(sc2.floor)html+='<th>Floor</th>';
+    if(sc2.mf)html+='<th>MF</th>';if(sc2.peak)html+='<th>Peak</th>';if(sc2.eros)html+='<th>Eros</th>';
     if(sc2.ind)html+='<th style="text-align:center">I1-I5</th>';
-    if(sc2.tp)html+='<th>TP</th>';if(sc2.ls)html+='<th>LS</th>';
+    if(sc2.tp)html+='<th>TP</th>';if(sc2.ls)html+='<th>LS</th>';if(sc2.sust)html+='<th>Sust</th>';
     if(sc2.grad)html+='<th>Grad</th>';if(sc2.ml)html+='<th>ML</th>';
     if(sc2.alert)html+='<th>Alert</th>';if(sc2.dec)html+='<th>Dec</th>';
     html+='</tr></thead><tbody>';
@@ -2086,13 +2089,39 @@ function renderDrawer(gameId){
       html+='<tr style="'+(isLatest?'border:1px solid var(--green-border);background:rgba(52,211,153,0.04)':'')+'">';
       if(sc2.time)html+='<td style="white-space:nowrap;font-size:9px">'+esc(qc)+'</td>';
       if(sc2.score)html+='<td>'+esc(score)+'</td>';
+      if(sc2.margin){
+        var mgn='--';var mgnColor='var(--fg-dim)';
+        if(s.home_pts!=null&&s.away_pts!=null){
+          var isFloorHome=s.floor_team&&s.floor_team===hA;
+          var raw=isFloorHome?(s.home_pts-s.away_pts):(s.away_pts-s.home_pts);
+          mgn=(raw>0?'+':'')+raw;
+          mgnColor=raw>0?'var(--green)':raw<0?'var(--coral)':'var(--fg-dim)';
+        }
+        html+='<td style="font-size:9px;color:'+mgnColor+'">'+mgn+'</td>';
+      }
       if(sc2.floor)html+='<td style="color:var(--green)">'+fmtF(s.floor_score)+'</td>';
       var mfIdx=sampled.length-1-ri;
       if(sc2.mf)html+='<td>'+fmtF(mfMap[mfIdx])+'</td>';
       if(sc2.peak)html+='<td>'+fmtF(pkMap[mfIdx])+'</td>';
+      if(sc2.eros){
+        var erosTxt='--';var erosColor='var(--fg-dim)';
+        if(matchAlert&&matchAlert.erosion_level){erosTxt=matchAlert.erosion_level.substring(0,4);erosColor=matchAlert.erosion_level==='CRITICAL'?'var(--coral)':matchAlert.erosion_level==='MODERATE'?'var(--amber)':'var(--fg-secondary)';}
+        html+='<td style="font-size:9px;color:'+erosColor+'">'+esc(erosTxt)+'</td>';
+      }
       if(sc2.ind)html+='<td style="text-align:center;letter-spacing:2px">'+indDot(s.i1,flipInd)+indDot(s.i2,flipInd)+indDot(s.i3,flipInd)+indDot(s.i4,flipInd)+indDot(s.i5,flipInd)+'</td>';
       if(sc2.tp)html+='<td style="font-size:9px">'+(s.tp_class?esc(s.tp_class).substring(0,4):'--')+'</td>';
       if(sc2.ls)html+='<td style="font-size:9px">'+(s.ls_class?esc(s.ls_class).substring(0,4):'--')+'</td>';
+      if(sc2.sust){
+        var sustTxt='--';var sustColor='var(--fg-dim)';
+        if(s.sust_json){
+          try{var sj=typeof s.sust_json==='string'?JSON.parse(s.sust_json):s.sust_json;
+          var ctrlSide=s.floor_team===hA?'home':'away';
+          var tier=sj[ctrlSide]&&sj[ctrlSide].overall?sj[ctrlSide].overall:null;
+          if(tier){sustTxt=tier.substring(0,4);sustColor=tier==='LOCKED IN'||tier==='DURABLE'?'var(--green)':tier==='MIXED'?'var(--fg-secondary)':'var(--coral)';}
+          }catch(e){}
+        }
+        html+='<td style="font-size:9px;color:'+sustColor+'">'+esc(sustTxt)+'</td>';
+      }
       if(sc2.grad)html+='<td style="font-size:9px">'+(matchAlert&&matchAlert.graduation_rank?esc(matchAlert.graduation_rank):'--')+'</td>';
       if(sc2.ml){
         // Find closest odds entry by timestamp
@@ -2160,8 +2189,23 @@ function selectRun(gameId,ri){
 // ── SNAPSHOT COLUMN TOGGLE ──
 function toggleSnapCol(gameId,col){
   var cs=cardState[gameId];if(!cs)return;
-  if(!cs._snapCols)cs._snapCols={time:true,score:true,floor:true,mf:true,peak:true,ind:true,tp:true,ls:true,grad:true,ml:true,alert:true,dec:true};
+  if(!cs._snapCols)cs._snapCols={time:true,score:true,margin:false,floor:true,mf:true,peak:true,eros:false,ind:true,tp:true,ls:true,sust:false,grad:true,ml:true,alert:true,dec:true};
   cs._snapCols[col]=!cs._snapCols[col];
+  renderDrawer(gameId);
+}
+function snapColsMinimal(gameId){
+  var cs=cardState[gameId];if(!cs)return;
+  // Check if already minimal (only time+score on)
+  var sc=cs._snapCols||{};
+  var isMinimal=Object.keys(sc).every(function(k){return k==='time'||k==='score'||!sc[k];});
+  if(isMinimal){
+    // Show All — restore defaults
+    cs._snapCols={time:true,score:true,margin:false,floor:true,mf:true,peak:true,eros:false,ind:true,tp:true,ls:true,sust:false,grad:true,ml:true,alert:true,dec:true};
+  } else {
+    // Hide All — only time+score
+    var cols={};Object.keys(sc).forEach(function(k){cols[k]=(k==='time'||k==='score');});
+    cs._snapCols=cols;
+  }
   renderDrawer(gameId);
 }
 
