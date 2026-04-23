@@ -1318,18 +1318,14 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
       }
     } else if(indKey==='I5'){
       if(pbp&&pbp.runs6){
-        var hR6=0,aR6=0;pbp.runs6.forEach(function(r){if(r.team===hA)hR6++;else aR6++;});
+        var hR6=0,aR6=0,hRuns6=[],aRuns6=[];
+        pbp.runs6.forEach(function(r){if(r.team===hA){hR6++;hRuns6.push(r.pts);}else{aR6++;aRuns6.push(r.pts);}});
         html+=evRow('Runs (6+)',hR6,aR6);
         var share=hR6+aR6>0?Math.round(hR6/(hR6+aR6)*100):50;
         html+=evRow('Run Share',share+'%',(100-share)+'%');
-      }
-      if(pbp&&pbp.runs&&pbp.runs.length>0){
-        html+='<div class="ind-ev-row" style="border-bottom:none"><span class="ind-ev-label">Top Runs</span><div class="ind-ev-vals" style="flex-direction:column;gap:2px">';
-        pbp.runs.slice(0,4).forEach(function(r){
-          var rc=r.team===hA?'var(--green)':'var(--coral)';
-          html+='<span style="color:'+rc+'">'+esc(r.team)+' '+r.pts+'-'+(r.oppPts||0)+' Q'+r.q+'</span>';
-        });
-        html+='</div></div>';
+        // Show individual run point totals per team
+        html+='<div class="ind-ev-row" style="border-bottom:none"><span class="ind-ev-label">'+esc(hA)+' runs</span><div class="ind-ev-vals" style="color:var(--green)">'+(hRuns6.length>0?hRuns6.join(', ')+' pts':'none')+'</div></div>';
+        html+='<div class="ind-ev-row" style="border-bottom:none"><span class="ind-ev-label">'+esc(aA)+' runs</span><div class="ind-ev-vals" style="color:var(--coral)">'+(aRuns6.length>0?aRuns6.join(', ')+' pts':'none')+'</div></div>';
       }
       var hFGM2=sum(hPl,'fgm'),hFGA2=sum(hPl,'fga'),aFGM2=sum(aPl,'fgm'),aFGA2=sum(aPl,'fga');
       html+=evRow('FG%',hFGA2>0?(hFGM2/hFGA2*100).toFixed(1)+'%':'--',aFGA2>0?(aFGM2/aFGA2*100).toFixed(1)+'%':'--');
