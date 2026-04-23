@@ -212,7 +212,7 @@ input,textarea,select{font-size:16px!important;}
 .coll-chevron{font-size:9px;color:var(--fg-dim);transition:transform .2s ease;flex:0 0 auto;}
 .coll-chevron.open{transform:rotate(90deg);}
 .coll-title{font-family:var(--sans);font-size:10.5px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:var(--fg-secondary);}
-.coll-summary{font-family:var(--mono);font-size:10px;color:var(--fg-dim);margin-left:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.coll-summary{font-family:var(--mono);font-size:10px;color:var(--fg-secondary);margin-left:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .coll-body{display:grid;grid-template-rows:0fr;transition:grid-template-rows .25s ease;overflow:hidden;}
 .coll-body.open{grid-template-rows:1fr;}
 .coll-inner{overflow:hidden;padding:0 16px;}
@@ -2457,9 +2457,16 @@ function renderDepthAuditSection(id,cs,hA,aA){
   var html='<div class="collapsible">';
   html+='<div class="coll-header" onclick="toggleColl(\''+id+'\',\'da\')">';
   html+='<span class="coll-chevron'+(isOpen?' open':'')+'">\u25b8</span>';
-  html+='<span class="coll-title">Depth Audit \u00b7 Shot Zones</span>';
-  var totalH=(pbp.home.shotDiet?pbp.home.shotDiet.total:0),totalA=(pbp.away.shotDiet?pbp.away.shotDiet.total:0);
-  html+='<span class="coll-meta">'+totalH+'/'+totalA+' FGA</span>';
+  html+='<span class="coll-title">Shot Zones</span>';
+  // Find most efficient player (min 4 FGA)
+  var szSummary='';
+  if(pbp.raw&&pbp.raw.shots){
+    var plMap={};pbp.raw.shots.forEach(function(s){if(!plMap[s.p+'_'+s.tm])plMap[s.p+'_'+s.tm]={n:s.p,tm:s.tm,m:0,a:0};plMap[s.p+'_'+s.tm].a++;if(s.m)plMap[s.p+'_'+s.tm].m++;});
+    var topP=null,topPct=0;
+    Object.values(plMap).forEach(function(p){if(p.a>=4){var pct=p.m/p.a;if(pct>topPct||(pct===topPct&&p.a>(topP?topP.a:0))){topPct=pct;topP=p;}}});
+    if(topP){var lastName=topP.n.split(' ').pop();szSummary='<span style="color:'+tc(topP.tm)+'">'+esc(lastName)+'</span> '+topP.m+'/'+topP.a+' <span style="color:'+_dEc(topP.m,topP.a)+'">'+Math.round(topPct*100)+'%</span>';}
+  }
+  html+='<span class="coll-summary">'+szSummary+'</span>';
   html+='</div>';
   html+='<div class="coll-body'+(isOpen?' open':'')+'">';
   if(isOpen){
@@ -2689,14 +2696,14 @@ function renderScoringCompSection(id,cs,hA,aA){
   var sTrA='',vTrA='';
   if(sc.structTrend)sTrA=sc.structTrend==='up'?' \u25b2':sc.structTrend==='down'?' \u25bc':' \u25ac';
   if(sc.varTrend)vTrA=sc.varTrend==='up'?' \u25b2':sc.varTrend==='down'?' \u25bc':' \u25ac';
-  var summary='S: '+sTeam+' +'+sAbs+sTrA+' \u00b7 V: '+vTeam+' +'+vAbs+vTrA;
+  var summary='<span style="color:var(--green)">S:</span> <span style="color:'+tc(sTeam)+'">'+esc(sTeam)+'</span> +'+sAbs+sTrA+' <span style="color:var(--fg-dim)">\u00b7</span> <span style="color:var(--amber)">V:</span> <span style="color:'+tc(vTeam)+'">'+esc(vTeam)+'</span> +'+vAbs+vTrA;
   var isOpen=_collOpen[id+'_sc']||false;
 
   var html='<div class="collapsible">';
   html+='<div class="coll-header" onclick="toggleColl(\''+id+'\',\'sc\')">';
   html+='<span class="coll-chevron'+(isOpen?' open':'')+'">\u25b8</span>';
   html+='<span class="coll-title">Scoring Comp</span>';
-  html+='<span class="coll-summary">'+esc(summary)+'</span>';
+  html+='<span class="coll-summary">'+summary+'</span>';
   html+='</div>';
   html+='<div class="coll-body'+(isOpen?' open':'')+'">';
   html+='<div class="coll-inner">';
@@ -2769,7 +2776,7 @@ function renderMarginFlowSection(id,cs,hA,aA){
   if(sEvts.length<4&&runs.length===0)return'';
 
   var bigRun=runs.length>0?runs.reduce(function(a,b){return b.pts>a.pts?b:a;},runs[0]):null;
-  var summary=runs.length+' runs'+(bigRun?' \u00b7 '+bigRun.team+' '+bigRun.pts+'-'+(bigRun.oppPts||0):'');
+  var summary=runs.length+' runs'+(bigRun?' <span style="color:var(--fg-dim)">\u00b7</span> <span style="color:'+tc(bigRun.team)+'">'+esc(bigRun.team)+'</span> '+bigRun.pts+'-'+(bigRun.oppPts||0):'');
   var isOpen=_collOpen[id+'_mf']||false;
   var selRun=_selectedRun[id];
 
@@ -2777,7 +2784,7 @@ function renderMarginFlowSection(id,cs,hA,aA){
   html+='<div class="coll-header" onclick="toggleColl(\''+id+'\',\'mf\')">';
   html+='<span class="coll-chevron'+(isOpen?' open':'')+'">\u25b8</span>';
   html+='<span class="coll-title">Margin Flow</span>';
-  html+='<span class="coll-summary">'+esc(summary)+'</span>';
+  html+='<span class="coll-summary">'+summary+'</span>';
   html+='</div>';
   html+='<div class="coll-body'+(isOpen?' open':'')+'">';
   html+='<div class="coll-inner">';
