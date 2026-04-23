@@ -1183,9 +1183,13 @@ async function reportQuarterJourney(sql) {
 // ── REPORT: GRADUATION SIM ──────────────────────────────────────────────────
 // Simulate checkpoint graduation using quarter boundaries.
 // Tests multiple MF/minF gates to find optimal WNBA thresholds.
-async function reportGraduationSim(sql) {
+async function reportGraduationSim(sql, url) {
   const games = await sql`SELECT game_id, sr_summary, winner, home_alias, away_alias, margin, margin_bucket, indicators, conviction_tier, conviction_detail, ctrl_team_won FROM wnba_backtest WHERE sr_summary IS NOT NULL`;
   if (games.length === 0) return { error: 'No SR data' };
+
+  // B-rank timing gate: ?bgate=Q3 means B-rank can only graduate at Q3 or later
+  const bgateParam = url?.searchParams?.get('bgate') || '';
+  const bGateQ = bgateParam === 'Q3' ? 3 : bgateParam === 'Q4' ? 4 : 2; // default Q2 (no gate)
 
   // MF gates to test
   const mfGates = [0.55, 0.58, 0.60, 0.62, 0.65, 0.68, 0.70];
@@ -1267,6 +1271,9 @@ async function reportGraduationSim(sql) {
                 else if (hasStrong) gradRank = 'B';
                 else continue; // Don't graduate without at least STRONG
 
+                // B-rank timing gate: block B before bGateQ
+                if (gradRank === 'B' && (q + 1) < bGateQ) continue;
+
                 gradQ = q;
                 gradTeam = ctrl;
 
@@ -1342,7 +1349,8 @@ async function reportGraduationSim(sql) {
 
   return {
     totalGames: gameData.length,
-    note: 'Quarter boundaries as checkpoints (Q1-Q4). Graduation requires 2+ checkpoints, MF >= gate, minF >= gate, team leading, conviction >= STRONG.',
+    bGate: bGateQ > 2 ? `Q${bGateQ}` : 'none',
+    note: `Quarter boundaries as checkpoints (Q1-Q4). Graduation requires 2+ checkpoints, MF >= gate, minF >= gate, team leading, conviction >= STRONG.${bGateQ > 2 ? ' B-rank timing gate: cannot graduate before Q' + bGateQ + '.' : ''}`,
     bestCombos: ranked.slice(0, 10).map(r => ({
       gates: `MF=${r.mfGate} minF=${r.minFGate}`,
       accuracy: r.gradPct + '%',
@@ -2524,7 +2532,7 @@ export default async (req) => {
       case 'report':  result = await phaseReport(sql); break;
       case 'explore': result = await phaseExplore(sql); break;
       case 'report_quarter_journey': result = await reportQuarterJourney(sql); break;
-      case 'report_graduation_sim': result = await reportGraduationSim(sql); break;
+      case 'report_graduation_sim': result = await reportGraduationSim(sql, url); break;
       case 'report_close_game': result = await reportCloseGame(sql); break;
       case 'report_trailing_profile': result = await reportTrailingProfile(sql); break;
       case 'report_indicator_stability': result = await reportIndicatorStability(sql); break;
