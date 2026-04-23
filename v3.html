@@ -1013,7 +1013,11 @@ function renderCard(id){
       } else if(pred.fwp){hFwp=esc(pred.fwp);winnerTeam=hA;}
       if(pred.homeValue){var _hf=pred.homeValue.fwp;hFwp=_hf!=null?(String(_hf).includes('%')?_hf:_hf+'%'):hFwp;hEdge=pred.homeValue.edge!=null?(pred.homeValue.edge>0?'+':'')+pred.homeValue.edge+'%':'--';hML=pred.homeValue.ml||'--';hSprd=pred.homeValue.spread||'--';}
       if(pred.awayValue){var _af=pred.awayValue.fwp;aFwp=_af!=null?(String(_af).includes('%')?_af:_af+'%'):aFwp;aEdge=pred.awayValue.edge!=null?(pred.awayValue.edge>0?'+':'')+pred.awayValue.edge+'%':'--';aML=pred.awayValue.ml||'--';aSprd=pred.awayValue.spread||'--';}
-      if(pred.edge&&hEdge==='--'){hEdge=esc(pred.edge.replace(/\s*\(.*$/, ''));}
+      if(pred.edge&&hEdge==='--'){
+        var _eMatch=String(pred.edge).match(/=\s*([+-]?\d+\.?\d*%?)\s*$/);
+        if(_eMatch)hEdge=_eMatch[1]+(String(_eMatch[1]).includes('%')?'':'%');
+        else{var _eNum=String(pred.edge).match(/([+-]?\d+\.?\d*)%/);if(_eNum)hEdge=_eNum[1]+'%';}
+      }
       // Odds from cs.oddsData fallback
       var od=cs.oddsData;
       if(od){
