@@ -1842,7 +1842,7 @@ function computeAtCheckpoint(cpSnap, homeAlias, awayAlias) {
     I1, I2, I3, I4, I5,
     homeAlias: hA, awayAlias: aA,
     homePts: cpSnap.homeScore, awayPts: cpSnap.awayScore,
-    margin: cpSnap.margin, cpLabel: cpSnap.cp.label,
+    margin: cpSnap.margin, cpLabel: cpSnap.cp?.label || 'FULL',
   };
 }
 
