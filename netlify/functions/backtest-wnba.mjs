@@ -2401,16 +2401,17 @@ async function reportReconstructionValidation(sql) {
     const srConv = computeConviction(srInd);
     total++;
 
-    // Compare control team
-    if (pbpInd.controlTeam === srInd.controlTeam) ctrlAgree++;
+    // Compare control team (normalize aliases)
+    const norm = s => bdlAlias(s) || s; // SR alias → BDL alias
+    if (norm(pbpInd.controlTeam) === norm(srInd.controlTeam)) ctrlAgree++;
 
     // Compare conviction
     if (pbpConv.tier === srConv.tier) convAgree++;
 
     // Compare each indicator leader
     for (const ik of ['I1', 'I2', 'I3', 'I4', 'I5']) {
-      const srLeader = srInd[ik]?.leader || 'EVEN';
-      const pbpLeader = pbpInd[ik]?.leader || 'EVEN';
+      const srLeader = norm(srInd[ik]?.leader || 'EVEN');
+      const pbpLeader = norm(pbpInd[ik]?.leader || 'EVEN');
       indN[ik]++;
       if (srLeader === pbpLeader) indAgree[ik]++;
     }
@@ -2440,7 +2441,7 @@ async function reportReconstructionValidation(sql) {
     statDiffs.reb.push(Math.abs((h.oreb + h.dreb - a.oreb - a.dreb)));
 
     // Log disagreements for inspection
-    if (pbpInd.controlTeam !== srInd.controlTeam) {
+    if (norm(pbpInd.controlTeam) !== norm(srInd.controlTeam)) {
       disagrees.push({
         game: `${g.away_alias}@${g.home_alias}`,
         srCtrl: srInd.controlTeam, pbpCtrl: pbpInd.controlTeam,
@@ -2448,7 +2449,7 @@ async function reportReconstructionValidation(sql) {
         srConv: srConv.tier, pbpConv: pbpConv.tier,
         indicators: ['I1','I2','I3','I4','I5'].map(ik => ({
           ind: ik, sr: srInd[ik]?.leader, pbp: pbpInd[ik]?.leader,
-          agree: srInd[ik]?.leader === pbpInd[ik]?.leader,
+          agree: norm(srInd[ik]?.leader || 'EVEN') === norm(pbpInd[ik]?.leader || 'EVEN'),
         })),
         statGaps: {
           disruption: Math.abs((h.stl+h.blk)-(a.stl+a.blk) - (srHome.disruptDiff||0)),
