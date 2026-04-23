@@ -184,6 +184,17 @@ input,textarea,select{font-size:16px!important;}
 .ind-pill{font-family:var(--mono);font-size:10.5px;font-weight:500;padding:5px 8px;border-radius:6px;background:var(--bg-surface-2);border:1px solid var(--hairline);color:var(--fg-tertiary);white-space:nowrap;}
 .ind-pill.won{background:var(--green-dim);border-color:var(--green-border);color:var(--green);}
 .ind-pill.even{color:var(--fg-dim);}
+.ind-pill.sel{outline:2px solid var(--green);outline-offset:1px;}
+.ind-pill{cursor:pointer;-webkit-tap-highlight-color:transparent;}
+.ind-evidence{padding:8px 10px;background:var(--bg-surface-2);border:1px solid var(--hairline-strong);border-radius:var(--r-inner);margin-bottom:14px;font-family:var(--mono);font-size:10px;line-height:1.6;}
+.ind-ev-head{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
+.ind-ev-name{font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--fg-tertiary);}
+.ind-ev-leader{font-family:var(--mono);font-size:11px;font-weight:600;}
+.ind-ev-row{display:flex;justify-content:space-between;align-items:center;padding:2px 0;border-bottom:1px solid var(--hairline);}
+.ind-ev-row:last-child{border-bottom:none;}
+.ind-ev-label{color:var(--fg-tertiary);font-size:9px;font-weight:500;min-width:60px;}
+.ind-ev-vals{display:flex;gap:12px;font-size:10px;}
+.ind-ev-val{white-space:nowrap;}
 .sust-row{display:flex;align-items:center;gap:8px;padding:6px 0;font-family:var(--sans);font-size:11px;}
 .sust-label{font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:var(--fg-dim);min-width:60px;font-size:9.5px;}
 .sust-team{font-weight:500;color:var(--fg-tertiary);min-width:28px;}
@@ -1067,9 +1078,11 @@ function renderCard(id){
         html+='</div>';
       }
 
-      // Indicator strip (I1-I5)
+      // Indicator strip (I1-I5) — tappable for evidence
       html+='<div class="ind-strip">';
       var indLabels=['I1','I2','I3','I4','I5'];
+      var indNames={I1:'Disruption',I2:'Interior',I3:'Shot Quality',I4:'Game Control',I5:'Execution'};
+      var selInd=cs._selectedInd||null;
       for(var ii=0;ii<5;ii++){
         var indKey=indLabels[ii];
         var ind=floor[indKey];
@@ -1077,13 +1090,17 @@ function renderCard(id){
           var ldr=ind.leader||'?';
           var isWon=ind.score!=null?(ind.score>=0.6):false;
           var isEven=ind.score!=null?(ind.score>=0.4&&ind.score<0.6):false;
-          var cls='ind-pill'+(isWon?' won':'')+(isEven?' even':'');
-          html+='<span class="'+cls+'">'+indKey+' '+esc(isEven?'Even':ldr)+'</span>';
+          var cls='ind-pill'+(isWon?' won':'')+(isEven?' even':'')+(selInd===indKey?' sel':'');
+          html+='<span class="'+cls+'" onclick="toggleIndEvidence(\''+id+'\',\''+indKey+'\')">'+indKey+' '+esc(isEven?'Even':ldr)+'</span>';
         } else {
           html+='<span class="ind-pill even">'+indKey+' --</span>';
         }
       }
       html+='</div>';
+      // Evidence detail (expanded indicator)
+      if(selInd){
+        html+=buildIndEvidence(id,cs,hA,aA,selInd,indNames[selInd],floor);
+      }
 
       // Sustainability rows
       var sust=cs.sustainabilityAudit||cs.clientSustainability;
@@ -1210,6 +1227,90 @@ function addLog(id,msg,ok){var cs=cardState[id];if(!cs)return;if(!cs.logs)cs.log
 function persistAnalysis(id,cs){try{localStorage.setItem('nba4:analysis:'+id,JSON.stringify({analysis:cs.analysis,analysisTime:cs.analysisTime?cs.analysisTime.getTime():null,sonnetIndicators:cs.sonnetIndicators,prediction:cs.prediction,sustainabilityAudit:cs.sustainabilityAudit,clientSustainability:cs.clientSustainability||null}));}catch(e){}}
 
 function restoreAnalysis(id){try{var raw=localStorage.getItem('nba4:analysis:'+id);if(!raw)return null;return JSON.parse(raw);}catch(e){return null;}}
+
+function toggleIndEvidence(gameId,indKey){
+  var cs=cardState[gameId];if(!cs)return;
+  cs._selectedInd=cs._selectedInd===indKey?null:indKey;
+  renderCard(gameId);
+}
+function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
+  var ind=floor[indKey];if(!ind)return'';
+  var isWon=ind.score!=null&&ind.score>=0.6;
+  var isEven=ind.score!=null&&ind.score>=0.4&&ind.score<0.6;
+  var ldr=isEven?'EVEN':ind.leader||'?';
+  var ldrColor=isEven?'var(--fg-dim)':tc(ldr);
+
+  // Gather stats from box score rollup + PBP
+  var box=cs._lastBoxScore;
+  var pbp=cs.pbpAudit;
+  var html='<div class="ind-evidence">';
+  html+='<div class="ind-ev-head"><span class="ind-ev-name">'+indKey+' '+esc(indName)+'</span>';
+  html+='<span class="ind-ev-leader" style="color:'+ldrColor+'">'+esc(ldr)+'</span></div>';
+
+  function evRow(label,hVal,aVal,opts){
+    opts=opts||{};var inv=opts.invert;
+    var hCol='var(--fg-primary)',aCol='var(--fg-primary)';
+    if(hVal!==aVal){
+      if(inv){hCol=hVal<aVal?'var(--green)':'var(--coral)';aCol=aVal<hVal?'var(--green)':'var(--coral)';}
+      else{hCol=hVal>aVal?'var(--green)':'var(--coral)';aCol=aVal>hVal?'var(--green)':'var(--coral)';}
+    }
+    return'<div class="ind-ev-row"><span class="ind-ev-label">'+label+'</span><div class="ind-ev-vals"><span class="ind-ev-val" style="color:'+tc(hA)+'">'+hA+'</span><span class="ind-ev-val" style="color:'+hCol+'">'+hVal+'</span><span style="color:var(--fg-dim)">-</span><span class="ind-ev-val" style="color:'+aCol+'">'+aVal+'</span><span class="ind-ev-val" style="color:'+tc(aA)+'">'+aA+'</span></div></div>';
+  }
+  if(box){
+    var hPl=box.home_team?.players||[],aPl=box.visitor_team?.players||[];
+    function sum(pl,f){var t=0;pl.forEach(function(p){t+=p[f]||0;});return t;}
+    if(indKey==='I1'){
+      html+=evRow('Steals',sum(hPl,'stl'),sum(aPl,'stl'));
+      html+=evRow('Blocks',sum(hPl,'blk'),sum(aPl,'blk'));
+      html+=evRow('Turnovers',sum(hPl,'turnover'),sum(aPl,'turnover'),{invert:true});
+      if(pbp){
+        var hF=pbp.home&&pbp.home.tos?pbp.home.tos.forced||0:0,aF=pbp.away&&pbp.away.tos?pbp.away.tos.forced||0:0;
+        html+=evRow('Forced TO',aF,hF);// opponent's forced = my steals equivalent
+      }
+    } else if(indKey==='I2'){
+      if(pbp){
+        var hRim=(pbp.home.rim?pbp.home.rim.made:0)+'/'+(pbp.home.rim?pbp.home.rim.att:0);
+        var aRim=(pbp.away.rim?pbp.away.rim.made:0)+'/'+(pbp.away.rim?pbp.away.rim.att:0);
+        html+=evRow('Rim FG',hRim,aRim);
+        var hPnt=(pbp.home.paint?pbp.home.paint.made:0)+'/'+(pbp.home.paint?pbp.home.paint.att:0);
+        var aPnt=(pbp.away.paint?pbp.away.paint.made:0)+'/'+(pbp.away.paint?pbp.away.paint.att:0);
+        html+=evRow('Paint FG',hPnt,aPnt);
+      }
+      html+=evRow('FTA',sum(hPl,'fta'),sum(aPl,'fta'));
+      html+=evRow('FTM',sum(hPl,'ftm'),sum(aPl,'ftm'));
+    } else if(indKey==='I3'){
+      var hFGM=sum(hPl,'fgm'),hFGA=sum(hPl,'fga'),h3M=sum(hPl,'fg3m'),h3A=sum(hPl,'fg3a');
+      var aFGM=sum(aPl,'fgm'),aFGA=sum(aPl,'fga'),a3M=sum(aPl,'fg3m'),a3A=sum(aPl,'fg3a');
+      var hEFG=hFGA>0?((hFGM+0.5*h3M)/hFGA*100).toFixed(1):'--';
+      var aEFG=aFGA>0?((aFGM+0.5*a3M)/aFGA*100).toFixed(1):'--';
+      html+=evRow('eFG%',hEFG+'%',aEFG+'%');
+      html+=evRow('3PT',h3M+'/'+h3A,a3M+'/'+a3A);
+      html+=evRow('Assists',sum(hPl,'ast'),sum(aPl,'ast'));
+      var hAR=hFGM>0?Math.round(sum(hPl,'ast')/hFGM*100):0;
+      var aAR=aFGM>0?Math.round(sum(aPl,'ast')/aFGM*100):0;
+      html+=evRow('Ast Ratio',hAR+'%',aAR+'%');
+    } else if(indKey==='I4'){
+      html+=evRow('Score',box.home_team_score||0,box.visitor_team_score||0);
+      var hLine=box.home_team?.line_score||[],aLine=box.visitor_team?.line_score||[];
+      for(var qi=0;qi<Math.max(hLine.length,aLine.length);qi++){
+        html+=evRow('Q'+(qi+1),hLine[qi]||0,aLine[qi]||0);
+      }
+    } else if(indKey==='I5'){
+      if(pbp&&pbp.runs6){
+        var hR6=0,aR6=0;pbp.runs6.forEach(function(r){if(r.team===hA)hR6++;else aR6++;});
+        html+=evRow('Runs (6+)',hR6,aR6);
+        var share=hR6+aR6>0?Math.round(hR6/(hR6+aR6)*100):50;
+        html+=evRow('Run Share',share+'%',(100-share)+'%');
+      }
+      var hFGM2=sum(hPl,'fgm'),hFGA2=sum(hPl,'fga'),aFGM2=sum(aPl,'fgm'),aFGA2=sum(aPl,'fga');
+      html+=evRow('FG%',hFGA2>0?(hFGM2/hFGA2*100).toFixed(1)+'%':'--',aFGA2>0?(aFGM2/aFGA2*100).toFixed(1)+'%':'--');
+    }
+  } else {
+    html+='<div style="color:var(--fg-dim);font-size:10px">Box score data not loaded</div>';
+  }
+  html+='</div>';
+  return html;
+}
 
 function getFloor(cs){
   if(!cs)return null;
