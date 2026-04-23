@@ -1315,6 +1315,21 @@ function persistAnalysis(id,cs){try{localStorage.setItem('nba4:analysis:'+id,JSO
 
 function restoreAnalysis(id){try{var raw=localStorage.getItem('nba4:analysis:'+id);if(!raw)return null;return JSON.parse(raw);}catch(e){return null;}}
 
+// Shared parser for v2 fields from raw_text (used by both sync paths)
+function parseRawTextV2(rawText){
+  if(!rawText)return{};
+  var t=rawText.replace(/\r\n/g,'\n').replace(/\r/g,'\n');
+  var out={};
+  var riskLine=t.match(/RISK:\s*(.+?)(?:\n|$)/);if(riskLine){out.risk=riskLine[1].trim();if(out.risk.toUpperCase().startsWith('NONE'))out.risk=null;}
+  var closLine=t.match(/CLOSING:\s*(.+?)(?:\n|$)/);if(closLine)out.closing=closLine[1].trim();
+  var narLine=t.match(/NARRATIVE:\s*([\s\S]*?)(?:\n(?:Sustainability|Lead Source|DISAGREEMENT|RISK|CLOSING|FWP|EDGE):|$)/);
+  if(narLine)out.narrative=narLine[1].trim();
+  if(!out.narrative){var narSimple=t.match(/NARRATIVE:\s*(.+)/);if(narSimple)out.narrative=narSimple[1].trim();}
+  var disLine=t.match(/DISAGREEMENT:\s*(.+?)(?:\n|$)/);
+  if(disLine){out.disagreement=disLine[1].trim();if(out.disagreement.toUpperCase()==='NONE')out.disagreement=null;}
+  return out;
+}
+
 function toggleIndEvidence(gameId,indKey){
   var cs=cardState[gameId];if(!cs)return;
   cs._selectedInd=cs._selectedInd===indKey?null:indKey;
@@ -1566,6 +1581,16 @@ async function syncAnalysesFromDB(){
       var dbTime=cached.analysisTime||0;
       if(localTime>=dbTime&&cs.prediction)return;
       if(cached.prediction)cs.prediction=cached.prediction;
+      else cs.prediction=cs.prediction||{};
+      // Merge v2 fields from raw_text into prediction
+      var v2=parseRawTextV2(cached.analysis);
+      if(v2.narrative&&!cs.prediction.narrative)cs.prediction.narrative=v2.narrative;
+      if(v2.risk&&!cs.prediction.risk)cs.prediction.risk=v2.risk;
+      if(v2.closing&&!cs.prediction.closing)cs.prediction.closing=v2.closing;
+      if(v2.disagreement&&!cs.prediction.disagreement)cs.prediction.disagreement=v2.disagreement;
+      if(cached.fwp&&!cs.prediction.fwp)cs.prediction.fwp=cached.fwp;
+      if(cached.edge&&!cs.prediction.edge)cs.prediction.edge=cached.edge;
+      if(cached.signal&&!cs.prediction.signal)cs.prediction.signal=cached.signal;
       if(cached.sonnetIndicators)cs.sonnetIndicators=cached.sonnetIndicators;
       if(dbTime)cs.analysisTime=new Date(dbTime);
       cs.analysis=cached.analysis||cs.analysis;
@@ -1649,14 +1674,9 @@ function applyAutoAnalysesToCards(){
       var predLine=t.match(/Prediction:\s*(.+)/i);if(predLine)d.prediction=predLine[1].trim();
       var sigLine=t.match(/SIGNAL:\s*(BUY\s+\w+|NO VALUE|PASS)\s*(?:[---]\s*(.+))?/i);
       if(sigLine){d.signalType=sigLine[1].trim().toUpperCase();d.signalNote=sigLine[2]?sigLine[2].trim():'';}
-      var riskLine=t.match(/RISK:\s*(.+?)(?:\n|$)/);if(riskLine){d.risk=riskLine[1].trim();if(d.risk.toUpperCase().startsWith('NONE'))d.risk=null;}
-      var closLine=t.match(/CLOSING:\s*(.+?)(?:\n|$)/);if(closLine)d.closing=closLine[1].trim();
-      var disLine=t.match(/DISAGREEMENT:\s*(.+?)(?:\n|$)/);
-      if(disLine){d.disagreement=disLine[1].trim();if(d.disagreement.toUpperCase()==='NONE')d.disagreement=null;}
-      var narLine=t.match(/NARRATIVE:\s*([\s\S]*?)(?:\n(?:Sustainability|Lead Source|DISAGREEMENT|RISK|CLOSING|FWP|EDGE):|$)/);
-      if(narLine)d.narrative=narLine[1].trim();
-      // Fallback: if NARRATIVE not found, try simpler pattern
-      if(!d.narrative){var narSimple=t.match(/NARRATIVE:\s*(.+)/);if(narSimple)d.narrative=narSimple[1].trim();}
+      var v2f=parseRawTextV2(latest.raw_text);
+      d.narrative=v2f.narrative||null;d.risk=v2f.risk||null;
+      d.closing=v2f.closing||null;d.disagreement=v2f.disagreement||null;
     }
 
     if(d.conviction||d.prediction||d.fwp||(d.homeValue&&d.awayValue)){
