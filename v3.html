@@ -1650,7 +1650,17 @@ function applyAutoAnalysesToCards(){
     });
     if(newEntries>0)cs.analysisHistory.sort(function(a,b){return(a.time||'').localeCompare(b.time||'');});
 
-    if(latestTime<=localTime&&cs.prediction){if(newEntries>0)applied++;return;}
+    if(latestTime<=localTime&&cs.prediction){
+      // Still merge v2 narrative fields from auto analyses (client analyses lack these)
+      if(latest.raw_text&&cs.prediction){
+        var _v2=parseRawTextV2(latest.raw_text);
+        if(_v2.narrative&&!cs.prediction.narrative)cs.prediction.narrative=_v2.narrative;
+        if(_v2.risk&&!cs.prediction.risk)cs.prediction.risk=_v2.risk;
+        if(_v2.closing&&!cs.prediction.closing)cs.prediction.closing=_v2.closing;
+        if(_v2.disagreement&&!cs.prediction.disagreement)cs.prediction.disagreement=_v2.disagreement;
+      }
+      if(newEntries>0)applied++;return;
+    }
 
     var pred=null,ind=null;
     if(latest.prediction_json){try{pred=typeof latest.prediction_json==='string'?JSON.parse(latest.prediction_json):latest.prediction_json;}catch(e){}}
