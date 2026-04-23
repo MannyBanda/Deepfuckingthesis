@@ -2001,12 +2001,11 @@ function renderDrawer(gameId){
       html+='<tr><td>Q'+qk+(isPartial?'*':'')+'</td>';
       statDefs.forEach(function(s){
         var hVal=s.get(d.home);var aVal=s.get(d.away);
-        // Delta from control team perspective
-        var rawDelta=ctrlIsHome?hVal-aVal:aVal-hVal;
-        // For TO: invert so positive = fewer TOs = good
-        var delta=s.invert?-rawDelta:rawDelta;
+        // Delta from control team perspective (raw — no sign inversion)
+        var delta=ctrlIsHome?hVal-aVal:aVal-hVal;
         deltas[s.label].push(delta);
-        var cls=delta>0?'pos':delta<0?'neg':'even';
+        // For TO: negative = fewer TOs = good (green), positive = more TOs = bad (red)
+        var cls=s.invert?(delta<0?'pos':delta>0?'neg':'even'):(delta>0?'pos':delta<0?'neg':'even');
         var txt=delta>0?'+'+delta:delta===0?'\u00b7':''+delta;
         html+='<td class="qd-cell '+cls+'">'+txt+'</td>';
       });
@@ -2031,10 +2030,9 @@ function renderDrawer(gameId){
         html+='<td style="white-space:nowrap"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);margin-right:4px;animation:pulse 1.8s ease-in-out infinite"></span>Q'+curQ+'</td>';
         statDefs.forEach(function(s){
           var hVal=s.get(liveHome);var aVal=s.get(liveAway);
-          var rawDelta=ctrlIsHome?hVal-aVal:aVal-hVal;
-          var delta=s.invert?-rawDelta:rawDelta;
+          var delta=ctrlIsHome?hVal-aVal:aVal-hVal;
           deltas[s.label].push(delta);
-          var cls=delta>0?'pos':delta<0?'neg':'even';
+          var cls=s.invert?(delta<0?'pos':delta>0?'neg':'even'):(delta>0?'pos':delta<0?'neg':'even');
           var txt=delta>0?'+'+delta:delta===0?'\u00b7':''+delta;
           if(s.label==='PNT'&&hVal===0&&aVal===0){txt='--';cls='even';}
           html+='<td class="qd-cell '+cls+'">'+txt+'</td>';
@@ -2047,8 +2045,10 @@ function renderDrawer(gameId){
       html+='<tr><td class="qd-trend" style="color:var(--fg-dim)">TREND</td>';
       statDefs.forEach(function(s){
         var arr=deltas[s.label];if(arr.length<2){html+='<td class="qd-trend qd-cell even">\u25ac</td>';return;}
-        var latest=arr[arr.length-1];var avg=arr.reduce(function(a,b){return a+b;},0)/arr.length;
-        var trend=latest>avg+0.5?'up':latest<avg-0.5?'down':'flat';
+        var cumSum=arr.reduce(function(a,b){return a+b;},0);
+        // For inverted stats (TO): negative cumSum = good = up arrow
+        var effective=s.invert?-cumSum:cumSum;
+        var trend=effective>0.5?'up':effective<-0.5?'down':'flat';
         var sym=trend==='up'?'\u25b2':trend==='down'?'\u25bc':'\u25ac';
         var col=trend==='up'?'pos':trend==='down'?'neg':'even';
         html+='<td class="qd-trend qd-cell '+col+'">'+sym+'</td>';
