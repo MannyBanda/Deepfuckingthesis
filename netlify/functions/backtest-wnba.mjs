@@ -23,9 +23,10 @@ const BDL_KEY = process.env.BDL_API_KEY;
 const SR_BASE = 'https://api.sportradar.com/wnba/trial/v8/en/';
 const SR_KEY = process.env.SR_WNBA_KEY || process.env.SR_API_KEY; // prefer dedicated WNBA key
 
-// ── WNBA INDICATOR WEIGHTS ───────────────────────────────────────────────────
-// I1 Disruption 15%, I2 Perimeter+FT 20%, I3 Shot Quality 30%, I4 Game Control 25%, I5 Momentum 10%
-const W = { I1: 0.15, I2: 0.20, I3: 0.30, I4: 0.25, I5: 0.10 };
+// ── WNBA INDICATOR WEIGHTS (overridable via ?weights=25,20,35,10,10) ────────
+// I1 Disruption, I2 Perimeter+FT, I3 Shot Quality, I4 Game Control, I5 Momentum
+let W = { I1: 0.15, I2: 0.20, I3: 0.30, I4: 0.25, I5: 0.10 };
+const W_DEFAULT = { ...W };
 
 // ── BDL FETCH ────────────────────────────────────────────────────────────────
 async function bdlFetch(path) {
@@ -2495,6 +2496,21 @@ export default async (req) => {
   const url = new URL(req.url);
   const phase = url.searchParams.get('phase') || 'report';
 
+  // Override weights: ?weights=25,20,35,10,10 (I1,I2,I3,I4,I5 as percentages)
+  const wParam = url.searchParams.get('weights');
+  if (wParam) {
+    const parts = wParam.split(',').map(Number);
+    if (parts.length === 5 && parts.every(n => !isNaN(n)) && Math.abs(parts.reduce((s, v) => s + v, 0) - 100) < 1) {
+      W = { I1: parts[0] / 100, I2: parts[1] / 100, I3: parts[2] / 100, I4: parts[3] / 100, I5: parts[4] / 100 };
+    } else {
+      return new Response(JSON.stringify({ error: 'weights must be 5 comma-separated numbers summing to 100. Example: ?weights=25,20,35,10,10' }), {
+        status: 400, headers: { 'Content-Type': 'application/json' },
+      });
+    }
+  } else {
+    W = { ...W_DEFAULT };
+  }
+
   try {
     let result;
     switch (phase) {
@@ -2522,6 +2538,10 @@ export default async (req) => {
       case 'report_validate_reconstruction': result = await reportReconstructionValidation(sql); break;
       default:
         result = { error: `Unknown phase: ${phase}. Phases: init, collect, sample, compute, report, explore, collect_pbp, compute_checkpoints, report_cp_journey, report_cp_graduation, report_cp_trailing, report_cp_stability, report_cp_close` };
+    }
+    // Inject active weights into report output
+    if (result && typeof result === 'object' && !result.error) {
+      result._weights = { I1: W.I1, I2: W.I2, I3: W.I3, I4: W.I4, I5: W.I5, custom: !!wParam };
     }
     return new Response(JSON.stringify(result, null, 2), {
       headers: { 'Content-Type': 'application/json' },
