@@ -410,6 +410,17 @@ window.__nbaBooted = false;
 const FN = '/.netlify/functions/';
 const W = {I1:.10, I2:.15, I3:.20, I4:.30, I5:.25};
 
+// ── TEAM COLORS ──
+const TC={
+ATL:'#E03A3E',BOS:'#007A33',BKN:'#AAAAAA',CHA:'#00788C',CHI:'#CE1141',
+CLE:'#860038',DAL:'#00538C',DEN:'#FEC524',DET:'#C8102E',GSW:'#1D428A',
+HOU:'#CE1141',IND:'#FDBB30',LAC:'#C8102E',LAL:'#552583',MEM:'#5D76A9',
+MIA:'#98002E',MIL:'#00471B',MIN:'#236192',NOP:'#C8102E',NYK:'#F58426',
+OKC:'#007AC1',ORL:'#0077C0',PHI:'#006BB6',PHX:'#E56020',POR:'#E03A3E',
+SAC:'#5A2D81',SAS:'#C4CED4',TOR:'#CE1141',UTA:'#F9A01B',WAS:'#E31837'
+};
+function tc(alias){return TC[(alias||'').toUpperCase()]||'var(--fg-primary)';}
+
 // ── STATE ──
 var games = [], activeGameId = null, pollTimer = null, dateOffset = 0;
 var pollInterval = 10000;
@@ -851,13 +862,13 @@ function renderCard(id){
   if(state==='PRE'){
     var ms=new Date(g.scheduled)-new Date();
     var h=Math.max(0,Math.floor(ms/3600000)),m=Math.max(0,Math.floor((ms%3600000)/60000));
-    html+='<div class="score-row"><div class="team"><span class="team-abbr">'+esc(aA)+(aRank?'<span class="team-rank">'+ordinal(aRank.confRank)+'</span>':'')+'</span><span class="team-sub">'+esc(g.away?.name||'')+'</span></div>';
+    html+='<div class="score-row"><div class="team"><span class="team-abbr" style="color:'+tc(aA)+'">'+esc(aA)+(aRank?'<span class="team-rank">'+ordinal(aRank.confRank)+'</span>':'')+'</span><span class="team-sub">'+esc(g.away?.name||'')+'</span></div>';
     html+='<div class="score" style="font-size:20px;color:var(--fg-dim)">'+esc((h>0?h+'h ':'')+ m+'m')+'</div>';
-    html+='<div class="team is-right"><span class="team-abbr">'+esc(hA)+(hRank?'<span class="team-rank">'+ordinal(hRank.confRank)+'</span>':'')+'</span><span class="team-sub">'+esc(g.home?.name||'')+'</span></div></div>';
+    html+='<div class="team is-right"><span class="team-abbr" style="color:'+tc(hA)+'">'+esc(hA)+(hRank?'<span class="team-rank">'+ordinal(hRank.confRank)+'</span>':'')+'</span><span class="team-sub">'+esc(g.home?.name||'')+'</span></div></div>';
   } else {
-    html+='<div class="score-row"><div class="team"><span class="team-abbr">'+esc(aA)+(aRank?'<span class="team-rank">'+ordinal(aRank.confRank)+'</span>':'')+'</span><span class="team-sub">'+esc(g.away?.name||'')+'</span></div>';
+    html+='<div class="score-row"><div class="team"><span class="team-abbr" style="color:'+tc(aA)+'">'+esc(aA)+(aRank?'<span class="team-rank">'+ordinal(aRank.confRank)+'</span>':'')+'</span><span class="team-sub">'+esc(g.away?.name||'')+'</span></div>';
     html+='<div class="score">'+(g.awayPoints??'\u2014')+'<span class="em-dash">\u2014</span>'+(g.homePoints??'\u2014')+'</div>';
-    html+='<div class="team is-right"><span class="team-abbr">'+esc(hA)+(hRank?'<span class="team-rank">'+ordinal(hRank.confRank)+'</span>':'')+'</span><span class="team-sub">'+esc(g.home?.name||'')+'</span></div></div>';
+    html+='<div class="team is-right"><span class="team-abbr" style="color:'+tc(hA)+'">'+esc(hA)+(hRank?'<span class="team-rank">'+ordinal(hRank.confRank)+'</span>':'')+'</span><span class="team-sub">'+esc(g.home?.name||'')+'</span></div></div>';
   }
   html+='</div>';
 
@@ -868,7 +879,7 @@ function renderCard(id){
     var wpOpen=cs.espnWP.opening!=null?(cs.espnWP.home>=cs.espnWP.away?cs.espnWP.opening:100-cs.espnWP.opening):null;
     var wpDelta=wpOpen!=null?wpPct-wpOpen:null;
     var wpTrend=wpDelta!=null?(wpDelta>5?'\u25b2 +'+Math.round(wpDelta):wpDelta<-5?'\u25bc '+Math.round(wpDelta):'\u25ac'):'';
-    html+='<div class="wp-chart"><div class="wp-head"><div class="wp-head-left"><span>ESPN WP</span><span class="wp-val">'+esc(wpLead)+' '+wpPct+'%</span>';
+    html+='<div class="wp-chart"><div class="wp-head"><div class="wp-head-left"><span>ESPN WP</span><span class="wp-val"><span style="color:'+tc(wpLead)+'">'+esc(wpLead)+'</span> '+wpPct+'%</span>';
     if(wpTrend)html+='<span class="wp-trend">'+wpTrend+'</span>';
     html+='</div><div class="wp-head-right">';
     if(wpOpen!=null)html+='<span>open '+Math.round(wpOpen)+'%</span>';
@@ -919,8 +930,8 @@ function renderCard(id){
 
       html+='<table class="vr-table"><thead><tr><th></th><th>FWP</th><th>Edge</th><th>ML</th><th>Spread</th></tr></thead><tbody>';
       var aWin=winnerTeam===aA,hWin=winnerTeam===hA;
-      html+='<tr class="'+(aWin?'winner':'')+'"><td>'+(aWin?'<span class="vr-arrow">\u25b6</span>':'')+esc(aA)+'</td><td>'+aFwp+'</td><td>'+edgeHtml(aEdge)+'</td><td>'+aML+'</td><td>'+aSprd+'</td></tr>';
-      html+='<tr class="'+(hWin?'winner':'')+'"><td>'+(hWin?'<span class="vr-arrow">\u25b6</span>':'')+esc(hA)+'</td><td>'+hFwp+'</td><td>'+edgeHtml(hEdge)+'</td><td>'+hML+'</td><td>'+hSprd+'</td></tr>';
+      html+='<tr class="'+(aWin?'winner':'')+'"><td>'+(aWin?'<span class="vr-arrow">\u25b6</span>':'')+'<span style="color:'+tc(aA)+'">'+esc(aA)+'</span></td><td>'+aFwp+'</td><td>'+edgeHtml(aEdge)+'</td><td>'+aML+'</td><td>'+aSprd+'</td></tr>';
+      html+='<tr class="'+(hWin?'winner':'')+'"><td>'+(hWin?'<span class="vr-arrow">\u25b6</span>':'')+'<span style="color:'+tc(hA)+'">'+esc(hA)+'</span></td><td>'+hFwp+'</td><td>'+edgeHtml(hEdge)+'</td><td>'+hML+'</td><td>'+hSprd+'</td></tr>';
       html+='</tbody></table>';
 
       // Conviction bar
@@ -1009,7 +1020,7 @@ function renderCard(id){
       // Floor row
       var fillColor=vrd.color;
       html+='<div class="floor-row">';
-      html+='<span class="floor-team">'+esc(floor.controlTeam||'?')+'</span>';
+      html+='<span class="floor-team" style="color:'+tc(floor.controlTeam)+'">'+esc(floor.controlTeam||'?')+'</span>';
       html+='<span class="floor-score">'+floor.score.toFixed(2)+'</span>';
       html+='<div class="floor-meter"><div class="floor-fill" style="width:'+floorPct+'%;background:'+fillColor+';"></div></div>';
       html+='<span class="floor-verdict" style="color:'+vrd.color+'">'+esc(vrd.label)+'</span>';
@@ -1062,11 +1073,11 @@ function renderCard(id){
         var trailSide=margin>=0?sust.away:sust.home;
         if(leadSide&&leadSide.tier){
           var stCls=sustTierClass(leadSide.tier);
-          html+='<div class="sust-row"><span class="sust-label">Leading</span><span class="sust-team">'+esc(leadTeam)+'</span><span class="sust-tier '+stCls+'">'+esc(leadSide.tier)+'</span></div>';
+          html+='<div class="sust-row"><span class="sust-label">Leading</span><span class="sust-team" style="color:'+tc(leadTeam)+'">'+esc(leadTeam)+'</span><span class="sust-tier '+stCls+'">'+esc(leadSide.tier)+'</span></div>';
         }
         if(trailSide&&trailSide.tier){
           var stCls2=sustTierClass(trailSide.tier);
-          html+='<div class="sust-row"><span class="sust-label">Trailing</span><span class="sust-team">'+esc(trailTeam)+'</span><span class="sust-tier '+stCls2+'">'+esc(trailSide.tier)+'</span></div>';
+          html+='<div class="sust-row"><span class="sust-label">Trailing</span><span class="sust-team" style="color:'+tc(trailTeam)+'">'+esc(trailTeam)+'</span><span class="sust-tier '+stCls2+'">'+esc(trailSide.tier)+'</span></div>';
         }
       }
       html+='</div>';
@@ -1985,7 +1996,7 @@ function renderDrawer(gameId){
   var diffs=cs._serverQuarterDiffs;
   if(diffs){
     var ctrlIsHome=ctrlTeam===hA;
-    html+='<div style="font-family:var(--mono);font-size:9px;color:var(--fg-dim);margin-bottom:6px">\u2190 from '+esc(ctrlTeam)+' perspective</div>';
+    html+='<div style="font-family:var(--mono);font-size:9px;color:var(--fg-dim);margin-bottom:6px">\u2190 from <span style="color:'+tc(ctrlTeam)+'">'+esc(ctrlTeam)+'</span> perspective</div>';
     var statDefs=[
       {label:'PNT',get:function(d){return d.points_in_the_paint||d.points_in_paint||0;}},
       {label:'FTA',get:function(d){return d.free_throws_att||0;}},
@@ -2409,7 +2420,7 @@ function renderScoringCompSection(id,cs,hA,aA){
 function scoringBar(tm){
   var t=tm.total||1;
   var html='<div class="sc-team-row">';
-  html+='<div class="sc-team-head"><span class="sc-team-name">'+esc(tm.team)+' <span style="font-family:var(--mono);font-weight:400;color:var(--fg-tertiary)">'+tm.total+'</span></span>';
+  html+='<div class="sc-team-head"><span class="sc-team-name"><span style="color:'+tc(tm.team)+'">'+esc(tm.team)+'</span> <span style="font-family:var(--mono);font-weight:400;color:var(--fg-tertiary)">'+tm.total+'</span></span>';
   html+='<span class="sc-team-sv">S:'+tm.sPct+'% V:'+tm.vPct+'%</span></div>';
   html+='<div class="sc-bar">';
   if(tm.paint>0){var pw=tm.paint/t*100;html+='<div class="sc-seg paint" style="width:'+pw+'%">'+(pw>=12?tm.paintPct+'%':'')+'</div>';}
@@ -2734,7 +2745,7 @@ async function fetchLineShop(alert){
 
     var html='<div class="toast-odds-grid">';
     html+='<div style="padding:2px 8px 8px;display:flex;align-items:baseline;gap:6px">';
-    html+='<span style="font-family:var(--mono);font-size:16px;font-weight:700;color:var(--green)">'+esc(betTeam)+' ML</span>';
+    html+='<span style="font-family:var(--mono);font-size:16px;font-weight:700;color:'+tc(betTeam)+'">'+esc(betTeam)+' ML</span>';
     html+='<span style="font-family:var(--mono);font-size:10px;color:var(--fg-dim)">'+totalBooks+' books</span>';
     html+='</div>';
     function oddsRow(r){
