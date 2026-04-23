@@ -2566,18 +2566,49 @@ function buildScoringCompForCard(gameId){
 async function fetchPBPFromDB(gameId,force){
   if(!dbReady)return;
   var cs=cardState[gameId];if(!cs)return;
-  if(cs.pbpAudit&&!force)return; // already have it (skip for FINAL)
+  if(cs.pbpAudit&&cs.pbpAudit.raw&&cs.pbpAudit.raw.shots&&!force)return;
   try{
     var r=await fetch(FN+'db-api?action=get_pbp&game_id='+encodeURIComponent(gameId));
     if(!r.ok)return;var data=await r.json();
-    if(data.pbp&&(data.pbp.scoringEvents||data.pbp.runs)){
-      cs.pbpAudit=data.pbp;
-      cs.pbpTime=new Date(data.saved_at||Date.now());
-      console.log('[PBP] '+(force?'Refreshed':'Loaded')+' from DB for',gameId,data.pbp.scoringEvents?data.pbp.scoringEvents.length+' events':'');
-      buildScoringCompForCard(gameId);
-      renderCard(gameId);
+    if(data.pbp){
+      // Check if DB has full raw shot data (needed for shot zones + margin flow)
+      if(data.pbp.raw&&data.pbp.raw.shots&&data.pbp.raw.shots.length>0){
+        cs.pbpAudit=data.pbp;
+        cs.pbpTime=new Date(data.saved_at||Date.now());
+        console.log('[PBP] Loaded from DB (with raw shots) for',gameId);
+        buildScoringCompForCard(gameId);
+        renderCard(gameId);
+        return;
+      }
+      // DB has aggregated data but no raw shots — use aggregates temporarily
+      if(data.pbp.scoringEvents||data.pbp.runs){
+        cs.pbpAudit=data.pbp;
+        cs.pbpTime=new Date(data.saved_at||Date.now());
+        buildScoringCompForCard(gameId);
+        renderCard(gameId);
+      }
     }
   }catch(e){console.warn('[PBP] DB fetch failed:',e.message);}
+  // Fallback: fetch BDL plays directly and re-parse (fills in raw shots for zones + margin flow)
+  var bdlId=bdlGameMap[gameId];
+  if(bdlId){
+    try{
+      var g=games.find(function(x){return x.id===gameId;});if(!g)return;
+      var hA=g.home?.alias||'HOME',aA=g.away?.alias||'AWAY';
+      var plData=await bdl('plays',{game_id:String(bdlId)});
+      var plays=plData.data||[];
+      if(plays.length>0){
+        var pbp=parseBDLPBP(plays,hA,aA);
+        if(pbp&&pbp.totalShots>0){
+          cs.pbpAudit=pbp;
+          cs.pbpTime=new Date();
+          console.log('[PBP] Fetched BDL plays directly for',gameId,pbp.totalShots,'shots');
+          buildScoringCompForCard(gameId);
+          renderCard(gameId);
+        }
+      }
+    }catch(e){console.warn('[PBP] BDL plays fallback failed:',e.message);}
+  }
 }
 
 // ── RENDER SCORING COMPOSITION ──
