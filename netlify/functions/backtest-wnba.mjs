@@ -2,13 +2,19 @@
 // BDL-primary (60 calls/s), SR-targeted (1 call/s, cached)
 //
 // Phases:
-//   ?phase=init     — Create wnba_backtest table
-//   ?phase=collect  — BDL: pull all 2025 games + team_stats, cache to DB
-//   ?phase=sample   — SR: fetch 50 stratified game summaries, cache to DB
-//   ?phase=compute  — Run computeServer + computeConviction on cached data
-//   ?phase=report   — Return validation report
-//
-// Delete this file after WNBA calibration is complete.
+//   ?phase=init               — Create wnba_backtest table
+//   ?phase=collect            — BDL: pull all 2025 games + team_stats
+//   ?phase=sample             — SR: fetch stratified game summaries
+//   ?phase=compute            — Run computeServer + computeConviction on SR data
+//   ?phase=report             — Overall validation report
+//   ?phase=explore            — Raw stat correlation analysis
+//   ?phase=collect_pbp        — BDL: fetch PBP for all games (use console auto-runner)
+//   ?phase=compute_checkpoints — Reconstruct box scores at 2.5-min checkpoints
+//   ?phase=report_cp_journey  — Control stability at checkpoint granularity
+//   ?phase=report_cp_graduation — Test MF/minF gates for WNBA graduation
+//   ?phase=report_cp_trailing — BUY profile: trailing ctrl team comeback rates
+//   ?phase=report_cp_stability — Per-indicator hold rates across checkpoints
+//   ?phase=report_cp_close    — Close game filter definitions
 
 import { neon } from '@neondatabase/serverless';
 
@@ -1639,6 +1645,666 @@ async function reportIndicatorStability(sql) {
   };
 }
 
+// ── WNBA 2.5-MINUTE CHECKPOINTS ─────────────────────────────────────────────
+// 10-min quarters → 4 checkpoints per quarter (Q2-Q4) = 11 total + Q4_END
+const WNBA_CHECKPOINTS = [
+  { label: 'Q2_7.5', period: 2, clockSec: 450, gameSec: 750  },
+  { label: 'Q2_5',   period: 2, clockSec: 300, gameSec: 900  },
+  { label: 'Q2_2.5', period: 2, clockSec: 150, gameSec: 1050 },
+  { label: 'Q2_END', period: 2, clockSec: 0,   gameSec: 1200 },
+  { label: 'Q3_7.5', period: 3, clockSec: 450, gameSec: 1350 },
+  { label: 'Q3_5',   period: 3, clockSec: 300, gameSec: 1500 },
+  { label: 'Q3_2.5', period: 3, clockSec: 150, gameSec: 1650 },
+  { label: 'Q3_END', period: 3, clockSec: 0,   gameSec: 1800 },
+  { label: 'Q4_7.5', period: 4, clockSec: 450, gameSec: 1950 },
+  { label: 'Q4_5',   period: 4, clockSec: 300, gameSec: 2100 },
+  { label: 'Q4_2.5', period: 4, clockSec: 150, gameSec: 2250 },
+];
+
+function parseClockSec(clock) {
+  if (!clock) return 0;
+  const p = String(clock).split(':');
+  return parseInt(p[0] || 0) * 60 + parseInt(p[1] || 0);
+}
+
+// ── PBP BOX SCORE RECONSTRUCTION ────────────────────────────────────────────
+// Walk BDL plays chronologically, accumulate stats, snapshot at each checkpoint.
+function reconstructCheckpoints(plays, homeAbbr, awayAbbr) {
+  if (!plays || plays.length === 0) return null;
+  const sorted = plays.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+
+  const mk = () => ({ fgm: 0, fga: 0, fg3m: 0, fg3a: 0, ftm: 0, fta: 0,
+    oreb: 0, dreb: 0, ast: 0, stl: 0, blk: 0, tov: 0, pf: 0, pot: 0 });
+  const h = mk(), a = mk();
+  let bigH = 0, bigA = 0, pendPOT = null, lastPeriod = 0;
+  const snaps = [];
+  let cpIdx = 0;
+
+  const snap = (hScore, aScore) => ({
+    cp: WNBA_CHECKPOINTS[cpIdx],
+    home: { ...h, biggest_lead: bigH, three_points_pct: h.fg3a > 0 ? h.fg3m / h.fg3a * 100 : 0 },
+    away: { ...a, biggest_lead: bigA, three_points_pct: a.fg3a > 0 ? a.fg3m / a.fg3a * 100 : 0 },
+    homeScore: hScore, awayScore: aScore, margin: hScore - aScore,
+  });
+
+  for (const ev of sorted) {
+    const period = ev.period || 1;
+    const clockSec = parseClockSec(ev.clock);
+    const gs = (period - 1) * 600 + (600 - clockSec);
+
+    // Reset POT on period change
+    if (period !== lastPeriod) { pendPOT = null; lastPeriod = period; }
+
+    // Snapshot at each passed checkpoint
+    while (cpIdx < WNBA_CHECKPOINTS.length && gs >= WNBA_CHECKPOINTS[cpIdx].gameSec) {
+      snaps.push(snap(ev.home_score || 0, ev.away_score || 0));
+      cpIdx++;
+    }
+
+    const tm = ev.team?.abbreviation || '';
+    if (!tm) continue;
+    const isH = tm === homeAbbr;
+    const s = isH ? h : a;
+    const opp = isH ? awayAbbr : homeAbbr;
+    const type = (ev.type || '').toLowerCase();
+    const text = (ev.text || '').toLowerCase();
+
+    // Biggest lead
+    if (ev.home_score != null && ev.away_score != null) {
+      const mg = ev.home_score - ev.away_score;
+      if (mg > bigH) bigH = mg;
+      if (-mg > bigA) bigA = -mg;
+    }
+
+    if (type.includes('substitution') || text.includes('enters the game')) continue;
+
+    // ── Free throws
+    if (type.includes('free throw')) {
+      s.fta++;
+      if (ev.scoring_play || text.includes('makes')) {
+        s.ftm++;
+        if (pendPOT === tm) s.pot += 1;
+      }
+      continue;
+    }
+
+    // ── Field goals — detect from scoring_play + score_value OR type keywords
+    const isShotType = type.includes('shot') || type.includes('layup') || type.includes('dunk') ||
+      type.includes('hook') || type.includes('tip') || type.includes('alley') || type.includes('finger roll') ||
+      type.includes('pullup') || type.includes('driving') || type.includes('fadeaway') ||
+      type.includes('float') || type.includes('runner') || type.includes('step back') ||
+      type.includes('turnaround') || type.includes('cutting') || type.includes('putback');
+    const isMadeFG = ev.scoring_play && ev.score_value >= 2;
+
+    if (isShotType || isMadeFG || (text.includes('misses') && !type.includes('free throw'))) {
+      const is3 = ev.score_value === 3 || type.includes('three point') || type.includes('3-point') || type.includes('3pt');
+      s.fga++;
+      if (is3) s.fg3a++;
+      if (isMadeFG || text.includes('makes')) {
+        s.fgm++;
+        if (is3) s.fg3m++;
+        if (text.includes('assist')) s.ast++;
+        if (pendPOT === tm) s.pot += (is3 ? 3 : 2);
+        pendPOT = null;
+      }
+      continue;
+    }
+
+    // ── Turnovers
+    if (type.includes('turnover') || type.includes('offensive foul')) {
+      s.tov++;
+      pendPOT = opp;
+      continue;
+    }
+
+    // ── Rebounds
+    if (type.includes('rebound')) {
+      if (type.includes('offensive') || text.includes('offensive')) s.oreb++;
+      else { s.dreb++; pendPOT = null; }
+      continue;
+    }
+
+    // ── Steals (may appear as separate play or in text of turnover)
+    if (type.includes('steal')) { s.stl++; continue; }
+
+    // ── Blocks
+    if (type.includes('block')) { s.blk++; continue; }
+
+    // ── Fouls
+    if (type.includes('foul') && !type.includes('offensive')) { s.pf++; continue; }
+  }
+
+  // Capture remaining checkpoints
+  const last = sorted[sorted.length - 1];
+  while (cpIdx < WNBA_CHECKPOINTS.length) {
+    snaps.push(snap(last?.home_score || 0, last?.away_score || 0));
+    cpIdx++;
+  }
+  return snaps;
+}
+
+// ── COMPUTE INDICATORS FROM CHECKPOINT SNAPSHOT ─────────────────────────────
+function computeAtCheckpoint(cpSnap, homeAlias, awayAlias) {
+  const hs = cpSnap.home, as = cpSnap.away;
+  const hA = homeAlias, aA = awayAlias;
+
+  // I1 — Disruption: steals+blocks (±2) + POT (±3)
+  const disruptDiff = (hs.stl + hs.blk) - (as.stl + as.blk);
+  const i1A = disruptDiff > 2 ? 1 : disruptDiff < -2 ? -1 : 0;
+  const potDiff = (hs.pot || 0) - (as.pot || 0);
+  const i1B = potDiff > 3 ? 1 : potDiff < -3 ? -1 : 0;
+  const i1r = i1A + i1B;
+  const I1 = { score: i1r > 0 ? 1 : i1r === 0 ? 0.5 : 0, leader: i1r > 0 ? hA : i1r < 0 ? aA : 'EVEN' };
+
+  // I2 — Perimeter: 3PT% (±3%) + FTA (±2)
+  const h3P = hs.fg3a > 0 ? hs.fg3m / hs.fg3a * 100 : 0;
+  const a3P = as.fg3a > 0 ? as.fg3m / as.fg3a * 100 : 0;
+  const i2A = (h3P - a3P) > 3 ? 1 : (h3P - a3P) < -3 ? -1 : 0;
+  const ftaDiff = hs.fta - as.fta;
+  const i2B = ftaDiff > 2 ? 1 : ftaDiff < -2 ? -1 : 0;
+  const i2r = i2A + i2B;
+  const I2 = { score: i2r > 0 ? 1 : i2r === 0 ? 0.5 : 0, leader: i2r > 0 ? hA : i2r < 0 ? aA : 'EVEN' };
+
+  // I3 — Shot Quality: eFG (±0.03) + assists (±2)
+  const hFGA = hs.fga || 1, aFGA = as.fga || 1;
+  const hEFG = (hs.fgm + 0.5 * hs.fg3m) / hFGA;
+  const aEFG = (as.fgm + 0.5 * as.fg3m) / aFGA;
+  const efgDiff = hEFG - aEFG;
+  const i3A = efgDiff > 0.03 ? 1 : efgDiff < -0.03 ? -1 : 0;
+  const astDiff = hs.ast - as.ast;
+  const i3B = astDiff > 2 ? 1 : astDiff < -2 ? -1 : 0;
+  const i3r = i3A + i3B;
+  const I3 = { score: i3r > 0 ? 1 : i3r === 0 ? 0.5 : 0, leader: i3r > 0 ? hA : i3r < 0 ? aA : 'EVEN' };
+
+  // I4 — Game Control: biggest_lead (±4) + last-checkpoint scoring (±2)
+  const blDiff = hs.biggest_lead - as.biggest_lead;
+  const i4A = blDiff > 4 ? 1 : blDiff < -4 ? -1 : 0;
+  // Use current margin as proxy for "recent scoring diff"
+  const marg = cpSnap.margin || 0;
+  const i4B = marg > 2 ? 1 : marg < -2 ? -1 : 0;
+  const i4r = i4A + i4B;
+  const I4 = { score: i4r > 0 ? 1 : i4r === 0 ? 0.5 : 0, leader: i4r > 0 ? hA : i4r < 0 ? aA : 'EVEN' };
+
+  // I5 — Momentum: fast_break_pts=0 (unavailable from BDL PBP) + rebounds (±3)
+  const rebDiff = (hs.oreb + hs.dreb) - (as.oreb + as.dreb);
+  const i5B = rebDiff > 3 ? 1 : rebDiff < -3 ? -1 : 0;
+  // i5A always 0 (fast break unavailable)
+  const i5r = i5B;
+  const I5 = { score: i5r > 0 ? 1 : i5r === 0 ? 0.5 : 0, leader: i5r > 0 ? hA : i5r < 0 ? aA : 'EVEN' };
+
+  const raw = I1.score * W.I1 + I2.score * W.I2 + I3.score * W.I3 + I4.score * W.I4 + I5.score * W.I5;
+  const controlHome = raw >= 0.5;
+  const controlTeam = controlHome ? hA : aA;
+  const score = controlHome ? raw : 1 - raw;
+
+  return {
+    controlTeam, score: Math.round(score * 100) / 100,
+    I1, I2, I3, I4, I5,
+    homeAlias: hA, awayAlias: aA,
+    homePts: cpSnap.homeScore, awayPts: cpSnap.awayScore,
+    margin: cpSnap.margin, cpLabel: cpSnap.cp.label,
+  };
+}
+
+// ── PHASE: COLLECT PBP ──────────────────────────────────────────────────────
+// Fetch BDL PBP for games missing it. Run via console auto-runner.
+async function phaseCollectPBP(sql, url) {
+  // Ensure column exists
+  await sql`ALTER TABLE wnba_backtest ADD COLUMN IF NOT EXISTS bdl_pbp JSONB`;
+  await sql`ALTER TABLE wnba_backtest ADD COLUMN IF NOT EXISTS checkpoint_data JSONB`;
+
+  const batch = parseInt(url.searchParams.get('batch') || '15');
+
+  const games = await sql`
+    SELECT game_id, bdl_game_id, home_alias, away_alias
+    FROM wnba_backtest WHERE bdl_game_id IS NOT NULL AND bdl_pbp IS NULL
+    ORDER BY date LIMIT ${batch}
+  `;
+
+  const remaining = await sql`
+    SELECT COUNT(*) as n FROM wnba_backtest WHERE bdl_game_id IS NOT NULL AND bdl_pbp IS NULL
+  `;
+
+  let collected = 0, errors = 0;
+  for (const g of games) {
+    try {
+      const data = await bdlFetch(`/wnba/v1/plays?game_id=${g.bdl_game_id}`);
+      const plays = data?.data || [];
+      if (plays.length > 0) {
+        await sql`UPDATE wnba_backtest SET bdl_pbp = ${JSON.stringify(plays)} WHERE game_id = ${g.game_id}`;
+        collected++;
+      } else {
+        // Store empty array to mark as attempted
+        await sql`UPDATE wnba_backtest SET bdl_pbp = '[]'::jsonb WHERE game_id = ${g.game_id}`;
+        errors++;
+      }
+    } catch (e) {
+      console.log(`PBP error ${g.game_id}: ${e.message}`);
+      errors++;
+    }
+  }
+
+  return {
+    status: 'ok', collected, errors, batch: games.length,
+    remaining: Number(remaining[0].n) - games.length,
+    note: collected > 0 ? 'Run again to continue. When remaining=0, run ?phase=compute_checkpoints.' : 'No games to collect.',
+    console_runner: `// Paste in browser console to auto-collect all PBP:
+(async()=>{let r=999,i=0;while(r>0){i++;try{const d=await(await fetch('/.netlify/functions/backtest-wnba?phase=collect_pbp&batch=15')).json();r=d.remaining;console.log('Round '+i+': +'+d.collected+', remaining='+r);}catch(e){console.error('Round '+i+' failed:',e);await new Promise(r=>setTimeout(r,3000));}await new Promise(r=>setTimeout(r,500));}console.log('Done! Run ?phase=compute_checkpoints next.');})();`,
+  };
+}
+
+// ── PHASE: COMPUTE CHECKPOINTS ──────────────────────────────────────────────
+// Reconstruct box scores from PBP, compute indicators at each 2.5-min checkpoint.
+async function phaseComputeCheckpoints(sql) {
+  const games = await sql`
+    SELECT game_id, bdl_pbp, home_alias, away_alias, winner, margin, margin_bucket
+    FROM wnba_backtest WHERE bdl_pbp IS NOT NULL AND bdl_pbp != '[]'::jsonb AND checkpoint_data IS NULL
+    LIMIT 50
+  `;
+
+  const remaining = await sql`
+    SELECT COUNT(*) as n FROM wnba_backtest
+    WHERE bdl_pbp IS NOT NULL AND bdl_pbp != '[]'::jsonb AND checkpoint_data IS NULL
+  `;
+
+  let computed = 0, errors = 0;
+  for (const g of games) {
+    try {
+      const plays = g.bdl_pbp;
+      const snaps = reconstructCheckpoints(plays, g.home_alias, g.away_alias);
+      if (!snaps || snaps.length === 0) { errors++; continue; }
+
+      // Compute indicators at each checkpoint
+      const cpData = snaps.map(s => {
+        const ind = computeAtCheckpoint(s, g.home_alias, g.away_alias);
+        const conv = computeConviction(ind);
+        return {
+          label: s.cp.label, gameSec: s.cp.gameSec,
+          controlTeam: ind.controlTeam, floor: ind.score,
+          conviction: conv.tier, indicatorsWon: conv.indicatorsWon,
+          I1: ind.I1.leader, I2: ind.I2.leader, I3: ind.I3.leader,
+          I4: ind.I4.leader, I5: ind.I5.leader,
+          margin: s.margin, homeScore: s.homeScore, awayScore: s.awayScore,
+        };
+      });
+
+      await sql`UPDATE wnba_backtest SET checkpoint_data = ${JSON.stringify(cpData)} WHERE game_id = ${g.game_id}`;
+      computed++;
+    } catch (e) {
+      console.log(`CP error ${g.game_id}: ${e.message}`);
+      errors++;
+    }
+  }
+
+  return {
+    status: 'ok', computed, errors,
+    remaining: Number(remaining[0].n) - games.length,
+    note: 'When remaining=0, run report phases (report_cp_journey, report_cp_graduation, etc.)',
+  };
+}
+
+// ── CHECKPOINT REPORTS ──────────────────────────────────────────────────────
+
+// Report: CP Journey — control stability at 2.5-min granularity
+async function reportCPJourney(sql) {
+  const games = await sql`SELECT * FROM wnba_backtest WHERE checkpoint_data IS NOT NULL`;
+  if (games.length === 0) return { error: 'No checkpoint data. Run compute_checkpoints first.' };
+
+  const pct = (w, n) => n > 0 ? Math.round(w / n * 1000) / 10 : 0;
+  let total = 0;
+  const cpAccuracy = {};  // per-checkpoint: ctrl team at that CP wins game?
+  const floorByCP = {};
+  let wireToWire = { n: 0, wins: 0 }, flipped = { n: 0, wins: 0 };
+  const flipCounts = { 0: 0, 1: 0, 2: 0, '3+': 0 };
+
+  for (const g of games) {
+    const cps = g.checkpoint_data;
+    if (!cps || cps.length === 0) continue;
+    total++;
+
+    // Count control flips between consecutive checkpoints
+    let flips = 0;
+    for (let i = 1; i < cps.length; i++) {
+      if (cps[i].controlTeam !== cps[i - 1].controlTeam) flips++;
+    }
+    const fk = flips >= 3 ? '3+' : String(flips);
+    flipCounts[fk] = (flipCounts[fk] || 0) + 1;
+
+    const won = bdlAlias(cps[cps.length - 1].controlTeam) === g.winner || cps[cps.length - 1].controlTeam === g.winner;
+    if (flips === 0) { wireToWire.n++; if (won) wireToWire.wins++; }
+    else { flipped.n++; if (won) flipped.wins++; }
+
+    for (const cp of cps) {
+      const label = cp.label;
+      if (!cpAccuracy[label]) cpAccuracy[label] = { n: 0, wins: 0 };
+      cpAccuracy[label].n++;
+      const cpWon = bdlAlias(cp.controlTeam) === g.winner || cp.controlTeam === g.winner;
+      if (cpWon) cpAccuracy[label].wins++;
+
+      if (!floorByCP[label]) floorByCP[label] = [];
+      floorByCP[label].push(cp.floor);
+    }
+  }
+
+  const avg = arr => arr.length > 0 ? Math.round(arr.reduce((s, v) => s + v, 0) / arr.length * 1000) / 1000 : 0;
+  const cpReport = {};
+  for (const [label, data] of Object.entries(cpAccuracy)) {
+    cpReport[label] = { n: data.n, wins: data.wins, pct: pct(data.wins, data.n), avgFloor: avg(floorByCP[label] || []) };
+  }
+
+  return {
+    totalGames: total,
+    wireToWire: { ...wireToWire, pct: pct(wireToWire.wins, wireToWire.n) },
+    flipped: { ...flipped, pct: pct(flipped.wins, flipped.n) },
+    flipDistribution: flipCounts,
+    checkpointAccuracy: cpReport,
+  };
+}
+
+// Report: CP Graduation Sim — test MF/minF gates at 2.5-min granularity
+async function reportCPGraduation(sql) {
+  const games = await sql`SELECT * FROM wnba_backtest WHERE checkpoint_data IS NOT NULL`;
+  if (games.length === 0) return { error: 'No checkpoint data.' };
+
+  const pct = (w, n) => n > 0 ? Math.round(w / n * 1000) / 10 : 0;
+  const mfGates = [0.55, 0.58, 0.60, 0.62, 0.65, 0.68, 0.70];
+  const minFGates = [0.50, 0.55, 0.58, 0.60];
+
+  const results = {};
+  for (const mfG of mfGates) {
+    for (const minFG of minFGates) {
+      if (minFG > mfG) continue;
+      const key = `MF${mfG}_minF${minFG}`;
+      let grad = 0, gradW = 0, never = 0, neverW = 0;
+      const byRank = { S: { n: 0, w: 0 }, A: { n: 0, w: 0 }, B: { n: 0, w: 0 } };
+      const byCP = {};
+      let flipped = 0, flippedW = 0, standard = 0, standardW = 0;
+
+      for (const g of games) {
+        const cps = g.checkpoint_data;
+        if (!cps || cps.length < 2) continue;
+
+        // Track per-team checkpoint history
+        const teamCPs = {};
+        let gradTeam = null, gradIdx = -1, gradRank = null, isFlip = false;
+
+        for (let i = 0; i < cps.length; i++) {
+          const cp = cps[i];
+          const tm = cp.controlTeam;
+          if (!teamCPs[tm]) teamCPs[tm] = [];
+          teamCPs[tm].push({ idx: i, floor: cp.floor, conv: cp.conviction, margin: cp.margin, label: cp.label });
+
+          if (gradTeam) continue; // already graduated
+
+          const tcps = teamCPs[tm];
+          if (tcps.length < 2) continue;
+          const floors = tcps.map(c => c.floor);
+          const mf = floors.reduce((s, v) => s + v, 0) / floors.length;
+          const minF = Math.min(...floors);
+          const ctrlHome = tm === cps[i].controlTeam && tm === g.home_alias; // check if ctrl is home
+          const leading = ctrlHome ? cp.margin > 0 : cp.margin < 0;
+
+          if (mf >= mfG && minF >= minFG && leading) {
+            const hasDom = tcps.some(c => c.conv === 'DOMINANT');
+            const hasStrong = tcps.some(c => c.conv === 'STRONG' || c.conv === 'DOMINANT');
+            if (!hasStrong) continue;
+
+            gradTeam = tm;
+            gradIdx = i;
+            const ctrlMargin = ctrlHome ? cp.margin : -cp.margin;
+            gradRank = (hasDom && ctrlMargin >= 8) ? 'A' : 'B';
+
+            // Check if wire-to-wire (S-rank)
+            if (cps.every(c => c.controlTeam === tm) && gradRank === 'A') gradRank = 'S';
+
+            // Check flip
+            for (const [otm, otcps] of Object.entries(teamCPs)) {
+              if (otm !== tm && otcps.length >= 2) {
+                const omf = otcps.map(c => c.floor).reduce((s, v) => s + v, 0) / otcps.length;
+                if (omf >= minFG) isFlip = true;
+              }
+            }
+          }
+        }
+
+        const won = gradTeam && (bdlAlias(gradTeam) === g.winner || gradTeam === g.winner);
+        if (gradTeam) {
+          grad++; if (won) gradW++;
+          byRank[gradRank].n++; if (won) byRank[gradRank].w++;
+          const cpLabel = cps[gradIdx].label;
+          if (!byCP[cpLabel]) byCP[cpLabel] = { n: 0, w: 0 };
+          byCP[cpLabel].n++; if (won) byCP[cpLabel].w++;
+          if (isFlip) { flipped++; if (won) flippedW++; }
+          else { standard++; if (won) standardW++; }
+        } else {
+          never++;
+          const lastCtrl = cps[cps.length - 1].controlTeam;
+          if (bdlAlias(lastCtrl) === g.winner || lastCtrl === g.winner) neverW++;
+        }
+      }
+
+      results[key] = {
+        mfGate: mfG, minFGate: minFG,
+        graduated: grad, gradPct: pct(gradW, grad), coverage: pct(grad, games.length),
+        neverGrad: never, neverGradPct: pct(neverW, never),
+        byRank: { S: { n: byRank.S.n, pct: pct(byRank.S.w, byRank.S.n) }, A: { n: byRank.A.n, pct: pct(byRank.A.w, byRank.A.n) }, B: { n: byRank.B.n, pct: pct(byRank.B.w, byRank.B.n) } },
+        byCheckpoint: Object.fromEntries(Object.entries(byCP).map(([k, v]) => [k, { n: v.n, pct: pct(v.w, v.n) }])),
+        flip: { standard, standardPct: pct(standardW, standard), flipped, flippedPct: pct(flippedW, flipped) },
+      };
+    }
+  }
+
+  const ranked = Object.values(results).filter(r => r.graduated >= 20)
+    .sort((a, b) => ((b.gradPct / 100) * (b.coverage / 100)) - ((a.gradPct / 100) * (a.coverage / 100)));
+
+  return {
+    totalGames: games.length,
+    note: '2.5-min checkpoints across Q2-Q4. Graduation: 2+ CPs same team, MF>=gate, minF>=gate, leading, conviction>=STRONG.',
+    bestCombos: ranked.slice(0, 10).map(r => ({
+      gates: `MF=${r.mfGate} minF=${r.minFGate}`, accuracy: r.gradPct + '%', coverage: r.coverage + '%',
+      score: Math.round((r.gradPct / 100) * (r.coverage / 100) * 1000) / 10,
+      graduated: r.graduated, byRank: r.byRank,
+    })),
+    allResults: results,
+  };
+}
+
+// Report: CP Trailing Profile — BUY profile at 2.5-min checkpoints
+async function reportCPTrailing(sql) {
+  const games = await sql`SELECT * FROM wnba_backtest WHERE checkpoint_data IS NOT NULL`;
+  if (games.length === 0) return { error: 'No checkpoint data.' };
+
+  const pct = (w, n) => n > 0 ? Math.round(w / n * 1000) / 10 : 0;
+  const byDeficit = {}, byIndicators = {}, byConviction = {}, byCP = {};
+  const goldenStack = { n: 0, wins: 0 };
+  const i3Won = { n: 0, wins: 0 }, i3Lost = { n: 0, wins: 0 };
+
+  for (const g of games) {
+    for (const cp of (g.checkpoint_data || [])) {
+      const ctrlHome = cp.controlTeam === g.home_alias;
+      const ctrlMargin = ctrlHome ? cp.margin : -cp.margin;
+      if (ctrlMargin >= 0) continue; // only trailing
+
+      const deficit = Math.abs(ctrlMargin);
+      const won = bdlAlias(cp.controlTeam) === g.winner || cp.controlTeam === g.winner;
+      const indCount = cp.indicatorsWon?.length || 0;
+
+      // By checkpoint
+      if (!byCP[cp.label]) byCP[cp.label] = { n: 0, w: 0 };
+      byCP[cp.label].n++; if (won) byCP[cp.label].w++;
+
+      // By deficit
+      const dk = deficit <= 4 ? '1-4' : deficit <= 7 ? '5-7' : deficit <= 10 ? '8-10' : deficit <= 15 ? '11-15' : '16+';
+      if (!byDeficit[dk]) byDeficit[dk] = { n: 0, w: 0 };
+      byDeficit[dk].n++; if (won) byDeficit[dk].w++;
+
+      // By indicator count
+      const ik = indCount + '_ind';
+      if (!byIndicators[ik]) byIndicators[ik] = { n: 0, w: 0 };
+      byIndicators[ik].n++; if (won) byIndicators[ik].w++;
+
+      // By conviction
+      if (!byConviction[cp.conviction]) byConviction[cp.conviction] = { n: 0, w: 0 };
+      byConviction[cp.conviction].n++; if (won) byConviction[cp.conviction].w++;
+
+      // Golden stack
+      // For opp indicators, we'd need more data. Approximate: if indCount >= 3, check conviction
+      if (deficit >= 1 && deficit <= 4 && indCount >= 3) {
+        goldenStack.n++; if (won) goldenStack.wins++;
+      }
+
+      // I3 inversion
+      if (cp.I3 === cp.controlTeam) { i3Won.n++; if (won) i3Won.wins++; }
+      else if (cp.I3 !== 'EVEN') { i3Lost.n++; if (won) i3Lost.wins++; }
+    }
+  }
+
+  const addPct = obj => { for (const v of Object.values(obj)) v.pct = pct(v.w || v.wins, v.n); };
+  addPct(byDeficit); addPct(byIndicators); addPct(byConviction); addPct(byCP);
+  goldenStack.pct = pct(goldenStack.wins, goldenStack.n);
+  i3Won.pct = pct(i3Won.wins, i3Won.n);
+  i3Lost.pct = pct(i3Lost.wins, i3Lost.n);
+
+  return {
+    totalGames: games.length,
+    note: 'Ctrl team trailing at each 2.5-min checkpoint. Measures comeback rate.',
+    byCheckpoint: byCP, byDeficit, byIndicatorCount: byIndicators, byConviction,
+    goldenStack: { ...goldenStack, note: 'trail 1-4 + 3+ indicators' },
+    i3Inversion: { ctrlWinsI3: i3Won, ctrlLosesI3: i3Lost,
+      note: 'NBA: winning I3 while trailing = 37.3% (negative signal). Check WNBA.' },
+  };
+}
+
+// Report: CP Indicator Stability — per-indicator hold rates at 2.5-min granularity
+async function reportCPStability(sql) {
+  const games = await sql`SELECT * FROM wnba_backtest WHERE checkpoint_data IS NOT NULL`;
+  if (games.length === 0) return { error: 'No checkpoint data.' };
+
+  const pct = (w, n) => n > 0 ? Math.round(w / n * 1000) / 10 : 0;
+  const indicators = ['I1', 'I2', 'I3', 'I4', 'I5'];
+  const stability = {};
+  for (const ik of indicators) {
+    stability[ik] = {
+      early_to_final: { n: 0, held: 0 },   // Q2_7.5 leader → final leader
+      mid_to_final: { n: 0, held: 0 },      // Q3_END leader → final
+      late_to_final: { n: 0, held: 0 },      // Q4_5 leader → final
+      flipRate: { n: 0, flips: 0 },
+      evenCount: 0,
+    };
+  }
+  let total = 0;
+
+  for (const g of games) {
+    const cps = g.checkpoint_data;
+    if (!cps || cps.length < 2) continue;
+    total++;
+    const last = cps[cps.length - 1];
+
+    for (const ik of indicators) {
+      const leaders = cps.map(c => c[ik]);
+      const finalL = last[ik];
+
+      // Early (first CP) → final
+      if (leaders[0] !== 'EVEN' && finalL !== 'EVEN') {
+        stability[ik].early_to_final.n++;
+        if (leaders[0] === finalL) stability[ik].early_to_final.held++;
+      }
+
+      // Mid (Q3_END, index ~7) → final
+      const midIdx = cps.findIndex(c => c.label === 'Q3_END');
+      if (midIdx >= 0 && leaders[midIdx] !== 'EVEN' && finalL !== 'EVEN') {
+        stability[ik].mid_to_final.n++;
+        if (leaders[midIdx] === finalL) stability[ik].mid_to_final.held++;
+      }
+
+      // Late (Q4_5, index ~9) → final
+      const lateIdx = cps.findIndex(c => c.label === 'Q4_5');
+      if (lateIdx >= 0 && leaders[lateIdx] !== 'EVEN' && finalL !== 'EVEN') {
+        stability[ik].late_to_final.n++;
+        if (leaders[lateIdx] === finalL) stability[ik].late_to_final.held++;
+      }
+
+      // Flip rate
+      for (let i = 1; i < cps.length; i++) {
+        if (leaders[i] !== 'EVEN' && leaders[i - 1] !== 'EVEN') {
+          stability[ik].flipRate.n++;
+          if (leaders[i] !== leaders[i - 1]) stability[ik].flipRate.flips++;
+        }
+      }
+
+      stability[ik].evenCount += leaders.filter(l => l === 'EVEN').length;
+    }
+  }
+
+  const report = {};
+  for (const ik of indicators) {
+    const s = stability[ik];
+    report[ik] = {
+      early_holds: { ...s.early_to_final, pct: pct(s.early_to_final.held, s.early_to_final.n) },
+      mid_holds: { ...s.mid_to_final, pct: pct(s.mid_to_final.held, s.mid_to_final.n) },
+      late_holds: { ...s.late_to_final, pct: pct(s.late_to_final.held, s.late_to_final.n) },
+      flipRate: { ...s.flipRate, pct: pct(s.flipRate.flips, s.flipRate.n) },
+      avgEvensPerGame: total > 0 ? Math.round(s.evenCount / total * 10) / 10 : 0,
+    };
+  }
+
+  return {
+    totalGames: total,
+    note: 'Stability at 2.5-min checkpoints. Early=Q2_7.5, Mid=Q3_END, Late=Q4_5.',
+    indicators: report,
+    summary: indicators.map(i => ({
+      indicator: i, earlyStability: report[i].early_holds.pct + '%',
+      midStability: report[i].mid_holds.pct + '%', flipRate: report[i].flipRate.pct + '%',
+    })),
+  };
+}
+
+// Report: CP Close Game — test close-game filters with checkpoint data
+async function reportCPClose(sql) {
+  const games = await sql`SELECT * FROM wnba_backtest WHERE checkpoint_data IS NOT NULL`;
+  if (games.length === 0) return { error: 'No checkpoint data.' };
+
+  const pct = (w, n) => n > 0 ? Math.round(w / n * 1000) / 10 : 0;
+
+  // Get Q3_END margin and final margin from checkpoint data
+  const gameData = games.map(g => {
+    const cps = g.checkpoint_data || [];
+    const q3End = cps.find(c => c.label === 'Q3_END');
+    const last = cps[cps.length - 1];
+    return {
+      q3Margin: q3End ? Math.abs(q3End.margin) : null,
+      finalMargin: Math.abs(g.margin),
+      ctrlWon: last && (bdlAlias(last.controlTeam) === g.winner || last.controlTeam === g.winner),
+      conviction: last?.conviction,
+    };
+  });
+
+  const filters = [
+    { name: 'NBA standard (Q3≤5, final≤7)', q3: 5, fin: 7 },
+    { name: 'Tight (Q3≤4, final≤6)', q3: 4, fin: 6 },
+    { name: 'Tighter (Q3≤3, final≤5)', q3: 3, fin: 5 },
+    { name: 'Final ≤5 only', q3: 999, fin: 5 },
+    { name: 'Final ≤7 only', q3: 999, fin: 7 },
+    { name: 'Final ≤10 only', q3: 999, fin: 10 },
+  ];
+
+  return {
+    totalGames: gameData.length,
+    results: filters.map(f => {
+      const close = gameData.filter(gd => (f.q3 >= 999 || (gd.q3Margin != null && gd.q3Margin <= f.q3)) && gd.finalMargin <= f.fin);
+      const wins = close.filter(gd => gd.ctrlWon).length;
+      const byTier = {};
+      for (const gd of close) {
+        const t = gd.conviction || '?';
+        if (!byTier[t]) byTier[t] = { n: 0, w: 0 };
+        byTier[t].n++; if (gd.ctrlWon) byTier[t].w++;
+      }
+      for (const v of Object.values(byTier)) v.pct = pct(v.w, v.n);
+      return { filter: f.name, games: close.length, pctOfTotal: pct(close.length, gameData.length), accuracy: pct(wins, close.length), byTier };
+    }),
+  };
+}
+
 // ── HANDLER ──────────────────────────────────────────────────────────────────
 export default async (req) => {
   const sql = neon(process.env.DATABASE_URL);
@@ -1662,8 +2328,15 @@ export default async (req) => {
       case 'report_close_game': result = await reportCloseGame(sql); break;
       case 'report_trailing_profile': result = await reportTrailingProfile(sql); break;
       case 'report_indicator_stability': result = await reportIndicatorStability(sql); break;
+      case 'collect_pbp':       result = await phaseCollectPBP(sql, url); break;
+      case 'compute_checkpoints': result = await phaseComputeCheckpoints(sql); break;
+      case 'report_cp_journey': result = await reportCPJourney(sql); break;
+      case 'report_cp_graduation': result = await reportCPGraduation(sql); break;
+      case 'report_cp_trailing': result = await reportCPTrailing(sql); break;
+      case 'report_cp_stability': result = await reportCPStability(sql); break;
+      case 'report_cp_close':   result = await reportCPClose(sql); break;
       default:
-        result = { error: `Unknown phase: ${phase}. Use init, collect, sample, compute, explore, report, report_quarter_journey, report_graduation_sim, report_close_game, report_trailing_profile, report_indicator_stability.` };
+        result = { error: `Unknown phase: ${phase}. Phases: init, collect, sample, compute, report, explore, collect_pbp, compute_checkpoints, report_cp_journey, report_cp_graduation, report_cp_trailing, report_cp_stability, report_cp_close` };
     }
     return new Response(JSON.stringify(result, null, 2), {
       headers: { 'Content-Type': 'application/json' },
