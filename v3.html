@@ -1317,13 +1317,19 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
         html+='<div class="ind-ev-row"><span class="ind-ev-label">Lead Chg / Ties</span><div class="ind-ev-vals" style="color:var(--fg-secondary)">'+lc+' lead changes \u00b7 '+tt+' ties</div></div>';
       }
     } else if(indKey==='I5'){
-      if(pbp&&pbp.runs6){
+      // Compute runs6 from scoreLog if missing (backward compat for DB entries without runs6)
+      var r6=pbp?pbp.runs6:null;
+      if(!r6&&pbp&&pbp._bdl&&pbp._bdl.scoreLog){
+        r6=[];var r6T=null,r6P=0;
+        pbp._bdl.scoreLog.forEach(function(sl){if(sl.team===r6T){r6P+=sl.pts;}else{if(r6P>=6&&r6T)r6.push({team:r6T,pts:r6P});r6T=sl.team;r6P=sl.pts;}});
+        if(r6P>=6&&r6T)r6.push({team:r6T,pts:r6P});
+      }
+      if(r6&&r6.length>0){
         var hR6=0,aR6=0,hRuns6=[],aRuns6=[];
-        pbp.runs6.forEach(function(r){if(r.team===hA){hR6++;hRuns6.push(r.pts);}else{aR6++;aRuns6.push(r.pts);}});
+        r6.forEach(function(r){if(r.team===hA){hR6++;hRuns6.push(r.pts);}else{aR6++;aRuns6.push(r.pts);}});
         html+=evRow('Runs (6+)',hR6,aR6);
         var share=hR6+aR6>0?Math.round(hR6/(hR6+aR6)*100):50;
         html+=evRow('Run Share',share+'%',(100-share)+'%');
-        // Show individual run point totals per team
         html+='<div class="ind-ev-row" style="border-bottom:none"><span class="ind-ev-label">'+esc(hA)+' runs</span><div class="ind-ev-vals" style="color:var(--green)">'+(hRuns6.length>0?hRuns6.join(', ')+' pts':'none')+'</div></div>';
         html+='<div class="ind-ev-row" style="border-bottom:none"><span class="ind-ev-label">'+esc(aA)+' runs</span><div class="ind-ev-vals" style="color:var(--coral)">'+(aRuns6.length>0?aRuns6.join(', ')+' pts':'none')+'</div></div>';
       }
@@ -1777,6 +1783,12 @@ function computeClientIndicators(boxScore, gameId){
   // ── I5: Sustained Execution (run share from PBP) ──
   var I5={score:0.5,leader:'EVEN'};
   var runs6=pbp?pbp.runs6||null:null;
+  // Fallback: compute from scoreLog if runs6 missing
+  if(!runs6&&pbp&&pbp._bdl&&pbp._bdl.scoreLog){
+    runs6=[];var r6T2=null,r6P2=0;
+    pbp._bdl.scoreLog.forEach(function(sl){if(sl.team===r6T2){r6P2+=sl.pts;}else{if(r6P2>=6&&r6T2)runs6.push({team:r6T2,pts:r6P2});r6T2=sl.team;r6P2=sl.pts;}});
+    if(r6P2>=6&&r6T2)runs6.push({team:r6T2,pts:r6P2});
+  }
   if(runs6){
     var hRuns=0,aRuns=0;
     runs6.forEach(function(r){if(r.team===hA)hRuns++;else if(r.team===aA)aRuns++;});

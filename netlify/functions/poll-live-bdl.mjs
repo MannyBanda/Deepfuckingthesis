@@ -3069,7 +3069,9 @@ async function computeServerContext(sql, game, league, summary, ind, espnWP, hA,
           home: pbpResult.home, away: pbpResult.away,
           homeAlias: hA, awayAlias: aA,
           totalShots: pbpResult.totalShots, totalTOs: pbpResult.totalTOs,
-          runs: pbpResult.runs,
+          runs: pbpResult.runs, runs6: pbpResult.runs6,
+          scoringEvents: pbpResult.scoringEvents,
+          _bdl: pbpResult._bdl,
         };
         // Build box_score_json from summary stats
         const _hs = summary.home?.statistics || {}, _as = summary.away?.statistics || {};
