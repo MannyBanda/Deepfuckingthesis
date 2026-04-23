@@ -597,7 +597,7 @@ async function phaseSample(sql, url) {
 async function phaseCompute(sql) {
   // Load all games with SR summaries
   const games = await sql`
-    SELECT * FROM wnba_backtest WHERE sr_summary IS NOT NULL
+    SELECT game_id, sr_summary, winner, home_alias, away_alias, margin, margin_bucket, indicators, conviction_tier, conviction_detail, ctrl_team_won FROM wnba_backtest WHERE sr_summary IS NOT NULL
   `;
 
   console.log(`Computing indicators for ${games.length} games`);
@@ -651,7 +651,8 @@ async function phaseCompute(sql) {
 
 async function phaseReport(sql) {
   const games = await sql`
-    SELECT * FROM wnba_backtest 
+    SELECT game_id, indicators, conviction_tier, conviction_combo, conviction_detail, ctrl_team_won, winner, margin, margin_bucket
+    FROM wnba_backtest 
     WHERE indicators IS NOT NULL AND conviction_tier IS NOT NULL
   `;
 
@@ -810,7 +811,7 @@ async function phaseReport(sql) {
 // Instead of testing NBA indicators, find what ACTUALLY predicts WNBA wins
 async function phaseExplore(sql) {
   const games = await sql`
-    SELECT * FROM wnba_backtest WHERE sr_summary IS NOT NULL
+    SELECT game_id, sr_summary, winner, home_alias, away_alias, margin, margin_bucket, indicators, conviction_tier, conviction_detail, ctrl_team_won FROM wnba_backtest WHERE sr_summary IS NOT NULL
   `;
 
   if (games.length < 20) {
@@ -1078,7 +1079,7 @@ function computeConvictionFromInd(ind) {
 // Track control team, floor, and conviction at each quarter boundary.
 // Answers: How stable is WNBA structural control across quarters?
 async function reportQuarterJourney(sql) {
-  const games = await sql`SELECT * FROM wnba_backtest WHERE sr_summary IS NOT NULL`;
+  const games = await sql`SELECT game_id, sr_summary, winner, home_alias, away_alias, margin, margin_bucket, indicators, conviction_tier, conviction_detail, ctrl_team_won FROM wnba_backtest WHERE sr_summary IS NOT NULL`;
   if (games.length === 0) return { error: 'No SR data' };
 
   let totalGames = 0;
@@ -1182,7 +1183,7 @@ async function reportQuarterJourney(sql) {
 // Simulate checkpoint graduation using quarter boundaries.
 // Tests multiple MF/minF gates to find optimal WNBA thresholds.
 async function reportGraduationSim(sql) {
-  const games = await sql`SELECT * FROM wnba_backtest WHERE sr_summary IS NOT NULL`;
+  const games = await sql`SELECT game_id, sr_summary, winner, home_alias, away_alias, margin, margin_bucket, indicators, conviction_tier, conviction_detail, ctrl_team_won FROM wnba_backtest WHERE sr_summary IS NOT NULL`;
   if (games.length === 0) return { error: 'No SR data' };
 
   // MF gates to test
@@ -1357,7 +1358,7 @@ async function reportGraduationSim(sql) {
 // Test different close game filter definitions for WNBA.
 // WNBA has lower scoring (10-min Q), so NBA's "within 5 Q3, within 7 Q4" may need tightening.
 async function reportCloseGame(sql) {
-  const games = await sql`SELECT * FROM wnba_backtest WHERE sr_summary IS NOT NULL`;
+  const games = await sql`SELECT game_id, sr_summary, winner, home_alias, away_alias, margin, margin_bucket, indicators, conviction_tier, conviction_detail, ctrl_team_won FROM wnba_backtest WHERE sr_summary IS NOT NULL`;
   if (games.length === 0) return { error: 'No SR data' };
 
   const gameData = [];
@@ -1444,7 +1445,7 @@ async function reportCloseGame(sql) {
 // BUY profile equivalent — when control team trails, how often do they win?
 // Uses per-quarter data to identify trailing scenarios.
 async function reportTrailingProfile(sql) {
-  const games = await sql`SELECT * FROM wnba_backtest WHERE sr_summary IS NOT NULL`;
+  const games = await sql`SELECT game_id, sr_summary, winner, home_alias, away_alias, margin, margin_bucket, indicators, conviction_tier, conviction_detail, ctrl_team_won FROM wnba_backtest WHERE sr_summary IS NOT NULL`;
   if (games.length === 0) return { error: 'No SR data' };
 
   const pct = (w, n) => n > 0 ? Math.round(w / n * 1000) / 10 : 0;
@@ -1549,7 +1550,7 @@ async function reportTrailingProfile(sql) {
 // How stable are individual indicators across quarters?
 // If I3 leads at Q2, does it hold through Q4?
 async function reportIndicatorStability(sql) {
-  const games = await sql`SELECT * FROM wnba_backtest WHERE sr_summary IS NOT NULL`;
+  const games = await sql`SELECT game_id, sr_summary, winner, home_alias, away_alias, margin, margin_bucket, indicators, conviction_tier, conviction_detail, ctrl_team_won FROM wnba_backtest WHERE sr_summary IS NOT NULL`;
   if (games.length === 0) return { error: 'No SR data' };
 
   const pct = (w, n) => n > 0 ? Math.round(w / n * 1000) / 10 : 0;
