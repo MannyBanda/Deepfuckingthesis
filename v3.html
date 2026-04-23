@@ -327,6 +327,13 @@ input,textarea,select{font-size:16px!important;}
 .empty{display:none;padding:60px 20px;text-align:center;font-family:var(--sans);font-size:13px;color:var(--fg-dim);letter-spacing:0.04em;}
 
 /* ═══ CONFIDENCE TABLE ═══ */
+.util-opt{display:block;width:100%;text-align:left;padding:10px 16px;background:none;border:none;color:var(--fg-secondary);font:12px var(--mono);cursor:pointer;}
+.util-opt:active{background:var(--bg-card);}
+.util-opt.on{color:var(--green);}
+#demo-strip{display:none;padding:4px 16px 8px;overflow-x:auto;white-space:nowrap;}
+#demo-strip button{font:600 11px var(--sans);padding:6px 14px;border-radius:20px;border:1px solid var(--green-border);background:var(--green-dim);color:var(--green);margin-right:8px;cursor:pointer;}
+#demo-strip button.active{background:var(--green);color:var(--bg);}
+#demo-strip .demo-desc{font:10px var(--mono);color:var(--fg-dim);margin-left:4px;}
 #conf-table{padding:8px 12px 12px;margin:0 16px 10px;background:var(--bg-surface);border:1px solid var(--hairline);border-radius:var(--r-card);}
 .ct-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
 .ct-title{font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:var(--fg-tertiary);}
@@ -386,8 +393,12 @@ body.is-locked{overflow:hidden;}
   <div class="chrome-actions">
     <button class="icon-btn" title="WP Profiles">WP</button>
     <button class="icon-btn" id="toast-btn" title="Alerts" onclick="showToast()">&#9889;<span class="chrome-badge" id="toast-badge"></span></button>
-    <button class="icon-btn" title="Menu" onclick="toggleConfTable()">&#9776;</button>
+    <button class="icon-btn" title="Menu" onclick="toggleUtilMenu()" id="util-btn">&#9776;</button>
   </div>
+</div>
+<div id="util-menu" style="display:none;position:absolute;right:16px;top:52px;z-index:200;background:var(--bg-surface);border:1px solid var(--hairline);border-radius:var(--r-card);padding:4px 0;min-width:160px;box-shadow:0 4px 16px rgba(0,0,0,.5)">
+  <button class="util-opt" onclick="toggleConfTable();hideUtilMenu()">Confidence Table</button>
+  <button class="util-opt" id="demo-opt" onclick="toggleDemo()">Demo Mode</button>
 </div>
 
 <div class="date-nav" id="date-nav">
@@ -398,6 +409,7 @@ body.is-locked{overflow:hidden;}
 
 <div id="pills" class="pill-strip"></div>
 <div id="conf-table" style="display:none"></div>
+<div id="demo-strip"></div>
 
 <div class="container">
   <div id="schedule-meta" class="schedule-meta"></div>
@@ -460,6 +472,21 @@ const theses = JSON.parse(localStorage.getItem('nba4:theses')||'{}');
 const standingsCache = {};
 var espnGameMap = {};
 var dbReady = false;
+var demoMode = false;
+var DEMO_GAMES = [
+  {id:'f98b9fa2-83b6-4bc5-9d2c-cb55d090fbb5',preset:'TRAIL -15',desc:'DEN +750 comeback in OT',
+   status:'closed',scheduled:'2026-04-07T01:00:00Z',venue:'Ball Arena',
+   home:{alias:'DEN',name:'Nuggets',market:'Denver'},away:{alias:'POR',name:'Trail Blazers',market:'Portland'},
+   homePoints:null,awayPoints:null,period:5,clock:'0:00',dataSource:'BDL'},
+  {id:'7710d87d-045b-47a2-ac65-0d6986d1940c',preset:'LEAD LOST',desc:'SAC graduated, lost lead, won +700',
+   status:'closed',scheduled:'2026-04-11T02:00:00Z',venue:'Golden 1 Center',
+   home:{alias:'SAC',name:'Kings',market:'Sacramento'},away:{alias:'GSW',name:'Warriors',market:'Golden State'},
+   homePoints:null,awayPoints:null,period:4,clock:'0:00',dataSource:'BDL'},
+  {id:'34b37d8e-01cf-4bae-a587-0390d92c608d',preset:'OT BAD BEAT',desc:'CHA play-in OT win',
+   status:'closed',scheduled:'2026-04-15T23:30:00Z',venue:'Spectrum Center',
+   home:{alias:'CHA',name:'Hornets',market:'Charlotte'},away:{alias:'MIA',name:'Heat',market:'Miami'},
+   homePoints:null,awayPoints:null,period:5,clock:'0:00',dataSource:'BDL'}
+];
 const bdlGameMap = {};
 var dbAnalysisCache = {};
 var autoAnalysisCache = {};
@@ -782,6 +809,52 @@ async function fetchLivePBP(gameId,bdlId){
 // ══════════════════════════════════════════════════════════════════════════════
 // RENDERING — v3 (completely new)
 // ══════════════════════════════════════════════════════════════════════════════
+
+function toggleUtilMenu(){
+  var el=document.getElementById('util-menu');
+  el.style.display=el.style.display==='none'?'block':'none';
+  if(el.style.display==='block'){
+    document.getElementById('demo-opt').className='util-opt'+(demoMode?' on':'');
+    document.getElementById('demo-opt').textContent=demoMode?'\u2713 Demo Mode':'Demo Mode';
+    setTimeout(function(){document.addEventListener('click',hideUtilMenu,{once:true});},10);
+  }
+}
+function hideUtilMenu(){document.getElementById('util-menu').style.display='none';}
+
+function toggleDemo(){
+  hideUtilMenu();
+  demoMode=!demoMode;
+  if(demoMode){
+    clearInterval(pollTimer);
+    games=DEMO_GAMES.map(function(d){return Object.assign({},d);});
+    cardState={};activeGameId=null;
+    mountAllCards();renderPills();renderDemoStrip();
+    // Hydrate from DB (staggered)
+    games.forEach(function(g,i){
+      setTimeout(function(){hydrateFromServerSnapshots(g.id);},i*200);
+      setTimeout(function(){fetchPBPFromDB(g.id);},400+i*200);
+      setTimeout(function(){fetchOddsHistory(g.id);},600+i*200);
+    });
+    syncAnalysesFromDB();syncCalibrationAnalyses();syncLatestSnapshotsFromDB();syncThesesFromDB();
+    document.querySelector('.date-nav').style.display='none';
+  } else {
+    document.querySelector('.date-nav').style.display='';
+    document.getElementById('demo-strip').style.display='none';
+    switchDate(0);
+  }
+}
+
+function renderDemoStrip(){
+  var strip=document.getElementById('demo-strip');
+  if(!demoMode){strip.style.display='none';return;}
+  strip.style.display='block';
+  var html='';
+  DEMO_GAMES.forEach(function(d,i){
+    html+='<button onclick="scrollToGame(\''+d.id+'\')">'
+      +esc(d.preset)+'<span class="demo-desc">'+esc(d.desc)+'</span></button>';
+  });
+  strip.innerHTML=html;
+}
 
 function renderPills(){
   var html='';
@@ -1447,6 +1520,11 @@ async function hydrateFromServerSnapshots(gameId){
       }
     }
 
+    // Auto-fill game scores from latest snapshot (demo mode + FINAL games)
+    var _gRef=games.find(function(x){return x.id===gameId;});
+    if(_gRef&&_gRef.homePoints==null&&latest.home_pts!=null){
+      _gRef.homePoints=latest.home_pts;_gRef.awayPoints=latest.away_pts;
+    }
     console.log('[DB] Snapshots hydrated for',gameId,':',usable.length,'entries');
     renderCard(gameId);
   }catch(e){console.warn('[DB] Snapshot hydration failed:',e.message);}
