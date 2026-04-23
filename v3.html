@@ -1306,6 +1306,21 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
         var diff=hQ-aQ;
         html+=evRow('Q'+(qi+1),hQ+' ('+(diff>=0?'+':'')+diff+')',aQ+' ('+((-diff)>=0?'+':'')+(-diff)+')');
       }
+      // SubA verdict: score gap vs ±8 threshold
+      var curDiff=(box.home_team_score||0)-(box.visitor_team_score||0);
+      var absCur=Math.abs(curDiff);
+      var subAWin=absCur>8?(curDiff>0?hA:aA):'EVEN';
+      html+='<div class="ind-ev-row"><span class="ind-ev-label">SubA: Gap (±8)</span><div class="ind-ev-vals" style="color:var(--fg-secondary)">'+(absCur>8?'<span style="color:var(--green)">'+esc(subAWin)+'</span> (\u00b1'+absCur+')':'EVEN (\u00b1'+absCur+')')+'</div></div>';
+      // SubB verdict: Q4 quarter delta vs ±2 threshold
+      var per=box.period||hLine.length||0;
+      if(per>=4&&hLine.length>=per&&aLine.length>=per){
+        var lastH=hLine[hLine.length-1]||0,lastA=aLine[aLine.length-1]||0;
+        var qDelta=lastH-lastA;
+        var subBWin=qDelta>2?hA:qDelta<-2?aA:'EVEN';
+        html+='<div class="ind-ev-row"><span class="ind-ev-label">SubB: Q'+per+' (\u00b12)</span><div class="ind-ev-vals" style="color:var(--fg-secondary)">'+(subBWin!=='EVEN'?'<span style="color:var(--green)">'+esc(subBWin)+'</span> ('+(qDelta>=0?'+':'')+qDelta+')':'EVEN ('+(qDelta>=0?'+':'')+qDelta+')')+'</div></div>';
+      } else {
+        html+='<div class="ind-ev-row"><span class="ind-ev-label">SubB: Qtr \u0394</span><div class="ind-ev-vals" style="color:var(--fg-dim)">Q4 only</div></div>';
+      }
       // Lead changes + ties from scoring events
       if(pbp&&pbp.scoringEvents){
         var lc=0,tt=0,prevLead=0;
