@@ -1041,19 +1041,19 @@ async function runPregameAgent() {
   var schedule = typeof pollRows[0].schedule_json === 'string' ? JSON.parse(pollRows[0].schedule_json) : pollRows[0].schedule_json;
   log('Schedule: ' + schedule.length + ' games on ' + dateKey);
 
-  // 2. Find games tipping in 30-75 minutes (widened from 5-15 to catch ~1 hour pre-tip)
+  // 2. Find games tipping in 0-75 minutes (catches late runs + ~1 hour pre-tip)
   var candidates = [];
   for (var g of schedule) {
     if (!g.scheduled) continue;
     var tip = new Date(g.scheduled);
     var minsTilTip = (tip - now) / 60000;
-    if (minsTilTip >= 30 && minsTilTip <= 75) {
+    if (minsTilTip >= 0 && minsTilTip <= 75) {
       candidates.push({ game: g, minsTilTip: Math.round(minsTilTip) });
     }
   }
 
   if (candidates.length === 0) {
-    log('No games tipping in 30-75 minutes — nothing to do');
+    log('No games tipping in 0-75 minutes — nothing to do');
     return { logs: logs, generated: 0 };
   }
   log('Candidates: ' + candidates.map(function(c) { return c.game.away_alias + '@' + c.game.home_alias + ' (' + c.minsTilTip + 'min)'; }).join(', '));
