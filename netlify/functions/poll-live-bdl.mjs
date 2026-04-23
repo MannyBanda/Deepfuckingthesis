@@ -667,6 +667,36 @@ async function espnWinProb(league, espnEventId) {
   }
 }
 
+// Fetch FULL ESPN WP history array for DB persistence (called at game finalization)
+async function espnWPHistoryFull(league, espnEventId) {
+  const cfg = LEAGUES[league];
+  const url = `${cfg.espnSummaryBase}?event=${espnEventId}`;
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const wp = data.winprobability || [];
+    if (wp.length === 0) return null;
+    let history = wp.map(p => ({
+      homeWP: p.homeWinPercentage != null ? Math.round(p.homeWinPercentage * 1000) / 1000 : null,
+      secondsLeft: p.secondsLeft != null ? p.secondsLeft : null,
+      seq: p.sequenceNumber || null,
+    }));
+    // Downsample to 300 if needed
+    if (history.length > 300) {
+      const step = Math.ceil(history.length / 300);
+      const sampled = [history[0]];
+      for (let i = step; i < history.length - 1; i += step) sampled.push(history[i]);
+      sampled.push(history[history.length - 1]);
+      history = sampled;
+    }
+    return history;
+  } catch (e) {
+    log(`ESPN WP history error for ${espnEventId}: ${e.message}`);
+    return null;
+  }
+}
+
 // ── BDL FETCH ───────────────────────────────────────────────────────────────
 
 async function bdlFetch(path) {
@@ -4724,6 +4754,14 @@ export default async function(req) {
 
             if (espnMap[game.id]) {
               var finalWP = await espnWinProb(league, espnMap[game.id]);
+              // Fetch + persist full WP history for next-day chart rendering
+              var wpHistFull = await espnWPHistoryFull(league, espnMap[game.id]);
+              if (wpHistFull && wpHistFull.length > 0) {
+                try {
+                  await sql`UPDATE games SET espn_wp_json = ${JSON.stringify(wpHistFull)} WHERE id = ${game.id}`;
+                  log(`${matchup}: ★ ESPN WP history saved (${wpHistFull.length} points)`);
+                } catch (e) { log(`${matchup}: ESPN WP history save failed: ${e.message}`); }
+              }
             }
 
             // ── SERVER-SIDE FINALIZE — ensures calibration view works even when client is asleep ──

@@ -1202,6 +1202,10 @@ async function hydrateFromServerSnapshots(gameId){
       if(qd&&qd.window&&qd.window.available){
         cs.rollingWindow=qd.window;cs.rollingWindow.source='server-qd';
       }
+      // ESPN WP history from DB (persisted at game finalization)
+      if(qdData.espn_wp_json&&qdData.espn_wp_json.length>0){
+        cs.espnWPHistory=qdData.espn_wp_json;
+      }
     }
   }catch(e){}
 

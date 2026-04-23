@@ -169,6 +169,7 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_away_ls_class TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_away_ls_margin INTEGER`; } catch(e) {}
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS prev_away_opp_sust TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS espn_wp_json JSONB`; } catch(e) {}
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS home_lead_degraded_at TIMESTAMPTZ`; } catch(e) {}
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS away_lead_degraded_at TIMESTAMPTZ`; } catch(e) {}
       // v2 BWC state machine — per-game live tracking state
@@ -547,12 +548,12 @@ exports.handler = async (event) => {
       if (!gameId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id required' }) };
 
       try {
-        const rows = await sql`SELECT quarter_data FROM games WHERE id = ${gameId}`;
+        const rows = await sql`SELECT quarter_data, espn_wp_json FROM games WHERE id = ${gameId}`;
         if (rows.length === 0 || !rows[0].quarter_data) {
-          return { statusCode: 200, headers, body: JSON.stringify({ quarter_data: null }) };
+          return { statusCode: 200, headers, body: JSON.stringify({ quarter_data: null, espn_wp_json: rows.length > 0 ? rows[0].espn_wp_json : null }) };
         }
         const qd = typeof rows[0].quarter_data === 'string' ? JSON.parse(rows[0].quarter_data) : rows[0].quarter_data;
-        return { statusCode: 200, headers, body: JSON.stringify({ quarter_data: qd }) };
+        return { statusCode: 200, headers, body: JSON.stringify({ quarter_data: qd, espn_wp_json: rows[0].espn_wp_json || null }) };
       } catch (e) {
         return { statusCode: 200, headers, body: JSON.stringify({ quarter_data: null, error: e.message }) };
       }
