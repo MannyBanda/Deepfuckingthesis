@@ -679,16 +679,17 @@ async function refreshLiveCards(){
       g.period=b.period||g.period;
       g.clock=normalizeBdlClock(b.time,b.status)||g.clock;
       updated=true;
+      // Store box score for all states (evidence panel needs it)
+      var cs=cardState[g.id];
+      if(cs)cs._lastBoxScore=b;
       // Client-side indicator compute for LIVE games
       var gs=getState(g);
       if(gs==='LIVE'){
-        var cs=cardState[g.id];
         if(cs){
           var ind=computeClientIndicators(b,g.id);
           if(ind){
             cs.clientInd=ind;
           }
-          cs._lastBoxScore=b;
           // Queue direct BDL plays fetch for this LIVE game
           _livePBPQueue.push({gameId:g.id,bdlId:bdlId});
         }
