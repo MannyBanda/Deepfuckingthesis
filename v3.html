@@ -1299,8 +1299,18 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
       if(pbp&&pbp._bdl){
         html+=evRow('Big Lead',pbp._bdl.biggestLeadHome||0,pbp._bdl.biggestLeadAway||0);
       }
-      // Per-quarter margins
+      // Per-quarter margins — fallback to boundaries if line_score empty (FINAL from DB)
       var hLine=box.home_team?.line_score||[],aLine=box.visitor_team?.line_score||[];
+      if(hLine.length===0&&cs._serverQDBoundaries){
+        var bKeys=Object.keys(cs._serverQDBoundaries).map(Number).filter(function(n){return n>0&&!isNaN(n);}).sort(function(a,b){return a-b;});
+        hLine=[];aLine=[];
+        for(var bi=0;bi<bKeys.length;bi++){
+          var b=cs._serverQDBoundaries[bKeys[bi]];
+          var prevB=bi>0?cs._serverQDBoundaries[bKeys[bi-1]]:null;
+          hLine.push((b.home?.points||0)-(prevB?prevB.home?.points||0:0));
+          aLine.push((b.away?.points||0)-(prevB?prevB.away?.points||0:0));
+        }
+      }
       for(var qi=0;qi<Math.max(hLine.length,aLine.length);qi++){
         var hQ=hLine[qi]||0,aQ=aLine[qi]||0;
         var diff=hQ-aQ;
