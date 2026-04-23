@@ -2490,7 +2490,7 @@ function renderDrawer(gameId){
     });
 
     // Column toggle state
-    if(!cs._snapCols)cs._snapCols={time:true,score:true,margin:true,floor:true,mf:true,peak:true,eros:false,ind:true,tp:false,ls:false,sust:false,grad:true,ml:true,alert:true,dec:true};
+    if(!cs._snapCols)cs._snapCols={time:true,score:true,margin:true,floor:true,mf:true,peak:false,eros:false,ind:true,tp:false,ls:false,sust:false,grad:true,ml:true,alert:true,dec:true};
     var sc2=cs._snapCols;
     html+='<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;align-items:center">';
     var colDefs=[{k:'time',l:'Time'},{k:'score',l:'Score'},{k:'margin',l:'Margin'},{k:'floor',l:'Floor'},{k:'mf',l:'MF'},{k:'peak',l:'Peak'},{k:'eros',l:'Eros'},{k:'ind',l:'I1-I5'},{k:'tp',l:'TP'},{k:'ls',l:'LS'},{k:'sust',l:'Sust'},{k:'grad',l:'Grad'},{k:'ml',l:'ML'},{k:'alert',l:'Alert'},{k:'dec',l:'Dec'}];
