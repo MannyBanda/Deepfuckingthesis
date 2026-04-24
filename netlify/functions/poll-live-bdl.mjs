@@ -5110,6 +5110,9 @@ export default async function(req) {
               runs6: pbpResult?.runs6 ? { home: pbpResult.runs6.filter(r=>r.team===hA).length, away: pbpResult.runs6.filter(r=>r.team===aA).length, total: pbpResult.runs6.length } : null,
             });
           } catch (e) { /* non-fatal — snapshot still saves without raw stats */ }
+          // Read live_tracking for bwc_state + grad_rank (main lt not loaded until V2 section below)
+          var _snapLT = null;
+          try { const _ltR = await sql`SELECT live_tracking FROM games WHERE id = ${game.id}`; if (_ltR[0]?.live_tracking) _snapLT = typeof _ltR[0].live_tracking === 'string' ? JSON.parse(_ltR[0].live_tracking) : _ltR[0].live_tracking; } catch(e) {}
           await sql`
             INSERT INTO snapshots (game_id, period, clock, home_pts, away_pts,
               floor_score, floor_team, pbp_score, pbp_team, pbp_window_size,
@@ -5125,7 +5128,7 @@ export default async function(req) {
               ${ind.I1.score}, ${ind.I2.score}, ${ind.I3.score}, ${ind.I4.score}, ${ind.I5.score},
               ${'server'}, ${leadClass}, ${sustJson},
               ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
-              ${lt.bwc_fired ? (lt._prev_bwc_state || null) : null}, ${lt.cp_peak_rank || null})
+              ${_snapLT?.bwc_fired ? (_snapLT._prev_bwc_state || null) : null}, ${_snapLT?.cp_peak_rank || null})
           `;
           log(`${matchup}: snapshot saved — floor:${ind.score} I1-5:${ind.I1?.score},${ind.I2?.score},${ind.I3?.score},${ind.I4?.score},${ind.I5?.score} tp:${snapTp?.classification||'-'} ls:${snapLs?.classification||'-'}`);
 
@@ -6082,7 +6085,7 @@ export default async function(req) {
                       ${ind.I1.score}, ${ind.I2.score}, ${ind.I3.score}, ${ind.I4.score}, ${ind.I5.score},
                       ${t.tag}, ${sustJson},
                       ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
-                      ${lt.bwc_fired ? (lt._prev_bwc_state || null) : null}, ${lt.cp_peak_rank || null})
+                      ${lt?.bwc_fired ? (lt._prev_bwc_state || null) : null}, ${lt?.cp_peak_rank || null})
                   `;
                   log(`${matchup}: ${t.label} CAL snapshot saved — floor ${ind.controlTeam} ${ind.score} | sust:${leadSust || '?'} class:${leadClass || '?'} | WP:${espnWP?.home || '?'}% | spd:${spreadVal != null ? spreadVal : 'N/A'}`);
                 } catch (e) {
