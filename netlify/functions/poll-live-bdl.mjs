@@ -5795,7 +5795,8 @@ export default async function(req) {
 
                     await routeV2Alert(v2AlertType, 'FIRED', _v2ExitSev, false);
 
-                    // Update gate timestamps
+                    // Update gate timestamps — transition fired, advance state
+                    lt._v2_transition_pending = false;
                     lt._last_any_bwc_ts = _v2Now;
                     lt._last_fired_state = v2BwcState;
                     lt._last_fired_floor = ind.score;
@@ -5803,6 +5804,7 @@ export default async function(req) {
                     lt._last_fired_ts = _v2Now;
                   } else if (!_v2ShouldFire) {
                     log(`${matchup}: v2 ${v2AlertType} GATED — cooldown=${!_v2CooldownPassed ? 'BLOCKED(' + Math.round(_v2MsSinceAnyBwc/1000) + 's)' : 'ok'} material=${!_v2MaterialChange && !_v2StateChanged ? 'BLOCKED' : 'ok'}`);
+                    lt._v2_transition_pending = true; // Hold _prev_bwc_state until this transition fires
                   }
                   } // close position gate else
                 }
@@ -5862,8 +5864,8 @@ export default async function(req) {
 
             // ── V2 STATE LOGGING ──
             if (lt.bwc_fired) {
-              if (v2BwcState) lt._prev_bwc_state = v2BwcState;
-              log(`${matchup}: v2 state=${v2BwcState || '-'} erosion=${v2Erosion.level} peak=${v2Erosion.peakFloor?.toFixed(2) || '-'} holds=${lt.ctrl_team_holds || 0} bwcTeam=${lt.bwc_fired.team}`);
+              if (v2BwcState && !lt._v2_transition_pending) lt._prev_bwc_state = v2BwcState;
+              log(`${matchup}: v2 state=${v2BwcState || '-'} erosion=${v2Erosion.level} peak=${v2Erosion.peakFloor?.toFixed(2) || '-'} holds=${lt.ctrl_team_holds || 0} bwcTeam=${lt.bwc_fired.team}${lt._v2_transition_pending ? ' PENDING(prev=' + lt._prev_bwc_state + ')' : ''}`);
             }
           }
 
