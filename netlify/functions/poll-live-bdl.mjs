@@ -5769,19 +5769,14 @@ export default async function(req) {
                     log(`${matchup}: ${v2AlertType} GATED — position closed after EXIT (subscriber already out). Only recovery alerts or new BUY can re-open.`);
                   } else {
 
-                  // Cooldown gate
+                  // Material change gate (cooldown killed Apr 24 — agent + material gate sufficient)
                   const _v2Now = Date.now();
-                  const _v2MsSinceAnyBwc = lt._last_any_bwc_ts ? (_v2Now - lt._last_any_bwc_ts) : Infinity;
-                  const _v2CooldownExempt = v2AlertType === 'THESIS_ALIVE';
-                  const _v2CooldownPassed = _v2CooldownExempt || _v2MsSinceAnyBwc >= 60000;
-
-                  // Material change gate
                   const _v2StateChanged = v2BwcState !== lt._last_fired_state;
                   const _v2FloorDelta = Math.abs(ind.score - (lt._last_fired_floor || 0));
                   const _v2MarginDelta = Math.abs(_v2Margin - (lt._last_fired_margin || 0));
                   const _v2TimeDelta = lt._last_fired_ts ? (_v2Now - lt._last_fired_ts) : Infinity;
                   const _v2MaterialChange = _v2FloorDelta >= 0.10 || _v2MarginDelta >= 5 || _v2TimeDelta >= 300000;
-                  const _v2ShouldFire = _v2CooldownPassed && (_v2StateChanged || _v2MaterialChange);
+                  const _v2ShouldFire = _v2StateChanged || _v2MaterialChange;
 
                   if (_v2ShouldFire && alertMinsLeft >= 1.0 && ind.controlTeam !== 'Neither') {
                     // Exit severity for EXIT alerts
@@ -5797,13 +5792,12 @@ export default async function(req) {
 
                     // Update gate timestamps — transition fired, advance state
                     lt._v2_transition_pending = false;
-                    lt._last_any_bwc_ts = _v2Now;
                     lt._last_fired_state = v2BwcState;
                     lt._last_fired_floor = ind.score;
                     lt._last_fired_margin = _v2Margin;
                     lt._last_fired_ts = _v2Now;
                   } else if (!_v2ShouldFire) {
-                    log(`${matchup}: v2 ${v2AlertType} GATED — cooldown=${!_v2CooldownPassed ? 'BLOCKED(' + Math.round(_v2MsSinceAnyBwc/1000) + 's)' : 'ok'} material=${!_v2MaterialChange && !_v2StateChanged ? 'BLOCKED' : 'ok'}`);
+                    log(`${matchup}: v2 ${v2AlertType} GATED — material=${!_v2MaterialChange && !_v2StateChanged ? 'BLOCKED' : 'ok'}`);
                     lt._v2_transition_pending = true; // Hold _prev_bwc_state until this transition fires
                   }
                   } // close position gate else

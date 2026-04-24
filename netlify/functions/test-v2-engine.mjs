@@ -266,8 +266,6 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
   let lastFiredAlert = {};  // { alertType, period, clock, floor, margin, ts, bwcState }
   let lastDegradeTs = null;
   let lastRecoverTs = null;
-  let lastAnyBwcTs = null;  // Universal cooldown — 3min between ANY BWC transitions
-  const BWC_COOLDOWN_MS = 3 * 60 * 1000;  // 3 minutes
   let lastBuyTs = null;     // BUY cooldown — 3min between BUY fires
   const BUY_COOLDOWN_MS = 3 * 60 * 1000;
   let positionClosed = false; // Tracks post-EXIT position gate for agent context
@@ -371,7 +369,7 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
           ctrlTeam: cr.ctrlTeam, reasoning: `[INITIAL BWC FIRE — structural lead established after ${bwcCandidateHolds} holds]`,
           decision: 'SEND',
         });
-        lastAnyBwcTs = snap.ts ? new Date(snap.ts).getTime() : Date.now();
+
         lastFiredAlert = { alertType: 'BUY WINDOW CLOSING', floor: cr.floor, margin: cr.margin, bwcState: initialState, period, clock: cr.clock };
       }
     } else if (!bwcFirstFired) {
@@ -414,16 +412,10 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
           const marginDelta = Math.abs(cr.margin - lastMargin);
           const lastState = lastFiredAlert.bwcState || null;
 
-          // Universal cooldown: 3min between ANY BWC transitions (prevents trail pollution)
-          // THESIS_ALIVE exempt — EXIT→VALUE is always a significant state change worth evaluating
-          const msSinceAnyBwc = lastAnyBwcTs ? (snapTs - lastAnyBwcTs) : Infinity;
-          const cooldownExempt = alertType === 'THESIS_ALIVE';
-          const cooldownPassed = cooldownExempt || msSinceAnyBwc >= BWC_COOLDOWN_MS;
-
-          // Gate: cooldown must pass, THEN different state always fires, same state needs material change.
+          // Material change gate (cooldown killed Apr 24 — agent + material gate sufficient)
           const stateChanged = bwcState !== lastState;
           const materialChange = floorDelta >= 0.10 || marginDelta >= 5 || msSinceLast >= 5 * 60 * 1000;
-          const shouldFire = cooldownPassed && (stateChanged || materialChange);
+          const shouldFire = stateChanged || materialChange;
 
           if (shouldFire) {
             const triggerPoint = {
@@ -463,7 +455,6 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
 
             // Update gate tracking
             lastFiredAlert = { alertType, floor: cr.floor, margin: cr.margin, bwcState, period, clock: cr.clock };
-            lastAnyBwcTs = snapTs;
             if (direction === 'DEGRADING') lastDegradeTs = snapTs;
             else lastRecoverTs = snapTs;
 
@@ -1744,11 +1735,10 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
   let rAlertTriggers = [];
   let rLastBuyTs = null;
   const BUY_COOLDOWN = 3 * 60 * 1000;
-  const BWC_COOLDOWN = 3 * 60 * 1000;
 
   // BWC transition gate tracking
   let rLastFiredAlert = {};
-  let rLastDegradeTs = null, rLastRecoverTs = null, rLastAnyBwcTs = null;
+  let rLastDegradeTs = null, rLastRecoverTs = null;
   let rPositionClosed = false;
 
   // State capture helper for agent integration
@@ -2038,11 +2028,8 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
           // The agent execution phase handles gating dynamically, so if THESIS_ALIVE
           // SENDS, subsequent triggers see positionClosed=false.
           {
-            // Cooldown + material change gates
+            // Material change gate (cooldown killed Apr 24)
             const snapTs = snap.ts ? new Date(snap.ts).getTime() : Date.now();
-            const msSinceAnyBwc = rLastAnyBwcTs ? (snapTs - rLastAnyBwcTs) : Infinity;
-            const cooldownExempt = rTransAlertType === 'THESIS_ALIVE';
-            const cooldownPassed = cooldownExempt || msSinceAnyBwc >= BWC_COOLDOWN;
 
             const stateChanged = rBwcState !== rLastFiredAlert.bwcState;
             const floorDelta = Math.abs(rc.floor - (rLastFiredAlert.floor || 0));
@@ -2050,7 +2037,7 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
             const lastSameDir = rDir === 'DEGRADING' ? rLastDegradeTs : rLastRecoverTs;
             const timeDelta = lastSameDir ? (snapTs - lastSameDir) : Infinity;
             const materialChange = floorDelta >= 0.10 || marginDelta >= 5 || timeDelta >= 300000;
-            const shouldFire = cooldownPassed && (stateChanged || materialChange);
+            const shouldFire = stateChanged || materialChange;
 
             if (shouldFire) {
               const bg = captureBwcGrad(rc);
@@ -2072,7 +2059,6 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
 
               // Update gate tracking
               rLastFiredAlert = { alertType: rTransAlertType, floor: rc.floor, margin: rMargin, bwcState: rBwcState };
-              rLastAnyBwcTs = snapTs;
               if (rDir === 'DEGRADING') rLastDegradeTs = snapTs;
               else rLastRecoverTs = snapTs;
             }
