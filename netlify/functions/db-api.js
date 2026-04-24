@@ -149,6 +149,10 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ls_exp_swing REAL`; } catch(e) {}
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS raw_stats_json JSONB`; } catch(e) {}
 
+      // V2 state machine + graduation per snapshot
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS bwc_state TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS grad_rank TEXT`; } catch(e) {}
+
       // Quarter-level data for server-authoritative rolling window
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS quarter_data JSONB`; } catch(e) {}
 

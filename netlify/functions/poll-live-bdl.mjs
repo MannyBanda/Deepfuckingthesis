@@ -5116,14 +5116,16 @@ export default async function(req) {
               qtr_score, qtr_team, espn_wp_home, espn_wp_away,
               spread, deficit, trailing_team, lead_sust, gap, accel,
               i1, i2, i3, i4, i5, source, lead_class, sust_json,
-              tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json)
+              tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json,
+              bwc_state, grad_rank)
             VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
               ${ind.score}, ${ind.controlTeam}, ${null}, ${null}, ${null},
               ${null}, ${null}, ${espnWP?.home || null}, ${espnWP?.away || null},
               ${spreadVal}, ${deficit}, ${trailingTeam}, ${leadSust}, ${null}, ${null},
               ${ind.I1.score}, ${ind.I2.score}, ${ind.I3.score}, ${ind.I4.score}, ${ind.I5.score},
               ${'server'}, ${leadClass}, ${sustJson},
-              ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson})
+              ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
+              ${lt.bwc_fired ? (lt._prev_bwc_state || null) : null}, ${lt.cp_peak_rank || null})
           `;
           log(`${matchup}: snapshot saved — floor:${ind.score} I1-5:${ind.I1?.score},${ind.I2?.score},${ind.I3?.score},${ind.I4?.score},${ind.I5?.score} tp:${snapTp?.classification||'-'} ls:${snapLs?.classification||'-'}`);
 
@@ -6072,13 +6074,15 @@ export default async function(req) {
                       floor_score, floor_team, espn_wp_home, espn_wp_away,
                       spread, deficit, trailing_team, lead_sust, lead_class,
                       i1, i2, i3, i4, i5, source, sust_json,
-                      tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json)
+                      tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json,
+                      bwc_state, grad_rank)
                     VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
                       ${ind.score}, ${ind.controlTeam}, ${espnWP?.home || null}, ${espnWP?.away || null},
                       ${spreadVal}, ${deficit}, ${trailingTeam}, ${leadSust}, ${leadClass},
                       ${ind.I1.score}, ${ind.I2.score}, ${ind.I3.score}, ${ind.I4.score}, ${ind.I5.score},
                       ${t.tag}, ${sustJson},
-                      ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson})
+                      ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
+                      ${lt.bwc_fired ? (lt._prev_bwc_state || null) : null}, ${lt.cp_peak_rank || null})
                   `;
                   log(`${matchup}: ${t.label} CAL snapshot saved — floor ${ind.controlTeam} ${ind.score} | sust:${leadSust || '?'} class:${leadClass || '?'} | WP:${espnWP?.home || '?'}% | spd:${spreadVal != null ? spreadVal : 'N/A'}`);
                 } catch (e) {
