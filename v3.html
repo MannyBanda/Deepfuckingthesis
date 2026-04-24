@@ -2427,6 +2427,8 @@ function renderDrawer(gameId){
         var aPl=cs._lastBoxScore.visitor_team?.players||[];
         function qdRollup(players){var s={steals:0,turnovers:0,total_turnovers:0,free_throws_att:0,three_points_made:0,assists:0,points_in_the_paint:0};players.forEach(function(p){s.steals+=p.stl||0;s.turnovers+=p.turnover||0;s.free_throws_att+=p.fta||0;s.three_points_made+=p.fg3m||0;s.assists+=p.ast||0;});s.total_turnovers=s.turnovers;return s;}
         var hCum=qdRollup(hPl),aCum=qdRollup(aPl);
+        // BDL doesn't have paint — flag so diff doesn't produce garbage
+        var _noPaint=(hCum.points_in_the_paint===0&&aCum.points_in_the_paint===0);
         function qdDiff(cum,bound){var d={};['steals','turnovers','total_turnovers','free_throws_att','three_points_made','assists','points_in_the_paint'].forEach(function(k){d[k]=(cum[k]||0)-(bound[k]||0);});return d;}
         var liveHome=qdDiff(hCum,lastBound.home);
         var liveAway=qdDiff(aCum,lastBound.away);
@@ -2439,7 +2441,7 @@ function renderDrawer(gameId){
           deltas[s.label].push(delta);
           var cls=s.invert?(delta<0?'pos':delta>0?'neg':'even'):(delta>0?'pos':delta<0?'neg':'even');
           var txt=delta>0?'+'+delta:delta===0?'\u00b7':''+delta;
-          if(s.label==='PNT'&&hVal===0&&aVal===0){txt='--';cls='even';}
+          if(s.label==='PNT'&&_noPaint){txt='\u00b7';cls='even';deltas[s.label].pop();}
           html+='<td class="qd-cell '+cls+'">'+txt+'</td>';
         });
         html+='</tr>';
