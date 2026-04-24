@@ -245,7 +245,10 @@ ${ctx.oppI3Won ? 'Opponent I3 (shot quality) won — EXPECTED variance, not stru
 ${ctx.oppIndicatorCount >= 1 && !ctx.oppI3Won ? 'WARNING: Opponent structural counter-indicators (' + ctx.oppIndicatorsWon + '), not just variance.' : ''}
 
 POSITION HEALTH:
-${ctx.alertType === 'BUY' ? 'Mean' : 'Peak'} floor: ${ctx.peakFloor != null ? Number(ctx.peakFloor).toFixed(2) : 'N/A'} | Delta: ${ctx.peakDelta != null ? Number(ctx.peakDelta).toFixed(3) : 'N/A'} | Erosion: ${ctx.erosionLevel}
+Peak floor: ${ctx.peakFloor != null ? Number(ctx.peakFloor).toFixed(2) : 'N/A'} | Mean floor: ${ctx.meanFloor != null ? Number(ctx.meanFloor).toFixed(3) : 'N/A'} | Current: ${ctx.floor}
+Erosion: ${ctx.erosionLevel} (${ctx.alertType === 'POSITION_OPEN' ? 'peak-anchored' : 'mean-anchored'})${ctx.peakErosionLevel && ctx.peakErosionLevel !== ctx.erosionLevel ? ' | Peak erosion: ' + ctx.peakErosionLevel + ' (reference only)' : ''}
+${ctx.convictionTrend && ctx.convictionTrend.trend !== 'INSUFFICIENT' ? 'Conviction trend: ' + ctx.convictionTrend.trend + ' (' + ctx.convictionTrend.tiers.join(' \u2192 ') + (ctx.convictionTrend.degradePoint ? ', dropped at ' + ctx.convictionTrend.degradePoint : '') + ')' : ''}
+${ctx.fullCPTrend && ctx.fullCPTrend.direction !== 'INSUFFICIENT' ? 'CP trend (all, unfiltered): ' + ctx.fullCPTrend.direction + ' (' + ctx.fullCPTrend.floors.map(f => f.toFixed(2)).join(' \u2192 ') + ') delta=' + (ctx.fullCPTrend.delta > 0 ? '+' : '') + ctx.fullCPTrend.delta.toFixed(3) : ''}
 Consecutive holds: ${ctx.consecutiveHolds}
 BWC lifecycle: ${ctx.bwcState}${ctx.bwcFirePeriod ? ' (BWC fired Q' + ctx.bwcFirePeriod + ', floor ' + (ctx.bwcFireFloor != null ? Number(ctx.bwcFireFloor).toFixed(2) : '?') + ')' : ''}
 ${ctx.positionClosed ? 'POSITION STATE: CLOSED — an EXIT was previously SENT. The subscriber was told to exit this position. Any SEND decision on a recovery alert (POSITION_OPEN, POSITION_SAFE, POSITION_RECOVERING, THESIS_ALIVE) will RE-OPEN the position. This requires ELEVATED SCRUTINY — the thesis previously failed. See POST-EXIT RE-ENTRY rules on each alert type below.' : ''}
@@ -258,6 +261,14 @@ ${ctx.poRank === 'BUY'
 } | Lane: ${ctx.lane || 'unknown'} (pregame ML ${ctx.pregameML || '?'}) | CP flips: ${ctx.cpCtrlFlips} | Control flips (game total): ${ctx.ctrlFlips}
 
 ${stress}
+STRUCTURE-SCORE RELATIONSHIP:
+${ctx.floorMarginSignal && ctx.floorMarginSignal.signal !== 'INSUFFICIENT'
+  ? 'Floor trend: ' + ctx.floorMarginSignal.floorTrend + ' | Margin trend: ' + ctx.floorMarginSignal.marginTrend + ' | Signal: ' + ctx.floorMarginSignal.signal
+    + (ctx.floorMarginSignal.signal === 'DIVERGING_POSITIVE' ? '\nFloor is declining but scoreboard margin is growing \u2014 structural floor may be stale from cumulative anchoring. Do NOT use erosion as primary suppression signal.' : '')
+    + (ctx.floorMarginSignal.signal === 'CONVERGING_DOWN' ? '\nBoth structure and scoreboard declining \u2014 genuine structural decay. Erosion signal is trustworthy.' : '')
+    + (ctx.floorMarginSignal.signal === 'DIVERGING_NEGATIVE' ? '\nFloor is rising but margin is shrinking \u2014 structure improving but not translating to scoreboard.' : '')
+  : 'Insufficient checkpoint data for floor-margin analysis'}
+
 FLOOR TRAJECTORY:
 ${ctx.floorHistory || 'No prior snapshots'}
 
@@ -277,12 +288,20 @@ RULES:
   : ''}
   ${!ctx.bwcFlipped ? 'Lane: ' + (ctx.lane || 'unknown') + '. ' + (ctx.lane === 'underdog' ? 'UNDERDOG graduation — market has not priced structural control. Edge is structural floor vs implied probability. ALWAYS SEND.' : ctx.lane === 'heavy_favorite' ? 'Heavy favorite — PO confirms structural read but line may offer limited edge. Frame as position confirmation, not direct entry.' : 'Evaluate edge: floor vs current ML implied probability.') : ''}
   ${ctx.positionClosed ? 'POST-EXIT RE-ENTRY: The subscriber was told to EXIT this position earlier in the game. If you SEND this POSITION_OPEN, you are telling them to RE-ENTER — this must clear a HIGHER bar than a normal PO. The structural thesis PREVIOUSLY FAILED (that is why EXIT fired). For re-entry to be justified: (1) graduation must show RISING or FLAT MF trajectory with 3+ eligible checkpoints — the team rebuilt control over sustained evaluation windows AFTER the EXIT, (2) structural stress combined read must be REINFORCING or DOMINANT — not COLLAPSING/SHIFT/ERODING, (3) the indicators that powered the EXIT (opponent gaining I1/I2/I4) must have flipped BACK to the BWC team in the per-quarter breakdown. If ANY of these fail, SUPPRESS — the graduation badge is stale anchoring from pre-EXIT dominance, not evidence of current control. DOWNGRADE is acceptable if graduation is mechanically real but stress is mixed.' : ''}
+  Also check: CP trend (all, unfiltered) gives the full trajectory including bad stretches that eligible MF hides. If eligible MF says RISING but full CP trend says DECLINING, the graduation badge may overstate current control.
   This IS a position recommendation. Body should reference the arc from TRACKING (if prior alert exists), explain the graduation criteria met, current structural picture, and frame as: "Position open on [TEAM] — [rank] structural edge confirmed." Include odds/ML if available.
-- VALUE: team PREVIOUSLY held a structural lead (BWC fired Q${ctx.bwcFirePeriod || '?'}) but lost it while retaining structural control. Thesis: "structural edge that built the lead is intact — dip is temporary, plus-money entry." Verify: floor vs BWC fire floor, how lead was lost, deficit depth (1-7 best), timing (Q2-Q3 > Q4). If prior BWC_EDGE alerts flagged a RISK, reference whether it materialized. SUPPRESS if erosion is COLLAPSE AND structural indicators (I1/I4) have flipped to opponent.
+- VALUE: team PREVIOUSLY held a structural lead (BWC fired Q${ctx.bwcFirePeriod || '?'}) but lost it while retaining structural control. Thesis: "structural edge that built the lead is intact — dip is temporary, plus-money entry."
+  EVALUATE WITH ALL SIGNALS — no single signal alone justifies suppression:
+  1. Erosion (mean-anchored): STABLE/CAUTION = thesis intact. COLLAPSE = skepticism, but check signals 2-3.
+  2. Floor-margin signal: DIVERGING_POSITIVE overrides COLLAPSE erosion — team is winning despite low floor, structure is stale from cumulative anchoring. CONVERGING_DOWN confirms COLLAPSE — genuine decay.
+  3. Conviction trend: STABLE/HELD = structural core intact despite floor drop (cumulative indicators held). DEGRADING = real structural loss across checkpoints.
+  SUPPRESS only when 2+ signals agree on decline: erosion COLLAPSE + floor-margin CONVERGING_DOWN, or erosion COLLAPSE + conviction DEGRADING, or floor-margin CONVERGING_DOWN + conviction DEGRADING. Single-signal COLLAPSE alone is NOT sufficient.
+  Also verify: deficit depth (1-7 best), timing (Q2-Q3 > Q4). If prior BWC_EDGE alerts flagged a RISK, reference whether it materialized.
 - THESIS_ALIVE: BWC team regained structural control AFTER an EXIT. This is a deep-value play — floor erosion is EXPECTED and is WHY plus-money exists. DO NOT treat floor level or erosion as primary factors. Weight hierarchy: (1) WHICH indicators does the BWC team still hold? I1 Disruption + I4 Game Control = structural core retained. (2) Is opponent's edge variance-based? oppI3Won=true means opponent is shooting well, not structurally dominant — this is the thesis. (3) TP path — STRONG RECOVERY or PROBABLE = mechanical path exists. (4) Deficit depth and timing. Floor being below BWC fire floor is the ENTRY SIGNAL, not a red flag. SUPPRESS only if: BWC team lost I1+I4 (structural core gone), OR opponent has non-I3 structural indicators (I1/I2/I4), OR TP is NO PATH/UNLIKELY with < 3 min left.
 ${ctx.positionClosed ? '  POST-EXIT THESIS_ALIVE: Position is CLOSED. The subscriber was told to EXIT, and now the BWC team has clawed back to VALUE state. This is a RE-ENTRY signal — if you SEND, you are telling them to re-open the position they were told to close. Apply the standard THESIS_ALIVE criteria above (I1+I4, TP path, opponent profile) AND verify via per-quarter breakdown that the structural recovery is happening in RECENT quarters, not just cumulative anchoring. Reference the EXIT reasoning from PRIOR ALERT REASONING TRAIL — what specifically broke? Has it been fixed?' : ''}
 - EXIT: BWC team (${ctx.bwcFirePeriod ? 'the team that fired BWC in Q' + ctx.bwcFirePeriod : 'original BWC team'}) lost structural control. The SUBSCRIBER'S POSITION is on the BWC team, NOT the current control team. Frame the exit around the BWC team losing their edge. Reference the full arc from prior alerts.
-- BWC_EDGE: SEND by default — this is a position update for a subscriber already holding. Frame as reassurance: structural picture holding, lead compressing. Do NOT frame as a buy signal. MAY SUPPRESS if structural stress override applies (see STRUCTURAL STRESS CHECK). MUST include a RISK line at the end of the body — identify the ONE specific thing that could flip this position next (e.g., indicator about to flip, sustainability degrading, erosion approaching threshold). If prior alerts flagged a RISK, reference whether it materialized or not. The RISK line creates accountability across the alert chain. Format body as: status update (2-3 sentences) + "RISK: [specific forward-looking concern]"
+  Floor-margin confirmation: CONVERGING_DOWN + conviction DEGRADING = strong EXIT confirmation (genuine structural death). DIVERGING_POSITIVE (floor low but margin growing) = EXIT may be premature — structural floor is stale while the team is actually winning. Check conviction trend — if conviction held STABLE/DOMINANT throughout, the floor is the problem, not the team.
+- BWC_EDGE: SEND by default — this is a position update for a subscriber already holding. Frame as reassurance: structural picture holding, lead compressing. Do NOT frame as a buy signal. MAY SUPPRESS if structural stress override applies (see STRUCTURAL STRESS CHECK). MUST include a RISK line at the end of the body — identify the ONE specific thing that could flip this position next (e.g., indicator about to flip, sustainability degrading, erosion approaching threshold, floor-margin DIVERGING_NEGATIVE meaning structure improving but margin shrinking). If prior alerts flagged a RISK, reference whether it materialized or not. Check conviction trend — DEGRADING conviction is a key risk to flag even if floor is stable. The RISK line creates accountability across the alert chain. Format body as: status update (2-3 sentences) + "RISK: [specific forward-looking concern]"
 - POSITION_SAFE / POSITION_RECOVERING: SEND as reassurance if prior alerts flagged risks or concerns. Include whether prior RISK materialized. SUPPRESS only if nothing changed AND no prior risk to update on. Write reasoning for compounding either way.
 ${ctx.positionClosed ? '  POST-EXIT RECOVERY: Position is CLOSED — the subscriber was told to EXIT. This recovery alert (BWC team leading again) could RE-OPEN the position. Apply elevated scrutiny: (1) structural stress combined read must be REINFORCING or DOMINANT — not COLLAPSING/SHIFT/ERODING, (2) the indicators that caused the EXIT must have flipped BACK to the BWC team in recent quarters, (3) the recovery must be sustained (consecutive holds, not a single-snapshot spike). If the BWC team is genuinely back in control with structural evidence, SEND — this is a strong signal (thesis broke and then repaired). If the recovery looks like cumulative anchoring or a brief reclaim before the next flip, SUPPRESS. Reference the EXIT reasoning from the PRIOR ALERT REASONING TRAIL.' : ''}
 - BUY: structurally dominant team trailing. Standard evaluation — floor, indicators, TP, deficit depth (1-7 sweet spot; deeper deficits need stronger structural case). When bwcTeamMatch is noted, the team has BWC lifecycle context — reference the position arc. This is a "warm BUY" (thesis history). Without BWC context = "cold BUY" (unproven, higher bar for SEND).
@@ -1643,6 +1662,107 @@ function computeMFTrajectory(checkpoints, bwcTeam) {
     firstAvg: Math.round(firstAvg * 1000) / 1000,
     secondAvg: Math.round(secondAvg * 1000) / 1000,
   };
+}
+
+// Full checkpoint trend — ALL checkpoints where BWC team has control (no floor/margin filter).
+// Used for MF trend evaluation on transition alerts. Graduation-eligible MF (computeMFTrajectory)
+// hides declining checkpoints; this shows the real trajectory including bad stretches.
+function computeFullCPTrend(checkpoints, bwcTeam) {
+  const bwcCPs = checkpoints.filter(cp => cp.team === bwcTeam);
+  if (bwcCPs.length < 2) return { direction: 'INSUFFICIENT', floors: bwcCPs.map(cp => cp.floor), margins: bwcCPs.map(cp => cp.margin), count: bwcCPs.length };
+
+  const mid = Math.floor(bwcCPs.length / 2);
+  const firstFloors = bwcCPs.slice(0, mid);
+  const secondFloors = bwcCPs.slice(mid);
+  const firstAvg = firstFloors.reduce((s, cp) => s + cp.floor, 0) / firstFloors.length;
+  const secondAvg = secondFloors.reduce((s, cp) => s + cp.floor, 0) / secondFloors.length;
+  const delta = secondAvg - firstAvg;
+
+  var direction;
+  if (delta > 0.04) direction = 'RISING';
+  else if (delta < -0.04) direction = 'DECLINING';
+  else direction = 'FLAT';
+
+  return {
+    direction,
+    delta: Math.round(delta * 1000) / 1000,
+    floors: bwcCPs.map(cp => cp.floor),
+    margins: bwcCPs.map(cp => cp.margin),
+    count: bwcCPs.length,
+    firstAvg: Math.round(firstAvg * 1000) / 1000,
+    secondAvg: Math.round(secondAvg * 1000) / 1000,
+  };
+}
+
+// Floor-margin divergence signal — does the structural floor agree with the scoreboard?
+// Compares floor trend vs margin trend from BWC team checkpoints.
+// DIVERGING_POSITIVE = floor declining but margin growing (floor stale, team winning)
+// CONVERGING_DOWN = both declining (genuine structural decay)
+function computeFloorMarginSignal(checkpoints, bwcTeam, currentFloor, currentBwcMargin) {
+  const bwcCPs = checkpoints.filter(cp => cp.team === bwcTeam);
+  // Include current values as the latest data point
+  const floors = bwcCPs.map(cp => cp.floor).concat(currentFloor);
+  const margins = bwcCPs.map(cp => cp.margin).concat(currentBwcMargin);
+
+  if (floors.length < 4) return { signal: 'INSUFFICIENT', floorTrend: null, marginTrend: null };
+
+  // Use last 8 data points max (recent history)
+  const recent = Math.min(floors.length, 8);
+  const rFloors = floors.slice(-recent);
+  const rMargins = margins.slice(-recent);
+
+  const mid = Math.floor(rFloors.length / 2);
+  const f1 = rFloors.slice(0, mid).reduce((a, b) => a + b, 0) / mid;
+  const f2 = rFloors.slice(mid).reduce((a, b) => a + b, 0) / (rFloors.length - mid);
+  const m1 = rMargins.slice(0, mid).reduce((a, b) => a + b, 0) / mid;
+  const m2 = rMargins.slice(mid).reduce((a, b) => a + b, 0) / (rMargins.length - mid);
+
+  const fDelta = f2 - f1;
+  const mDelta = m2 - m1;
+
+  var floorTrend = fDelta > 0.03 ? 'RISING' : fDelta < -0.03 ? 'DECLINING' : 'FLAT';
+  var marginTrend = mDelta > 1.5 ? 'GROWING' : mDelta < -1.5 ? 'SHRINKING' : 'FLAT';
+
+  var signal = 'ALIGNED';
+  if (floorTrend === 'DECLINING' && marginTrend === 'GROWING') signal = 'DIVERGING_POSITIVE';
+  else if (floorTrend === 'RISING' && marginTrend === 'SHRINKING') signal = 'DIVERGING_NEGATIVE';
+  else if (floorTrend === 'DECLINING' && marginTrend === 'SHRINKING') signal = 'CONVERGING_DOWN';
+  else if (floorTrend === 'RISING' && marginTrend === 'GROWING') signal = 'CONVERGING_UP';
+
+  return { signal, floorTrend, marginTrend, fDelta: Math.round(fDelta * 1000) / 1000, mDelta: Math.round(mDelta * 10) / 10 };
+}
+
+// Conviction trend from checkpoints — has conviction held, degraded, or improved?
+function computeConvictionTrend(checkpoints, bwcTeam) {
+  const bwcCPs = checkpoints.filter(cp => cp.team === bwcTeam && cp.conv);
+  if (bwcCPs.length < 2) return { trend: 'INSUFFICIENT', tiers: [], held: false, current: null, degradePoint: null };
+
+  const RANK = { 'DOMINANT': 4, 'STRONG': 3, 'CONDITIONAL': 2, 'MODEST': 1 };
+  const tiers = bwcCPs.map(cp => cp.conv);
+  const current = tiers[tiers.length - 1];
+  const first = tiers[0];
+  const held = tiers.every(t => t === first);
+
+  // Find first degradation point
+  var degradePoint = null;
+  var maxRank = RANK[tiers[0]] || 0;
+  for (var ci = 1; ci < tiers.length; ci++) {
+    var r = RANK[tiers[ci]] || 0;
+    if (r < maxRank && !degradePoint) {
+      degradePoint = bwcCPs[ci].label;
+    }
+    if (r > maxRank) maxRank = r;
+  }
+
+  // Overall trend: compare first half avg rank to second half avg rank
+  const mid = Math.floor(tiers.length / 2);
+  const firstAvgR = tiers.slice(0, mid).reduce((s, t) => s + (RANK[t] || 0), 0) / mid;
+  const secondAvgR = tiers.slice(mid).reduce((s, t) => s + (RANK[t] || 0), 0) / (tiers.length - mid);
+  var trend = 'STABLE';
+  if (secondAvgR < firstAvgR - 0.5) trend = 'DEGRADING';
+  else if (secondAvgR > firstAvgR + 0.5) trend = 'IMPROVING';
+
+  return { trend, tiers, held, current, degradePoint };
 }
 
 function getLaneGates(lane) {
@@ -5233,8 +5353,13 @@ export default async function(req) {
 
               // Build v2 agent prompt context
               const mfTraj = lt.bwc_fired ? computeMFTrajectory(lt.checkpoints || [], lt.bwc_fired.team) : null;
-              // BUY alerts use mean-floor-anchored erosion (not peak) — bettors are evaluating entry, not holding from peak
-              const buyErosion = v2IsBuy ? computeMeanErosion(lt, ind.score, hA, ind.controlTeam) : null;
+              // Mean erosion for all alerts (PO uses peak, transitions+BUY use mean)
+              const meanErosion = computeMeanErosion(lt, ind.score, hA, ind.controlTeam);
+              // Full CP trend (all checkpoints, no filter), floor-margin divergence, conviction trend
+              const fullCPTrend = lt.bwc_fired ? computeFullCPTrend(lt.checkpoints || [], lt.bwc_fired.team) : null;
+              const _bwcMarginForFM = lt.bwc_fired ? (lt.bwc_fired.team === hA ? (ind.homePts - ind.awayPts) : (ind.awayPts - ind.homePts)) : _v2Margin;
+              const floorMarginSig = lt.bwc_fired ? computeFloorMarginSignal(lt.checkpoints || [], lt.bwc_fired.team, ind.score, _bwcMarginForFM) : null;
+              const convTrend = lt.bwc_fired ? computeConvictionTrend(lt.checkpoints || [], lt.bwc_fired.team) : null;
               const v2Ctx = {
                 alertType: v2Type, alertTier: v2Tier,
                 ctrlTeam: ind.controlTeam, floor: ind.score.toFixed(2),
@@ -5257,9 +5382,12 @@ export default async function(req) {
                 oppIndicatorCount: _oppIndW.length,
                 oppIndicatorsWon: _oppIndW.join('+') || 'none',
                 oppI3Won: _oppI3Won,
-                peakFloor: v2IsBuy ? buyErosion.meanFloor : v2Erosion.peakFloor,
-                peakDelta: v2IsBuy ? buyErosion.meanDelta : v2Erosion.peakDelta,
-                erosionLevel: v2IsBuy ? buyErosion.level : v2Erosion.level,
+                peakFloor: v2Erosion.peakFloor,
+                peakDelta: v2Erosion.peakDelta,
+                meanFloor: meanErosion.meanFloor,
+                meanDelta: meanErosion.meanDelta,
+                erosionLevel: v2Type === 'POSITION_OPEN' ? v2Erosion.level : (meanErosion.level || v2Erosion.level),
+                peakErosionLevel: v2Erosion.level,
                 consecutiveHolds: lt.ctrl_team_holds || 0,
                 bwcState: v2BwcState || lt._prev_bwc_state,
                 bwcFirePeriod: lt.bwc_fired?.period,
@@ -5288,6 +5416,9 @@ export default async function(req) {
                 lane: lt.lane || null,
                 pregameML: lt.pregame_ml || null,
                 mfTrajectory: mfTraj,
+                fullCPTrend: fullCPTrend,
+                floorMarginSignal: floorMarginSig,
+                convictionTrend: convTrend,
                 bwcFlipped: lt.bwc_flipped || false,
                 positionClosed: lt.position_closed || false,
                 originalBwcTeam: lt.original_bwc_team || null,
@@ -5420,8 +5551,8 @@ export default async function(req) {
                   ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null},
                   ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null},
                   ${conviction.tier}, ${conviction.combo}, ${shouldSend},
-                  ${v2BwcState || lt._prev_bwc_state}, ${v2IsBuy ? buyErosion.level : v2Erosion.level},
-                  ${v2IsBuy ? (buyErosion.meanFloor ?? null) : (v2Erosion.peakFloor ?? null)}, ${v2ExitSev?.severity ?? null},
+                  ${v2BwcState || lt._prev_bwc_state}, ${v2Type === 'POSITION_OPEN' ? v2Erosion.level : (meanErosion.level || v2Erosion.level)},
+                  ${v2Type === 'POSITION_OPEN' ? (v2Erosion.peakFloor ?? null) : (meanErosion.meanFloor ?? v2Erosion.peakFloor ?? null)}, ${v2ExitSev?.severity ?? null},
                   ${lt.po_fired?.rank || null}, ${mfTraj?.direction || null},
                   ${alertCtx?.combinedRead?.read || null}, ${lt.cp_eligible_count || null},
                   ${lt.cp_ctrl_flips || null}, ${lt.lane || null},
@@ -5786,7 +5917,7 @@ export default async function(req) {
                       _v2ExitSev = computeExitSeverity(_oppInd, _oppInd.length, ind.score, lt.ctrl_team_holds || 0);
                     }
 
-                    log(`${matchup}: ▶ V2 TRIGGER ${v2AlertType} [${lt._prev_bwc_state}→${v2BwcState}] floor=${ind.score.toFixed(2)} margin=${_v2Margin} erosion=${v2Erosion.level} ctrl=${_ctrlInd.join('+')||'none'}(${_ctrlInd.length}/5) opp=${_oppIndW.join('+')||'none'} oppI3=${_oppI3Won}${_v2ExitSev ? ' exit=' + _v2ExitSev.severity : ''} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||lsForBWC?.classification||'-'}`);
+                    log(`${matchup}: ▶ V2 TRIGGER ${v2AlertType} [${lt._prev_bwc_state}→${v2BwcState}] floor=${ind.score.toFixed(2)} margin=${_v2Margin} erosion=${v2Type === 'POSITION_OPEN' ? v2Erosion.level : (meanErosion.level || v2Erosion.level)}(${v2Type === 'POSITION_OPEN' ? 'peak' : 'mean'}) ctrl=${_ctrlInd.join('+')||'none'}(${_ctrlInd.length}/5) opp=${_oppIndW.join('+')||'none'} oppI3=${_oppI3Won}${_v2ExitSev ? ' exit=' + _v2ExitSev.severity : ''} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||lsForBWC?.classification||'-'}`);
 
                     await routeV2Alert(v2AlertType, 'FIRED', _v2ExitSev, false);
 
@@ -5859,7 +5990,7 @@ export default async function(req) {
             // ── V2 STATE LOGGING ──
             if (lt.bwc_fired) {
               if (v2BwcState && !lt._v2_transition_pending) lt._prev_bwc_state = v2BwcState;
-              log(`${matchup}: v2 state=${v2BwcState || '-'} erosion=${v2Erosion.level} peak=${v2Erosion.peakFloor?.toFixed(2) || '-'} holds=${lt.ctrl_team_holds || 0} bwcTeam=${lt.bwc_fired.team}${lt._v2_transition_pending ? ' PENDING(prev=' + lt._prev_bwc_state + ')' : ''}`);
+              log(`${matchup}: v2 state=${v2BwcState || '-'} erosion=${v2Erosion.level}(peak)/${meanErosion.level || '-'}(mean) peak=${v2Erosion.peakFloor?.toFixed(2) || '-'} mf=${meanErosion.meanFloor?.toFixed(3) || '-'} holds=${lt.ctrl_team_holds || 0} bwcTeam=${lt.bwc_fired.team}${lt._v2_transition_pending ? ' PENDING(prev=' + lt._prev_bwc_state + ')' : ''}`);
             }
           }
 
