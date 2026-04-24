@@ -5773,7 +5773,7 @@ export default async function(req) {
                   const _v2Now = Date.now();
                   const _v2MsSinceAnyBwc = lt._last_any_bwc_ts ? (_v2Now - lt._last_any_bwc_ts) : Infinity;
                   const _v2CooldownExempt = v2AlertType === 'THESIS_ALIVE';
-                  const _v2CooldownPassed = _v2CooldownExempt || _v2MsSinceAnyBwc >= 180000;
+                  const _v2CooldownPassed = _v2CooldownExempt || _v2MsSinceAnyBwc >= 60000;
 
                   // Material change gate
                   const _v2StateChanged = v2BwcState !== lt._last_fired_state;
