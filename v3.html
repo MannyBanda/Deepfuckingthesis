@@ -2488,11 +2488,15 @@ function renderDrawer(gameId){
     allSnaps.forEach(function(s,i){
       if(i===0||i===allSnaps.length-1||i%3===0)sampled.push(s);
     });
-    // Precompute cumulative MF and peak for each sampled snapshot
-    var mfMap={},pkMap={},fSum=0,fPk=0;
+    // Precompute cumulative MF and peak for each sampled snapshot (per-team)
+    var mfMap={},pkMap={},teamMF={};
     allSnaps.forEach(function(s,i){
-      fSum+=(s.floor_score||0);fPk=Math.max(fPk,s.floor_score||0);
-      var idx=sampled.indexOf(s);if(idx>=0){mfMap[idx]=(fSum/(i+1));pkMap[idx]=fPk;}
+      var team=s.floor_team||'?';
+      if(!teamMF[team])teamMF[team]={sum:0,count:0,peak:0};
+      teamMF[team].sum+=(s.floor_score||0);
+      teamMF[team].count++;
+      teamMF[team].peak=Math.max(teamMF[team].peak,s.floor_score||0);
+      var idx=sampled.indexOf(s);if(idx>=0){mfMap[idx]=teamMF[team].count>=1?(teamMF[team].sum/teamMF[team].count):null;pkMap[idx]=teamMF[team].peak;}
     });
     sampled.reverse(); // most recent first
     // Build alert lookup by period+clock for cross-reference
