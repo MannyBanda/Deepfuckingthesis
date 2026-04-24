@@ -1023,6 +1023,19 @@ exports.handler = async (event) => {
     }
 
     // ═══════════════════════════════════════════════════════
+    // GET LIVE TRACKING — checkpoint data, BWC state, floor tracking
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_live_tracking') {
+      const gameId = params.game_id;
+      if (!gameId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id required' }) };
+
+      const rows = await sql`SELECT live_tracking FROM games WHERE id = ${gameId} LIMIT 1`;
+      const lt = rows.length > 0 ? rows[0].live_tracking : null;
+
+      return { statusCode: 200, headers, body: JSON.stringify({ live_tracking: lt }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
     // STATS — dashboard-level aggregate stats
     // ═══════════════════════════════════════════════════════
     if (action === 'stats') {
