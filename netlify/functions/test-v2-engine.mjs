@@ -105,10 +105,6 @@ function updateLiveTracking(lt, cr) {
     lt[`${side}_peak_time`] = `Q${cr.period} ${cr.clock}`;
   }
 
-  // Track running floor sum/count for mean erosion
-  lt[`${side}_floor_sum`] = (lt[`${side}_floor_sum`] || 0) + cr.floor;
-  lt[`${side}_floor_count`] = (lt[`${side}_floor_count`] || 0) + 1;
-
   // Consecutive holds
   if (lt.ctrl_team_current === cr.ctrlTeam) {
     lt.ctrl_team_holds = (lt.ctrl_team_holds || 0) + 1;
@@ -194,24 +190,6 @@ function computeErosion(lt, cr) {
   if (peakDelta <= collapseDelta) level = 'COLLAPSE';
   else if (peakDelta <= cautionDelta) level = 'CAUTION';
   return { level, peakFloor, peakDelta, cautionDelta, collapseDelta };
-}
-
-function computeMeanErosion(lt, cr) {
-  const side = cr.ctrlIsHome ? 'home' : 'away';
-  const sum = lt[`${side}_floor_sum`] || 0;
-  const count = lt[`${side}_floor_count`] || 0;
-  if (count < 3) return { level: 'STABLE', meanFloor: null, meanDelta: 0 };
-  const meanFloor = Math.round((sum / count) * 1000) / 1000;
-  if (cr.floor >= meanFloor) return { level: 'STABLE', meanFloor, meanDelta: 0 };
-  const meanDelta = cr.floor - meanFloor;
-  const edgeAboveCoinFlip = meanFloor - 0.50;
-  if (edgeAboveCoinFlip <= 0) return { level: 'STABLE', meanFloor, meanDelta };
-  const cautionDelta = -(edgeAboveCoinFlip * 0.40);
-  const collapseDelta = -(edgeAboveCoinFlip * 0.70);
-  let level = 'STABLE';
-  if (meanDelta <= collapseDelta) level = 'COLLAPSE';
-  else if (meanDelta <= cautionDelta) level = 'CAUTION';
-  return { level, meanFloor, meanDelta, cautionDelta, collapseDelta };
 }
 
 function parsePeriod(snap) {
@@ -329,9 +307,8 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
     // Compute BWC state
     bwcState = computeBwcState(lt, cr);
 
-    // Compute erosion (peak + mean)
+    // Compute erosion
     erosion = computeErosion(lt, cr);
-    const mErosion = computeMeanErosion(lt, cr);
 
     // Record state for debugging
     stateLog.push({
@@ -448,9 +425,9 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
               snapIdx: idx, period, clock: cr.clock,
               ctrlTeam: cr.ctrlTeam, floor: cr.floor,
               margin: cr.margin, bwcState,
-              erosion: alertType === 'POSITION_OPEN' ? erosion.level : (mErosion.level || erosion.level),
-              peakFloor: alertType === 'POSITION_OPEN' ? erosion.peakFloor : (mErosion.meanFloor ?? erosion.peakFloor),
-              peakDelta: alertType === 'POSITION_OPEN' ? erosion.peakDelta : (mErosion.meanDelta ?? erosion.peakDelta),
+              erosion: erosion.level,
+              peakFloor: erosion.peakFloor,
+              peakDelta: erosion.peakDelta,
               holds: lt.ctrl_team_holds,
               oppIndicatorCount: cr.oppIndicatorCount,
               oppIndicatorsWon: cr.oppIndicators.join('+') || 'none',
@@ -468,11 +445,8 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
 
             // Context package (mode >= context)
             if (mode !== 'mechanical') {
-              // Route erosion: POSITION_OPEN uses peak, all transitions use mean
-              const effErosion = alertType === 'POSITION_OPEN' ? erosion
-                : { level: mErosion.level || erosion.level, peakFloor: mErosion.meanFloor ?? erosion.peakFloor, peakDelta: mErosion.meanDelta ?? erosion.peakDelta };
               triggerPoint.contextPackage = assembleContextPackage(
-                snap, cr, lt, effErosion, bwcState, v2Alerts, snapshots, idx, hA, aA, useMonitor, storedLT, positionClosed
+                snap, cr, lt, erosion, bwcState, v2Alerts, snapshots, idx, hA, aA, useMonitor, storedLT, positionClosed
               );
             }
 
@@ -666,16 +640,14 @@ async function replayGame(sql, gameId, mode, triggerIdx = null, useMonitor = fal
             oppIndicatorsWon: cr.oppIndicators.join('+') || 'none',
             ctrlIndicatorCount: cr.ctrlIndicatorCount,
             oppI3Won: cr.oppI3Won,
-            erosion: mErosion.level || erosion.level,
+            erosion: erosion.level,
             ctrlSust: cr.ctrlSust, oppSust: cr.oppSust,
             tpClass: cr.tpClass, lsClass: cr.lsClass,
             bwcTeamMatch: (lt.bwc_fired?.team === cr.ctrlTeam) ? 'YES' : 'NO',
           };
           if (mode !== 'mechanical') {
-            // BUY always uses mean erosion
-            const effErosion = { level: mErosion.level || erosion.level, peakFloor: mErosion.meanFloor ?? erosion.peakFloor, peakDelta: mErosion.meanDelta ?? erosion.peakDelta };
             triggerPoint.contextPackage = assembleContextPackage(
-              snap, cr, lt, effErosion, bwcState, v2Alerts, snapshots, idx, hA, aA, useMonitor, storedLT, positionClosed
+              snap, cr, lt, erosion, bwcState, v2Alerts, snapshots, idx, hA, aA, useMonitor, storedLT, positionClosed
             );
           }
           triggers.push(triggerPoint);
@@ -812,7 +784,7 @@ ${ctx.oppI3Won ? 'Opponent I3 (shot quality) won — EXPECTED variance, not stru
 ${ctx.oppIndicatorCount >= 1 && !ctx.oppI3Won ? 'WARNING: Opponent structural counter-indicators (' + ctx.oppIndicatorsWon + '), not just variance.' : ''}
 
 POSITION HEALTH:
-${ctx.alertType === 'POSITION_OPEN' ? 'Peak' : 'Mean'} floor: ${ctx.peakFloor != null ? Number(ctx.peakFloor).toFixed(2) : 'N/A'} | Delta: ${ctx.peakDelta != null ? Number(ctx.peakDelta).toFixed(3) : 'N/A'} | Erosion: ${ctx.erosionLevel}
+Peak floor: ${ctx.peakFloor != null ? Number(ctx.peakFloor).toFixed(2) : 'N/A'} | Delta: ${ctx.peakDelta != null ? Number(ctx.peakDelta).toFixed(3) : 'N/A'} | Erosion: ${ctx.erosionLevel}
 Consecutive holds: ${ctx.consecutiveHolds}
 BWC lifecycle: ${ctx.bwcState}${ctx.bwcFirePeriod ? ' (BWC fired Q' + ctx.bwcFirePeriod + ', floor ' + (ctx.bwcFireFloor != null ? Number(ctx.bwcFireFloor).toFixed(2) : '?') + ')' : ''}
 ${ctx.positionClosed ? 'POSITION STATE: CLOSED — an EXIT was previously SENT. The subscriber was told to exit this position. Any SEND decision on a recovery alert (POSITION_OPEN, POSITION_SAFE, POSITION_RECOVERING, THESIS_ALIVE) will RE-OPEN the position. This requires ELEVATED SCRUTINY — the thesis previously failed. See POST-EXIT RE-ENTRY rules on each alert type below.' : ''}
