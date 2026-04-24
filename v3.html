@@ -2541,7 +2541,7 @@ function renderDrawer(gameId){
         }
         html+='<td style="font-size:9px;color:'+mgnColor+'">'+mgn+'</td>';
       }
-      if(sc2.floor)html+='<td style="color:var(--green)">'+fmtF(s.floor_score)+'</td>';
+      if(sc2.floor){var fTeam=s.floor_team||'';html+='<td><span style="font-size:8px;color:'+tc(fTeam)+'">'+esc(fTeam)+'</span> <span style="color:var(--green)">'+fmtF(s.floor_score)+'</span></td>';}
       var mfIdx=sampled.length-1-ri;
       if(sc2.mf)html+='<td>'+fmtF(mfMap[mfIdx])+'</td>';
       if(sc2.peak)html+='<td>'+fmtF(pkMap[mfIdx])+'</td>';
