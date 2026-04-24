@@ -2427,8 +2427,14 @@ function renderDrawer(gameId){
         var aPl=cs._lastBoxScore.visitor_team?.players||[];
         function qdRollup(players){var s={steals:0,turnovers:0,total_turnovers:0,free_throws_att:0,three_points_made:0,assists:0,points_in_the_paint:0};players.forEach(function(p){s.steals+=p.stl||0;s.turnovers+=p.turnover||0;s.free_throws_att+=p.fta||0;s.three_points_made+=p.fg3m||0;s.assists+=p.ast||0;});s.total_turnovers=s.turnovers;return s;}
         var hCum=qdRollup(hPl),aCum=qdRollup(aPl);
-        // BDL doesn't have paint — flag so diff doesn't produce garbage
+        // BDL players don't have paint — inject from PBP shot zones if available
         var _noPaint=(hCum.points_in_the_paint===0&&aCum.points_in_the_paint===0);
+        if(_noPaint&&cs.pbpAudit&&cs.pbpAudit.home&&cs.pbpAudit.away){
+          var _hp=cs.pbpAudit.home,_ap=cs.pbpAudit.away;
+          hCum.points_in_the_paint=((_hp.rim?_hp.rim.made:0)+(_hp.paint?_hp.paint.made:0))*2;
+          aCum.points_in_the_paint=((_ap.rim?_ap.rim.made:0)+(_ap.paint?_ap.paint.made:0))*2;
+          _noPaint=(hCum.points_in_the_paint===0&&aCum.points_in_the_paint===0);
+        }
         function qdDiff(cum,bound){var d={};['steals','turnovers','total_turnovers','free_throws_att','three_points_made','assists','points_in_the_paint'].forEach(function(k){d[k]=(cum[k]||0)-(bound[k]||0);});return d;}
         var liveHome=qdDiff(hCum,lastBound.home);
         var liveAway=qdDiff(aCum,lastBound.away);
