@@ -245,7 +245,7 @@ ${ctx.oppI3Won ? 'Opponent I3 (shot quality) won — EXPECTED variance, not stru
 ${ctx.oppIndicatorCount >= 1 && !ctx.oppI3Won ? 'WARNING: Opponent structural counter-indicators (' + ctx.oppIndicatorsWon + '), not just variance.' : ''}
 
 POSITION HEALTH:
-${ctx.alertType === 'BUY' ? 'Mean' : 'Peak'} floor: ${ctx.peakFloor != null ? Number(ctx.peakFloor).toFixed(2) : 'N/A'} | Delta: ${ctx.peakDelta != null ? Number(ctx.peakDelta).toFixed(3) : 'N/A'} | Erosion: ${ctx.erosionLevel}
+${ctx.alertType === 'POSITION_OPEN' ? 'Peak' : 'Mean'} floor: ${ctx.peakFloor != null ? Number(ctx.peakFloor).toFixed(2) : 'N/A'} | Delta: ${ctx.peakDelta != null ? Number(ctx.peakDelta).toFixed(3) : 'N/A'} | Erosion: ${ctx.erosionLevel}
 Consecutive holds: ${ctx.consecutiveHolds}
 BWC lifecycle: ${ctx.bwcState}${ctx.bwcFirePeriod ? ' (BWC fired Q' + ctx.bwcFirePeriod + ', floor ' + (ctx.bwcFireFloor != null ? Number(ctx.bwcFireFloor).toFixed(2) : '?') + ')' : ''}
 ${ctx.positionClosed ? 'POSITION STATE: CLOSED — an EXIT was previously SENT. The subscriber was told to exit this position. Any SEND decision on a recovery alert (POSITION_OPEN, POSITION_SAFE, POSITION_RECOVERING, THESIS_ALIVE) will RE-OPEN the position. This requires ELEVATED SCRUTINY — the thesis previously failed. See POST-EXIT RE-ENTRY rules on each alert type below.' : ''}
@@ -5233,8 +5233,8 @@ export default async function(req) {
 
               // Build v2 agent prompt context
               const mfTraj = lt.bwc_fired ? computeMFTrajectory(lt.checkpoints || [], lt.bwc_fired.team) : null;
-              // BUY alerts use mean-floor-anchored erosion (not peak) — bettors are evaluating entry, not holding from peak
-              const buyErosion = v2IsBuy ? computeMeanErosion(lt, ind.score, hA, ind.controlTeam) : null;
+              // Mean-floor erosion for all transition alerts + BUY (peak only for POSITION_OPEN)
+              const meanErosion = computeMeanErosion(lt, ind.score, hA, ind.controlTeam);
               const v2Ctx = {
                 alertType: v2Type, alertTier: v2Tier,
                 ctrlTeam: ind.controlTeam, floor: ind.score.toFixed(2),
@@ -5257,9 +5257,9 @@ export default async function(req) {
                 oppIndicatorCount: _oppIndW.length,
                 oppIndicatorsWon: _oppIndW.join('+') || 'none',
                 oppI3Won: _oppI3Won,
-                peakFloor: v2IsBuy ? buyErosion.meanFloor : v2Erosion.peakFloor,
-                peakDelta: v2IsBuy ? buyErosion.meanDelta : v2Erosion.peakDelta,
-                erosionLevel: v2IsBuy ? buyErosion.level : v2Erosion.level,
+                peakFloor: v2Type === 'POSITION_OPEN' ? v2Erosion.peakFloor : (meanErosion.meanFloor ?? v2Erosion.peakFloor),
+                peakDelta: v2Type === 'POSITION_OPEN' ? v2Erosion.peakDelta : (meanErosion.meanDelta ?? v2Erosion.peakDelta),
+                erosionLevel: v2Type === 'POSITION_OPEN' ? v2Erosion.level : (meanErosion.level || v2Erosion.level),
                 consecutiveHolds: lt.ctrl_team_holds || 0,
                 bwcState: v2BwcState || lt._prev_bwc_state,
                 bwcFirePeriod: lt.bwc_fired?.period,
