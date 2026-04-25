@@ -5941,7 +5941,7 @@ export default async function(req) {
                       _v2ExitSev = computeExitSeverity(_oppInd, _oppInd.length, ind.score, lt.ctrl_team_holds || 0);
                     }
 
-                    log(`${matchup}: ▶ V2 TRIGGER ${v2AlertType} [${lt._prev_bwc_state}→${v2BwcState}] floor=${ind.score.toFixed(2)} margin=${_v2Margin} erosion=${v2Type === 'POSITION_OPEN' ? v2Erosion.level : (typeof meanErosion !== 'undefined' && meanErosion ? meanErosion.level || v2Erosion.level : v2Erosion.level)}(${v2Type === 'POSITION_OPEN' ? 'peak' : 'mean'}) ctrl=${_ctrlInd.join('+')||'none'}(${_ctrlInd.length}/5) opp=${_oppIndW.join('+')||'none'} oppI3=${_oppI3Won}${_v2ExitSev ? ' exit=' + _v2ExitSev.severity : ''} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||lsForBWC?.classification||'-'}`);
+                    log(`${matchup}: ▶ V2 TRIGGER ${v2AlertType} [${lt._prev_bwc_state}→${v2BwcState}] floor=${ind.score.toFixed(2)} margin=${_v2Margin} erosion=${v2AlertType === 'POSITION_OPEN' ? v2Erosion.level : (typeof meanErosion !== 'undefined' && meanErosion ? meanErosion.level || v2Erosion.level : v2Erosion.level)}(${v2AlertType === 'POSITION_OPEN' ? 'peak' : 'mean'}) ctrl=${_ctrlInd.join('+')||'none'}(${_ctrlInd.length}/5) opp=${_oppIndW.join('+')||'none'} oppI3=${_oppI3Won}${_v2ExitSev ? ' exit=' + _v2ExitSev.severity : ''} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||lsForBWC?.classification||'-'}`);
 
                     await routeV2Alert(v2AlertType, 'FIRED', _v2ExitSev, false);
 
