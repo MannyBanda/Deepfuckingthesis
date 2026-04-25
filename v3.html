@@ -422,7 +422,7 @@ body.is-locked{overflow:hidden;}
 <div class="toast" id="toast">
   <div class="toast-handle"><div class="toast-handle-bar"></div></div>
   <div class="toast-head">
-    <div class="toast-dot"></div>
+    <div class="toast-dot" id="toast-dot"></div>
     <div class="toast-head-text">
       <div class="toast-label" id="toast-label">Entry Signal</div>
       <div class="toast-alert-info" id="toast-alert-info"></div>
@@ -3321,6 +3321,17 @@ async function pollAlerts(){
     var badge=document.getElementById('toast-badge');
     if(_latestSendAlert&&badge){badge.textContent='';badge.classList.add('show');}
     if(newSend)fireToast(newSend);
+    // Refresh visible toast with latest SEND alert for its game (catches EXIT, POSITION_SAFE, team flips)
+    else if(_toastVisible&&_toastGameId&&_alertCache[_toastGameId]){
+      var gameAlerts=_alertCache[_toastGameId];
+      var latestForGame=null;
+      for(var li=gameAlerts.length-1;li>=0;li--){
+        if(gameAlerts[li].agent_decision==='SEND'){latestForGame=gameAlerts[li];break;}
+      }
+      if(latestForGame&&_toastAlert&&latestForGame.id!==_toastAlert.id){
+        fireToast(latestForGame);
+      }
+    }
   }catch(e){console.warn('[TOAST] Alert poll failed:',e.message);}
 }
 
@@ -3328,8 +3339,18 @@ function renderToastHeader(alert){
   var g=games.find(function(x){return x.id===alert.game_id;});
   var hA=g?.home?.alias||'HOME',aA=g?.away?.alias||'AWAY';
   var betTeam=alert.floor_team||alert.control_team||'?';
+  var isExit=(alert.alert_type||'').startsWith('EXIT');
+  var isPosition=/^(POSITION_SAFE|POSITION_OPEN|STRENGTHENING|HOLDING|SECOND_CHANCE)$/.test(alert.alert_type||'');
 
-  document.getElementById('toast-label').textContent='Entry Signal';
+  // Label based on alert type
+  var label=isExit?'Exit Signal':isPosition?'Position Update':'Entry Signal';
+  document.getElementById('toast-label').textContent=label;
+
+  // Style the toast border based on alert type
+  var toast=document.getElementById('toast');
+  if(isExit){toast.style.borderColor='var(--amber)';document.getElementById('toast-label').style.color='var(--amber)';document.getElementById('toast-dot').style.background='var(--amber)';document.getElementById('toast-dot').style.boxShadow='0 0 12px var(--amber)';}
+  else{toast.style.borderColor='var(--green-border)';document.getElementById('toast-label').style.color='var(--green)';document.getElementById('toast-dot').style.background='var(--green)';document.getElementById('toast-dot').style.boxShadow='0 0 12px var(--green)';}
+
   var typeLabel=(alert.alert_type||'').replace(/_/g,' ');
   if(alert.alert_tier)typeLabel+=' \u00b7 '+alert.alert_tier;
   var time='';if(alert.period)time+='Q'+alert.period;if(alert.clock)time+=' '+alert.clock;
