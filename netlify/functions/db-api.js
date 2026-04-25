@@ -352,6 +352,11 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS position_closed BOOLEAN`; } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS is_flip_buy BOOLEAN`; } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS position_team TEXT`; } catch(e) {}
+      // Backfill position_team for existing alerts
+      try {
+        await sql`UPDATE alerts SET position_team = control_team WHERE position_team IS NULL AND alert_type != 'EXIT'`;
+        await sql`UPDATE alerts a SET position_team = CASE WHEN a.control_team = g.home_alias THEN g.away_alias ELSE g.home_alias END FROM games g WHERE g.id = a.game_id AND a.position_team IS NULL AND a.alert_type = 'EXIT'`;
+      } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS cp_mean_floor REAL`; } catch(e) {}
       try { await sql`ALTER TABLE poll_state ADD COLUMN IF NOT EXISTS monitor_last_run TIMESTAMPTZ`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS conviction_tier TEXT`; } catch(e) {}
