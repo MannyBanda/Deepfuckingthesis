@@ -1481,7 +1481,7 @@ async function loadSeasonQ4(sql, league) {
 
 // ── V2 BWC STATE MACHINE — mechanical functions (validated 9/9 games) ────────
 
-const STATE_RANK = { 'LOCK': 4, 'EDGE': 3, 'VALUE': 2, 'EXIT': 1, 'DEEP_TRAIL': 0 };
+const STATE_RANK = { 'LOCK': 4, 'EDGE': 3, 'VALUE': 2, 'DEEP_TRAIL': 1, 'EXIT': 0 };
 
 // 3-minute checkpoint boundaries (game seconds from start)
 // gameSec = (period - 1) * 720 + (720 - clockRemainingInSeconds)
