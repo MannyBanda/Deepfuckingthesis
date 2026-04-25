@@ -3359,9 +3359,17 @@ function renderToastHeader(alert){
 
   var margin=alert.margin!=null?Math.abs(alert.margin):'?';
   var trailing=alert.margin!=null&&alert.margin<0;
-  var gameText=betTeam+(trailing?' trailing '+margin:' leading '+margin);
-  gameText+=' \u00b7 '+aA+'@'+hA;
-  if(alert.floor_score!=null)gameText+=' \u00b7 Floor '+Number(alert.floor_score).toFixed(2);
+  var gameText='';
+  if(isExit){
+    // EXIT: make it clear who lost control and who to bet
+    var exitTeam=betTeam;
+    var oppTeam=(exitTeam.toUpperCase()===hA.toUpperCase())?aA:hA;
+    gameText='Exit '+exitTeam+' \u00b7 '+aA+'@'+hA+' \u00b7 Bet '+oppTeam;
+  } else {
+    gameText=betTeam+(trailing?' trailing '+margin:' leading '+margin);
+    gameText+=' \u00b7 '+aA+'@'+hA;
+    if(alert.floor_score!=null)gameText+=' \u00b7 Floor '+Number(alert.floor_score).toFixed(2);
+  }
   document.getElementById('toast-game').textContent=gameText;
 }
 
@@ -3386,6 +3394,11 @@ async function fetchLineShop(alert){
   var hA=g.home?.alias||'HOME',aA=g.away?.alias||'AWAY';
   var hName=g.home?.name||'',aName=g.away?.name||'';
   var betTeam=alert.floor_team||alert.control_team||'?';
+  // EXIT = the control team LOST structural control — bet the opposite team
+  var isExit=(alert.alert_type||'').startsWith('EXIT');
+  if(isExit){
+    betTeam=(betTeam.toUpperCase()===hA.toUpperCase())?aA:hA;
+  }
   var isHome=betTeam.toUpperCase()===hA.toUpperCase();
   // The team name to match in Odds API outcomes
   var betFullName=isHome?(g.home?.market||'')+' '+hName:(g.away?.market||'')+' '+aName;
