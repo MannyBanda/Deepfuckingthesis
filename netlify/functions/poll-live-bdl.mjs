@@ -5569,10 +5569,11 @@ export default async function(req) {
             }
 
             // ── V2 TRACKING ALERT (fires at BWC establishment) ──
-            if (lt._just_established) {
+            if (lt._just_established && !lt._tracking_sent) {
               delete lt._just_established;
               if (alertMinsLeft >= 1.0) {
                 await routeV2Alert('TRACKING', 'FIRED', null, false);
+                lt._tracking_sent = true;
                 log(`${matchup}: ★ TRACKING — ${lt.bwc_fired.team} Q${currentPeriod} ${clock}`);
               }
             }
