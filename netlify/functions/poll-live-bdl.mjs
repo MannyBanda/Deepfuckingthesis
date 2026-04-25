@@ -5390,9 +5390,9 @@ export default async function(req) {
                 oppI3Won: _oppI3Won,
                 peakFloor: v2Erosion.peakFloor,
                 peakDelta: v2Erosion.peakDelta,
-                meanFloor: meanErosion.meanFloor,
-                meanDelta: meanErosion.meanDelta,
-                erosionLevel: v2Type === 'POSITION_OPEN' ? v2Erosion.level : (meanErosion.level || v2Erosion.level),
+                meanFloor: typeof meanErosion !== 'undefined' && meanErosion ? meanErosion.meanFloor : null,
+                meanDelta: typeof meanErosion !== 'undefined' && meanErosion ? meanErosion.meanDelta : null,
+                erosionLevel: v2Type === 'POSITION_OPEN' ? v2Erosion.level : (typeof meanErosion !== 'undefined' && meanErosion ? meanErosion.level || v2Erosion.level : v2Erosion.level),
                 peakErosionLevel: v2Erosion.level,
                 consecutiveHolds: lt.ctrl_team_holds || 0,
                 bwcState: v2BwcState || lt._prev_bwc_state,
@@ -5567,8 +5567,8 @@ export default async function(req) {
                   ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null},
                   ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null},
                   ${conviction.tier}, ${conviction.combo}, ${shouldSend},
-                  ${v2BwcState || lt._prev_bwc_state}, ${v2Type === 'POSITION_OPEN' ? v2Erosion.level : (meanErosion.level || v2Erosion.level)},
-                  ${v2Type === 'POSITION_OPEN' ? (v2Erosion.peakFloor ?? null) : (meanErosion.meanFloor ?? v2Erosion.peakFloor ?? null)}, ${v2ExitSev?.severity ?? null},
+                  ${v2BwcState || lt._prev_bwc_state}, ${v2Type === 'POSITION_OPEN' ? v2Erosion.level : (typeof meanErosion !== 'undefined' && meanErosion ? meanErosion.level || v2Erosion.level : v2Erosion.level)},
+                  ${v2Type === 'POSITION_OPEN' ? (v2Erosion.peakFloor ?? null) : ((typeof meanErosion !== 'undefined' && meanErosion ? meanErosion.meanFloor : null) ?? v2Erosion.peakFloor ?? null)}, ${v2ExitSev?.severity ?? null},
                   ${lt.po_fired?.rank || null}, ${mfTraj?.direction || null},
                   ${alertCtx?.combinedRead?.read || null}, ${lt.cp_eligible_count || null},
                   ${lt.cp_ctrl_flips || null}, ${lt.lane || null},
@@ -5941,7 +5941,7 @@ export default async function(req) {
                       _v2ExitSev = computeExitSeverity(_oppInd, _oppInd.length, ind.score, lt.ctrl_team_holds || 0);
                     }
 
-                    log(`${matchup}: ▶ V2 TRIGGER ${v2AlertType} [${lt._prev_bwc_state}→${v2BwcState}] floor=${ind.score.toFixed(2)} margin=${_v2Margin} erosion=${v2Type === 'POSITION_OPEN' ? v2Erosion.level : (meanErosion.level || v2Erosion.level)}(${v2Type === 'POSITION_OPEN' ? 'peak' : 'mean'}) ctrl=${_ctrlInd.join('+')||'none'}(${_ctrlInd.length}/5) opp=${_oppIndW.join('+')||'none'} oppI3=${_oppI3Won}${_v2ExitSev ? ' exit=' + _v2ExitSev.severity : ''} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||lsForBWC?.classification||'-'}`);
+                    log(`${matchup}: ▶ V2 TRIGGER ${v2AlertType} [${lt._prev_bwc_state}→${v2BwcState}] floor=${ind.score.toFixed(2)} margin=${_v2Margin} erosion=${v2Type === 'POSITION_OPEN' ? v2Erosion.level : (typeof meanErosion !== 'undefined' && meanErosion ? meanErosion.level || v2Erosion.level : v2Erosion.level)}(${v2Type === 'POSITION_OPEN' ? 'peak' : 'mean'}) ctrl=${_ctrlInd.join('+')||'none'}(${_ctrlInd.length}/5) opp=${_oppIndW.join('+')||'none'} oppI3=${_oppI3Won}${_v2ExitSev ? ' exit=' + _v2ExitSev.severity : ''} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||lsForBWC?.classification||'-'}`);
 
                     await routeV2Alert(v2AlertType, 'FIRED', _v2ExitSev, false);
 
@@ -6014,7 +6014,9 @@ export default async function(req) {
             // ── V2 STATE LOGGING ──
             if (lt.bwc_fired) {
               if (v2BwcState && !lt._v2_transition_pending) lt._prev_bwc_state = v2BwcState;
-              log(`${matchup}: v2 state=${v2BwcState || '-'} erosion=${v2Erosion.level}(peak)/${meanErosion.level || '-'}(mean) peak=${v2Erosion.peakFloor?.toFixed(2) || '-'} mf=${meanErosion.meanFloor?.toFixed(3) || '-'} holds=${lt.ctrl_team_holds || 0} bwcTeam=${lt.bwc_fired.team}${lt._v2_transition_pending ? ' PENDING(prev=' + lt._prev_bwc_state + ')' : ''}`);
+              try {
+                log(`${matchup}: v2 state=${v2BwcState || '-'} erosion=${v2Erosion?.level || '-'}(peak)/${typeof meanErosion !== 'undefined' && meanErosion ? meanErosion.level || '-' : '-'}(mean) peak=${v2Erosion?.peakFloor?.toFixed(2) || '-'} mf=${typeof meanErosion !== 'undefined' && meanErosion ? meanErosion.meanFloor?.toFixed(3) || '-' : '-'} holds=${lt.ctrl_team_holds || 0} bwcTeam=${lt.bwc_fired.team}${lt._v2_transition_pending ? ' PENDING(prev=' + lt._prev_bwc_state + ')' : ''}`);
+              } catch(e) { log(`${matchup}: v2 state=${v2BwcState || '-'} (log error: ${e.message})`); }
             }
           }
 
