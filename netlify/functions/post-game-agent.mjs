@@ -170,17 +170,26 @@ export default async function handler(req) {
 
   // ── 2. BUILD POSITION ARCS ──────────────────────────────────────────────
 
-  // Group alerts by game_id + control_team
+  // Group alerts by game_id + position_team (falls back to control_team for older alerts)
   const alertsByGameTeam = {};
   alerts.forEach(a => {
-    const key = `${a.game_id}__${a.control_team}`;
+    const posTeam = a.position_team || a.control_team;
+    const key = `${a.game_id}__${posTeam}`;
     if (!alertsByGameTeam[key]) alertsByGameTeam[key] = {
-      gameId: a.game_id, team: a.control_team,
+      gameId: a.game_id, team: posTeam,
       matchup: `${a.away_alias}@${a.home_alias}`,
       alerts: [],
     };
     alertsByGameTeam[key].alerts.push(a);
   });
+
+  // Helper: convert period + clock to a single game-time number (higher = later in game)
+  function gameTimeSortKey(a) {
+    const p = Number(a.period) || 0;
+    const cm = String(a.clock || '12:00').match(/(\d+):(\d+)/);
+    const clockSec = cm ? parseInt(cm[1]) * 60 + parseInt(cm[2]) : 720;
+    return p * 720 + (720 - clockSec); // Q1 12:00 = 0, Q4 0:00 = 2880
+  }
 
   // Build arcs from delivered alerts
   const arcs = [];
@@ -199,8 +208,8 @@ export default async function handler(req) {
 
     if (delivered.length === 0) return;
 
-    // Sort by timestamp
-    delivered.sort((a, b) => new Date(a.ts) - new Date(b.ts));
+    // Sort by game time (period + clock), not wall-clock ts — concurrency can reorder ts
+    delivered.sort((a, b) => gameTimeSortKey(a) - gameTimeSortKey(b));
 
     // Skip TRACKING-only arcs (no position taken)
     const nonTracking = delivered.filter(a => a.alert_type !== 'TRACKING');
@@ -210,7 +219,7 @@ export default async function handler(req) {
     const outcome = resolveOutcome(team, finalScores);
     if (!outcome) return;
 
-    // Terminal = last non-TRACKING delivered alert by timestamp
+    // Terminal = last non-TRACKING delivered alert by game time
     const terminal = nonTracking[nonTracking.length - 1];
 
     // Score: EXIT inverts (correct when ctrl lost)
@@ -348,7 +357,8 @@ export default async function handler(req) {
   const agentStructural = agentSuppressed.filter(a => !isDedup(a.agent_reasoning));
 
   const structuralScored = agentStructural.map(a => {
-    const outcome = resolveOutcome(a.control_team, finalScores);
+    const posTeam = a.position_team || a.control_team;
+    const outcome = resolveOutcome(posTeam, finalScores);
     if (!outcome) return null;
     const wouldBeCorrect = a.alert_type === 'EXIT' ? !outcome.ctrlWon : outcome.ctrlWon;
     return { ...a, outcome, wouldBeCorrect };
@@ -381,7 +391,7 @@ export default async function handler(req) {
   scoredArcs.forEach(arc => {
     const exitAlerts = arc.alerts.filter(a => a.type === 'EXIT');
     exitAlerts.forEach(() => {
-      const exitFull = alerts.find(al => al.game_id === arc.gameId && al.control_team === arc.team && al.alert_type === 'EXIT');
+      const exitFull = alerts.find(al => al.game_id === arc.gameId && (al.position_team || al.control_team) === arc.team && al.alert_type === 'EXIT');
       const sev = exitFull?.exit_severity || 'unknown';
       if (!exitSevAccuracy[sev]) exitSevAccuracy[sev] = { total: 0, correct: 0 };
       exitSevAccuracy[sev].total++;
@@ -398,7 +408,7 @@ export default async function handler(req) {
     // Build enriched arc summaries for Sonnet
     const arcSummaries = scoredArcs.map(arc => {
       const steps = arc.alerts.map(a => {
-        const full = alerts.find(al => al.game_id === arc.gameId && al.control_team === arc.team
+        const full = alerts.find(al => al.game_id === arc.gameId && (al.position_team || al.control_team) === arc.team
           && al.alert_type === a.type && al.period === a.period && al.clock === a.clock);
 
         let line = `  ${readable(a.type)} Q${a.period} ${a.clock}: floor=${a.floor} margin=${a.margin}`;

@@ -4115,8 +4115,8 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           // No prior actionable position — suppress without calling agent (save Sonnet API call)
           const aaReasoning = 'No prior actionable alert sent for this game — auto-analysis suppressed (position gate)';
           try {
-            await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent)
-              VALUES (${game.id}, ${league}, ${'AUTO_ANALYSIS'}, ${period}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${aaEdge}, ${aaML ? parseInt(aaML) : null}, ${odds?.homeSpread ? parseFloat(odds.homeSpread) : null}, ${tpClass}, ${lsClass}, ${ctrlSust}, ${oppSust}, ${clientCtx?.rollingWindow?.score ?? null}, ${'ANALYSIS'}, ${'SUPPRESS'}, ${aaReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${calConviction.tier}, ${calConviction.combo}, ${false})`;
+            await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team)
+              VALUES (${game.id}, ${league}, ${'AUTO_ANALYSIS'}, ${period}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${aaEdge}, ${aaML ? parseInt(aaML) : null}, ${odds?.homeSpread ? parseFloat(odds.homeSpread) : null}, ${tpClass}, ${lsClass}, ${ctrlSust}, ${oppSust}, ${clientCtx?.rollingWindow?.score ?? null}, ${'ANALYSIS'}, ${'SUPPRESS'}, ${aaReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${calConviction.tier}, ${calConviction.combo}, ${false}, ${ind.controlTeam})`;
           } catch (e) { log(`${matchup}: ${triggerTag} position-gate alert save failed: ${e.message}`); }
           log(`${matchup}: ${triggerTag} suppressed — no prior actionable position`);
         } else {
@@ -4191,8 +4191,8 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
 
         // Always INSERT to alerts table for accuracy tracking
         try {
-          await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent)
-            VALUES (${game.id}, ${league}, ${'AUTO_ANALYSIS'}, ${period}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${aaEdge}, ${aaML ? parseInt(aaML) : null}, ${odds?.homeSpread ? parseFloat(odds.homeSpread) : null}, ${tpClass}, ${lsClass}, ${ctrlSust}, ${oppSust}, ${clientCtx?.rollingWindow?.score ?? null}, ${'ANALYSIS'}, ${aaDecision}, ${aaReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${calConviction.tier}, ${calConviction.combo}, ${aaNtfySent})`;
+          await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team)
+            VALUES (${game.id}, ${league}, ${'AUTO_ANALYSIS'}, ${period}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${aaEdge}, ${aaML ? parseInt(aaML) : null}, ${odds?.homeSpread ? parseFloat(odds.homeSpread) : null}, ${tpClass}, ${lsClass}, ${ctrlSust}, ${oppSust}, ${clientCtx?.rollingWindow?.score ?? null}, ${'ANALYSIS'}, ${aaDecision}, ${aaReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${calConviction.tier}, ${calConviction.combo}, ${aaNtfySent}, ${ind.controlTeam})`;
         } catch (e) { log(`${matchup}: ${triggerTag} alert save failed: ${e.message}`); }
 
         if (aaDecision === 'SEND') {
@@ -5449,8 +5449,8 @@ export default async function(req) {
               if (_dbDedupSkip) {
                 // Still record the alert for audit trail but skip agent + ntfy
                 try {
-                  await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, alert_tier, agent_decision, agent_reasoning, ntfy_sent)
-                    VALUES (${game.id}, ${league}, ${v2Type}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${ctrlTrailing}, ${v2Tier}, ${'DB_DEDUP'}, ${'Concurrent invocation already sent — agent call skipped'}, ${false})`;
+                  await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, alert_tier, agent_decision, agent_reasoning, ntfy_sent, position_team)
+                    VALUES (${game.id}, ${league}, ${v2Type}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${ctrlTrailing}, ${v2Tier}, ${'DB_DEDUP'}, ${'Concurrent invocation already sent — agent call skipped'}, ${false}, ${v2Type === 'EXIT' ? (lt.bwc_fired?.team || ind.controlTeam) : ind.controlTeam})`;
                 } catch(e) { /* non-fatal */ }
                 return;
               }
@@ -5458,8 +5458,8 @@ export default async function(req) {
               // Insert lock row immediately — concurrent invocations will hit this in dedup check
               let _lockRowId = null;
               try {
-                const _lr = await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, alert_tier, agent_decision, agent_reasoning, ntfy_sent)
-                  VALUES (${game.id}, ${league}, ${v2Type}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${ctrlTrailing}, ${v2Tier}, ${'PENDING'}, ${'Agent call in progress'}, ${false})
+                const _lr = await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, alert_tier, agent_decision, agent_reasoning, ntfy_sent, position_team)
+                  VALUES (${game.id}, ${league}, ${v2Type}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${ctrlTrailing}, ${v2Tier}, ${'PENDING'}, ${'Agent call in progress'}, ${false}, ${v2Type === 'EXIT' ? (lt.bwc_fired?.team || ind.controlTeam) : ind.controlTeam})
                   RETURNING id`;
                 _lockRowId = _lr[0]?.id;
               } catch(e) { log(`${matchup}: lock row insert failed: ${e.message}`); }
@@ -5569,7 +5569,7 @@ export default async function(req) {
                   i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent,
                   bwc_state, erosion_level, peak_floor, exit_severity,
                   graduation_rank, mf_trajectory, combined_read, cp_eligible_count,
-                  cp_ctrl_flips, lane, position_closed, is_flip_buy, cp_mean_floor)
+                  cp_ctrl_flips, lane, position_closed, is_flip_buy, cp_mean_floor, position_team)
                   VALUES (${game.id}, ${league}, ${v2Type}, ${currentPeriod}, ${clock}, ${ind.controlTeam},
                   ${ind.score}, ${margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal},
                   ${tpForBuy?.classification || null}, ${lsForBWC?.classification || null},
@@ -5583,7 +5583,7 @@ export default async function(req) {
                   ${alertCtx?.combinedRead?.read || null}, ${lt.cp_eligible_count || null},
                   ${lt.cp_ctrl_flips || null}, ${lt.lane || null},
                   ${lt.position_closed || false}, ${!!(v2IsBuy && lt._flipBuyContext)},
-                  ${lt.cp_mean_floor || null})`;
+                  ${lt.cp_mean_floor || null}, ${v2Type === 'EXIT' ? (lt.bwc_fired?.team || ind.controlTeam) : ind.controlTeam})`;
               } catch (e) { log(`${matchup}: v2 alert save failed: ${e.message}`); }
 
               // Cleanup lock row — full alert row now exists

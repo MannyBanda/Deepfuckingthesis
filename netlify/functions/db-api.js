@@ -351,6 +351,7 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS lane TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS position_closed BOOLEAN`; } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS is_flip_buy BOOLEAN`; } catch(e) {}
+      try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS position_team TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS cp_mean_floor REAL`; } catch(e) {}
       try { await sql`ALTER TABLE poll_state ADD COLUMN IF NOT EXISTS monitor_last_run TIMESTAMPTZ`; } catch(e) {}
       try { await sql`ALTER TABLE analyses ADD COLUMN IF NOT EXISTS conviction_tier TEXT`; } catch(e) {}
