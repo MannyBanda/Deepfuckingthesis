@@ -37,6 +37,18 @@ const LEAGUES = {
     season: '2025',
     aliasMap: {},  // NCAAMB uses name-based ESPN matching, no alias overrides needed
   },
+  wnba: {
+    srBase: 'https://api.sportradar.com/wnba/trial/v8/en/',
+    srKeyEnv: 'SR_WNBA_KEY',
+    espnSlug: 'wnba',
+    espnBase: 'https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/',
+    espnSummaryBase: 'https://site.web.api.espn.com/apis/site/v2/sports/basketball/wnba/summary',
+    bdlPrefix: '/wnba',
+    bdlHasSeasonStats: false,
+    season: '2025',
+    aliasMap: {},
+    dryRun: true,  // preseason — collect data, suppress alerts + BWC tracking
+  },
 };
 
 const BDL_BASE = 'https://api.balldontlie.io';
@@ -5177,7 +5189,7 @@ export default async function(req) {
           // ── LIGHTWEIGHT ENTRY SIGNAL CHECK (every cycle, no Sonnet needed) ──
           // BUY:  floor ≥ 0.65, trailing 1-15, Q2+, throughput not UNLIKELY/NO PATH
           // BWC:  floor ≥ 0.60, leading 2+, Q2+, edge > 0, lead safety not AT RISK/CRITICAL
-          {
+          if (!cfg.dryRun) {
             // ── V2 LIVE TRACKING: read state, update peaks/holds, compute BWC + erosion ──
             var lt = {};
             try {
@@ -6042,9 +6054,11 @@ export default async function(req) {
           }
 
           // ── V2 LIVE TRACKING: persist state to DB ──
-          try {
-            await sql`UPDATE games SET live_tracking = ${JSON.stringify(lt)} WHERE id = ${game.id}`;
-          } catch(e) { log(`${matchup}: live_tracking write failed: ${e.message}`); }
+          if (!cfg.dryRun) {
+            try {
+              await sql`UPDATE games SET live_tracking = ${JSON.stringify(lt)} WHERE id = ${game.id}`;
+            } catch(e) { log(`${matchup}: live_tracking write failed: ${e.message}`); }
+          }
 
           // ── QUARTER-BOUNDARY CALIBRATION SNAPSHOTS ─────────────────
           // Detect Q1→Q2, Q2→Q3, Q3→Q4 transitions. Fire ONCE each per game:
@@ -6089,6 +6103,13 @@ export default async function(req) {
               if (currentPeriod === 2 && clockMin != null && clockMin <= 10.0) {
                 transitions.push({ from: 0, to: 1, tag: 'calibration_sq3', trigger: 'auto_sq3', label: 'sQ3(H2@10)', sonnet: false, clockBased: true, qdKey: '3', qdPrev: '2' });
               }
+            } else if (league === 'wnba') {
+              // WNBA uses quarters like NBA but sonnet: false during dryRun preseason
+              transitions = [
+                { from: 1, to: 2, tag: 'calibration_q1', trigger: 'auto_q1', label: 'Q1', sonnet: !cfg.dryRun, qdKey: '1', qdPrev: '0' },
+                { from: 2, to: 3, tag: 'calibration_q2', trigger: 'auto_q2', label: 'Q2', sonnet: !cfg.dryRun, qdKey: '2', qdPrev: '1' },
+                { from: 3, to: 4, tag: 'calibration_q3', trigger: 'auto_q3', label: 'Q3', sonnet: !cfg.dryRun, qdKey: '3', qdPrev: '2' },
+              ];
             }
 
             for (const t of transitions) {
