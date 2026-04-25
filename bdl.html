@@ -10266,16 +10266,15 @@ function renderCard(game){
         for(var ri=0;ri<rows.length;ri++){
           var rv = rows[ri];
           var isBest = fwpTeam && rv.team===fwpTeam;
-          var isHigherFwp = rv.fwp >= 50;
-          var tColor = isHigherFwp ? 'var(--t1)' : 'var(--t3)';
-          var eColor = isHigherFwp ? (rv.edge!=null&&rv.edge>=10?'var(--green)':rv.edge!=null&&rv.edge>=5?'var(--g2)':rv.edge!=null&&rv.edge>=1?'var(--yellow)':rv.edge!=null&&rv.edge>=0?'var(--t3)':'var(--red)') : 'var(--t3)';
-          html+='<div style="display:grid;grid-template-columns:42px 1fr 1fr 1fr 52px 52px;gap:2px;padding:3px 2px;border-radius:3px;margin-bottom:1px;'+(isHigherFwp?'background:rgba(0,200,83,.08);border-left:2px solid var(--green)':'border-left:2px solid transparent')+'">';
-          html+='<span style="font-size:9px;font-weight:700;color:'+(isHigherFwp?'var(--t1)':'var(--t3)')+'">'+esc(rv.team)+'</span>';
+          var tColor = isBest ? 'var(--t1)' : 'var(--t3)';
+          var eColor = isBest ? (rv.edge!=null&&rv.edge>=10?'var(--green)':rv.edge!=null&&rv.edge>=5?'var(--g2)':rv.edge!=null&&rv.edge>=1?'var(--yellow)':rv.edge!=null&&rv.edge>=0?'var(--t3)':'var(--red)') : 'var(--t3)';
+          html+='<div style="display:grid;grid-template-columns:42px 1fr 1fr 1fr 52px 52px;gap:2px;padding:3px 2px;border-radius:3px;margin-bottom:1px;'+(isBest?'background:rgba(0,200,83,.08);border-left:2px solid var(--green)':'border-left:2px solid transparent')+'">';
+          html+='<span style="font-size:9px;font-weight:700;color:'+(isBest?'var(--t1)':'var(--t3)')+'">'+esc(rv.team)+'</span>';
           html+='<span style="font-size:10px;font-weight:600;color:'+tColor+';text-align:center">'+(rv.fwp!=null?rv.fwp.toFixed(0)+'%':'—')+'</span>';
-          html+='<span style="font-size:10px;color:'+(isHigherFwp?'var(--t2)':'var(--t3)')+';text-align:center">'+(rv.mip!=null?rv.mip.toFixed(1)+'%':'N/A')+'</span>';
+          html+='<span style="font-size:10px;color:'+(isBest?'var(--t2)':'var(--t3)')+';text-align:center">'+(rv.mip!=null?rv.mip.toFixed(1)+'%':'N/A')+'</span>';
           html+='<span style="font-size:10px;font-weight:700;color:'+eColor+';text-align:center">'+(rv.edge!=null?(rv.edge>=0?'+':'')+rv.edge.toFixed(1)+'%':'—')+'</span>';
-          html+='<span style="font-size:9px;color:'+(isHigherFwp?'var(--t2)':'var(--t3)')+';text-align:center">'+esc(String(rv.ml||'—'))+'</span>';
-          html+='<span style="font-size:9px;color:'+(isHigherFwp?'var(--t2)':'var(--t3)')+';text-align:center">'+esc(String(rv.spread||'—'))+'</span>';
+          html+='<span style="font-size:9px;color:'+(isBest?'var(--t2)':'var(--t3)')+';text-align:center">'+esc(String(rv.ml||'—'))+'</span>';
+          html+='<span style="font-size:9px;color:'+(isBest?'var(--t2)':'var(--t3)')+';text-align:center">'+esc(String(rv.spread||'—'))+'</span>';
           html+='</div>';
         }
       } else {
