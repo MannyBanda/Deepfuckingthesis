@@ -5245,6 +5245,7 @@ export default async function(req) {
 
             const v2BwcState = computeBwcState(lt, ind.controlTeam, _v2Margin);
             const v2Erosion = computeErosion(lt, ind.score, hA, ind.controlTeam);
+            var meanErosion = computeMeanErosion(lt, ind.score, hA, ind.controlTeam);
 
             // ── SHARED COMPUTATIONS (control-team-relative, used by all alert paths) ──
             const ctrlSide = ind.controlTeam === hA ? 'home' : 'away';
@@ -5359,7 +5360,7 @@ export default async function(req) {
               // Build v2 agent prompt context
               const mfTraj = lt.bwc_fired ? computeMFTrajectory(lt.checkpoints || [], lt.bwc_fired.team) : null;
               // Mean erosion for all alerts (PO uses peak, transitions+BUY use mean)
-              const meanErosion = computeMeanErosion(lt, ind.score, hA, ind.controlTeam);
+              // meanErosion already computed at cycle level above
               // Full CP trend (all checkpoints, no filter), floor-margin divergence, conviction trend
               const fullCPTrend = lt.bwc_fired ? computeFullCPTrend(lt.checkpoints || [], lt.bwc_fired.team) : null;
               const _bwcMarginForFM = lt.bwc_fired ? (lt.bwc_fired.team === hA ? (ind.homePts - ind.awayPts) : (ind.awayPts - ind.homePts)) : _v2Margin;
