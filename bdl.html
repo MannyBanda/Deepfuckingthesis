@@ -1577,6 +1577,15 @@ const BDL_TEAM_IDS = {
   HOU:11,IND:12,LAC:13,LAL:14,MEM:15,MIA:16,MIL:17,MIN:18,NOP:19,NYK:20,
   OKC:21,ORL:22,PHI:23,PHX:24,POR:25,SAC:26,SAS:27,TOR:28,UTA:29,WAS:30,
 };
+// Team colors optimized for dark backgrounds — uses lighter/accent color when primary is too dark
+const NBA_TEAM_COLORS = {
+  ATL:'#e03a3e',BOS:'#00a94f',BKN:'#ccc',CHA:'#00b2a9',CHI:'#ce1141',CLE:'#fdbb30',
+  DAL:'#4b90cd',DEN:'#fec524',DET:'#c8102e',GSW:'#ffc72c',HOU:'#ce1141',IND:'#fdbb30',
+  LAC:'#c8102e',LAL:'#FDB927',MEM:'#7bb2dd',MIA:'#f9a01b',MIL:'#00844b',MIN:'#78be20',
+  NOP:'#c8102e',NYK:'#f58426',OKC:'#007ac1',ORL:'#0097dc',PHI:'#006bb6',PHX:'#e56020',
+  POR:'#e03a3e',SAC:'#6b3fa0',SAS:'#c4ced4',TOR:'#ce1141',UTA:'#f9a01b',WAS:'#c8102e',
+};
+function getTeamColor(alias){ return NBA_TEAM_COLORS[alias] || 'var(--t2)'; }
 
 async function buildBdlGameMap(dateStr){
   try{
@@ -9915,10 +9924,10 @@ function renderCard(game){
     <div class="chr">${state==='LIVE'?'<div class="ld"></div>':''}<span class="pb">${periodLabel}${game.clock?' '+game.clock:''}</span></div>
   </div>
   <div class="sr">
-    <div><div class="srt">${esc(aA)}${standingsCache[aA]?'<span style="font-size:8px;color:var(--amber);font-weight:600;margin-left:3px">('+ordinal(standingsCache[aA].confRank)+')</span>':''}</div>
+    <div><div class="srt" style="color:${getTeamColor(aA)}">${esc(aA)}${standingsCache[aA]?'<span style="font-size:8px;color:var(--amber);font-weight:600;margin-left:3px">('+ordinal(standingsCache[aA].confRank)+')</span>':''}</div>
     <div><span class="srs">${state==='PRE'?'—':game.awayPoints??'—'}</span>${game.summary?.away?.bonus?'<span class="bonus-tag">BONUS</span>':''}</div></div>
     <span class="sr-sep">–</span>
-    <div style="text-align:right"><div class="srt">${esc(hA)}${standingsCache[hA]?'<span style="font-size:8px;color:var(--amber);font-weight:600;margin-left:3px">('+ordinal(standingsCache[hA].confRank)+')</span>':''}</div>
+    <div style="text-align:right"><div class="srt" style="color:${getTeamColor(hA)}">${esc(hA)}${standingsCache[hA]?'<span style="font-size:8px;color:var(--amber);font-weight:600;margin-left:3px">('+ordinal(standingsCache[hA].confRank)+')</span>':''}</div>
     <div>${game.summary?.home?.bonus?'<span class="bonus-tag">BONUS</span>':''}<span class="srs">${state==='PRE'?'—':game.homePoints??'—'}</span></div></div>
   </div>`;
 
