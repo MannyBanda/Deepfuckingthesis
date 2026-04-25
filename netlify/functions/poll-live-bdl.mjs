@@ -5436,9 +5436,10 @@ export default async function(req) {
               };
 
               // DB-level dedup — catch concurrent invocations BEFORE burning agent tokens
+              // Checks for ANY recent alert row (including PENDING lock rows from concurrent invocations)
               let _dbDedupSkip = false;
               try {
-                const dbDedup = await sql`SELECT 1 FROM alerts WHERE game_id = ${game.id} AND alert_type = ${v2Type} AND ntfy_sent = true AND ts > NOW() - INTERVAL '2 minutes' LIMIT 1`;
+                const dbDedup = await sql`SELECT 1 FROM alerts WHERE game_id = ${game.id} AND alert_type = ${v2Type} AND ts > NOW() - INTERVAL '60 seconds' LIMIT 1`;
                 if (dbDedup.length > 0) {
                   log(`${matchup}: ${v2Type} DB-deduped — skipping agent call`);
                   _dbDedupSkip = true;
@@ -5453,6 +5454,15 @@ export default async function(req) {
                 } catch(e) { /* non-fatal */ }
                 return;
               }
+
+              // Insert lock row immediately — concurrent invocations will hit this in dedup check
+              let _lockRowId = null;
+              try {
+                const _lr = await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, alert_tier, agent_decision, agent_reasoning, ntfy_sent)
+                  VALUES (${game.id}, ${league}, ${v2Type}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${ctrlTrailing}, ${v2Tier}, ${'PENDING'}, ${'Agent call in progress'}, ${false})
+                  RETURNING id`;
+                _lockRowId = _lr[0]?.id;
+              } catch(e) { log(`${matchup}: lock row insert failed: ${e.message}`); }
 
               const v2Prompt = buildV2AgentPrompt(v2Ctx);
               const agentResult = await runAlertAgent(v2Ctx, v2Prompt, 600);
@@ -5575,6 +5585,11 @@ export default async function(req) {
                   ${lt.position_closed || false}, ${!!(v2IsBuy && lt._flipBuyContext)},
                   ${lt.cp_mean_floor || null})`;
               } catch (e) { log(`${matchup}: v2 alert save failed: ${e.message}`); }
+
+              // Cleanup lock row — full alert row now exists
+              if (_lockRowId) {
+                try { await sql`DELETE FROM alerts WHERE id = ${_lockRowId}`; } catch(e) {}
+              }
 
               log(`${matchup}: ${shouldSend ? '★' : '○'} ${v2Type} ${v2Tier} ${agentDecision} — ${ind.controlTeam} ${ind.score.toFixed(2)} ${ctrlTrailing ? 'trailing' : 'leading'} by ${margin}${ctrlEdge != null ? ', edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}`);
             }
@@ -5942,6 +5957,12 @@ export default async function(req) {
                     }
 
                     log(`${matchup}: ▶ V2 TRIGGER ${v2AlertType} [${lt._prev_bwc_state}→${v2BwcState}] floor=${ind.score.toFixed(2)} margin=${_v2Margin} erosion=${v2AlertType === 'POSITION_OPEN' ? v2Erosion.level : (typeof meanErosion !== 'undefined' && meanErosion ? meanErosion.level || v2Erosion.level : v2Erosion.level)}(${v2AlertType === 'POSITION_OPEN' ? 'peak' : 'mean'}) ctrl=${_ctrlInd.join('+')||'none'}(${_ctrlInd.length}/5) opp=${_oppIndW.join('+')||'none'} oppI3=${_oppI3Won}${_v2ExitSev ? ' exit=' + _v2ExitSev.severity : ''} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||lsForBWC?.classification||'-'}`);
+
+                    // Advance state and save lt BEFORE agent call — prevents concurrent invocations
+                    // from seeing the same transition (agent takes 10-15s, race window is huge)
+                    lt._prev_bwc_state = v2BwcState;
+                    lt._v2_transition_pending = false;
+                    try { await sql`UPDATE games SET live_tracking = ${JSON.stringify(lt)} WHERE id = ${game.id}`; } catch(e) {}
 
                     await routeV2Alert(v2AlertType, 'FIRED', _v2ExitSev, false);
 
