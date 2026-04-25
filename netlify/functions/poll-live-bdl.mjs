@@ -5435,6 +5435,25 @@ export default async function(req) {
                 buyOpenPeriod: lt._buy_open_period || null,
               };
 
+              // DB-level dedup — catch concurrent invocations BEFORE burning agent tokens
+              let _dbDedupSkip = false;
+              try {
+                const dbDedup = await sql`SELECT 1 FROM alerts WHERE game_id = ${game.id} AND alert_type = ${v2Type} AND ntfy_sent = true AND ts > NOW() - INTERVAL '2 minutes' LIMIT 1`;
+                if (dbDedup.length > 0) {
+                  log(`${matchup}: ${v2Type} DB-deduped — skipping agent call`);
+                  _dbDedupSkip = true;
+                }
+              } catch(e) { /* non-fatal — fail-open */ }
+
+              if (_dbDedupSkip) {
+                // Still record the alert for audit trail but skip agent + ntfy
+                try {
+                  await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, alert_tier, agent_decision, agent_reasoning, ntfy_sent)
+                    VALUES (${game.id}, ${league}, ${v2Type}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${ctrlTrailing}, ${v2Tier}, ${'DB_DEDUP'}, ${'Concurrent invocation already sent — agent call skipped'}, ${false})`;
+                } catch(e) { /* non-fatal */ }
+                return;
+              }
+
               const v2Prompt = buildV2AgentPrompt(v2Ctx);
               const agentResult = await runAlertAgent(v2Ctx, v2Prompt, 600);
 
@@ -5462,15 +5481,6 @@ export default async function(req) {
                 agentDecision = v2Tier === 'FIRED' ? 'FALLBACK_SEND' : 'FALLBACK_DROP';
                 log(`${matchup}: Agent unavailable — ${agentDecision} for ${v2Tier} ${v2Type}`);
               }
-
-              // DB-level dedup — catch concurrent invocations
-              try {
-                const dbDedup = await sql`SELECT 1 FROM alerts WHERE game_id = ${game.id} AND alert_type = ${v2Type} AND ntfy_sent = true AND ts > NOW() - INTERVAL '2 minutes' LIMIT 1`;
-                if (dbDedup.length > 0) {
-                  log(`${matchup}: ${v2Type} DB-deduped — concurrent invocation already sent`);
-                  shouldSend = false;
-                }
-              } catch(e) { /* non-fatal — fail-open */ }
 
               if (shouldSend) {
                 const ntfyBody = (agentResult?.body && agentResult.body.length > 20)
