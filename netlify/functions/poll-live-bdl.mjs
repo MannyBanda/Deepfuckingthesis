@@ -5572,9 +5572,16 @@ export default async function(req) {
             if (lt._just_established && !lt._tracking_sent) {
               delete lt._just_established;
               if (alertMinsLeft >= 1.0) {
-                await routeV2Alert('TRACKING', 'FIRED', null, false);
+                // DB-based dedup — check if TRACKING already fired for this game (lt save may have failed)
+                let _trackingExists = false;
+                try { const _te = await sql`SELECT 1 FROM alerts WHERE game_id = ${game.id} AND alert_type = 'TRACKING' LIMIT 1`; _trackingExists = _te.length > 0; } catch(e) {}
+                if (!_trackingExists) {
+                  await routeV2Alert('TRACKING', 'FIRED', null, false);
+                  log(`${matchup}: ★ TRACKING — ${lt.bwc_fired.team} Q${currentPeriod} ${clock}`);
+                } else {
+                  log(`${matchup}: TRACKING already in DB — skipping re-fire`);
+                }
                 lt._tracking_sent = true;
-                log(`${matchup}: ★ TRACKING — ${lt.bwc_fired.team} Q${currentPeriod} ${clock}`);
               }
             }
 
