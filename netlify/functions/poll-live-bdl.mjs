@@ -178,7 +178,11 @@ function buildV2AgentPrompt(ctx) {
     stress += `Window (${wLabel}, ${rw.windowPossessions || '?'} poss): ${rw.controlTeam} ${rw.score != null ? rw.score.toFixed(2) : '?'}\n`;
     ['I1','I2','I3','I4','I5'].forEach(k => {
       const i = rw[k];
-      if (i && i.score != null) stress += `  ${k}: ${i.score.toFixed(1)} — ${i.detail || ''}\n`;
+      if (i && i.score != null) {
+        // Flip to ctrl-relative (window scores are home-relative like computeServer)
+        const ctrlScore = ctx.ctrlIsHome ? i.score : 1 - i.score;
+        stress += `  ${k}: ${ctrlScore.toFixed(1)} — ${i.detail || ''}\n`;
+      }
     });
     stress += `Data quality: ${rw.dataQuality || '?'}\n`;
   } else {
@@ -3666,9 +3670,13 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
     const wLabel = rw.windowQuarters ? rw.windowQuarters.join('+') : '?';
     p += `\nROLLING WINDOW (${wLabel}, ${rw.windowPossessions || '?'} poss):\n`;
     p += `Control: ${rw.controlTeam} ${rw.score != null ? rw.score.toFixed(2) : '?'}\n`;
+    const _rwCtrlIsHome = ind && ind.controlTeam === hA;
     ['I1', 'I2', 'I3', 'I4', 'I5'].forEach(k => {
       const i = rw[k];
-      if (i && i.score != null) p += `  ${k}: ${i.score.toFixed(1)} — ${i.detail || ''}\n`;
+      if (i && i.score != null) {
+        const ctrlScore = _rwCtrlIsHome ? i.score : 1 - i.score;
+        p += `  ${k}: ${ctrlScore.toFixed(1)} — ${i.detail || ''}\n`;
+      }
     });
     p += `Data quality: ${rw.dataQuality || '?'}\n`;
   }
