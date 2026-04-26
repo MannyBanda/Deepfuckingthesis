@@ -5255,7 +5255,7 @@ export default async function(req) {
               log(`${matchup}: Lane: ${lt.lane} (pregame ML ${ml > 0 ? '+' : ''}${ml})`);
             }
 
-            const v2BwcState = computeBwcState(lt, ind.controlTeam, _v2Margin);
+            let v2BwcState = computeBwcState(lt, ind.controlTeam, _v2Margin);
             const v2Erosion = computeErosion(lt, ind.score, hA, ind.controlTeam);
             var meanErosion = computeMeanErosion(lt, ind.score, hA, ind.controlTeam);
 
@@ -5828,6 +5828,9 @@ export default async function(req) {
                       lt._prev_bwc_state = computeBwcState(lt, ind.controlTeam, _v2Margin);
 
                       await routeV2Alert('POSITION_OPEN', 'FIRED', null, false);
+                      // Recompute v2BwcState — bwc_fired.team just changed, stale value would
+                      // cause spurious EXIT in the transition check below
+                      v2BwcState = computeBwcState(lt, ind.controlTeam, _v2Margin);
                       log(`${matchup}: ★ FLIP PO — ${oppTeam} ${oppFlipRank}-Rank (${hadPriorPO ? 'supersedes prior PO on' : 'flipped from'} ${lt.original_bwc_team}) | oppMF=${oppMF.toFixed(3)} | ${oppEligible.length} opp CPs`);
                     }
                   }
