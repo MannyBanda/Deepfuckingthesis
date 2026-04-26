@@ -8552,161 +8552,175 @@ async function reportBuyExitSim(sql, url) {
 // ── HANDLER ─────────────────────────────────────────────────────────────────
 // ── REPORT: FLIP VOLATILITY — team-level floor flip analysis ────────────────
 async function reportFlipVolatility(sql) {
-  // Pull all backtest snapshots ordered by game
+  // Pull all backtest snapshots with game date
   const rows = await sql`
-    SELECT game_id, checkpoint, period, clock_sec,
-           home_alias, away_alias,
-           margin_at_snapshot,
-           indicators->>'controlTeam' as ctrl_team,
-           (indicators->>'score')::real as floor_score,
-           ctrl_team_won,
-           final_margin
-    FROM nba_snapshot_backtest
-    ORDER BY game_id, period ASC, clock_sec DESC
+    SELECT s.game_id, s.checkpoint, s.period, s.clock_sec,
+           s.home_alias, s.away_alias,
+           s.margin_at_snapshot,
+           s.indicators->>'controlTeam' as ctrl_team,
+           (s.indicators->>'score')::real as floor_score,
+           s.ctrl_team_won,
+           s.final_margin,
+           g.date as game_date
+    FROM nba_snapshot_backtest s
+    JOIN games g ON g.id = s.game_id
+    ORDER BY s.game_id, s.period ASC, s.clock_sec DESC
   `;
 
   // Group by game
-  const games = {};
+  const gameMap = {};
   for (const r of rows) {
-    if (!games[r.game_id]) games[r.game_id] = [];
-    games[r.game_id].push(r);
+    if (!gameMap[r.game_id]) gameMap[r.game_id] = [];
+    gameMap[r.game_id].push(r);
   }
 
-  // Analyze each game for flips
-  const teamFlips = {};  // team -> [{stuck, peak_div, period, ...}]
-  let totalGames = 0, totalFlips = 0;
+  // Core analysis function — reusable across filters
+  function analyzeFlips(games, label) {
+    const teamFlips = {};
+    const teamFloorWP = {}; // team -> {bucket -> {wins, total}}
+    let totalGames = 0, totalFlips = 0;
 
-  for (const [gid, snaps] of Object.entries(games)) {
-    if (snaps.length < 4) continue;
-    totalGames++;
+    for (const [gid, snaps] of Object.entries(games)) {
+      if (snaps.length < 4) continue;
+      totalGames++;
 
-    const home = snaps[0].home_alias;
-    const away = snaps[0].away_alias;
-    // Determine winner from final_margin (home - away)
-    const fm = snaps[0].final_margin;
-    const winner = fm > 0 ? home : fm < 0 ? away : null;
+      const home = snaps[0].home_alias;
+      const away = snaps[0].away_alias;
+      const fm = snaps[0].final_margin;
+      const winner = fm > 0 ? home : fm < 0 ? away : null;
 
-    let prevFloorTeam = null;
-    const snapData = [];
+      let prevFloorTeam = null;
+      const snapData = [];
 
-    for (const s of snaps) {
-      const ft = s.ctrl_team;
-      const fs = s.floor_score || 0;
-      const mg = s.margin_at_snapshot || 0; // home - away
-      const signedFloor = ft === home ? fs : -fs;
-      const mgScaled = mg / 16.0;
-      const divergence = signedFloor - mgScaled;
+      for (const s of snaps) {
+        const ft = s.ctrl_team;
+        const fs = s.floor_score || 0;
+        const mg = s.margin_at_snapshot || 0;
+        const signedFloor = ft === home ? fs : -fs;
+        const mgScaled = mg / 16.0;
+        const divergence = signedFloor - mgScaled;
 
-      snapData.push({
-        period: s.period, ft, fs, signedFloor, mg, mgScaled, divergence
-      });
+        snapData.push({ period: s.period, ft, fs, signedFloor, mg, mgScaled, divergence });
 
-      if (prevFloorTeam && ft && ft !== prevFloorTeam) {
-        // Flip detected
-        const idx = snapData.length - 1;
-        const start = Math.max(0, idx - 10);
-        const preFlip = snapData.slice(start, idx);
+        // Floor WP tracking: at this floor score, did the control team win?
+        if (ft && fs >= 0.40) {
+          const bucket = Math.floor(fs * 10) / 10; // 0.4, 0.5, 0.6, etc
+          const won = ft === winner;
+          if (!teamFloorWP[ft]) teamFloorWP[ft] = {};
+          if (!teamFloorWP[ft][bucket]) teamFloorWP[ft][bucket] = { wins: 0, total: 0 };
+          teamFloorWP[ft][bucket].total++;
+          if (won) teamFloorWP[ft][bucket].wins++;
+        }
 
-        if (preFlip.length >= 2) {
-          const absDivs = preFlip.map(r => Math.abs(r.divergence));
-          const peakDiv = Math.max(...absDivs);
-          const meanDiv = absDivs.reduce((a,b) => a+b, 0) / absDivs.length;
-          const sustained = absDivs.filter(d => d > 0.60).length / absDivs.length;
-          const flipWinnerWon = ft === winner;
+        if (prevFloorTeam && ft && ft !== prevFloorTeam) {
+          const idx = snapData.length - 1;
+          const start = Math.max(0, idx - 10);
+          const preFlip = snapData.slice(start, idx);
 
-          totalFlips++;
+          if (preFlip.length >= 2) {
+            const absDivs = preFlip.map(r => Math.abs(r.divergence));
+            const peakDiv = Math.max(...absDivs);
+            const flipWinnerWon = ft === winner;
+            totalFlips++;
 
-          // Record for both teams involved
-          for (const team of [prevFloorTeam, ft]) {
-            if (!teamFlips[team]) teamFlips[team] = [];
-            teamFlips[team].push({
-              gained: team === ft,
-              stuck: flipWinnerWon,
-              peakDiv, meanDiv, sustained,
-              period: s.period,
-              from: prevFloorTeam, to: ft,
-              margin: mg
-            });
+            for (const team of [prevFloorTeam, ft]) {
+              if (!teamFlips[team]) teamFlips[team] = [];
+              teamFlips[team].push({
+                gained: team === ft, stuck: flipWinnerWon,
+                peakDiv, period: s.period, margin: mg
+              });
+            }
           }
         }
+        if (ft) prevFloorTeam = ft;
       }
-      if (ft) prevFloorTeam = ft;
     }
-  }
 
-  // Compute team-level coefficients
-  const teamCoeffs = {};
-  for (const [team, flips] of Object.entries(teamFlips)) {
-    const n = flips.length;
-    if (n < 5) continue;
+    // Compute team coefficients
+    const teamCoeffs = {};
+    for (const [team, flips] of Object.entries(teamFlips)) {
+      const n = flips.length;
+      if (n < 3) continue;
+      const gained = flips.filter(f => f.gained);
+      const lost = flips.filter(f => !f.gained);
+      const gainedStick = gained.length ? Math.round(100 * gained.filter(f => f.stuck).length / gained.length) : null;
+      const lostStick = lost.length ? Math.round(100 * lost.filter(f => f.stuck).length / lost.length) : null;
+      const highDiv = flips.filter(f => f.peakDiv >= 0.80);
+      const q4 = flips.filter(f => f.period === 4);
+      const q4Gained = q4.filter(f => f.gained);
 
-    const stickRate = flips.filter(f => f.stuck).length / n;
-    const gained = flips.filter(f => f.gained);
-    const lost = flips.filter(f => !f.gained);
-    const gainedStick = gained.length ? gained.filter(f => f.stuck).length / gained.length : 0;
-    const lostStick = lost.length ? lost.filter(f => f.stuck).length / lost.length : 0;
+      teamCoeffs[team] = {
+        totalFlips: n,
+        stickRate: Math.round(100 * flips.filter(f => f.stuck).length / n),
+        gained: { n: gained.length, stick: gainedStick },
+        lost: { n: lost.length, stick: lostStick },
+        grip: (gainedStick || 0) - (lostStick || 0),
+        highDiv: { n: highDiv.length, stick: highDiv.length >= 3 ? Math.round(100 * highDiv.filter(f => f.stuck).length / highDiv.length) : null },
+        q4: { n: q4.length, gainedStick: q4Gained.length >= 2 ? Math.round(100 * q4Gained.filter(f => f.stuck).length / q4Gained.length) : null },
+      };
+    }
 
-    // High divergence flip permanence
-    const highDiv = flips.filter(f => f.peakDiv >= 0.80);
-    const highDivStick = highDiv.length >= 3 ? highDiv.filter(f => f.stuck).length / highDiv.length : null;
-
-    // By period
-    const byPeriod = {};
-    for (const p of [1,2,3,4]) {
-      const pf = flips.filter(f => f.period === p);
-      if (pf.length >= 2) {
-        byPeriod[`Q${p}`] = {
-          n: pf.length,
-          stickRate: Math.round(100 * pf.filter(f => f.stuck).length / pf.length)
+    // Divergence buckets
+    const allGained = Object.values(teamFlips).flat().filter(f => f.gained);
+    const divBuckets = {};
+    for (const [lo, hi] of [[0,0.3],[0.3,0.5],[0.5,0.7],[0.7,0.9],[0.9,1.1],[1.1,3.0]]) {
+      const b = allGained.filter(f => f.peakDiv >= lo && f.peakDiv < hi);
+      if (b.length >= 3) {
+        divBuckets[`${lo.toFixed(1)}-${hi.toFixed(1)}`] = {
+          n: b.length, stick: Math.round(100 * b.filter(f => f.stuck).length / b.length)
         };
       }
     }
 
-    const nGames = new Set(flips.map(f => `${f.from}_${f.to}_${f.period}`)).size; // approximate
+    // Floor WP by team — win rate at each floor bucket
+    const floorWP = {};
+    for (const [team, buckets] of Object.entries(teamFloorWP)) {
+      const teamBuckets = {};
+      for (const [bucket, data] of Object.entries(buckets)) {
+        if (data.total >= 5) {
+          teamBuckets[bucket] = { wp: Math.round(100 * data.wins / data.total), n: data.total };
+        }
+      }
+      if (Object.keys(teamBuckets).length >= 2) floorWP[team] = teamBuckets;
+    }
 
-    teamCoeffs[team] = {
-      totalFlips: n,
-      stickRate: Math.round(100 * stickRate),
-      gainedFloor: { n: gained.length, stickRate: Math.round(100 * gainedStick) },
-      lostFloor: { n: lost.length, stickRate: Math.round(100 * lostStick) },
-      highDivStickRate: highDivStick !== null ? Math.round(100 * highDivStick) : null,
-      highDivN: highDiv.length,
-      byPeriod
+    // Sort by grip
+    const sorted = Object.entries(teamCoeffs).sort((a, b) => b[1].grip - a[1].grip);
+
+    return {
+      label, totalGames, totalFlips,
+      popStick: totalFlips ? Math.round(100 * allGained.filter(f => f.stuck).length / allGained.length) : 0,
+      divBuckets,
+      teams: Object.fromEntries(sorted),
+      floorWP,
     };
   }
 
-  // Sort by stick rate (most volatile first)
-  const sorted = Object.entries(teamCoeffs)
-    .sort((a, b) => b[1].stickRate - a[1].stickRate);
+  // Build filtered game sets
+  const allGames = gameMap;
+  const closeGames = {};
+  const postASBGames = {};
+  const closePostASB = {};
 
-  // Population baseline
-  const popStick = totalFlips ? Math.round(100 * Object.values(teamFlips)
-    .flat().filter(f => f.gained && f.stuck).length /
-    Object.values(teamFlips).flat().filter(f => f.gained).length) : 0;
+  for (const [gid, snaps] of Object.entries(gameMap)) {
+    const fm = Math.abs(snaps[0].final_margin || 0);
+    const dt = snaps[0].game_date;
+    const isClose = fm <= 8;
+    const isPostASB = dt && dt >= '2026-02-20';
 
-  // Divergence buckets (population)
-  const allFlipEvents = Object.values(teamFlips).flat().filter(f => f.gained);
-  const divBuckets = {};
-  for (const [lo, hi] of [[0,0.3],[0.3,0.5],[0.5,0.7],[0.7,0.9],[0.9,1.1],[1.1,3.0]]) {
-    const b = allFlipEvents.filter(f => f.peakDiv >= lo && f.peakDiv < hi);
-    if (b.length >= 3) {
-      divBuckets[`${lo.toFixed(1)}-${hi.toFixed(1)}`] = {
-        n: b.length,
-        stickRate: Math.round(100 * b.filter(f => f.stuck).length / b.length)
-      };
-    }
+    if (isClose) closeGames[gid] = snaps;
+    if (isPostASB) postASBGames[gid] = snaps;
+    if (isClose && isPostASB) closePostASB[gid] = snaps;
   }
 
-  return {
-    totalGames,
-    totalFlipEvents: totalFlips,
-    populationFlipStickRate: popStick,
-    divergenceBuckets: divBuckets,
-    teamCoefficients: Object.fromEntries(sorted),
-    volatile: sorted.filter(([,v]) => v.stickRate >= 30).map(([t,v]) => ({ team: t, ...v })),
-    resilient: sorted.filter(([,v]) => v.stickRate <= 18 && v.totalFlips >= 10).map(([t,v]) => ({ team: t, ...v })),
-  };
+  const full = analyzeFlips(allGames, 'full_season');
+  const close = analyzeFlips(closeGames, 'close_games_8');
+  const postASB = analyzeFlips(postASBGames, 'post_allstar');
+  const closePost = analyzeFlips(closePostASB, 'close_post_allstar');
+
+  return { full, close, postASB, closePostASB: closePost };
 }
+
 
 export default async (req) => {
   const sql = neon(process.env.DATABASE_URL);
