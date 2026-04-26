@@ -1551,6 +1551,10 @@ function lookupFloorWP(coeffs, team, floorScore) {
   };
 }
 
+// Module-scope coefficient cache — populated per invocation inside handler,
+// referenced by fireCalibrationAnalysis (also module scope)
+var _floorWPCoeffs = {};
+
 function computeBwcState(lt, ctrlTeam, margin) {
   const bwcFired = lt.bwc_fired;
   if (!bwcFired || !ctrlTeam) return null;
@@ -4324,7 +4328,7 @@ export default async function(req) {
   const sql = neon(dbUrl);
 
   // Load floor reliability coefficients (30 rows, once per poll cycle)
-  var _floorWPCoeffs = {};
+  _floorWPCoeffs = {};
   try {
     const fwpRows = await sql`SELECT team_alias, reliability_class, grip, close_floor_wp_json FROM floor_wp_coefficients WHERE league = 'nba' AND season = '2025-26'`;
     for (const r of fwpRows) {
