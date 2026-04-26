@@ -6037,10 +6037,19 @@ export default async function(req) {
                     } catch(e) { /* non-fatal */ }
                   }
 
-                  log(`${matchup}: ▶ V2 BUY ${buyTier}${lt._flipBuyContext ? ' [FLIP]' : ''} floor=${ind.score.toFixed(2)} trail=${margin} bwcMatch=${lt.bwc_fired?.team === ind.controlTeam} ctrl=${_ctrlInd.join('+')||'none'}(${_ctrlInd.length}/5) opp=${_oppIndW.join('+')||'none'} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||'-'} ml=${ctrlML||'-'}`);
+                  // ── COLD BUY GATE ──
+                  // Cold BUY = no BWC lifecycle for the buying team (and not a flip buy).
+                  // Cold BUYs have no prior structural tracking — require higher bar:
+                  // floor ≥ 0.70 AND conviction STRONG+ (killer pair or 4+ indicators).
+                  const isColdBuy = !lt.bwc_fired || (lt.bwc_fired.team !== ind.controlTeam && !lt._flipBuyContext);
+                  if (isColdBuy && (ind.score < 0.70 || (conviction.tier !== 'DOMINANT' && conviction.tier !== 'STRONG'))) {
+                    log(`${matchup}: Cold BUY suppressed — floor ${ind.score.toFixed(2)} conv ${conviction.tier} (cold needs ≥0.70 + STRONG+)`);
+                  } else {
+                  log(`${matchup}: ▶ V2 BUY ${buyTier}${lt._flipBuyContext ? ' [FLIP]' : ''}${isColdBuy ? ' [COLD]' : ''} floor=${ind.score.toFixed(2)} trail=${margin} bwcMatch=${lt.bwc_fired?.team === ind.controlTeam} ctrl=${_ctrlInd.join('+')||'none'}(${_ctrlInd.length}/5) opp=${_oppIndW.join('+')||'none'} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||'-'} ml=${ctrlML||'-'} conv=${conviction.tier}`);
 
                   await routeV2Alert('BUY', buyTier, null, true);
                   lt._last_buy_ts = _v2Now;
+                  }
                 }
               }
             } else if (ind.score >= 0.65 && ctrlTrailing && margin >= 1 && margin <= 15 && currentPeriod >= 2 && alertMinsLeft < 1.0) {
