@@ -1184,11 +1184,13 @@ function renderCard(id){
         var indKey=indLabels[ii];
         var ind=floor[indKey];
         if(ind){
-          var ldr=ind.leader||'?';
-          var isWon=ind.score!=null?(ind.score>=0.6):false;
-          var isEven=ind.score!=null?(ind.score>=0.4&&ind.score<0.6):false;
+          // Control-team-relative: flip score if control team is away
+          var ctrlIsHome=!floor.controlTeam||hA.toUpperCase().substring(0,3)===floor.controlTeam.toUpperCase().substring(0,3);
+          var ctrlScore=ind.score!=null?(ctrlIsHome?ind.score:1-ind.score):0.5;
+          var isWon=ctrlScore>=0.6;
+          var isEven=ctrlScore>=0.4&&ctrlScore<0.6;
           var cls='ind-pill'+(isWon?' won':'')+(isEven?' even':'')+(selInd===indKey?' sel':'');
-          html+='<span class="'+cls+'" onclick="toggleIndEvidence(\''+id+'\',\''+indKey+'\')">'+indKey+' '+esc(isEven?'Even':ldr)+'</span>';
+          html+='<span class="'+cls+'" onclick="toggleIndEvidence(\''+id+'\',\''+indKey+'\')">'+indKey+' '+esc(isEven?'Even':floor.controlTeam||'?')+'</span>';
         } else {
           html+='<span class="ind-pill even">'+indKey+' --</span>';
         }
@@ -1347,9 +1349,11 @@ function toggleIndEvidence(gameId,indKey){
 }
 function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
   var ind=floor[indKey];if(!ind)return'';
-  var isWon=ind.score!=null&&ind.score>=0.6;
-  var isEven=ind.score!=null&&ind.score>=0.4&&ind.score<0.6;
-  var ldr=isEven?'EVEN':ind.leader||'?';
+  var ctrlIsHome2=!floor.controlTeam||hA.toUpperCase().substring(0,3)===floor.controlTeam.toUpperCase().substring(0,3);
+  var ctrlScore2=ind.score!=null?(ctrlIsHome2?ind.score:1-ind.score):0.5;
+  var isWon=ctrlScore2>=0.6;
+  var isEven=ctrlScore2>=0.4&&ctrlScore2<0.6;
+  var ldr=isEven?'EVEN':(isWon?(floor.controlTeam||ind.leader||'?'):(ind.leader||'?'));
   var ldrColor=isEven?'var(--fg-dim)':tc(ldr);
 
   // Gather stats from box score rollup + PBP
@@ -1469,8 +1473,10 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
         html+=evRow('Runs (6+)',hR6,aR6);
         var share=hR6+aR6>0?Math.round(hR6/(hR6+aR6)*100):50;
         html+=evRow('Run Share',share+'%',(100-share)+'%');
-        html+='<div class="ind-ev-row" style="border-bottom:none"><span class="ind-ev-label">'+esc(hA)+' runs</span><div class="ind-ev-vals" style="color:var(--green)">'+(hRuns6.length>0?hRuns6.join(', ')+' pts':'none')+'</div></div>';
-        html+='<div class="ind-ev-row" style="border-bottom:none"><span class="ind-ev-label">'+esc(aA)+' runs</span><div class="ind-ev-vals" style="color:var(--coral)">'+(aRuns6.length>0?aRuns6.join(', ')+' pts':'none')+'</div></div>';
+        var hRunCol=hR6>aR6?'var(--green)':hR6<aR6?'var(--coral)':'var(--fg-secondary)';
+        var aRunCol=aR6>hR6?'var(--green)':aR6<hR6?'var(--coral)':'var(--fg-secondary)';
+        html+='<div class="ind-ev-row" style="border-bottom:none"><span class="ind-ev-label">'+esc(hA)+' runs</span><div class="ind-ev-vals" style="color:'+hRunCol+'">'+(hRuns6.length>0?hRuns6.join(', ')+' pts':'none')+'</div></div>';
+        html+='<div class="ind-ev-row" style="border-bottom:none"><span class="ind-ev-label">'+esc(aA)+' runs</span><div class="ind-ev-vals" style="color:'+aRunCol+'">'+(aRuns6.length>0?aRuns6.join(', ')+' pts':'none')+'</div></div>';
       }
       var hFGM2=sum(hPl,'fgm'),hFGA2=sum(hPl,'fga'),aFGM2=sum(aPl,'fgm'),aFGA2=sum(aPl,'fga');
       html+=evRow('FG%',hFGA2>0?(hFGM2/hFGA2*100).toFixed(1)+'%':'--',aFGA2>0?(aFGM2/aFGA2*100).toFixed(1)+'%':'--');
