@@ -256,6 +256,11 @@ Opponent indicators won: ${ctx.oppIndicatorCount} (${ctx.oppIndicatorsWon})
 ${ctx.oppI3Won ? 'Opponent I3 (shot quality) won — EXPECTED variance, not structural. Does NOT invalidate buy thesis.' : ''}
 ${ctx.oppIndicatorCount >= 1 && !ctx.oppI3Won ? 'WARNING: Opponent structural counter-indicators (' + ctx.oppIndicatorsWon + '), not just variance.' : ''}
 
+FLOOR RELIABILITY (from 1,235-game backtest):
+${ctx.ctrlTeam} classified: ${ctx.reliabilityClass || 'NEUTRAL'} | Grip: ${ctx.floorGrip != null ? (ctx.floorGrip > 0 ? '+' : '') + ctx.floorGrip : 'N/A'}
+${ctx.floorWPHistorical != null ? 'Historical close-game win rate at floor ' + ctx.floor + ': ' + ctx.floorWPHistorical + '% (vs ~70% population avg at this level)' : 'No historical floor WP data for this team/level'}
+${ctx.reliabilityClass === 'WEAK' || ctx.reliabilityClass === 'BROKEN' ? 'WARNING: This team\'s floor reads historically overstate structural edge in close games. A ' + ctx.floor + ' floor for ' + ctx.ctrlTeam + ' converts at ' + (ctx.floorWPHistorical || '?') + '%, well below league average. Apply elevated scrutiny — require strong indicator confirmation (I1+I2 or I4) beyond floor score alone.' : ''}${ctx.reliabilityClass === 'ELITE' ? 'This team\'s floor reads are highly reliable — floor score closely tracks actual win probability in close games.' : ''}
+
 POSITION HEALTH:
 Peak floor: ${ctx.peakFloor != null ? Number(ctx.peakFloor).toFixed(2) : 'N/A'} | Mean floor: ${ctx.meanFloor != null ? Number(ctx.meanFloor).toFixed(3) : 'N/A'} | Current: ${ctx.floor}
 Erosion: ${ctx.erosionLevel} (${ctx.alertType === 'POSITION_OPEN' ? 'peak-anchored' : 'mean-anchored'})${ctx.peakErosionLevel && ctx.peakErosionLevel !== ctx.erosionLevel ? ' | Peak erosion: ' + ctx.peakErosionLevel + ' (reference only)' : ''}
@@ -1531,6 +1536,19 @@ function updateLiveTracking(lt, ctrlTeam, floor, period, clock, homeAlias) {
   }
 
   return lt;
+}
+
+// Floor reliability lookup — returns historical win rate at team's current floor bucket
+function lookupFloorWP(coeffs, team, floorScore) {
+  const c = coeffs[team];
+  if (!c) return { wp: null, reliabilityClass: 'NEUTRAL', grip: 0 };
+  const bucket = String(Math.floor(floorScore * 10) / 10); // 0.73 -> "0.7"
+  const wpData = c.closeFloorWP[bucket];
+  return {
+    wp: wpData ? wpData.wp : null,
+    reliabilityClass: c.reliabilityClass,
+    grip: c.grip
+  };
 }
 
 function computeBwcState(lt, ctrlTeam, margin) {
@@ -3437,7 +3455,7 @@ function parseAnalysisText(text, homeAlias, awayAlias) {
 // Single function that formats ALL data layers into prompt text.
 // Matches analyze.js quality — no more "payload ghost" layers.
 
-function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary, conviction, graduationCtx, priorAlertTrail }) {
+function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary, conviction, graduationCtx, priorAlertTrail, floorWP }) {
   let p = `${aA} @ ${hA} | Q${period} ${clock} | ${score}\n\n`;
 
   // ── GROUND TRUTH (mechanical engine output — do not override) ──
@@ -3466,6 +3484,18 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
       p += `\n`;
     }
     p += `\n`;
+  }
+
+  // Floor reliability context
+  if (floorWP && floorWP.reliabilityClass && floorWP.reliabilityClass !== 'NEUTRAL' && ind) {
+    p += `FLOOR RELIABILITY: ${ind.controlTeam} is ${floorWP.reliabilityClass} (grip ${floorWP.grip > 0 ? '+' : ''}${floorWP.grip})`;
+    if (floorWP.wp != null) p += ` | Historical close-game win rate at floor ${ind.score?.toFixed(1)}: ${floorWP.wp}%`;
+    if (floorWP.reliabilityClass === 'WEAK' || floorWP.reliabilityClass === 'BROKEN') {
+      p += `\nCAUTION: This team's floor score historically overstates structural edge in close games. Exercise caution in FWP assessment.`;
+    } else if (floorWP.reliabilityClass === 'ELITE') {
+      p += `\nThis team's floor reads are highly reliable — floor closely tracks actual win probability.`;
+    }
+    p += `\n\n`;
   }
 
   // Thesis
@@ -3992,6 +4022,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       conviction: calConviction,
       graduationCtx,
       priorAlertTrail,
+      floorWP: ind ? lookupFloorWP(_floorWPCoeffs, ind.controlTeam, ind.score) : null,
     });
 
     // ── Compute prompt layer inventory for diagnostics ──
@@ -4292,6 +4323,19 @@ export default async function(req) {
   }
   const sql = neon(dbUrl);
 
+  // Load floor reliability coefficients (30 rows, once per poll cycle)
+  var _floorWPCoeffs = {};
+  try {
+    const fwpRows = await sql`SELECT team_alias, reliability_class, grip, close_floor_wp_json FROM floor_wp_coefficients WHERE league = 'nba' AND season = '2025-26'`;
+    for (const r of fwpRows) {
+      _floorWPCoeffs[r.team_alias] = {
+        reliabilityClass: r.reliability_class || 'NEUTRAL',
+        grip: r.grip || 0,
+        closeFloorWP: r.close_floor_wp_json || {}
+      };
+    }
+  } catch(e) { /* table may not exist yet — non-fatal */ }
+
   // ── TEST CONTEXT: diagnose server context computation ──
   if (url.searchParams.get('test_context') === '1') {
     try {
@@ -4370,6 +4414,7 @@ export default async function(req) {
           espnWP: null, wpProfiles: null, analysisHistory: null,
           ctx, quarterDataFromDB: ctx.quarterDiffs || null, summary,
           conviction: computeConviction(ind),
+          floorWP: ind ? lookupFloorWP(_floorWPCoeffs, ind.controlTeam, ind.score) : null,
         });
         result.promptLength = prompt.length;
         result.promptFirst500 = prompt.substring(0, 500);
@@ -5006,6 +5051,9 @@ export default async function(req) {
           }
           const conviction = computeConviction(ind);
 
+          // Floor reliability lookup
+          const _floorWP = lookupFloorWP(_floorWPCoeffs, ind.controlTeam, ind.score);
+
           // ── FALLBACK THESIS — catch games where pregame cron missed the window ──
           if (!_thesisAttempted.has(game.id)) {
             pendingAnalyses.push(
@@ -5132,7 +5180,7 @@ export default async function(req) {
               spread, deficit, trailing_team, lead_sust, gap, accel,
               i1, i2, i3, i4, i5, source, lead_class, sust_json,
               tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json,
-              bwc_state, grad_rank)
+              bwc_state, grad_rank, floor_wp_historical, reliability_class)
             VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
               ${ind.score}, ${ind.controlTeam}, ${null}, ${null}, ${null},
               ${null}, ${null}, ${espnWP?.home || null}, ${espnWP?.away || null},
@@ -5140,7 +5188,8 @@ export default async function(req) {
               ${ind.I1.score}, ${ind.I2.score}, ${ind.I3.score}, ${ind.I4.score}, ${ind.I5.score},
               ${'server'}, ${leadClass}, ${sustJson},
               ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
-              ${_snapLT?.bwc_fired ? (_snapLT._prev_bwc_state || null) : null}, ${_snapLT?.cp_peak_rank || null})
+              ${_snapLT?.bwc_fired ? (_snapLT._prev_bwc_state || null) : null}, ${_snapLT?.cp_peak_rank || null},
+              ${_floorWP.wp}, ${_floorWP.reliabilityClass})
           `;
           log(`${matchup}: snapshot saved — floor:${ind.score} I1-5:${ind.I1?.score},${ind.I2?.score},${ind.I3?.score},${ind.I4?.score},${ind.I5?.score} tp:${snapTp?.classification||'-'} ls:${snapLs?.classification||'-'}`);
 
@@ -5445,6 +5494,10 @@ export default async function(req) {
                 flipBuyContext: lt._flipBuyContext || null,
                 // BUY-opened position context
                 buyOpenPeriod: lt._buy_open_period || null,
+                // Floor reliability
+                floorWPHistorical: _floorWP.wp,
+                reliabilityClass: _floorWP.reliabilityClass,
+                floorGrip: _floorWP.grip,
               };
 
               // DB-level dedup — catch concurrent invocations BEFORE burning agent tokens
@@ -5505,11 +5558,14 @@ export default async function(req) {
               }
 
               if (shouldSend) {
-                const ntfyBody = (agentResult?.body && agentResult.body.length > 20)
+                let ntfyBody = (agentResult?.body && agentResult.body.length > 20)
                   ? scoreLine + '\n' + agentResult.body
                   : scoreLine + '\n' + ind.controlTeam + ' structural floor ' + ind.score.toFixed(2)
                     + ', ' + _ctrlInd.length + '/5 indicators (' + (_ctrlInd.join('+') || 'none') + ')'
                     + (ctrlEdge != null ? '\nEdge: ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '% over market' : '');
+                if (_floorWP.reliabilityClass === 'WEAK' || _floorWP.reliabilityClass === 'BROKEN') {
+                  ntfyBody += '\nNote: ' + ind.controlTeam + ' structural reads have been less reliable in close games historically. Elevated uncertainty on this signal.';
+                }
                 await sendNtfy(ntfyTitle, ntfyBody, alertPriority);
 
                 // Post-EXIT position gate: close position when EXIT SENT, re-open on any RECOVERING alert SENT
@@ -6158,14 +6214,15 @@ export default async function(req) {
                       spread, deficit, trailing_team, lead_sust, lead_class,
                       i1, i2, i3, i4, i5, source, sust_json,
                       tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json,
-                      bwc_state, grad_rank)
+                      bwc_state, grad_rank, floor_wp_historical, reliability_class)
                     VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
                       ${ind.score}, ${ind.controlTeam}, ${espnWP?.home || null}, ${espnWP?.away || null},
                       ${spreadVal}, ${deficit}, ${trailingTeam}, ${leadSust}, ${leadClass},
                       ${ind.I1.score}, ${ind.I2.score}, ${ind.I3.score}, ${ind.I4.score}, ${ind.I5.score},
                       ${t.tag}, ${sustJson},
                       ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
-                      ${lt?.bwc_fired ? (lt._prev_bwc_state || null) : null}, ${lt?.cp_peak_rank || null})
+                      ${lt?.bwc_fired ? (lt._prev_bwc_state || null) : null}, ${lt?.cp_peak_rank || null},
+                      ${_floorWP.wp}, ${_floorWP.reliabilityClass})
                   `;
                   log(`${matchup}: ${t.label} CAL snapshot saved — floor ${ind.controlTeam} ${ind.score} | sust:${leadSust || '?'} class:${leadClass || '?'} | WP:${espnWP?.home || '?'}% | spd:${spreadVal != null ? spreadVal : 'N/A'}`);
                 } catch (e) {

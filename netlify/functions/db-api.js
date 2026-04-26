@@ -153,6 +153,10 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS bwc_state TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS grad_rank TEXT`; } catch(e) {}
 
+      // Floor reliability coefficients per snapshot
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS floor_wp_historical REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS reliability_class TEXT`; } catch(e) {}
+
       // Quarter-level data for server-authoritative rolling window
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS quarter_data JSONB`; } catch(e) {}
 
@@ -401,6 +405,23 @@ exports.handler = async (event) => {
       )`;
       try { await sql`CREATE INDEX IF NOT EXISTS idx_learnings_date ON learnings (date)`; } catch(e) {}
       try { await sql`ALTER TABLE learnings ADD COLUMN IF NOT EXISTS scoring_version TEXT DEFAULT 'v1'`; } catch(e) {}
+
+      await sql`CREATE TABLE IF NOT EXISTS floor_wp_coefficients (
+        team_alias TEXT NOT NULL,
+        league TEXT NOT NULL DEFAULT 'nba',
+        season TEXT NOT NULL DEFAULT '2025-26',
+        reliability_class TEXT,
+        grip INTEGER,
+        floor_wp_json JSONB,
+        close_floor_wp_json JSONB,
+        post_asb_floor_wp_json JSONB,
+        q4_gained_stick INTEGER,
+        total_flips INTEGER,
+        gained_stick INTEGER,
+        lost_stick INTEGER,
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (team_alias, league, season)
+      )`;
 
       await sql`CREATE TABLE IF NOT EXISTS replay_configs (
         name TEXT PRIMARY KEY,
@@ -1206,6 +1227,50 @@ exports.handler = async (event) => {
         };
       });
       return { statusCode: 200, headers, body: JSON.stringify({ clutch: result }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // SAVE_FLOOR_WP — persist floor win probability coefficients
+    // ═══════════════════════════════════════════════════════
+    if (action === 'save_floor_wp' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      const teams = body.teams || [];
+      const league = body.league || 'nba';
+      const season = body.season || '2025-26';
+      let saved = 0;
+      for (const t of teams) {
+        await sql`
+          INSERT INTO floor_wp_coefficients (team_alias, league, season, reliability_class, grip,
+            floor_wp_json, close_floor_wp_json, post_asb_floor_wp_json,
+            q4_gained_stick, total_flips, gained_stick, lost_stick, updated_at)
+          VALUES (${t.team}, ${league}, ${season}, ${t.reliability_class}, ${t.grip},
+            ${JSON.stringify(t.floor_wp)}, ${JSON.stringify(t.close_floor_wp)}, ${JSON.stringify(t.post_asb_floor_wp || null)},
+            ${t.q4_gained_stick}, ${t.total_flips}, ${t.gained_stick}, ${t.lost_stick}, NOW())
+          ON CONFLICT (team_alias, league, season) DO UPDATE SET
+            reliability_class = EXCLUDED.reliability_class, grip = EXCLUDED.grip,
+            floor_wp_json = EXCLUDED.floor_wp_json, close_floor_wp_json = EXCLUDED.close_floor_wp_json,
+            post_asb_floor_wp_json = EXCLUDED.post_asb_floor_wp_json,
+            q4_gained_stick = EXCLUDED.q4_gained_stick, total_flips = EXCLUDED.total_flips,
+            gained_stick = EXCLUDED.gained_stick, lost_stick = EXCLUDED.lost_stick,
+            updated_at = NOW()
+        `;
+        saved++;
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ saved }) };
+    }
+
+    // GET_FLOOR_WP — retrieve floor win probability coefficients
+    if (action === 'get_floor_wp') {
+      const league = params.league || 'nba';
+      const season = params.season || '2025-26';
+      const teams = params.teams ? params.teams.split(',') : null;
+      let rows;
+      if (teams) {
+        rows = await sql`SELECT * FROM floor_wp_coefficients WHERE team_alias = ANY(${teams}) AND league = ${league} AND season = ${season}`;
+      } else {
+        rows = await sql`SELECT * FROM floor_wp_coefficients WHERE league = ${league} AND season = ${season}`;
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ coefficients: rows }) };
     }
 
     // ═══════════════════════════════════════════════════════

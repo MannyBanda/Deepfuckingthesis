@@ -8721,6 +8721,61 @@ async function reportFlipVolatility(sql) {
   return { full, close, postASB, closePostASB: closePost };
 }
 
+// ── POPULATE: FLOOR WP COEFFICIENTS — compute and save to DB ────────────────
+async function populateFloorWP(sql) {
+  const report = await reportFlipVolatility(sql);
+  const closeTeams = report.close?.teams || {};
+  const closeWP = report.close?.floorWP || {};
+  const fullTeams = report.full?.teams || {};
+  const fullWP = report.full?.floorWP || {};
+  const postASBTeams = report.postASB?.teams || {};
+  const postASBWP = report.postASB?.floorWP || {};
+
+  // Classification: based on close-game floor WP at 0.7+ buckets
+  function classify(team) {
+    const wp = closeWP[team];
+    if (!wp) return 'NEUTRAL';
+    // Average win rate at 0.7, 0.8, 0.9 buckets (close games)
+    const highBuckets = ['0.7', '0.8', '0.9'].map(b => wp[b]).filter(Boolean);
+    if (highBuckets.length < 2) return 'NEUTRAL';
+    const avgWP = highBuckets.reduce((s, b) => s + b.wp, 0) / highBuckets.length;
+    if (avgWP >= 80) return 'ELITE';
+    if (avgWP >= 70) return 'STRONG';
+    if (avgWP >= 60) return 'NEUTRAL';
+    if (avgWP >= 50) return 'WEAK';
+    return 'BROKEN';
+  }
+
+  const allTeams = new Set([...Object.keys(closeTeams), ...Object.keys(fullTeams)]);
+  let saved = 0;
+
+  for (const team of allTeams) {
+    const ct = closeTeams[team] || {};
+    const ft = fullTeams[team] || {};
+    const pt = postASBTeams[team] || {};
+    const reliabilityClass = classify(team);
+
+    await sql`
+      INSERT INTO floor_wp_coefficients (team_alias, league, season, reliability_class, grip,
+        floor_wp_json, close_floor_wp_json, post_asb_floor_wp_json,
+        q4_gained_stick, total_flips, gained_stick, lost_stick, updated_at)
+      VALUES (${team}, 'nba', '2025-26', ${reliabilityClass}, ${ct.grip || ft.grip || 0},
+        ${JSON.stringify(fullWP[team] || {})}, ${JSON.stringify(closeWP[team] || {})}, ${JSON.stringify(postASBWP[team] || {})},
+        ${ct.q4?.gainedStick ?? ft.q4?.gainedStick ?? null}, ${ft.totalFlips || 0},
+        ${ct.gained?.stick ?? ft.gained?.stick ?? null}, ${ct.lost?.stick ?? ft.lost?.stick ?? null}, NOW())
+      ON CONFLICT (team_alias, league, season) DO UPDATE SET
+        reliability_class = EXCLUDED.reliability_class, grip = EXCLUDED.grip,
+        floor_wp_json = EXCLUDED.floor_wp_json, close_floor_wp_json = EXCLUDED.close_floor_wp_json,
+        post_asb_floor_wp_json = EXCLUDED.post_asb_floor_wp_json,
+        q4_gained_stick = EXCLUDED.q4_gained_stick, total_flips = EXCLUDED.total_flips,
+        gained_stick = EXCLUDED.gained_stick, lost_stick = EXCLUDED.lost_stick,
+        updated_at = NOW()
+    `;
+    saved++;
+  }
+
+  return { saved, teams: [...allTeams].sort(), classifications: Object.fromEntries([...allTeams].sort().map(t => [t, classify(t)])) };
+}
 
 export default async (req) => {
   const sql = neon(process.env.DATABASE_URL);
@@ -8775,6 +8830,7 @@ export default async (req) => {
       case 'diagnose_buy_gap': result = await diagnoseBuyGap(sql); break;
       case 'report_all':        result = await phaseReportAll(sql); break;
       case 'report_flip_volatility': result = await reportFlipVolatility(sql); break;
+      case 'populate_floor_wp': result = await populateFloorWP(sql); break;
       case 'status':            result = await phaseStatus(sql); break;
       case 'wipe_indicators':    result = await phaseWipeIndicators(sql); break;
       case 'inspect':           result = await phaseInspect(sql, url); break;

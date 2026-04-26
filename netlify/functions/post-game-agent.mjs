@@ -88,6 +88,14 @@ export default async function handler(req) {
   log('Post-game learning agent starting...');
 
   const sql = neon(process.env.DATABASE_URL);
+
+  // Load floor reliability coefficients
+  var _floorWPCoeffs = {};
+  try {
+    const fwpRows = await sql`SELECT team_alias, reliability_class, grip FROM floor_wp_coefficients WHERE league = 'nba' AND season = '2025-26'`;
+    for (const r of fwpRows) _floorWPCoeffs[r.team_alias] = { reliabilityClass: r.reliability_class || 'NEUTRAL', grip: r.grip || 0 };
+  } catch(e) { /* table may not exist — non-fatal */ }
+
   const url = new URL(req.url, 'https://localhost');
   const dateOverride = url.searchParams.get('date');
   const today = dateOverride ? { dateStr: dateOverride } : getArizonaDate();
@@ -436,6 +444,10 @@ export default async function handler(req) {
       const marginStr = arc.outcome.finalMargin > 0 ? `+${arc.outcome.finalMargin}` : `${arc.outcome.finalMargin}`;
 
       let header = `ARC: ${arc.matchup} — ${arc.team} [${arc.arcType.toUpperCase()}] → ${resultTag}`;
+      const _arcReliability = _floorWPCoeffs[arc.team];
+      if (_arcReliability && _arcReliability.reliabilityClass !== 'NEUTRAL') {
+        header += ` | Floor reliability: ${_arcReliability.reliabilityClass} (grip ${_arcReliability.grip > 0 ? '+' : ''}${_arcReliability.grip})`;
+      }
       header += `\nCtrl ${arc.outcome.ctrlWon ? 'WON' : 'LOST'} by ${Math.abs(arc.outcome.finalMargin)} (final margin: ${marginStr})`;
       header += `\nTerminal: ${readable(arc.terminal.type)} Q${arc.terminal.period} ${arc.terminal.clock}`;
       if (arc.failureType === 'left_hanging') header += '\nNo EXIT fired — subscriber left holding a losing position';
