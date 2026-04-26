@@ -1445,7 +1445,8 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
         var lastH=hLine[hLine.length-1]||0,lastA=aLine[aLine.length-1]||0;
         var qDelta=lastH-lastA;
         var subBWin=qDelta>2?hA:qDelta<-2?aA:'EVEN';
-        html+='<div class="ind-ev-row"><span class="ind-ev-label">SubB: Q'+per+' (\u00b12)</span><div class="ind-ev-vals" style="color:var(--fg-secondary)">'+(subBWin!=='EVEN'?'<span style="color:var(--green)">'+esc(subBWin)+'</span> ('+(qDelta>=0?'+':'')+qDelta+')':'EVEN ('+(qDelta>=0?'+':'')+qDelta+')')+'</div></div>';
+        var subBDisplay=subBWin===aA?-qDelta:qDelta;
+        html+='<div class="ind-ev-row"><span class="ind-ev-label">SubB: Q'+per+' (\u00b12)</span><div class="ind-ev-vals" style="color:var(--fg-secondary)">'+(subBWin!=='EVEN'?'<span style="color:var(--green)">'+esc(subBWin)+'</span> ('+(subBDisplay>=0?'+':'')+subBDisplay+')':'EVEN ('+(qDelta>=0?'+':'')+qDelta+')')+'</div></div>';
       } else {
         html+='<div class="ind-ev-row"><span class="ind-ev-label">SubB: Qtr \u0394</span><div class="ind-ev-vals" style="color:var(--fg-dim)">season Q4 prior (server)</div></div>';
       }
