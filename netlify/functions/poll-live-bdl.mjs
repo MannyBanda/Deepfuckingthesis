@@ -5881,6 +5881,17 @@ export default async function(req) {
                         original_bwc_team: lt.original_bwc_team,
                       };
 
+                      // Swap graduation fields — new BWC team's graduation becomes primary
+                      const _oldCpGrad = lt.cp_graduation;
+                      lt.cp_graduation = lt.cp_opp_graduation;
+                      lt.cp_opp_graduation = _oldCpGrad;
+                      lt.cp_peak_rank = lt.cp_graduation?.rank || null;
+                      lt.cp_mean_floor = oppMF;
+                      lt.cp_eligible_count = oppEligible.length;
+                      lt.cp_min_floor = oppEligible.length > 0
+                        ? Math.round(Math.min(...oppEligible.map(cp => cp.floor)) * 1000) / 1000
+                        : null;
+
                       // Reset _prev_bwc_state to prevent spurious transition alert after flip
                       lt._prev_bwc_state = computeBwcState(lt, ind.controlTeam, _v2Margin);
 
