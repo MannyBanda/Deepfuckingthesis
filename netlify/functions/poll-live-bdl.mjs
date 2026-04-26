@@ -5865,6 +5865,7 @@ export default async function(req) {
                       if (!lt.original_bwc_team) lt.original_bwc_team = lt.bwc_fired.team;
                       lt.bwc_flipped = true;
                       lt.bwc_fired.team = oppTeam;
+                      lt.position_closed = false; // old team's EXIT doesn't contaminate new team
 
                       const oppFlipRank = lt.cp_opp_graduation.rank;
                       const hadPriorPO = lt.po_fired && lt.po_fired.team !== oppTeam;
