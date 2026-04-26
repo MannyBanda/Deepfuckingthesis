@@ -8561,9 +8561,9 @@ async function reportFlipVolatility(sql) {
            (s.indicators->>'score')::real as floor_score,
            s.ctrl_team_won,
            s.final_margin,
-           g.date as game_date
+           bt.date as game_date
     FROM nba_snapshot_backtest s
-    JOIN games g ON g.id = s.game_id
+    JOIN (SELECT DISTINCT bdl_game_id, date FROM nba_backtest) bt ON bt.bdl_game_id = s.game_id
     ORDER BY s.game_id, s.period ASC, s.clock_sec DESC
   `;
 
