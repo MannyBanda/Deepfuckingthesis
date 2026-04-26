@@ -6037,18 +6037,23 @@ export default async function(req) {
                     } catch(e) { /* non-fatal */ }
                   }
 
-                  // ── COLD BUY GATE ──
-                  // Cold BUY = no BWC lifecycle for the buying team (and not a flip buy).
-                  // Cold BUYs have no prior structural tracking — require higher bar:
-                  // floor ≥ 0.70 AND conviction STRONG+ (killer pair or 4+ indicators).
+                  // ── BUY CONVICTION GATES ──
+                  // Cold BUY (no BWC lifecycle, not flip): floor ≥ 0.70 + STRONG+ conviction.
+                  // Warm pre-graduation BUY (tracked but not graduated): MODEST+ conviction (2+ indicators, no danger combos).
+                  // Warm graduated BUY / Flip BUY: no additional gate.
                   const isColdBuy = !lt.bwc_fired || (lt.bwc_fired.team !== ind.controlTeam && !lt._flipBuyContext);
+                  const isWarmPreGrad = !isColdBuy && lt.bwc_fired?.team === ind.controlTeam && !lt.cp_graduation;
+
                   if (isColdBuy && (ind.score < 0.70 || (conviction.tier !== 'DOMINANT' && conviction.tier !== 'STRONG'))) {
                     log(`${matchup}: Cold BUY suppressed — floor ${ind.score.toFixed(2)} conv ${conviction.tier} (cold needs ≥0.70 + STRONG+)`);
+                  } else if (isWarmPreGrad && (conviction.tier === 'CONDITIONAL' || conviction.tier === 'NO ENTRY')) {
+                    log(`${matchup}: Warm pre-grad BUY suppressed — conv ${conviction.tier} (pre-grad needs MODEST+, ${conviction.count}/5 indicators: ${conviction.combo})`);
                   } else {
-                  log(`${matchup}: ▶ V2 BUY ${buyTier}${lt._flipBuyContext ? ' [FLIP]' : ''}${isColdBuy ? ' [COLD]' : ''} floor=${ind.score.toFixed(2)} trail=${margin} bwcMatch=${lt.bwc_fired?.team === ind.controlTeam} ctrl=${_ctrlInd.join('+')||'none'}(${_ctrlInd.length}/5) opp=${_oppIndW.join('+')||'none'} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||'-'} ml=${ctrlML||'-'} conv=${conviction.tier}`);
+                    const buyTag = isColdBuy ? ' [COLD]' : isWarmPreGrad ? ' [PRE-GRAD]' : '';
+                    log(`${matchup}: ▶ V2 BUY ${buyTier}${lt._flipBuyContext ? ' [FLIP]' : ''}${buyTag} floor=${ind.score.toFixed(2)} trail=${margin} bwcMatch=${lt.bwc_fired?.team === ind.controlTeam} ctrl=${_ctrlInd.join('+')||'none'}(${_ctrlInd.length}/5) opp=${_oppIndW.join('+')||'none'} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||'-'} ml=${ctrlML||'-'} conv=${conviction.tier}`);
 
-                  await routeV2Alert('BUY', buyTier, null, true);
-                  lt._last_buy_ts = _v2Now;
+                    await routeV2Alert('BUY', buyTier, null, true);
+                    lt._last_buy_ts = _v2Now;
                   }
                 }
               }
