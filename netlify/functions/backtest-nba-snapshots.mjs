@@ -8550,6 +8550,164 @@ async function reportBuyExitSim(sql, url) {
 
 
 // ── HANDLER ─────────────────────────────────────────────────────────────────
+// ── REPORT: FLIP VOLATILITY — team-level floor flip analysis ────────────────
+async function reportFlipVolatility(sql) {
+  // Pull all backtest snapshots ordered by game
+  const rows = await sql`
+    SELECT game_id, checkpoint, period, clock_sec,
+           home_alias, away_alias,
+           margin_at_snapshot,
+           indicators->>'controlTeam' as ctrl_team,
+           (indicators->>'score')::real as floor_score,
+           ctrl_team_won,
+           final_margin
+    FROM nba_snapshot_backtest
+    ORDER BY game_id, period ASC, clock_sec DESC
+  `;
+
+  // Group by game
+  const games = {};
+  for (const r of rows) {
+    if (!games[r.game_id]) games[r.game_id] = [];
+    games[r.game_id].push(r);
+  }
+
+  // Analyze each game for flips
+  const teamFlips = {};  // team -> [{stuck, peak_div, period, ...}]
+  let totalGames = 0, totalFlips = 0;
+
+  for (const [gid, snaps] of Object.entries(games)) {
+    if (snaps.length < 4) continue;
+    totalGames++;
+
+    const home = snaps[0].home_alias;
+    const away = snaps[0].away_alias;
+    // Determine winner from final_margin (home - away)
+    const fm = snaps[0].final_margin;
+    const winner = fm > 0 ? home : fm < 0 ? away : null;
+
+    let prevFloorTeam = null;
+    const snapData = [];
+
+    for (const s of snaps) {
+      const ft = s.ctrl_team;
+      const fs = s.floor_score || 0;
+      const mg = s.margin_at_snapshot || 0; // home - away
+      const signedFloor = ft === home ? fs : -fs;
+      const mgScaled = mg / 16.0;
+      const divergence = signedFloor - mgScaled;
+
+      snapData.push({
+        period: s.period, ft, fs, signedFloor, mg, mgScaled, divergence
+      });
+
+      if (prevFloorTeam && ft && ft !== prevFloorTeam) {
+        // Flip detected
+        const idx = snapData.length - 1;
+        const start = Math.max(0, idx - 10);
+        const preFlip = snapData.slice(start, idx);
+
+        if (preFlip.length >= 2) {
+          const absDivs = preFlip.map(r => Math.abs(r.divergence));
+          const peakDiv = Math.max(...absDivs);
+          const meanDiv = absDivs.reduce((a,b) => a+b, 0) / absDivs.length;
+          const sustained = absDivs.filter(d => d > 0.60).length / absDivs.length;
+          const flipWinnerWon = ft === winner;
+
+          totalFlips++;
+
+          // Record for both teams involved
+          for (const team of [prevFloorTeam, ft]) {
+            if (!teamFlips[team]) teamFlips[team] = [];
+            teamFlips[team].push({
+              gained: team === ft,
+              stuck: flipWinnerWon,
+              peakDiv, meanDiv, sustained,
+              period: s.period,
+              from: prevFloorTeam, to: ft,
+              margin: mg
+            });
+          }
+        }
+      }
+      if (ft) prevFloorTeam = ft;
+    }
+  }
+
+  // Compute team-level coefficients
+  const teamCoeffs = {};
+  for (const [team, flips] of Object.entries(teamFlips)) {
+    const n = flips.length;
+    if (n < 5) continue;
+
+    const stickRate = flips.filter(f => f.stuck).length / n;
+    const gained = flips.filter(f => f.gained);
+    const lost = flips.filter(f => !f.gained);
+    const gainedStick = gained.length ? gained.filter(f => f.stuck).length / gained.length : 0;
+    const lostStick = lost.length ? lost.filter(f => f.stuck).length / lost.length : 0;
+
+    // High divergence flip permanence
+    const highDiv = flips.filter(f => f.peakDiv >= 0.80);
+    const highDivStick = highDiv.length >= 3 ? highDiv.filter(f => f.stuck).length / highDiv.length : null;
+
+    // By period
+    const byPeriod = {};
+    for (const p of [1,2,3,4]) {
+      const pf = flips.filter(f => f.period === p);
+      if (pf.length >= 2) {
+        byPeriod[`Q${p}`] = {
+          n: pf.length,
+          stickRate: Math.round(100 * pf.filter(f => f.stuck).length / pf.length)
+        };
+      }
+    }
+
+    const nGames = new Set(flips.map(f => `${f.from}_${f.to}_${f.period}`)).size; // approximate
+
+    teamCoeffs[team] = {
+      totalFlips: n,
+      stickRate: Math.round(100 * stickRate),
+      gainedFloor: { n: gained.length, stickRate: Math.round(100 * gainedStick) },
+      lostFloor: { n: lost.length, stickRate: Math.round(100 * lostStick) },
+      highDivStickRate: highDivStick !== null ? Math.round(100 * highDivStick) : null,
+      highDivN: highDiv.length,
+      byPeriod
+    };
+  }
+
+  // Sort by stick rate (most volatile first)
+  const sorted = Object.entries(teamCoeffs)
+    .sort((a, b) => b[1].stickRate - a[1].stickRate);
+
+  // Population baseline
+  const popStick = totalFlips ? Math.round(100 * Object.values(teamFlips)
+    .flat().filter(f => f.gained && f.stuck).length /
+    Object.values(teamFlips).flat().filter(f => f.gained).length) : 0;
+
+  // Divergence buckets (population)
+  const allFlipEvents = Object.values(teamFlips).flat().filter(f => f.gained);
+  const divBuckets = {};
+  for (const [lo, hi] of [[0,0.3],[0.3,0.5],[0.5,0.7],[0.7,0.9],[0.9,1.1],[1.1,3.0]]) {
+    const b = allFlipEvents.filter(f => f.peakDiv >= lo && f.peakDiv < hi);
+    if (b.length >= 3) {
+      divBuckets[`${lo.toFixed(1)}-${hi.toFixed(1)}`] = {
+        n: b.length,
+        stickRate: Math.round(100 * b.filter(f => f.stuck).length / b.length)
+      };
+    }
+  }
+
+  return {
+    totalGames,
+    totalFlipEvents: totalFlips,
+    populationFlipStickRate: popStick,
+    divergenceBuckets: divBuckets,
+    teamCoefficients: Object.fromEntries(sorted),
+    volatile: sorted.filter(([,v]) => v.stickRate >= 30).map(([t,v]) => ({ team: t, ...v })),
+    resilient: sorted.filter(([,v]) => v.stickRate <= 18 && v.totalFlips >= 10).map(([t,v]) => ({ team: t, ...v })),
+  };
+}
+
 export default async (req) => {
   const sql = neon(process.env.DATABASE_URL);
   const url = new URL(req.url);
@@ -8602,6 +8760,7 @@ export default async (req) => {
       case 'validate': result = await phaseValidate(sql); break;
       case 'diagnose_buy_gap': result = await diagnoseBuyGap(sql); break;
       case 'report_all':        result = await phaseReportAll(sql); break;
+      case 'report_flip_volatility': result = await reportFlipVolatility(sql); break;
       case 'status':            result = await phaseStatus(sql); break;
       case 'wipe_indicators':    result = await phaseWipeIndicators(sql); break;
       case 'inspect':           result = await phaseInspect(sql, url); break;
