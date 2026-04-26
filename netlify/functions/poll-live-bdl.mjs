@@ -5354,7 +5354,7 @@ export default async function(req) {
                 const flipTag = lt._flipBuyContext ? ' [FLIP]' : '';
                 ntfyTitle = `BUY${tierTag}${flipTag} ${ind.controlTeam}${mlStr}`;
               } else if (v2Type === 'EXIT') {
-                ntfyTitle = `EXIT${v2ExitSev ? ' (' + v2ExitSev.severity + ')' : ''} — ${matchup}`;
+                ntfyTitle = `EXIT — ${matchup}`;
               } else {
                 ntfyTitle = `${V2_TITLE_MAP[v2Type] || v2Type}${tierTag} — ${bwcTeam || ind.controlTeam}${mlStr}`;
               }
