@@ -8834,6 +8834,46 @@ export default async (req) => {
       case 'status':            result = await phaseStatus(sql); break;
       case 'wipe_indicators':    result = await phaseWipeIndicators(sql); break;
       case 'inspect':           result = await phaseInspect(sql, url); break;
+      case 'export_xgb': {
+        const limit = Math.min(parseInt(url.searchParams.get('limit') || '2000'), 2000);
+        const offset = parseInt(url.searchParams.get('offset') || '0');
+        const rows = await sql`
+          SELECT game_id, checkpoint, period, clock_sec,
+                 home_alias, away_alias, margin_at_snapshot,
+                 team_stats, pbp_derived, indicators, conviction,
+                 ctrl_team_won, final_margin
+          FROM nba_snapshot_backtest
+          WHERE indicators IS NOT NULL AND ctrl_team_won IS NOT NULL
+          ORDER BY game_id, period, clock_sec
+          LIMIT ${limit} OFFSET ${offset}
+        `;
+        const total = await sql`
+          SELECT COUNT(*) AS n FROM nba_snapshot_backtest
+          WHERE indicators IS NOT NULL AND ctrl_team_won IS NOT NULL
+        `;
+        result = {
+          rows: rows.map(r => ({
+            game_id: r.game_id,
+            checkpoint: r.checkpoint,
+            period: r.period,
+            clock_sec: r.clock_sec,
+            home_alias: r.home_alias,
+            away_alias: r.away_alias,
+            margin: r.margin_at_snapshot,
+            team_stats: typeof r.team_stats === 'string' ? JSON.parse(r.team_stats) : r.team_stats,
+            pbp: typeof r.pbp_derived === 'string' ? JSON.parse(r.pbp_derived) : r.pbp_derived,
+            ind: typeof r.indicators === 'string' ? JSON.parse(r.indicators) : r.indicators,
+            conv: typeof r.conviction === 'string' ? JSON.parse(r.conviction) : r.conviction,
+            ctrl_won: r.ctrl_team_won,
+            final_margin: r.final_margin,
+          })),
+          total: Number(total[0].n),
+          offset,
+          limit,
+          has_more: offset + limit < Number(total[0].n),
+        };
+        break;
+      }
       default:
         result = { error: `Unknown phase: ${phase}. Use init, snapshot, compute, wipe_indicators, report_all, report_calibration, report_time, report_alert_sim, status, inspect.` };
     }
