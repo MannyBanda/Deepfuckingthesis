@@ -411,6 +411,12 @@ ${ctx.xgbWinProb != null ? `\nXGBOOST STRUCTURAL MODEL (independent — trained 
 XGB win probability: ${(ctx.xgbWinProb * 100).toFixed(1)}% | Floor: ${(ctx.floor * 100).toFixed(1)}% | ${ctx.xgbAligned ? 'ALIGNED' : '⚠️ DIVERGENT (' + (ctx.xgbDivergence > 0 ? '+' : '') + (ctx.xgbDivergence * 100).toFixed(1) + '%)'}
 ${ctx.xgbShap ? 'SHAP drivers (what raw stats push XGB prediction): ' + ctx.xgbShap.map(s => s.f + '=' + (s.v > 0 ? '+' : '') + s.v.toFixed(2)).join(', ') : ''}
 ${!ctx.xgbAligned && ctx.xgbWinProb < 0.45 ? 'WARNING: XGBoost sees < 45% win probability from raw stats despite floor at ' + ctx.floor + '. In 1,235-game backtest, BUY-eligible alerts with XGB < 0.45 win only 11%. Consider SUPPRESS.' : ''}${!ctx.xgbAligned && ctx.xgbWinProb > ctx.floor + 0.15 ? 'NOTE: XGBoost sees stronger edge than floor — raw stats outpace composite indicators.' : ''}` : ''}
+${ctx.alertType === 'BUY' && ctx.xgbWinProb != null ? `XGB BUY CALIBRATION (1,235-game backtest, ctrl trailing + floor >= 0.65):
+  Q2: XGB>=0.70 = 100% | 0.55-0.70 = 82% | 0.40-0.55 = 78% | <0.40 = 76%
+  Q3: XGB>=0.70 = 100% | 0.55-0.70 = 76% | 0.40-0.55 = 73% | <0.40 = 63%
+  Q4: XGB>=0.70 = 97%  | 0.55-0.70 = 50% | 0.40-0.55 = 38% | <0.40 = 29%
+  Deficit: trail 1-4 viable. Trail 5+: ~50-56% even at XGB 0.55-0.70.
+  → This BUY: Q${ctx.period}, XGB ${(ctx.xgbWinProb * 100).toFixed(0)}% = calibrated ${ctx.period >= 4 ? (ctx.xgbWinProb >= 0.70 ? '97%' : ctx.xgbWinProb >= 0.55 ? '50%' : ctx.xgbWinProb >= 0.40 ? '38%' : '29%') : ctx.period >= 3 ? (ctx.xgbWinProb >= 0.70 ? '100%' : ctx.xgbWinProb >= 0.55 ? '76%' : ctx.xgbWinProb >= 0.40 ? '73%' : '63%') : (ctx.xgbWinProb >= 0.70 ? '100%' : ctx.xgbWinProb >= 0.55 ? '82%' : ctx.xgbWinProb >= 0.40 ? '78%' : '76%')} baseline` : ''}
 
 FLOOR TRAJECTORY:
 ${ctx.floorHistory || 'No prior snapshots'}
@@ -454,6 +460,7 @@ ${ctx.positionClosed ? '  POST-EXIT RECOVERY: Position is CLOSED — the subscri
   I3 INVERSION: ctrl I3 won = 37.3%. ctrl I3 LOST (opp shooting well) = 49%. When the BUY team has shot quality but is STILL trailing, they are losing for reasons shooting cannot fix. When trailing BECAUSE of poor shooting, that is the variance the thesis exploits.
   OPPONENT KILLS: opp I1 (disruption) -> 28.8%. opp I2 (paint) -> 30.6%. opp I1 OR I2 -> 28.5%. These are STRUCTURAL threats. opp I3 only -> thesis intact (variance).
   TIMING: Q4 trail 5-9 = 14.8% — hard suppress. Q4 trail 1-4 = 43% — still viable.
+  XGB QUARTER RULE: Q4 BUYs with XGB < 0.60 are historically 29-38% (money-losing). Q2-Q3 BUYs with XGB 0.55+ are 73-82%. XGB >= 0.70 at any quarter = 98.7% (n=78). Weight XGB more heavily in Q4 — by Q4 the raw stats have full-game sample and structural non-conversion is the dominant signal.
   CHECKPOINT GRADUATION CONTEXT (additional data for BUY evaluation — does not override BUY evidence above):
   ${ctx.cpGraduation
     ? 'BWC team (' + ctx.bwcTeam + ') GRADUATED ' + ctx.cpPeakRank + '-Rank @ ' + ctx.cpGraduation.cp_label + '. ' + mfTrajStr
@@ -5713,8 +5720,19 @@ export default async function(req) {
               const _xgbGatesEnabled = process.env.XGB_GATES_ENABLED === 'true';
               let _xgbGateSuppress = false;
               if (_xgbGatesEnabled && _xgbWinProb != null) {
-                // BUY/BWC/WINDOW_BUY with XGB < 0.40 → hard suppress (7% / 6% win rate in backtest)
-                if ((v2Type === 'BUY' || v2Type === 'BWC' || v2Type === 'WINDOW_BUY') && _xgbWinProb < 0.40) {
+                // BUY: quarter-tiered XGB gate (Q4 mid-tier BUYs are 29-38% — money losers)
+                // Q2: XGB < 0.40 suppress (76% above, 59% below)
+                // Q3: XGB < 0.45 suppress (73% above, 63% below)
+                // Q4: XGB < 0.60 suppress (50% at 0.55-0.70, 38% at 0.40-0.55, 29% below)
+                if (v2Type === 'BUY') {
+                  const buyXgbFloor = currentPeriod >= 4 ? 0.60 : currentPeriod >= 3 ? 0.45 : 0.40;
+                  if (_xgbWinProb < buyXgbFloor) {
+                    _xgbGateSuppress = true;
+                    log(`${matchup}: XGB GATE — suppressing BUY Q${currentPeriod} (xgb=${_xgbWinProb.toFixed(3)}, threshold=${buyXgbFloor}, floor=${ind.score})`);
+                  }
+                }
+                // BWC/WINDOW_BUY: flat XGB < 0.40 (no quarter-specific data yet)
+                if ((v2Type === 'BWC' || v2Type === 'WINDOW_BUY') && _xgbWinProb < 0.40) {
                   _xgbGateSuppress = true;
                   log(`${matchup}: XGB GATE — suppressing ${v2Type} (xgb=${_xgbWinProb.toFixed(3)}, floor=${ind.score})`);
                 }
