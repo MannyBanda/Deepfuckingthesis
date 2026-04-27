@@ -409,7 +409,7 @@ ${ctx.floorMarginSignal && ctx.floorMarginSignal.signal !== 'INSUFFICIENT'
   : 'Insufficient checkpoint data for floor-margin analysis'}
 ${ctx.xgbWinProb != null ? `\nXGBOOST STRUCTURAL MODEL (independent — trained on raw stats, does NOT use floor/indicators/margin):
 XGB win probability: ${(ctx.xgbWinProb * 100).toFixed(1)}% | Floor: ${(ctx.floor * 100).toFixed(1)}% | ${ctx.xgbAligned ? 'ALIGNED' : '⚠️ DIVERGENT (' + (ctx.xgbDivergence > 0 ? '+' : '') + (ctx.xgbDivergence * 100).toFixed(1) + '%)'}
-${ctx.xgbShap ? 'SHAP drivers (what raw stats push XGB prediction): ' + ctx.xgbShap.filter(s => Math.abs(s.v) >= 0.05).map(s => s.f + '=' + (s.v > 0 ? '+' : '') + s.v.toFixed(2)).join(', ') : ''}
+${ctx.xgbShap ? 'SHAP drivers (what raw stats push XGB prediction): ' + ctx.xgbShap.map(s => s.f + '=' + (s.v > 0 ? '+' : '') + s.v.toFixed(2)).join(', ') : ''}
 ${!ctx.xgbAligned && ctx.xgbWinProb < 0.45 ? 'WARNING: XGBoost sees < 45% win probability from raw stats despite floor at ' + ctx.floor + '. In 1,235-game backtest, BUY-eligible alerts with XGB < 0.45 win only 11%. Consider SUPPRESS.' : ''}${!ctx.xgbAligned && ctx.xgbWinProb > ctx.floor + 0.15 ? 'NOTE: XGBoost sees stronger edge than floor — raw stats outpace composite indicators.' : ''}` : ''}
 
 FLOOR TRAJECTORY:
@@ -534,6 +534,7 @@ ${ctx.positionClosed ? '  POST-EXIT RECOVERY: Position is CLOSED — the subscri
   • biglead negative = team hasn't converted structural control to scoreboard separation. Effort-based production risk (hustle stats inflating floor without actual dominance).
   • to negative = turnover differential hurting. If ctrl team's TO count is elevated, structural edge is compromised regardless of other indicators.
   DIVERGENT — XGB ABOVE FLOOR: Raw stats outpace composite indicators. paint/fta/oreb positive = interior structural dominance floor hasn't fully weighted. BUY/VALUE becomes more attractive.
+  NEAR-ZERO FEATURES ARE DIAGNOSTIC: A feature at 0.00 means that dimension is NOT contributing to the prediction. If floor says 0.75 but paint=0.00 and oreb=0.00, the structural control has NO interior foundation in the raw stats — it is entirely shooting-driven (check efg). If the BUY thesis is "structurally dominant team trailing" but paint/fta/oreb are all near zero, the raw stats say there IS no structural dominance — floor may be anchoring stale early-game data.
   DECISION GUIDANCE:
   • BUY/VALUE with XGB < 0.40: lean SUPPRESS (backtest: 11% win rate) unless efg is sole negative SHAP driver + sust favorable (shooting variance thesis intact).
   • EXIT with XGB < 0.40: CONFIRMS exit thesis (backtest: 3.5% win rate at floor >= 0.60). Lean SEND.
@@ -578,7 +579,7 @@ TP: ${ctx.tpClass || 'N/A'} (trailing team comeback path: STRONG>PROBABLE>CONTES
 LS: ${ctx.lsClass || 'N/A'} (leading team margin safety: SAFE>CUSHIONED>AT RISK>CRITICAL)
 Ctrl sust: ${ctx.ctrlSust || 'N/A'} | Opp sust: ${ctx.oppSust || 'N/A'}
 Window score: ${ctx.windowScore || 'N/A'}
-${ctx.xgbWinProb != null ? 'XGBoost structural model: ' + (ctx.xgbWinProb * 100).toFixed(1) + '% win probability (independent raw-stats model). ' + (ctx.xgbAligned ? 'ALIGNED with floor.' : '⚠️ DIVERGENT from floor (' + (ctx.xgbDivergence > 0 ? '+' : '') + (ctx.xgbDivergence * 100).toFixed(1) + '%).') + (ctx.xgbShap ? ' SHAP: ' + ctx.xgbShap.filter(s => Math.abs(s.v) >= 0.05).map(s => s.f + '=' + (s.v > 0 ? '+' : '') + s.v.toFixed(2)).join(', ') : '') : ''}
+${ctx.xgbWinProb != null ? 'XGBoost structural model: ' + (ctx.xgbWinProb * 100).toFixed(1) + '% win probability (independent raw-stats model). ' + (ctx.xgbAligned ? 'ALIGNED with floor.' : '⚠️ DIVERGENT from floor (' + (ctx.xgbDivergence > 0 ? '+' : '') + (ctx.xgbDivergence * 100).toFixed(1) + '%).') + (ctx.xgbShap ? ' SHAP: ' + ctx.xgbShap.map(s => s.f + '=' + (s.v > 0 ? '+' : '') + s.v.toFixed(2)).join(', ') : '') : ''}
 
 INDICATORS (control-team-relative, scale: 1.0=ctrl dominates, 0.0=opponent dominates, 0.5=even):
 I1 Disruption: ${ctx.i1} | I2 Interior: ${ctx.i2} | I3 Shot Quality: ${ctx.i3} | I4 Game Control: ${ctx.i4} | I5 Execution: ${ctx.i5}
