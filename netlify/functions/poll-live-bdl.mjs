@@ -49,7 +49,7 @@ var XGB_FEATURE_LABELS = ['progress','paint','pot','to','stl','oreb','ast','blk'
 
 // Tree interpreter SHAP — decomposes XGB prediction into per-feature contributions
 // Uses precomputed expected values (ev) at each tree node. O(trees × depth) per call.
-// Returns top 5 features sorted by |contribution| in logit space.
+// Returns all 14 features sorted by |contribution| in logit space.
 function computeXGBContributions(features) {
   if (!features || !XGB_MODEL?.trees?.[0]?.ev) return null;
   var contribs = new Float64Array(14);
@@ -68,7 +68,7 @@ function computeXGBContributions(features) {
     ranked.push({ f: XGB_FEATURE_LABELS[i], v: Math.round(contribs[i] * 1000) / 1000 });
   }
   ranked.sort(function(a, b) { return Math.abs(b.v) - Math.abs(a.v); });
-  return ranked.slice(0, 5);
+  return ranked;
 }
 
 function extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock) {
