@@ -489,6 +489,7 @@ RULES:
   • Floor dropped 0.10+ from prior snapshots + conviction downgraded → SEND: structural case is deteriorating
   • If a prior BWC or BUY was SENT for this team in priorAlerts: lean SEND — the subscriber has a position to protect and needs to know about threats
 - VARIANCE BREAKING: opponent's shooting is regressing toward the mean. SEND if structural edge is clear (I4 COMBO YES, 3+ indicators) and the sustainability shift is meaningful. SUPPRESS if structural edge is thin (I4 EVEN, 1-2 indicators) or the sustainability drop is a borderline tier flip that could reverse.
+- STRUCTURAL_SHIFT: Pre-flip early warning — the trailing team is gaining structural control BEFORE the floor has officially flipped. Fires when: floor declined 0.15+ from peak, trailing team holds 1+ indicators in the recent window (0.65+), and margin compressed 3+ from peak (Q3+). ALWAYS SEND — the mechanical gates are the filter. Your job is to add valuable context: (1) WHICH indicators the incoming team holds and whether they are structural (I1 disruption / I2 paint / I4 game control) or variance-based (I3 shot quality only), (2) whether the shift is likely to result in a full control flip or just a temporary compression, (3) the floor reliability class of both teams if available. Frame as informational: "Structural shift developing — [team] recovering structural control." This is NOT a position recommendation — it is a heads-up that a control flip may be incoming.
 - ANCHORED FLOOR CHECK: If team is TRAILING with floor 0.75+ but margin only 1-3 pts AND floor is declining from recent snapshots, the floor may be anchored from earlier dominance that has eroded. Verify recent quarters still favor control team before SEND. This rule does NOT apply to leading teams (BWC/WINDOW BUY) — a high floor with a small lead is a valid structural read.
 - EARLY GAME NOTE (Q1-Q2): Indicator samples are smaller early — steals/blocks counts are low, run share may not be populated yet, and biggest_lead gaps can form from a single early run. This does NOT mean early signals are unreliable. The new indicator formulas have proven predictive even in Q2. For Q1-Q2 FIRED alerts: I4 COMBO YES = SEND with confidence. I4 COMBO NO = apply normal scrutiny (don't auto-reject, just verify the structural case). For Q1-Q2 CANDIDATE alerts: I4 COMBO YES = SEND. I4 COMBO NO = apply extra scrutiny but still SEND if floor is strong (0.75+) and sustainability favors control team. Q3+ alerts have the most data — highest confidence.
 - CANDIDATE BUYs at floor 0.55-0.65: only SEND if I4 COMBO is YES (I4 decisive + at least one other indicator agrees — this pattern is 98-100% accurate historically). Without I4 COMBO, require very strong sustainability case to justify SEND.
@@ -4152,7 +4153,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
 
         // ── 10a. POSITION GATE — auto-analysis only sends as position updates ──
         // Query for most recent SENT actionable alert for this game
-        const POSITION_TYPES = ['BUY', 'BUY WINDOW CLOSING', 'WINDOW BUY', 'RECOVERY PATH', 'LEAD CRUMBLING', 'LEAD LOST', 'VARIANCE BREAKING', 'POSITION_OPEN', 'BWC_EDGE', 'VALUE', 'EXIT', 'THESIS_ALIVE', 'POSITION_RECOVERING', 'POSITION_SAFE'];
+        const POSITION_TYPES = ['BUY', 'BUY WINDOW CLOSING', 'WINDOW BUY', 'RECOVERY PATH', 'LEAD CRUMBLING', 'LEAD LOST', 'VARIANCE BREAKING', 'STRUCTURAL_SHIFT', 'POSITION_OPEN', 'BWC_EDGE', 'VALUE', 'EXIT', 'THESIS_ALIVE', 'POSITION_RECOVERING', 'POSITION_SAFE'];
         let priorPosition = null;
         try {
           const priorRows = await sql`
@@ -4260,7 +4261,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
             const sameTeam = pp.control_team === ind.controlTeam;
             const floorDelta = ind.score - Number(pp.floor_score);
             const statusWord = !sameTeam ? 'At Risk' : floorDelta > 0.1 ? 'Improving' : floorDelta < -0.1 ? 'Fading' : 'Holding';
-            const _alertReadable = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Holding','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','WINDOW BUY':'Window Buy','RECOVERY PATH':'Recovery Path'}[pp.alert_type] || pp.alert_type;
+            const _alertReadable = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Holding','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','WINDOW BUY':'Window Buy','RECOVERY PATH':'Recovery Path','STRUCTURAL_SHIFT':'Structural Shift'}[pp.alert_type] || pp.alert_type;
             const ntfyTitle = `UPDATE: Your Q${pp.period} ${_alertReadable} on ${pp.control_team} is ${statusWord}`;
             // Agent writes the body via BODY: response, use it if available
             const agentBody = agentResult?.body || '';
@@ -4281,7 +4282,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           } else {
             const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${period} ${clock}`;
             const pp = priorPosition;
-            const _alertReadableW = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Holding','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','WINDOW BUY':'Window Buy','RECOVERY PATH':'Recovery Path'}[pp.alert_type] || pp.alert_type;
+            const _alertReadableW = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Holding','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','WINDOW BUY':'Window Buy','RECOVERY PATH':'Recovery Path','STRUCTURAL_SHIFT':'Structural Shift'}[pp.alert_type] || pp.alert_type;
             const ntfyTitle = `WATCH: Your Q${pp.period} ${_alertReadableW} on ${pp.control_team} Needs Attention`;
             const agentBody = agentResult?.body || '';
             const ntfyBody = scoreLine
@@ -5170,6 +5171,17 @@ export default async function(req) {
               snapLs = computeLeadSafetyServer(summary, ind, sust, hA, aA, currentPeriod, clock, league, gameVolumeThreat);
             } catch (e) { /* non-fatal — snapshot still saves without tp/ls */ }
           }
+          // Compute rolling window for snapshot persistence + structural shift warning
+          var _windowScore = null, _windowResult = null;
+          try {
+            const _qd = await readQuarterData(sql, game.id);
+            if (_qd) {
+              _windowResult = computeServerWindow(_qd, currentPeriod, clock, summary, hA, aA, league);
+              if (_windowResult && _windowResult.available) {
+                _windowScore = _windowResult.score;
+              }
+            }
+          } catch (e) { /* non-fatal */ }
           // DIAGNOSTIC: log ind shape before INSERT to catch null fields
           log(`${matchup}: SNAP IND — Q${currentPeriod} ${clock} score:${ind.score} team:${ind.controlTeam} I1:${ind.I1?.score} I2:${ind.I2?.score} I3:${ind.I3?.score} I4:${ind.I4?.score} I5:${ind.I5?.score} conv:${conviction.tier}(${conviction.combo}) hPts:${ind.homePts} aPts:${ind.awayPts} tp:${snapTp?.classification||'null'} ls:${snapLs?.classification||'null'}`);
           // Capture raw stats that fed computeServer for audit/debugging
@@ -5192,7 +5204,7 @@ export default async function(req) {
               spread, deficit, trailing_team, lead_sust, gap, accel,
               i1, i2, i3, i4, i5, source, lead_class, sust_json,
               tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json,
-              bwc_state, grad_rank, floor_wp_historical, reliability_class)
+              bwc_state, grad_rank, floor_wp_historical, reliability_class, window_score)
             VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
               ${ind.score}, ${ind.controlTeam}, ${null}, ${null}, ${null},
               ${null}, ${null}, ${espnWP?.home || null}, ${espnWP?.away || null},
@@ -5201,7 +5213,7 @@ export default async function(req) {
               ${'server'}, ${leadClass}, ${sustJson},
               ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
               ${_snapLT?.bwc_fired ? (_snapLT._prev_bwc_state || null) : null}, ${_snapLT?.cp_peak_rank || null},
-              ${_floorWP.wp}, ${_floorWP.reliabilityClass})
+              ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore})
           `;
           log(`${matchup}: snapshot saved — floor:${ind.score} I1-5:${ind.I1?.score},${ind.I2?.score},${ind.I3?.score},${ind.I4?.score},${ind.I5?.score} tp:${snapTp?.classification||'-'} ls:${snapLs?.classification||'-'}`);
 
@@ -5395,6 +5407,7 @@ export default async function(req) {
                 'POSITION_RECOVERING': 'STRENGTHENING',
                 'POSITION_SAFE': 'POSITION SAFE',
                 'BUY': 'BUY',
+                'STRUCTURAL_SHIFT': 'STRUCTURAL SHIFT',
               };
 
               const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
@@ -6150,6 +6163,116 @@ export default async function(req) {
             }
           }
 
+          // ── STRUCTURAL SHIFT WARNING ──
+          // Pre-flip early warning: trailing team gaining structural control before floor flips
+          if (currentPeriod >= 3 && ind.controlTeam && _windowResult?.available) {
+            const _ssCtrlIsHome = ind.controlTeam === hA;
+            const _ssOppInds = ['I1','I2','I3','I4','I5'].filter(k => {
+              const s = ind[k]?.score;
+              return s != null && (_ssCtrlIsHome ? s >= 0.55 : s <= 0.45);
+            });
+            const _ssFloorSide = _ssCtrlIsHome ? 'home' : 'away';
+            const _ssPeakFloor = lt[_ssFloorSide + '_peak_floor'] || ind.score;
+            const _ssFloorDecline = _ssPeakFloor - ind.score;
+            const _ssCtrlPts = _ssCtrlIsHome ? ind.homePts : ind.awayPts;
+            const _ssOppPts = _ssCtrlIsHome ? ind.awayPts : ind.homePts;
+            const _ssMargin = _ssCtrlPts - _ssOppPts; // positive = ctrl leading
+            const _ssCtrlStats = _ssCtrlIsHome ? (summary.home?.statistics || {}) : (summary.away?.statistics || {});
+            const _ssPeakMargin = _ssCtrlStats.biggest_lead || _ssMargin;
+            const _ssCompression = _ssPeakMargin - _ssMargin;
+            // Opponent's window strength (how strong is the trailing team in the recent window?)
+            const _ssOppWindow = _windowResult.score != null
+              ? (_windowResult.controlTeam === _ssTrailingTeam ? _windowResult.score : 1 - _windowResult.score)
+              : null;
+            // Trailing team name
+            const _ssTrailingTeam = _ssCtrlIsHome ? aA : hA;
+
+            // GATES: floor decline >= 0.15 + opp 1+ indicators + compression >= 3 + opp window >= 0.65
+            const _ssGates = _ssFloorDecline >= 0.15
+              && _ssOppInds.length >= 1
+              && _ssCompression >= 3
+              && _ssOppWindow != null && _ssOppWindow >= 0.65
+              && _ssMargin >= 0;  // ctrl team still leading (pre-flip, not post-flip)
+
+            // Dedup: once per game per trailing team
+            const _ssKey = `shift_${_ssTrailingTeam}`;
+            const _ssFired = lt._shift_warnings || {};
+
+            if (_ssGates && !_ssFired[_ssKey]) {
+              log(`${matchup}: ★ STRUCTURAL SHIFT WARNING — ${_ssTrailingTeam} gaining control. FlDec=${_ssFloorDecline.toFixed(2)} comp=${_ssCompression} oppInds=${_ssOppInds.join('+')} oppWin=${_ssOppWindow?.toFixed(2)} mg=${_ssMargin}`);
+              lt._shift_warnings = { ..._ssFired, [_ssKey]: true };
+
+              // Route through agent — use the same routeV2Alert mechanism
+              // Need to temporarily set up context for routeV2Alert
+              const _ssAgentCtx = await gatherAgentContext(sql, game.id, matchup);
+              const _ssV2Ctx = {
+                alertType: 'STRUCTURAL_SHIFT', alertTier: 'FIRED',
+                ctrlTeam: ind.controlTeam, ctrlIsHome: _ssCtrlIsHome,
+                floor: ind.score?.toFixed(2), margin: _ssMargin,
+                bwcTeam: lt.bwc_fired?.team || null,
+                bwcFirePeriod: lt.bwc_fired?.period || null,
+                homeAlias: hA, awayAlias: aA, homePts: ind.homePts, awayPts: ind.awayPts,
+                period: currentPeriod, clock,
+                ctrlSust: sust?.[_ssCtrlIsHome ? 'home' : 'away']?.tier || null,
+                oppSust: sust?.[_ssCtrlIsHome ? 'away' : 'home']?.tier || null,
+                windowScore: _windowScore,
+                rollingWindow: _windowResult,
+                i1: (_ssCtrlIsHome ? ind.I1?.score : (1 - (ind.I1?.score || 0.5)))?.toFixed(2),
+                i2: (_ssCtrlIsHome ? ind.I2?.score : (1 - (ind.I2?.score || 0.5)))?.toFixed(2),
+                i3: (_ssCtrlIsHome ? ind.I3?.score : (1 - (ind.I3?.score || 0.5)))?.toFixed(2),
+                i4: (_ssCtrlIsHome ? ind.I4?.score : (1 - (ind.I4?.score || 0.5)))?.toFixed(2),
+                i5: (_ssCtrlIsHome ? ind.I5?.score : (1 - (ind.I5?.score || 0.5)))?.toFixed(2),
+                convictionTier: conviction?.tier || null, convictionCombo: conviction?.combo || null,
+                oppIndicatorsWon: _ssOppInds.join('+'), oppIndicatorCount: _ssOppInds.length,
+                combinedRead: null,
+                erosionLevel: null, peakFloor: _ssPeakFloor,
+                floorWPHistorical: _floorWP.wp, reliabilityClass: _floorWP.reliabilityClass, floorGrip: _floorWP.grip,
+                priorAlertTrail: _ssAgentCtx?.priorAlerts || null,
+                shiftTrailingTeam: _ssTrailingTeam,
+                shiftFloorDecline: _ssFloorDecline.toFixed(2),
+                shiftCompression: _ssCompression,
+                shiftOppWindow: _ssOppWindow?.toFixed(2),
+                shiftOppInds: _ssOppInds.join('+'),
+              };
+
+              const _ssPrompt = buildV2AgentPrompt(_ssV2Ctx);
+              try {
+                const _ssAgentResp = await fetch('https://api.anthropic.com/v1/messages', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+                  body: JSON.stringify({ model: 'claude-opus-4-20250514', max_tokens: 600, messages: [{ role: 'user', content: _ssPrompt }] }),
+                });
+                const _ssAgentData = await _ssAgentResp.json();
+                const _ssAgentText = _ssAgentData.content?.[0]?.text || '';
+                const _ssDecision = _ssAgentText.match(/DECISION:\s*(SEND|SUPPRESS|DOWNGRADE)/)?.[1] || 'SEND';
+                const _ssBody = _ssAgentText.match(/BODY:\s*([\s\S]*?)(?:\n(?:DECISION|REASONING):|$)/)?.[1]?.trim() || '';
+                const _ssReasoning = _ssAgentText.match(/REASONING:\s*([\s\S]*?)(?:\n(?:DECISION|BODY):|$)/)?.[1]?.trim() || '';
+
+                // Save alert
+                const _ssWinScore = _windowScore;
+                await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team)
+                  VALUES (${game.id}, ${league}, ${'STRUCTURAL_SHIFT'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_ssMargin}, ${false}, ${null}, ${null}, ${spreadVal}, ${snapTp?.classification || null}, ${snapLs?.classification || null}, ${_ssV2Ctx.ctrlSust}, ${_ssV2Ctx.oppSust}, ${_ssWinScore}, ${'FIRED'}, ${_ssDecision}, ${_ssReasoning || _ssBody}, ${ind.I1?.score}, ${ind.I2?.score}, ${ind.I3?.score}, ${ind.I4?.score}, ${ind.I5?.score}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${_ssDecision === 'SEND'}, ${_ssTrailingTeam})`;
+
+                if (_ssDecision === 'SEND') {
+                  const _ssNtfyTitle = `STRUCTURAL SHIFT — ${matchup}`;
+                  let _ssNtfyBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\n`;
+                  _ssNtfyBody += _ssBody || `${_ssTrailingTeam} recovering structural control. ${ind.controlTeam}'s edge weakening — floor declined ${_ssPeakFloor.toFixed(2)}→${ind.score.toFixed(2)}, lead compressed ${_ssPeakMargin}→${_ssMargin}. ${_ssTrailingTeam} winning ${_ssOppInds.join('+')} in recent window (${_ssOppWindow?.toFixed(2)}).`;
+                  await sendNtfy(_ssNtfyTitle, _ssNtfyBody, 'default');
+                  log(`${matchup}: STRUCTURAL SHIFT → ${_ssDecision} (ntfy sent)`);
+                } else {
+                  log(`${matchup}: STRUCTURAL SHIFT → ${_ssDecision}: ${_ssReasoning?.substring(0, 150)}`);
+                }
+              } catch (e) {
+                log(`${matchup}: STRUCTURAL SHIFT agent error: ${e.message}`);
+                // Still save the alert without agent
+                await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, ntfy_sent, position_team)
+                  VALUES (${game.id}, ${league}, ${'STRUCTURAL_SHIFT'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_ssMargin}, ${false}, ${null}, ${null}, ${spreadVal}, ${_windowScore}, ${'FIRED'}, ${'SEND'}, ${'Agent unavailable — auto-SEND'}, ${ind.I1?.score}, ${ind.I2?.score}, ${ind.I3?.score}, ${ind.I4?.score}, ${ind.I5?.score}, ${true}, ${_ssTrailingTeam})`;
+                const _ssFallbackBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\n${_ssTrailingTeam} recovering structural control. Floor declined ${_ssPeakFloor.toFixed(2)}→${ind.score.toFixed(2)}, lead compressed ${_ssPeakMargin}→${_ssMargin}. ${_ssTrailingTeam} winning ${_ssOppInds.join('+')} in recent window.`;
+                await sendNtfy(`STRUCTURAL SHIFT — ${matchup}`, _ssFallbackBody, 'default');
+              }
+            }
+          }
+
           // ── V2 LIVE TRACKING: persist state to DB ──
           if (!cfg.dryRun) {
             try {
@@ -6238,7 +6361,7 @@ export default async function(req) {
                       spread, deficit, trailing_team, lead_sust, lead_class,
                       i1, i2, i3, i4, i5, source, sust_json,
                       tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json,
-                      bwc_state, grad_rank, floor_wp_historical, reliability_class)
+                      bwc_state, grad_rank, floor_wp_historical, reliability_class, window_score)
                     VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
                       ${ind.score}, ${ind.controlTeam}, ${espnWP?.home || null}, ${espnWP?.away || null},
                       ${spreadVal}, ${deficit}, ${trailingTeam}, ${leadSust}, ${leadClass},
@@ -6246,7 +6369,7 @@ export default async function(req) {
                       ${t.tag}, ${sustJson},
                       ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
                       ${lt?.bwc_fired ? (lt._prev_bwc_state || null) : null}, ${lt?.cp_peak_rank || null},
-                      ${_floorWP.wp}, ${_floorWP.reliabilityClass})
+                      ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore})
                   `;
                   log(`${matchup}: ${t.label} CAL snapshot saved — floor ${ind.controlTeam} ${ind.score} | sust:${leadSust || '?'} class:${leadClass || '?'} | WP:${espnWP?.home || '?'}% | spd:${spreadVal != null ? spreadVal : 'N/A'}`);
                 } catch (e) {

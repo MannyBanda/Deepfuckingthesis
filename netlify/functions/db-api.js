@@ -156,6 +156,7 @@ exports.handler = async (event) => {
       // Floor reliability coefficients per snapshot
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS floor_wp_historical REAL`; } catch(e) {}
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS reliability_class TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS window_score REAL`; } catch(e) {}
 
       // Quarter-level data for server-authoritative rolling window
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS quarter_data JSONB`; } catch(e) {}
