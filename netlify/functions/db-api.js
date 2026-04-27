@@ -458,6 +458,20 @@ exports.handler = async (event) => {
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, game_id }) };
     }
 
+    if (action === 'backfill_xgb' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      const updates = body.updates || [];
+      if (!updates.length) return { statusCode: 400, headers, body: JSON.stringify({ error: 'updates array required' }) };
+      let updated = 0;
+      for (const u of updates) {
+        try {
+          await sql`UPDATE snapshots SET xgb_win_prob = ${u.xgb_win_prob}, xgb_divergence = ${u.xgb_divergence} WHERE id = ${u.id}`;
+          updated++;
+        } catch(e) { /* skip */ }
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, updated, total: updates.length }) };
+    }
+
     // ═══════════════════════════════════════════════════════
     // GET_PBP — fetch persisted PBP audit (avoids SR API call)
     // ═══════════════════════════════════════════════════════
