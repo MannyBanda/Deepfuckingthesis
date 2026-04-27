@@ -8,7 +8,7 @@ export default async function handler(req) {
   if (!anthropicKey) return new Response(JSON.stringify({ error: 'No API key' }), { status: 500 });
 
   const url = new URL(req.url, 'https://x.com');
-  const testParam = url.searchParams.get('test') || 'all'; // 'po', 'bwc', 'all'
+  const testParam = url.searchParams.get('test') || 'all'; // 'po', 'bwc', 'flip', 'all'
 
   async function callOpus(prompt) {
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -144,7 +144,102 @@ REASONING: [2-3 sentences]
 BODY: [If SEND/DOWNGRADE: plain-English alert. If SUPPRESS: blank]`;
   }
 
+  // ── Apr 25 DEN@MIN FLIP BUY prompt ──
+  function buildFlipBuyPrompt(xgbBlock) {
+    const xgbSection = xgbBlock ? `
+XGBOOST STRUCTURAL MODEL (independent — trained on raw stats, does NOT use floor/indicators/margin):
+XGB win probability: ${(xgbBlock.prob * 100).toFixed(1)}% | Floor: 68.0% | ⚠️ DIVERGENT (${(xgbBlock.divergence * 100).toFixed(1)}%)
+SHAP drivers (what raw stats push XGB prediction): ${xgbBlock.shap}
+WARNING: XGBoost sees < 40% win probability from raw stats despite floor at 0.68. In 1,235-game backtest, BUY-eligible alerts with XGB < 0.45 win only 11%. Consider SUPPRESS.
+XGB BUY CALIBRATION (1,235-game backtest, ctrl trailing + floor >= 0.65):
+  Q3: XGB>=0.70 = 100% | 0.55-0.70 = 76% | 0.40-0.55 = 73% | <0.40 = 63%
+  → This BUY: Q3, XGB 38% = calibrated 63% baseline` : '';
+
+    return `You are a live NBA betting alert quality agent. A mechanical system has identified a potential betting signal. Your job is to assess whether it should be sent to the bettor.
+
+ALERT:
+Type: BUY (FIRED)
+Control team: DEN | Floor: 0.68 | Margin: 1 (trailing)
+Score: DEN 63 - MIN 64 (DEN is AWAY)
+Period: Q3 8:06
+BWC team (subscriber position): DEN
+
+FLIP BUY CONTEXT:
+An EXIT alert was SENT for MIN at Q2 6:09 (floor was 0.57, margin 5).
+The structural edge has been confirmed as flipped — this BUY is NOT counter-betting. It is an independent structural signal on the team that took control away from the original position.
+The EXIT + BUY firing simultaneously is TWO independent signals corroborating the same structural reversal.
+Evaluate DEN's structural case on its own merit. The position gate is LIFTED.
+
+INDICATORS (control-team-relative):
+I1 Disruption: 0.70 | I2 Interior: 0.75 | I3 Shot Quality: 0.35 | I4 Game Control: 0.80 | I5 Execution: 0.55
+Indicators won: I1, I2, I4 (3/5) — I1+I2 power pair (55.2% BUY win rate in backtest)
+Conviction: MODEST (I1+I2+I4)
+Ctrl sust: LOCKED IN | Opp sust: UNSUSTAINABLE
+TP: STRONG RECOVERY | LS: N/A
+
+OPPONENT PROFILE:
+Opponent indicators won: 1 (I3 — shot quality)
+Opponent I3 (shot quality) won — EXPECTED variance, not structural. Does NOT invalidate buy thesis.
+
+POSITION HEALTH:
+Peak floor: 0.73 | Mean floor: 0.68 | Current: 0.68
+Erosion: STABLE (mean-anchored)
+Consecutive holds: 28
+BWC lifecycle: EXIT → FLIP BUY (BWC initially on MIN Q2, control flipped to DEN mid-Q2)
+Graduation: BUY-opened (no checkpoint graduation yet) | MF: INSUFFICIENT
+Lane: underdog (pregame ML +330) | CP flips: N/A
+
+STRUCTURAL STRESS:
+Window (Q2+Q3, ~35 poss): DEN 0.62
+Combined read: EARNED — cumulative and window both favor DEN. Structural control confirmed in recent play.
+
+Per-quarter breakdown:
+  Q1 (MIN vs DEN): Paint MIN:14 DEN:10 | FT MIN:4/4 DEN:2/4 | 3P MIN:6/12 DEN:4/14 | AST MIN:7 DEN:5 | TO MIN:4 DEN:6 | STL MIN:3 DEN:2
+  Q2 (MIN vs DEN): Paint MIN:14 DEN:18 | FT MIN:6/8 DEN:4/6 | 3P MIN:2/8 DEN:3/10 | AST MIN:6 DEN:9 | TO MIN:6 DEN:3 | STL MIN:1 DEN:4
+  Q3 partial (MIN vs DEN): Paint MIN:2 DEN:4 | TO MIN:1 DEN:1 | STL even
+
+STRUCTURE-SCORE RELATIONSHIP:
+Floor trend: STABLE | Margin trend: IMPROVING | Signal: CONVERGING (structure and score aligning)
+${xgbSection}
+
+FLOOR TRAJECTORY:
+Q3 8:06: 0.68 (DEN) -1 | Q3 11:28: 0.73 +6 | Q2 6:09: 0.57 +5 | Q2 7:19: 0.63 +3 | Q2 9:46: 0.75 -3 (MIN ctrl) | Q2 12:00: 0.75 -1 (MIN ctrl)
+
+PRIOR ALERT REASONING TRAIL:
+Q2 12:00 BUY for MIN → SEND (tracking — MIN structural interest, I3+I4, floor 0.75)
+Q2 9:46 BUY for MIN → SEND (MIN trailing 3, STRONG I3+I4, underdog value)
+Q2 6:09 EXIT for MIN → SEND (DEN took structural control, MIN position exited. DEN floor 0.57 below 0.65 threshold but structural indicators shifted)
+
+BUY EVIDENCE (from 9,861-snapshot backtest):
+  POWER PAIRS: I1+I2 (55.2%, n=134) is the BUY anchor — physical dominance while trailing.
+  I3 INVERSION: ctrl I3 LOST (opp shooting well) = 49% win rate — when trailing BECAUSE of poor shooting, that IS the variance the thesis exploits.
+  OPPONENT KILLS: opp I1 (disruption) -> 28.8%. opp I2 (paint) -> 30.6%. opp I3 only -> thesis intact (variance).
+  FLIP BUY: EXIT + opponent BUY = structural reversal. One of highest-conviction signals.
+
+RULES:
+- BUY: Structurally dominant team trailing. Verify control team actually dominates AND opponent's lead is variance-driven.
+- FLIP BUY: EXIT + opponent BUY = TWO independent signals corroborating structural reversal. SEND if BUY team controls 2+ indicators with at least I1 or I2 (structural, not variance). SEND if combined read = FLIPPED or EARNED. SUPPRESS if BUY team's only advantage is I3.
+- TP is context, not a veto. TP STRONG RECOVERY adds confidence.
+${xgbBlock ? `- XGB REASONING (use SHAP drivers to interpret floor-XGB disagreements):
+  DIVERGENT — XGB BELOW FLOOR: SHAP tells you why.
+  • efg as primary negative driver → shooting variance. Cross-ref sustainability: if opp_sust is UNSUSTAINABLE and efg is the sole large SHAP driver, XGB may be overreacting to shooting variance the framework EXPECTS to regress.
+  • paint/fta/oreb as negative drivers → STRUCTURAL interior weakness. Weight XGB heavily.
+  • biglead as negative driver → team hasn't converted structural control to scoreboard separation. Effort-based production risk.
+  DECISION GUIDANCE:
+  • BUY with XGB < 0.40: lean SUPPRESS (backtest: 11% win rate) unless efg is sole negative SHAP driver + sust favorable.
+  • XGB BUY CALIBRATION: Q3 XGB < 0.40 = 63% baseline (vs 76% at 0.55-0.70).
+  XGB QUARTER RULE: Q3 BUYs with XGB 0.55+ are 73-82%. XGB < 0.40 drops to 63%. Weight XGB signal but consider whether efg-driven divergence aligns with the sustainability read.` : ''}
+
+BODY RULES: Lead with score + action, explain WHY in basketball terms, 2-4 sentences max. Frame as structural reversal if SEND.
+
+Respond in EXACTLY this format:
+DECISION: [SEND|SUPPRESS|DOWNGRADE]
+REASONING: [2-3 sentences]
+BODY: [If SEND/DOWNGRADE: plain-English alert. If SUPPRESS: blank]`;
+  }
+
   // XGB data computed from real raw_stats_json at these moments
+  // Apr 20 DEN@MIN (MIN 119, DEN 114)
   const xgbPO = {
     prob: 0.494,
     divergence: 0.494 - 0.77,
@@ -155,59 +250,77 @@ BODY: [If SEND/DOWNGRADE: plain-English alert. If SUPPRESS: blank]`;
     divergence: 0.548 - 0.77,
     shap: 'progress=+0.43, pot=-0.32, paint=-0.27, efg=-0.25, fta=-0.23',
   };
+  // Apr 25 DEN@MIN (MIN 112, DEN 96)
+  const xgbFlipBuy = {
+    prob: 0.376,
+    divergence: 0.376 - 0.68,
+    shap: 'efg=-0.84, biglead=-0.53, ast=+0.17, fta=-0.15, 3pr=-0.15',
+  };
 
   const tests = [];
 
   if (testParam === 'all' || testParam === 'po') {
-    // POSITION_OPEN without XGB
     console.log('Running PO without XGB...');
     const poNoXGB = await callOpus(buildPrompt('POSITION_OPEN', null));
-    tests.push({ name: 'PO_NO_XGB', alert: 'Q4 5:54 POSITION_OPEN', ...poNoXGB });
-
+    tests.push({ name: 'PO_NO_XGB', alert: 'Apr20 Q4 5:54 POSITION_OPEN', ...poNoXGB });
     await new Promise(r => setTimeout(r, 1000));
-
-    // POSITION_OPEN with XGB
     console.log('Running PO with XGB...');
     const poWithXGB = await callOpus(buildPrompt('POSITION_OPEN', xgbPO));
-    tests.push({ name: 'PO_WITH_XGB', alert: 'Q4 5:54 POSITION_OPEN', ...poWithXGB });
-
+    tests.push({ name: 'PO_WITH_XGB', alert: 'Apr20 Q4 5:54 POSITION_OPEN', ...poWithXGB });
     await new Promise(r => setTimeout(r, 1000));
   }
 
   if (testParam === 'all' || testParam === 'bwc') {
-    // BWC_EDGE without XGB
     console.log('Running BWC without XGB...');
     const bwcNoXGB = await callOpus(buildPrompt('BWC_EDGE', null));
-    tests.push({ name: 'BWC_NO_XGB', alert: 'Q4 5:32 BWC_EDGE', ...bwcNoXGB });
-
+    tests.push({ name: 'BWC_NO_XGB', alert: 'Apr20 Q4 5:32 BWC_EDGE', ...bwcNoXGB });
     await new Promise(r => setTimeout(r, 1000));
-
-    // BWC_EDGE with XGB
     console.log('Running BWC with XGB...');
     const bwcWithXGB = await callOpus(buildPrompt('BWC_EDGE', xgbBWC));
-    tests.push({ name: 'BWC_WITH_XGB', alert: 'Q4 5:32 BWC_EDGE', ...bwcWithXGB });
+    tests.push({ name: 'BWC_WITH_XGB', alert: 'Apr20 Q4 5:32 BWC_EDGE', ...bwcWithXGB });
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  if (testParam === 'all' || testParam === 'flip') {
+    console.log('Running FLIP BUY without XGB...');
+    const flipNoXGB = await callOpus(buildFlipBuyPrompt(null));
+    tests.push({ name: 'FLIP_NO_XGB', alert: 'Apr25 Q3 8:06 FLIP BUY (DEN)', ...flipNoXGB });
+    await new Promise(r => setTimeout(r, 1000));
+    console.log('Running FLIP BUY with XGB...');
+    const flipWithXGB = await callOpus(buildFlipBuyPrompt(xgbFlipBuy));
+    tests.push({ name: 'FLIP_WITH_XGB', alert: 'Apr25 Q3 8:06 FLIP BUY (DEN)', ...flipWithXGB });
   }
 
   // Build comparison
   const comparisons = [];
   for (let i = 0; i < tests.length; i += 2) {
     if (i + 1 < tests.length) {
+      const isApr25 = tests[i].name.includes('FLIP');
       comparisons.push({
         alert: tests[i].alert,
         without_xgb: { decision: tests[i].decision, reasoning: tests[i].reasoning },
         with_xgb: { decision: tests[i + 1].decision, reasoning: tests[i + 1].reasoning },
         decision_changed: tests[i].decision !== tests[i + 1].decision,
-        actual_outcome: 'DEN LOST (MIN 119-114) — correct decision was SUPPRESS/DOWNGRADE',
+        actual_outcome: isApr25 
+          ? 'DEN LOST BY 16 (MIN 112, DEN 96) — correct decision was SUPPRESS'
+          : 'DEN LOST (MIN 119, DEN 114) — correct decision was SUPPRESS/DOWNGRADE',
       });
     }
   }
 
+  const gameLabel = testParam === 'flip' 
+    ? 'DEN @ MIN — Apr 25, 2026 — FINAL: MIN 112, DEN 96'
+    : testParam === 'all'
+      ? 'Multiple games (Apr 20 + Apr 25)'
+      : 'DEN vs MIN — Apr 20, 2026 — FINAL: MIN 119, DEN 114';
+
   return new Response(JSON.stringify({
-    game: 'DEN vs MIN — Apr 20, 2026 — FINAL: MIN 119, DEN 114',
+    game: gameLabel,
     model: 'claude-opus-4-6',
     xgb_context: {
-      po: 'XGB 49.4%, floor 77%, divergence -27.6%, SHAP: progress=+0.43 pot=-0.35 efg=-0.27 paint=-0.25 fta=-0.24',
-      bwc: 'XGB 54.8%, floor 77%, divergence -22.2%, SHAP: progress=+0.43 pot=-0.32 paint=-0.27 efg=-0.25 fta=-0.23',
+      po_apr20: 'XGB 49.4%, floor 77%, divergence -27.6%',
+      bwc_apr20: 'XGB 54.8%, floor 77%, divergence -22.2%',
+      flip_apr25: 'XGB 37.6%, floor 68%, divergence -30.4%, SHAP: efg=-0.84 biglead=-0.53',
     },
     comparisons,
     full_results: tests.map(t => ({
