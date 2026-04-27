@@ -21,6 +21,9 @@
 [functions."test-bdl"]
   timeout = 60
 
+[functions."xgb-replay"]
+  timeout = 120
+
 [functions."post-game-agent"]
   timeout = 120
 
