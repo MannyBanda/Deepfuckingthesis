@@ -28,13 +28,32 @@ XGB confidence splits BUY-eligible snapshots dramatically:
 - **EXIT SIGNAL** (floor ≥ 0.60, XGB < 0.40, Q3+): **3.5%** (205 games)
 - **STRONG BWC** (both ≥ 0.65, leading): **93.2%** (1,187 games)
 
-### 3. Graduation Enhancement
-- S-rank + XGB ≥ 0.55: **96.1%** → S-rank + XGB < 0.55: **52.0%**
-- A-rank + XGB ≥ 0.55: **52.3%** → A-rank + XGB < 0.55: **22.5%**
-- 0 flips + XGB ≥ 0.55: **97.5%** → 0 flips + XGB < 0.55: **4.8%** (catches 20/21 "impossible losses")
+### 3. Graduation Enhancement (CORRECTED — BWC team perspective)
+
+**Note:** Graduation labels were recomputed using the real `classifyBWCTier` logic (DOMINANT + lead≥8 + 4 holds + ≤1 opp indicator = A). Numbers track the BWC team (first team to fire), not the ctrl team at each snapshot. Sample sizes on A-rank XGB<0.55 are small (n=7) — treat as directional, validate with live data.
+
+**A-rank peak:**
+- XGB ≥ 0.55: **80.2%** (n=449) → XGB < 0.55: **14.3%** (n=7, small sample)
+
+**B-rank peak (where XGB adds most value):**
+- XGB ≥ 0.55: **62.3%** (n=355) → XGB < 0.55: **27.4%** (n=73)
+
+**Zero flips:**
+- XGB ≥ 0.55: **97.2%** (n=463) → XGB < 0.55: **32.1%** (n=28)
+
+**2+ flips (biggest split — 717 games):**
+- XGB ≥ 0.55: **69.2%** (n=491) → XGB < 0.55: **9.7%** (n=226)
+
+**C→A graduation × XGB confidence tiers:**
+- XGB 70-80%: 72.7% (n=44), XGB 80%+: 81.7% (n=372)
+
+**C→B graduation × XGB confidence tiers:**
+- XGB <40%: 23.1% (n=13), XGB 60-70%: 60.6% (n=94), XGB 70-80%: 69.0% (n=100)
+
+**Discrepancy note:** Backtest tier journey reports C→A at 92.3% (n=842), our replication gets 78.7% (n=437). The backtest's graduation logic has checkpoint coverage and hold counting nuances not fully captured in the exported snapshot data. Exact graduation × XGB thresholds should be validated with live system graduation labels.
 
 ### 4. Shift Detection
-XGB dropped below 0.50 before the floor in **100%** of games where the ctrl team lost (365/365). Average lead time: 30.5 minutes.
+XGB dropped below 0.50 before the floor in **100%** of games where the ctrl team lost (365/365). Average lead time: 30.5 minutes. (Note: floor by design can't drop below 0.50 for the ctrl team — it flips instead. So this measures XGB catching decay before the flip happens.)
 
 ### 5. Trailing Team Accuracy
 When floor says BUY (≥ 0.65) and team is trailing:
@@ -67,6 +86,7 @@ I3 (Shot Quality) and I5 (Momentum) rank lowest among indicators.
 - XGB is trained on cumulative stats — same anchoring problem as floor, partially mitigated by game_progress feature
 - Backtest uses in-sample model predictions (not OOF) for game replays — live performance may differ
 - 1,235 games is strong but playoffs-only would be a useful subsample
+- Graduation × XGB has a labeling discrepancy: our replication of `classifyBWCTier` produces different tier distributions than the backtest tier journey report (437 C→A vs 842 C→A). Checkpoint coverage, hold counting, or conv_tier mapping differences likely cause this. Live system graduation labels will provide ground truth for Phase 2 gate thresholds
 
 ## Next Steps
 

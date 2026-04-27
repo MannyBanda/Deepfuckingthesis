@@ -15,7 +15,7 @@ The floor score is a hand-crafted composite of five indicators (I1-I5) that meas
 
 **B. Structural shift detection.** In 100% of games where the control team lost (365/365), XGBoost dropped below 0.50 before the floor recognized the shift. The floor can't drop below 0.50 for the ctrl team by design — it just eventually flips. XGBoost sees the decay in raw stats before the indicator composites cross their thresholds.
 
-**C. Graduation validation.** S-rank drops from 96.1% to 52.0% when XGBoost disagrees. Zero-flip games drop from 97.5% to 4.8%. A-rank splits 52.3% / 22.5%. The graduation system identifies process consistency; XGBoost validates whether that consistency reflects genuine structural quality or inflated indicators.
+**C. Graduation validation.** A-rank peak with XGB agreement is 80.2%; without it, 14.3% (small sample, n=7). B-rank splits 62.3% / 27.4% (n=73 disagreements). Zero-flip games split 97.2% / 32.1%. The biggest actionable split: 2+ flip games go from 69.2% (XGB agrees) to 9.7% (XGB disagrees) across 717 games. The graduation system identifies process consistency; XGBoost validates whether that consistency reflects genuine structural quality or inflated indicators. Exact graduation × XGB thresholds need validation with live system graduation labels — our backtest replication has a labeling discrepancy vs the tier journey report.
 
 ---
 
@@ -160,7 +160,7 @@ Based on backtest findings, these are the gates to evaluate once live data confi
 | BWC (leading) | XGB < 0.40 → hard suppress | 6.1% win rate |
 | EXIT | XGB < 0.40 + Q3+ → fire XGB_EXIT_WARNING | 3.5% win rate (EXIT SIGNAL tier) |
 | POSITION_SAFE | XGB < 0.50 → suppress reassurance | Don't confirm a position XGB doubts |
-| Graduation | XGB < 0.55 at graduation → cap at B-rank | S-rank drops to 52%, A-rank to 22.5% |
+| Graduation | XGB < 0.55 at graduation → downgrade confidence | B-rank drops to 27.4%, 2+ flips to 9.7%. A-rank sample too small (n=7) for hard gate — validate live |
 
 **These gates are NOT implemented in the advisory phase.** They're documented here as the spec for promotion. The learning agent accumulates the data to validate each gate threshold.
 
