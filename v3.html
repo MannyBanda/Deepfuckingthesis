@@ -1259,22 +1259,26 @@ function renderWPChart(cs,hA,aA){
   var W=600,H=80;
   var pts=hist.filter(function(p){return p.homeWP!=null;});
   if(pts.length<2)return'<div class="wp-canvas" style="height:40px"></div>';
-  var pathD='',fillD='M0,'+H/2;
+  var pathD='',fillD='M0,'+H/2,fillDownD='M0,'+H/2;
   for(var i=0;i<pts.length;i++){
     var px=(i/(pts.length-1))*W;
     var py=(1-pts[i].homeWP)*H;
     if(i===0)pathD+='M'+px.toFixed(1)+','+py.toFixed(1);
     else pathD+='L'+px.toFixed(1)+','+py.toFixed(1);
     fillD+='L'+px.toFixed(1)+','+Math.min(py,H/2).toFixed(1);
+    fillDownD+='L'+px.toFixed(1)+','+Math.max(py,H/2).toFixed(1);
   }
   fillD+='L'+W+','+H/2+'Z';
+  fillDownD+='L'+W+','+H/2+'Z';
   var lastPt=pts[pts.length-1];
   var lastX=W,lastY=(1-lastPt.homeWP)*H;
   var html='<div class="wp-canvas"><svg class="wp-svg" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none">';
-  html+='<defs><linearGradient id="wpFill-'+esc(hA)+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#34D399" stop-opacity="0.35"/><stop offset="100%" stop-color="#34D399" stop-opacity="0"/></linearGradient></defs>';
+  html+='<defs><linearGradient id="wpFill-'+esc(hA)+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#34D399" stop-opacity="0.35"/><stop offset="100%" stop-color="#34D399" stop-opacity="0"/></linearGradient>';
+  html+='<linearGradient id="wpFillDown-'+esc(hA)+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#F87171" stop-opacity="0"/><stop offset="100%" stop-color="#F87171" stop-opacity="0.35"/></linearGradient></defs>';
   html+='<line x1="0" y1="'+H/2+'" x2="'+W+'" y2="'+H/2+'" stroke="rgba(255,255,255,0.05)" stroke-dasharray="3 4"/>';
   for(var q=1;q<=3;q++)html+='<line x1="'+(q/4*W)+'" y1="0" x2="'+(q/4*W)+'" y2="'+H+'" stroke="rgba(255,255,255,0.04)"/>';
   html+='<path d="'+fillD+'" fill="url(#wpFill-'+esc(hA)+')"/>';
+  html+='<path d="'+fillDownD+'" fill="url(#wpFillDown-'+esc(hA)+')"/>';
   html+='<path d="'+pathD+'" fill="none" stroke="#34D399" stroke-opacity="0.8" stroke-width="1.5" stroke-linejoin="round"/>';
   html+='<circle cx="'+lastX.toFixed(1)+'" cy="'+lastY.toFixed(1)+'" r="3.5" fill="#34D399" opacity="0.3"/>';
   html+='<circle cx="'+lastX.toFixed(1)+'" cy="'+lastY.toFixed(1)+'" r="2" fill="#34D399"/>';
