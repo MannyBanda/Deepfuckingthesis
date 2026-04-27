@@ -45,6 +45,32 @@ function predictXGB(features) {
   return 1 / (1 + Math.exp(-(baseLogit + sum)));
 }
 
+var XGB_FEATURE_LABELS = ['progress','paint','pot','to','stl','oreb','ast','blk','fta','efg','biglead','3pr','rim_pct','runs'];
+
+// Tree interpreter SHAP — decomposes XGB prediction into per-feature contributions
+// Uses precomputed expected values (ev) at each tree node. O(trees × depth) per call.
+// Returns top 5 features sorted by |contribution| in logit space.
+function computeXGBContributions(features) {
+  if (!features || !XGB_MODEL?.trees?.[0]?.ev) return null;
+  var contribs = new Float64Array(14);
+  for (var ti = 0; ti < XGB_MODEL.trees.length; ti++) {
+    var tree = XGB_MODEL.trees[ti];
+    var node = 0;
+    while (tree.l[node] !== -1) {
+      var feat = tree.s[node];
+      var child = (features[feat] ?? 0) < tree.c[node] ? tree.l[node] : tree.r[node];
+      contribs[feat] += tree.ev[child] - tree.ev[node];
+      node = child;
+    }
+  }
+  var ranked = [];
+  for (var i = 0; i < 14; i++) {
+    ranked.push({ f: XGB_FEATURE_LABELS[i], v: Math.round(contribs[i] * 1000) / 1000 });
+  }
+  ranked.sort(function(a, b) { return Math.abs(b.v) - Math.abs(a.v); });
+  return ranked.slice(0, 5);
+}
+
 function extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock) {
   if (!summary?.home?.statistics || !summary?.away?.statistics) return null;
   const hs = summary.home.statistics, as = summary.away.statistics;
@@ -5879,6 +5905,12 @@ export default async function(req) {
                   period: currentPeriod,
                   clock: clock,
                 };
+
+                // ── XGB + SHAP at checkpoint ──
+                if (_xgbFeatures && _xgbWinProb != null) {
+                  cpEntry.xgb = Math.round(_xgbWinProb * 1000) / 1000;
+                  cpEntry.shap = computeXGBContributions(_xgbFeatures);
+                }
 
                 // ── Checkpoint-level control flip detection ──
                 if (lt.checkpoints.length > 0) {
