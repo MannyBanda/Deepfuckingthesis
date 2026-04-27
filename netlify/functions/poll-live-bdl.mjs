@@ -11,8 +11,100 @@
 // ══════════════════════════════════════════════════════════════════════════════
 
 import { neon } from '@neondatabase/serverless';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 
-// ── CONFIG ──────────────────────────────────────────────────────────────────
+// ── XGBOOST MODEL ──────────────────────────────────────────────────────────
+// Raw stats structural model — 300 trees, 14 features, trained on 1,235 games.
+// Provides independent win probability from raw box score stats without using
+// margin, indicators, or floor score. Used as advisory signal + gate layer.
+var XGB_MODEL = null;
+try {
+  const __xgbDir = dirname(fileURLToPath(import.meta.url));
+  XGB_MODEL = JSON.parse(readFileSync(join(__xgbDir, 'xgb-model.json'), 'utf8'));
+} catch (e) { /* non-fatal — system operates without XGB */ }
+
+// XGB feature order (must match training):
+// [0] game_progress, [1] ctrl_paint_diff, [2] ctrl_pot_diff, [3] ctrl_to_diff,
+// [4] ctrl_stl_diff, [5] ctrl_oreb_diff, [6] ctrl_ast_diff, [7] ctrl_blk_diff,
+// [8] ctrl_fta_diff, [9] ctrl_efg_diff, [10] ctrl_biglead_diff,
+// [11] ctrl_3pr_diff, [12] ctrl_rim_pct_diff, [13] ctrl_run_share
+function predictXGB(features) {
+  if (!XGB_MODEL) return null;
+  let sum = 0;
+  for (const tree of XGB_MODEL.trees) {
+    let node = 0;
+    while (tree.l[node] !== -1) {
+      const fval = features[tree.s[node]] ?? 0;
+      node = fval < tree.c[node] ? tree.l[node] : tree.r[node];
+    }
+    sum += tree.w[node];
+  }
+  const baseLogit = Math.log(XGB_MODEL.base_score / (1 - XGB_MODEL.base_score));
+  return 1 / (1 + Math.exp(-(baseLogit + sum)));
+}
+
+function extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock) {
+  if (!summary?.home?.statistics || !summary?.away?.statistics) return null;
+  const hs = summary.home.statistics, as = summary.away.statistics;
+  const ctrlIsHome = ind.controlTeam === ind.homeAlias;
+  const flip = ctrlIsHome ? 1 : -1;
+
+  // Game progress: 0.0 = tipoff, 1.0 = end of Q4
+  let clockMin = 6;
+  try {
+    const parts = String(clock || '12:00').replace(/^Q\d+\s*/, '').split(':');
+    clockMin = parseInt(parts[0]) + (parseInt(parts[1] || 0)) / 60;
+  } catch (e) { /* use default */ }
+  const elapsed = (Math.min(currentPeriod, 4) - 1) * 12 + (12 - clockMin);
+  const progress = Math.min(elapsed / 48, 1.0);
+
+  // Shooting efficiency
+  const hFGA = Number(hs.field_goals_att || hs.fga || 0) || 0;
+  const aFGA = Number(as.field_goals_att || as.fga || 0) || 0;
+  const hFGM = Number(hs.field_goals_made || hs.fgm || 0) || 0;
+  const aFGM = Number(as.field_goals_made || as.fgm || 0) || 0;
+  const hFG3M = Number(hs.three_points_made || hs.fg3m || 0) || 0;
+  const aFG3M = Number(as.three_points_made || as.fg3m || 0) || 0;
+  const hFG3A = Number(hs.three_points_att || hs.fg3a || 0) || 0;
+  const aFG3A = Number(as.three_points_att || as.fg3a || 0) || 0;
+  const hEFG = hFGA > 0 ? (hFGM + 0.5 * hFG3M) / hFGA : 0;
+  const aEFG = aFGA > 0 ? (aFGM + 0.5 * aFG3M) / aFGA : 0;
+
+  // Rim efficiency (SR-only — 0 if unavailable)
+  const hRimM = Number(hs.field_goals_at_rim_made || 0) || 0;
+  const hRimA = Number(hs.field_goals_at_rim_att || 0) || 0;
+  const aRimM = Number(as.field_goals_at_rim_made || 0) || 0;
+  const aRimA = Number(as.field_goals_at_rim_att || 0) || 0;
+  const rimDiff = ((hRimM / Math.max(hRimA, 1)) - (aRimM / Math.max(aRimA, 1))) * flip;
+
+  // Run share (PBP — 0.5 if unavailable)
+  let runShare = 0.5;
+  if (pbpResult?.runs6) {
+    const hRuns = pbpResult.runs6.filter(r => r.team === ind.homeAlias).length;
+    const aRuns = pbpResult.runs6.filter(r => r.team === ind.awayAlias).length;
+    const totalRuns = hRuns + aRuns;
+    if (totalRuns > 0) runShare = (ctrlIsHome ? hRuns : aRuns) / totalRuns;
+  }
+
+  return [
+    progress,
+    (Number(hs.points_in_the_paint || hs.points_in_paint || 0) - Number(as.points_in_the_paint || as.points_in_paint || 0)) * flip,
+    (Number(hs.points_off_turnovers || 0) - Number(as.points_off_turnovers || 0)) * flip,
+    (Number(hs.turnovers || 0) - Number(as.turnovers || 0)) * flip,
+    (Number(hs.steals || 0) - Number(as.steals || 0)) * flip,
+    (Number(hs.offensive_rebounds || 0) - Number(as.offensive_rebounds || 0)) * flip,
+    (Number(hs.assists || 0) - Number(as.assists || 0)) * flip,
+    (Number(hs.blocks || 0) - Number(as.blocks || 0)) * flip,
+    (Number(hs.free_throws_att || 0) - Number(as.free_throws_att || 0)) * flip,
+    (hEFG - aEFG) * flip,
+    (Number(hs.biggest_lead || 0) - Number(as.biggest_lead || 0)) * flip,
+    (hFGA > 0 && aFGA > 0 ? (hFG3A / hFGA - aFG3A / aFGA) : 0) * flip,
+    rimDiff,
+    runShare,
+  ];
+}
 
 const LEAGUES = {
   nba: {
@@ -289,6 +381,9 @@ ${ctx.floorMarginSignal && ctx.floorMarginSignal.signal !== 'INSUFFICIENT'
     + (ctx.floorMarginSignal.signal === 'CONVERGING_DOWN' ? '\nBoth structure and scoreboard declining \u2014 genuine structural decay. Erosion signal is trustworthy.' : '')
     + (ctx.floorMarginSignal.signal === 'DIVERGING_NEGATIVE' ? '\nFloor is rising but margin is shrinking \u2014 structure improving but not translating to scoreboard.' : '')
   : 'Insufficient checkpoint data for floor-margin analysis'}
+${ctx.xgbWinProb != null ? `\nXGBOOST STRUCTURAL MODEL (independent — trained on raw stats, does NOT use floor/indicators/margin):
+XGB win probability: ${(ctx.xgbWinProb * 100).toFixed(1)}% | Floor: ${(ctx.floor * 100).toFixed(1)}% | ${ctx.xgbAligned ? 'ALIGNED' : '⚠️ DIVERGENT (' + (ctx.xgbDivergence > 0 ? '+' : '') + (ctx.xgbDivergence * 100).toFixed(1) + '%)'}
+${!ctx.xgbAligned && ctx.xgbWinProb < 0.45 ? 'WARNING: XGBoost sees < 45% win probability from raw stats despite floor at ' + ctx.floor + '. In 1,235-game backtest, BUY-eligible alerts with XGB < 0.45 win only 11%. Consider SUPPRESS.' : ''}${!ctx.xgbAligned && ctx.xgbWinProb > ctx.floor + 0.15 ? 'NOTE: XGBoost sees stronger edge than floor — raw stats outpace composite indicators.' : ''}` : ''}
 
 FLOOR TRAJECTORY:
 ${ctx.floorHistory || 'No prior snapshots'}
@@ -441,6 +536,7 @@ TP: ${ctx.tpClass || 'N/A'} (trailing team comeback path: STRONG>PROBABLE>CONTES
 LS: ${ctx.lsClass || 'N/A'} (leading team margin safety: SAFE>CUSHIONED>AT RISK>CRITICAL)
 Ctrl sust: ${ctx.ctrlSust || 'N/A'} | Opp sust: ${ctx.oppSust || 'N/A'}
 Window score: ${ctx.windowScore || 'N/A'}
+${ctx.xgbWinProb != null ? 'XGBoost structural model: ' + (ctx.xgbWinProb * 100).toFixed(1) + '% win probability (independent raw-stats model, trained on 1,235 games). ' + (ctx.xgbAligned ? 'ALIGNED with floor.' : '⚠️ DIVERGENT from floor (' + (ctx.xgbDivergence > 0 ? '+' : '') + (ctx.xgbDivergence * 100).toFixed(1) + '%).') : ''}
 
 INDICATORS (control-team-relative, scale: 1.0=ctrl dominates, 0.0=opponent dominates, 0.5=even):
 I1 Disruption: ${ctx.i1} | I2 Interior: ${ctx.i2} | I3 Shot Quality: ${ctx.i3} | I4 Game Control: ${ctx.i4} | I5 Execution: ${ctx.i5}
@@ -4191,6 +4287,9 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           edge: aaEdge, ml: aaML, spread: odds?.homeSpread || null,
           tpClass, lsClass, ctrlSust, oppSust: oppSust,
           windowScore: clientCtx?.rollingWindow?.score || null,
+          xgbWinProb: _xgbWinProb != null ? Math.round(_xgbWinProb * 1000) / 1000 : null,
+          xgbDivergence: _xgbDivergence,
+          xgbAligned: _xgbAligned,
           convictionTier: calConviction.tier, convictionCombo: calConviction.combo,
           convictionPairs: calConviction.pairs?.join(', ') || '',
           i1: (ctrlIsHome ? ind.I1?.score : ind.I1?.score != null ? 1 - ind.I1.score : null)?.toFixed(2),
@@ -4247,8 +4346,8 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
 
         // Always INSERT to alerts table for accuracy tracking
         try {
-          await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team)
-            VALUES (${game.id}, ${league}, ${'AUTO_ANALYSIS'}, ${period}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${aaEdge}, ${aaML ? parseInt(aaML) : null}, ${odds?.homeSpread ? parseFloat(odds.homeSpread) : null}, ${tpClass}, ${lsClass}, ${ctrlSust}, ${oppSust}, ${clientCtx?.rollingWindow?.score ?? null}, ${'ANALYSIS'}, ${aaDecision}, ${aaReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${calConviction.tier}, ${calConviction.combo}, ${aaNtfySent}, ${ind.controlTeam})`;
+          await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
+            VALUES (${game.id}, ${league}, ${'AUTO_ANALYSIS'}, ${period}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${aaEdge}, ${aaML ? parseInt(aaML) : null}, ${odds?.homeSpread ? parseFloat(odds.homeSpread) : null}, ${tpClass}, ${lsClass}, ${ctrlSust}, ${oppSust}, ${clientCtx?.rollingWindow?.score ?? null}, ${'ANALYSIS'}, ${aaDecision}, ${aaReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${calConviction.tier}, ${calConviction.combo}, ${aaNtfySent}, ${ind.controlTeam}, ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
         } catch (e) { log(`${matchup}: ${triggerTag} alert save failed: ${e.message}`); }
 
         if (aaDecision === 'SEND') {
@@ -5064,7 +5163,11 @@ export default async function(req) {
           }
           const conviction = computeConviction(ind);
 
-          // Floor reliability lookup
+          // XGBoost structural win probability
+          const _xgbFeatures = extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock);
+          const _xgbWinProb = _xgbFeatures ? predictXGB(_xgbFeatures) : null;
+          const _xgbDivergence = _xgbWinProb != null ? Math.round((_xgbWinProb - ind.score) * 1000) / 1000 : null;
+          const _xgbAligned = _xgbWinProb != null ? Math.abs(_xgbWinProb - ind.score) < 0.15 : null;
           const _floorWP = lookupFloorWP(_floorWPCoeffs, ind.controlTeam, ind.score);
 
           // ── FALLBACK THESIS — catch games where pregame cron missed the window ──
@@ -5204,7 +5307,8 @@ export default async function(req) {
               spread, deficit, trailing_team, lead_sust, gap, accel,
               i1, i2, i3, i4, i5, source, lead_class, sust_json,
               tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json,
-              bwc_state, grad_rank, floor_wp_historical, reliability_class, window_score)
+              bwc_state, grad_rank, floor_wp_historical, reliability_class, window_score,
+              xgb_win_prob, xgb_divergence)
             VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
               ${ind.score}, ${ind.controlTeam}, ${null}, ${null}, ${null},
               ${null}, ${null}, ${espnWP?.home || null}, ${espnWP?.away || null},
@@ -5213,9 +5317,10 @@ export default async function(req) {
               ${'server'}, ${leadClass}, ${sustJson},
               ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
               ${_snapLT?.bwc_fired ? (_snapLT._prev_bwc_state || null) : null}, ${_snapLT?.cp_peak_rank || null},
-              ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore})
+              ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore},
+              ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbDivergence})
           `;
-          log(`${matchup}: snapshot saved — floor:${ind.score} I1-5:${ind.I1?.score},${ind.I2?.score},${ind.I3?.score},${ind.I4?.score},${ind.I5?.score} tp:${snapTp?.classification||'-'} ls:${snapLs?.classification||'-'}`);
+          log(`${matchup}: snapshot saved — floor:${ind.score} I1-5:${ind.I1?.score},${ind.I2?.score},${ind.I3?.score},${ind.I4?.score},${ind.I5?.score} tp:${snapTp?.classification||'-'} ls:${snapLs?.classification||'-'} xgb:${_xgbWinProb != null ? _xgbWinProb.toFixed(3) : '-'}`);
 
           // Save odds to odds_history table if we got data
           if (odds) {
@@ -5523,6 +5628,10 @@ export default async function(req) {
                 floorWPHistorical: _floorWP.wp,
                 reliabilityClass: _floorWP.reliabilityClass,
                 floorGrip: _floorWP.grip,
+                // XGBoost structural model
+                xgbWinProb: _xgbWinProb != null ? Math.round(_xgbWinProb * 1000) / 1000 : null,
+                xgbDivergence: _xgbDivergence,
+                xgbAligned: _xgbAligned,
               };
 
               // DB-level dedup — catch concurrent invocations BEFORE burning agent tokens
@@ -5547,6 +5656,31 @@ export default async function(req) {
 
               // Insert lock row immediately — concurrent invocations will hit this in dedup check
               let _lockRowId = null;
+
+              // ── XGB GATE (Phase 2) — hard suppress before burning agent tokens ──
+              const _xgbGatesEnabled = process.env.XGB_GATES_ENABLED === 'true';
+              let _xgbGateSuppress = false;
+              if (_xgbGatesEnabled && _xgbWinProb != null) {
+                // BUY/BWC/WINDOW_BUY with XGB < 0.40 → hard suppress (7% / 6% win rate in backtest)
+                if ((v2Type === 'BUY' || v2Type === 'BWC' || v2Type === 'WINDOW_BUY') && _xgbWinProb < 0.40) {
+                  _xgbGateSuppress = true;
+                  log(`${matchup}: XGB GATE — suppressing ${v2Type} (xgb=${_xgbWinProb.toFixed(3)}, floor=${ind.score})`);
+                }
+                // POSITION_SAFE with XGB < 0.50 → don't confirm a position XGB doubts
+                if (v2Type === 'POSITION_SAFE' && _xgbWinProb < 0.50) {
+                  _xgbGateSuppress = true;
+                  log(`${matchup}: XGB GATE — suppressing ${v2Type} (xgb=${_xgbWinProb.toFixed(3)})`);
+                }
+              }
+
+              if (_xgbGateSuppress) {
+                try {
+                  await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, alert_tier, agent_decision, agent_reasoning, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
+                    VALUES (${game.id}, ${league}, ${v2Type}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${ctrlTrailing}, ${v2Tier}, ${'XGB_SUPPRESS'}, ${'XGBoost structural model at ' + (_xgbWinProb * 100).toFixed(1) + '% — below gate threshold. Floor ' + ind.score + ' diverges from raw stats read.'}, ${false}, ${v2Type === 'EXIT' ? (lt.bwc_fired?.team || ind.controlTeam) : ind.controlTeam}, ${Math.round(_xgbWinProb * 10000) / 10000}, ${_xgbAligned})`;
+                } catch(e) { /* non-fatal */ }
+                return;
+              }
+
               try {
                 const _lr = await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, alert_tier, agent_decision, agent_reasoning, ntfy_sent, position_team)
                   VALUES (${game.id}, ${league}, ${v2Type}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${ctrlTrailing}, ${v2Tier}, ${'PENDING'}, ${'Agent call in progress'}, ${false}, ${v2Type === 'EXIT' ? (lt.bwc_fired?.team || ind.controlTeam) : ind.controlTeam})
@@ -5662,7 +5796,8 @@ export default async function(req) {
                   i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent,
                   bwc_state, erosion_level, peak_floor, exit_severity,
                   graduation_rank, mf_trajectory, combined_read, cp_eligible_count,
-                  cp_ctrl_flips, lane, position_closed, is_flip_buy, cp_mean_floor, position_team)
+                  cp_ctrl_flips, lane, position_closed, is_flip_buy, cp_mean_floor, position_team,
+                  xgb_win_prob, xgb_aligned)
                   VALUES (${game.id}, ${league}, ${v2Type}, ${currentPeriod}, ${clock}, ${ind.controlTeam},
                   ${ind.score}, ${margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal},
                   ${tpForBuy?.classification || null}, ${lsForBWC?.classification || null},
@@ -5676,7 +5811,8 @@ export default async function(req) {
                   ${alertCtx?.combinedRead?.read || null}, ${lt.cp_eligible_count || null},
                   ${lt.cp_ctrl_flips || null}, ${lt.lane || null},
                   ${lt.position_closed || false}, ${!!(v2IsBuy && lt._flipBuyContext)},
-                  ${lt.cp_mean_floor || null}, ${v2Type === 'EXIT' ? (lt.bwc_fired?.team || ind.controlTeam) : ind.controlTeam})`;
+                  ${lt.cp_mean_floor || null}, ${v2Type === 'EXIT' ? (lt.bwc_fired?.team || ind.controlTeam) : ind.controlTeam},
+                  ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
               } catch (e) { log(`${matchup}: v2 alert save failed: ${e.message}`); }
 
               // Cleanup lock row — full alert row now exists
@@ -6361,7 +6497,8 @@ export default async function(req) {
                       spread, deficit, trailing_team, lead_sust, lead_class,
                       i1, i2, i3, i4, i5, source, sust_json,
                       tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json,
-                      bwc_state, grad_rank, floor_wp_historical, reliability_class, window_score)
+                      bwc_state, grad_rank, floor_wp_historical, reliability_class, window_score,
+                      xgb_win_prob, xgb_divergence)
                     VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
                       ${ind.score}, ${ind.controlTeam}, ${espnWP?.home || null}, ${espnWP?.away || null},
                       ${spreadVal}, ${deficit}, ${trailingTeam}, ${leadSust}, ${leadClass},
@@ -6369,7 +6506,8 @@ export default async function(req) {
                       ${t.tag}, ${sustJson},
                       ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
                       ${lt?.bwc_fired ? (lt._prev_bwc_state || null) : null}, ${lt?.cp_peak_rank || null},
-                      ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore})
+                      ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore},
+                      ${_xgbWinProb != null ? Math.round(_xgbWinProb * 1000) / 1000 : null}, ${_xgbDivergence})
                   `;
                   log(`${matchup}: ${t.label} CAL snapshot saved — floor ${ind.controlTeam} ${ind.score} | sust:${leadSust || '?'} class:${leadClass || '?'} | WP:${espnWP?.home || '?'}% | spd:${spreadVal != null ? spreadVal : 'N/A'}`);
                 } catch (e) {
