@@ -409,6 +409,7 @@ ${ctx.floorMarginSignal && ctx.floorMarginSignal.signal !== 'INSUFFICIENT'
   : 'Insufficient checkpoint data for floor-margin analysis'}
 ${ctx.xgbWinProb != null ? `\nXGBOOST STRUCTURAL MODEL (independent — trained on raw stats, does NOT use floor/indicators/margin):
 XGB win probability: ${(ctx.xgbWinProb * 100).toFixed(1)}% | Floor: ${(ctx.floor * 100).toFixed(1)}% | ${ctx.xgbAligned ? 'ALIGNED' : '⚠️ DIVERGENT (' + (ctx.xgbDivergence > 0 ? '+' : '') + (ctx.xgbDivergence * 100).toFixed(1) + '%)'}
+${ctx.xgbShap ? 'SHAP drivers (what raw stats push XGB prediction): ' + ctx.xgbShap.filter(s => Math.abs(s.v) >= 0.05).map(s => s.f + '=' + (s.v > 0 ? '+' : '') + s.v.toFixed(2)).join(', ') : ''}
 ${!ctx.xgbAligned && ctx.xgbWinProb < 0.45 ? 'WARNING: XGBoost sees < 45% win probability from raw stats despite floor at ' + ctx.floor + '. In 1,235-game backtest, BUY-eligible alerts with XGB < 0.45 win only 11%. Consider SUPPRESS.' : ''}${!ctx.xgbAligned && ctx.xgbWinProb > ctx.floor + 0.15 ? 'NOTE: XGBoost sees stronger edge than floor — raw stats outpace composite indicators.' : ''}` : ''}
 
 FLOOR TRAJECTORY:
@@ -525,6 +526,21 @@ ${ctx.positionClosed ? '  POST-EXIT RECOVERY: Position is CLOSED — the subscri
     LANE ADJUSTMENT for underdogs (lane = underdog, ML > +100): Raise opponent floor threshold by +0.05 to preserve high-payout positions. Q3 BUY: opponent needs 0.65. Q2 BUY: opponent needs 0.65. Q4 BUY: opponent needs 0.55.
     FLIP BUY SIGNAL: When EXIT on a BUY-opened position AND opponent floor >= 0.65, note in the body that structural reversal suggests a potential entry on the opponent side.
   REINFORCING (DOMINANT/STRONG combined read) = cumulative floor is trustworthy, proceed normally with per-alert-type rules.
+- XGB REASONING (use SHAP drivers to interpret floor-XGB disagreements):
+  ALIGNED (within 15%): Both systems independently agree — strongest signal. Proceed with normal rules.
+  DIVERGENT — XGB BELOW FLOOR: SHAP tells you why.
+  • efg as primary negative driver → shooting variance. Cross-ref sustainability: LOCKED/DURABLE sust = structural shooting gap (XGB may be right). FRAGILE/UNSUSTAINABLE sust = sust already flags this — don't double-penalize. If efg is the SOLE large negative SHAP driver and sust favors ctrl team, XGB may be overreacting to shooting variance the framework expects to regress.
+  • paint/fta/oreb as negative drivers → STRUCTURAL interior weakness. The cumulative floor may be anchoring past early-game dominance that has since eroded. Weight XGB heavily — these are the core structural signals.
+  • biglead negative = team hasn't converted structural control to scoreboard separation. Effort-based production risk (hustle stats inflating floor without actual dominance).
+  • to negative = turnover differential hurting. If ctrl team's TO count is elevated, structural edge is compromised regardless of other indicators.
+  DIVERGENT — XGB ABOVE FLOOR: Raw stats outpace composite indicators. paint/fta/oreb positive = interior structural dominance floor hasn't fully weighted. BUY/VALUE becomes more attractive.
+  DECISION GUIDANCE:
+  • BUY/VALUE with XGB < 0.40: lean SUPPRESS (backtest: 11% win rate) unless efg is sole negative SHAP driver + sust favorable (shooting variance thesis intact).
+  • EXIT with XGB < 0.40: CONFIRMS exit thesis (backtest: 3.5% win rate at floor >= 0.60). Lean SEND.
+  • BWC/PO with XGB < 0.50 + paint/fta negative in SHAP: lean DOWNGRADE — interior dominance thesis failing in raw stats.
+  • Floor > 0.70 AND XGB > 0.70: highest-conviction combined read. Both systems see structural dominance.
+  • Zero CP flips + XGB aligned: 97.2% win rate. Near-automatic SEND for any alert type.
+  • 2+ CP flips + XGB < 0.50: 9.7% win rate. Near-automatic SUPPRESS.
 - REASONING AS JOURNAL: Even when SUPPRESS, write thorough reasoning. It feeds subsequent decisions.
 
 BODY RULES (read by non-technical bettors on their phone):
@@ -562,7 +578,7 @@ TP: ${ctx.tpClass || 'N/A'} (trailing team comeback path: STRONG>PROBABLE>CONTES
 LS: ${ctx.lsClass || 'N/A'} (leading team margin safety: SAFE>CUSHIONED>AT RISK>CRITICAL)
 Ctrl sust: ${ctx.ctrlSust || 'N/A'} | Opp sust: ${ctx.oppSust || 'N/A'}
 Window score: ${ctx.windowScore || 'N/A'}
-${ctx.xgbWinProb != null ? 'XGBoost structural model: ' + (ctx.xgbWinProb * 100).toFixed(1) + '% win probability (independent raw-stats model, trained on 1,235 games). ' + (ctx.xgbAligned ? 'ALIGNED with floor.' : '⚠️ DIVERGENT from floor (' + (ctx.xgbDivergence > 0 ? '+' : '') + (ctx.xgbDivergence * 100).toFixed(1) + '%).') : ''}
+${ctx.xgbWinProb != null ? 'XGBoost structural model: ' + (ctx.xgbWinProb * 100).toFixed(1) + '% win probability (independent raw-stats model). ' + (ctx.xgbAligned ? 'ALIGNED with floor.' : '⚠️ DIVERGENT from floor (' + (ctx.xgbDivergence > 0 ? '+' : '') + (ctx.xgbDivergence * 100).toFixed(1) + '%).') + (ctx.xgbShap ? ' SHAP: ' + ctx.xgbShap.filter(s => Math.abs(s.v) >= 0.05).map(s => s.f + '=' + (s.v > 0 ? '+' : '') + s.v.toFixed(2)).join(', ') : '') : ''}
 
 INDICATORS (control-team-relative, scale: 1.0=ctrl dominates, 0.0=opponent dominates, 0.5=even):
 I1 Disruption: ${ctx.i1} | I2 Interior: ${ctx.i2} | I3 Shot Quality: ${ctx.i3} | I4 Game Control: ${ctx.i4} | I5 Execution: ${ctx.i5}
@@ -4262,6 +4278,13 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
         const ctrlSust = sust?.[ctrlIsHome ? 'home' : 'away']?.tier || null;
         const oppSust = sust?.[ctrlIsHome ? 'away' : 'home']?.tier || null;
 
+        // XGB for auto-analysis (computed locally — poll-loop _xgb* vars are out of scope)
+        const _caXgbFeatures = extractXGBFeatures(summary, ind, null, period, clock);
+        const _caXgbWinProb = _caXgbFeatures ? predictXGB(_caXgbFeatures) : null;
+        const _caXgbDivergence = _caXgbWinProb != null ? Math.round((_caXgbWinProb - ind.score) * 1000) / 1000 : null;
+        const _caXgbAligned = _caXgbWinProb != null ? Math.abs(_caXgbWinProb - ind.score) < 0.15 : null;
+        const _caXgbShap = _caXgbFeatures ? computeXGBContributions(_caXgbFeatures) : null;
+
         // Compute edge/ML from odds (same as mechanical alert path)
         let aaEdge = null, aaML = null;
         if (odds && (odds.homeML || odds.awayML)) {
@@ -4313,9 +4336,10 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           edge: aaEdge, ml: aaML, spread: odds?.homeSpread || null,
           tpClass, lsClass, ctrlSust, oppSust: oppSust,
           windowScore: clientCtx?.rollingWindow?.score || null,
-          xgbWinProb: _xgbWinProb != null ? Math.round(_xgbWinProb * 1000) / 1000 : null,
-          xgbDivergence: _xgbDivergence,
-          xgbAligned: _xgbAligned,
+          xgbWinProb: _caXgbWinProb != null ? Math.round(_caXgbWinProb * 1000) / 1000 : null,
+          xgbDivergence: _caXgbDivergence,
+          xgbAligned: _caXgbAligned,
+          xgbShap: _caXgbShap,
           convictionTier: calConviction.tier, convictionCombo: calConviction.combo,
           convictionPairs: calConviction.pairs?.join(', ') || '',
           i1: (ctrlIsHome ? ind.I1?.score : ind.I1?.score != null ? 1 - ind.I1.score : null)?.toFixed(2),
@@ -4373,7 +4397,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
         // Always INSERT to alerts table for accuracy tracking
         try {
           await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
-            VALUES (${game.id}, ${league}, ${'AUTO_ANALYSIS'}, ${period}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${aaEdge}, ${aaML ? parseInt(aaML) : null}, ${odds?.homeSpread ? parseFloat(odds.homeSpread) : null}, ${tpClass}, ${lsClass}, ${ctrlSust}, ${oppSust}, ${clientCtx?.rollingWindow?.score ?? null}, ${'ANALYSIS'}, ${aaDecision}, ${aaReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${calConviction.tier}, ${calConviction.combo}, ${aaNtfySent}, ${ind.controlTeam}, ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
+            VALUES (${game.id}, ${league}, ${'AUTO_ANALYSIS'}, ${period}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${aaEdge}, ${aaML ? parseInt(aaML) : null}, ${odds?.homeSpread ? parseFloat(odds.homeSpread) : null}, ${tpClass}, ${lsClass}, ${ctrlSust}, ${oppSust}, ${clientCtx?.rollingWindow?.score ?? null}, ${'ANALYSIS'}, ${aaDecision}, ${aaReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${calConviction.tier}, ${calConviction.combo}, ${aaNtfySent}, ${ind.controlTeam}, ${_caXgbWinProb != null ? Math.round(_caXgbWinProb * 10000) / 10000 : null}, ${_caXgbAligned})`;
         } catch (e) { log(`${matchup}: ${triggerTag} alert save failed: ${e.message}`); }
 
         if (aaDecision === 'SEND') {
@@ -5658,6 +5682,7 @@ export default async function(req) {
                 xgbWinProb: _xgbWinProb != null ? Math.round(_xgbWinProb * 1000) / 1000 : null,
                 xgbDivergence: _xgbDivergence,
                 xgbAligned: _xgbAligned,
+                xgbShap: _xgbFeatures ? computeXGBContributions(_xgbFeatures) : null,
               };
 
               // DB-level dedup — catch concurrent invocations BEFORE burning agent tokens
@@ -6408,7 +6433,7 @@ export default async function(req) {
                 const _ssAgentResp = await fetch('https://api.anthropic.com/v1/messages', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-                  body: JSON.stringify({ model: 'claude-opus-4-20250514', max_tokens: 600, messages: [{ role: 'user', content: _ssPrompt }] }),
+                  body: JSON.stringify({ model: 'claude-opus-4-6', max_tokens: 600, messages: [{ role: 'user', content: _ssPrompt }] }),
                 });
                 const _ssAgentData = await _ssAgentResp.json();
                 const _ssAgentText = _ssAgentData.content?.[0]?.text || '';
