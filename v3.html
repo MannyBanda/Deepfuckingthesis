@@ -1027,12 +1027,10 @@ function renderCard(id){
         if(aML==='--'&&od.awayML)aML=esc(od.awayML);
       }
       if(!winnerTeam&&pred.edgeNum!=null)winnerTeam=pred.edgeNum>=0?hA:aA;
-      // Fallback: compare parsed FWP values to determine winner
-      if(!winnerTeam){
-        var hN=parseFloat(String(hFwp).replace('%',''))||0;
-        var aN=parseFloat(String(aFwp).replace('%',''))||0;
-        if(hN>aN+1)winnerTeam=hA;else if(aN>hN+1)winnerTeam=aA;
-      }
+      // Always re-derive winner from final parsed FWP values
+      var hN=parseFloat(String(hFwp).replace('%',''))||0;
+      var aN=parseFloat(String(aFwp).replace('%',''))||0;
+      if(hN>aN+1)winnerTeam=hA;else if(aN>hN+1)winnerTeam=aA;
 
       // Edge color helper
       function edgeHtml(val){
