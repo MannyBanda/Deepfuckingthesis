@@ -641,9 +641,9 @@ async function loadSchedule(){
     }catch(e){console.warn('[BDL] Status update failed:',e.message);}
 
     renderPills();
+    await fetchEspnScoreboard();
     mountAllCards();
     if(Object.keys(standingsCache).length===0)fetchStandings();
-    fetchEspnScoreboard();
 
     // ── Phase 2: DB hydration pipeline ──
     if(!dbReady)await initDB();
