@@ -5221,11 +5221,6 @@ export default async function(req) {
           }
           const conviction = computeConviction(ind);
 
-          // XGBoost structural win probability
-          const _xgbFeatures = extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock);
-          const _xgbWinProb = _xgbFeatures ? predictXGB(_xgbFeatures) : null;
-          const _xgbDivergence = _xgbWinProb != null ? Math.round((_xgbWinProb - ind.score) * 1000) / 1000 : null;
-          const _xgbAligned = _xgbWinProb != null ? Math.abs(_xgbWinProb - ind.score) < 0.15 : null;
           const _floorWP = lookupFloorWP(_floorWPCoeffs, ind.controlTeam, ind.score);
 
           // ── FALLBACK THESIS — catch games where pregame cron missed the window ──
@@ -5250,6 +5245,12 @@ export default async function(req) {
             || (summary.home?.periods || []).length
             || 0;
           const clock = summary.clock || '';
+
+          // XGBoost structural win probability
+          const _xgbFeatures = extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock);
+          const _xgbWinProb = _xgbFeatures ? predictXGB(_xgbFeatures) : null;
+          const _xgbDivergence = _xgbWinProb != null ? Math.round((_xgbWinProb - ind.score) * 1000) / 1000 : null;
+          const _xgbAligned = _xgbWinProb != null ? Math.abs(_xgbWinProb - ind.score) < 0.15 : null;
 
           // Compute deficit relative to control team
           const ctrlIsHome = ind.controlTeam === hA;
