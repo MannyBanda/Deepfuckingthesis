@@ -5773,7 +5773,7 @@ export default async function(req) {
                   await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, alert_tier, agent_decision, agent_reasoning, ntfy_sent, position_team)
                     VALUES (${game.id}, ${league}, ${v2Type}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${ctrlTrailing}, ${v2Tier}, ${'DB_DEDUP'}, ${'Concurrent invocation already sent — agent call skipped'}, ${false}, ${v2Type === 'EXIT' ? (lt.bwc_fired?.team || ind.controlTeam) : ind.controlTeam})`;
                 } catch(e) { /* non-fatal */ }
-                return;
+                return { decision: 'DB_DEDUP', sent: false };
               }
 
               // Insert lock row immediately — concurrent invocations will hit this in dedup check
@@ -5811,7 +5811,7 @@ export default async function(req) {
                   await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, alert_tier, agent_decision, agent_reasoning, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
                     VALUES (${game.id}, ${league}, ${v2Type}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${ctrlTrailing}, ${v2Tier}, ${'XGB_SUPPRESS'}, ${'XGBoost structural model at ' + (_xgbWinProb * 100).toFixed(1) + '% — below gate threshold. Floor ' + ind.score + ' diverges from raw stats read.'}, ${false}, ${v2Type === 'EXIT' ? (lt.bwc_fired?.team || ind.controlTeam) : ind.controlTeam}, ${Math.round(_xgbWinProb * 10000) / 10000}, ${_xgbAligned})`;
                 } catch(e) { /* non-fatal */ }
-                return;
+                return { decision: 'XGB_SUPPRESS', sent: false };
               }
 
               try {
@@ -5903,6 +5903,12 @@ export default async function(req) {
                   if (!lt.po_fired || lt.po_fired.team !== buyTeam) {
                     lt.po_fired = { team: buyTeam, rank: 'BUY', period: currentPeriod, clock, flipped: false };
                     lt._prev_bwc_state = computeBwcState(lt, ind.controlTeam, _v2Margin);
+                    // Commit PO sentinel — BUY already SENT by agent
+                    try {
+                      await sql`INSERT INTO game_checkpoints (game_id, label, period, clock, team, floor, margin, conv, opp_count)
+                        VALUES (${game.id}, ${'PO_ACTIVE'}, ${currentPeriod}, ${clock}, ${buyTeam}, ${ind.score}, ${_v2Margin}, ${'BUY'}, ${0})
+                        ON CONFLICT (game_id, label) DO NOTHING`;
+                    } catch(e) { log(`${matchup}: BUY PO sentinel failed: ${e.message}`); }
                     log(`${matchup}: Position OPENED via BUY — ${buyTeam} (rank: BUY, seeded state: ${lt._prev_bwc_state})`);
                   }
                   lt.position_closed = false;
@@ -5948,6 +5954,7 @@ export default async function(req) {
               }
 
               log(`${matchup}: ${shouldSend ? '★' : '○'} ${v2Type} ${v2Tier} ${agentDecision} — ${ind.controlTeam} ${ind.score.toFixed(2)} ${ctrlTrailing ? 'trailing' : 'leading'} by ${margin}${ctrlEdge != null ? ', edge ' + (ctrlEdge > 0 ? '+' : '') + ctrlEdge + '%' : ''}`);
+              return { decision: agentDecision, sent: shouldSend };
             }
 
             // ── V2 TRACKING ALERT (fires at BWC establishment) ──
@@ -5985,6 +5992,22 @@ export default async function(req) {
                   shap: typeof r.shap === 'string' ? JSON.parse(r.shap) : r.shap,
                 }));
               } catch (e) { log(`${matchup}: game_checkpoints read failed: ${e.message}`); }
+
+              // ── PO SENTINEL RECOVERY — race-safe position state from DB ──
+              const _poSentinel = cpArray.find(r => r.label === 'PO_ACTIVE');
+              if (_poSentinel && !lt.po_fired) {
+                lt.po_fired = {
+                  team: _poSentinel.team,
+                  rank: _poSentinel.conv || 'BUY',
+                  period: _poSentinel.period,
+                  clock: _poSentinel.clock,
+                  flipped: false, // flip state tracked via lt.bwc_flipped
+                  mean_floor: _poSentinel.floor,
+                };
+                log(`${matchup}: PO recovered from DB — ${_poSentinel.team} rank=${_poSentinel.conv} Q${_poSentinel.period} ${_poSentinel.clock}`);
+              }
+              // Filter sentinels out of checkpoint array (not structural snapshots)
+              cpArray = cpArray.filter(r => r.label !== 'PO_ACTIVE');
 
               // Derive next index from DB data (not lt — race-safe)
               let effectiveNextIdx = 0;
@@ -6093,7 +6116,19 @@ export default async function(req) {
               }
 
               // ── POSITION OPEN EVALUATION (post-capture, runs every cycle for convergence) ──
+              // SUPPRESS throttle — don't re-evaluate if agent recently SUPPRESS'd (3-min window)
+              let _poSuppressThrottled = false;
               if (lt.cp_graduation && (!lt.po_fired || lt.po_fired.rank === 'BUY') && ind.controlTeam === bwcTeam) {
+                try {
+                  const _recentSup = await sql`SELECT 1 FROM alerts WHERE game_id = ${game.id} AND alert_type = 'POSITION_OPEN' AND agent_decision = 'SUPPRESS' AND ts > NOW() - INTERVAL '3 minutes' AND position_team = ${bwcTeam} LIMIT 1`;
+                  if (_recentSup.length > 0) {
+                    _poSuppressThrottled = true;
+                    log(`${matchup}: PO throttled — agent SUPPRESS'd within 3 min for ${bwcTeam}`);
+                  }
+                } catch(e) { /* fail-open */ }
+              }
+
+              if (lt.cp_graduation && (!lt.po_fired || lt.po_fired.rank === 'BUY') && ind.controlTeam === bwcTeam && !_poSuppressThrottled) {
                 const gRank = lt.cp_graduation.rank;
                 const gates = getLaneGates(lt.lane || 'tossup');
 
@@ -6130,6 +6165,7 @@ export default async function(req) {
                 if (poShouldFire && alertMinsLeft >= 1.0) {
                   const poRank = gRank;
 
+                  // Set temporarily for agent context (poRank feeds v2Ctx)
                   lt.po_fired = {
                     team: bwcTeam, rank: poRank,
                     period: currentPeriod, clock: clock,
@@ -6139,8 +6175,21 @@ export default async function(req) {
                     checkpoint_count: lt.cp_eligible_count,
                   };
 
-                  await routeV2Alert('POSITION_OPEN', 'FIRED', null, false);
-                  log(`${matchup}: ★ POSITION OPEN — ${bwcTeam} ${poRank}-Rank | MF=${lt.cp_mean_floor?.toFixed(3)} minF=${lt.cp_min_floor?.toFixed(2)} lane=${lt.lane} cpFlips=${lt.cp_ctrl_flips || 0}`);
+                  const _poResult = await routeV2Alert('POSITION_OPEN', 'FIRED', null, false);
+
+                  if (_poResult?.decision === 'SUPPRESS') {
+                    // Rollback — position not committed, agent gets another chance in 3 min
+                    lt.po_fired = null;
+                    log(`${matchup}: PO SUPPRESS'd — rolled back, will re-evaluate in 3 min`);
+                  } else {
+                    // Commit — insert PO sentinel (race-safe, ON CONFLICT = upgrade from BUY)
+                    try {
+                      await sql`INSERT INTO game_checkpoints (game_id, label, period, clock, team, floor, margin, conv, opp_count)
+                        VALUES (${game.id}, ${'PO_ACTIVE'}, ${currentPeriod}, ${clock}, ${bwcTeam}, ${lt.cp_mean_floor || ind.score}, ${_v2Margin}, ${poRank}, ${0})
+                        ON CONFLICT (game_id, label) DO UPDATE SET team = EXCLUDED.team, floor = EXCLUDED.floor, conv = EXCLUDED.conv, period = EXCLUDED.period, clock = EXCLUDED.clock`;
+                    } catch(e) { log(`${matchup}: PO sentinel INSERT failed: ${e.message}`); }
+                    log(`${matchup}: ★ POSITION OPEN — ${bwcTeam} ${poRank}-Rank | MF=${lt.cp_mean_floor?.toFixed(3)} minF=${lt.cp_min_floor?.toFixed(2)} lane=${lt.lane} cpFlips=${lt.cp_ctrl_flips || 0}`);
+                  }
                 } else if (poBlockReason) {
                   log(`${matchup}: PO blocked — ${gRank}-Rank but ${poBlockReason}`);
                 }
@@ -6202,12 +6251,30 @@ export default async function(req) {
                     lt._prev_bwc_state = computeBwcState(lt, ind.controlTeam, _v2Margin);
 
                     await routeV2Alert('POSITION_OPEN', 'FIRED', null, false);
+
+                    // Commit flip sentinel — structural reality, always persisted
+                    try {
+                      await sql`INSERT INTO game_checkpoints (game_id, label, period, clock, team, floor, margin, conv, opp_count)
+                        VALUES (${game.id}, ${'PO_ACTIVE'}, ${currentPeriod}, ${clock}, ${oppTeam}, ${oppMF}, ${_v2Margin}, ${oppFlipRank}, ${0})
+                        ON CONFLICT (game_id, label) DO UPDATE SET team = EXCLUDED.team, floor = EXCLUDED.floor, conv = EXCLUDED.conv, period = EXCLUDED.period, clock = EXCLUDED.clock`;
+                    } catch(e) { log(`${matchup}: FLIP PO sentinel failed: ${e.message}`); }
+
                     v2BwcState = computeBwcState(lt, ind.controlTeam, _v2Margin);
                     log(`${matchup}: ★ FLIP PO — ${oppTeam} ${oppFlipRank}-Rank (${hadPriorPO ? 'supersedes prior PO on' : 'flipped from'} ${lt.original_bwc_team}) | oppMF=${oppMF.toFixed(3)} | ${oppEligible.length} opp CPs`);
                   }
                 }
               }
             } else if (lt.bwc_fired && !lt.po_fired && league === 'ncaamb') {
+              // ── NCAAMB PO sentinel recovery (not in game_checkpoints path) ──
+              try {
+                const _ncaaPO = await sql`SELECT team, conv, period, clock, floor FROM game_checkpoints WHERE game_id = ${game.id} AND label = 'PO_ACTIVE' LIMIT 1`;
+                if (_ncaaPO.length > 0) {
+                  lt.po_fired = { team: _ncaaPO[0].team, rank: _ncaaPO[0].conv || 'BUY', period: Number(_ncaaPO[0].period), clock: _ncaaPO[0].clock };
+                  log(`${matchup}: NCAAMB PO recovered from DB — ${_ncaaPO[0].team} rank=${_ncaaPO[0].conv}`);
+                }
+              } catch(e) { /* fail-open */ }
+              if (lt.po_fired) { /* recovered — skip NCAAMB PO evaluation */ } else {
+
               // ── NCAAMB: retain existing 60s-poll graduation logic (unchanged) ──
               if (!lt.graduation) lt.graduation = {};
               const bwcTeam = lt.bwc_fired.team;
@@ -6256,12 +6323,25 @@ export default async function(req) {
                   const isWireToWire = (lt.ctrl_flips || 0) === 0;
                   const poRank = (gRank === 'A' && isWireToWire) ? 'S' : gRank;
 
+                  // Set temporarily for agent context
                   lt.po_fired = {
                     team: bwcTeam, rank: poRank,
                     period: currentPeriod, clock
                   };
-                  await routeV2Alert('POSITION_OPEN', 'FIRED', null, false);
-                  log(`${matchup}: ★ POSITION OPEN — ${bwcTeam} ${poRank}-Rank Q${currentPeriod} ${clock}`);
+                  const _ncaaPOResult = await routeV2Alert('POSITION_OPEN', 'FIRED', null, false);
+
+                  if (_ncaaPOResult?.decision === 'SUPPRESS') {
+                    lt.po_fired = null;
+                    log(`${matchup}: PO SUPPRESS'd — rolled back, will re-evaluate in 3 min`);
+                  } else {
+                    // Commit PO sentinel
+                    try {
+                      await sql`INSERT INTO game_checkpoints (game_id, label, period, clock, team, floor, margin, conv, opp_count)
+                        VALUES (${game.id}, ${'PO_ACTIVE'}, ${currentPeriod}, ${clock}, ${bwcTeam}, ${ind.score}, ${_v2Margin}, ${poRank}, ${0})
+                        ON CONFLICT (game_id, label) DO UPDATE SET team = EXCLUDED.team, floor = EXCLUDED.floor, conv = EXCLUDED.conv, period = EXCLUDED.period, clock = EXCLUDED.clock`;
+                    } catch(e) { log(`${matchup}: NCAAMB PO sentinel failed: ${e.message}`); }
+                    log(`${matchup}: ★ POSITION OPEN — ${bwcTeam} ${poRank}-Rank Q${currentPeriod} ${clock}`);
+                  }
                 }
               }
 
@@ -6294,6 +6374,7 @@ export default async function(req) {
               } else {
                 lt.opp_bwc_holds = 0;
               }
+              } // close sentinel recovery guard
             }
 
             // ── V2 BWC STATE TRANSITIONS (gated on POSITION OPEN having fired) ──
