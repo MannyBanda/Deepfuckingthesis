@@ -2409,6 +2409,7 @@ async function fetchAlerts(){
     if(!Array.isArray(alerts))return;
     alerts.forEach(function(a){
       if(!a.game_id)return;
+      if(a.agent_decision==='DB_DEDUP')return;
       if(!_alertCache[a.game_id])_alertCache[a.game_id]=[];
       _alertCache[a.game_id].push(a);
     });
@@ -3391,6 +3392,7 @@ async function pollAlerts(){
     _alertCache={};
     alerts.forEach(function(a){
       if(!a.game_id)return;
+      if(a.agent_decision==='DB_DEDUP')return;
       if(!_alertCache[a.game_id])_alertCache[a.game_id]=[];
       _alertCache[a.game_id].push(a);
     });
