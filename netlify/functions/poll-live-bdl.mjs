@@ -5927,6 +5927,10 @@ export default async function(req) {
               const currentGameSec = (currentPeriod - 1) * 720 + (720 - cpClockSec);
 
               // Check if we've crossed the next checkpoint boundary
+              if (lt.next_cp_idx < GRAD_CHECKPOINTS.length) {
+                const _dbgNextCp = GRAD_CHECKPOINTS[lt.next_cp_idx];
+                log(`${matchup}: CP_DEBUG Q${currentPeriod} ${clock} gameSec=${currentGameSec} next_cp_idx=${lt.next_cp_idx} nextCp=${_dbgNextCp.label}@${_dbgNextCp.gameSec} gap=${currentGameSec - _dbgNextCp.gameSec} cps=${(lt.checkpoints||[]).length}`);
+              }
               while (lt.next_cp_idx < GRAD_CHECKPOINTS.length) {
                 const nextCp = GRAD_CHECKPOINTS[lt.next_cp_idx];
                 if (currentGameSec < nextCp.gameSec) break; // haven't reached it yet
@@ -5966,6 +5970,7 @@ export default async function(req) {
                 }
 
                 lt.checkpoints.push(cpEntry);
+                log(`${matchup}: CP_CAPTURED ${nextCp.label} Q${currentPeriod} ${clock} floor=${ind.score} xgb=${cpEntry.xgb || 'n/a'} total=${lt.checkpoints.length}`);
 
                 // ── Update checkpoint-level holds ──
                 if (ind.controlTeam === bwcTeam) {
