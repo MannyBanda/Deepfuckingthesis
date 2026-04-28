@@ -5524,11 +5524,15 @@ export default async function(req) {
                 lt._bwc_candidate_holds = 1;
               }
               if (lt._bwc_candidate_holds >= 3 && currentPeriod >= 2) {
-                lt.bwc_fired = { team: ind.controlTeam, period: currentPeriod, clock, floor: ind.score };
-                lt._prev_bwc_state = _v2Margin >= 3 ? 'LOCK' : 'EDGE';
-                lt._just_established = true;
-
-                log(`${matchup}: ★ V2 BWC FIRED — ${ind.controlTeam} floor ${ind.score.toFixed(2)} margin ${_v2Margin} state ${lt._prev_bwc_state}`);
+                // XGB gate — block establishment if structural model disagrees, but keep holds
+                if (_xgbWinProb != null && _xgbWinProb < 0.40) {
+                  log(`${matchup}: XGB GATE — blocking BWC establishment (xgb=${_xgbWinProb.toFixed(3)}, floor=${ind.score.toFixed(2)}, holds=${lt._bwc_candidate_holds})`);
+                } else {
+                  lt.bwc_fired = { team: ind.controlTeam, period: currentPeriod, clock, floor: ind.score };
+                  lt._prev_bwc_state = _v2Margin >= 3 ? 'LOCK' : 'EDGE';
+                  lt._just_established = true;
+                  log(`${matchup}: ★ V2 BWC FIRED — ${ind.controlTeam} floor ${ind.score.toFixed(2)} margin ${_v2Margin} state ${lt._prev_bwc_state}${_xgbWinProb != null ? ' xgb=' + _xgbWinProb.toFixed(3) : ''}`);
+                }
               }
             } else if (!lt.bwc_fired && ind.controlTeam !== lt._bwc_candidate) {
               lt._bwc_candidate = null;
