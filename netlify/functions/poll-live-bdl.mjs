@@ -391,9 +391,8 @@ ${ctx.fullCPTrend && ctx.fullCPTrend.direction !== 'INSUFFICIENT' ? 'CP trend (a
 Consecutive holds: ${ctx.consecutiveHolds}
 BWC lifecycle: ${ctx.bwcState}${ctx.bwcFirePeriod ? ' (BWC fired Q' + ctx.bwcFirePeriod + ', floor ' + (ctx.bwcFireFloor != null ? Number(ctx.bwcFireFloor).toFixed(2) : '?') + ')' : ''}
 ${ctx.positionClosed ? 'POSITION STATE: CLOSED — an EXIT was previously SENT. The subscriber was told to exit this position. Any SEND decision on a recovery alert (POSITION_OPEN, POSITION_SAFE, POSITION_RECOVERING, THESIS_ALIVE) will RE-OPEN the position. This requires ELEVATED SCRUTINY — the thesis previously failed. See POST-EXIT RE-ENTRY rules on each alert type below.' : ''}
-${ctx.poRank === 'BUY'
-  ? 'Position opened by BUY signal at Q' + (ctx.buyOpenPeriod || '?') + ' (no checkpoint graduation).' + (ctx.cpGraduation ? ' Checkpoint progress: team reached ' + ctx.cpPeakRank + '-Rank but PO gates not yet met. MF=' + (ctx.cpMeanFloor?.toFixed(3) || '?') + ' (' + ctx.cpEligibleCount + ' eligible CPs). If PO fires, position upgrades from BUY to graduated rank.' : ctx.cpEligibleCount > 0 ? ' Checkpoint progress: ' + ctx.cpEligibleCount + ' eligible CPs, MF=' + (ctx.cpMeanFloor?.toFixed(3) || '?') + '.' : '') + ' EXIT threshold is timing-dependent — see BUY-OPENED EXIT rules below.'
-  : ctx.cpGraduation 
+${ctx.buyPosition ? 'ACTIVE BUY POSITION: ' + ctx.buyPosition.team + ' entered at Q' + ctx.buyPosition.period + ' ' + (ctx.buyPosition.clock || '') + ' (' + (ctx.buyPosition.warm ? 'WARM — BWC lifecycle active, checkpoint data supports thesis' : 'COLD — spot read, no lifecycle context') + '). XGB at entry: ' + (ctx.buyPosition.xgb != null ? (ctx.buyPosition.xgb * 100).toFixed(0) + '%' : '?') + '. BUY positions exit via XGB INVALIDATED, NOT V2 EXIT. If this team graduates through checkpoints, PO fires independently as confirmation.' : ''}
+${ctx.cpGraduation 
   ? 'Graduation: ' + ctx.cpPeakRank + '-Rank (graduated @ ' + ctx.cpGraduation.cp_label + ', floor was ' + Number(ctx.cpGraduation.floor).toFixed(2) + ') | ' + mfTrajStr + ' | MF=' + (ctx.cpMeanFloor?.toFixed(3) || '?') + ' minF=' + (ctx.cpMinFloor?.toFixed(2) || '?') + ' (' + ctx.cpEligibleCount + ' eligible CPs)'
     + (ctx.cpOppGraduation ? ' | OPPONENT ALSO GRADUATED ' + ctx.cpOppGraduation.rank + '-Rank @ ' + ctx.cpOppGraduation.cp_label : '')
   : 'Pre-graduation (' + (ctx.cpEligibleCount || 0) + ' eligible CPs, MF=' + (ctx.cpMeanFloor?.toFixed(3) || '?') + ' ' + mfTrajStr + ')'
@@ -531,12 +530,6 @@ ${ctx.positionClosed ? '  POST-EXIT RECOVERY: Position is CLOSED — the subscri
   DOWNGRADE is preferred over SUPPRESS for POSITION_OPEN (subscriber should know graduation happened but that it is contested).
   BWC_EDGE and POSITION_SAFE may fully SUPPRESS (these are updates to existing positions — no value in reassuring the subscriber about a position that is structurally compromised).
   EXEMPT from stress override: EXIT on GRADUATED positions (always SEND), TRACKING (always SEND), A-Rank WIRE-TO-WIRE with 0 flips (strongest signal, stress override should not touch).
-  EXIT on BUY-OPENED positions (poRank = BUY): Position was opened by a BUY signal, not checkpoint graduation. EXIT is NOT automatic. Apply timing-based opponent floor thresholds:
-    BUY opened Q4: Any control flip is meaningful (91% precision). SEND.
-    BUY opened Q3: Opponent must show >= 0.60 floor for EXIT to be warranted (79% precision). Below 0.60 = noise flip, SUPPRESS.
-    BUY opened Q2: Opponent must show >= 0.60 floor (68% precision). Lean SUPPRESS unless opponent holds structural indicators (I1, I2, or I4).
-    LANE ADJUSTMENT for underdogs (lane = underdog, ML > +100): Raise opponent floor threshold by +0.05 to preserve high-payout positions. Q3 BUY: opponent needs 0.65. Q2 BUY: opponent needs 0.65. Q4 BUY: opponent needs 0.55.
-    FLIP BUY SIGNAL: When EXIT on a BUY-opened position AND opponent floor >= 0.65, note in the body that structural reversal suggests a potential entry on the opponent side.
   REINFORCING (DOMINANT/STRONG combined read) = cumulative floor is trustworthy, proceed normally with per-alert-type rules.
 - XGB REASONING (use SHAP drivers to interpret floor-XGB disagreements):
   ALIGNED (within 15%): Both systems independently agree — strongest signal. Proceed with normal rules.
@@ -5745,6 +5738,7 @@ export default async function(req) {
                 flipBuyContext: lt._flipBuyContext || null,
                 // BUY-opened position context
                 buyOpenPeriod: lt._buy_open_period || null,
+                buyPosition: lt.buy_position || null,
                 // Floor reliability
                 floorWPHistorical: _floorWP.wp,
                 reliabilityClass: _floorWP.reliabilityClass,
@@ -5872,8 +5866,9 @@ export default async function(req) {
                   lt.position_closed = false;
                   log(`${matchup}: Position RE-OPENED — ${v2Type} sent, position updates resume`);
                 } else if (v2IsBuy) {
-                  // BUY SEND opens position — activate V2 state machine for exit protection
+                  // BUY SEND — track position independently, does NOT activate V2 state machine
                   const buyTeam = ind.controlTeam;
+                  const _buyWarm = !!(lt.bwc_fired && lt.bwc_fired.team === buyTeam);
 
                   // Ensure bwc_fired tracks the buy team
                   if (!lt.bwc_fired) {
@@ -5899,25 +5894,16 @@ export default async function(req) {
                     log(`${matchup}: BUY flipped BWC ${lt.original_bwc_team} → ${buyTeam}, stale graduation data cleared`);
                   }
 
-                  // Open or re-open position
-                  if (!lt.po_fired || lt.po_fired.team !== buyTeam) {
-                    lt.po_fired = { team: buyTeam, rank: 'BUY', period: currentPeriod, clock, flipped: false };
-                    lt._prev_bwc_state = computeBwcState(lt, ind.controlTeam, _v2Margin);
-                    // Commit PO sentinel — BUY already SENT by agent
-                    try {
-                      await sql`INSERT INTO game_checkpoints (game_id, label, period, clock, team, floor, margin, conv, opp_count)
-                        VALUES (${game.id}, ${'PO_ACTIVE'}, ${currentPeriod}, ${clock}, ${buyTeam}, ${ind.score}, ${_v2Margin}, ${'BUY'}, ${0})
-                        ON CONFLICT (game_id, label) DO NOTHING`;
-                    } catch(e) { log(`${matchup}: BUY PO sentinel failed: ${e.message}`); }
-                    log(`${matchup}: Position OPENED via BUY — ${buyTeam} (rank: BUY, seeded state: ${lt._prev_bwc_state})`);
-                  }
-                  lt.position_closed = false;
+                  // Track BUY position independently — does NOT activate V2 state machine
+                  // Exit path is XGB_INVALIDATED, not V2 EXIT. PO graduation runs independently.
+                  lt.buy_position = { team: buyTeam, period: currentPeriod, clock, warm: _buyWarm, xgb: _xgbWinProb, flip: !!lt._flipBuyContext };
                   lt._buy_open_period = currentPeriod;
 
                   // XGB invalidation tracking — monitor for thesis collapse after BUY
                   lt.buy_send_xgb = _xgbWinProb;
                   lt.buy_send_period = currentPeriod;
                   lt.buy_invalidated = false;
+                  log(`${matchup}: BUY position tracked — ${buyTeam} (${_buyWarm ? 'WARM' : 'COLD'}, xgb=${_xgbWinProb != null ? _xgbWinProb.toFixed(3) : '?'})`);
                 }
               }
 
@@ -5996,15 +5982,21 @@ export default async function(req) {
               // ── PO SENTINEL RECOVERY — race-safe position state from DB ──
               const _poSentinel = cpArray.find(r => r.label === 'PO_ACTIVE');
               if (_poSentinel && !lt.po_fired) {
-                lt.po_fired = {
-                  team: _poSentinel.team,
-                  rank: _poSentinel.conv || 'BUY',
-                  period: _poSentinel.period,
-                  clock: _poSentinel.clock,
-                  flipped: false, // flip state tracked via lt.bwc_flipped
-                  mean_floor: _poSentinel.floor,
-                };
-                log(`${matchup}: PO recovered from DB — ${_poSentinel.team} rank=${_poSentinel.conv} Q${_poSentinel.period} ${_poSentinel.clock}`);
+                if (_poSentinel.conv === 'BUY') {
+                  // Legacy BUY sentinel — recover as buy_position (BUY no longer sets po_fired)
+                  lt.buy_position = lt.buy_position || { team: _poSentinel.team, period: _poSentinel.period, clock: _poSentinel.clock, warm: true, xgb: null, flip: false };
+                  log(`${matchup}: BUY position recovered from legacy sentinel — ${_poSentinel.team} Q${_poSentinel.period} ${_poSentinel.clock}`);
+                } else {
+                  lt.po_fired = {
+                    team: _poSentinel.team,
+                    rank: _poSentinel.conv,
+                    period: _poSentinel.period,
+                    clock: _poSentinel.clock,
+                    flipped: false, // flip state tracked via lt.bwc_flipped
+                    mean_floor: _poSentinel.floor,
+                  };
+                  log(`${matchup}: PO recovered from DB — ${_poSentinel.team} rank=${_poSentinel.conv} Q${_poSentinel.period} ${_poSentinel.clock}`);
+                }
               }
               // Filter sentinels out of checkpoint array (not structural snapshots)
               cpArray = cpArray.filter(r => r.label !== 'PO_ACTIVE');
@@ -6118,7 +6110,7 @@ export default async function(req) {
               // ── POSITION OPEN EVALUATION (post-capture, runs every cycle for convergence) ──
               // SUPPRESS throttle — don't re-evaluate if agent recently SUPPRESS'd (3-min window)
               let _poSuppressThrottled = false;
-              if (lt.cp_graduation && (!lt.po_fired || lt.po_fired.rank === 'BUY') && ind.controlTeam === bwcTeam) {
+              if (lt.cp_graduation && !lt.po_fired && ind.controlTeam === bwcTeam) {
                 try {
                   const _recentSup = await sql`SELECT 1 FROM alerts WHERE game_id = ${game.id} AND alert_type = 'POSITION_OPEN' AND agent_decision = 'SUPPRESS' AND ts > NOW() - INTERVAL '3 minutes' AND position_team = ${bwcTeam} LIMIT 1`;
                   if (_recentSup.length > 0) {
@@ -6128,7 +6120,7 @@ export default async function(req) {
                 } catch(e) { /* fail-open */ }
               }
 
-              if (lt.cp_graduation && (!lt.po_fired || lt.po_fired.rank === 'BUY') && ind.controlTeam === bwcTeam && !_poSuppressThrottled) {
+              if (lt.cp_graduation && !lt.po_fired && ind.controlTeam === bwcTeam && !_poSuppressThrottled) {
                 const gRank = lt.cp_graduation.rank;
                 const gates = getLaneGates(lt.lane || 'tossup');
 
@@ -6269,8 +6261,13 @@ export default async function(req) {
               try {
                 const _ncaaPO = await sql`SELECT team, conv, period, clock, floor FROM game_checkpoints WHERE game_id = ${game.id} AND label = 'PO_ACTIVE' LIMIT 1`;
                 if (_ncaaPO.length > 0) {
-                  lt.po_fired = { team: _ncaaPO[0].team, rank: _ncaaPO[0].conv || 'BUY', period: Number(_ncaaPO[0].period), clock: _ncaaPO[0].clock };
-                  log(`${matchup}: NCAAMB PO recovered from DB — ${_ncaaPO[0].team} rank=${_ncaaPO[0].conv}`);
+                  if (_ncaaPO[0].conv === 'BUY') {
+                    lt.buy_position = lt.buy_position || { team: _ncaaPO[0].team, period: Number(_ncaaPO[0].period), clock: _ncaaPO[0].clock, warm: true, xgb: null, flip: false };
+                    log(`${matchup}: NCAAMB BUY position recovered from legacy sentinel — ${_ncaaPO[0].team}`);
+                  } else {
+                    lt.po_fired = { team: _ncaaPO[0].team, rank: _ncaaPO[0].conv, period: Number(_ncaaPO[0].period), clock: _ncaaPO[0].clock };
+                    log(`${matchup}: NCAAMB PO recovered from DB — ${_ncaaPO[0].team} rank=${_ncaaPO[0].conv}`);
+                  }
                 }
               } catch(e) { /* fail-open */ }
               if (lt.po_fired) { /* recovered — skip NCAAMB PO evaluation */ } else {

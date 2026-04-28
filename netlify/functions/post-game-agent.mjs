@@ -245,8 +245,8 @@ export default async function handler(req) {
     }
 
     // Determine arc type
-    const hasBuyOnly = nonTracking.every(a => a.alert_type === 'BUY');
-    const arcType = hasBuyOnly ? 'standalone_buy' : 'lifecycle';
+    const buyRelated = nonTracking.every(a => ['BUY', 'XGB_INVALIDATED'].includes(a.alert_type));
+    const arcType = buyRelated ? 'standalone_buy' : 'lifecycle';
 
     // Get live_tracking context
     const lt = liveTrackingMap[gameId] || null;
