@@ -326,7 +326,7 @@ BODY: [If SEND/DOWNGRADE: plain-English alert. If SUPPRESS: blank]`;
     full_results: tests.map(t => ({
       name: t.name, alert: t.alert, decision: t.decision,
       reasoning: t.reasoning,
-      body: t.body?.substring(0, 300),
+      body: t.body || '',
       tokens: t.tokens ? t.tokens.input_tokens + 'in/' + t.tokens.output_tokens + 'out' : '?',
     })),
   }, null, 2), { headers: { 'Content-Type': 'application/json' } });
