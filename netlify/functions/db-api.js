@@ -1108,7 +1108,7 @@ exports.handler = async (event) => {
       const gameId = params.game_id;
       if (!gameId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id required' }) };
 
-      const rows = await sql`SELECT * FROM game_checkpoints WHERE game_id = ${gameId} ORDER BY period, clock`;
+      const rows = await sql`SELECT * FROM game_checkpoints WHERE game_id = ${gameId} ORDER BY created_at`;
       return { statusCode: 200, headers, body: JSON.stringify({ checkpoints: rows }) };
     }
 

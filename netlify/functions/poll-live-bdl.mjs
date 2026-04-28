@@ -1641,6 +1641,7 @@ const STATE_RANK = { 'LOCK': 4, 'EDGE': 3, 'VALUE': 2, 'DEEP_TRAIL': 1, 'EXIT': 
 // gameSec = (period - 1) * 720 + (720 - clockRemainingInSeconds)
 // NBA only — NCAAMB uses existing graduation path
 const GRAD_CHECKPOINTS = [
+  { label: 'Q1_END', period: 2, clockSec: 720, gameSec: 720  },
   { label: 'Q2_9',   period: 2, clockSec: 540, gameSec: 900  },
   { label: 'Q2_6',   period: 2, clockSec: 360, gameSec: 1080 },
   { label: 'Q2_3',   period: 2, clockSec: 180, gameSec: 1260 },
@@ -5977,6 +5978,10 @@ export default async function(req) {
                   shap: typeof r.shap === 'string' ? JSON.parse(r.shap) : r.shap,
                 }));
               } catch (e) { log(`${matchup}: game_checkpoints read failed: ${e.message}`); }
+
+              // Sort by GRAD_CHECKPOINTS order (clock text sort is wrong — lex "11:30" < "2:31" < "8:55")
+              const _cpLabelOrder = Object.fromEntries(GRAD_CHECKPOINTS.map((cp, i) => [cp.label, i]));
+              cpArray.sort((a, b) => (_cpLabelOrder[a.label] ?? 99) - (_cpLabelOrder[b.label] ?? 99));
 
               // ── PO SENTINEL RECOVERY — race-safe position state from DB ──
               const _poSentinel = cpArray.find(r => r.label === 'PO_ACTIVE');
