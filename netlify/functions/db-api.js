@@ -436,6 +436,22 @@ exports.handler = async (event) => {
         created_at TIMESTAMPTZ DEFAULT NOW()
       )`;
 
+      await sql`CREATE TABLE IF NOT EXISTS game_checkpoints (
+        game_id TEXT NOT NULL,
+        label TEXT NOT NULL,
+        period INTEGER NOT NULL,
+        clock TEXT,
+        team TEXT NOT NULL,
+        floor REAL NOT NULL,
+        margin INTEGER NOT NULL,
+        conv TEXT,
+        opp_count INTEGER,
+        xgb REAL,
+        shap JSONB,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (game_id, label)
+      )`;
+
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'Schema initialized' }) };
     }
 
@@ -1083,6 +1099,17 @@ exports.handler = async (event) => {
       const lt = rows.length > 0 ? rows[0].live_tracking : null;
 
       return { statusCode: 200, headers, body: JSON.stringify({ live_tracking: lt }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET CHECKPOINTS — race-safe checkpoint data from dedicated table
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_checkpoints') {
+      const gameId = params.game_id;
+      if (!gameId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id required' }) };
+
+      const rows = await sql`SELECT * FROM game_checkpoints WHERE game_id = ${gameId} ORDER BY period, clock`;
+      return { statusCode: 200, headers, body: JSON.stringify({ checkpoints: rows }) };
     }
 
     // ═══════════════════════════════════════════════════════
