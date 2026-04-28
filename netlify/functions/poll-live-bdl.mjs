@@ -417,6 +417,11 @@ ${ctx.alertType === 'BUY' && ctx.xgbWinProb != null ? `XGB BUY CALIBRATION (1,23
   Q4: XGB>=0.70 = 97%  | 0.55-0.70 = 50% | 0.40-0.55 = 38% | <0.40 = 29%
   Deficit: trail 1-4 viable. Trail 5+: ~50-56% even at XGB 0.55-0.70.
   → This BUY: Q${ctx.period}, XGB ${(ctx.xgbWinProb * 100).toFixed(0)}% = calibrated ${ctx.period >= 4 ? (ctx.xgbWinProb >= 0.70 ? '97%' : ctx.xgbWinProb >= 0.55 ? '50%' : ctx.xgbWinProb >= 0.40 ? '38%' : '29%') : ctx.period >= 3 ? (ctx.xgbWinProb >= 0.70 ? '100%' : ctx.xgbWinProb >= 0.55 ? '76%' : ctx.xgbWinProb >= 0.40 ? '73%' : '63%') : (ctx.xgbWinProb >= 0.70 ? '100%' : ctx.xgbWinProb >= 0.55 ? '82%' : ctx.xgbWinProb >= 0.40 ? '78%' : '76%')} baseline` : ''}
+${ctx.alertType === 'XGB_INVALIDATED' ? `XGB THESIS COLLAPSE:
+  BUY fired at Q${ctx.xgbBuySendPeriod} with XGB ${(ctx.xgbBuySendProb * 100).toFixed(0)}%
+  Current XGB: ${(ctx.xgbWinProb * 100).toFixed(1)}% — BELOW Q${ctx.period} gate of ${(ctx.xgbQuarterGate * 100).toFixed(0)}%
+  Drop: ${((ctx.xgbBuySendProb - ctx.xgbWinProb) * 100).toFixed(0)}pp
+  The raw-stats model no longer sees a viable structural edge. ALWAYS SEND this alert — add narrative about what changed.` : ''}
 
 FLOOR TRAJECTORY:
 ${ctx.floorHistory || 'No prior snapshots'}
@@ -636,6 +641,7 @@ RULES:
   • If a prior BWC or BUY was SENT for this team in priorAlerts: lean SEND — the subscriber has a position to protect and needs to know about threats
 - VARIANCE BREAKING: opponent's shooting is regressing toward the mean. SEND if structural edge is clear (I4 COMBO YES, 3+ indicators) and the sustainability shift is meaningful. SUPPRESS if structural edge is thin (I4 EVEN, 1-2 indicators) or the sustainability drop is a borderline tier flip that could reverse.
 - STRUCTURAL_SHIFT: Pre-flip early warning — the trailing team is gaining structural control BEFORE the floor has officially flipped. Fires when: floor declined 0.15+ from peak, trailing team holds 1+ indicators in the recent window (0.65+), and margin compressed 3+ from peak (Q3+). ALWAYS SEND — the mechanical gates are the filter. Your job is to add valuable context: (1) WHICH indicators the incoming team holds and whether they are structural (I1 disruption / I2 paint / I4 game control) or variance-based (I3 shot quality only), (2) whether the shift is likely to result in a full control flip or just a temporary compression, (3) the floor reliability class of both teams if available. Frame as informational: "Structural shift developing — [team] recovering structural control." This is NOT a position recommendation — it is a heads-up that a control flip may be incoming.
+- XGB_INVALIDATED: The structural model (XGBoost) that supported a prior BUY has dropped below the quarter's viability gate (Q2<0.40, Q3<0.45, Q4<0.60). ALWAYS SEND — the mechanical gate is the filter. Your job is to add narrative context: (1) what the SHAP drivers are showing NOW vs at BUY time — has interior/paint collapsed? has disruption (I1) flipped? (2) whether the XGB drop is driven by raw stat decay or game progress pressure, (3) what the current structural picture looks like (indicators, conviction, floor-margin relationship). Frame as: "The structural model no longer supports the [TEAM] BUY — [explain what changed in basketball terms]. Consider exiting if you took this position." This is an exit signal, not a veto of future entry.
 - ANCHORED FLOOR CHECK: If team is TRAILING with floor 0.75+ but margin only 1-3 pts AND floor is declining from recent snapshots, the floor may be anchored from earlier dominance that has eroded. Verify recent quarters still favor control team before SEND. This rule does NOT apply to leading teams (BWC/WINDOW BUY) — a high floor with a small lead is a valid structural read.
 - EARLY GAME NOTE (Q1-Q2): Indicator samples are smaller early — steals/blocks counts are low, run share may not be populated yet, and biggest_lead gaps can form from a single early run. This does NOT mean early signals are unreliable. The new indicator formulas have proven predictive even in Q2. For Q1-Q2 FIRED alerts: I4 COMBO YES = SEND with confidence. I4 COMBO NO = apply normal scrutiny (don't auto-reject, just verify the structural case). For Q1-Q2 CANDIDATE alerts: I4 COMBO YES = SEND. I4 COMBO NO = apply extra scrutiny but still SEND if floor is strong (0.75+) and sustainability favors control team. Q3+ alerts have the most data — highest confidence.
 - CANDIDATE BUYs at floor 0.55-0.65: only SEND if I4 COMBO is YES (I4 decisive + at least one other indicator agrees — this pattern is 98-100% accurate historically). Without I4 COMBO, require very strong sustainability case to justify SEND.
@@ -5798,6 +5804,9 @@ export default async function(req) {
                 }
                 await sendNtfy(ntfyTitle, ntfyBody, alertPriority);
 
+                // Track last sent alert type for XGB invalidation gating
+                lt.last_send_type = v2Type;
+
                 // Post-EXIT position gate: close position when EXIT SENT, re-open on any RECOVERING alert SENT
                 if (v2Type === 'EXIT') {
                   lt.position_closed = true;
@@ -5856,6 +5865,11 @@ export default async function(req) {
                   }
                   lt.position_closed = false;
                   lt._buy_open_period = currentPeriod;
+
+                  // XGB invalidation tracking — monitor for thesis collapse after BUY
+                  lt.buy_send_xgb = _xgbWinProb;
+                  lt.buy_send_period = currentPeriod;
+                  lt.buy_invalidated = false;
                 }
               }
 
@@ -6487,6 +6501,80 @@ export default async function(req) {
                   VALUES (${game.id}, ${league}, ${'STRUCTURAL_SHIFT'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_ssMargin}, ${false}, ${null}, ${null}, ${spreadVal}, ${_windowScore}, ${'FIRED'}, ${'SEND'}, ${'Agent unavailable — auto-SEND'}, ${ind.I1?.score}, ${ind.I2?.score}, ${ind.I3?.score}, ${ind.I4?.score}, ${ind.I5?.score}, ${true}, ${_ssTrailingTeam})`;
                 const _ssFallbackBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\n${_ssTrailingTeam} recovering structural control. Floor declined ${_ssPeakFloor.toFixed(2)}→${ind.score.toFixed(2)}, lead compressed ${_ssPeakMargin}→${_ssMargin}. ${_ssTrailingTeam} winning ${_ssOppInds.join('+')} in recent window.`;
                 await sendNtfy(`STRUCTURAL SHIFT — ${matchup}`, _ssFallbackBody, 'default');
+              }
+            }
+          }
+
+          // ── XGB THESIS INVALIDATED: post-BUY structural model collapse detection ──
+          // After a BUY SEND, if XGB drops below the current quarter's viability gate,
+          // fire an invalidation alert. One-shot per game, only if BUY was most recent send.
+          const _xgbGateByQ = { 2: 0.40, 3: 0.45, 4: 0.60 };
+          if (lt.buy_send_xgb != null && !lt.buy_invalidated && lt.last_send_type === 'BUY'
+              && _xgbWinProb != null && currentPeriod >= 2 && currentPeriod <= 4) {
+            const _invGate = _xgbGateByQ[currentPeriod] || 0.60;
+            if (_xgbWinProb < _invGate) {
+              log(`${matchup}: ★ XGB INVALIDATED — BUY xgb was ${(lt.buy_send_xgb * 100).toFixed(1)}% at Q${lt.buy_send_period}, now ${(_xgbWinProb * 100).toFixed(1)}% < Q${currentPeriod} gate ${(_invGate * 100).toFixed(0)}%`);
+              lt.buy_invalidated = true;
+
+              // Build agent context
+              const _invAgentCtx = await gatherAgentContext(sql, game.id, matchup);
+              const _invBuyTeam = lt.bwc_fired?.team || ind.controlTeam;
+              const _invCtrlIsHome = ind.controlTeam === hA;
+              const _invV2Ctx = {
+                alertType: 'XGB_INVALIDATED', alertTier: 'FIRED',
+                ctrlTeam: ind.controlTeam, ctrlIsHome: _invCtrlIsHome,
+                floor: ind.score?.toFixed(2), margin: _v2Margin,
+                bwcTeam: _invBuyTeam,
+                bwcFirePeriod: lt.bwc_fired?.period || null,
+                homeAlias: hA, awayAlias: aA, homePts: ind.homePts, awayPts: ind.awayPts,
+                period: currentPeriod, clock,
+                ctrlSust: sust?.[_invCtrlIsHome ? 'home' : 'away']?.tier || null,
+                oppSust: sust?.[_invCtrlIsHome ? 'away' : 'home']?.tier || null,
+                windowScore: _windowScore,
+                rollingWindow: _windowResult,
+                i1: ind.I1?.score, i2: ind.I2?.score, i3: ind.I3?.score, i4: ind.I4?.score, i5: ind.I5?.score,
+                convictionTier: conviction?.tier || null, convictionCombo: conviction?.combo || null,
+                combinedRead: null,
+                erosionLevel: null, peakFloor: lt[_invCtrlIsHome ? 'home_peak_floor' : 'away_peak_floor'] || ind.score,
+                floorWPHistorical: _floorWP.wp, reliabilityClass: _floorWP.reliabilityClass, floorGrip: _floorWP.grip,
+                priorAlertTrail: _invAgentCtx?.priorAlerts || null,
+                xgbWinProb: _xgbWinProb,
+                xgbBuySendProb: lt.buy_send_xgb,
+                xgbBuySendPeriod: lt.buy_send_period,
+                xgbQuarterGate: _invGate,
+              };
+
+              const _invPrompt = buildV2AgentPrompt(_invV2Ctx);
+              try {
+                const _invAgentResp = await fetch('https://api.anthropic.com/v1/messages', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+                  body: JSON.stringify({ model: 'claude-opus-4-6', max_tokens: 600, messages: [{ role: 'user', content: _invPrompt }] }),
+                });
+                const _invAgentData = await _invAgentResp.json();
+                const _invAgentText = _invAgentData.content?.[0]?.text || '';
+                // Always SEND — extract body/reasoning for narrative
+                const _invBody = _invAgentText.match(/BODY:\s*([\s\S]*?)(?:\n(?:DECISION|REASONING):|$)/)?.[1]?.trim() || '';
+                const _invReasoning = _invAgentText.match(/REASONING:\s*([\s\S]*?)(?:\n(?:DECISION|BODY):|$)/)?.[1]?.trim() || '';
+
+                await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
+                  VALUES (${game.id}, ${league}, ${'XGB_INVALIDATED'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal}, ${snapTp?.classification || null}, ${snapLs?.classification || null}, ${_invV2Ctx.ctrlSust}, ${_invV2Ctx.oppSust}, ${_windowScore}, ${'FIRED'}, ${'SEND'}, ${_invReasoning || _invBody}, ${ind.I1?.score}, ${ind.I2?.score}, ${ind.I3?.score}, ${ind.I4?.score}, ${ind.I5?.score}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${true}, ${_invBuyTeam}, ${Math.round(_xgbWinProb * 10000) / 10000}, ${_xgbAligned})`;
+
+                const _invNtfyTitle = `XGB INVALIDATED — ${_invBuyTeam} BUY`;
+                const _invScoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
+                const _invNtfyBody = _invBody
+                  ? _invScoreLine + '\n' + _invBody
+                  : _invScoreLine + '\nThe structural model that supported the ' + _invBuyTeam + ' BUY at Q' + lt.buy_send_period + ' (XGB ' + (lt.buy_send_xgb * 100).toFixed(0) + '%) has dropped to ' + (_xgbWinProb * 100).toFixed(0) + '%, below the Q' + currentPeriod + ' viability threshold of ' + (_invGate * 100).toFixed(0) + '%. The raw stats no longer support the entry thesis. Consider exiting.';
+                await sendNtfy(_invNtfyTitle, _invNtfyBody, 5);
+                lt.last_send_type = 'XGB_INVALIDATED';
+                log(`${matchup}: XGB INVALIDATED → SEND (ntfy sent)`);
+              } catch (e) {
+                log(`${matchup}: XGB INVALIDATED agent error: ${e.message} — sending fallback`);
+                await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, alert_tier, agent_decision, agent_reasoning, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
+                  VALUES (${game.id}, ${league}, ${'XGB_INVALIDATED'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${ctrlTrailing}, ${'FIRED'}, ${'SEND'}, ${'Agent unavailable — auto-SEND'}, ${true}, ${_invBuyTeam}, ${Math.round(_xgbWinProb * 10000) / 10000}, ${_xgbAligned})`;
+                const _invFallback = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\nThe structural model that supported the ${_invBuyTeam} BUY at Q${lt.buy_send_period} (XGB ${(lt.buy_send_xgb * 100).toFixed(0)}%) has dropped to ${(_xgbWinProb * 100).toFixed(0)}%, below the Q${currentPeriod} viability threshold of ${(_invGate * 100).toFixed(0)}%. Consider exiting.`;
+                await sendNtfy(`XGB INVALIDATED — ${_invBuyTeam} BUY`, _invFallback, 5);
+                lt.last_send_type = 'XGB_INVALIDATED';
               }
             }
           }
