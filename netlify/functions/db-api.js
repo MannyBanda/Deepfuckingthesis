@@ -1933,6 +1933,25 @@ exports.handler = async (event) => {
     }
 
     // ═══════════════════════════════════════════════════════
+    // GET_SNAPSHOT_TIMELINE — full snapshot history for a game (diagnostic)
+    // Returns all server snapshots with raw_stats_json for XGB retroactive analysis
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_snapshot_timeline') {
+      const gameId = params.game_id;
+      if (!gameId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id required' }) };
+      const rows = await sql`
+        SELECT id, game_id, ts, period, clock, home_pts, away_pts,
+               floor_score, floor_team, raw_stats_json,
+               i1, i2, i3, i4, i5, source, sust_json,
+               tp_class, ls_class, xgb_win_prob, xgb_divergence
+        FROM snapshots
+        WHERE game_id = ${gameId} AND source = 'server'
+        ORDER BY ts ASC
+      `;
+      return { statusCode: 200, headers, body: JSON.stringify({ snapshots: rows, count: rows.length }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
     // GET_ODDS — fetch odds history for a game
     // ═══════════════════════════════════════════════════════
     if (action === 'get_odds') {
