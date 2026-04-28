@@ -222,13 +222,13 @@ RULES:
 - TP is context, not a veto. TP STRONG RECOVERY adds confidence.
 ${xgbBlock ? `- XGB REASONING (use SHAP drivers to interpret floor-XGB disagreements):
   DIVERGENT — XGB BELOW FLOOR: SHAP tells you why.
-  • efg as primary negative driver → shooting variance. Cross-ref sustainability: if opp_sust is UNSUSTAINABLE and efg is the sole large SHAP driver, XGB may be overreacting to shooting variance the framework EXPECTS to regress.
+  • efg as primary negative driver → shooting efficiency gap. The control team is being outshot. Do NOT dismiss this as "variance the framework expects to regress" — XGB is trained on 1,235 games and knows which shooting gaps close and which don't.
   • paint/fta/oreb as negative drivers → STRUCTURAL interior weakness. Weight XGB heavily.
-  • biglead as negative driver → team hasn't converted structural control to scoreboard separation. Effort-based production risk.
+  • biglead as negative driver → team hasn't converted structural control to scoreboard separation. If the team "dominates structurally" but can't build a lead, the dominance may be effort-based, not talent-based.
   DECISION GUIDANCE:
-  • BUY with XGB < 0.40: lean SUPPRESS (backtest: 11% win rate) unless efg is sole negative SHAP driver + sust favorable.
-  • XGB BUY CALIBRATION: Q3 XGB < 0.40 = 63% baseline (vs 76% at 0.55-0.70).
-  XGB QUARTER RULE: Q3 BUYs with XGB 0.55+ are 73-82%. XGB < 0.40 drops to 63%. Weight XGB signal but consider whether efg-driven divergence aligns with the sustainability read.` : ''}
+  • BUY with XGB < 0.40: lean SUPPRESS (backtest: only 11% win rate at this level).
+  • XGB BUY CALIBRATION: Q3 XGB < 0.40 = 63% baseline (vs 76% at 0.55-0.70). This is the lowest tier.
+  • When floor and XGB disagree by 25%+, treat XGB as the stronger signal — the floor may be anchoring stale early-game data that no longer reflects the live game.` : ''}
 
 BODY RULES: Lead with score + action, explain WHY in basketball terms, 2-4 sentences max. Frame as structural reversal if SEND.
 
