@@ -905,7 +905,6 @@ async function bdlFetch(path) {
 // Fetch today's BDL games → build team ID map + game ID map (for odds)
 async function bdlGameData(league, dateStr) {
   const cfg = LEAGUES[league];
-  if (!cfg.bdlHasSeasonStats) return { teamIds: {}, gameIds: {} };
   // dateStr format: YYYY-MM-DD
   // NCAAMB: BDL uses UTC dates, so late-ET games appear on the next UTC day.
   // Fetch both the requested date and the next day, merge results.
