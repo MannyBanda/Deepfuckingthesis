@@ -6299,14 +6299,20 @@ export default async function(req) {
               }
 
               // ── POSITION OPEN EVALUATION (post-capture, runs every cycle for convergence) ──
-              // SUPPRESS throttle — don't re-evaluate if agent recently SUPPRESS'd (3-min window)
+              // Escalating SUPPRESS throttle — 3min after 1st, 6min after 2nd, 12min after 3rd+
               let _poSuppressThrottled = false;
               if (lt.cp_graduation && !lt.po_fired && ind.controlTeam === bwcTeam) {
                 try {
-                  const _recentSup = await sql`SELECT 1 FROM alerts WHERE game_id = ${game.id} AND alert_type = 'POSITION_OPEN' AND agent_decision = 'SUPPRESS' AND ts > NOW() - INTERVAL '3 minutes' AND position_team = ${bwcTeam} LIMIT 1`;
-                  if (_recentSup.length > 0) {
-                    _poSuppressThrottled = true;
-                    log(`${matchup}: PO throttled — agent SUPPRESS'd within 3 min for ${bwcTeam}`);
+                  const _supHistory = await sql`SELECT COUNT(*)::int as cnt, MAX(ts) as last_ts FROM alerts WHERE game_id = ${game.id} AND alert_type = 'POSITION_OPEN' AND agent_decision = 'SUPPRESS' AND position_team = ${bwcTeam}`;
+                  const _supCount = _supHistory[0]?.cnt || 0;
+                  const _supLastTs = _supHistory[0]?.last_ts ? new Date(_supHistory[0].last_ts).getTime() : 0;
+                  if (_supCount > 0 && _supLastTs > 0) {
+                    const _supWindowMin = _supCount === 1 ? 3 : _supCount === 2 ? 6 : 12;
+                    const _supElapsed = (Date.now() - _supLastTs) / 60000;
+                    if (_supElapsed < _supWindowMin) {
+                      _poSuppressThrottled = true;
+                      log(`${matchup}: PO throttled — ${_supCount} prior SUPPRESS(es), waiting ${_supWindowMin}min (${_supElapsed.toFixed(1)}min elapsed)`);
+                    }
                   }
                 } catch(e) { /* fail-open */ }
               }
