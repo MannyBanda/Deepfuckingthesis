@@ -5343,18 +5343,7 @@ export default async function(req) {
           const _xgbDivergence = _xgbWinProb != null ? Math.round((_xgbWinProb - ind.score) * 1000) / 1000 : null;
           const _xgbAligned = _xgbWinProb != null ? Math.abs(_xgbWinProb - ind.score) < 0.15 : null;
 
-          // XGB from BWC team's perspective (for EXIT detection)
-          // When BWC team IS ctrl team, reuse _xgbWinProb. Otherwise recompute with BWC as reference.
-          var _xgbBwcProb = null;
-          if (lt?.bwc_fired && _xgbWinProb != null) {
-            if (lt.bwc_fired.team === ind.controlTeam) {
-              _xgbBwcProb = _xgbWinProb;
-            } else {
-              const _bwcInd = { ...ind, controlTeam: lt.bwc_fired.team };
-              const _bwcFeatures = extractXGBFeatures(summary, _bwcInd, pbpResult, currentPeriod, clock);
-              _xgbBwcProb = _bwcFeatures ? predictXGB(_bwcFeatures) : null;
-            }
-          }
+          // _xgbBwcProb computed below after lt is loaded from DB
 
           // Compute deficit relative to control team
           const ctrlIsHome = ind.controlTeam === hA;
@@ -5542,6 +5531,19 @@ export default async function(req) {
             } catch(e) { /* non-fatal — initialize fresh */ }
 
             lt = updateLiveTracking(lt, ind.controlTeam, ind.score, currentPeriod, clock, hA);
+
+            // XGB from BWC team's perspective (for EXIT detection)
+            // When BWC team IS ctrl team, reuse _xgbWinProb. Otherwise recompute with BWC as reference.
+            var _xgbBwcProb = null;
+            if (lt.bwc_fired && _xgbWinProb != null) {
+              if (lt.bwc_fired.team === ind.controlTeam) {
+                _xgbBwcProb = _xgbWinProb;
+              } else {
+                const _bwcInd = { ...ind, controlTeam: lt.bwc_fired.team };
+                const _bwcFeatures = extractXGBFeatures(summary, _bwcInd, pbpResult, currentPeriod, clock);
+                _xgbBwcProb = _bwcFeatures ? predictXGB(_bwcFeatures) : null;
+              }
+            }
 
             // Quick ctrl-relative margin for v2 state machine (full margin computed below)
             const _v2CtrlIsHome = ind.controlTeam === hA;
