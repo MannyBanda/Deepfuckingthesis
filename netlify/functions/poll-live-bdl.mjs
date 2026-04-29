@@ -631,19 +631,12 @@ RULES:
   • Floor driven by I1+I2 without I4 or I5: effort-based control (hustle stats), not structural dominance. DOWNGRADE unless sustainability strongly favors control team
   • Floor trending DOWN across recent snapshots while alert says BUY: fading control, consider SUPPRESS
 - CANDIDATE alerts failed a soft threshold but might still have value. You should SEND only if the structural case is compelling despite the threshold miss.
-- BUY/WINDOW BUY: the thesis is "structurally dominant team is trailing due to unsustainable opponent variance." Verify the control team actually dominates AND the opponent's lead is variance-driven.
+- BUY: the thesis is "structurally dominant team is trailing due to unsustainable opponent variance." Verify the control team actually dominates AND the opponent's lead is variance-driven.
 - BWC (Buy Window Closing): the thesis is "market hasn't priced in structural dominance yet." Verify edge is real and lead is secure.
   • BWC + I4 EVEN: Unlike BUY (where the team must TAKE control back), BWC teams already HOLD the lead. I4 EVEN is NOT a suppress signal for BWC when 3+ other indicators favor the control team and sustainability is LOCKED IN, DURABLE, or STALLED. STALLED means both shooting dimensions are significantly below baseline — but a lead built on paint and transition doesn't need hot shooting to hold. Only suppress BWC on I4 EVEN if fewer than 3 indicators won OR sustainability is FRAGILE/UNSUSTAINABLE OR floor is unstable (dropped 0.15+ in recent snapshots).
-- RECOVERY PATH: math projects a comeback. SEND if structural indicators (especially I4) back the TP math — I4 COMBO YES + rising floor means the engine is real. SUPPRESS if TP is anchored from early-game cumulative stats that have since eroded — floor declining + I4 COMBO NO means the opponent actually has game control despite favorable TP math. DOWNGRADE if math works but structural case is modest (2/5 indicators, CONDITIONAL conviction).
-- LEAD CRUMBLING: WARNING alert — INVERTS normal indicator logic. For entry alerts (BUY/BWC), strong indicators = SEND. For LEAD CRUMBLING, strong indicators = lead is SAFE = SUPPRESS. The question is: "is this lead actually in danger, or is LS just reacting to a hot opponent quarter?"
-  • I4 COMBO YES + 3+ indicators + LOCKED IN/DURABLE sust → SUPPRESS: structural foundation is solid, this is noise not a real crumble
-  • I4 EVEN/NO + declining floor + sust shifting toward opponent → SEND: real erosion, bettor needs the warning
-  • Floor dropped 0.10+ from prior snapshots + conviction downgraded → SEND: structural case is deteriorating
-  • If a prior BWC or BUY was SENT for this team in priorAlerts: lean SEND — the subscriber has a position to protect and needs to know about threats
-- VARIANCE BREAKING: opponent's shooting is regressing toward the mean. SEND if structural edge is clear (I4 COMBO YES, 3+ indicators) and the sustainability shift is meaningful. SUPPRESS if structural edge is thin (I4 EVEN, 1-2 indicators) or the sustainability drop is a borderline tier flip that could reverse.
 - VULNERABILITY: Fires mechanically (no agent call) when the ctrl team is leading by 0-5, XGB < 0.65, and the PBP 15-possession window shows the opponent dominating (ctrl score <= 0.45). When you see VULNERABILITY in priorAlerts or the VULNERABILITY WARNING section above, it means the structural shift was detected via possession-level data BEFORE cumulative indicators reacted. This is highly predictive — weight it heavily when evaluating subsequent BWC_EDGE (lean SUPPRESS or add strong RISK line), POSITION_SAFE (flag that the position was already vulnerable), and EXIT decisions (confirms the structural collapse was real and early-detected). The vulnerability warning is the PBP window catching what cumulative floor and XGB miss due to anchoring.
 - XGB_INVALIDATED: The structural model (XGBoost) that supported a prior BUY has dropped below the quarter's viability gate (Q2<0.40, Q3<0.45, Q4<0.60). ALWAYS SEND — the mechanical gate is the filter. Your job is to add narrative context: (1) what the SHAP drivers are showing NOW vs at BUY time — has interior/paint collapsed? has disruption (I1) flipped? (2) whether the XGB drop is driven by raw stat decay or game progress pressure, (3) what the current structural picture looks like (indicators, conviction, floor-margin relationship). Frame as: "The structural model no longer supports the [TEAM] BUY — [explain what changed in basketball terms]. Consider exiting if you took this position." This is an exit signal, not a veto of future entry.
-- ANCHORED FLOOR CHECK: If team is TRAILING with floor 0.75+ but margin only 1-3 pts AND floor is declining from recent snapshots, the floor may be anchored from earlier dominance that has eroded. Verify recent quarters still favor control team before SEND. This rule does NOT apply to leading teams (BWC/WINDOW BUY) — a high floor with a small lead is a valid structural read.
+- ANCHORED FLOOR CHECK: If team is TRAILING with floor 0.75+ but margin only 1-3 pts AND floor is declining from recent snapshots, the floor may be anchored from earlier dominance that has eroded. Verify recent quarters still favor control team before SEND. This rule does NOT apply to leading teams (BWC) — a high floor with a small lead is a valid structural read.
 - EARLY GAME NOTE (Q1-Q2): Indicator samples are smaller early — steals/blocks counts are low, run share may not be populated yet, and biggest_lead gaps can form from a single early run. This does NOT mean early signals are unreliable. The new indicator formulas have proven predictive even in Q2. For Q1-Q2 FIRED alerts: I4 COMBO YES = SEND with confidence. I4 COMBO NO = apply normal scrutiny (don't auto-reject, just verify the structural case). For Q1-Q2 CANDIDATE alerts: I4 COMBO YES = SEND. I4 COMBO NO = apply extra scrutiny but still SEND if floor is strong (0.75+) and sustainability favors control team. Q3+ alerts have the most data — highest confidence.
 - CANDIDATE BUYs at floor 0.55-0.65: only SEND if I4 COMBO is YES (I4 decisive + at least one other indicator agrees — this pattern is 98-100% accurate historically). Without I4 COMBO, require very strong sustainability case to justify SEND.
 - CANDIDATE BUYs with negative ML (heavy favorite trailing): the CANDIDATE tier reflects the ML gate (-250 to -400), NOT structural weakness. Evaluate the structural case as if it were FIRED — if I4 COMBO YES + STRONG/DOMINANT conviction, SEND so the subscriber can shop for favorable lines. Note the heavy ML in the BODY.
@@ -4536,7 +4529,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
 
         // ── 10a. POSITION GATE — auto-analysis only sends as position updates ──
         // Query for most recent SENT actionable alert for this game
-        const POSITION_TYPES = ['BUY', 'BUY WINDOW CLOSING', 'WINDOW BUY', 'RECOVERY PATH', 'LEAD CRUMBLING', 'LEAD LOST', 'VARIANCE BREAKING', 'VULNERABILITY', 'POSITION_OPEN', 'BWC_EDGE', 'VALUE', 'EXIT', 'THESIS_ALIVE', 'POSITION_RECOVERING', 'POSITION_SAFE'];
+        const POSITION_TYPES = ['BUY', 'BUY WINDOW CLOSING', 'VULNERABILITY', 'POSITION_OPEN', 'BWC_EDGE', 'VALUE', 'EXIT', 'THESIS_ALIVE', 'POSITION_RECOVERING', 'POSITION_SAFE'];
         let priorPosition = null;
         try {
           const priorRows = await sql`
@@ -4648,7 +4641,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
             const sameTeam = pp.control_team === ind.controlTeam;
             const floorDelta = ind.score - Number(pp.floor_score);
             const statusWord = !sameTeam ? 'At Risk' : floorDelta > 0.1 ? 'Improving' : floorDelta < -0.1 ? 'Fading' : 'Holding';
-            const _alertReadable = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Lead Compressing','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','WINDOW BUY':'Window Buy','RECOVERY PATH':'Recovery Path','VULNERABILITY':'Vulnerability'}[pp.alert_type] || pp.alert_type;
+            const _alertReadable = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Lead Compressing','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','VULNERABILITY':'Vulnerability'}[pp.alert_type] || pp.alert_type;
             const ntfyTitle = `UPDATE: Your Q${pp.period} ${_alertReadable} on ${pp.control_team} is ${statusWord}`;
             // Agent writes the body via BODY: response, use it if available
             const agentBody = agentResult?.body || '';
@@ -4669,7 +4662,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           } else {
             const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${period} ${clock}`;
             const pp = priorPosition;
-            const _alertReadableW = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Lead Compressing','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','WINDOW BUY':'Window Buy','RECOVERY PATH':'Recovery Path','VULNERABILITY':'Vulnerability'}[pp.alert_type] || pp.alert_type;
+            const _alertReadableW = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Lead Compressing','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','VULNERABILITY':'Vulnerability'}[pp.alert_type] || pp.alert_type;
             const ntfyTitle = `WATCH: Your Q${pp.period} ${_alertReadableW} on ${pp.control_team} Needs Attention`;
             const agentBody = agentResult?.body || '';
             const ntfyBody = scoreLine
@@ -5975,8 +5968,8 @@ export default async function(req) {
                     log(`${matchup}: XGB GATE — suppressing BUY Q${currentPeriod} (xgb=${_xgbWinProb.toFixed(3)}, threshold=${buyXgbFloor}, floor=${ind.score})`);
                   }
                 }
-                // BWC/WINDOW_BUY: flat XGB < 0.40 (no quarter-specific data yet)
-                if ((v2Type === 'BWC' || v2Type === 'WINDOW_BUY') && _xgbWinProb < 0.40) {
+                // BWC: flat XGB < 0.40
+                if (v2Type === 'BWC' && _xgbWinProb < 0.40) {
                   _xgbGateSuppress = true;
                   log(`${matchup}: XGB GATE — suppressing ${v2Type} (xgb=${_xgbWinProb.toFixed(3)}, floor=${ind.score})`);
                 }
