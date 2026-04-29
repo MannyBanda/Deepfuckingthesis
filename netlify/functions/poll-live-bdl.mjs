@@ -452,11 +452,13 @@ RULES:
   Also verify: deficit depth (1-7 best), timing (Q2-Q3 > Q4). If prior BWC_EDGE alerts flagged a RISK, reference whether it materialized.
 - THESIS_ALIVE: BWC team regained structural control AFTER an EXIT. This is a deep-value play — floor erosion is EXPECTED and is WHY plus-money exists. DO NOT treat floor level or erosion as primary factors. Weight hierarchy: (1) WHICH indicators does the BWC team still hold? I1 Disruption + I4 Game Control = structural core retained. (2) Is opponent's edge variance-based? oppI3Won=true means opponent is shooting well, not structurally dominant — this is the thesis. (3) TP path — STRONG RECOVERY or PROBABLE = mechanical path exists. (4) Deficit depth and timing. Floor being below BWC fire floor is the ENTRY SIGNAL, not a red flag. SUPPRESS only if: BWC team lost I1+I4 (structural core gone), OR opponent has non-I3 structural indicators (I1/I2/I4), OR TP is NO PATH/UNLIKELY with < 3 min left.
 ${ctx.positionClosed ? '  POST-EXIT THESIS_ALIVE: Position is CLOSED. The subscriber was told to EXIT, and now the BWC team has clawed back to VALUE state. This is a RE-ENTRY signal — if you SEND, you are telling them to re-open the position they were told to close. Apply the standard THESIS_ALIVE criteria above (I1+I4, TP path, opponent profile) AND verify via per-quarter breakdown that the structural recovery is happening in RECENT quarters, not just cumulative anchoring. Reference the EXIT reasoning from PRIOR ALERT REASONING TRAIL — what specifically broke? Has it been fixed?' : ''}
-- EXIT: BWC team (${ctx.bwcFirePeriod ? 'the team that fired BWC in Q' + ctx.bwcFirePeriod : 'original BWC team'}) lost structural control. The SUBSCRIBER'S POSITION is on the BWC team, NOT the current control team. Frame the exit around the BWC team losing their edge. Reference the full arc from prior alerts.
-  Floor-margin confirmation: CONVERGING_DOWN + conviction DEGRADING = strong EXIT confirmation (genuine structural death). DIVERGING_POSITIVE (floor low but margin growing) = EXIT may be premature — structural floor is stale while the team is actually winning. Check conviction trend — if conviction held STABLE/DOMINANT throughout, the floor is the problem, not the team.
+- EXIT: The XGB structural model for ${ctx.bwcTeam || 'the BWC team'} has dropped below the exit threshold, indicating the raw game stats no longer support the position thesis.${ctx.exitSeverity?.xgb != null ? ' XGB: ' + (ctx.exitSeverity.xgb * 100).toFixed(1) + '% (threshold: ' + (ctx.exitSeverity.threshold * 100).toFixed(0) + '%).' : ''}${ctx.exitSeverity?.ctrlMatchesBWC === false ? ' NOTE: Structural control has ALSO flipped to ' + ctx.exitSeverity.ctrlTeam + ' — double confirmation.' : ctx.exitSeverity?.ctrlMatchesBWC === true ? ' NOTE: ' + ctx.bwcTeam + ' still holds structural control but raw stats are deteriorating — this is the slow bleed the indicator floor misses.' : ''} BWC state: ${ctx.exitSeverity?.bwcState || 'unknown'}.
+  The SUBSCRIBER'S POSITION is on ${ctx.bwcTeam || 'the BWC team'}. Frame the exit around the underlying stats declining. Reference the full arc from prior alerts.
+  EXIT on graduated positions is ALWAYS SEND. Your job is the narrative — what changed in the underlying stats, whether this looks permanent or temporary, and what the subscriber should watch for.
+  Floor-margin confirmation: CONVERGING_DOWN + conviction DEGRADING = strong EXIT confirmation (genuine structural death). DIVERGING_POSITIVE (floor low but margin growing) = the structural floor is stale while the team is actually winning — flag this honestly but still SEND.
 - BWC_EDGE: SEND by default — this is a position update for a subscriber already holding. Frame as reassurance: structural picture holding, lead compressing. Do NOT frame as a buy signal. MAY SUPPRESS if structural stress override applies (see STRUCTURAL STRESS CHECK). MUST include a RISK line at the end of the body — identify the ONE specific thing that could flip this position next (e.g., indicator about to flip, sustainability degrading, erosion approaching threshold, floor-margin DIVERGING_NEGATIVE meaning structure improving but margin shrinking). If prior alerts flagged a RISK, reference whether it materialized or not. Check conviction trend — DEGRADING conviction is a key risk to flag even if floor is stable. The RISK line creates accountability across the alert chain. Format body as: status update (2-3 sentences) + "RISK: [specific forward-looking concern]"
 - POSITION_SAFE / POSITION_RECOVERING: SEND as reassurance if prior alerts flagged risks or concerns. Include whether prior RISK materialized. SUPPRESS only if nothing changed AND no prior risk to update on. Write reasoning for compounding either way.
-${ctx.positionClosed ? '  POST-EXIT RECOVERY: Position is CLOSED — the subscriber was told to EXIT. This recovery alert (BWC team leading again) could RE-OPEN the position. Apply elevated scrutiny: (1) structural stress combined read must be REINFORCING or DOMINANT — not COLLAPSING/SHIFT/ERODING, (2) the indicators that caused the EXIT must have flipped BACK to the BWC team in recent quarters, (3) the recovery must be sustained (consecutive holds, not a single-snapshot spike). If the BWC team is genuinely back in control with structural evidence, SEND — this is a strong signal (thesis broke and then repaired). If the recovery looks like cumulative anchoring or a brief reclaim before the next flip, SUPPRESS. Reference the EXIT reasoning from the PRIOR ALERT REASONING TRAIL.' : ''}
+${ctx.positionClosed ? '  POST-EXIT RECOVERY: Position is CLOSED — the subscriber was told to EXIT (XGB dropped below threshold). This recovery alert fires because XGB has recovered above threshold + 0.10 for sustained evaluation. Apply elevated scrutiny: (1) structural stress combined read must be REINFORCING or DOMINANT — not COLLAPSING/SHIFT/ERODING, (2) verify in per-quarter breakdown that recent quarters show the BWC team recovering structurally, not just cumulative anchoring, (3) the XGB recovery must be supported by the underlying stats improving — check which features drove the recovery. If the BWC team is genuinely back with structural evidence AND XGB conviction, SEND — this is a strong signal (thesis broke and then repaired). If the recovery looks like a brief spike or noise, SUPPRESS. Reference the EXIT reasoning from the PRIOR ALERT REASONING TRAIL.' : ''}
 - BUY: structurally dominant team trailing. Standard evaluation — floor, indicators, TP, deficit depth (1-7 sweet spot; deeper deficits need stronger structural case). When bwcTeamMatch is noted, the team has BWC lifecycle context — reference the position arc. This is a "warm BUY" (thesis history). Without BWC context = "cold BUY" (unproven, higher bar for SEND).
 - BUY EVIDENCE (from 9,861-snapshot backtest, 502 BUY-eligible):
   WHAT WINS: trail 1-4 (44.6%) > trail 5-9 (25%) > trail 10+ (0%). 3+ ctrl indicators (45.6%) > <=2 (36.6%). Opp 0 indicators (48.6%) vs opp I1 or I2 won (28.5%). Best stack: trail 1-4 + 3+ ind + opp 0 indicators = 57.4% (n=115).
@@ -1709,14 +1711,41 @@ function computeBwcState(lt, ctrlTeam, margin) {
   const bwcFired = lt.bwc_fired;
   if (!bwcFired || !ctrlTeam) return null;
 
-  if (bwcFired.team === ctrlTeam) {
-    if (margin >= 3) return 'LOCK';
-    if (margin >= 1) return 'EDGE';
-    if (margin >= -7) return 'VALUE';
-    return 'DEEP_TRAIL';
-  } else {
-    return 'EXIT';
+  // Margin from BWC team's perspective (flip when BWC ≠ ctrl)
+  const bwcMargin = bwcFired.team === ctrlTeam ? margin : -margin;
+
+  if (bwcMargin >= 3) return 'LOCK';
+  if (bwcMargin >= 1) return 'EDGE';
+  if (bwcMargin >= -7) return 'VALUE';
+  return 'DEEP_TRAIL';
+}
+
+// XGB EXIT — fires when BWC team's XGB win prob drops below quarter-aware threshold.
+// Requires sustained signal (2 polls ~90s) to filter single-possession noise.
+// Replaces control-flip EXIT (backtest: 84.2% overall vs 72.5% ctrl flip).
+function checkXGBExit(lt, xgbBwcProb, period) {
+  if (period < 2) return false;
+  if (xgbBwcProb == null) return false;
+  if (lt.xgb_exit_sent) return false; // one-shot per position
+
+  const threshold = period >= 4 ? 0.45 : 0.40;
+
+  // Extreme collapse — bypass confirmation
+  if (xgbBwcProb < 0.15) return true;
+
+  if (xgbBwcProb < threshold) {
+    if (!lt.xgb_exit_warned) {
+      lt.xgb_exit_warned = Date.now();
+      return false; // first warning — start confirmation window
+    }
+    if (Date.now() - lt.xgb_exit_warned >= 90000) {
+      return true; // sustained below threshold for ~2 polls
+    }
+    return false; // still in confirmation window
+  } else if (xgbBwcProb >= threshold + 0.05) {
+    lt.xgb_exit_warned = null; // recovered — clear with hysteresis
   }
+  return false;
 }
 
 function classifyTransition(fromState, toState) {
@@ -5314,6 +5343,19 @@ export default async function(req) {
           const _xgbDivergence = _xgbWinProb != null ? Math.round((_xgbWinProb - ind.score) * 1000) / 1000 : null;
           const _xgbAligned = _xgbWinProb != null ? Math.abs(_xgbWinProb - ind.score) < 0.15 : null;
 
+          // XGB from BWC team's perspective (for EXIT detection)
+          // When BWC team IS ctrl team, reuse _xgbWinProb. Otherwise recompute with BWC as reference.
+          var _xgbBwcProb = null;
+          if (lt?.bwc_fired && _xgbWinProb != null) {
+            if (lt.bwc_fired.team === ind.controlTeam) {
+              _xgbBwcProb = _xgbWinProb;
+            } else {
+              const _bwcInd = { ...ind, controlTeam: lt.bwc_fired.team };
+              const _bwcFeatures = extractXGBFeatures(summary, _bwcInd, pbpResult, currentPeriod, clock);
+              _xgbBwcProb = _bwcFeatures ? predictXGB(_bwcFeatures) : null;
+            }
+          }
+
           // Compute deficit relative to control team
           const ctrlIsHome = ind.controlTeam === hA;
           const ctrlPts = ctrlIsHome ? ind.homePts : ind.awayPts;
@@ -5748,6 +5790,8 @@ export default async function(req) {
                 xgbDivergence: _xgbDivergence,
                 xgbAligned: _xgbAligned,
                 xgbShap: _xgbFeatures ? computeXGBContributions(_xgbFeatures) : null,
+                xgbBwcProb: _xgbBwcProb != null ? Math.round(_xgbBwcProb * 1000) / 1000 : null,
+                exitSeverity: v2ExitSev || null,
               };
 
               // DB-level dedup — catch concurrent invocations BEFORE burning agent tokens
@@ -6388,7 +6432,7 @@ export default async function(req) {
                 if (v2Dir === 'DEGRADING') {
                   if (v2BwcState === 'EDGE') v2AlertType = 'BWC_EDGE';
                   else if (v2BwcState === 'VALUE') v2AlertType = 'VALUE';
-                  else if (v2BwcState === 'EXIT') v2AlertType = 'EXIT';
+                  // EXIT no longer fires via state transition — handled by XGB EXIT below
                 } else if (v2Dir === 'RECOVERING') {
                   if (v2BwcState === 'LOCK') v2AlertType = 'POSITION_SAFE';
                   else if (v2BwcState === 'EDGE') v2AlertType = 'POSITION_RECOVERING';
@@ -6414,12 +6458,7 @@ export default async function(req) {
                   const _v2ShouldFire = _v2StateChanged || _v2MaterialChange;
 
                   if (_v2ShouldFire && alertMinsLeft >= 1.0 && ind.controlTeam !== 'Neither') {
-                    // Exit severity for EXIT alerts
                     var _v2ExitSev = null;
-                    if (v2BwcState === 'EXIT') {
-                      const _oppInd = _indNames.filter((n, i) => _indScores[i] && _ctrlScoreFn(_indScores[i].score) >= 0.55);
-                      _v2ExitSev = computeExitSeverity(_oppInd, _oppInd.length, ind.score, lt.ctrl_team_holds || 0);
-                    }
 
                     log(`${matchup}: ▶ V2 TRIGGER ${v2AlertType} [${lt._prev_bwc_state}→${v2BwcState}] floor=${ind.score.toFixed(2)} margin=${_v2Margin} erosion=${v2AlertType === 'POSITION_OPEN' ? v2Erosion.level : (typeof meanErosion !== 'undefined' && meanErosion ? meanErosion.level || v2Erosion.level : v2Erosion.level)}(${v2AlertType === 'POSITION_OPEN' ? 'peak' : 'mean'}) ctrl=${_ctrlInd.join('+')||'none'}(${_ctrlInd.length}/5) opp=${_oppIndW.join('+')||'none'} oppI3=${_oppI3Won}${_v2ExitSev ? ' exit=' + _v2ExitSev.severity : ''} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||lsForBWC?.classification||'-'}`);
 
@@ -6443,6 +6482,69 @@ export default async function(req) {
                   }
                   } // close position gate else
                 }
+              }
+            }
+
+            // ── XGB EXIT — Pure XGB replaces control-flip EXIT ──────────────────
+            // Backtest: 92.4% exit accuracy (Q4 at 0.45: 90.8%) vs 63.7% control flip.
+            // fires when BWC team's XGB drops below quarter-aware threshold for 2+ polls.
+            if (lt.bwc_fired && lt.po_fired && _xgbBwcProb != null
+                && alertMinsLeft >= 1.0 && ind.controlTeam !== 'Neither') {
+              if (checkXGBExit(lt, _xgbBwcProb, currentPeriod)) {
+                const _xgbThreshold = currentPeriod >= 4 ? 0.45 : 0.40;
+                const _xgbExitSev = {
+                  severity: _xgbBwcProb < 0.15 ? 'COLLAPSE' : _xgbBwcProb < 0.25 ? 'SEVERE' : 'STANDARD',
+                  xgb: Math.round(_xgbBwcProb * 1000) / 1000,
+                  threshold: _xgbThreshold,
+                  bwcState: v2BwcState,
+                  ctrlTeam: ind.controlTeam,
+                  bwcTeam: lt.bwc_fired.team,
+                  ctrlMatchesBWC: ind.controlTeam === lt.bwc_fired.team,
+                };
+                log(`${matchup}: ▶ XGB EXIT — ${lt.bwc_fired.team} xgb=${_xgbBwcProb.toFixed(3)} < threshold ${_xgbThreshold} (Q${currentPeriod}) bwcState=${v2BwcState} ctrl=${ind.controlTeam} margin=${_v2Margin} severity=${_xgbExitSev.severity}`);
+
+                lt.xgb_exit_sent = true;
+                lt.xgb_exit_xgb = _xgbBwcProb;
+                lt.xgb_exit_ts = Date.now();
+                lt.xgb_exit_warned = null;
+
+                // Save lt BEFORE agent call (race-safe)
+                try { await sql`UPDATE games SET live_tracking = ${JSON.stringify(lt)} WHERE id = ${game.id}`; } catch(e) {}
+
+                await routeV2Alert('EXIT', 'FIRED', _xgbExitSev, false);
+
+              } else if (lt.xgb_exit_warned && !lt.xgb_exit_sent) {
+                log(`${matchup}: XGB EXIT warned — ${lt.bwc_fired.team} xgb=${_xgbBwcProb.toFixed(3)} (waiting for confirmation, warned ${Math.round((Date.now() - lt.xgb_exit_warned) / 1000)}s ago)`);
+              }
+            }
+
+            // ── XGB RECOVERY — Re-entry signal after XGB EXIT ───────────────────
+            // Fires when XGB recovers above threshold + 0.10 for 2+ polls.
+            if (lt.xgb_exit_sent && lt.position_closed && _xgbBwcProb != null
+                && lt.bwc_fired && alertMinsLeft >= 1.0 && ind.controlTeam !== 'Neither') {
+              const _recoveryThreshold = (currentPeriod >= 4 ? 0.45 : 0.40) + 0.10;
+
+              if (_xgbBwcProb >= _recoveryThreshold) {
+                if (!lt.xgb_recovery_warned) {
+                  lt.xgb_recovery_warned = Date.now();
+                } else if (Date.now() - lt.xgb_recovery_warned >= 90000) {
+                  // Sustained recovery — map to recovery alert type based on BWC state
+                  var _recoveryType = 'THESIS_ALIVE';
+                  if (v2BwcState === 'LOCK') _recoveryType = 'POSITION_SAFE';
+                  else if (v2BwcState === 'EDGE') _recoveryType = 'POSITION_RECOVERING';
+
+                  log(`${matchup}: ▶ XGB RECOVERY — ${lt.bwc_fired.team} xgb=${_xgbBwcProb.toFixed(3)} recovered above ${_recoveryThreshold} (bwcState=${v2BwcState}) → ${_recoveryType}`);
+
+                  lt.xgb_exit_sent = false;
+                  lt.xgb_recovery_warned = null;
+                  lt.xgb_exit_warned = null;
+
+                  try { await sql`UPDATE games SET live_tracking = ${JSON.stringify(lt)} WHERE id = ${game.id}`; } catch(e) {}
+
+                  await routeV2Alert(_recoveryType, 'FIRED', null, false);
+                }
+              } else {
+                lt.xgb_recovery_warned = null; // recovery stalled, reset
               }
             }
 
