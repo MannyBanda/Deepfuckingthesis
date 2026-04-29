@@ -1722,13 +1722,15 @@ function computeBwcState(lt, ctrlTeam, margin) {
 
 // XGB EXIT — fires when BWC team's XGB win prob drops below quarter-aware threshold.
 // Requires sustained signal (2 polls ~90s) to filter single-possession noise.
-// Replaces control-flip EXIT (backtest: 84.2% overall vs 72.5% ctrl flip).
+// Replaces control-flip EXIT. Backtest (998 graduated games):
+//   0.50/0.55: 77.2% exit acc, 81.2% loss prot, exits ~9min earlier than flip, margin +0.8 at exit
+//   vs flip:   54.1% exit acc, 68.2% loss prot, margin -2.8 at exit
 function checkXGBExit(lt, xgbBwcProb, period) {
   if (period < 2) return false;
   if (xgbBwcProb == null) return false;
   if (lt.xgb_exit_sent) return false; // one-shot per position
 
-  const threshold = period >= 4 ? 0.45 : 0.40;
+  const threshold = period >= 4 ? 0.55 : 0.50;
 
   // Extreme collapse — bypass confirmation
   if (xgbBwcProb < 0.15) return true;
@@ -6493,7 +6495,7 @@ export default async function(req) {
             if (lt.bwc_fired && lt.po_fired && _xgbBwcProb != null
                 && alertMinsLeft >= 1.0 && ind.controlTeam !== 'Neither') {
               if (checkXGBExit(lt, _xgbBwcProb, currentPeriod)) {
-                const _xgbThreshold = currentPeriod >= 4 ? 0.45 : 0.40;
+                const _xgbThreshold = currentPeriod >= 4 ? 0.55 : 0.50;
                 const _xgbExitSev = {
                   severity: _xgbBwcProb < 0.15 ? 'COLLAPSE' : _xgbBwcProb < 0.25 ? 'SEVERE' : 'STANDARD',
                   xgb: Math.round(_xgbBwcProb * 1000) / 1000,
@@ -6524,7 +6526,7 @@ export default async function(req) {
             // Fires when XGB recovers above threshold + 0.10 for 2+ polls.
             if (lt.xgb_exit_sent && lt.position_closed && _xgbBwcProb != null
                 && lt.bwc_fired && alertMinsLeft >= 1.0 && ind.controlTeam !== 'Neither') {
-              const _recoveryThreshold = (currentPeriod >= 4 ? 0.45 : 0.40) + 0.10;
+              const _recoveryThreshold = (currentPeriod >= 4 ? 0.55 : 0.50) + 0.10;
 
               if (_xgbBwcProb >= _recoveryThreshold) {
                 if (!lt.xgb_recovery_warned) {
