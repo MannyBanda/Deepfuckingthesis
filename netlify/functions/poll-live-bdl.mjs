@@ -421,6 +421,12 @@ ${ctx.alertType === 'XGB_INVALIDATED' ? `XGB THESIS COLLAPSE:
   Current XGB: ${(ctx.xgbWinProb * 100).toFixed(1)}% — BELOW Q${ctx.period} gate of ${(ctx.xgbQuarterGate * 100).toFixed(0)}%
   Drop: ${((ctx.xgbBuySendProb - ctx.xgbWinProb) * 100).toFixed(0)}pp
   The raw-stats model no longer sees a viable structural edge. ALWAYS SEND this alert — add narrative about what changed.` : ''}
+${ctx.vulnerabilityWarning ? `
+VULNERABILITY WARNING (fired earlier this game):
+  ${ctx.vulnerabilityWarning.team} flagged as vulnerable at Q${ctx.vulnerabilityWarning.period} ${ctx.vulnerabilityWarning.clock}
+  PBP 15-possession window: ${(ctx.vulnerabilityWarning.window_score * 100).toFixed(0)}% (ctrl-relative) — opponent dominated recent possessions
+  XGB at warning: ${(ctx.vulnerabilityWarning.xgb * 100).toFixed(0)}% | Margin at warning: ${ctx.vulnerabilityWarning.margin}
+  This means the structural shift was detected BEFORE cumulative indicators caught up. Weight heavily for EXIT/BWC_EDGE/POSITION_SAFE decisions — the PBP window saw this coming.` : ''}
 
 FLOOR TRAJECTORY:
 ${ctx.floorHistory || 'No prior snapshots'}
@@ -635,7 +641,7 @@ RULES:
   • Floor dropped 0.10+ from prior snapshots + conviction downgraded → SEND: structural case is deteriorating
   • If a prior BWC or BUY was SENT for this team in priorAlerts: lean SEND — the subscriber has a position to protect and needs to know about threats
 - VARIANCE BREAKING: opponent's shooting is regressing toward the mean. SEND if structural edge is clear (I4 COMBO YES, 3+ indicators) and the sustainability shift is meaningful. SUPPRESS if structural edge is thin (I4 EVEN, 1-2 indicators) or the sustainability drop is a borderline tier flip that could reverse.
-- STRUCTURAL_SHIFT: Pre-flip early warning — the trailing team is gaining structural control BEFORE the floor has officially flipped. Fires when: floor declined 0.15+ from peak, trailing team holds 1+ indicators in the recent window (0.65+), and margin compressed 3+ from peak (Q3+). ALWAYS SEND — the mechanical gates are the filter. Your job is to add valuable context: (1) WHICH indicators the incoming team holds and whether they are structural (I1 disruption / I2 paint / I4 game control) or variance-based (I3 shot quality only), (2) whether the shift is likely to result in a full control flip or just a temporary compression, (3) the floor reliability class of both teams if available. Frame as informational: "Structural shift developing — [team] recovering structural control." This is NOT a position recommendation — it is a heads-up that a control flip may be incoming.
+- VULNERABILITY: Fires mechanically (no agent call) when the ctrl team is leading by 0-5, XGB < 0.65, and the PBP 15-possession window shows the opponent dominating (ctrl score <= 0.45). When you see VULNERABILITY in priorAlerts or the VULNERABILITY WARNING section above, it means the structural shift was detected via possession-level data BEFORE cumulative indicators reacted. This is highly predictive — weight it heavily when evaluating subsequent BWC_EDGE (lean SUPPRESS or add strong RISK line), POSITION_SAFE (flag that the position was already vulnerable), and EXIT decisions (confirms the structural collapse was real and early-detected). The vulnerability warning is the PBP window catching what cumulative floor and XGB miss due to anchoring.
 - XGB_INVALIDATED: The structural model (XGBoost) that supported a prior BUY has dropped below the quarter's viability gate (Q2<0.40, Q3<0.45, Q4<0.60). ALWAYS SEND — the mechanical gate is the filter. Your job is to add narrative context: (1) what the SHAP drivers are showing NOW vs at BUY time — has interior/paint collapsed? has disruption (I1) flipped? (2) whether the XGB drop is driven by raw stat decay or game progress pressure, (3) what the current structural picture looks like (indicators, conviction, floor-margin relationship). Frame as: "The structural model no longer supports the [TEAM] BUY — [explain what changed in basketball terms]. Consider exiting if you took this position." This is an exit signal, not a veto of future entry.
 - ANCHORED FLOOR CHECK: If team is TRAILING with floor 0.75+ but margin only 1-3 pts AND floor is declining from recent snapshots, the floor may be anchored from earlier dominance that has eroded. Verify recent quarters still favor control team before SEND. This rule does NOT apply to leading teams (BWC/WINDOW BUY) — a high floor with a small lead is a valid structural read.
 - EARLY GAME NOTE (Q1-Q2): Indicator samples are smaller early — steals/blocks counts are low, run share may not be populated yet, and biggest_lead gaps can form from a single early run. This does NOT mean early signals are unreliable. The new indicator formulas have proven predictive even in Q2. For Q1-Q2 FIRED alerts: I4 COMBO YES = SEND with confidence. I4 COMBO NO = apply normal scrutiny (don't auto-reject, just verify the structural case). For Q1-Q2 CANDIDATE alerts: I4 COMBO YES = SEND. I4 COMBO NO = apply extra scrutiny but still SEND if floor is strong (0.75+) and sustainability favors control team. Q3+ alerts have the most data — highest confidence.
@@ -1370,8 +1376,139 @@ function parseBDLPBPServer(plays, homeAbbr, awayAbbr) {
     runs6,
     perQuarter: buildPerQuarterMetrics(shots, turnovers, hA, aA),
     pbpPeriod: lastP, pbpAge: 0,
+    possLog: buildPossLogServer(sorted, hA, aA),
     _bdl: { potHome: potH, potAway: potA, scpHome: scpH, scpAway: scpA, biggestLeadHome: bigH, biggestLeadAway: bigA, scoreLog },
   };
+}
+
+// ── POSSESSION LOG & WINDOW (for VULNERABILITY warning) ──────────────────
+// Walks sorted BDL plays, segments into possessions.
+// Possession boundary: made shot (non-FT or final FT), turnover, defensive rebound, offensive foul, end of period.
+function buildPossLogServer(sorted, hA, aA) {
+  if (!sorted || sorted.length < 20) return null;
+  const possessions = [];
+  let cur = null;
+
+  function flush() {
+    if (cur && cur.team) possessions.push(cur);
+    cur = { team: null, pts: 0, fgm: 0, fga: 0, fg3m: 0, fg3a: 0, ast: 0, tos: 0, stl: 0, oreb: 0, dreb: 0, fta: 0, ftm: 0, q: 0 };
+  }
+  flush();
+
+  for (const ev of sorted) {
+    const type = (ev.type || '').trim(), tl = type.toLowerCase();
+    const text = (ev.text || '').toLowerCase();
+    const tAbbr = ev.team?.abbreviation || '';
+    const team = tAbbr === hA ? hA : tAbbr === aA ? aA : '';
+    if (!team) continue;
+    const quarter = ev.period || 0;
+    if (tl.includes('substitution') || text.includes('enters the game for')) continue;
+
+    // End of period = flush
+    if (tl.includes('end period') || tl.includes('end game')) { flush(); continue; }
+
+    // Set possession team on first meaningful event
+    if (!cur.team) { cur.team = team; cur.q = quarter; }
+
+    // Free throws — don't end possession unless final FT
+    if (tl.includes('free throw')) {
+      const made = ev.scoring_play || false;
+      cur.fta++;
+      if (made) { cur.ftm++; cur.pts++; }
+      const ftM = type.match(/(\d+)\s*of\s*(\d+)/i);
+      if (ftM && ftM[1] === ftM[2] && made) flush(); // final FT made = end possession
+      continue;
+    }
+
+    // Shooting play (non-FT)
+    if (ev.shooting_play) {
+      const made = ev.scoring_play || false;
+      const is3 = ev.score_value === 3 || text.includes('three point');
+      cur.fga++;
+      if (is3) cur.fg3a++;
+      if (made) {
+        cur.fgm++;
+        const pts = ev.score_value || (is3 ? 3 : 2);
+        cur.pts += pts;
+        if (is3) cur.fg3m++;
+        if ((ev.text || '').toLowerCase().includes('ast')) cur.ast++;
+        flush(); // made shot = end possession
+      }
+      continue;
+    }
+
+    // Turnover = end possession, credit steal to opponent
+    if (tl.includes('turnover')) {
+      cur.tos++;
+      flush();
+      // Credit steal to next possession's team (opponent)
+      const oppTeam = team === hA ? aA : hA;
+      cur.team = oppTeam; cur.q = quarter; cur.stl++;
+      continue;
+    }
+
+    // Rebound
+    if (tl.includes('rebound')) {
+      if (tl.includes('offensive')) {
+        cur.oreb++; // possession continues
+      } else {
+        // Defensive rebound = new possession for rebounding team
+        flush();
+        cur.team = team; cur.q = quarter; cur.dreb++;
+      }
+      continue;
+    }
+
+    // Offensive foul = turnover equivalent
+    if (tl.includes('foul') && tl.includes('offensive')) {
+      flush();
+      continue;
+    }
+  }
+  flush(); // final possession
+  return possessions.filter(p => p.team); // drop empty
+}
+
+// Score I1-I5 on last N possessions. Returns ctrl-team-relative score 0-1.
+// score > 0.5 = ctrl team winning the window; score < 0.5 = opponent winning.
+function computePossWindowServer(possLog, windowSize, hA, aA) {
+  if (!possLog || possLog.length < windowSize) return { available: false };
+  const window = possLog.slice(-windowSize);
+
+  const hPoss = window.filter(p => p.team === hA), aPoss = window.filter(p => p.team === aA);
+  const hPts = hPoss.reduce((s, p) => s + p.pts, 0), aPts = aPoss.reduce((s, p) => s + p.pts, 0);
+  const hStl = hPoss.reduce((s, p) => s + p.stl, 0), aStl = aPoss.reduce((s, p) => s + p.stl, 0);
+  const hFGM = hPoss.reduce((s, p) => s + p.fgm, 0), aFGM = aPoss.reduce((s, p) => s + p.fgm, 0);
+  const hFGA = hPoss.reduce((s, p) => s + p.fga, 0), aFGA = aPoss.reduce((s, p) => s + p.fga, 0);
+  const hFG3M = hPoss.reduce((s, p) => s + p.fg3m, 0), aFG3M = aPoss.reduce((s, p) => s + p.fg3m, 0);
+  const hAst = hPoss.reduce((s, p) => s + p.ast, 0), aAst = aPoss.reduce((s, p) => s + p.ast, 0);
+  const hTos = hPoss.reduce((s, p) => s + p.tos, 0), aTos = aPoss.reduce((s, p) => s + p.tos, 0);
+
+  // eFG%
+  const hEFG = hFGA > 0 ? (hFGM + 0.5 * hFG3M) / hFGA : 0;
+  const aEFG = aFGA > 0 ? (aFGM + 0.5 * aFG3M) / aFGA : 0;
+  // 2PT scoring (interior proxy — exclude 3s)
+  const h2pts = hPoss.reduce((s, p) => s + (p.fgm - p.fg3m) * 2 + p.ftm, 0);
+  const a2pts = aPoss.reduce((s, p) => s + (p.fgm - p.fg3m) * 2 + p.ftm, 0);
+  // Assist rate
+  const hAstR = hFGM > 0 ? hAst / hFGM : 0, aAstR = aFGM > 0 ? aAst / aFGM : 0;
+  // PPP
+  const hPPP = hPoss.length > 0 ? hPts / hPoss.length : 0, aPPP = aPoss.length > 0 ? aPts / aPoss.length : 0;
+
+  // Normalize diffs to 0-1 scale (clamp with sigmoid-like mapping)
+  function norm(diff, scale) { return 0.5 + 0.5 * Math.max(-1, Math.min(1, diff / scale)); }
+
+  const i1 = norm(hStl - aStl, 3);         // I1: Steals diff (disruption)
+  const i2 = norm(h2pts - a2pts, 8);        // I2: 2PT scoring (interior)
+  const i3 = norm((hEFG - aEFG) * 10 + (hAstR - aAstR) * 2, 3); // I3: eFG + assist rate
+  const i4 = norm(hPts - aPts, 10);         // I4: Points diff (game control)
+  const i5 = norm(hPPP - aPPP, 0.3);        // I5: PPP diff (efficiency)
+
+  // Weighted composite (same weights as framework)
+  const score = i1 * 0.25 + i2 * 0.25 + i3 * 0.20 + i4 * 0.20 + i5 * 0.10;
+  const controlTeam = score >= 0.5 ? hA : aA;
+
+  return { available: true, score, controlTeam, i1, i2, i3, i4, i5, windowSize, possCount: window.length };
 }
 
 // Normalize BDL clock format — strips period prefix, handles sub-minute and special labels
@@ -4399,7 +4536,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
 
         // ── 10a. POSITION GATE — auto-analysis only sends as position updates ──
         // Query for most recent SENT actionable alert for this game
-        const POSITION_TYPES = ['BUY', 'BUY WINDOW CLOSING', 'WINDOW BUY', 'RECOVERY PATH', 'LEAD CRUMBLING', 'LEAD LOST', 'VARIANCE BREAKING', 'STRUCTURAL_SHIFT', 'POSITION_OPEN', 'BWC_EDGE', 'VALUE', 'EXIT', 'THESIS_ALIVE', 'POSITION_RECOVERING', 'POSITION_SAFE'];
+        const POSITION_TYPES = ['BUY', 'BUY WINDOW CLOSING', 'WINDOW BUY', 'RECOVERY PATH', 'LEAD CRUMBLING', 'LEAD LOST', 'VARIANCE BREAKING', 'VULNERABILITY', 'POSITION_OPEN', 'BWC_EDGE', 'VALUE', 'EXIT', 'THESIS_ALIVE', 'POSITION_RECOVERING', 'POSITION_SAFE'];
         let priorPosition = null;
         try {
           const priorRows = await sql`
@@ -4511,7 +4648,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
             const sameTeam = pp.control_team === ind.controlTeam;
             const floorDelta = ind.score - Number(pp.floor_score);
             const statusWord = !sameTeam ? 'At Risk' : floorDelta > 0.1 ? 'Improving' : floorDelta < -0.1 ? 'Fading' : 'Holding';
-            const _alertReadable = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Holding','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','WINDOW BUY':'Window Buy','RECOVERY PATH':'Recovery Path','STRUCTURAL_SHIFT':'Structural Shift'}[pp.alert_type] || pp.alert_type;
+            const _alertReadable = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Holding','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','WINDOW BUY':'Window Buy','RECOVERY PATH':'Recovery Path','VULNERABILITY':'Vulnerability'}[pp.alert_type] || pp.alert_type;
             const ntfyTitle = `UPDATE: Your Q${pp.period} ${_alertReadable} on ${pp.control_team} is ${statusWord}`;
             // Agent writes the body via BODY: response, use it if available
             const agentBody = agentResult?.body || '';
@@ -4532,7 +4669,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           } else {
             const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${period} ${clock}`;
             const pp = priorPosition;
-            const _alertReadableW = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Holding','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','WINDOW BUY':'Window Buy','RECOVERY PATH':'Recovery Path','STRUCTURAL_SHIFT':'Structural Shift'}[pp.alert_type] || pp.alert_type;
+            const _alertReadableW = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Holding','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','WINDOW BUY':'Window Buy','RECOVERY PATH':'Recovery Path','VULNERABILITY':'Vulnerability'}[pp.alert_type] || pp.alert_type;
             const ntfyTitle = `WATCH: Your Q${pp.period} ${_alertReadableW} on ${pp.control_team} Needs Attention`;
             const agentBody = agentResult?.body || '';
             const ntfyBody = scoreLine
@@ -5672,7 +5809,7 @@ export default async function(req) {
                 'POSITION_RECOVERING': 'STRENGTHENING',
                 'POSITION_SAFE': 'POSITION SAFE',
                 'BUY': 'BUY',
-                'STRUCTURAL_SHIFT': 'STRUCTURAL SHIFT',
+                'VULNERABILITY': 'VULNERABILITY',
               };
 
               const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
@@ -5796,6 +5933,8 @@ export default async function(req) {
                 xgbShap: _xgbFeatures ? computeXGBContributions(_xgbFeatures) : null,
                 xgbBwcProb: _xgbBwcProb != null ? Math.round(_xgbBwcProb * 1000) / 1000 : null,
                 exitSeverity: v2ExitSev || null,
+                // Vulnerability warning context (if fired earlier in this game)
+                vulnerabilityWarning: lt._vuln_fired || null,
               };
 
               // DB-level dedup — catch concurrent invocations BEFORE burning agent tokens
@@ -6626,112 +6765,53 @@ export default async function(req) {
             }
           }
 
-          // ── STRUCTURAL SHIFT WARNING ──
-          // Pre-flip early warning: trailing team gaining structural control before floor flips
-          if (currentPeriod >= 3 && ind.controlTeam && _windowResult?.available) {
-            const _ssCtrlIsHome = ind.controlTeam === hA;
-            const _ssOppInds = ['I1','I2','I3','I4','I5'].filter(k => {
-              const s = ind[k]?.score;
-              return s != null && (_ssCtrlIsHome ? s <= 0.45 : s >= 0.55);
-            });
-            const _ssFloorSide = _ssCtrlIsHome ? 'home' : 'away';
-            const _ssPeakFloor = lt[_ssFloorSide + '_peak_floor'] || ind.score;
-            const _ssFloorDecline = _ssPeakFloor - ind.score;
-            const _ssCtrlPts = _ssCtrlIsHome ? ind.homePts : ind.awayPts;
-            const _ssOppPts = _ssCtrlIsHome ? ind.awayPts : ind.homePts;
-            const _ssMargin = _ssCtrlPts - _ssOppPts; // positive = ctrl leading
-            const _ssCtrlStats = _ssCtrlIsHome ? (summary.home?.statistics || {}) : (summary.away?.statistics || {});
-            const _ssPeakMargin = _ssCtrlStats.biggest_lead || _ssMargin;
-            const _ssCompression = _ssPeakMargin - _ssMargin;
-            // Trailing team name
-            const _ssTrailingTeam = _ssCtrlIsHome ? aA : hA;
-            // Opponent's window strength (how strong is the trailing team in the recent window?)
-            const _ssOppWindow = _windowResult.score != null
-              ? (_windowResult.controlTeam === _ssTrailingTeam ? _windowResult.score : 1 - _windowResult.score)
-              : null;
+          // ── VULNERABILITY WARNING ──
+          // Ctrl team leading but PBP possession window + XGB + tight margin say lead is fragile.
+          // Mechanical fire — no agent call. Context injected into subsequent agent alerts via lt._vuln_fired.
+          // Backtest: 47.4% precision on 342 fires (mg<=5), 1.78x lift vs 26.6% base rate.
+          if (currentPeriod >= 3 && ind.controlTeam && ind.controlTeam !== 'Neither'
+              && _v2Margin >= 0 && _v2Margin <= 5
+              && _xgbWinProb != null && _xgbWinProb < 0.65
+              && alertMinsLeft >= 1.0) {
+            // Compute PBP possession window (last 15 possessions, ctrl-relative)
+            const _vulnPossWindow = computePossWindowServer(pbpResult?.possLog, 15, hA, aA);
+            if (_vulnPossWindow.available) {
+              const _vulnCtrlIsHome = ind.controlTeam === hA;
+              // Convert to ctrl-team-relative: score > 0.5 = home winning window
+              const _vulnCtrlScore = _vulnCtrlIsHome ? _vulnPossWindow.score : (1 - _vulnPossWindow.score);
 
-            // GATES: floor decline >= 0.15 + opp 1+ indicators + compression >= 3 + opp window >= 0.65
-            const _ssGates = _ssFloorDecline >= 0.15
-              && _ssOppInds.length >= 1
-              && _ssCompression >= 3
-              && _ssOppWindow != null && _ssOppWindow >= 0.65
-              && _ssMargin >= 0;  // ctrl team still leading (pre-flip, not post-flip)
+              if (_vulnCtrlScore <= 0.45) {
+                // Dedup: once per ctrl team per game
+                const _vulnFired = lt._vuln_warnings || {};
+                if (!_vulnFired[ind.controlTeam]) {
+                  lt._vuln_warnings = { ..._vulnFired, [ind.controlTeam]: true };
+                  // Store for agent context injection on subsequent alerts
+                  lt._vuln_fired = { team: ind.controlTeam, period: currentPeriod, clock, window_score: _vulnCtrlScore, xgb: _xgbWinProb, margin: _v2Margin };
+                  const _vulnOppTeam = _vulnCtrlIsHome ? aA : hA;
 
-            // Dedup: once per game per trailing team
-            const _ssKey = `shift_${_ssTrailingTeam}`;
-            const _ssFired = lt._shift_warnings || {};
+                  log(`${matchup}: ★ VULNERABILITY WARNING — ${ind.controlTeam} up ${_v2Margin} but vulnerable. PBP=${_vulnCtrlScore.toFixed(2)} XGB=${_xgbWinProb.toFixed(3)} mg=${_v2Margin}`);
 
-            if (_ssGates && !_ssFired[_ssKey]) {
-              log(`${matchup}: ★ STRUCTURAL SHIFT WARNING — ${_ssTrailingTeam} gaining control. FlDec=${_ssFloorDecline.toFixed(2)} comp=${_ssCompression} oppInds=${_ssOppInds.join('+')} oppWin=${_ssOppWindow?.toFixed(2)} mg=${_ssMargin}`);
-              lt._shift_warnings = { ..._ssFired, [_ssKey]: true };
+                  // Check for active position
+                  const _vulnHasPosition = lt.bwc_fired?.team === ind.controlTeam || lt.buy_position?.team === ind.controlTeam;
+                  const _vulnPosNote = _vulnHasPosition
+                    ? `\nActive position: ${ind.controlTeam} (${lt.cp_peak_rank || '?'}-rank, Q${lt.bwc_fired?.period || lt.buy_position?.period || '?'}).`
+                    : '';
 
-              // Route through agent — use the same routeV2Alert mechanism
-              // Need to temporarily set up context for routeV2Alert
-              const _ssAgentCtx = await gatherAgentContext(sql, game.id, matchup);
-              const _ssV2Ctx = {
-                alertType: 'STRUCTURAL_SHIFT', alertTier: 'FIRED',
-                ctrlTeam: ind.controlTeam, ctrlIsHome: _ssCtrlIsHome,
-                floor: ind.score?.toFixed(2), margin: _ssMargin,
-                bwcTeam: lt.bwc_fired?.team || null,
-                bwcFirePeriod: lt.bwc_fired?.period || null,
-                homeAlias: hA, awayAlias: aA, homePts: ind.homePts, awayPts: ind.awayPts,
-                period: currentPeriod, clock,
-                ctrlSust: sust?.[_ssCtrlIsHome ? 'home' : 'away']?.tier || null,
-                oppSust: sust?.[_ssCtrlIsHome ? 'away' : 'home']?.tier || null,
-                windowScore: _windowScore,
-                rollingWindow: _windowResult,
-                i1: (_ssCtrlIsHome ? ind.I1?.score : (1 - (ind.I1?.score || 0.5)))?.toFixed(2),
-                i2: (_ssCtrlIsHome ? ind.I2?.score : (1 - (ind.I2?.score || 0.5)))?.toFixed(2),
-                i3: (_ssCtrlIsHome ? ind.I3?.score : (1 - (ind.I3?.score || 0.5)))?.toFixed(2),
-                i4: (_ssCtrlIsHome ? ind.I4?.score : (1 - (ind.I4?.score || 0.5)))?.toFixed(2),
-                i5: (_ssCtrlIsHome ? ind.I5?.score : (1 - (ind.I5?.score || 0.5)))?.toFixed(2),
-                convictionTier: conviction?.tier || null, convictionCombo: conviction?.combo || null,
-                oppIndicatorsWon: _ssOppInds.join('+'), oppIndicatorCount: _ssOppInds.length,
-                combinedRead: null,
-                erosionLevel: null, peakFloor: _ssPeakFloor,
-                floorWPHistorical: _floorWP.wp, reliabilityClass: _floorWP.reliabilityClass, floorGrip: _floorWP.grip,
-                priorAlertTrail: _ssAgentCtx?.priorAlerts || null,
-                shiftTrailingTeam: _ssTrailingTeam,
-                shiftFloorDecline: _ssFloorDecline.toFixed(2),
-                shiftCompression: _ssCompression,
-                shiftOppWindow: _ssOppWindow?.toFixed(2),
-                shiftOppInds: _ssOppInds.join('+'),
-              };
+                  // Mechanical narrative
+                  const _vulnBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\n${ind.controlTeam} up ${_v2Margin} but structurally vulnerable — XGB ${(_xgbWinProb * 100).toFixed(0)}%, ${_vulnOppTeam} dominating last 15 possessions (PBP window ${_vulnCtrlScore.toFixed(2)}). Watch closely.${_vulnPosNote}`;
 
-              const _ssPrompt = buildV2AgentPrompt(_ssV2Ctx);
-              try {
-                const _ssAgentResp = await fetch('https://api.anthropic.com/v1/messages', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-                  body: JSON.stringify({ model: 'claude-opus-4-6', max_tokens: 600, messages: [{ role: 'user', content: _ssPrompt }] }),
-                });
-                const _ssAgentData = await _ssAgentResp.json();
-                const _ssAgentText = _ssAgentData.content?.[0]?.text || '';
-                const _ssDecision = _ssAgentText.match(/DECISION:\s*(SEND|SUPPRESS|DOWNGRADE)/)?.[1] || 'SEND';
-                const _ssBody = _ssAgentText.match(/BODY:\s*([\s\S]*?)(?:\n(?:DECISION|REASONING):|$)/)?.[1]?.trim() || '';
-                const _ssReasoning = _ssAgentText.match(/REASONING:\s*([\s\S]*?)(?:\n(?:DECISION|BODY):|$)/)?.[1]?.trim() || '';
+                  // DB insert
+                  try {
+                    const _vulnCtrlSust = sust?.[_vulnCtrlIsHome ? 'home' : 'away']?.tier || null;
+                    const _vulnOppSust = sust?.[_vulnCtrlIsHome ? 'away' : 'home']?.tier || null;
+                    await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
+                      VALUES (${game.id}, ${league}, ${'VULNERABILITY'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${false}, ${null}, ${null}, ${spreadVal}, ${snapTp?.classification || null}, ${snapLs?.classification || null}, ${_vulnCtrlSust}, ${_vulnOppSust}, ${_vulnCtrlScore}, ${'FIRED'}, ${'SEND'}, ${_vulnBody}, ${ind.I1?.score}, ${ind.I2?.score}, ${ind.I3?.score}, ${ind.I4?.score}, ${ind.I5?.score}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${true}, ${ind.controlTeam}, ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
+                  } catch (e) { log(`${matchup}: VULNERABILITY DB insert error: ${e.message}`); }
 
-                // Save alert
-                const _ssWinScore = _windowScore;
-                await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team)
-                  VALUES (${game.id}, ${league}, ${'STRUCTURAL_SHIFT'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_ssMargin}, ${false}, ${null}, ${null}, ${spreadVal}, ${snapTp?.classification || null}, ${snapLs?.classification || null}, ${_ssV2Ctx.ctrlSust}, ${_ssV2Ctx.oppSust}, ${_ssWinScore}, ${'FIRED'}, ${_ssDecision}, ${_ssReasoning || _ssBody}, ${ind.I1?.score}, ${ind.I2?.score}, ${ind.I3?.score}, ${ind.I4?.score}, ${ind.I5?.score}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${_ssDecision === 'SEND'}, ${_ssTrailingTeam})`;
-
-                if (_ssDecision === 'SEND') {
-                  const _ssNtfyTitle = `STRUCTURAL SHIFT — ${matchup}`;
-                  let _ssNtfyBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\n`;
-                  _ssNtfyBody += _ssBody || `${_ssTrailingTeam} recovering structural control. ${ind.controlTeam}'s edge weakening — floor declined ${_ssPeakFloor.toFixed(2)}→${ind.score.toFixed(2)}, lead compressed ${_ssPeakMargin}→${_ssMargin}. ${_ssTrailingTeam} winning ${_ssOppInds.join('+')} in recent window (${_ssOppWindow?.toFixed(2)}).`;
-                  await sendNtfy(_ssNtfyTitle, _ssNtfyBody, 'default');
-                  log(`${matchup}: STRUCTURAL SHIFT → ${_ssDecision} (ntfy sent)`);
-                } else {
-                  log(`${matchup}: STRUCTURAL SHIFT → ${_ssDecision}: ${_ssReasoning?.substring(0, 150)}`);
+                  // ntfy
+                  await sendNtfy(`VULNERABILITY — ${matchup}`, _vulnBody, 4);
+                  log(`${matchup}: VULNERABILITY ntfy sent`);
                 }
-              } catch (e) {
-                log(`${matchup}: STRUCTURAL SHIFT agent error: ${e.message}`);
-                // Still save the alert without agent
-                await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, ntfy_sent, position_team)
-                  VALUES (${game.id}, ${league}, ${'STRUCTURAL_SHIFT'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_ssMargin}, ${false}, ${null}, ${null}, ${spreadVal}, ${_windowScore}, ${'FIRED'}, ${'SEND'}, ${'Agent unavailable — auto-SEND'}, ${ind.I1?.score}, ${ind.I2?.score}, ${ind.I3?.score}, ${ind.I4?.score}, ${ind.I5?.score}, ${true}, ${_ssTrailingTeam})`;
-                const _ssFallbackBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\n${_ssTrailingTeam} recovering structural control. Floor declined ${_ssPeakFloor.toFixed(2)}→${ind.score.toFixed(2)}, lead compressed ${_ssPeakMargin}→${_ssMargin}. ${_ssTrailingTeam} winning ${_ssOppInds.join('+')} in recent window.`;
-                await sendNtfy(`STRUCTURAL SHIFT — ${matchup}`, _ssFallbackBody, 'default');
               }
             }
           }
