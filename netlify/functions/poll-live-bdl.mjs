@@ -6632,7 +6632,7 @@ export default async function(req) {
             const _ssCtrlIsHome = ind.controlTeam === hA;
             const _ssOppInds = ['I1','I2','I3','I4','I5'].filter(k => {
               const s = ind[k]?.score;
-              return s != null && (_ssCtrlIsHome ? s >= 0.55 : s <= 0.45);
+              return s != null && (_ssCtrlIsHome ? s <= 0.45 : s >= 0.55);
             });
             const _ssFloorSide = _ssCtrlIsHome ? 'home' : 'away';
             const _ssPeakFloor = lt[_ssFloorSide + '_peak_floor'] || ind.score;
@@ -6643,12 +6643,12 @@ export default async function(req) {
             const _ssCtrlStats = _ssCtrlIsHome ? (summary.home?.statistics || {}) : (summary.away?.statistics || {});
             const _ssPeakMargin = _ssCtrlStats.biggest_lead || _ssMargin;
             const _ssCompression = _ssPeakMargin - _ssMargin;
+            // Trailing team name
+            const _ssTrailingTeam = _ssCtrlIsHome ? aA : hA;
             // Opponent's window strength (how strong is the trailing team in the recent window?)
             const _ssOppWindow = _windowResult.score != null
               ? (_windowResult.controlTeam === _ssTrailingTeam ? _windowResult.score : 1 - _windowResult.score)
               : null;
-            // Trailing team name
-            const _ssTrailingTeam = _ssCtrlIsHome ? aA : hA;
 
             // GATES: floor decline >= 0.15 + opp 1+ indicators + compression >= 3 + opp window >= 0.65
             const _ssGates = _ssFloorDecline >= 0.15
