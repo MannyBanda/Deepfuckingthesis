@@ -6781,11 +6781,23 @@ export default async function(req) {
                   } else if (isWarmPreGrad && (conviction.tier === 'CONDITIONAL' || conviction.tier === 'NO ENTRY')) {
                     log(`${matchup}: Warm pre-grad BUY suppressed — conv ${conviction.tier} (pre-grad needs MODEST+, ${conviction.count}/5 indicators: ${conviction.combo})`);
                   } else {
-                    const buyTag = isColdBuy ? ' [COLD]' : isWarmPreGrad ? ' [PRE-GRAD]' : '';
-                    log(`${matchup}: ▶ V2 BUY ${buyTier}${lt._flipBuyContext ? ' [FLIP]' : ''}${buyTag} floor=${ind.score.toFixed(2)} trail=${margin} bwcMatch=${lt.bwc_fired?.team === ind.controlTeam} ctrl=${_ctrlInd.join('+')||'none'}(${_ctrlInd.length}/5) opp=${_oppIndW.join('+')||'none'} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||'-'} ml=${ctrlML||'-'} conv=${conviction.tier}`);
+                    // BUY throttle: 1 per quarter per game
+                    let _buyQuarterThrottled = false;
+                    try {
+                      const _buyQDedup = await sql`SELECT 1 FROM alerts WHERE game_id = ${game.id} AND alert_type = 'BUY' AND period = ${currentPeriod} AND agent_decision IN ('SEND', 'DOWNGRADE', 'FALLBACK_SEND') LIMIT 1`;
+                      if (_buyQDedup.length > 0) {
+                        _buyQuarterThrottled = true;
+                        log(`${matchup}: BUY throttled — already sent in Q${currentPeriod}`);
+                      }
+                    } catch(e) { /* fail-open */ }
 
-                    await routeV2Alert('BUY', buyTier, null, true);
-                    lt._last_buy_ts = _v2Now;
+                    if (!_buyQuarterThrottled) {
+                      const buyTag = isColdBuy ? ' [COLD]' : isWarmPreGrad ? ' [PRE-GRAD]' : '';
+                      log(`${matchup}: ▶ V2 BUY ${buyTier}${lt._flipBuyContext ? ' [FLIP]' : ''}${buyTag} floor=${ind.score.toFixed(2)} trail=${margin} bwcMatch=${lt.bwc_fired?.team === ind.controlTeam} ctrl=${_ctrlInd.join('+')||'none'}(${_ctrlInd.length}/5) opp=${_oppIndW.join('+')||'none'} sust=${ctrlSust}/${oppSustTier} tp=${tpForBuy?.classification||'-'} ml=${ctrlML||'-'} conv=${conviction.tier}`);
+
+                      await routeV2Alert('BUY', buyTier, null, true);
+                      lt._last_buy_ts = _v2Now;
+                    }
                   }
                 }
               }
