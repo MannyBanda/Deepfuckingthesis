@@ -823,6 +823,7 @@ async function espnScoreboard(league, dateStr) {
     const away = comp.competitors?.find(c => c.homeAway === 'away');
     return {
       espnId: ev.id,
+      scheduled: ev.date || null,
       homeAbbr: home?.team?.abbreviation || '',
       awayAbbr: away?.team?.abbreviation || '',
       homeName: (home?.team?.displayName || '').toLowerCase(),
@@ -5086,8 +5087,32 @@ export default async function(req) {
       } else {
         // First fetch today — single SR schedule call, cache to DB
         log(`${league.toUpperCase()}: fetching schedule (first call today)...`);
-        const schedule = await srFetch(league, `games/${d.year}/${pad(d.month)}/${pad(d.day)}/schedule.json`);
-        const allGames = schedule.games || [];
+        let allGames = [];
+        let _scheduleSource = 'sr';
+        try {
+          const schedule = await srFetch(league, `games/${d.year}/${pad(d.month)}/${pad(d.day)}/schedule.json`);
+          allGames = schedule.games || [];
+        } catch (srErr) {
+          log(`${league.toUpperCase()}: SR schedule failed (${srErr.message}) — falling back to ESPN`);
+          // ESPN fallback — critical for WNBA preseason (SR has no preseason data)
+          const dateStr = `${d.year}${pad(d.month)}${pad(d.day)}`;
+          const espnFallback = await espnScoreboard(league, dateStr);
+          if (espnFallback.length > 0) {
+            _scheduleSource = 'espn';
+            // Normalize ESPN status → SR-compatible: STATUS_FINAL→closed, STATUS_IN_PROGRESS→inprogress
+            const _espnStatusMap = { 'STATUS_FINAL': 'closed', 'STATUS_IN_PROGRESS': 'inprogress', 'STATUS_SCHEDULED': 'scheduled', 'STATUS_HALFTIME': 'inprogress', 'STATUS_END_PERIOD': 'inprogress' };
+            allGames = espnFallback.map(eg => ({
+              id: eg.espnId,
+              scheduled: eg.scheduled || null,
+              home: { alias: eg.homeAbbr, name: eg.homeName },
+              away: { alias: eg.awayAbbr, name: eg.awayName },
+              status: _espnStatusMap[eg.status] || (eg.status || 'scheduled').toLowerCase(),
+            }));
+            log(`${league.toUpperCase()}: ESPN fallback found ${allGames.length} games`);
+          } else {
+            log(`${league.toUpperCase()}: ESPN fallback also empty`);
+          }
+        }
 
         // Build minimal cache: only the fields we need per cycle
         cachedGames = allGames.map(g => ({
@@ -5125,7 +5150,7 @@ export default async function(req) {
           log(`${league.toUpperCase()}: no games today — stored & sleeping`);
           continue;
         }
-        log(`${league.toUpperCase()}: schedule cached — ${cachedGames.length} games, first tip ${firstTip ? new Date(firstTip).toLocaleTimeString('en-US', {timeZone:'America/New_York'}) : '?'} ET`);
+        log(`${league.toUpperCase()}: schedule cached (${_scheduleSource}) — ${cachedGames.length} games, first tip ${firstTip ? new Date(firstTip).toLocaleTimeString('en-US', {timeZone:'America/New_York'}) : '?'} ET`);
 
         // Check if before window (just fetched, might be too early)
         if (firstTip) {
@@ -5279,7 +5304,20 @@ export default async function(req) {
 
         try {
           if (!bdlGid) {
-            log(`${matchup}: no BDL game ID mapped — skipping`);
+            // dryRun preseason: collect ESPN WP and log even without BDL box scores
+            if (cfg.dryRun && espnMap[game.id]) {
+              const _drEspnWP = await espnWinProb(league, espnMap[game.id]);
+              log(`${matchup}: dryRun — no BDL data, ESPN WP: ${_drEspnWP ? `${hA} ${_drEspnWP.home}% / ${aA} ${_drEspnWP.away}%` : 'unavailable'}`);
+              // Insert/update minimal game row so we know we saw it
+              try {
+                await sql`INSERT INTO games (id, league, home_team, away_team, status) 
+                  VALUES (${game.id}, ${league}, ${hA}, ${aA}, ${'preseason'})
+                  ON CONFLICT (id) DO UPDATE SET status = ${'preseason'}`;
+              } catch(e) { /* games table may not have this ID format */ }
+              liveCount++;
+            } else {
+              log(`${matchup}: no BDL game ID mapped — skipping`);
+            }
             continue;
           }
 
