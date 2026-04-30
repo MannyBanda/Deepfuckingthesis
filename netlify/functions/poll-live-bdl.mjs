@@ -46,6 +46,8 @@ function predictXGB(features) {
 }
 
 var XGB_FEATURE_LABELS = ['paint','pot','to','stl','oreb','ast','blk','fta','efg','biglead','3pr','rim_pct','runs'];
+var XGB_VOLATILE_FEATURES = new Set(['pot', 'to', 'stl', 'oreb', 'runs']);
+var XGB_STRUCTURAL_FEATURES = new Set(['paint', 'ast', 'blk', 'fta', 'efg', 'biglead', '3pr', 'rim_pct']);
 
 // Tree interpreter SHAP — decomposes XGB prediction into per-feature contributions
 // Uses precomputed expected values (ev) at each tree node. O(trees × depth) per call.
@@ -120,6 +122,129 @@ function extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock) {
     rimDiff,
     runShare,
   ];
+}
+
+// Conviction quality — classifies HOW XGB arrives at its prediction
+// Separates volatile (hustle/event-driven) vs structural (scheme/repeatable) SHAP contributions
+function computeConvictionQuality(shapArray) {
+  if (!shapArray || shapArray.length === 0) return null;
+  var posFeatures = shapArray.filter(function(s) { return s.v > 0; });
+  var totalPos = posFeatures.reduce(function(sum, s) { return sum + s.v; }, 0) || 0.001;
+
+  var volPos = 0, strPos = 0, bigleadVal = 0;
+  for (var i = 0; i < shapArray.length; i++) {
+    var s = shapArray[i];
+    if (s.f === 'biglead') bigleadVal = s.v;
+    if (s.v > 0) {
+      if (XGB_VOLATILE_FEATURES.has(s.f)) volPos += s.v;
+      else strPos += s.v;
+    }
+  }
+
+  var top1 = posFeatures.length > 0
+    ? posFeatures.reduce(function(a, b) { return a.v >= b.v ? a : b; })
+    : { f: 'none', v: 0 };
+  var volConc = volPos / totalPos;
+  var bigleadShare = Math.max(bigleadVal, 0) / totalPos;
+
+  return {
+    volConcentration: Math.round(volConc * 1000) / 1000,
+    strConcentration: Math.round(strPos / totalPos * 1000) / 1000,
+    top1Feature: top1.f,
+    top1IsVolatile: XGB_VOLATILE_FEATURES.has(top1.f),
+    top1Share: Math.round((top1.v / totalPos) * 1000) / 1000,
+    basis: volConc >= 0.50 ? 'VOLATILE' : volConc < 0.30 ? 'STRUCTURAL' : 'MIXED',
+    bigleadShare: Math.round(bigleadShare * 1000) / 1000,
+    bigleadAnchored: bigleadShare > 0.25,
+    noScoreboardConfirmation: bigleadVal <= 0,
+  };
+}
+
+// Trajectory signals — detects conviction quality CHANGES between checkpoints
+// Uses SHAP deltas to catch efficiency collapse, structural inversion, volatile persistence
+function computeTrajectorySignals(currentShap, cpArray, convictionQuality, xgbProb) {
+  if (!currentShap || currentShap.length === 0) return null;
+
+  // Build lookup for current SHAP by feature name
+  var currMap = {};
+  for (var i = 0; i < currentShap.length; i++) currMap[currentShap[i].f] = currentShap[i].v;
+
+  // Find most recent checkpoint with SHAP data
+  var prevShapMap = null;
+  for (var j = cpArray.length - 1; j >= 0; j--) {
+    if (cpArray[j].shap && cpArray[j].shap.length > 0) {
+      prevShapMap = {};
+      for (var k = 0; k < cpArray[j].shap.length; k++) prevShapMap[cpArray[j].shap[k].f] = cpArray[j].shap[k].v;
+      break;
+    }
+  }
+
+  var efgDelta = null, divergence = null;
+  if (prevShapMap) {
+    efgDelta = (currMap['efg'] || 0) - (prevShapMap['efg'] || 0);
+    efgDelta = Math.round(efgDelta * 1000) / 1000;
+
+    var volDelta = 0, strDelta = 0;
+    for (var fi = 0; fi < XGB_FEATURE_LABELS.length; fi++) {
+      var f = XGB_FEATURE_LABELS[fi];
+      var delta = (currMap[f] || 0) - (prevShapMap[f] || 0);
+      if (XGB_VOLATILE_FEATURES.has(f)) volDelta += delta;
+      else strDelta += delta;
+    }
+    divergence = Math.round((volDelta - strDelta) * 1000) / 1000;
+  }
+
+  // Count consecutive checkpoints where volatile features dominate (including current)
+  var consecutiveVolDominant = 0;
+  if (convictionQuality && convictionQuality.volConcentration >= 0.50) {
+    consecutiveVolDominant = 1;
+    for (var ci = cpArray.length - 1; ci >= 0; ci--) {
+      var cpConv = cpArray[ci].shap ? computeConvictionQuality(cpArray[ci].shap) : null;
+      if (cpConv && cpConv.volConcentration >= 0.50) {
+        consecutiveVolDominant++;
+      } else {
+        break;
+      }
+    }
+  }
+
+  // Evaluate warnings (ordered by discriminating power from backtest)
+  var warnings = [];
+
+  // 1. Biglead / scoreboard translation (strongest discriminator — 0.24x lift)
+  if (convictionQuality && convictionQuality.noScoreboardConfirmation && xgbProb >= 0.70) {
+    warnings.push('NO_SCOREBOARD_TRANSLATION: XGB reads '
+      + Math.round(xgbProb * 100) + '% but biglead SHAP is flat/negative'
+      + ' — statistical dominance is not translating to scoreboard control.'
+      + ' In backtest, XGB >=70% without biglead confirmation has 19% loss rate vs 5% with it.');
+  }
+
+  // 2. Efficiency collapse (1.33x lift)
+  if (efgDelta != null && efgDelta <= -0.30) {
+    warnings.push('EFFICIENCY_COLLAPSE: Shooting efficiency SHAP dropped '
+      + Math.abs(efgDelta).toFixed(2)
+      + ' this checkpoint — opponent gaining structural shooting edge');
+  }
+
+  // 3. Volatile foundation (1.28x lift as combo)
+  if (convictionQuality && convictionQuality.volConcentration >= 0.50 && convictionQuality.top1IsVolatile) {
+    warnings.push('VOLATILE_FOUNDATION: '
+      + Math.round(convictionQuality.volConcentration * 100)
+      + '% of XGB conviction from volatile stats ('
+      + convictionQuality.top1Feature + ' dominant at '
+      + Math.round(convictionQuality.top1Share * 100) + '% share)'
+      + ' — edge built on turnovers/hustle, may not sustain');
+  }
+
+  // 4. Structural inversion (1.08x lift)
+  if (divergence != null && divergence >= 0.40) {
+    warnings.push('STRUCTURAL_INVERSION: Volatile metrics growing while'
+      + ' efficiency metrics declining, divergence='
+      + divergence.toFixed(2)
+      + ' — structural foundation shifting to opponent');
+  }
+
+  return { efgDelta: efgDelta, divergence: divergence, consecutiveVolDominant: consecutiveVolDominant, warnings: warnings };
 }
 
 const LEAGUES = {
@@ -399,6 +524,8 @@ ${ctx.floorMarginSignal && ctx.floorMarginSignal.signal !== 'INSUFFICIENT'
 ${ctx.xgbWinProb != null ? `\nXGBOOST STRUCTURAL MODEL (independent — trained on raw stats, does NOT use floor/indicators/margin):
 XGB win probability: ${(ctx.xgbWinProb * 100).toFixed(1)}% | Floor: ${(ctx.floor * 100).toFixed(1)}% | ${ctx.xgbAligned ? 'ALIGNED' : '⚠️ DIVERGENT (' + (ctx.xgbDivergence > 0 ? '+' : '') + (ctx.xgbDivergence * 100).toFixed(1) + '%)'}
 ${ctx.xgbShap ? 'SHAP drivers (what raw stats push XGB prediction): ' + ctx.xgbShap.map(s => s.f + '=' + (s.v > 0 ? '+' : '') + s.v.toFixed(2)).join(', ') : ''}
+${ctx.convictionQuality ? 'XGB CONVICTION QUALITY:\nBasis: ' + ctx.convictionQuality.basis + ' — ' + Math.round(ctx.convictionQuality.strConcentration * 100) + '% structural / ' + Math.round(ctx.convictionQuality.volConcentration * 100) + '% volatile\nTop driver: ' + ctx.convictionQuality.top1Feature + ' (' + Math.round(ctx.convictionQuality.top1Share * 100) + '% of positive SHAP)' + (ctx.convictionQuality.top1IsVolatile ? ' [VOLATILE]' : '') + '\nScoreboard: ' + (ctx.convictionQuality.bigleadAnchored ? 'CONFIRMED — biglead driving ' + Math.round(ctx.convictionQuality.bigleadShare * 100) + '% (95% win rate in backtest)' : ctx.convictionQuality.noScoreboardConfirmation ? 'NOT CONFIRMED — biglead SHAP flat/negative, stats not translating to lead (19% loss rate vs 5%)' : 'PARTIAL — biglead contributing ' + Math.round(ctx.convictionQuality.bigleadShare * 100) + '%') : ''}
+${ctx.trajectorySignals && ctx.trajectorySignals.warnings.length > 0 ? 'CONVICTION WARNINGS:\n' + ctx.trajectorySignals.warnings.join('\n') : ''}
 ${!ctx.xgbAligned && ctx.xgbWinProb < 0.45 ? 'WARNING: XGBoost sees < 45% win probability from raw stats despite floor at ' + ctx.floor + '. In 1,235-game backtest, BUY-eligible alerts with XGB < 0.45 win only 11%. Consider SUPPRESS.' : ''}${!ctx.xgbAligned && ctx.xgbWinProb > ctx.floor + 0.15 ? 'NOTE: XGBoost sees stronger edge than floor — raw stats outpace composite indicators.' : ''}` : ''}
 ${ctx.alertType === 'BUY' && ctx.xgbWinProb != null ? `XGB BUY CALIBRATION (1,235-game backtest, ctrl trailing + floor >= 0.65):
   Q2: XGB>=0.70 = 100% | 0.55-0.70 = 82% | 0.40-0.55 = 78% | <0.40 = 76%
@@ -583,6 +710,8 @@ LS: ${ctx.lsClass || 'N/A'} (leading team margin safety: SAFE>CUSHIONED>AT RISK>
 Ctrl sust: ${ctx.ctrlSust || 'N/A'} | Opp sust: ${ctx.oppSust || 'N/A'}
 Window score: ${ctx.windowScore || 'N/A'}
 ${ctx.xgbWinProb != null ? 'XGBoost structural model: ' + (ctx.xgbWinProb * 100).toFixed(1) + '% win probability (independent raw-stats model). ' + (ctx.xgbAligned ? 'ALIGNED with floor.' : '⚠️ DIVERGENT from floor (' + (ctx.xgbDivergence > 0 ? '+' : '') + (ctx.xgbDivergence * 100).toFixed(1) + '%).') + (ctx.xgbShap ? ' SHAP: ' + ctx.xgbShap.map(s => s.f + '=' + (s.v > 0 ? '+' : '') + s.v.toFixed(2)).join(', ') : '') : ''}
+${ctx.convictionQuality ? 'Conviction quality: ' + ctx.convictionQuality.basis + ' (' + Math.round(ctx.convictionQuality.strConcentration * 100) + '% structural / ' + Math.round(ctx.convictionQuality.volConcentration * 100) + '% volatile). Top: ' + ctx.convictionQuality.top1Feature + ' (' + Math.round(ctx.convictionQuality.top1Share * 100) + '%)' + (ctx.convictionQuality.top1IsVolatile ? ' [VOLATILE]' : '') + '. Scoreboard: ' + (ctx.convictionQuality.bigleadAnchored ? 'CONFIRMED' : ctx.convictionQuality.noScoreboardConfirmation ? 'NOT CONFIRMED' : 'PARTIAL') : ''}
+${ctx.trajectorySignals && ctx.trajectorySignals.warnings.length > 0 ? 'Conviction warnings: ' + ctx.trajectorySignals.warnings.join(' | ') : ''}
 
 INDICATORS (control-team-relative, scale: 1.0=ctrl dominates, 0.0=opponent dominates, 0.5=even):
 I1 Disruption: ${ctx.i1} | I2 Interior: ${ctx.i2} | I3 Shot Quality: ${ctx.i3} | I4 Game Control: ${ctx.i4} | I5 Execution: ${ctx.i5}
@@ -626,11 +755,23 @@ RULES:
   • BWC + I4 EVEN: Unlike BUY (where the team must TAKE control back), BWC teams already HOLD the lead. I4 EVEN is NOT a suppress signal for BWC when 3+ other indicators favor the control team and sustainability is LOCKED IN, DURABLE, or STALLED. STALLED means both shooting dimensions are significantly below baseline — but a lead built on paint and transition doesn't need hot shooting to hold. Only suppress BWC on I4 EVEN if fewer than 3 indicators won OR sustainability is FRAGILE/UNSUSTAINABLE OR floor is unstable (dropped 0.15+ in recent snapshots).
 - VULNERABILITY: Fires mechanically (no agent call) when the ctrl team is leading by 0-5, XGB < 0.65, and the PBP 15-possession window shows the opponent dominating (ctrl score <= 0.45). When you see VULNERABILITY in priorAlerts or the VULNERABILITY WARNING section above, it means the structural shift was detected via possession-level data BEFORE cumulative indicators reacted. This is highly predictive — weight it heavily when evaluating subsequent BWC_EDGE (lean SUPPRESS or add strong RISK line), POSITION_SAFE (flag that the position was already vulnerable), and EXIT decisions (confirms the structural collapse was real and early-detected). The vulnerability warning is the PBP window catching what cumulative floor and XGB miss due to anchoring.
 - XGB_INVALIDATED: The structural model (XGBoost) that supported a prior BUY has dropped below the quarter's viability gate (Q2<0.40, Q3<0.45, Q4<0.60). ALWAYS SEND — the mechanical gate is the filter. Your job is to add narrative context: (1) what the SHAP drivers are showing NOW vs at BUY time — has interior/paint collapsed? has disruption (I1) flipped? (2) whether the XGB drop is driven by raw stat decay or game progress pressure, (3) what the current structural picture looks like (indicators, conviction, floor-margin relationship). Frame as: "The structural model no longer supports the [TEAM] BUY — [explain what changed in basketball terms]. Consider exiting if you took this position." This is an exit signal, not a veto of future entry.
+- CONVICTION QUALITY: If provided, evaluate how the XGB model arrives at its prediction. CONFIRMED scoreboard = high confidence (95% WR). NOT CONFIRMED = stats not translating to lead, elevate scrutiny. VOLATILE basis (pot/stl/oreb/to/runs dominant) = circumstantial edge, may not sustain. Multiple conviction warnings compounding = strong SUPPRESS/DOWNGRADE signal. Single warning = flag as RISK, not auto-SUPPRESS.
 - ANCHORED FLOOR CHECK: If team is TRAILING with floor 0.75+ but margin only 1-3 pts AND floor is declining from recent snapshots, the floor may be anchored from earlier dominance that has eroded. Verify recent quarters still favor control team before SEND. This rule does NOT apply to leading teams (BWC) — a high floor with a small lead is a valid structural read.
 - EARLY GAME NOTE (Q1-Q2): Indicator samples are smaller early — steals/blocks counts are low, run share may not be populated yet, and biggest_lead gaps can form from a single early run. This does NOT mean early signals are unreliable. The new indicator formulas have proven predictive even in Q2. For Q1-Q2 FIRED alerts: I4 COMBO YES = SEND with confidence. I4 COMBO NO = apply normal scrutiny (don't auto-reject, just verify the structural case). For Q1-Q2 CANDIDATE alerts: I4 COMBO YES = SEND. I4 COMBO NO = apply extra scrutiny but still SEND if floor is strong (0.75+) and sustainability favors control team. Q3+ alerts have the most data — highest confidence.
 - CANDIDATE BUYs at floor 0.55-0.65: only SEND if I4 COMBO is YES (I4 decisive + at least one other indicator agrees — this pattern is 98-100% accurate historically). Without I4 COMBO, require very strong sustainability case to justify SEND.
 - CANDIDATE BUYs with negative ML (heavy favorite trailing): the CANDIDATE tier reflects the ML gate (-250 to -400), NOT structural weakness. Evaluate the structural case as if it were FIRED — if I4 COMBO YES + STRONG/DOMINANT conviction, SEND so the subscriber can shop for favorable lines. Note the heavy ML in the BODY.
 - TP (Throughput Projection) is context, not a veto. It estimates whether a trailing team's structural production rate can close the deficit in remaining possessions. Limitation: TP uses cumulative game stats, so early-game dominance by either team anchors the rates even after momentum shifts. TP NO PATH at 1-3 point deficits is often a false negative — the game is essentially tied regardless of what the projection math says. TP STRONG RECOVERY or PROBABLE adds confidence. TP UNLIKELY or NO PATH is a caution flag, not a stop sign.
+- CONVICTION QUALITY (how XGB arrives at its prediction — validated on 16,910 snapshots):
+  SCOREBOARD STATUS is the strongest signal:
+    "CONFIRMED" (biglead anchored) = team has built commanding lead, XGB highly reliable (95% win rate). High confidence.
+    "NOT CONFIRMED" (biglead flat/negative) = stats look dominant but no lead built. Other features compensating. Elevate scrutiny — 19% loss rate vs 5% when confirmed.
+    "PARTIAL" = some biglead contribution. Moderate confidence.
+  VOLATILE vs STRUCTURAL basis:
+    STRUCTURAL = conviction from shooting (efg), paint, ball movement (ast). Repeatable. Trust.
+    MIXED = partial volatile contribution. Weight structural stress and window more heavily.
+    VOLATILE = conviction from turnovers/hustle (pot, stl, oreb, runs). Circumstantial. 46% loss rate at XGB>70% vs 29% structural.
+  CONVICTION WARNINGS fire on validated thresholds. Multiple warnings compounding = strong SUPPRESS/DOWNGRADE signal. Single warning = flag as RISK in body, does NOT mean auto-SUPPRESS (54% of volatile-basis teams still win).
+  These signals matter MOST for BUY and BWC_EDGE. For EXIT, XGB threshold itself is sufficient — conviction quality is informational only.
 
 BODY RULES (the BODY is read by non-technical bettors on their phone — translate your technical reasoning into basketball language while keeping structural data):
 - Translate indicators into basketball, then include indicator codes in parentheses:
@@ -4506,6 +4647,8 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
         const _caXgbDivergence = _caXgbWinProb != null ? Math.round((_caXgbWinProb - ind.score) * 1000) / 1000 : null;
         const _caXgbAligned = _caXgbWinProb != null ? Math.abs(_caXgbWinProb - ind.score) < 0.15 : null;
         const _caXgbShap = _caXgbFeatures ? computeXGBContributions(_caXgbFeatures) : null;
+        const _caConvQuality = _caXgbShap ? computeConvictionQuality(_caXgbShap) : null;
+        const _caTrajSignals = _caXgbShap ? computeTrajectorySignals(_caXgbShap, lt.checkpoints || [], _caConvQuality, _caXgbWinProb) : null;
 
         // Compute edge/ML from odds (same as mechanical alert path)
         let aaEdge = null, aaML = null;
@@ -4562,6 +4705,8 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           xgbDivergence: _caXgbDivergence,
           xgbAligned: _caXgbAligned,
           xgbShap: _caXgbShap,
+          convictionQuality: _caConvQuality,
+          trajectorySignals: _caTrajSignals,
           convictionTier: calConviction.tier, convictionCombo: calConviction.combo,
           convictionPairs: calConviction.pairs?.join(', ') || '',
           i1: (ctrlIsHome ? ind.I1?.score : ind.I1?.score != null ? 1 - ind.I1.score : null)?.toFixed(2),
@@ -5886,6 +6031,10 @@ export default async function(req) {
               const _bwcMarginForFM = lt.bwc_fired ? (lt.bwc_fired.team === hA ? (ind.homePts - ind.awayPts) : (ind.awayPts - ind.homePts)) : _v2Margin;
               const floorMarginSig = lt.bwc_fired ? computeFloorMarginSignal(lt.checkpoints || [], lt.bwc_fired.team, ind.score, _bwcMarginForFM) : null;
               const convTrend = lt.bwc_fired ? computeConvictionTrend(lt.checkpoints || [], lt.bwc_fired.team) : null;
+              // Conviction quality — compute SHAP once, reuse for xgbShap + conviction quality + trajectory
+              const _v2Shap = _xgbFeatures ? computeXGBContributions(_xgbFeatures) : null;
+              const _v2ConvQuality = _v2Shap ? computeConvictionQuality(_v2Shap) : null;
+              const _v2TrajSignals = _v2Shap ? computeTrajectorySignals(_v2Shap, lt.checkpoints || [], _v2ConvQuality, _xgbWinProb) : null;
               const v2Ctx = {
                 alertType: v2Type, alertTier: v2Tier,
                 ctrlTeam: ind.controlTeam, floor: ind.score.toFixed(2),
@@ -5962,9 +6111,12 @@ export default async function(req) {
                 xgbWinProb: _xgbWinProb != null ? Math.round(_xgbWinProb * 1000) / 1000 : null,
                 xgbDivergence: _xgbDivergence,
                 xgbAligned: _xgbAligned,
-                xgbShap: _xgbFeatures ? computeXGBContributions(_xgbFeatures) : null,
+                xgbShap: _v2Shap,
                 xgbBwcProb: _xgbBwcProb != null ? Math.round(_xgbBwcProb * 1000) / 1000 : null,
                 exitSeverity: v2ExitSev || null,
+                // XGB conviction quality (how XGB arrives at its prediction)
+                convictionQuality: _v2ConvQuality,
+                trajectorySignals: _v2TrajSignals,
                 // Vulnerability warning context (if fired earlier in this game)
                 vulnerabilityWarning: lt._vuln_fired || null,
               };
