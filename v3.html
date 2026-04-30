@@ -1345,7 +1345,7 @@ function renderXGBChart(cs,hA,aA){
   var html='<div class="wp-canvas"><svg class="wp-svg" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none">';
   html+='<defs><linearGradient id="xgbFill-'+esc(hA)+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#67e8f9" stop-opacity="0.3"/><stop offset="100%" stop-color="#67e8f9" stop-opacity="0"/></linearGradient>';
   html+='<linearGradient id="xgbFillDown-'+esc(hA)+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#F87171" stop-opacity="0"/><stop offset="100%" stop-color="#F87171" stop-opacity="0.3"/></linearGradient></defs>';
-  html+='<line x1="0" y1="'+H/2+'" x2="'+W+'" y2="'+H/2+'" stroke="rgba(255,255,255,0.05)" stroke-dasharray="3 4"/>';
+  html+='<line x1="0" y1="'+H/2+'" x2="'+W+'" y2="'+H/2+'" stroke="rgba(255,255,255,0.15)" stroke-dasharray="3 4"/>';
   for(var q=1;q<=3;q++)html+='<line x1="'+(q/4*W)+'" y1="0" x2="'+(q/4*W)+'" y2="'+H+'" stroke="rgba(255,255,255,0.04)"/>';
   html+='<path d="'+fillD+'" fill="url(#xgbFill-'+esc(hA)+')"/>';
   html+='<path d="'+fillDownD+'" fill="url(#xgbFillDown-'+esc(hA)+')"/>';
@@ -1355,8 +1355,8 @@ function renderXGBChart(cs,hA,aA){
   html+='<path d="'+pathD+'" fill="none" stroke="#67e8f9" stroke-opacity="0.85" stroke-width="1.5" stroke-linejoin="round"/>';
   html+='<circle cx="'+lastX.toFixed(1)+'" cy="'+lastY.toFixed(1)+'" r="3.5" fill="#67e8f9" opacity="0.3"/>';
   html+='<circle cx="'+lastX.toFixed(1)+'" cy="'+lastY.toFixed(1)+'" r="2" fill="#67e8f9"/>';
-  html+='<text x="6" y="12" font-size="8" fill="rgba(255,255,255,0.25)" font-family="var(--mono)">'+esc(hA)+'</text>';
-  html+='<text x="6" y="'+(H-4)+'" font-size="8" fill="rgba(255,255,255,0.25)" font-family="var(--mono)">'+esc(aA)+'</text>';
+  html+='<text x="6" y="12" font-size="9" font-weight="600" fill="'+tc(hA)+'" fill-opacity="0.7" font-family="var(--mono)">'+esc(hA)+'</text>';
+  html+='<text x="6" y="'+(H-4)+'" font-size="9" font-weight="600" fill="'+tc(aA)+'" fill-opacity="0.7" font-family="var(--mono)">'+esc(aA)+'</text>';
   // Legend
   html+='<text x="'+(W-90)+'" y="12" font-size="7" fill="#67e8f9" fill-opacity="0.6" font-family="var(--mono)">XGB</text>';
   html+='<text x="'+(W-50)+'" y="12" font-size="7" fill="#ff6b35" fill-opacity="0.4" font-family="var(--mono)">Floor</text>';
