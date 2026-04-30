@@ -350,7 +350,18 @@ const SONNET_SYSTEM_PROMPT = 'You are an NBA structural analyst. You receive pre
 + '  - Rolling window (recent ~2-quarter control trend)\n'
 + '  - Gap acceleration (is edge compounding or fading)\n'
 + '  - Directional arrows (per-quarter sub-metric trends)\n'
-+ '  - Bonus status\n\n'
++ '  - Bonus status\n'
++ '  - XGBoost structural model (independent raw-stats win probability + SHAP feature drivers)\n'
++ '  - XGB conviction quality (volatile vs structural basis, scoreboard confirmation status)\n\n'
++ 'XGB CONVICTION QUALITY GUIDELINES:\n'
++ '  When XGB data is provided, use it to calibrate your FWP:\n'
++ '  - Scoreboard CONFIRMED (biglead anchored): XGB is highly reliable. 95% win rate in backtest.\n'
++ '  - Scoreboard NOT CONFIRMED: stats look dominant but no lead. Discount FWP certainty.\n'
++ '  - VOLATILE basis (pot/stl/oreb/to/runs): edge is circumstantial, may not sustain. Flag in RISK.\n'
++ '  - STRUCTURAL basis (paint/ast/efg/blk/fta): edge is scheme-driven, repeatable. Trust it.\n'
++ '  - Conviction warnings (EFFICIENCY_COLLAPSE, VOLATILE_FOUNDATION, etc.): flag in RISK section.\n'
++ '  - XGB DIVERGENT from floor: if XGB < floor, raw stats see less edge than indicators suggest.\n'
++ '    If XGB > floor, raw stats see more edge than indicators. Note the divergence direction.\n\n'
 + 'DATA QUALITY NOTE — PAINT POINTS:\n'
 + '  SR often delays or zeros out points_in_the_paint in the game summary JSON.\n'
 + '  Use DEPTH AUDIT rim section or LEAD COMPOSITION structural points as the authoritative paint signal.\n\n'
@@ -3973,7 +3984,7 @@ function parseAnalysisText(text, homeAlias, awayAlias) {
 // Single function that formats ALL data layers into prompt text.
 // Matches analyze.js quality — no more "payload ghost" layers.
 
-function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary, conviction, graduationCtx, priorAlertTrail, floorWP }) {
+function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary, conviction, graduationCtx, priorAlertTrail, floorWP, xgbData }) {
   let p = `${aA} @ ${hA} | Q${period} ${clock} | ${score}\n\n`;
 
   // ── GROUND TRUTH (mechanical engine output — do not override) ──
@@ -4014,6 +4025,25 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
       p += `\nThis team's floor reads are highly reliable — floor closely tracks actual win probability.`;
     }
     p += `\n\n`;
+  }
+
+  // XGBoost structural model + conviction quality
+  if (xgbData && xgbData.winProb != null) {
+    p += `XGBOOST STRUCTURAL MODEL (independent — trained on 13 raw stat differentials, does NOT use floor/indicators/margin):\n`;
+    p += `XGB win probability: ${(xgbData.winProb * 100).toFixed(1)}% | Floor: ${(ind.score * 100).toFixed(1)}% | ${xgbData.aligned ? 'ALIGNED' : 'DIVERGENT (' + (xgbData.divergence > 0 ? '+' : '') + (xgbData.divergence * 100).toFixed(1) + '%)'}\n`;
+    if (xgbData.shap) {
+      p += `SHAP drivers: ${xgbData.shap.map(s => s.f + '=' + (s.v > 0 ? '+' : '') + s.v.toFixed(2)).join(', ')}\n`;
+    }
+    if (xgbData.convictionQuality) {
+      const cq = xgbData.convictionQuality;
+      p += `Conviction quality: ${cq.basis} — ${Math.round(cq.strConcentration * 100)}% structural / ${Math.round(cq.volConcentration * 100)}% volatile\n`;
+      p += `Top driver: ${cq.top1Feature} (${Math.round(cq.top1Share * 100)}% of positive SHAP)${cq.top1IsVolatile ? ' [VOLATILE]' : ''}\n`;
+      p += `Scoreboard: ${cq.bigleadAnchored ? 'CONFIRMED — biglead driving ' + Math.round(cq.bigleadShare * 100) + '% (95% WR in backtest)' : cq.noScoreboardConfirmation ? 'NOT CONFIRMED — stats not translating to lead (19% loss rate vs 5%)' : 'PARTIAL — biglead contributing ' + Math.round(cq.bigleadShare * 100) + '%'}\n`;
+    }
+    if (xgbData.trajectorySignals && xgbData.trajectorySignals.warnings.length > 0) {
+      p += `Conviction warnings:\n${xgbData.trajectorySignals.warnings.join('\n')}\n`;
+    }
+    p += `\n`;
   }
 
   // Thesis
@@ -4529,6 +4559,15 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
 
     const calConviction = computeConviction(ind);
 
+    // XGB for analysis prompt (computed locally — poll-loop _xgb* vars are out of scope)
+    const _caXgbFeatures = extractXGBFeatures(summary, ind, null, period, clock);
+    const _caXgbWinProb = _caXgbFeatures ? predictXGB(_caXgbFeatures) : null;
+    const _caXgbDivergence = _caXgbWinProb != null ? Math.round((_caXgbWinProb - ind.score) * 1000) / 1000 : null;
+    const _caXgbAligned = _caXgbWinProb != null ? Math.abs(_caXgbWinProb - ind.score) < 0.15 : null;
+    const _caXgbShap = _caXgbFeatures ? computeXGBContributions(_caXgbFeatures) : null;
+    const _caConvQuality = _caXgbShap ? computeConvictionQuality(_caXgbShap) : null;
+    const _caTrajSignals = _caXgbShap ? computeTrajectorySignals(_caXgbShap, lt.checkpoints || [], _caConvQuality, _caXgbWinProb) : null;
+
     const userPrompt = formatSonnetPrompt({
       hA, aA, period, clock, score: scoreLine,
       thesis: thesis || null,
@@ -4540,6 +4579,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       graduationCtx,
       priorAlertTrail,
       floorWP: ind ? lookupFloorWP(_floorWPCoeffs, ind.controlTeam, ind.score) : null,
+      xgbData: { winProb: _caXgbWinProb, divergence: _caXgbDivergence, aligned: _caXgbAligned, shap: _caXgbShap, convictionQuality: _caConvQuality, trajectorySignals: _caTrajSignals },
     });
 
     // ── Compute prompt layer inventory for diagnostics ──
@@ -4643,15 +4683,6 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
         const lsClass = clientCtx?.leadSafety?.classification || null;
         const ctrlSust = sust?.[ctrlIsHome ? 'home' : 'away']?.tier || null;
         const oppSust = sust?.[ctrlIsHome ? 'away' : 'home']?.tier || null;
-
-        // XGB for auto-analysis (computed locally — poll-loop _xgb* vars are out of scope)
-        const _caXgbFeatures = extractXGBFeatures(summary, ind, null, period, clock);
-        const _caXgbWinProb = _caXgbFeatures ? predictXGB(_caXgbFeatures) : null;
-        const _caXgbDivergence = _caXgbWinProb != null ? Math.round((_caXgbWinProb - ind.score) * 1000) / 1000 : null;
-        const _caXgbAligned = _caXgbWinProb != null ? Math.abs(_caXgbWinProb - ind.score) < 0.15 : null;
-        const _caXgbShap = _caXgbFeatures ? computeXGBContributions(_caXgbFeatures) : null;
-        const _caConvQuality = _caXgbShap ? computeConvictionQuality(_caXgbShap) : null;
-        const _caTrajSignals = _caXgbShap ? computeTrajectorySignals(_caXgbShap, lt.checkpoints || [], _caConvQuality, _caXgbWinProb) : null;
 
         // Compute edge/ML from odds (same as mechanical alert path)
         let aaEdge = null, aaML = null;
