@@ -6823,7 +6823,6 @@ export default async function(req) {
                 log(`${matchup}: v2 state=${v2BwcState || '-'} erosion=${v2Erosion?.level || '-'}(peak)/${typeof meanErosion !== 'undefined' && meanErosion ? meanErosion.level || '-' : '-'}(mean) peak=${v2Erosion?.peakFloor?.toFixed(2) || '-'} mf=${typeof meanErosion !== 'undefined' && meanErosion ? meanErosion.meanFloor?.toFixed(3) || '-' : '-'} holds=${lt.ctrl_team_holds || 0} bwcTeam=${lt.bwc_fired.team}${lt._v2_transition_pending ? ' PENDING(prev=' + lt._prev_bwc_state + ')' : ''}`);
               } catch(e) { log(`${matchup}: v2 state=${v2BwcState || '-'} (log error: ${e.message})`); }
             }
-          }
 
           // ── VULNERABILITY WARNING ──
           // Ctrl team leading but PBP possession window + XGB + tight margin say lead is fragile.
@@ -6949,6 +6948,7 @@ export default async function(req) {
               }
             }
           }
+          } // end if (!cfg.dryRun)
 
           // ── V2 LIVE TRACKING: persist state to DB ──
           if (!cfg.dryRun) {
