@@ -16,7 +16,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 // ── XGBOOST MODEL ──────────────────────────────────────────────────────────
-// Raw stats structural model — 300 trees, 14 features, trained on 1,235 games.
+// Raw stats structural model — 300 trees, 13 features (no progress), trained on 1,235 games.
 // Provides independent win probability from raw box score stats without using
 // margin, indicators, or floor score. Used as advisory signal + gate layer.
 var XGB_MODEL = null;
@@ -25,11 +25,11 @@ try {
   XGB_MODEL = JSON.parse(readFileSync(join(__xgbDir, 'xgb-model.json'), 'utf8'));
 } catch (e) { /* non-fatal — system operates without XGB */ }
 
-// XGB feature order (must match training):
-// [0] game_progress, [1] ctrl_paint_diff, [2] ctrl_pot_diff, [3] ctrl_to_diff,
-// [4] ctrl_stl_diff, [5] ctrl_oreb_diff, [6] ctrl_ast_diff, [7] ctrl_blk_diff,
-// [8] ctrl_fta_diff, [9] ctrl_efg_diff, [10] ctrl_biglead_diff,
-// [11] ctrl_3pr_diff, [12] ctrl_rim_pct_diff, [13] ctrl_run_share
+// XGB feature order (must match training — no progress):
+// [0] ctrl_paint_diff, [1] ctrl_pot_diff, [2] ctrl_to_diff,
+// [3] ctrl_stl_diff, [4] ctrl_oreb_diff, [5] ctrl_ast_diff, [6] ctrl_blk_diff,
+// [7] ctrl_fta_diff, [8] ctrl_efg_diff, [9] ctrl_biglead_diff,
+// [10] ctrl_3pr_diff, [11] ctrl_rim_pct_diff, [12] ctrl_run_share
 function predictXGB(features) {
   if (!XGB_MODEL) return null;
   let sum = 0;
@@ -45,14 +45,14 @@ function predictXGB(features) {
   return 1 / (1 + Math.exp(-(baseLogit + sum)));
 }
 
-var XGB_FEATURE_LABELS = ['progress','paint','pot','to','stl','oreb','ast','blk','fta','efg','biglead','3pr','rim_pct','runs'];
+var XGB_FEATURE_LABELS = ['paint','pot','to','stl','oreb','ast','blk','fta','efg','biglead','3pr','rim_pct','runs'];
 
 // Tree interpreter SHAP — decomposes XGB prediction into per-feature contributions
 // Uses precomputed expected values (ev) at each tree node. O(trees × depth) per call.
-// Returns all 14 features sorted by |contribution| in logit space.
+// Returns all 13 features sorted by |contribution| in logit space.
 function computeXGBContributions(features) {
   if (!features || !XGB_MODEL?.trees?.[0]?.ev) return null;
-  var contribs = new Float64Array(14);
+  var contribs = new Float64Array(13);
   for (var ti = 0; ti < XGB_MODEL.trees.length; ti++) {
     var tree = XGB_MODEL.trees[ti];
     var node = 0;
@@ -64,7 +64,7 @@ function computeXGBContributions(features) {
     }
   }
   var ranked = [];
-  for (var i = 0; i < 14; i++) {
+  for (var i = 0; i < 13; i++) {
     ranked.push({ f: XGB_FEATURE_LABELS[i], v: Math.round(contribs[i] * 1000) / 1000 });
   }
   ranked.sort(function(a, b) { return Math.abs(b.v) - Math.abs(a.v); });
@@ -76,15 +76,6 @@ function extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock) {
   const hs = summary.home.statistics, as = summary.away.statistics;
   const ctrlIsHome = ind.controlTeam === ind.homeAlias;
   const flip = ctrlIsHome ? 1 : -1;
-
-  // Game progress: 0.0 = tipoff, 1.0 = end of Q4
-  let clockMin = 6;
-  try {
-    const parts = String(clock || '12:00').replace(/^Q\d+\s*/, '').split(':');
-    clockMin = parseInt(parts[0]) + (parseInt(parts[1] || 0)) / 60;
-  } catch (e) { /* use default */ }
-  const elapsed = (Math.min(currentPeriod, 4) - 1) * 12 + (12 - clockMin);
-  const progress = Math.min(elapsed / 48, 1.0);
 
   // Shooting efficiency
   const hFGA = Number(hs.field_goals_att || hs.fga || 0) || 0;
@@ -115,7 +106,6 @@ function extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock) {
   }
 
   return [
-    progress,
     (Number(hs.points_in_the_paint || hs.points_in_paint || 0) - Number(as.points_in_the_paint || as.points_in_paint || 0)) * flip,
     (Number(hs.points_off_turnovers || 0) - Number(as.points_off_turnovers || 0)) * flip,
     (Number(hs.turnovers || 0) - Number(as.turnovers || 0)) * flip,
