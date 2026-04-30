@@ -5607,6 +5607,17 @@ export default async function(req) {
               }
             }
           } catch (e) { /* non-fatal */ }
+          // Compute PBP 15-possession window for snapshot persistence
+          var _possWindowScore = null;
+          try {
+            const _pw = computePossWindowServer(pbpResult?.possLog, 15, hA, aA);
+            if (_pw && _pw.available) {
+              // Convert to ctrl-team-relative
+              const _pwCtrlIsHome = ind.controlTeam === hA;
+              _possWindowScore = _pwCtrlIsHome ? _pw.score : (1 - _pw.score);
+              _possWindowScore = Math.round(_possWindowScore * 10000) / 10000;
+            }
+          } catch (e) { /* non-fatal */ }
           // DIAGNOSTIC: log ind shape before INSERT to catch null fields
           log(`${matchup}: SNAP IND — Q${currentPeriod} ${clock} score:${ind.score} team:${ind.controlTeam} I1:${ind.I1?.score} I2:${ind.I2?.score} I3:${ind.I3?.score} I4:${ind.I4?.score} I5:${ind.I5?.score} conv:${conviction.tier}(${conviction.combo}) hPts:${ind.homePts} aPts:${ind.awayPts} tp:${snapTp?.classification||'null'} ls:${snapLs?.classification||'null'}`);
           // Capture raw stats that fed computeServer for audit/debugging
@@ -5630,7 +5641,7 @@ export default async function(req) {
               i1, i2, i3, i4, i5, source, lead_class, sust_json,
               tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json,
               bwc_state, grad_rank, floor_wp_historical, reliability_class, window_score,
-              xgb_win_prob, xgb_divergence)
+              xgb_win_prob, xgb_divergence, poss_window_score)
             VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
               ${ind.score}, ${ind.controlTeam}, ${null}, ${null}, ${null},
               ${null}, ${null}, ${espnWP?.home || null}, ${espnWP?.away || null},
@@ -5640,7 +5651,7 @@ export default async function(req) {
               ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
               ${_snapLT?.bwc_fired ? (_snapLT._prev_bwc_state || null) : null}, ${_snapLT?.cp_peak_rank || null},
               ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore},
-              ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbDivergence})
+              ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbDivergence}, ${_possWindowScore})
           `;
           log(`${matchup}: snapshot saved — floor:${ind.score} I1-5:${ind.I1?.score},${ind.I2?.score},${ind.I3?.score},${ind.I4?.score},${ind.I5?.score} tp:${snapTp?.classification||'-'} ls:${snapLs?.classification||'-'} xgb:${_xgbWinProb != null ? _xgbWinProb.toFixed(3) : '-'}`);
 
@@ -7028,7 +7039,7 @@ export default async function(req) {
                       i1, i2, i3, i4, i5, source, sust_json,
                       tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json,
                       bwc_state, grad_rank, floor_wp_historical, reliability_class, window_score,
-                      xgb_win_prob, xgb_divergence)
+                      xgb_win_prob, xgb_divergence, poss_window_score)
                     VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
                       ${ind.score}, ${ind.controlTeam}, ${espnWP?.home || null}, ${espnWP?.away || null},
                       ${spreadVal}, ${deficit}, ${trailingTeam}, ${leadSust}, ${leadClass},
@@ -7037,7 +7048,7 @@ export default async function(req) {
                       ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
                       ${lt?.bwc_fired ? (lt._prev_bwc_state || null) : null}, ${lt?.cp_peak_rank || null},
                       ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore},
-                      ${_xgbWinProb != null ? Math.round(_xgbWinProb * 1000) / 1000 : null}, ${_xgbDivergence})
+                      ${_xgbWinProb != null ? Math.round(_xgbWinProb * 1000) / 1000 : null}, ${_xgbDivergence}, ${_possWindowScore})
                   `;
                   log(`${matchup}: ${t.label} CAL snapshot saved — floor ${ind.controlTeam} ${ind.score} | sust:${leadSust || '?'} class:${leadClass || '?'} | WP:${espnWP?.home || '?'}% | spd:${spreadVal != null ? spreadVal : 'N/A'}`);
                 } catch (e) {

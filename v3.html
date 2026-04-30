@@ -2670,7 +2670,7 @@ function renderDrawer(gameId){
         }else{html+='<td style="color:var(--fg-dim);font-size:9px">--</td>';}
       }
       if(sc2.win){
-        var wVal=s.window_score;
+        var wVal=s.poss_window_score;
         if(wVal!=null){
           var wNum=Number(wVal);
           var wColor=wNum>=0.65?'var(--green)':wNum<=0.35?'var(--coral)':'var(--fg-secondary)';
