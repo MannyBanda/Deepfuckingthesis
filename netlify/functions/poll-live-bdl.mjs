@@ -6972,6 +6972,7 @@ export default async function(req) {
           {
             const prevPeriod = game.last_period || 0;
             if (!game.cal_captured) game.cal_captured = {};
+            log(`${matchup}: CAL_DIAG — entering transition block. currentPeriod=${currentPeriod} prevPeriod=${prevPeriod} cal_captured=${JSON.stringify(game.cal_captured)}`);
 
             // Parse clock minutes for NCAAMB mid-half detection
             let clockMin = null;
@@ -7016,13 +7017,18 @@ export default async function(req) {
                 const existing = await sql`
                   SELECT 1 FROM snapshots WHERE game_id = ${game.id} AND source = ${t.tag} LIMIT 1
                 `;
-                if (existing.length > 0) continue; // already captured in a prior invocation
-              } catch (e) { /* table may not exist yet, proceed */ }
+                if (existing.length > 0) {
+                  log(`${matchup}: CAL_DIAG — ${t.tag} already exists in DB, skipping`);
+                  continue;
+                }
+              } catch (e) { log(`${matchup}: CAL_DIAG — ${t.tag} dedup check failed: ${e.message}, proceeding`); }
 
               // Period-based transitions: standard detection
               const triggered = t.clockBased
                 ? true  // clock-based: already validated above
                 : (currentPeriod >= t.to);
+
+              log(`${matchup}: CAL_DIAG — ${t.tag} triggered=${triggered} (currentPeriod=${currentPeriod} >= to=${t.to})`);
 
               if (triggered) {
                 game.cal_captured[t.tag] = true;

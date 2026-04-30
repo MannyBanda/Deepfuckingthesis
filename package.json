@@ -2,7 +2,7 @@
   "name": "deepfuckingthesis",
   "private": true,
   "dependencies": {
-    "@neondatabase/serverless": "^1.0.2",
+    "@neondatabase/serverless": "^1.1.0",
     "acorn": "^8.16.0",
     "postgres": "^3.4.9"
   }
