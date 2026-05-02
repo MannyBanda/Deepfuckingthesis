@@ -1825,6 +1825,10 @@ async function phaseTriggeredReplay(sql, url) {
       var canaryFired = false;
       if (canaryMode === 'absolute') {
         canaryFired = mc.winProb < mcThreshold;
+      } else if (canaryMode === 'combined') {
+        var relFired = cp.floor != null && (cp.floor - mc.winProb) > canaryThreshold;
+        var absFired = mc.winProb < mcThreshold;
+        canaryFired = relFired || absFired;
       } else {
         canaryFired = cp.floor != null && (cp.floor - mc.winProb) > canaryThreshold;
       }
@@ -2107,6 +2111,10 @@ async function phaseSilentAudit(sql, url) {
       var canaryFired = false;
       if (canaryMode === 'absolute') {
         canaryFired = mc.winProb < mcThreshold;
+      } else if (canaryMode === 'combined') {
+        var relFired2 = cp.floor != null && (cp.floor - mc.winProb) > canaryThreshold;
+        var absFired2 = mc.winProb < mcThreshold;
+        canaryFired = relFired2 || absFired2;
       } else {
         canaryFired = cp.floor != null && (cp.floor - mc.winProb) > canaryThreshold;
       }
