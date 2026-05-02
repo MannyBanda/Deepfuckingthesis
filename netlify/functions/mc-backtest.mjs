@@ -963,8 +963,9 @@ function diffLongKeys(curr, prev) {
   return d;
 }
 
-// Reconstruct computeServerWindow cross-fade and extract MC rates
-function reconstructWindowRates(qd, snapRaw, period, clockStr, regressionCap) {
+// Reconstruct rolling window rates and extract MC rates
+// mode = 'production' (full computeServerWindow cross-fade) or 'responsive' (partial quarter priority)
+function reconstructWindowRates(qd, snapRaw, period, clockStr, regressionCap, mode) {
   if (!qd || !qd.boundaries || !qd.diffs || period < 2) return null;
 
   // Parse clock
@@ -993,28 +994,41 @@ function reconstructWindowRates(qd, snapRaw, period, clockStr, regressionCap) {
   var partialAway = diffLongKeys(awayCurr, boundary.away);
   var partialDiff = { home: partialHome, away: partialAway };
 
-  // Compute pts for partial if not in raw (for possession estimation)
-  // Points might not be in raw_stats short keys — compute from snapshot
-  // Actually we have them from toLongKeys if poss is available
-
-  // Build windowQs with exact NBA cross-fade logic from computeServerWindow
   var windowQs = [];
   var p = period;
 
-  if (p === 2) {
-    if (qd.diffs['1']) windowQs.push({ weight: Math.max(0, 1.0 - completion), diff: qd.diffs['1'] });
-    windowQs.push({ weight: 1.0, diff: partialDiff });
-  } else if (p === 3) {
-    if (qd.diffs['2']) windowQs.push({ weight: 1.0, diff: qd.diffs['2'] });
-    windowQs.push({ weight: 1.0, diff: partialDiff });
-  } else if (p === 4) {
-    if (qd.diffs['2']) windowQs.push({ weight: Math.max(0, 1.0 - completion), diff: qd.diffs['2'] });
-    if (qd.diffs['3']) windowQs.push({ weight: 1.0, diff: qd.diffs['3'] });
-    windowQs.push({ weight: 1.0, diff: partialDiff });
-  } else if (p >= 5) {
-    if (qd.diffs['3']) windowQs.push({ weight: Math.max(0, 1.0 - completion), diff: qd.diffs['3'] });
-    if (qd.diffs['4']) windowQs.push({ weight: 1.0, diff: qd.diffs['4'] });
-    windowQs.push({ weight: 1.0, diff: partialDiff });
+  if (mode === 'responsive') {
+    // RESPONSIVE MODE: use partial current quarter as primary.
+    // Only blend in last completed quarter if partial has < 10 FGA per side.
+    var partialFGA = (partialHome.field_goals_att || 0) + (partialAway.field_goals_att || 0);
+    if (partialFGA >= 20) {
+      // Enough volume — use partial only (~5-10 min window)
+      windowQs.push({ weight: 1.0, diff: partialDiff });
+    } else {
+      // Not enough volume — add last completed quarter, weight partial higher
+      var prevQKey = String(Math.max(...completedKeys.filter(function(k) { return k < p; })));
+      if (qd.diffs[prevQKey]) {
+        windowQs.push({ weight: 0.5, diff: qd.diffs[prevQKey] });
+      }
+      windowQs.push({ weight: 1.0, diff: partialDiff });
+    }
+  } else {
+    // PRODUCTION MODE: full computeServerWindow cross-fade
+    if (p === 2) {
+      if (qd.diffs['1']) windowQs.push({ weight: Math.max(0, 1.0 - completion), diff: qd.diffs['1'] });
+      windowQs.push({ weight: 1.0, diff: partialDiff });
+    } else if (p === 3) {
+      if (qd.diffs['2']) windowQs.push({ weight: 1.0, diff: qd.diffs['2'] });
+      windowQs.push({ weight: 1.0, diff: partialDiff });
+    } else if (p === 4) {
+      if (qd.diffs['2']) windowQs.push({ weight: Math.max(0, 1.0 - completion), diff: qd.diffs['2'] });
+      if (qd.diffs['3']) windowQs.push({ weight: 1.0, diff: qd.diffs['3'] });
+      windowQs.push({ weight: 1.0, diff: partialDiff });
+    } else if (p >= 5) {
+      if (qd.diffs['3']) windowQs.push({ weight: Math.max(0, 1.0 - completion), diff: qd.diffs['3'] });
+      if (qd.diffs['4']) windowQs.push({ weight: 1.0, diff: qd.diffs['4'] });
+      windowQs.push({ weight: 1.0, diff: partialDiff });
+    }
   }
 
   if (windowQs.length === 0) return null;
@@ -1083,6 +1097,7 @@ async function phaseValidateGameV2(sql, url) {
 
   var simCount = parseInt(url.searchParams.get('sims') || '1000');
   var regressionCap = parseFloat(url.searchParams.get('rc') || '0.60');
+  var mode = url.searchParams.get('mode') || 'responsive';  // 'responsive' or 'production'
 
   // Pull quarter_data
   var qdRows = await sql`SELECT quarter_data FROM games WHERE id = ${gameId}`;
@@ -1120,8 +1135,8 @@ async function phaseValidateGameV2(sql, url) {
       ? JSON.parse(snap.raw_stats_json) : snap.raw_stats_json;
     if (!raw || !raw.home || !raw.away) continue;
 
-    // Reconstruct production rolling window rates
-    var windowRates = reconstructWindowRates(qd, raw, snap.period, snap.clock, regressionCap);
+    // Reconstruct rolling window rates
+    var windowRates = reconstructWindowRates(qd, raw, snap.period, snap.clock, regressionCap, mode);
     if (!windowRates) continue;
     if (windowRates.home._windowFGA < 5 || windowRates.away._windowFGA < 5) continue;
 
@@ -1172,8 +1187,8 @@ async function phaseValidateGameV2(sql, url) {
 
   return {
     status: 'ok',
-    version: 'v2_production_fidelity',
-    rateSource: 'computeServerWindow_reconstruction',
+    version: 'v2_' + mode,
+    rateSource: mode === 'responsive' ? 'partial_quarter_priority' : 'computeServerWindow_reconstruction',
     game: {
       id: gameId,
       matchup: (g.away_alias || g.away_team) + ' @ ' + (g.home_alias || g.home_team),
