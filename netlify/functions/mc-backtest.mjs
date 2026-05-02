@@ -1528,6 +1528,7 @@ async function phaseValidateTriggered(sql, url) {
   var batchSize = parseInt(url.searchParams.get('n') || '10');
   var offset = parseInt(url.searchParams.get('offset') || '0');
   var canaryThreshold = parseFloat(url.searchParams.get('canary') || '0.15');
+  var minPeriod = parseInt(url.searchParams.get('min_period') || '3');  // Q3+ by default
 
   var games = await sql`
     SELECT id, date, home_alias, away_alias, home_pts, away_pts, winner, quarter_data
@@ -1578,7 +1579,7 @@ async function phaseValidateTriggered(sql, url) {
 
     for (var ci = 0; ci < parsed.length; ci++) {
       var cs = parsed[ci].snap;
-      if (cs.period < 2) continue;
+      if (cs.period < minPeriod) continue;
 
       var canaryRates = possessionWindowRates(
         parsed.map(function(p) { return p.stats; }), ci, 20, regressionCap
@@ -1695,6 +1696,7 @@ async function phaseValidateTriggered(sql, url) {
     status: 'ok',
     mode: 'triggered_investigation',
     canary_threshold: canaryThreshold,
+    min_trigger_period: minPeriod,
     dateRange: fromDate + ' to ' + toDate,
     gamesProcessed: summaries.length,
     totalAvailable: Number(totalGames[0]?.n || 0),
