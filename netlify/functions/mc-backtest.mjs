@@ -1985,6 +1985,202 @@ async function phaseTriggeredReplay(sql, url) {
 
 
 // ══════════════════════════════════════════════════════════════════════════════
+// PHASE: SILENT_AUDIT — Games where MC never triggered but ctrl team lost
+//   What collapses are we missing? What do they look like?
+//   ?phase=silent_audit&n=200&offset=0
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function phaseSilentAudit(sql, url) {
+  var batchSize = parseInt(url.searchParams.get('n') || '200');
+  var offset = parseInt(url.searchParams.get('offset') || '0');
+  var canaryThreshold = parseFloat(url.searchParams.get('canary') || '0.15');
+  var regressionCap = parseFloat(url.searchParams.get('rc') || '0.60');
+  var startTime = Date.now();
+
+  var gameIds = await sql`
+    SELECT DISTINCT game_id FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL
+    ORDER BY game_id LIMIT ${batchSize} OFFSET ${offset}
+  `;
+  var totalGames = await sql`SELECT COUNT(DISTINCT game_id) AS n FROM nba_snapshot_backtest WHERE indicators IS NOT NULL`;
+
+  if (gameIds.length === 0) return { status: 'ok', message: 'No more games' };
+
+  var ids = gameIds.map(function(r) { return r.game_id; });
+  var rows = await sql`
+    SELECT game_id, checkpoint, team_stats,
+           (indicators->>'score')::real AS floor,
+           indicators->>'controlTeam' AS ctrl_team,
+           indicators->>'homeAlias' AS home_alias,
+           indicators->>'awayAlias' AS away_alias,
+           margin_at_snapshot AS margin,
+           ctrl_team_won, final_margin
+    FROM nba_snapshot_backtest
+    WHERE game_id = ANY(${ids}) AND indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+    ORDER BY game_id, checkpoint
+  `;
+
+  var gameMap = {};
+  for (var r of rows) {
+    if (!gameMap[r.game_id]) gameMap[r.game_id] = [];
+    var ts = typeof r.team_stats === 'string' ? JSON.parse(r.team_stats) : r.team_stats;
+    gameMap[r.game_id].push({
+      checkpoint: r.checkpoint, cpIdx: CP_INDEX[r.checkpoint],
+      home: ts ? ts.home : null, away: ts ? ts.away : null,
+      floor: r.floor, ctrl_team: r.ctrl_team,
+      home_alias: r.home_alias, away_alias: r.away_alias,
+      margin: r.margin, ctrl_team_won: r.ctrl_team_won, final_margin: r.final_margin,
+    });
+  }
+  for (var gid of Object.keys(gameMap)) {
+    gameMap[gid].sort(function(a, b) { return a.cpIdx - b.cpIdx; });
+  }
+
+  var agg = {
+    total: 0, triggered: 0, not_triggered: 0,
+    silent_losses: 0,  // ctrl lost but MC never triggered
+    silent_wins: 0,    // ctrl won, MC correctly silent
+    // Characterize silent losses
+    loss_buckets: {
+      blowout_reversal: 0,   // ctrl had 15+ lead that evaporated
+      large_swing: 0,         // 10+ point swing Q3+
+      slow_erosion: 0,        // margin drifted < 5pts per checkpoint
+      close_throughout: 0,    // never led by more than 8
+    },
+    loss_margins: [],  // final margin of silent losses
+    loss_floors: [],   // {q3_start_floor, q4_end_floor, max_margin_q3plus, final_margin}
+  };
+
+  for (var gid of Object.keys(gameMap)) {
+    if (Date.now() - startTime > 90000) break;
+    agg.total++;
+    var cps = gameMap[gid];
+
+    var parsed = cps.map(function(cp) {
+      if (!cp.home || !cp.away) return null;
+      return {
+        home: { fgm: cp.home.fgm||0, fga: cp.home.fga||0, fg3m: cp.home.fg3m||0, fg3a: cp.home.fg3a||0,
+                ftm: cp.home.ftm||0, fta: cp.home.fta||0, to: cp.home.to||0, oreb: cp.home.oreb||0 },
+        away: { fgm: cp.away.fgm||0, fga: cp.away.fga||0, fg3m: cp.away.fg3m||0, fg3a: cp.away.fg3a||0,
+                ftm: cp.away.ftm||0, fta: cp.away.fta||0, to: cp.away.to||0, oreb: cp.away.oreb||0 },
+      };
+    });
+
+    // Run canary check (same as triggered_replay)
+    var triggered = false;
+    for (var ci = 2; ci < cps.length; ci++) {
+      var cp = cps[ci];
+      if (cp.cpIdx < 6) continue;
+      if (cp.checkpoint === 'Q4_END') continue;
+      if (!parsed[ci] || !parsed[ci-2]) continue;
+
+      var hRates = diffToRates(parsed[ci].home, parsed[ci-2].home, 0.36, regressionCap);
+      var aRates = diffToRates(parsed[ci].away, parsed[ci-2].away, 0.36, regressionCap);
+      if (!hRates || !aRates) continue;
+
+      var meta = CP_META[cp.checkpoint]; if (!meta) continue;
+      var rp = estimateRemainingPoss(parsed[ci].home, parsed[ci].away, meta.period, meta.clockSec);
+      if (rp < 1) continue;
+
+      var ctrlHome = cp.ctrl_team === cp.home_alias;
+      var hScore = (parsed[ci].home.fgm - parsed[ci].home.fg3m)*2 + parsed[ci].home.fg3m*3 + parsed[ci].home.ftm;
+      var aScore = (parsed[ci].away.fgm - parsed[ci].away.fg3m)*2 + parsed[ci].away.fg3m*3 + parsed[ci].away.ftm;
+
+      var mc = runMonteCarloSim(hRates, aRates, hScore, aScore, rp,
+        { simCount: 200, ctrlTeam: ctrlHome ? 'home' : 'away' });
+
+      if (cp.floor != null && (cp.floor - mc.winProb) > canaryThreshold) {
+        triggered = true; break;
+      }
+    }
+
+    if (triggered) { agg.triggered++; continue; }
+
+    agg.not_triggered++;
+    var ctrlWon = cps[0].ctrl_team_won;
+
+    if (ctrlWon) {
+      agg.silent_wins++;
+      continue;
+    }
+
+    // SILENT LOSS — ctrl lost but MC never triggered
+    agg.silent_losses++;
+
+    // Characterize this loss
+    var q3Start = cps.find(function(c) { return c.checkpoint === 'Q3_9'; });
+    var q4End = cps.find(function(c) { return c.checkpoint === 'Q4_END'; });
+    var q3StartFloor = q3Start ? q3Start.floor : null;
+    var q4EndFloor = q4End ? q4End.floor : null;
+
+    // Max ctrl margin Q3+ and margin swing
+    var maxMarginQ3 = -999, minMarginQ3 = 999;
+    var maxCtrlLeadEver = -999;
+    for (var mi = 0; mi < cps.length; mi++) {
+      var mg = cps[mi].margin || 0;
+      // Convert to ctrl-team-relative margin
+      var ctrlMg = cps[mi].ctrl_team === cps[mi].home_alias ? mg : -mg;
+      if (ctrlMg > maxCtrlLeadEver) maxCtrlLeadEver = ctrlMg;
+      if (cps[mi].cpIdx >= 6) {  // Q3+
+        if (ctrlMg > maxMarginQ3) maxMarginQ3 = ctrlMg;
+        if (ctrlMg < minMarginQ3) minMarginQ3 = ctrlMg;
+      }
+    }
+    var q3Swing = maxMarginQ3 - minMarginQ3;
+    var finalMg = Math.abs(cps[0].final_margin || 0);
+
+    // Classify loss type
+    if (maxCtrlLeadEver >= 15) agg.loss_buckets.blowout_reversal++;
+    else if (q3Swing >= 10) agg.loss_buckets.large_swing++;
+    else if (maxCtrlLeadEver <= 8) agg.loss_buckets.close_throughout++;
+    else agg.loss_buckets.slow_erosion++;
+
+    agg.loss_margins.push(finalMg);
+
+    if (agg.loss_floors.length < 50) {
+      agg.loss_floors.push({
+        q3_floor: q3StartFloor != null ? Math.round(q3StartFloor * 100) / 100 : null,
+        q4_end_floor: q4EndFloor != null ? Math.round(q4EndFloor * 100) / 100 : null,
+        max_ctrl_lead: maxCtrlLeadEver,
+        q3_swing: q3Swing,
+        final_margin: finalMg,
+      });
+    }
+  }
+
+  // Compute loss margin distribution
+  var lm = agg.loss_margins;
+  lm.sort(function(a, b) { return a - b; });
+  var marginDist = lm.length > 0 ? {
+    median: lm[Math.floor(lm.length / 2)],
+    mean: Math.round(lm.reduce(function(a,b){return a+b;},0) / lm.length * 10) / 10,
+    close_le5: lm.filter(function(m) { return m <= 5; }).length,
+    medium_6_12: lm.filter(function(m) { return m > 5 && m <= 12; }).length,
+    blowout_13plus: lm.filter(function(m) { return m > 12; }).length,
+  } : null;
+
+  return {
+    status: 'ok',
+    phase: 'silent_audit',
+    gamesProcessed: agg.total,
+    totalAvailable: Number(totalGames[0]?.n || 0),
+    elapsed_ms: Date.now() - startTime,
+    triggered: agg.triggered,
+    not_triggered: agg.not_triggered,
+    silent_wins: agg.silent_wins,
+    silent_losses: agg.silent_losses,
+    silent_loss_pct: agg.not_triggered > 0 ? Math.round(agg.silent_losses / agg.not_triggered * 1000) / 10 : null,
+    loss_types: agg.loss_buckets,
+    loss_margin_distribution: marginDist,
+    sample_losses: agg.loss_floors,
+    nextStep: offset + batchSize < Number(totalGames[0]?.n || 0)
+      ? '?phase=silent_audit&n=' + batchSize + '&offset=' + (offset + batchSize)
+      : 'COMPLETE',
+  };
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
 // HANDLER
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -2012,6 +2208,7 @@ export default async function handler(req) {
       case 'validate_slate':   result = await phaseValidateSlate(sql, url); break;
       case 'validate_triggered': result = await phaseValidateTriggered(sql, url); break;
       case 'triggered_replay':   result = await phaseTriggeredReplay(sql, url); break;
+      case 'silent_audit':       result = await phaseSilentAudit(sql, url); break;
       case 'status': {
         var count = await sql`SELECT COUNT(*) AS n FROM mc_backtest_results`;
         var games = await sql`SELECT COUNT(DISTINCT game_id) AS n FROM mc_backtest_results`;
