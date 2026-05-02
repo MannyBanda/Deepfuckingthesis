@@ -625,8 +625,8 @@ async function phaseAnalyze(sql, url) {
              MAX(ABS(margin_at_snapshot)) AS max_margin,
              MAX(CASE WHEN margin_at_snapshot > 0 THEN margin_at_snapshot ELSE 0 END) AS max_home_lead,
              MAX(CASE WHEN margin_at_snapshot < 0 THEN ABS(margin_at_snapshot) ELSE 0 END) AS max_away_lead,
-             (ARRAY_AGG(final_margin ORDER BY checkpoint LIMIT 1))[1] AS final_margin,
-             (ARRAY_AGG(home_alias ORDER BY checkpoint LIMIT 1))[1] AS home_alias
+             MIN(final_margin) AS final_margin,
+             MIN(home_alias) AS home_alias
       FROM mc_backtest_results
       GROUP BY game_id
     )
