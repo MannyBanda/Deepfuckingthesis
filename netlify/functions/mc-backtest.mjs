@@ -2004,6 +2004,8 @@ async function phaseSilentAudit(sql, url) {
   var batchSize = parseInt(url.searchParams.get('n') || '200');
   var offset = parseInt(url.searchParams.get('offset') || '0');
   var canaryThreshold = parseFloat(url.searchParams.get('canary') || '0.15');
+  var canaryMode = url.searchParams.get('canary_mode') || 'relative';
+  var mcThreshold = parseFloat(url.searchParams.get('mc_threshold') || '0.70');
   var regressionCap = parseFloat(url.searchParams.get('rc') || '0.60');
   var startTime = Date.now();
 
@@ -2102,7 +2104,13 @@ async function phaseSilentAudit(sql, url) {
       var mc = runMonteCarloSim(hRates, aRates, hScore, aScore, rp,
         { simCount: 200, ctrlTeam: ctrlHome ? 'home' : 'away' });
 
-      if (cp.floor != null && (cp.floor - mc.winProb) > canaryThreshold) {
+      var canaryFired = false;
+      if (canaryMode === 'absolute') {
+        canaryFired = mc.winProb < mcThreshold;
+      } else {
+        canaryFired = cp.floor != null && (cp.floor - mc.winProb) > canaryThreshold;
+      }
+      if (canaryFired) {
         triggered = true; break;
       }
     }
