@@ -922,6 +922,271 @@ function extractProdStats(raw, teamAlias, isHome) {
 
 
 // ══════════════════════════════════════════════════════════════════════════════
+// PHASE: VALIDATE_GAME_V2 — Production-fidelity MC using computeServerWindow
+//   reconstruction from quarter_data boundaries + snapshot cumulative stats
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Map raw_stats_json short keys → boundary long keys
+function toLongKeys(short) {
+  if (!short) return {};
+  return {
+    field_goals_made: Number(short.fgm || 0),
+    field_goals_att: Number(short.fga || 0),
+    three_points_made: Number(short.fg3m || 0),
+    three_points_att: Number(short.fg3a || 0),
+    free_throws_made: Number(short.ftm || 0),
+    free_throws_att: Number(short.fta || 0),
+    turnovers: Number(short.to || 0),
+    offensive_rebounds: Number(short.oreb || 0),
+    steals: Number(short.stl || 0),
+    blocks: Number(short.blk || 0),
+    assists: Number(short.ast || 0),
+    points_in_paint: Number(short.paint || 0),
+    points_off_turnovers: Number(short.pot || 0),
+    second_chance_points: Number(short.scp || 0),
+    fast_break_points: Number(short.fbp || 0),
+    fouls_drawn: Number(short.fd || 0),
+    bench_points: Number(short.bench || 0),
+    possessions: Number(short.poss || 0),
+    points: Number(short.pts || 0),
+  };
+}
+
+// Diff two long-key stat objects (current - previous)
+function diffLongKeys(curr, prev) {
+  var d = {};
+  var keys = Object.keys(curr);
+  for (var i = 0; i < keys.length; i++) {
+    var k = keys[i];
+    d[k] = (curr[k] || 0) - (prev[k] || 0);
+  }
+  return d;
+}
+
+// Reconstruct computeServerWindow cross-fade and extract MC rates
+function reconstructWindowRates(qd, snapRaw, period, clockStr, regressionCap) {
+  if (!qd || !qd.boundaries || !qd.diffs || period < 2) return null;
+
+  // Parse clock
+  var clockParts = (clockStr || '12:00').split(':');
+  var clockMins = parseInt(clockParts[0]) + (parseInt(clockParts[1] || 0) / 60);
+  var completion = Math.max(0, Math.min(1, (12 - clockMins) / 12));
+
+  // Convert snapshot cumulative to long keys
+  var homeCurr = toLongKeys(snapRaw.home);
+  var awayCurr = toLongKeys(snapRaw.away);
+
+  // Find last completed boundary
+  var completedKeys = Object.keys(qd.diffs).map(Number).filter(function(n) { return !isNaN(n); }).sort(function(a,b) { return a-b; });
+  if (completedKeys.length === 0) return null;
+
+  // Last boundary that's BEFORE our current period
+  var lastBK = 0;
+  for (var ci = 0; ci < completedKeys.length; ci++) {
+    if (completedKeys[ci] < period) lastBK = completedKeys[ci];
+  }
+  var boundary = qd.boundaries[String(lastBK)];
+  if (!boundary || !boundary.home || !boundary.away) return null;
+
+  // Partial current quarter = current cumulative - last boundary
+  var partialHome = diffLongKeys(homeCurr, boundary.home);
+  var partialAway = diffLongKeys(awayCurr, boundary.away);
+  var partialDiff = { home: partialHome, away: partialAway };
+
+  // Compute pts for partial if not in raw (for possession estimation)
+  // Points might not be in raw_stats short keys — compute from snapshot
+  // Actually we have them from toLongKeys if poss is available
+
+  // Build windowQs with exact NBA cross-fade logic from computeServerWindow
+  var windowQs = [];
+  var p = period;
+
+  if (p === 2) {
+    if (qd.diffs['1']) windowQs.push({ weight: Math.max(0, 1.0 - completion), diff: qd.diffs['1'] });
+    windowQs.push({ weight: 1.0, diff: partialDiff });
+  } else if (p === 3) {
+    if (qd.diffs['2']) windowQs.push({ weight: 1.0, diff: qd.diffs['2'] });
+    windowQs.push({ weight: 1.0, diff: partialDiff });
+  } else if (p === 4) {
+    if (qd.diffs['2']) windowQs.push({ weight: Math.max(0, 1.0 - completion), diff: qd.diffs['2'] });
+    if (qd.diffs['3']) windowQs.push({ weight: 1.0, diff: qd.diffs['3'] });
+    windowQs.push({ weight: 1.0, diff: partialDiff });
+  } else if (p >= 5) {
+    if (qd.diffs['3']) windowQs.push({ weight: Math.max(0, 1.0 - completion), diff: qd.diffs['3'] });
+    if (qd.diffs['4']) windowQs.push({ weight: 1.0, diff: qd.diffs['4'] });
+    windowQs.push({ weight: 1.0, diff: partialDiff });
+  }
+
+  if (windowQs.length === 0) return null;
+
+  // Aggregate stats with cross-fade weights (per side)
+  function aggSide(side) {
+    var keys = ['field_goals_made','field_goals_att','three_points_made','three_points_att',
+                'free_throws_made','free_throws_att','turnovers','offensive_rebounds','possessions','points'];
+    var agg = {};
+    for (var ki = 0; ki < keys.length; ki++) {
+      var k = keys[ki];
+      var sum = 0, hasAny = false;
+      for (var wi = 0; wi < windowQs.length; wi++) {
+        var v = windowQs[wi].diff[side] ? windowQs[wi].diff[side][k] : null;
+        if (v != null) { sum += v * windowQs[wi].weight; hasAny = true; }
+      }
+      agg[k] = hasAny ? sum : 0;
+    }
+    return agg;
+  }
+
+  var hAgg = aggSide('home');
+  var aAgg = aggSide('away');
+
+  // Convert aggregated window stats → MC rates
+  var cap = regressionCap || 0.60;
+  function toMCRates(agg) {
+    var fga = agg.field_goals_att || 1;
+    var fgm = agg.field_goals_made || 0;
+    var fg3a = agg.three_points_att || 0;
+    var fg3m = agg.three_points_made || 0;
+    var fta = agg.free_throws_att || 0;
+    var ftm = agg.free_throws_made || 0;
+    var to = agg.turnovers || 0;
+    var oreb = agg.offensive_rebounds || 0;
+    var poss = agg.possessions || (fga + 0.44 * fta - oreb + to);
+    if (poss < 3) poss = Math.max(fga, 3);
+    var fg2a = fga - fg3a;
+    var fg2m = fgm - fg3m;
+
+    var rawFg3Pct = fg3a > 0 ? fg3m / fg3a : 0.36;
+    var sampleWeight = Math.min(cap, fg3a / 30);
+    var fg3Pct = rawFg3Pct * sampleWeight + 0.36 * (1 - sampleWeight);
+
+    function clamp(v) { return Math.max(0, Math.min(1, v)); }
+    return {
+      toRate: clamp(poss > 0 ? to / poss : 0.12),
+      fg3aShare: clamp(fga > 0 ? fg3a / fga : 0.35),
+      fg3Pct: clamp(fg3Pct),
+      fg2Pct: clamp(fg2a > 0 ? fg2m / fg2a : 0.50),
+      orebRate: clamp((fga - fgm) > 0 ? oreb / (fga - fgm) : 0.25),
+      ftaRate: Math.min(poss > 0 ? fta / poss : 0.20, 1.0),
+      ftPct: clamp(fta > 0 ? ftm / fta : 0.76),
+      _windowFGA: fga,
+      _windowPoss: Math.round(poss),
+    };
+  }
+
+  return { home: toMCRates(hAgg), away: toMCRates(aAgg) };
+}
+
+
+async function phaseValidateGameV2(sql, url) {
+  var gameId = url.searchParams.get('game_id');
+  if (!gameId) return { error: 'game_id required' };
+
+  var simCount = parseInt(url.searchParams.get('sims') || '1000');
+  var regressionCap = parseFloat(url.searchParams.get('rc') || '0.60');
+
+  // Pull quarter_data
+  var qdRows = await sql`SELECT quarter_data FROM games WHERE id = ${gameId}`;
+  var qd = qdRows[0]?.quarter_data;
+  if (!qd) return { error: 'No quarter_data for game ' + gameId };
+  if (typeof qd === 'string') qd = JSON.parse(qd);
+
+  // Pull game info
+  var game = await sql`SELECT * FROM games WHERE id = ${gameId} LIMIT 1`;
+  var g = game[0];
+  if (!g) return { error: 'Game not found: ' + gameId };
+
+  // Pull all server snapshots
+  var snapshots = await sql`
+    SELECT id, period, clock, source,
+           raw_stats_json, floor_score, floor_team,
+           xgb_win_prob, home_pts, away_pts, ts
+    FROM snapshots
+    WHERE game_id = ${gameId}
+      AND source = 'server'
+      AND raw_stats_json IS NOT NULL
+      AND period >= 2
+    ORDER BY period ASC, clock DESC
+  `;
+
+  if (snapshots.length === 0) {
+    return { error: 'No Q2+ server snapshots for game ' + gameId };
+  }
+
+  var results = [];
+
+  for (var si = 0; si < snapshots.length; si++) {
+    var snap = snapshots[si];
+    var raw = typeof snap.raw_stats_json === 'string'
+      ? JSON.parse(snap.raw_stats_json) : snap.raw_stats_json;
+    if (!raw || !raw.home || !raw.away) continue;
+
+    // Reconstruct production rolling window rates
+    var windowRates = reconstructWindowRates(qd, raw, snap.period, snap.clock, regressionCap);
+    if (!windowRates) continue;
+    if (windowRates.home._windowFGA < 5 || windowRates.away._windowFGA < 5) continue;
+
+    // Parse clock for remaining poss
+    var clockSec = 360;
+    try {
+      var parts = String(snap.clock || '6:00').split(':');
+      clockSec = parseInt(parts[0]) * 60 + parseInt(parts[1] || 0);
+    } catch(e) {}
+
+    // Remaining possessions from cumulative stats
+    var homeCum = toLongKeys(raw.home);
+    var awayCum = toLongKeys(raw.away);
+    var remainPoss = estimateRemainingPoss(
+      { fga: homeCum.field_goals_att, fta: homeCum.free_throws_att, oreb: homeCum.offensive_rebounds, to: homeCum.turnovers },
+      { fga: awayCum.field_goals_att, fta: awayCum.free_throws_att, oreb: awayCum.offensive_rebounds, to: awayCum.turnovers },
+      snap.period, clockSec
+    );
+    if (remainPoss < 1) continue;
+
+    var ctrlIsHome = snap.floor_team === g.home_alias;
+
+    var mc = runMonteCarloSim(
+      windowRates.home, windowRates.away,
+      snap.home_pts || 0, snap.away_pts || 0,
+      remainPoss,
+      { simCount: simCount, ctrlTeam: ctrlIsHome ? 'home' : 'away' }
+    );
+
+    results.push({
+      period: snap.period,
+      clock: snap.clock,
+      score: (snap.home_pts || 0) + '-' + (snap.away_pts || 0),
+      margin: (snap.home_pts || 0) - (snap.away_pts || 0),
+      floor: snap.floor_score,
+      floor_team: snap.floor_team,
+      xgb: snap.xgb_win_prob,
+      mc_winProb: mc.winProb,
+      mc_collapse: mc.collapseProb,
+      mc_median: mc.medianMargin,
+      mc_range: mc.margin10pct + ' to ' + mc.margin90pct,
+      remainPoss: mc.remainingPoss,
+      windowFGA: windowRates.home._windowFGA + windowRates.away._windowFGA,
+      xgb_mc_divergence: snap.xgb_win_prob != null
+        ? Math.round((snap.xgb_win_prob - mc.winProb) * 1000) / 1000 : null,
+    });
+  }
+
+  return {
+    status: 'ok',
+    version: 'v2_production_fidelity',
+    rateSource: 'computeServerWindow_reconstruction',
+    game: {
+      id: gameId,
+      matchup: (g.away_alias || g.away_team) + ' @ ' + (g.home_alias || g.home_team),
+      final: g.home_pts + '-' + g.away_pts,
+      winner: g.winner,
+    },
+    snapshots: results.length,
+    timeline: results,
+  };
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
 // HANDLER
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -945,6 +1210,7 @@ export default async function handler(req) {
       case 'run':            result = await phaseRun(sql, url); break;
       case 'analyze':        result = await phaseAnalyze(sql, url); break;
       case 'validate_game':  result = await phaseValidateGame(sql, url); break;
+      case 'validate_game_v2': result = await phaseValidateGameV2(sql, url); break;
       case 'status': {
         var count = await sql`SELECT COUNT(*) AS n FROM mc_backtest_results`;
         var games = await sql`SELECT COUNT(DISTINCT game_id) AS n FROM mc_backtest_results`;
