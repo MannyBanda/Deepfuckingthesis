@@ -1514,6 +1514,203 @@ async function phaseValidateSlate(sql, url) {
 
 
 // ══════════════════════════════════════════════════════════════════════════════
+// PHASE: VALIDATE_TRIGGERED — PBP-triggered MC investigation across games
+//   Canary (poss_20 divergence > 0.15 from XGB) triggers investigation.
+//   MC then uses only POST-TRIGGER rates to build conviction.
+//   ?phase=validate_triggered&n=15&offset=0
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function phaseValidateTriggered(sql, url) {
+  var fromDate = url.searchParams.get('from') || '2026-04-18';
+  var toDate = url.searchParams.get('to') || '2026-05-02';
+  var regressionCap = parseFloat(url.searchParams.get('rc') || '0.60');
+  var simCount = parseInt(url.searchParams.get('sims') || '500');
+  var batchSize = parseInt(url.searchParams.get('n') || '10');
+  var offset = parseInt(url.searchParams.get('offset') || '0');
+  var canaryThreshold = parseFloat(url.searchParams.get('canary') || '0.15');
+
+  var games = await sql`
+    SELECT id, date, home_alias, away_alias, home_pts, away_pts, winner, quarter_data
+    FROM games
+    WHERE date >= ${fromDate} AND date <= ${toDate}
+      AND winner IS NOT NULL AND quarter_data IS NOT NULL
+    ORDER BY date ASC, id ASC
+    LIMIT ${batchSize} OFFSET ${offset}
+  `;
+
+  var totalGames = await sql`
+    SELECT COUNT(*) AS n FROM games
+    WHERE date >= ${fromDate} AND date <= ${toDate}
+      AND winner IS NOT NULL AND quarter_data IS NOT NULL
+  `;
+
+  var summaries = [];
+  var aggConfirmed = 0, aggConfirmedRight = 0;
+  var aggLikely = 0, aggLikelyRight = 0;
+
+  for (var gi = 0; gi < games.length; gi++) {
+    var g = games[gi];
+
+    var snaps = await sql`
+      SELECT period, clock, raw_stats_json, floor_score, floor_team,
+             xgb_win_prob, home_pts, away_pts
+      FROM snapshots
+      WHERE game_id = ${g.id} AND source = 'server' AND raw_stats_json IS NOT NULL
+      ORDER BY period ASC, clock DESC
+    `;
+    if (snaps.length < 10) { summaries.push({ matchup: (g.away_alias||'?')+'@'+(g.home_alias||'?'), error: 'insufficient snapshots' }); continue; }
+
+    // Parse all snapshots
+    var parsed = [];
+    var seen = {};
+    for (var si = 0; si < snaps.length; si++) {
+      var sk = snaps[si].period + '_' + snaps[si].clock + '_' + snaps[si].home_pts;
+      if (seen[sk]) continue;
+      seen[sk] = true;
+      var raw = typeof snaps[si].raw_stats_json === 'string' ? JSON.parse(snaps[si].raw_stats_json) : snaps[si].raw_stats_json;
+      var mc_parsed = parseSnapForMC(raw);
+      if (mc_parsed) parsed.push({ snap: snaps[si], stats: mc_parsed });
+    }
+
+    // Phase 1: Walk forward with poss_20 canary to find trigger
+    var triggerIdx = null;
+    var triggerTeam = null;
+
+    for (var ci = 0; ci < parsed.length; ci++) {
+      var cs = parsed[ci].snap;
+      if (cs.period < 2) continue;
+
+      var canaryRates = possessionWindowRates(
+        parsed.map(function(p) { return p.stats; }), ci, 20, regressionCap
+      );
+      if (!canaryRates || canaryRates.home._windowFGA < 5) continue;
+
+      var clockS = 360;
+      try { var pp = String(cs.clock||'6:00').split(':'); clockS = parseInt(pp[0])*60+parseInt(pp[1]||0); } catch(e){}
+      var rp = estimateRemainingPoss(parsed[ci].stats.home, parsed[ci].stats.away, cs.period, clockS);
+      if (rp < 1) continue;
+
+      var ctrlHome = cs.floor_team === g.home_alias;
+      var canaryMC = runMonteCarloSim(canaryRates.home, canaryRates.away,
+        cs.home_pts||0, cs.away_pts||0, rp,
+        { simCount: 300, ctrlTeam: ctrlHome ? 'home' : 'away' });
+
+      var xgb = cs.xgb_win_prob;
+      if (xgb != null && (xgb - canaryMC.winProb) > canaryThreshold) {
+        triggerIdx = ci;
+        triggerTeam = cs.floor_team;
+        break;
+      }
+    }
+
+    if (triggerIdx === null) {
+      summaries.push({
+        date: g.date,
+        matchup: (g.away_alias||'?')+'@'+(g.home_alias||'?'),
+        final: (g.home_pts||0)+'-'+(g.away_pts||0),
+        winner: g.winner,
+        triggered: false,
+      });
+      continue;
+    }
+
+    // Phase 2: From trigger, run MC with post-trigger rates only
+    var triggerStats = parsed[triggerIdx].stats;
+    var triggerSnap = parsed[triggerIdx].snap;
+    var ctrlWon = triggerTeam === g.winner;
+    var ctrlIsHome = triggerTeam === g.home_alias;
+
+    var firstLikely = null;   // MC < 0.40
+    var firstConfirmed = null; // MC < 0.25
+    var peakCollapse = 0;
+    var normalized = false;
+
+    for (var ti = triggerIdx + 1; ti < parsed.length; ti++) {
+      var ts = parsed[ti].snap;
+      var tc = parsed[ti].stats;
+
+      // Post-trigger diff
+      var hDiff = {
+        fgm: tc.home.fgm - triggerStats.home.fgm, fga: tc.home.fga - triggerStats.home.fga,
+        fg3m: tc.home.fg3m - triggerStats.home.fg3m, fg3a: tc.home.fg3a - triggerStats.home.fg3a,
+        ftm: tc.home.ftm - triggerStats.home.ftm, fta: tc.home.fta - triggerStats.home.fta,
+        to: tc.home.to - triggerStats.home.to, oreb: tc.home.oreb - triggerStats.home.oreb,
+      };
+      var aDiff = {
+        fgm: tc.away.fgm - triggerStats.away.fgm, fga: tc.away.fga - triggerStats.away.fga,
+        fg3m: tc.away.fg3m - triggerStats.away.fg3m, fg3a: tc.away.fg3a - triggerStats.away.fg3a,
+        ftm: tc.away.ftm - triggerStats.away.ftm, fta: tc.away.fta - triggerStats.away.fta,
+        to: tc.away.to - triggerStats.away.to, oreb: tc.away.oreb - triggerStats.away.oreb,
+      };
+
+      var postFGA = hDiff.fga + aDiff.fga;
+      if (postFGA < 8) continue; // need minimum post-trigger data
+
+      var hRates = diffToRates(tc.home, triggerStats.home, 0.36, regressionCap);
+      var aRates = diffToRates(tc.away, triggerStats.away, 0.36, regressionCap);
+      if (!hRates || !aRates) continue;
+
+      var clockS2 = 360;
+      try { var pp2 = String(ts.clock||'6:00').split(':'); clockS2 = parseInt(pp2[0])*60+parseInt(pp2[1]||0); } catch(e){}
+      var rp2 = estimateRemainingPoss(tc.home, tc.away, ts.period, clockS2);
+      if (rp2 < 1) continue;
+
+      var mc = runMonteCarloSim(hRates, aRates,
+        ts.home_pts||0, ts.away_pts||0, rp2,
+        { simCount: simCount, ctrlTeam: ctrlIsHome ? 'home' : 'away' });
+
+      if (mc.collapseProb != null && mc.collapseProb > peakCollapse) peakCollapse = mc.collapseProb;
+
+      if (mc.winProb > 0.65) normalized = true;
+
+      if (mc.winProb < 0.40 && !firstLikely) {
+        firstLikely = { period: ts.period, clock: ts.clock, score: (ts.home_pts||0)+'-'+(ts.away_pts||0),
+          margin: (ts.home_pts||0)-(ts.away_pts||0), mc: mc.winProb, collapse: mc.collapseProb, postPoss: Math.round((hDiff.fga+hDiff.to+aDiff.fga+aDiff.to)/2) };
+      }
+      if (mc.winProb < 0.25 && !firstConfirmed) {
+        firstConfirmed = { period: ts.period, clock: ts.clock, score: (ts.home_pts||0)+'-'+(ts.away_pts||0),
+          margin: (ts.home_pts||0)-(ts.away_pts||0), mc: mc.winProb, collapse: mc.collapseProb, postPoss: Math.round((hDiff.fga+hDiff.to+aDiff.fga+aDiff.to)/2) };
+      }
+    }
+
+    if (firstConfirmed) { aggConfirmed++; if (!ctrlWon) aggConfirmedRight++; }
+    if (firstLikely) { aggLikely++; if (!ctrlWon) aggLikelyRight++; }
+
+    summaries.push({
+      date: g.date,
+      matchup: (g.away_alias||'?')+'@'+(g.home_alias||'?'),
+      final: (g.home_pts||0)+'-'+(g.away_pts||0),
+      winner: g.winner,
+      triggered: true,
+      trigger: { period: triggerSnap.period, clock: triggerSnap.clock, score: (triggerSnap.home_pts||0)+'-'+(triggerSnap.away_pts||0), margin: (triggerSnap.home_pts||0)-(triggerSnap.away_pts||0), floor_team: triggerTeam },
+      ctrl_won: ctrlWon,
+      first_likely: firstLikely,
+      first_confirmed: firstConfirmed,
+      peak_collapse: Math.round(peakCollapse * 1000) / 1000,
+      normalized_then_resumed: normalized && (firstLikely != null),
+    });
+  }
+
+  return {
+    status: 'ok',
+    mode: 'triggered_investigation',
+    canary_threshold: canaryThreshold,
+    dateRange: fromDate + ' to ' + toDate,
+    gamesProcessed: summaries.length,
+    totalAvailable: Number(totalGames[0]?.n || 0),
+    game_level: {
+      confirmed: { games: aggConfirmed, mc_right: aggConfirmedRight, precision: aggConfirmed > 0 ? Math.round(aggConfirmedRight/aggConfirmed*1000)/10 : null },
+      likely: { games: aggLikely, mc_right: aggLikelyRight, precision: aggLikely > 0 ? Math.round(aggLikelyRight/aggLikely*1000)/10 : null },
+    },
+    nextStep: offset + batchSize < Number(totalGames[0]?.n || 0)
+      ? '?phase=validate_triggered&from='+fromDate+'&to='+toDate+'&n='+batchSize+'&offset='+(offset+batchSize)
+      : null,
+    games: summaries,
+  };
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
 // HANDLER
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -1539,6 +1736,7 @@ export default async function handler(req) {
       case 'validate_game':  result = await phaseValidateGame(sql, url); break;
       case 'validate_game_v2': result = await phaseValidateGameV2(sql, url); break;
       case 'validate_slate':   result = await phaseValidateSlate(sql, url); break;
+      case 'validate_triggered': result = await phaseValidateTriggered(sql, url); break;
       case 'status': {
         var count = await sql`SELECT COUNT(*) AS n FROM mc_backtest_results`;
         var games = await sql`SELECT COUNT(DISTINCT game_id) AS n FROM mc_backtest_results`;
