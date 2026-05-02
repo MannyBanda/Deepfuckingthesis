@@ -790,35 +790,33 @@ async function phaseValidateGame(sql, url) {
   if (!g) return { error: 'Game not found: ' + gameId };
 
   var results = [];
-  var prevStats = null;
+  var LOOKBACK = parseInt(url.searchParams.get('lb') || '5');  // ~5 minutes back
 
+  // Parse all raw_stats upfront
+  var parsed = [];
   for (var si = 0; si < snapshots.length; si++) {
     var snap = snapshots[si];
-    if (snap.period < 2) { prevStats = snap.raw_stats_json; continue; }
-
     var raw = typeof snap.raw_stats_json === 'string'
       ? JSON.parse(snap.raw_stats_json) : snap.raw_stats_json;
-    var prev = prevStats
-      ? (typeof prevStats === 'string' ? JSON.parse(prevStats) : prevStats)
-      : null;
+    parsed.push({
+      snap: snap,
+      homeStats: raw ? extractProdStats(raw, g.home_alias || g.home_team, true) : null,
+      awayStats: raw ? extractProdStats(raw, g.away_alias || g.away_team, false) : null,
+    });
+  }
 
-    if (!raw || !prev) { prevStats = snap.raw_stats_json; continue; }
+  for (var si = LOOKBACK; si < parsed.length; si++) {
+    var curr = parsed[si];
+    var prev = parsed[si - LOOKBACK];
+    var snap = curr.snap;
 
-    // Extract home/away stats from raw BDL format
-    var homeRaw = extractProdStats(raw, g.home_alias || g.home_team, true);
-    var awayRaw = extractProdStats(raw, g.away_alias || g.away_team, false);
-    var homePrev = extractProdStats(prev, g.home_alias || g.home_team, true);
-    var awayPrev = extractProdStats(prev, g.away_alias || g.away_team, false);
+    if (snap.period < 2) continue;
+    if (!curr.homeStats || !curr.awayStats || !prev.homeStats || !prev.awayStats) continue;
 
-    if (!homeRaw || !awayRaw || !homePrev || !awayPrev) {
-      prevStats = snap.raw_stats_json;
-      continue;
-    }
+    var homeRates = diffToRates(curr.homeStats, prev.homeStats, 0.36, regressionCap);
+    var awayRates = diffToRates(curr.awayStats, prev.awayStats, 0.36, regressionCap);
 
-    var homeRates = diffToRates(homeRaw, homePrev, 0.36, regressionCap);
-    var awayRates = diffToRates(awayRaw, awayPrev, 0.36, regressionCap);
-
-    if (!homeRates || !awayRates) { prevStats = snap.raw_stats_json; continue; }
+    if (!homeRates || !awayRates) continue;
 
     // Parse clock
     var clockSec = 360;
@@ -827,8 +825,8 @@ async function phaseValidateGame(sql, url) {
       clockSec = parseInt(parts[0]) * 60 + parseInt(parts[1] || 0);
     } catch(e) {}
 
-    var remainPoss = estimateRemainingPoss(homeRaw, awayRaw, snap.period, clockSec);
-    if (remainPoss < 1) { prevStats = snap.raw_stats_json; continue; }
+    var remainPoss = estimateRemainingPoss(curr.homeStats, curr.awayStats, snap.period, clockSec);
+    if (remainPoss < 1) continue;
 
     var ctrlIsHome = snap.floor_team === (g.home_alias || g.home_team);
 
@@ -856,8 +854,6 @@ async function phaseValidateGame(sql, url) {
       xgb_mc_divergence: snap.xgb_win_prob != null
         ? Math.round((snap.xgb_win_prob - mc.winProb) * 1000) / 1000 : null,
     });
-
-    prevStats = snap.raw_stats_json;
   }
 
   return {
