@@ -2047,6 +2047,9 @@ async function phaseSilentAudit(sql, url) {
       slow_erosion: 0,        // margin drifted < 5pts per checkpoint
       close_throughout: 0,    // never led by more than 8
     },
+    blowout_q3_state: {
+      leading_10plus: 0, leading_5_9: 0, leading_1_4: 0, close: 0, already_behind: 0,
+    },
     loss_margins: [],  // final margin of silent losses
     loss_floors: [],   // {q3_start_floor, q4_end_floor, max_margin_q3plus, final_margin}
   };
@@ -2116,11 +2119,13 @@ async function phaseSilentAudit(sql, url) {
     // Max ctrl margin Q3+ and margin swing
     var maxMarginQ3 = -999, minMarginQ3 = 999;
     var maxCtrlLeadEver = -999;
+    var marginAtQ3Start = null;
     for (var mi = 0; mi < cps.length; mi++) {
       var mg = cps[mi].margin || 0;
       // Convert to ctrl-team-relative margin
       var ctrlMg = cps[mi].ctrl_team === cps[mi].home_alias ? mg : -mg;
       if (ctrlMg > maxCtrlLeadEver) maxCtrlLeadEver = ctrlMg;
+      if (cps[mi].checkpoint === 'Q3_9') marginAtQ3Start = ctrlMg;
       if (cps[mi].cpIdx >= 6) {  // Q3+
         if (ctrlMg > maxMarginQ3) maxMarginQ3 = ctrlMg;
         if (ctrlMg < minMarginQ3) minMarginQ3 = ctrlMg;
@@ -2130,20 +2135,32 @@ async function phaseSilentAudit(sql, url) {
     var finalMg = Math.abs(cps[0].final_margin || 0);
 
     // Classify loss type
-    if (maxCtrlLeadEver >= 15) agg.loss_buckets.blowout_reversal++;
+    if (maxCtrlLeadEver >= 15) {
+      agg.loss_buckets.blowout_reversal++;
+      // Sub-classify blowouts by Q3 state
+      if (marginAtQ3Start !== null) {
+        if (marginAtQ3Start >= 10) agg.blowout_q3_state.leading_10plus++;
+        else if (marginAtQ3Start >= 5) agg.blowout_q3_state.leading_5_9++;
+        else if (marginAtQ3Start >= 1) agg.blowout_q3_state.leading_1_4++;
+        else if (marginAtQ3Start >= -3) agg.blowout_q3_state.close++;
+        else agg.blowout_q3_state.already_behind++;
+      }
+    }
     else if (q3Swing >= 10) agg.loss_buckets.large_swing++;
     else if (maxCtrlLeadEver <= 8) agg.loss_buckets.close_throughout++;
     else agg.loss_buckets.slow_erosion++;
 
     agg.loss_margins.push(finalMg);
 
-    if (agg.loss_floors.length < 50) {
+    if (agg.loss_floors.length < 80) {
       agg.loss_floors.push({
         q3_floor: q3StartFloor != null ? Math.round(q3StartFloor * 100) / 100 : null,
         q4_end_floor: q4EndFloor != null ? Math.round(q4EndFloor * 100) / 100 : null,
         max_ctrl_lead: maxCtrlLeadEver,
+        margin_at_q3: marginAtQ3Start,
         q3_swing: q3Swing,
         final_margin: finalMg,
+        type: maxCtrlLeadEver >= 15 ? 'blowout' : q3Swing >= 10 ? 'swing' : maxCtrlLeadEver <= 8 ? 'close' : 'erosion',
       });
     }
   }
@@ -2171,6 +2188,7 @@ async function phaseSilentAudit(sql, url) {
     silent_losses: agg.silent_losses,
     silent_loss_pct: agg.not_triggered > 0 ? Math.round(agg.silent_losses / agg.not_triggered * 1000) / 10 : null,
     loss_types: agg.loss_buckets,
+    blowout_q3_state: agg.blowout_q3_state,
     loss_margin_distribution: marginDist,
     sample_losses: agg.loss_floors,
     nextStep: offset + batchSize < Number(totalGames[0]?.n || 0)
