@@ -1355,6 +1355,8 @@ async function phaseValidateSlate(sql, url) {
     var maxDiv = 0, maxDivSnap = null;
     var mcCorrect = 0, mcTotal = 0;
     var q3Divergences = [];
+    var firstDualFire = null;  // first dual-confirmed divergence
+    var dualFireCount = 0;
     var seen = {};
 
     for (var si = 0; si < snaps.length; si++) {
@@ -1437,6 +1439,11 @@ async function phaseValidateSlate(sql, url) {
           if (confirmed) {
             divBuckets[th].flagged++;
             if (!ctrlWon) divBuckets[th].mcRight++;
+            // Track first dual-confirmed fire per game (at 0.20 threshold)
+            if (th === '0.20' && !firstDualFire) {
+              firstDualFire = { period: snap.period, clock: snap.clock, score: (snap.home_pts||0)+'-'+(snap.away_pts||0), margin: (snap.home_pts||0)-(snap.away_pts||0), mc: mc.winProb, mcLong: mcLong ? mcLong.winProb : null, xgb: xgb, floor_team: snap.floor_team, ctrlWon: ctrlWon };
+            }
+            if (th === '0.20') dualFireCount++;
           }
         }
       }
@@ -1463,6 +1470,8 @@ async function phaseValidateSlate(sql, url) {
       avg_q3_divergence: avgQ3Div != null ? Math.round(avgQ3Div*1000)/1000 : null,
       first_crack: firstCrack,
       first_alarm: firstAlarm,
+      dual_fire: firstDualFire,
+      dual_fire_count: dualFireCount,
     });
   }
 
@@ -1473,13 +1482,29 @@ async function phaseValidateSlate(sql, url) {
     divPrecision[th2] = { flagged: b.flagged, mc_right: b.mcRight, precision: b.flagged > 0 ? Math.round(b.mcRight/b.flagged*1000)/10 : null };
   }
 
+  // Game-level precision: of games with dual-confirmed fire, how many did MC get right?
+  var gamesWithFire = 0, gamesMCRight = 0;
+  for (var si2 = 0; si2 < summaries.length; si2++) {
+    var df = summaries[si2].dual_fire;
+    if (df) {
+      gamesWithFire++;
+      if (!df.ctrlWon) gamesMCRight++;
+    }
+  }
+
   return {
     status: 'ok',
     mode: mode,
     dateRange: fromDate + ' to ' + toDate,
     gamesProcessed: summaries.length,
     totalAvailable: Number(totalGames[0]?.n || 0),
-    divergence_precision: divPrecision,
+    snapshot_precision: divPrecision,
+    game_level: {
+      games_with_dual_fire: gamesWithFire,
+      mc_right: gamesMCRight,
+      mc_wrong: gamesWithFire - gamesMCRight,
+      precision: gamesWithFire > 0 ? Math.round(gamesMCRight/gamesWithFire*1000)/10 : null,
+    },
     nextStep: offset + batchSize < Number(totalGames[0]?.n || 0)
       ? '?phase=validate_slate&from='+fromDate+'&to='+toDate+'&mode='+mode+'&n='+batchSize+'&offset='+(offset+batchSize)
       : null,
