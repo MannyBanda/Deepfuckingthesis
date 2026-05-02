@@ -52,6 +52,9 @@
 [functions."test-v2-engine"]
   timeout = 120
 
+[functions."mc-backtest"]
+  timeout = 120
+
 [[headers]]
   for = "/*"
   [headers.values]

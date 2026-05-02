@@ -1,0 +1,975 @@
+// ══════════════════════════════════════════════════════════════════════════════
+// Monte Carlo Possession Simulation — Backtest & Validation Harness
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// Phases:
+//   ?phase=init                         — Create mc_backtest_results table
+//   ?phase=run&n=100&offset=0           — Process N games from backtest table
+//   ?phase=run&n=100&offset=100         — Next batch
+//   ?phase=analyze                      — Compute AUC, calibration, segments
+//   ?phase=analyze&segment=lead_change  — Lead-change games only
+//   ?phase=sweep&param=regression&values=0.3,0.5,0.7  — Parameter sweep
+//   ?phase=validate_game&game_id=XXX    — Run MC against prod game snapshots
+//
+// Dependencies: nba_snapshot_backtest (16,910 rows, ~1,235 games)
+
+import { neon } from '@neondatabase/serverless';
+
+// ── Checkpoint ordering (must match backtest-nba-snapshots.mjs) ─────────────
+var CP_LABELS = [
+  'Q1_6','Q1_END',
+  'Q2_9','Q2_6','Q2_3','Q2_END',
+  'Q3_9','Q3_6','Q3_3','Q3_END',
+  'Q4_9','Q4_6','Q4_3','Q4_END',
+];
+var CP_INDEX = {};
+for (var i = 0; i < CP_LABELS.length; i++) CP_INDEX[CP_LABELS[i]] = i;
+
+// Checkpoint → {period, clockSec}
+var CP_META = {
+  Q1_6:   { period: 1, clockSec: 360 },
+  Q1_END: { period: 1, clockSec: 0 },
+  Q2_9:   { period: 2, clockSec: 540 },
+  Q2_6:   { period: 2, clockSec: 360 },
+  Q2_3:   { period: 2, clockSec: 180 },
+  Q2_END: { period: 2, clockSec: 0 },
+  Q3_9:   { period: 3, clockSec: 540 },
+  Q3_6:   { period: 3, clockSec: 360 },
+  Q3_3:   { period: 3, clockSec: 180 },
+  Q3_END: { period: 3, clockSec: 0 },
+  Q4_9:   { period: 4, clockSec: 540 },
+  Q4_6:   { period: 4, clockSec: 360 },
+  Q4_3:   { period: 4, clockSec: 180 },
+  Q4_END: { period: 4, clockSec: 0 },
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MONTE CARLO SIMULATION ENGINE (pure function — no DB, no side effects)
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Simulate a single possession given team rates.
+ * Returns points scored (0, 2, or 3 from field + 0-2 from FT).
+ */
+function simulatePossession(rates) {
+  // Turnover check
+  if (Math.random() < rates.toRate) return 0;
+
+  var shotPts = 0;
+  var isMake = false;
+
+  // Shot type: 3PT vs 2PT
+  if (Math.random() < rates.fg3aShare) {
+    // 3PT attempt
+    isMake = Math.random() < rates.fg3Pct;
+    if (isMake) shotPts = 3;
+  } else {
+    // 2PT attempt
+    isMake = Math.random() < rates.fg2Pct;
+    if (isMake) shotPts = 2;
+  }
+
+  // OREB on miss → bonus 2PT attempt (max 1 extra)
+  if (!isMake && Math.random() < rates.orebRate) {
+    if (Math.random() < rates.fg2Pct) shotPts = 2;
+  }
+
+  // Free throw opportunity (independent of shot outcome)
+  // ftaRate = FTA per possession; divide by 2 to get foul-event rate
+  // Each foul event = 2 FTA
+  if (Math.random() < rates.ftaRate / 2) {
+    if (Math.random() < rates.ftPct) shotPts += 1;
+    if (Math.random() < rates.ftPct) shotPts += 1;
+  }
+
+  return shotPts;
+}
+
+/**
+ * Run Monte Carlo simulation from current game state.
+ *
+ * @param {Object} homeRates  — {toRate, fg3aShare, fg3Pct, fg2Pct, orebRate, ftaRate, ftPct}
+ * @param {Object} awayRates  — same shape
+ * @param {number} homeScore  — current home points
+ * @param {number} awayScore  — current away points
+ * @param {number} remainPoss — estimated remaining possessions PER TEAM
+ * @param {Object} opts       — {simCount: 1000, ctrlTeam: 'home'|'away'}
+ * @returns {Object}          — {winProb, collapseProb, medianMargin, margin10pct, margin90pct, ...}
+ */
+function runMonteCarloSim(homeRates, awayRates, homeScore, awayScore, remainPoss, opts) {
+  var simCount = (opts && opts.simCount) || 1000;
+  var ctrlIsHome = (opts && opts.ctrlTeam === 'away') ? false : true;
+
+  var margins = new Array(simCount);
+  var ctrlWins = 0;
+  var leadLost = 0;  // sims where leading team at start loses lead
+
+  var currentMargin = homeScore - awayScore;  // home perspective
+  var ctrlMargin = ctrlIsHome ? currentMargin : -currentMargin;
+  var ctrlLeading = ctrlMargin > 0;
+
+  for (var s = 0; s < simCount; s++) {
+    var hScore = homeScore;
+    var aScore = awayScore;
+    var hPoss = Math.round(remainPoss);
+    var aPoss = Math.round(remainPoss);
+
+    // Alternate possessions (random first)
+    var homeHasBall = Math.random() < 0.5;
+
+    while (hPoss > 0 || aPoss > 0) {
+      if (homeHasBall) {
+        if (hPoss > 0) {
+          hScore += simulatePossession(homeRates);
+          hPoss--;
+        }
+      } else {
+        if (aPoss > 0) {
+          aScore += simulatePossession(awayRates);
+          aPoss--;
+        }
+      }
+      homeHasBall = !homeHasBall;
+    }
+
+    var finalMargin = ctrlIsHome ? (hScore - aScore) : (aScore - hScore);
+    margins[s] = finalMargin;
+    if (finalMargin > 0) ctrlWins++;
+    else if (finalMargin === 0) ctrlWins += 0.5;  // ties = 0.5 wins
+
+    // Collapse detection: ctrl was leading, sim ends with ctrl losing
+    if (ctrlLeading && finalMargin <= 0) leadLost++;
+  }
+
+  // Sort margins for percentiles
+  margins.sort(function(a, b) { return a - b; });
+
+  var p10idx = Math.floor(simCount * 0.10);
+  var p50idx = Math.floor(simCount * 0.50);
+  var p90idx = Math.floor(simCount * 0.90);
+
+  return {
+    winProb:       Math.round(ctrlWins / simCount * 1000) / 1000,
+    collapseProb:  ctrlLeading ? Math.round(leadLost / simCount * 1000) / 1000 : null,
+    medianMargin:  margins[p50idx],
+    margin10pct:   margins[p10idx],
+    margin90pct:   margins[p90idx],
+    currentMargin: ctrlMargin,
+    simCount:      simCount,
+    remainingPoss: Math.round(remainPoss),
+  };
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RATE EXTRACTION — diff consecutive backtest checkpoints
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Diff two cumulative stat objects to get window rates.
+ * Returns null if sample too small (< 5 FGA in window).
+ */
+function diffToRates(curr, prev, seasonFg3Pct, regressionCap) {
+  var cap = regressionCap || 0.60;
+
+  var fga = (curr.fga || 0) - (prev.fga || 0);
+  var fgm = (curr.fgm || 0) - (prev.fgm || 0);
+  var fg3a = (curr.fg3a || 0) - (prev.fg3a || 0);
+  var fg3m = (curr.fg3m || 0) - (prev.fg3m || 0);
+  var fta = (curr.fta || 0) - (prev.fta || 0);
+  var ftm = (curr.ftm || 0) - (prev.ftm || 0);
+  var to  = (curr.to  || 0) - (prev.to  || 0);
+  var oreb = (curr.oreb || 0) - (prev.oreb || 0);
+
+  var fg2a = fga - fg3a;
+  var fg2m = fgm - fg3m;
+
+  // Estimate possessions in window: FGA + 0.44*FTA - OREB + TO
+  var poss = fga + 0.44 * fta - oreb + to;
+  if (poss < 3) poss = Math.max(fga, 3);  // floor at 3
+
+  if (fga < 5) return null;  // too few shots for stable rates
+
+  // Raw rates
+  var toRate = poss > 0 ? to / poss : 0.12;
+  var fg3aShare = fga > 0 ? fg3a / fga : 0.35;
+  var rawFg3Pct = fg3a > 0 ? fg3m / fg3a : 0.36;
+  var fg2Pct = fg2a > 0 ? fg2m / fg2a : 0.50;
+  var orebRate = (fga - fgm) > 0 ? oreb / (fga - fgm) : 0.25;
+  var ftaRate = poss > 0 ? fta / poss : 0.20;
+  var ftPct = fta > 0 ? ftm / fta : 0.76;
+
+  // 3PT regression toward season baseline
+  var baseline = seasonFg3Pct || 0.36;
+  var sampleWeight = Math.min(cap, fg3a / 30);
+  var fg3Pct = rawFg3Pct * sampleWeight + baseline * (1 - sampleWeight);
+
+  // Clamp all rates to [0, 1]
+  function clamp(v) { return Math.max(0, Math.min(1, v)); }
+
+  return {
+    toRate:     clamp(toRate),
+    fg3aShare:  clamp(fg3aShare),
+    fg3Pct:     clamp(fg3Pct),
+    fg2Pct:     clamp(fg2Pct),
+    orebRate:   clamp(orebRate),
+    ftaRate:    Math.min(ftaRate, 1.0),  // can exceed 1 in foul-heavy windows
+    ftPct:      clamp(ftPct),
+    // Metadata for analysis
+    _windowPoss: Math.round(poss),
+    _windowFGA:  fga,
+    _rawFg3Pct:  rawFg3Pct,
+    _regressedFg3Pct: fg3Pct,
+  };
+}
+
+/**
+ * Estimate remaining possessions per team from cumulative stats + clock.
+ */
+function estimateRemainingPoss(homeStats, awayStats, period, clockSec) {
+  // Possessions consumed so far
+  function estPoss(s) {
+    return (s.fga || 0) + 0.44 * (s.fta || 0) - (s.oreb || 0) + (s.to || 0);
+  }
+  var hPoss = estPoss(homeStats);
+  var aPoss = estPoss(awayStats);
+  var avgPoss = (hPoss + aPoss) / 2;
+
+  // Elapsed minutes
+  var elapsedMin = (Math.min(period, 4) - 1) * 12 + (12 - clockSec / 60);
+  if (elapsedMin < 1) elapsedMin = 1;  // guard division by zero
+
+  // Remaining minutes (regulation only)
+  var remainMin = 48 - elapsedMin;
+  if (remainMin < 0) remainMin = 0;
+
+  // Pace → remaining possessions per team
+  var pacePerMin = avgPoss / elapsedMin;
+  var remainPoss = pacePerMin * remainMin;
+
+  return Math.max(0, Math.round(remainPoss));
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PHASE: INIT — Create results table
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function phaseInit(sql) {
+  await sql`
+    CREATE TABLE IF NOT EXISTS mc_backtest_results (
+      game_id INTEGER NOT NULL,
+      checkpoint TEXT NOT NULL,
+      period INTEGER,
+      clock_sec INTEGER,
+      mc_win_prob REAL,
+      mc_collapse_prob REAL,
+      mc_median_margin REAL,
+      mc_margin_10pct REAL,
+      mc_margin_90pct REAL,
+      xgb_win_prob REAL,
+      floor_score REAL,
+      margin_at_snapshot INTEGER,
+      ctrl_team_won BOOLEAN,
+      final_margin INTEGER,
+      window_size INTEGER,
+      regression_cap REAL,
+      sim_count INTEGER,
+      rate_source TEXT,
+      window_possessions INTEGER,
+      home_alias TEXT,
+      away_alias TEXT,
+      ctrl_team TEXT,
+      PRIMARY KEY (game_id, checkpoint)
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_mc_checkpoint ON mc_backtest_results(checkpoint)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_mc_ctrl_won ON mc_backtest_results(ctrl_team_won)`;
+
+  return { status: 'ok', message: 'mc_backtest_results table ready', nextStep: '?phase=run&n=100&offset=0' };
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PHASE: RUN — Process batch of games from nba_snapshot_backtest
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function phaseRun(sql, url) {
+  var startTime = Date.now();
+  var TIME_BUDGET_MS = 100000;  // 100s of 120s timeout
+  var batchSize = parseInt(url.searchParams.get('n') || '100');
+  var offset = parseInt(url.searchParams.get('offset') || '0');
+  var windowSize = parseInt(url.searchParams.get('ws') || '2');
+  var regressionCap = parseFloat(url.searchParams.get('rc') || '0.60');
+  var simCount = parseInt(url.searchParams.get('sims') || '1000');
+  var force = url.searchParams.get('force') === '1';
+
+  // Get distinct game_ids from backtest table
+  var gameIds;
+  if (force) {
+    gameIds = await sql`
+      SELECT DISTINCT game_id
+      FROM nba_snapshot_backtest
+      WHERE indicators IS NOT NULL
+      ORDER BY game_id
+      LIMIT ${batchSize} OFFSET ${offset}
+    `;
+  } else {
+    // Skip games already processed
+    gameIds = await sql`
+      SELECT DISTINCT s.game_id
+      FROM nba_snapshot_backtest s
+      LEFT JOIN mc_backtest_results mc ON mc.game_id = s.game_id
+      WHERE s.indicators IS NOT NULL
+        AND mc.game_id IS NULL
+      ORDER BY s.game_id
+      LIMIT ${batchSize}
+    `;
+  }
+
+  if (gameIds.length === 0) {
+    return { status: 'ok', message: 'No more games to process', nextStep: '?phase=analyze' };
+  }
+
+  var ids = gameIds.map(function(r) { return r.game_id; });
+
+  // Fetch all checkpoints for these games in one query
+  var rows = await sql`
+    SELECT game_id, checkpoint,
+           team_stats,
+           (indicators->>'score')::real AS floor,
+           indicators->>'controlTeam' AS ctrl_team,
+           indicators->>'homeAlias' AS home_alias,
+           indicators->>'awayAlias' AS away_alias,
+           margin_at_snapshot AS margin,
+           ctrl_team_won,
+           final_margin
+    FROM nba_snapshot_backtest
+    WHERE game_id = ANY(${ids})
+      AND indicators IS NOT NULL
+      AND indicators->>'no_data' IS NULL
+    ORDER BY game_id, checkpoint
+  `;
+
+  // Group by game
+  var gameMap = {};
+  for (var r of rows) {
+    if (!gameMap[r.game_id]) gameMap[r.game_id] = [];
+    var ts = typeof r.team_stats === 'string' ? JSON.parse(r.team_stats) : r.team_stats;
+    gameMap[r.game_id].push({
+      checkpoint: r.checkpoint,
+      cpIdx: CP_INDEX[r.checkpoint],
+      home: ts ? ts.home : null,
+      away: ts ? ts.away : null,
+      floor: r.floor,
+      ctrl_team: r.ctrl_team,
+      home_alias: r.home_alias,
+      away_alias: r.away_alias,
+      margin: r.margin,
+      ctrl_team_won: r.ctrl_team_won,
+      final_margin: r.final_margin,
+    });
+  }
+
+  // Sort each game's checkpoints by CP_INDEX order
+  for (var gid of Object.keys(gameMap)) {
+    gameMap[gid].sort(function(a, b) { return a.cpIdx - b.cpIdx; });
+  }
+
+  // Process each game
+  var results = [];
+  var gamesProcessed = 0;
+  var checkpointsProcessed = 0;
+  var skippedNoRates = 0;
+
+  for (var gid of Object.keys(gameMap)) {
+    if (Date.now() - startTime > TIME_BUDGET_MS) break;
+
+    var cps = gameMap[gid];
+    gamesProcessed++;
+
+    // Walk checkpoints; MC eligible = Q2+ (cpIdx >= 2) with enough prior data
+    for (var ci = 0; ci < cps.length; ci++) {
+      var cp = cps[ci];
+      if (cp.cpIdx < 2) continue;  // Skip Q1 checkpoints
+      if (cp.checkpoint === 'Q4_END') continue;  // Game over, no remaining possessions
+
+      // Need at least windowSize prior checkpoints
+      if (ci < windowSize) continue;
+
+      var meta = CP_META[cp.checkpoint];
+      if (!meta) continue;
+
+      // Diff current minus (current - windowSize) for rolling rates
+      var prevCp = cps[ci - windowSize];
+      if (!prevCp || !prevCp.home || !prevCp.away || !cp.home || !cp.away) {
+        skippedNoRates++;
+        continue;
+      }
+
+      var homeRates = diffToRates(cp.home, prevCp.home, 0.36, regressionCap);
+      var awayRates = diffToRates(cp.away, prevCp.away, 0.36, regressionCap);
+
+      if (!homeRates || !awayRates) {
+        skippedNoRates++;
+        continue;
+      }
+
+      // Remaining possessions
+      var remainPoss = estimateRemainingPoss(cp.home, cp.away, meta.period, meta.clockSec);
+      if (remainPoss < 1) continue;
+
+      // Determine ctrl team perspective
+      var ctrlIsHome = cp.ctrl_team === cp.home_alias;
+
+      // Run MC simulation
+      var mc = runMonteCarloSim(
+        homeRates, awayRates,
+        cp.home.pts || 0, cp.away.pts || 0,
+        remainPoss,
+        { simCount: simCount, ctrlTeam: ctrlIsHome ? 'home' : 'away' }
+      );
+
+      results.push({
+        game_id: parseInt(gid),
+        checkpoint: cp.checkpoint,
+        period: meta.period,
+        clock_sec: meta.clockSec,
+        mc_win_prob: mc.winProb,
+        mc_collapse_prob: mc.collapseProb,
+        mc_median_margin: mc.medianMargin,
+        mc_margin_10pct: mc.margin10pct,
+        mc_margin_90pct: mc.margin90pct,
+        xgb_win_prob: null,  // XGB not in backtest table — fill later if needed
+        floor_score: cp.floor,
+        margin: cp.margin,
+        ctrl_team_won: cp.ctrl_team_won,
+        final_margin: cp.final_margin,
+        window_size: windowSize,
+        regression_cap: regressionCap,
+        sim_count: simCount,
+        rate_source: ci >= windowSize ? 'window' : 'cumulative',
+        window_poss: homeRates._windowPoss + awayRates._windowPoss,
+        home_alias: cp.home_alias,
+        away_alias: cp.away_alias,
+        ctrl_team: cp.ctrl_team,
+      });
+
+      checkpointsProcessed++;
+    }
+  }
+
+  // Batch insert results
+  if (results.length > 0) {
+    // Insert in chunks of 50 to stay under query size limits
+    for (var ci2 = 0; ci2 < results.length; ci2 += 50) {
+      var chunk = results.slice(ci2, ci2 + 50);
+      for (var r2 of chunk) {
+        await sql`
+          INSERT INTO mc_backtest_results (
+            game_id, checkpoint, period, clock_sec,
+            mc_win_prob, mc_collapse_prob, mc_median_margin,
+            mc_margin_10pct, mc_margin_90pct,
+            xgb_win_prob, floor_score, margin_at_snapshot,
+            ctrl_team_won, final_margin,
+            window_size, regression_cap, sim_count, rate_source,
+            window_possessions,
+            home_alias, away_alias, ctrl_team
+          ) VALUES (
+            ${r2.game_id}, ${r2.checkpoint}, ${r2.period}, ${r2.clock_sec},
+            ${r2.mc_win_prob}, ${r2.mc_collapse_prob}, ${r2.mc_median_margin},
+            ${r2.mc_margin_10pct}, ${r2.mc_margin_90pct},
+            ${r2.xgb_win_prob}, ${r2.floor_score}, ${r2.margin},
+            ${r2.ctrl_team_won}, ${r2.final_margin},
+            ${r2.window_size}, ${r2.regression_cap}, ${r2.sim_count}, ${r2.rate_source},
+            ${r2.window_poss},
+            ${r2.home_alias}, ${r2.away_alias}, ${r2.ctrl_team}
+          )
+          ON CONFLICT (game_id, checkpoint) DO UPDATE SET
+            mc_win_prob = EXCLUDED.mc_win_prob,
+            mc_collapse_prob = EXCLUDED.mc_collapse_prob,
+            mc_median_margin = EXCLUDED.mc_median_margin,
+            mc_margin_10pct = EXCLUDED.mc_margin_10pct,
+            mc_margin_90pct = EXCLUDED.mc_margin_90pct,
+            floor_score = EXCLUDED.floor_score,
+            margin_at_snapshot = EXCLUDED.margin_at_snapshot,
+            window_size = EXCLUDED.window_size,
+            regression_cap = EXCLUDED.regression_cap,
+            sim_count = EXCLUDED.sim_count,
+            window_possessions = EXCLUDED.window_possessions
+        `;
+      }
+    }
+  }
+
+  var remaining = await sql`
+    SELECT COUNT(DISTINCT s.game_id) AS n
+    FROM nba_snapshot_backtest s
+    LEFT JOIN mc_backtest_results mc ON mc.game_id = s.game_id
+    WHERE s.indicators IS NOT NULL AND mc.game_id IS NULL
+  `;
+
+  return {
+    status: 'ok',
+    gamesProcessed: gamesProcessed,
+    checkpointsProcessed: checkpointsProcessed,
+    skippedNoRates: skippedNoRates,
+    resultsInserted: results.length,
+    elapsed_ms: Date.now() - startTime,
+    remaining: Number(remaining[0]?.n || 0),
+    nextStep: Number(remaining[0]?.n || 0) > 0
+      ? '?phase=run&n=100' + (force ? '&force=1&offset=' + (offset + batchSize) : '')
+      : '?phase=analyze',
+  };
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PHASE: ANALYZE — Compute accuracy metrics
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function phaseAnalyze(sql, url) {
+  var segment = url?.searchParams?.get('segment') || 'all';
+
+  // Overall stats
+  var total = await sql`SELECT COUNT(*) AS n FROM mc_backtest_results`;
+  var distinctGames = await sql`SELECT COUNT(DISTINCT game_id) AS n FROM mc_backtest_results`;
+
+  // ── AUC approximation via concordance ──
+  // For each pair: MC predicted higher for actual winner vs loser = concordant
+  // Full pairwise is O(n²) — use bucket-based approximation
+  var wins = await sql`
+    SELECT mc_win_prob FROM mc_backtest_results WHERE ctrl_team_won = true
+  `;
+  var losses = await sql`
+    SELECT mc_win_prob FROM mc_backtest_results WHERE ctrl_team_won = false
+  `;
+
+  var concordant = 0, discordant = 0, tied = 0;
+  // Sample-based AUC: compare each win against a random sample of losses
+  var sampleSize = Math.min(losses.length, 500);
+  var lossSample = [];
+  for (var li = 0; li < sampleSize; li++) {
+    lossSample.push(losses[Math.floor(Math.random() * losses.length)].mc_win_prob);
+  }
+  for (var wi of wins) {
+    for (var lp of lossSample) {
+      if (wi.mc_win_prob > lp) concordant++;
+      else if (wi.mc_win_prob < lp) discordant++;
+      else tied++;
+    }
+  }
+  var aucTotal = concordant + discordant + tied;
+  var auc = aucTotal > 0 ? (concordant + 0.5 * tied) / aucTotal : 0.5;
+
+  // ── Brier Score ──
+  var brier = await sql`
+    SELECT AVG(POWER(mc_win_prob - (CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END), 2)) AS brier
+    FROM mc_backtest_results
+  `;
+
+  // ── Calibration buckets ──
+  var calibration = await sql`
+    SELECT
+      FLOOR(mc_win_prob * 10)::int AS bucket,
+      COUNT(*) AS n,
+      AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) AS actual_win_rate,
+      AVG(mc_win_prob) AS avg_predicted
+    FROM mc_backtest_results
+    GROUP BY FLOOR(mc_win_prob * 10)::int
+    ORDER BY bucket
+  `;
+
+  // ── Per-quarter accuracy ──
+  var byQuarter = await sql`
+    SELECT
+      CASE WHEN period = 2 THEN 'Q2' WHEN period = 3 THEN 'Q3' WHEN period = 4 THEN 'Q4' ELSE 'Q1' END AS quarter,
+      COUNT(*) AS n,
+      AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) AS actual_wr,
+      AVG(mc_win_prob) AS avg_mc,
+      AVG(POWER(mc_win_prob - (CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END), 2)) AS brier
+    FROM mc_backtest_results
+    GROUP BY CASE WHEN period = 2 THEN 'Q2' WHEN period = 3 THEN 'Q3' WHEN period = 4 THEN 'Q4' ELSE 'Q1' END
+    ORDER BY quarter
+  `;
+
+  // ── Floor comparison AUC (bucket-based approximation) ──
+  var floorWins = await sql`
+    SELECT floor_score FROM mc_backtest_results WHERE ctrl_team_won = true AND floor_score IS NOT NULL
+  `;
+  var floorLosses = await sql`
+    SELECT floor_score FROM mc_backtest_results WHERE ctrl_team_won = false AND floor_score IS NOT NULL
+  `;
+  var fC = 0, fD = 0, fT = 0;
+  var fSample = [];
+  var fSampleSize = Math.min(floorLosses.length, 500);
+  for (var fi = 0; fi < fSampleSize; fi++) {
+    fSample.push(floorLosses[Math.floor(Math.random() * floorLosses.length)].floor_score);
+  }
+  for (var fw of floorWins) {
+    for (var fl of fSample) {
+      if (fw.floor_score > fl) fC++;
+      else if (fw.floor_score < fl) fD++;
+      else fT++;
+    }
+  }
+  var floorAucTotal = fC + fD + fT;
+  var floorAuc = floorAucTotal > 0 ? (fC + 0.5 * fT) / floorAucTotal : 0.5;
+
+  // ── Lead-change game analysis ──
+  // Games where a team led by 10+ at some checkpoint but opponent won
+  var leadChangeGames = await sql`
+    WITH game_max_margins AS (
+      SELECT game_id,
+             MAX(ABS(margin_at_snapshot)) AS max_margin,
+             MAX(CASE WHEN margin_at_snapshot > 0 THEN margin_at_snapshot ELSE 0 END) AS max_home_lead,
+             MAX(CASE WHEN margin_at_snapshot < 0 THEN ABS(margin_at_snapshot) ELSE 0 END) AS max_away_lead,
+             (ARRAY_AGG(final_margin ORDER BY checkpoint LIMIT 1))[1] AS final_margin,
+             (ARRAY_AGG(home_alias ORDER BY checkpoint LIMIT 1))[1] AS home_alias
+      FROM mc_backtest_results
+      GROUP BY game_id
+    )
+    SELECT game_id, max_margin, max_home_lead, max_away_lead, final_margin, home_alias
+    FROM game_max_margins
+    WHERE (max_home_lead >= 10 AND final_margin < 0)
+       OR (max_away_lead >= 10 AND final_margin > 0)
+  `;
+
+  var leadChangeIds = leadChangeGames.map(function(r) { return r.game_id; });
+
+  var lcMcAccuracy = null;
+  var lcFloorAccuracy = null;
+  if (leadChangeIds.length > 0) {
+    // MC AUC in lead-change games
+    var lcWins = await sql`
+      SELECT mc_win_prob FROM mc_backtest_results
+      WHERE game_id = ANY(${leadChangeIds}) AND ctrl_team_won = true
+    `;
+    var lcLosses = await sql`
+      SELECT mc_win_prob FROM mc_backtest_results
+      WHERE game_id = ANY(${leadChangeIds}) AND ctrl_team_won = false
+    `;
+    var lcC = 0, lcD = 0, lcT = 0;
+    var lcSample = [];
+    var lcSampleSize = Math.min(lcLosses.length, 200);
+    for (var lci = 0; lci < lcSampleSize; lci++) {
+      lcSample.push(lcLosses[Math.floor(Math.random() * lcLosses.length)].mc_win_prob);
+    }
+    for (var lcw of lcWins) {
+      for (var lcl of lcSample) {
+        if (lcw.mc_win_prob > lcl) lcC++;
+        else if (lcw.mc_win_prob < lcl) lcD++;
+        else lcT++;
+      }
+    }
+    var lcAucTot = lcC + lcD + lcT;
+    lcMcAccuracy = lcAucTot > 0 ? (lcC + 0.5 * lcT) / lcAucTot : 0.5;
+
+    // Floor AUC in lead-change games
+    var lcFW = await sql`
+      SELECT floor_score FROM mc_backtest_results
+      WHERE game_id = ANY(${leadChangeIds}) AND ctrl_team_won = true AND floor_score IS NOT NULL
+    `;
+    var lcFL = await sql`
+      SELECT floor_score FROM mc_backtest_results
+      WHERE game_id = ANY(${leadChangeIds}) AND ctrl_team_won = false AND floor_score IS NOT NULL
+    `;
+    var lcFC = 0, lcFD = 0, lcFT2 = 0;
+    var lcFSample = [];
+    var lcFSS = Math.min(lcFL.length, 200);
+    for (var lcfi = 0; lcfi < lcFSS; lcfi++) {
+      lcFSample.push(lcFL[Math.floor(Math.random() * lcFL.length)].floor_score);
+    }
+    for (var lcfw of lcFW) {
+      for (var lcfl of lcFSample) {
+        if (lcfw.floor_score > lcfl) lcFC++;
+        else if (lcfw.floor_score < lcfl) lcFD++;
+        else lcFT2++;
+      }
+    }
+    var lcFTot = lcFC + lcFD + lcFT2;
+    lcFloorAccuracy = lcFTot > 0 ? (lcFC + 0.5 * lcFT2) / lcFTot : 0.5;
+  }
+
+  // ── Collapse probability precision ──
+  var collapseThresholds = await sql`
+    SELECT
+      threshold,
+      COUNT(*) FILTER (WHERE mc_collapse_prob >= threshold) AS flagged,
+      COUNT(*) FILTER (WHERE mc_collapse_prob >= threshold AND NOT ctrl_team_won) AS correct_flags,
+      CASE WHEN COUNT(*) FILTER (WHERE mc_collapse_prob >= threshold) > 0
+        THEN ROUND(COUNT(*) FILTER (WHERE mc_collapse_prob >= threshold AND NOT ctrl_team_won)::numeric /
+             COUNT(*) FILTER (WHERE mc_collapse_prob >= threshold)::numeric, 3)
+        ELSE 0 END AS precision
+    FROM mc_backtest_results,
+         unnest(ARRAY[0.15, 0.20, 0.25, 0.30, 0.35, 0.40]) AS threshold
+    WHERE mc_collapse_prob IS NOT NULL
+    GROUP BY threshold
+    ORDER BY threshold
+  `;
+
+  return {
+    status: 'ok',
+    overview: {
+      totalCheckpoints: Number(total[0]?.n || 0),
+      distinctGames: Number(distinctGames[0]?.n || 0),
+      mc_auc: Math.round(auc * 1000) / 1000,
+      floor_auc: Math.round(floorAuc * 1000) / 1000,
+      brier_score: Math.round(Number(brier[0]?.brier || 0) * 10000) / 10000,
+    },
+    calibration: calibration.map(function(b) {
+      return {
+        bucket: b.bucket * 10 + '-' + (b.bucket * 10 + 10) + '%',
+        n: Number(b.n),
+        predicted: Math.round(Number(b.avg_predicted) * 1000) / 10,
+        actual: Math.round(Number(b.actual_win_rate) * 1000) / 10,
+        delta: Math.round((Number(b.actual_win_rate) - Number(b.avg_predicted)) * 1000) / 10,
+      };
+    }),
+    byQuarter: byQuarter.map(function(q) {
+      return {
+        quarter: q.quarter,
+        n: Number(q.n),
+        actual_wr: Math.round(Number(q.actual_wr) * 1000) / 10,
+        avg_mc: Math.round(Number(q.avg_mc) * 1000) / 10,
+        brier: Math.round(Number(q.brier) * 10000) / 10000,
+      };
+    }),
+    leadChangeGames: {
+      count: leadChangeIds.length,
+      mc_auc: lcMcAccuracy ? Math.round(lcMcAccuracy * 1000) / 1000 : null,
+      floor_auc: lcFloorAccuracy ? Math.round(lcFloorAccuracy * 1000) / 1000 : null,
+      games: leadChangeGames.slice(0, 10).map(function(g) {
+        return { game_id: g.game_id, max_margin: g.max_margin, final_margin: g.final_margin };
+      }),
+    },
+    collapseThresholds: collapseThresholds.map(function(t) {
+      return {
+        threshold: Number(t.threshold),
+        flagged: Number(t.flagged),
+        correct: Number(t.correct_flags),
+        precision: Number(t.precision),
+      };
+    }),
+  };
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PHASE: VALIDATE_GAME — Run MC against prod game snapshots (e.g. DET@ORL)
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function phaseValidateGame(sql, url) {
+  var gameId = url.searchParams.get('game_id');
+  if (!gameId) return { error: 'game_id required' };
+
+  var simCount = parseInt(url.searchParams.get('sims') || '1000');
+  var regressionCap = parseFloat(url.searchParams.get('rc') || '0.60');
+
+  // Pull prod snapshots for this game
+  var snapshots = await sql`
+    SELECT id, game_id, period, clock, source,
+           raw_stats_json, floor_score, floor_team,
+           xgb_win_prob, i1, i2, i3, i4, i5,
+           created_at
+    FROM snapshots
+    WHERE game_id = ${gameId}
+      AND source = 'server'
+      AND raw_stats_json IS NOT NULL
+    ORDER BY period ASC, clock DESC
+  `;
+
+  if (snapshots.length === 0) {
+    return { error: 'No server snapshots found for game ' + gameId };
+  }
+
+  // Get game outcome
+  var game = await sql`SELECT * FROM games WHERE id = ${gameId} LIMIT 1`;
+  var g = game[0];
+  if (!g) return { error: 'Game not found: ' + gameId };
+
+  var results = [];
+  var prevStats = null;
+
+  for (var si = 0; si < snapshots.length; si++) {
+    var snap = snapshots[si];
+    if (snap.period < 2) { prevStats = snap.raw_stats_json; continue; }
+
+    var raw = typeof snap.raw_stats_json === 'string'
+      ? JSON.parse(snap.raw_stats_json) : snap.raw_stats_json;
+    var prev = prevStats
+      ? (typeof prevStats === 'string' ? JSON.parse(prevStats) : prevStats)
+      : null;
+
+    if (!raw || !prev) { prevStats = snap.raw_stats_json; continue; }
+
+    // Extract home/away stats from raw BDL format
+    var homeRaw = extractProdStats(raw, g.home_alias || g.home_team, true);
+    var awayRaw = extractProdStats(raw, g.away_alias || g.away_team, false);
+    var homePrev = extractProdStats(prev, g.home_alias || g.home_team, true);
+    var awayPrev = extractProdStats(prev, g.away_alias || g.away_team, false);
+
+    if (!homeRaw || !awayRaw || !homePrev || !awayPrev) {
+      prevStats = snap.raw_stats_json;
+      continue;
+    }
+
+    var homeRates = diffToRates(homeRaw, homePrev, 0.36, regressionCap);
+    var awayRates = diffToRates(awayRaw, awayPrev, 0.36, regressionCap);
+
+    if (!homeRates || !awayRates) { prevStats = snap.raw_stats_json; continue; }
+
+    // Parse clock
+    var clockSec = 360;
+    try {
+      var parts = String(snap.clock || '6:00').split(':');
+      clockSec = parseInt(parts[0]) * 60 + parseInt(parts[1] || 0);
+    } catch(e) {}
+
+    var remainPoss = estimateRemainingPoss(homeRaw, awayRaw, snap.period, clockSec);
+    if (remainPoss < 1) { prevStats = snap.raw_stats_json; continue; }
+
+    var ctrlIsHome = snap.floor_team === (g.home_alias || g.home_team);
+
+    var mc = runMonteCarloSim(
+      homeRates, awayRates,
+      homeRaw.pts || 0, awayRaw.pts || 0,
+      remainPoss,
+      { simCount: simCount, ctrlTeam: ctrlIsHome ? 'home' : 'away' }
+    );
+
+    results.push({
+      period: snap.period,
+      clock: snap.clock,
+      score: (homeRaw.pts || 0) + '-' + (awayRaw.pts || 0),
+      margin: (homeRaw.pts || 0) - (awayRaw.pts || 0),
+      floor: snap.floor_score,
+      floor_team: snap.floor_team,
+      xgb: snap.xgb_win_prob,
+      mc_winProb: mc.winProb,
+      mc_collapse: mc.collapseProb,
+      mc_median: mc.medianMargin,
+      mc_range: mc.margin10pct + ' to ' + mc.margin90pct,
+      remainPoss: mc.remainingPoss,
+      windowPoss: homeRates._windowPoss + awayRates._windowPoss,
+      xgb_mc_divergence: snap.xgb_win_prob != null
+        ? Math.round((snap.xgb_win_prob - mc.winProb) * 1000) / 1000 : null,
+    });
+
+    prevStats = snap.raw_stats_json;
+  }
+
+  return {
+    status: 'ok',
+    game: {
+      id: gameId,
+      matchup: (g.away_alias || g.away_team) + ' @ ' + (g.home_alias || g.home_team),
+      final: g.home_score + '-' + g.away_score,
+      winner: g.winner,
+    },
+    snapshots: results.length,
+    timeline: results,
+  };
+}
+
+/**
+ * Extract normalized stats from prod raw_stats_json.
+ * Prod format varies (BDL summary with team arrays, or direct stats object).
+ * Returns {pts, fgm, fga, fg3m, fg3a, ftm, fta, to, oreb} or null.
+ */
+function extractProdStats(raw, teamAlias, isHome) {
+  if (!raw) return null;
+
+  // Format 1: raw has home/away objects directly (summary.home/away.statistics)
+  var side = isHome ? 'home' : 'away';
+  if (raw[side] && raw[side].statistics) {
+    var s = raw[side].statistics;
+    return {
+      pts: Number(s.points || 0),
+      fgm: Number(s.field_goals_made || 0),
+      fga: Number(s.field_goals_att || 0),
+      fg3m: Number(s.three_points_made || 0),
+      fg3a: Number(s.three_points_att || 0),
+      ftm: Number(s.free_throws_made || 0),
+      fta: Number(s.free_throws_att || 0),
+      to:  Number(s.turnovers || s.total_turnovers || 0),
+      oreb: Number(s.offensive_rebounds || 0),
+    };
+  }
+
+  // Format 2: raw is {home: {pts, fgm, ...}, away: {pts, fgm, ...}} (already normalized)
+  if (raw[side] && (raw[side].pts !== undefined || raw[side].fgm !== undefined)) {
+    var d = raw[side];
+    return {
+      pts: Number(d.pts || d.points || 0),
+      fgm: Number(d.fgm || d.field_goals_made || 0),
+      fga: Number(d.fga || d.field_goals_att || 0),
+      fg3m: Number(d.fg3m || d.three_points_made || 0),
+      fg3a: Number(d.fg3a || d.three_points_att || 0),
+      ftm: Number(d.ftm || d.free_throws_made || 0),
+      fta: Number(d.fta || d.free_throws_att || 0),
+      to:  Number(d.to || d.turnovers || 0),
+      oreb: Number(d.oreb || d.offensive_rebounds || 0),
+    };
+  }
+
+  // Format 3: BDL box score — teams array with team.data.abbreviation
+  if (raw.data && Array.isArray(raw.data)) {
+    // Player-level stats — need to aggregate
+    // This is expensive, skip for now and handle if encountered
+    return null;
+  }
+
+  return null;
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// HANDLER
+// ══════════════════════════════════════════════════════════════════════════════
+
+export default async function handler(req) {
+  var url = new URL(req.url, 'https://x.com');
+  var phase = url.searchParams.get('phase') || 'status';
+
+  var sql;
+  try {
+    sql = neon(process.env.DATABASE_URL);
+  } catch (e) {
+    return new Response(JSON.stringify({ error: 'DB connection failed', message: e.message }), {
+      status: 500, headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  var result;
+  try {
+    switch (phase) {
+      case 'init':           result = await phaseInit(sql); break;
+      case 'run':            result = await phaseRun(sql, url); break;
+      case 'analyze':        result = await phaseAnalyze(sql, url); break;
+      case 'validate_game':  result = await phaseValidateGame(sql, url); break;
+      case 'status': {
+        var count = await sql`SELECT COUNT(*) AS n FROM mc_backtest_results`;
+        var games = await sql`SELECT COUNT(DISTINCT game_id) AS n FROM mc_backtest_results`;
+        result = {
+          status: 'ok',
+          results: Number(count[0]?.n || 0),
+          games: Number(games[0]?.n || 0),
+          phases: ['init', 'run', 'analyze', 'validate_game'],
+        };
+        break;
+      }
+      default: result = { error: 'Unknown phase: ' + phase };
+    }
+  } catch (e) {
+    result = { error: e.message, stack: e.stack?.split('\n').slice(0, 5) };
+  }
+
+  return new Response(JSON.stringify(result, null, 2), {
+    status: result?.error ? 400 : 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+export const config = { path: '/.netlify/functions/mc-backtest' };
