@@ -1713,6 +1713,245 @@ async function phaseValidateTriggered(sql, url) {
 
 
 // ══════════════════════════════════════════════════════════════════════════════
+// PHASE: TRIGGERED_REPLAY — Backtest-scale triggered investigation (1,235 games)
+//   Uses nba_snapshot_backtest checkpoints. Canary = 2-cp window MC vs floor.
+//   ?phase=triggered_replay&n=200&offset=0
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function phaseTriggeredReplay(sql, url) {
+  var batchSize = parseInt(url.searchParams.get('n') || '200');
+  var offset = parseInt(url.searchParams.get('offset') || '0');
+  var canaryThreshold = parseFloat(url.searchParams.get('canary') || '0.15');
+  var simCount = parseInt(url.searchParams.get('sims') || '300');
+  var regressionCap = parseFloat(url.searchParams.get('rc') || '0.60');
+  var startTime = Date.now();
+
+  // Get distinct game_ids
+  var gameIds = await sql`
+    SELECT DISTINCT game_id FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL
+    ORDER BY game_id
+    LIMIT ${batchSize} OFFSET ${offset}
+  `;
+  var totalGames = await sql`SELECT COUNT(DISTINCT game_id) AS n FROM nba_snapshot_backtest WHERE indicators IS NOT NULL`;
+
+  if (gameIds.length === 0) return { status: 'ok', message: 'No more games' };
+
+  var ids = gameIds.map(function(r) { return r.game_id; });
+
+  // Fetch all checkpoints for these games
+  var rows = await sql`
+    SELECT game_id, checkpoint, team_stats,
+           (indicators->>'score')::real AS floor,
+           indicators->>'controlTeam' AS ctrl_team,
+           indicators->>'homeAlias' AS home_alias,
+           indicators->>'awayAlias' AS away_alias,
+           margin_at_snapshot AS margin,
+           ctrl_team_won, final_margin
+    FROM nba_snapshot_backtest
+    WHERE game_id = ANY(${ids}) AND indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+    ORDER BY game_id, checkpoint
+  `;
+
+  // Group by game and sort by checkpoint order
+  var gameMap = {};
+  for (var r of rows) {
+    if (!gameMap[r.game_id]) gameMap[r.game_id] = [];
+    var ts = typeof r.team_stats === 'string' ? JSON.parse(r.team_stats) : r.team_stats;
+    gameMap[r.game_id].push({
+      checkpoint: r.checkpoint, cpIdx: CP_INDEX[r.checkpoint],
+      home: ts ? ts.home : null, away: ts ? ts.away : null,
+      floor: r.floor, ctrl_team: r.ctrl_team,
+      home_alias: r.home_alias, away_alias: r.away_alias,
+      margin: r.margin, ctrl_team_won: r.ctrl_team_won, final_margin: r.final_margin,
+    });
+  }
+  for (var gid of Object.keys(gameMap)) {
+    gameMap[gid].sort(function(a, b) { return a.cpIdx - b.cpIdx; });
+  }
+
+  // Aggregate results
+  var agg = {
+    total: 0, triggered: 0, confirmed: 0, confirmed_right: 0,
+    likely: 0, likely_right: 0,
+    patterns: { CLEAN: {n:0,right:0}, WAVE: {n:0,right:0}, NORMALIZED: {n:0,right:0}, FALSE_ALARM: {n:0,right:0} },
+    speed_buckets: { fast: {n:0,right:0}, medium: {n:0,right:0}, slow: {n:0,right:0} },
+    speed_margins: [],  // {speed, finalMargin, correct} for scatter
+  };
+
+  for (var gid of Object.keys(gameMap)) {
+    if (Date.now() - startTime > 95000) break;  // budget
+    agg.total++;
+    var cps = gameMap[gid];
+
+    // Parse stats for MC
+    var parsed = cps.map(function(cp) {
+      if (!cp.home || !cp.away) return null;
+      return {
+        home: { fgm: cp.home.fgm||0, fga: cp.home.fga||0, fg3m: cp.home.fg3m||0, fg3a: cp.home.fg3a||0,
+                ftm: cp.home.ftm||0, fta: cp.home.fta||0, to: cp.home.to||0, oreb: cp.home.oreb||0 },
+        away: { fgm: cp.away.fgm||0, fga: cp.away.fga||0, fg3m: cp.away.fg3m||0, fg3a: cp.away.fg3a||0,
+                ftm: cp.away.ftm||0, fta: cp.away.fta||0, to: cp.away.to||0, oreb: cp.away.oreb||0 },
+      };
+    });
+
+    // Find canary trigger (Q3+ = cpIdx >= 6, need 2 prior checkpoints for window)
+    var triggerIdx = null;
+    for (var ci = 2; ci < cps.length; ci++) {
+      var cp = cps[ci];
+      if (cp.cpIdx < 6) continue;  // Q3+ only (Q3_9 = index 6)
+      if (cp.checkpoint === 'Q4_END') continue;
+      if (!parsed[ci] || !parsed[ci-2]) continue;
+
+      // 2-checkpoint canary window
+      var hRates = diffToRates(parsed[ci].home, parsed[ci-2].home, 0.36, regressionCap);
+      var aRates = diffToRates(parsed[ci].away, parsed[ci-2].away, 0.36, regressionCap);
+      if (!hRates || !aRates) continue;
+
+      var meta = CP_META[cp.checkpoint]; if (!meta) continue;
+      var rp = estimateRemainingPoss(parsed[ci].home, parsed[ci].away, meta.period, meta.clockSec);
+      if (rp < 1) continue;
+
+      var ctrlHome = cp.ctrl_team === cp.home_alias;
+      var mc = runMonteCarloSim(hRates, aRates,
+        parsed[ci].home.fgm ? (parsed[ci].home.fgm - parsed[ci].home.fg3m)*2 + parsed[ci].home.fg3m*3 + parsed[ci].home.ftm : 0,
+        parsed[ci].away.fgm ? (parsed[ci].away.fgm - parsed[ci].away.fg3m)*2 + parsed[ci].away.fg3m*3 + parsed[ci].away.ftm : 0,
+        rp, { simCount: 200, ctrlTeam: ctrlHome ? 'home' : 'away' });
+
+      // Canary: floor - MC > threshold (floor is ctrl-relative like XGB)
+      if (cp.floor != null && (cp.floor - mc.winProb) > canaryThreshold) {
+        triggerIdx = ci; break;
+      }
+    }
+
+    if (triggerIdx === null) continue;
+    agg.triggered++;
+
+    // Run post-trigger investigation
+    var triggerStats = parsed[triggerIdx];
+    var triggerCp = cps[triggerIdx];
+    var ctrlWon = triggerCp.ctrl_team_won;
+    var ctrlHome2 = triggerCp.ctrl_team === triggerCp.home_alias;
+
+    var verdicts = [];
+    var firstConfPoss = null;
+    var firstLikelyPoss = null;
+
+    for (var ti = triggerIdx + 1; ti < cps.length; ti++) {
+      if (cps[ti].checkpoint === 'Q4_END') continue;
+      if (!parsed[ti]) continue;
+
+      var hR = diffToRates(parsed[ti].home, triggerStats.home, 0.36, regressionCap);
+      var aR = diffToRates(parsed[ti].away, triggerStats.away, 0.36, regressionCap);
+      if (!hR || !aR) continue;
+
+      var postPoss = Math.round((hR._windowPoss + aR._windowPoss) / 2);
+      if (postPoss < 4) continue;
+
+      var m2 = CP_META[cps[ti].checkpoint]; if (!m2) continue;
+      var rp2 = estimateRemainingPoss(parsed[ti].home, parsed[ti].away, m2.period, m2.clockSec);
+      if (rp2 < 1) continue;
+
+      // Compute scores from cumulative stats
+      var hScore = (parsed[ti].home.fgm - parsed[ti].home.fg3m)*2 + parsed[ti].home.fg3m*3 + parsed[ti].home.ftm;
+      var aScore = (parsed[ti].away.fgm - parsed[ti].away.fg3m)*2 + parsed[ti].away.fg3m*3 + parsed[ti].away.ftm;
+
+      var mc2 = runMonteCarloSim(hR, aR, hScore, aScore, rp2,
+        { simCount: simCount, ctrlTeam: ctrlHome2 ? 'home' : 'away' });
+
+      var v;
+      if (postPoss < 8) v = 'INV';
+      else if (mc2.winProb > 0.60) v = 'NORM';
+      else if (mc2.winProb > 0.40) v = 'CONT';
+      else if (mc2.winProb > 0.25) v = 'LIKELY';
+      else v = 'CONF';
+
+      verdicts.push(v);
+      if (v === 'CONF' && firstConfPoss === null) firstConfPoss = postPoss;
+      if ((v === 'CONF' || v === 'LIKELY') && firstLikelyPoss === null) firstLikelyPoss = postPoss;
+    }
+
+    // Classify pattern
+    var seq = verdicts;
+    var everConf = seq.indexOf('CONF') >= 0;
+    var everLikely = seq.indexOf('LIKELY') >= 0 || everConf;
+
+    var pattern;
+    if (!everLikely) {
+      pattern = 'FALSE_ALARM';
+    } else {
+      var firstAlarmIdx = -1;
+      for (var si2 = 0; si2 < seq.length; si2++) {
+        if (seq[si2] === 'CONF' || seq[si2] === 'LIKELY') { firstAlarmIdx = si2; break; }
+      }
+      var postAlarm = seq.slice(firstAlarmIdx);
+      var hasNorm = postAlarm.indexOf('NORM') >= 0;
+      if (!hasNorm) {
+        pattern = 'CLEAN';
+      } else {
+        var normIdx2 = postAlarm.indexOf('NORM');
+        var postNorm = postAlarm.slice(normIdx2);
+        var reAlarmed = postNorm.some(function(v2) { return v2 === 'CONF' || v2 === 'LIKELY'; });
+        pattern = reAlarmed ? 'WAVE' : 'NORMALIZED';
+      }
+    }
+
+    // Record
+    var correct = !ctrlWon;
+    agg.patterns[pattern] = agg.patterns[pattern] || {n:0, right:0};
+    agg.patterns[pattern].n++;
+    if (correct) agg.patterns[pattern].right++;
+
+    if (everConf) { agg.confirmed++; if (correct) agg.confirmed_right++; }
+    if (everLikely) { agg.likely++; if (correct) agg.likely_right++; }
+
+    // Speed buckets
+    if (firstConfPoss !== null) {
+      var bucket = firstConfPoss <= 12 ? 'fast' : firstConfPoss <= 25 ? 'medium' : 'slow';
+      agg.speed_buckets[bucket].n++;
+      if (correct) agg.speed_buckets[bucket].right++;
+      agg.speed_margins.push({ speed: firstConfPoss, margin: Math.abs(cps[0].final_margin || 0), correct: correct });
+    }
+  }
+
+  // Trim speed_margins for response size
+  if (agg.speed_margins.length > 100) {
+    agg.speed_margins = agg.speed_margins.slice(0, 100);
+    agg._speed_margins_truncated = true;
+  }
+
+  return {
+    status: 'ok',
+    phase: 'triggered_replay',
+    gamesProcessed: agg.total,
+    totalAvailable: Number(totalGames[0]?.n || 0),
+    elapsed_ms: Date.now() - startTime,
+    triggered: agg.triggered,
+    triggered_pct: agg.total > 0 ? Math.round(agg.triggered / agg.total * 1000) / 10 : 0,
+    confirmed: { games: agg.confirmed, right: agg.confirmed_right,
+      precision: agg.confirmed > 0 ? Math.round(agg.confirmed_right / agg.confirmed * 1000) / 10 : null },
+    likely: { games: agg.likely, right: agg.likely_right,
+      precision: agg.likely > 0 ? Math.round(agg.likely_right / agg.likely * 1000) / 10 : null },
+    patterns: Object.keys(agg.patterns).map(function(p) {
+      var d = agg.patterns[p];
+      return { pattern: p, games: d.n, right: d.right, precision: d.n > 0 ? Math.round(d.right / d.n * 1000) / 10 : null };
+    }),
+    speed_to_confirm: {
+      fast_le12: { games: agg.speed_buckets.fast.n, right: agg.speed_buckets.fast.right,
+        precision: agg.speed_buckets.fast.n > 0 ? Math.round(agg.speed_buckets.fast.right / agg.speed_buckets.fast.n * 1000) / 10 : null },
+      medium_13_25: { games: agg.speed_buckets.medium.n, right: agg.speed_buckets.medium.right,
+        precision: agg.speed_buckets.medium.n > 0 ? Math.round(agg.speed_buckets.medium.right / agg.speed_buckets.medium.n * 1000) / 10 : null },
+      slow_26plus: { games: agg.speed_buckets.slow.n, right: agg.speed_buckets.slow.right,
+        precision: agg.speed_buckets.slow.n > 0 ? Math.round(agg.speed_buckets.slow.right / agg.speed_buckets.slow.n * 1000) / 10 : null },
+    },
+    nextStep: offset + batchSize < Number(totalGames[0]?.n || 0)
+      ? '?phase=triggered_replay&n=' + batchSize + '&offset=' + (offset + batchSize)
+      : 'COMPLETE',
+  };
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
 // HANDLER
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -1739,6 +1978,7 @@ export default async function handler(req) {
       case 'validate_game_v2': result = await phaseValidateGameV2(sql, url); break;
       case 'validate_slate':   result = await phaseValidateSlate(sql, url); break;
       case 'validate_triggered': result = await phaseValidateTriggered(sql, url); break;
+      case 'triggered_replay':   result = await phaseTriggeredReplay(sql, url); break;
       case 'status': {
         var count = await sql`SELECT COUNT(*) AS n FROM mc_backtest_results`;
         var games = await sql`SELECT COUNT(DISTINCT game_id) AS n FROM mc_backtest_results`;
