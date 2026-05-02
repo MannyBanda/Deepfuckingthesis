@@ -772,7 +772,7 @@ async function phaseValidateGame(sql, url) {
     SELECT id, game_id, period, clock, source,
            raw_stats_json, floor_score, floor_team,
            xgb_win_prob, i1, i2, i3, i4, i5,
-           created_at
+           home_pts, away_pts, ts
     FROM snapshots
     WHERE game_id = ${gameId}
       AND source = 'server'
@@ -834,7 +834,7 @@ async function phaseValidateGame(sql, url) {
 
     var mc = runMonteCarloSim(
       homeRates, awayRates,
-      homeRaw.pts || 0, awayRaw.pts || 0,
+      snap.home_pts || 0, snap.away_pts || 0,
       remainPoss,
       { simCount: simCount, ctrlTeam: ctrlIsHome ? 'home' : 'away' }
     );
@@ -842,8 +842,8 @@ async function phaseValidateGame(sql, url) {
     results.push({
       period: snap.period,
       clock: snap.clock,
-      score: (homeRaw.pts || 0) + '-' + (awayRaw.pts || 0),
-      margin: (homeRaw.pts || 0) - (awayRaw.pts || 0),
+      score: (snap.home_pts || 0) + '-' + (snap.away_pts || 0),
+      margin: (snap.home_pts || 0) - (snap.away_pts || 0),
       floor: snap.floor_score,
       floor_team: snap.floor_team,
       xgb: snap.xgb_win_prob,
@@ -865,7 +865,7 @@ async function phaseValidateGame(sql, url) {
     game: {
       id: gameId,
       matchup: (g.away_alias || g.away_team) + ' @ ' + (g.home_alias || g.home_team),
-      final: g.home_score + '-' + g.away_score,
+      final: g.home_pts + '-' + g.away_pts,
       winner: g.winner,
     },
     snapshots: results.length,
@@ -881,8 +881,9 @@ async function phaseValidateGame(sql, url) {
 function extractProdStats(raw, teamAlias, isHome) {
   if (!raw) return null;
 
-  // Format 1: raw has home/away objects directly (summary.home/away.statistics)
   var side = isHome ? 'home' : 'away';
+
+  // Format 1: raw has home/away with .statistics wrapper (SR summary format)
   if (raw[side] && raw[side].statistics) {
     var s = raw[side].statistics;
     return {
@@ -898,27 +899,26 @@ function extractProdStats(raw, teamAlias, isHome) {
     };
   }
 
-  // Format 2: raw is {home: {pts, fgm, ...}, away: {pts, fgm, ...}} (already normalized)
-  if (raw[side] && (raw[side].pts !== undefined || raw[side].fgm !== undefined)) {
+  // Format 2: prod raw_stats_json — flat object with short keys (fgm, fga, fg3m, etc.)
+  // This format does NOT have pts — caller must use snapshot home_pts/away_pts
+  if (raw[side] && (raw[side].fgm !== undefined || raw[side].fga !== undefined)) {
     var d = raw[side];
+    // Compute pts from shot stats: (fgm - fg3m)*2 + fg3m*3 + ftm
+    var fgm = Number(d.fgm || 0);
+    var fg3m = Number(d.fg3m || 0);
+    var ftm = Number(d.ftm || 0);
+    var computedPts = (fgm - fg3m) * 2 + fg3m * 3 + ftm;
     return {
-      pts: Number(d.pts || d.points || 0),
-      fgm: Number(d.fgm || d.field_goals_made || 0),
-      fga: Number(d.fga || d.field_goals_att || 0),
-      fg3m: Number(d.fg3m || d.three_points_made || 0),
-      fg3a: Number(d.fg3a || d.three_points_att || 0),
-      ftm: Number(d.ftm || d.free_throws_made || 0),
-      fta: Number(d.fta || d.free_throws_att || 0),
+      pts: Number(d.pts || d.points || computedPts),
+      fgm: fgm,
+      fga: Number(d.fga || 0),
+      fg3m: fg3m,
+      fg3a: Number(d.fg3a || 0),
+      ftm: ftm,
+      fta: Number(d.fta || 0),
       to:  Number(d.to || d.turnovers || 0),
       oreb: Number(d.oreb || d.offensive_rebounds || 0),
     };
-  }
-
-  // Format 3: BDL box score — teams array with team.data.abbreviation
-  if (raw.data && Array.isArray(raw.data)) {
-    // Player-level stats — need to aggregate
-    // This is expensive, skip for now and handle if encountered
-    return null;
   }
 
   return null;
