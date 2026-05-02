@@ -1722,6 +1722,8 @@ async function phaseTriggeredReplay(sql, url) {
   var batchSize = parseInt(url.searchParams.get('n') || '200');
   var offset = parseInt(url.searchParams.get('offset') || '0');
   var canaryThreshold = parseFloat(url.searchParams.get('canary') || '0.15');
+  var canaryMode = url.searchParams.get('canary_mode') || 'relative';  // 'relative' or 'absolute'
+  var mcThreshold = parseFloat(url.searchParams.get('mc_threshold') || '0.70');
   var simCount = parseInt(url.searchParams.get('sims') || '300');
   var regressionCap = parseFloat(url.searchParams.get('rc') || '0.60');
   var startTime = Date.now();
@@ -1819,8 +1821,14 @@ async function phaseTriggeredReplay(sql, url) {
         parsed[ci].away.fgm ? (parsed[ci].away.fgm - parsed[ci].away.fg3m)*2 + parsed[ci].away.fg3m*3 + parsed[ci].away.ftm : 0,
         rp, { simCount: 200, ctrlTeam: ctrlHome ? 'home' : 'away' });
 
-      // Canary: floor - MC > threshold (floor is ctrl-relative like XGB)
-      if (cp.floor != null && (cp.floor - mc.winProb) > canaryThreshold) {
+      // Canary check
+      var canaryFired = false;
+      if (canaryMode === 'absolute') {
+        canaryFired = mc.winProb < mcThreshold;
+      } else {
+        canaryFired = cp.floor != null && (cp.floor - mc.winProb) > canaryThreshold;
+      }
+      if (canaryFired) {
         triggerIdx = ci; break;
       }
     }
@@ -1952,6 +1960,8 @@ async function phaseTriggeredReplay(sql, url) {
   return {
     status: 'ok',
     phase: 'triggered_replay',
+    canary_mode: canaryMode,
+    canary_config: canaryMode === 'absolute' ? { mc_threshold: mcThreshold } : { divergence: canaryThreshold },
     gamesProcessed: agg.total,
     totalAvailable: Number(totalGames[0]?.n || 0),
     elapsed_ms: Date.now() - startTime,
