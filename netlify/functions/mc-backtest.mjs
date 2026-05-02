@@ -1298,7 +1298,15 @@ async function phaseValidateSlate(sql, url) {
   var offset = parseInt(url.searchParams.get('offset') || '0');
 
   var isPossMode = mode.startsWith('poss_');
+  var isDualMode = mode.startsWith('dual_');
   var targetPoss = isPossMode ? (parseInt(mode.split('_')[1]) || 30) : null;
+  var dualShort = null, dualLong = null;
+  if (isDualMode) {
+    var parts = mode.split('_');  // dual_30_60
+    dualShort = parseInt(parts[1]) || 30;
+    dualLong = parseInt(parts[2]) || 60;
+    isPossMode = true;  // dual mode uses possession windows
+  }
 
   var games = await sql`
     SELECT id, date, home_alias, away_alias, home_pts, away_pts, winner, quarter_data
@@ -1359,9 +1367,16 @@ async function phaseValidateSlate(sql, url) {
       var raw = typeof snap.raw_stats_json === 'string' ? JSON.parse(snap.raw_stats_json) : snap.raw_stats_json;
       if (!raw || !raw.home || !raw.away) continue;
 
-      var windowRates = isPossMode
-        ? possessionWindowRates(allParsed, si, targetPoss, regressionCap)
-        : reconstructWindowRates(qd, raw, snap.period, snap.clock, regressionCap, mode);
+      var windowRates = null;
+      var windowRatesLong = null;  // for dual mode
+      if (isDualMode) {
+        windowRates = possessionWindowRates(allParsed, si, dualShort, regressionCap);
+        windowRatesLong = possessionWindowRates(allParsed, si, dualLong, regressionCap);
+      } else if (isPossMode) {
+        windowRates = possessionWindowRates(allParsed, si, targetPoss, regressionCap);
+      } else {
+        windowRates = reconstructWindowRates(qd, raw, snap.period, snap.clock, regressionCap, mode);
+      }
       if (!windowRates || windowRates.home._windowFGA < 5 || windowRates.away._windowFGA < 5) continue;
 
       var clockSec = 360;
@@ -1380,10 +1395,18 @@ async function phaseValidateSlate(sql, url) {
 
       var ctrlIsHome = snap.floor_team === g.home_alias;
       var ctrlWon = snap.floor_team === g.winner;
+      var mcOpts = { simCount: simCount, ctrlTeam: ctrlIsHome ? 'home' : 'away' };
 
+      // Run MC — short window (or single window for non-dual)
       var mc = runMonteCarloSim(windowRates.home, windowRates.away,
-        snap.home_pts || 0, snap.away_pts || 0, remainPoss,
-        { simCount: simCount, ctrlTeam: ctrlIsHome ? 'home' : 'away' });
+        snap.home_pts || 0, snap.away_pts || 0, remainPoss, mcOpts);
+
+      // Run MC — long window (dual mode only)
+      var mcLong = null;
+      if (isDualMode && windowRatesLong && windowRatesLong.home._windowFGA >= 5 && windowRatesLong.away._windowFGA >= 5) {
+        mcLong = runMonteCarloSim(windowRatesLong.home, windowRatesLong.away,
+          snap.home_pts || 0, snap.away_pts || 0, remainPoss, mcOpts);
+      }
 
       mcTotal++;
       if ((mc.winProb > 0.5 && ctrlWon) || (mc.winProb < 0.5 && !ctrlWon)) mcCorrect++;
@@ -1391,18 +1414,27 @@ async function phaseValidateSlate(sql, url) {
       // Divergence tracking
       var xgb = snap.xgb_win_prob;
       if (xgb != null) {
-        var div = xgb - mc.winProb;
-        if (Math.abs(div) > Math.abs(maxDiv)) {
-          maxDiv = div;
-          maxDivSnap = { period: snap.period, clock: snap.clock, score: (snap.home_pts||0)+'-'+(snap.away_pts||0), margin: (snap.home_pts||0)-(snap.away_pts||0), xgb: xgb, mc: mc.winProb, collapse: mc.collapseProb };
-        }
-        if (snap.period === 3) q3Divergences.push(div);
+        var divShort = xgb - mc.winProb;
+        var divLong = mcLong ? (xgb - mcLong.winProb) : null;
 
-        // Divergence precision: when MC disagrees with XGB, who's right?
+        // For max divergence tracking, use short window (most responsive)
+        if (Math.abs(divShort) > Math.abs(maxDiv)) {
+          maxDiv = divShort;
+          maxDivSnap = { period: snap.period, clock: snap.clock, score: (snap.home_pts||0)+'-'+(snap.away_pts||0), margin: (snap.home_pts||0)-(snap.away_pts||0), xgb: xgb, mc: mc.winProb, mcLong: mcLong ? mcLong.winProb : null, collapse: mc.collapseProb };
+        }
+        if (snap.period === 3) q3Divergences.push(divShort);
+
+        // Divergence precision: flag only when BOTH windows confirm (dual) or single window (non-dual)
         for (var th of ['0.20','0.30','0.40']) {
           var threshold = parseFloat(th);
-          if (div > threshold) {
-            // XGB says ctrl wins, MC skeptical. Did ctrl actually lose?
+          var confirmed = false;
+          if (isDualMode) {
+            // DUAL: both short AND long must exceed threshold
+            confirmed = divShort > threshold && divLong !== null && divLong > threshold;
+          } else {
+            confirmed = divShort > threshold;
+          }
+          if (confirmed) {
             divBuckets[th].flagged++;
             if (!ctrlWon) divBuckets[th].mcRight++;
           }
