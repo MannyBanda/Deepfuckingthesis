@@ -1776,6 +1776,7 @@ async function phaseTriggeredReplay(sql, url) {
     likely: 0, likely_right: 0,
     patterns: { CLEAN: {n:0,right:0}, WAVE: {n:0,right:0}, NORMALIZED: {n:0,right:0}, FALSE_ALARM: {n:0,right:0} },
     speed_buckets: { fast: {n:0,right:0}, medium: {n:0,right:0}, slow: {n:0,right:0} },
+    drivers: {},  // VOLATILE, STRUCTURAL, MIXED
     speed_margins: [],  // {speed, finalMargin, correct} for scatter
   };
 
@@ -1836,6 +1837,7 @@ async function phaseTriggeredReplay(sql, url) {
     var verdicts = [];
     var firstConfPoss = null;
     var firstLikelyPoss = null;
+    var confRates = null;  // rates at first CONFIRMED for decomposition
 
     for (var ti = triggerIdx + 1; ti < cps.length; ti++) {
       if (cps[ti].checkpoint === 'Q4_END') continue;
@@ -1867,7 +1869,10 @@ async function phaseTriggeredReplay(sql, url) {
       else v = 'CONF';
 
       verdicts.push(v);
-      if (v === 'CONF' && firstConfPoss === null) firstConfPoss = postPoss;
+      if (v === 'CONF' && firstConfPoss === null) {
+        firstConfPoss = postPoss;
+        confRates = { ctrl: ctrlHome2 ? hR : aR, opp: ctrlHome2 ? aR : hR };
+      }
       if ((v === 'CONF' || v === 'LIKELY') && firstLikelyPoss === null) firstLikelyPoss = postPoss;
     }
 
@@ -1911,6 +1916,30 @@ async function phaseTriggeredReplay(sql, url) {
       agg.speed_buckets[bucket].n++;
       if (correct) agg.speed_buckets[bucket].right++;
       agg.speed_margins.push({ speed: firstConfPoss, margin: Math.abs(cps[0].final_margin || 0), correct: correct });
+
+      // Rate decomposition at first CONFIRMED
+      if (confRates) {
+        var cr = confRates.ctrl;  // collapsing team's post-trigger rates
+        var op = confRates.opp;   // opponent's post-trigger rates
+
+        // Compute deviations from baselines (ctrl team perspective — negative = bad for ctrl)
+        var baselines = { to: 0.13, fg2: 0.52, fg3: 0.36, oreb: 0.25, fta: 0.22 };
+        var deviations = {
+          ctrl_to:   (cr.toRate || 0) - baselines.to,      // positive = more TOs = bad
+          ctrl_fg2:  baselines.fg2 - (cr.fg2Pct || 0.50),  // positive = shooting worse = bad
+          opp_fg2:   (op.fg2Pct || 0.50) - baselines.fg2,  // positive = opponent shooting hot = bad
+          opp_oreb:  (op.orebRate || 0) - baselines.oreb,   // positive = opponent crashing glass = bad
+          ctrl_fta:  baselines.fta - (cr.ftaRate || 0),     // positive = fewer FTs = bad
+        };
+
+        var volScore = Math.abs(deviations.ctrl_to) + Math.abs(deviations.opp_oreb);
+        var strScore = Math.abs(deviations.ctrl_fg2) + Math.abs(deviations.opp_fg2);
+
+        var driver = volScore > strScore * 1.3 ? 'VOLATILE' : strScore > volScore * 1.3 ? 'STRUCTURAL' : 'MIXED';
+        agg.drivers[driver] = agg.drivers[driver] || {n: 0, right: 0};
+        agg.drivers[driver].n++;
+        if (correct) agg.drivers[driver].right++;
+      }
     }
   }
 
@@ -1944,6 +1973,10 @@ async function phaseTriggeredReplay(sql, url) {
       slow_26plus: { games: agg.speed_buckets.slow.n, right: agg.speed_buckets.slow.right,
         precision: agg.speed_buckets.slow.n > 0 ? Math.round(agg.speed_buckets.slow.right / agg.speed_buckets.slow.n * 1000) / 10 : null },
     },
+    collapse_drivers: Object.keys(agg.drivers).map(function(d) {
+      var dd = agg.drivers[d];
+      return { driver: d, games: dd.n, right: dd.right, precision: dd.n > 0 ? Math.round(dd.right / dd.n * 1000) / 10 : null };
+    }),
     nextStep: offset + batchSize < Number(totalGames[0]?.n || 0)
       ? '?phase=triggered_replay&n=' + batchSize + '&offset=' + (offset + batchSize)
       : 'COMPLETE',
