@@ -2225,6 +2225,179 @@ async function phaseSilentAudit(sql, url) {
 
 
 // ══════════════════════════════════════════════════════════════════════════════
+// PHASE: HALFTIME_MC — MC at Q2_END using Q2-only rates as pre-Q3 signal
+//   ?phase=halftime_mc&n=200&offset=0
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function phaseHalftimeMC(sql, url) {
+  var batchSize = parseInt(url.searchParams.get('n') || '200');
+  var offset = parseInt(url.searchParams.get('offset') || '0');
+  var regressionCap = parseFloat(url.searchParams.get('rc') || '0.60');
+  var simCount = parseInt(url.searchParams.get('sims') || '500');
+  var startTime = Date.now();
+
+  var gameIds = await sql`
+    SELECT DISTINCT game_id FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL ORDER BY game_id
+    LIMIT ${batchSize} OFFSET ${offset}
+  `;
+  var totalGames = await sql`SELECT COUNT(DISTINCT game_id) AS n FROM nba_snapshot_backtest WHERE indicators IS NOT NULL`;
+
+  if (gameIds.length === 0) return { status: 'ok', message: 'No more games' };
+  var ids = gameIds.map(function(r) { return r.game_id; });
+
+  var rows = await sql`
+    SELECT game_id, checkpoint, team_stats,
+           (indicators->>'score')::real AS floor,
+           indicators->>'controlTeam' AS ctrl_team,
+           indicators->>'homeAlias' AS home_alias,
+           margin_at_snapshot AS margin,
+           ctrl_team_won
+    FROM nba_snapshot_backtest
+    WHERE game_id = ANY(${ids}) AND indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+      AND checkpoint IN ('Q1_END', 'Q2_END')
+    ORDER BY game_id, checkpoint
+  `;
+
+  var gameMap = {};
+  for (var r of rows) {
+    if (!gameMap[r.game_id]) gameMap[r.game_id] = {};
+    var ts = typeof r.team_stats === 'string' ? JSON.parse(r.team_stats) : r.team_stats;
+    gameMap[r.game_id][r.checkpoint] = {
+      home: ts ? ts.home : null, away: ts ? ts.away : null,
+      floor: r.floor, ctrl_team: r.ctrl_team, home_alias: r.home_alias,
+      margin: r.margin, ctrl_team_won: r.ctrl_team_won,
+    };
+  }
+
+  var agg = {
+    total: 0, processed: 0,
+    mc_correct: 0, floor_correct: 0,
+    // Bucket by MC confidence
+    mc_high: { n: 0, right: 0 },      // MC > 0.70
+    mc_moderate: { n: 0, right: 0 },   // 0.55-0.70
+    mc_tossup: { n: 0, right: 0 },     // 0.45-0.55
+    mc_skeptical: { n: 0, right: 0 },  // 0.30-0.45
+    mc_collapse: { n: 0, right: 0 },   // < 0.30
+    // Divergence from floor
+    diverge_high: { n: 0, floor_right: 0, mc_right: 0 },  // |floor - MC| > 0.20
+    diverge_low: { n: 0, floor_right: 0, mc_right: 0 },   // |floor - MC| <= 0.20
+    // For AUC computation
+    predictions: [],  // {mc, floor, ctrlWon}
+  };
+
+  for (var gid of Object.keys(gameMap)) {
+    if (Date.now() - startTime > 90000) break;
+    agg.total++;
+    var gd = gameMap[gid];
+    var q1 = gd['Q1_END'];
+    var q2 = gd['Q2_END'];
+    if (!q1 || !q2 || !q1.home || !q2.home || !q1.away || !q2.away) continue;
+
+    // Parse stats
+    function toMC(d) {
+      return { fgm: d.fgm||0, fga: d.fga||0, fg3m: d.fg3m||0, fg3a: d.fg3a||0,
+               ftm: d.ftm||0, fta: d.fta||0, to: d.to||0, oreb: d.oreb||0 };
+    }
+    var q1h = toMC(q1.home), q1a = toMC(q1.away);
+    var q2h = toMC(q2.home), q2a = toMC(q2.away);
+
+    // Q2-only rates (diff Q2_END - Q1_END)
+    var hRates = diffToRates(q2h, q1h, 0.36, regressionCap);
+    var aRates = diffToRates(q2a, q1a, 0.36, regressionCap);
+    if (!hRates || !aRates) continue;
+
+    // Score at halftime
+    var hScore = (q2h.fgm - q2h.fg3m)*2 + q2h.fg3m*3 + q2h.ftm;
+    var aScore = (q2a.fgm - q2a.fg3m)*2 + q2a.fg3m*3 + q2a.ftm;
+
+    // ~48 remaining possessions (full second half)
+    var remainPoss = 48;
+
+    var ctrlHome = q2.ctrl_team === q2.home_alias;
+    var ctrlWon = q2.ctrl_team_won;
+
+    var mc = runMonteCarloSim(hRates, aRates, hScore, aScore, remainPoss,
+      { simCount: simCount, ctrlTeam: ctrlHome ? 'home' : 'away' });
+
+    agg.processed++;
+    var mcRight = (mc.winProb > 0.5 && ctrlWon) || (mc.winProb < 0.5 && !ctrlWon);
+    var floorRight = (q2.floor > 0.5 && ctrlWon) || (q2.floor < 0.5 && !ctrlWon);
+    if (mcRight) agg.mc_correct++;
+    if (floorRight) agg.floor_correct++;
+
+    // Confidence buckets
+    var bucket = mc.winProb > 0.70 ? 'mc_high' : mc.winProb > 0.55 ? 'mc_moderate' :
+                 mc.winProb > 0.45 ? 'mc_tossup' : mc.winProb > 0.30 ? 'mc_skeptical' : 'mc_collapse';
+    agg[bucket].n++;
+    if (mcRight) agg[bucket].right++;
+
+    // Divergence tracking
+    var div = Math.abs((q2.floor || 0.5) - mc.winProb);
+    var divKey = div > 0.20 ? 'diverge_high' : 'diverge_low';
+    agg[divKey].n++;
+    if (floorRight) agg[divKey].floor_right++;
+    if (mcRight) agg[divKey].mc_right++;
+
+    // Store for AUC
+    if (agg.predictions.length < 2000) {
+      agg.predictions.push({ mc: mc.winProb, floor: q2.floor || 0.5, won: ctrlWon ? 1 : 0 });
+    }
+  }
+
+  // Compute AUC for both MC and floor
+  function computeAUC(preds, key) {
+    var pos = preds.filter(function(p) { return p.won === 1; });
+    var neg = preds.filter(function(p) { return p.won === 0; });
+    if (pos.length === 0 || neg.length === 0) return null;
+    var concordant = 0, total = 0;
+    // Sample for speed if large
+    var maxPairs = 500000;
+    var step = Math.max(1, Math.floor(pos.length * neg.length / maxPairs));
+    for (var i = 0; i < pos.length; i++) {
+      for (var j = 0; j < neg.length; j += step) {
+        if (pos[i][key] > neg[j][key]) concordant++;
+        else if (pos[i][key] === neg[j][key]) concordant += 0.5;
+        total++;
+      }
+    }
+    return Math.round(concordant / total * 1000) / 1000;
+  }
+
+  var mcAUC = computeAUC(agg.predictions, 'mc');
+  var floorAUC = computeAUC(agg.predictions, 'floor');
+
+  return {
+    status: 'ok',
+    phase: 'halftime_mc',
+    gamesProcessed: agg.total,
+    gamesWithData: agg.processed,
+    totalAvailable: Number(totalGames[0]?.n || 0),
+    elapsed_ms: Date.now() - startTime,
+    auc: { mc_q2_rates: mcAUC, floor_cumulative: floorAUC },
+    accuracy: {
+      mc: agg.processed > 0 ? Math.round(agg.mc_correct / agg.processed * 1000) / 10 : null,
+      floor: agg.processed > 0 ? Math.round(agg.floor_correct / agg.processed * 1000) / 10 : null,
+    },
+    mc_confidence: {
+      high_gt70: { games: agg.mc_high.n, right: agg.mc_high.right, precision: agg.mc_high.n > 0 ? Math.round(agg.mc_high.right/agg.mc_high.n*1000)/10 : null },
+      moderate_55_70: { games: agg.mc_moderate.n, right: agg.mc_moderate.right, precision: agg.mc_moderate.n > 0 ? Math.round(agg.mc_moderate.right/agg.mc_moderate.n*1000)/10 : null },
+      tossup_45_55: { games: agg.mc_tossup.n, right: agg.mc_tossup.right, precision: agg.mc_tossup.n > 0 ? Math.round(agg.mc_tossup.right/agg.mc_tossup.n*1000)/10 : null },
+      skeptical_30_45: { games: agg.mc_skeptical.n, right: agg.mc_skeptical.right, precision: agg.mc_skeptical.n > 0 ? Math.round(agg.mc_skeptical.right/agg.mc_skeptical.n*1000)/10 : null },
+      collapse_lt30: { games: agg.mc_collapse.n, right: agg.mc_collapse.right, precision: agg.mc_collapse.n > 0 ? Math.round(agg.mc_collapse.right/agg.mc_collapse.n*1000)/10 : null },
+    },
+    divergence: {
+      high_gt20: { games: agg.diverge_high.n, floor_right: agg.diverge_high.floor_right, mc_right: agg.diverge_high.mc_right },
+      low_le20: { games: agg.diverge_low.n, floor_right: agg.diverge_low.floor_right, mc_right: agg.diverge_low.mc_right },
+    },
+    nextStep: offset + batchSize < Number(totalGames[0]?.n || 0)
+      ? '?phase=halftime_mc&n=' + batchSize + '&offset=' + (offset + batchSize)
+      : 'COMPLETE',
+  };
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
 // HANDLER
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -2253,6 +2426,7 @@ export default async function handler(req) {
       case 'validate_triggered': result = await phaseValidateTriggered(sql, url); break;
       case 'triggered_replay':   result = await phaseTriggeredReplay(sql, url); break;
       case 'silent_audit':       result = await phaseSilentAudit(sql, url); break;
+      case 'halftime_mc':        result = await phaseHalftimeMC(sql, url); break;
       case 'status': {
         var count = await sql`SELECT COUNT(*) AS n FROM mc_backtest_results`;
         var games = await sql`SELECT COUNT(DISTINCT game_id) AS n FROM mc_backtest_results`;
