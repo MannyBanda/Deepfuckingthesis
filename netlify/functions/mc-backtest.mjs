@@ -1091,26 +1091,92 @@ function reconstructWindowRates(qd, snapRaw, period, clockStr, regressionCap, mo
 }
 
 
+// ══════════════════════════════════════════════════════════════════════════════
+// POSSESSION-TARGETING WINDOW — adaptive lookback to hit N possessions
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Walk backwards through parsed snapshots to find window with targetPoss possessions.
+ * Returns MC rates or null if insufficient data.
+ * parsedSnaps = [{home: {fgm,fga,...}, away: {fgm,fga,...}}, ...]
+ */
+function possessionWindowRates(parsedSnaps, currentIdx, targetPoss, regressionCap) {
+  if (currentIdx < 1) return null;
+  var curr = parsedSnaps[currentIdx];
+  if (!curr.home || !curr.away) return null;
+
+  // Walk backwards until possession diff >= target
+  for (var i = currentIdx - 1; i >= 0; i--) {
+    var prev = parsedSnaps[i];
+    if (!prev.home || !prev.away) continue;
+
+    var hFGA = (curr.home.fga || 0) - (prev.home.fga || 0);
+    var hTO  = (curr.home.to  || 0) - (prev.home.to  || 0);
+    var aFGA = (curr.away.fga || 0) - (prev.away.fga || 0);
+    var aTO  = (curr.away.to  || 0) - (prev.away.to  || 0);
+    var avgPoss = ((hFGA + hTO) + (aFGA + aTO)) / 2;
+
+    if (avgPoss >= targetPoss) {
+      var homeRates = diffToRates(curr.home, prev.home, 0.36, regressionCap);
+      var awayRates = diffToRates(curr.away, prev.away, 0.36, regressionCap);
+      if (!homeRates || !awayRates) return null;
+      homeRates._windowPossActual = Math.round(hFGA + hTO);
+      awayRates._windowPossActual = Math.round(aFGA + aTO);
+      return { home: homeRates, away: awayRates };
+    }
+  }
+  return null;  // not enough game played yet
+}
+
+/**
+ * Parse raw_stats_json short keys into MC-compatible format.
+ */
+function parseSnapForMC(raw) {
+  if (!raw || !raw.home || !raw.away) return null;
+  function side(d) {
+    return {
+      pts:  Number(d.pts || 0) || ((Number(d.fgm||0) - Number(d.fg3m||0)) * 2 + Number(d.fg3m||0) * 3 + Number(d.ftm||0)),
+      fgm:  Number(d.fgm || 0),
+      fga:  Number(d.fga || 0),
+      fg3m: Number(d.fg3m || 0),
+      fg3a: Number(d.fg3a || 0),
+      ftm:  Number(d.ftm || 0),
+      fta:  Number(d.fta || 0),
+      to:   Number(d.to || 0),
+      oreb: Number(d.oreb || 0),
+    };
+  }
+  return { home: side(raw.home), away: side(raw.away) };
+}
+
+
 async function phaseValidateGameV2(sql, url) {
   var gameId = url.searchParams.get('game_id');
   if (!gameId) return { error: 'game_id required' };
 
   var simCount = parseInt(url.searchParams.get('sims') || '1000');
   var regressionCap = parseFloat(url.searchParams.get('rc') || '0.60');
-  var mode = url.searchParams.get('mode') || 'responsive';  // 'responsive' or 'production'
+  var mode = url.searchParams.get('mode') || 'responsive';  // 'responsive', 'production', or 'poss_30' etc.
+  var targetPoss = null;
+  var isPossMode = mode.startsWith('poss_');
+  if (isPossMode) targetPoss = parseInt(mode.split('_')[1]) || 30;
 
-  // Pull quarter_data
-  var qdRows = await sql`SELECT quarter_data FROM games WHERE id = ${gameId}`;
-  var qd = qdRows[0]?.quarter_data;
-  if (!qd) return { error: 'No quarter_data for game ' + gameId };
-  if (typeof qd === 'string') qd = JSON.parse(qd);
+  // Pull quarter_data (not needed for poss mode but used for responsive/production)
+  var qd = null;
+  if (!isPossMode) {
+    var qdRows = await sql`SELECT quarter_data FROM games WHERE id = ${gameId}`;
+    qd = qdRows[0]?.quarter_data;
+    if (!qd) return { error: 'No quarter_data for game ' + gameId };
+    if (typeof qd === 'string') qd = JSON.parse(qd);
+  }
 
   // Pull game info
   var game = await sql`SELECT * FROM games WHERE id = ${gameId} LIMIT 1`;
   var g = game[0];
   if (!g) return { error: 'Game not found: ' + gameId };
 
-  // Pull all server snapshots
+  // Pull server snapshots — include Q1 for possession mode (lookback needs early data)
+  var minPeriod = isPossMode ? 1 : 2;
   var snapshots = await sql`
     SELECT id, period, clock, source,
            raw_stats_json, floor_score, floor_team,
@@ -1119,24 +1185,39 @@ async function phaseValidateGameV2(sql, url) {
     WHERE game_id = ${gameId}
       AND source = 'server'
       AND raw_stats_json IS NOT NULL
-      AND period >= 2
+      AND period >= ${minPeriod}
     ORDER BY period ASC, clock DESC
   `;
 
   if (snapshots.length === 0) {
-    return { error: 'No Q2+ server snapshots for game ' + gameId };
+    return { error: 'No server snapshots for game ' + gameId };
+  }
+
+  // Pre-parse all snapshots for possession mode
+  var allParsed = [];
+  for (var pi = 0; pi < snapshots.length; pi++) {
+    var rawP = typeof snapshots[pi].raw_stats_json === 'string'
+      ? JSON.parse(snapshots[pi].raw_stats_json) : snapshots[pi].raw_stats_json;
+    allParsed.push(parseSnapForMC(rawP));
   }
 
   var results = [];
 
   for (var si = 0; si < snapshots.length; si++) {
     var snap = snapshots[si];
+    if (snap.period < 2) continue;  // still skip Q1 for MC output
+
     var raw = typeof snap.raw_stats_json === 'string'
       ? JSON.parse(snap.raw_stats_json) : snap.raw_stats_json;
     if (!raw || !raw.home || !raw.away) continue;
 
-    // Reconstruct rolling window rates
-    var windowRates = reconstructWindowRates(qd, raw, snap.period, snap.clock, regressionCap, mode);
+    // Get rates based on mode
+    var windowRates = null;
+    if (isPossMode) {
+      windowRates = possessionWindowRates(allParsed, si, targetPoss, regressionCap);
+    } else {
+      windowRates = reconstructWindowRates(qd, raw, snap.period, snap.clock, regressionCap, mode);
+    }
     if (!windowRates) continue;
     if (windowRates.home._windowFGA < 5 || windowRates.away._windowFGA < 5) continue;
 
@@ -1148,13 +1229,14 @@ async function phaseValidateGameV2(sql, url) {
     } catch(e) {}
 
     // Remaining possessions from cumulative stats
-    var homeCum = toLongKeys(raw.home);
-    var awayCum = toLongKeys(raw.away);
-    var remainPoss = estimateRemainingPoss(
-      { fga: homeCum.field_goals_att, fta: homeCum.free_throws_att, oreb: homeCum.offensive_rebounds, to: homeCum.turnovers },
-      { fga: awayCum.field_goals_att, fta: awayCum.free_throws_att, oreb: awayCum.offensive_rebounds, to: awayCum.turnovers },
-      snap.period, clockSec
-    );
+    var cumStats = isPossMode ? allParsed[si] : null;
+    var homeCumForPoss = isPossMode
+      ? { fga: cumStats.home.fga, fta: cumStats.home.fta, oreb: cumStats.home.oreb, to: cumStats.home.to }
+      : (function() { var h = toLongKeys(raw.home); return { fga: h.field_goals_att, fta: h.free_throws_att, oreb: h.offensive_rebounds, to: h.turnovers }; })();
+    var awayCumForPoss = isPossMode
+      ? { fga: cumStats.away.fga, fta: cumStats.away.fta, oreb: cumStats.away.oreb, to: cumStats.away.to }
+      : (function() { var a = toLongKeys(raw.away); return { fga: a.field_goals_att, fta: a.free_throws_att, oreb: a.offensive_rebounds, to: a.turnovers }; })();
+    var remainPoss = estimateRemainingPoss(homeCumForPoss, awayCumForPoss, snap.period, clockSec);
     if (remainPoss < 1) continue;
 
     var ctrlIsHome = snap.floor_team === g.home_alias;
@@ -1188,7 +1270,7 @@ async function phaseValidateGameV2(sql, url) {
   return {
     status: 'ok',
     version: 'v2_' + mode,
-    rateSource: mode === 'responsive' ? 'partial_quarter_priority' : 'computeServerWindow_reconstruction',
+    rateSource: isPossMode ? 'possession_window_' + targetPoss : (mode === 'responsive' ? 'partial_quarter_priority' : 'computeServerWindow_reconstruction'),
     game: {
       id: gameId,
       matchup: (g.away_alias || g.away_team) + ' @ ' + (g.home_alias || g.home_team),
@@ -1211,17 +1293,18 @@ async function phaseValidateSlate(sql, url) {
   var toDate = url.searchParams.get('to') || '2026-05-02';
   var mode = url.searchParams.get('mode') || 'responsive';
   var regressionCap = parseFloat(url.searchParams.get('rc') || '0.60');
-  var simCount = parseInt(url.searchParams.get('sims') || '500');  // lower default for speed
+  var simCount = parseInt(url.searchParams.get('sims') || '500');
   var batchSize = parseInt(url.searchParams.get('n') || '10');
   var offset = parseInt(url.searchParams.get('offset') || '0');
 
-  // Get playoff games in date range with results
+  var isPossMode = mode.startsWith('poss_');
+  var targetPoss = isPossMode ? (parseInt(mode.split('_')[1]) || 30) : null;
+
   var games = await sql`
     SELECT id, date, home_alias, away_alias, home_pts, away_pts, winner, quarter_data
     FROM games
     WHERE date >= ${fromDate} AND date <= ${toDate}
-      AND winner IS NOT NULL
-      AND quarter_data IS NOT NULL
+      AND winner IS NOT NULL AND quarter_data IS NOT NULL
     ORDER BY date ASC, id ASC
     LIMIT ${batchSize} OFFSET ${offset}
   `;
@@ -1232,37 +1315,43 @@ async function phaseValidateSlate(sql, url) {
       AND winner IS NOT NULL AND quarter_data IS NOT NULL
   `;
 
+  // Aggregate divergence precision across all games
+  var divBuckets = { '0.20': { flagged: 0, mcRight: 0 }, '0.30': { flagged: 0, mcRight: 0 }, '0.40': { flagged: 0, mcRight: 0 } };
   var summaries = [];
 
   for (var gi = 0; gi < games.length; gi++) {
     var g = games[gi];
     var qd = typeof g.quarter_data === 'string' ? JSON.parse(g.quarter_data) : g.quarter_data;
-    if (!qd || !qd.boundaries) { summaries.push({ game: g.id, error: 'no quarter_data' }); continue; }
+    if (!isPossMode && (!qd || !qd.boundaries)) { summaries.push({ matchup: (g.away_alias||'?')+'@'+(g.home_alias||'?'), error: 'no quarter_data' }); continue; }
 
-    // Pull server snapshots
+    var minPeriod = isPossMode ? 1 : 2;
     var snaps = await sql`
       SELECT period, clock, raw_stats_json, floor_score, floor_team,
              xgb_win_prob, home_pts, away_pts
       FROM snapshots
-      WHERE game_id = ${g.id} AND source = 'server' AND raw_stats_json IS NOT NULL AND period >= 2
+      WHERE game_id = ${g.id} AND source = 'server' AND raw_stats_json IS NOT NULL AND period >= ${minPeriod}
       ORDER BY period ASC, clock DESC
     `;
+    if (snaps.length === 0) { summaries.push({ matchup: (g.away_alias||'?')+'@'+(g.home_alias||'?'), error: 'no snapshots' }); continue; }
 
-    if (snaps.length === 0) { summaries.push({ game: g.id, error: 'no snapshots' }); continue; }
+    // Pre-parse for possession mode
+    var allParsed = [];
+    if (isPossMode) {
+      for (var pi = 0; pi < snaps.length; pi++) {
+        var rawP = typeof snaps[pi].raw_stats_json === 'string' ? JSON.parse(snaps[pi].raw_stats_json) : snaps[pi].raw_stats_json;
+        allParsed.push(parseSnapForMC(rawP));
+      }
+    }
 
-    // Run MC on each snapshot, track key metrics
-    var firstCrack = null;    // MC < 0.70 for ctrl team
-    var firstAlarm = null;    // MC < 0.40
-    var maxDiv = 0;
-    var maxDivSnap = null;
-    var mcCorrect = 0;
-    var mcTotal = 0;
-    var q3Snaps = 0;
+    var firstCrack = null, firstAlarm = null;
+    var maxDiv = 0, maxDivSnap = null;
+    var mcCorrect = 0, mcTotal = 0;
     var q3Divergences = [];
     var seen = {};
 
     for (var si = 0; si < snaps.length; si++) {
       var snap = snaps[si];
+      if (snap.period < 2) continue;
       var snapKey = snap.period + '_' + snap.clock + '_' + snap.home_pts;
       if (seen[snapKey]) continue;
       seen[snapKey] = true;
@@ -1270,73 +1359,86 @@ async function phaseValidateSlate(sql, url) {
       var raw = typeof snap.raw_stats_json === 'string' ? JSON.parse(snap.raw_stats_json) : snap.raw_stats_json;
       if (!raw || !raw.home || !raw.away) continue;
 
-      var windowRates = reconstructWindowRates(qd, raw, snap.period, snap.clock, regressionCap, mode);
+      var windowRates = isPossMode
+        ? possessionWindowRates(allParsed, si, targetPoss, regressionCap)
+        : reconstructWindowRates(qd, raw, snap.period, snap.clock, regressionCap, mode);
       if (!windowRates || windowRates.home._windowFGA < 5 || windowRates.away._windowFGA < 5) continue;
 
       var clockSec = 360;
-      try { var pts = String(snap.clock || '6:00').split(':'); clockSec = parseInt(pts[0]) * 60 + parseInt(pts[1] || 0); } catch(e) {}
+      try { var pts2 = String(snap.clock || '6:00').split(':'); clockSec = parseInt(pts2[0]) * 60 + parseInt(pts2[1] || 0); } catch(e) {}
 
-      var homeCum = toLongKeys(raw.home);
-      var awayCum = toLongKeys(raw.away);
-      var remainPoss = estimateRemainingPoss(
-        { fga: homeCum.field_goals_att, fta: homeCum.free_throws_att, oreb: homeCum.offensive_rebounds, to: homeCum.turnovers },
-        { fga: awayCum.field_goals_att, fta: awayCum.free_throws_att, oreb: awayCum.offensive_rebounds, to: awayCum.turnovers },
-        snap.period, clockSec
-      );
+      var cumForPoss = isPossMode ? allParsed[si] : null;
+      var hCum = isPossMode
+        ? { fga: cumForPoss.home.fga, fta: cumForPoss.home.fta, oreb: cumForPoss.home.oreb, to: cumForPoss.home.to }
+        : (function() { var h = toLongKeys(raw.home); return { fga: h.field_goals_att, fta: h.free_throws_att, oreb: h.offensive_rebounds, to: h.turnovers }; })();
+      var aCum = isPossMode
+        ? { fga: cumForPoss.away.fga, fta: cumForPoss.away.fta, oreb: cumForPoss.away.oreb, to: cumForPoss.away.to }
+        : (function() { var a = toLongKeys(raw.away); return { fga: a.field_goals_att, fta: a.free_throws_att, oreb: a.offensive_rebounds, to: a.turnovers }; })();
+
+      var remainPoss = estimateRemainingPoss(hCum, aCum, snap.period, clockSec);
       if (remainPoss < 1) continue;
 
       var ctrlIsHome = snap.floor_team === g.home_alias;
       var ctrlWon = snap.floor_team === g.winner;
 
-      var mc = runMonteCarloSim(
-        windowRates.home, windowRates.away,
-        snap.home_pts || 0, snap.away_pts || 0,
-        remainPoss,
-        { simCount: simCount, ctrlTeam: ctrlIsHome ? 'home' : 'away' }
-      );
+      var mc = runMonteCarloSim(windowRates.home, windowRates.away,
+        snap.home_pts || 0, snap.away_pts || 0, remainPoss,
+        { simCount: simCount, ctrlTeam: ctrlIsHome ? 'home' : 'away' });
 
-      // Track accuracy
       mcTotal++;
       if ((mc.winProb > 0.5 && ctrlWon) || (mc.winProb < 0.5 && !ctrlWon)) mcCorrect++;
 
-      // Track divergence from XGB
+      // Divergence tracking
       var xgb = snap.xgb_win_prob;
       if (xgb != null) {
-        var div = xgb - mc.winProb;  // positive = XGB more confident than MC
+        var div = xgb - mc.winProb;
         if (Math.abs(div) > Math.abs(maxDiv)) {
           maxDiv = div;
-          maxDivSnap = { period: snap.period, clock: snap.clock, score: (snap.home_pts||0) + '-' + (snap.away_pts||0), margin: (snap.home_pts||0) - (snap.away_pts||0), xgb: xgb, mc: mc.winProb, collapse: mc.collapseProb };
+          maxDivSnap = { period: snap.period, clock: snap.clock, score: (snap.home_pts||0)+'-'+(snap.away_pts||0), margin: (snap.home_pts||0)-(snap.away_pts||0), xgb: xgb, mc: mc.winProb, collapse: mc.collapseProb };
         }
-        if (snap.period === 3) {
-          q3Snaps++;
-          q3Divergences.push(div);
+        if (snap.period === 3) q3Divergences.push(div);
+
+        // Divergence precision: when MC disagrees with XGB, who's right?
+        for (var th of ['0.20','0.30','0.40']) {
+          var threshold = parseFloat(th);
+          if (div > threshold) {
+            // XGB says ctrl wins, MC skeptical. Did ctrl actually lose?
+            divBuckets[th].flagged++;
+            if (!ctrlWon) divBuckets[th].mcRight++;
+          }
         }
       }
 
-      // First crack / alarm
       if (mc.winProb < 0.70 && !firstCrack) {
-        firstCrack = { period: snap.period, clock: snap.clock, score: (snap.home_pts||0) + '-' + (snap.away_pts||0), margin: (snap.home_pts||0) - (snap.away_pts||0), mc: mc.winProb, collapse: mc.collapseProb, floor_team: snap.floor_team };
+        firstCrack = { period: snap.period, clock: snap.clock, score: (snap.home_pts||0)+'-'+(snap.away_pts||0), margin: (snap.home_pts||0)-(snap.away_pts||0), mc: mc.winProb, collapse: mc.collapseProb, floor_team: snap.floor_team };
       }
       if (mc.winProb < 0.40 && !firstAlarm) {
-        firstAlarm = { period: snap.period, clock: snap.clock, score: (snap.home_pts||0) + '-' + (snap.away_pts||0), margin: (snap.home_pts||0) - (snap.away_pts||0), mc: mc.winProb, collapse: mc.collapseProb, floor_team: snap.floor_team };
+        firstAlarm = { period: snap.period, clock: snap.clock, score: (snap.home_pts||0)+'-'+(snap.away_pts||0), margin: (snap.home_pts||0)-(snap.away_pts||0), mc: mc.winProb, collapse: mc.collapseProb, floor_team: snap.floor_team };
       }
     }
 
-    var avgQ3Div = q3Divergences.length > 0 ? q3Divergences.reduce(function(a,b){return a+b;}, 0) / q3Divergences.length : null;
+    var avgQ3Div = q3Divergences.length > 0 ? q3Divergences.reduce(function(a,b){return a+b;},0)/q3Divergences.length : null;
 
     summaries.push({
       date: g.date,
-      matchup: (g.away_alias || '?') + '@' + (g.home_alias || '?'),
-      final: (g.home_pts || 0) + '-' + (g.away_pts || 0),
+      matchup: (g.away_alias||'?')+'@'+(g.home_alias||'?'),
+      final: (g.home_pts||0)+'-'+(g.away_pts||0),
       winner: g.winner,
       snapshots: mcTotal,
-      mc_accuracy: mcTotal > 0 ? Math.round(mcCorrect / mcTotal * 1000) / 10 : null,
-      max_divergence: Math.round(maxDiv * 1000) / 1000,
+      mc_accuracy: mcTotal > 0 ? Math.round(mcCorrect/mcTotal*1000)/10 : null,
+      max_divergence: Math.round(maxDiv*1000)/1000,
       max_div_detail: maxDivSnap,
-      avg_q3_divergence: avgQ3Div != null ? Math.round(avgQ3Div * 1000) / 1000 : null,
+      avg_q3_divergence: avgQ3Div != null ? Math.round(avgQ3Div*1000)/1000 : null,
       first_crack: firstCrack,
       first_alarm: firstAlarm,
     });
+  }
+
+  // Divergence precision summary
+  var divPrecision = {};
+  for (var th2 of ['0.20','0.30','0.40']) {
+    var b = divBuckets[th2];
+    divPrecision[th2] = { flagged: b.flagged, mc_right: b.mcRight, precision: b.flagged > 0 ? Math.round(b.mcRight/b.flagged*1000)/10 : null };
   }
 
   return {
@@ -1345,8 +1447,9 @@ async function phaseValidateSlate(sql, url) {
     dateRange: fromDate + ' to ' + toDate,
     gamesProcessed: summaries.length,
     totalAvailable: Number(totalGames[0]?.n || 0),
+    divergence_precision: divPrecision,
     nextStep: offset + batchSize < Number(totalGames[0]?.n || 0)
-      ? '?phase=validate_slate&from=' + fromDate + '&to=' + toDate + '&mode=' + mode + '&n=' + batchSize + '&offset=' + (offset + batchSize)
+      ? '?phase=validate_slate&from='+fromDate+'&to='+toDate+'&mode='+mode+'&n='+batchSize+'&offset='+(offset+batchSize)
       : null,
     games: summaries,
   };
