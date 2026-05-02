@@ -1202,6 +1202,158 @@ async function phaseValidateGameV2(sql, url) {
 
 
 // ══════════════════════════════════════════════════════════════════════════════
+// PHASE: VALIDATE_SLATE — Run MC on multiple playoff games, report per-game summary
+//   ?phase=validate_slate&from=2026-04-18&to=2026-05-02&mode=responsive&n=10&offset=0
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function phaseValidateSlate(sql, url) {
+  var fromDate = url.searchParams.get('from') || '2026-04-18';
+  var toDate = url.searchParams.get('to') || '2026-05-02';
+  var mode = url.searchParams.get('mode') || 'responsive';
+  var regressionCap = parseFloat(url.searchParams.get('rc') || '0.60');
+  var simCount = parseInt(url.searchParams.get('sims') || '500');  // lower default for speed
+  var batchSize = parseInt(url.searchParams.get('n') || '10');
+  var offset = parseInt(url.searchParams.get('offset') || '0');
+
+  // Get playoff games in date range with results
+  var games = await sql`
+    SELECT id, date, home_alias, away_alias, home_pts, away_pts, winner, quarter_data
+    FROM games
+    WHERE date >= ${fromDate} AND date <= ${toDate}
+      AND winner IS NOT NULL
+      AND quarter_data IS NOT NULL
+    ORDER BY date ASC, id ASC
+    LIMIT ${batchSize} OFFSET ${offset}
+  `;
+
+  var totalGames = await sql`
+    SELECT COUNT(*) AS n FROM games
+    WHERE date >= ${fromDate} AND date <= ${toDate}
+      AND winner IS NOT NULL AND quarter_data IS NOT NULL
+  `;
+
+  var summaries = [];
+
+  for (var gi = 0; gi < games.length; gi++) {
+    var g = games[gi];
+    var qd = typeof g.quarter_data === 'string' ? JSON.parse(g.quarter_data) : g.quarter_data;
+    if (!qd || !qd.boundaries) { summaries.push({ game: g.id, error: 'no quarter_data' }); continue; }
+
+    // Pull server snapshots
+    var snaps = await sql`
+      SELECT period, clock, raw_stats_json, floor_score, floor_team,
+             xgb_win_prob, home_pts, away_pts
+      FROM snapshots
+      WHERE game_id = ${g.id} AND source = 'server' AND raw_stats_json IS NOT NULL AND period >= 2
+      ORDER BY period ASC, clock DESC
+    `;
+
+    if (snaps.length === 0) { summaries.push({ game: g.id, error: 'no snapshots' }); continue; }
+
+    // Run MC on each snapshot, track key metrics
+    var firstCrack = null;    // MC < 0.70 for ctrl team
+    var firstAlarm = null;    // MC < 0.40
+    var maxDiv = 0;
+    var maxDivSnap = null;
+    var mcCorrect = 0;
+    var mcTotal = 0;
+    var q3Snaps = 0;
+    var q3Divergences = [];
+    var seen = {};
+
+    for (var si = 0; si < snaps.length; si++) {
+      var snap = snaps[si];
+      var snapKey = snap.period + '_' + snap.clock + '_' + snap.home_pts;
+      if (seen[snapKey]) continue;
+      seen[snapKey] = true;
+
+      var raw = typeof snap.raw_stats_json === 'string' ? JSON.parse(snap.raw_stats_json) : snap.raw_stats_json;
+      if (!raw || !raw.home || !raw.away) continue;
+
+      var windowRates = reconstructWindowRates(qd, raw, snap.period, snap.clock, regressionCap, mode);
+      if (!windowRates || windowRates.home._windowFGA < 5 || windowRates.away._windowFGA < 5) continue;
+
+      var clockSec = 360;
+      try { var pts = String(snap.clock || '6:00').split(':'); clockSec = parseInt(pts[0]) * 60 + parseInt(pts[1] || 0); } catch(e) {}
+
+      var homeCum = toLongKeys(raw.home);
+      var awayCum = toLongKeys(raw.away);
+      var remainPoss = estimateRemainingPoss(
+        { fga: homeCum.field_goals_att, fta: homeCum.free_throws_att, oreb: homeCum.offensive_rebounds, to: homeCum.turnovers },
+        { fga: awayCum.field_goals_att, fta: awayCum.free_throws_att, oreb: awayCum.offensive_rebounds, to: awayCum.turnovers },
+        snap.period, clockSec
+      );
+      if (remainPoss < 1) continue;
+
+      var ctrlIsHome = snap.floor_team === g.home_alias;
+      var ctrlWon = snap.floor_team === g.winner;
+
+      var mc = runMonteCarloSim(
+        windowRates.home, windowRates.away,
+        snap.home_pts || 0, snap.away_pts || 0,
+        remainPoss,
+        { simCount: simCount, ctrlTeam: ctrlIsHome ? 'home' : 'away' }
+      );
+
+      // Track accuracy
+      mcTotal++;
+      if ((mc.winProb > 0.5 && ctrlWon) || (mc.winProb < 0.5 && !ctrlWon)) mcCorrect++;
+
+      // Track divergence from XGB
+      var xgb = snap.xgb_win_prob;
+      if (xgb != null) {
+        var div = xgb - mc.winProb;  // positive = XGB more confident than MC
+        if (Math.abs(div) > Math.abs(maxDiv)) {
+          maxDiv = div;
+          maxDivSnap = { period: snap.period, clock: snap.clock, score: (snap.home_pts||0) + '-' + (snap.away_pts||0), margin: (snap.home_pts||0) - (snap.away_pts||0), xgb: xgb, mc: mc.winProb, collapse: mc.collapseProb };
+        }
+        if (snap.period === 3) {
+          q3Snaps++;
+          q3Divergences.push(div);
+        }
+      }
+
+      // First crack / alarm
+      if (mc.winProb < 0.70 && !firstCrack) {
+        firstCrack = { period: snap.period, clock: snap.clock, score: (snap.home_pts||0) + '-' + (snap.away_pts||0), margin: (snap.home_pts||0) - (snap.away_pts||0), mc: mc.winProb, collapse: mc.collapseProb, floor_team: snap.floor_team };
+      }
+      if (mc.winProb < 0.40 && !firstAlarm) {
+        firstAlarm = { period: snap.period, clock: snap.clock, score: (snap.home_pts||0) + '-' + (snap.away_pts||0), margin: (snap.home_pts||0) - (snap.away_pts||0), mc: mc.winProb, collapse: mc.collapseProb, floor_team: snap.floor_team };
+      }
+    }
+
+    var avgQ3Div = q3Divergences.length > 0 ? q3Divergences.reduce(function(a,b){return a+b;}, 0) / q3Divergences.length : null;
+
+    summaries.push({
+      date: g.date,
+      matchup: (g.away_alias || '?') + '@' + (g.home_alias || '?'),
+      final: (g.home_pts || 0) + '-' + (g.away_pts || 0),
+      winner: g.winner,
+      snapshots: mcTotal,
+      mc_accuracy: mcTotal > 0 ? Math.round(mcCorrect / mcTotal * 1000) / 10 : null,
+      max_divergence: Math.round(maxDiv * 1000) / 1000,
+      max_div_detail: maxDivSnap,
+      avg_q3_divergence: avgQ3Div != null ? Math.round(avgQ3Div * 1000) / 1000 : null,
+      first_crack: firstCrack,
+      first_alarm: firstAlarm,
+    });
+  }
+
+  return {
+    status: 'ok',
+    mode: mode,
+    dateRange: fromDate + ' to ' + toDate,
+    gamesProcessed: summaries.length,
+    totalAvailable: Number(totalGames[0]?.n || 0),
+    nextStep: offset + batchSize < Number(totalGames[0]?.n || 0)
+      ? '?phase=validate_slate&from=' + fromDate + '&to=' + toDate + '&mode=' + mode + '&n=' + batchSize + '&offset=' + (offset + batchSize)
+      : null,
+    games: summaries,
+  };
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
 // HANDLER
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -1226,6 +1378,7 @@ export default async function handler(req) {
       case 'analyze':        result = await phaseAnalyze(sql, url); break;
       case 'validate_game':  result = await phaseValidateGame(sql, url); break;
       case 'validate_game_v2': result = await phaseValidateGameV2(sql, url); break;
+      case 'validate_slate':   result = await phaseValidateSlate(sql, url); break;
       case 'status': {
         var count = await sql`SELECT COUNT(*) AS n FROM mc_backtest_results`;
         var games = await sql`SELECT COUNT(DISTINCT game_id) AS n FROM mc_backtest_results`;
