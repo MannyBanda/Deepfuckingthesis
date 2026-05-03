@@ -2557,9 +2557,9 @@ async function phaseCrossConcordance(sql) {
       CASE WHEN mc_win_prob > 0.70 THEN 'HIGH' WHEN mc_win_prob >= 0.50 THEN 'MED' ELSE 'LOW' END AS mc_b,
       CASE WHEN xgb_win_prob > 0.70 THEN 'HIGH' WHEN xgb_win_prob >= 0.50 THEN 'MED' ELSE 'LOW' END AS xgb_b,
       COUNT(*) AS n,
-      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100, 1) AS ctrl_win_pct,
-      ROUND(AVG(margin_at_snapshot), 1) AS avg_margin,
-      ROUND(AVG(final_margin), 1) AS avg_final_margin
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100::numeric, 1) AS ctrl_win_pct,
+      ROUND(AVG(margin_at_snapshot)::numeric, 1) AS avg_margin,
+      ROUND(AVG(final_margin)::numeric, 1) AS avg_final_margin
     FROM mc_backtest_results
     WHERE mc_win_prob IS NOT NULL AND xgb_win_prob IS NOT NULL AND floor_score IS NOT NULL
     GROUP BY 1, 2, 3
@@ -2570,21 +2570,21 @@ async function phaseCrossConcordance(sql) {
   var floorMarginal = await sql`
     SELECT CASE WHEN floor_score > 0.70 THEN 'HIGH' WHEN floor_score >= 0.50 THEN 'MED' ELSE 'LOW' END AS bucket,
            COUNT(*) AS n,
-           ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100, 1) AS ctrl_win_pct
+           ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100::numeric, 1) AS ctrl_win_pct
     FROM mc_backtest_results WHERE floor_score IS NOT NULL
     GROUP BY 1 ORDER BY 1
   `;
   var mcMarginal = await sql`
     SELECT CASE WHEN mc_win_prob > 0.70 THEN 'HIGH' WHEN mc_win_prob >= 0.50 THEN 'MED' ELSE 'LOW' END AS bucket,
            COUNT(*) AS n,
-           ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100, 1) AS ctrl_win_pct
+           ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100::numeric, 1) AS ctrl_win_pct
     FROM mc_backtest_results WHERE mc_win_prob IS NOT NULL
     GROUP BY 1 ORDER BY 1
   `;
   var xgbMarginal = await sql`
     SELECT CASE WHEN xgb_win_prob > 0.70 THEN 'HIGH' WHEN xgb_win_prob >= 0.50 THEN 'MED' ELSE 'LOW' END AS bucket,
            COUNT(*) AS n,
-           ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100, 1) AS ctrl_win_pct
+           ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100::numeric, 1) AS ctrl_win_pct
     FROM mc_backtest_results WHERE xgb_win_prob IS NOT NULL
     GROUP BY 1 ORDER BY 1
   `;
@@ -2602,8 +2602,8 @@ async function phaseCrossConcordance(sql) {
         ELSE NULL
       END AS state_name,
       COUNT(*) AS n,
-      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100, 1) AS ctrl_win_pct,
-      ROUND(AVG(margin_at_snapshot), 1) AS avg_margin
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100::numeric, 1) AS ctrl_win_pct,
+      ROUND(AVG(margin_at_snapshot)::numeric, 1) AS avg_margin
     FROM mc_backtest_results
     WHERE mc_win_prob IS NOT NULL AND xgb_win_prob IS NOT NULL AND floor_score IS NOT NULL
     GROUP BY 1
@@ -2652,8 +2652,8 @@ async function phaseCrossFailure(sql, url) {
         ELSE 'MIXED'
       END AS attribution,
       COUNT(*) AS n,
-      ROUND(AVG(margin_at_snapshot), 1) AS avg_margin,
-      ROUND(AVG(final_margin), 1) AS avg_final_margin
+      ROUND(AVG(margin_at_snapshot)::numeric, 1) AS avg_margin,
+      ROUND(AVG(final_margin)::numeric, 1) AS avg_final_margin
     FROM mc_backtest_results
     WHERE checkpoint = ${cp}
       AND ctrl_team_won = false
@@ -2733,8 +2733,8 @@ async function phaseCrossMarginal(sql) {
       COUNT(*) FILTER (WHERE mc_win_prob < 0.50) AS mc_warned,
       COUNT(*) FILTER (WHERE mc_win_prob < 0.40) AS mc_strong_warn,
       COUNT(*) FILTER (WHERE mc_win_prob < 0.30) AS mc_alarm,
-      ROUND(AVG(mc_win_prob), 3) AS avg_mc,
-      ROUND(AVG(margin_at_snapshot), 1) AS avg_margin,
+      ROUND(AVG(mc_win_prob)::numeric, 3) AS avg_mc,
+      ROUND(AVG(margin_at_snapshot)::numeric, 1) AS avg_margin,
       checkpoint
     FROM mc_backtest_results
     WHERE floor_score > 0.65 AND xgb_win_prob > 0.65
@@ -2750,7 +2750,7 @@ async function phaseCrossMarginal(sql) {
       COUNT(*) AS total_wins,
       COUNT(*) FILTER (WHERE mc_win_prob > 0.60) AS mc_held,
       COUNT(*) FILTER (WHERE mc_win_prob > 0.70) AS mc_strong_hold,
-      ROUND(AVG(mc_win_prob), 3) AS avg_mc,
+      ROUND(AVG(mc_win_prob)::numeric, 3) AS avg_mc,
       checkpoint
     FROM mc_backtest_results
     WHERE floor_score < 0.50 AND xgb_win_prob < 0.50
@@ -2766,8 +2766,8 @@ async function phaseCrossMarginal(sql) {
       COUNT(*) AS n,
       COUNT(*) FILTER (WHERE ctrl_team_won = false) AS mc_right,
       COUNT(*) FILTER (WHERE ctrl_team_won = true) AS mc_false_alarm,
-      ROUND(AVG(CASE WHEN ctrl_team_won = false THEN 1.0 ELSE 0.0 END) * 100, 1) AS precision,
-      ROUND(AVG(margin_at_snapshot), 1) AS avg_margin,
+      ROUND(AVG(CASE WHEN ctrl_team_won = false THEN 1.0 ELSE 0.0 END) * 100::numeric, 1) AS precision,
+      ROUND(AVG(margin_at_snapshot)::numeric, 1) AS avg_margin,
       checkpoint
     FROM mc_backtest_results
     WHERE mc_win_prob < 0.50 AND floor_score > 0.60 AND xgb_win_prob > 0.60
@@ -2839,10 +2839,10 @@ async function phaseCrossCompounds(sql) {
         ELSE NULL
       END AS compound_state,
       COUNT(*) AS n,
-      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100, 1) AS ctrl_win_pct,
-      ROUND(AVG(final_margin), 1) AS avg_final_margin,
-      ROUND(AVG(margin_at_snapshot), 1) AS avg_margin_at_snap,
-      ROUND(AVG(4 - period + clock_sec / 720.0), 2) AS avg_quarters_remaining
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100::numeric, 1) AS ctrl_win_pct,
+      ROUND(AVG(final_margin)::numeric, 1) AS avg_final_margin,
+      ROUND(AVG(margin_at_snapshot)::numeric, 1) AS avg_margin_at_snap,
+      ROUND(AVG(4 - period + clock_sec / 720.0)::numeric, 2) AS avg_quarters_remaining
     FROM states
     WHERE CASE
         WHEN floor_score > 0.80 AND mc_win_prob > 0.80 AND xgb_win_prob > 0.80 THEN 'FORTRESS'
@@ -2867,19 +2867,19 @@ async function phaseCrossCompounds(sql) {
     SELECT
       'floor_high_alone' AS baseline,
       COUNT(*) AS n,
-      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100, 1) AS ctrl_win_pct
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100::numeric, 1) AS ctrl_win_pct
     FROM mc_backtest_results
     WHERE floor_score > 0.70 AND period >= 3 AND floor_score IS NOT NULL
     UNION ALL
     SELECT 'xgb_high_alone',
       COUNT(*),
-      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100, 1)
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100::numeric, 1)
     FROM mc_backtest_results
     WHERE xgb_win_prob > 0.70 AND period >= 3 AND xgb_win_prob IS NOT NULL
     UNION ALL
     SELECT 'mc_high_alone',
       COUNT(*),
-      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100, 1)
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100::numeric, 1)
     FROM mc_backtest_results
     WHERE mc_win_prob > 0.70 AND period >= 3 AND mc_win_prob IS NOT NULL
   `;
@@ -2903,8 +2903,8 @@ async function phaseCrossCompounds(sql) {
         ELSE NULL
       END AS velocity_bucket,
       COUNT(*) AS n,
-      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100, 1) AS ctrl_win_pct,
-      ROUND(AVG(margin_at_snapshot), 1) AS avg_margin
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100::numeric, 1) AS ctrl_win_pct,
+      ROUND(AVG(margin_at_snapshot)::numeric, 1) AS avg_margin
     FROM mv
     WHERE mdelta IS NOT NULL
     GROUP BY 1
@@ -3050,7 +3050,7 @@ async function phaseCrossReplay(sql) {
       COUNT(*) FILTER (WHERE ctrl_team_won = false) AS wrong_sends,
       COUNT(*) FILTER (WHERE ctrl_team_won = false AND mc_win_prob < 0.50) AS mc_would_warn,
       COUNT(*) FILTER (WHERE ctrl_team_won = false AND mc_win_prob < 0.40) AS mc_strong_warn,
-      ROUND(AVG(CASE WHEN ctrl_team_won = false THEN mc_win_prob END), 3) AS avg_mc_on_wrong
+      ROUND(AVG(CASE WHEN ctrl_team_won = false THEN mc_win_prob END)::numeric, 3) AS avg_mc_on_wrong
     FROM alert_mc
     WHERE rn = 1
     GROUP BY alert_type, alert_tier
