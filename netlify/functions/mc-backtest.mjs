@@ -3454,12 +3454,13 @@ async function phaseCrossTriggered(sql, url) {
     }
 
     // --- Record pattern + signal state ---
-    if (!agg.patterns[pattern]) agg.patterns[pattern] = { n: 0, right: 0, floor_at_trig: [], xgb_at_trig: [], floor_at_conf: [], xgb_at_conf: [], xgb_buckets: { high: {n:0,right:0}, med: {n:0,right:0}, low: {n:0,right:0} }, floor_buckets: { high: {n:0,right:0}, med: {n:0,right:0}, low: {n:0,right:0} } };
+    if (!agg.patterns[pattern]) agg.patterns[pattern] = { n: 0, right: 0, floor_at_trig: [], xgb_at_trig: [], floor_at_conf: [], xgb_at_conf: [], margin_at_trig: [], xgb_buckets: { high: {n:0,right:0}, med: {n:0,right:0}, low: {n:0,right:0} }, floor_buckets: { high: {n:0,right:0}, med: {n:0,right:0}, low: {n:0,right:0} }, margin_buckets: { tight: {n:0,right:0}, mid: {n:0,right:0}, comfortable: {n:0,right:0}, blowout: {n:0,right:0} } };
     var pat = agg.patterns[pattern];
     pat.n++;
     if (correct) pat.right++;
     if (trigFloor != null) pat.floor_at_trig.push(trigFloor);
     if (trigXgb != null) pat.xgb_at_trig.push(trigXgb);
+    pat.margin_at_trig.push(ctrlTrigMargin);
 
     // Per-pattern XGB/floor bucket precision — use confirm checkpoint for CLEAN/WAVE, trigger for others
     var bucketXgb = everConf && confirmXgb != null ? confirmXgb : trigXgb;
@@ -3474,6 +3475,10 @@ async function phaseCrossTriggered(sql, url) {
       pat.floor_buckets[fBucket].n++;
       if (correct) pat.floor_buckets[fBucket].right++;
     }
+    // Margin-at-trigger bucket
+    var mBucket = ctrlTrigMargin <= 3 ? 'tight' : ctrlTrigMargin <= 8 ? 'mid' : ctrlTrigMargin <= 15 ? 'comfortable' : 'blowout';
+    pat.margin_buckets[mBucket].n++;
+    if (correct) pat.margin_buckets[mBucket].right++;
 
     // Compound precision for games that reached CONFIRMED
     if (everConf) {
@@ -3548,6 +3553,13 @@ async function phaseCrossTriggered(sql, url) {
         med: { n: p.floor_buckets.med.n, precision: prec(p.floor_buckets.med) },
         low: { n: p.floor_buckets.low.n, precision: prec(p.floor_buckets.low) },
       },
+      by_margin: {
+        tight: { n: p.margin_buckets.tight.n, precision: prec(p.margin_buckets.tight), label: '≤3' },
+        mid: { n: p.margin_buckets.mid.n, precision: prec(p.margin_buckets.mid), label: '4-8' },
+        comfortable: { n: p.margin_buckets.comfortable.n, precision: prec(p.margin_buckets.comfortable), label: '9-15' },
+        blowout: { n: p.margin_buckets.blowout.n, precision: prec(p.margin_buckets.blowout), label: '16+' },
+      },
+      avg_margin_at_trigger: p.margin_at_trig.length > 0 ? avg(p.margin_at_trig) : null,
     };
   }
 
