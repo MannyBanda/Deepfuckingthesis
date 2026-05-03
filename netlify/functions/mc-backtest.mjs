@@ -3742,6 +3742,7 @@ async function phaseCrossTriggeredProd(sql, url) {
       } : null,
       games: p.games.map(function(g2) {
         return { date: g2.date, matchup: g2.matchup, correct: g2.correct,
+          ctrl_team: g2.ctrl_team, verdicts: g2.verdicts,
           trig_floor: g2.trig_floor, trig_xgb: g2.trig_xgb,
           conf_floor: g2.conf_floor, conf_xgb: g2.conf_xgb };
       }),
