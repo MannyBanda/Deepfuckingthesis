@@ -3018,6 +3018,134 @@ function computeAUC(data, field) {
 
 
 // ══════════════════════════════════════════════════════════════════════════════
+// PHASE: CROSS_DEEP — Targeted compound analysis:
+//   1. MARGIN_COMPRESS by period (Q3 vs Q4)
+//   2. MARGIN_COMPRESS + MC low stacking (does MC agreement amplify?)
+//   3. MC collapse as opponent BUY trigger (ctrl collapsing while leading)
+//   ?phase=cross_deep
+// ══════════════════════════════════════════════════════════════════════════════
+async function phaseCrossDeep(sql) {
+  // --- 1. MARGIN_COMPRESS by period ---
+  var marginByPeriod = await sql`
+    WITH mv AS (
+      SELECT *,
+        margin_at_snapshot - LAG(margin_at_snapshot, 2) OVER (PARTITION BY game_id ORDER BY period, clock_sec DESC) AS mdelta
+      FROM mc_backtest_results
+      WHERE mc_win_prob IS NOT NULL AND xgb_win_prob IS NOT NULL AND floor_score IS NOT NULL
+        AND period >= 3
+    )
+    SELECT period,
+      CASE
+        WHEN floor_score > 0.65 AND mc_win_prob < 0.55 AND mdelta <= -6 THEN 'MARGIN_COMPRESS'
+        WHEN floor_score > 0.70 AND mdelta <= -10 THEN 'MARGIN_COLLAPSE'
+        ELSE NULL
+      END AS state,
+      COUNT(*) AS n,
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100::numeric, 1) AS ctrl_win_pct,
+      ROUND(AVG(margin_at_snapshot)::numeric, 1) AS avg_margin,
+      ROUND(AVG(final_margin)::numeric, 1) AS avg_final
+    FROM mv
+    WHERE mdelta IS NOT NULL
+      AND (
+        (floor_score > 0.65 AND mc_win_prob < 0.55 AND mdelta <= -6)
+        OR (floor_score > 0.70 AND mdelta <= -10)
+      )
+    GROUP BY period, 2
+    ORDER BY 2, period
+  `;
+
+  // --- 2. MARGIN_COMPRESS + MC level stacking ---
+  var marginMCStack = await sql`
+    WITH mv AS (
+      SELECT *,
+        margin_at_snapshot - LAG(margin_at_snapshot, 2) OVER (PARTITION BY game_id ORDER BY period, clock_sec DESC) AS mdelta
+      FROM mc_backtest_results
+      WHERE mc_win_prob IS NOT NULL AND floor_score IS NOT NULL AND period >= 3
+    )
+    SELECT
+      CASE
+        WHEN mc_win_prob < 0.30 THEN 'MC_VERY_LOW'
+        WHEN mc_win_prob < 0.40 THEN 'MC_LOW'
+        WHEN mc_win_prob < 0.55 THEN 'MC_MED_LOW'
+        ELSE 'MC_NEUTRAL'
+      END AS mc_bucket,
+      COUNT(*) AS n,
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100::numeric, 1) AS ctrl_win_pct,
+      ROUND(AVG(margin_at_snapshot)::numeric, 1) AS avg_margin
+    FROM mv
+    WHERE mdelta IS NOT NULL AND mdelta <= -6 AND floor_score > 0.65
+    GROUP BY 1
+    ORDER BY ctrl_win_pct ASC
+  `;
+
+  // --- 3. MC collapse as opponent BUY trigger ---
+  // When ctrl team is LEADING but MC says they're collapsing,
+  // how often does the opponent come back and win?
+  // This is the "BUY opponent during collapse" scenario
+  var collapseBuy = await sql`
+    SELECT
+      CASE
+        WHEN mc_win_prob < 0.30 AND margin_at_snapshot > 0 THEN 'COLLAPSE_LEADING_STRONG'
+        WHEN mc_win_prob < 0.40 AND margin_at_snapshot > 0 THEN 'COLLAPSE_LEADING'
+        WHEN mc_win_prob < 0.50 AND margin_at_snapshot > 0 THEN 'EARLY_COLLAPSE_LEADING'
+        WHEN mc_win_prob < 0.40 AND margin_at_snapshot BETWEEN -5 AND 0 THEN 'COLLAPSE_TRAILING_CLOSE'
+        ELSE NULL
+      END AS scenario,
+      period,
+      COUNT(*) AS n,
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN 0.0 ELSE 1.0 END) * 100::numeric, 1) AS opponent_win_pct,
+      ROUND(AVG(margin_at_snapshot)::numeric, 1) AS avg_margin,
+      ROUND(AVG(CASE WHEN NOT ctrl_team_won THEN -final_margin ELSE NULL END)::numeric, 1) AS avg_opp_win_margin
+    FROM mc_backtest_results
+    WHERE mc_win_prob IS NOT NULL AND floor_score IS NOT NULL
+      AND floor_score > 0.60
+      AND period >= 3
+      AND (
+        (mc_win_prob < 0.50 AND margin_at_snapshot > 0)
+        OR (mc_win_prob < 0.40 AND margin_at_snapshot BETWEEN -5 AND 0)
+      )
+    GROUP BY 1, period
+    ORDER BY 1, period
+  `;
+
+  // --- 4. Floor state of OPPONENT when ctrl is collapsing ---
+  // Can we identify games where opponent also has structural quality?
+  // mc_backtest_results doesn't have opponent floor directly, but ctrl_team_won
+  // tells us the outcome. Check if ctrl losing + MC low + margin positive
+  // correlates differently when floor is still high vs dropping
+  var collapseByFloor = await sql`
+    SELECT
+      CASE
+        WHEN floor_score > 0.75 THEN 'FLOOR_ANCHORED_HIGH'
+        WHEN floor_score > 0.60 THEN 'FLOOR_MED'
+        WHEN floor_score > 0.45 THEN 'FLOOR_DROPPING'
+        ELSE 'FLOOR_LOW'
+      END AS floor_state,
+      COUNT(*) AS n,
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN 0.0 ELSE 1.0 END) * 100::numeric, 1) AS opponent_win_pct,
+      ROUND(AVG(margin_at_snapshot)::numeric, 1) AS avg_margin,
+      ROUND(AVG(mc_win_prob)::numeric, 3) AS avg_mc
+    FROM mc_backtest_results
+    WHERE mc_win_prob IS NOT NULL AND floor_score IS NOT NULL
+      AND mc_win_prob < 0.40
+      AND margin_at_snapshot > 0
+      AND period >= 3
+    GROUP BY 1
+    ORDER BY opponent_win_pct DESC
+  `;
+
+  return {
+    status: 'ok',
+    phase: 'cross_deep',
+    margin_compress_by_period: marginByPeriod,
+    margin_mc_stacking: marginMCStack,
+    collapse_buy_trigger: collapseBuy,
+    collapse_by_floor_state: collapseByFloor,
+  };
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
 // PHASE: CROSS_REPLAY — Match historical alerts against MC data (Test 6)
 //   ?phase=cross_replay
 // ══════════════════════════════════════════════════════════════════════════════
@@ -3826,6 +3954,7 @@ export default async function handler(req) {
       case 'cross_failure':      result = await phaseCrossFailure(sql, url); break;
       case 'cross_marginal':     result = await phaseCrossMarginal(sql); break;
       case 'cross_compounds':    result = await phaseCrossCompounds(sql); break;
+      case 'cross_deep':         result = await phaseCrossDeep(sql); break;
       case 'cross_temporal':     result = await phaseCrossTemporal(sql); break;
       case 'cross_replay':       result = await phaseCrossReplay(sql); break;
       case 'cross_triggered':    result = await phaseCrossTriggered(sql, url); break;
