@@ -382,6 +382,31 @@ input,textarea,select{font-size:16px!important;}
 .icon-btn{position:relative;}
 
 body.is-locked{overflow:hidden;}
+
+/* MC Investigation Strip */
+.mc-strip{padding:10px 12px;margin-bottom:14px;background:var(--bg-surface-2);border:1px solid var(--hairline);border-radius:var(--r-inner);}
+.mc-strip.collapse{border-color:var(--coral-border);background:var(--coral-dim);}
+.mc-strip.wave{border-color:var(--amber-border);background:var(--amber-dim);}
+.mc-strip.cleared{border-color:var(--green-border);}
+.mc-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+.mc-badge{font:600 9.5px/1 var(--sans);letter-spacing:0.08em;text-transform:uppercase;padding:3px 8px;border-radius:var(--r-pill);}
+.mc-badge.investigating{color:var(--amber);background:var(--amber-dim);border:1px solid var(--amber-border);}
+.mc-badge.collapse{color:var(--coral);background:var(--coral-dim);border:1px solid var(--coral-border);}
+.mc-badge.wave{color:var(--amber);background:var(--amber-dim);border:1px solid var(--amber-border);}
+.mc-badge.cleared{color:var(--green);background:var(--green-dim);border:1px solid var(--green-border);}
+.mc-trigger{font:9.5px var(--mono);color:var(--fg-dim);}
+.mc-body{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start;}
+.mc-wp-cell{padding:6px 10px;background:rgba(15,23,42,0.4);border-radius:6px;min-width:72px;border:1px solid rgba(148,163,184,0.08);}
+.mc-wp-label{font:600 8px/1 var(--sans);letter-spacing:0.08em;color:var(--fg-dim);margin-bottom:2px;}
+.mc-wp-val{font:500 16px var(--mono);font-feature-settings:"tnum";}
+.mc-meter{height:4px;background:var(--bg-surface-3);border-radius:2px;overflow:hidden;margin-top:4px;}
+.mc-meter-fill{height:100%;border-radius:2px;transition:width 0.4s ease;}
+.mc-verdict-row{display:flex;gap:4px;align-items:center;flex-wrap:wrap;padding-top:2px;}
+.mc-dot{width:8px;height:8px;border-radius:999px;flex-shrink:0;}
+.mc-context{font:9px var(--mono);color:var(--fg-dim);margin-top:6px;border-top:1px solid var(--hairline);padding-top:6px;}
+.mc-cleared-text{font:11px var(--sans);color:var(--fg-secondary);line-height:1.5;}
+@keyframes mc-pulse{0%,100%{opacity:1;}50%{opacity:0.3;}}
+.mc-pulse{animation:mc-pulse 1.8s ease-in-out infinite;}
 </style>
 </head>
 <body>
@@ -947,6 +972,53 @@ document.getElementById('swipe').addEventListener('scroll',function(){
   },80);
 });
 
+// ── MC INVESTIGATION STRIP ──
+function renderMCStrip(mc){
+  if(!mc||!mc.triggered)return '';
+  var pattern=mc.pattern;
+  // FALSE_ALARM: render nothing
+  if(pattern==='FALSE_ALARM')return '';
+  var verdictColors={INV:'rgba(148,163,184,0.4)',CONT:'var(--amber)',LIKELY:'var(--coral)',CONF:'#ef4444',NORM:'var(--green)'};
+  var verdictHollow={INV:true,NORM:true};
+  // Determine strip class, badge, icon, MC color
+  var stripCls='mc-strip',badgeCls='mc-badge investigating',icon='◉',label='INVESTIGATING',mcColor='var(--amber)';
+  if(pattern==='CLEAN'){stripCls='mc-strip collapse';badgeCls='mc-badge collapse';icon='▼';label='COLLAPSE';mcColor='var(--coral)';}
+  else if(pattern==='WAVE'){stripCls='mc-strip wave';badgeCls='mc-badge wave';icon='◈';label='OSCILLATING';mcColor='var(--amber)';}
+  else if(pattern==='NORMALIZED'){stripCls='mc-strip cleared';badgeCls='mc-badge cleared';icon='✓';label='CLEARED';mcColor='var(--green)';}
+  var trigCtx=pattern==='NORMALIZED'?'Q'+mc.trigger_period+' '+mc.trigger_clock+' → cleared':'since Q'+mc.trigger_period+' '+mc.trigger_clock+' · +'+(mc.trigger_margin||'?');
+  var h='<div class="'+stripCls+'">';
+  h+='<div class="mc-head"><div style="display:flex;align-items:center;gap:6px"><span style="color:'+mcColor+';font-size:11px'+((!pattern)?';animation:mc-pulse 1.8s ease-in-out infinite':'')+'">'+ icon+'</span><span class="'+badgeCls+'">'+label+'</span></div>';
+  h+='<span class="mc-trigger">'+esc(trigCtx)+'</span></div>';
+  if(pattern==='NORMALIZED'){
+    h+='<div class="mc-cleared-text">MC investigated structural shift — rates recovered. Hold validated.</div>';
+  } else {
+    h+='<div class="mc-body">';
+    var mcPct=mc.current_mc!=null?(mc.current_mc*100).toFixed(1)+'%':'--';
+    h+='<div class="mc-wp-cell"><div class="mc-wp-label">MC</div><div class="mc-wp-val" style="color:'+mcColor+'">'+mcPct+'</div>';
+    h+='<div class="mc-meter"><div class="mc-meter-fill" style="width:'+Math.max(2,(mc.current_mc||0)*100)+'%;background:'+mcColor+'"></div></div></div>';
+    // Verdict dots
+    h+='<div style="padding-top:2px"><div class="mc-verdict-row">';
+    var vds=mc.verdicts||[];
+    for(var vi=0;vi<vds.length;vi++){
+      var vc=verdictColors[vds[vi]]||'var(--fg-dim)';
+      var hollow=verdictHollow[vds[vi]];
+      h+='<div class="mc-dot" style="'+(hollow?'background:transparent;border:1.5px solid '+vc:'background:'+vc+';border:1.5px solid '+vc)+'" title="'+vds[vi]+'"></div>';
+    }
+    if(!pattern){for(var pi=0;pi<3;pi++)h+='<div class="mc-dot" style="border:1px dashed rgba(148,163,184,0.15);background:transparent"></div>';}
+    h+='</div></div></div>';
+    if(pattern==='CLEAN'){
+      var mg=mc.trigger_margin||0;
+      var mLabel=mg<=3?'tight':mg<=8?'mid':mg<=15?'comf':'blow';
+      var mPrec=mg<=3?'81%':mg<=8?'72%':mg<=15?'63%':'—';
+      h+='<div class="mc-context">XGB: '+(mc.trigger_xgb!=null?Math.round(mc.trigger_xgb*100)+'%':'?')+' · Margin: +'+mg+' → '+mLabel+' ('+mPrec+')';
+      if(mg<=3)h+='<span style="color:var(--coral);margin-left:4px">⚡ highest conviction</span>';
+      h+='</div>';
+    }
+  }
+  h+='</div>';
+  return h;
+}
+
 function renderCard(id){
   var el=document.getElementById('card-'+id);if(!el)return;
   var g=games.find(function(x){return x.id===id;});if(!g)return;
@@ -1190,6 +1262,11 @@ function renderCard(id){
           html+='<span class="window-cell-val">'+esc(p.controlTeam||'')+' '+p.score.toFixed(2)+'<span class="window-cell-delta '+pCls+'">'+pSign+pDelta.toFixed(2)+'</span></span></div>';
         }
         html+='</div>';
+      }
+
+      // MC Investigation strip (between window grid and indicator strip)
+      if(cs._serverMC&&cs._serverMC.triggered){
+        html+=renderMCStrip(cs._serverMC);
       }
 
       // Indicator strip (I1-I5) — tappable for evidence
@@ -1649,6 +1726,16 @@ async function hydrateFromServerSnapshots(gameId){
       _gRef.homePoints=latest.home_pts;_gRef.awayPoints=latest.away_pts;
     }
     console.log('[DB] Snapshots hydrated for',gameId,':',usable.length,'entries');
+
+    // MC investigation state from live_tracking
+    try{
+      var ltResp=await fetch(FN+'db-api?action=get_live_tracking&game_id='+encodeURIComponent(gameId));
+      if(ltResp.ok){var ltData=await ltResp.json();var ltObj=ltData.live_tracking;
+        if(ltObj&&typeof ltObj==='string')try{ltObj=JSON.parse(ltObj);}catch(e){}
+        if(ltObj&&ltObj.mc)cs._serverMC=ltObj.mc;
+      }
+    }catch(e){}
+
     renderCard(gameId);
   }catch(e){console.warn('[DB] Snapshot hydration failed:',e.message);}
 }
