@@ -3317,12 +3317,26 @@ async function phaseCrossTriggered(sql, url) {
     }
 
     // --- Record pattern + signal state ---
-    if (!agg.patterns[pattern]) agg.patterns[pattern] = { n: 0, right: 0, floor_at_trig: [], xgb_at_trig: [], floor_at_conf: [], xgb_at_conf: [] };
+    if (!agg.patterns[pattern]) agg.patterns[pattern] = { n: 0, right: 0, floor_at_trig: [], xgb_at_trig: [], floor_at_conf: [], xgb_at_conf: [], xgb_buckets: { high: {n:0,right:0}, med: {n:0,right:0}, low: {n:0,right:0} }, floor_buckets: { high: {n:0,right:0}, med: {n:0,right:0}, low: {n:0,right:0} } };
     var pat = agg.patterns[pattern];
     pat.n++;
     if (correct) pat.right++;
     if (trigFloor != null) pat.floor_at_trig.push(trigFloor);
     if (trigXgb != null) pat.xgb_at_trig.push(trigXgb);
+
+    // Per-pattern XGB/floor bucket precision — use confirm checkpoint for CLEAN/WAVE, trigger for others
+    var bucketXgb = everConf && confirmXgb != null ? confirmXgb : trigXgb;
+    var bucketFloor = everConf && confirmFloor != null ? confirmFloor : trigFloor;
+    if (bucketXgb != null) {
+      var xBucket = bucketXgb > 0.70 ? 'high' : bucketXgb >= 0.50 ? 'med' : 'low';
+      pat.xgb_buckets[xBucket].n++;
+      if (correct) pat.xgb_buckets[xBucket].right++;
+    }
+    if (bucketFloor != null) {
+      var fBucket = bucketFloor > 0.70 ? 'high' : bucketFloor >= 0.50 ? 'med' : 'low';
+      pat.floor_buckets[fBucket].n++;
+      if (correct) pat.floor_buckets[fBucket].right++;
+    }
 
     // Compound precision for games that reached CONFIRMED
     if (everConf) {
@@ -3387,6 +3401,16 @@ async function phaseCrossTriggered(sql, url) {
         floor_above_70: pct(p.floor_at_conf, 0.70),
         xgb_above_70: pct(p.xgb_at_conf, 0.70),
       } : null,
+      by_xgb: {
+        high: { n: p.xgb_buckets.high.n, precision: prec(p.xgb_buckets.high) },
+        med: { n: p.xgb_buckets.med.n, precision: prec(p.xgb_buckets.med) },
+        low: { n: p.xgb_buckets.low.n, precision: prec(p.xgb_buckets.low) },
+      },
+      by_floor: {
+        high: { n: p.floor_buckets.high.n, precision: prec(p.floor_buckets.high) },
+        med: { n: p.floor_buckets.med.n, precision: prec(p.floor_buckets.med) },
+        low: { n: p.floor_buckets.low.n, precision: prec(p.floor_buckets.low) },
+      },
     };
   }
 
