@@ -3450,6 +3450,339 @@ async function phaseCrossTriggered(sql, url) {
 
 
 // ══════════════════════════════════════════════════════════════════════════════
+// PHASE: CROSS_TRIGGERED_PROD — Triggered MC cross-signal on PRODUCTION snapshots
+//   Uses minute-level production data (234 games). Combined canary (floor-MC
+//   div>0.15 OR MC<0.70) with 20-poss window. Post-trigger conviction ramp +
+//   CLEAN/WAVE/NORMALIZED/FALSE_ALARM pattern classification. Floor + XGB
+//   enrichment at trigger, each verdict, and confirm.
+//   ?phase=cross_triggered_prod&n=20&offset=0&from=2026-03-17&to=2026-05-02
+// ══════════════════════════════════════════════════════════════════════════════
+async function phaseCrossTriggeredProd(sql, url) {
+  var fromDate = url.searchParams.get('from') || '2026-03-17';
+  var toDate = url.searchParams.get('to') || '2026-05-02';
+  var batchSize = parseInt(url.searchParams.get('n') || '20');
+  var offset = parseInt(url.searchParams.get('offset') || '0');
+  var canaryThreshold = parseFloat(url.searchParams.get('canary') || '0.15');
+  var mcAbsoluteThreshold = parseFloat(url.searchParams.get('mc_abs') || '0.70');
+  var simCount = parseInt(url.searchParams.get('sims') || '500');
+  var regressionCap = parseFloat(url.searchParams.get('rc') || '0.60');
+  var minPeriod = parseInt(url.searchParams.get('min_period') || '3');
+  var startTime = Date.now();
+
+  var games = await sql`
+    SELECT id, date, home_alias, away_alias, home_pts, away_pts, winner
+    FROM games
+    WHERE date >= ${fromDate} AND date <= ${toDate}
+      AND winner IS NOT NULL
+    ORDER BY date ASC, id ASC
+    LIMIT ${batchSize} OFFSET ${offset}
+  `;
+  var totalGames = await sql`
+    SELECT COUNT(*) AS n FROM games
+    WHERE date >= ${fromDate} AND date <= ${toDate} AND winner IS NOT NULL
+  `;
+
+  // Aggregation
+  var agg = {
+    total: 0, with_snaps: 0, triggered: 0,
+    patterns: {},
+    trigger_signals: { floors: [], xgbs: [] },
+    confirm_signals: { floors: [], xgbs: [] },
+    compounds: {
+      conf_all: { n: 0, right: 0 },
+      conf_floor_high: { n: 0, right: 0 },
+      conf_floor_high_xgb_high: { n: 0, right: 0 },
+      conf_xgb_low: { n: 0, right: 0 },
+      conf_xgb_high: { n: 0, right: 0 },
+    },
+  };
+  var gameSummaries = [];
+
+  for (var gi = 0; gi < games.length; gi++) {
+    if (Date.now() - startTime > 92000) break;
+    var g = games[gi];
+    agg.total++;
+
+    // Pull production snapshots
+    var snaps = await sql`
+      SELECT period, clock, raw_stats_json, floor_score, floor_team,
+             xgb_win_prob, home_pts, away_pts
+      FROM snapshots
+      WHERE game_id = ${g.id} AND source = 'server' AND raw_stats_json IS NOT NULL
+      ORDER BY period ASC, clock DESC
+    `;
+    if (snaps.length < 10) continue;
+    agg.with_snaps++;
+
+    // Parse + dedup snapshots
+    var parsed = [];
+    var seen = {};
+    for (var si = 0; si < snaps.length; si++) {
+      var sk = snaps[si].period + '_' + snaps[si].clock + '_' + snaps[si].home_pts;
+      if (seen[sk]) continue;
+      seen[sk] = true;
+      var raw = typeof snaps[si].raw_stats_json === 'string' ? JSON.parse(snaps[si].raw_stats_json) : snaps[si].raw_stats_json;
+      var mc_parsed = parseSnapForMC(raw);
+      if (mc_parsed) parsed.push({ snap: snaps[si], stats: mc_parsed });
+    }
+
+    // --- Phase 1: Walk forward with 20-poss canary + combined trigger ---
+    var triggerIdx = null;
+
+    for (var ci = 0; ci < parsed.length; ci++) {
+      var cs = parsed[ci].snap;
+      if (cs.period < minPeriod) continue;
+
+      var canaryRates = possessionWindowRates(
+        parsed.map(function(p) { return p.stats; }), ci, 20, regressionCap
+      );
+      if (!canaryRates || canaryRates.home._windowFGA < 5) continue;
+
+      var clockS = 360;
+      try { var pp = String(cs.clock||'6:00').split(':'); clockS = parseInt(pp[0])*60+parseInt(pp[1]||0); } catch(e){}
+      var rp = estimateRemainingPoss(parsed[ci].stats.home, parsed[ci].stats.away, cs.period, clockS);
+      if (rp < 1) continue;
+
+      var ctrlHome = cs.floor_team === g.home_alias;
+      var canaryMC = runMonteCarloSim(canaryRates.home, canaryRates.away,
+        cs.home_pts||0, cs.away_pts||0, rp,
+        { simCount: 300, ctrlTeam: ctrlHome ? 'home' : 'away' });
+
+      // Combined canary: divergence from floor OR absolute MC low
+      var floorVal = cs.floor_score;
+      var canaryFired = false;
+      if (floorVal != null && (floorVal - canaryMC.winProb) > canaryThreshold) canaryFired = true;
+      if (canaryMC.winProb < mcAbsoluteThreshold) canaryFired = true;
+
+      if (canaryFired) { triggerIdx = ci; break; }
+    }
+
+    if (triggerIdx === null) {
+      gameSummaries.push({
+        date: g.date, matchup: (g.away_alias||'?')+'@'+(g.home_alias||'?'),
+        triggered: false, ctrl_won: null,
+      });
+      continue;
+    }
+
+    agg.triggered++;
+    var trigSnap = parsed[triggerIdx].snap;
+    var trigStats = parsed[triggerIdx].stats;
+    var ctrlTeam = trigSnap.floor_team;
+    var ctrlIsHome2 = ctrlTeam === g.home_alias;
+    var ctrlWon = ctrlTeam === g.winner;
+    var correct = !ctrlWon; // MC says collapse → correct if ctrl LOST
+
+    // Capture floor + XGB at trigger
+    var trigFloor = trigSnap.floor_score;
+    var trigXgb = trigSnap.xgb_win_prob;
+    if (trigFloor != null) agg.trigger_signals.floors.push(trigFloor);
+    if (trigXgb != null) agg.trigger_signals.xgbs.push(trigXgb);
+
+    // --- Phase 2: Post-trigger investigation with conviction ramp ---
+    var verdicts = [];
+    var verdictSignals = []; // floor+XGB at each verdict checkpoint
+    var confirmFloor = null, confirmXgb = null;
+    var firstConfIdx = -1;
+
+    for (var ti = triggerIdx + 1; ti < parsed.length; ti++) {
+      var ts2 = parsed[ti].snap;
+      var tc = parsed[ti].stats;
+
+      // Post-trigger diff
+      var postHomeFGA = tc.home.fga - trigStats.home.fga;
+      var postAwayFGA = tc.away.fga - trigStats.away.fga;
+      var postPoss = Math.round(((postHomeFGA + (tc.home.to - trigStats.home.to)) +
+                                  (postAwayFGA + (tc.away.to - trigStats.away.to))) / 2);
+      if (postPoss < 4) continue;
+
+      var hR = diffToRates(tc.home, trigStats.home, 0.36, regressionCap);
+      var aR = diffToRates(tc.away, trigStats.away, 0.36, regressionCap);
+      if (!hR || !aR) continue;
+
+      var clockS2 = 360;
+      try { var pp2 = String(ts2.clock||'6:00').split(':'); clockS2 = parseInt(pp2[0])*60+parseInt(pp2[1]||0); } catch(e){}
+      var rp2 = estimateRemainingPoss(tc.home, tc.away, ts2.period, clockS2);
+      if (rp2 < 1) continue;
+
+      var mc2 = runMonteCarloSim(hR, aR,
+        ts2.home_pts||0, ts2.away_pts||0, rp2,
+        { simCount: simCount, ctrlTeam: ctrlIsHome2 ? 'home' : 'away' });
+
+      var v;
+      if (postPoss < 8) v = 'INV';
+      else if (mc2.winProb > 0.60) v = 'NORM';
+      else if (mc2.winProb > 0.40) v = 'CONT';
+      else if (mc2.winProb > 0.25) v = 'LIKELY';
+      else v = 'CONF';
+
+      verdicts.push(v);
+      verdictSignals.push({ v: v, floor: ts2.floor_score, xgb: ts2.xgb_win_prob, mc: mc2.winProb, postPoss: postPoss });
+
+      if (v === 'CONF' && firstConfIdx < 0) {
+        firstConfIdx = verdicts.length - 1;
+        confirmFloor = ts2.floor_score;
+        confirmXgb = ts2.xgb_win_prob;
+      }
+    }
+
+    // --- Pattern classification (identical to triggered_replay) ---
+    var everConf = verdicts.indexOf('CONF') >= 0;
+    var everLikely = verdicts.indexOf('LIKELY') >= 0 || everConf;
+    var pattern;
+    if (!everLikely) {
+      pattern = 'FALSE_ALARM';
+    } else {
+      var firstAlarmIdx = -1;
+      for (var si2 = 0; si2 < verdicts.length; si2++) {
+        if (verdicts[si2] === 'CONF' || verdicts[si2] === 'LIKELY') { firstAlarmIdx = si2; break; }
+      }
+      var postAlarm = verdicts.slice(firstAlarmIdx);
+      var hasNorm = postAlarm.indexOf('NORM') >= 0;
+      if (!hasNorm) {
+        pattern = 'CLEAN';
+      } else {
+        var normIdx2 = postAlarm.indexOf('NORM');
+        var postNorm = postAlarm.slice(normIdx2);
+        var reAlarmed = postNorm.some(function(v2) { return v2 === 'CONF' || v2 === 'LIKELY'; });
+        pattern = reAlarmed ? 'WAVE' : 'NORMALIZED';
+      }
+    }
+
+    // --- Record pattern + signal state ---
+    if (!agg.patterns[pattern]) agg.patterns[pattern] = {
+      n: 0, right: 0,
+      trig_floors: [], trig_xgbs: [],
+      conf_floors: [], conf_xgbs: [],
+      games: [],
+    };
+    var pat = agg.patterns[pattern];
+    pat.n++;
+    if (correct) pat.right++;
+    if (trigFloor != null) pat.trig_floors.push(trigFloor);
+    if (trigXgb != null) pat.trig_xgbs.push(trigXgb);
+
+    // --- Compound precision for CONFIRMED games ---
+    if (everConf) {
+      var cfFloor = confirmFloor != null ? confirmFloor : trigFloor;
+      var cfXgb = confirmXgb != null ? confirmXgb : trigXgb;
+
+      if (cfFloor != null) {
+        agg.confirm_signals.floors.push(cfFloor);
+        pat.conf_floors.push(cfFloor);
+      }
+      if (cfXgb != null) {
+        agg.confirm_signals.xgbs.push(cfXgb);
+        pat.conf_xgbs.push(cfXgb);
+      }
+
+      agg.compounds.conf_all.n++;
+      if (correct) agg.compounds.conf_all.right++;
+
+      if (cfFloor != null && cfFloor > 0.70) {
+        agg.compounds.conf_floor_high.n++;
+        if (correct) agg.compounds.conf_floor_high.right++;
+      }
+      if (cfFloor != null && cfXgb != null && cfFloor > 0.70 && cfXgb > 0.70) {
+        agg.compounds.conf_floor_high_xgb_high.n++;
+        if (correct) agg.compounds.conf_floor_high_xgb_high.right++;
+      }
+      if (cfXgb != null && cfXgb < 0.50) {
+        agg.compounds.conf_xgb_low.n++;
+        if (correct) agg.compounds.conf_xgb_low.right++;
+      }
+      if (cfXgb != null && cfXgb > 0.70) {
+        agg.compounds.conf_xgb_high.n++;
+        if (correct) agg.compounds.conf_xgb_high.right++;
+      }
+    }
+
+    // Game summary
+    pat.games.push({
+      date: g.date,
+      matchup: (g.away_alias||'?')+'@'+(g.home_alias||'?'),
+      pattern: pattern,
+      correct: correct,
+      ctrl_team: ctrlTeam,
+      trig_floor: trigFloor, trig_xgb: trigXgb != null ? Math.round(trigXgb*1000)/1000 : null,
+      conf_floor: confirmFloor, conf_xgb: confirmXgb != null ? Math.round(confirmXgb*1000)/1000 : null,
+      verdicts: verdicts.join(','),
+    });
+
+    gameSummaries.push({
+      date: g.date,
+      matchup: (g.away_alias||'?')+'@'+(g.home_alias||'?'),
+      triggered: true, correct: correct,
+      pattern: pattern,
+      ctrl_team: ctrlTeam,
+      trig_floor: trigFloor, trig_xgb: trigXgb != null ? Math.round(trigXgb*1000)/1000 : null,
+      conf_floor: confirmFloor, conf_xgb: confirmXgb != null ? Math.round(confirmXgb*1000)/1000 : null,
+    });
+  }
+
+  // Summary helpers
+  function avg(arr) { return arr.length > 0 ? Math.round(arr.reduce(function(s,v){return s+v;},0)/arr.length*1000)/1000 : null; }
+  function pctAbove(arr, t) { return arr.length > 0 ? Math.round(arr.filter(function(v){return v>t;}).length/arr.length*1000)/10 : null; }
+  function prec(obj) { return obj.n > 0 ? Math.round(obj.right/obj.n*1000)/10 : null; }
+
+  var patternSummary = {};
+  for (var pk of Object.keys(agg.patterns)) {
+    var p = agg.patterns[pk];
+    patternSummary[pk] = {
+      n: p.n, right: p.right, precision: prec(p),
+      at_trigger: {
+        avg_floor: avg(p.trig_floors), avg_xgb: avg(p.trig_xgbs),
+        floor_above_70: pctAbove(p.trig_floors, 0.70),
+        xgb_above_70: pctAbove(p.trig_xgbs, 0.70),
+      },
+      at_confirm: p.conf_floors.length > 0 ? {
+        avg_floor: avg(p.conf_floors), avg_xgb: avg(p.conf_xgbs),
+        floor_above_70: pctAbove(p.conf_floors, 0.70),
+        xgb_above_70: pctAbove(p.conf_xgbs, 0.70),
+      } : null,
+      games: p.games.map(function(g2) {
+        return { date: g2.date, matchup: g2.matchup, correct: g2.correct,
+          trig_floor: g2.trig_floor, trig_xgb: g2.trig_xgb,
+          conf_floor: g2.conf_floor, conf_xgb: g2.conf_xgb };
+      }),
+    };
+  }
+
+  return {
+    status: 'ok',
+    phase: 'cross_triggered_prod',
+    dateRange: fromDate + ' to ' + toDate,
+    canary: { mode: 'combined', div_threshold: canaryThreshold, mc_absolute: mcAbsoluteThreshold },
+    total_games: agg.total,
+    with_snapshots: agg.with_snaps,
+    triggered: agg.triggered,
+    at_trigger_overall: {
+      avg_floor: avg(agg.trigger_signals.floors), avg_xgb: avg(agg.trigger_signals.xgbs),
+      floor_above_70: pctAbove(agg.trigger_signals.floors, 0.70),
+      xgb_above_70: pctAbove(agg.trigger_signals.xgbs, 0.70),
+    },
+    at_confirm_overall: {
+      avg_floor: avg(agg.confirm_signals.floors), avg_xgb: avg(agg.confirm_signals.xgbs),
+      floor_above_70: pctAbove(agg.confirm_signals.floors, 0.70),
+      xgb_above_70: pctAbove(agg.confirm_signals.xgbs, 0.70),
+    },
+    patterns: patternSummary,
+    compound_precision: {
+      confirmed_all: { n: agg.compounds.conf_all.n, precision: prec(agg.compounds.conf_all), label: 'MC CONFIRMED (all)' },
+      confirmed_floor_high: { n: agg.compounds.conf_floor_high.n, precision: prec(agg.compounds.conf_floor_high), label: 'MC CONFIRMED + floor>0.70' },
+      confirmed_floor_high_xgb_high: { n: agg.compounds.conf_floor_high_xgb_high.n, precision: prec(agg.compounds.conf_floor_high_xgb_high), label: 'MC CONFIRMED + floor>0.70 + xgb>0.70' },
+      confirmed_xgb_low: { n: agg.compounds.conf_xgb_low.n, precision: prec(agg.compounds.conf_xgb_low), label: 'MC CONFIRMED + xgb<0.50 (signals agree)' },
+      confirmed_xgb_high: { n: agg.compounds.conf_xgb_high.n, precision: prec(agg.compounds.conf_xgb_high), label: 'MC CONFIRMED + xgb>0.70 (MC vs XGB disagree)' },
+    },
+    nextStep: offset + batchSize < Number(totalGames[0]?.n || 0)
+      ? '?phase=cross_triggered_prod&n=' + batchSize + '&offset=' + (offset + batchSize)
+        + '&from=' + fromDate + '&to=' + toDate
+      : 'COMPLETE',
+  };
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
 
 export default async function handler(req) {
   var url = new URL(req.url, 'https://x.com');
@@ -3485,6 +3818,7 @@ export default async function handler(req) {
       case 'cross_temporal':     result = await phaseCrossTemporal(sql); break;
       case 'cross_replay':       result = await phaseCrossReplay(sql); break;
       case 'cross_triggered':    result = await phaseCrossTriggered(sql, url); break;
+      case 'cross_triggered_prod': result = await phaseCrossTriggeredProd(sql, url); break;
       case 'status': {
         var count = await sql`SELECT COUNT(*) AS n FROM mc_backtest_results`;
         var games = await sql`SELECT COUNT(DISTINCT game_id) AS n FROM mc_backtest_results`;
