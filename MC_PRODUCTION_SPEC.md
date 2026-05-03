@@ -541,8 +541,139 @@ CREATE TABLE IF NOT EXISTS clutch_profiles (
 12. Update POSITION_TYPES + readable maps
 13. Add snapshots.mc_win_prob column
 
-### Phase C: Dashboard (deferred)
-14. MC strip on game cards (badge: Investigating / COLLAPSE / Oscillating / Cleared)
+### Phase C: Dashboard MC Graphic (v3.html)
+
+MC investigation renders inside the **Structural Read** section of each game card, between the window grid (QTR/PBP) and the indicator strip (I1-I5). It uses the existing visual language: window-cell containers, color-coded badges, monospace values.
+
+#### Display States
+
+**Not active (Q1-Q2, or Q3+ with no canary fire):** Nothing rendered. No placeholder. Clean card.
+
+**FALSE_ALARM (canary fired, verdicts never reached LIKELY/CONF):** Nothing rendered. Showing it adds noise with no actionable information.
+
+**INVESTIGATING (canary fired, pattern not yet classified):**
+
+```
+┌─────────────────────────────────────────────────┐
+│  ◉ MC INVESTIGATING          since Q3 8:42 · +7 │
+│  ┌──────────┐  ┌──────────────────────────────┐ │
+│  │ MC  38.2%│  │ ○ ○ ○ ·  ·  ·               │ │
+│  │ ▓▓▓▓░░░░ │  │ INV INV INV                  │ │
+│  └──────────┘  └──────────────────────────────┘ │
+└─────────────────────────────────────────────────┘
+```
+
+- Pulsing amber dot (◉) with `animation: pulse` — same as live chip indicator
+- "MC INVESTIGATING" label in amber, mono 9.5px uppercase
+- Trigger context right-aligned: "since Q{period} {clock} · +{margin}" in dim mono
+- Left cell: MC win prob (mono 14px) + mini meter bar (same as floor meter, 4px tall)
+- Right cell: verdict dots — gray circles for INV, building left to right as verdicts arrive
+- Container: `window-cell` styling (bg-surface-2, hairline border, r-inner radius)
+
+**CLEAN — Structural Collapse (highest visual weight):**
+
+```
+┌─────────────────────────────────────────────────┐
+│  ▼ COLLAPSE                  since Q3 8:42 · +7 │
+│  ┌──────────┐  ┌──────────────────────────────┐ │
+│  │ MC   4.2%│  │ ○ ○ ◆ ◆ ● ● ●              │ │
+│  │ ▓░░░░░░░ │  │ INV  CONT LIKELY  CONF      │ │
+│  └──────────┘  └──────────────────────────────┘ │
+│  XGB: 92% · Margin: +3 → tight (81%)           │
+└─────────────────────────────────────────────────┘
+```
+
+- Coral down-arrow (▼) with "COLLAPSE" badge — coral color, coral-dim bg, coral-border
+- MC win prob in coral (large, prominent)
+- Verdict timeline: gray (INV) → amber (CONT) → coral filled (LIKELY/CONF)
+- Bottom context line (mono 9px, dim): XGB state at trigger, margin qualifier with precision
+- Container border changes to coral-border (1px solid) — visually pops from the card
+- If graduated position exists, append: "· Active {rank}-rank on {team}"
+
+**WAVE — Oscillating Collapse:**
+
+```
+┌─────────────────────────────────────────────────┐
+│  ◈ OSCILLATING               since Q3 8:42 · +5 │
+│  ┌──────────┐  ┌──────────────────────────────┐ │
+│  │ MC  31.7%│  │ ○ ◆ ● ● ◇ ◇ ◆ ●            │ │
+│  │ ▓▓▓░░░░░ │  │ INV CONT CONF NORM CONT CONF │ │
+│  └──────────┘  └──────────────────────────────┘ │
+└─────────────────────────────────────────────────┘
+```
+
+- Amber diamond (◈) with "OSCILLATING" badge — amber color
+- Verdict timeline shows the wave pattern: coral → green recovery → coral again
+- Green circles (◇) for NORM verdicts make the oscillation visually obvious
+- Container border: amber-border
+
+**NORMALIZED — Investigated & Cleared:**
+
+```
+┌─────────────────────────────────────────────────┐
+│  ✓ CLEARED                   Q3 8:42 → Q3 2:15  │
+│  MC investigated structural shift — rates        │
+│  recovered. Hold validated.                      │
+└─────────────────────────────────────────────────┘
+```
+
+- Green checkmark (✓) with "CLEARED" badge — green color, green-dim bg
+- Single line of context (mono 10px): investigation window Q{start} → Q{end}
+- Brief explanation (sans 11px, fg-secondary): "MC investigated structural shift — rates recovered. Hold validated."
+- Compact: no meter, no verdict dots. The investigation is over and positive.
+- Container: subtle green-border (low visual weight — positive signal shouldn't dominate)
+
+#### Verdict Timeline Implementation
+
+The verdict timeline is the visual signature of the MC graphic. Each verdict is a small circle (8px) with color:
+
+| Verdict | Color | Shape | Meaning |
+|---------|-------|-------|---------|
+| INV | `var(--fg-dim)` | ○ hollow | Insufficient data |
+| CONT | `var(--amber)` | ◆ filled | Contested |
+| LIKELY | `var(--coral)` | ● filled | Probable collapse |
+| CONF | `var(--coral)` | ● filled (brighter) | Confirmed collapse |
+| NORM | `var(--green)` | ◇ hollow | Rates recovered |
+
+Dots are 8px circles with 4px gaps, rendered left-to-right as verdicts arrive. This creates a visual "heartbeat" — a healthy investigation has gray→green (normalized), a collapse has gray→amber→coral (worsening), and a wave shows coral→green→coral (oscillation).
+
+```css
+.mc-strip { padding: 10px 12px; margin-bottom: 14px; background: var(--bg-surface-2);
+  border: 1px solid var(--hairline); border-radius: var(--r-inner); }
+.mc-strip.collapse { border-color: var(--coral-border); background: var(--coral-dim); }
+.mc-strip.wave { border-color: var(--amber-border); background: var(--amber-dim); }
+.mc-strip.cleared { border-color: var(--green-border); }
+.mc-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.mc-badge { font: 600 9.5px/1 var(--sans); letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 3px 8px; border-radius: var(--r-pill); }
+.mc-badge.investigating { color: var(--amber); background: var(--amber-dim); border: 1px solid var(--amber-border); }
+.mc-badge.collapse { color: var(--coral); background: var(--coral-dim); border: 1px solid var(--coral-border); }
+.mc-badge.wave { color: var(--amber); background: var(--amber-dim); border: 1px solid var(--amber-border); }
+.mc-badge.cleared { color: var(--green); background: var(--green-dim); border: 1px solid var(--green-border); }
+.mc-trigger { font: 9.5px var(--mono); color: var(--fg-dim); }
+.mc-body { display: grid; grid-template-columns: auto 1fr; gap: 8px; }
+.mc-wp { font: 500 14px var(--mono); font-feature-settings: "tnum"; }
+.mc-meter { height: 4px; background: var(--bg-surface-3); border-radius: 2px; overflow: hidden; margin-top: 4px; }
+.mc-verdict-row { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; padding-top: 2px; }
+.mc-dot { width: 8px; height: 8px; border-radius: 999px; }
+.mc-context { font: 9px var(--mono); color: var(--fg-dim); margin-top: 6px; }
+```
+
+#### Data Flow: Server → Client
+
+`lt.mc` state persists in `live_tracking` JSONB. The client receives it via snapshot polling. The `renderCard` function reads `cs._serverMC` (hydrated from `lt.mc` on the latest snapshot) and renders the appropriate state.
+
+```javascript
+// In snapshot hydration (where lt.* fields are read)
+if (lt.mc) cs._serverMC = lt.mc;
+
+// In renderCard, after window grid, before indicator strip:
+if (cs._serverMC && cs._serverMC.triggered) {
+  html += renderMCStrip(cs._serverMC, g, cs);
+}
+```
+
+#### ~Lines: 80 (CSS) + 60 (renderMCStrip function) = ~140 lines in v3.html
 
 Phase A ships first (can deploy independently — no functional change, just data collection). Phase B ships as a single deploy. Phase C follows.
 
@@ -563,6 +694,16 @@ Phase A ships first (can deploy independently — no functional change, just dat
 - Confirm MC_COLLAPSE ntfy fires with correct body
 - Confirm agent sees MC INVESTIGATION context
 - Compare MC regression: team-specific baseline vs old flat 36%
+
+### Phase C Verification
+- MC strip renders in INVESTIGATING state during active canary (amber pulsing dot)
+- CLEAN pattern renders coral container with verdict timeline
+- WAVE renders amber container with oscillation visible in dot colors
+- NORMALIZED renders compact green "CLEARED" strip
+- FALSE_ALARM renders nothing (no noise)
+- Verdict dots update in real-time as new snapshots arrive
+- Margin qualifier + XGB state show in context line for CLEAN
+- Strip disappears cleanly when MC state resets between games
 
 ### Regression
 - PBP window computation unchanged
