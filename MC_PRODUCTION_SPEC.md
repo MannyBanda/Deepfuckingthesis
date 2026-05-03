@@ -340,6 +340,15 @@ mcInvestigation: lt.mc ? {
       anchored to stale data, but MC is not infallible here. Frame as high risk,
       not certainty. Do NOT auto-override XGB.
 
+  MARGIN QUALIFIER — ctrl lead at trigger (validated, n=292):
+    • Tight (≤3):      81.0% precision (n=179). Highest conviction.
+    • Mid (4-8):       72.2% precision (n=79). Standard CLEAN.
+    • Comfortable (9-15): 63.3% precision (n=30). Cushion absorbs decay.
+    • Blowout (16+):   50.0% precision (n=4). Ignore — noise.
+    Average CLEAN trigger margin is only +1.7. Most collapses fire in tight games.
+    Agent should weight margin into confidence: CLEAN at +2 is much more urgent
+    than CLEAN at +12.
+
   Floor state at trigger is weakly discriminative (77.6% HIGH vs 75.6% MED) —
   floor does not meaningfully change CLEAN precision. This confirms floor is
   the anchored signal MC was designed to catch.
@@ -420,6 +429,7 @@ Q3 compression is more dangerous — full quarter remains for opponent to finish
 2. **Pattern classification is essential.** Without CLEAN/WAVE/NORMALIZED, MC investigation is noise against XGB consensus.
 3. **Trust hierarchy is conditional on XGB agreement**, not blanket "MC > XGB > Floor."
 4. **MC collapse + floor alignment = compound BUY trigger.** Neither signal alone is sufficient.
+5. **Margin at trigger is the strongest CLEAN precision modifier.** ≤3 = 81%, 9-15 = 63%. Average CLEAN trigger margin is only +1.7 — most collapses fire in tight games where the cushion can't absorb.
 
 ---
 

@@ -60,6 +60,14 @@ MC STRUCTURAL INVESTIGATION${pattern ? ' — ' + pattern : ' (active)'}:
                               as "MC detects deterioration that XGB hasn't priced in"
                               rather than "XGB is wrong." Do NOT auto-override XGB.
 
+  Margin qualifier — ctrl lead at trigger (n=292):
+    Tight (≤3): 81.0% (n=179). Highest conviction — no cushion to absorb decay.
+    Mid (4-8): 72.2% (n=79). Standard CLEAN.
+    Comfortable (9-15): 63.3% (n=30). Cushion may absorb — lower confidence.
+    Blowout (16+): noise — ignore MC at large leads.
+    Average CLEAN fires at only +1.7 margin. Factor margin into urgency: CLEAN at
+    +2 is an emergency, CLEAN at +12 is a watch-and-wait.
+
   Per alert type:
     EXIT: MC_COLLAPSE CONFIRMS the exit — the collapse was real and sustained.
           Reference MC in body: "Post-trigger rates show sustained collapse since
@@ -143,6 +151,8 @@ possessions — it is immune to the cumulative anchoring that affects floor and 
     CLEAN + XGB LOW = CONFIRMED (86.9%) — max conviction, both signals agree.
     CLEAN + XGB MED = DEVELOPING (70.4%) — MC leading, XGB catching up.
     CLEAN + XGB HIGH = PROBABLE (73.8%) — strong risk but NOT certainty.
+  CLEAN precision also depends on margin at trigger:
+    ≤3 pts = 81%, 4-8 = 72%, 9-15 = 63%, 16+ = noise. Avg trigger margin is +1.7.
 - MC WAVE = oscillating collapse. 60% precision. Risk signal, not confirmed.
 - MC NORMALIZED = floor and XGB are VALIDATED. The system tested for collapse
   and found the structural edge intact. Trust cumulative signals with confidence.
