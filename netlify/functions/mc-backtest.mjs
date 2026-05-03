@@ -14,6 +14,81 @@
 // Dependencies: nba_snapshot_backtest (16,910 rows, ~1,235 games)
 
 import { neon } from '@neondatabase/serverless';
+import { readFileSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+
+// ── XGB model loading ──────────────────────────────────────────────────────
+var XGB_MODEL = null;
+try {
+  var __xgbDir = dirname(fileURLToPath(import.meta.url));
+  XGB_MODEL = JSON.parse(readFileSync(join(__xgbDir, 'xgb-model.json'), 'utf8'));
+} catch (e) { /* non-fatal — cross-signal phases degrade gracefully */ }
+
+// XGB feature order: paint, pot, to, stl, oreb, ast, blk, fta, efg, biglead, 3pr, rim_pct, runs
+function predictXGB(features) {
+  if (!XGB_MODEL) return null;
+  var sum = 0;
+  for (var ti = 0; ti < XGB_MODEL.trees.length; ti++) {
+    var tree = XGB_MODEL.trees[ti];
+    var node = 0;
+    while (tree.l[node] !== -1) {
+      var fval = features[tree.s[node]] != null ? features[tree.s[node]] : 0;
+      node = fval < tree.c[node] ? tree.l[node] : tree.r[node];
+    }
+    sum += tree.w[node];
+  }
+  var baseLogit = Math.log(XGB_MODEL.base_score / (1 - XGB_MODEL.base_score));
+  return 1 / (1 + Math.exp(-(baseLogit + sum)));
+}
+
+// Extract XGB features from backtest data format
+// team_stats: { home: { pts,fgm,fga,...}, away: {...} }
+// pbp_derived: { hPaint,aPaint,hRimM,hRimA,...,hBigLead,aBigLead,hPOT,aPOT,runs6:[...] }
+function extractXGBFeaturesBacktest(teamStats, pbpDerived, ctrlTeam, homeAlias) {
+  if (!teamStats?.home || !teamStats?.away) return null;
+  var h = teamStats.home, a = teamStats.away;
+  var pbp = pbpDerived || {};
+  var ctrlIsHome = ctrlTeam === homeAlias;
+  var flip = ctrlIsHome ? 1 : -1;
+
+  var hFGA = Number(h.fga || 0), aFGA = Number(a.fga || 0);
+  var hFGM = Number(h.fgm || 0), aFGM = Number(a.fgm || 0);
+  var hFG3M = Number(h.fg3m || 0), aFG3M = Number(a.fg3m || 0);
+  var hFG3A = Number(h.fg3a || 0), aFG3A = Number(a.fg3a || 0);
+  var hEFG = hFGA > 0 ? (hFGM + 0.5 * hFG3M) / hFGA : 0;
+  var aEFG = aFGA > 0 ? (aFGM + 0.5 * aFG3M) / aFGA : 0;
+
+  var hRimM = Number(pbp.hRimM || 0), hRimA = Number(pbp.hRimA || 0);
+  var aRimM = Number(pbp.aRimM || 0), aRimA = Number(pbp.aRimA || 0);
+  var rimDiff = ((hRimM / Math.max(hRimA, 1)) - (aRimM / Math.max(aRimA, 1))) * flip;
+
+  var runShare = 0.5;
+  if (pbp.runs6 && Array.isArray(pbp.runs6) && pbp.runs6.length > 0) {
+    var hRuns = 0, aRuns = 0;
+    for (var ri = 0; ri < pbp.runs6.length; ri++) {
+      if (pbp.runs6[ri].team === homeAlias) hRuns++; else aRuns++;
+    }
+    var totalRuns = hRuns + aRuns;
+    if (totalRuns > 0) runShare = (ctrlIsHome ? hRuns : aRuns) / totalRuns;
+  }
+
+  return [
+    (Number(pbp.hPaint || 0) - Number(pbp.aPaint || 0)) * flip,
+    (Number(pbp.hPOT || 0) - Number(pbp.aPOT || 0)) * flip,
+    (Number(h.to || 0) - Number(a.to || 0)) * flip,
+    (Number(h.stl || 0) - Number(a.stl || 0)) * flip,
+    (Number(h.oreb || 0) - Number(a.oreb || 0)) * flip,
+    (Number(h.ast || 0) - Number(a.ast || 0)) * flip,
+    (Number(h.blk || 0) - Number(a.blk || 0)) * flip,
+    (Number(h.fta || 0) - Number(a.fta || 0)) * flip,
+    (hEFG - aEFG) * flip,
+    (Number(pbp.hBigLead || 0) - Number(pbp.aBigLead || 0)) * flip,
+    (hFGA > 0 && aFGA > 0 ? (hFG3A / hFGA - aFG3A / aFGA) : 0) * flip,
+    rimDiff,
+    runShare,
+  ];
+}
 
 // ── Checkpoint ordering (must match backtest-nba-snapshots.mjs) ─────────────
 var CP_LABELS = [
@@ -2398,7 +2473,619 @@ async function phaseHalftimeMC(sql, url) {
 
 
 // ══════════════════════════════════════════════════════════════════════════════
-// HANDLER
+// PHASE: XGB_BACKFILL — Compute XGB win prob for all mc_backtest_results rows
+//   ?phase=xgb_backfill&n=500
+// ══════════════════════════════════════════════════════════════════════════════
+async function phaseXGBBackfill(sql, url) {
+  if (!XGB_MODEL) return { error: 'XGB model not loaded — xgb-model.json missing' };
+
+  var batchSize = parseInt(url.searchParams.get('n') || '500');
+  var startTime = Date.now();
+  var TIME_BUDGET_MS = 100000;
+
+  var rows = await sql`
+    SELECT s.game_id, s.checkpoint, s.team_stats, s.pbp_derived,
+           s.indicators->>'controlTeam' AS ctrl_team,
+           s.indicators->>'homeAlias' AS home_alias
+    FROM nba_snapshot_backtest s
+    JOIN mc_backtest_results mc ON mc.game_id = s.game_id AND mc.checkpoint = s.checkpoint
+    WHERE mc.xgb_win_prob IS NULL
+      AND s.team_stats IS NOT NULL
+    ORDER BY s.game_id, s.checkpoint
+    LIMIT ${batchSize}
+  `;
+
+  if (rows.length === 0) {
+    var total = await sql`SELECT COUNT(*) AS n, COUNT(xgb_win_prob) AS xgb FROM mc_backtest_results`;
+    return {
+      status: 'ok',
+      message: 'XGB backfill complete',
+      total: Number(total[0]?.n || 0),
+      xgb_populated: Number(total[0]?.xgb || 0),
+      nextStep: 'COMPLETE',
+    };
+  }
+
+  var processed = 0, skipped = 0;
+
+  for (var r of rows) {
+    if (Date.now() - startTime > TIME_BUDGET_MS) break;
+
+    var ts = typeof r.team_stats === 'string' ? JSON.parse(r.team_stats) : r.team_stats;
+    var pbp = typeof r.pbp_derived === 'string' ? JSON.parse(r.pbp_derived) : (r.pbp_derived || {});
+
+    var features = extractXGBFeaturesBacktest(ts, pbp, r.ctrl_team, r.home_alias);
+    if (!features) { skipped++; continue; }
+
+    var xgbProb = predictXGB(features);
+    if (xgbProb == null) { skipped++; continue; }
+
+    await sql`
+      UPDATE mc_backtest_results
+      SET xgb_win_prob = ${xgbProb}
+      WHERE game_id = ${r.game_id} AND checkpoint = ${r.checkpoint}
+    `;
+    processed++;
+  }
+
+  var remaining = await sql`
+    SELECT COUNT(*) AS n FROM mc_backtest_results WHERE xgb_win_prob IS NULL
+  `;
+
+  return {
+    status: 'ok',
+    phase: 'xgb_backfill',
+    processed,
+    skipped,
+    remaining: Number(remaining[0]?.n || 0),
+    nextStep: Number(remaining[0]?.n || 0) > 0
+      ? '?phase=xgb_backfill&n=' + batchSize
+      : 'COMPLETE',
+  };
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PHASE: CROSS_CONCORDANCE — 3×3×3 signal agreement matrix (Test 1)
+//   ?phase=cross_concordance
+// ══════════════════════════════════════════════════════════════════════════════
+async function phaseCrossConcordance(sql) {
+  // Main 27-cell matrix
+  var matrix = await sql`
+    SELECT
+      CASE WHEN floor_score > 0.70 THEN 'HIGH' WHEN floor_score >= 0.50 THEN 'MED' ELSE 'LOW' END AS floor_b,
+      CASE WHEN mc_win_prob > 0.70 THEN 'HIGH' WHEN mc_win_prob >= 0.50 THEN 'MED' ELSE 'LOW' END AS mc_b,
+      CASE WHEN xgb_win_prob > 0.70 THEN 'HIGH' WHEN xgb_win_prob >= 0.50 THEN 'MED' ELSE 'LOW' END AS xgb_b,
+      COUNT(*) AS n,
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100, 1) AS ctrl_win_pct,
+      ROUND(AVG(margin_at_snapshot), 1) AS avg_margin,
+      ROUND(AVG(final_margin), 1) AS avg_final_margin
+    FROM mc_backtest_results
+    WHERE mc_win_prob IS NOT NULL AND xgb_win_prob IS NOT NULL AND floor_score IS NOT NULL
+    GROUP BY 1, 2, 3
+    ORDER BY 1, 2, 3
+  `;
+
+  // Marginal win rates per signal per bucket
+  var floorMarginal = await sql`
+    SELECT CASE WHEN floor_score > 0.70 THEN 'HIGH' WHEN floor_score >= 0.50 THEN 'MED' ELSE 'LOW' END AS bucket,
+           COUNT(*) AS n,
+           ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100, 1) AS ctrl_win_pct
+    FROM mc_backtest_results WHERE floor_score IS NOT NULL
+    GROUP BY 1 ORDER BY 1
+  `;
+  var mcMarginal = await sql`
+    SELECT CASE WHEN mc_win_prob > 0.70 THEN 'HIGH' WHEN mc_win_prob >= 0.50 THEN 'MED' ELSE 'LOW' END AS bucket,
+           COUNT(*) AS n,
+           ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100, 1) AS ctrl_win_pct
+    FROM mc_backtest_results WHERE mc_win_prob IS NOT NULL
+    GROUP BY 1 ORDER BY 1
+  `;
+  var xgbMarginal = await sql`
+    SELECT CASE WHEN xgb_win_prob > 0.70 THEN 'HIGH' WHEN xgb_win_prob >= 0.50 THEN 'MED' ELSE 'LOW' END AS bucket,
+           COUNT(*) AS n,
+           ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100, 1) AS ctrl_win_pct
+    FROM mc_backtest_results WHERE xgb_win_prob IS NOT NULL
+    GROUP BY 1 ORDER BY 1
+  `;
+
+  // Key named cells
+  var keyStates = await sql`
+    SELECT
+      CASE
+        WHEN floor_score > 0.70 AND mc_win_prob > 0.70 AND xgb_win_prob > 0.70 THEN 'ALL_HIGH'
+        WHEN floor_score < 0.50 AND mc_win_prob < 0.50 AND xgb_win_prob < 0.50 THEN 'ALL_LOW'
+        WHEN floor_score > 0.70 AND mc_win_prob < 0.50 THEN 'FLOOR_HIGH_MC_LOW'
+        WHEN mc_win_prob > 0.70 AND floor_score < 0.50 THEN 'MC_HIGH_FLOOR_LOW'
+        WHEN xgb_win_prob > 0.70 AND mc_win_prob < 0.50 THEN 'XGB_HIGH_MC_LOW'
+        WHEN mc_win_prob > 0.70 AND xgb_win_prob < 0.50 THEN 'MC_HIGH_XGB_LOW'
+        ELSE NULL
+      END AS state_name,
+      COUNT(*) AS n,
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100, 1) AS ctrl_win_pct,
+      ROUND(AVG(margin_at_snapshot), 1) AS avg_margin
+    FROM mc_backtest_results
+    WHERE mc_win_prob IS NOT NULL AND xgb_win_prob IS NOT NULL AND floor_score IS NOT NULL
+    GROUP BY 1
+    HAVING CASE
+        WHEN floor_score > 0.70 AND mc_win_prob > 0.70 AND xgb_win_prob > 0.70 THEN 'ALL_HIGH'
+        WHEN floor_score < 0.50 AND mc_win_prob < 0.50 AND xgb_win_prob < 0.50 THEN 'ALL_LOW'
+        WHEN floor_score > 0.70 AND mc_win_prob < 0.50 THEN 'FLOOR_HIGH_MC_LOW'
+        WHEN mc_win_prob > 0.70 AND floor_score < 0.50 THEN 'MC_HIGH_FLOOR_LOW'
+        WHEN xgb_win_prob > 0.70 AND mc_win_prob < 0.50 THEN 'XGB_HIGH_MC_LOW'
+        WHEN mc_win_prob > 0.70 AND xgb_win_prob < 0.50 THEN 'MC_HIGH_XGB_LOW'
+        ELSE NULL
+      END IS NOT NULL
+    ORDER BY state_name
+  `;
+
+  return {
+    status: 'ok',
+    phase: 'cross_concordance',
+    total_rows: matrix.reduce(function(s, r) { return s + Number(r.n); }, 0),
+    matrix: matrix,
+    marginals: { floor: floorMarginal, mc: mcMarginal, xgb: xgbMarginal },
+    key_states: keyStates,
+  };
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PHASE: CROSS_FAILURE — Which signals catch losses? (Test 2)
+//   ?phase=cross_failure&checkpoint=Q3_END  (default Q3_END)
+// ══════════════════════════════════════════════════════════════════════════════
+async function phaseCrossFailure(sql, url) {
+  var cp = url.searchParams.get('checkpoint') || 'Q3_END';
+
+  // Attribution at chosen checkpoint — games where ctrl LOST
+  var attr = await sql`
+    SELECT
+      CASE
+        WHEN floor_score > 0.65 AND mc_win_prob > 0.65 AND xgb_win_prob > 0.65 THEN 'ALL_WRONG'
+        WHEN floor_score > 0.65 AND xgb_win_prob > 0.65 AND mc_win_prob <= 0.50 THEN 'ONLY_MC_RIGHT'
+        WHEN floor_score > 0.65 AND mc_win_prob > 0.65 AND xgb_win_prob <= 0.50 THEN 'ONLY_XGB_RIGHT'
+        WHEN mc_win_prob > 0.65 AND xgb_win_prob > 0.65 AND floor_score <= 0.50 THEN 'ONLY_FLOOR_RIGHT'
+        WHEN floor_score > 0.65 AND mc_win_prob <= 0.50 AND xgb_win_prob <= 0.50 THEN 'MC_AND_XGB_RIGHT'
+        WHEN mc_win_prob > 0.65 AND floor_score <= 0.50 AND xgb_win_prob <= 0.50 THEN 'FLOOR_AND_XGB_RIGHT'
+        WHEN xgb_win_prob > 0.65 AND floor_score <= 0.50 AND mc_win_prob <= 0.50 THEN 'MC_AND_FLOOR_RIGHT'
+        WHEN floor_score <= 0.50 AND mc_win_prob <= 0.50 AND xgb_win_prob <= 0.50 THEN 'ALL_RIGHT'
+        ELSE 'MIXED'
+      END AS attribution,
+      COUNT(*) AS n,
+      ROUND(AVG(margin_at_snapshot), 1) AS avg_margin,
+      ROUND(AVG(final_margin), 1) AS avg_final_margin
+    FROM mc_backtest_results
+    WHERE checkpoint = ${cp}
+      AND ctrl_team_won = false
+      AND mc_win_prob IS NOT NULL AND xgb_win_prob IS NOT NULL AND floor_score IS NOT NULL
+    GROUP BY 1
+    ORDER BY n DESC
+  `;
+
+  // Same for checkpoint Q4_6
+  var attr_q4 = await sql`
+    SELECT
+      CASE
+        WHEN floor_score > 0.65 AND mc_win_prob > 0.65 AND xgb_win_prob > 0.65 THEN 'ALL_WRONG'
+        WHEN floor_score > 0.65 AND xgb_win_prob > 0.65 AND mc_win_prob <= 0.50 THEN 'ONLY_MC_RIGHT'
+        WHEN floor_score > 0.65 AND mc_win_prob > 0.65 AND xgb_win_prob <= 0.50 THEN 'ONLY_XGB_RIGHT'
+        WHEN mc_win_prob > 0.65 AND xgb_win_prob > 0.65 AND floor_score <= 0.50 THEN 'ONLY_FLOOR_RIGHT'
+        WHEN floor_score > 0.65 AND mc_win_prob <= 0.50 AND xgb_win_prob <= 0.50 THEN 'MC_AND_XGB_RIGHT'
+        WHEN mc_win_prob > 0.65 AND floor_score <= 0.50 AND xgb_win_prob <= 0.50 THEN 'FLOOR_AND_XGB_RIGHT'
+        WHEN xgb_win_prob > 0.65 AND floor_score <= 0.50 AND mc_win_prob <= 0.50 THEN 'MC_AND_FLOOR_RIGHT'
+        WHEN floor_score <= 0.50 AND mc_win_prob <= 0.50 AND xgb_win_prob <= 0.50 THEN 'ALL_RIGHT'
+        ELSE 'MIXED'
+      END AS attribution,
+      COUNT(*) AS n
+    FROM mc_backtest_results
+    WHERE checkpoint = 'Q4_6'
+      AND ctrl_team_won = false
+      AND mc_win_prob IS NOT NULL AND xgb_win_prob IS NOT NULL AND floor_score IS NOT NULL
+    GROUP BY 1
+    ORDER BY n DESC
+  `;
+
+  // False alarms — ctrl WON but signal was LOW
+  var falseAlarms = await sql`
+    SELECT
+      'floor' AS signal,
+      COUNT(*) FILTER (WHERE floor_score < 0.50 AND ctrl_team_won) AS false_exits,
+      COUNT(*) FILTER (WHERE floor_score < 0.50) AS total_low,
+      COUNT(*) FILTER (WHERE ctrl_team_won) AS total_wins
+    FROM mc_backtest_results
+    WHERE checkpoint = ${cp} AND floor_score IS NOT NULL
+    UNION ALL
+    SELECT 'mc',
+      COUNT(*) FILTER (WHERE mc_win_prob < 0.50 AND ctrl_team_won),
+      COUNT(*) FILTER (WHERE mc_win_prob < 0.50),
+      COUNT(*) FILTER (WHERE ctrl_team_won)
+    FROM mc_backtest_results
+    WHERE checkpoint = ${cp} AND mc_win_prob IS NOT NULL
+    UNION ALL
+    SELECT 'xgb',
+      COUNT(*) FILTER (WHERE xgb_win_prob < 0.50 AND ctrl_team_won),
+      COUNT(*) FILTER (WHERE xgb_win_prob < 0.50),
+      COUNT(*) FILTER (WHERE ctrl_team_won)
+    FROM mc_backtest_results
+    WHERE checkpoint = ${cp} AND xgb_win_prob IS NOT NULL
+  `;
+
+  return {
+    status: 'ok',
+    phase: 'cross_failure',
+    checkpoint: cp,
+    attribution_at_cp: attr,
+    attribution_at_Q4_6: attr_q4,
+    false_alarms: falseAlarms,
+  };
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PHASE: CROSS_MARGINAL — MC's value when added to Floor+XGB (Test 3)
+//   ?phase=cross_marginal
+// ══════════════════════════════════════════════════════════════════════════════
+async function phaseCrossMarginal(sql) {
+  // 3a: Double-confident losses — floor>0.65 AND xgb>0.65 AND ctrl lost
+  var doubleConfidentLosses = await sql`
+    SELECT
+      COUNT(*) AS total_losses,
+      COUNT(*) FILTER (WHERE mc_win_prob < 0.50) AS mc_warned,
+      COUNT(*) FILTER (WHERE mc_win_prob < 0.40) AS mc_strong_warn,
+      COUNT(*) FILTER (WHERE mc_win_prob < 0.30) AS mc_alarm,
+      ROUND(AVG(mc_win_prob), 3) AS avg_mc,
+      ROUND(AVG(margin_at_snapshot), 1) AS avg_margin,
+      checkpoint
+    FROM mc_backtest_results
+    WHERE floor_score > 0.65 AND xgb_win_prob > 0.65
+      AND ctrl_team_won = false
+      AND mc_win_prob IS NOT NULL
+    GROUP BY checkpoint
+    ORDER BY checkpoint
+  `;
+
+  // 3b: Double-exit signals — floor<0.50 AND xgb<0.50 AND ctrl WON
+  var doubleExitWins = await sql`
+    SELECT
+      COUNT(*) AS total_wins,
+      COUNT(*) FILTER (WHERE mc_win_prob > 0.60) AS mc_held,
+      COUNT(*) FILTER (WHERE mc_win_prob > 0.70) AS mc_strong_hold,
+      ROUND(AVG(mc_win_prob), 3) AS avg_mc,
+      checkpoint
+    FROM mc_backtest_results
+    WHERE floor_score < 0.50 AND xgb_win_prob < 0.50
+      AND ctrl_team_won = true
+      AND mc_win_prob IS NOT NULL
+    GROUP BY checkpoint
+    ORDER BY checkpoint
+  `;
+
+  // 3c: MC solo alarm — mc<0.50 AND floor>0.60 AND xgb>0.60
+  var mcSoloAlarm = await sql`
+    SELECT
+      COUNT(*) AS n,
+      COUNT(*) FILTER (WHERE ctrl_team_won = false) AS mc_right,
+      COUNT(*) FILTER (WHERE ctrl_team_won = true) AS mc_false_alarm,
+      ROUND(AVG(CASE WHEN ctrl_team_won = false THEN 1.0 ELSE 0.0 END) * 100, 1) AS precision,
+      ROUND(AVG(margin_at_snapshot), 1) AS avg_margin,
+      checkpoint
+    FROM mc_backtest_results
+    WHERE mc_win_prob < 0.50 AND floor_score > 0.60 AND xgb_win_prob > 0.60
+      AND mc_win_prob IS NOT NULL
+    GROUP BY checkpoint
+    ORDER BY checkpoint
+  `;
+
+  // Summary across all Q3+ checkpoints
+  var q3PlusSummary = await sql`
+    SELECT
+      'double_confident_losses' AS metric,
+      COUNT(*) AS n,
+      COUNT(*) FILTER (WHERE mc_win_prob < 0.50) AS mc_caught
+    FROM mc_backtest_results
+    WHERE floor_score > 0.65 AND xgb_win_prob > 0.65
+      AND ctrl_team_won = false
+      AND mc_win_prob IS NOT NULL
+      AND period >= 3
+    UNION ALL
+    SELECT 'mc_solo_alarm',
+      COUNT(*),
+      COUNT(*) FILTER (WHERE ctrl_team_won = false)
+    FROM mc_backtest_results
+    WHERE mc_win_prob < 0.50 AND floor_score > 0.60 AND xgb_win_prob > 0.60
+      AND mc_win_prob IS NOT NULL
+      AND period >= 3
+  `;
+
+  return {
+    status: 'ok',
+    phase: 'cross_marginal',
+    catches_losses: doubleConfidentLosses,
+    prevents_exits: doubleExitWins,
+    solo_alarm: mcSoloAlarm,
+    q3_plus_summary: q3PlusSummary,
+  };
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PHASE: CROSS_COMPOUNDS — Named compound states with precision (Test 4)
+//   ?phase=cross_compounds
+// ══════════════════════════════════════════════════════════════════════════════
+async function phaseCrossCompounds(sql) {
+  // Compound states — Q3+ checkpoints only (decision-relevant)
+  var compounds = await sql`
+    WITH states AS (
+      SELECT *,
+        -- Margin velocity: compare to 2 checkpoints prior in same game
+        margin_at_snapshot - LAG(margin_at_snapshot, 2) OVER (PARTITION BY game_id ORDER BY period, clock_sec DESC) AS margin_delta_2cp
+      FROM mc_backtest_results
+      WHERE mc_win_prob IS NOT NULL AND xgb_win_prob IS NOT NULL AND floor_score IS NOT NULL
+        AND period >= 3
+    )
+    SELECT
+      CASE
+        WHEN floor_score > 0.80 AND mc_win_prob > 0.80 AND xgb_win_prob > 0.80 THEN 'FORTRESS'
+        WHEN floor_score > 0.70 AND mc_win_prob > 0.70 AND xgb_win_prob > 0.70 AND margin_at_snapshot > 0 THEN 'CONSENSUS_STRONG'
+        WHEN floor_score > 0.75 AND mc_win_prob < 0.50 AND xgb_win_prob > 0.70 THEN 'ANCHORED_DECAY'
+        WHEN floor_score > 0.65 AND mc_win_prob < 0.50 AND xgb_win_prob > 0.60 AND ABS(margin_at_snapshot) <= 8 THEN 'EARLY_WARNING'
+        WHEN floor_score < 0.55 AND mc_win_prob < 0.40 AND xgb_win_prob < 0.55 THEN 'CONFIRMED_COLLAPSE'
+        WHEN floor_score > 0.65 AND mc_win_prob > 0.65 AND xgb_win_prob < 0.45 THEN 'STRUCTURAL_BUY'
+        WHEN mc_win_prob < 0.40 AND floor_score > 0.65 AND xgb_win_prob > 0.65 THEN 'MC_SOLO_EXIT'
+        WHEN floor_score < 0.55 AND mc_win_prob > 0.65 AND xgb_win_prob < 0.50 THEN 'RECOVERY_CONFIRMED'
+        WHEN floor_score < 0.50 AND mc_win_prob < 0.40 AND xgb_win_prob < 0.50 THEN 'CONSENSUS_EXIT'
+        WHEN floor_score > 0.70 AND margin_delta_2cp IS NOT NULL AND margin_delta_2cp <= -10 THEN 'MARGIN_COLLAPSE'
+        WHEN floor_score > 0.65 AND mc_win_prob < 0.55 AND margin_delta_2cp IS NOT NULL AND margin_delta_2cp <= -6 THEN 'MARGIN_COMPRESS'
+        ELSE NULL
+      END AS compound_state,
+      COUNT(*) AS n,
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100, 1) AS ctrl_win_pct,
+      ROUND(AVG(final_margin), 1) AS avg_final_margin,
+      ROUND(AVG(margin_at_snapshot), 1) AS avg_margin_at_snap,
+      ROUND(AVG(4 - period + clock_sec / 720.0), 2) AS avg_quarters_remaining
+    FROM states
+    WHERE CASE
+        WHEN floor_score > 0.80 AND mc_win_prob > 0.80 AND xgb_win_prob > 0.80 THEN 'FORTRESS'
+        WHEN floor_score > 0.70 AND mc_win_prob > 0.70 AND xgb_win_prob > 0.70 AND margin_at_snapshot > 0 THEN 'CONSENSUS_STRONG'
+        WHEN floor_score > 0.75 AND mc_win_prob < 0.50 AND xgb_win_prob > 0.70 THEN 'ANCHORED_DECAY'
+        WHEN floor_score > 0.65 AND mc_win_prob < 0.50 AND xgb_win_prob > 0.60 AND ABS(margin_at_snapshot) <= 8 THEN 'EARLY_WARNING'
+        WHEN floor_score < 0.55 AND mc_win_prob < 0.40 AND xgb_win_prob < 0.55 THEN 'CONFIRMED_COLLAPSE'
+        WHEN floor_score > 0.65 AND mc_win_prob > 0.65 AND xgb_win_prob < 0.45 THEN 'STRUCTURAL_BUY'
+        WHEN mc_win_prob < 0.40 AND floor_score > 0.65 AND xgb_win_prob > 0.65 THEN 'MC_SOLO_EXIT'
+        WHEN floor_score < 0.55 AND mc_win_prob > 0.65 AND xgb_win_prob < 0.50 THEN 'RECOVERY_CONFIRMED'
+        WHEN floor_score < 0.50 AND mc_win_prob < 0.40 AND xgb_win_prob < 0.50 THEN 'CONSENSUS_EXIT'
+        WHEN floor_score > 0.70 AND margin_delta_2cp IS NOT NULL AND margin_delta_2cp <= -10 THEN 'MARGIN_COLLAPSE'
+        WHEN floor_score > 0.65 AND mc_win_prob < 0.55 AND margin_delta_2cp IS NOT NULL AND margin_delta_2cp <= -6 THEN 'MARGIN_COMPRESS'
+        ELSE NULL
+      END IS NOT NULL
+    GROUP BY 1
+    ORDER BY ctrl_win_pct DESC
+  `;
+
+  // Baselines for comparison
+  var baselines = await sql`
+    SELECT
+      'floor_high_alone' AS baseline,
+      COUNT(*) AS n,
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100, 1) AS ctrl_win_pct
+    FROM mc_backtest_results
+    WHERE floor_score > 0.70 AND period >= 3 AND floor_score IS NOT NULL
+    UNION ALL
+    SELECT 'xgb_high_alone',
+      COUNT(*),
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100, 1)
+    FROM mc_backtest_results
+    WHERE xgb_win_prob > 0.70 AND period >= 3 AND xgb_win_prob IS NOT NULL
+    UNION ALL
+    SELECT 'mc_high_alone',
+      COUNT(*),
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100, 1)
+    FROM mc_backtest_results
+    WHERE mc_win_prob > 0.70 AND period >= 3 AND mc_win_prob IS NOT NULL
+  `;
+
+  // Margin velocity standalone — does margin compression predict independently?
+  var marginVelocity = await sql`
+    WITH mv AS (
+      SELECT *,
+        margin_at_snapshot - LAG(margin_at_snapshot, 2) OVER (PARTITION BY game_id ORDER BY period, clock_sec DESC) AS mdelta
+      FROM mc_backtest_results
+      WHERE period >= 3 AND mc_win_prob IS NOT NULL
+    )
+    SELECT
+      CASE
+        WHEN mdelta <= -15 THEN 'CRASH_15plus'
+        WHEN mdelta <= -10 THEN 'CRASH_10_15'
+        WHEN mdelta <= -6 THEN 'COMPRESS_6_10'
+        WHEN mdelta <= -3 THEN 'MILD_3_6'
+        WHEN mdelta BETWEEN -2 AND 2 THEN 'STABLE'
+        WHEN mdelta >= 3 THEN 'EXPANDING'
+        ELSE NULL
+      END AS velocity_bucket,
+      COUNT(*) AS n,
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1.0 ELSE 0.0 END) * 100, 1) AS ctrl_win_pct,
+      ROUND(AVG(margin_at_snapshot), 1) AS avg_margin
+    FROM mv
+    WHERE mdelta IS NOT NULL
+    GROUP BY 1
+    ORDER BY ctrl_win_pct
+  `;
+
+  return {
+    status: 'ok',
+    phase: 'cross_compounds',
+    compound_states: compounds,
+    baselines: baselines,
+    margin_velocity: marginVelocity,
+  };
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PHASE: CROSS_TEMPORAL — Per-checkpoint AUC for each signal + ensembles (Test 5)
+//   ?phase=cross_temporal
+// ══════════════════════════════════════════════════════════════════════════════
+async function phaseCrossTemporal(sql) {
+  // Get all data with all three signals present
+  var rows = await sql`
+    SELECT checkpoint, period, mc_win_prob, xgb_win_prob, floor_score, ctrl_team_won
+    FROM mc_backtest_results
+    WHERE mc_win_prob IS NOT NULL AND xgb_win_prob IS NOT NULL AND floor_score IS NOT NULL
+    ORDER BY checkpoint
+  `;
+
+  // Group by checkpoint and compute AUC for each signal + ensembles
+  var grouped = {};
+  for (var r of rows) {
+    if (!grouped[r.checkpoint]) grouped[r.checkpoint] = [];
+    grouped[r.checkpoint].push({
+      mc: Number(r.mc_win_prob),
+      xgb: Number(r.xgb_win_prob),
+      floor: Number(r.floor_score),
+      won: r.ctrl_team_won,
+      period: Number(r.period),
+    });
+  }
+
+  var results = [];
+  for (var cpLabel of CP_LABELS) {
+    var data = grouped[cpLabel];
+    if (!data || data.length < 10) continue;
+
+    var period = data[0].period;
+
+    // Ensemble weights — quarter-adaptive
+    var mcW, xgbW, floorW;
+    if (period <= 2) { mcW = 0.20; xgbW = 0.50; floorW = 0.30; }
+    else if (period === 3) { mcW = 0.35; xgbW = 0.35; floorW = 0.30; }
+    else { mcW = 0.50; xgbW = 0.30; floorW = 0.20; }
+
+    // Compute ensembles
+    for (var d of data) {
+      d.avg = (d.mc + d.xgb + d.floor) / 3;
+      d.xgb_heavy = 0.50 * d.xgb + 0.30 * d.mc + 0.20 * d.floor;
+      d.mc_heavy = 0.50 * d.mc + 0.30 * d.xgb + 0.20 * d.floor;
+      d.adaptive = mcW * d.mc + xgbW * d.xgb + floorW * d.floor;
+    }
+
+    results.push({
+      checkpoint: cpLabel,
+      period: period,
+      n: data.length,
+      auc_floor: computeAUC(data, 'floor'),
+      auc_mc: computeAUC(data, 'mc'),
+      auc_xgb: computeAUC(data, 'xgb'),
+      auc_avg: computeAUC(data, 'avg'),
+      auc_xgb_heavy: computeAUC(data, 'xgb_heavy'),
+      auc_mc_heavy: computeAUC(data, 'mc_heavy'),
+      auc_adaptive: computeAUC(data, 'adaptive'),
+    });
+  }
+
+  return {
+    status: 'ok',
+    phase: 'cross_temporal',
+    checkpoints: results,
+  };
+}
+
+// Simple AUC computation (Wilcoxon-Mann-Whitney statistic)
+function computeAUC(data, field) {
+  var pos = [], neg = [];
+  for (var d of data) {
+    if (d.won) pos.push(d[field]); else neg.push(d[field]);
+  }
+  if (pos.length === 0 || neg.length === 0) return null;
+
+  // Sort both arrays
+  pos.sort(function(a, b) { return a - b; });
+  neg.sort(function(a, b) { return a - b; });
+
+  // Count concordant pairs
+  var concordant = 0, ties = 0;
+  var ni = 0;
+  for (var pi = 0; pi < pos.length; pi++) {
+    while (ni < neg.length && neg[ni] < pos[pi]) ni++;
+    concordant += ni;
+    // Count ties at this value
+    var ti = ni;
+    while (ti < neg.length && neg[ti] === pos[pi]) ti++;
+    ties += (ti - ni);
+  }
+
+  return Math.round(((concordant + 0.5 * ties) / (pos.length * neg.length)) * 1000) / 1000;
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PHASE: CROSS_REPLAY — Match historical alerts against MC data (Test 6)
+//   ?phase=cross_replay
+// ══════════════════════════════════════════════════════════════════════════════
+async function phaseCrossReplay(sql) {
+  // Join alerts with nearest mc_backtest_results checkpoint
+  // alerts have game_id (bdl), period, clock — find closest backtest checkpoint
+  var wrongSends = await sql`
+    WITH alert_mc AS (
+      SELECT a.id, a.game_id, a.alert_type, a.alert_tier, a.agent_decision,
+             a.period, a.clock, a.position_team,
+             mc.mc_win_prob, mc.xgb_win_prob, mc.floor_score,
+             mc.ctrl_team_won, mc.margin_at_snapshot AS mc_margin,
+             mc.checkpoint,
+             ROW_NUMBER() OVER (PARTITION BY a.id ORDER BY
+               ABS(mc.period - a.period) * 720 +
+               ABS(COALESCE(mc.clock_sec, 0) - COALESCE(
+                 CASE WHEN a.clock ~ '^[0-9]+:[0-9]+$'
+                      THEN SPLIT_PART(a.clock, ':', 1)::int * 60 + SPLIT_PART(a.clock, ':', 2)::int
+                      ELSE 0 END, 0))
+             ) AS rn
+      FROM alerts a
+      JOIN mc_backtest_results mc ON mc.game_id = a.game_id::int
+      WHERE a.agent_decision = 'SEND'
+        AND a.alert_type IN ('BUY', 'BWC', 'WINDOW_BUY', 'POSITION_OPEN')
+        AND mc.mc_win_prob IS NOT NULL
+        AND mc.xgb_win_prob IS NOT NULL
+    )
+    SELECT alert_type, alert_tier,
+      COUNT(*) AS total_sends,
+      COUNT(*) FILTER (WHERE ctrl_team_won = false) AS wrong_sends,
+      COUNT(*) FILTER (WHERE ctrl_team_won = false AND mc_win_prob < 0.50) AS mc_would_warn,
+      COUNT(*) FILTER (WHERE ctrl_team_won = false AND mc_win_prob < 0.40) AS mc_strong_warn,
+      ROUND(AVG(CASE WHEN ctrl_team_won = false THEN mc_win_prob END), 3) AS avg_mc_on_wrong
+    FROM alert_mc
+    WHERE rn = 1
+    GROUP BY alert_type, alert_tier
+    ORDER BY alert_type, alert_tier
+  `;
+
+  // Good suppressions — agent suppressed, team would have lost
+  var goodSuppresses = await sql`
+    WITH alert_mc AS (
+      SELECT a.id, a.alert_type, a.agent_decision,
+             mc.mc_win_prob, mc.ctrl_team_won,
+             ROW_NUMBER() OVER (PARTITION BY a.id ORDER BY
+               ABS(mc.period - a.period) * 720) AS rn
+      FROM alerts a
+      JOIN mc_backtest_results mc ON mc.game_id = a.game_id::int
+      WHERE a.agent_decision = 'SUPPRESS'
+        AND mc.mc_win_prob IS NOT NULL
+    )
+    SELECT
+      COUNT(*) AS total_suppresses,
+      COUNT(*) FILTER (WHERE ctrl_team_won = false) AS correct_suppresses,
+      COUNT(*) FILTER (WHERE ctrl_team_won = false AND mc_win_prob < 0.50) AS mc_agreed,
+      COUNT(*) FILTER (WHERE ctrl_team_won = true) AS missed_opportunities,
+      COUNT(*) FILTER (WHERE ctrl_team_won = true AND mc_win_prob > 0.70) AS mc_would_override
+    FROM alert_mc
+    WHERE rn = 1
+  `;
+
+  return {
+    status: 'ok',
+    phase: 'cross_replay',
+    wrong_sends_by_type: wrongSends,
+    suppress_analysis: goodSuppresses,
+  };
+}
 // ══════════════════════════════════════════════════════════════════════════════
 
 export default async function handler(req) {
@@ -2427,6 +3114,13 @@ export default async function handler(req) {
       case 'triggered_replay':   result = await phaseTriggeredReplay(sql, url); break;
       case 'silent_audit':       result = await phaseSilentAudit(sql, url); break;
       case 'halftime_mc':        result = await phaseHalftimeMC(sql, url); break;
+      case 'xgb_backfill':       result = await phaseXGBBackfill(sql, url); break;
+      case 'cross_concordance':  result = await phaseCrossConcordance(sql); break;
+      case 'cross_failure':      result = await phaseCrossFailure(sql, url); break;
+      case 'cross_marginal':     result = await phaseCrossMarginal(sql); break;
+      case 'cross_compounds':    result = await phaseCrossCompounds(sql); break;
+      case 'cross_temporal':     result = await phaseCrossTemporal(sql); break;
+      case 'cross_replay':       result = await phaseCrossReplay(sql); break;
       case 'status': {
         var count = await sql`SELECT COUNT(*) AS n FROM mc_backtest_results`;
         var games = await sql`SELECT COUNT(DISTINCT game_id) AS n FROM mc_backtest_results`;
