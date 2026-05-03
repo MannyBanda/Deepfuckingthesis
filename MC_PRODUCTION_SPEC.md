@@ -1,97 +1,259 @@
-# MC Production Integration — Architecture Spec (v3)
+# MC Production Integration — Architecture Spec (v4)
 
 **Date:** May 3, 2026
 **Status:** SPEC — awaiting approval before implementation
-**Touches:** `poll-live-bdl.mjs` (primary), `db-api.js` (init), `v3.html` (dashboard)
-**Replaces:** VULNERABILITY alert system (dead code removal)
+**Touches:** `poll-live-bdl.mjs`, `db-api.js`, `v3.html`
+**Replaces:** VULNERABILITY alert system
 
 ---
 
 ## Design Thesis
 
-Monte Carlo is a **graduation guard** — a stateful investigation that detects structural collapse in ctrl-leading games where cumulative signals (floor, XGB) are anchored to stale early-game data. It answers the one question the existing system can't: "this team graduated and is leading, but are they collapsing RIGHT NOW?"
+Monte Carlo is a **graduation guard** — a stateful investigation that detects structural collapse in ctrl-leading games where cumulative signals (floor, XGB) are anchored to stale early-game data.
 
-MC replaces VULNERABILITY entirely. The MC canary fire IS the vulnerability detection (wider scope, no XGB gate, any margin), and the investigation that follows is pure upside VULNERABILITY never had — it classifies whether the threat is sustained (CLEAN), oscillating (WAVE), or noise (NORMALIZED/FALSE_ALARM).
+MC replaces VULNERABILITY entirely. The MC canary is strictly better on every dimension — wider scope (any margin, no XGB gate), higher precision (CLEAN 72.6% vs VULN 47.4%), and richer information (pattern classification vs binary fire).
 
 ---
 
-## How MC Works (Plain English)
+## How MC Works
 
-### The Canary
+### The Canary (every eligible poll, ~5ms)
 
-Every minute during Q3+, when the ctrl team is leading, the system looks at the last 20 possessions from the PBP log. It extracts exact per-team rates — 2PT%, 3PT%, turnover rate, offensive rebound rate, free throw rate — directly from those 20 possessions. Then it simulates the rest of the game 200 times using those rates plus the actual current score. If the ctrl team wins fewer than 70% of simulations, OR the gap between the cumulative floor and the MC probability exceeds 15%, the canary fires.
+Every minute during Q3+, when the ctrl team is leading, the system extracts exact per-team rates from the last 20 possessions of the PBP log — 2PT%, 3PT%, TO rate, OREB rate, FT rate — directly from actual possessions, not box score approximations. Then it simulates the rest of the game 200 times. If ctrl wins < 70% of sims, OR the gap between floor and MC exceeds 15%, the canary fires.
 
-### The Investigation
+### The Investigation (every poll after trigger, ~12ms)
 
-When the canary fires, the system photographs the box score at that exact moment. Every minute after that, it subtracts the photograph from the current box score to get "what has each team produced SINCE the alarm went off." From those diffs it computes post-trigger rates, then simulates the rest of the game 500 times. Each verdict measures ONLY what happened after the alarm — not from game start, not from a rolling window.
+At canary fire, the system photographs the box score. Every minute after, it subtracts the photograph from the current box score to get post-trigger rates — what each team has produced SINCE the alarm. It simulates the rest of the game 500 times using only post-trigger rates and classifies a verdict:
 
-### The Pattern
+- **CONF** (≤25%): sustained collapse
+- **LIKELY** (25-40%): probable collapse
+- **CONT** (40-60%): contested
+- **NORM** (>60%): rates recovered
+- **INV** (<8 post-trigger poss): insufficient data
 
-Each minute produces a verdict based on the ctrl team's sim win rate:
-- **CONF** (≤25%): "at this rate, they lose"
-- **LIKELY** (25-40%): "probably collapsing"
-- **CONT** (40-60%): "contested, unclear"
-- **NORM** (>60%): "rates recovered"
-- **INV** (<8 post-trigger possessions): "not enough data yet"
+Investigation starts at canary fire (not 20 possessions ago). Canary detects, investigation confirms persistence. The INV period (~3-4 minutes) forces the system to wait for NEW evidence.
 
-The pattern classifies the sequence of verdicts:
-- **CLEAN**: Hit CONF/LIKELY and never recovered. Sustained collapse. (72.6% precision)
-- **WAVE**: Collapsed → recovered → collapsed again. Oscillating. (60% precision)
-- **NORMALIZED**: Alarmed but rates recovered. Noise. (86-91% ctrl survives)
-- **FALSE_ALARM**: Never reached LIKELY/CONF. False alarm. (91% ctrl survives)
+### The Pattern (verdict sequence classification)
+
+- **CLEAN**: Hit CONF/LIKELY and never recovered. Sustained collapse. **72.6% precision.**
+- **WAVE**: Collapsed → recovered → collapsed again. Oscillating. **60% precision.**
+- **NORMALIZED**: Alarmed but rates recovered. **86-91% ctrl survives.**
+- **FALSE_ALARM**: Never reached LIKELY/CONF. **91% ctrl survives.**
 
 ### What MC Knows
 
-- Per-team shooting rates (2PT%, 3PT% regressed to 36% baseline, FT%)
-- Turnover rate, offensive rebound rate per team
-- Actual current score
+- Per-team shooting rates from PBP possessions (canary) or box score diff (investigation)
+- Current actual score (sims start from real score)
 - Remaining possessions (estimated from pace + clock)
+- **Per-team 3PT baseline** from season cache (v4 — replaces flat 36%)
+- **Q4 pressure adjustments** from clutch profiles (v4 — team-specific Q4 rate deltas)
 
 ### What MC Doesn't Know
 
-- **Per-team 3PT baseline** — regresses everyone to 36% league average. GSW should regress to 38%, a bad shooting team to 33%. (Queued improvement — per-team baselines from season cache.)
-- **Who's on the floor** — if bench is in, rates reflect bench play. If starters return, rates change.
-- **Foul situation** — bonus/double bonus creates more FT possessions than the window rate suggests.
-- **Late-game intentional fouling** — trailing team fouls to stop clock. The possession tree breaks down because fouls create FT possessions that skip normal shot attempts.
-- **Clutch pressure** — rates under pressure differ from mid-game rates.
-- **Timeout effects** — timeouts can reset momentum, change lineup, draw up a play.
+- Who's on the floor (lineup changes)
+- Foul situation (bonus/double bonus)
+- Late-game intentional fouling (possession tree breaks down)
+- Timeout effects on momentum
 
 ---
 
-## Why MC Replaces VULNERABILITY
+## Per-Team 3PT Baseline (v4)
 
-| Dimension | VULNERABILITY | MC |
-|-----------|--------------|-----|
-| Margin gate | 0-5 only | Any ctrl-leading margin |
-| XGB gate | < 0.65 required | None — catches collapses XGB misses |
-| PBP window | 15-poss, binary fire | 20-poss canary, then post-trigger investigation |
-| Precision | 47.4% | CLEAN 72.6% (backtest), 100% (prod playoffs) |
-| Information | Binary: fired or not | Pattern: CLEAN/WAVE/NORMALIZED/FALSE_ALARM |
-| Persistence | Single-shot, one context injection | Multi-cycle investigation with verdict sequence |
-| Inverse value | None | NORMALIZED/FALSE_ALARM = 88-91% hold confidence |
+### Problem
 
----
+MC regresses small-sample 3PT% toward a flat 36% league average. GSW (actual 36.1%) barely affected, but BOS (37.2%) is pulled down and ORL (33.9%) is pulled up. The regression is biased.
 
-## Validated Precision (1,235 backtest + 46 playoff production)
+### Solution
 
-| Pattern | Backtest (ctrl-leading) | Production (playoffs) | Action |
-|---------|------------------------|-----------------------|--------|
-| CLEAN | 72.6% (197 games) | 100% (3 games) | Fire MC_COLLAPSE alert |
-| WAVE | 61.1% (18 games) | 60% (5 games) | Agent context — "at risk" |
-| NORMALIZED | 86.0% ctrl survives (129) | 100% ctrl survives (2) | Agent context — "noise, hold" |
-| FALSE_ALARM | 90.8% ctrl survives (476) | 93.8% ctrl survives (16) | Silent — no action |
+Season cache already has per-player `fg3m`, `fg3a`, `games_played` for all 30 teams. At function cold start, compute team-level 3PT% and cache alongside the existing season priors:
 
----
-
-## Architecture: Stateful Investigation Across Poll Cycles
-
-### State Machine
-
+```javascript
+// In loadSeasonCache or equivalent
+for (const team of Object.keys(seasonCache)) {
+  const players = seasonCache[team].players_json;
+  let fg3m = 0, fg3a = 0;
+  for (const p of players) {
+    const gp = Number(p.games_played || 0);
+    if (gp < 10) continue;
+    fg3m += Number(p.fg3m || 0) * gp;
+    fg3a += Number(p.fg3a || 0) * gp;
+  }
+  seasonCache[team]._team3ptPct = fg3a > 0 ? fg3m / fg3a : 0.36;
+}
 ```
-IDLE → [canary fires] → INVESTIGATING → [verdicts accumulate] → CLEAN / WAVE / NORMALIZED / FALSE_ALARM
-                              ↑                                          |
-                              └─── [each poll adds verdict] ─────────────┘
+
+MC's regression step changes from:
+
+```javascript
+// Old: flat 36% for everyone
+fg3Pct = fg3a >= 3 ? Math.min(samplePct * 0.6 + 0.36 * 0.4, 0.60) : 0.36;
+
+// New: team-specific baseline
+const baseline = clutchProfile?.q4_fg3pct || teamSeasonPct || 0.36;
+fg3Pct = fg3a >= 3 ? Math.min(samplePct * 0.6 + baseline * 0.4, 0.60) : baseline;
 ```
+
+**Impact:** Small but correct. Matters most for extreme teams (BOS/GSW high, low-volume shooters low). Eliminates systematic bias.
+
+---
+
+## Clutch Profiles (v4)
+
+### Purpose
+
+Give MC team-specific Q4 rate adjustments. Instead of assuming Q4 shooting rates equal full-game rates, MC models the pressure effect: teams that tighten up in Q4 vs teams that get sloppy.
+
+### Table Schema
+
+```sql
+CREATE TABLE IF NOT EXISTS clutch_profiles (
+  team_alias TEXT NOT NULL,
+  league TEXT NOT NULL DEFAULT 'nba',
+  season TEXT NOT NULL DEFAULT '2025',
+  games INTEGER DEFAULT 0,
+  -- Q4 running totals
+  q4_fga INTEGER DEFAULT 0,
+  q4_fgm INTEGER DEFAULT 0,
+  q4_fg3a INTEGER DEFAULT 0,
+  q4_fg3m INTEGER DEFAULT 0,
+  q4_fta INTEGER DEFAULT 0,
+  q4_ftm INTEGER DEFAULT 0,
+  q4_to INTEGER DEFAULT 0,
+  q4_oreb INTEGER DEFAULT 0,
+  q4_poss REAL DEFAULT 0,
+  -- Full-game running totals (for pressure delta computation)
+  full_fga INTEGER DEFAULT 0,
+  full_fgm INTEGER DEFAULT 0,
+  full_fg3a INTEGER DEFAULT 0,
+  full_fg3m INTEGER DEFAULT 0,
+  full_fta INTEGER DEFAULT 0,
+  full_ftm INTEGER DEFAULT 0,
+  full_to INTEGER DEFAULT 0,
+  full_oreb INTEGER DEFAULT 0,
+  full_poss REAL DEFAULT 0,
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (team_alias, league, season)
+);
+```
+
+### Auto-Update (in poll loop at game finalization)
+
+The poll loop already detects game finalization and has quarter_data in memory. When a game goes final:
+
+```javascript
+// After final score detected, quarter_data boundaries available
+const b3 = quarterData.boundaries['3'];
+const b4 = quarterData.boundaries['4'];
+if (b3 && b4) {
+  for (const side of ['home', 'away']) {
+    const teamAlias = side === 'home' ? hA : aA;
+    const q4 = {
+      fga: Number(b4[side].field_goals_att) - Number(b3[side].field_goals_att),
+      fgm: Number(b4[side].field_goals_made) - Number(b3[side].field_goals_made),
+      fg3a: Number(b4[side].three_points_att) - Number(b3[side].three_points_att),
+      fg3m: Number(b4[side].three_points_made) - Number(b3[side].three_points_made),
+      fta: Number(b4[side].free_throws_att) - Number(b3[side].free_throws_att),
+      ftm: Number(b4[side].free_throws_made) - Number(b3[side].free_throws_made),
+      to: Number(b4[side].turnovers) - Number(b3[side].turnovers),
+      oreb: Number(b4[side].offensive_rebounds) - Number(b3[side].offensive_rebounds),
+      poss: Number(b4[side].possessions) - Number(b3[side].possessions),
+    };
+    const full = b4[side]; // Q4 boundary = full-game cumulative
+    await sql`
+      INSERT INTO clutch_profiles (team_alias, league, season, games,
+        q4_fga, q4_fgm, q4_fg3a, q4_fg3m, q4_fta, q4_ftm, q4_to, q4_oreb, q4_poss,
+        full_fga, full_fgm, full_fg3a, full_fg3m, full_fta, full_ftm, full_to, full_oreb, full_poss)
+      VALUES (${teamAlias}, ${league}, ${'2025'}, 1,
+        ${q4.fga}, ${q4.fgm}, ${q4.fg3a}, ${q4.fg3m}, ${q4.fta}, ${q4.ftm}, ${q4.to}, ${q4.oreb}, ${q4.poss},
+        ${Number(full.field_goals_att)}, ${Number(full.field_goals_made)},
+        ${Number(full.three_points_att)}, ${Number(full.three_points_made)},
+        ${Number(full.free_throws_att)}, ${Number(full.free_throws_made)},
+        ${Number(full.turnovers)}, ${Number(full.offensive_rebounds)}, ${Number(full.possessions)})
+      ON CONFLICT (team_alias, league, season) DO UPDATE SET
+        games = clutch_profiles.games + 1,
+        q4_fga = clutch_profiles.q4_fga + EXCLUDED.q4_fga,
+        q4_fgm = clutch_profiles.q4_fgm + EXCLUDED.q4_fgm,
+        q4_fg3a = clutch_profiles.q4_fg3a + EXCLUDED.q4_fg3a,
+        q4_fg3m = clutch_profiles.q4_fg3m + EXCLUDED.q4_fg3m,
+        q4_fta = clutch_profiles.q4_fta + EXCLUDED.q4_fta,
+        q4_ftm = clutch_profiles.q4_ftm + EXCLUDED.q4_ftm,
+        q4_to = clutch_profiles.q4_to + EXCLUDED.q4_to,
+        q4_oreb = clutch_profiles.q4_oreb + EXCLUDED.q4_oreb,
+        q4_poss = clutch_profiles.q4_poss + EXCLUDED.q4_poss,
+        full_fga = clutch_profiles.full_fga + EXCLUDED.full_fga,
+        full_fgm = clutch_profiles.full_fgm + EXCLUDED.full_fgm,
+        full_fg3a = clutch_profiles.full_fg3a + EXCLUDED.full_fg3a,
+        full_fg3m = clutch_profiles.full_fg3m + EXCLUDED.full_fg3m,
+        full_fta = clutch_profiles.full_fta + EXCLUDED.full_fta,
+        full_ftm = clutch_profiles.full_ftm + EXCLUDED.full_ftm,
+        full_to = clutch_profiles.full_to + EXCLUDED.full_to,
+        full_oreb = clutch_profiles.full_oreb + EXCLUDED.full_oreb,
+        full_poss = clutch_profiles.full_poss + EXCLUDED.full_poss,
+        updated_at = NOW()
+    `;
+  }
+}
+```
+
+### Initial Backfill
+
+One-time script reads the 181 games with quarter_data, diffs Q4-Q3 for both teams, and populates running totals. Can run as a `?phase=backfill_clutch` in mc-backtest.mjs or a db-api action.
+
+### Loading at Runtime
+
+Same pattern as season cache — one query at function cold start:
+
+```javascript
+const clutchRows = await sql`SELECT * FROM clutch_profiles WHERE league = 'nba' AND season = '2025'`;
+const clutchMap = {};
+for (const r of clutchRows) {
+  clutchMap[r.team_alias] = {
+    games: r.games,
+    q4_fg3pct: r.q4_fg3a > 0 ? r.q4_fg3m / r.q4_fg3a : null,
+    q4_fg2pct: (r.q4_fga - r.q4_fg3a) > 0 ? (r.q4_fgm - r.q4_fg3m) / (r.q4_fga - r.q4_fg3a) : null,
+    q4_to_rate: r.q4_poss > 0 ? r.q4_to / r.q4_poss : null,
+    q4_oreb_rate: (r.q4_fga - r.q4_fgm) > 0 ? r.q4_oreb / (r.q4_fga - r.q4_fgm) : null,
+    q4_ft_rate: r.q4_fga > 0 ? r.q4_fta / r.q4_fga : null,
+    q4_ft_pct: r.q4_fta > 0 ? r.q4_ftm / r.q4_fta : null,
+    // Pressure deltas (Q4 rate minus full-game rate)
+    delta_fg3: (r.q4_fg3a > 20 && r.full_fg3a > 50)
+      ? (r.q4_fg3m / r.q4_fg3a) - (r.full_fg3m / r.full_fg3a) : 0,
+    delta_to: (r.q4_poss > 50 && r.full_poss > 200)
+      ? (r.q4_to / r.q4_poss) - (r.full_to / r.full_poss) : 0,
+  };
+}
+```
+
+### MC Integration
+
+When MC simulates Q4 possessions, it applies the team's clutch profile:
+
+**For 3PT regression:**
+```javascript
+// Use Q4-specific 3PT% as baseline when simulating Q4
+const period = currentPeriod;
+const baseline = period >= 4 && clutchProfile?.q4_fg3pct != null
+  ? clutchProfile.q4_fg3pct
+  : teamSeasonPct || 0.36;
+fg3Pct = fg3a >= 3 ? Math.min(samplePct * 0.6 + baseline * 0.4, 0.60) : baseline;
+```
+
+**For pressure adjustments (optional, can ship separately):**
+```javascript
+// When simulating Q4 possessions, adjust base rates by team's Q4 pressure delta
+if (period >= 4 && clutchProfile) {
+  rates.toRate = Math.max(0, rates.toRate + (clutchProfile.delta_to || 0));
+  // Could also adjust: fg2Pct, orebRate, ftRate
+}
+```
+
+The 3PT baseline swap is the immediate win. Pressure deltas are a follow-up once we validate Q4 profiles have enough sample (need ~30+ games per team for stable rates).
+
+---
+
+## State Machine & Alert Architecture
+
+*(Unchanged from v3 — included for completeness)*
 
 ### State in `live_tracking` JSONB
 
@@ -104,134 +266,24 @@ lt.mc = {
   trigger_margin: 7,
   trigger_floor: 0.88,
   trigger_xgb: 0.926,
-  trigger_mc: 0.32,                 // canary MC probability (from 20-poss PBP rates)
-  trigger_stats: {                  // box score photograph at trigger for diffToRates
+  trigger_mc: 0.32,
+  trigger_stats: {
     home: { fgm, fga, fg3m, fg3a, ftm, fta, to, oreb },
     away: { fgm, fga, fg3m, fg3a, ftm, fta, to, oreb }
   },
   ctrl_team: 'ORL',
   ctrl_is_home: false,
-  verdicts: [],                     // ['INV','INV','CONF','CONF','CONF']
-  pattern: null,                    // CLEAN|WAVE|NORMALIZED|FALSE_ALARM|null
+  verdicts: [],
+  pattern: null,
   alert_sent: false,
-  current_mc: null,                 // latest investigation MC win prob
+  current_mc: null,
 }
 ```
 
-~400 bytes JSONB. Negligible.
+### MC_COLLAPSE Alert (CLEAN pattern)
 
----
+Mechanical fire, no agent call, plain English ntfy.
 
-## Computation Pipeline
-
-### Phase 1: Canary (PBP-derived rates, ~5ms per eligible poll)
-
-**Location:** Replaces VULNERABILITY block (~line 7003-7050).
-
-**Gates:**
-- `currentPeriod >= 3`
-- `ind.controlTeam !== 'Neither'`
-- Ctrl team IS leading (`ctrlMargin > 0`)
-- `!lt.mc?.triggered`
-- `alertMinsLeft >= 1.0`
-- PBP possession log has ≥ 20 possessions
-
-**Rate extraction from PBP log (last 20 possessions):**
-
-```javascript
-function extractMCRatesFromPossLog(possLog, windowSize, teamAlias) {
-  const window = possLog.slice(-windowSize);
-  const teamPoss = window.filter(p => p.team === teamAlias);
-  const n = teamPoss.length;
-  if (n < 5) return null;  // need minimum possessions
-
-  const fga = teamPoss.reduce((s, p) => s + p.fga, 0);
-  const fgm = teamPoss.reduce((s, p) => s + p.fgm, 0);
-  const fg3a = teamPoss.reduce((s, p) => s + p.fg3a, 0);
-  const fg3m = teamPoss.reduce((s, p) => s + p.fg3m, 0);
-  const fta = teamPoss.reduce((s, p) => s + p.fta, 0);
-  const ftm = teamPoss.reduce((s, p) => s + p.ftm, 0);
-  const tos = teamPoss.reduce((s, p) => s + p.tos, 0);
-  const misses = fga - fgm;
-  const oreb = teamPoss.reduce((s, p) => s + p.oreb, 0);
-
-  const fg2a = fga - fg3a;
-  const fg2m = fgm - fg3m;
-
-  return {
-    toRate: tos / n,                                    // TOs per possession
-    shotMix3: fga > 0 ? fg3a / fga : 0.30,            // fraction of shots that are 3s
-    fg2Pct: fg2a > 0 ? fg2m / fg2a : 0.48,            // 2PT%
-    fg3Pct: fg3a >= 3                                   // 3PT% with regression
-      ? Math.min(fg3m / fg3a * 0.6 + 0.36 * 0.4, 0.60) // regress toward 36% baseline, cap 60%
-      : 0.36,                                           // too few attempts, use baseline
-    orebRate: misses > 0 ? oreb / misses : 0.25,       // OREB per miss
-    ftRate: fga > 0 ? fta / fga : 0.25,                // FT trips per FGA
-    ftPct: fta > 0 ? ftm / fta : 0.76,                // FT%
-    _n: n, _fga: fga, _fg3a: fg3a,                    // diagnostics
-  };
-}
-```
-
-This gives MC exactly what it needs at the granularity it operates: per-possession rates from actual possessions. No box score diff approximation, no pace normalization.
-
-**Canary computation:**
-1. Extract rates for both teams from last 20 possessions of PBP log
-2. Run MC sim (200 sims) using PBP rates + current score + remaining possessions
-3. Combined canary: `(floor - mcWinProb) > 0.15 OR mcWinProb < 0.70`
-
-**If canary fires:**
-- Photograph current box score stats → `lt.mc.trigger_stats`
-- Store canary MC probability → `lt.mc.trigger_mc`
-- Store floor, XGB, margin at trigger
-- Investigation starts from THIS moment forward (Option A — canary detects, investigation confirms persistence)
-- Log: `${matchup}: ★ MC CANARY — floor=${floor} MC=${mcWP} margin=${ctrlMargin}`
-
-### Phase 2: Investigation (box score diff from trigger, ~12ms per poll)
-
-**Location:** Immediately after Phase 1.
-
-**Why box score diff (not PBP) for investigation:**
-
-The investigation asks "what has happened since the alarm fired?" The PBP possession log is a rolling window — it can't isolate "possessions since trigger." Box score stats are cumulative — subtracting the trigger snapshot gives exactly "production since trigger." The two phases use different rate sources because they answer different questions:
-
-- **Canary:** "What's happening RIGHT NOW?" → PBP rolling window (most responsive)
-- **Investigation:** "Has the collapse persisted since the alarm?" → Box score diff from fixed trigger point (anchored measurement)
-
-**Computation:**
-1. `diffToRates(currentStats, lt.mc.trigger_stats, 0.36, 0.60)` — rates since trigger
-2. Count post-trigger possessions: `(homePostFGA + homePostTO + awayPostFGA + awayPostTO) / 2`
-3. If `postPoss < 8`: push `INV`, skip sim (insufficient data, ~3-4 minutes from trigger)
-4. If `postPoss >= 8`: run MC sim (500 sims) using post-trigger rates
-5. Classify verdict:
-   - `mcWP > 0.60` → `NORM`
-   - `mcWP > 0.40` → `CONT`
-   - `mcWP > 0.25` → `LIKELY`
-   - `mcWP <= 0.25` → `CONF`
-6. Append to `lt.mc.verdicts`, update `lt.mc.current_mc` and `lt.mc.pattern`
-
-**Pattern classification:**
-```
-No LIKELY or CONF in verdicts → FALSE_ALARM
-Has LIKELY/CONF:
-  No NORM after first alarm → CLEAN
-  NORM after alarm, then re-alarm → WAVE
-  NORM after alarm, no re-alarm → NORMALIZED
-```
-
----
-
-## Alert Generation
-
-### MC_COLLAPSE (on CLEAN pattern)
-
-**Trigger:** Pattern = CLEAN AND `!lt.mc.alert_sent` AND ≥ 3 non-INV verdicts.
-
-**Mechanical fire.** No agent call. Plain English ntfy + DB insert.
-
-**Alert type:** `MC_COLLAPSE`
-
-**ntfy body:**
 ```
 PHI 88-75 BOS · Q3 2:01
 Structural collapse detected — ORL leading by 9 but post-trigger rates
@@ -240,11 +292,11 @@ anchored to early game. MC: 4.2%.
 [If position: Active A-rank position on ORL — consider exit.]
 ```
 
-**Priority:** 5 if graduated position exists, 4 otherwise.
+Priority 5 if graduated position, 4 otherwise.
 
-### No ntfy for WAVE / NORMALIZED / FALSE_ALARM
+### Agent Context
 
-Agent context only. WAVE at 60% is too noisy for subscriber alerts.
+WAVE → agent context "oscillating, position at risk." NORMALIZED → agent context "investigated and cleared, hold confidence." FALSE_ALARM → silent.
 
 ---
 
@@ -252,7 +304,7 @@ Agent context only. WAVE at 60% is too noisy for subscriber alerts.
 
 ### Context Object
 
-In `gatherAgentContext()`, replace `vulnerabilityWarning: lt._vuln_fired` with:
+Replace `vulnerabilityWarning: lt._vuln_fired` with:
 
 ```javascript
 mcInvestigation: lt.mc ? {
@@ -271,173 +323,156 @@ mcInvestigation: lt.mc ? {
 } : null,
 ```
 
-### Prompt Section
-
-Replace VULNERABILITY WARNING block (~line 553-558) with:
-
-```javascript
-${ctx.mcInvestigation?.active ? `
-MC STRUCTURAL INVESTIGATION${ctx.mcInvestigation.pattern ? ' — ' + ctx.mcInvestigation.pattern : ' (active)'}:
-  Triggered Q${ctx.mcInvestigation.trigger_period} ${ctx.mcInvestigation.trigger_clock}
-  when ${ctx.mcInvestigation.ctrl_team} led by ${ctx.mcInvestigation.trigger_margin}.
-  Floor at trigger: ${ctx.mcInvestigation.trigger_floor?.toFixed(2)}
-  XGB at trigger: ${(ctx.mcInvestigation.trigger_xgb * 100).toFixed(0)}%
-  Canary MC at trigger: ${(ctx.mcInvestigation.trigger_mc * 100).toFixed(1)}%
-  Current MC win prob: ${ctx.mcInvestigation.current_mc != null
-    ? (ctx.mcInvestigation.current_mc * 100).toFixed(1) + '%' : 'investigating...'}
-  Verdicts: ${ctx.mcInvestigation.verdicts?.join(' → ') || 'none yet'}
-  Pattern: ${ctx.mcInvestigation.pattern || 'classifying...'}` : ''}
-```
-
-### Agent Rules (replace VULNERABILITY rule at ~line 770)
+### Agent Rules
 
 ```
-- MC_COLLAPSE: Fires mechanically when triggered MC investigation reaches CLEAN
-  pattern — post-trigger possession rates show sustained deterioration that never
-  normalized. Backtest: 72.6% (197 games). Production playoffs: 100% (3 games).
-  When you see MC_COLLAPSE in priorAlerts or MC STRUCTURAL INVESTIGATION section,
-  the cumulative floor and XGB are ANCHORED to early-game data and do NOT reflect
-  current structural reality. Weight MC above floor and XGB for EXIT, BWC_EDGE,
-  and POSITION_SAFE decisions. If graduated position exists, frame as exit signal.
+- MC_COLLAPSE: Fires mechanically on CLEAN pattern. Post-trigger rates show
+  sustained collapse that never normalized. 72.6% precision (197 games), 100%
+  production playoffs (3 games). Floor and XGB are ANCHORED — weight MC above
+  both for EXIT, BWC_EDGE, POSITION_SAFE. If graduated position, frame as exit.
 
-- MC WAVE (in MC STRUCTURAL INVESTIGATION): Oscillating collapse — rates collapsed,
-  recovered, collapsed again. 60% precision. RISK signal, not confirmed collapse.
-  BWC_EDGE: add prominent RISK line. POSITION_SAFE: DOWNGRADE or SUPPRESS.
+- MC WAVE: Oscillating collapse. 60% precision. RISK signal, not confirmed.
+  BWC_EDGE: prominent RISK line. POSITION_SAFE: DOWNGRADE or SUPPRESS.
 
-- MC NORMALIZED: Investigation triggered but rates RECOVERED. CONFIDENCE signal —
-  86-91% ctrl survives. Reference for POSITION_SAFE and BWC_EDGE bodies — MC
-  investigated and cleared. Structural hold validated beyond cumulative indicators.
+- MC NORMALIZED: Rates recovered. 86-91% ctrl survives. CONFIDENCE signal —
+  MC investigated and cleared. Validates position beyond cumulative indicators.
 ```
-
-Update all existing rules that reference "VULNERABILITY in priorAlerts" → "MC_COLLAPSE in priorAlerts" or "MC STRUCTURAL INVESTIGATION section."
-
----
-
-## Graduation System Interaction
-
-### MC_COLLAPSE + Graduated Position (PO_ACTIVE)
-Highest-value scenario. Agent weights MC above graduation badge — badge reflects past control, MC reflects current reality.
-
-### MC_COLLAPSE + TRACKING (Pre-Graduation)
-Early flip buy signal. Existing FLIP BUY logic evaluates opponent independently. MC provides the EXIT signal.
-
-### MC NORMALIZED + Graduated Position
-Confidence boost — "MC investigated and cleared." Context enrichment for POSITION_SAFE bodies.
 
 ---
 
 ## Dead Code Removal: VULNERABILITY
 
-### poll-live-bdl.mjs — Remove
+| Location | Code | Action |
+|----------|------|--------|
+| ~553-558 | VULNERABILITY WARNING prompt section | Replace with MC INVESTIGATION |
+| ~770 | VULNERABILITY agent rule | Replace with MC rules |
+| ~4700 | `'VULNERABILITY'` in POSITION_TYPES | → `'MC_COLLAPSE'` |
+| ~4814 | `'VULNERABILITY':'Vulnerability'` | → `'MC_COLLAPSE':'Structural Collapse'` |
+| ~4835 | `'VULNERABILITY':'Vulnerability'` | → `'MC_COLLAPSE':'Structural Collapse'` |
+| ~6023 | `'VULNERABILITY': 'VULNERABILITY'` | → `'MC_COLLAPSE': 'MC_COLLAPSE'` |
+| ~6155 | `vulnerabilityWarning: lt._vuln_fired` | Replace with mcInvestigation |
+| ~7003-7050 | Entire VULNERABILITY block | Remove — MC replaces |
 
-| Lines (approx) | Code | Action |
-|-----------------|------|--------|
-| 553-558 | `${ctx.vulnerabilityWarning ? ...}` prompt section | Replace with MC INVESTIGATION section |
-| 770 | VULNERABILITY agent rule (~5 lines) | Replace with MC rules |
-| 4700 | `'VULNERABILITY'` in POSITION_TYPES | Replace with `'MC_COLLAPSE'` |
-| 4814 | `'VULNERABILITY':'Vulnerability'` in _alertReadable | Replace with `'MC_COLLAPSE':'Structural Collapse'` |
-| 4835 | `'VULNERABILITY':'Vulnerability'` in _alertReadableW | Replace with `'MC_COLLAPSE':'Structural Collapse'` |
-| 6023 | `'VULNERABILITY': 'VULNERABILITY'` in alert type map | Replace with `'MC_COLLAPSE': 'MC_COLLAPSE'` |
-| 6155 | `vulnerabilityWarning: lt._vuln_fired` | Replace with `mcInvestigation: lt.mc ? {...} : null` |
-| 7003-7050 | Entire VULNERABILITY block (~47 lines) | Remove — MC canary + investigation replaces |
-
-### Dead State in live_tracking
-
-| Key | Action |
-|-----|--------|
-| `lt._vuln_fired` | Dead — replaced by `lt.mc` |
-| `lt._vuln_warnings` | Dead — replaced by `lt.mc.triggered` gate |
-
-No migration needed — runtime JSONB fields reset each game.
-
-### Other Files
-
-| File | Reference | Action |
-|------|-----------|--------|
-| `v3.html` | VULNERABILITY in alert rendering labels | Update to MC_COLLAPSE / Structural Collapse |
-| `post-game-agent.mjs` | If VULNERABILITY in arc scoring | Update to MC_COLLAPSE |
+Dead state: `lt._vuln_fired`, `lt._vuln_warnings` — no migration needed.
 
 ---
 
 ## New DB Schema
 
 ```sql
+-- MC investigation WP on snapshots
 ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS mc_win_prob REAL;
-```
 
-Populated when MC investigation is active. NULL otherwise.
+-- Clutch profiles (auto-updating)
+CREATE TABLE IF NOT EXISTS clutch_profiles (
+  team_alias TEXT NOT NULL,
+  league TEXT NOT NULL DEFAULT 'nba',
+  season TEXT NOT NULL DEFAULT '2025',
+  games INTEGER DEFAULT 0,
+  q4_fga INTEGER DEFAULT 0, q4_fgm INTEGER DEFAULT 0,
+  q4_fg3a INTEGER DEFAULT 0, q4_fg3m INTEGER DEFAULT 0,
+  q4_fta INTEGER DEFAULT 0, q4_ftm INTEGER DEFAULT 0,
+  q4_to INTEGER DEFAULT 0, q4_oreb INTEGER DEFAULT 0,
+  q4_poss REAL DEFAULT 0,
+  full_fga INTEGER DEFAULT 0, full_fgm INTEGER DEFAULT 0,
+  full_fg3a INTEGER DEFAULT 0, full_fg3m INTEGER DEFAULT 0,
+  full_fta INTEGER DEFAULT 0, full_ftm INTEGER DEFAULT 0,
+  full_to INTEGER DEFAULT 0, full_oreb INTEGER DEFAULT 0,
+  full_poss REAL DEFAULT 0,
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (team_alias, league, season)
+);
+```
 
 ---
 
 ## Implementation Inventory
 
-### New Functions
+### New Functions (in poll-live-bdl.mjs)
 
 | Function | ~Lines | Purpose |
 |----------|--------|---------|
 | `extractMCRatesFromPossLog()` | 35 | PBP-derived per-team rates from last N possessions |
 | `runMonteCarloSim()` | 80 | Per-possession tree sim engine |
-| `diffToRates()` | 30 | Rates from box score stat diffs, 3PT regression |
+| `diffToRates()` | 30 | Post-trigger rates from box score diff |
 | `estimateRemainingPoss()` | 15 | Remaining possessions from pace + clock |
 | `classifyMCPattern()` | 25 | Pattern from verdict sequence |
-| **Total functions:** | **~185** | |
+| `updateClutchProfile()` | 20 | UPSERT Q4 stats at game finalization |
 
-### Poll Loop Integration
+### Poll Loop Changes
 
 | Component | ~Lines |
 |-----------|--------|
-| Canary check (Phase 1) | 40 |
-| Investigation (Phase 2) | 50 |
-| MC_COLLAPSE alert fire + ntfy | 30 |
-| **Total poll loop:** | **~120** |
+| Load clutch profiles at cold start | 15 |
+| Compute team 3PT baselines from season cache | 10 |
+| MC canary check (Phase 1) | 40 |
+| MC investigation (Phase 2) | 50 |
+| MC_COLLAPSE alert + ntfy | 30 |
+| Clutch profile UPSERT at game finalization | 25 |
 
-### Context + Prompt
+### Agent Context + Prompt
 
 | Component | ~Lines |
 |-----------|--------|
 | gatherAgentContext mcInvestigation | 12 |
 | formatSonnetPrompt MC section | 15 |
 | Agent rules | 20 |
-| **Total context:** | **~47** |
 
-**Net code change:** Remove ~47 lines (VULN block) + ~15 lines (VULN refs). Add ~352 lines. **Net: +290 lines.**
+### Other Files
+
+| File | Change | ~Lines |
+|------|--------|--------|
+| db-api.js | clutch_profiles table in init, get_clutch_profiles action | 25 |
+| mc-backtest.mjs | backfill_clutch phase (one-time, reads 181 games) | 60 |
+
+**Total new code: ~430 lines.** Remove ~62 lines (VULN). **Net: ~370 lines.**
 
 ---
 
 ## Implementation Order
 
-1. Port MC functions (top of poll-live-bdl.mjs near utilities)
-2. Add `extractMCRatesFromPossLog()` (new — uses PBP log structure)
-3. Remove VULNERABILITY block (~7003-7050) and dead state refs
-4. Insert MC canary + investigation in same location
-5. MC_COLLAPSE alert fire — DB insert + ntfy
-6. Agent context — replace vulnerabilityWarning with mcInvestigation
-7. Agent rules — replace VULNERABILITY with MC rules
-8. Update POSITION_TYPES + readable maps
-9. Add `snapshots.mc_win_prob` column in db-api.js init
-10. Dashboard MC strip (deferred)
+### Phase A: Clutch Profiles Foundation
+1. `clutch_profiles` table in db-api.js init
+2. `backfill_clutch` phase in mc-backtest.mjs — seed from 181 games
+3. Auto-update UPSERT in poll loop at game finalization
+4. Load clutch profiles at cold start
 
-Steps 1-9 = single deploy.
+### Phase B: MC Engine + VULNERABILITY Replacement
+5. Port MC functions (runMonteCarloSim, diffToRates, estimateRemainingPoss, classifyMCPattern)
+6. Add extractMCRatesFromPossLog (PBP-derived canary rates)
+7. Per-team 3PT baseline from season cache + clutch profiles
+8. Remove VULNERABILITY block + dead state
+9. Insert MC canary + investigation
+10. MC_COLLAPSE alert + ntfy
+11. Agent context + rules
+12. Update POSITION_TYPES + readable maps
+13. Add snapshots.mc_win_prob column
+
+### Phase C: Dashboard (deferred)
+14. MC strip on game cards (badge: Investigating / COLLAPSE / Oscillating / Cleared)
+
+Phase A ships first (can deploy independently — no functional change, just data collection). Phase B ships as a single deploy. Phase C follows.
 
 ---
 
 ## Verification Plan
 
-### Pre-Deploy
-- Syntax check
-- Grep for remaining VULNERABILITY/vuln references (zero expected)
-- Unit test: feed known PBP log to extractMCRatesFromPossLog, verify rates
+### Phase A Verification
+- Run backfill_clutch, verify 30 teams populated with reasonable Q4 rates
+- Manually check: ORL Q4 from DET@ORL G6 (the collapse game) should show terrible Q4 FG%
+- Verify auto-update fires on next game finalization
 
-### Post-Deploy (live slate dry run)
-- Monitor logs for MC canary fires
+### Phase B Verification
+- Syntax check, grep for remaining VULNERABILITY refs (zero expected)
+- Monitor logs for MC canary fires on live slate
 - Verify lt.mc persists across polls
-- Verify pattern classification progresses
-- Confirm MC_COLLAPSE ntfy body is plain English
+- Verify pattern classification progresses correctly
+- Confirm MC_COLLAPSE ntfy fires with correct body
 - Confirm agent sees MC INVESTIGATION context
-- Confirm no VULNERABILITY references remain
+- Compare MC regression: team-specific baseline vs old flat 36%
 
 ### Regression
-- PBP window computation still works (shared infra, different consumer)
-- XGB EXIT unaffected
-- BWC state machine unaffected
-- Graduation system unaffected
+- PBP window computation unchanged
+- XGB EXIT unchanged
+- BWC state machine unchanged
+- Graduation system unchanged
