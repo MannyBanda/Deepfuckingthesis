@@ -3101,6 +3101,7 @@ async function phaseCrossTriggered(sql, url) {
   var mcThreshold = parseFloat(url.searchParams.get('mc_threshold') || '0.70');
   var simCount = parseInt(url.searchParams.get('sims') || '300');
   var regressionCap = parseFloat(url.searchParams.get('rc') || '0.60');
+  var ctrlLeadingOnly = url.searchParams.get('ctrl_leading') === '1';
   var startTime = Date.now();
 
   var gameIds = await sql`
@@ -3225,7 +3226,14 @@ async function phaseCrossTriggered(sql, url) {
       } else {
         canaryFired = cp.floor != null && (cp.floor - mc.winProb) > canaryThreshold;
       }
-      if (canaryFired) { triggerIdx = ci; break; }
+      if (canaryFired) {
+        if (ctrlLeadingOnly) {
+          var ctrlHome3 = cp.ctrl_team === cp.home_alias;
+          var ctrlMargin = ctrlHome3 ? (cp.margin || 0) : -(cp.margin || 0);
+          if (ctrlMargin <= 0) continue; // ctrl not leading, skip
+        }
+        triggerIdx = ci; break;
+      }
     }
 
     if (triggerIdx === null) continue;
@@ -3235,6 +3243,7 @@ async function phaseCrossTriggered(sql, url) {
     var triggerStats = parsed[triggerIdx];
     var ctrlWon = triggerCp.ctrl_team_won;
     var ctrlHome2 = triggerCp.ctrl_team === triggerCp.home_alias;
+    var ctrlTrigMargin = ctrlHome2 ? (triggerCp.margin || 0) : -(triggerCp.margin || 0);
     var correct = !ctrlWon;
 
     // Capture floor + XGB at trigger
@@ -3420,6 +3429,7 @@ async function phaseCrossTriggered(sql, url) {
     canary_mode: canaryMode,
     canary_threshold: canaryThreshold,
     mc_threshold: mcThreshold,
+    ctrl_leading_only: ctrlLeadingOnly,
     total_games: agg.total,
     triggered: agg.triggered,
     patterns: patternSummary,
