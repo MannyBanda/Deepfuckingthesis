@@ -326,17 +326,100 @@ mcInvestigation: lt.mc ? {
 ### Agent Rules
 
 ```
-- MC_COLLAPSE: Fires mechanically on CLEAN pattern. Post-trigger rates show
-  sustained collapse that never normalized. 72.6% precision (197 games), 100%
-  production playoffs (3 games). Floor and XGB are ANCHORED — weight MC above
-  both for EXIT, BWC_EDGE, POSITION_SAFE. If graduated position, frame as exit.
+- MC_COLLAPSE (CLEAN pattern):
+  Fires mechanically. Post-trigger rates show sustained collapse that never
+  normalized. 72.6% precision (295 games backtest), 83.3% production (6 games).
+
+  TRUST HIERARCHY depends on XGB agreement (validated, n=295):
+    • CLEAN + XGB LOW (<0.50)  = CONFIRMED COLLAPSE. 86.9% precision (n=84).
+      Both signals agree ctrl is collapsing. Max conviction EXIT.
+    • CLEAN + XGB MED (0.50-0.70) = DEVELOPING COLLAPSE. 70.4% precision (n=108).
+      MC is leading, XGB starting to waver. Strong EXIT signal.
+    • CLEAN + XGB HIGH (>0.70) = PROBABLE COLLAPSE. 73.8% precision (n=103).
+      MC vs XGB disagree. Agent should scrutinize heavily — floor and XGB are
+      anchored to stale data, but MC is not infallible here. Frame as high risk,
+      not certainty. Do NOT auto-override XGB.
+
+  Floor state at trigger is weakly discriminative (77.6% HIGH vs 75.6% MED) —
+  floor does not meaningfully change CLEAN precision. This confirms floor is
+  the anchored signal MC was designed to catch.
 
 - MC WAVE: Oscillating collapse. 60% precision. RISK signal, not confirmed.
   BWC_EDGE: prominent RISK line. POSITION_SAFE: DOWNGRADE or SUPPRESS.
 
 - MC NORMALIZED: Rates recovered. 86-91% ctrl survives. CONFIDENCE signal —
   MC investigated and cleared. Validates position beyond cumulative indicators.
+
+- MC as BUY trigger: MC_COLLAPSE on ctrl does NOT justify buying the opponent
+  by itself. Validated findings (1,235 games):
+    • MC<0.30 + ctrl leading Q4: opponent wins only 49.5% (n=97) — coin flip.
+    • MC<0.30 + ctrl floor STILL ANCHORED HIGH (>0.75): opponent wins 25.8% (n=213).
+    • MC<0.30 + ctrl floor DROPPING (<0.60): opponent wins 59.9% (n=182).
+  MC collapse alone means floor anchoring is masking decay. Only when floor
+  ALSO starts dropping (confirming the collapse) does the opponent BUY signal
+  become actionable. Agent should treat MC collapse + floor drop as the compound
+  BUY trigger, not MC alone.
+
+- MARGIN_COMPRESS context (Q3 more dangerous than Q4):
+    • Q3 margin compression (dropped 6+ over 2 checkpoints): ctrl wins 57.1% (n=84).
+    • Q4 margin compression: ctrl wins 75.7% (n=37) — less time to complete reversal.
+    • MC stacking: when margin compresses AND MC_VERY_LOW (<0.30): ctrl wins 60.0% (n=95).
+      When margin compresses but MC neutral (>0.55): ctrl wins 91.7% (n=639).
+    MC discriminates well during margin compression — use MC to distinguish
+    real collapses from normal variance in close games.
 ```
+
+---
+
+## Cross-Signal Validation Findings (May 3, 2026)
+
+Eight phases of cross-signal analysis (`cross_concordance` through `cross_deep`) on 1,235 backtest games + 50 production games.
+
+### Temporal AUC — XGB dominates raw prediction at every checkpoint
+
+| Checkpoint | Floor | MC | XGB | Adaptive |
+|-----------|-------|-----|-----|----------|
+| Q2_END | 0.680 | 0.670 | 0.851 | 0.810 |
+| Q3_END | 0.744 | 0.737 | 0.915 | 0.848 |
+| Q4_3 | 0.769 | 0.918 | 0.955 | 0.943 |
+
+MC catches up to floor by late Q4 but never beats XGB on raw AUC. MC's value is as a **targeted collapse detector**, not a better overall predictor.
+
+### CLEAN × XGB (n=295 backtest, the spec-defining finding)
+
+| XGB State | N | CLEAN Precision | Interpretation |
+|-----------|---|-----------------|----------------|
+| XGB LOW (<0.50) — signals agree | 84 | **86.9%** | CONFIRMED COLLAPSE |
+| XGB MED (0.50-0.70) — XGB wavering | 108 | 70.4% | DEVELOPING COLLAPSE |
+| XGB HIGH (>0.70) — MC vs XGB disagree | 103 | 73.8% | PROBABLE COLLAPSE |
+
+Pattern classification (CLEAN vs NORMALIZED vs FALSE_ALARM) does massive lifting: raw CONFIRMED verdict + XGB_HIGH is a coin flip (53.3%); CLEAN + XGB_HIGH is 73.8%.
+
+### MC Collapse NOT a Standalone BUY Trigger
+
+| Ctrl State at Collapse | N | Opponent Win% |
+|------------------------|---|---------------|
+| MC<0.30, leading, Q4 | 97 | 49.5% |
+| MC<0.30, floor ANCHORED HIGH (>0.75) | 213 | 25.8% |
+| MC<0.30, floor DROPPING (<0.60) | 182 | **59.9%** |
+
+BUY trigger requires **MC collapse + floor confirmation (dropping)**. MC alone detects anchoring; floor dropping confirms the collapse is real.
+
+### MARGIN_COMPRESS Timing
+
+| Period | N | Ctrl Win% |
+|--------|---|-----------|
+| Q3 | 84 | 57.1% |
+| Q4 | 37 | 75.7% |
+
+Q3 compression is more dangerous — full quarter remains for opponent to finish reversal. MC discriminates well: MC_VERY_LOW during compression → ctrl wins 60.0% (n=95); MC neutral → ctrl wins 91.7% (n=639).
+
+### Key Design Principles from Validation
+
+1. **MC is a targeted tool, not a better predictor.** Use for collapse detection, not general win probability.
+2. **Pattern classification is essential.** Without CLEAN/WAVE/NORMALIZED, MC investigation is noise against XGB consensus.
+3. **Trust hierarchy is conditional on XGB agreement**, not blanket "MC > XGB > Floor."
+4. **MC collapse + floor alignment = compound BUY trigger.** Neither signal alone is sufficient.
 
 ---
 

@@ -43,30 +43,40 @@ MC STRUCTURAL INVESTIGATION${pattern ? ' — ' + pattern : ' (active)'}:
 ```
 - MC_COLLAPSE: Fires mechanically when MC structural investigation reaches CLEAN
   pattern — possession rates since trigger show SUSTAINED deterioration that never
-  normalized. 72.6% precision on 197 backtest games, 100% on production playoffs.
+  normalized. 72.6% precision on 295 backtest games, 83.3% on 6 production games.
 
   WHEN MC_COLLAPSE APPEARS IN priorAlerts OR MC STRUCTURAL INVESTIGATION ABOVE:
   The cumulative floor and XGB are ANCHORED to early-game data. They do NOT reflect
   what is happening RIGHT NOW. MC computes rates from actual possessions since the
   trigger fired — this is the most current structural read in the system.
 
-  Trust hierarchy when MC_COLLAPSE is active:
-    MC pattern > XGB > Floor > Graduation badge
+  Trust hierarchy when MC_COLLAPSE is active — CONDITIONAL on XGB agreement:
+    CLEAN + XGB LOW (<0.50):  CONFIRMED COLLAPSE (86.9%, n=84). Both signals agree.
+                              Max conviction — treat as definitive.
+    CLEAN + XGB MED (0.50-0.70): DEVELOPING COLLAPSE (70.4%, n=108). MC leading,
+                              XGB wavering. Strong signal — act with high confidence.
+    CLEAN + XGB HIGH (>0.70): PROBABLE COLLAPSE (73.8%, n=103). MC vs XGB disagree.
+                              High risk but NOT certainty. Scrutinize heavily — frame
+                              as "MC detects deterioration that XGB hasn't priced in"
+                              rather than "XGB is wrong." Do NOT auto-override XGB.
 
   Per alert type:
     EXIT: MC_COLLAPSE CONFIRMS the exit — the collapse was real and sustained.
           Reference MC in body: "Post-trigger rates show sustained collapse since
           Q${trigger_period} ${trigger_clock}."
+          If CLEAN + XGB LOW: "Both MC and XGB confirm structural collapse."
+          If CLEAN + XGB HIGH: "MC detects collapse; XGB hasn't caught up yet."
     BWC_EDGE: SUPPRESS or add CRITICAL RISK line. The position is structurally
               compromised — floor is lying due to cumulative anchoring.
     POSITION_SAFE: SUPPRESS. Cannot reassure subscriber about a position where
                    MC detected sustained structural collapse.
     POSITION_OPEN: DOWNGRADE. Graduation badge may be stale — MC says the
                    structural edge that powered graduation is eroding.
-    BUY (on opponent): If MC_COLLAPSE is on the ctrl team AND the opponent
-                       independently qualifies as BUY, this is the highest-
-                       conviction entry signal. The structural flip is confirmed
-                       by MC before floor and XGB catch up.
+    BUY (on opponent): MC_COLLAPSE alone does NOT justify buying the opponent.
+                       Opponent wins only 25.8% when ctrl floor is still anchored
+                       high (>0.75). Only when ctrl floor is ALSO dropping (<0.60)
+                       does opponent win 59.9% (n=182). Require floor confirmation
+                       before treating as BUY trigger.
 
 - MC WAVE: Oscillating collapse. Rates collapsed, recovered, collapsed again.
   60% precision — RISK signal, NOT confirmed collapse.
@@ -129,10 +139,19 @@ MC TRUST HIERARCHY:
 When MC STRUCTURAL INVESTIGATION is active (see section below), it provides the
 most current structural read in the system. MC computes rates from actual recent
 possessions — it is immune to the cumulative anchoring that affects floor and XGB.
-- MC CLEAN/WAVE = floor and XGB are PROVEN stale. Don't trust them over MC.
+- MC CLEAN = floor is PROVEN stale. Trust level depends on XGB agreement:
+    CLEAN + XGB LOW = CONFIRMED (86.9%) — max conviction, both signals agree.
+    CLEAN + XGB MED = DEVELOPING (70.4%) — MC leading, XGB catching up.
+    CLEAN + XGB HIGH = PROBABLE (73.8%) — strong risk but NOT certainty.
+- MC WAVE = oscillating collapse. 60% precision. Risk signal, not confirmed.
 - MC NORMALIZED = floor and XGB are VALIDATED. The system tested for collapse
   and found the structural edge intact. Trust cumulative signals with confidence.
 - MC not active = use standard floor/XGB/rolling window analysis as before.
+
+MC AS BUY TRIGGER — requires floor confirmation:
+  MC collapse alone is insufficient (opponent wins only 25.8% when ctrl floor
+  stays anchored high). Only when ctrl floor ALSO drops below 0.60 does
+  opponent win rate reach 59.9%. Both signals must agree for BUY action.
 ```
 
 ---
