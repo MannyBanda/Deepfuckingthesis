@@ -71,6 +71,7 @@ const READABLE = {
   'POSITION_OPEN': 'Position Open', 'BWC_EDGE': 'Holding', 'VALUE': 'Entry Value',
   'EXIT': 'Exit', 'THESIS_ALIVE': 'Second Chance', 'POSITION_RECOVERING': 'Strengthening',
   'POSITION_SAFE': 'Position Safe', 'AUTO_ANALYSIS': 'Position Update',
+  'MC_COLLAPSE': 'Structural Collapse',
   'BUY': 'Buy', 'TRACKING': 'Tracking',
 };
 const readable = (t) => READABLE[t] || t;

@@ -454,6 +454,29 @@ exports.handler = async (event) => {
         PRIMARY KEY (game_id, label)
       )`;
 
+      // MC: snapshots.mc_win_prob
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS mc_win_prob REAL`; } catch(e) {}
+
+      // MC: clutch_profiles — auto-updating per-team Q4 rate profiles
+      await sql`CREATE TABLE IF NOT EXISTS clutch_profiles (
+        team_alias TEXT NOT NULL,
+        league TEXT NOT NULL DEFAULT 'nba',
+        season TEXT NOT NULL DEFAULT '2025',
+        games INTEGER DEFAULT 0,
+        q4_fga INTEGER DEFAULT 0, q4_fgm INTEGER DEFAULT 0,
+        q4_fg3a INTEGER DEFAULT 0, q4_fg3m INTEGER DEFAULT 0,
+        q4_fta INTEGER DEFAULT 0, q4_ftm INTEGER DEFAULT 0,
+        q4_to INTEGER DEFAULT 0, q4_oreb INTEGER DEFAULT 0,
+        q4_poss REAL DEFAULT 0,
+        full_fga INTEGER DEFAULT 0, full_fgm INTEGER DEFAULT 0,
+        full_fg3a INTEGER DEFAULT 0, full_fg3m INTEGER DEFAULT 0,
+        full_fta INTEGER DEFAULT 0, full_ftm INTEGER DEFAULT 0,
+        full_to INTEGER DEFAULT 0, full_oreb INTEGER DEFAULT 0,
+        full_poss REAL DEFAULT 0,
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (team_alias, league, season)
+      )`;
+
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'Schema initialized' }) };
     }
 
@@ -2086,6 +2109,20 @@ exports.handler = async (event) => {
           ORDER BY team_alias
         `;
       }
+      return { statusCode: 200, headers, body: JSON.stringify({ profiles: rows }) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // GET_CLUTCH_PROFILES — per-team Q4 rate profiles for MC
+    // ═══════════════════════════════════════════════════════
+    if (action === 'get_clutch_profiles') {
+      const league = params.league || 'nba';
+      const season = params.season || '2025';
+      const rows = await sql`
+        SELECT * FROM clutch_profiles
+        WHERE league = ${league} AND season = ${season}
+        ORDER BY team_alias
+      `;
       return { statusCode: 200, headers, body: JSON.stringify({ profiles: rows }) };
     }
 

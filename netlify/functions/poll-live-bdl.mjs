@@ -25,6 +25,10 @@ try {
   XGB_MODEL = JSON.parse(readFileSync(join(__xgbDir, 'xgb-model.json'), 'utf8'));
 } catch (e) { /* non-fatal — system operates without XGB */ }
 
+// MC: Clutch profiles and team 3PT baselines (loaded at first poll)
+var _clutchMap = null;
+var _team3ptBaselines = null;
+
 // XGB feature order (must match training — no progress):
 // [0] ctrl_paint_diff, [1] ctrl_pot_diff, [2] ctrl_to_diff,
 // [3] ctrl_stl_diff, [4] ctrl_oreb_diff, [5] ctrl_ast_diff, [6] ctrl_blk_diff,
@@ -550,12 +554,15 @@ ${ctx.alertType === 'XGB_INVALIDATED' ? `XGB THESIS COLLAPSE:
   Current XGB: ${(ctx.xgbWinProb * 100).toFixed(1)}% — BELOW Q${ctx.period} gate of ${(ctx.xgbQuarterGate * 100).toFixed(0)}%
   Drop: ${((ctx.xgbBuySendProb - ctx.xgbWinProb) * 100).toFixed(0)}pp
   The raw-stats model no longer sees a viable structural edge. ALWAYS SEND this alert — add narrative about what changed.` : ''}
-${ctx.vulnerabilityWarning ? `
-VULNERABILITY WARNING (fired earlier this game):
-  ${ctx.vulnerabilityWarning.team} flagged as vulnerable at Q${ctx.vulnerabilityWarning.period} ${ctx.vulnerabilityWarning.clock}
-  PBP 15-possession window: ${(ctx.vulnerabilityWarning.window_score * 100).toFixed(0)}% (ctrl-relative) — opponent dominated recent possessions
-  XGB at warning: ${(ctx.vulnerabilityWarning.xgb * 100).toFixed(0)}% | Margin at warning: ${ctx.vulnerabilityWarning.margin}
-  This means the structural shift was detected BEFORE cumulative indicators caught up. Weight heavily for EXIT/BWC_EDGE/POSITION_SAFE decisions — the PBP window saw this coming.` : ''}
+${ctx.mcInvestigation?.active ? `
+MC STRUCTURAL INVESTIGATION${ctx.mcInvestigation.pattern ? ' — ' + ctx.mcInvestigation.pattern : ' (active)'}:
+  Triggered Q${ctx.mcInvestigation.trigger_period} ${ctx.mcInvestigation.trigger_clock} when ${ctx.mcInvestigation.ctrl_team} led by ${ctx.mcInvestigation.trigger_margin}.
+  Floor at trigger: ${ctx.mcInvestigation.trigger_floor?.toFixed(2)} | XGB at trigger: ${(ctx.mcInvestigation.trigger_xgb * 100).toFixed(0)}%
+  Canary MC at trigger: ${(ctx.mcInvestigation.trigger_mc * 100).toFixed(1)}% (20-possession PBP window)
+  Current MC win prob: ${ctx.mcInvestigation.current_mc != null ? (ctx.mcInvestigation.current_mc * 100).toFixed(1) + '%' : 'investigating'}
+  Verdicts: ${ctx.mcInvestigation.verdicts?.join(' → ') || 'none yet'}
+  Pattern: ${ctx.mcInvestigation.pattern || 'classifying...'}
+  Prior investigations this game: ${ctx.mcInvestigation.prior_investigations || 0}` : ''}
 
 FLOOR TRAJECTORY:
 ${ctx.floorHistory || 'No prior snapshots'}
@@ -767,10 +774,19 @@ RULES:
 - BUY: the thesis is "structurally dominant team is trailing due to unsustainable opponent variance." Verify the control team actually dominates AND the opponent's lead is variance-driven.
 - BWC (Buy Window Closing): the thesis is "market hasn't priced in structural dominance yet." Verify edge is real and lead is secure.
   • BWC + I4 EVEN: Unlike BUY (where the team must TAKE control back), BWC teams already HOLD the lead. I4 EVEN is NOT a suppress signal for BWC when 3+ other indicators favor the control team and sustainability is LOCKED IN, DURABLE, or STALLED. STALLED means both shooting dimensions are significantly below baseline — but a lead built on paint and transition doesn't need hot shooting to hold. Only suppress BWC on I4 EVEN if fewer than 3 indicators won OR sustainability is FRAGILE/UNSUSTAINABLE OR floor is unstable (dropped 0.15+ in recent snapshots).
-- VULNERABILITY: Fires mechanically (no agent call) when the ctrl team is leading by 0-5, XGB < 0.65, and the PBP 15-possession window shows the opponent dominating (ctrl score <= 0.45). When you see VULNERABILITY in priorAlerts or the VULNERABILITY WARNING section above, it means the structural shift was detected via possession-level data BEFORE cumulative indicators reacted. This is highly predictive — weight it heavily when evaluating subsequent BWC_EDGE (lean SUPPRESS or add strong RISK line), POSITION_SAFE (flag that the position was already vulnerable), and EXIT decisions (confirms the structural collapse was real and early-detected). The vulnerability warning is the PBP window catching what cumulative floor and XGB miss due to anchoring.
+- MC_COLLAPSE (CLEAN pattern): Fires mechanically when MC structural investigation detects sustained collapse — post-trigger possession rates never normalized. 72.6% precision (295 backtest), 83.3% production (6 games). When MC STRUCTURAL INVESTIGATION is active above, MC computes rates from actual recent possessions — immune to cumulative anchoring that affects floor and XGB.
+  Trust hierarchy depends on XGB agreement:
+    CLEAN + XGB LOW (<0.50) = CONFIRMED COLLAPSE (86.9%, n=84). Both agree. Max conviction.
+    CLEAN + XGB MED (0.50-0.70) = DEVELOPING COLLAPSE (70.4%, n=108). MC leading, XGB wavering.
+    CLEAN + XGB HIGH (>0.70) = PROBABLE COLLAPSE (73.8%, n=103). MC vs XGB disagree — high risk, NOT certainty. Do NOT auto-override XGB.
+  Margin qualifier — ctrl lead at trigger: ≤3=81%, 4-8=72%, 9-15=63%, 16+=noise. Avg CLEAN trigger margin is only +1.7.
+  Per alert type: EXIT=MC confirms exit. BWC_EDGE=SUPPRESS or CRITICAL RISK. POSITION_SAFE=SUPPRESS. POSITION_OPEN=DOWNGRADE. BUY on opponent=requires ctrl floor ALSO dropping (<0.60) — MC collapse alone is insufficient (opponent wins only 25.8% when ctrl floor stays anchored high).
+  MC CLEAN/WAVE overrides combined_read — treat as COLLAPSING/SHIFT regardless. MC NORMALIZED = treat as REINFORCING.
+- MC WAVE: Oscillating collapse. 60% precision. RISK signal, not confirmed. BWC_EDGE: prominent RISK line. POSITION_SAFE: DOWNGRADE.
+- MC NORMALIZED: Rates recovered. 86-91% ctrl survives. CONFIDENCE signal. Reference as positive for POSITION_SAFE/BWC_EDGE. Argues AGAINST exit.
 - XGB_INVALIDATED: The structural model (XGBoost) that supported a prior BUY has dropped below the quarter's viability gate (Q2<0.40, Q3<0.45, Q4<0.60). ALWAYS SEND — the mechanical gate is the filter. Your job is to add narrative context: (1) what the SHAP drivers are showing NOW vs at BUY time — has interior/paint collapsed? has disruption (I1) flipped? (2) whether the XGB drop is driven by raw stat decay or game progress pressure, (3) what the current structural picture looks like (indicators, conviction, floor-margin relationship). Frame as: "The structural model no longer supports the [TEAM] BUY — [explain what changed in basketball terms]. Consider exiting if you took this position." This is an exit signal, not a veto of future entry.
 - CONVICTION QUALITY: If provided, evaluate how the XGB model arrives at its prediction. CONFIRMED scoreboard = high confidence (95% WR). NOT CONFIRMED = stats not translating to lead, elevate scrutiny. VOLATILE basis (pot/stl/oreb/to/runs dominant) = circumstantial edge, may not sustain. Multiple conviction warnings compounding = strong SUPPRESS/DOWNGRADE signal. Single warning = flag as RISK, not auto-SUPPRESS.
-- ANCHORED FLOOR CHECK: If team is TRAILING with floor 0.75+ but margin only 1-3 pts AND floor is declining from recent snapshots, the floor may be anchored from earlier dominance that has eroded. Verify recent quarters still favor control team before SEND. This rule does NOT apply to leading teams (BWC) — a high floor with a small lead is a valid structural read.
+- ANCHORED FLOOR CHECK: If team is TRAILING with floor 0.75+ but margin only 1-3 pts AND floor is declining from recent snapshots, the floor may be anchored from earlier dominance that has eroded. Verify recent quarters still favor control team before SEND. This rule does NOT apply to leading teams (BWC) — a high floor with a small lead is a valid structural read. When MC STRUCTURAL INVESTIGATION is active and shows CLEAN/WAVE, the floor IS anchored — MC proved it by showing post-trigger rates have deteriorated while cumulative floor remained high. Do not independently diagnose anchoring when MC has already measured it.
 - EARLY GAME NOTE (Q1-Q2): Indicator samples are smaller early — steals/blocks counts are low, run share may not be populated yet, and biggest_lead gaps can form from a single early run. This does NOT mean early signals are unreliable. The new indicator formulas have proven predictive even in Q2. For Q1-Q2 FIRED alerts: I4 COMBO YES = SEND with confidence. I4 COMBO NO = apply normal scrutiny (don't auto-reject, just verify the structural case). For Q1-Q2 CANDIDATE alerts: I4 COMBO YES = SEND. I4 COMBO NO = apply extra scrutiny but still SEND if floor is strong (0.75+) and sustainability favors control team. Q3+ alerts have the most data — highest confidence.
 - CANDIDATE BUYs at floor 0.55-0.65: only SEND if I4 COMBO is YES (I4 decisive + at least one other indicator agrees — this pattern is 98-100% accurate historically). Without I4 COMBO, require very strong sustainability case to justify SEND.
 - CANDIDATE BUYs with negative ML (heavy favorite trailing): the CANDIDATE tier reflects the ML gate (-250 to -400), NOT structural weakness. Evaluate the structural case as if it were FIRED — if I4 COMBO YES + STRONG/DOMINANT conviction, SEND so the subscriber can shop for favorable lines. Note the heavy ML in the BODY.
@@ -1520,7 +1536,7 @@ function parseBDLPBPServer(plays, homeAbbr, awayAbbr) {
   };
 }
 
-// ── POSSESSION LOG & WINDOW (for VULNERABILITY warning) ──────────────────
+// ── POSSESSION LOG & WINDOW (for MC canary + VULNERABILITY legacy) ──────────────────
 // Walks sorted BDL plays, segments into possessions.
 // Possession boundary: made shot (non-FT or final FT), turnover, defensive rebound, offensive foul, end of period.
 function buildPossLogServer(sorted, hA, aA) {
@@ -1648,6 +1664,189 @@ function computePossWindowServer(possLog, windowSize, hA, aA) {
   const controlTeam = score >= 0.5 ? hA : aA;
 
   return { available: true, score, controlTeam, i1, i2, i3, i4, i5, windowSize, possCount: window.length };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MONTE CARLO ENGINE — possession-level simulation for structural collapse detection
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Simulate a single possession given team rates → returns points scored
+function simulatePossessionMC(rates) {
+  if (Math.random() < rates.toRate) return 0;
+  var shotPts = 0, isMake = false;
+  if (Math.random() < rates.fg3aShare) {
+    isMake = Math.random() < rates.fg3Pct;
+    if (isMake) shotPts = 3;
+  } else {
+    isMake = Math.random() < rates.fg2Pct;
+    if (isMake) shotPts = 2;
+  }
+  if (!isMake && Math.random() < rates.orebRate) {
+    if (Math.random() < rates.fg2Pct) shotPts = 2;
+  }
+  if (Math.random() < rates.ftaRate / 2) {
+    if (Math.random() < rates.ftPct) shotPts += 1;
+    if (Math.random() < rates.ftPct) shotPts += 1;
+  }
+  return shotPts;
+}
+
+// Run N simulations from current score → ctrl team win probability + margin distribution
+function runMonteCarloSim(homeRates, awayRates, homeScore, awayScore, remainPoss, opts) {
+  var simCount = (opts && opts.simCount) || 500;
+  var ctrlIsHome = (opts && opts.ctrlTeam === 'away') ? false : true;
+  var margins = new Array(simCount);
+  var ctrlWins = 0, leadLost = 0;
+  var currentMargin = homeScore - awayScore;
+  var ctrlMargin = ctrlIsHome ? currentMargin : -currentMargin;
+  var ctrlLeading = ctrlMargin > 0;
+  for (var s = 0; s < simCount; s++) {
+    var hScore = homeScore, aScore = awayScore;
+    var hPoss = Math.round(remainPoss), aPoss = Math.round(remainPoss);
+    var homeHasBall = Math.random() < 0.5;
+    while (hPoss > 0 || aPoss > 0) {
+      if (homeHasBall) { if (hPoss > 0) { hScore += simulatePossessionMC(homeRates); hPoss--; } }
+      else { if (aPoss > 0) { aScore += simulatePossessionMC(awayRates); aPoss--; } }
+      homeHasBall = !homeHasBall;
+    }
+    var finalMargin = ctrlIsHome ? (hScore - aScore) : (aScore - hScore);
+    margins[s] = finalMargin;
+    if (finalMargin > 0) ctrlWins++;
+    else if (finalMargin === 0) ctrlWins += 0.5;
+    if (ctrlLeading && finalMargin <= 0) leadLost++;
+  }
+  margins.sort(function(a, b) { return a - b; });
+  return {
+    winProb: Math.round(ctrlWins / simCount * 1000) / 1000,
+    collapseProb: ctrlLeading ? Math.round(leadLost / simCount * 1000) / 1000 : null,
+    medianMargin: margins[Math.floor(simCount * 0.50)],
+    margin10pct: margins[Math.floor(simCount * 0.10)],
+    margin90pct: margins[Math.floor(simCount * 0.90)],
+    currentMargin: ctrlMargin,
+    simCount: simCount,
+    remainingPoss: Math.round(remainPoss),
+  };
+}
+
+// Diff two cumulative stat objects to get window rates for MC sim
+function diffToRatesMC(curr, prev, seasonFg3Pct, regressionCap) {
+  var cap = regressionCap || 0.60;
+  var fga = (Number(curr.fga)||0) - (Number(prev.fga)||0);
+  var fgm = (Number(curr.fgm)||0) - (Number(prev.fgm)||0);
+  var fg3a = (Number(curr.fg3a)||0) - (Number(prev.fg3a)||0);
+  var fg3m = (Number(curr.fg3m)||0) - (Number(prev.fg3m)||0);
+  var fta = (Number(curr.fta)||0) - (Number(prev.fta)||0);
+  var ftm = (Number(curr.ftm)||0) - (Number(prev.ftm)||0);
+  var to = (Number(curr.to)||0) - (Number(prev.to)||0);
+  var oreb = (Number(curr.oreb)||0) - (Number(prev.oreb)||0);
+  var fg2a = fga - fg3a, fg2m = fgm - fg3m;
+  var poss = fga + 0.44 * fta - oreb + to;
+  if (poss < 3) poss = Math.max(fga, 3);
+  if (fga < 5) return null;
+  var toRate = poss > 0 ? to / poss : 0.12;
+  var fg3aShare = fga > 0 ? fg3a / fga : 0.35;
+  var rawFg3Pct = fg3a > 0 ? fg3m / fg3a : 0.36;
+  var fg2Pct = fg2a > 0 ? fg2m / fg2a : 0.50;
+  var orebRate = (fga - fgm) > 0 ? oreb / (fga - fgm) : 0.25;
+  var ftaRate = poss > 0 ? fta / poss : 0.20;
+  var ftPct = fta > 0 ? ftm / fta : 0.76;
+  var baseline = seasonFg3Pct || 0.36;
+  var sampleWeight = Math.min(cap, fg3a / 30);
+  var fg3Pct = rawFg3Pct * sampleWeight + baseline * (1 - sampleWeight);
+  function clamp(v) { return Math.max(0, Math.min(1, v)); }
+  return {
+    toRate: clamp(toRate), fg3aShare: clamp(fg3aShare), fg3Pct: clamp(fg3Pct),
+    fg2Pct: clamp(fg2Pct), orebRate: clamp(orebRate), ftaRate: Math.min(ftaRate, 1.0),
+    ftPct: clamp(ftPct), _windowPoss: Math.round(poss), _windowFGA: fga,
+  };
+}
+
+// Extract MC rates from possLog (PBP-derived) — last N possessions per team
+function extractMCRatesFromPossLog(possLog, windowSize, hA, aA, hBaseline, aBaseline) {
+  if (!possLog || possLog.length < windowSize) return null;
+  var window = possLog.slice(-windowSize);
+  function aggSide(tm) {
+    var p = window.filter(function(x) { return x.team === tm; });
+    return {
+      fgm: p.reduce(function(s,x){return s+x.fgm;},0), fga: p.reduce(function(s,x){return s+x.fga;},0),
+      fg3m: p.reduce(function(s,x){return s+x.fg3m;},0), fg3a: p.reduce(function(s,x){return s+x.fg3a;},0),
+      ftm: p.reduce(function(s,x){return s+x.ftm;},0), fta: p.reduce(function(s,x){return s+x.fta;},0),
+      to: p.reduce(function(s,x){return s+x.tos;},0), oreb: p.reduce(function(s,x){return s+x.oreb;},0),
+      poss: p.length,
+    };
+  }
+  var hAgg = aggSide(hA), aAgg = aggSide(aA);
+  // Build rates directly from aggregates (no diff — these are raw window totals)
+  function buildRates(agg, baseline) {
+    var fga = agg.fga, fgm = agg.fgm, fg3a = agg.fg3a, fg3m = agg.fg3m;
+    var fta = agg.fta, ftm = agg.ftm, to = agg.to, oreb = agg.oreb;
+    var fg2a = fga - fg3a, fg2m = fgm - fg3m;
+    var poss = agg.poss;
+    if (poss < 3 || fga < 3) return null;
+    var bl = baseline || 0.36;
+    var rawFg3 = fg3a > 0 ? fg3m / fg3a : bl;
+    var sw = Math.min(0.60, fg3a / 30);
+    function clamp(v) { return Math.max(0, Math.min(1, v)); }
+    return {
+      toRate: clamp(poss > 0 ? to / poss : 0.12),
+      fg3aShare: clamp(fga > 0 ? fg3a / fga : 0.35),
+      fg3Pct: clamp(rawFg3 * sw + bl * (1 - sw)),
+      fg2Pct: clamp(fg2a > 0 ? fg2m / fg2a : 0.50),
+      orebRate: clamp((fga - fgm) > 0 ? oreb / (fga - fgm) : 0.25),
+      ftaRate: Math.min(poss > 0 ? fta / poss : 0.20, 1.0),
+      ftPct: clamp(fta > 0 ? ftm / fta : 0.76),
+      _windowPoss: poss, _windowFGA: fga,
+    };
+  }
+  var hRates = buildRates(hAgg, hBaseline);
+  var aRates = buildRates(aAgg, aBaseline);
+  if (!hRates || !aRates) return null;
+  return { home: hRates, away: aRates };
+}
+
+// Estimate remaining possessions per team from cumulative stats + clock
+function estimateRemainingPossMC(homeStats, awayStats, period, clockSec) {
+  function estPoss(s) { return (Number(s.fga)||0) + 0.44*(Number(s.fta)||0) - (Number(s.oreb)||0) + (Number(s.to||s.turnovers)||0); }
+  var hPoss = estPoss(homeStats), aPoss = estPoss(awayStats);
+  var avgPoss = (hPoss + aPoss) / 2;
+  var elapsedMin = (Math.min(period, 4) - 1) * 12 + (12 - clockSec / 60);
+  if (elapsedMin < 1) elapsedMin = 1;
+  var remainMin = 48 - elapsedMin;
+  if (remainMin < 0) remainMin = 0;
+  var pacePerMin = avgPoss / elapsedMin;
+  return Math.max(0, Math.round(pacePerMin * remainMin));
+}
+
+// Classify MC verdict from single poll's post-trigger MC win probability
+function classifyMCVerdict(mcWinProb) {
+  if (mcWinProb <= 0.25) return 'CONF';
+  if (mcWinProb <= 0.40) return 'LIKELY';
+  if (mcWinProb <= 0.60) return 'CONT';
+  return 'NORM';
+}
+
+// Classify pattern from verdict sequence
+function classifyMCPattern(verdicts) {
+  if (!verdicts || verdicts.length < 3) return null;
+  // Need at least one non-INV verdict
+  var meaningful = verdicts.filter(function(v) { return v !== 'INV'; });
+  if (meaningful.length < 2) return null;
+  var hitConfLikely = meaningful.some(function(v) { return v === 'CONF' || v === 'LIKELY'; });
+  var hitNorm = meaningful.some(function(v) { return v === 'NORM'; });
+  if (!hitConfLikely) {
+    // Never reached LIKELY/CONF
+    if (meaningful.length >= 3) return 'FALSE_ALARM';
+    return null; // still classifying
+  }
+  if (!hitNorm) return 'CLEAN'; // hit LIKELY/CONF but never recovered
+  // Check if it recovered then collapsed again (WAVE)
+  var lastConf = -1, lastNorm = -1;
+  for (var i = meaningful.length - 1; i >= 0; i--) {
+    if (lastConf === -1 && (meaningful[i] === 'CONF' || meaningful[i] === 'LIKELY')) lastConf = i;
+    if (lastNorm === -1 && meaningful[i] === 'NORM') lastNorm = i;
+  }
+  if (lastConf > lastNorm) return 'WAVE'; // collapsed after recovering
+  return 'NORMALIZED'; // recovered and stayed recovered
 }
 
 // Normalize BDL clock format — strips period prefix, handles sub-minute and special labels
@@ -4046,6 +4245,22 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
     p += `\n`;
   }
 
+  // Monte Carlo structural investigation
+  if (ctx?.mcInvestigation?.active) {
+    const mc = ctx.mcInvestigation;
+    p += `MONTE CARLO STRUCTURAL INVESTIGATION:\n`;
+    p += `  Status: ${mc.pattern || 'Active — classifying'}\n`;
+    p += `  Triggered: Q${mc.trigger_period} ${mc.trigger_clock} (${mc.ctrl_team} led by ${mc.trigger_margin} at trigger)\n`;
+    p += `  Floor at trigger: ${mc.trigger_floor?.toFixed(2)} | XGB at trigger: ${(mc.trigger_xgb * 100).toFixed(0)}%\n`;
+    p += `  Current MC: ${mc.current_mc != null ? (mc.current_mc * 100).toFixed(1) + '%' : 'investigating'}\n`;
+    p += `  Verdicts: ${mc.verdicts?.join(' → ') || 'none yet'}\n`;
+    p += `  MC uses CURRENT possession rates (post-trigger only). Immune to cumulative anchoring.\n`;
+    if (mc.pattern === 'CLEAN') p += `  WARNING: SUSTAINED COLLAPSE — floor and XGB are stale. Post-trigger rates never recovered.\n`;
+    else if (mc.pattern === 'WAVE') p += `  RISK: Oscillating rates — collapsed, recovered, collapsed again.\n`;
+    else if (mc.pattern === 'NORMALIZED') p += `  POSITIVE: Rates recovered — structural hold validated by MC investigation.\n`;
+    p += `\n`;
+  }
+
   // Thesis
   if (thesis) p += `THESIS:\n${thesis}\n`;
   p += '\n';
@@ -4697,7 +4912,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
 
         // ── 10a. POSITION GATE — auto-analysis only sends as position updates ──
         // Query for most recent SENT actionable alert for this game
-        const POSITION_TYPES = ['BUY', 'BUY WINDOW CLOSING', 'VULNERABILITY', 'POSITION_OPEN', 'BWC_EDGE', 'VALUE', 'EXIT', 'THESIS_ALIVE', 'POSITION_RECOVERING', 'POSITION_SAFE'];
+        const POSITION_TYPES = ['BUY', 'BUY WINDOW CLOSING', 'MC_COLLAPSE', 'POSITION_OPEN', 'BWC_EDGE', 'VALUE', 'EXIT', 'THESIS_ALIVE', 'POSITION_RECOVERING', 'POSITION_SAFE'];
         let priorPosition = null;
         try {
           const priorRows = await sql`
@@ -4811,7 +5026,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
             const sameTeam = pp.control_team === ind.controlTeam;
             const floorDelta = ind.score - Number(pp.floor_score);
             const statusWord = !sameTeam ? 'At Risk' : floorDelta > 0.1 ? 'Improving' : floorDelta < -0.1 ? 'Fading' : 'Holding';
-            const _alertReadable = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Lead Compressing','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','VULNERABILITY':'Vulnerability'}[pp.alert_type] || pp.alert_type;
+            const _alertReadable = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Lead Compressing','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','MC_COLLAPSE':'Structural Collapse'}[pp.alert_type] || pp.alert_type;
             const ntfyTitle = `UPDATE: Your Q${pp.period} ${_alertReadable} on ${pp.control_team} is ${statusWord}`;
             // Agent writes the body via BODY: response, use it if available
             const agentBody = agentResult?.body || '';
@@ -4832,7 +5047,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           } else {
             const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${period} ${clock}`;
             const pp = priorPosition;
-            const _alertReadableW = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Lead Compressing','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','VULNERABILITY':'Vulnerability'}[pp.alert_type] || pp.alert_type;
+            const _alertReadableW = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Lead Compressing','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','MC_COLLAPSE':'Structural Collapse'}[pp.alert_type] || pp.alert_type;
             const ntfyTitle = `WATCH: Your Q${pp.period} ${_alertReadableW} on ${pp.control_team} Needs Attention`;
             const agentBody = agentResult?.body || '';
             const ntfyBody = scoreLine
@@ -5404,6 +5619,40 @@ export default async function(req) {
       // Load season stats — cache-first (DB), fetch stale/missing from BDL
       const bdlSeasonCache = await getSeasonStatsForTeams(sql, league, cfg.season, teamAbbrs, bdlTeamIds);
 
+      // MC: Load clutch profiles + compute team 3PT baselines (once per invocation)
+      if (!_clutchMap) {
+        try {
+          const _cpRows = await sql`SELECT * FROM clutch_profiles WHERE league = ${league} AND season = ${'2025'}`;
+          _clutchMap = {};
+          for (const r of _cpRows) {
+            _clutchMap[r.team_alias] = {
+              games: r.games,
+              q4_fg3pct: r.q4_fg3a > 0 ? r.q4_fg3m / r.q4_fg3a : null,
+              q4_fg2pct: (r.q4_fga - r.q4_fg3a) > 0 ? (r.q4_fgm - r.q4_fg3m) / (r.q4_fga - r.q4_fg3a) : null,
+              q4_to_rate: r.q4_poss > 0 ? r.q4_to / r.q4_poss : null,
+              delta_fg3: (r.q4_fg3a > 20 && r.full_fg3a > 50) ? (r.q4_fg3m / r.q4_fg3a) - (r.full_fg3m / r.full_fg3a) : 0,
+            };
+          }
+          log(`MC: loaded ${_cpRows.length} clutch profiles`);
+        } catch (e) { _clutchMap = {}; log(`MC: clutch profile load failed: ${e.message}`); }
+      }
+      if (!_team3ptBaselines) {
+        _team3ptBaselines = {};
+        for (const tm of Object.keys(bdlSeasonCache)) {
+          const sc = bdlSeasonCache[tm];
+          if (!sc || !sc.players) continue;
+          let fg3m = 0, fg3a = 0;
+          for (const p of sc.players) {
+            const gp = Number(p.games_played || p.gp || 0);
+            if (gp < 10) continue;
+            fg3m += Number(p.fg3m || p.three_points_made || 0) * gp;
+            fg3a += Number(p.fg3a || p.three_points_att || 0) * gp;
+          }
+          _team3ptBaselines[tm] = fg3a > 0 ? fg3m / fg3a : 0.36;
+        }
+        log(`MC: computed ${Object.keys(_team3ptBaselines).length} team 3PT baselines`);
+      }
+
       // Track which cached games got updated this cycle
       let cacheUpdated = false;
       let liveCount = 0;
@@ -5530,6 +5779,53 @@ export default async function(req) {
             } catch (e) {
               log(`${matchup}: game-end quarter_data capture failed: ${e.message}`);
             }
+
+            // ── MC: Update clutch profiles from quarter_data ──
+            try {
+              const _cpQd = await readQuarterData(sql, game.id);
+              const _cpB3 = _cpQd?.boundaries?.['3'], _cpB4 = _cpQd?.boundaries?.['4'];
+              if (_cpB3 && _cpB4) {
+                for (const _cpSide of ['home', 'away']) {
+                  const _cpTeam = _cpSide === 'home' ? hA : aA;
+                  const _cpQ4 = {
+                    fga: Number(_cpB4[_cpSide]?.field_goals_att||0) - Number(_cpB3[_cpSide]?.field_goals_att||0),
+                    fgm: Number(_cpB4[_cpSide]?.field_goals_made||0) - Number(_cpB3[_cpSide]?.field_goals_made||0),
+                    fg3a: Number(_cpB4[_cpSide]?.three_points_att||0) - Number(_cpB3[_cpSide]?.three_points_att||0),
+                    fg3m: Number(_cpB4[_cpSide]?.three_points_made||0) - Number(_cpB3[_cpSide]?.three_points_made||0),
+                    fta: Number(_cpB4[_cpSide]?.free_throws_att||0) - Number(_cpB3[_cpSide]?.free_throws_att||0),
+                    ftm: Number(_cpB4[_cpSide]?.free_throws_made||0) - Number(_cpB3[_cpSide]?.free_throws_made||0),
+                    to: Number(_cpB4[_cpSide]?.turnovers||_cpB4[_cpSide]?.total_turnovers||0) - Number(_cpB3[_cpSide]?.turnovers||_cpB3[_cpSide]?.total_turnovers||0),
+                    oreb: Number(_cpB4[_cpSide]?.offensive_rebounds||0) - Number(_cpB3[_cpSide]?.offensive_rebounds||0),
+                    poss: Number(_cpB4[_cpSide]?.possessions||0) - Number(_cpB3[_cpSide]?.possessions||0),
+                  };
+                  const _cpFull = _cpB4[_cpSide] || {};
+                  await sql`INSERT INTO clutch_profiles (team_alias, league, season, games,
+                    q4_fga, q4_fgm, q4_fg3a, q4_fg3m, q4_fta, q4_ftm, q4_to, q4_oreb, q4_poss,
+                    full_fga, full_fgm, full_fg3a, full_fg3m, full_fta, full_ftm, full_to, full_oreb, full_poss)
+                  VALUES (${_cpTeam}, ${league}, ${'2025'}, ${1},
+                    ${_cpQ4.fga}, ${_cpQ4.fgm}, ${_cpQ4.fg3a}, ${_cpQ4.fg3m}, ${_cpQ4.fta}, ${_cpQ4.ftm}, ${_cpQ4.to}, ${_cpQ4.oreb}, ${_cpQ4.poss},
+                    ${Number(_cpFull.field_goals_att||0)}, ${Number(_cpFull.field_goals_made||0)},
+                    ${Number(_cpFull.three_points_att||0)}, ${Number(_cpFull.three_points_made||0)},
+                    ${Number(_cpFull.free_throws_att||0)}, ${Number(_cpFull.free_throws_made||0)},
+                    ${Number(_cpFull.turnovers||_cpFull.total_turnovers||0)}, ${Number(_cpFull.offensive_rebounds||0)}, ${Number(_cpFull.possessions||0)})
+                  ON CONFLICT (team_alias, league, season) DO UPDATE SET
+                    games = clutch_profiles.games + 1,
+                    q4_fga = clutch_profiles.q4_fga + EXCLUDED.q4_fga, q4_fgm = clutch_profiles.q4_fgm + EXCLUDED.q4_fgm,
+                    q4_fg3a = clutch_profiles.q4_fg3a + EXCLUDED.q4_fg3a, q4_fg3m = clutch_profiles.q4_fg3m + EXCLUDED.q4_fg3m,
+                    q4_fta = clutch_profiles.q4_fta + EXCLUDED.q4_fta, q4_ftm = clutch_profiles.q4_ftm + EXCLUDED.q4_ftm,
+                    q4_to = clutch_profiles.q4_to + EXCLUDED.q4_to, q4_oreb = clutch_profiles.q4_oreb + EXCLUDED.q4_oreb,
+                    q4_poss = clutch_profiles.q4_poss + EXCLUDED.q4_poss,
+                    full_fga = clutch_profiles.full_fga + EXCLUDED.full_fga, full_fgm = clutch_profiles.full_fgm + EXCLUDED.full_fgm,
+                    full_fg3a = clutch_profiles.full_fg3a + EXCLUDED.full_fg3a, full_fg3m = clutch_profiles.full_fg3m + EXCLUDED.full_fg3m,
+                    full_fta = clutch_profiles.full_fta + EXCLUDED.full_fta, full_ftm = clutch_profiles.full_ftm + EXCLUDED.full_ftm,
+                    full_to = clutch_profiles.full_to + EXCLUDED.full_to, full_oreb = clutch_profiles.full_oreb + EXCLUDED.full_oreb,
+                    full_poss = clutch_profiles.full_poss + EXCLUDED.full_poss, updated_at = NOW()`;
+                  log(`${matchup}: ★ clutch profile updated for ${_cpTeam}`);
+                }
+                // Invalidate cache so next invocation reloads
+                _clutchMap = null;
+              }
+            } catch (e) { log(`${matchup}: clutch profile update failed: ${e.message}`); }
 
             if (espnMap[game.id]) {
               var finalWP = await espnWinProb(league, espnMap[game.id]);
@@ -5810,7 +6106,7 @@ export default async function(req) {
               i1, i2, i3, i4, i5, source, lead_class, sust_json,
               tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json,
               bwc_state, grad_rank, floor_wp_historical, reliability_class, window_score,
-              xgb_win_prob, xgb_divergence, poss_window_score)
+              xgb_win_prob, xgb_divergence, poss_window_score, mc_win_prob)
             VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
               ${ind.score}, ${ind.controlTeam}, ${null}, ${null}, ${null},
               ${null}, ${null}, ${espnWP?.home || null}, ${espnWP?.away || null},
@@ -5820,7 +6116,7 @@ export default async function(req) {
               ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
               ${_snapLT?.bwc_fired ? (_snapLT._prev_bwc_state || null) : null}, ${_snapLT?.cp_peak_rank || null},
               ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore},
-              ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbDivergence}, ${_possWindowScore})
+              ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbDivergence}, ${_possWindowScore}, ${lt?.mc?.current_mc != null ? Math.round(lt.mc.current_mc * 10000) / 10000 : null})
           `;
           log(`${matchup}: snapshot saved — floor:${ind.score} I1-5:${ind.I1?.score},${ind.I2?.score},${ind.I3?.score},${ind.I4?.score},${ind.I5?.score} tp:${snapTp?.classification||'-'} ls:${snapLs?.classification||'-'} xgb:${_xgbWinProb != null ? _xgbWinProb.toFixed(3) : '-'}`);
 
@@ -6020,7 +6316,7 @@ export default async function(req) {
                 'POSITION_RECOVERING': 'STRENGTHENING',
                 'POSITION_SAFE': 'POSITION SAFE',
                 'BUY': 'BUY',
-                'VULNERABILITY': 'VULNERABILITY',
+                'MC_COLLAPSE': 'MC_COLLAPSE',
               };
 
               const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
@@ -6151,8 +6447,22 @@ export default async function(req) {
                 // XGB conviction quality (how XGB arrives at its prediction)
                 convictionQuality: _v2ConvQuality,
                 trajectorySignals: _v2TrajSignals,
-                // Vulnerability warning context (if fired earlier in this game)
-                vulnerabilityWarning: lt._vuln_fired || null,
+                // MC structural investigation context (replaces vulnerability)
+                mcInvestigation: lt.mc?.triggered ? {
+                  active: true,
+                  pattern: lt.mc.pattern,
+                  verdicts: lt.mc.verdicts,
+                  trigger_period: lt.mc.trigger_period,
+                  trigger_clock: lt.mc.trigger_clock,
+                  trigger_margin: lt.mc.trigger_margin,
+                  trigger_floor: lt.mc.trigger_floor,
+                  trigger_xgb: lt.mc.trigger_xgb,
+                  trigger_mc: lt.mc.trigger_mc,
+                  current_mc: lt.mc.current_mc,
+                  ctrl_team: lt.mc.ctrl_team,
+                  alert_sent: lt.mc.alert_sent,
+                  prior_investigations: lt.mc.prior_investigations || 0,
+                } : null,
               };
 
               // DB-level dedup — catch concurrent invocations BEFORE burning agent tokens
@@ -7000,53 +7310,114 @@ export default async function(req) {
               } catch(e) { log(`${matchup}: v2 state=${v2BwcState || '-'} (log error: ${e.message})`); }
             }
 
-          // ── VULNERABILITY WARNING ──
-          // Ctrl team leading but PBP possession window + XGB + tight margin say lead is fragile.
-          // Mechanical fire — no agent call. Context injected into subsequent agent alerts via lt._vuln_fired.
-          // Backtest: 47.4% precision on 342 fires (mg<=5), 1.78x lift vs 26.6% base rate.
+          // ── MONTE CARLO STRUCTURAL INVESTIGATION ──
+          // Replaces VULNERABILITY. Combined canary: MC<0.70 OR floor-MC divergence>0.15.
+          // PBP-derived canary → triggered investigation with post-trigger rates → pattern classification.
           if (currentPeriod >= 3 && ind.controlTeam && ind.controlTeam !== 'Neither'
-              && _v2Margin >= 0 && _v2Margin <= 5
-              && _xgbWinProb != null && _xgbWinProb < 0.65
-              && alertMinsLeft >= 1.0) {
-            // Compute PBP possession window (last 15 possessions, ctrl-relative)
-            const _vulnPossWindow = computePossWindowServer(pbpResult?.possLog, 15, hA, aA);
-            if (_vulnPossWindow.available) {
-              const _vulnCtrlIsHome = ind.controlTeam === hA;
-              // Convert to ctrl-team-relative: score > 0.5 = home winning window
-              const _vulnCtrlScore = _vulnCtrlIsHome ? _vulnPossWindow.score : (1 - _vulnPossWindow.score);
+              && _v2Margin >= 0 && alertMinsLeft >= 1.0) {
+            const _mcCtrlIsHome = ind.controlTeam === hA;
+            const _mcCtrlSide = _mcCtrlIsHome ? 'home' : 'away';
+            // Get team 3PT baselines from season cache or clutch profiles
+            const _mcHBaseline = _clutchMap?.[hA]?.q4_fg3pct || _team3ptBaselines?.[hA] || 0.36;
+            const _mcABaseline = _clutchMap?.[aA]?.q4_fg3pct || _team3ptBaselines?.[aA] || 0.36;
 
-              if (_vulnCtrlScore <= 0.45) {
-                // Dedup: once per ctrl team per game
-                const _vulnFired = lt._vuln_warnings || {};
-                if (!_vulnFired[ind.controlTeam]) {
-                  lt._vuln_warnings = { ..._vulnFired, [ind.controlTeam]: true };
-                  // Store for agent context injection on subsequent alerts
-                  lt._vuln_fired = { team: ind.controlTeam, period: currentPeriod, clock, window_score: _vulnCtrlScore, xgb: _xgbWinProb, margin: _v2Margin };
-                  const _vulnOppTeam = _vulnCtrlIsHome ? aA : hA;
-
-                  log(`${matchup}: ★ VULNERABILITY WARNING — ${ind.controlTeam} up ${_v2Margin} but vulnerable. PBP=${_vulnCtrlScore.toFixed(2)} XGB=${_xgbWinProb.toFixed(3)} mg=${_v2Margin}`);
-
-                  // Check for active position
-                  const _vulnHasPosition = lt.bwc_fired?.team === ind.controlTeam || lt.buy_position?.team === ind.controlTeam;
-                  const _vulnPosNote = _vulnHasPosition
-                    ? `\nActive position: ${ind.controlTeam} (${lt.cp_peak_rank || '?'}-rank, Q${lt.bwc_fired?.period || lt.buy_position?.period || '?'}).`
-                    : '';
-
-                  // Mechanical narrative
-                  const _vulnBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\n${ind.controlTeam} up ${_v2Margin} but structurally vulnerable — XGB ${(_xgbWinProb * 100).toFixed(0)}%, ${_vulnOppTeam} dominating last 15 possessions (PBP window ${_vulnCtrlScore.toFixed(2)}). Watch closely.${_vulnPosNote}`;
-
-                  // DB insert
-                  try {
-                    const _vulnCtrlSust = sust?.[_vulnCtrlIsHome ? 'home' : 'away']?.tier || null;
-                    const _vulnOppSust = sust?.[_vulnCtrlIsHome ? 'away' : 'home']?.tier || null;
-                    await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
-                      VALUES (${game.id}, ${league}, ${'VULNERABILITY'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${false}, ${null}, ${null}, ${spreadVal}, ${snapTp?.classification || null}, ${snapLs?.classification || null}, ${_vulnCtrlSust}, ${_vulnOppSust}, ${_vulnCtrlScore}, ${'FIRED'}, ${'SEND'}, ${_vulnBody}, ${ind.I1?.score}, ${ind.I2?.score}, ${ind.I3?.score}, ${ind.I4?.score}, ${ind.I5?.score}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${true}, ${ind.controlTeam}, ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
-                  } catch (e) { log(`${matchup}: VULNERABILITY DB insert error: ${e.message}`); }
-
-                  // ntfy
-                  await sendNtfy(`VULNERABILITY — ${matchup}`, _vulnBody, 4);
-                  log(`${matchup}: VULNERABILITY ntfy sent`);
+            if (!lt.mc || !lt.mc.triggered) {
+              // ── CANARY CHECK (no active investigation) ──
+              const _mcRates = extractMCRatesFromPossLog(pbpResult?.possLog, 20, hA, aA, _mcHBaseline, _mcABaseline);
+              if (_mcRates && _mcRates.home._windowFGA >= 5 && _mcRates.away._windowFGA >= 5) {
+                const _hs = summary.home?.statistics || {}, _as = summary.away?.statistics || {};
+                const _mcClockSec = (function(c) { try { var pp = String(c||'6:00').split(':'); return parseInt(pp[0])*60+parseInt(pp[1]||0); } catch(e) { return 360; } })(clock);
+                const _mcRemain = estimateRemainingPossMC(_hs, _as, currentPeriod, _mcClockSec);
+                if (_mcRemain > 0) {
+                  const _mcCanary = runMonteCarloSim(_mcRates.home, _mcRates.away,
+                    Number(ind.homePts), Number(ind.awayPts), _mcRemain,
+                    { simCount: 200, ctrlTeam: _mcCtrlIsHome ? 'home' : 'away' });
+                  // Combined canary: MC < 0.70 OR floor-MC divergence > 0.15
+                  const _mcAbsFired = _mcCanary.winProb < 0.70;
+                  const _mcDivFired = ind.score != null && (ind.score - _mcCanary.winProb) > 0.15;
+                  if (_mcAbsFired || _mcDivFired) {
+                    log(`${matchup}: ★ MC CANARY FIRED — ctrl=${ind.controlTeam} MC=${_mcCanary.winProb.toFixed(3)} floor=${ind.score} margin=${_v2Margin} trigger=${_mcAbsFired ? 'absolute' : 'divergence'}`);
+                    const _hs2 = summary.home?.statistics || {}, _as2 = summary.away?.statistics || {};
+                    lt.mc = {
+                      triggered: true,
+                      trigger_ts: Date.now(),
+                      trigger_period: currentPeriod,
+                      trigger_clock: clock,
+                      trigger_margin: _v2Margin,
+                      trigger_floor: ind.score,
+                      trigger_xgb: _xgbWinProb,
+                      trigger_mc: _mcCanary.winProb,
+                      trigger_stats: {
+                        home: { fgm: Number(_hs2.field_goals_made||0), fga: Number(_hs2.field_goals_att||0), fg3m: Number(_hs2.three_points_made||0), fg3a: Number(_hs2.three_points_att||0), ftm: Number(_hs2.free_throws_made||0), fta: Number(_hs2.free_throws_att||0), to: Number(_hs2.turnovers||_hs2.total_turnovers||0), oreb: Number(_hs2.offensive_rebounds||0) },
+                        away: { fgm: Number(_as2.field_goals_made||0), fga: Number(_as2.field_goals_att||0), fg3m: Number(_as2.three_points_made||0), fg3a: Number(_as2.three_points_att||0), ftm: Number(_as2.free_throws_made||0), fta: Number(_as2.free_throws_att||0), to: Number(_as2.turnovers||_as2.total_turnovers||0), oreb: Number(_as2.offensive_rebounds||0) },
+                      },
+                      ctrl_team: ind.controlTeam,
+                      ctrl_is_home: _mcCtrlIsHome,
+                      verdicts: [],
+                      pattern: null,
+                      alert_sent: false,
+                      current_mc: _mcCanary.winProb,
+                      prior_investigations: lt.mc?.prior_investigations || 0,
+                    };
+                  }
                 }
+              }
+            } else if (lt.mc.triggered && !lt.mc.pattern?.match(/^(CLEAN|WAVE)$/)) {
+              // ── INVESTIGATION (active, pattern not terminal) ──
+              const _hs3 = summary.home?.statistics || {}, _as3 = summary.away?.statistics || {};
+              const _mcNowH = { fgm: Number(_hs3.field_goals_made||0), fga: Number(_hs3.field_goals_att||0), fg3m: Number(_hs3.three_points_made||0), fg3a: Number(_hs3.three_points_att||0), ftm: Number(_hs3.free_throws_made||0), fta: Number(_hs3.free_throws_att||0), to: Number(_hs3.turnovers||_hs3.total_turnovers||0), oreb: Number(_hs3.offensive_rebounds||0) };
+              const _mcNowA = { fgm: Number(_as3.field_goals_made||0), fga: Number(_as3.field_goals_att||0), fg3m: Number(_as3.three_points_made||0), fg3a: Number(_as3.three_points_att||0), ftm: Number(_as3.free_throws_made||0), fta: Number(_as3.free_throws_att||0), to: Number(_as3.turnovers||_as3.total_turnovers||0), oreb: Number(_as3.offensive_rebounds||0) };
+              // Post-trigger rates via box score diff
+              const _mcTrigH = lt.mc.trigger_stats.home, _mcTrigA = lt.mc.trigger_stats.away;
+              const _mcPostFGA = (_mcNowH.fga - _mcTrigH.fga) + (_mcNowA.fga - _mcTrigA.fga);
+              if (_mcPostFGA >= 8) {
+                const _mcHRates = diffToRatesMC(_mcNowH, _mcTrigH, _mcHBaseline);
+                const _mcARates = diffToRatesMC(_mcNowA, _mcTrigA, _mcABaseline);
+                if (_mcHRates && _mcARates) {
+                  const _mcClockSec2 = (function(c) { try { var pp = String(c||'6:00').split(':'); return parseInt(pp[0])*60+parseInt(pp[1]||0); } catch(e) { return 360; } })(clock);
+                  const _mcRemain2 = estimateRemainingPossMC(_mcNowH, _mcNowA, currentPeriod, _mcClockSec2);
+                  if (_mcRemain2 > 0) {
+                    const _mcInv = runMonteCarloSim(_mcHRates, _mcARates,
+                      Number(ind.homePts), Number(ind.awayPts), _mcRemain2,
+                      { simCount: 500, ctrlTeam: lt.mc.ctrl_is_home ? 'home' : 'away' });
+                    lt.mc.current_mc = _mcInv.winProb;
+                    const _mcVerdict = classifyMCVerdict(_mcInv.winProb);
+                    lt.mc.verdicts.push(_mcVerdict);
+                    log(`${matchup}: MC investigation — verdict=${_mcVerdict} MC=${_mcInv.winProb.toFixed(3)} postFGA=${_mcPostFGA} pattern=${lt.mc.pattern || 'classifying'}`);
+                    // Classify pattern
+                    const _mcPat = classifyMCPattern(lt.mc.verdicts);
+                    if (_mcPat) {
+                      lt.mc.pattern = _mcPat;
+                      log(`${matchup}: MC pattern classified → ${_mcPat}`);
+                      // CLEAN → fire MC_COLLAPSE alert
+                      if (_mcPat === 'CLEAN' && !lt.mc.alert_sent) {
+                        lt.mc.alert_sent = true;
+                        const _mcOppTeam = _mcCtrlIsHome ? aA : hA;
+                        const _mcHasPosition = lt.bwc_fired?.team === ind.controlTeam || lt.buy_position?.team === ind.controlTeam;
+                        const _mcPosNote = _mcHasPosition ? `\nActive ${lt.cp_peak_rank || '?'}-rank position on ${ind.controlTeam} — consider exit.` : '';
+                        const _mcBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\nStructural collapse detected — ${ind.controlTeam} leading by ${_v2Margin} but post-trigger rates show sustained deterioration since Q${lt.mc.trigger_period} ${lt.mc.trigger_clock}. Floor (${ind.score.toFixed(2)}) and XGB (${_xgbWinProb != null ? (_xgbWinProb * 100).toFixed(0) + '%' : '?'}) anchored to early game. MC: ${(_mcInv.winProb * 100).toFixed(1)}%.${_mcPosNote}`;
+                        const _mcPriority = _mcHasPosition ? 5 : 4;
+                        try {
+                          const _mcCSust = sust?.[_mcCtrlIsHome ? 'home' : 'away']?.tier || null;
+                          const _mcOSust = sust?.[_mcCtrlIsHome ? 'away' : 'home']?.tier || null;
+                          await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
+                            VALUES (${game.id}, ${league}, ${'MC_COLLAPSE'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${false}, ${null}, ${null}, ${spreadVal}, ${snapTp?.classification || null}, ${snapLs?.classification || null}, ${_mcCSust}, ${_mcOSust}, ${_mcInv.winProb}, ${'FIRED'}, ${'SEND'}, ${_mcBody}, ${ind.I1?.score}, ${ind.I2?.score}, ${ind.I3?.score}, ${ind.I4?.score}, ${ind.I5?.score}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${true}, ${ind.controlTeam}, ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
+                        } catch (e) { log(`${matchup}: MC_COLLAPSE DB insert error: ${e.message}`); }
+                        await sendNtfy(`STRUCTURAL COLLAPSE — ${matchup}`, _mcBody, _mcPriority);
+                        log(`${matchup}: MC_COLLAPSE ntfy sent`);
+                      }
+                      // NORMALIZED or FALSE_ALARM → reset for re-trigger
+                      if (_mcPat === 'NORMALIZED' || _mcPat === 'FALSE_ALARM') {
+                        log(`${matchup}: MC investigation resolved → ${_mcPat}, resetting for re-trigger`);
+                        lt.mc = { triggered: false, prior_investigations: (lt.mc.prior_investigations || 0) + 1 };
+                      }
+                    }
+                  }
+                }
+              } else {
+                // Not enough post-trigger data yet — add INV verdict
+                lt.mc.verdicts.push('INV');
+                log(`${matchup}: MC investigation — INV (postFGA=${_mcPostFGA} < 8)`);
               }
             }
           }
@@ -7221,7 +7592,7 @@ export default async function(req) {
                       i1, i2, i3, i4, i5, source, sust_json,
                       tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json,
                       bwc_state, grad_rank, floor_wp_historical, reliability_class, window_score,
-                      xgb_win_prob, xgb_divergence, poss_window_score)
+                      xgb_win_prob, xgb_divergence, poss_window_score, mc_win_prob)
                     VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
                       ${ind.score}, ${ind.controlTeam}, ${espnWP?.home || null}, ${espnWP?.away || null},
                       ${spreadVal}, ${deficit}, ${trailingTeam}, ${leadSust}, ${leadClass},
@@ -7230,7 +7601,7 @@ export default async function(req) {
                       ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
                       ${lt?.bwc_fired ? (lt._prev_bwc_state || null) : null}, ${lt?.cp_peak_rank || null},
                       ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore},
-                      ${_xgbWinProb != null ? Math.round(_xgbWinProb * 1000) / 1000 : null}, ${_xgbDivergence}, ${_possWindowScore})
+                      ${_xgbWinProb != null ? Math.round(_xgbWinProb * 1000) / 1000 : null}, ${_xgbDivergence}, ${_possWindowScore}, ${lt?.mc?.current_mc != null ? Math.round(lt.mc.current_mc * 10000) / 10000 : null})
                   `;
                   log(`${matchup}: ${t.label} CAL snapshot saved — floor ${ind.controlTeam} ${ind.score} | sust:${leadSust || '?'} class:${leadClass || '?'} | WP:${espnWP?.home || '?'}% | spd:${spreadVal != null ? spreadVal : 'N/A'}`);
                 } catch (e) {
