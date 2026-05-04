@@ -3982,6 +3982,205 @@ export default async function handler(req) {
         };
         break;
       }
+      case 'opp_canary': {
+      var batchSize = parseInt(url.searchParams.get('n') || '200');
+      var oppOffset = parseInt(url.searchParams.get('offset') || '0');
+      var oppThresholds = (url.searchParams.get('opp_threshold') || '0.55,0.60,0.65').split(',').map(Number);
+      var ctrlThreshold = parseFloat(url.searchParams.get('ctrl_threshold') || '0.70');
+      var simCount = parseInt(url.searchParams.get('sims') || '200');
+      var rc = parseFloat(url.searchParams.get('rc') || '0.60');
+      var startTime = Date.now();
+
+      var gameIds = await sql`
+        SELECT DISTINCT game_id FROM nba_snapshot_backtest
+        WHERE indicators IS NOT NULL ORDER BY game_id
+        LIMIT ${batchSize} OFFSET ${oppOffset}`;
+      var ids = gameIds.map(function(r) { return r.game_id; });
+      if (ids.length === 0) { result = { status: 'done', message: 'No more games' }; break; }
+
+      var rows = await sql`
+        SELECT game_id, checkpoint, team_stats,
+               (indicators->>'score')::real AS floor,
+               indicators->>'controlTeam' AS ctrl_team,
+               indicators->>'homeAlias' AS home_alias,
+               indicators->>'awayAlias' AS away_alias,
+               margin_at_snapshot AS margin,
+               ctrl_team_won, final_margin
+        FROM nba_snapshot_backtest
+        WHERE game_id = ANY(${ids}) AND indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+        ORDER BY game_id, checkpoint`;
+
+      var gMap = {};
+      for (var r of rows) {
+        if (!gMap[r.game_id]) gMap[r.game_id] = [];
+        var ts = typeof r.team_stats === 'string' ? JSON.parse(r.team_stats) : r.team_stats;
+        gMap[r.game_id].push({
+          checkpoint: r.checkpoint, cpIdx: CP_INDEX[r.checkpoint],
+          home: ts?.home, away: ts?.away,
+          floor: r.floor, ctrl_team: r.ctrl_team,
+          home_alias: r.home_alias, away_alias: r.away_alias,
+          margin: r.margin, ctrl_team_won: r.ctrl_team_won, final_margin: r.final_margin,
+        });
+      }
+      for (var g of Object.keys(gMap)) gMap[g].sort(function(a,b) { return a.cpIdx - b.cpIdx; });
+
+      // Per-threshold aggregation
+      var aggs = {};
+      for (var th of oppThresholds) {
+        aggs[th] = {
+          total: 0, opp_fired: 0, ctrl_fired: 0, both_fired: 0,
+          opp_only: { n: 0, correct: 0 },
+          ctrl_only: { n: 0, correct: 0 },
+          opp_first: { n: 0, correct: 0 },
+          ctrl_first: { n: 0, correct: 0 },
+          same_cp: { n: 0, correct: 0 },
+          neither: { n: 0, correct: 0 },
+          opp_by_period: {}, ctrl_by_period: {},
+          opp_margin_buckets: { 'trailing_1_3': {n:0,c:0}, 'trailing_4_8': {n:0,c:0}, 'trailing_9_15': {n:0,c:0}, 'trailing_16': {n:0,c:0} },
+          timing_gain_cps: [],  // how many checkpoints earlier opp fires vs ctrl
+          examples: [],
+        };
+      }
+
+      for (var gid of Object.keys(gMap)) {
+        if (Date.now() - startTime > 90000) break;
+        var cps = gMap[gid];
+        var parsed = cps.map(function(cp) {
+          if (!cp.home || !cp.away) return null;
+          return {
+            home: { fgm:cp.home.fgm||0, fga:cp.home.fga||0, fg3m:cp.home.fg3m||0, fg3a:cp.home.fg3a||0,
+                    ftm:cp.home.ftm||0, fta:cp.home.fta||0, to:cp.home.to||0, oreb:cp.home.oreb||0 },
+            away: { fgm:cp.away.fgm||0, fga:cp.away.fga||0, fg3m:cp.away.fg3m||0, fg3a:cp.away.fg3a||0,
+                    ftm:cp.away.ftm||0, fta:cp.away.fta||0, to:cp.away.to||0, oreb:cp.away.oreb||0 },
+          };
+        });
+
+        for (var th of oppThresholds) {
+          aggs[th].total++;
+          var oppFireIdx = null, ctrlFireIdx = null;
+          var oppFireCp = null, ctrlFireCp = null;
+
+          for (var ci = 2; ci < cps.length; ci++) {
+            var cp = cps[ci];
+            if (cp.cpIdx < 4) continue;  // Q2_9+
+            if (cp.checkpoint === 'Q4_END') continue;
+            if (!parsed[ci] || !parsed[ci-2]) continue;
+
+            var hR = diffToRates(parsed[ci].home, parsed[ci-2].home, 0.36, rc);
+            var aR = diffToRates(parsed[ci].away, parsed[ci-2].away, 0.36, rc);
+            if (!hR || !aR) continue;
+
+            var meta = CP_META[cp.checkpoint]; if (!meta) continue;
+            var rp = estimateRemainingPoss(parsed[ci].home, parsed[ci].away, meta.period, meta.clockSec);
+            if (rp < 1) continue;
+
+            var ctrlHome = cp.ctrl_team === cp.home_alias;
+            var hPts = (parsed[ci].home.fgm - parsed[ci].home.fg3m)*2 + parsed[ci].home.fg3m*3 + parsed[ci].home.ftm;
+            var aPts = (parsed[ci].away.fgm - parsed[ci].away.fg3m)*2 + parsed[ci].away.fg3m*3 + parsed[ci].away.ftm;
+
+            // Ctrl team canary (collapse)
+            if (ctrlFireIdx === null) {
+              var ctrlMC = runMonteCarloSim(hR, aR, hPts, aPts, rp,
+                { simCount: simCount, ctrlTeam: ctrlHome ? 'home' : 'away' });
+              if (ctrlMC.winProb < ctrlThreshold) {
+                ctrlFireIdx = ci; ctrlFireCp = cp.checkpoint;
+              }
+            }
+
+            // Opponent canary (rising) — compute MC from OPPONENT perspective
+            if (oppFireIdx === null) {
+              var oppMC = runMonteCarloSim(hR, aR, hPts, aPts, rp,
+                { simCount: simCount, ctrlTeam: ctrlHome ? 'away' : 'home' });
+              // Opponent must be TRAILING for this to be a flip-buy signal
+              var oppTrailing = ctrlHome ? (hPts > aPts) : (aPts > hPts);
+              var oppDeficit = ctrlHome ? (hPts - aPts) : (aPts - hPts);
+              if (oppMC.winProb > th && oppTrailing && oppDeficit >= 1) {
+                oppFireIdx = ci; oppFireCp = cp.checkpoint;
+                // Margin bucket
+                var bk = oppDeficit <= 3 ? 'trailing_1_3' : oppDeficit <= 8 ? 'trailing_4_8' : oppDeficit <= 15 ? 'trailing_9_15' : 'trailing_16';
+                aggs[th].opp_margin_buckets[bk].n++;
+                if (!cp.ctrl_team_won) aggs[th].opp_margin_buckets[bk].c++;
+                // Period bucket
+                var pKey = 'Q' + meta.period;
+                if (!aggs[th].opp_by_period[pKey]) aggs[th].opp_by_period[pKey] = { n: 0, c: 0 };
+                aggs[th].opp_by_period[pKey].n++;
+                if (!cp.ctrl_team_won) aggs[th].opp_by_period[pKey].c++;
+              }
+            }
+          }
+
+          // Classify and score
+          var oppWon = cps[0] ? !cps[0].ctrl_team_won : false;  // opponent = non-ctrl-team
+          if (oppFireIdx !== null) aggs[th].opp_fired++;
+          if (ctrlFireIdx !== null) aggs[th].ctrl_fired++;
+
+          if (oppFireIdx !== null && ctrlFireIdx !== null) {
+            aggs[th].both_fired++;
+            if (oppFireIdx < ctrlFireIdx) {
+              aggs[th].opp_first.n++; if (oppWon) aggs[th].opp_first.correct++;
+              aggs[th].timing_gain_cps.push(ctrlFireIdx - oppFireIdx);
+            } else if (ctrlFireIdx < oppFireIdx) {
+              aggs[th].ctrl_first.n++; if (oppWon) aggs[th].ctrl_first.correct++;
+            } else {
+              aggs[th].same_cp.n++; if (oppWon) aggs[th].same_cp.correct++;
+            }
+          } else if (oppFireIdx !== null) {
+            aggs[th].opp_only.n++; if (oppWon) aggs[th].opp_only.correct++;
+          } else if (ctrlFireIdx !== null) {
+            aggs[th].ctrl_only.n++; if (oppWon) aggs[th].ctrl_only.correct++;
+          } else {
+            aggs[th].neither.n++; if (oppWon) aggs[th].neither.correct++;
+          }
+
+          // Collect examples (first 5 per threshold where opp fires first)
+          if (aggs[th].examples.length < 8 && oppFireIdx !== null &&
+              (ctrlFireIdx === null || oppFireIdx < ctrlFireIdx)) {
+            aggs[th].examples.push({
+              game: gid, ctrl: cps[0]?.ctrl_team, opp: cps[0]?.ctrl_team === cps[0]?.home_alias ? cps[0]?.away_alias : cps[0]?.home_alias,
+              opp_cp: oppFireCp, ctrl_cp: ctrlFireCp || 'never',
+              opp_won: oppWon, margin: cps[0]?.margin,
+            });
+          }
+        }
+      }
+
+      // Format results
+      var summary = {};
+      for (var th of oppThresholds) {
+        var a = aggs[th];
+        function pct(n, d) { return d > 0 ? Math.round(n/d*1000)/10 : 0; }
+        var avgGain = a.timing_gain_cps.length > 0
+          ? Math.round(a.timing_gain_cps.reduce(function(s,v){return s+v;},0) / a.timing_gain_cps.length * 10) / 10
+          : 0;
+        summary['threshold_' + th] = {
+          games: a.total,
+          opp_fired: a.opp_fired + ' (' + pct(a.opp_fired, a.total) + '%)',
+          ctrl_fired: a.ctrl_fired + ' (' + pct(a.ctrl_fired, a.total) + '%)',
+          both_fired: a.both_fired,
+          breakdown: {
+            opp_only: a.opp_only.n + ' → ' + pct(a.opp_only.correct, a.opp_only.n) + '% correct',
+            ctrl_only: a.ctrl_only.n + ' → ' + pct(a.ctrl_only.correct, a.ctrl_only.n) + '% correct',
+            opp_first: a.opp_first.n + ' → ' + pct(a.opp_first.correct, a.opp_first.n) + '% correct',
+            ctrl_first: a.ctrl_first.n + ' → ' + pct(a.ctrl_first.correct, a.ctrl_first.n) + '% correct',
+            same_checkpoint: a.same_cp.n + ' → ' + pct(a.same_cp.correct, a.same_cp.n) + '% correct',
+            neither: a.neither.n,
+          },
+          avg_timing_gain_cps: avgGain + ' checkpoints earlier',
+          opp_by_period: a.opp_by_period,
+          opp_by_margin: a.opp_margin_buckets,
+          examples_opp_first: a.examples,
+        };
+      }
+
+      result = {
+        phase: 'opp_canary', batch_size: batchSize, offset: oppOffset,
+        games_processed: Object.keys(gMap).length,
+        ctrl_canary_threshold: ctrlThreshold,
+        opp_thresholds: oppThresholds,
+        summary: summary,
+      };
+        break;
+      }
       default: result = { error: 'Unknown phase: ' + phase };
     }
   } catch (e) {
