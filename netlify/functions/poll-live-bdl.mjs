@@ -6207,6 +6207,17 @@ export default async function(req) {
 
             lt = updateLiveTracking(lt, ind.controlTeam, ind.score, currentPeriod, clock, hA);
 
+            // ── Save XGB + MC data to lt for client analysis injection ──
+            if (_xgbFeatures) {
+              lt.xgb_shap = computeXGBContributions(_xgbFeatures);
+              lt.conviction_quality = lt.xgb_shap ? computeConvictionQuality(lt.xgb_shap) : null;
+              lt.xgb_trajectory = lt.xgb_shap ? computeTrajectorySignals(lt.xgb_shap, lt.checkpoints || [], lt.conviction_quality, _xgbWinProb) : null;
+            }
+            lt.xgb_win_prob = _xgbWinProb;
+            lt.xgb_divergence = _xgbDivergence;
+            lt.xgb_aligned = _xgbAligned;
+            if (_pollMC != null) lt.mc_trajectory_wp = _pollMC;
+
             // XGB from BWC team's perspective (for EXIT detection)
             // When BWC team IS ctrl team, reuse _xgbWinProb. Otherwise recompute with BWC as reference.
             var _xgbBwcProb = null;

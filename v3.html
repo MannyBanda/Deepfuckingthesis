@@ -2322,6 +2322,13 @@ async function triggerAnalysis(gameId){
     }
     if(!summaryData){cs.analyzing=false;renderCard(gameId);console.error('[ANALYZE] No summary data available');return;}
 
+    // 1b. Fetch live_tracking for XGB + MC injection
+    var _ltObj=null;
+    try{
+      var _ltR=await fetch(FN+'db-api?action=get_live_tracking&game_id='+encodeURIComponent(gameId));
+      if(_ltR.ok){var _ltD=await _ltR.json();_ltObj=_ltD.live_tracking;if(_ltObj&&typeof _ltObj==='string')try{_ltObj=JSON.parse(_ltObj);}catch(e){}}
+    }catch(e){}
+
     // 2. Build payload from cardState
     var period=g?.period?'Q'+g.period:'';
     var score=aA+' '+(g?.awayPoints||0)+' - '+hA+' '+(g?.homePoints||0);
@@ -2343,6 +2350,8 @@ async function triggerAnalysis(gameId){
       leadSafety:cs.leadSafety?{classification:cs.leadSafety.classification,lead:cs.leadSafety.lead,fTeam:cs.leadSafety.fTeam}:null,
       volumeThreat:cs.volumeThreat||null,
       espnWP:cs.espnWP?{home:cs.espnWP.home,away:cs.espnWP.away,homeAlias:cs.espnWP.homeAlias,awayAlias:cs.espnWP.awayAlias}:null,
+      xgbData:_ltObj&&_ltObj.xgb_win_prob!=null?{winProb:_ltObj.xgb_win_prob,divergence:_ltObj.xgb_divergence,aligned:_ltObj.xgb_aligned,shap:_ltObj.xgb_shap,convictionQuality:_ltObj.conviction_quality,trajectorySignals:_ltObj.xgb_trajectory}:null,
+      mcData:_ltObj?{mcWinProb:_ltObj.mc_trajectory_wp||null,investigation:_ltObj.mc&&_ltObj.mc.triggered?{pattern:_ltObj.mc.pattern,verdicts:_ltObj.mc.verdicts,currentMC:_ltObj.mc.current_mc,ctrlTeam:_ltObj.mc.ctrl_team,triggerPeriod:_ltObj.mc.trigger_period,triggerClock:_ltObj.mc.trigger_clock,triggerMargin:_ltObj.mc.trigger_margin,alertSent:_ltObj.mc.alert_sent}:null}:null,
     };
 
     // 3. Call analyze.js

@@ -416,7 +416,28 @@ var SYSTEM_PROMPT = 'You are an NBA structural analyst. You receive pre-computed
 + '  - Rolling window (recent ~2-quarter control trend)\n'
 + '  - Gap acceleration (is edge compounding or fading)\n'
 + '  - Directional arrows (per-quarter sub-metric trends)\n'
-+ '  - Bonus status\n\n'
++ '  - Bonus status\n'
++ '  - XGB structural model (independent 13-feature raw-stats win probability model)\n'
++ '  - Monte Carlo trajectory (possession-level simulation from last 20 possessions projected forward)\n\n'
++ 'XGB CONVICTION QUALITY:\n'
++ '  XGB is an independent raw-stat model (13 features, 300 trees). It is NOT derived from the floor.\n'
++ '  When XGB and floor ALIGN (within 15pp), structural conviction is confirmed by two independent signals.\n'
++ '  When DIVERGENT: XGB sees something floor misses (or vice versa). Investigate SHAP drivers.\n'
++ '  Conviction basis: STRUCTURAL (paint/pot/steals driven — durable) vs VOLATILE (efg/rim driven — fragile).\n'
++ '  Scoreboard confirmation: if the leading SHAP driver (e.g. paint_diff) matches the box score reality, conviction is confirmed.\n'
++ '  If SHAP says paint dominance but box score shows paint is close, conviction is UNCONFIRMED — FWP should reflect uncertainty.\n'
++ '  CRITICAL: XGB biglead feature locks permanently at max lead — it cannot shrink. In comeback games, XGB will overstate\n'
++ '  the leading team because biglead SHAP contribution stays frozen. When biglead is the top SHAP driver and margin has\n'
++ '  compressed significantly, discount XGB and weight MC and recent window more heavily.\n\n'
++ 'MONTE CARLO STRUCTURAL INVESTIGATION:\n'
++ '  MC computes win probability from RECENT possession-level rates (last 20 possessions), NOT cumulative stats.\n'
++ '  MC is immune to the cumulative anchoring that affects floor and XGB.\n'
++ '  TRUST HIERARCHY when MC investigation is active: MC > XGB > Floor > Graduation badge.\n'
++ '  MC patterns: CLEAN = sustained collapse (72.6% precision Q3+, confirmed). WAVE = oscillating, 60% — risk flag only.\n'
++ '  NORMALIZED = rates recovered, hold validated. Investigation active = await classification.\n'
++ '  Always-on MC trajectory (mc_win_prob): available every poll Q2+. Shows structural trend independent of cumulative anchoring.\n'
++ '  When floor says 0.90 and MC says 0.30, MC is right — floor is anchored to stale early-game data.\n'
++ '  Q2 MC caveat: Q2 fires have 24+ minutes remaining for recovery. Frame as early warning, not confirmed collapse.\n\n'
 + 'DATA QUALITY NOTE — PAINT POINTS:\n'
 + '  SR often delays or zeros out points_in_the_paint in the game summary JSON.\n'
 + '  Use DEPTH AUDIT rim section or LEAD COMPOSITION structural points as the authoritative paint signal.\n\n'
@@ -493,6 +514,8 @@ exports.handler = async function(event) {
     var throughputData = body.throughput || null;
     var leadSafetyData = body.leadSafety || null;
     var volumeThreatData = body.volumeThreat || null;
+    var xgbData = body.xgbData || null;
+    var mcData = body.mcData || null;
     if (!summaryData) {
       return { statusCode: 400, headers: headers, body: JSON.stringify({ error: 'summaryData required' }) };
     }
@@ -896,13 +919,52 @@ exports.handler = async function(event) {
       }
     }
 
+    // ── XGB STRUCTURAL MODEL ──
+    var xgbSection = '';
+    if (xgbData && xgbData.winProb != null) {
+      xgbSection = '\nXGB STRUCTURAL MODEL:\n';
+      xgbSection += 'XGB win probability: ' + (xgbData.winProb * 100).toFixed(1) + '% | Floor: ' + (dashboardScores && dashboardScores.floor ? (dashboardScores.floor * 100).toFixed(1) + '%' : '?') + ' | ' + (xgbData.aligned ? 'ALIGNED' : 'DIVERGENT (' + (xgbData.divergence > 0 ? '+' : '') + (xgbData.divergence * 100).toFixed(1) + '%)') + '\n';
+      if (xgbData.shap && xgbData.shap.length > 0) {
+        xgbSection += 'SHAP drivers: ' + xgbData.shap.map(function(s) { return s.f + '=' + (s.v > 0 ? '+' : '') + s.v.toFixed(2); }).join(', ') + '\n';
+      }
+      if (xgbData.convictionQuality) {
+        var cq = xgbData.convictionQuality;
+        xgbSection += 'Conviction basis: ' + (cq.basis || '?') + ' | Top driver: ' + (cq.topDriver || '?') + ' | Scoreboard: ' + (cq.scoreboard || '?') + '\n';
+        if (cq.warning) xgbSection += 'XGB WARNING: ' + cq.warning + '\n';
+      }
+      if (xgbData.trajectorySignals && xgbData.trajectorySignals.warnings && xgbData.trajectorySignals.warnings.length > 0) {
+        xgbSection += 'Trajectory warnings:\n' + xgbData.trajectorySignals.warnings.join('\n') + '\n';
+      }
+    }
+
+    // ── MONTE CARLO STRUCTURAL INVESTIGATION ──
+    var mcSection = '';
+    if (mcData) {
+      if (mcData.mcWinProb != null) {
+        mcSection = '\nMONTE CARLO (always-on trajectory):\n';
+        mcSection += 'MC win probability: ' + (mcData.mcWinProb * 100).toFixed(1) + '% (ctrl team, last 20 possessions projected forward)\n';
+      }
+      if (mcData.investigation) {
+        var inv = mcData.investigation;
+        mcSection += '\nMC STRUCTURAL INVESTIGATION:\n';
+        mcSection += 'Status: ' + (inv.pattern ? inv.pattern : 'INVESTIGATING') + ' | Ctrl: ' + (inv.ctrlTeam || '?') + ' | Triggered: Q' + (inv.triggerPeriod || '?') + ' ' + (inv.triggerClock || '?') + ' at margin +' + (inv.triggerMargin || '?') + '\n';
+        if (inv.currentMC != null) mcSection += 'Current investigation MC: ' + (inv.currentMC * 100).toFixed(1) + '%\n';
+        if (inv.verdicts && inv.verdicts.length > 0) mcSection += 'Verdict sequence: ' + inv.verdicts.join(' > ') + '\n';
+        if (inv.pattern === 'CLEAN') mcSection += 'CLEAN = sustained structural collapse confirmed. Post-trigger rates never recovered. MC > XGB > Floor when active.\n';
+        else if (inv.pattern === 'WAVE') mcSection += 'WAVE = oscillating collapse. Rates deteriorated, recovered, then deteriorated again. 60% precision — flag as risk, do not confirm.\n';
+        else if (inv.pattern === 'NORMALIZED') mcSection += 'NORMALIZED = rates recovered after initial deterioration. Hold validated — position is stronger for having been tested.\n';
+        else if (!inv.pattern) mcSection += 'Investigation in progress — awaiting enough post-trigger data for pattern classification.\n';
+        if (inv.alertSent) mcSection += 'MC_COLLAPSE alert has been sent to subscribers.\n';
+      }
+    }
+
     // ── BUILD PROMPT ──
     var userPrompt = awayTeam + ' @ ' + homeTeam + ' | ' + period + ' | ' + score + '\n\n'
       + groundTruthSection
       + (thesis ? 'THESIS:\n' + thesis + '\n' : 'No thesis.')
       + '\n' + clutchSection + oddsSection + tpLsSection + bonusSection + trackingSection + sustainabilitySection + leadCompSection
       + windowSection + quarterSection + gapSection + combinedReadSection + arrowSection + adjustmentSection
-      + pbpSection + volumeSection + edgeSection + narrativeSection + wpSection + espnWPSection
+      + pbpSection + volumeSection + xgbSection + mcSection + edgeSection + narrativeSection + wpSection + espnWPSection
       + '\nGAME DATA:\n' + JSON.stringify(summaryData);
 
     var resp = await fetch('https://api.anthropic.com/v1/messages', {
