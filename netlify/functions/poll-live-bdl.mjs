@@ -7313,7 +7313,8 @@ export default async function(req) {
           // ── MONTE CARLO STRUCTURAL INVESTIGATION ──
           // Replaces VULNERABILITY. Combined canary: MC<0.70 OR floor-MC divergence>0.15.
           // PBP-derived canary → triggered investigation with post-trigger rates → pattern classification.
-          if (currentPeriod >= 3 && ind.controlTeam && ind.controlTeam !== 'Neither'
+          // Q2+ gate — early detection trades precision for warning time.
+          if (currentPeriod >= 2 && ind.controlTeam && ind.controlTeam !== 'Neither'
               && _v2Margin >= 0 && alertMinsLeft >= 1.0) {
             const _mcCtrlIsHome = ind.controlTeam === hA;
             const _mcCtrlSide = _mcCtrlIsHome ? 'home' : 'away';
