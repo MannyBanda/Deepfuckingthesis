@@ -7454,6 +7454,10 @@ export default async function(req) {
                       current_mc: _mcCanary.winProb,
                       prior_investigations: lt.mc?.prior_investigations || 0,
                     };
+                    // Nudge ntfy — let Manny know to check the dashboard
+                    const _mcNudgeBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\nMC canary fired — ctrl ${ind.controlTeam} MC=${(_mcCanary.winProb * 100).toFixed(1)}% vs floor ${ind.score.toFixed(2)} (${_mcAbsFired ? 'absolute' : 'divergence'}). Margin +${_v2Margin}. Investigating.`;
+                    await sendNtfy(`MC INVESTIGATING — ${matchup}`, _mcNudgeBody, 3);
+                    log(`${matchup}: MC INVESTIGATING ntfy sent`);
                   }
                 }
               }
