@@ -2680,10 +2680,10 @@ function renderDrawer(gameId){
     });
 
     // Column toggle state
-    if(!cs._snapCols)cs._snapCols={time:true,score:true,margin:true,floor:true,mf:true,xgb:true,win:false,peak:false,eros:false,ind:true,conv:true,state:true,tp:false,ls:false,sust:false,grad:true,ml:true,alert:true,dec:true};
+    if(!cs._snapCols)cs._snapCols={time:true,score:true,margin:true,floor:true,mf:true,xgb:true,mc:true,win:false,peak:false,eros:false,ind:true,conv:true,state:true,tp:false,ls:false,sust:false,grad:true,ml:true,alert:true,dec:true};
     var sc2=cs._snapCols;
     html+='<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;align-items:center">';
-    var colDefs=[{k:'time',l:'Time'},{k:'score',l:'Score'},{k:'margin',l:'Margin'},{k:'floor',l:'Floor'},{k:'mf',l:'MF'},{k:'xgb',l:'XGB'},{k:'win',l:'PBP'},{k:'peak',l:'Peak'},{k:'eros',l:'Eros'},{k:'ind',l:'I1-I5'},{k:'conv',l:'Conv'},{k:'state',l:'State'},{k:'tp',l:'TP'},{k:'ls',l:'LS'},{k:'sust',l:'Sust'},{k:'grad',l:'Grad'},{k:'ml',l:'ML'},{k:'alert',l:'Alert'},{k:'dec',l:'Dec'}];
+    var colDefs=[{k:'time',l:'Time'},{k:'score',l:'Score'},{k:'margin',l:'Margin'},{k:'floor',l:'Floor'},{k:'mf',l:'MF'},{k:'xgb',l:'XGB'},{k:'mc',l:'MC'},{k:'win',l:'PBP'},{k:'peak',l:'Peak'},{k:'eros',l:'Eros'},{k:'ind',l:'I1-I5'},{k:'conv',l:'Conv'},{k:'state',l:'State'},{k:'tp',l:'TP'},{k:'ls',l:'LS'},{k:'sust',l:'Sust'},{k:'grad',l:'Grad'},{k:'ml',l:'ML'},{k:'alert',l:'Alert'},{k:'dec',l:'Dec'}];
     colDefs.forEach(function(c){
       html+='<button onclick="toggleSnapCol(\''+gameId+'\',\''+c.k+'\')" style="font-family:var(--mono);font-size:8px;padding:2px 5px;border-radius:4px;border:1px solid '+(sc2[c.k]?'var(--green-border)':'var(--hairline)')+';background:'+(sc2[c.k]?'var(--green-dim)':'transparent')+';color:'+(sc2[c.k]?'var(--green)':'var(--fg-dim)')+';cursor:pointer">'+c.l+'</button>';
     });
@@ -2714,7 +2714,7 @@ function renderDrawer(gameId){
 
     html+='<div style="overflow-x:auto"><table class="qd-grid" style="font-size:10px"><thead><tr>';
     if(sc2.time)html+='<th>Time</th>';if(sc2.score)html+='<th>Score</th>';if(sc2.margin)html+='<th>+/-</th>';if(sc2.floor)html+='<th>Floor</th>';
-    if(sc2.mf)html+='<th>MF</th>';if(sc2.xgb)html+='<th>XGB</th>';if(sc2.win)html+='<th>PBP</th>';if(sc2.peak)html+='<th>Peak</th>';if(sc2.eros)html+='<th>Eros</th>';
+    if(sc2.mf)html+='<th>MF</th>';if(sc2.xgb)html+='<th>XGB</th>';if(sc2.mc)html+='<th>MC</th>';if(sc2.win)html+='<th>PBP</th>';if(sc2.peak)html+='<th>Peak</th>';if(sc2.eros)html+='<th>Eros</th>';
     if(sc2.ind)html+='<th style="text-align:center">I1-I5</th>';
     if(sc2.conv)html+='<th>Conv</th>';if(sc2.state)html+='<th>State</th>';
     if(sc2.tp)html+='<th>TP</th>';if(sc2.ls)html+='<th>LS</th>';if(sc2.sust)html+='<th>Sust</th>';
@@ -2755,6 +2755,14 @@ function renderDrawer(gameId){
           var xDiv=s.xgb_divergence!=null?Number(s.xgb_divergence):null;
           var xColor=xVal<0.40?'var(--coral)':xDiv!=null&&Math.abs(xDiv)>0.15?'var(--amber)':'var(--cyan,#67e8f9)';
           html+='<td style="font-size:9px;color:'+xColor+'">'+xPct+'%</td>';
+        }else{html+='<td style="color:var(--fg-dim);font-size:9px">--</td>';}
+      }
+      if(sc2.mc){
+        var mcVal=s.mc_win_prob;
+        if(mcVal!=null){
+          var mcPct=Math.round(Number(mcVal)*100);
+          var mcColor=mcVal<0.40?'var(--coral)':mcVal>0.70?'var(--green)':'var(--amber)';
+          html+='<td style="font-size:9px;color:'+mcColor+'">'+mcPct+'%</td>';
         }else{html+='<td style="color:var(--fg-dim);font-size:9px">--</td>';}
       }
       if(sc2.win){
@@ -2854,7 +2862,7 @@ function selectRun(gameId,ri){
 // ── SNAPSHOT COLUMN TOGGLE ──
 function toggleSnapCol(gameId,col){
   var cs=cardState[gameId];if(!cs)return;
-  if(!cs._snapCols)cs._snapCols={time:true,score:true,margin:true,floor:true,mf:true,xgb:true,win:false,peak:true,eros:true,ind:true,conv:true,state:true,tp:true,ls:true,sust:true,grad:true,ml:true,alert:true,dec:true};
+  if(!cs._snapCols)cs._snapCols={time:true,score:true,margin:true,floor:true,mf:true,xgb:true,mc:true,win:false,peak:true,eros:true,ind:true,conv:true,state:true,tp:true,ls:true,sust:true,grad:true,ml:true,alert:true,dec:true};
   cs._snapCols[col]=!cs._snapCols[col];
   renderDrawer(gameId);
 }
@@ -2868,7 +2876,7 @@ function snapColsMinimal(gameId){
     cs._snapCols=cols;
   } else {
     // Show All — everything visible
-    cs._snapCols={time:true,score:true,margin:true,floor:true,mf:true,xgb:true,win:true,peak:true,eros:true,ind:true,conv:true,state:true,tp:true,ls:true,sust:true,grad:true,ml:true,alert:true,dec:true};
+    cs._snapCols={time:true,score:true,margin:true,floor:true,mf:true,xgb:true,mc:true,win:true,peak:true,eros:true,ind:true,conv:true,state:true,tp:true,ls:true,sust:true,grad:true,ml:true,alert:true,dec:true};
   }
   renderDrawer(gameId);
 }

@@ -6100,6 +6100,30 @@ export default async function(req) {
               runs6: pbpResult?.runs6 ? { home: pbpResult.runs6.filter(r=>r.team===hA).length, away: pbpResult.runs6.filter(r=>r.team===aA).length, total: pbpResult.runs6.length } : null,
             });
           } catch (e) { /* non-fatal — snapshot still saves without raw stats */ }
+
+          // ── MC TRAJECTORY: compute MC every poll Q2+ for snapshot storage ──
+          var _pollMC = null;
+          if (currentPeriod >= 2 && ind.controlTeam && ind.controlTeam !== 'Neither') {
+            try {
+              var _pmHBL = _clutchMap?.[hA]?.q4_fg3pct || _team3ptBaselines?.[hA] || 0.36;
+              var _pmABL = _clutchMap?.[aA]?.q4_fg3pct || _team3ptBaselines?.[aA] || 0.36;
+              var _pmRates = extractMCRatesFromPossLog(pbpResult?.possLog, 20, hA, aA, _pmHBL, _pmABL);
+              if (_pmRates && _pmRates.home._windowFGA >= 5 && _pmRates.away._windowFGA >= 5) {
+                var _pmClk = String(clock||'6:00').match(/(\d+):(\d+)/);
+                var _pmSec = _pmClk ? parseInt(_pmClk[1])*60+parseInt(_pmClk[2]) : 360;
+                var _pmHS = summary.home?.statistics || {}, _pmAS = summary.away?.statistics || {};
+                var _pmRemain = estimateRemainingPossMC(_pmHS, _pmAS, currentPeriod, _pmSec);
+                if (_pmRemain > 0) {
+                  var _pmCtrlHome = ind.controlTeam === hA;
+                  var _pmResult = runMonteCarloSim(_pmRates.home, _pmRates.away,
+                    Number(ind.homePts), Number(ind.awayPts), _pmRemain,
+                    { simCount: 200, ctrlTeam: _pmCtrlHome ? 'home' : 'away' });
+                  _pollMC = Math.round(_pmResult.winProb * 10000) / 10000;
+                }
+              }
+            } catch (e) { /* non-fatal */ }
+          }
+
           // Read live_tracking for bwc_state + grad_rank (main lt not loaded until V2 section below)
           var _snapLT = null;
           try { const _ltR = await sql`SELECT live_tracking FROM games WHERE id = ${game.id}`; if (_ltR[0]?.live_tracking) _snapLT = typeof _ltR[0].live_tracking === 'string' ? JSON.parse(_ltR[0].live_tracking) : _ltR[0].live_tracking; } catch(e) {}
@@ -6121,7 +6145,7 @@ export default async function(req) {
               ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
               ${_snapLT?.bwc_fired ? (_snapLT._prev_bwc_state || null) : null}, ${_snapLT?.cp_peak_rank || null},
               ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore},
-              ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbDivergence}, ${_possWindowScore}, ${lt?.mc?.current_mc != null ? Math.round(lt.mc.current_mc * 10000) / 10000 : null})
+              ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbDivergence}, ${_possWindowScore}, ${_pollMC})
           `;
           log(`${matchup}: snapshot saved — floor:${ind.score} I1-5:${ind.I1?.score},${ind.I2?.score},${ind.I3?.score},${ind.I4?.score},${ind.I5?.score} tp:${snapTp?.classification||'-'} ls:${snapLs?.classification||'-'} xgb:${_xgbWinProb != null ? _xgbWinProb.toFixed(3) : '-'}`);
 
@@ -7672,7 +7696,7 @@ export default async function(req) {
                       ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
                       ${lt?.bwc_fired ? (lt._prev_bwc_state || null) : null}, ${lt?.cp_peak_rank || null},
                       ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore},
-                      ${_xgbWinProb != null ? Math.round(_xgbWinProb * 1000) / 1000 : null}, ${_xgbDivergence}, ${_possWindowScore}, ${lt?.mc?.current_mc != null ? Math.round(lt.mc.current_mc * 10000) / 10000 : null})
+                      ${_xgbWinProb != null ? Math.round(_xgbWinProb * 1000) / 1000 : null}, ${_xgbDivergence}, ${_possWindowScore}, ${_pollMC})
                   `;
                   log(`${matchup}: ${t.label} CAL snapshot saved — floor ${ind.controlTeam} ${ind.score} | sust:${leadSust || '?'} class:${leadClass || '?'} | WP:${espnWP?.home || '?'}% | spd:${spreadVal != null ? spreadVal : 'N/A'}`);
                 } catch (e) {
