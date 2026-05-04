@@ -981,10 +981,11 @@ function renderMCStrip(mc){
   var verdictColors={INV:'rgba(148,163,184,0.4)',CONT:'var(--amber)',LIKELY:'var(--coral)',CONF:'#ef4444',NORM:'var(--green)'};
   var verdictHollow={INV:true,NORM:true};
   // Determine strip class, badge, icon, MC color
-  var stripCls='mc-strip',badgeCls='mc-badge investigating',icon='◉',label='INVESTIGATING',mcColor='var(--amber)';
-  if(pattern==='CLEAN'){stripCls='mc-strip collapse';badgeCls='mc-badge collapse';icon='▼';label='COLLAPSE';mcColor='var(--coral)';}
-  else if(pattern==='WAVE'){stripCls='mc-strip wave';badgeCls='mc-badge wave';icon='◈';label='OSCILLATING';mcColor='var(--amber)';}
-  else if(pattern==='NORMALIZED'){stripCls='mc-strip cleared';badgeCls='mc-badge cleared';icon='✓';label='CLEARED';mcColor='var(--green)';}
+  var ctrlTm=mc.ctrl_team||'';
+  var stripCls='mc-strip',badgeCls='mc-badge investigating',icon='◉',label=ctrlTm+' INVESTIGATING',mcColor='var(--amber)';
+  if(pattern==='CLEAN'){stripCls='mc-strip collapse';badgeCls='mc-badge collapse';icon='▼';label=ctrlTm+' COLLAPSE';mcColor='var(--coral)';}
+  else if(pattern==='WAVE'){stripCls='mc-strip wave';badgeCls='mc-badge wave';icon='◈';label=ctrlTm+' OSCILLATING';mcColor='var(--amber)';}
+  else if(pattern==='NORMALIZED'){stripCls='mc-strip cleared';badgeCls='mc-badge cleared';icon='✓';label=ctrlTm+' CLEARED';mcColor='var(--green)';}
   var trigCtx=pattern==='NORMALIZED'?'Q'+mc.trigger_period+' '+mc.trigger_clock+' → cleared':'since Q'+mc.trigger_period+' '+mc.trigger_clock+' · +'+(mc.trigger_margin||'?');
   var h='<div class="'+stripCls+'">';
   h+='<div class="mc-head"><div style="display:flex;align-items:center;gap:6px"><span style="color:'+mcColor+';font-size:11px'+((!pattern)?';animation:mc-pulse 1.8s ease-in-out infinite':'')+'">'+ icon+'</span><span class="'+badgeCls+'">'+label+'</span></div>';
