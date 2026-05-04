@@ -72,6 +72,7 @@ const READABLE = {
   'EXIT': 'Exit', 'THESIS_ALIVE': 'Second Chance', 'POSITION_RECOVERING': 'Strengthening',
   'POSITION_SAFE': 'Position Safe', 'AUTO_ANALYSIS': 'Position Update',
   'MC_COLLAPSE': 'Structural Collapse',
+  'TRACKING_INVALIDATED': 'Tracking Invalidated',
   'BUY': 'Buy', 'TRACKING': 'Tracking',
 };
 const readable = (t) => READABLE[t] || t;

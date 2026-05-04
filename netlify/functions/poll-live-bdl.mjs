@@ -573,7 +573,8 @@ ${ctx.priorAlertTrail || 'None'}
 RULES:
 - TRACKING: First structural signal — the system just identified ${ctx.ctrlTeam} as structurally interesting (3 consecutive holds, floor ${ctx.floor}, margin ${ctx.margin}). This is NOT a position recommendation — the subscriber learns a game is on the radar. ALWAYS SEND unless the game is clearly meaningless (garbage time, both teams eliminated, period 4 with < 2 min left). Body should explain: which team, what structural picture (indicators, floor, margin), and that we are watching for the edge to develop. Frame as: "Watching [TEAM] — [why they look structurally dominant]. Will update if this develops into a position." Keep it short — this is a heads-up, not a thesis.
 - POSITION_OPEN: The team has GRADUATED through the checkpoint system — sustained structural rank confirmed across multiple 3-minute evaluation windows.
-  ${ctx.bwcFlipped ? 'BWC FLIP: The system originally tracked ' + ctx.originalBwcTeam + ' but they FAILED to graduate (peak C). ' + ctx.bwcTeam + ' then graduated ' + ctx.poRank + '-Rank — taking structural control away from a previously dominant team. This is one of the strongest signals in the system (74-86% win rate). The floor appears modest because cumulative stats are anchored by ' + ctx.originalBwcTeam + "'s early dominance, but " + ctx.bwcTeam + " is holding control DESPITE that headwind. ALWAYS SEND."
+  ${ctx.isSecondBwc ? 'SECOND BWC: ' + ctx.bwcTeam + ' took structural control away from ' + ctx.deadTeam + (ctx.deadHadPO ? ' (who had ' + ctx.deadRank + '-rank position)' : ' (who had TRACKING but never graduated)') + '. Second-to-graduate wins 78.2% historically (B-rank flips, n=257). The Q3_6 timing gate was bypassed because the reversal itself is the evidence — ' + ctx.bwcTeam + ' earned this through merit after ' + ctx.deadTeam + ' collapsed. ALWAYS SEND.'
+  : ctx.bwcFlipped ? 'BWC FLIP: The system originally tracked ' + ctx.originalBwcTeam + ' but they FAILED to graduate (peak C). ' + ctx.bwcTeam + ' then graduated ' + ctx.poRank + '-Rank — taking structural control away from a previously dominant team. This is one of the strongest signals in the system (74-86% win rate). The floor appears modest because cumulative stats are anchored by ' + ctx.originalBwcTeam + "'s early dominance, but " + ctx.bwcTeam + " is holding control DESPITE that headwind. ALWAYS SEND."
   : ctx.poRank === 'A' && ctx.cpCtrlFlips === 0 ? 'A-Rank WIRE-TO-WIRE (85.6%): Zero checkpoint-level control flips — structural dominance unchallenged. ' + mfTrajStr + ' across ' + ctx.cpEligibleCount + ' checkpoints. ALWAYS SEND.'
   : ctx.poRank === 'A' ? 'A-Rank: Sustained DOMINANT conviction with lead 8+. ' + mfTrajStr + ' across ' + ctx.cpEligibleCount + ' checkpoints. CP flips: ' + ctx.cpCtrlFlips + (ctx.cpCtrlFlips >= 2 ? ' (multiple flips — A-with-flips is 58.5% in competitive games. Apply extra scrutiny: check structural stress, per-quarter breakdown, whether indicators that powered graduation are still held.)' : '') + '.'
   : ctx.poRank === 'B' ? 'B-Rank: Sustained DOMINANT/STRONG conviction with lead 3+. ' + mfTrajStr + ' across ' + ctx.cpEligibleCount + ' checkpoints.'
@@ -620,6 +621,7 @@ ${ctx.positionClosed ? '  POST-EXIT RECOVERY: Position is CLOSED — the subscri
   }
   ${ctx.cpOppGraduation ? 'Opponent graduated ' + ctx.cpOppGraduation.rank + '-Rank @ ' + ctx.cpOppGraduation.cp_label + (ctx.cpOppGraduation.cp_idx > (ctx.cpGraduation?.cp_idx ?? -1) ? ' (MORE RECENT than BWC graduation — opponent is structurally ascending)' : '') : ''}
   ${ctx.bwcFlipped ? 'BWC FLIPPED: System originally tracked ' + ctx.originalBwcTeam + ' -> structural control transferred to ' + ctx.bwcTeam + '. Latest-to-graduate wins 84.5% historically.' : ''}
+  ${ctx.isSecondBwc ? 'SECOND BWC: ' + ctx.deadTeam + ' lost structural control. ' + ctx.bwcTeam + ' earned BWC after tracking invalidation. Second-to-graduate wins 78.2% (B-rank, n=257).' : ''}
   
   BWC LIFECYCLE STATUS FOR BUY DECISIONS:
   The BUY team's relationship to the BWC lifecycle determines baseline confidence:
@@ -786,6 +788,7 @@ RULES:
   MC CLEAN/WAVE overrides combined_read — treat as COLLAPSING/SHIFT regardless. MC NORMALIZED = treat as REINFORCING.
 - MC WAVE: Oscillating collapse. 60% precision. RISK signal, not confirmed. BWC_EDGE: prominent RISK line. POSITION_SAFE: DOWNGRADE.
 - MC NORMALIZED: Rates recovered. 86-91% ctrl survives. CONFIDENCE signal. Reference as positive for POSITION_SAFE/BWC_EDGE. Argues AGAINST exit.
+- TRACKING_INVALIDATED: The previously tracked team lost structural control. BWC tracking terminated mechanically. Subsequent alerts about the new control team are FRESH evaluations — not continuations of the old thesis. Do not reference the dead team's floor or graduation state for current decisions. If the dead team had a graduated position, this is an implicit EXIT — the structural case supporting the position is gone.
 - XGB_INVALIDATED: The structural model (XGBoost) that supported a prior BUY has dropped below the quarter's viability gate (Q2<0.40, Q3<0.45, Q4<0.60). ALWAYS SEND — the mechanical gate is the filter. Your job is to add narrative context: (1) what the SHAP drivers are showing NOW vs at BUY time — has interior/paint collapsed? has disruption (I1) flipped? (2) whether the XGB drop is driven by raw stat decay or game progress pressure, (3) what the current structural picture looks like (indicators, conviction, floor-margin relationship). Frame as: "The structural model no longer supports the [TEAM] BUY — [explain what changed in basketball terms]. Consider exiting if you took this position." This is an exit signal, not a veto of future entry.
 - CONVICTION QUALITY: If provided, evaluate how the XGB model arrives at its prediction. CONFIRMED scoreboard = high confidence (95% WR). NOT CONFIRMED = stats not translating to lead, elevate scrutiny. VOLATILE basis (pot/stl/oreb/to/runs dominant) = circumstantial edge, may not sustain. Multiple conviction warnings compounding = strong SUPPRESS/DOWNGRADE signal. Single warning = flag as RISK, not auto-SUPPRESS.
 - ANCHORED FLOOR CHECK: If team is TRAILING with floor 0.75+ but margin only 1-3 pts AND floor is declining from recent snapshots, the floor may be anchored from earlier dominance that has eroded. Verify recent quarters still favor control team before SEND. This rule does NOT apply to leading teams (BWC) — a high floor with a small lead is a valid structural read. When MC STRUCTURAL INVESTIGATION is active and shows CLEAN/WAVE, the floor IS anchored — MC proved it by showing post-trigger rates have deteriorated while cumulative floor remained high. Do not independently diagnose anchoring when MC has already measured it.
@@ -4914,7 +4917,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
 
         // ── 10a. POSITION GATE — auto-analysis only sends as position updates ──
         // Query for most recent SENT actionable alert for this game
-        const POSITION_TYPES = ['BUY', 'BUY WINDOW CLOSING', 'MC_COLLAPSE', 'POSITION_OPEN', 'BWC_EDGE', 'VALUE', 'EXIT', 'THESIS_ALIVE', 'POSITION_RECOVERING', 'POSITION_SAFE'];
+        const POSITION_TYPES = ['BUY', 'BUY WINDOW CLOSING', 'MC_COLLAPSE', 'TRACKING_INVALIDATED', 'POSITION_OPEN', 'BWC_EDGE', 'VALUE', 'EXIT', 'THESIS_ALIVE', 'POSITION_RECOVERING', 'POSITION_SAFE'];
         let priorPosition = null;
         try {
           const priorRows = await sql`
@@ -5028,7 +5031,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
             const sameTeam = pp.control_team === ind.controlTeam;
             const floorDelta = ind.score - Number(pp.floor_score);
             const statusWord = !sameTeam ? 'At Risk' : floorDelta > 0.1 ? 'Improving' : floorDelta < -0.1 ? 'Fading' : 'Holding';
-            const _alertReadable = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Lead Compressing','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','MC_COLLAPSE':'Structural Collapse'}[pp.alert_type] || pp.alert_type;
+            const _alertReadable = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Lead Compressing','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','MC_COLLAPSE':'Structural Collapse','TRACKING_INVALIDATED':'Tracking Invalidated'}[pp.alert_type] || pp.alert_type;
             const ntfyTitle = `UPDATE: Your Q${pp.period} ${_alertReadable} on ${pp.control_team} is ${statusWord}`;
             // Agent writes the body via BODY: response, use it if available
             const agentBody = agentResult?.body || '';
@@ -5049,7 +5052,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           } else {
             const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${period} ${clock}`;
             const pp = priorPosition;
-            const _alertReadableW = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Lead Compressing','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','MC_COLLAPSE':'Structural Collapse'}[pp.alert_type] || pp.alert_type;
+            const _alertReadableW = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Lead Compressing','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','MC_COLLAPSE':'Structural Collapse','TRACKING_INVALIDATED':'Tracking Invalidated'}[pp.alert_type] || pp.alert_type;
             const ntfyTitle = `WATCH: Your Q${pp.period} ${_alertReadableW} on ${pp.control_team} Needs Attention`;
             const agentBody = agentResult?.body || '';
             const ntfyBody = scoreLine
@@ -6199,6 +6202,67 @@ export default async function(req) {
             const _v2OppPts = _v2CtrlIsHome ? ind.awayPts : ind.homePts;
             const _v2Margin = _v2CtrlPts - _v2OppPts; // positive = leading
 
+            // ── BWC TRACKING DEATH — structural control lost ──
+            // First poll where control flips away from BWC team = thesis dead.
+            // Clears all BWC state, opens path for new team to earn BWC on merit.
+            // Fires regardless of graduation state — post-graduation death = implicit EXIT.
+            if (lt.bwc_fired && ind.controlTeam !== lt.bwc_fired.team && ind.controlTeam !== 'Neither') {
+              const _deadTeam = lt.bwc_fired.team;
+              const _deadHadPO = !!lt.po_fired;
+              const _deadRank = lt.cp_peak_rank || lt.po_fired?.rank || 'C';
+              const _newCtrlTeam = ind.controlTeam;
+              log(`${matchup}: ★ BWC DEATH — ${_deadTeam} lost structural control to ${_newCtrlTeam}. hadPO=${_deadHadPO} rank=${_deadRank} flips=${lt.ctrl_flips}`);
+
+              // Clear all BWC-specific state
+              lt.bwc_fired = null;
+              lt.po_fired = null;
+              lt._bwc_candidate = null;
+              lt._bwc_candidate_holds = 0;
+              lt._prev_bwc_state = null;
+              lt._just_established = false;
+              lt._tracking_sent = false;
+              lt.bwc_flipped = false;
+              lt.original_bwc_team = null;
+              lt.cp_graduation = null;
+              lt.cp_opp_graduation = null;
+              lt.cp_peak_rank = null;
+              lt.cp_mean_floor = null;
+              lt.cp_min_floor = null;
+              lt.cp_eligible_count = 0;
+              lt.cp_ctrl_flips = 0;
+              lt.cp_holds = 0;
+              lt.cp_opp_holds = 0;
+              lt.checkpoints = null;
+              lt.xgb_exit_warned = null;
+              lt.xgb_exit_sent = false;
+              lt.xgb_exit_ts = null;
+              lt.xgb_exit_xgb = null;
+              lt.xgb_recovery_warned = null;
+              lt.position_closed = false;
+              lt.position_closed_ts = null;
+
+              // Mark as second BWC opportunity — bypasses Q3_6 gate for B-rank
+              lt._is_second_bwc = true;
+              lt._dead_team = _deadTeam;
+              lt._dead_had_po = _deadHadPO;
+              lt._dead_rank = _deadRank;
+
+              // Persist immediately so next cycle sees clean state
+              try { await sql`UPDATE games SET live_tracking = ${JSON.stringify(lt)} WHERE id = ${game.id}`; } catch(e) {}
+
+              // TRACKING_INVALIDATED alert — mechanical, no agent
+              const _deathPosNote = _deadHadPO
+                ? `\n${_deadTeam} had ${_deadRank}-rank position. The structural case supporting this position is gone. Consider exiting if you took this position.`
+                : '';
+              const _deathBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\n${_deadTeam} structural edge invalidated — control shifted to ${_newCtrlTeam}. Tracking on ${_deadTeam} stopped.${_deathPosNote}`;
+              try {
+                await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
+                  VALUES (${game.id}, ${league}, ${'TRACKING_INVALIDATED'}, ${currentPeriod}, ${clock}, ${_newCtrlTeam}, ${ind.score}, ${_v2Margin}, ${false}, ${'FIRED'}, ${'SEND'}, ${_deathBody}, ${ind.I1?.score}, ${ind.I2?.score}, ${ind.I3?.score}, ${ind.I4?.score}, ${ind.I5?.score}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${true}, ${_deadTeam}, ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
+              } catch (e) { log(`${matchup}: TRACKING_INVALIDATED DB insert error: ${e.message}`); }
+              await sendNtfy(`TRACKING INVALIDATED — ${matchup}`, _deathBody, 3);
+              log(`${matchup}: TRACKING_INVALIDATED ntfy sent`);
+            }
+
             // ── V2 BWC candidate tracking (3-hold minimum for initial fire) ──
             // Q1 hold accumulation allowed; fire gated on Q2+
             if (!lt.bwc_fired && ind.score >= 0.60 && _v2Margin >= 2) {
@@ -6427,6 +6491,10 @@ export default async function(req) {
                 floorMarginSignal: floorMarginSig,
                 convictionTrend: convTrend,
                 bwcFlipped: lt.bwc_flipped || false,
+                isSecondBwc: lt._is_second_bwc || false,
+                deadTeam: lt._dead_team || null,
+                deadHadPO: lt._dead_had_po || false,
+                deadRank: lt._dead_rank || null,
                 positionClosed: lt.position_closed || false,
                 originalBwcTeam: lt.original_bwc_team || null,
                 // Flip buy context (BUY fires for opponent after EXIT sent on BWC team)
@@ -6863,9 +6931,9 @@ export default async function(req) {
                   }
                 }
 
-                // B-Rank: requires Q3_6+ AND MF/minF gates
+                // B-Rank: requires Q3_6+ AND MF/minF gates (Q3_6 bypassed for second BWC team)
                 if (gRank === 'B') {
-                  const pastQ3_6 = currentPeriod > 3 || (currentPeriod === 3 && cpClockSec <= 360);
+                  const pastQ3_6 = currentPeriod > 3 || (currentPeriod === 3 && cpClockSec <= 360) || lt._is_second_bwc;
                   if (pastQ3_6 && lt.cp_mean_floor >= gates.mfGate && lt.cp_min_floor >= gates.minFGate) {
                     poShouldFire = true;
                   } else if (!pastQ3_6) {
