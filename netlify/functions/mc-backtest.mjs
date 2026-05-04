@@ -3982,6 +3982,287 @@ export default async function handler(req) {
         };
         break;
       }
+      // ═══════════════════════════════════════════════════════════════
+      // PHASE: HALFTIME_PRIMER — MC at Q2_END as pre-Q3 structural read
+      //   ?phase=halftime_primer&n=300&offset=0
+      // ═══════════════════════════════════════════════════════════════
+      case 'halftime_primer': {
+        var bSize = parseInt(url.searchParams.get('n') || '300');
+        var hOffset = parseInt(url.searchParams.get('offset') || '0');
+        var sims = parseInt(url.searchParams.get('sims') || '300');
+        var rc = parseFloat(url.searchParams.get('rc') || '0.60');
+        var t0 = Date.now();
+
+        var gIds = await sql`SELECT DISTINCT game_id FROM nba_snapshot_backtest WHERE indicators IS NOT NULL ORDER BY game_id LIMIT ${bSize} OFFSET ${hOffset}`;
+        var ids = gIds.map(function(r) { return r.game_id; });
+        if (!ids.length) { result = { status: 'done' }; break; }
+
+        var rows = await sql`
+          SELECT game_id, checkpoint, team_stats,
+                 (indicators->>'score')::real AS floor,
+                 indicators->>'controlTeam' AS ctrl_team,
+                 indicators->>'homeAlias' AS home_alias,
+                 indicators->>'awayAlias' AS away_alias,
+                 margin_at_snapshot AS margin,
+                 ctrl_team_won, final_margin
+          FROM nba_snapshot_backtest
+          WHERE game_id = ANY(${ids}) AND indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+          ORDER BY game_id, checkpoint`;
+
+        var gMap = {};
+        for (var r of rows) {
+          if (!gMap[r.game_id]) gMap[r.game_id] = [];
+          var ts = typeof r.team_stats === 'string' ? JSON.parse(r.team_stats) : r.team_stats;
+          gMap[r.game_id].push({ checkpoint: r.checkpoint, cpIdx: CP_INDEX[r.checkpoint],
+            home: ts?.home, away: ts?.away, floor: r.floor, ctrl_team: r.ctrl_team,
+            home_alias: r.home_alias, away_alias: r.away_alias,
+            margin: r.margin, ctrl_team_won: r.ctrl_team_won, final_margin: r.final_margin });
+        }
+        for (var g of Object.keys(gMap)) gMap[g].sort(function(a,b) { return a.cpIdx - b.cpIdx; });
+
+        // Buckets
+        var buckets = {
+          mc_high:       { n: 0, wins: 0 },  // MC > 0.70
+          mc_mid:        { n: 0, wins: 0 },  // MC 0.50-0.70
+          mc_low:        { n: 0, wins: 0 },  // MC < 0.50
+          // Divergence: floor vs MC
+          floor_high_mc_high: { n: 0, wins: 0 },  // floor>0.70 + MC>0.70 = aligned
+          floor_high_mc_low:  { n: 0, wins: 0 },  // floor>0.70 + MC<0.50 = ANCHORING
+          floor_high_mc_mid:  { n: 0, wins: 0 },  // floor>0.70 + MC 0.50-0.70 = early warning
+          floor_low:          { n: 0, wins: 0 },   // floor<0.60
+          // By margin at halftime
+          leading_big:   { n: 0, wins: 0 },  // ctrl leading 8+
+          leading_small: { n: 0, wins: 0 },  // ctrl leading 1-7
+          tied:          { n: 0, wins: 0 },  // tied
+          trailing:      { n: 0, wins: 0 },  // ctrl trailing
+        };
+        var total = 0, computed = 0;
+
+        for (var gid of Object.keys(gMap)) {
+          if (Date.now() - t0 > 90000) break;
+          var cps = gMap[gid];
+          total++;
+          // Find Q2_END (cpIdx=5) and the checkpoint 2 before it (Q2_3, cpIdx=3)
+          var q2end = null, q2_3 = null;
+          for (var ci = 0; ci < cps.length; ci++) {
+            if (cps[ci].checkpoint === 'Q2_END') q2end = cps[ci];
+            if (cps[ci].checkpoint === 'Q2_3') q2_3 = cps[ci];
+          }
+          if (!q2end || !q2_3 || !q2end.home || !q2end.away || !q2_3.home || !q2_3.away) continue;
+          if (!q2end.ctrl_team || q2end.ctrl_team === 'Neither') continue;
+
+          var h2 = { fgm:q2end.home.fgm||0, fga:q2end.home.fga||0, fg3m:q2end.home.fg3m||0, fg3a:q2end.home.fg3a||0, ftm:q2end.home.ftm||0, fta:q2end.home.fta||0, to:q2end.home.to||0, oreb:q2end.home.oreb||0 };
+          var a2 = { fgm:q2end.away.fgm||0, fga:q2end.away.fga||0, fg3m:q2end.away.fg3m||0, fg3a:q2end.away.fg3a||0, ftm:q2end.away.ftm||0, fta:q2end.away.fta||0, to:q2end.away.to||0, oreb:q2end.away.oreb||0 };
+          var h3 = { fgm:q2_3.home.fgm||0, fga:q2_3.home.fga||0, fg3m:q2_3.home.fg3m||0, fg3a:q2_3.home.fg3a||0, ftm:q2_3.home.ftm||0, fta:q2_3.home.fta||0, to:q2_3.home.to||0, oreb:q2_3.home.oreb||0 };
+          var a3 = { fgm:q2_3.away.fgm||0, fga:q2_3.away.fga||0, fg3m:q2_3.away.fg3m||0, fg3a:q2_3.away.fg3a||0, ftm:q2_3.away.ftm||0, fta:q2_3.away.fta||0, to:q2_3.away.to||0, oreb:q2_3.away.oreb||0 };
+
+          var hR = diffToRates(h2, h3, 0.36, rc);
+          var aR = diffToRates(a2, a3, 0.36, rc);
+          if (!hR || !aR) continue;
+
+          var hPts = (h2.fgm - h2.fg3m)*2 + h2.fg3m*3 + h2.ftm;
+          var aPts = (a2.fgm - a2.fg3m)*2 + a2.fg3m*3 + a2.ftm;
+          var rp = estimateRemainingPoss(h2, a2, 2, 0);  // Q2 0:00
+          if (rp < 1) continue;
+
+          var ctrlH = q2end.ctrl_team === q2end.home_alias;
+          var mc = runMonteCarloSim(hR, aR, hPts, aPts, rp, { simCount: sims, ctrlTeam: ctrlH ? 'home' : 'away' });
+          computed++;
+          var won = q2end.ctrl_team_won;
+          var fl = q2end.floor || 0;
+          var ctrlMg = ctrlH ? (q2end.margin||0) : -(q2end.margin||0);
+
+          // MC buckets
+          if (mc.winProb > 0.70) { buckets.mc_high.n++; if (won) buckets.mc_high.wins++; }
+          else if (mc.winProb >= 0.50) { buckets.mc_mid.n++; if (won) buckets.mc_mid.wins++; }
+          else { buckets.mc_low.n++; if (won) buckets.mc_low.wins++; }
+
+          // Divergence buckets
+          if (fl > 0.70 && mc.winProb > 0.70) { buckets.floor_high_mc_high.n++; if (won) buckets.floor_high_mc_high.wins++; }
+          else if (fl > 0.70 && mc.winProb < 0.50) { buckets.floor_high_mc_low.n++; if (won) buckets.floor_high_mc_low.wins++; }
+          else if (fl > 0.70) { buckets.floor_high_mc_mid.n++; if (won) buckets.floor_high_mc_mid.wins++; }
+          else { buckets.floor_low.n++; if (won) buckets.floor_low.wins++; }
+
+          // Margin buckets
+          if (ctrlMg >= 8) { buckets.leading_big.n++; if (won) buckets.leading_big.wins++; }
+          else if (ctrlMg >= 1) { buckets.leading_small.n++; if (won) buckets.leading_small.wins++; }
+          else if (ctrlMg === 0) { buckets.tied.n++; if (won) buckets.tied.wins++; }
+          else { buckets.trailing.n++; if (won) buckets.trailing.wins++; }
+        }
+
+        function wp(b) { return b.n > 0 ? Math.round(b.wins/b.n*1000)/10 : 0; }
+        result = {
+          phase: 'halftime_primer', games: total, computed: computed, offset: hOffset,
+          mc_buckets: {
+            'mc>0.70': buckets.mc_high.n + ' → ' + wp(buckets.mc_high) + '% ctrl wins',
+            'mc_0.50-0.70': buckets.mc_mid.n + ' → ' + wp(buckets.mc_mid) + '% ctrl wins',
+            'mc<0.50': buckets.mc_low.n + ' → ' + wp(buckets.mc_low) + '% ctrl wins',
+          },
+          divergence: {
+            'floor>0.70_mc>0.70_ALIGNED': buckets.floor_high_mc_high.n + ' → ' + wp(buckets.floor_high_mc_high) + '%',
+            'floor>0.70_mc<0.50_ANCHORING': buckets.floor_high_mc_low.n + ' → ' + wp(buckets.floor_high_mc_low) + '%',
+            'floor>0.70_mc_0.50-0.70_WARNING': buckets.floor_high_mc_mid.n + ' → ' + wp(buckets.floor_high_mc_mid) + '%',
+            'floor<0.60': buckets.floor_low.n + ' → ' + wp(buckets.floor_low) + '%',
+          },
+          margin: {
+            'leading_8+': buckets.leading_big.n + ' → ' + wp(buckets.leading_big) + '%',
+            'leading_1-7': buckets.leading_small.n + ' → ' + wp(buckets.leading_small) + '%',
+            'tied': buckets.tied.n + ' → ' + wp(buckets.tied) + '%',
+            'trailing': buckets.trailing.n + ' → ' + wp(buckets.trailing) + '%',
+          },
+        };
+        break;
+      }
+      // ═══════════════════════════════════════════════════════════════
+      // PHASE: EXIT_CONFIRM — MC as tiebreaker for XGB EXIT decisions
+      //   ?phase=exit_confirm&n=300&offset=0
+      // ═══════════════════════════════════════════════════════════════
+      case 'exit_confirm': {
+        var bSize2 = parseInt(url.searchParams.get('n') || '300');
+        var eOffset = parseInt(url.searchParams.get('offset') || '0');
+        var sims2 = parseInt(url.searchParams.get('sims') || '300');
+        var rc2 = parseFloat(url.searchParams.get('rc') || '0.60');
+        var t02 = Date.now();
+
+        var gIds2 = await sql`SELECT DISTINCT game_id FROM nba_snapshot_backtest WHERE indicators IS NOT NULL ORDER BY game_id LIMIT ${bSize2} OFFSET ${eOffset}`;
+        var ids2 = gIds2.map(function(r) { return r.game_id; });
+        if (!ids2.length) { result = { status: 'done' }; break; }
+
+        var xRows = await sql`SELECT game_id, checkpoint, xgb_win_prob FROM mc_backtest_results WHERE game_id = ANY(${ids2}) AND xgb_win_prob IS NOT NULL`;
+        var xMap = {};
+        for (var xr of xRows) {
+          if (!xMap[xr.game_id]) xMap[xr.game_id] = [];
+          xMap[xr.game_id].push({ checkpoint: xr.checkpoint, cpIdx: CP_INDEX[xr.checkpoint], xgb: Number(xr.xgb_win_prob) });
+        }
+        for (var g of Object.keys(xMap)) xMap[g].sort(function(a,b) { return a.cpIdx - b.cpIdx; });
+
+        var rows2 = await sql`
+          SELECT game_id, checkpoint, team_stats,
+                 (indicators->>'score')::real AS floor,
+                 indicators->>'controlTeam' AS ctrl_team,
+                 indicators->>'homeAlias' AS home_alias,
+                 indicators->>'awayAlias' AS away_alias,
+                 margin_at_snapshot AS margin,
+                 ctrl_team_won
+          FROM nba_snapshot_backtest
+          WHERE game_id = ANY(${ids2}) AND indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+          ORDER BY game_id, checkpoint`;
+
+        var gMap2 = {};
+        for (var r of rows2) {
+          if (!gMap2[r.game_id]) gMap2[r.game_id] = [];
+          var ts = typeof r.team_stats === 'string' ? JSON.parse(r.team_stats) : r.team_stats;
+          gMap2[r.game_id].push({ checkpoint: r.checkpoint, cpIdx: CP_INDEX[r.checkpoint],
+            home: ts?.home, away: ts?.away, floor: r.floor, ctrl_team: r.ctrl_team,
+            home_alias: r.home_alias, away_alias: r.away_alias,
+            margin: r.margin, ctrl_team_won: r.ctrl_team_won });
+        }
+        for (var g of Object.keys(gMap2)) gMap2[g].sort(function(a,b) { return a.cpIdx - b.cpIdx; });
+
+        // Find XGB "exit" events: XGB was >= 0.55 then drops below 0.50 at Q3+
+        var agg = {
+          total: 0, exits_found: 0,
+          // XGB exit + MC state
+          exit_mc_low:  { n: 0, correct: 0 },  // MC < 0.40 = confirms exit
+          exit_mc_mid:  { n: 0, correct: 0 },  // MC 0.40-0.60 = contested
+          exit_mc_high: { n: 0, correct: 0 },  // MC > 0.60 = disagrees (recovering)
+          // By period
+          exit_q3: { n: 0, correct: 0 },
+          exit_q4: { n: 0, correct: 0 },
+          // Floor state at exit
+          exit_floor_high: { n: 0, correct: 0 },  // floor > 0.65 at exit = anchored
+          exit_floor_low:  { n: 0, correct: 0 },  // floor < 0.55 at exit = confirmed
+        };
+
+        for (var gid of Object.keys(gMap2)) {
+          if (Date.now() - t02 > 90000) break;
+          agg.total++;
+          var cps = gMap2[gid];
+          var xgbs = xMap[gid];
+          if (!xgbs || xgbs.length < 4) continue;
+
+          // Find exit point: XGB drops from >= 0.55 to < 0.50 at Q3+
+          var exitIdx = null, priorXgb = null;
+          for (var xi = 0; xi < xgbs.length; xi++) {
+            var x = xgbs[xi];
+            if (x.cpIdx < 6) { priorXgb = x.xgb; continue; }  // Q3+ only
+            if (priorXgb != null && priorXgb >= 0.55 && x.xgb < 0.50) {
+              exitIdx = xi; break;
+            }
+            priorXgb = x.xgb;
+          }
+          if (exitIdx === null) continue;
+
+          var exitCp = xgbs[exitIdx].checkpoint;
+          // Find matching snapshot
+          var snap = null;
+          for (var ci = 0; ci < cps.length; ci++) {
+            if (cps[ci].checkpoint === exitCp) { snap = cps[ci]; break; }
+          }
+          if (!snap || !snap.home || !snap.away) continue;
+
+          // Find window baseline (2 checkpoints back)
+          var baseSnap = null;
+          for (var ci = 0; ci < cps.length; ci++) {
+            if (cps[ci].cpIdx === snap.cpIdx - 2) { baseSnap = cps[ci]; break; }
+          }
+          if (!baseSnap || !baseSnap.home || !baseSnap.away) continue;
+
+          var he = { fgm:snap.home.fgm||0, fga:snap.home.fga||0, fg3m:snap.home.fg3m||0, fg3a:snap.home.fg3a||0, ftm:snap.home.ftm||0, fta:snap.home.fta||0, to:snap.home.to||0, oreb:snap.home.oreb||0 };
+          var ae = { fgm:snap.away.fgm||0, fga:snap.away.fga||0, fg3m:snap.away.fg3m||0, fg3a:snap.away.fg3a||0, ftm:snap.away.ftm||0, fta:snap.away.fta||0, to:snap.away.to||0, oreb:snap.away.oreb||0 };
+          var hb = { fgm:baseSnap.home.fgm||0, fga:baseSnap.home.fga||0, fg3m:baseSnap.home.fg3m||0, fg3a:baseSnap.home.fg3a||0, ftm:baseSnap.home.ftm||0, fta:baseSnap.home.fta||0, to:baseSnap.home.to||0, oreb:baseSnap.home.oreb||0 };
+          var ab = { fgm:baseSnap.away.fgm||0, fga:baseSnap.away.fga||0, fg3m:baseSnap.away.fg3m||0, fg3a:baseSnap.away.fg3a||0, ftm:baseSnap.away.ftm||0, fta:baseSnap.away.fta||0, to:baseSnap.away.to||0, oreb:baseSnap.away.oreb||0 };
+
+          var hR = diffToRates(he, hb, 0.36, rc2);
+          var aR = diffToRates(ae, ab, 0.36, rc2);
+          if (!hR || !aR) continue;
+
+          var meta = CP_META[exitCp]; if (!meta) continue;
+          var rp = estimateRemainingPoss(he, ae, meta.period, meta.clockSec);
+          if (rp < 1) continue;
+
+          var hPts = (he.fgm - he.fg3m)*2 + he.fg3m*3 + he.ftm;
+          var aPts = (ae.fgm - ae.fg3m)*2 + ae.fg3m*3 + ae.ftm;
+
+          // MC from ctrl team's perspective at exit point
+          var ctrlH = snap.ctrl_team === snap.home_alias;
+          var mc = runMonteCarloSim(hR, aR, hPts, aPts, rp, { simCount: sims2, ctrlTeam: ctrlH ? 'home' : 'away' });
+
+          agg.exits_found++;
+          // "Correct" exit = ctrl team actually LOST (exit was justified)
+          var exitCorrect = !snap.ctrl_team_won;
+
+          if (mc.winProb < 0.40) { agg.exit_mc_low.n++; if (exitCorrect) agg.exit_mc_low.correct++; }
+          else if (mc.winProb <= 0.60) { agg.exit_mc_mid.n++; if (exitCorrect) agg.exit_mc_mid.correct++; }
+          else { agg.exit_mc_high.n++; if (exitCorrect) agg.exit_mc_high.correct++; }
+
+          if (meta.period <= 3) { agg.exit_q3.n++; if (exitCorrect) agg.exit_q3.correct++; }
+          else { agg.exit_q4.n++; if (exitCorrect) agg.exit_q4.correct++; }
+
+          var fl = snap.floor || 0;
+          if (fl > 0.65) { agg.exit_floor_high.n++; if (exitCorrect) agg.exit_floor_high.correct++; }
+          else { agg.exit_floor_low.n++; if (exitCorrect) agg.exit_floor_low.correct++; }
+        }
+
+        function ep(b) { return b.n > 0 ? Math.round(b.correct/b.n*1000)/10 : 0; }
+        result = {
+          phase: 'exit_confirm', games: agg.total, exits: agg.exits_found, offset: eOffset,
+          mc_at_exit: {
+            'mc<0.40_CONFIRMS': agg.exit_mc_low.n + ' → ' + ep(agg.exit_mc_low) + '% exit justified',
+            'mc_0.40-0.60_CONTESTED': agg.exit_mc_mid.n + ' → ' + ep(agg.exit_mc_mid) + '% exit justified',
+            'mc>0.60_DISAGREES': agg.exit_mc_high.n + ' → ' + ep(agg.exit_mc_high) + '% exit justified',
+          },
+          by_period: {
+            Q3: agg.exit_q3.n + ' → ' + ep(agg.exit_q3) + '%',
+            Q4: agg.exit_q4.n + ' → ' + ep(agg.exit_q4) + '%',
+          },
+          floor_at_exit: {
+            'floor>0.65_ANCHORED': agg.exit_floor_high.n + ' → ' + ep(agg.exit_floor_high) + '% exit justified',
+            'floor<0.55_CONFIRMED': agg.exit_floor_low.n + ' → ' + ep(agg.exit_floor_low) + '% exit justified',
+          },
+        };
+        break;
+      }
       case 'opp_canary': {
       var batchSize = parseInt(url.searchParams.get('n') || '200');
       var oppOffset = parseInt(url.searchParams.get('offset') || '0');
