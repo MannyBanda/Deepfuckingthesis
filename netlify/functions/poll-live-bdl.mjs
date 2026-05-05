@@ -7519,19 +7519,23 @@ export default async function(req) {
                       // CLEAN → fire MC_COLLAPSE alert
                       if (_mcPat === 'CLEAN' && !lt.mc.alert_sent) {
                         lt.mc.alert_sent = true;
-                        const _mcOppTeam = _mcCtrlIsHome ? aA : hA;
-                        const _mcHasPosition = lt.bwc_fired?.team === ind.controlTeam || lt.buy_position?.team === ind.controlTeam;
-                        const _mcPosNote = _mcHasPosition ? `\nActive ${lt.cp_peak_rank || '?'}-rank position on ${ind.controlTeam} — consider exit.` : '';
-                        const _mcBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\nStructural collapse detected — ${ind.controlTeam} leading by ${_v2Margin} but post-trigger rates show sustained deterioration since Q${lt.mc.trigger_period} ${lt.mc.trigger_clock}. Floor (${ind.score.toFixed(2)}) and XGB (${_xgbWinProb != null ? (_xgbWinProb * 100).toFixed(0) + '%' : '?'}) anchored to early game. MC: ${(_mcInv.winProb * 100).toFixed(1)}%.${_mcPosNote}`;
+                        // Use the INVESTIGATED team, not current floor leader
+                        const _mcInvTeam = lt.mc.ctrl_team;
+                        const _mcInvIsHome = lt.mc.ctrl_is_home;
+                        const _mcInvOpp = _mcInvIsHome ? aA : hA;
+                        const _mcHasPosition = lt.bwc_fired?.team === _mcInvTeam || lt.buy_position?.team === _mcInvTeam;
+                        const _mcPosNote = _mcHasPosition ? `\nActive ${lt.cp_peak_rank || '?'}-rank position on ${_mcInvTeam} — consider exit.` : '';
+                        const _mcInvMargin = _mcInvIsHome ? (Number(ind.homePts) - Number(ind.awayPts)) : (Number(ind.awayPts) - Number(ind.homePts));
+                        const _mcBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\n${_mcInvTeam} structural collapse — held control at Q${lt.mc.trigger_period} ${lt.mc.trigger_clock} but post-trigger possession rates show sustained deterioration. MC: ${(_mcInv.winProb * 100).toFixed(1)}%. Floor (${ind.score.toFixed(2)}) and XGB (${_xgbWinProb != null ? (_xgbWinProb * 100).toFixed(0) + '%' : '?'}) may be anchored to early-game data.${_mcPosNote}`;
                         const _mcPriority = _mcHasPosition ? 5 : 4;
                         try {
-                          const _mcCSust = sust?.[_mcCtrlIsHome ? 'home' : 'away']?.tier || null;
-                          const _mcOSust = sust?.[_mcCtrlIsHome ? 'away' : 'home']?.tier || null;
+                          const _mcCSust = sust?.[_mcInvIsHome ? 'home' : 'away']?.tier || null;
+                          const _mcOSust = sust?.[_mcInvIsHome ? 'away' : 'home']?.tier || null;
                           await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
-                            VALUES (${game.id}, ${league}, ${'MC_COLLAPSE'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${false}, ${null}, ${null}, ${spreadVal}, ${snapTp?.classification || null}, ${snapLs?.classification || null}, ${_mcCSust}, ${_mcOSust}, ${_mcInv.winProb}, ${'FIRED'}, ${'SEND'}, ${_mcBody}, ${ind.I1?.score}, ${ind.I2?.score}, ${ind.I3?.score}, ${ind.I4?.score}, ${ind.I5?.score}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${true}, ${ind.controlTeam}, ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
+                            VALUES (${game.id}, ${league}, ${'MC_COLLAPSE'}, ${currentPeriod}, ${clock}, ${_mcInvTeam}, ${ind.score}, ${_mcInvMargin}, ${_mcInvMargin < 0}, ${null}, ${null}, ${spreadVal}, ${snapTp?.classification || null}, ${snapLs?.classification || null}, ${_mcCSust}, ${_mcOSust}, ${_mcInv.winProb}, ${'FIRED'}, ${'SEND'}, ${_mcBody}, ${ind.I1?.score}, ${ind.I2?.score}, ${ind.I3?.score}, ${ind.I4?.score}, ${ind.I5?.score}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${true}, ${_mcInvTeam}, ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
                         } catch (e) { log(`${matchup}: MC_COLLAPSE DB insert error: ${e.message}`); }
                         await sendNtfy(`STRUCTURAL COLLAPSE — ${matchup}`, _mcBody, _mcPriority);
-                        log(`${matchup}: MC_COLLAPSE ntfy sent`);
+                        log(`${matchup}: MC_COLLAPSE ntfy sent — investigated team: ${_mcInvTeam}`);
                       }
                       // NORMALIZED or FALSE_ALARM → reset for re-trigger
                       if (_mcPat === 'NORMALIZED' || _mcPat === 'FALSE_ALARM') {
