@@ -4258,9 +4258,15 @@ async function phaseWindowXGBExport(sql, url) {
       // MC simulation (optional — enabled with mc=1)
       var mc2q = null, mcCum = null;
       if (runMC) {
+        // estimateRemainingPoss expects short keys (fga, fta, oreb, to)
+        function toShortKeys(m) {
+          return { fga: m.field_goals_att||0, fta: m.free_throws_att||0,
+                   oreb: m.offensive_rebounds||0, to: m.turnovers||0,
+                   pts: m.points||0 };
+        }
         var remainPoss = estimateRemainingPoss(
-          currentMerged.home, currentMerged.away, cp.period,
-          cp.clockRemaining * 60  // clockRemaining is minutes, estimateRemainingPoss expects seconds
+          toShortKeys(currentMerged.home), toShortKeys(currentMerged.away),
+          cp.period, cp.clockRemaining * 60
         );
         if (remainPoss >= 1) {
           // 2Q window MC
