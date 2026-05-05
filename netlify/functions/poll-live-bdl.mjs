@@ -356,7 +356,9 @@ const SONNET_SYSTEM_PROMPT = 'You are an NBA structural analyst. You receive pre
 + '  - Directional arrows (per-quarter sub-metric trends)\n'
 + '  - Bonus status\n'
 + '  - XGBoost structural model (independent raw-stats win probability + SHAP feature drivers)\n'
-+ '  - XGB conviction quality (volatile vs structural basis, scoreboard confirmation status)\n\n'
++ '  - XGB conviction quality (volatile vs structural basis, scoreboard confirmation status)\n'
++ '  - Monte Carlo trajectory (possession-level simulation from last 20 possessions projected forward)\n'
++ '  - MC investigation state (if active: pattern, verdicts, trigger context)\n\n'
 + 'XGB CONVICTION QUALITY GUIDELINES:\n'
 + '  When XGB data is provided, use it to calibrate your FWP:\n'
 + '  - Scoreboard CONFIRMED (biglead anchored): XGB is highly reliable. 95% win rate in backtest.\n'
@@ -366,6 +368,22 @@ const SONNET_SYSTEM_PROMPT = 'You are an NBA structural analyst. You receive pre
 + '  - Conviction warnings (EFFICIENCY_COLLAPSE, VOLATILE_FOUNDATION, etc.): flag in RISK section.\n'
 + '  - XGB DIVERGENT from floor: if XGB < floor, raw stats see less edge than indicators suggest.\n'
 + '    If XGB > floor, raw stats see more edge than indicators. Note the divergence direction.\n\n'
++ 'SIGNAL TRUST HIERARCHY (13,177 checkpoint backtest, 1,233 games):\n'
++ '  Floor, XGB, and MC measure different things:\n'
++ '  - Floor: cumulative game box score -> I1-I5 composite. Stable but anchors stale early-game data.\n'
++ '  - XGB: cumulative game box score -> 13-feature raw-stats model. Independent from floor. Same anchoring. Biglead locks at max lead.\n'
++ '  - MC: last 20 possessions only -> simulated forward. Immune to cumulative anchoring.\n\n'
++ '  All three most reliable when they AGREE. When they DISAGREE:\n'
++ '  Q2: Floor ~ XGB > MC. MC overconfident by 10-22pp. Use MC as early warning only.\n'
++ '  Q3: MC ~ XGB > Floor. MC calibration tightens. Floor starts anchoring. MC right 64% when they disagree.\n'
++ '  Q4: MC > XGB > Floor. MC 70-80% converts at 75.3% (perfect calibration). MC>70% = 91.9% accurate.\n'
++ '    Floor least reliable — cumulative anchoring at maximum. Trust MC over floor for FWP in Q4.\n'
++ '  When MC investigation is active (CLEAN/WAVE): MC > everything, regardless of quarter.\n\n'
++ '  MC INVESTIGATION PATTERNS (when provided):\n'
++ '  CLEAN = sustained collapse, 72.6% precision Q3+. Strongest signal.\n'
++ '  WAVE = oscillating collapse, 60%. Risk flag only.\n'
++ '  NORMALIZED = rates recovered. Hold validated.\n'
++ '  Investigation active = await classification.\n\n'
 + 'DATA QUALITY NOTE — PAINT POINTS:\n'
 + '  SR often delays or zeros out points_in_the_paint in the game summary JSON.\n'
 + '  Use DEPTH AUDIT rim section or LEAD COMPOSITION structural points as the authoritative paint signal.\n\n'
@@ -563,6 +581,19 @@ MC STRUCTURAL INVESTIGATION${ctx.mcInvestigation.pattern ? ' — ' + ctx.mcInves
   Verdicts: ${ctx.mcInvestigation.verdicts?.join(' → ') || 'none yet'}
   Pattern: ${ctx.mcInvestigation.pattern || 'classifying...'}
   Prior investigations this game: ${ctx.mcInvestigation.prior_investigations || 0}` : ''}
+${ctx.mcTrajectoryWp != null ? `
+MC TRAJECTORY (always-on, last 20 possessions projected forward):
+  MC win probability: ${(ctx.mcTrajectoryWp * 100).toFixed(1)}% | Floor: ${(ctx.floor * 100).toFixed(1)}% | XGB: ${ctx.xgbWinProb != null ? (ctx.xgbWinProb * 100).toFixed(1) + '%' : '?'}
+  ${Math.abs(ctx.mcTrajectoryWp - ctx.floor) > 0.15 ? 'DIVERGENCE: MC and floor disagree by ' + Math.round(Math.abs(ctx.mcTrajectoryWp - ctx.floor) * 100) + 'pp — recent possession rates tell a different story than cumulative box score.' : 'ALIGNED: MC and floor within 15pp.'}` : ''}
+
+SIGNAL TRUST HIERARCHY (13,177 checkpoint backtest, 1,233 games):
+  Floor, XGB, and MC measure different things. All three most reliable when they AGREE.
+  When they DISAGREE, which to trust depends on quarter:
+  Q2: Floor ~ XGB > MC. MC overconfident by 10-22pp. Use MC as early warning only.
+  Q3: MC ~ XGB > Floor. MC calibration tightens. Floor starts anchoring. MC right 64% in disagreements.
+  Q4: MC > XGB > Floor. MC 70-80% = 75.3% actual (perfect calibration). MC>70% = 91.9% accurate.
+    Floor least reliable — cumulative anchoring at maximum. Trust MC over floor for decisions in Q4.
+  When MC investigation active (CLEAN/WAVE): MC > everything, regardless of quarter.
 
 FLOOR TRAJECTORY:
 ${ctx.floorHistory || 'No prior snapshots'}
@@ -4204,7 +4235,7 @@ function parseAnalysisText(text, homeAlias, awayAlias) {
 // Single function that formats ALL data layers into prompt text.
 // Matches analyze.js quality — no more "payload ghost" layers.
 
-function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary, conviction, graduationCtx, priorAlertTrail, floorWP, xgbData }) {
+function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary, conviction, graduationCtx, priorAlertTrail, floorWP, xgbData, mcData }) {
   let p = `${aA} @ ${hA} | Q${period} ${clock} | ${score}\n\n`;
 
   // ── GROUND TRUTH (mechanical engine output — do not override) ──
@@ -4263,8 +4294,31 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
     p += `\n`;
   }
 
-  // Monte Carlo structural investigation
-  if (ctx?.mcInvestigation?.active) {
+  // Monte Carlo trajectory + investigation
+  if (mcData) {
+    if (mcData.mcWinProb != null) {
+      p += `MONTE CARLO TRAJECTORY (always-on, last 20 possessions projected forward):\n`;
+      p += `  MC win probability: ${(mcData.mcWinProb * 100).toFixed(1)}% | Floor: ${ind ? (ind.score * 100).toFixed(1) + '%' : '?'} | XGB: ${xgbData?.winProb != null ? (xgbData.winProb * 100).toFixed(1) + '%' : '?'}\n`;
+      if (ind && Math.abs(mcData.mcWinProb - ind.score) > 0.15) {
+        p += `  DIVERGENCE: MC and floor disagree by ${Math.round(Math.abs(mcData.mcWinProb - ind.score) * 100)}pp — recent possession rates tell a different story than cumulative box score.\n`;
+      }
+      p += `\n`;
+    }
+    var mcInv = mcData.investigation;
+    if (mcInv && mcInv.triggered) {
+      p += `MONTE CARLO STRUCTURAL INVESTIGATION:\n`;
+      p += `  Status: ${mcInv.pattern || 'Active — classifying'}\n`;
+      p += `  Triggered: Q${mcInv.trigger_period} ${mcInv.trigger_clock} (${mcInv.ctrl_team} led by ${mcInv.trigger_margin} at trigger)\n`;
+      p += `  Floor at trigger: ${mcInv.trigger_floor?.toFixed(2)} | XGB at trigger: ${(mcInv.trigger_xgb * 100).toFixed(0)}%\n`;
+      p += `  Current MC: ${mcInv.current_mc != null ? (mcInv.current_mc * 100).toFixed(1) + '%' : 'investigating'}\n`;
+      p += `  Verdicts: ${mcInv.verdicts?.join(' → ') || 'none yet'}\n`;
+      if (mcInv.pattern === 'CLEAN') p += `  WARNING: SUSTAINED COLLAPSE — floor and XGB are stale. Post-trigger rates never recovered.\n`;
+      else if (mcInv.pattern === 'WAVE') p += `  RISK: Oscillating rates — collapsed, recovered, collapsed again.\n`;
+      else if (mcInv.pattern === 'NORMALIZED') p += `  POSITIVE: Rates recovered — structural hold validated by MC investigation.\n`;
+      p += `\n`;
+    }
+  } else if (ctx?.mcInvestigation?.active) {
+    // Fallback for client-triggered context without mcData
     const mc = ctx.mcInvestigation;
     p += `MONTE CARLO STRUCTURAL INVESTIGATION:\n`;
     p += `  Status: ${mc.pattern || 'Active — classifying'}\n`;
@@ -4272,7 +4326,6 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
     p += `  Floor at trigger: ${mc.trigger_floor?.toFixed(2)} | XGB at trigger: ${(mc.trigger_xgb * 100).toFixed(0)}%\n`;
     p += `  Current MC: ${mc.current_mc != null ? (mc.current_mc * 100).toFixed(1) + '%' : 'investigating'}\n`;
     p += `  Verdicts: ${mc.verdicts?.join(' → ') || 'none yet'}\n`;
-    p += `  MC uses CURRENT possession rates (post-trigger only). Immune to cumulative anchoring.\n`;
     if (mc.pattern === 'CLEAN') p += `  WARNING: SUSTAINED COLLAPSE — floor and XGB are stale. Post-trigger rates never recovered.\n`;
     else if (mc.pattern === 'WAVE') p += `  RISK: Oscillating rates — collapsed, recovered, collapsed again.\n`;
     else if (mc.pattern === 'NORMALIZED') p += `  POSITIVE: Rates recovered — structural hold validated by MC investigation.\n`;
@@ -4813,6 +4866,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       priorAlertTrail,
       floorWP: ind ? lookupFloorWP(_floorWPCoeffs, ind.controlTeam, ind.score) : null,
       xgbData: { winProb: _caXgbWinProb, divergence: _caXgbDivergence, aligned: _caXgbAligned, shap: _caXgbShap, convictionQuality: _caConvQuality, trajectorySignals: _caTrajSignals },
+      mcData: { mcWinProb: lt.mc_trajectory_wp || null, investigation: lt.mc?.triggered ? lt.mc : null },
     });
 
     // ── Compute prompt layer inventory for diagnostics ──
@@ -5211,6 +5265,7 @@ export default async function(req) {
           ctx, quarterDataFromDB: ctx.quarterDiffs || null, summary,
           conviction: computeConviction(ind),
           floorWP: ind ? lookupFloorWP(_floorWPCoeffs, ind.controlTeam, ind.score) : null,
+          mcData: null,
         });
         result.promptLength = prompt.length;
         result.promptFirst500 = prompt.substring(0, 500);
@@ -6588,6 +6643,7 @@ export default async function(req) {
                   alert_sent: lt.mc.alert_sent,
                   prior_investigations: lt.mc.prior_investigations || 0,
                 } : null,
+                mcTrajectoryWp: lt.mc_trajectory_wp != null ? lt.mc_trajectory_wp : null,
               };
 
               // DB-level dedup — catch concurrent invocations BEFORE burning agent tokens
