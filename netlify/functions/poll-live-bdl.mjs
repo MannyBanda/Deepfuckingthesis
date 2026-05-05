@@ -6107,7 +6107,8 @@ export default async function(req) {
             try {
               var _pmHBL = _clutchMap?.[hA]?.q4_fg3pct || _team3ptBaselines?.[hA] || 0.36;
               var _pmABL = _clutchMap?.[aA]?.q4_fg3pct || _team3ptBaselines?.[aA] || 0.36;
-              var _pmRates = extractMCRatesFromPossLog(pbpResult?.possLog, 20, hA, aA, _pmHBL, _pmABL);
+              var _pmPossLog = pbpResult?.possLog;
+              var _pmRates = extractMCRatesFromPossLog(_pmPossLog, 20, hA, aA, _pmHBL, _pmABL);
               if (_pmRates && _pmRates.home._windowFGA >= 5 && _pmRates.away._windowFGA >= 5) {
                 var _pmClk = String(clock||'6:00').match(/(\d+):(\d+)/);
                 var _pmSec = _pmClk ? parseInt(_pmClk[1])*60+parseInt(_pmClk[2]) : 360;
@@ -6119,9 +6120,13 @@ export default async function(req) {
                     Number(ind.homePts), Number(ind.awayPts), _pmRemain,
                     { simCount: 200, ctrlTeam: _pmCtrlHome ? 'home' : 'away' });
                   _pollMC = Math.round(_pmResult.winProb * 10000) / 10000;
+                } else {
+                  log(`${matchup}: MC skip — remainPoss=${_pmRemain}`);
                 }
+              } else {
+                log(`${matchup}: MC skip — possLog=${_pmPossLog?.length || 'null'} rates=${!!_pmRates} hFGA=${_pmRates?.home?._windowFGA || '?'} aFGA=${_pmRates?.away?._windowFGA || '?'}`);
               }
-            } catch (e) { /* non-fatal */ }
+            } catch (e) { log(`${matchup}: MC error — ${e.message}`); }
           }
 
           // Read live_tracking for bwc_state + grad_rank (main lt not loaded until V2 section below)
