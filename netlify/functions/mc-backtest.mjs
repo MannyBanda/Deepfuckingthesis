@@ -4052,10 +4052,43 @@ function parseWindowCheckpoint(cp) {
   };
 }
 
+// Convert cross-fade aggregate stats → MC simulation rates
+function aggToMCRates(agg, regressionCap) {
+  var cap = regressionCap || 0.60;
+  var fga = agg.field_goals_att || 1;
+  var fgm = agg.field_goals_made || 0;
+  var fg3a = agg.three_points_att || 0;
+  var fg3m = agg.three_points_made || 0;
+  var fta = agg.free_throws_att || 0;
+  var ftm = agg.free_throws_made || 0;
+  var to = agg.turnovers || 0;
+  var oreb = agg.offensive_rebounds || 0;
+  var poss = fga + 0.44 * fta - oreb + to;
+  if (poss < 3) poss = Math.max(fga, 3);
+  var fg2a = fga - fg3a;
+  var fg2m = fgm - fg3m;
+  if (fga < 3) return null;  // too few shots
+  var rawFg3Pct = fg3a > 0 ? fg3m / fg3a : 0.36;
+  var sampleWeight = Math.min(cap, fg3a / 30);
+  var fg3Pct = rawFg3Pct * sampleWeight + 0.36 * (1 - sampleWeight);
+  function clamp(v) { return Math.max(0, Math.min(1, v)); }
+  return {
+    toRate: clamp(poss > 0 ? to / poss : 0.12),
+    fg3aShare: clamp(fga > 0 ? fg3a / fga : 0.35),
+    fg3Pct: clamp(fg3Pct),
+    fg2Pct: clamp(fg2a > 0 ? fg2m / fg2a : 0.50),
+    orebRate: clamp((fga - fgm) > 0 ? oreb / (fga - fgm) : 0.25),
+    ftaRate: Math.min(poss > 0 ? fta / poss : 0.20, 1.0),
+    ftPct: clamp(fta > 0 ? ftm / fta : 0.76),
+  };
+}
+
 async function phaseWindowXGBExport(sql, url) {
   var batchSize = parseInt(url.searchParams.get('batch') || '100');
   var offset = parseInt(url.searchParams.get('offset') || '0');
   var windowSize = parseInt(url.searchParams.get('window') || '2'); // 1=1Q recency, 2=2Q (default)
+  var runMC = url.searchParams.get('mc') === '1';
+  var simCount = parseInt(url.searchParams.get('sims') || '500');
 
   var gameIds = await sql`
     SELECT DISTINCT game_id
@@ -4222,6 +4255,39 @@ async function phaseWindowXGBExport(sql, url) {
       var w1f = agg1 ? extractFeaturesFromStats(agg1.home, agg1.away, ctrlIsHome, cumBiglead, cumRunShare) : wf;
       var cf = extractFeaturesFromStats(currentMerged.home, currentMerged.away, ctrlIsHome, cumBiglead, cumRunShare);
 
+      // MC simulation (optional — enabled with mc=1)
+      var mc2q = null, mcCum = null;
+      if (runMC) {
+        var remainPoss = estimateRemainingPoss(
+          currentMerged.home, currentMerged.away, cp.period,
+          cp.clockRemaining * 60  // clockRemaining is minutes, estimateRemainingPoss expects seconds
+        );
+        if (remainPoss >= 1) {
+          // 2Q window MC
+          var hRates2q = aggToMCRates(agg.home);
+          var aRates2q = aggToMCRates(agg.away);
+          if (hRates2q && aRates2q) {
+            var sim2q = runMonteCarloSim(
+              hRates2q, aRates2q,
+              currentMerged.home.points || 0, currentMerged.away.points || 0,
+              remainPoss, { simCount: simCount, ctrlTeam: ctrlIsHome ? 'home' : 'away' }
+            );
+            mc2q = sim2q.winProb;
+          }
+          // Cumulative MC
+          var hRatesCum = aggToMCRates(currentMerged.home);
+          var aRatesCum = aggToMCRates(currentMerged.away);
+          if (hRatesCum && aRatesCum) {
+            var simCum = runMonteCarloSim(
+              hRatesCum, aRatesCum,
+              currentMerged.home.points || 0, currentMerged.away.points || 0,
+              remainPoss, { simCount: simCount, ctrlTeam: ctrlIsHome ? 'home' : 'away' }
+            );
+            mcCum = simCum.winProb;
+          }
+        }
+      }
+
       output.push({
         gid: Number(snap.game_id),
         cp: snap.checkpoint,
@@ -4240,6 +4306,9 @@ async function phaseWindowXGBExport(sql, url) {
         w: wf.map(function(v) { return Math.round(v * 10000) / 10000; }),
         // Cumulative [c0-c12]
         c: cf.map(function(v) { return Math.round(v * 10000) / 10000; }),
+        // MC win probabilities (only when mc=1)
+        mc2q: mc2q,
+        mcC: mcCum,
       });
     }
   }
