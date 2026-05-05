@@ -454,8 +454,9 @@ exports.handler = async (event) => {
         PRIMARY KEY (game_id, label)
       )`;
 
-      // MC: snapshots.mc_win_prob
+      // MC: snapshots.mc_win_prob + mc_cum_win_prob
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS mc_win_prob REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS mc_cum_win_prob REAL`; } catch(e) {}
 
       // MC: clutch_profiles — auto-updating per-team Q4 rate profiles
       await sql`CREATE TABLE IF NOT EXISTS clutch_profiles (
@@ -1968,7 +1969,7 @@ exports.handler = async (event) => {
         SELECT id, game_id, ts, period, clock, home_pts, away_pts,
                floor_score, floor_team, raw_stats_json,
                i1, i2, i3, i4, i5, source, sust_json,
-               tp_class, ls_class, xgb_win_prob, xgb_divergence, window_score, poss_window_score, mc_win_prob
+               tp_class, ls_class, xgb_win_prob, xgb_divergence, window_score, poss_window_score, mc_win_prob, mc_cum_win_prob
         FROM snapshots
         WHERE game_id = ${gameId} AND source = 'server'
         ORDER BY ts ASC
