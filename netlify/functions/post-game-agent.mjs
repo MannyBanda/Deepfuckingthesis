@@ -80,6 +80,9 @@ const readable = (t) => READABLE[t] || t;
 // Hold-type alerts (subscriber has position, system gave confidence or update)
 const HOLD_TYPES = ['POSITION_OPEN', 'BWC_EDGE', 'POSITION_SAFE', 'POSITION_RECOVERING', 'AUTO_ANALYSIS'];
 
+// Exit-class alerts (system told subscriber to exit or invalidated the position)
+const EXIT_TYPES = ['EXIT', 'TRACKING_INVALIDATED', 'XGB_THESIS_INVALIDATED', 'MC_COLLAPSE'];
+
 // Dedup pattern detection in agent reasoning
 const DEDUP_PATTERNS = ['duplicate', 'already sent', 'already SENT', 'bettor already has', 'already received',
   'already been alerted', 'already correctly suppressed', 'resending', 'no meaningful change',
@@ -232,13 +235,15 @@ export default async function handler(req) {
     // Terminal = last non-TRACKING delivered alert by game time
     const terminal = nonTracking[nonTracking.length - 1];
 
-    // Score: EXIT inverts (correct when ctrl lost)
-    const correct = terminal.alert_type === 'EXIT' ? !outcome.ctrlWon : outcome.ctrlWon;
+    // Score: EXIT-class signals invert (correct when position_team lost = signal justified)
+    const isExitLike = EXIT_TYPES.includes(terminal.alert_type);
+    const correct = isExitLike ? !outcome.ctrlWon : outcome.ctrlWon;
 
     // Sub-classify failures
     let failureType = null;
     if (!correct) {
       if (terminal.alert_type === 'EXIT') failureType = 'premature_exit';
+      else if (isExitLike) failureType = 'premature_invalidation';
       else if (terminal.alert_type === 'BUY') failureType = 'wrong_entry';
       else if (terminal.alert_type === 'THESIS_ALIVE') failureType = 'false_recovery';
       else if (terminal.alert_type === 'VALUE') failureType = 'false_dip';
