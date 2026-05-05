@@ -1811,7 +1811,13 @@ function extractMCRatesFromPossLog(possLog, windowSize, hA, aA, hBaseline, aBase
 
 // Estimate remaining possessions per team from cumulative stats + clock
 function estimateRemainingPossMC(homeStats, awayStats, period, clockSec) {
-  function estPoss(s) { return (Number(s.fga)||0) + 0.44*(Number(s.fta)||0) - (Number(s.oreb)||0) + (Number(s.to||s.turnovers)||0); }
+  function estPoss(s) {
+    var fga = Number(s.fga || s.field_goals_att || 0) || 0;
+    var fta = Number(s.fta || s.free_throws_att || 0) || 0;
+    var oreb = Number(s.oreb || s.offensive_rebounds || 0) || 0;
+    var to = Number(s.to || s.turnovers || s.total_turnovers || 0) || 0;
+    return fga + 0.44 * fta - oreb + to;
+  }
   var hPoss = estPoss(homeStats), aPoss = estPoss(awayStats);
   var avgPoss = (hPoss + aPoss) / 2;
   var elapsedMin = (Math.min(period, 4) - 1) * 12 + (12 - clockSec / 60);
