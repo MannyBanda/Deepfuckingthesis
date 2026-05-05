@@ -6415,10 +6415,8 @@ export default async function(req) {
 
             // Ctrl-relative indicator computation (shared by all alert paths)
             const _indNames = ['I1','I2','I3','I4','I5'];
-            const _indScores = [ind.I1, ind.I2, ind.I3, ind.I4, ind.I5];
-            const _ctrlScoreFn = (s) => s == null ? 0.5 : (ctrlIsHome ? s : 1 - s);
-            const _ctrlInd = _indNames.filter((n, i) => _indScores[i] && _ctrlScoreFn(_indScores[i].score) >= 0.55);
-            const _oppIndW = _indNames.filter((n, i) => _indScores[i] && _ctrlScoreFn(_indScores[i].score) <= 0.45);
+            const _ctrlInd = _indNames.filter((n, i) => _ci[i] != null && _ci[i] >= 0.55);
+            const _oppIndW = _indNames.filter((n, i) => _ci[i] != null && _ci[i] <= 0.45);
             const _oppI3Won = _oppIndW.length >= 1 && _oppIndW.includes('I3');
 
             // Lazy-computed server context for alert agent (rolling window, combined read, per-quarter data)
@@ -6497,11 +6495,11 @@ export default async function(req) {
                 ctrlIsHome,
                 period: currentPeriod, clock,
                 bwcTeam,
-                i1: _ctrlScoreFn(ind.I1?.score)?.toFixed(2),
-                i2: _ctrlScoreFn(ind.I2?.score)?.toFixed(2),
-                i3: _ctrlScoreFn(ind.I3?.score)?.toFixed(2),
-                i4: _ctrlScoreFn(ind.I4?.score)?.toFixed(2),
-                i5: _ctrlScoreFn(ind.I5?.score)?.toFixed(2),
+                i1: _ci[0]?.toFixed(2),
+                i2: _ci[1]?.toFixed(2),
+                i3: _ci[2]?.toFixed(2),
+                i4: _ci[3]?.toFixed(2),
+                i5: _ci[4]?.toFixed(2),
                 ctrlIndicators: _ctrlInd.join('+') || 'none',
                 ctrlIndicatorCount: _ctrlInd.length,
                 ctrlSust, oppSust: oppSustTier,
