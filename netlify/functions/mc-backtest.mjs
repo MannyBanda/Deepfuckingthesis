@@ -3964,7 +3964,6 @@ async function phaseFloorVsWindow(sql) {
       AND s.window_score IS NOT NULL
       AND s.source = 'server'
       AND g.winner IS NOT NULL
-      AND g.status = 'final'
   `;
 
   if (rows.length === 0) {
