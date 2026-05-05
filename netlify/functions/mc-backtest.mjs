@@ -3935,6 +3935,101 @@ async function phaseCrossTriggeredProd(sql, url) {
 
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════════════════════════════
+// PHASE: MC_QUARTER_ACCURACY — MC calibration by quarter × confidence bucket
+// Tests hypothesis: MC is more accurate in later quarters
+// ══════════════════════════════════════════════════════════════════════════════
+async function phaseMCQuarterAccuracy(sql) {
+  // Quarter × confidence bucket cross-tab
+  var bucketRows = await sql`
+    SELECT
+      period,
+      CASE
+        WHEN mc_win_prob < 0.20 THEN '0-20'
+        WHEN mc_win_prob < 0.40 THEN '20-40'
+        WHEN mc_win_prob < 0.50 THEN '40-50'
+        WHEN mc_win_prob < 0.60 THEN '50-60'
+        WHEN mc_win_prob < 0.70 THEN '60-70'
+        WHEN mc_win_prob < 0.80 THEN '70-80'
+        WHEN mc_win_prob < 0.90 THEN '80-90'
+        WHEN mc_win_prob < 1.00 THEN '90-99'
+        ELSE '100'
+      END AS bucket,
+      COUNT(*) AS n,
+      ROUND(AVG(mc_win_prob::numeric) * 100, 1) AS avg_mc,
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1 ELSE 0 END)::numeric * 100, 1) AS actual_wr,
+      ROUND(AVG((mc_win_prob - (CASE WHEN ctrl_team_won THEN 1 ELSE 0 END))^2)::numeric, 4) AS brier
+    FROM mc_backtest_results
+    WHERE period >= 2
+    GROUP BY period, bucket
+    ORDER BY period, bucket
+  `;
+
+  // Also get per-quarter AUC-style discrimination: when MC>0.70, how often right?
+  var threshRows = await sql`
+    SELECT
+      period,
+      COUNT(*) AS total,
+      SUM(CASE WHEN mc_win_prob >= 0.70 THEN 1 ELSE 0 END) AS mc_above_70,
+      SUM(CASE WHEN mc_win_prob >= 0.70 AND ctrl_team_won THEN 1 ELSE 0 END) AS mc_above_70_correct,
+      SUM(CASE WHEN mc_win_prob < 0.30 THEN 1 ELSE 0 END) AS mc_below_30,
+      SUM(CASE WHEN mc_win_prob < 0.30 AND NOT ctrl_team_won THEN 1 ELSE 0 END) AS mc_below_30_correct,
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN mc_win_prob ELSE 1 - mc_win_prob END)::numeric, 3) AS avg_confidence_when_right,
+      ROUND(AVG((mc_win_prob - (CASE WHEN ctrl_team_won THEN 1 ELSE 0 END))^2)::numeric, 4) AS brier
+    FROM mc_backtest_results
+    WHERE period >= 2
+    GROUP BY period
+    ORDER BY period
+  `;
+
+  // Floor comparison — same buckets for floor to show delta
+  var floorRows = await sql`
+    SELECT
+      period,
+      CASE
+        WHEN floor_score < 0.55 THEN '<0.55'
+        WHEN floor_score < 0.65 THEN '0.55-0.65'
+        WHEN floor_score < 0.75 THEN '0.65-0.75'
+        WHEN floor_score < 0.85 THEN '0.75-0.85'
+        ELSE '0.85+'
+      END AS bucket,
+      COUNT(*) AS n,
+      ROUND(AVG(floor_score::numeric) * 100, 1) AS avg_floor,
+      ROUND(AVG(CASE WHEN ctrl_team_won THEN 1 ELSE 0 END)::numeric * 100, 1) AS actual_wr,
+      ROUND(AVG((floor_score - (CASE WHEN ctrl_team_won THEN 1 ELSE 0 END))^2)::numeric, 4) AS brier
+    FROM mc_backtest_results
+    WHERE period >= 2 AND floor_score IS NOT NULL
+    GROUP BY period, bucket
+    ORDER BY period, bucket
+  `;
+
+  // MC vs Floor head-to-head by quarter: when they disagree, who's right?
+  var disagreementRows = await sql`
+    SELECT
+      period,
+      COUNT(*) AS total,
+      SUM(CASE WHEN mc_win_prob >= 0.65 AND floor_score >= 0.65 AND ctrl_team_won THEN 1 ELSE 0 END) AS both_agree_win,
+      SUM(CASE WHEN mc_win_prob >= 0.65 AND floor_score >= 0.65 THEN 1 ELSE 0 END) AS both_agree_n,
+      SUM(CASE WHEN mc_win_prob >= 0.65 AND floor_score < 0.55 AND ctrl_team_won THEN 1 ELSE 0 END) AS mc_yes_floor_no_win,
+      SUM(CASE WHEN mc_win_prob >= 0.65 AND floor_score < 0.55 THEN 1 ELSE 0 END) AS mc_yes_floor_no_n,
+      SUM(CASE WHEN mc_win_prob < 0.35 AND floor_score >= 0.65 AND NOT ctrl_team_won THEN 1 ELSE 0 END) AS mc_no_floor_yes_correct,
+      SUM(CASE WHEN mc_win_prob < 0.35 AND floor_score >= 0.65 THEN 1 ELSE 0 END) AS mc_no_floor_yes_n
+    FROM mc_backtest_results
+    WHERE period >= 2
+    GROUP BY period
+    ORDER BY period
+  `;
+
+  return {
+    status: 'ok',
+    description: 'MC trajectory accuracy by quarter × confidence bucket (1,233 games, 13K+ checkpoints)',
+    mcByQuarterAndBucket: bucketRows,
+    thresholdAccuracy: threshRows,
+    floorByQuarterAndBucket: floorRows,
+    mcVsFloorDisagreement: disagreementRows,
+  };
+}
+
 export default async function handler(req) {
   var url = new URL(req.url, 'https://x.com');
   var phase = url.searchParams.get('phase') || 'status';
@@ -3971,6 +4066,7 @@ export default async function handler(req) {
       case 'cross_replay':       result = await phaseCrossReplay(sql); break;
       case 'cross_triggered':    result = await phaseCrossTriggered(sql, url); break;
       case 'cross_triggered_prod': result = await phaseCrossTriggeredProd(sql, url); break;
+      case 'mc_quarter_accuracy': result = await phaseMCQuarterAccuracy(sql); break;
       case 'status': {
         var count = await sql`SELECT COUNT(*) AS n FROM mc_backtest_results`;
         var games = await sql`SELECT COUNT(DISTINCT game_id) AS n FROM mc_backtest_results`;
