@@ -4055,6 +4055,7 @@ function parseWindowCheckpoint(cp) {
 async function phaseWindowXGBExport(sql, url) {
   var batchSize = parseInt(url.searchParams.get('batch') || '100');
   var offset = parseInt(url.searchParams.get('offset') || '0');
+  var windowSize = parseInt(url.searchParams.get('window') || '2'); // 1=1Q recency, 2=2Q (default)
 
   var gameIds = await sql`
     SELECT DISTINCT game_id
@@ -4167,29 +4168,38 @@ async function phaseWindowXGBExport(sql, url) {
         away: diffBacktestStats(currentMerged.away, prevBoundary.away),
       };
 
-      // Build cross-fade window — matches production exactly
-      var windowQs = [];
+      // Build BOTH window sizes for comparison
+      // 1Q: fading(N-1) + building(N) — extreme recency
+      var windowQs1 = [];
+      var prevQ = p - 1;
+      if (prevQ >= 1 && perQDiffs[prevQ]) {
+        windowQs1.push({ weight: Math.max(0, 1.0 - completion), diff: perQDiffs[prevQ] });
+      }
+      windowQs1.push({ weight: 1.0, diff: partialDiff });
 
+      // 2Q: fading(N-2) + anchor(N-1) + building(N)
+      var windowQs2 = [];
       if (p === 2) {
-        if (perQDiffs[1]) windowQs.push({ weight: Math.max(0, 1.0 - completion), diff: perQDiffs[1] });
-        windowQs.push({ weight: 1.0, diff: partialDiff });
+        if (perQDiffs[1]) windowQs2.push({ weight: Math.max(0, 1.0 - completion), diff: perQDiffs[1] });
+        windowQs2.push({ weight: 1.0, diff: partialDiff });
       } else if (p === 3) {
-        if (perQDiffs[2]) windowQs.push({ weight: 1.0, diff: perQDiffs[2] });
-        windowQs.push({ weight: 1.0, diff: partialDiff });
+        if (perQDiffs[2]) windowQs2.push({ weight: 1.0, diff: perQDiffs[2] });
+        windowQs2.push({ weight: 1.0, diff: partialDiff });
       } else if (p === 4) {
-        if (perQDiffs[2]) windowQs.push({ weight: Math.max(0, 1.0 - completion), diff: perQDiffs[2] });
-        if (perQDiffs[3]) windowQs.push({ weight: 1.0, diff: perQDiffs[3] });
-        windowQs.push({ weight: 1.0, diff: partialDiff });
+        if (perQDiffs[2]) windowQs2.push({ weight: Math.max(0, 1.0 - completion), diff: perQDiffs[2] });
+        if (perQDiffs[3]) windowQs2.push({ weight: 1.0, diff: perQDiffs[3] });
+        windowQs2.push({ weight: 1.0, diff: partialDiff });
       } else {
-        // OT
-        if (perQDiffs[3]) windowQs.push({ weight: Math.max(0, 1.0 - completion), diff: perQDiffs[3] });
-        if (perQDiffs[4]) windowQs.push({ weight: 1.0, diff: perQDiffs[4] });
-        windowQs.push({ weight: 1.0, diff: partialDiff });
+        if (perQDiffs[3]) windowQs2.push({ weight: Math.max(0, 1.0 - completion), diff: perQDiffs[3] });
+        if (perQDiffs[4]) windowQs2.push({ weight: 1.0, diff: perQDiffs[4] });
+        windowQs2.push({ weight: 1.0, diff: partialDiff });
       }
 
-      if (windowQs.length === 0) { skippedNoWindow++; continue; }
+      if (windowQs1.length === 0 && windowQs2.length === 0) { skippedNoWindow++; continue; }
 
-      var agg = crossFadeAggregate(windowQs);
+      var agg1 = windowQs1.length > 0 ? crossFadeAggregate(windowQs1) : null;
+      var agg2 = windowQs2.length > 0 ? crossFadeAggregate(windowQs2) : null;
+      var agg = agg2 || agg1; // fallback for downstream compat
 
       // Cumulative biglead (not windowed)
       var cumBiglead = (currentMerged.home.biggest_lead - currentMerged.away.biggest_lead);
@@ -4209,6 +4219,7 @@ async function phaseWindowXGBExport(sql, url) {
       }
 
       var wf = extractFeaturesFromStats(agg.home, agg.away, ctrlIsHome, cumBiglead, cumRunShare);
+      var w1f = agg1 ? extractFeaturesFromStats(agg1.home, agg1.away, ctrlIsHome, cumBiglead, cumRunShare) : wf;
       var cf = extractFeaturesFromStats(currentMerged.home, currentMerged.away, ctrlIsHome, cumBiglead, cumRunShare);
 
       output.push({
@@ -4223,7 +4234,9 @@ async function phaseWindowXGBExport(sql, url) {
         hA: snap.home_alias,
         aA: snap.away_alias,
         fmar: snap.final_margin,
-        // Windowed [w0-w12]
+        // 1Q window [extreme recency]
+        w1: w1f.map(function(v) { return Math.round(v * 10000) / 10000; }),
+        // 2Q window [production]
         w: wf.map(function(v) { return Math.round(v * 10000) / 10000; }),
         // Cumulative [c0-c12]
         c: cf.map(function(v) { return Math.round(v * 10000) / 10000; }),
