@@ -3939,6 +3939,129 @@ async function phaseCrossTriggeredProd(sql, url) {
 // PHASE: MC_QUARTER_ACCURACY — MC calibration by quarter × confidence bucket
 // Tests hypothesis: MC is more accurate in later quarters
 // ══════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+// PHASE: FLOOR_VS_WINDOW — compare cumulative floor vs cross-fade window accuracy
+// Uses production snapshots table (238+ games) joined with game outcomes
+// ══════════════════════════════════════════════════════════════════════════════
+async function phaseFloorVsWindow(sql) {
+  // Get all Q2+ snapshots with both floor and window scores, joined with outcomes
+  var rows = await sql`
+    SELECT
+      s.period,
+      s.floor_score,
+      s.floor_team,
+      s.window_score,
+      s.xgb_win_prob,
+      s.mc_win_prob,
+      s.poss_window_score,
+      g.winner,
+      g.home_alias,
+      g.away_alias
+    FROM snapshots s
+    JOIN games g ON s.game_id = g.id
+    WHERE s.period >= 2
+      AND s.floor_score IS NOT NULL
+      AND s.window_score IS NOT NULL
+      AND s.source = 'server'
+      AND g.winner IS NOT NULL
+      AND g.status = 'final'
+  `;
+
+  if (rows.length === 0) {
+    return { status: 'ok', message: 'No snapshots with both floor and window scores found', n: 0 };
+  }
+
+  // Determine if ctrl team won for each snapshot
+  var enriched = rows.map(function(r) {
+    var ctrlWon = r.floor_team === r.winner;
+    return {
+      period: r.period,
+      floor: Number(r.floor_score),
+      window: Number(r.window_score),
+      xgb: r.xgb_win_prob != null ? Number(r.xgb_win_prob) : null,
+      mc: r.mc_win_prob != null ? Number(r.mc_win_prob) : null,
+      pws: r.poss_window_score != null ? Number(r.poss_window_score) : null,
+      ctrlWon: ctrlWon,
+    };
+  });
+
+  // Compute accuracy by quarter for each signal
+  function analyzeSignal(data, field) {
+    var byQ = {};
+    for (var d of data) {
+      var val = d[field];
+      if (val == null) continue;
+      var q = d.period;
+      if (!byQ[q]) byQ[q] = { n: 0, correct: 0, sumPred: 0, sumActual: 0, brier: 0, buckets: {} };
+      byQ[q].n++;
+      var won = d.ctrlWon ? 1 : 0;
+      byQ[q].sumPred += val;
+      byQ[q].sumActual += won;
+      byQ[q].brier += (val - won) * (val - won);
+      if (val >= 0.65) { byQ[q].correct += won; }
+      // Bucket
+      var bk = val < 0.40 ? '<0.40' : val < 0.55 ? '0.40-0.55' : val < 0.65 ? '0.55-0.65' : val < 0.75 ? '0.65-0.75' : val < 0.85 ? '0.75-0.85' : '0.85+';
+      if (!byQ[q].buckets[bk]) byQ[q].buckets[bk] = { n: 0, wins: 0 };
+      byQ[q].buckets[bk].n++;
+      byQ[q].buckets[bk].wins += won;
+    }
+    var result = {};
+    for (var q of Object.keys(byQ).sort()) {
+      var d2 = byQ[q];
+      var above65 = 0, above65correct = 0;
+      for (var dd of data.filter(x => x.period == q && x[field] != null && x[field] >= 0.65)) {
+        above65++;
+        if (dd.ctrlWon) above65correct++;
+      }
+      result['Q' + q] = {
+        n: d2.n,
+        avgPred: Math.round(d2.sumPred / d2.n * 1000) / 10,
+        actualWR: Math.round(d2.sumActual / d2.n * 1000) / 10,
+        brier: Math.round(d2.brier / d2.n * 10000) / 10000,
+        above65accuracy: above65 > 0 ? Math.round(above65correct / above65 * 1000) / 10 : null,
+        above65n: above65,
+        buckets: Object.fromEntries(Object.entries(d2.buckets).map(([k, v]) => [k, { n: v.n, wr: Math.round(v.wins / v.n * 1000) / 10 }])),
+      };
+    }
+    return result;
+  }
+
+  var floorAnalysis = analyzeSignal(enriched, 'floor');
+  var windowAnalysis = analyzeSignal(enriched, 'window');
+  var xgbAnalysis = analyzeSignal(enriched, 'xgb');
+  var mcAnalysis = analyzeSignal(enriched, 'mc');
+  var pwsAnalysis = analyzeSignal(enriched, 'pws');
+
+  // Head-to-head: when floor and window disagree, who's right?
+  var disagreement = { Q2: { n: 0, windowRight: 0 }, Q3: { n: 0, windowRight: 0 }, Q4: { n: 0, windowRight: 0 } };
+  for (var d of enriched) {
+    if (Math.abs(d.floor - d.window) < 0.10) continue; // Only look at meaningful disagreements
+    var qk = 'Q' + d.period;
+    if (!disagreement[qk]) continue;
+    disagreement[qk].n++;
+    // Window "right" = window was closer to the actual outcome
+    var floorErr = Math.abs(d.floor - (d.ctrlWon ? 1 : 0));
+    var winErr = Math.abs(d.window - (d.ctrlWon ? 1 : 0));
+    if (winErr < floorErr) disagreement[qk].windowRight++;
+  }
+  for (var qk of Object.keys(disagreement)) {
+    var dq = disagreement[qk];
+    dq.windowRightPct = dq.n > 0 ? Math.round(dq.windowRight / dq.n * 1000) / 10 : null;
+  }
+
+  return {
+    status: 'ok',
+    totalSnapshots: enriched.length,
+    distinctGames: new Set(rows.map(r => r.floor_team + r.winner)).size, // rough proxy
+    floor: floorAnalysis,
+    window: windowAnalysis,
+    xgb: xgbAnalysis,
+    mc: mcAnalysis,
+    possWindow: pwsAnalysis,
+    floorVsWindowDisagreement: disagreement,
+  };
+}
+
 async function phaseMCQuarterAccuracy(sql) {
   // Quarter × confidence bucket cross-tab
   var bucketRows = await sql`
@@ -4067,6 +4190,7 @@ export default async function handler(req) {
       case 'cross_triggered':    result = await phaseCrossTriggered(sql, url); break;
       case 'cross_triggered_prod': result = await phaseCrossTriggeredProd(sql, url); break;
       case 'mc_quarter_accuracy': result = await phaseMCQuarterAccuracy(sql); break;
+      case 'floor_vs_window': result = await phaseFloorVsWindow(sql); break;
       case 'status': {
         var count = await sql`SELECT COUNT(*) AS n FROM mc_backtest_results`;
         var games = await sql`SELECT COUNT(DISTINCT game_id) AS n FROM mc_backtest_results`;
