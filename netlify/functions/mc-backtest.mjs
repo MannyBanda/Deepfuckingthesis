@@ -3940,6 +3940,304 @@ async function phaseCrossTriggeredProd(sql, url) {
 // Tests hypothesis: MC is more accurate in later quarters
 // ══════════════════════════════════════════════════════════════════════════════
 // ══════════════════════════════════════════════════════════════════════════════
+// PHASE: WINDOW_XGB_EXPORT — Extract cross-fade window XGB features from
+// nba_snapshot_backtest for model retraining comparison.
+//
+// Returns both cumulative (current model) and windowed features per checkpoint,
+// so we can train two models and compare OOF AUC.
+//
+// Cross-fade logic matches production computeServerWindow() exactly:
+//   Q2: Q1(fading by completion) + Q2(partial)
+//   Q3: Q2(anchor, weight=1.0) + Q3(partial)
+//   Q4: Q2(fading by completion) + Q3(anchor) + Q4(partial)
+//   OT: Q3(fading) + Q4(anchor) + OT(partial)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Stats that can be diffed between quarter boundaries (additive counts)
+var WINDOW_ADDITIVE_KEYS = [
+  'turnovers', 'steals', 'offensive_rebounds', 'assists', 'blocks',
+  'free_throws_att', 'field_goals_made', 'field_goals_att',
+  'three_points_made', 'three_points_att', 'free_throws_made', 'points',
+  'points_in_paint', 'points_off_turnovers', 'rim_made', 'rim_att',
+];
+
+// Merge BDL team_stats + pbp_derived into unified stat object per side
+function mergeBacktestStats(teamStats, pbpDerived, side) {
+  var prefix = side === 'home' ? 'h' : 'a';
+  var ts = (teamStats || {})[side] || {};
+  return {
+    turnovers: Number(ts.to || 0),
+    steals: Number(ts.stl || 0),
+    offensive_rebounds: Number(ts.oreb || 0),
+    assists: Number(ts.ast || 0),
+    blocks: Number(ts.blk || 0),
+    free_throws_att: Number(ts.fta || 0),
+    field_goals_made: Number(ts.fgm || 0),
+    field_goals_att: Number(ts.fga || 0),
+    three_points_made: Number(ts.fg3m || 0),
+    three_points_att: Number(ts.fg3a || 0),
+    free_throws_made: Number(ts.ftm || 0),
+    points: Number(ts.pts || 0),
+    points_in_paint: Number((pbpDerived || {})[prefix + 'Paint'] || 0),
+    points_off_turnovers: Number((pbpDerived || {})[prefix + 'POT'] || 0),
+    biggest_lead: Number((pbpDerived || {})[prefix + 'BigLead'] || 0),
+    rim_made: Number((pbpDerived || {})[prefix + 'RimM'] || 0),
+    rim_att: Number((pbpDerived || {})[prefix + 'RimA'] || 0),
+  };
+}
+
+// Diff additive stats between current and boundary; biglead stays cumulative
+function diffBacktestStats(current, boundary) {
+  var d = {};
+  for (var i = 0; i < WINDOW_ADDITIVE_KEYS.length; i++) {
+    var k = WINDOW_ADDITIVE_KEYS[i];
+    d[k] = (current[k] || 0) - (boundary[k] || 0);
+  }
+  d.biggest_lead = current.biggest_lead || 0;
+  return d;
+}
+
+// Apply cross-fade weights and aggregate
+function crossFadeAggregate(windowQs) {
+  var home = {}, away = {};
+  for (var i = 0; i < WINDOW_ADDITIVE_KEYS.length; i++) {
+    var k = WINDOW_ADDITIVE_KEYS[i];
+    var hSum = 0, aSum = 0;
+    for (var j = 0; j < windowQs.length; j++) {
+      hSum += (windowQs[j].diff.home[k] || 0) * windowQs[j].weight;
+      aSum += (windowQs[j].diff.away[k] || 0) * windowQs[j].weight;
+    }
+    home[k] = hSum;
+    away[k] = aSum;
+  }
+  return { home: home, away: away };
+}
+
+// Extract 13 XGB features from stat aggregate
+function extractFeaturesFromStats(home, away, ctrlIsHome, cumBiglead, cumRunShare) {
+  var flip = ctrlIsHome ? 1 : -1;
+  var hFGA = home.field_goals_att || 1;
+  var aFGA = away.field_goals_att || 1;
+  var hEFG = (home.field_goals_made + 0.5 * home.three_points_made) / Math.max(hFGA, 1);
+  var aEFG = (away.field_goals_made + 0.5 * away.three_points_made) / Math.max(aFGA, 1);
+  var hRimPct = home.rim_att > 0 ? home.rim_made / home.rim_att : 0;
+  var aRimPct = away.rim_att > 0 ? away.rim_made / away.rim_att : 0;
+
+  return [
+    (home.points_in_paint - away.points_in_paint) * flip,
+    (home.points_off_turnovers - away.points_off_turnovers) * flip,
+    (home.turnovers - away.turnovers) * flip,
+    (home.steals - away.steals) * flip,
+    (home.offensive_rebounds - away.offensive_rebounds) * flip,
+    (home.assists - away.assists) * flip,
+    (home.blocks - away.blocks) * flip,
+    (home.free_throws_att - away.free_throws_att) * flip,
+    (hEFG - aEFG) * flip,
+    cumBiglead * flip,
+    (hFGA > 0 && aFGA > 0 ? (home.three_points_att / hFGA - away.three_points_att / aFGA) : 0) * flip,
+    (hRimPct - aRimPct) * flip,
+    cumRunShare,
+  ];
+}
+
+// Parse checkpoint name → {period, clockRemaining, isEnd}
+function parseWindowCheckpoint(cp) {
+  if (!cp) return null;
+  var m = cp.match(/^Q(\d+)_(\d+|END)$/);
+  if (!m) return null;
+  return {
+    period: parseInt(m[1]),
+    clockRemaining: m[2] === 'END' ? 0 : parseInt(m[2]),
+    isEnd: m[2] === 'END',
+  };
+}
+
+async function phaseWindowXGBExport(sql, url) {
+  var batchSize = parseInt(url.searchParams.get('batch') || '100');
+  var offset = parseInt(url.searchParams.get('offset') || '0');
+
+  var gameIds = await sql`
+    SELECT DISTINCT game_id
+    FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL AND ctrl_team_won IS NOT NULL
+    ORDER BY game_id
+    LIMIT ${batchSize} OFFSET ${offset}
+  `;
+
+  if (gameIds.length === 0) {
+    return { status: 'done', message: 'No more games', offset: offset };
+  }
+
+  var ids = gameIds.map(function(r) { return r.game_id; });
+
+  var rows = await sql`
+    SELECT game_id, checkpoint, period, clock_sec,
+           home_alias, away_alias, margin_at_snapshot,
+           team_stats, pbp_derived, indicators,
+           ctrl_team_won, final_margin
+    FROM nba_snapshot_backtest
+    WHERE game_id = ANY(${ids})
+      AND indicators IS NOT NULL
+      AND ctrl_team_won IS NOT NULL
+    ORDER BY game_id, period, clock_sec DESC
+  `;
+
+  var games = {};
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (!games[r.game_id]) games[r.game_id] = [];
+    games[r.game_id].push(r);
+  }
+
+  var output = [];
+  var skippedNoWindow = 0;
+
+  for (var gid of Object.keys(games)) {
+    var snaps = games[gid];
+
+    for (var s = 0; s < snaps.length; s++) {
+      var snap = snaps[s];
+      snap.team_stats = typeof snap.team_stats === 'string' ? JSON.parse(snap.team_stats) : snap.team_stats;
+      snap.pbp_derived = typeof snap.pbp_derived === 'string' ? JSON.parse(snap.pbp_derived) : snap.pbp_derived;
+      snap.indicators = typeof snap.indicators === 'string' ? JSON.parse(snap.indicators) : snap.indicators;
+    }
+
+    // Build merged cumulative stats at each checkpoint
+    var merged = {};
+    for (var s = 0; s < snaps.length; s++) {
+      var snap = snaps[s];
+      merged[snap.checkpoint] = {
+        home: mergeBacktestStats(snap.team_stats, snap.pbp_derived, 'home'),
+        away: mergeBacktestStats(snap.team_stats, snap.pbp_derived, 'away'),
+      };
+    }
+
+    // Identify quarter boundaries (Q*_END)
+    var boundaries = {};
+    for (var s = 0; s < snaps.length; s++) {
+      var cp = parseWindowCheckpoint(snaps[s].checkpoint);
+      if (cp && cp.isEnd) {
+        boundaries[cp.period] = merged[snaps[s].checkpoint];
+      }
+    }
+
+    // Compute per-quarter diffs from boundaries
+    var perQDiffs = {};
+    var bKeys = Object.keys(boundaries).map(Number).sort(function(a, b) { return a - b; });
+    for (var bi = 0; bi < bKeys.length; bi++) {
+      var qNum = bKeys[bi];
+      if (qNum === 1) {
+        perQDiffs[qNum] = {
+          home: diffBacktestStats(boundaries[qNum].home, {}),
+          away: diffBacktestStats(boundaries[qNum].away, {}),
+        };
+      } else {
+        var prevQ = qNum - 1;
+        if (boundaries[prevQ]) {
+          perQDiffs[qNum] = {
+            home: diffBacktestStats(boundaries[qNum].home, boundaries[prevQ].home),
+            away: diffBacktestStats(boundaries[qNum].away, boundaries[prevQ].away),
+          };
+        }
+      }
+    }
+
+    // Process each Q2+ checkpoint
+    for (var s = 0; s < snaps.length; s++) {
+      var snap = snaps[s];
+      var cp = parseWindowCheckpoint(snap.checkpoint);
+      if (!cp || cp.period < 2) continue;
+
+      var p = cp.period;
+      var completion = (12 - cp.clockRemaining) / 12;
+      var ctrlTeam = snap.indicators?.controlTeam;
+      var hA = snap.home_alias;
+      var aA = snap.away_alias;
+      if (!ctrlTeam || !hA) continue;
+      var ctrlIsHome = ctrlTeam === hA;
+
+      var prevBoundary = boundaries[p - 1];
+      if (!prevBoundary) { skippedNoWindow++; continue; }
+
+      var currentMerged = merged[snap.checkpoint];
+      if (!currentMerged) { skippedNoWindow++; continue; }
+
+      var partialDiff = {
+        home: diffBacktestStats(currentMerged.home, prevBoundary.home),
+        away: diffBacktestStats(currentMerged.away, prevBoundary.away),
+      };
+
+      // Build cross-fade window — matches production exactly
+      var windowQs = [];
+
+      if (p === 2) {
+        if (perQDiffs[1]) windowQs.push({ weight: Math.max(0, 1.0 - completion), diff: perQDiffs[1] });
+        windowQs.push({ weight: 1.0, diff: partialDiff });
+      } else if (p === 3) {
+        if (perQDiffs[2]) windowQs.push({ weight: 1.0, diff: perQDiffs[2] });
+        windowQs.push({ weight: 1.0, diff: partialDiff });
+      } else if (p === 4) {
+        if (perQDiffs[2]) windowQs.push({ weight: Math.max(0, 1.0 - completion), diff: perQDiffs[2] });
+        if (perQDiffs[3]) windowQs.push({ weight: 1.0, diff: perQDiffs[3] });
+        windowQs.push({ weight: 1.0, diff: partialDiff });
+      } else {
+        // OT
+        if (perQDiffs[3]) windowQs.push({ weight: Math.max(0, 1.0 - completion), diff: perQDiffs[3] });
+        if (perQDiffs[4]) windowQs.push({ weight: 1.0, diff: perQDiffs[4] });
+        windowQs.push({ weight: 1.0, diff: partialDiff });
+      }
+
+      if (windowQs.length === 0) { skippedNoWindow++; continue; }
+
+      var agg = crossFadeAggregate(windowQs);
+
+      // Cumulative biglead (not windowed)
+      var cumBiglead = (currentMerged.home.biggest_lead - currentMerged.away.biggest_lead);
+
+      // Cumulative runShare (not windowed)
+      var cumRunShare = 0.5;
+      var pbp = snap.pbp_derived;
+      if (typeof pbp === 'string') pbp = JSON.parse(pbp);
+      if (pbp && pbp.runs6 && pbp.runs6.length > 0) {
+        var hRuns = 0, aRuns = 0;
+        for (var ri = 0; ri < pbp.runs6.length; ri++) {
+          if (pbp.runs6[ri].team === hA) hRuns++;
+          else aRuns++;
+        }
+        var totalRuns = hRuns + aRuns;
+        if (totalRuns > 0) cumRunShare = (ctrlIsHome ? hRuns : aRuns) / totalRuns;
+      }
+
+      var wf = extractFeaturesFromStats(agg.home, agg.away, ctrlIsHome, cumBiglead, cumRunShare);
+      var cf = extractFeaturesFromStats(currentMerged.home, currentMerged.away, ctrlIsHome, cumBiglead, cumRunShare);
+
+      output.push({
+        gid: Number(snap.game_id),
+        cp: snap.checkpoint,
+        p: cp.period,
+        clk: cp.clockRemaining,
+        won: snap.ctrl_team_won,
+        mar: snap.margin_at_snapshot,
+        // Windowed [w0-w12]
+        w: wf.map(function(v) { return Math.round(v * 10000) / 10000; }),
+        // Cumulative [c0-c12]
+        c: cf.map(function(v) { return Math.round(v * 10000) / 10000; }),
+      });
+    }
+  }
+
+  return {
+    status: 'ok',
+    gamesProcessed: Object.keys(games).length,
+    rowsExported: output.length,
+    skippedNoWindow: skippedNoWindow,
+    nextOffset: offset + batchSize,
+    hasMore: gameIds.length === batchSize,
+    rows: output,
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // PHASE: FLOOR_VS_WINDOW — compare cumulative floor vs cross-fade window accuracy
 // Uses production snapshots table (238+ games) joined with game outcomes
 // ══════════════════════════════════════════════════════════════════════════════
@@ -4189,6 +4487,7 @@ export default async function handler(req) {
       case 'cross_triggered':    result = await phaseCrossTriggered(sql, url); break;
       case 'cross_triggered_prod': result = await phaseCrossTriggeredProd(sql, url); break;
       case 'mc_quarter_accuracy': result = await phaseMCQuarterAccuracy(sql); break;
+      case 'window_xgb_export': result = await phaseWindowXGBExport(sql, url); break;
       case 'floor_vs_window': result = await phaseFloorVsWindow(sql); break;
       case 'status': {
         var count = await sql`SELECT COUNT(*) AS n FROM mc_backtest_results`;
