@@ -28,6 +28,7 @@ try {
 // MC: Clutch profiles and team 3PT baselines (loaded at first poll)
 var _clutchMap = null;
 var _team3ptBaselines = null;
+var _teamSeasonRates = null;  // { alias: { toRate, fg3aShare, fg3Pct, fg2Pct, orebRate, ftaRate, ftPct } }
 
 // XGB feature order (must match training — no progress):
 // [0] ctrl_paint_diff, [1] ctrl_pot_diff, [2] ctrl_to_diff,
@@ -600,7 +601,7 @@ MC TRAJECTORY (always-on):
   MC PBP (20-poss window): ${(ctx.mcTrajectoryWp * 100).toFixed(1)}% | MC Cum (game-rate): ${ctx.mcCumWp != null ? (ctx.mcCumWp * 100).toFixed(1) + '%' : '?'} | Floor: ${(ctx.floor * 100).toFixed(1)}% | XGB: ${ctx.xgbWinProb != null ? (ctx.xgbWinProb * 100).toFixed(1) + '%' : '?'}
   ${Math.abs(ctx.mcTrajectoryWp - ctx.floor) > 0.15 ? 'DIVERGENCE: MC PBP and floor disagree by ' + Math.round(Math.abs(ctx.mcTrajectoryWp - ctx.floor) * 100) + 'pp — recent possession rates tell a different story than cumulative box score.' : 'ALIGNED: MC PBP and floor within 15pp.'}
   ${ctx.mcCumWp != null && ctx.xgbWinProb != null && Math.abs(ctx.mcCumWp - ctx.xgbWinProb) > 0.15 ? 'MC Cum vs XGB gap: ' + Math.round(Math.abs(ctx.mcCumWp - ctx.xgbWinProb) * 100) + 'pp — MC Cum dominates disagreements (70-87%).' : ''}
-  ${ctx.mcDrivers && ctx.mcDrivers.length > 0 ? 'MC RATE DRIVERS (what is driving ' + (ctx.bwcTeam || ctx.ctrlTeam) + ' win prob):\\n' + ctx.mcDrivers.filter(function(d) { return Math.abs(d.delta) >= 0.02; }).map(function(d) { return '    ' + d.label + ': ' + (d.delta >= 0 ? '+' : '') + Math.round(d.delta * 100) + 'pp (game ' + (d.ctrlVal * 100).toFixed(0) + '% vs league ' + (d.leagueDefault * 100).toFixed(0) + '%)'; }).join('\\n') : ''}` : ''}
+  ${ctx.mcDrivers && ctx.mcDrivers.length > 0 ? 'MC RATE DRIVERS (what is driving ' + (ctx.bwcTeam || ctx.ctrlTeam) + ' win prob):\\n' + ctx.mcDrivers.filter(function(d) { return Math.abs(d.delta) >= 0.02; }).map(function(d) { return '    ' + d.label + ': ' + (d.delta >= 0 ? '+' : '') + Math.round(d.delta * 100) + 'pp (game ' + (d.ctrlVal * 100).toFixed(0) + '% vs season ' + (d.seasonVal * 100).toFixed(0) + '%)'; }).join('\\n') : ''}` : ''}
 
 SIGNAL TRUST HIERARCHY (14,440 checkpoint backtest, 1,233 games):
   Four signals: Floor (cumulative indicators), XGB (2Q windowed structural model), MC PBP (20-possession canary), MC Cum (game-rate probability anchor).
@@ -1948,36 +1949,40 @@ var MC_RATE_LABELS = {
   ftPct: 'free throw accuracy',
 };
 
-function computeMCDrivers(mcCumResult, ctrlIsHome, homeScore, awayScore) {
+function computeMCDrivers(mcCumResult, ctrlIsHome, homeScore, awayScore, ctrlSeasonRates) {
   if (!mcCumResult || !mcCumResult.homeRates || !mcCumResult.awayRates) return null;
   var baseWP = mcCumResult.winProb;
   var hRates = mcCumResult.homeRates, aRates = mcCumResult.awayRates;
   var remainPoss = mcCumResult.remainPoss;
   if (remainPoss <= 0) return null;
 
-  // For each rate dimension on CTRL team, swap to league default
-  // delta = baseWP - WP(with ctrl rate neutralized) → positive = ctrl rate helping
+  // Use per-team season rates as baseline, fall back to league defaults
+  var baseline = ctrlSeasonRates || MC_DEFAULT_RATES;
+
+  // For each rate dimension on CTRL team, swap to season baseline
+  // delta = baseWP - WP(with ctrl rate at season avg) → positive = game rate helping
   var drivers = [];
   var rateKeys = Object.keys(MC_DEFAULT_RATES);
   for (var i = 0; i < rateKeys.length; i++) {
     var key = rateKeys[i];
     var modH = Object.assign({}, hRates);
     var modA = Object.assign({}, aRates);
-    // Neutralize ctrl team's rate to league default
-    if (ctrlIsHome) { modH[key] = MC_DEFAULT_RATES[key]; }
-    else { modA[key] = MC_DEFAULT_RATES[key]; }
+    // Neutralize ctrl team's rate to their season baseline
+    if (ctrlIsHome) { modH[key] = baseline[key] || MC_DEFAULT_RATES[key]; }
+    else { modA[key] = baseline[key] || MC_DEFAULT_RATES[key]; }
     var modResult = runMonteCarloSim(modH, modA,
       homeScore, awayScore, remainPoss,
       { simCount: 200, ctrlTeam: ctrlIsHome ? 'home' : 'away' });
     var delta = baseWP - modResult.winProb;
     var ctrlVal = ctrlIsHome ? hRates[key] : aRates[key];
     var oppVal = ctrlIsHome ? aRates[key] : hRates[key];
+    var baselineVal = baseline[key] || MC_DEFAULT_RATES[key];
     drivers.push({
       rate: key, label: MC_RATE_LABELS[key],
       delta: Math.round(delta * 1000) / 1000,
       ctrlVal: Math.round(ctrlVal * 1000) / 1000,
       oppVal: Math.round(oppVal * 1000) / 1000,
-      leagueDefault: MC_DEFAULT_RATES[key],
+      seasonVal: Math.round(baselineVal * 1000) / 1000,
     });
   }
   drivers.sort(function(a, b) { return Math.abs(b.delta) - Math.abs(a.delta); });
@@ -4434,7 +4439,7 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
           p += `  MC RATE DRIVERS:\n`;
           for (var di = 0; di < sigDrivers.length; di++) {
             var d = sigDrivers[di];
-            p += `    ${d.label}: ${d.delta >= 0 ? '+' : ''}${Math.round(d.delta * 100)}pp (game ${(d.ctrlVal * 100).toFixed(0)}% vs league ${(d.leagueDefault * 100).toFixed(0)}%)\n`;
+            p += `    ${d.label}: ${d.delta >= 0 ? '+' : ''}${Math.round(d.delta * 100)}pp (game ${(d.ctrlVal * 100).toFixed(0)}% vs season ${(d.seasonVal * 100).toFixed(0)}%)\n`;
           }
         }
       }
@@ -5861,6 +5866,41 @@ export default async function(req) {
         }
         log(`MC: computed ${Object.keys(_team3ptBaselines).length} team 3PT baselines`);
       }
+      // Compute team-level season rates for MC driver decomposition
+      if (!_teamSeasonRates) {
+        _teamSeasonRates = {};
+        for (const tm of Object.keys(bdlSeasonCache)) {
+          const sc = bdlSeasonCache[tm];
+          if (!sc || !sc.players) continue;
+          var tFGA=0, tFGM=0, tFG3A=0, tFG3M=0, tFTA=0, tFTM=0, tTO=0, tOREB=0;
+          for (const p of sc.players) {
+            const gp = Number(p.games_played || p.gp || 0);
+            if (gp < 10) continue;
+            // Multiply per-game averages by games played to get season totals
+            tFGA += Number(p.fga || 0) * gp;
+            tFGM += Number(p.fgm || 0) * gp;
+            tFG3A += Number(p.fg3a || 0) * gp;
+            tFG3M += Number(p.fg3m || 0) * gp;
+            tFTA += Number(p.fta || 0) * gp;
+            tFTM += Number(p.ftm || 0) * gp;
+            tTO += Number(p.turnover || p.to || 0) * gp;
+            tOREB += Number(p.oreb || 0) * gp;
+          }
+          var tFG2A = tFGA - tFG3A, tFG2M = tFGM - tFG3M;
+          var tPoss = tFGA + 0.44 * tFTA - tOREB + tTO;
+          if (tFGA < 100) continue; // skip teams with insufficient data
+          _teamSeasonRates[tm] = {
+            toRate: tPoss > 0 ? tTO / tPoss : 0.13,
+            fg3aShare: tFGA > 0 ? tFG3A / tFGA : 0.35,
+            fg3Pct: tFG3A > 0 ? tFG3M / tFG3A : 0.36,
+            fg2Pct: tFG2A > 0 ? tFG2M / tFG2A : 0.52,
+            orebRate: (tFGA - tFGM) > 0 ? tOREB / (tFGA - tFGM) : 0.25,
+            ftaRate: tPoss > 0 ? tFTA / tPoss : 0.22,
+            ftPct: tFTA > 0 ? tFTM / tFTA : 0.76,
+          };
+        }
+        log(`MC: computed ${Object.keys(_teamSeasonRates).length} team season rate profiles`);
+      }
 
       // Track which cached games got updated this cycle
       let cacheUpdated = false;
@@ -6351,9 +6391,11 @@ export default async function(req) {
               if (_mcCum) {
                 try {
                   var _mcCtrlHome = ind.controlTeam === hA;
+                  var _mcCtrlSeasonRates = _teamSeasonRates?.[ind.controlTeam] || null;
                   _mcCum.drivers = computeMCDrivers(_mcCum, _mcCtrlHome,
                     Number(summary.home?.points || ind.homePts || 0),
-                    Number(summary.away?.points || ind.awayPts || 0));
+                    Number(summary.away?.points || ind.awayPts || 0),
+                    _mcCtrlSeasonRates);
                 } catch (e) { /* non-fatal */ }
               }
             } catch (e) { log(`${matchup}: MC Cum error — ${e.message}`); }
