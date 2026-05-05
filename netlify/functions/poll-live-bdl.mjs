@@ -7454,6 +7454,11 @@ export default async function(req) {
                   const _mcAbsFired = _mcCanary.winProb < 0.70;
                   const _mcDivFired = ind.score != null && (ind.score - _mcCanary.winProb) > 0.15;
                   if (_mcAbsFired || _mcDivFired) {
+                    // Only investigate teams with established tracking or active position
+                    const _mcIsTracked = lt.bwc_fired?.team === ind.controlTeam || lt.buy_position?.team === ind.controlTeam;
+                    if (!_mcIsTracked) {
+                      log(`${matchup}: MC canary skipped — ${ind.controlTeam} not tracked/positioned (bwc=${lt.bwc_fired?.team || 'none'} pos=${lt.buy_position?.team || 'none'})`);
+                    } else {
                     log(`${matchup}: ★ MC CANARY FIRED — ctrl=${ind.controlTeam} MC=${_mcCanary.winProb.toFixed(3)} floor=${ind.score} margin=${_v2Margin} trigger=${_mcAbsFired ? 'absolute' : 'divergence'}`);
                     const _hs2 = summary.home?.statistics || {}, _as2 = summary.away?.statistics || {};
                     lt.mc = {
@@ -7482,6 +7487,7 @@ export default async function(req) {
                     const _mcNudgeBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\nMC canary fired — ctrl ${ind.controlTeam} MC=${(_mcCanary.winProb * 100).toFixed(1)}% vs floor ${ind.score.toFixed(2)} (${_mcAbsFired ? 'absolute' : 'divergence'}). Margin +${_v2Margin}. Investigating.`;
                     await sendNtfy(`MC INVESTIGATING — ${matchup}`, _mcNudgeBody, 3);
                     log(`${matchup}: MC INVESTIGATING ntfy sent`);
+                    } // close _mcIsTracked else
                   }
                 }
               }
