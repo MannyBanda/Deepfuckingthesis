@@ -7476,6 +7476,7 @@ export default async function(req) {
                       alert_sent: false,
                       current_mc: _mcCanary.winProb,
                       prior_investigations: lt.mc?.prior_investigations || 0,
+                      last_verdict_fga: 0,
                     };
                     // Nudge ntfy — let Manny know to check the dashboard
                     const _mcNudgeBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\nMC canary fired — ctrl ${ind.controlTeam} MC=${(_mcCanary.winProb * 100).toFixed(1)}% vs floor ${ind.score.toFixed(2)} (${_mcAbsFired ? 'absolute' : 'divergence'}). Margin +${_v2Margin}. Investigating.`;
@@ -7493,6 +7494,9 @@ export default async function(req) {
               const _mcTrigH = lt.mc.trigger_stats.home, _mcTrigA = lt.mc.trigger_stats.away;
               const _mcPostFGA = (_mcNowH.fga - _mcTrigH.fga) + (_mcNowA.fga - _mcTrigA.fga);
               if (_mcPostFGA >= 8) {
+                if (_mcPostFGA <= (lt.mc.last_verdict_fga || 0)) {
+                  log(`${matchup}: MC investigation — stale data (postFGA=${_mcPostFGA} unchanged), skipping verdict`);
+                } else {
                 const _mcHRates = diffToRatesMC(_mcNowH, _mcTrigH, _mcHBaseline);
                 const _mcARates = diffToRatesMC(_mcNowA, _mcTrigA, _mcABaseline);
                 if (_mcHRates && _mcARates) {
@@ -7505,6 +7509,7 @@ export default async function(req) {
                     lt.mc.current_mc = _mcInv.winProb;
                     const _mcVerdict = classifyMCVerdict(_mcInv.winProb);
                     lt.mc.verdicts.push(_mcVerdict);
+                    lt.mc.last_verdict_fga = _mcPostFGA;
                     log(`${matchup}: MC investigation — verdict=${_mcVerdict} MC=${_mcInv.winProb.toFixed(3)} postFGA=${_mcPostFGA} pattern=${lt.mc.pattern || 'classifying'}`);
                     // Classify pattern
                     const _mcPat = classifyMCPattern(lt.mc.verdicts);
@@ -7536,10 +7541,14 @@ export default async function(req) {
                     }
                   }
                 }
+                } // close stale-data else
               } else {
                 // Not enough post-trigger data yet — add INV verdict
-                lt.mc.verdicts.push('INV');
-                log(`${matchup}: MC investigation — INV (postFGA=${_mcPostFGA} < 8)`);
+                if (_mcPostFGA > (lt.mc.last_verdict_fga || 0)) {
+                  lt.mc.verdicts.push('INV');
+                  lt.mc.last_verdict_fga = _mcPostFGA;
+                  log(`${matchup}: MC investigation — INV (postFGA=${_mcPostFGA} < 8)`);
+                }
               }
             }
           }
