@@ -6120,6 +6120,7 @@ export default async function(req) {
                     Number(ind.homePts), Number(ind.awayPts), _pmRemain,
                     { simCount: 200, ctrlTeam: _pmCtrlHome ? 'home' : 'away' });
                   _pollMC = Math.round(_pmResult.winProb * 10000) / 10000;
+                  log(`${matchup}: MC trajectory — wp=${_pollMC} remain=${_pmRemain} hFGA=${_pmRates.home._windowFGA} aFGA=${_pmRates.away._windowFGA}`);
                 } else {
                   log(`${matchup}: MC skip — remainPoss=${_pmRemain}`);
                 }
