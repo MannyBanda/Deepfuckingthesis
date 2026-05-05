@@ -4174,7 +4174,6 @@ async function phaseWindowXGBExport(sql, url) {
         if (perQDiffs[1]) windowQs.push({ weight: Math.max(0, 1.0 - completion), diff: perQDiffs[1] });
         windowQs.push({ weight: 1.0, diff: partialDiff });
       } else if (p === 3) {
-        if (perQDiffs[1]) windowQs.push({ weight: Math.max(0, 1.0 - completion), diff: perQDiffs[1] });
         if (perQDiffs[2]) windowQs.push({ weight: 1.0, diff: perQDiffs[2] });
         windowQs.push({ weight: 1.0, diff: partialDiff });
       } else if (p === 4) {
