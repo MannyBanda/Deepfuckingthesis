@@ -973,7 +973,7 @@ document.getElementById('swipe').addEventListener('scroll',function(){
 });
 
 // ── MC INVESTIGATION STRIP ──
-function renderMCStrip(mc){
+function renderMCStrip(mc,gameId){
   if(!mc||!mc.triggered)return '';
   var pattern=mc.pattern;
   // FALSE_ALARM: render nothing
@@ -987,9 +987,12 @@ function renderMCStrip(mc){
   else if(pattern==='WAVE'){stripCls='mc-strip wave';badgeCls='mc-badge wave';icon='◈';label=ctrlTm+' OSCILLATING';mcColor='var(--amber)';}
   else if(pattern==='NORMALIZED'){stripCls='mc-strip cleared';badgeCls='mc-badge cleared';icon='✓';label=ctrlTm+' CLEARED';mcColor='var(--green)';}
   var trigCtx=pattern==='NORMALIZED'?'Q'+mc.trigger_period+' '+mc.trigger_clock+' → cleared':'since Q'+mc.trigger_period+' '+mc.trigger_clock+' · +'+(mc.trigger_margin||'?');
+  var mcOpen=_collOpen[gameId+'_mc']!=null?_collOpen[gameId+'_mc']:true;
+  var chevron=mcOpen?'▾':'▸';
   var h='<div class="'+stripCls+'">';
-  h+='<div class="mc-head"><div style="display:flex;align-items:center;gap:6px"><span style="color:'+mcColor+';font-size:11px'+((!pattern)?';animation:mc-pulse 1.8s ease-in-out infinite':'')+'">'+ icon+'</span><span class="'+badgeCls+'">'+label+'</span></div>';
+  h+='<div class="mc-head" onclick="toggleColl(\''+gameId+'\',\'mc\')" style="cursor:pointer"><div style="display:flex;align-items:center;gap:6px"><span style="color:'+mcColor+';font-size:11px'+((!pattern)?';animation:mc-pulse 1.8s ease-in-out infinite':'')+'">'+ icon+'</span><span class="'+badgeCls+'">'+label+'</span><span style="color:var(--fg-dim);font-size:10px;margin-left:2px">'+chevron+'</span></div>';
   h+='<span class="mc-trigger">'+esc(trigCtx)+'</span></div>';
+  if(!mcOpen){h+='</div>';return h;}
   if(pattern==='NORMALIZED'){
     h+='<div class="mc-cleared-text">MC investigated structural shift — rates recovered. Hold validated.</div>';
   } else {
@@ -1267,7 +1270,7 @@ function renderCard(id){
 
       // MC Investigation strip (between window grid and indicator strip)
       if(cs._serverMC&&cs._serverMC.triggered){
-        html+=renderMCStrip(cs._serverMC);
+        html+=renderMCStrip(cs._serverMC,id);
       }
 
       // Indicator strip (I1-I5) — tappable for evidence
