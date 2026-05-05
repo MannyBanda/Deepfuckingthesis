@@ -4218,6 +4218,11 @@ async function phaseWindowXGBExport(sql, url) {
         clk: cp.clockRemaining,
         won: snap.ctrl_team_won,
         mar: snap.margin_at_snapshot,
+        flr: Math.round((snap.indicators?.score || 0) * 10000) / 10000,
+        ctrl: snap.indicators?.controlTeam || '',
+        hA: snap.home_alias,
+        aA: snap.away_alias,
+        fmar: snap.final_margin,
         // Windowed [w0-w12]
         w: wf.map(function(v) { return Math.round(v * 10000) / 10000; }),
         // Cumulative [c0-c12]
