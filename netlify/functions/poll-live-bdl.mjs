@@ -599,7 +599,8 @@ ${ctx.mcTrajectoryWp != null ? `
 MC TRAJECTORY (always-on):
   MC PBP (20-poss window): ${(ctx.mcTrajectoryWp * 100).toFixed(1)}% | MC Cum (game-rate): ${ctx.mcCumWp != null ? (ctx.mcCumWp * 100).toFixed(1) + '%' : '?'} | Floor: ${(ctx.floor * 100).toFixed(1)}% | XGB: ${ctx.xgbWinProb != null ? (ctx.xgbWinProb * 100).toFixed(1) + '%' : '?'}
   ${Math.abs(ctx.mcTrajectoryWp - ctx.floor) > 0.15 ? 'DIVERGENCE: MC PBP and floor disagree by ' + Math.round(Math.abs(ctx.mcTrajectoryWp - ctx.floor) * 100) + 'pp — recent possession rates tell a different story than cumulative box score.' : 'ALIGNED: MC PBP and floor within 15pp.'}
-  ${ctx.mcCumWp != null && ctx.xgbWinProb != null && Math.abs(ctx.mcCumWp - ctx.xgbWinProb) > 0.15 ? 'MC Cum vs XGB gap: ' + Math.round(Math.abs(ctx.mcCumWp - ctx.xgbWinProb) * 100) + 'pp — MC Cum dominates disagreements (70-87%).' : ''}` : ''}
+  ${ctx.mcCumWp != null && ctx.xgbWinProb != null && Math.abs(ctx.mcCumWp - ctx.xgbWinProb) > 0.15 ? 'MC Cum vs XGB gap: ' + Math.round(Math.abs(ctx.mcCumWp - ctx.xgbWinProb) * 100) + 'pp — MC Cum dominates disagreements (70-87%).' : ''}
+  ${ctx.mcDrivers && ctx.mcDrivers.length > 0 ? 'MC RATE DRIVERS (what is driving ' + (ctx.bwcTeam || ctx.ctrlTeam) + ' win prob):\\n' + ctx.mcDrivers.filter(function(d) { return Math.abs(d.delta) >= 0.02; }).map(function(d) { return '    ' + d.label + ': ' + (d.delta >= 0 ? '+' : '') + Math.round(d.delta * 100) + 'pp (game ' + (d.ctrlVal * 100).toFixed(0) + '% vs league ' + (d.leagueDefault * 100).toFixed(0) + '%)'; }).join('\\n') : ''}` : ''}
 
 SIGNAL TRUST HIERARCHY (14,440 checkpoint backtest, 1,233 games):
   Four signals: Floor (cumulative indicators), XGB (2Q windowed structural model), MC PBP (20-possession canary), MC Cum (game-rate probability anchor).
@@ -1931,6 +1932,56 @@ function computeMCCumulative(summary, period, clockSec, controlTeam, hA, hBaseli
     homeRates: homeRates,
     awayRates: awayRates,
   };
+}
+
+// ── MC RATE DECOMPOSITION — which rates are driving MC win probability ─────
+// Swaps each ctrl-team rate to league default, measures WP delta.
+// ~1,400 sims (~1ms). Purely narrative — no gates or decisions depend on this.
+var MC_DEFAULT_RATES = {
+  toRate: 0.13, fg3aShare: 0.35, fg3Pct: 0.36, fg2Pct: 0.52,
+  orebRate: 0.25, ftaRate: 0.22, ftPct: 0.76,
+};
+var MC_RATE_LABELS = {
+  toRate: 'turnover discipline', fg3aShare: '3PT volume',
+  fg3Pct: '3PT shooting', fg2Pct: 'interior finishing',
+  orebRate: 'offensive rebounding', ftaRate: 'free throw generation',
+  ftPct: 'free throw accuracy',
+};
+
+function computeMCDrivers(mcCumResult, ctrlIsHome, homeScore, awayScore) {
+  if (!mcCumResult || !mcCumResult.homeRates || !mcCumResult.awayRates) return null;
+  var baseWP = mcCumResult.winProb;
+  var hRates = mcCumResult.homeRates, aRates = mcCumResult.awayRates;
+  var remainPoss = mcCumResult.remainPoss;
+  if (remainPoss <= 0) return null;
+
+  // For each rate dimension on CTRL team, swap to league default
+  // delta = baseWP - WP(with ctrl rate neutralized) → positive = ctrl rate helping
+  var drivers = [];
+  var rateKeys = Object.keys(MC_DEFAULT_RATES);
+  for (var i = 0; i < rateKeys.length; i++) {
+    var key = rateKeys[i];
+    var modH = Object.assign({}, hRates);
+    var modA = Object.assign({}, aRates);
+    // Neutralize ctrl team's rate to league default
+    if (ctrlIsHome) { modH[key] = MC_DEFAULT_RATES[key]; }
+    else { modA[key] = MC_DEFAULT_RATES[key]; }
+    var modResult = runMonteCarloSim(modH, modA,
+      homeScore, awayScore, remainPoss,
+      { simCount: 200, ctrlTeam: ctrlIsHome ? 'home' : 'away' });
+    var delta = baseWP - modResult.winProb;
+    var ctrlVal = ctrlIsHome ? hRates[key] : aRates[key];
+    var oppVal = ctrlIsHome ? aRates[key] : hRates[key];
+    drivers.push({
+      rate: key, label: MC_RATE_LABELS[key],
+      delta: Math.round(delta * 1000) / 1000,
+      ctrlVal: Math.round(ctrlVal * 1000) / 1000,
+      oppVal: Math.round(oppVal * 1000) / 1000,
+      leagueDefault: MC_DEFAULT_RATES[key],
+    });
+  }
+  drivers.sort(function(a, b) { return Math.abs(b.delta) - Math.abs(a.delta); });
+  return drivers;
 }
 
 // Classify MC verdict from single poll's post-trigger MC win probability
@@ -4377,6 +4428,16 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
       if (ind && Math.abs(mcData.mcWinProb - ind.score) > 0.15) {
         p += `  DIVERGENCE: MC and floor disagree by ${Math.round(Math.abs(mcData.mcWinProb - ind.score) * 100)}pp — recent possession rates tell a different story than cumulative box score.\n`;
       }
+      if (mcData.mcDrivers && mcData.mcDrivers.length > 0) {
+        var sigDrivers = mcData.mcDrivers.filter(function(d) { return Math.abs(d.delta) >= 0.02; });
+        if (sigDrivers.length > 0) {
+          p += `  MC RATE DRIVERS:\n`;
+          for (var di = 0; di < sigDrivers.length; di++) {
+            var d = sigDrivers[di];
+            p += `    ${d.label}: ${d.delta >= 0 ? '+' : ''}${Math.round(d.delta * 100)}pp (game ${(d.ctrlVal * 100).toFixed(0)}% vs league ${(d.leagueDefault * 100).toFixed(0)}%)\n`;
+          }
+        }
+      }
       p += `\n`;
     }
     var mcInv = mcData.investigation;
@@ -4941,7 +5002,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       priorAlertTrail,
       floorWP: ind ? lookupFloorWP(_floorWPCoeffs, ind.controlTeam, ind.score) : null,
       xgbData: { winProb: _caXgbWinProb, divergence: _caXgbDivergence, aligned: _caXgbAligned, shap: _caXgbShap, convictionQuality: _caConvQuality, trajectorySignals: _caTrajSignals },
-      mcData: { mcWinProb: lt.mc_trajectory_wp || null, mcCumWp: lt.mc_cum_wp || null, investigation: lt.mc?.triggered ? lt.mc : null },
+      mcData: { mcWinProb: lt.mc_trajectory_wp || null, mcCumWp: lt.mc_cum_wp || null, mcDrivers: lt.mc_drivers || null, investigation: lt.mc?.triggered ? lt.mc : null },
     });
 
     // ── Compute prompt layer inventory for diagnostics ──
@@ -6286,6 +6347,15 @@ export default async function(req) {
               var _mcClk = String(clock||'6:00').match(/(\d+):(\d+)/);
               var _mcSec = _mcClk ? parseInt(_mcClk[1])*60+parseInt(_mcClk[2]) : 360;
               _mcCum = computeMCCumulative(summary, currentPeriod, _mcSec, ind.controlTeam, hA, _mcHBL, _mcABL);
+              // MC Rate Decomposition — which rates drive the win probability
+              if (_mcCum) {
+                try {
+                  var _mcCtrlHome = ind.controlTeam === hA;
+                  _mcCum.drivers = computeMCDrivers(_mcCum, _mcCtrlHome,
+                    Number(summary.home?.points || ind.homePts || 0),
+                    Number(summary.away?.points || ind.awayPts || 0));
+                } catch (e) { /* non-fatal */ }
+              }
             } catch (e) { log(`${matchup}: MC Cum error — ${e.message}`); }
           }
 
@@ -6383,6 +6453,7 @@ export default async function(req) {
             lt.xgb_aligned = _xgbAligned;
             if (_pollMC != null) lt.mc_trajectory_wp = _pollMC;
             if (_mcCum != null) lt.mc_cum_wp = _mcCum.winProb;
+            if (_mcCum?.drivers) lt.mc_drivers = _mcCum.drivers;
 
             // XGB from BWC team's perspective (for EXIT detection)
             // When BWC team IS ctrl team, reuse _xgbWinProb. Otherwise recompute with BWC as reference.
@@ -6734,6 +6805,7 @@ export default async function(req) {
                 } : null,
                 mcTrajectoryWp: lt.mc_trajectory_wp != null ? lt.mc_trajectory_wp : null,
                 mcCumWp: _mcCum?.winProb != null ? Math.round(_mcCum.winProb * 1000) / 1000 : (lt.mc_cum_wp != null ? lt.mc_cum_wp : null),
+                mcDrivers: _mcCum?.drivers || lt.mc_drivers || null,
               };
 
               // DB-level dedup — catch concurrent invocations BEFORE burning agent tokens
