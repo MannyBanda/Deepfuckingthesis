@@ -1968,7 +1968,7 @@ exports.handler = async (event) => {
         SELECT id, game_id, ts, period, clock, home_pts, away_pts,
                floor_score, floor_team, raw_stats_json,
                i1, i2, i3, i4, i5, source, sust_json,
-               tp_class, ls_class, xgb_win_prob, xgb_divergence, window_score, poss_window_score
+               tp_class, ls_class, xgb_win_prob, xgb_divergence, window_score, poss_window_score, mc_win_prob
         FROM snapshots
         WHERE game_id = ${gameId} AND source = 'server'
         ORDER BY ts ASC
