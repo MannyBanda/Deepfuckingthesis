@@ -2656,6 +2656,16 @@ function computeServer(summary, pbpData, seasonQ4) {
   };
 }
 
+// ── CTRL-RELATIVE I1-I5 HELPER ──
+// All storage (snapshots, alerts) and agent context should use ctrl-relative indicators.
+// I1-I5 from computeServer are HOME-relative (1 = home wins). This flips to ctrl perspective.
+function ctrlI(ind) {
+  var ch = ind.controlTeam === ind.homeAlias;
+  return [ind.I1, ind.I2, ind.I3, ind.I4, ind.I5].map(
+    function(v) { return v && v.score != null ? Math.round((ch ? v.score : 1 - v.score) * 10) / 10 : null; }
+  );
+}
+
 // ── CONVICTION ENGINE — combo-pattern-driven from 171-game validation ──────
 // Returns mechanical conviction tier based on WHICH indicators the control team wins.
 // Data basis: I4+I5=100%(77g), I3+I4=99%(68g), I3+I5=96%(68g), 4+=100%(66g), 3=85%(62g), 2=70%(33g)
@@ -4200,11 +4210,8 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
   // ── GROUND TRUTH (mechanical engine output — do not override) ──
   if (ind) {
     const ctrlHome = ind.controlTeam === hA;
-    const i1ctrl = ctrlHome ? ind.I1?.score : (ind.I1?.score != null ? 1 - ind.I1.score : null);
-    const i2ctrl = ctrlHome ? ind.I2?.score : (ind.I2?.score != null ? 1 - ind.I2.score : null);
-    const i3ctrl = ctrlHome ? ind.I3?.score : (ind.I3?.score != null ? 1 - ind.I3.score : null);
-    const i4ctrl = ctrlHome ? ind.I4?.score : (ind.I4?.score != null ? 1 - ind.I4.score : null);
-    const i5ctrl = ctrlHome ? ind.I5?.score : (ind.I5?.score != null ? 1 - ind.I5.score : null);
+    const _fci = ctrlI(ind);
+    const i1ctrl = _fci[0], i2ctrl = _fci[1], i3ctrl = _fci[2], i4ctrl = _fci[3], i5ctrl = _fci[4];
     p += `GROUND TRUTH (mechanical engine — do not override):\n`;
     p += `Control: ${ind.controlTeam} ${ind.score?.toFixed(2)} (floor = weighted I1-I5 composite, 0-1) | `;
     p += `Conviction: ${conviction?.tier || 'N/A'} (${conviction?.combo || 'N/A'})`;
@@ -4942,7 +4949,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           const aaReasoning = 'No prior actionable alert sent for this game — auto-analysis suppressed (position gate)';
           try {
             await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team)
-              VALUES (${game.id}, ${league}, ${'AUTO_ANALYSIS'}, ${period}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${aaEdge}, ${aaML ? parseInt(aaML) : null}, ${odds?.homeSpread ? parseFloat(odds.homeSpread) : null}, ${tpClass}, ${lsClass}, ${ctrlSust}, ${oppSust}, ${clientCtx?.rollingWindow?.score ?? null}, ${'ANALYSIS'}, ${'SUPPRESS'}, ${aaReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${calConviction.tier}, ${calConviction.combo}, ${false}, ${ind.controlTeam})`;
+              VALUES (${game.id}, ${league}, ${'AUTO_ANALYSIS'}, ${period}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${aaEdge}, ${aaML ? parseInt(aaML) : null}, ${odds?.homeSpread ? parseFloat(odds.homeSpread) : null}, ${tpClass}, ${lsClass}, ${ctrlSust}, ${oppSust}, ${clientCtx?.rollingWindow?.score ?? null}, ${'ANALYSIS'}, ${'SUPPRESS'}, ${aaReasoning}, ${ctrlI(ind)[0]}, ${ctrlI(ind)[1]}, ${ctrlI(ind)[2]}, ${ctrlI(ind)[3]}, ${ctrlI(ind)[4]}, ${calConviction.tier}, ${calConviction.combo}, ${false}, ${ind.controlTeam})`;
           } catch (e) { log(`${matchup}: ${triggerTag} position-gate alert save failed: ${e.message}`); }
           log(`${matchup}: ${triggerTag} suppressed — no prior actionable position`);
         } else {
@@ -4969,11 +4976,11 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           trajectorySignals: _caTrajSignals,
           convictionTier: calConviction.tier, convictionCombo: calConviction.combo,
           convictionPairs: calConviction.pairs?.join(', ') || '',
-          i1: (ctrlIsHome ? ind.I1?.score : ind.I1?.score != null ? 1 - ind.I1.score : null)?.toFixed(2),
-          i2: (ctrlIsHome ? ind.I2?.score : ind.I2?.score != null ? 1 - ind.I2.score : null)?.toFixed(2),
-          i3: (ctrlIsHome ? ind.I3?.score : ind.I3?.score != null ? 1 - ind.I3.score : null)?.toFixed(2),
-          i4: (ctrlIsHome ? ind.I4?.score : ind.I4?.score != null ? 1 - ind.I4.score : null)?.toFixed(2),
-          i5: (ctrlIsHome ? ind.I5?.score : ind.I5?.score != null ? 1 - ind.I5.score : null)?.toFixed(2),
+          i1: ctrlI(ind)[0]?.toFixed(2),
+          i2: ctrlI(ind)[1]?.toFixed(2),
+          i3: ctrlI(ind)[2]?.toFixed(2),
+          i4: ctrlI(ind)[3]?.toFixed(2),
+          i5: ctrlI(ind)[4]?.toFixed(2),
           indicatorsWon: calConviction.count,
           indWon: calConviction.indicatorsWon?.join('+') || '',
           indLost: calConviction.indicatorsLost?.join('+') || '',
@@ -5024,7 +5031,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
         // Always INSERT to alerts table for accuracy tracking
         try {
           await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
-            VALUES (${game.id}, ${league}, ${'AUTO_ANALYSIS'}, ${period}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${aaEdge}, ${aaML ? parseInt(aaML) : null}, ${odds?.homeSpread ? parseFloat(odds.homeSpread) : null}, ${tpClass}, ${lsClass}, ${ctrlSust}, ${oppSust}, ${clientCtx?.rollingWindow?.score ?? null}, ${'ANALYSIS'}, ${aaDecision}, ${aaReasoning}, ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null}, ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null}, ${calConviction.tier}, ${calConviction.combo}, ${aaNtfySent}, ${ind.controlTeam}, ${_caXgbWinProb != null ? Math.round(_caXgbWinProb * 10000) / 10000 : null}, ${_caXgbAligned})`;
+            VALUES (${game.id}, ${league}, ${'AUTO_ANALYSIS'}, ${period}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${margin}, ${ctrlTrailing}, ${aaEdge}, ${aaML ? parseInt(aaML) : null}, ${odds?.homeSpread ? parseFloat(odds.homeSpread) : null}, ${tpClass}, ${lsClass}, ${ctrlSust}, ${oppSust}, ${clientCtx?.rollingWindow?.score ?? null}, ${'ANALYSIS'}, ${aaDecision}, ${aaReasoning}, ${ctrlI(ind)[0]}, ${ctrlI(ind)[1]}, ${ctrlI(ind)[2]}, ${ctrlI(ind)[3]}, ${ctrlI(ind)[4]}, ${calConviction.tier}, ${calConviction.combo}, ${aaNtfySent}, ${ind.controlTeam}, ${_caXgbWinProb != null ? Math.round(_caXgbWinProb * 10000) / 10000 : null}, ${_caXgbAligned})`;
         } catch (e) { log(`${matchup}: ${triggerTag} alert save failed: ${e.message}`); }
 
         if (aaDecision === 'SEND') {
@@ -5958,6 +5965,9 @@ export default async function(req) {
           }
           const conviction = computeConviction(ind);
 
+          // ── CTRL-RELATIVE I1-I5: all storage and display uses these ──
+          const _ci = ctrlI(ind);
+
           const _floorWP = lookupFloorWP(_floorWPCoeffs, ind.controlTeam, ind.score);
 
           // ── FALLBACK THESIS — catch games where pregame cron missed the window ──
@@ -6095,7 +6105,7 @@ export default async function(req) {
             }
           } catch (e) { /* non-fatal */ }
           // DIAGNOSTIC: log ind shape before INSERT to catch null fields
-          log(`${matchup}: SNAP IND — Q${currentPeriod} ${clock} score:${ind.score} team:${ind.controlTeam} I1:${ind.I1?.score} I2:${ind.I2?.score} I3:${ind.I3?.score} I4:${ind.I4?.score} I5:${ind.I5?.score} conv:${conviction.tier}(${conviction.combo}) hPts:${ind.homePts} aPts:${ind.awayPts} tp:${snapTp?.classification||'null'} ls:${snapLs?.classification||'null'}`);
+          log(`${matchup}: SNAP IND — Q${currentPeriod} ${clock} score:${ind.score} team:${ind.controlTeam} I1:${_ci[0]} I2:${_ci[1]} I3:${_ci[2]} I4:${_ci[3]} I5:${_ci[4]} conv:${conviction.tier}(${conviction.combo}) hPts:${ind.homePts} aPts:${ind.awayPts} tp:${snapTp?.classification||'null'} ls:${snapLs?.classification||'null'}`);
           // Capture raw stats that fed computeServer for audit/debugging
           var rawStatsJson = null;
           try {
@@ -6152,14 +6162,14 @@ export default async function(req) {
               ${ind.score}, ${ind.controlTeam}, ${null}, ${null}, ${null},
               ${null}, ${null}, ${espnWP?.home || null}, ${espnWP?.away || null},
               ${spreadVal}, ${deficit}, ${trailingTeam}, ${leadSust}, ${null}, ${null},
-              ${ind.I1.score}, ${ind.I2.score}, ${ind.I3.score}, ${ind.I4.score}, ${ind.I5.score},
+              ${_ci[0]}, ${_ci[1]}, ${_ci[2]}, ${_ci[3]}, ${_ci[4]},
               ${'server'}, ${leadClass}, ${sustJson},
               ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
               ${_snapLT?.bwc_fired ? (_snapLT._prev_bwc_state || null) : null}, ${_snapLT?.cp_peak_rank || null},
               ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore},
               ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbDivergence}, ${_possWindowScore}, ${_pollMC})
           `;
-          log(`${matchup}: snapshot saved — floor:${ind.score} I1-5:${ind.I1?.score},${ind.I2?.score},${ind.I3?.score},${ind.I4?.score},${ind.I5?.score} tp:${snapTp?.classification||'-'} ls:${snapLs?.classification||'-'} xgb:${_xgbWinProb != null ? _xgbWinProb.toFixed(3) : '-'}`);
+          log(`${matchup}: snapshot saved — floor:${ind.score} I1-5:${_ci[0]},${_ci[1]},${_ci[2]},${_ci[3]},${_ci[4]} tp:${snapTp?.classification||'-'} ls:${snapLs?.classification||'-'} xgb:${_xgbWinProb != null ? _xgbWinProb.toFixed(3) : '-'}`);
 
           // Save odds to odds_history table if we got data
           if (odds) {
@@ -6201,7 +6211,7 @@ export default async function(req) {
           }
 
           const bdlEnriched = (homeBdl.length > 0 || awayBdl.length > 0);
-          log(`${matchup} Q${currentPeriod} ${clock} | ${ind.homePts}-${ind.awayPts} | ${ind.controlTeam} ${ind.score} | I:${ind.I1.score}/${ind.I2.score}/${ind.I3.score}/${ind.I4.score}/${ind.I5.score} | sust:${leadSust || '?'} class:${leadClass || '?'}${bdlEnriched ? ' BDL✓' : ''}${spreadVal != null ? ` spd:${spreadVal}` : ''}${espnWP ? ` | WP:${espnWP.home}%` : ''}`);
+          log(`${matchup} Q${currentPeriod} ${clock} | ${ind.homePts}-${ind.awayPts} | ${ind.controlTeam} ${ind.score} | I:${_ci[0]}/${_ci[1]}/${_ci[2]}/${_ci[3]}/${_ci[4]} | sust:${leadSust || '?'} class:${leadClass || '?'}${bdlEnriched ? ' BDL✓' : ''}${spreadVal != null ? ` spd:${spreadVal}` : ''}${espnWP ? ` | WP:${espnWP.home}%` : ''}`);
 
           // ── LIGHTWEIGHT ENTRY SIGNAL CHECK (every cycle, no Sonnet needed) ──
           // BUY:  floor ≥ 0.65, trailing 1-15, Q2+, throughput not UNLIKELY/NO PATH
@@ -6304,7 +6314,7 @@ export default async function(req) {
               const _deathBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\n${_deadTeam} structural edge invalidated — control shifted to ${_newCtrlTeam}. Tracking on ${_deadTeam} stopped.${_deathPosNote}`;
               try {
                 await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
-                  VALUES (${game.id}, ${league}, ${'TRACKING_INVALIDATED'}, ${currentPeriod}, ${clock}, ${_newCtrlTeam}, ${ind.score}, ${_v2Margin}, ${false}, ${'FIRED'}, ${'SEND'}, ${_deathBody}, ${ind.I1?.score}, ${ind.I2?.score}, ${ind.I3?.score}, ${ind.I4?.score}, ${ind.I5?.score}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${true}, ${_deadTeam}, ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
+                  VALUES (${game.id}, ${league}, ${'TRACKING_INVALIDATED'}, ${currentPeriod}, ${clock}, ${_newCtrlTeam}, ${ind.score}, ${_v2Margin}, ${false}, ${'FIRED'}, ${'SEND'}, ${_deathBody}, ${ctrlI(ind)[0]}, ${ctrlI(ind)[1]}, ${ctrlI(ind)[2]}, ${ctrlI(ind)[3]}, ${ctrlI(ind)[4]}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${true}, ${_deadTeam}, ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
               } catch (e) { log(`${matchup}: TRACKING_INVALIDATED DB insert error: ${e.message}`); }
               await sendNtfy(`TRACKING INVALIDATED — ${matchup}`, _deathBody, 3);
               log(`${matchup}: TRACKING_INVALIDATED ntfy sent`);
@@ -6753,8 +6763,8 @@ export default async function(req) {
                   ${ind.score}, ${margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal},
                   ${tpForBuy?.classification || null}, ${lsForBWC?.classification || null},
                   ${ctrlSust}, ${oppSustTier}, ${alertCtx?.rollingWindow?.score ?? null}, ${v2Tier}, ${agentDecision}, ${agentReasoning},
-                  ${ind.I1?.score ?? null}, ${ind.I2?.score ?? null}, ${ind.I3?.score ?? null},
-                  ${ind.I4?.score ?? null}, ${ind.I5?.score ?? null},
+                  ${_ci[0]}, ${_ci[1]}, ${_ci[2]},
+                  ${_ci[3]}, ${_ci[4]},
                   ${conviction.tier}, ${conviction.combo}, ${shouldSend},
                   ${v2BwcState || lt._prev_bwc_state}, ${v2Type === 'POSITION_OPEN' ? v2Erosion.level : (typeof meanErosion !== 'undefined' && meanErosion ? meanErosion.level || v2Erosion.level : v2Erosion.level)},
                   ${v2Type === 'POSITION_OPEN' ? (v2Erosion.peakFloor ?? null) : ((typeof meanErosion !== 'undefined' && meanErosion ? meanErosion.meanFloor : null) ?? v2Erosion.peakFloor ?? null)}, ${v2ExitSev?.severity ?? null},
@@ -7538,7 +7548,7 @@ export default async function(req) {
                           const _mcCSust = sust?.[_mcInvIsHome ? 'home' : 'away']?.tier || null;
                           const _mcOSust = sust?.[_mcInvIsHome ? 'away' : 'home']?.tier || null;
                           await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
-                            VALUES (${game.id}, ${league}, ${'MC_COLLAPSE'}, ${currentPeriod}, ${clock}, ${_mcInvTeam}, ${ind.score}, ${_mcInvMargin}, ${_mcInvMargin < 0}, ${null}, ${null}, ${spreadVal}, ${snapTp?.classification || null}, ${snapLs?.classification || null}, ${_mcCSust}, ${_mcOSust}, ${_mcInv.winProb}, ${'FIRED'}, ${'SEND'}, ${_mcBody}, ${ind.I1?.score}, ${ind.I2?.score}, ${ind.I3?.score}, ${ind.I4?.score}, ${ind.I5?.score}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${true}, ${_mcInvTeam}, ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
+                            VALUES (${game.id}, ${league}, ${'MC_COLLAPSE'}, ${currentPeriod}, ${clock}, ${_mcInvTeam}, ${ind.score}, ${_mcInvMargin}, ${_mcInvMargin < 0}, ${null}, ${null}, ${spreadVal}, ${snapTp?.classification || null}, ${snapLs?.classification || null}, ${_mcCSust}, ${_mcOSust}, ${_mcInv.winProb}, ${'FIRED'}, ${'SEND'}, ${_mcBody}, ${ctrlI(ind)[0]}, ${ctrlI(ind)[1]}, ${ctrlI(ind)[2]}, ${ctrlI(ind)[3]}, ${ctrlI(ind)[4]}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${true}, ${_mcInvTeam}, ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
                         } catch (e) { log(`${matchup}: MC_COLLAPSE DB insert error: ${e.message}`); }
                         await sendNtfy(`STRUCTURAL COLLAPSE — ${matchup}`, _mcBody, _mcPriority);
                         log(`${matchup}: MC_COLLAPSE ntfy sent — investigated team: ${_mcInvTeam}`);
@@ -7590,7 +7600,7 @@ export default async function(req) {
                 oppSust: sust?.[_invCtrlIsHome ? 'away' : 'home']?.tier || null,
                 windowScore: _windowScore,
                 rollingWindow: _windowResult,
-                i1: ind.I1?.score, i2: ind.I2?.score, i3: ind.I3?.score, i4: ind.I4?.score, i5: ind.I5?.score,
+                i1: _ci[0], i2: _ci[1], i3: _ci[2], i4: _ci[3], i5: _ci[4],
                 convictionTier: conviction?.tier || null, convictionCombo: conviction?.combo || null,
                 combinedRead: null,
                 erosionLevel: null, peakFloor: lt[_invCtrlIsHome ? 'home_peak_floor' : 'away_peak_floor'] || ind.score,
@@ -7616,7 +7626,7 @@ export default async function(req) {
                 const _invReasoning = _invAgentText.match(/REASONING:\s*([\s\S]*?)(?:\n(?:DECISION|BODY):|$)/)?.[1]?.trim() || '';
 
                 await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
-                  VALUES (${game.id}, ${league}, ${'XGB_INVALIDATED'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal}, ${snapTp?.classification || null}, ${snapLs?.classification || null}, ${_invV2Ctx.ctrlSust}, ${_invV2Ctx.oppSust}, ${_windowScore}, ${'FIRED'}, ${'SEND'}, ${_invReasoning || _invBody}, ${ind.I1?.score}, ${ind.I2?.score}, ${ind.I3?.score}, ${ind.I4?.score}, ${ind.I5?.score}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${true}, ${_invBuyTeam}, ${Math.round(_xgbWinProb * 10000) / 10000}, ${_xgbAligned})`;
+                  VALUES (${game.id}, ${league}, ${'XGB_INVALIDATED'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal}, ${snapTp?.classification || null}, ${snapLs?.classification || null}, ${_invV2Ctx.ctrlSust}, ${_invV2Ctx.oppSust}, ${_windowScore}, ${'FIRED'}, ${'SEND'}, ${_invReasoning || _invBody}, ${ctrlI(ind)[0]}, ${ctrlI(ind)[1]}, ${ctrlI(ind)[2]}, ${ctrlI(ind)[3]}, ${ctrlI(ind)[4]}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${true}, ${_invBuyTeam}, ${Math.round(_xgbWinProb * 10000) / 10000}, ${_xgbAligned})`;
 
                 const _invNtfyTitle = `XGB INVALIDATED — ${_invBuyTeam} BUY`;
                 const _invScoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
@@ -7737,7 +7747,7 @@ export default async function(req) {
                     VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
                       ${ind.score}, ${ind.controlTeam}, ${espnWP?.home || null}, ${espnWP?.away || null},
                       ${spreadVal}, ${deficit}, ${trailingTeam}, ${leadSust}, ${leadClass},
-                      ${ind.I1.score}, ${ind.I2.score}, ${ind.I3.score}, ${ind.I4.score}, ${ind.I5.score},
+                      ${_ci[0]}, ${_ci[1]}, ${_ci[2]}, ${_ci[3]}, ${_ci[4]},
                       ${t.tag}, ${sustJson},
                       ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
                       ${lt?.bwc_fired ? (lt._prev_bwc_state || null) : null}, ${lt?.cp_peak_rank || null},
