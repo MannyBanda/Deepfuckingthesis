@@ -4543,6 +4543,168 @@ async function phaseMCQuarterAccuracy(sql) {
   };
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// PHASE: BACKFILL_MC_CUM — compute MC Cum on historical snapshots
+//   Mirrors production computeMCCumulative exactly:
+//     - 500 sims, regression cap 0.75, fga>=10 gate, 0.36 baseline
+//   Writes mc_cum_win_prob to snapshots that have raw_stats_json but no mc_cum.
+//   ?phase=backfill_mc_cum&from=2026-04-19&to=2026-05-06&batch=5&dry=0
+// ══════════════════════════════════════════════════════════════════════════════
+async function phaseBackfillMcCum(sql, url) {
+  var fromDate = url.searchParams.get('from') || '2026-04-19';
+  var toDate = url.searchParams.get('to') || '2026-05-06';
+  var batchSize = parseInt(url.searchParams.get('batch') || '5');
+  var offset = parseInt(url.searchParams.get('offset') || '0');
+  var dryRun = url.searchParams.get('dry') === '1';
+  var SIM_COUNT = 500;
+  var REGRESSION_CAP = 0.75;
+  var FGA_GATE = 10;
+
+  // Production-equivalent rate extraction (mirrors extractMCRatesFromCumulative)
+  function extractRates(stats) {
+    var fga = Number(stats.fga || stats.field_goals_att || 0) || 0;
+    var fgm = Number(stats.fgm || stats.field_goals_made || 0) || 0;
+    var fg3a = Number(stats.fg3a || stats.three_points_att || 0) || 0;
+    var fg3m = Number(stats.fg3m || stats.three_points_made || 0) || 0;
+    var fta = Number(stats.fta || stats.free_throws_att || 0) || 0;
+    var ftm = Number(stats.ftm || stats.free_throws_made || 0) || 0;
+    var to = Number(stats.to || stats.turnovers || 0) || 0;
+    var oreb = Number(stats.oreb || stats.offensive_rebounds || 0) || 0;
+    var fg2a = fga - fg3a, fg2m = fgm - fg3m;
+    var poss = fga + 0.44 * fta - oreb + to;
+    if (poss < 3) poss = Math.max(fga, 3);
+    if (fga < FGA_GATE) return null;
+    var rawFg3 = fg3a > 0 ? fg3m / fg3a : 0.36;
+    var sw = Math.min(REGRESSION_CAP, fg3a / 30);
+    var fg3Pct = rawFg3 * sw + 0.36 * (1 - sw);
+    function cl(v) { return Math.max(0, Math.min(1, v)); }
+    return {
+      toRate: cl(poss > 0 ? to / poss : 0.12),
+      fg3aShare: cl(fga > 0 ? fg3a / fga : 0.35),
+      fg3Pct: cl(fg3Pct),
+      fg2Pct: cl(fg2a > 0 ? fg2m / fg2a : 0.50),
+      orebRate: cl((fga - fgm) > 0 ? oreb / (fga - fgm) : 0.25),
+      ftaRate: Math.min(poss > 0 ? fta / poss : 0.20, 1.0),
+      ftPct: cl(fta > 0 ? ftm / fta : 0.76),
+    };
+  }
+
+  // Production-equivalent remaining poss (mirrors estimateRemainingPossMC)
+  function estRemain(hStats, aStats, period, clockSec) {
+    function ep(s) {
+      return (Number(s.fga||s.field_goals_att||0)||0) + 0.44*(Number(s.fta||s.free_throws_att||0)||0)
+        - (Number(s.oreb||s.offensive_rebounds||0)||0) + (Number(s.to||s.turnovers||0)||0);
+    }
+    var avg = (ep(hStats) + ep(aStats)) / 2;
+    var elapsed = (Math.min(period, 4) - 1) * 12 + (12 - clockSec / 60);
+    if (elapsed < 1) elapsed = 1;
+    var remain = 48 - elapsed;
+    if (remain < 0) remain = 0;
+    return Math.max(0, Math.round(avg / elapsed * remain));
+  }
+
+  // Get games in date range
+  var games = await sql`
+    SELECT id, date, home_alias, away_alias, winner
+    FROM games
+    WHERE date >= ${fromDate} AND date <= ${toDate} AND winner IS NOT NULL
+    ORDER BY date ASC, id ASC
+    LIMIT ${batchSize} OFFSET ${offset}
+  `;
+  var totalCount = await sql`
+    SELECT COUNT(*)::int AS n FROM games
+    WHERE date >= ${fromDate} AND date <= ${toDate} AND winner IS NOT NULL
+  `;
+  var totalGames = Number(totalCount[0]?.n || 0);
+
+  var results = [];
+  var totalUpdated = 0;
+  var totalSkipped = 0;
+  var totalNoRates = 0;
+
+  for (var g of games) {
+    var matchup = (g.away_alias || '?') + '@' + (g.home_alias || '?');
+
+    // Get all server snapshots Q2+ without mc_cum_win_prob
+    var snaps = await sql`
+      SELECT id, period, clock, home_pts, away_pts, floor_team, raw_stats_json, mc_cum_win_prob
+      FROM snapshots
+      WHERE game_id = ${g.id} AND source = 'server' AND period >= 2
+        AND raw_stats_json IS NOT NULL
+      ORDER BY ts ASC
+    `;
+
+    var updated = 0, skipped = 0, noRates = 0;
+
+    for (var s of snaps) {
+      // Skip if already has mc_cum
+      if (s.mc_cum_win_prob != null) { skipped++; continue; }
+
+      var rsj = typeof s.raw_stats_json === 'string' ? JSON.parse(s.raw_stats_json) : s.raw_stats_json;
+      if (!rsj || !rsj.home || !rsj.away) { noRates++; continue; }
+
+      var hRates = extractRates(rsj.home);
+      var aRates = extractRates(rsj.away);
+      if (!hRates || !aRates) { noRates++; continue; }
+
+      // Parse clock
+      var clockSec = 0;
+      if (s.clock) {
+        var cm = String(s.clock).match(/(\d+):(\d+)/);
+        if (cm) clockSec = parseInt(cm[1]) * 60 + parseInt(cm[2]);
+      }
+
+      var remain = estRemain(rsj.home, rsj.away, s.period, clockSec);
+      if (remain <= 0) { noRates++; continue; }
+
+      var ctrl = s.floor_team || '';
+      var ctrlIsHome = ctrl === g.home_alias;
+
+      var mc = runMonteCarloSim(hRates, aRates,
+        Number(s.home_pts || 0), Number(s.away_pts || 0),
+        remain, { simCount: SIM_COUNT, ctrlTeam: ctrlIsHome ? 'home' : 'away' });
+
+      var mcCum = Math.round(mc.winProb * 10000) / 10000;
+
+      if (!dryRun) {
+        await sql`UPDATE snapshots SET mc_cum_win_prob = ${mcCum} WHERE id = ${s.id}`;
+      }
+      updated++;
+    }
+
+    totalUpdated += updated;
+    totalSkipped += skipped;
+    totalNoRates += noRates;
+
+    results.push({
+      matchup: matchup,
+      date: g.date,
+      total_snaps: snaps.length,
+      updated: updated,
+      skipped: skipped,
+      no_rates: noRates,
+    });
+  }
+
+  return {
+    status: 'ok',
+    phase: 'backfill_mc_cum',
+    dryRun: dryRun,
+    dateRange: fromDate + ' to ' + toDate,
+    simCount: SIM_COUNT,
+    regressionCap: REGRESSION_CAP,
+    gamesProcessed: games.length,
+    totalGames: totalGames,
+    totalUpdated: totalUpdated,
+    totalSkipped: totalSkipped,
+    totalNoRates: totalNoRates,
+    games: results,
+    nextStep: offset + batchSize < totalGames
+      ? '?phase=backfill_mc_cum&from=' + fromDate + '&to=' + toDate + '&batch=' + batchSize + '&offset=' + (offset + batchSize)
+      : null,
+  };
+}
+
 export default async function handler(req) {
   var url = new URL(req.url, 'https://x.com');
   var phase = url.searchParams.get('phase') || 'status';
@@ -4582,6 +4744,7 @@ export default async function handler(req) {
       case 'mc_quarter_accuracy': result = await phaseMCQuarterAccuracy(sql); break;
       case 'window_xgb_export': result = await phaseWindowXGBExport(sql, url); break;
       case 'floor_vs_window': result = await phaseFloorVsWindow(sql); break;
+      case 'backfill_mc_cum': result = await phaseBackfillMcCum(sql, url); break;
       case 'status': {
         var count = await sql`SELECT COUNT(*) AS n FROM mc_backtest_results`;
         var games = await sql`SELECT COUNT(DISTINCT game_id) AS n FROM mc_backtest_results`;
