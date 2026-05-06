@@ -5855,9 +5855,9 @@ export default async function(req) {
         _team3ptBaselines = {};
         for (const tm of Object.keys(bdlSeasonCache)) {
           const sc = bdlSeasonCache[tm];
-          if (!sc || !sc.players) continue;
+          if (!sc || !Array.isArray(sc) || sc.length === 0) continue;
           let fg3m = 0, fg3a = 0;
-          for (const p of sc.players) {
+          for (const p of sc) {
             const gp = Number(p.games_played || p.gp || 0);
             if (gp < 10) continue;
             fg3m += Number(p.fg3m || p.three_points_made || 0) * gp;
@@ -5872,9 +5872,9 @@ export default async function(req) {
         _teamSeasonRates = {};
         for (const tm of Object.keys(bdlSeasonCache)) {
           const sc = bdlSeasonCache[tm];
-          if (!sc || !sc.players) continue;
+          if (!sc || !Array.isArray(sc) || sc.length === 0) continue;
           var tFGA=0, tFGM=0, tFG3A=0, tFG3M=0, tFTA=0, tFTM=0, tTO=0, tOREB=0;
-          for (const p of sc.players) {
+          for (const p of sc) {
             const gp = Number(p.games_played || p.gp || 0);
             if (gp < 10) continue;
             // Multiply per-game averages by games played to get season totals
