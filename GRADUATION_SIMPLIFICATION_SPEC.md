@@ -1,9 +1,9 @@
-# GRADUATION SIMPLIFICATION SPEC v2
-## Replacing multi-checkpoint floor graduation with compound threshold (MC Cum + Floor)
+# GRADUATION SIMPLIFICATION SPEC v3
+## Compound threshold graduation + EXIT compound (MC Cum + Windowed XGB)
 
-**Date:** May 6, 2026 (v2 — production-validated)
+**Date:** May 6, 2026 (v3 — EXIT compound added, position monitoring closed)
 **Status:** SPEC — awaiting confirmation before implementation
-**Risk Level:** HIGH — touches agent prompts, PO firing, alert context, learning agent
+**Risk Level:** HIGH — touches agent prompts, PO firing, EXIT logic, alert context, learning agent
 **Backup:** backups/graduation-pre-simplification/ at commit daa0dbe
 
 ---
@@ -18,9 +18,13 @@
 
 ## 1. SCOPE
 
-**IN SCOPE:** NBA graduation path in poll-live-bdl.mjs. Agent prompts. PO firing logic. v2Ctx construction. Alert fields. Dashboard display. Learning agent graduation references.
+**IN SCOPE:** NBA graduation path in poll-live-bdl.mjs. EXIT compound (windowed XGB + MC Cum gate). Agent prompts. PO firing logic. v2Ctx construction. Alert fields. Dashboard display. Learning agent graduation references.
 
-**OUT OF SCOPE:** NCAAMB graduation (lines ~7371-7460 — separate system, unchanged). Position monitoring states (LOCK/EDGE/VALUE — separate research thread). XGB EXIT (unchanged). PBP MC canary (unchanged). BUY/PO decoupled system (unchanged). Alert routing/dedup (unchanged).
+**OUT OF SCOPE:** NCAAMB graduation (lines ~7371-7460 — separate system, unchanged). PBP MC canary investigation pipeline (unchanged — canary triggers investigation, EXIT is separate). BUY/PO decoupled system (unchanged). Alert routing/dedup (unchanged).
+
+**CLOSED (research completed May 6):**
+- Position monitoring (LOCK/EDGE/VALUE as compound states): insufficient discrimination. 85% of confirmed positions never dip below MC 0.90. The 0.70-0.90 middle zone is only 20 games at 80% win rate — not alarming enough for a separate alert layer. MC Cum level injected into agent narrative on existing position alerts instead.
+- PBP MC canary as EXIT discriminator: fires 70% on both true and false exits — too volatile for gating decisions. Role is early warning/investigation trigger only.
 
 ---
 
@@ -129,7 +133,97 @@ No schema migrations needed.
 
 ---
 
-## 3. DEAD CODE TO REMOVE
+## 3. EXIT COMPOUND (NEW — validated May 6)
+
+### 3A. Problem
+
+Current EXIT uses cumulative XGB with flat 0.45 threshold. Cumulative XGB is slow to detect structural collapse because early-game dominance anchors the probability high. In 2/10 playoff losses, cumulative XGB never dropped below 0.55 — EXIT never fired.
+
+### 3B. Solution: Windowed XGB + MC Cum Gate
+
+Two-signal compound where each signal does what it's best at:
+
+```
+EXIT TRIGGER: Windowed XGB (2Q boundary diff)
+  - Threshold: < 0.45 flat
+  - Fast-path: < 0.15 (bypass confirmation)
+  - 2-poll confirmation (90 seconds)
+  - Recovery: >= 0.50 clears warning
+
+EXIT GATE: MC Cum < 0.70
+  - Windowed XGB EXIT fires first (early detection)
+  - MC Cum confirms sustained structural shift
+  - EXIT only acts when BOTH signals agree
+```
+
+### 3C. Validation (48 playoff games, 45 confirmed positions)
+
+| Configuration | TP | FP | Precision | Recall |
+|---|---|---|---|---|
+| Windowed XGB EXIT only | 10/10 | 10/35 | 50% | 100% |
+| **Windowed XGB + MC Cum < 0.70** | **8/10** | **3/35** | **73%** | **80%** |
+| Cumulative XGB EXIT (current prod) | 8/10 | varies | ~50% | 80% |
+
+**2 missed losses (accepted cost):**
+- CLE@TOR (MC Cum 0.787 at EXIT): MC Cum anchored from strong first half
+- DET@ORL (MC Cum 0.877 at EXIT): blowout reversal, MC Cum anchored from 22-point lead
+
+Both are blowout reversals where cumulative anchoring prevents MC Cum from dropping. The PBP canary catches both of these through the investigation pipeline, so subscribers still get the MC_COLLAPSE alert — EXIT just doesn't fire.
+
+**3 false positives (structurally correct exits):**
+- LAL@HOU (MC Cum 0.169, margin -4): genuinely losing, won in OT
+- CLE@TOR OT (MC Cum 0.487, margin 0): overtime coin flip
+- ORL@DET (MC Cum 0.715, margin 2): borderline threshold
+
+All three were structurally correct reads — the team was losing at EXIT time and recovered. Hard to call these "wrong."
+
+### 3D. Why PBP MC Doesn't Gate EXIT
+
+PBP MC (20-possession window) fires on 70% of both true and false exits. It's too volatile — a 20-possession run triggers it whether the shift is permanent or temporary. MC Cum is smoother and only drops below 0.70 when the structural shift has infected full-game rates.
+
+Signal roles:
+- **Windowed XGB** = early structural decay detector (fires first, most sensitive)
+- **MC Cum** = confirmation of sustained shift (smoother, less reactive)
+- **PBP MC** = investigation trigger (catches collapses for MC_COLLAPSE alert, not for EXIT gating)
+- **Floor** = narrative context + indicator decomposition (too anchored for decisions)
+
+### 3E. Implementation — checkXGBExit() Changes
+
+Modify existing checkXGBExit() (~10 lines changed):
+
+1. Replace cumulative XGB input with windowed XGB (`_xgbBwcProb` computed from window features)
+2. Add MC Cum gate: `if (mcCumWinProb >= 0.70) return false;` before threshold check
+3. Pass `mcCumWinProb` as new parameter
+4. Threshold stays 0.45, confirmation stays 2-poll 90s, fast-path stays 0.15
+
+Call site changes:
+- Compute windowed XGB features at EXIT check time (window already computed for snapshot XGB)
+- Pass mc_cum_win_prob (already available from always-on MC trajectory)
+
+### 3F. Infrastructure Deployed
+
+`backfill_mc_pbp` phase added to mc-backtest.mjs (commit c956442). Fetches BDL plays retroactively, builds possession log, computes PBP 20-possession windowed MC at each snapshot. Writes mc_win_prob to snapshots. All 48 playoff games backfilled (5,407 snapshots).
+
+---
+
+## 4. SIGNAL ROLES (validated May 6)
+
+| Signal | Best at | Weakness | Role |
+|---|---|---|---|
+| Windowed XGB (2Q) | Early structural decay, recency | Noisy in Q2 (only 1Q of data) | EXIT trigger, entry gates |
+| MC Cum (full game) | Sustained probability, calibration | Cumulative anchoring in blowouts | EXIT gate, confirmation |
+| PBP MC (20 poss) | Real-time collapse detection | Too volatile for gating | Investigation trigger |
+| Floor (cumulative) | Indicator decomposition, narrative | Anti-predictive in lead-change games | Agent context, not decisions |
+| XGB Cum (full game) | Stable structural read | Misses 2/10 collapses entirely | Replaced by windowed for EXIT |
+
+Trust hierarchy by quarter (unchanged):
+- Q2: Floor ≈ XGB > MC (MC off calibration by 10pp)
+- Q3: MC ≈ XGB > Floor
+- Q4: MC > XGB > Floor
+
+---
+
+## 5. DEAD CODE TO REMOVE
 
 ### Functions (~220 lines — classifyRank KEPT for NCAAMB):
 - computeCheckpointFloorStats() (2483-2500)
@@ -150,7 +244,7 @@ No schema migrations needed.
 
 ---
 
-## 4. PRODUCTION VALIDATION
+## 6. PRODUCTION VALIDATION
 
 48 NBA playoff games (Apr 19-May 5, 2026). MC Cum backfilled via backfill_mc_cum phase (500 sims, production-equivalent, commit 3d7089c). Data deduped by (period, clock) to remove concurrent invocation duplicates.
 
@@ -175,20 +269,21 @@ No schema migrations needed.
 
 ---
 
-## 5. CASCADING IMPLICATIONS
+## 7. CASCADING IMPLICATIONS
 
 - Learning agent: LOW risk. Scores on terminal outcome, not tier.
 - Subscriber copy: MEDIUM risk. Agent generates all copy, prompt rewrite handles this.
-- Position monitoring (LOCK/EDGE/VALUE): DEFERRED to separate research thread.
-- XGB EXIT: NONE. Independent system.
-- PBP MC canary: NONE. Independent system.
+- Position monitoring (LOCK/EDGE/VALUE): CLOSED. No separate alert layer — MC Cum injected into agent narrative.
+- XGB EXIT: IN SCOPE. Windowed XGB replaces cumulative, MC Cum gate added.
+- PBP MC canary: NONE. Independent system. Investigation pipeline unchanged.
 - BUY system: LOW. Context fields change, logic unchanged.
 - NCAAMB: NONE. Separate code path, classifyRank preserved.
 
 ---
 
-## 6. IMPLEMENTATION PLAN
+## 8. IMPLEMENTATION PLAN
 
+**Graduation (Phases 1-10):**
 Phase 1: Dead code removal (~220 lines, 7 functions + LANE_THRESHOLDS)
 Phase 2: New compound function (~30 lines)
 Phase 3: PO firing logic (~80 lines changed)
@@ -200,9 +295,15 @@ Phase 8: Post-game agent (~15 lines)
 Phase 9: v3.html (~5 lines)
 Phase 10: Smoke test
 
+**EXIT Compound (Phases 11-14):**
+Phase 11: checkXGBExit() — add MC Cum gate, switch to windowed XGB input (~10 lines changed)
+Phase 12: EXIT call site — compute windowed features for EXIT check (~15 lines)
+Phase 13: Agent prompt EXIT rules — add MC Cum context to EXIT decision (~10 lines)
+Phase 14: EXIT smoke test on live game
+
 ---
 
-## 7. CONFIRMED DEPENDENCIES
+## 9. CONFIRMED DEPENDENCIES
 
 1. MC Cum available at compound check time (line 6383, checkpoints at 7065, same scope)
 2. lt persisted after compound evaluation (line 7913)
@@ -211,13 +312,14 @@ Phase 10: Smoke test
 
 ---
 
-## 8. FILES MODIFIED
+## 10. FILES MODIFIED
 
 | File | Change | Est. lines |
 |---|---|---|
-| poll-live-bdl.mjs | Major | -400, +110 (net -290) |
+| poll-live-bdl.mjs | Major (graduation + EXIT) | -400, +145 (net -255) |
 | post-game-agent.mjs | Minor | ~15 |
 | v3.html | Minor | ~5 |
+| mc-backtest.mjs | backfill_mc_pbp phase (already deployed) | +367 |
 | db-api.js | None | 0 |
 
 No schema migrations. No new tables. No new env vars.
