@@ -1926,7 +1926,7 @@ function computeMCCumulative(summary, period, clockSec, controlTeam, hA, hBaseli
   var ctrlIsHome = controlTeam === hA;
   var result = runMonteCarloSim(homeRates, awayRates,
     Number(summary.home?.points || 0), Number(summary.away?.points || 0),
-    remainPoss, { simCount: 200, ctrlTeam: ctrlIsHome ? 'home' : 'away' });
+    remainPoss, { simCount: 500, ctrlTeam: ctrlIsHome ? 'home' : 'away' });
   return {
     winProb: result.winProb,
     medianMargin: result.medianMargin,
@@ -1973,7 +1973,7 @@ function computeMCDrivers(mcCumResult, ctrlIsHome, homeScore, awayScore, ctrlSea
     else { modA[key] = baseline[key] || MC_DEFAULT_RATES[key]; }
     var modResult = runMonteCarloSim(modH, modA,
       homeScore, awayScore, remainPoss,
-      { simCount: 200, ctrlTeam: ctrlIsHome ? 'home' : 'away' });
+      { simCount: 500, ctrlTeam: ctrlIsHome ? 'home' : 'away' });
     var delta = baseWP - modResult.winProb;
     var ctrlVal = ctrlIsHome ? hRates[key] : aRates[key];
     var oppVal = ctrlIsHome ? aRates[key] : hRates[key];
@@ -6367,7 +6367,7 @@ export default async function(req) {
                   var _pmCtrlHome = ind.controlTeam === hA;
                   var _pmResult = runMonteCarloSim(_pmRates.home, _pmRates.away,
                     Number(ind.homePts), Number(ind.awayPts), _pmRemain,
-                    { simCount: 200, ctrlTeam: _pmCtrlHome ? 'home' : 'away' });
+                    { simCount: 500, ctrlTeam: _pmCtrlHome ? 'home' : 'away' });
                   _pollMC = Math.round(_pmResult.winProb * 10000) / 10000;
                   log(`${matchup}: MC trajectory — wp=${_pollMC} remain=${_pmRemain} hFGA=${_pmRates.home._windowFGA} aFGA=${_pmRates.away._windowFGA}`);
                 } else {
@@ -7718,7 +7718,7 @@ export default async function(req) {
                 if (_mcRemain > 0) {
                   const _mcCanary = runMonteCarloSim(_mcRates.home, _mcRates.away,
                     Number(ind.homePts), Number(ind.awayPts), _mcRemain,
-                    { simCount: 200, ctrlTeam: _mcCtrlIsHome ? 'home' : 'away' });
+                    { simCount: 1000, ctrlTeam: _mcCtrlIsHome ? 'home' : 'away' });
                   // Combined canary: MC < 0.70 OR floor-MC divergence > 0.15
                   const _mcAbsFired = _mcCanary.winProb < 0.70;
                   const _mcDivFired = ind.score != null && (ind.score - _mcCanary.winProb) > 0.15;
@@ -7780,7 +7780,7 @@ export default async function(req) {
                   if (_mcRemain2 > 0) {
                     const _mcInv = runMonteCarloSim(_mcHRates, _mcARates,
                       Number(ind.homePts), Number(ind.awayPts), _mcRemain2,
-                      { simCount: 500, ctrlTeam: lt.mc.ctrl_is_home ? 'home' : 'away' });
+                      { simCount: 1000, ctrlTeam: lt.mc.ctrl_is_home ? 'home' : 'away' });
                     lt.mc.current_mc = _mcInv.winProb;
                     const _mcVerdict = classifyMCVerdict(_mcInv.winProb);
                     lt.mc.verdicts.push(_mcVerdict);
