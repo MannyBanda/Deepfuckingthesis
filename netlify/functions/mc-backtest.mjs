@@ -4705,6 +4705,372 @@ async function phaseBackfillMcCum(sql, url) {
   };
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// PHASE: BACKFILL_MC_PBP — compute PBP 20-possession windowed MC on historical snapshots
+//   Fetches BDL plays retroactively, builds possession log, runs MC sim on
+//   last-20-possession window at each snapshot timestamp.
+//   Writes mc_win_prob to snapshots (same column production uses for _pollMC).
+//   ?phase=backfill_mc_pbp&from=2026-04-19&to=2026-05-06&batch=3&dry=0
+// ══════════════════════════════════════════════════════════════════════════════
+async function phaseBackfillMcPbp(sql, url) {
+  var fromDate = url.searchParams.get('from') || '2026-04-19';
+  var toDate = url.searchParams.get('to') || '2026-05-06';
+  var batchSize = parseInt(url.searchParams.get('batch') || '3');
+  var offset = parseInt(url.searchParams.get('offset') || '0');
+  var dryRun = url.searchParams.get('dry') === '1';
+  var SIM_COUNT = parseInt(url.searchParams.get('sims') || '500');
+  var WINDOW_SIZE = 20;
+  var REGRESSION_CAP = 0.60; // matches production extractMCRatesFromPossLog
+  var BDL_KEY = process.env.BDL_API_KEY;
+
+  if (!BDL_KEY) return { error: 'BDL_API_KEY not configured' };
+
+  // ── Helper: fetch BDL API with auth ──
+  async function bdlFetch(path) {
+    var resp = await fetch('https://api.balldontlie.io' + path, {
+      headers: { 'Authorization': BDL_KEY },
+    });
+    if (!resp.ok) throw new Error('BDL ' + resp.status + ' for ' + path);
+    return resp.json();
+  }
+
+  // ── Helper: game-seconds elapsed from period + clock string ──
+  // Q1 12:00 = 0s, Q1 0:00 = 720s, Q2 12:00 = 720s, Q4 0:00 = 2880s
+  function gameSeconds(period, clockStr) {
+    var cm = String(clockStr || '12:00').match(/(\d+):(\d+)/);
+    var mins = cm ? parseInt(cm[1]) : 12;
+    var secs = cm ? parseInt(cm[2]) : 0;
+    return (Math.min(period, 5) - 1) * 720 + (720 - mins * 60 - secs);
+  }
+
+  // ── Build possession log from BDL plays (mirrors buildPossLogServer) ──
+  function buildPossLog(plays, hA, aA) {
+    if (!plays || plays.length < 20) return [];
+    var possessions = [];
+    var cur = null;
+
+    function flush() {
+      if (cur && cur.team) possessions.push(cur);
+      cur = { team: null, pts: 0, fgm: 0, fga: 0, fg3m: 0, fg3a: 0,
+              ast: 0, tos: 0, stl: 0, oreb: 0, dreb: 0, fta: 0, ftm: 0,
+              q: 0, gameSec: 0 };
+    }
+    flush();
+
+    for (var i = 0; i < plays.length; i++) {
+      var ev = plays[i];
+      var type = (ev.type || '').trim(), tl = type.toLowerCase();
+      var text = (ev.text || '').toLowerCase();
+      var tAbbr = ev.team?.abbreviation || (typeof ev.team === 'string' ? ev.team : '');
+      var team = tAbbr === hA ? hA : tAbbr === aA ? aA : '';
+      if (!team) continue;
+      var quarter = ev.period || 0;
+      var evSec = gameSeconds(quarter, ev.clock);
+
+      if (tl.includes('substitution') || text.includes('enters the game for')) continue;
+      if (tl.includes('end period') || tl.includes('end game')) { flush(); continue; }
+
+      if (!cur.team) { cur.team = team; cur.q = quarter; cur.gameSec = evSec; }
+      cur.gameSec = evSec; // update to latest event in possession
+
+      // Free throws
+      if (tl.includes('free throw')) {
+        var made = ev.scoring_play || false;
+        cur.fta++;
+        if (made) { cur.ftm++; cur.pts++; }
+        var ftM = type.match(/(\d+)\s*of\s*(\d+)/i);
+        if (ftM && ftM[1] === ftM[2] && made) flush();
+        continue;
+      }
+
+      // Shooting play
+      if (ev.shooting_play) {
+        var shotMade = ev.scoring_play || false;
+        var is3 = ev.score_value === 3 || text.includes('three point');
+        cur.fga++;
+        if (is3) cur.fg3a++;
+        if (shotMade) {
+          cur.fgm++;
+          var pts = ev.score_value || (is3 ? 3 : 2);
+          cur.pts += pts;
+          if (is3) cur.fg3m++;
+          if (text.includes('ast')) cur.ast++;
+          flush();
+        }
+        continue;
+      }
+
+      // Turnover
+      if (tl.includes('turnover')) {
+        cur.tos++;
+        flush();
+        var oppTeam = team === hA ? aA : hA;
+        cur.team = oppTeam; cur.q = quarter; cur.gameSec = evSec; cur.stl++;
+        continue;
+      }
+
+      // Rebound
+      if (tl.includes('rebound')) {
+        if (tl.includes('offensive')) {
+          cur.oreb++;
+        } else {
+          flush();
+          cur.team = team; cur.q = quarter; cur.gameSec = evSec; cur.dreb++;
+        }
+        continue;
+      }
+
+      // Offensive foul
+      if (tl.includes('foul') && tl.includes('offensive')) {
+        flush();
+        continue;
+      }
+    }
+    flush();
+    return possessions.filter(function(p) { return p.team; });
+  }
+
+  // ── Extract MC rates from possession window (mirrors extractMCRatesFromPossLog) ──
+  function extractPbpRates(possLog, windowSize, hA, aA, hBaseline, aBaseline) {
+    if (!possLog || possLog.length < windowSize) return null;
+    var window = possLog.slice(-windowSize);
+
+    function aggSide(tm) {
+      var p = window.filter(function(x) { return x.team === tm; });
+      return {
+        fgm: p.reduce(function(s,x){return s+x.fgm;},0),
+        fga: p.reduce(function(s,x){return s+x.fga;},0),
+        fg3m: p.reduce(function(s,x){return s+x.fg3m;},0),
+        fg3a: p.reduce(function(s,x){return s+x.fg3a;},0),
+        ftm: p.reduce(function(s,x){return s+x.ftm;},0),
+        fta: p.reduce(function(s,x){return s+x.fta;},0),
+        to: p.reduce(function(s,x){return s+x.tos;},0),
+        oreb: p.reduce(function(s,x){return s+x.oreb;},0),
+        poss: p.length,
+      };
+    }
+
+    var hAgg = aggSide(hA), aAgg = aggSide(aA);
+
+    function buildRates(agg, baseline) {
+      var fga = agg.fga, fgm = agg.fgm, fg3a = agg.fg3a, fg3m = agg.fg3m;
+      var fta = agg.fta, ftm = agg.ftm, to = agg.to, oreb = agg.oreb;
+      var fg2a = fga - fg3a, fg2m = fgm - fg3m;
+      var poss = agg.poss;
+      if (poss < 3 || fga < 3) return null;
+      var bl = baseline || 0.36;
+      var rawFg3 = fg3a > 0 ? fg3m / fg3a : bl;
+      var sw = Math.min(REGRESSION_CAP, fg3a / 30);
+      function clamp(v) { return Math.max(0, Math.min(1, v)); }
+      return {
+        toRate: clamp(poss > 0 ? to / poss : 0.12),
+        fg3aShare: clamp(fga > 0 ? fg3a / fga : 0.35),
+        fg3Pct: clamp(rawFg3 * sw + bl * (1 - sw)),
+        fg2Pct: clamp(fg2a > 0 ? fg2m / fg2a : 0.50),
+        orebRate: clamp((fga - fgm) > 0 ? oreb / (fga - fgm) : 0.25),
+        ftaRate: Math.min(poss > 0 ? fta / poss : 0.20, 1.0),
+        ftPct: clamp(fta > 0 ? ftm / fta : 0.76),
+        _windowPoss: poss, _windowFGA: fga,
+      };
+    }
+
+    var hRates = buildRates(hAgg, hBaseline);
+    var aRates = buildRates(aAgg, aBaseline);
+    if (!hRates || !aRates) return null;
+    return { home: hRates, away: aRates };
+  }
+
+  // ── Get games in date range ──
+  var games = await sql`
+    SELECT id, date, home_alias, away_alias, winner
+    FROM games
+    WHERE date >= ${fromDate} AND date <= ${toDate} AND winner IS NOT NULL
+      AND league = 'nba'
+    ORDER BY date ASC, id ASC
+    LIMIT ${batchSize} OFFSET ${offset}
+  `;
+  var totalCount = await sql`
+    SELECT COUNT(*)::int AS n FROM games
+    WHERE date >= ${fromDate} AND date <= ${toDate} AND winner IS NOT NULL
+      AND league = 'nba'
+  `;
+  var totalGames = Number(totalCount[0]?.n || 0);
+
+  var results = [];
+  var totalUpdated = 0, totalSkipped = 0, totalNoPlays = 0, totalNoRates = 0;
+
+  for (var gi = 0; gi < games.length; gi++) {
+    var g = games[gi];
+    var matchup = (g.away_alias || '?') + '@' + (g.home_alias || '?');
+    var hA = g.home_alias, aA = g.away_alias;
+
+    // ── Step 1: Find BDL game_id by matching teams on this date ──
+    var bdlGameId = null;
+    try {
+      var bdlGames = await bdlFetch('/nba/v1/games?dates[]=' + g.date);
+      var bdlList = bdlGames.data || [];
+      for (var bi = 0; bi < bdlList.length; bi++) {
+        var bg = bdlList[bi];
+        var bgHome = bg.home_team?.abbreviation || '';
+        var bgAway = bg.visitor_team?.abbreviation || '';
+        if ((bgHome === hA && bgAway === aA) || (bgHome === aA && bgAway === hA)) {
+          bdlGameId = bg.id;
+          break;
+        }
+      }
+    } catch (e) {
+      results.push({ matchup: matchup, error: 'BDL schedule: ' + e.message });
+      continue;
+    }
+
+    if (!bdlGameId) {
+      results.push({ matchup: matchup, error: 'No BDL game_id found' });
+      totalNoPlays++;
+      continue;
+    }
+
+    // ── Step 2: Fetch all BDL plays ──
+    var allPlays = [];
+    try {
+      var playsResp = await bdlFetch('/nba/v1/plays?game_id=' + bdlGameId + '&per_page=1000');
+      allPlays = playsResp.data || [];
+    } catch (e) {
+      results.push({ matchup: matchup, bdl_id: bdlGameId, error: 'BDL plays: ' + e.message });
+      totalNoPlays++;
+      continue;
+    }
+
+    if (allPlays.length < 30) {
+      results.push({ matchup: matchup, bdl_id: bdlGameId, plays: allPlays.length, error: 'Too few plays' });
+      totalNoPlays++;
+      continue;
+    }
+
+    // Sort plays by order
+    allPlays.sort(function(a, b) { return (a.order || 0) - (b.order || 0); });
+
+    // ── Step 3: Build full possession log ──
+    var fullPossLog = buildPossLog(allPlays, hA, aA);
+
+    // ── Step 4: Get snapshots Q2+ ──
+    var snaps = await sql`
+      SELECT id, period, clock, home_pts, away_pts, floor_team, floor_score,
+             raw_stats_json, mc_win_prob
+      FROM snapshots
+      WHERE game_id = ${g.id} AND source = 'server' AND period >= 2
+        AND raw_stats_json IS NOT NULL
+      ORDER BY ts ASC
+    `;
+
+    // ── Step 5: Get 3PT baselines (clutch profiles or default) ──
+    var hBaseline = 0.36, aBaseline = 0.36;
+    try {
+      var clutch = await sql`
+        SELECT team_alias, q4_fg3pct FROM clutch_profiles
+        WHERE team_alias IN (${hA}, ${aA}) AND league = 'nba'
+      `;
+      for (var ci = 0; ci < clutch.length; ci++) {
+        if (clutch[ci].team_alias === hA && clutch[ci].q4_fg3pct) hBaseline = Number(clutch[ci].q4_fg3pct);
+        if (clutch[ci].team_alias === aA && clutch[ci].q4_fg3pct) aBaseline = Number(clutch[ci].q4_fg3pct);
+      }
+    } catch (e) { /* use defaults */ }
+
+    var updated = 0, skipped = 0, noRates = 0;
+
+    for (var si = 0; si < snaps.length; si++) {
+      var s = snaps[si];
+
+      // Skip if already has mc_win_prob
+      if (s.mc_win_prob != null) { skipped++; continue; }
+
+      // Calculate game-seconds for this snapshot
+      var snapSec = gameSeconds(s.period, s.clock);
+
+      // Slice possession log to possessions completed before this snapshot
+      var possAtSnap = [];
+      for (var pi = 0; pi < fullPossLog.length; pi++) {
+        if (fullPossLog[pi].gameSec <= snapSec) {
+          possAtSnap.push(fullPossLog[pi]);
+        }
+      }
+
+      // Need at least 20 possessions for the window
+      if (possAtSnap.length < WINDOW_SIZE) { noRates++; continue; }
+
+      // Extract rates from last 20 possessions
+      var rates = extractPbpRates(possAtSnap, WINDOW_SIZE, hA, aA, hBaseline, aBaseline);
+      if (!rates) { noRates++; continue; }
+
+      // Get remaining possessions from cumulative stats
+      var rsj = typeof s.raw_stats_json === 'string' ? JSON.parse(s.raw_stats_json) : s.raw_stats_json;
+      if (!rsj || !rsj.home || !rsj.away) { noRates++; continue; }
+
+      var clockSec = 0;
+      var cm = String(s.clock || '6:00').match(/(\d+):(\d+)/);
+      if (cm) clockSec = parseInt(cm[1]) * 60 + parseInt(cm[2]);
+
+      var remain = estimateRemainingPoss(rsj.home, rsj.away, s.period, clockSec);
+      if (remain <= 0) { noRates++; continue; }
+
+      // Determine ctrl team
+      var ctrl = s.floor_team || '';
+      var ctrlIsHome = ctrl === hA;
+
+      // Run MC sim
+      var mc = runMonteCarloSim(rates.home, rates.away,
+        Number(s.home_pts || 0), Number(s.away_pts || 0),
+        remain, { simCount: SIM_COUNT, ctrlTeam: ctrlIsHome ? 'home' : 'away' });
+
+      var mcPbp = Math.round(mc.winProb * 10000) / 10000;
+
+      if (!dryRun) {
+        await sql`UPDATE snapshots SET mc_win_prob = ${mcPbp} WHERE id = ${s.id}`;
+      }
+      updated++;
+    }
+
+    totalUpdated += updated;
+    totalSkipped += skipped;
+    totalNoRates += noRates;
+
+    results.push({
+      matchup: matchup,
+      date: g.date,
+      bdl_id: bdlGameId,
+      total_plays: allPlays.length,
+      possessions: fullPossLog.length,
+      total_snaps: snaps.length,
+      updated: updated,
+      skipped: skipped,
+      no_rates: noRates,
+    });
+
+    // BDL rate limit courtesy — 1s pause between games
+    if (gi < games.length - 1) {
+      await new Promise(function(r) { setTimeout(r, 1000); });
+    }
+  }
+
+  return {
+    status: 'ok',
+    phase: 'backfill_mc_pbp',
+    dryRun: dryRun,
+    dateRange: fromDate + ' to ' + toDate,
+    simCount: SIM_COUNT,
+    windowSize: WINDOW_SIZE,
+    gamesProcessed: games.length,
+    totalGames: totalGames,
+    totalUpdated: totalUpdated,
+    totalSkipped: totalSkipped,
+    totalNoPlays: totalNoPlays,
+    totalNoRates: totalNoRates,
+    games: results,
+    nextStep: offset + batchSize < totalGames
+      ? '?phase=backfill_mc_pbp&from=' + fromDate + '&to=' + toDate + '&batch=' + batchSize + '&offset=' + (offset + batchSize)
+      : null,
+  };
+}
+
 export default async function handler(req) {
   var url = new URL(req.url, 'https://x.com');
   var phase = url.searchParams.get('phase') || 'status';
@@ -4745,6 +5111,7 @@ export default async function handler(req) {
       case 'window_xgb_export': result = await phaseWindowXGBExport(sql, url); break;
       case 'floor_vs_window': result = await phaseFloorVsWindow(sql); break;
       case 'backfill_mc_cum': result = await phaseBackfillMcCum(sql, url); break;
+      case 'backfill_mc_pbp': result = await phaseBackfillMcPbp(sql, url); break;
       case 'status': {
         var count = await sql`SELECT COUNT(*) AS n FROM mc_backtest_results`;
         var games = await sql`SELECT COUNT(DISTINCT game_id) AS n FROM mc_backtest_results`;
