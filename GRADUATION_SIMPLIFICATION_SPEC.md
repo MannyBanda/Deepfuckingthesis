@@ -1,18 +1,26 @@
-# GRADUATION SIMPLIFICATION SPEC
+# GRADUATION SIMPLIFICATION SPEC v2
 ## Replacing multi-checkpoint floor graduation with compound threshold (MC Cum + Floor)
 
-**Date:** May 6, 2026  
-**Status:** SPEC — awaiting confirmation before implementation  
-**Risk Level:** HIGH — touches agent prompts, PO firing, alert context, learning agent  
-**Backup:** `backups/graduation-pre-simplification/` at commit `daa0dbe`
+**Date:** May 6, 2026 (v2 — production-validated)
+**Status:** SPEC — awaiting confirmation before implementation
+**Risk Level:** HIGH — touches agent prompts, PO firing, alert context, learning agent
+**Backup:** backups/graduation-pre-simplification/ at commit daa0dbe
+
+---
+
+## 0. TERMINOLOGY
+
+- **Position tracking** replaces "BWC tracking." The state where the system has identified structural control but not yet confirmed a position.
+- **Position open / confirmed** = compound threshold met for 5 consecutive polls.
+- **S/A/B/C ranks are retired.** Replaced by confidence tiers: TRACKING → CONFIRMED → RECOVERING → LOCKED.
 
 ---
 
 ## 1. SCOPE
 
-**IN SCOPE:** NBA graduation path in `poll-live-bdl.mjs`. Agent prompts. PO firing logic. v2Ctx construction. Alert fields. Dashboard display. Learning agent graduation references.
+**IN SCOPE:** NBA graduation path in poll-live-bdl.mjs. Agent prompts. PO firing logic. v2Ctx construction. Alert fields. Dashboard display. Learning agent graduation references.
 
-**OUT OF SCOPE:** NCAAMB graduation (lines ~7371-7460 — separate system, unchanged). BWC state machine (LOCK/EDGE etc — unchanged). XGB EXIT (unchanged). PBP MC canary (unchanged). BUY/PO decoupled system (unchanged). Alert routing/dedup (unchanged).
+**OUT OF SCOPE:** NCAAMB graduation (lines ~7371-7460 — separate system, unchanged). Position monitoring states (LOCK/EDGE/VALUE — separate research thread). XGB EXIT (unchanged). PBP MC canary (unchanged). BUY/PO decoupled system (unchanged). Alert routing/dedup (unchanged).
 
 ---
 
@@ -20,311 +28,196 @@
 
 ### 2A. New Position Confirmation Logic
 
-**Replaces:** `recomputeCheckpointState()` → S/A/B/C ranks → PO evaluation with MF/minF/lane gates
+**Replaces:** recomputeCheckpointState() → S/A/B/C ranks → PO evaluation with MF/minF/lane gates
 
-**New system (two paths):**
+**New system — uniform 5 poll holds, two paths:**
 
 ```
 Q2 EARLY CONFIRMATION:
-  3 consecutive checkpoints where:
-    MC Cum ≥ 0.85 AND Floor ≥ 0.70 AND ctrl_margin ≥ 5
-  → Position confirmed
+  5 consecutive polls where:
+    MC Cum >= 0.80 AND Floor >= 0.65 AND ctrl_margin >= 5 AND 0 prior flips
+  -> CONFIRMED (95.5%, 22/48 playoff games trigger)
 
 Q3+ STANDARD CONFIRMATION:
-  First checkpoint where:
-    MC Cum ≥ 0.80 AND Floor ≥ 0.65
-  → Position confirmed
+  5 consecutive polls where:
+    MC Cum >= 0.80 AND Floor >= 0.65
+  -> CONFIRMED (81.8%, 44/48 trigger)
+  -> If 1+ prior flips: RECOVERING (73%)
 ```
 
-**Implementation:** New function `checkCompoundConfirmation(lt, period, floor, mcCum, ctrlMargin)`:
-- Tracks `lt.compound_holds` (consecutive Q2 checkpoint count above Q2 threshold)
-- Resets `lt.compound_holds` to 0 when a checkpoint fails Q2 threshold
-- Returns `{ confirmed: bool, path: 'Q2_EARLY'|'Q3_STANDARD', holds: n }`
-- Q3+ is a single-read check — no tracking needed
+**Why 5 polls:** 5 consecutive deduped polls = ~2.5 min game clock = ~5 min wall clock. Production-validated on 48 playoff games with backfilled MC Cum (500 sims, production-equivalent). Accuracy climbs from 78.7% (1 hold) to 81.8% (5 holds) with minimal coverage loss (47->44 games).
 
-**Data required at each checkpoint:** `mc_cum_win_prob` (already stored on every snapshot Q2+) and `floor_score` (already computed). Both are available in the polling loop when checkpoints fire.
+**Why lead>=5 in Q2:** Every Q2 game where compound fires at margin 0-4 is a loss (3/3). The margin gate filters games where Q2 MC is overconfident in close situations. Q3+ does not need a margin gate because MC calibration improves with game time.
 
-### 2B. PO Firing Logic (lines ~7223-7300)
+**Why 0 flips required for Q2:** Q2 with flips = untested control. By Q3+, a flip followed by 5 sustained holds proves the team re-established control through challenge.
 
-**Current:** Graduation rank (A/B/C) → lane gates (MF/minF thresholds) → PO fires or blocks  
-**New:** `checkCompoundConfirmation()` returns `confirmed: true` → PO fires
+### 2B. Confidence Tiers
 
-**Changes:**
-- Remove `classifyRank()` call in PO evaluation
-- Remove `getLaneGates()` / `LANE_THRESHOLDS` usage for PO
-- Remove B-rank Q3_6 gate
-- Remove MF/minF gate checks
-- PO fires when compound is confirmed AND `!lt.po_fired AND ind.controlTeam === bwcTeam AND alertMinsLeft >= 1.0`
-- PO rank field: set to `'COMPOUND'` (or keep using A/B for backward compat — see §4)
-- Suppress throttle logic (lines ~7219-7237) UNCHANGED — still needed
+| Tier | Condition | Accuracy | Subscriber alert? |
+|---|---|---|---|
+| TRACKING | Position tracking started, compound not yet met | n/a | No — internal only |
+| CONFIRMED | 5 holds, 0 prior flips | 86% | Yes -> POSITION_OPEN |
+| RECOVERING | 5 holds, 1+ prior flips | 73% | Yes -> POSITION_OPEN (agent notes lower confidence) |
+| LOCKED | 10+ holds, 0 prior flips | 92% | No new alert — upgrades context on subsequent alerts |
 
-**The PO_ACTIVE sentinel** still written to `game_checkpoints` for race-safe recovery. The `conv` field stores `'COMPOUND'` instead of `'A'`/`'B'`.
+CONFIRMED and RECOVERING both fire POSITION_OPEN. The difference is agent language:
+- CONFIRMED: "Structural position confirmed — compound signals aligned."
+- RECOVERING: "Position confirmed after control flip — structural edge recovered but game contested."
 
-### 2C. Flip PO Logic (lines ~7310-7370)
+LOCKED does not fire a separate alert. It upgrades confidence language on position monitoring alerts.
 
-**Current:** Opponent graduation (B+ rank, 2+ opp holds, more recent than BWC graduation) → flip PO  
-**New:** Opponent compound confirmation using same thresholds. The opponent team's floor/MC Cum must meet compound threshold.
+### 2C. Close Game Acknowledgment
 
-**Changes:**
-- Replace `lt.cp_opp_graduation` check with compound check on opponent's indicators
-- Opponent needs: Floor ≥ 0.65 AND MC Cum ≥ 0.80 (uses current snapshot values, ctrl-relative to opponent)
-- Opponent holds ≥ 2 requirement STAYS (prevents single-snapshot flip)
-- `lt.cp_opp_holds` tracking STAYS (consecutive opponent checkpoints)
-- Remove `lt.cp_opp_graduation` state
+Compound plateaus at 75% accuracy in close games (margin <= 8) regardless of hold count. This is the best close-game accuracy the system has produced:
+- Pre-graduation first fire: 51.1%
+- Floor graduation B-rank close games: 68.6%
+- Compound 5 holds close games: 75.0%
 
-**RISK:** MC Cum is computed ctrl-relative. When opponent has control, MC Cum already reflects opponent perspective (it uses `controlTeam` from indicators). Flip PO fires when opponent has control AND their compound is met. This is architecturally consistent — MC Cum at that checkpoint is already from the opponent's POV.
+The agent prompt must communicate this honestly. Close-game compound is a 75% edge, not a certainty.
 
-### 2D. BWC Death Graduation Clearing (lines ~6523-6550)
+### 2D. Implementation — checkCompoundConfirmation()
 
-**Current clears:** `lt.cp_graduation`, `lt.cp_opp_graduation`, `lt.cp_mean_floor`, `lt.cp_min_floor`, `lt.cp_eligible_count`, `lt.cp_ctrl_flips`, `lt.cp_peak_rank`
+New function (~30 lines). Called every poll cycle (not just at checkpoint boundaries).
 
-**New clears:** `lt.compound_holds` (Q2 consecutive counter), `lt.compound_confirmed` (if we store this). Everything else that was cleared is now dead — remove.
+- Tracks lt.compound_holds (consecutive poll count above threshold)
+- Resets to 0 when compound threshold is not met
+- Resets to 0 on control flip (streak requires same team throughout)
+- Returns { confirmed, tier, holds, path }
+- Q2 path adds lead>=5 and 0-flip requirements
+- Concurrent invocation under-count (last-write-wins) makes system marginally more conservative — expected behavior, not a bug
 
-**DELETE FROM game_checkpoints** on death STAYS — still needed for PO_ACTIVE sentinel cleanup.
+### 2E. PO Firing Logic
 
-### 2E. Checkpoint Capture (Phase B, lines ~7130-7170)
+checkCompoundConfirmation() returns confirmed: true AND !lt.po_fired -> PO fires.
 
-**STAYS UNCHANGED.** Checkpoints are still captured at 3-minute intervals to `game_checkpoints` table. The data (floor, margin, team, conv, xgb, shap) is still valuable for:
-- PO_ACTIVE sentinel (race-safe PO recovery)
-- Post-game analysis / debugging
-- Backtest data pipeline
-- NCAAMB graduation (uses same table)
+- PO stores tier string (CONFIRMED/RECOVERING/LOCKED)
+- Suppress throttle (escalating 3/6/12 min) UNCHANGED
+- PO_ACTIVE sentinel still written to game_checkpoints
+- lt.po_fired: { team, tier, period, clock, holds, path, mc, floor }
 
-**What changes:** After capture, instead of calling `recomputeCheckpointState()` and deriving S/A/B/C ranks, we call `checkCompoundConfirmation()`.
+### 2F. Flip PO Logic
 
-### 2F. Agent Prompt Rules (lines ~550-730 in formatAgentPromptV2)
+Opponent compound confirmation — opponent floor/MC Cum must meet compound threshold for 5 holds while opponent has control.
 
-**THIS IS THE BIGGEST REWRITE.** ~180 lines of graduation-specific prompt rules need to be replaced.
+- lt.cp_opp_holds tracking STAYS
+- Opponent must be more recent controller
+- Flip PO fires POSITION_OPEN with flipped: true
 
-**What gets removed:**
-- All S/A/B/C rank references and rules
-- MF trajectory analysis (RISING/DECLINING/FLAT)
-- Checkpoint count requirements
-- Flip penalty rules
-- Lane-based gates discussion
-- "Full CP trend" vs "eligible MF" comparison
-- POST-EXIT RE-ENTRY graduation validation rules
-- B-rank multiple flips scrutiny rules
+### 2G. Death Clearing
 
-**What replaces it:**
-- Compound state: CONFIRMED (MC≥0.80+Floor≥0.65 met) or PRE-CONFIRMATION
-- Q2 early confirmation note if applicable
-- Simple flip context: compound was met, then control flipped — is compound still met for new team?
-- MC Cum value + Floor value at confirmation point
-- POST-EXIT RE-ENTRY: simplified to "compound must be met for re-entry" (no graduated-rank-quality assessment)
-- Trust hierarchy reminder: Q2 Floor≈XGB>MC, Q3 MC≈XGB>Floor, Q4 MC>XGB>Floor
+Clears: lt.compound_holds, lt.compound_confirmed
+DELETE FROM game_checkpoints on death STAYS for PO_ACTIVE cleanup.
 
-**Draft prompt skeleton:**
-```
-COMPOUND CONFIRMATION:
-Status: [CONFIRMED at Q{period} {clock} | PRE-CONFIRMATION]
-MC Cum: {value} | Floor: {value} | Margin: {margin}
-[Q2 early: {holds}/3 consecutive holds above threshold]
-[Ctrl flips since BWC: {count}]
-```
+### 2H. Agent Prompt Rules
 
-### 2G. formatSonnetPrompt Graduation Context (lines ~4506-4525)
+~180 lines graduation rules -> ~40 lines compound rules.
 
-**Current:** Outputs graduation rank, MF trajectory, eligible CPs, opponent graduation  
-**New:** Outputs compound state, MC Cum/Floor at confirmation, Q2 holds if applicable
+Remove all S/A/B/C rank references, MF trajectory, checkpoint counts, flip penalties, lane gates, POST-EXIT graduation validation.
 
-### 2H. v2Ctx Construction (lines ~6787-6802)
+Replace with: compound state, trust hierarchy by quarter, close game note, RECOVERING context, post-EXIT re-entry (compound must re-meet, no carryover).
 
-**Fields that change meaning:**
-- `poRank` → set to `'COMPOUND'` (or null if not confirmed)
-- `cpMeanFloor` → REMOVED (dead)
-- `cpMinFloor` → REMOVED (dead)
-- `cpEligibleCount` → REMOVED (dead)
-- `cpPeakRank` → REMOVED (dead)
-- `cpGraduation` → REPLACED with `compoundConfirmation: { path, period, clock, mc, floor }`
-- `cpOppGraduation` → REMOVED (dead)
-- `cpCtrlFlips` → STAYS (still useful context)
-- `mfTrajectory` → REMOVED (dead)
-- `fullCPTrend` → REMOVED (dead)
-- `floorMarginSignal` → REMOVED (dead)
-- `convictionTrend` → REMOVED (dead)
-- `lane` → STAYS (still useful for BUY lane context, pregame ML)
+### 2I-2N. Other Changes
 
-**New fields:**
-- `compoundState: 'CONFIRMED'|'PRE_CONFIRMATION'`
-- `compoundMC: number` (MC Cum at confirmation)
-- `compoundFloor: number` (Floor at confirmation)
-- `compoundPath: 'Q2_EARLY'|'Q3_STANDARD'`
+- formatSonnetPrompt: replace graduation context with compound state
+- v2Ctx: remove dead fields, add compound fields
+- Alert INSERT: graduation_rank -> tier string, cp_eligible_count -> compound_holds
+- Snapshot INSERT: grad_rank -> compound tier
+- Post-game agent: reads new tier strings, arc scoring unchanged
+- v3.html: grad_rank color mapping updated
 
-### 2I. Alert INSERT (lines ~7010-7040)
-
-**Column mapping (backward compatible — columns stay, values change):**
-- `graduation_rank` → `'COMPOUND'` when confirmed, null otherwise
-- `mf_trajectory` → null (dead)
-- `cp_eligible_count` → null (dead — or repurpose for compound_holds count)
-- `cp_ctrl_flips` → STAYS (still tracked via lt.cp_ctrl_flips or lt.ctrl_flips)
-- `cp_mean_floor` → null (dead)
-
-**No schema migration needed.** Existing columns accept the new values. Historical data retains old graduation ranks for comparison.
-
-### 2J. Snapshot INSERT (lines ~6409-6425)
-
-**`grad_rank`** column currently stores `lt.cp_peak_rank`. Repurpose to store compound state:
-- `'CONFIRMED'` when compound is met
-- `null` otherwise
-
-### 2K. Post-Game Learning Agent (post-game-agent.mjs)
-
-**Lines 267-304, 338-387, 440:**
-- `graduation_rank` → now reads `'COMPOUND'` instead of `'A'`/`'B'`/`'C'`
-- Arc scoring logic at line 338 that keys on `graduation_rank` → simplify
-- Line 386 that filters `graduation_rank` for structural scoring → adapt
-- Graduation context at lines 295-302 (reads `lt.cp_graduation`) → adapt to new structure
-
-**No fundamental changes to arc scoring logic.** The learning agent scores arcs on terminal alert outcome, not graduation rank.
-
-### 2L. v3.html Dashboard
-
-**Line 2859:** `grad_rank` display in snapshot history. Change color mapping:
-- `'COMPOUND'` → green
-- null → dim
-- Legacy `'A'`/`'B'`/`'C'` still renders correctly for historical data
+No schema migrations needed.
 
 ---
 
 ## 3. DEAD CODE TO REMOVE
 
-### Functions (poll-live-bdl.mjs):
-| Function | Lines | Reason |
-|---|---|---|
-| `classifyRank()` | 2411-2418 | Only used by graduation ranking |
-| `computeCheckpointFloorStats()` | 2483-2500 | MF/minF computation — graduation-only |
-| `computeMFTrajectory()` | 2502-2531 | MF trajectory — graduation-only |
-| `computeFullCPTrend()` | 2533-2562 | Full CP trend — graduation-only |
-| `computeFloorMarginSignal()` | 2564-2597 | Floor-margin signal — graduation-only |
-| `computeConvictionTrend()` | 2599-2630 | Conviction trend — graduation-only |
-| `recomputeCheckpointState()` | 2632-2700 | Core graduation engine — replaced |
-| `getLaneGates()` | 2701-2703 | Lane gate lookup — graduation-only |
-
-**~290 lines of dead functions.**
+### Functions (~220 lines — classifyRank KEPT for NCAAMB):
+- computeCheckpointFloorStats() (2483-2500)
+- computeMFTrajectory() (2502-2531)
+- computeFullCPTrend() (2533-2562)
+- computeFloorMarginSignal() (2564-2597)
+- computeConvictionTrend() (2599-2630)
+- recomputeCheckpointState() (2632-2700)
+- getLaneGates() (2701-2703)
 
 ### Constants:
-| Constant | Line | Reason |
-|---|---|---|
-| `LANE_THRESHOLDS` | 2306-2311 | Only used by PO lane gates — dead |
+- LANE_THRESHOLDS (2306-2311) — dead
 
-**Keep:** `GRAD_CHECKPOINTS` (still used for checkpoint capture timing).
-
-### lt.* fields that become dead:
-- `lt.cp_graduation` → replaced by `lt.compound_confirmed`
-- `lt.cp_opp_graduation` → dead
-- `lt.cp_peak_rank` → dead
-- `lt.cp_mean_floor` → dead
-- `lt.cp_min_floor` → dead
-- `lt.cp_eligible_count` → dead
-- `lt.cp_holds` → dead (replaced by `lt.compound_holds`)
-- `lt.cp_opp_holds` → STAYS (still used for flip PO opponent hold check)
-- `lt.graduation` → dead for NBA (NCAAMB still uses it at line ~7389)
-
-### Agent prompt text:
-- Lines ~550-730: ~180 lines of graduation-specific rules → replace with ~40 lines of compound rules
-- **Net reduction: ~140 lines**
+### Keep:
+- GRAD_CHECKPOINTS — still drives checkpoint capture + NCAAMB
+- classifyRank — NCAAMB uses it (line ~7394)
+- lt.cp_opp_holds — flip PO tracking
 
 ---
 
-## 4. BACKWARD COMPATIBILITY DECISIONS
+## 4. PRODUCTION VALIDATION
 
-### Option A: Keep rank letters
-Map compound to existing rank system: CONFIRMED → 'A', PRE_CONFIRMATION → 'C'. Pro: zero changes to consumers. Con: misleading — 'A' no longer means what it used to.
+48 NBA playoff games (Apr 19-May 5, 2026). MC Cum backfilled via backfill_mc_cum phase (500 sims, production-equivalent, commit 3d7089c). Data deduped by (period, clock) to remove concurrent invocation duplicates.
 
-### Option B: New value 'COMPOUND' (RECOMMENDED)
-Store `'COMPOUND'` in `graduation_rank` and `grad_rank`. Pro: clean break, historical data distinguishable. Con: consumers that switch on 'A'/'B'/'C' need null checks.
+| Signal | Accuracy | n |
+|---|---|---|
+| 5 holds, 0 flips | 86% | 29 |
+| 5 holds, 1+ flips | 73% | 15 |
+| 10 holds, 0 flips | 92% | 25 |
+| Q2 early (5 holds + lead>=5, 0 flips) | 95.5% | 22 |
+| Close games (margin <= 8, 5+ holds) | 75% | 12 |
+| PBP canary on compound losses | 11/11 caught | 11 |
 
-**Recommendation: Option B.** The learning agent and v3.html both handle null/unknown gracefully. `'COMPOUND'` is explicit about the new system.
+### Q2 Lead Gate
+| Gate | Accuracy | Games |
+|---|---|---|
+| lead >= 0 | 84.0% | 25 (3 extra games = ALL losses) |
+| lead >= 5 | 95.5% | 22 (sweet spot) |
+| lead >= 8 | 94.7% | 19 (loses 3 wins) |
+
+### Poll Interval
+60s wall clock per poll. ~28-30s game clock per poll (dead ball time). 5 polls = ~5 min wall = ~2.5 min game clock. 45% raw snapshot dedup rate from concurrent crons.
 
 ---
 
 ## 5. CASCADING IMPLICATIONS
 
-### 5A. Learning Agent Scoring
-**Risk: LOW.** Arc scoring uses terminal alert outcome (ctrl_won vs position_team), not graduation rank. The `graduation_rank` field in prompts provides context but doesn't drive scoring logic. With `'COMPOUND'` replacing ranks, the Opus analysis prompt gets cleaner context.
-
-### 5B. Subscriber Alert Copy
-**Risk: MEDIUM.** Current PO alerts say "A-Rank structural edge confirmed" or "B-Rank graduation." Need new copy: "Structural position confirmed — compound signals aligned (MC {x}%, Floor {y})." The agent prompt rewrite (§2F) handles this. No direct alert copy template exists — it's all agent-generated.
-
-### 5C. BWC State Machine
-**Risk: NONE.** BWC state (LOCK/EDGE/VALUE) is computed from margin + indicators, not graduation. Completely independent.
-
-### 5D. XGB EXIT
-**Risk: NONE.** XGB EXIT uses `_xgbBwcProb` and quarter-specific thresholds. Does not reference graduation.
-
-### 5E. PBP MC Canary
-**Risk: NONE.** Canary fires on windowed MC rates and divergence. Does not reference graduation.
-
-### 5F. BUY System
-**Risk: LOW.** BUY fires independently of PO/graduation. The only interaction: BUY alert context includes graduation data (`cpMeanFloor`, `cpPeakRank`). With compound, the context changes to `compoundState`/`compoundMC`/`compoundFloor`. Agent prompt rules for BUY+graduation (lines ~680-725) need rewriting.
-
-### 5G. NCAAMB
-**Risk: NONE.** NCAAMB graduation at lines ~7371-7460 is a completely separate code path gated by `league === 'ncaamb'`. Uses `lt.graduation` (not `lt.cp_graduation`). Untouched.
-
-### 5H. Backtest Infrastructure
-**Risk: LOW.** `backtest-nba-snapshots.mjs` has its own checkpoint logic for backtesting. It reads `game_checkpoints` but doesn't write graduation state. The checkpoint table structure is unchanged. Backtest phases that reference graduation ranks (`report_all`, `report_calibration`) will see `'COMPOUND'` in new data.
-
-### 5I. Dashboard Historical Data
-**Risk: LOW.** Old snapshots have `grad_rank` = 'A'/'B'/'C'. New snapshots have 'COMPOUND'. v3.html color mapping handles both. No visual regression.
+- Learning agent: LOW risk. Scores on terminal outcome, not tier.
+- Subscriber copy: MEDIUM risk. Agent generates all copy, prompt rewrite handles this.
+- Position monitoring (LOCK/EDGE/VALUE): DEFERRED to separate research thread.
+- XGB EXIT: NONE. Independent system.
+- PBP MC canary: NONE. Independent system.
+- BUY system: LOW. Context fields change, logic unchanged.
+- NCAAMB: NONE. Separate code path, classifyRank preserved.
 
 ---
 
 ## 6. IMPLEMENTATION PLAN
 
-### Phase 1: Dead Code Removal (~290 lines)
-Remove the 8 dead functions and LANE_THRESHOLDS. `node -c` after removal. These have zero callers outside the graduation path being replaced.
-
-### Phase 2: New Compound Function (~30 lines)
-Add `checkCompoundConfirmation()`. Add `lt.compound_holds`, `lt.compound_confirmed` tracking.
-
-### Phase 3: PO Firing Logic (~80 lines changed)
-Replace Phase C graduation evaluation + PO firing with compound check. Keep PO_ACTIVE sentinel writes. Keep suppress throttle.
-
-### Phase 4: Flip PO (~30 lines changed)
-Replace opponent graduation check with opponent compound check.
-
-### Phase 5: BWC Death (~10 lines changed)
-Replace graduation field clearing with compound field clearing.
-
-### Phase 6: v2Ctx + Alert INSERT (~20 lines changed)
-Update field mappings. Remove dead fields from v2Ctx. Add compound fields.
-
-### Phase 7: Agent Prompts (~180 lines rewritten)
-Rewrite graduation rules in formatAgentPromptV2. Rewrite BWC LIFECYCLE in formatSonnetPrompt. This is the highest-risk phase — prompt changes can have unexpected effects on agent behavior.
-
-### Phase 8: Post-Game Agent (~15 lines changed)
-Update graduation_rank references. Update context building.
-
-### Phase 9: v3.html (~5 lines changed)
-Update grad_rank color mapping.
-
-### Phase 10: Smoke Test
-- Hit poll endpoint on a live game, verify compound confirmation fires
-- Check alert INSERT has correct field values
-- Verify learning agent handles 'COMPOUND' rank
-- Check v3.html renders new snapshots correctly
-- Verify NCAAMB path is completely unaffected
+Phase 1: Dead code removal (~220 lines, 7 functions + LANE_THRESHOLDS)
+Phase 2: New compound function (~30 lines)
+Phase 3: PO firing logic (~80 lines changed)
+Phase 4: Flip PO (~30 lines)
+Phase 5: Death clearing (~10 lines)
+Phase 6: v2Ctx + alert INSERT (~20 lines)
+Phase 7: Agent prompts (~180 -> ~40 lines) — highest risk phase
+Phase 8: Post-game agent (~15 lines)
+Phase 9: v3.html (~5 lines)
+Phase 10: Smoke test
 
 ---
 
-## 7. WHAT I'M NOT SURE ABOUT
+## 7. CONFIRMED DEPENDENCIES
 
-1. **MC Cum availability at checkpoint time.** ✅ CONFIRMED. `var _mcCum` declared at line 6383, computed at line 6390, stored on `lt.mc_cum_wp` at line 6498. Checkpoint section starts at line 7065. Same function scope (`var` declaration). `_mcCum.winProb` is ctrl-relative (uses `ind.controlTeam`). No code movement needed.
-
-2. **Q2 consecutive hold persistence across polling cycles.** ✅ CONFIRMED. `lt` is saved to `games.live_tracking` JSONB at line 7913 (after checkpoint section at 7065-7370). `lt.compound_holds` will persist between polls.
-
-3. **Agent prompt regression risk.** The agent currently uses graduation rank heavily for POSITION_OPEN decisions. Switching from "A-Rank with X flips" to "Compound confirmed MC=0.85 Floor=0.72" changes the agent's decision-making context. Could lead to different SEND/SUPPRESS ratios. **→ Monitor first slate after deployment.**
+1. MC Cum available at compound check time (line 6383, checkpoints at 7065, same scope)
+2. lt persisted after compound evaluation (line 7913)
+3. classifyRank needed by NCAAMB — do NOT remove
+4. Concurrent invocation hold under-count = expected conservative behavior
 
 ---
 
 ## 8. FILES MODIFIED
 
-| File | Change Type | Lines Changed (est.) |
+| File | Change | Est. lines |
 |---|---|---|
-| `poll-live-bdl.mjs` | Major | -430, +120 (net -310) |
-| `post-game-agent.mjs` | Minor | ~15 |
-| `v3.html` | Minor | ~5 |
-| `db-api.js` | None | 0 |
+| poll-live-bdl.mjs | Major | -400, +110 (net -290) |
+| post-game-agent.mjs | Minor | ~15 |
+| v3.html | Minor | ~5 |
+| db-api.js | None | 0 |
 
-**No schema migrations. No new tables. No new env vars. No new dependencies.**
+No schema migrations. No new tables. No new env vars.
