@@ -6479,6 +6479,7 @@ export default async function(req) {
               ${_snapLT?.bwc_fired ? (_snapLT._prev_bwc_state || null) : null}, ${_snapLT?.compound_tier || null},
               ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore},
               ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbDivergence}, ${_possWindowScore}, ${_pollMC}, ${_mcCum?.winProb != null ? Math.round(_mcCum.winProb * 10000) / 10000 : null})
+            ON CONFLICT (game_id, period, clock, home_pts, away_pts) DO NOTHING
           `;
           log(`${matchup}: snapshot saved — floor:${ind.score} I1-5:${_ci[0]},${_ci[1]},${_ci[2]},${_ci[3]},${_ci[4]} tp:${snapTp?.classification||'-'} ls:${snapLs?.classification||'-'} xgb:${_xgbWinProb != null ? _xgbWinProb.toFixed(3) : '-'}`);
 
@@ -8032,6 +8033,7 @@ export default async function(req) {
                       ${lt?.bwc_fired ? (lt._prev_bwc_state || null) : null}, ${lt?.cp_peak_rank || null},
                       ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore},
                       ${_xgbWinProb != null ? Math.round(_xgbWinProb * 1000) / 1000 : null}, ${_xgbDivergence}, ${_possWindowScore}, ${_pollMC}, ${_mcCum?.winProb != null ? Math.round(_mcCum.winProb * 10000) / 10000 : null})
+                    ON CONFLICT (game_id, period, clock, home_pts, away_pts) DO NOTHING
                   `;
                   log(`${matchup}: ${t.label} CAL snapshot saved — floor ${ind.controlTeam} ${ind.score} | sust:${leadSust || '?'} class:${leadClass || '?'} | WP:${espnWP?.home || '?'}% | spd:${spreadVal != null ? spreadVal : 'N/A'}`);
                 } catch (e) {

@@ -124,6 +124,13 @@ exports.handler = async (event) => {
 
       await sql`CREATE INDEX IF NOT EXISTS idx_snapshots_game ON snapshots(game_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_snapshots_period ON snapshots(period)`;
+
+      // Snapshot dedup — remove concurrent cron duplicates, then add unique index
+      try {
+        await sql`DELETE FROM snapshots a USING snapshots b WHERE a.id > b.id AND a.game_id = b.game_id AND a.period = b.period AND a.clock = b.clock AND a.home_pts = b.home_pts AND a.away_pts = b.away_pts`;
+        await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshots_dedup ON snapshots(game_id, period, clock, home_pts, away_pts)`;
+      } catch(e) { console.log('Snapshot dedup index:', e.message); }
+
       await sql`CREATE INDEX IF NOT EXISTS idx_analyses_game ON analyses(game_id)`;
 
       // Migrations — add columns if they don't exist (safe to re-run)
