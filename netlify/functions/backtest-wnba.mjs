@@ -2498,6 +2498,172 @@ async function reportReconstructionValidation(sql) {
   };
 }
 
+// ── EXPORT CHECKPOINT XGB — production-faithful 2Q window features ───────────
+// Reconstructs box scores from PBP at 2.5-min checkpoints.
+// Computes cumulative AND 2Q windowed features at each checkpoint (ctrl-relative).
+// Window = current cumulative - cumulative from N checkpoints back.
+// Batched: ?offset=0&limit=50 (default all)
+async function exportCheckpointXGB(sql, url) {
+  const offset = parseInt(url.searchParams.get('offset') || '0');
+  const limit = parseInt(url.searchParams.get('limit') || '999');
+
+  const games = await sql`
+    SELECT game_id, bdl_pbp, home_alias, away_alias, winner, margin, ctrl_team_won,
+           sr_summary
+    FROM wnba_backtest
+    WHERE bdl_pbp IS NOT NULL AND bdl_pbp != '[]'::jsonb AND winner IS NOT NULL
+    ORDER BY game_id
+    OFFSET ${offset} LIMIT ${limit}
+  `;
+
+  if (games.length === 0) return { error: 'No games with PBP data', offset, limit };
+
+  const rows = [];
+  let gamesProcessed = 0;
+
+  for (const g of games) {
+    const snaps = reconstructCheckpoints(g.bdl_pbp, g.home_alias, g.away_alias);
+    if (!snaps || snaps.length < 4) continue;
+
+    // Determine ctrl team from final checkpoint
+    const lastSnap = snaps[snaps.length - 1];
+    const finalInd = computeAtCheckpoint(lastSnap, g.home_alias, g.away_alias);
+    if (!finalInd) continue;
+    const ctrlTeam = finalInd.controlTeam;
+    const ctrlIsHome = ctrlTeam === g.home_alias;
+    const ctrlWon = g.ctrl_team_won;
+
+    for (let i = 0; i < snaps.length; i++) {
+      const s = snaps[i];
+      const cp = s.cp;
+
+      // Ctrl-relative raw stats (cumulative)
+      const cH = ctrlIsHome ? s.home : s.away;
+      const cA = ctrlIsHome ? s.away : s.home;
+
+      // 2Q window: subtract checkpoint from 8 positions back (20 min)
+      // 1Q window: subtract checkpoint from 4 positions back (10 min)
+      const lookback2Q = i >= 8 ? snaps[i - 8] : null;
+      const lookback1Q = i >= 4 ? snaps[i - 4] : null;
+
+      const safePct = (m, a) => a > 0 ? m / a : 0;
+
+      // Feature extractor: given ctrl and opp stats objects, compute feature dict
+      const extractFeatures = (ctrl, opp, prefix) => {
+        const cFGA = ctrl.fga || 1, oFGA = opp.fga || 1;
+        return {
+          [`${prefix}pot`]: ctrl.pot - opp.pot,
+          [`${prefix}to`]: ctrl.tov - opp.tov,
+          [`${prefix}stl`]: ctrl.stl - opp.stl,
+          [`${prefix}blk`]: ctrl.blk - opp.blk,
+          [`${prefix}oreb`]: ctrl.oreb - opp.oreb,
+          [`${prefix}dreb`]: ctrl.dreb - opp.dreb,
+          [`${prefix}ast`]: ctrl.ast - opp.ast,
+          [`${prefix}fta`]: ctrl.fta - opp.fta,
+          [`${prefix}ftm`]: ctrl.ftm - opp.ftm,
+          [`${prefix}efg`]: safePct(ctrl.fgm + 0.5 * ctrl.fg3m, cFGA)
+                          - safePct(opp.fgm + 0.5 * opp.fg3m, oFGA),
+          [`${prefix}3pr`]: safePct(ctrl.fg3m, ctrl.fg3a || 1)
+                          - safePct(opp.fg3m, opp.fg3a || 1),
+          [`${prefix}3pa`]: ctrl.fg3a - opp.fg3a,
+          [`${prefix}3pm`]: ctrl.fg3m - opp.fg3m,
+          [`${prefix}2pr`]: safePct(ctrl.fgm - ctrl.fg3m, (ctrl.fga - ctrl.fg3a) || 1)
+                          - safePct(opp.fgm - opp.fg3m, (opp.fga - opp.fg3a) || 1),
+          [`${prefix}pf`]: ctrl.pf - opp.pf,
+          [`${prefix}disruption`]: (ctrl.stl + ctrl.blk) - (opp.stl + opp.blk),
+          [`${prefix}to_ratio`]: safePct(ctrl.stl, ctrl.tov || 1) - safePct(opp.stl, opp.tov || 1),
+          [`${prefix}ast_ratio`]: safePct(ctrl.ast, ctrl.fgm || 1) - safePct(opp.ast, opp.fgm || 1),
+        };
+      };
+
+      // Diff two stat objects for windowed features
+      const diffStats = (curr, prev) => {
+        const cCtrl = ctrlIsHome ? curr.home : curr.away;
+        const cOpp = ctrlIsHome ? curr.away : curr.home;
+        const pCtrl = ctrlIsHome ? prev.home : prev.away;
+        const pOpp = ctrlIsHome ? prev.away : prev.home;
+        const d = (obj, field) => (obj[field] || 0);
+        const wCtrl = {}, wOpp = {};
+        for (const f of ['fgm','fga','fg3m','fg3a','ftm','fta','oreb','dreb','ast','stl','blk','tov','pf','pot']) {
+          wCtrl[f] = d(cCtrl, f) - d(pCtrl, f);
+          wOpp[f] = d(cOpp, f) - d(pOpp, f);
+        }
+        return { ctrl: wCtrl, opp: wOpp };
+      };
+
+      // Cumulative features
+      const cumFeats = extractFeatures(cH, cA, 'c_');
+      cumFeats.c_biglead = (cH.biggest_lead || 0) - (cA.biggest_lead || 0);
+
+      // 2Q window features
+      let w2q = {};
+      if (lookback2Q) {
+        const { ctrl, opp } = diffStats(s, lookback2Q);
+        w2q = extractFeatures(ctrl, opp, 'w2q_');
+      }
+
+      // 1Q window features
+      let w1q = {};
+      if (lookback1Q) {
+        const { ctrl, opp } = diffStats(s, lookback1Q);
+        w1q = extractFeatures(ctrl, opp, 'w1q_');
+      }
+
+      const ctrlScore = ctrlIsHome ? s.homeScore : s.awayScore;
+      const oppScore = ctrlIsHome ? s.awayScore : s.homeScore;
+
+      rows.push({
+        game_id: g.game_id, cp_label: cp.label, period: cp.period, game_sec: cp.gameSec,
+        ctrl_team: ctrlTeam, ctrl_is_home: ctrlIsHome,
+        margin: ctrlScore - oppScore,
+        ctrl_won: ctrlWon ? 1 : 0,
+        ...cumFeats, ...w2q, ...w1q,
+      });
+    }
+    gamesProcessed++;
+  }
+
+  // AUC per feature — only compute for rows with enough data
+  const featureKeys = Object.keys(rows[0] || {}).filter(k =>
+    k.startsWith('c_') || k.startsWith('w2q_') || k.startsWith('w1q_'));
+
+  const aucTable = {};
+  const periodLabels = ['Q2', 'Q3', 'Q4'];
+
+  for (const fk of featureKeys) {
+    aucTable[fk] = {};
+    for (const q of [2, 3, 4]) {
+      const qRows = rows.filter(r => r.period === q && r[fk] !== undefined && r[fk] !== null && !isNaN(r[fk]));
+      if (qRows.length < 15) { aucTable[fk][`Q${q}`] = null; continue; }
+      const wins = qRows.filter(r => r.ctrl_won === 1).map(r => r[fk]);
+      const losses = qRows.filter(r => r.ctrl_won === 0).map(r => r[fk]);
+      if (wins.length === 0 || losses.length === 0) { aucTable[fk][`Q${q}`] = null; continue; }
+      let conc = 0, disc = 0, tied = 0;
+      for (const w of wins) for (const l of losses) {
+        if (w > l) conc++; else if (w < l) disc++; else tied++;
+      }
+      const total = conc + disc + tied;
+      aucTable[fk][`Q${q}`] = total > 0 ? Math.round((conc + 0.5 * tied) / total * 1000) / 1000 : 0.5;
+    }
+  }
+
+  const ranked = featureKeys
+    .map(fk => ({ feature: fk, ...aucTable[fk] }))
+    .filter(f => f.Q4 !== null)
+    .sort((a, b) => (b.Q4 || 0) - (a.Q4 || 0));
+
+  return {
+    gamesProcessed, totalRows: rows.length,
+    checkpointsPerGame: rows.length / (gamesProcessed || 1),
+    featureAUC_ranked: ranked.slice(0, 40),
+    topCumulative: ranked.filter(f => f.feature.startsWith('c_')).slice(0, 15),
+    topWindow2Q: ranked.filter(f => f.feature.startsWith('w2q_')).slice(0, 15),
+    topWindow1Q: ranked.filter(f => f.feature.startsWith('w1q_')).slice(0, 15),
+    rows,
+    methodology: '2.5-min checkpoints from PBP reconstruction. c_=cumulative, w2q_=2Q window (20min lookback), w1q_=1Q window (10min lookback). All ctrl-relative. No biglead in windowed features. AUC via Mann-Whitney.',
+  };
+}
+
 // ── EXPORT XGB DISCOVER ─────────────────────────────────────────────────────
 // Extracts wide feature set at each quarter boundary for XGB feature discovery.
 // All features ctrl-relative. Both cumulative and windowed (current Q only).
@@ -2746,6 +2912,7 @@ export default async (req) => {
       case 'report_cp_close':   result = await reportCPClose(sql); break;
       case 'report_validate_reconstruction': result = await reportReconstructionValidation(sql); break;
       case 'export_xgb_discover': result = await exportXGBDiscover(sql); break;
+      case 'export_checkpoint_xgb': result = await exportCheckpointXGB(sql, url); break;
       default:
         result = { error: `Unknown phase: ${phase}. Phases: init, collect, sample, compute, report, explore, collect_pbp, compute_checkpoints, report_cp_journey, report_cp_graduation, report_cp_trailing, report_cp_stability, report_cp_close` };
     }
