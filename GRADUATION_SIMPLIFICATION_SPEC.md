@@ -1,7 +1,7 @@
-# GRADUATION SIMPLIFICATION SPEC v3
-## Compound threshold graduation + EXIT compound (MC Cum + Windowed XGB)
+# GRADUATION SIMPLIFICATION SPEC v4
+## Compound threshold position confirmation + EXIT compound (MC Cum + Windowed XGB)
 
-**Date:** May 6, 2026 (v3 — EXIT compound added, position monitoring closed)
+**Date:** May 7, 2026 (v4 — full prompt text, corrected dead code, trajectory functions preserved)
 **Status:** SPEC — awaiting confirmation before implementation
 **Risk Level:** HIGH — touches agent prompts, PO firing, EXIT logic, alert context, learning agent
 **Backup:** backups/graduation-pre-simplification/ at commit daa0dbe
@@ -13,6 +13,7 @@
 - **Position tracking** replaces "BWC tracking." The state where the system has identified structural control but not yet confirmed a position.
 - **Position open / confirmed** = compound threshold met for 5 consecutive polls.
 - **S/A/B/C ranks are retired.** Replaced by confidence tiers: TRACKING → CONFIRMED → RECOVERING → LOCKED.
+- **Warm BUY** = BUY where position tracking has compound-confirmed the team. **Cold BUY** = no tracking context or TRACKING only.
 
 ---
 
@@ -49,7 +50,7 @@ Q3+ STANDARD CONFIRMATION:
   -> If 1+ prior flips: RECOVERING (73%)
 ```
 
-**Why 5 polls:** 5 consecutive deduped polls = ~2.5 min game clock = ~5 min wall clock. Production-validated on 48 playoff games with backfilled MC Cum (500 sims, production-equivalent). Accuracy climbs from 78.7% (1 hold) to 81.8% (5 holds) with minimal coverage loss (47->44 games).
+**Why 5 polls:** 5 consecutive deduped polls = ~2.5 min game clock = ~5 min wall clock. Production-validated on 48 playoff games with backfilled MC Cum (500 sims, production-equivalent). Accuracy climbs from 78.7% (1 hold) to 81.8% (5 holds) with minimal coverage loss (47→44 games).
 
 **Why lead>=5 in Q2:** Every Q2 game where compound fires at margin 0-4 is a loss (3/3). The margin gate filters games where Q2 MC is overconfident in close situations. Q3+ does not need a margin gate because MC calibration improves with game time.
 
@@ -60,8 +61,8 @@ Q3+ STANDARD CONFIRMATION:
 | Tier | Condition | Accuracy | Subscriber alert? |
 |---|---|---|---|
 | TRACKING | Position tracking started, compound not yet met | n/a | No — internal only |
-| CONFIRMED | 5 holds, 0 prior flips | 86% | Yes -> POSITION_OPEN |
-| RECOVERING | 5 holds, 1+ prior flips | 73% | Yes -> POSITION_OPEN (agent notes lower confidence) |
+| CONFIRMED | 5 holds, 0 prior flips | 86% | Yes → POSITION_OPEN |
+| RECOVERING | 5 holds, 1+ prior flips | 73% | Yes → POSITION_OPEN (agent notes lower confidence) |
 | LOCKED | 10+ holds, 0 prior flips | 92% | No new alert — upgrades context on subsequent alerts |
 
 CONFIRMED and RECOVERING both fire POSITION_OPEN. The difference is agent language:
@@ -92,7 +93,7 @@ New function (~30 lines). Called every poll cycle (not just at checkpoint bounda
 
 ### 2E. PO Firing Logic
 
-checkCompoundConfirmation() returns confirmed: true AND !lt.po_fired -> PO fires.
+checkCompoundConfirmation() returns confirmed: true AND !lt.po_fired → PO fires.
 
 - PO stores tier string (CONFIRMED/RECOVERING/LOCKED)
 - Suppress throttle (escalating 3/6/12 min) UNCHANGED
@@ -112,28 +113,55 @@ Opponent compound confirmation — opponent floor/MC Cum must meet compound thre
 Clears: lt.compound_holds, lt.compound_confirmed
 DELETE FROM game_checkpoints on death STAYS for PO_ACTIVE cleanup.
 
-### 2H. Agent Prompt Rules
+### 2H. v2Ctx Field Changes
 
-~180 lines graduation rules -> ~40 lines compound rules.
+**REMOVE from v2Ctx:**
+- `cpPeakRank` → replaced by `compoundTier`
+- `cpGraduation` → replaced by compound confirmation data
+- `cpOppGraduation` → opponent tracking simplified (stays as concept)
+- `lane` → lanes removed (compound thresholds are universal)
+- `cpMeanFloor` → no longer used for gates (MF trajectory stays as agent context)
+- `cpMinFloor` → no longer used for gates
+- `cpEligibleCount` → replaced by `compoundHolds`
 
-Remove all S/A/B/C rank references, MF trajectory, checkpoint counts, flip penalties, lane gates, POST-EXIT graduation validation.
+**ADD to v2Ctx:**
+- `compoundTier` — TRACKING/CONFIRMED/RECOVERING/LOCKED (string)
+- `compoundHolds` — consecutive compound hold count (int)
+- `compoundPath` — Q2_EARLY or STANDARD (string)
+- `mcCumAtConfirmation` — MC Cum when compound first confirmed (float, null if not confirmed)
+- `priorFlips` — control flips before confirmation (int)
 
-Replace with: compound state, trust hierarchy by quarter, close game note, RECOVERING context, post-EXIT re-entry (compound must re-meet, no carryover).
+**KEEP UNCHANGED:**
+- `mfTrajectory` — still computed from checkpoints (computeMFTrajectory stays)
+- `fullCPTrend` — still computed from checkpoints (computeFullCPTrend stays)
+- `floorMarginSignal` — still computed from checkpoints (computeFloorMarginSignal stays)
+- `convictionTrend` — still computed from checkpoints (computeConvictionTrend stays)
+- `cpCtrlFlips` — stays (controls flip context for agent)
+- `bwcFlipped`, `isSecondBwc`, `deadTeam`, `deadHadPO`, `deadRank` — death/flip context stays
+- `positionClosed`, `buyPosition` — stay
+- ALL erosion fields, floor reliability, XGB, SHAP, MC, conviction quality — unchanged
+- `pregameML` — stays (useful context)
 
-### 2I-2N. Other Changes
+### 2I. Alert INSERT Changes
 
-- formatSonnetPrompt: replace graduation context with compound state
-- v2Ctx: remove dead fields, add compound fields
-- Alert INSERT: graduation_rank -> tier string, cp_eligible_count -> compound_holds
-- Snapshot INSERT: grad_rank -> compound tier
+- `graduation_rank` column → store compound tier string (CONFIRMED/RECOVERING/LOCKED)
+- `cp_eligible_count` column → store compound_holds count
+- `cp_mean_floor` → store MC Cum at confirmation (or current MC Cum)
+- `cp_ctrl_flips` → store prior flips count
+
+No new columns needed — reuse existing columns with new semantics.
+
+### 2J. Other Changes
+
+- formatSonnetPrompt: replace graduation context with compound state + keep trajectory signals
 - Post-game agent: reads new tier strings, arc scoring unchanged
-- v3.html: grad_rank color mapping updated
+- v3.html: graduation rank color mapping → compound tier color mapping
 
 No schema migrations needed.
 
 ---
 
-## 3. EXIT COMPOUND (NEW — validated May 6)
+## 3. EXIT COMPOUND (validated May 6)
 
 ### 3A. Problem
 
@@ -168,18 +196,18 @@ EXIT GATE: MC Cum < 0.70
 - CLE@TOR (MC Cum 0.787 at EXIT): MC Cum anchored from strong first half
 - DET@ORL (MC Cum 0.877 at EXIT): blowout reversal, MC Cum anchored from 22-point lead
 
-Both are blowout reversals where cumulative anchoring prevents MC Cum from dropping. The PBP canary catches both of these through the investigation pipeline, so subscribers still get the MC_COLLAPSE alert — EXIT just doesn't fire.
+Both are blowout reversals where cumulative anchoring prevents MC Cum from dropping. The PBP canary catches both through the investigation pipeline — subscribers still get MC_COLLAPSE.
 
 **3 false positives (structurally correct exits):**
 - LAL@HOU (MC Cum 0.169, margin -4): genuinely losing, won in OT
 - CLE@TOR OT (MC Cum 0.487, margin 0): overtime coin flip
 - ORL@DET (MC Cum 0.715, margin 2): borderline threshold
 
-All three were structurally correct reads — the team was losing at EXIT time and recovered. Hard to call these "wrong."
+All three were structurally correct reads — the team was losing at EXIT time and recovered.
 
 ### 3D. Why PBP MC Doesn't Gate EXIT
 
-PBP MC (20-possession window) fires on 70% of both true and false exits. It's too volatile — a 20-possession run triggers it whether the shift is permanent or temporary. MC Cum is smoother and only drops below 0.70 when the structural shift has infected full-game rates.
+PBP MC (20-possession window) fires on 70% of both true and false exits. Too volatile — a 20-possession run triggers it whether the shift is permanent or temporary. MC Cum is smoother and only drops below 0.70 when the structural shift has infected full-game rates.
 
 Signal roles:
 - **Windowed XGB** = early structural decay detector (fires first, most sensitive)
@@ -191,18 +219,18 @@ Signal roles:
 
 Modify existing checkXGBExit() (~10 lines changed):
 
-1. Replace cumulative XGB input with windowed XGB (`_xgbBwcProb` computed from window features)
-2. Add MC Cum gate: `if (mcCumWinProb >= 0.70) return false;` before threshold check
-3. Pass `mcCumWinProb` as new parameter
-4. Threshold stays 0.45, confirmation stays 2-poll 90s, fast-path stays 0.15
+1. Add MC Cum gate: `if (mcCumWinProb >= 0.70) return false;` before threshold check
+2. Pass `mcCumWinProb` as new parameter
+3. Threshold stays 0.45, confirmation stays 2-poll 90s, fast-path stays 0.15
+4. Recovery stays >= 0.50 (was threshold + 0.05)
 
 Call site changes:
-- Compute windowed XGB features at EXIT check time (window already computed for snapshot XGB)
-- Pass mc_cum_win_prob (already available from always-on MC trajectory)
+- `_xgbBwcProb` already computed from windowed features (extractXGBFeatures uses window stats since windowed XGB deploy)
+- Pass mc_win_prob (already available from always-on MC trajectory)
 
 ### 3F. Infrastructure Deployed
 
-`backfill_mc_pbp` phase added to mc-backtest.mjs (commit c956442). Fetches BDL plays retroactively, builds possession log, computes PBP 20-possession windowed MC at each snapshot. Writes mc_win_prob to snapshots. All 48 playoff games backfilled (5,407 snapshots).
+`backfill_mc_pbp` phase added to mc-backtest.mjs (commit c956442). All 48 playoff games backfilled (5,407 snapshots).
 
 ---
 
@@ -211,10 +239,19 @@ Call site changes:
 | Signal | Best at | Weakness | Role |
 |---|---|---|---|
 | Windowed XGB (2Q) | Early structural decay, recency | Noisy in Q2 (only 1Q of data) | EXIT trigger, entry gates |
-| MC Cum (full game) | Sustained probability, calibration | Cumulative anchoring in blowouts | EXIT gate, confirmation |
+| MC Cum (full game) | Sustained probability, calibration | Cumulative anchoring in blowouts | EXIT gate, position confirmation |
 | PBP MC (20 poss) | Real-time collapse detection | Too volatile for gating | Investigation trigger |
-| Floor (cumulative) | Indicator decomposition, narrative | Anti-predictive in lead-change games | Agent context, not decisions |
+| Floor (cumulative) | Indicator decomposition, narrative | Anti-predictive in lead-change games | Agent context via trajectory functions |
 | XGB Cum (full game) | Stable structural read | Misses 2/10 collapses entirely | Replaced by windowed for EXIT |
+
+**Trajectory functions (checkpoint-based, KEPT for agent context):**
+
+| Function | Signal | Used by |
+|---|---|---|
+| computeMFTrajectory | RISING/FLAT/DECLINING floor trend | BUY amplifiers, PO context |
+| computeFloorMarginSignal | DIVERGING_POSITIVE/CONVERGING_DOWN | VALUE override, EXIT confirmation |
+| computeConvictionTrend | STABLE/DEGRADING/IMPROVING | VALUE, BUY scrutiny |
+| computeFullCPTrend | Unfiltered floor trajectory | Cross-check on MF trajectory |
 
 Trust hierarchy by quarter (unchanged):
 - Q2: Floor ≈ XGB > MC (MC off calibration by 10pp)
@@ -225,26 +262,227 @@ Trust hierarchy by quarter (unchanged):
 
 ## 5. DEAD CODE TO REMOVE
 
-### Functions (~220 lines — classifyRank KEPT for NCAAMB):
-- computeCheckpointFloorStats() (2483-2500)
-- computeMFTrajectory() (2502-2531)
-- computeFullCPTrend() (2533-2562)
-- computeFloorMarginSignal() (2564-2597)
-- computeConvictionTrend() (2599-2630)
-- recomputeCheckpointState() (2632-2700)
-- getLaneGates() (2701-2703)
+### Functions (~120 lines):
+- `computeCheckpointFloorStats()` (2483-2500) — eligible CP stats feeding graduation MF/minF gates
+- `recomputeCheckpointState()` (2632-2700) — graduation rank computation (S/A/B/C)
+- `getLaneGates()` (2699-2703) — lane-specific MF/minF thresholds
 
 ### Constants:
-- LANE_THRESHOLDS (2306-2311) — dead
+- `LANE_THRESHOLDS` (2308-2311) — dead
 
-### Keep:
-- GRAD_CHECKPOINTS — still drives checkpoint capture + NCAAMB
-- classifyRank — NCAAMB uses it (line ~7394)
-- lt.cp_opp_holds — flip PO tracking
+### KEEP (agent context — NOT graduation machinery):
+- `computeMFTrajectory()` (2502-2531) — floor direction signal
+- `computeFullCPTrend()` (2533-2562) — unfiltered floor trajectory
+- `computeFloorMarginSignal()` (2564-2597) — floor vs margin divergence
+- `computeConvictionTrend()` (2599-2630) — conviction stability
+- `classifyRank()` — NCAAMB uses it
+- `computeTrajectorySignals()` — XGB SHAP trajectory (uses checkpoint SHAP, independent)
+- `computeMeanErosion()` — uses poll-level floor sums, independent
+- `GRAD_CHECKPOINTS` — still drives checkpoint capture + NCAAMB
+- `lt.cp_opp_holds` — flip PO tracking
 
 ---
 
-## 6. PRODUCTION VALIDATION
+## 6. AGENT PROMPT — FULL TEXT
+
+This section contains the exact prompt text for every rule that changes. Sections marked NO CHANGE are listed for completeness but their text stays exactly as currently deployed.
+
+### 6A. Data Injection — POSITION TRACKING Section
+
+**Replaces the graduation context line at ~556-562. Trajectory signals (MF, floor-margin, conviction, full CP) stay in the POSITION HEALTH block — they still compute from checkpoints.**
+
+```javascript
+// Build position tracking context string (replaces graduation context)
+const compoundCtxStr = ctx.compoundTier === 'CONFIRMED' || ctx.compoundTier === 'RECOVERING' || ctx.compoundTier === 'LOCKED'
+  ? 'Position: ' + ctx.compoundTier + ' (' + ctx.compoundHolds + ' compound holds, ' + ctx.compoundPath + ' path)'
+    + ' | MC Cum at confirmation: ' + (ctx.mcCumAtConfirmation != null ? (ctx.mcCumAtConfirmation * 100).toFixed(1) + '%' : '?')
+    + ' | Prior flips: ' + (ctx.priorFlips || 0)
+    + ' | Control flips (game total): ' + ctx.ctrlFlips
+  : 'Pre-confirmation (' + (ctx.compoundHolds || 0) + ' compound holds toward threshold)'
+    + ' | Control flips: ' + ctx.ctrlFlips;
+```
+
+This replaces the old graduation context line. The rest of the POSITION HEALTH block stays:
+```
+POSITION HEALTH:
+Peak floor: ... | Mean floor: ... | Current: ...
+Erosion: ... (peak-anchored / mean-anchored)
+${compoundCtxStr}
+${mfTrajStr}
+${fullCPTrend context}
+${convictionTrend context}
+Consecutive holds: ...
+Position lifecycle: ...
+${positionClosed context}
+${buyPosition context}
+```
+
+### 6B. Data Injection — EXIT Severity Addition
+
+**Add to existing EXIT severity block in v2Ctx prompt:**
+```javascript
+${ctx.exitSeverity?.windowedXgb != null
+  ? 'Windowed XGB (2Q): ' + (ctx.exitSeverity.windowedXgb * 100).toFixed(1) + '% — reads recent structural data, detects decay faster than cumulative.'
+  : ''}
+${ctx.exitSeverity?.mcCumAtExit != null
+  ? 'MC Cum at EXIT: ' + (ctx.exitSeverity.mcCumAtExit * 100).toFixed(1) + '% — confirms sustained shift (gate: < 70%).'
+  : ''}
+```
+
+### 6C. Rules — TRACKING (minor wording only)
+
+```
+- TRACKING: First structural signal — the system has identified ${ctx.ctrlTeam} as structurally interesting (floor ${ctx.floor}, margin ${ctx.margin}). This is NOT a position recommendation — the subscriber learns a game is on the radar. ALWAYS SEND unless the game is clearly meaningless (garbage time, both teams eliminated, period 4 with < 2 min left). Body should explain: which team, what structural picture (indicators, floor, margin), and that we are watching for the edge to develop. Frame as: "Watching [TEAM] — [why they look structurally dominant]. Will update if this develops into a position." Keep it short — this is a heads-up, not a thesis.
+```
+
+### 6D. Rules — POSITION_OPEN (MAJOR REWRITE)
+
+```
+- POSITION_OPEN: The team has sustained compound structural signals — MC Cum ≥ 0.80 AND Floor ≥ 0.65 — for 5 consecutive polls (~2.5 minutes game clock). This is a significant structural confirmation.
+  ${ctx.compoundTier === 'CONFIRMED' && ctx.compoundPath === 'Q2_EARLY'
+    ? 'Q2 EARLY CONFIRMATION (95.5% accuracy): Compound sustained with lead ≥5 and zero prior control flips. Strongest early signal — structural dominance established before halftime with scoreboard separation. ALWAYS SEND.'
+    : ctx.compoundTier === 'CONFIRMED'
+    ? 'CONFIRMED (86% accuracy, 0 prior flips): Structural position validated. Compound signals sustained without control being contested. Standard confidence — evaluate structural stress and current indicators.'
+    : ctx.compoundTier === 'RECOVERING'
+    ? 'RECOVERING (73% accuracy, ' + (ctx.priorFlips || '1+') + ' prior flips): Position confirmed after control was contested. Structural edge recovered but game is competitive. The compound held DESPITE flip history — this was earned through challenge. Note lower baseline accuracy in body. Check: are the indicators that slipped during flips back? Is conviction trend STABLE or DEGRADING?'
+    : ctx.compoundTier === 'LOCKED'
+    ? 'LOCKED (92% accuracy, 10+ sustained holds): Highest-confidence structural read — compound signals sustained across extended evaluation. ALWAYS SEND.'
+    : ''}
+  ${ctx.isSecondBwc ? 'SECOND POSITION TEAM: ' + ctx.bwcTeam + ' took structural control away from ' + ctx.deadTeam + (ctx.deadHadPO ? ' (who had a confirmed position)' : ' (who was tracking but never confirmed)') + '. The reversal itself is evidence — ' + ctx.bwcTeam + ' earned this through merit after ' + ctx.deadTeam + ' collapsed. ALWAYS SEND.' : ''}
+  ${ctx.bwcFlipped ? 'POSITION FLIP: The system originally tracked ' + ctx.originalBwcTeam + ' but they FAILED to confirm. ' + ctx.bwcTeam + ' then confirmed ' + ctx.compoundTier + ' — taking structural control away from a previously dominant team. The floor appears modest because cumulative stats are anchored by ' + ctx.originalBwcTeam + "'s early dominance, but " + ctx.bwcTeam + " is sustaining compound signals DESPITE that headwind. ALWAYS SEND." : ''}
+  CLOSE GAME CONTEXT: Compound accuracy plateaus at 75% in close games (margin ≤ 8). This is the best close-game accuracy the system has ever produced (up from 51% at first fire, 69% with old graduation), but it is an edge, not a certainty. Communicate honestly in body.
+  ${ctx.positionClosed ? 'POST-EXIT RE-ENTRY: Position was previously closed via EXIT. Compound has RESET — these 5 holds are FRESH post-EXIT readings, not carryover. ' + (ctx.compoundPath === 'Q2_EARLY' ? 'Q2 re-entry requires lead ≥5 and 0 flips since EXIT.' : 'Standard re-entry threshold applies (MC Cum ≥ 0.80 + Floor ≥ 0.65, 5 holds).') + ' Verify via per-quarter breakdown that structural signals are genuinely post-EXIT, not cumulative anchoring. Reference the EXIT reasoning from PRIOR ALERT REASONING TRAIL — what specifically broke? Has it been fixed? If the same weaknesses persist, SUPPRESS regardless of compound confirmation.' : ''}
+  MF trajectory provides additional context:
+  - RISING MF = structural thesis building. Increases PO confidence.
+  - DECLINING MF = floor eroding despite compound holding. MC Cum is more reliable than floor here, but flag as context and check per-quarter breakdown.
+  Also check: Full CP trend (all, unfiltered) gives the trajectory including bad stretches. If MF says RISING but full CP trend says DECLINING, compound may overstate current control.
+  This IS a position recommendation. Body should reference the tracking arc (if prior TRACKING alert), explain compound confirmation, current structural picture, and frame as: "Position open on [TEAM] — structural edge confirmed." Include odds/ML if available.
+```
+
+### 6E. Rules — VALUE (minor wording only)
+
+Replace these specific phrases:
+- "graduation badge is stale anchoring from pre-EXIT dominance" → "compound confirmation is stale anchoring from pre-EXIT dominance"
+- "graduation badge may overstate current control" → "compound confirmation may overstate current control"
+
+**Rest of VALUE rule stays exactly as-is** (erosion, floor-margin signal, conviction trend, deficit depth, timing, multi-signal SUPPRESS criteria).
+
+### 6F. Rules — THESIS_ALIVE
+
+**NO CHANGE.** All references are structural (I1+I4, TP path, opponent profile).
+
+### 6G. Rules — EXIT (REWRITE)
+
+```
+- EXIT: Structural position has deteriorated. Two independent signals agree the edge is gone:
+  (1) Windowed XGB (2Q cross-fade) dropped below 0.45 — detects recent structural shifts faster than cumulative stats.
+  (2) MC Cum dropped below 0.70 — confirms the shift is sustained across full-game rates, not just a brief window.
+  ${ctx.exitSeverity?.windowedXgb != null ? 'Windowed XGB: ' + (ctx.exitSeverity.windowedXgb * 100).toFixed(1) + '% (threshold: 45%).' : ''} ${ctx.exitSeverity?.mcCumAtExit != null ? 'MC Cum: ' + (ctx.exitSeverity.mcCumAtExit * 100).toFixed(1) + '% (gate: 70%).' : ''} ${ctx.exitSeverity?.ctrlMatchesBWC === false ? 'NOTE: Structural control has ALSO flipped to ' + ctx.exitSeverity.ctrlTeam + ' — triple confirmation (XGB + MC + control flip).' : ctx.exitSeverity?.ctrlMatchesBWC === true ? 'NOTE: ' + ctx.bwcTeam + ' still holds structural control but underlying stats are deteriorating — this is the slow bleed that cumulative indicators miss.' : ''} Position state: ${ctx.exitSeverity?.bwcState || 'unknown'}.
+  The SUBSCRIBER'S POSITION is on ${ctx.bwcTeam || 'the tracked team'}. Frame the exit around the underlying stats declining. Reference the full arc from prior alerts.
+  EXIT on confirmed positions is ALWAYS SEND. Your job is the narrative — what changed in the underlying stats, whether this looks permanent or temporary, and what the subscriber should watch for.
+  Floor-margin confirmation: CONVERGING_DOWN + conviction DEGRADING = strong EXIT confirmation (genuine structural death). DIVERGING_POSITIVE (floor low but margin growing) = structural floor is stale while the team is actually winning — flag this honestly but still SEND.
+```
+
+### 6H. Rules — BWC_EDGE (minor wording)
+
+Replace: "The graduation badge does not guarantee current structural control"
+With: "Compound confirmation does not guarantee current structural control"
+
+Rest stays exactly as-is (SEND by default, RISK line, structural stress override).
+
+### 6I. Rules — POSITION_SAFE / POSITION_RECOVERING
+
+**NO CHANGE.**
+
+### 6J. Rules — BUY (lifecycle rewrite, ALL evidence preserved)
+
+**KEEP EXACTLY AS-IS (validated, drives BUY accuracy):**
+- BUY EVIDENCE block (trail depth, indicators, power pairs, opponent kills, timing)
+- I3 INVERSION finding
+- XGB BUY CALIBRATION numbers (per-quarter, per-XGB-band)
+- FLIP BUY rules
+- CANDIDATE BUY evaluation
+
+**REPLACE the BWC LIFECYCLE section with:**
+
+```
+  POSITION TRACKING CONTEXT FOR BUY DECISIONS:
+  The BUY team's relationship to position tracking determines baseline confidence:
+
+  - BUY team = tracked team with CONFIRMED/LOCKED position: "Warm BUY" — compound structural signals sustained (MC Cum ≥ 0.80 + Floor ≥ 0.65 for 5+ consecutive polls). Team trailing is the thesis working. MF trajectory tells you if the structural trend is holding.
+  - BUY team = tracked team with RECOVERING position: "Warm BUY with caution" — position confirmed after control flip, 73% baseline. Trailing could be the thesis (structural team behind on variance) OR the original instability reasserting. Check conviction trend and per-quarter breakdown.
+  - BUY team = tracked team, TRACKING only (compound not confirmed): System identified structural interest but compound signals never sustained. Lower confidence. Rely entirely on standard BUY evidence. This is a cold BUY with partial context.
+  - BUY team = original tracked team but tracking FLIPPED to opponent: Near-automatic SUPPRESS. This team LOST structural control to the opponent. You are buying against the confirmed structural direction. The team that took it away confirmed through compound and wins historically.
+  - BUY team = opponent of tracked team (not flipped): Evaluate independently. If opponent has confirmed, their structural case is strong — they earned it against the tracked team.
+  - No tracking context at all: Cold BUY — rely entirely on standard BUY evidence above.
+
+  HOW TO USE MF TRAJECTORY ON BUY DECISIONS:
+  - RISING = structural thesis is building, not fading. Trailing is more likely variance. Increases BUY confidence.
+  - FLAT = structural edge is real but not separating. Apply standard BUY scrutiny from evidence above.
+  - DECLINING = the game may have shifted since position confirmation. Extra skepticism — check if indicators that powered the position are still held.
+  - INSUFFICIENT = fewer than 2 eligible checkpoints. Rely on standard BUY evidence.
+
+  POSITION TRACKING AMPLIFIERS:
+  - CONFIRMED/LOCKED + RISING MF = highest confidence warm BUY. Sustained compound + building structural trend + trailing at plus money.
+  - RECOVERING + DECLINING MF = lowest confidence. Position contested AND structural trend fading.
+
+  DEFICIT DEPTH + POSITION TRACKING: trail 5-9 with confirmed position = structural thesis may be wrong despite compound, apply extra scrutiny regardless of trajectory. Trail 10+ with confirmed position = near-automatic SUPPRESS (the structural read was incorrect regardless of compound).
+
+  HOW TO USE CONTROL FLIPS ON BUY DECISIONS:
+
+  CONFIRMED POSITION (compound confirmed, subscriber holds position):
+  Compound confirmed after sustained structural signals. Trailing is the thesis working. Control flips provide risk context.
+  - 0 flips = strongest warm BUY. Structural thesis unchallenged — trailing is pure variance.
+  - 1-2 flips = warm BUY with caution. Note flips in RISK line. Apply standard BUY evidence.
+  - 3+ flips = extreme skepticism. Structural control REPEATEDLY contested. The compound may reflect cumulative anchoring rather than current dominance. Rely entirely on standard BUY evidence (deficit depth, indicator profile, opponent indicators). Do NOT treat compound confirmation as confidence — treat it as context only. SUPPRESS unless BUY evidence is independently strong (trail 1-4, 3+ indicators, opp 0 structural indicators).
+
+  POSITION CLOSED (EXIT was sent — thesis previously broke):
+  Compound has RESET after EXIT. What matters is whether compound has re-confirmed with FRESH holds post-EXIT.
+  - If compound re-confirmed post-EXIT: re-entry is credible — team proved it can sustain structural signals AFTER the thesis broke. Still requires evidence that the specific structural failures from the EXIT have been fixed. Reference EXIT reasoning from PRIOR ALERT REASONING TRAIL.
+  - If compound NOT re-confirmed post-EXIT: the position thesis failed and hasn't been mechanically restored. Near-automatic SUPPRESS unless BUY evidence is independently overwhelming.
+  - In BOTH cases: reference the agent's prior EXIT reasoning. What specific structural failures caused the EXIT? Have those indicators flipped back? If the same weaknesses persist, SUPPRESS regardless.
+```
+
+### 6K. Rules — STRUCTURAL STRESS CHECK
+
+```
+- STRUCTURAL STRESS CHECK: When combined read is COLLAPSING, FLIPPED, or SHIFT, the cumulative floor may be anchored from earlier-quarter dominance that has since eroded. The rolling window shows who is winning RECENT quarters.
+  For entry signals (BUY, VALUE, THESIS_ALIVE): COLLAPSING + trailing = near-automatic SUPPRESS. SHIFT = extreme skepticism.
+  For position alerts (POSITION_OPEN, BWC_EDGE, POSITION_SAFE, POSITION_RECOVERING): When the rolling window is SIGNIFICANTLY weaker than the cumulative floor, you MAY SUPPRESS or DOWNGRADE — this OVERRIDES the per-alert-type rules above. Compound confirmation does not guarantee CURRENT structural control. Evaluate whether the indicators that powered the position are still held in recent quarters using the per-quarter breakdown. If recent quarters show the opponent winning paint, disruption, or game control, the compound is stale.
+  DOWNGRADE is preferred over SUPPRESS for POSITION_OPEN (subscriber should know confirmation happened but that it is contested).
+  BWC_EDGE and POSITION_SAFE may fully SUPPRESS (these are updates to existing positions — no value in reassuring about a compromised position).
+  EXEMPT from stress override: EXIT on confirmed positions (always SEND), TRACKING (always SEND), LOCKED with 0 flips (strongest signal, sustained across 10+ polls — stress override should not touch).
+  REINFORCING (DOMINANT/STRONG combined read) = cumulative floor is trustworthy, proceed normally with per-alert-type rules.
+```
+
+### 6L. Rules — MC_COLLAPSE (minor wording)
+
+Replace: "Do not reference the dead team's floor or graduation state"
+With: "Do not reference the dead team's floor or position tracking state"
+
+### 6M. Rules — TRACKING_INVALIDATED (minor wording)
+
+Replace: "If the dead team had a graduated position, this is an implicit EXIT"
+With: "If the dead team had a confirmed position, this is an implicit EXIT"
+
+### 6N. Rules — NO CHANGE (complete list)
+
+- XGB_INVALIDATED: NO CHANGE
+- XGB REASONING: NO CHANGE
+- CONVICTION QUALITY: NO CHANGE
+- ANCHORED FLOOR CHECK: NO CHANGE
+- EARLY GAME NOTE: NO CHANGE
+- TP context interpretation: NO CHANGE
+- BODY RULES: NO CHANGE
+- FLOOR RELIABILITY: NO CHANGE
+- SIGNAL TRUST HIERARCHY: NO CHANGE
+- MC trajectory/driver context: NO CHANGE
+- CANDIDATE BUY rules: NO CHANGE
+- FLIP BUY rules: NO CHANGE
+
+---
+
+## 7. PRODUCTION VALIDATION
 
 48 NBA playoff games (Apr 19-May 5, 2026). MC Cum backfilled via backfill_mc_cum phase (500 sims, production-equivalent, commit 3d7089c). Data deduped by (period, clock) to remove concurrent invocation duplicates.
 
@@ -269,57 +507,82 @@ Trust hierarchy by quarter (unchanged):
 
 ---
 
-## 7. CASCADING IMPLICATIONS
+## 8. CASCADING IMPLICATIONS
 
 - Learning agent: LOW risk. Scores on terminal outcome, not tier.
 - Subscriber copy: MEDIUM risk. Agent generates all copy, prompt rewrite handles this.
-- Position monitoring (LOCK/EDGE/VALUE): CLOSED. No separate alert layer — MC Cum injected into agent narrative.
-- XGB EXIT: IN SCOPE. Windowed XGB replaces cumulative, MC Cum gate added.
-- PBP MC canary: NONE. Independent system. Investigation pipeline unchanged.
-- BUY system: LOW. Context fields change, logic unchanged.
+- Position monitoring (LOCK/EDGE/VALUE): CLOSED. No separate alert layer.
+- XGB EXIT: IN SCOPE. MC Cum gate added.
+- PBP MC canary: NONE. Independent system.
+- BUY system: LOW. Lifecycle context fields change, all BUY evidence and decision criteria unchanged.
 - NCAAMB: NONE. Separate code path, classifyRank preserved.
+- Trajectory functions: NONE. All 4 preserved — they read checkpoints (still captured) and produce agent context (still needed).
 
 ---
 
-## 8. IMPLEMENTATION PLAN
+## 9. IMPLEMENTATION PLAN
 
-**Graduation (Phases 1-10):**
-Phase 1: Dead code removal (~220 lines, 7 functions + LANE_THRESHOLDS)
-Phase 2: New compound function (~30 lines)
-Phase 3: PO firing logic (~80 lines changed)
-Phase 4: Flip PO (~30 lines)
-Phase 5: Death clearing (~10 lines)
-Phase 6: v2Ctx + alert INSERT (~20 lines)
-Phase 7: Agent prompts (~180 -> ~40 lines) — highest risk phase
-Phase 8: Post-game agent (~15 lines)
-Phase 9: v3.html (~5 lines)
-Phase 10: Smoke test
+**Graduation (Phases 1-11):**
+Phase 1: Dead code removal (~120 lines: 3 functions + LANE_THRESHOLDS)
+Phase 2: New checkCompoundConfirmation() function (~30 lines)
+Phase 3: PO firing logic — replace rank/gate evaluation with compound confirmation (~80 lines changed)
+Phase 4: Flip PO — opponent compound tracking (~30 lines)
+Phase 5: Death clearing — clear compound_holds, compound_confirmed (~10 lines)
+Phase 6: v2Ctx — remove graduation fields, add compound fields (~20 lines)
+Phase 7: Agent prompt — POSITION_OPEN, BUY lifecycle, EXIT, stress check (~180 lines replaced with ~100 lines) — HIGHEST RISK
+Phase 8: formatSonnetPrompt — graduation context → compound context (~15 lines)
+Phase 9: Post-game agent — read tier strings (~15 lines)
+Phase 10: v3.html — compound tier color mapping (~5 lines)
+Phase 11: Smoke test
 
-**EXIT Compound (Phases 11-14):**
-Phase 11: checkXGBExit() — add MC Cum gate, switch to windowed XGB input (~10 lines changed)
-Phase 12: EXIT call site — compute windowed features for EXIT check (~15 lines)
-Phase 13: Agent prompt EXIT rules — add MC Cum context to EXIT decision (~10 lines)
-Phase 14: EXIT smoke test on live game
+**EXIT Compound (Phases 12-14):**
+Phase 12: checkXGBExit() — add MC Cum gate parameter (~10 lines changed)
+Phase 13: EXIT call site — pass mc_win_prob to checkXGBExit (~5 lines)
+Phase 14: EXIT smoke test
 
 ---
 
-## 9. CONFIRMED DEPENDENCIES
+## 10. CONFIRMED DEPENDENCIES
 
 1. MC Cum available at compound check time (line 6383, checkpoints at 7065, same scope)
 2. lt persisted after compound evaluation (line 7913)
 3. classifyRank needed by NCAAMB — do NOT remove
 4. Concurrent invocation hold under-count = expected conservative behavior
+5. Checkpoint capture loop unchanged — trajectory functions still have data source
+6. computeMeanErosion uses poll-level floor sums — independent of checkpoints/graduation
+7. Windowed XGB features already computed for snapshot — reuse for EXIT
 
 ---
 
-## 10. FILES MODIFIED
+## 11. FILES MODIFIED
 
 | File | Change | Est. lines |
 |---|---|---|
-| poll-live-bdl.mjs | Major (graduation + EXIT) | -400, +145 (net -255) |
+| poll-live-bdl.mjs | Major (graduation + EXIT) | -250, +160 (net -90) |
 | post-game-agent.mjs | Minor | ~15 |
 | v3.html | Minor | ~5 |
-| mc-backtest.mjs | backfill_mc_pbp phase (already deployed) | +367 |
 | db-api.js | None | 0 |
 
 No schema migrations. No new tables. No new env vars.
+
+---
+
+## 12. WHAT STAYS EXACTLY AS-IS (BUY accuracy protection)
+
+These prompt sections are UNCHANGED — they drive BUY accuracy and are independent of graduation:
+- All BUY EVIDENCE (trail depth, indicators, power pairs, opponent kills, timing, I3 inversion)
+- XGB BUY CALIBRATION numbers (per-quarter, per-XGB-band)
+- XGB REASONING section (SHAP interpretation, decision guidance)
+- CONVICTION QUALITY interpretation
+- MC_COLLAPSE handling (CLEAN/WAVE/NORMALIZED/FALSE_ALARM, trust hierarchy with XGB)
+- CANDIDATE BUY evaluation rules
+- FLIP BUY rules
+- ANCHORED FLOOR CHECK
+- EARLY GAME NOTE (Q1-Q2 sample size caveat)
+- TP/LS context interpretation
+- BODY RULES (plain English, lead with action)
+- FLOOR RELIABILITY (team-specific win rates)
+- SIGNAL TRUST HIERARCHY (quarter-dependent, validated on 14,440 checkpoints)
+- All MC trajectory and MC driver context
+- Floor-margin signal interpretation (DIVERGING_POSITIVE overrides, CONVERGING_DOWN confirms)
+- Conviction trend interpretation (STABLE/DEGRADING/IMPROVING)
