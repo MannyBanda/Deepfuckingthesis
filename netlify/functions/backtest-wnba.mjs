@@ -2769,6 +2769,12 @@ async function exportCheckpointXGB(sql, url) {
         game_id: g.game_id, cp_label: cp.label, period: cp.period, game_sec: cp.gameSec,
         ctrl_team: cpInd.controlTeam, ctrl_is_home: ctrlIsHome, floor: cpInd.score,
         margin: ctrlScore - oppScore, ctrl_won: ctrlWon, window_valid: windowValid ? 1 : 0,
+        home_score: s.homeScore, away_score: s.awayScore,
+        // Raw per-team cumulative stats for MC rate extraction
+        h_fgm: s.home.fgm, h_fga: s.home.fga, h_fg3m: s.home.fg3m, h_fg3a: s.home.fg3a,
+        h_ftm: s.home.ftm, h_fta: s.home.fta, h_tov: s.home.tov, h_oreb: s.home.oreb,
+        a_fgm: s.away.fgm, a_fga: s.away.fga, a_fg3m: s.away.fg3m, a_fg3a: s.away.fg3a,
+        a_ftm: s.away.ftm, a_fta: s.away.fta, a_tov: s.away.tov, a_oreb: s.away.oreb,
         ...cumFeats, ...wf,
       });
     }
