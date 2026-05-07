@@ -6577,7 +6577,7 @@ export default async function(req) {
               ${_ci[0]}, ${_ci[1]}, ${_ci[2]}, ${_ci[3]}, ${_ci[4]},
               ${'server'}, ${leadClass}, ${sustJson},
               ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
-              ${_snapLT?.bwc_fired ? (_snapLT._prev_bwc_state || null) : null}, ${_snapLT?.cp_peak_rank || null},
+              ${_snapLT?.bwc_fired ? (_snapLT._prev_bwc_state || null) : null}, ${_snapLT?.compound_tier || null},
               ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore},
               ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbDivergence}, ${_possWindowScore}, ${_pollMC}, ${_mcCum?.winProb != null ? Math.round(_mcCum.winProb * 10000) / 10000 : null})
           `;
@@ -6680,7 +6680,7 @@ export default async function(req) {
             if (lt.bwc_fired && ind.controlTeam !== lt.bwc_fired.team && ind.controlTeam !== 'Neither') {
               const _deadTeam = lt.bwc_fired.team;
               const _deadHadPO = !!lt.po_fired;
-              const _deadRank = lt.cp_peak_rank || lt.po_fired?.rank || 'C';
+              const _deadRank = lt.compound_tier || lt.cp_peak_rank || lt.po_fired?.tier || lt.po_fired?.rank || null;
               const _newCtrlTeam = ind.controlTeam;
               log(`${matchup}: ★ BWC DEATH — ${_deadTeam} lost structural control to ${_newCtrlTeam}. hadPO=${_deadHadPO} rank=${_deadRank} flips=${lt.ctrl_flips}`);
 
@@ -6711,6 +6711,16 @@ export default async function(req) {
               lt.xgb_recovery_warned = null;
               lt.position_closed = false;
               lt.position_closed_ts = null;
+              // Compound confirmation state
+              lt.compound_holds = 0;
+              lt.compound_tier = null;
+              lt.compound_confirmed = false;
+              lt.compound_path = null;
+              lt.compound_mc_at_confirm = null;
+              lt.compound_last_period = null;
+              lt.compound_last_clock = null;
+              lt.compound_opp_last_period = null;
+              lt.compound_opp_last_clock = null;
 
               // Mark as second BWC opportunity — bypasses Q3_6 gate for B-rank
               lt._is_second_bwc = true;
@@ -6723,7 +6733,7 @@ export default async function(req) {
 
               // TRACKING_INVALIDATED alert — mechanical, no agent
               const _deathPosNote = _deadHadPO
-                ? `\n${_deadTeam} had ${_deadRank}-rank position. The structural case supporting this position is gone. Consider exiting if you took this position.`
+                ? `\n${_deadTeam} had a ${(_deadRank || 'confirmed').toLowerCase()} position. The structural case supporting this position is gone. Consider exiting if you took this position.`
                 : '';
               const _deathBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\n${_deadTeam} structural edge invalidated — control shifted to ${_newCtrlTeam}. Tracking on ${_deadTeam} stopped.${_deathPosNote}`;
               try {
@@ -7183,11 +7193,11 @@ export default async function(req) {
                   ${conviction.tier}, ${conviction.combo}, ${shouldSend},
                   ${v2BwcState || lt._prev_bwc_state}, ${v2Type === 'POSITION_OPEN' ? v2Erosion.level : (typeof meanErosion !== 'undefined' && meanErosion ? meanErosion.level || v2Erosion.level : v2Erosion.level)},
                   ${v2Type === 'POSITION_OPEN' ? (v2Erosion.peakFloor ?? null) : ((typeof meanErosion !== 'undefined' && meanErosion ? meanErosion.meanFloor : null) ?? v2Erosion.peakFloor ?? null)}, ${v2ExitSev?.severity ?? null},
-                  ${lt.po_fired?.rank || null}, ${mfTraj?.direction || null},
-                  ${alertCtx?.combinedRead?.read || null}, ${lt.cp_eligible_count || null},
-                  ${lt.cp_ctrl_flips || null}, ${lt.lane || null},
+                  ${lt.po_fired?.tier || lt.compound_tier || null}, ${mfTraj?.direction || null},
+                  ${alertCtx?.combinedRead?.read || null}, ${lt.compound_holds || null},
+                  ${lt.cp_ctrl_flips || null}, ${null},
                   ${lt.position_closed || false}, ${!!(v2IsBuy && lt._flipBuyContext)},
-                  ${lt.cp_mean_floor || null}, ${v2Type === 'EXIT' ? (lt.bwc_fired?.team || ind.controlTeam) : ind.controlTeam},
+                  ${lt.compound_mc_at_confirm || null}, ${v2Type === 'EXIT' ? (lt.bwc_fired?.team || ind.controlTeam) : ind.controlTeam},
                   ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
               } catch (e) { log(`${matchup}: v2 alert save failed: ${e.message}`); }
 
