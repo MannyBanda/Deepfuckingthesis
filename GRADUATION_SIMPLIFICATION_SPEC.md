@@ -85,7 +85,8 @@ The agent prompt must communicate this honestly. Close-game compound is a 75% ed
 New function (~30 lines). Called every poll cycle (not just at checkpoint boundaries).
 
 - Tracks lt.compound_holds (consecutive poll count above threshold)
-- Resets to 0 when compound threshold is not met
+- **STALE POLL GUARD:** Only counts a hold when game clock has advanced since the last counted hold. Stores `lt.compound_last_period` and `lt.compound_last_clock`. If current (period, clock) matches stored values, skip — do not increment or reset. This prevents hold inflation during timeouts, halftime, quarter transitions, and concurrent cron invocations. The 5-hold threshold was validated on deduped data (one reading per unique game-clock moment) — production must match.
+- Resets to 0 when compound threshold is not met (on a non-stale poll)
 - Resets to 0 on control flip (streak requires same team throughout)
 - Returns { confirmed, tier, holds, path }
 - Q2 path adds lead>=5 and 0-flip requirements
@@ -110,7 +111,7 @@ Opponent compound confirmation — opponent floor/MC Cum must meet compound thre
 
 ### 2G. Death Clearing
 
-Clears: lt.compound_holds, lt.compound_confirmed
+Clears: lt.compound_holds, lt.compound_confirmed, lt.compound_last_period, lt.compound_last_clock
 DELETE FROM game_checkpoints on death STAYS for PO_ACTIVE cleanup.
 
 ### 2H. v2Ctx Field Changes
@@ -610,9 +611,10 @@ Phase 15: EXIT smoke test
 2. lt persisted after compound evaluation (line 7913)
 3. classifyRank needed by NCAAMB — do NOT remove
 4. Concurrent invocation hold under-count = expected conservative behavior
-5. Checkpoint capture loop unchanged — trajectory functions still have data source
-6. computeMeanErosion uses poll-level floor sums — independent of checkpoints/graduation
-7. Windowed XGB features already computed for snapshot — reuse for EXIT
+5. Stale poll guard: compound_last_period + compound_last_clock prevent hold inflation during timeouts/halftime/quarter transitions
+6. Checkpoint capture loop unchanged — trajectory functions still have data source
+7. computeMeanErosion uses poll-level floor sums — independent of checkpoints/graduation
+8. Windowed XGB features already computed for snapshot — reuse for EXIT
 
 ---
 
