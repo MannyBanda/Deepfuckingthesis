@@ -568,12 +568,16 @@ ${ctx.fullCPTrend && ctx.fullCPTrend.direction !== 'INSUFFICIENT' ? 'CP trend (a
 Consecutive holds: ${ctx.consecutiveHolds}
 BWC lifecycle: ${ctx.bwcState}${ctx.bwcFirePeriod ? ' (BWC fired Q' + ctx.bwcFirePeriod + ', floor ' + (ctx.bwcFireFloor != null ? Number(ctx.bwcFireFloor).toFixed(2) : '?') + ')' : ''}
 ${ctx.positionClosed ? 'POSITION STATE: CLOSED — an EXIT was previously SENT. The subscriber was told to exit this position. Any SEND decision on a recovery alert (POSITION_OPEN, POSITION_SAFE, POSITION_RECOVERING, THESIS_ALIVE) will RE-OPEN the position. This requires ELEVATED SCRUTINY — the thesis previously failed. See POST-EXIT RE-ENTRY rules on each alert type below.' : ''}
-${ctx.buyPosition ? 'ACTIVE BUY POSITION: ' + ctx.buyPosition.team + ' entered at Q' + ctx.buyPosition.period + ' ' + (ctx.buyPosition.clock || '') + ' (' + (ctx.buyPosition.warm ? 'WARM — BWC lifecycle active, checkpoint data supports thesis' : 'COLD — spot read, no lifecycle context') + '). XGB at entry: ' + (ctx.buyPosition.xgb != null ? (ctx.buyPosition.xgb * 100).toFixed(0) + '%' : '?') + '. BUY positions exit via XGB INVALIDATED, NOT V2 EXIT. If this team graduates through checkpoints, PO fires independently as confirmation.' : ''}
-${ctx.cpGraduation 
-  ? 'Graduation: ' + ctx.cpPeakRank + '-Rank (graduated @ ' + ctx.cpGraduation.cp_label + ', floor was ' + Number(ctx.cpGraduation.floor).toFixed(2) + ') | ' + mfTrajStr + ' | MF=' + (ctx.cpMeanFloor?.toFixed(3) || '?') + ' minF=' + (ctx.cpMinFloor?.toFixed(2) || '?') + ' (' + ctx.cpEligibleCount + ' eligible CPs)'
-    + (ctx.cpOppGraduation ? ' | OPPONENT ALSO GRADUATED ' + ctx.cpOppGraduation.rank + '-Rank @ ' + ctx.cpOppGraduation.cp_label : '')
-  : 'Pre-graduation (' + (ctx.cpEligibleCount || 0) + ' eligible CPs, MF=' + (ctx.cpMeanFloor?.toFixed(3) || '?') + ' ' + mfTrajStr + ')'
-} | Lane: ${ctx.lane || 'unknown'} (pregame ML ${ctx.pregameML || '?'}) | CP flips: ${ctx.cpCtrlFlips} | Control flips (game total): ${ctx.ctrlFlips}
+${ctx.buyPosition ? 'ACTIVE BUY POSITION: ' + ctx.buyPosition.team + ' entered at Q' + ctx.buyPosition.period + ' ' + (ctx.buyPosition.clock || '') + ' (' + (ctx.buyPosition.warm ? 'WARM — position tracking active, compound signals support thesis' : 'COLD — spot read, no tracking context') + '). XGB at entry: ' + (ctx.buyPosition.xgb != null ? (ctx.buyPosition.xgb * 100).toFixed(0) + '%' : '?') + '. BUY positions exit via XGB INVALIDATED, NOT V2 EXIT. If this team confirms through compound threshold, PO fires independently as confirmation.' : ''}
+${ctx.compoundTier === 'CONFIRMED' || ctx.compoundTier === 'RECOVERING' || ctx.compoundTier === 'LOCKED'
+  ? 'Position: ' + ctx.compoundTier + ' (' + ctx.compoundHolds + ' compound holds, ' + ctx.compoundPath + ' path)'
+    + ' | MC Cum at confirmation: ' + (ctx.mcCumAtConfirmation != null ? (ctx.mcCumAtConfirmation * 100).toFixed(1) + '%' : '?')
+    + ' | Prior flips: ' + (ctx.priorFlips || 0)
+    + ' | Control flips (game total): ' + ctx.ctrlFlips
+  : 'Pre-confirmation (' + (ctx.compoundHolds || 0) + ' compound holds toward threshold)'
+    + ' | Control flips: ' + ctx.ctrlFlips
+}
+${mfTrajStr}
 
 ${stress}
 STRUCTURE-SCORE RELATIONSHIP:
@@ -637,21 +641,26 @@ PRIOR ALERT REASONING TRAIL:
 ${ctx.priorAlertTrail || 'None'}
 
 RULES:
-- TRACKING: First structural signal — the system just identified ${ctx.ctrlTeam} as structurally interesting (3 consecutive holds, floor ${ctx.floor}, margin ${ctx.margin}). This is NOT a position recommendation — the subscriber learns a game is on the radar. ALWAYS SEND unless the game is clearly meaningless (garbage time, both teams eliminated, period 4 with < 2 min left). Body should explain: which team, what structural picture (indicators, floor, margin), and that we are watching for the edge to develop. Frame as: "Watching [TEAM] — [why they look structurally dominant]. Will update if this develops into a position." Keep it short — this is a heads-up, not a thesis.
-- POSITION_OPEN: The team has GRADUATED through the checkpoint system — sustained structural rank confirmed across multiple 3-minute evaluation windows.
-  ${ctx.isSecondBwc ? 'SECOND BWC: ' + ctx.bwcTeam + ' took structural control away from ' + ctx.deadTeam + (ctx.deadHadPO ? ' (who had ' + ctx.deadRank + '-rank position)' : ' (who had TRACKING but never graduated)') + '. Second-to-graduate wins 78.2% historically (B-rank flips, n=257). The Q3_6 timing gate was bypassed because the reversal itself is the evidence — ' + ctx.bwcTeam + ' earned this through merit after ' + ctx.deadTeam + ' collapsed. ALWAYS SEND.'
-  : ctx.bwcFlipped ? 'BWC FLIP: The system originally tracked ' + ctx.originalBwcTeam + ' but they FAILED to graduate (peak C). ' + ctx.bwcTeam + ' then graduated ' + ctx.poRank + '-Rank — taking structural control away from a previously dominant team. This is one of the strongest signals in the system (74-86% win rate). The floor appears modest because cumulative stats are anchored by ' + ctx.originalBwcTeam + "'s early dominance, but " + ctx.bwcTeam + " is holding control DESPITE that headwind. ALWAYS SEND."
-  : ctx.poRank === 'A' && ctx.cpCtrlFlips === 0 ? 'A-Rank WIRE-TO-WIRE (85.6%): Zero checkpoint-level control flips — structural dominance unchallenged. ' + mfTrajStr + ' across ' + ctx.cpEligibleCount + ' checkpoints. ALWAYS SEND.'
-  : ctx.poRank === 'A' ? 'A-Rank: Sustained DOMINANT conviction with lead 8+. ' + mfTrajStr + ' across ' + ctx.cpEligibleCount + ' checkpoints. CP flips: ' + ctx.cpCtrlFlips + (ctx.cpCtrlFlips >= 2 ? ' (multiple flips — A-with-flips is 58.5% in competitive games. Apply extra scrutiny: check structural stress, per-quarter breakdown, whether indicators that powered graduation are still held.)' : '') + '.'
-  : ctx.poRank === 'B' ? 'B-Rank: Sustained DOMINANT/STRONG conviction with lead 3+. ' + mfTrajStr + ' across ' + ctx.cpEligibleCount + ' checkpoints.'
-  + (ctx.cpCtrlFlips === 0 ? ' Zero CP flips — clean structural hold. Standard evaluation.'
-   : ctx.cpCtrlFlips === 1 ? ' 1 CP flip — structural control briefly contested. Check: did the BWC team reclaim indicators that slipped? If yes, the graduation is earned through recovery. If the same indicators are still contested, the flip signals fragility.'
-   : ' ' + ctx.cpCtrlFlips + ' CP flips — structural control REPEATEDLY contested. B-rank with multiple flips is significantly weaker than B with zero flips. The graduation badge says the team held long enough to pass mechanical gates, but the flips say the opponent keeps taking control back. Apply A-with-flips level scrutiny (58.5% baseline): check structural stress, verify indicators that powered graduation are still held in recent quarters, and confirm the current checkpoint is not another temporary reclaim before the next flip. DOWNGRADE if stress is SHIFT/ERODING. SUPPRESS if stress is COLLAPSING.')
-  : ''}
-  ${!ctx.bwcFlipped ? 'Lane: ' + (ctx.lane || 'unknown') + '. ' + (ctx.lane === 'underdog' ? 'UNDERDOG graduation — market has not priced structural control. Edge is structural floor vs implied probability. ALWAYS SEND.' : ctx.lane === 'heavy_favorite' ? 'Heavy favorite — PO confirms structural read but line may offer limited edge. Frame as position confirmation, not direct entry.' : 'Evaluate edge: floor vs current ML implied probability.') : ''}
-  ${ctx.positionClosed ? 'POST-EXIT RE-ENTRY: The subscriber was told to EXIT this position earlier in the game. If you SEND this POSITION_OPEN, you are telling them to RE-ENTER — this must clear a HIGHER bar than a normal PO. The structural thesis PREVIOUSLY FAILED (that is why EXIT fired). For re-entry to be justified: (1) graduation must show RISING or FLAT MF trajectory with 3+ eligible checkpoints — the team rebuilt control over sustained evaluation windows AFTER the EXIT, (2) structural stress combined read must be REINFORCING or DOMINANT — not COLLAPSING/SHIFT/ERODING, (3) the indicators that powered the EXIT (opponent gaining I1/I2/I4) must have flipped BACK to the BWC team in the per-quarter breakdown. If ANY of these fail, SUPPRESS — the graduation badge is stale anchoring from pre-EXIT dominance, not evidence of current control. DOWNGRADE is acceptable if graduation is mechanically real but stress is mixed.' : ''}
-  Also check: CP trend (all, unfiltered) gives the full trajectory including bad stretches that eligible MF hides. If eligible MF says RISING but full CP trend says DECLINING, the graduation badge may overstate current control.
-  This IS a position recommendation. Body should reference the arc from TRACKING (if prior alert exists), explain the graduation criteria met, current structural picture, and frame as: "Position open on [TEAM] — [rank] structural edge confirmed." Include odds/ML if available.
+- TRACKING: First structural signal — the system has identified ${ctx.ctrlTeam} as structurally interesting (floor ${ctx.floor}, margin ${ctx.margin}). This is NOT a position recommendation — the subscriber learns a game is on the radar. ALWAYS SEND unless the game is clearly meaningless (garbage time, both teams eliminated, period 4 with < 2 min left). Body should explain: which team, what structural picture (indicators, floor, margin), and that we are watching for the edge to develop. Frame as: "Watching [TEAM] — [why they look structurally dominant]. Will update if this develops into a position." Keep it short — this is a heads-up, not a thesis.
+- POSITION_OPEN: The team has sustained compound structural signals — MC Cum ≥ 0.80 AND Floor ≥ 0.65 — for 5 consecutive polls (~2.5 minutes game clock). This is a significant structural confirmation.
+  ${ctx.compoundTier === 'CONFIRMED' && ctx.compoundPath === 'Q2_EARLY'
+    ? 'Q2 EARLY CONFIRMATION (95.5% accuracy): Compound sustained with lead ≥5 and zero prior control flips. Strongest early signal — structural dominance established before halftime with scoreboard separation. ALWAYS SEND.'
+    : ctx.compoundTier === 'CONFIRMED'
+    ? 'CONFIRMED (86% accuracy, 0 prior flips): Structural position validated. Compound signals sustained without control being contested. Standard confidence — evaluate structural stress and current indicators.'
+    : ctx.compoundTier === 'RECOVERING'
+    ? 'RECOVERING (73% accuracy, ' + (ctx.priorFlips || '1+') + ' prior flips): Position confirmed after control was contested. Structural edge recovered but game is competitive. The compound held DESPITE flip history — this was earned through challenge. Note lower baseline accuracy in body. Check: are the indicators that slipped during flips back? Is conviction trend STABLE or DEGRADING?'
+    : ctx.compoundTier === 'LOCKED'
+    ? 'LOCKED (92% accuracy, 10+ sustained holds): Highest-confidence structural read — compound signals sustained across extended evaluation. ALWAYS SEND.'
+    : ''}
+  ${ctx.isSecondBwc ? 'SECOND POSITION TEAM: ' + ctx.bwcTeam + ' took structural control away from ' + ctx.deadTeam + (ctx.deadHadPO ? ' (who had a confirmed position)' : ' (who was tracking but never confirmed)') + '. The reversal itself is evidence — ' + ctx.bwcTeam + ' earned this through merit after ' + ctx.deadTeam + ' collapsed. ALWAYS SEND.' : ''}
+  ${ctx.bwcFlipped ? 'POSITION FLIP: The system originally tracked ' + ctx.originalBwcTeam + ' but they FAILED to confirm. ' + ctx.bwcTeam + ' then confirmed ' + ctx.compoundTier + ' — taking structural control away from a previously dominant team. The floor appears modest because cumulative stats are anchored by ' + ctx.originalBwcTeam + "'s early dominance, but " + ctx.bwcTeam + " is sustaining compound signals DESPITE that headwind. ALWAYS SEND." : ''}
+  CLOSE GAME CONTEXT: Compound accuracy plateaus at 75% in close games (margin ≤ 8). This is the best close-game accuracy the system has ever produced (up from 51% at first fire, 69% with old graduation), but it is an edge, not a certainty. Communicate honestly in body.
+  ${ctx.positionClosed ? 'POST-EXIT RE-ENTRY: Position was previously closed via EXIT. Compound has RESET — these 5 holds are FRESH post-EXIT readings, not carryover. ' + (ctx.compoundPath === 'Q2_EARLY' ? 'Q2 re-entry requires lead ≥5 and 0 flips since EXIT.' : 'Standard re-entry threshold applies (MC Cum ≥ 0.80 + Floor ≥ 0.65, 5 holds).') + ' Verify via per-quarter breakdown that structural signals are genuinely post-EXIT, not cumulative anchoring. Reference the EXIT reasoning from PRIOR ALERT REASONING TRAIL — what specifically broke? Has it been fixed? If the same weaknesses persist, SUPPRESS regardless of compound confirmation.' : ''}
+  MF trajectory provides additional context:
+  - RISING MF = structural thesis building. Increases PO confidence.
+  - DECLINING MF = floor eroding despite compound holding. MC Cum is more reliable than floor here, but flag as context and check per-quarter breakdown.
+  Also check: Full CP trend (all, unfiltered) gives the trajectory including bad stretches. If MF says RISING but full CP trend says DECLINING, compound may overstate current control.
+  This IS a position recommendation. Body should reference the tracking arc (if prior TRACKING alert), explain compound confirmation, current structural picture, and frame as: "Position open on [TEAM] — structural edge confirmed." Include odds/ML if available.
 - VALUE: team PREVIOUSLY held a structural lead (BWC fired Q${ctx.bwcFirePeriod || '?'}) but lost it while retaining structural control. Thesis: "structural edge that built the lead is intact — dip is temporary, plus-money entry."
   EVALUATE WITH ALL SIGNALS — no single signal alone justifies suppression:
   1. Erosion (mean-anchored): STABLE/CAUTION = thesis intact. COLLAPSE = skepticism, but check signals 2-3.
@@ -661,10 +670,13 @@ RULES:
   Also verify: deficit depth (1-7 best), timing (Q2-Q3 > Q4). If prior BWC_EDGE alerts flagged a RISK, reference whether it materialized.
 - THESIS_ALIVE: BWC team regained structural control AFTER an EXIT. This is a deep-value play — floor erosion is EXPECTED and is WHY plus-money exists. DO NOT treat floor level or erosion as primary factors. Weight hierarchy: (1) WHICH indicators does the BWC team still hold? I1 Disruption + I4 Game Control = structural core retained. (2) Is opponent's edge variance-based? oppI3Won=true means opponent is shooting well, not structurally dominant — this is the thesis. (3) TP path — STRONG RECOVERY or PROBABLE = mechanical path exists. (4) Deficit depth and timing. Floor being below BWC fire floor is the ENTRY SIGNAL, not a red flag. SUPPRESS only if: BWC team lost I1+I4 (structural core gone), OR opponent has non-I3 structural indicators (I1/I2/I4), OR TP is NO PATH/UNLIKELY with < 3 min left.
 ${ctx.positionClosed ? '  POST-EXIT THESIS_ALIVE: Position is CLOSED. The subscriber was told to EXIT, and now the BWC team has clawed back to VALUE state. This is a RE-ENTRY signal — if you SEND, you are telling them to re-open the position they were told to close. Apply the standard THESIS_ALIVE criteria above (I1+I4, TP path, opponent profile) AND verify via per-quarter breakdown that the structural recovery is happening in RECENT quarters, not just cumulative anchoring. Reference the EXIT reasoning from PRIOR ALERT REASONING TRAIL — what specifically broke? Has it been fixed?' : ''}
-- EXIT: The XGB structural model for ${ctx.bwcTeam || 'the BWC team'} has dropped below the exit threshold, indicating the raw game stats no longer support the position thesis.${ctx.exitSeverity?.xgb != null ? ' XGB: ' + (ctx.exitSeverity.xgb * 100).toFixed(1) + '% (threshold: ' + (ctx.exitSeverity.threshold * 100).toFixed(0) + '%).' : ''}${ctx.exitSeverity?.ctrlMatchesBWC === false ? ' NOTE: Structural control has ALSO flipped to ' + ctx.exitSeverity.ctrlTeam + ' — double confirmation.' : ctx.exitSeverity?.ctrlMatchesBWC === true ? ' NOTE: ' + ctx.bwcTeam + ' still holds structural control but raw stats are deteriorating — this is the slow bleed the indicator floor misses.' : ''} BWC state: ${ctx.exitSeverity?.bwcState || 'unknown'}.
-  The SUBSCRIBER'S POSITION is on ${ctx.bwcTeam || 'the BWC team'}. Frame the exit around the underlying stats declining. Reference the full arc from prior alerts.
-  EXIT on graduated positions is ALWAYS SEND. Your job is the narrative — what changed in the underlying stats, whether this looks permanent or temporary, and what the subscriber should watch for.
-  Floor-margin confirmation: CONVERGING_DOWN + conviction DEGRADING = strong EXIT confirmation (genuine structural death). DIVERGING_POSITIVE (floor low but margin growing) = the structural floor is stale while the team is actually winning — flag this honestly but still SEND.
+- EXIT: Structural position has deteriorated. Two independent signals agree the edge is gone:
+  (1) Windowed XGB (2Q cross-fade) dropped below 0.45 — detects recent structural shifts faster than cumulative stats.
+  (2) MC Cum dropped below 0.70 — confirms the shift is sustained across full-game rates, not just a brief window.
+  ${ctx.exitSeverity?.windowedXgb != null ? 'Windowed XGB: ' + (ctx.exitSeverity.windowedXgb * 100).toFixed(1) + '% (threshold: 45%).' : ''} ${ctx.exitSeverity?.mcCumAtExit != null ? 'MC Cum: ' + (ctx.exitSeverity.mcCumAtExit * 100).toFixed(1) + '% (gate: 70%).' : ''} ${ctx.exitSeverity?.ctrlMatchesBWC === false ? 'NOTE: Structural control has ALSO flipped to ' + ctx.exitSeverity.ctrlTeam + ' — triple confirmation (XGB + MC + control flip).' : ctx.exitSeverity?.ctrlMatchesBWC === true ? 'NOTE: ' + ctx.bwcTeam + ' still holds structural control but underlying stats are deteriorating — this is the slow bleed that cumulative indicators miss.' : ''} Position state: ${ctx.exitSeverity?.bwcState || 'unknown'}.
+  The SUBSCRIBER'S POSITION is on ${ctx.bwcTeam || 'the tracked team'}. Frame the exit around the underlying stats declining. Reference the full arc from prior alerts.
+  EXIT on confirmed positions is ALWAYS SEND. Your job is the narrative — what changed in the underlying stats, whether this looks permanent or temporary, and what the subscriber should watch for.
+  Floor-margin confirmation: CONVERGING_DOWN + conviction DEGRADING = strong EXIT confirmation (genuine structural death). DIVERGING_POSITIVE (floor low but margin growing) = structural floor is stale while the team is actually winning — flag this honestly but still SEND.
 - BWC_EDGE: SEND by default — this is a position update for a subscriber already holding. Frame as reassurance: structural picture holding, lead compressing. Do NOT frame as a buy signal. MAY SUPPRESS if structural stress override applies (see STRUCTURAL STRESS CHECK). MUST include a RISK line at the end of the body — identify the ONE specific thing that could flip this position next (e.g., indicator about to flip, sustainability degrading, erosion approaching threshold, floor-margin DIVERGING_NEGATIVE meaning structure improving but margin shrinking). If prior alerts flagged a RISK, reference whether it materialized or not. Check conviction trend — DEGRADING conviction is a key risk to flag even if floor is stable. The RISK line creates accountability across the alert chain. Format body as: status update (2-3 sentences) + "RISK: [specific forward-looking concern]"
 - POSITION_SAFE / POSITION_RECOVERING: SEND as reassurance if prior alerts flagged risks or concerns. Include whether prior RISK materialized. SUPPRESS only if nothing changed AND no prior risk to update on. Write reasoning for compounding either way.
 ${ctx.positionClosed ? '  POST-EXIT RECOVERY: Position is CLOSED — the subscriber was told to EXIT (XGB dropped below threshold). This recovery alert fires because XGB has recovered above threshold + 0.10 for sustained evaluation. Apply elevated scrutiny: (1) structural stress combined read must be REINFORCING or DOMINANT — not COLLAPSING/SHIFT/ERODING, (2) verify in per-quarter breakdown that recent quarters show the BWC team recovering structurally, not just cumulative anchoring, (3) the XGB recovery must be supported by the underlying stats improving — check which features drove the recovery. If the BWC team is genuinely back with structural evidence AND XGB conviction, SEND — this is a strong signal (thesis broke and then repaired). If the recovery looks like a brief spike or noise, SUPPRESS. Reference the EXIT reasoning from the PRIOR ALERT REASONING TRAIL.' : ''}
@@ -676,72 +688,59 @@ ${ctx.positionClosed ? '  POST-EXIT RECOVERY: Position is CLOSED — the subscri
   OPPONENT KILLS: opp I1 (disruption) -> 28.8%. opp I2 (paint) -> 30.6%. opp I1 OR I2 -> 28.5%. These are STRUCTURAL threats. opp I3 only -> thesis intact (variance).
   TIMING: Q4 trail 5-9 = 14.8% — hard suppress. Q4 trail 1-4 = 43% — still viable.
   XGB QUARTER RULE (corrected for ctrl truly trailing): Q4 XGB<0.45 = 19% (hard suppress). Q3 XGB<0.45 = 28% (suppress). Q4 XGB 0.55-0.70 = 46%. Q3 XGB 0.55-0.70 = 54%. Q2 is near coin-flip regardless of XGB. Weight XGB most heavily in Q4 — by Q4 the windowed stats have recent structural signal.
-  CHECKPOINT GRADUATION CONTEXT (additional data for BUY evaluation — does not override BUY evidence above):
-  ${ctx.cpGraduation
-    ? 'BWC team (' + ctx.bwcTeam + ') GRADUATED ' + ctx.cpPeakRank + '-Rank @ ' + ctx.cpGraduation.cp_label + '. ' + mfTrajStr
-    : ctx.cpEligibleCount > 0
-      ? 'BWC team (' + ctx.bwcTeam + ') pre-graduation: ' + ctx.cpEligibleCount + ' eligible checkpoints. ' + mfTrajStr
-      : ctx.bwcTeam
-        ? 'BWC team (' + ctx.bwcTeam + ') tracked but no eligible checkpoints — structural interest identified but never confirmed.'
-        : 'No BWC context — cold BUY.'
-  }
-  ${ctx.cpOppGraduation ? 'Opponent graduated ' + ctx.cpOppGraduation.rank + '-Rank @ ' + ctx.cpOppGraduation.cp_label + (ctx.cpOppGraduation.cp_idx > (ctx.cpGraduation?.cp_idx ?? -1) ? ' (MORE RECENT than BWC graduation — opponent is structurally ascending)' : '') : ''}
-  ${ctx.bwcFlipped ? 'BWC FLIPPED: System originally tracked ' + ctx.originalBwcTeam + ' -> structural control transferred to ' + ctx.bwcTeam + '. Latest-to-graduate wins 84.5% historically.' : ''}
-  ${ctx.isSecondBwc ? 'SECOND BWC: ' + ctx.deadTeam + ' lost structural control. ' + ctx.bwcTeam + ' earned BWC after tracking invalidation. Second-to-graduate wins 78.2% (B-rank, n=257).' : ''}
-  
-  BWC LIFECYCLE STATUS FOR BUY DECISIONS:
-  The BUY team's relationship to the BWC lifecycle determines baseline confidence:
-  
-  - BUY team = current BWC team WITH active PO: "Warm BUY" — graduated team trailing is the thesis working. MF trajectory tells you if the structural edge is holding.
-  - BUY team = current BWC team WITHOUT PO (graduated but gates blocked): Structural edge confirmed mechanically but quality didn't meet PO gates. Moderate confidence — rely on standard BUY evidence with graduation as supporting context.
-  - BUY team = BWC team but NEVER graduated (tracked, no graduation): System identified structural interest but edge never separated. Lower confidence. Rely entirely on standard BUY evidence. MF trajectory may show INSUFFICIENT.
-  - BUY team = original BWC team but BWC was FLIPPED to opponent: Near-automatic SUPPRESS. This team LOST structural control to the opponent. You are buying against the confirmed structural direction. The team that took it away from them graduated more recently and wins 84.5% of the time.
-  - BUY team = opponent of BWC team (not flipped): Evaluate independently. If opponent has graduated, their structural case is strong — they earned it against the BWC team.
-  - No BWC context at all: Cold BUY — rely entirely on standard BUY evidence above.
-  
+  POSITION TRACKING CONTEXT FOR BUY DECISIONS:
+  The BUY team's relationship to position tracking determines baseline confidence:
+
+  - BUY team = tracked team with CONFIRMED/LOCKED position: "Warm BUY" — compound structural signals sustained (MC Cum ≥ 0.80 + Floor ≥ 0.65 for 5+ consecutive polls). Team trailing is the thesis working. MF trajectory tells you if the structural trend is holding.
+  - BUY team = tracked team with RECOVERING position: "Warm BUY with caution" — position confirmed after control flip, 73% baseline. Trailing could be the thesis (structural team behind on variance) OR the original instability reasserting. Check conviction trend and per-quarter breakdown.
+  - BUY team = tracked team, TRACKING only (compound not confirmed): System identified structural interest but compound signals never sustained. Lower confidence. Rely entirely on standard BUY evidence. This is a cold BUY with partial context.
+  - BUY team = original tracked team but tracking FLIPPED to opponent: Near-automatic SUPPRESS. This team LOST structural control to the opponent. You are buying against the confirmed structural direction. The team that took it away confirmed through compound and wins historically.
+  - BUY team = opponent of tracked team (not flipped): Evaluate independently. If opponent has confirmed, their structural case is strong — they earned it against the tracked team.
+  - No tracking context at all: Cold BUY — rely entirely on standard BUY evidence above.
+
   FLIP BUY (EXIT + opponent BUY = structural reversal):
   When FLIP BUY CONTEXT is present above, the system has confirmed the structural reversal from TWO independent directions: EXIT confirmed the original position is dead, AND BUY independently identified the new control team as structurally dominant. This is NOT counter-betting — it is the highest-conviction structural signal because both the protective system (EXIT) and the offensive system (BUY) agree.
-  
+
   SEND if: BUY team controls 2+ indicators AND at least one is I1 (disruption) or I2 (interior) — these are structural, not variance.
   SEND if: combined read = FLIPPED — the rolling window confirms the structural reversal.
   LEAN SEND if: combined read = COLLAPSING AND BUY team controls I1 or I2 — reversal in progress, structural indicators confirm direction.
   SUPPRESS if: BUY team's only advantage is I3 (shot quality) — variance on both sides, no confirmed structural reversal.
   SUPPRESS if: combined read = ERODING only — EXIT may have been premature, edge hasn't fully transferred. Wait for stronger confirmation.
   SUPPRESS if: deficit > 9 or < 1 min remaining — structural reversal confirmed but no betting window.
-  
+
   Body MUST frame as structural reversal: "STRUCTURAL FLIP — your [exitTeam] position was exited at [time] because structural control shifted to [buyTeam]. [buyTeam] now independently qualifies as a BUY — [specific indicators]. This is not a counter-bet — the system independently confirmed the structural edge reversed."
-  
+
   HOW TO USE MF TRAJECTORY ON BUY DECISIONS:
   - RISING = structural thesis is building, not fading. Trailing is more likely variance. Increases BUY confidence.
   - FLAT = structural edge is real but not separating. Apply standard BUY scrutiny from evidence above.
-  - DECLINING = the game may have shifted since graduation. The rank badge is stale. Extra skepticism — check if indicators that powered graduation are still held.
+  - DECLINING = the game may have shifted since position confirmation. Extra skepticism — check if indicators that powered the position are still held.
   - INSUFFICIENT = fewer than 2 eligible checkpoints. Rely on standard BUY evidence.
-  
-  LANE AMPLIFIERS:
-  - Underdog + RISING MF = highest confidence — market hasn't priced sustained structural control, and it's getting stronger.
-  - Heavy favorite + DECLINING MF = lowest confidence — expected dominance is fading, position may be compromised.
-  
-  DEFICIT DEPTH + GRADUATION: trail 5-9 with graduation = structural thesis may be wrong, apply extra scrutiny regardless of trajectory. Trail 10+ with graduation = near-automatic SUPPRESS (the structural read was incorrect regardless of rank).
-  
-  HOW TO USE CP FLIPS ON BUY DECISIONS:
-  
-  POSITION OPEN (agent endorsed PO — subscriber holds a position):
-  The agent already validated this graduation. Trailing is the thesis working. CP flips provide risk context.
+
+  POSITION TRACKING AMPLIFIERS:
+  - CONFIRMED/LOCKED + RISING MF = highest confidence warm BUY. Sustained compound + building structural trend + trailing at plus money.
+  - RECOVERING + DECLINING MF = lowest confidence. Position contested AND structural trend fading.
+
+  DEFICIT DEPTH + POSITION TRACKING: trail 5-9 with confirmed position = structural thesis may be wrong despite compound, apply extra scrutiny regardless of trajectory. Trail 10+ with confirmed position = near-automatic SUPPRESS (the structural read was incorrect regardless of compound).
+
+  HOW TO USE CONTROL FLIPS ON BUY DECISIONS:
+
+  CONFIRMED POSITION (compound confirmed, subscriber holds position):
+  Compound confirmed after sustained structural signals. Trailing is the thesis working. Control flips provide risk context.
   - 0 flips = strongest warm BUY. Structural thesis unchallenged — trailing is pure variance.
   - 1-2 flips = warm BUY with caution. Note flips in RISK line. Apply standard BUY evidence.
-  - 3+ flips = extreme skepticism. Structural control has been REPEATEDLY contested at the checkpoint level — this is a competitive game, not a structural mismatch. The graduation may be mechanically valid but the game is not separating. Rely entirely on standard BUY evidence (deficit depth, indicator profile, opponent indicators). Do NOT treat graduation as confidence — treat it as context only. SUPPRESS unless BUY evidence is independently strong (trail 1-4, 3+ indicators, opp 0 structural indicators).
-  
-  POSITION CLOSED (EXIT was sent — agent already rejected this thesis):
-  The thesis BROKE. The agent already said to exit and may have suppressed re-entry. Rank at original graduation does not matter — A and B exits are equally severe. What matters is the quality of re-graduation AFTER the exit.
-  - If original rank was A and team re-graduates B or A: the structural foundation was deep enough to earn A originally. Re-graduation is more credible — the team has a proven ability to sustain structural control. Still requires something fundamentally changed since the SUPPRESS reasoning.
-  - If original rank was B and team re-graduates B or A: weaker credibility. The team never fully separated structurally before the thesis broke. Re-graduation may be cumulative anchoring. Apply extreme skepticism — require clear evidence in per-quarter breakdown that recent quarters (post-EXIT) are structurally dominated by the BUY team, not just cumulative carryover.
-  - In BOTH cases: reference the agent's prior EXIT and SUPPRESS reasoning from the PRIOR ALERT REASONING TRAIL. What specific structural failures caused the EXIT? Have those specific indicators flipped back? If the same weaknesses persist, SUPPRESS regardless of re-graduation rank.
+  - 3+ flips = extreme skepticism. Structural control REPEATEDLY contested. The compound may reflect cumulative anchoring rather than current dominance. Rely entirely on standard BUY evidence (deficit depth, indicator profile, opponent indicators). Do NOT treat compound confirmation as confidence — treat it as context only. SUPPRESS unless BUY evidence is independently strong (trail 1-4, 3+ indicators, opp 0 structural indicators).
+
+  POSITION CLOSED (EXIT was sent — thesis previously broke):
+  Compound has RESET after EXIT. What matters is whether compound has re-confirmed with FRESH holds post-EXIT.
+  - If compound re-confirmed post-EXIT: re-entry is credible — team proved it can sustain structural signals AFTER the thesis broke. Still requires evidence that the specific structural failures from the EXIT have been fixed. Reference EXIT reasoning from PRIOR ALERT REASONING TRAIL.
+  - If compound NOT re-confirmed post-EXIT: the position thesis failed and hasn't been mechanically restored. Near-automatic SUPPRESS unless BUY evidence is independently overwhelming.
+  - In BOTH cases: reference the agent's prior EXIT reasoning. What specific structural failures caused the EXIT? Have those indicators flipped back? If the same weaknesses persist, SUPPRESS regardless.
 - STRUCTURAL STRESS CHECK: When combined read is COLLAPSING, FLIPPED, or SHIFT, the cumulative floor may be anchored from earlier-quarter dominance that has since eroded. The rolling window shows who is winning RECENT quarters.
   For entry signals (BUY, VALUE, THESIS_ALIVE): COLLAPSING + trailing = near-automatic SUPPRESS. SHIFT = extreme skepticism.
-  For position alerts (POSITION_OPEN, BWC_EDGE, POSITION_SAFE, POSITION_RECOVERING): When the rolling window is SIGNIFICANTLY weaker than the cumulative floor, you MAY SUPPRESS or DOWNGRADE — this OVERRIDES the per-alert-type ALWAYS SEND rules above. The graduation badge does not guarantee current structural control. Evaluate whether the indicators that powered graduation are still held in recent quarters using the per-quarter breakdown. If recent quarters show the opponent winning paint, disruption, or game control, the graduation is stale.
-  DOWNGRADE is preferred over SUPPRESS for POSITION_OPEN (subscriber should know graduation happened but that it is contested).
-  BWC_EDGE and POSITION_SAFE may fully SUPPRESS (these are updates to existing positions — no value in reassuring the subscriber about a position that is structurally compromised).
-  EXEMPT from stress override: EXIT on GRADUATED positions (always SEND), TRACKING (always SEND), A-Rank WIRE-TO-WIRE with 0 flips (strongest signal, stress override should not touch).
+  For position alerts (POSITION_OPEN, BWC_EDGE, POSITION_SAFE, POSITION_RECOVERING): When the rolling window is SIGNIFICANTLY weaker than the cumulative floor, you MAY SUPPRESS or DOWNGRADE — this OVERRIDES the per-alert-type rules above. Compound confirmation does not guarantee CURRENT structural control. Evaluate whether the indicators that powered the position are still held in recent quarters using the per-quarter breakdown. If recent quarters show the opponent winning paint, disruption, or game control, the compound is stale.
+  DOWNGRADE is preferred over SUPPRESS for POSITION_OPEN (subscriber should know confirmation happened but that it is contested).
+  BWC_EDGE and POSITION_SAFE may fully SUPPRESS (these are updates to existing positions — no value in reassuring about a compromised position).
+  EXEMPT from stress override: EXIT on confirmed positions (always SEND), TRACKING (always SEND), LOCKED with 0 flips (strongest signal, sustained across 10+ polls — stress override should not touch).
   REINFORCING (DOMINANT/STRONG combined read) = cumulative floor is trustworthy, proceed normally with per-alert-type rules.
 - XGB REASONING (use SHAP drivers to interpret floor-XGB disagreements):
   ALIGNED (within 15%): Both systems independently agree — strongest signal. Proceed with normal rules.
@@ -854,7 +853,7 @@ RULES:
   MC CLEAN/WAVE overrides combined_read — treat as COLLAPSING/SHIFT regardless. MC NORMALIZED = treat as REINFORCING.
 - MC WAVE: Oscillating collapse. 60% precision. RISK signal, not confirmed. BWC_EDGE: prominent RISK line. POSITION_SAFE: DOWNGRADE.
 - MC NORMALIZED: Rates recovered. 86-91% ctrl survives. CONFIDENCE signal. Reference as positive for POSITION_SAFE/BWC_EDGE. Argues AGAINST exit.
-- TRACKING_INVALIDATED: The previously tracked team lost structural control. BWC tracking terminated mechanically. Subsequent alerts about the new control team are FRESH evaluations — not continuations of the old thesis. Do not reference the dead team's floor or graduation state for current decisions. If the dead team had a graduated position, this is an implicit EXIT — the structural case supporting the position is gone.
+- TRACKING_INVALIDATED: The previously tracked team lost structural control. BWC tracking terminated mechanically. Subsequent alerts about the new control team are FRESH evaluations — not continuations of the old thesis. Do not reference the dead team's floor or position tracking state for current decisions. If the dead team had a confirmed position, this is an implicit EXIT — the structural case supporting the position is gone.
 - XGB_INVALIDATED: The structural model (XGBoost) that supported a prior BUY has dropped below the quarter's viability gate (Q2<0.40, Q3<0.45, Q4<0.60). ALWAYS SEND — the mechanical gate is the filter. Your job is to add narrative context: (1) what the SHAP drivers are showing NOW vs at BUY time — has interior/paint collapsed? has disruption (I1) flipped? (2) whether the XGB drop is driven by raw stat decay or game progress pressure, (3) what the current structural picture looks like (indicators, conviction, floor-margin relationship). Frame as: "The structural model no longer supports the [TEAM] BUY — [explain what changed in basketball terms]. Consider exiting if you took this position." This is an exit signal, not a veto of future entry.
 - CONVICTION QUALITY: If provided, evaluate how the XGB model arrives at its prediction. CONFIRMED scoreboard = high confidence (95% WR). NOT CONFIRMED = stats not translating to lead, elevate scrutiny. VOLATILE basis (pot/stl/oreb/to/runs dominant) = circumstantial edge, may not sustain. Multiple conviction warnings compounding = strong SUPPRESS/DOWNGRADE signal. Single warning = flag as RISK, not auto-SUPPRESS.
 - ANCHORED FLOOR CHECK: If team is TRAILING with floor 0.75+ but margin only 1-3 pts AND floor is declining from recent snapshots, the floor may be anchored from earlier dominance that has eroded. Verify recent quarters still favor control team before SEND. This rule does NOT apply to leading teams (BWC) — a high floor with a small lead is a valid structural read. When MC STRUCTURAL INVESTIGATION is active and shows CLEAN/WAVE, the floor IS anchored — MC proved it by showing post-trigger rates have deteriorated while cumulative floor remained high. Do not independently diagnose anchoring when MC has already measured it.
@@ -6674,7 +6673,7 @@ export default async function(req) {
             // ── BWC TRACKING DEATH — structural control lost ──
             // First poll where control flips away from BWC team = thesis dead.
             // Clears all BWC state, opens path for new team to earn BWC on merit.
-            // Fires regardless of graduation state — post-graduation death = implicit EXIT.
+            // Fires regardless of confirmation state — post-confirmation death = implicit EXIT.
             if (lt.bwc_fired && ind.controlTeam !== lt.bwc_fired.team && ind.controlTeam !== 'Neither') {
               const _deadTeam = lt.bwc_fired.team;
               const _deadHadPO = !!lt.po_fired;
