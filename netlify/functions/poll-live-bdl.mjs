@@ -4986,7 +4986,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       }
     } catch (e) { /* quarter_data not available */ }
 
-    // Build graduation context from live_tracking (passed as parameter — no stale DB read)
+    // Build position tracking context from live_tracking (passed as parameter — no stale DB read)
     let graduationCtx = null;
     try {
       if (lt && lt.bwc_fired) {
@@ -7063,7 +7063,7 @@ export default async function(req) {
                     lt.original_bwc_team = lt.original_bwc_team || lt.bwc_fired.team;
                     lt.bwc_fired = { team: buyTeam, period: currentPeriod, clock, floor: ind.score };
                     lt.bwc_flipped = true;
-                    // Clear stale graduation data from old team
+                    // Clear stale graduation/compound data from old team
                     lt.checkpoints = [];
                     lt.cp_graduation = null;
                     lt.cp_opp_graduation = null;
@@ -7072,6 +7072,14 @@ export default async function(req) {
                     lt.cp_min_floor = null;
                     lt.cp_eligible_count = 0;
                     lt.cp_ctrl_flips = 0;
+                    // Clear compound state (old team's confirmation doesn't apply to new team)
+                    lt.compound_holds = 0;
+                    lt.compound_tier = null;
+                    lt.compound_confirmed = false;
+                    lt.compound_path = null;
+                    lt.compound_mc_at_confirm = null;
+                    lt.compound_last_period = null;
+                    lt.compound_last_clock = null;
                     // Clear checkpoint table for this game (old team's data is stale)
                     try { await sql`DELETE FROM game_checkpoints WHERE game_id = ${game.id}`; } catch(e) {}
                     log(`${matchup}: BUY flipped BWC ${lt.original_bwc_team} → ${buyTeam}, stale graduation data cleared`);
@@ -7842,7 +7850,7 @@ export default async function(req) {
                         const _mcInvIsHome = lt.mc.ctrl_is_home;
                         const _mcInvOpp = _mcInvIsHome ? aA : hA;
                         const _mcHasPosition = lt.bwc_fired?.team === _mcInvTeam || lt.buy_position?.team === _mcInvTeam;
-                        const _mcPosNote = _mcHasPosition ? `\nActive ${lt.cp_peak_rank || '?'}-rank position on ${_mcInvTeam} — consider exit.` : '';
+                        const _mcPosNote = _mcHasPosition ? `\nActive ${lt.compound_tier || lt.cp_peak_rank || '?'} position on ${_mcInvTeam} — consider exit.` : '';
                         const _mcInvMargin = _mcInvIsHome ? (Number(ind.homePts) - Number(ind.awayPts)) : (Number(ind.awayPts) - Number(ind.homePts));
                         const _mcBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\n${_mcInvTeam} structural collapse — held control at Q${lt.mc.trigger_period} ${lt.mc.trigger_clock} but post-trigger possession rates show sustained deterioration. MC: ${(_mcInv.winProb * 100).toFixed(1)}%. Floor (${ind.score.toFixed(2)}) and XGB (${_xgbWinProb != null ? (_xgbWinProb * 100).toFixed(0) + '%' : '?'}) may be anchored to early-game data.${_mcPosNote}`;
                         const _mcPriority = _mcHasPosition ? 5 : 4;
