@@ -2498,123 +2498,268 @@ async function reportReconstructionValidation(sql) {
   };
 }
 
-// ── EXPORT CHECKPOINT XGB — production-faithful 2Q window features ───────────
-// Reconstructs box scores from PBP at 2.5-min checkpoints.
-// Computes cumulative AND 2Q windowed features at each checkpoint (ctrl-relative).
-// Window = current cumulative - cumulative from N checkpoints back.
-// Batched: ?offset=0&limit=50 (default all)
+// ── EXPORT CHECKPOINT XGB — production-faithful cross-fade window ────────────
+// Replicates NBA's computeServerWindow cross-fade methodology for WNBA:
+//   Q2: Q1(fading) + Q2(partial)
+//   Q3: Q2(anchor) + Q3(partial)
+//   Q4: Q2(fading) + Q3(anchor) + Q4(partial)
+// Per-checkpoint ctrl determination (no look-ahead bias).
+// Batched: ?offset=0&limit=25
 async function exportCheckpointXGB(sql, url) {
   const offset = parseInt(url.searchParams.get('offset') || '0');
-  const limit = parseInt(url.searchParams.get('limit') || '999');
+  const limit = parseInt(url.searchParams.get('limit') || '25');
 
   const games = await sql`
-    SELECT game_id, bdl_pbp, home_alias, away_alias, winner, margin, ctrl_team_won,
-           sr_summary
+    SELECT game_id, bdl_pbp, home_alias, away_alias, winner, margin
     FROM wnba_backtest
     WHERE bdl_pbp IS NOT NULL AND bdl_pbp != '[]'::jsonb AND winner IS NOT NULL
-    ORDER BY game_id
-    OFFSET ${offset} LIMIT ${limit}
+    ORDER BY game_id OFFSET ${offset} LIMIT ${limit}
   `;
+  if (games.length === 0) return { error: 'No games', offset, limit };
 
-  if (games.length === 0) return { error: 'No games with PBP data', offset, limit };
+  const PERIOD_MINS = 10; // WNBA quarter length
+  const STAT_FIELDS = ['fgm','fga','fg3m','fg3a','ftm','fta','oreb','dreb','ast','stl','blk','tov','pf','pot'];
+
+  // Add Q1_END to checkpoint list for boundary capture
+  const ALL_CPS = [
+    { label: 'Q1_END', period: 1, gameSec: 600 },
+    ...WNBA_CHECKPOINTS, // Q2_7.5 through Q4_2.5
+  ];
 
   const rows = [];
   let gamesProcessed = 0;
 
   for (const g of games) {
-    const snaps = reconstructCheckpoints(g.bdl_pbp, g.home_alias, g.away_alias);
-    if (!snaps || snaps.length < 4) continue;
+    // Reconstruct with Q1_END added — rerun PBP walk with extended checkpoints
+    const plays = g.bdl_pbp;
+    if (!plays || plays.length === 0) continue;
+    const sorted = plays.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
 
-    // Determine ctrl team from final checkpoint
-    const lastSnap = snaps[snaps.length - 1];
-    const finalInd = computeAtCheckpoint(lastSnap, g.home_alias, g.away_alias);
-    if (!finalInd) continue;
-    const ctrlTeam = finalInd.controlTeam;
-    const ctrlIsHome = ctrlTeam === g.home_alias;
-    const ctrlWon = g.ctrl_team_won;
+    const mk = () => ({ fgm:0, fga:0, fg3m:0, fg3a:0, ftm:0, fta:0, oreb:0, dreb:0, ast:0, stl:0, blk:0, tov:0, pf:0, pot:0 });
+    const h = mk(), a = mk();
+    let bigH = 0, bigA = 0, pendPOT = null, lastPeriod = 0;
+    const snaps = [];
+    let cpIdx = 0;
 
+    const snap = (hScore, aScore) => ({
+      cp: ALL_CPS[cpIdx],
+      home: { ...h, biggest_lead: bigH },
+      away: { ...a, biggest_lead: bigA },
+      homeScore: hScore, awayScore: aScore,
+    });
+
+    for (const ev of sorted) {
+      const period = ev.period || 1;
+      const clockSec = parseClockSec(ev.clock);
+      const gs = (period - 1) * 600 + (600 - clockSec);
+      if (period !== lastPeriod) { pendPOT = null; lastPeriod = period; }
+
+      while (cpIdx < ALL_CPS.length && gs >= ALL_CPS[cpIdx].gameSec) {
+        snaps.push(snap(ev.home_score || 0, ev.away_score || 0));
+        cpIdx++;
+      }
+
+      const tm = ev.team?.abbreviation || '';
+      if (!tm) continue;
+      const isH = tm === g.home_alias;
+      const s = isH ? h : a;
+      const type = (ev.type || '').toLowerCase();
+      const text = (ev.text || '').toLowerCase();
+
+      if (ev.home_score != null && ev.away_score != null) {
+        const mg = ev.home_score - ev.away_score;
+        if (mg > bigH) bigH = mg;
+        if (-mg > bigA) bigA = -mg;
+      }
+
+      if (type.includes('substitution') || text.includes('enters the game')) continue;
+      if (type.includes('free throw')) {
+        s.fta++;
+        if (ev.scoring_play || text.includes('makes')) { s.ftm++; if (pendPOT === tm) s.pot += 1; }
+        continue;
+      }
+      const isShotType = type.includes('shot') || type.includes('layup') || type.includes('dunk') ||
+        type.includes('hook') || type.includes('tip') || type.includes('alley') || type.includes('finger roll') ||
+        type.includes('pullup') || type.includes('driving') || type.includes('fadeaway') ||
+        type.includes('float') || type.includes('runner') || type.includes('step back') ||
+        type.includes('turnaround') || type.includes('cutting') || type.includes('putback');
+      const isMadeFG = ev.scoring_play && ev.score_value >= 2;
+      if (isShotType || isMadeFG || (text.includes('misses') && !type.includes('free throw'))) {
+        const is3 = ev.score_value === 3 || type.includes('three point') || type.includes('3-point') || type.includes('3pt');
+        s.fga++; if (is3) s.fg3a++;
+        if (isMadeFG || text.includes('makes')) {
+          s.fgm++; if (is3) s.fg3m++;
+          if (text.includes('assist')) s.ast++;
+          if (pendPOT === tm) s.pot += (is3 ? 3 : 2);
+          pendPOT = null;
+        }
+        continue;
+      }
+      if (type.includes('turnover') || type.includes('offensive foul')) { s.tov++; pendPOT = isH ? g.away_alias : g.home_alias; continue; }
+      if (type.includes('rebound')) {
+        if (type.includes('offensive') || text.includes('offensive')) s.oreb++;
+        else { s.dreb++; pendPOT = null; }
+        continue;
+      }
+      if (type.includes('steal')) { s.stl++; continue; }
+      if (type.includes('block')) { s.blk++; continue; }
+      if (type.includes('foul') && !type.includes('offensive')) { s.pf++; continue; }
+    }
+    const last = sorted[sorted.length - 1];
+    while (cpIdx < ALL_CPS.length) { snaps.push(snap(last?.home_score || 0, last?.away_score || 0)); cpIdx++; }
+
+    if (snaps.length < 4) continue;
+
+    // Identify quarter boundary snapshots (Q1_END=idx0, Q2_END, Q3_END)
+    const boundaryIdx = {};
+    for (let i = 0; i < snaps.length; i++) {
+      if (snaps[i].cp.label.endsWith('_END')) boundaryIdx[snaps[i].cp.period] = i;
+    }
+
+    // Compute per-quarter diffs
+    const qDiffs = {}; // qDiffs[q] = { home: {...}, away: {...} }
+    const diffSide = (curr, prev) => {
+      const d = {};
+      for (const f of STAT_FIELDS) d[f] = (curr[f] || 0) - (prev[f] || 0);
+      return d;
+    };
+    // Q1 diff = boundary[1] cumulative (it's from 0)
+    if (boundaryIdx[1] !== undefined) {
+      const b1 = snaps[boundaryIdx[1]];
+      qDiffs[1] = { home: { ...b1.home }, away: { ...b1.away } };
+    }
+    // Q2 diff = boundary[2] - boundary[1]
+    if (boundaryIdx[2] !== undefined && boundaryIdx[1] !== undefined) {
+      const b2 = snaps[boundaryIdx[2]], b1 = snaps[boundaryIdx[1]];
+      qDiffs[2] = { home: diffSide(b2.home, b1.home), away: diffSide(b2.away, b1.away) };
+    }
+    // Q3 diff = boundary[3] - boundary[2]
+    if (boundaryIdx[3] !== undefined && boundaryIdx[2] !== undefined) {
+      const b3 = snaps[boundaryIdx[3]], b2 = snaps[boundaryIdx[2]];
+      qDiffs[3] = { home: diffSide(b3.home, b2.home), away: diffSide(b3.away, b2.away) };
+    }
+
+    // Who won?
+    const finalSnap = snaps[snaps.length - 1];
+    const homeWon = (finalSnap.homeScore || 0) > (finalSnap.awayScore || 0);
+
+    // Process each non-boundary checkpoint (Q2+ only)
     for (let i = 0; i < snaps.length; i++) {
       const s = snaps[i];
       const cp = s.cp;
+      if (cp.period < 2) continue; // skip Q1_END
 
-      // Ctrl-relative raw stats (cumulative)
+      // Determine ctrl team AT THIS CHECKPOINT
+      const cpInd = computeAtCheckpoint(s, g.home_alias, g.away_alias);
+      if (!cpInd || cpInd.controlTeam === 'EVEN') continue;
+      const ctrlIsHome = cpInd.controlTeam === g.home_alias;
+      const ctrlWon = (ctrlIsHome && homeWon) || (!ctrlIsHome && !homeWon) ? 1 : 0;
+      const flip = ctrlIsHome ? 1 : -1;
+
+      // ── CUMULATIVE features (no biglead) ──
       const cH = ctrlIsHome ? s.home : s.away;
       const cA = ctrlIsHome ? s.away : s.home;
+      const safePct = (m, att) => att > 0 ? m / att : 0;
 
-      // 2Q window: subtract checkpoint from 8 positions back (20 min)
-      // 1Q window: subtract checkpoint from 4 positions back (10 min)
-      const lookback2Q = i >= 8 ? snaps[i - 8] : null;
-      const lookback1Q = i >= 4 ? snaps[i - 4] : null;
+      const cumFeats = {};
+      cumFeats.c_pot = (cH.pot - cA.pot);
+      cumFeats.c_to = (cH.tov - cA.tov);
+      cumFeats.c_stl = (cH.stl - cA.stl);
+      cumFeats.c_blk = (cH.blk - cA.blk);
+      cumFeats.c_oreb = (cH.oreb - cA.oreb);
+      cumFeats.c_dreb = (cH.dreb - cA.dreb);
+      cumFeats.c_ast = (cH.ast - cA.ast);
+      cumFeats.c_fta = (cH.fta - cA.fta);
+      cumFeats.c_ftm = (cH.ftm - cA.ftm);
+      cumFeats.c_efg = safePct(cH.fgm + 0.5*cH.fg3m, cH.fga||1) - safePct(cA.fgm + 0.5*cA.fg3m, cA.fga||1);
+      cumFeats.c_3pr = safePct(cH.fg3m, cH.fg3a||1) - safePct(cA.fg3m, cA.fg3a||1);
+      cumFeats.c_3pa = (cH.fg3a - cA.fg3a);
+      cumFeats.c_2pr = safePct(cH.fgm-cH.fg3m, (cH.fga-cH.fg3a)||1) - safePct(cA.fgm-cA.fg3m, (cA.fga-cA.fg3a)||1);
+      cumFeats.c_pf = (cH.pf - cA.pf);
+      cumFeats.c_disruption = (cH.stl+cH.blk) - (cA.stl+cA.blk);
+      cumFeats.c_to_ratio = safePct(cH.stl, cH.tov||1) - safePct(cA.stl, cA.tov||1);
+      cumFeats.c_ast_ratio = safePct(cH.ast, cH.fgm||1) - safePct(cA.ast, cA.fgm||1);
 
-      const safePct = (m, a) => a > 0 ? m / a : 0;
+      // ── CROSS-FADE WINDOW features ──
+      // Determine which quarter boundaries are complete
+      const lastBoundaryQ = Object.keys(boundaryIdx).map(Number).filter(n => snaps[boundaryIdx[n]].cp.gameSec <= cp.gameSec).sort((a,b) => b-a)[0] || 0;
 
-      // Feature extractor: given ctrl and opp stats objects, compute feature dict
-      const extractFeatures = (ctrl, opp, prefix) => {
-        const cFGA = ctrl.fga || 1, oFGA = opp.fga || 1;
-        return {
-          [`${prefix}pot`]: ctrl.pot - opp.pot,
-          [`${prefix}to`]: ctrl.tov - opp.tov,
-          [`${prefix}stl`]: ctrl.stl - opp.stl,
-          [`${prefix}blk`]: ctrl.blk - opp.blk,
-          [`${prefix}oreb`]: ctrl.oreb - opp.oreb,
-          [`${prefix}dreb`]: ctrl.dreb - opp.dreb,
-          [`${prefix}ast`]: ctrl.ast - opp.ast,
-          [`${prefix}fta`]: ctrl.fta - opp.fta,
-          [`${prefix}ftm`]: ctrl.ftm - opp.ftm,
-          [`${prefix}efg`]: safePct(ctrl.fgm + 0.5 * ctrl.fg3m, cFGA)
-                          - safePct(opp.fgm + 0.5 * opp.fg3m, oFGA),
-          [`${prefix}3pr`]: safePct(ctrl.fg3m, ctrl.fg3a || 1)
-                          - safePct(opp.fg3m, opp.fg3a || 1),
-          [`${prefix}3pa`]: ctrl.fg3a - opp.fg3a,
-          [`${prefix}3pm`]: ctrl.fg3m - opp.fg3m,
-          [`${prefix}2pr`]: safePct(ctrl.fgm - ctrl.fg3m, (ctrl.fga - ctrl.fg3a) || 1)
-                          - safePct(opp.fgm - opp.fg3m, (opp.fga - opp.fg3a) || 1),
-          [`${prefix}pf`]: ctrl.pf - opp.pf,
-          [`${prefix}disruption`]: (ctrl.stl + ctrl.blk) - (opp.stl + opp.blk),
-          [`${prefix}to_ratio`]: safePct(ctrl.stl, ctrl.tov || 1) - safePct(opp.stl, opp.tov || 1),
-          [`${prefix}ast_ratio`]: safePct(ctrl.ast, ctrl.fgm || 1) - safePct(opp.ast, opp.fgm || 1),
-        };
-      };
-
-      // Diff two stat objects for windowed features
-      const diffStats = (curr, prev) => {
-        const cCtrl = ctrlIsHome ? curr.home : curr.away;
-        const cOpp = ctrlIsHome ? curr.away : curr.home;
-        const pCtrl = ctrlIsHome ? prev.home : prev.away;
-        const pOpp = ctrlIsHome ? prev.away : prev.home;
-        const d = (obj, field) => (obj[field] || 0);
-        const wCtrl = {}, wOpp = {};
-        for (const f of ['fgm','fga','fg3m','fg3a','ftm','fta','oreb','dreb','ast','stl','blk','tov','pf','pot']) {
-          wCtrl[f] = d(cCtrl, f) - d(pCtrl, f);
-          wOpp[f] = d(cOpp, f) - d(pOpp, f);
+      // Partial current quarter: current cumulative - last boundary
+      const partialDiff = { home: {}, away: {} };
+      if (lastBoundaryQ > 0 && boundaryIdx[lastBoundaryQ] !== undefined) {
+        const bSnap = snaps[boundaryIdx[lastBoundaryQ]];
+        for (const f of STAT_FIELDS) {
+          partialDiff.home[f] = (s.home[f] || 0) - (bSnap.home[f] || 0);
+          partialDiff.away[f] = (s.away[f] || 0) - (bSnap.away[f] || 0);
         }
-        return { ctrl: wCtrl, opp: wOpp };
-      };
-
-      // Cumulative features
-      const cumFeats = extractFeatures(cH, cA, 'c_');
-      cumFeats.c_biglead = (cH.biggest_lead || 0) - (cA.biggest_lead || 0);
-
-      // Null-init helper for consistent keys
-      const nullFeats = (prefix) => {
-        const o = {};
-        for (const k of ['pot','to','stl','blk','oreb','dreb','ast','fta','ftm','efg','3pr','3pa','3pm','2pr','pf','disruption','to_ratio','ast_ratio'])
-          o[`${prefix}${k}`] = null;
-        return o;
-      };
-
-      // 2Q window features (20min lookback = 8 checkpoints)
-      let w2q = nullFeats('w2q_');
-      if (lookback2Q) {
-        const { ctrl, opp } = diffStats(s, lookback2Q);
-        w2q = extractFeatures(ctrl, opp, 'w2q_');
+      } else {
+        // No boundary yet — partial = cumulative
+        for (const f of STAT_FIELDS) {
+          partialDiff.home[f] = s.home[f] || 0;
+          partialDiff.away[f] = s.away[f] || 0;
+        }
       }
 
-      // 1Q window features (10min lookback = 4 checkpoints)
-      let w1q = nullFeats('w1q_');
-      if (lookback1Q) {
-        const { ctrl, opp } = diffStats(s, lookback1Q);
-        w1q = extractFeatures(ctrl, opp, 'w1q_');
+      // Clock completion for fade weight
+      const elapsedInQ = cp.gameSec - (cp.period - 1) * 600;
+      const completion = Math.max(0, Math.min(1, elapsedInQ / (PERIOD_MINS * 60)));
+
+      // Build weighted quarter array (matching production logic)
+      const windowQs = [];
+      const p = cp.period;
+      if (p === 2) {
+        if (qDiffs[1]) windowQs.push({ w: Math.max(0, 1.0 - completion), d: qDiffs[1] }); // Q1 fading
+        windowQs.push({ w: 1.0, d: partialDiff }); // Q2 partial
+      } else if (p === 3) {
+        if (qDiffs[2]) windowQs.push({ w: 1.0, d: qDiffs[2] }); // Q2 anchor
+        windowQs.push({ w: 1.0, d: partialDiff }); // Q3 partial
+      } else if (p === 4) {
+        if (qDiffs[2]) windowQs.push({ w: Math.max(0, 1.0 - completion), d: qDiffs[2] }); // Q2 fading
+        if (qDiffs[3]) windowQs.push({ w: 1.0, d: qDiffs[3] }); // Q3 anchor
+        windowQs.push({ w: 1.0, d: partialDiff }); // Q4 partial
+      }
+
+      // Aggregate with weights
+      const aggSide = (side) => {
+        const agg = {};
+        for (const f of STAT_FIELDS) {
+          let sum = 0, hasAny = false;
+          for (const wq of windowQs) {
+            const v = wq.d?.[side]?.[f];
+            if (v != null) { sum += v * wq.w; hasAny = true; }
+          }
+          agg[f] = hasAny ? sum : 0;
+        }
+        return agg;
+      };
+
+      const wHome = aggSide('home'), wAway = aggSide('away');
+      const wCtrl = ctrlIsHome ? wHome : wAway;
+      const wOpp = ctrlIsHome ? wAway : wHome;
+
+      // Check minimum volume
+      const wCtrlFGA = wCtrl.fga || 0, wOppFGA = wOpp.fga || 0;
+      const windowValid = wCtrlFGA >= 5 && wOppFGA >= 5;
+
+      const wf = {};
+      if (windowValid) {
+        wf.w_pot = wCtrl.pot - wOpp.pot;
+        wf.w_to = wCtrl.tov - wOpp.tov;
+        wf.w_stl = wCtrl.stl - wOpp.stl;
+        wf.w_blk = wCtrl.blk - wOpp.blk;
+        wf.w_oreb = wCtrl.oreb - wOpp.oreb;
+        wf.w_dreb = wCtrl.dreb - wOpp.dreb;
+        wf.w_ast = wCtrl.ast - wOpp.ast;
+        wf.w_fta = wCtrl.fta - wOpp.fta;
+        wf.w_ftm = wCtrl.ftm - wOpp.ftm;
+        wf.w_efg = safePct(wCtrl.fgm+0.5*wCtrl.fg3m, wCtrlFGA) - safePct(wOpp.fgm+0.5*wOpp.fg3m, wOppFGA);
+        wf.w_3pr = safePct(wCtrl.fg3m, wCtrl.fg3a||1) - safePct(wOpp.fg3m, wOpp.fg3a||1);
+        wf.w_3pa = wCtrl.fg3a - wOpp.fg3a;
+        wf.w_2pr = safePct(wCtrl.fgm-wCtrl.fg3m,(wCtrl.fga-wCtrl.fg3a)||1) - safePct(wOpp.fgm-wOpp.fg3m,(wOpp.fga-wOpp.fg3a)||1);
+        wf.w_pf = wCtrl.pf - wOpp.pf;
+        wf.w_disruption = (wCtrl.stl+wCtrl.blk) - (wOpp.stl+wOpp.blk);
+        wf.w_to_ratio = safePct(wCtrl.stl, wCtrl.tov||1) - safePct(wOpp.stl, wOpp.tov||1);
+        wf.w_ast_ratio = safePct(wCtrl.ast, wCtrl.fgm||1) - safePct(wOpp.ast, wOpp.fgm||1);
       }
 
       const ctrlScore = ctrlIsHome ? s.homeScore : s.awayScore;
@@ -2622,53 +2767,39 @@ async function exportCheckpointXGB(sql, url) {
 
       rows.push({
         game_id: g.game_id, cp_label: cp.label, period: cp.period, game_sec: cp.gameSec,
-        ctrl_team: ctrlTeam, ctrl_is_home: ctrlIsHome,
-        margin: ctrlScore - oppScore,
-        ctrl_won: ctrlWon ? 1 : 0,
-        ...cumFeats, ...w2q, ...w1q,
+        ctrl_team: cpInd.controlTeam, ctrl_is_home: ctrlIsHome, floor: cpInd.score,
+        margin: ctrlScore - oppScore, ctrl_won: ctrlWon, window_valid: windowValid ? 1 : 0,
+        ...cumFeats, ...wf,
       });
     }
     gamesProcessed++;
   }
 
-  // AUC per feature — only compute for rows with enough data
-  const featureKeys = Object.keys(rows[0] || {}).filter(k =>
-    k.startsWith('c_') || k.startsWith('w2q_') || k.startsWith('w1q_'));
-
+  // AUC per feature
+  const featureKeys = Object.keys(rows[0] || {}).filter(k => k.startsWith('c_') || k.startsWith('w_'));
   const aucTable = {};
-  const periodLabels = ['Q2', 'Q3', 'Q4'];
-
   for (const fk of featureKeys) {
     aucTable[fk] = {};
-    for (const q of [2, 3, 4]) {
+    for (const q of [2,3,4]) {
       const qRows = rows.filter(r => r.period === q && r[fk] !== undefined && r[fk] !== null && !isNaN(r[fk]));
       if (qRows.length < 15) { aucTable[fk][`Q${q}`] = null; continue; }
       const wins = qRows.filter(r => r.ctrl_won === 1).map(r => r[fk]);
       const losses = qRows.filter(r => r.ctrl_won === 0).map(r => r[fk]);
       if (wins.length === 0 || losses.length === 0) { aucTable[fk][`Q${q}`] = null; continue; }
       let conc = 0, disc = 0, tied = 0;
-      for (const w of wins) for (const l of losses) {
-        if (w > l) conc++; else if (w < l) disc++; else tied++;
-      }
+      for (const w of wins) for (const l of losses) { if (w > l) conc++; else if (w < l) disc++; else tied++; }
       const total = conc + disc + tied;
       aucTable[fk][`Q${q}`] = total > 0 ? Math.round((conc + 0.5 * tied) / total * 1000) / 1000 : 0.5;
     }
   }
-
-  const ranked = featureKeys
-    .map(fk => ({ feature: fk, ...aucTable[fk] }))
-    .filter(f => f.Q4 !== null)
-    .sort((a, b) => (b.Q4 || 0) - (a.Q4 || 0));
+  const ranked = featureKeys.map(fk => ({ feature: fk, ...aucTable[fk] })).filter(f => f.Q4 !== null).sort((a, b) => (b.Q4||0) - (a.Q4||0));
 
   return {
     gamesProcessed, totalRows: rows.length,
-    checkpointsPerGame: rows.length / (gamesProcessed || 1),
-    featureAUC_ranked: ranked.slice(0, 40),
-    topCumulative: ranked.filter(f => f.feature.startsWith('c_')).slice(0, 15),
-    topWindow2Q: ranked.filter(f => f.feature.startsWith('w2q_')).slice(0, 15),
-    topWindow1Q: ranked.filter(f => f.feature.startsWith('w1q_')).slice(0, 15),
+    windowValidRows: rows.filter(r => r.window_valid).length,
+    featureAUC_ranked: ranked.slice(0, 30),
     rows,
-    methodology: '2.5-min checkpoints from PBP reconstruction. c_=cumulative, w2q_=2Q window (20min lookback), w1q_=1Q window (10min lookback). All ctrl-relative. No biglead in windowed features. AUC via Mann-Whitney.',
+    methodology: 'Production-faithful cross-fade: Q2=Q1(fading)+Q2(partial), Q3=Q2(anchor)+Q3(partial), Q4=Q2(fading)+Q3(anchor)+Q4(partial). 10-min quarters. Per-checkpoint ctrl. No biglead.',
   };
 }
 
