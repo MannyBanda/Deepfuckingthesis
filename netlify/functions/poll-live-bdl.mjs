@@ -4655,21 +4655,18 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
   // Graduation / BWC lifecycle context
   if (graduationCtx) {
     const gc = graduationCtx;
-    p += `\nBWC LIFECYCLE:\n`;
-    p += `BWC team: ${gc.bwcTeam} (fired Q${gc.bwcFirePeriod}, floor ${gc.bwcFireFloor != null ? Number(gc.bwcFireFloor).toFixed(2) : '?'})`;
-    if (gc.lane) p += ` | Lane: ${gc.lane} (pregame ML ${gc.pregameML || '?'})`;
-    p += `\n`;
-    if (gc.cpGraduation) {
-      const mfStr = gc.mfTrajectory
-        ? `MF ${gc.mfTrajectory.direction} (${gc.mfTrajectory.floors.map(f => f.toFixed(2)).join(' -> ')})`
-        : 'No MF data';
-      p += `Graduation: ${gc.cpPeakRank}-Rank @ ${gc.cpGraduation.cp_label} | ${mfStr} | MF=${gc.cpMeanFloor?.toFixed(3) || '?'} | ${gc.cpEligibleCount} eligible CPs\n`;
-      if (gc.cpOppGraduation) p += `Opponent graduated: ${gc.cpOppGraduation.rank}-Rank @ ${gc.cpOppGraduation.cp_label}\n`;
+    p += `\nPOSITION TRACKING:\n`;
+    p += `Tracked team: ${gc.bwcTeam} (fired Q${gc.bwcFirePeriod}, floor ${gc.bwcFireFloor != null ? Number(gc.bwcFireFloor).toFixed(2) : '?'})\n`;
+    const mfStr = gc.mfTrajectory
+      ? `MF ${gc.mfTrajectory.direction} (${gc.mfTrajectory.floors.map(f => f.toFixed(2)).join(' -> ')})`
+      : 'No MF data';
+    if (gc.compoundTier === 'CONFIRMED' || gc.compoundTier === 'RECOVERING' || gc.compoundTier === 'LOCKED') {
+      p += `Position: ${gc.compoundTier} (${gc.compoundHolds} holds, ${gc.compoundPath || 'STANDARD'} path) | MC Cum at confirmation: ${gc.mcCumAtConfirmation != null ? (gc.mcCumAtConfirmation * 100).toFixed(1) + '%' : '?'} | ${mfStr}\n`;
     } else {
-      p += `Pre-graduation (${gc.cpEligibleCount} eligible CPs, MF=${gc.cpMeanFloor?.toFixed(3) || '?'})\n`;
+      p += `Pre-confirmation (${gc.compoundHolds || 0} compound holds toward threshold) | ${mfStr}\n`;
     }
     p += `CP flips: ${gc.cpCtrlFlips} | Game ctrl flips: ${gc.ctrlFlips}\n`;
-    if (gc.bwcFlipped) p += `BWC FLIPPED: Originally ${gc.originalBwcTeam}, flipped to ${gc.bwcTeam}\n`;
+    if (gc.bwcFlipped) p += `POSITION FLIPPED: Originally ${gc.originalBwcTeam}, flipped to ${gc.bwcTeam}\n`;
     if (gc.positionClosed) p += `POSITION CLOSED: EXIT was previously sent\n`;
     p += `BWC state: ${gc.bwcState || 'unknown'}\n`;
   }
