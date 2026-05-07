@@ -310,6 +310,20 @@ const BDL_TEAMS = {
   OKC:21, ORL:22, PHI:23, PHX:24, POR:25, SAC:26, SAS:27, TOR:28, UTA:29, WAS:30
 };
 
+// The Odds API full team names → our aliases (for server-side batch odds fetch)
+const ODDS_API_TEAMS = {
+  'Atlanta Hawks': 'ATL', 'Boston Celtics': 'BOS', 'Brooklyn Nets': 'BKN',
+  'Charlotte Hornets': 'CHA', 'Chicago Bulls': 'CHI', 'Cleveland Cavaliers': 'CLE',
+  'Dallas Mavericks': 'DAL', 'Denver Nuggets': 'DEN', 'Detroit Pistons': 'DET',
+  'Golden State Warriors': 'GSW', 'Houston Rockets': 'HOU', 'Indiana Pacers': 'IND',
+  'Los Angeles Clippers': 'LAC', 'Los Angeles Lakers': 'LAL', 'Memphis Grizzlies': 'MEM',
+  'Miami Heat': 'MIA', 'Milwaukee Bucks': 'MIL', 'Minnesota Timberwolves': 'MIN',
+  'New Orleans Pelicans': 'NOP', 'New York Knicks': 'NYK', 'Oklahoma City Thunder': 'OKC',
+  'Orlando Magic': 'ORL', 'Philadelphia 76ers': 'PHI', 'Phoenix Suns': 'PHX',
+  'Portland Trail Blazers': 'POR', 'Sacramento Kings': 'SAC', 'San Antonio Spurs': 'SAS',
+  'Toronto Raptors': 'TOR', 'Utah Jazz': 'UTA', 'Washington Wizards': 'WAS',
+};
+
 const W = { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 };
 
 const SR_DELAY_MS = 1400; // respect trial tier rate limit
@@ -1321,6 +1335,68 @@ async function bdlOdds(league, bdlGameId) {
 
   if (homeSpread == null && homeML == null) return null;
   return { homeSpread, homeML, awayML, total };
+}
+
+// Fetch live odds from The Odds API — one call returns ALL live NBA games
+// Returns map: { 'NYK': { homeSpread, homeML, awayML, total, books }, ... } keyed by HOME alias
+// Uses best available line (most favorable ML for each side)
+async function fetchOddsAPIBatch() {
+  const apiKey = process.env.ODDS_API_KEY;
+  if (!apiKey) return {};
+  try {
+    const url = `https://api.the-odds-api.com/v4/sports/basketball_nba/odds?apiKey=${apiKey}&regions=us,us2&markets=h2h,spreads,totals&oddsFormat=american`;
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      log(`Odds API ${resp.status}`);
+      return {};
+    }
+    const games = await resp.json();
+    const remaining = resp.headers.get('x-requests-remaining');
+    log(`Odds API: ${games.length} games, ${remaining} credits remaining`);
+
+    const result = {};
+    for (const g of games) {
+      const homeAlias = ODDS_API_TEAMS[g.home_team];
+      const awayAlias = ODDS_API_TEAMS[g.away_team];
+      if (!homeAlias || !awayAlias) continue;
+
+      let bestHomeML = null, bestAwayML = null;
+      const spreads = [], totals = [];
+
+      for (const bk of (g.bookmakers || [])) {
+        for (const mkt of (bk.markets || [])) {
+          if (mkt.key === 'h2h') {
+            for (const o of (mkt.outcomes || [])) {
+              const alias = ODDS_API_TEAMS[o.name];
+              if (alias === homeAlias && (bestHomeML == null || o.price > bestHomeML)) bestHomeML = o.price;
+              if (alias === awayAlias && (bestAwayML == null || o.price > bestAwayML)) bestAwayML = o.price;
+            }
+          } else if (mkt.key === 'spreads') {
+            const homeOut = (mkt.outcomes || []).find(o => ODDS_API_TEAMS[o.name] === homeAlias);
+            if (homeOut?.point != null) spreads.push(homeOut.point);
+          } else if (mkt.key === 'totals') {
+            const overOut = (mkt.outcomes || []).find(o => o.name === 'Over');
+            if (overOut?.point != null) totals.push(overOut.point);
+          }
+        }
+      }
+
+      // Median for spread and total (consensus)
+      const median = arr => { if (!arr.length) return null; arr.sort((a, b) => a - b); const m = Math.floor(arr.length / 2); return arr.length % 2 ? arr[m] : (arr[m - 1] + arr[m]) / 2; };
+      const homeSpread = median(spreads);
+      const total = median(totals);
+
+      if (bestHomeML == null && homeSpread == null) continue;
+      result[homeAlias] = {
+        homeSpread, homeML: bestHomeML, awayML: bestAwayML, total,
+        books: (g.bookmakers || []).length,
+      };
+    }
+    return result;
+  } catch (e) {
+    log(`Odds API error: ${e.message}`);
+    return {};
+  }
 }
 
 // Fetch tracking baselines (catch-and-shoot + pull-up eFG) — NBA only, season stats
@@ -5963,6 +6039,10 @@ export default async function(req) {
       // Load season Q4 margins for I4 pre-Q4 prior
       const seasonQ4 = await loadSeasonQ4(sql, league);
 
+      // Fetch live odds from The Odds API (one call, all games)
+      // Returns { 'NYK': { homeSpread, homeML, awayML, total, books }, ... }
+      const oddsAPICache = league === 'nba' ? await fetchOddsAPIBatch() : {};
+
       for (let gi = 0; gi < potentiallyLive.length; gi++) {
         const game = potentiallyLive[gi];
         const hA = game.home_alias || 'HOME';
@@ -6301,9 +6381,10 @@ export default async function(req) {
           const leadSust = sust?.[leadSide]?.tier || null;
           const leadClass = leadComp?.classification || null;
 
-          // Fetch BDL odds (no rate limit, fast)
-          let odds = null;
-          if (bdlGid) {
+          // Live odds from The Odds API batch cache (best available line)
+          // Falls back to BDL if Odds API didn't return this game
+          let odds = oddsAPICache[hA] || null;
+          if (!odds && bdlGid) {
             odds = await bdlOdds(league, bdlGid);
           }
           const spreadVal = odds?.homeSpread != null ? parseFloat(odds.homeSpread) : null;
@@ -6432,7 +6513,7 @@ export default async function(req) {
             try {
               await sql`
                 INSERT INTO odds_history (game_id, home_spread, home_ml, away_ml, total, source)
-                VALUES (${game.id}, ${odds.homeSpread != null ? parseFloat(odds.homeSpread) : null}, ${odds.homeML != null ? parseInt(odds.homeML) : null}, ${odds.awayML != null ? parseInt(odds.awayML) : null}, ${odds.total != null ? parseFloat(odds.total) : null}, ${'server'})
+                VALUES (${game.id}, ${odds.homeSpread != null ? parseFloat(odds.homeSpread) : null}, ${odds.homeML != null ? parseInt(odds.homeML) : null}, ${odds.awayML != null ? parseInt(odds.awayML) : null}, ${odds.total != null ? parseFloat(odds.total) : null}, ${odds.books ? 'odds-api' : 'server'})
               `;
             } catch (e) { /* odds_history table may not exist — non-fatal */ }
           }
