@@ -643,8 +643,8 @@ PRIOR ALERT REASONING TRAIL:
 ${ctx.priorAlertTrail || 'None'}
 
 RULES:
-- TRACKING: First structural signal — the system has identified ${ctx.ctrlTeam} as structurally interesting (floor ${ctx.floor}, margin ${ctx.margin}). This is NOT a position recommendation — the subscriber learns a game is on the radar. ALWAYS SEND unless the game is clearly meaningless (garbage time, both teams eliminated, period 4 with < 2 min left). Body should explain: which team, what structural picture (indicators, floor, margin), and that we are watching for the edge to develop. Frame as: "Watching [TEAM] — [why they look structurally dominant]. Will update if this develops into a position." Keep it short — this is a heads-up, not a thesis.
-- POSITION_OPEN: The team has sustained compound structural signals — MC Cum ≥ 0.80 AND Floor ≥ 0.65 — for 5 consecutive polls (~2.5 minutes game clock). This is a significant structural confirmation.
+- TRACKING: First compound structural signal — MC Cum (≥0.80) AND indicator floor (≥0.65) both confirm ${ctx.ctrlTeam} as structurally dominant (floor ${ctx.floor}, margin ${ctx.margin}). This is a higher-confidence initial signal than historical first-fires. This is NOT yet a position recommendation — the subscriber learns a game is on the radar with strong structural evidence. ALWAYS SEND unless the game is clearly meaningless (garbage time, both teams eliminated, period 4 with < 2 min left). Body should explain: which team, what structural picture (indicators, floor, margin, MC confirmation), and that we are watching for sustained confirmation. Frame as: "Watching [TEAM] — [why they look structurally dominant]. Will update if this develops into a position." Keep it short — this is a heads-up, not a thesis.
+- POSITION_OPEN: The team has sustained compound structural signals — MC Cum ≥ 0.80 AND Floor ≥ 0.65 at establishment, sustained at ≥ 0.60 — for 5 consecutive polls (~2.5 minutes game clock). This is a significant structural confirmation.
   ${ctx.compoundTier === 'CONFIRMED' && ctx.compoundPath === 'Q2_EARLY'
     ? 'Q2 EARLY CONFIRMATION (95.5% accuracy): Compound sustained with lead ≥5 and zero prior control flips. Strongest early signal — structural dominance established before halftime with scoreboard separation. ALWAYS SEND.'
     : ctx.compoundTier === 'CONFIRMED'
@@ -657,7 +657,7 @@ RULES:
   ${ctx.isSecondBwc ? 'SECOND POSITION TEAM: ' + ctx.bwcTeam + ' took structural control away from ' + ctx.deadTeam + (ctx.deadHadPO ? ' (who had a confirmed position)' : ' (who was tracking but never confirmed)') + '. The reversal itself is evidence — ' + ctx.bwcTeam + ' earned this through merit after ' + ctx.deadTeam + ' collapsed. ALWAYS SEND.' : ''}
   ${ctx.bwcFlipped ? 'POSITION FLIP: The system originally tracked ' + ctx.originalBwcTeam + ' but they FAILED to confirm. ' + ctx.bwcTeam + ' then confirmed ' + ctx.compoundTier + ' — taking structural control away from a previously dominant team. The floor appears modest because cumulative stats are anchored by ' + ctx.originalBwcTeam + "'s early dominance, but " + ctx.bwcTeam + " is sustaining compound signals DESPITE that headwind. ALWAYS SEND." : ''}
   CLOSE GAME CONTEXT: Compound accuracy plateaus at 75% in close games (margin ≤ 8). This is the best close-game accuracy the system has ever produced (up from 51% at first fire, 69% with old graduation), but it is an edge, not a certainty. Communicate honestly in body.
-  ${ctx.positionClosed ? 'POST-EXIT RE-ENTRY: Position was previously closed via EXIT. Compound has RESET — these 5 holds are FRESH post-EXIT readings, not carryover. ' + (ctx.compoundPath === 'Q2_EARLY' ? 'Q2 re-entry requires lead ≥5 and 0 flips since EXIT.' : 'Standard re-entry threshold applies (MC Cum ≥ 0.80 + Floor ≥ 0.65, 5 holds).') + ' Verify via per-quarter breakdown that structural signals are genuinely post-EXIT, not cumulative anchoring. Reference the EXIT reasoning from PRIOR ALERT REASONING TRAIL — what specifically broke? Has it been fixed? If the same weaknesses persist, SUPPRESS regardless of compound confirmation.' : ''}
+  ${ctx.positionClosed ? 'POST-EXIT RE-ENTRY: Position was previously closed via EXIT. Compound has RESET — these 5 holds are FRESH post-EXIT readings, not carryover. ' + (ctx.compoundPath === 'Q2_EARLY' ? 'Q2 re-entry requires lead ≥5 and 0 flips since EXIT.' : 'Standard re-entry threshold applies (MC Cum ≥ 0.80 + Floor ≥ 0.65 to re-establish, ≥ 0.60 to sustain, 5 holds).') + ' Verify via per-quarter breakdown that structural signals are genuinely post-EXIT, not cumulative anchoring. Reference the EXIT reasoning from PRIOR ALERT REASONING TRAIL — what specifically broke? Has it been fixed? If the same weaknesses persist, SUPPRESS regardless of compound confirmation.' : ''}
   MF trajectory provides additional context:
   - RISING MF = structural thesis building. Increases PO confidence.
   - DECLINING MF = floor eroding despite compound holding. MC Cum is more reliable than floor here, but flag as context and check per-quarter breakdown.
@@ -693,7 +693,7 @@ ${ctx.positionClosed ? '  POST-EXIT RECOVERY: Position is CLOSED — the subscri
   POSITION TRACKING CONTEXT FOR BUY DECISIONS:
   The BUY team's relationship to position tracking determines baseline confidence:
 
-  - BUY team = tracked team with CONFIRMED/LOCKED position: "Warm BUY" — compound structural signals sustained (MC Cum ≥ 0.80 + Floor ≥ 0.65 for 5+ consecutive polls). Team trailing is the thesis working. MF trajectory tells you if the structural trend is holding.
+  - BUY team = tracked team with CONFIRMED/LOCKED position: "Warm BUY" — compound structural signals sustained (MC Cum ≥ 0.80 + Floor ≥ 0.65 at establishment, ≥ 0.60 sustained for 5+ consecutive polls). Team trailing is the thesis working. MF trajectory tells you if the structural trend is holding.
   - BUY team = tracked team with RECOVERING position: "Warm BUY with caution" — position confirmed after control flip, 73% baseline. Trailing could be the thesis (structural team behind on variance) OR the original instability reasserting. Check conviction trend and per-quarter breakdown.
   - BUY team = tracked team, TRACKING only (compound not confirmed): System identified structural interest but compound signals never sustained. Lower confidence. Rely entirely on standard BUY evidence. This is a cold BUY with partial context.
   - BUY team = original tracked team but tracking FLIPPED to opponent: Near-automatic SUPPRESS. This team LOST structural control to the opponent. You are buying against the confirmed structural direction. The team that took it away confirmed through compound and wins historically.
@@ -2473,7 +2473,8 @@ function checkXGBExit(lt, xgbBwcProb, period, mcCumWinProb) {
 }
 
 // ── COMPOUND CONFIRMATION — replaces checkpoint graduation ──────
-// 5 consecutive deduped polls where MC Cum >= 0.80 AND Floor >= 0.65.
+// Sustain compound: MC Cum >= 0.80 AND Floor >= 0.60 (holds 2-5).
+// Establishment (hold 1) uses Floor >= 0.65 — handled by caller, not this function.
 // Q2 EARLY path adds lead >= 5 AND 0 prior flips.
 // Returns { confirmed, tier, holds, path }.
 // Stale poll guard: only counts hold when game clock has advanced.
@@ -2493,8 +2494,8 @@ function checkCompoundConfirmation(lt, mcCumWinProb, floor, period, clock, ctrlT
     return result; // no increment, no reset — just return current state
   }
 
-  // Check compound threshold
-  const baseThreshold = mcCumWinProb != null && mcCumWinProb >= 0.80 && floor >= 0.65;
+  // Check compound threshold — sustain at 0.60 (establishment at 0.65 handled by caller)
+  const baseThreshold = mcCumWinProb != null && mcCumWinProb >= 0.80 && floor >= 0.60;
 
   // Q2 early path adds margin and flip requirements
   const isQ2 = period === 2;
@@ -6649,7 +6650,26 @@ export default async function(req) {
 
             // ── V2 BWC candidate tracking (3-hold minimum for initial fire) ──
             // Q1 hold accumulation allowed; fire gated on Q2+
-            if (!lt.bwc_fired && ind.score >= 0.60 && _v2Margin >= 2) {
+            // ── NBA: Compound establishment (MC + Floor at 0.65) ──
+            // First poll where compound threshold is met → TRACKING + hold #1
+            // NCAAMB: retains floor-based 3-hold candidate tracking
+            if (!lt.bwc_fired && league === 'nba' && currentPeriod >= 2 && ind.controlTeam !== 'Neither') {
+              const _estabMC = _mcCum?.winProb != null ? _mcCum.winProb : null;
+              const _estabMet = _estabMC != null && _estabMC >= 0.80 && ind.score >= 0.65;
+              const _estabQ2 = currentPeriod !== 2 || (_v2Margin >= 5 && (lt.ctrl_flips || 0) === 0);
+
+              if (_estabMet && _estabQ2) {
+                lt.bwc_fired = { team: ind.controlTeam, period: currentPeriod, clock, floor: ind.score };
+                lt._prev_bwc_state = _v2Margin >= 3 ? 'LOCK' : 'EDGE';
+                lt._just_established = true;
+                // Seed compound — this poll is hold #1
+                lt.compound_holds = 1;
+                lt.compound_last_period = currentPeriod;
+                lt.compound_last_clock = clock;
+                log(`${matchup}: ★ COMPOUND ESTABLISHMENT — ${ind.controlTeam} MC=${_estabMC.toFixed(3)} floor=${ind.score.toFixed(2)} margin=${_v2Margin} Q${currentPeriod} ${clock}${_xgbWinProb != null ? ' xgb=' + _xgbWinProb.toFixed(3) : ''}`);
+              }
+            } else if (!lt.bwc_fired && league !== 'nba' && ind.score >= 0.60 && _v2Margin >= 2) {
+              // NCAAMB: floor-based BWC candidate tracking
               if (lt._bwc_candidate === ind.controlTeam) {
                 lt._bwc_candidate_holds = (lt._bwc_candidate_holds || 0) + 1;
               } else {
@@ -6657,7 +6677,6 @@ export default async function(req) {
                 lt._bwc_candidate_holds = 1;
               }
               if (lt._bwc_candidate_holds >= 3 && currentPeriod >= 2) {
-                // XGB gate — block establishment if structural model disagrees, but keep holds
                 if (_xgbWinProb != null && _xgbWinProb < 0.40) {
                   log(`${matchup}: XGB GATE — blocking BWC establishment (xgb=${_xgbWinProb.toFixed(3)}, floor=${ind.score.toFixed(2)}, holds=${lt._bwc_candidate_holds})`);
                 } else {
@@ -6667,7 +6686,7 @@ export default async function(req) {
                   log(`${matchup}: ★ V2 BWC FIRED — ${ind.controlTeam} floor ${ind.score.toFixed(2)} margin ${_v2Margin} state ${lt._prev_bwc_state}${_xgbWinProb != null ? ' xgb=' + _xgbWinProb.toFixed(3) : ''}`);
                 }
               }
-            } else if (!lt.bwc_fired && ind.controlTeam !== lt._bwc_candidate) {
+            } else if (!lt.bwc_fired && league !== 'nba' && ind.controlTeam !== lt._bwc_candidate) {
               lt._bwc_candidate = null;
               lt._bwc_candidate_holds = 0;
             }
@@ -7323,7 +7342,7 @@ export default async function(req) {
                   // stale — skip
                 } else {
                   const oppMcCum = _mcCum?.winProb != null ? _mcCum.winProb : null;
-                  const oppCompoundMet = oppMcCum != null && oppMcCum >= 0.80 && ind.score >= 0.65;
+                  const oppCompoundMet = oppMcCum != null && oppMcCum >= 0.80 && ind.score >= 0.60;
                   if (oppCompoundMet) {
                     lt.cp_opp_holds = (lt.cp_opp_holds || 0) + 1;
                     lt.compound_opp_last_period = currentPeriod;
