@@ -144,18 +144,79 @@ DELETE FROM game_checkpoints on death STAYS for PO_ACTIVE cleanup.
 
 ### 2I. Alert INSERT Changes
 
-- `graduation_rank` column → store compound tier string (CONFIRMED/RECOVERING/LOCKED)
+Alert INSERT (line ~7018) — reuse existing columns with new semantics:
+- `graduation_rank` column → store compound tier string (CONFIRMED/RECOVERING/LOCKED/TRACKING)
+  - Old: `${lt.po_fired?.rank || null}` → New: `${lt.po_fired?.tier || lt.compound_tier || null}`
 - `cp_eligible_count` column → store compound_holds count
+  - Old: `${lt.cp_eligible_count || null}` → New: `${lt.compound_holds || null}`
 - `cp_mean_floor` → store MC Cum at confirmation (or current MC Cum)
-- `cp_ctrl_flips` → store prior flips count
+  - Old: `${lt.cp_mean_floor || null}` → New: `${lt.compound_mc_at_confirm || null}`
+- `cp_ctrl_flips` → store prior flips count (semantics unchanged)
+- `lane` → `${null}` (lanes removed, column stays for historical data)
 
-No new columns needed — reuse existing columns with new semantics.
+No new columns needed. No schema migration.
 
-### 2J. Other Changes
+### 2J. Snapshot INSERT Changes
 
-- formatSonnetPrompt: replace graduation context with compound state + keep trajectory signals
-- Post-game agent: reads new tier strings, arc scoring unchanged
-- v3.html: graduation rank color mapping → compound tier color mapping
+Two snapshot INSERT locations write `grad_rank` column:
+
+**NBA path (line ~6424):**
+- Old: `${_snapLT?.cp_peak_rank || null}`
+- New: `${_snapLT?.compound_tier || null}`
+- Writes compound tier per snapshot (TRACKING/CONFIRMED/RECOVERING/LOCKED or null)
+
+**NCAAMB path (line ~8012):**
+- Old: `${lt?.cp_peak_rank || null}`
+- **NO CHANGE** — NCAAMB keeps classifyRank, continues writing S/A/B/C
+
+`bwc_state` column at both locations: **NO CHANGE** — still writes LOCK/EDGE/VALUE from `_prev_bwc_state`.
+
+### 2K. Post-Game Agent Changes (~30 lines across 4 blocks)
+
+**Block 1: GRADUATION RANK ACCURACY (lines 333-368):**
+Replace A/B rank bucketing with compound tier bucketing:
+```javascript
+const tierAccuracy = {
+  CONFIRMED: { correct: 0, total: 0 },
+  RECOVERING: { correct: 0, total: 0 },
+  LOCKED: { correct: 0, total: 0 },
+};
+poAlerts.forEach(po => {
+  const bucket = tierAccuracy[po.tier];
+  if (!bucket) return;
+  bucket.total++;
+  if (po.ctrlWon) bucket.correct++;
+});
+```
+Log line: `Position: CONFIRMED X/Y (Z%) | RECOVERING X/Y (Z%) | LOCKED X/Y (Z%)`
+
+**Block 2: Suppressed rank breakdown (line 386-387):**
+- Old: `${a.graduation_rank}_${a.wouldBeCorrect ? 'miss' : 'save'}`
+- New: `${a.graduation_rank}_${a.wouldBeCorrect ? 'miss' : 'save'}` — same code, new values (CONFIRMED/RECOVERING/LOCKED instead of A/B)
+
+**Block 3: Opus prompt line (line 441):**
+- Old: `Grad: ${full.graduation_rank || '-'}-Rank MF=${full.mf_trajectory || '-'} stress=${full.combined_read || '-'} CPs=${full.cp_eligible_count || '-'} flips=${full.cp_ctrl_flips != null ? full.cp_ctrl_flips : '-'} lane=${full.lane || '-'}`
+- New: `Position: ${full.graduation_rank || '-'} (${full.cp_eligible_count || '-'} holds) MF=${full.mf_trajectory || '-'} stress=${full.combined_read || '-'} flips=${full.cp_ctrl_flips != null ? full.cp_ctrl_flips : '-'}`
+- Drops: `lane` reference, `-Rank` suffix. Adds: holds count context. Changes: "Grad" → "Position"
+
+**Block 4: Arc detail output (line 719):**
+- Old: `gradRank: a.terminal.graduation_rank`
+- New: `compoundTier: a.terminal.graduation_rank` — field rename in output JSON, reads same column
+
+### 2L. v3.html Changes
+
+**Snapshot history column (line 2859):**
+- Column label stays "Grad" (or rename to "Tier" — optional)
+- Color mapping update:
+  - Old: `A=green, B=amber, C=dim`
+  - New: `LOCKED=var(--green), CONFIRMED=var(--green), RECOVERING=var(--amber), TRACKING=var(--fg-dim)`
+- Value display: show first letter or abbreviated tier (L/C/R/T) for column width
+
+**Two `_snapCols` defaults (lines 2736, 2926, 2940):** `grad:true` stays.
+
+### 2M. formatSonnetPrompt Changes
+
+Replace graduation context injection with compound state. Keep trajectory signal injections (MF trajectory, floor-margin signal, conviction trend) — they still compute from checkpoints.
 
 No schema migrations needed.
 
@@ -531,14 +592,15 @@ Phase 5: Death clearing — clear compound_holds, compound_confirmed (~10 lines)
 Phase 6: v2Ctx — remove graduation fields, add compound fields (~20 lines)
 Phase 7: Agent prompt — POSITION_OPEN, BUY lifecycle, EXIT, stress check (~180 lines replaced with ~100 lines) — HIGHEST RISK
 Phase 8: formatSonnetPrompt — graduation context → compound context (~15 lines)
-Phase 9: Post-game agent — read tier strings (~15 lines)
-Phase 10: v3.html — compound tier color mapping (~5 lines)
-Phase 11: Smoke test
+Phase 9: Snapshot INSERT — NBA path writes compound tier to grad_rank (~2 lines changed)
+Phase 10: Post-game agent — compound tier bucketing, prompt line, arc output (~30 lines across 4 blocks)
+Phase 11: v3.html — compound tier color mapping + column display (~10 lines)
+Phase 12: Smoke test
 
-**EXIT Compound (Phases 12-14):**
-Phase 12: checkXGBExit() — add MC Cum gate parameter (~10 lines changed)
-Phase 13: EXIT call site — pass mc_win_prob to checkXGBExit (~5 lines)
-Phase 14: EXIT smoke test
+**EXIT Compound (Phases 13-15):**
+Phase 13: checkXGBExit() — add MC Cum gate parameter (~10 lines changed)
+Phase 14: EXIT call site — pass mc_win_prob to checkXGBExit (~5 lines)
+Phase 15: EXIT smoke test
 
 ---
 
@@ -558,9 +620,9 @@ Phase 14: EXIT smoke test
 
 | File | Change | Est. lines |
 |---|---|---|
-| poll-live-bdl.mjs | Major (graduation + EXIT) | -250, +160 (net -90) |
-| post-game-agent.mjs | Minor | ~15 |
-| v3.html | Minor | ~5 |
+| poll-live-bdl.mjs | Major (graduation + EXIT + snapshot INSERT) | -250, +160 (net -90) |
+| post-game-agent.mjs | Moderate (4 blocks: tier bucketing, prompt, output) | ~30 |
+| v3.html | Minor (color mapping, column display) | ~10 |
 | db-api.js | None | 0 |
 
 No schema migrations. No new tables. No new env vars.
