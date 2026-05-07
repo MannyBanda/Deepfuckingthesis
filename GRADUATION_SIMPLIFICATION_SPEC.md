@@ -86,11 +86,59 @@ New function (~30 lines). Called every poll cycle (not just at checkpoint bounda
 
 - Tracks lt.compound_holds (consecutive poll count above threshold)
 - **STALE POLL GUARD:** Only counts a hold when game clock has advanced since the last counted hold. Stores `lt.compound_last_period` and `lt.compound_last_clock`. If current (period, clock) matches stored values, skip — do not increment or reset. This prevents hold inflation during timeouts, halftime, quarter transitions, and concurrent cron invocations. The 5-hold threshold was validated on deduped data (one reading per unique game-clock moment) — production must match.
-- Resets to 0 when compound threshold is not met (on a non-stale poll)
-- Resets to 0 on control flip (streak requires same team throughout)
+- Resets compound_holds to 0 when compound threshold is not met (on a non-stale poll)
+- Resets compound_holds to 0 on control flip (streak requires same team throughout)
 - Returns { confirmed, tier, holds, path }
 - Q2 path adds lead>=5 and 0-flip requirements
 - Concurrent invocation under-count (last-write-wins) makes system marginally more conservative — expected behavior, not a bug
+
+**POST-CONFIRMATION BEHAVIOR:**
+
+`compound_tier` is a **watermark** — it only upgrades, never degrades:
+```
+null → TRACKING → CONFIRMED/RECOVERING → LOCKED
+```
+`compound_holds` is the **live streak** — resets to 0 when compound threshold breaks on a non-stale poll.
+
+After CONFIRMED fires at 5 holds, if MC Cum drops to 0.78 on the next poll, compound_holds resets to 0 but compound_tier stays CONFIRMED. The agent sees both: "CONFIRMED position (0 current holds)" — useful stress context for BUY and POSITION_SAFE decisions. A warm BUY stays warm during a brief dip.
+
+LOCKED upgrade (10 holds, 0 flips) requires 10 consecutive in a **single unbroken streak**. If the streak breaks at 7 and restarts, the new streak starts at 0 — need a fresh 10.
+
+**EXIT resets compound entirely.** When EXIT fires, compound_tier resets to TRACKING, compound_holds resets to 0, compound_confirmed resets to false. Re-entry requires a fresh 5-hold streak meeting the same confirmation criteria for the current quarter (Q2 rules if still in Q2, Q3+ rules if in Q3+). This is the same bar as initial entry — no carryover from pre-EXIT dominance.
+
+**Q2→Q3 STREAK CARRYOVER:**
+
+If a team has 4 compound holds in Q2, the stale poll guard pauses the streak during halftime. When Q3 starts and hold 5 fires, confirmation evaluates under **Q3+ STANDARD rules** (no margin or flip gate), not Q2 EARLY rules. Q2_EARLY means confirmation completed during Q2 — if it spills into Q3, the team didn't sustain long enough to confirm before halftime.
+
+**lt FIELD INVENTORY (consolidated):**
+
+New fields:
+| Field | Type | Purpose |
+|---|---|---|
+| `lt.compound_holds` | int | Live consecutive streak count (resets on break) |
+| `lt.compound_tier` | string | Watermark tier — only upgrades (TRACKING/CONFIRMED/RECOVERING/LOCKED) |
+| `lt.compound_confirmed` | bool | Has compound ever confirmed this tracking period |
+| `lt.compound_path` | string | Q2_EARLY or STANDARD |
+| `lt.compound_mc_at_confirm` | float | MC Cum when first confirmed (null if not yet) |
+| `lt.compound_last_period` | int | Stale poll guard — last period where hold was counted |
+| `lt.compound_last_clock` | string | Stale poll guard — last clock where hold was counted |
+
+Dead fields (remove from death clearing + v2Ctx):
+| Field | Replaced by |
+|---|---|
+| `lt.cp_peak_rank` | `lt.compound_tier` |
+| `lt.cp_graduation` | `lt.compound_confirmed` + tier |
+| `lt.cp_opp_graduation` | opponent compound tracking |
+| `lt.cp_mean_floor` | `lt.compound_mc_at_confirm` |
+| `lt.cp_min_floor` | (dropped — no longer needed for gates) |
+| `lt.cp_eligible_count` | `lt.compound_holds` |
+
+Kept fields (checkpoint capture + flip tracking — NOT graduation):
+| Field | Reason |
+|---|---|
+| `lt.cp_holds` | Checkpoint capture loop counter |
+| `lt.cp_opp_holds` | Opponent checkpoint holds for flip PO |
+| `lt.cp_ctrl_flips` | Control flip count (agent risk context) |
 
 ### 2E. PO Firing Logic
 
@@ -106,12 +154,13 @@ checkCompoundConfirmation() returns confirmed: true AND !lt.po_fired → PO fire
 Opponent compound confirmation — opponent floor/MC Cum must meet compound threshold for 5 holds while opponent has control.
 
 - lt.cp_opp_holds tracking STAYS
+- **OPPONENT STALE POLL GUARD:** Same dedup as primary compound — only counts opponent hold when (period, clock) has advanced. Stores `lt.compound_opp_last_period` and `lt.compound_opp_last_clock`.
 - Opponent must be more recent controller
 - Flip PO fires POSITION_OPEN with flipped: true
 
 ### 2G. Death Clearing
 
-Clears: lt.compound_holds, lt.compound_confirmed, lt.compound_last_period, lt.compound_last_clock
+Clears all compound state: lt.compound_holds, lt.compound_tier, lt.compound_confirmed, lt.compound_path, lt.compound_mc_at_confirm, lt.compound_last_period, lt.compound_last_clock, lt.compound_opp_last_period, lt.compound_opp_last_clock
 DELETE FROM game_checkpoints on death STAYS for PO_ACTIVE cleanup.
 
 ### 2H. v2Ctx Field Changes
@@ -285,6 +334,7 @@ Modify existing checkXGBExit() (~10 lines changed):
 2. Pass `mcCumWinProb` as new parameter
 3. Threshold stays 0.45, confirmation stays 2-poll 90s, fast-path stays 0.15
 4. Recovery stays >= 0.50 (was threshold + 0.05)
+5. **On EXIT fire:** Reset compound state — lt.compound_tier = 'TRACKING', lt.compound_holds = 0, lt.compound_confirmed = false, lt.compound_path = null, lt.compound_mc_at_confirm = null. Set lt.position_closed = true. Re-entry requires fresh 5-hold streak under current quarter's rules (same bar as initial entry).
 
 Call site changes:
 - `_xgbBwcProb` already computed from windowed features (extractXGBFeatures uses window stats since windowed XGB deploy)
