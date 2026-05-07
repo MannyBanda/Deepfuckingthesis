@@ -331,39 +331,32 @@ export default async function handler(req) {
   log(`Failures: ${JSON.stringify(failures)}`);
   if (leftHanging.length > 0) log(`LEFT HANGING: ${leftHanging.map(a => `${a.matchup} ${a.team}`).join(', ')}`);
 
-  // ── GRADUATION RANK ACCURACY ──
+  // ── COMPOUND TIER ACCURACY ──
   const poAlerts = [];
   scoredArcs.forEach(arc => {
     arc.alerts.forEach(a => {
       if (a.type === 'POSITION_OPEN' && a.graduation_rank) {
-        poAlerts.push({ rank: a.graduation_rank, cpFlips: a.cp_ctrl_flips, ctrlWon: arc.outcome.ctrlWon });
+        poAlerts.push({ tier: a.graduation_rank, cpFlips: a.cp_ctrl_flips, ctrlWon: arc.outcome.ctrlWon });
       }
     });
   });
 
-  const rankAccuracy = {
-    A: { correct: 0, total: 0, w2w_correct: 0, w2w_total: 0, with_flips_correct: 0, with_flips_total: 0 },
-    B: { correct: 0, total: 0 },
+  const tierAccuracy = {
+    CONFIRMED: { correct: 0, total: 0 },
+    RECOVERING: { correct: 0, total: 0 },
+    LOCKED: { correct: 0, total: 0 },
   };
   poAlerts.forEach(po => {
-    const bucket = rankAccuracy[po.rank];
+    const bucket = tierAccuracy[po.tier];
     if (!bucket) return;
     bucket.total++;
     if (po.ctrlWon) bucket.correct++;
-    if (po.rank === 'A') {
-      if (po.cpFlips === 0) {
-        bucket.w2w_total++;
-        if (po.ctrlWon) bucket.w2w_correct++;
-      } else {
-        bucket.with_flips_total++;
-        if (po.ctrlWon) bucket.with_flips_correct++;
-      }
-    }
   });
 
-  const aRate = rankAccuracy.A.total > 0 ? Math.round((rankAccuracy.A.correct / rankAccuracy.A.total) * 100) : null;
-  const bRate = rankAccuracy.B.total > 0 ? Math.round((rankAccuracy.B.correct / rankAccuracy.B.total) * 100) : null;
-  log(`Graduation: A-Rank ${rankAccuracy.A.correct}/${rankAccuracy.A.total} (${aRate || '-'}%) | B-Rank ${rankAccuracy.B.correct}/${rankAccuracy.B.total} (${bRate || '-'}%)`);
+  const confRate = tierAccuracy.CONFIRMED.total > 0 ? Math.round((tierAccuracy.CONFIRMED.correct / tierAccuracy.CONFIRMED.total) * 100) : null;
+  const recRate = tierAccuracy.RECOVERING.total > 0 ? Math.round((tierAccuracy.RECOVERING.correct / tierAccuracy.RECOVERING.total) * 100) : null;
+  const lockRate = tierAccuracy.LOCKED.total > 0 ? Math.round((tierAccuracy.LOCKED.correct / tierAccuracy.LOCKED.total) * 100) : null;
+  log(`Position: CONFIRMED ${tierAccuracy.CONFIRMED.correct}/${tierAccuracy.CONFIRMED.total} (${confRate || '-'}%) | RECOVERING ${tierAccuracy.RECOVERING.correct}/${tierAccuracy.RECOVERING.total} (${recRate || '-'}%) | LOCKED ${tierAccuracy.LOCKED.correct}/${tierAccuracy.LOCKED.total} (${lockRate || '-'}%)`);
 
   // ── SUPPRESSED ALERT EVALUATION ──
   const positionGated = allSuppressed.filter(a => a.agent_reasoning && a.agent_reasoning.includes('position gate'));
@@ -438,7 +431,7 @@ export default async function handler(req) {
             line += `\n    BWC: state=${full.bwc_state || '-'} erosion=${full.erosion_level || '-'} peak=${full.peak_floor ? Number(full.peak_floor).toFixed(2) : '-'} exit_sev=${full.exit_severity || '-'}`;
           }
           if (full.graduation_rank || full.mf_trajectory || full.combined_read) {
-            line += `\n    Grad: ${full.graduation_rank || '-'}-Rank MF=${full.mf_trajectory || '-'} stress=${full.combined_read || '-'} CPs=${full.cp_eligible_count || '-'} flips=${full.cp_ctrl_flips != null ? full.cp_ctrl_flips : '-'} lane=${full.lane || '-'}`;
+            line += `\n    Position: ${full.graduation_rank || '-'} (${full.cp_eligible_count || '-'} holds) MF=${full.mf_trajectory || '-'} stress=${full.combined_read || '-'} flips=${full.cp_ctrl_flips != null ? full.cp_ctrl_flips : '-'}`;
             if (full.position_closed) line += ' posClosed=true';
             if (full.is_flip_buy) line += ' FLIP_BUY';
           }
@@ -716,7 +709,7 @@ RECOMMENDATIONS:
       matchup: a.matchup, team: a.team, arcType: a.arcType,
       terminal: a.terminal.type, correct: a.correct, failureType: a.failureType,
       ctrlWon: a.outcome.ctrlWon, finalMargin: a.outcome.finalMargin,
-      gradRank: a.terminal.graduation_rank, alertCount: a.alerts.length,
+      compoundTier: a.terminal.graduation_rank, alertCount: a.alerts.length,
     })),
   }));
 }

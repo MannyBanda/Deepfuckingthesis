@@ -2856,7 +2856,7 @@ function renderDrawer(gameId){
         }
         html+='<td style="font-size:9px;color:'+sustColor+'">'+esc(sustTxt)+'</td>';
       }
-      if(sc2.grad){var gr=s.grad_rank||(matchAlert&&matchAlert.graduation_rank?matchAlert.graduation_rank:null);var grColor=gr==='A'?'var(--green)':gr==='B'?'var(--amber)':gr==='C'?'var(--fg-secondary)':'var(--fg-dim)';html+='<td style="font-size:9px;color:'+grColor+'">'+(gr?esc(gr):'--')+'</td>';}
+      if(sc2.grad){var gr=s.grad_rank||(matchAlert&&matchAlert.graduation_rank?matchAlert.graduation_rank:null);var grColor=gr==='LOCKED'?'var(--green)':gr==='CONFIRMED'?'var(--green)':gr==='RECOVERING'?'var(--amber)':gr==='TRACKING'?'var(--fg-dim)':gr==='A'?'var(--green)':gr==='B'?'var(--amber)':'var(--fg-dim)';var grLabel=gr==='LOCKED'?'L':gr==='CONFIRMED'?'C':gr==='RECOVERING'?'R':gr==='TRACKING'?'T':gr||'--';html+='<td style="font-size:9px;color:'+grColor+'">'+esc(grLabel)+'</td>';}
       if(sc2.ml){
         // Find closest odds entry by timestamp
         var mlText='--';
