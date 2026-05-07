@@ -2498,6 +2498,207 @@ async function reportReconstructionValidation(sql) {
   };
 }
 
+// ── EXPORT XGB DISCOVER ─────────────────────────────────────────────────────
+// Extracts wide feature set at each quarter boundary for XGB feature discovery.
+// All features ctrl-relative. Both cumulative and windowed (current Q only).
+// Output: one row per game per quarter with outcome.
+async function exportXGBDiscover(sql) {
+  const games = await sql`
+    SELECT game_id, sr_summary, winner, home_alias, away_alias, margin, ctrl_team_won
+    FROM wnba_backtest WHERE sr_summary IS NOT NULL AND winner IS NOT NULL
+  `;
+  if (games.length < 20) return { error: `Only ${games.length} games. Need 20+.` };
+
+  const rows = [];
+
+  for (const g of games) {
+    const summary = g.sr_summary;
+    if (!summary?.home?.statistics?.periods || !summary?.away?.statistics?.periods) continue;
+
+    const hPeriods = summary.home.statistics.periods;
+    const aPeriods = summary.away.statistics.periods;
+    const hScoring = summary.home.scoring || [];
+    const aScoring = summary.away.scoring || [];
+    const hA = summary.home.alias || g.home_alias;
+    const aA = summary.away.alias || g.away_alias;
+
+    // Determine ctrl team from final cumulative indicators
+    const finalInd = computeCumulativeAtQuarter(summary, Math.min(hPeriods.length, aPeriods.length));
+    if (!finalInd) continue;
+    const ctrlTeam = finalInd.controlTeam;
+    const ctrlIsHome = ctrlTeam === hA;
+    const ctrlWon = g.ctrl_team_won;
+
+    for (let q = 1; q <= Math.min(hPeriods.length, aPeriods.length, 4); q++) {
+      // Helper: sum a field across periods [start, end) (0-indexed)
+      const sumP = (periods, field, start, end) => {
+        let s = 0;
+        for (let i = start; i < end; i++) s += Number(periods[i]?.[field] || 0);
+        return s;
+      };
+      const maxP = (periods, field, start, end) => {
+        let m = 0;
+        for (let i = start; i < end; i++) m = Math.max(m, Number(periods[i]?.[field] || 0));
+        return m;
+      };
+
+      // ── CUMULATIVE features (periods 0..q-1) ──
+      const cumH = {}, cumA = {};
+      const fields = ['steals','blocks','points_off_turnovers','three_points_made','three_points_att',
+        'free_throws_att','free_throws_made','field_goals_made','field_goals_att','assists',
+        'fast_break_pts','offensive_rebounds','defensive_rebounds','second_chance_pts',
+        'points_in_the_paint','personal_fouls','total_turnovers','two_points_made','two_points_att',
+        'bench_points','possessions','most_unanswered'];
+      for (const f of fields) {
+        cumH[f] = sumP(hPeriods, f, 0, q);
+        cumA[f] = sumP(aPeriods, f, 0, q);
+      }
+      cumH.biggest_lead = maxP(hPeriods, 'biggest_lead', 0, q);
+      cumA.biggest_lead = maxP(aPeriods, 'biggest_lead', 0, q);
+
+      // Cumulative score
+      let hPts = 0, aPts = 0;
+      for (let i = 0; i < q; i++) { hPts += hScoring[i]?.points || 0; aPts += aScoring[i]?.points || 0; }
+
+      // ── WINDOWED features (current quarter only, period q-1) ──
+      const winH = {}, winA = {};
+      for (const f of fields) {
+        winH[f] = sumP(hPeriods, f, q - 1, q);
+        winA[f] = sumP(aPeriods, f, q - 1, q);
+      }
+      winH.biggest_lead = maxP(hPeriods, 'biggest_lead', q - 1, q);
+      winA.biggest_lead = maxP(aPeriods, 'biggest_lead', q - 1, q);
+
+      // ── Compute ctrl-relative diffs ──
+      const ctrlH = ctrlIsHome ? cumH : cumA;
+      const oppH = ctrlIsHome ? cumA : cumH;
+      const ctrlW = ctrlIsHome ? winH : winA;
+      const oppW = ctrlIsHome ? winA : winH;
+
+      const safePct = (m, a) => a > 0 ? m / a : 0;
+      const ctrlFGA_c = ctrlH.field_goals_att || 1;
+      const oppFGA_c = oppH.field_goals_att || 1;
+      const ctrlFGA_w = ctrlW.field_goals_att || 1;
+      const oppFGA_w = oppW.field_goals_att || 1;
+
+      const row = {
+        game_id: g.game_id, quarter: q, ctrl_team: ctrlTeam, ctrl_is_home: ctrlIsHome,
+        margin: ctrlIsHome ? hPts - aPts : aPts - hPts,
+        ctrl_won: ctrlWon ? 1 : 0,
+        final_margin: ctrlIsHome ? g.margin : -g.margin,
+
+        // ── CUMULATIVE DIFFS (c_ prefix) ──
+        c_paint: (ctrlH.points_in_the_paint || 0) - (oppH.points_in_the_paint || 0),
+        c_pot: ctrlH.points_off_turnovers - oppH.points_off_turnovers,
+        c_to: ctrlH.total_turnovers - oppH.total_turnovers,
+        c_stl: ctrlH.steals - oppH.steals,
+        c_blk: ctrlH.blocks - oppH.blocks,
+        c_oreb: ctrlH.offensive_rebounds - oppH.offensive_rebounds,
+        c_ast: ctrlH.assists - oppH.assists,
+        c_fta: ctrlH.free_throws_att - oppH.free_throws_att,
+        c_efg: safePct(ctrlH.field_goals_made + 0.5 * ctrlH.three_points_made, ctrlFGA_c)
+             - safePct(oppH.field_goals_made + 0.5 * oppH.three_points_made, oppFGA_c),
+        c_biglead: ctrlH.biggest_lead - oppH.biggest_lead,
+        c_3pr: safePct(ctrlH.three_points_made, ctrlH.three_points_att || 1)
+             - safePct(oppH.three_points_made, oppH.three_points_att || 1),
+        c_3pa: ctrlH.three_points_att - oppH.three_points_att,
+        c_3pm: ctrlH.three_points_made - oppH.three_points_made,
+        c_2pr: safePct(ctrlH.two_points_made, ctrlH.two_points_att || 1)
+             - safePct(oppH.two_points_made, oppH.two_points_att || 1),
+        c_rim_pct: 0, // SR per-period may not have at-rim — computed if available
+        c_fbp: ctrlH.fast_break_pts - oppH.fast_break_pts,
+        c_scp: ctrlH.second_chance_pts - oppH.second_chance_pts,
+        c_bench: ctrlH.bench_points - oppH.bench_points,
+        c_pf: ctrlH.personal_fouls - oppH.personal_fouls,
+        c_dreb: ctrlH.defensive_rebounds - oppH.defensive_rebounds,
+        c_runs: ctrlH.most_unanswered - oppH.most_unanswered,
+        c_disruption: (ctrlH.steals + ctrlH.blocks) - (oppH.steals + oppH.blocks),
+        c_to_ratio: (ctrlH.steals > 0 || ctrlH.total_turnovers > 0)
+          ? ctrlH.steals / (ctrlH.total_turnovers || 1) - oppH.steals / (oppH.total_turnovers || 1) : 0,
+        c_ast_ratio: safePct(ctrlH.assists, ctrlH.field_goals_made || 1)
+                   - safePct(oppH.assists, oppH.field_goals_made || 1),
+        c_ftm: ctrlH.free_throws_made - oppH.free_throws_made,
+        c_poss: (ctrlH.possessions || 0) - (oppH.possessions || 0),
+
+        // ── WINDOWED DIFFS (w_ prefix, current quarter only) ──
+        w_paint: (ctrlW.points_in_the_paint || 0) - (oppW.points_in_the_paint || 0),
+        w_pot: ctrlW.points_off_turnovers - oppW.points_off_turnovers,
+        w_to: ctrlW.total_turnovers - oppW.total_turnovers,
+        w_stl: ctrlW.steals - oppW.steals,
+        w_blk: ctrlW.blocks - oppW.blocks,
+        w_oreb: ctrlW.offensive_rebounds - oppW.offensive_rebounds,
+        w_ast: ctrlW.assists - oppW.assists,
+        w_fta: ctrlW.free_throws_att - oppW.free_throws_att,
+        w_efg: safePct(ctrlW.field_goals_made + 0.5 * ctrlW.three_points_made, ctrlFGA_w)
+             - safePct(oppW.field_goals_made + 0.5 * oppW.three_points_made, oppFGA_w),
+        w_biglead: ctrlW.biggest_lead - oppW.biggest_lead,
+        w_3pr: safePct(ctrlW.three_points_made, ctrlW.three_points_att || 1)
+             - safePct(oppW.three_points_made, oppW.three_points_att || 1),
+        w_3pa: ctrlW.three_points_att - oppW.three_points_att,
+        w_3pm: ctrlW.three_points_made - oppW.three_points_made,
+        w_fbp: ctrlW.fast_break_pts - oppW.fast_break_pts,
+        w_scp: ctrlW.second_chance_pts - oppW.second_chance_pts,
+        w_bench: ctrlW.bench_points - oppW.bench_points,
+        w_pf: ctrlW.personal_fouls - oppW.personal_fouls,
+        w_runs: ctrlW.most_unanswered - oppW.most_unanswered,
+        w_disruption: (ctrlW.steals + ctrlW.blocks) - (oppW.steals + oppW.blocks),
+        w_ftm: ctrlW.free_throws_made - oppW.free_throws_made,
+      };
+
+      rows.push(row);
+    }
+  }
+
+  // ── Quick AUC approximation per feature per quarter ──
+  // Uses concordance (Mann-Whitney U / AUC without sklearn)
+  const featureKeys = Object.keys(rows[0] || {}).filter(k =>
+    k.startsWith('c_') || k.startsWith('w_'));
+  const quarters = [1, 2, 3, 4];
+  const aucTable = {};
+
+  for (const fk of featureKeys) {
+    aucTable[fk] = {};
+    for (const q of quarters) {
+      const qRows = rows.filter(r => r.quarter === q && r.ctrl_won !== null);
+      if (qRows.length < 20) { aucTable[fk][`Q${q}`] = null; continue; }
+
+      // Concordance AUC: P(feature higher for wins than losses)
+      const wins = qRows.filter(r => r.ctrl_won === 1).map(r => r[fk]);
+      const losses = qRows.filter(r => r.ctrl_won === 0).map(r => r[fk]);
+      if (wins.length === 0 || losses.length === 0) { aucTable[fk][`Q${q}`] = null; continue; }
+
+      let concordant = 0, discordant = 0, tied = 0;
+      for (const w of wins) {
+        for (const l of losses) {
+          if (w > l) concordant++;
+          else if (w < l) discordant++;
+          else tied++;
+        }
+      }
+      const total = concordant + discordant + tied;
+      const auc = total > 0 ? (concordant + 0.5 * tied) / total : 0.5;
+      aucTable[fk][`Q${q}`] = Math.round(auc * 1000) / 1000;
+    }
+  }
+
+  // Rank by Q4 AUC (most relevant for prediction)
+  const ranked = featureKeys
+    .map(fk => ({ feature: fk, ...aucTable[fk], avg: Math.round(((aucTable[fk].Q2||0.5)+(aucTable[fk].Q3||0.5)+(aucTable[fk].Q4||0.5))/3*1000)/1000 }))
+    .sort((a, b) => (b.Q4 || 0) - (a.Q4 || 0));
+
+  return {
+    totalGames: games.length,
+    totalRows: rows.length,
+    rowsPerQuarter: { Q1: rows.filter(r=>r.quarter===1).length, Q2: rows.filter(r=>r.quarter===2).length,
+      Q3: rows.filter(r=>r.quarter===3).length, Q4: rows.filter(r=>r.quarter===4).length },
+    featureAUC: ranked,
+    topCumulative: ranked.filter(f => f.feature.startsWith('c_')).slice(0, 15),
+    topWindowed: ranked.filter(f => f.feature.startsWith('w_')).slice(0, 15),
+    rows: rows,
+    methodology: 'All features ctrl-relative (positive = ctrl team advantage). AUC via Mann-Whitney concordance. c_ = cumulative through quarter. w_ = current quarter only (windowed).',
+  };
+}
+
 // ── HANDLER ──────────────────────────────────────────────────────────────────
 export default async (req) => {
   const sql = neon(process.env.DATABASE_URL);
@@ -2544,6 +2745,7 @@ export default async (req) => {
       case 'report_cp_stability': result = await reportCPStability(sql); break;
       case 'report_cp_close':   result = await reportCPClose(sql); break;
       case 'report_validate_reconstruction': result = await reportReconstructionValidation(sql); break;
+      case 'export_xgb_discover': result = await exportXGBDiscover(sql); break;
       default:
         result = { error: `Unknown phase: ${phase}. Phases: init, collect, sample, compute, report, explore, collect_pbp, compute_checkpoints, report_cp_journey, report_cp_graduation, report_cp_trailing, report_cp_stability, report_cp_close` };
     }
