@@ -2595,15 +2595,23 @@ async function exportCheckpointXGB(sql, url) {
       const cumFeats = extractFeatures(cH, cA, 'c_');
       cumFeats.c_biglead = (cH.biggest_lead || 0) - (cA.biggest_lead || 0);
 
-      // 2Q window features
-      let w2q = {};
+      // Null-init helper for consistent keys
+      const nullFeats = (prefix) => {
+        const o = {};
+        for (const k of ['pot','to','stl','blk','oreb','dreb','ast','fta','ftm','efg','3pr','3pa','3pm','2pr','pf','disruption','to_ratio','ast_ratio'])
+          o[`${prefix}${k}`] = null;
+        return o;
+      };
+
+      // 2Q window features (20min lookback = 8 checkpoints)
+      let w2q = nullFeats('w2q_');
       if (lookback2Q) {
         const { ctrl, opp } = diffStats(s, lookback2Q);
         w2q = extractFeatures(ctrl, opp, 'w2q_');
       }
 
-      // 1Q window features
-      let w1q = {};
+      // 1Q window features (10min lookback = 4 checkpoints)
+      let w1q = nullFeats('w1q_');
       if (lookback1Q) {
         const { ctrl, opp } = diffStats(s, lookback1Q);
         w1q = extractFeatures(ctrl, opp, 'w1q_');
