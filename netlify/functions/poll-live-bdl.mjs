@@ -2449,14 +2449,18 @@ function computeBwcState(lt, ctrlTeam, margin) {
 // Replaces control-flip EXIT. Backtest (998 graduated games):
 //   0.50/0.55: 77.2% exit acc, 81.2% loss prot, exits ~9min earlier than flip, margin +0.8 at exit
 //   vs flip:   54.1% exit acc, 68.2% loss prot, margin -2.8 at exit
-function checkXGBExit(lt, xgbBwcProb, period) {
+function checkXGBExit(lt, xgbBwcProb, period, mcCumWinProb) {
   if (period < 2) return false;
   if (xgbBwcProb == null) return false;
   if (lt.xgb_exit_sent) return false; // one-shot per position
 
+  // MC Cum gate — EXIT only fires when BOTH windowed XGB AND MC Cum agree
+  // MC Cum >= 0.70 means full-game rates still favor BWC team — structural shift not sustained
+  if (mcCumWinProb != null && mcCumWinProb >= 0.70) return false;
+
   const threshold = 0.45;  // flat 0.45 — minimizes total damage (premature exits + missed exits)
 
-  // Extreme collapse — bypass confirmation
+  // Extreme collapse — bypass confirmation (MC Cum gate already passed above)
   if (xgbBwcProb < 0.15) return true;
 
   if (xgbBwcProb < threshold) {
@@ -2472,6 +2476,77 @@ function checkXGBExit(lt, xgbBwcProb, period) {
     lt.xgb_exit_warned = null; // recovered — clear with hysteresis
   }
   return false;
+}
+
+// ── COMPOUND CONFIRMATION — replaces checkpoint graduation ──────
+// 5 consecutive deduped polls where MC Cum >= 0.80 AND Floor >= 0.65.
+// Q2 EARLY path adds lead >= 5 AND 0 prior flips.
+// Returns { confirmed, tier, holds, path }.
+// Stale poll guard: only counts hold when game clock has advanced.
+// compound_tier is a watermark (only upgrades). compound_holds is the live streak.
+function checkCompoundConfirmation(lt, mcCumWinProb, floor, period, clock, ctrlTeam, bwcTeam, ctrlMargin, priorFlips) {
+  const result = { confirmed: false, tier: lt.compound_tier || 'TRACKING', holds: lt.compound_holds || 0, path: lt.compound_path || null };
+
+  // Control must match BWC team — streak requires same team throughout
+  if (ctrlTeam !== bwcTeam) {
+    lt.compound_holds = 0;
+    result.holds = 0;
+    return result;
+  }
+
+  // Stale poll guard: skip if game clock hasn't advanced
+  if (lt.compound_last_period === period && lt.compound_last_clock === clock) {
+    return result; // no increment, no reset — just return current state
+  }
+
+  // Check compound threshold
+  const baseThreshold = mcCumWinProb != null && mcCumWinProb >= 0.80 && floor >= 0.65;
+
+  // Q2 early path adds margin and flip requirements
+  const isQ2 = period === 2;
+  const q2Extra = !isQ2 || (ctrlMargin >= 5 && priorFlips === 0);
+  const thresholdMet = baseThreshold && q2Extra;
+
+  if (thresholdMet) {
+    lt.compound_holds = (lt.compound_holds || 0) + 1;
+    lt.compound_last_period = period;
+    lt.compound_last_clock = clock;
+    result.holds = lt.compound_holds;
+
+    // Determine path — Q2_EARLY only if confirmation completes during Q2
+    if (lt.compound_holds >= 5 && !lt.compound_confirmed) {
+      const path = isQ2 ? 'Q2_EARLY' : 'STANDARD';
+      const tier = priorFlips === 0 ? 'CONFIRMED' : 'RECOVERING';
+
+      lt.compound_confirmed = true;
+      lt.compound_path = path;
+      lt.compound_mc_at_confirm = mcCumWinProb;
+
+      // Watermark — only upgrade
+      const TIER_ORDER = { TRACKING: 0, RECOVERING: 1, CONFIRMED: 2, LOCKED: 3 };
+      if ((TIER_ORDER[tier] || 0) > (TIER_ORDER[lt.compound_tier] || 0)) {
+        lt.compound_tier = tier;
+      }
+
+      result.confirmed = true;
+      result.tier = lt.compound_tier;
+      result.path = path;
+    }
+
+    // LOCKED upgrade — 10 consecutive holds in single unbroken streak, 0 flips
+    if (lt.compound_holds >= 10 && priorFlips === 0 && lt.compound_tier !== 'LOCKED') {
+      lt.compound_tier = 'LOCKED';
+      result.tier = 'LOCKED';
+    }
+  } else {
+    // Threshold not met on a non-stale poll — reset streak
+    lt.compound_holds = 0;
+    lt.compound_last_period = period;
+    lt.compound_last_clock = clock;
+    result.holds = 0;
+  }
+
+  return result;
 }
 
 function classifyTransition(fromState, toState) {
@@ -7629,28 +7704,42 @@ export default async function(req) {
               }
             }
 
-            // ── XGB EXIT — Pure XGB replaces control-flip EXIT ──────────────────
-            // Backtest: 92.4% exit accuracy (Q4 at 0.45: 90.8%) vs 63.7% control flip.
-            // fires when BWC team's XGB drops below quarter-aware threshold for 2+ polls.
+            // ── XGB EXIT — Windowed XGB + MC Cum gate ──────────────────
+            // Windowed XGB detects recent structural decay. MC Cum confirms sustained shift.
+            // EXIT fires only when BOTH signals agree (73% precision, 80% recall on 48 playoff games).
             if (lt.bwc_fired && lt.po_fired && _xgbBwcProb != null
                 && alertMinsLeft >= 1.0 && ind.controlTeam !== 'Neither') {
-              if (checkXGBExit(lt, _xgbBwcProb, currentPeriod)) {
+              // MC Cum from BWC team's perspective (MC Cum is computed for current ctrl team)
+              const _mcCumBwcWp = _mcCum?.winProb != null
+                ? (ind.controlTeam === lt.bwc_fired.team ? _mcCum.winProb : 1 - _mcCum.winProb)
+                : null;
+              if (checkXGBExit(lt, _xgbBwcProb, currentPeriod, _mcCumBwcWp)) {
                 const _xgbThreshold = 0.45;
                 const _xgbExitSev = {
                   severity: _xgbBwcProb < 0.15 ? 'COLLAPSE' : _xgbBwcProb < 0.25 ? 'SEVERE' : 'STANDARD',
                   xgb: Math.round(_xgbBwcProb * 1000) / 1000,
+                  windowedXgb: Math.round(_xgbBwcProb * 1000) / 1000,
+                  mcCumAtExit: _mcCumBwcWp != null ? Math.round(_mcCumBwcWp * 1000) / 1000 : null,
                   threshold: _xgbThreshold,
                   bwcState: v2BwcState,
                   ctrlTeam: ind.controlTeam,
                   bwcTeam: lt.bwc_fired.team,
                   ctrlMatchesBWC: ind.controlTeam === lt.bwc_fired.team,
                 };
-                log(`${matchup}: ▶ XGB EXIT — ${lt.bwc_fired.team} xgb=${_xgbBwcProb.toFixed(3)} < threshold ${_xgbThreshold} (Q${currentPeriod}) bwcState=${v2BwcState} ctrl=${ind.controlTeam} margin=${_v2Margin} severity=${_xgbExitSev.severity}`);
+                log(`${matchup}: ▶ XGB EXIT — ${lt.bwc_fired.team} xgb=${_xgbBwcProb.toFixed(3)} mcCum=${_mcCumBwcWp != null ? _mcCumBwcWp.toFixed(3) : '?'} < threshold ${_xgbThreshold} (Q${currentPeriod}) bwcState=${v2BwcState} ctrl=${ind.controlTeam} margin=${_v2Margin} severity=${_xgbExitSev.severity}`);
 
                 lt.xgb_exit_sent = true;
                 lt.xgb_exit_xgb = _xgbBwcProb;
                 lt.xgb_exit_ts = Date.now();
                 lt.xgb_exit_warned = null;
+
+                // Reset compound state — re-entry requires fresh 5-hold streak
+                lt.compound_tier = 'TRACKING';
+                lt.compound_holds = 0;
+                lt.compound_confirmed = false;
+                lt.compound_path = null;
+                lt.compound_mc_at_confirm = null;
+                lt.position_closed = true;
 
                 // Save lt BEFORE agent call (race-safe)
                 try { await sql`UPDATE games SET live_tracking = ${JSON.stringify(lt)} WHERE id = ${game.id}`; } catch(e) {}
@@ -7658,7 +7747,7 @@ export default async function(req) {
                 await routeV2Alert('EXIT', 'FIRED', _xgbExitSev, false);
 
               } else if (lt.xgb_exit_warned && !lt.xgb_exit_sent) {
-                log(`${matchup}: XGB EXIT warned — ${lt.bwc_fired.team} xgb=${_xgbBwcProb.toFixed(3)} (waiting for confirmation, warned ${Math.round((Date.now() - lt.xgb_exit_warned) / 1000)}s ago)`);
+                log(`${matchup}: XGB EXIT warned — ${lt.bwc_fired.team} xgb=${_xgbBwcProb.toFixed(3)} mcCum=${_mcCumBwcWp != null ? _mcCumBwcWp.toFixed(3) : '?'} (waiting for confirmation, warned ${Math.round((Date.now() - lt.xgb_exit_warned) / 1000)}s ago)`);
               }
             }
 
