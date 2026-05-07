@@ -296,7 +296,7 @@ const LEAGUES = {
     bdlPrefix: '/wnba',
     bdlHasSeasonStats: false,
     season: '2025',
-    aliasMap: {},
+    aliasMap: { NYL:'NY', LVA:'LV', LAS:'LA', GSV:'GS', WAS:'WSH', PDX:'POR', TOY:'TOR' },
     dryRun: true,  // preseason — collect data, suppress alerts + BWC tracking
   },
 };
@@ -6026,16 +6026,19 @@ export default async function(req) {
 
         try {
           if (!bdlGid) {
-            // dryRun preseason: collect ESPN WP and log even without BDL box scores
-            if (cfg.dryRun && espnMap[game.id]) {
-              const _drEspnWP = await espnWinProb(league, espnMap[game.id]);
-              log(`${matchup}: dryRun — no BDL data, ESPN WP: ${_drEspnWP ? `${hA} ${_drEspnWP.home}% / ${aA} ${_drEspnWP.away}%` : 'unavailable'}`);
-              // Insert/update minimal game row so we know we saw it
+            // dryRun preseason: always insert game row from SR data, ESPN WP is bonus
+            if (cfg.dryRun) {
               try {
                 await sql`INSERT INTO games (id, league, home_team, away_team, status) 
                   VALUES (${game.id}, ${league}, ${hA}, ${aA}, ${'preseason'})
                   ON CONFLICT (id) DO UPDATE SET status = ${'preseason'}`;
-              } catch(e) { /* games table may not have this ID format */ }
+              } catch(e) { log(`${matchup}: dryRun game INSERT failed: ${e.message}`); }
+              if (espnMap[game.id]) {
+                const _drEspnWP = await espnWinProb(league, espnMap[game.id]);
+                log(`${matchup}: dryRun — ESPN WP: ${_drEspnWP ? `${hA} ${_drEspnWP.home}% / ${aA} ${_drEspnWP.away}%` : 'unavailable'}`);
+              } else {
+                log(`${matchup}: dryRun — game saved, no ESPN mapping`);
+              }
               liveCount++;
             } else {
               log(`${matchup}: no BDL game ID mapped — skipping`);
