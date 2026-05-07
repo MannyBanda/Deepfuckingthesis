@@ -1746,8 +1746,8 @@ function reconstructCheckpoints(plays, homeAbbr, awayAbbr) {
       type.includes('turnaround') || type.includes('cutting') || type.includes('putback');
     const isMadeFG = ev.scoring_play && ev.score_value >= 2;
 
-    if (isShotType || isMadeFG || (text.includes('misses') && !type.includes('free throw'))) {
-      const is3 = ev.score_value === 3 || type.includes('three point') || type.includes('3-point') || type.includes('3pt');
+    if (ev.shooting_play || isShotType || isMadeFG || (text.includes('misses') && !type.includes('free throw'))) {
+      const is3 = ev.score_value === 3 || type.includes('three point') || type.includes('3-point') || type.includes('3pt') || text.includes('three point') || text.includes('3-point') || text.includes('3pt') || text.includes('3-pointer');
       s.fga++;
       if (is3) s.fg3a++;
       if (isMadeFG || text.includes('makes')) {
@@ -2376,8 +2376,8 @@ async function reportReconstructionValidation(sql) {
         type.includes('float') || type.includes('runner') || type.includes('step back') ||
         type.includes('turnaround') || type.includes('cutting') || type.includes('putback');
       const isMadeFG = ev.scoring_play && ev.score_value >= 2;
-      if (isShotType || isMadeFG || (text.includes('misses') && !type.includes('free throw'))) {
-        const is3 = ev.score_value === 3 || type.includes('three point') || type.includes('3-point') || type.includes('3pt');
+      if (ev.shooting_play || isShotType || isMadeFG || (text.includes('misses') && !type.includes('free throw'))) {
+        const is3 = ev.score_value === 3 || type.includes('three point') || type.includes('3-point') || type.includes('3pt') || text.includes('three point') || text.includes('3-point') || text.includes('3pt') || text.includes('3-pointer');
         s.fga++; if (is3) s.fg3a++;
         if (isMadeFG || text.includes('makes')) {
           s.fgm++; if (is3) s.fg3m++;
@@ -2584,8 +2584,8 @@ async function exportCheckpointXGB(sql, url) {
         type.includes('float') || type.includes('runner') || type.includes('step back') ||
         type.includes('turnaround') || type.includes('cutting') || type.includes('putback');
       const isMadeFG = ev.scoring_play && ev.score_value >= 2;
-      if (isShotType || isMadeFG || (text.includes('misses') && !type.includes('free throw'))) {
-        const is3 = ev.score_value === 3 || type.includes('three point') || type.includes('3-point') || type.includes('3pt');
+      if (ev.shooting_play || isShotType || isMadeFG || (text.includes('misses') && !type.includes('free throw'))) {
+        const is3 = ev.score_value === 3 || type.includes('three point') || type.includes('3-point') || type.includes('3pt') || text.includes('three point') || text.includes('3-point') || text.includes('3pt') || text.includes('3-pointer');
         s.fga++; if (is3) s.fg3a++;
         if (isMadeFG || text.includes('makes')) {
           s.fgm++; if (is3) s.fg3m++;
