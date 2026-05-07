@@ -574,8 +574,10 @@ ${ctx.compoundTier === 'CONFIRMED' || ctx.compoundTier === 'RECOVERING' || ctx.c
     + ' | MC Cum at confirmation: ' + (ctx.mcCumAtConfirmation != null ? (ctx.mcCumAtConfirmation * 100).toFixed(1) + '%' : '?')
     + ' | Prior flips: ' + (ctx.priorFlips || 0)
     + ' | Control flips (game total): ' + ctx.ctrlFlips
+    + ' | Lane: ' + (ctx.lane || 'unknown') + ' (pregame ML ' + (ctx.pregameML || '?') + ')'
   : 'Pre-confirmation (' + (ctx.compoundHolds || 0) + ' compound holds toward threshold)'
     + ' | Control flips: ' + ctx.ctrlFlips
+    + ' | Lane: ' + (ctx.lane || 'unknown') + ' (pregame ML ' + (ctx.pregameML || '?') + ')'
 }
 ${mfTrajStr}
 
@@ -4558,7 +4560,7 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
   if (graduationCtx) {
     const gc = graduationCtx;
     p += `\nPOSITION TRACKING:\n`;
-    p += `Tracked team: ${gc.bwcTeam} (fired Q${gc.bwcFirePeriod}, floor ${gc.bwcFireFloor != null ? Number(gc.bwcFireFloor).toFixed(2) : '?'})\n`;
+    p += `Tracked team: ${gc.bwcTeam} (fired Q${gc.bwcFirePeriod}, floor ${gc.bwcFireFloor != null ? Number(gc.bwcFireFloor).toFixed(2) : '?'})${gc.lane ? ' | Lane: ' + gc.lane + ' (pregame ML ' + (gc.pregameML || '?') + ')' : ''}\n`;
     const mfStr = gc.mfTrajectory
       ? `MF ${gc.mfTrajectory.direction} (${gc.mfTrajectory.floors.map(f => f.toFixed(2)).join(' -> ')})`
       : 'No MF data';
@@ -4994,6 +4996,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
             bwcState: lt.bwc_state || null,
             positionClosed: lt.position_closed || false,
             pregameML: lt.pregame_ml || null,
+            lane: lt.lane || null,
             compoundTier: lt.compound_tier || 'TRACKING',
             compoundHolds: lt.compound_holds || 0,
             compoundPath: lt.compound_path || null,
@@ -6854,6 +6857,7 @@ export default async function(req) {
                 ctrlFlips: lt.ctrl_flips || 0,
                 cpCtrlFlips: lt.cp_ctrl_flips || 0,
                 pregameML: lt.pregame_ml || null,
+                lane: lt.lane || null,
                 mfTrajectory: mfTraj,
                 fullCPTrend: fullCPTrend,
                 floorMarginSignal: floorMarginSig,
@@ -7084,7 +7088,7 @@ export default async function(req) {
                   ${v2Type === 'POSITION_OPEN' ? (v2Erosion.peakFloor ?? null) : ((typeof meanErosion !== 'undefined' && meanErosion ? meanErosion.meanFloor : null) ?? v2Erosion.peakFloor ?? null)}, ${v2ExitSev?.severity ?? null},
                   ${lt.po_fired?.tier || lt.compound_tier || null}, ${mfTraj?.direction || null},
                   ${alertCtx?.combinedRead?.read || null}, ${lt.compound_holds || null},
-                  ${lt.cp_ctrl_flips || null}, ${null},
+                  ${lt.cp_ctrl_flips || null}, ${lt.lane || null},
                   ${lt.position_closed || false}, ${!!(v2IsBuy && lt._flipBuyContext)},
                   ${lt.compound_mc_at_confirm || null}, ${v2Type === 'EXIT' ? (lt.bwc_fired?.team || ind.controlTeam) : ind.controlTeam},
                   ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
