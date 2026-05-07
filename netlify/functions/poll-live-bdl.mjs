@@ -2380,13 +2380,6 @@ const GRAD_CHECKPOINTS = [
   { label: 'Q4_3',   period: 4, clockSec: 180, gameSec: 2700 },
 ];
 
-const LANE_THRESHOLDS = {
-  underdog:       { mfGate: 0.65, minFGate: 0.58 },  // pregame ML > +100 (<50% implied)
-  tossup:         { mfGate: 0.65, minFGate: 0.58 },  // pregame ML +100 to -150 (50-60% implied)
-  favorite:       { mfGate: 0.65, minFGate: 0.58 },  // pregame ML -151 to -300 (60-75% implied)
-  heavy_favorite: { mfGate: 0.65, minFGate: 0.58 },  // pregame ML -301 or worse (75%+ implied)
-};
-
 function updateLiveTracking(lt, ctrlTeam, floor, period, clock, homeAlias) {
   if (!lt) lt = {};
   const side = ctrlTeam === homeAlias ? 'home' : 'away';
@@ -2628,26 +2621,7 @@ function computeExitSeverity(ctrlIndicators, ctrlIndicatorCount, ctrlFloor, hold
         : ctrlIndicatorCount === 0 ? ', no indicators won' : '') };
 }
 
-// ── CHECKPOINT GRADUATION HELPERS ────────────────────────────────────────────
-
-function computeCheckpointFloorStats(checkpoints, bwcTeam) {
-  // Only BWC-eligible checkpoints: team has control + floor >= 0.60 + margin >= 2
-  const eligible = checkpoints.filter(cp =>
-    cp.team === bwcTeam && cp.floor >= 0.60 && cp.margin >= 2
-  );
-  if (eligible.length === 0) return { meanFloor: null, minFloor: null, eligibleCount: 0 };
-
-  let sum = 0, min = 999;
-  for (const cp of eligible) {
-    sum += cp.floor;
-    if (cp.floor < min) min = cp.floor;
-  }
-  return {
-    meanFloor: Math.round((sum / eligible.length) * 1000) / 1000,
-    minFloor: Math.round(min * 1000) / 1000,
-    eligibleCount: eligible.length,
-  };
-}
+// ── CHECKPOINT TRAJECTORY HELPERS (agent context — NOT graduation) ────────────
 
 function computeMFTrajectory(checkpoints, bwcTeam) {
   const eligible = checkpoints.filter(cp =>
@@ -2776,78 +2750,6 @@ function computeConvictionTrend(checkpoints, bwcTeam) {
   else if (secondAvgR > firstAvgR + 0.5) trend = 'IMPROVING';
 
   return { trend, tiers, held, current, degradePoint };
-}
-
-// Recompute all checkpoint-derived state from a flat array (race-safe — works from DB table data)
-function recomputeCheckpointState(cpArray, bwcTeam) {
-  let cpHolds = 0, cpOppHolds = 0, cpCtrlFlips = 0;
-  let cpGraduation = null, cpOppGraduation = null, cpPeakRank = 'C';
-  const CP_RANK_ORDER = { C: 0, B: 1, A: 2 };
-
-  for (let i = 0; i < cpArray.length; i++) {
-    const cp = cpArray[i];
-
-    // Control flip detection
-    if (i > 0 && cpArray[i - 1].team !== cp.team) {
-      cpCtrlFlips++;
-    }
-
-    // Consecutive holds
-    if (cp.team === bwcTeam) {
-      cpHolds++;
-      cpOppHolds = 0;
-    } else {
-      cpHolds = 0;
-      if (cp.margin >= 2 && cp.floor >= 0.60) {
-        cpOppHolds++;
-      } else {
-        cpOppHolds = 0;
-      }
-    }
-
-    // BWC team graduation
-    if (cp.team === bwcTeam && cp.margin >= 2 && cp.floor >= 0.60) {
-      const cpRank = classifyRank(cp.conv, cp.margin, cpHolds, cp.oppCount || 0);
-      if (CP_RANK_ORDER[cpRank] > (CP_RANK_ORDER[cpPeakRank] || 0)) {
-        cpPeakRank = cpRank;
-        cpGraduation = {
-          rank: cpRank, cp_label: cp.label, cp_idx: i,
-          floor: cp.floor, margin: cp.margin,
-          period: cp.period, clock: cp.clock,
-        };
-      }
-    }
-
-    // Opponent graduation
-    if (cp.team !== bwcTeam && cpOppHolds >= 2 && cp.margin >= 2 && cp.floor >= 0.60) {
-      const oppRank = classifyRank(cp.conv, cp.margin, cpOppHolds, cp.oppCount || 0);
-      if ((oppRank === 'B' || oppRank === 'A')
-          && CP_RANK_ORDER[oppRank] > (CP_RANK_ORDER[cpOppGraduation?.rank] || 0)) {
-        cpOppGraduation = {
-          rank: oppRank, cp_label: cp.label, cp_idx: i,
-          floor: cp.floor, margin: cp.margin,
-        };
-      }
-    }
-  }
-
-  const floorStats = computeCheckpointFloorStats(cpArray, bwcTeam);
-
-  return {
-    cpHolds,
-    cpOppHolds,
-    cpCtrlFlips,
-    cpGraduation,
-    cpOppGraduation,
-    cpPeakRank,
-    cpMeanFloor: floorStats.meanFloor,
-    cpMinFloor: floorStats.minFloor,
-    cpEligibleCount: floorStats.eligibleCount,
-  };
-}
-
-function getLaneGates(lane) {
-  return LANE_THRESHOLDS[lane] || LANE_THRESHOLDS.tossup;
 }
 
 // ── SERVER-SIDE COMPUTE (I1–I5) ─────────────────────────────────────────────
@@ -7324,51 +7226,39 @@ export default async function(req) {
                 effectiveNextIdx++;
               }
 
-              // ── PHASE C: Derive all state from full checkpoint array ──
-              const cpState = recomputeCheckpointState(cpArray, bwcTeam);
-              const prevPeakRank = lt.cp_peak_rank || 'C';
-              const CP_RANK_ORDER = { C: 0, B: 1, A: 2 };
-
-              // Update lt with derived values
-              lt.cp_holds = cpState.cpHolds;
-              lt.cp_opp_holds = cpState.cpOppHolds;
-              lt.cp_ctrl_flips = cpState.cpCtrlFlips;
-              lt.cp_mean_floor = cpState.cpMeanFloor;
-              lt.cp_min_floor = cpState.cpMinFloor;
-              lt.cp_eligible_count = cpState.cpEligibleCount;
-
-              // Graduation — update only on rank improvement
-              if (cpState.cpGraduation && CP_RANK_ORDER[cpState.cpPeakRank] > CP_RANK_ORDER[prevPeakRank]) {
-                lt.cp_peak_rank = cpState.cpPeakRank;
-                lt.cp_graduation = cpState.cpGraduation;
-                log(`${matchup}: ▲ CP GRADUATION ${bwcTeam} ${prevPeakRank}→${cpState.cpPeakRank} @ ${cpState.cpGraduation.cp_label}`);
-              } else if (!lt.cp_graduation && cpState.cpGraduation) {
-                // First graduation (race recovery — stale lt had no graduation)
-                lt.cp_peak_rank = cpState.cpPeakRank;
-                lt.cp_graduation = cpState.cpGraduation;
-                log(`${matchup}: ▲ CP GRADUATION (recovered) ${bwcTeam} →${cpState.cpPeakRank} @ ${cpState.cpGraduation.cp_label}`);
+              // ── PHASE C: Derive flip/hold counts from checkpoint array ──
+              // Checkpoint capture still runs (Phase A+B above). Trajectory functions read lt.checkpoints.
+              // cp_holds/cp_opp_holds/cp_ctrl_flips tracked for agent context + flip detection.
+              let _cpHolds = 0, _cpOppHolds = 0, _cpCtrlFlips = 0;
+              for (let i = 0; i < cpArray.length; i++) {
+                if (i > 0 && cpArray[i - 1].team !== cpArray[i].team) _cpCtrlFlips++;
+                if (cpArray[i].team === bwcTeam) { _cpHolds++; _cpOppHolds = 0; }
+                else { _cpHolds = 0; if (cpArray[i].margin >= 2 && cpArray[i].floor >= 0.60) _cpOppHolds++; else _cpOppHolds = 0; }
               }
-
-              // Opponent graduation
-              if (cpState.cpOppGraduation) {
-                const prevOppRank = lt.cp_opp_graduation?.rank || 'C';
-                if (CP_RANK_ORDER[cpState.cpOppGraduation.rank] > (CP_RANK_ORDER[prevOppRank] || 0)) {
-                  lt.cp_opp_graduation = cpState.cpOppGraduation;
-                  log(`${matchup}: ⚠ CP OPP GRADUATION → ${cpState.cpOppGraduation.rank}-Rank @ ${cpState.cpOppGraduation.cp_label}`);
-                }
-              }
-
-              // Backward compat — consumers read lt.checkpoints
+              lt.cp_holds = _cpHolds;
+              lt.cp_opp_holds = _cpOppHolds;
+              lt.cp_ctrl_flips = _cpCtrlFlips;
               lt.checkpoints = cpArray;
 
               if (newCaptured > 0 || cpArray.length > 0) {
-                log(`${matchup}: CP Phase C — holds=${lt.cp_holds} oppHolds=${lt.cp_opp_holds} flips=${lt.cp_ctrl_flips} MF=${lt.cp_mean_floor?.toFixed(3) || '?'} peak=${lt.cp_peak_rank} cps=${cpArray.length} new=${newCaptured}`);
+                log(`${matchup}: CP Phase C — holds=${lt.cp_holds} oppHolds=${lt.cp_opp_holds} flips=${lt.cp_ctrl_flips} compound=${lt.compound_tier || 'TRACKING'}(${lt.compound_holds || 0}) cps=${cpArray.length} new=${newCaptured}`);
               }
 
-              // ── POSITION OPEN EVALUATION (post-capture, runs every cycle for convergence) ──
+              // ── COMPOUND CONFIRMATION — runs every poll cycle ──
+              // MC Cum for BWC team (when BWC has control, _mcCum IS their probability)
+              const _compoundMcCum = _mcCum?.winProb != null ? _mcCum.winProb : (lt.mc_cum_wp != null ? lt.mc_cum_wp : null);
+              const _compoundResult = checkCompoundConfirmation(lt, _compoundMcCum, ind.score, currentPeriod, clock, ind.controlTeam, bwcTeam, _v2Margin, lt.cp_ctrl_flips);
+
+              if (_compoundResult.confirmed) {
+                log(`${matchup}: ★ COMPOUND ${_compoundResult.tier} — ${bwcTeam} ${_compoundResult.holds} holds, ${_compoundResult.path} path, MC=${_compoundMcCum?.toFixed(3) || '?'} floor=${ind.score.toFixed(2)} flips=${lt.cp_ctrl_flips}`);
+              } else if (lt.compound_holds > 0 && lt.compound_holds !== (_compoundResult.holds || 0)) {
+                log(`${matchup}: compound ${bwcTeam} — ${lt.compound_holds} holds (tier=${lt.compound_tier || 'TRACKING'})`);
+              }
+
+              // ── POSITION OPEN EVALUATION — fires when compound confirmed ──
               // Escalating SUPPRESS throttle — 3min after 1st, 6min after 2nd, 12min after 3rd+
               let _poSuppressThrottled = false;
-              if (lt.cp_graduation && !lt.po_fired && ind.controlTeam === bwcTeam) {
+              if (lt.compound_confirmed && !lt.po_fired && ind.controlTeam === bwcTeam) {
                 try {
                   const _supHistory = await sql`SELECT COUNT(*)::int as cnt, MAX(ts) as last_ts FROM alerts WHERE game_id = ${game.id} AND alert_type = 'POSITION_OPEN' AND agent_decision = 'SUPPRESS' AND position_team = ${bwcTeam}`;
                   const _supCount = _supHistory[0]?.cnt || 0;
@@ -7384,139 +7274,98 @@ export default async function(req) {
                 } catch(e) { /* fail-open */ }
               }
 
-              if (lt.cp_graduation && !lt.po_fired && ind.controlTeam === bwcTeam && !_poSuppressThrottled) {
-                const gRank = lt.cp_graduation.rank;
-                const gates = getLaneGates(lt.lane || 'tossup');
+              if (lt.compound_confirmed && !lt.po_fired && ind.controlTeam === bwcTeam && !_poSuppressThrottled && alertMinsLeft >= 1.0) {
+                const poTier = lt.compound_tier;
 
-                let poShouldFire = false;
-                let poBlockReason = null;
+                // Set temporarily for agent context
+                lt.po_fired = {
+                  team: bwcTeam, tier: poTier,
+                  period: currentPeriod, clock: clock,
+                  holds: lt.compound_holds,
+                  path: lt.compound_path,
+                  mc: lt.compound_mc_at_confirm,
+                  floor: ind.score,
+                };
 
-                // A-Rank: fires at any checkpoint meeting MF/minF gates
-                if (gRank === 'A') {
-                  if (lt.cp_mean_floor >= gates.mfGate && lt.cp_min_floor >= gates.minFGate) {
-                    poShouldFire = true;
-                  } else {
-                    poBlockReason = `MF ${lt.cp_mean_floor?.toFixed(3)} < ${gates.mfGate} or minF ${lt.cp_min_floor?.toFixed(2)} < ${gates.minFGate}`;
-                  }
-                }
+                const _poResult = await routeV2Alert('POSITION_OPEN', 'FIRED', null, false);
 
-                // B-Rank: requires Q3_6+ AND MF/minF gates (Q3_6 bypassed for second BWC team)
-                if (gRank === 'B') {
-                  const pastQ3_6 = currentPeriod > 3 || (currentPeriod === 3 && cpClockSec <= 360) || lt._is_second_bwc;
-                  if (pastQ3_6 && lt.cp_mean_floor >= gates.mfGate && lt.cp_min_floor >= gates.minFGate) {
-                    poShouldFire = true;
-                  } else if (!pastQ3_6) {
-                    poBlockReason = `B-Rank requires Q3_6+ (currently Q${currentPeriod} ${clock})`;
-                  } else {
-                    poBlockReason = `MF ${lt.cp_mean_floor?.toFixed(3)} < ${gates.mfGate} or minF ${lt.cp_min_floor?.toFixed(2)} < ${gates.minFGate}`;
-                  }
-                }
-
-                // C-Rank: never fires PO
-                if (gRank === 'C') {
-                  poBlockReason = 'C-Rank — no PO';
-                }
-
-                // Fire PO — S-rank is post-hoc only
-                if (poShouldFire && alertMinsLeft >= 1.0) {
-                  const poRank = gRank;
-
-                  // Set temporarily for agent context (poRank feeds v2Ctx)
-                  lt.po_fired = {
-                    team: bwcTeam, rank: poRank,
-                    period: currentPeriod, clock: clock,
-                    mean_floor: lt.cp_mean_floor,
-                    min_floor: lt.cp_min_floor,
-                    lane: lt.lane,
-                    checkpoint_count: lt.cp_eligible_count,
-                  };
-
-                  const _poResult = await routeV2Alert('POSITION_OPEN', 'FIRED', null, false);
-
-                  if (_poResult?.decision === 'SUPPRESS') {
-                    // Rollback — position not committed, agent gets another chance in 3 min
-                    lt.po_fired = null;
-                    log(`${matchup}: PO SUPPRESS'd — rolled back, will re-evaluate in 3 min`);
-                  } else {
-                    // Commit — insert PO sentinel (race-safe, ON CONFLICT = upgrade from BUY)
-                    try {
-                      await sql`INSERT INTO game_checkpoints (game_id, label, period, clock, team, floor, margin, conv, opp_count)
-                        VALUES (${game.id}, ${'PO_ACTIVE'}, ${currentPeriod}, ${clock}, ${bwcTeam}, ${lt.cp_mean_floor || ind.score}, ${_v2Margin}, ${poRank}, ${0})
-                        ON CONFLICT (game_id, label) DO UPDATE SET team = EXCLUDED.team, floor = EXCLUDED.floor, conv = EXCLUDED.conv, period = EXCLUDED.period, clock = EXCLUDED.clock`;
-                    } catch(e) { log(`${matchup}: PO sentinel INSERT failed: ${e.message}`); }
-                    log(`${matchup}: ★ POSITION OPEN — ${bwcTeam} ${poRank}-Rank | MF=${lt.cp_mean_floor?.toFixed(3)} minF=${lt.cp_min_floor?.toFixed(2)} lane=${lt.lane} cpFlips=${lt.cp_ctrl_flips || 0}`);
-                  }
-                } else if (poBlockReason) {
-                  log(`${matchup}: PO blocked — ${gRank}-Rank but ${poBlockReason}`);
+                if (_poResult?.decision === 'SUPPRESS') {
+                  // Rollback — position not committed, agent gets another chance in 3 min
+                  lt.po_fired = null;
+                  log(`${matchup}: PO SUPPRESS'd — rolled back, will re-evaluate in 3 min`);
+                } else {
+                  // Commit — insert PO sentinel (race-safe, ON CONFLICT = upgrade from BUY)
+                  try {
+                    await sql`INSERT INTO game_checkpoints (game_id, label, period, clock, team, floor, margin, conv, opp_count)
+                      VALUES (${game.id}, ${'PO_ACTIVE'}, ${currentPeriod}, ${clock}, ${bwcTeam}, ${ind.score}, ${_v2Margin}, ${poTier}, ${0})
+                      ON CONFLICT (game_id, label) DO UPDATE SET team = EXCLUDED.team, floor = EXCLUDED.floor, conv = EXCLUDED.conv, period = EXCLUDED.period, clock = EXCLUDED.clock`;
+                  } catch(e) { log(`${matchup}: PO sentinel INSERT failed: ${e.message}`); }
+                  log(`${matchup}: ★ POSITION OPEN — ${bwcTeam} ${poTier} | ${lt.compound_holds} holds | path=${lt.compound_path} | MC@confirm=${lt.compound_mc_at_confirm?.toFixed(3) || '?'} | flips=${lt.cp_ctrl_flips || 0}`);
                 }
               }
 
-              // ── LATEST-TO-GRADUATE FLIP ──
+              // ── OPPONENT COMPOUND FLIP PO ──
+              // Opponent must sustain compound threshold for 5 polls while having control
               const oppTeam = ind.controlTeam !== bwcTeam ? ind.controlTeam : null;
-              if (oppTeam && lt.cp_opp_graduation
-                  && (lt.cp_opp_graduation.rank === 'B' || lt.cp_opp_graduation.rank === 'A')
-                  && lt.cp_opp_holds >= 2
+              if (oppTeam && oppTeam !== 'Neither'
                   && (!lt.po_fired || lt.po_fired.team !== oppTeam)
                   && alertMinsLeft >= 1.0) {
+                // Opponent stale poll guard
+                if (lt.compound_opp_last_period === currentPeriod && lt.compound_opp_last_clock === clock) {
+                  // stale — skip
+                } else {
+                  const oppMcCum = _mcCum?.winProb != null ? _mcCum.winProb : null;
+                  const oppCompoundMet = oppMcCum != null && oppMcCum >= 0.80 && ind.score >= 0.65;
+                  if (oppCompoundMet) {
+                    lt.cp_opp_holds = (lt.cp_opp_holds || 0) + 1;
+                    lt.compound_opp_last_period = currentPeriod;
+                    lt.compound_opp_last_clock = clock;
+                  } else {
+                    lt.cp_opp_holds = 0;
+                    lt.compound_opp_last_period = currentPeriod;
+                    lt.compound_opp_last_clock = clock;
+                  }
 
-                // Check "more recent" — opponent graduated after BWC team (or BWC never graduated)
-                const bwcGradIdx = lt.cp_graduation?.cp_idx ?? -1;
-                const oppGradIdx = lt.cp_opp_graduation.cp_idx;
-                const oppIsMoreRecent = oppGradIdx > bwcGradIdx;
-
-                if (oppIsMoreRecent) {
-                  // Compute opponent's MF from their eligible checkpoints
-                  const oppEligible = cpArray.filter(cp =>
-                    cp.team === oppTeam && cp.floor >= 0.60 && cp.margin >= 2
-                  );
-                  const oppMF = oppEligible.length > 0
-                    ? Math.round((oppEligible.reduce((s, cp) => s + cp.floor, 0) / oppEligible.length) * 1000) / 1000
-                    : null;
-
-                  if (oppMF != null && oppMF >= 0.55) {
+                  // 5 opponent holds → flip PO
+                  if (lt.cp_opp_holds >= 5) {
                     if (!lt.original_bwc_team) lt.original_bwc_team = lt.bwc_fired.team;
                     lt.bwc_flipped = true;
                     lt.bwc_fired.team = oppTeam;
                     lt.position_closed = false;
 
-                    const oppFlipRank = lt.cp_opp_graduation.rank;
                     const hadPriorPO = lt.po_fired && lt.po_fired.team !== oppTeam;
 
+                    // Reset compound for new team
+                    lt.compound_tier = 'CONFIRMED';
+                    lt.compound_confirmed = true;
+                    lt.compound_holds = lt.cp_opp_holds;
+                    lt.compound_path = 'STANDARD';
+                    lt.compound_mc_at_confirm = oppMcCum;
+
                     lt.po_fired = {
-                      team: oppTeam, rank: oppFlipRank,
+                      team: oppTeam, tier: 'CONFIRMED',
                       period: currentPeriod, clock: clock,
-                      mean_floor: oppMF,
-                      min_floor: null,
-                      lane: lt.lane,
-                      checkpoint_count: oppEligible.length,
+                      holds: lt.cp_opp_holds,
+                      path: 'STANDARD',
+                      mc: oppMcCum,
+                      floor: ind.score,
                       flipped: true,
                       original_bwc_team: lt.original_bwc_team,
                     };
-
-                    // Swap graduation fields
-                    const _oldCpGrad = lt.cp_graduation;
-                    lt.cp_graduation = lt.cp_opp_graduation;
-                    lt.cp_opp_graduation = _oldCpGrad;
-                    lt.cp_peak_rank = lt.cp_graduation?.rank || null;
-                    lt.cp_mean_floor = oppMF;
-                    lt.cp_eligible_count = oppEligible.length;
-                    lt.cp_min_floor = oppEligible.length > 0
-                      ? Math.round(Math.min(...oppEligible.map(cp => cp.floor)) * 1000) / 1000
-                      : null;
 
                     lt._prev_bwc_state = computeBwcState(lt, ind.controlTeam, _v2Margin);
 
                     await routeV2Alert('POSITION_OPEN', 'FIRED', null, false);
 
-                    // Commit flip sentinel — structural reality, always persisted
+                    // Commit flip sentinel
                     try {
                       await sql`INSERT INTO game_checkpoints (game_id, label, period, clock, team, floor, margin, conv, opp_count)
-                        VALUES (${game.id}, ${'PO_ACTIVE'}, ${currentPeriod}, ${clock}, ${oppTeam}, ${oppMF}, ${_v2Margin}, ${oppFlipRank}, ${0})
+                        VALUES (${game.id}, ${'PO_ACTIVE'}, ${currentPeriod}, ${clock}, ${oppTeam}, ${ind.score}, ${_v2Margin}, ${'CONFIRMED'}, ${0})
                         ON CONFLICT (game_id, label) DO UPDATE SET team = EXCLUDED.team, floor = EXCLUDED.floor, conv = EXCLUDED.conv, period = EXCLUDED.period, clock = EXCLUDED.clock`;
                     } catch(e) { log(`${matchup}: FLIP PO sentinel failed: ${e.message}`); }
 
                     v2BwcState = computeBwcState(lt, ind.controlTeam, _v2Margin);
-                    log(`${matchup}: ★ FLIP PO — ${oppTeam} ${oppFlipRank}-Rank (${hadPriorPO ? 'supersedes prior PO on' : 'flipped from'} ${lt.original_bwc_team}) | oppMF=${oppMF.toFixed(3)} | ${oppEligible.length} opp CPs`);
+                    log(`${matchup}: ★ FLIP PO — ${oppTeam} CONFIRMED (${hadPriorPO ? 'supersedes prior PO on' : 'flipped from'} ${lt.original_bwc_team}) | ${lt.cp_opp_holds} opp holds | MC=${oppMcCum?.toFixed(3) || '?'}`);
                   }
                 }
               }
