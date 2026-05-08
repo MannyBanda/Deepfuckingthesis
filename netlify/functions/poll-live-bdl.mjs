@@ -6580,10 +6580,10 @@ export default async function(req) {
             const _v2Margin = _v2CtrlPts - _v2OppPts; // positive = leading
 
             // ── BWC TRACKING DEATH — structural control lost ──
-            // First poll where control flips away from BWC team = thesis dead.
-            // Clears all BWC state, opens path for new team to earn BWC on merit.
-            // Fires regardless of confirmation state — post-confirmation death = implicit EXIT.
-            if (lt.bwc_fired && ind.controlTeam !== lt.bwc_fired.team && ind.controlTeam !== 'Neither') {
+            // First poll where control flips away from tracked team = tracking dead.
+            // Only fires when team is in TRACKING (pre-confirmation). Once compound-confirmed,
+            // only XGB EXIT can close the position.
+            if (lt.bwc_fired && ind.controlTeam !== lt.bwc_fired.team && ind.controlTeam !== 'Neither' && !lt.compound_confirmed) {
               const _deadTeam = lt.bwc_fired.team;
               const _deadHadPO = !!lt.po_fired;
               const _deadRank = lt.compound_tier || lt.cp_peak_rank || lt.po_fired?.tier || lt.po_fired?.rank || null;
