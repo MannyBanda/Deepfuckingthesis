@@ -245,3 +245,35 @@ Convert from `const` to function. NBA returns current string verbatim.
 **Files modified:** `netlify/functions/poll-live-bdl.mjs`
 **Risk:** Moderate. NBA byte-identical. All WNBA sections data-backed.
 **Scope:** ~200 lines prompt templates + ~10 lines thresholds.
+
+---
+
+## Section 5: League Plumbing Gap (CRITICAL — must fix before prompt branching)
+
+### Finding
+`league` does not flow into either prompt system. Without fixing this first, all `if (ctx.league === 'wnba')` branches would evaluate to `undefined === 'wnba'` → false, and every WNBA game would silently receive NBA prompt text with no indication of failure.
+
+### Five fixes required (all have `league` in scope at the callsite):
+
+| # | Component | Line | Current | Fix |
+|---|-----------|------|---------|-----|
+| 1 | `v2Ctx` object | 7081 | No `league` property | Add `league,` to object literal |
+| 2 | `_invV2Ctx` object | 8164 | No `league` property | Add `league,` to object literal |
+| 3 | `formatSonnetPrompt` signature | 4630 | No `league` in destructured params | Add `league` to param list |
+| 4 | `formatSonnetPrompt` callsites | 5255, 5658 | Not passing `league` | Add `league` to passed object |
+| 5 | `SONNET_SYSTEM_PROMPT` usage | 5315 | Uses const directly | Change to `getSonnetSystemPrompt(league)` |
+
+### Why this is silent
+- `ctx.league` is `undefined`, not an error
+- `if (ctx.league === 'wnba')` evaluates to `false` → falls through to NBA text
+- Agent produces valid-looking output with NBA rules applied to WNBA game
+- No crash, no log, no indication of wrong prompt — only detectable by inspecting agent reasoning content
+
+### Implementation order
+Fix all 5 plumbing points BEFORE adding any league-branched prompt text. Verify with a log line: `log(\`${matchup}: agent prompt league=${v2Ctx.league}\`)` to confirm WNBA games get `league=wnba`.
+
+### No contamination risk
+- `league` is `const` in the for-loop (block-scoped) — cannot leak between iterations
+- No global `var league` exists anywhere in the file
+- Concurrent Netlify invocations each get independent execution contexts
+- Sequential NBA→NCAAMB→WNBA loop within one invocation is safe due to block scoping
