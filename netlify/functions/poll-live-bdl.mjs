@@ -19,11 +19,16 @@ import { dirname, join } from 'path';
 // Raw stats structural model — 300 trees, 13 features (no progress), trained on 1,235 games.
 // Provides independent win probability from raw box score stats without using
 // margin, indicators, or floor score. Used as advisory signal + gate layer.
-var XGB_MODEL = null;
+var XGB_MODELS = {};
 try {
   const __xgbDir = dirname(fileURLToPath(import.meta.url));
-  XGB_MODEL = JSON.parse(readFileSync(join(__xgbDir, 'xgb-model.json'), 'utf8'));
-} catch (e) { /* non-fatal — system operates without XGB */ }
+  XGB_MODELS.nba = JSON.parse(readFileSync(join(__xgbDir, 'xgb-model.json'), 'utf8'));
+} catch (e) { /* non-fatal — NBA XGB model not found */ }
+try {
+  const __xgbDir = dirname(fileURLToPath(import.meta.url));
+  XGB_MODELS.wnba = JSON.parse(readFileSync(join(__xgbDir, 'xgb-model-wnba.json'), 'utf8'));
+} catch (e) { /* non-fatal — WNBA XGB model not found */ }
+var XGB_MODEL = XGB_MODELS.nba || null; // backward compat
 
 // MC: Clutch profiles and team 3PT baselines (loaded at first poll)
 var _clutchMap = null;
@@ -35,10 +40,11 @@ var _teamSeasonRates = null;  // { alias: { toRate, fg3aShare, fg3Pct, fg2Pct, o
 // [3] ctrl_stl_diff, [4] ctrl_oreb_diff, [5] ctrl_ast_diff, [6] ctrl_blk_diff,
 // [7] ctrl_fta_diff, [8] ctrl_efg_diff, [9] ctrl_biglead_diff,
 // [10] ctrl_3pr_diff, [11] ctrl_rim_pct_diff, [12] ctrl_run_share
-function predictXGB(features) {
-  if (!XGB_MODEL) return null;
+function predictXGB(features, league) {
+  var model = (league && XGB_MODELS[league]) || XGB_MODEL;
+  if (!model) return null;
   let sum = 0;
-  for (const tree of XGB_MODEL.trees) {
+  for (const tree of model.trees) {
     let node = 0;
     while (tree.l[node] !== -1) {
       const fval = features[tree.s[node]] ?? 0;
@@ -46,22 +52,25 @@ function predictXGB(features) {
     }
     sum += tree.w[node];
   }
-  const baseLogit = Math.log(XGB_MODEL.base_score / (1 - XGB_MODEL.base_score));
+  const baseLogit = Math.log(model.base_score / (1 - model.base_score));
   return 1 / (1 + Math.exp(-(baseLogit + sum)));
 }
 
 var XGB_FEATURE_LABELS = ['paint','pot','to','stl','oreb','ast','blk','fta','efg','biglead','3pr','rim_pct','runs'];
+var XGB_FEATURE_LABELS_WNBA = ['ast','ftm','ast_ratio','w_dreb','w_3pa','3pa','pot','w_fta','oreb','w_ftm','w_pot','w_ast_ratio'];
 var XGB_VOLATILE_FEATURES = new Set(['pot', 'to', 'stl', 'oreb', 'runs']);
 var XGB_STRUCTURAL_FEATURES = new Set(['paint', 'ast', 'blk', 'fta', 'efg', 'biglead', '3pr', 'rim_pct']);
 
 // Tree interpreter SHAP — decomposes XGB prediction into per-feature contributions
 // Uses precomputed expected values (ev) at each tree node. O(trees × depth) per call.
-// Returns all 13 features sorted by |contribution| in logit space.
-function computeXGBContributions(features) {
-  if (!features || !XGB_MODEL?.trees?.[0]?.ev) return null;
-  var contribs = new Float64Array(13);
-  for (var ti = 0; ti < XGB_MODEL.trees.length; ti++) {
-    var tree = XGB_MODEL.trees[ti];
+function computeXGBContributions(features, league) {
+  var model = (league && XGB_MODELS[league]) || XGB_MODEL;
+  var labels = league === 'wnba' ? XGB_FEATURE_LABELS_WNBA : XGB_FEATURE_LABELS;
+  var featureCount = model?.feature_count || 13;
+  if (!features || !model?.trees?.[0]?.ev) return null;
+  var contribs = new Float64Array(featureCount);
+  for (var ti = 0; ti < model.trees.length; ti++) {
+    var tree = model.trees[ti];
     var node = 0;
     while (tree.l[node] !== -1) {
       var feat = tree.s[node];
@@ -71,15 +80,16 @@ function computeXGBContributions(features) {
     }
   }
   var ranked = [];
-  for (var i = 0; i < 13; i++) {
-    ranked.push({ f: XGB_FEATURE_LABELS[i], v: Math.round(contribs[i] * 1000) / 1000 });
+  for (var i = 0; i < featureCount; i++) {
+    ranked.push({ f: labels[i] || ('f'+i), v: Math.round(contribs[i] * 1000) / 1000 });
   }
   ranked.sort(function(a, b) { return Math.abs(b.v) - Math.abs(a.v); });
   return ranked;
 }
 
-function extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock, windowAgg) {
+function extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock, windowAgg, league) {
   if (!summary?.home?.statistics || !summary?.away?.statistics) return null;
+  if (league === 'wnba') return extractXGBFeaturesWNBA(summary, ind, windowAgg);
   const hs = summary.home.statistics, as = summary.away.statistics;
   const ctrlIsHome = ind.controlTeam === ind.homeAlias;
   const flip = ctrlIsHome ? 1 : -1;
@@ -142,6 +152,47 @@ function extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock, windo
     runShare,  // ALWAYS cumulative (PBP)
   ];
 }
+// ── WNBA XGB FEATURE EXTRACTION ──────────────────────────────────────────────
+// 12 features: 6 cumulative + 6 windowed. No biglead (circular in WNBA).
+// Feature order must match xgb-model-wnba.json training.
+function extractXGBFeaturesWNBA(summary, ind, windowAgg) {
+  var hs = summary.home.statistics, as = summary.away.statistics;
+  var ctrlIsHome = ind.controlTeam === ind.homeAlias;
+  var flip = ctrlIsHome ? 1 : -1;
+
+  var hFGM = Number(hs.field_goals_made || 0), aFGM = Number(as.field_goals_made || 0);
+  var hAst = Number(hs.assists || 0), aAst = Number(as.assists || 0);
+  var hAR = hFGM > 0 ? hAst / hFGM : 0, aAR = aFGM > 0 ? aAst / aFGM : 0;
+
+  // Windowed stats
+  var wH = null, wA = null;
+  if (windowAgg && windowAgg.home && windowAgg.away) {
+    var wHFGA = Number(windowAgg.home.field_goals_att || 0);
+    var wAFGA = Number(windowAgg.away.field_goals_att || 0);
+    if (wHFGA >= 5 && wAFGA >= 5) { wH = windowAgg.home; wA = windowAgg.away; }
+  }
+
+  return [
+    (hAst - aAst) * flip,                                                                           // [0] c_ast
+    (Number(hs.free_throws_made || 0) - Number(as.free_throws_made || 0)) * flip,                   // [1] c_ftm
+    (hAR - aAR) * flip,                                                                             // [2] c_ast_ratio
+    wH ? (Number(wH.defensive_rebounds || 0) - Number(wA.defensive_rebounds || 0)) * flip : 0,       // [3] w_dreb
+    wH ? (Number(wH.three_points_att || 0) - Number(wA.three_points_att || 0)) * flip : 0,          // [4] w_3pa
+    (Number(hs.three_points_att || 0) - Number(as.three_points_att || 0)) * flip,                    // [5] c_3pa
+    (Number(hs.points_off_turnovers || 0) - Number(as.points_off_turnovers || 0)) * flip,            // [6] c_pot
+    wH ? (Number(wH.free_throws_att || 0) - Number(wA.free_throws_att || 0)) * flip : 0,            // [7] w_fta
+    (Number(hs.offensive_rebounds || 0) - Number(as.offensive_rebounds || 0)) * flip,                 // [8] c_oreb
+    wH ? (Number(wH.free_throws_made || 0) - Number(wA.free_throws_made || 0)) * flip : 0,          // [9] w_ftm
+    wH ? (Number(wH.points_off_turnovers || 0) - Number(wA.points_off_turnovers || 0)) * flip : 0,  // [10] w_pot
+    wH ? (function() {                                                                               // [11] w_ast_ratio
+      var whFGM = Number(wH.field_goals_made || 0), waFGM = Number(wA.field_goals_made || 0);
+      var whAR = whFGM > 0 ? Number(wH.assists || 0) / whFGM : 0;
+      var waAR = waFGM > 0 ? Number(wA.assists || 0) / waFGM : 0;
+      return (whAR - waAR) * flip;
+    })() : 0,
+  ];
+}
+
 // Separates volatile (hustle/event-driven) vs structural (scheme/repeatable) SHAP contributions
 function computeConvictionQuality(shapArray) {
   if (!shapArray || shapArray.length === 0) return null;
@@ -273,8 +324,17 @@ const LEAGUES = {
     espnSummaryBase: 'https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba/summary',
     bdlPrefix: '/nba',
     bdlHasSeasonStats: true,
+    bdlHasBoxScores: true,
     season: '2025',
     aliasMap: { NOP: 'NO', GSW: 'GS', NYK: 'NY', SAS: 'SA', PHX: 'PHO', BKN: 'BKN' },
+    quarterMinutes: 12,
+    gameMinutes: 48,
+    periodCount: 4,
+    twoPointBaseline: 0.52,
+    weights: { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 },
+    mcDefaults: { toRate: 0.13, fg3aShare: 0.35, fg3Pct: 0.36, fg2Pct: 0.52, orebRate: 0.25, ftaRate: 0.22, ftPct: 0.76 },
+    xgbModelFile: 'xgb-model.json',
+    xgbFeatureCount: 13,
   },
   ncaamb: {
     srBase: 'https://api.sportradar.com/ncaamb/trial/v8/en/',
@@ -284,8 +344,16 @@ const LEAGUES = {
     espnSummaryBase: 'https://site.web.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/summary',
     bdlPrefix: '/ncaab',
     bdlHasSeasonStats: true,
+    bdlHasBoxScores: false,
     season: '2025',
-    aliasMap: {},  // NCAAMB uses name-based ESPN matching, no alias overrides needed
+    aliasMap: {},
+    quarterMinutes: 20,
+    gameMinutes: 40,
+    periodCount: 2,
+    twoPointBaseline: 0.49,
+    weights: { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 },
+    mcDefaults: null,
+    xgbModelFile: null,
   },
   wnba: {
     srBase: 'https://api.sportradar.com/wnba/trial/v8/en/',
@@ -295,9 +363,17 @@ const LEAGUES = {
     espnSummaryBase: 'https://site.web.api.espn.com/apis/site/v2/sports/basketball/wnba/summary',
     bdlPrefix: '/wnba',
     bdlHasSeasonStats: false,
+    bdlHasBoxScores: false,
     season: '2025',
     aliasMap: { NYL:'NY', LVA:'LV', LAS:'LA', GSV:'GS', WAS:'WSH', PDX:'POR', TOY:'TOR' },
-    dryRun: true,  // preseason — collect data, suppress alerts + BWC tracking
+    quarterMinutes: 10,
+    gameMinutes: 40,
+    periodCount: 4,
+    twoPointBaseline: 0.46,
+    weights: { I1: 0.15, I2: 0.20, I3: 0.30, I4: 0.25, I5: 0.10 },
+    mcDefaults: { toRate: 0.178, fg3aShare: 0.345, fg3Pct: 0.347, fg2Pct: 0.482, orebRate: 0.348, ftaRate: 0.224, ftPct: 0.788 },
+    xgbModelFile: 'xgb-model-wnba.json',
+    xgbFeatureCount: 12,
   },
 };
 
@@ -1939,7 +2015,7 @@ function extractMCRatesFromPossLog(possLog, windowSize, hA, aA, hBaseline, aBase
 }
 
 // Estimate remaining possessions per team from cumulative stats + clock
-function estimateRemainingPossMC(homeStats, awayStats, period, clockSec) {
+function estimateRemainingPossMC(homeStats, awayStats, period, clockSec, league) {
   function estPoss(s) {
     var fga = Number(s.fga || s.field_goals_att || 0) || 0;
     var fta = Number(s.fta || s.free_throws_att || 0) || 0;
@@ -1949,9 +2025,11 @@ function estimateRemainingPossMC(homeStats, awayStats, period, clockSec) {
   }
   var hPoss = estPoss(homeStats), aPoss = estPoss(awayStats);
   var avgPoss = (hPoss + aPoss) / 2;
-  var elapsedMin = (Math.min(period, 4) - 1) * 12 + (12 - clockSec / 60);
+  var qMin = (LEAGUES[league]?.quarterMinutes) || 12;
+  var gameMin = (LEAGUES[league]?.gameMinutes) || 48;
+  var elapsedMin = (Math.min(period, 4) - 1) * qMin + (qMin - clockSec / 60);
   if (elapsedMin < 1) elapsedMin = 1;
-  var remainMin = 48 - elapsedMin;
+  var remainMin = gameMin - elapsedMin;
   if (remainMin < 0) remainMin = 0;
   var pacePerMin = avgPoss / elapsedMin;
   return Math.max(0, Math.round(pacePerMin * remainMin));
@@ -1960,7 +2038,8 @@ function estimateRemainingPossMC(homeStats, awayStats, period, clockSec) {
 // ── MC CUMULATIVE — game-rate simulation (always-on Q2+) ──────────────────────
 // Uses full cumulative box score rates (not PBP window).
 // MC Cum AUC=0.7938 — best single signal. Beats XGB in disagreements 70-87%.
-function extractMCRatesFromCumulative(stats, seasonFg3Pct) {
+function extractMCRatesFromCumulative(stats, seasonFg3Pct, league) {
+  var defaults = getMCDefaults(league);
   var fga = Number(stats.field_goals_att || stats.fga || 0) || 0;
   var fgm = Number(stats.field_goals_made || stats.fgm || 0) || 0;
   var fg3a = Number(stats.three_points_att || stats.fg3a || 0) || 0;
@@ -1973,32 +2052,32 @@ function extractMCRatesFromCumulative(stats, seasonFg3Pct) {
   var poss = fga + 0.44 * fta - oreb + to;
   if (poss < 3) poss = Math.max(fga, 3);
   if (fga < 10) return null; // cumulative should always pass by Q2
-  var rawFg3Pct = fg3a > 0 ? fg3m / fg3a : 0.36;
-  var baseline = seasonFg3Pct || 0.36;
+  var rawFg3Pct = fg3a > 0 ? fg3m / fg3a : defaults.fg3Pct;
+  var baseline = seasonFg3Pct || defaults.fg3Pct;
   // Heavier regression cap for cumulative (more data = trust raw more)
   var sampleWeight = Math.min(0.75, fg3a / 30);
   var fg3Pct = rawFg3Pct * sampleWeight + baseline * (1 - sampleWeight);
   function clamp(v) { return Math.max(0, Math.min(1, v)); }
   return {
-    toRate: clamp(poss > 0 ? to / poss : 0.12),
-    fg3aShare: clamp(fga > 0 ? fg3a / fga : 0.35),
+    toRate: clamp(poss > 0 ? to / poss : defaults.toRate),
+    fg3aShare: clamp(fga > 0 ? fg3a / fga : defaults.fg3aShare),
     fg3Pct: clamp(fg3Pct),
-    fg2Pct: clamp(fg2a > 0 ? fg2m / fg2a : 0.50),
-    orebRate: clamp((fga - fgm) > 0 ? oreb / (fga - fgm) : 0.25),
-    ftaRate: Math.min(poss > 0 ? fta / poss : 0.20, 1.0),
-    ftPct: clamp(fta > 0 ? ftm / fta : 0.76),
+    fg2Pct: clamp(fg2a > 0 ? fg2m / fg2a : defaults.fg2Pct),
+    orebRate: clamp((fga - fgm) > 0 ? oreb / (fga - fgm) : defaults.orebRate),
+    ftaRate: Math.min(poss > 0 ? fta / poss : defaults.ftaRate, 1.0),
+    ftPct: clamp(fta > 0 ? ftm / fta : defaults.ftPct),
     _cumPoss: Math.round(poss), _cumFGA: fga,
   };
 }
 
-function computeMCCumulative(summary, period, clockSec, controlTeam, hA, hBaseline, aBaseline) {
+function computeMCCumulative(summary, period, clockSec, controlTeam, hA, hBaseline, aBaseline, league) {
   if (period < 2) return null;
   var homeStats = summary.home?.statistics || {};
   var awayStats = summary.away?.statistics || {};
-  var homeRates = extractMCRatesFromCumulative(homeStats, hBaseline);
-  var awayRates = extractMCRatesFromCumulative(awayStats, aBaseline);
+  var homeRates = extractMCRatesFromCumulative(homeStats, hBaseline, league);
+  var awayRates = extractMCRatesFromCumulative(awayStats, aBaseline, league);
   if (!homeRates || !awayRates) return null;
-  var remainPoss = estimateRemainingPossMC(homeStats, awayStats, period, clockSec);
+  var remainPoss = estimateRemainingPossMC(homeStats, awayStats, period, clockSec, league);
   if (remainPoss <= 0) return null;
   var ctrlIsHome = controlTeam === hA;
   var result = runMonteCarloSim(homeRates, awayRates,
@@ -2016,10 +2095,14 @@ function computeMCCumulative(summary, period, clockSec, controlTeam, hA, hBaseli
 // ── MC RATE DECOMPOSITION — which rates are driving MC win probability ─────
 // Swaps each ctrl-team rate to league default, measures WP delta.
 // ~1,400 sims (~1ms). Purely narrative — no gates or decisions depend on this.
-var MC_DEFAULT_RATES = {
+var MC_NBA_DEFAULTS = {
   toRate: 0.13, fg3aShare: 0.35, fg3Pct: 0.36, fg2Pct: 0.52,
   orebRate: 0.25, ftaRate: 0.22, ftPct: 0.76,
 };
+function getMCDefaults(league) {
+  return LEAGUES[league]?.mcDefaults || MC_NBA_DEFAULTS;
+}
+var MC_DEFAULT_RATES = MC_NBA_DEFAULTS; // backward compat
 var MC_RATE_LABELS = {
   toRate: 'turnover discipline', fg3aShare: '3PT volume',
   fg3Pct: '3PT shooting', fg2Pct: 'interior finishing',
@@ -2027,27 +2110,28 @@ var MC_RATE_LABELS = {
   ftPct: 'free throw accuracy',
 };
 
-function computeMCDrivers(mcCumResult, ctrlIsHome, homeScore, awayScore, ctrlSeasonRates) {
+function computeMCDrivers(mcCumResult, ctrlIsHome, homeScore, awayScore, ctrlSeasonRates, league) {
   if (!mcCumResult || !mcCumResult.homeRates || !mcCumResult.awayRates) return null;
   var baseWP = mcCumResult.winProb;
   var hRates = mcCumResult.homeRates, aRates = mcCumResult.awayRates;
   var remainPoss = mcCumResult.remainPoss;
   if (remainPoss <= 0) return null;
+  var defaults = getMCDefaults(league);
 
   // Use per-team season rates as baseline, fall back to league defaults
-  var baseline = ctrlSeasonRates || MC_DEFAULT_RATES;
+  var baseline = ctrlSeasonRates || defaults;
 
   // For each rate dimension on CTRL team, swap to season baseline
   // delta = baseWP - WP(with ctrl rate at season avg) → positive = game rate helping
   var drivers = [];
-  var rateKeys = Object.keys(MC_DEFAULT_RATES);
+  var rateKeys = Object.keys(defaults);
   for (var i = 0; i < rateKeys.length; i++) {
     var key = rateKeys[i];
     var modH = Object.assign({}, hRates);
     var modA = Object.assign({}, aRates);
     // Neutralize ctrl team's rate to their season baseline
-    if (ctrlIsHome) { modH[key] = baseline[key] || MC_DEFAULT_RATES[key]; }
-    else { modA[key] = baseline[key] || MC_DEFAULT_RATES[key]; }
+    if (ctrlIsHome) { modH[key] = baseline[key] || defaults[key]; }
+    else { modA[key] = baseline[key] || defaults[key]; }
     var modResult = runMonteCarloSim(modH, modA,
       homeScore, awayScore, remainPoss,
       { simCount: 500, ctrlTeam: ctrlIsHome ? 'home' : 'away' });
@@ -2761,22 +2845,26 @@ function computeConvictionTrend(checkpoints, bwcTeam) {
 // Pure function. No cardState, no DOM, no PBP, no baselines.
 // Input: SR game summary JSON. Output: indicator scores + composite.
 
-function computeServer(summary, pbpData, seasonQ4) {
+function computeServer(summary, pbpData, seasonQ4, league) {
   const H = summary.home, A = summary.away;
   if (!H || !A) return null;
   const hs = H.statistics || {}, as = A.statistics || {};
   const hA = H.alias || H.name || 'HOME', aA = A.alias || A.name || 'AWAY';
   const hS = H.points || 0, aS = A.points || 0;
   if (hS === 0 && aS === 0) return null;
+  const cfg = LEAGUES[league] || LEAGUES.nba;
+  const W = cfg.weights || { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 };
 
   // I1 — Disruption & Conversion
   const hDisrupt = (hs.steals || 0) + (hs.blocks || 0);
   const aDisrupt = (as.steals || 0) + (as.blocks || 0);
   const disruptDiff = hDisrupt - aDisrupt;
-  const i1subA = disruptDiff > 1 ? 1 : disruptDiff < -1 ? -1 : 0;
+  const disruptThresh = league === 'wnba' ? 2 : 1;
+  const i1subA = disruptDiff > disruptThresh ? 1 : disruptDiff < -disruptThresh ? -1 : 0;
   const hPOT = hs.points_off_turnovers || 0, aPOT = as.points_off_turnovers || 0;
   const potDiff = hPOT - aPOT;
-  const i1subB = potDiff > 4 ? 1 : potDiff < -4 ? -1 : 0;
+  const potThresh = league === 'wnba' ? 3 : 4;
+  const i1subB = potDiff > potThresh ? 1 : potDiff < -potThresh ? -1 : 0;
   let i1raw = i1subA + i1subB;
   // Chaos layer — forced vs unforced TO split from PBP (±0.5, threshold ±4)
   if (pbpData) {
@@ -2790,22 +2878,37 @@ function computeServer(summary, pbpData, seasonQ4) {
   const I1 = { score: i1raw > 0 ? 1 : i1raw === 0 ? 0.5 : 0, leader: i1raw > 0 ? hA : i1raw < 0 ? aA : 'EVEN' };
 
   // I2 — Interior Control (Sub-A: paint volume, Sub-B: rim efficiency)
-  const hPaint = hs.points_in_the_paint || hs.points_in_paint || 0;
-  const aPaint = as.points_in_the_paint || as.points_in_paint || 0;
-  const paintDiff = hPaint - aPaint;
-  let i2subA = 0;
-  if (paintDiff > 6) i2subA = 1;
-  else if (paintDiff < -6) i2subA = -1;
-  const hRimM = hs.field_goals_at_rim_made || 0, hRimA = hs.field_goals_at_rim_att || 0;
-  const aRimM = as.field_goals_at_rim_made || 0, aRimA = as.field_goals_at_rim_att || 0;
-  const hRimPct = hRimA >= 6 ? hRimM / hRimA : null;
-  const aRimPct = aRimA >= 6 ? aRimM / aRimA : null;
-  let i2subB = 0;
-  if (hRimPct != null && aRimPct != null) {
-    if (hRimPct - aRimPct > 0.10) i2subB = 1;
-    else if (aRimPct - hRimPct > 0.10) i2subB = -1;
+  // I2 — Interior Control (NBA) / Perimeter & FT Access (WNBA)
+  let i2raw;
+  if (league === 'wnba') {
+    const h3Pct = (hs.three_points_att || 0) > 4 ? (hs.three_points_made || 0) / (hs.three_points_att || 1) * 100 : null;
+    const a3Pct = (as.three_points_att || 0) > 4 ? (as.three_points_made || 0) / (as.three_points_att || 1) * 100 : null;
+    let wi2a = 0;
+    if (h3Pct != null && a3Pct != null) {
+      if (h3Pct - a3Pct > 3) wi2a = 1;
+      else if (a3Pct - h3Pct > 3) wi2a = -1;
+    }
+    const hFTA = hs.free_throws_att || 0, aFTA = as.free_throws_att || 0;
+    const wi2b = (hFTA - aFTA > 2) ? 1 : (aFTA - hFTA > 2) ? -1 : 0;
+    i2raw = wi2a + wi2b;
+  } else {
+    const hPaint = hs.points_in_the_paint || hs.points_in_paint || 0;
+    const aPaint = as.points_in_the_paint || as.points_in_paint || 0;
+    const paintDiff = hPaint - aPaint;
+    let i2subA = 0;
+    if (paintDiff > 6) i2subA = 1;
+    else if (paintDiff < -6) i2subA = -1;
+    const hRimM = hs.field_goals_at_rim_made || 0, hRimA = hs.field_goals_at_rim_att || 0;
+    const aRimM = as.field_goals_at_rim_made || 0, aRimA = as.field_goals_at_rim_att || 0;
+    const hRimPct = hRimA >= 6 ? hRimM / hRimA : null;
+    const aRimPct = aRimA >= 6 ? aRimM / aRimA : null;
+    let i2subB = 0;
+    if (hRimPct != null && aRimPct != null) {
+      if (hRimPct - aRimPct > 0.10) i2subB = 1;
+      else if (aRimPct - hRimPct > 0.10) i2subB = -1;
+    }
+    i2raw = i2subA + i2subB;
   }
-  const i2raw = i2subA + i2subB;
   const I2 = { score: i2raw > 0 ? 1 : i2raw < 0 ? 0 : 0.5, leader: i2raw > 0 ? hA : i2raw < 0 ? aA : 'EVEN' };
 
   // I3 — Shot Quality & Creation
@@ -2814,21 +2917,34 @@ function computeServer(summary, pbpData, seasonQ4) {
   const aEFG = ((as.field_goals_made || 0) + 0.5 * (as.three_points_made || 0)) / aFGA;
   const hAst = hs.assists || 0, aAst = as.assists || 0;
   const hFGM = hs.field_goals_made || 1, aFGM = as.field_goals_made || 1;
-  const hAR = (hAst / hFGM) * 100, aAR = (aAst / aFGM) * 100;
-  const hCS3 = pbpData?.home?.threes?.assisted || 0, aCS3 = pbpData?.away?.threes?.assisted || 0;
-  const i3raw = (hEFG > aEFG + 0.02 ? 1 : hEFG < aEFG - 0.02 ? -1 : 0)
-              + (hAR > aAR + 5 ? 1 : hAR < aAR - 5 ? -1 : 0)
-              + (hCS3 > aCS3 + 2 ? 1 : hCS3 < aCS3 - 2 ? -1 : 0);
+  let i3raw;
+  if (league === 'wnba') {
+    const efgDiff = hEFG - aEFG;
+    const astDiff = hAst - aAst;
+    i3raw = (efgDiff > 0.03 ? 1 : efgDiff < -0.03 ? -1 : 0)
+          + (astDiff > 2 ? 1 : astDiff < -2 ? -1 : 0);
+  } else {
+    const hAR = (hAst / hFGM) * 100, aAR = (aAst / aFGM) * 100;
+    const hCS3 = pbpData?.home?.threes?.assisted || 0, aCS3 = pbpData?.away?.threes?.assisted || 0;
+    i3raw = (hEFG > aEFG + 0.02 ? 1 : hEFG < aEFG - 0.02 ? -1 : 0)
+          + (hAR > aAR + 5 ? 1 : hAR < aAR - 5 ? -1 : 0)
+          + (hCS3 > aCS3 + 2 ? 1 : hCS3 < aCS3 - 2 ? -1 : 0);
+  }
   const I3 = { score: i3raw > 0 ? 1 : i3raw === 0 ? 0.5 : 0, leader: i3raw > 0 ? hA : i3raw < 0 ? aA : 'EVEN' };
 
   // I4 — Game Control
   const hBigLead = hs.biggest_lead || 0, aBigLead = as.biggest_lead || 0;
-  // Flip: need ≥2 gap. Contested: opponent within 75% of leader's biggest lead.
   let i4subA = 0;
-  if (hBigLead >= aBigLead + 2) {
-    i4subA = (aBigLead >= 0.75 * hBigLead) ? 0 : 1;
-  } else if (aBigLead >= hBigLead + 2) {
-    i4subA = (hBigLead >= 0.75 * aBigLead) ? 0 : -1;
+  if (league === 'wnba') {
+    const blDiff = hBigLead - aBigLead;
+    i4subA = blDiff > 4 ? 1 : blDiff < -4 ? -1 : 0;
+  } else {
+    // NBA: ≥2 gap with 75% contested check
+    if (hBigLead >= aBigLead + 2) {
+      i4subA = (aBigLead >= 0.75 * hBigLead) ? 0 : 1;
+    } else if (aBigLead >= hBigLead + 2) {
+      i4subA = (hBigLead >= 0.75 * aBigLead) ? 0 : -1;
+    }
   }
   let i4subB = 0;
   const periods = summary.periods || [];
@@ -2845,9 +2961,17 @@ function computeServer(summary, pbpData, seasonQ4) {
   const i4raw = i4subA + i4subB;
   const I4 = { score: i4raw > 0 ? 1 : i4raw === 0 ? 0.5 : 0, leader: i4raw > 0 ? hA : i4raw < 0 ? aA : 'EVEN' };
 
-  // I5 — Sustained Execution (run share from PBP)
+  // I5 — Sustained Execution (NBA) / Momentum (WNBA)
   let I5 = { score: 0.5, leader: 'EVEN' };
-  if (pbpData?.runs6) {
+  if (league === 'wnba') {
+    const hFBP = hs.fast_break_pts || hs.fast_break_points || 0;
+    const aFBP = as.fast_break_pts || as.fast_break_points || 0;
+    const hReb = (hs.offensive_rebounds || 0) + (hs.defensive_rebounds || 0);
+    const aReb = (as.offensive_rebounds || 0) + (as.defensive_rebounds || 0);
+    const i5raw = (hFBP - aFBP > 3 ? 1 : hFBP - aFBP < -3 ? -1 : 0)
+                + (hReb - aReb > 3 ? 1 : aReb - hReb > 3 ? -1 : 0);
+    I5 = { score: i5raw > 0 ? 1 : i5raw === 0 ? 0.5 : 0, leader: i5raw > 0 ? hA : i5raw < 0 ? aA : 'EVEN' };
+  } else if (pbpData?.runs6) {
     const hRuns = pbpData.runs6.filter(r => r.team === hA).length;
     const aRuns = pbpData.runs6.filter(r => r.team === aA).length;
     const totalRuns = hRuns + aRuns;
@@ -2888,7 +3012,7 @@ function ctrlI(ind) {
 // ── CONVICTION ENGINE — combo-pattern-driven from 171-game validation ──────
 // Returns mechanical conviction tier based on WHICH indicators the control team wins.
 // Data basis: I4+I5=100%(77g), I3+I4=99%(68g), I3+I5=96%(68g), 4+=100%(66g), 3=85%(62g), 2=70%(33g)
-function computeConviction(ind) {
+function computeConviction(ind, league) {
   if (!ind || ind.score == null) return { tier: 'NO ENTRY', combo: 'NONE', indicatorsWon: [], indicatorsLost: [], count: 0, pairs: [] };
   const ctrlHome = ind.controlTeam === ind.homeAlias;
 
@@ -2906,37 +3030,60 @@ function computeConviction(ind) {
   const has = (a, b) => wins.includes(a) && wins.includes(b);
   const combo = count > 0 ? wins.join('+') : 'NONE';
 
-  // Check killer pairs
-  const hasI4I5 = has('I4', 'I5');
-  const hasI3I4 = has('I3', 'I4');
-  const hasI3I5 = has('I3', 'I5');
-  const hasKillerPair = hasI4I5 || hasI3I4 || hasI3I5;
-
-  // Danger combos — high count but historically weak
-  const isDanger = (
-    (count === 2 && wins.includes('I1') && wins.includes('I5') && !wins.includes('I3') && !wins.includes('I4')) || // I1+I5 only: 50%
-    (count === 3 && wins.includes('I1') && wins.includes('I2') && wins.includes('I5') && !wins.includes('I3') && !wins.includes('I4')) || // I1+I2+I5: 40%
-    (count === 3 && wins.includes('I2') && wins.includes('I3') && wins.includes('I5') && !wins.includes('I4')) // I2+I3+I5: 63%
-  );
-
-  let tier;
-  if (count >= 4 || hasI4I5) {
-    tier = 'DOMINANT';   // 100% historical
-  } else if (hasKillerPair && !isDanger) {
-    tier = 'STRONG';     // 96-99% historical
-  } else if (count >= 2 && !isDanger) {
-    tier = 'MODEST';     // 70-80% historical
-  } else if (count >= 1) {
-    tier = 'CONDITIONAL'; // 40-70%, needs Sonnet justification
-  } else {
-    tier = 'NO ENTRY';   // 0 indicators
-  }
-
-  // Pairs found (for logging/display)
+  let tier, isDanger = false;
   const pairs = [];
-  if (hasI4I5) pairs.push('I4+I5');
-  if (hasI3I4) pairs.push('I3+I4');
-  if (hasI3I5) pairs.push('I3+I5');
+
+  if (league === 'wnba') {
+    // WNBA conviction rules — I3 is anchor (30% weight), I4+I2 are killers
+    const hasI3I4 = has('I3', 'I4');
+    const hasI3I2 = has('I3', 'I2');
+    const hasI4I2 = has('I4', 'I2');
+    const hasKillerPair = hasI3I4 || hasI3I2 || hasI4I2;
+
+    if (count >= 4 || (hasI3I4 && count >= 3)) {
+      tier = 'DOMINANT';
+    } else if (hasKillerPair) {
+      tier = 'STRONG';
+    } else if (count >= 2) {
+      tier = 'MODEST';
+    } else if (count >= 1) {
+      tier = 'CONDITIONAL';
+    } else {
+      tier = 'NO ENTRY';
+    }
+
+    if (hasI3I4) pairs.push('I3+I4');
+    if (hasI3I2) pairs.push('I3+I2');
+    if (hasI4I2) pairs.push('I4+I2');
+  } else {
+    // NBA conviction rules (171-game validated)
+    const hasI4I5 = has('I4', 'I5');
+    const hasI3I4 = has('I3', 'I4');
+    const hasI3I5 = has('I3', 'I5');
+    const hasKillerPair = hasI4I5 || hasI3I4 || hasI3I5;
+
+    isDanger = (
+      (count === 2 && wins.includes('I1') && wins.includes('I5') && !wins.includes('I3') && !wins.includes('I4')) ||
+      (count === 3 && wins.includes('I1') && wins.includes('I2') && wins.includes('I5') && !wins.includes('I3') && !wins.includes('I4')) ||
+      (count === 3 && wins.includes('I2') && wins.includes('I3') && wins.includes('I5') && !wins.includes('I4'))
+    );
+
+    if (count >= 4 || hasI4I5) {
+      tier = 'DOMINANT';
+    } else if (hasKillerPair && !isDanger) {
+      tier = 'STRONG';
+    } else if (count >= 2 && !isDanger) {
+      tier = 'MODEST';
+    } else if (count >= 1) {
+      tier = 'CONDITIONAL';
+    } else {
+      tier = 'NO ENTRY';
+    }
+
+    if (hasI4I5) pairs.push('I4+I5');
+    if (hasI3I4) pairs.push('I3+I4');
+    if (hasI3I5) pairs.push('I3+I5');
+  }
 
   return { tier, combo, count, indicatorsWon: wins, indicatorsLost: loses, indicatorsEven: even, pairs, isDanger };
 }
@@ -3079,7 +3226,7 @@ function computeServerWindow(qd, currentPeriod, clock, summary, hA, aA, league) 
   // Clock → completion fraction
   const clockParts = (clock || '').split(':');
   const clockMins = clockParts.length === 2 ? parseInt(clockParts[0]) + (parseInt(clockParts[1] || 0) / 60) : 12;
-  const periodLength = league === 'ncaamb' ? 20 : 12;
+  const periodLength = league === 'ncaamb' ? 20 : league === 'wnba' ? 10 : 12;
   const completion = Math.max(0, Math.min(1, (periodLength - clockMins) / periodLength));
 
   // Build weighted quarter map: {quarterKey: {weight, diff}}
@@ -3160,42 +3307,70 @@ function computeServerWindow(qd, currentPeriod, clock, summary, hA, aA, league) 
   const hWDisrupt = (hW.steals || 0) + (hW.blocks || 0);
   const aWDisrupt = (aW.steals || 0) + (aW.blocks || 0);
   const wDisruptDiff = hWDisrupt - aWDisrupt;
-  const i1r = wDisruptDiff > 1 ? 1 : wDisruptDiff < -1 ? -1 : 0;
+  const wDisruptThresh = league === 'wnba' ? 2 : 1;
+  const i1r = wDisruptDiff > wDisruptThresh ? 1 : wDisruptDiff < -wDisruptThresh ? -1 : 0;
   const wI1 = { score: i1r > 0 ? 1 : i1r === 0 ? 0.5 : 0, leader: i1r > 0 ? hA : i1r < 0 ? aA : 'EVEN' };
 
-  // I2 — Interior Control (Sub-A: paint volume ±3 for window, Sub-B: rim efficiency ±10%)
-  const hPaint = hW.points_in_the_paint || hW.points_in_paint || 0;
-  const aPaint = aW.points_in_the_paint || aW.points_in_paint || 0;
-  const wPaintDiff = hPaint - aPaint;
-  let wi2subA = 0;
-  if (wPaintDiff > 3) wi2subA = 1;
-  else if (wPaintDiff < -3) wi2subA = -1;
-  const whRimM = hW.field_goals_at_rim_made || 0, whRimA = hW.field_goals_at_rim_att || 0;
-  const waRimM = aW.field_goals_at_rim_made || 0, waRimA = aW.field_goals_at_rim_att || 0;
-  const whRimPct = whRimA >= 6 ? whRimM / whRimA : null;
-  const waRimPct = waRimA >= 6 ? waRimM / waRimA : null;
-  let wi2subB = 0;
-  if (whRimPct != null && waRimPct != null) {
-    if (whRimPct - waRimPct > 0.10) wi2subB = 1;
-    else if (waRimPct - whRimPct > 0.10) wi2subB = -1;
+  // I2 — Interior Control (NBA) / Perimeter & FT Access (WNBA)
+  let wi2raw;
+  if (league === 'wnba') {
+    const wH3A = hW.three_points_att || 0, wA3A = aW.three_points_att || 0;
+    const wH3Pct = wH3A > 4 ? (hW.three_points_made || 0) / wH3A * 100 : null;
+    const wA3Pct = wA3A > 4 ? (aW.three_points_made || 0) / wA3A * 100 : null;
+    let wi2a = 0;
+    if (wH3Pct != null && wA3Pct != null) {
+      if (wH3Pct - wA3Pct > 3) wi2a = 1;
+      else if (wA3Pct - wH3Pct > 3) wi2a = -1;
+    }
+    const wHFTA = hW.free_throws_att || 0, wAFTA = aW.free_throws_att || 0;
+    const wi2b = (wHFTA - wAFTA > 2) ? 1 : (wAFTA - wHFTA > 2) ? -1 : 0;
+    wi2raw = wi2a + wi2b;
+  } else {
+    const hPaint = hW.points_in_the_paint || hW.points_in_paint || 0;
+    const aPaint = aW.points_in_the_paint || aW.points_in_paint || 0;
+    const wPaintDiff = hPaint - aPaint;
+    let wi2subA = 0;
+    if (wPaintDiff > 3) wi2subA = 1;
+    else if (wPaintDiff < -3) wi2subA = -1;
+    const whRimM = hW.field_goals_at_rim_made || 0, whRimA = hW.field_goals_at_rim_att || 0;
+    const waRimM = aW.field_goals_at_rim_made || 0, waRimA = aW.field_goals_at_rim_att || 0;
+    const whRimPct = whRimA >= 6 ? whRimM / whRimA : null;
+    const waRimPct = waRimA >= 6 ? waRimM / waRimA : null;
+    let wi2subB = 0;
+    if (whRimPct != null && waRimPct != null) {
+      if (whRimPct - waRimPct > 0.10) wi2subB = 1;
+      else if (waRimPct - whRimPct > 0.10) wi2subB = -1;
+    }
+    wi2raw = wi2subA + wi2subB;
   }
-  const wi2raw = wi2subA + wi2subB;
   const wI2 = { score: wi2raw > 0 ? 1 : wi2raw < 0 ? 0 : 0.5, leader: wi2raw > 0 ? hA : wi2raw < 0 ? aA : 'EVEN' };
 
-  // I3 — Shot Quality & Creation (eFG% and assist ratio are rates — thresholds unchanged)
+  // I3 — Shot Quality & Creation
   const hEFG = hW.efg || 0, aEFG = aW.efg || 0;
-  const hAR = hW.assist_ratio || 0, aAR = aW.assist_ratio || 0;
-  const i3r = (hEFG > aEFG + 0.02 ? 1 : hEFG < aEFG - 0.02 ? -1 : 0)
-            + (hAR > aAR + 5 ? 1 : hAR < aAR - 5 ? -1 : 0);
+  let i3r;
+  if (league === 'wnba') {
+    const wHAst = hW.assists || 0, wAAst = aW.assists || 0;
+    i3r = (hEFG > aEFG + 0.03 ? 1 : hEFG < aEFG - 0.03 ? -1 : 0)
+        + (wHAst - wAAst > 2 ? 1 : wAAst - wHAst > 2 ? -1 : 0);
+  } else {
+    const hAR = hW.assist_ratio || 0, aAR = aW.assist_ratio || 0;
+    i3r = (hEFG > aEFG + 0.02 ? 1 : hEFG < aEFG - 0.02 ? -1 : 0)
+        + (hAR > aAR + 5 ? 1 : hAR < aAR - 5 ? -1 : 0);
+  }
   const wI3 = { score: i3r > 0 ? 1 : i3r === 0 ? 0.5 : 0, leader: i3r > 0 ? hA : i3r < 0 ? aA : 'EVEN' };
 
   // I4 — Game Control (cumulative biggest_lead + window scoring margin)
   const hBigLead = homeStats.biggest_lead || 0, aBigLead = awayStats.biggest_lead || 0;
   let wi4subA = 0;
-  if (hBigLead >= aBigLead + 2) {
-    wi4subA = (aBigLead >= 0.75 * hBigLead) ? 0 : 1;
-  } else if (aBigLead >= hBigLead + 2) {
-    wi4subA = (hBigLead >= 0.75 * aBigLead) ? 0 : -1;
+  if (league === 'wnba') {
+    const blDiff = hBigLead - aBigLead;
+    wi4subA = blDiff > 4 ? 1 : blDiff < -4 ? -1 : 0;
+  } else {
+    if (hBigLead >= aBigLead + 2) {
+      wi4subA = (aBigLead >= 0.75 * hBigLead) ? 0 : 1;
+    } else if (aBigLead >= hBigLead + 2) {
+      wi4subA = (hBigLead >= 0.75 * aBigLead) ? 0 : -1;
+    }
   }
   const margins = windowQs.map(wq => ((wq.diff?.home?.points || 0) - (wq.diff?.away?.points || 0)));
   const marginSum = margins.reduce((a, b) => a + b, 0);
@@ -3206,8 +3381,9 @@ function computeServerWindow(qd, currentPeriod, clock, summary, hA, aA, league) 
   // I5 — Sustained Execution (cumulative runShare — runs not window-segmentable)
   const wI5 = { score: 0.5, leader: 'EVEN' };
 
-  // Composite
-  const raw = wI1.score * W.I1 + wI2.score * W.I2 + wI3.score * W.I3 + wI4.score * W.I4 + wI5.score * W.I5;
+  // Composite (league-local weights)
+  const _wW = (LEAGUES[league]?.weights) || { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 };
+  const raw = wI1.score * _wW.I1 + wI2.score * _wW.I2 + wI3.score * _wW.I3 + wI4.score * _wW.I4 + wI5.score * _wW.I5;
   const ctrlHome = raw >= 0.5;
   const wTeam = ctrlHome ? hA : aA;
   const wScore = ctrlHome ? raw : 1 - raw;
@@ -4082,8 +4258,7 @@ function computeSubMetricArrowsServer(perQuarter, hA, aA) {
 // Main server context computation — called when client hasn't pushed context
 async function computeServerContext(sql, game, league, summary, ind, espnWP, hA, aA, period, clock, matchup, sust, odds) {
   const ctx = {};
-  const W = { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 };
-
+  const W = (LEAGUES[league]?.weights) || { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 };
   // ── 1. BONUS STATUS (from SR summary — trivial) ──
   if (summary.home?.bonus || summary.away?.bonus) {
     ctx.bonusStatus = {
@@ -5038,14 +5213,14 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
 
     // Build team calibration prompt section
 
-    const calConviction = computeConviction(ind);
+    const calConviction = computeConviction(ind, league);
 
     // XGB for analysis prompt (computed locally — poll-loop _xgb* vars are out of scope)
-    const _caXgbFeatures = extractXGBFeatures(summary, ind, null, period, clock, null);
-    const _caXgbWinProb = _caXgbFeatures ? predictXGB(_caXgbFeatures) : null;
+    const _caXgbFeatures = extractXGBFeatures(summary, ind, null, period, clock, null, league);
+    const _caXgbWinProb = _caXgbFeatures ? predictXGB(_caXgbFeatures, league) : null;
     const _caXgbDivergence = _caXgbWinProb != null ? Math.round((_caXgbWinProb - ind.score) * 1000) / 1000 : null;
     const _caXgbAligned = _caXgbWinProb != null ? Math.abs(_caXgbWinProb - ind.score) < 0.15 : null;
-    const _caXgbShap = _caXgbFeatures ? computeXGBContributions(_caXgbFeatures) : null;
+    const _caXgbShap = _caXgbFeatures ? computeXGBContributions(_caXgbFeatures, league) : null;
     const _caConvQuality = _caXgbShap ? computeConvictionQuality(_caXgbShap) : null;
     const _caTrajSignals = _caXgbShap ? computeTrajectorySignals(_caXgbShap, lt.checkpoints || [], _caConvQuality, _caXgbWinProb) : null;
 
@@ -5423,7 +5598,7 @@ export default async function(req) {
       const clock = summary.clock || '';
 
       // Compute indicators + sustainability
-      const ind = computeServer(summary, pbpResult, _seasonQ4Cache || {});
+      const ind = computeServer(summary, pbpResult, _seasonQ4Cache || {}, league);
       const sust = computeSustainability(summary, league);
       const leadComp = computeLeadComposition(summary);
 
@@ -5458,7 +5633,7 @@ export default async function(req) {
           sust, leadComp, ind, clutchData: null, odds: null,
           espnWP: null, wpProfiles: null, analysisHistory: null,
           ctx, quarterDataFromDB: ctx.quarterDiffs || null, summary,
-          conviction: computeConviction(ind),
+          conviction: computeConviction(ind, league),
           floorWP: ind ? lookupFloorWP(_floorWPCoeffs, ind.controlTeam, ind.score) : null,
           mcData: null,
         });
@@ -5962,6 +6137,7 @@ export default async function(req) {
 
       // ── 3c. Batch BDL box_scores + lineups fetch (one call each, covers ALL games) ──
       let bdlBoxScores = [];
+      if (cfg.bdlHasBoxScores !== false) {
       try {
         // Use date endpoint — returns ALL games (in-progress, OT, halftime, final)
         // box_scores/live may omit OT games
@@ -5983,6 +6159,7 @@ export default async function(req) {
       } catch (e) {
         log(`BDL box_scores failed: ${e.message}`);
       }
+      } // end bdlHasBoxScores guard
 
       // Batch lineups for all games we don't have cached
       const lineupsNeeded = potentiallyLive.filter(g => {
@@ -6049,15 +6226,37 @@ export default async function(req) {
             continue;
           }
 
-          // Find box score for this game
-          const boxScore = bdlBoxScores.find(b => b.id === bdlGid);
-          if (!boxScore) {
-            log(`${matchup}: no box score — game may not have started`);
-            continue;
+          // Find data source for this game
+          let boxScore = null, _srSummary = null;
+          if (league === 'wnba') {
+            // ── WNBA: SR game summary primary (BDL has no box_scores) ──
+            try {
+              await sleep(SR_DELAY_MS);
+              _srSummary = await srFetch(league, `games/${game.id}/summary.json`);
+              if (!_srSummary || (!_srSummary.home && !_srSummary.away)) {
+                log(`${matchup}: SR summary empty — skipping`);
+                continue;
+              }
+            } catch (srErr) {
+              log(`${matchup}: SR summary fetch failed — ${srErr.message}`);
+              continue;
+            }
+          } else {
+            boxScore = bdlBoxScores.find(b => b.id === bdlGid);
+            if (!boxScore) {
+              log(`${matchup}: no box score — game may not have started`);
+              continue;
+            }
           }
 
           // Check game status
-          const gameStatus = normalizeBdlStatusServer(boxScore.status, boxScore);
+          let gameStatus;
+          if (league === 'wnba') {
+            const srSt = (_srSummary.status || 'scheduled').toLowerCase();
+            gameStatus = srSt === 'complete' ? 'closed' : srSt === 'inprogress' ? 'in progress' : srSt;
+          } else {
+            gameStatus = normalizeBdlStatusServer(boxScore.status, boxScore);
+          }
           if (gameStatus === 'closed' || gameStatus === 'complete') {
             game.status = gameStatus;
             cacheUpdated = true;
@@ -6071,7 +6270,7 @@ export default async function(req) {
               const plays = playsResult?.data || [];
               const pbpResult = parseBDLPBPServer(plays, hA, aA);
               const lineupsArr = _serverLineupsCache[bdlGid] || null;
-              const finalSummary = buildSummaryFromBDLServer(boxScore, pbpResult, lineupsArr);
+              const finalSummary = league === 'wnba' ? _srSummary : buildSummaryFromBDLServer(boxScore, pbpResult, lineupsArr);
               const homeStats = finalSummary.home?.statistics || {};
               const awayStats = finalSummary.away?.statistics || {};
               if (Object.keys(homeStats).length > 0) {
@@ -6151,8 +6350,8 @@ export default async function(req) {
 
             // ── SERVER-SIDE FINALIZE — ensures calibration view works even when client is asleep ──
             try {
-              const homePts = boxScore.home_team_score || 0;
-              const awayPts = boxScore.visitor_team_score || 0;
+              const homePts = league === 'wnba' ? Number(_srSummary?.home?.points || 0) : (boxScore.home_team_score || 0);
+              const awayPts = league === 'wnba' ? Number(_srSummary?.away?.points || 0) : (boxScore.visitor_team_score || 0);
               const winner = homePts > awayPts ? hA : (awayPts > homePts ? aA : 'TIE');
               const margin = Math.abs(homePts - awayPts);
 
@@ -6243,19 +6442,19 @@ export default async function(req) {
           const pbpResult = parseBDLPBPServer(plays, hA, aA);
           const lineupsArr = _serverLineupsCache[bdlGid] || null;
 
-          // Build SR-shaped summary
-          const summary = buildSummaryFromBDLServer(boxScore, pbpResult, lineupsArr);
+          // Build SR-shaped summary (WNBA: already fetched from SR)
+          const summary = league === 'wnba' ? _srSummary : buildSummaryFromBDLServer(boxScore, pbpResult, lineupsArr);
 
           // Stash PBP result for computeServerContext to use (avoids re-fetching)
           game._bdlPbp = pbpResult;
 
           // Compute indicators
-          const ind = computeServer(summary, pbpResult, _seasonQ4Cache || {});
+          const ind = computeServer(summary, pbpResult, _seasonQ4Cache || {}, league);
           if (!ind) {
             log(`${matchup}: compute returned null (no stats yet?)`);
             continue;
           }
-          const conviction = computeConviction(ind);
+          const conviction = computeConviction(ind, league);
 
           // ── CTRL-RELATIVE I1-I5: all storage and display uses these ──
           const _ci = ctrlI(ind);
@@ -6298,8 +6497,8 @@ export default async function(req) {
           } catch (e) { /* non-fatal */ }
 
           // XGBoost structural win probability (uses 2Q cross-fade window when available)
-          const _xgbFeatures = extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock, _windowResult?.rawAgg || null);
-          const _xgbWinProb = _xgbFeatures ? predictXGB(_xgbFeatures) : null;
+          const _xgbFeatures = extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock, _windowResult?.rawAgg || null, league);
+          const _xgbWinProb = _xgbFeatures ? predictXGB(_xgbFeatures, league) : null;
           const _xgbDivergence = _xgbWinProb != null ? Math.round((_xgbWinProb - ind.score) * 1000) / 1000 : null;
           const _xgbAligned = _xgbWinProb != null ? Math.abs(_xgbWinProb - ind.score) < 0.15 : null;
 
@@ -6423,7 +6622,7 @@ export default async function(req) {
                 var _pmClk = String(clock||'6:00').match(/(\d+):(\d+)/);
                 var _pmSec = _pmClk ? parseInt(_pmClk[1])*60+parseInt(_pmClk[2]) : 360;
                 var _pmHS = summary.home?.statistics || {}, _pmAS = summary.away?.statistics || {};
-                var _pmRemain = estimateRemainingPossMC(_pmHS, _pmAS, currentPeriod, _pmSec);
+                var _pmRemain = estimateRemainingPossMC(_pmHS, _pmAS, currentPeriod, _pmSec, league);
                 if (_pmRemain > 0) {
                   var _pmCtrlHome = ind.controlTeam === hA;
                   var _pmResult = runMonteCarloSim(_pmRates.home, _pmRates.away,
@@ -6448,7 +6647,7 @@ export default async function(req) {
               var _mcABL = _clutchMap?.[aA]?.q4_fg3pct || _team3ptBaselines?.[aA] || 0.36;
               var _mcClk = String(clock||'6:00').match(/(\d+):(\d+)/);
               var _mcSec = _mcClk ? parseInt(_mcClk[1])*60+parseInt(_mcClk[2]) : 360;
-              _mcCum = computeMCCumulative(summary, currentPeriod, _mcSec, ind.controlTeam, hA, _mcHBL, _mcABL);
+              _mcCum = computeMCCumulative(summary, currentPeriod, _mcSec, ind.controlTeam, hA, _mcHBL, _mcABL, league);
               // MC Rate Decomposition — which rates drive the win probability
               if (_mcCum) {
                 try {
@@ -6457,7 +6656,7 @@ export default async function(req) {
                   _mcCum.drivers = computeMCDrivers(_mcCum, _mcCtrlHome,
                     Number(summary.home?.points || ind.homePts || 0),
                     Number(summary.away?.points || ind.awayPts || 0),
-                    _mcCtrlSeasonRates);
+                    _mcCtrlSeasonRates, league);
                 } catch (e) { /* non-fatal */ }
               }
             } catch (e) { log(`${matchup}: MC Cum error — ${e.message}`); }
@@ -6549,7 +6748,7 @@ export default async function(req) {
 
             // ── Save XGB + MC data to lt for client analysis injection ──
             if (_xgbFeatures) {
-              lt.xgb_shap = computeXGBContributions(_xgbFeatures);
+              lt.xgb_shap = computeXGBContributions(_xgbFeatures, league);
               lt.conviction_quality = lt.xgb_shap ? computeConvictionQuality(lt.xgb_shap) : null;
               lt.xgb_trajectory = lt.xgb_shap ? computeTrajectorySignals(lt.xgb_shap, lt.checkpoints || [], lt.conviction_quality, _xgbWinProb) : null;
             }
@@ -6568,8 +6767,8 @@ export default async function(req) {
                 _xgbBwcProb = _xgbWinProb;
               } else {
                 const _bwcInd = { ...ind, controlTeam: lt.bwc_fired.team };
-                const _bwcFeatures = extractXGBFeatures(summary, _bwcInd, pbpResult, currentPeriod, clock, _windowResult?.rawAgg || null);
-                _xgbBwcProb = _bwcFeatures ? predictXGB(_bwcFeatures) : null;
+                const _bwcFeatures = extractXGBFeatures(summary, _bwcInd, pbpResult, currentPeriod, clock, _windowResult?.rawAgg || null, league);
+                _xgbBwcProb = _bwcFeatures ? predictXGB(_bwcFeatures, league) : null;
               }
             }
 
@@ -6831,7 +7030,7 @@ export default async function(req) {
               const floorMarginSig = lt.bwc_fired ? computeFloorMarginSignal(lt.checkpoints || [], lt.bwc_fired.team, ind.score, _bwcMarginForFM) : null;
               const convTrend = lt.bwc_fired ? computeConvictionTrend(lt.checkpoints || [], lt.bwc_fired.team) : null;
               // Conviction quality — compute SHAP once, reuse for xgbShap + conviction quality + trajectory
-              const _v2Shap = _xgbFeatures ? computeXGBContributions(_xgbFeatures) : null;
+              const _v2Shap = _xgbFeatures ? computeXGBContributions(_xgbFeatures, league) : null;
               const _v2ConvQuality = _v2Shap ? computeConvictionQuality(_v2Shap) : null;
               const _v2TrajSignals = _v2Shap ? computeTrajectorySignals(_v2Shap, lt.checkpoints || [], _v2ConvQuality, _xgbWinProb) : null;
               const v2Ctx = {
@@ -7226,7 +7425,7 @@ export default async function(req) {
                 if (currentGameSec < nextCp.gameSec) break;
 
                 // Compute checkpoint entry from current game state
-                const cpConv = computeConviction(ind);
+                const cpConv = computeConviction(ind, league);
                 const cpOppCount = cpConv.indicatorsLost.length;
                 const cpCtrlIsHome = ind.controlTeam === hA;
                 const cpCtrlPts = cpCtrlIsHome ? ind.homePts : ind.awayPts;
@@ -7247,7 +7446,7 @@ export default async function(req) {
                 // XGB + SHAP at checkpoint
                 if (_xgbFeatures && _xgbWinProb != null) {
                   cpEntry.xgb = Math.round(_xgbWinProb * 1000) / 1000;
-                  cpEntry.shap = computeXGBContributions(_xgbFeatures);
+                  cpEntry.shap = computeXGBContributions(_xgbFeatures, league);
                 }
 
                 // Atomic write — concurrent invocations are no-ops via ON CONFLICT DO NOTHING
@@ -7428,7 +7627,7 @@ export default async function(req) {
               if (!lt.graduation[bwcTeam]) lt.graduation[bwcTeam] = { rank: 'C' };
 
               if (ind.controlTeam === bwcTeam) {
-                const gradConviction = computeConviction(ind);
+                const gradConviction = computeConviction(ind, league);
                 const oppCount = _oppIndW.length;
                 const curRank = classifyRank(
                   gradConviction.tier, _v2Margin, lt.ctrl_team_holds || 0, oppCount
@@ -7498,7 +7697,7 @@ export default async function(req) {
                 if (_v2Margin >= 2 && ind.score >= 0.60 && currentPeriod >= 2) {
                   lt.opp_bwc_holds = (lt.opp_bwc_holds || 0) + 1;
                   if (lt.opp_bwc_holds >= 3) {
-                    const oppConv = computeConviction(ind);
+                    const oppConv = computeConviction(ind, league);
                     const oppOppCount = _oppIndW.length;
                     const oppRank = classifyRank(
                       oppConv.tier, _v2Margin, lt.opp_bwc_holds, oppOppCount
@@ -7774,7 +7973,7 @@ export default async function(req) {
               if (_mcRates && _mcRates.home._windowFGA >= 5 && _mcRates.away._windowFGA >= 5) {
                 const _hs = summary.home?.statistics || {}, _as = summary.away?.statistics || {};
                 const _mcClockSec = (function(c) { try { var pp = String(c||'6:00').split(':'); return parseInt(pp[0])*60+parseInt(pp[1]||0); } catch(e) { return 360; } })(clock);
-                const _mcRemain = estimateRemainingPossMC(_hs, _as, currentPeriod, _mcClockSec);
+                const _mcRemain = estimateRemainingPossMC(_hs, _as, currentPeriod, _mcClockSec, league);
                 if (_mcRemain > 0) {
                   const _mcCanary = runMonteCarloSim(_mcRates.home, _mcRates.away,
                     Number(ind.homePts), Number(ind.awayPts), _mcRemain,
@@ -7845,7 +8044,7 @@ export default async function(req) {
                 const _mcARates = diffToRatesMC(_mcNowA, _mcTrigA, _mcABaseline);
                 if (_mcHRates && _mcARates) {
                   const _mcClockSec2 = (function(c) { try { var pp = String(c||'6:00').split(':'); return parseInt(pp[0])*60+parseInt(pp[1]||0); } catch(e) { return 360; } })(clock);
-                  const _mcRemain2 = estimateRemainingPossMC(_mcNowH, _mcNowA, currentPeriod, _mcClockSec2);
+                  const _mcRemain2 = estimateRemainingPossMC(_mcNowH, _mcNowA, currentPeriod, _mcClockSec2, league);
                   if (_mcRemain2 > 0) {
                     const _mcInv = runMonteCarloSim(_mcHRates, _mcARates,
                       Number(ind.homePts), Number(ind.awayPts), _mcRemain2,
