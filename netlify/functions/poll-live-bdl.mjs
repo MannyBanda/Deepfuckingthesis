@@ -8036,18 +8036,14 @@ export default async function(req) {
               ];
             }
 
+            // Read quarter_data once for dedup across all transitions
+            const _qdDedup = await readQuarterData(sql, game.id);
+
             for (const t of transitions) {
-              // DB-based dedup — check if calibration snapshot already exists for this game+tag
-              // In-memory cal_captured doesn't persist across serverless invocations
-              try {
-                const existing = await sql`
-                  SELECT 1 FROM snapshots WHERE game_id = ${game.id} AND source = ${t.tag} LIMIT 1
-                `;
-                if (existing.length > 0) {
-                  log(`${matchup}: CAL_DIAG — ${t.tag} already exists in DB, skipping`);
-                  continue;
-                }
-              } catch (e) { log(`${matchup}: CAL_DIAG — ${t.tag} dedup check failed: ${e.message}, proceeding`); }
+              // Dedup via quarter_data boundaries — if boundary already captured, transition was processed
+              if (_qdDedup.boundaries[t.qdKey]) {
+                continue;
+              }
 
               // Period-based transitions: standard detection
               const triggered = t.clockBased
