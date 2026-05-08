@@ -590,7 +590,7 @@ ${ctx.floorMarginSignal && ctx.floorMarginSignal.signal !== 'INSUFFICIENT'
     + (ctx.floorMarginSignal.signal === 'DIVERGING_NEGATIVE' ? '\nFloor is rising but margin is shrinking \u2014 structure improving but not translating to scoreboard.' : '')
   : 'Insufficient checkpoint data for floor-margin analysis'}
 ${ctx.xgbWinProb != null ? `\nXGBOOST STRUCTURAL MODEL (independent — trained on raw stats, does NOT use floor/indicators/margin):
-XGB win probability: ${(ctx.xgbWinProb * 100).toFixed(1)}% | Floor: ${(ctx.floor * 100).toFixed(1)}% | ${ctx.xgbAligned ? 'ALIGNED' : '⚠️ DIVERGENT (' + (ctx.xgbDivergence > 0 ? '+' : '') + (ctx.xgbDivergence * 100).toFixed(1) + '%)'}
+XGB win probability: ${(ctx.xgbWinProb * 100).toFixed(1)}% | MC Cum: ${ctx.mcCumWp != null ? (ctx.mcCumWp * 100).toFixed(1) + '%' : '?'} | Floor: ${(ctx.floor * 100).toFixed(1)}% | ${ctx.xgbAligned ? 'ALIGNED' : '⚠️ DIVERGENT (' + (ctx.xgbDivergence > 0 ? '+' : '') + (ctx.xgbDivergence * 100).toFixed(1) + '%)'}
 ${ctx.xgbShap ? 'SHAP drivers (what raw stats push XGB prediction): ' + ctx.xgbShap.map(s => s.f + '=' + (s.v > 0 ? '+' : '') + s.v.toFixed(2)).join(', ') : ''}
 ${ctx.convictionQuality ? 'XGB CONVICTION QUALITY:\nBasis: ' + ctx.convictionQuality.basis + ' — ' + Math.round(ctx.convictionQuality.strConcentration * 100) + '% structural / ' + Math.round(ctx.convictionQuality.volConcentration * 100) + '% volatile\nTop driver: ' + ctx.convictionQuality.top1Feature + ' (' + Math.round(ctx.convictionQuality.top1Share * 100) + '% of positive SHAP)' + (ctx.convictionQuality.top1IsVolatile ? ' [VOLATILE]' : '') + '\nScoreboard: ' + (ctx.convictionQuality.bigleadAnchored ? 'CONFIRMED — biglead driving ' + Math.round(ctx.convictionQuality.bigleadShare * 100) + '% (95% win rate in backtest)' : ctx.convictionQuality.noScoreboardConfirmation ? 'NOT CONFIRMED — biglead SHAP flat/negative, stats not translating to lead (19% loss rate vs 5%)' : 'PARTIAL — biglead contributing ' + Math.round(ctx.convictionQuality.bigleadShare * 100) + '%') : ''}
 ${ctx.trajectorySignals && ctx.trajectorySignals.warnings.length > 0 ? 'CONVICTION WARNINGS:\n' + ctx.trajectorySignals.warnings.join('\n') : ''}
@@ -4467,7 +4467,7 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
   // XGBoost structural model + conviction quality
   if (xgbData && xgbData.winProb != null) {
     p += `XGBOOST STRUCTURAL MODEL (independent — trained on 13 raw stat differentials, does NOT use floor/indicators/margin):\n`;
-    p += `XGB win probability: ${(xgbData.winProb * 100).toFixed(1)}% | Floor: ${(ind.score * 100).toFixed(1)}% | ${xgbData.aligned ? 'ALIGNED' : 'DIVERGENT (' + (xgbData.divergence > 0 ? '+' : '') + (xgbData.divergence * 100).toFixed(1) + '%)'}\n`;
+    p += `XGB win probability: ${(xgbData.winProb * 100).toFixed(1)}% | MC Cum: ${mcData?.mcCumWp != null ? (mcData.mcCumWp * 100).toFixed(1) + '%' : '?'} | Floor: ${(ind.score * 100).toFixed(1)}% | ${xgbData.aligned ? 'ALIGNED' : 'DIVERGENT (' + (xgbData.divergence > 0 ? '+' : '') + (xgbData.divergence * 100).toFixed(1) + '%)'}\n`;
     if (xgbData.shap) {
       p += `SHAP drivers: ${xgbData.shap.map(s => s.f + '=' + (s.v > 0 ? '+' : '') + s.v.toFixed(2)).join(', ')}\n`;
     }
