@@ -2382,7 +2382,7 @@ const GRAD_CHECKPOINTS = [
   { label: 'Q4_3',   period: 4, clockSec: 180, gameSec: 2700 },
 ];
 
-function updateLiveTracking(lt, ctrlTeam, floor, period, clock, homeAlias) {
+function updateLiveTracking(lt, ctrlTeam, floor, period, clock, homeAlias, currentPeriod) {
   if (!lt) lt = {};
   const side = ctrlTeam === homeAlias ? 'home' : 'away';
   const peakKey = side + '_peak_floor';
@@ -2403,6 +2403,8 @@ function updateLiveTracking(lt, ctrlTeam, floor, period, clock, homeAlias) {
     lt.ctrl_team_current = ctrlTeam;
     lt.ctrl_team_holds = 1;
     lt.ctrl_flips = (lt.ctrl_flips || 0) + 1;
+    // Q2+ flips only — Q1 flips are noise before structural control is meaningful
+    if ((currentPeriod || period) >= 2) lt.ctrl_flips_q2plus = (lt.ctrl_flips_q2plus || 0) + 1;
   }
 
   return lt;
@@ -6543,7 +6545,7 @@ export default async function(req) {
               }
             } catch(e) { /* non-fatal — initialize fresh */ }
 
-            lt = updateLiveTracking(lt, ind.controlTeam, ind.score, currentPeriod, clock, hA);
+            lt = updateLiveTracking(lt, ind.controlTeam, ind.score, currentPeriod, clock, hA, currentPeriod);
 
             // ── Save XGB + MC data to lt for client analysis injection ──
             if (_xgbFeatures) {
@@ -6656,7 +6658,7 @@ export default async function(req) {
             if (!lt.bwc_fired && league === 'nba' && currentPeriod >= 2 && ind.controlTeam !== 'Neither') {
               const _estabMC = _mcCum?.winProb != null ? _mcCum.winProb : null;
               const _estabMet = _estabMC != null && _estabMC >= 0.80 && ind.score >= 0.65;
-              const _estabQ2 = currentPeriod !== 2 || (_v2Margin >= 5 && (lt.ctrl_flips || 0) === 0);
+              const _estabQ2 = currentPeriod !== 2 || (_v2Margin >= 5 && (lt.ctrl_flips_q2plus || 0) === 0);
 
               if (_estabMet && _estabQ2) {
                 lt.bwc_fired = { team: ind.controlTeam, period: currentPeriod, clock, floor: ind.score };
