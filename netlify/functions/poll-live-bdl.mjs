@@ -8076,12 +8076,14 @@ export default async function(req) {
                 if (t.qdKey) {
                   try {
                     const qd = await readQuarterData(sql, game.id);
-                    const homeStats = summary.home?.statistics || {};
-                    const awayStats = summary.away?.statistics || {};
-                    captureBoundary(qd, t.qdKey, t.qdPrev, homeStats, awayStats);
-                    await writeQuarterData(sql, game.id, qd);
-                    const diffKeys = qd.diffs[t.qdKey] ? Object.keys(qd.diffs[t.qdKey].home || {}).length : 0;
-                    log(`${matchup}: ${t.label} quarter_data boundary[${t.qdKey}] captured (diff from [${t.qdPrev}]: ${diffKeys} fields)`);
+                    if (!qd.boundaries[t.qdKey]) {
+                      const homeStats = summary.home?.statistics || {};
+                      const awayStats = summary.away?.statistics || {};
+                      captureBoundary(qd, t.qdKey, t.qdPrev, homeStats, awayStats);
+                      await writeQuarterData(sql, game.id, qd);
+                      const diffKeys = qd.diffs[t.qdKey] ? Object.keys(qd.diffs[t.qdKey].home || {}).length : 0;
+                      log(`${matchup}: ${t.label} quarter_data boundary[${t.qdKey}] captured (diff from [${t.qdPrev}]: ${diffKeys} fields)`);
+                    }
                   } catch (e) {
                     log(`${matchup}: ${t.label} quarter_data capture failed: ${e.message}`);
                   }
