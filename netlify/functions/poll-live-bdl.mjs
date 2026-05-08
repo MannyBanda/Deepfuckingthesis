@@ -362,7 +362,7 @@ const LEAGUES = {
     espnBase: 'https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/',
     espnSummaryBase: 'https://site.web.api.espn.com/apis/site/v2/sports/basketball/wnba/summary',
     bdlPrefix: '/wnba',
-    bdlHasSeasonStats: false,
+    bdlHasSeasonStats: true,
     bdlHasBoxScores: false,
     season: '2025',
     aliasMap: { NYL:'NY', LVA:'LV', LAS:'LA', GSV:'GS', WAS:'WSH', PDX:'POR', TOY:'TOR' },
@@ -2451,7 +2451,7 @@ const STATE_RANK = { 'LOCK': 4, 'EDGE': 3, 'VALUE': 2, 'DEEP_TRAIL': 1, 'EXIT': 
 // 3-minute checkpoint boundaries (game seconds from start)
 // gameSec = (period - 1) * 720 + (720 - clockRemainingInSeconds)
 // NBA only — NCAAMB uses existing graduation path
-const GRAD_CHECKPOINTS = [
+const GRAD_CHECKPOINTS_NBA = [
   { label: 'Q1_END', period: 2, clockSec: 720, gameSec: 720  },
   { label: 'Q2_9',   period: 2, clockSec: 540, gameSec: 900  },
   { label: 'Q2_6',   period: 2, clockSec: 360, gameSec: 1080 },
@@ -2465,6 +2465,25 @@ const GRAD_CHECKPOINTS = [
   { label: 'Q4_6',   period: 4, clockSec: 360, gameSec: 2520 },
   { label: 'Q4_3',   period: 4, clockSec: 180, gameSec: 2700 },
 ];
+const GRAD_CHECKPOINTS_WNBA = [
+  { label: 'Q1_END', period: 2, clockSec: 600, gameSec: 600  },
+  { label: 'Q2_7.5', period: 2, clockSec: 450, gameSec: 750  },
+  { label: 'Q2_5',   period: 2, clockSec: 300, gameSec: 900  },
+  { label: 'Q2_2.5', period: 2, clockSec: 150, gameSec: 1050 },
+  { label: 'Q2_END', period: 2, clockSec: 0,   gameSec: 1200 },
+  { label: 'Q3_7.5', period: 3, clockSec: 450, gameSec: 1350 },
+  { label: 'Q3_5',   period: 3, clockSec: 300, gameSec: 1500 },
+  { label: 'Q3_2.5', period: 3, clockSec: 150, gameSec: 1650 },
+  { label: 'Q3_END', period: 3, clockSec: 0,   gameSec: 1800 },
+  { label: 'Q4_7.5', period: 4, clockSec: 450, gameSec: 1950 },
+  { label: 'Q4_5',   period: 4, clockSec: 300, gameSec: 2100 },
+  { label: 'Q4_2.5', period: 4, clockSec: 150, gameSec: 2250 },
+];
+function getGradCheckpoints(league) {
+  if (league === 'wnba') return GRAD_CHECKPOINTS_WNBA;
+  return GRAD_CHECKPOINTS_NBA;
+}
+const GRAD_CHECKPOINTS = GRAD_CHECKPOINTS_NBA; // backward compat
 
 function updateLiveTracking(lt, ctrlTeam, floor, period, clock, homeAlias, currentPeriod) {
   if (!lt) lt = {};
@@ -2559,13 +2578,14 @@ function checkXGBExit(lt, xgbBwcProb, period, mcCumWinProb) {
 }
 
 // ── COMPOUND CONFIRMATION — replaces checkpoint graduation ──────
-// Sustain compound: MC Cum >= 0.80 AND Floor >= 0.60 (holds 2-5).
-// Establishment (hold 1) uses Floor >= 0.65 — handled by caller, not this function.
+// NBA sustain: MC Cum >= 0.80 AND Floor >= 0.60 (holds 2-5).
+// WNBA sustain: MC Cum >= 0.85 AND XGB >= 0.60 (floor demoted to narrative).
+// Establishment (hold 1) handled by caller.
 // Q2 EARLY path adds lead >= 5 AND 0 prior flips.
 // Returns { confirmed, tier, holds, path }.
 // Stale poll guard: only counts hold when game clock has advanced.
 // compound_tier is a watermark (only upgrades). compound_holds is the live streak.
-function checkCompoundConfirmation(lt, mcCumWinProb, floor, period, clock, ctrlTeam, bwcTeam, ctrlMargin, priorFlips) {
+function checkCompoundConfirmation(lt, mcCumWinProb, floor, period, clock, ctrlTeam, bwcTeam, ctrlMargin, priorFlips, league, xgbWinProb) {
   const result = { confirmed: false, tier: lt.compound_tier || 'TRACKING', holds: lt.compound_holds || 0, path: lt.compound_path || null };
 
   // Control must match BWC team — streak requires same team throughout
@@ -2580,8 +2600,16 @@ function checkCompoundConfirmation(lt, mcCumWinProb, floor, period, clock, ctrlT
     return result; // no increment, no reset — just return current state
   }
 
-  // Check compound threshold — sustain at 0.60 (establishment at 0.65 handled by caller)
-  const baseThreshold = mcCumWinProb != null && mcCumWinProb >= 0.80 && floor >= 0.60;
+  // Check compound threshold — league-specific signals
+  let baseThreshold;
+  if (league === 'wnba') {
+    // WNBA: MC Cum + XGB compound (floor demoted to narrative)
+    baseThreshold = mcCumWinProb != null && mcCumWinProb >= 0.85
+                 && xgbWinProb != null && xgbWinProb >= 0.60;
+  } else {
+    // NBA: MC Cum + Floor compound (sustain at 0.60, establishment at 0.65 by caller)
+    baseThreshold = mcCumWinProb != null && mcCumWinProb >= 0.80 && floor >= 0.60;
+  }
 
   // Q2 early path adds margin and flip requirements
   const isQ2 = period === 2;
@@ -3427,7 +3455,7 @@ function computeSustainability(summary, league) {
     var live3Pct = team3PA > 0 ? (team3PM / team3PA * 100) : 0;
 
     // Season prior from player averages (SR summary may include .average)
-    var seasonPrior3Pct = 36.0; // NBA average fallback
+    var seasonPrior3Pct = league === 'wnba' ? 34.7 : league === 'ncaamb' ? 33.5 : 36.0;
     var gotSeasonData = false;
     var seasonTot3PM = 0, seasonTot3PA = 0;
     players.forEach(function(p) {
@@ -3733,7 +3761,7 @@ function computeVolumeThreat(summary, pbpAudit, sust, league, minsElapsed) {
 // ── THROUGHPUT / LEAD SAFETY (ported from client) ──────────────────────────
 // Pure math — no API calls, no DB queries. All inputs from poll loop.
 
-function computeSwingCoreServer(focalStats, targetStats, focalSustData, targetSustData, deficit, minsLeft, minsElapsed, gameFraction, sznDefault, focalVTBonus, targetVTBonus) {
+function computeSwingCoreServer(focalStats, targetStats, focalSustData, targetSustData, deficit, minsLeft, minsElapsed, gameFraction, sznDefault, focalVTBonus, targetVTBonus, league) {
   var focalPoss = Number(focalStats.possessions) || 0;
   var targetPoss = Number(targetStats.possessions) || 0;
   if (focalPoss < 3) focalPoss = (Number(focalStats.field_goals_att)||0) + 0.44*(Number(focalStats.free_throws_att)||0) - (Number(focalStats.offensive_rebounds)||0) + (Number(focalStats.turnovers||focalStats.total_turnovers)||0);
@@ -3750,7 +3778,7 @@ function computeSwingCoreServer(focalStats, targetStats, focalSustData, targetSu
   // 2PT quality factor: discount structRate when team converts poorly from 2
   // Teams below league-avg 2PT% are generating structural points through volume/hustle
   // rather than efficient conversion. Floor at 0.75 prevents overcorrection.
-  var twoPointBaseline = sznDefault <= 34 ? 0.49 : 0.52; // NCAAMB ~49%, NBA ~52%
+  var twoPointBaseline = LEAGUES[league]?.twoPointBaseline || (sznDefault <= 34 ? 0.49 : 0.52);
   function qualityFactor(st) {
     var fgm = Number(st.field_goals_made) || 0;
     var fga = Number(st.field_goals_att) || 0;
@@ -3842,7 +3870,7 @@ function computeThroughputServer(summary, ind, sust, hA, aA, period, clock, leag
   var focalVT = volumeThreat ? (ctrlIsHome ? volumeThreat.home?.vtBonus : volumeThreat.away?.vtBonus) : 0;
   var targetVT = volumeThreat ? (ctrlIsHome ? volumeThreat.away?.vtBonus : volumeThreat.home?.vtBonus) : 0;
 
-  var core = computeSwingCoreServer(focalStats, targetStats, focalSustData, targetSustData, deficit, minsLeft, minsElapsed, gameFraction, sznDefault, focalVT, targetVT);
+  var core = computeSwingCoreServer(focalStats, targetStats, focalSustData, targetSustData, deficit, minsLeft, minsElapsed, gameFraction, sznDefault, focalVT, targetVT, league);
   if (!core) return null;
   var con = core.bands[0], exp = core.bands[1], opt = core.bands[2];
 
@@ -3896,7 +3924,7 @@ function computeLeadSafetyServer(summary, ind, sust, hA, aA, period, clock, leag
   var focalVT = volumeThreat ? (ctrlIsHome ? volumeThreat.away?.vtBonus : volumeThreat.home?.vtBonus) : 0;
   var targetVT = volumeThreat ? (ctrlIsHome ? volumeThreat.home?.vtBonus : volumeThreat.away?.vtBonus) : 0;
 
-  var core = computeSwingCoreServer(focalStats, targetStats, focalSustData, targetSustData, lead, minsLeft, minsElapsed, gameFraction, sznDefault, focalVT, targetVT);
+  var core = computeSwingCoreServer(focalStats, targetStats, focalSustData, targetSustData, lead, minsLeft, minsElapsed, gameFraction, sznDefault, focalVT, targetVT, league);
   if (!core) return null;
   var con = core.bands[0], exp = core.bands[1], opt = core.bands[2];
 
@@ -6869,7 +6897,24 @@ export default async function(req) {
                 lt.compound_last_clock = clock;
                 log(`${matchup}: ★ COMPOUND ESTABLISHMENT — ${ind.controlTeam} MC=${_estabMC.toFixed(3)} floor=${ind.score.toFixed(2)} margin=${_v2Margin} Q${currentPeriod} ${clock}${_xgbWinProb != null ? ' xgb=' + _xgbWinProb.toFixed(3) : ''}`);
               }
-            } else if (!lt.bwc_fired && league !== 'nba' && ind.score >= 0.60 && _v2Margin >= 2) {
+            } else if (!lt.bwc_fired && league === 'wnba' && currentPeriod >= 2 && ind.controlTeam !== 'Neither') {
+              // WNBA: MC Cum + XGB compound (floor demoted to narrative)
+              const _estabMC = _mcCum?.winProb != null ? _mcCum.winProb : null;
+              const _estabXGB = _xgbWinProb;
+              const _estabMet = _estabMC != null && _estabMC >= 0.85
+                             && _estabXGB != null && _estabXGB >= 0.60;
+              const _estabQ2 = currentPeriod !== 2 || (_v2Margin >= 5 && (lt.ctrl_flips_q2plus || 0) === 0);
+
+              if (_estabMet && _estabQ2) {
+                lt.bwc_fired = { team: ind.controlTeam, period: currentPeriod, clock, floor: ind.score };
+                lt._prev_bwc_state = _v2Margin >= 3 ? 'LOCK' : 'EDGE';
+                lt._just_established = true;
+                lt.compound_holds = 1;
+                lt.compound_last_period = currentPeriod;
+                lt.compound_last_clock = clock;
+                log(`${matchup}: ★ WNBA COMPOUND ESTABLISHMENT — ${ind.controlTeam} MC=${_estabMC.toFixed(3)} XGB=${_estabXGB.toFixed(3)} floor=${ind.score.toFixed(2)} margin=${_v2Margin} Q${currentPeriod} ${clock}`);
+              }
+            } else if (!lt.bwc_fired && league !== 'nba' && league !== 'wnba' && ind.score >= 0.60 && _v2Margin >= 2) {
               // NCAAMB: floor-based BWC candidate tracking
               if (lt._bwc_candidate === ind.controlTeam) {
                 lt._bwc_candidate_holds = (lt._bwc_candidate_holds || 0) + 1;
@@ -6887,7 +6932,7 @@ export default async function(req) {
                   log(`${matchup}: ★ V2 BWC FIRED — ${ind.controlTeam} floor ${ind.score.toFixed(2)} margin ${_v2Margin} state ${lt._prev_bwc_state}${_xgbWinProb != null ? ' xgb=' + _xgbWinProb.toFixed(3) : ''}`);
                 }
               }
-            } else if (!lt.bwc_fired && league !== 'nba' && ind.controlTeam !== lt._bwc_candidate) {
+            } else if (!lt.bwc_fired && league !== 'nba' && league !== 'wnba' && ind.controlTeam !== lt._bwc_candidate) {
               lt._bwc_candidate = null;
               lt._bwc_candidate_holds = 0;
             }
@@ -7353,9 +7398,9 @@ export default async function(req) {
             }
 
             // ── V2 GRADUATION DETECTION (fires POSITION OPEN at rank upgrade) ──
-            // NBA: checkpoint-based graduation system (race-safe via game_checkpoints table)
+            // NBA + WNBA: checkpoint-based graduation system (race-safe via game_checkpoints table)
             // NCAAMB: retains original 60s-poll graduation
-            if (lt.bwc_fired && league === 'nba') {
+            if (lt.bwc_fired && (league === 'nba' || league === 'wnba')) {
               const bwcTeam = lt.bwc_fired.team;
 
               // ── PHASE A: Read existing checkpoints from DB (race-safe source of truth) ──
@@ -7371,8 +7416,9 @@ export default async function(req) {
                 }));
               } catch (e) { log(`${matchup}: game_checkpoints read failed: ${e.message}`); }
 
-              // Sort by GRAD_CHECKPOINTS order (clock text sort is wrong — lex "11:30" < "2:31" < "8:55")
-              const _cpLabelOrder = Object.fromEntries(GRAD_CHECKPOINTS.map((cp, i) => [cp.label, i]));
+              // Sort by league-specific checkpoints (clock text sort is wrong — lex "11:30" < "2:31" < "8:55")
+              const _gradCPs = getGradCheckpoints(league);
+              const _cpLabelOrder = Object.fromEntries(_gradCPs.map((cp, i) => [cp.label, i]));
               cpArray.sort((a, b) => (_cpLabelOrder[a.label] ?? 99) - (_cpLabelOrder[b.label] ?? 99));
 
               // ── PO SENTINEL RECOVERY — race-safe position state from DB ──
@@ -7401,7 +7447,7 @@ export default async function(req) {
               let effectiveNextIdx = 0;
               if (cpArray.length > 0) {
                 const lastLabel = cpArray[cpArray.length - 1].label;
-                const lastIdx = GRAD_CHECKPOINTS.findIndex(cp => cp.label === lastLabel);
+                const lastIdx = _gradCPs.findIndex(cp => cp.label === lastLabel);
                 if (lastIdx >= 0) effectiveNextIdx = lastIdx + 1;
               }
 
@@ -7413,15 +7459,15 @@ export default async function(req) {
               const currentGameSec = (currentPeriod - 1) * 720 + (720 - cpClockSec);
 
               // Debug logging
-              if (effectiveNextIdx < GRAD_CHECKPOINTS.length) {
-                const _dbgNextCp = GRAD_CHECKPOINTS[effectiveNextIdx];
+              if (effectiveNextIdx < _gradCPs.length) {
+                const _dbgNextCp = _gradCPs[effectiveNextIdx];
                 log(`${matchup}: CP_DEBUG Q${currentPeriod} ${clock} gameSec=${currentGameSec} nextIdx=${effectiveNextIdx} nextCp=${_dbgNextCp.label}@${_dbgNextCp.gameSec} gap=${currentGameSec - _dbgNextCp.gameSec} dbCPs=${cpArray.length}`);
               }
 
               // ── PHASE B: Capture new checkpoints (INSERT to table, ON CONFLICT = no-op) ──
               let newCaptured = 0;
-              while (effectiveNextIdx < GRAD_CHECKPOINTS.length) {
-                const nextCp = GRAD_CHECKPOINTS[effectiveNextIdx];
+              while (effectiveNextIdx < _gradCPs.length) {
+                const nextCp = _gradCPs[effectiveNextIdx];
                 if (currentGameSec < nextCp.gameSec) break;
 
                 // Compute checkpoint entry from current game state
@@ -7483,7 +7529,7 @@ export default async function(req) {
               // ── COMPOUND CONFIRMATION — runs every poll cycle ──
               // MC Cum for BWC team (when BWC has control, _mcCum IS their probability)
               const _compoundMcCum = _mcCum?.winProb != null ? _mcCum.winProb : (lt.mc_cum_wp != null ? lt.mc_cum_wp : null);
-              const _compoundResult = checkCompoundConfirmation(lt, _compoundMcCum, ind.score, currentPeriod, clock, ind.controlTeam, bwcTeam, _v2Margin, lt.cp_ctrl_flips);
+              const _compoundResult = checkCompoundConfirmation(lt, _compoundMcCum, ind.score, currentPeriod, clock, ind.controlTeam, bwcTeam, _v2Margin, lt.cp_ctrl_flips, league, _xgbWinProb);
 
               if (_compoundResult.confirmed) {
                 log(`${matchup}: ★ COMPOUND ${_compoundResult.tier} — ${bwcTeam} ${_compoundResult.holds} holds, ${_compoundResult.path} path, MC=${_compoundMcCum?.toFixed(3) || '?'} floor=${ind.score.toFixed(2)} flips=${lt.cp_ctrl_flips}`);
