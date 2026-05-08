@@ -356,14 +356,14 @@ All downstream odds usage (ML gates, lane classification, odds display, alert co
 - Odds movement tracking (odds_history table)
 
 ### Credit Budget
-- NBA: ~900 calls/night (60s polls × ~5 games × ~3 hours)
-- WNBA: ~450-600 calls/night (same pattern, fewer games, shorter games)
-- Combined: ~1,500/night × 30 nights = ~45K/month
-- Plan: 20K credits/month
-- **RISK: May exceed budget with both leagues.** Mitigation options:
-  - Poll odds less frequently (every 2nd or 3rd poll cycle instead of every cycle)
-  - Gate odds fetch to only games in Q2+ (skip pregame/Q1)
-  - Upgrade plan if ROI justifies
+- Each `fetchOddsAPIBatch` call = 1 credit (batch — all games for that sport, not per-game)
+- Poll has pre-tip gate + all_final skip — odds only fetched during active game window
+- NBA game night: ~150 credits (2.5hr window)
+- WNBA game night: ~270 credits (4.5hr window, 3 games staggered)
+- Overlap night (both live): ~420 credits
+- **Peak month (June — Finals + WNBA): ~7,500 credits = 37.5% of 20K plan**
+- July-Sep (WNBA only): ~6,750/month = 33.8% of plan
+- Plenty of headroom. No concern.
 
 ### Verification
 After deployment, hit the odds endpoint during a live WNBA game and verify:
