@@ -7763,12 +7763,12 @@ export default async function(req) {
 
             if (!lt.mc || !lt.mc.triggered) {
               // ── CANARY CHECK (no active investigation) ──
-              // Track rolling margin + XGB for compression/drop detection
+              // Track rolling margin + XGB for compression/drop detection (10 polls ≈ 20 possessions)
               if (!lt._canary_margins) lt._canary_margins = [];
               if (!lt._canary_xgb) lt._canary_xgb = [];
               lt._canary_margins.push(_v2Margin);
-              if (lt._canary_margins.length > 5) lt._canary_margins.shift();
-              if (_xgbWinProb != null) { lt._canary_xgb.push(_xgbWinProb); if (lt._canary_xgb.length > 5) lt._canary_xgb.shift(); }
+              if (lt._canary_margins.length > 10) lt._canary_margins.shift();
+              if (_xgbWinProb != null) { lt._canary_xgb.push(_xgbWinProb); if (lt._canary_xgb.length > 10) lt._canary_xgb.shift(); }
 
               const _mcRates = extractMCRatesFromPossLog(pbpResult?.possLog, 20, hA, aA, _mcHBaseline, _mcABaseline);
               if (_mcRates && _mcRates.home._windowFGA >= 5 && _mcRates.away._windowFGA >= 5) {
