@@ -1063,23 +1063,34 @@ function renderCard(id){
     var wpDelta=wpOpen!=null?wpPct-wpOpen:null;
     var wpTrend=wpDelta!=null?(wpDelta>5?'\u25b2 +'+Math.round(wpDelta):wpDelta<-5?'\u25bc '+Math.round(wpDelta):'\u25ac'):'';
     // XGB current value from latest snapshot
-    var _xgbLatest=null;
-    if(cs._allSnapshots&&cs._allSnapshots.length>0){var _ls=cs._allSnapshots[cs._allSnapshots.length-1];_xgbLatest=_ls.xgb_win_prob!=null?Math.round(Number(_ls.xgb_win_prob)*100):null;}
+    var _xgbLatest=null,_mcCumLatest=null;
+    if(cs._allSnapshots&&cs._allSnapshots.length>0){var _ls=cs._allSnapshots[cs._allSnapshots.length-1];_xgbLatest=_ls.xgb_win_prob!=null?Math.round(Number(_ls.xgb_win_prob)*100):null;_mcCumLatest=_ls.mc_cum_win_prob!=null?Math.round(Number(_ls.mc_cum_win_prob)*100):null;}
     var isXGB=cs._wpMode==='xgb';
+    if(!cs._wpSeries)cs._wpSeries={xgb:true,mc:true,floor:false};
+    var _wps=cs._wpSeries;
     html+='<div class="wp-chart"><div class="wp-head"><div class="wp-head-left">';
-    // Toggle buttons
+    // Mode toggle: ESPN / Structural
     html+='<span onclick="cardState[\''+g.id+'\']._wpMode=\'espn\';renderCard(\''+g.id+'\')" style="cursor:pointer;padding:1px 5px;border-radius:3px;font-size:9px;'+(isXGB?'color:var(--fg-dim)':'color:var(--green);background:var(--green-dim)')+'">ESPN</span>';
-    html+='<span onclick="cardState[\''+g.id+'\']._wpMode=\'xgb\';renderCard(\''+g.id+'\')" style="cursor:pointer;padding:1px 5px;border-radius:3px;font-size:9px;margin-left:3px;'+(isXGB?'color:var(--cyan,#67e8f9);background:rgba(103,232,249,0.1)':'color:var(--fg-dim)')+'">XGB</span>';
+    html+='<span onclick="cardState[\''+g.id+'\']._wpMode=\'xgb\';renderCard(\''+g.id+'\')" style="cursor:pointer;padding:1px 5px;border-radius:3px;font-size:9px;margin-left:3px;'+(isXGB?'color:#67e8f9;background:rgba(103,232,249,0.1)':'color:var(--fg-dim)')+'">Structural</span>';
     if(!isXGB){
       html+='<span class="wp-val"><span style="color:'+tc(wpLead)+'">'+esc(wpLead)+'</span> '+wpPct+'%</span>';
       if(wpTrend)html+='<span class="wp-trend">'+wpTrend+'</span>';
-    }else if(_xgbLatest!=null){
+    }else{
       var _xgbTeam=cs._allSnapshots&&cs._allSnapshots.length>0?cs._allSnapshots[cs._allSnapshots.length-1].floor_team||'':'';
-      html+='<span class="wp-val"><span style="color:'+tc(_xgbTeam)+'">'+esc(_xgbTeam)+'</span> '+_xgbLatest+'%</span>';
+      var _valParts=[];
+      if(_wps.xgb&&_xgbLatest!=null)_valParts.push('<span style="color:#67e8f9">XGB</span> '+_xgbLatest+'%');
+      if(_wps.mc&&_mcCumLatest!=null)_valParts.push('<span style="color:#FDB927">MC</span> '+_mcCumLatest+'%');
+      if(_valParts.length>0)html+='<span class="wp-val" style="font-size:9px">'+_valParts.join(' <span style="color:var(--fg-dim);margin:0 2px">·</span> ')+'</span>';
     }
     html+='</div><div class="wp-head-right">';
     if(!isXGB&&wpOpen!=null)html+='<span>open '+Math.round(wpOpen)+'%</span>';
-    if(isXGB)html+='<span style="font-size:8px;color:var(--fg-dim)">structural model</span>';
+    if(isXGB){
+      // Series toggle pills
+      var _pillFn=function(k,label,color){var on=_wps[k];return'<span onclick="cardState[\''+g.id+'\']._wpSeries.'+k+'=!cardState[\''+g.id+'\']._wpSeries.'+k+';renderCard(\''+g.id+'\')" style="cursor:pointer;padding:2px 6px;border-radius:3px;font-size:8px;margin-left:3px;'+(on?'color:'+color+';background:'+color+'1a':'color:var(--fg-dim);opacity:0.5')+'">'+label+'</span>';};
+      html+=_pillFn('xgb','XGB','#67e8f9');
+      html+=_pillFn('mc','MC','#FDB927');
+      html+=_pillFn('floor','Floor','#ff6b35');
+    }
     html+='</div></div>';
     // Render chart
     if(!isXGB){
@@ -1428,57 +1439,63 @@ function renderWPChart(cs,hA,aA){
 
 function renderXGBChart(cs,hA,aA){
   var snaps=cs._allSnapshots;
-  if(!snaps||snaps.length<2)return'<div class="wp-canvas" style="height:40px;display:flex;align-items:center;justify-content:center"><span style="font-size:9px;color:var(--fg-dim)">XGB data available after tonight\'s games</span></div>';
-  var pts=snaps.filter(function(s){return s.xgb_win_prob!=null&&s.period&&s.period<=4;});
-  if(pts.length<2)return'<div class="wp-canvas" style="height:40px;display:flex;align-items:center;justify-content:center"><span style="font-size:9px;color:var(--fg-dim)">No XGB data yet</span></div>';
+  if(!snaps||snaps.length<2)return'<div class="wp-canvas" style="height:40px;display:flex;align-items:center;justify-content:center"><span style="font-size:9px;color:var(--fg-dim)">Structural data available after tonight\'s games</span></div>';
+  var pts=snaps.filter(function(s){return (s.xgb_win_prob!=null||s.mc_cum_win_prob!=null)&&s.period&&s.period<=4;});
+  if(pts.length<2)return'<div class="wp-canvas" style="height:40px;display:flex;align-items:center;justify-content:center"><span style="font-size:9px;color:var(--fg-dim)">No structural data yet</span></div>';
   var W=600,H=80;
-  // XGB is ctrl-team-relative. We need to plot from HOME perspective for consistency with ESPN WP.
-  // When ctrl=home, xgb_win_prob IS home WP. When ctrl=away, home WP = 1 - xgb_win_prob.
-  var pathD='',fillD='M0,'+H/2,fillDownD='M0,'+H/2;
-  for(var i=0;i<pts.length;i++){
-    var px=(i/(pts.length-1))*W;
-    var xVal=Number(pts[i].xgb_win_prob);
-    var homeWP=(pts[i].floor_team===hA)?xVal:(1-xVal);
-    var py=(1-homeWP)*H;
-    if(i===0)pathD+='M'+px.toFixed(1)+','+py.toFixed(1);
-    else pathD+='L'+px.toFixed(1)+','+py.toFixed(1);
-    fillD+='L'+px.toFixed(1)+','+Math.min(py,H/2).toFixed(1);
-    fillDownD+='L'+px.toFixed(1)+','+Math.max(py,H/2).toFixed(1);
+  var _wps=cs._wpSeries||{xgb:true,mc:true,floor:false};
+
+  // Build path helper: converts ctrl-relative values to home-relative SVG path
+  function buildPath(pts,field,fallback){
+    var d='',lastPx=0,lastPy=H/2,hasData=false;
+    for(var i=0;i<pts.length;i++){
+      var val=pts[i][field];if(val==null){if(fallback)val=fallback;else continue;}
+      val=Number(val);
+      var homeWP=(pts[i].floor_team===hA)?val:(1-val);
+      var px=(i/(pts.length-1))*W;
+      var py=(1-homeWP)*H;
+      if(!hasData){d+='M'+px.toFixed(1)+','+py.toFixed(1);hasData=true;}
+      else d+='L'+px.toFixed(1)+','+py.toFixed(1);
+      lastPx=px;lastPy=py;
+    }
+    return{d:d,lastX:lastPx,lastY:lastPy,hasData:hasData};
+  }
+
+  // Build fill regions from the primary visible series (XGB > MC > Floor)
+  var primaryField=_wps.xgb?'xgb_win_prob':_wps.mc?'mc_cum_win_prob':_wps.floor?'floor_score':null;
+  var fillD='M0,'+H/2,fillDownD='M0,'+H/2;
+  if(primaryField){
+    for(var i=0;i<pts.length;i++){
+      var pv=pts[i][primaryField];if(pv==null)continue;
+      pv=Number(pv);
+      var phwp=(pts[i].floor_team===hA)?pv:(1-pv);
+      var ppx=(i/(pts.length-1))*W;
+      var ppy=(1-phwp)*H;
+      fillD+='L'+ppx.toFixed(1)+','+Math.min(ppy,H/2).toFixed(1);
+      fillDownD+='L'+ppx.toFixed(1)+','+Math.max(ppy,H/2).toFixed(1);
+    }
   }
   fillD+='L'+W+','+H/2+'Z';
   fillDownD+='L'+W+','+H/2+'Z';
-  var lastPt=pts[pts.length-1];
-  var lastXVal=Number(lastPt.xgb_win_prob);
-  var lastHomeWP=(lastPt.floor_team===hA)?lastXVal:(1-lastXVal);
-  var lastX=W,lastY=(1-lastHomeWP)*H;
-  // Also overlay floor score as a faint line for comparison
-  var floorPath='';
-  for(var j=0;j<pts.length;j++){
-    var fpx=(j/(pts.length-1))*W;
-    var fVal=Number(pts[j].floor_score||0.5);
-    var fHome=(pts[j].floor_team===hA)?fVal:(1-fVal);
-    var fpy=(1-fHome)*H;
-    if(j===0)floorPath+='M'+fpx.toFixed(1)+','+fpy.toFixed(1);
-    else floorPath+='L'+fpx.toFixed(1)+','+fpy.toFixed(1);
-  }
+
+  var primaryColor=_wps.xgb?'#67e8f9':_wps.mc?'#FDB927':'#ff6b35';
   var html='<div class="wp-canvas"><svg class="wp-svg" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none">';
-  html+='<defs><linearGradient id="xgbFill-'+esc(hA)+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#67e8f9" stop-opacity="0.3"/><stop offset="100%" stop-color="#67e8f9" stop-opacity="0"/></linearGradient>';
-  html+='<linearGradient id="xgbFillDown-'+esc(hA)+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#F87171" stop-opacity="0"/><stop offset="100%" stop-color="#F87171" stop-opacity="0.3"/></linearGradient></defs>';
+  html+='<defs><linearGradient id="xgbFill-'+esc(hA)+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="'+primaryColor+'" stop-opacity="0.2"/><stop offset="100%" stop-color="'+primaryColor+'" stop-opacity="0"/></linearGradient>';
+  html+='<linearGradient id="xgbFillDown-'+esc(hA)+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#F87171" stop-opacity="0"/><stop offset="100%" stop-color="#F87171" stop-opacity="0.2"/></linearGradient></defs>';
+  // Grid
   html+='<line x1="0" y1="'+H/2+'" x2="'+W+'" y2="'+H/2+'" stroke="rgba(255,255,255,0.15)" stroke-dasharray="3 4"/>';
   for(var q=1;q<=3;q++)html+='<line x1="'+(q/4*W)+'" y1="0" x2="'+(q/4*W)+'" y2="'+H+'" stroke="rgba(255,255,255,0.04)"/>';
-  html+='<path d="'+fillD+'" fill="url(#xgbFill-'+esc(hA)+')"/>';
-  html+='<path d="'+fillDownD+'" fill="url(#xgbFillDown-'+esc(hA)+')"/>';
-  // Floor score as faint orange reference line
-  html+='<path d="'+floorPath+'" fill="none" stroke="#ff6b35" stroke-opacity="0.3" stroke-width="1" stroke-dasharray="3 2"/>';
-  // XGB main line in cyan
-  html+='<path d="'+pathD+'" fill="none" stroke="#67e8f9" stroke-opacity="0.85" stroke-width="1.5" stroke-linejoin="round"/>';
-  html+='<circle cx="'+lastX.toFixed(1)+'" cy="'+lastY.toFixed(1)+'" r="3.5" fill="#67e8f9" opacity="0.3"/>';
-  html+='<circle cx="'+lastX.toFixed(1)+'" cy="'+lastY.toFixed(1)+'" r="2" fill="#67e8f9"/>';
+  // Fill regions
+  if(primaryField){html+='<path d="'+fillD+'" fill="url(#xgbFill-'+esc(hA)+')"/>';html+='<path d="'+fillDownD+'" fill="url(#xgbFillDown-'+esc(hA)+')" />';}
+  // Floor line (rendered first so it's behind)
+  if(_wps.floor){var fp=buildPath(pts,'floor_score',0.5);if(fp.hasData)html+='<path d="'+fp.d+'" fill="none" stroke="#ff6b35" stroke-opacity="0.5" stroke-width="1" stroke-dasharray="3 2"/>';}
+  // MC Cum line
+  if(_wps.mc){var mp=buildPath(pts,'mc_cum_win_prob');if(mp.hasData){html+='<path d="'+mp.d+'" fill="none" stroke="#FDB927" stroke-opacity="0.85" stroke-width="1.5" stroke-linejoin="round"/>';html+='<circle cx="'+mp.lastX.toFixed(1)+'" cy="'+mp.lastY.toFixed(1)+'" r="3" fill="#FDB927" opacity="0.3"/>';html+='<circle cx="'+mp.lastX.toFixed(1)+'" cy="'+mp.lastY.toFixed(1)+'" r="1.5" fill="#FDB927"/>';}}
+  // XGB line (rendered last so it's on top)
+  if(_wps.xgb){var xp=buildPath(pts,'xgb_win_prob');if(xp.hasData){html+='<path d="'+xp.d+'" fill="none" stroke="#67e8f9" stroke-opacity="0.85" stroke-width="1.5" stroke-linejoin="round"/>';html+='<circle cx="'+xp.lastX.toFixed(1)+'" cy="'+xp.lastY.toFixed(1)+'" r="3.5" fill="#67e8f9" opacity="0.3"/>';html+='<circle cx="'+xp.lastX.toFixed(1)+'" cy="'+xp.lastY.toFixed(1)+'" r="2" fill="#67e8f9"/>';}}
+  // Team labels
   html+='<text x="6" y="12" font-size="9" font-weight="600" fill="'+tc(hA)+'" fill-opacity="0.7" font-family="var(--mono)">'+esc(hA)+'</text>';
   html+='<text x="6" y="'+(H-4)+'" font-size="9" font-weight="600" fill="'+tc(aA)+'" fill-opacity="0.7" font-family="var(--mono)">'+esc(aA)+'</text>';
-  // Legend
-  html+='<text x="'+(W-90)+'" y="12" font-size="7" fill="#67e8f9" fill-opacity="0.6" font-family="var(--mono)">XGB</text>';
-  html+='<text x="'+(W-50)+'" y="12" font-size="7" fill="#ff6b35" fill-opacity="0.4" font-family="var(--mono)">Floor</text>';
   html+='</svg></div>';
   return html;
 }
