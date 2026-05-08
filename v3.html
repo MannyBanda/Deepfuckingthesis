@@ -1066,7 +1066,7 @@ function renderCard(id){
     var _xgbLatest=null,_mcCumLatest=null;
     if(cs._allSnapshots&&cs._allSnapshots.length>0){var _ls=cs._allSnapshots[cs._allSnapshots.length-1];_xgbLatest=_ls.xgb_win_prob!=null?Math.round(Number(_ls.xgb_win_prob)*100):null;_mcCumLatest=_ls.mc_cum_win_prob!=null?Math.round(Number(_ls.mc_cum_win_prob)*100):null;}
     var isXGB=cs._wpMode==='xgb';
-    if(!cs._wpSeries)cs._wpSeries={xgb:true,mc:true,floor:false};
+    if(!cs._wpSeries)cs._wpSeries={xgb:true,mc:true,floor:false,canary:false};
     var _wps=cs._wpSeries;
     html+='<div class="wp-chart"><div class="wp-head"><div class="wp-head-left">';
     // Mode toggle: ESPN / Structural
@@ -1089,6 +1089,7 @@ function renderCard(id){
       var _pillFn=function(k,label,color){var on=_wps[k];return'<span onclick="cardState[\''+g.id+'\']._wpSeries.'+k+'=!cardState[\''+g.id+'\']._wpSeries.'+k+';renderCard(\''+g.id+'\')" style="cursor:pointer;padding:2px 6px;border-radius:3px;font-size:8px;margin-left:3px;'+(on?'color:'+color+';background:'+color+'1a':'color:var(--fg-dim);opacity:0.5')+'">'+label+'</span>';};
       html+=_pillFn('xgb','XGB','#67e8f9');
       html+=_pillFn('mc','MC','#FDB927');
+      html+=_pillFn('canary','PBP','#a78bfa');
       html+=_pillFn('floor','Floor','#ff6b35');
     }
     html+='</div></div>';
@@ -1490,6 +1491,8 @@ function renderXGBChart(cs,hA,aA){
   if(primaryField){html+='<path d="'+fillD+'" fill="url(#xgbFill-'+esc(hA)+')"/>';html+='<path d="'+fillDownD+'" fill="url(#xgbFillDown-'+esc(hA)+')" />';}
   // Floor line (rendered first so it's behind)
   if(_wps.floor){var fp=buildPath(pts,'floor_score',0.5);if(fp.hasData)html+='<path d="'+fp.d+'" fill="none" stroke="#ff6b35" stroke-opacity="0.5" stroke-width="1" stroke-dasharray="3 2"/>';}
+  // PBP MC canary line (volatile — thin, behind structural lines)
+  if(_wps.canary){var cp=buildPath(pts,'mc_win_prob');if(cp.hasData)html+='<path d="'+cp.d+'" fill="none" stroke="#a78bfa" stroke-opacity="0.6" stroke-width="1" stroke-linejoin="round"/>';}
   // MC Cum line
   if(_wps.mc){var mp=buildPath(pts,'mc_cum_win_prob');if(mp.hasData){html+='<path d="'+mp.d+'" fill="none" stroke="#FDB927" stroke-opacity="0.85" stroke-width="1.5" stroke-linejoin="round"/>';html+='<circle cx="'+mp.lastX.toFixed(1)+'" cy="'+mp.lastY.toFixed(1)+'" r="3" fill="#FDB927" opacity="0.3"/>';html+='<circle cx="'+mp.lastX.toFixed(1)+'" cy="'+mp.lastY.toFixed(1)+'" r="1.5" fill="#FDB927"/>';}}
   // XGB line (rendered last so it's on top)
