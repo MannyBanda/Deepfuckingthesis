@@ -1782,6 +1782,7 @@ async function hydrateFromServerSnapshots(gameId){
     }catch(e){}
 
     renderCard(gameId);
+    if(_drawerGameId===gameId)renderDrawer(gameId);
   }catch(e){console.warn('[DB] Snapshot hydration failed:',e.message);}
 }
 
@@ -2462,8 +2463,8 @@ function openDrawer(gameId){
   renderDrawer(gameId);
   // Fetch alerts if not cached
   if(!_alertsFetched)fetchAlerts();
-  // Fetch odds history for this game
-  var _cs=cardState[gameId];if(!_cs||!_cs._oddsHistory)fetchOddsHistory(gameId);
+  // Fetch odds history for this game (always re-fetch — live odds update every poll)
+  fetchOddsHistory(gameId);
 }
 
 async function fetchOddsHistory(gameId){
