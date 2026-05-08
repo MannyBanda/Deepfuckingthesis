@@ -7763,6 +7763,13 @@ export default async function(req) {
 
             if (!lt.mc || !lt.mc.triggered) {
               // ── CANARY CHECK (no active investigation) ──
+              // Track rolling margin + XGB for compression/drop detection
+              if (!lt._canary_margins) lt._canary_margins = [];
+              if (!lt._canary_xgb) lt._canary_xgb = [];
+              lt._canary_margins.push(_v2Margin);
+              if (lt._canary_margins.length > 5) lt._canary_margins.shift();
+              if (_xgbWinProb != null) { lt._canary_xgb.push(_xgbWinProb); if (lt._canary_xgb.length > 5) lt._canary_xgb.shift(); }
+
               const _mcRates = extractMCRatesFromPossLog(pbpResult?.possLog, 20, hA, aA, _mcHBaseline, _mcABaseline);
               if (_mcRates && _mcRates.home._windowFGA >= 5 && _mcRates.away._windowFGA >= 5) {
                 const _hs = summary.home?.statistics || {}, _as = summary.away?.statistics || {};
@@ -7772,16 +7779,22 @@ export default async function(req) {
                   const _mcCanary = runMonteCarloSim(_mcRates.home, _mcRates.away,
                     Number(ind.homePts), Number(ind.awayPts), _mcRemain,
                     { simCount: 1000, ctrlTeam: _mcCtrlIsHome ? 'home' : 'away' });
-                  // Combined canary: MC < 0.70 OR floor-MC divergence > 0.15
+                  // Signal triggers: PBP MC absolute, floor-MC divergence, XGB structural drop
                   const _mcAbsFired = _mcCanary.winProb < 0.70;
                   const _mcDivFired = ind.score != null && (ind.score - _mcCanary.winProb) > 0.15;
-                  if (_mcAbsFired || _mcDivFired) {
+                  const _peakXgb = lt._canary_xgb.length > 0 ? Math.max(...lt._canary_xgb) : null;
+                  const _xgbDropFired = _peakXgb != null && _xgbWinProb != null && (_peakXgb - _xgbWinProb) >= 0.15;
+                  // Margin compression gate: scoreboard must confirm deterioration
+                  const _peakMargin = Math.max(...lt._canary_margins);
+                  const _marginCompressed = (_peakMargin - _v2Margin) >= 3;
+                  const _triggerReason = _mcAbsFired ? 'absolute' : _mcDivFired ? 'divergence' : 'xgb_drop';
+                  if ((_mcAbsFired || _mcDivFired || _xgbDropFired) && _marginCompressed) {
                     // Only investigate teams with established tracking or active position
                     const _mcIsTracked = lt.bwc_fired?.team === ind.controlTeam || lt.buy_position?.team === ind.controlTeam;
                     if (!_mcIsTracked) {
                       log(`${matchup}: MC canary skipped — ${ind.controlTeam} not tracked/positioned (bwc=${lt.bwc_fired?.team || 'none'} pos=${lt.buy_position?.team || 'none'})`);
                     } else {
-                    log(`${matchup}: ★ MC CANARY FIRED — ctrl=${ind.controlTeam} MC=${_mcCanary.winProb.toFixed(3)} floor=${ind.score} margin=${_v2Margin} trigger=${_mcAbsFired ? 'absolute' : 'divergence'}`);
+                    log(`${matchup}: ★ MC CANARY FIRED — ctrl=${ind.controlTeam} MC=${_mcCanary.winProb.toFixed(3)} floor=${ind.score} margin=${_v2Margin} peak=${_peakMargin} compressed=${_peakMargin - _v2Margin} trigger=${_triggerReason}${_xgbDropFired ? ' xgbDrop=' + (_peakXgb - _xgbWinProb).toFixed(3) : ''}`);
                     const _hs2 = summary.home?.statistics || {}, _as2 = summary.away?.statistics || {};
                     lt.mc = {
                       triggered: true,
@@ -7792,6 +7805,7 @@ export default async function(req) {
                       trigger_floor: ind.score,
                       trigger_xgb: _xgbWinProb,
                       trigger_mc: _mcCanary.winProb,
+                      trigger_reason: _triggerReason,
                       trigger_stats: {
                         home: { fgm: Number(_hs2.field_goals_made||0), fga: Number(_hs2.field_goals_att||0), fg3m: Number(_hs2.three_points_made||0), fg3a: Number(_hs2.three_points_att||0), ftm: Number(_hs2.free_throws_made||0), fta: Number(_hs2.free_throws_att||0), to: Number(_hs2.turnovers||_hs2.total_turnovers||0), oreb: Number(_hs2.offensive_rebounds||0) },
                         away: { fgm: Number(_as2.field_goals_made||0), fga: Number(_as2.field_goals_att||0), fg3m: Number(_as2.three_points_made||0), fg3a: Number(_as2.three_points_att||0), ftm: Number(_as2.free_throws_made||0), fta: Number(_as2.free_throws_att||0), to: Number(_as2.turnovers||_as2.total_turnovers||0), oreb: Number(_as2.offensive_rebounds||0) },
@@ -7806,10 +7820,12 @@ export default async function(req) {
                       last_verdict_fga: 0,
                     };
                     // Nudge ntfy — let Manny know to check the dashboard
-                    const _mcNudgeBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\nMC canary fired — ctrl ${ind.controlTeam} MC=${(_mcCanary.winProb * 100).toFixed(1)}% vs floor ${ind.score.toFixed(2)} (${_mcAbsFired ? 'absolute' : 'divergence'}). Margin +${_v2Margin}. Investigating.`;
+                    const _mcNudgeBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\nMC canary fired — ctrl ${ind.controlTeam} MC=${(_mcCanary.winProb * 100).toFixed(1)}% vs floor ${ind.score.toFixed(2)} (${_triggerReason}). Margin +${_v2Margin} (peak +${_peakMargin}). Investigating.`;
                     await sendNtfy(`MC INVESTIGATING — ${matchup}`, _mcNudgeBody, 3);
                     log(`${matchup}: MC INVESTIGATING ntfy sent`);
                     } // close _mcIsTracked else
+                  } else if ((_mcAbsFired || _mcDivFired || _xgbDropFired) && !_marginCompressed) {
+                    log(`${matchup}: MC canary signal blocked by margin gate — MC=${_mcCanary.winProb.toFixed(3)} margin=${_v2Margin} peak=${_peakMargin} compressed=${_peakMargin - _v2Margin} (need >=3)`);
                   }
                 }
               }
