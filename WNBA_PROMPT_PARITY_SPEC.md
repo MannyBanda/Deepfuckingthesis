@@ -277,3 +277,97 @@ Fix all 5 plumbing points BEFORE adding any league-branched prompt text. Verify 
 - No global `var league` exists anywhere in the file
 - Concurrent Netlify invocations each get independent execution contexts
 - Sequential NBA→NCAAMB→WNBA loop within one invocation is safe due to block scoping
+
+---
+
+## Section 6: WNBA Odds Integration (The Odds API primary, BDL fallback)
+
+### Current State
+- `fetchOddsAPIBatch()` (line 1420) hardcoded to `basketball_nba` sport key
+- Line 6226: `const oddsAPICache = league === 'nba' ? await fetchOddsAPIBatch() : {};` — WNBA skipped entirely
+- `bdlOdds(league, bdlGid)` (line 1386) already league-aware — newly available for WNBA per BDL (Danny confirmed May 8)
+- `ODDS_API_TEAMS` mapping (line 389) — NBA only, 30 teams
+
+### Changes
+
+**1. `fetchOddsAPIBatch` → league-aware (line 1420)**
+
+Add `league` parameter, branch sport key:
+```javascript
+async function fetchOddsAPIBatch(league) {
+  const apiKey = process.env.ODDS_API_KEY;
+  if (!apiKey) return {};
+  const sportKey = league === 'wnba' ? 'basketball_wnba' : 'basketball_nba';
+  const teamMap = league === 'wnba' ? ODDS_API_TEAMS_WNBA : ODDS_API_TEAMS;
+  const url = `https://api.the-odds-api.com/v4/sports/${sportKey}/odds?apiKey=${apiKey}&regions=us,us2&markets=h2h,spreads,totals&oddsFormat=american`;
+  // ... rest unchanged, but use teamMap instead of ODDS_API_TEAMS
+```
+
+**2. `ODDS_API_TEAMS_WNBA` mapping (new, after line ~420)**
+
+15 WNBA teams — full names as they appear in The Odds API → our SR aliases:
+```javascript
+const ODDS_API_TEAMS_WNBA = {
+  'Atlanta Dream': 'ATL',
+  'Chicago Sky': 'CHI',
+  'Connecticut Sun': 'CON',
+  'Dallas Wings': 'DAL',
+  'Golden State Valkyries': 'GSV',
+  'Indiana Fever': 'IND',
+  'Las Vegas Aces': 'LVA',
+  'Los Angeles Sparks': 'LAS',
+  'Minnesota Lynx': 'MIN',
+  'New York Liberty': 'NYL',
+  'Phoenix Mercury': 'PHO',
+  'Portland Fire': 'PDX',
+  'Seattle Storm': 'SEA',
+  'Toronto Tempo': 'TOY',
+  'Washington Mystics': 'WAS',
+};
+```
+
+**NOTE:** These team names must match EXACTLY what The Odds API returns. Verify against a live response on opening night. New expansion teams (Portland Fire, Toronto Tempo) may use different names in the API.
+
+**3. Poll loop odds fetch (line 6226)**
+
+```javascript
+// Current:
+const oddsAPICache = league === 'nba' ? await fetchOddsAPIBatch() : {};
+
+// Change:
+const oddsAPICache = (league === 'nba' || league === 'wnba') ? await fetchOddsAPIBatch(league) : {};
+```
+
+**4. `fetchOddsAPIBatch` internal team mapping**
+
+Current code at line ~1436 uses `ODDS_API_TEAMS[g.home_team]` — needs to use the league-specific map:
+```javascript
+// Pass teamMap into the function or select based on league param
+const homeAlias = teamMap[g.home_team];
+const awayAlias = teamMap[g.away_team];
+```
+
+All downstream odds usage (ML gates, lane classification, odds display, alert context) already works — they read from `odds.homeML`, `odds.awayML`, `odds.homeSpread` which the batch fetch populates. No changes needed downstream.
+
+### What This Enables
+- ML gates functional for WNBA (BUY ML > -250, CANDIDATE ML -250 to -400)
+- Lane classification (FAVORITE/DOG/PICK) for position tracking
+- Line shopping across 20+ books in agent context and dashboard
+- Odds movement tracking (odds_history table)
+
+### Credit Budget
+- NBA: ~900 calls/night (60s polls × ~5 games × ~3 hours)
+- WNBA: ~450-600 calls/night (same pattern, fewer games, shorter games)
+- Combined: ~1,500/night × 30 nights = ~45K/month
+- Plan: 20K credits/month
+- **RISK: May exceed budget with both leagues.** Mitigation options:
+  - Poll odds less frequently (every 2nd or 3rd poll cycle instead of every cycle)
+  - Gate odds fetch to only games in Q2+ (skip pregame/Q1)
+  - Upgrade plan if ROI justifies
+
+### Verification
+After deployment, hit the odds endpoint during a live WNBA game and verify:
+1. The Odds API returns WNBA games with correct team names
+2. Team name → alias mapping resolves correctly
+3. ML/spread values flow through to alerts and agent context
+4. BDL fallback works when Odds API doesn't return a game
