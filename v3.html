@@ -1461,8 +1461,9 @@ function renderXGBChart(cs,hA,aA){
     return{d:d,lastX:lastPx,lastY:lastPy,hasData:hasData};
   }
 
-  // Build fill regions from the primary visible series (XGB > MC > Floor)
-  var primaryField=_wps.xgb?'xgb_win_prob':_wps.mc?'mc_cum_win_prob':_wps.floor?'floor_score':null;
+  // Build fill regions from the primary visible series (MC > XGB > Floor)
+  // When both MC and XGB are on, MC gets the area chart, XGB stays as a line
+  var primaryField=_wps.mc?'mc_cum_win_prob':_wps.xgb?'xgb_win_prob':_wps.floor?'floor_score':null;
   var fillD='M0,'+H/2,fillDownD='M0,'+H/2;
   if(primaryField){
     for(var i=0;i<pts.length;i++){
@@ -1478,7 +1479,7 @@ function renderXGBChart(cs,hA,aA){
   fillD+='L'+W+','+H/2+'Z';
   fillDownD+='L'+W+','+H/2+'Z';
 
-  var primaryColor=_wps.xgb?'#67e8f9':_wps.mc?'#FDB927':'#ff6b35';
+  var primaryColor=_wps.mc?'#FDB927':_wps.xgb?'#67e8f9':'#ff6b35';
   var html='<div class="wp-canvas"><svg class="wp-svg" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none">';
   html+='<defs><linearGradient id="xgbFill-'+esc(hA)+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="'+primaryColor+'" stop-opacity="0.2"/><stop offset="100%" stop-color="'+primaryColor+'" stop-opacity="0"/></linearGradient>';
   html+='<linearGradient id="xgbFillDown-'+esc(hA)+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#F87171" stop-opacity="0"/><stop offset="100%" stop-color="#F87171" stop-opacity="0.2"/></linearGradient></defs>';
