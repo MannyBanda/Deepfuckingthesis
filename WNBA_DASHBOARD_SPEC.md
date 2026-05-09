@@ -652,6 +652,93 @@ The thesis rendering in the card works as-is (reads `theses[id]` from DB, displa
 
 **Future:** Add WNBA to pregame agent — needs WNBA-specific system prompt, SR depth charts/injuries for WNBA, and WNBA season Q4 auto data. Separate ticket.
 
+### 3S. Signal Strip Redesign — toggleable series below WP chart
+
+**Current v3 layout:** Toggle pills (XGB, MC, PBP, Floor) live in the WP chart header right side, only visible in Structural mode. Current values shown inline in header left.
+
+**New WNBA layout:**
+
+```
+[ESPN] [⚡ Structural]                         ← chart header (mode switch only)
+┌────────────────────────────────────────────┐
+│  Chart (ESPN WP or Structural signals)     │
+└────────────────────────────────────────────┘
+ 1st        2nd        3rd        4th
+[MC 85%] · [XGB 72%] · [PBP 68%] · [Floor ·] ← signal strip
+```
+
+**Behavior:**
+- Signal strip sits **below** the WP chart, always visible in both ESPN and Structural modes
+- Each pill shows signal name + current value (e.g., `MC 85%`)
+- Clicking a pill **toggles that series on/off** on the structural chart
+- If in ESPN mode and user clicks a signal pill, auto-switch to Structural view
+- Active pills: colored text + tinted background. Inactive: dimmed/muted
+- Default series: **MC Cum ON, XGB ON, PBP ON, Floor OFF**
+
+**Signal colors (consistent with chart lines):**
+
+| Signal | Color | Chart field |
+|--------|-------|-------------|
+| MC Cum | `#FDB927` (gold) | `mc_cum_win_prob` |
+| XGB | `#67e8f9` (cyan) | `xgb_win_prob` |
+| PBP MC | `#a78bfa` (violet) | `mc_win_prob` |
+| Floor | `#ff6b35` (orange) | `floor_score` |
+
+**Default series change:**
+```javascript
+// Current v3:
+if(!cs._wpSeries) cs._wpSeries = {xgb:true, mc:true, floor:false, canary:false};
+
+// WNBA:
+if(!cs._wpSeries) cs._wpSeries = {mc:true, xgb:true, canary:true, floor:false};
+```
+
+**Rendering — signal strip below chart:**
+```javascript
+// After the chart SVG and quarter labels, render the signal strip
+html += '<div class="sig-strip">';
+var _sigs = [
+  {k:'mc',     label:'MC',    color:'#FDB927', val:_mcCumLatest},
+  {k:'xgb',    label:'XGB',   color:'#67e8f9', val:_xgbLatest},
+  {k:'canary', label:'PBP',   color:'#a78bfa', val:_pbpMcLatest},
+  {k:'floor',  label:'Floor', color:'#ff6b35', val:_floorLatest}
+];
+_sigs.forEach(function(sig){
+  var on = _wps[sig.k];
+  var valStr = sig.val != null ? ' ' + sig.val + '%' : '';
+  var style = on
+    ? 'color:' + sig.color + ';background:' + sig.color + '1a;border-color:' + sig.color + '33'
+    : 'color:var(--fg-dim);opacity:0.45;border-color:var(--hairline)';
+  html += '<span class="sig-pill" onclick="toggleSigSeries(\'' + g.id + '\',\'' + sig.k + '\')" style="' + style + '">';
+  html += sig.label + valStr + '</span>';
+});
+html += '</div>';
+```
+
+**Toggle handler — auto-switch to structural mode:**
+```javascript
+function toggleSigSeries(gameId, key){
+  var cs = cardState[gameId];
+  if(!cs) return;
+  if(!cs._wpSeries) cs._wpSeries = {mc:true, xgb:true, canary:true, floor:false};
+  cs._wpSeries[key] = !cs._wpSeries[key];
+  // Auto-switch to structural mode when toggling signals
+  if(cs._wpMode !== 'xgb') cs._wpMode = 'xgb';
+  renderCard(gameId);
+}
+```
+
+**CSS for signal strip:**
+```css
+.sig-strip{display:flex;align-items:center;gap:6px;padding:6px 16px 2px;flex-wrap:wrap;}
+.sig-pill{font-family:var(--mono);font-size:9px;font-weight:600;padding:3px 8px;
+  border-radius:4px;border:1px solid;cursor:pointer;white-space:nowrap;
+  transition:all 0.12s ease;-webkit-tap-highlight-color:transparent;}
+.sig-pill:active{transform:scale(0.95);}
+```
+
+**Remove from chart header:** The toggle pills currently in `wp-head-right` (the `_pillFn` block) are removed. The header only keeps ESPN/Structural mode switch + current value summary. The `wp-head-right` section in structural mode becomes empty or shows a compact summary.
+
 ---
 
 ## 4. Server-Side Changes
@@ -721,7 +808,8 @@ Apply to both live URL (`/v4/sports/{sportKey}/odds`) and historical URL (`/v4/h
 | 7 | `buildTeamEvidence()` + `buildWNBASummary()` adapters | Low | ~60 |
 | 8 | Poll: `refreshLiveCardsWNBA()` (stores _pbpPlayerStats + _teamEvidence) | Medium | ~55 |
 | 9 | Delete dead code (computeClientIndicators, buildV3Summary, refreshLiveCards, box_score fetches) | Low | -240 |
-| 10 | Shot zones: no code changes — `courtSVG()` + `_dZones()` work as-is once shooting_play fix populates data | None | 0 |
+| 10 | Signal strip redesign: move toggle pills below chart, auto-switch to structural | Medium | ~40 |
+| 11 | Shot zones: no code changes — `courtSVG()` + `_dZones()` work as-is once shooting_play fix populates data | None | 0 |
 | 11 | I1-I5 indicator detail: read from `_pbpPlayerStats` / `_teamEvidence`, I2 perimeter/FT | Medium | ~40 |
 | 12 | QD grid: column reorder + live partial from `_teamEvidence` + PBP paint | Low | ~20 |
 | 13 | Inline conviction: WNBA killer pairs | Low | ~15 |
