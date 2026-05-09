@@ -92,17 +92,27 @@ const ESPN_ALIAS_MAP = {NYL:'NY', GSV:'GS', WAS:'WSH', LVA:'LV', LAS:'LA', PDX:'
 ```
 Identical to LEAGUES.wnba.aliasMap on the server. All 15 teams confirmed — the 8 not in the map (ATL, CHI, CON, DAL, IND, MIN, PHX, SEA) are identical between SR and ESPN.
 
-**WNBA team colors (TC):**
+**WNBA team colors (TC) — brightest per team, optimized for dark bg contrast:**
 ```javascript
 const TC = {
-  ATL:'#C8102E', CHI:'#418FDE', CON:'#DC4405', DAL:'#00A4E4',
-  GS:'#552583', IND:'#002D62', LA:'#702F8A', LV:'#000000',
-  MIN:'#236192', NY:'#2BACE2', PHX:'#E56020', POR:'#E03C31',
-  SEA:'#2C5234', TOR:'#A6192E', WSH:'#002B5C',
+  ATL:'#E35205',  // Dream Coral
+  CHI:'#72C5EB',  // Sky Blue (lightened from #418FDE for dark bg)
+  CON:'#FB4F14',  // Sun Orange
+  DAL:'#00A4E4',  // Wings Blue
+  GS: '#AD96DC',  // Valkyrie Violet
+  IND:'#FFCD00',  // Fever Yellow
+  LA: '#FFC72C',  // Sparks Gold
+  LV: '#C8102E',  // Aces Red
+  MIN:'#78BE21',  // Lynx Aurora Green
+  NY: '#6ECEB2',  // Liberty Seafoam
+  PHX:'#E56020',  // Mercury Orange
+  POR:'#E03C31',  // Fire Red (approx — expansion team)
+  SEA:'#FBE122',  // Storm Yellow
+  TOR:'#6CACE4',  // Tempo Borealis Blue (approx — expansion team)
+  WSH:'#E31837',  // Mystics Red (shifted from #C8102E to differentiate from LV)
   HOME:'#888', AWAY:'#888'
 };
 ```
-Note: PDX (Portland Fire) and TOY (Toronto Tempo) are expansion teams — brand colors approximate, update from official guides when available.
 
 **Inline conviction (`snapConviction` in snapshot history drawer) — WNBA killer pairs:**
 ```javascript
@@ -422,7 +432,7 @@ Add `league` to payload, branch system prompt. Key diffs from NBA:
 |---------|--------|------|------------|
 | Live scores (10s) | BDL box_scores | BDL plays | **Solved** |
 | Per-player stats | box_scores players[] | Team-level only | **Yes** |
-| Shot zones | PBP x,y coords | Hidden | **Yes** |
+| Shot zone court visual | PBP x,y coords | Hidden (zone % aggregates still in evidence) | **Yes** |
 | Run tracking | BDL plays | BDL plays (with fix) | **Solved** |
 | Indicators/floor | Client compute | Server (higher quality) | **Better** |
 | Sust. personnel | Per-player in-game | Regression + shot-type only | **Partial** |
