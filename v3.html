@@ -3780,10 +3780,19 @@ function showToastEl(){
 }
 
 function showToast(){
-  if(_latestSendAlert){fireToast(_latestSendAlert);}
+  // Scope to currently viewed game first
+  var alertForGame=null;
+  if(activeGameId&&_alertCache[activeGameId]){
+    var ga=_alertCache[activeGameId];
+    for(var i=ga.length-1;i>=0;i--){
+      if(ga[i].agent_decision==='SEND'){alertForGame=ga[i];break;}
+    }
+  }
+  if(alertForGame){fireToast(alertForGame);}
+  else if(_latestSendAlert&&_latestSendAlert.game_id===activeGameId){fireToast(_latestSendAlert);}
   else{
     document.getElementById('toast-label').textContent='No Alerts';
-    document.getElementById('toast-alert-info').textContent='No SEND alerts today';
+    document.getElementById('toast-alert-info').textContent='No alerts for this game';
     document.getElementById('toast-game').textContent='Alerts will appear here when signals fire';
     document.getElementById('toast-odds').innerHTML='';
     showToastEl();
