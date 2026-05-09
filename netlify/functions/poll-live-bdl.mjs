@@ -405,7 +405,9 @@ const W = { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 };
 const SR_DELAY_MS = 1400; // respect trial tier rate limit
 
 // ── SONNET SYSTEM PROMPT (same as analyze.js) ────────────────────────────────
-const SONNET_SYSTEM_PROMPT = 'You are an NBA structural analyst. You receive pre-computed mechanical indicators as GROUND TRUTH — do not recompute them. Your job: synthesize a predictive read, compute FWP, identify risks, and write a plain-English narrative.\n\n'
+function getSonnetSystemPrompt(league) {
+// WNBA prompt branch will be added in Phase 3
+return 'You are an NBA structural analyst. You receive pre-computed mechanical indicators as GROUND TRUTH — do not recompute them. Your job: synthesize a predictive read, compute FWP, identify risks, and write a plain-English narrative.\n\n'
 + 'GROUND TRUTH (provided by the mechanical engine — do NOT override):\n'
 + '  - I1-I5 indicator scores with team labels and who wins each\n'
 + '  - Composite floor score and control team\n'
@@ -512,6 +514,7 @@ const SONNET_SYSTEM_PROMPT = 'You are an NBA structural analyst. You receive pre
 + 'Lead Source: [STRUCTURAL | VARIANCE | MIXED | EVEN] — [1-line]\n'
 + 'DISAGREEMENT: [NONE | 1-2 sentences explaining where you disagree with mechanical conviction and why]\n\n'
 + 'Be concise. Decisive when the indicators are clear. Your value is context and projection, not recomputing what the engine already knows.';
+}
 // ── HELPERS ─────────────────────────────────────────────────────────────────
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -4627,7 +4630,7 @@ function parseAnalysisText(text, homeAlias, awayAlias) {
 // Single function that formats ALL data layers into prompt text.
 // Matches analyze.js quality — no more "payload ghost" layers.
 
-function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary, conviction, graduationCtx, priorAlertTrail, floorWP, xgbData, mcData }) {
+function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary, conviction, graduationCtx, priorAlertTrail, floorWP, xgbData, mcData, league }) {
   let p = `${aA} @ ${hA} | Q${period} ${clock} | ${score}\n\n`;
 
   // ── GROUND TRUTH (mechanical engine output — do not override) ──
@@ -5253,7 +5256,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
     const _caTrajSignals = _caXgbShap ? computeTrajectorySignals(_caXgbShap, lt.checkpoints || [], _caConvQuality, _caXgbWinProb) : null;
 
     const userPrompt = formatSonnetPrompt({
-      hA, aA, period, clock, score: scoreLine,
+      hA, aA, period, clock, score: scoreLine, league,
       thesis: thesis || null,
       sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory,
       ctx: clientCtx || {},
@@ -5312,7 +5315,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       body: JSON.stringify({
         model: 'claude-opus-4-6',
         max_tokens: 2500,
-        system: SONNET_SYSTEM_PROMPT,
+        system: getSonnetSystemPrompt(league),
         messages: [{ role: 'user', content: userPrompt }],
       }),
     });
@@ -5656,7 +5659,7 @@ export default async function(req) {
       // Generate prompt snippet
       if (ctx && ind) {
         const prompt = formatSonnetPrompt({
-          hA, aA, period, clock, score: result.score,
+          hA, aA, period, clock, score: result.score, league,
           thesis: null,
           sust, leadComp, ind, clutchData: null, odds: null,
           espnWP: null, wpProfiles: null, analysisHistory: null,
@@ -7094,7 +7097,7 @@ export default async function(req) {
                 margin: _v2Margin, // signed: positive = leading
                 awayAlias: aA, homeAlias: hA,
                 awayPts: ind.awayPts, homePts: ind.homePts,
-                ctrlIsHome,
+                ctrlIsHome, league,
                 period: currentPeriod, clock,
                 bwcTeam,
                 i1: _ci[0]?.toFixed(2),
@@ -7221,7 +7224,9 @@ export default async function(req) {
                 // Q3: XGB < 0.45 suppress (73% above, 63% below)
                 // Q4: XGB < 0.60 suppress (50% at 0.55-0.70, 38% at 0.40-0.55, 29% below)
                 if (v2Type === 'BUY') {
-                  const buyXgbFloor = currentPeriod >= 4 ? 0.60 : currentPeriod >= 3 ? 0.45 : 0.40;
+                  const buyXgbFloor = league === 'wnba'
+                    ? (currentPeriod >= 4 ? 0.70 : 0.45)  // WNBA: Q4 BUY nearly dead (<0.45=2%), Q2-Q3 same gate
+                    : (currentPeriod >= 4 ? 0.60 : currentPeriod >= 3 ? 0.45 : 0.40);  // NBA
                   if (_xgbWinProb < buyXgbFloor) {
                     _xgbGateSuppress = true;
                     log(`${matchup}: XGB GATE — suppressing BUY Q${currentPeriod} (xgb=${_xgbWinProb.toFixed(3)}, threshold=${buyXgbFloor}, floor=${ind.score})`);
@@ -7920,7 +7925,7 @@ export default async function(req) {
             }
 
             // ── V2 BUY TRIGGERS ──
-            if (currentPeriod >= 2 && ind.score >= 0.55 && ctrlTrailing && margin >= 1 && margin <= 15
+            if (currentPeriod >= 2 && ind.score >= 0.55 && ctrlTrailing && margin >= 1 && margin <= (league === 'wnba' ? 9 : 15)
                 && alertMinsLeft >= 1.0 && ind.controlTeam !== 'Neither') {
               const _v2Now = Date.now();
               const _v2MsSinceLastBuy = lt._last_buy_ts ? (_v2Now - lt._last_buy_ts) : Infinity;
@@ -7992,7 +7997,7 @@ export default async function(req) {
                   }
                 }
               }
-            } else if (ind.score >= 0.65 && ctrlTrailing && margin >= 1 && margin <= 15 && currentPeriod >= 2 && alertMinsLeft < 1.0) {
+            } else if (ind.score >= 0.65 && ctrlTrailing && margin >= 1 && margin <= (league === 'wnba' ? 9 : 15) && currentPeriod >= 2 && alertMinsLeft < 1.0) {
               log(`${matchup}: BUY suppressed — ${alertMinsLeft.toFixed(1)} min left (< 1 min clock gate)`);
             }
 
@@ -8173,7 +8178,7 @@ export default async function(req) {
               const _invCtrlIsHome = ind.controlTeam === hA;
               const _invV2Ctx = {
                 alertType: 'XGB_INVALIDATED', alertTier: 'FIRED',
-                ctrlTeam: ind.controlTeam, ctrlIsHome: _invCtrlIsHome,
+                ctrlTeam: ind.controlTeam, ctrlIsHome: _invCtrlIsHome, league,
                 floor: ind.score?.toFixed(2), margin: _v2Margin,
                 bwcTeam: _invBuyTeam,
                 bwcFirePeriod: lt.bwc_fired?.period || null,
