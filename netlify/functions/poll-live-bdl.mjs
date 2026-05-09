@@ -400,6 +400,14 @@ const ODDS_API_TEAMS = {
   'Toronto Raptors': 'TOR', 'Utah Jazz': 'UTA', 'Washington Wizards': 'WAS',
 };
 
+const ODDS_API_TEAMS_WNBA = {
+  'Atlanta Dream': 'ATL', 'Chicago Sky': 'CHI', 'Connecticut Sun': 'CON',
+  'Dallas Wings': 'DAL', 'Golden State Valkyries': 'GSV', 'Indiana Fever': 'IND',
+  'Las Vegas Aces': 'LVA', 'Los Angeles Sparks': 'LAS', 'Minnesota Lynx': 'MIN',
+  'New York Liberty': 'NYL', 'Phoenix Mercury': 'PHO', 'Portland Fire': 'PDX',
+  'Seattle Storm': 'SEA', 'Toronto Tempo': 'TOY', 'Washington Mystics': 'WAS',
+};
+
 const W = { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 };
 
 const SR_DELAY_MS = 1400; // respect trial tier rate limit
@@ -1520,24 +1528,26 @@ async function bdlOdds(league, bdlGameId) {
 // Fetch live odds from The Odds API — one call returns ALL live NBA games
 // Returns map: { 'NYK': { homeSpread, homeML, awayML, total, books }, ... } keyed by HOME alias
 // Uses best available line (most favorable ML for each side)
-async function fetchOddsAPIBatch() {
+async function fetchOddsAPIBatch(league) {
   const apiKey = process.env.ODDS_API_KEY;
   if (!apiKey) return {};
+  const sportKey = league === 'wnba' ? 'basketball_wnba' : 'basketball_nba';
+  const teamMap = league === 'wnba' ? ODDS_API_TEAMS_WNBA : ODDS_API_TEAMS;
   try {
-    const url = `https://api.the-odds-api.com/v4/sports/basketball_nba/odds?apiKey=${apiKey}&regions=us,us2&markets=h2h,spreads,totals&oddsFormat=american`;
+    const url = `https://api.the-odds-api.com/v4/sports/${sportKey}/odds?apiKey=${apiKey}&regions=us,us2&markets=h2h,spreads,totals&oddsFormat=american`;
     const resp = await fetch(url);
     if (!resp.ok) {
-      log(`Odds API ${resp.status}`);
+      log(`Odds API ${resp.status} (${sportKey})`);
       return {};
     }
     const games = await resp.json();
     const remaining = resp.headers.get('x-requests-remaining');
-    log(`Odds API: ${games.length} games, ${remaining} credits remaining`);
+    log(`Odds API (${league}): ${games.length} games, ${remaining} credits remaining`);
 
     const result = {};
     for (const g of games) {
-      const homeAlias = ODDS_API_TEAMS[g.home_team];
-      const awayAlias = ODDS_API_TEAMS[g.away_team];
+      const homeAlias = teamMap[g.home_team];
+      const awayAlias = teamMap[g.away_team];
       if (!homeAlias || !awayAlias) continue;
 
       let bestHomeML = null, bestAwayML = null;
@@ -1547,12 +1557,12 @@ async function fetchOddsAPIBatch() {
         for (const mkt of (bk.markets || [])) {
           if (mkt.key === 'h2h') {
             for (const o of (mkt.outcomes || [])) {
-              const alias = ODDS_API_TEAMS[o.name];
+              const alias = teamMap[o.name];
               if (alias === homeAlias && (bestHomeML == null || o.price > bestHomeML)) bestHomeML = o.price;
               if (alias === awayAlias && (bestAwayML == null || o.price > bestAwayML)) bestAwayML = o.price;
             }
           } else if (mkt.key === 'spreads') {
-            const homeOut = (mkt.outcomes || []).find(o => ODDS_API_TEAMS[o.name] === homeAlias);
+            const homeOut = (mkt.outcomes || []).find(o => teamMap[o.name] === homeAlias);
             if (homeOut?.point != null) spreads.push(homeOut.point);
           } else if (mkt.key === 'totals') {
             const overOut = (mkt.outcomes || []).find(o => o.name === 'Over');
@@ -6333,7 +6343,7 @@ export default async function(req) {
 
       // Fetch live odds from The Odds API (one call, all games)
       // Returns { 'NYK': { homeSpread, homeML, awayML, total, books }, ... }
-      const oddsAPICache = league === 'nba' ? await fetchOddsAPIBatch() : {};
+      const oddsAPICache = (league === 'nba' || league === 'wnba') ? await fetchOddsAPIBatch(league) : {};
 
       for (let gi = 0; gi < potentiallyLive.length; gi++) {
         const game = potentiallyLive[gi];
