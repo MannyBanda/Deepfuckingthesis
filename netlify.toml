@@ -32,7 +32,7 @@
 
 [functions."poll-live-bdl"]
   timeout = 120
-  included_files = ["netlify/functions/xgb-model.json"]
+  included_files = ["netlify/functions/xgb-model.json", "netlify/functions/xgb-model-wnba.json"]
 
 [functions."test-monitor"]
   timeout = 120

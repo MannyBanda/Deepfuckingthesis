@@ -1,6 +1,7 @@
 // odds-api.js — Proxy for The Odds API (line shopping)
-// Live games: /v4/sports/basketball_nba/odds (1 credit)
-// Completed games: /v4/historical/sports/basketball_nba/odds?date=ISO (10 credits)
+// Accepts ?league=nba|wnba (default: nba)
+// Live games: /v4/sports/{sportKey}/odds (1 credit)
+// Completed games: /v4/historical/sports/{sportKey}/odds?date=ISO (10 credits)
 
 exports.handler = async function(event) {
   var headers = {
@@ -18,11 +19,13 @@ exports.handler = async function(event) {
   try {
     var params = event.queryStringParameters || {};
     var histDate = params.date || null;
+    var league = params.league || 'nba';
+    var sportKey = league === 'wnba' ? 'basketball_wnba' : 'basketball_nba';
     var url;
 
     if (histDate) {
       // Historical odds — pass ISO date to get odds snapshot at that time
-      url = 'https://api.the-odds-api.com/v4/historical/sports/basketball_nba/odds'
+      url = 'https://api.the-odds-api.com/v4/historical/sports/' + sportKey + '/odds'
         + '?apiKey=' + apiKey
         + '&regions=us,us2'
         + '&markets=h2h'
@@ -30,7 +33,7 @@ exports.handler = async function(event) {
         + '&date=' + encodeURIComponent(histDate);
     } else {
       // Live/upcoming odds
-      url = 'https://api.the-odds-api.com/v4/sports/basketball_nba/odds'
+      url = 'https://api.the-odds-api.com/v4/sports/' + sportKey + '/odds'
         + '?apiKey=' + apiKey
         + '&regions=us,us2'
         + '&markets=h2h'

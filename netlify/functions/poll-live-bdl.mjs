@@ -1750,7 +1750,8 @@ function parseBDLPBPServer(plays, homeAbbr, awayAbbr) {
     if (hs != null && as != null) { const mg = hs - as; if (mg > bigH) bigH = mg; if (-mg > bigA) bigA = -mg; }
     if (tl.includes('substitution') || tx.includes('enters the game for')) return;
 
-    if (ev.shooting_play) {
+    const _isShotPlay = ev.shooting_play != null ? ev.shooting_play : /shot|layup|dunk|hook|tip|free throw/.test(tl);
+    if (_isShotPlay) {
       const made = ev.scoring_play || false;
       const is3 = ev.score_value === 3 || tx.includes('three point');
       let pts = made ? (ev.score_value || (is3 ? 3 : 2)) : 0;
@@ -1899,7 +1900,8 @@ function buildPossLogServer(sorted, hA, aA) {
     }
 
     // Shooting play (non-FT)
-    if (ev.shooting_play) {
+    const _isShotPlay2 = ev.shooting_play != null ? ev.shooting_play : /shot|layup|dunk|hook|tip/.test(tl);
+    if (_isShotPlay2) {
       const made = ev.scoring_play || false;
       const is3 = ev.score_value === 3 || text.includes('three point');
       cur.fga++;
