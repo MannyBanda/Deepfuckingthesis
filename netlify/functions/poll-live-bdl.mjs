@@ -5989,7 +5989,11 @@ export default async function(req) {
   const results = { games: 0, snapshots: 0, espn: 0, odds: 0, errors: [], skipped: null };
   const pendingAnalyses = []; // collect async Sonnet calls so we await them before returning
 
+  let _leagueIdx = 0;
   for (const league of Object.keys(LEAGUES)) {
+    // Stagger SR calls between leagues — 1 req/sec rate limit
+    if (_leagueIdx > 0) await new Promise(r => setTimeout(r, 2000));
+    _leagueIdx++;
     const cfg = LEAGUES[league];
     const apiKey = process.env[cfg.srKeyEnv];
     if (!apiKey) {

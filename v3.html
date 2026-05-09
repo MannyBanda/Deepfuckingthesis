@@ -1721,9 +1721,12 @@ async function hydrateFromServerSnapshots(gameId){
   if(!dbReady)return;
   var cs=cardState[gameId];if(!cs)return;
 
+  // Use cached resolved ID from prior hydration, or default to gameId
+  var dbId=cs._dbGameId||gameId;
+
   // Quarter data
   try{
-    var qdResp=await fetch(FN+'db-api?action=get_quarter_data&game_id='+encodeURIComponent(gameId));
+    var qdResp=await fetch(FN+'db-api?action=get_quarter_data&game_id='+encodeURIComponent(dbId));
     if(qdResp.ok){
       var qdData=await qdResp.json();
       var qd=qdData.quarter_data;
@@ -1741,9 +1744,18 @@ async function hydrateFromServerSnapshots(gameId){
 
   // Snapshots
   try{
-    var resp=await fetch(FN+'db-api?action=history&game_id='+gameId);
+    var resp=await fetch(FN+'db-api?action=history&game_id='+dbId);
     if(!resp.ok)return;var data=await resp.json();
-    var snaps=data.snapshots||[];if(snaps.length===0)return;
+    var snaps=data.snapshots||[];
+    // ESPN ID fallback — server may store data under ESPN ID when SR schedule failed
+    if(snaps.length===0&&espnGameMap[gameId]&&espnGameMap[gameId]!==dbId){
+      dbId=espnGameMap[gameId];cs._dbGameId=dbId;
+      console.log('[HYDRATE] SR ID empty — trying ESPN ID '+dbId);
+      try{var _r2=await fetch(FN+'db-api?action=history&game_id='+dbId);if(_r2.ok){var _d2=await _r2.json();snaps=_d2.snapshots||[];}}catch(e){}
+      // Re-fetch quarter data under the correct ID
+      try{var _qr2=await fetch(FN+'db-api?action=get_quarter_data&game_id='+encodeURIComponent(dbId));if(_qr2.ok){var _qd2=await _qr2.json();var _q2=_qd2.quarter_data;if(_q2&&_q2.diffs)cs._serverQuarterDiffs=_q2.diffs;if(_q2&&_q2.boundaries)cs._serverQDBoundaries=_q2.boundaries;if(_q2&&_q2.window&&_q2.window.available){cs.rollingWindow=_q2.window;cs.rollingWindow.source='server-qd';}if(_qd2.espn_wp_json&&_qd2.espn_wp_json.length>0)cs.espnWPHistory=_qd2.espn_wp_json;}}catch(e){}
+    }
+    if(snaps.length===0)return;
     var usable=snaps.filter(function(s){return s.floor_score!=null;});
     if(usable.length===0)return;
     cs._allSnapshots=usable; // store full array for drawer history
@@ -1792,7 +1804,7 @@ async function hydrateFromServerSnapshots(gameId){
 
     // MC investigation state from live_tracking
     try{
-      var ltResp=await fetch(FN+'db-api?action=get_live_tracking&game_id='+encodeURIComponent(gameId));
+      var ltResp=await fetch(FN+'db-api?action=get_live_tracking&game_id='+encodeURIComponent(dbId));
       if(ltResp.ok){var ltData=await ltResp.json();var ltObj=ltData.live_tracking;
         if(ltObj&&typeof ltObj==='string')try{ltObj=JSON.parse(ltObj);}catch(e){}
         if(ltObj&&ltObj.mc)cs._serverMC=ltObj.mc;
@@ -1811,7 +1823,7 @@ async function hydrateFromServerSnapshots(gameId){
 async function syncAnalysesFromDB(){
   if(!dbReady)return;
   try{
-    var ids=games.map(function(g){return g.id;}).join(',');if(!ids)return;
+    var ids=games.map(function(g){var _cs=cardState[g.id];return(_cs&&_cs._dbGameId)||g.id;}).join(',');if(!ids)return;
     var r=await fetch(FN+'db-api?action=get_analyses&game_ids='+encodeURIComponent(ids));
     if(!r.ok)return;var data=await r.json();var rows=data.analyses||[];
     rows.forEach(function(row){
@@ -1853,7 +1865,7 @@ async function syncAnalysesFromDB(){
 async function syncCalibrationAnalyses(){
   if(!dbReady)return;
   try{
-    var ids=games.map(function(g){return g.id;}).join(',');if(!ids)return;
+    var ids=games.map(function(g){var _cs=cardState[g.id];return(_cs&&_cs._dbGameId)||g.id;}).join(',');if(!ids)return;
     var r=await fetch(FN+'db-api?action=get_auto_analyses&game_ids='+encodeURIComponent(ids));
     if(!r.ok)return;var data=await r.json();
     var grouped=data.analyses||{};
@@ -1963,7 +1975,7 @@ function applyAutoAnalysesToCards(){
 async function syncLatestSnapshotsFromDB(){
   if(!dbReady)return;
   try{
-    var ids=games.map(function(g){return g.id;}).join(',');if(!ids)return;
+    var ids=games.map(function(g){var _cs=cardState[g.id];return(_cs&&_cs._dbGameId)||g.id;}).join(',');if(!ids)return;
     var r=await fetch(FN+'db-api?action=get_latest_snapshots&game_ids='+encodeURIComponent(ids));
     if(!r.ok)return;var data=await r.json();
     var snaps=data.snapshots||{};
@@ -1975,7 +1987,7 @@ async function syncLatestSnapshotsFromDB(){
 async function syncThesesFromDB(){
   if(!dbReady)return;
   try{
-    var ids=games.map(function(g){return g.id;}).join(',');if(!ids)return;
+    var ids=games.map(function(g){var _cs=cardState[g.id];return(_cs&&_cs._dbGameId)||g.id;}).join(',');if(!ids)return;
     var r=await fetch(FN+'db-api?action=get_theses&game_ids='+encodeURIComponent(ids));
     if(!r.ok)return;var data=await r.json();
     var t=data.theses||{};
@@ -2390,8 +2402,9 @@ async function triggerAnalysis(gameId){
 
     // 1b. Fetch live_tracking for XGB + MC injection
     var _ltObj=null;
+    var _dbId2=cs._dbGameId||gameId;
     try{
-      var _ltR=await fetch(FN+'db-api?action=get_live_tracking&game_id='+encodeURIComponent(gameId));
+      var _ltR=await fetch(FN+'db-api?action=get_live_tracking&game_id='+encodeURIComponent(_dbId2));
       if(_ltR.ok){var _ltD=await _ltR.json();_ltObj=_ltD.live_tracking;if(_ltObj&&typeof _ltObj==='string')try{_ltObj=JSON.parse(_ltObj);}catch(e){}}
     }catch(e){}
 
@@ -2491,8 +2504,9 @@ function openDrawer(gameId){
 async function fetchOddsHistory(gameId){
   if(!dbReady)return;
   var cs=cardState[gameId];if(!cs)return;
+  var _dbId=cs._dbGameId||gameId;
   try{
-    var r=await fetch(FN+'db-api?action=get_odds&game_id='+encodeURIComponent(gameId));
+    var r=await fetch(FN+'db-api?action=get_odds&game_id='+encodeURIComponent(_dbId));
     if(!r.ok)return;var data=await r.json();
     cs._oddsHistory=data.odds||[];
     if(cs._oddsHistory.length>0){
@@ -3258,9 +3272,10 @@ function buildScoringCompForCard(gameId){
 async function fetchPBPFromDB(gameId,force){
   if(!dbReady)return;
   var cs=cardState[gameId];if(!cs)return;
+  var _dbId=cs._dbGameId||gameId;
   if(cs.pbpAudit&&cs.pbpAudit.raw&&cs.pbpAudit.raw.shots&&!force)return;
   try{
-    var r=await fetch(FN+'db-api?action=get_pbp&game_id='+encodeURIComponent(gameId));
+    var r=await fetch(FN+'db-api?action=get_pbp&game_id='+encodeURIComponent(_dbId));
     if(!r.ok)return;var data=await r.json();
     if(data.pbp){
       // Hydrate box score from DB if not already loaded (for evidence panel)
