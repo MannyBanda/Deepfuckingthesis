@@ -406,7 +406,75 @@ const SR_DELAY_MS = 1400; // respect trial tier rate limit
 
 // ── SONNET SYSTEM PROMPT (same as analyze.js) ────────────────────────────────
 function getSonnetSystemPrompt(league) {
-// WNBA prompt branch will be added in Phase 3
+if (league === 'wnba') {
+return 'You are a WNBA structural analyst. You receive pre-computed mechanical indicators as GROUND TRUTH — do not recompute them. Your job: synthesize a predictive read, compute FWP, identify risks, and write a plain-English narrative.\n\n'
++ 'GROUND TRUTH (provided by the mechanical engine — do NOT override):\n'
++ '  - I1-I5 indicator scores with team labels and who wins each\n'
++ '  - Composite floor score and control team\n'
++ '  - Mechanical conviction tier: DOMINANT / STRONG / MODEST / CONDITIONAL / NO ENTRY\n'
++ '    Based on which indicator COMBINATIONS the control team wins (203-game validated):\n'
++ '    DOMINANT = I3+I4 pair AND 3+ indicators, OR 4+ indicators. I3+I4 = 99.1%.\n'
++ '    STRONG = I3+I4 (99.1%), I3+I2, or I4+I2 killer pairs.\n'
++ '    MODEST = 2+ indicators without killer pairs. 70-80% win rate.\n'
++ '    CONDITIONAL = 1 indicator only. Needs strong contextual justification.\n'
++ '    NO ENTRY = 0 indicators\n'
++ '    KEY WNBA DIFFERENCE: I4+I5 is NOT a killer pair (I5 AUC = 0.500, no signal). I3 (Shot Quality, 30% weight) is the anchor.\n'
++ '  - Sustainability tiers (with player-level shooter breakdown)\n'
++ '  - TP (Throughput) and LS (Lead Safety) classifications\n'
++ '  - Per-quarter stats flow showing trends\n\n'
++ 'YOUR ANALYTICAL JOBS:\n'
++ '1. FWP (Framework Win Probability) — game-state-aware win probability.\n'
++ '   Factor in: score margin, quarter, time remaining, structural control, closing dynamics, team identity.\n'
++ '   FWP reflects who you predict WINS — not who currently leads. WNBA is 40-minute games with 10-minute quarters — structural advantages have less time to compound than NBA.\n'
++ '   Output BOTH teams with alias labels. Must sum to ~100%.\n\n'
++ '2. NARRATIVE — plain English structural read for non-technical subscribers.\n'
++ '   Lead with the action: what should the reader do or watch for?\n'
++ '   Name specific stats that drive the read.\n'
++ '   2-3 sentences max.\n\n'
++ '3. RISK FLAGS — what could go wrong. 1-2 sentences.\n\n'
++ '4. CLOSING PROJECTION — how does this game resolve? 1 sentence.\n\n'
++ '5. DISAGREEMENT — if your contextual read conflicts with mechanical conviction, flag it with reasoning. Say "NONE" if you agree.\n\n'
++ 'XGB MODEL CONTEXT (WNBA-specific, 12 features, AUC 0.809):\n'
++ '  NO biglead feature — excluded by design (circular with winning in WNBA, causes 4x SHAP anchoring).\n'
++ '  NO "scoreboard confirmation" concept — all features are box-score structural.\n'
++ '  Top SHAP drivers: assists, FT made, assist ratio, defensive rebounds (windowed), 3PT attempts.\n'
++ '  Cumulative features (c_*) carry core weight; windowed features (w_*) detect recent shifts.\n'
++ '  When XGB data is provided, use SHAP drivers to calibrate your FWP:\n'
++ '  - Strong assists + FT made = ball movement + aggression — sustainable edge.\n'
++ '  - Strong windowed features only = recent shift, not yet cumulative — watch for confirmation.\n'
++ '  - Near-zero for most features = structural edge is thin regardless of MC/floor.\n\n'
++ 'SIGNAL TRUST HIERARCHY (3,432 checkpoints, 312 games):\n'
++ '  Three signals with fundamentally different roles from NBA:\n'
++ '  - MC Cum: Best single predictor (AUC 0.822). Wins every checkpoint from Q2_5 onward.\n'
++ '  - XGB: Structural quality + collapse detector (AUC 0.809). 3x floor discrimination on losses.\n'
++ '  - Floor: Narrative context ONLY. When floor disagrees with MC+XGB, floor is wrong 80%.\n\n'
++ '  When they DISAGREE:\n'
++ '  Q2: XGB > MC > Floor. MC overconfident by ~20pp (same as NBA Q2).\n'
++ '  Q3: MC > XGB > Floor. MC best calibrated (0.6-0.7 bucket: actual 65.2%, perfect).\n'
++ '  Q4: MC >> XGB >> Floor. MC UNDERESTIMATES in WNBA Q4 (unlike NBA).\n'
++ '    MC 0.7-0.8 = actual 89.2% (+14pp). MC 0.8-0.9 = actual 93.3% (+8pp).\n'
++ '    A 75% MC Cum in WNBA Q4 is functionally ~89%. Treat as strong hold.\n\n'
++ '  CRITICAL: Floor is NEVER a decision gate in WNBA.\n'
++ '  Floor HIGH + MC+XGB LOW = 20.2% accuracy (floor confidently wrong).\n'
++ '  MC+XGB HIGH + Floor LOW = 83-86% (compound correct regardless of floor).\n'
++ '  When MC investigation active (CLEAN/WAVE): MC PBP > everything.\n\n'
++ 'SUSTAINABILITY RULES:\n'
++ '  - LOCKED IN/DURABLE = shooting at or below baseline. Sustainable.\n'
++ '  - STALLED = 3PT below 95% of season baseline AND 2PT% below 85% of WNBA baseline (46%). Genuine collapse.\n'
++ '  - FRAGILE/UNSUSTAINABLE = shooting above baseline, driven by non-shooters.\n\n'
++ 'BONUS STATUS RULE:\n'
++ '  "TeamX IN BONUS" = TeamX BENEFITS (free throws on every foul). Pure upside for TeamX.\n\n'
++ 'OUTPUT FORMAT (follow exactly — each field on its own line):\n\n'
++ 'FWP: [AwayAlias] XX% / [HomeAlias] YY%\n'
++ 'EDGE: [+X% | No market data]\n'
++ 'RISK: [1-2 sentences identifying what could undermine the structural read, or NONE]\n'
++ 'CLOSING: [1-sentence projection of how the game resolves]\n'
++ 'NARRATIVE: [2-3 sentence plain English read for subscribers]\n'
++ 'Sustainability: [TeamA]: [tier] | [TeamB]: [tier]\n'
++ 'Lead Source: [STRUCTURAL | VARIANCE | MIXED | EVEN] — [1-line]\n'
++ 'DISAGREEMENT: [NONE | 1-2 sentences]\n\n'
++ 'Be concise. Decisive when the indicators are clear. Your value is context and projection, not recomputing what the engine already knows.';
+}
 return 'You are an NBA structural analyst. You receive pre-computed mechanical indicators as GROUND TRUTH — do not recompute them. Your job: synthesize a predictive read, compute FWP, identify risks, and write a plain-English narrative.\n\n'
 + 'GROUND TRUTH (provided by the mechanical engine — do NOT override):\n'
 + '  - I1-I5 indicator scores with team labels and who wins each\n'
@@ -675,13 +743,18 @@ ${ctx.convictionQuality ? 'XGB CONVICTION QUALITY:\nBasis: ' + ctx.convictionQua
 ${ctx.trajectorySignals && ctx.trajectorySignals.warnings.length > 0 ? 'CONVICTION WARNINGS:\n' + ctx.trajectorySignals.warnings.join('\n') : ''}
 ${!ctx.xgbAligned && ctx.xgbWinProb < 0.45 ? 'WARNING: XGBoost sees < 45% win probability from raw stats despite floor at ' + ctx.floor + '. Ctrl trailing + XGB<0.45 wins only 20-28% in Q3-Q4. Consider SUPPRESS.' : ''}${!ctx.xgbAligned && ctx.xgbWinProb > ctx.floor + 0.15 ? 'NOTE: XGBoost sees stronger edge than floor — raw stats outpace composite indicators.' : ''}
 ${ctx.xgbWinProb >= 0.60 && ctx.margin < -5 ? 'WARNING: XGB reads ' + (ctx.xgbWinProb * 100).toFixed(0) + '% but team is trailing by ' + Math.abs(ctx.margin) + '. In corrected backtest, XGB >=0.60 + ctrl trailing 5+ has 82% loss rate (n=17). Elevate scrutiny.' : ctx.xgbWinProb >= 0.70 && ctx.margin < 0 ? 'CAUTION: XGB reads ' + (ctx.xgbWinProb * 100).toFixed(0) + '% but team is trailing. High XGB + trailing is unreliable.' : ''}` : ''}
-${ctx.alertType === 'BUY' && ctx.xgbWinProb != null ? `XGB BUY CALIBRATION (1,233-game backtest, ctrl TRULY trailing + floor >= 0.65):
+${ctx.alertType === 'BUY' && ctx.xgbWinProb != null ? (ctx.league === 'wnba' ? `XGB BUY CALIBRATION (312-game WNBA backtest, ctrl trailing):
+  Q2: XGB>=0.55 = 92.3% (n=17) | 0.45-0.55 = 35.7% (n=14) | 0.35-0.45 = 27.3% (n=22) | <0.35 = 24.5% (n=53)
+  Q3: XGB>=0.55 = 90.6% (n=32) | 0.45-0.55 = 50.0% (n=10) | 0.35-0.45 = 25.0% (n=12) | <0.35 = 5.3% (n=38)
+  Q4: XGB>=0.70 = 75.0% (n=8) | 0.45-0.70 = 33.3% (n=12) | <0.45 = 2.0% (n=44) — NEARLY DEAD
+  WNBA Q4 BUY is functionally dead below XGB 0.70. 40-minute games give almost no recovery runway.
+  → This BUY: Q${ctx.period}, XGB ${(ctx.xgbWinProb * 100).toFixed(0)}%` : `XGB BUY CALIBRATION (1,233-game backtest, ctrl TRULY trailing + floor >= 0.65):
   NOTE: Small samples at high XGB + truly trailing. Numbers are directional, not definitive.
   Q2: XGB>=0.70 = 50% (n=117) | 0.55-0.70 = 47% (n=53) | 0.45-0.55 = 39% | <0.45 = 50% (n=42)
   Q3: XGB>=0.70 = 65% (n=20) | 0.55-0.70 = 54% (n=48) | 0.45-0.55 = 45% | <0.45 = 28% (n=54)
   Q4: XGB>=0.70 = 64% (n=14) | 0.55-0.70 = 46% (n=59) | 0.45-0.55 = 30% | <0.45 = 19% (n=36)
   XGB < 0.45 ctrl trailing Q3-Q4: 20-28% win rate — SUPPRESS zone.
-  → This BUY: Q${ctx.period}, XGB ${(ctx.xgbWinProb * 100).toFixed(0)}% = calibrated ${ctx.period >= 4 ? (ctx.xgbWinProb >= 0.70 ? '64%' : ctx.xgbWinProb >= 0.55 ? '46%' : ctx.xgbWinProb >= 0.45 ? '30%' : '19%') : ctx.period >= 3 ? (ctx.xgbWinProb >= 0.70 ? '65%' : ctx.xgbWinProb >= 0.55 ? '54%' : ctx.xgbWinProb >= 0.45 ? '45%' : '28%') : (ctx.xgbWinProb >= 0.70 ? '50%' : ctx.xgbWinProb >= 0.55 ? '47%' : ctx.xgbWinProb >= 0.45 ? '39%' : '50%')} baseline` : ''}
+  → This BUY: Q${ctx.period}, XGB ${(ctx.xgbWinProb * 100).toFixed(0)}% = calibrated ${ctx.period >= 4 ? (ctx.xgbWinProb >= 0.70 ? '64%' : ctx.xgbWinProb >= 0.55 ? '46%' : ctx.xgbWinProb >= 0.45 ? '30%' : '19%') : ctx.period >= 3 ? (ctx.xgbWinProb >= 0.70 ? '65%' : ctx.xgbWinProb >= 0.55 ? '54%' : ctx.xgbWinProb >= 0.45 ? '45%' : '28%') : (ctx.xgbWinProb >= 0.70 ? '50%' : ctx.xgbWinProb >= 0.55 ? '47%' : ctx.xgbWinProb >= 0.45 ? '39%' : '50%')} baseline`) : ''}
 ${ctx.alertType === 'XGB_INVALIDATED' ? `XGB THESIS COLLAPSE:
   BUY fired at Q${ctx.xgbBuySendPeriod} with XGB ${(ctx.xgbBuySendProb * 100).toFixed(0)}%
   Current XGB: ${(ctx.xgbWinProb * 100).toFixed(1)}% — BELOW Q${ctx.period} gate of ${(ctx.xgbQuarterGate * 100).toFixed(0)}%
@@ -703,7 +776,21 @@ MC TRAJECTORY (always-on):
   ${ctx.mcCumWp != null && ctx.xgbWinProb != null && Math.abs(ctx.mcCumWp - ctx.xgbWinProb) > 0.15 ? 'MC Cum vs XGB gap: ' + Math.round(Math.abs(ctx.mcCumWp - ctx.xgbWinProb) * 100) + 'pp — MC Cum dominates disagreements (70-87%).' : ''}
   ${ctx.mcDrivers && ctx.mcDrivers.length > 0 ? 'MC RATE DRIVERS (what is driving ' + (ctx.bwcTeam || ctx.ctrlTeam) + ' win prob):\\n' + ctx.mcDrivers.filter(function(d) { return Math.abs(d.delta) >= 0.02; }).map(function(d) { return '    ' + d.label + ': ' + (d.delta >= 0 ? '+' : '') + Math.round(d.delta * 100) + 'pp (game ' + (d.ctrlVal * 100).toFixed(0) + '% vs season ' + (d.seasonVal * 100).toFixed(0) + '%)'; }).join('\\n') : ''}` : ''}
 
-SIGNAL TRUST HIERARCHY (14,440 checkpoint backtest, 1,233 games):
+${ctx.league === 'wnba' ? `SIGNAL TRUST HIERARCHY (3,432 checkpoints, 312 games):
+  Three signals with fundamentally different roles from NBA:
+  - MC Cum: Best single predictor (AUC 0.822). Wins every checkpoint from Q2_5 onward.
+  - XGB: Structural quality + collapse detector (AUC 0.809). 3x floor discrimination on losses.
+  - Floor: Narrative context ONLY. When floor disagrees with MC+XGB, floor is wrong 80%.
+  When they DISAGREE:
+  Q2: XGB > MC > Floor. MC overconfident by ~20pp.
+  Q3: MC > XGB > Floor. MC best calibrated.
+  Q4: MC >> XGB >> Floor. MC UNDERESTIMATES in WNBA Q4.
+    MC 0.7-0.8 = actual 89.2% (+14pp). MC 0.8-0.9 = actual 93.3% (+8pp).
+    A 75% MC Cum in WNBA Q4 is functionally ~89%. Treat as strong hold.
+  CRITICAL: Floor is NEVER a decision gate in WNBA.
+  Floor HIGH + MC+XGB LOW = 20.2% (floor confidently wrong). MC+XGB HIGH + Floor LOW = 83-86%.
+  EXIT CONFIRMATION: Floor < 0.55 at EXIT = 100% correct. Floor 0.70+ at EXIT = only 66.7% — floor does NOT deny EXIT when high.
+  When MC investigation active (CLEAN/WAVE): MC PBP > everything.` : `SIGNAL TRUST HIERARCHY (14,440 checkpoint backtest, 1,233 games):
   Four signals: Floor (cumulative indicators), XGB (2Q windowed structural model), MC PBP (20-possession canary), MC Cum (game-rate probability anchor).
   MC Cum is the best single probability signal (AUC 0.79). XGB 2Q is the best structural classifier (AUC 0.79). Floor anchors stale early-game data.
   When they DISAGREE, which to trust depends on quarter:
@@ -713,7 +800,7 @@ SIGNAL TRUST HIERARCHY (14,440 checkpoint backtest, 1,233 games):
     Floor least reliable — cumulative anchoring at maximum. Trust MC Cum over floor for decisions in Q4.
   When all 3 agree high (MC+XGB+Floor): Q4 95.9% accuracy.
   EXIT CONFIRMATION: MC Cum < 0.45 confirms EXIT = 84% accuracy. MC Cum > 0.55 denies EXIT = only 62% — reconsider.
-  When MC investigation active (CLEAN/WAVE): MC PBP > everything, regardless of quarter.
+  When MC investigation active (CLEAN/WAVE): MC PBP > everything, regardless of quarter.`}
 
 FLOOR TRAJECTORY:
 ${ctx.floorHistory || 'No prior snapshots'}
@@ -722,21 +809,21 @@ PRIOR ALERT REASONING TRAIL:
 ${ctx.priorAlertTrail || 'None'}
 
 RULES:
-- TRACKING: First compound structural signal — MC Cum (≥0.80) AND indicator floor (≥0.65) both confirm ${ctx.ctrlTeam} as structurally dominant (floor ${ctx.floor}, margin ${ctx.margin}). This is a higher-confidence initial signal than historical first-fires. This is NOT yet a position recommendation — the subscriber learns a game is on the radar with strong structural evidence. ALWAYS SEND unless the game is clearly meaningless (garbage time, both teams eliminated, period 4 with < 2 min left). Body should explain: which team, what structural picture (indicators, floor, margin, MC confirmation), and that we are watching for sustained confirmation. Frame as: "Watching [TEAM] — [why they look structurally dominant]. Will update if this develops into a position." Keep it short — this is a heads-up, not a thesis.
-- POSITION_OPEN: The team has sustained compound structural signals — MC Cum ≥ 0.80 AND Floor ≥ 0.65 at establishment, sustained at ≥ 0.60 — for 5 consecutive polls (~2.5 minutes game clock). This is a significant structural confirmation.
+- TRACKING: First compound structural signal — ${ctx.league === 'wnba' ? 'MC Cum (≥0.85) AND XGB (≥0.60)' : 'MC Cum (≥0.80) AND indicator floor (≥0.65)'} both confirm ${ctx.ctrlTeam} as structurally dominant (floor ${ctx.floor}, margin ${ctx.margin}). This is a higher-confidence initial signal than historical first-fires. This is NOT yet a position recommendation — the subscriber learns a game is on the radar with strong structural evidence. ALWAYS SEND unless the game is clearly meaningless (garbage time, both teams eliminated, period 4 with < 2 min left). Body should explain: which team, what structural picture (indicators, floor, margin, MC confirmation), and that we are watching for sustained confirmation. Frame as: "Watching [TEAM] — [why they look structurally dominant]. Will update if this develops into a position." Keep it short — this is a heads-up, not a thesis.
+- POSITION_OPEN: The team has sustained compound structural signals — ${ctx.league === 'wnba' ? 'MC Cum ≥ 0.85 AND XGB ≥ 0.60 (floor is narrative context, not a gate)' : 'MC Cum ≥ 0.80 AND Floor ≥ 0.65 at establishment, sustained at ≥ 0.60'} — for 5 consecutive polls (~2.5 minutes game clock). This is a significant structural confirmation.
   ${ctx.compoundTier === 'CONFIRMED' && ctx.compoundPath === 'Q2_EARLY'
-    ? 'Q2 EARLY CONFIRMATION (95.5% accuracy): Compound sustained with lead ≥5 and zero prior control flips. Strongest early signal — structural dominance established before halftime with scoreboard separation. ALWAYS SEND.'
+    ? (ctx.league === 'wnba' ? 'Q2 EARLY CONFIRMATION (89.6% accuracy): Compound sustained with lead ≥5 and zero prior control flips. Strong early signal in 40-minute format. ALWAYS SEND.' : 'Q2 EARLY CONFIRMATION (95.5% accuracy): Compound sustained with lead ≥5 and zero prior control flips. Strongest early signal — structural dominance established before halftime with scoreboard separation. ALWAYS SEND.')
     : ctx.compoundTier === 'CONFIRMED'
-    ? 'CONFIRMED (86% accuracy, 0 prior flips): Structural position validated. Compound signals sustained without control being contested. Standard confidence — evaluate structural stress and current indicators.'
+    ? (ctx.league === 'wnba' ? 'CONFIRMED (90.9% accuracy, 0 prior flips): Structural position validated via MC+XGB compound. Floor is context — not decision-gated.' : 'CONFIRMED (86% accuracy, 0 prior flips): Structural position validated. Compound signals sustained without control being contested. Standard confidence — evaluate structural stress and current indicators.')
     : ctx.compoundTier === 'RECOVERING'
-    ? 'RECOVERING (73% accuracy, ' + (ctx.priorFlips || '1+') + ' prior flips): Position confirmed after control was contested. Structural edge recovered but game is competitive. The compound held DESPITE flip history — this was earned through challenge. Note lower baseline accuracy in body. Check: are the indicators that slipped during flips back? Is conviction trend STABLE or DEGRADING?'
+    ? (ctx.league === 'wnba' ? 'RECOVERING (' + (ctx.priorFlips || '1+') + ' prior flips): Position confirmed after control was contested. 40-minute games give less recovery runway — note lower confidence in body.' : 'RECOVERING (73% accuracy, ' + (ctx.priorFlips || '1+') + ' prior flips): Position confirmed after control was contested. Structural edge recovered but game is competitive. The compound held DESPITE flip history — this was earned through challenge. Note lower baseline accuracy in body. Check: are the indicators that slipped during flips back? Is conviction trend STABLE or DEGRADING?')
     : ctx.compoundTier === 'LOCKED'
-    ? 'LOCKED (92% accuracy, 10+ sustained holds): Highest-confidence structural read — compound signals sustained across extended evaluation. ALWAYS SEND.'
+    ? (ctx.league === 'wnba' ? 'LOCKED (94.8% accuracy, 5+ sustained holds): Highest-confidence structural read. ALWAYS SEND.' : 'LOCKED (92% accuracy, 10+ sustained holds): Highest-confidence structural read — compound signals sustained across extended evaluation. ALWAYS SEND.')
     : ''}
   ${ctx.isSecondBwc ? 'SECOND POSITION TEAM: ' + ctx.bwcTeam + ' took structural control away from ' + ctx.deadTeam + (ctx.deadHadPO ? ' (who had a confirmed position)' : ' (who was tracking but never confirmed)') + '. The reversal itself is evidence — ' + ctx.bwcTeam + ' earned this through merit after ' + ctx.deadTeam + ' collapsed. ALWAYS SEND.' : ''}
   ${ctx.bwcFlipped ? 'POSITION FLIP: The system originally tracked ' + ctx.originalBwcTeam + ' but they FAILED to confirm. ' + ctx.bwcTeam + ' then confirmed ' + ctx.compoundTier + ' — taking structural control away from a previously dominant team. The floor appears modest because cumulative stats are anchored by ' + ctx.originalBwcTeam + "'s early dominance, but " + ctx.bwcTeam + " is sustaining compound signals DESPITE that headwind. ALWAYS SEND." : ''}
-  CLOSE GAME CONTEXT: Compound accuracy plateaus at 75% in close games (margin ≤ 8). This is the best close-game accuracy the system has ever produced (up from 51% at first fire, 69% with old graduation), but it is an edge, not a certainty. Communicate honestly in body.
-  ${ctx.positionClosed ? 'POST-EXIT RE-ENTRY: Position was previously closed via EXIT. Compound has RESET — these 5 holds are FRESH post-EXIT readings, not carryover. ' + (ctx.compoundPath === 'Q2_EARLY' ? 'Q2 re-entry requires lead ≥5 and 0 flips since EXIT.' : 'Standard re-entry threshold applies (MC Cum ≥ 0.80 + Floor ≥ 0.65 to re-establish, ≥ 0.60 to sustain, 5 holds).') + ' Verify via per-quarter breakdown that structural signals are genuinely post-EXIT, not cumulative anchoring. Reference the EXIT reasoning from PRIOR ALERT REASONING TRAIL — what specifically broke? Has it been fixed? If the same weaknesses persist, SUPPRESS regardless of compound confirmation.' : ''}
+  CLOSE GAME CONTEXT: ${ctx.league === 'wnba' ? 'Compound accuracy is ~70% in close games (margin ≤ 8). Shorter 40-minute format gives structural edges less time to express. Communicate honestly in body.' : 'Compound accuracy plateaus at 75% in close games (margin ≤ 8). This is the best close-game accuracy the system has ever produced (up from 51% at first fire, 69% with old graduation), but it is an edge, not a certainty. Communicate honestly in body.'}
+  ${ctx.positionClosed ? 'POST-EXIT RE-ENTRY: Position was previously closed via EXIT. Compound has RESET — these 5 holds are FRESH post-EXIT readings, not carryover. ' + (ctx.league === 'wnba' ? 'Standard re-entry: MC Cum ≥ 0.85 + XGB ≥ 0.60, 5 holds.' : ctx.compoundPath === 'Q2_EARLY' ? 'Q2 re-entry requires lead ≥5 and 0 flips since EXIT.' : 'Standard re-entry threshold applies (MC Cum ≥ 0.80 + Floor ≥ 0.65 to re-establish, ≥ 0.60 to sustain, 5 holds).') + ' Verify via per-quarter breakdown that structural signals are genuinely post-EXIT, not cumulative anchoring. Reference the EXIT reasoning from PRIOR ALERT REASONING TRAIL — what specifically broke? Has it been fixed? If the same weaknesses persist, SUPPRESS regardless of compound confirmation.' : ''}
   MF trajectory provides additional context:
   - RISING MF = structural thesis building. Increases PO confidence.
   - DECLINING MF = floor eroding despite compound holding. MC Cum is more reliable than floor here, but flag as context and check per-quarter breakdown.
@@ -761,18 +848,24 @@ ${ctx.positionClosed ? '  POST-EXIT THESIS_ALIVE: Position is CLOSED. The subscr
 - BWC_EDGE: SEND by default — this is a position update for a subscriber already holding. Frame as reassurance: structural picture holding, lead compressing. Do NOT frame as a buy signal. MAY SUPPRESS if structural stress override applies (see STRUCTURAL STRESS CHECK). MUST include a RISK line at the end of the body — identify the ONE specific thing that could flip this position next (e.g., indicator about to flip, sustainability degrading, erosion approaching threshold, floor-margin DIVERGING_NEGATIVE meaning structure improving but margin shrinking). If prior alerts flagged a RISK, reference whether it materialized or not. Check conviction trend — DEGRADING conviction is a key risk to flag even if floor is stable. The RISK line creates accountability across the alert chain. Format body as: status update (2-3 sentences) + "RISK: [specific forward-looking concern]"
 - POSITION_SAFE / POSITION_RECOVERING: SEND as reassurance if prior alerts flagged risks or concerns. Include whether prior RISK materialized. SUPPRESS only if nothing changed AND no prior risk to update on. Write reasoning for compounding either way.
 ${ctx.positionClosed ? '  POST-EXIT RECOVERY: Position is CLOSED — the subscriber was told to EXIT (XGB dropped below threshold). This recovery alert fires because XGB has recovered above threshold + 0.10 for sustained evaluation. Apply elevated scrutiny: (1) structural stress combined read must be REINFORCING or DOMINANT — not COLLAPSING/SHIFT/ERODING, (2) verify in per-quarter breakdown that recent quarters show the BWC team recovering structurally, not just cumulative anchoring, (3) the XGB recovery must be supported by the underlying stats improving — check which features drove the recovery. If the BWC team is genuinely back with structural evidence AND XGB conviction, SEND — this is a strong signal (thesis broke and then repaired). If the recovery looks like a brief spike or noise, SUPPRESS. Reference the EXIT reasoning from the PRIOR ALERT REASONING TRAIL.' : ''}
-- BUY: structurally dominant team trailing. Standard evaluation — floor, indicators, TP, deficit depth (1-7 sweet spot; deeper deficits need stronger structural case). When bwcTeamMatch is noted, the team has BWC lifecycle context — reference the position arc. This is a "warm BUY" (thesis history). Without BWC context = "cold BUY" (unproven, higher bar for SEND).
-- BUY EVIDENCE (from 9,861-snapshot backtest, 502 BUY-eligible):
+- BUY: structurally dominant team trailing. Standard evaluation — floor, indicators, TP, deficit depth${ctx.league === 'wnba' ? ' (1-4 sweet spot — trail 10+ is 0% in WNBA 40-min games)' : ' (1-7 sweet spot; deeper deficits need stronger structural case)'}. When bwcTeamMatch is noted, the team has BWC lifecycle context — reference the position arc. This is a "warm BUY" (thesis history). Without BWC context = "cold BUY" (unproven, higher bar for SEND).
+${ctx.league === 'wnba' ? `- BUY EVIDENCE (312-game WNBA backtest, 262 trailing checkpoints):
+  DEFICIT: trail 1-4 (38.6%) > trail 5-9 (23.8%) > trail 10+ (0%). Structural WNBA teams rarely trail deep — 75% of trailing checkpoints are down 1-4 only.
+  POWER PAIRS: I2+I3 (44.8%, n=67) is the WNBA BUY anchor — perimeter/FT access + shot quality. I1+I3 = 26.1% — TRAP (disruption alone does not translate to comebacks).
+  I3 ANTI-INVERSION (OPPOSITE OF NBA): ctrl I3 WON = 39.2%. ctrl I3 LOST = 17.6%. In NBA, lost I3 = 49% (variance thesis). In WNBA, losing I3 means losing the 30% anchor — this is structural death, not a cold streak. Do NOT apply NBA variance logic.
+  OPPONENT KILLS: opp I2 (perimeter/FT access) = 27.9% — when the opponent controls the perimeter and free throw line, path is blocked. opp I1 (disruption) = 39.1% — losing disruption is surprisingly benign in WNBA.
+  Q4 BUY IS NEARLY DEAD: XGB<0.45 = 2% comeback (n=44). Only XGB 0.70+ is viable (75%, n=8). Q4 BUY requires extreme scrutiny — the 40-minute clock makes late comebacks structurally implausible unless indicators are overwhelming.
+  XGB QUARTER RULE: Q2 XGB<0.45 = 25% (suppress). Q3 XGB<0.45 = 5% (hard suppress). Q4 XGB<0.45 = 2% (absolute suppress). Q4 only 0.70+ viable.` : `- BUY EVIDENCE (from 9,861-snapshot backtest, 502 BUY-eligible):
   WHAT WINS: trail 1-4 (44.6%) > trail 5-9 (25%) > trail 10+ (0%). 3+ ctrl indicators (45.6%) > <=2 (36.6%). Opp 0 indicators (48.6%) vs opp I1 or I2 won (28.5%). Best stack: trail 1-4 + 3+ ind + opp 0 indicators = 57.4% (n=115).
   POWER PAIRS: I1+I2 (55.2%, n=134) is the BUY anchor — physical dominance while trailing. I1+I4 (52.4%). TRAP: I3+I4 (38.9%, n=149) — the BWC killer combo is the WORST BUY pair.
   I3 INVERSION: ctrl I3 won = 37.3%. ctrl I3 LOST (opp shooting well) = 49%. When the BUY team has shot quality but is STILL trailing, they are losing for reasons shooting cannot fix. When trailing BECAUSE of poor shooting, that is the variance the thesis exploits.
   OPPONENT KILLS: opp I1 (disruption) -> 28.8%. opp I2 (paint) -> 30.6%. opp I1 OR I2 -> 28.5%. These are STRUCTURAL threats. opp I3 only -> thesis intact (variance).
   TIMING: Q4 trail 5-9 = 14.8% — hard suppress. Q4 trail 1-4 = 43% — still viable.
-  XGB QUARTER RULE (corrected for ctrl truly trailing): Q4 XGB<0.45 = 19% (hard suppress). Q3 XGB<0.45 = 28% (suppress). Q4 XGB 0.55-0.70 = 46%. Q3 XGB 0.55-0.70 = 54%. Q2 is near coin-flip regardless of XGB. Weight XGB most heavily in Q4 — by Q4 the windowed stats have recent structural signal.
+  XGB QUARTER RULE (corrected for ctrl truly trailing): Q4 XGB<0.45 = 19% (hard suppress). Q3 XGB<0.45 = 28% (suppress). Q4 XGB 0.55-0.70 = 46%. Q3 XGB 0.55-0.70 = 54%. Q2 is near coin-flip regardless of XGB. Weight XGB most heavily in Q4 — by Q4 the windowed stats have recent structural signal.`}
   POSITION TRACKING CONTEXT FOR BUY DECISIONS:
   The BUY team's relationship to position tracking determines baseline confidence:
 
-  - BUY team = tracked team with CONFIRMED/LOCKED position: "Warm BUY" — compound structural signals sustained (MC Cum ≥ 0.80 + Floor ≥ 0.65 at establishment, ≥ 0.60 sustained for 5+ consecutive polls). Team trailing is the thesis working. MF trajectory tells you if the structural trend is holding.
+  - BUY team = tracked team with CONFIRMED/LOCKED position: "Warm BUY" — compound structural signals sustained (${ctx.league === 'wnba' ? 'MC Cum ≥ 0.85 + XGB ≥ 0.60' : 'MC Cum ≥ 0.80 + Floor ≥ 0.65 at establishment, ≥ 0.60 sustained'} for 5+ consecutive polls). Team trailing is the thesis working. MF trajectory tells you if the structural trend is holding.
   - BUY team = tracked team with RECOVERING position: "Warm BUY with caution" — position confirmed after control flip, 73% baseline. Trailing could be the thesis (structural team behind on variance) OR the original instability reasserting. Check conviction trend and per-quarter breakdown.
   - BUY team = tracked team, TRACKING only (compound not confirmed): System identified structural interest but compound signals never sustained. Lower confidence. Rely entirely on standard BUY evidence. This is a cold BUY with partial context.
   - BUY team = original tracked team but tracking FLIPPED to opponent: Near-automatic SUPPRESS. This team LOST structural control to the opponent. You are buying against the confirmed structural direction. The team that took it away confirmed through compound and wins historically.
@@ -921,7 +1014,7 @@ RULES:
 - CANDIDATE alerts failed a soft threshold but might still have value. You should SEND only if the structural case is compelling despite the threshold miss.
 - BUY: the thesis is "structurally dominant team is trailing due to unsustainable opponent variance." Verify the control team actually dominates AND the opponent's lead is variance-driven.
 - BWC (Buy Window Closing): the thesis is "market hasn't priced in structural dominance yet." Verify edge is real and lead is secure.
-  • BWC + I4 EVEN: Unlike BUY (where the team must TAKE control back), BWC teams already HOLD the lead. I4 EVEN is NOT a suppress signal for BWC when 3+ other indicators favor the control team and sustainability is LOCKED IN, DURABLE, or STALLED. STALLED means both shooting dimensions are significantly below baseline — but a lead built on paint and transition doesn't need hot shooting to hold. Only suppress BWC on I4 EVEN if fewer than 3 indicators won OR sustainability is FRAGILE/UNSUSTAINABLE OR floor is unstable (dropped 0.15+ in recent snapshots).
+  • BWC + I4 EVEN: ${ctx.league === 'wnba' ? 'In WNBA, I4 is 25% weight (not the 30% NBA anchor). I3 (Shot Quality, 30%) is the structural foundation. I4 EVEN with I3 WON + I2 WON = strong structural hold. Only suppress if I3 is LOST — that is the WNBA equivalent of losing the anchor.' : 'Unlike BUY (where the team must TAKE control back), BWC teams already HOLD the lead. I4 EVEN is NOT a suppress signal for BWC when 3+ other indicators favor the control team and sustainability is LOCKED IN, DURABLE, or STALLED. STALLED means both shooting dimensions are significantly below baseline — but a lead built on paint and transition doesn\'t need hot shooting to hold. Only suppress BWC on I4 EVEN if fewer than 3 indicators won OR sustainability is FRAGILE/UNSUSTAINABLE OR floor is unstable (dropped 0.15+ in recent snapshots).'}
 - MC_COLLAPSE (CLEAN pattern): Fires mechanically when MC structural investigation detects sustained collapse — post-trigger possession rates never normalized. 72.6% precision (295 backtest, Q3+), 83.3% production (6 games). When MC STRUCTURAL INVESTIGATION is active above, MC computes rates from actual recent possessions — immune to cumulative anchoring that affects floor and XGB.
   Q2 vs Q3+ precision: Q3+ fires validated at 72.6%. Q2 fires have 24+ minutes remaining for recovery — precision is unvalidated and expected lower. Q2 MC_COLLAPSE = EARLY WARNING, not confirmed collapse. Frame as "structural deterioration detected early" rather than "confirmed collapse." The signal is real — the outcome has more variance.
   Trust hierarchy depends on XGB agreement:
@@ -935,14 +1028,21 @@ RULES:
 - MC WAVE: Oscillating collapse. 60% precision. RISK signal, not confirmed. BWC_EDGE: prominent RISK line. POSITION_SAFE: DOWNGRADE.
 - MC NORMALIZED: Rates recovered. 86-91% ctrl survives. CONFIDENCE signal. Reference as positive for POSITION_SAFE/BWC_EDGE. Argues AGAINST exit.
 - TRACKING_INVALIDATED: The previously tracked team lost structural control. BWC tracking terminated mechanically. Subsequent alerts about the new control team are FRESH evaluations — not continuations of the old thesis. Do not reference the dead team's floor or position tracking state for current decisions. If the dead team had a confirmed position, this is an implicit EXIT — the structural case supporting the position is gone.
-- XGB_INVALIDATED: The structural model (XGBoost) that supported a prior BUY has dropped below the quarter's viability gate (Q2<0.40, Q3<0.45, Q4<0.60). ALWAYS SEND — the mechanical gate is the filter. Your job is to add narrative context: (1) what the SHAP drivers are showing NOW vs at BUY time — has interior/paint collapsed? has disruption (I1) flipped? (2) whether the XGB drop is driven by raw stat decay or game progress pressure, (3) what the current structural picture looks like (indicators, conviction, floor-margin relationship). Frame as: "The structural model no longer supports the [TEAM] BUY — [explain what changed in basketball terms]. Consider exiting if you took this position." This is an exit signal, not a veto of future entry.
-- CONVICTION QUALITY: If provided, evaluate how the XGB model arrives at its prediction. CONFIRMED scoreboard = high confidence (95% WR). NOT CONFIRMED = stats not translating to lead, elevate scrutiny. VOLATILE basis (pot/stl/oreb/to/runs dominant) = circumstantial edge, may not sustain. Multiple conviction warnings compounding = strong SUPPRESS/DOWNGRADE signal. Single warning = flag as RISK, not auto-SUPPRESS.
+- XGB_INVALIDATED: The structural model (XGBoost) that supported a prior BUY has dropped below the quarter's viability gate (${ctx.league === 'wnba' ? 'Q2<0.45, Q3<0.45, Q4<0.70 — WNBA Q4 gate is much harsher than NBA' : 'Q2<0.40, Q3<0.45, Q4<0.60'}). ALWAYS SEND — the mechanical gate is the filter. Your job is to add narrative context: (1) what the SHAP drivers are showing NOW vs at BUY time — ${ctx.league === 'wnba' ? 'have assists/FT collapsed? has shot quality (I3) flipped?' : 'has interior/paint collapsed? has disruption (I1) flipped?'} (2) whether the XGB drop is driven by raw stat decay or game progress pressure, (3) what the current structural picture looks like (indicators, conviction, floor-margin relationship). Frame as: "The structural model no longer supports the [TEAM] BUY — [explain what changed in basketball terms]. Consider exiting if you took this position." This is an exit signal, not a veto of future entry.
+- CONVICTION QUALITY: ${ctx.league === 'wnba' ? 'WNBA XGB has no biglead feature — no "scoreboard confirmation" concept. Evaluate conviction quality by SHAP driver type: strong assists + FT made = ball movement + aggression (sustainable). Strong windowed features only = recent shift, watch for confirmation. Near-zero for most features = thin edge regardless of MC/floor. Cumulative-dominated conviction = 84% accuracy. Windowed-dominated = 80%. 3.7pp gap is softer than NBA.' : 'If provided, evaluate how the XGB model arrives at its prediction. CONFIRMED scoreboard = high confidence (95% WR). NOT CONFIRMED = stats not translating to lead, elevate scrutiny. VOLATILE basis (pot/stl/oreb/to/runs dominant) = circumstantial edge, may not sustain. Multiple conviction warnings compounding = strong SUPPRESS/DOWNGRADE signal. Single warning = flag as RISK, not auto-SUPPRESS.'}
 - ANCHORED FLOOR CHECK: If team is TRAILING with floor 0.75+ but margin only 1-3 pts AND floor is declining from recent snapshots, the floor may be anchored from earlier dominance that has eroded. Verify recent quarters still favor control team before SEND. This rule does NOT apply to leading teams (BWC) — a high floor with a small lead is a valid structural read. When MC STRUCTURAL INVESTIGATION is active and shows CLEAN/WAVE, the floor IS anchored — MC proved it by showing post-trigger rates have deteriorated while cumulative floor remained high. Do not independently diagnose anchoring when MC has already measured it.
-- EARLY GAME NOTE (Q1-Q2): Indicator samples are smaller early — steals/blocks counts are low, run share may not be populated yet, and biggest_lead gaps can form from a single early run. This does NOT mean early signals are unreliable. The new indicator formulas have proven predictive even in Q2. For Q1-Q2 FIRED alerts: I4 COMBO YES = SEND with confidence. I4 COMBO NO = apply normal scrutiny (don't auto-reject, just verify the structural case). For Q1-Q2 CANDIDATE alerts: I4 COMBO YES = SEND. I4 COMBO NO = apply extra scrutiny but still SEND if floor is strong (0.75+) and sustainability favors control team. Q3+ alerts have the most data — highest confidence.
-- CANDIDATE BUYs at floor 0.55-0.65: only SEND if I4 COMBO is YES (I4 decisive + at least one other indicator agrees — this pattern is 98-100% accurate historically). Without I4 COMBO, require very strong sustainability case to justify SEND.
-- CANDIDATE BUYs with negative ML (heavy favorite trailing): the CANDIDATE tier reflects the ML gate (-250 to -400), NOT structural weakness. Evaluate the structural case as if it were FIRED — if I4 COMBO YES + STRONG/DOMINANT conviction, SEND so the subscriber can shop for favorable lines. Note the heavy ML in the BODY.
+- EARLY GAME NOTE (Q1-Q2): Indicator samples are smaller early — steals/blocks counts are low, run share may not be populated yet, and biggest_lead gaps can form from a single early run. This does NOT mean early signals are unreliable. ${ctx.league === 'wnba' ? 'For Q1-Q2 FIRED alerts: I3 COMBO YES = SEND with confidence. For CANDIDATE alerts: I3 COMBO YES = SEND. Without I3 COMBO, apply extra scrutiny.' : 'The new indicator formulas have proven predictive even in Q2. For Q1-Q2 FIRED alerts: I4 COMBO YES = SEND with confidence. I4 COMBO NO = apply normal scrutiny (don\'t auto-reject, just verify the structural case). For Q1-Q2 CANDIDATE alerts: I4 COMBO YES = SEND. I4 COMBO NO = apply extra scrutiny but still SEND if floor is strong (0.75+) and sustainability favors control team.'} Q3+ alerts have the most data — highest confidence.
+- CANDIDATE BUYs at floor 0.55-0.65: only SEND if ${ctx.league === 'wnba' ? 'I3 COMBO is YES (I3 decisive + at least one other indicator agrees — I3 is the 30% WNBA anchor). Without I3 COMBO, SUPPRESS.' : 'I4 COMBO is YES (I4 decisive + at least one other indicator agrees — this pattern is 98-100% accurate historically). Without I4 COMBO, require very strong sustainability case to justify SEND.'}
+- CANDIDATE BUYs with negative ML (heavy favorite trailing): the CANDIDATE tier reflects the ML gate (-250 to -400), NOT structural weakness. Evaluate the structural case as if it were FIRED — if ${ctx.league === 'wnba' ? 'I3 COMBO YES' : 'I4 COMBO YES'} + STRONG/DOMINANT conviction, SEND so the subscriber can shop for favorable lines. Note the heavy ML in the BODY.
 - TP (Throughput Projection) is context, not a veto. It estimates whether a trailing team's structural production rate can close the deficit in remaining possessions. Limitation: TP uses cumulative game stats, so early-game dominance by either team anchors the rates even after momentum shifts. TP NO PATH at 1-3 point deficits is often a false negative — the game is essentially tied regardless of what the projection math says. TP STRONG RECOVERY or PROBABLE adds confidence. TP UNLIKELY or NO PATH is a caution flag, not a stop sign.
-- CONVICTION QUALITY (how XGB arrives at its prediction — validated on 16,910 snapshots):
+${ctx.league === 'wnba' ? `- CONVICTION QUALITY (how WNBA XGB arrives at its prediction — 12 features, no biglead):
+  No "scoreboard confirmation" concept — all features are box-score structural.
+  Evaluate SHAP drivers directly:
+    Strong assists + FT made = ball movement + aggression — sustainable edge. Trust.
+    Strong windowed features only = recent shift, not yet cumulative — watch for confirmation.
+    Near-zero for most features = structural edge is thin regardless of MC/floor.
+  Cumulative-dominated conviction: 84.0% accuracy. Windowed-dominated: 80.3% (3.7pp gap, softer than NBA).
+  These signals matter MOST for BUY and BWC_EDGE. For EXIT, XGB threshold itself is sufficient.` : `- CONVICTION QUALITY (how XGB arrives at its prediction — validated on 16,910 snapshots):
   SCOREBOARD STATUS is the strongest signal:
     "CONFIRMED" (biglead anchored) = team has built commanding lead, XGB highly reliable (95% win rate). High confidence.
     "NOT CONFIRMED" (biglead flat/negative) = stats look dominant but no lead built. Other features compensating. Elevate scrutiny — 19% loss rate vs 5% when confirmed.
@@ -952,7 +1052,7 @@ RULES:
     MIXED = partial volatile contribution. Weight structural stress and window more heavily.
     VOLATILE = conviction from turnovers/hustle (pot, stl, oreb, runs). Circumstantial. 46% loss rate at XGB>70% vs 29% structural.
   CONVICTION WARNINGS fire on validated thresholds. Multiple warnings compounding = strong SUPPRESS/DOWNGRADE signal. Single warning = flag as RISK in body, does NOT mean auto-SUPPRESS (54% of volatile-basis teams still win).
-  These signals matter MOST for BUY and BWC_EDGE. For EXIT, XGB threshold itself is sufficient — conviction quality is informational only.
+  These signals matter MOST for BUY and BWC_EDGE. For EXIT, XGB threshold itself is sufficient — conviction quality is informational only.`}
 
 BODY RULES (the BODY is read by non-technical bettors on their phone — translate your technical reasoning into basketball language while keeping structural data):
 - Translate indicators into basketball, then include indicator codes in parentheses:
