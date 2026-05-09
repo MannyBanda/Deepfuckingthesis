@@ -1,5 +1,5 @@
 # WNBA Dashboard Spec — `wnba-bdl.html`
-**Date:** May 9, 2026 (v4 — all questions resolved)
+**Date:** May 9, 2026 (v5 — shooting_play fix expanded, court visual + player stats unlocked)
 **Source:** Fork from `v3.html` (3,959 lines)
 **Status:** SPEC COMPLETE — awaiting implementation go-ahead
 
@@ -41,7 +41,7 @@ Server computes indicators from SR summary (higher quality — paint, POT, SCP, 
 | `stats` (per-player) | ❌ 404 | Not available |
 | `box_scores` (batch) | ❌ | Doesn't exist |
 | `odds` | ❌ | Not available (server uses The Odds API) |
-| Play coordinates | ❌ | No x,y — shot zones dead |
+| Play coordinates | ❌ | No x,y — but zone classification works via text fallback (see 3C, 3N) |
 
 ### Why NOT client-side indicator compute
 BDL team_stats could compute rough indicators, but server already computes from SR (includes paint, POT, SCP, FBP, possessions — data BDL lacks). Server indicators are strictly higher quality. Client compute would disagree with server reads. Keep server as authority.
@@ -53,11 +53,11 @@ BDL team_stats could compute rough indicators, but server already computes from 
 | File | Change | Risk |
 |------|--------|------|
 | `wnba-bdl.html` | New (fork from v3) | None |
+| `poll-live-bdl.mjs` | `shooting_play` fix at 2 locations (lines 1753, 1902) | **Low** — NBA always has field, regex only fires for WNBA |
 | `analyze.js` | WNBA system prompt branch (~50 lines) | Medium |
 | `netlify.toml` | Add xgb-model-wnba.json to included_files | None |
 
-**NOT touched (previously planned, now deferred):**
-- `poll-live-bdl.mjs` — no ntfy data ping needed (scrapped event-driven)
+**NOT touched:**
 - `db-api.js` — `get_alerts` and `get_games` already accept `league` param; `get_latest_snapshots` and `get_live_tracking` are game_id-based, no league filter needed
 
 ---
@@ -162,23 +162,41 @@ games = sched.map(function(g){
 
 **Keep** `fetchEspnScoreboard()` — change `league=nba` → `league=wnba`.
 
-**Skip** `fetchStandings()` — no BDL WNBA standings endpoint.
+**Replace** `fetchStandings()` — use SR standings via `sr-data?league=wnba&type=standings` instead of BDL. SR confirmed working (all 13+ teams with W/L records).
 
-### 3C. CRITICAL: `parseBDLPBP()` shot detection fix
+### 3C. CRITICAL: `shooting_play` fix — 3 locations (client + server x2)
 
-WNBA BDL plays do NOT have `shooting_play` field (0 of 453 plays verified). The guard `if(ev.shooting_play)` skips ALL shots, killing runs, scoring events, zone data, and POT/SCP tracking.
+WNBA BDL plays do NOT have `shooting_play` field (0 of 453 plays verified). The guard `if(ev.shooting_play)` skips ALL shots, killing runs, scoring events, zone data, POT/SCP tracking, and MC possession logs.
 
-**Fix:** Replace `if(ev.shooting_play)` with:
+**Verified impact on opening night data:** `game_pbp` table has `totalShots: 0`, `scoreLog: 0`, `runs: 0` for all 3 WNBA games. Turnovers work (different code path). `biggestLeadHome` works (separate tracking). But all shot-dependent data is empty.
 
+**Fix pattern (identical at all 3 locations):**
+
+Replace:
+```javascript
+if (ev.shooting_play) {
+```
+With:
 ```javascript
 var _isShotPlay = ev.shooting_play != null ? ev.shooting_play
   : /shot|layup|dunk|hook|tip|free throw/i.test(type);
-if(_isShotPlay){
+if (_isShotPlay) {
 ```
 
-**NBA regression risk:** Zero. NBA plays always have `shooting_play`, so the ternary uses `ev.shooting_play` (truthy/falsy). The regex only fires when `shooting_play` is `undefined` (WNBA).
+**Location 1 — `wnba-bdl.html` client-side `parseBDLPBP()` (line ~2330 in v3):**
+Gates all shot parsing → zone classification, runs, scoring events, POT/SCP tracking, per-player shot data for court visual and zone detail.
 
-**3PT classification:** Already correct. `is3 = ev.score_value === 3 || tx.includes('three point')` catches WNBA's text-based "three point" pattern (e.g., "misses 27-foot three point jumper").
+**Location 2 — `poll-live-bdl.mjs` line 1753 — server PBP parser:**
+Gates server-side `parseBDLPBPServer()` → zone data, runs, scoring events persisted to `game_pbp` table. Also feeds the I1-I5 indicator detail and court visual data on page load for completed games.
+
+**Location 3 — `poll-live-bdl.mjs` line 1902 — possession log builder:**
+Gates `buildPossLogServer()` → per-possession FGA/FGM tracking for MC engine input. Without this fix, WNBA MC possession logs have zero shot data.
+
+**NBA regression risk:** Zero at all 3 locations. NBA plays always have `shooting_play` (boolean), so the ternary uses `ev.shooting_play` directly. The regex only fires when `shooting_play` is `undefined` (WNBA).
+
+**3PT classification:** Already correct at all locations. `is3 = ev.score_value === 3 || tx.includes('three point')` catches WNBA's text-based pattern.
+
+**Backfill:** After deploying the fix, re-parse the 3 opening night games by hitting `?action=save_pbp` with fresh BDL plays data to populate the correct zone/shot/run data in `game_pbp`.
 
 ### 3D. Poll Cycle — Hybrid Refresh
 
@@ -266,7 +284,7 @@ function buildTeamEvidence(tsData, game){
 
 **`getFloor()` chain:** `sonnetIndicators → clientInd(null) → _serverFloor → rollingWindow` — works unchanged. `clientInd` is always null (no client compute), falls through to `_serverFloor`.
 
-### 3E. Dead Code (~290 lines removed)
+### 3E. Dead Code (~240 lines removed)
 
 | Function | Lines | Why dead |
 |----------|-------|----------|
@@ -274,21 +292,28 @@ function buildTeamEvidence(tsData, game){
 | `buildV3Summary()` | ~32 | BDL box_scores format converter — not needed |
 | `refreshLiveCards()` | ~55 | Replaced by `refreshLiveCardsWNBA()` |
 | BDL box_score fetch blocks in loadSchedule | ~15 | Endpoint doesn't exist |
-| Shot zone rendering + coordinate helpers | ~50 | No x,y coordinates |
 
-**KEPT:** `bdl()`, `buildBdlGameMap()`, `parseBDLPBP()` (with shooting_play fix), `bdlClassifyTO()`, `bdlExtractPlayer()`, `normalizeBdlClock()`, `coordinateToZone()` (still used by parseBDLPBP for type-based classification even without coordinates).
+**KEPT:** `bdl()`, `buildBdlGameMap()`, `parseBDLPBP()` (with shooting_play fix), `bdlClassifyTO()`, `bdlExtractPlayer()`, `bdlExtractAssist()`, `bdlExtractBlock()`, `bdlExtractSteal()`, `normalizeBdlClock()`, `coordinateToZone()` (text fallback classifies zones without coordinates), shot zone court visual (`courtSVG()` — ported from bdl.html, adapted for 4 zones).
 
-### 3F. Evidence Panels
+### 3F. I1-I5 Indicator Detail (tap pill → expandable `buildIndEvidence()`)
 
-**Data source:** `cs._teamEvidence` (from `buildTeamEvidence`) replaces `cs._lastBoxScore` player rollup. Fallback to latest snapshot `raw_stats_json` if `_teamEvidence` is null.
+**Data source chain:** PBP player stats (from `compilePBPPlayerStats`, see 3O) → `_teamEvidence` (from BDL team_stats) → latest snapshot `raw_stats_json`. PBP is preferred because it provides per-player breakdowns.
 
-**Rendering pattern change:**
+**Rendering: `buildIndEvidence()` currently reads from `cs._lastBoxScore` (per-player arrays).** For WNBA, read from `cs._pbpPlayerStats` (compiled from PBP) with `_teamEvidence` as fallback:
+
 ```javascript
-// NBA:  var hPl = box.home_team?.players || []; sum(hPl, 'stl')
-// WNBA: var ev = cs._teamEvidence; (ev?.home?.stl || 0)
+// NBA:  var box = cs._lastBoxScore; var hPl = box.home_team?.players || [];
+//       function sum(pl, f){ var t=0; pl.forEach(function(p){ t += p[f]||0; }); return t; }
+// WNBA: var pbs = cs._pbpPlayerStats;  // from compilePBPPlayerStats()
+//       var ev = cs._teamEvidence;       // from buildTeamEvidence()
+//       function teamStat(side, f){
+//         if(pbs && pbs[side]) return pbs[side].totals[f] || 0;
+//         if(ev && ev[side]) return ev[side][f] || 0;
+//         return 0;
+//       }
 ```
 
-**I2 evidence panel — Perimeter/FT (not Interior Control):**
+**I2 indicator detail — WNBA is Perimeter/FT (not Interior Control):**
 
 | NBA I2 rows | WNBA I2 rows |
 |-------------|--------------|
@@ -297,7 +322,9 @@ function buildTeamEvidence(tsData, game){
 | FTA | FG3A |
 | FTM | FG3M |
 
-PBP-derived rows (forced TO, runs) stay the same — `parseBDLPBP` provides these from `cs.pbpAudit`.
+Note: Rim FG and Paint FG from PBP ARE available (text classification works) — they just aren't the I2-defining stats for WNBA. They could be added as supplementary rows.
+
+PBP-derived rows (forced TO, runs, biggest lead) stay the same — `parseBDLPBP` provides these from `cs.pbpAudit`.
 
 ### 3G. Quarter Dominance Grid
 
@@ -313,17 +340,22 @@ var statDefs = [
 ];
 ```
 
-**Live partial quarter row:** Replace `qdRollup(players)` with `qdRollupEvidence(te)`:
+**Live partial quarter row:** Replace `qdRollup(players)` with `qdRollupEvidence(te, pbp, side)`:
 ```javascript
-function qdRollupEvidence(te){
+function qdRollupEvidence(te, pbp, side){
+  // PBP-derived paint: (rim_made + paint_made) * 2
+  var paintPts = 0;
+  if(pbp && pbp[side]){
+    paintPts = ((pbp[side].rim?.made||0) + (pbp[side].paint?.made||0)) * 2;
+  }
   return {
     steals: te?.stl||0, turnovers: te?.turnovers||0, total_turnovers: te?.turnovers||0,
     free_throws_att: te?.fta||0, three_points_made: te?.fg3m||0,
-    assists: te?.ast||0, points_in_the_paint: 0
+    assists: te?.ast||0, points_in_the_paint: paintPts
   };
 }
 ```
-Paint shows `·` in live partial (BDL team_stats has no paint stat). Completed quarter rows from server `quarter_data` DO have paint (from SR).
+PBP zone data provides paint for the live partial row (rim+paint zones from text classification). Completed quarter rows from server `quarter_data` also have paint (from SR).
 
 ### 3H. ESPN WP
 
@@ -376,7 +408,7 @@ function buildWNBASummary(raw, game){
 }
 ```
 
-`players:[]` means analyze.js sustainability personnel layer falls back to regression + shot-type grades. Correct behavior — can't see per-player in-game stats.
+`players` array populated from `compilePBPPlayerStats()` (see 3O) — gives sustainability audit real per-player shooting data (FGM/FGA by zone, assisted%, context). Falls back to empty `[]` if no PBP data (regression + shot-type grades only).
 
 **Pass `league:'wnba'` in analysis payload.**
 
@@ -403,11 +435,242 @@ Opening night presets (May 8):
 - GSV@SEA (`8f658fb4-cc4e-4499-a66f-025474c73ba8`) — competitive, LOCKED
 - WAS@TOR (`61500e2a-18d1-4bb9-82ce-ab3010c4ce53`) — close, no compound
 
+### 3N. Shot Zone Court Visual (ported from bdl.html)
+
+The court visual works for WNBA using text-based zone classification. `coordinateToZone()` text fallback chain:
+- `"layup"`, `"dunk"`, `"tip"` → rim
+- `"hook"`, `"float"` → paint
+- `"N-foot"` where N ≤ 4 → rim, N ≤ 9 → paint, N ≥ 22 → 3pt, else → mid
+- `"three point"` in text or `score_value === 3` → 3pt
+
+**4 zones instead of 5:** Corner 3 vs above-the-break 3 cannot be distinguished without coordinates. Merge into single "3PT" zone.
+
+**Zone positions for WNBA (modified from bdl.html's `zPos`):**
+```javascript
+var zPos = {
+  home: [
+    {k:'rim',   cx:150, cy:178},
+    {k:'paint', cx:90,  cy:130},
+    {k:'mid',   cx:230, cy:120},
+    {k:'three', cx:150, cy:30}   // merged corner3+above3
+  ],
+  away: [
+    {k:'rim',   cx:150, cy:40},
+    {k:'paint', cx:210, cy:88},
+    {k:'mid',   cx:70,  cy:98},
+    {k:'three', cx:150, cy:188}  // merged corner3+above3
+  ]
+};
+```
+
+**Zone data source:** `parseBDLPBP()` → `aggTeam()` already computes `{rim: {made, att}, paint: {...}, mid: {...}, threes: {...}}`. For the court visual, merge threes into a single zone:
+
+```javascript
+function buildZonesForCourt(pbpSide){
+  if(!pbpSide) return null;
+  return {
+    rim:   {m: pbpSide.rim?.made||0,   a: pbpSide.rim?.att||0,   players: pbpSide.rim?.byPlayer||[]},
+    paint: {m: pbpSide.paint?.made||0, a: pbpSide.paint?.att||0, players: pbpSide.paint?.byPlayer||[]},
+    mid:   {m: pbpSide.mid?.made||0,   a: pbpSide.mid?.att||0,   players: pbpSide.mid?.byPlayer||[]},
+    three: {m: pbpSide.threes?.made||0, a: pbpSide.threes?.att||0, players: pbpSide.threes?.byPlayer||[]}
+  };
+}
+```
+
+**Per-player zone detail (tap bubble → player breakdown):** `parseBDLPBP` `shots[]` array has `{p: player, z: zone, m: made}` per shot. `byPlayer` needs to be populated in `aggTeam()` — currently returns `byPlayer:[]` in v3.html. Add player aggregation:
+
+```javascript
+// Inside aggTeam(), after computing zone shot arrays:
+function playerAgg(shotArr){
+  var map = {};
+  shotArr.forEach(function(s){
+    if(!map[s.p]) map[s.p] = {n: s.p, m: 0, a: 0};
+    map[s.p].a++;
+    if(s.m) map[s.p].m++;
+  });
+  return Object.values(map).sort(function(a,b){ return b.a - a.a; });
+}
+// Then in the return:
+threes: {made:thM.length, att:th.length, ..., byPlayer: playerAgg(th)},
+rim:    {made:riM.length, att:ri.length, ..., byPlayer: playerAgg(ri)},
+paint:  {made:paM.length, att:pa.length, ..., byPlayer: playerAgg(pa)},
+mid:    {made:miM.length, att:mi.length, ..., byPlayer: playerAgg(mi)}
+```
+
+**S:V ratio header:** `structVarCalc()` from bdl.html. For WNBA with merged 3PT:
+```javascript
+function structVarCalc(zones){
+  var s = (zones.rim.m + zones.paint.m) * 2;
+  var v = zones.three.m * 3 + zones.mid.m * 2;
+  var t = s + v;
+  return {s:s, v:v, pct: t > 0 ? Math.round(s/t*100) : 0};
+}
+```
+
+**Court SVG rendering:** Port `courtSVG()` from bdl.html (~50 lines) — half-court outline with zone bubbles at fixed positions. Circle radius scales with volume (`Math.max(12, Math.min(26, d.a*2.5))`). Color coded by efficiency (green/amber/red). Tap handler shows per-player zone detail panel.
+
+**Data persistence:** `game_pbp` table already stores `pbp_json` for WNBA games. Once the `shooting_play` fix is deployed (3C), zone data populates correctly. Completed games load PBP from DB via `fetchPBPFromDB()`. Live games get fresh PBP every 10s via `refreshLiveCardsWNBA()`.
+
+### 3O. PBP Player Stats Compilation
+
+Per-player stats compiled from BDL plays text extraction. Every play has full player names (e.g., `"Breanna Stewart makes 7-foot turnaround jump shot (Marine Johannes assists)"`). Extraction functions already exist: `bdlExtractPlayer()`, `bdlExtractAssist()`, `bdlExtractBlock()`, `bdlExtractSteal()`.
+
+```javascript
+function compilePBPPlayerStats(plays, homeAbbr, awayAbbr){
+  if(!plays || plays.length === 0) return null;
+  var stats = {home: {}, away: {}};
+
+  plays.forEach(function(ev){
+    var type = (ev.type||'').trim(), tl = type.toLowerCase();
+    var text = (ev.text||'').trim(), tx = text.toLowerCase();
+    var tAbbr = ev.team?.abbreviation || '';
+    var side = tAbbr === homeAbbr ? 'home' : tAbbr === awayAbbr ? 'away' : null;
+    if(!side) return;
+    var player = bdlExtractPlayer(text);
+    if(!player || player === '?') return;
+
+    // Initialize player
+    if(!stats[side][player]) stats[side][player] = {
+      name:player, fgm:0, fga:0, fg3m:0, fg3a:0, ftm:0, fta:0,
+      pts:0, ast:0, stl:0, blk:0, to:0, oreb:0, dreb:0, reb:0,
+      zones:{rim:{m:0,a:0}, paint:{m:0,a:0}, mid:{m:0,a:0}, three:{m:0,a:0}}
+    };
+    var p = stats[side][player];
+
+    // Shooting plays
+    var _isShotPlay = ev.shooting_play != null ? ev.shooting_play
+      : /shot|layup|dunk|hook|tip|free throw/i.test(tl);
+    if(_isShotPlay){
+      var made = ev.scoring_play || false;
+      var is3 = ev.score_value === 3 || tx.includes('three point');
+
+      if(tl.includes('free throw')){
+        p.fta++;
+        if(made){ p.ftm++; p.pts += 1; }
+        return;
+      }
+      p.fga++;
+      if(is3) p.fg3a++;
+      var zone = coordinateToZone(null, null, type, text, ev.score_value);
+      // Map to 4-zone system (merge corner3+above3 → three)
+      var zKey = (zone === 'corner3' || zone === 'above3') ? 'three'
+               : (zone === 'rim' || zone === 'paint' || zone === 'mid') ? zone : 'mid';
+      p.zones[zKey].a++;
+      if(made){
+        p.fgm++;
+        if(is3) p.fg3m++;
+        p.pts += ev.score_value || (is3 ? 3 : 2);
+        p.zones[zKey].m++;
+      }
+      return;
+    }
+
+    // Turnovers
+    if(tl.includes('turnover')){ p.to++; return; }
+
+    // Rebounds
+    if(tl.includes('rebound')){
+      if(tl.includes('offensive')){ p.oreb++; p.reb++; }
+      else if(tl.includes('defensive')){ p.dreb++; p.reb++; }
+      return;
+    }
+
+    // Assists — credited to the assister, not the scorer
+    var assister = bdlExtractAssist(text);
+    if(assister && assister !== '?'){
+      if(!stats[side][assister]) stats[side][assister] = {
+        name:assister, fgm:0, fga:0, fg3m:0, fg3a:0, ftm:0, fta:0,
+        pts:0, ast:0, stl:0, blk:0, to:0, oreb:0, dreb:0, reb:0,
+        zones:{rim:{m:0,a:0}, paint:{m:0,a:0}, mid:{m:0,a:0}, three:{m:0,a:0}}
+      };
+      stats[side][assister].ast++;
+    }
+
+    // Steals — credited to the stealer (appears in turnover plays of the OTHER team)
+    var stealer = bdlExtractSteal(text);
+    if(stealer && stealer !== '?'){
+      var stealSide = side === 'home' ? 'away' : 'home'; // stealer is on opposing team
+      if(!stats[stealSide][stealer]) stats[stealSide][stealer] = {
+        name:stealer, fgm:0, fga:0, fg3m:0, fg3a:0, ftm:0, fta:0,
+        pts:0, ast:0, stl:0, blk:0, to:0, oreb:0, dreb:0, reb:0,
+        zones:{rim:{m:0,a:0}, paint:{m:0,a:0}, mid:{m:0,a:0}, three:{m:0,a:0}}
+      };
+      stats[stealSide][stealer].stl++;
+    }
+
+    // Blocks
+    var blocker = bdlExtractBlock(text);
+    if(blocker && blocker !== '?'){
+      var blockSide = side === 'home' ? 'away' : 'home';
+      if(!stats[blockSide][blocker]) stats[blockSide][blocker] = {
+        name:blocker, fgm:0, fga:0, fg3m:0, fg3a:0, ftm:0, fta:0,
+        pts:0, ast:0, stl:0, blk:0, to:0, oreb:0, dreb:0, reb:0,
+        zones:{rim:{m:0,a:0}, paint:{m:0,a:0}, mid:{m:0,a:0}, three:{m:0,a:0}}
+      };
+      stats[blockSide][blocker].blk++;
+    }
+  });
+
+  // Sort by pts desc and compute totals
+  function finalize(side){
+    var arr = Object.values(stats[side]).sort(function(a,b){ return b.pts - a.pts; });
+    var totals = {fgm:0, fga:0, fg3m:0, fg3a:0, ftm:0, fta:0, pts:0, ast:0, stl:0, blk:0, to:0, oreb:0, dreb:0, reb:0};
+    arr.forEach(function(p){
+      for(var k in totals) totals[k] += p[k] || 0;
+    });
+    return {players: arr, totals: totals};
+  }
+  return {home: finalize('home'), away: finalize('away')};
+}
+```
+
+**Store as `cs._pbpPlayerStats`** in `refreshLiveCardsWNBA()` after parsing plays:
+```javascript
+cs._pbpPlayerStats = compilePBPPlayerStats(plays, hE, aE);
+```
+
+**Usage:**
+- **I1-I5 indicator detail:** `teamStat('home', 'stl')` reads from `_pbpPlayerStats.home.totals.stl`
+- **Analyze button:** `buildWNBASummary` populates `players[]` from `_pbpPlayerStats.home.players`
+- **Sustainability personnel:** Opus sees per-player shooting splits (zone %, assisted %, shot context)
+- **Shot zone court visual:** `byPlayer` arrays for tap-to-expand zone detail
+
+### 3P. SR Standings
+
+SR WNBA standings confirmed working via `sr-data?league=wnba&type=standings&year=2026`.
+
+**Replace** BDL standings fetch with SR:
+```javascript
+async function fetchStandings(){
+  try {
+    var r = await fetch(FN+'sr-data?league=wnba&type=standings&year=2026');
+    if(!r.ok) return;
+    var data = await r.json();
+    var confs = data.conferences || [];
+    standings = {};
+    confs.forEach(function(c){
+      var teams = [];
+      // WNBA has no divisions — teams directly under conference
+      (c.teams || []).forEach(function(t){
+        teams.push({alias: t.alias||'', name: t.market||'', wins: t.wins||0, losses: t.losses||0});
+      });
+      standings[c.alias || c.name || '?'] = teams;
+    });
+  } catch(e){ console.warn('[Standings]', e.message); }
+}
+```
+
 ---
 
 ## 4. Server-Side Changes
 
-### 4A. analyze.js — WNBA system prompt branch (~50 lines)
+### 4A. `poll-live-bdl.mjs` — `shooting_play` fix (2 locations)
+
+See Section 3C for the fix pattern. Apply identically at lines 1753 and 1902. Zero NBA regression risk.
+
+After deploying, backfill the 3 opening night games by re-fetching BDL plays and re-saving to `game_pbp`.
+
+### 4B. analyze.js — WNBA system prompt branch (~50 lines)
 
 Add `league` to payload, branch system prompt. Key diffs from NBA:
 - Indicator names (I2='Perimeter/FT', I5='Momentum'), weights (I3=30% anchor)
@@ -416,7 +679,7 @@ Add `league` to payload, branch system prompt. Key diffs from NBA:
 - Conviction (I3+I4 DOMINANT, no I4+I5 killer pair)
 - Turnovers inverse
 
-### 4B. netlify.toml — included_files
+### 4C. netlify.toml — included_files
 
 ```toml
 [functions."poll-live-bdl"]
@@ -428,17 +691,19 @@ Add `league` to payload, branch system prompt. Key diffs from NBA:
 
 ## 5. What's Genuinely Missing vs NBA v3
 
-| Feature | NBA v3 | WNBA | Permanent? |
-|---------|--------|------|------------|
+| Feature | NBA v3 | WNBA | Status |
+|---------|--------|------|--------|
 | Live scores (10s) | BDL box_scores | BDL plays | **Solved** |
-| Per-player stats | box_scores players[] | Team-level only | **Yes** |
-| Shot zone court visual | PBP x,y coords | Hidden (zone % aggregates still in evidence) | **Yes** |
-| Run tracking | BDL plays | BDL plays (with fix) | **Solved** |
-| Indicators/floor | Client compute | Server (higher quality) | **Better** |
-| Sust. personnel | Per-player in-game | Regression + shot-type only | **Partial** |
-| Standings/ranks | BDL standings | Not available | **Yes** |
-| Paint in live QD partial | PBP-derived | Shows `·` | **Yes** |
-| Analysis button | BDL box_scores | Server raw_stats_json | **Solved** |
+| Per-player stats | box_scores players[] | PBP text extraction (`compilePBPPlayerStats`) | **Solved** |
+| Shot zone court visual | PBP x,y coords → 5 zones | PBP text classification → 4 zones (corner3+above3 merged) | **Solved** |
+| Per-player zone detail (tap bubble) | x,y coords + player name | Text zone + player name (`byPlayer` arrays) | **Solved** |
+| Run tracking | BDL plays | BDL plays (with shooting_play fix) | **Solved** |
+| Indicators/floor | Client compute from BDL | Server compute from SR (higher quality) | **Better** |
+| Sust. personnel grading | Per-player box_scores | Per-player PBP stats (FGM/FGA by zone, assisted%) | **Solved** |
+| Standings | BDL standings | SR standings | **Solved** |
+| Paint in live QD partial | BDL box_score rollup | PBP zone data: (rim_made + paint_made) * 2 | **Solved** |
+| Analysis button | BDL box_scores → summaryData | Server raw_stats_json + PBP player stats | **Solved** |
+| Corner 3 vs above-break 3 | x,y coordinate split | Cannot distinguish — merged into single 3PT zone | **Permanent** (cosmetic only) |
 
 ---
 
@@ -446,26 +711,31 @@ Add `league` to payload, branch system prompt. Key diffs from NBA:
 
 | # | What | Risk | Lines |
 |---|------|------|-------|
-| 1 | Copy v3.html → wnba-bdl.html | None | 0 |
-| 2 | Constants: TC, W, indNames, BDL_TEAM_MATCH, ESPN_ALIAS_MAP, localStorage, title | Low | ~40 |
-| 3 | `parseBDLPBP()` shooting_play fix | None | 2 |
-| 4 | Schedule: poll_state path, skip box_scores/standings | Medium | ~30 |
-| 5 | `buildTeamEvidence()` + `buildWNBASummary()` adapters | Low | ~60 |
-| 6 | Poll: `refreshLiveCardsWNBA()` | Medium | ~50 |
-| 7 | Delete dead code | Low | -290 |
-| 8 | Evidence panels: `_teamEvidence`, I2 perimeter/FT | Medium | ~40 |
-| 9 | QD grid: column reorder + live partial | Low | ~20 |
-| 10 | Inline conviction: WNBA killer pairs | Low | ~15 |
-| 11 | Analyze: `buildWNBASummary` + league payload | Medium | ~20 |
-| 12 | analyze.js: WNBA system prompt | Medium | ~50 |
-| 13 | Alert toast: `&league=wnba` | Low | 1 |
-| 14 | ESPN: `league=wnba` | Low | 2 |
-| 15 | netlify.toml: included_files | None | 1 |
-| 16 | Demo mode | Low | ~10 |
-| 17 | Game status updates in poll loop | Low | ~10 |
-| 18 | Smoke test | — | — |
+| 1 | **Server fix:** `shooting_play` in poll-live-bdl.mjs (lines 1753, 1902) | **Low** | 4 |
+| 2 | Copy v3.html → wnba-bdl.html | None | 0 |
+| 3 | Constants: TC, W, indNames, BDL_TEAM_MATCH, ESPN_ALIAS_MAP, localStorage, title | Low | ~40 |
+| 4 | `parseBDLPBP()` shooting_play fix + `byPlayer` aggregation in `aggTeam()` | Low | ~15 |
+| 5 | Schedule: poll_state path, skip box_scores | Medium | ~30 |
+| 6 | `compilePBPPlayerStats()` function | Medium | ~90 |
+| 7 | `buildTeamEvidence()` + `buildWNBASummary()` adapters | Low | ~60 |
+| 8 | Poll: `refreshLiveCardsWNBA()` (stores _pbpPlayerStats + _teamEvidence) | Medium | ~55 |
+| 9 | Delete dead code (computeClientIndicators, buildV3Summary, refreshLiveCards, box_score fetches) | Low | -240 |
+| 10 | Shot zone court visual: port `courtSVG()` from bdl.html, adapt for 4 zones | Medium | ~80 |
+| 11 | I1-I5 indicator detail: read from `_pbpPlayerStats` / `_teamEvidence`, I2 perimeter/FT | Medium | ~40 |
+| 12 | QD grid: column reorder + live partial from `_teamEvidence` | Low | ~20 |
+| 13 | Inline conviction: WNBA killer pairs | Low | ~15 |
+| 14 | Analyze: `buildWNBASummary` with PBP player stats + league payload | Medium | ~25 |
+| 15 | analyze.js: WNBA system prompt branch | Medium | ~50 |
+| 16 | SR standings: `fetchStandings()` via sr-data proxy | Low | ~20 |
+| 17 | Alert toast: `&league=wnba` | Low | 1 |
+| 18 | ESPN: `league=wnba` | Low | 2 |
+| 19 | netlify.toml: included_files | None | 1 |
+| 20 | Demo mode: opening night presets | Low | ~10 |
+| 21 | Game status updates in poll loop | Low | ~10 |
+| 22 | Backfill: re-parse 3 opening night games to fix empty game_pbp data | Low | script |
+| 23 | Smoke test | — | — |
 
-**Estimated net: ~3,800 lines (3,959 - 290 dead + ~130 new)**
+**Estimated net: ~3,900 lines (3,959 - 240 dead + ~180 new)**
 
 ---
 
@@ -473,17 +743,22 @@ Add `league` to payload, branch system prompt. Key diffs from NBA:
 
 | # | Question | Resolution |
 |---|----------|------------|
-| 1 | Team colors | Set. PDX/TOY approximate — update when official. |
+| 1 | Team colors | Brightest per team for dark bg. PDX/TOR approximate. |
 | 2 | ESPN alias mapping | All 15 verified. Map = LEAGUES.wnba.aliasMap. |
 | 3 | BDL plays live | Verified. No `shooting_play`, no `coordinate_x`. |
 | 4 | BDL team_stats fields | `fouls` not `pf`, `turnovers` not `to`, no `pts`. |
 | 5 | Merge timeline | 2-3 weeks stable. |
-| 6 | `shooting_play` missing | Type-regex fallback. Zero NBA regression. |
+| 6 | `shooting_play` missing | **3 fix locations** (client + server x2). Type-regex fallback. Zero NBA regression. |
 | 7 | ntfy event-driven | Scrapped. Plain 10s/60s polling. |
 | 8 | 3PT classification | Already correct via `tx.includes('three point')`. |
 | 9 | XGB model included_files | Add to netlify.toml defensively. |
 | 10 | Game status chain | poll_state → BDL plays → ESPN scoreboard. |
-| 11 | summaryData for analyze | Build from server snapshot raw_stats_json. |
+| 11 | summaryData for analyze | Build from server raw_stats_json + PBP player stats. |
+| 12 | Shot zone court visual | **NOT dead.** Text classification → 4 zones. Port `courtSVG()` from bdl.html. |
+| 13 | Per-player stats | **Solved.** `compilePBPPlayerStats()` from play text extraction. |
+| 14 | Sustainability personnel | **Solved.** PBP player stats provide per-player shooting by zone. |
+| 15 | Standings | **Solved.** SR has WNBA standings (`sr-data?league=wnba&type=standings`). |
+| 16 | game_pbp data empty | **Root cause:** `shooting_play` bug on server. Fix + backfill 3 opening night games. |
 
 ---
 
