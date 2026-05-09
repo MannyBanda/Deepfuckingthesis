@@ -55,6 +55,7 @@ BDL team_stats could compute rough indicators, but server already computes from 
 | `wnba-bdl.html` | New (fork from v3) | None |
 | `poll-live-bdl.mjs` | `shooting_play` fix at 2 locations (lines 1753, 1902) | **Low** — NBA always has field, regex only fires for WNBA |
 | `analyze.js` | WNBA system prompt branch (~50 lines) | Medium |
+| `odds-api.js` | Accept `league` param, switch sport key to `basketball_wnba` | **Low** — defaults to NBA |
 | `netlify.toml` | Add xgb-model-wnba.json to included_files | None |
 
 **NOT touched:**
@@ -435,81 +436,40 @@ Opening night presets (May 8):
 - GSV@SEA (`8f658fb4-cc4e-4499-a66f-025474c73ba8`) — competitive, LOCKED
 - WAS@TOR (`61500e2a-18d1-4bb9-82ce-ab3010c4ce53`) — close, no compound
 
-### 3N. Shot Zone Court Visual (ported from bdl.html)
+### 3N. Shot Zone Court Visual (already in v3.html — just needs data)
 
-The court visual works for WNBA using text-based zone classification. `coordinateToZone()` text fallback chain:
-- `"layup"`, `"dunk"`, `"tip"` → rim
-- `"hook"`, `"float"` → paint
-- `"N-foot"` where N ≤ 4 → rim, N ≤ 9 → paint, N ≥ 22 → 3pt, else → mid
-- `"three point"` in text or `score_value === 3` → 3pt
+The court visual is ALREADY in v3.html — `courtSVG()` at line 3100, `_dZones()` at line 3060, `_daZone()` tap handler at line 3071, `renderDepthAuditSection()` at line 3078. **No porting needed.**
 
-**4 zones instead of 5:** Corner 3 vs above-the-break 3 cannot be distinguished without coordinates. Merge into single "3PT" zone.
+The only reason it's empty for WNBA is the `shooting_play` bug (3C). Once fixed, `parseBDLPBP` populates `raw.shots[]` with zones from text classification, `_dZones()` builds per-player zone aggregates, and `courtSVG()` renders the bubbles at fixed SVG positions.
 
-**Zone positions for WNBA (modified from bdl.html's `zPos`):**
+**WNBA behavior with text classification:**
+- `coordinateToZone()` text fallback classifies every shot into rim/paint/mid/above3
+- Without x,y coordinates, ALL 3-pointers classify as `above3` (the distance heuristic `≥22ft` catches them, or the `"three point"` text match)
+- `corner3` bubble stays empty → `_dZones()` returns `{corner3: {m:0, a:0}}` → `courtSVG()` skips it (`if(!hasLive&&!hasBaseline)return;`)
+- Result: 4 visible bubbles (rim, paint, mid, above3) instead of 5. Functionally correct.
+
+**`byPlayer` aggregation already works in v3.html `_dZones()`:**
 ```javascript
-var zPos = {
-  home: [
-    {k:'rim',   cx:150, cy:178},
-    {k:'paint', cx:90,  cy:130},
-    {k:'mid',   cx:230, cy:120},
-    {k:'three', cx:150, cy:30}   // merged corner3+above3
-  ],
-  away: [
-    {k:'rim',   cx:150, cy:40},
-    {k:'paint', cx:210, cy:88},
-    {k:'mid',   cx:70,  cy:98},
-    {k:'three', cx:150, cy:188}  // merged corner3+above3
-  ]
-};
-```
-
-**Zone data source:** `parseBDLPBP()` → `aggTeam()` already computes `{rim: {made, att}, paint: {...}, mid: {...}, threes: {...}}`. For the court visual, merge threes into a single zone:
-
-```javascript
-function buildZonesForCourt(pbpSide){
-  if(!pbpSide) return null;
-  return {
-    rim:   {m: pbpSide.rim?.made||0,   a: pbpSide.rim?.att||0,   players: pbpSide.rim?.byPlayer||[]},
-    paint: {m: pbpSide.paint?.made||0, a: pbpSide.paint?.att||0, players: pbpSide.paint?.byPlayer||[]},
-    mid:   {m: pbpSide.mid?.made||0,   a: pbpSide.mid?.att||0,   players: pbpSide.mid?.byPlayer||[]},
-    three: {m: pbpSide.threes?.made||0, a: pbpSide.threes?.att||0, players: pbpSide.threes?.byPlayer||[]}
-  };
-}
-```
-
-**Per-player zone detail (tap bubble → player breakdown):** `parseBDLPBP` `shots[]` array has `{p: player, z: zone, m: made}` per shot. `byPlayer` needs to be populated in `aggTeam()` — currently returns `byPlayer:[]` in v3.html. Add player aggregation:
-
-```javascript
-// Inside aggTeam(), after computing zone shot arrays:
-function playerAgg(shotArr){
-  var map = {};
-  shotArr.forEach(function(s){
-    if(!map[s.p]) map[s.p] = {n: s.p, m: 0, a: 0};
-    map[s.p].a++;
-    if(s.m) map[s.p].m++;
+function _dZones(rawShots, tm){
+  var z = {rim:{m:0,a:0,pl:{}}, paint:{m:0,a:0,pl:{}}, mid:{m:0,a:0,pl:{}},
+           corner3:{m:0,a:0,pl:{}}, above3:{m:0,a:0,pl:{}}};
+  (rawShots||[]).filter(function(s){ return s.tm===tm; }).forEach(function(s){
+    var zn = z[s.z]; if(!zn) return;
+    zn.a++; if(s.m) zn.m++;
+    if(!zn.pl[s.p]) zn.pl[s.p] = {n:s.p, m:0, a:0};
+    zn.pl[s.p].a++; if(s.m) zn.pl[s.p].m++;
   });
-  return Object.values(map).sort(function(a,b){ return b.a - a.a; });
-}
-// Then in the return:
-threes: {made:thM.length, att:th.length, ..., byPlayer: playerAgg(th)},
-rim:    {made:riM.length, att:ri.length, ..., byPlayer: playerAgg(ri)},
-paint:  {made:paM.length, att:pa.length, ..., byPlayer: playerAgg(pa)},
-mid:    {made:miM.length, att:mi.length, ..., byPlayer: playerAgg(mi)}
-```
-
-**S:V ratio header:** `structVarCalc()` from bdl.html. For WNBA with merged 3PT:
-```javascript
-function structVarCalc(zones){
-  var s = (zones.rim.m + zones.paint.m) * 2;
-  var v = zones.three.m * 3 + zones.mid.m * 2;
-  var t = s + v;
-  return {s:s, v:v, pct: t > 0 ? Math.round(s/t*100) : 0};
+  Object.keys(z).forEach(function(k){
+    z[k].players = Object.values(z[k].pl).sort(function(a,b){ return b.a-a.a; });
+    delete z[k].pl;
+  });
+  return z;
 }
 ```
 
-**Court SVG rendering:** Port `courtSVG()` from bdl.html (~50 lines) — half-court outline with zone bubbles at fixed positions. Circle radius scales with volume (`Math.max(12, Math.min(26, d.a*2.5))`). Color coded by efficiency (green/amber/red). Tap handler shows per-player zone detail panel.
+This already builds per-player zone breakdowns from `rawShots[].p` (player name) and `rawShots[].z` (zone). Tap-to-expand shows player performance in each zone. **Zero WNBA changes needed** — the `shooting_play` fix is the only blocker.
 
-**Data persistence:** `game_pbp` table already stores `pbp_json` for WNBA games. Once the `shooting_play` fix is deployed (3C), zone data populates correctly. Completed games load PBP from DB via `fetchPBPFromDB()`. Live games get fresh PBP every 10s via `refreshLiveCardsWNBA()`.
+**Data persistence:** `game_pbp` table stores `pbp_json` including `raw.shots[]` with zone and player data. Completed games load from DB via `fetchPBPFromDB()`. Live games get fresh PBP every 10s.
 
 ### 3O. PBP Player Stats Compilation
 
@@ -660,6 +620,38 @@ async function fetchStandings(){
 }
 ```
 
+### 3Q. Odds Toast — `odds-api.js` league param
+
+The toast rendering and `fetchLineShop()` in v3 work as-is. But `odds-api.js` is **hardcoded to `basketball_nba`** — the client-facing proxy doesn't accept a league param.
+
+Server-side already handles WNBA (poll-live-bdl.mjs line 1534: `const sportKey = league === 'wnba' ? 'basketball_wnba' : 'basketball_nba'`). The client proxy needs the same treatment.
+
+**Fix in `odds-api.js`:**
+```javascript
+// Current:
+var url = '...sports/basketball_nba/odds?...'
+
+// WNBA:
+var league = params.league || 'nba';
+var sportKey = league === 'wnba' ? 'basketball_wnba' : 'basketball_nba';
+var url = '...sports/' + sportKey + '/odds?...'
+```
+
+Apply to both the live and historical URL constructions (~4 lines changed).
+
+**Client-side:** `fetchLineShop()` needs to pass `league=wnba` in the fetch URL:
+```javascript
+var oddsUrl = FN + 'odds-api?league=wnba';
+```
+
+### 3R. Pregame Thesis — not yet WNBA-aware
+
+The thesis rendering in the card works as-is (reads `theses[id]` from DB, displays plain text). But `pregame-agent.mjs` is **hardcoded to NBA** — line 1030: `var league = 'nba'; // MVP: NBA only`.
+
+**For v1 WNBA dashboard:** Thesis section will be empty (no data generated). The collapsible section gracefully hides when `theses[id]` is falsy — no UI breakage.
+
+**Future:** Add WNBA to pregame agent — needs WNBA-specific system prompt, SR depth charts/injuries for WNBA, and WNBA season Q4 auto data. Separate ticket.
+
 ---
 
 ## 4. Server-Side Changes
@@ -679,7 +671,16 @@ Add `league` to payload, branch system prompt. Key diffs from NBA:
 - Conviction (I3+I4 DOMINANT, no I4+I5 killer pair)
 - Turnovers inverse
 
-### 4C. netlify.toml — included_files
+### 4C. odds-api.js — league param (~4 lines)
+
+Accept `league` query param, default to `nba`. Map to Odds API sport key:
+```javascript
+var league = params.league || 'nba';
+var sportKey = league === 'wnba' ? 'basketball_wnba' : 'basketball_nba';
+```
+Apply to both live URL (`/v4/sports/{sportKey}/odds`) and historical URL (`/v4/historical/sports/{sportKey}/odds`).
+
+### 4D. netlify.toml — included_files
 
 ```toml
 [functions."poll-live-bdl"]
@@ -714,26 +715,30 @@ Add `league` to payload, branch system prompt. Key diffs from NBA:
 | 1 | **Server fix:** `shooting_play` in poll-live-bdl.mjs (lines 1753, 1902) | **Low** | 4 |
 | 2 | Copy v3.html → wnba-bdl.html | None | 0 |
 | 3 | Constants: TC, W, indNames, BDL_TEAM_MATCH, ESPN_ALIAS_MAP, localStorage, title | Low | ~40 |
-| 4 | `parseBDLPBP()` shooting_play fix + `byPlayer` aggregation in `aggTeam()` | Low | ~15 |
+| 4 | `parseBDLPBP()` shooting_play fix (client-side, same 2-line pattern as server) | Low | 2 |
 | 5 | Schedule: poll_state path, skip box_scores | Medium | ~30 |
 | 6 | `compilePBPPlayerStats()` function | Medium | ~90 |
 | 7 | `buildTeamEvidence()` + `buildWNBASummary()` adapters | Low | ~60 |
 | 8 | Poll: `refreshLiveCardsWNBA()` (stores _pbpPlayerStats + _teamEvidence) | Medium | ~55 |
 | 9 | Delete dead code (computeClientIndicators, buildV3Summary, refreshLiveCards, box_score fetches) | Low | -240 |
-| 10 | Shot zone court visual: port `courtSVG()` from bdl.html, adapt for 4 zones | Medium | ~80 |
+| 10 | Shot zones: no code changes — `courtSVG()` + `_dZones()` work as-is once shooting_play fix populates data | None | 0 |
 | 11 | I1-I5 indicator detail: read from `_pbpPlayerStats` / `_teamEvidence`, I2 perimeter/FT | Medium | ~40 |
-| 12 | QD grid: column reorder + live partial from `_teamEvidence` | Low | ~20 |
+| 12 | QD grid: column reorder + live partial from `_teamEvidence` + PBP paint | Low | ~20 |
 | 13 | Inline conviction: WNBA killer pairs | Low | ~15 |
 | 14 | Analyze: `buildWNBASummary` with PBP player stats + league payload | Medium | ~25 |
 | 15 | analyze.js: WNBA system prompt branch | Medium | ~50 |
 | 16 | SR standings: `fetchStandings()` via sr-data proxy | Low | ~20 |
-| 17 | Alert toast: `&league=wnba` | Low | 1 |
-| 18 | ESPN: `league=wnba` | Low | 2 |
-| 19 | netlify.toml: included_files | None | 1 |
-| 20 | Demo mode: opening night presets | Low | ~10 |
-| 21 | Game status updates in poll loop | Low | ~10 |
-| 22 | Backfill: re-parse 3 opening night games to fix empty game_pbp data | Low | script |
-| 23 | Smoke test | — | — |
+| 17 | odds-api.js: accept `league` param, `basketball_wnba` sport key | **Low** | 4 |
+| 18 | Odds toast: pass `league=wnba` in `fetchLineShop()` | Low | 1 |
+| 19 | Alert toast: `&league=wnba` on `pollAlerts()` | Low | 1 |
+| 20 | ESPN: `league=wnba` | Low | 2 |
+| 21 | netlify.toml: included_files | None | 1 |
+| 22 | Demo mode: opening night presets | Low | ~10 |
+| 23 | Game status updates in poll loop | Low | ~10 |
+| 24 | Backfill: re-parse 3 opening night games to fix empty game_pbp data | Low | script |
+| 25 | Smoke test | — | — |
+
+**Note:** Pregame thesis section will be empty until `pregame-agent.mjs` gets WNBA support (separate ticket). The UI gracefully hides when no thesis data exists.
 
 **Estimated net: ~3,900 lines (3,959 - 240 dead + ~180 new)**
 
