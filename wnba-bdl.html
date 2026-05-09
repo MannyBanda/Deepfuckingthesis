@@ -597,7 +597,7 @@ function switchDate(offset){
 
 async function buildBdlGameMap(dateStr){
   try{
-    var data=await bdl('games',{date:dateStr});var bg=data.data||[];
+    var data=await bdl('games',{date:dateStr,league:'wnba'});var bg=data.data||[];
     for(var g of games){
       var hA=g.home?.alias,aA=g.away?.alias;if(!hA||!aA)continue;
       var hM=BDL_TEAM_MATCH[hA],aM=BDL_TEAM_MATCH[aA];
@@ -873,7 +873,7 @@ async function fetchLivePBP(gameId,bdlId){
   var g=games.find(function(x){return x.id===gameId;});if(!g)return;
   var hA=g.home?.alias||'HOME',aA=g.away?.alias||'AWAY';
   try{
-    var data=await bdl('plays',{game_id:String(bdlId)});
+    var data=await bdl('plays',{game_id:String(bdlId),league:'wnba'});
     var plays=data.data||[];
     if(plays.length===0)return;
     // Fingerprint: skip if play count unchanged
@@ -3225,7 +3225,7 @@ async function fetchPBPFromDB(gameId,force){
     try{
       var g=games.find(function(x){return x.id===gameId;});if(!g)return;
       var hA=g.home?.alias||'HOME',aA=g.away?.alias||'AWAY';
-      var plData=await bdl('plays',{game_id:String(bdlId)});
+      var plData=await bdl('plays',{game_id:String(bdlId),league:'wnba'});
       var plays=plData.data||[];
       if(plays.length>0){
         var pbp=parseBDLPBP(plays,hA,aA);
