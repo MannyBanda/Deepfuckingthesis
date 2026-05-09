@@ -3599,7 +3599,7 @@ function computeSustainability(summary, league) {
     if (tier === 'LOCKED IN') {
       var fg2m = (stats.field_goals_made || 0) - team3PM;
       var fg2a = teamFGA - team3PA;
-      var twoPointBase = league === 'ncaamb' ? 0.49 : 0.52;
+      var twoPointBase = league === 'ncaamb' ? 0.49 : league === 'wnba' ? 0.46 : 0.52;
       var threeBelow95 = live3Pct < seasonPrior3Pct * 0.95;
       var twoBelowExtreme = fg2a >= 6 && fg2m / fg2a < twoPointBase * 0.85;
       if (threeBelow95 && twoBelowExtreme) {
@@ -3680,8 +3680,8 @@ function computeLeadComposition(summary) {
 // Returns per-team: active flag, projected 3PA, discount (for floor), vtBonus (for structRate).
 
 function computeVolumeThreat(summary, pbpAudit, sust, league, minsElapsed) {
-  var GAME_MINUTES = league === 'ncaamb' ? 40 : 48;
-  var sznDefault = league === 'ncaamb' ? 33 : 36;
+  var GAME_MINUTES = (league === 'ncaamb' || league === 'wnba') ? 40 : 48;
+  var sznDefault = league === 'ncaamb' ? 33 : league === 'wnba' ? 34.7 : 36;
 
   function evalSide(stats, pbpSide, sustSide) {
     var live3PA = Number(stats.three_points_att) || 0;
@@ -3846,8 +3846,8 @@ function computeThroughputServer(summary, ind, sust, hA, aA, period, clock, leag
   var deficit = oppPts - ctrlPts;
   if (deficit <= 0) return null; // not trailing
 
-  var PERIOD_MINUTES = league === 'ncaamb' ? 20 : 12;
-  var GAME_MINUTES = league === 'ncaamb' ? 40 : 48;
+  var PERIOD_MINUTES = league === 'ncaamb' ? 20 : league === 'wnba' ? 10 : 12;
+  var GAME_MINUTES = (league === 'ncaamb' || league === 'wnba') ? 40 : 48;
   var totalPeriods = league === 'ncaamb' ? 2 : 4;
   var clockParts = (clock || '').split(':');
   var clockMins = clockParts.length === 2 ? (parseInt(clockParts[0]) || 0) + ((parseInt(clockParts[1]) || 0) / 60) : PERIOD_MINUTES;
@@ -3861,7 +3861,7 @@ function computeThroughputServer(summary, ind, sust, hA, aA, period, clock, leag
   var as = summary.away?.statistics || {};
   var focalStats = ctrlIsHome ? hs : as;
   var targetStats = ctrlIsHome ? as : hs;
-  var sznDefault = league === 'ncaamb' ? 33 : 36;
+  var sznDefault = league === 'ncaamb' ? 33 : league === 'wnba' ? 34.7 : 36;
 
   var focalSustData = sust ? (ctrlIsHome ? sust.home : sust.away) : null;
   var targetSustData = sust ? (ctrlIsHome ? sust.away : sust.home) : null;
@@ -3899,8 +3899,8 @@ function computeLeadSafetyServer(summary, ind, sust, hA, aA, period, clock, leag
   var lead = ctrlPts - oppPts;
   if (lead < 2) return null; // not leading enough
 
-  var PERIOD_MINUTES = league === 'ncaamb' ? 20 : 12;
-  var GAME_MINUTES = league === 'ncaamb' ? 40 : 48;
+  var PERIOD_MINUTES = league === 'ncaamb' ? 20 : league === 'wnba' ? 10 : 12;
+  var GAME_MINUTES = (league === 'ncaamb' || league === 'wnba') ? 40 : 48;
   var totalPeriods = league === 'ncaamb' ? 2 : 4;
   var clockParts = (clock || '').split(':');
   var clockMins = clockParts.length === 2 ? (parseInt(clockParts[0]) || 0) + ((parseInt(clockParts[1]) || 0) / 60) : PERIOD_MINUTES;
@@ -3915,7 +3915,7 @@ function computeLeadSafetyServer(summary, ind, sust, hA, aA, period, clock, leag
   // Focal = OPPONENT (trailing, trying to recover)
   var focalStats = ctrlIsHome ? as : hs;
   var targetStats = ctrlIsHome ? hs : as;
-  var sznDefault = league === 'ncaamb' ? 33 : 36;
+  var sznDefault = league === 'ncaamb' ? 33 : league === 'wnba' ? 34.7 : 36;
 
   var focalSustData = sust ? (ctrlIsHome ? sust.away : sust.home) : null;
   var targetSustData = sust ? (ctrlIsHome ? sust.home : sust.away) : null;
@@ -4428,8 +4428,8 @@ async function computeServerContext(sql, game, league, summary, ind, espnWP, hA,
   // ── 6. VOLUME THREAT + THROUGHPUT + LEAD SAFETY ──
   try {
     // Compute volume threat (needs PBP + sust + game time)
-    var GAME_MINS_VT = league === 'ncaamb' ? 40 : 48;
-    var PERIOD_MINS_VT = league === 'ncaamb' ? 20 : 12;
+    var GAME_MINS_VT = (league === 'ncaamb' || league === 'wnba') ? 40 : 48;
+    var PERIOD_MINS_VT = league === 'ncaamb' ? 20 : league === 'wnba' ? 10 : 12;
     var totalPeriodsVT = league === 'ncaamb' ? 2 : 4;
     var vtClockParts = (clock || '').split(':');
     var vtClockMins = vtClockParts.length === 2 ? (parseInt(vtClockParts[0]) || 0) + ((parseInt(vtClockParts[1]) || 0) / 60) : PERIOD_MINS_VT;
@@ -6565,8 +6565,8 @@ export default async function(req) {
           // Compute volume threat (needs PBP + sust + game time)
           let gameVolumeThreat = null;
           try {
-            var VT_GAME_MINS = league === 'ncaamb' ? 40 : 48;
-            var VT_PERIOD_MINS = league === 'ncaamb' ? 20 : 12;
+            var VT_GAME_MINS = (league === 'ncaamb' || league === 'wnba') ? 40 : 48;
+            var VT_PERIOD_MINS = league === 'ncaamb' ? 20 : league === 'wnba' ? 10 : 12;
             var vtTotalPeriods = league === 'ncaamb' ? 2 : 4;
             var vtClk = (clock || '').split(':');
             var vtClkMins = vtClk.length === 2 ? (parseInt(vtClk[0]) || 0) + ((parseInt(vtClk[1]) || 0) / 60) : VT_PERIOD_MINS;
@@ -7010,7 +7010,7 @@ export default async function(req) {
 
             // Clock computation for alert time gates
             const alertClockParts = clock.replace(/^[A-Za-z]+\s*/, '').split(':');
-            const alertPeriodMins = league === 'ncaamb' ? 20 : 12;
+            const alertPeriodMins = league === 'ncaamb' ? 20 : league === 'wnba' ? 10 : 12;
             const alertClockMins = alertClockParts.length === 2 ? (parseInt(alertClockParts[0]) || 0) + ((parseInt(alertClockParts[1]) || 0) / 60) : alertPeriodMins;
             const alertTotalPeriods = league === 'ncaamb' ? 2 : 4;
             const alertMinsLeft = alertClockMins + (Math.max(0, alertTotalPeriods - currentPeriod) * alertPeriodMins);
