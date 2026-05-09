@@ -610,8 +610,17 @@ async function buildBdlGameMap(dateStr){
 
 async function fetchStandings(){
   try{
-    var data=await bdl('standings',{season:'2025'});var arr=data.data||[];
-    arr.forEach(function(s){var abbr=s.team?.abbreviation||'';if(!abbr)return;standingsCache[abbr]={confRank:s.conference_rank||null,w:s.wins||0,l:s.losses||0,conf:s.team?.conference||''};});
+    var r=await fetch(FN+'sr-data?league=wnba&type=standings&year=2026');
+    if(!r.ok)return;
+    var data=await r.json();
+    var confs=data.conferences||[];
+    confs.forEach(function(c){
+      var confName=c.alias||c.name||'';
+      (c.teams||[]).forEach(function(t){
+        var alias=t.alias||'';if(!alias)return;
+        standingsCache[alias]={confRank:t.seed||null,w:t.wins||0,l:t.losses||0,conf:confName};
+      });
+    });
     console.log('[STANDINGS]',Object.keys(standingsCache).length,'teams');
   }catch(e){console.warn('[STANDINGS]',e.message);}
 }
@@ -1655,13 +1664,19 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
     }
     return'<div class="ind-ev-row"><span class="ind-ev-label">'+label+'</span><div class="ind-ev-vals"><span class="ind-ev-val" style="color:'+hCol+'">'+hA+'</span><span class="ind-ev-val" style="color:'+hCol+'">'+hVal+'</span><span style="color:var(--fg-dim)">-</span><span class="ind-ev-val" style="color:'+aCol+'">'+aVal+'</span><span class="ind-ev-val" style="color:'+aCol+'">'+aA+'</span></div></div>';
   }
-  if(box){
-    var hPl=box.home_team?.players||[],aPl=box.visitor_team?.players||[];
-    function sum(pl,f){var t=0;pl.forEach(function(p){t+=p[f]||0;});return t;}
+  // WNBA: use _teamEvidence (BDL team_stats) or _pbpPlayerStats totals
+  var _te=cs._teamEvidence;var _pbs=cs._pbpPlayerStats;
+  var hasData=_te||_pbs;
+  if(hasData){
+    function tStat(side,f){
+      if(_pbs&&_pbs[side])return _pbs[side].totals[f]||0;
+      if(_te&&_te[side])return _te[side][f]||0;
+      return 0;
+    }
     if(indKey==='I1'){
-      html+=evRow('Steals',sum(hPl,'stl'),sum(aPl,'stl'));
-      html+=evRow('Blocks',sum(hPl,'blk'),sum(aPl,'blk'));
-      html+=evRow('Turnovers',sum(hPl,'turnover'),sum(aPl,'turnover'),{invert:true});
+      html+=evRow('Steals',tStat('home','stl'),tStat('away','stl'));
+      html+=evRow('Blocks',tStat('home','blk'),tStat('away','blk'));
+      html+=evRow('Turnovers',tStat('home','to')||tStat('home','turnovers'),tStat('away','to')||tStat('away','turnovers'),{invert:true});
       if(pbp){
         var hF=pbp.home&&pbp.home.tos?pbp.home.tos.forced||0:0,aF=pbp.away&&pbp.away.tos?pbp.away.tos.forced||0:0;
         html+=evRow('Forced TO',aF,hF);
@@ -1669,37 +1684,31 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
         html+=evRow('Unforced TO',hUF,aUF,{invert:true});
       }
     } else if(indKey==='I2'){
-      if(pbp){
-        var hRimM=pbp.home.rim?pbp.home.rim.made:0,hRimA2=pbp.home.rim?pbp.home.rim.att:0;
-        var aRimM=pbp.away.rim?pbp.away.rim.made:0,aRimA2=pbp.away.rim?pbp.away.rim.att:0;
-        html+=evRow('Rim FG',hRimM+'/'+hRimA2,aRimM+'/'+aRimA2,{cmpH:hRimA2>0?hRimM/hRimA2:0,cmpA:aRimA2>0?aRimM/aRimA2:0});
-        var hPntM=pbp.home.paint?pbp.home.paint.made:0,hPntA2=pbp.home.paint?pbp.home.paint.att:0;
-        var aPntM=pbp.away.paint?pbp.away.paint.made:0,aPntA2=pbp.away.paint?pbp.away.paint.att:0;
-        html+=evRow('Paint FG',hPntM+'/'+hPntA2,aPntM+'/'+aPntA2,{cmpH:hPntA2>0?hPntM/hPntA2:0,cmpA:aPntA2>0?aPntM/aPntA2:0});
-      }
-      html+=evRow('FTA',sum(hPl,'fta'),sum(aPl,'fta'));
-      html+=evRow('FTM',sum(hPl,'ftm'),sum(aPl,'ftm'));
+      // WNBA I2: Perimeter/FT (not Interior Control)
+      html+=evRow('FTA',tStat('home','fta'),tStat('away','fta'));
+      html+=evRow('FTM',tStat('home','ftm'),tStat('away','ftm'));
+      html+=evRow('FG3A',tStat('home','fg3a'),tStat('away','fg3a'));
+      html+=evRow('FG3M',tStat('home','fg3m'),tStat('away','fg3m'));
     } else if(indKey==='I3'){
-      var hFGM=sum(hPl,'fgm'),hFGA=sum(hPl,'fga'),h3M=sum(hPl,'fg3m'),h3A=sum(hPl,'fg3a');
-      var aFGM=sum(aPl,'fgm'),aFGA=sum(aPl,'fga'),a3M=sum(aPl,'fg3m'),a3A=sum(aPl,'fg3a');
+      var hFGM=tStat('home','fgm'),hFGA=tStat('home','fga'),h3M=tStat('home','fg3m'),h3A=tStat('home','fg3a');
+      var aFGM=tStat('away','fgm'),aFGA=tStat('away','fga'),a3M=tStat('away','fg3m'),a3A=tStat('away','fg3a');
       var hEFG=hFGA>0?((hFGM+0.5*h3M)/hFGA*100).toFixed(1):'--';
       var aEFG=aFGA>0?((aFGM+0.5*a3M)/aFGA*100).toFixed(1):'--';
       html+=evRow('eFG%',hEFG+'%',aEFG+'%');
       html+=evRow('3PT',h3M+'/'+h3A,a3M+'/'+a3A,{cmpH:h3A>0?h3M/h3A:0,cmpA:a3A>0?a3M/a3A:0});
-      html+=evRow('Assists',sum(hPl,'ast'),sum(aPl,'ast'));
-      var hAR=hFGM>0?Math.round(sum(hPl,'ast')/hFGM*100):0;
-      var aAR=aFGM>0?Math.round(sum(aPl,'ast')/aFGM*100):0;
+      html+=evRow('Assists',tStat('home','ast'),tStat('away','ast'));
+      var hAR=hFGM>0?Math.round(tStat('home','ast')/hFGM*100):0;
+      var aAR=aFGM>0?Math.round(tStat('away','ast')/aFGM*100):0;
       html+=evRow('Ast Ratio',hAR+'%',aAR+'%');
     } else if(indKey==='I4'){
       // Biggest lead from PBP if available
       if(pbp&&pbp._bdl){
         html+=evRow('Big Lead',pbp._bdl.biggestLeadHome||0,pbp._bdl.biggestLeadAway||0);
       }
-      // Per-quarter margins — fallback to boundaries if line_score empty (FINAL from DB)
-      var hLine=box.home_team?.line_score||[],aLine=box.visitor_team?.line_score||[];
-      if(hLine.length===0&&cs._serverQDBoundaries){
+      // Per-quarter margins from server boundaries
+      var hLine=[],aLine=[];
+      if(cs._serverQDBoundaries){
         var bKeys=Object.keys(cs._serverQDBoundaries).map(Number).filter(function(n){return n>0&&!isNaN(n);}).sort(function(a,b){return a-b;});
-        hLine=[];aLine=[];
         for(var bi=0;bi<bKeys.length;bi++){
           var b=cs._serverQDBoundaries[bKeys[bi]];
           var prevB=bi>0?cs._serverQDBoundaries[bKeys[bi-1]]:null;
@@ -1721,7 +1730,8 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
       var pctNote=evBLH>evBLA?(evBLH>0?Math.round(evBLA/evBLH*100):0):(evBLA>0?Math.round(evBLH/evBLA*100):0);
       html+='<div class="ind-ev-row"><span class="ind-ev-label">SubA: Big Lead</span><div class="ind-ev-vals" style="color:var(--fg-secondary)">'+(subAWin!=='EVEN'?'<span style="color:var(--green)">'+esc(subAWin)+'</span> ('+pctNote+'% of leader)':'EVEN ('+pctNote+'%)')+'</div></div>';
       // SubB verdict: Q4 quarter delta vs ±2 threshold / season prior pre-Q4
-      var per=box.period||hLine.length||0;
+      var _g4=games.find(function(x){return x.id===id;});
+      var per=(_g4?_g4.period:0)||hLine.length||0;
       if(per>=4&&hLine.length>=per&&aLine.length>=per){
         var lastH=hLine[hLine.length-1]||0,lastA=aLine[aLine.length-1]||0;
         var qDelta=lastH-lastA;
@@ -1760,7 +1770,7 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
         html+='<div class="ind-ev-row" style="border-bottom:none"><span class="ind-ev-label">'+esc(hA)+' runs</span><div class="ind-ev-vals" style="color:'+hRunCol+'">'+(hRuns6.length>0?hRuns6.join(', ')+' pts':'none')+'</div></div>';
         html+='<div class="ind-ev-row" style="border-bottom:none"><span class="ind-ev-label">'+esc(aA)+' runs</span><div class="ind-ev-vals" style="color:'+aRunCol+'">'+(aRuns6.length>0?aRuns6.join(', ')+' pts':'none')+'</div></div>';
       }
-      var hFGM2=sum(hPl,'fgm'),hFGA2=sum(hPl,'fga'),aFGM2=sum(aPl,'fgm'),aFGA2=sum(aPl,'fga');
+      var hFGM2=tStat('home','fgm'),hFGA2=tStat('home','fga'),aFGM2=tStat('away','fgm'),aFGA2=tStat('away','fga');
       html+=evRow('FG%',hFGA2>0?(hFGM2/hFGA2*100).toFixed(1)+'%':'--',aFGA2>0?(aFGM2/aFGA2*100).toFixed(1)+'%':'--');
     }
   } else {
@@ -1811,6 +1821,11 @@ async function hydrateFromServerSnapshots(gameId){
     if(usable.length===0)return;
     cs._allSnapshots=usable; // store full array for drawer history
     var latest=usable[usable.length-1];
+
+    // Store raw_stats_json for WNBA analyze button
+    if(latest.raw_stats_json){
+      cs._latestRawStats=typeof latest.raw_stats_json==='string'?JSON.parse(latest.raw_stats_json):latest.raw_stats_json;
+    }
 
     // Server floor — always update from latest snapshot (server has SR-enriched data)
     if(latest.floor_score!=null){
@@ -2270,17 +2285,31 @@ async function triggerAnalysis(gameId){
   var hA=g?.home?.alias||'HOME',aA=g?.away?.alias||'AWAY';
 
   try{
-    // 1. Fetch BDL box score for summaryData
-    var bdlId=bdlGameMap[gameId];
+    // 1. WNBA: build summaryData from server raw_stats_json + PBP player stats
     var summaryData=null;
-    if(bdlId){
-      try{
-        var d=getSlateDate(dateOffset);
-        var boxRes=await bdl('box_scores',{date:d.str});
-        var boxArr=boxRes.data||[];
-        var match=boxArr.find(function(b){return b.id===bdlId;});
-        if(match)summaryData=buildV3Summary(match);
-      }catch(e){console.warn('[ANALYZE] BDL box score fetch failed:',e.message);}
+    if(cs._latestRawStats){
+      var raw=cs._latestRawStats;
+      var hE=ESPN_ALIAS_MAP[g?.home?.alias]||g?.home?.alias||'';
+      var aE=ESPN_ALIAS_MAP[g?.away?.alias]||g?.away?.alias||'';
+      function _mapS(s){
+        if(!s)return{};
+        var fga=s.fga||1,fgm=s.fgm||0,fg3m=s.fg3m||0,ftm=s.ftm||0;
+        return{field_goals_made:fgm,field_goals_att:s.fga||0,three_points_made:fg3m,three_points_att:s.fg3a||0,
+          two_points_made:fgm-fg3m,two_points_att:(s.fga||0)-(s.fg3a||0),free_throws_made:ftm,free_throws_att:s.fta||0,
+          assists:s.ast||0,steals:s.stl||0,blocks:s.blk||0,offensive_rebounds:s.oreb||0,
+          turnovers:s.to||0,total_turnovers:s.to||0,personal_fouls:s.fd||0,
+          points:(fgm-fg3m)*2+fg3m*3+ftm,points_in_paint:s.paint||0,points_off_turnovers:s.pot||0,
+          second_chance_pts:s.scp||0,fast_break_pts:s.fbp||0,possessions:s.poss||0,biggest_lead:s.bigLead||0,bench_points:s.bench||0,
+          effective_fg_pct:+((fgm+0.5*fg3m)/fga*100).toFixed(1),field_goals_pct:+(fgm/fga*100).toFixed(1),
+          three_points_pct:s.fg3a>0?+(fg3m/(s.fg3a)*100).toFixed(1):0,
+          offensive_points_per_possession:s.poss>0?+(((fgm-fg3m)*2+fg3m*3+ftm)/s.poss).toFixed(2):0};
+      }
+      var _pbs=cs._pbpPlayerStats;
+      var hPlayers=_pbs&&_pbs.home?_pbs.home.players.map(function(p){return{full_name:p.name,played:true,active:true,statistics:{field_goals_made:p.fgm,field_goals_att:p.fga,three_points_made:p.fg3m,three_points_att:p.fg3a,free_throws_made:p.ftm,free_throws_att:p.fta,assists:p.ast,steals:p.stl,blocks:p.blk,turnovers:p.to,points:p.pts}};}):[];
+      var aPlayers=_pbs&&_pbs.away?_pbs.away.players.map(function(p){return{full_name:p.name,played:true,active:true,statistics:{field_goals_made:p.fgm,field_goals_att:p.fga,three_points_made:p.fg3m,three_points_att:p.fg3a,free_throws_made:p.ftm,free_throws_att:p.fta,assists:p.ast,steals:p.stl,blocks:p.blk,turnovers:p.to,points:p.pts}};}):[];
+      summaryData={_dataSource:'server_raw',status:'inprogress',quarter:g?.period||0,clock:g?.clock||'',
+        home:{name:g?.home?.name||'',alias:hE,points:g?.homePoints||0,statistics:_mapS(raw.home),players:hPlayers},
+        away:{name:g?.away?.name||'',alias:aE,points:g?.awayPoints||0,statistics:_mapS(raw.away),players:aPlayers}};
     }
     if(!summaryData){cs.analyzing=false;renderCard(gameId);console.error('[ANALYZE] No summary data available');return;}
 

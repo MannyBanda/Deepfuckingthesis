@@ -483,6 +483,30 @@ var SYSTEM_PROMPT = 'You are an NBA structural analyst. You receive pre-computed
 + 'DISAGREEMENT: [NONE | 1-2 sentences explaining where you disagree with mechanical conviction and why]\n\n'
 + 'Be concise. Decisive when the indicators are clear. Your value is context and projection, not recomputing what the engine already knows.';
 
+var SYSTEM_PROMPT_WNBA_OVERRIDE = '\n\n'
++ '══ WNBA-SPECIFIC OVERRIDES (these supersede any NBA-specific guidance above) ══\n\n'
++ 'You are analyzing a WNBA game (10-minute quarters, 40-minute game, 30-second shot clock).\n\n'
++ 'INDICATOR NAMES & WEIGHTS:\n'
++ '  I1 Disruption (15%) — steals, forced TOs, deflections. Turnovers are INVERSE in WNBA: team losing TO battle wins 63% (opposite of NBA).\n'
++ '  I2 Perimeter/FT (20%) — FTA, FTM, 3PA, 3PM. NOT interior — paint is noise in WNBA (AUC 0.500).\n'
++ '  I3 Shot Quality (30%) — THE ANCHOR. eFG%, 3PT%, assists, assist ratio. Losing I3 = 17.6% comeback rate (vs NBA 49%). Fatal, not recoverable variance.\n'
++ '  I4 Game Control (25%) — biggest lead gap, per-quarter margins, bench production.\n'
++ '  I5 Momentum (10%) — runs, scoring bursts. Low weight — AUC 0.500.\n\n'
++ 'CONVICTION COMBOS:\n'
++ '  DOMINANT = I3+I4 (99.1%) or 4+ indicators\n'
++ '  STRONG = I3+I2 or I4+I2\n'
++ '  I4+I5 is NOT a killer pair (I5 is noise)\n'
++ '  No validated danger combos in WNBA\n\n'
++ 'SIGNAL TRUST HIERARCHY:\n'
++ '  Q2: Floor ≈ XGB > MC\n'
++ '  Q3: MC ≈ XGB > Floor\n'
++ '  Q4: MC >> XGB >> Floor. MC right 82.1% when disagreeing with floor.\n'
++ '  Floor is NEVER a gate for WNBA decisions — narrative context only.\n'
++ '  MC underestimates WNBA Q4 by 8-14pp. MC 0.75 ≈ 89% actual.\n\n'
++ 'Q4 BUY: Nearly dead. XGB < 0.45 = 2% comeback. Only XGB ≥ 0.70 viable (75%).\n'
++ 'BUY trailing: 1-9 points max (not 1-15 like NBA).\n'
++ 'Compound establishment: MC ≥ 0.85 + XGB ≥ 0.60 (floor demoted).\n';
+
 // ══════════════════════════════════════════════════════════════════════════════
 // HANDLER
 // ══════════════════════════════════════════════════════════════════════════════
@@ -510,6 +534,7 @@ exports.handler = async function(event) {
 
   try {
     var body = JSON.parse(event.body);
+    var league = body.league || 'nba';
     var summaryData = body.summaryData;
     var thesis = body.thesis;
     var homeTeam = body.homeTeam;
@@ -998,7 +1023,7 @@ exports.handler = async function(event) {
       body: JSON.stringify({
         model: 'claude-opus-4-6',
         max_tokens: 2500,
-        system: SYSTEM_PROMPT,
+        system: league === 'wnba' ? SYSTEM_PROMPT + SYSTEM_PROMPT_WNBA_OVERRIDE : SYSTEM_PROMPT,
         messages: [{ role: 'user', content: userPrompt }],
       }),
     });
