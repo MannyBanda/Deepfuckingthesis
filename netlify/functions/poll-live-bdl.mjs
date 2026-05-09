@@ -6189,11 +6189,18 @@ export default async function(req) {
       }
       } // end bdlHasBoxScores guard
 
+      // Helper: translate SR aliases → BDL aliases for game ID lookup
+      const getBdlGid = (g) => {
+        const hB = cfg.aliasMap?.[g.home_alias] || g.home_alias;
+        const aB = cfg.aliasMap?.[g.away_alias] || g.away_alias;
+        return bdlGameIds[`${aB}@${hB}`] || bdlGameIds[`${g.away_alias}@${g.home_alias}`];
+      };
+
       // Batch lineups for all games we don't have cached
       const lineupsNeeded = potentiallyLive.filter(g => {
-        const bdlGid = bdlGameIds[`${g.away_alias}@${g.home_alias}`];
+        const bdlGid = getBdlGid(g);
         return bdlGid && !_serverLineupsCache[bdlGid];
-      }).map(g => bdlGameIds[`${g.away_alias}@${g.home_alias}`]);
+      }).map(g => getBdlGid(g));
       if (lineupsNeeded.length > 0) {
         try {
           const luResult = await bdlFetch(`${cfg.bdlPrefix}/v1/lineups?${lineupsNeeded.map(id => 'game_ids[]=' + id).join('&')}&per_page=100`);
@@ -6212,7 +6219,7 @@ export default async function(req) {
       // ── 4. Process each potentially live game — BDL box_scores + plays ──
       // Fetch plays for all live games in parallel (BDL: 600 req/min)
       const playsFetches = potentiallyLive.map(g => {
-        const bdlGid = bdlGameIds[`${g.away_alias}@${g.home_alias}`];
+        const bdlGid = getBdlGid(g);
         if (!bdlGid) return Promise.resolve(null);
         return bdlFetch(`${cfg.bdlPrefix}/v1/plays?game_id=${bdlGid}&per_page=500`).catch(() => null);
       });
@@ -6230,12 +6237,14 @@ export default async function(req) {
         const hA = game.home_alias || 'HOME';
         const aA = game.away_alias || 'AWAY';
         const matchup = `${aA}@${hA}`;
-        const bdlGid = bdlGameIds[matchup];
+        const bdlGid = getBdlGid(game);
 
         try {
           if (!bdlGid) {
-            // dryRun preseason: always insert game row from SR data, ESPN WP is bonus
-            if (cfg.dryRun) {
+            if (league === 'wnba') {
+              // WNBA: proceed without BDL — SR summary is primary data source
+              log(`${matchup}: no BDL game ID — using SR-only path`);
+            } else if (cfg.dryRun) {
               try {
                 await sql`INSERT INTO games (id, league, home_team, away_team, status) 
                   VALUES (${game.id}, ${league}, ${hA}, ${aA}, ${'preseason'})
@@ -6248,10 +6257,11 @@ export default async function(req) {
                 log(`${matchup}: dryRun — game saved, no ESPN mapping`);
               }
               liveCount++;
+              continue;
             } else {
               log(`${matchup}: no BDL game ID mapped — skipping`);
+              continue;
             }
-            continue;
           }
 
           // Find data source for this game
