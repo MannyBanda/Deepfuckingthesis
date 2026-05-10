@@ -61,6 +61,10 @@ exports.handler = async (event) => {
           awayAbbr: away?.team?.abbreviation || '',
           homeName: home?.team?.displayName || '',
           awayName: away?.team?.displayName || '',
+          homeScore: home?.score ? parseInt(home.score) : null,
+          awayScore: away?.score ? parseInt(away.score) : null,
+          period: ev.status?.period || 0,
+          clock: ev.status?.displayClock || '',
           status: ev.status?.type?.name || '',
           shortDetail: ev.status?.type?.shortDetail || '',
         };

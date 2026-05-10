@@ -714,7 +714,29 @@ async function loadSchedule(){
 // ── POLL (10s — score updates + client-side indicator compute) ──
 async function refreshLiveCards(){
   try{
-    var updated=false;
+    // ESPN live score refresh — faster than BDL plays
+    try{
+      var d=getSlateDate(dateOffset);var dateStr=d.year+d.month+d.day;
+      var er=await fetch(FN+'espn-data?type=scoreboard&league=wnba&date='+dateStr);
+      if(er.ok){
+        var ed=await er.json();var eg=ed.games||[];
+        games.forEach(function(g){
+          var hA=g.home?.alias||'',aA=g.away?.alias||'';
+          var hE=ESPN_ALIAS_MAP[hA]||hA,aE=ESPN_ALIAS_MAP[aA]||aA;
+          var match=eg.find(function(e){return(e.homeAbbr===hA||e.homeAbbr===hE)&&(e.awayAbbr===aA||e.awayAbbr===aE);});
+          if(!match)return;
+          if(!espnGameMap[g.id])espnGameMap[g.id]=match.espnId;
+          if(match.homeScore!=null)g.homePoints=match.homeScore;
+          if(match.awayScore!=null)g.awayPoints=match.awayScore;
+          if(match.period)g.period=match.period;
+          if(match.clock)g.clock=match.clock;
+          var ms=(match.status||'').toLowerCase();
+          if(ms==='status_final')g.status='closed';
+          else if(ms==='status_in_progress'||ms==='status_end_period')g.status='inprogress';
+        });
+      }
+    }catch(e){console.warn('[ESPN-SCORE]',e.message);}
+    var updated=games.some(function(g){return getState(g)==='LIVE';});
     for(var gi=0;gi<games.length;gi++){
       var g=games[gi];
       if(getState(g)!=='LIVE')continue;
