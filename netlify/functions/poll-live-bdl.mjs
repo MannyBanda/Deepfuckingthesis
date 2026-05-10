@@ -1847,12 +1847,17 @@ function parseBDLPBPServer(plays, homeAbbr, awayAbbr) {
     };
   }
 
+  // Build scoringEvents from made shots
+  const scoringEvents = shots.filter(s => s.m).map(s => ({tm: s.tm, pts: s.is3 ? 3 : 2, p: s.p, q: s.q, z: s.z}));
+
   return {
     home: aggTeam(hA), away: aggTeam(aA),
     homeAlias: hA, awayAlias: aA,
     totalShots: shots.length, totalTOs: turnovers.length,
     runs: runs.slice(0, 10),
     runs6,
+    scoringEvents,
+    raw: { shots, turnovers },
     perQuarter: buildPerQuarterMetrics(shots, turnovers, hA, aA),
     pbpPeriod: lastP, pbpAge: 0,
     possLog: buildPossLogServer(sorted, hA, aA),
@@ -4508,6 +4513,7 @@ async function computeServerContext(sql, game, league, summary, ind, espnWP, hA,
           totalShots: pbpResult.totalShots, totalTOs: pbpResult.totalTOs,
           runs: pbpResult.runs, runs6: pbpResult.runs6,
           scoringEvents: pbpResult.scoringEvents,
+          raw: pbpResult.raw,
           _bdl: pbpResult._bdl,
         };
         // Build box_score_json from summary stats
@@ -5733,7 +5739,8 @@ export default async function(req) {
 
       // Parse PBP
       const playsResp = await bdlFetch(`/nba/v1/plays?game_id=${bdlGame.id}`);
-      const pbpResult = parseBDLPBPServer(playsResp?.data || [], hA, aA);
+      const _testCfg = LEAGUES['nba'];
+      const pbpResult = parseBDLPBPServer(playsResp?.data || [], _testCfg.aliasMap[hA]||hA, _testCfg.aliasMap[aA]||aA);
 
       // Build summary
       const summary = buildSummaryFromBDLServer(bdlGame, pbpResult, null);
@@ -5918,11 +5925,13 @@ export default async function(req) {
               const playsResp = await bdlFetch(`/nba/v1/plays?game_id=${bdlGame.id}&per_page=500`);
               const plays = playsResp?.data || [];
               if (plays.length < 10) { skipped++; continue; }
-              pbpResult = parseBDLPBPServer(plays, hA, aA);
+              pbpResult = parseBDLPBPServer(plays, cfg.aliasMap[hA]||hA, cfg.aliasMap[aA]||aA);
               pbpSave = {
                 home: pbpResult.home, away: pbpResult.away,
                 totalShots: pbpResult.totalShots, totalTOs: pbpResult.totalTOs,
                 runs: pbpResult.runs, runs6: pbpResult.runs6,
+                scoringEvents: pbpResult.scoringEvents,
+                raw: pbpResult.raw,
                 perQuarter: pbpResult.perQuarter,
                 _bdl: pbpResult._bdl,
               };
@@ -6053,11 +6062,40 @@ export default async function(req) {
       let cachedGames = null; // [{id, scheduled, home_alias, away_alias, status}]
 
       if (pollState && pollState.schedule_json) {
-        // Use cached schedule — NO SR call
+        // Use cached schedule — NO SR call (unless ESPN fallback was used)
         cachedGames = typeof pollState.schedule_json === 'string'
           ? JSON.parse(pollState.schedule_json)
           : pollState.schedule_json;
-        log(`${league.toUpperCase()}: using cached schedule (${cachedGames.length} games)`);
+        // Detect ESPN-sourced schedule (numeric IDs) — retry SR for proper UUIDs
+        // Only safe to swap IDs BEFORE any game data is stored (pre-first-tip)
+        const _hasEspnIds = cachedGames.length > 0 && cachedGames.every(g => /^\d+$/.test(String(g.id)));
+        const _allPreTip = cachedGames.every(g => g.status === 'scheduled');
+        if (_hasEspnIds && _allPreTip) {
+          log(`${league.toUpperCase()}: cached schedule has ESPN IDs (all pre-tip) — retrying SR`);
+          try {
+            const schedule = await srFetch(league, `games/${d.year}/${pad(d.month)}/${pad(d.day)}/schedule.json`);
+            const srGames = schedule.games || [];
+            if (srGames.length > 0) {
+              cachedGames = srGames.map(g => ({
+                id: g.id, scheduled: g.scheduled || null,
+                home_alias: g.home?.alias || '', away_alias: g.away?.alias || '',
+                home_name: g.home?.name || '', away_name: g.away?.name || '',
+                status: (g.status || 'scheduled').toLowerCase(),
+              }));
+              const tips = cachedGames.filter(g => g.scheduled).map(g => new Date(g.scheduled)).sort((a, b) => a - b);
+              const firstTip = tips.length > 0 ? tips[0].toISOString() : null;
+              const lastTip = tips.length > 0 ? tips[tips.length - 1].toISOString() : null;
+              await sql`UPDATE poll_state SET schedule_json = ${JSON.stringify(cachedGames)}, first_tip = ${firstTip}, last_tip = ${lastTip}, fetched_at = NOW() WHERE league = ${league} AND date = ${dateKey}`;
+              log(`${league.toUpperCase()}: SR retry succeeded — ${cachedGames.length} games with UUIDs`);
+            } else {
+              log(`${league.toUpperCase()}: SR retry returned 0 games — keeping ESPN IDs`);
+            }
+          } catch (e) {
+            log(`${league.toUpperCase()}: SR retry failed (${e.message}) — keeping ESPN IDs`);
+          }
+        } else {
+          log(`${league.toUpperCase()}: using cached schedule (${cachedGames.length} games${_hasEspnIds?' [ESPN IDs — games in progress, keeping]':''})`);
+        }
       } else {
         // First fetch today — single SR schedule call, cache to DB
         log(`${league.toUpperCase()}: fetching schedule (first call today)...`);
@@ -6425,7 +6463,7 @@ export default async function(req) {
             try {
               const playsResult = allPlaysResults[gi];
               const plays = playsResult?.data || [];
-              const pbpResult = parseBDLPBPServer(plays, hA, aA);
+              const pbpResult = parseBDLPBPServer(plays, cfg.aliasMap[hA]||hA, cfg.aliasMap[aA]||aA);
               const lineupsArr = _serverLineupsCache[bdlGid] || null;
               const finalSummary = league === 'wnba' ? _srSummary : buildSummaryFromBDLServer(boxScore, pbpResult, lineupsArr);
               const homeStats = finalSummary.home?.statistics || {};
@@ -6596,7 +6634,7 @@ export default async function(req) {
           // Parse PBP
           const playsResult = allPlaysResults[gi];
           const plays = playsResult?.data || [];
-          const pbpResult = parseBDLPBPServer(plays, hA, aA);
+          const pbpResult = parseBDLPBPServer(plays, cfg.aliasMap[hA]||hA, cfg.aliasMap[aA]||aA);
           const lineupsArr = _serverLineupsCache[bdlGid] || null;
 
           // Build SR-shaped summary (WNBA: already fetched from SR)
