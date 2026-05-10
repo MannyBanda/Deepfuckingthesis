@@ -458,7 +458,7 @@ var SYSTEM_PROMPT = 'You are an NBA structural analyst. You receive pre-computed
 + '    WAVE = oscillating collapse, 60% precision. Flag as risk, do not confirm.\n'
 + '    NORMALIZED = rates recovered after initial deterioration. Hold validated — position stronger for having been tested.\n'
 + '    Investigation active (no pattern yet) = await classification before acting.\n'
-+ '    MC_COLLAPSE alert sent = subscribers already notified of structural collapse.\n\n'
++ '    MC_COLLAPSE alert sent = subscribers already notified of structural stress.\n\n'
 + 'DATA QUALITY NOTE — PAINT POINTS:\n'
 + '  SR often delays or zeros out points_in_the_paint in the game summary JSON.\n'
 + '  Use DEPTH AUDIT rim section or LEAD COMPOSITION structural points as the authoritative paint signal.\n\n'
@@ -996,7 +996,7 @@ exports.handler = async function(event) {
         mcSection += 'Status: ' + (inv.pattern ? inv.pattern : 'INVESTIGATING') + ' | Ctrl: ' + (inv.ctrlTeam || '?') + ' | Triggered: Q' + (inv.triggerPeriod || '?') + ' ' + (inv.triggerClock || '?') + ' at margin +' + (inv.triggerMargin || '?') + '\n';
         if (inv.currentMC != null) mcSection += 'Current investigation MC: ' + (inv.currentMC * 100).toFixed(1) + '%\n';
         if (inv.verdicts && inv.verdicts.length > 0) mcSection += 'Verdict sequence: ' + inv.verdicts.join(' > ') + '\n';
-        if (inv.pattern === 'CLEAN') mcSection += 'CLEAN = sustained structural collapse confirmed. Post-trigger rates never recovered. MC > XGB > Floor when active.\n';
+        if (inv.pattern === 'CLEAN') mcSection += 'CLEAN = sustained structural stress confirmed. Post-trigger rates never recovered. MC > XGB > Floor when active.\n';
         else if (inv.pattern === 'WAVE') mcSection += 'WAVE = oscillating collapse. Rates deteriorated, recovered, then deteriorated again. 60% precision — flag as risk, do not confirm.\n';
         else if (inv.pattern === 'NORMALIZED') mcSection += 'NORMALIZED = rates recovered after initial deterioration. Hold validated — position is stronger for having been tested.\n';
         else if (!inv.pattern) mcSection += 'Investigation in progress — awaiting enough post-trigger data for pattern classification.\n';

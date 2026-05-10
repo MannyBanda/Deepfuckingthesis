@@ -71,17 +71,17 @@ const READABLE = {
   'POSITION_OPEN': 'Position Open', 'BWC_EDGE': 'Holding', 'VALUE': 'Entry Value',
   'EXIT': 'Exit', 'THESIS_ALIVE': 'Second Chance', 'POSITION_RECOVERING': 'Strengthening',
   'POSITION_SAFE': 'Position Safe', 'AUTO_ANALYSIS': 'Position Update',
-  'MC_COLLAPSE': 'Structural Collapse',
+  'MC_COLLAPSE': 'Structural Stress',
   'TRACKING_INVALIDATED': 'Tracking Invalidated',
   'BUY': 'Buy', 'TRACKING': 'Tracking',
 };
 const readable = (t) => READABLE[t] || t;
 
 // Hold-type alerts (subscriber has position, system gave confidence or update)
-const HOLD_TYPES = ['POSITION_OPEN', 'BWC_EDGE', 'POSITION_SAFE', 'POSITION_RECOVERING', 'AUTO_ANALYSIS'];
+const HOLD_TYPES = ['POSITION_OPEN', 'BWC_EDGE', 'POSITION_SAFE', 'POSITION_RECOVERING', 'AUTO_ANALYSIS', 'MC_COLLAPSE'];
 
 // Exit-class alerts (system told subscriber to exit or invalidated the position)
-const EXIT_TYPES = ['EXIT', 'TRACKING_INVALIDATED', 'XGB_THESIS_INVALIDATED', 'MC_COLLAPSE'];
+const EXIT_TYPES = ['EXIT', 'TRACKING_INVALIDATED', 'XGB_THESIS_INVALIDATED'];
 
 // Dedup pattern detection in agent reasoning
 const DEDUP_PATTERNS = ['duplicate', 'already sent', 'already SENT', 'bettor already has', 'already received',

@@ -5617,7 +5617,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
             const sameTeam = pp.control_team === ind.controlTeam;
             const floorDelta = ind.score - Number(pp.floor_score);
             const statusWord = !sameTeam ? 'At Risk' : floorDelta > 0.1 ? 'Improving' : floorDelta < -0.1 ? 'Fading' : 'Holding';
-            const _alertReadable = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Lead Compressing','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','MC_COLLAPSE':'Structural Collapse','TRACKING_INVALIDATED':'Tracking Invalidated'}[pp.alert_type] || pp.alert_type;
+            const _alertReadable = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Lead Compressing','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','MC_COLLAPSE':'Structural Stress','TRACKING_INVALIDATED':'Tracking Invalidated'}[pp.alert_type] || pp.alert_type;
             const ntfyTitle = `UPDATE: Your Q${pp.period} ${_alertReadable} on ${pp.control_team} is ${statusWord}`;
             // Agent writes the body via BODY: response, use it if available
             const agentBody = agentResult?.body || '';
@@ -5638,7 +5638,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
           } else {
             const scoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${period} ${clock}`;
             const pp = priorPosition;
-            const _alertReadableW = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Lead Compressing','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','MC_COLLAPSE':'Structural Collapse','TRACKING_INVALIDATED':'Tracking Invalidated'}[pp.alert_type] || pp.alert_type;
+            const _alertReadableW = {'POSITION_OPEN':'Position Open','BWC_EDGE':'Lead Compressing','VALUE':'Entry Value','EXIT':'Exit','THESIS_ALIVE':'Second Chance','POSITION_RECOVERING':'Strengthening','POSITION_SAFE':'Position Safe','BUY':'Buy','BUY WINDOW CLOSING':'Buy Window Closing','MC_COLLAPSE':'Structural Stress','TRACKING_INVALIDATED':'Tracking Invalidated'}[pp.alert_type] || pp.alert_type;
             const ntfyTitle = `WATCH: Your Q${pp.period} ${_alertReadableW} on ${pp.control_team} Needs Attention`;
             const agentBody = agentResult?.body || '';
             const ntfyBody = scoreLine
@@ -8282,9 +8282,9 @@ export default async function(req) {
                         const _mcInvIsHome = lt.mc.ctrl_is_home;
                         const _mcInvOpp = _mcInvIsHome ? aA : hA;
                         const _mcHasPosition = lt.bwc_fired?.team === _mcInvTeam || lt.buy_position?.team === _mcInvTeam;
-                        const _mcPosNote = _mcHasPosition ? `\nActive ${lt.compound_tier || lt.cp_peak_rank || '?'} position on ${_mcInvTeam} — consider exit.` : '';
+                        const _mcPosNote = _mcHasPosition ? `\nActive ${lt.compound_tier || lt.cp_peak_rank || '?'} position on ${_mcInvTeam} — monitoring. EXIT will fire if structural breakdown confirmed.` : '';
                         const _mcInvMargin = _mcInvIsHome ? (Number(ind.homePts) - Number(ind.awayPts)) : (Number(ind.awayPts) - Number(ind.homePts));
-                        const _mcBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\n${_mcInvTeam} structural collapse — held control at Q${lt.mc.trigger_period} ${lt.mc.trigger_clock} but post-trigger possession rates show sustained deterioration. MC: ${(_mcInv.winProb * 100).toFixed(1)}%. Floor (${ind.score.toFixed(2)}) and XGB (${_xgbWinProb != null ? (_xgbWinProb * 100).toFixed(0) + '%' : '?'}) may be anchored to early-game data.${_mcPosNote}`;
+                        const _mcBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\n${_mcInvTeam} structural stress detected — held control at Q${lt.mc.trigger_period} ${lt.mc.trigger_clock} but post-trigger possession rates show sustained deterioration. MC: ${(_mcInv.winProb * 100).toFixed(1)}%. Floor (${ind.score.toFixed(2)}) and XGB (${_xgbWinProb != null ? (_xgbWinProb * 100).toFixed(0) + '%' : '?'}) may be anchored to early-game data.${_mcPosNote}`;
                         const _mcPriority = _mcHasPosition ? 5 : 4;
                         try {
                           const _mcCSust = sust?.[_mcInvIsHome ? 'home' : 'away']?.tier || null;
@@ -8292,7 +8292,7 @@ export default async function(req) {
                           await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
                             VALUES (${game.id}, ${league}, ${'MC_COLLAPSE'}, ${currentPeriod}, ${clock}, ${_mcInvTeam}, ${ind.score}, ${_mcInvMargin}, ${_mcInvMargin < 0}, ${null}, ${null}, ${spreadVal}, ${snapTp?.classification || null}, ${snapLs?.classification || null}, ${_mcCSust}, ${_mcOSust}, ${_mcInv.winProb}, ${'FIRED'}, ${'SEND'}, ${_mcBody}, ${ctrlI(ind)[0]}, ${ctrlI(ind)[1]}, ${ctrlI(ind)[2]}, ${ctrlI(ind)[3]}, ${ctrlI(ind)[4]}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${true}, ${_mcInvTeam}, ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
                         } catch (e) { log(`${matchup}: MC_COLLAPSE DB insert error: ${e.message}`); }
-                        await sendNtfy(`STRUCTURAL COLLAPSE — ${matchup}`, _mcBody, _mcPriority);
+                        await sendNtfy(`STRUCTURAL STRESS — ${matchup}`, _mcBody, _mcPriority);
                         log(`${matchup}: MC_COLLAPSE ntfy sent — investigated team: ${_mcInvTeam}`);
                       }
                       // NORMALIZED or FALSE_ALARM → reset for re-trigger
