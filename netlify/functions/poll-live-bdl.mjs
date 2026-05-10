@@ -465,6 +465,7 @@ return 'You are a WNBA structural analyst. You receive pre-computed mechanical i
 + '  CRITICAL: Floor is NEVER a decision gate in WNBA.\n'
 + '  Floor HIGH + MC+XGB LOW = 20.2% accuracy (floor confidently wrong).\n'
 + '  MC+XGB HIGH + Floor LOW = 83-86% (compound correct regardless of floor).\n'
++ '  TRAILING TEAM MC Cum: MC Cum for trailing teams is mechanically depressed by the deficit. MC Cum > 0.45 for a trailing team means structural rates are strong despite the deficit penalty. Do NOT suppress BUY on MC Cum alone when > 0.45.\n'
 + '  When MC investigation active (CLEAN/WAVE): MC PBP > everything.\n\n'
 + 'SUSTAINABILITY RULES:\n'
 + '  - LOCKED IN/DURABLE = shooting at or below baseline. Sustainable.\n'
@@ -561,6 +562,7 @@ return 'You are an NBA structural analyst. You receive pre-computed mechanical i
 + '  Q3: MC Cum ~ XGB > Floor. MC calibration tightens. Floor starts anchoring.\n'
 + '  Q4: MC Cum > XGB > Floor. MC Cum 70-80% converts at 75.3% (perfect calibration). MC>70% = 91.9% accurate.\n'
 + '    Floor least reliable — cumulative anchoring at maximum. Trust MC Cum over floor for FWP in Q4.\n'
++ '  TRAILING TEAM MC Cum: MC Cum for trailing teams is mechanically depressed by the deficit. MC Cum > 0.45 for a trailing team means structural rates are strong despite the deficit penalty.\n'
 + '  When MC investigation is active (CLEAN/WAVE): MC PBP > everything, regardless of quarter.\n\n'
 + '  MC INVESTIGATION PATTERNS (when provided):\n'
 + '  CLEAN = sustained collapse, 72.6% precision Q3+. Strongest signal.\n'
@@ -798,6 +800,7 @@ ${ctx.league === 'wnba' ? `SIGNAL TRUST HIERARCHY (3,432 checkpoints, 312 games)
   CRITICAL: Floor is NEVER a decision gate in WNBA.
   Floor HIGH + MC+XGB LOW = 20.2% (floor confidently wrong). MC+XGB HIGH + Floor LOW = 83-86%.
   EXIT CONFIRMATION: Floor < 0.55 at EXIT = 100% correct. Floor 0.70+ at EXIT = only 66.7% — floor does NOT deny EXIT when high.
+  TRAILING TEAM MC Cum: MC Cum for trailing teams is mechanically depressed by the deficit — remaining possessions cannot reliably overcome even a small gap in simulation. MC Cum > 0.45 for a trailing team means structural rates are strong despite the deficit penalty. Do NOT suppress BUY alerts on MC Cum alone when MC Cum > 0.45.
   When MC investigation active (CLEAN/WAVE): MC PBP > everything.` : `SIGNAL TRUST HIERARCHY (14,440 checkpoint backtest, 1,233 games):
   Four signals: Floor (cumulative indicators), XGB (2Q windowed structural model), MC PBP (20-possession canary), MC Cum (game-rate probability anchor).
   MC Cum is the best single probability signal (AUC 0.79). XGB 2Q is the best structural classifier (AUC 0.79). Floor anchors stale early-game data.
@@ -808,6 +811,7 @@ ${ctx.league === 'wnba' ? `SIGNAL TRUST HIERARCHY (3,432 checkpoints, 312 games)
     Floor least reliable — cumulative anchoring at maximum. Trust MC Cum over floor for decisions in Q4.
   When all 3 agree high (MC+XGB+Floor): Q4 95.9% accuracy.
   EXIT CONFIRMATION: MC Cum < 0.45 confirms EXIT = 84% accuracy. MC Cum > 0.55 denies EXIT = only 62% — reconsider.
+  TRAILING TEAM MC Cum: MC Cum for trailing teams is mechanically depressed by the deficit — remaining possessions cannot reliably overcome even a 1-2 point gap in simulation. MC Cum > 0.45 for a trailing team means structural rates are strong despite the deficit penalty. Do NOT suppress BUY alerts on MC Cum alone when MC Cum > 0.45. The structural edge is already captured in floor and XGB — MC Cum re-penalizes the deficit on top of those reads.
   When MC investigation active (CLEAN/WAVE): MC PBP > everything, regardless of quarter.`}
 
 FLOOR TRAJECTORY:
