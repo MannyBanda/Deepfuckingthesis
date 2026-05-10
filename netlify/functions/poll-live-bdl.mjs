@@ -1332,10 +1332,10 @@ async function bdlFetch(path) {
 async function bdlGameData(league, dateStr) {
   const cfg = LEAGUES[league];
   // dateStr format: YYYY-MM-DD
-  // NCAAMB: BDL uses UTC dates, so late-ET games appear on the next UTC day.
+  // NCAAMB/WNBA: BDL uses UTC dates, so late-ET games appear on the next UTC day.
   // Fetch both the requested date and the next day, merge results.
   const dates = [dateStr];
-  if (league === 'ncaamb') {
+  if (league === 'ncaamb' || league === 'wnba') {
     const dt = new Date(dateStr + 'T12:00:00Z');
     dt.setUTCDate(dt.getUTCDate() + 1);
     const nd = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth()+1).padStart(2,'0')}-${String(dt.getUTCDate()).padStart(2,'0')}`;
