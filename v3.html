@@ -516,6 +516,12 @@ const bdlGameMap = {};
 var dbAnalysisCache = {};
 var autoAnalysisCache = {};
 var dbSnapshotCache = {};
+// Reverse-map DB game ID → client game ID (SR UUID) when ESPN fallback used
+function _clientGid(dbGid){
+  if(cardState[dbGid])return dbGid; // direct match
+  for(var k in cardState){if(cardState[k]._dbGameId===dbGid)return k;}
+  return dbGid; // fallback
+}
 var _ssExpanded = {}; // track expanded sonnet signal per game
 var _lastThesisResync = 0;
 var _lastSnapshotResync = 0;
@@ -1830,7 +1836,7 @@ async function syncAnalysesFromDB(){
       var pred=null,ind=null;
       if(row.prediction_json){try{pred=typeof row.prediction_json==='string'?JSON.parse(row.prediction_json):row.prediction_json;}catch(e){}}
       if(row.indicators_json){try{ind=typeof row.indicators_json==='string'?JSON.parse(row.indicators_json):row.indicators_json;}catch(e){}}
-      dbAnalysisCache[row.game_id]={prediction:pred,sonnetIndicators:ind,analysisTime:row.ts?new Date(row.ts).getTime():0,analysis:row.raw_text||'',control_team:row.control_team,control_score:row.control_score,fwp:row.fwp,edge:row.edge,signal:row.signal,sustainability:row.sustainability};
+      dbAnalysisCache[_clientGid(row.game_id)]={prediction:pred,sonnetIndicators:ind,analysisTime:row.ts?new Date(row.ts).getTime():0,analysis:row.raw_text||'',control_team:row.control_team,control_score:row.control_score,fwp:row.fwp,edge:row.edge,signal:row.signal,sustainability:row.sustainability};
     });
     if(rows.length>0)console.log('[DB] Cached',rows.length,'analyses from DB');
 
@@ -1869,7 +1875,7 @@ async function syncCalibrationAnalyses(){
     var r=await fetch(FN+'db-api?action=get_auto_analyses&game_ids='+encodeURIComponent(ids));
     if(!r.ok)return;var data=await r.json();
     var grouped=data.analyses||{};
-    Object.keys(grouped).forEach(function(gid){autoAnalysisCache[gid]=grouped[gid];});
+    Object.keys(grouped).forEach(function(gid){autoAnalysisCache[_clientGid(gid)]=grouped[gid];});
     if(Object.keys(grouped).length>0){
       console.log('[DB] Cached auto analyses for',Object.keys(grouped).length,'games');
       applyAutoAnalysesToCards();
@@ -1979,7 +1985,7 @@ async function syncLatestSnapshotsFromDB(){
     var r=await fetch(FN+'db-api?action=get_latest_snapshots&game_ids='+encodeURIComponent(ids));
     if(!r.ok)return;var data=await r.json();
     var snaps=data.snapshots||{};
-    Object.keys(snaps).forEach(function(gid){dbSnapshotCache[gid]=snaps[gid];});
+    Object.keys(snaps).forEach(function(gid){dbSnapshotCache[_clientGid(gid)]=snaps[gid];});
     if(Object.keys(snaps).length>0)console.log('[DB] Cached latest snapshots for',Object.keys(snaps).length,'games');
   }catch(e){console.warn('[DB] Snapshot sync failed:',e.message);}
 }
@@ -1991,7 +1997,7 @@ async function syncThesesFromDB(){
     var r=await fetch(FN+'db-api?action=get_theses&game_ids='+encodeURIComponent(ids));
     if(!r.ok)return;var data=await r.json();
     var t=data.theses||{};
-    Object.keys(t).forEach(function(gid){theses[gid]=t[gid];});
+    Object.keys(t).forEach(function(gid){theses[_clientGid(gid)]=t[gid];});
     var count=Object.keys(t).length;
     if(count>0){
       console.log('[DB] Loaded',count,'theses');
@@ -2587,8 +2593,9 @@ async function fetchAlerts(){
     alerts.forEach(function(a){
       if(!a.game_id)return;
       if(a.agent_decision==='DB_DEDUP')return;
-      if(!_alertCache[a.game_id])_alertCache[a.game_id]=[];
-      _alertCache[a.game_id].push(a);
+      var _cg=_clientGid(a.game_id);
+      if(!_alertCache[_cg])_alertCache[_cg]=[];
+      _alertCache[_cg].push(a);
     });
     _alertsFetched=true;
     console.log('[ALERTS] Cached',alerts.length,'alerts for',d.str);
@@ -3595,8 +3602,9 @@ async function pollAlerts(){
     alerts.forEach(function(a){
       if(!a.game_id)return;
       if(a.agent_decision==='DB_DEDUP')return;
-      if(!_alertCache[a.game_id])_alertCache[a.game_id]=[];
-      _alertCache[a.game_id].push(a);
+      var _cg=_clientGid(a.game_id);
+      if(!_alertCache[_cg])_alertCache[_cg]=[];
+      _alertCache[_cg].push(a);
     });
     _alertsFetched=true;
     var newSend=null;
@@ -3605,8 +3613,9 @@ async function pollAlerts(){
         _seenAlertIds.add(a.id);
         _latestSendAlert=a;
         // Only auto-toast for: entry types, not dismissed, active game, not FINAL
-        if(ENTRY_TYPES[a.alert_type]&&!_dismissedAlertIds.has(a.id)&&a.game_id===activeGameId){
-          var ag=games.find(function(x){return x.id===a.game_id;});
+        if(ENTRY_TYPES[a.alert_type]&&!_dismissedAlertIds.has(a.id)&&_clientGid(a.game_id)===activeGameId){
+          var _cg2=_clientGid(a.game_id);
+          var ag=games.find(function(x){return x.id===_cg2;});
           if(!ag||getState(ag)!=='FINAL')newSend=a;
         }
       }
