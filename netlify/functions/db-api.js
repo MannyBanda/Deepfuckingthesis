@@ -419,6 +419,9 @@ exports.handler = async (event) => {
       )`;
       try { await sql`CREATE INDEX IF NOT EXISTS idx_learnings_date ON learnings (date)`; } catch(e) {}
       try { await sql`ALTER TABLE learnings ADD COLUMN IF NOT EXISTS scoring_version TEXT DEFAULT 'v1'`; } catch(e) {}
+      try { await sql`ALTER TABLE learnings ADD COLUMN IF NOT EXISTS league TEXT DEFAULT 'nba'`; } catch(e) {}
+      try { await sql`ALTER TABLE learnings DROP CONSTRAINT IF EXISTS learnings_date_key`; } catch(e) {}
+      try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_learnings_date_league ON learnings (date, league)`; } catch(e) {}
 
       await sql`CREATE TABLE IF NOT EXISTS floor_wp_coefficients (
         team_alias TEXT NOT NULL,
@@ -1461,7 +1464,10 @@ exports.handler = async (event) => {
     // ═══════════════════════════════════════════════════════
     if (action === 'get_learnings') {
       const limit = parseInt(params.limit || '30');
-      const rows = await sql`SELECT * FROM learnings ORDER BY date DESC LIMIT ${limit}`;
+      const league = params.league;
+      const rows = league
+        ? await sql`SELECT * FROM learnings WHERE league = ${league} ORDER BY date DESC LIMIT ${limit}`
+        : await sql`SELECT * FROM learnings ORDER BY date DESC LIMIT ${limit}`;
       return { statusCode: 200, headers, body: JSON.stringify({ learnings: rows }) };
     }
 
@@ -2673,12 +2679,14 @@ exports.handler = async (event) => {
 
     if (action === 'delete_learning') {
       const date = params.date;
+      const league = params.league;
       if (!date) return { statusCode: 400, headers, body: JSON.stringify({ error: 'date required' }) };
-      const deleted = await sql`DELETE FROM learnings WHERE date = ${date} RETURNING date`;
+      const deleted = league
+        ? await sql`DELETE FROM learnings WHERE date = ${date} AND league = ${league} RETURNING date`
+        : await sql`DELETE FROM learnings WHERE date = ${date} RETURNING date`;
       if (deleted.length === 0) {
-        // Show what dates exist so we can debug
-        const existing = await sql`SELECT date FROM learnings ORDER BY date DESC LIMIT 10`;
-        return { statusCode: 200, headers, body: JSON.stringify({ ok: false, message: 'No row found for ' + date, existing_dates: existing.map(r => r.date) }) };
+        const existing = await sql`SELECT date, league FROM learnings ORDER BY date DESC LIMIT 10`;
+        return { statusCode: 200, headers, body: JSON.stringify({ ok: false, message: 'No row found for ' + date, existing: existing.map(r => r.date + ' ' + r.league) }) };
       }
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, deleted: deleted.length }) };
     }

@@ -1,12 +1,12 @@
 // ══════════════════════════════════════════════════════════════════════════════
 // post-game-agent.mjs — Nightly Post-Game Learning Agent (V2 Arc Scoring)
 //
-// Runs at 11:45pm MST (6:45am UTC) daily. For each day's games:
+// Runs at 11:45pm MST (6:45am UTC) daily. For each league (NBA, WNBA):
 //   1. COLLECT: alerts, final scores, live_tracking state
 //   2. BUILD ARCS: group delivered alerts into position arcs per game+team
 //   3. SCORE: grade each arc on its terminal alert (last thing subscriber saw)
 //   4. ANALYZE: one Sonnet call to identify patterns across the full slate
-//   5. STORE: save findings to `learnings` table
+//   5. STORE: save findings to `learnings` table (one row per date+league)
 //   6. NOTIFY: send ntfy summary
 //
 // Scoring model: arcs, not individual alerts. The terminal alert is what the
@@ -29,12 +29,16 @@ function getArizonaDate() {
   };
 }
 
-// Fetch final scores from BDL
-async function fetchFinalScores(dateStr) {
+// Fetch final scores from BDL (NBA only — WNBA uses games table fallback)
+async function fetchFinalScores(dateStr, league) {
+  // WNBA: skip BDL because BDL abbreviations (LV, NY, etc.) don't match SR abbreviations
+  // (LVA, NYL, etc.) stored in alerts. Games table fallback uses correct SR abbreviations.
+  if (league === 'wnba') return [];
+
   const apiKey = process.env.BDL_API_KEY;
   if (!apiKey) { log('No BDL_API_KEY'); return []; }
   try {
-    const resp = await fetch(`https://api.balldontlie.io/nba/v1/games?dates[]=${dateStr}`, {
+    const resp = await fetch(`https://api.balldontlie.io/${league}/v1/games?dates[]=${dateStr}`, {
       headers: { Authorization: apiKey },
     });
     if (!resp.ok) { log(`BDL scores ${resp.status}`); return []; }
@@ -89,60 +93,70 @@ const DEDUP_PATTERNS = ['duplicate', 'already sent', 'already SENT', 'bettor alr
   'zero meaningful change', 'below the 0.10 threshold', 'nothing new', 'no new actionable'];
 const isDedup = (r) => r && DEDUP_PATTERNS.some(p => r.toLowerCase().includes(p.toLowerCase()));
 
-export default async function handler(req) {
-  log('Post-game learning agent starting...');
+// WNBA-specific Opus prompt context
+const WNBA_SIGNAL_CONTEXT = `
+WNBA-SPECIFIC SIGNAL RULES (critical for analysis):
+- Floor score is NARRATIVE ONLY in WNBA — wrong 80% of the time vs MC + XGB. Do NOT treat floor as a reliable signal.
+- I3 (Shot Quality) is the anchor indicator (30% weight), not I4/I2 as in NBA.
+- Paint/rim stats are noise in WNBA — perimeter game dominates.
+- Q4 BUY is nearly dead: XGB < 0.45 = 2% win rate. Only XGB >= 0.70 is viable.
+- MC Q4 underestimates ctrl win probability by +8-14pp — expect MC to read low.
+- I3 anti-inversion: losing I3 = 17.6% win rate (opposite of NBA where losing I3 = 49%).
+- Turnovers are inversely correlated with winning (unlike NBA).
+- XGB gates differ: Q2 < 0.45, Q3 < 0.45, Q4 < 0.70 (vs NBA Q2 < 0.40, Q3 < 0.45, Q4 < 0.60).
+When evaluating WNBA arcs, weight MC and XGB signals heavily. Floor-based decisions are inherently suspect.`;
 
-  const sql = neon(process.env.DATABASE_URL);
+// ══════════════════════════════════════════════════════════════════════════════
+// processLeague — core per-league analysis pipeline
+// ══════════════════════════════════════════════════════════════════════════════
+async function processLeague(sql, league, dateStr, isOverride) {
+  const leagueUpper = league.toUpperCase();
+  log(`--- ${leagueUpper} processing for ${dateStr} ---`);
 
   // Load floor reliability coefficients
   var _floorWPCoeffs = {};
   try {
-    const fwpRows = await sql`SELECT team_alias, reliability_class, grip FROM floor_wp_coefficients WHERE league = 'nba' AND season = '2025-26'`;
+    const fwpRows = await sql`SELECT team_alias, reliability_class, grip FROM floor_wp_coefficients WHERE league = ${league} AND season = '2025-26'`;
     for (const r of fwpRows) _floorWPCoeffs[r.team_alias] = { reliabilityClass: r.reliability_class || 'NEUTRAL', grip: r.grip || 0 };
   } catch(e) { /* table may not exist — non-fatal */ }
-
-  const url = new URL(req.url, 'https://localhost');
-  const dateOverride = url.searchParams.get('date');
-  const today = dateOverride ? { dateStr: dateOverride } : getArizonaDate();
-  log(`Processing date: ${today.dateStr}${dateOverride ? ' (manual override)' : ' (Arizona time)'}`);
 
   // ── 1. COLLECT ──────────────────────────────────────────────────────────
 
   // Idempotent check (skip if already processed, unless manual override)
-  if (!dateOverride) {
+  if (!isOverride) {
     try {
-      const existing = await sql`SELECT 1 FROM learnings WHERE date = ${today.dateStr} LIMIT 1`;
+      const existing = await sql`SELECT 1 FROM learnings WHERE date = ${dateStr} AND league = ${league} LIMIT 1`;
       if (existing.length > 0) {
-        log(`Already processed ${today.dateStr}, skipping`);
-        return new Response(JSON.stringify({ ok: true, message: 'Already processed' }));
+        log(`Already processed ${dateStr} ${leagueUpper}, skipping`);
+        return { ok: true, league, message: 'Already processed' };
       }
     } catch (e) { log(`Learnings check: ${e.message}`); }
   }
 
   // Claim the row (upsert for manual reruns)
   try {
-    await sql`INSERT INTO learnings (date, games_analyzed, alerts_scored, findings, scoring_version)
-      VALUES (${today.dateStr}, 0, 0, 'Processing...', 'v2')
-      ON CONFLICT (date) DO UPDATE SET findings = 'Reprocessing...', scoring_version = 'v2'`;
+    await sql`INSERT INTO learnings (date, league, games_analyzed, alerts_scored, findings, scoring_version)
+      VALUES (${dateStr}, ${league}, 0, 0, 'Processing...', 'v2')
+      ON CONFLICT (date, league) DO UPDATE SET findings = 'Reprocessing...', scoring_version = 'v2'`;
   } catch (e) { log(`Learnings claim: ${e.message}`); }
 
-  // Get today's alerts (join games for matchup + outcome)
+  // Get today's alerts (join games for matchup + outcome, filtered by league)
   const alerts = await sql`
     SELECT a.*, g.away_alias, g.home_alias, g.date as game_date,
       g.winner as game_winner, g.home_pts as game_home_pts, g.away_pts as game_away_pts
     FROM alerts a
     JOIN games g ON a.game_id = g.id
-    WHERE g.date = ${today.dateStr}
+    WHERE g.date = ${dateStr} AND a.league = ${league}
     ORDER BY a.ts
   `;
-  log(`Found ${alerts.length} alerts for ${today.dateStr}`);
+  log(`Found ${alerts.length} ${leagueUpper} alerts for ${dateStr}`);
 
   if (alerts.length === 0) {
-    log('No alerts to analyze');
+    log(`No ${leagueUpper} alerts to analyze`);
     try {
-      await sql`UPDATE learnings SET findings = 'No alerts fired today.' WHERE date = ${today.dateStr}`;
+      await sql`UPDATE learnings SET findings = ${'No alerts fired today.'} WHERE date = ${dateStr} AND league = ${league}`;
     } catch (e) { log(`Save empty: ${e.message}`); }
-    return new Response(JSON.stringify({ ok: true, message: 'No alerts' }));
+    return { ok: true, league, message: 'No alerts' };
   }
 
   // Get live_tracking for game-level context
@@ -156,9 +170,9 @@ export default async function handler(req) {
     log(`Loaded live_tracking for ${Object.keys(liveTrackingMap).length}/${gameIds.length} games`);
   } catch (e) { log(`live_tracking query: ${e.message}`); }
 
-  // Fetch final scores from BDL, fall back to games table
-  let finalScores = await fetchFinalScores(today.dateStr);
-  log(`BDL returned ${finalScores.length} games`);
+  // Fetch final scores from BDL (NBA) or games table fallback (WNBA)
+  let finalScores = await fetchFinalScores(dateStr, league);
+  log(`BDL returned ${finalScores.length} ${leagueUpper} games`);
 
   if (finalScores.length === 0) {
     const gameMap = {};
@@ -176,8 +190,8 @@ export default async function handler(req) {
       log(`BDL empty — using games table fallback (${finalScores.length} games)`);
     } else {
       log('No final scores available');
-      try { await sql`UPDATE learnings SET findings = 'No final scores available.' WHERE date = ${today.dateStr}`; } catch(e) {}
-      return new Response(JSON.stringify({ ok: true, message: 'No final scores' }));
+      try { await sql`UPDATE learnings SET findings = 'No final scores available.' WHERE date = ${dateStr} AND league = ${league}`; } catch(e) {}
+      return { ok: true, league, message: 'No final scores' };
     }
   }
 
@@ -507,8 +521,11 @@ Dedup suppressions: ${agentDedup.length} | Position-gated: ${positionGated.lengt
       ? `CONFLICTING SIGNALS:\n${conflicts.map(g => `  ${g.matchup}: ${g.teams.map(t => `${t.team} terminal=${readable(t.terminal)} ${t.correct ? 'CORRECT' : 'WRONG'}`).join(' vs ')}`).join('\n')}`
       : '';
 
-    const prompt = `You are the post-game learning agent for a live NBA betting alert system. Analyze tonight's results.
+    const leagueLabel = league === 'wnba' ? 'WNBA' : 'NBA';
+    const leagueSignalContext = league === 'wnba' ? WNBA_SIGNAL_CONTEXT : '';
 
+    const prompt = `You are the post-game learning agent for a live ${leagueLabel} betting alert system. Analyze tonight's results.
+${leagueSignalContext}
 SCORING MODEL:
 Alerts are grouped into POSITION ARCS per game per team. Each arc is scored on its TERMINAL alert — the last thing the subscriber saw and acted on.
 
@@ -544,9 +561,9 @@ ${arcSummaries}
 WHAT TO ANALYZE:
 1. Were "left_hanging" failures detectable? Should EXIT have fired based on what the system knew at the terminal alert?
 2. Were "false_recovery" signals justified? Check THESIS_ALIVE graduation rank, MF trajectory, combined read.
-3. A-Rank vs B-Rank — is graduation correctly separating structural dominance? Do wire-to-wire arcs always cash?
+3. Is graduation correctly separating structural dominance?
 4. Did EXIT fire at the right time when it did fire?
-5. For wrong arcs — was the structural read fundamentally wrong or was the timing wrong?
+5. For wrong arcs — was the structural read fundamentally wrong or was the timing wrong?${league === 'wnba' ? '\n6. Were floor-based signals misleading? (Floor is unreliable in WNBA — check if MC/XGB told a different story.)' : ''}
 
 Respond in EXACTLY this format:
 
@@ -636,8 +653,8 @@ RECOMMENDATIONS:
       agent_accuracy = ${JSON.stringify(agentAccuracy)}, findings = ${findings},
       patterns = ${patterns}, recommendations = ${recommendations},
       scoring_version = ${'v2'}
-      WHERE date = ${today.dateStr}`;
-    log(`Learning saved for ${today.dateStr}`);
+      WHERE date = ${dateStr} AND league = ${league}`;
+    log(`Learning saved for ${dateStr} ${leagueUpper}`);
   } catch (e) {
     log(`Learning save failed: ${e.message}`);
   }
@@ -649,9 +666,9 @@ RECOMMENDATIONS:
     const pct = arcAccuracy || 0;
     const emoji = pct >= 80 ? '🟢' : pct >= 60 ? '🟡' : '🔴';
 
-    let headline = `${emoji} ${correctArcs.length}/${scoredArcs.length} position arcs correct tonight (${pct}%)`;
+    let headline = `${emoji} ${leagueUpper}: ${correctArcs.length}/${scoredArcs.length} position arcs correct tonight (${pct}%)`;
 
-    // Rank line
+    // Tier line
     const rankParts = [];
     if (tierAccuracy.CONFIRMED.total > 0) rankParts.push(`CONFIRMED: ${tierAccuracy.CONFIRMED.correct}/${tierAccuracy.CONFIRMED.total}`);
     if (tierAccuracy.RECOVERING.total > 0) rankParts.push(`RECOVERING: ${tierAccuracy.RECOVERING.correct}/${tierAccuracy.RECOVERING.total}`);
@@ -684,18 +701,16 @@ RECOMMENDATIONS:
     try {
       await fetch(`https://ntfy.sh/${topic}`, {
         method: 'POST',
-        headers: { 'Title': 'Tonight\'s results', 'Priority': '3', 'Tags': 'basketball' },
+        headers: { 'Title': `${leagueUpper} Results`, 'Priority': '3', 'Tags': 'basketball' },
         body: body,
       });
-      log('Nightly summary sent to ntfy');
+      log(`${leagueUpper} nightly summary sent to ntfy`);
     } catch (e) { log(`Ntfy failed: ${e.message}`); }
   }
 
-  log('Post-game learning agent complete');
-  return new Response(JSON.stringify({
-    ok: true,
-    date: today.dateStr,
-    scoringVersion: 'v2',
+  log(`--- ${leagueUpper} complete ---`);
+  return {
+    ok: true, league,
     arcs: scoredArcs.length,
     accuracy: arcAccuracy,
     arcBreakdown: {
@@ -711,7 +726,38 @@ RECOMMENDATIONS:
       ctrlWon: a.outcome.ctrlWon, finalMargin: a.outcome.finalMargin,
       compoundTier: a.terminal.graduation_rank, alertCount: a.alerts.length,
     })),
-  }));
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Handler — loops over leagues, delegates to processLeague
+// ══════════════════════════════════════════════════════════════════════════════
+export default async function handler(req) {
+  log('Post-game learning agent starting...');
+
+  const sql = neon(process.env.DATABASE_URL);
+
+  const url = new URL(req.url, 'https://localhost');
+  const dateOverride = url.searchParams.get('date');
+  const leagueOverride = url.searchParams.get('league');
+  const today = dateOverride ? { dateStr: dateOverride } : getArizonaDate();
+  log(`Processing date: ${today.dateStr}${dateOverride ? ' (manual override)' : ' (Arizona time)'}`);
+
+  const leagues = leagueOverride ? [leagueOverride] : ['nba', 'wnba'];
+  const results = [];
+
+  for (const league of leagues) {
+    try {
+      const result = await processLeague(sql, league, today.dateStr, !!dateOverride);
+      results.push(result);
+    } catch (e) {
+      log(`${league.toUpperCase()} processing failed: ${e.message}`);
+      results.push({ ok: false, league, error: e.message });
+    }
+  }
+
+  log('Post-game learning agent complete');
+  return new Response(JSON.stringify({ ok: true, date: today.dateStr, results }));
 }
 
 export const config = {
