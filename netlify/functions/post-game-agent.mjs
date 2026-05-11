@@ -465,13 +465,12 @@ export default async function handler(req) {
       return `${header}${ltLine}\n${steps}`;
     }).join('\n\n');
 
-    // Graduation rank summary
+    // Compound tier summary
     const gradSummary = [
-      `GRADUATION RANK ACCURACY:`,
-      `A-Rank POs: ${rankAccuracy.A.correct}/${rankAccuracy.A.total} (${aRate || '-'}%)`,
-      rankAccuracy.A.w2w_total > 0 ? `  Wire-to-wire (0 flips): ${rankAccuracy.A.w2w_correct}/${rankAccuracy.A.w2w_total}` : null,
-      rankAccuracy.A.with_flips_total > 0 ? `  With flips: ${rankAccuracy.A.with_flips_correct}/${rankAccuracy.A.with_flips_total}` : null,
-      `B-Rank POs: ${rankAccuracy.B.correct}/${rankAccuracy.B.total} (${bRate || '-'}%)`,
+      `COMPOUND TIER ACCURACY:`,
+      tierAccuracy.CONFIRMED.total > 0 ? `CONFIRMED: ${tierAccuracy.CONFIRMED.correct}/${tierAccuracy.CONFIRMED.total} (${confRate}%)` : null,
+      tierAccuracy.RECOVERING.total > 0 ? `RECOVERING: ${tierAccuracy.RECOVERING.correct}/${tierAccuracy.RECOVERING.total} (${recRate}%)` : null,
+      tierAccuracy.LOCKED.total > 0 ? `LOCKED: ${tierAccuracy.LOCKED.correct}/${tierAccuracy.LOCKED.total} (${lockRate}%)` : null,
     ].filter(Boolean).join('\n');
 
     // Failure breakdown
@@ -615,7 +614,7 @@ RECOMMENDATIONS:
       lifecycle: { correct: lifecycleArcs.filter(a=>a.correct).length, total: lifecycleArcs.length },
       standalone_buy: { correct: standaloneBuyArcs.filter(a=>a.correct).length, total: standaloneBuyArcs.length },
     },
-    rank: rankAccuracy,
+    rank: tierAccuracy,
     failures,
   };
 
@@ -654,8 +653,9 @@ RECOMMENDATIONS:
 
     // Rank line
     const rankParts = [];
-    if (rankAccuracy.A.total > 0) rankParts.push(`A-Rank: ${rankAccuracy.A.correct}/${rankAccuracy.A.total}`);
-    if (rankAccuracy.B.total > 0) rankParts.push(`B-Rank: ${rankAccuracy.B.correct}/${rankAccuracy.B.total}`);
+    if (tierAccuracy.CONFIRMED.total > 0) rankParts.push(`CONFIRMED: ${tierAccuracy.CONFIRMED.correct}/${tierAccuracy.CONFIRMED.total}`);
+    if (tierAccuracy.RECOVERING.total > 0) rankParts.push(`RECOVERING: ${tierAccuracy.RECOVERING.correct}/${tierAccuracy.RECOVERING.total}`);
+    if (tierAccuracy.LOCKED.total > 0) rankParts.push(`LOCKED: ${tierAccuracy.LOCKED.correct}/${tierAccuracy.LOCKED.total}`);
     if (standaloneBuyArcs.length > 0) rankParts.push(`BUY: ${standaloneBuyArcs.filter(a=>a.correct).length}/${standaloneBuyArcs.length}`);
     const rankLine = rankParts.length > 0 ? '\n' + rankParts.join(' | ') : '';
 
@@ -702,7 +702,7 @@ RECOMMENDATIONS:
       lifecycle: { correct: lifecycleArcs.filter(a=>a.correct).length, total: lifecycleArcs.length },
       standalone_buy: { correct: standaloneBuyArcs.filter(a=>a.correct).length, total: standaloneBuyArcs.length },
     },
-    rank: rankAccuracy,
+    rank: tierAccuracy,
     failures,
     agent: { saves: agentSaves, misses: agentMisses, dedup: agentDedup.length, posGated: positionGated.length },
     arcsDetail: scoredArcs.map(a => ({
