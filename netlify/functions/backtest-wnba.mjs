@@ -1809,6 +1809,10 @@ function reconstructCheckpoints(plays, homeAbbr, awayAbbr) {
         if (text.includes('assist')) s.ast++;
         if (pendPOT === tm) s.pot += (is3 ? 3 : 2);
         pendPOT = null;
+      } else if (text.includes('block')) {
+        // BDL embeds blocks in shot miss text: "X blocks Y's shot"
+        const oppS = isH ? a : h;
+        oppS.blk++;
       }
       continue;
     }
@@ -1817,6 +1821,11 @@ function reconstructCheckpoints(plays, homeAbbr, awayAbbr) {
     if (type.includes('turnover') || type.includes('offensive foul')) {
       s.tov++;
       pendPOT = opp;
+      // BDL embeds steals in turnover text: "(X steals)"
+      if (text.includes('steal')) {
+        const oppS = isH ? a : h;
+        oppS.stl++;
+      }
       continue;
     }
 
@@ -2437,10 +2446,10 @@ async function reportReconstructionValidation(sql) {
           if (text.includes('assist')) s.ast++;
           if (pendPOT === tm) s.pot += (is3 ? 3 : 2);
           pendPOT = null;
-        }
+        } else if (text.includes('block')) { const oppS = isH ? a : h; oppS.blk++; }
         continue;
       }
-      if (type.includes('turnover') || type.includes('offensive foul')) { s.tov++; pendPOT = opp; continue; }
+      if (type.includes('turnover') || type.includes('offensive foul')) { s.tov++; pendPOT = opp; if (text.includes('steal')) { const oppS = isH ? a : h; oppS.stl++; } continue; }
       if (type.includes('rebound')) {
         if (type.includes('offensive') || text.includes('offensive')) s.oreb++;
         else { s.dreb++; pendPOT = null; }
@@ -2645,10 +2654,10 @@ async function exportCheckpointXGB(sql, url) {
           if (text.includes('assist')) s.ast++;
           if (pendPOT === tm) s.pot += (is3 ? 3 : 2);
           pendPOT = null;
-        }
+        } else if (text.includes('block')) { const oppS = isH ? a : h; oppS.blk++; }
         continue;
       }
-      if (type.includes('turnover') || type.includes('offensive foul')) { s.tov++; pendPOT = isH ? g.away_alias : g.home_alias; continue; }
+      if (type.includes('turnover') || type.includes('offensive foul')) { s.tov++; pendPOT = isH ? g.away_alias : g.home_alias; if (text.includes('steal')) { const oppS = isH ? a : h; oppS.stl++; } continue; }
       if (type.includes('rebound')) {
         if (type.includes('offensive') || text.includes('offensive')) s.oreb++;
         else { s.dreb++; pendPOT = null; }
@@ -3223,10 +3232,10 @@ async function phaseValidateReconstruction(sql) {
           s.fgm++; if (is3) s.fg3m++;
           if (text.includes('assist')) s.ast++;
           if (pendPOT === tm) s.pot += (is3 ? 3 : 2); pendPOT = null;
-        }
+        } else if (text.includes('block')) { const oppS = isH ? a : h; oppS.blk++; }
         continue;
       }
-      if (type.includes('turnover') || type.includes('offensive foul')) { s.tov++; pendPOT = opp; continue; }
+      if (type.includes('turnover') || type.includes('offensive foul')) { s.tov++; pendPOT = opp; if (text.includes('steal')) { const oppS = isH ? a : h; oppS.stl++; } continue; }
       if (type.includes('rebound')) {
         if (type.includes('offensive') || text.includes('offensive')) s.oreb++;
         else { s.dreb++; pendPOT = null; }
@@ -3437,11 +3446,11 @@ async function phaseComputeXGBTraining(sql, url) {
           const pts = is3 ? 3 : 2;
           if (runTm === tm) { runPts += pts; }
           else { if (runPts >= 6) { if (runTm === g.home_alias) hRuns6++; else aRuns6++; } runTm = tm; runPts = pts; }
-        }
+        } else if (text.includes('block')) { const oppS = isH ? a : h; oppS.blk++; }
         continue;
       }
 
-      if (type.includes('turnover') || type.includes('offensive foul')) { s.tov++; pendPOT = opp; continue; }
+      if (type.includes('turnover') || type.includes('offensive foul')) { s.tov++; pendPOT = opp; if (text.includes('steal')) { const oppS = isH ? a : h; oppS.stl++; } continue; }
       if (type.includes('rebound')) {
         if (type.includes('offensive') || text.includes('offensive')) s.oreb++;
         else { s.dreb++; pendPOT = null; }
