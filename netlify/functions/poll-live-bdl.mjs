@@ -765,11 +765,15 @@ ${ctx.alertType === 'BUY' && ctx.xgbWinProb != null ? (ctx.league === 'wnba' ? `
   Q4: XGB>=0.70 = 64% (n=14) | 0.55-0.70 = 46% (n=59) | 0.45-0.55 = 30% | <0.45 = 19% (n=36)
   XGB < 0.45 ctrl trailing Q3-Q4: 20-28% win rate — SUPPRESS zone.
   → This BUY: Q${ctx.period}, XGB ${(ctx.xgbWinProb * 100).toFixed(0)}% = calibrated ${ctx.period >= 4 ? (ctx.xgbWinProb >= 0.70 ? '64%' : ctx.xgbWinProb >= 0.55 ? '46%' : ctx.xgbWinProb >= 0.45 ? '30%' : '19%') : ctx.period >= 3 ? (ctx.xgbWinProb >= 0.70 ? '65%' : ctx.xgbWinProb >= 0.55 ? '54%' : ctx.xgbWinProb >= 0.45 ? '45%' : '28%') : (ctx.xgbWinProb >= 0.70 ? '50%' : ctx.xgbWinProb >= 0.55 ? '47%' : ctx.xgbWinProb >= 0.45 ? '39%' : '50%')} baseline`) : ''}
-${ctx.alertType === 'XGB_INVALIDATED' ? `XGB THESIS COLLAPSE:
+${ctx.alertType === 'XGB_INVALIDATED' ? (ctx.invTriggerSignal === 'mc_cum' ? `MC STRUCTURAL COLLAPSE:
+  BUY fired at Q${ctx.xgbBuySendPeriod} with XGB ${(ctx.xgbBuySendProb * 100).toFixed(0)}%
+  Current MC Cum: ${ctx.mcCumWinProb != null ? (ctx.mcCumWinProb * 100).toFixed(1) + '%' : '?'} — BELOW 30% structural viability threshold
+  Current XGB: ${ctx.xgbWinProb != null ? (ctx.xgbWinProb * 100).toFixed(1) + '%' : '?'}
+  The full-game possession rates no longer project a win. ALWAYS SEND — add narrative about which rates collapsed.` : `XGB THESIS COLLAPSE:
   BUY fired at Q${ctx.xgbBuySendPeriod} with XGB ${(ctx.xgbBuySendProb * 100).toFixed(0)}%
   Current XGB: ${(ctx.xgbWinProb * 100).toFixed(1)}% — BELOW Q${ctx.period} gate of ${(ctx.xgbQuarterGate * 100).toFixed(0)}%
   Drop: ${((ctx.xgbBuySendProb - ctx.xgbWinProb) * 100).toFixed(0)}pp
-  The raw-stats model no longer sees a viable structural edge. ALWAYS SEND this alert — add narrative about what changed.` : ''}
+  The raw-stats model no longer sees a viable structural edge. ALWAYS SEND this alert — add narrative about what changed.`) : ''}
 ${ctx.mcInvestigation?.active ? `
 MC STRUCTURAL INVESTIGATION${ctx.mcInvestigation.pattern ? ' — ' + ctx.mcInvestigation.pattern : ' (active)'}:
   Triggered Q${ctx.mcInvestigation.trigger_period} ${ctx.mcInvestigation.trigger_clock} when ${ctx.mcInvestigation.ctrl_team} led by ${ctx.mcInvestigation.trigger_margin}.
@@ -1040,7 +1044,7 @@ RULES:
 - MC WAVE: Oscillating collapse. 60% precision. RISK signal, not confirmed. BWC_EDGE: prominent RISK line. POSITION_SAFE: DOWNGRADE.
 - MC NORMALIZED: Rates recovered. 86-91% ctrl survives. CONFIDENCE signal. Reference as positive for POSITION_SAFE/BWC_EDGE. Argues AGAINST exit.
 - TRACKING_INVALIDATED: The previously tracked team lost structural control. BWC tracking terminated mechanically. Subsequent alerts about the new control team are FRESH evaluations — not continuations of the old thesis. Do not reference the dead team's floor or position tracking state for current decisions. If the dead team had a confirmed position, this is an implicit EXIT — the structural case supporting the position is gone.
-- XGB_INVALIDATED: The structural model (XGBoost) that supported a prior BUY has dropped below the quarter's viability gate (${ctx.league === 'wnba' ? 'Q2<0.45, Q3<0.45, Q4<0.70 — WNBA Q4 gate is much harsher than NBA' : 'Q2<0.40, Q3<0.45, Q4<0.60'}). ALWAYS SEND — the mechanical gate is the filter. Your job is to add narrative context: (1) what the SHAP drivers are showing NOW vs at BUY time — ${ctx.league === 'wnba' ? 'have assists/FT collapsed? has shot quality (I3) flipped?' : 'has interior/paint collapsed? has disruption (I1) flipped?'} (2) whether the XGB drop is driven by raw stat decay or game progress pressure, (3) what the current structural picture looks like (indicators, conviction, floor-margin relationship). Frame as: "The structural model no longer supports the [TEAM] BUY — [explain what changed in basketball terms]. Consider exiting if you took this position." This is an exit signal, not a veto of future entry.
+- XGB_INVALIDATED: A prior BUY thesis has been invalidated by structural collapse. ${ctx.invTriggerSignal === 'mc_cum' ? 'Q3/Q4 uses MC Cum (full-game rate projection) < 30% as the trigger — the possession rates that supported the entry no longer project a win. Focus narrative on: (1) which rates collapsed (TO discipline, interior finishing, 3PT shooting, FT generation), (2) whether the rate decay is accelerating or stabilizing, (3) current indicator picture.' : `Q2 uses XGB (structural model) dropping below the viability gate (${ctx.league === 'wnba' ? 'Q2<0.45' : 'Q2<0.40'}). Focus narrative on: (1) SHAP drivers NOW vs at BUY time, (2) whether XGB drop is raw stat decay or game progress pressure, (3) current structural picture.`} ALWAYS SEND — the mechanical gate is the filter. Frame as: "The structural case no longer supports the [TEAM] BUY — [explain what changed in basketball terms]. Consider exiting if you took this position." This is an exit signal, not a veto of future entry.
 - CONVICTION QUALITY: ${ctx.league === 'wnba' ? 'WNBA XGB has no biglead feature — no "scoreboard confirmation" concept. Evaluate conviction quality by SHAP driver type: strong assists + FT made = ball movement + aggression (sustainable). Strong windowed features only = recent shift, watch for confirmation. Near-zero for most features = thin edge regardless of MC/floor. Cumulative-dominated conviction = 84% accuracy. Windowed-dominated = 80%. 3.7pp gap is softer than NBA.' : 'If provided, evaluate how the XGB model arrives at its prediction. CONFIRMED scoreboard = high confidence (95% WR). NOT CONFIRMED = stats not translating to lead, elevate scrutiny. VOLATILE basis (pot/stl/oreb/to/runs dominant) = circumstantial edge, may not sustain. Multiple conviction warnings compounding = strong SUPPRESS/DOWNGRADE signal. Single warning = flag as RISK, not auto-SUPPRESS.'}
 - ANCHORED FLOOR CHECK: If team is TRAILING with floor 0.75+ but margin only 1-3 pts AND floor is declining from recent snapshots, the floor may be anchored from earlier dominance that has eroded. Verify recent quarters still favor control team before SEND. This rule does NOT apply to leading teams (BWC) — a high floor with a small lead is a valid structural read. When MC STRUCTURAL INVESTIGATION is active and shows CLEAN/WAVE, the floor IS anchored — MC proved it by showing post-trigger rates have deteriorated while cumulative floor remained high. Do not independently diagnose anchoring when MC has already measured it.
 - EARLY GAME NOTE (Q1-Q2): Indicator samples are smaller early — steals/blocks counts are low, run share may not be populated yet, and biggest_lead gaps can form from a single early run. This does NOT mean early signals are unreliable. ${ctx.league === 'wnba' ? 'For Q1-Q2 FIRED alerts: I3 COMBO YES = SEND with confidence. For CANDIDATE alerts: I3 COMBO YES = SEND. Without I3 COMBO, apply extra scrutiny.' : 'The new indicator formulas have proven predictive even in Q2. For Q1-Q2 FIRED alerts: I4 COMBO YES = SEND with confidence. I4 COMBO NO = apply normal scrutiny (don\'t auto-reject, just verify the structural case). For Q1-Q2 CANDIDATE alerts: I4 COMBO YES = SEND. I4 COMBO NO = apply extra scrutiny but still SEND if floor is strong (0.75+) and sustainability favors control team.'} Q3+ alerts have the most data — highest confidence.
@@ -2698,37 +2702,49 @@ function computeBwcState(lt, ctrlTeam, margin) {
   return 'DEEP_TRAIL';
 }
 
-// XGB EXIT — fires when BWC team's XGB win prob drops below quarter-aware threshold.
-// Requires sustained signal (2 polls ~90s) to filter single-possession noise.
-// Replaces control-flip EXIT. Backtest (998 graduated games):
-//   0.50/0.55: 77.2% exit acc, 81.2% loss prot, exits ~9min earlier than flip, margin +0.8 at exit
-//   vs flip:   54.1% exit acc, 68.2% loss prot, margin -2.8 at exit
+// HYBRID EXIT — quarter-aware trigger system (validated May 11, 63 games):
+//   Q2: XGB < 0.45 + MC Cum < 0.70 gate + 2-poll (90s). Fast-path XGB < 0.15.
+//   Q3: MC Cum < 0.30 + 2-poll (90s). Fast-path MC < 0.10.
+//   Q4: MC Cum < 0.25 + 1-poll (immediate). 80% precision (n=10).
+// MC Cum AUC 0.96 in Q4 — strongest EXIT signal. XGB kept for Q2 where MC is too noisy.
 function checkXGBExit(lt, xgbBwcProb, period, mcCumWinProb) {
   if (period < 2) return false;
-  if (xgbBwcProb == null) return false;
   if (lt.xgb_exit_sent) return false; // one-shot per position
 
-  // MC Cum gate — EXIT only fires when BOTH windowed XGB AND MC Cum agree
-  // MC Cum >= 0.70 means full-game rates still favor BWC team — structural shift not sustained
-  if (mcCumWinProb != null && mcCumWinProb >= 0.70) return false;
-
-  const threshold = 0.45;  // flat 0.45 — minimizes total damage (premature exits + missed exits)
-
-  // Extreme collapse — bypass confirmation (MC Cum gate already passed above)
-  if (xgbBwcProb < 0.15) return true;
-
-  if (xgbBwcProb < threshold) {
-    if (!lt.xgb_exit_warned) {
-      lt.xgb_exit_warned = Date.now();
-      return false; // first warning — start confirmation window
-    }
-    if (Date.now() - lt.xgb_exit_warned >= 90000) {
-      return true; // sustained below threshold for ~2 polls
-    }
-    return false; // still in confirmation window
-  } else if (xgbBwcProb >= threshold + 0.05) {
-    lt.xgb_exit_warned = null; // recovered — clear with hysteresis
+  // ── Q2: XGB trigger + MC Cum gate (unchanged) ──
+  if (period === 2) {
+    if (xgbBwcProb == null) return false;
+    if (mcCumWinProb != null && mcCumWinProb >= 0.70) return false;
+    if (xgbBwcProb < 0.15) { lt.exit_trigger = 'xgb'; return true; }
+    if (xgbBwcProb < 0.45) {
+      if (!lt.xgb_exit_warned) { lt.xgb_exit_warned = Date.now(); return false; }
+      if (Date.now() - lt.xgb_exit_warned >= 90000) { lt.exit_trigger = 'xgb'; return true; }
+      return false;
+    } else if (xgbBwcProb >= 0.50) { lt.xgb_exit_warned = null; }
+    return false;
   }
+
+  // ── Q3: MC Cum < 0.30 + 2-poll confirmation ──
+  if (period === 3) {
+    if (mcCumWinProb == null) return false;
+    if (mcCumWinProb < 0.10) { lt.exit_trigger = 'mc_cum'; return true; }
+    if (mcCumWinProb < 0.30) {
+      if (!lt.xgb_exit_warned) { lt.xgb_exit_warned = Date.now(); return false; }
+      if (Date.now() - lt.xgb_exit_warned >= 90000) { lt.exit_trigger = 'mc_cum'; return true; }
+      return false;
+    } else if (mcCumWinProb >= 0.50) { lt.xgb_exit_warned = null; }
+    return false;
+  }
+
+  // ── Q4: MC Cum < 0.25 + 1-poll (immediate) ──
+  if (period >= 4) {
+    if (mcCumWinProb == null) return false;
+    if (mcCumWinProb < 0.25) { lt.exit_trigger = 'mc_cum'; return true; }
+    // No confirmation needed — 1-poll. Clear warning if recovered.
+    if (mcCumWinProb >= 0.45) { lt.xgb_exit_warned = null; }
+    return false;
+  }
+
   return false;
 }
 
@@ -7074,6 +7090,8 @@ export default async function(req) {
               lt.xgb_exit_sent = false;
               lt.xgb_exit_ts = null;
               lt.xgb_exit_xgb = null;
+              lt.exit_trigger = null;
+              lt.exit_mc = null;
               lt.xgb_recovery_warned = null;
               lt.position_closed = false;
               lt.position_closed_ts = null;
@@ -8067,32 +8085,38 @@ export default async function(req) {
               }
             }
 
-            // ── XGB EXIT — Windowed XGB + MC Cum gate ──────────────────
-            // Windowed XGB detects recent structural decay. MC Cum confirms sustained shift.
-            // EXIT fires only when BOTH signals agree (73% precision, 80% recall on 48 playoff games).
-            if (lt.bwc_fired && lt.po_fired && _xgbBwcProb != null
-                && alertMinsLeft >= 1.0 && ind.controlTeam !== 'Neither') {
+            // ── HYBRID EXIT — Q2: XGB trigger, Q3/Q4: MC Cum trigger ──────────────────
+            // Q2: XGB < 0.45 + MC gate + 2-poll. Q3: MC < 0.30 + 2-poll. Q4: MC < 0.25 + 1-poll.
+            if (lt.bwc_fired && lt.po_fired
+                && alertMinsLeft >= 1.0 && ind.controlTeam !== 'Neither'
+                && (_xgbBwcProb != null || (_mcCum?.winProb != null && currentPeriod >= 3))) {
               // MC Cum from BWC team's perspective (MC Cum is computed for current ctrl team)
               const _mcCumBwcWp = _mcCum?.winProb != null
                 ? (ind.controlTeam === lt.bwc_fired.team ? _mcCum.winProb : 1 - _mcCum.winProb)
                 : null;
               if (checkXGBExit(lt, _xgbBwcProb, currentPeriod, _mcCumBwcWp)) {
-                const _xgbThreshold = 0.45;
+                const _exitIsMC = lt.exit_trigger === 'mc_cum';
                 const _xgbExitSev = {
-                  severity: _xgbBwcProb < 0.15 ? 'COLLAPSE' : _xgbBwcProb < 0.25 ? 'SEVERE' : 'STANDARD',
-                  xgb: Math.round(_xgbBwcProb * 1000) / 1000,
-                  windowedXgb: Math.round(_xgbBwcProb * 1000) / 1000,
+                  severity: _exitIsMC
+                    ? (_mcCumBwcWp < 0.10 ? 'COLLAPSE' : _mcCumBwcWp < 0.20 ? 'SEVERE' : 'STANDARD')
+                    : (_xgbBwcProb < 0.15 ? 'COLLAPSE' : _xgbBwcProb < 0.25 ? 'SEVERE' : 'STANDARD'),
+                  xgb: _xgbBwcProb != null ? Math.round(_xgbBwcProb * 1000) / 1000 : null,
+                  windowedXgb: _xgbBwcProb != null ? Math.round(_xgbBwcProb * 1000) / 1000 : null,
                   mcCumAtExit: _mcCumBwcWp != null ? Math.round(_mcCumBwcWp * 1000) / 1000 : null,
-                  threshold: _xgbThreshold,
+                  exitTrigger: lt.exit_trigger || 'xgb',
+                  threshold: _exitIsMC ? (currentPeriod >= 4 ? 0.25 : 0.30) : 0.45,
                   bwcState: v2BwcState,
                   ctrlTeam: ind.controlTeam,
                   bwcTeam: lt.bwc_fired.team,
                   ctrlMatchesBWC: ind.controlTeam === lt.bwc_fired.team,
                 };
-                log(`${matchup}: ▶ XGB EXIT — ${lt.bwc_fired.team} xgb=${_xgbBwcProb.toFixed(3)} mcCum=${_mcCumBwcWp != null ? _mcCumBwcWp.toFixed(3) : '?'} < threshold ${_xgbThreshold} (Q${currentPeriod}) bwcState=${v2BwcState} ctrl=${ind.controlTeam} margin=${_v2Margin} severity=${_xgbExitSev.severity}`);
+                const _exitLabel = _exitIsMC ? 'MC EXIT' : 'XGB EXIT';
+                const _exitVal = _exitIsMC ? (_mcCumBwcWp != null ? _mcCumBwcWp.toFixed(3) : '?') : (_xgbBwcProb != null ? _xgbBwcProb.toFixed(3) : '?');
+                log(`${matchup}: ▶ ${_exitLabel} — ${lt.bwc_fired.team} xgb=${_xgbBwcProb != null ? _xgbBwcProb.toFixed(3) : '?'} mcCum=${_mcCumBwcWp != null ? _mcCumBwcWp.toFixed(3) : '?'} < threshold ${_xgbExitSev.threshold} (Q${currentPeriod}) bwcState=${v2BwcState} ctrl=${ind.controlTeam} margin=${_v2Margin} severity=${_xgbExitSev.severity}`);
 
                 lt.xgb_exit_sent = true;
                 lt.xgb_exit_xgb = _xgbBwcProb;
+                lt.exit_mc = _mcCumBwcWp;
                 lt.xgb_exit_ts = Date.now();
                 lt.xgb_exit_warned = null;
 
@@ -8110,17 +8134,22 @@ export default async function(req) {
                 await routeV2Alert('EXIT', 'FIRED', _xgbExitSev, false);
 
               } else if (lt.xgb_exit_warned && !lt.xgb_exit_sent) {
-                log(`${matchup}: XGB EXIT warned — ${lt.bwc_fired.team} xgb=${_xgbBwcProb.toFixed(3)} mcCum=${_mcCumBwcWp != null ? _mcCumBwcWp.toFixed(3) : '?'} (waiting for confirmation, warned ${Math.round((Date.now() - lt.xgb_exit_warned) / 1000)}s ago)`);
+                log(`${matchup}: EXIT warned — ${lt.bwc_fired.team} xgb=${_xgbBwcProb != null ? _xgbBwcProb.toFixed(3) : '?'} mcCum=${_mcCumBwcWp != null ? _mcCumBwcWp.toFixed(3) : '?'} (Q${currentPeriod}, waiting for confirmation, warned ${Math.round((Date.now() - lt.xgb_exit_warned) / 1000)}s ago)`);
               }
             }
 
-            // ── XGB RECOVERY — Re-entry signal after XGB EXIT ───────────────────
-            // Fires when XGB recovers above threshold + 0.10 for 2+ polls.
-            if (lt.xgb_exit_sent && lt.position_closed && _xgbBwcProb != null
+            // ── EXIT RECOVERY — Re-entry signal after EXIT ───────────────────
+            // Q2 (XGB trigger): XGB recovers above 0.55 for 2+ polls.
+            // Q3/Q4 (MC trigger): MC Cum recovers above 0.50 for 2+ polls.
+            if (lt.xgb_exit_sent && lt.position_closed
                 && lt.bwc_fired && alertMinsLeft >= 1.0 && ind.controlTeam !== 'Neither') {
-              const _recoveryThreshold = 0.45 + 0.10;  // 0.55
+              const _exitWasMC = lt.exit_trigger === 'mc_cum';
+              const _recoverySignal = _exitWasMC
+                ? (_mcCum?.winProb != null ? (ind.controlTeam === lt.bwc_fired.team ? _mcCum.winProb : 1 - _mcCum.winProb) : null)
+                : _xgbBwcProb;
+              const _recoveryThreshold = _exitWasMC ? 0.50 : 0.55;
 
-              if (_xgbBwcProb >= _recoveryThreshold) {
+              if (_recoverySignal != null && _recoverySignal >= _recoveryThreshold) {
                 if (!lt.xgb_recovery_warned) {
                   lt.xgb_recovery_warned = Date.now();
                 } else if (Date.now() - lt.xgb_recovery_warned >= 90000) {
@@ -8129,11 +8158,12 @@ export default async function(req) {
                   if (v2BwcState === 'LOCK') _recoveryType = 'POSITION_SAFE';
                   else if (v2BwcState === 'EDGE') _recoveryType = 'POSITION_RECOVERING';
 
-                  log(`${matchup}: ▶ XGB RECOVERY — ${lt.bwc_fired.team} xgb=${_xgbBwcProb.toFixed(3)} recovered above ${_recoveryThreshold} (bwcState=${v2BwcState}) → ${_recoveryType}`);
+                  log(`${matchup}: ▶ ${_exitWasMC ? 'MC' : 'XGB'} RECOVERY — ${lt.bwc_fired.team} ${_exitWasMC ? 'mcCum' : 'xgb'}=${_recoverySignal.toFixed(3)} recovered above ${_recoveryThreshold} (bwcState=${v2BwcState}) → ${_recoveryType}`);
 
                   lt.xgb_exit_sent = false;
                   lt.xgb_recovery_warned = null;
                   lt.xgb_exit_warned = null;
+                  lt.exit_trigger = null;
 
                   try { await sql`UPDATE games SET live_tracking = ${JSON.stringify(lt)} WHERE id = ${game.id}`; } catch(e) {}
 
@@ -8381,15 +8411,22 @@ export default async function(req) {
             }
           }
 
-          // ── XGB THESIS INVALIDATED: post-BUY structural model collapse detection ──
-          // After a BUY SEND, if XGB drops below the current quarter's viability gate,
-          // fire an invalidation alert. One-shot per game, only if BUY was most recent send.
-          const _xgbGateByQ = { 2: 0.40, 3: 0.45, 4: 0.60 };
+          // ── THESIS INVALIDATED: post-BUY structural collapse detection ──
+          // After a BUY SEND, check for thesis collapse. One-shot per game.
+          // Q2: XGB < 0.40 (unchanged). Q3/Q4: MC Cum < 0.30 (matches BWC EXIT).
+          const _xgbGateByQ = { 2: 0.40 };  // Q3/Q4 now use MC Cum
+          const _invUseMC = currentPeriod >= 3;
+          const _invMcCum = _mcCum?.winProb != null ? _mcCum.winProb : null;
           if (lt.buy_send_xgb != null && !lt.buy_invalidated && lt.last_send_type === 'BUY'
-              && _xgbWinProb != null && currentPeriod >= 2 && currentPeriod <= 4) {
-            const _invGate = _xgbGateByQ[currentPeriod] || 0.60;
-            if (_xgbWinProb < _invGate) {
-              log(`${matchup}: ★ XGB INVALIDATED — BUY xgb was ${(lt.buy_send_xgb * 100).toFixed(1)}% at Q${lt.buy_send_period}, now ${(_xgbWinProb * 100).toFixed(1)}% < Q${currentPeriod} gate ${(_invGate * 100).toFixed(0)}%`);
+              && currentPeriod >= 2 && currentPeriod <= 4
+              && (_invUseMC ? _invMcCum != null : _xgbWinProb != null)) {
+            const _invTriggered = _invUseMC
+              ? _invMcCum < 0.30
+              : _xgbWinProb < (_xgbGateByQ[currentPeriod] || 0.40);
+            if (_invTriggered) {
+              const _invGateLabel = _invUseMC ? 'MC Cum 30%' : `XGB Q${currentPeriod} ${(_xgbGateByQ[currentPeriod] * 100).toFixed(0)}%`;
+              const _invSignalVal = _invUseMC ? _invMcCum : _xgbWinProb;
+              log(`${matchup}: ★ ${_invUseMC ? 'MC' : 'XGB'} INVALIDATED — BUY ${_invUseMC ? 'mcCum' : 'xgb'} was ${(lt.buy_send_xgb * 100).toFixed(1)}% at Q${lt.buy_send_period}, now ${(_invSignalVal * 100).toFixed(1)}% < ${_invGateLabel}`);
               lt.buy_invalidated = true;
 
               // Build agent context
@@ -8417,7 +8454,9 @@ export default async function(req) {
                 xgbWinProb: _xgbWinProb,
                 xgbBuySendProb: lt.buy_send_xgb,
                 xgbBuySendPeriod: lt.buy_send_period,
-                xgbQuarterGate: _invGate,
+                xgbQuarterGate: _invUseMC ? 0.30 : (_xgbGateByQ[currentPeriod] || 0.40),
+                invTriggerSignal: _invUseMC ? 'mc_cum' : 'xgb',
+                mcCumWinProb: _invMcCum,
               };
 
               const _invPrompt = buildV2AgentPrompt(_invV2Ctx);
@@ -8436,20 +8475,24 @@ export default async function(req) {
                 await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
                   VALUES (${game.id}, ${league}, ${'XGB_INVALIDATED'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal}, ${snapTp?.classification || null}, ${snapLs?.classification || null}, ${_invV2Ctx.ctrlSust}, ${_invV2Ctx.oppSust}, ${_windowScore}, ${'FIRED'}, ${'SEND'}, ${_invReasoning || _invBody}, ${ctrlI(ind)[0]}, ${ctrlI(ind)[1]}, ${ctrlI(ind)[2]}, ${ctrlI(ind)[3]}, ${ctrlI(ind)[4]}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${true}, ${_invBuyTeam}, ${Math.round(_xgbWinProb * 10000) / 10000}, ${_xgbAligned})`;
 
-                const _invNtfyTitle = `XGB INVALIDATED — ${_invBuyTeam} BUY`;
+                const _invNtfyTitle = `${_invUseMC ? 'MC' : 'XGB'} INVALIDATED — ${_invBuyTeam} BUY`;
                 const _invScoreLine = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}`;
                 const _invNtfyBody = _invBody
                   ? _invScoreLine + '\n' + _invBody
-                  : _invScoreLine + '\nThe structural model that supported the ' + _invBuyTeam + ' BUY at Q' + lt.buy_send_period + ' (XGB ' + (lt.buy_send_xgb * 100).toFixed(0) + '%) has dropped to ' + (_xgbWinProb * 100).toFixed(0) + '%, below the Q' + currentPeriod + ' viability threshold of ' + (_invGate * 100).toFixed(0) + '%. The raw stats no longer support the entry thesis. Consider exiting.';
+                  : _invUseMC
+                    ? _invScoreLine + '\nThe full-game rate projection for ' + _invBuyTeam + ' has dropped to ' + (_invMcCum * 100).toFixed(0) + '%, below the 30% structural viability threshold. The possession rates no longer support the entry thesis. Consider exiting.'
+                    : _invScoreLine + '\nThe structural model that supported the ' + _invBuyTeam + ' BUY at Q' + lt.buy_send_period + ' (XGB ' + (lt.buy_send_xgb * 100).toFixed(0) + '%) has dropped to ' + (_xgbWinProb * 100).toFixed(0) + '%, below the Q' + currentPeriod + ' viability threshold. The raw stats no longer support the entry thesis. Consider exiting.';
                 await sendNtfy(_invNtfyTitle, _invNtfyBody, 5);
                 lt.last_send_type = 'XGB_INVALIDATED';
-                log(`${matchup}: XGB INVALIDATED → SEND (ntfy sent)`);
+                log(`${matchup}: ${_invUseMC ? 'MC' : 'XGB'} INVALIDATED → SEND (ntfy sent)`);
               } catch (e) {
-                log(`${matchup}: XGB INVALIDATED agent error: ${e.message} — sending fallback`);
+                log(`${matchup}: ${_invUseMC ? 'MC' : 'XGB'} INVALIDATED agent error: ${e.message} — sending fallback`);
                 await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, alert_tier, agent_decision, agent_reasoning, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
                   VALUES (${game.id}, ${league}, ${'XGB_INVALIDATED'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${ctrlTrailing}, ${'FIRED'}, ${'SEND'}, ${'Agent unavailable — auto-SEND'}, ${true}, ${_invBuyTeam}, ${Math.round(_xgbWinProb * 10000) / 10000}, ${_xgbAligned})`;
-                const _invFallback = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\nThe structural model that supported the ${_invBuyTeam} BUY at Q${lt.buy_send_period} (XGB ${(lt.buy_send_xgb * 100).toFixed(0)}%) has dropped to ${(_xgbWinProb * 100).toFixed(0)}%, below the Q${currentPeriod} viability threshold of ${(_invGate * 100).toFixed(0)}%. Consider exiting.`;
-                await sendNtfy(`XGB INVALIDATED — ${_invBuyTeam} BUY`, _invFallback, 5);
+                const _invFallback = _invUseMC
+                  ? `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\nThe full-game rate projection for ${_invBuyTeam} has dropped to ${(_invMcCum * 100).toFixed(0)}%, below the 30% structural viability threshold. Consider exiting.`
+                  : `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\nThe structural model that supported the ${_invBuyTeam} BUY at Q${lt.buy_send_period} (XGB ${(lt.buy_send_xgb * 100).toFixed(0)}%) has dropped to ${(_xgbWinProb * 100).toFixed(0)}%, below the Q${currentPeriod} viability threshold. Consider exiting.`;
+                await sendNtfy(`${_invUseMC ? 'MC' : 'XGB'} INVALIDATED — ${_invBuyTeam} BUY`, _invFallback, 5);
                 lt.last_send_type = 'XGB_INVALIDATED';
               }
             }
