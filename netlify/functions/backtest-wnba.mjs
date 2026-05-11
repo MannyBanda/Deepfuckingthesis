@@ -217,7 +217,27 @@ async function phaseInit(sql) {
       computed_at TIMESTAMPTZ
     )
   `;
-  return { status: 'ok', message: 'wnba_backtest table created' };
+  // Add season column if missing
+  await sql`ALTER TABLE wnba_backtest ADD COLUMN IF NOT EXISTS season INTEGER`;
+  await sql`UPDATE wnba_backtest SET season = 2025 WHERE season IS NULL`;
+  // XGB training data table
+  await sql`
+    CREATE TABLE IF NOT EXISTS wnba_xgb_training (
+      id SERIAL PRIMARY KEY,
+      game_id TEXT NOT NULL,
+      bdl_game_id INTEGER,
+      season INTEGER,
+      checkpoint TEXT NOT NULL,
+      quarter INTEGER NOT NULL,
+      game_seconds INTEGER,
+      ctrl_team TEXT,
+      ctrl_won BOOLEAN,
+      features JSONB NOT NULL,
+      margin INTEGER,
+      UNIQUE(game_id, checkpoint)
+    )
+  `;
+  return { status: 'ok', message: 'wnba_backtest + wnba_xgb_training tables ready' };
 }
 
 async function phaseReset(sql) {
@@ -1655,6 +1675,39 @@ async function reportIndicatorStability(sql) {
   };
 }
 
+// ── SHOT ZONE CLASSIFICATION ─────────────────────────────────────────────────
+// Deep paint hypothesis: SR's points_in_paint (≤16ft) masks structural signal.
+// RIM (≤5ft) correlates with defensive penetration. Mid-range paint is noise.
+function classifyShotZone(type, text) {
+  // 1. Try to extract explicit distance from play text: "X-foot" or "X'"
+  const distMatch = text.match(/(\d+)[- ]?(?:foot|ft|')/);
+  if (distMatch) {
+    const ft = parseInt(distMatch[1]);
+    if (ft <= 5)  return 'RIM';
+    if (ft <= 10) return 'SHORT';
+    if (ft <= 16) return 'MID_PAINT';
+    if (ft <= 22) return 'LONG2';
+    return 'THREE'; // 23+ft
+  }
+  // 2. No distance — classify by shot type keywords
+  const t = type.toLowerCase();
+  const tx = text.toLowerCase();
+  // RIM: layups, dunks, tips, putbacks
+  if (t.includes('layup') || t.includes('dunk') || t.includes('tip') || t.includes('putback') ||
+      tx.includes('layup') || tx.includes('dunk') || tx.includes('tip shot') || tx.includes('putback') ||
+      tx.includes('cutting') || tx.includes('finger roll') || tx.includes('alley oop'))
+    return 'RIM';
+  // SHORT: hooks, floaters, runners
+  if (t.includes('hook') || t.includes('float') || t.includes('runner') ||
+      tx.includes('hook') || tx.includes('floating') || tx.includes('runner'))
+    return 'SHORT';
+  // MID: turnaround jump shot without distance
+  if ((t.includes('turnaround') || tx.includes('turnaround')) && !tx.includes('hook'))
+    return 'MID_PAINT';
+  // Can't classify — exclude from zone features
+  return 'UNKNOWN';
+}
+
 // ── WNBA 2.5-MINUTE CHECKPOINTS ─────────────────────────────────────────────
 // 10-min quarters → 4 checkpoints per quarter (Q2-Q4) = 11 total + Q4_END
 const WNBA_CHECKPOINTS = [
@@ -3010,6 +3063,583 @@ async function exportXGBDiscover(sql) {
   };
 }
 
+// ── PHASE: COLLECT 2024 ─────────────────────────────────────────────────────
+// Pull 2024 WNBA season games from BDL. Same as phaseCollect but for prior season.
+async function phaseCollect2024(sql) {
+  // Ensure season column exists
+  await sql`ALTER TABLE wnba_backtest ADD COLUMN IF NOT EXISTS season INTEGER`;
+  // Backfill existing 2025 games
+  await sql`UPDATE wnba_backtest SET season = 2025 WHERE season IS NULL`;
+
+  const allGames = [];
+  let cursor = null, pages = 0;
+  while (pages < 30) {
+    let path = `/wnba/v1/games?seasons[]=2024&per_page=100`;
+    if (cursor) path += `&cursor=${cursor}`;
+    const resp = await bdlFetch(path);
+    if (!resp?.data || resp.data.length === 0) break;
+    for (const g of resp.data) {
+      if (g.status !== 'post' && g.status !== 'Final') continue;
+      allGames.push(g);
+    }
+    cursor = resp.meta?.next_cursor;
+    pages++;
+    if (!cursor) break;
+  }
+  console.log(`BDL 2024: ${allGames.length} completed games (${pages} pages)`);
+
+  let saved = 0, skipped = 0, errors = 0;
+  for (const g of allGames) {
+    try {
+      const homeAbbr = g.home_team?.abbreviation || '';
+      const awayAbbr = g.visitor_team?.abbreviation || '';
+      const winner = g.home_score > g.away_score ? homeAbbr : awayAbbr;
+      const margin = Math.abs(g.home_score - g.away_score);
+      const bucket = margin >= 15 ? 'blowout' : margin >= 8 ? 'comfortable' : margin >= 1 ? 'close' : 'tie';
+      await sql`
+        INSERT INTO wnba_backtest (game_id, bdl_game_id, date, home_alias, away_alias, home_score, away_score, winner, margin, margin_bucket, season)
+        VALUES (${`bdl_${g.id}`}, ${g.id}, ${g.date?.substring(0, 10)}, ${homeAbbr}, ${awayAbbr}, ${g.home_score}, ${g.away_score}, ${winner}, ${margin}, ${bucket}, 2024)
+        ON CONFLICT (game_id) DO UPDATE SET
+          home_score = EXCLUDED.home_score, away_score = EXCLUDED.away_score,
+          winner = EXCLUDED.winner, margin = EXCLUDED.margin,
+          margin_bucket = EXCLUDED.margin_bucket, season = EXCLUDED.season
+      `;
+      saved++;
+    } catch (e) { errors++; }
+  }
+  const counts = await sql`SELECT season, COUNT(*) as n FROM wnba_backtest GROUP BY season ORDER BY season`;
+  return { status: 'ok', season: 2024, found: allGames.length, saved, errors, byseason: counts.map(r => ({ season: r.season, n: Number(r.n) })) };
+}
+
+// ── PHASE: COLLECT TEAM STATS ────────────────────────────────────────────────
+// Fetch BDL team_stats per game as ground truth for PBP reconstruction validation.
+// Batched: ?phase=collect_team_stats&limit=25
+async function phaseCollectTeamStats(sql, url) {
+  const limit = parseInt(url.searchParams.get('limit') || '25');
+  await sql`ALTER TABLE wnba_backtest ADD COLUMN IF NOT EXISTS bdl_team_stats JSONB`;
+
+  const games = await sql`
+    SELECT game_id, bdl_game_id FROM wnba_backtest
+    WHERE bdl_game_id IS NOT NULL AND bdl_team_stats IS NULL
+    ORDER BY game_id LIMIT ${limit}
+  `;
+  const remaining = await sql`
+    SELECT COUNT(*) as n FROM wnba_backtest WHERE bdl_game_id IS NOT NULL AND bdl_team_stats IS NULL
+  `;
+
+  let fetched = 0, errors = 0;
+  for (const g of games) {
+    try {
+      const resp = await bdlFetch(`/wnba/v1/team_stats?game_ids[]=${g.bdl_game_id}`);
+      if (resp?.data) {
+        await sql`UPDATE wnba_backtest SET bdl_team_stats = ${JSON.stringify(resp.data)} WHERE game_id = ${g.game_id}`;
+        fetched++;
+      } else {
+        // Mark as empty so we don't retry
+        await sql`UPDATE wnba_backtest SET bdl_team_stats = '[]'::jsonb WHERE game_id = ${g.game_id}`;
+        errors++;
+      }
+      await delay(100); // BDL courtesy delay
+    } catch (e) { errors++; }
+  }
+
+  return {
+    status: 'ok', fetched, errors, remaining: Number(remaining[0]?.n || 0),
+    nextStep: fetched > 0 ? `Run again: ?phase=collect_team_stats&limit=${limit}` : 'All team_stats collected',
+  };
+}
+
+// ── PHASE: VALIDATE RECONSTRUCTION ──────────────────────────────────────────
+// Compare PBP-reconstructed game totals vs BDL team_stats. NON-NEGOTIABLE before training.
+// Acceptable: ±2 per stat. Flag >3 for inspection.
+async function phaseValidateReconstruction(sql) {
+  const games = await sql`
+    SELECT game_id, home_alias, away_alias, bdl_pbp, bdl_team_stats
+    FROM wnba_backtest
+    WHERE bdl_pbp IS NOT NULL AND bdl_pbp != '[]'::jsonb
+      AND bdl_team_stats IS NOT NULL AND bdl_team_stats != '[]'::jsonb
+  `;
+  if (games.length === 0) return { error: 'No games with both bdl_pbp and bdl_team_stats. Run collect_team_stats first.' };
+
+  const COMPARE = ['fgm','fga','fg3m','fg3a','ftm','fta','oreb','ast','stl','blk','tov'];
+  // BDL team_stats field name mapping (WNBA uses different names)
+  const BDL_MAP = {
+    fgm: 'fgm', fga: 'fga', fg3m: 'fg3m', fg3a: 'fg3a', ftm: 'ftm', fta: 'fta',
+    oreb: 'oreb', ast: 'ast', stl: 'stl', blk: 'blk', tov: 'turnovers',
+  };
+
+  let total = 0;
+  const diffs = {};
+  for (const f of COMPARE) diffs[f] = { total: 0, sum: 0, max: 0, over3: 0 };
+  const flagged = [];
+
+  for (const g of games) {
+    const plays = g.bdl_pbp;
+    const ts = g.bdl_team_stats;
+    if (!plays || !ts || ts.length === 0) continue;
+
+    // Reconstruct full game from PBP
+    const sorted = plays.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+    const mk = () => ({ fgm:0, fga:0, fg3m:0, fg3a:0, ftm:0, fta:0, oreb:0, dreb:0, ast:0, stl:0, blk:0, tov:0, pf:0, pot:0 });
+    const h = mk(), a = mk();
+    let pendPOT = null, lastPeriod = 0;
+
+    for (const ev of sorted) {
+      const period = ev.period || 1;
+      if (period !== lastPeriod) { pendPOT = null; lastPeriod = period; }
+      const tm = ev.team?.abbreviation || '';
+      if (!tm) continue;
+      const isH = tm === g.home_alias;
+      const s = isH ? h : a;
+      const opp = isH ? g.away_alias : g.home_alias;
+      const type = (ev.type || '').toLowerCase();
+      const text = (ev.text || '').toLowerCase();
+      if (type.includes('substitution') || text.includes('enters the game')) continue;
+      if (type.includes('free throw')) {
+        s.fta++;
+        if (ev.scoring_play || text.includes('makes')) { s.ftm++; if (pendPOT === tm) s.pot += 1; }
+        continue;
+      }
+      const isShotType = type.includes('shot') || type.includes('layup') || type.includes('dunk') ||
+        type.includes('hook') || type.includes('tip') || type.includes('alley') || type.includes('finger roll') ||
+        type.includes('pullup') || type.includes('driving') || type.includes('fadeaway') ||
+        type.includes('float') || type.includes('runner') || type.includes('step back') ||
+        type.includes('turnaround') || type.includes('cutting') || type.includes('putback');
+      const isMadeFG = ev.scoring_play && ev.score_value >= 2;
+      if (ev.shooting_play || isShotType || isMadeFG || (text.includes('misses') && !type.includes('free throw'))) {
+        const is3 = ev.score_value === 3 || type.includes('three point') || type.includes('3-point') || type.includes('3pt') || text.includes('three point') || text.includes('3-point') || text.includes('3pt') || text.includes('3-pointer');
+        s.fga++; if (is3) s.fg3a++;
+        if (isMadeFG || text.includes('makes')) {
+          s.fgm++; if (is3) s.fg3m++;
+          if (text.includes('assist')) s.ast++;
+          if (pendPOT === tm) s.pot += (is3 ? 3 : 2); pendPOT = null;
+        }
+        continue;
+      }
+      if (type.includes('turnover') || type.includes('offensive foul')) { s.tov++; pendPOT = opp; continue; }
+      if (type.includes('rebound')) {
+        if (type.includes('offensive') || text.includes('offensive')) s.oreb++;
+        else { s.dreb++; pendPOT = null; }
+        continue;
+      }
+      if (type.includes('steal')) { s.stl++; continue; }
+      if (type.includes('block')) { s.blk++; continue; }
+      if (type.includes('foul') && !type.includes('offensive')) { s.pf++; continue; }
+    }
+
+    // Find BDL team_stats for home/away
+    const findTeam = (abbr) => ts.find(t => (t.team?.abbreviation || '') === abbr);
+    const bdlH = findTeam(g.home_alias);
+    const bdlA = findTeam(g.away_alias);
+    if (!bdlH || !bdlA) continue;
+    total++;
+
+    const gameFlags = [];
+    for (const [side, pbp, bdl] of [['home', h, bdlH], ['away', a, bdlA]]) {
+      for (const f of COMPARE) {
+        const pbpVal = pbp[f] || 0;
+        const bdlField = BDL_MAP[f] || f;
+        const bdlVal = Number(bdl[bdlField] || 0);
+        const diff = Math.abs(pbpVal - bdlVal);
+        diffs[f].total++;
+        diffs[f].sum += diff;
+        if (diff > diffs[f].max) diffs[f].max = diff;
+        if (diff > 3) {
+          diffs[f].over3++;
+          gameFlags.push({ side, stat: f, pbp: pbpVal, bdl: bdlVal, diff });
+        }
+      }
+    }
+    if (gameFlags.length > 0) flagged.push({ game: `${g.away_alias}@${g.home_alias}`, id: g.game_id, flags: gameFlags });
+  }
+
+  const summary = {};
+  for (const f of COMPARE) {
+    summary[f] = {
+      avg: diffs[f].total > 0 ? Math.round(diffs[f].sum / diffs[f].total * 100) / 100 : 0,
+      max: diffs[f].max,
+      over3: diffs[f].over3,
+      over3pct: diffs[f].total > 0 ? Math.round(diffs[f].over3 / diffs[f].total * 1000) / 10 : 0,
+    };
+  }
+
+  return {
+    totalGames: total,
+    statDiffs: summary,
+    flaggedGames: flagged.length,
+    flaggedSample: flagged.slice(0, 20),
+    verdict: flagged.length === 0 ? 'PASS — all stats within ±3' :
+      flagged.length < total * 0.05 ? 'MARGINAL — <5% of games have >3 stat gaps' :
+      'FAIL — significant reconstruction errors, inspect before training',
+  };
+}
+
+// ── PHASE: COMPUTE XGB TRAINING ─────────────────────────────────────────────
+// BDL-primary, pure windowed features (28 total incl zones + biglead + runs).
+// Cross-fade window matching production computeServerWindow.
+// Stores to wnba_xgb_training table for Python export.
+// Batched: ?phase=compute_xgb_training&offset=0&limit=25
+async function phaseComputeXGBTraining(sql, url) {
+  const offset = parseInt(url.searchParams.get('offset') || '0');
+  const limit = parseInt(url.searchParams.get('limit') || '25');
+
+  // Ensure training table exists
+  await sql`
+    CREATE TABLE IF NOT EXISTS wnba_xgb_training (
+      id SERIAL PRIMARY KEY,
+      game_id TEXT NOT NULL,
+      bdl_game_id INTEGER,
+      season INTEGER,
+      checkpoint TEXT NOT NULL,
+      quarter INTEGER NOT NULL,
+      game_seconds INTEGER,
+      ctrl_team TEXT,
+      ctrl_won BOOLEAN,
+      features JSONB NOT NULL,
+      margin INTEGER,
+      UNIQUE(game_id, checkpoint)
+    )
+  `;
+
+  const games = await sql`
+    SELECT game_id, bdl_game_id, bdl_pbp, home_alias, away_alias, winner, margin, season
+    FROM wnba_backtest
+    WHERE bdl_pbp IS NOT NULL AND bdl_pbp != '[]'::jsonb AND winner IS NOT NULL
+    ORDER BY game_id OFFSET ${offset} LIMIT ${limit}
+  `;
+  if (games.length === 0) return { error: 'No games at this offset', offset, limit };
+
+  const PERIOD_MINS = 10;
+  const STAT_FIELDS = ['fgm','fga','fg3m','fg3a','ftm','fta','oreb','dreb','ast','stl','blk','tov','pf','pot'];
+  const ZONE_FIELDS = ['rim_fgm','rim_fga','short_fgm','short_fga','mid_fgm','mid_fga','long2_fgm','long2_fga'];
+  const ALL_FIELDS = [...STAT_FIELDS, ...ZONE_FIELDS];
+
+  // Checkpoints include Q1_END for boundary capture
+  const ALL_CPS = [
+    { label: 'Q1_END', period: 1, gameSec: 600 },
+    ...WNBA_CHECKPOINTS,
+  ];
+
+  let totalRows = 0, gamesProcessed = 0;
+
+  for (const g of games) {
+    const plays = g.bdl_pbp;
+    if (!plays || plays.length === 0) continue;
+    const sorted = plays.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+
+    const mk = () => ({ fgm:0, fga:0, fg3m:0, fg3a:0, ftm:0, fta:0, oreb:0, dreb:0, ast:0, stl:0, blk:0, tov:0, pf:0, pot:0,
+      rim_fgm:0, rim_fga:0, short_fgm:0, short_fga:0, mid_fgm:0, mid_fga:0, long2_fgm:0, long2_fga:0 });
+    const h = mk(), a = mk();
+    let bigH = 0, bigA = 0, pendPOT = null, lastPeriod = 0;
+    // Runs tracking: 6+ point unanswered scoring sequences
+    let hRuns6 = 0, aRuns6 = 0, runTm = null, runPts = 0;
+    const snaps = [];
+    let cpIdx = 0;
+
+    const snap = (hScore, aScore) => ({
+      cp: ALL_CPS[cpIdx],
+      home: { ...h, biggest_lead: bigH },
+      away: { ...a, biggest_lead: bigA },
+      homeScore: hScore, awayScore: aScore,
+      hRuns6, aRuns6,
+    });
+
+    for (const ev of sorted) {
+      const period = ev.period || 1;
+      const clockSec = parseClockSec(ev.clock);
+      const gs = (period - 1) * 600 + (600 - clockSec);
+      if (period !== lastPeriod) { pendPOT = null; lastPeriod = period; }
+
+      while (cpIdx < ALL_CPS.length && gs >= ALL_CPS[cpIdx].gameSec) {
+        snaps.push(snap(ev.home_score || 0, ev.away_score || 0));
+        cpIdx++;
+      }
+
+      const tm = ev.team?.abbreviation || '';
+      if (!tm) continue;
+      const isH = tm === g.home_alias;
+      const s = isH ? h : a;
+      const opp = isH ? g.away_alias : g.home_alias;
+      const type = (ev.type || '').toLowerCase();
+      const text = (ev.text || '').toLowerCase();
+
+      if (ev.home_score != null && ev.away_score != null) {
+        const mg = ev.home_score - ev.away_score;
+        if (mg > bigH) bigH = mg;
+        if (-mg > bigA) bigA = -mg;
+      }
+      if (type.includes('substitution') || text.includes('enters the game')) continue;
+
+      // ── Free throws
+      if (type.includes('free throw')) {
+        s.fta++;
+        if (ev.scoring_play || text.includes('makes')) {
+          s.ftm++;
+          if (pendPOT === tm) s.pot += 1;
+          // Run tracking: FT = 1 point
+          if (runTm === tm) { runPts += 1; }
+          else { if (runPts >= 6) { if (runTm === g.home_alias) hRuns6++; else aRuns6++; } runTm = tm; runPts = 1; }
+        }
+        continue;
+      }
+
+      // ── Field goals
+      const isShotType = type.includes('shot') || type.includes('layup') || type.includes('dunk') ||
+        type.includes('hook') || type.includes('tip') || type.includes('alley') || type.includes('finger roll') ||
+        type.includes('pullup') || type.includes('driving') || type.includes('fadeaway') ||
+        type.includes('float') || type.includes('runner') || type.includes('step back') ||
+        type.includes('turnaround') || type.includes('cutting') || type.includes('putback');
+      const isMadeFG = ev.scoring_play && ev.score_value >= 2;
+
+      if (ev.shooting_play || isShotType || isMadeFG || (text.includes('misses') && !type.includes('free throw'))) {
+        const is3 = ev.score_value === 3 || type.includes('three point') || type.includes('3-point') || type.includes('3pt') || text.includes('three point') || text.includes('3-point') || text.includes('3pt') || text.includes('3-pointer');
+        s.fga++;
+        if (is3) s.fg3a++;
+
+        // Zone classification (non-3PT shots only — 3PT zone is implicit from fg3a)
+        if (!is3) {
+          const zone = classifyShotZone(ev.type || '', ev.text || '');
+          if (zone === 'RIM')       { s.rim_fga++; }
+          else if (zone === 'SHORT')     { s.short_fga++; }
+          else if (zone === 'MID_PAINT') { s.mid_fga++; }
+          else if (zone === 'LONG2')     { s.long2_fga++; }
+          // UNKNOWN: counted in fga but not in zone features
+        }
+
+        if (isMadeFG || text.includes('makes')) {
+          s.fgm++;
+          if (is3) s.fg3m++;
+          if (text.includes('assist')) s.ast++;
+          if (pendPOT === tm) s.pot += (is3 ? 3 : 2);
+          pendPOT = null;
+
+          // Zone makes
+          if (!is3) {
+            const zone = classifyShotZone(ev.type || '', ev.text || '');
+            if (zone === 'RIM')       { s.rim_fgm++; }
+            else if (zone === 'SHORT')     { s.short_fgm++; }
+            else if (zone === 'MID_PAINT') { s.mid_fgm++; }
+            else if (zone === 'LONG2')     { s.long2_fgm++; }
+          }
+
+          // Run tracking: 2 or 3 points
+          const pts = is3 ? 3 : 2;
+          if (runTm === tm) { runPts += pts; }
+          else { if (runPts >= 6) { if (runTm === g.home_alias) hRuns6++; else aRuns6++; } runTm = tm; runPts = pts; }
+        }
+        continue;
+      }
+
+      if (type.includes('turnover') || type.includes('offensive foul')) { s.tov++; pendPOT = opp; continue; }
+      if (type.includes('rebound')) {
+        if (type.includes('offensive') || text.includes('offensive')) s.oreb++;
+        else { s.dreb++; pendPOT = null; }
+        continue;
+      }
+      if (type.includes('steal')) { s.stl++; continue; }
+      if (type.includes('block')) { s.blk++; continue; }
+      if (type.includes('foul') && !type.includes('offensive')) { s.pf++; continue; }
+    }
+    // Flush final run
+    if (runPts >= 6) { if (runTm === g.home_alias) hRuns6++; else aRuns6++; }
+
+    const last = sorted[sorted.length - 1];
+    while (cpIdx < ALL_CPS.length) { snaps.push(snap(last?.home_score || 0, last?.away_score || 0)); cpIdx++; }
+    if (snaps.length < 4) continue;
+
+    // ── Quarter boundary snapshots ──
+    const boundaryIdx = {};
+    for (let i = 0; i < snaps.length; i++) {
+      if (snaps[i].cp.label.endsWith('_END')) boundaryIdx[snaps[i].cp.period] = i;
+    }
+
+    // ── Per-quarter diffs ──
+    const qDiffs = {};
+    const diffSide = (curr, prev) => {
+      const d = {};
+      for (const f of ALL_FIELDS) d[f] = (curr[f] || 0) - (prev[f] || 0);
+      return d;
+    };
+    if (boundaryIdx[1] !== undefined) {
+      const b1 = snaps[boundaryIdx[1]];
+      qDiffs[1] = { home: { ...b1.home }, away: { ...b1.away } };
+    }
+    if (boundaryIdx[2] !== undefined && boundaryIdx[1] !== undefined) {
+      const b2 = snaps[boundaryIdx[2]], b1 = snaps[boundaryIdx[1]];
+      qDiffs[2] = { home: diffSide(b2.home, b1.home), away: diffSide(b2.away, b1.away) };
+    }
+    if (boundaryIdx[3] !== undefined && boundaryIdx[2] !== undefined) {
+      const b3 = snaps[boundaryIdx[3]], b2 = snaps[boundaryIdx[2]];
+      qDiffs[3] = { home: diffSide(b3.home, b2.home), away: diffSide(b3.away, b2.away) };
+    }
+
+    const homeWon = g.winner === g.home_alias;
+    const safePct = (m, att) => att > 0 ? m / att : 0;
+
+    // ── Process each checkpoint Q2+ ──
+    for (let i = 0; i < snaps.length; i++) {
+      const s = snaps[i];
+      const cp = s.cp;
+      if (cp.period < 2) continue;
+
+      const cpInd = computeAtCheckpoint(s, g.home_alias, g.away_alias);
+      if (!cpInd || cpInd.controlTeam === 'EVEN') continue;
+      const ctrlIsHome = cpInd.controlTeam === g.home_alias;
+      const ctrlWon = (ctrlIsHome && homeWon) || (!ctrlIsHome && !homeWon);
+
+      // ── CROSS-FADE WINDOW ──
+      const lastBoundaryQ = Object.keys(boundaryIdx).map(Number).filter(n => snaps[boundaryIdx[n]].cp.gameSec <= cp.gameSec).sort((a,b) => b-a)[0] || 0;
+      const partialDiff = { home: {}, away: {} };
+      if (lastBoundaryQ > 0 && boundaryIdx[lastBoundaryQ] !== undefined) {
+        const bSnap = snaps[boundaryIdx[lastBoundaryQ]];
+        for (const f of ALL_FIELDS) {
+          partialDiff.home[f] = (s.home[f] || 0) - (bSnap.home[f] || 0);
+          partialDiff.away[f] = (s.away[f] || 0) - (bSnap.away[f] || 0);
+        }
+      } else {
+        for (const f of ALL_FIELDS) {
+          partialDiff.home[f] = s.home[f] || 0;
+          partialDiff.away[f] = s.away[f] || 0;
+        }
+      }
+
+      const elapsedInQ = cp.gameSec - (cp.period - 1) * 600;
+      const completion = Math.max(0, Math.min(1, elapsedInQ / (PERIOD_MINS * 60)));
+
+      const windowQs = [];
+      const p = cp.period;
+      if (p === 2) {
+        if (qDiffs[1]) windowQs.push({ w: Math.max(0, 1.0 - completion), d: qDiffs[1] });
+        windowQs.push({ w: 1.0, d: partialDiff });
+      } else if (p === 3) {
+        if (qDiffs[2]) windowQs.push({ w: 1.0, d: qDiffs[2] });
+        windowQs.push({ w: 1.0, d: partialDiff });
+      } else if (p === 4) {
+        if (qDiffs[2]) windowQs.push({ w: Math.max(0, 1.0 - completion), d: qDiffs[2] });
+        if (qDiffs[3]) windowQs.push({ w: 1.0, d: qDiffs[3] });
+        windowQs.push({ w: 1.0, d: partialDiff });
+      }
+
+      const aggSide = (side) => {
+        const agg = {};
+        for (const f of ALL_FIELDS) {
+          let sum = 0;
+          for (const wq of windowQs) { sum += (wq.d?.[side]?.[f] || 0) * wq.w; }
+          agg[f] = sum;
+        }
+        return agg;
+      };
+      const wHome = aggSide('home'), wAway = aggSide('away');
+      const wCtrl = ctrlIsHome ? wHome : wAway;
+      const wOpp = ctrlIsHome ? wAway : wHome;
+      const wCtrlFGA = wCtrl.fga || 0, wOppFGA = wOpp.fga || 0;
+      const windowValid = wCtrlFGA >= 5 && wOppFGA >= 5;
+      if (!windowValid) continue; // spec: pure windowed — skip if insufficient volume
+
+      // ── Extract 28 features ──
+      const f = {};
+      // Standard box score (18 windowed)
+      f.pot = wCtrl.pot - wOpp.pot;
+      f.to = wCtrl.tov - wOpp.tov;
+      f.stl = wCtrl.stl - wOpp.stl;
+      f.blk = wCtrl.blk - wOpp.blk;
+      f.oreb = wCtrl.oreb - wOpp.oreb;
+      f.dreb = wCtrl.dreb - wOpp.dreb;
+      f.ast = wCtrl.ast - wOpp.ast;
+      f.ast_ratio = safePct(wCtrl.ast, wCtrl.fgm || 1) - safePct(wOpp.ast, wOpp.fgm || 1);
+      f.fta = wCtrl.fta - wOpp.fta;
+      f.ftm = wCtrl.ftm - wOpp.ftm;
+      f.efg = safePct(wCtrl.fgm + 0.5 * wCtrl.fg3m, wCtrlFGA) - safePct(wOpp.fgm + 0.5 * wOpp.fg3m, wOppFGA);
+      f['3pa'] = wCtrl.fg3a - wOpp.fg3a;
+      f['3pm'] = wCtrl.fg3m - wOpp.fg3m;
+      f['3pr'] = safePct(wCtrl.fg3m, wCtrl.fg3a || 1) - safePct(wOpp.fg3m, wOpp.fg3a || 1);
+      f['2pr'] = safePct(wCtrl.fgm - wCtrl.fg3m, (wCtrl.fga - wCtrl.fg3a) || 1) - safePct(wOpp.fgm - wOpp.fg3m, (wOpp.fga - wOpp.fg3a) || 1);
+      f.pf = wCtrl.pf - wOpp.pf;
+      f.disruption = (wCtrl.stl + wCtrl.blk) - (wOpp.stl + wOpp.blk);
+      f.to_ratio = safePct(wCtrl.stl, wCtrl.tov || 1) - safePct(wOpp.stl, wOpp.tov || 1);
+
+      // Zone features (8 windowed)
+      const cRimPts = (wCtrl.rim_fgm || 0) * 2; // rim shots are all 2pt
+      const oRimPts = (wOpp.rim_fgm || 0) * 2;
+      f.rim_pts = cRimPts - oRimPts;
+      f.rim_rate = safePct(wCtrl.rim_fgm, wCtrl.rim_fga || 1) - safePct(wOpp.rim_fgm, wOpp.rim_fga || 1);
+      f.rim_share = safePct(wCtrl.rim_fga, wCtrlFGA) - safePct(wOpp.rim_fga, wOppFGA);
+      f.short_pts = ((wCtrl.short_fgm || 0) - (wOpp.short_fgm || 0)) * 2;
+      f.mid_paint_pts = ((wCtrl.mid_fgm || 0) - (wOpp.mid_fgm || 0)) * 2;
+      // paint_pts = everything ≤16ft (rim + short + mid_paint) — SR-equivalent baseline
+      f.paint_pts = (cRimPts + (wCtrl.short_fgm || 0) * 2 + (wCtrl.mid_fgm || 0) * 2)
+                  - (oRimPts + (wOpp.short_fgm || 0) * 2 + (wOpp.mid_fgm || 0) * 2);
+      f.long2_pts = ((wCtrl.long2_fgm || 0) - (wOpp.long2_fgm || 0)) * 2;
+      f.deep_paint_rate = f.rim_rate; // alias for clarity — same as rim FG% differential
+
+      // Game-state (2 cumulative)
+      const cH = ctrlIsHome ? s.home : s.away;
+      const cA = ctrlIsHome ? s.away : s.home;
+      f.biglead = cH.biggest_lead - cA.biggest_lead;
+      f.runs = (ctrlIsHome ? s.hRuns6 : s.aRuns6) - (ctrlIsHome ? s.aRuns6 : s.hRuns6);
+
+      const ctrlScore = ctrlIsHome ? s.homeScore : s.awayScore;
+      const oppScore = ctrlIsHome ? s.awayScore : s.homeScore;
+
+      // ── Store to DB ──
+      try {
+        await sql`
+          INSERT INTO wnba_xgb_training (game_id, bdl_game_id, season, checkpoint, quarter, game_seconds, ctrl_team, ctrl_won, features, margin)
+          VALUES (${g.game_id}, ${g.bdl_game_id}, ${g.season || 2025}, ${cp.label}, ${cp.period}, ${cp.gameSec}, ${cpInd.controlTeam}, ${ctrlWon}, ${JSON.stringify(f)}, ${ctrlScore - oppScore})
+          ON CONFLICT (game_id, checkpoint) DO UPDATE SET
+            ctrl_team = EXCLUDED.ctrl_team, ctrl_won = EXCLUDED.ctrl_won,
+            features = EXCLUDED.features, margin = EXCLUDED.margin,
+            season = EXCLUDED.season
+        `;
+        totalRows++;
+      } catch (e) {
+        console.log(`Error storing ${g.game_id}/${cp.label}: ${e.message}`);
+      }
+    }
+    gamesProcessed++;
+  }
+
+  const total = await sql`SELECT COUNT(*) as n FROM wnba_xgb_training`;
+  const byQ = await sql`SELECT quarter, COUNT(*) as n FROM wnba_xgb_training GROUP BY quarter ORDER BY quarter`;
+
+  return {
+    status: 'ok', offset, limit, gamesProcessed, rowsInserted: totalRows,
+    totalInTable: Number(total[0]?.n || 0),
+    byQuarter: byQ.map(r => ({ q: r.quarter, n: Number(r.n) })),
+    nextStep: totalRows > 0 ? `Next batch: ?phase=compute_xgb_training&offset=${offset + limit}&limit=${limit}` : 'Done or no more games',
+  };
+}
+
+// ── PHASE: EXPORT XGB ───────────────────────────────────────────────────────
+// Paginated JSON export from wnba_xgb_training for Python training.
+// ?phase=export_xgb_training&batch=200&offset=0
+async function phaseExportXGBTraining(sql, url) {
+  const batch = parseInt(url.searchParams.get('batch') || '500');
+  const offset = parseInt(url.searchParams.get('offset') || '0');
+
+  const rows = await sql`
+    SELECT game_id, bdl_game_id, season, checkpoint, quarter, game_seconds,
+           ctrl_team, ctrl_won, features, margin
+    FROM wnba_xgb_training
+    ORDER BY game_id, game_seconds
+    OFFSET ${offset} LIMIT ${batch}
+  `;
+  const total = await sql`SELECT COUNT(*) as n FROM wnba_xgb_training`;
+
+  return {
+    total: Number(total[0]?.n || 0),
+    offset, batch,
+    returned: rows.length,
+    hasMore: rows.length === batch,
+    nextOffset: offset + batch,
+    rows: rows.map(r => ({
+      game_id: r.game_id, season: r.season, cp: r.checkpoint, q: r.quarter,
+      gs: r.game_seconds, ctrl: r.ctrl_team, won: r.ctrl_won,
+      margin: r.margin, ...r.features,
+    })),
+  };
+}
+
 // ── HANDLER ──────────────────────────────────────────────────────────────────
 export default async (req) => {
   const sql = neon(process.env.DATABASE_URL);
@@ -3057,9 +3687,14 @@ export default async (req) => {
       case 'report_cp_close':   result = await reportCPClose(sql); break;
       case 'report_validate_reconstruction': result = await reportReconstructionValidation(sql); break;
       case 'export_xgb_discover': result = await exportXGBDiscover(sql); break;
+      case 'collect_2024':         result = await phaseCollect2024(sql); break;
+      case 'collect_team_stats':   result = await phaseCollectTeamStats(sql, url); break;
+      case 'validate_reconstruction_bdl': result = await phaseValidateReconstruction(sql); break;
+      case 'compute_xgb_training': result = await phaseComputeXGBTraining(sql, url); break;
+      case 'export_xgb_training':  result = await phaseExportXGBTraining(sql, url); break;
       case 'export_checkpoint_xgb': result = await exportCheckpointXGB(sql, url); break;
       default:
-        result = { error: `Unknown phase: ${phase}. Phases: init, collect, sample, compute, report, explore, collect_pbp, compute_checkpoints, report_cp_journey, report_cp_graduation, report_cp_trailing, report_cp_stability, report_cp_close` };
+        result = { error: `Unknown phase: ${phase}. Phases: init, collect, collect_2024, collect_team_stats, validate_reconstruction_bdl, sample, compute, report, explore, collect_pbp, compute_checkpoints, compute_xgb_training, export_xgb_training, report_cp_*` };
     }
     // Inject active weights into report output
     if (result && typeof result === 'object' && !result.error) {
