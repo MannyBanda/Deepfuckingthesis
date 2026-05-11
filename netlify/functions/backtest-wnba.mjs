@@ -3174,11 +3174,16 @@ async function phaseValidateReconstruction(sql) {
   for (const f of COMPARE) diffs[f] = { total: 0, sum: 0, max: 0, over3: 0 };
   const flagged = [];
 
-  for (const gMeta of gameIds) {
-    // Fetch PBP + team_stats per game (avoids loading all JSONB at once)
-    const rows = await sql`SELECT bdl_pbp, bdl_team_stats FROM wnba_backtest WHERE game_id = ${gMeta.game_id}`;
-    if (!rows[0]) continue;
-    const g = { ...gMeta, bdl_pbp: rows[0].bdl_pbp, bdl_team_stats: rows[0].bdl_team_stats };
+  // Process in batches to stay within timeout
+  const BATCH = 20;
+  for (let bi = 0; bi < gameIds.length; bi += BATCH) {
+    const batch = gameIds.slice(bi, bi + BATCH);
+    const batchIds = batch.map(g => g.game_id);
+    const batchRows = await sql`
+      SELECT game_id, home_alias, away_alias, bdl_pbp, bdl_team_stats
+      FROM wnba_backtest WHERE game_id = ANY(${batchIds})
+    `;
+    for (const g of batchRows) {
     const plays = g.bdl_pbp;
     const ts = g.bdl_team_stats;
     if (!plays || !ts || ts.length === 0) continue;
@@ -3256,7 +3261,8 @@ async function phaseValidateReconstruction(sql) {
       }
     }
     if (gameFlags.length > 0) flagged.push({ game: `${g.away_alias}@${g.home_alias}`, id: g.game_id, flags: gameFlags });
-  }
+  } // end game loop
+  } // end batch loop
 
   const summary = {};
   for (const f of COMPARE) {
