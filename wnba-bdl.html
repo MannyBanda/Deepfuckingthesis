@@ -646,10 +646,27 @@ async function loadSchedule(){
     var d=getSlateDate(dateOffset);
 
     // WNBA: games from server poll_state (SR already discovered)
-    var psResp=await fetch(FN+'db-api?action=get_poll_state&league=wnba');
+    var psResp=await fetch(FN+'db-api?action=get_poll_state&league=wnba&date='+d.str);
     var psData=await psResp.json();
     var sched=psData.state?.schedule_json||[];
     if(typeof sched==='string')sched=JSON.parse(sched);
+
+    // Fallback: if poll_state has no schedule for this date, try ESPN scoreboard
+    if(sched.length===0){
+      try{
+        var espnResp=await fetch(FN+'espn-data?type=scoreboard&league=wnba&date='+d.year+d.month+d.day);
+        if(espnResp.ok){
+          var espnData=await espnResp.json();
+          var espnGames=espnData.games||[];
+          if(espnGames.length>0){
+            var stMap={'STATUS_FINAL':'closed','STATUS_IN_PROGRESS':'inprogress','STATUS_SCHEDULED':'scheduled','STATUS_HALFTIME':'inprogress','STATUS_END_PERIOD':'inprogress'};
+            sched=espnGames.map(function(eg){
+              return{id:eg.espnId,scheduled:null,home_alias:eg.homeAbbr||'',home_name:eg.homeName||'',away_alias:eg.awayAbbr||'',away_name:eg.awayName||'',status:stMap[eg.status]||(eg.status||'scheduled').toLowerCase()};
+            });
+          }
+        }
+      }catch(e){}
+    }
 
     games=sched.map(function(g){return{id:g.id,status:g.status,scheduled:g.scheduled,venue:'',home:{alias:g.home_alias,name:g.home_name},away:{alias:g.away_alias,name:g.away_name},homePoints:null,awayPoints:null,period:0,clock:'',summary:null,bdlData:null,dataSource:'BDL'};});
     var order={inprogress:0,halftime:0,scheduled:1,closed:2,complete:2,created:1};

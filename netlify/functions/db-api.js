@@ -1765,12 +1765,19 @@ exports.handler = async (event) => {
     // ═══════════════════════════════════════════════════════
     if (action === 'get_poll_state') {
       const league = params.league || 'nba';
+      const date = params.date || null;
       try {
-        const rows = await sql`
-          SELECT league, date, first_tip, last_tip, game_count, all_final, schedule_json, fetched_at
-          FROM poll_state WHERE league = ${league}
-          ORDER BY date DESC LIMIT 1
-        `;
+        const rows = date
+          ? await sql`
+              SELECT league, date, first_tip, last_tip, game_count, all_final, schedule_json, fetched_at
+              FROM poll_state WHERE league = ${league} AND date = ${date}
+              LIMIT 1
+            `
+          : await sql`
+              SELECT league, date, first_tip, last_tip, game_count, all_final, schedule_json, fetched_at
+              FROM poll_state WHERE league = ${league}
+              ORDER BY date DESC LIMIT 1
+            `;
         return { statusCode: 200, headers, body: JSON.stringify({ state: rows.length > 0 ? rows[0] : null }) };
       } catch (e) {
         return { statusCode: 200, headers, body: JSON.stringify({ state: null, error: 'poll_state table may not exist: ' + e.message }) };
