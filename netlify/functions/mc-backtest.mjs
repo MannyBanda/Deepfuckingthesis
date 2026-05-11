@@ -4722,6 +4722,14 @@ async function phaseBackfillMcPbp(sql, url) {
   var WINDOW_SIZE = 20;
   var REGRESSION_CAP = 0.60; // matches production extractMCRatesFromPossLog
   var BDL_KEY = process.env.BDL_API_KEY;
+  var league = url.searchParams.get('league') || 'nba';
+
+  // League-specific config
+  var QUARTER_MIN = league === 'wnba' ? 10 : 12;
+  var QUARTER_SEC = QUARTER_MIN * 60;
+  var TOTAL_MIN = QUARTER_MIN * 4;
+  var BDL_PREFIX = league === 'wnba' ? '/wnba' : (league === 'ncaamb' ? '/ncaamb' : '');
+  var ALIAS_MAP = league === 'wnba' ? { NYL:'NY', LVA:'LV', LAS:'LA', GSV:'GS', WAS:'WSH', PDX:'POR', TOY:'TOR' } : {};
 
   if (!BDL_KEY) return { error: 'BDL_API_KEY not configured' };
 
@@ -4735,12 +4743,11 @@ async function phaseBackfillMcPbp(sql, url) {
   }
 
   // ── Helper: game-seconds elapsed from period + clock string ──
-  // Q1 12:00 = 0s, Q1 0:00 = 720s, Q2 12:00 = 720s, Q4 0:00 = 2880s
   function gameSeconds(period, clockStr) {
-    var cm = String(clockStr || '12:00').match(/(\d+):(\d+)/);
-    var mins = cm ? parseInt(cm[1]) : 12;
+    var cm = String(clockStr || QUARTER_MIN + ':00').match(/(\d+):(\d+)/);
+    var mins = cm ? parseInt(cm[1]) : QUARTER_MIN;
     var secs = cm ? parseInt(cm[2]) : 0;
-    return (Math.min(period, 5) - 1) * 720 + (720 - mins * 60 - secs);
+    return (Math.min(period, 5) - 1) * QUARTER_SEC + (QUARTER_SEC - mins * 60 - secs);
   }
 
   // ── Build possession log from BDL plays (mirrors buildPossLogServer) ──
@@ -4783,8 +4790,9 @@ async function phaseBackfillMcPbp(sql, url) {
         continue;
       }
 
-      // Shooting play
-      if (ev.shooting_play) {
+      // Shooting play (shooting_play field missing on WNBA — use regex fallback)
+      var _isShotPlay = ev.shooting_play != null ? ev.shooting_play : /shot|layup|dunk|hook|tip/.test(tl);
+      if (_isShotPlay) {
         var shotMade = ev.scoring_play || false;
         var is3 = ev.score_value === 3 || text.includes('three point');
         cur.fga++;
@@ -4885,14 +4893,14 @@ async function phaseBackfillMcPbp(sql, url) {
     SELECT id, date, home_alias, away_alias, winner
     FROM games
     WHERE date >= ${fromDate} AND date <= ${toDate} AND winner IS NOT NULL
-      AND league = 'nba'
+      AND league = ${league}
     ORDER BY date ASC, id ASC
     LIMIT ${batchSize} OFFSET ${offset}
   `;
   var totalCount = await sql`
     SELECT COUNT(*)::int AS n FROM games
     WHERE date >= ${fromDate} AND date <= ${toDate} AND winner IS NOT NULL
-      AND league = 'nba'
+      AND league = ${league}
   `;
   var totalGames = Number(totalCount[0]?.n || 0);
 
@@ -4906,16 +4914,28 @@ async function phaseBackfillMcPbp(sql, url) {
 
     // ── Step 1: Find BDL game_id by matching teams on this date ──
     var bdlGameId = null;
+    // Map SR aliases → BDL aliases for matching
+    var hBdl = ALIAS_MAP[hA] || hA;
+    var aBdl = ALIAS_MAP[aA] || aA;
     try {
-      var bdlGames = await bdlFetch('/nba/v1/games?dates[]=' + g.date);
-      var bdlList = bdlGames.data || [];
-      for (var bi = 0; bi < bdlList.length; bi++) {
-        var bg = bdlList[bi];
-        var bgHome = bg.home_team?.abbreviation || '';
-        var bgAway = bg.visitor_team?.abbreviation || '';
-        if ((bgHome === hA && bgAway === aA) || (bgHome === aA && bgAway === hA)) {
-          bdlGameId = bg.id;
-          break;
+      // WNBA: BDL uses UTC dates, so late-ET games appear on the next day
+      var datesToFetch = [g.date];
+      if (league === 'wnba') {
+        var dt = new Date(g.date + 'T12:00:00Z');
+        dt.setUTCDate(dt.getUTCDate() + 1);
+        datesToFetch.push(dt.toISOString().slice(0, 10));
+      }
+      for (var di = 0; di < datesToFetch.length && !bdlGameId; di++) {
+        var bdlGames = await bdlFetch(BDL_PREFIX + '/v1/games?dates[]=' + datesToFetch[di]);
+        var bdlList = bdlGames.data || [];
+        for (var bi = 0; bi < bdlList.length; bi++) {
+          var bg = bdlList[bi];
+          var bgHome = bg.home_team?.abbreviation || '';
+          var bgAway = bg.visitor_team?.abbreviation || '';
+          if ((bgHome === hBdl && bgAway === aBdl) || (bgHome === aBdl && bgAway === hBdl)) {
+            bdlGameId = bg.id;
+            break;
+          }
         }
       }
     } catch (e) {
@@ -4932,7 +4952,7 @@ async function phaseBackfillMcPbp(sql, url) {
     // ── Step 2: Fetch all BDL plays ──
     var allPlays = [];
     try {
-      var playsResp = await bdlFetch('/nba/v1/plays?game_id=' + bdlGameId + '&per_page=1000');
+      var playsResp = await bdlFetch(BDL_PREFIX + '/v1/plays?game_id=' + bdlGameId + '&per_page=1000');
       allPlays = playsResp.data || [];
     } catch (e) {
       results.push({ matchup: matchup, bdl_id: bdlGameId, error: 'BDL plays: ' + e.message });
@@ -4949,8 +4969,8 @@ async function phaseBackfillMcPbp(sql, url) {
     // Sort plays by order
     allPlays.sort(function(a, b) { return (a.order || 0) - (b.order || 0); });
 
-    // ── Step 3: Build full possession log ──
-    var fullPossLog = buildPossLog(allPlays, hA, aA);
+    // ── Step 3: Build full possession log (use BDL aliases) ──
+    var fullPossLog = buildPossLog(allPlays, hBdl, aBdl);
 
     // ── Step 4: Get snapshots Q2+ ──
     var snaps = await sql`
@@ -4967,7 +4987,7 @@ async function phaseBackfillMcPbp(sql, url) {
     try {
       var clutch = await sql`
         SELECT team_alias, q4_fg3pct FROM clutch_profiles
-        WHERE team_alias IN (${hA}, ${aA}) AND league = 'nba'
+        WHERE team_alias IN (${hA}, ${aA}) AND league = ${league}
       `;
       for (var ci = 0; ci < clutch.length; ci++) {
         if (clutch[ci].team_alias === hA && clutch[ci].q4_fg3pct) hBaseline = Number(clutch[ci].q4_fg3pct);
@@ -4998,7 +5018,7 @@ async function phaseBackfillMcPbp(sql, url) {
       if (possAtSnap.length < WINDOW_SIZE) { noRates++; continue; }
 
       // Extract rates from last 20 possessions
-      var rates = extractPbpRates(possAtSnap, WINDOW_SIZE, hA, aA, hBaseline, aBaseline);
+      var rates = extractPbpRates(possAtSnap, WINDOW_SIZE, hBdl, aBdl, hBaseline, aBaseline);
       if (!rates) { noRates++; continue; }
 
       // Get remaining possessions from cumulative stats
@@ -5009,7 +5029,15 @@ async function phaseBackfillMcPbp(sql, url) {
       var cm = String(s.clock || '6:00').match(/(\d+):(\d+)/);
       if (cm) clockSec = parseInt(cm[1]) * 60 + parseInt(cm[2]);
 
-      var remain = estimateRemainingPoss(rsj.home, rsj.away, s.period, clockSec);
+      // Estimate remaining possessions (league-aware quarter length)
+      function estPoss(st) { return (st.fga||0) + 0.44*(st.fta||0) - (st.oreb||0) + (st.to||0); }
+      var hPoss = estPoss(rsj.home), aPoss = estPoss(rsj.away);
+      var avgPoss = (hPoss + aPoss) / 2;
+      var elapsedMin = (Math.min(s.period, 4) - 1) * QUARTER_MIN + (QUARTER_MIN - clockSec / 60);
+      if (elapsedMin < 1) elapsedMin = 1;
+      var remainMin = TOTAL_MIN - elapsedMin;
+      if (remainMin < 0) remainMin = 0;
+      var remain = Math.max(0, Math.round(avgPoss / elapsedMin * remainMin));
       if (remain <= 0) { noRates++; continue; }
 
       // Determine ctrl team
@@ -5054,6 +5082,7 @@ async function phaseBackfillMcPbp(sql, url) {
   return {
     status: 'ok',
     phase: 'backfill_mc_pbp',
+    league: league,
     dryRun: dryRun,
     dateRange: fromDate + ' to ' + toDate,
     simCount: SIM_COUNT,
@@ -5066,7 +5095,7 @@ async function phaseBackfillMcPbp(sql, url) {
     totalNoRates: totalNoRates,
     games: results,
     nextStep: offset + batchSize < totalGames
-      ? '?phase=backfill_mc_pbp&from=' + fromDate + '&to=' + toDate + '&batch=' + batchSize + '&offset=' + (offset + batchSize)
+      ? '?phase=backfill_mc_pbp&league=' + league + '&from=' + fromDate + '&to=' + toDate + '&batch=' + batchSize + '&offset=' + (offset + batchSize)
       : null,
   };
 }
