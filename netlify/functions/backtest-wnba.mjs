@@ -3153,13 +3153,14 @@ async function phaseCollectTeamStats(sql, url) {
 // Compare PBP-reconstructed game totals vs BDL team_stats. NON-NEGOTIABLE before training.
 // Acceptable: ±2 per stat. Flag >3 for inspection.
 async function phaseValidateReconstruction(sql) {
-  const games = await sql`
-    SELECT game_id, home_alias, away_alias, bdl_pbp, bdl_team_stats
+  // Get game IDs first (no JSONB columns — avoids 64MB Neon response limit)
+  const gameIds = await sql`
+    SELECT game_id, home_alias, away_alias
     FROM wnba_backtest
     WHERE bdl_pbp IS NOT NULL AND bdl_pbp != '[]'::jsonb
       AND bdl_team_stats IS NOT NULL AND bdl_team_stats != '[]'::jsonb
   `;
-  if (games.length === 0) return { error: 'No games with both bdl_pbp and bdl_team_stats. Run collect_team_stats first.' };
+  if (gameIds.length === 0) return { error: 'No games with both bdl_pbp and bdl_team_stats. Run collect_team_stats first.' };
 
   const COMPARE = ['fgm','fga','fg3m','fg3a','ftm','fta','oreb','ast','stl','blk','tov'];
   // BDL team_stats field name mapping (WNBA uses different names)
@@ -3173,7 +3174,11 @@ async function phaseValidateReconstruction(sql) {
   for (const f of COMPARE) diffs[f] = { total: 0, sum: 0, max: 0, over3: 0 };
   const flagged = [];
 
-  for (const g of games) {
+  for (const gMeta of gameIds) {
+    // Fetch PBP + team_stats per game (avoids loading all JSONB at once)
+    const rows = await sql`SELECT bdl_pbp, bdl_team_stats FROM wnba_backtest WHERE game_id = ${gMeta.game_id}`;
+    if (!rows[0]) continue;
+    const g = { ...gMeta, bdl_pbp: rows[0].bdl_pbp, bdl_team_stats: rows[0].bdl_team_stats };
     const plays = g.bdl_pbp;
     const ts = g.bdl_team_stats;
     if (!plays || !ts || ts.length === 0) continue;
