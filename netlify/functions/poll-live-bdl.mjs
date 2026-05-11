@@ -6694,6 +6694,9 @@ export default async function(req) {
           const playsResult = allPlaysResults[gi];
           const plays = playsResult?.data || [];
           const pbpResult = parseBDLPBPServer(plays, league==='wnba'?(cfg.aliasMap[hA]||hA):hA, league==='wnba'?(cfg.aliasMap[aA]||aA):aA);
+          // PBP data uses BDL abbreviations (e.g. 'GS' not 'GSV') — all possLog/runs6 consumers must use these
+          const hBdl = league === 'wnba' ? (cfg.aliasMap?.[hA] || hA) : hA;
+          const aBdl = league === 'wnba' ? (cfg.aliasMap?.[aA] || aA) : aA;
           const lineupsArr = _serverLineupsCache[bdlGid] || null;
 
           // Build SR-shaped summary (WNBA: already fetched from SR)
@@ -6843,7 +6846,7 @@ export default async function(req) {
           // Compute PBP 15-possession window for snapshot persistence
           var _possWindowScore = null;
           try {
-            const _pw = computePossWindowServer(pbpResult?.possLog, 15, hA, aA);
+            const _pw = computePossWindowServer(pbpResult?.possLog, 15, hBdl, aBdl);
             if (_pw && _pw.available) {
               // Convert to ctrl-team-relative
               const _pwCtrlIsHome = ind.controlTeam === hA;
@@ -6860,7 +6863,7 @@ export default async function(req) {
             rawStatsJson = JSON.stringify({
               home: { stl: _hs.steals||0, oreb: _hs.offensive_rebounds||0, to: _hs.turnovers||_hs.total_turnovers||0, fbp: _hs.fast_break_points||0, pot: _hs.points_off_turnovers||0, scp: _hs.second_chance_points||_hs.second_chance_pts||0, paint: _hs.points_in_the_paint||_hs.points_in_paint||0, atRimM: _hs.field_goals_at_rim_made||0, atRimA: _hs.field_goals_at_rim_att||0, paintM: _hs.points_in_paint_made||0, paintA: _hs.points_in_paint_att||0, fta: _hs.free_throws_att||0, blk: _hs.blocks||0, fd: _hs.fouls_drawn||0, fgm: _hs.field_goals_made||0, fga: _hs.field_goals_att||0, fg3m: _hs.three_points_made||0, fg3a: _hs.three_points_att||0, ast: _hs.assists||0, bigLead: _hs.biggest_lead||0, bench: _hs.bench_points||0, oppp: _hs.offensive_points_per_possession||0, dppp: _hs.defensive_points_per_possession||0, poss: _hs.possessions||0, ftm: _hs.free_throws_made||0, forced_to: pbpResult?.home?.tos?.forced||0, unforced_to: pbpResult?.home?.tos?.unforced||0, assisted_3pm: pbpResult?.home?.threes?.assisted||0 },
               away: { stl: _as.steals||0, oreb: _as.offensive_rebounds||0, to: _as.turnovers||_as.total_turnovers||0, fbp: _as.fast_break_points||0, pot: _as.points_off_turnovers||0, scp: _as.second_chance_points||_as.second_chance_pts||0, paint: _as.points_in_the_paint||_as.points_in_paint||0, atRimM: _as.field_goals_at_rim_made||0, atRimA: _as.field_goals_at_rim_att||0, paintM: _as.points_in_paint_made||0, paintA: _as.points_in_paint_att||0, fta: _as.free_throws_att||0, blk: _as.blocks||0, fd: _as.fouls_drawn||0, fgm: _as.field_goals_made||0, fga: _as.field_goals_att||0, fg3m: _as.three_points_made||0, fg3a: _as.three_points_att||0, ast: _as.assists||0, bigLead: _as.biggest_lead||0, bench: _as.bench_points||0, oppp: _as.offensive_points_per_possession||0, dppp: _as.defensive_points_per_possession||0, poss: _as.possessions||0, ftm: _as.free_throws_made||0, forced_to: pbpResult?.away?.tos?.forced||0, unforced_to: pbpResult?.away?.tos?.unforced||0, assisted_3pm: pbpResult?.away?.threes?.assisted||0 },
-              runs6: pbpResult?.runs6 ? { home: pbpResult.runs6.filter(r=>r.team===hA).length, away: pbpResult.runs6.filter(r=>r.team===aA).length, total: pbpResult.runs6.length } : null,
+              runs6: pbpResult?.runs6 ? { home: pbpResult.runs6.filter(r=>r.team===hBdl).length, away: pbpResult.runs6.filter(r=>r.team===aBdl).length, total: pbpResult.runs6.length } : null,
             });
           } catch (e) { /* non-fatal — snapshot still saves without raw stats */ }
 
@@ -6871,7 +6874,7 @@ export default async function(req) {
               var _pmHBL = _clutchMap?.[hA]?.q4_fg3pct || _team3ptBaselines?.[hA] || 0.36;
               var _pmABL = _clutchMap?.[aA]?.q4_fg3pct || _team3ptBaselines?.[aA] || 0.36;
               var _pmPossLog = pbpResult?.possLog;
-              var _pmRates = extractMCRatesFromPossLog(_pmPossLog, 20, hA, aA, _pmHBL, _pmABL);
+              var _pmRates = extractMCRatesFromPossLog(_pmPossLog, 20, hBdl, aBdl, _pmHBL, _pmABL);
               if (_pmRates && _pmRates.home._windowFGA >= 5 && _pmRates.away._windowFGA >= 5) {
                 var _pmClk = String(clock||'6:00').match(/(\d+):(\d+)/);
                 var _pmSec = _pmClk ? parseInt(_pmClk[1])*60+parseInt(_pmClk[2]) : 360;
@@ -8243,7 +8246,7 @@ export default async function(req) {
               if (lt._canary_margins.length > 10) lt._canary_margins.shift();
               if (_xgbWinProb != null) { lt._canary_xgb.push(_xgbWinProb); if (lt._canary_xgb.length > 10) lt._canary_xgb.shift(); }
 
-              const _mcRates = extractMCRatesFromPossLog(pbpResult?.possLog, 20, hA, aA, _mcHBaseline, _mcABaseline);
+              const _mcRates = extractMCRatesFromPossLog(pbpResult?.possLog, 20, hBdl, aBdl, _mcHBaseline, _mcABaseline);
               if (_mcRates && _mcRates.home._windowFGA >= 5 && _mcRates.away._windowFGA >= 5) {
                 const _hs = summary.home?.statistics || {}, _as = summary.away?.statistics || {};
                 const _mcClockSec = (function(c) { try { var pp = String(c||'6:00').split(':'); return parseInt(pp[0])*60+parseInt(pp[1]||0); } catch(e) { return 360; } })(clock);
