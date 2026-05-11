@@ -1058,7 +1058,13 @@ async function runPregameAgent() {
   }
   log('Candidates: ' + candidates.map(function(c) { return c.game.away_alias + '@' + c.game.home_alias + ' (' + c.minsTilTip + 'min)'; }).join(', '));
 
-  // 3. Check which don't have theses yet
+  // 3. Clean up stale PENDING sentinels (crashed/timed-out invocations)
+  try {
+    var cleaned = await sql`DELETE FROM theses WHERE text = 'PENDING' AND created_at < NOW() - INTERVAL '2 minutes' RETURNING game_id`;
+    if (cleaned.length > 0) log('Cleaned ' + cleaned.length + ' stale PENDING sentinel(s)');
+  } catch (e) {}
+
+  // 4. Check which don't have theses yet
   var gameIds = candidates.map(function(c) { return c.game.id; });
   var existingRows;
   try {
@@ -1094,6 +1100,25 @@ async function runPregameAgent() {
 
     var hId = SR_TEAM_IDS[hA], aId = SR_TEAM_IDS[aA];
     if (!hId || !aId) { log('Unknown team alias: ' + hA + ' or ' + aA); continue; }
+
+    // ── CLAIM: Insert PENDING sentinel to prevent concurrent invocations from duplicating SR calls ──
+    // Race pattern: 3 invocations check "thesis exists?" simultaneously, all see "no", all burn 12+ SR calls.
+    // Fix: first-write-wins via INSERT ON CONFLICT. Losers skip immediately.
+    try {
+      var claimed = await sql`
+        INSERT INTO theses (game_id, league, text, created_at)
+        VALUES (${game.id}, ${league}, 'PENDING', NOW())
+        ON CONFLICT (game_id) DO NOTHING
+        RETURNING game_id
+      `;
+      if (claimed.length === 0) {
+        log('  Another invocation already claimed ' + matchup + ' — skipping SR calls');
+        continue;
+      }
+    } catch (claimErr) {
+      log('  Claim failed for ' + matchup + ': ' + claimErr.message);
+      continue;
+    }
 
     try {
       // Fetch per-game SR data (10 calls with 1.1s delays for rate limit)
@@ -1239,30 +1264,25 @@ async function runPregameAgent() {
       var sonnetData = await anthropicResp.json();
       var thesis = sonnetData.content.filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('\n');
 
-      // Save to DB — DO NOTHING so first write wins (prevents duplicate ntfy on overlapping invocations)
-      var insertResult = await sql`
-        INSERT INTO theses (game_id, league, text, created_at)
-        VALUES (${game.id}, ${league}, ${thesis}, NOW())
-        ON CONFLICT (game_id) DO NOTHING
-        RETURNING game_id
+      // Update PENDING sentinel with real thesis text
+      await sql`
+        UPDATE theses SET text = ${thesis}, created_at = NOW()
+        WHERE game_id = ${game.id} AND text = 'PENDING'
       `;
 
-      // Only count + notify if we actually inserted (not a duplicate)
-      if (insertResult.length > 0) {
-        generated.push({
-          matchup: matchup,
-          floor: floor ? floor.score.toFixed(2) : '?',
-          verdict: floor ? getVerdictLabel(floor.score) : '?',
-          conviction: conviction.tier,
-          controlTeam: floor ? floor.controlTeam : '?',
-        });
-        log('  Thesis saved for ' + matchup);
-      } else {
-        log('  Thesis already exists for ' + matchup + ' — skipped');
-      }
+      generated.push({
+        matchup: matchup,
+        floor: floor ? floor.score.toFixed(2) : '?',
+        verdict: floor ? getVerdictLabel(floor.score) : '?',
+        conviction: conviction.tier,
+        controlTeam: floor ? floor.controlTeam : '?',
+      });
+      log('  Thesis saved for ' + matchup);
 
     } catch (e) {
       log('  ERROR processing ' + matchup + ': ' + e.message);
+      // Delete PENDING sentinel so future invocations can retry this game
+      try { await sql`DELETE FROM theses WHERE game_id = ${game.id} AND text = 'PENDING'`; } catch (de) {}
     }
   }
 
