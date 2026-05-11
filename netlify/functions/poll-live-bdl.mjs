@@ -2202,8 +2202,12 @@ function computeMCCumulative(summary, period, clockSec, controlTeam, hA, hBaseli
   var awayRates = extractMCRatesFromCumulative(awayStats, aBaseline, league);
   if (!homeRates || !awayRates) return null;
   var remainPoss = estimateRemainingPossMC(homeStats, awayStats, period, clockSec, league);
-  if (remainPoss <= 0) return null;
   var ctrlIsHome = controlTeam === hA;
+  if (remainPoss <= 0) {
+    var hPts = Number(summary.home?.points || 0), aPts = Number(summary.away?.points || 0);
+    var wp = hPts === aPts ? 0.5 : (ctrlIsHome ? (hPts > aPts ? 1.0 : 0.0) : (aPts > hPts ? 1.0 : 0.0));
+    return { winProb: wp, medianMargin: ctrlIsHome ? hPts - aPts : aPts - hPts, remainPoss: 0, homeRates, awayRates };
+  }
   var result = runMonteCarloSim(homeRates, awayRates,
     Number(summary.home?.points || 0), Number(summary.away?.points || 0),
     remainPoss, { simCount: 500, ctrlTeam: ctrlIsHome ? 'home' : 'away' });
