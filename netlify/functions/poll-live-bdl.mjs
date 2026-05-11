@@ -364,7 +364,7 @@ const LEAGUES = {
     bdlPrefix: '/wnba',
     bdlHasSeasonStats: true,
     bdlHasBoxScores: false,
-    season: '2025',
+    season: '2026',  // WNBA is calendar-year league (not split-year like NBA)
     aliasMap: { NYL:'NY', LVA:'LV', LAS:'LA', GSV:'GS', WAS:'WSH', PDX:'POR', TOY:'TOR' },
     quarterMinutes: 10,
     gameMinutes: 40,
@@ -2529,6 +2529,33 @@ Keep it under 300 words. Use team aliases (${hA}, ${aA}).`;
     _thesisAttempted.delete(game.id);  // allow retry on next invocation
     log(`${matchup}: fallback thesis failed: ${e.message}`);
   }
+}
+
+// Build SR-shaped summary from BDL player_stats (WNBA fallback when SR is down)
+// Returns same shape as buildSummaryFromBDLServer but without starters/quarter scores
+function buildSummaryFromBDLPlayerStats(playerStats, bdlGame, pbpResult) {
+  var hA = bdlGame.home_team?.abbreviation || 'HOME';
+  var aA = bdlGame.visitor_team?.abbreviation || 'AWAY';
+  var homePlayers = playerStats.filter(function(p) { return p.team?.abbreviation === hA; });
+  var awayPlayers = playerStats.filter(function(p) { return p.team?.abbreviation === aA; });
+
+  // Reshape into boxScore-compatible format for buildSummaryFromBDLServer's bts()
+  // BDL player_stats fields (turnover, pf, pts, stl, blk, oreb, dreb) match what bts() reads
+  var fakeBoxScore = {
+    id: bdlGame.id,
+    status: bdlGame.status === 'post' ? 'Final' : bdlGame.status === 'in_progress' ? 'In Progress' : bdlGame.status,
+    time: bdlGame.time,
+    period: bdlGame.period,
+    home_team: { team: bdlGame.home_team, players: homePlayers },
+    visitor_team: { team: bdlGame.visitor_team, players: awayPlayers },
+    // Map WNBA BDL score fields to NBA-shaped fields for buildSummaryFromBDLServer
+    home_team_score: bdlGame.home_score || 0,
+    visitor_team_score: bdlGame.away_score || 0,
+    // No quarter scores available from WNBA BDL game object (no home_q1 etc.)
+  };
+
+  // No lineups endpoint for WNBA → bench_points = total points (acceptable degradation)
+  return buildSummaryFromBDLServer(fakeBoxScore, pbpResult, null);
 }
 
 // Load season Q4 margins from games table (cached per hour)
@@ -6427,18 +6454,46 @@ export default async function(req) {
 
           // Find data source for this game
           let boxScore = null, _srSummary = null;
+          let _usedBdlFallback = false;
           if (league === 'wnba') {
-            // ── WNBA: SR game summary primary (BDL has no box_scores) ──
+            // ── WNBA: SR game summary primary, BDL player_stats fallback ──
             try {
               await sleep(SR_DELAY_MS);
               _srSummary = await srFetch(league, `games/${game.id}/summary.json`);
               if (!_srSummary || (!_srSummary.home && !_srSummary.away)) {
-                log(`${matchup}: SR summary empty — skipping`);
-                continue;
+                throw new Error('SR summary empty');
               }
             } catch (srErr) {
-              log(`${matchup}: SR summary fetch failed — ${srErr.message}`);
-              continue;
+              log(`${matchup}: SR summary failed (${srErr.message}) — trying BDL player_stats fallback`);
+              if (bdlGid) {
+                try {
+                  var psResp = await bdlFetch(`${cfg.bdlPrefix}/v1/player_stats?game_ids[]=${bdlGid}&per_page=50`);
+                  var bdlPlayers = psResp?.data || [];
+                  if (bdlPlayers.length > 0) {
+                    var gameResp = await bdlFetch(`${cfg.bdlPrefix}/v1/games/${bdlGid}`);
+                    var bdlGameObj = gameResp?.data || null;
+                    if (bdlGameObj) {
+                      var fbPlays = allPlaysResults[gi]?.data || [];
+                      var fbPbp = parseBDLPBPServer(fbPlays, cfg.aliasMap?.[hA]||hA, cfg.aliasMap?.[aA]||aA);
+                      _srSummary = buildSummaryFromBDLPlayerStats(bdlPlayers, bdlGameObj, fbPbp);
+                      _usedBdlFallback = true;
+                      log(`${matchup}: ★ BDL fallback succeeded — ${bdlPlayers.length} players`);
+                    } else {
+                      log(`${matchup}: BDL game fetch failed — skipping`);
+                      continue;
+                    }
+                  } else {
+                    log(`${matchup}: BDL player_stats empty — skipping`);
+                    continue;
+                  }
+                } catch (bdlErr) {
+                  log(`${matchup}: BDL fallback also failed (${bdlErr.message}) — skipping`);
+                  continue;
+                }
+              } else {
+                log(`${matchup}: no BDL game ID for fallback — skipping`);
+                continue;
+              }
             }
           } else {
             boxScore = bdlBoxScores.find(b => b.id === bdlGid);
