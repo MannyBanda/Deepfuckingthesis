@@ -5744,7 +5744,7 @@ export default async function(req) {
       // Parse PBP
       const playsResp = await bdlFetch(`/nba/v1/plays?game_id=${bdlGame.id}`);
       const _testCfg = LEAGUES['nba'];
-      const pbpResult = parseBDLPBPServer(playsResp?.data || [], _testCfg.aliasMap[hA]||hA, _testCfg.aliasMap[aA]||aA);
+      const pbpResult = parseBDLPBPServer(playsResp?.data || [], hA, aA);
 
       // Build summary
       const summary = buildSummaryFromBDLServer(bdlGame, pbpResult, null);
@@ -5929,7 +5929,7 @@ export default async function(req) {
               const playsResp = await bdlFetch(`/nba/v1/plays?game_id=${bdlGame.id}&per_page=500`);
               const plays = playsResp?.data || [];
               if (plays.length < 10) { skipped++; continue; }
-              pbpResult = parseBDLPBPServer(plays, cfg.aliasMap[hA]||hA, cfg.aliasMap[aA]||aA);
+              pbpResult = parseBDLPBPServer(plays, league==='wnba'?(cfg.aliasMap[hA]||hA):hA, league==='wnba'?(cfg.aliasMap[aA]||aA):aA);
               pbpSave = {
                 home: pbpResult.home, away: pbpResult.away,
                 totalShots: pbpResult.totalShots, totalTOs: pbpResult.totalTOs,
@@ -6467,7 +6467,7 @@ export default async function(req) {
             try {
               const playsResult = allPlaysResults[gi];
               const plays = playsResult?.data || [];
-              const pbpResult = parseBDLPBPServer(plays, cfg.aliasMap[hA]||hA, cfg.aliasMap[aA]||aA);
+              const pbpResult = parseBDLPBPServer(plays, league==='wnba'?(cfg.aliasMap[hA]||hA):hA, league==='wnba'?(cfg.aliasMap[aA]||aA):aA);
               const lineupsArr = _serverLineupsCache[bdlGid] || null;
               const finalSummary = league === 'wnba' ? _srSummary : buildSummaryFromBDLServer(boxScore, pbpResult, lineupsArr);
               const homeStats = finalSummary.home?.statistics || {};
@@ -6638,7 +6638,7 @@ export default async function(req) {
           // Parse PBP
           const playsResult = allPlaysResults[gi];
           const plays = playsResult?.data || [];
-          const pbpResult = parseBDLPBPServer(plays, cfg.aliasMap[hA]||hA, cfg.aliasMap[aA]||aA);
+          const pbpResult = parseBDLPBPServer(plays, league==='wnba'?(cfg.aliasMap[hA]||hA):hA, league==='wnba'?(cfg.aliasMap[aA]||aA):aA);
           const lineupsArr = _serverLineupsCache[bdlGid] || null;
 
           // Build SR-shaped summary (WNBA: already fetched from SR)
