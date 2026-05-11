@@ -1831,6 +1831,7 @@ function reconstructCheckpoints(plays, homeAbbr, awayAbbr) {
 
     // ── Rebounds
     if (type.includes('rebound')) {
+      if (text.includes('team rebound')) continue; // dead ball — not in box score stats
       if (type.includes('offensive') || text.includes('offensive')) s.oreb++;
       else { s.dreb++; pendPOT = null; }
       continue;
@@ -2451,6 +2452,7 @@ async function reportReconstructionValidation(sql) {
       }
       if (type.includes('turnover') || type.includes('offensive foul')) { s.tov++; pendPOT = opp; if (text.includes('steal')) { const oppS = isH ? a : h; oppS.stl++; } continue; }
       if (type.includes('rebound')) {
+        if (text.includes('team rebound')) continue; // dead ball — not in box score stats
         if (type.includes('offensive') || text.includes('offensive')) s.oreb++;
         else { s.dreb++; pendPOT = null; }
         continue;
@@ -2659,6 +2661,7 @@ async function exportCheckpointXGB(sql, url) {
       }
       if (type.includes('turnover') || type.includes('offensive foul')) { s.tov++; pendPOT = isH ? g.away_alias : g.home_alias; if (text.includes('steal')) { const oppS = isH ? a : h; oppS.stl++; } continue; }
       if (type.includes('rebound')) {
+        if (text.includes('team rebound')) continue; // dead ball — not in box score stats
         if (type.includes('offensive') || text.includes('offensive')) s.oreb++;
         else { s.dreb++; pendPOT = null; }
         continue;
@@ -3237,6 +3240,7 @@ async function phaseValidateReconstruction(sql) {
       }
       if (type.includes('turnover') || type.includes('offensive foul')) { s.tov++; pendPOT = opp; if (text.includes('steal')) { const oppS = isH ? a : h; oppS.stl++; } continue; }
       if (type.includes('rebound')) {
+        if (text.includes('team rebound')) continue; // dead ball — not in box score stats
         if (type.includes('offensive') || text.includes('offensive')) s.oreb++;
         else { s.dreb++; pendPOT = null; }
         continue;
@@ -3452,6 +3456,7 @@ async function phaseComputeXGBTraining(sql, url) {
 
       if (type.includes('turnover') || type.includes('offensive foul')) { s.tov++; pendPOT = opp; if (text.includes('steal')) { const oppS = isH ? a : h; oppS.stl++; } continue; }
       if (type.includes('rebound')) {
+        if (text.includes('team rebound')) continue; // dead ball — not in box score stats
         if (type.includes('offensive') || text.includes('offensive')) s.oreb++;
         else { s.dreb++; pendPOT = null; }
         continue;
