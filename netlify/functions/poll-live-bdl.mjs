@@ -1810,6 +1810,7 @@ function parseBDLPBPServer(plays, homeAbbr, awayAbbr) {
     }
 
     if (tl.includes('rebound')) {
+      if (tx.includes('team rebound')) { pendOREB = null; pendPOT = null; return; } // dead ball — not in box score stats
       if (tl.includes('offensive')) pendOREB = team;
       else { pendOREB = null; pendPOT = null; }
       return;
@@ -1944,14 +1945,15 @@ function buildPossLogServer(sorted, hA, aA) {
     if (tl.includes('turnover')) {
       cur.tos++;
       flush();
-      // Credit steal to next possession's team (opponent)
       const oppTeam = team === hA ? aA : hA;
-      cur.team = oppTeam; cur.q = quarter; cur.stl++;
+      cur.team = oppTeam; cur.q = quarter;
+      if (text.includes('steal')) cur.stl++; // only credit steal when explicitly in play text
       continue;
     }
 
     // Rebound
     if (tl.includes('rebound')) {
+      if (text.includes('team rebound')) continue; // dead ball — not in box score stats
       if (tl.includes('offensive')) {
         cur.oreb++; // possession continues
       } else {
