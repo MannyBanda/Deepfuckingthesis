@@ -1141,7 +1141,11 @@ function renderCard(id){
     }else{
       html+=renderXGBChart(cs,hA,aA);
     }
-    html+='<div class="wp-qlabels"><span>1st</span><span>2nd</span><span>3rd</span><span>4th</span></div>';
+    html+='<div class="wp-qlabels">';
+    var _qNames=['1st','2nd','3rd','4th'];
+    var _maxQ=1;if(cs._allSnapshots){for(var qi=0;qi<cs._allSnapshots.length;qi++){var _qp=cs._allSnapshots[qi].period||1;if(_qp>_maxQ&&_qp<=4)_maxQ=_qp;}}
+    for(var qi=0;qi<_maxQ;qi++)html+='<span>'+_qNames[qi]+'</span>';
+    html+='</div>';
     // ── Signal pills (below chart, always visible in structural mode) ──
     if(isXGB){
       var _pbpMcLatest=null,_floorLatest=null;
@@ -1476,14 +1480,25 @@ function renderXGBChart(cs,hA,aA){
   var W=600,H=80;
   var _wps=cs._wpSeries||{xgb:true,mc:true,floor:false,canary:true};
 
-  // Build path helper: converts ctrl-relative values to home-relative SVG path
+  // Compute game seconds for time-based x-axis
+  var maxQ=1;
+  for(var i=0;i<pts.length;i++){
+    var p=pts[i].period||1;if(p>maxQ&&p<=4)maxQ=p;
+    var clk=pts[i].clock||'0:00';
+    var cm=clk.match(/(\d+):(\d+)/);
+    var clockSec=cm?(parseInt(cm[1])*60+parseInt(cm[2])):0;
+    pts[i]._gs=(p-1)*720+(720-clockSec); // game seconds elapsed (12-min quarters)
+  }
+  var maxGS=maxQ*720; // scale to end of current quarter
+
+  // Build path helper: converts ctrl-relative values to home-relative SVG path (time-based x)
   function buildPath(pts,field,fallback){
     var d='',lastPx=0,lastPy=H/2,hasData=false;
     for(var i=0;i<pts.length;i++){
       var val=pts[i][field];if(val==null){if(fallback)val=fallback;else continue;}
       val=Number(val);
       var homeWP=(pts[i].floor_team===hA)?val:(1-val);
-      var px=(i/(pts.length-1))*W;
+      var px=Math.min((pts[i]._gs/maxGS)*W,W);
       var py=(1-homeWP)*H;
       if(!hasData){d+='M'+px.toFixed(1)+','+py.toFixed(1);hasData=true;}
       else d+='L'+px.toFixed(1)+','+py.toFixed(1);
@@ -1501,7 +1516,7 @@ function renderXGBChart(cs,hA,aA){
       var pv=pts[i][primaryField];if(pv==null)continue;
       pv=Number(pv);
       var phwp=(pts[i].floor_team===hA)?pv:(1-pv);
-      var ppx=(i/(pts.length-1))*W;
+      var ppx=Math.min((pts[i]._gs/maxGS)*W,W);
       var ppy=(1-phwp)*H;
       fillD+='L'+ppx.toFixed(1)+','+Math.min(ppy,H/2).toFixed(1);
       fillDownD+='L'+ppx.toFixed(1)+','+Math.max(ppy,H/2).toFixed(1);
@@ -1514,9 +1529,9 @@ function renderXGBChart(cs,hA,aA){
   var html='<div class="wp-canvas"><svg class="wp-svg" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none">';
   html+='<defs><linearGradient id="xgbFill-'+esc(hA)+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="'+primaryColor+'" stop-opacity="0.2"/><stop offset="100%" stop-color="'+primaryColor+'" stop-opacity="0"/></linearGradient>';
   html+='<linearGradient id="xgbFillDown-'+esc(hA)+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#F87171" stop-opacity="0"/><stop offset="100%" stop-color="#F87171" stop-opacity="0.2"/></linearGradient></defs>';
-  // Grid
+  // Grid — quarter dividers only for quarters in play
   html+='<line x1="0" y1="'+H/2+'" x2="'+W+'" y2="'+H/2+'" stroke="rgba(255,255,255,0.15)" stroke-dasharray="3 4"/>';
-  for(var q=1;q<=3;q++)html+='<line x1="'+(q/4*W)+'" y1="0" x2="'+(q/4*W)+'" y2="'+H+'" stroke="rgba(255,255,255,0.04)"/>';
+  for(var q=1;q<maxQ;q++)html+='<line x1="'+(q/maxQ*W)+'" y1="0" x2="'+(q/maxQ*W)+'" y2="'+H+'" stroke="rgba(255,255,255,0.04)"/>';
   // Fill regions
   if(primaryField){html+='<path d="'+fillD+'" fill="url(#xgbFill-'+esc(hA)+')"/>';html+='<path d="'+fillDownD+'" fill="url(#xgbFillDown-'+esc(hA)+')" />';}
   // Floor line (rendered first so it's behind)
@@ -1529,7 +1544,7 @@ function renderXGBChart(cs,hA,aA){
       var val=pts[i].mc_win_prob;if(val==null)continue;
       val=Number(val);
       var homeWP=(pts[i].floor_team===hA)?val:(1-val);
-      var px=(i/(pts.length-1))*W;
+      var px=Math.min((pts[i]._gs/maxGS)*W,W);
       var py=(1-homeWP)*H;
       pbpPts.push({px:px,py:py,color:pbpDivColor(pts[i]),snap:pts[i]});
     }
@@ -1540,7 +1555,7 @@ function renderXGBChart(cs,hA,aA){
         var pbpV=pts[i].mc_win_prob!=null?Number(pts[i].mc_win_prob):null;
         var mcV=pts[i].mc_cum_win_prob!=null?Number(pts[i].mc_cum_win_prob):null;
         if(pbpV==null||mcV==null||pbpV-mcV<0.15||pbpV<0.65){if(curSeg){gapSegs.push(curSeg);curSeg=null;}continue;}
-        var px=(i/(pts.length-1))*W;
+        var px=Math.min((pts[i]._gs/maxGS)*W,W);
         var pbpHWP=(pts[i].floor_team===hA)?pbpV:(1-pbpV);
         var mcHWP=(pts[i].floor_team===hA)?mcV:(1-mcV);
         var col=pbpDivColor(pts[i]);
