@@ -57,9 +57,11 @@ function predictXGB(features, league) {
 }
 
 var XGB_FEATURE_LABELS = ['paint','pot','to','stl','oreb','ast','blk','fta','efg','biglead','3pr','rim_pct','runs'];
-var XGB_FEATURE_LABELS_WNBA = ['ast','ftm','ast_ratio','w_dreb','w_3pa','3pa','pot','w_fta','oreb','w_ftm','w_pot','w_ast_ratio'];
+var XGB_FEATURE_LABELS_WNBA = ['biglead','disruption','ast','oreb','to_ratio','ftm','ast_ratio','pf','blk','fta','efg','pot'];
 var XGB_VOLATILE_FEATURES = new Set(['pot', 'to', 'stl', 'oreb', 'runs']);
 var XGB_STRUCTURAL_FEATURES = new Set(['paint', 'ast', 'blk', 'fta', 'efg', 'biglead', '3pr', 'rim_pct']);
+var XGB_VOLATILE_FEATURES_WNBA = new Set(['pot', 'oreb', 'to_ratio']);
+var XGB_STRUCTURAL_FEATURES_WNBA = new Set(['biglead', 'disruption', 'ast', 'ftm', 'ast_ratio', 'pf', 'blk', 'fta', 'efg']);
 
 // Tree interpreter SHAP — decomposes XGB prediction into per-feature contributions
 // Uses precomputed expected values (ev) at each tree node. O(trees × depth) per call.
@@ -153,49 +155,55 @@ function extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock, windo
   ];
 }
 // ── WNBA XGB FEATURE EXTRACTION ──────────────────────────────────────────────
-// 12 features: 6 cumulative + 6 windowed. No biglead (circular in WNBA).
-// Feature order must match xgb-model-wnba.json training.
+// 12 features: 10 windowed (cross-fade) + 2 cumulative game-state (biglead, runs excluded by pruning).
+// Pure windowed architecture matching NBA — biglead added as scoreboard confirmation signal.
+// Feature order must match xgb-model-wnba.json training (BDL-primary, 576 games, OOF AUC 0.765).
 function extractXGBFeaturesWNBA(summary, ind, windowAgg) {
   var hs = summary.home.statistics, as = summary.away.statistics;
   var ctrlIsHome = ind.controlTeam === ind.homeAlias;
   var flip = ctrlIsHome ? 1 : -1;
 
-  var hFGM = Number(hs.field_goals_made || 0), aFGM = Number(as.field_goals_made || 0);
-  var hAst = Number(hs.assists || 0), aAst = Number(as.assists || 0);
-  var hAR = hFGM > 0 ? hAst / hFGM : 0, aAR = aFGM > 0 ? aAst / aFGM : 0;
-
-  // Windowed stats
-  var wH = null, wA = null;
+  // Determine stat source: windowed (2Q cross-fade) or cumulative fallback
+  var useWindow = false;
+  var hS = hs, aS = as;
   if (windowAgg && windowAgg.home && windowAgg.away) {
-    var wHFGA = Number(windowAgg.home.field_goals_att || 0);
-    var wAFGA = Number(windowAgg.away.field_goals_att || 0);
-    if (wHFGA >= 5 && wAFGA >= 5) { wH = windowAgg.home; wA = windowAgg.away; }
+    var wHFGA = Number(windowAgg.home.field_goals_att || windowAgg.home.fga || 0) || 0;
+    var wAFGA = Number(windowAgg.away.field_goals_att || windowAgg.away.fga || 0) || 0;
+    if (wHFGA >= 5 && wAFGA >= 5) { useWindow = true; hS = windowAgg.home; aS = windowAgg.away; }
   }
 
+  var hFGA = Number(hS.field_goals_att || hS.fga || 0) || 1;
+  var aFGA = Number(aS.field_goals_att || aS.fga || 0) || 1;
+  var hFGM = Number(hS.field_goals_made || hS.fgm || 0);
+  var aFGM = Number(aS.field_goals_made || aS.fgm || 0);
+  var hFG3M = Number(hS.three_points_made || hS.fg3m || 0);
+  var aFG3M = Number(aS.three_points_made || aS.fg3m || 0);
+  var hStl = Number(hS.steals || hS.stl || 0), aStl = Number(aS.steals || aS.stl || 0);
+  var hBlk = Number(hS.blocks || hS.blk || 0), aBlk = Number(aS.blocks || aS.blk || 0);
+  var hAst = Number(hS.assists || hS.ast || 0), aAst = Number(aS.assists || aS.ast || 0);
+  var hTov = Number(hS.turnovers || hS.tov || hS.total_turnovers || 0);
+  var aTov = Number(aS.turnovers || aS.tov || aS.total_turnovers || 0);
+
   return [
-    (hAst - aAst) * flip,                                                                           // [0] c_ast
-    (Number(hs.free_throws_made || 0) - Number(as.free_throws_made || 0)) * flip,                   // [1] c_ftm
-    (hAR - aAR) * flip,                                                                             // [2] c_ast_ratio
-    wH ? (Number(wH.defensive_rebounds || 0) - Number(wA.defensive_rebounds || 0)) * flip : 0,       // [3] w_dreb
-    wH ? (Number(wH.three_points_att || 0) - Number(wA.three_points_att || 0)) * flip : 0,          // [4] w_3pa
-    (Number(hs.three_points_att || 0) - Number(as.three_points_att || 0)) * flip,                    // [5] c_3pa
-    (Number(hs.points_off_turnovers || 0) - Number(as.points_off_turnovers || 0)) * flip,            // [6] c_pot
-    wH ? (Number(wH.free_throws_att || 0) - Number(wA.free_throws_att || 0)) * flip : 0,            // [7] w_fta
-    (Number(hs.offensive_rebounds || 0) - Number(as.offensive_rebounds || 0)) * flip,                 // [8] c_oreb
-    wH ? (Number(wH.free_throws_made || 0) - Number(wA.free_throws_made || 0)) * flip : 0,          // [9] w_ftm
-    wH ? (Number(wH.points_off_turnovers || 0) - Number(wA.points_off_turnovers || 0)) * flip : 0,  // [10] w_pot
-    wH ? (function() {                                                                               // [11] w_ast_ratio
-      var whFGM = Number(wH.field_goals_made || 0), waFGM = Number(wA.field_goals_made || 0);
-      var whAR = whFGM > 0 ? Number(wH.assists || 0) / whFGM : 0;
-      var waAR = waFGM > 0 ? Number(wA.assists || 0) / waFGM : 0;
-      return (whAR - waAR) * flip;
-    })() : 0,
+    (Number(hs.biggest_lead || 0) - Number(as.biggest_lead || 0)) * flip,                          // [0] biglead (ALWAYS cumulative)
+    ((hStl + hBlk) - (aStl + aBlk)) * flip,                                                        // [1] disruption
+    (hAst - aAst) * flip,                                                                           // [2] ast
+    (Number(hS.offensive_rebounds || hS.oreb || 0) - Number(aS.offensive_rebounds || aS.oreb || 0)) * flip,  // [3] oreb
+    ((hTov > 0 ? hStl / hTov : 0) - (aTov > 0 ? aStl / aTov : 0)) * flip,                        // [4] to_ratio
+    (Number(hS.free_throws_made || hS.ftm || 0) - Number(aS.free_throws_made || aS.ftm || 0)) * flip,  // [5] ftm
+    ((hFGM > 0 ? hAst / hFGM : 0) - (aFGM > 0 ? aAst / aFGM : 0)) * flip,                       // [6] ast_ratio
+    (Number(hS.personal_fouls || hS.fouls || hS.pf || 0) - Number(aS.personal_fouls || aS.fouls || aS.pf || 0)) * flip,  // [7] pf
+    (hBlk - aBlk) * flip,                                                                          // [8] blk
+    (Number(hS.free_throws_att || hS.fta || 0) - Number(aS.free_throws_att || aS.fta || 0)) * flip,  // [9] fta
+    (((hFGM + 0.5 * hFG3M) / hFGA) - ((aFGM + 0.5 * aFG3M) / aFGA)) * flip,                     // [10] efg
+    (Number(hS.points_off_turnovers || hS.pot || 0) - Number(aS.points_off_turnovers || aS.pot || 0)) * flip,  // [11] pot
   ];
 }
 
 // Separates volatile (hustle/event-driven) vs structural (scheme/repeatable) SHAP contributions
-function computeConvictionQuality(shapArray) {
+function computeConvictionQuality(shapArray, league) {
   if (!shapArray || shapArray.length === 0) return null;
+  var volSet = league === 'wnba' ? XGB_VOLATILE_FEATURES_WNBA : XGB_VOLATILE_FEATURES;
   var posFeatures = shapArray.filter(function(s) { return s.v > 0; });
   var totalPos = posFeatures.reduce(function(sum, s) { return sum + s.v; }, 0) || 0.001;
 
@@ -204,7 +212,7 @@ function computeConvictionQuality(shapArray) {
     var s = shapArray[i];
     if (s.f === 'biglead') bigleadVal = s.v;
     if (s.v > 0) {
-      if (XGB_VOLATILE_FEATURES.has(s.f)) volPos += s.v;
+      if (volSet.has(s.f)) volPos += s.v;
       else strPos += s.v;
     }
   }
@@ -219,7 +227,7 @@ function computeConvictionQuality(shapArray) {
     volConcentration: Math.round(volConc * 1000) / 1000,
     strConcentration: Math.round(strPos / totalPos * 1000) / 1000,
     top1Feature: top1.f,
-    top1IsVolatile: XGB_VOLATILE_FEATURES.has(top1.f),
+    top1IsVolatile: volSet.has(top1.f),
     top1Share: Math.round((top1.v / totalPos) * 1000) / 1000,
     basis: volConc >= 0.50 ? 'VOLATILE' : volConc < 0.30 ? 'STRUCTURAL' : 'MIXED',
     bigleadShare: Math.round(bigleadShare * 1000) / 1000,
@@ -230,7 +238,7 @@ function computeConvictionQuality(shapArray) {
 
 // Trajectory signals — detects conviction quality CHANGES between checkpoints
 // Uses SHAP deltas to catch efficiency collapse, structural inversion, volatile persistence
-function computeTrajectorySignals(currentShap, cpArray, convictionQuality, xgbProb) {
+function computeTrajectorySignals(currentShap, cpArray, convictionQuality, xgbProb, league) {
   if (!currentShap || currentShap.length === 0) return null;
 
   // Build lookup for current SHAP by feature name
@@ -267,7 +275,7 @@ function computeTrajectorySignals(currentShap, cpArray, convictionQuality, xgbPr
   if (convictionQuality && convictionQuality.volConcentration >= 0.50) {
     consecutiveVolDominant = 1;
     for (var ci = cpArray.length - 1; ci >= 0; ci--) {
-      var cpConv = cpArray[ci].shap ? computeConvictionQuality(cpArray[ci].shap) : null;
+      var cpConv = cpArray[ci].shap ? computeConvictionQuality(cpArray[ci].shap, league) : null;
       if (cpConv && cpConv.volConcentration >= 0.50) {
         consecutiveVolDominant++;
       } else {
@@ -442,19 +450,21 @@ return 'You are a WNBA structural analyst. You receive pre-computed mechanical i
 + '3. RISK FLAGS — what could go wrong. 1-2 sentences.\n\n'
 + '4. CLOSING PROJECTION — how does this game resolve? 1 sentence.\n\n'
 + '5. DISAGREEMENT — if your contextual read conflicts with mechanical conviction, flag it with reasoning. Say "NONE" if you agree.\n\n'
-+ 'XGB MODEL CONTEXT (WNBA-specific, 12 features, AUC 0.809):\n'
-+ '  NO biglead feature — excluded by design (circular with winning in WNBA, causes 4x SHAP anchoring).\n'
-+ '  NO "scoreboard confirmation" concept — all features are box-score structural.\n'
-+ '  Top SHAP drivers: assists, FT made, assist ratio, defensive rebounds (windowed), 3PT attempts.\n'
-+ '  Cumulative features (c_*) carry core weight; windowed features (w_*) detect recent shifts.\n'
++ 'XGB MODEL CONTEXT (WNBA-specific, 12 features, OOF AUC 0.765, Q4 AUC 0.831):\n'
++ '  Features: biglead, disruption (stl+blk), ast, oreb, to_ratio, ftm, ast_ratio, pf, blk, fta, efg, pot.\n'
++ '  biglead is the #1 signal (Q4 AUC 0.77 alone) — scoreboard confirmation applies to WNBA.\n'
++ '  Pure windowed architecture (cross-fade) for all features except biglead (cumulative game-state).\n'
++ '  Top SHAP drivers: biglead, disruption (combined steals+blocks), assists, offensive rebounds.\n'
 + '  When XGB data is provided, use SHAP drivers to calibrate your FWP:\n'
-+ '  - Strong assists + FT made = ball movement + aggression — sustainable edge.\n'
-+ '  - Strong windowed features only = recent shift, not yet cumulative — watch for confirmation.\n'
++ '  - biglead SHAP anchored (>25% share) = scoreboard confirms structural edge (high confidence).\n'
++ '  - biglead SHAP flat/negative = stats not translating to lead — elevate scrutiny.\n'
++ '  - VOLATILE basis (pot/oreb/to_ratio dominant) = circumstantial edge, may not sustain.\n'
++ '  - STRUCTURAL basis (biglead/disruption/ast/efg/ftm dominant) = scheme-driven, more durable.\n'
 + '  - Near-zero for most features = structural edge is thin regardless of MC/floor.\n\n'
-+ 'SIGNAL TRUST HIERARCHY (3,432 checkpoints, 312 games):\n'
++ 'SIGNAL TRUST HIERARCHY (576 games):\n'
 + '  Three signals with fundamentally different roles from NBA:\n'
 + '  - MC Cum: Best single predictor (AUC 0.822). Wins every checkpoint from Q2_5 onward.\n'
-+ '  - XGB: Structural quality + collapse detector (AUC 0.809). 3x floor discrimination on losses.\n'
++ '  - XGB: Structural quality + collapse detector (OOF AUC 0.765, Q4 0.831).\n'
 + '  - Floor: Narrative context ONLY. When floor disagrees with MC+XGB, floor is wrong 80%.\n\n'
 + '  When they DISAGREE:\n'
 + '  Q2: XGB > MC > Floor. MC overconfident by ~20pp (same as NBA Q2).\n'
@@ -1045,7 +1055,7 @@ RULES:
 - MC NORMALIZED: Rates recovered. 86-91% ctrl survives. CONFIDENCE signal. Reference as positive for POSITION_SAFE/BWC_EDGE. Argues AGAINST exit.
 - TRACKING_INVALIDATED: The previously tracked team lost structural control. BWC tracking terminated mechanically. Subsequent alerts about the new control team are FRESH evaluations — not continuations of the old thesis. Do not reference the dead team's floor or position tracking state for current decisions. If the dead team had a confirmed position, this is an implicit EXIT — the structural case supporting the position is gone.
 - XGB_INVALIDATED: A prior BUY thesis has been invalidated by structural collapse. ${ctx.invTriggerSignal === 'mc_cum' ? 'Q3/Q4 uses MC Cum (full-game rate projection) < 30% as the trigger — the possession rates that supported the entry no longer project a win. Focus narrative on: (1) which rates collapsed (TO discipline, interior finishing, 3PT shooting, FT generation), (2) whether the rate decay is accelerating or stabilizing, (3) current indicator picture.' : `Q2 uses XGB (structural model) dropping below the viability gate (${ctx.league === 'wnba' ? 'Q2<0.45' : 'Q2<0.40'}). Focus narrative on: (1) SHAP drivers NOW vs at BUY time, (2) whether XGB drop is raw stat decay or game progress pressure, (3) current structural picture.`} ALWAYS SEND — the mechanical gate is the filter. Frame as: "The structural case no longer supports the [TEAM] BUY — [explain what changed in basketball terms]. Consider exiting if you took this position." This is an exit signal, not a veto of future entry.
-- CONVICTION QUALITY: ${ctx.league === 'wnba' ? 'WNBA XGB has no biglead feature — no "scoreboard confirmation" concept. Evaluate conviction quality by SHAP driver type: strong assists + FT made = ball movement + aggression (sustainable). Strong windowed features only = recent shift, watch for confirmation. Near-zero for most features = thin edge regardless of MC/floor. Cumulative-dominated conviction = 84% accuracy. Windowed-dominated = 80%. 3.7pp gap is softer than NBA.' : 'If provided, evaluate how the XGB model arrives at its prediction. CONFIRMED scoreboard = high confidence (95% WR). NOT CONFIRMED = stats not translating to lead, elevate scrutiny. VOLATILE basis (pot/stl/oreb/to/runs dominant) = circumstantial edge, may not sustain. Multiple conviction warnings compounding = strong SUPPRESS/DOWNGRADE signal. Single warning = flag as RISK, not auto-SUPPRESS.'}
+- CONVICTION QUALITY: ${ctx.league === 'wnba' ? 'Evaluate how the XGB model arrives at its prediction. CONFIRMED scoreboard (biglead SHAP anchored >25%) = high confidence. NOT CONFIRMED (biglead flat/negative) = stats not translating to lead, elevate scrutiny. VOLATILE basis (pot/oreb/to_ratio dominant) = circumstantial edge, may not sustain. STRUCTURAL basis (biglead/disruption/ast/efg/ftm dominant) = scheme-driven, more durable. Multiple conviction warnings compounding = strong SUPPRESS/DOWNGRADE signal. Single warning = flag as RISK, not auto-SUPPRESS.' : 'If provided, evaluate how the XGB model arrives at its prediction. CONFIRMED scoreboard = high confidence (95% WR). NOT CONFIRMED = stats not translating to lead, elevate scrutiny. VOLATILE basis (pot/stl/oreb/to/runs dominant) = circumstantial edge, may not sustain. Multiple conviction warnings compounding = strong SUPPRESS/DOWNGRADE signal. Single warning = flag as RISK, not auto-SUPPRESS.'}
 - ANCHORED FLOOR CHECK: If team is TRAILING with floor 0.75+ but margin only 1-3 pts AND floor is declining from recent snapshots, the floor may be anchored from earlier dominance that has eroded. Verify recent quarters still favor control team before SEND. This rule does NOT apply to leading teams (BWC) — a high floor with a small lead is a valid structural read. When MC STRUCTURAL INVESTIGATION is active and shows CLEAN/WAVE, the floor IS anchored — MC proved it by showing post-trigger rates have deteriorated while cumulative floor remained high. Do not independently diagnose anchoring when MC has already measured it.
 - EARLY GAME NOTE (Q1-Q2): Indicator samples are smaller early — steals/blocks counts are low, run share may not be populated yet, and biggest_lead gaps can form from a single early run. This does NOT mean early signals are unreliable. ${ctx.league === 'wnba' ? 'For Q1-Q2 FIRED alerts: I3 COMBO YES = SEND with confidence. For CANDIDATE alerts: I3 COMBO YES = SEND. Without I3 COMBO, apply extra scrutiny.' : 'The new indicator formulas have proven predictive even in Q2. For Q1-Q2 FIRED alerts: I4 COMBO YES = SEND with confidence. I4 COMBO NO = apply normal scrutiny (don\'t auto-reject, just verify the structural case). For Q1-Q2 CANDIDATE alerts: I4 COMBO YES = SEND. I4 COMBO NO = apply extra scrutiny but still SEND if floor is strong (0.75+) and sustainability favors control team.'} Q3+ alerts have the most data — highest confidence.
 - CANDIDATE BUYs at floor 0.55-0.65: only SEND if ${ctx.league === 'wnba' ? 'I3 COMBO is YES (I3 decisive + at least one other indicator agrees — I3 is the 30% WNBA anchor). Without I3 COMBO, SUPPRESS.' : 'I4 COMBO is YES (I4 decisive + at least one other indicator agrees — this pattern is 98-100% accurate historically). Without I4 COMBO, require very strong sustainability case to justify SEND.'}
@@ -5421,8 +5431,8 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
     const _caXgbDivergence = _caXgbWinProb != null ? Math.round((_caXgbWinProb - ind.score) * 1000) / 1000 : null;
     const _caXgbAligned = _caXgbWinProb != null ? Math.abs(_caXgbWinProb - ind.score) < 0.15 : null;
     const _caXgbShap = _caXgbFeatures ? computeXGBContributions(_caXgbFeatures, league) : null;
-    const _caConvQuality = _caXgbShap ? computeConvictionQuality(_caXgbShap) : null;
-    const _caTrajSignals = _caXgbShap ? computeTrajectorySignals(_caXgbShap, lt.checkpoints || [], _caConvQuality, _caXgbWinProb) : null;
+    const _caConvQuality = _caXgbShap ? computeConvictionQuality(_caXgbShap, league) : null;
+    const _caTrajSignals = _caXgbShap ? computeTrajectorySignals(_caXgbShap, lt.checkpoints || [], _caConvQuality, _caXgbWinProb, league) : null;
 
     const userPrompt = formatSonnetPrompt({
       hA, aA, period, clock, score: scoreLine, league,
@@ -7026,8 +7036,8 @@ export default async function(req) {
             // ── Save XGB + MC data to lt for client analysis injection ──
             if (_xgbFeatures) {
               lt.xgb_shap = computeXGBContributions(_xgbFeatures, league);
-              lt.conviction_quality = lt.xgb_shap ? computeConvictionQuality(lt.xgb_shap) : null;
-              lt.xgb_trajectory = lt.xgb_shap ? computeTrajectorySignals(lt.xgb_shap, lt.checkpoints || [], lt.conviction_quality, _xgbWinProb) : null;
+              lt.conviction_quality = lt.xgb_shap ? computeConvictionQuality(lt.xgb_shap, league) : null;
+              lt.xgb_trajectory = lt.xgb_shap ? computeTrajectorySignals(lt.xgb_shap, lt.checkpoints || [], lt.conviction_quality, _xgbWinProb, league) : null;
             }
             lt.xgb_win_prob = _xgbWinProb;
             lt.xgb_divergence = _xgbDivergence;
@@ -7327,8 +7337,8 @@ export default async function(req) {
               const convTrend = lt.bwc_fired ? computeConvictionTrend(lt.checkpoints || [], lt.bwc_fired.team) : null;
               // Conviction quality — compute SHAP once, reuse for xgbShap + conviction quality + trajectory
               const _v2Shap = _xgbFeatures ? computeXGBContributions(_xgbFeatures, league) : null;
-              const _v2ConvQuality = _v2Shap ? computeConvictionQuality(_v2Shap) : null;
-              const _v2TrajSignals = _v2Shap ? computeTrajectorySignals(_v2Shap, lt.checkpoints || [], _v2ConvQuality, _xgbWinProb) : null;
+              const _v2ConvQuality = _v2Shap ? computeConvictionQuality(_v2Shap, league) : null;
+              const _v2TrajSignals = _v2Shap ? computeTrajectorySignals(_v2Shap, lt.checkpoints || [], _v2ConvQuality, _xgbWinProb, league) : null;
               const v2Ctx = {
                 alertType: v2Type, alertTier: v2Tier,
                 ctrlTeam: ind.controlTeam, floor: ind.score.toFixed(2),
