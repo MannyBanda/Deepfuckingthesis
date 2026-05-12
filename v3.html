@@ -407,6 +407,13 @@ body.is-locked{overflow:hidden;}
 .mc-cleared-text{font:11px var(--sans);color:var(--fg-secondary);line-height:1.5;}
 @keyframes mc-pulse{0%,100%{opacity:1;}50%{opacity:0.3;}}
 .mc-pulse{animation:mc-pulse 1.8s ease-in-out infinite;}
+/* Signal strip pills + divergence callout */
+.sig-pills{display:flex;gap:4px;padding:6px 0 2px;flex-wrap:wrap;}
+.sig-pill{cursor:pointer;padding:3px 8px;border-radius:var(--r-pill);font:600 9px/1 var(--sans);letter-spacing:0.06em;border:1px solid var(--hairline);transition:all 0.15s ease;user-select:none;}
+.div-callout{margin-top:6px;padding:8px 10px;background:var(--bg-surface-2);border-radius:var(--r-inner);border-left:3px solid var(--fg-dim);font-family:var(--sans);}
+.div-callout .div-driver{font:600 9px/1 var(--sans);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:4px;}
+.div-callout .div-body{font-size:10px;color:var(--fg-secondary);line-height:1.5;}
+.div-callout .div-body .div-stat{font-family:var(--mono);font-weight:600;}
 </style>
 </head>
 <body>
@@ -979,6 +986,43 @@ document.getElementById('swipe').addEventListener('scroll',function(){
 });
 
 // ── MC INVESTIGATION STRIP ──
+// ── PBP DIVERGENCE DRIVER CLASSIFICATION ─────────────────────────────────────
+// When PBP MC diverges from MC Cum, classifies whether the divergence is
+// STRUCTURAL (I2+I3 driven, 88% cascade) or VOLATILE (I1 driven, fades).
+function computePBPDivergence(snap){
+  if(!snap)return null;
+  var pbp=snap.mc_win_prob!=null?Number(snap.mc_win_prob):null;
+  var mc=snap.mc_cum_win_prob!=null?Number(snap.mc_cum_win_prob):null;
+  if(pbp==null||mc==null)return null;
+  var gap=pbp-mc;
+  if(gap<0.15||pbp<0.65)return null;
+  var i1=Number(snap.i1||0),i2=Number(snap.i2||0),i3=Number(snap.i3||0);
+  var structScore=(i2+i3)/2;
+  var driver='MIXED';
+  if(structScore>=0.50)driver='STRUCTURAL';
+  else if(i1>=0.75&&structScore<0.25)driver='VOLATILE';
+  var q=Number(snap.period||2);
+  var conf='MODERATE';
+  if(q===2)conf='HIGH';
+  else if(driver==='STRUCTURAL'&&pbp>=0.80)conf='HIGH';
+  else if(driver==='VOLATILE')conf='LOW';
+  else if(gap>0.50&&driver!=='STRUCTURAL')conf='LOW';
+  var driverLabels={STRUCTURAL:'Shooting + paint edge — likely to stick',VOLATILE:'Turnover-driven heater — may fade',MIXED:'Mixed driver — watch for confirmation'};
+  return{active:true,gap:gap,driver:driver,confidence:conf,i1:i1,i2:i2,i3:i3,pbp:pbp,mc:mc,label:driverLabels[driver]};
+}
+// Per-snapshot divergence color for PBP line segments
+function pbpDivColor(snap){
+  if(!snap)return'#a78bfa';
+  var pbp=snap.mc_win_prob!=null?Number(snap.mc_win_prob):null;
+  var mc=snap.mc_cum_win_prob!=null?Number(snap.mc_cum_win_prob):null;
+  if(pbp==null||mc==null||pbp-mc<0.15||pbp<0.65)return'#a78bfa';
+  var i1=Number(snap.i1||0),i2=Number(snap.i2||0),i3=Number(snap.i3||0);
+  var structScore=(i2+i3)/2;
+  if(structScore>=0.50)return'#34d399'; // green = structural
+  if(i1>=0.75&&structScore<0.25)return'#f5b544'; // amber = volatile
+  return'#a78bfa'; // purple = mixed
+}
+
 function renderMCStrip(mc,gameId){
   if(!mc||!mc.triggered)return '';
   var pattern=mc.pattern;
@@ -1062,7 +1106,7 @@ function renderCard(id){
 
   // ═══ ESPN WP CHART ═══
   if(state!=='PRE' && cs.espnWP){
-    if(!cs._wpMode)cs._wpMode='espn';
+    if(!cs._wpMode)cs._wpMode='xgb';
     var wpLead=cs.espnWP.home>=cs.espnWP.away?hA:aA;
     var wpPct=Math.max(cs.espnWP.home,cs.espnWP.away);
     var wpOpen=cs.espnWP.opening!=null?(cs.espnWP.home>=cs.espnWP.away?cs.espnWP.opening:100-cs.espnWP.opening):null;
@@ -1072,7 +1116,7 @@ function renderCard(id){
     var _xgbLatest=null,_mcCumLatest=null;
     if(cs._allSnapshots&&cs._allSnapshots.length>0){var _ls=cs._allSnapshots[cs._allSnapshots.length-1];_xgbLatest=_ls.xgb_win_prob!=null?Math.round(Number(_ls.xgb_win_prob)*100):null;_mcCumLatest=_ls.mc_cum_win_prob!=null?Math.round(Number(_ls.mc_cum_win_prob)*100):null;}
     var isXGB=cs._wpMode==='xgb';
-    if(!cs._wpSeries)cs._wpSeries={xgb:true,mc:true,floor:false,canary:false};
+    if(!cs._wpSeries)cs._wpSeries={xgb:true,mc:true,floor:false,canary:true};
     var _wps=cs._wpSeries;
     html+='<div class="wp-chart"><div class="wp-head"><div class="wp-head-left">';
     // Mode toggle: ESPN / Structural
@@ -1090,14 +1134,6 @@ function renderCard(id){
     }
     html+='</div><div class="wp-head-right">';
     if(!isXGB&&wpOpen!=null)html+='<span>open '+Math.round(wpOpen)+'%</span>';
-    if(isXGB){
-      // Series toggle pills
-      var _pillFn=function(k,label,color){var on=_wps[k];return'<span onclick="cardState[\''+g.id+'\']._wpSeries.'+k+'=!cardState[\''+g.id+'\']._wpSeries.'+k+';renderCard(\''+g.id+'\')" style="cursor:pointer;padding:2px 6px;border-radius:3px;font-size:8px;margin-left:3px;'+(on?'color:'+color+';background:'+color+'1a':'color:var(--fg-dim);opacity:0.5')+'">'+label+'</span>';};
-      html+=_pillFn('xgb','XGB','#67e8f9');
-      html+=_pillFn('mc','MC','#FDB927');
-      html+=_pillFn('canary','PBP','#a78bfa');
-      html+=_pillFn('floor','Floor','#ff6b35');
-    }
     html+='</div></div>';
     // Render chart
     if(!isXGB){
@@ -1105,7 +1141,38 @@ function renderCard(id){
     }else{
       html+=renderXGBChart(cs,hA,aA);
     }
-    html+='<div class="wp-qlabels"><span>1st</span><span>2nd</span><span>3rd</span><span>4th</span></div></div>';
+    html+='<div class="wp-qlabels"><span>1st</span><span>2nd</span><span>3rd</span><span>4th</span></div>';
+    // ── Signal pills (below chart, always visible in structural mode) ──
+    if(isXGB){
+      var _pbpMcLatest=null,_floorLatest=null;
+      if(cs._allSnapshots&&cs._allSnapshots.length>0){var _ls2=cs._allSnapshots[cs._allSnapshots.length-1];_pbpMcLatest=_ls2.mc_win_prob!=null?Math.round(Number(_ls2.mc_win_prob)*100):null;_floorLatest=_ls2.floor_score!=null?Math.round(Number(_ls2.floor_score)*100):null;}
+      html+='<div class="sig-pills">';
+      var _sigs=[{k:'mc',label:'MC',color:'#FDB927',val:_mcCumLatest},{k:'xgb',label:'XGB',color:'#67e8f9',val:_xgbLatest},{k:'canary',label:'PBP',color:'#a78bfa',val:_pbpMcLatest},{k:'floor',label:'Floor',color:'#ff6b35',val:_floorLatest}];
+      for(var si=0;si<_sigs.length;si++){
+        var sig=_sigs[si],on=_wps[sig.k],valStr=sig.val!=null?' '+sig.val+'%':'';
+        var sty=on?'color:'+sig.color+';background:'+sig.color+'1a;border-color:'+sig.color+'33':'color:var(--fg-dim);opacity:0.45;border-color:var(--hairline)';
+        html+='<span class="sig-pill" onclick="cardState[\''+g.id+'\']._wpSeries.'+sig.k+'=!cardState[\''+g.id+'\']._wpSeries.'+sig.k+';renderCard(\''+g.id+'\')\" style="'+sty+'">'+sig.label+valStr+'</span>';
+      }
+      html+='</div>';
+      // ── Divergence callout ──
+      var _latestSnap=cs._allSnapshots&&cs._allSnapshots.length>0?cs._allSnapshots[cs._allSnapshots.length-1]:null;
+      var _div=_wps.canary?computePBPDivergence(_latestSnap):null;
+      if(_div){
+        var _dColor=_div.driver==='STRUCTURAL'?'#34d399':_div.driver==='VOLATILE'?'#f5b544':'#a78bfa';
+        var _dIcon=_div.driver==='STRUCTURAL'?'●':_div.driver==='VOLATILE'?'◇':'◉';
+        html+='<div class="div-callout" style="border-left-color:'+_dColor+'">';
+        html+='<div class="div-driver" style="color:'+_dColor+'">'+_dIcon+' '+_div.driver+' <span style="font-weight:400;opacity:0.7">· cascade '+_div.confidence.toLowerCase()+'</span></div>';
+        html+='<div class="div-body">PBP→MC gap: <span class="div-stat">+'+Math.round(_div.gap*100)+'pp</span>';
+        html+=' · I2 <span class="div-stat">'+_div.i2.toFixed(1)+'</span> I3 <span class="div-stat">'+_div.i3.toFixed(1)+'</span>';
+        if(_div.driver==='VOLATILE')html+=' · I1 <span class="div-stat" style="color:#f5b544">'+_div.i1.toFixed(1)+'</span>';
+        html+='</div></div>';
+      }
+      // ── MC Investigation (relocated from structural read) ──
+      if(cs._serverMC&&cs._serverMC.triggered){
+        html+=renderMCStrip(cs._serverMC,g.id);
+      }
+    }
+    html+='</div>';
   }
 
   // ═══ VALUE READ ═══
@@ -1286,49 +1353,6 @@ function renderCard(id){
         html+='</div>';
       }
 
-      // MC Investigation strip (between window grid and indicator strip)
-      if(cs._serverMC&&cs._serverMC.triggered){
-        html+=renderMCStrip(cs._serverMC,id);
-      }
-
-      // ═══ MC SIGNALS — always-on MC Cum + MC PBP row ═══
-      if(cs._mcCumWp!=null||cs._mcPbpWp!=null){
-        var _mcCumPct=cs._mcCumWp!=null?Math.round(cs._mcCumWp*100):null;
-        var _mcPbpPct=cs._mcPbpWp!=null?Math.round(cs._mcPbpWp*100):null;
-        var _xgbPct=null;
-        if(cs._allSnapshots&&cs._allSnapshots.length>0){var _mcls=cs._allSnapshots[cs._allSnapshots.length-1];if(_mcls.xgb_win_prob!=null)_xgbPct=Math.round(Number(_mcls.xgb_win_prob)*100);}
-        var _flPct=floor&&floor.score!=null?Math.round(floor.score*100):null;
-        function mcSigColor(v){return v==null?'var(--fg-dim)':v<40?'var(--coral)':v>70?'var(--green)':'var(--fg-secondary)';}
-        html+='<div style="display:flex;gap:2px;margin-bottom:10px;padding:6px 8px;background:var(--bg-surface-2);border-radius:var(--r-inner);border:1px solid var(--hairline)">';
-        html+='<div style="flex:1;text-align:center"><div style="font-size:8px;color:var(--fg-dim);text-transform:uppercase;letter-spacing:0.5px">MC Cum</div><div style="font-size:14px;font-weight:600;color:'+mcSigColor(_mcCumPct)+'">'+(_mcCumPct!=null?_mcCumPct+'%':'--')+'</div></div>';
-        html+='<div style="flex:1;text-align:center"><div style="font-size:8px;color:var(--fg-dim);text-transform:uppercase;letter-spacing:0.5px">MC PBP</div><div style="font-size:14px;font-weight:600;color:'+mcSigColor(_mcPbpPct)+'">'+(_mcPbpPct!=null?_mcPbpPct+'%':'--')+'</div></div>';
-        html+='<div style="flex:1;text-align:center"><div style="font-size:8px;color:var(--fg-dim);text-transform:uppercase;letter-spacing:0.5px">XGB</div><div style="font-size:14px;font-weight:600;color:'+mcSigColor(_xgbPct)+'">'+(_xgbPct!=null?_xgbPct+'%':'--')+'</div></div>';
-        html+='<div style="flex:1;text-align:center"><div style="font-size:8px;color:var(--fg-dim);text-transform:uppercase;letter-spacing:0.5px">Floor</div><div style="font-size:14px;font-weight:600;color:'+mcSigColor(_flPct)+'">'+(_flPct!=null?(_flPct/100).toFixed(2):'--')+'</div></div>';
-        html+='</div>';
-        // MC Drivers — collapsible rate decomposition
-        if(cs._mcDrivers&&cs._mcDrivers.length>0){
-          var drvOpen=_collOpen[id+'_drv']!=null?_collOpen[id+'_drv']:false;
-          var sigDrivers=cs._mcDrivers.filter(function(d){return Math.abs(d.delta)>=0.02;});
-          if(sigDrivers.length>0){
-            html+='<div style="margin-bottom:10px;padding:6px 8px;background:var(--bg-surface-2);border-radius:var(--r-inner);border:1px solid var(--hairline)">';
-            html+='<div onclick="toggleColl(\''+id+'\',\'drv\')" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center"><span style="font-size:9px;color:var(--fg-dim);text-transform:uppercase;letter-spacing:0.5px">MC Rate Drivers</span><span style="color:var(--fg-dim);font-size:10px">'+(drvOpen?'▾':'▸')+'</span></div>';
-            if(drvOpen){
-              for(var di=0;di<sigDrivers.length;di++){
-                var d=sigDrivers[di];
-                var dSign=d.delta>=0;
-                var dColor=dSign?'var(--green)':'var(--coral)';
-                var dPp=(dSign?'+':'')+Math.round(d.delta*100)+'pp';
-                html+='<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;font-size:10px">';
-                html+='<span style="color:var(--fg-secondary)">'+esc(d.label)+'</span>';
-                html+='<span><span style="color:'+dColor+';font-weight:600">'+dPp+'</span> <span style="color:var(--fg-dim);font-size:9px">'+Math.round(d.ctrlVal*100)+'% vs '+Math.round(d.seasonVal*100)+'% szn</span></span>';
-                html+='</div>';
-              }
-            }
-            html+='</div>';
-          }
-        }
-      }
-
       // Indicator strip (I1-I5) — tappable for evidence
       html+='<div class="ind-strip">';
       var indLabels=['I1','I2','I3','I4','I5'];
@@ -1450,7 +1474,7 @@ function renderXGBChart(cs,hA,aA){
   var pts=snaps.filter(function(s){return (s.xgb_win_prob!=null||s.mc_cum_win_prob!=null)&&s.period&&s.period<=4;});
   if(pts.length<2)return'<div class="wp-canvas" style="height:40px;display:flex;align-items:center;justify-content:center"><span style="font-size:9px;color:var(--fg-dim)">No structural data yet</span></div>';
   var W=600,H=80;
-  var _wps=cs._wpSeries||{xgb:true,mc:true,floor:false};
+  var _wps=cs._wpSeries||{xgb:true,mc:true,floor:false,canary:true};
 
   // Build path helper: converts ctrl-relative values to home-relative SVG path
   function buildPath(pts,field,fallback){
@@ -1497,8 +1521,51 @@ function renderXGBChart(cs,hA,aA){
   if(primaryField){html+='<path d="'+fillD+'" fill="url(#xgbFill-'+esc(hA)+')"/>';html+='<path d="'+fillDownD+'" fill="url(#xgbFillDown-'+esc(hA)+')" />';}
   // Floor line (rendered first so it's behind)
   if(_wps.floor){var fp=buildPath(pts,'floor_score',0.5);if(fp.hasData)html+='<path d="'+fp.d+'" fill="none" stroke="#ff6b35" stroke-opacity="0.5" stroke-width="1" stroke-dasharray="3 2"/>';}
-  // PBP MC canary line (volatile — thin, behind structural lines)
-  if(_wps.canary){var cp=buildPath(pts,'mc_win_prob');if(cp.hasData)html+='<path d="'+cp.d+'" fill="none" stroke="#a78bfa" stroke-opacity="0.6" stroke-width="1" stroke-linejoin="round"/>';}
+  // PBP MC line — color-coded by divergence driver (green=structural, amber=volatile, purple=default)
+  if(_wps.canary){
+    // Build per-point coordinates + colors
+    var pbpPts=[];
+    for(var i=0;i<pts.length;i++){
+      var val=pts[i].mc_win_prob;if(val==null)continue;
+      val=Number(val);
+      var homeWP=(pts[i].floor_team===hA)?val:(1-val);
+      var px=(i/(pts.length-1))*W;
+      var py=(1-homeWP)*H;
+      pbpPts.push({px:px,py:py,color:pbpDivColor(pts[i]),snap:pts[i]});
+    }
+    // Gap fill between PBP and MC Cum when diverging (gap >= 0.15)
+    if(_wps.mc&&pbpPts.length>1){
+      var gapSegs=[];var curSeg=null;
+      for(var i=0;i<pts.length;i++){
+        var pbpV=pts[i].mc_win_prob!=null?Number(pts[i].mc_win_prob):null;
+        var mcV=pts[i].mc_cum_win_prob!=null?Number(pts[i].mc_cum_win_prob):null;
+        if(pbpV==null||mcV==null||pbpV-mcV<0.15||pbpV<0.65){if(curSeg){gapSegs.push(curSeg);curSeg=null;}continue;}
+        var px=(i/(pts.length-1))*W;
+        var pbpHWP=(pts[i].floor_team===hA)?pbpV:(1-pbpV);
+        var mcHWP=(pts[i].floor_team===hA)?mcV:(1-mcV);
+        var col=pbpDivColor(pts[i]);
+        if(!curSeg||curSeg.color!==col){if(curSeg)gapSegs.push(curSeg);curSeg={color:col,top:[],bot:[]};}
+        curSeg.top.push({x:px,y:(1-pbpHWP)*H});
+        curSeg.bot.push({x:px,y:(1-mcHWP)*H});
+      }
+      if(curSeg)gapSegs.push(curSeg);
+      for(var gi=0;gi<gapSegs.length;gi++){
+        var seg=gapSegs[gi];if(seg.top.length<2)continue;
+        var fd='M'+seg.top[0].x.toFixed(1)+','+seg.top[0].y.toFixed(1);
+        for(var si=1;si<seg.top.length;si++)fd+='L'+seg.top[si].x.toFixed(1)+','+seg.top[si].y.toFixed(1);
+        for(var si=seg.bot.length-1;si>=0;si--)fd+='L'+seg.bot[si].x.toFixed(1)+','+seg.bot[si].y.toFixed(1);
+        fd+='Z';
+        html+='<path d="'+fd+'" fill="'+seg.color+'" fill-opacity="0.12"/>';
+      }
+    }
+    // Draw PBP line segments with per-segment color
+    for(var i=1;i<pbpPts.length;i++){
+      var p0=pbpPts[i-1],p1=pbpPts[i];
+      html+='<line x1="'+p0.px.toFixed(1)+'" y1="'+p0.py.toFixed(1)+'" x2="'+p1.px.toFixed(1)+'" y2="'+p1.py.toFixed(1)+'" stroke="'+p1.color+'" stroke-opacity="0.75" stroke-width="1.3" stroke-linejoin="round"/>';
+    }
+    // End dot
+    if(pbpPts.length>0){var last=pbpPts[pbpPts.length-1];html+='<circle cx="'+last.px.toFixed(1)+'" cy="'+last.py.toFixed(1)+'" r="2.5" fill="'+last.color+'" opacity="0.3"/>';html+='<circle cx="'+last.px.toFixed(1)+'" cy="'+last.py.toFixed(1)+'" r="1.5" fill="'+last.color+'"/>';}
+  }
   // MC Cum line
   if(_wps.mc){var mp=buildPath(pts,'mc_cum_win_prob');if(mp.hasData){html+='<path d="'+mp.d+'" fill="none" stroke="#FDB927" stroke-opacity="0.85" stroke-width="1.5" stroke-linejoin="round"/>';html+='<circle cx="'+mp.lastX.toFixed(1)+'" cy="'+mp.lastY.toFixed(1)+'" r="3" fill="#FDB927" opacity="0.3"/>';html+='<circle cx="'+mp.lastX.toFixed(1)+'" cy="'+mp.lastY.toFixed(1)+'" r="1.5" fill="#FDB927"/>';}}
   // XGB line (rendered last so it's on top)

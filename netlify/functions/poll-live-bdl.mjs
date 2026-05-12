@@ -798,12 +798,13 @@ MC TRAJECTORY (always-on):
   MC PBP (20-poss window): ${(ctx.mcTrajectoryWp * 100).toFixed(1)}% | MC Cum (game-rate): ${ctx.mcCumWp != null ? (ctx.mcCumWp * 100).toFixed(1) + '%' : '?'} | Floor: ${(ctx.floor * 100).toFixed(1)}% | XGB: ${ctx.xgbWinProb != null ? (ctx.xgbWinProb * 100).toFixed(1) + '%' : '?'}
   ${Math.abs(ctx.mcTrajectoryWp - ctx.floor) > 0.15 ? 'DIVERGENCE: MC PBP and floor disagree by ' + Math.round(Math.abs(ctx.mcTrajectoryWp - ctx.floor) * 100) + 'pp — recent possession rates tell a different story than cumulative box score.' : 'ALIGNED: MC PBP and floor within 15pp.'}
   ${ctx.mcCumWp != null && ctx.xgbWinProb != null && Math.abs(ctx.mcCumWp - ctx.xgbWinProb) > 0.15 ? 'MC Cum vs XGB gap: ' + Math.round(Math.abs(ctx.mcCumWp - ctx.xgbWinProb) * 100) + 'pp — MC Cum dominates disagreements (70-87%).' : ''}
-  ${ctx.mcDrivers && ctx.mcDrivers.length > 0 ? 'MC RATE DRIVERS (what is driving ' + (ctx.bwcTeam || ctx.ctrlTeam) + ' win prob):\\n' + ctx.mcDrivers.filter(function(d) { return Math.abs(d.delta) >= 0.02; }).map(function(d) { return '    ' + d.label + ': ' + (d.delta >= 0 ? '+' : '') + Math.round(d.delta * 100) + 'pp (game ' + (d.ctrlVal * 100).toFixed(0) + '% vs season ' + (d.seasonVal * 100).toFixed(0) + '%)'; }).join('\\n') : ''}` : ''}
+  ${ctx.mcDrivers && ctx.mcDrivers.length > 0 ? 'MC RATE DRIVERS (what is driving ' + (ctx.bwcTeam || ctx.ctrlTeam) + ' win prob):\\n' + ctx.mcDrivers.filter(function(d) { return Math.abs(d.delta) >= 0.02; }).map(function(d) { return '    ' + d.label + ': ' + (d.delta >= 0 ? '+' : '') + Math.round(d.delta * 100) + 'pp (game ' + (d.ctrlVal * 100).toFixed(0) + '% vs season ' + (d.seasonVal * 100).toFixed(0) + '%)'; }).join('\\n') : ''}
+  ${ctx.mcTrajectoryWp != null && ctx.mcCumWp != null && ctx.mcTrajectoryWp >= 0.65 && (ctx.mcTrajectoryWp - ctx.mcCumWp) >= 0.15 ? (function() { var _i1 = Number(ctx.i1 || 0), _i2 = Number(ctx.i2 || 0), _i3 = Number(ctx.i3 || 0); var _ss = (_i2 + _i3) / 2; var _dr = _ss >= 0.50 ? 'STRUCTURAL' : (_i1 >= 0.75 && _ss < 0.25 ? 'VOLATILE' : 'MIXED'); var _labels = { STRUCTURAL: 'Shooting + paint edge — 88% cascade rate from research.', VOLATILE: 'Turnover-driven heater — historically fades as TO rates regress.', MIXED: 'Mixed driver — watch for cumulative confirmation.' }; return 'PBP DIVERGENCE DRIVER: ' + _dr + ' (PBP ' + (ctx.mcTrajectoryWp * 100).toFixed(0) + '% vs MC Cum ' + (ctx.mcCumWp * 100).toFixed(0) + '%, gap +' + Math.round((ctx.mcTrajectoryWp - ctx.mcCumWp) * 100) + 'pp)\\n  ' + _labels[_dr] + '\\n  I1=' + _i1.toFixed(1) + ' I2=' + _i2.toFixed(1) + ' I3=' + _i3.toFixed(1) + (_dr === 'VOLATILE' ? ' — I1 dominant with weak I2+I3 = circumstantial edge.' : ''); })() : ''}` : ''}
 
-${ctx.league === 'wnba' ? `SIGNAL TRUST HIERARCHY (3,432 checkpoints, 312 games):
+${ctx.league === 'wnba' ? `SIGNAL TRUST HIERARCHY (576 games):
   Three signals with fundamentally different roles from NBA:
   - MC Cum: Best single predictor (AUC 0.822). Wins every checkpoint from Q2_5 onward.
-  - XGB: Structural quality + collapse detector (AUC 0.809). 3x floor discrimination on losses.
+  - XGB: Structural quality + collapse detector (OOF AUC 0.765, Q4 0.831).
   - Floor: Narrative context ONLY. When floor disagrees with MC+XGB, floor is wrong 80%.
   When they DISAGREE:
   Q2: XGB > MC > Floor. MC overconfident by ~20pp.
