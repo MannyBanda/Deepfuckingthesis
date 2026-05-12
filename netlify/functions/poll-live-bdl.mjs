@@ -3176,12 +3176,9 @@ function computeServer(summary, pbpData, seasonQ4, league) {
   // I5 — Sustained Execution (NBA) / Momentum (WNBA)
   let I5 = { score: 0.5, leader: 'EVEN' };
   if (league === 'wnba') {
-    const hFBP = hs.fast_break_pts || hs.fast_break_points || 0;
-    const aFBP = as.fast_break_pts || as.fast_break_points || 0;
     const hReb = (hs.offensive_rebounds || 0) + (hs.defensive_rebounds || 0);
     const aReb = (as.offensive_rebounds || 0) + (as.defensive_rebounds || 0);
-    const i5raw = (hFBP - aFBP > 3 ? 1 : hFBP - aFBP < -3 ? -1 : 0)
-                + (hReb - aReb > 3 ? 1 : aReb - hReb > 3 ? -1 : 0);
+    const i5raw = (hReb - aReb > 3 ? 1 : aReb - hReb > 3 ? -1 : 0);
     I5 = { score: i5raw > 0 ? 1 : i5raw === 0 ? 0.5 : 0, leader: i5raw > 0 ? hA : i5raw < 0 ? aA : 'EVEN' };
   } else if (pbpData?.runs6) {
     const hRuns = pbpData.runs6.filter(r => r.team === hA).length;
@@ -6437,6 +6434,23 @@ export default async function(req) {
         } catch (e) { log(`BDL lineups failed: ${e.message}`); }
       }
 
+      // ── 3d. WNBA: batch BDL player_stats (no box_scores endpoint) ──
+      var wnbaPlayerStatsCache = {}; // { bdlGid: [player, ...] }
+      if (league === 'wnba') {
+        const gids = potentiallyLive.map(g => getBdlGid(g)).filter(Boolean);
+        if (gids.length > 0) {
+          try {
+            const psResp = await bdlFetch(`${cfg.bdlPrefix}/v1/player_stats?${gids.map(id => 'game_ids[]=' + id).join('&')}&per_page=200`);
+            const allPs = psResp?.data || [];
+            for (const p of allPs) {
+              const gid = p.game?.id;
+              if (gid) { if (!wnbaPlayerStatsCache[gid]) wnbaPlayerStatsCache[gid] = []; wnbaPlayerStatsCache[gid].push(p); }
+            }
+            log(`BDL WNBA player_stats: ${allPs.length} records for ${Object.keys(wnbaPlayerStatsCache).length} games`);
+          } catch (e) { log(`BDL WNBA player_stats batch failed: ${e.message}`); }
+        }
+      }
+
       // ── 4. Process each potentially live game — BDL box_scores + plays ──
       // Fetch plays for all live games in parallel (BDL: 600 req/min)
       const playsFetches = potentiallyLive.map(g => {
@@ -6463,8 +6477,8 @@ export default async function(req) {
         try {
           if (!bdlGid) {
             if (league === 'wnba') {
-              // WNBA: proceed without BDL — SR summary is primary data source
-              log(`${matchup}: no BDL game ID — using SR-only path`);
+              // WNBA: no BDL game ID — will attempt SR fallback in data fetch block
+              log(`${matchup}: no BDL game ID — will try SR fallback`);
             } else if (cfg.dryRun) {
               try {
                 await sql`INSERT INTO games (id, league, home_team, away_team, status) 
@@ -6489,42 +6503,46 @@ export default async function(req) {
           let boxScore = null, _srSummary = null;
           let _usedBdlFallback = false;
           if (league === 'wnba') {
-            // ── WNBA: SR game summary primary, BDL player_stats fallback ──
-            try {
-              await sleep(SR_DELAY_MS);
-              _srSummary = await srFetch(league, `games/${game.id}/summary.json`);
-              if (!_srSummary || (!_srSummary.home && !_srSummary.away)) {
-                throw new Error('SR summary empty');
-              }
-            } catch (srErr) {
-              log(`${matchup}: SR summary failed (${srErr.message}) — trying BDL player_stats fallback`);
-              if (bdlGid) {
+            // ── WNBA: BDL player_stats primary, SR game summary fallback ──
+            var bdlPlayers = bdlGid ? (wnbaPlayerStatsCache[bdlGid] || []) : [];
+            if (bdlPlayers.length > 0) {
+              try {
+                var gameResp = await bdlFetch(`${cfg.bdlPrefix}/v1/games/${bdlGid}`);
+                var bdlGameObj = gameResp?.data || null;
+                if (bdlGameObj) {
+                  var fbPlays = allPlaysResults[gi]?.data || [];
+                  var fbPbp = parseBDLPBPServer(fbPlays, cfg.aliasMap?.[hA]||hA, cfg.aliasMap?.[aA]||aA);
+                  _srSummary = buildSummaryFromBDLPlayerStats(bdlPlayers, bdlGameObj, fbPbp);
+                  _usedBdlFallback = true;
+                  log(`${matchup}: BDL primary — ${bdlPlayers.length} players`);
+                } else {
+                  throw new Error('BDL game object null');
+                }
+              } catch (bdlErr) {
+                log(`${matchup}: BDL primary failed (${bdlErr.message}) — trying SR fallback`);
                 try {
-                  var psResp = await bdlFetch(`${cfg.bdlPrefix}/v1/player_stats?game_ids[]=${bdlGid}&per_page=50`);
-                  var bdlPlayers = psResp?.data || [];
-                  if (bdlPlayers.length > 0) {
-                    var gameResp = await bdlFetch(`${cfg.bdlPrefix}/v1/games/${bdlGid}`);
-                    var bdlGameObj = gameResp?.data || null;
-                    if (bdlGameObj) {
-                      var fbPlays = allPlaysResults[gi]?.data || [];
-                      var fbPbp = parseBDLPBPServer(fbPlays, cfg.aliasMap?.[hA]||hA, cfg.aliasMap?.[aA]||aA);
-                      _srSummary = buildSummaryFromBDLPlayerStats(bdlPlayers, bdlGameObj, fbPbp);
-                      _usedBdlFallback = true;
-                      log(`${matchup}: ★ BDL fallback succeeded — ${bdlPlayers.length} players`);
-                    } else {
-                      log(`${matchup}: BDL game fetch failed — skipping`);
-                      continue;
-                    }
-                  } else {
-                    log(`${matchup}: BDL player_stats empty — skipping`);
-                    continue;
+                  await sleep(SR_DELAY_MS);
+                  _srSummary = await srFetch(league, `games/${game.id}/summary.json`);
+                  if (!_srSummary || (!_srSummary.home && !_srSummary.away)) {
+                    throw new Error('SR summary empty');
                   }
-                } catch (bdlErr) {
-                  log(`${matchup}: BDL fallback also failed (${bdlErr.message}) — skipping`);
+                  log(`${matchup}: SR fallback succeeded`);
+                } catch (srErr) {
+                  log(`${matchup}: SR fallback also failed (${srErr.message}) — skipping`);
                   continue;
                 }
-              } else {
-                log(`${matchup}: no BDL game ID for fallback — skipping`);
+              }
+            } else {
+              // No BDL player_stats (game may not have started, or no bdlGid) — try SR
+              try {
+                await sleep(SR_DELAY_MS);
+                _srSummary = await srFetch(league, `games/${game.id}/summary.json`);
+                if (!_srSummary || (!_srSummary.home && !_srSummary.away)) {
+                  throw new Error('SR summary empty');
+                }
+                log(`${matchup}: SR fallback succeeded (no BDL player_stats)`);
+              } catch (srErr) {
+                log(`${matchup}: no BDL player_stats + SR failed (${srErr.message}) — skipping`);
                 continue;
               }
             }
