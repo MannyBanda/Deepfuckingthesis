@@ -2935,20 +2935,20 @@ function renderDrawer(gameId){
           html+='<td style="font-size:9px;color:'+xColor+'">'+xPct+'%</td>';
         }else{html+='<td style="color:var(--fg-dim);font-size:9px">--</td>';}
       }
-      if(sc2.mc){
-        var mcVal=s.mc_win_prob;
-        if(mcVal!=null){
-          var mcPct=Math.round(Number(mcVal)*100);
-          var mcColor=mcVal<0.40?'var(--coral)':mcVal>0.70?'var(--green)':'var(--amber)';
-          html+='<td style="font-size:9px;color:'+mcColor+'">'+mcPct+'%</td>';
-        }else{html+='<td style="color:var(--fg-dim);font-size:9px">--</td>';}
-      }
       if(sc2.mcc){
         var mccVal=s.mc_cum_win_prob;
         if(mccVal!=null){
           var mccPct=Math.round(Number(mccVal)*100);
           var mccColor=mccVal<0.40?'var(--coral)':mccVal>0.70?'var(--green)':'var(--amber)';
           html+='<td style="font-size:9px;color:'+mccColor+'">'+mccPct+'%</td>';
+        }else{html+='<td style="color:var(--fg-dim);font-size:9px">--</td>';}
+      }
+      if(sc2.mc){
+        var mcVal=s.mc_win_prob;
+        if(mcVal!=null){
+          var mcPct=Math.round(Number(mcVal)*100);
+          var mcColor=mcVal<0.40?'var(--coral)':mcVal>0.70?'var(--green)':'var(--amber)';
+          html+='<td style="font-size:9px;color:'+mcColor+'">'+mcPct+'%</td>';
         }else{html+='<td style="color:var(--fg-dim);font-size:9px">--</td>';}
       }
       if(sc2.win){
