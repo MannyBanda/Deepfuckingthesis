@@ -412,7 +412,7 @@ const ODDS_API_TEAMS_WNBA = {
   'Atlanta Dream': 'ATL', 'Chicago Sky': 'CHI', 'Connecticut Sun': 'CON',
   'Dallas Wings': 'DAL', 'Golden State Valkyries': 'GSV', 'Indiana Fever': 'IND',
   'Las Vegas Aces': 'LVA', 'Los Angeles Sparks': 'LAS', 'Minnesota Lynx': 'MIN',
-  'New York Liberty': 'NYL', 'Phoenix Mercury': 'PHO', 'Portland Fire': 'PDX',
+  'New York Liberty': 'NYL', 'Phoenix Mercury': 'PHX', 'Portland Fire': 'PDX',
   'Seattle Storm': 'SEA', 'Toronto Tempo': 'TOY', 'Washington Mystics': 'WAS',
 };
 
