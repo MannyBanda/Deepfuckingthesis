@@ -753,66 +753,63 @@ async function refreshLiveCards(){
         });
       }
     }catch(e){console.warn('[ESPN-SCORE]',e.message);}
-    var updated=games.some(function(g){return getState(g)==='LIVE';});
-    for(var gi=0;gi<games.length;gi++){
-      var g=games[gi];
-      if(getState(g)!=='LIVE')continue;
-      var bdlId=bdlGameMap[g.id];
-      if(!bdlId)continue;
-      var cs=cardState[g.id];
-      if(!cs)continue;
-
-      // 1a. BDL plays → scores, period, clock, PBP
-      try{
-        var playsRes=await bdl('plays',{game_id:bdlId,league:'wnba'});
-        var plays=playsRes.data||[];
-        if(plays.length>0){
-          var last=plays[plays.length-1];
-          g.homePoints=last.home_score!=null?last.home_score:g.homePoints;
-          g.awayPoints=last.away_score!=null?last.away_score:g.awayPoints;
-          g.period=last.period||g.period;
-          g.clock=last.clock||g.clock;
-          if((last.type||'').toLowerCase().includes('end game'))g.status='closed';
-          var hA=g.home?.alias||'',aA=g.away?.alias||'';
-          var hE=ESPN_ALIAS_MAP[hA]||hA,aE=ESPN_ALIAS_MAP[aA]||aA;
-          cs.pbpAudit=parseBDLPBP(plays,hE,aE);
-          cs._bdlPlays=plays;
-          cs._pbpPlayerStats=compilePBPPlayerStats(plays,hE,aE);
-          // Build scoring comp from PBP
-          buildScoringCompForCard(g.id);
-          updated=true;
+    // Parallel per-game fetches — plays + team_stats fired simultaneously
+    var liveGames=games.filter(function(g){
+      return getState(g)==='LIVE'&&bdlGameMap[g.id]&&cardState[g.id];
+    });
+    if(liveGames.length>0){
+      await Promise.all(liveGames.map(async function(g){
+        var bdlId=bdlGameMap[g.id];
+        var cs=cardState[g.id];
+        var res=await Promise.all([
+          bdl('plays',{game_id:bdlId,league:'wnba'}).catch(function(e){console.warn('[BDL plays]',g.id,e.message);return null;}),
+          bdl('team_stats',{game_id:bdlId,league:'wnba'}).catch(function(e){console.warn('[BDL team_stats]',g.id,e.message);return null;})
+        ]);
+        // 1a. Process plays → scores, period, clock, PBP
+        if(res[0]){
+          var plays=res[0].data||[];
+          if(plays.length>0){
+            var last=plays[plays.length-1];
+            g.homePoints=last.home_score!=null?last.home_score:g.homePoints;
+            g.awayPoints=last.away_score!=null?last.away_score:g.awayPoints;
+            g.period=last.period||g.period;
+            g.clock=last.clock||g.clock;
+            if((last.type||'').toLowerCase().includes('end game'))g.status='closed';
+            var hA=g.home?.alias||'',aA=g.away?.alias||'';
+            var hE=ESPN_ALIAS_MAP[hA]||hA,aE=ESPN_ALIAS_MAP[aA]||aA;
+            cs.pbpAudit=parseBDLPBP(plays,hE,aE);
+            cs._bdlPlays=plays;
+            cs._pbpPlayerStats=compilePBPPlayerStats(plays,hE,aE);
+            buildScoringCompForCard(g.id);
+          }
         }
-      }catch(e){console.warn('[BDL plays]',g.id,e.message);}
-
-      // 1b. BDL team_stats → team evidence for I1-I5 detail + QD partial
-      try{
-        var tsRes=await bdl('team_stats',{game_id:bdlId,league:'wnba'});
-        var tsData=tsRes.data||[];
-        if(tsData.length>=2){
-          cs._bdlTeamStats=tsData;
-          cs._teamEvidence=buildTeamEvidence(tsData,g);
-          updated=true;
+        // 1b. Process team_stats → team evidence for I1-I5 detail
+        if(res[1]){
+          var tsData=res[1].data||[];
+          if(tsData.length>=2){
+            cs._bdlTeamStats=tsData;
+            cs._teamEvidence=buildTeamEvidence(tsData,g);
+          }
         }
-      }catch(e){console.warn('[BDL team_stats]',g.id,e.message);}
-
-      // Compute client-side indicators from BDL data (10s refresh)
-      var _ci=computeClientIndicators(g.id);
-      if(_ci)cs.clientInd=_ci;
-
-      // Persist ESPN WP history when game goes FINAL
-      if(getState(g)==='FINAL'){
-        if(cs&&cs.espnWPHistory&&cs.espnWPHistory.length>10&&!cs._wpSaved){
-          cs._wpSaved=true;
-          try{localStorage.setItem('wnba:wpHist:'+g.id,JSON.stringify(cs.espnWPHistory));}catch(e){}
+        // Compute client-side indicators from BDL data (10s refresh)
+        var _ci=computeClientIndicators(g.id);
+        if(_ci)cs.clientInd=_ci;
+        // Persist ESPN WP history when game goes FINAL
+        if(getState(g)==='FINAL'){
+          if(cs.espnWPHistory&&cs.espnWPHistory.length>10&&!cs._wpSaved){
+            cs._wpSaved=true;
+            try{localStorage.setItem('wnba:wpHist:'+g.id,JSON.stringify(cs.espnWPHistory));}catch(e){}
+          }
         }
-      }
+      }));
+      renderPills();games.forEach(function(g){renderCard(g.id);});
     }
-    if(updated){renderPills();games.forEach(function(g){renderCard(g.id);});}
   }catch(e){console.warn('[POLL]',e.message);}
   pollAlerts();
   maybeResyncTheses();
   maybeResyncSnapshots();
   maybeRefreshEspnWP();
+  maybeRefreshOdds();
 }
 
 // ── WNBA ADAPTERS ──
@@ -908,6 +905,19 @@ function maybeRefreshEspnWP(){
     if(getState(g)==='LIVE'&&espnGameMap[g.id]){
       setTimeout(function(){fetchEspnWP(g.id);},i*300);
     }
+  });
+}
+
+function maybeRefreshOdds(){
+  if(!dbReady)return;
+  var now=Date.now();
+  games.forEach(function(g){
+    if(getState(g)!=='LIVE')return;
+    var cs=cardState[g.id];
+    if(!cs)return;
+    if(cs._lastOddsRefresh&&now-cs._lastOddsRefresh<30000)return;
+    cs._lastOddsRefresh=now;
+    fetchOddsHistory(g.id);
   });
 }
 
@@ -2551,10 +2561,11 @@ async function fetchOddsHistory(gameId){
       // Populate ML from latest odds entry into oddsData for value read table
       var latest=cs._oddsHistory[cs._oddsHistory.length-1];
       if(!cs.oddsData)cs.oddsData={homeSpread:null,homeML:null,awayML:null,total:null,source:'db-odds'};
+      if(!cs._openingOdds&&(cs.oddsData.homeML||cs.oddsData.homeSpread))cs._openingOdds={homeSpread:cs.oddsData.homeSpread,homeML:cs.oddsData.homeML,awayML:cs.oddsData.awayML,total:cs.oddsData.total};
       if(latest.home_ml!=null)cs.oddsData.homeML=String(latest.home_ml);
       if(latest.away_ml!=null)cs.oddsData.awayML=String(latest.away_ml);
-      if(latest.home_spread!=null&&!cs.oddsData.homeSpread)cs.oddsData.homeSpread=String(latest.home_spread);
-      if(latest.total!=null&&!cs.oddsData.total)cs.oddsData.total=String(latest.total);
+      if(latest.home_spread!=null)cs.oddsData.homeSpread=String(latest.home_spread);
+      if(latest.total!=null)cs.oddsData.total=String(latest.total);
       console.log('[ODDS] Loaded',cs._oddsHistory.length,'entries for',gameId,'ML:'+cs.oddsData.homeML+'/'+cs.oddsData.awayML);
       renderCard(gameId);
       if(_drawerGameId===gameId)renderDrawer(gameId);
