@@ -795,6 +795,10 @@ async function refreshLiveCards(){
         }
       }catch(e){console.warn('[BDL team_stats]',g.id,e.message);}
 
+      // Compute client-side indicators from BDL data (10s refresh)
+      var _ci=computeClientIndicators(g.id);
+      if(_ci)cs.clientInd=_ci;
+
       // Persist ESPN WP history when game goes FINAL
       if(getState(g)==='FINAL'){
         if(cs&&cs.espnWPHistory&&cs.espnWPHistory.length>10&&!cs._wpSaved){
@@ -1822,8 +1826,8 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
 function getFloor(cs){
   if(!cs)return null;
   if(cs.sonnetIndicators&&cs.sonnetIndicators.score!=null)return cs.sonnetIndicators;
-  if(cs._serverFloor&&cs._serverFloor.score!=null)return cs._serverFloor;
   if(cs.clientInd&&cs.clientInd.score!=null)return cs.clientInd;
+  if(cs._serverFloor&&cs._serverFloor.score!=null)return cs._serverFloor;
   if(cs.rollingWindow&&cs.rollingWindow.available&&cs.rollingWindow.score!=null)return{score:cs.rollingWindow.score,controlTeam:cs.rollingWindow.controlTeam,I1:cs.rollingWindow.I1,I2:cs.rollingWindow.I2,I3:cs.rollingWindow.I3,I4:cs.rollingWindow.I4,I5:cs.rollingWindow.I5,source:cs.rollingWindow.source||'window'};
   return null;
 }
@@ -2165,9 +2169,92 @@ function buildV3Summary(boxScore){
   return null;
 }
 
-function computeClientIndicators(boxScore, gameId){
-  // WNBA: server computes indicators from SR — client doesn't compute
-  return null;
+function computeClientIndicators(gameId){
+  var g=games.find(function(x){return x.id===gameId;});
+  var cs=cardState[gameId];
+  if(!g||!cs)return null;
+  if(getState(g)!=='LIVE')return null;
+  var te=cs._teamEvidence;
+  if(!te||!te.home||!te.away)return null;
+  var hFGA=te.home.fga||0,aFGA=te.away.fga||0;
+  if(hFGA+aFGA<10)return null;
+
+  var hA=g.home?.alias||'',aA=g.away?.alias||'';
+  var hE=ESPN_ALIAS_MAP[hA]||hA,aE=ESPN_ALIAS_MAP[aA]||aA;
+  var pbp=cs.pbpAudit;
+  var bdl=pbp&&pbp._bdl?pbp._bdl:null;
+  var period=g.period||0;
+
+  // I1 — Disruption
+  var hDisrupt=(te.home.stl||0)+(te.home.blk||0);
+  var aDisrupt=(te.away.stl||0)+(te.away.blk||0);
+  var i1subA=(hDisrupt-aDisrupt>2)?1:(aDisrupt-hDisrupt>2)?-1:0;
+  var hPOT=bdl?bdl.potHome||0:0,aPOT=bdl?bdl.potAway||0:0;
+  var i1subB=(hPOT-aPOT>3)?1:(aPOT-hPOT>3)?-1:0;
+  var i1raw=i1subA+i1subB;
+  // Chaos layer — forced vs unforced TO split
+  if(pbp&&pbp.home&&pbp.away){
+    var hForced=pbp.away&&pbp.away.tos?pbp.away.tos.forced||0:0;
+    var aForced=pbp.home&&pbp.home.tos?pbp.home.tos.forced||0:0;
+    var hUnforced=pbp.home&&pbp.home.tos?pbp.home.tos.unforced||0:0;
+    var aUnforced=pbp.away&&pbp.away.tos?pbp.away.tos.unforced||0:0;
+    if(hForced>=aForced+4)i1raw+=0.5;
+    else if(aForced>=hForced+4)i1raw-=0.5;
+    else if(hUnforced>=aUnforced+4)i1raw-=0.5;
+    else if(aUnforced>=hUnforced+4)i1raw+=0.5;
+  }
+  var I1={score:i1raw>0?1:i1raw===0?0.5:0,leader:i1raw>0?hA:i1raw<0?aA:'EVEN'};
+
+  // I2 — Perimeter & FT Access
+  var h3Pct=(te.home.fg3a||0)>4?(te.home.fg3m||0)/(te.home.fg3a||1)*100:null;
+  var a3Pct=(te.away.fg3a||0)>4?(te.away.fg3m||0)/(te.away.fg3a||1)*100:null;
+  var wi2a=0;
+  if(h3Pct!=null&&a3Pct!=null){if(h3Pct-a3Pct>3)wi2a=1;else if(a3Pct-h3Pct>3)wi2a=-1;}
+  var hFTA=te.home.fta||0,aFTA=te.away.fta||0;
+  var wi2b=(hFTA-aFTA>2)?1:(aFTA-hFTA>2)?-1:0;
+  var i2raw=wi2a+wi2b;
+  var I2={score:i2raw>0?1:i2raw<0?0:0.5,leader:i2raw>0?hA:i2raw<0?aA:'EVEN'};
+
+  // I3 — Shot Quality & Creation
+  var hEFG=hFGA>0?((te.home.fgm||0)+0.5*(te.home.fg3m||0))/hFGA:0;
+  var aEFG=aFGA>0?((te.away.fgm||0)+0.5*(te.away.fg3m||0))/aFGA:0;
+  var hAst=te.home.ast||0,aAst=te.away.ast||0;
+  var i3raw=(hEFG-aEFG>0.03?1:hEFG-aEFG<-0.03?-1:0)+(hAst-aAst>2?1:hAst-aAst<-2?-1:0);
+  var I3={score:i3raw>0?1:i3raw===0?0.5:0,leader:i3raw>0?hA:i3raw<0?aA:'EVEN'};
+
+  // I4 — Game Control
+  var hBL=bdl?bdl.biggestLeadHome||0:0,aBL=bdl?bdl.biggestLeadAway||0:0;
+  var blDiff=hBL-aBL;
+  var i4subA=blDiff>4?1:blDiff<-4?-1:0;
+  var i4subB=0;
+  if(period>=4&&pbp&&pbp.scoringEvents){
+    var hQPts=0,aQPts=0;
+    pbp.scoringEvents.forEach(function(e){
+      if(e.q!==period)return;
+      if(e.tm===hE)hQPts+=e.pts;
+      else if(e.tm===aE)aQPts+=e.pts;
+    });
+    var qDiff=hQPts-aQPts;
+    i4subB=qDiff>2?1:qDiff<-2?-1:0;
+  }
+  var i4raw=i4subA+i4subB;
+  var I4={score:i4raw>0?1:i4raw===0?0.5:0,leader:i4raw>0?hA:i4raw<0?aA:'EVEN'};
+
+  // I5 — Momentum (rebounds)
+  var hReb=(te.home.oreb||0)+(te.home.dreb||0);
+  var aReb=(te.away.oreb||0)+(te.away.dreb||0);
+  var i5raw=(hReb-aReb>3)?1:(aReb-hReb>3)?-1:0;
+  var I5={score:i5raw>0?1:i5raw===0?0.5:0,leader:i5raw>0?hA:i5raw<0?aA:'EVEN'};
+
+  // Composite — WNBA weights
+  var raw=I1.score*0.15+I2.score*0.20+I3.score*0.30+I4.score*0.25+I5.score*0.10;
+  var controlHome=raw>=0.5;
+  var controlTeam=controlHome?hA:aA;
+  var score=controlHome?raw:1-raw;
+
+  return{controlTeam:controlTeam,score:Math.round(score*100)/100,
+    I1:I1,I2:I2,I3:I3,I4:I4,I5:I5,
+    homeAlias:hA,awayAlias:aA,source:'client'};
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
