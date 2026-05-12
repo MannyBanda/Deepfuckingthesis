@@ -15,7 +15,10 @@
 import { neon } from '@neondatabase/serverless';
 
 // ── INDICATOR WEIGHTS (aligned with live system — poll-live-bdl.mjs) ────────
-var W = { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 };
+var WEIGHTS = {
+  nba:  { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 },
+  wnba: { I1: 0.15, I2: 0.20, I3: 0.30, I4: 0.25, I5: 0.10 },
+};
 
 // ── NBA TEAM IDS (SR UUIDs — stable) ────────────────────────────────────────
 var SR_TEAM_IDS = {
@@ -35,6 +38,21 @@ var SR_TEAM_IDS = {
   SAS:'583ecd4f-fb46-11e1-82cb-f4ce4684ea4c',TOR:'583ecda6-fb46-11e1-82cb-f4ce4684ea4c',
   UTA:'583ece50-fb46-11e1-82cb-f4ce4684ea4c',WAS:'583ec8d4-fb46-11e1-82cb-f4ce4684ea4c',
 };
+
+// ── WNBA TEAM IDS (SR UUIDs — stable, 15 teams) ────────────────────────────
+var SR_TEAM_IDS_WNBA = {
+  ATL:'5d70a9af-8c2b-4aec-9e68-9acc6ddb93e4',CHI:'3c409388-ab73-4c7f-953d-3a71062240f6',
+  CON:'a015b02d-845c-40c1-8ef4-844984f47e4d',DAL:'5f0b5caf-708b-4300-92f2-53b51d83ec06',
+  GSV:'4f57ec40-0d35-4b59-bea0-9d040f0d2292',IND:'f073a15f-0486-4179-b0a3-dfd0294eb595',
+  LAS:'0a5ad38d-2fe3-43ba-894b-1ba3d5042ea9',LVA:'171b097d-01db-4ae8-9d56-035689402ec6',
+  MIN:'6f017f37-be96-4bdc-b6d3-0a0429c72e89',NYL:'08ed8274-e29f-4248-bc2e-83cc8ed18d75',
+  PDX:'d54283cc-c5ec-4dbd-bb61-166f217e3864',PHX:'0699edf3-5993-4182-b9b4-ec935cbd4fcc',
+  SEA:'d6a012ed-84aa-48d3-8265-2d3f3ff2199a',TOR:'4e4f726e-a015-4306-91a7-28e8576c7868',
+  WAS:'5c0d47fe-8539-47b0-9f36-d0b3609ca89b',
+};
+
+// ── WNBA ALIAS MAP (SR alias → BDL abbreviation, for odds matching) ─────────
+var WNBA_ALIAS_MAP = { NYL:'NY', LVA:'LV', LAS:'LA', GSV:'GS', WAS:'WSH', PDX:'POR', TOY:'TOR' };
 
 // ══════════════════════════════════════════════════════════════════════════════
 // HELPER UTILITIES
@@ -599,7 +617,7 @@ function formatPreComputed(homeAlias, awayAlias, rosterAudit, sia, finalCaps, re
 // 10. MECHANICAL PREGAME FLOOR
 // ══════════════════════════════════════════════════════════════════════════════
 
-function computePreGameFloor(homeStats, awayStats, standings, seasonQ4, siaCaps, homeAlias, awayAlias) {
+function computePreGameFloor(homeStats, awayStats, standings, seasonQ4, siaCaps, homeAlias, awayAlias, league) {
   if (!homeStats || !awayStats) return null;
 
   function avg(stats) {
@@ -616,10 +634,12 @@ function computePreGameFloor(homeStats, awayStats, standings, seasonQ4, siaCaps,
       fgm: a.field_goals_made || (t.field_goals_made ? t.field_goals_made/gp : 0),
       fga: a.field_goals_att || (t.field_goals_att ? t.field_goals_att/gp : 0),
       fg3m: a.three_points_made || (t.three_points_made ? t.three_points_made/gp : 0),
+      fg3a: a.three_points_att || (t.three_points_att ? t.three_points_att/gp : 0),
       ast: a.assists || (t.assists ? t.assists/gp : 0),
       pts: a.points || (t.points ? t.points/gp : 0),
       ptsA: a.points_against || (t.points_against ? t.points_against/gp : 0),
       oreb: a.off_rebounds || a.offensive_rebounds || (t.offensive_rebounds ? t.offensive_rebounds/gp : 0),
+      dreb: a.def_rebounds || a.defensive_rebounds || (t.defensive_rebounds ? t.defensive_rebounds/gp : 0),
       to: a.turnovers || (t.turnovers ? t.turnovers/gp : 0),
       fta: a.free_throws_att || (t.free_throws_att ? t.free_throws_att/gp : 0),
       gp: gp,
@@ -629,42 +649,75 @@ function computePreGameFloor(homeStats, awayStats, standings, seasonQ4, siaCaps,
   var h = avg(homeStats);
   var a = avg(awayStats);
   var diffs = {};
+  var isWNBA = league === 'wnba';
+  var W = WEIGHTS[league] || WEIGHTS.nba;
 
-  // I1
+  // I1 — Disruption
   var hDisrupt = h.stl + h.blk, aDisrupt = a.stl + a.blk;
   diffs.i1subA_diff = +(hDisrupt - aDisrupt).toFixed(1);
-  var i1subA = diffs.i1subA_diff > 1 ? 1 : diffs.i1subA_diff < -1 ? -1 : 0;
+  var disruptThresh = isWNBA ? 2 : 1;
+  var i1subA = diffs.i1subA_diff > disruptThresh ? 1 : diffs.i1subA_diff < -disruptThresh ? -1 : 0;
   diffs.i1subB_diff = +(h.pot - a.pot).toFixed(1);
-  var i1subB = diffs.i1subB_diff > 2 ? 1 : diffs.i1subB_diff < -2 ? -1 : 0;
+  var potThresh = isWNBA ? 3 : 2;
+  var i1subB = diffs.i1subB_diff > potThresh ? 1 : diffs.i1subB_diff < -potThresh ? -1 : 0;
   var i1raw = i1subA + i1subB;
   var I1 = { score: i1raw > 0 ? 1 : i1raw === 0 ? 0.5 : 0, leader: i1raw > 0 ? homeAlias : i1raw < 0 ? awayAlias : 'EVEN' };
 
-  // I2
-  diffs.i2subA_diff = +(h.paint - a.paint).toFixed(1);
-  var i2subA = diffs.i2subA_diff > 4 ? 1 : diffs.i2subA_diff < -4 ? -1 : 0;
-  var hPaintPct = h.paintA >= 3 ? h.paintM / h.paintA : null;
-  var aPaintPct = a.paintA >= 3 ? a.paintM / a.paintA : null;
-  var i2subB = 0;
-  if (hPaintPct != null && aPaintPct != null) {
-    diffs.i2subB_diff = +((hPaintPct - aPaintPct) * 100).toFixed(1);
-    if (hPaintPct - aPaintPct > 0.05) i2subB = 1;
-    else if (aPaintPct - hPaintPct > 0.05) i2subB = -1;
-  } else { diffs.i2subB_diff = null; }
-  var i2raw = i2subA + i2subB;
+  // I2 — Interior Control (NBA) / Perimeter+FT (WNBA)
+  var i2raw;
+  if (isWNBA) {
+    // WNBA I2 subA: 3PT% differential
+    var h3Pct = h.fg3a >= 3 ? (h.fg3m / h.fg3a) * 100 : null;
+    var a3Pct = a.fg3a >= 3 ? (a.fg3m / a.fg3a) * 100 : null;
+    var wi2a = 0;
+    if (h3Pct != null && a3Pct != null) {
+      diffs.i2subA_diff = +(h3Pct - a3Pct).toFixed(1);
+      if (h3Pct - a3Pct > 3) wi2a = 1;
+      else if (a3Pct - h3Pct > 3) wi2a = -1;
+    } else { diffs.i2subA_diff = null; }
+    // WNBA I2 subB: FTA differential
+    diffs.i2subB_diff = +(h.fta - a.fta).toFixed(1);
+    var wi2b = (h.fta - a.fta > 2) ? 1 : (a.fta - h.fta > 2) ? -1 : 0;
+    i2raw = wi2a + wi2b;
+  } else {
+    // NBA I2: paint volume + paint/rim FG%
+    diffs.i2subA_diff = +(h.paint - a.paint).toFixed(1);
+    var i2subA = diffs.i2subA_diff > 4 ? 1 : diffs.i2subA_diff < -4 ? -1 : 0;
+    var hPaintPct = h.paintA >= 3 ? h.paintM / h.paintA : null;
+    var aPaintPct = a.paintA >= 3 ? a.paintM / a.paintA : null;
+    var i2subB = 0;
+    if (hPaintPct != null && aPaintPct != null) {
+      diffs.i2subB_diff = +((hPaintPct - aPaintPct) * 100).toFixed(1);
+      if (hPaintPct - aPaintPct > 0.05) i2subB = 1;
+      else if (aPaintPct - hPaintPct > 0.05) i2subB = -1;
+    } else { diffs.i2subB_diff = null; }
+    i2raw = i2subA + i2subB;
+  }
   var I2 = { score: i2raw > 0 ? 1 : i2raw < 0 ? 0 : 0.5, leader: i2raw > 0 ? homeAlias : i2raw < 0 ? awayAlias : 'EVEN' };
 
-  // I3
-  var hEFG = (h.fgm + 0.5 * h.fg3m) / (h.fga || 1);
-  var aEFG = (a.fgm + 0.5 * a.fg3m) / (a.fga || 1);
-  diffs.i3sub1_diff = +((hEFG - aEFG) * 100).toFixed(1);
-  var hAR = (h.ast / (h.fgm || 1)) * 100;
-  var aAR = (a.ast / (a.fgm || 1)) * 100;
-  diffs.i3sub2_diff = +(hAR - aAR).toFixed(1);
-  var i3raw = (hEFG > aEFG + 0.02 ? 1 : hEFG < aEFG - 0.02 ? -1 : 0)
-            + (hAR > aAR + 3 ? 1 : hAR < aAR - 3 ? -1 : 0);
+  // I3 — Shot Quality & Creation
+  var hFGA = h.fga || 1, aFGA = a.fga || 1;
+  var hEFG = (h.fgm + 0.5 * h.fg3m) / hFGA;
+  var aEFG = (a.fgm + 0.5 * a.fg3m) / aFGA;
+  var i3raw;
+  if (isWNBA) {
+    // WNBA: eFG% ±3%, raw assists ±2
+    diffs.i3sub1_diff = +((hEFG - aEFG) * 100).toFixed(1);
+    diffs.i3sub2_diff = +(h.ast - a.ast).toFixed(1);
+    i3raw = (hEFG > aEFG + 0.03 ? 1 : hEFG < aEFG - 0.03 ? -1 : 0)
+          + (h.ast - a.ast > 2 ? 1 : a.ast - h.ast > 2 ? -1 : 0);
+  } else {
+    // NBA: eFG% ±2%, assist ratio ±3
+    diffs.i3sub1_diff = +((hEFG - aEFG) * 100).toFixed(1);
+    var hAR = (h.ast / (h.fgm || 1)) * 100;
+    var aAR = (a.ast / (a.fgm || 1)) * 100;
+    diffs.i3sub2_diff = +(hAR - aAR).toFixed(1);
+    i3raw = (hEFG > aEFG + 0.02 ? 1 : hEFG < aEFG - 0.02 ? -1 : 0)
+          + (hAR > aAR + 3 ? 1 : hAR < aAR - 3 ? -1 : 0);
+  }
   var I3 = { score: i3raw > 0 ? 1 : i3raw === 0 ? 0.5 : 0, leader: i3raw > 0 ? homeAlias : i3raw < 0 ? awayAlias : 'EVEN' };
 
-  // I4
+  // I4 — Game Control (same proxy for both leagues)
   var hMargin = h.pts - h.ptsA;
   var aMargin = a.pts - a.ptsA;
   diffs.i4subA_diff = +(hMargin - aMargin).toFixed(1);
@@ -678,17 +731,33 @@ function computePreGameFloor(homeStats, awayStats, standings, seasonQ4, siaCaps,
   var i4raw = i4subA + i4subB;
   var I4 = { score: i4raw > 0 ? 1 : i4raw === 0 ? 0.5 : 0, leader: i4raw > 0 ? homeAlias : i4raw < 0 ? awayAlias : 'EVEN' };
 
-  // I5
-  var hPoss = h.fga - h.oreb + h.to + 0.44 * h.fta;
-  var aPoss = a.fga - a.oreb + a.to + 0.44 * a.fta;
-  var hOrtg = hPoss > 0 ? (h.pts / hPoss * 100) : 100;
-  var hDrtg = aPoss > 0 ? (a.pts / aPoss * 100) : 100;
-  var aOrtg = aPoss > 0 ? (a.pts / aPoss * 100) : 100;
-  var aDrtg = hPoss > 0 ? (h.pts / hPoss * 100) : 100;
-  var hNet = hOrtg - hDrtg, aNet = aOrtg - aDrtg;
-  diffs.i5_diff = +(hNet - aNet).toFixed(1);
-  var I5 = { score: diffs.i5_diff > 3 ? 1 : diffs.i5_diff < -3 ? 0 : 0.5,
-             leader: diffs.i5_diff > 3 ? homeAlias : diffs.i5_diff < -3 ? awayAlias : 'EVEN' };
+  // I5 — Sustained Execution (NBA) / Momentum (WNBA)
+  var I5, hNet, aNet;
+  if (isWNBA) {
+    // WNBA: rebounds differential (FBP unavailable in season stats, net rating has no signal)
+    var hReb = h.oreb + h.dreb, aReb = a.oreb + a.dreb;
+    diffs.i5_diff = +(hReb - aReb).toFixed(1);
+    I5 = { score: diffs.i5_diff > 3 ? 1 : diffs.i5_diff < -3 ? 0 : 0.5,
+           leader: diffs.i5_diff > 3 ? homeAlias : diffs.i5_diff < -3 ? awayAlias : 'EVEN' };
+    // Still compute net for display even though it's not used for scoring
+    var hPoss = h.fga - h.oreb + h.to + 0.44 * h.fta;
+    var aPoss = a.fga - a.oreb + a.to + 0.44 * a.fta;
+    hNet = hPoss > 0 ? +((h.pts / hPoss * 100) - (a.pts / aPoss * 100)).toFixed(1) : 0;
+    aNet = aPoss > 0 ? +((a.pts / aPoss * 100) - (h.pts / hPoss * 100)).toFixed(1) : 0;
+  } else {
+    // NBA: net rating
+    var hPoss = h.fga - h.oreb + h.to + 0.44 * h.fta;
+    var aPoss = a.fga - a.oreb + a.to + 0.44 * a.fta;
+    var hOrtg = hPoss > 0 ? (h.pts / hPoss * 100) : 100;
+    var hDrtg = aPoss > 0 ? (a.pts / aPoss * 100) : 100;
+    var aOrtg = aPoss > 0 ? (a.pts / aPoss * 100) : 100;
+    var aDrtg = hPoss > 0 ? (h.pts / hPoss * 100) : 100;
+    hNet = +(hOrtg - hDrtg).toFixed(1);
+    aNet = +(aOrtg - aDrtg).toFixed(1);
+    diffs.i5_diff = +(hNet - aNet).toFixed(1);
+    I5 = { score: diffs.i5_diff > 3 ? 1 : diffs.i5_diff < -3 ? 0 : 0.5,
+           leader: diffs.i5_diff > 3 ? homeAlias : diffs.i5_diff < -3 ? awayAlias : 'EVEN' };
+  }
 
   // Apply SIA caps
   if (siaCaps) {
@@ -718,11 +787,12 @@ function computePreGameFloor(homeStats, awayStats, standings, seasonQ4, siaCaps,
     controlTeam: controlTeam, score: Math.round(score * 100) / 100,
     I1: I1, I2: I2, I3: I3, I4: I4, I5: I5,
     homeAlias: homeAlias, awayAlias: awayAlias, diffs: diffs,
-    homeAvgs: h, awayAvgs: a, homeNet: +hNet.toFixed(1), awayNet: +aNet.toFixed(1),
+    homeAvgs: h, awayAvgs: a, homeNet: +hNet, awayNet: +aNet,
+    league: league,
   };
 }
 
-function computeConviction(ind) {
+function computeConviction(ind, league) {
   if (!ind || ind.score == null) return { tier: 'NO ENTRY', combo: 'NONE', indicatorsWon: [], indicatorsLost: [], count: 0, pairs: [] };
   var ctrlHome = ind.controlTeam === ind.homeAlias;
   var wins = [], loses = [], even = [];
@@ -735,24 +805,47 @@ function computeConviction(ind) {
     else even.push(k);
   });
   var count = wins.length;
+  var has = function(a, b) { return wins.indexOf(a) >= 0 && wins.indexOf(b) >= 0; };
   var pairs = [];
-  for (var i = 0; i < wins.length; i++) {
-    for (var j = i + 1; j < wins.length; j++) {
-      pairs.push(wins[i] + '+' + wins[j]);
-    }
-  }
   var tier = 'NO ENTRY';
   var combo = wins.length > 0 ? wins.join('+') : 'NONE';
-  if (count >= 4 || pairs.indexOf('I4+I5') >= 0) tier = 'DOMINANT';
-  else if (pairs.indexOf('I3+I4') >= 0 || pairs.indexOf('I3+I5') >= 0) tier = 'STRONG';
-  else if (count >= 2) tier = 'MODEST';
-  else if (count === 1) tier = 'CONDITIONAL';
+
+  if (league === 'wnba') {
+    // WNBA: I3 is anchor (30%), I4+I5 is NOT a killer pair
+    var hasI3I4 = has('I3', 'I4');
+    var hasI3I2 = has('I3', 'I2');
+    var hasI4I2 = has('I4', 'I2');
+    var hasKillerPair = hasI3I4 || hasI3I2 || hasI4I2;
+
+    if (count >= 4 || (hasI3I4 && count >= 3)) tier = 'DOMINANT';
+    else if (hasKillerPair) tier = 'STRONG';
+    else if (count >= 2) tier = 'MODEST';
+    else if (count >= 1) tier = 'CONDITIONAL';
+
+    if (hasI3I4) pairs.push('I3+I4');
+    if (hasI3I2) pairs.push('I3+I2');
+    if (hasI4I2) pairs.push('I4+I2');
+  } else {
+    // NBA: I4+I5 killer pair, danger combos (171-game validated)
+    for (var i = 0; i < wins.length; i++) {
+      for (var j = i + 1; j < wins.length; j++) {
+        pairs.push(wins[i] + '+' + wins[j]);
+      }
+    }
+    if (count >= 4 || pairs.indexOf('I4+I5') >= 0) tier = 'DOMINANT';
+    else if (pairs.indexOf('I3+I4') >= 0 || pairs.indexOf('I3+I5') >= 0) tier = 'STRONG';
+    else if (count >= 2) tier = 'MODEST';
+    else if (count === 1) tier = 'CONDITIONAL';
+  }
+
   return { tier: tier, combo: combo, indicatorsWon: wins, indicatorsLost: loses, count: count, pairs: pairs };
 }
 
-function formatMechanicalFloor(floor, conviction, homeAlias, awayAlias) {
+function formatMechanicalFloor(floor, conviction, homeAlias, awayAlias, league) {
   if (!floor) return '';
   var d = floor.diffs;
+  var isWNBA = league === 'wnba';
+  var W = WEIGHTS[league] || WEIGHTS.nba;
   var lines = [
     '=== MECHANICAL PREGAME FLOOR (ground truth \u2014 do NOT override indicator scores) ===',
     'CONTROL TEAM: ' + floor.controlTeam,
@@ -761,20 +854,35 @@ function formatMechanicalFloor(floor, conviction, homeAlias, awayAlias) {
     'INDICATORS WON: ' + (conviction.indicatorsWon.join(', ') || 'NONE'),
     'INDICATORS LOST: ' + (conviction.indicatorsLost.join(', ') || 'NONE'),
     '',
+    'WEIGHTS: I1=' + (W.I1*100) + '% I2=' + (W.I2*100) + '% I3=' + (W.I3*100) + '% I4=' + (W.I4*100) + '% I5=' + (W.I5*100) + '%',
+    '',
     'RAW DIFFERENTIALS (' + homeAlias + ' minus ' + awayAlias + ', per-game season averages):',
-    '  I1 subA: steals+blocks diff = ' + (d.i1subA_diff >= 0 ? '+' : '') + d.i1subA_diff + ' (threshold \u00B11) \u2192 ' + floor.I1.leader,
-    '  I1 subB: POT diff = ' + (d.i1subB_diff >= 0 ? '+' : '') + d.i1subB_diff + ' (threshold \u00B12) \u2192 ' + (d.i1subB_diff > 2 ? homeAlias : d.i1subB_diff < -2 ? awayAlias : 'EVEN'),
-    '  I2 subA: paint pts diff = ' + (d.i2subA_diff >= 0 ? '+' : '') + d.i2subA_diff + ' (threshold \u00B14) \u2192 ' + (d.i2subA_diff > 4 ? homeAlias : d.i2subA_diff < -4 ? awayAlias : 'EVEN'),
-    '  I2 subB: paint FG% diff = ' + (d.i2subB_diff != null ? (d.i2subB_diff >= 0 ? '+' : '') + d.i2subB_diff + '% (threshold \u00B15%)' : 'N/A'),
-    '  I3 sub1: eFG% diff = ' + (d.i3sub1_diff >= 0 ? '+' : '') + d.i3sub1_diff + '% (threshold \u00B12%)',
-    '  I3 sub2: assist ratio diff = ' + (d.i3sub2_diff >= 0 ? '+' : '') + d.i3sub2_diff + ' (threshold \u00B13)',
-    '  I4 subA: avg win margin diff = ' + (d.i4subA_diff >= 0 ? '+' : '') + d.i4subA_diff + ' (threshold \u00B12.5)',
-    '  I4 subB: Q4 margin diff = ' + (d.i4subB_diff != null ? (d.i4subB_diff >= 0 ? '+' : '') + d.i4subB_diff + ' (threshold \u00B12)' : 'N/A'),
-    '  I5: net rating diff = ' + (d.i5_diff >= 0 ? '+' : '') + d.i5_diff + ' (threshold \u00B13)',
-    '',
-    'NET RATINGS: ' + homeAlias + ' ' + (floor.homeNet >= 0 ? '+' : '') + floor.homeNet + ' | ' + awayAlias + ' ' + (floor.awayNet >= 0 ? '+' : '') + floor.awayNet,
-    '',
+    '  I1 subA: steals+blocks diff = ' + (d.i1subA_diff >= 0 ? '+' : '') + d.i1subA_diff + ' (threshold \u00B1' + (isWNBA ? '2' : '1') + ') \u2192 ' + floor.I1.leader,
+    '  I1 subB: POT diff = ' + (d.i1subB_diff >= 0 ? '+' : '') + d.i1subB_diff + ' (threshold \u00B1' + (isWNBA ? '3' : '2') + ')',
   ];
+  if (isWNBA) {
+    lines.push('  I2 subA: 3PT% diff = ' + (d.i2subA_diff != null ? (d.i2subA_diff >= 0 ? '+' : '') + d.i2subA_diff + '% (threshold \u00B13%)' : 'N/A'));
+    lines.push('  I2 subB: FTA/gm diff = ' + (d.i2subB_diff >= 0 ? '+' : '') + d.i2subB_diff + ' (threshold \u00B12)');
+  } else {
+    lines.push('  I2 subA: paint pts diff = ' + (d.i2subA_diff >= 0 ? '+' : '') + d.i2subA_diff + ' (threshold \u00B14) \u2192 ' + (d.i2subA_diff > 4 ? homeAlias : d.i2subA_diff < -4 ? awayAlias : 'EVEN'));
+    lines.push('  I2 subB: paint FG% diff = ' + (d.i2subB_diff != null ? (d.i2subB_diff >= 0 ? '+' : '') + d.i2subB_diff + '% (threshold \u00B15%)' : 'N/A'));
+  }
+  lines.push('  I3 sub1: eFG% diff = ' + (d.i3sub1_diff >= 0 ? '+' : '') + d.i3sub1_diff + '% (threshold \u00B1' + (isWNBA ? '3' : '2') + '%)');
+  if (isWNBA) {
+    lines.push('  I3 sub2: assists/gm diff = ' + (d.i3sub2_diff >= 0 ? '+' : '') + d.i3sub2_diff + ' (threshold \u00B12)');
+  } else {
+    lines.push('  I3 sub2: assist ratio diff = ' + (d.i3sub2_diff >= 0 ? '+' : '') + d.i3sub2_diff + ' (threshold \u00B13)');
+  }
+  lines.push('  I4 subA: avg win margin diff = ' + (d.i4subA_diff >= 0 ? '+' : '') + d.i4subA_diff + ' (threshold \u00B12.5)');
+  lines.push('  I4 subB: Q4 margin diff = ' + (d.i4subB_diff != null ? (d.i4subB_diff >= 0 ? '+' : '') + d.i4subB_diff + ' (threshold \u00B12)' : 'N/A'));
+  if (isWNBA) {
+    lines.push('  I5: rebounds/gm diff = ' + (d.i5_diff >= 0 ? '+' : '') + d.i5_diff + ' (threshold \u00B13)');
+  } else {
+    lines.push('  I5: net rating diff = ' + (d.i5_diff >= 0 ? '+' : '') + d.i5_diff + ' (threshold \u00B13)');
+  }
+  lines.push('');
+  lines.push('NET RATINGS: ' + homeAlias + ' ' + (floor.homeNet >= 0 ? '+' : '') + floor.homeNet + ' | ' + awayAlias + ' ' + (floor.awayNet >= 0 ? '+' : '') + floor.awayNet);
+  lines.push('');
   return lines.join('\n');
 }
 
@@ -790,7 +898,85 @@ function getVerdictLabel(score) {
 // SYSTEM PROMPT
 // ══════════════════════════════════════════════════════════════════════════════
 
-function buildSystemPrompt() {
+function buildSystemPrompt(league) {
+  if (league === 'wnba') {
+    return [
+      'You are a WNBA pre-game structural analyst. You receive a pre-computed MECHANICAL PREGAME FLOOR with indicator scores as ground truth. Your job: contextualize the structural read against the specific matchup, identify risks the mechanical engine cannot see, and write entry/pass/watch guidance for live monitoring.',
+      '',
+      "The user's strategy: BET THE STRUCTURALLY DOMINANT TEAM WHEN TRAILING, because the opponent's lead is built on unsustainable variance. The thesis identifies WHICH team has real structural control.",
+      '',
+      'INDICATORS (weighted): I1 Disruption (15%) \u2014 steals+blocks, POT differential. I2 Perimeter & FT Access (20%) \u2014 3PT%, FTA differential. Paint is NOISE in WNBA (winner has more paint only 50% of the time). I3 Shot Quality & Creation (30%, ANCHOR) \u2014 eFG%, assists differential. I4 Game Control (25%) \u2014 win margin tendency, Q4 closing. I5 Momentum (10%) \u2014 rebounds differential. I5 has AUC 0.500 \u2014 literally random. Do NOT use I5 for conviction.',
+      '',
+      'Each scored 1.0 (clear edge), 0.5 (contested), 0.0 (opponent). Control: 0.90+ DOMINANT | 0.75-0.89 STRONG | 0.60-0.74 EARNED | 0.45-0.59 NO EDGE | <0.45 WAIT.',
+      '',
+      'CRITICAL WNBA DIFFERENCES FROM NBA:',
+      '  - I3 is the ANCHOR (30% weight). Losing I3 = 17.6% win rate. This is structural death, not a cold streak.',
+      '  - I4+I5 is NOT a killer pair (I5 has no signal). Killer pairs: I3+I4 (99.1%), I3+I2, I4+I2.',
+      '  - Paint dominance is NOT structural in WNBA. Do not treat it as an edge.',
+      '  - Floor is narrative context only \u2014 never a decision gate. MC Cum and XGB are the live decision signals.',
+      '  - 40-minute games with 10-minute quarters \u2014 structural advantages have less time to compound than NBA.',
+      '  - BUY trailing max 1-9 (not 1-15). Trail 10+ = 0% win rate.',
+      '',
+      'CONVICTION TIERS (203-game validated):',
+      '  DOMINANT = I3+I4 pair AND 3+ indicators, OR 4+ indicators.',
+      '  STRONG = I3+I4 (99.1%), I3+I2, or I4+I2 killer pairs.',
+      '  MODEST = 2+ indicators without killer pairs. 70-80%.',
+      '  CONDITIONAL = 1 indicator only. Needs strong contextual justification.',
+      '  NO ENTRY = 0 indicators.',
+      '',
+      'GROUND TRUTH (from the mechanical engine \u2014 do NOT override):',
+      '  - I1-I5 indicator scores with team labels and who wins each',
+      '  - Composite pregame floor score and control team',
+      '  - Conviction tier and combo',
+      '  - Raw differentials per sub-indicator so you can verify the data',
+      '  - SIA caps already applied (depletion/redistribution/SRM factored in)',
+      '',
+      'PREGAME PROXY CONTEXT \u2014 what the mechanical engine CANNOT capture:',
+      '  - I2 subA uses season 3PT% as a proxy. Hot/cold shooting nights are variance. But scheme matchups (perimeter-hunting offense vs switching defense) can amplify or suppress 3PT production. Flag when relevant.',
+      '  - I4 subA uses average win margin as proxy for in-game control tendency. Matchup-specific factors (pace forcing, clutch personnel) are not captured.',
+      '  - I5 uses rebounds as proxy for momentum. This indicator carries only 10% weight and has no predictive power \u2014 treat as narrative context only.',
+      '',
+      'YOUR ANALYTICAL JOBS:',
+      '1. CONTEXTUALIZE \u2014 does the matchup confirm or challenge the mechanical read? I3 is the anchor \u2014 if the perimeter matchup challenges the I3 read, that is the most important contextual factor.',
+      '2. ENTRY/PASS \u2014 where does the betting window open and close? WNBA games are shorter \u2014 the window is tighter.',
+      '3. WATCH \u2014 3 live monitoring signals that confirm or deny the thesis.',
+      '4. DISAGREEMENT \u2014 if your contextual read conflicts with mechanical conviction, flag it. You cannot change the tier but explain why.',
+      '',
+      'STRUCTURAL IMPACT ASSESSMENT:',
+      'SIA caps have already been applied. GP GATE context:',
+      '- SUPPRESSED (GP <40%): Season stats already reflect absence.',
+      '- REDUCED (GP 40-70%): Partial inflation.',
+      '- FULL (GP 70%+): Season stats include OUT player. Caps applied.',
+      '',
+      'Compute from the data: Context-Adjusted Strength, Structural Identity, Shot Diet, Win/Loss Delta, Comeback Score (0-10), Lead-Keep Score (0-10), Foul Resilience.',
+      'BHV, Chaos Risk, and Pythagorean are pre-computed \u2014 use provided values.',
+      '',
+      '3PT VULNERABILITY PROFILE (both teams): ELITE (38%+ on 2+ 3PA/gm), AVERAGE (33-38%), NON-SHOOTER (<33%). Name 2-3 per team.',
+      '',
+      'ML THRESHOLD (if odds provided): Convert control score to FWP. ML THRESHOLD = ML where MIP is 5%+ below FWP.',
+      '',
+      'OUTPUT FORMAT (PLAIN TEXT ONLY \u2014 no Markdown. Use \u2501 lines, \u26A0 \u2713 \u2705 \u274C emoji, and ALL CAPS for section headers.):',
+      'COMPACT THESIS \u2014 [AWAY] vs [HOME] | [Time] MST',
+      '[Date] | [Venue]',
+      '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
+      'AVAILABILITY',
+      '',
+      'SIA (from pre-computed assessment):',
+      '[Show SIA with GP GATE notation]',
+      '',
+      'REST [TEAM A] X day | [TEAM B] X day',
+      '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
+      'CONTROL SCORE: [TEAM] [SCORE] \u2014 [VERDICT]',
+      '[I1-I5 with team labels, 1-line each, show who wins and why]',
+      '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
+      'KEY FLAGS',
+      'LIVE WATCH',
+      'ENTRY/PASS/WATCH GUIDANCE',
+      'FWP | ML THRESHOLD',
+      'DISAGREEMENT: [NONE or explanation]',
+    ].join('\n');
+  }
+  // NBA prompt (existing)
   return [
     'You are an NBA pre-game structural analyst. You receive a pre-computed MECHANICAL PREGAME FLOOR with indicator scores as ground truth. Your job: contextualize the structural read against the specific matchup, identify risks the mechanical engine cannot see, and write entry/pass/watch guidance for live monitoring.',
     '',
@@ -892,6 +1078,7 @@ function buildSystemPrompt() {
 var LEAGUE_CFG = {
   nba: { srBase: 'https://api.sportradar.com/nba/trial/v8/en/', srKeyEnv: 'SR_API_KEY', season: '2025' },
   ncaamb: { srBase: 'https://api.sportradar.com/ncaamb/trial/v8/en/', srKeyEnv: 'SR_NCAAMB_KEY', season: '2025' },
+  wnba: { srBase: 'https://api.sportradar.com/wnba/trial/v8/en/', srKeyEnv: 'SR_WNBA_KEY', season: '2026' },
 };
 
 async function srFetchDirect(league, path) {
@@ -989,9 +1176,16 @@ function autoTrimDepth(d) {
 function autoTrimStandings(s) {
   if (!s) return '(unavailable)';
   var teams = [];
-  (s.conferences||[]).forEach(function(conf){(conf.divisions||[]).forEach(function(div){(div.teams||[]).forEach(function(t){
-    teams.push((t.name||'?')+' '+(t.wins||0)+'-'+(t.losses||0)+' ('+(t.win_pct||0).toFixed(3)+') PF:'+(t.calc_points?.for||'?')+' PA:'+(t.calc_points?.against||'?'));
-  });});});
+  (s.conferences||[]).forEach(function(conf){
+    // Direct teams under conference (WNBA — no division layer)
+    (conf.teams||[]).forEach(function(t){
+      teams.push((t.name||'?')+' '+(t.wins||0)+'-'+(t.losses||0)+' ('+(t.win_pct||0).toFixed(3)+') PF:'+(t.calc_points?.for||'?')+' PA:'+(t.calc_points?.against||'?'));
+    });
+    // Division teams (NBA)
+    (conf.divisions||[]).forEach(function(div){(div.teams||[]).forEach(function(t){
+      teams.push((t.name||'?')+' '+(t.wins||0)+'-'+(t.losses||0)+' ('+(t.win_pct||0).toFixed(3)+') PF:'+(t.calc_points?.for||'?')+' PA:'+(t.calc_points?.against||'?'));
+    });});
+  });
   return teams.join('\n');
 }
 
@@ -1002,6 +1196,291 @@ function autoTrimInjuries(inj) {
       var li=(Array.isArray(p.injuries)?p.injuries:[])[0]||{};
       return (p.full_name||'?')+' ['+(p.primary_position||'?')+'] '+(li.status||p.status||'?')+' — '+(li.desc||li.comment||'?');
     }).join('; ');}).join('\n');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PER-LEAGUE THESIS PROCESSING
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function processLeagueTheses(sql, apiKey, league, dateKey, now, log) {
+  var leagueUpper = league.toUpperCase();
+  var pollRows;
+  try {
+    pollRows = await sql`SELECT schedule_json FROM poll_state WHERE league = ${league} AND date = ${dateKey} LIMIT 1`;
+  } catch (e) { log(leagueUpper + ': poll_state query failed: ' + e.message); return []; }
+
+  if (!pollRows || pollRows.length === 0 || !pollRows[0].schedule_json) {
+    log(leagueUpper + ': No schedule found for ' + dateKey);
+    return [];
+  }
+
+  var schedule = typeof pollRows[0].schedule_json === 'string' ? JSON.parse(pollRows[0].schedule_json) : pollRows[0].schedule_json;
+  log(leagueUpper + ': ' + schedule.length + ' games on ' + dateKey);
+
+  // Find games tipping in 0-75 minutes
+  var candidates = [];
+  for (var g of schedule) {
+    if (!g.scheduled) continue;
+    var tip = new Date(g.scheduled);
+    var minsTilTip = (tip - now) / 60000;
+    if (minsTilTip >= 0 && minsTilTip <= 75) {
+      candidates.push({ game: g, minsTilTip: Math.round(minsTilTip) });
+    }
+  }
+
+  if (candidates.length === 0) {
+    log(leagueUpper + ': No games tipping in 0-75 minutes');
+    return [];
+  }
+  log(leagueUpper + ' candidates: ' + candidates.map(function(c) { return c.game.away_alias + '@' + c.game.home_alias + ' (' + c.minsTilTip + 'min)'; }).join(', '));
+
+  // Clean up stale PENDING sentinels
+  try {
+    var cleaned = await sql`DELETE FROM theses WHERE text = 'PENDING' AND created_at < NOW() - INTERVAL '2 minutes' RETURNING game_id`;
+    if (cleaned.length > 0) log(leagueUpper + ': Cleaned ' + cleaned.length + ' stale PENDING sentinel(s)');
+  } catch (e) {}
+
+  // Check which don't have theses yet
+  var gameIds = candidates.map(function(c) { return c.game.id; });
+  var existingRows;
+  try {
+    existingRows = await sql`SELECT game_id FROM theses WHERE game_id = ANY(${gameIds})`;
+  } catch (e) { existingRows = []; }
+  var existingSet = new Set((existingRows || []).map(function(r) { return r.game_id; }));
+
+  var toGenerate = candidates.filter(function(c) { return !existingSet.has(c.game.id); });
+  if (toGenerate.length === 0) {
+    log(leagueUpper + ': All candidates already have theses');
+    return [];
+  }
+  log(leagueUpper + ': Generating theses for ' + toGenerate.length + ' games');
+
+  // Fetch shared data (once per league)
+  var injuries = null, standings = null, seasonQ4 = {};
+  try {
+    injuries = await srFetchDirect(league, 'league/injuries.json');
+    await new Promise(function(r) { setTimeout(r, 1100); });
+    standings = await srFetchDirect(league, 'seasons/' + LEAGUE_CFG[league].season + '/REG/standings.json');
+    await new Promise(function(r) { setTimeout(r, 1100); });
+  } catch (e) { log(leagueUpper + ': Shared SR fetch error: ' + e.message); }
+
+  try { seasonQ4 = await loadSeasonQ4Auto(sql, league); } catch (e) {}
+
+  // Team ID map
+  var teamIds = league === 'wnba' ? SR_TEAM_IDS_WNBA : SR_TEAM_IDS;
+  var isWNBA = league === 'wnba';
+  var bdlPrefix = isWNBA ? '/wnba' : '/nba';
+
+  // Process each game (cap at 2 per invocation)
+  var generated = [];
+  for (var c of toGenerate.slice(0, 2)) {
+    var game = c.game;
+    var hA = game.home_alias, aA = game.away_alias;
+    var matchup = aA + ' @ ' + hA;
+    log(leagueUpper + ': Processing ' + matchup);
+
+    var hId = teamIds[hA], aId = teamIds[aA];
+    if (!hId || !aId) { log('  Unknown team alias: ' + hA + ' or ' + aA); continue; }
+
+    // CLAIM: Insert PENDING sentinel
+    try {
+      var claimed = await sql`
+        INSERT INTO theses (game_id, league, text, created_at)
+        VALUES (${game.id}, ${league}, 'PENDING', NOW())
+        ON CONFLICT (game_id) DO NOTHING
+        RETURNING game_id
+      `;
+      if (claimed.length === 0) {
+        log('  Another invocation already claimed ' + matchup + ' — skipping');
+        continue;
+      }
+    } catch (claimErr) {
+      log('  Claim failed for ' + matchup + ': ' + claimErr.message);
+      continue;
+    }
+
+    try {
+      // Fetch per-game SR data
+      var srCalls = [
+        { key: 'homeProfile', path: 'teams/' + hId + '/profile.json' },
+        { key: 'awayProfile', path: 'teams/' + aId + '/profile.json' },
+      ];
+      // Depth charts — NBA only (WNBA returns 404)
+      if (!isWNBA) {
+        srCalls.push(
+          { key: 'homeDepth', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + hId + '/depth_chart.json' },
+          { key: 'awayDepth', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + aId + '/depth_chart.json' }
+        );
+      }
+      srCalls.push(
+        { key: 'homeStats', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + hId + '/statistics.json' },
+        { key: 'awayStats', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + aId + '/statistics.json' },
+        { key: 'homeSplitsGame', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + hId + '/splits/game.json' },
+        { key: 'awaySplitsGame', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + aId + '/splits/game.json' },
+        { key: 'homeSplitsSchedule', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + hId + '/splits/schedule.json' },
+        { key: 'awaySplitsSchedule', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + aId + '/splits/schedule.json' }
+      );
+
+      var collected = {};
+      for (var call of srCalls) {
+        try {
+          collected[call.key] = await srFetchDirect(league, call.path);
+        } catch (e) {
+          log('  SR ' + call.key + ' failed: ' + e.message);
+          collected[call.key] = null;
+        }
+        await new Promise(function(r) { setTimeout(r, 1100); });
+      }
+
+      // BDL odds (league-parameterized path + alias mapping)
+      var oddsText = '';
+      try {
+        var tipDate = new Date(game.scheduled).toISOString().split('T')[0];
+        var bdlGames = await bdlFetchDirect(bdlPrefix + '/v1/games?dates[]=' + tipDate);
+        var bdlHomeAlias = isWNBA ? (WNBA_ALIAS_MAP[hA] || hA) : hA;
+        var bdlAwayAlias = isWNBA ? (WNBA_ALIAS_MAP[aA] || aA) : aA;
+        var bdlGame = (bdlGames.data||[]).find(function(bg) {
+          return (bg.home_team?.abbreviation === bdlHomeAlias && (bg.visitor_team?.abbreviation === bdlAwayAlias || bg.away_team?.abbreviation === bdlAwayAlias));
+        });
+        if (bdlGame?.id) {
+          await new Promise(function(r) { setTimeout(r, 200); });
+          var oddsResp = await bdlFetchDirect(bdlPrefix + '/v1/odds?game_id=' + bdlGame.id);
+          var oddsArr = oddsResp.data || [];
+          if (oddsArr.length > 0) {
+            var book = oddsArr[0];
+            oddsText = '\n=== ODDS ===\nSpread: ' + (book.spread_home_value||'?') + ' | ML: ' + (book.moneyline_home_odds||'?') + '/' + (book.moneyline_away_odds||'?') + ' | O/U: ' + (book.total_value||'?') + '\n';
+          }
+        }
+      } catch (e) { log('  BDL odds failed (non-fatal): ' + e.message); }
+
+      // Build sections
+      var sections = {
+        injuries: autoTrimInjuries(injuries),
+        homeRoster: autoTrimProfile(collected.homeProfile),
+        awayRoster: autoTrimProfile(collected.awayProfile),
+        homeDepth: autoTrimDepth(collected.homeDepth || null),
+        awayDepth: autoTrimDepth(collected.awayDepth || null),
+        homeStats: autoTrimStats(collected.homeStats),
+        awayStats: autoTrimStats(collected.awayStats),
+        homeSplitsGame: collected.homeSplitsGame ? JSON.stringify(collected.homeSplitsGame).substring(0, 8000) : '(unavailable)',
+        awaySplitsGame: collected.awaySplitsGame ? JSON.stringify(collected.awaySplitsGame).substring(0, 8000) : '(unavailable)',
+        homeSplitsSchedule: collected.homeSplitsSchedule ? JSON.stringify(collected.homeSplitsSchedule).substring(0, 8000) : '(unavailable)',
+        awaySplitsSchedule: collected.awaySplitsSchedule ? JSON.stringify(collected.awaySplitsSchedule).substring(0, 8000) : '(unavailable)',
+        standings: autoTrimStandings(standings),
+        odds: oddsText,
+      };
+
+      // Build analytical object for SIA pipeline
+      var analytical = {
+        injuries: injuries,
+        standings: standings,
+        league: league,
+        homeStats: collected.homeStats,
+        awayStats: collected.awayStats,
+        homeDepth: collected.homeDepth || null,
+        awayDepth: collected.awayDepth || null,
+      };
+      if (collected.homeProfile) analytical.homeProfile = collected.homeProfile;
+      if (collected.awayProfile) analytical.awayProfile = collected.awayProfile;
+
+      // Run SIA pipeline
+      var rosterAudit = computeRosterAudit(analytical, hA, aA);
+      var sia = computeSIA(rosterAudit, analytical, hA, aA);
+      var redistribution = computeRedistribution(rosterAudit, sia, analytical, hA, aA);
+      var srm = computeSRM(rosterAudit, analytical);
+      var finalCaps = applyAdjustments(sia, redistribution, srm);
+      var depletion = computeDepletionGate(rosterAudit);
+      var pyth = computePythagorean(standings, hA, aA);
+      var bhv = computeBHV(analytical, hA, aA, rosterAudit);
+      var preComputed = formatPreComputed(hA, aA, rosterAudit, sia, finalCaps, redistribution, srm, depletion, pyth, bhv);
+
+      // Compute mechanical pregame floor
+      var homeStatsRaw = collected.homeStats?.own_record || collected.homeStats;
+      var awayStatsRaw = collected.awayStats?.own_record || collected.awayStats;
+      var floor = computePreGameFloor(homeStatsRaw, awayStatsRaw, standings, seasonQ4, finalCaps, hA, aA, league);
+      var conviction = floor ? computeConviction(floor, league) : { tier: 'NO ENTRY', combo: 'NONE', indicatorsWon: [], indicatorsLost: [] };
+      var floorText = floor ? formatMechanicalFloor(floor, conviction, hA, aA, league) : '';
+
+      log('  Floor: ' + (floor ? floor.controlTeam + ' ' + floor.score.toFixed(2) + ' ' + getVerdictLabel(floor.score) + ' | ' + conviction.tier + ' (' + conviction.combo + ')' : 'FAILED'));
+
+      var homeOutCount = rosterAudit.out.home.length;
+      var awayOutCount = rosterAudit.out.away.length;
+      log('  SIA: ' + hA + ' ' + homeOutCount + ' OUT, ' + aA + ' ' + awayOutCount + ' OUT');
+
+      // Build prompt
+      var tipTime = new Date(game.scheduled).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Phoenix' });
+      var systemPrompt = buildSystemPrompt(league);
+      var leagueLabel = isWNBA ? 'WNBA' : 'NBA';
+      var userPrompt = 'Build a complete pre-game thesis for this ' + leagueLabel + ' matchup.\n\n' +
+        'MATCHUP: ' + aA + ' @ ' + hA + '\n' +
+        'DATE: ' + dateKey + ' | TIME: ' + tipTime + ' MST\n' +
+        'VENUE: ' + (game.venue || 'TBD') + '\n\n' +
+        floorText +
+        preComputed + '\n\n' +
+        '=== INJURIES ===\n' + sections.injuries + '\n\n' +
+        '=== ' + hA + ' ROSTER ===\n' + sections.homeRoster + '\n\n' +
+        '=== ' + aA + ' ROSTER ===\n' + sections.awayRoster + '\n\n';
+
+      // Depth charts — NBA only
+      if (!isWNBA) {
+        userPrompt += '=== ' + hA + ' DEPTH CHART ===\n' + sections.homeDepth + '\n\n' +
+          '=== ' + aA + ' DEPTH CHART ===\n' + sections.awayDepth + '\n\n';
+      }
+
+      userPrompt += '=== ' + hA + ' SEASON STATS ===\n' + sections.homeStats + '\n\n' +
+        '=== ' + aA + ' SEASON STATS ===\n' + sections.awayStats + '\n\n' +
+        '=== ' + hA + ' SPLITS (Game) ===\n' + sections.homeSplitsGame + '\n\n' +
+        '=== ' + aA + ' SPLITS (Game) ===\n' + sections.awaySplitsGame + '\n\n' +
+        '=== ' + hA + ' SPLITS (Schedule) ===\n' + sections.homeSplitsSchedule + '\n\n' +
+        '=== ' + aA + ' SPLITS (Schedule) ===\n' + sections.awaySplitsSchedule + '\n\n' +
+        '=== STANDINGS ===\n' + sections.standings + '\n' +
+        sections.odds + '\n\n';
+
+      if (isWNBA) {
+        userPrompt += 'IMPORTANT: The PRE-COMPUTED STRUCTURAL ASSESSMENT contains SIA context. The MECHANICAL PREGAME FLOOR provides indicator scores as ground truth \u2014 do not override them. I3 (Shot Quality, 30%) is the ANCHOR indicator in WNBA. Floor is narrative context only \u2014 never a decision gate. Show SIA notation in AVAILABILITY. Add DISAGREEMENT if your contextual read differs from the mechanical floor.\n\nOutput the compact thesis format.';
+      } else {
+        userPrompt += 'IMPORTANT: The PRE-COMPUTED STRUCTURAL ASSESSMENT contains SIA context. The MECHANICAL PREGAME FLOOR provides indicator scores as ground truth \u2014 do not override them. Show SIA notation in AVAILABILITY. Add DISAGREEMENT if your contextual read differs from the mechanical floor.\n\nOutput the compact thesis format.';
+      }
+
+      // Call Sonnet
+      var anthropicResp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 2000, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
+      });
+
+      if (!anthropicResp.ok) {
+        var errText = await anthropicResp.text();
+        log('  Sonnet error: ' + anthropicResp.status + ' ' + errText.substring(0, 200));
+        continue;
+      }
+
+      var sonnetData = await anthropicResp.json();
+      var thesis = sonnetData.content.filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('\n');
+
+      // Update PENDING sentinel with real thesis text
+      await sql`
+        UPDATE theses SET text = ${thesis}, created_at = NOW()
+        WHERE game_id = ${game.id} AND text = 'PENDING'
+      `;
+
+      generated.push({
+        matchup: matchup,
+        league: league,
+        floor: floor ? floor.score.toFixed(2) : '?',
+        verdict: floor ? getVerdictLabel(floor.score) : '?',
+        conviction: conviction.tier,
+        controlTeam: floor ? floor.controlTeam : '?',
+      });
+      log('  Thesis saved for ' + matchup);
+
+    } catch (e) {
+      log('  ERROR processing ' + matchup + ': ' + e.message);
+      try { await sql`DELETE FROM theses WHERE game_id = ${game.id} AND text = 'PENDING'`; } catch (de) {}
+    }
+  }
+
+  return generated;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1027,276 +1506,29 @@ async function runPregameAgent() {
   var pad = function(n) { return String(n).padStart(2, '0'); };
   var dateKey = et.getUTCFullYear() + '-' + pad(et.getUTCMonth() + 1) + '-' + pad(et.getUTCDate());
 
-  var league = 'nba'; // MVP: NBA only
-  var pollRows;
-  try {
-    pollRows = await sql`SELECT schedule_json FROM poll_state WHERE league = ${league} AND date = ${dateKey} LIMIT 1`;
-  } catch (e) { log('poll_state query failed: ' + e.message); return { logs: logs, generated: 0 }; }
+  var leagues = ['nba', 'wnba'];
+  var allGenerated = [];
 
-  if (!pollRows || pollRows.length === 0 || !pollRows[0].schedule_json) {
-    log('No schedule found for ' + dateKey + ' — nothing to do');
-    return { logs: logs, generated: 0 };
-  }
-
-  var schedule = typeof pollRows[0].schedule_json === 'string' ? JSON.parse(pollRows[0].schedule_json) : pollRows[0].schedule_json;
-  log('Schedule: ' + schedule.length + ' games on ' + dateKey);
-
-  // 2. Find games tipping in 0-75 minutes (catches late runs + ~1 hour pre-tip)
-  var candidates = [];
-  for (var g of schedule) {
-    if (!g.scheduled) continue;
-    var tip = new Date(g.scheduled);
-    var minsTilTip = (tip - now) / 60000;
-    if (minsTilTip >= 0 && minsTilTip <= 75) {
-      candidates.push({ game: g, minsTilTip: Math.round(minsTilTip) });
-    }
-  }
-
-  if (candidates.length === 0) {
-    log('No games tipping in 0-75 minutes — nothing to do');
-    return { logs: logs, generated: 0 };
-  }
-  log('Candidates: ' + candidates.map(function(c) { return c.game.away_alias + '@' + c.game.home_alias + ' (' + c.minsTilTip + 'min)'; }).join(', '));
-
-  // 3. Clean up stale PENDING sentinels (crashed/timed-out invocations)
-  try {
-    var cleaned = await sql`DELETE FROM theses WHERE text = 'PENDING' AND created_at < NOW() - INTERVAL '2 minutes' RETURNING game_id`;
-    if (cleaned.length > 0) log('Cleaned ' + cleaned.length + ' stale PENDING sentinel(s)');
-  } catch (e) {}
-
-  // 4. Check which don't have theses yet
-  var gameIds = candidates.map(function(c) { return c.game.id; });
-  var existingRows;
-  try {
-    existingRows = await sql`SELECT game_id FROM theses WHERE game_id = ANY(${gameIds})`;
-  } catch (e) { existingRows = []; }
-  var existingSet = new Set((existingRows || []).map(function(r) { return r.game_id; }));
-
-  var toGenerate = candidates.filter(function(c) { return !existingSet.has(c.game.id); });
-  if (toGenerate.length === 0) {
-    log('All candidates already have theses — nothing to do');
-    return { logs: logs, generated: 0 };
-  }
-  log('Generating theses for ' + toGenerate.length + ' games');
-
-  // 4. Fetch shared data (once per invocation)
-  var injuries = null, standings = null, seasonQ4 = {};
-  try {
-    injuries = await srFetchDirect(league, 'league/injuries.json');
-    await new Promise(function(r) { setTimeout(r, 1100); });
-    standings = await srFetchDirect(league, 'seasons/' + LEAGUE_CFG[league].season + '/REG/standings.json');
-    await new Promise(function(r) { setTimeout(r, 1100); });
-  } catch (e) { log('Shared SR fetch error: ' + e.message); }
-
-  try { seasonQ4 = await loadSeasonQ4Auto(sql, league); } catch (e) {}
-
-  // 5. Process each game (cap at 2 per invocation — runs every 5 min, so 10-game slate finishes in ~25 min)
-  var generated = [];
-  for (var c of toGenerate.slice(0, 2)) {
-    var game = c.game;
-    var hA = game.home_alias, aA = game.away_alias;
-    var matchup = aA + ' @ ' + hA;
-    log('Processing: ' + matchup);
-
-    var hId = SR_TEAM_IDS[hA], aId = SR_TEAM_IDS[aA];
-    if (!hId || !aId) { log('Unknown team alias: ' + hA + ' or ' + aA); continue; }
-
-    // ── CLAIM: Insert PENDING sentinel to prevent concurrent invocations from duplicating SR calls ──
-    // Race pattern: 3 invocations check "thesis exists?" simultaneously, all see "no", all burn 12+ SR calls.
-    // Fix: first-write-wins via INSERT ON CONFLICT. Losers skip immediately.
+  for (var league of leagues) {
     try {
-      var claimed = await sql`
-        INSERT INTO theses (game_id, league, text, created_at)
-        VALUES (${game.id}, ${league}, 'PENDING', NOW())
-        ON CONFLICT (game_id) DO NOTHING
-        RETURNING game_id
-      `;
-      if (claimed.length === 0) {
-        log('  Another invocation already claimed ' + matchup + ' — skipping SR calls');
-        continue;
-      }
-    } catch (claimErr) {
-      log('  Claim failed for ' + matchup + ': ' + claimErr.message);
-      continue;
-    }
-
-    try {
-      // Fetch per-game SR data (10 calls with 1.1s delays for rate limit)
-      var srCalls = [
-        { key: 'homeProfile', path: 'teams/' + hId + '/profile.json' },
-        { key: 'awayProfile', path: 'teams/' + aId + '/profile.json' },
-        { key: 'homeDepth', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + hId + '/depth_chart.json' },
-        { key: 'awayDepth', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + aId + '/depth_chart.json' },
-        { key: 'homeStats', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + hId + '/statistics.json' },
-        { key: 'awayStats', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + aId + '/statistics.json' },
-        { key: 'homeSplitsGame', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + hId + '/splits/game.json' },
-        { key: 'awaySplitsGame', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + aId + '/splits/game.json' },
-        { key: 'homeSplitsSchedule', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + hId + '/splits/schedule.json' },
-        { key: 'awaySplitsSchedule', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + aId + '/splits/schedule.json' },
-      ];
-
-      var collected = {};
-      for (var call of srCalls) {
-        try {
-          collected[call.key] = await srFetchDirect(league, call.path);
-        } catch (e) {
-          log('  SR ' + call.key + ' failed: ' + e.message);
-          collected[call.key] = null;
-        }
-        await new Promise(function(r) { setTimeout(r, 1100); });
-      }
-
-      // BDL odds
-      var oddsText = '';
-      try {
-        var tipDate = new Date(game.scheduled).toISOString().split('T')[0];
-        var bdlGames = await bdlFetchDirect('/nba/v1/games?dates[]=' + tipDate);
-        var bdlGame = (bdlGames.data||[]).find(function(bg) {
-          return (bg.home_team?.abbreviation === hA && (bg.visitor_team?.abbreviation === aA || bg.away_team?.abbreviation === aA));
-        });
-        if (bdlGame?.id) {
-          await new Promise(function(r) { setTimeout(r, 200); });
-          var oddsResp = await bdlFetchDirect('/nba/v1/odds?game_id=' + bdlGame.id);
-          var oddsArr = oddsResp.data || [];
-          if (oddsArr.length > 0) {
-            var book = oddsArr[0];
-            oddsText = '\n=== ODDS ===\nSpread: ' + (book.spread_home_value||'?') + ' | ML: ' + (book.moneyline_home_odds||'?') + '/' + (book.moneyline_away_odds||'?') + ' | O/U: ' + (book.total_value||'?') + '\n';
-          }
-        }
-      } catch (e) { log('  BDL odds failed (non-fatal): ' + e.message); }
-
-      // Build sections (trimmed text for Sonnet)
-      var sections = {
-        injuries: autoTrimInjuries(injuries),
-        homeRoster: autoTrimProfile(collected.homeProfile),
-        awayRoster: autoTrimProfile(collected.awayProfile),
-        homeDepth: autoTrimDepth(collected.homeDepth),
-        awayDepth: autoTrimDepth(collected.awayDepth),
-        homeStats: autoTrimStats(collected.homeStats),
-        awayStats: autoTrimStats(collected.awayStats),
-        homeSplitsGame: collected.homeSplitsGame ? JSON.stringify(collected.homeSplitsGame).substring(0, 8000) : '(unavailable)',
-        awaySplitsGame: collected.awaySplitsGame ? JSON.stringify(collected.awaySplitsGame).substring(0, 8000) : '(unavailable)',
-        homeSplitsSchedule: collected.homeSplitsSchedule ? JSON.stringify(collected.homeSplitsSchedule).substring(0, 8000) : '(unavailable)',
-        awaySplitsSchedule: collected.awaySplitsSchedule ? JSON.stringify(collected.awaySplitsSchedule).substring(0, 8000) : '(unavailable)',
-        standings: autoTrimStandings(standings),
-        odds: oddsText,
-      };
-
-      // Build analytical object for SIA pipeline
-      // FIX: Use homeStats/awayStats keys (not homeSeasonStats/awaySeasonStats)
-      // so computeRosterAudit, computeSIA, computeRedistribution, computeSRM, computeBHV
-      // all find the data they expect via analytical[side + 'Stats']
-      var analytical = {
-        injuries: injuries,
-        standings: standings,
-        league: league,
-        homeStats: collected.homeStats,     // ← was homeSeasonStats (SIA key bug)
-        awayStats: collected.awayStats,     // ← was awaySeasonStats (SIA key bug)
-        homeDepth: collected.homeDepth,
-        awayDepth: collected.awayDepth,
-      };
-      if (collected.homeProfile) analytical.homeProfile = collected.homeProfile;
-      if (collected.awayProfile) analytical.awayProfile = collected.awayProfile;
-
-      // Run SIA pipeline
-      var rosterAudit = computeRosterAudit(analytical, hA, aA);
-      var sia = computeSIA(rosterAudit, analytical, hA, aA);
-      var redistribution = computeRedistribution(rosterAudit, sia, analytical, hA, aA);
-      var srm = computeSRM(rosterAudit, analytical);
-      var finalCaps = applyAdjustments(sia, redistribution, srm);
-      var depletion = computeDepletionGate(rosterAudit);
-      var pyth = computePythagorean(standings, hA, aA);
-      var bhv = computeBHV(analytical, hA, aA, rosterAudit);
-      var preComputed = formatPreComputed(hA, aA, rosterAudit, sia, finalCaps, redistribution, srm, depletion, pyth, bhv);
-
-      // Compute mechanical pregame floor
-      var homeStatsRaw = collected.homeStats?.own_record || collected.homeStats;
-      var awayStatsRaw = collected.awayStats?.own_record || collected.awayStats;
-      var floor = computePreGameFloor(homeStatsRaw, awayStatsRaw, standings, seasonQ4, finalCaps, hA, aA);
-      var conviction = floor ? computeConviction(floor) : { tier: 'NO ENTRY', combo: 'NONE', indicatorsWon: [], indicatorsLost: [] };
-      var floorText = floor ? formatMechanicalFloor(floor, conviction, hA, aA) : '';
-
-      log('  Floor: ' + (floor ? floor.controlTeam + ' ' + floor.score.toFixed(2) + ' ' + getVerdictLabel(floor.score) + ' | ' + conviction.tier + ' (' + conviction.combo + ')' : 'FAILED'));
-
-      // Log SIA results for diagnostics
-      var homeOutCount = rosterAudit.out.home.length;
-      var awayOutCount = rosterAudit.out.away.length;
-      log('  SIA: ' + hA + ' ' + homeOutCount + ' OUT, ' + aA + ' ' + awayOutCount + ' OUT');
-
-      // Build prompt
-      var tipTime = new Date(game.scheduled).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Phoenix' });
-      var systemPrompt = buildSystemPrompt();
-      var userPrompt = 'Build a complete pre-game thesis for this NBA matchup.\n\n' +
-        'MATCHUP: ' + aA + ' @ ' + hA + '\n' +
-        'DATE: ' + dateKey + ' | TIME: ' + tipTime + ' MST\n' +
-        'VENUE: ' + (game.venue || 'TBD') + '\n\n' +
-        floorText +
-        preComputed + '\n\n' +
-        '=== INJURIES ===\n' + sections.injuries + '\n\n' +
-        '=== ' + hA + ' ROSTER ===\n' + sections.homeRoster + '\n\n' +
-        '=== ' + aA + ' ROSTER ===\n' + sections.awayRoster + '\n\n' +
-        '=== ' + hA + ' DEPTH CHART ===\n' + sections.homeDepth + '\n\n' +
-        '=== ' + aA + ' DEPTH CHART ===\n' + sections.awayDepth + '\n\n' +
-        '=== ' + hA + ' SEASON STATS ===\n' + sections.homeStats + '\n\n' +
-        '=== ' + aA + ' SEASON STATS ===\n' + sections.awayStats + '\n\n' +
-        '=== ' + hA + ' SPLITS (Game) ===\n' + sections.homeSplitsGame + '\n\n' +
-        '=== ' + aA + ' SPLITS (Game) ===\n' + sections.awaySplitsGame + '\n\n' +
-        '=== ' + hA + ' SPLITS (Schedule) ===\n' + sections.homeSplitsSchedule + '\n\n' +
-        '=== ' + aA + ' SPLITS (Schedule) ===\n' + sections.awaySplitsSchedule + '\n\n' +
-        '=== STANDINGS ===\n' + sections.standings + '\n' +
-        sections.odds + '\n\n' +
-        'IMPORTANT: The PRE-COMPUTED STRUCTURAL ASSESSMENT contains SIA context. The MECHANICAL PREGAME FLOOR provides indicator scores as ground truth \u2014 do not override them. Show SIA notation in AVAILABILITY. Add DISAGREEMENT if your contextual read differs from the mechanical floor.\n\n' +
-        'Output the compact thesis format.';
-
-      // Call Sonnet (non-streaming for auto mode)
-      var anthropicResp = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 2000, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
-      });
-
-      if (!anthropicResp.ok) {
-        var errText = await anthropicResp.text();
-        log('  Sonnet error: ' + anthropicResp.status + ' ' + errText.substring(0, 200));
-        continue;
-      }
-
-      var sonnetData = await anthropicResp.json();
-      var thesis = sonnetData.content.filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('\n');
-
-      // Update PENDING sentinel with real thesis text
-      await sql`
-        UPDATE theses SET text = ${thesis}, created_at = NOW()
-        WHERE game_id = ${game.id} AND text = 'PENDING'
-      `;
-
-      generated.push({
-        matchup: matchup,
-        floor: floor ? floor.score.toFixed(2) : '?',
-        verdict: floor ? getVerdictLabel(floor.score) : '?',
-        conviction: conviction.tier,
-        controlTeam: floor ? floor.controlTeam : '?',
-      });
-      log('  Thesis saved for ' + matchup);
-
+      var leagueResult = await processLeagueTheses(sql, apiKey, league, dateKey, now, log);
+      allGenerated = allGenerated.concat(leagueResult);
     } catch (e) {
-      log('  ERROR processing ' + matchup + ': ' + e.message);
-      // Delete PENDING sentinel so future invocations can retry this game
-      try { await sql`DELETE FROM theses WHERE game_id = ${game.id} AND text = 'PENDING'`; } catch (de) {}
+      log(league.toUpperCase() + ' error: ' + e.message);
     }
   }
 
-  // 6. Send ntfy summary
-  if (generated.length > 0) {
-    var ntfyTitle = 'DFT Pre-Game: ' + generated.length + ' ' + (generated.length === 1 ? 'thesis' : 'theses') + ' ready';
-    var ntfyBody = generated.map(function(g) {
-      return g.matchup + '\nFloor: ' + g.controlTeam + ' ' + g.floor + ' ' + g.verdict + ' (' + g.conviction + ')';
+  // Send single ntfy with all generated theses
+  if (allGenerated.length > 0) {
+    var ntfyTitle = 'DFT Pre-Game: ' + allGenerated.length + ' ' + (allGenerated.length === 1 ? 'thesis' : 'theses') + ' ready';
+    var ntfyBody = allGenerated.map(function(g) {
+      return (g.league === 'wnba' ? '[WNBA] ' : '') + g.matchup + '\nFloor: ' + g.controlTeam + ' ' + g.floor + ' ' + g.verdict + ' (' + g.conviction + ')';
     }).join('\n\n');
     await sendNtfy(ntfyTitle, ntfyBody);
     log('ntfy sent: ' + ntfyTitle);
   }
 
-  return { logs: logs, generated: generated.length };
+  return { logs: logs, generated: allGenerated.length };
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
