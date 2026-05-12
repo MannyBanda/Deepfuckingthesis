@@ -6440,7 +6440,7 @@ export default async function(req) {
         const gids = potentiallyLive.map(g => getBdlGid(g)).filter(Boolean);
         if (gids.length > 0) {
           try {
-            const psResp = await bdlFetch(`${cfg.bdlPrefix}/v1/player_stats?${gids.map(id => 'game_ids[]=' + id).join('&')}&per_page=200`);
+            const psResp = await bdlFetch(`${cfg.bdlPrefix}/v1/player_stats?${gids.map(id => 'game_ids[]=' + id).join('&')}&per_page=100`);
             const allPs = psResp?.data || [];
             for (const p of allPs) {
               const gid = p.game?.id;
