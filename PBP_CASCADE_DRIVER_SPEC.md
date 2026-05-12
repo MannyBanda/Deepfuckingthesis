@@ -1,8 +1,8 @@
 # PBP Cascade Driver — Signal Strip Redesign Spec
 
-**Version:** 1.0
+**Version:** 1.1
 **Date:** May 12, 2026
-**Status:** SPEC — awaiting approval
+**Status:** APPROVED — ready for implementation
 **Scope:** v3.html signal strip redesign + PBP divergence driver classification + agent prompt integration
 
 ---
@@ -111,10 +111,13 @@ Stored on `cs._pbpDivergence` per game card:
 
 - MC investigation strip sits in the structural read section (collapsible card)
 - Shows pattern badge (INVESTIGATING / COLLAPSE / OSCILLATING / CLEARED)
-- WP chart has ESPN / Structural toggle but signal series (MC Cum, PBP, Floor) only render in "Structural" mode on the chart itself
+- WP chart defaults to ESPN mode; Structural mode is secondary toggle
+- Signal series (MC Cum, PBP, Floor) only render in "Structural" mode on the chart itself
 - No toggleable pills, no independent strip
 
 ### 3.2 New Design
+
+**Default chart mode: STRUCTURAL** (currently defaults to ESPN). The structural chart with signal overlay is the primary view — ESPN WP is the secondary toggle. Change: `cs._wpMode` initializes to `'xgb'` instead of `'espn'` (v3.html line 1065).
 
 Move signal strip to **below the WP chart**, matching WNBA dashboard pattern. The WP chart (ESPN or Structural mode) renders above; the signal strip renders below as a unified component.
 
@@ -324,22 +327,25 @@ For drawing the PBP line with color-coded segments, the chart renderer needs div
 
 ## 6. Implementation Plan
 
+### 6.1 Steps
+
 | Step | What | Lines | Notes |
 |------|------|-------|-------|
 | 1 | CSS for signal strip, pills, divergence callout | ~40 | New styles, match WNBA patterns |
-| 2 | `computePBPDivergence()` function | ~30 | Classification algorithm |
-| 3 | `renderSignalStripChart()` function | ~120 | Canvas chart with 4 series, color-coded PBP, gap fill |
-| 4 | Toggle pill row + callout HTML | ~40 | In `renderCard()`, below WP chart |
-| 5 | Move MC investigation strip into callout area | ~20 | Relocate existing HTML generation |
-| 6 | Agent prompt integration | ~15 | Divergence context block in alert + analysis prompts |
+| 2 | Default chart mode → Structural | 1 | `cs._wpMode` init `'xgb'` instead of `'espn'` |
+| 3 | `computePBPDivergence()` function | ~30 | Classification algorithm |
+| 4 | `renderSignalStripChart()` function | ~120 | Canvas chart with 4 series, color-coded PBP, gap fill |
+| 5 | Toggle pill row + callout HTML | ~40 | In `renderCard()`, below WP chart |
+| 6 | Move MC investigation strip into callout area | ~20 | Relocate existing HTML generation |
+| 7 | Agent prompt integration | ~15 | Divergence context block in alert + analysis prompts |
 | **Total** | | **~265** | |
 
-### 6.1 Files Modified
+### 6.2 Files Modified
 
-- `v3.html` — signal strip chart, pills, divergence callout, CSS (~250 lines)
+- `v3.html` — default chart mode change (line 1065), signal strip chart, pills, divergence callout, MC investigation relocation, CSS (~250 lines)
 - `netlify/functions/poll-live-bdl.mjs` — agent prompt divergence context (~15 lines)
 
-### 6.2 Risk Assessment
+### 6.3 Risk Assessment
 
 - **Low risk:** All client-side rendering changes. No server polling logic touched.
 - **Agent prompt change:** Additive context block, no existing prompt text modified.
