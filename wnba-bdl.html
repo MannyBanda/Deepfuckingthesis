@@ -101,6 +101,11 @@ input,textarea,select{font-size:16px!important;}
 .sig-strip{display:flex;align-items:center;gap:6px;padding:6px 0 2px;flex-wrap:wrap;}
 .sig-pill{font-family:var(--mono);font-size:9px;font-weight:600;padding:3px 8px;border-radius:4px;border:1px solid;cursor:pointer;white-space:nowrap;transition:all 0.12s ease;-webkit-tap-highlight-color:transparent;}
 .sig-pill:active{transform:scale(0.95);}
+/* Signal strip divergence callout */
+.div-callout{margin-top:6px;padding:8px 10px;background:var(--bg-surface-2);border-radius:var(--r-inner);border-left:3px solid var(--fg-dim);font-family:var(--sans);}
+.div-callout .div-driver{font:600 9px/1 var(--sans);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:4px;}
+.div-callout .div-body{font-size:10px;color:var(--fg-secondary);line-height:1.5;}
+.div-callout .div-body .div-stat{font-family:var(--mono);font-weight:600;}
 
 /* ═══ SECTION ═══ */
 .section{padding:16px;border-top:1px solid var(--hairline);}
@@ -1086,6 +1091,135 @@ document.getElementById('swipe').addEventListener('scroll',function(){
   },80);
 });
 
+// ── PBP DIVERGENCE DRIVER CLASSIFICATION (WNBA) ────────────────────────────
+// When PBP MC diverges from MC Cum, classifies whether the divergence is driven by
+// SHOOTING (fg2%/fg3% improving — durable, 62.5% trailing win) or
+// FT_DRIVEN/TO_DRIVEN (ref-dependent or turnover heater — fades, 0% trailing win).
+// Uses MC rate decomposition from raw_stats_json, NOT indicator scores.
+function computePBPDivergenceWNBA(snap, allSnaps, snapIdx, homeAlias) {
+  if (!snap) return null;
+  var pbp = snap.mc_win_prob != null ? Number(snap.mc_win_prob) : null;
+  var mc = snap.mc_cum_win_prob != null ? Number(snap.mc_cum_win_prob) : null;
+  if (pbp == null || mc == null) return null;
+  var gap = pbp - mc;
+  if (gap < 0.15 || pbp < 0.65) return null;
+
+  // Parse raw_stats_json for current snapshot
+  var raw = snap.raw_stats_json;
+  if (!raw) return null;
+  if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch(e) { return null; } }
+  var hStats = raw.home_team || raw.home;
+  var aStats = raw.away_team || raw.away;
+  if (!hStats || !aStats) return null;
+
+  var ctrlIsHome = snap.floor_team === homeAlias;
+
+  function extractStats(s) {
+    return {
+      fgm: Number(s.fgm || s.field_goals_made || 0),
+      fga: Number(s.fga || s.field_goals_att || 0),
+      fg3m: Number(s.fg3m || s.three_points_made || 0),
+      fg3a: Number(s.fg3a || s.three_points_att || 0),
+      ftm: Number(s.ftm || s.free_throws_made || 0),
+      fta: Number(s.fta || s.free_throws_att || 0),
+      tov: Number(s.to || s.turnovers || s.tov || s.total_turnovers || 0),
+      oreb: Number(s.oreb || s.offensive_rebounds || 0)
+    };
+  }
+  function computeRates(st) {
+    var fg2a = st.fga - st.fg3a, fg2m = st.fgm - st.fg3m;
+    var poss = Math.max(st.fga + 0.44 * st.fta + st.tov - st.oreb, 1);
+    return {
+      fg2Pct: fg2a >= 3 ? fg2m / fg2a : 0.482,
+      fg3Pct: st.fg3a >= 3 ? st.fg3m / st.fg3a : 0.347,
+      fg3aShare: st.fga >= 3 ? st.fg3a / st.fga : 0.345,
+      toRate: poss >= 3 ? st.tov / poss : 0.178,
+      ftaRate: poss >= 3 ? st.fta / poss : 0.224
+    };
+  }
+
+  var cumH = extractStats(hStats), cumA = extractStats(aStats);
+  var cumCtrl = computeRates(ctrlIsHome ? cumH : cumA);
+  var cumOpp = computeRates(ctrlIsHome ? cumA : cumH);
+
+  // Lookback: ~4 snapshots back for windowed rates
+  var lbIdx = Math.max(0, snapIdx - 4);
+  var lbSnap = allSnaps[lbIdx];
+  var winCtrl = cumCtrl, winOpp = cumOpp; // fallback to cumulative
+  var hasWindow = false;
+
+  if (lbIdx < snapIdx && lbSnap && lbSnap.raw_stats_json) {
+    var lbRaw = lbSnap.raw_stats_json;
+    if (typeof lbRaw === 'string') { try { lbRaw = JSON.parse(lbRaw); } catch(e) { lbRaw = null; } }
+    if (lbRaw) {
+      var lbH = extractStats(lbRaw.home_team || lbRaw.home || {});
+      var lbA = extractStats(lbRaw.away_team || lbRaw.away || {});
+      function diffStats(curr, prev) {
+        var d = {};
+        for (var k in curr) d[k] = Math.max(0, curr[k] - (prev[k] || 0));
+        return d;
+      }
+      var wH = diffStats(cumH, lbH), wA = diffStats(cumA, lbA);
+      if ((wH.fga + wA.fga) >= 6) {
+        winCtrl = computeRates(ctrlIsHome ? wH : wA);
+        winOpp = computeRates(ctrlIsHome ? wA : wH);
+        hasWindow = true;
+      }
+    }
+  }
+
+  // Rate deltas: window improvement over cumulative (ctrl-relative)
+  var fg2Delta = (winCtrl.fg2Pct - cumCtrl.fg2Pct) - (winOpp.fg2Pct - cumOpp.fg2Pct);
+  var fg3Delta = (winCtrl.fg3Pct - cumCtrl.fg3Pct) - (winOpp.fg3Pct - cumOpp.fg3Pct);
+  var toRDelta = -(winCtrl.toRate - cumCtrl.toRate) + (winOpp.toRate - cumOpp.toRate); // positive = ctrl improving
+  var ftaDelta = (winCtrl.ftaRate - cumCtrl.ftaRate) - (winOpp.ftaRate - cumOpp.ftaRate);
+
+  var shootMag = Math.abs(fg2Delta) + Math.abs(fg3Delta);
+  var toMag = Math.abs(toRDelta);
+  var ftaMag = Math.abs(ftaDelta);
+  var total = shootMag + toMag + ftaMag;
+  if (total < 0.001) total = 1; // avoid div0
+
+  var driver = 'MIXED';
+  if (shootMag / total >= 0.55 && ftaMag / total < 0.35) driver = 'SHOOTING';
+  else if (ftaMag / total >= 0.40) driver = 'FT_DRIVEN';
+  else if (toMag / total >= 0.50 && shootMag / total < 0.30) driver = 'TO_DRIVEN';
+
+  var q = Number(snap.period || 2);
+  var conf = 'MODERATE';
+  if (q === 2) conf = 'HIGH';
+  else if (driver === 'SHOOTING' && pbp >= 0.80) conf = 'HIGH';
+  else if (driver === 'FT_DRIVEN' || driver === 'TO_DRIVEN') conf = 'LOW';
+
+  var labels = {
+    SHOOTING: 'Shooting efficiency surge \u2014 likely to stick',
+    FT_DRIVEN: 'Free throw-driven edge \u2014 ref-dependent, may fade',
+    TO_DRIVEN: 'Turnover-driven heater \u2014 may fade',
+    MIXED: 'Mixed driver \u2014 watch for confirmation'
+  };
+
+  return {
+    active: true, gap: gap, driver: driver, confidence: conf,
+    pbp: pbp, mc: mc, label: labels[driver],
+    fg2: hasWindow ? fg2Delta : null, fg3: hasWindow ? fg3Delta : null,
+    toR: hasWindow ? toRDelta : null, fta: hasWindow ? ftaDelta : null
+  };
+}
+
+// Per-snapshot divergence color for PBP line segments
+function pbpDivColorWNBA(snap, allSnaps, snapIdx, homeAlias) {
+  if (!snap) return '#a78bfa';
+  if (snap._divColor) return snap._divColor;
+  var div = computePBPDivergenceWNBA(snap, allSnaps, snapIdx, homeAlias);
+  var color = '#a78bfa'; // default purple
+  if (div) {
+    if (div.driver === 'SHOOTING') color = '#34d399';
+    else if (div.driver === 'FT_DRIVEN' || div.driver === 'TO_DRIVEN') color = '#f5b544';
+  }
+  snap._divColor = color;
+  return color;
+}
+
 // ── MC INVESTIGATION STRIP ──
 function renderMCStrip(mc,gameId){
   if(!mc||!mc.triggered)return '';
@@ -1217,6 +1351,25 @@ function renderCard(id){
       html+='<span class="sig-pill" onclick="toggleSigSeries(\''+g.id+'\',\''+sig.k+'\')" style="'+style+'">'+sig.label+valStr+'</span>';
     });
     html+='</div>';
+    // ── Divergence callout ──
+    var _latestSnap=cs._allSnapshots&&cs._allSnapshots.length>0?cs._allSnapshots[cs._allSnapshots.length-1]:null;
+    var _divW=_wps.canary&&_latestSnap?computePBPDivergenceWNBA(_latestSnap,cs._allSnapshots,cs._allSnapshots.length-1,hA):null;
+    if(_divW){
+      var _dColor=_divW.driver==='SHOOTING'?'#34d399':(_divW.driver==='FT_DRIVEN'||_divW.driver==='TO_DRIVEN')?'#f5b544':'#a78bfa';
+      var _dIcon=_divW.driver==='SHOOTING'?'●':(_divW.driver==='FT_DRIVEN'||_divW.driver==='TO_DRIVEN')?'◇':'◉';
+      html+='<div class="div-callout" style="border-left-color:'+_dColor+'">';
+      html+='<div class="div-driver" style="color:'+_dColor+'">'+_dIcon+' '+_divW.driver.replace('_',' ')+' <span style="font-weight:400;opacity:0.7">\u00b7 cascade '+_divW.confidence.toLowerCase()+'</span></div>';
+      html+='<div class="div-body">PBP\u2192MC gap: <span class="div-stat">+'+Math.round(_divW.gap*100)+'pp</span>';
+      if(_divW.fg2!=null)html+=' \u00b7 fg2% <span class="div-stat">'+(_divW.fg2>0?'+':'')+(_divW.fg2*100).toFixed(1)+'</span>';
+      if(_divW.fg3!=null)html+=' \u00b7 fg3% <span class="div-stat">'+(_divW.fg3>0?'+':'')+(_divW.fg3*100).toFixed(1)+'</span>';
+      if(_divW.driver==='FT_DRIVEN'&&_divW.fta!=null)html+=' \u00b7 FTA <span class="div-stat" style="color:#f5b544">'+(_divW.fta>0?'+':'')+(_divW.fta*100).toFixed(1)+'</span>';
+      if(_divW.driver==='TO_DRIVEN'&&_divW.toR!=null)html+=' \u00b7 TO <span class="div-stat" style="color:#f5b544">'+(_divW.toR>0?'+':'')+(_divW.toR*100).toFixed(1)+'</span>';
+      html+='</div></div>';
+    }
+    // MC Investigation strip (below divergence callout, matching NBA layout)
+    if(cs._serverMC&&cs._serverMC.triggered){
+      html+=renderMCStrip(cs._serverMC,g.id);
+    }
     html+='</div>';
   }
 
@@ -1396,11 +1549,6 @@ function renderCard(id){
           html+='<span class="window-cell-val">'+esc(p.controlTeam||'')+' '+p.score.toFixed(2)+'<span class="window-cell-delta '+pCls+'">'+pSign+pDelta.toFixed(2)+'</span></span></div>';
         }
         html+='</div>';
-      }
-
-      // MC Investigation strip (between window grid and indicator strip)
-      if(cs._serverMC&&cs._serverMC.triggered){
-        html+=renderMCStrip(cs._serverMC,id);
       }
 
       // ═══ MC SIGNALS — always-on MC Cum + MC PBP row ═══
@@ -1609,8 +1757,49 @@ function renderXGBChart(cs,hA,aA){
   if(primaryField){html+='<path d="'+fillD+'" fill="url(#xgbFill-'+esc(hA)+')"/>';html+='<path d="'+fillDownD+'" fill="url(#xgbFillDown-'+esc(hA)+')" />';}
   // Floor line (rendered first so it's behind)
   if(_wps.floor){var fp=buildPath(pts,'floor_score',0.5);if(fp.hasData)html+='<path d="'+fp.d+'" fill="none" stroke="#ff6b35" stroke-opacity="0.5" stroke-width="1" stroke-dasharray="3 2"/>';}
-  // PBP MC canary line (volatile — thin, behind structural lines)
-  if(_wps.canary){var cp=buildPath(pts,'mc_win_prob');if(cp.hasData)html+='<path d="'+cp.d+'" fill="none" stroke="#a78bfa" stroke-opacity="0.6" stroke-width="1" stroke-linejoin="round"/>';}
+  // PBP MC canary line — color-coded by divergence driver (green=shooting, amber=FT/TO-driven, purple=default)
+  if(_wps.canary){
+    // Build per-point coordinates + colors
+    var pbpPts=[];
+    for(var i=0;i<pts.length;i++){
+      var val=pts[i].mc_win_prob;if(val==null)continue;
+      val=Number(val);
+      var homeWP=(pts[i].floor_team===hA)?val:(1-val);
+      var px=(i/(pts.length-1))*W;
+      var py=(1-homeWP)*H;
+      pbpPts.push({px:px,py:py,color:pbpDivColorWNBA(pts[i],pts,i,hA),snap:pts[i]});
+    }
+    // Gap fill between PBP and MC Cum when diverging (gap >= 0.15)
+    if(_wps.mc&&pbpPts.length>1){
+      var gapSegs=[];var curSeg=null;
+      for(var i=0;i<pts.length;i++){
+        var pbpV=pts[i].mc_win_prob!=null?Number(pts[i].mc_win_prob):null;
+        var mcV=pts[i].mc_cum_win_prob!=null?Number(pts[i].mc_cum_win_prob):null;
+        if(pbpV==null||mcV==null||pbpV-mcV<0.15||pbpV<0.65){if(curSeg){gapSegs.push(curSeg);curSeg=null;}continue;}
+        var gpx=(i/(pts.length-1))*W;
+        var pbpHWP=(pts[i].floor_team===hA)?pbpV:(1-pbpV);
+        var mcHWP=(pts[i].floor_team===hA)?mcV:(1-mcV);
+        var col=pbpDivColorWNBA(pts[i],pts,i,hA);
+        if(!curSeg||curSeg.color!==col){if(curSeg)gapSegs.push(curSeg);curSeg={color:col,top:[],bot:[]};}
+        curSeg.top.push({x:gpx,y:(1-pbpHWP)*H});
+        curSeg.bot.push({x:gpx,y:(1-mcHWP)*H});
+      }
+      if(curSeg)gapSegs.push(curSeg);
+      for(var gi=0;gi<gapSegs.length;gi++){
+        var seg=gapSegs[gi];if(seg.top.length<2)continue;
+        var fd='M'+seg.top[0].x.toFixed(1)+','+seg.top[0].y.toFixed(1);
+        for(var si=1;si<seg.top.length;si++)fd+='L'+seg.top[si].x.toFixed(1)+','+seg.top[si].y.toFixed(1);
+        for(var si=seg.bot.length-1;si>=0;si--)fd+='L'+seg.bot[si].x.toFixed(1)+','+seg.bot[si].y.toFixed(1);
+        fd+='Z';
+        html+='<path d="'+fd+'" fill="'+seg.color+'" fill-opacity="0.12"/>';
+      }
+    }
+    // Draw per-segment colored PBP line
+    for(var i=1;i<pbpPts.length;i++){
+      var col=pbpPts[i].color;
+      html+='<line x1="'+pbpPts[i-1].px.toFixed(1)+'" y1="'+pbpPts[i-1].py.toFixed(1)+'" x2="'+pbpPts[i].px.toFixed(1)+'" y2="'+pbpPts[i].py.toFixed(1)+'" stroke="'+col+'" stroke-opacity="0.7" stroke-width="1.2" stroke-linecap="round"/>';
+    }
+  }
   // MC Cum line
   if(_wps.mc){var mp=buildPath(pts,'mc_cum_win_prob');if(mp.hasData){html+='<path d="'+mp.d+'" fill="none" stroke="#FDB927" stroke-opacity="0.85" stroke-width="1.5" stroke-linejoin="round"/>';html+='<circle cx="'+mp.lastX.toFixed(1)+'" cy="'+mp.lastY.toFixed(1)+'" r="3" fill="#FDB927" opacity="0.3"/>';html+='<circle cx="'+mp.lastX.toFixed(1)+'" cy="'+mp.lastY.toFixed(1)+'" r="1.5" fill="#FDB927"/>';}}
   // XGB line (rendered last so it's on top)
