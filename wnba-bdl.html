@@ -613,7 +613,7 @@ async function buildBdlGameMap(dateStr){
     }
     for(var g of games){
       var hA=g.home?.alias,aA=g.away?.alias;if(!hA||!aA)continue;
-      var hM=BDL_TEAM_MATCH[hA],aM=BDL_TEAM_MATCH[aA];
+      var hM=BDL_TEAM_MATCH[ESPN_ALIAS_MAP[hA]||hA],aM=BDL_TEAM_MATCH[ESPN_ALIAS_MAP[aA]||aA];
       var match=bg.find(function(b){return b.home_team?.full_name?.includes(hM)&&b.visitor_team?.full_name?.includes(aM);});
       if(match)bdlGameMap[g.id]=match.id;
     }
