@@ -602,14 +602,22 @@ function switchDate(offset){
 
 async function buildBdlGameMap(dateStr){
   try{
-    var data=await bdl('games',{date:dateStr,league:'wnba'});var bg=data.data||[];
+    // WNBA: late-ET games land on next UTC day in BDL — fetch both dates
+    var dates=[dateStr];
+    var dt=new Date(dateStr+'T12:00:00Z');dt.setUTCDate(dt.getUTCDate()+1);
+    var nd=dt.getUTCFullYear()+'-'+String(dt.getUTCMonth()+1).padStart(2,'0')+'-'+String(dt.getUTCDate()).padStart(2,'0');
+    dates.push(nd);
+    var bg=[];
+    for(var ds of dates){
+      try{var data=await bdl('games',{date:ds,league:'wnba'});bg=bg.concat(data.data||[]);}catch(e){}
+    }
     for(var g of games){
       var hA=g.home?.alias,aA=g.away?.alias;if(!hA||!aA)continue;
       var hM=BDL_TEAM_MATCH[hA],aM=BDL_TEAM_MATCH[aA];
       var match=bg.find(function(b){return b.home_team?.full_name?.includes(hM)&&b.visitor_team?.full_name?.includes(aM);});
       if(match)bdlGameMap[g.id]=match.id;
     }
-    console.log('[BDL] Game map:',Object.keys(bdlGameMap).length,'mapped');
+    console.log('[BDL] Game map:',Object.keys(bdlGameMap).length,'mapped from',dates.join('+'));
   }catch(e){console.warn('[BDL] Map failed:',e.message);}
 }
 
