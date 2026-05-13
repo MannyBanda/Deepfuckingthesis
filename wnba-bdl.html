@@ -1712,14 +1712,25 @@ function renderXGBChart(cs,hA,aA){
   var W=600,H=80;
   var _wps=cs._wpSeries||{xgb:true,mc:true,floor:false};
 
-  // Build path helper: converts ctrl-relative values to home-relative SVG path
+  // Compute game seconds for time-based x-axis (WNBA: 10-min quarters = 600s)
+  var maxQ=1;
+  for(var i=0;i<pts.length;i++){
+    var p=pts[i].period||1;if(p>maxQ&&p<=4)maxQ=p;
+    var clk=pts[i].clock||'0:00';
+    var cm=clk.match(/(\d+):(\d+)/);
+    var clockSec=cm?(parseInt(cm[1])*60+parseInt(cm[2])):0;
+    pts[i]._gs=(p-1)*600+(600-clockSec);
+  }
+  var maxGS=maxQ*600;
+
+  // Build path helper: converts ctrl-relative values to home-relative SVG path (time-based x)
   function buildPath(pts,field,fallback){
     var d='',lastPx=0,lastPy=H/2,hasData=false;
     for(var i=0;i<pts.length;i++){
       var val=pts[i][field];if(val==null){if(fallback)val=fallback;else continue;}
       val=Number(val);
       var homeWP=(pts[i].floor_team===hA)?val:(1-val);
-      var px=(i/(pts.length-1))*W;
+      var px=Math.min((pts[i]._gs/maxGS)*W,W);
       var py=(1-homeWP)*H;
       if(!hasData){d+='M'+px.toFixed(1)+','+py.toFixed(1);hasData=true;}
       else d+='L'+px.toFixed(1)+','+py.toFixed(1);
@@ -1737,7 +1748,7 @@ function renderXGBChart(cs,hA,aA){
       var pv=pts[i][primaryField];if(pv==null)continue;
       pv=Number(pv);
       var phwp=(pts[i].floor_team===hA)?pv:(1-pv);
-      var ppx=(i/(pts.length-1))*W;
+      var ppx=Math.min((pts[i]._gs/maxGS)*W,W);
       var ppy=(1-phwp)*H;
       fillD+='L'+ppx.toFixed(1)+','+Math.min(ppy,H/2).toFixed(1);
       fillDownD+='L'+ppx.toFixed(1)+','+Math.max(ppy,H/2).toFixed(1);
@@ -1752,7 +1763,7 @@ function renderXGBChart(cs,hA,aA){
   html+='<linearGradient id="xgbFillDown-'+esc(hA)+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#F87171" stop-opacity="0"/><stop offset="100%" stop-color="#F87171" stop-opacity="0.2"/></linearGradient></defs>';
   // Grid
   html+='<line x1="0" y1="'+H/2+'" x2="'+W+'" y2="'+H/2+'" stroke="rgba(255,255,255,0.15)" stroke-dasharray="3 4"/>';
-  for(var q=1;q<=3;q++)html+='<line x1="'+(q/4*W)+'" y1="0" x2="'+(q/4*W)+'" y2="'+H+'" stroke="rgba(255,255,255,0.04)"/>';
+  for(var q=1;q<maxQ;q++)html+='<line x1="'+(q/maxQ*W)+'" y1="0" x2="'+(q/maxQ*W)+'" y2="'+H+'" stroke="rgba(255,255,255,0.04)"/>';
   // Fill regions
   if(primaryField){html+='<path d="'+fillD+'" fill="url(#xgbFill-'+esc(hA)+')"/>';html+='<path d="'+fillDownD+'" fill="url(#xgbFillDown-'+esc(hA)+')" />';}
   // Floor line (rendered first so it's behind)
@@ -1765,7 +1776,7 @@ function renderXGBChart(cs,hA,aA){
       var val=pts[i].mc_win_prob;if(val==null)continue;
       val=Number(val);
       var homeWP=(pts[i].floor_team===hA)?val:(1-val);
-      var px=(i/(pts.length-1))*W;
+      var px=Math.min((pts[i]._gs/maxGS)*W,W);
       var py=(1-homeWP)*H;
       pbpPts.push({px:px,py:py,color:pbpDivColorWNBA(pts[i],pts,i,hA),snap:pts[i]});
     }
@@ -1776,7 +1787,7 @@ function renderXGBChart(cs,hA,aA){
         var pbpV=pts[i].mc_win_prob!=null?Number(pts[i].mc_win_prob):null;
         var mcV=pts[i].mc_cum_win_prob!=null?Number(pts[i].mc_cum_win_prob):null;
         if(pbpV==null||mcV==null||pbpV-mcV<0.15||pbpV<0.65){if(curSeg){gapSegs.push(curSeg);curSeg=null;}continue;}
-        var gpx=(i/(pts.length-1))*W;
+        var gpx=Math.min((pts[i]._gs/maxGS)*W,W);
         var pbpHWP=(pts[i].floor_team===hA)?pbpV:(1-pbpV);
         var mcHWP=(pts[i].floor_team===hA)?mcV:(1-mcV);
         var col=pbpDivColorWNBA(pts[i],pts,i,hA);
