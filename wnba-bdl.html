@@ -623,16 +623,14 @@ async function buildBdlGameMap(dateStr){
 
 async function fetchStandings(){
   try{
-    var r=await fetch(FN+'sr-data?league=wnba&type=standings&year=2026');
-    if(!r.ok)return;
-    var data=await r.json();
-    var confs=data.conferences||[];
-    confs.forEach(function(c){
-      var confName=c.alias||c.name||'';
-      (c.teams||[]).forEach(function(t){
-        var alias=t.alias||'';if(!alias)return;
-        standingsCache[alias]={confRank:t.seed||null,w:t.wins||0,l:t.losses||0,conf:confName};
-      });
+    var data=await bdl('standings',{season:'2025',league:'wnba'});var arr=data.data||[];
+    // Reverse alias map: BDL abbr → SR alias (e.g. NY→NYL, POR→PDX)
+    var rev={};Object.keys(ESPN_ALIAS_MAP).forEach(function(k){rev[ESPN_ALIAS_MAP[k]]=k;});
+    arr.forEach(function(s){
+      var abbr=s.team?.abbreviation||'';if(!abbr)return;
+      var entry={confRank:s.playoff_seed||null,w:s.wins||0,l:s.losses||0,conf:s.team?.conference||''};
+      standingsCache[abbr]=entry;
+      if(rev[abbr])standingsCache[rev[abbr]]=entry;
     });
     console.log('[STANDINGS]',Object.keys(standingsCache).length,'teams');
   }catch(e){console.warn('[STANDINGS]',e.message);}
