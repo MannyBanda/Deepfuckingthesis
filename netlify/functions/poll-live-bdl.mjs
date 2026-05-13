@@ -836,8 +836,8 @@ PRIOR ALERT REASONING TRAIL:
 ${ctx.priorAlertTrail || 'None'}
 
 RULES:
-- TRACKING: First compound structural signal — ${ctx.league === 'wnba' ? 'MC Cum (≥0.85) AND XGB (≥0.60)' : 'MC Cum (≥0.80) AND indicator floor (≥0.65)'} both confirm ${ctx.ctrlTeam} as structurally dominant (floor ${ctx.floor}, margin ${ctx.margin}). This is a higher-confidence initial signal than historical first-fires. This is NOT yet a position recommendation — the subscriber learns a game is on the radar with strong structural evidence. ALWAYS SEND unless the game is clearly meaningless (garbage time, both teams eliminated, period 4 with < 2 min left). Body should explain: which team, what structural picture (indicators, floor, margin, MC confirmation), and that we are watching for sustained confirmation. Frame as: "Watching [TEAM] — [why they look structurally dominant]. Will update if this develops into a position." Keep it short — this is a heads-up, not a thesis.
-- POSITION_OPEN: The team has sustained compound structural signals — ${ctx.league === 'wnba' ? 'MC Cum ≥ 0.85 AND XGB ≥ 0.60 (floor is narrative context, not a gate)' : 'MC Cum ≥ 0.80 AND Floor ≥ 0.65 at establishment, sustained at ≥ 0.60'} — for 5 consecutive polls (~2.5 minutes game clock). This is a significant structural confirmation.
+- TRACKING: First compound structural signal — ${ctx.league === 'wnba' ? 'MC Cum (≥0.80) AND XGB (≥0.60)' : 'MC Cum (≥0.80) AND indicator floor (≥0.65)'} both confirm ${ctx.ctrlTeam} as structurally dominant (floor ${ctx.floor}, margin ${ctx.margin}). This is a higher-confidence initial signal than historical first-fires. This is NOT yet a position recommendation — the subscriber learns a game is on the radar with strong structural evidence. ALWAYS SEND unless the game is clearly meaningless (garbage time, both teams eliminated, period 4 with < 2 min left). Body should explain: which team, what structural picture (indicators, floor, margin, MC confirmation), and that we are watching for sustained confirmation. Frame as: "Watching [TEAM] — [why they look structurally dominant]. Will update if this develops into a position." Keep it short — this is a heads-up, not a thesis.
+- POSITION_OPEN: The team has sustained compound structural signals — ${ctx.league === 'wnba' ? 'MC Cum ≥ 0.80 AND XGB ≥ 0.60 (floor is narrative context, not a gate)' : 'MC Cum ≥ 0.80 AND Floor ≥ 0.65 at establishment, sustained at ≥ 0.60'} — for 5 consecutive polls (~2.5 minutes game clock). This is a significant structural confirmation.
   ${ctx.compoundTier === 'CONFIRMED' && ctx.compoundPath === 'Q2_EARLY'
     ? (ctx.league === 'wnba' ? 'Q2 EARLY CONFIRMATION (89.6% accuracy): Compound sustained with lead ≥5 and zero prior control flips. Strong early signal in 40-minute format. ALWAYS SEND.' : 'Q2 EARLY CONFIRMATION (95.5% accuracy): Compound sustained with lead ≥5 and zero prior control flips. Strongest early signal — structural dominance established before halftime with scoreboard separation. ALWAYS SEND.')
     : ctx.compoundTier === 'CONFIRMED'
@@ -850,7 +850,7 @@ RULES:
   ${ctx.isSecondBwc ? 'SECOND POSITION TEAM: ' + ctx.bwcTeam + ' took structural control away from ' + ctx.deadTeam + (ctx.deadHadPO ? ' (who had a confirmed position)' : ' (who was tracking but never confirmed)') + '. The reversal itself is evidence — ' + ctx.bwcTeam + ' earned this through merit after ' + ctx.deadTeam + ' collapsed. ALWAYS SEND.' : ''}
   ${ctx.bwcFlipped ? 'POSITION FLIP: The system originally tracked ' + ctx.originalBwcTeam + ' but they FAILED to confirm. ' + ctx.bwcTeam + ' then confirmed ' + ctx.compoundTier + ' — taking structural control away from a previously dominant team. The floor appears modest because cumulative stats are anchored by ' + ctx.originalBwcTeam + "'s early dominance, but " + ctx.bwcTeam + " is sustaining compound signals DESPITE that headwind. ALWAYS SEND." : ''}
   CLOSE GAME CONTEXT: ${ctx.league === 'wnba' ? 'Compound accuracy is ~70% in close games (margin ≤ 8). Shorter 40-minute format gives structural edges less time to express. Communicate honestly in body.' : 'Compound accuracy plateaus at 75% in close games (margin ≤ 8). This is the best close-game accuracy the system has ever produced (up from 51% at first fire, 69% with old graduation), but it is an edge, not a certainty. Communicate honestly in body.'}
-  ${ctx.positionClosed ? 'POST-EXIT RE-ENTRY: Position was previously closed via EXIT. Compound has RESET — these 5 holds are FRESH post-EXIT readings, not carryover. ' + (ctx.league === 'wnba' ? 'Standard re-entry: MC Cum ≥ 0.85 + XGB ≥ 0.60, 5 holds.' : ctx.compoundPath === 'Q2_EARLY' ? 'Q2 re-entry requires lead ≥5 and 0 flips since EXIT.' : 'Standard re-entry threshold applies (MC Cum ≥ 0.80 + Floor ≥ 0.65 to re-establish, ≥ 0.60 to sustain, 5 holds).') + ' Verify via per-quarter breakdown that structural signals are genuinely post-EXIT, not cumulative anchoring. Reference the EXIT reasoning from PRIOR ALERT REASONING TRAIL — what specifically broke? Has it been fixed? If the same weaknesses persist, SUPPRESS regardless of compound confirmation.' : ''}
+  ${ctx.positionClosed ? 'POST-EXIT RE-ENTRY: Position was previously closed via EXIT. Compound has RESET — these 5 holds are FRESH post-EXIT readings, not carryover. ' + (ctx.league === 'wnba' ? 'Standard re-entry: MC Cum ≥ 0.80 + XGB ≥ 0.60, 5 holds.' : ctx.compoundPath === 'Q2_EARLY' ? 'Q2 re-entry requires lead ≥5 and 0 flips since EXIT.' : 'Standard re-entry threshold applies (MC Cum ≥ 0.80 + Floor ≥ 0.65 to re-establish, ≥ 0.60 to sustain, 5 holds).') + ' Verify via per-quarter breakdown that structural signals are genuinely post-EXIT, not cumulative anchoring. Reference the EXIT reasoning from PRIOR ALERT REASONING TRAIL — what specifically broke? Has it been fixed? If the same weaknesses persist, SUPPRESS regardless of compound confirmation.' : ''}
   MF trajectory provides additional context:
   - RISING MF = structural thesis building. Increases PO confidence.
   - DECLINING MF = floor eroding despite compound holding. MC Cum is more reliable than floor here, but flag as context and check per-quarter breakdown.
@@ -892,7 +892,7 @@ ${ctx.league === 'wnba' ? `- BUY EVIDENCE (312-game WNBA backtest, 262 trailing 
   POSITION TRACKING CONTEXT FOR BUY DECISIONS:
   The BUY team's relationship to position tracking determines baseline confidence:
 
-  - BUY team = tracked team with CONFIRMED/LOCKED position: "Warm BUY" — compound structural signals sustained (${ctx.league === 'wnba' ? 'MC Cum ≥ 0.85 + XGB ≥ 0.60' : 'MC Cum ≥ 0.80 + Floor ≥ 0.65 at establishment, ≥ 0.60 sustained'} for 5+ consecutive polls). Team trailing is the thesis working. MF trajectory tells you if the structural trend is holding.
+  - BUY team = tracked team with CONFIRMED/LOCKED position: "Warm BUY" — compound structural signals sustained (${ctx.league === 'wnba' ? 'MC Cum ≥ 0.80 + XGB ≥ 0.60' : 'MC Cum ≥ 0.80 + Floor ≥ 0.65 at establishment, ≥ 0.60 sustained'} for 5+ consecutive polls). Team trailing is the thesis working. MF trajectory tells you if the structural trend is holding.
   - BUY team = tracked team with RECOVERING position: "Warm BUY with caution" — position confirmed after control flip, 73% baseline. Trailing could be the thesis (structural team behind on variance) OR the original instability reasserting. Check conviction trend and per-quarter breakdown.
   - BUY team = tracked team, TRACKING only (compound not confirmed): System identified structural interest but compound signals never sustained. Lower confidence. Rely entirely on standard BUY evidence. This is a cold BUY with partial context.
   - BUY team = original tracked team but tracking FLIPPED to opponent: Near-automatic SUPPRESS. This team LOST structural control to the opponent. You are buying against the confirmed structural direction. The team that took it away confirmed through compound and wins historically.
@@ -2763,7 +2763,7 @@ function checkXGBExit(lt, xgbBwcProb, period, mcCumWinProb) {
 
 // ── COMPOUND CONFIRMATION — replaces checkpoint graduation ──────
 // NBA sustain: MC Cum >= 0.80 AND Floor >= 0.60 (holds 2-5).
-// WNBA sustain: MC Cum >= 0.85 AND XGB >= 0.60 (floor demoted to narrative).
+// WNBA sustain: MC Cum >= 0.80 AND XGB >= 0.60 (floor demoted to narrative).
 // Establishment (hold 1) handled by caller.
 // Q2 EARLY path adds lead >= 5 AND 0 prior flips.
 // Returns { confirmed, tier, holds, path }.
@@ -2788,7 +2788,7 @@ function checkCompoundConfirmation(lt, mcCumWinProb, floor, period, clock, ctrlT
   let baseThreshold;
   if (league === 'wnba') {
     // WNBA: MC Cum + XGB compound (floor demoted to narrative)
-    baseThreshold = mcCumWinProb != null && mcCumWinProb >= 0.85
+    baseThreshold = mcCumWinProb != null && mcCumWinProb >= 0.80
                  && xgbWinProb != null && xgbWinProb >= 0.60;
   } else {
     // NBA: MC Cum + Floor compound (sustain at 0.60, establishment at 0.65 by caller)
@@ -7183,7 +7183,7 @@ export default async function(req) {
               // WNBA: MC Cum + XGB compound (floor demoted to narrative)
               const _estabMC = _mcCum?.winProb != null ? _mcCum.winProb : null;
               const _estabXGB = _xgbWinProb;
-              const _estabMet = _estabMC != null && _estabMC >= 0.85
+              const _estabMet = _estabMC != null && _estabMC >= 0.80
                              && _estabXGB != null && _estabXGB >= 0.60;
               const _estabQ2 = currentPeriod !== 2 || (_v2Margin >= 5 && (lt.ctrl_flips_q2plus || 0) === 0);
 
