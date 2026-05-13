@@ -744,28 +744,27 @@ async function loadSchedule(){
 // ── POLL (10s — score updates + client-side indicator compute) ──
 async function refreshLiveCards(){
   try{
-    // ESPN live score refresh — faster than BDL plays
+    // BDL live score refresh — more current than ESPN scoreboard
     try{
-      var d=getSlateDate(dateOffset);var dateStr=d.year+d.month+d.day;
-      var er=await fetch(FN+'espn-data?type=scoreboard&league=wnba&date='+dateStr);
-      if(er.ok){
-        var ed=await er.json();var eg=ed.games||[];
-        games.forEach(function(g){
-          var hA=g.home?.alias||'',aA=g.away?.alias||'';
-          var hE=ESPN_ALIAS_MAP[hA]||hA,aE=ESPN_ALIAS_MAP[aA]||aA;
-          var match=eg.find(function(e){return(e.homeAbbr===hA||e.homeAbbr===hE)&&(e.awayAbbr===aA||e.awayAbbr===aE);});
-          if(!match)return;
-          if(!espnGameMap[g.id])espnGameMap[g.id]=match.espnId;
-          if(match.homeScore!=null)g.homePoints=match.homeScore;
-          if(match.awayScore!=null)g.awayPoints=match.awayScore;
-          if(match.period)g.period=match.period;
-          if(match.clock)g.clock=match.clock;
-          var ms=(match.status||'').toLowerCase();
-          if(ms==='status_final')g.status='closed';
-          else if(ms==='status_in_progress'||ms==='status_end_period')g.status='inprogress';
-        });
-      }
-    }catch(e){console.warn('[ESPN-SCORE]',e.message);}
+      var d=getSlateDate(dateOffset);var ds1=d.year+'-'+d.month+'-'+d.day;
+      var dt=new Date(ds1+'T12:00:00Z');dt.setUTCDate(dt.getUTCDate()+1);
+      var ds2=dt.getUTCFullYear()+'-'+String(dt.getUTCMonth()+1).padStart(2,'0')+'-'+String(dt.getUTCDate()).padStart(2,'0');
+      var bg=[];
+      try{var r1=await bdl('games',{date:ds1,league:'wnba'});bg=bg.concat(r1.data||[]);}catch(e){}
+      try{var r2=await bdl('games',{date:ds2,league:'wnba'});bg=bg.concat(r2.data||[]);}catch(e){}
+      games.forEach(function(g){
+        var bdlId=bdlGameMap[g.id];if(!bdlId)return;
+        var match=bg.find(function(b){return b.id===bdlId;});
+        if(!match)return;
+        if(match.home_score!=null)g.homePoints=match.home_score;
+        if(match.away_score!=null)g.awayPoints=match.away_score;
+        if(match.period)g.period=match.period;
+        if(match.time&&match.time!=='0.0')g.clock=match.time;
+        var ms=(match.status||'').toLowerCase();
+        if(ms==='post')g.status='closed';
+        else if(ms==='in')g.status='inprogress';
+      });
+    }catch(e){console.warn('[BDL-SCORE]',e.message);}
     // Parallel per-game fetches — plays + team_stats fired simultaneously
     var liveGames=games.filter(function(g){
       return getState(g)==='LIVE'&&bdlGameMap[g.id]&&cardState[g.id];
