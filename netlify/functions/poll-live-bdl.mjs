@@ -761,6 +761,7 @@ XGB win probability: ${(ctx.xgbWinProb * 100).toFixed(1)}% | MC Cum: ${ctx.mcCum
 ${ctx.xgbShap ? 'SHAP drivers (what raw stats push XGB prediction): ' + ctx.xgbShap.map(s => s.f + '=' + (s.v > 0 ? '+' : '') + s.v.toFixed(2)).join(', ') : ''}
 ${ctx.convictionQuality ? 'XGB CONVICTION QUALITY:\nBasis: ' + ctx.convictionQuality.basis + ' — ' + Math.round(ctx.convictionQuality.strConcentration * 100) + '% structural / ' + Math.round(ctx.convictionQuality.volConcentration * 100) + '% volatile\nTop driver: ' + ctx.convictionQuality.top1Feature + ' (' + Math.round(ctx.convictionQuality.top1Share * 100) + '% of positive SHAP)' + (ctx.convictionQuality.top1IsVolatile ? ' [VOLATILE]' : '') + '\nScoreboard: ' + (ctx.convictionQuality.bigleadAnchored ? 'CONFIRMED — biglead driving ' + Math.round(ctx.convictionQuality.bigleadShare * 100) + '% (95% win rate in backtest)' : ctx.convictionQuality.noScoreboardConfirmation ? 'NOT CONFIRMED — biglead SHAP flat/negative, stats not translating to lead (19% loss rate vs 5%)' : 'PARTIAL — biglead contributing ' + Math.round(ctx.convictionQuality.bigleadShare * 100) + '%') : ''}
 ${ctx.trajectorySignals && ctx.trajectorySignals.warnings.length > 0 ? 'CONVICTION WARNINGS:\n' + ctx.trajectorySignals.warnings.join('\n') : ''}
+${ctx.failureProfile ? (ctx.league === 'wnba' ? '⚠️ FAILURE PROFILE ACTIVE: Floor reads ' + (ctx.floor * 100).toFixed(0) + '% but ' + (ctx.mcCumWp != null && ctx.mcCumWp < 0.60 ? 'MC Cum ' + (ctx.mcCumWp * 100).toFixed(0) + '% (<60%)' : '') + (ctx.mcCumWp != null && ctx.mcCumWp < 0.60 && ctx.xgbWinProb != null && ctx.xgbWinProb < 0.50 ? ' AND ' : '') + (ctx.xgbWinProb != null && ctx.xgbWinProb < 0.50 ? 'XGB ' + (ctx.xgbWinProb * 100).toFixed(0) + '% (<50%)' : '') + ' don\'t confirm structural edge.\nWNBA floor HIGH + MC+XGB LOW = 20.2% win rate (312 games). Floor is narrative context only in WNBA — this combination is nearly always wrong.\nFor BUY/BWC: SUPPRESS. For POSITION_OPEN: Note extreme risk in body.' : '⚠️ FAILURE PROFILE ACTIVE: Floor reads ' + (ctx.floor * 100).toFixed(0) + '% but ' + (ctx.mcCumWp != null && ctx.mcCumWp < 0.60 ? 'MC Cum ' + (ctx.mcCumWp * 100).toFixed(0) + '% (<60%)' : '') + (ctx.mcCumWp != null && ctx.mcCumWp < 0.60 && ctx.xgbWinProb != null && ctx.xgbWinProb < 0.50 ? ' AND ' : '') + (ctx.xgbWinProb != null && ctx.xgbWinProb < 0.50 ? 'XGB ' + (ctx.xgbWinProb * 100).toFixed(0) + '% (<50%)' : '') + ' don\'t confirm structural edge.\nHistorical win rate in this profile: 41-44% (1,233 games). 51% of all wrong calls system-wide have floor >=0.65. Likely cumulative anchoring from early-game dominance.\nFor BUY/BWC: SUPPRESS unless per-quarter breakdown shows the current quarter specifically supports the floor read.\nFor POSITION_OPEN: Note elevated risk in body — compound threshold passed but underlying structural quality is contested.') : ''}
 ${!ctx.xgbAligned && ctx.xgbWinProb < 0.45 ? 'WARNING: XGBoost sees < 45% win probability from raw stats despite floor at ' + ctx.floor + '. Ctrl trailing + XGB<0.45 wins only 20-28% in Q3-Q4. Consider SUPPRESS.' : ''}${!ctx.xgbAligned && ctx.xgbWinProb > ctx.floor + 0.15 ? 'NOTE: XGBoost sees stronger edge than floor — raw stats outpace composite indicators.' : ''}
 ${ctx.xgbWinProb >= 0.60 && ctx.margin < -5 ? 'WARNING: XGB reads ' + (ctx.xgbWinProb * 100).toFixed(0) + '% but team is trailing by ' + Math.abs(ctx.margin) + '. In corrected backtest, XGB >=0.60 + ctrl trailing 5+ has 82% loss rate (n=17). Elevate scrutiny.' : ctx.xgbWinProb >= 0.70 && ctx.margin < 0 ? 'CAUTION: XGB reads ' + (ctx.xgbWinProb * 100).toFixed(0) + '% but team is trailing. High XGB + trailing is unreliable.' : ''}` : ''}
 ${ctx.alertType === 'BUY' && ctx.xgbWinProb != null ? (ctx.league === 'wnba' ? `XGB BUY CALIBRATION (312-game WNBA backtest, ctrl trailing):
@@ -797,7 +798,7 @@ ${ctx.mcTrajectoryWp != null ? `
 MC TRAJECTORY (always-on):
   MC PBP (20-poss window): ${(ctx.mcTrajectoryWp * 100).toFixed(1)}% | MC Cum (game-rate): ${ctx.mcCumWp != null ? (ctx.mcCumWp * 100).toFixed(1) + '%' : '?'} | Floor: ${(ctx.floor * 100).toFixed(1)}% | XGB: ${ctx.xgbWinProb != null ? (ctx.xgbWinProb * 100).toFixed(1) + '%' : '?'}
   ${Math.abs(ctx.mcTrajectoryWp - ctx.floor) > 0.15 ? 'DIVERGENCE: MC PBP and floor disagree by ' + Math.round(Math.abs(ctx.mcTrajectoryWp - ctx.floor) * 100) + 'pp — recent possession rates tell a different story than cumulative box score.' : 'ALIGNED: MC PBP and floor within 15pp.'}
-  ${ctx.mcCumWp != null && ctx.xgbWinProb != null && Math.abs(ctx.mcCumWp - ctx.xgbWinProb) > 0.15 ? 'MC Cum vs XGB gap: ' + Math.round(Math.abs(ctx.mcCumWp - ctx.xgbWinProb) * 100) + 'pp — MC Cum dominates disagreements (70-87%).' : ''}
+  ${ctx.xgbMcClass === 'MC_LEADS' ? 'SIGNAL DIVERGENCE: MC Cum (' + (ctx.mcCumWp * 100).toFixed(0) + '%) >> XGB (' + (ctx.xgbWinProb * 100).toFixed(0) + '%), gap ' + Math.round(Math.abs(ctx.xgbMcGap) * 100) + 'pp. MC LEADS — rates project a win that structural features don\'t fully reflect. ' + (ctx.league === 'wnba' ? 'WNBA: MC leads divergence = 64% ctrl wins (312 games). Trust MC Cum over XGB.' : 'NBA close-game WR in this profile: 92%. Trust MC Cum over XGB.') : ctx.xgbMcClass === 'XGB_LEADS' ? 'SIGNAL DIVERGENCE: XGB (' + (ctx.xgbWinProb * 100).toFixed(0) + '%) >> MC Cum (' + (ctx.mcCumWp * 100).toFixed(0) + '%), gap ' + Math.round(Math.abs(ctx.xgbMcGap) * 100) + 'pp. XGB LEADS — structural quality not translating to possession rates. ' + (ctx.league === 'wnba' ? 'WNBA: XGB leads divergence = 42.9% ctrl wins (312 games). Do NOT trust XGB over MC.' : 'NBA close-game WR in this profile: 50%. Elevated caution.') : ''}
   ${ctx.mcDrivers && ctx.mcDrivers.length > 0 ? 'MC RATE DRIVERS (what is driving ' + (ctx.bwcTeam || ctx.ctrlTeam) + ' win prob):\\n' + ctx.mcDrivers.filter(function(d) { return Math.abs(d.delta) >= 0.02; }).map(function(d) { return '    ' + d.label + ': ' + (d.delta >= 0 ? '+' : '') + Math.round(d.delta * 100) + 'pp (game ' + (d.ctrlVal * 100).toFixed(0) + '% vs season ' + (d.seasonVal * 100).toFixed(0) + '%)'; }).join('\\n') : ''}
   ${ctx.mcTrajectoryWp != null && ctx.mcCumWp != null && ctx.mcTrajectoryWp >= 0.65 && (ctx.mcTrajectoryWp - ctx.mcCumWp) >= 0.15 ? (function() { var _i1 = Number(ctx.i1 || 0), _i2 = Number(ctx.i2 || 0), _i3 = Number(ctx.i3 || 0); var _ss = (_i2 + _i3) / 2; var _dr = _ss >= 0.50 ? 'STRUCTURAL' : (_i1 >= 0.75 && _ss < 0.25 ? 'VOLATILE' : 'MIXED'); var _labels = { STRUCTURAL: 'Shooting + paint edge — 88% cascade rate from research.', VOLATILE: 'Turnover-driven heater — historically fades as TO rates regress.', MIXED: 'Mixed driver — watch for cumulative confirmation.' }; return 'PBP DIVERGENCE DRIVER: ' + _dr + ' (PBP ' + (ctx.mcTrajectoryWp * 100).toFixed(0) + '% vs MC Cum ' + (ctx.mcCumWp * 100).toFixed(0) + '%, gap +' + Math.round((ctx.mcTrajectoryWp - ctx.mcCumWp) * 100) + 'pp)\\n  ' + _labels[_dr] + '\\n  I1=' + _i1.toFixed(1) + ' I2=' + _i2.toFixed(1) + ' I3=' + _i3.toFixed(1) + (_dr === 'VOLATILE' ? ' — I1 dominant with weak I2+I3 = circumstantial edge.' : ''); })() : ''}` : ''}
 
@@ -4876,6 +4877,24 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
       if (ind && Math.abs(mcData.mcWinProb - ind.score) > 0.15) {
         p += `  DIVERGENCE: MC and floor disagree by ${Math.round(Math.abs(mcData.mcWinProb - ind.score) * 100)}pp — recent possession rates tell a different story than cumulative box score.\n`;
       }
+      // XGB-MC directional divergence (league-specific)
+      if (xgbData?.winProb != null && mcData?.mcCumWp != null) {
+        const gap = xgbData.winProb - mcData.mcCumWp;
+        if (gap < -0.10) {
+          p += `  SIGNAL DIVERGENCE: MC Cum (${(mcData.mcCumWp * 100).toFixed(0)}%) >> XGB (${(xgbData.winProb * 100).toFixed(0)}%), gap ${Math.round(Math.abs(gap) * 100)}pp. ${league === 'wnba' ? 'MC leads divergence = 64% ctrl wins.' : 'Close-game WR: 92%. Trust MC.'}\n`;
+        } else if (gap > 0.10) {
+          p += `  SIGNAL DIVERGENCE: XGB (${(xgbData.winProb * 100).toFixed(0)}%) >> MC Cum (${(mcData.mcCumWp * 100).toFixed(0)}%), gap ${Math.round(Math.abs(gap) * 100)}pp. ${league === 'wnba' ? 'XGB leads divergence = 42.9% ctrl wins. Don\'t trust XGB over MC.' : 'Close-game WR: 50%. Caution.'}\n`;
+        }
+      }
+      // Failure profile flag (league-specific)
+      if (ind?.score >= 0.65 && (
+        (mcData?.mcCumWp != null && mcData.mcCumWp < 0.60) ||
+        (xgbData?.winProb != null && xgbData.winProb < 0.50)
+      )) {
+        p += league === 'wnba'
+          ? `  ⚠️ FAILURE PROFILE: Floor ${(ind.score * 100).toFixed(0)}% but MC/XGB don't confirm. WNBA floor HIGH + MC+XGB LOW = 20.2% WR. Floor is narrative-only.\n`
+          : `  ⚠️ FAILURE PROFILE: Floor ${(ind.score * 100).toFixed(0)}% but MC/XGB don't confirm. Historical WR: 41-44%. Likely cumulative anchoring.\n`;
+      }
       if (mcData.mcDrivers && mcData.mcDrivers.length > 0) {
         var sigDrivers = mcData.mcDrivers.filter(function(d) { return Math.abs(d.delta) >= 0.02; });
         if (sigDrivers.length > 0) {
@@ -7360,6 +7379,23 @@ export default async function(req) {
               const _v2Shap = _xgbFeatures ? computeXGBContributions(_xgbFeatures, league) : null;
               const _v2ConvQuality = _v2Shap ? computeConvictionQuality(_v2Shap, league) : null;
               const _v2TrajSignals = _v2Shap ? computeTrajectorySignals(_v2Shap, lt.checkpoints || [], _v2ConvQuality, _xgbWinProb, league) : null;
+              // ── XGB-MC divergence classification ──
+              // NBA: validated May 13 (14,440 checkpoints, 1,233 games, close-game analysis)
+              // WNBA: validated May 8 (3,432 checkpoints, 312 games, compound signal analysis)
+              var _xgbMcGap = null, _xgbMcClass = null, _failureProfile = false;
+              if (_xgbWinProb != null && _mcCum?.winProb != null) {
+                _xgbMcGap = _xgbWinProb - _mcCum.winProb;  // positive = XGB higher
+                if (_xgbMcGap > 0.10)       _xgbMcClass = 'XGB_LEADS';
+                else if (_xgbMcGap < -0.10) _xgbMcClass = 'MC_LEADS';
+                else                        _xgbMcClass = 'CONVERGED';
+              }
+              // Failure profile: floor high but MC/XGB don't confirm
+              if (ind.score >= 0.65 && (
+                (_mcCum?.winProb != null && _mcCum.winProb < 0.60) ||
+                (_xgbWinProb != null && _xgbWinProb < 0.50)
+              )) {
+                _failureProfile = true;
+              }
               const v2Ctx = {
                 alertType: v2Type, alertTier: v2Tier,
                 ctrlTeam: ind.controlTeam, floor: ind.score.toFixed(2),
@@ -7459,6 +7495,10 @@ export default async function(req) {
                 mcTrajectoryWp: lt.mc_trajectory_wp != null ? lt.mc_trajectory_wp : null,
                 mcCumWp: _mcCum?.winProb != null ? Math.round(_mcCum.winProb * 1000) / 1000 : (lt.mc_cum_wp != null ? lt.mc_cum_wp : null),
                 mcDrivers: _mcCum?.drivers || lt.mc_drivers || null,
+                // XGB-MC divergence context (validated May 13 NBA, May 8 WNBA)
+                xgbMcGap: _xgbMcGap,
+                xgbMcClass: _xgbMcClass,
+                failureProfile: _failureProfile,
               };
 
               // DB-level dedup — catch concurrent invocations BEFORE burning agent tokens
