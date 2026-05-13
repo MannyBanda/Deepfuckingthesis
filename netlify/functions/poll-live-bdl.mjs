@@ -8711,8 +8711,8 @@ export default async function(req) {
           }
 
         } catch (e) {
-          results.errors.push(`${matchup}: ${e.message}`);
-          log(`ERROR ${matchup}: ${e.message}`);
+          results.errors.push(`${matchup}: ${e.message} | STACK: ${(e.stack || '').split('\n').slice(0,3).join(' → ')}`);
+          log(`ERROR ${matchup}: ${e.message}\n${e.stack || 'no stack'}`);
         }
       }
 
