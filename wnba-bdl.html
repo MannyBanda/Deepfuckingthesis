@@ -615,7 +615,16 @@ async function buildBdlGameMap(dateStr){
       var hA=g.home?.alias,aA=g.away?.alias;if(!hA||!aA)continue;
       var hM=BDL_TEAM_MATCH[ESPN_ALIAS_MAP[hA]||hA],aM=BDL_TEAM_MATCH[ESPN_ALIAS_MAP[aA]||aA];
       var match=bg.find(function(b){return b.home_team?.full_name?.includes(hM)&&b.visitor_team?.full_name?.includes(aM);});
-      if(match)bdlGameMap[g.id]=match.id;
+      if(match){
+        bdlGameMap[g.id]=match.id;
+        if(match.home_score!=null)g.homePoints=match.home_score;
+        if(match.away_score!=null)g.awayPoints=match.away_score;
+        if(match.period)g.period=match.period;
+        if(match.time&&match.time!=='0.0')g.clock=match.time;
+        var ms=(match.status||'').toLowerCase();
+        if(ms==='post')g.status='closed';
+        else if(ms==='in')g.status='inprogress';
+      }
     }
     console.log('[BDL] Game map:',Object.keys(bdlGameMap).length,'mapped from',dates.join('+'));
   }catch(e){console.warn('[BDL] Map failed:',e.message);}
@@ -733,6 +742,7 @@ async function loadSchedule(){
     // Start polling for today
     clearInterval(pollTimer);
     if(dateOffset===0){
+      refreshLiveCards(); // immediate first fetch — don't wait 10s
       pollTimer=setInterval(function(){refreshLiveCards();},pollInterval);
     }
   }catch(e){showErr(e.message);}
