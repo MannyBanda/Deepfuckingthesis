@@ -3686,6 +3686,137 @@ function mcRunSim(hRates, aRates, hScore, aScore, remainPoss, ctrlIsHome, simCou
   return Math.round(wins / simCount * 1000) / 1000;
 }
 
+// ── MC with 2PT/FT/TO regression (test variant) ──
+function mcExtractRatesRegressed(stats) {
+  var fga = stats.fga || 0, fgm = stats.fgm || 0, fg3a = stats.fg3a || 0, fg3m = stats.fg3m || 0;
+  var fta = stats.fta || 0, ftm = stats.ftm || 0, to = stats.tov || 0, oreb = stats.oreb || 0;
+  var fg2a = fga - fg3a, fg2m = fgm - fg3m;
+  var poss = fga + 0.44 * fta - oreb + to;
+  if (poss < 3) poss = Math.max(fga, 3);
+  if (fga < 10) return null;
+  function cl(v) { return Math.max(0, Math.min(1, v)); }
+  // 3PT regression (same as production)
+  var rawFg3 = fg3a > 0 ? fg3m / fg3a : WNBA_MC_DEFAULTS.fg3Pct;
+  var sw3 = Math.min(0.75, fg3a / 30);
+  var fg3Pct = rawFg3 * sw3 + WNBA_MC_DEFAULTS.fg3Pct * (1 - sw3);
+  // 2PT regression toward league baseline
+  var rawFg2 = fg2a > 0 ? fg2m / fg2a : WNBA_MC_DEFAULTS.fg2Pct;
+  var sw2 = Math.min(0.75, fg2a / 25);
+  var fg2Pct = rawFg2 * sw2 + WNBA_MC_DEFAULTS.fg2Pct * (1 - sw2);
+  // FT% regression
+  var rawFt = fta > 0 ? ftm / fta : WNBA_MC_DEFAULTS.ftPct;
+  var swFt = Math.min(0.75, fta / 15);
+  var ftPct = rawFt * swFt + WNBA_MC_DEFAULTS.ftPct * (1 - swFt);
+  // TO rate regression
+  var rawTo = poss > 0 ? to / poss : WNBA_MC_DEFAULTS.toRate;
+  var swTo = Math.min(0.75, poss / 30);
+  var toRate = rawTo * swTo + WNBA_MC_DEFAULTS.toRate * (1 - swTo);
+  return {
+    toRate: cl(toRate), fg3aShare: cl(fga > 0 ? fg3a / fga : WNBA_MC_DEFAULTS.fg3aShare),
+    fg3Pct: cl(fg3Pct), fg2Pct: cl(fg2Pct),
+    orebRate: cl((fga - fgm) > 0 ? oreb / (fga - fgm) : WNBA_MC_DEFAULTS.orebRate),
+    ftaRate: Math.min(poss > 0 ? fta / poss : WNBA_MC_DEFAULTS.ftaRate, 1.0),
+    ftPct: cl(ftPct),
+  };
+}
+
+// ?phase=mc_test&batch=50&offset=0 — dry-run MC with regression, returns AUC comparison
+async function phaseMCTest(sql, url) {
+  const batch = parseInt(url.searchParams.get('batch') || '50');
+  const offset = parseInt(url.searchParams.get('offset') || '0');
+
+  const gameIds = await sql`
+    SELECT DISTINCT game_id FROM wnba_xgb_training ORDER BY game_id LIMIT ${batch} OFFSET ${offset}
+  `;
+  if (gameIds.length === 0) return { status: 'done', offset };
+
+  const ids = gameIds.map(r => r.game_id);
+  const gamesData = await sql`
+    SELECT game_id, bdl_pbp, home_alias, away_alias FROM wnba_backtest
+    WHERE game_id = ANY(${ids}) AND bdl_pbp IS NOT NULL AND bdl_pbp != '[]'::jsonb
+  `;
+  const trRows = await sql`
+    SELECT game_id, checkpoint, quarter, game_seconds, ctrl_team, margin, mc_cum, ctrl_won
+    FROM wnba_xgb_training WHERE game_id = ANY(${ids}) ORDER BY game_id, game_seconds
+  `;
+
+  const gameMap = {};
+  for (const g of gamesData) gameMap[g.game_id] = g;
+  const trByGame = {};
+  for (const r of trRows) { if (!trByGame[r.game_id]) trByGame[r.game_id] = []; trByGame[r.game_id].push(r); }
+
+  const results = []; // { cp, q, won, mc_orig, mc_reg }
+  for (const gid of ids) {
+    const g = gameMap[gid]; const trs = trByGame[gid];
+    if (!g || !trs) continue;
+    const snaps = reconstructCheckpoints(g.bdl_pbp, g.home_alias, g.away_alias);
+    if (!snaps) continue;
+    const snapMap = {};
+    for (const s of snaps) snapMap[s.cp.label] = s;
+
+    for (const tr of trs) {
+      const s = snapMap[tr.checkpoint];
+      if (!s) continue;
+      const hRatesR = mcExtractRatesRegressed(s.home);
+      const aRatesR = mcExtractRatesRegressed(s.away);
+      if (!hRatesR || !aRatesR) continue;
+      var hPoss = s.home.fga + 0.44*s.home.fta - s.home.oreb + s.home.tov;
+      var aPoss = s.away.fga + 0.44*s.away.fta - s.away.oreb + s.away.tov;
+      var avgPoss = (hPoss + aPoss) / 2;
+      var elapsedMin = tr.game_seconds / 60; if (elapsedMin < 1) elapsedMin = 1;
+      var remainPoss = Math.max(0, Math.round((avgPoss / elapsedMin) * (40 - elapsedMin)));
+      var ctrlIsHome = tr.ctrl_team === g.home_alias;
+      var mcReg = remainPoss > 0 ? mcRunSim(hRatesR, aRatesR, s.homeScore, s.awayScore, remainPoss, ctrlIsHome, 500) : (s.homeScore === s.awayScore ? 0.5 : (ctrlIsHome ? (s.homeScore > s.awayScore ? 1 : 0) : (s.awayScore > s.homeScore ? 1 : 0)));
+      results.push({ cp: tr.checkpoint, q: tr.quarter, won: tr.ctrl_won, mc_orig: tr.mc_cum, mc_reg: mcReg });
+    }
+  }
+
+  // Compute AUC comparison
+  const won = results.map(r => r.won ? 1 : 0);
+  const origVals = results.map(r => r.mc_orig);
+  const regVals = results.map(r => r.mc_reg);
+
+  // Simple AUC approximation (Mann-Whitney)
+  function auc(labels, scores) {
+    let pairs = labels.map((l,i) => [scores[i], l]).sort((a,b) => a[0] - b[0]);
+    let n1 = pairs.filter(p => p[1] === 1).length, n0 = pairs.length - n1;
+    if (n1 === 0 || n0 === 0) return 0.5;
+    let rank = 0, sum = 0;
+    for (let i = 0; i < pairs.length; i++) { rank = i + 1; if (pairs[i][1] === 1) sum += rank; }
+    return (sum - n1*(n1+1)/2) / (n1 * n0);
+  }
+
+  const perQ = {};
+  for (const r of results) {
+    if (!perQ[r.q]) perQ[r.q] = { won: [], orig: [], reg: [] };
+    perQ[r.q].won.push(r.won ? 1 : 0);
+    perQ[r.q].orig.push(r.mc_orig);
+    perQ[r.q].reg.push(r.mc_reg);
+  }
+
+  const qAucs = {};
+  for (const q of Object.keys(perQ)) {
+    qAucs['Q'+q] = {
+      n: perQ[q].won.length,
+      orig: Math.round(auc(perQ[q].won, perQ[q].orig) * 10000) / 10000,
+      reg: Math.round(auc(perQ[q].won, perQ[q].reg) * 10000) / 10000,
+    };
+  }
+
+  // MC=1.0 counts
+  const orig1 = results.filter(r => r.mc_orig >= 0.999).length;
+  const reg1 = results.filter(r => r.mc_reg >= 0.999).length;
+
+  return {
+    status: 'ok', games: ids.length, checkpoints: results.length,
+    auc_overall: { orig: Math.round(auc(won, origVals)*10000)/10000, reg: Math.round(auc(won, regVals)*10000)/10000 },
+    auc_per_quarter: qAucs,
+    mc_1_count: { orig: orig1, reg: reg1, total: results.length },
+    remaining: await sql`SELECT COUNT(DISTINCT game_id) as n FROM wnba_xgb_training`.then(r => Number(r[0]?.n||0) - offset - batch),
+    nextStep: '?phase=mc_test&batch=' + batch + '&offset=' + (offset + batch),
+  };
+}
+
 // ── PHASE: DEBUG MC — diagnostic for one game ──────────────────────────────
 // ?phase=debug_mc&game_id=bdl_3596
 async function phaseDebugMC(sql, url) {
@@ -3932,6 +4063,7 @@ export default async (req) => {
       case 'export_xgb_training':  result = await phaseExportXGBTraining(sql, url); break;
       case 'backfill_mc':           result = await phaseBackfillMC(sql, url); break;
       case 'debug_mc':              result = await phaseDebugMC(sql, url); break;
+      case 'mc_test':               result = await phaseMCTest(sql, url); break;
       case 'export_checkpoint_xgb': result = await exportCheckpointXGB(sql, url); break;
       default:
         result = { error: `Unknown phase: ${phase}. Phases: init, collect, collect_2024, collect_team_stats, validate_reconstruction_bdl, sample, compute, report, explore, collect_pbp, compute_checkpoints, compute_xgb_training, export_xgb_training, report_cp_*` };
