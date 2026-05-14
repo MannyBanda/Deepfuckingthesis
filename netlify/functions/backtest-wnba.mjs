@@ -3720,12 +3720,15 @@ async function phaseDebugMC(sql, url) {
       cp: s.cp.label, gameSec: s.cp.gameSec,
       homeScore: s.homeScore, awayScore: s.awayScore, margin: s.homeScore - s.awayScore,
       ctrlMargin: tr?.margin,
-      home_fga: s.home.fga, home_fta: s.home.fta, home_oreb: s.home.oreb, home_tov: s.home.tov,
-      away_fga: s.away.fga, away_fta: s.away.fta, away_oreb: s.away.oreb, away_tov: s.away.tov,
+      home_fga: s.home.fga, home_fgm: s.home.fgm, home_fg3a: s.home.fg3a, home_fg3m: s.home.fg3m,
+      home_fta: s.home.fta, home_ftm: s.home.ftm, home_oreb: s.home.oreb, home_tov: s.home.tov,
+      away_fga: s.away.fga, away_fgm: s.away.fgm, away_fg3a: s.away.fg3a, away_fg3m: s.away.fg3m,
+      away_fta: s.away.fta, away_ftm: s.away.ftm, away_oreb: s.away.oreb, away_tov: s.away.tov,
       hPoss: Math.round(hPoss * 10) / 10, aPoss: Math.round(aPoss * 10) / 10,
       avgPoss: Math.round(avgPoss * 10) / 10,
       pacePerMin: Math.round(pacePerMin * 100) / 100,
       remainPoss, ctrlIsHome, mcWp,
+      hRates, aRates,
     };
   });
   return { game_id: gameId, home: g.home_alias, away: g.away_alias, winner: g.winner, checkpoints: diagnostics };
