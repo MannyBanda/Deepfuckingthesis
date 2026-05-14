@@ -3686,6 +3686,51 @@ function mcRunSim(hRates, aRates, hScore, aScore, remainPoss, ctrlIsHome, simCou
   return Math.round(wins / simCount * 1000) / 1000;
 }
 
+// ── PHASE: DEBUG MC — diagnostic for one game ──────────────────────────────
+// ?phase=debug_mc&game_id=bdl_3596
+async function phaseDebugMC(sql, url) {
+  const gameId = url.searchParams.get('game_id');
+  if (!gameId) return { error: 'game_id required' };
+
+  const rows = await sql`SELECT game_id, bdl_pbp, home_alias, away_alias, winner FROM wnba_backtest WHERE game_id = ${gameId}`;
+  if (!rows.length) return { error: 'Game not found' };
+  const g = rows[0];
+  const snaps = reconstructCheckpoints(g.bdl_pbp, g.home_alias, g.away_alias);
+  if (!snaps) return { error: 'No snapshots from reconstruction' };
+
+  const trRows = await sql`SELECT checkpoint, quarter, game_seconds, ctrl_team, margin FROM wnba_xgb_training WHERE game_id = ${gameId} ORDER BY game_seconds`;
+
+  const diagnostics = snaps.map(s => {
+    const tr = trRows.find(r => r.checkpoint === s.cp.label);
+    const hRates = mcExtractRates(s.home);
+    const aRates = mcExtractRates(s.away);
+    const hPoss = s.home.fga + 0.44 * s.home.fta - s.home.oreb + s.home.tov;
+    const aPoss = s.away.fga + 0.44 * s.away.fta - s.away.oreb + s.away.tov;
+    const avgPoss = (hPoss + aPoss) / 2;
+    const elapsedMin = s.cp.gameSec / 60;
+    const remainMin = 40 - elapsedMin;
+    const pacePerMin = avgPoss / (elapsedMin < 1 ? 1 : elapsedMin);
+    const remainPoss = Math.max(0, Math.round(pacePerMin * remainMin));
+    const ctrlIsHome = tr ? tr.ctrl_team === g.home_alias : null;
+    let mcWp = null;
+    if (hRates && aRates && remainPoss > 0 && ctrlIsHome !== null) {
+      mcWp = mcRunSim(hRates, aRates, s.homeScore, s.awayScore, remainPoss, ctrlIsHome, 500);
+    }
+    return {
+      cp: s.cp.label, gameSec: s.cp.gameSec,
+      homeScore: s.homeScore, awayScore: s.awayScore, margin: s.homeScore - s.awayScore,
+      ctrlMargin: tr?.margin,
+      home_fga: s.home.fga, home_fta: s.home.fta, home_oreb: s.home.oreb, home_tov: s.home.tov,
+      away_fga: s.away.fga, away_fta: s.away.fta, away_oreb: s.away.oreb, away_tov: s.away.tov,
+      hPoss: Math.round(hPoss * 10) / 10, aPoss: Math.round(aPoss * 10) / 10,
+      avgPoss: Math.round(avgPoss * 10) / 10,
+      pacePerMin: Math.round(pacePerMin * 100) / 100,
+      remainPoss, ctrlIsHome, mcWp,
+    };
+  });
+  return { game_id: gameId, home: g.home_alias, away: g.away_alias, winner: g.winner, checkpoints: diagnostics };
+}
+
 // ── PHASE: BACKFILL MC CUM ──────────────────────────────────────────────────
 // Reconstructs PBP stats at each checkpoint, computes MC cumulative, writes to wnba_xgb_training.
 // ?phase=backfill_mc&batch=20&offset=0&sims=500
@@ -3883,6 +3928,7 @@ export default async (req) => {
       case 'compute_xgb_training': result = await phaseComputeXGBTraining(sql, url); break;
       case 'export_xgb_training':  result = await phaseExportXGBTraining(sql, url); break;
       case 'backfill_mc':           result = await phaseBackfillMC(sql, url); break;
+      case 'debug_mc':              result = await phaseDebugMC(sql, url); break;
       case 'export_checkpoint_xgb': result = await exportCheckpointXGB(sql, url); break;
       default:
         result = { error: `Unknown phase: ${phase}. Phases: init, collect, collect_2024, collect_team_stats, validate_reconstruction_bdl, sample, compute, report, explore, collect_pbp, compute_checkpoints, compute_xgb_training, export_xgb_training, report_cp_*` };
