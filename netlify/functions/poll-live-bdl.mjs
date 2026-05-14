@@ -6772,6 +6772,24 @@ export default async function(req) {
           // Build SR-shaped summary (WNBA: already fetched from SR)
           const summary = league === 'wnba' ? _srSummary : buildSummaryFromBDLServer(boxScore, pbpResult, lineupsArr);
 
+          // ── BIGLEAD LAG FIX: BDL/SR biggest_lead lags 1-3 polls behind actual score ──
+          // Track running max margin from actual scores in live_tracking, override summary
+          try {
+            const _hPts = Number(summary.home?.points || 0), _aPts = Number(summary.away?.points || 0);
+            const _curMargin = _hPts - _aPts;  // positive = home leading
+            // Load stored max from live_tracking
+            const _blR = await sql`SELECT live_tracking->'_bigLeadHome' as blh, live_tracking->'_bigLeadAway' as bla FROM games WHERE id = ${game.id}`;
+            const _storedBLH = Number(_blR[0]?.blh || 0), _storedBLA = Number(_blR[0]?.bla || 0);
+            const _trueBLH = Math.max(_storedBLH, _curMargin > 0 ? _curMargin : 0);
+            const _trueBLA = Math.max(_storedBLA, _curMargin < 0 ? -_curMargin : 0);
+            // Override summary biggest_lead with running max
+            if (summary.home?.statistics) summary.home.statistics.biggest_lead = _trueBLH;
+            if (summary.away?.statistics) summary.away.statistics.biggest_lead = _trueBLA;
+            // Stash for lt persistence later
+            game._trueBigLeadHome = _trueBLH;
+            game._trueBigLeadAway = _trueBLA;
+          } catch (e) { /* non-fatal — falls back to BDL/SR values */ }
+
           // Stash PBP result for computeServerContext to use (avoids re-fetching)
           game._bdlPbp = pbpResult;
 
@@ -7073,6 +7091,10 @@ export default async function(req) {
             } catch(e) { /* non-fatal — initialize fresh */ }
 
             lt = updateLiveTracking(lt, ind.controlTeam, ind.score, currentPeriod, clock, hA, currentPeriod);
+
+            // Persist biglead running max (computed before computeServer)
+            if (game._trueBigLeadHome != null) lt._bigLeadHome = game._trueBigLeadHome;
+            if (game._trueBigLeadAway != null) lt._bigLeadAway = game._trueBigLeadAway;
 
             // ── Save XGB + MC data to lt for client analysis injection ──
             if (_xgbFeatures) {
