@@ -237,6 +237,7 @@ async function phaseInit(sql) {
       UNIQUE(game_id, checkpoint)
     )
   `;
+  await sql`ALTER TABLE wnba_xgb_training ADD COLUMN IF NOT EXISTS mc_cum REAL`;
   return { status: 'ok', message: 'wnba_backtest + wnba_xgb_training tables ready' };
 }
 
@@ -3635,6 +3636,170 @@ async function phaseComputeXGBTraining(sql, url) {
   };
 }
 
+// ── MC SIMULATION (replicated from poll-live-bdl.mjs — Netlify bundles separately) ──
+var WNBA_MC_DEFAULTS = { toRate: 0.178, fg3aShare: 0.345, fg3Pct: 0.347, fg2Pct: 0.482, orebRate: 0.348, ftaRate: 0.224, ftPct: 0.788 };
+
+function mcSimPossession(rates) {
+  if (Math.random() < rates.toRate) return 0;
+  var pts = 0, isMake = false;
+  if (Math.random() < rates.fg3aShare) { isMake = Math.random() < rates.fg3Pct; if (isMake) pts = 3; }
+  else { isMake = Math.random() < rates.fg2Pct; if (isMake) pts = 2; }
+  if (!isMake && Math.random() < rates.orebRate) { if (Math.random() < rates.fg2Pct) pts = 2; }
+  if (Math.random() < rates.ftaRate / 2) { if (Math.random() < rates.ftPct) pts += 1; if (Math.random() < rates.ftPct) pts += 1; }
+  return pts;
+}
+
+function mcExtractRates(stats) {
+  var fga = stats.fga || 0, fgm = stats.fgm || 0, fg3a = stats.fg3a || 0, fg3m = stats.fg3m || 0;
+  var fta = stats.fta || 0, ftm = stats.ftm || 0, to = stats.tov || 0, oreb = stats.oreb || 0;
+  var fg2a = fga - fg3a, fg2m = fgm - fg3m;
+  var poss = fga + 0.44 * fta - oreb + to;
+  if (poss < 3) poss = Math.max(fga, 3);
+  if (fga < 10) return null;
+  var rawFg3 = fg3a > 0 ? fg3m / fg3a : WNBA_MC_DEFAULTS.fg3Pct;
+  var sw = Math.min(0.75, fg3a / 30);
+  var fg3Pct = rawFg3 * sw + WNBA_MC_DEFAULTS.fg3Pct * (1 - sw);
+  function cl(v) { return Math.max(0, Math.min(1, v)); }
+  return {
+    toRate: cl(poss > 0 ? to / poss : WNBA_MC_DEFAULTS.toRate),
+    fg3aShare: cl(fga > 0 ? fg3a / fga : WNBA_MC_DEFAULTS.fg3aShare),
+    fg3Pct: cl(fg3Pct), fg2Pct: cl(fg2a > 0 ? fg2m / fg2a : WNBA_MC_DEFAULTS.fg2Pct),
+    orebRate: cl((fga - fgm) > 0 ? oreb / (fga - fgm) : WNBA_MC_DEFAULTS.orebRate),
+    ftaRate: Math.min(poss > 0 ? fta / poss : WNBA_MC_DEFAULTS.ftaRate, 1.0),
+    ftPct: cl(fta > 0 ? ftm / fta : WNBA_MC_DEFAULTS.ftPct),
+  };
+}
+
+function mcRunSim(hRates, aRates, hScore, aScore, remainPoss, ctrlIsHome, simCount) {
+  var wins = 0;
+  for (var s = 0; s < simCount; s++) {
+    var hS = hScore, aS = aScore, hP = remainPoss, aP = remainPoss;
+    var hBall = Math.random() < 0.5;
+    while (hP > 0 || aP > 0) {
+      if (hBall) { if (hP > 0) { hS += mcSimPossession(hRates); hP--; } }
+      else { if (aP > 0) { aS += mcSimPossession(aRates); aP--; } }
+      hBall = !hBall;
+    }
+    var fm = ctrlIsHome ? (hS - aS) : (aS - hS);
+    if (fm > 0) wins++; else if (fm === 0) wins += 0.5;
+  }
+  return Math.round(wins / simCount * 1000) / 1000;
+}
+
+// ── PHASE: BACKFILL MC CUM ──────────────────────────────────────────────────
+// Reconstructs PBP stats at each checkpoint, computes MC cumulative, writes to wnba_xgb_training.
+// ?phase=backfill_mc&batch=20&offset=0&sims=500
+async function phaseBackfillMC(sql, url) {
+  const batch = parseInt(url.searchParams.get('batch') || '20');
+  const offset = parseInt(url.searchParams.get('offset') || '0');
+  const simCount = parseInt(url.searchParams.get('sims') || '500');
+
+  // Find games that need MC backfill
+  const needGames = await sql`
+    SELECT DISTINCT t.game_id
+    FROM wnba_xgb_training t
+    WHERE t.mc_cum IS NULL
+    ORDER BY t.game_id
+    LIMIT ${batch} OFFSET ${offset}
+  `;
+  if (needGames.length === 0) {
+    const total = await sql`SELECT COUNT(*) as n FROM wnba_xgb_training WHERE mc_cum IS NOT NULL`;
+    return { status: 'done', message: 'All MC values backfilled', filled: Number(total[0]?.n || 0) };
+  }
+
+  const gameIds = needGames.map(r => r.game_id);
+
+  // Fetch PBP data for these games
+  const gamesData = await sql`
+    SELECT game_id, bdl_pbp, home_alias, away_alias, winner
+    FROM wnba_backtest
+    WHERE game_id = ANY(${gameIds}) AND bdl_pbp IS NOT NULL AND bdl_pbp != '[]'::jsonb
+  `;
+
+  // Fetch existing training rows to know which checkpoints need MC
+  const trainingRows = await sql`
+    SELECT game_id, checkpoint, quarter, game_seconds, ctrl_team, margin
+    FROM wnba_xgb_training
+    WHERE game_id = ANY(${gameIds}) AND mc_cum IS NULL
+    ORDER BY game_id, game_seconds
+  `;
+
+  let updated = 0, skipped = 0, errors = 0;
+  const gameMap = {};
+  for (const g of gamesData) gameMap[g.game_id] = g;
+
+  // Group training rows by game
+  const trByGame = {};
+  for (const r of trainingRows) {
+    if (!trByGame[r.game_id]) trByGame[r.game_id] = [];
+    trByGame[r.game_id].push(r);
+  }
+
+  for (const gid of gameIds) {
+    const g = gameMap[gid];
+    const trs = trByGame[gid];
+    if (!g || !trs) { skipped++; continue; }
+
+    try {
+      // Reconstruct checkpoints from PBP
+      const snaps = reconstructCheckpoints(g.bdl_pbp, g.home_alias, g.away_alias);
+      if (!snaps || snaps.length === 0) { skipped++; continue; }
+
+      // Build lookup: checkpoint label -> reconstructed stats
+      const snapMap = {};
+      for (const s of snaps) snapMap[s.cp.label] = s;
+
+      for (const tr of trs) {
+        const s = snapMap[tr.checkpoint];
+        if (!s) { skipped++; continue; }
+
+        // Extract rates from reconstructed stats
+        const hRates = mcExtractRates(s.home);
+        const aRates = mcExtractRates(s.away);
+        if (!hRates || !aRates) { skipped++; continue; }
+
+        // Estimate remaining possessions
+        var hPoss = s.home.fga + 0.44 * s.home.fta - s.home.oreb + s.home.tov;
+        var aPoss = s.away.fga + 0.44 * s.away.fta - s.away.oreb + s.away.tov;
+        var avgPoss = (hPoss + aPoss) / 2;
+        var elapsedMin = tr.game_seconds / 60;
+        if (elapsedMin < 1) elapsedMin = 1;
+        var remainMin = 40 - elapsedMin;
+        if (remainMin < 0) remainMin = 0;
+        var pacePerMin = avgPoss / elapsedMin;
+        var remainPoss = Math.max(0, Math.round(pacePerMin * remainMin));
+
+        // Run MC simulation
+        var ctrlIsHome = tr.ctrl_team === g.home_alias;
+        var mcWp = mcRunSim(hRates, aRates, s.homeScore, s.awayScore, remainPoss, ctrlIsHome, simCount);
+
+        // Write to DB
+        await sql`
+          UPDATE wnba_xgb_training
+          SET mc_cum = ${mcWp}
+          WHERE game_id = ${gid} AND checkpoint = ${tr.checkpoint}
+        `;
+        updated++;
+      }
+    } catch (e) {
+      console.log(`MC backfill error ${gid}: ${e.message}`);
+      errors++;
+    }
+  }
+
+  const remaining = await sql`SELECT COUNT(DISTINCT game_id) as n FROM wnba_xgb_training WHERE mc_cum IS NULL`;
+
+  return {
+    status: 'ok',
+    updated, skipped, errors,
+    batchGames: gameIds.length,
+    remainingGames: Number(remaining[0]?.n || 0),
+    nextStep: Number(remaining[0]?.n || 0) > 0
+      ? '?phase=backfill_mc&batch=' + batch + '&offset=0&sims=' + simCount
+      : '?phase=export_xgb_training',
+  };
+}
+
 // ── PHASE: EXPORT XGB ───────────────────────────────────────────────────────
 // Paginated JSON export from wnba_xgb_training for Python training.
 // ?phase=export_xgb_training&batch=200&offset=0
@@ -3644,7 +3809,7 @@ async function phaseExportXGBTraining(sql, url) {
 
   const rows = await sql`
     SELECT game_id, bdl_game_id, season, checkpoint, quarter, game_seconds,
-           ctrl_team, ctrl_won, features, margin
+           ctrl_team, ctrl_won, features, margin, mc_cum
     FROM wnba_xgb_training
     ORDER BY game_id, game_seconds
     OFFSET ${offset} LIMIT ${batch}
@@ -3660,7 +3825,7 @@ async function phaseExportXGBTraining(sql, url) {
     rows: rows.map(r => ({
       game_id: r.game_id, season: r.season, cp: r.checkpoint, q: r.quarter,
       gs: r.game_seconds, ctrl: r.ctrl_team, won: r.ctrl_won,
-      margin: r.margin, ...r.features,
+      margin: r.margin, mc_cum: r.mc_cum, ...r.features,
     })),
   };
 }
@@ -3717,6 +3882,7 @@ export default async (req) => {
       case 'validate_reconstruction_bdl': result = await phaseValidateReconstruction(sql); break;
       case 'compute_xgb_training': result = await phaseComputeXGBTraining(sql, url); break;
       case 'export_xgb_training':  result = await phaseExportXGBTraining(sql, url); break;
+      case 'backfill_mc':           result = await phaseBackfillMC(sql, url); break;
       case 'export_checkpoint_xgb': result = await exportCheckpointXGB(sql, url); break;
       default:
         result = { error: `Unknown phase: ${phase}. Phases: init, collect, collect_2024, collect_team_stats, validate_reconstruction_bdl, sample, compute, report, explore, collect_pbp, compute_checkpoints, compute_xgb_training, export_xgb_training, report_cp_*` };
