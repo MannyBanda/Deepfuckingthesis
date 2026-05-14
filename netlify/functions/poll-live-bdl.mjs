@@ -61,7 +61,7 @@ var XGB_FEATURE_LABELS_WNBA = ['windowed_biglead','disruption','ast','oreb','to_
 var XGB_VOLATILE_FEATURES = new Set(['pot', 'to', 'stl', 'oreb', 'runs']);
 var XGB_STRUCTURAL_FEATURES = new Set(['paint', 'ast', 'blk', 'fta', 'efg', 'biglead', '3pr', 'rim_pct']);
 var XGB_VOLATILE_FEATURES_WNBA = new Set(['pot', 'oreb', 'to_ratio']);
-var XGB_STRUCTURAL_FEATURES_WNBA = new Set(['windowed_biglead', 'disruption', 'ast', 'ftm', 'ast_ratio', 'pf', 'blk', 'fta', 'efg']);
+var XGB_STRUCTURAL_FEATURES_WNBA = new Set(['biglead', 'disruption', 'ast', 'ftm', 'ast_ratio', 'pf', 'blk', 'fta', 'efg']);
 
 // Tree interpreter SHAP — decomposes XGB prediction into per-feature contributions
 // Uses precomputed expected values (ev) at each tree node. O(trees × depth) per call.
@@ -454,10 +454,10 @@ return 'You are a WNBA structural analyst. You receive pre-computed mechanical i
 + '3. RISK FLAGS — what could go wrong. 1-2 sentences.\n\n'
 + '4. CLOSING PROJECTION — how does this game resolve? 1 sentence.\n\n'
 + '5. DISAGREEMENT — if your contextual read conflicts with mechanical conviction, flag it with reasoning. Say "NONE" if you agree.\n\n'
-+ 'XGB MODEL CONTEXT (WNBA-specific, 12 features, OOF AUC 0.765, Q4 AUC 0.831):\n'
++ 'XGB MODEL CONTEXT (WNBA-specific, 12 features, OOF AUC 0.798, Q4 AUC 0.871):\n'
 + '  Features: biglead, disruption (stl+blk), ast, oreb, to_ratio, ftm, ast_ratio, pf, blk, fta, efg, pot.\n'
-+ '  biglead is the #1 signal (Q4 AUC 0.77 alone) — scoreboard confirmation applies to WNBA.\n'
-+ '  Pure windowed architecture (cross-fade) for all features except biglead (cumulative game-state).\n'
++ '  Windowed biglead (#1 feature, 31% SHAP importance) = per-quarter max margin, cross-fade weighted. Scoreboard confirmation applies.\n'
++ '  Pure windowed architecture (cross-fade) for ALL features including biglead. No cumulative features.\n'
 + '  Top SHAP drivers: biglead, disruption (combined steals+blocks), assists, offensive rebounds.\n'
 + '  When XGB data is provided, use SHAP drivers to calibrate your FWP:\n'
 + '  - biglead SHAP anchored (>25% share) = scoreboard confirms structural edge (high confidence).\n'
@@ -465,17 +465,18 @@ return 'You are a WNBA structural analyst. You receive pre-computed mechanical i
 + '  - VOLATILE basis (pot/oreb/to_ratio dominant) = circumstantial edge, may not sustain.\n'
 + '  - STRUCTURAL basis (biglead/disruption/ast/efg/ftm dominant) = scheme-driven, more durable.\n'
 + '  - Near-zero for most features = structural edge is thin regardless of MC/floor.\n\n'
-+ 'SIGNAL TRUST HIERARCHY (576 games):\n'
++ 'SIGNAL TRUST HIERARCHY (526 games):\n'
 + '  Three signals with fundamentally different roles from NBA:\n'
-+ '  - MC Cum: Best single predictor (AUC 0.822). Wins every checkpoint from Q2_5 onward.\n'
-+ '  - XGB: Structural quality + collapse detector (OOF AUC 0.765, Q4 0.831).\n'
++ '  - MC Cum: Best single predictor in Q4 (AUC 0.906). Co-primary with XGB overall (0.801 vs 0.802).\n'
++ '  - XGB: Structural quality + collapse detector (OOF AUC 0.798, Q4 0.871). Wins Q3 (AUC 0.816 vs MC 0.799).\n'
 + '  - Floor: Narrative context ONLY. When floor disagrees with MC+XGB, floor is wrong 80%.\n\n'
 + '  When they DISAGREE:\n'
-+ '  Q2: XGB > MC > Floor. MC overconfident by ~20pp (same as NBA Q2).\n'
-+ '  Q3: MC > XGB > Floor. MC best calibrated (0.6-0.7 bucket: actual 65.2%, perfect).\n'
-+ '  Q4: MC >> XGB >> Floor. MC UNDERESTIMATES in WNBA Q4 (unlike NBA).\n'
++ '  Q2: XGB ~ MC > Floor. Both tied (AUC 0.706 vs 0.704). Use either as early warning.\n'
++ '  Q3: XGB > MC > Floor. XGB wins disagreements (65.4% vs MC 60.4%). Trust windowed structure.\n'
++ '  Q4: MC >> XGB >> Floor. MC wins disagreements (78.4% vs XGB 50.5%). MC UNDERESTIMATES in WNBA Q4.\n'
 + '    MC 0.7-0.8 = actual 89.2% (+14pp). MC 0.8-0.9 = actual 93.3% (+8pp).\n'
 + '    A 75% MC Cum in WNBA Q4 is functionally ~89%. Treat as strong hold.\n\n'
++ '  ALIGNED (±0.10): 83.3% overall, 89.6% Q4. Highest conviction when both agree.\n'
 + '  CRITICAL: Floor is NEVER a decision gate in WNBA.\n'
 + '  Floor HIGH + MC+XGB LOW = 20.2% accuracy (floor confidently wrong).\n'
 + '  MC+XGB HIGH + Floor LOW = 83-86% (compound correct regardless of floor).\n'
@@ -765,14 +766,15 @@ XGB win probability: ${(ctx.xgbWinProb * 100).toFixed(1)}% | MC Cum: ${ctx.mcCum
 ${ctx.xgbShap ? 'SHAP drivers (what raw stats push XGB prediction): ' + ctx.xgbShap.map(s => s.f + '=' + (s.v > 0 ? '+' : '') + s.v.toFixed(2)).join(', ') : ''}
 ${ctx.convictionQuality ? 'XGB CONVICTION QUALITY:\nBasis: ' + ctx.convictionQuality.basis + ' — ' + Math.round(ctx.convictionQuality.strConcentration * 100) + '% structural / ' + Math.round(ctx.convictionQuality.volConcentration * 100) + '% volatile\nTop driver: ' + ctx.convictionQuality.top1Feature + ' (' + Math.round(ctx.convictionQuality.top1Share * 100) + '% of positive SHAP)' + (ctx.convictionQuality.top1IsVolatile ? ' [VOLATILE]' : '') + '\nScoreboard: ' + (ctx.convictionQuality.bigleadAnchored ? 'CONFIRMED — biglead driving ' + Math.round(ctx.convictionQuality.bigleadShare * 100) + '% (95% win rate in backtest)' : ctx.convictionQuality.noScoreboardConfirmation ? 'NOT CONFIRMED — biglead SHAP flat/negative, stats not translating to lead (19% loss rate vs 5%)' : 'PARTIAL — biglead contributing ' + Math.round(ctx.convictionQuality.bigleadShare * 100) + '%') : ''}
 ${ctx.trajectorySignals && ctx.trajectorySignals.warnings.length > 0 ? 'CONVICTION WARNINGS:\n' + ctx.trajectorySignals.warnings.join('\n') : ''}
-${ctx.failureProfile ? (ctx.league === 'wnba' ? '⚠️ FAILURE PROFILE ACTIVE: Floor reads ' + (ctx.floor * 100).toFixed(0) + '% but ' + (ctx.mcCumWp != null && ctx.mcCumWp < 0.60 ? 'MC Cum ' + (ctx.mcCumWp * 100).toFixed(0) + '% (<60%)' : '') + (ctx.mcCumWp != null && ctx.mcCumWp < 0.60 && ctx.xgbWinProb != null && ctx.xgbWinProb < 0.50 ? ' AND ' : '') + (ctx.xgbWinProb != null && ctx.xgbWinProb < 0.50 ? 'XGB ' + (ctx.xgbWinProb * 100).toFixed(0) + '% (<50%)' : '') + ' don\'t confirm structural edge.\nWNBA floor HIGH + MC+XGB LOW = 20.2% win rate (312 games). Floor is narrative context only in WNBA — this combination is nearly always wrong.\nFor BUY/BWC: SUPPRESS. For POSITION_OPEN: Note extreme risk in body.' : '⚠️ FAILURE PROFILE ACTIVE: Floor reads ' + (ctx.floor * 100).toFixed(0) + '% but ' + (ctx.mcCumWp != null && ctx.mcCumWp < 0.60 ? 'MC Cum ' + (ctx.mcCumWp * 100).toFixed(0) + '% (<60%)' : '') + (ctx.mcCumWp != null && ctx.mcCumWp < 0.60 && ctx.xgbWinProb != null && ctx.xgbWinProb < 0.50 ? ' AND ' : '') + (ctx.xgbWinProb != null && ctx.xgbWinProb < 0.50 ? 'XGB ' + (ctx.xgbWinProb * 100).toFixed(0) + '% (<50%)' : '') + ' don\'t confirm structural edge.\nHistorical win rate in this profile: 41-44% (1,233 games). 51% of all wrong calls system-wide have floor >=0.65. Likely cumulative anchoring from early-game dominance.\nFor BUY/BWC: SUPPRESS unless per-quarter breakdown shows the current quarter specifically supports the floor read.\nFor POSITION_OPEN: Note elevated risk in body — compound threshold passed but underlying structural quality is contested.') : ''}
+${ctx.failureProfile ? (ctx.league === 'wnba' ? '⚠️ FAILURE PROFILE ACTIVE: Floor reads ' + (ctx.floor * 100).toFixed(0) + '% but ' + (ctx.mcCumWp != null && ctx.mcCumWp < 0.60 ? 'MC Cum ' + (ctx.mcCumWp * 100).toFixed(0) + '% (<60%)' : '') + (ctx.mcCumWp != null && ctx.mcCumWp < 0.60 && ctx.xgbWinProb != null && ctx.xgbWinProb < 0.50 ? ' AND ' : '') + (ctx.xgbWinProb != null && ctx.xgbWinProb < 0.50 ? 'XGB ' + (ctx.xgbWinProb * 100).toFixed(0) + '% (<50%)' : '') + ' don\'t confirm structural edge.\nWNBA floor HIGH + MC+XGB LOW = 20.2% win rate (526 games). Floor is narrative context only in WNBA — this combination is nearly always wrong.\nFor BUY/BWC: SUPPRESS. For POSITION_OPEN: Note extreme risk in body.' : '⚠️ FAILURE PROFILE ACTIVE: Floor reads ' + (ctx.floor * 100).toFixed(0) + '% but ' + (ctx.mcCumWp != null && ctx.mcCumWp < 0.60 ? 'MC Cum ' + (ctx.mcCumWp * 100).toFixed(0) + '% (<60%)' : '') + (ctx.mcCumWp != null && ctx.mcCumWp < 0.60 && ctx.xgbWinProb != null && ctx.xgbWinProb < 0.50 ? ' AND ' : '') + (ctx.xgbWinProb != null && ctx.xgbWinProb < 0.50 ? 'XGB ' + (ctx.xgbWinProb * 100).toFixed(0) + '% (<50%)' : '') + ' don\'t confirm structural edge.\nHistorical win rate in this profile: 41-44% (1,233 games). 51% of all wrong calls system-wide have floor >=0.65. Likely cumulative anchoring from early-game dominance.\nFor BUY/BWC: SUPPRESS unless per-quarter breakdown shows the current quarter specifically supports the floor read.\nFor POSITION_OPEN: Note elevated risk in body — compound threshold passed but underlying structural quality is contested.') : ''}
 ${!ctx.xgbAligned && ctx.xgbWinProb < 0.45 ? 'WARNING: XGBoost sees < 45% win probability from raw stats despite floor at ' + ctx.floor + '. Ctrl trailing + XGB<0.45 wins only 20-28% in Q3-Q4. Consider SUPPRESS.' : ''}${!ctx.xgbAligned && ctx.xgbWinProb > ctx.floor + 0.15 ? 'NOTE: XGBoost sees stronger edge than floor — raw stats outpace composite indicators.' : ''}
 ${ctx.xgbWinProb >= 0.60 && ctx.margin < -5 ? 'WARNING: XGB reads ' + (ctx.xgbWinProb * 100).toFixed(0) + '% but team is trailing by ' + Math.abs(ctx.margin) + '. In corrected backtest, XGB >=0.60 + ctrl trailing 5+ has 82% loss rate (n=17). Elevate scrutiny.' : ctx.xgbWinProb >= 0.70 && ctx.margin < 0 ? 'CAUTION: XGB reads ' + (ctx.xgbWinProb * 100).toFixed(0) + '% but team is trailing. High XGB + trailing is unreliable.' : ''}` : ''}
-${ctx.alertType === 'BUY' && ctx.xgbWinProb != null ? (ctx.league === 'wnba' ? `XGB BUY CALIBRATION (312-game WNBA backtest, ctrl trailing):
-  Q2: XGB>=0.55 = 92.3% (n=17) | 0.45-0.55 = 35.7% (n=14) | 0.35-0.45 = 27.3% (n=22) | <0.35 = 24.5% (n=53)
-  Q3: XGB>=0.55 = 90.6% (n=32) | 0.45-0.55 = 50.0% (n=10) | 0.35-0.45 = 25.0% (n=12) | <0.35 = 5.3% (n=38)
-  Q4: XGB>=0.70 = 75.0% (n=8) | 0.45-0.70 = 33.3% (n=12) | <0.45 = 2.0% (n=44) — NEARLY DEAD
-  WNBA Q4 BUY is functionally dead below XGB 0.70. 40-minute games give almost no recovery runway.
+${ctx.alertType === 'BUY' && ctx.xgbWinProb != null ? (ctx.league === 'wnba' ? `XGB BUY CALIBRATION (526-game WNBA backtest, windowed XGB, ctrl trailing):
+  Q2: XGB>=0.55 = 41.0% (n=39) | 0.45-0.55 = 45.2% (n=31) | 0.35-0.45 = 38.2% (n=34) | <0.35 = 31.0% (n=87)
+  Q3: XGB>=0.55 = 53.3% (n=60) | 0.45-0.55 = 42.3% (n=26) | 0.35-0.45 = 38.9% (n=36) | <0.35 = 27.4% (n=124)
+  Q4: XGB>=0.70 = 58.8% (n=17) | 0.45-0.70 = 42.9% (n=49) | <0.45 = 20.5% (n=117)
+  Q4 BUY below XGB 0.45 is the suppress zone (20.5%). Q4 XGB 0.55+ is viable (63.6%).
+  Q4 CALIBRATION: Windowed XGB underestimates at 0.55-0.75 — actual WR is 10-20pp higher than predicted.
   → This BUY: Q${ctx.period}, XGB ${(ctx.xgbWinProb * 100).toFixed(0)}%` : `XGB BUY CALIBRATION (1,233-game backtest, ctrl TRULY trailing + floor >= 0.65):
   NOTE: Small samples at high XGB + truly trailing. Numbers are directional, not definitive.
   Q2: XGB>=0.70 = 50% (n=117) | 0.55-0.70 = 47% (n=53) | 0.45-0.55 = 39% | <0.45 = 50% (n=42)
@@ -802,21 +804,22 @@ ${ctx.mcTrajectoryWp != null ? `
 MC TRAJECTORY (always-on):
   MC PBP (20-poss window): ${(ctx.mcTrajectoryWp * 100).toFixed(1)}% | MC Cum (game-rate): ${ctx.mcCumWp != null ? (ctx.mcCumWp * 100).toFixed(1) + '%' : '?'} | Floor: ${(ctx.floor * 100).toFixed(1)}% | XGB: ${ctx.xgbWinProb != null ? (ctx.xgbWinProb * 100).toFixed(1) + '%' : '?'}
   ${Math.abs(ctx.mcTrajectoryWp - ctx.floor) > 0.15 ? 'DIVERGENCE: MC PBP and floor disagree by ' + Math.round(Math.abs(ctx.mcTrajectoryWp - ctx.floor) * 100) + 'pp — recent possession rates tell a different story than cumulative box score.' : 'ALIGNED: MC PBP and floor within 15pp.'}
-  ${ctx.xgbMcClass === 'MC_LEADS' ? 'SIGNAL DIVERGENCE: MC Cum (' + (ctx.mcCumWp * 100).toFixed(0) + '%) >> XGB (' + (ctx.xgbWinProb * 100).toFixed(0) + '%), gap ' + Math.round(Math.abs(ctx.xgbMcGap) * 100) + 'pp. MC LEADS — rates project a win that structural features don\'t fully reflect. ' + (ctx.league === 'wnba' ? 'WNBA: MC leads divergence = 64% ctrl wins (312 games). Trust MC Cum over XGB.' : 'NBA close-game WR in this profile: 92%. Trust MC Cum over XGB.') : ctx.xgbMcClass === 'XGB_LEADS' ? 'SIGNAL DIVERGENCE: XGB (' + (ctx.xgbWinProb * 100).toFixed(0) + '%) >> MC Cum (' + (ctx.mcCumWp * 100).toFixed(0) + '%), gap ' + Math.round(Math.abs(ctx.xgbMcGap) * 100) + 'pp. XGB LEADS — structural quality not translating to possession rates. ' + (ctx.league === 'wnba' ? 'WNBA: XGB leads divergence = 42.9% ctrl wins (312 games). Do NOT trust XGB over MC.' : 'NBA close-game WR in this profile: 50%. Elevated caution.') : ''}
+  ${ctx.xgbMcClass === 'MC_LEADS' ? 'SIGNAL DIVERGENCE: MC Cum (' + (ctx.mcCumWp * 100).toFixed(0) + '%) >> XGB (' + (ctx.xgbWinProb * 100).toFixed(0) + '%), gap ' + Math.round(Math.abs(ctx.xgbMcGap) * 100) + 'pp. MC LEADS — rates project a win that structural features don\'t fully reflect. ' + (ctx.league === 'wnba' ? 'WNBA: MC leads divergence = 66% ctrl wins (526 games). Trust MC Cum, especially Q4 (78%).' : 'NBA close-game WR in this profile: 92%. Trust MC Cum over XGB.') : ctx.xgbMcClass === 'XGB_LEADS' ? 'SIGNAL DIVERGENCE: XGB (' + (ctx.xgbWinProb * 100).toFixed(0) + '%) >> MC Cum (' + (ctx.mcCumWp * 100).toFixed(0) + '%), gap ' + Math.round(Math.abs(ctx.xgbMcGap) * 100) + 'pp. XGB LEADS — structural quality not translating to possession rates. ' + (ctx.league === 'wnba' ? 'WNBA: XGB leads divergence = 57% ctrl wins (526 games). XGB credible in Q3 (65%), not Q4 (50%).' : 'NBA close-game WR in this profile: 50%. Elevated caution.') : ''}
   ${ctx.mcDrivers && ctx.mcDrivers.length > 0 ? 'MC RATE DRIVERS (what is driving ' + (ctx.bwcTeam || ctx.ctrlTeam) + ' win prob):\\n' + ctx.mcDrivers.filter(function(d) { return Math.abs(d.delta) >= 0.02; }).map(function(d) { return '    ' + d.label + ': ' + (d.delta >= 0 ? '+' : '') + Math.round(d.delta * 100) + 'pp (game ' + (d.ctrlVal * 100).toFixed(0) + '% vs season ' + (d.seasonVal * 100).toFixed(0) + '%)'; }).join('\\n') : ''}
   ${ctx.mcTrajectoryWp != null && ctx.mcCumWp != null && ctx.mcTrajectoryWp >= 0.65 && (ctx.mcTrajectoryWp - ctx.mcCumWp) >= 0.15 ? (function() { var _i1 = Number(ctx.i1 || 0), _i2 = Number(ctx.i2 || 0), _i3 = Number(ctx.i3 || 0); var _ss = (_i2 + _i3) / 2; var _dr = _ss >= 0.50 ? 'STRUCTURAL' : (_i1 >= 0.75 && _ss < 0.25 ? 'VOLATILE' : 'MIXED'); var _labels = { STRUCTURAL: 'Shooting + paint edge — 88% cascade rate from research.', VOLATILE: 'Turnover-driven heater — historically fades as TO rates regress.', MIXED: 'Mixed driver — watch for cumulative confirmation.' }; return 'PBP DIVERGENCE DRIVER: ' + _dr + ' (PBP ' + (ctx.mcTrajectoryWp * 100).toFixed(0) + '% vs MC Cum ' + (ctx.mcCumWp * 100).toFixed(0) + '%, gap +' + Math.round((ctx.mcTrajectoryWp - ctx.mcCumWp) * 100) + 'pp)\\n  ' + _labels[_dr] + '\\n  I1=' + _i1.toFixed(1) + ' I2=' + _i2.toFixed(1) + ' I3=' + _i3.toFixed(1) + (_dr === 'VOLATILE' ? ' — I1 dominant with weak I2+I3 = circumstantial edge.' : ''); })() : ''}` : ''}
 
-${ctx.league === 'wnba' ? `SIGNAL TRUST HIERARCHY (576 games):
+${ctx.league === 'wnba' ? `SIGNAL TRUST HIERARCHY (526 games):
   Three signals with fundamentally different roles from NBA:
-  - MC Cum: Best single predictor (AUC 0.822). Wins every checkpoint from Q2_5 onward.
-  - XGB: Structural quality + collapse detector (OOF AUC 0.765, Q4 0.831).
+  - MC Cum: Co-primary with XGB overall (AUC 0.801 vs 0.802). Best single predictor in Q4 (AUC 0.906).
+  - XGB: Structural quality + collapse detector (OOF AUC 0.798, Q4 0.871). Wins Q3 (AUC 0.816 vs MC 0.799).
   - Floor: Narrative context ONLY. When floor disagrees with MC+XGB, floor is wrong 80%.
   When they DISAGREE:
-  Q2: XGB > MC > Floor. MC overconfident by ~20pp.
-  Q3: MC > XGB > Floor. MC best calibrated.
-  Q4: MC >> XGB >> Floor. MC UNDERESTIMATES in WNBA Q4.
+  Q2: XGB ~ MC > Floor. Both tied (AUC ~0.705). Use either as early warning.
+  Q3: XGB > MC > Floor. XGB wins disagreements (65% vs MC 60%). Trust windowed structure.
+  Q4: MC >> XGB >> Floor. MC wins disagreements (78% vs XGB 50%). MC UNDERESTIMATES in WNBA Q4.
     MC 0.7-0.8 = actual 89.2% (+14pp). MC 0.8-0.9 = actual 93.3% (+8pp).
     A 75% MC Cum in WNBA Q4 is functionally ~89%. Treat as strong hold.
+  ALIGNED (±0.10): 83% overall, 90% Q4. Highest conviction when both agree.
   CRITICAL: Floor is NEVER a decision gate in WNBA.
   Floor HIGH + MC+XGB LOW = 20.2% (floor confidently wrong). MC+XGB HIGH + Floor LOW = 83-86%.
   EXIT CONFIRMATION: Floor < 0.55 at EXIT = 100% correct. Floor 0.70+ at EXIT = only 66.7% — floor does NOT deny EXIT when high.
@@ -881,13 +884,14 @@ ${ctx.positionClosed ? '  POST-EXIT THESIS_ALIVE: Position is CLOSED. The subscr
 - POSITION_SAFE / POSITION_RECOVERING: SEND as reassurance if prior alerts flagged risks or concerns. Include whether prior RISK materialized. SUPPRESS only if nothing changed AND no prior risk to update on. Write reasoning for compounding either way.
 ${ctx.positionClosed ? '  POST-EXIT RECOVERY: Position is CLOSED — the subscriber was told to EXIT (XGB dropped below threshold). This recovery alert fires because XGB has recovered above threshold + 0.10 for sustained evaluation. Apply elevated scrutiny: (1) structural stress combined read must be REINFORCING or DOMINANT — not COLLAPSING/SHIFT/ERODING, (2) verify in per-quarter breakdown that recent quarters show the BWC team recovering structurally, not just cumulative anchoring, (3) the XGB recovery must be supported by the underlying stats improving — check which features drove the recovery. If the BWC team is genuinely back with structural evidence AND XGB conviction, SEND — this is a strong signal (thesis broke and then repaired). If the recovery looks like a brief spike or noise, SUPPRESS. Reference the EXIT reasoning from the PRIOR ALERT REASONING TRAIL.' : ''}
 - BUY: structurally dominant team trailing. Standard evaluation — floor, indicators, TP, deficit depth${ctx.league === 'wnba' ? ' (1-4 sweet spot — trail 10+ is 0% in WNBA 40-min games)' : ' (1-7 sweet spot; deeper deficits need stronger structural case)'}. When bwcTeamMatch is noted, the team has BWC lifecycle context — reference the position arc. This is a "warm BUY" (thesis history). Without BWC context = "cold BUY" (unproven, higher bar for SEND).
-${ctx.league === 'wnba' ? `- BUY EVIDENCE (312-game WNBA backtest, 262 trailing checkpoints):
+${ctx.league === 'wnba' ? `- BUY EVIDENCE (526-game WNBA backtest, windowed XGB, 620 trailing checkpoints):
   DEFICIT: trail 1-4 (38.6%) > trail 5-9 (23.8%) > trail 10+ (0%). Structural WNBA teams rarely trail deep — 75% of trailing checkpoints are down 1-4 only.
   POWER PAIRS: I2+I3 (44.8%, n=67) is the WNBA BUY anchor — perimeter/FT access + shot quality. I1+I3 = 26.1% — TRAP (disruption alone does not translate to comebacks).
   I3 ANTI-INVERSION (OPPOSITE OF NBA): ctrl I3 WON = 39.2%. ctrl I3 LOST = 17.6%. In NBA, lost I3 = 49% (variance thesis). In WNBA, losing I3 means losing the 30% anchor — this is structural death, not a cold streak. Do NOT apply NBA variance logic.
   OPPONENT KILLS: opp I2 (perimeter/FT access) = 27.9% — when the opponent controls the perimeter and free throw line, path is blocked. opp I1 (disruption) = 39.1% — losing disruption is surprisingly benign in WNBA.
-  Q4 BUY IS NEARLY DEAD: XGB<0.45 = 2% comeback (n=44). Only XGB 0.70+ is viable (75%, n=8). Q4 BUY requires extreme scrutiny — the 40-minute clock makes late comebacks structurally implausible unless indicators are overwhelming.
-  XGB QUARTER RULE: Q2 XGB<0.45 = 25% (suppress). Q3 XGB<0.45 = 5% (hard suppress). Q4 XGB<0.45 = 2% (absolute suppress). Q4 only 0.70+ viable.` : `- BUY EVIDENCE (from 9,861-snapshot backtest, 502 BUY-eligible):
+  Q4 BUY: XGB<0.45 = 20.5% (suppress zone). XGB 0.45-0.70 = 42.9% (marginal). XGB 0.55+ = 63.6% (viable range).
+  Q4 CALIBRATION: Windowed XGB underestimates at 0.55-0.75 — actual WR is 10-20pp higher than predicted. A Q4 XGB of 0.60 is functionally ~80%.
+  XGB QUARTER RULE: Q2 XGB<0.35 = 31% (suppress). Q3 XGB<0.35 = 27% (suppress). Q4 XGB<0.45 = 20.5% (suppress). Q3-Q4 XGB 0.55+ is the viable range.` : `- BUY EVIDENCE (from 9,861-snapshot backtest, 502 BUY-eligible):
   WHAT WINS: trail 1-4 (44.6%) > trail 5-9 (25%) > trail 10+ (0%). 3+ ctrl indicators (45.6%) > <=2 (36.6%). Opp 0 indicators (48.6%) vs opp I1 or I2 won (28.5%). Best stack: trail 1-4 + 3+ ind + opp 0 indicators = 57.4% (n=115).
   POWER PAIRS: I1+I2 (55.2%, n=134) is the BUY anchor — physical dominance while trailing. I1+I4 (52.4%). TRAP: I3+I4 (38.9%, n=149) — the BWC killer combo is the WORST BUY pair.
   I3 INVERSION: ctrl I3 won = 37.3%. ctrl I3 LOST (opp shooting well) = 49%. When the BUY team has shot quality but is STILL trailing, they are losing for reasons shooting cannot fix. When trailing BECAUSE of poor shooting, that is the variance the thesis exploits.
@@ -1067,13 +1071,14 @@ RULES:
 - CANDIDATE BUYs at floor 0.55-0.65: only SEND if ${ctx.league === 'wnba' ? 'I3 COMBO is YES (I3 decisive + at least one other indicator agrees — I3 is the 30% WNBA anchor). Without I3 COMBO, SUPPRESS.' : 'I4 COMBO is YES (I4 decisive + at least one other indicator agrees — this pattern is 98-100% accurate historically). Without I4 COMBO, require very strong sustainability case to justify SEND.'}
 - CANDIDATE BUYs with negative ML (heavy favorite trailing): the CANDIDATE tier reflects the ML gate (-250 to -400), NOT structural weakness. Evaluate the structural case as if it were FIRED — if ${ctx.league === 'wnba' ? 'I3 COMBO YES' : 'I4 COMBO YES'} + STRONG/DOMINANT conviction, SEND so the subscriber can shop for favorable lines. Note the heavy ML in the BODY.
 - TP (Throughput Projection) is context, not a veto. It estimates whether a trailing team's structural production rate can close the deficit in remaining possessions. Limitation: TP uses cumulative game stats, so early-game dominance by either team anchors the rates even after momentum shifts. TP NO PATH at 1-3 point deficits is often a false negative — the game is essentially tied regardless of what the projection math says. TP STRONG RECOVERY or PROBABLE adds confidence. TP UNLIKELY or NO PATH is a caution flag, not a stop sign.
-${ctx.league === 'wnba' ? `- CONVICTION QUALITY (how WNBA XGB arrives at its prediction — 12 features, no biglead):
-  No "scoreboard confirmation" concept — all features are box-score structural.
-  Evaluate SHAP drivers directly:
-    Strong assists + FT made = ball movement + aggression — sustainable edge. Trust.
-    Strong windowed features only = recent shift, not yet cumulative — watch for confirmation.
-    Near-zero for most features = structural edge is thin regardless of MC/floor.
-  Cumulative-dominated conviction: 84.0% accuracy. Windowed-dominated: 80.3% (3.7pp gap, softer than NBA).
+${ctx.league === 'wnba' ? `- CONVICTION QUALITY (how WNBA XGB arrives at its prediction — 12 features, windowed biglead):
+  Windowed biglead is #1 feature (31% SHAP importance) — scoreboard confirmation now applies to WNBA.
+  biglead SHAP anchored (>25% share) = scoreboard confirms structural edge. High confidence.
+  biglead SHAP flat/negative = stats not translating to lead — elevate scrutiny.
+  VOLATILE basis (pot/oreb/to_ratio dominant) = circumstantial edge, may not sustain.
+  STRUCTURAL basis (biglead/disruption/ast/efg/ftm dominant) = scheme-driven, more durable.
+  Near-zero for most features = structural edge is thin regardless of MC/floor.
+  Q4 calibration: model underestimates at 0.55-0.75 (actual WR 10-20pp higher than predicted).
   These signals matter MOST for BUY and BWC_EDGE. For EXIT, XGB threshold itself is sufficient.` : `- CONVICTION QUALITY (how XGB arrives at its prediction — validated on 16,910 snapshots):
   SCOREBOARD STATUS is the strongest signal:
     "CONFIRMED" (biglead anchored) = team has built commanding lead, XGB highly reliable (95% win rate). High confidence.
@@ -4885,9 +4890,9 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
       if (xgbData?.winProb != null && mcData?.mcCumWp != null) {
         const gap = xgbData.winProb - mcData.mcCumWp;
         if (gap < -0.10) {
-          p += `  SIGNAL DIVERGENCE: MC Cum (${(mcData.mcCumWp * 100).toFixed(0)}%) >> XGB (${(xgbData.winProb * 100).toFixed(0)}%), gap ${Math.round(Math.abs(gap) * 100)}pp. ${league === 'wnba' ? 'MC leads divergence = 64% ctrl wins.' : 'Close-game WR: 92%. Trust MC.'}\n`;
+          p += `  SIGNAL DIVERGENCE: MC Cum (${(mcData.mcCumWp * 100).toFixed(0)}%) >> XGB (${(xgbData.winProb * 100).toFixed(0)}%), gap ${Math.round(Math.abs(gap) * 100)}pp. ${league === 'wnba' ? 'MC leads divergence = 66% ctrl wins. Trust MC, especially Q4.' : 'Close-game WR: 92%. Trust MC.'}\n`;
         } else if (gap > 0.10) {
-          p += `  SIGNAL DIVERGENCE: XGB (${(xgbData.winProb * 100).toFixed(0)}%) >> MC Cum (${(mcData.mcCumWp * 100).toFixed(0)}%), gap ${Math.round(Math.abs(gap) * 100)}pp. ${league === 'wnba' ? 'XGB leads divergence = 42.9% ctrl wins. Don\'t trust XGB over MC.' : 'Close-game WR: 50%. Caution.'}\n`;
+          p += `  SIGNAL DIVERGENCE: XGB (${(xgbData.winProb * 100).toFixed(0)}%) >> MC Cum (${(mcData.mcCumWp * 100).toFixed(0)}%), gap ${Math.round(Math.abs(gap) * 100)}pp. ${league === 'wnba' ? 'XGB leads divergence = 57% ctrl wins. XGB credible in Q3, not Q4.' : 'Close-game WR: 50%. Caution.'}\n`;
         }
       }
       // Failure profile flag (league-specific)
