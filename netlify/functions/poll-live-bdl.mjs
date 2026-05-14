@@ -6828,6 +6828,7 @@ export default async function(req) {
           const _xgbWinProb = _xgbFeatures ? predictXGB(_xgbFeatures, league) : null;
           const _xgbDivergence = _xgbWinProb != null ? Math.round((_xgbWinProb - ind.score) * 1000) / 1000 : null;
           const _xgbAligned = _xgbWinProb != null ? Math.abs(_xgbWinProb - ind.score) < 0.15 : null;
+          const _xgbShap = _xgbFeatures ? computeXGBContributions(_xgbFeatures, league) : null;
 
           // _xgbBwcProb computed below after lt is loaded from DB
 
@@ -7000,7 +7001,7 @@ export default async function(req) {
               i1, i2, i3, i4, i5, source, lead_class, sust_json,
               tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json,
               bwc_state, grad_rank, floor_wp_historical, reliability_class, window_score,
-              xgb_win_prob, xgb_divergence, poss_window_score, mc_win_prob, mc_cum_win_prob)
+              xgb_win_prob, xgb_divergence, poss_window_score, mc_win_prob, mc_cum_win_prob, xgb_shap)
             VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
               ${ind.score}, ${ind.controlTeam}, ${null}, ${null}, ${null},
               ${null}, ${null}, ${espnWP?.home || null}, ${espnWP?.away || null},
@@ -7010,7 +7011,7 @@ export default async function(req) {
               ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
               ${_snapLT?.bwc_fired ? (_snapLT._prev_bwc_state || null) : null}, ${_snapLT?.compound_tier || null},
               ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore},
-              ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbDivergence}, ${_possWindowScore}, ${_pollMC}, ${_mcCum?.winProb != null ? Math.round(_mcCum.winProb * 10000) / 10000 : null})
+              ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbDivergence}, ${_possWindowScore}, ${_pollMC}, ${_mcCum?.winProb != null ? Math.round(_mcCum.winProb * 10000) / 10000 : null}, ${_xgbShap ? JSON.stringify(_xgbShap) : null})
             ON CONFLICT (game_id, period, clock, home_pts, away_pts) DO NOTHING
           `;
           log(`${matchup}: snapshot saved — floor:${ind.score} I1-5:${_ci[0]},${_ci[1]},${_ci[2]},${_ci[3]},${_ci[4]} tp:${snapTp?.classification||'-'} ls:${snapLs?.classification||'-'} xgb:${_xgbWinProb != null ? _xgbWinProb.toFixed(3) : '-'}`);
@@ -7075,7 +7076,7 @@ export default async function(req) {
 
             // ── Save XGB + MC data to lt for client analysis injection ──
             if (_xgbFeatures) {
-              lt.xgb_shap = computeXGBContributions(_xgbFeatures, league);
+              lt.xgb_shap = _xgbShap;
               lt.conviction_quality = lt.xgb_shap ? computeConvictionQuality(lt.xgb_shap, league) : null;
               lt.xgb_trajectory = lt.xgb_shap ? computeTrajectorySignals(lt.xgb_shap, lt.checkpoints || [], lt.conviction_quality, _xgbWinProb, league) : null;
             }
@@ -8661,7 +8662,7 @@ export default async function(req) {
                       i1, i2, i3, i4, i5, source, sust_json,
                       tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json,
                       bwc_state, grad_rank, floor_wp_historical, reliability_class, window_score,
-                      xgb_win_prob, xgb_divergence, poss_window_score, mc_win_prob, mc_cum_win_prob)
+                      xgb_win_prob, xgb_divergence, poss_window_score, mc_win_prob, mc_cum_win_prob, xgb_shap)
                     VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
                       ${ind.score}, ${ind.controlTeam}, ${espnWP?.home || null}, ${espnWP?.away || null},
                       ${spreadVal}, ${deficit}, ${trailingTeam}, ${leadSust}, ${leadClass},
@@ -8670,7 +8671,7 @@ export default async function(req) {
                       ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
                       ${lt?.bwc_fired ? (lt._prev_bwc_state || null) : null}, ${lt?.cp_peak_rank || null},
                       ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore},
-                      ${_xgbWinProb != null ? Math.round(_xgbWinProb * 1000) / 1000 : null}, ${_xgbDivergence}, ${_possWindowScore}, ${_pollMC}, ${_mcCum?.winProb != null ? Math.round(_mcCum.winProb * 10000) / 10000 : null})
+                      ${_xgbWinProb != null ? Math.round(_xgbWinProb * 1000) / 1000 : null}, ${_xgbDivergence}, ${_possWindowScore}, ${_pollMC}, ${_mcCum?.winProb != null ? Math.round(_mcCum.winProb * 10000) / 10000 : null}, ${_xgbShap ? JSON.stringify(_xgbShap) : null})
                     ON CONFLICT (game_id, period, clock, home_pts, away_pts) DO NOTHING
                   `;
                   log(`${matchup}: ${t.label} CAL snapshot saved — floor ${ind.controlTeam} ${ind.score} | sust:${leadSust || '?'} class:${leadClass || '?'} | WP:${espnWP?.home || '?'}% | spd:${spreadVal != null ? spreadVal : 'N/A'}`);
