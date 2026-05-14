@@ -57,11 +57,11 @@ function predictXGB(features, league) {
 }
 
 var XGB_FEATURE_LABELS = ['paint','pot','to','stl','oreb','ast','blk','fta','efg','biglead','3pr','rim_pct','runs'];
-var XGB_FEATURE_LABELS_WNBA = ['windowed_biglead','disruption','ast','oreb','to_ratio','ftm','ast_ratio','pf','blk','fta','efg','pot'];
+var XGB_FEATURE_LABELS_WNBA = ['windowed_biglead','disruption','ast','oreb','to_ratio','ftm','ast_ratio','pf','blk','fta','efg','pot','biglead_erosion'];
 var XGB_VOLATILE_FEATURES = new Set(['pot', 'to', 'stl', 'oreb', 'runs']);
 var XGB_STRUCTURAL_FEATURES = new Set(['paint', 'ast', 'blk', 'fta', 'efg', 'biglead', '3pr', 'rim_pct']);
 var XGB_VOLATILE_FEATURES_WNBA = new Set(['pot', 'oreb', 'to_ratio']);
-var XGB_STRUCTURAL_FEATURES_WNBA = new Set(['biglead', 'disruption', 'ast', 'ftm', 'ast_ratio', 'pf', 'blk', 'fta', 'efg']);
+var XGB_STRUCTURAL_FEATURES_WNBA = new Set(['biglead', 'disruption', 'ast', 'ftm', 'ast_ratio', 'pf', 'blk', 'fta', 'efg', 'biglead_erosion']);
 
 // Tree interpreter SHAP — decomposes XGB prediction into per-feature contributions
 // Uses precomputed expected values (ev) at each tree node. O(trees × depth) per call.
@@ -155,9 +155,9 @@ function extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock, windo
   ];
 }
 // ── WNBA XGB FEATURE EXTRACTION ──────────────────────────────────────────────
-// 12 features: 10 windowed (cross-fade) + 2 cumulative game-state (biglead, runs excluded by pruning).
+// 13 features: 10 windowed (cross-fade) + 2 cumulative game-state + biglead_erosion (windowed_biglead - margin).
 // Pure windowed architecture matching NBA — biglead added as scoreboard confirmation signal.
-// Feature order must match xgb-model-wnba.json training (windowed biglead, OOF AUC 0.798).
+// Feature order must match xgb-model-wnba.json training (windowed biglead + erosion, OOF AUC 0.807).
 function extractXGBFeaturesWNBA(summary, ind, windowAgg, windowedBiglead) {
   var hs = summary.home.statistics, as = summary.away.statistics;
   var ctrlIsHome = ind.controlTeam === ind.homeAlias;
@@ -201,6 +201,7 @@ function extractXGBFeaturesWNBA(summary, ind, windowAgg, windowedBiglead) {
     (Number(hS.free_throws_att || hS.fta || 0) - Number(aS.free_throws_att || aS.fta || 0)) * flip,  // [9] fta
     (((hFGM + 0.5 * hFG3M) / hFGA) - ((aFGM + 0.5 * aFG3M) / aFGA)) * flip,                     // [10] efg
     (Number(hS.points_off_turnovers || hS.pot || 0) - Number(aS.points_off_turnovers || aS.pot || 0)) * flip,  // [11] pot
+    bigleadVal - (Number(summary.home?.points || 0) - Number(summary.away?.points || 0)) * flip,              // [12] biglead_erosion (windowed_biglead - ctrl_margin)
   ];
 }
 
@@ -385,7 +386,7 @@ const LEAGUES = {
     weights: { I1: 0.15, I2: 0.20, I3: 0.30, I4: 0.25, I5: 0.10 },
     mcDefaults: { toRate: 0.178, fg3aShare: 0.345, fg3Pct: 0.347, fg2Pct: 0.482, orebRate: 0.348, ftaRate: 0.224, ftPct: 0.788 },
     xgbModelFile: 'xgb-model-wnba.json',
-    xgbFeatureCount: 12,
+    xgbFeatureCount: 13,
   },
 };
 
