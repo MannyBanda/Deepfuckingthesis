@@ -57,11 +57,11 @@ function predictXGB(features, league) {
 }
 
 var XGB_FEATURE_LABELS = ['paint','pot','to','stl','oreb','ast','blk','fta','efg','biglead','3pr','rim_pct','runs'];
-var XGB_FEATURE_LABELS_WNBA = ['biglead','disruption','ast','oreb','to_ratio','ftm','ast_ratio','pf','blk','fta','efg','pot'];
+var XGB_FEATURE_LABELS_WNBA = ['windowed_biglead','disruption','ast','oreb','to_ratio','ftm','ast_ratio','pf','blk','fta','efg','pot'];
 var XGB_VOLATILE_FEATURES = new Set(['pot', 'to', 'stl', 'oreb', 'runs']);
 var XGB_STRUCTURAL_FEATURES = new Set(['paint', 'ast', 'blk', 'fta', 'efg', 'biglead', '3pr', 'rim_pct']);
 var XGB_VOLATILE_FEATURES_WNBA = new Set(['pot', 'oreb', 'to_ratio']);
-var XGB_STRUCTURAL_FEATURES_WNBA = new Set(['biglead', 'disruption', 'ast', 'ftm', 'ast_ratio', 'pf', 'blk', 'fta', 'efg']);
+var XGB_STRUCTURAL_FEATURES_WNBA = new Set(['windowed_biglead', 'disruption', 'ast', 'ftm', 'ast_ratio', 'pf', 'blk', 'fta', 'efg']);
 
 // Tree interpreter SHAP — decomposes XGB prediction into per-feature contributions
 // Uses precomputed expected values (ev) at each tree node. O(trees × depth) per call.
@@ -89,9 +89,9 @@ function computeXGBContributions(features, league) {
   return ranked;
 }
 
-function extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock, windowAgg, league) {
+function extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock, windowAgg, league, windowedBiglead) {
   if (!summary?.home?.statistics || !summary?.away?.statistics) return null;
-  if (league === 'wnba') return extractXGBFeaturesWNBA(summary, ind, windowAgg);
+  if (league === 'wnba') return extractXGBFeaturesWNBA(summary, ind, windowAgg, windowedBiglead);
   const hs = summary.home.statistics, as = summary.away.statistics;
   const ctrlIsHome = ind.controlTeam === ind.homeAlias;
   const flip = ctrlIsHome ? 1 : -1;
@@ -157,8 +157,8 @@ function extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock, windo
 // ── WNBA XGB FEATURE EXTRACTION ──────────────────────────────────────────────
 // 12 features: 10 windowed (cross-fade) + 2 cumulative game-state (biglead, runs excluded by pruning).
 // Pure windowed architecture matching NBA — biglead added as scoreboard confirmation signal.
-// Feature order must match xgb-model-wnba.json training (BDL-primary, 576 games, OOF AUC 0.765).
-function extractXGBFeaturesWNBA(summary, ind, windowAgg) {
+// Feature order must match xgb-model-wnba.json training (windowed biglead, OOF AUC 0.798).
+function extractXGBFeaturesWNBA(summary, ind, windowAgg, windowedBiglead) {
   var hs = summary.home.statistics, as = summary.away.statistics;
   var ctrlIsHome = ind.controlTeam === ind.homeAlias;
   var flip = ctrlIsHome ? 1 : -1;
@@ -184,8 +184,12 @@ function extractXGBFeaturesWNBA(summary, ind, windowAgg) {
   var hTov = Number(hS.turnovers || hS.tov || hS.total_turnovers || 0);
   var aTov = Number(aS.turnovers || aS.tov || aS.total_turnovers || 0);
 
+  // Windowed biglead: use pre-computed cross-fade max margin if available, else cumulative fallback
+  var bigleadVal = windowedBiglead != null ? windowedBiglead
+    : (Number(hs.biggest_lead || 0) - Number(as.biggest_lead || 0)) * flip;
+
   return [
-    (Number(hs.biggest_lead || 0) - Number(as.biggest_lead || 0)) * flip,                          // [0] biglead (ALWAYS cumulative)
+    bigleadVal,                                                                                     // [0] windowed_biglead (cross-fade max margin)
     ((hStl + hBlk) - (aStl + aBlk)) * flip,                                                        // [1] disruption
     (hAst - aAst) * flip,                                                                           // [2] ast
     (Number(hS.offensive_rebounds || hS.oreb || 0) - Number(aS.offensive_rebounds || aS.oreb || 0)) * flip,  // [3] oreb
@@ -6774,20 +6778,30 @@ export default async function(req) {
 
           // ── BIGLEAD LAG FIX: BDL/SR biggest_lead lags 1-3 polls behind actual score ──
           // Track running max margin from actual scores in live_tracking, override summary
+          // Also track per-quarter max margins for WNBA windowed biglead feature
           try {
             const _hPts = Number(summary.home?.points || 0), _aPts = Number(summary.away?.points || 0);
             const _curMargin = _hPts - _aPts;  // positive = home leading
-            // Load stored max from live_tracking
-            const _blR = await sql`SELECT live_tracking->'_bigLeadHome' as blh, live_tracking->'_bigLeadAway' as bla FROM games WHERE id = ${game.id}`;
+            // Load stored max from live_tracking (isolated query — never add to existing SELECTs)
+            const _blR = await sql`SELECT live_tracking->'_bigLeadHome' as blh, live_tracking->'_bigLeadAway' as bla, live_tracking->'_qMaxMarginHome' as qmh, live_tracking->'_qMaxMarginAway' as qma FROM games WHERE id = ${game.id}`;
             const _storedBLH = Number(_blR[0]?.blh || 0), _storedBLA = Number(_blR[0]?.bla || 0);
             const _trueBLH = Math.max(_storedBLH, _curMargin > 0 ? _curMargin : 0);
             const _trueBLA = Math.max(_storedBLA, _curMargin < 0 ? -_curMargin : 0);
             // Override summary biggest_lead with running max
             if (summary.home?.statistics) summary.home.statistics.biggest_lead = _trueBLH;
             if (summary.away?.statistics) summary.away.statistics.biggest_lead = _trueBLA;
+            // Per-quarter max margins (for WNBA windowed biglead)
+            var _qmh = _blR[0]?.qmh || {}, _qma = _blR[0]?.qma || {};
+            if (typeof _qmh === 'string') _qmh = JSON.parse(_qmh);
+            if (typeof _qma === 'string') _qma = JSON.parse(_qma);
+            var _qKey = String(summary.quarter || summary.half || 1);
+            _qmh[_qKey] = Math.max(Number(_qmh[_qKey] || 0), _curMargin > 0 ? _curMargin : 0);
+            _qma[_qKey] = Math.max(Number(_qma[_qKey] || 0), _curMargin < 0 ? -_curMargin : 0);
             // Stash for lt persistence later
             game._trueBigLeadHome = _trueBLH;
             game._trueBigLeadAway = _trueBLA;
+            game._qMaxMarginHome = _qmh;
+            game._qMaxMarginAway = _qma;
           } catch (e) { /* non-fatal — falls back to BDL/SR values */ }
 
           // Stash PBP result for computeServerContext to use (avoids re-fetching)
@@ -6842,7 +6856,33 @@ export default async function(req) {
           } catch (e) { /* non-fatal */ }
 
           // XGBoost structural win probability (uses 2Q cross-fade window when available)
-          const _xgbFeatures = extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock, _windowResult?.rawAgg || null, league);
+          // WNBA: compute windowed biglead from per-quarter max margins (cross-fade weighted)
+          var _windowedBiglead = null;
+          if (league === 'wnba' && game._qMaxMarginHome && ind && ind.controlTeam) {
+            try {
+              var _wblCtrlIsHome = ind.controlTeam === hA;
+              var _wblQMC = _wblCtrlIsHome ? game._qMaxMarginHome : game._qMaxMarginAway;  // ctrl's max leads
+              var _wblQMO = _wblCtrlIsHome ? game._qMaxMarginAway : game._qMaxMarginHome;  // opp's max leads
+              var _wblP = currentPeriod || 1;
+              var _wblClkParts = (clock || '10:00').split(':');
+              var _wblClkSec = (parseInt(_wblClkParts[0]) || 0) * 60 + (parseInt(_wblClkParts[1]) || 0);
+              var _wblCompletion = Math.max(0, Math.min(1, (600 - _wblClkSec) / 600));
+              var _wblWQs = [];
+              if (_wblP === 2) { _wblWQs = [[Math.max(0, 1-_wblCompletion), 1], [1.0, 2]]; }
+              else if (_wblP === 3) { _wblWQs = [[1.0, 2], [1.0, 3]]; }
+              else if (_wblP >= 4) { _wblWQs = [[Math.max(0, 1-_wblCompletion), 2], [1.0, 3], [1.0, 4]]; }
+              var _wblCtrl = 0, _wblOpp = 0;
+              for (var _wqi = 0; _wqi < _wblWQs.length; _wqi++) {
+                var _wblW = _wblWQs[_wqi][0], _wblQ = _wblWQs[_wqi][1];
+                if (_wblW > 0.1) {
+                  _wblCtrl = Math.max(_wblCtrl, Number(_wblQMC[String(_wblQ)] || 0));
+                  _wblOpp = Math.max(_wblOpp, Number(_wblQMO[String(_wblQ)] || 0));
+                }
+              }
+              _windowedBiglead = _wblCtrl - _wblOpp;
+            } catch (e) { /* non-fatal — falls back to cumulative */ }
+          }
+          const _xgbFeatures = extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock, _windowResult?.rawAgg || null, league, _windowedBiglead);
           const _xgbWinProb = _xgbFeatures ? predictXGB(_xgbFeatures, league) : null;
           const _xgbDivergence = _xgbWinProb != null ? Math.round((_xgbWinProb - ind.score) * 1000) / 1000 : null;
           const _xgbAligned = _xgbWinProb != null ? Math.abs(_xgbWinProb - ind.score) < 0.15 : null;
@@ -7095,6 +7135,8 @@ export default async function(req) {
             // Persist biglead running max (computed before computeServer)
             if (game._trueBigLeadHome != null) lt._bigLeadHome = game._trueBigLeadHome;
             if (game._trueBigLeadAway != null) lt._bigLeadAway = game._trueBigLeadAway;
+            if (game._qMaxMarginHome) lt._qMaxMarginHome = game._qMaxMarginHome;
+            if (game._qMaxMarginAway) lt._qMaxMarginAway = game._qMaxMarginAway;
 
             // ── Save XGB + MC data to lt for client analysis injection ──
             if (_xgbFeatures) {
