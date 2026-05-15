@@ -6085,6 +6085,131 @@ export default async function(req) {
     }
   }
 
+  // ── DIAGNOSTIC MODE: time each section of the poll loop ──
+  if (url.searchParams.get('diag') === '1') {
+    const diag = { sections: [], ts: new Date().toISOString() };
+    const _dt = (label, t0) => { const ms = Date.now() - t0; diag.sections.push({ label, ms }); return ms; };
+    try {
+      for (const league of Object.keys(LEAGUES)) {
+        const cfg = LEAGUES[league];
+        const apiKey = process.env[cfg.srKeyEnv];
+        if (!apiKey) { diag.sections.push({ label: `${league}: no SR key — skip`, ms: 0 }); continue; }
+
+        const d = today();
+        const pad = n => String(n).padStart(2, '0');
+        const dateKey = `${d.year}-${pad(d.month)}-${pad(d.day)}`;
+        diag.sections.push({ label: `${league}: dateKey=${dateKey}`, ms: 0 });
+
+        // S1: poll_state
+        let t0 = Date.now();
+        let pollState = null;
+        try {
+          const psRows = await sql`SELECT first_tip, last_tip, game_count, all_final, schedule_json FROM poll_state WHERE league = ${league} AND date = ${dateKey}`;
+          if (psRows.length > 0) pollState = psRows[0];
+        } catch(e) { diag.sections.push({ label: `${league}: poll_state error: ${e.message}`, ms: Date.now()-t0 }); continue; }
+        _dt(`${league}: S1 poll_state`, t0);
+
+        if (pollState?.all_final) { diag.sections.push({ label: `${league}: all_final — skip`, ms: 0 }); continue; }
+        if (pollState?.game_count === 0) { diag.sections.push({ label: `${league}: no games — skip`, ms: 0 }); continue; }
+        if (!pollState) { diag.sections.push({ label: `${league}: no poll_state row — would fetch schedule`, ms: 0 }); continue; }
+
+        // Check time window
+        const now = new Date();
+        const windowStart = new Date(new Date(pollState.first_tip).getTime() - 15 * 60 * 1000);
+        const windowEnd = new Date(new Date(pollState.last_tip).getTime() + 3 * 60 * 60 * 1000);
+        if (now < windowStart) { diag.sections.push({ label: `${league}: before window`, ms: 0 }); continue; }
+        if (now > windowEnd) { diag.sections.push({ label: `${league}: past window`, ms: 0 }); continue; }
+
+        const cachedGames = typeof pollState.schedule_json === 'string' ? JSON.parse(pollState.schedule_json) : pollState.schedule_json;
+        const potentiallyLive = cachedGames.filter(g => {
+          if (g.status === 'closed' || g.status === 'complete') return false;
+          if (!g.scheduled) return true;
+          return new Date(g.scheduled) <= now;
+        });
+        diag.sections.push({ label: `${league}: ${cachedGames.length} cached, ${potentiallyLive.length} live`, ms: 0 });
+        if (potentiallyLive.length === 0) { diag.sections.push({ label: `${league}: no live games`, ms: 0 }); continue; }
+
+        // S2: ESPN scoreboard
+        const dateStr = `${d.year}${pad(d.month)}${pad(d.day)}`;
+        t0 = Date.now();
+        const espnGames = await espnScoreboard(league, dateStr);
+        _dt(`${league}: S2 ESPN scoreboard (${espnGames.length} events)`, t0);
+
+        // S3: BDL game data
+        const bdlDateStr = `${d.year}-${pad(d.month)}-${pad(d.day)}`;
+        t0 = Date.now();
+        const bdlData = await bdlGameData(league, bdlDateStr);
+        _dt(`${league}: S3 BDL gameData (${Object.keys(bdlData.gameIds).length} games)`, t0);
+
+        // S4: Season stats
+        const teamAbbrs = new Set();
+        for (const g of potentiallyLive) { if (g.home_alias) teamAbbrs.add(g.home_alias); if (g.away_alias) teamAbbrs.add(g.away_alias); }
+        t0 = Date.now();
+        const bdlSeasonCache = await getSeasonStatsForTeams(sql, league, cfg.season, teamAbbrs, bdlData.teamIds);
+        _dt(`${league}: S4 seasonStats (${Object.keys(bdlSeasonCache).length} teams)`, t0);
+
+        // S5: Clutch profiles
+        t0 = Date.now();
+        try {
+          const _cpRows = await sql`SELECT * FROM clutch_profiles WHERE league = ${league} AND season = ${'2025'}`;
+          _dt(`${league}: S5 clutchProfiles (${_cpRows.length} rows)`, t0);
+        } catch(e) { _dt(`${league}: S5 clutchProfiles error: ${e.message}`, t0); }
+
+        // S6: WNBA player_stats batch
+        if (league === 'wnba') {
+          const gids = potentiallyLive.map(g => {
+            const hB = cfg.aliasMap?.[g.home_alias] || g.home_alias;
+            const aB = cfg.aliasMap?.[g.away_alias] || g.away_alias;
+            return bdlData.gameIds[`${aB}@${hB}`] || bdlData.gameIds[`${g.away_alias}@${g.home_alias}`];
+          }).filter(Boolean);
+          t0 = Date.now();
+          try {
+            const psResp = await bdlFetch(`${cfg.bdlPrefix}/v1/player_stats?${gids.map(id => 'game_ids[]=' + id).join('&')}&per_page=100`);
+            const allPs = psResp?.data || [];
+            _dt(`${league}: S6 playerStats (${allPs.length} records, gids=${gids.join(',')})`, t0);
+          } catch(e) { _dt(`${league}: S6 playerStats error: ${e.message}`, t0); }
+        }
+
+        // S7: Plays fetches
+        t0 = Date.now();
+        const playsFetches = potentiallyLive.map(g => {
+          const hB = cfg.aliasMap?.[g.home_alias] || g.home_alias;
+          const aB = cfg.aliasMap?.[g.away_alias] || g.away_alias;
+          const bgid = bdlData.gameIds[`${aB}@${hB}`] || bdlData.gameIds[`${g.away_alias}@${g.home_alias}`];
+          if (!bgid) return Promise.resolve(null);
+          return bdlFetch(`${cfg.bdlPrefix}/v1/plays?game_id=${bgid}&per_page=500`).catch(() => null);
+        });
+        await Promise.all(playsFetches);
+        _dt(`${league}: S7 plays (${playsFetches.length} fetches)`, t0);
+
+        // S8: Season Q4
+        t0 = Date.now();
+        await loadSeasonQ4(sql, league);
+        _dt(`${league}: S8 seasonQ4`, t0);
+
+        // S9: Odds API
+        t0 = Date.now();
+        await fetchOddsAPIBatch(league);
+        _dt(`${league}: S9 oddsAPI`, t0);
+
+        // S10: First game — build summary only (no snapshot save)
+        const g0 = potentiallyLive[0];
+        if (g0) {
+          const hB = cfg.aliasMap?.[g0.home_alias] || g0.home_alias;
+          const aB = cfg.aliasMap?.[g0.away_alias] || g0.away_alias;
+          const bgid = bdlData.gameIds[`${aB}@${hB}`] || bdlData.gameIds[`${g0.away_alias}@${g0.home_alias}`];
+          diag.sections.push({ label: `${league}: S10 game0 ${g0.away_alias}@${g0.home_alias} bdlGid=${bgid}`, ms: 0 });
+        }
+
+        diag.sections.push({ label: `${league}: ✓ all sections passed`, ms: 0 });
+      }
+    } catch(e) {
+      diag.sections.push({ label: `CRASH: ${e.message}`, ms: 0, stack: e.stack?.split('\n').slice(0,5) });
+    }
+    diag.totalMs = Date.now() - startTime;
+    return new Response(JSON.stringify(diag, null, 2), { headers: { 'Content-Type': 'application/json' } });
+  }
+
   const results = { games: 0, snapshots: 0, espn: 0, odds: 0, errors: [], skipped: null };
   const pendingAnalyses = []; // collect async Sonnet calls so we await them before returning
 
