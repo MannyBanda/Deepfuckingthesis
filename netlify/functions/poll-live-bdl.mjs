@@ -6192,83 +6192,78 @@ export default async function(req) {
         await fetchOddsAPIBatch(league);
         _dt(`${league}: S9 oddsAPI`, t0);
 
-        // S10: First game — step through processing
+        // S10: First game — step through processing (stop at diag_step param)
+        const diagStep = parseInt(url.searchParams.get('diag_step') || '99');
         const g0 = potentiallyLive[0];
         if (g0) {
           const hA = g0.home_alias || 'HOME', aA = g0.away_alias || 'AWAY';
           const hB = cfg.aliasMap?.[hA] || hA, aB = cfg.aliasMap?.[aA] || aA;
           const bgid = bdlData.gameIds[`${aB}@${hB}`] || bdlData.gameIds[`${aA}@${hA}`] || bdlData.gameIds[`${g0.away_alias}@${g0.home_alias}`];
-          diag.sections.push({ label: `${league}: S10 game ${aA}@${hA} bdlGid=${bgid}`, ms: 0 });
+          diag.sections.push({ label: `${league}: S10 game ${aA}@${hA} bdlGid=${bgid} (stop@${diagStep})`, ms: 0 });
+          if (diagStep < 1) { diag.sections.push({ label: 'stopped at step 0' }); break; }
 
-          // S10a: Build summary
+          // Step 1: Get player stats + game obj
           t0 = Date.now();
-          let _srSummary = null;
+          let _srSummary = null, bdlPlayers = [], bdlGameObj = null, fbPlays = [], fbPbp = null;
           try {
             if (league === 'wnba' && bgid) {
-              const _psCache = {};
               const psResp2 = await bdlFetch(`${cfg.bdlPrefix}/v1/player_stats?game_ids[]=${bgid}&per_page=100`);
-              const allPs2 = psResp2?.data || [];
-              for (const p of allPs2) { const gid = p.game?.id; if (gid) { if (!_psCache[gid]) _psCache[gid] = []; _psCache[gid].push(p); } }
-              const bdlPlayers = _psCache[bgid] || [];
-              diag.sections.push({ label: `${league}: S10a.1 playerStats=${bdlPlayers.length}`, ms: Date.now()-t0 });
-              if (bdlPlayers.length > 0) {
+              bdlPlayers = (psResp2?.data || []).filter(p => p.game?.id === bgid);
+              _dt(`${league}: step1a playerStats=${bdlPlayers.length}`, t0);
+              if (bdlPlayers.length > 0 && diagStep >= 2) {
                 const gameResp = await bdlFetch(`${cfg.bdlPrefix}/v1/games/${bgid}`);
-                const bdlGameObj = gameResp?.data || null;
-                diag.sections.push({ label: `${league}: S10a.2 gameObj status=${bdlGameObj?.status} score=${bdlGameObj?.home_score}-${bdlGameObj?.away_score}`, ms: Date.now()-t0 });
-                const plays0 = playsFetches[0] ? await playsFetches[0] : null;
-                const fbPlays = plays0?.data || [];
-                const fbPbp = parseBDLPBPServer(fbPlays, cfg.aliasMap?.[hA]||hA, cfg.aliasMap?.[aA]||aA);
-                diag.sections.push({ label: `${league}: S10a.3 pbp plays=${fbPlays.length}`, ms: Date.now()-t0 });
-                _srSummary = buildSummaryFromBDLPlayerStats(bdlPlayers, bdlGameObj, fbPbp);
-                _dt(`${league}: S10a buildSummary ✓`, t0);
-              } else {
-                diag.sections.push({ label: `${league}: S10a no players — would SR fallback`, ms: Date.now()-t0 });
+                bdlGameObj = gameResp?.data || null;
+                _dt(`${league}: step1b gameObj status=${bdlGameObj?.status} score=${bdlGameObj?.home_score}-${bdlGameObj?.away_score}`, t0);
               }
             }
-          } catch(e) { diag.sections.push({ label: `${league}: S10a CRASH: ${e.message}`, ms: Date.now()-t0, stack: e.stack?.split('\n').slice(0,3) }); }
+          } catch(e) { diag.sections.push({ label: `step1 CRASH: ${e.message}`, ms: Date.now()-t0 }); }
+          if (diagStep < 2) { diag.sections.push({ label: 'stopped at step 1' }); break; }
 
-          if (_srSummary) {
-            const summary = _srSummary;
-            const pbpResult = null;
+          // Step 2: Parse PBP
+          t0 = Date.now();
+          try {
+            const playsResp = await bdlFetch(`${cfg.bdlPrefix}/v1/plays?game_id=${bgid}&per_page=500`);
+            fbPlays = playsResp?.data || [];
+            fbPbp = parseBDLPBPServer(fbPlays, cfg.aliasMap?.[hA]||hA, cfg.aliasMap?.[aA]||aA);
+            _dt(`${league}: step2 pbp plays=${fbPlays.length}`, t0);
+          } catch(e) { diag.sections.push({ label: `step2 CRASH: ${e.message}`, ms: Date.now()-t0 }); }
+          if (diagStep < 3) { diag.sections.push({ label: 'stopped at step 2' }); break; }
 
-            // S10b: Extract period/clock
-            t0 = Date.now();
-            const currentPeriod = summary.quarter || 1;
-            const clock = summary.clock || '0:00';
-            _dt(`${league}: S10b period=${currentPeriod} clock=${clock}`, t0);
+          // Step 3: Build summary
+          t0 = Date.now();
+          try {
+            if (bdlPlayers.length > 0 && bdlGameObj) {
+              _srSummary = buildSummaryFromBDLPlayerStats(bdlPlayers, bdlGameObj, fbPbp);
+              _dt(`${league}: step3 buildSummary ✓ homePts=${_srSummary?.home?.points} awayPts=${_srSummary?.away?.points}`, t0);
+            }
+          } catch(e) { diag.sections.push({ label: `step3 CRASH: ${e.message}`, ms: Date.now()-t0, stack: e.stack?.split('\n').slice(0,3) }); }
+          if (diagStep < 4 || !_srSummary) { diag.sections.push({ label: `stopped at step 3 (summary=${!!_srSummary})` }); break; }
 
-            // S10c: computeServer
-            t0 = Date.now();
-            try {
-              const ind = computeServer(summary, pbpResult, _seasonQ4Cache || {}, league);
-              _dt(`${league}: S10c computeServer floor=${ind?.score} ctrl=${ind?.controlTeam}`, t0);
+          // Step 4: computeServer
+          t0 = Date.now();
+          let ind = null;
+          try {
+            ind = computeServer(_srSummary, fbPbp, _seasonQ4Cache || {}, league);
+            _dt(`${league}: step4 computeServer floor=${ind?.score} ctrl=${ind?.controlTeam}`, t0);
+          } catch(e) { diag.sections.push({ label: `step4 CRASH: ${e.message}`, ms: Date.now()-t0, stack: e.stack?.split('\n').slice(0,3) }); }
+          if (diagStep < 5) { diag.sections.push({ label: 'stopped at step 4' }); break; }
 
-              // S10d: Quarter data + window
-              t0 = Date.now();
-              try {
-                const _qd = await readQuarterData(sql, g0.id);
-                const _wr = computeServerWindow(_qd, currentPeriod, clock, summary, hA, aA, league);
-                _dt(`${league}: S10d window (has=${!!_wr})`, t0);
-              } catch(e) { _dt(`${league}: S10d window CRASH: ${e.message}`, t0); }
+          // Step 5: extractXGBFeatures
+          t0 = Date.now();
+          try {
+            const _wbl = _srSummary?.home?.statistics?.biggest_lead || 0;
+            const _xf = extractXGBFeatures(_srSummary, ind, fbPbp, _srSummary?.quarter || 1, _srSummary?.clock || '', null, league, _wbl);
+            const _xp = _xf ? predictXGB(_xf, league) : null;
+            _dt(`${league}: step5 XGB prob=${_xp?.toFixed(3)} features=${_xf?.length}`, t0);
+          } catch(e) { diag.sections.push({ label: `step5 XGB CRASH: ${e.message}`, ms: Date.now()-t0, stack: e.stack?.split('\n').slice(0,3) }); }
+          if (diagStep < 6) { diag.sections.push({ label: 'stopped at step 5' }); break; }
 
-              // S10e: XGB
-              t0 = Date.now();
-              try {
-                const _windowedBiglead = summary._windowedBiglead != null ? summary._windowedBiglead : (summary.home?.statistics?.biggest_lead || 0);
-                const _xgbFeatures = extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock, null, league, _windowedBiglead);
-                const _xgbWinProb = _xgbFeatures ? predictXGB(_xgbFeatures, league) : null;
-                _dt(`${league}: S10e XGB prob=${_xgbWinProb?.toFixed(3)} features=${_xgbFeatures?.length}`, t0);
-              } catch(e) { diag.sections.push({ label: `${league}: S10e XGB CRASH: ${e.message}`, ms: Date.now()-t0, stack: e.stack?.split('\n').slice(0,3) }); }
-
-              // S10f: Sustainability
-              t0 = Date.now();
-              try {
-                const sust = computeSustainability(summary, league);
-                _dt(`${league}: S10f sust ctrl=${sust?.ctrl} opp=${sust?.opp}`, t0);
-              } catch(e) { _dt(`${league}: S10f sust CRASH: ${e.message}`, t0); }
-
-            } catch(e) { diag.sections.push({ label: `${league}: S10c computeServer CRASH: ${e.message}`, ms: Date.now()-t0, stack: e.stack?.split('\n').slice(0,3) }); }
-          }
+          // Step 6: computeSustainability
+          t0 = Date.now();
+          try {
+            const sust = computeSustainability(_srSummary, league);
+            _dt(`${league}: step6 sust ctrl=${sust?.ctrl} opp=${sust?.opp}`, t0);
+          } catch(e) { diag.sections.push({ label: `step6 sust CRASH: ${e.message}`, ms: Date.now()-t0, stack: e.stack?.split('\n').slice(0,3) }); }
         }
 
         diag.sections.push({ label: `${league}: ✓ all sections passed`, ms: 0 });
