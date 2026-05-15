@@ -504,6 +504,11 @@ var espnGameMap = {};
 var dbReady = false;
 var demoMode = false;
 var DEMO_GAMES = [
+  {id:'79695927-6dad-4aac-9d45-87b64c207526',preset:'ESPN TEST',desc:'MIN@DAL ESPN primary test',
+   status:'inprogress',scheduled:'2026-05-15T00:00:00Z',venue:'College Park Center',
+   home:{alias:'DAL',name:'Wings',market:'Dallas'},away:{alias:'MIN',name:'Lynx',market:'Minnesota'},
+   homePoints:null,awayPoints:null,period:3,clock:'5:00',dataSource:'ESPN',
+   _espnId:'401856908'},
   {id:'a01c0aa0-885e-4258-82c5-695c2ada9546',preset:'BLOWOUT',desc:'NYL LOCKED 37 holds',
    status:'closed',scheduled:'2026-05-08T23:30:00Z',venue:'Barclays Center',
    home:{alias:'NY',name:'Liberty',market:'New York'},away:{alias:'CON',name:'Sun',market:'Connecticut'},
@@ -1113,6 +1118,8 @@ function toggleDemo(){
     clearInterval(pollTimer);
     games=DEMO_GAMES.map(function(d){return Object.assign({},d);});
     Object.keys(cardState).forEach(function(k){delete cardState[k];});activeGameId=null;
+    // Map ESPN IDs for demo games that have them
+    DEMO_GAMES.forEach(function(d){if(d._espnId)espnGameMap[d.id]=d._espnId;});
     mountAllCards();renderPills();renderDemoStrip();
     // Hydrate from DB (staggered)
     games.forEach(function(g,i){
@@ -1121,6 +1128,12 @@ function toggleDemo(){
       setTimeout(function(){fetchOddsHistory(g.id);},600+i*200);
     });
     syncAnalysesFromDB();syncCalibrationAnalyses();syncLatestSnapshotsFromDB();syncThesesFromDB();
+    // Start polling if any demo game is LIVE (ESPN test)
+    var hasLiveDemo=games.some(function(g){return getState(g)==='LIVE';});
+    if(hasLiveDemo){
+      refreshLiveCards();
+      pollTimer=setInterval(function(){refreshLiveCards();},pollInterval);
+    }
     document.querySelector('.date-nav').style.display='none';
   } else {
     document.querySelector('.date-nav').style.display='';
