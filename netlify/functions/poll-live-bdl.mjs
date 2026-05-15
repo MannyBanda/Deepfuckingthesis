@@ -2719,6 +2719,9 @@ function buildSummaryFromESPN(espnFull) {
   var aSPts = aPl.filter(function(p) { return p.starter; }).reduce(function(t, p) { return t + (p.stats?.points || 0); }, 0);
   hStats.bench_points = Math.max(0, hStats.points - hSPts);
   aStats.bench_points = Math.max(0, aStats.points - aSPts);
+  // Recalculate oppp now that points are set (not available in _parseESPNTeamStats)
+  hStats.offensive_points_per_possession = hStats.possessions > 0 ? +(hStats.points / hStats.possessions).toFixed(2) : 0;
+  aStats.offensive_points_per_possession = aStats.possessions > 0 ? +(aStats.points / aStats.possessions).toFixed(2) : 0;
   // Cross-references
   hStats.points_against = aStats.points; aStats.points_against = hStats.points;
   hStats.defensive_points_per_possession = hStats.possessions > 0 ? +(aStats.points / hStats.possessions).toFixed(2) : 0;
