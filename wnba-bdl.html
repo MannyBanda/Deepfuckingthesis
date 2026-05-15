@@ -508,7 +508,7 @@ var DEMO_GAMES = [
    status:'inprogress',scheduled:'2026-05-15T00:00:00Z',venue:'College Park Center',
    home:{alias:'DAL',name:'Wings',market:'Dallas'},away:{alias:'MIN',name:'Lynx',market:'Minnesota'},
    homePoints:null,awayPoints:null,period:3,clock:'5:00',dataSource:'ESPN',
-   _espnId:'401856908'},
+   _espnId:'401856908',_bdlId:24770},
   {id:'a01c0aa0-885e-4258-82c5-695c2ada9546',preset:'BLOWOUT',desc:'NYL LOCKED 37 holds',
    status:'closed',scheduled:'2026-05-08T23:30:00Z',venue:'Barclays Center',
    home:{alias:'NY',name:'Liberty',market:'New York'},away:{alias:'CON',name:'Sun',market:'Connecticut'},
@@ -1118,8 +1118,11 @@ function toggleDemo(){
     clearInterval(pollTimer);
     games=DEMO_GAMES.map(function(d){return Object.assign({},d);});
     Object.keys(cardState).forEach(function(k){delete cardState[k];});activeGameId=null;
-    // Map ESPN IDs for demo games that have them
-    DEMO_GAMES.forEach(function(d){if(d._espnId)espnGameMap[d.id]=d._espnId;});
+    // Map ESPN and BDL IDs for demo games that have them
+    DEMO_GAMES.forEach(function(d){
+      if(d._espnId)espnGameMap[d.id]=d._espnId;
+      if(d._bdlId)bdlGameMap[d.id]=d._bdlId;
+    });
     mountAllCards();renderPills();renderDemoStrip();
     // Hydrate from DB (staggered)
     games.forEach(function(g,i){
@@ -3700,20 +3703,27 @@ async function fetchPBPFromDB(gameId,force){
       }
       // Check if DB has full raw shot data (needed for shot zones + margin flow)
       if(data.pbp.raw&&data.pbp.raw.shots&&data.pbp.raw.shots.length>0){
-        cs.pbpAudit=data.pbp;
-        cs.pbpTime=new Date(data.saved_at||Date.now());
-        cs.pbpWindow=computePBPWindow(data.pbp,data.pbp.homeAlias||'HOME',data.pbp.awayAlias||'AWAY');
-        console.log('[PBP] Loaded from DB (with raw shots) for',gameId);
-        buildScoringCompForCard(gameId);
-        renderCard(gameId);
-        return;
-      }
-      // DB has aggregated data but no raw shots — use aggregates temporarily
-      if(data.pbp.scoringEvents||data.pbp.runs){
-        cs.pbpAudit=data.pbp;
-        cs.pbpTime=new Date(data.saved_at||Date.now());
-        buildScoringCompForCard(gameId);
-        renderCard(gameId);
+        // Check if scoringEvents have valid margins — older DB entries may have null m
+        var _seValid=data.pbp.scoringEvents&&data.pbp.scoringEvents.length>0&&data.pbp.scoringEvents[0].m!=null;
+        if(_seValid){
+          cs.pbpAudit=data.pbp;
+          cs.pbpTime=new Date(data.saved_at||Date.now());
+          cs.pbpWindow=computePBPWindow(data.pbp,data.pbp.homeAlias||'HOME',data.pbp.awayAlias||'AWAY');
+          console.log('[PBP] Loaded from DB (with raw shots) for',gameId);
+          buildScoringCompForCard(gameId);
+          renderCard(gameId);
+          return;
+        }
+        // Margins are null — skip DB data entirely, fall through to BDL re-parse
+        console.log('[PBP] DB has raw shots but null margins — will re-parse from BDL for',gameId);
+      } else {
+        // DB has aggregated data but no raw shots — use aggregates temporarily
+        if(data.pbp.scoringEvents||data.pbp.runs){
+          cs.pbpAudit=data.pbp;
+          cs.pbpTime=new Date(data.saved_at||Date.now());
+          buildScoringCompForCard(gameId);
+          renderCard(gameId);
+        }
       }
     }
   }catch(e){console.warn('[PBP] DB fetch failed:',e.message);}
@@ -3722,7 +3732,8 @@ async function fetchPBPFromDB(gameId,force){
   if(bdlId){
     try{
       var g=games.find(function(x){return x.id===gameId;});if(!g)return;
-      var hA=g.home?.alias||'HOME',aA=g.away?.alias||'AWAY';
+      var hA=ESPN_ALIAS_MAP[g.home?.alias]||g.home?.alias||'HOME';
+      var aA=ESPN_ALIAS_MAP[g.away?.alias]||g.away?.alias||'AWAY';
       var plData=await bdl('plays',{game_id:String(bdlId),league:'wnba'});
       var plays=plData.data||[];
       if(plays.length>0){

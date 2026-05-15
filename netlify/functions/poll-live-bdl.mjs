@@ -1878,8 +1878,12 @@ function parseBDLPBPServer(plays, homeAbbr, awayAbbr) {
     };
   }
 
-  // Build scoringEvents from made shots
-  const scoringEvents = shots.filter(s => s.m).map(s => ({tm: s.tm, pts: s.is3 ? 3 : 2, p: s.p, q: s.q, z: s.z}));
+  // Build scoringEvents from scoreLog (includes FTs, has running margin)
+  const scoringEvents = scoreLog.map(s => ({
+    tm: s.team, pts: s.pts, q: s.q,
+    type: s.pts === 3 ? '3PT' : s.pts === 1 ? 'FT' : '2PT',
+    m: s.aScore - s.hScore
+  }));
 
   return {
     home: aggTeam(hA), away: aggTeam(aA),
