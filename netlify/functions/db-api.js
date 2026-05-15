@@ -155,6 +155,7 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ls_class TEXT`; } catch(e) {}
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ls_exp_swing REAL`; } catch(e) {}
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS raw_stats_json JSONB`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS espn_raw_stats_json JSONB`; } catch(e) {}
 
       // V2 state machine + graduation per snapshot
       try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS bwc_state TEXT`; } catch(e) {}

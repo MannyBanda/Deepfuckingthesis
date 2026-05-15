@@ -2590,6 +2590,179 @@ function buildSummaryFromBDLPlayerStats(playerStats, bdlGame, pbpResult) {
   return buildSummaryFromBDLServer(fakeBoxScore, pbpResult, null);
 }
 
+// ── ESPN ADAPTER: converts ESPN summary to SR-shaped summary for computeServer ──
+// Fetches full ESPN summary — WP + boxscore + player stats in one call
+async function espnSummaryFull(league, espnEventId) {
+  var cfg = LEAGUES[league];
+  var url = `${cfg.espnSummaryBase}?event=${espnEventId}`;
+  try {
+    var resp = await fetch(url);
+    if (!resp.ok) return null;
+    var data = await resp.json();
+    var wpArr = data.winprobability || [];
+    var latest = wpArr.length > 0 ? wpArr[wpArr.length - 1] : null;
+    var homeWP = latest?.homeWinPercentage;
+    var wp = homeWP != null ? { home: Math.round(homeWP * 100), away: 100 - Math.round(homeWP * 100) } : null;
+    var boxTeams = data.boxscore?.teams || [];
+    var homeBox = boxTeams.find(function(t) { return t.homeAway === 'home'; });
+    var awayBox = boxTeams.find(function(t) { return t.homeAway === 'away'; });
+    var boxPlayers = data.boxscore?.players || [];
+    var homePl = boxPlayers.find(function(t) { return t.homeAway === 'home' || (homeBox && t.team?.abbreviation === homeBox.team?.abbreviation); });
+    var awayPl = boxPlayers.find(function(t) { return t.homeAway === 'away' || (awayBox && t.team?.abbreviation === awayBox.team?.abbreviation); });
+    var comp = data.header?.competitions?.[0] || {};
+    var homeComp = comp.competitors?.find(function(c) { return c.homeAway === 'home'; });
+    var awayComp = comp.competitors?.find(function(c) { return c.homeAway === 'away'; });
+    return {
+      wp: wp,
+      boxscore: { home: homeBox?.statistics || [], away: awayBox?.statistics || [], homeAbbr: homeBox?.team?.abbreviation || '', awayAbbr: awayBox?.team?.abbreviation || '' },
+      players: { home: _extractESPNPlayers(homePl), away: _extractESPNPlayers(awayPl) },
+      header: {
+        homeScore: Number(homeComp?.score || 0), awayScore: Number(awayComp?.score || 0),
+        period: Number(comp.status?.period || 0), clock: comp.status?.displayClock || '',
+        status: comp.status?.type?.name || '',
+        linescores: { home: (homeComp?.linescores || []).map(function(ls) { return Number(ls.value || 0); }), away: (awayComp?.linescores || []).map(function(ls) { return Number(ls.value || 0); }) },
+      },
+    };
+  } catch (e) {
+    log(`ESPN summary full error for ${espnEventId}: ${e.message}`);
+    return null;
+  }
+}
+
+function _extractESPNPlayers(teamPl) {
+  if (!teamPl?.statistics?.[0]?.athletes) return [];
+  var keys = teamPl.statistics[0].keys || [];
+  return teamPl.statistics[0].athletes.map(function(a) {
+    var ps = {};
+    keys.forEach(function(k, i) {
+      var v = (a.stats || [])[i] || '0';
+      if (k === 'minutes') { ps.minutes = v; }
+      else if (k === 'points') { ps.points = Number(v) || 0; }
+      else if (k === 'fieldGoalsMade-fieldGoalsAttempted') { var p = v.split('-'); ps.field_goals_made = Number(p[0]) || 0; ps.field_goals_att = Number(p[1]) || 0; }
+      else if (k === 'threePointFieldGoalsMade-threePointFieldGoalsAttempted') { var p = v.split('-'); ps.three_points_made = Number(p[0]) || 0; ps.three_points_att = Number(p[1]) || 0; }
+      else if (k === 'freeThrowsMade-freeThrowsAttempted') { var p = v.split('-'); ps.free_throws_made = Number(p[0]) || 0; ps.free_throws_att = Number(p[1]) || 0; }
+      else if (k === 'rebounds') { ps.rebounds = Number(v) || 0; }
+      else if (k === 'assists') { ps.assists = Number(v) || 0; }
+      else if (k === 'turnovers') { ps.turnovers = Number(v) || 0; }
+      else if (k === 'steals') { ps.steals = Number(v) || 0; }
+      else if (k === 'blocks') { ps.blocks = Number(v) || 0; }
+      else if (k === 'offensiveRebounds') { ps.offensive_rebounds = Number(v) || 0; }
+      else if (k === 'defensiveRebounds') { ps.defensive_rebounds = Number(v) || 0; }
+      else if (k === 'fouls') { ps.personal_fouls = Number(v) || 0; }
+      else if (k === 'plusMinus') { ps.pls_min = Number(v) || 0; }
+    });
+    return { id: a.athlete?.id || '', name: a.athlete?.displayName || '', position: a.athlete?.position?.abbreviation || '', starter: !!a.starter, didNotPlay: !!a.didNotPlay, stats: ps };
+  });
+}
+
+function _parseESPNTeamStats(statsArr) {
+  var s = {
+    field_goals_made: 0, field_goals_att: 0, three_points_made: 0, three_points_att: 0,
+    two_points_made: 0, two_points_att: 0, free_throws_made: 0, free_throws_att: 0,
+    assists: 0, steals: 0, blocks: 0, offensive_rebounds: 0, defensive_rebounds: 0,
+    rebounds: 0, turnovers: 0, total_turnovers: 0, personal_fouls: 0, points: 0,
+    bench_points: 0, points_in_paint: 0, points_in_the_paint: 0,
+    fast_break_pts: 0, fast_break_points: 0, points_off_turnovers: 0,
+    second_chance_points: 0, second_chance_pts: 0, biggest_lead: 0,
+    field_goals_pct: 0, three_points_pct: 0, effective_fg_pct: 0,
+    possessions: 0, offensive_points_per_possession: 0, defensive_points_per_possession: 0,
+    offensive_rating: 0, defensive_rating: 0, fouls_drawn: 0, points_against: 0,
+    points_in_paint_made: 0, points_in_paint_att: 0,
+    field_goals_at_rim_made: 0, field_goals_at_rim_att: 0,
+    most_unanswered: { points: 0 }, time_leading: '',
+  };
+  (statsArr || []).forEach(function(st) {
+    var v = st.displayValue;
+    if (st.name === 'fieldGoalsMade-fieldGoalsAttempted') { var p = v.split('-'); s.field_goals_made = Number(p[0]) || 0; s.field_goals_att = Number(p[1]) || 0; }
+    else if (st.name === 'threePointFieldGoalsMade-threePointFieldGoalsAttempted') { var p = v.split('-'); s.three_points_made = Number(p[0]) || 0; s.three_points_att = Number(p[1]) || 0; }
+    else if (st.name === 'freeThrowsMade-freeThrowsAttempted') { var p = v.split('-'); s.free_throws_made = Number(p[0]) || 0; s.free_throws_att = Number(p[1]) || 0; }
+    else if (st.name === 'totalRebounds') { s.rebounds = +v; }
+    else if (st.name === 'offensiveRebounds') { s.offensive_rebounds = +v; }
+    else if (st.name === 'defensiveRebounds') { s.defensive_rebounds = +v; }
+    else if (st.name === 'assists') { s.assists = +v; }
+    else if (st.name === 'steals') { s.steals = +v; }
+    else if (st.name === 'blocks') { s.blocks = +v; }
+    else if (st.name === 'turnovers') { s.turnovers = +v; s.total_turnovers = +v; }
+    else if (st.name === 'fouls') { s.personal_fouls = +v; }
+    else if (st.name === 'pointsInPaint') { s.points_in_paint = +v; s.points_in_the_paint = +v; }
+    else if (st.name === 'fastBreakPoints') { s.fast_break_pts = +v; s.fast_break_points = +v; }
+    else if (st.name === 'turnoverPoints') { s.points_off_turnovers = +v; }
+    else if (st.name === 'largestLead') { s.biggest_lead = +v; }
+    else if (st.name === 'fieldGoalPct') { s.field_goals_pct = +v; }
+    else if (st.name === 'threePointFieldGoalPct') { s.three_points_pct = +v; }
+  });
+  s.two_points_made = s.field_goals_made - s.three_points_made;
+  s.two_points_att = s.field_goals_att - s.three_points_att;
+  var fga = s.field_goals_att || 1;
+  s.effective_fg_pct = +((s.field_goals_made + 0.5 * s.three_points_made) / fga * 100).toFixed(1);
+  s.true_shooting_att = +(fga + 0.44 * s.free_throws_att).toFixed(1);
+  s.true_shooting_pct = s.true_shooting_att > 0 ? +(s.points / (2 * s.true_shooting_att) * 100).toFixed(1) : 0;
+  s.assists_turnover_ratio = s.turnovers > 0 ? +(s.assists / s.turnovers).toFixed(2) : s.assists;
+  s.possessions = +(fga - s.offensive_rebounds + s.turnovers + 0.4 * s.free_throws_att).toFixed(1);
+  s.offensive_points_per_possession = s.possessions > 0 ? +(s.points / s.possessions).toFixed(2) : 0;
+  return s;
+}
+
+function buildSummaryFromESPN(espnFull) {
+  if (!espnFull?.boxscore) return null;
+  var hStats = _parseESPNTeamStats(espnFull.boxscore.home);
+  var aStats = _parseESPNTeamStats(espnFull.boxscore.away);
+  var hPl = espnFull.players?.home || [];
+  var aPl = espnFull.players?.away || [];
+  // Points: prefer team stats, fallback to player sum, fallback to header
+  if (!hStats.points) hStats.points = hPl.reduce(function(t, p) { return t + (p.stats?.points || 0); }, 0);
+  if (!aStats.points) aStats.points = aPl.reduce(function(t, p) { return t + (p.stats?.points || 0); }, 0);
+  if (!hStats.points && espnFull.header) hStats.points = espnFull.header.homeScore;
+  if (!aStats.points && espnFull.header) aStats.points = espnFull.header.awayScore;
+  // Bench points from starter flags
+  var hSPts = hPl.filter(function(p) { return p.starter; }).reduce(function(t, p) { return t + (p.stats?.points || 0); }, 0);
+  var aSPts = aPl.filter(function(p) { return p.starter; }).reduce(function(t, p) { return t + (p.stats?.points || 0); }, 0);
+  hStats.bench_points = Math.max(0, hStats.points - hSPts);
+  aStats.bench_points = Math.max(0, aStats.points - aSPts);
+  // Cross-references
+  hStats.points_against = aStats.points; aStats.points_against = hStats.points;
+  hStats.defensive_points_per_possession = hStats.possessions > 0 ? +(aStats.points / hStats.possessions).toFixed(2) : 0;
+  aStats.defensive_points_per_possession = aStats.possessions > 0 ? +(hStats.points / aStats.possessions).toFixed(2) : 0;
+  hStats.offensive_rating = hStats.possessions > 0 ? +(hStats.points / hStats.possessions * 100).toFixed(1) : 0;
+  hStats.defensive_rating = hStats.possessions > 0 ? +(aStats.points / hStats.possessions * 100).toFixed(1) : 0;
+  aStats.offensive_rating = aStats.possessions > 0 ? +(aStats.points / aStats.possessions * 100).toFixed(1) : 0;
+  aStats.defensive_rating = aStats.possessions > 0 ? +(hStats.points / aStats.possessions * 100).toFixed(1) : 0;
+  // Player arrays
+  function ePlToSR(eArr) {
+    return eArr.filter(function(p) { return !p.didNotPlay; }).map(function(p) {
+      return { id: p.id, full_name: p.name, position: p.position, primary_position: p.position, played: !p.didNotPlay, active: true, starter: p.starter, on_court: false,
+        statistics: { minutes: p.stats?.minutes || '0', field_goals_made: p.stats?.field_goals_made || 0, field_goals_att: p.stats?.field_goals_att || 0, three_points_made: p.stats?.three_points_made || 0, three_points_att: p.stats?.three_points_att || 0, free_throws_made: p.stats?.free_throws_made || 0, free_throws_att: p.stats?.free_throws_att || 0, offensive_rebounds: p.stats?.offensive_rebounds || 0, defensive_rebounds: p.stats?.defensive_rebounds || 0, rebounds: p.stats?.rebounds || 0, assists: p.stats?.assists || 0, steals: p.stats?.steals || 0, blocks: p.stats?.blocks || 0, turnovers: p.stats?.turnovers || 0, personal_fouls: p.stats?.personal_fouls || 0, points: p.stats?.points || 0, pls_min: p.stats?.pls_min || 0 } };
+    });
+  }
+  // Periods from linescores
+  var periods = [];
+  var hLS = espnFull.header?.linescores?.home || [];
+  var aLS = espnFull.header?.linescores?.away || [];
+  for (var i = 0; i < Math.max(hLS.length, aLS.length); i++) {
+    periods.push({ number: i + 1, home_points: hLS[i] || 0, away_points: aLS[i] || 0 });
+  }
+  var hScoring = periods.map(function(p) { return { type: 'quarter', number: p.number, sequence: p.number, points: p.home_points }; });
+  var aScoring = periods.map(function(p) { return { type: 'quarter', number: p.number, sequence: p.number, points: p.away_points }; });
+  return {
+    home: { alias: espnFull.boxscore.homeAbbr, name: espnFull.boxscore.homeAbbr, points: hStats.points, statistics: hStats, players: ePlToSR(hPl), scoring: hScoring },
+    away: { alias: espnFull.boxscore.awayAbbr, name: espnFull.boxscore.awayAbbr, points: aStats.points, statistics: aStats, players: ePlToSR(aPl), scoring: aScoring },
+    quarter: espnFull.header?.period || 0, clock: espnFull.header?.clock || '', status: espnFull.header?.status || '',
+    periods: periods, _dataSource: 'ESPN',
+  };
+}
+
+function buildESPNRawStatsJson(espnSummary) {
+  if (!espnSummary) return null;
+  try {
+    var h = espnSummary.home?.statistics || {}, a = espnSummary.away?.statistics || {};
+    return JSON.stringify({
+      home: { stl: h.steals||0, oreb: h.offensive_rebounds||0, to: h.turnovers||0, fbp: h.fast_break_points||0, pot: h.points_off_turnovers||0, scp: h.second_chance_points||0, paint: h.points_in_paint||0, fta: h.free_throws_att||0, blk: h.blocks||0, fgm: h.field_goals_made||0, fga: h.field_goals_att||0, fg3m: h.three_points_made||0, fg3a: h.three_points_att||0, ast: h.assists||0, bigLead: h.biggest_lead||0, bench: h.bench_points||0, oppp: h.offensive_points_per_possession||0, dppp: h.defensive_points_per_possession||0, poss: h.possessions||0, ftm: h.free_throws_made||0, pts: h.points||0, pf: h.personal_fouls||0, efg: h.effective_fg_pct||0 },
+      away: { stl: a.steals||0, oreb: a.offensive_rebounds||0, to: a.turnovers||0, fbp: a.fast_break_points||0, pot: a.points_off_turnovers||0, scp: a.second_chance_points||0, paint: a.points_in_paint||0, fta: a.free_throws_att||0, blk: a.blocks||0, fgm: a.field_goals_made||0, fga: a.field_goals_att||0, fg3m: a.three_points_made||0, fg3a: a.three_points_att||0, ast: a.assists||0, bigLead: a.biggest_lead||0, bench: a.bench_points||0, oppp: a.offensive_points_per_possession||0, dppp: a.defensive_points_per_possession||0, poss: a.possessions||0, ftm: a.free_throws_made||0, pts: a.points||0, pf: a.personal_fouls||0, efg: a.effective_fg_pct||0 },
+      source: 'espn',
+    });
+  } catch (e) { return null; }
+}
+
 // Load season Q4 margins from games table (cached per hour)
 async function loadSeasonQ4(sql, league) {
   if (_seasonQ4Cache && Date.now() - _seasonQ4Time < 3600000) return _seasonQ4Cache;
@@ -6969,8 +7142,38 @@ export default async function(req) {
           const aBdl = league === 'wnba' ? (cfg.aliasMap?.[aA] || aA) : aA;
           const lineupsArr = _serverLineupsCache[bdlGid] || null;
 
-          // Build SR-shaped summary (WNBA: already fetched from SR)
-          const summary = league === 'wnba' ? _srSummary : buildSummaryFromBDLServer(boxScore, pbpResult, lineupsArr);
+          // Build SR-shaped summary
+          // WNBA two-tier: ESPN for display (indicators/floor/alerts), BDL for models (XGB/MC)
+          var summary, modelSummary, espnFull = null, espnRawStatsJson = null;
+          if (league === 'wnba') {
+            if (espnMap[game.id]) {
+              try { espnFull = await espnSummaryFull(league, espnMap[game.id]); } catch (e) { log(`${matchup}: ESPN summary failed — ${e.message}`); }
+            }
+            if (espnFull?.boxscore?.home?.length > 0) {
+              summary = buildSummaryFromESPN(espnFull);
+              // Enrich ESPN summary with BDL PBP-derived SCP + runs
+              if (pbpResult?._bdl) {
+                if (summary.home?.statistics) { summary.home.statistics.second_chance_points = pbpResult._bdl.scpHome || 0; summary.home.statistics.second_chance_pts = pbpResult._bdl.scpHome || 0; }
+                if (summary.away?.statistics) { summary.away.statistics.second_chance_points = pbpResult._bdl.scpAway || 0; summary.away.statistics.second_chance_pts = pbpResult._bdl.scpAway || 0; }
+              }
+              if (pbpResult?.runs) {
+                var _hRuns = (pbpResult.runs || []).filter(function(r) { return r.team === hBdl; });
+                var _aRuns = (pbpResult.runs || []).filter(function(r) { return r.team === aBdl; });
+                if (summary.home?.statistics) summary.home.statistics.most_unanswered = { points: _hRuns.reduce(function(m, r) { return r.pts > m ? r.pts : m; }, 0) };
+                if (summary.away?.statistics) summary.away.statistics.most_unanswered = { points: _aRuns.reduce(function(m, r) { return r.pts > m ? r.pts : m; }, 0) };
+              }
+              espnRawStatsJson = buildESPNRawStatsJson(summary);
+              modelSummary = _srSummary; // BDL-derived for XGB/MC fidelity
+              log(`${matchup}: ESPN display ✓ | BDL model ✓`);
+            } else {
+              summary = _srSummary;
+              modelSummary = _srSummary;
+              log(`${matchup}: ESPN unavailable — BDL for all`);
+            }
+          } else {
+            summary = buildSummaryFromBDLServer(boxScore, pbpResult, lineupsArr);
+            modelSummary = summary;
+          }
 
           // ── BIGLEAD LAG FIX: BDL/SR biggest_lead lags 1-3 polls behind actual score ──
           // Track running max margin from actual scores in live_tracking, override summary
@@ -7024,9 +7227,11 @@ export default async function(req) {
             );
           }
 
-          // Fetch ESPN WP (no rate limit, non-blocking)
+          // ESPN WP — use espnFull if available (WNBA: no extra HTTP call)
           let espnWP = null;
-          if (espnMap[game.id]) {
+          if (league === 'wnba' && espnFull?.wp) {
+            espnWP = espnFull.wp;
+          } else if (espnMap[game.id]) {
             espnWP = await espnWinProb(league, espnMap[game.id]);
           }
 
@@ -7078,7 +7283,9 @@ export default async function(req) {
               _windowedBiglead = _wblCtrl - _wblOpp;
             } catch (e) { /* non-fatal — falls back to cumulative */ }
           }
-          const _xgbFeatures = extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock, _windowResult?.rawAgg || null, league, _windowedBiglead);
+          // XGB: use modelSummary (BDL) for WNBA feature fidelity — avoids distribution shift
+          const _xgbSrc = league === 'wnba' ? (modelSummary || summary) : summary;
+          const _xgbFeatures = extractXGBFeatures(_xgbSrc, ind, pbpResult, currentPeriod, clock, _windowResult?.rawAgg || null, league, _windowedBiglead);
           const _xgbWinProb = _xgbFeatures ? predictXGB(_xgbFeatures, league) : null;
           const _xgbDivergence = _xgbWinProb != null ? Math.round((_xgbWinProb - ind.score) * 1000) / 1000 : null;
           const _xgbAligned = _xgbWinProb != null ? Math.abs(_xgbWinProb - ind.score) < 0.15 : null;
@@ -7229,7 +7436,8 @@ export default async function(req) {
               var _mcABL = _clutchMap?.[aA]?.q4_fg3pct || _team3ptBaselines?.[aA] || 0.36;
               var _mcClk = String(clock||'6:00').match(/(\d+):(\d+)/);
               var _mcSec = _mcClk ? parseInt(_mcClk[1])*60+parseInt(_mcClk[2]) : 360;
-              _mcCum = computeMCCumulative(summary, currentPeriod, _mcSec, ind.controlTeam, hA, _mcHBL, _mcABL, league);
+              var _mcSrc = league === 'wnba' ? (modelSummary || summary) : summary;
+              _mcCum = computeMCCumulative(_mcSrc, currentPeriod, _mcSec, ind.controlTeam, hA, _mcHBL, _mcABL, league);
               // MC Rate Decomposition — which rates drive the win probability
               if (_mcCum) {
                 try {
@@ -7253,7 +7461,7 @@ export default async function(req) {
               qtr_score, qtr_team, espn_wp_home, espn_wp_away,
               spread, deficit, trailing_team, lead_sust, gap, accel,
               i1, i2, i3, i4, i5, source, lead_class, sust_json,
-              tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json,
+              tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json, espn_raw_stats_json,
               bwc_state, grad_rank, floor_wp_historical, reliability_class, window_score,
               xgb_win_prob, xgb_divergence, poss_window_score, mc_win_prob, mc_cum_win_prob, xgb_shap)
             VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
@@ -7262,7 +7470,7 @@ export default async function(req) {
               ${spreadVal}, ${deficit}, ${trailingTeam}, ${leadSust}, ${null}, ${null},
               ${_ci[0]}, ${_ci[1]}, ${_ci[2]}, ${_ci[3]}, ${_ci[4]},
               ${'server'}, ${leadClass}, ${sustJson},
-              ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
+              ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson}, ${espnRawStatsJson},
               ${_snapLT?.bwc_fired ? (_snapLT._prev_bwc_state || null) : null}, ${_snapLT?.compound_tier || null},
               ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore},
               ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbDivergence}, ${_possWindowScore}, ${_pollMC}, ${_mcCum?.winProb != null ? Math.round(_mcCum.winProb * 10000) / 10000 : null}, ${_xgbShap ? JSON.stringify(_xgbShap) : null})
@@ -8920,7 +9128,7 @@ export default async function(req) {
                       floor_score, floor_team, espn_wp_home, espn_wp_away,
                       spread, deficit, trailing_team, lead_sust, lead_class,
                       i1, i2, i3, i4, i5, source, sust_json,
-                      tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json,
+                      tp_class, tp_exp_swing, tp_remain_poss, ls_class, ls_exp_swing, raw_stats_json, espn_raw_stats_json,
                       bwc_state, grad_rank, floor_wp_historical, reliability_class, window_score,
                       xgb_win_prob, xgb_divergence, poss_window_score, mc_win_prob, mc_cum_win_prob, xgb_shap)
                     VALUES (${game.id}, ${currentPeriod}, ${clock}, ${ind.homePts}, ${ind.awayPts},
@@ -8928,7 +9136,7 @@ export default async function(req) {
                       ${spreadVal}, ${deficit}, ${trailingTeam}, ${leadSust}, ${leadClass},
                       ${_ci[0]}, ${_ci[1]}, ${_ci[2]}, ${_ci[3]}, ${_ci[4]},
                       ${t.tag}, ${sustJson},
-                      ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson},
+                      ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson}, ${espnRawStatsJson},
                       ${lt?.bwc_fired ? (lt._prev_bwc_state || null) : null}, ${lt?.cp_peak_rank || null},
                       ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore},
                       ${_xgbWinProb != null ? Math.round(_xgbWinProb * 1000) / 1000 : null}, ${_xgbDivergence}, ${_possWindowScore}, ${_pollMC}, ${_mcCum?.winProb != null ? Math.round(_mcCum.winProb * 10000) / 10000 : null}, ${_xgbShap ? JSON.stringify(_xgbShap) : null})
