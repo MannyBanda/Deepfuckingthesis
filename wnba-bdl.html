@@ -527,6 +527,7 @@ var _lastSnapshotResync = 0;
 var _lastEspnWPRefresh = 0;
 var _livePBPQueue = [];
 var _pbpPlayCount = {}; // gameId → last play count (fingerprint to skip redundant parsing)
+var _lastBDLPBPRefresh = 0; // throttle BDL plays to 30s
 
 // ── UTILS ──
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/`/g,'&#96;').replace(/\$\{/g,'&#36;{');}
@@ -749,71 +750,103 @@ async function loadSchedule(){
   finally{showLoading(false);}
 }
 
-// ── POLL (10s — score updates + client-side indicator compute) ──
+// ── POLL (10s — ESPN primary for score/indicators/WP, BDL 30s for PBP) ──
 async function refreshLiveCards(){
   try{
-    // BDL live score refresh — more current than ESPN scoreboard
+    // ─── 1. ESPN SCOREBOARD — score/clock/status for ALL games (1 call) ───
     try{
-      var d=getSlateDate(dateOffset);var ds1=d.year+'-'+d.month+'-'+d.day;
-      var dt=new Date(ds1+'T12:00:00Z');dt.setUTCDate(dt.getUTCDate()+1);
-      var ds2=dt.getUTCFullYear()+'-'+String(dt.getUTCMonth()+1).padStart(2,'0')+'-'+String(dt.getUTCDate()).padStart(2,'0');
-      var bg=[];
-      try{var r1=await bdl('games',{date:ds1,league:'wnba'});bg=bg.concat(r1.data||[]);}catch(e){}
-      try{var r2=await bdl('games',{date:ds2,league:'wnba'});bg=bg.concat(r2.data||[]);}catch(e){}
-      games.forEach(function(g){
-        var bdlId=bdlGameMap[g.id];if(!bdlId)return;
-        var match=bg.find(function(b){return b.id===bdlId;});
-        if(!match)return;
-        if(match.home_score!=null)g.homePoints=match.home_score;
-        if(match.away_score!=null)g.awayPoints=match.away_score;
-        if(match.period)g.period=match.period;
-        if(match.time&&match.time!=='0.0')g.clock=match.time;
-        var ms=(match.status||'').toLowerCase();
-        if(ms==='post')g.status='closed';
-        else if(ms==='in')g.status='inprogress';
-      });
-    }catch(e){console.warn('[BDL-SCORE]',e.message);}
-    // Parallel per-game fetches — plays + team_stats fired simultaneously
+      var d=getSlateDate(dateOffset);
+      var dateStr=d.year+d.month+d.day;
+      var sbResp=await fetch(FN+'espn-data?type=scoreboard&league=wnba&date='+dateStr);
+      if(sbResp.ok){
+        var sbData=await sbResp.json();
+        var eg=sbData.games||[];
+        games.forEach(function(g){
+          var hA=g.home?.alias||'',aA=g.away?.alias||'';
+          var hE=ESPN_ALIAS_MAP[hA]||hA,aE=ESPN_ALIAS_MAP[aA]||aA;
+          var match=eg.find(function(e){
+            return(e.homeAbbr===hA||e.homeAbbr===hE)&&(e.awayAbbr===aA||e.awayAbbr===aE);
+          });
+          if(!match)return;
+          if(match.espnId&&!espnGameMap[g.id])espnGameMap[g.id]=match.espnId;
+          if(match.homeScore!=null)g.homePoints=match.homeScore;
+          if(match.awayScore!=null)g.awayPoints=match.awayScore;
+          if(match.period)g.period=match.period;
+          if(match.clock&&match.clock!=='0.0')g.clock=match.clock;
+          var ms=(match.status||'').replace('STATUS_','').toLowerCase();
+          if(ms==='final')g.status='closed';
+          else if(ms==='in_progress'||ms==='halftime'||ms==='end_period')g.status='inprogress';
+        });
+      }
+    }catch(e){console.warn('[ESPN-SB]',e.message);}
+
+    // ─── 2. Per LIVE game: ESPN summary (team stats + WP) ───
     var liveGames=games.filter(function(g){
-      return getState(g)==='LIVE'&&bdlGameMap[g.id]&&cardState[g.id];
+      return getState(g)==='LIVE'&&cardState[g.id];
     });
     if(liveGames.length>0){
       await Promise.all(liveGames.map(async function(g){
-        var bdlId=bdlGameMap[g.id];
         var cs=cardState[g.id];
-        var res=await Promise.all([
-          bdl('plays',{game_id:bdlId,league:'wnba'}).catch(function(e){console.warn('[BDL plays]',g.id,e.message);return null;}),
-          bdl('team_stats',{game_id:bdlId,league:'wnba'}).catch(function(e){console.warn('[BDL team_stats]',g.id,e.message);return null;})
-        ]);
-        // 1a. Process plays → scores, period, clock, PBP
-        if(res[0]){
-          var plays=res[0].data||[];
-          if(plays.length>0){
-            var last=plays[plays.length-1];
-            g.homePoints=last.home_score!=null?last.home_score:g.homePoints;
-            g.awayPoints=last.away_score!=null?last.away_score:g.awayPoints;
-            g.period=last.period||g.period;
-            g.clock=last.clock||g.clock;
-            if((last.type||'').toLowerCase().includes('end game'))g.status='closed';
-            var hA=g.home?.alias||'',aA=g.away?.alias||'';
-            var hE=ESPN_ALIAS_MAP[hA]||hA,aE=ESPN_ALIAS_MAP[aA]||aA;
-            cs.pbpAudit=parseBDLPBP(plays,hE,aE);
-            cs._bdlPlays=plays;
-            cs._pbpPlayerStats=compilePBPPlayerStats(plays,hE,aE);
-            buildScoringCompForCard(g.id);
-          }
+        var espnId=espnGameMap[g.id];
+
+        // ESPN summary — team stats + WP + header (10s)
+        var espnOk=false;
+        if(espnId){
+          try{
+            var r=await fetch(FN+'espn-data?type=winprob&league=wnba&event_id='+espnId);
+            if(r.ok){
+              var data=await r.json();
+              // 2a. Score/clock/period from header (more precise than scoreboard)
+              if(data.header){
+                if(data.header.homeScore!=null)g.homePoints=data.header.homeScore;
+                if(data.header.awayScore!=null)g.awayPoints=data.header.awayScore;
+                if(data.header.period)g.period=data.header.period;
+                if(data.header.clock)g.clock=data.header.clock;
+                var hs=(data.header.status||'').replace('STATUS_','').toLowerCase();
+                if(hs==='final')g.status='closed';
+              }
+              // 2b. Team evidence from ESPN boxscore
+              var espnEvidence=buildTeamEvidenceFromESPN(data,g);
+              if(espnEvidence){
+                cs._teamEvidence=espnEvidence;
+                cs._teamEvidenceSource='espn';
+                espnOk=true;
+              }
+              // 2c. WP (folded into 10s — no separate 30s cycle)
+              if(data.current&&data.current.homeWinPct!=null){
+                var homeWP=Math.round(data.current.homeWinPct*100);
+                cs.espnWP={home:homeWP,away:100-homeWP,opening:data.opening?Math.round(data.opening.homeWinPct*100):null};
+                if(data.wpHistory&&data.wpHistory.length>0){
+                  cs.espnWPHistory=data.wpHistory;
+                  if(getState(g)==='FINAL'){
+                    try{localStorage.setItem('wnba:wpHist:'+g.id,JSON.stringify(cs.espnWPHistory));}catch(e){}
+                  }
+                }
+              }
+            }
+          }catch(e){console.warn('[ESPN-SUM]',g.id,e.message);}
         }
-        // 1b. Process team_stats → team evidence for I1-I5 detail
-        if(res[1]){
-          var tsData=res[1].data||[];
-          if(tsData.length>=2){
-            cs._bdlTeamStats=tsData;
-            cs._teamEvidence=buildTeamEvidence(tsData,g);
-          }
+
+        // 2d. BDL team_stats FALLBACK — only if ESPN failed for this game
+        if(!espnOk){
+          try{
+            var bdlId=bdlGameMap[g.id];
+            if(bdlId){
+              var tsRes=await bdl('team_stats',{game_id:bdlId,league:'wnba'});
+              var tsData=(tsRes&&tsRes.data)||[];
+              if(tsData.length>=2){
+                cs._bdlTeamStats=tsData;
+                cs._teamEvidence=buildTeamEvidence(tsData,g);
+                cs._teamEvidenceSource='bdl-fallback';
+              }
+            }
+          }catch(e2){console.warn('[BDL-FALLBACK]',g.id,e2.message);}
         }
-        // Compute client-side indicators from BDL data (10s refresh)
+
+        // 2e. Compute client-side indicators (10s)
         var _ci=computeClientIndicators(g.id);
         if(_ci)cs.clientInd=_ci;
+
         // Persist ESPN WP history when game goes FINAL
         if(getState(g)==='FINAL'){
           if(cs.espnWPHistory&&cs.espnWPHistory.length>10&&!cs._wpSaved){
@@ -822,13 +855,46 @@ async function refreshLiveCards(){
           }
         }
       }));
-      renderPills();games.forEach(function(g){renderCard(g.id);});
     }
+
+    // ─── 3. BDL plays — throttled to 30s for PBP features ───
+    if(Date.now()-_lastBDLPBPRefresh>=30000){
+      _lastBDLPBPRefresh=Date.now();
+      var pbpGames=games.filter(function(g){
+        return getState(g)==='LIVE'&&bdlGameMap[g.id]&&cardState[g.id];
+      });
+      if(pbpGames.length>0){
+        await Promise.all(pbpGames.map(async function(g){
+          var bdlId=bdlGameMap[g.id];
+          var cs=cardState[g.id];
+          var hA=g.home?.alias||'',aA=g.away?.alias||'';
+          var hE=ESPN_ALIAS_MAP[hA]||hA,aE=ESPN_ALIAS_MAP[aA]||aA;
+          try{
+            var plRes=await bdl('plays',{game_id:bdlId,league:'wnba'});
+            var plays=(plRes&&plRes.data)||[];
+            if(plays.length>0){
+              var prev=_pbpPlayCount[g.id]||0;
+              if(plays.length!==prev){
+                _pbpPlayCount[g.id]=plays.length;
+                cs.pbpAudit=parseBDLPBP(plays,hE,aE);
+                cs._bdlPlays=plays;
+                cs._pbpPlayerStats=compilePBPPlayerStats(plays,hE,aE);
+                cs.pbpWindow=computePBPWindow(cs.pbpAudit,hE,aE);
+                buildScoringCompForCard(g.id);
+              }
+            }
+          }catch(e){console.warn('[BDL-PBP]',g.id,e.message);}
+        }));
+      }
+    }
+
+    // Render
+    renderPills();games.forEach(function(g){renderCard(g.id);});
   }catch(e){console.warn('[POLL]',e.message);}
   pollAlerts();
   maybeResyncTheses();
   maybeResyncSnapshots();
-  maybeRefreshEspnWP();
+  // maybeRefreshEspnWP removed — WP folded into ESPN summary above
   maybeRefreshOdds();
 }
 
@@ -847,6 +913,66 @@ function buildTeamEvidence(tsData,game){
       pts:(fgm-fg3m)*2+fg3m*3+ftm};
   }
   return{home:adapt(home),away:adapt(away)};
+}
+
+function buildTeamEvidenceFromESPN(espnData, game) {
+  if (!espnData || !espnData.boxscore || espnData.boxscore.length < 2) return null;
+  var homeBox = espnData.boxscore.find(function(b) { return b.homeAway === 'home'; });
+  var awayBox = espnData.boxscore.find(function(b) { return b.homeAway === 'away'; });
+  if (!homeBox || !awayBox) return null;
+
+  function parseStats(statsArr) {
+    var s = { stl:0, blk:0, turnovers:0, pf:0, fta:0, ftm:0, fg3a:0, fg3m:0,
+              fga:0, fgm:0, ast:0, oreb:0, dreb:0, reb:0, pts:0,
+              paint:0, fbp:0, pot:0, scp:0, biggest_lead:0,
+              lead_changes:0, lead_pct:0, bench:0 };
+    (statsArr || []).forEach(function(st) {
+      var v = st.displayValue;
+      if (st.name === 'fieldGoalsMade-fieldGoalsAttempted') {
+        var p = v.split('-'); s.fgm = Number(p[0]) || 0; s.fga = Number(p[1]) || 0;
+      } else if (st.name === 'threePointFieldGoalsMade-threePointFieldGoalsAttempted') {
+        var p = v.split('-'); s.fg3m = Number(p[0]) || 0; s.fg3a = Number(p[1]) || 0;
+      } else if (st.name === 'freeThrowsMade-freeThrowsAttempted') {
+        var p = v.split('-'); s.ftm = Number(p[0]) || 0; s.fta = Number(p[1]) || 0;
+      } else if (st.name === 'assists') { s.ast = +v; }
+      else if (st.name === 'steals') { s.stl = +v; }
+      else if (st.name === 'blocks') { s.blk = +v; }
+      else if (st.name === 'turnovers') { s.turnovers = +v; }
+      else if (st.name === 'fouls') { s.pf = +v; }
+      else if (st.name === 'offensiveRebounds') { s.oreb = +v; }
+      else if (st.name === 'defensiveRebounds') { s.dreb = +v; }
+      else if (st.name === 'totalRebounds') { s.reb = +v; }
+      else if (st.name === 'pointsInPaint') { s.paint = +v; }
+      else if (st.name === 'fastBreakPoints') { s.fbp = +v; }
+      else if (st.name === 'turnoverPoints') { s.pot = +v; }
+      else if (st.name === 'largestLead') { s.biggest_lead = +v; }
+      else if (st.name === 'leadChanges') { s.lead_changes = +v; }
+      else if (st.name === 'leadPercentage') { s.lead_pct = +v; }
+    });
+    s.pts = (s.fgm - s.fg3m) * 2 + s.fg3m * 3 + s.ftm;
+    return s;
+  }
+
+  var hStats = parseStats(homeBox.statistics);
+  var aStats = parseStats(awayBox.statistics);
+
+  // Bench points from player starter flags
+  if (espnData.players && espnData.players.length >= 2) {
+    var homePl = espnData.players.find(function(p) { return p.homeAway === 'home'; });
+    var awayPl = espnData.players.find(function(p) { return p.homeAway === 'away'; });
+    if (homePl) {
+      var hStarterPts = (homePl.athletes || []).filter(function(a) { return a.starter; })
+        .reduce(function(t, a) { return t + (a.points || 0); }, 0);
+      hStats.bench = Math.max(0, hStats.pts - hStarterPts);
+    }
+    if (awayPl) {
+      var aStarterPts = (awayPl.athletes || []).filter(function(a) { return a.starter; })
+        .reduce(function(t, a) { return t + (a.points || 0); }, 0);
+      aStats.bench = Math.max(0, aStats.pts - aStarterPts);
+    }
+  }
+
+  return { home: hStats, away: aStats, source: 'espn' };
 }
 
 function compilePBPPlayerStats(plays,homeAbbr,awayAbbr){
@@ -1951,12 +2077,19 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
         var hUF=pbp.home&&pbp.home.tos?pbp.home.tos.unforced||0:0,aUF=pbp.away&&pbp.away.tos?pbp.away.tos.unforced||0:0;
         html+=evRow('Unforced TO',hUF,aUF,{invert:true});
       }
+      if(_te&&_te.source==='espn'){
+        html+=evRow('Pts off TO',_te.home.pot||0,_te.away.pot||0);
+        html+=evRow('Fast Break',_te.home.fbp||0,_te.away.fbp||0);
+      }
     } else if(indKey==='I2'){
       // WNBA I2: Perimeter/FT (not Interior Control)
       html+=evRow('FTA',tStat('home','fta'),tStat('away','fta'));
       html+=evRow('FTM',tStat('home','ftm'),tStat('away','ftm'));
       html+=evRow('FG3A',tStat('home','fg3a'),tStat('away','fg3a'));
       html+=evRow('FG3M',tStat('home','fg3m'),tStat('away','fg3m'));
+      if(_te&&_te.source==='espn'){
+        html+=evRow('Paint',_te.home.paint||0,_te.away.paint||0);
+      }
     } else if(indKey==='I3'){
       var hFGM=tStat('home','fgm'),hFGA=tStat('home','fga'),h3M=tStat('home','fg3m'),h3A=tStat('home','fg3a');
       var aFGM=tStat('away','fgm'),aFGA=tStat('away','fga'),a3M=tStat('away','fg3m'),a3A=tStat('away','fg3a');
@@ -1969,10 +2102,10 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
       var aAR=aFGM>0?Math.round(tStat('away','ast')/aFGM*100):0;
       html+=evRow('Ast Ratio',hAR+'%',aAR+'%');
     } else if(indKey==='I4'){
-      // Biggest lead from PBP if available
-      if(pbp&&pbp._bdl){
-        html+=evRow('Big Lead',pbp._bdl.biggestLeadHome||0,pbp._bdl.biggestLeadAway||0);
-      }
+      // Biggest lead — prefer ESPN _teamEvidence, fallback to PBP
+      var _blH=(_te&&_te.home.biggest_lead)?_te.home.biggest_lead:(pbp&&pbp._bdl?pbp._bdl.biggestLeadHome||0:0);
+      var _blA=(_te&&_te.away.biggest_lead)?_te.away.biggest_lead:(pbp&&pbp._bdl?pbp._bdl.biggestLeadAway||0:0);
+      if(_blH||_blA){html+=evRow('Big Lead',_blH,_blA);}
       // Per-quarter margins from server boundaries
       var hLine=[],aLine=[];
       if(cs._serverQDBoundaries){
@@ -1990,8 +2123,8 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
         html+=evRow('Q'+(qi+1),hQ+' ('+(diff>=0?'+':'')+diff+')',aQ+' ('+((-diff)>=0?'+':'')+(-diff)+')');
       }
       // SubA verdict: biggest lead comparison (75% threshold, >=2 gap)
-      var evBLH=pbp&&pbp._bdl?pbp._bdl.biggestLeadHome||0:0;
-      var evBLA=pbp&&pbp._bdl?pbp._bdl.biggestLeadAway||0:0;
+      var evBLH=_blH;
+      var evBLA=_blA;
       var subAWin='EVEN';
       if(evBLH>=evBLA+2&&evBLA<0.75*evBLH)subAWin=hA;
       else if(evBLA>=evBLH+2&&evBLH<0.75*evBLA)subAWin=aA;
@@ -2414,7 +2547,7 @@ function computeClientIndicators(gameId){
   var hDisrupt=(te.home.stl||0)+(te.home.blk||0);
   var aDisrupt=(te.away.stl||0)+(te.away.blk||0);
   var i1subA=(hDisrupt-aDisrupt>2)?1:(aDisrupt-hDisrupt>2)?-1:0;
-  var hPOT=bdl?bdl.potHome||0:0,aPOT=bdl?bdl.potAway||0:0;
+  var hPOT=te.home.pot||(bdl?bdl.potHome||0:0),aPOT=te.away.pot||(bdl?bdl.potAway||0:0);
   var i1subB=(hPOT-aPOT>3)?1:(aPOT-hPOT>3)?-1:0;
   var i1raw=i1subA+i1subB;
   // Chaos layer — forced vs unforced TO split
@@ -2448,7 +2581,7 @@ function computeClientIndicators(gameId){
   var I3={score:i3raw>0?1:i3raw===0?0.5:0,leader:i3raw>0?hA:i3raw<0?aA:'EVEN'};
 
   // I4 — Game Control
-  var hBL=bdl?bdl.biggestLeadHome||0:0,aBL=bdl?bdl.biggestLeadAway||0:0;
+  var hBL=te.home.biggest_lead||(bdl?bdl.biggestLeadHome||0:0),aBL=te.away.biggest_lead||(bdl?bdl.biggestLeadAway||0:0);
   var blDiff=hBL-aBL;
   var i4subA=blDiff>4?1:blDiff<-4?-1:0;
   var i4subB=0;
@@ -2954,8 +3087,8 @@ function renderDrawer(gameId){
         var _te=cs._teamEvidence;
         var _pbp=cs.pbpAudit;
         function qdFromEvidence(te,pbpSide){
-          var paintPts=0;
-          if(pbpSide){paintPts=((pbpSide.rim?pbpSide.rim.made:0)+(pbpSide.paint?pbpSide.paint.made:0))*2;}
+          var paintPts=te?.paint||0;
+          if(!paintPts&&pbpSide){paintPts=((pbpSide.rim?pbpSide.rim.made:0)+(pbpSide.paint?pbpSide.paint.made:0))*2;}
           return{steals:te?.stl||0,turnovers:te?.turnovers||0,total_turnovers:te?.turnovers||0,
             free_throws_att:te?.fta||0,three_points_made:te?.fg3m||0,
             assists:te?.ast||0,points_in_the_paint:paintPts};

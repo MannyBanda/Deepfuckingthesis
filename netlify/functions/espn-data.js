@@ -155,6 +155,60 @@ exports.handler = async (event) => {
         });
       }
 
+      // ── BOXSCORE TEAM STATS (for dashboard indicators) ──
+      var boxscore = null;
+      var boxTeams = data.boxscore?.teams || [];
+      if (boxTeams.length >= 2) {
+        boxscore = boxTeams.map(function(bt) {
+          return {
+            homeAway: bt.homeAway,
+            abbr: bt.team?.abbreviation || '',
+            statistics: (bt.statistics || []).map(function(st) {
+              return { name: st.name, displayValue: st.displayValue };
+            }),
+          };
+        });
+      }
+
+      // ── PLAYERS (minimal: name, starter, points, position for bench calc) ──
+      var players = null;
+      var boxPlayers = data.boxscore?.players || [];
+      if (boxPlayers.length >= 2) {
+        players = boxPlayers.map(function(bp) {
+          var keys = bp.statistics?.[0]?.keys || [];
+          var ptsIdx = keys.indexOf('points');
+          return {
+            homeAway: bp.homeAway || '',
+            abbr: bp.team?.abbreviation || '',
+            athletes: (bp.statistics?.[0]?.athletes || []).map(function(a) {
+              return {
+                name: a.athlete?.displayName || '',
+                position: a.athlete?.position?.abbreviation || '',
+                starter: !!a.starter,
+                didNotPlay: !!a.didNotPlay,
+                points: ptsIdx >= 0 ? (Number(a.stats?.[ptsIdx]) || 0) : 0,
+              };
+            }),
+          };
+        });
+      }
+
+      // ── HEADER (score, period, clock, status, linescores) ──
+      var header = null;
+      if (comp.competitors) {
+        header = {
+          homeScore: homeTeam?.score ? parseInt(homeTeam.score) : null,
+          awayScore: awayTeam?.score ? parseInt(awayTeam.score) : null,
+          period: comp.status?.period || 0,
+          clock: comp.status?.displayClock || '',
+          status: comp.status?.type?.name || '',
+          linescores: {
+            home: (homeTeam?.linescores || []).map(function(ls) { return Number(ls.value || 0); }),
+            away: (awayTeam?.linescores || []).map(function(ls) { return Number(ls.value || 0); }),
+          },
+        };
+      }
+
       return {
         statusCode: 200,
         headers,
@@ -174,6 +228,9 @@ exports.handler = async (event) => {
           predictor: predictor,
           officials: officials,
           seasonseries: seasonseries,
+          boxscore: boxscore,
+          players: players,
+          header: header,
         }),
       };
     }
