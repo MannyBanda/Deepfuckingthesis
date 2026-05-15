@@ -6192,13 +6192,83 @@ export default async function(req) {
         await fetchOddsAPIBatch(league);
         _dt(`${league}: S9 oddsAPI`, t0);
 
-        // S10: First game — build summary only (no snapshot save)
+        // S10: First game — step through processing
         const g0 = potentiallyLive[0];
         if (g0) {
-          const hB = cfg.aliasMap?.[g0.home_alias] || g0.home_alias;
-          const aB = cfg.aliasMap?.[g0.away_alias] || g0.away_alias;
-          const bgid = bdlData.gameIds[`${aB}@${hB}`] || bdlData.gameIds[`${g0.away_alias}@${g0.home_alias}`];
-          diag.sections.push({ label: `${league}: S10 game0 ${g0.away_alias}@${g0.home_alias} bdlGid=${bgid}`, ms: 0 });
+          const hA = g0.home_alias || 'HOME', aA = g0.away_alias || 'AWAY';
+          const hB = cfg.aliasMap?.[hA] || hA, aB = cfg.aliasMap?.[aA] || aA;
+          const bgid = bdlData.gameIds[`${aB}@${hB}`] || bdlData.gameIds[`${aA}@${hA}`] || bdlData.gameIds[`${g0.away_alias}@${g0.home_alias}`];
+          diag.sections.push({ label: `${league}: S10 game ${aA}@${hA} bdlGid=${bgid}`, ms: 0 });
+
+          // S10a: Build summary
+          t0 = Date.now();
+          let _srSummary = null;
+          try {
+            if (league === 'wnba' && bgid) {
+              const _psCache = {};
+              const psResp2 = await bdlFetch(`${cfg.bdlPrefix}/v1/player_stats?game_ids[]=${bgid}&per_page=100`);
+              const allPs2 = psResp2?.data || [];
+              for (const p of allPs2) { const gid = p.game?.id; if (gid) { if (!_psCache[gid]) _psCache[gid] = []; _psCache[gid].push(p); } }
+              const bdlPlayers = _psCache[bgid] || [];
+              diag.sections.push({ label: `${league}: S10a.1 playerStats=${bdlPlayers.length}`, ms: Date.now()-t0 });
+              if (bdlPlayers.length > 0) {
+                const gameResp = await bdlFetch(`${cfg.bdlPrefix}/v1/games/${bgid}`);
+                const bdlGameObj = gameResp?.data || null;
+                diag.sections.push({ label: `${league}: S10a.2 gameObj status=${bdlGameObj?.status} score=${bdlGameObj?.home_score}-${bdlGameObj?.away_score}`, ms: Date.now()-t0 });
+                const plays0 = playsFetches[0] ? await playsFetches[0] : null;
+                const fbPlays = plays0?.data || [];
+                const fbPbp = parseBDLPBPServer(fbPlays, cfg.aliasMap?.[hA]||hA, cfg.aliasMap?.[aA]||aA);
+                diag.sections.push({ label: `${league}: S10a.3 pbp plays=${fbPlays.length}`, ms: Date.now()-t0 });
+                _srSummary = buildSummaryFromBDLPlayerStats(bdlPlayers, bdlGameObj, fbPbp);
+                _dt(`${league}: S10a buildSummary ✓`, t0);
+              } else {
+                diag.sections.push({ label: `${league}: S10a no players — would SR fallback`, ms: Date.now()-t0 });
+              }
+            }
+          } catch(e) { diag.sections.push({ label: `${league}: S10a CRASH: ${e.message}`, ms: Date.now()-t0, stack: e.stack?.split('\n').slice(0,3) }); }
+
+          if (_srSummary) {
+            const summary = _srSummary;
+            const pbpResult = null;
+
+            // S10b: Extract period/clock
+            t0 = Date.now();
+            const currentPeriod = summary.quarter || 1;
+            const clock = summary.clock || '0:00';
+            _dt(`${league}: S10b period=${currentPeriod} clock=${clock}`, t0);
+
+            // S10c: computeServer
+            t0 = Date.now();
+            try {
+              const ind = computeServer(summary, pbpResult, _seasonQ4Cache || {}, league);
+              _dt(`${league}: S10c computeServer floor=${ind?.score} ctrl=${ind?.controlTeam}`, t0);
+
+              // S10d: Quarter data + window
+              t0 = Date.now();
+              try {
+                const _qd = await readQuarterData(sql, g0.id);
+                const _wr = computeServerWindow(_qd, currentPeriod, clock, summary, hA, aA, league);
+                _dt(`${league}: S10d window (has=${!!_wr})`, t0);
+              } catch(e) { _dt(`${league}: S10d window CRASH: ${e.message}`, t0); }
+
+              // S10e: XGB
+              t0 = Date.now();
+              try {
+                const _windowedBiglead = summary._windowedBiglead != null ? summary._windowedBiglead : (summary.home?.statistics?.biggest_lead || 0);
+                const _xgbFeatures = extractXGBFeatures(summary, ind, pbpResult, currentPeriod, clock, null, league, _windowedBiglead);
+                const _xgbWinProb = _xgbFeatures ? predictXGB(_xgbFeatures, league) : null;
+                _dt(`${league}: S10e XGB prob=${_xgbWinProb?.toFixed(3)} features=${_xgbFeatures?.length}`, t0);
+              } catch(e) { diag.sections.push({ label: `${league}: S10e XGB CRASH: ${e.message}`, ms: Date.now()-t0, stack: e.stack?.split('\n').slice(0,3) }); }
+
+              // S10f: Sustainability
+              t0 = Date.now();
+              try {
+                const sust = computeSustainability(summary, league);
+                _dt(`${league}: S10f sust ctrl=${sust?.ctrl} opp=${sust?.opp}`, t0);
+              } catch(e) { _dt(`${league}: S10f sust CRASH: ${e.message}`, t0); }
+
+            } catch(e) { diag.sections.push({ label: `${league}: S10c computeServer CRASH: ${e.message}`, ms: Date.now()-t0, stack: e.stack?.split('\n').slice(0,3) }); }
+          }
         }
 
         diag.sections.push({ label: `${league}: ✓ all sections passed`, ms: 0 });
