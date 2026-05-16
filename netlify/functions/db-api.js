@@ -497,6 +497,8 @@ exports.handler = async (event) => {
       for (const [sr, bdl] of _wnbaAliasMap) {
         await sql`UPDATE games SET home_alias = ${bdl}, matchup = REPLACE(matchup, ${sr}, ${bdl}) WHERE home_alias = ${sr} AND league = 'wnba'`;
         await sql`UPDATE games SET away_alias = ${bdl}, matchup = REPLACE(matchup, ${sr}, ${bdl}) WHERE away_alias = ${sr} AND league = 'wnba'`;
+        await sql`UPDATE games SET winner = ${bdl} WHERE winner = ${sr} AND league = 'wnba'`;
+        await sql`UPDATE games SET thesis_team = ${bdl} WHERE thesis_team = ${sr} AND league = 'wnba'`;
         await sql`UPDATE alerts SET control_team = ${bdl} WHERE control_team = ${sr} AND league = 'wnba'`;
         await sql`UPDATE alerts SET position_team = ${bdl} WHERE position_team = ${sr} AND league = 'wnba'`;
       }
