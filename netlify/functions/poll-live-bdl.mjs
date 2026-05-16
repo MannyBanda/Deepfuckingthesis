@@ -6538,7 +6538,8 @@ export default async function(req) {
             if (srGames.length > 0) {
               cachedGames = srGames.map(g => ({
                 id: g.id, scheduled: g.scheduled || null,
-                home_alias: g.home?.alias || '', away_alias: g.away?.alias || '',
+                home_alias: cfg.aliasMap?.[g.home?.alias] || g.home?.alias || '',
+                away_alias: cfg.aliasMap?.[g.away?.alias] || g.away?.alias || '',
                 home_name: g.home?.name || '', away_name: g.away?.name || '',
                 status: (g.status || 'scheduled').toLowerCase(),
               }));
@@ -6590,8 +6591,8 @@ export default async function(req) {
         cachedGames = allGames.map(g => ({
           id: g.id,
           scheduled: g.scheduled || null,
-          home_alias: g.home?.alias || '',
-          away_alias: g.away?.alias || '',
+          home_alias: cfg.aliasMap?.[g.home?.alias] || g.home?.alias || '',
+          away_alias: cfg.aliasMap?.[g.away?.alias] || g.away?.alias || '',
           home_name: g.home?.name || '',
           away_name: g.away?.name || '',
           status: (g.status || 'scheduled').toLowerCase(),
@@ -6868,8 +6869,11 @@ export default async function(req) {
 
       for (let gi = 0; gi < potentiallyLive.length; gi++) {
         const game = potentiallyLive[gi];
-        const hA = game.home_alias || 'HOME';
-        const aA = game.away_alias || 'AWAY';
+        // Normalize aliases to BDL canonical (SR schedule uses LAS/LVA/NYL/GSV/WAS/PDX/TOY;
+        // BDL+ESPN+computeServer use LA/LV/NY/GS/WSH/POR/TOR). Single conversion here
+        // means ALL downstream functions (MC, XGB, erosion, alerts, etc.) get consistent aliases.
+        const hA = cfg.aliasMap?.[game.home_alias] || game.home_alias || 'HOME';
+        const aA = cfg.aliasMap?.[game.away_alias] || game.away_alias || 'AWAY';
         const matchup = `${aA}@${hA}`;
         const bdlGid = getBdlGid(game);
 
@@ -6910,7 +6914,7 @@ export default async function(req) {
                 var bdlGameObj = gameResp?.data || null;
                 if (bdlGameObj) {
                   var fbPlays = allPlaysResults[gi]?.data || [];
-                  var fbPbp = parseBDLPBPServer(fbPlays, cfg.aliasMap?.[hA]||hA, cfg.aliasMap?.[aA]||aA);
+                  var fbPbp = parseBDLPBPServer(fbPlays, hA, aA);
                   _srSummary = buildSummaryFromBDLPlayerStats(bdlPlayers, bdlGameObj, fbPbp);
                   _usedBdlFallback = true;
                   log(`${matchup}: BDL primary — ${bdlPlayers.length} players`);
@@ -6972,7 +6976,7 @@ export default async function(req) {
             try {
               const playsResult = allPlaysResults[gi];
               const plays = playsResult?.data || [];
-              const pbpResult = parseBDLPBPServer(plays, league==='wnba'?(cfg.aliasMap[hA]||hA):hA, league==='wnba'?(cfg.aliasMap[aA]||aA):aA);
+              const pbpResult = parseBDLPBPServer(plays, hA, aA);
               const lineupsArr = _serverLineupsCache[bdlGid] || null;
               const finalSummary = league === 'wnba' ? _srSummary : buildSummaryFromBDLServer(boxScore, pbpResult, lineupsArr);
               const homeStats = finalSummary.home?.statistics || {};
@@ -7143,10 +7147,7 @@ export default async function(req) {
           // Parse PBP
           const playsResult = allPlaysResults[gi];
           const plays = playsResult?.data || [];
-          const pbpResult = parseBDLPBPServer(plays, league==='wnba'?(cfg.aliasMap[hA]||hA):hA, league==='wnba'?(cfg.aliasMap[aA]||aA):aA);
-          // PBP data uses BDL abbreviations (e.g. 'GS' not 'GSV') — all possLog/runs6 consumers must use these
-          const hBdl = league === 'wnba' ? (cfg.aliasMap?.[hA] || hA) : hA;
-          const aBdl = league === 'wnba' ? (cfg.aliasMap?.[aA] || aA) : aA;
+          const pbpResult = parseBDLPBPServer(plays, hA, aA);
           const lineupsArr = _serverLineupsCache[bdlGid] || null;
 
           // Build SR-shaped summary
@@ -7164,8 +7165,8 @@ export default async function(req) {
                 if (summary.away?.statistics) { summary.away.statistics.second_chance_points = pbpResult._bdl.scpAway || 0; summary.away.statistics.second_chance_pts = pbpResult._bdl.scpAway || 0; }
               }
               if (pbpResult?.runs) {
-                var _hRuns = (pbpResult.runs || []).filter(function(r) { return r.team === hBdl; });
-                var _aRuns = (pbpResult.runs || []).filter(function(r) { return r.team === aBdl; });
+                var _hRuns = (pbpResult.runs || []).filter(function(r) { return r.team === hA; });
+                var _aRuns = (pbpResult.runs || []).filter(function(r) { return r.team === aA; });
                 if (summary.home?.statistics) summary.home.statistics.most_unanswered = { points: _hRuns.reduce(function(m, r) { return r.pts > m ? r.pts : m; }, 0) };
                 if (summary.away?.statistics) summary.away.statistics.most_unanswered = { points: _aRuns.reduce(function(m, r) { return r.pts > m ? r.pts : m; }, 0) };
               }
@@ -7385,7 +7386,7 @@ export default async function(req) {
           // Compute PBP 15-possession window for snapshot persistence
           var _possWindowScore = null;
           try {
-            const _pw = computePossWindowServer(pbpResult?.possLog, 15, hBdl, aBdl);
+            const _pw = computePossWindowServer(pbpResult?.possLog, 15, hA, aA);
             if (_pw && _pw.available) {
               // Convert to ctrl-team-relative
               const _pwCtrlIsHome = ind.controlTeam === hA;
@@ -7402,7 +7403,7 @@ export default async function(req) {
             rawStatsJson = JSON.stringify({
               home: { stl: _hs.steals||0, oreb: _hs.offensive_rebounds||0, to: _hs.turnovers||_hs.total_turnovers||0, fbp: _hs.fast_break_points||0, pot: _hs.points_off_turnovers||0, scp: _hs.second_chance_points||_hs.second_chance_pts||0, paint: _hs.points_in_the_paint||_hs.points_in_paint||0, atRimM: _hs.field_goals_at_rim_made||0, atRimA: _hs.field_goals_at_rim_att||0, paintM: _hs.points_in_paint_made||0, paintA: _hs.points_in_paint_att||0, fta: _hs.free_throws_att||0, blk: _hs.blocks||0, fd: _hs.fouls_drawn||0, fgm: _hs.field_goals_made||0, fga: _hs.field_goals_att||0, fg3m: _hs.three_points_made||0, fg3a: _hs.three_points_att||0, ast: _hs.assists||0, bigLead: _hs.biggest_lead||0, bench: _hs.bench_points||0, oppp: _hs.offensive_points_per_possession||0, dppp: _hs.defensive_points_per_possession||0, poss: _hs.possessions||0, ftm: _hs.free_throws_made||0, forced_to: pbpResult?.home?.tos?.forced||0, unforced_to: pbpResult?.home?.tos?.unforced||0, assisted_3pm: pbpResult?.home?.threes?.assisted||0 },
               away: { stl: _as.steals||0, oreb: _as.offensive_rebounds||0, to: _as.turnovers||_as.total_turnovers||0, fbp: _as.fast_break_points||0, pot: _as.points_off_turnovers||0, scp: _as.second_chance_points||_as.second_chance_pts||0, paint: _as.points_in_the_paint||_as.points_in_paint||0, atRimM: _as.field_goals_at_rim_made||0, atRimA: _as.field_goals_at_rim_att||0, paintM: _as.points_in_paint_made||0, paintA: _as.points_in_paint_att||0, fta: _as.free_throws_att||0, blk: _as.blocks||0, fd: _as.fouls_drawn||0, fgm: _as.field_goals_made||0, fga: _as.field_goals_att||0, fg3m: _as.three_points_made||0, fg3a: _as.three_points_att||0, ast: _as.assists||0, bigLead: _as.biggest_lead||0, bench: _as.bench_points||0, oppp: _as.offensive_points_per_possession||0, dppp: _as.defensive_points_per_possession||0, poss: _as.possessions||0, ftm: _as.free_throws_made||0, forced_to: pbpResult?.away?.tos?.forced||0, unforced_to: pbpResult?.away?.tos?.unforced||0, assisted_3pm: pbpResult?.away?.threes?.assisted||0 },
-              runs6: pbpResult?.runs6 ? { home: pbpResult.runs6.filter(r=>r.team===hBdl).length, away: pbpResult.runs6.filter(r=>r.team===aBdl).length, total: pbpResult.runs6.length } : null,
+              runs6: pbpResult?.runs6 ? { home: pbpResult.runs6.filter(r=>r.team===hA).length, away: pbpResult.runs6.filter(r=>r.team===aA).length, total: pbpResult.runs6.length } : null,
             });
           } catch (e) { /* non-fatal — snapshot still saves without raw stats */ }
 
@@ -7413,7 +7414,7 @@ export default async function(req) {
               var _pmHBL = _clutchMap?.[hA]?.q4_fg3pct || _team3ptBaselines?.[hA] || 0.36;
               var _pmABL = _clutchMap?.[aA]?.q4_fg3pct || _team3ptBaselines?.[aA] || 0.36;
               var _pmPossLog = pbpResult?.possLog;
-              var _pmRates = extractMCRatesFromPossLog(_pmPossLog, 20, hBdl, aBdl, _pmHBL, _pmABL);
+              var _pmRates = extractMCRatesFromPossLog(_pmPossLog, 20, hA, aA, _pmHBL, _pmABL);
               if (_pmRates && _pmRates.home._windowFGA >= 5 && _pmRates.away._windowFGA >= 5) {
                 var _pmClk = String(clock||'6:00').match(/(\d+):(\d+)/);
                 var _pmSec = _pmClk ? parseInt(_pmClk[1])*60+parseInt(_pmClk[2]) : 360;
@@ -8827,7 +8828,7 @@ export default async function(req) {
               if (lt._canary_margins.length > 10) lt._canary_margins.shift();
               if (_xgbWinProb != null) { lt._canary_xgb.push(_xgbWinProb); if (lt._canary_xgb.length > 10) lt._canary_xgb.shift(); }
 
-              const _mcRates = extractMCRatesFromPossLog(pbpResult?.possLog, 20, hBdl, aBdl, _mcHBaseline, _mcABaseline);
+              const _mcRates = extractMCRatesFromPossLog(pbpResult?.possLog, 20, hA, aA, _mcHBaseline, _mcABaseline);
               if (_mcRates && _mcRates.home._windowFGA >= 5 && _mcRates.away._windowFGA >= 5) {
                 const _hs = summary.home?.statistics || {}, _as = summary.away?.statistics || {};
                 const _mcClockSec = (function(c) { try { var pp = String(c||'6:00').split(':'); return parseInt(pp[0])*60+parseInt(pp[1]||0); } catch(e) { return 360; } })(clock);

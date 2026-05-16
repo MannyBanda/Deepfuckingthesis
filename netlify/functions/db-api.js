@@ -490,6 +490,32 @@ exports.handler = async (event) => {
         PRIMARY KEY (team_alias, league, season)
       )`;
 
+      // ── WNBA alias migration: normalize SR abbreviations → BDL canonical ──
+      // SR schedule uses LAS/LVA/NYL/GSV/WAS/PDX/TOY; BDL uses LA/LV/NY/GS/WSH/POR/TOR
+      // Idempotent — no-op once aliases are already BDL-style
+      const _wnbaAliasMap = [['LAS','LA'],['LVA','LV'],['NYL','NY'],['GSV','GS'],['WAS','WSH'],['PDX','POR'],['TOY','TOR']];
+      for (const [sr, bdl] of _wnbaAliasMap) {
+        await sql`UPDATE games SET home_alias = ${bdl}, matchup = REPLACE(matchup, ${sr}, ${bdl}) WHERE home_alias = ${sr} AND league = 'wnba'`;
+        await sql`UPDATE games SET away_alias = ${bdl}, matchup = REPLACE(matchup, ${sr}, ${bdl}) WHERE away_alias = ${sr} AND league = 'wnba'`;
+        await sql`UPDATE alerts SET control_team = ${bdl} WHERE control_team = ${sr} AND league = 'wnba'`;
+        await sql`UPDATE alerts SET position_team = ${bdl} WHERE position_team = ${sr} AND league = 'wnba'`;
+      }
+      // Also update schedule_json in poll_state so cached schedules use BDL aliases
+      try {
+        const _ps = await sql`SELECT schedule_json FROM poll_state WHERE league = 'wnba'`;
+        for (const row of _ps) {
+          if (!row.schedule_json) continue;
+          let sj = typeof row.schedule_json === 'string' ? JSON.parse(row.schedule_json) : row.schedule_json;
+          let changed = false;
+          const _am = {LAS:'LA',LVA:'LV',NYL:'NY',GSV:'GS',WAS:'WSH',PDX:'POR',TOY:'TOR'};
+          for (const g of sj) {
+            if (_am[g.home_alias]) { g.home_alias = _am[g.home_alias]; changed = true; }
+            if (_am[g.away_alias]) { g.away_alias = _am[g.away_alias]; changed = true; }
+          }
+          if (changed) await sql`UPDATE poll_state SET schedule_json = ${JSON.stringify(sj)} WHERE league = 'wnba'`;
+        }
+      } catch(e) { /* poll_state may not have schedule_json */ }
+
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'Schema initialized' }) };
     }
 
