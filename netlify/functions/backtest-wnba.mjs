@@ -3979,6 +3979,276 @@ async function phaseBackfillMC(sql, url) {
   };
 }
 
+// ── PHASE: BACKFILL MC WINDOWED ─────────────────────────────────────────────
+// 2Q cross-fade windowed MC with current score. Uses same PBP reconstruction
+// as phaseComputeXGBTraining to get quarter boundaries for windowing.
+// ?phase=backfill_mc_windowed&batch=20&sims=500
+async function phaseBackfillMCWindowed(sql, url) {
+  const batch = parseInt(url.searchParams.get('batch') || '20');
+  const offset = parseInt(url.searchParams.get('offset') || '0');
+  const simCount = parseInt(url.searchParams.get('sims') || '500');
+
+  await sql`ALTER TABLE wnba_xgb_training ADD COLUMN IF NOT EXISTS mc_windowed REAL`;
+
+  var needGames = await sql`
+    SELECT DISTINCT t.game_id
+    FROM wnba_xgb_training t
+    WHERE t.mc_windowed IS NULL
+    ORDER BY t.game_id
+    LIMIT ${batch} OFFSET ${offset}
+  `;
+  if (needGames.length === 0) {
+    var total = await sql`SELECT COUNT(*) as n FROM wnba_xgb_training WHERE mc_windowed IS NOT NULL`;
+    return { status: 'done', message: 'All mc_windowed values backfilled', filled: Number(total[0]?.n || 0) };
+  }
+
+  var gameIds = needGames.map(r => r.game_id);
+  var gamesData = await sql`
+    SELECT game_id, bdl_pbp, home_alias, away_alias, winner
+    FROM wnba_backtest
+    WHERE game_id = ANY(${gameIds}) AND bdl_pbp IS NOT NULL AND bdl_pbp != '[]'::jsonb
+  `;
+  var trainingRows = await sql`
+    SELECT game_id, checkpoint, quarter, game_seconds, ctrl_team, margin
+    FROM wnba_xgb_training
+    WHERE game_id = ANY(${gameIds}) AND mc_windowed IS NULL
+    ORDER BY game_id, game_seconds
+  `;
+
+  var gameMap = {};
+  for (var gd of gamesData) gameMap[gd.game_id] = gd;
+  var trByGame = {};
+  for (var tr of trainingRows) {
+    if (!trByGame[tr.game_id]) trByGame[tr.game_id] = [];
+    trByGame[tr.game_id].push(tr);
+  }
+
+  var STAT_FIELDS = ['fgm','fga','fg3m','fg3a','ftm','fta','oreb','dreb','ast','stl','blk','tov','pf','pot'];
+  var ALL_CPS = [
+    { label: 'Q1_END', period: 1, gameSec: 600 },
+    ...WNBA_CHECKPOINTS,
+  ];
+
+  var updated = 0, skipped = 0, errors = 0;
+
+  for (var gid of gameIds) {
+    var g = gameMap[gid];
+    var trs = trByGame[gid];
+    if (!g || !trs) { skipped++; continue; }
+
+    try {
+      var plays = g.bdl_pbp;
+      if (!plays || plays.length === 0) { skipped++; continue; }
+      var sorted = plays.slice().sort(function(a, b) { return (a.order || 0) - (b.order || 0); });
+
+      // Walk PBP and snapshot at ALL_CPS (includes Q1_END)
+      var mk = function() { var o = {}; for (var f of STAT_FIELDS) o[f] = 0; return o; };
+      var h = mk(), a = mk();
+      var bigH = 0, bigA = 0, pendPOT = null, lastPeriod = 0;
+      var snaps = [];
+      var cpIdx = 0;
+
+      for (var ev of sorted) {
+        var period = ev.period || 1;
+        var clockSec = parseClockSec(ev.clock);
+        var gs = (period - 1) * 600 + (600 - clockSec);
+        if (period !== lastPeriod) { pendPOT = null; lastPeriod = period; }
+
+        while (cpIdx < ALL_CPS.length && gs >= ALL_CPS[cpIdx].gameSec) {
+          snaps.push({ cp: ALL_CPS[cpIdx], home: { ...h }, away: { ...a },
+            homeScore: ev.home_score || 0, awayScore: ev.away_score || 0 });
+          cpIdx++;
+        }
+
+        var tm = ev.team?.abbreviation || '';
+        if (!tm) continue;
+        var isH = tm === g.home_alias;
+        var s = isH ? h : a;
+        var opp = isH ? g.away_alias : g.home_alias;
+        var type = (ev.type || '').toLowerCase();
+        var text = (ev.text || '').toLowerCase();
+
+        if (type.includes('substitution') || text.includes('enters the game')) continue;
+        if (type.includes('free throw')) {
+          s.fta++;
+          if (ev.scoring_play || text.includes('makes')) { s.ftm++; if (pendPOT === tm) s.pot += 1; }
+          continue;
+        }
+        var isShotType = type.includes('shot') || type.includes('layup') || type.includes('dunk') ||
+          type.includes('hook') || type.includes('tip') || type.includes('alley') || type.includes('finger roll') ||
+          type.includes('pullup') || type.includes('driving') || type.includes('fadeaway') ||
+          type.includes('float') || type.includes('runner') || type.includes('step back') ||
+          type.includes('turnaround') || type.includes('cutting') || type.includes('putback');
+        var isMadeFG = ev.scoring_play && ev.score_value >= 2;
+        if (ev.shooting_play || isShotType || isMadeFG || (text.includes('misses') && !type.includes('free throw'))) {
+          var is3 = ev.score_value === 3 || type.includes('three point') || type.includes('3-point') || type.includes('3pt') || text.includes('three point') || text.includes('3-point') || text.includes('3pt') || text.includes('3-pointer');
+          s.fga++; if (is3) s.fg3a++;
+          if (isMadeFG || text.includes('makes')) {
+            s.fgm++; if (is3) s.fg3m++;
+            if (text.includes('assist')) s.ast++;
+            if (pendPOT === tm) s.pot += (is3 ? 3 : 2);
+            pendPOT = null;
+          } else if (text.includes('block')) { (isH ? a : h).blk++; }
+          continue;
+        }
+        if (type.includes('turnover') || type.includes('offensive foul')) { s.tov++; pendPOT = opp; if (text.includes('steal')) { (isH ? a : h).stl++; } continue; }
+        if (type.includes('rebound')) { if (text.includes('team rebound')) continue; if (type.includes('offensive') || text.includes('offensive')) s.oreb++; else { s.dreb++; pendPOT = null; } continue; }
+        if (type.includes('steal')) { s.stl++; continue; }
+        if (type.includes('block')) { s.blk++; continue; }
+        if (type.includes('foul') && !type.includes('offensive')) { s.pf++; continue; }
+      }
+      var lastEv = sorted[sorted.length - 1];
+      while (cpIdx < ALL_CPS.length) {
+        snaps.push({ cp: ALL_CPS[cpIdx], home: { ...h }, away: { ...a },
+          homeScore: lastEv?.home_score || 0, awayScore: lastEv?.away_score || 0 });
+        cpIdx++;
+      }
+      if (snaps.length < 4) { skipped++; continue; }
+
+      // Build quarter boundaries and per-quarter diffs
+      var boundarySnap = {};
+      for (var si = 0; si < snaps.length; si++) {
+        if (snaps[si].cp.label.endsWith('_END')) boundarySnap[snaps[si].cp.period] = snaps[si];
+      }
+      var diffSide = function(curr, prev) {
+        var d = {};
+        for (var f of STAT_FIELDS) d[f] = Math.max(0, (curr[f] || 0) - (prev[f] || 0));
+        return d;
+      };
+      var zeroSide = function() { var o = {}; for (var f of STAT_FIELDS) o[f] = 0; return o; };
+      var qDiffs = {};
+      var b0 = { home: zeroSide(), away: zeroSide() };
+      if (boundarySnap[1]) {
+        qDiffs[1] = { home: { ...boundarySnap[1].home }, away: { ...boundarySnap[1].away } };
+      }
+      if (boundarySnap[2] && boundarySnap[1]) {
+        qDiffs[2] = { home: diffSide(boundarySnap[2].home, boundarySnap[1].home),
+                      away: diffSide(boundarySnap[2].away, boundarySnap[1].away) };
+      }
+      if (boundarySnap[3] && boundarySnap[2]) {
+        qDiffs[3] = { home: diffSide(boundarySnap[3].home, boundarySnap[2].home),
+                      away: diffSide(boundarySnap[3].away, boundarySnap[2].away) };
+      }
+
+      // Build lookup: checkpoint label -> snap
+      var snapMap = {};
+      for (var sn of snaps) snapMap[sn.cp.label] = sn;
+
+      // Process each training row for this game
+      for (var tri of trs) {
+        var snap = snapMap[tri.checkpoint];
+        if (!snap) { skipped++; continue; }
+
+        var p = snap.cp.period;
+        if (p < 2) { skipped++; continue; }
+
+        // Compute partial quarter diff (current cumulative minus last boundary)
+        var lastBQ = 0;
+        for (var bq = p - 1; bq >= 1; bq--) { if (boundarySnap[bq]) { lastBQ = bq; break; } }
+        var partialDiff = { home: {}, away: {} };
+        if (lastBQ > 0 && boundarySnap[lastBQ]) {
+          partialDiff.home = diffSide(snap.home, boundarySnap[lastBQ].home);
+          partialDiff.away = diffSide(snap.away, boundarySnap[lastBQ].away);
+        } else {
+          partialDiff.home = { ...snap.home };
+          partialDiff.away = { ...snap.away };
+        }
+
+        // Cross-fade window
+        var elapsedInQ = snap.cp.gameSec - (p - 1) * 600;
+        var completion = Math.max(0, Math.min(1, elapsedInQ / 600));
+
+        var windowQs = [];
+        if (p === 2) {
+          if (qDiffs[1]) windowQs.push({ w: Math.max(0, 1.0 - completion), d: qDiffs[1] });
+          windowQs.push({ w: 1.0, d: partialDiff });
+        } else if (p === 3) {
+          if (qDiffs[2]) windowQs.push({ w: 1.0, d: qDiffs[2] });
+          windowQs.push({ w: 1.0, d: partialDiff });
+        } else if (p === 4) {
+          if (qDiffs[2]) windowQs.push({ w: Math.max(0, 1.0 - completion), d: qDiffs[2] });
+          if (qDiffs[3]) windowQs.push({ w: 1.0, d: qDiffs[3] });
+          windowQs.push({ w: 1.0, d: partialDiff });
+        }
+
+        // Aggregate windowed stats per team
+        var aggSide = function(side) {
+          var agg = {};
+          for (var f of STAT_FIELDS) {
+            var sum = 0;
+            for (var wq of windowQs) sum += (wq.d[side]?.[f] || 0) * wq.w;
+            agg[f] = sum;
+          }
+          return agg;
+        };
+        var wHome = aggSide('home'), wAway = aggSide('away');
+
+        // Extract MC rates from windowed stats (lower FGA guard for window)
+        var extractWindowRates = function(ws) {
+          var fga = ws.fga || 0, fgm = ws.fgm || 0, fg3a = ws.fg3a || 0, fg3m = ws.fg3m || 0;
+          var fta = ws.fta || 0, ftm = ws.ftm || 0, to = ws.tov || 0, oreb = ws.oreb || 0;
+          var fg2a = fga - fg3a, fg2m = fgm - fg3m;
+          var poss = fga + 0.44 * fta - oreb + to;
+          if (poss < 3) poss = Math.max(fga, 3);
+          if (fga < 5) return null;
+          var rawFg3 = fg3a > 0 ? fg3m / fg3a : WNBA_MC_DEFAULTS.fg3Pct;
+          var sw = Math.min(0.75, fg3a / 30);
+          var fg3Pct = rawFg3 * sw + WNBA_MC_DEFAULTS.fg3Pct * (1 - sw);
+          function cl(v) { return Math.max(0, Math.min(1, v)); }
+          return {
+            toRate: cl(poss > 0 ? to / poss : WNBA_MC_DEFAULTS.toRate),
+            fg3aShare: cl(fga > 0 ? fg3a / fga : WNBA_MC_DEFAULTS.fg3aShare),
+            fg3Pct: cl(fg3Pct),
+            fg2Pct: cl(fg2a > 0 ? fg2m / fg2a : WNBA_MC_DEFAULTS.fg2Pct),
+            orebRate: cl((fga - fgm) > 0 ? oreb / (fga - fgm) : WNBA_MC_DEFAULTS.orebRate),
+            ftaRate: Math.min(poss > 0 ? fta / poss : WNBA_MC_DEFAULTS.ftaRate, 1.0),
+            ftPct: cl(fta > 0 ? ftm / fta : WNBA_MC_DEFAULTS.ftPct),
+          };
+        };
+
+        var hRates = extractWindowRates(wHome);
+        var aRates = extractWindowRates(wAway);
+        if (!hRates || !aRates) { skipped++; continue; }
+
+        // Remaining possessions
+        var hPoss = snap.home.fga + 0.44 * snap.home.fta - snap.home.oreb + snap.home.tov;
+        var aPoss = snap.away.fga + 0.44 * snap.away.fta - snap.away.oreb + snap.away.tov;
+        var avgPoss = (hPoss + aPoss) / 2;
+        var elapsedMin = snap.cp.gameSec / 60;
+        if (elapsedMin < 1) elapsedMin = 1;
+        var remainMin = 40 - elapsedMin;
+        if (remainMin < 0) remainMin = 0;
+        var pacePerMin = avgPoss / elapsedMin;
+        var remainPoss = Math.max(0, Math.round(pacePerMin * remainMin));
+
+        var ctrlIsHome = tri.ctrl_team === g.home_alias;
+        var mcWp = mcRunSim(hRates, aRates, snap.homeScore, snap.awayScore, remainPoss, ctrlIsHome, simCount);
+
+        await sql`
+          UPDATE wnba_xgb_training
+          SET mc_windowed = ${mcWp}
+          WHERE game_id = ${gid} AND checkpoint = ${tri.checkpoint}
+        `;
+        updated++;
+      }
+    } catch (e) {
+      console.log('MC windowed error ' + gid + ': ' + e.message);
+      errors++;
+    }
+  }
+
+  var remaining = await sql`SELECT COUNT(DISTINCT game_id) as n FROM wnba_xgb_training WHERE mc_windowed IS NULL`;
+
+  return {
+    status: 'ok', updated, skipped, errors,
+    batchGames: gameIds.length,
+    remainingGames: Number(remaining[0]?.n || 0),
+    nextStep: Number(remaining[0]?.n || 0) > 0
+      ? '?phase=backfill_mc_windowed&batch=' + batch + '&sims=' + simCount
+      : '?phase=export_xgb_training',
+  };
+}
+
 // ── PHASE: EXPORT XGB ───────────────────────────────────────────────────────
 // Paginated JSON export from wnba_xgb_training for Python training.
 // ?phase=export_xgb_training&batch=200&offset=0
@@ -3988,7 +4258,7 @@ async function phaseExportXGBTraining(sql, url) {
 
   const rows = await sql`
     SELECT game_id, bdl_game_id, season, checkpoint, quarter, game_seconds,
-           ctrl_team, ctrl_won, features, margin, mc_cum
+           ctrl_team, ctrl_won, features, margin, mc_cum, mc_windowed
     FROM wnba_xgb_training
     ORDER BY game_id, game_seconds
     OFFSET ${offset} LIMIT ${batch}
@@ -4004,7 +4274,7 @@ async function phaseExportXGBTraining(sql, url) {
     rows: rows.map(r => ({
       game_id: r.game_id, season: r.season, cp: r.checkpoint, q: r.quarter,
       gs: r.game_seconds, ctrl: r.ctrl_team, won: r.ctrl_won,
-      margin: r.margin, mc_cum: r.mc_cum, ...r.features,
+      margin: r.margin, mc_cum: r.mc_cum, mc_windowed: r.mc_windowed, ...r.features,
     })),
   };
 }
@@ -4062,6 +4332,7 @@ export default async (req) => {
       case 'compute_xgb_training': result = await phaseComputeXGBTraining(sql, url); break;
       case 'export_xgb_training':  result = await phaseExportXGBTraining(sql, url); break;
       case 'backfill_mc':           result = await phaseBackfillMC(sql, url); break;
+      case 'backfill_mc_windowed':  result = await phaseBackfillMCWindowed(sql, url); break;
       case 'debug_mc':              result = await phaseDebugMC(sql, url); break;
       case 'mc_test':               result = await phaseMCTest(sql, url); break;
       case 'export_checkpoint_xgb': result = await exportCheckpointXGB(sql, url); break;
