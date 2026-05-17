@@ -49,6 +49,10 @@ var SR_TEAM_IDS_WNBA = {
   PDX:'d54283cc-c5ec-4dbd-bb61-166f217e3864',PHX:'0699edf3-5993-4182-b9b4-ec935cbd4fcc',
   SEA:'d6a012ed-84aa-48d3-8265-2d3f3ff2199a',TOR:'4e4f726e-a015-4306-91a7-28e8576c7868',
   WAS:'5c0d47fe-8539-47b0-9f36-d0b3609ca89b',
+  // BDL canonical aliases (schedule_json normalized at boundary since 1c82798)
+  LV:'171b097d-01db-4ae8-9d56-035689402ec6', LA:'0a5ad38d-2fe3-43ba-894b-1ba3d5042ea9',
+  NY:'08ed8274-e29f-4248-bc2e-83cc8ed18d75', GS:'4f57ec40-0d35-4b59-bea0-9d040f0d2292',
+  WSH:'5c0d47fe-8539-47b0-9f36-d0b3609ca89b',POR:'d54283cc-c5ec-4dbd-bb61-166f217e3864',
 };
 
 // ── WNBA ALIAS MAP (SR alias → BDL abbreviation, for odds matching) ─────────
