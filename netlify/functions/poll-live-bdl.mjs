@@ -479,9 +479,10 @@ return 'You are a WNBA structural analyst. You receive pre-computed mechanical i
 + '    A 75% MC Cum in WNBA Q4 is functionally ~89%. Treat as strong hold.\n\n'
 + '  ALIGNED (±0.10): 83.3% overall, 89.6% Q4. Highest conviction when both agree.\n'
 + '  CRITICAL: Floor is NEVER a decision gate in WNBA.\n'
-+ '  Floor HIGH + MC+XGB LOW = 20.2% accuracy (floor confidently wrong).\n'
++ '  Floor HIGH + MC LOW + XGB LOW = genuine structural erosion (both models disagree).\n'
++ '  Floor HIGH + MC LOW + XGB HIGH = MC reflects margin pressure, not structural decay. XGB confirms structure (72% WR, 43 games).\n'
 + '  MC+XGB HIGH + Floor LOW = 83-86% (compound correct regardless of floor).\n'
-+ '  TRAILING TEAM MC Cum: MC Cum for trailing teams is mechanically depressed by the deficit. MC Cum > 0.45 for a trailing team means structural rates are strong despite the deficit penalty. Do NOT suppress BUY on MC Cum alone when > 0.45.\n'
++ '  TRAILING TEAM MC Cum: MC simulates forward using observed possession rates shaped by game state. Trailing teams produce different rate profiles (pressing, risk-taking, opponent protecting). MC Cum > 0.45 for a trailing team means structural rates are strong despite the deficit environment. Do NOT treat low MC as structural evidence against a trailing team when XGB confirms.\n'
 + '  When MC investigation active (CLEAN/WAVE): MC PBP > everything.\n\n'
 + 'SUSTAINABILITY RULES:\n'
 + '  - LOCKED IN/DURABLE = shooting at or below baseline. Sustainable.\n'
@@ -578,7 +579,7 @@ return 'You are an NBA structural analyst. You receive pre-computed mechanical i
 + '  Q3: MC Cum ~ XGB > Floor. MC calibration tightens. Floor starts anchoring.\n'
 + '  Q4: MC Cum > XGB > Floor. MC Cum 70-80% converts at 75.3% (perfect calibration). MC>70% = 91.9% accurate.\n'
 + '    Floor least reliable — cumulative anchoring at maximum. Trust MC Cum over floor for FWP in Q4.\n'
-+ '  TRAILING TEAM MC Cum: MC Cum for trailing teams is mechanically depressed by the deficit. MC Cum > 0.45 for a trailing team means structural rates are strong despite the deficit penalty.\n'
++ '  TRAILING TEAM MC Cum: MC simulates forward using observed possession rates shaped by game state. Trailing teams produce different rate profiles (pressing, risk-taking, opponent protecting). Low MC for a trailing team may reflect the deficit environment rather than structural decay. When XGB confirms structural edge despite low MC, weigh XGB.\n'
 + '  When MC investigation is active (CLEAN/WAVE): MC PBP > everything, regardless of quarter.\n\n'
 + '  MC INVESTIGATION PATTERNS (when provided):\n'
 + '  CLEAN = sustained collapse, 72.6% precision Q3+. Strongest signal.\n'
@@ -767,7 +768,8 @@ XGB win probability: ${(ctx.xgbWinProb * 100).toFixed(1)}% | MC Cum: ${ctx.mcCum
 ${ctx.xgbShap ? 'SHAP drivers (what raw stats push XGB prediction): ' + ctx.xgbShap.map(s => s.f + '=' + (s.v > 0 ? '+' : '') + s.v.toFixed(2)).join(', ') : ''}
 ${ctx.convictionQuality ? 'XGB CONVICTION QUALITY:\nBasis: ' + ctx.convictionQuality.basis + ' — ' + Math.round(ctx.convictionQuality.strConcentration * 100) + '% structural / ' + Math.round(ctx.convictionQuality.volConcentration * 100) + '% volatile\nTop driver: ' + ctx.convictionQuality.top1Feature + ' (' + Math.round(ctx.convictionQuality.top1Share * 100) + '% of positive SHAP)' + (ctx.convictionQuality.top1IsVolatile ? ' [VOLATILE]' : '') + '\nScoreboard: ' + (ctx.convictionQuality.bigleadAnchored ? 'CONFIRMED — biglead driving ' + Math.round(ctx.convictionQuality.bigleadShare * 100) + '% (95% win rate in backtest)' : ctx.convictionQuality.noScoreboardConfirmation ? 'NOT CONFIRMED — biglead SHAP flat/negative, stats not translating to lead (19% loss rate vs 5%)' : 'PARTIAL — biglead contributing ' + Math.round(ctx.convictionQuality.bigleadShare * 100) + '%') : ''}
 ${ctx.trajectorySignals && ctx.trajectorySignals.warnings.length > 0 ? 'CONVICTION WARNINGS:\n' + ctx.trajectorySignals.warnings.join('\n') : ''}
-${ctx.failureProfile ? (ctx.league === 'wnba' ? '⚠️ FAILURE PROFILE ACTIVE: Floor reads ' + (ctx.floor * 100).toFixed(0) + '% but ' + (ctx.mcCumWp != null && ctx.mcCumWp < 0.60 ? 'MC Cum ' + (ctx.mcCumWp * 100).toFixed(0) + '% (<60%)' : '') + (ctx.mcCumWp != null && ctx.mcCumWp < 0.60 && ctx.xgbWinProb != null && ctx.xgbWinProb < 0.50 ? ' AND ' : '') + (ctx.xgbWinProb != null && ctx.xgbWinProb < 0.50 ? 'XGB ' + (ctx.xgbWinProb * 100).toFixed(0) + '% (<50%)' : '') + ' don\'t confirm structural edge.\nWNBA floor HIGH + MC+XGB LOW = 20.2% win rate (526 games). Floor is narrative context only in WNBA — this combination is nearly always wrong.\nFor BUY/BWC: SUPPRESS. For POSITION_OPEN: Note extreme risk in body.' : '⚠️ FAILURE PROFILE ACTIVE: Floor reads ' + (ctx.floor * 100).toFixed(0) + '% but ' + (ctx.mcCumWp != null && ctx.mcCumWp < 0.60 ? 'MC Cum ' + (ctx.mcCumWp * 100).toFixed(0) + '% (<60%)' : '') + (ctx.mcCumWp != null && ctx.mcCumWp < 0.60 && ctx.xgbWinProb != null && ctx.xgbWinProb < 0.50 ? ' AND ' : '') + (ctx.xgbWinProb != null && ctx.xgbWinProb < 0.50 ? 'XGB ' + (ctx.xgbWinProb * 100).toFixed(0) + '% (<50%)' : '') + ' don\'t confirm structural edge.\nHistorical win rate in this profile: 41-44% (1,233 games). 51% of all wrong calls system-wide have floor >=0.65. Likely cumulative anchoring from early-game dominance.\nFor BUY/BWC: SUPPRESS unless per-quarter breakdown shows the current quarter specifically supports the floor read.\nFor POSITION_OPEN: Note elevated risk in body — compound threshold passed but underlying structural quality is contested.') : ''}
+${ctx.failureProfile ? (ctx.league === 'wnba' ? '⚠️ FAILURE PROFILE ACTIVE: Floor reads ' + (ctx.floor * 100).toFixed(0) + '% but MC Cum ' + (ctx.mcCumWp != null ? (ctx.mcCumWp * 100).toFixed(0) + '%' : '?') + ' AND XGB ' + (ctx.xgbWinProb != null ? (ctx.xgbWinProb * 100).toFixed(0) + '%' : '?') + ' BOTH disagree — genuine structural erosion, not margin pressure.\nFor BUY/BWC: SUPPRESS. For POSITION_OPEN: Note extreme risk in body.' : '⚠️ FAILURE PROFILE ACTIVE: Floor reads ' + (ctx.floor * 100).toFixed(0) + '% but MC Cum ' + (ctx.mcCumWp != null ? (ctx.mcCumWp * 100).toFixed(0) + '%' : '?') + ' AND XGB ' + (ctx.xgbWinProb != null ? (ctx.xgbWinProb * 100).toFixed(0) + '%' : '?') + ' BOTH disagree — genuine structural erosion.\nFor BUY/BWC: SUPPRESS unless per-quarter breakdown shows the current quarter specifically supports the floor read.\nFor POSITION_OPEN: Note elevated risk in body.') : ''}
+${ctx.mcOnlyFailure ? (ctx.alertType === 'BUY' || ctx.alertType === 'VALUE' ? 'MC CUM CONTEXT FOR BUY: MC Cum reads ' + (ctx.mcCumWp * 100).toFixed(0) + '% — but XGB reads ' + (ctx.xgbWinProb * 100).toFixed(0) + '%, confirming structural momentum.\nMC simulates forward using observed possession rates, which are shaped by the current game state. Trailing teams produce different rate profiles — pressing, risk-taking, opponent protecting leads. MC\'s projection reflects the deficit environment rather than measuring structural quality independently. In BUY territory, low MC is expected — the ctrl team is trailing by definition.\nXGB reads structural features (paint, assists, blocks, FTA, efg) independent of margin. When floor and XGB agree but MC disagrees during a BUY, this is the system identifying value — a structurally dominant team whose process metrics predict they should win despite the current deficit.\nBacktest (43 games): Floor>=0.65 + MC<0.60 + XGB>=0.60 = 72% ctrl WR. Floor>=0.65 + MC<0.60 + XGB<0.50 = 44%. XGB agreement is the discriminator, not MC.\nEvaluate this BUY on floor + XGB + indicator picture. Do NOT suppress on MC disagreement alone.' : 'MC CUM DIVERGENCE: MC Cum reads ' + (ctx.mcCumWp * 100).toFixed(0) + '% while floor reads ' + (ctx.floor * 100).toFixed(0) + '%. However, XGB at ' + (ctx.xgbWinProb * 100).toFixed(0) + '% confirms structural edge.\nMC may reflect margin pressure rather than structural decay — MC simulates using observed possession rates which are shaped by game state (trailing vs leading). Weigh XGB agreement when evaluating structural quality.') : ''}
 ${!ctx.xgbAligned && ctx.xgbWinProb < 0.45 ? 'WARNING: XGBoost sees < 45% win probability from raw stats despite floor at ' + ctx.floor + '. Ctrl trailing + XGB<0.45 wins only 20-28% in Q3-Q4. Consider SUPPRESS.' : ''}${!ctx.xgbAligned && ctx.xgbWinProb > ctx.floor + 0.15 ? 'NOTE: XGBoost sees stronger edge than floor — raw stats outpace composite indicators.' : ''}
 ${ctx.xgbWinProb >= 0.60 && ctx.margin < -5 ? 'WARNING: XGB reads ' + (ctx.xgbWinProb * 100).toFixed(0) + '% but team is trailing by ' + Math.abs(ctx.margin) + '. In corrected backtest, XGB >=0.60 + ctrl trailing 5+ has 82% loss rate (n=17). Elevate scrutiny.' : ctx.xgbWinProb >= 0.70 && ctx.margin < 0 ? 'CAUTION: XGB reads ' + (ctx.xgbWinProb * 100).toFixed(0) + '% but team is trailing. High XGB + trailing is unreliable.' : ''}` : ''}
 ${ctx.alertType === 'BUY' && ctx.xgbWinProb != null ? (ctx.league === 'wnba' ? `XGB BUY CALIBRATION (526-game WNBA backtest, windowed XGB, ctrl trailing):
@@ -822,9 +824,11 @@ ${ctx.league === 'wnba' ? `SIGNAL TRUST HIERARCHY (526 games):
     A 75% MC Cum in WNBA Q4 is functionally ~89%. Treat as strong hold.
   ALIGNED (±0.10): 83% overall, 90% Q4. Highest conviction when both agree.
   CRITICAL: Floor is NEVER a decision gate in WNBA.
-  Floor HIGH + MC+XGB LOW = 20.2% (floor confidently wrong). MC+XGB HIGH + Floor LOW = 83-86%.
+  Floor HIGH + MC LOW + XGB LOW = genuine structural erosion (both models disagree with floor).
+  Floor HIGH + MC LOW + XGB HIGH = MC reflects margin pressure, not structural decay. XGB confirms structure (72% WR, 43 games). In BUY territory, this is the DFT thesis — structurally dominant team trailing.
+  MC+XGB HIGH + Floor LOW = 83-86%.
   EXIT CONFIRMATION: Floor < 0.55 at EXIT = 100% correct. Floor 0.70+ at EXIT = only 66.7% — floor does NOT deny EXIT when high.
-  TRAILING TEAM MC Cum: MC Cum for trailing teams is mechanically depressed by the deficit — remaining possessions cannot reliably overcome even a small gap in simulation. MC Cum > 0.45 for a trailing team means structural rates are strong despite the deficit penalty. Do NOT suppress BUY alerts on MC Cum alone when MC Cum > 0.45.
+  TRAILING TEAM MC Cum: MC simulates forward using observed possession rates shaped by the current game state. Trailing teams produce different rate profiles — pressing, risk-taking, opponent protecting leads. MC's projection reflects the deficit environment rather than measuring structural quality independently. In BUY territory, low MC is expected — the ctrl team is trailing by definition. Do NOT suppress BUY alerts based on low MC when XGB confirms structural edge (>=0.60). The structural edge is captured in floor and XGB — MC re-penalizes the deficit on top of those reads.
   When MC investigation active (CLEAN/WAVE): MC PBP > everything.` : `SIGNAL TRUST HIERARCHY (14,440 checkpoint backtest, 1,233 games):
   Four signals: Floor (cumulative indicators), XGB (2Q windowed structural model), MC PBP (20-possession canary), MC Cum (game-rate probability anchor).
   MC Cum is the best single probability signal (AUC 0.79). XGB 2Q is the best structural classifier (AUC 0.79). Floor anchors stale early-game data.
@@ -835,7 +839,7 @@ ${ctx.league === 'wnba' ? `SIGNAL TRUST HIERARCHY (526 games):
     Floor least reliable — cumulative anchoring at maximum. Trust MC Cum over floor for decisions in Q4.
   When all 3 agree high (MC+XGB+Floor): Q4 95.9% accuracy.
   EXIT CONFIRMATION: MC Cum < 0.45 confirms EXIT = 84% accuracy. MC Cum > 0.55 denies EXIT = only 62% — reconsider.
-  TRAILING TEAM MC Cum: MC Cum for trailing teams is mechanically depressed by the deficit — remaining possessions cannot reliably overcome even a 1-2 point gap in simulation. MC Cum > 0.45 for a trailing team means structural rates are strong despite the deficit penalty. Do NOT suppress BUY alerts on MC Cum alone when MC Cum > 0.45. The structural edge is already captured in floor and XGB — MC Cum re-penalizes the deficit on top of those reads.
+  TRAILING TEAM MC Cum: MC simulates forward using observed possession rates shaped by the current game state. Trailing teams produce different rate profiles — pressing, risk-taking, opponent protecting leads. MC's projection reflects the deficit environment rather than measuring structural quality independently. In BUY territory, low MC is expected — the ctrl team is trailing by definition. Do NOT suppress BUY alerts based on low MC when XGB confirms structural edge (>=0.60). The structural edge is captured in floor and XGB — MC re-penalizes the deficit on top of those reads.
   When MC investigation active (CLEAN/WAVE): MC PBP > everything, regardless of quarter.`}
 
 FLOOR TRAJECTORY:
@@ -5076,14 +5080,17 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
           p += `  SIGNAL DIVERGENCE: XGB (${(xgbData.winProb * 100).toFixed(0)}%) >> MC Cum (${(mcData.mcCumWp * 100).toFixed(0)}%), gap ${Math.round(Math.abs(gap) * 100)}pp. ${league === 'wnba' ? 'XGB leads divergence = 57% ctrl wins. XGB credible in Q3, not Q4.' : 'Close-game WR: 50%. Caution.'}\n`;
         }
       }
-      // Failure profile flag (league-specific)
-      if (ind?.score >= 0.65 && (
-        (mcData?.mcCumWp != null && mcData.mcCumWp < 0.60) ||
-        (xgbData?.winProb != null && xgbData.winProb < 0.50)
-      )) {
-        p += league === 'wnba'
-          ? `  ⚠️ FAILURE PROFILE: Floor ${(ind.score * 100).toFixed(0)}% but MC/XGB don't confirm. WNBA floor HIGH + MC+XGB LOW = 20.2% WR. Floor is narrative-only.\n`
-          : `  ⚠️ FAILURE PROFILE: Floor ${(ind.score * 100).toFixed(0)}% but MC/XGB don't confirm. Historical WR: 41-44%. Likely cumulative anchoring.\n`;
+      // Failure profile flag (league-specific) — split by XGB agreement
+      if (ind?.score >= 0.65) {
+        const _aaMcLow = mcData?.mcCumWp != null && mcData.mcCumWp < 0.60;
+        const _aaXgbLow = xgbData?.winProb != null && xgbData.winProb < 0.50;
+        if (_aaMcLow && _aaXgbLow) {
+          p += league === 'wnba'
+            ? `  ⚠️ FAILURE PROFILE: Floor ${(ind.score * 100).toFixed(0)}% but MC AND XGB both disagree — genuine structural erosion.\n`
+            : `  ⚠️ FAILURE PROFILE: Floor ${(ind.score * 100).toFixed(0)}% but MC AND XGB both disagree. Likely cumulative anchoring.\n`;
+        } else if (_aaMcLow && !_aaXgbLow) {
+          p += `  MC DIVERGENCE: MC Cum ${(mcData.mcCumWp * 100).toFixed(0)}% while floor ${(ind.score * 100).toFixed(0)}%, but XGB ${(xgbData?.winProb * 100).toFixed(0)}% confirms structure. MC may reflect margin pressure rather than structural decay.\n`;
+        }
       }
       if (mcData.mcDrivers && mcData.mcDrivers.length > 0) {
         var sigDrivers = mcData.mcDrivers.filter(function(d) { return Math.abs(d.delta) >= 0.02; });
@@ -7859,19 +7866,26 @@ export default async function(req) {
               // ── XGB-MC divergence classification ──
               // NBA: validated May 13 (14,440 checkpoints, 1,233 games, close-game analysis)
               // WNBA: validated May 8 (3,432 checkpoints, 312 games, compound signal analysis)
-              var _xgbMcGap = null, _xgbMcClass = null, _failureProfile = false;
+              var _xgbMcGap = null, _xgbMcClass = null, _failureProfile = false, _mcOnlyFailure = false;
               if (_xgbWinProb != null && _mcCum?.winProb != null) {
                 _xgbMcGap = _xgbWinProb - _mcCum.winProb;  // positive = XGB higher
                 if (_xgbMcGap > 0.10)       _xgbMcClass = 'XGB_LEADS';
                 else if (_xgbMcGap < -0.10) _xgbMcClass = 'MC_LEADS';
                 else                        _xgbMcClass = 'CONVERGED';
               }
-              // Failure profile: floor high but MC/XGB don't confirm
-              if (ind.score >= 0.65 && (
-                (_mcCum?.winProb != null && _mcCum.winProb < 0.60) ||
-                (_xgbWinProb != null && _xgbWinProb < 0.50)
-              )) {
-                _failureProfile = true;
+              // Failure profile: split by XGB agreement
+              // True failure = BOTH MC and XGB disagree with floor (genuine structural erosion)
+              // MC-only failure = MC low but XGB confirms (margin pressure, not structural decay)
+              if (ind.score >= 0.65) {
+                const _fpMcLow = _mcCum?.winProb != null && _mcCum.winProb < 0.60;
+                const _fpXgbLow = _xgbWinProb != null && _xgbWinProb < 0.50;
+                if (_fpMcLow && _fpXgbLow) {
+                  _failureProfile = true;   // Both models disagree — true structural erosion
+                } else if (_fpMcLow && !_fpXgbLow) {
+                  _mcOnlyFailure = true;    // MC depressed but XGB confirms structure
+                } else if (!_fpMcLow && _fpXgbLow) {
+                  _failureProfile = true;   // XGB low is structural — treat as failure
+                }
               }
               const v2Ctx = {
                 alertType: v2Type, alertTier: v2Tier,
@@ -7976,6 +7990,7 @@ export default async function(req) {
                 xgbMcGap: _xgbMcGap,
                 xgbMcClass: _xgbMcClass,
                 failureProfile: _failureProfile,
+                mcOnlyFailure: _mcOnlyFailure,
               };
 
               // DB-level dedup — catch concurrent invocations BEFORE burning agent tokens
