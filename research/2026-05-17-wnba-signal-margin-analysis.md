@@ -518,3 +518,63 @@ XGB spreads predictions across the range: 50 games above 0.50, 16 at ≥ 0.70. T
 | 16+ | 1 | 0.0% | — (0) |
 
 Shallow trailing (1–3) has 43.3% base comeback rate. XGB > 0.50 lifts this to 52.5% (n=40). Deeper trailing (4–9) drops to 37.9% base but XGB > 0.50 still lifts to 52.9% (n=17). Beyond 10 points, no XGB reads above 0.50 — the structural read correctly says "this team is overwhelmed."
+
+### Finding 13: Floor Indicator Breakdown — I5 Is the Only Standalone Predictor (Test 2)
+
+**Dataset:** 1,756 Q2+ production snapshots, 27 games. All indicators converted to ctrl-relative.
+
+**Per-indicator win rate when ctrl team wins vs loses that indicator:**
+
+| Indicator | Weight | Won (=1) WR | Lost (=0) WR | Spread | AUC |
+|-----------|--------|-------------|-------------|--------|-----|
+| I1 Disruption | 15% | 61.7% (n=575) | 91.5% (n=692) | **−29.7** | 0.300 |
+| I2 Perimeter/FT | 20% | 83.2% (n=392) | 82.7% (n=877) | +0.5 | 0.468 |
+| I3 Shot Quality | 30% | 56.5% (n=517) | 92.8% (n=922) | **−36.4** | 0.251 |
+| I4 Game Control | 25% | 68.4% (n=534) | 88.9% (n=606) | **−20.6** | 0.366 |
+| I5 Momentum | 10% | 84.0% (n=525) | 69.3% (n=635) | **+14.7** | 0.600 |
+| Floor composite | — | — | — | — | 0.652 |
+
+I1, I3, and I4 are individually anti-predictive on production data. I5 Momentum is the only indicator with positive standalone spread. I2 is neutral.
+
+**Why indicators are inverted: selection effect.** The ctrl team is defined by the composite floor. When the ctrl team LOSES the anchor indicator (I3, 30% weight) but still has floor control, it means the remaining indicators are overwhelmingly dominant — those are the most structurally secure games. "Lost I3" ≈ "dominant on everything else."
+
+**Indicator pairs (both won by ctrl):**
+
+| Pair | n | WR% | Lift vs 78.5% base |
+|------|---|-----|-------------------|
+| I1+I5 | 220 | **94.5%** | +16.0 |
+| I2+I5 | 204 | 92.2% | +13.6 |
+| I2+I4 | 228 | 89.0% | +10.5 |
+| I4+I5 | 327 | 83.5% | +5.0 |
+| I3+I4 | 314 | 63.7% | −14.8 |
+| I1+I3 | 261 | **52.1%** | −26.4 |
+
+I5 lifts every pair it touches. I3 drags down every pair. I1+I3 together is essentially a coinflip (52.1%).
+
+**Per-quarter indicator AUC:**
+
+| Indicator | Q2 | Q3 | Q4 |
+|-----------|-----|-----|-----|
+| I5 Momentum | 0.462 | 0.623 | **0.812** |
+| Floor | 0.558 | 0.743 | 0.700 |
+| I2 Perim/FT | 0.440 | 0.516 | 0.461 |
+| I4 Game Ctrl | 0.371 | 0.335 | 0.396 |
+| I1 Disruption | 0.374 | 0.249 | 0.273 |
+| I3 Shot Qual | 0.222 | 0.263 | 0.287 |
+
+I5 is the only indicator that improves with quarter and reaches meaningful AUC in Q4 (0.812). All other individual indicators are below 0.50 in every quarter.
+
+**Floor tier win rates (composite works despite individual inversions):**
+
+| Tier | ALL | Q2 | Q3 | Q4 |
+|------|-----|-----|-----|-----|
+| DOMINANT ≥0.90 | 95.7% (371) | 83.8% (99) | 100% (123) | 100% (149) |
+| STRONG 0.75–0.89 | 77.5% (534) | 63.2% (174) | 84.0% (169) | 84.8% (191) |
+| EARNED 0.60–0.74 | 74.2% (601) | 70.2% (188) | 77.3% (216) | 74.6% (193) |
+| NO EDGE 0.50–0.59 | 64.7% (215) | 57.9% (38) | 61.1% (72) | 69.7% (89) |
+
+The composite is clean and monotonic. DOMINANT Q3/Q4 = 100% on production. The tier matters more than which individual indicators compose it.
+
+**Caveat:** 27 games is a small sample. The 203-game backtest validated I3 as the WNBA anchor. Production inversions may be noise or may reflect 2026 season dynamics. The composite floor's clean tier structure suggests the weighting is functional even if individual indicator spreads are confounded by the selection effect.
+
+**Implication for agent prompt:** The agent should emphasize floor TIER (DOMINANT/STRONG/EARNED) over indicator composition. When discussing specific indicators, I5 (momentum — rebounds, fast break) is the most reliable standalone signal in Q4. The agent should NOT cite "I3 shot quality advantage" as strong evidence — on production data, winning I3 alone is associated with lower win rates due to the narrow-control confound.
