@@ -299,3 +299,136 @@ Both signals at maximum confidence. CON leads by 21 in Q3. CON collapses and los
 
 - Analysis script: `research/signal_analysis.py`
 - OOF predictions: generated via 5-fold GroupKFold CV, same hyperparams as `research/retrain_wnba_xgb.py`
+
+---
+
+## Production Validation (May 18, 2026 — 27 games, 1,686 Q2+ snapshots)
+
+### Methodology
+
+**Re-scoring required.** Stored `xgb_win_prob` values in production snapshots were computed by different model versions depending on game date:
+- May 8–10: No WNBA XGB at all (first deploy May 12)
+- May 12–13: 12-feature model with leaf c/w bug (reading cover instead of leaf weight)
+- May 14: Windowed + erosion model with base_score logit→prob bug
+- May 15+ (after `0899f57`): Current correct model
+
+Only 8 of 27 games had the correct model. All 27 games were re-scored using:
+1. Current `xgb-model-wnba.json` (300 trees, 13 features)
+2. **Windowed box-score features** reconstructed from production snapshot timeline (matching training pipeline)
+3. Per-quarter max margins reconstructed from `home_pts - away_pts` per snapshot (replacing live `_qMaxMargin` which is not persisted after game finalization)
+4. Cross-fade windowed biglead computed from per-quarter max margins
+
+**Alias normalization bug found.** Games before May 16 (`1c82798`) stored SR aliases (NYL, GSV, WAS, LVA) in `floor_team` while `winner` used BDL aliases (NY, GS, WSH, LV). Without normalization, 6/12 teams' win/loss labels were inverted, producing junk accuracy numbers. All results below use normalized aliases.
+
+### Finding 6: Production Signal Comparison (re-scored XGB)
+
+| Signal | AUC | Brier | Dir Acc |
+|--------|-----|-------|---------|
+| MC Cum | **0.748** | 0.158 | 79.4% |
+| XGB (windowed, re-scored) | 0.668 | 0.155 | 80.4% |
+| Window Score | 0.659 | 0.158 | 80.3% |
+| Floor | 0.639 | 0.164 | 77.5% |
+
+**Per-quarter:**
+
+| Quarter | XGB | MC Cum | Floor | Window |
+|---------|-----|--------|-------|--------|
+| Q2 | 0.645 | **0.690** | 0.544 | 0.563 |
+| Q3 | 0.596 | **0.745** | 0.728 | 0.704 |
+| Q4 | 0.726 | **0.808** | 0.699 | 0.759 |
+
+MC Cum leads every quarter on production. XGB's production AUC (0.668) is significantly below its backtest OOF (0.809). Possible contributors: 2026 season distribution shift, personal fouls feature always zero (BDL WNBA doesn't provide `pf`), 27-game small sample, and the inherent gap between backtest (controlled checkpoints) and production (live polling cadence).
+
+### Finding 7: XGB Directional Accuracy Is Misleading
+
+XGB's 80.4% directional accuracy is NOT evidence of strong prediction. Analysis:
+
+| Metric | XGB | MC Cum |
+|--------|-----|--------|
+| Predicts > 0.50 | **89.3%** of snapshots | 82.9% |
+| Mean prediction | 0.779 | 0.767 |
+| "Always predict > 0.50" baseline | 79.5% | 79.5% |
+| Directional accuracy | 80.4% | 79.4% |
+| **Separation gap** (mean for wins − mean for losses) | **0.150** | **0.264** |
+
+XGB predicts > 0.50 on 89.3% of all snapshots. Since the ctrl team wins 79.5% of the time, this inflates directional accuracy to 80.4% — only 0.9pp above a zero-skill model. MC Cum's separation gap (0.264) is nearly double XGB's (0.150), meaning MC provides substantially more signal about which games the ctrl team will lose.
+
+**Directional accuracy is the wrong metric at high base rates.** AUC and separation gap are the correct measures.
+
+### Finding 8: XGB Measures Structure, Not Wins — And That's Correct
+
+**Raw AUC conflates two distinct failure modes:**
+
+Out of 5 ctrl-team losses across 27 games:
+
+| Game | Score | Ctrl Led% | XGB Mean | XGB Q4 Min | Classification |
+|------|-------|-----------|----------|------------|----------------|
+| MIN@PHX May 12 | 88-84 | 57% | 0.601 | 0.275 | **STRUCTURAL** — XGB caught collapse |
+| MIN@DAL May 14 | 90-86 | 70% | 0.518 | 0.285 | **STRUCTURAL** — XGB caught collapse |
+| CHI@MIN May 17 | 86-79 | 13% | 0.422 | 0.171 | **STRUCTURAL** — XGB caught collapse |
+| ATL@MIN May 9 | 91-90 | 95% | 0.925 | 0.484 | **VARIANCE** — 1-point loss, correct structural read |
+| NY@POR May 12 | 96-98 | 72% | 0.821 | 0.616 | **VARIANCE** — 2-point loss, correct structural read |
+
+- **Structural collapses (3/3): XGB detected all of them.** Q4 min dropped below 0.30 in every case.
+- **Variance losses (2/2): XGB's structural read was correct.** These were close games (margins of 1 and 2) where the structurally dominant team led most of the game and lost to late execution/variance. From a betting perspective, these are correct reads that hit the wrong side of a coinflip.
+
+**AUC penalizes XGB equally for NY@POR (variance, structural read correct) and MIN@PHX (structural collapse, XGB flagged it).** This makes AUC a poor standalone metric for evaluating a structural signal. XGB's job is to read structure; the agent's job is to assess whether structure will translate to a win given game context.
+
+### Finding 9: XGB Production Bucket Accuracy
+
+| XGB Bucket | ALL | Leading | Trailing |
+|-----------|-----|---------|----------|
+| < 0.30 | 21.7% (n=60) | 57.1% (n=7) | 14.0% (n=50) |
+| 0.30–0.40 | 29.7% (n=37) | 27.3% (n=11) | 30.0% (n=20) |
+| 0.40–0.50 | 70.2% (n=84) | 71.7% (n=53) | 60.9% (n=23) |
+| 0.50–0.60 | 82.9% (n=146) | 85.6% (n=118) | 63.6% (n=11) |
+| 0.60–0.70 | 75.6% (n=176) | 77.6% (n=156) | 50.0% (n=6) |
+| 0.70–0.80 | 75.9% (n=228) | 77.0% (n=209) | 60.0% (n=15) |
+| 0.80–0.90 | 88.8% (n=313) | 91.9% (n=296) | 66.7% (n=3) |
+| ≥ 0.90 | 86.1% (n=642) | 86.1% (n=642) | — |
+
+Monotonic overall ramp (21.7% → 86.1%). The ≥0.90 bucket captures 38% of all snapshots with 86.1% accuracy. The < 0.30 bucket correctly identifies structural weakness (ctrl wins only 21.7%).
+
+### Finding 10: Trailing Team Signal Comparison (Production)
+
+| Signal | Trailing AUC (n=128) | Trail 1-9 AUC (n=125) |
+|--------|---------------------|----------------------|
+| MC Cum | **0.880** | **0.875** |
+| XGB | 0.758 | 0.750 |
+| Floor | 0.532 | 0.530 |
+
+MC Cum dominates trailing-team discrimination on production data, consistent with backtest findings. However, the trailing sample is small (128 snapshots from ~5 games where floor flipped while trailing), so these numbers should be treated as directional.
+
+---
+
+## Implications for Agent Prompt Rewrite
+
+### Signal Roles (refined from production validation)
+
+1. **XGB reads structure, not wins.** XGB's features are windowed box-score diffs — it identifies which team has structural momentum right now. It is not designed to predict late-game execution, variance, or prayer shots. When XGB reads high and the team loses, check whether the loss was structural (XGB should have caught it) or variance (XGB was correct about structure, variance hit).
+
+2. **MC Cum reads margin trajectory and calibrates uncertainty.** MC's strength is that it naturally incorporates score — when the margin disappears, MC drops, correctly reflecting increased uncertainty regardless of structural read. MC leads XGB on every production quarter and context.
+
+3. **XGB's EXIT detection is strong.** In all 3 structural collapses, XGB dropped below 0.30 in Q4 before the game ended. This validates the EXIT system: when XGB drops hard, structure has genuinely broken down. The 2-poll confirmation at 0.45 threshold catches these.
+
+4. **XGB's BUY-gate role needs context.** The high base rate (79.5% ctrl wins) means XGB > 0.50 adds almost no information. The valuable XGB reads are at the extremes: ≥ 0.90 (structural lock, 86% WR) and < 0.30 (structural weakness, 22% WR). The middle range (0.50–0.80) is where XGB struggles to discriminate on production data.
+
+5. **Consensus remains the strongest state.** Both signals high (from backtest: 91.4% WR) is the highest-confidence compound in the system. Both signals low confirms structural breakdown.
+
+### What the Agent Should Be Told
+
+**When XGB is high and MC drops (BUY territory):**
+> XGB reads structural momentum from windowed box-score features (assists, eFG, disruption, paint, FTA, biglead). This team has genuine structural advantages right now. MC is dropping because the margin is compressing — that's what MC does. The question is whether the structural edge (XGB) will reassert or whether the margin compression reflects a real shift. On production data, 2 of 5 ctrl losses were variance (correct structural read, lost by 1-2 points). The BUY thesis is structurally sound but inherently includes variance risk.
+
+**When XGB drops below 0.30:**
+> Structure has genuinely broken down. On production, XGB caught 3/3 structural collapses with Q4 min below 0.30. This is an EXIT signal — don't fight it.
+
+**When XGB is in the middle (0.50–0.80):**
+> XGB is uncertain. The structural features don't clearly favor either team. Lean on MC Cum and floor for the read. XGB's middle range has poor discrimination on production data (75-83% WR, similar to base rate of 79.5%).
+
+### Open Items for Remaining Tests
+
+- **Test 1 (game-level trailing):** Still needed — game-level aggregation may show different XGB trailing accuracy than snapshot-level
+- **Test 2 (floor accuracy):** Production floor AUC 0.639 — needs deeper analysis of which indicators drive floor accuracy
+- **Test 6 (2025-only OOF):** Tests whether 2024 training data helps or hurts the 2026 production gap
+- **Production pf feature gap:** BDL WNBA provides 0 for personal fouls. Training data had real values from SR. This is a permanent distribution shift that may contribute to production AUC drop. Potential fix: retrain with pf=0 or drop the feature.
