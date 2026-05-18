@@ -215,7 +215,7 @@ function computeConvictionQuality(shapArray, league) {
   var volPos = 0, strPos = 0, bigleadVal = 0;
   for (var i = 0; i < shapArray.length; i++) {
     var s = shapArray[i];
-    if (s.f === 'biglead') bigleadVal = s.v;
+    if (s.f === 'biglead' || (league === 'wnba' && s.f === 'windowed_biglead')) bigleadVal = s.v;
     if (s.v > 0) {
       if (volSet.has(s.f)) volPos += s.v;
       else strPos += s.v;
@@ -8026,7 +8026,7 @@ export default async function(req) {
                 // Q4: XGB < 0.60 suppress (50% at 0.55-0.70, 38% at 0.40-0.55, 29% below)
                 if (v2Type === 'BUY') {
                   const buyXgbFloor = league === 'wnba'
-                    ? (currentPeriod >= 4 ? 0.70 : 0.45)  // WNBA: Q4 BUY nearly dead (<0.45=2%), Q2-Q3 same gate
+                    ? (currentPeriod >= 4 ? 0.55 : 0.45)  // WNBA: Q4 gate lowered from 0.70 (two suppressed BUYs won)
                     : (currentPeriod >= 4 ? 0.60 : currentPeriod >= 3 ? 0.45 : 0.40);  // NBA
                   if (_xgbWinProb < buyXgbFloor) {
                     _xgbGateSuppress = true;
