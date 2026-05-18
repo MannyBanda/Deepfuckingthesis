@@ -432,3 +432,40 @@ MC Cum dominates trailing-team discrimination on production data, consistent wit
 - **Test 2 (floor accuracy):** Production floor AUC 0.639 — needs deeper analysis of which indicators drive floor accuracy
 - **Test 6 (2025-only OOF):** Tests whether 2024 training data helps or hurts the 2026 production gap
 - **Production pf feature gap:** BDL WNBA provides 0 for personal fouls. Training data had real values from SR. This is a permanent distribution shift that may contribute to production AUC drop. Potential fix: retrain with pf=0 or drop the feature.
+
+### Finding 11: Year-to-Year Drift Is Not the Production Gap (Test 6)
+
+XGB OOF comparison across season filters:
+
+| Dataset | OOF AUC | Games | Checkpoints |
+|---------|---------|-------|-------------|
+| Full (2024+2025) | 0.807 | 526 | 5,260 |
+| 2025 only | 0.804 | 312 | 3,120 |
+| 2024 only | 0.770 | 214 | 2,140 |
+| Train 2024 → Test 2025 | 0.791 | — | — |
+| Train 2025 → Test 2024 | 0.793 | — | — |
+| Production (2026, re-scored) | 0.668 | 27 | 1,686 |
+
+**2025-only OOF (0.804) ≈ full dataset (0.807).** Adding 2024 data contributes +0.003 AUC — negligible. The model is not overfitting on 2024-specific dynamics.
+
+**Cross-season transfer is strong.** Train on 2024, test on 2025 = 0.791. Reverse = 0.793. Structural features generalize across seasons. Year-to-year roster and style changes do not break the model.
+
+**2024-only OOF is weaker (0.770).** Smaller dataset (214 games) and potentially noisier early-WNBA BDL data. The 2025 season provides cleaner signal.
+
+**The 0.807 → 0.668 production gap is not explained by year-to-year drift.** Remaining contributors:
+1. 27-game sample noise (dominant factor — a few variance losses heavily penalize AUC on small n)
+2. `pf` feature permanently zero in production (BDL WNBA does not provide personal fouls; training data had real values from SR)
+3. AUC conflation of structural accuracy with win prediction (Finding 8)
+4. Genuine 2026 season differences not testable with 27 games
+
+**Trailing AUC by season:** 2025-only trailing AUC = 0.635 vs 2024-only = 0.516. XGB discriminates trailing-team comebacks better on 2025 data. Encouraging for BUY thesis — the more recent season's structural patterns are more learnable.
+
+**Per-quarter comparison:**
+
+| Quarter | Full OOF | 2025 OOF | 2024 OOF |
+|---------|----------|----------|----------|
+| Q2 | 0.716 | 0.696 | 0.685 |
+| Q3 | 0.815 | 0.820 | 0.783 |
+| Q4 | 0.875 | 0.870 | 0.834 |
+
+Q3 and Q4 are essentially identical between full and 2025-only. The model's late-game discrimination is stable regardless of whether 2024 data is included.
