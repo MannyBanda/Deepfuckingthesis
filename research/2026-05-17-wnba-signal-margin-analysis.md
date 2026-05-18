@@ -469,3 +469,52 @@ XGB OOF comparison across season filters:
 | Q4 | 0.875 | 0.870 | 0.834 |
 
 Q3 and Q4 are essentially identical between full and 2025-only. The model's late-game discrimination is stable regardless of whether 2024 data is included.
+
+### Finding 12: Game-Level Trailing — XGB Is the Only Usable BUY Signal (Test 1)
+
+**Dataset:** 193 games where ctrl team trailed at some point in Q3/Q4 (from 526-game backtest). 77 comebacks (39.9%), 116 losses (60.1%).
+
+**Game-level AUC (signal at deepest trailing point):**
+
+| Metric | XGB OOF | MC Cum |
+|--------|---------|--------|
+| At deepest trailing | 0.594 | 0.626 |
+| Mean while trailing | 0.612 | 0.617 |
+| Max while trailing | 0.606 | 0.596 |
+
+Both signals modestly above chance at game level. MC slightly edges at deepest point, XGB slightly edges on peak structural read.
+
+**XGB bucket accuracy at deepest trailing — clean monotonic ramp:**
+
+| XGB | Comeback Rate | n |
+|-----|--------------|---|
+| < 0.30 | 30.7% | 75 |
+| 0.30–0.50 | 41.2% | 68 |
+| 0.50–0.60 | 44.0% | 25 |
+| 0.60–0.70 | 55.6% | 9 |
+| ≥ 0.70 | **62.5%** | 16 |
+
+**MC is pinned low in trailing territory — cannot discriminate:**
+
+| MC Cum | Comeback Rate | n |
+|--------|--------------|---|
+| < 0.30 | 33.1% | **124** (64% of all trailing games) |
+| 0.30–0.50 | 51.7% | 58 |
+| ≥ 0.50 | 54.5% | 11 |
+
+124 of 193 trailing games (64%) have MC < 0.30 at the deepest point. MC echoes margin — when the ctrl team trails, MC is always low regardless of structural quality. MC cannot distinguish which trailing teams will come back because it gives the same read on nearly all of them.
+
+XGB spreads predictions across the range: 50 games above 0.50, 16 at ≥ 0.70. The ≥ 0.70 bucket comes back 62.5% — the structurally dominant team at their worst moment still wins nearly 2/3 when XGB reads high.
+
+**Implication for agent prompt:** In BUY territory (ctrl team trailing), XGB is the only signal with useful discrimination. MC's role shifts from "independent predictor" to "margin context" — it tells you how deep the deficit is, not whether the team will recover. The agent should frame BUY decisions around XGB's structural read and use MC only for deficit severity context. Current XGB BUY gates are unchanged — this finding informs agent language, not mechanical thresholds.
+
+**Trailing depth breakdown:**
+
+| Depth | n | Comeback% | XGB > 0.50 CB% (n) |
+|-------|---|-----------|-------------------|
+| 1–3 | 120 | 43.3% | 52.5% (40) |
+| 4–9 | 95 | 37.9% | 52.9% (17) |
+| 10–15 | 21 | 28.6% | — (0) |
+| 16+ | 1 | 0.0% | — (0) |
+
+Shallow trailing (1–3) has 43.3% base comeback rate. XGB > 0.50 lifts this to 52.5% (n=40). Deeper trailing (4–9) drops to 37.9% base but XGB > 0.50 still lifts to 52.9% (n=17). Beyond 10 points, no XGB reads above 0.50 — the structural read correctly says "this team is overwhelmed."
