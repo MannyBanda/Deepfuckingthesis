@@ -518,6 +518,35 @@ exports.handler = async (event) => {
         }
       } catch(e) { /* poll_state may not have schedule_json */ }
 
+      // ── NBA reverse-alias migration: fix phantom aliases from broken aliasMap ──
+      // Old aliasMap converted to non-existent abbreviations: NOP→NO, GSW→GS, NYK→NY, SAS→SA, PHX→PHO
+      // SR + BDL both use: NOP, GSW, NYK, SAS, PHX — the aliasMap targets don't exist in either API
+      // Idempotent — no-op once phantom aliases are gone
+      const _nbaReverseMap = [['NO','NOP'],['GS','GSW'],['NY','NYK'],['SA','SAS'],['PHO','PHX']];
+      for (const [phantom, correct] of _nbaReverseMap) {
+        await sql`UPDATE games SET home_alias = ${correct}, matchup = REPLACE(matchup, ${phantom}||'@', ${correct}||'@') WHERE home_alias = ${phantom} AND league = 'nba'`;
+        await sql`UPDATE games SET home_alias = ${correct}, matchup = REPLACE(matchup, '@'||${phantom}, '@'||${correct}) WHERE home_alias = ${phantom} AND league = 'nba'`;
+        await sql`UPDATE games SET away_alias = ${correct}, matchup = REPLACE(matchup, ${phantom}||'@', ${correct}||'@') WHERE away_alias = ${phantom} AND league = 'nba'`;
+        await sql`UPDATE games SET away_alias = ${correct}, matchup = REPLACE(matchup, '@'||${phantom}, '@'||${correct}) WHERE away_alias = ${phantom} AND league = 'nba'`;
+        await sql`UPDATE alerts SET control_team = ${correct} WHERE control_team = ${phantom} AND league = 'nba'`;
+        await sql`UPDATE alerts SET position_team = ${correct} WHERE position_team = ${phantom} AND league = 'nba'`;
+      }
+      // Fix NBA schedule_json in poll_state
+      try {
+        const _nbaPs = await sql`SELECT schedule_json, date FROM poll_state WHERE league = 'nba'`;
+        for (const row of _nbaPs) {
+          if (!row.schedule_json) continue;
+          let sj = typeof row.schedule_json === 'string' ? JSON.parse(row.schedule_json) : row.schedule_json;
+          let changed = false;
+          const _rm = {NO:'NOP',GS:'GSW',NY:'NYK',SA:'SAS',PHO:'PHX'};
+          for (const g of sj) {
+            if (_rm[g.home_alias]) { g.home_alias = _rm[g.home_alias]; changed = true; }
+            if (_rm[g.away_alias]) { g.away_alias = _rm[g.away_alias]; changed = true; }
+          }
+          if (changed) await sql`UPDATE poll_state SET schedule_json = ${JSON.stringify(sj)} WHERE league = 'nba'`;
+        }
+      } catch(e) { /* non-fatal */ }
+
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: 'Schema initialized' }) };
     }
 
