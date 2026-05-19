@@ -339,7 +339,7 @@ const LEAGUES = {
     bdlHasSeasonStats: true,
     bdlHasBoxScores: true,
     season: '2025',
-    aliasMap: { NOP: 'NO', GSW: 'GS', NYK: 'NY', SAS: 'SA', PHX: 'PHO', BKN: 'BKN' },
+    aliasMap: { NOP: 'NO', GSW: 'GS', NYK: 'NY', SA: 'SAS', PHX: 'PHO', BKN: 'BKN' },
     quarterMinutes: 12,
     gameMinutes: 48,
     periodCount: 4,
