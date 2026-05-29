@@ -95,16 +95,16 @@ const isDedup = (r) => r && DEDUP_PATTERNS.some(p => r.toLowerCase().includes(p.
 
 // WNBA-specific Opus prompt context
 const WNBA_SIGNAL_CONTEXT = `
-WNBA-SPECIFIC SIGNAL RULES (critical for analysis):
-- Floor score is NARRATIVE ONLY in WNBA — wrong 80% of the time vs MC + XGB. Do NOT treat floor as a reliable signal.
+WNBA-SPECIFIC SIGNAL RULES (critical for analysis). Tags: [STRUCT]=direction/ordering reliable, magnitude not; [OP]=mechanical gate; [PRIOR]=backtest, reason-from-not-quote.
+- Floor score is NARRATIVE ONLY in WNBA — when it disagrees with MC+XGB, floor is the one that's wrong. Do NOT treat floor as a reliable signal. [STRUCT]
 - I3 (Shot Quality) is the anchor indicator (30% weight), not I4/I2 as in NBA.
 - Paint/rim stats are noise in WNBA — perimeter game dominates.
-- Q4 BUY is nearly dead: XGB < 0.45 = 2% win rate. Only XGB >= 0.70 is viable.
-- MC Q4 underestimates ctrl win probability by +8-14pp — expect MC to read low.
-- I3 anti-inversion: losing I3 = 17.6% win rate (opposite of NBA where losing I3 = 49%).
+- BUY is a plus-money structural play: value is in the PRICE. A low win rate is EXPECTED and is not, by itself, a failure — do not score a structurally sound trailing BUY as wrong merely because it lost. [STRUCT]
+- [PRIOR] MC underestimates ctrl win prob in WNBA Q4 (~+8-14pp) — expect MC to read low; reason from it, don't quote.
+- I3 anti-inversion [STRUCT]: in WNBA, losing I3 is structural death (the 30% anchor), the OPPOSITE of NBA where trailing on cold shooting (lost I3) is the variance the thesis exploits. Do NOT apply NBA variance logic to WNBA.
 - Turnovers are inversely correlated with winning (unlike NBA).
-- XGB gates differ: Q2 < 0.45, Q3 < 0.45, Q4 < 0.70 (vs NBA Q2 < 0.40, Q3 < 0.45, Q4 < 0.60).
-When evaluating WNBA arcs, weight MC and XGB signals heavily. Floor-based decisions are inherently suspect.`;
+- [OP] Enforced XGB BUY gates: WNBA Q4 < 0.55, Q1-Q3 < 0.45 (vs NBA Q4 < 0.60, Q3 < 0.45, Q2 < 0.40).
+When evaluating WNBA arcs, weight MC and XGB over floor. Floor-based decisions are inherently suspect. [STRUCT]`;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // processLeague — core per-league analysis pipeline

@@ -919,7 +919,7 @@ function buildSystemPrompt(league) {
       '  - Paint dominance is NOT structural in WNBA. Do not treat it as an edge.',
       '  - Floor is narrative context only \u2014 never a decision gate. MC Cum and XGB are the live decision signals.',
       '  - 40-minute games with 10-minute quarters \u2014 structural advantages have less time to compound than NBA.',
-      '  - BUY trailing max 1-9 (not 1-15). Trail 10+ = 0% win rate.',
+      '  - BUY trailing 1-9 (not 1-15 like NBA); 1-4 is the sweet spot, deep deficits need an exceptional case. [STRUCT]',
       '',
       'CONVICTION TIERS (203-game validated):',
       '  DOMINANT = I3+I4 pair AND 3+ indicators, OR 4+ indicators.',
