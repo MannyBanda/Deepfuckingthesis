@@ -389,6 +389,10 @@ input,textarea,select{font-size:16px!important;}
 .toast-team-pill{flex:1;font-family:var(--mono);font-size:12px;font-weight:600;padding:7px 0;border-radius:var(--r-inner);background:transparent;border:1px solid var(--hairline);color:var(--fg-tertiary);cursor:pointer;text-align:center;transition:all .12s ease;}
 .toast-team-pill.active{border-color:var(--green-border);background:rgba(52,211,153,0.06);}
 .toast-hint{margin:0 14px 8px;padding:7px 10px;border-radius:var(--r-inner);background:rgba(52,211,153,0.08);border:1px solid var(--green-border);color:var(--green);font-family:var(--sans);font-size:11px;font-weight:600;cursor:pointer;text-align:center;}
+.toast-odds-bar{display:flex;align-items:center;justify-content:space-between;padding:0 14px 6px;}
+.toast-odds-updated{font-family:var(--mono);font-size:9px;color:var(--fg-dim);}
+.toast-odds-refresh{background:transparent;border:1px solid var(--hairline);border-radius:var(--r-inner);color:var(--fg-tertiary);font-size:12px;line-height:1;padding:3px 8px;cursor:pointer;}
+.toast-odds-refresh:active{color:var(--green);border-color:var(--green-border);}
 .chrome-badge{position:absolute;top:-4px;right:-4px;width:16px;height:16px;border-radius:999px;background:var(--green);color:var(--bg-surface);font-family:var(--mono);font-size:9px;font-weight:700;place-items:center;display:none;}
 .chrome-badge.show{display:grid;}
 .icon-btn{position:relative;}
@@ -471,6 +475,10 @@ body.is-locked{overflow:hidden;}
   <div class="toast-teams" id="toast-teams" style="display:none">
     <button class="toast-team-pill" id="toast-pill-away" onclick="pickToastTeam(false)"></button>
     <button class="toast-team-pill" id="toast-pill-home" onclick="pickToastTeam(true)"></button>
+  </div>
+  <div class="toast-odds-bar" id="toast-odds-bar" style="display:none">
+    <span class="toast-odds-updated" id="toast-odds-updated"></span>
+    <button class="toast-odds-refresh" id="toast-odds-refresh" onclick="refreshToastOdds()" title="Refresh odds">&#8635;</button>
   </div>
   <div id="toast-odds"></div>
 </div>
@@ -1251,7 +1259,7 @@ document.getElementById('swipe').addEventListener('scroll',function(){
         // Update toast for new game if toast is visible (skip FINAL)
         var swG=games.find(function(x){return x.id===newActive;});
         if(_toastVisible&&swG&&getState(swG)!=='FINAL')updateToastForGame(newActive);
-        else if(_toastVisible&&swG&&getState(swG)==='FINAL'){document.getElementById('toast').classList.remove('show');_toastVisible=false;stopToastOddsPoll();}
+        else if(_toastVisible&&swG&&getState(swG)==='FINAL'){document.getElementById('toast').classList.remove('show');_toastVisible=false;stopOddsClock();}
       }
     }
   },80);
@@ -4010,7 +4018,8 @@ var _toastAlert=null;
 var _toastGameId=null;
 var _latestSendAlert=null;
 var _toastVisible=false;
-var _toastOddsTimer=null;
+var _oddsCache=null;          // {url,ts,games[]} last odds-api response (event-driven, 30s freshness)
+var _toastClockTimer=null;    // display-only 1s ticker for "updated Ns ago" (never fetches)
 var _dismissedAlertIds=new Set();
 var _toastPick={};            // {gameId:{team,isHome}} session-only manual pick
 var _toastView=null;          // {team,isHome} currently rendered — poll re-renders this
@@ -4175,11 +4184,8 @@ function _resolveDefaultTeam(g,gid){
   if(ct){var isHome=ct.toUpperCase()===hA.toUpperCase();return {team:isHome?hA:(g.away?.alias||'AWAY'),isHome:isHome};}
   return {team:hA,isHome:true};
 }
-function _startManualPollIfLive(g){
-  if(g&&getState(g)!=='FINAL')startToastOddsPoll();else stopToastOddsPoll();
-}
 // Render a manual (no-alert) view for a game using session pick → default team.
-function _manualToastView(g,gid){
+function _manualToastView(g,gid,force){
   var sel=_toastPick[gid]||_resolveDefaultTeam(g,gid);
   _toastAlert=null;_toastPendingAlert=null;hideToastHint();
   // Baseline: treat any pre-existing alert for this game as already surfaced (no false hint)
@@ -4187,22 +4193,18 @@ function _manualToastView(g,gid){
   for(var _i=_ga.length-1;_i>=0;_i--){if(_ga[_i].agent_decision==='SEND'){_toastAckId=_ga[_i].id;break;}}
   renderNeutralHeader(g,sel.team,sel.isHome);
   document.getElementById('toast-odds').innerHTML='<div class="toast-no-odds">Loading odds\u2026</div>';
-  renderOddsFor(g,sel.team,sel.isHome);
-  _startManualPollIfLive(g);
+  renderOddsFor(g,sel.team,sel.isHome,force);
 }
 
-function fireToast(alert){
+function fireToast(alert,force){
+  if(force===undefined)force=true;
   _toastAlert=alert;_toastGameId=alert.game_id;
   _toastPendingAlert=null;hideToastHint();_toastAckId=alert.id;
   renderToastHeader(alert);
   var oddsEl=document.getElementById('toast-odds');
   oddsEl.innerHTML='<div class="toast-no-odds">Loading odds\u2026</div>';
   showToastEl();
-  fetchLineShop(alert);
-  // Only poll live odds for non-FINAL games
-  var g=games.find(function(x){return x.id===alert.game_id;});
-  if(g&&getState(g)!=='FINAL')startToastOddsPoll();
-  else stopToastOddsPoll();
+  fetchLineShop(alert,force);
 }
 
 // Resolve {team,isHome} from an alert, applying the EXIT opponent-flip.
@@ -4216,16 +4218,42 @@ function _alertBetTeam(alert,g){
 }
 
 // Thin wrapper: derive bet team from alert, then render. Alert display path unchanged.
-async function fetchLineShop(alert){
+async function fetchLineShop(alert,force){
   var oddsEl=document.getElementById('toast-odds');
   var g=games.find(function(x){return x.id===alert.game_id;});
   if(!g){oddsEl.innerHTML='<div class="toast-no-odds">Game not found</div>';return;}
   var bt=_alertBetTeam(alert,g);
-  return renderOddsFor(g,bt.team,bt.isHome);
+  return renderOddsFor(g,bt.team,bt.isHome,force);
+}
+
+// Freshness-gated odds fetch. Returns cached games if same URL and <30s old (unless force).
+async function _getOdds(url,force){
+  if(!force&&_oddsCache&&_oddsCache.url===url&&(Date.now()-_oddsCache.ts)<30000)return _oddsCache.games;
+  var r=await fetch(url);
+  if(!r.ok){var e=await r.json().catch(function(){return{};});console.warn('[ODDS API]',e.detail||e.error);throw new Error(e.error||'HTTP '+r.status);}
+  var data=await r.json();
+  if(data.credits)console.log('[ODDS API]'+(data.historical?' (historical)':'')+' rem:',data.credits.remaining,'used:',data.credits.used);
+  _oddsCache={url:url,ts:Date.now(),games:(data.games||[])};
+  return _oddsCache.games;
+}
+// Display-only freshness clock — rewrites a text node every 1s, never fetches.
+function startOddsClock(){stopOddsClock();_renderOddsClock();_toastClockTimer=setInterval(_renderOddsClock,1000);}
+function stopOddsClock(){if(_toastClockTimer){clearInterval(_toastClockTimer);_toastClockTimer=null;}}
+function _renderOddsClock(){
+  var el=document.getElementById('toast-odds-updated');if(!el)return;
+  if(!_oddsCache||!_oddsCache.ts){el.textContent='';return;}
+  var s=Math.max(0,Math.round((Date.now()-_oddsCache.ts)/1000));
+  el.textContent=s<60?('updated '+s+'s ago'):('updated '+Math.floor(s/60)+'m+ ago');
+}
+// Manual refresh — forces a fresh pull, bypassing the 30s buffer.
+function refreshToastOdds(){
+  var g=games.find(function(x){return x.id===_toastGameId;});
+  if(!g||!_toastView)return;
+  renderOddsFor(g,_toastView.team,_toastView.isHome,true);
 }
 
 // Core odds renderer — team-agnostic. betTeam/isHome are final (EXIT flip already applied by caller).
-async function renderOddsFor(g,betTeam,isHome){
+async function renderOddsFor(g,betTeam,isHome,force){
   _toastView={team:betTeam,isHome:isHome};
   renderToastTeams(g,isHome);
   var oddsEl=document.getElementById('toast-odds');
@@ -4237,17 +4265,17 @@ async function renderOddsFor(g,betTeam,isHome){
   try{
     // For completed games, use historical endpoint with game's scheduled time
     var gs=getState(g);
+    var isLive=(gs!=='FINAL');
+    var bar=document.getElementById('toast-odds-bar');
+    if(bar)bar.style.display=isLive?'flex':'none';
     var oddsUrl=FN+'odds-api?league=wnba';
     if(gs==='FINAL'&&g.scheduled){
       // Normalize to ISO Z format without milliseconds (Odds API requires YYYY-MM-DDTHH:MM:SSZ)
       var histDate=new Date(g.scheduled).toISOString().replace(/\.\d{3}Z$/,'Z');
       oddsUrl+=('&date='+encodeURIComponent(histDate));
     }
-    var r=await fetch(oddsUrl);
-    if(!r.ok){var errD=await r.json().catch(function(){return{};});console.warn('[ODDS API] Error detail:',errD.detail||errD.error);throw new Error(errD.error||'HTTP '+r.status);}
-    var data=await r.json();
-    var oddsGames=data.games||[];
-    if(data.credits)console.log('[ODDS API]'+(data.historical?' (historical)':'')+' Credits remaining:',data.credits.remaining,'used:',data.credits.used);
+    var oddsGames=await _getOdds(oddsUrl, force);
+    if(isLive)startOddsClock(); else stopOddsClock();
 
     // Match our game in The Odds API response — exact match on "Market Name" (e.g., "Boston Celtics")
     var homeFullName=((g.home?.market||'')+' '+hName).trim().toLowerCase();
@@ -4345,7 +4373,7 @@ function showToast(){
     // session pick → control team → home (pre-tip)
     _toastGameId=gid;
     showToastEl();
-    _manualToastView(g,gid);
+    _manualToastView(g,gid,true);
     return;
   }
   // No active game — minimal placeholder
@@ -4360,7 +4388,7 @@ function showToast(){
 function dismissToast(){
   document.getElementById('toast').classList.remove('show');
   _toastVisible=false;
-  stopToastOddsPoll();
+  stopOddsClock();
   _toastPendingAlert=null;hideToastHint();
   // Remember this alert was dismissed — don't auto-show it again
   if(_toastAlert&&_toastAlert.id)_dismissedAlertIds.add(_toastAlert.id);
@@ -4368,30 +4396,16 @@ function dismissToast(){
 
 function updateToastForGame(gameId){
   var g=games.find(function(x){return x.id===gameId;});
-  if(!g){document.getElementById('toast').classList.remove('show');_toastVisible=false;stopToastOddsPoll();return;}
+  if(!g){document.getElementById('toast').classList.remove('show');_toastVisible=false;stopOddsClock();return;}
   _toastGameId=gameId;
-  // 1. session pick wins; else 2. latest SEND alert; else control team → home
+  // 1. session pick wins; else 2. latest SEND alert; else control team → home. Swipe = gated (30s buffer).
   if(!_toastPick[gameId]){
     var gameAlerts=_alertCache[gameId]||[];
     var latest=null;
     for(var i=gameAlerts.length-1;i>=0;i--){if(gameAlerts[i].agent_decision==='SEND'){latest=gameAlerts[i];break;}}
-    if(latest){fireToast(latest);return;}
+    if(latest){fireToast(latest,false);return;}
   }
-  _manualToastView(g,gameId);
-}
-
-function startToastOddsPoll(){
-  stopToastOddsPoll();
-  _toastOddsTimer=setInterval(function(){
-    if(_toastVisible&&_toastView){
-      var g=games.find(function(x){return x.id===_toastGameId;});
-      if(g)renderOddsFor(g,_toastView.team,_toastView.isHome);else stopToastOddsPoll();
-    }else stopToastOddsPoll();
-  },10000);
-}
-
-function stopToastOddsPoll(){
-  if(_toastOddsTimer){clearInterval(_toastOddsTimer);_toastOddsTimer=null;}
+  _manualToastView(g,gameId,false);
 }
 
 function openBook(appUrl,webUrl){
