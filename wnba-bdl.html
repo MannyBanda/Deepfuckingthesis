@@ -385,6 +385,10 @@ input,textarea,select{font-size:16px!important;}
 .toast-best-tag{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--green);margin-left:6px;}
 .toast-open{font-family:var(--sans);font-size:10px;font-weight:600;color:var(--green);margin-left:10px;white-space:nowrap;}
 .toast-no-odds{padding:10px 14px;font-family:var(--sans);font-size:12px;color:var(--fg-dim);text-align:center;}
+.toast-teams{display:flex;gap:6px;padding:0 14px 8px;}
+.toast-team-pill{flex:1;font-family:var(--mono);font-size:12px;font-weight:600;padding:7px 0;border-radius:var(--r-inner);background:transparent;border:1px solid var(--hairline);color:var(--fg-tertiary);cursor:pointer;text-align:center;transition:all .12s ease;}
+.toast-team-pill.active{border-color:var(--green-border);background:rgba(52,211,153,0.06);}
+.toast-hint{margin:0 14px 8px;padding:7px 10px;border-radius:var(--r-inner);background:rgba(52,211,153,0.08);border:1px solid var(--green-border);color:var(--green);font-family:var(--sans);font-size:11px;font-weight:600;cursor:pointer;text-align:center;}
 .chrome-badge{position:absolute;top:-4px;right:-4px;width:16px;height:16px;border-radius:999px;background:var(--green);color:var(--bg-surface);font-family:var(--mono);font-size:9px;font-weight:700;place-items:center;display:none;}
 .chrome-badge.show{display:grid;}
 .icon-btn{position:relative;}
@@ -463,6 +467,11 @@ body.is-locked{overflow:hidden;}
     <button class="toast-close" onclick="dismissToast()">&times;</button>
   </div>
   <div class="toast-game" id="toast-game" onclick="toastScrollToGame()"></div>
+  <div class="toast-hint" id="toast-hint" style="display:none" onclick="acceptToastHint()"></div>
+  <div class="toast-teams" id="toast-teams" style="display:none">
+    <button class="toast-team-pill" id="toast-pill-away" onclick="pickToastTeam(false)"></button>
+    <button class="toast-team-pill" id="toast-pill-home" onclick="pickToastTeam(true)"></button>
+  </div>
   <div id="toast-odds"></div>
 </div>
 
@@ -492,7 +501,7 @@ ATL:'#E35205',CHI:'#72C5EB',CON:'#FB4F14',DAL:'#00A4E4',GS:'#AD96DC',
 IND:'#FFCD00',LA:'#FFC72C',LV:'#C8102E',MIN:'#78BE21',NY:'#6ECEB2',
 PHX:'#E56020',POR:'#E03C31',SEA:'#FBE122',TOR:'#6CACE4',WSH:'#E31837'
 };
-function tc(alias){return TC[(alias||'').toUpperCase()]||'var(--fg-primary)';}
+function tc(alias){var a=(alias||'').toUpperCase();return TC[ESPN_ALIAS_MAP[a]||a]||'var(--fg-primary)';}
 
 // ── STATE ──
 var games = [], activeGameId = null, pollTimer = null, dateOffset = 0;
@@ -4003,6 +4012,10 @@ var _latestSendAlert=null;
 var _toastVisible=false;
 var _toastOddsTimer=null;
 var _dismissedAlertIds=new Set();
+var _toastPick={};            // {gameId:{team,isHome}} session-only manual pick
+var _toastView=null;          // {team,isHome} currently rendered — poll re-renders this
+var _toastPendingAlert=null;  // alert awaiting tap when hint is shown (open-toast case)
+var _toastAckId=null;         // id of latest alert already surfaced for the displayed game (hint baseline)
 
 async function pollAlerts(){
   if(!dbReady)return;
@@ -4039,16 +4052,26 @@ async function pollAlerts(){
     }
     var badge=document.getElementById('toast-badge');
     if(_latestSendAlert&&badge){badge.textContent='';badge.classList.add('show');}
-    if(newSend)fireToast(newSend);
-    // Refresh visible toast with latest SEND alert for its game (catches EXIT, POSITION_SAFE, team flips)
+    if(newSend){
+      if(_toastVisible){
+        // Toast already open → non-disruptive hint only (no re-render, no pick overwrite)
+        _toastPendingAlert=newSend;showToastHint(newSend);
+      } else {
+        // Toast closed → auto-open + flash to alert team + overwrite session pick
+        var _ngm=games.find(function(x){return x.id===newSend.game_id;});
+        if(_ngm){var _bt=_alertBetTeam(newSend,_ngm);_toastPick[newSend.game_id]={team:_bt.team,isHome:_bt.isHome};}
+        fireToast(newSend);
+      }
+    }
+    // Open toast, new SEND for the displayed game (EXIT, POSITION_SAFE, flips) → hint only
     else if(_toastVisible&&_toastGameId&&_alertCache[_toastGameId]){
       var gameAlerts=_alertCache[_toastGameId];
       var latestForGame=null;
       for(var li=gameAlerts.length-1;li>=0;li--){
         if(gameAlerts[li].agent_decision==='SEND'){latestForGame=gameAlerts[li];break;}
       }
-      if(latestForGame&&_toastAlert&&latestForGame.id!==_toastAlert.id){
-        fireToast(latestForGame);
+      if(latestForGame&&latestForGame.id!==_toastAckId&&latestForGame.id!==(_toastPendingAlert&&_toastPendingAlert.id)){
+        _toastPendingAlert=latestForGame;showToastHint(latestForGame);
       }
     }
   }catch(e){console.warn('[TOAST] Alert poll failed:',e.message);}
@@ -4092,8 +4115,85 @@ function renderToastHeader(alert){
   document.getElementById('toast-game').textContent=gameText;
 }
 
+// Neutral header for manual (no-alert) odds views — no signal metadata.
+function renderNeutralHeader(g,team,isHome){
+  var hA=g.home?.alias||'HOME',aA=g.away?.alias||'AWAY';
+  var toast=document.getElementById('toast');
+  toast.style.borderColor='var(--hairline-strong)';
+  var lab=document.getElementById('toast-label');lab.textContent='Odds';lab.style.color='var(--fg-secondary)';
+  var dot=document.getElementById('toast-dot');dot.style.background='var(--fg-tertiary)';dot.style.boxShadow='none';
+  document.getElementById('toast-alert-info').textContent=aA+'@'+hA;
+  document.getElementById('toast-game').textContent=esc(team)+' odds';
+}
+
+// Render the home/away selector pills, marking the active side.
+function renderToastTeams(g,activeIsHome){
+  var el=document.getElementById('toast-teams');if(!el)return;
+  var hA=g.home?.alias||'HOME',aA=g.away?.alias||'AWAY';
+  var pa=document.getElementById('toast-pill-away'),ph=document.getElementById('toast-pill-home');
+  pa.textContent=aA;ph.textContent=hA;
+  pa.className='toast-team-pill'+(!activeIsHome?' active':'');
+  ph.className='toast-team-pill'+(activeIsHome?' active':'');
+  pa.style.color=!activeIsHome?tc(aA):'var(--fg-tertiary)';
+  ph.style.color=activeIsHome?tc(hA):'var(--fg-tertiary)';
+  el.style.display='flex';
+}
+
+// Manual team selection — writes session pick, renders that team's odds.
+function pickToastTeam(isHome){
+  var g=games.find(function(x){return x.id===_toastGameId;});if(!g)return;
+  var team=isHome?(g.home?.alias||'HOME'):(g.away?.alias||'AWAY');
+  _toastPick[_toastGameId]={team:team,isHome:isHome};
+  if(_toastAlert){
+    var bt=_alertBetTeam(_toastAlert,g);
+    if(team.toUpperCase()===bt.team.toUpperCase())renderToastHeader(_toastAlert);
+    else renderNeutralHeader(g,team,isHome);
+  } else renderNeutralHeader(g,team,isHome);
+  document.getElementById('toast-odds').innerHTML='<div class="toast-no-odds">Loading odds\u2026</div>';
+  renderOddsFor(g,team,isHome);
+}
+
+// New-alert hint (open-toast case) — non-disruptive, tap to switch.
+function showToastHint(alert){
+  var el=document.getElementById('toast-hint');if(!el)return;
+  var g=games.find(function(x){return x.id===alert.game_id;});
+  var team=g?_alertBetTeam(alert,g).team:(alert.floor_team||alert.control_team||'?');
+  el.textContent='New signal: '+(alert.alert_type||'').replace(/_/g,' ')+' '+team+' \u00b7 tap to view';
+  el.style.display='block';
+}
+function hideToastHint(){var el=document.getElementById('toast-hint');if(el)el.style.display='none';}
+function acceptToastHint(){
+  if(_toastPendingAlert){var a=_toastPendingAlert;_toastPendingAlert=null;hideToastHint();fireToast(a);}
+}
+
+// Resolve the team to show on a manual open/swipe for a game (no alert firing).
+// control team (latest snapshot floor_team) → home (pre-tip fallback)
+function _resolveDefaultTeam(g,gid){
+  var cs=cardState[gid];
+  var ct=(cs&&cs._allSnapshots&&cs._allSnapshots.length>0)?(cs._allSnapshots[cs._allSnapshots.length-1].floor_team||null):null;
+  var hA=g.home?.alias||'HOME';
+  if(ct){var isHome=ct.toUpperCase()===hA.toUpperCase();return {team:isHome?hA:(g.away?.alias||'AWAY'),isHome:isHome};}
+  return {team:hA,isHome:true};
+}
+function _startManualPollIfLive(g){
+  if(g&&getState(g)!=='FINAL')startToastOddsPoll();else stopToastOddsPoll();
+}
+// Render a manual (no-alert) view for a game using session pick → default team.
+function _manualToastView(g,gid){
+  var sel=_toastPick[gid]||_resolveDefaultTeam(g,gid);
+  _toastAlert=null;_toastPendingAlert=null;hideToastHint();
+  // Baseline: treat any pre-existing alert for this game as already surfaced (no false hint)
+  var _ga=_alertCache[gid]||[];_toastAckId=null;
+  for(var _i=_ga.length-1;_i>=0;_i--){if(_ga[_i].agent_decision==='SEND'){_toastAckId=_ga[_i].id;break;}}
+  renderNeutralHeader(g,sel.team,sel.isHome);
+  document.getElementById('toast-odds').innerHTML='<div class="toast-no-odds">Loading odds\u2026</div>';
+  renderOddsFor(g,sel.team,sel.isHome);
+  _startManualPollIfLive(g);
+}
+
 function fireToast(alert){
   _toastAlert=alert;_toastGameId=alert.game_id;
+  _toastPendingAlert=null;hideToastHint();_toastAckId=alert.id;
   renderToastHeader(alert);
   var oddsEl=document.getElementById('toast-odds');
   oddsEl.innerHTML='<div class="toast-no-odds">Loading odds\u2026</div>';
@@ -4105,20 +4205,32 @@ function fireToast(alert){
   else stopToastOddsPoll();
 }
 
+// Resolve {team,isHome} from an alert, applying the EXIT opponent-flip.
+function _alertBetTeam(alert,g){
+  var hA=g.home?.alias||'HOME',aA=g.away?.alias||'AWAY';
+  var betTeam=alert.floor_team||alert.control_team||'?';
+  if((alert.alert_type||'').startsWith('EXIT')){
+    betTeam=(betTeam.toUpperCase()===hA.toUpperCase())?aA:hA;
+  }
+  return {team:betTeam,isHome:betTeam.toUpperCase()===hA.toUpperCase()};
+}
+
+// Thin wrapper: derive bet team from alert, then render. Alert display path unchanged.
 async function fetchLineShop(alert){
   var oddsEl=document.getElementById('toast-odds');
   var g=games.find(function(x){return x.id===alert.game_id;});
   if(!g){oddsEl.innerHTML='<div class="toast-no-odds">Game not found</div>';return;}
+  var bt=_alertBetTeam(alert,g);
+  return renderOddsFor(g,bt.team,bt.isHome);
+}
 
+// Core odds renderer — team-agnostic. betTeam/isHome are final (EXIT flip already applied by caller).
+async function renderOddsFor(g,betTeam,isHome){
+  _toastView={team:betTeam,isHome:isHome};
+  renderToastTeams(g,isHome);
+  var oddsEl=document.getElementById('toast-odds');
   var hA=g.home?.alias||'HOME',aA=g.away?.alias||'AWAY';
   var hName=g.home?.name||'',aName=g.away?.name||'';
-  var betTeam=alert.floor_team||alert.control_team||'?';
-  // EXIT = the control team LOST structural control — bet the opposite team
-  var isExit=(alert.alert_type||'').startsWith('EXIT');
-  if(isExit){
-    betTeam=(betTeam.toUpperCase()===hA.toUpperCase())?aA:hA;
-  }
-  var isHome=betTeam.toUpperCase()===hA.toUpperCase();
   // The team name to match in Odds API outcomes
   var betFullName=isHome?(g.home?.market||'')+' '+hName:(g.away?.market||'')+' '+aName;
 
@@ -4216,55 +4328,65 @@ function showToastEl(){
 }
 
 function showToast(){
-  // Scope to currently viewed game first
-  var alertForGame=null;
-  if(activeGameId&&_alertCache[activeGameId]){
-    var ga=_alertCache[activeGameId];
-    for(var i=ga.length-1;i>=0;i--){
-      if(ga[i].agent_decision==='SEND'){alertForGame=ga[i];break;}
+  var gid=activeGameId;
+  var g=gid?games.find(function(x){return x.id===gid;}):null;
+  if(g){
+    // 1. session pick (user-chosen) wins on manual open
+    // 2. live SEND alert for this game → alert-driven display (unchanged)
+    if(!_toastPick[gid]){
+      var alertForGame=null;
+      if(_alertCache[gid]){
+        var ga=_alertCache[gid];
+        for(var i=ga.length-1;i>=0;i--){if(ga[i].agent_decision==='SEND'){alertForGame=ga[i];break;}}
+      }
+      if(alertForGame){fireToast(alertForGame);return;}
+      if(_latestSendAlert&&_latestSendAlert.game_id===gid){fireToast(_latestSendAlert);return;}
     }
-  }
-  if(alertForGame){fireToast(alertForGame);}
-  else if(_latestSendAlert&&_latestSendAlert.game_id===activeGameId){fireToast(_latestSendAlert);}
-  else{
-    document.getElementById('toast-label').textContent='No Alerts';
-    document.getElementById('toast-alert-info').textContent='No alerts for this game';
-    document.getElementById('toast-game').textContent='Alerts will appear here when signals fire';
-    document.getElementById('toast-odds').innerHTML='';
+    // session pick → control team → home (pre-tip)
+    _toastGameId=gid;
     showToastEl();
+    _manualToastView(g,gid);
+    return;
   }
+  // No active game — minimal placeholder
+  document.getElementById('toast-label').textContent='Odds';
+  document.getElementById('toast-alert-info').textContent='No game selected';
+  document.getElementById('toast-game').textContent='Open a game to shop odds';
+  document.getElementById('toast-odds').innerHTML='';
+  var tt=document.getElementById('toast-teams');if(tt)tt.style.display='none';
+  showToastEl();
 }
 
 function dismissToast(){
   document.getElementById('toast').classList.remove('show');
   _toastVisible=false;
   stopToastOddsPoll();
+  _toastPendingAlert=null;hideToastHint();
   // Remember this alert was dismissed — don't auto-show it again
   if(_toastAlert&&_toastAlert.id)_dismissedAlertIds.add(_toastAlert.id);
 }
 
 function updateToastForGame(gameId){
-  // Find latest SEND alert for this game
-  var gameAlerts=_alertCache[gameId]||[];
-  var latest=null;
-  for(var i=gameAlerts.length-1;i>=0;i--){
-    if(gameAlerts[i].agent_decision==='SEND'){latest=gameAlerts[i];break;}
+  var g=games.find(function(x){return x.id===gameId;});
+  if(!g){document.getElementById('toast').classList.remove('show');_toastVisible=false;stopToastOddsPoll();return;}
+  _toastGameId=gameId;
+  // 1. session pick wins; else 2. latest SEND alert; else control team → home
+  if(!_toastPick[gameId]){
+    var gameAlerts=_alertCache[gameId]||[];
+    var latest=null;
+    for(var i=gameAlerts.length-1;i>=0;i--){if(gameAlerts[i].agent_decision==='SEND'){latest=gameAlerts[i];break;}}
+    if(latest){fireToast(latest);return;}
   }
-  if(latest){
-    fireToast(latest);
-  } else {
-    // No alerts for this game — dismiss toast
-    document.getElementById('toast').classList.remove('show');
-    _toastVisible=false;
-    stopToastOddsPoll();
-  }
+  _manualToastView(g,gameId);
 }
 
 function startToastOddsPoll(){
   stopToastOddsPoll();
   _toastOddsTimer=setInterval(function(){
-    if(_toastAlert&&_toastVisible)fetchLineShop(_toastAlert);
-    else stopToastOddsPoll();
+    if(_toastVisible&&_toastView){
+      var g=games.find(function(x){return x.id===_toastGameId;});
+      if(g)renderOddsFor(g,_toastView.team,_toastView.isHome);else stopToastOddsPoll();
+    }else stopToastOddsPoll();
   },10000);
 }
 
