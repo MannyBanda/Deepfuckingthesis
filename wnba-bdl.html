@@ -1470,7 +1470,7 @@ function renderCard(id){
 
   // ═══ ESPN WP CHART ═══
   if(state!=='PRE' && cs.espnWP){
-    if(!cs._wpMode)cs._wpMode='espn';
+    if(!cs._wpMode)cs._wpMode='xgb';
     var wpLead=cs.espnWP.home>=cs.espnWP.away?hA:aA;
     var wpPct=Math.max(cs.espnWP.home,cs.espnWP.away);
     var wpOpen=cs.espnWP.opening!=null?(cs.espnWP.home>=cs.espnWP.away?cs.espnWP.opening:100-cs.espnWP.opening):null;
