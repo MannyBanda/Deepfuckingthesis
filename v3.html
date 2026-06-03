@@ -1483,7 +1483,7 @@ function renderWPChart(cs,hA,aA){
 
 function renderXGBChart(cs,hA,aA){
   var snaps=cs._allSnapshots;
-  if(!snaps||snaps.length<2)return'<div class="wp-canvas" style="height:40px;display:flex;align-items:center;justify-content:center"><span style="font-size:9px;color:var(--fg-dim)">Structural view builds from Q2</span></div>';
+  if(!snaps||snaps.length<2)return'<div class="wp-canvas" style="height:40px;display:flex;align-items:center;justify-content:center"><span style="font-size:9px;color:var(--fg-dim)">Building structural read\u2026</span></div>';
   var pts=snaps.filter(function(s){return (s.xgb_win_prob!=null||s.mc_cum_win_prob!=null)&&s.period&&s.period<=4;});
   if(pts.length<2)return'<div class="wp-canvas" style="height:40px;display:flex;align-items:center;justify-content:center"><span style="font-size:9px;color:var(--fg-dim)">No structural data yet</span></div>';
   var W=600,H=80;
