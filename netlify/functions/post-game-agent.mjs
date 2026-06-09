@@ -585,7 +585,7 @@ RECOMMENDATIONS:
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-fable-5',
           max_tokens: 2000,
           messages: [{ role: 'user', content: prompt }],
         }),
@@ -593,6 +593,11 @@ RECOMMENDATIONS:
 
       if (resp.ok) {
         const data = await resp.json();
+
+        if (data.stop_reason === 'refusal') {
+          log(`Fable refused (stop_reason=refusal) — skipping agent analysis`);
+          findings = `Agent analysis refused by model. Arc accuracy: ${arcAccuracy != null ? arcAccuracy + '%' : '-'}.`;
+        } else {
         const text = data.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
 
         const findingsMatch = text.match(/FINDINGS:\s*([\s\S]*?)(?=\nPATTERNS:)/i);
@@ -611,13 +616,14 @@ RECOMMENDATIONS:
           } catch { recommendations = '[]'; }
         }
 
-        log(`Sonnet analysis complete (${data.usage?.input_tokens}in/${data.usage?.output_tokens}out)`);
+        log(`Fable analysis complete (${data.usage?.input_tokens}in/${data.usage?.output_tokens}out)`);
+        }
       } else {
-        log(`Sonnet ${resp.status}`);
+        log(`Fable ${resp.status}`);
         findings = `Agent analysis unavailable (API ${resp.status}). Arc accuracy: ${arcAccuracy != null ? arcAccuracy + '%' : '-'}.`;
       }
     } catch (e) {
-      log(`Sonnet error: ${e.message}`);
+      log(`Fable error: ${e.message}`);
       findings = `Agent analysis failed: ${e.message}. Arc accuracy: ${arcAccuracy != null ? arcAccuracy + '%' : '-'}.`;
     }
   } else {

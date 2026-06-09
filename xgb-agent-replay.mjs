@@ -56,7 +56,7 @@ async function callAgent(prompt) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'claude-opus-4-6',
+      model: 'claude-opus-4-8',
       max_tokens: 600,
       messages: [{ role: 'user', content: prompt }],
     }),
@@ -231,7 +231,7 @@ async function main() {
 
   console.log('═══════════════════════════════════════════════════════════════');
   console.log('  XGB AGENT REPLAY — DEN vs MIN (Apr 20, 2026)');
-  console.log('  Model: claude-opus-4-6 | FINAL: MIN 119, DEN 114');
+  console.log('  Model: claude-opus-4-8 | FINAL: MIN 119, DEN 114');
   console.log('═══════════════════════════════════════════════════════════════\n');
 
   for (const alert of alerts) {

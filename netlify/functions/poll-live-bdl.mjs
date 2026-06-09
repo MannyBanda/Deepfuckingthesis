@@ -1114,7 +1114,7 @@ BODY: [If SEND/DOWNGRADE: plain-English alert body following BODY RULES above. I
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-opus-4-6',
+        model: 'claude-opus-4-8',
         max_tokens: maxTokens || 500,
         messages: [{ role: 'user', content: prompt }],
       }),
@@ -2532,7 +2532,7 @@ Keep it under 300 words. Use team aliases (${hA}, ${aA}).`;
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
-        model: 'claude-opus-4-6',
+        model: 'claude-opus-4-8',
         max_tokens: 1000,
         messages: [{ role: 'user', content: prompt }],
       }),
@@ -5700,7 +5700,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-opus-4-6',
+        model: 'claude-opus-4-8',
         max_tokens: 2500,
         system: getSonnetSystemPrompt(league),
         messages: [{ role: 'user', content: userPrompt }],
@@ -9019,7 +9019,7 @@ export default async function(req) {
                 const _invAgentResp = await fetch('https://api.anthropic.com/v1/messages', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-                  body: JSON.stringify({ model: 'claude-opus-4-6', max_tokens: 600, messages: [{ role: 'user', content: _invPrompt }] }),
+                  body: JSON.stringify({ model: 'claude-opus-4-8', max_tokens: 600, messages: [{ role: 'user', content: _invPrompt }] }),
                 });
                 const _invAgentData = await _invAgentResp.json();
                 const _invAgentText = _invAgentData.content?.[0]?.text || '';

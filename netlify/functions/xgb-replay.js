@@ -14,7 +14,7 @@ export default async function handler(req) {
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: 'claude-opus-4-6', max_tokens: 600, messages: [{ role: 'user', content: prompt }] }),
+      body: JSON.stringify({ model: 'claude-opus-4-8', max_tokens: 600, messages: [{ role: 'user', content: prompt }] }),
     });
     if (!resp.ok) return { decision: 'ERROR', reasoning: 'API ' + resp.status + ': ' + (await resp.text()).substring(0, 200) };
     const data = await resp.json();
@@ -316,7 +316,7 @@ BODY: [If SEND/DOWNGRADE: plain-English alert. If SUPPRESS: blank]`;
 
   return new Response(JSON.stringify({
     game: gameLabel,
-    model: 'claude-opus-4-6',
+    model: 'claude-opus-4-8',
     xgb_context: {
       po_apr20: 'XGB 49.4%, floor 77%, divergence -27.6%',
       bwc_apr20: 'XGB 54.8%, floor 77%, divergence -22.2%',

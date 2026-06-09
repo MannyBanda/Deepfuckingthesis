@@ -1464,7 +1464,7 @@ async function runAgentTests(sql, gameId, triggers, v2Alerts, matchup, triggerId
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify({
-          model: 'claude-opus-4-6',
+          model: 'claude-opus-4-8',
           max_tokens: 600,
           messages: [{ role: 'user', content: prompt }],
         }),
@@ -2451,7 +2451,7 @@ async function replayWithConfig(sql, gameId, config, diffOnly, runAgent = false,
           const resp = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' },
-            body: JSON.stringify({ model: 'claude-opus-4-6', max_tokens: 600, messages: [{ role: 'user', content: prompt }] }),
+            body: JSON.stringify({ model: 'claude-opus-4-8', max_tokens: 600, messages: [{ role: 'user', content: prompt }] }),
           });
 
           if (!resp.ok) { agentRuns.push({ trigger: `${t.type} Q${t.period} ${t.clock}`, error: `API ${resp.status}` }); continue; }

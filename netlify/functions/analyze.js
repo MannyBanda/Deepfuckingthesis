@@ -1019,7 +1019,7 @@ exports.handler = async function(event) {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-opus-4-6',
+        model: 'claude-opus-4-8',
         max_tokens: 2500,
         system: league === 'wnba' ? SYSTEM_PROMPT + SYSTEM_PROMPT_WNBA_OVERRIDE : SYSTEM_PROMPT,
         messages: [{ role: 'user', content: userPrompt }],
