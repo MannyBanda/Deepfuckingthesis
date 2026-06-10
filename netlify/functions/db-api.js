@@ -2813,6 +2813,16 @@ exports.handler = async (event) => {
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, count: rows.length, observations: rows }) };
     }
 
+    if (action === 'delete_thesis') {
+      const gameId = params.game_id;
+      if (!gameId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id required' }) };
+      const deleted = await sql`DELETE FROM theses WHERE game_id = ${gameId} RETURNING game_id`;
+      if (deleted.length === 0) {
+        return { statusCode: 200, headers, body: JSON.stringify({ ok: false, message: 'No thesis row found for ' + gameId }) };
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, deleted: deleted.length }) };
+    }
+
     if (action === 'delete_learning') {
       const date = params.date;
       const league = params.league;
