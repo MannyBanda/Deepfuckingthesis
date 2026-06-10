@@ -2442,6 +2442,33 @@ function buildSummaryFromBDLServer(boxScore, pbpResult, lineupsArr) {
     periods };
 }
 
+// ── WNBA Phase 0: boundary-stale clock guard (Jun 7 phantom-snapshot fix) ──
+// BDL parks game.time at '0.0' (period just ended) or '10:00' (next period queued, even
+// after play resumes); ESPN can momentarily report period=0 or END_PERIOD/HALFTIME at
+// breaks, letting the periods.length fallback inflate currentPeriod (phantom Q4/0:00).
+// Live-captured sequences (Jun 9, PHX@GS): P1 '0.0' → P2 '10:00' parked while ESPN ran 9:07.
+// Returns stable { period, clock, boundary }. WNBA-only — NBA path untouched.
+function stableWNBAPeriodClock(summary, game) {
+  var rawPeriod = Number(summary.quarter || 0);
+  var rawClock = String(summary.clock || '').trim();
+  var status = String(summary.status || '');
+  var prevPeriod = Number(game.last_period || 0);
+  var parked = rawClock === '' || rawClock === '0.0' || rawClock === '0:00' || rawClock === '00:00' || rawClock === '10:00'
+    || (rawPeriod >= 5 && rawClock === '5:00')
+    || /END_PERIOD|HALFTIME/i.test(status);
+  if (!parked) {
+    // Running clock — trust it; never let periods.length inflate past a real reading
+    var p = rawPeriod || prevPeriod || (summary.periods || []).length || 0;
+    return { period: p, clock: rawClock, boundary: false };
+  }
+  // Boundary window: freeze at the just-completed quarter; never advance on a parked clock
+  var queued = rawClock === '10:00' || (rawPeriod >= 5 && rawClock === '5:00');
+  var completed = Math.max(prevPeriod, (rawPeriod && !queued) ? rawPeriod : 0)
+    || (summary.periods || []).length || rawPeriod || 0;
+  if (queued && rawPeriod > prevPeriod && prevPeriod > 0) completed = prevPeriod;
+  return { period: completed, clock: '0:00', boundary: true };
+}
+
 // ── In-memory BDL caches for server polling ──
 let _serverBoxScoreCache = null;    // Array of box score objects
 let _serverBoxScoreTime = 0;
@@ -7245,11 +7272,30 @@ export default async function(req) {
           // Determine period + clock from summary
           // SR NBA has summary.quarter, NCAAMB has summary.half
           // Periods may be nested under home/away, not top-level
-          const currentPeriod = summary.quarter || summary.half
-            || (summary.periods || []).length
-            || (summary.home?.periods || []).length
-            || 0;
-          const clock = summary.clock || '';
+          var currentPeriod, clock, _boundaryStale = false;
+          if (league === 'wnba') {
+            // Phase 0: boundary-stale guard (see stableWNBAPeriodClock)
+            const _pc = stableWNBAPeriodClock(summary, game);
+            currentPeriod = _pc.period; clock = _pc.clock; _boundaryStale = _pc.boundary;
+          } else {
+            currentPeriod = summary.quarter || summary.half
+              || (summary.periods || []).length
+              || (summary.home?.periods || []).length
+              || 0;
+            clock = summary.clock || '';
+          }
+
+          // Phase 0: during an intermission, take at most ONE boundary snapshot per period.
+          // Subsequent polls skip recompute on the stale box (Jun 7: 2 model computes on stale data).
+          if (_boundaryStale) {
+            try {
+              const _lastSnap = await sql`SELECT period, clock FROM snapshots WHERE game_id = ${game.id} AND source = 'server' ORDER BY ts DESC LIMIT 1`;
+              if (_lastSnap[0] && Number(_lastSnap[0].period) === Number(currentPeriod) && String(_lastSnap[0].clock) === '0:00') {
+                log(`${matchup}: boundary-stale (P${currentPeriod} parked) — boundary snapshot already taken, skipping cycle`);
+                continue;
+              }
+            } catch (e) { /* non-fatal — proceed with normal cycle */ }
+          }
 
           // Compute rolling window BEFORE XGB — XGB uses windowed features
           var _windowScore = null, _windowResult = null;
@@ -7477,7 +7523,7 @@ export default async function(req) {
               ${spreadVal}, ${deficit}, ${trailingTeam}, ${leadSust}, ${null}, ${null},
               ${_ci[0]}, ${_ci[1]}, ${_ci[2]}, ${_ci[3]}, ${_ci[4]},
               ${'server'}, ${leadClass}, ${sustJson},
-              ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson}, ${espnRawStatsJson},
+              ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${(_boundaryStale && rawStatsJson && typeof rawStatsJson === 'object') ? { ...rawStatsJson, _boundary: true } : rawStatsJson}, ${espnRawStatsJson},
               ${_snapLT?.bwc_fired ? (_snapLT._prev_bwc_state || null) : null}, ${_snapLT?.compound_tier || null},
               ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore},
               ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbDivergence}, ${_possWindowScore}, ${_pollMC}, ${_mcCum?.winProb != null ? Math.round(_mcCum.winProb * 10000) / 10000 : null}, ${_xgbShap ? JSON.stringify(_xgbShap) : null})
