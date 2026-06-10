@@ -490,6 +490,37 @@ exports.handler = async (event) => {
         PRIMARY KEY (team_alias, league, season)
       )`;
 
+      // ── WNBA Data Layer v3: official post-game truth (BDL game advanced) ──
+      await sql`CREATE TABLE IF NOT EXISTS wnba_official_stats (
+        bdl_game_id INTEGER NOT NULL,
+        team_abbr TEXT NOT NULL,
+        is_home BOOLEAN,
+        opponent_abbr TEXT,
+        game_date TEXT,
+        misc JSONB,
+        advanced JSONB,
+        four_factors JSONB,
+        scoring JSONB,
+        usage_stats JSONB,
+        fetched_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (bdl_game_id, team_abbr)
+      )`;
+
+      // ── WNBA Data Layer v3: nightly approximation-vs-official validation ──
+      await sql`CREATE TABLE IF NOT EXISTS wnba_field_validation (
+        game_id TEXT NOT NULL,
+        bdl_game_id INTEGER,
+        team_abbr TEXT NOT NULL,
+        field TEXT NOT NULL,
+        source_used TEXT,
+        ours REAL,
+        official REAL,
+        err REAL,
+        anchored BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (game_id, team_abbr, field)
+      )`;
+
       // ── WNBA alias migration: normalize SR abbreviations → BDL canonical ──
       // SR schedule uses LAS/LVA/NYL/GSV/WAS/PDX/TOY; BDL uses LA/LV/NY/GS/WSH/POR/TOR
       // Idempotent — no-op once aliases are already BDL-style
@@ -567,6 +598,52 @@ exports.handler = async (event) => {
           total_tos = ${pbp.totalTOs || 0}, saved_at = NOW()
       `;
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, game_id }) };
+    }
+
+    // ── WNBA Data Layer v3: upsert official BDL post-game stats (backfill + nightly) ──
+    if (action === 'upsert_wnba_official' && event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      const rows = body.rows || [];
+      if (!rows.length) return { statusCode: 400, headers, body: JSON.stringify({ error: 'rows array required' }) };
+      let upserted = 0;
+      for (const r of rows) {
+        if (!r.bdl_game_id || !r.team_abbr) continue;
+        await sql`
+          INSERT INTO wnba_official_stats (bdl_game_id, team_abbr, is_home, opponent_abbr, game_date, misc, advanced, four_factors, scoring, usage_stats, fetched_at)
+          VALUES (${r.bdl_game_id}, ${r.team_abbr}, ${r.is_home ?? null}, ${r.opponent_abbr || null}, ${r.game_date || null},
+            ${JSON.stringify(r.misc || {})}, ${JSON.stringify(r.advanced || {})}, ${JSON.stringify(r.four_factors || {})},
+            ${JSON.stringify(r.scoring || {})}, ${JSON.stringify(r.usage_stats || {})}, NOW())
+          ON CONFLICT (bdl_game_id, team_abbr) DO UPDATE SET
+            is_home = EXCLUDED.is_home, opponent_abbr = EXCLUDED.opponent_abbr, game_date = EXCLUDED.game_date,
+            misc = EXCLUDED.misc, advanced = EXCLUDED.advanced, four_factors = EXCLUDED.four_factors,
+            scoring = EXCLUDED.scoring, usage_stats = EXCLUDED.usage_stats, fetched_at = NOW()
+        `;
+        upserted++;
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, upserted }) };
+    }
+
+    // ── WNBA Data Layer v3: read official stats ──
+    if (action === 'get_wnba_official') {
+      const bdlGameId = params.bdl_game_id ? Number(params.bdl_game_id) : null;
+      const rows = bdlGameId
+        ? await sql`SELECT * FROM wnba_official_stats WHERE bdl_game_id = ${bdlGameId} ORDER BY team_abbr`
+        : await sql`SELECT * FROM wnba_official_stats ORDER BY bdl_game_id, team_abbr`;
+      return { statusCode: 200, headers, body: JSON.stringify({ official: rows }) };
+    }
+
+    // ── WNBA Data Layer v3: last snapshot per game w/ raw stats (adjudication + validation reads) ──
+    if (action === 'get_final_snapshots') {
+      const league = params.league || 'wnba';
+      const rows = await sql`
+        SELECT DISTINCT ON (s.game_id) s.game_id, g.matchup, g.date, g.home_alias, g.away_alias,
+          g.home_pts AS final_home_pts, g.away_pts AS final_away_pts, g.winner,
+          s.ts, s.period, s.clock, s.home_pts, s.away_pts, s.raw_stats_json
+        FROM snapshots s JOIN games g ON g.id = s.game_id
+        WHERE g.league = ${league} AND s.raw_stats_json IS NOT NULL
+        ORDER BY s.game_id, s.ts DESC
+      `;
+      return { statusCode: 200, headers, body: JSON.stringify({ finals: rows }) };
     }
 
     if (action === 'backfill_xgb' && event.httpMethod === 'POST') {
