@@ -70,3 +70,26 @@ We store spread POINT but not spread PRICES. If ATS becomes a research thread, a
 **Open question for tonight's slate:** do team_stats/player_stats update LIVE in-game or post-game only? Test alongside SR live-summary feasibility.
 
 **Revised data-layer architecture implication:** BDL's new endpoints close the lineup/plus_minus/standings gaps but NOT the structural-stat gap — paint/POT/SCP/FBP/possessions/per-period remain SR-only. Recommended stack: SR live summary -> structural model inputs; BDL player_stats -> lineup/bench/plus_minus enrichment + season caching; BDL standings -> replace SR standings; ESPN -> fast display tier.
+
+## CORRECTION to BDL addendum (same day): WNBA advanced stats DO exist
+
+My probe missed them — I pattern-matched NBA route names instead of reading the WNBA OpenAPI spec (https://www.balldontlie.io/openapi/wnba.yml, docs at wnba.balldontlie.io). The WNBA API uses different resource naming. All verified live with our GOAT key:
+
+1. `/wnba/v1/team_game_advanced_stats` — per-game team PIE, pace, **possessions**, net/off/def rating, assist ratio/pct, turnover ratio. Has `period` param (0=full game) — accepted but returned 0 rows for period=3 on Jun 8 game; per-period population unverified.
+2. `/wnba/v1/player_game_advanced_stats` — per-player per-game PIE, ratings, usage, possessions, pace.
+3. `/wnba/v1/team_season_advanced_stats` — measure_type: advanced/misc/scoring/usage/defense/**four_factors**/opponent/base; scope: general/**clutch**. Four-factors payload includes own+opponent eFG/TOV%/OREB%/FTA-rate with league ranks. Clutch scope returns clutch PIE/pace/ratings.
+4. `/wnba/v1/player_season_advanced_stats` — same measure_type/scope matrix per player.
+5. `/wnba/v1/team_shot_locations` + 6. `/wnba/v1/player_shot_locations` — zone-level FG splits (restricted area, mid_range, corner 3s, ATB 3) or 5ft ranges.
+Also: `/wnba/v1/player_season_stats`, `/wnba/v1/team_season_stats` (season averages — fields top-level, not nested).
+Also: `/wnba/v1/odds` — PER-VENDOR spread value+price, ML, totals with updated_at (betmgm/betrivers/caesars/draftkings/fanatics/fanduel) — closes the spread-price logging gap via existing GOAT sub. `/wnba/v1/odds/player_props` live.
+
+### Revised data-layer picture
+- **Season-prior layer: BDL now covers it fully** (four factors + clutch ratings + shot zones + advanced ratings). Feeds hierarchical team priors (backlog #8), per-team sustainability baselines, VT/shot-diet priors, MC clutch inputs.
+- **Live intra-game structural counting stats (paint/POT/SCP/FBP, per-period boundaries): still SR-only.** SR option stands but is narrowed to the live structural tier.
+- Docs explicitly state team_stats/player_stats are "updated in real-time for games currently in progress." Advanced game stats carry no liveness note (NBA's say post-completion only). Verify both tonight.
+
+### Tonight's live-slate checklist (consolidated)
+1. SR live summary: in-progress availability, latency, field completeness, quota math
+2. BDL team_stats/player_stats live cadence (docs claim real-time)
+3. BDL game advanced stats: live vs post-game; does `period` populate during/after games
+4. BDL boundary catch for the phantom period=4 bug (Jun 7 open decision)
