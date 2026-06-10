@@ -53,3 +53,20 @@ We store spread POINT but not spread PRICES. If ATS becomes a research thread, a
 2. Next concrete step: live-slate SR feasibility check (tonight's 3-game WNBA slate works) — zero prod risk, answers questions 1-3 above.
 3. NBA MC-vs-spread is a genuinely promising new thread; park until regular season replication or more playoff games accumulate.
 4. WNBA betting edge from current models: falsified across all three tests. Treat WNBA alerts as analytical, not bettable, until the data layer upgrade + retrain clears the line bar.
+
+## Addendum: BDL endpoint re-probe (Jun 9, live API verification)
+
+**Genuinely NEW for WNBA (all were 404 at May launch):**
+1. `/wnba/v1/team_stats` — per-game TEAM box (fgm/fga, 3s, FTs, oreb/dreb, ast/stl/blk, turnovers, fouls). Filters: `game_ids[]`, `seasons[]`, `team_ids[]`. Verified populated for Jun 8 games. Basic box only — no paint/POT/SCP/FBP/possessions.
+2. `/wnba/v1/player_stats` — per-game PLAYER stats including **plus_minus**, min, pts, full box. (The per-player endpoint that 404'd at launch.) Unlocks I4-style lineup signal + bench points for WNBA.
+3. `/wnba/v1/standings` — W/L, conference records, playoff seed. Can replace the SR standings call -> frees SR quota for live summaries (synergy with Option A).
+
+**Still missing for WNBA:** season_averages (all variants 404), box_scores, any advanced stats, any live box endpoint.
+
+**NBA:** `/v1/season_averages/{category}` with categories general/clutch/defense/shooting/playtype/tracking/hustle/shotdashboard and `type=advanced` returns 74-field player season advanced (off/def/net rating, usage, pace, PIE, ranks). No team-level season advanced exists (`type=team` is silently ignored — returns player rows; verified). `/v1/stats/advanced` per-game player advanced unchanged.
+
+**Probe hygiene notes:** BDL 400 `{"param":"id"}` errors on /games/advanced etc. are router fall-throughs to `/games/:id` — phantom routes, not hidden endpoints. No OpenAPI spec served from api host. Project-file BDL_Full_Spec.pdf is a zip of screenshots, not parseable.
+
+**Open question for tonight's slate:** do team_stats/player_stats update LIVE in-game or post-game only? Test alongside SR live-summary feasibility.
+
+**Revised data-layer architecture implication:** BDL's new endpoints close the lineup/plus_minus/standings gaps but NOT the structural-stat gap — paint/POT/SCP/FBP/possessions/per-period remain SR-only. Recommended stack: SR live summary -> structural model inputs; BDL player_stats -> lineup/bench/plus_minus enrichment + season caching; BDL standings -> replace SR standings; ESPN -> fast display tier.
