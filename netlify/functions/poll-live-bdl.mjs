@@ -2469,6 +2469,41 @@ function stableWNBAPeriodClock(summary, game) {
   return { period: completed, clock: '0:00', boundary: true };
 }
 
+// ── WNBA Phase 1: structural overlay v2 (dual-write; deployed model untouched) ──
+// Adjudicated sources (research/2026-06-10_phase4a_adjudication.md, n=81 vs official):
+//   paint: ESPN direct (89% exact) | fbp: ESPN direct (75% exact; Phase 3 anchors correct tail)
+//   pot:   ESPN with ATTRIBUTION FLIP — ESPN turnoverPoints is opponent-attributed (17%→67% exact)
+//   scp:   PBP regex placeholder (REJECTED, -2.47 mean undercount; Phase 2 machine replaces)
+//   poss:  FGA - OREB + TOV + 0.4*FTA estimator (median |err| 1.6 vs official)
+// v2 values land on modelSummary stats + raw_stats_json as parallel keys; the live model
+// keeps reading v1 fields until the Phase 6 retrain swaps model + fields atomically.
+function computeWNBAModelV2(modelSummary, espnSummary, pbpResult) {
+  function side(mySide, oppSide, scpVal) {
+    var e = (espnSummary && espnSummary[mySide] && espnSummary[mySide].statistics) || null;
+    var eOpp = (espnSummary && espnSummary[oppSide] && espnSummary[oppSide].statistics) || null;
+    var m = (modelSummary && modelSummary[mySide] && modelSummary[mySide].statistics) || {};
+    var fga = Number(m.field_goals_att || 0), oreb = Number(m.offensive_rebounds || 0);
+    var to = Number(m.turnovers || m.total_turnovers || 0), fta = Number(m.free_throws_att || 0);
+    return {
+      paint: e ? Number(e.points_in_paint || e.points_in_the_paint || 0) : null,
+      fbp: e ? Number(e.fast_break_pts || e.fast_break_points || 0) : null,
+      pot: eOpp ? Number(eOpp.points_off_turnovers || 0) : null, // FLIP: opponent's ESPN value is OUR pot
+      scp: Number(scpVal || 0),
+      poss: fga > 0 ? Math.round((fga - oreb + to + 0.4 * fta) * 10) / 10 : null,
+      src: e ? 'espn+flip' : 'no-espn',
+    };
+  }
+  var v2 = {
+    home: side('home', 'away', pbpResult?._bdl?.scpHome),
+    away: side('away', 'home', pbpResult?._bdl?.scpAway),
+  };
+  ['home', 'away'].forEach(function(s) {
+    var st = modelSummary && modelSummary[s] && modelSummary[s].statistics;
+    if (st) { st.paint_v2 = v2[s].paint; st.fbp_v2 = v2[s].fbp; st.pot_v2 = v2[s].pot; st.scp_v2 = v2[s].scp; st.poss_v2 = v2[s].poss; }
+  });
+  return v2;
+}
+
 // ── In-memory BDL caches for server polling ──
 let _serverBoxScoreCache = null;    // Array of box score objects
 let _serverBoxScoreTime = 0;
@@ -7209,6 +7244,12 @@ export default async function(req) {
             modelSummary = summary;
           }
 
+          // Phase 1: compute v2 structural overlay (dual-write — see computeWNBAModelV2)
+          if (league === 'wnba') {
+            try { game._wnbaV2 = computeWNBAModelV2(modelSummary, espnFull ? summary : null, pbpResult); }
+            catch (e) { game._wnbaV2 = null; }
+          }
+
           // ── BIGLEAD LAG FIX: BDL/SR biggest_lead lags 1-3 polls behind actual score ──
           // Track running max margin from actual scores in live_tracking, override summary
           // Also track per-quarter max margins for WNBA windowed biglead feature
@@ -7446,8 +7487,9 @@ export default async function(req) {
           try {
             var _hs = summary.home?.statistics || {}, _as = summary.away?.statistics || {};
             rawStatsJson = JSON.stringify({
-              home: { stl: _hs.steals||0, oreb: _hs.offensive_rebounds||0, to: _hs.turnovers||_hs.total_turnovers||0, fbp: _hs.fast_break_points||0, pot: _hs.points_off_turnovers||0, scp: _hs.second_chance_points||_hs.second_chance_pts||0, paint: _hs.points_in_the_paint||_hs.points_in_paint||0, atRimM: _hs.field_goals_at_rim_made||0, atRimA: _hs.field_goals_at_rim_att||0, paintM: _hs.points_in_paint_made||0, paintA: _hs.points_in_paint_att||0, fta: _hs.free_throws_att||0, blk: _hs.blocks||0, fd: _hs.fouls_drawn||0, fgm: _hs.field_goals_made||0, fga: _hs.field_goals_att||0, fg3m: _hs.three_points_made||0, fg3a: _hs.three_points_att||0, ast: _hs.assists||0, bigLead: _hs.biggest_lead||0, bench: _hs.bench_points||0, oppp: _hs.offensive_points_per_possession||0, dppp: _hs.defensive_points_per_possession||0, poss: _hs.possessions||0, ftm: _hs.free_throws_made||0, forced_to: pbpResult?.home?.tos?.forced||0, unforced_to: pbpResult?.home?.tos?.unforced||0, assisted_3pm: pbpResult?.home?.threes?.assisted||0 },
-              away: { stl: _as.steals||0, oreb: _as.offensive_rebounds||0, to: _as.turnovers||_as.total_turnovers||0, fbp: _as.fast_break_points||0, pot: _as.points_off_turnovers||0, scp: _as.second_chance_points||_as.second_chance_pts||0, paint: _as.points_in_the_paint||_as.points_in_paint||0, atRimM: _as.field_goals_at_rim_made||0, atRimA: _as.field_goals_at_rim_att||0, paintM: _as.points_in_paint_made||0, paintA: _as.points_in_paint_att||0, fta: _as.free_throws_att||0, blk: _as.blocks||0, fd: _as.fouls_drawn||0, fgm: _as.field_goals_made||0, fga: _as.field_goals_att||0, fg3m: _as.three_points_made||0, fg3a: _as.three_points_att||0, ast: _as.assists||0, bigLead: _as.biggest_lead||0, bench: _as.bench_points||0, oppp: _as.offensive_points_per_possession||0, dppp: _as.defensive_points_per_possession||0, poss: _as.possessions||0, ftm: _as.free_throws_made||0, forced_to: pbpResult?.away?.tos?.forced||0, unforced_to: pbpResult?.away?.tos?.unforced||0, assisted_3pm: pbpResult?.away?.threes?.assisted||0 },
+              _boundary: _boundaryStale || undefined,
+              home: { stl: _hs.steals||0, oreb: _hs.offensive_rebounds||0, to: _hs.turnovers||_hs.total_turnovers||0, fbp: _hs.fast_break_points||0, pot: _hs.points_off_turnovers||0, scp: _hs.second_chance_points||_hs.second_chance_pts||0, paint: _hs.points_in_the_paint||_hs.points_in_paint||0, atRimM: _hs.field_goals_at_rim_made||0, atRimA: _hs.field_goals_at_rim_att||0, paintM: _hs.points_in_paint_made||0, paintA: _hs.points_in_paint_att||0, fta: _hs.free_throws_att||0, blk: _hs.blocks||0, fd: _hs.fouls_drawn||0, fgm: _hs.field_goals_made||0, fga: _hs.field_goals_att||0, fg3m: _hs.three_points_made||0, fg3a: _hs.three_points_att||0, ast: _hs.assists||0, bigLead: _hs.biggest_lead||0, bench: _hs.bench_points||0, oppp: _hs.offensive_points_per_possession||0, dppp: _hs.defensive_points_per_possession||0, poss: _hs.possessions||0, ftm: _hs.free_throws_made||0, forced_to: pbpResult?.home?.tos?.forced||0, unforced_to: pbpResult?.home?.tos?.unforced||0, assisted_3pm: pbpResult?.home?.threes?.assisted||0, ...(game._wnbaV2?.home ? { pot_v2: game._wnbaV2.home.pot, paint_v2: game._wnbaV2.home.paint, fbp_v2: game._wnbaV2.home.fbp, scp_v2: game._wnbaV2.home.scp, poss_v2: game._wnbaV2.home.poss, v2_src: game._wnbaV2.home.src } : {}) },
+              away: { stl: _as.steals||0, oreb: _as.offensive_rebounds||0, to: _as.turnovers||_as.total_turnovers||0, fbp: _as.fast_break_points||0, pot: _as.points_off_turnovers||0, scp: _as.second_chance_points||_as.second_chance_pts||0, paint: _as.points_in_the_paint||_as.points_in_paint||0, atRimM: _as.field_goals_at_rim_made||0, atRimA: _as.field_goals_at_rim_att||0, paintM: _as.points_in_paint_made||0, paintA: _as.points_in_paint_att||0, fta: _as.free_throws_att||0, blk: _as.blocks||0, fd: _as.fouls_drawn||0, fgm: _as.field_goals_made||0, fga: _as.field_goals_att||0, fg3m: _as.three_points_made||0, fg3a: _as.three_points_att||0, ast: _as.assists||0, bigLead: _as.biggest_lead||0, bench: _as.bench_points||0, oppp: _as.offensive_points_per_possession||0, dppp: _as.defensive_points_per_possession||0, poss: _as.possessions||0, ftm: _as.free_throws_made||0, forced_to: pbpResult?.away?.tos?.forced||0, unforced_to: pbpResult?.away?.tos?.unforced||0, assisted_3pm: pbpResult?.away?.threes?.assisted||0, ...(game._wnbaV2?.away ? { pot_v2: game._wnbaV2.away.pot, paint_v2: game._wnbaV2.away.paint, fbp_v2: game._wnbaV2.away.fbp, scp_v2: game._wnbaV2.away.scp, poss_v2: game._wnbaV2.away.poss, v2_src: game._wnbaV2.away.src } : {}) },
               runs6: pbpResult?.runs6 ? { home: pbpResult.runs6.filter(r=>r.team===hA).length, away: pbpResult.runs6.filter(r=>r.team===aA).length, total: pbpResult.runs6.length } : null,
             });
           } catch (e) { /* non-fatal — snapshot still saves without raw stats */ }
@@ -7523,7 +7565,7 @@ export default async function(req) {
               ${spreadVal}, ${deficit}, ${trailingTeam}, ${leadSust}, ${null}, ${null},
               ${_ci[0]}, ${_ci[1]}, ${_ci[2]}, ${_ci[3]}, ${_ci[4]},
               ${'server'}, ${leadClass}, ${sustJson},
-              ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${(_boundaryStale && rawStatsJson && typeof rawStatsJson === 'object') ? { ...rawStatsJson, _boundary: true } : rawStatsJson}, ${espnRawStatsJson},
+              ${snapTp?.classification || null}, ${snapTp ? Math.round(snapTp.expected.totalSwing * 10) / 10 : null}, ${snapTp?.remainingPoss || null}, ${snapLs?.classification || null}, ${snapLs ? Math.round(snapLs.expected.totalSwing * 10) / 10 : null}, ${rawStatsJson}, ${espnRawStatsJson},
               ${_snapLT?.bwc_fired ? (_snapLT._prev_bwc_state || null) : null}, ${_snapLT?.compound_tier || null},
               ${_floorWP.wp}, ${_floorWP.reliabilityClass}, ${_windowScore},
               ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbDivergence}, ${_possWindowScore}, ${_pollMC}, ${_mcCum?.winProb != null ? Math.round(_mcCum.winProb * 10000) / 10000 : null}, ${_xgbShap ? JSON.stringify(_xgbShap) : null})
