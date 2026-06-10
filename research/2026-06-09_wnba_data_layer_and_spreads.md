@@ -93,3 +93,35 @@ Also: `/wnba/v1/odds` — PER-VENDOR spread value+price, ML, totals with updated
 2. BDL team_stats/player_stats live cadence (docs claim real-time)
 3. BDL game advanced stats: live vs post-game; does `period` populate during/after games
 4. BDL boundary catch for the phantom period=4 bug (Jun 7 open decision)
+
+## Live-slate verification results (Jun 9 night, PHX@GS live + 2 finals)
+
+**1. POT/SCP proxy validation vs SR — FAILED.** Final-box comparison, DFT PBP-derived vs SR official:
+- ATL@CHI: POT 14/17 vs SR 19/25 (-26%/-32%). SCP 0/12 vs SR 1/17.
+- DAL@MIN: POT 9/10 vs SR 19/10 (home -53%, away exact). SCP 2/6 vs 4/11.
+- Systematic undercount, occasionally severe. POT is WNBA XGB feature [11] — the model trains and serves on corrupted POT. Biglead mostly fine (live-margin override working).
+
+**2. BDL lag re-measured: ~30-60 game-seconds behind ESPN/SR** (7 samples over 4 min; prior belief was ~90s — improved but material). ESPN and SR track each other within ~0-4s. BDL team_stats totals update every ~30-60s.
+
+**3. SR trial key serves LIVE in-progress summaries.** status=inprogress, live clock, paint/POT/SCP/FBP/possessions all populating mid-game, latency ≈ ESPN. One transient fetch failure in 7 samples — needs throttle+retry. Feasibility for Option A: CONFIRMED.
+
+**4. BDL liveness:** team_stats + player_stats live in-game (docs claim verified; team_stats == player_stats aggregation exactly). Game advanced stats (team+player): 0 rows during live game — post-game only.
+
+**5. Boundary states captured live:** during Q1->Q2 break, BDL game showed period=1 time='0.0', then period=2 time='10:00' parked while ESPN/SR showed Q2 9:07 running. Spec input for the extraction guard: treat time in {'0.0','10:00'} as boundary-stale regardless of period.
+
+## GAP ANALYSIS — current BDL usage vs target sourcing (WNBA)
+
+| # | Data category | Current source | Target source | Notes |
+|---|---|---|---|---|
+| 1 | Live team box (fga/ast/stl/blk/tov/oreb) | Aggregate /wnba/v1/player_stats | Keep (or team_stats for simplicity) | Verified identical; low priority |
+| 2 | Live structural: paint, POT, SCP, FBP, possessions, per-period | PBP regex reconstruction (POT/SCP only; no paint/FBP/poss) | **SR live summary** | Proxy falsified tonight; SR live confirmed. HEADLINE CHANGE. Requires XGB retrain (feature distribution shift) |
+| 3 | PBP (runs, shot zones, margin flow) | /wnba/v1/plays | Keep BDL plays | Drop POT/SCP derivation after #2 ships |
+| 4 | plus_minus / lineup / bench | Fetched in player_stats, unused | **Start consuming** | I4 subB + bench_points for WNBA |
+| 5 | Season priors (four factors, clutch, shot zones, season avgs) | League constants + 6-9 game clutch UPSERTs | **NEW: BDL team/player_season_advanced_stats (four_factors, clutch scope), shot_locations, season_stats** | Per-team sustainability baselines, MC clutch inputs, VT/shot-diet priors, hierarchical priors (#8) |
+| 6 | Post-game advanced (PIE/ratings/poss per game) | None | **NEW: BDL game advanced stats** | Post-game only — learning agent, backtests, retrain features |
+| 7 | Odds | The Odds API (best ML, median spread point, no prices) | **ADD: BDL /wnba/v1/odds** | Per-vendor spread value+price, ML, totals; closes spread-price gap; relieves Odds API quota |
+| 8 | Standings | SR | **BDL standings** | Frees SR daily quota for live summaries |
+| 9 | Schedule / game IDs | SR + ESPN fallback | Keep | SR UUID is the system key |
+| 10 | Display / fast score | ESPN | Keep | Fastest tier confirmed again tonight |
+
+**Coupling note:** #2 (SR structural) + #5 (season priors) + retrain on true POT/paint/FBP/possessions is one coherent WNBA model-v2 program, accepted/rejected by the line-paired OOS bar from edge test #1.
