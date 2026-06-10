@@ -2472,30 +2472,29 @@ function stableWNBAPeriodClock(summary, game) {
 // ── WNBA Phase 1: structural overlay v2 (dual-write; deployed model untouched) ──
 // Adjudicated sources (research/2026-06-10_phase4a_adjudication.md, n=81 vs official):
 //   paint: ESPN direct (89% exact) | fbp: ESPN direct (75% exact; Phase 3 anchors correct tail)
-//   pot:   ESPN with ATTRIBUTION FLIP — ESPN turnoverPoints is opponent-attributed (17%→67% exact)
+//   pot:   ESPN direct — attribution flip now applied at source (buildSummaryFromESPN call site)
 //   scp:   PBP regex placeholder (REJECTED, -2.47 mean undercount; Phase 2 machine replaces)
 //   poss:  FGA - OREB + TOV + 0.4*FTA estimator (median |err| 1.6 vs official)
 // v2 values land on modelSummary stats + raw_stats_json as parallel keys; the live model
 // keeps reading v1 fields until the Phase 6 retrain swaps model + fields atomically.
 function computeWNBAModelV2(modelSummary, espnSummary, pbpResult) {
-  function side(mySide, oppSide, scpVal) {
+  function side(mySide, scpVal) {
     var e = (espnSummary && espnSummary[mySide] && espnSummary[mySide].statistics) || null;
-    var eOpp = (espnSummary && espnSummary[oppSide] && espnSummary[oppSide].statistics) || null;
     var m = (modelSummary && modelSummary[mySide] && modelSummary[mySide].statistics) || {};
     var fga = Number(m.field_goals_att || 0), oreb = Number(m.offensive_rebounds || 0);
     var to = Number(m.turnovers || m.total_turnovers || 0), fta = Number(m.free_throws_att || 0);
     return {
       paint: e ? Number(e.points_in_paint || e.points_in_the_paint || 0) : null,
       fbp: e ? Number(e.fast_break_pts || e.fast_break_points || 0) : null,
-      pot: eOpp ? Number(eOpp.points_off_turnovers || 0) : null, // FLIP: opponent's ESPN value is OUR pot
+      pot: e ? Number(e.points_off_turnovers || 0) : null, // attribution already corrected at buildSummaryFromESPN call site (own-side read; pot should equal pot_v2 going forward)
       scp: Number(scpVal || 0),
       poss: fga > 0 ? Math.round((fga - oreb + to + 0.4 * fta) * 10) / 10 : null,
-      src: e ? 'espn+flip' : 'no-espn',
+      src: e ? 'espn' : 'no-espn',
     };
   }
   var v2 = {
-    home: side('home', 'away', pbpResult?._bdl?.scpHome),
-    away: side('away', 'home', pbpResult?._bdl?.scpAway),
+    home: side('home', pbpResult?._bdl?.scpHome),
+    away: side('away', pbpResult?._bdl?.scpAway),
   };
   ['home', 'away'].forEach(function(s) {
     var st = modelSummary && modelSummary[s] && modelSummary[s].statistics;
@@ -7220,6 +7219,17 @@ export default async function(req) {
             }
             if (espnFull?.boxscore?.home?.length > 0) {
               summary = buildSummaryFromESPN(espnFull);
+              // POT ATTRIBUTION FIX — ESPN turnoverPoints is OPPONENT-attributed
+              // (research/2026-06-10_phase4a_adjudication.md, n=81: flip takes 17%→67% exact, median err 0).
+              // Swap sides so pot = OUR points scored off THEIR turnovers. Validated WNBA-only;
+              // this branch is league-gated (league === 'wnba') — do NOT generalize to NBA without validation.
+              // All downstream consumers (raw_stats_json, espn_raw_stats_json, computeServer/I1,
+              // extractXGBFeatures, computeWNBAModelV2, agent prompts) read this summary post-swap.
+              if (summary?.home?.statistics && summary?.away?.statistics) {
+                var _potSwap = summary.home.statistics.points_off_turnovers;
+                summary.home.statistics.points_off_turnovers = summary.away.statistics.points_off_turnovers;
+                summary.away.statistics.points_off_turnovers = _potSwap;
+              }
               // Enrich ESPN summary with BDL PBP-derived SCP + runs
               if (pbpResult?._bdl) {
                 if (summary.home?.statistics) { summary.home.statistics.second_chance_points = pbpResult._bdl.scpHome || 0; summary.home.statistics.second_chance_pts = pbpResult._bdl.scpHome || 0; }
