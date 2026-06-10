@@ -168,3 +168,33 @@ Schedule/game IDs (system key) + pregame context + nightly post-game validation 
 3. Stand up nightly SR validation harness
 4. Retrain WNBA XGB on corrected features + BDL season priors (four_factors/clutch/zones)
 5. Accept/reject vs the line-paired OOS bar (edge test #1 standard)
+
+## Addendum (Jun 10): BDL advanced liveness clarified + full payload audit + boundary-pull design
+
+**Liveness claim, honestly sourced:** "post-game only" was drawn from ONE observation — 0 rows mid-Q2 during PHX@GS live, while team_stats/player_stats returned live data — plus NBA docs precedent. Confirmed Jun 10: rows now populated for 24839 (somewhere between game end and +15h; exact populate latency unknown — catch on tonight's slate). Also confirmed: `period` param returns 0 rows for P1-P4 even POST-game — documented but not populated. No per-quarter official splits from BDL.
+
+**Full team_game_advanced_stats payload (5 measure blocks, 81 fields):**
+- misc (13): **points_paint, points_off_turnovers, points_second_chance (SCP!), points_fast_break + opp_ versions of all four**, fouls_drawn, blocks/against
+- advanced (24): possessions, pace, PIE, off/def/net rating, eFG, TS, reb%, ast%, TO ratio
+- four_factors (9): own + opp
+- scoring (16): % points by paint/FB/POT/midrange, assisted/unassisted 2pt/3pt splits
+- usage (19)
+
+**Implications:**
+1. **BDL post-game = complete official structural truth INCLUDING SCP** (which ESPN lacks). The validation harness can be pure BDL — SR not needed even for nightly ground truth.
+2. **Season-wide backfill available NOW:** official paint/POT/SCP/FBP/possessions for every 2026 WNBA game -> immediate retrain features at game level + immediate validation of our approximations' end-of-game values across the full season (not one night at a time).
+3. SR's unique remaining live value = official structural values DURING games.
+
+## Quarter-boundary SR pulls (Manny's proposal — endorsed)
+Design: SR summary fetched ONLY at period transitions (Q1 end, half, Q3 end; final optional — BDL covers it). ~3-4 calls/game, 12-24/night vs ~450 for full live polling. Trivial quota, massive headroom, no live-polling dependence on SR.
+
+**"Models need snapshot-level data" — solved by anchor+delta:**
+`snapshot_value = SR_boundary_anchor + (ESPN_value_now − ESPN_value_at_boundary)`
+Official level at every boundary; intra-quarter movement from ESPN deltas. Error bounded to ESPN's intra-quarter drift and RESETS every ~10 game-minutes. MC (cumulative rates) least sensitive; windowed XGB actually improves because quarter windows get official boundaries; existing quarter-transition detection is the natural hook (with the boundary-stale guard).
+
+## Revised three-tier WNBA live architecture (v3)
+| Tier | Source | Cadence | Provides |
+|---|---|---|---|
+| Continuous | ESPN summary (already fetched) + BDL player_stats/plays | 60s | box, plus_minus, paint/FBP/POT approx, PBP, possessions estimator |
+| Anchor | SR summary | quarter boundaries only (~4/game) | official paint/POT/SCP/FBP/possessions + native per-period splits; drift-corrects tier 1 |
+| Truth | BDL game advanced | post-game | official everything incl SCP; validation, learning agent, retrain labels, season backfill |
