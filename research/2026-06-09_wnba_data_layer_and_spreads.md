@@ -125,3 +125,46 @@ Also: `/wnba/v1/odds` — PER-VENDOR spread value+price, ML, totals with updated
 | 10 | Display / fast score | ESPN | Keep | Fastest tier confirmed again tonight |
 
 **Coupling note:** #2 (SR structural) + #5 (season priors) + retrain on true POT/paint/FBP/possessions is one coherent WNBA model-v2 program, accepted/rejected by the line-paired OOS bar from edge test #1.
+
+## REVISED GAP ANALYSIS v2 — BDL-primary, SR minimal (no live polling), ESPN fills
+Constraint set by Manny: SR paid tier ($1,800) not justified at current stage. BDL is building out WNBA; work with BDL + ESPN + SR-trial-no-live.
+
+### Key discovery (live snapshot verification, ATL@CHI + PHX@GS Jun 9)
+**ESPN's WNBA summary ALREADY provides paint, FBP, POT, and largestLead live — and `_parseESPNTeamStats` already maps them — but only the DISPLAY path consumes them. The model path (`modelSummary`) uses BDL aggregation + the falsified PBP POT/SCP.** Snapshot raw stats (ESPN-built) for ATL@CHI final: paint 48/26, fbp 11/7, pot 16/25, bigLead 10/6, poss 78.4/72 — all populated.
+Accuracy vs SR finals (1 game): bigLead EXACT both sides; SCP is PBP-derived (still undercounts); ESPN POT within 0-3 pts one side, off ~6-9 the other (attribution/definition needs multi-game verification). Possessions estimator within ~2-3% of SR.
+
+### Q1 — New from BDL (vs WNBA launch in May)
+LIVE (verified real-time tonight): player_stats (per-player box incl **plus_minus** — unlocks I4 subB, bench, lineup reads; plus_minus currently fetched but unused), team_stats (== our player aggregation).
+POST-GAME: team/player_game_advanced_stats (PIE, ratings, pace, TRUE possessions).
+SEASON: team/player_season_advanced_stats (four_factors own+opp w/ ranks, clutch scope, misc/scoring/usage/defense/opponent), shot_locations (zones/5ft), season_stats, standings, player_injuries.
+ODDS: per-vendor spread value+price, ML, totals (6 books).
+
+### Q2 — SR-only fields: approximation plan
+| Field | Approximation | Status |
+|---|---|---|
+| biggest_lead | ESPN largestLead + live margin tracker | VERIFIED EXACT vs SR — solved |
+| paint | ESPN pointsInPaint (live, populated) | accuracy vs SR TBD; low stakes (paint=noise in WNBA framework) |
+| FBP | ESPN fastBreakPoints (live, populated) | accuracy TBD |
+| POT | ESPN turnoverPoints AND/OR rebuilt PBP possession-state machine | ESPN mixed in 1-game check; rebuild PBP from regex->possession-origin tracking (credit ALL pts in possession incl FTs) |
+| SCP | Rebuilt PBP possession-state machine (ESPN doesn't provide SCP) | current regex falsified; possession-origin rebuild is the fix |
+| possessions (live) | FGA - OREB + TOV + 0.4*FTA estimator (already computed) | within ~2-3% of SR; calibrate vs BDL post-game TRUE possessions |
+| per-period splits | quarter_data boundary diffs + boundary-stale guard (time in {'0.0','10:00'}) | existing mechanism, guard pending |
+
+**Validation harness (SR's new job):** nightly post-game SR summary pull (3-6 calls/night, trivial trial quota, NO live polling) -> compare every approximated field vs SR ground truth -> error tracked in DB per field per game. Approximations graduate into the model only when within tolerance (proposed: POT/SCP/paint within ±2-3 pts). This converts "we think it's close" into a measured number, permanently.
+
+### Q3 — Remaining gap (acknowledged, not solved without paid SR)
+1. Official live POT/SCP/paint — we get approximations with measured error bars instead
+2. SR native per-quarter team splits (78 fields/period) — reconstructed from boundaries instead
+3. fouls_drawn, time_leading, official rim/midrange splits live
+4. Live in-game advanced ratings (BDL's are post-game only)
+5. Source redundancy: ESPN becomes the single live structural source (SR was the hedge); mitigated by BDL box cross-checks
+
+### SR's reduced role
+Schedule/game IDs (system key) + pregame context + nightly post-game validation ONLY. Standings -> BDL. Injuries -> optionally BDL. Zero live polling.
+
+### Sequencing implication (one program, spec pending Manny's go)
+1. Plumb ESPN structural fields (+ BDL plus_minus) into modelSummary — biggest win, near-zero new fetches
+2. Rebuild PBP POT/SCP as possession-state machine
+3. Stand up nightly SR validation harness
+4. Retrain WNBA XGB on corrected features + BDL season priors (four_factors/clutch/zones)
+5. Accept/reject vs the line-paired OOS bar (edge test #1 standard)
