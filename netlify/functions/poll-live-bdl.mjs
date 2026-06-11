@@ -2537,6 +2537,11 @@ async function backfillWNBAPot(sql, opts) {
   if (!W) return { error: 'LEAGUES.wnba.weights missing' };
   const r1 = (v) => Math.round(v * 10) / 10;
   const r2 = (v) => Math.round(v * 100) / 100;
+  // Pre-May-16 rows store floor_team as SR aliases while games use BDL (memory: ALIAS_MAP rule).
+  // Normalize for side-determination; preserve each row's own convention when writing.
+  const SR_TO_BDL = { NYL: 'NY', GSV: 'GS', WAS: 'WSH', LVA: 'LV', LAS: 'LA', PDX: 'POR', TOY: 'TOR' };
+  const BDL_TO_SR = { NY: 'NYL', GS: 'GSV', WSH: 'WAS', LV: 'LVA', LA: 'LAS', POR: 'PDX', TOR: 'TOY' };
+  const norm = (x) => SR_TO_BDL[x] || x;
 
   const rows = await sql`
     SELECT s.id, s.i1, s.i2, s.i3, s.i4, s.i5, s.floor_score, s.floor_team,
@@ -2563,7 +2568,15 @@ async function backfillWNBAPot(sql, opts) {
     if (!s.home_alias || !s.away_alias) { out.skipped.no_alias++; continue; }
     if (s.i1 == null || s.i2 == null || s.i3 == null || s.i4 == null || s.i5 == null || s.floor_score == null || !s.floor_team) { out.skipped.null_indicators++; continue; }
 
-    const ctrlHomeOld = s.floor_team === s.home_alias;
+    const nFT = norm(s.floor_team), nHA = norm(s.home_alias), nAA = norm(s.away_alias);
+    if (nFT !== nHA && nFT !== nAA) {
+      out.skipped.alias_unresolved = (out.skipped.alias_unresolved || 0) + 1;
+      if (out.parity_miss_ids.length < 10) out.parity_miss_ids.push(s.id);
+      continue;
+    }
+    const ctrlHomeOld = nFT === nHA;
+    const rowIsSR = s.floor_team !== s.home_alias && s.floor_team !== s.away_alias; // row stores SR-form aliases
+    const toRowForm = (bdlAlias) => (rowIsSR ? (BDL_TO_SR[bdlAlias] || bdlAlias) : bdlAlias);
     // Pivot stored ctrl-relative i2-i5 back to home-relative
     const i2h = ctrlHomeOld ? Number(s.i2) : 1 - Number(s.i2);
     const i3h = ctrlHomeOld ? Number(s.i3) : 1 - Number(s.i3);
@@ -2593,7 +2606,7 @@ async function backfillWNBAPot(sql, opts) {
     const i1HomeNew = _bfI1Home(h, a);
     const rawNew = i1HomeNew * W.I1 + i2h * W.I2 + i3h * W.I3 + i4h * W.I4 + i5h * W.I5;
     const ctrlHomeNew = rawNew >= 0.5;
-    const floorTeamNew = ctrlHomeNew ? s.home_alias : s.away_alias;
+    const floorTeamNew = ctrlHomeNew === ctrlHomeOld ? s.floor_team : toRowForm(norm(ctrlHomeNew ? s.home_alias : s.away_alias));
     const floorScoreNew = r2(ctrlHomeNew ? rawNew : 1 - rawNew);
     const ci = [i1HomeNew, i2h, i3h, i4h, i5h].map((v) => r1(ctrlHomeNew ? v : 1 - v));
 
