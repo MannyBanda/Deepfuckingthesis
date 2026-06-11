@@ -2503,6 +2503,117 @@ function computeWNBAModelV2(modelSummary, espnSummary, pbpResult) {
   return v2;
 }
 
+// ── WNBA POT BACKFILL — corrects historical side-flipped pot ───────────────
+// (research/2026-06-10_phase4a_adjudication.md). Swaps home/away pot in
+// raw_stats_json and recomputes i1 / floor_score / floor_team. i2-i5 inputs are
+// pot-independent: stored ctrl-relative values are pivoted to home-relative,
+// re-blended with corrected I1, re-pivoted vs the new control team.
+// Alerts table intentionally untouched (historical decision log — Manny, Jun 10).
+// SAFETY: two parity gates per row — recomputing I1 with the ORIGINAL pot must
+// reproduce stored i1, and re-blending the original floor must reproduce stored
+// floor_score (±0.011). Any miss → row skipped, never written.
+// IDEMPOTENT: rows tagged raw_stats_json._pot_corrected; post-fix rows
+// (pot already === pot_v2) skipped. Keyset pagination via `after` cursor on s.id.
+function _bfI1Home(h, a) {
+  // Replicates computeServer WNBA I1 exactly (thresholds: disrupt ±2, pot ±3)
+  const disruptDiff = (Number(h.stl) || 0) + (Number(h.blk) || 0) - (Number(a.stl) || 0) - (Number(a.blk) || 0);
+  const i1subA = disruptDiff > 2 ? 1 : disruptDiff < -2 ? -1 : 0;
+  const potDiff = (Number(h.pot) || 0) - (Number(a.pot) || 0);
+  const i1subB = potDiff > 3 ? 1 : potDiff < -3 ? -1 : 0;
+  let i1raw = i1subA + i1subB;
+  // Chaos layer — computeServer cross-wiring: home's forcing credit = away side's forced count
+  const hForced = Number(a.forced_to) || 0, aForced = Number(h.forced_to) || 0;
+  const hUnforced = Number(h.unforced_to) || 0, aUnforced = Number(a.unforced_to) || 0;
+  if (hForced >= aForced + 4) i1raw += 0.5;
+  else if (aForced >= hForced + 4) i1raw -= 0.5;
+  else if (hUnforced >= aUnforced + 4) i1raw -= 0.5;
+  else if (aUnforced >= hUnforced + 4) i1raw += 0.5;
+  return i1raw > 0 ? 1 : i1raw === 0 ? 0.5 : 0;
+}
+
+async function backfillWNBAPot(sql, opts) {
+  const { batch, after, dry } = opts;
+  const W = (LEAGUES.wnba && LEAGUES.wnba.weights) || null;
+  if (!W) return { error: 'LEAGUES.wnba.weights missing' };
+  const r1 = (v) => Math.round(v * 10) / 10;
+  const r2 = (v) => Math.round(v * 100) / 100;
+
+  const rows = await sql`
+    SELECT s.id, s.i1, s.i2, s.i3, s.i4, s.i5, s.floor_score, s.floor_team,
+           s.raw_stats_json, g.home_alias, g.away_alias
+    FROM snapshots s JOIN games g ON s.game_id = g.id
+    WHERE g.league = 'wnba' AND s.id > ${after}
+    ORDER BY s.id ASC LIMIT ${batch}`;
+
+  const out = {
+    dry, batch, after, fetched: rows.length, updated: 0,
+    skipped: { already_tagged: 0, already_correct: 0, unparseable: 0, null_indicators: 0, i1_parity_miss: 0, floor_parity_miss: 0, no_alias: 0 },
+    changes: { i1_changed: 0, ctrl_flips: 0, floor_delta_sum: 0 },
+    parity_miss_ids: [], last_id: after, done: rows.length < batch,
+  };
+
+  for (const s of rows) {
+    out.last_id = s.id;
+    let rs;
+    try { rs = typeof s.raw_stats_json === 'string' ? JSON.parse(s.raw_stats_json) : s.raw_stats_json; } catch (e) { rs = null; }
+    if (!rs || !rs.home || !rs.away) { out.skipped.unparseable++; continue; }
+    if (rs._pot_corrected) { out.skipped.already_tagged++; continue; }
+    const h = rs.home, a = rs.away;
+    if (h.pot_v2 != null && a.pot_v2 != null && h.pot === h.pot_v2 && a.pot === a.pot_v2) { out.skipped.already_correct++; continue; }
+    if (!s.home_alias || !s.away_alias) { out.skipped.no_alias++; continue; }
+    if (s.i1 == null || s.i2 == null || s.i3 == null || s.i4 == null || s.i5 == null || s.floor_score == null || !s.floor_team) { out.skipped.null_indicators++; continue; }
+
+    const ctrlHomeOld = s.floor_team === s.home_alias;
+    // Pivot stored ctrl-relative i2-i5 back to home-relative
+    const i2h = ctrlHomeOld ? Number(s.i2) : 1 - Number(s.i2);
+    const i3h = ctrlHomeOld ? Number(s.i3) : 1 - Number(s.i3);
+    const i4h = ctrlHomeOld ? Number(s.i4) : 1 - Number(s.i4);
+    const i5h = ctrlHomeOld ? Number(s.i5) : 1 - Number(s.i5);
+
+    // PARITY GATE 1: I1 replica on ORIGINAL pot must reproduce stored i1
+    const i1HomeOld = _bfI1Home(h, a);
+    const i1CtrlOld = r1(ctrlHomeOld ? i1HomeOld : 1 - i1HomeOld);
+    if (Math.abs(i1CtrlOld - Number(s.i1)) > 0.001) {
+      out.skipped.i1_parity_miss++;
+      if (out.parity_miss_ids.length < 10) out.parity_miss_ids.push(s.id);
+      continue;
+    }
+    // PARITY GATE 2: re-blend with ORIGINAL I1 must reproduce stored floor_score
+    const rawOld = i1HomeOld * W.I1 + i2h * W.I2 + i3h * W.I3 + i4h * W.I4 + i5h * W.I5;
+    const floorOld = r2(rawOld >= 0.5 ? rawOld : 1 - rawOld);
+    if (Math.abs(floorOld - Number(s.floor_score)) > 0.011) {
+      out.skipped.floor_parity_miss++;
+      if (out.parity_miss_ids.length < 10) out.parity_miss_ids.push(s.id);
+      continue;
+    }
+
+    // SWAP pot + recompute
+    const tmp = h.pot; h.pot = a.pot; a.pot = tmp;
+    rs._pot_corrected = true;
+    const i1HomeNew = _bfI1Home(h, a);
+    const rawNew = i1HomeNew * W.I1 + i2h * W.I2 + i3h * W.I3 + i4h * W.I4 + i5h * W.I5;
+    const ctrlHomeNew = rawNew >= 0.5;
+    const floorTeamNew = ctrlHomeNew ? s.home_alias : s.away_alias;
+    const floorScoreNew = r2(ctrlHomeNew ? rawNew : 1 - rawNew);
+    const ci = [i1HomeNew, i2h, i3h, i4h, i5h].map((v) => r1(ctrlHomeNew ? v : 1 - v));
+
+    if (i1HomeNew !== i1HomeOld) out.changes.i1_changed++;
+    if (floorTeamNew !== s.floor_team) out.changes.ctrl_flips++;
+    out.changes.floor_delta_sum += Math.abs(floorScoreNew - Number(s.floor_score));
+
+    if (!dry) {
+      await sql`UPDATE snapshots SET raw_stats_json = ${JSON.stringify(rs)},
+        i1 = ${ci[0]}, i2 = ${ci[1]}, i3 = ${ci[2]}, i4 = ${ci[3]}, i5 = ${ci[4]},
+        floor_score = ${floorScoreNew}, floor_team = ${floorTeamNew}
+        WHERE id = ${s.id}`;
+    }
+    out.updated++;
+  }
+  out.changes.mean_abs_floor_delta = out.updated > 0 ? r2(out.changes.floor_delta_sum / out.updated) : 0;
+  delete out.changes.floor_delta_sum;
+  return out;
+}
+
 // ── In-memory BDL caches for server polling ──
 let _serverBoxScoreCache = null;    // Array of box score objects
 let _serverBoxScoreTime = 0;
@@ -6021,6 +6132,17 @@ export default async function(req) {
     return new Response('DATABASE_URL not configured', { status: 500 });
   }
   const sql = neon(dbUrl);
+
+  // ── WNBA POT BACKFILL — one-off manual action, never runs on cron ──
+  // ?backfill_pot=1&batch=200&after=0&dry=1 — see backfillWNBAPot()
+  if (url.searchParams.get('backfill_pot') === '1') {
+    const result = await backfillWNBAPot(sql, {
+      batch: Math.min(parseInt(url.searchParams.get('batch') || '200'), 500),
+      after: parseInt(url.searchParams.get('after') || '0'),
+      dry: url.searchParams.get('dry') === '1',
+    });
+    return new Response(JSON.stringify(result, null, 2), { headers: { 'Content-Type': 'application/json' } });
+  }
 
   // Load floor reliability coefficients (30 rows, once per poll cycle)
   _floorWPCoeffs = {};
