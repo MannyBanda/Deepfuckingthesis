@@ -87,6 +87,7 @@ Weekly refresh job (cron or piggyback nightly agent):
 
 ## Phase 6 — Retrain + acceptance gate
 - Training table: stored season snapshots with v2 corrected fields (ESPN structural history already persisted in raw_stats_json — full season available) + anchors where present + official finals + priors. Features: current 13 -> corrected pot, + paint, fbp, possessions/pace, pls_min-derived lineup signal. Windowed architecture retained (windowed biglead validated for WNBA).
+- **POT correction COMPLETE (Jun 10, ahead of schedule):** live path flipped at source (buildSummaryFromESPN call site) and v1 pot backfilled across all historical snapshots with i1/floor_score/floor_team recomputed (6,888 rows corrected, dual parity gates, 391 boundary-class rows quarantined — see research/2026-06-10_pot_backfill.md). **Do NOT flip pot during training-table construction — stored pot is now correct; a build-time flip would double-flip.** Note: stored xgb_win_prob on historical snapshots still reflects flipped-pot inputs; optional rescore via rescore_xgb_prod.py before any research that consumes historical XGB scores.
 - OOF CV as usual, then **acceptance = line-paired OOS test** (edge test #1 harness, reusable): new model must (a) beat current WNBA XGB OOS AND (b) be evaluated for OOS info beyond the live line. If (b) still fails, WNBA stays analytical-only — stated honestly — but dashboards/agents get the better model.
 - Atomic swap: model file + feature extraction + field source flip in one commit.
 
