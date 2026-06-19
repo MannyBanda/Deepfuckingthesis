@@ -2089,6 +2089,7 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
       if(inv){hCol=hCmp<aCmp?'var(--green)':'var(--coral)';aCol=aCmp<hCmp?'var(--green)':'var(--coral)';}
       else{hCol=hCmp>aCmp?'var(--green)':'var(--coral)';aCol=aCmp>hCmp?'var(--green)':'var(--coral)';}
     }
+    if(opts.hColor)hCol=opts.hColor;if(opts.aColor)aCol=opts.aColor;
     return'<div class="ind-ev-row"><span class="ind-ev-label">'+label+'</span><div class="ind-ev-vals"><span class="ind-ev-val" style="color:'+hCol+'">'+hA+'</span><span class="ind-ev-val" style="color:'+hCol+'">'+hVal+'</span><span style="color:var(--fg-dim)">-</span><span class="ind-ev-val" style="color:'+aCol+'">'+aVal+'</span><span class="ind-ev-val" style="color:'+aCol+'">'+aA+'</span></div></div>';
   }
   // WNBA: use _teamEvidence (BDL team_stats) or _pbpPlayerStats totals
@@ -2128,7 +2129,9 @@ function buildIndEvidence(id,cs,hA,aA,indKey,indName,floor){
       var aFGM=tStat('away','fgm'),aFGA=tStat('away','fga'),a3M=tStat('away','fg3m'),a3A=tStat('away','fg3a');
       var hEFG=hFGA>0?((hFGM+0.5*h3M)/hFGA*100).toFixed(1):'--';
       var aEFG=aFGA>0?((aFGM+0.5*a3M)/aFGA*100).toFixed(1):'--';
-      html+=evRow('eFG%',hEFG+'%',aEFG+'%');
+      var _per=(games.find(function(x){return x.id===id;})||{}).period||0;
+      var hET=efgTier(parseFloat(hEFG),_per),aET=efgTier(parseFloat(aEFG),_per);
+      html+=evRow('eFG%',hEFG+'%',aEFG+'%',{hColor:hET.color,aColor:aET.color});
       html+=evRow('3PT',h3M+'/'+h3A,a3M+'/'+a3A,{cmpH:h3A>0?h3M/h3A:0,cmpA:a3A>0?a3M/a3A:0});
       html+=evRow('Assists',tStat('home','ast'),tStat('away','ast'));
       var hAR=hFGM>0?Math.round(tStat('home','ast')/hFGM*100):0;
@@ -3620,6 +3623,42 @@ function renderDepthAuditSection(id,cs,hA,aA){
   return html;
 }
 
+// ── EFFICIENCY-DIVERGENCE FADE READ (WNBA) — tunable; calibrated off 110-game backtest ──
+// Period-adjusted eFG heat bands [greenMax, orangeMax]; red = above orangeMax.
+var EFG_BANDS={1:[54,61],2:[56,63],3:[58,66],4:[60,69]};
+function efgTier(efg,period){
+  if(efg==null||isNaN(efg))return{tier:'na',color:'var(--fg-dim)'};
+  var b=EFG_BANDS[period]||EFG_BANDS[4];
+  if(efg<=b[0])return{tier:'green',color:'var(--green)'};
+  if(efg<=b[1])return{tier:'orange',color:'var(--amber)'};
+  return{tier:'red',color:'var(--coral)'};
+}
+function vShareTier(v){
+  if(v==null||isNaN(v))return{tier:'na',color:'var(--fg-dim)'};
+  if(v<=45)return{tier:'struct',color:'var(--green)'};
+  if(v<=55)return{tier:'mixed',color:'var(--amber)'};
+  return{tier:'var',color:'var(--coral)'};
+}
+function _clkSec(c){if(c==null)return 999;c=String(c);if(c.indexOf(':')>-1){var p=c.split(':');return (+p[0])*60+(+p[1]);}var n=parseFloat(c);return isNaN(n)?999:n;}
+// Evaluates the CURRENT LEADER as fade target. Returns {tier,label,color,text} or null.
+function divergenceRead(sc){
+  if(!sc||!sc.home||!sc.away)return null;
+  var h=sc.home,a=sc.away,p=sc.period||0,clk=sc.clock||'';
+  var hp=h.total||0,ap=a.total||0,margin=Math.abs(hp-ap);
+  var L=hp>=ap?h:a,T=hp>=ap?a:h,efg=L.efgBox,v=L.vPct,fga=L.fga||0;
+  function R(t,l,c,x){return{tier:t,label:l,color:c,text:x};}
+  if(margin<=2)return R('EVEN','—','var(--fg-dim)','Game even — no lead to fade.');
+  if(efg==null||fga<12)return R('WAIT','WAIT','var(--fg-dim)',L.team+' shot sample too small to judge.');
+  if(margin>=10)return R('NO FADE','BANKED','var(--green)',L.team+' lead is banked (+'+margin+') — regression will not erase double digits.');
+  if(p>=4||(p===3&&_clkSec(clk)<180))return R('NO FADE','LATE','var(--fg-dim)',L.team+' heat is earned this late — not a fade window.');
+  var t=efgTier(efg,p).tier,ef=Math.round(efg)+'% eFG';
+  if(t==='green')return R('NO EDGE','—','var(--fg-dim)',L.team+' not above sustainable ('+ef+') — no divergence.');
+  if(v<=45)return R('NO FADE','STRUCTURAL','var(--green)',L.team+' hot ('+ef+') but structural — paint/FT-driven, sticky lead.');
+  if((efg>=70&&v>45)||(t==='red'&&v>55))return R('STRONG FADE','FADE '+T.team,'var(--coral)','⚠ '+L.team+' on unsustainable variance ('+ef+', V '+Math.round(v)+'%), only +'+margin+' in Q'+p+'. Back '+T.team+' at plus money.');
+  if(t==='orange'&&v>55)return R('LEAN FADE','LEAN '+T.team,'var(--amber)',L.team+' '+ef+' variance-sourced and thin (+'+margin+'). Lean fade '+T.team+' if plus money.');
+  return R('NO FADE','MIXED','var(--fg-dim)',L.team+' hot ('+ef+') but mixed-sourced — not a clean fade.');
+}
+
 // ── SCORING COMPOSITION (from PBP audit zone data) ──
 function computeScoringComp(pbp,hA,aA,hPts,aPts){
   if(!pbp||!pbp.home||!pbp.away)return null;
@@ -3696,6 +3735,14 @@ function buildScoringCompForCard(gameId){
       }
     }
   }
+  // box eFG (authoritative, matches I3 row) + period for the divergence read
+  var _pbs=cs._pbpPlayerStats,_te=cs._teamEvidence;
+  function _box(s,f){if(_pbs&&_pbs[s]&&_pbs[s].totals)return Number(_pbs[s].totals[f])||0;if(_te&&_te[s])return Number(_te[s][f])||0;return 0;}
+  function _efg(s){var fga=_box(s,'fga');return fga>0?((_box(s,'fgm')+0.5*_box(s,'fg3m'))/fga*100):null;}
+  sc.home.efgBox=_efg('home');sc.home.fga=_box('home','fga');
+  sc.away.efgBox=_efg('away');sc.away.fga=_box('away','fga');
+  sc.period=g.period||0;sc.clock=g.clock||'';
+  sc.fadeRead=divergenceRead(sc);
   cs.scoringComp=sc;renderCard(gameId);
 }
 
@@ -3792,8 +3839,8 @@ function renderScoringCompSection(id,cs,hA,aA){
   html+='<div class="coll-body'+(isOpen?' open':'')+'">';
   html+='<div class="coll-inner">';
 
-  html+=scoringBar(h);
-  html+=scoringBar(a);
+  html+=scoringBar(h,sc.period);
+  html+=scoringBar(a,sc.period);
 
   // Legend
   html+='<div class="sc-legend">';
@@ -3821,6 +3868,13 @@ function renderScoringCompSection(id,cs,hA,aA){
   html+='<span class="sc-delta-val" style="color:var(--amber)">'+esc(vTeam)+' +'+Math.abs(Math.round(vD))+vArrow+'</span></div>';
 
   // Lead source classification
+  // Efficiency-divergence fade read (the betting action; sits above composition class)
+  if(sc.fadeRead){
+    var fr=sc.fadeRead,frStrong=fr.tier==='STRONG FADE';
+    html+='<div style="margin-top:10px;padding:8px 10px;background:'+(frStrong?'var(--coral-dim)':'var(--bg-surface-2)')+';border:1px solid '+(frStrong?'var(--coral-border)':'var(--hairline)')+';border-radius:var(--r-inner);font-family:var(--sans);font-size:12px;line-height:1.5;color:var(--fg-secondary)">';
+    html+='<span style="font-weight:600;color:'+fr.color+'">'+esc(fr.label)+'</span> — '+esc(fr.text)+'</div>';
+  }
+
   if(sc.durability){
     var lcCol=sc.classification==='STRUCTURAL'?'var(--green)':sc.classification==='VOLATILE'?'var(--coral)':'var(--fg-secondary)';
     html+='<div style="margin-top:10px;padding:8px 10px;background:var(--bg-surface-2);border:1px solid var(--hairline);border-radius:var(--r-inner);font-family:var(--sans);font-size:12px;line-height:1.5;color:var(--fg-secondary)">';
@@ -3831,11 +3885,12 @@ function renderScoringCompSection(id,cs,hA,aA){
   return html;
 }
 
-function scoringBar(tm){
+function scoringBar(tm,period){
   var t=tm.total||1;
+  var vt=vShareTier(tm.vPct);
   var html='<div class="sc-team-row">';
   html+='<div class="sc-team-head"><span class="sc-team-name"><span style="color:'+tc(tm.team)+'">'+esc(tm.team)+'</span> <span style="font-family:var(--mono);font-weight:400;color:var(--fg-tertiary)">'+tm.total+'</span></span>';
-  html+='<span class="sc-team-sv">S:'+tm.sPct+'% V:'+tm.vPct+'%</span></div>';
+  html+='<span class="sc-team-sv">S:'+tm.sPct+'% <span style="color:'+vt.color+'">V:'+tm.vPct+'%</span></span></div>';
   html+='<div class="sc-bar">';
   if(tm.paint>0){var pw=tm.paint/t*100;html+='<div class="sc-seg paint" style="width:'+pw+'%">'+(pw>=12?tm.paintPct+'%':'')+'</div>';}
   if(tm.ft>0){var fw=tm.ft/t*100;html+='<div class="sc-seg ft" style="width:'+fw+'%">'+(fw>=10?tm.ft:'')+'</div>';}
@@ -3844,6 +3899,8 @@ function scoringBar(tm){
   html+='</div>';
   // Made/attempted detail line
   html+='<div class="sc-detail">';
+  var et=efgTier(tm.efgBox,period||0);
+  if(tm.efgBox!=null)html+='<span class="sc-d" style="color:'+et.color+';font-weight:600">eFG '+Math.round(tm.efgBox)+'%</span>';
   html+='<span class="sc-d paint">Paint '+tm.paintM+'/'+tm.paintA+'</span>';
   if(tm.ft>0)html+='<span class="sc-d ft">FT '+tm.ftM+'</span>';
   html+='<span class="sc-d three">3PT '+tm.tpm+'/'+tm.tpa+'</span>';
