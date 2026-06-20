@@ -655,7 +655,7 @@ async function buildBdlGameMap(dateStr){
 
 async function fetchStandings(){
   try{
-    var data=await bdl('standings',{season:'2025',league:'wnba'});var arr=data.data||[];
+    var data=await bdl('standings',{season:String(new Date().getFullYear()),league:'wnba'});var arr=data.data||[];
     // Reverse alias map: BDL abbr → SR alias (e.g. NY→NYL, POR→PDX)
     var rev={};Object.keys(ESPN_ALIAS_MAP).forEach(function(k){rev[ESPN_ALIAS_MAP[k]]=k;});
     arr.forEach(function(s){
@@ -3659,6 +3659,34 @@ function divergenceRead(sc){
   return R('NO FADE','MIXED','var(--fg-dim)',L.team+' hot ('+ef+') but mixed-sourced — not a clean fade.');
 }
 
+// ── BAD-LEADER COLLAPSE COMEBACK ENGINE (WNBA) — validated on 113-game set ──
+// Edge: a quality team trailing a BAD team whose lead is built on unsustainable shooting.
+// The market prices the deficit, not the teams. Edge is captured at entry — take & hold.
+function americanToImplied(ml){if(ml==null||ml==='')return null;ml=Number(ml);if(isNaN(ml)||ml===0)return null;return ml>0?100/(ml+100):(-ml)/((-ml)+100);}
+function fmtML(n){n=Number(n);return(n>0?'+':'')+n;}
+function cbDepthRate(d){if(d<=5)return 0.68;if(d<=9)return 0.56;if(d<=14)return 0.50;if(d<=19)return 0.44;return 0;}
+// leaderWP/trailerWP in [0,1] or null; deficit>0 int; period int; fadeRead = sc.fadeRead | null
+function comebackProb(leaderWP,trailerWP,deficit,period,fadeRead){
+  if(leaderWP==null||trailerWP==null)return{tier:'NO_DATA'};
+  if(leaderWP>=0.40)return{tier:'NO_EDGE',leaderWP:leaderWP};
+  if(deficit>=20)return{tier:'DEAD',deficit:deficit};
+  var base=cbDepthRate(deficit),gap=trailerWP-leaderWP;
+  var lean=Math.max(-1,Math.min(1,(gap-0.20)/0.20))*0.05;
+  var pPoint=Math.max(0.10,Math.min(0.85,base+lean)),drivers=[];
+  if(fadeRead&&fadeRead.tier==='STRONG FADE'){pPoint=Math.min(0.85,pPoint+0.03);drivers.push('fragile lead');}
+  var tier=deficit<=7?'SHORT':(gap>0.20?'STRONG':(gap>=0.10?'MODERATE':'THIN'));
+  return{tier:tier,pPoint:pPoint,pLow:Math.max(0.05,pPoint-0.07),pHigh:Math.min(0.95,pPoint+0.07),gap:gap,drivers:drivers};
+}
+// sizes off the point estimate (spec decision #3); quarter-Kelly, hard-capped at 12% of bankroll
+function comebackEV(pPoint,ml){
+  var implied=americanToImplied(ml);if(implied==null)return{noLine:true};
+  var edge=pPoint-implied,mln=Number(ml);
+  if(edge<=0)return{verdict:'NO_VALUE',implied:implied,line:mln};
+  var decNet=mln>0?mln/100:100/Math.abs(mln);
+  var fullK=(pPoint*(decNet+1)-1)/decNet;
+  return{implied:implied,edge:edge,size:Math.max(0,Math.min(0.12,0.25*fullK)),line:mln};
+}
+
 // ── SCORING COMPOSITION (from PBP audit zone data) ──
 function computeScoringComp(pbp,hA,aA,hPts,aPts){
   if(!pbp||!pbp.home||!pbp.away)return null;
@@ -3828,7 +3856,7 @@ function renderScoringCompSection(id,cs,hA,aA){
   if(sc.structTrend)sTrA=sc.structTrend==='up'?' \u25b2':sc.structTrend==='down'?' \u25bc':' \u25ac';
   if(sc.varTrend)vTrA=sc.varTrend==='up'?' \u25b2':sc.varTrend==='down'?' \u25bc':' \u25ac';
   var summary='<span style="color:var(--green)">S:</span> <span style="color:'+tc(sTeam)+'">'+esc(sTeam)+'</span> +'+sAbs+sTrA+' <span style="color:var(--fg-dim)">\u00b7</span> <span style="color:var(--amber)">V:</span> <span style="color:'+tc(vTeam)+'">'+esc(vTeam)+'</span> +'+vAbs+vTrA;
-  var isOpen=_collOpen[id+'_sc']||false;
+  var isOpen=_collOpen[id+'_sc']!=null?_collOpen[id+'_sc']:true;
 
   var html='<div class="collapsible">';
   html+='<div class="coll-header" onclick="toggleColl(\''+id+'\',\'sc\')">';
@@ -3866,6 +3894,34 @@ function renderScoringCompSection(id,cs,hA,aA){
   html+='<span class="sc-delta-val" style="color:var(--green)">'+esc(sTeam)+' +'+Math.abs(Math.round(sD))+sArrow+'</span></div>';
   html+='<div class="sc-delta" style="margin-top:4px"><span class="sc-delta-label">Variance</span>';
   html+='<span class="sc-delta-val" style="color:var(--amber)">'+esc(vTeam)+' +'+Math.abs(Math.round(vD))+vArrow+'</span></div>';
+
+  // ── Bad-leader collapse read (primary betting read; sits above divergence) ──
+  html+=(function(){
+    var hp=sc.home.total||0,ap=sc.away.total||0;
+    if(hp===ap)return'';
+    var homeTrails=ap>hp;
+    var leadAl=homeTrails?sc.away.team:sc.home.team,trailAl=homeTrails?sc.home.team:sc.away.team;
+    var trailML=homeTrails?(cs.oddsData&&cs.oddsData.homeML):(cs.oddsData&&cs.oddsData.awayML);
+    function _wp(al){var r=standingsCache[al];if(!r)return null;var gp=(r.w||0)+(r.l||0);return gp>=4?(r.w/gp):null;}
+    function _rec(al){var r=standingsCache[al];return r?((r.w||0)+'-'+(r.l||0)):'';}
+    var pr=comebackProb(_wp(leadAl),_wp(trailAl),Math.abs(hp-ap),sc.period||0,sc.fadeRead);
+    if(pr.tier==='NO_DATA'||pr.tier==='NO_EDGE')return'';
+    var d=Math.abs(hp-ap),qL='Q'+(sc.period||'?');
+    function _box(label,col,bg,bd,body){return'<div style="margin-top:10px;padding:8px 10px;background:'+bg+';border:1px solid '+bd+';border-radius:var(--r-inner);font-family:var(--sans);font-size:12px;line-height:1.5;color:var(--fg-secondary)"><span style="font-weight:600;color:'+col+'">'+esc(label)+'</span> \u2014 '+body+'</div>';}
+    if(pr.tier==='DEAD')return _box('TOO DEEP','var(--fg-dim)','var(--bg-surface-2)','var(--hairline)','down '+d+' \u2014 bad leaders still hold 20+. Market is right here; no edge.');
+    var ev=comebackEV(pr.pPoint,trailML);
+    var pP=Math.round(pr.pPoint*100),pL=Math.round(pr.pLow*100),pH=Math.round(pr.pHigh*100);
+    var frag=(pr.drivers&&pr.drivers.indexOf('fragile lead')>-1)?', fragile lead':'';
+    var setup=esc(trailAl)+' ('+_rec(trailAl)+') down '+d+' to '+esc(leadAl)+' ('+_rec(leadAl)+') in '+qL+frag+'.';
+    var strong=pr.tier==='STRONG',mod=pr.tier==='MODERATE';
+    var col=strong?'var(--green)':(mod?'var(--amber)':'var(--fg-secondary)');
+    var bg=strong?'var(--green-dim)':(mod?'var(--amber-dim)':'var(--bg-surface-2)');
+    var bd=strong?'var(--green-border)':(mod?'var(--amber-border)':'var(--hairline)');
+    if(ev.noLine)return _box((strong||mod)?('BACK '+trailAl):pr.tier,col,bg,bd,setup+' true ~'+pP+'% ('+pL+'\u2013'+pH+'%) \u00b7 no live line.');
+    if(ev.verdict==='NO_VALUE')return _box('NO VALUE','var(--fg-secondary)','var(--bg-surface-2)','var(--hairline)',setup+' true ~'+pP+'% but '+fmtML(ev.line)+' prices ~'+Math.round(ev.implied*100)+'%. Pass.');
+    var lab=(strong||mod)?('BACK '+trailAl):(pr.tier==='SHORT'?'SHORT ODDS':'THIN GAP');
+    return _box(lab,col,bg,bd,setup+' true ~'+pP+'% ('+pL+'\u2013'+pH+'%) \u00b7 '+fmtML(ev.line)+' (mkt ~'+Math.round(ev.implied*100)+'%) \u00b7 <b style="color:'+col+'">EDGE +'+Math.round(ev.edge*100)+'pp</b> \u00b7 size ~'+Math.round(ev.size*100)+'% (\u00bc-Kelly) \u00b7 <i>take &amp; hold</i>');
+  })();
 
   // Lead source classification
   // Efficiency-divergence fade read (the betting action; sits above composition class)
