@@ -1450,12 +1450,13 @@ async function processLeagueTheses(sql, apiKey, league, dateKey, now, log) {
       var anthropicResp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 2000, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
+        body: JSON.stringify({ model: 'claude-opus-4-8', max_tokens: 2000, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
       });
 
       if (!anthropicResp.ok) {
         var errText = await anthropicResp.text();
-        log('  Sonnet error: ' + anthropicResp.status + ' ' + errText.substring(0, 200));
+        log('  Thesis model error: ' + anthropicResp.status + ' ' + errText.substring(0, 200));
+        try { await sql`DELETE FROM theses WHERE game_id = ${game.id} AND text = 'PENDING'`; } catch (de) {}
         continue;
       }
 
