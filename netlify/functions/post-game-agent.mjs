@@ -585,7 +585,7 @@ RECOMMENDATIONS:
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify({
-          model: 'claude-fable-5',
+          model: 'claude-opus-4-8',
           max_tokens: 2000,
           messages: [{ role: 'user', content: prompt }],
         }),
