@@ -58,6 +58,16 @@ var SR_TEAM_IDS_WNBA = {
 // ── WNBA ALIAS MAP (SR alias → BDL abbreviation, for odds matching) ─────────
 var WNBA_ALIAS_MAP = { NYL:'NY', LVA:'LV', LAS:'LA', GSV:'GS', WAS:'WSH', PDX:'POR', TOY:'TOR' };
 
+// SR UUID -> BDL-canonical alias. SR WNBA league/injuries.json omits team.alias, so it gets
+// backfilled from team.id at fetch time (see processLeagueTheses). Skipping WNBA_ALIAS_MAP keys
+// (SR-only aliases like LVA/NYL) ensures the canonical forms (LV/NY/...) win, matching the
+// schedule_json home/away aliases the SIA matcher compares against.
+var WNBA_UUID_TO_ALIAS = {};
+Object.keys(SR_TEAM_IDS_WNBA).forEach(function(a) {
+  if (WNBA_ALIAS_MAP[a]) return;
+  WNBA_UUID_TO_ALIAS[SR_TEAM_IDS_WNBA[a]] = a;
+});
+
 // ══════════════════════════════════════════════════════════════════════════════
 // HELPER UTILITIES
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1263,6 +1273,11 @@ async function processLeagueTheses(sql, apiKey, league, dateKey, now, log) {
   var injuries = null, standings = null, seasonQ4 = {};
   try {
     injuries = await srFetchDirect(league, 'league/injuries.json');
+    // WNBA injuries feed has no team.alias field — backfill from SR UUID so autoTrimInjuries labels
+    // and the SIA home/away matcher (both key on team.alias) work instead of dropping every injury.
+    if (league === 'wnba' && injuries && Array.isArray(injuries.teams)) {
+      injuries.teams.forEach(function(t) { t.alias = WNBA_UUID_TO_ALIAS[t.id] || t.market || t.alias; });
+    }
     await new Promise(function(r) { setTimeout(r, 1100); });
     standings = await srFetchDirect(league, 'seasons/' + LEAGUE_CFG[league].season + '/REG/standings.json');
     await new Promise(function(r) { setTimeout(r, 1100); });
