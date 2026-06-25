@@ -114,7 +114,64 @@ Poll-loop pregame-thesis safety net: **def 2643**, Opus call **2720** (1000 tok)
 
 ---
 
-## 5. Learning agent → calibration + execution tracker (Decision D)
+## 4a. Phase 2a — gate engine + parity (DETAILED, code-verified at `ad5bf3f`)
+
+> First shippable slice. **Compute + store + validate only — no alert fires in 2a.** Ships dark behind a separate compute flag; the mechanical alert is 2b, gated on 2a parity being green.
+
+### Parity question — RESOLVED (favorable)
+The server has **two** lead-composition paths and they are **not** interchangeable:
+- `computeLeadComposition(summary)` (4202) splits from **box** stats (`points_in_the_paint`, `field_goals_at_rim_made`). This is the WNBA box-paint-unreliability gap (the v3 reason the client avoids box). **DO NOT reuse for the sweet-spot port.**
+- `pbpResult.home/away` (= `game._bdlPbp`, from `parseBDLPBPServer` @1768) carries **PBP-zone** `{made, att}` per `rim/paint/mid/threes` (assembled @1876–1882) — the **exact** shape the client's `computeScoringComp.breakdown()` reads. The client consumes this same structure round-tripped through the server-written `game_pbp` table, so feeding the server's own in-loop `pbpResult` into a ported `computeScoringComp` reproduces the client at the field level.
+
+**Port path:** zones from PBP (`game._bdlPbp.home/away`), eFG from reliable box (`fgm/fg3m/fga`). The unreliable WNBA box fields (paint/mid) are never touched.
+
+### Port inventory (inline into `poll-live-bdl.mjs` — Netlify bundles separately)
+- **Pure, lift as-is:** `americanToImplied`, `cbDepthRate` (depth table .68 / .56 / .50 / .44 / 0), `efgTier` + its `EFG_BANDS` table, `_clkSec`, `comebackEV` (¼-Kelly, hard cap 12%).
+- **Assembled:** `computeScoringComp(game._bdlPbp.home/away, hA, aA, hPts, aPts)` → eFG/FGA augmentation per side `(fgm + 0.5·fg3m)/fga` (matches the I3 row) → `divergenceRead(sc)` → `comebackProb(leaderWP, trailerWP, deficit, period, fadeRead)`.
+- **DO NOT port/reuse:** `computeLeadComposition` (box-paint). Sweet spot is PBP-zone only. *(Leave it in place — NBA prompt path still uses it; just don't feed the sweet-spot engine from it.)*
+- *Availability check at impl:* `game._bdlPbp` is populated in-loop (already consumed by `ctx.pbpAudit` @4945 and the MC rate extractor), so it's present where the gates will run.
+
+### New input — server standings cache (the ONLY net-new data dependency)
+- Source: BDL WNBA `standings` (confirmed live, commit `7b952d5`), **daily** refresh (standings move ~1×/day).
+- Cache keyed **BDL-canonical alias** → `{w, l}`. `_wp = gp >= 4 ? w/(w+l) : null` — the **gp ≥ 4 floor is a real gate** (early season → `null` → `comebackProb` NO_DATA), not a bug; port faithfully.
+- Alias keying = BDL-canonical, same convention as the odds fix (`000094d`). **Divergent-team test mandatory** (TOR/LV/GS/etc.) — this is the aliasMap-regression class of bug.
+
+### A / B tiering (LOCKED with Manny)
+- **A — pristine dual-gate (system trigger):** `comebackProb.tier ∈ {STRONG, SHORT}` (gap > .20) **AND** `divergenceRead.tier === 'STRONG FADE'` **AND** `computeScoringComp.classification === 'VOLATILE'` **AND** deficit ≤ 9 **AND** margin < 10 **AND** pre-Q4 **AND** `comebackEV.edge > 0`. (Both reads key on `L` = the leader, so a *trailer*-variance lead — the POR@CHI trap — cannot trip A.)
+- **B — soft dual-gate (lower conviction, "worth your eyes, your call"):** exactly one gate steps down — `comebackProb` MODERATE (gap .10–.20) with a fade, **OR** STRONG/SHORT collapse with only a LEAN FADE, **OR** deficit in the 10–14 band — **AND** still `edge > 0`. **Threshold EARNED, not assumed** (see B-earning).
+- **Display / calibration-only (NO push):** any bucket that doesn't beat the line in replay.
+- **NOT B:** individual-heater / Q4-closing-capacity discretionary reads (the MIN@WSH type). The gates key on *team* eFG/variance, so an individual-heater lead reads STRUCTURAL/MIXED and won't fire — by design. That edge is the shelved **`INDIVIDUAL_HEATER`** subtype, validated separately (below), never a B retrofit.
+
+### B-earning methodology (runs inside the 2a replay)
+- Bucket every gate-fire by **(collapse tier × divergence tier × deficit band)**.
+- Per bucket: realized win% vs predicted-true% vs line-implied.
+- **A** = the pristine bucket; **B** = the next buckets that **still beat the line**; non-line-beating buckets → display/calibration-only.
+- **Data caveat (Jun-9 standard):** edge-vs-line needs point-in-time odds → leans on the **live 95-set + forward**; calibration (predicted vs realized, no line needed) uses **all 619** (524 historical likely lack point-in-time odds).
+
+### Two-stage narration (LOCKED with Manny) — decision stays **0-Opus & deterministic**
+What Phase 1 removed was Opus in the *decision* loop. This adds Opus as *narration on an already-fired mechanical alert* — a different layer.
+- **Stage 1 — instant mechanical push:** the actionable WHAT (back trailer, line, edge, size, window). Fires the moment the gate trips. 0-Opus, no await.
+- **Stage 2 — async Opus context:** the WHY (run dynamics, who's actually hot/cold, foul trouble, injuries, thesis cross-reference, anything else relevant). Lands seconds later as a 2nd push (or enriches the alert in place).
+- **HARD RULES:** narration is **never a dependency** — Opus slow/error → Stage-1 alert already delivered, full and actionable. **Dedicated sweet-spot-scoped Opus call at the trigger moment** (NOT the per-quarter analysis — it can be stale when a mid-quarter sweet spot fires). **No synchronous await / lock-row in the fire path** (the exact race Phase 1 stripped). Store the narration text on the `sweetspot_alerts` row so the tracker sees what Manny was told.
+- Opus = narration only for now; **revisit Opus-as-suppressor later**, after we see the full alert pattern (Manny). *(This is 2b wiring; specced here because it shapes the `sweetspot_alerts` schema.)*
+
+### Snapshot gate-output columns (schema diff — see §4 list)
+`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS …` the `ss_*` set. **Populate at the primary snapshot (7703), after gates compute.** Run `?action=init`. **Write-only — widen no poll-path SELECT** (hard rule). This is the parity + calibration substrate.
+
+### `sweetspot_alerts` table (created in 2a, written in 2b)
+`alert_subtype` (EFG_FADE / BAD_LEADER_COLLAPSE / INDIVIDUAL_HEATER / …) + gate-output fields + **tier (A/B)** + line_used/line_consensus/implied/edge/kelly_size + **narration_text** + outcome/pnl (tracker). Extensible by design, mirrors the extensible classifier.
+
+### Test harness (2a gate)
+- **Port-parity (canonical):** ported gates server-side vs the client on the **same stored snapshots** — tonight's slate + a historical set — assert identical tier / true% / edge within float tolerance. *(The aliasMap-regression lesson — this is the test that catches a bad port before it can fire.)*
+- **Replay:** 524 historical + 95 live — gate-fire counts; **POR-type structural lead does NOT fire; ATL-type banked deficit correctly CLOSES**; divergent-alias team (TOR/LV/GS) resolves line + standings correctly.
+- **Standings:** gp ≥ 4 floor behavior; divergent-alias keying.
+- `node -c` gate; no ship without green.
+
+### Out of 2a (parallel / later)
+- **`INDIVIDUAL_HEATER` backtest** (524 + 95): does heater-dependence erode MORE than the line implies OOS? Metric = lead-DEPENDENCE composite (top-scorer pts share + their TS/eFG vs OWN season norm + shot-type variance-vs-rim + support-cast vacuum), NOT raw TS. **Separate research thread**; if validated → its own subtype, not a B retrofit.
+- **2b** mechanical alert (two-stage) + odds consensus/stale-guard + `sweetspot_alerts` writes. **2c** tracker repurpose. **2d** per-quarter prompt reorient.
+
+
 
 `post-game-agent.mjs`, nightly:
 1. Pull `SWEETSPOT` alerts + gate-output snapshot rows for the slate; join BDL final scores.
@@ -166,7 +223,10 @@ Keep the 2500-tok per-quarter call; rewrite the prompt to the sweet-spot lens on
 
 ## 9. Phasing
 
-- **Phase 1:** flag off legacy alerts + 2 Opus calls (cascade cleared). Immediate token/noise drop. Reversible.
-- **Phase 2:** port gates, schema diff, mechanical alert (odds wired), tracker repurpose, prompt reorient.
+- **Phase 1 — SHIPPED (`ad5bf3f`, live behind `WNBA_LEGACY_ALERTS_OFF=1`).** Flag off legacy alerts + 3 Opus call paths (cascade cleared). Immediate token/noise drop. Reversible via env flip.
+- **Phase 2a — gate engine + parity (NEXT; spec §4a).** Port gates inline + standings cache + snapshot `ss_*` columns + `sweetspot_alerts` table. **Compute + store + validate only — no alert.** Ships dark; gated on port-parity + replay green.
+- **Phase 2b — mechanical alert (two-stage).** Stage-1 instant mechanical push + Stage-2 async Opus narration (never a dependency) + odds consensus/stale-guard + `sweetspot_alerts` writes. A/B tiers fire. Gated on 2a.
+- **Phase 2c — tracker repurpose.** `post-game-agent` → calibration (signal base edge) + execution (discretionary alpha).
+- **Phase 2d — prompt reorient.** The kept 2500-tok per-quarter analysis → sweet-spot lens; strip legacy vocabulary.
 - **Phase 3 (separate spec):** delete dead state-machine code (BWC/position/graduation/canary) once nothing references them.
-- **Later:** individual-heater layer (validate first).
+- **Parallel research:** `INDIVIDUAL_HEATER` validation (524 + 95). If it clears the Jun-9 standard → its own subtype, not a B retrofit.
