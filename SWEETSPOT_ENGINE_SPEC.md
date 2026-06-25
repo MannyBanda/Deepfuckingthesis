@@ -2,7 +2,7 @@
 
 **Status:** DRAFT — spec → sign-off → implement. Nothing ships before Manny reads this.
 **Scope:** WNBA only.
-**Date:** 2026-06-24
+**Date:** 2026-06-24 · **§3 Phase-1 code-verified against HEAD `f260031`: 2026-06-25** (line numbers refreshed; 3 prior mischaracterizations corrected; `generateFallbackThesis` surfaced as an open sub-decision).
 
 ---
 
@@ -28,7 +28,7 @@ Move server-side, **inlined** into `poll-live-bdl.mjs` (Netlify bundles function
 
 ## 2. Odds — available, BUT a confirmed alias bug degrades 7 teams (Decision B)
 
-> **✅ FIXED — commit `000094d` (deployed 2026-06-24).** The Odds API line now resolves for all 15 teams; the 7 divergent-alias teams (GSV/WAS/PDX/LVA/LAS/NYL/TOY) no longer fall back to inferior BDL odds. Cache keyed BDL-canonical via `cfg.aliasMap`. Live confirmation (GS/WSH writing `source='odds-api'`) pending next live WNBA slate. The remaining §2 refinements (consensus line, point-in-time pairing, stale-guard) are Phase-2 quality work.
+> **✅ FIXED — commit `000094d` (committed/deployed 2026-06-25 20:18 UTC).** The Odds API line now resolves for all 15 teams; the 7 divergent-alias teams (GSV/WAS/PDX/LVA/LAS/NYL/TOY) no longer fall back to inferior BDL odds. Cache keyed BDL-canonical via `cfg.aliasMap`. **Timing note:** the fix postdates the 2026-06-24 slate (tip 23:30 UTC, ~21 h earlier), so that slate's divergent-home games (`ATL@GS`, `MIN@WSH`) writing `source='server'` is **pre-fix behavior, NOT a fix failure.** **Live confirmation = TONIGHT (2026-06-25 slate): `LA@TOR` + `DAL@LV` are home-divergent (TOR/LV) → their `odds_history` rows should write `source='odds-api'` once books open (~30 min pre-tip).** The remaining §2 refinements (consensus line, point-in-time pairing, stale-guard) are Phase-2 quality work.
 
 **Path that exists:** `fetchOddsAPIBatch('wnba')` (poll loop S9, lines 6567 + 7063) → The Odds API `/v4/sports/basketball_wnba/odds`, regions us,us2, markets h2h+spreads+totals, american, **best-available per side**, keyed by home alias via `ODDS_API_TEAMS_WNBA`. Per-game: `odds = oddsAPICache[hA]` → `{homeSpread, homeML, awayML, total, books}`. Stored: `odds_history (game_id, home_spread, home_ml, away_ml, total, source)`, appended per poll. `mlToProb()` available. Trailer ML = `trailerIsHome ? homeML : awayML`.
 
@@ -42,26 +42,57 @@ Move server-side, **inlined** into `poll-live-bdl.mjs` (Netlify bundles function
 
 ## 3. Phase 1 — disable legacy alerts + Opus calls (Decision C)
 
-### Kill list (flag off, reversible)
-- **Opus calls:** alert-reasoning agent (~989–1124, 500 tok) + MC-investigation agent (~9252).
-- **ntfy fires:** 7886 (TRACKING INVALIDATED), 8325 (BUY/BWC/WINDOW BUY main), 9122 (MC INVESTIGATING), 9179 (STRUCTURAL STRESS), 9273 + 9283 (XGB/MC INVALIDATED position exit).
+> **Code-verified against HEAD `f260031` (post-`000094d`).** All line numbers below are live, not spec-era; legacy numbers drifted **+4** from the odds-fix commit. **Four** Opus call sites exist in the poll fn (the original kill list named two and missed `generateFallbackThesis`); `runAlertAgent` is invoked at **two** sites (not one); and `game_context` + the "2nd snapshot" are **NOT** in the investigation block (corrected below).
 
-### Keep
-- Per-quarter auto-analysis Opus (~5750–5907, 2500 tok) — Decision #1, prompt reoriented (§6).
-- Pregame thesis (separate fn) — Decision #2.
-- Snapshot INSERT (7699) — the data substrate.
-- Always-on MC trajectory + XGB compute — cheap, no Opus, may feed displays.
+### Mechanism — one league-gated kill-switch
+`WNBA_LEGACY_ALERTS_OFF`, read at module scope. **Recommend env-var** (`process.env.WNBA_LEGACY_ALERTS_OFF === '1'`) for instant rollback without redeploy; const is the simpler-but-redeploy alternative. **Default OFF (legacy ON)** for safety — set `1` to activate teardown. Every gate is `if (WNBA_LEGACY_ALERTS_OFF && league === 'wnba')`. **NBA/NCAAMB are byte-identical at runtime** (guard is always false for them). Hard rule: never reference the flag without the `&& league === 'wnba'` pairing.
 
-### Cascade trace (1st / 2nd / 3rd order)
-1. **`game_context` — CLEARED.** Written only at 9421 (inside MC-investigation); **read nowhere in the poll loop**; the per-quarter auto-analysis builds its own prompt and does not read it. → Killing alert agent + MC investigation does NOT starve the kept analysis. *(Verify client/`analyze.js` don't hard-depend on fresh `game_context`; worst case = dashboard staleness, not a poll break.)*
-2. **Learning agent — intended break → repurpose (§5).** It reads the `alerts` table to build BUY/BWC/position arcs; with those off, arc-building yields nothing. Transition gap between Phase 1 (off) and Phase 2 (sweet-spot on) is acceptable on a controlled WNBA timeline.
+### Kill sites — 4 gates (all WNBA-gated, reversible)
+
+| # | Path | Site(s) | Gate |
+|---|---|---|---|
+| 1 | **Main alert path** — BUY / BWC / WINDOW BUY / EXIT / POSITION_*. Covers the PENDING lock-row insert (8286), the **main agent Opus call (8293)**, and the **main alert ntfy (8329)**. | `routeV2Alert()` **def 8034** | Early-return at top of `routeV2Alert`: `return { decision:'LEGACY_OFF', sent:false }`. One guard kills lock-row + Opus + ntfy together (must be block-level — the lock-row precedes the slow await per the concurrency hotfix). |
+| 2 | **Legacy position-update flow** — the **2nd `runAlertAgent` Opus call (5993)**, its AUTO_ANALYSIS `alerts` inserts, and position-update ntfy (**6090** SEND "UPDATE: …", **6105** DOWNGRADE "WATCH: …"). | CAL-block **Step 10**, opens **~5939** at `if (calConviction.tier !== 'NO ENTRY' && ind.score >= 0.55)` | Gate the whole Step-10 sub-block. |
+| 3 | **BWC-death alert** — TRACKING_INVALIDATED `alerts` insert + ntfy (**7890**). Mechanical, no agent. | BWC-death block **~7882–7891** | Gate the insert + `sendNtfy`. |
+| 4 | **MC-investigation block** — MC INVESTIGATING ntfy (**9126**), STRUCTURAL STRESS ntfy (**9183**), **MC-investigation Opus call (9254/9259)**, position-exit ntfy (**9277** primary / **9287** fallback). | canary→investigate block **~9090–~9300** | Gate block entry. Ends *before* the calibration-transition capture (~9360+) — see Keep. |
+
+### Keep (unchanged for WNBA)
+- **2500-tok per-quarter analysis** — Opus call **5884** → `analyses` INSERT **~5915**. **CORRECTION:** this call is **already store-only — it self-pushes nothing.** The thing that pushes at 6090/6105 is the *separate* legacy position-update agent (gate #2), not this analysis. Phase 2 §6 reorients this prompt.
+- `computeServerContext` (**5752**) feeding that analysis.
+- **Primary poll snapshot** INSERT (**7703**) — the data substrate. Phase-2 gate-output columns populate here.
+- **Calibration-transition snapshot** INSERT (**9379**, tagged Q2_END/Q3_END/…) — gold-standard calibration data. **CORRECTION:** this is the calibration capture, **not** an investigation write; gate #4 does **not** touch it.
+- **`game_context` write** (`computeServerContext` **9421** → INSERT **9425**, `ON CONFLICT … DO UPDATE`). **CORRECTION:** this lives in the calibration-transition capture, **not** the MC-investigation block; it fires on quarter transitions (not canary), so it does **not** "die with the investigation." It is league-tagged, no WNBA consumer reads it (§7.3), and it is a cheap write → **leave it running for WNBA; not a Phase-1 target.**
+- Always-on MC trajectory + XGB compute (no Opus).
+- Pregame thesis (`pregame-agent.mjs`, separate fn) — Decision #2.
+
+### OPEN SUB-DECISION — `generateFallbackThesis` (NEW finding, was not in the kill list)
+Poll-loop pregame-thesis safety net: **def 2643**, Opus call **2720** (1000 tok) → writes `theses` `ON CONFLICT DO NOTHING` → then **ntfy "Thesis (late)" at 2742**. Invoked **7449**, **not league-gated**, guarded only by `!_thesisAttempted.has(game.id)`. This is the fn that covered WNBA during the pregame-404 outage (`8edf8b0`). It is a *thesis* generator (pregame-equivalent), **not** an in-game alert — but it (a) burns an Opus call, (b) pushes an ntfy that competes with "the sweet-spot alert is the only push," and (c) its prompt carries legacy conviction/control-score vocabulary.
+- **Recommended:** KEEP the Opus call (preserve the WNBA thesis safety net → `theses`, dashboard-visible) + **kill only the 2742 ntfy for WNBA**. Reorient its prompt to the sweet-spot lens in Phase 2 §6 alongside the kept analysis + pregame prompts.
+- Alternatives: keep both (accept a pregame-style push); kill both for WNBA (**risk:** if pregame cron misses, WNBA gets *no* thesis — the exact 8edf8b0 failure).
+- *(Not touched: the `test_ntfy=1` manual probe at 6134 — diagnostic only, leave alone.)*
+
+### Cascade trace (corrected)
+1. **`game_context` — KEEP, no gate.** *(Corrects the earlier "CLEARED / written only at 9421 inside MC-investigation.")* The single write (9421/9425) is in the calibration-transition capture, fires on quarter transitions (not the canary), is league-tagged, and is unread by any WNBA consumer → harmless to leave on; **not** killed by gate #4. NBA/NCAAMB readers (`bdl.html`/`index.html`/`ncaamb*.html`) untouched.
+2. **Learning agent — intended break → repurpose (§5).** Legacy `alerts` arcs go empty under Phase 1. Acceptable gap Phase 1→2 on a controlled WNBA timeline.
 3. **State machine — harmless dormancy.** BWC/position/graduation keep writing `games.live_tracking` each cycle but fire no ntfy; snapshot cols `bwc_state/grad_rank/position_team` stay populated (no null surprise); no poll-path SELECT touched.
-4. **Dashboards — quiet badges.** Legacy badges still render from `live_tracking` (Phase 1) but stop pushing. The **Scoring Comp panel (the gates) is client-side, independent, unaffected** — the edge view is untouched.
-5. **Anthropic spend.** Drops alert agent (500/alert) + MC investigation immediately. Remaining: per-quarter analysis (kept) + pregame. Sweet-spot alert path (Phase 2) is mechanical → **0 Opus**.
-6. **`alerts` table.** Stops receiving legacy rows; sweet-spot rows go to the **new `sweetspot_alerts` table** (resolved §7b.3) with an `alert_subtype` column for multiple Claude-derived types.
+4. **Dashboards — quiet badges.** Legacy badges still render from `live_tracking` but stop pushing. The client **Scoring Comp panel (the gates) is independent, unaffected** — the edge view is untouched.
+5. **Anthropic spend (per WNBA poll cycle).** Drops main-alert agent (gate 1), position-update agent (gate 2), and MC-investigation (gate 4). **KEEP:** 2500-tok per-quarter analysis + (recommended) fallback thesis. Phase-2 sweet-spot alert = **0 Opus**.
+6. **`alerts` table.** Stops receiving legacy WNBA rows; sweet-spot rows → new `sweetspot_alerts` (§7b.3, `alert_subtype` col).
 
-### Sub-decision flagged
-- Per-quarter analysis currently **pushes ntfy** (6086/6101). **DECIDED: store-only** — compute + write to `analyses`, kill the push (6086/6101). No quarter summaries to ntfy; the sweet-spot alert is the only push.
+### Phase 1 implementation checklist
+1. Add `WNBA_LEGACY_ALERTS_OFF` (env-var read at module scope; default OFF).
+2. Gate #1 — early-return atop `routeV2Alert` (8034).
+3. Gate #2 — wrap CAL-block Step 10 (~5939).
+4. Gate #3 — wrap BWC-death insert + ntfy (~7882–7891).
+5. Gate #4 — wrap MC-investigation block entry (~9090).
+6. `generateFallbackThesis` — per the resolved sub-decision (default rec: gate **only** the 2742 ntfy for WNBA).
+7. `node -c` gate. Grep-confirm every `WNBA_LEGACY_ALERTS_OFF` use is paired with `&& league === 'wnba'`.
+
+### Phase 1 test plan
+- **NBA byte-identical:** poll run flag-ON vs flag-OFF on a replayed/contrived NBA slate → identical alerts/ntfy/snapshots (guard false for NBA ⇒ zero delta).
+- **WNBA silence:** flag ON, tonight's slate fires **zero** legacy ntfy (TRACKING / BUY / BWC / WINDOW BUY / EXIT / position-update / MC INVESTIGATING / STRUCTURAL STRESS / position-exit) and **zero** legacy Opus calls (log-verify agent / investigation / position-update skipped).
+- **Substrate intact:** primary snapshot (7703) + calibration snapshot (9379) still write; 2500-tok analysis still writes `analyses`; pregame thesis present; (recommended) fallback thesis still writes `theses` *without* ntfy; `game_context` still writes; poll completes clean.
+- **Reversibility:** flip flag OFF → legacy alerts resume next cycle.
 
 ---
 
@@ -79,7 +110,7 @@ Move server-side, **inlined** into `poll-live-bdl.mjs` (Netlify bundles function
 - **Dedup:** fire once per game on first reveal; re-fire if edge strengthens (+X pp) or after cooldown (Y min); emit terse `SWEET SPOT CLOSED — [banked +10 / Q4 / deficit out of band]`. Mirror BWC dedup (5min OR +0.10).
 
 ### Snapshot gate-output storage (schema diff)
-`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS`: `ss_leader_alias text, ss_leader_wp real, ss_trailer_wp real, ss_quality_gap real, ss_leader_efg real, ss_leader_efg_band text, ss_variance_share real, ss_fade_tier text, ss_collapse_tier text, ss_collapse_true real, ss_lead_class text, ss_line_used int, ss_line_consensus int, ss_implied real, ss_edge real, ss_kelly_size real, ss_alert_fired bool`. Populate at 7699. Run `?action=init`. **Do NOT widen any poll-path SELECT** (hard rule) — write-only, read later by the tracker + backtests. The second snapshot INSERT (9375, in investigation) disappears when investigation is killed — ensure 7699 is the sole writer.
+`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS`: `ss_leader_alias text, ss_leader_wp real, ss_trailer_wp real, ss_quality_gap real, ss_leader_efg real, ss_leader_efg_band text, ss_variance_share real, ss_fade_tier text, ss_collapse_tier text, ss_collapse_true real, ss_lead_class text, ss_line_used int, ss_line_consensus int, ss_implied real, ss_edge real, ss_kelly_size real, ss_alert_fired bool`. Populate at 7699. Run `?action=init`. **Do NOT widen any poll-path SELECT** (hard rule) — write-only, read later by the tracker + backtests. **Populate the new columns at the primary poll snapshot (7703).** *(Corrected: there are two legitimate snapshot writers — primary poll (7703) + calibration-transition tagged (9379, Q2_END/Q3_END) — and **both are kept**. Neither is an "investigation" write; the MC-investigation block writes no snapshot. The earlier "2nd INSERT at 9375 in investigation disappears" note was a mis-attribution.)*
 
 ---
 
@@ -111,7 +142,7 @@ Keep the 2500-tok per-quarter call; rewrite the prompt to the sweet-spot lens on
    - **Writers:** poll MC-investigation (9421, `serverCtx`); clients via `save_context` — pushers are **`index.html` (NBA) + `ncaamb.html` (NCAAMB)**, NOT `wnba-bdl.html`.
    - **Readers:** clients via `get_context` — **`bdl.html` + `index.html` (NBA), `ncaamb.html` + `ncaamb-bdl.html` (NCAAMB)**; plus the V2 test harness. The poll's per-quarter auto-analysis does **not** call `get_context`.
    - **`wnba-bdl.html` neither reads nor writes it; no WNBA-path consumer reads it.**
-   - **Decision:** keep the `game_context` table + `save_context`/`get_context` endpoints (NBA + NCAAMB depend on them). The only WNBA-relevant write is the MC-investigation writer (9421), which dies *with* the investigation — **league-gate the kill to WNBA** so NBA/NCAAMB investigation writes are untouched. (Earlier "cascade cleared / no client reads it" was wrong — corrected here.)
+   - **Decision:** keep the `game_context` table + `save_context`/`get_context` endpoints (NBA + NCAAMB depend on them). The only WNBA-relevant write is at **9421/9425 — but re-verified at `f260031`: it sits in the calibration-transition capture, NOT the MC-investigation block, and fires on quarter transitions (not the canary), so it does NOT die when the investigation is gated.** It is league-tagged and unread by any WNBA consumer → **leave it running for WNBA (cheap, harmless); no Phase-1 gate.** NBA/NCAAMB writers/readers untouched. *(Two prior characterizations were off — "cascade cleared / no client reads it" AND "dies with the investigation"; both corrected here and in §3.)*
 
 4. **Variance share — PBP-zone, and HALF-BUILT already.** Box-derived is OFF the table for WNBA (box paint/mid splits are the v3 gap). The poll loop **already computes `leadComp.classification`** (STRUCTURAL/VARIANCE/MIXED) from PBP zones, stored as `lead_class` (line 7589). Porting the full fade read mostly means **exposing the variance-share % + leader eFG band** off that existing machinery + box eFG. **Decision: PBP-zone (Manny's client/server-parity bias confirms it).**
 
