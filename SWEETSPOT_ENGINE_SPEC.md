@@ -171,7 +171,9 @@ What Phase 1 removed was Opus in the *decision* loop. This adds Opus as *narrati
 - **`INDIVIDUAL_HEATER` backtest** (524 + 95): does heater-dependence erode MORE than the line implies OOS? Metric = lead-DEPENDENCE composite (top-scorer pts share + their TS/eFG vs OWN season norm + shot-type variance-vs-rim + support-cast vacuum), NOT raw TS. **Separate research thread**; if validated → its own subtype, not a B retrofit.
 - **2b** mechanical alert (two-stage) + odds consensus/stale-guard + `sweetspot_alerts` writes. **2c** tracker repurpose. **2d** per-quarter prompt reorient.
 
+---
 
+## 5. Learning agent → calibration + execution tracker (Decision D)
 
 `post-game-agent.mjs`, nightly:
 1. Pull `SWEETSPOT` alerts + gate-output snapshot rows for the slate; join BDL final scores.
