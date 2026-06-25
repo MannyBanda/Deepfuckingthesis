@@ -15,6 +15,13 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
+// ── PHASE 1 KILL-SWITCH ─────────────────────────────────────────────────────
+// WNBA legacy-alert teardown (sweet-spot engine migration). Ships DARK: default
+// OFF (legacy alerts ON). Set env WNBA_LEGACY_ALERTS_OFF=1 in Netlify to activate.
+// Every consumer gates on (WNBA_LEGACY_ALERTS_OFF && league === 'wnba') so NBA /
+// NCAAMB are byte-identical at runtime. Reversible via env flip (no redeploy).
+const WNBA_LEGACY_ALERTS_OFF = process.env.WNBA_LEGACY_ALERTS_OFF === '1';
+
 // ── XGBOOST MODEL ──────────────────────────────────────────────────────────
 // Raw stats structural model — 300 trees, 13 features (no progress), trained on 1,235 games.
 // Provides independent win probability from raw box score stats without using
@@ -5936,7 +5943,10 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
 
     // ── 10. Route through alert agent (unified path — no independent ntfy push) ──
     // Agent decides BUY or WATCH based on mechanical conviction + Sonnet context
-    if (calConviction.tier !== 'NO ENTRY' && ind.score >= 0.55) {
+    // PHASE 1: WNBA legacy alerts off → skip the position-update agent flow
+    // (2nd runAlertAgent Opus call + UPDATE/WATCH ntfy). The 2500-tok analysis
+    // above is already store-only and is unaffected.
+    if (!(WNBA_LEGACY_ALERTS_OFF && league === 'wnba') && calConviction.tier !== 'NO ENTRY' && ind.score >= 0.55) {
       try {
         const margin = Math.abs((ind.homePts || 0) - (ind.awayPts || 0));
         const ctrlIsHome = ind.controlTeam === hA;
@@ -7879,6 +7889,7 @@ export default async function(req) {
               try { await sql`UPDATE games SET live_tracking = ${JSON.stringify(lt)} WHERE id = ${game.id}`; } catch(e) {}
 
               // TRACKING_INVALIDATED alert — mechanical, no agent
+              if (!(WNBA_LEGACY_ALERTS_OFF && league === 'wnba')) {
               const _deathPosNote = _deadHadPO
                 ? `\n${_deadTeam} had a ${(_deadRank || 'confirmed').toLowerCase()} position. The structural case supporting this position is gone. Consider exiting if you took this position.`
                 : '';
@@ -7889,6 +7900,7 @@ export default async function(req) {
               } catch (e) { log(`${matchup}: TRACKING_INVALIDATED DB insert error: ${e.message}`); }
               await sendNtfy(`TRACKING INVALIDATED — ${matchup}`, _deathBody, 3);
               log(`${matchup}: TRACKING_INVALIDATED ntfy sent`);
+              }
             }
 
             // ── V2 BWC candidate tracking (3-hold minimum for initial fire) ──
@@ -8032,6 +8044,9 @@ export default async function(req) {
             // ── V2 ALERT ROUTING HELPER ──
             // Assembles context, calls agent with v2 prompt, sends ntfy, writes DB
             async function routeV2Alert(v2Type, v2Tier, v2ExitSev, v2IsBuy) {
+              // PHASE 1: WNBA legacy alerts off → skip the entire main-alert path
+              // (PENDING lock-row, agent Opus call @runAlertAgent, alert ntfy) up front.
+              if (WNBA_LEGACY_ALERTS_OFF && league === 'wnba') return { decision: 'LEGACY_OFF', sent: false };
               // Map alert type → ntfy title
               const V2_TITLE_MAP = {
                 'TRACKING': 'TRACKING',
@@ -9055,7 +9070,11 @@ export default async function(req) {
           // Replaces VULNERABILITY. Combined canary: MC<0.70 OR floor-MC divergence>0.15.
           // PBP-derived canary → triggered investigation with post-trigger rates → pattern classification.
           // Q2+ gate — early detection trades precision for warning time.
-          if (currentPeriod >= 2 && ind.controlTeam && ind.controlTeam !== 'Neither'
+          // PHASE 1: WNBA legacy alerts off → skip the entire canary→investigation
+          // chain (INVESTIGATING/STRUCTURAL STRESS/position-exit ntfy + MC Opus call).
+          // Upstream _pollMC/_mcCum (line ~7647/7676) and the calibration snapshot are unaffected.
+          if (!(WNBA_LEGACY_ALERTS_OFF && league === 'wnba')
+              && currentPeriod >= 2 && ind.controlTeam && ind.controlTeam !== 'Neither'
               && _v2Margin >= 0 && alertMinsLeft >= 1.0) {
             const _mcCtrlIsHome = ind.controlTeam === hA;
             const _mcCtrlSide = _mcCtrlIsHome ? 'home' : 'away';
