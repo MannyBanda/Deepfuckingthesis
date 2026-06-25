@@ -1559,6 +1559,7 @@ async function fetchOddsAPIBatch(league) {
   if (!apiKey) return {};
   const sportKey = league === 'wnba' ? 'basketball_wnba' : 'basketball_nba';
   const teamMap = league === 'wnba' ? ODDS_API_TEAMS_WNBA : ODDS_API_TEAMS;
+  const cfg = LEAGUES[league] || {};
   try {
     const url = `https://api.the-odds-api.com/v4/sports/${sportKey}/odds?apiKey=${apiKey}&regions=us,us2&markets=h2h,spreads,totals&oddsFormat=american`;
     const resp = await fetch(url);
@@ -1603,7 +1604,10 @@ async function fetchOddsAPIBatch(league) {
       const total = median(totals);
 
       if (bestHomeML == null && homeSpread == null) continue;
-      result[homeAlias] = {
+      // Key by BDL-canonical alias to match the poll-loop lookup (hA = cfg.aliasMap[home_alias]).
+      // Was keyed by SR alias -> silent miss -> inferior BDL fallback for GSV/WAS/PDX/LVA/LAS/NYL/TOY.
+      const canonHome = cfg.aliasMap?.[homeAlias] || homeAlias;
+      result[canonHome] = {
         homeSpread, homeML: bestHomeML, awayML: bestAwayML, total,
         books: (g.bookmakers || []).length,
       };
