@@ -4239,6 +4239,108 @@ function computeLeadComposition(summary) {
   return { classification, leadTeam, structuralMargin: leadStruct, varianceMargin: leadVar };
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// SWEET-SPOT GATE ENGINE (Phase 2a) — ported VERBATIM from wnba-bdl.html (the
+// source of truth). Standalone fns; wired into the WNBA poll gate-compute step
+// in a later chunk. PARITY is the acceptance test — do NOT "improve" logic here.
+// NOTE: computeScoringComp here does NOT attach efgBox/fga — that augmentation
+// (box eFG, matches I3) happens at the wiring step, mirroring buildScoringCompForCard.
+// ══════════════════════════════════════════════════════════════════════════════
+var EFG_BANDS = { 1:[54,61], 2:[56,63], 3:[58,66], 4:[60,69] };
+function efgTier(efg, period) {
+  if (efg == null || isNaN(efg)) return { tier:'na', color:'var(--fg-dim)' };
+  var b = EFG_BANDS[period] || EFG_BANDS[4];
+  if (efg <= b[0]) return { tier:'green', color:'var(--green)' };
+  if (efg <= b[1]) return { tier:'orange', color:'var(--amber)' };
+  return { tier:'red', color:'var(--coral)' };
+}
+function _clkSec(c) { if (c == null) return 999; c = String(c); if (c.indexOf(':') > -1) { var p = c.split(':'); return (+p[0])*60 + (+p[1]); } var n = parseFloat(c); return isNaN(n) ? 999 : n; }
+function americanToImplied(ml) { if (ml == null || ml === '') return null; ml = Number(ml); if (isNaN(ml) || ml === 0) return null; return ml > 0 ? 100/(ml+100) : (-ml)/((-ml)+100); }
+function cbDepthRate(d) { if (d <= 5) return 0.68; if (d <= 9) return 0.56; if (d <= 14) return 0.50; if (d <= 19) return 0.44; return 0; }
+
+function divergenceRead(sc) {
+  if (!sc || !sc.home || !sc.away) return null;
+  var h = sc.home, a = sc.away, p = sc.period || 0, clk = sc.clock || '';
+  var hp = h.total || 0, ap = a.total || 0, margin = Math.abs(hp - ap);
+  var L = hp >= ap ? h : a, T = hp >= ap ? a : h, efg = L.efgBox, v = L.vPct, fga = L.fga || 0;
+  function R(t,l,c,x){ return { tier:t, label:l, color:c, text:x }; }
+  if (margin <= 2) return R('EVEN','—','var(--fg-dim)','Game even — no lead to fade.');
+  if (efg == null || fga < 12) return R('WAIT','WAIT','var(--fg-dim)', L.team+' shot sample too small to judge.');
+  if (margin >= 10) return R('NO FADE','BANKED','var(--green)', L.team+' lead is banked (+'+margin+') — regression will not erase double digits.');
+  if (p >= 4 || (p === 3 && _clkSec(clk) < 180)) return R('NO FADE','LATE','var(--fg-dim)', L.team+' heat is earned this late — not a fade window.');
+  var t = efgTier(efg,p).tier, ef = Math.round(efg)+'% eFG';
+  if (t === 'green') return R('NO EDGE','—','var(--fg-dim)', L.team+' not above sustainable ('+ef+') — no divergence.');
+  if (v <= 45) return R('NO FADE','STRUCTURAL','var(--green)', L.team+' hot ('+ef+') but structural — paint/FT-driven, sticky lead.');
+  if ((efg >= 70 && v > 45) || (t === 'red' && v > 55)) return R('STRONG FADE','FADE '+T.team,'var(--coral)','⚠ '+L.team+' on unsustainable variance ('+ef+', V '+Math.round(v)+'%), only +'+margin+' in Q'+p+'. Back '+T.team+' at plus money.');
+  if (t === 'orange' && v > 55) return R('LEAN FADE','LEAN '+T.team,'var(--amber)', L.team+' '+ef+' variance-sourced and thin (+'+margin+'). Lean fade '+T.team+' if plus money.');
+  return R('NO FADE','MIXED','var(--fg-dim)', L.team+' hot ('+ef+') but mixed-sourced — not a clean fade.');
+}
+
+// leaderWP/trailerWP in [0,1] or null; deficit>0 int; period int; fadeRead = sc.fadeRead | null
+function comebackProb(leaderWP, trailerWP, deficit, period, fadeRead) {
+  if (leaderWP == null || trailerWP == null) return { tier:'NO_DATA' };
+  if (leaderWP >= 0.40) return { tier:'NO_EDGE', leaderWP:leaderWP };
+  if (deficit >= 20) return { tier:'DEAD', deficit:deficit };
+  var gap = trailerWP - leaderWP;
+  if (gap < 0.10) return { tier:'NO_QUALITY_EDGE', gap:gap };
+  var base = cbDepthRate(deficit), pPoint, drivers = [];
+  if (gap > 0.20) { var lean = Math.max(-1, Math.min(1, (gap-0.20)/0.20))*0.05; pPoint = Math.max(0.10, Math.min(0.85, base+lean)); }
+  else { pPoint = base*0.75; }
+  if (fadeRead && fadeRead.tier === 'STRONG FADE') { pPoint = Math.min(0.85, pPoint+0.03); drivers.push('fragile lead'); }
+  var tier = gap > 0.20 ? (deficit <= 7 ? 'SHORT' : 'STRONG') : 'MODERATE';
+  return { tier:tier, pPoint:pPoint, pLow:Math.max(0.05, pPoint-0.07), pHigh:Math.min(0.95, pPoint+0.07), gap:gap, drivers:drivers };
+}
+// sizes off the point estimate; quarter-Kelly, hard-capped at 12% of bankroll
+function comebackEV(pPoint, ml) {
+  var implied = americanToImplied(ml); if (implied == null) return { noLine:true };
+  var edge = pPoint - implied, mln = Number(ml);
+  if (edge <= 0) return { verdict:'NO_VALUE', implied:implied, line:mln };
+  var decNet = mln > 0 ? mln/100 : 100/Math.abs(mln);
+  var fullK = (pPoint*(decNet+1)-1)/decNet;
+  return { implied:implied, edge:edge, size:Math.max(0, Math.min(0.12, 0.25*fullK)), line:mln };
+}
+
+function computeScoringComp(pbp, hA, aA, hPts, aPts) {
+  if (!pbp || !pbp.home || !pbp.away) return null;
+  function breakdown(side, total) {
+    var rimM = side.rim ? side.rim.made||0 : 0, rimA = side.rim ? side.rim.att||0 : 0;
+    var pntM = side.paint ? side.paint.made||0 : 0, pntA = side.paint ? side.paint.att||0 : 0;
+    var midM = side.mid ? side.mid.made||0 : 0, midA = side.mid ? side.mid.att||0 : 0;
+    var threeM = side.threes ? side.threes.made||0 : 0, threeA = side.threes ? side.threes.att||0 : 0;
+    var allPaintM = rimM+pntM, allPaintA = rimA+pntA;
+    var paintPts = allPaintM*2;
+    var threePts = threeM*3;
+    var midPts = midM*2;
+    var ftPts = Math.max(0, total-paintPts-threePts-midPts);
+    var ftM = ftPts, ftA = ftPts>0 ? Math.round(ftPts/0.78) : ftPts;
+    var structural = paintPts+ftPts;
+    var variance = threePts+midPts;
+    var sPct = total>0 ? Math.round(structural/total*100) : 0;
+    var paintPct = allPaintA>0 ? Math.round(allPaintM/allPaintA*100) : 0;
+    var threePct = threeA>0 ? Math.round(threeM/threeA*100) : 0;
+    var midPct = midA>0 ? Math.round(midM/midA*100) : 0;
+    return { total:total, paint:paintPts, ft:ftPts, three:threePts, midOther:midPts,
+      structural:structural, variance:variance, sPct:sPct, vPct:100-sPct,
+      paintM:allPaintM, paintA:allPaintA, paintPct:paintPct,
+      ftM:ftM, ftA:ftA,
+      tpm:threeM, tpa:threeA, threePct:threePct,
+      midM:midM, midA:midA, midPct:midPct };
+  }
+  var h = breakdown(pbp.home, hPts); var a = breakdown(pbp.away, aPts);
+  h.team = hA; a.team = aA;
+  var margin = hPts-aPts; var absMargin = Math.abs(margin);
+  var sDelta = h.structural-a.structural; var vDelta = h.variance-a.variance;
+  var leadTeam = margin>=0 ? hA : aA, trailTeam = margin>=0 ? aA : hA;
+  var leadS = margin>=0 ? sDelta : -sDelta; var leadV = margin>=0 ? vDelta : -vDelta;
+  var classification = 'MIXED', durability = '';
+  if (absMargin <= 2) { classification = 'EVEN'; durability = 'Margin too small to classify'; }
+  else if (leadS >= absMargin*0.6) { classification = 'STRUCTURAL'; durability = leadTeam+' lead is structural \u2014 paint/FT drives margin (+'+Math.abs(Math.round(leadS))+')'; }
+  else if (leadV >= absMargin*0.6) { classification = 'VOLATILE'; durability = leadTeam+' lead is variance-driven \u2014 3PT/mid drives margin with uncertain sustainability. Structural favors '+(leadS>=0?leadTeam:trailTeam)+' (+'+Math.abs(Math.round(leadS<0?leadS:leadS))+')'; }
+  else { classification = 'MIXED'; durability = 'No single source dominates margin'; }
+  return { home:h, away:a, structuralDelta:sDelta, varianceDelta:vDelta, leadTeam:leadTeam, classification:classification, durability:durability };
+}
+// ── END SWEET-SPOT GATE ENGINE (Phase 2a) ─────────────────────────────────────
+
 // ── VOLUME THREAT DETECTION ──────────────────────────────────────────────────
 // Identifies teams with scheme-driven high-volume 3PT production at baseline.
 // Returns per-team: active flag, projected 3PA, discount (for floor), vtBonus (for structRate).

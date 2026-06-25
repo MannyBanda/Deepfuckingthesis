@@ -172,6 +172,74 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS xgb_win_prob REAL`; } catch(e) {}
       try { await sql`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS xgb_aligned BOOLEAN`; } catch(e) {}
 
+      // ── SWEET-SPOT ENGINE (Phase 2a) — gate-output columns on snapshots (write-only parity/calibration substrate; populated at the primary poll snapshot) ──
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ss_leader_alias TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ss_leader_wp REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ss_trailer_wp REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ss_quality_gap REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ss_leader_efg REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ss_leader_efg_band TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ss_variance_share REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ss_lead_class TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ss_fade_tier TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ss_collapse_tier TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ss_collapse_true REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ss_line_used INTEGER`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ss_line_consensus INTEGER`; } catch(e) {} // 2b — null in 2a
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ss_implied REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ss_edge REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ss_kelly_size REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ss_alert_tier TEXT`; } catch(e) {} // A / B / null — would-fire tier (2a stores, no push)
+      try { await sql`ALTER TABLE snapshots ADD COLUMN IF NOT EXISTS ss_alert_fired BOOLEAN`; } catch(e) {}
+
+      // Sweet-spot alerts (table created 2a, written 2b) — extensible by alert_subtype
+      await sql`
+        CREATE TABLE IF NOT EXISTS sweetspot_alerts (
+          id SERIAL PRIMARY KEY,
+          game_id TEXT,
+          league TEXT DEFAULT 'wnba',
+          alert_subtype TEXT,
+          alert_tier TEXT,
+          period INTEGER,
+          clock TEXT,
+          leader_alias TEXT,
+          trailer_alias TEXT,
+          leader_wp REAL,
+          trailer_wp REAL,
+          quality_gap REAL,
+          leader_efg REAL,
+          leader_efg_band TEXT,
+          variance_share REAL,
+          lead_class TEXT,
+          fade_tier TEXT,
+          collapse_tier TEXT,
+          collapse_true REAL,
+          deficit INTEGER,
+          margin INTEGER,
+          line_used INTEGER,
+          line_consensus INTEGER,
+          implied REAL,
+          edge REAL,
+          kelly_size REAL,
+          narration_text TEXT,
+          ntfy_sent BOOLEAN DEFAULT false,
+          outcome TEXT,
+          pnl REAL,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )`;
+      try { await sql`CREATE INDEX IF NOT EXISTS idx_ssa_game ON sweetspot_alerts (game_id)`; } catch(e) {}
+
+      // Standings cache (daily refresh) — keyed BDL-canonical alias → W/L; feeds comebackProb leaderWP/trailerWP
+      await sql`
+        CREATE TABLE IF NOT EXISTS standings_cache (
+          league TEXT NOT NULL,
+          team_alias TEXT NOT NULL,
+          wins INTEGER DEFAULT 0,
+          losses INTEGER DEFAULT 0,
+          updated_at TIMESTAMPTZ DEFAULT NOW(),
+          PRIMARY KEY (league, team_alias)
+        )`;
+
       // Quarter-level data for server-authoritative rolling window
       try { await sql`ALTER TABLE games ADD COLUMN IF NOT EXISTS quarter_data JSONB`; } catch(e) {}
 
