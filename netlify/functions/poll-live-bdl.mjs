@@ -21,6 +21,9 @@ import { dirname, join } from 'path';
 // Every consumer gates on (WNBA_LEGACY_ALERTS_OFF && league === 'wnba') so NBA /
 // NCAAMB are byte-identical at runtime. Reversible via env flip (no redeploy).
 const WNBA_LEGACY_ALERTS_OFF = process.env.WNBA_LEGACY_ALERTS_OFF === '1';
+// Phase 2a sweet-spot gate compute — runs ON-for-WNBA by default (decision (a));
+// env WNBA_SS_COMPUTE_OFF=1 kills it. Compute + store only (no alert) until 2b.
+const WNBA_SS_COMPUTE_OFF = process.env.WNBA_SS_COMPUTE_OFF === '1';
 
 // ── XGBOOST MODEL ──────────────────────────────────────────────────────────
 // Raw stats structural model — 300 trees, 13 features (no progress), trained on 1,235 games.
@@ -1561,6 +1564,41 @@ async function bdlOdds(league, bdlGameId) {
 // Fetch live odds from The Odds API — one call returns ALL live NBA games
 // Returns map: { 'NYK': { homeSpread, homeML, awayML, total, books }, ... } keyed by HOME alias
 // Uses best available line (most favorable ML for each side)
+// ── STANDINGS CACHE (Phase 2a) — daily-refreshed BDL standings → W/L for comebackProb ──
+// Keyed BDL-canonical alias (matches hA/aA post-aliasMap). gp<4 → caller's _wp returns
+// null (NO_DATA). Cached in DB (standings_cache) so it survives container recycles;
+// refetched only when the newest row is stale (> ~20h). Cheap: ~1 BDL call/day.
+async function fetchStandingsCache(sql, league) {
+  const cfg = LEAGUES[league] || {};
+  const out = {};
+  // 1. DB cache — fresh if newest row < 20h old
+  try {
+    const rows = await sql`SELECT team_alias, wins, losses, EXTRACT(EPOCH FROM (NOW() - updated_at)) AS age_s FROM standings_cache WHERE league = ${league}`;
+    if (rows.length > 0) {
+      const maxAge = Math.max(...rows.map(r => Number(r.age_s) || 1e9));
+      if (maxAge < 72000) {
+        rows.forEach(r => { out[r.team_alias] = { w: Number(r.wins) || 0, l: Number(r.losses) || 0 }; });
+        return out;
+      }
+    }
+  } catch (e) { /* table missing / read error → fall through to fetch */ }
+  // 2. Stale or empty → fetch from BDL + upsert
+  try {
+    const yr = new Date().getFullYear();
+    const data = await bdlFetch(`${cfg.bdlPrefix}/v1/standings?season=${yr}`);
+    const arr = (data && data.data) || [];
+    for (const s of arr) {
+      const abbr = s.team && s.team.abbreviation;
+      if (!abbr) continue;
+      const w = Number(s.wins) || 0, l = Number(s.losses) || 0;
+      out[abbr] = { w, l };
+      try { await sql`INSERT INTO standings_cache (league, team_alias, wins, losses, updated_at) VALUES (${league}, ${abbr}, ${w}, ${l}, NOW()) ON CONFLICT (league, team_alias) DO UPDATE SET wins = ${w}, losses = ${l}, updated_at = NOW()`; } catch (e) {}
+    }
+    log(`Standings cache refreshed (${league}): ${Object.keys(out).length} teams`);
+  } catch (e) { log(`Standings fetch failed (${league}): ${e.message}`); }
+  return out;
+}
+
 async function fetchOddsAPIBatch(league) {
   const apiKey = process.env.ODDS_API_KEY;
   if (!apiKey) return {};
@@ -7177,6 +7215,7 @@ export default async function(req) {
       // Fetch live odds from The Odds API (one call, all games)
       // Returns { 'NYK': { homeSpread, homeML, awayML, total, books }, ... }
       const oddsAPICache = (league === 'nba' || league === 'wnba') ? await fetchOddsAPIBatch(league) : {};
+      const ssStandings = (league === 'wnba' && !WNBA_SS_COMPUTE_OFF) ? await fetchStandingsCache(sql, league) : {};
 
       for (let gi = 0; gi < potentiallyLive.length; gi++) {
         const game = potentiallyLive[gi];
@@ -7891,6 +7930,73 @@ export default async function(req) {
             } catch(e) { /* non-fatal — initialize fresh */ }
 
             lt = updateLiveTracking(lt, ind.controlTeam, ind.score, currentPeriod, clock, hA, currentPeriod);
+
+            // ── SWEET-SPOT GATE COMPUTE (Phase 2a) — WNBA only; compute + store, NO alert (2b fires) ──
+            // eFG from PBP zone-sums (same feed as variance share — mitigation #1), never SR box.
+            // A = deterministic pristine dual-gate; B left NULL (earned in the replay bucket analysis).
+            // Isolated UPDATE (does NOT touch the snapshot INSERT or the NBA path); try/catch → never breaks polling.
+            if (league === 'wnba' && !WNBA_SS_COMPUTE_OFF) {
+              try {
+                const _ssPbp = game._bdlPbp;
+                if (_ssPbp && _ssPbp.home && _ssPbp.away) {
+                  const _ssHp = Number(ind.homePts) || 0, _ssAp = Number(ind.awayPts) || 0;
+                  const _ssSc = computeScoringComp(_ssPbp, hA, aA, _ssHp, _ssAp);
+                  if (_ssSc) {
+                    const _zEfg = function(side) {
+                      var rm = side.rim?.made||0, pm = side.paint?.made||0, mm = side.mid?.made||0, tm = side.threes?.made||0;
+                      var ra = side.rim?.att||0,  pa = side.paint?.att||0,  ma = side.mid?.att||0,  ta = side.threes?.att||0;
+                      var fgm = rm+pm+mm+tm, fg3m = tm, fga = ra+pa+ma+ta;
+                      return { efg: fga > 0 ? ((fgm + 0.5*fg3m)/fga*100) : null, fga: fga };
+                    };
+                    var _ssHe = _zEfg(_ssPbp.home), _ssAe = _zEfg(_ssPbp.away);
+                    _ssSc.home.efgBox = _ssHe.efg; _ssSc.home.fga = _ssHe.fga;
+                    _ssSc.away.efgBox = _ssAe.efg; _ssSc.away.fga = _ssAe.fga;
+                    _ssSc.period = currentPeriod; _ssSc.clock = clock;
+                    _ssSc.fadeRead = divergenceRead(_ssSc);
+
+                    var _ssHomeTrails = _ssAp > _ssHp;
+                    var _ssLeadAl = _ssHomeTrails ? aA : hA, _ssTrailAl = _ssHomeTrails ? hA : aA;
+                    var _ssDeficit = Math.abs(_ssHp - _ssAp);
+                    var _ssWp = function(al) { var r = ssStandings[al]; if (!r) return null; var gp = (r.w||0)+(r.l||0); return gp >= 4 ? (r.w/gp) : null; };
+                    var _ssLeadWP = _ssWp(_ssLeadAl), _ssTrailWP = _ssWp(_ssTrailAl);
+                    var _ssPr = comebackProb(_ssLeadWP, _ssTrailWP, _ssDeficit, currentPeriod, _ssSc.fadeRead);
+                    var _ssTrailML = _ssHomeTrails ? (odds && odds.homeML) : (odds && odds.awayML);
+                    var _ssEv = (_ssPr.pPoint != null) ? comebackEV(_ssPr.pPoint, _ssTrailML) : null;
+
+                    var _ssFadeT = _ssSc.fadeRead ? _ssSc.fadeRead.tier : null;
+                    var _ssCollT = _ssPr.tier;
+                    var _ssClass = _ssSc.classification;
+                    var _ssEdge = (_ssEv && _ssEv.edge != null) ? _ssEv.edge : null;
+                    var _ssLeadEfg = _ssHomeTrails ? _ssSc.away.efgBox : _ssSc.home.efgBox;
+                    var _ssLeadBand = _ssLeadEfg != null ? efgTier(_ssLeadEfg, currentPeriod).tier : null;
+                    var _ssVar = _ssHomeTrails ? _ssSc.away.vPct : _ssSc.home.vPct;
+                    var _ssGap = (_ssLeadWP != null && _ssTrailWP != null) ? (_ssTrailWP - _ssLeadWP) : null;
+                    var _ssImplied = (_ssTrailML != null) ? americanToImplied(_ssTrailML) : null;
+                    // A = pristine dual-gate (deterministic). B intentionally left null — earned in replay.
+                    var _ssTier = null;
+                    if (_ssEdge != null && _ssEdge > 0 && currentPeriod < 4
+                        && (_ssCollT === 'STRONG' || _ssCollT === 'SHORT')
+                        && _ssFadeT === 'STRONG FADE' && _ssClass === 'VOLATILE' && _ssDeficit <= 9) {
+                      _ssTier = 'A';
+                    }
+                    var _ssFired = _ssTier != null;
+
+                    await sql`UPDATE snapshots SET
+                      ss_leader_alias = ${_ssLeadAl}, ss_leader_wp = ${_ssLeadWP}, ss_trailer_wp = ${_ssTrailWP},
+                      ss_quality_gap = ${_ssGap}, ss_leader_efg = ${_ssLeadEfg != null ? Math.round(_ssLeadEfg*10)/10 : null},
+                      ss_leader_efg_band = ${_ssLeadBand}, ss_variance_share = ${_ssVar != null ? _ssVar : null},
+                      ss_lead_class = ${_ssClass}, ss_fade_tier = ${_ssFadeT}, ss_collapse_tier = ${_ssCollT},
+                      ss_collapse_true = ${_ssPr.pPoint != null ? _ssPr.pPoint : null},
+                      ss_line_used = ${_ssTrailML != null ? parseInt(_ssTrailML) : null}, ss_implied = ${_ssImplied},
+                      ss_edge = ${_ssEdge != null ? Math.round(_ssEdge*100)/100 : null},
+                      ss_kelly_size = ${_ssEv && _ssEv.size != null ? Math.round(_ssEv.size*10000)/10000 : null},
+                      ss_alert_tier = ${_ssTier}, ss_alert_fired = ${_ssFired}
+                      WHERE game_id = ${game.id} AND period = ${currentPeriod} AND clock = ${clock} AND home_pts = ${_ssHp} AND away_pts = ${_ssAp}`;
+                    log(`${matchup}: SS — ${_ssLeadAl} +${_ssDeficit} | collapse=${_ssCollT} fade=${_ssFadeT} class=${_ssClass} band=${_ssLeadBand||'—'} edge=${_ssEdge != null ? _ssEdge.toFixed(1) : '—'} tier=${_ssTier || 'none'}`);
+                  }
+                }
+              } catch (e) { log(`${matchup}: sweetspot compute non-fatal: ${e.message}`); }
+            }
 
             // Persist biglead running max (computed before computeServer)
             if (game._trueBigLeadHome != null) lt._bigLeadHome = game._trueBigLeadHome;
