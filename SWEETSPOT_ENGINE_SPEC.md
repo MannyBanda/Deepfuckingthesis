@@ -142,7 +142,14 @@ The server has **two** lead-composition paths and they are **not** interchangeab
 - **Display / calibration-only (NO push):** any bucket that doesn't beat the line in replay.
 - **NOT B:** individual-heater / Q4-closing-capacity discretionary reads (the MIN@WSH type). The gates key on *team* eFG/variance, so an individual-heater lead reads STRUCTURAL/MIXED and won't fire — by design. That edge is the shelved **`INDIVIDUAL_HEATER`** subtype, validated separately (below), never a B retrofit.
 
-### B-earning methodology (runs inside the 2a replay)
+### C tier — Q4 collapse-only (DEFERRED, post-A/B)
+Late-game collapse reads (the NY@SEA-down-13-in-Q4 type) are **C**, not A/B. A/B are structurally confined to **pre-Q4, deficit ≤ 9** (the fade gate BANKS at margin ≥ 10 and goes LATE in Q4), so a Q4 collapse-only read can *never* be A/B — it's its own tier.
+- **Surface C only when:** the **trailer is a top-3 team** (by win%) **AND** a catchable deficit late in Q4 (Manny: "less than 10 to go in Q4" — *confirm whether deficit <10 pts or clock-based*). This is the formalized **elite-team Q4 closing-capacity** read (cf. the MIN@WSH discretionary read — supersedes the "NOT B / nothing" framing above: closing-capacity reads land here, as C).
+- **Keys on the TRAILER being elite (absolute win%), NOT the quality gap** — a *different gate* than A/B (which key on trailer-minus-leader gap). The leader need not be sub-.40; in Q4 what matters is the elite team's ability to close, not how bad the leader is. So C is its own signal, **not** "Q4 `comebackProb`." Design the gate accordingly when built.
+- **Opus MAY SUPPRESS C** — the concrete answer to the earlier "revisit Opus-suppress after we see the pattern." Tiered decision authority: **A/B fire mechanically (0-Opus, deterministic); C is mechanically-proposed but Opus-suppressable on context** (star benched, garbage time, foul math). Lowest conviction → the judgment layer earns its keep there, and only there.
+- **DEFERRED:** build A + B (2b) first. C recorded here, not built.
+
+
 - Bucket every gate-fire by **(collapse tier × divergence tier × deficit band)**.
 - Per bucket: realized win% vs predicted-true% vs line-implied.
 - **A** = the pristine bucket; **B** = the next buckets that **still beat the line**; non-line-beating buckets → display/calibration-only.
