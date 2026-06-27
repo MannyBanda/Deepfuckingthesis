@@ -131,6 +131,21 @@ The server has **two** lead-composition paths and they are **not** interchangeab
 - **DO NOT port/reuse:** `computeLeadComposition` (box-paint). Sweet spot is PBP-zone only. *(Leave it in place — NBA prompt path still uses it; just don't feed the sweet-spot engine from it.)*
 - *Availability check at impl:* `game._bdlPbp` is populated in-loop (already consumed by `ctx.pbpAudit` @4945 and the MC rate extractor), so it's present where the gates will run.
 
+### eFG source — implementation drift, CORRECTED (caught Jun 25, Manny pressure-test)
+The spec above is right (**"eFG from reliable box `(fgm+0.5·fg3m)/fga`"**), but the 2a gate-compute as shipped (`6fae745`, poll ~7945) **deviated**: it computed eFG from **PBP zone-sums** (`_zEfg`, summing rim/paint/mid/threes made+att) and mislabeled it "mitigation #1." Wrong source. **Empirical proof (n=18 live snapshots, NY@SEA / DAL@LV / LA@TOR):** zone-sum carries a **one-directional upward bias vs the official box** — mean **+1.62pp**, max **+5.2pp**, zone ≥ box in **18/18** (never once below). Mechanism: the zone regex silently drops **missed** attempts it can't classify (makes parse more reliably than misses) → denominator shrinks → eFG inflates. For a *fade* gate this is the dangerous direction — it manufactures STRONG/LEAN FADE, and +5pp flips bands. The box (`summary.home/away.statistics.field_goals_made/att/three_points_made` — the same source `raw_stats_json` already serializes) is accurate and **matches the client headline** (57.4% vs client 57% on the canonical NY@SEA snapshot; zone-sum read 59.3%). **Variance-share is unaffected** (a *made-points* ratio, robust to dropped misses → `variance_share=38` already matched the dashboard) → **stays on PBP zones.** Net: box for eFG, zones for variance — each source where it's strongest, exactly as the spec said.
+
+**Fix (gate-compute ~7945–7953):** replace `_zEfg` (zone-sum) with `_bEfg` reading the box —
+`var fgm=Number(st?.field_goals_made||st?.fgm||0)||0, fga=Number(st?.field_goals_att||st?.fga||0)||0, fg3m=Number(st?.three_points_made||st?.fg3m||0)||0; return {efg: fga>0?((fgm+0.5*fg3m)/fga*100):null, fga};` fed `_bEfg(summary.home?.statistics)` / `_bEfg(summary.away?.statistics)`. Everything downstream unchanged (`efgBox`/`fga` still feed `divergenceRead`/`efgTier`/`ss_leader_efg`). Fix the line-7935 comment ("zone-sums" → "reliable box"). **Delete `_zEfg`** (dead after swap; block-local, no other consumer).
+
+**Cascading implications:**
+- `ss_leader_efg` / `_band`: now box-sourced. Pre-fix stored rows are inflated — but every snapshot's `raw_stats_json` carries `fgm/fga/fg3m`, so **the replay recomputes box eFG retroactively** for all 619+ rows → no backfill, no data loss.
+- A-trigger: fade band now accurate → **fewer false STRONG FADE → fewer false A's** (the correction, not a regression).
+- Server/client parity: gap **2.3pp → ~0.4pp** (box 57.4 vs client player-sum 57, within rounding). Residual immaterial; optional follow-up = point the client headline at the box too for byte-exact display↔alert agreement.
+- Graceful degradation preserved: empty `summary.statistics` → eFG null → no band → no fade → no A (correct), inside the existing try/catch. No new break surface.
+- Parity harness: `divergenceRead` **logic** unchanged → still 14,083/0. Harness feeds `efgBox` directly, so the source swap doesn't touch it — add a box-vs-zone band-flip delta check to the **replay**, not the parity harness.
+
+**Test plan:** (1) re-run `ss_parity.mjs` → expect 14,083 / 0. (2) post-deploy re-pull an NY@SEA-class snapshot → `ss_leader_efg` ≈ box (`raw_stats`) and ≈ client display. (3) replay: box-eFG vs zone-eFG band-flip count across stored rows (quantify how many historical fade reads the drift corrupted).
+
 ### New input — server standings cache (the ONLY net-new data dependency)
 - Source: BDL WNBA `standings` (confirmed live, commit `7b952d5`), **daily** refresh (standings move ~1×/day).
 - Cache keyed **BDL-canonical alias** → `{w, l}`. `_wp = gp >= 4 ? w/(w+l) : null` — the **gp ≥ 4 floor is a real gate** (early season → `null` → `comebackProb` NO_DATA), not a bug; port faithfully.
