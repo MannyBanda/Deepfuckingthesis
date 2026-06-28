@@ -260,7 +260,7 @@ Prompt shifts from *"explain why the gate fired"* → *"here is the full state o
 - **Sustainability audit** (`sust_json`): is the leader's lead one hot shooter or broad-based? (concentrated → regressable.)
 - **Per-quarter breakdown** (`getQuarterData`): the quarter-by-quarter story.
 - **XGB + MC + floor:** structural models as **silent inputs Opus weighs**, never quoted back — corroboration when aligned, an explicit caveat when they disagree with the gate.
-- **Foul/personnel + injuries:** best-effort (WNBA data is thin — no per-player stats/clutch; team box + zones + runs + sustainability + XGB/MC/per-quarter are the reliable core).
+- **Per-player (BDL `/player_stats` — confirmed live + 6 seasons; see note below):** **scoring concentration** (is the leader's lead one hot shooter or balanced — the sharpest mirage tell), **foul trouble** (`pf` — key players at 3+), who's carrying the comeback, minutes/rotation, plus_minus. Injuries via `/player_injuries`. *Integration design is PARKED for next session.*
 - **The gate thesis:** the specific claim being stress-tested (collapse+fade read + edge).
 
 ### Architecture — async assembly, ZERO hot-path cost (code-verified)
@@ -291,10 +291,23 @@ Without the loop you trust the analysis on faith; with it you weight it like any
 - `formatSonnetPrompt` stays (still used by the kept per-quarter auto-analysis) — add alongside, don't touch.
 - Token budget: Stage-2 `max_tokens` 400 → ~800-1000 (richer input + structured tail). Per-A only (rare).
 
-### Open decisions (rec in parens)
-1. **READ scale:** 4-level CONFIRM/LEAN/CAUTION/PASS *(rec — interpretable + enough for calibration)* vs a 1-5 number.
-2. **MVP context depth:** full set vs core (box + sustainability + runs + per-quarter + XGB/MC + thesis), injuries/foul deferred *(rec — core first; WNBA per-player data is thin)*.
-3. **Disagreement surfacing:** always show the strongest counter-factor even on a CONFIRM *(rec — the honest caveat is the value)*.
+### Per-player data (BDL `/player_stats`) — CONFIRMED available; integration PARKED (next session)
+Re-explored BDL WNBA (Jun 28); the old "no per-player stats (404)" note is **stale**. Confirmed:
+- **`/wnba/v1/player_stats`** → full per-player box: min, pts, fgm/fga, fg3m/fg3a, ftm/fta, oreb/dreb/reb, ast, stl, blk, turnover, **`pf` (fouls)**, plus_minus + player obj.
+- **LIVE** — updates mid-game (verified on a live MIN@DAL: partial accumulating lines).
+- **6+ seasons** — 2021–2026 all return per-player data → large backtest sample.
+- Also new: `/player_injuries`, richer `/standings` (home/away/conf records, playoff_seed). Still absent: `/box_scores`, `/season_averages`, `/stats/advanced` (advanced derivable from the raw box; season avgs aggregable from `/player_stats`).
+
+**Why it matters here:** **scoring concentration** (one hot shooter vs balanced) is the sharpest "is this lead a mirage" signal, and **foul trouble** is exactly the context Manny can't hold in his head — both can now feed the analyst live.
+
+**PARKED — next session, BEFORE building 4c:** assess how player-level data should enter the system. We **likely already use some** (client `compilePBPPlayerStats` parses BDL PBP into per-player aggregates; `season_cache`), so the task is to map current usage and decide how the official `/player_stats` feed (cleaner, live, and it carries fouls — which the PBP parse lacks) gets incorporated: live fetch in the async Stage-2 for the analyst, bulk historical for backtests, and whether it supersedes or complements the PBP-derived player stats. **Do not design the integration until that assessment.**
+
+**Direction 2 (individual-heater) — now backtest-ready:** shelved for lack of per-player data; 6 seasons of `/player_stats` unblocks the lead-dependence backtest whenever prioritized. Separate thread from 4c.
+
+### Decisions — finalized (+1 parked)
+1. **READ scale:** ✅ **CONFIRM / LEAN / CAUTION / PASS** (confirmed) + CONVICTION STRONG/MODERATE/WEAK + KEY phrase.
+2. **Disagreement:** ✅ **Always surface the single strongest counter-factor, even on a CONFIRM** (confirmed — the honest caveat is the value).
+3. **MVP context depth:** ⏸ PARKED into the per-player integration assessment (above). Per-player data is now available (not thin), so the depth call is made once we decide how `/player_stats` enters the system.
 
 ### Test plan
 1. Schema init → verify the 4 `analysis_*` columns.
