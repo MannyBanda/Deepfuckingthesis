@@ -7932,7 +7932,10 @@ export default async function(req) {
             lt = updateLiveTracking(lt, ind.controlTeam, ind.score, currentPeriod, clock, hA, currentPeriod);
 
             // ── SWEET-SPOT GATE COMPUTE (Phase 2a) — WNBA only; compute + store, NO alert (2b fires) ──
-            // eFG from PBP zone-sums (same feed as variance share — mitigation #1), never SR box.
+            // eFG from reliable box (fgm/fg3m/fga) — same source raw_stats_json serializes. Zone-sums
+            // silently drop unparseable MISSED attempts → denominator shrinks → eFG inflates one-directionally
+            // (+1.6pp avg / +5.2pp max vs box, n=18 live) → false fades. Box matches the client headline.
+            // Variance-share stays on PBP zones (computeScoringComp, untouched — a made-points ratio).
             // A = deterministic pristine dual-gate; B left NULL (earned in the replay bucket analysis).
             // Isolated UPDATE (does NOT touch the snapshot INSERT or the NBA path); try/catch → never breaks polling.
             if (league === 'wnba' && !WNBA_SS_COMPUTE_OFF) {
@@ -7942,13 +7945,13 @@ export default async function(req) {
                   const _ssHp = Number(ind.homePts) || 0, _ssAp = Number(ind.awayPts) || 0;
                   const _ssSc = computeScoringComp(_ssPbp, hA, aA, _ssHp, _ssAp);
                   if (_ssSc) {
-                    const _zEfg = function(side) {
-                      var rm = side.rim?.made||0, pm = side.paint?.made||0, mm = side.mid?.made||0, tm = side.threes?.made||0;
-                      var ra = side.rim?.att||0,  pa = side.paint?.att||0,  ma = side.mid?.att||0,  ta = side.threes?.att||0;
-                      var fgm = rm+pm+mm+tm, fg3m = tm, fga = ra+pa+ma+ta;
+                    const _bEfg = function(st) {
+                      var fgm = Number(st?.field_goals_made||st?.fgm||0)||0;
+                      var fga = Number(st?.field_goals_att||st?.fga||0)||0;
+                      var fg3m = Number(st?.three_points_made||st?.fg3m||0)||0;
                       return { efg: fga > 0 ? ((fgm + 0.5*fg3m)/fga*100) : null, fga: fga };
                     };
-                    var _ssHe = _zEfg(_ssPbp.home), _ssAe = _zEfg(_ssPbp.away);
+                    var _ssHe = _bEfg(summary.home?.statistics), _ssAe = _bEfg(summary.away?.statistics);
                     _ssSc.home.efgBox = _ssHe.efg; _ssSc.home.fga = _ssHe.fga;
                     _ssSc.away.efgBox = _ssAe.efg; _ssSc.away.fga = _ssAe.fga;
                     _ssSc.period = currentPeriod; _ssSc.clock = clock;
