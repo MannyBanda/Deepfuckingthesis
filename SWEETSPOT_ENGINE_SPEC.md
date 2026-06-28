@@ -195,6 +195,58 @@ What Phase 1 removed was Opus in the *decision* loop. This adds Opus as *narrati
 
 ---
 
+## 4b. Phase 2b — mechanical A alert (DETAILED, code-verified at `8a3f63b`)
+
+> Fires the **A** alert the instant the gate-compute produces `_ssTier === 'A'`. Two-stage: instant 0-Opus mechanical push (the WHAT) → async Opus narration (the WHY). **B deferred** until the replay earns its threshold; **C deferred** (post-A/B). A/B fire mechanically — Opus **cannot** suppress (only C is Opus-suppressable, §4a).
+
+### Hook point (code-verified)
+Gate-compute block, immediately after `var _ssFired = _ssTier != null;` (~7982) and the isolated snapshot UPDATE (~7984–7994). When `_ssTier === 'A'`, call the helper. All inputs already in scope: `_ssLeadAl, _ssTrailAl, _ssLeadWP, _ssTrailWP, _ssGap, _ssDeficit, _ssLeadEfg, _ssLeadBand, _ssVar, _ssClass, _ssFadeT, _ssCollT, _ssPr.pPoint, _ssTrailML, _ssImplied, _ssEdge, _ssEv.size, currentPeriod, clock, odds`. Inside the existing WNBA-only + try/catch → NBA byte-identical, never breaks polling.
+
+### Decision A — structure: helper in-file
+`async function fireSweetSpotAlert(sql, game, league, hA, aA, ss)` in `poll-live-bdl.mjs` (Netlify bundles separately → must be in-file; a helper keeps the gate block readable). `ss` = gate-output object assembled at the hook.
+
+### Decision C — atomic dedup (schema + logic) — THE must-do the 2a schema missed
+- **Schema migration** (db-api.js init): `CREATE UNIQUE INDEX IF NOT EXISTS idx_ssa_dedup ON sweetspot_alerts (game_id, alert_subtype)`. (2a created only a NON-unique `idx_ssa_game` → `ON CONFLICT` throws without this.) Run `?action=init`.
+- **Logic:** `INSERT INTO sweetspot_alerts (...) ON CONFLICT (game_id, alert_subtype) DO NOTHING RETURNING id`. **Push only if the INSERT returned a row** — dedup AND cron-concurrency in one atomic move (strictly better than the legacy query-then-send at 6205, which isn't atomic). No lock row needed.
+- **Subtype for the current A** = `'EFG_FADE'`. Per-subtype dedup → when `INDIVIDUAL_HEATER` ships it can fire in a game that already had an eFG-fade alert.
+
+### Decision B — two-stage narration
+- **Stage 1 (fast, in-cycle):** after the atomic INSERT wins → `await sendNtfy('SWEET SPOT — Back '+trailer+' vs '+leader, body, 5)`. Mark `ntfy_sent=true`.
+- **Stage 2 (in-cycle, after Stage 1):** Opus narration — `claude-opus-4-8`, the 2765 fetch template, ~400 tok. On response → `UPDATE sweetspot_alerts SET narration_text=… WHERE id=…` + `await sendNtfy('SWEET SPOT — why '+trailer, narration, 4)` (the WHY follows the WHAT). **Opus failure = non-fatal** (decision + Stage-1 push already happened). The Stage-1 atomic insert **gates** Stage 2 → only the race-winner narrates (no double Opus). Cycle extends ~3s on an A fire (rare — 0 in 2 days); acceptable.
+- **Narration is NARRATION ONLY** — does not gate/suppress the A.
+
+### The mechanical body (Stage 1) — per §4 line format
+`SWEET SPOT — Back [trailer] ([tW-tL]) vs [leader] ([lW-lL]). [leader] +[margin], eFG [X]% ([band]) / variance [Y]%. True ~[P]% [([lo]–[hi])] · best [ML]@[book] (consensus [ML2], mkt [Q]%) · EDGE +[Z]pp · ~[S]% (¼-Kelly, cap 12%). Window: single-digit, pre-Q4. Take & hold.`
+- **CONFIRM at impl:** does `comebackProb` return the band `(lo–hi)`? (dashboard shows "55% (48–62%)"). If it returns it → use; if the client derives it → port that; else drop the clause.
+- ntfy body is UTF-8-safe (only the *Title* needs ASCII — `sendNtfy` strips it).
+
+### Decision D — odds consensus (`fetchOddsAPIBatch` extension)
+- In the `h2h` loop (1630–1635): also capture the **book name** of the best ML (`bestHomeMLBook`/`bestAwayMLBook`) and **collect all** home/away MLs → `median()` consensus, exactly as spread/total already do (1647–1649).
+- Return adds: `homeMLBook, awayMLBook, homeMLConsensus, awayMLConsensus` (`books` count already returned).
+- **Source-guard (Decision E):** the gate's `odds` is `oddsAPICache[hA]` with a `bdlOdds` fallback (7748–7750). Show the "consensus [ML2]" clause **only when `odds.books > 1`** (Odds-API multi-book); BDL fallback → omit it. **Null-odds cannot occur on an A** — A requires `edge>0` ⇒ a trailer ML existed ⇒ odds present. So the guard is purely consensus-wording, not a fire/skip gate.
+
+### sweetspot_alerts INSERT (schema already present, 2a)
+`game_id, league, alert_subtype='EFG_FADE', alert_tier='A', period, clock, leader_alias, trailer_alias, leader_wp, trailer_wp, quality_gap, leader_efg, leader_efg_band, variance_share, lead_class, fade_tier, collapse_tier, collapse_true, deficit, margin, line_used, line_consensus, implied, edge, kelly_size, narration_text(NULL→UPDATE), ntfy_sent=true, outcome=NULL, pnl=NULL`. outcome/pnl filled by the 2c tracker.
+
+### Stage-2 narration prompt (NEW — design here, refine at impl)
+Focused (~400 tok). Inputs: leader/trailer + records, margin, deficit, eFG+band, variance-share, fade tier, collapse tier, quality gap, edge, line. Ask for 2–3 plain-English sentences: (1) why the leader's lead is a mirage (eFG/variance unsustainability), (2) why the trailer is structurally the better team (records + quality gap), (3) the single risk to watch. No jargon, use aliases. Explicit: this NARRATES a decision already made — it does not re-decide.
+
+### Ship pattern + kill-switch
+Mirror Phase 1 / 2a: `WNBA_SS_ALERT_OFF` flag (`process.env...==='1'`). **Ship DARK** (flag set = alerts off) → forced/synthetic A test (verify push + row + narration UPDATE + dedup) → flip the env var on. A brand-new live push path should not fire untested, even though A's are rare.
+
+### Cascading implications
+- Gate-compute snapshot UPDATE (ss_*) **unchanged** — 2b ADDS the fire after it.
+- `ss_alert_fired` (snapshot) = "this snapshot met the A bar" (per-snapshot detection); the **push** dedup lives in `sweetspot_alerts` (per-game-per-subtype). A 2nd A snapshot in the same game sets `ss_alert_fired=true` but does NOT push (dedup). Semantics noted — not a conflict.
+- Phase-1 legacy untouched (different table; same ntfy topic). Per-quarter auto-analysis still writes `alerts` — no collision with `sweetspot_alerts`.
+- NBA byte-identical (WNBA-only block). No dead code introduced.
+
+### Test plan
+1. `?action=init` → verify `idx_ssa_dedup` UNIQUE index exists.
+2. `fetchOddsAPIBatch` consensus/best-book on a live/sample Odds-API response.
+3. Dedup/concurrency: two rapid pokes of the poll on a forced-A game → exactly one row + one push.
+4. Forced A end-to-end (synthetic `ss` or a replay snapshot meeting A): push fires, row written, narration UPDATE lands, 2nd poke no-ops.
+5. Parity harness unaffected (no gate-logic change) → still 14,083/0.
+
 ## 5. Learning agent → calibration + execution tracker (Decision D)
 
 `post-game-agent.mjs`, nightly:
