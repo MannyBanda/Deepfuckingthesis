@@ -25,6 +25,10 @@ const WNBA_LEGACY_ALERTS_OFF = process.env.WNBA_LEGACY_ALERTS_OFF === '1';
 // env WNBA_SS_COMPUTE_OFF=1 kills it. Compute + store only (no alert) until 2b.
 const WNBA_SS_COMPUTE_OFF = process.env.WNBA_SS_COMPUTE_OFF === '1';
 
+// SWEET-SPOT 2b: mechanical A alert. Ships DARK (default off). Set env WNBA_SS_ALERT_ON=1 in
+// Netlify to go live, after the forced-path verification passes. A/B mechanical; only C Opus-suppressable.
+const WNBA_SS_ALERT_ON = process.env.WNBA_SS_ALERT_ON === '1';
+
 // ── XGBOOST MODEL ──────────────────────────────────────────────────────────
 // Raw stats structural model — 300 trees, 13 features (no progress), trained on 1,235 games.
 // Provides independent win probability from raw box score stats without using
@@ -637,6 +641,72 @@ async function sendNtfy(title, body, priority = 4) {
   } catch (e) {
     log(`NTFY failed: ${e.message}`);
   }
+}
+
+// ── SWEET-SPOT 2b: mechanical A alert (two-stage) ─────────────────────────
+// Stage 1: atomic dedup INSERT ON CONFLICT (game_id, alert_subtype) DO NOTHING RETURNING id
+//   → push the WHAT only if WE inserted the row (handles cron concurrency in one move).
+// Stage 2: async Opus narration (the WHY) — non-fatal, NEVER re-decides (A is mechanical).
+async function fireSweetSpotAlert(sql, game, league, hA, aA, ss) {
+  const _ml = v => v == null ? '?' : (Number(v) > 0 ? '+' + v : '' + v);
+  const _pct = (v, d = 0) => v == null ? '?' : (v * 100).toFixed(d);
+  try {
+    // Stage 1a — atomic dedup insert
+    let inserted;
+    try {
+      inserted = await sql`
+        INSERT INTO sweetspot_alerts (game_id, league, alert_subtype, alert_tier, period, clock,
+          leader_alias, trailer_alias, leader_wp, trailer_wp, quality_gap, leader_efg, leader_efg_band,
+          variance_share, lead_class, fade_tier, collapse_tier, collapse_true, deficit, margin,
+          line_used, line_consensus, implied, edge, kelly_size, ntfy_sent)
+        VALUES (${game.id}, ${league}, ${ss.subtype}, ${ss.tier}, ${ss.period}, ${ss.clock},
+          ${ss.leaderAl}, ${ss.trailerAl}, ${ss.leaderWP}, ${ss.trailerWP}, ${ss.gap}, ${ss.leaderEfg}, ${ss.leaderBand},
+          ${ss.varShare}, ${ss.leadClass}, ${ss.fadeTier}, ${ss.collapseTier}, ${ss.collapseTrue}, ${ss.margin}, ${ss.margin},
+          ${ss.bestML != null ? parseInt(ss.bestML) : null}, ${ss.consensusML != null ? parseInt(ss.consensusML) : null},
+          ${ss.impliedBest}, ${ss.edge}, ${ss.kellySize}, ${true})
+        ON CONFLICT (game_id, alert_subtype) DO NOTHING
+        RETURNING id`;
+    } catch (e) { log(`${aA}@${hA}: sweetspot insert failed: ${e.message}`); return; }
+    if (!inserted || inserted.length === 0) return;  // already fired this subtype for this game
+    const rowId = inserted[0].id;
+
+    // Stage 1b — instant mechanical push (the WHAT, 0 Opus)
+    const consensusClause = (ss.books > 1 && ss.consensusML != null)
+      ? ` (consensus ${_ml(ss.consensusML)}, mkt ${_pct(ss.impliedBest)}%)`
+      : ` (mkt ${_pct(ss.impliedBest)}%)`;
+    const body = `SWEET SPOT — Back ${ss.trailerAl} (${ss.trailerW}-${ss.trailerL}) vs ${ss.leaderAl} (${ss.leaderW}-${ss.leaderL}).`
+      + ` ${ss.leaderAl} +${ss.margin}, eFG ${ss.leaderEfg != null ? Math.round(ss.leaderEfg) : '?'}% (${ss.leaderBand}) / variance ${ss.varShare != null ? Math.round(ss.varShare) : '?'}%.`
+      + ` True ~${_pct(ss.collapseTrue)}% (${_pct(ss.pLow)}-${_pct(ss.pHigh)}%) · best ${_ml(ss.bestML)}@${ss.bestBook || 'book'}${consensusClause}`
+      + ` · EDGE +${_pct(ss.edge)}pp · ~${_pct(ss.kellySize)}% (1/4-Kelly).`
+      + ` Window: single-digit, pre-Q4. Take & hold.`;
+    await sendNtfy(`SWEET SPOT - Back ${ss.trailerAl} vs ${ss.leaderAl}`, body, 5);
+    log(`${aA}@${hA}: ★ SWEET SPOT A FIRED — ${ss.trailerAl} +${ss.margin} edge=${_pct(ss.edge)}pp line=${_ml(ss.bestML)}`);
+
+    // Stage 2 — async Opus narration (the WHY); non-fatal, never re-decides
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) return;
+    try {
+      const prompt = `You are narrating a live betting sweet-spot alert that has ALREADY fired — do not re-decide, just explain WHY for a bettor in 2-3 short plain-English sentences.\n\n`
+        + `${ss.trailerAl} (${ss.trailerW}-${ss.trailerL}) is down ${ss.margin} to ${ss.leaderAl} (${ss.leaderW}-${ss.leaderL}) in Q${ss.period} ${ss.clock}.\n`
+        + `Why the system flagged it:\n`
+        + `- ${ss.leaderAl}'s lead is built on unsustainable shooting: eFG ${ss.leaderEfg != null ? Math.round(ss.leaderEfg) : '?'}% (${ss.leaderBand} band), variance share ${ss.varShare != null ? Math.round(ss.varShare) : '?'}% (lead class ${ss.leadClass}).\n`
+        + `- ${ss.trailerAl} is the structurally better team: win% ${_pct(ss.trailerWP)} vs ${_pct(ss.leaderWP)} (quality gap ${ss.gap != null ? ss.gap.toFixed(2) : '?'}).\n`
+        + `- Model true win prob ~${_pct(ss.collapseTrue)}% vs market ~${_pct(ss.impliedBest)}% → edge +${_pct(ss.edge)}pp.\n\n`
+        + `Write exactly: (1) one sentence on why ${ss.leaderAl}'s lead is a mirage, (2) one sentence on why ${ss.trailerAl} is the better team likely to close, (3) one sentence on the single biggest risk to watch. Use team names, no jargon, no preamble, under 80 words.`;
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: 'claude-opus-4-8', max_tokens: 400, messages: [{ role: 'user', content: prompt }] }),
+      });
+      if (!resp.ok) { log(`${aA}@${hA}: sweetspot narration ${resp.status}`); return; }
+      const data = await resp.json();
+      const narration = data.content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+      if (!narration || narration.length < 20) return;
+      await sql`UPDATE sweetspot_alerts SET narration_text = ${narration} WHERE id = ${rowId}`;
+      await sendNtfy(`SWEET SPOT - why ${ss.trailerAl}`, narration, 4);
+      log(`${aA}@${hA}: sweetspot narration delivered (${narration.length} chars)`);
+    } catch (e) { log(`${aA}@${hA}: sweetspot narration error: ${e.message}`); }
+  } catch (e) { log(`${aA}@${hA}: fireSweetSpotAlert fatal: ${e.message}`); }
 }
 
 // ── ALERT REASONING AGENT ────────────────────────────────────────────────
@@ -1622,16 +1692,16 @@ async function fetchOddsAPIBatch(league) {
       const awayAlias = teamMap[g.away_team];
       if (!homeAlias || !awayAlias) continue;
 
-      let bestHomeML = null, bestAwayML = null;
-      const spreads = [], totals = [];
+      let bestHomeML = null, bestAwayML = null, bestHomeMLBook = null, bestAwayMLBook = null;
+      const spreads = [], totals = [], homeMLs = [], awayMLs = [];
 
       for (const bk of (g.bookmakers || [])) {
         for (const mkt of (bk.markets || [])) {
           if (mkt.key === 'h2h') {
             for (const o of (mkt.outcomes || [])) {
               const alias = teamMap[o.name];
-              if (alias === homeAlias && (bestHomeML == null || o.price > bestHomeML)) bestHomeML = o.price;
-              if (alias === awayAlias && (bestAwayML == null || o.price > bestAwayML)) bestAwayML = o.price;
+              if (alias === homeAlias) { homeMLs.push(o.price); if (bestHomeML == null || o.price > bestHomeML) { bestHomeML = o.price; bestHomeMLBook = bk.title || bk.key; } }
+              if (alias === awayAlias) { awayMLs.push(o.price); if (bestAwayML == null || o.price > bestAwayML) { bestAwayML = o.price; bestAwayMLBook = bk.title || bk.key; } }
             }
           } else if (mkt.key === 'spreads') {
             const homeOut = (mkt.outcomes || []).find(o => teamMap[o.name] === homeAlias);
@@ -1647,6 +1717,9 @@ async function fetchOddsAPIBatch(league) {
       const median = arr => { if (!arr.length) return null; arr.sort((a, b) => a - b); const m = Math.floor(arr.length / 2); return arr.length % 2 ? arr[m] : (arr[m - 1] + arr[m]) / 2; };
       const homeSpread = median(spreads);
       const total = median(totals);
+      // ML consensus = median american price across books (trailer in a sweet-spot is + odds → monotonic; fine for the reference line).
+      const homeMLConsensus = median(homeMLs) != null ? Math.round(median(homeMLs)) : null;
+      const awayMLConsensus = median(awayMLs) != null ? Math.round(median(awayMLs)) : null;
 
       if (bestHomeML == null && homeSpread == null) continue;
       // Key by BDL-canonical alias to match the poll-loop lookup (hA = cfg.aliasMap[home_alias]).
@@ -1654,6 +1727,8 @@ async function fetchOddsAPIBatch(league) {
       const canonHome = cfg.aliasMap?.[homeAlias] || homeAlias;
       result[canonHome] = {
         homeSpread, homeML: bestHomeML, awayML: bestAwayML, total,
+        homeMLBook: bestHomeMLBook, awayMLBook: bestAwayMLBook,
+        homeMLConsensus, awayMLConsensus,
         books: (g.bookmakers || []).length,
       };
     }
@@ -7996,6 +8071,23 @@ export default async function(req) {
                       ss_alert_tier = ${_ssTier}, ss_alert_fired = ${_ssFired}
                       WHERE game_id = ${game.id} AND period = ${currentPeriod} AND clock = ${clock} AND home_pts = ${_ssHp} AND away_pts = ${_ssAp}`;
                     log(`${matchup}: SS — ${_ssLeadAl} +${_ssDeficit} | collapse=${_ssCollT} fade=${_ssFadeT} class=${_ssClass} band=${_ssLeadBand||'—'} edge=${_ssEdge != null ? _ssEdge.toFixed(1) : '—'} tier=${_ssTier || 'none'}`);
+
+                    // ── 2b: fire the mechanical A alert (ships dark behind WNBA_SS_ALERT_ON) ──
+                    if (_ssTier === 'A' && WNBA_SS_ALERT_ON) {
+                      var _ssLeadRec = ssStandings[_ssLeadAl] || {}, _ssTrailRec = ssStandings[_ssTrailAl] || {};
+                      var _ssBestBook = _ssHomeTrails ? (odds && odds.homeMLBook) : (odds && odds.awayMLBook);
+                      var _ssConsML = _ssHomeTrails ? (odds && odds.homeMLConsensus) : (odds && odds.awayMLConsensus);
+                      await fireSweetSpotAlert(sql, game, league, hA, aA, {
+                        subtype: 'EFG_FADE', tier: _ssTier, period: currentPeriod, clock: clock,
+                        leaderAl: _ssLeadAl, trailerAl: _ssTrailAl, leaderWP: _ssLeadWP, trailerWP: _ssTrailWP, gap: _ssGap,
+                        leaderW: _ssLeadRec.w, leaderL: _ssLeadRec.l, trailerW: _ssTrailRec.w, trailerL: _ssTrailRec.l,
+                        leaderEfg: _ssLeadEfg, leaderBand: _ssLeadBand, varShare: _ssVar, leadClass: _ssClass,
+                        fadeTier: _ssFadeT, collapseTier: _ssCollT, collapseTrue: _ssPr.pPoint, pLow: _ssPr.pLow, pHigh: _ssPr.pHigh,
+                        bestML: _ssTrailML, bestBook: _ssBestBook, consensusML: _ssConsML, impliedBest: _ssImplied,
+                        edge: _ssEdge, kellySize: (_ssEv && _ssEv.size != null ? _ssEv.size : null),
+                        margin: _ssDeficit, books: (odds && odds.books) || 0,
+                      });
+                    }
                   }
                 }
               } catch (e) { log(`${matchup}: sweetspot compute non-fatal: ${e.message}`); }

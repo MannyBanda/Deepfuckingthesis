@@ -228,6 +228,8 @@ exports.handler = async (event) => {
           created_at TIMESTAMPTZ DEFAULT NOW()
         )`;
       try { await sql`CREATE INDEX IF NOT EXISTS idx_ssa_game ON sweetspot_alerts (game_id)`; } catch(e) {}
+      // 2b atomic dedup: UNIQUE (game_id, alert_subtype) → ON CONFLICT DO NOTHING RETURNING id (one alert per edge-type per game)
+      try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_ssa_dedup ON sweetspot_alerts (game_id, alert_subtype)`; } catch(e) {}
 
       // Standings cache (daily refresh) — keyed BDL-canonical alias → W/L; feeds comebackProb leaderWP/trailerWP
       await sql`
