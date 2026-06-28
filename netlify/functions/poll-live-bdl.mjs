@@ -6375,6 +6375,29 @@ export default async function(req) {
   }
   const sql = neon(dbUrl);
 
+  // ── SWEET-SPOT 2b FORCED TEST (TEMPORARY — remove after verifying the live path) ──
+  // ?ss_force_test=1 fires ONE synthetic A alert end-to-end; ?ss_force_clear=1 deletes the test row.
+  if (url.searchParams.get('ss_force_clear') === '1') {
+    try { await sql`DELETE FROM sweetspot_alerts WHERE game_id = ${'SS_FORCE_TEST'}`; } catch (e) {}
+    return new Response(JSON.stringify({ cleared: 'SS_FORCE_TEST' }), { headers: { 'Content-Type': 'application/json' } });
+  }
+  if (url.searchParams.get('ss_force_test') === '1') {
+    const _ft = { id: 'SS_FORCE_TEST' };
+    const _fss = {
+      subtype: 'EFG_FADE', tier: 'A', period: 3, clock: '5:42',
+      leaderAl: 'CHI', trailerAl: 'ATL', leaderWP: 0.353, trailerWP: 0.706, gap: 0.353,
+      leaderW: 6, leaderL: 11, trailerW: 12, trailerL: 5,
+      leaderEfg: 71.3, leaderBand: 'red', varShare: 62, leadClass: 'VOLATILE',
+      fadeTier: 'STRONG FADE', collapseTier: 'SHORT', collapseTrue: 0.61, pLow: 0.54, pHigh: 0.68,
+      bestML: 180, bestBook: 'FanDuel', consensusML: 165, impliedBest: 0.357,
+      edge: 0.253, kellySize: 0.071, margin: 6, books: 8,
+    };
+    await fireSweetSpotAlert(sql, _ft, 'wnba', 'CHI', 'ATL', _fss);
+    let _frow = null;
+    try { const r = await sql`SELECT id, alert_subtype, alert_tier, ntfy_sent, edge, line_used, line_consensus, narration_text FROM sweetspot_alerts WHERE game_id = ${'SS_FORCE_TEST'}`; _frow = r[0] || null; } catch (e) {}
+    return new Response(JSON.stringify({ forced_test: 'fired — check ntfy for 2 pushes (WHAT + WHY)', row: _frow }, null, 2), { headers: { 'Content-Type': 'application/json' } });
+  }
+
   // ── WNBA POT BACKFILL — one-off manual action, never runs on cron ──
   // ?backfill_pot=1&batch=200&after=0&dry=1 — see backfillWNBAPot()
   if (url.searchParams.get('backfill_pot') === '1') {
