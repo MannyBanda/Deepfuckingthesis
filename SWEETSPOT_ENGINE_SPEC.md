@@ -247,6 +247,61 @@ Mirror Phase 1 / 2a: `WNBA_SS_ALERT_OFF` flag (`process.env...==='1'`). **Ship D
 4. Forced A end-to-end (synthetic `ss` or a replay snapshot meeting A): push fires, row written, narration UPDATE lands, 2nd poke no-ops.
 5. Parity harness unaffected (no gate-logic change) → still 14,083/0.
 
+## 4c. Sweet-spot analysis layer — Opus as ANALYST, not narrator (enhances 2b Stage-2; pulls 2d forward)
+
+> The shipped Stage-2 is a **translator** (sees only the gate's ~6 outputs). Manny's correction: he doesn't need the alert re-stated — he needs Opus to hold the **entire game** (the part he can't keep in his head) and **stress-test the alert against it**, including disagreeing. The mechanical A still fires instantly (the WHAT); this upgrades the WHY into a contextual analyst read. **Output stays phone-tight (~100-120 words); the richness is in what Opus INGESTS.**
+
+### Role reframe (the core change)
+Prompt shifts from *"explain why the gate fired"* → *"here is the full state of this game; an alert fired with thesis X; as a sharp bettor, does it hold up in context — the real story, the one factor that matters most, your read."* **Opus MAY disagree** ("gate fired but I'd pass — ATL's run is all 3s that'll cool, CHI just got starters back"). It does NOT re-fire or suppress the A (A is mechanical); it informs Manny's discretionary call — including talking him off a bad one.
+
+### Context set (ingested, weighed SILENTLY — never recited back)
+- **Score arc / momentum:** recent scoring runs (`runs6`), is the deficit actually shrinking (comeback already underway?).
+- **Both teams' box truth:** FT rate, TOs, OREB/glass, bench pts, assist rate — not just the leader's eFG.
+- **Sustainability audit** (`sust_json`): is the leader's lead one hot shooter or broad-based? (concentrated → regressable.)
+- **Per-quarter breakdown** (`getQuarterData`): the quarter-by-quarter story.
+- **XGB + MC + floor:** structural models as **silent inputs Opus weighs**, never quoted back — corroboration when aligned, an explicit caveat when they disagree with the gate.
+- **Foul/personnel + injuries:** best-effort (WNBA data is thin — no per-player stats/clutch; team box + zones + runs + sustainability + XGB/MC/per-quarter are the reliable core).
+- **The gate thesis:** the specific claim being stress-tested (collapse+fade read + edge).
+
+### Architecture — async assembly, ZERO hot-path cost (code-verified)
+The rich context is assembled at the legacy auto-analysis call sites (`formatSonnetPrompt` @ 6056/6497, quarter-transition only) — NOT at the gate-compute hook. But Stage-2 is already **async + non-fatal** (fires after the instant mechanical push), so assembly lives there, off the hot path:
+- **Passed from the hook** (already computed every poll): `_xgbWinProb` + SHAP (7781), `_pollMC`/`_mcCum` (7896/7925), `summary` (box), `ind`, `runs6`, the gate `ss` outputs.
+- **Assembled inside Stage-2** (async, latency irrelevant): per-quarter (`getQuarterData` query), `sust_json` (pass or recompute), injuries (SR/cache).
+
+### Composer — NEW, not `formatSonnetPrompt` wholesale (honest correction)
+`formatSonnetPrompt` is bound to the **legacy control-team framework** (floor reliability, conviction combos, graduation tiers, control-relative). The sweet-spot is trailer/leader-relative with none of that machinery. So we **reuse the context DATA objects + assembly logic** (the proven queries/computes that build xgbData/mcData/sust/quarterData/runs), but write a **new `formatSweetSpotAnalysisPrompt`** that composes them trailer-relative for the analyst role, WITHOUT injecting floor/conviction/graduation. Reuse the pipeline, not the framing.
+
+### Output — prose + STRUCTURED read (for calibration)
+Opus returns:
+1. **Prose** (~100-120 words, decision-oriented): the read + the 1-2 factors that drove it. → stored + pushed as the WHY.
+2. **A structured tail line** we parse: `READ: [CONFIRM|LEAN|CAUTION|PASS] | CONVICTION: [STRONG|MODERATE|WEAK] | KEY: [one phrase]`. READ = the analyst's verdict on the alert (CONFIRM = context backs it; PASS = Opus disagrees). Regex-parsed → new columns.
+
+### Calibration loop — the piece that makes decisions better over time
+**Schema migration** (db-api init): add `analysis_text TEXT, analysis_read TEXT, analysis_conviction TEXT, analysis_key TEXT` to `sweetspot_alerts` (fold `narration_text` into `analysis_text`). 2b INSERT/UPDATE writes the prose + parsed structured fields.
+**The loop (defined here, consumed by §5/2c):** the post-game tracker joins `analysis_read`/`analysis_conviction` to the realized outcome. Over ~30-40 spots it answers the question that matters: **do Opus's CONFIRM/STRONG reads win materially more than its CAUTION/PASS reads?** That separates three edges —
+- **gate base edge** (does an A win at its predicted rate?),
+- **Opus analytical edge** (does the read add info beyond the gate?),
+- **Manny's realized edge** (discretionary execution).
+Without the loop you trust the analysis on faith; with it you weight it like any signal — and learn whether to lean on a CONFIRM or treat a PASS as a real veto.
+
+### Cascading implications
+- Stage-1 mechanical push **unchanged** — still instant, still the source of truth for "an A fired." Only Stage-2 changes.
+- The shipped translator prompt is **replaced** (dead) by `formatSweetSpotAnalysisPrompt`. `fireSweetSpotAlert` Stage-2 grows a context-assembly step + the parse.
+- Hot path untouched (assembly async). NBA byte-identical (WNBA-only).
+- `formatSonnetPrompt` stays (still used by the kept per-quarter auto-analysis) — add alongside, don't touch.
+- Token budget: Stage-2 `max_tokens` 400 → ~800-1000 (richer input + structured tail). Per-A only (rare).
+
+### Open decisions (rec in parens)
+1. **READ scale:** 4-level CONFIRM/LEAN/CAUTION/PASS *(rec — interpretable + enough for calibration)* vs a 1-5 number.
+2. **MVP context depth:** full set vs core (box + sustainability + runs + per-quarter + XGB/MC + thesis), injuries/foul deferred *(rec — core first; WNBA per-player data is thin)*.
+3. **Disagreement surfacing:** always show the strongest counter-factor even on a CONFIRM *(rec — the honest caveat is the value)*.
+
+### Test plan
+1. Schema init → verify the 4 `analysis_*` columns.
+2. `formatSweetSpotAnalysisPrompt` on a real game's assembled context → inspect the rendered prompt (all sections present, trailer-relative, no legacy floor/conviction).
+3. Forced-test fire → verify prose + parsed READ/CONVICTION/KEY land in the row, the second push reads as an analyst (not a translator), and a deliberately-weak spot yields CAUTION/PASS (Opus disagrees).
+4. Parity harness unaffected (no gate-logic change).
+
 ## 5. Learning agent → calibration + execution tracker (Decision D)
 
 `post-game-agent.mjs`, nightly:
