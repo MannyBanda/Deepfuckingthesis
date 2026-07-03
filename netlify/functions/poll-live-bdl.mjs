@@ -647,7 +647,140 @@ async function sendNtfy(title, body, priority = 4) {
 // Stage 1: atomic dedup INSERT ON CONFLICT (game_id, alert_subtype) DO NOTHING RETURNING id
 //   → push the WHAT only if WE inserted the row (handles cron concurrency in one move).
 // Stage 2: async Opus narration (the WHY) — non-fatal, NEVER re-decides (A is mechanical).
-async function fireSweetSpotAlert(sql, game, league, hA, aA, ss) {
+// ── SWEETSPOT §4c: PLAYER-CONTEXT DIGEST (lazy, alert-path only — never on the hot gate path) ──
+// Data-backed framings (research/2026-07-02_*): star-carried leads HOLD (~26% comeback vs ~34%
+// base); role-carry = fragility candidate (n<30); eFG heat = amplifier on quality gap (53→61%);
+// regression-to-norm does NOT give back a banked lead. All math coerces Number(x)||0 (BDL null=0).
+
+// F4 — carrier identity from season ppg (thresholds from addendum cuts)
+function ssClassifyCarrier(ppg) {
+  if (ppg == null) return 'UNKNOWN';
+  if (ppg >= 14) return 'STAR';
+  if (ppg <= 10) return 'ROLE';
+  return 'MID';
+}
+
+// minutes: '26' or '26:30' → number
+function _ssMin(m) {
+  if (m == null) return 0;
+  const s = String(m);
+  if (s.includes(':')) { const a = s.split(':'); return (Number(a[0]) || 0) + (Number(a[1]) || 0) / 60; }
+  return Number(s) || 0;
+}
+
+// F1 — per-team per-player reduce off modelSummary.{home,away}.players (bpa shape)
+function ssPlayerDigest(mm, leaderIsHome) {
+  if (!mm || !mm.home || !mm.away) return null;
+  function side(sd) {
+    const rows = (sd.players || []).map(p => {
+      const st = p.statistics || {};
+      const pts = Number(st.points) || 0, fga = Number(st.field_goals_att) || 0, fta = Number(st.free_throws_att) || 0;
+      const denom = 2 * (fga + 0.44 * fta);
+      return {
+        id: p.id, name: p.full_name || '?', starter: !!p.starter,
+        pts, fga, fta,
+        fgm: Number(st.field_goals_made) || 0, fg3m: Number(st.three_points_made) || 0, fg3a: Number(st.three_points_att) || 0,
+        pf: Number(st.personal_fouls) || 0, min: _ssMin(st.minutes),
+        ts: denom > 0 ? pts / denom : null,
+      };
+    });
+    const teamPts = rows.reduce((a, r) => a + r.pts, 0);
+    const tFga = rows.reduce((a, r) => a + r.fga, 0);
+    const teamEfg = tFga > 0 ? (rows.reduce((a, r) => a + r.fgm, 0) + 0.5 * rows.reduce((a, r) => a + r.fg3m, 0)) / tFga : null;
+    const sorted = rows.slice().sort((a, b) => b.pts - a.pts);
+    const top = sorted.slice(0, 2).map(r => ({ ...r, share: teamPts > 0 ? r.pts / teamPts : 0 }));
+    const foulTrouble = rows.filter(r => r.starter && r.pf >= 3).map(r => `${r.name} (${r.pf}F)`);
+    const benchPts = rows.filter(r => !r.starter).reduce((a, r) => a + r.pts, 0);
+    return { alias: sd.alias || '?', teamPts, teamEfg, top, foulTrouble, benchShare: teamPts > 0 ? benchPts / teamPts : 0 };
+  }
+  const h = side(mm.home), a = side(mm.away);
+  return leaderIsHome ? { leader: h, trailer: a } : { leader: a, trailer: h };
+}
+
+// F2 — per-player/team shot geography off parseBDLPBPServer raw.shots (quarter-filterable)
+function ssShotGeo(pbp, teamAlias, playerName, curPeriod) {
+  const shots = (pbp && pbp.raw && pbp.raw.shots) || [];
+  const mine = shots.filter(s => s && s.tm === teamAlias && (!playerName || s.p === playerName));
+  function mix(list) {
+    let rim = 0, mid = 0, three = 0, att = 0, made = 0;
+    for (const s of list) {
+      att++;
+      if (!s.m) continue;
+      made++;
+      if (s.is3) three += 3;
+      else if (/rim|paint|layup|dunk|restricted|tip/i.test(String(s.z || '') + ' ' + String(s.ctx || ''))) rim += 2;
+      else mid += 2;
+    }
+    const tot = rim + mid + three;
+    return { att, made, pts: tot, rimPct: tot > 0 ? rim / tot : null, midPct: tot > 0 ? mid / tot : null, threePct: tot > 0 ? three / tot : null, unsustShare: tot > 0 ? (mid + three) / tot : null };
+  }
+  return { cum: mix(mine), thisQ: mix(mine.filter(s => Number(s.q) === Number(curPeriod))) };
+}
+
+// F3 — lazy season baseline for a carrier (≤3 calls per fired alert; non-fatal → UNKNOWN)
+async function ssCarrierBaseline(playerId) {
+  try {
+    const yr = new Date().getFullYear();
+    const d = await bdlFetch(`/wnba/v1/player_stats?seasons[]=${yr}&player_ids[]=${playerId}&per_page=100`);
+    const rows = (d && d.data) || [];
+    let g = 0, pts = 0, fga = 0, fta = 0;
+    for (const r of rows) {
+      const m = _ssMin(r.min);
+      if (m <= 0 && !(Number(r.pts) || 0)) continue;
+      g++; pts += Number(r.pts) || 0; fga += Number(r.fga) || 0; fta += Number(r.fta) || 0;
+    }
+    if (g < 5) return null; // too few games for a norm
+    const denom = 2 * (fga + 0.44 * fta);
+    return { g, ppg: pts / g, tsNorm: denom > 0 ? pts / denom : null };
+  } catch (e) { return null; }
+}
+
+// F5 — prompt context block + row columns. Pure function of the digest.
+function ssComposeCtxBlock(dg) {
+  const P = (v, d = 0) => v == null ? '?' : (v * 100).toFixed(d);
+  const car = (dg.leader.top && dg.leader.top[0]) || null;
+  const base = (dg.base && car && dg.base[car.name]) || null;
+  const identity = ssClassifyCarrier(base ? base.ppg : null);
+  const dev = (car && car.ts != null && base && base.tsNorm != null) ? car.ts - base.tsNorm : null;
+  const cg = dg.shot && dg.shot.carrier && dg.shot.carrier.cum;
+  let t = `PLAYER CONTEXT [FACT-live]:\n`;
+  if (car) {
+    t += `- ${dg.leader.alias} scoring is carried by ${car.name} (${P(car.share)}% of team pts, ${car.pts} pts, live TS ${P(car.ts)}%`
+      + (base ? `; season ${base.ppg.toFixed(1)} ppg → ${identity} carrier` : `; season baseline unavailable → carrier profile UNKNOWN`)
+      + (dev != null ? `, running ${dev >= 0 ? '+' : ''}${P(dev)}pp vs her season norm` : '') + `).`
+      + (cg && cg.pts > 0 ? ` Shot mix: ${P(cg.rimPct)}% rim / ${P(cg.midPct)}% mid / ${P(cg.threePct)}% threes.` : '') + `\n`;
+  }
+  const ft = [...(dg.leader.foulTrouble || []).map(x => `${dg.leader.alias} ${x}`), ...(dg.trailer.foulTrouble || []).map(x => `${dg.trailer.alias} ${x}`)];
+  t += `- Foul trouble: ${ft.length ? ft.join(', ') : 'none'}.\n`;
+  if (dg.trailer.top && dg.trailer.top.length) {
+    t += `- ${dg.trailer.alias} comeback engines: ${dg.trailer.top.map(r => `${r.name} ${r.pts} pts (TS ${P(r.ts)}%)`).join(', ')}; bench ${P(dg.trailer.benchShare)}% of pts.\n`;
+  }
+  if (dg.trailer.teamEfg != null) {
+    t += `- ${dg.trailer.alias} shooting ${P(dg.trailer.teamEfg)}% eFG while trailing`
+      + (dg.trailer.teamEfg <= 0.48 ? ` — at/below par: the deficit is variance, not quality [PRIOR-validated]` : '') + `.\n`;
+  }
+  t += `\nFRAMING RULES [PRIOR-validated unless tagged]:\n`
+    + `- The fade thesis here is TEAM-level: quality gap first; ${dg.leader.alias}'s elevated eFG amplifies it (gap alone ~53% comeback; gap + leader shooting hot ~61%).\n`
+    + `- Hot shooting regresses to the shooter's own norm within the game — but points already scored are banked; regression alone does not hand the lead back.\n`;
+  if (identity === 'STAR') {
+    t += `- ${car.name} is a STAR carrier: star-carried leads historically HOLD BETTER than average (~26% comeback vs ~34% base). Do NOT call her production a mirage; name her as the primary risk — she regresses to a norm that still feeds the lead. The mirage claim applies to the team-level variance share, not to her.\n`;
+  } else if (identity === 'ROLE') {
+    t += `- ${car.name} is a ROLE carrier (≤10 ppg season): a role player carrying the lead is an early-sample fragility signal [PRIOR-candidate, n<30] — supportive color, not a load-bearing claim.\n`;
+  } else {
+    t += `- Carrier profile ${identity}: no carrier-specific framing — stick to team-level reasons.\n`;
+  }
+  return {
+    text: t,
+    cols: {
+      carrier_name: car ? car.name : null,
+      carrier_identity: identity,
+      carrier_share: car ? Math.round(car.share * 1000) / 1000 : null,
+      carrier_ppg: base ? Math.round(base.ppg * 10) / 10 : null,
+    },
+  };
+}
+
+async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
   const _ml = v => v == null ? '?' : (Number(v) > 0 ? '+' + v : '' + v);
   const _pct = (v, d = 0) => v == null ? '?' : (v * 100).toFixed(d);
   try {
@@ -682,21 +815,56 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss) {
     await sendNtfy(`SWEET SPOT - Back ${ss.trailerAl} vs ${ss.leaderAl}`, body, 5);
     log(`${aA}@${hA}: ★ SWEET SPOT A FIRED — ${ss.trailerAl} +${ss.margin} edge=${_pct(ss.edge)}pp line=${_ml(ss.bestML)}`);
 
+    // Stage 1.5 — §4c player-context digest (lazy; ledger-first so calibration data survives
+    // narration failure; any throw here degrades to today's context-free narration)
+    let _ctxText = '';
+    if (pctx && pctx.modelSummary) {
+      try {
+        const _ldHome = ss.leaderAl === hA;
+        const dg = ssPlayerDigest(pctx.modelSummary, _ldHome);
+        if (dg) {
+          const _car = (dg.leader.top && dg.leader.top[0]) || null;
+          dg.shot = {
+            team: ssShotGeo(pctx.pbp, dg.leader.alias, null, ss.period),
+            carrier: _car ? ssShotGeo(pctx.pbp, dg.leader.alias, _car.name, ss.period) : null,
+          };
+          dg.base = {};
+          const _blP = [...dg.leader.top.slice(0, 2), ...dg.trailer.top.slice(0, 1)];
+          for (const bp of _blP) {
+            if (bp && bp.id) dg.base[bp.name] = (pctx.baselines && pctx.baselines[bp.name]) || await ssCarrierBaseline(bp.id);
+          }
+          dg.period = ss.period;
+          const _composed = ssComposeCtxBlock(dg);
+          _ctxText = _composed.text;
+          const _c = _composed.cols;
+          await sql`UPDATE sweetspot_alerts SET carrier_name = ${_c.carrier_name}, carrier_identity = ${_c.carrier_identity},
+            carrier_share = ${_c.carrier_share}, carrier_ppg = ${_c.carrier_ppg}, player_ctx_json = ${JSON.stringify(dg)}
+            WHERE id = ${rowId}`;
+          log(`${aA}@${hA}: sweetspot pctx — carrier=${_c.carrier_name || '?'} (${_c.carrier_identity}) share=${_c.carrier_share != null ? Math.round(_c.carrier_share * 100) : '?'}%`);
+        }
+      } catch (e) { log(`${aA}@${hA}: sweetspot pctx non-fatal: ${e.message}`); _ctxText = ''; }
+    }
+
     // Stage 2 — async Opus narration (the WHY); non-fatal, never re-decides
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return;
     try {
-      const prompt = `You are narrating a live betting sweet-spot alert that has ALREADY fired — do not re-decide, just explain WHY for a bettor in 2-3 short plain-English sentences.\n\n`
+      const prompt = `You are narrating a live betting sweet-spot alert that has ALREADY fired — do not re-decide, just explain WHY for a bettor in plain English.\n\n`
         + `${ss.trailerAl} (${ss.trailerW}-${ss.trailerL}) is down ${ss.margin} to ${ss.leaderAl} (${ss.leaderW}-${ss.leaderL}) in Q${ss.period} ${ss.clock}.\n`
         + `Why the system flagged it:\n`
         + `- ${ss.leaderAl}'s lead is built on unsustainable shooting: eFG ${ss.leaderEfg != null ? Math.round(ss.leaderEfg) : '?'}% (${ss.leaderBand} band), variance share ${ss.varShare != null ? Math.round(ss.varShare) : '?'}% (lead class ${ss.leadClass}).\n`
         + `- ${ss.trailerAl} is the structurally better team: win% ${_pct(ss.trailerWP)} vs ${_pct(ss.leaderWP)} (quality gap ${ss.gap != null ? ss.gap.toFixed(2) : '?'}).\n`
         + `- Model true win prob ~${_pct(ss.collapseTrue)}% vs market ~${_pct(ss.impliedBest)}% → edge +${_pct(ss.edge)}pp.\n\n`
-        + `Write exactly: (1) one sentence on why ${ss.leaderAl}'s lead is a mirage, (2) one sentence on why ${ss.trailerAl} is the better team likely to close, (3) one sentence on the single biggest risk to watch. Use team names, no jargon, no preamble, under 80 words.`;
+        + (_ctxText ? _ctxText + `\n` : ``)
+        + `Write exactly, under 110 words, no jargon, no preamble:\n`
+        + `(1) one sentence on why ${ss.leaderAl}'s lead is statistically fragile at the TEAM level (variance share / eFG band / quality gap);\n`
+        + `(2) one sentence on why ${ss.trailerAl} is the better team likely to close${_ctxText ? `, naming their live comeback engine(s)` : ``};\n`
+        + `(3) one sentence on the single biggest risk to watch${_ctxText ? ` — if a STAR carrier is flagged above this MUST be her sustaining at her norm; include foul trouble on either side if present` : ``}.\n`
+        + `Never predict a specific player's shooting will collapse.${_ctxText ? ` Never contradict the FRAMING RULES.` : ``} Use team names.`;
       const resp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: 'claude-opus-4-8', max_tokens: 400, messages: [{ role: 'user', content: prompt }] }),
+        body: JSON.stringify({ model: 'claude-opus-4-8', max_tokens: 500, messages: [{ role: 'user', content: prompt }] }),
       });
       if (!resp.ok) { log(`${aA}@${hA}: sweetspot narration ${resp.status}`); return; }
       const data = await resp.json();
@@ -6381,7 +6549,8 @@ export default async function(req) {
     try { await sql`DELETE FROM sweetspot_alerts WHERE game_id = ${'SS_FORCE_TEST'}`; } catch (e) {}
     return new Response(JSON.stringify({ cleared: 'SS_FORCE_TEST' }), { headers: { 'Content-Type': 'application/json' } });
   }
-  if (url.searchParams.get('ss_force_test') === '1') {
+  const _ftMode = url.searchParams.get('ss_force_test');
+  if (_ftMode === '1' || _ftMode === '2') {
     const _ft = { id: 'SS_FORCE_TEST' };
     const _fss = {
       subtype: 'EFG_FADE', tier: 'A', period: 3, clock: '5:42',
@@ -6392,10 +6561,95 @@ export default async function(req) {
       bestML: 180, bestBook: 'FanDuel', consensusML: 165, impliedBest: 0.357,
       edge: 0.253, kellySize: 0.071, margin: 6, books: 8,
     };
-    await fireSweetSpotAlert(sql, _ft, 'wnba', 'CHI', 'ATL', _fss);
+    // mode 2: synthetic pctx — validates digest→prompt→row round-trip (§4c). ROLE carrier on
+    // leader + STAR on trailer + one starter in foul trouble; baselines supplied (no BDL dep).
+    let _fpctx = null;
+    if (_ftMode === '2') {
+      const _mkP = (id, name, starter, pts, fgm, fga, fg3m, fg3a, ftm, fta, pf, min) => ({
+        id, full_name: name, starter, played: true,
+        statistics: { minutes: min, points: pts, field_goals_made: fgm, field_goals_att: fga,
+          three_points_made: fg3m, three_points_att: fg3a, free_throws_made: ftm, free_throws_att: fta,
+          personal_fouls: pf, pls_min: 0 },
+      });
+      _fpctx = {
+        modelSummary: {
+          home: { alias: 'CHI', players: [
+            _mkP(990001, 'Test Rolecarry', true, 19, 7, 10, 4, 6, 1, 1, 1, '24'),
+            _mkP(990002, 'Chi Second', true, 8, 4, 9, 0, 2, 0, 0, 3, '22:30'),
+            _mkP(990003, 'Chi Third', true, 6, 3, 8, 0, 1, 0, 1, 1, '20'),
+            _mkP(990004, 'Chi Bench', false, 5, 2, 5, 1, 2, 0, 0, 2, '12'),
+          ] },
+          away: { alias: 'ATL', players: [
+            _mkP(990011, 'Test Star', true, 14, 6, 12, 1, 4, 1, 2, 1, '26'),
+            _mkP(990012, 'Atl Second', true, 10, 4, 8, 2, 4, 0, 0, 4, '23'),
+            _mkP(990013, 'Atl Bench', false, 8, 4, 6, 0, 1, 0, 0, 1, '14'),
+          ] },
+        },
+        pbp: { raw: { shots: [
+          { p: 'Test Rolecarry', tm: 'CHI', q: 2, m: 1, is3: true, z: 'above3', ctx: 'pullup' },
+          { p: 'Test Rolecarry', tm: 'CHI', q: 3, m: 1, is3: true, z: 'above3', ctx: 'pullup' },
+          { p: 'Test Rolecarry', tm: 'CHI', q: 3, m: 1, is3: true, z: 'wing3', ctx: '' },
+          { p: 'Test Rolecarry', tm: 'CHI', q: 3, m: 1, is3: false, z: 'mid', ctx: 'pullup' },
+          { p: 'Test Rolecarry', tm: 'CHI', q: 2, m: 1, is3: false, z: 'rim', ctx: 'driving layup' },
+          { p: 'Chi Second', tm: 'CHI', q: 1, m: 1, is3: false, z: 'rim', ctx: 'layup' },
+          { p: 'Test Star', tm: 'ATL', q: 2, m: 1, is3: false, z: 'rim', ctx: 'driving layup' },
+        ] } },
+        baselines: {
+          'Test Rolecarry': { g: 18, ppg: 7.4, tsNorm: 0.51 },
+          'Chi Second': { g: 20, ppg: 11.2, tsNorm: 0.54 },
+          'Test Star': { g: 19, ppg: 21.3, tsNorm: 0.58 },
+        },
+      };
+    }
+    await fireSweetSpotAlert(sql, _ft, 'wnba', 'CHI', 'ATL', _fss, _fpctx);
     let _frow = null;
-    try { const r = await sql`SELECT id, alert_subtype, alert_tier, ntfy_sent, edge, line_used, line_consensus, narration_text FROM sweetspot_alerts WHERE game_id = ${'SS_FORCE_TEST'}`; _frow = r[0] || null; } catch (e) {}
-    return new Response(JSON.stringify({ forced_test: 'fired — check ntfy for 2 pushes (WHAT + WHY)', row: _frow }, null, 2), { headers: { 'Content-Type': 'application/json' } });
+    try { const r = await sql`SELECT id, alert_subtype, alert_tier, ntfy_sent, edge, line_used, line_consensus, carrier_name, carrier_identity, carrier_share, carrier_ppg, narration_text FROM sweetspot_alerts WHERE game_id = ${'SS_FORCE_TEST'}`; _frow = r[0] || null; } catch (e) {}
+    return new Response(JSON.stringify({ forced_test: `mode ${_ftMode} fired — check ntfy for 2 pushes (WHAT + WHY)`, row: _frow }, null, 2), { headers: { 'Content-Type': 'application/json' } });
+  }
+
+  // ── SWEETSPOT §4c DIGEST DIAG — ?ss_diag_pctx={bdl_game_id} returns the computed player
+  // digest + prompt block for a live/recent WNBA game (no alert, no ntfy, read-only) ──
+  const _dpGid = url.searchParams.get('ss_diag_pctx');
+  if (_dpGid) {
+    try {
+      const _gR = await bdlFetch(`/wnba/v1/games/${_dpGid}`);
+      const _gObj = _gR && _gR.data;
+      if (!_gObj) return new Response(JSON.stringify({ error: `game ${_dpGid} not found` }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+      const _psR = await bdlFetch(`/wnba/v1/player_stats?game_ids[]=${_dpGid}&per_page=100`);
+      const _pRows = (_psR && _psR.data) || [];
+      let _plays = [], _cur = null;
+      for (let i = 0; i < 6; i++) {
+        const _pr = await bdlFetch(`/wnba/v1/plays?game_id=${_dpGid}&per_page=100${_cur ? `&cursor=${_cur}` : ''}`);
+        if (!_pr || !_pr.data) break;
+        _plays = _plays.concat(_pr.data);
+        _cur = _pr.meta && _pr.meta.next_cursor;
+        if (!_cur) break;
+      }
+      const _dhA = _gObj.home_team && _gObj.home_team.abbreviation, _daA = _gObj.visitor_team && _gObj.visitor_team.abbreviation;
+      const _dpbp = parseBDLPBPServer(_plays, _dhA, _daA);
+      const _dmm = buildSummaryFromBDLPlayerStats(_pRows, _gObj, _dpbp);
+      let _dhp = Number(_gObj.home_score) || 0, _dap = Number(_gObj.away_score) || 0;
+      if (_dhp === 0 && _dap === 0) {
+        for (const r of _pRows) {
+          const _tA = r.team && r.team.abbreviation;
+          if (_tA === _dhA) _dhp += Number(r.pts) || 0; else if (_tA === _daA) _dap += Number(r.pts) || 0;
+        }
+      }
+      const _dper = Number(_gObj.period) || 4;
+      const _dg = ssPlayerDigest(_dmm, _dhp >= _dap);
+      if (!_dg) return new Response(JSON.stringify({ error: 'digest null (no players?)' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+      const _dcar = (_dg.leader.top && _dg.leader.top[0]) || null;
+      _dg.shot = { team: ssShotGeo(_dpbp, _dg.leader.alias, null, _dper), carrier: _dcar ? ssShotGeo(_dpbp, _dg.leader.alias, _dcar.name, _dper) : null };
+      _dg.base = {};
+      for (const bp of [..._dg.leader.top.slice(0, 2), ..._dg.trailer.top.slice(0, 1)]) {
+        if (bp && bp.id) _dg.base[bp.name] = await ssCarrierBaseline(bp.id);
+      }
+      _dg.period = _dper;
+      const _dcomp = ssComposeCtxBlock(_dg);
+      return new Response(JSON.stringify({ game: `${_daA}@${_dhA}`, score: `${_dap}-${_dhp}`, period: _dper, cols: _dcomp.cols, prompt_block: _dcomp.text, digest: _dg }, null, 2), { headers: { 'Content-Type': 'application/json' } });
+    } catch (e) {
+      return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    }
   }
 
   // ── WNBA POT BACKFILL — one-off manual action, never runs on cron ──
@@ -8109,7 +8363,7 @@ export default async function(req) {
                         bestML: _ssTrailML, bestBook: _ssBestBook, consensusML: _ssConsML, impliedBest: _ssImplied,
                         edge: _ssEdge, kellySize: (_ssEv && _ssEv.size != null ? _ssEv.size : null),
                         margin: _ssDeficit, books: (odds && odds.books) || 0,
-                      });
+                      }, { modelSummary: modelSummary, pbp: game._bdlPbp });
                     }
                   }
                 }

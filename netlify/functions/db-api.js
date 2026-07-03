@@ -230,6 +230,12 @@ exports.handler = async (event) => {
       try { await sql`CREATE INDEX IF NOT EXISTS idx_ssa_game ON sweetspot_alerts (game_id)`; } catch(e) {}
       // 2b atomic dedup: UNIQUE (game_id, alert_subtype) → ON CONFLICT DO NOTHING RETURNING id (one alert per edge-type per game)
       try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_ssa_dedup ON sweetspot_alerts (game_id, alert_subtype)`; } catch(e) {}
+      // §4c player-context columns (SWEETSPOT_4C_SPEC.md) — nullable, ledger for role-carry + eFG-amp forward OOS
+      try { await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS carrier_name TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS carrier_identity TEXT`; } catch(e) {}
+      try { await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS carrier_share REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS carrier_ppg REAL`; } catch(e) {}
+      try { await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS player_ctx_json JSONB`; } catch(e) {}
 
       // Standings cache (daily refresh) — keyed BDL-canonical alias → W/L; feeds comebackProb leaderWP/trailerWP
       await sql`
