@@ -689,9 +689,12 @@ function ssPlayerDigest(mm, leaderIsHome) {
     const teamEfg = tFga > 0 ? (rows.reduce((a, r) => a + r.fgm, 0) + 0.5 * rows.reduce((a, r) => a + r.fg3m, 0)) / tFga : null;
     const sorted = rows.slice().sort((a, b) => b.pts - a.pts);
     const top = sorted.slice(0, 2).map(r => ({ ...r, share: teamPts > 0 ? r.pts / teamPts : 0 }));
-    const foulTrouble = rows.filter(r => r.starter && r.pf >= 3).map(r => `${r.name} (${r.pf}F)`);
+    // WNBA has no lineups endpoint → bpa starter flag is false for all; fall back to minutes
+    const foulTrouble = rows.filter(r => (r.starter || r.min >= 10) && r.pf >= 3).map(r => `${r.name} (${r.pf}F)`);
+    const hasStarterData = rows.some(r => r.starter);
     const benchPts = rows.filter(r => !r.starter).reduce((a, r) => a + r.pts, 0);
-    return { alias: sd.alias || '?', teamPts, teamEfg, top, foulTrouble, benchShare: teamPts > 0 ? benchPts / teamPts : 0 };
+    return { alias: sd.alias || '?', teamPts, teamEfg, top, foulTrouble,
+      benchShare: (hasStarterData && teamPts > 0) ? benchPts / teamPts : null };
   }
   const h = side(mm.home), a = side(mm.away);
   return leaderIsHome ? { leader: h, trailer: a } : { leader: a, trailer: h };
@@ -753,7 +756,8 @@ function ssComposeCtxBlock(dg) {
   const ft = [...(dg.leader.foulTrouble || []).map(x => `${dg.leader.alias} ${x}`), ...(dg.trailer.foulTrouble || []).map(x => `${dg.trailer.alias} ${x}`)];
   t += `- Foul trouble: ${ft.length ? ft.join(', ') : 'none'}.\n`;
   if (dg.trailer.top && dg.trailer.top.length) {
-    t += `- ${dg.trailer.alias} comeback engines: ${dg.trailer.top.map(r => `${r.name} ${r.pts} pts (TS ${P(r.ts)}%)`).join(', ')}; bench ${P(dg.trailer.benchShare)}% of pts.\n`;
+    t += `- ${dg.trailer.alias} comeback engines: ${dg.trailer.top.map(r => `${r.name} ${r.pts} pts (TS ${P(r.ts)}%)`).join(', ')}`
+      + (dg.trailer.benchShare != null ? `; bench ${P(dg.trailer.benchShare)}% of pts` : ``) + `.\n`;
   }
   if (dg.trailer.teamEfg != null) {
     t += `- ${dg.trailer.alias} shooting ${P(dg.trailer.teamEfg)}% eFG while trailing`
