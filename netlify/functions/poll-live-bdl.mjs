@@ -28,6 +28,11 @@ const WNBA_SS_COMPUTE_OFF = process.env.WNBA_SS_COMPUTE_OFF === '1';
 // SWEET-SPOT 2b: mechanical A alert. Ships DARK (default off). Set env WNBA_SS_ALERT_ON=1 in
 // Netlify to go live, after the forced-path verification passes. A/B mechanical; only C Opus-suppressable.
 const WNBA_SS_ALERT_ON = process.env.WNBA_SS_ALERT_ON === '1';
+// SWEETSPOT_TIER_BC_SPEC.md: B tier (one-soft + B3 mid-heat), ledger subtypes (rows only,
+// no push), WATCHLIST (review cue). All default OFF — ship dark, enable per rollout §5.
+const WNBA_SS_B_ON = process.env.WNBA_SS_B_ON === '1';
+const WNBA_SS_LEDGER_ON = process.env.WNBA_SS_LEDGER_ON === '1';
+const WNBA_SS_WATCHLIST_ON = process.env.WNBA_SS_WATCHLIST_ON === '1';
 
 // ── XGBOOST MODEL ──────────────────────────────────────────────────────────
 // Raw stats structural model — 300 trees, 13 features (no progress), trained on 1,235 games.
@@ -784,11 +789,81 @@ function ssComposeCtxBlock(dg) {
   };
 }
 
+// ── SWEETSPOT TIER LADDER (SWEETSPOT_TIER_BC_SPEC.md §2 + A1.2) ────────────
+// Pure function → extractable by the fixture harness (research/ss_tier_bc_fixtures.mjs).
+// Returns { tier, softCell, ledgerSub } — at most one of tier/ledgerSub is set.
+// A  = pristine dual-gate (STRONG FADE + VOLATILE)          [unchanged, live]
+// B1 = fade soft (LEAN FADE + VOLATILE)                     [BT 70.0%, n=10]
+// B2 = variance soft (STRONG FADE + MIXED)                  [BT 56.2%, n=32]
+// B3 = mid-heat, both one step (LEAN FADE + MIXED)          [A1.2, frontier-priced ~free]
+// GAP_BASE    = base gates pass, fade/class fail A+B shapes [~40% cell — ledger only]
+// Q4_COLLAPSE = Q4, deficit 10-15, collapse STRONG/SHORT    [log-first, push deferred]
+function ssClassifyTier(edge, period, deficit, collT, fadeT, cls) {
+  const out = { tier: null, softCell: null, ledgerSub: null };
+  if (edge == null || edge <= 0 || !(collT === 'STRONG' || collT === 'SHORT')) return out;
+  if (period < 4 && deficit <= 9) {
+    if (fadeT === 'STRONG FADE' && cls === 'VOLATILE') { out.tier = 'A'; }
+    else if (fadeT === 'LEAN FADE' && cls === 'VOLATILE') { out.tier = 'B'; out.softCell = 'B1'; }
+    else if (fadeT === 'STRONG FADE' && cls === 'MIXED') { out.tier = 'B'; out.softCell = 'B2'; }
+    else if (fadeT === 'LEAN FADE' && cls === 'MIXED') { out.tier = 'B'; out.softCell = 'B3'; }
+    else { out.ledgerSub = 'GAP_BASE'; }
+  } else if (period === 4 && deficit >= 10 && deficit <= 15) {
+    out.ledgerSub = 'Q4_COLLAPSE';
+  }
+  return out;
+}
+
+// ── PUSH COPY STANDARD (SWEETSPOT_TIER_BC_SPEC.md AMENDMENT 2, templates verbatim) ──
+// Pure function → extractable by the fixture harness. Bodies are UTF-8 (em dashes fine);
+// titles use ASCII hyphen (Node fetch requires ASCII headers — hotfix learning #2;
+// sendNtfy sanitizes as a second line of defense). WHY → NUMBERS → SIZE, every term in
+// full: "quality gap" with both win rates, "effective FG (shooting efficiency)", never
+// raw band colors / "pp" / "1/4-Kelly" jargon.
+function ssComposePush(ss) {
+  const _ml = v => v == null ? '?' : (Number(v) > 0 ? '+' + v : '' + v);
+  const _pct = (v, d = 0) => v == null ? '?' : (v * 100).toFixed(d);
+  if (ss.subtype === 'WATCHLIST') {
+    const band = ss.leaderBand === 'red' ? ' — running red-hot'
+      : (ss.leaderBand === 'orange' ? ' — running hot' : '');
+    const body = `${ss.trailerAl} is the much better team — wins ${_pct(ss.trailerWP)}% of games vs ${ss.leaderAl}'s ${_pct(ss.leaderWP)}% (quality gap) — and trails by ${ss.margin} in Q${ss.period}. ${ss.leaderAl} shooting ${ss.leaderEfg != null ? Math.round(ss.leaderEfg) : '?'}% effective FG${band}.\n`
+      + `System gates haven't aligned for a bet; worth a dashboard look.`;
+    return { title: `REVIEW - ${ss.trailerAl} down ${ss.margin} to ${ss.leaderAl} (not a bet call)`, body: body, priority: 2 };
+  }
+  // A / B share one template; B adds the soft-gate clause after WHY + eighth-Kelly SIZE.
+  const tierWord = ss.tier === 'B' ? 'B' : 'A';
+  const softClause = ss.tier !== 'B' ? ''
+    : (ss.softCell === 'B3'
+      ? `TIER B: both reads a step soft — confidence a notch below A.\n`
+      : `TIER B: one gate is a step soft: ${ss.softCell === 'B1' ? 'shooting-heat read moderate' : 'lead-mix read moderate'} — confidence a notch below A.\n`);
+  const consensus = (ss.books > 1 && ss.consensusML != null) ? ` (consensus ${_ml(ss.consensusML)})` : '';
+  const kelly = ss.kellySize == null ? '?' : ((ss.tier === 'B' ? ss.kellySize / 2 : ss.kellySize) * 100).toFixed(1);
+  const sizeLabel = ss.tier === 'B' ? 'eighth-Kelly — half of A sizing' : 'quarter-Kelly';
+  const body = `Back ${ss.trailerAl} (${ss.trailerW}-${ss.trailerL}) down ${ss.margin} to ${ss.leaderAl} (${ss.leaderW}-${ss.leaderL}), Q${ss.period} ${ss.clock}.\n`
+    + `WHY: ${ss.leaderAl}'s lead is built on hot shooting — ${ss.leaderEfg != null ? Math.round(ss.leaderEfg) : '?'}% effective FG (shooting efficiency), and ${ss.varShare != null ? Math.round(ss.varShare) : '?'}% of their lead comes from that heat rather than structure. ${ss.trailerAl} is the far better team: wins ${_pct(ss.trailerWP)}% of games vs ${ss.leaderAl}'s ${_pct(ss.leaderWP)}% (quality gap).\n`
+    + softClause
+    + `NUMBERS: model true win chance for ${ss.trailerAl} ~${_pct(ss.collapseTrue)}% (range ${_pct(ss.pLow)}–${_pct(ss.pHigh)}%) vs the market's ${_pct(ss.impliedBest)}% — a +${_pct(ss.edge)}-point edge. Best price ${_ml(ss.bestML)} at ${ss.bestBook || 'best book'}${consensus}.\n`
+    + `SIZE: ~${kelly}% of bankroll (${sizeLabel}). Valid while the deficit stays single digits, before Q4.`;
+  return { title: `SWEET SPOT ${tierWord} - Back ${ss.trailerAl} ${_ml(ss.bestML)} (${ss.bestBook || 'book'})`, body: body, priority: ss.tier === 'B' ? 4 : 5 };
+}
+
 async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
   const _ml = v => v == null ? '?' : (Number(v) > 0 ? '+' + v : '' + v);
   const _pct = (v, d = 0) => v == null ? '?' : (v * 100).toFixed(d);
   try {
-    // Stage 1a — atomic dedup insert
+    // Stage 0 — suppression (A2.5): A suppresses B; A/B suppress WATCHLIST. B-then-A and
+    // watchlist-then-A/B remain allowed (upgrades). Indexed SELECT, rare fire path only.
+    // Non-fatal: on error, fail open — the dedup index still guards same-subtype re-fires.
+    try {
+      if (ss.subtype === 'EFG_FADE_SOFT') {
+        const _sup = await sql`SELECT id FROM sweetspot_alerts WHERE game_id = ${game.id} AND alert_subtype = ${'EFG_FADE'} LIMIT 1`;
+        if (_sup.length > 0) { log(`${aA}@${hA}: sweetspot B suppressed — A already fired this game`); return; }
+      } else if (ss.subtype === 'WATCHLIST') {
+        const _sup = await sql`SELECT id FROM sweetspot_alerts WHERE game_id = ${game.id} AND alert_subtype IN ('EFG_FADE', 'EFG_FADE_SOFT') LIMIT 1`;
+        if (_sup.length > 0) { log(`${aA}@${hA}: sweetspot WATCHLIST suppressed — A/B already fired this game`); return; }
+      }
+    } catch (e) { log(`${aA}@${hA}: sweetspot suppress check non-fatal: ${e.message}`); }
+
+    // Stage 1a — atomic dedup insert (ledger subtypes: rows only, ntfy_sent=false)
     let inserted;
     try {
       inserted = await sql`
@@ -800,24 +875,22 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
           ${ss.leaderAl}, ${ss.trailerAl}, ${ss.leaderWP}, ${ss.trailerWP}, ${ss.gap}, ${ss.leaderEfg}, ${ss.leaderBand},
           ${ss.varShare}, ${ss.leadClass}, ${ss.fadeTier}, ${ss.collapseTier}, ${ss.collapseTrue}, ${ss.margin}, ${ss.margin},
           ${ss.bestML != null ? parseInt(ss.bestML) : null}, ${ss.consensusML != null ? parseInt(ss.consensusML) : null},
-          ${ss.impliedBest}, ${ss.edge}, ${ss.kellySize}, ${true})
+          ${ss.impliedBest}, ${ss.edge}, ${ss.kellySize}, ${!ss.ledgerOnly})
         ON CONFLICT (game_id, alert_subtype) DO NOTHING
         RETURNING id`;
     } catch (e) { log(`${aA}@${hA}: sweetspot insert failed: ${e.message}`); return; }
     if (!inserted || inserted.length === 0) return;  // already fired this subtype for this game
     const rowId = inserted[0].id;
 
-    // Stage 1b — instant mechanical push (the WHAT, 0 Opus)
-    const consensusClause = (ss.books > 1 && ss.consensusML != null)
-      ? ` (consensus ${_ml(ss.consensusML)}, mkt ${_pct(ss.impliedBest)}%)`
-      : ` (mkt ${_pct(ss.impliedBest)}%)`;
-    const body = `SWEET SPOT — Back ${ss.trailerAl} (${ss.trailerW}-${ss.trailerL}) vs ${ss.leaderAl} (${ss.leaderW}-${ss.leaderL}).`
-      + ` ${ss.leaderAl} +${ss.margin}, eFG ${ss.leaderEfg != null ? Math.round(ss.leaderEfg) : '?'}% (${ss.leaderBand}) / variance ${ss.varShare != null ? Math.round(ss.varShare) : '?'}%.`
-      + ` True ~${_pct(ss.collapseTrue)}% (${_pct(ss.pLow)}-${_pct(ss.pHigh)}%) · best ${_ml(ss.bestML)}@${ss.bestBook || 'book'}${consensusClause}`
-      + ` · EDGE +${_pct(ss.edge)}pp · ~${_pct(ss.kellySize)}% (1/4-Kelly).`
-      + ` Window: single-digit, pre-Q4. Take & hold.`;
-    await sendNtfy(`SWEET SPOT - Back ${ss.trailerAl} vs ${ss.leaderAl}`, body, 5);
-    log(`${aA}@${hA}: ★ SWEET SPOT A FIRED — ${ss.trailerAl} +${ss.margin} edge=${_pct(ss.edge)}pp line=${_ml(ss.bestML)}`);
+    // Stage 1b — instant mechanical push (the WHAT, 0 Opus). Copy per A2.3 standard.
+    // Ledger subtypes skip the push entirely (rows only); WATCHLIST is a priority-2 review cue.
+    if (ss.ledgerOnly) {
+      log(`${aA}@${hA}: sweetspot ledger row ${ss.subtype} recorded — Q${ss.period} ${ss.trailerAl} +${ss.margin} collapse=${ss.collapseTier} fade=${ss.fadeTier || '—'} class=${ss.leadClass || '—'} (no push, ever)`);
+    } else {
+      const push = ssComposePush(ss);
+      await sendNtfy(push.title, push.body, push.priority);
+      log(`${aA}@${hA}: ★ SWEET SPOT ${ss.subtype === 'WATCHLIST' ? 'WATCHLIST' : ss.tier} FIRED — ${ss.trailerAl} +${ss.margin}${ss.edge != null ? ` edge=${_pct(ss.edge)}pp` : ''} line=${_ml(ss.bestML)}${ss.softCell ? ` cell=${ss.softCell}` : ''}`);
+    }
 
     // Stage 1.5 — §4c player-context digest (lazy; ledger-first so calibration data survives
     // narration failure; any throw here degrades to today's context-free narration)
@@ -849,7 +922,10 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
       } catch (e) { log(`${aA}@${hA}: sweetspot pctx non-fatal: ${e.message}`); _ctxText = ''; }
     }
 
-    // Stage 2 — async Opus narration (the WHY); non-fatal, never re-decides
+    // Stage 2 — async Opus narration (the WHY); non-fatal, never re-decides.
+    // A and B only (D-11: B keeps two-push parity). Ledger rows and WATCHLIST never narrate —
+    // but both still got the Stage 1.5 digest above (carrier ledger = forward OOS feed).
+    if (ss.ledgerOnly || ss.subtype === 'WATCHLIST') return;
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return;
     try {
@@ -864,6 +940,7 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
         + `(1) one sentence on why ${ss.leaderAl}'s lead is statistically fragile at the TEAM level (variance share / eFG band / quality gap);\n`
         + `(2) one sentence on why ${ss.trailerAl} is the better team likely to close${_ctxText ? `, naming their live comeback engine(s)` : ``};\n`
         + `(3) one sentence on the single biggest risk to watch${_ctxText ? ` — if a STAR carrier is flagged above this MUST be her sustaining at her norm; include foul trouble on either side if present` : ``}.\n`
+        + `State every metric in full plain English on first use — say "quality gap" and "effective field-goal percentage", never bare "gap" or "eFG"; use percentages, not decimals.\n`
         + `Never predict a specific player's shooting will collapse.${_ctxText ? ` Never contradict the FRAMING RULES.` : ``} Use team names.`;
       const resp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -6553,8 +6630,13 @@ export default async function(req) {
     try { await sql`DELETE FROM sweetspot_alerts WHERE game_id = ${'SS_FORCE_TEST'}`; } catch (e) {}
     return new Response(JSON.stringify({ cleared: 'SS_FORCE_TEST' }), { headers: { 'Content-Type': 'application/json' } });
   }
+  // Modes: 1 = A (no pctx) · 2 = A + synthetic pctx (§4c) · 3 = B (B1 cell) + pctx ·
+  // 4 = GAP_BASE ledger row + pctx (assert ntfy_sent=false, digest present, NO push) ·
+  // 5 = WATCHLIST + pctx (assert single priority-2 push, digest, NO narration).
+  // Suppression rules apply across modes on the same test game — run ss_force_clear=1
+  // between sequences; recommended order: 5 → 3 → 4 (then 5 again to see the suppress).
   const _ftMode = url.searchParams.get('ss_force_test');
-  if (_ftMode === '1' || _ftMode === '2') {
+  if (['1', '2', '3', '4', '5'].includes(_ftMode)) {
     const _ft = { id: 'SS_FORCE_TEST' };
     const _fss = {
       subtype: 'EFG_FADE', tier: 'A', period: 3, clock: '5:42',
@@ -6565,10 +6647,24 @@ export default async function(req) {
       bestML: 180, bestBook: 'FanDuel', consensusML: 165, impliedBest: 0.357,
       edge: 0.253, kellySize: 0.071, margin: 6, books: 8,
     };
-    // mode 2: synthetic pctx — validates digest→prompt→row round-trip (§4c). ROLE carrier on
+    if (_ftMode === '3') {
+      // synthetic B — B1 cell (fade soft: LEAN FADE + VOLATILE), per spec §4
+      _fss.subtype = 'EFG_FADE_SOFT'; _fss.tier = 'B'; _fss.softCell = 'B1';
+      _fss.fadeTier = 'LEAN FADE';
+    } else if (_ftMode === '4') {
+      // synthetic GAP_BASE ledger row — base gates pass, fade/class fail A+B shapes
+      _fss.subtype = 'GAP_BASE'; _fss.tier = null; _fss.ledgerOnly = true;
+      _fss.fadeTier = 'NO FADE'; _fss.leadClass = 'STRUCTURAL';
+    } else if (_ftMode === '5') {
+      // synthetic WATCHLIST — band entry review cue; gate fields blank like a real early fire
+      _fss.subtype = 'WATCHLIST'; _fss.tier = null; _fss.period = 2; _fss.clock = '3:10';
+      _fss.fadeTier = null; _fss.collapseTier = null; _fss.collapseTrue = null;
+      _fss.pLow = null; _fss.pHigh = null; _fss.edge = null; _fss.kellySize = null;
+    }
+    // modes 2-5: synthetic pctx — validates digest→prompt→row round-trip (§4c). ROLE carrier on
     // leader + STAR on trailer + one starter in foul trouble; baselines supplied (no BDL dep).
     let _fpctx = null;
-    if (_ftMode === '2') {
+    if (_ftMode !== '1') {
       const _mkP = (id, name, starter, pts, fgm, fga, fg3m, fg3a, ftm, fta, pf, min) => ({
         id, full_name: name, starter, played: true,
         statistics: { minutes: min, points: pts, field_goals_made: fgm, field_goals_att: fga,
@@ -6606,9 +6702,10 @@ export default async function(req) {
       };
     }
     await fireSweetSpotAlert(sql, _ft, 'wnba', 'CHI', 'ATL', _fss, _fpctx);
-    let _frow = null;
-    try { const r = await sql`SELECT id, alert_subtype, alert_tier, ntfy_sent, edge, line_used, line_consensus, carrier_name, carrier_identity, carrier_share, carrier_ppg, narration_text FROM sweetspot_alerts WHERE game_id = ${'SS_FORCE_TEST'}`; _frow = r[0] || null; } catch (e) {}
-    return new Response(JSON.stringify({ forced_test: `mode ${_ftMode} fired — check ntfy for 2 pushes (WHAT + WHY)`, row: _frow }, null, 2), { headers: { 'Content-Type': 'application/json' } });
+    let _frows = [];
+    try { _frows = await sql`SELECT id, alert_subtype, alert_tier, ntfy_sent, edge, line_used, line_consensus, carrier_name, carrier_identity, carrier_share, carrier_ppg, narration_text FROM sweetspot_alerts WHERE game_id = ${'SS_FORCE_TEST'} ORDER BY id`; } catch (e) {}
+    const _ftExpect = { '1': '2 pushes (WHAT + WHY), no carrier cols', '2': '2 pushes + carrier cols', '3': '2 pushes (SWEET SPOT B, priority 4) + carrier cols', '4': 'NO push, ntfy_sent=false, carrier cols present, no narration', '5': '1 push (REVIEW, priority 2) + carrier cols, no narration' }[_ftMode];
+    return new Response(JSON.stringify({ forced_test: `mode ${_ftMode} fired — expect: ${_ftExpect}. If no new row appeared, a suppression rule blocked it (run ss_force_clear=1 and re-order: 5 → 3 → 4).`, rows: _frows }, null, 2), { headers: { 'Content-Type': 'application/json' } });
   }
 
   // ── SWEETSPOT §4c DIGEST DIAG — ?ss_diag_pctx={bdl_game_id} returns the computed player
@@ -8331,13 +8428,11 @@ export default async function(req) {
                     var _ssVar = _ssHomeTrails ? _ssSc.away.vPct : _ssSc.home.vPct;
                     var _ssGap = (_ssLeadWP != null && _ssTrailWP != null) ? (_ssTrailWP - _ssLeadWP) : null;
                     var _ssImplied = (_ssTrailML != null) ? americanToImplied(_ssTrailML) : null;
-                    // A = pristine dual-gate (deterministic). B intentionally left null — earned in replay.
-                    var _ssTier = null;
-                    if (_ssEdge != null && _ssEdge > 0 && currentPeriod < 4
-                        && (_ssCollT === 'STRONG' || _ssCollT === 'SHORT')
-                        && _ssFadeT === 'STRONG FADE' && _ssClass === 'VOLATILE' && _ssDeficit <= 9) {
-                      _ssTier = 'A';
-                    }
+                    // Tier ladder (SWEETSPOT_TIER_BC_SPEC.md): A pristine → B one-soft/B3 →
+                    // ledger shapes. Pure classifier; the snapshot records the SHAPE regardless
+                    // of feature flags (same compute-vs-fire separation as the original A).
+                    var _ssLad = ssClassifyTier(_ssEdge, currentPeriod, _ssDeficit, _ssCollT, _ssFadeT, _ssClass);
+                    var _ssTier = _ssLad.tier;
                     var _ssFired = _ssTier != null;
 
                     await sql`UPDATE snapshots SET
@@ -8353,13 +8448,21 @@ export default async function(req) {
                       WHERE game_id = ${game.id} AND period = ${currentPeriod} AND clock = ${clock} AND home_pts = ${_ssHp} AND away_pts = ${_ssAp}`;
                     log(`${matchup}: SS — ${_ssLeadAl} +${_ssDeficit} | collapse=${_ssCollT} fade=${_ssFadeT} class=${_ssClass} band=${_ssLeadBand||'—'} edge=${_ssEdge != null ? _ssEdge.toFixed(1) : '—'} tier=${_ssTier || 'none'}`);
 
-                    // ── 2b: fire the mechanical A alert (ships dark behind WNBA_SS_ALERT_ON) ──
-                    if (_ssTier === 'A' && WNBA_SS_ALERT_ON) {
+                    // ── 2b: fire the tier ladder — A live (WNBA_SS_ALERT_ON) · B behind
+                    // WNBA_SS_B_ON · ledger rows behind WNBA_SS_LEDGER_ON · WATCHLIST behind
+                    // WNBA_SS_WATCHLIST_ON. WATCHLIST is independent (band entry, Q2/Q3 only,
+                    // gap ≥ .15, deficit 1-9); fired AFTER A/B so same-poll A/B suppresses it.
+                    var _ssDoFire = (_ssTier === 'A' && WNBA_SS_ALERT_ON) || (_ssTier === 'B' && WNBA_SS_B_ON);
+                    var _ssDoLedger = !_ssTier && _ssLad.ledgerSub != null && WNBA_SS_LEDGER_ON;
+                    var _ssDoWatch = WNBA_SS_WATCHLIST_ON && _ssGap != null && _ssGap >= 0.15
+                      && _ssDeficit >= 1 && _ssDeficit <= 9
+                      && (currentPeriod === 2 || currentPeriod === 3);
+                    if (_ssDoFire || _ssDoLedger || _ssDoWatch) {
                       var _ssLeadRec = ssStandings[_ssLeadAl] || {}, _ssTrailRec = ssStandings[_ssTrailAl] || {};
                       var _ssBestBook = _ssHomeTrails ? (odds && odds.homeMLBook) : (odds && odds.awayMLBook);
                       var _ssConsML = _ssHomeTrails ? (odds && odds.homeMLConsensus) : (odds && odds.awayMLConsensus);
-                      await fireSweetSpotAlert(sql, game, league, hA, aA, {
-                        subtype: 'EFG_FADE', tier: _ssTier, period: currentPeriod, clock: clock,
+                      var _ssPayload = {
+                        period: currentPeriod, clock: clock,
                         leaderAl: _ssLeadAl, trailerAl: _ssTrailAl, leaderWP: _ssLeadWP, trailerWP: _ssTrailWP, gap: _ssGap,
                         leaderW: _ssLeadRec.w, leaderL: _ssLeadRec.l, trailerW: _ssTrailRec.w, trailerL: _ssTrailRec.l,
                         leaderEfg: _ssLeadEfg, leaderBand: _ssLeadBand, varShare: _ssVar, leadClass: _ssClass,
@@ -8367,7 +8470,19 @@ export default async function(req) {
                         bestML: _ssTrailML, bestBook: _ssBestBook, consensusML: _ssConsML, impliedBest: _ssImplied,
                         edge: _ssEdge, kellySize: (_ssEv && _ssEv.size != null ? _ssEv.size : null),
                         margin: _ssDeficit, books: (odds && odds.books) || 0,
-                      }, { modelSummary: modelSummary, pbp: game._bdlPbp });
+                      };
+                      var _ssPctx = { modelSummary: modelSummary, pbp: game._bdlPbp };
+                      if (_ssDoFire || _ssDoLedger) {
+                        await fireSweetSpotAlert(sql, game, league, hA, aA, Object.assign({}, _ssPayload, {
+                          subtype: _ssDoFire ? (_ssTier === 'A' ? 'EFG_FADE' : 'EFG_FADE_SOFT') : _ssLad.ledgerSub,
+                          tier: _ssDoFire ? _ssTier : null, softCell: _ssLad.softCell, ledgerOnly: _ssDoLedger,
+                        }), _ssPctx);
+                      }
+                      if (_ssDoWatch) {
+                        await fireSweetSpotAlert(sql, game, league, hA, aA, Object.assign({}, _ssPayload, {
+                          subtype: 'WATCHLIST', tier: null, softCell: null, ledgerOnly: false,
+                        }), _ssPctx);
+                      }
                     }
                   }
                 }
