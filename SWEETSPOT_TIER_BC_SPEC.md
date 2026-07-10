@@ -177,3 +177,73 @@ takes from his passes within the band. Promotable features become future tier ca
   rows (rec: yes) · D-8 late-Q1 watchlist eligibility (rec: no for v1, Q2+ only; revisit if the
   ledger shows Q1-qualifying games converting) · D-9 B3 inclusion despite two-soft deviation
   (rec: yes — frontier-priced at ~free).
+
+
+---
+
+# AMENDMENT 2 (2026-07-02, same session) — Push Copy Standard (plain English, terms in full)
+
+**Trigger:** PM directive — alerts must be clear plain English, most important information first,
+every term stated in full (e.g. "quality gap", never bare "gap"). This is the project's alert-body
+law applied rigorously; the LIVE A body currently violates it. Copy is code: templates below are
+verbatim build targets.
+
+## A2.1 Principles
+
+1. **Title carries the action + price** — the one glance that matters on a lock screen.
+2. **Body order: WHY → NUMBERS → SIZE** (the what is already in the title).
+3. **Every metric glossed on first use;** percentages, never decimals (35%, not .353).
+4. **Quality gap is always shown as both win rates** ("wins 71% of games vs 35%"), with the label.
+5. Internal vocab (collapse tier, band colors, lead class enums) never appears raw in a push.
+
+## A2.2 Term standard (applies to all tiers + Stage-2 narration)
+
+| Internal | Push copy |
+|---|---|
+| gap | "quality gap" + both win rates spelled out |
+| eFG / band | "effective FG (shooting efficiency)"; band → "running red-hot"/"running hot" |
+| variance share | "{X}% of their lead comes from hot shooting rather than structure" |
+| collapseTrue, pLow–pHigh | "model true win chance ~{X}% (range {lo}–{hi}%)" |
+| impliedBest | "the market prices them at {X}%" |
+| edge | "+{X}-point edge (model vs market win probability)" |
+| kellySize | "~{X}% of bankroll (quarter-Kelly)" / "(eighth-Kelly — half of A sizing)" |
+| bestML/bestBook | "+{ML} at {Book} (consensus +{ML})" |
+| window | "valid while the deficit stays single digits, before Q4" |
+
+## A2.3 Verbatim templates (build targets — replaces Stage 1b body at ~810)
+
+**A** — title: `SWEET SPOT A — Back {TRAILER} +{ML} ({Book})`
+```
+Back {TRAILER} ({W}-{L}) down {N} to {LEADER} ({W}-{L}), Q{P} {clock}.
+WHY: {LEADER}'s lead is built on hot shooting — {efg}% effective FG (shooting efficiency),
+and {var}% of their lead comes from that heat rather than structure. {TRAILER} is the far
+better team: wins {tw}% of games vs {LEADER}'s {lw}% (quality gap).
+NUMBERS: model true win chance for {TRAILER} ~{ct}% (range {lo}–{hi}%) vs the market's {imp}%
+— a +{edge}-point edge. Best price +{ML} at {Book} (consensus +{cML}).
+SIZE: ~{k}% of bankroll (quarter-Kelly). Valid while the deficit stays single digits, before Q4.
+```
+
+**B** — title: `SWEET SPOT B — Back {TRAILER} +{ML} ({Book})`
+Same as A, plus after WHY: `TIER B: {one gate is a step soft: {shooting-heat read moderate |
+lead-mix read moderate} | both reads a step soft} — confidence a notch below A.`
+SIZE line: `~{k}% of bankroll (eighth-Kelly — half of A sizing).`
+
+**WATCHLIST** — title: `REVIEW — {TRAILER} down {N} to {LEADER} (not a bet call)`
+```
+{TRAILER} is the much better team — wins {tw}% of games vs {LEADER}'s {lw}% (quality gap) —
+and trails by {N} in Q{P}. {LEADER} shooting {efg}% effective FG{ — running hot}.
+System gates haven't aligned for a bet; worth a dashboard look.
+```
+
+**Stage-2 narration prompt (§4c) — add one instruction line:** `State every metric in full plain
+English on first use — say "quality gap" and "effective field-goal percentage", never bare "gap"
+or "eFG"; use percentages, not decimals.`
+
+## A2.4 Scope & deltas
+
+- **A-body retrofit included in this build** (copy-only change to the live path, no flag; the
+  live A alert adopts the standard the moment B/C ships).
+- §4 tests: force-tests 1/2/3/5 assert the new copy shape (title contains price+book; body
+  contains "quality gap" and "effective FG"; no raw band colors or "pp"/"1/4-Kelly" jargon).
+- LOE: +~15 lines (template literals) → **~125–145 total**, unchanged elsewhere.
+- **PM decision D-10:** approve templates verbatim or edit wording before build.
