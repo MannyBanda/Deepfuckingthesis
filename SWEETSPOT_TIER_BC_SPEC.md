@@ -108,3 +108,72 @@ commit → push → sleep 60 → ss_force_test=3 → ss_force_test=4 → ss_forc
 | D-3 | GAP_BASE as ledger-only (not push) despite covering the manual CON pattern | yes — the 40% cell + calibration question; ledger graduates it if the line truly cushions |
 | D-4 | Q4_COLLAPSE deficit band 10–15 | yes (10–15; >15 is DEAD territory) |
 | D-5 | Ledger graduation bar (n≥30, ±5pp calibration) | as stated |
+
+
+---
+
+# AMENDMENT 1 (2026-07-02, same session) — Volume Frontier: B3 cell + WATCHLIST tier
+
+**Trigger:** PM volume review — A+B halftime-only counts (8.2%) understated live volume, and the
+manual dashboard workflow (~2 finds/week, high precision) is the system's best expansion asset.
+
+## A1.1 The measured frontier (720 games, first qualifying checkpoint of Q1/Q2/Q3-end)
+
+| Config | Games | Win% |
+|---|---|---|
+| A+B shape, halftime only | 8.2% | 61.0% |
+| **A+B shape, any checkpoint** | **20.0%** | **59.0%** |
+| + B3 mid-heat cell | 21.2% | 58.8% |
+| + deficit 1–12 | 22.2% | 56.2% (rejected: −3pp) |
+| + gap ≥ .05 | 23.5% | 56.2% (rejected: −3pp) |
+| all relaxations | 28.2% | 53.2% (rejected: barely above band) |
+| **Band entry gap ≥ .15 (WATCHLIST)** | **27.5%** | **58.6%** |
+
+**Volume correction:** live A+B expectation is ~1 alert per 1–2 slates (any-checkpoint ≈ 20%
+shape-level, trimmed by line/edge gates), not the 1–2/month implied by halftime-only counts.
+
+## A1.2 B3 — mid-heat cell (added to Tier B)
+
+`fadeTier === 'LEAN FADE'` AND `leadClass === 'MIXED'` (research analog: Ld .04–.08 &
+0 < Td < Ld). Honest note: this is **both gates one step soft** — a deliberate relaxation of the
+original "one clean / one soft" rule, priced by the frontier at **−0.2pp pooled for +6% volume**
+(the cheapest volume on the board). Same subtype `EFG_FADE_SOFT`, same push shape; the
+soft-gate body clause names both: `Soft gates: fade + variance (one step each).` Everything else
+in §2-B unchanged (leader-keyed, edge > 0, deficit ≤ 9, pre-Q4, A-suppresses-B, 1/8-Kelly).
+
+## A1.3 WATCHLIST — attention-routing tier (PUSH, dark behind `WNBA_SS_WATCHLIST_ON`)
+
+**Philosophy:** Manny is the high-precision discretionary filter; the system's job is ensuring he
+never misses a band game, not replacing his judgment. Not a bet signal — a review cue.
+
+- **Trigger:** first poll with `gap ≥ .15` AND deficit 1–9 AND period ∈ {2, 3} AND standings
+  available. One per game (subtype `WATCHLIST`, dedup index).
+- **Push:** ntfy priority 2, single line, explicitly non-directive:
+  `REVIEW: {trailer} down {N} to {leader} (gap {g}). Leader eFG {x}% ({band}), class {cls}. Check dashboard.`
+- **No Opus.** Stage 1.5 digest **runs** (carrier cols + ctx JSON on every watchlist row) —
+  band-scale carrier ledger is exactly the forward-OOS feed role-carry graduation needs, at ≤3
+  BDL calls per ~daily fire.
+- **Ordering:** watchlist typically precedes A/B (band entry before gates align); A/B fire
+  normally after a watchlist (upgrade). If A/B somehow fired first, suppress watchlist (same
+  existing-row check as A-suppresses-B).
+- **Prior:** band gap ≥ .15 pools 58.6% [BT n=198] — quality of the *pool*, not a bet claim.
+
+## A1.4 Follow-on unlocked: formalize the discretionary layer
+
+Once watchlist + ledger rows accumulate, join `research/betting_log.md` bets against stored gate
+states per game → measure which cells Manny's manual bets land in and what features separate his
+takes from his passes within the band. Promotable features become future tier candidates — the
+"mine Manny's alpha" loop. (Research task, own hypothesis doc, not this build.)
+
+## A1.5 Deltas to §3–§6
+
+- **§3 LOE:** +~30 lines → **~110–130 total**, still 1 file, no schema changes. New flag
+  `WNBA_SS_WATCHLIST_ON`.
+- **§4 tests:** fixtures for B3 shape + watchlist trigger/dedup/suppress; `ss_force_test=5` →
+  synthetic WATCHLIST (assert priority-2 push shape + digest + no narration).
+- **§5 rollout:** unchanged sequence + `set WNBA_SS_WATCHLIST_ON=1` may precede B (independent
+  flags; watchlist is the lowest-risk enable).
+- **§6 PM decisions added:** D-6 watchlist copy/priority (rec: as A1.3) · D-7 digest on watchlist
+  rows (rec: yes) · D-8 late-Q1 watchlist eligibility (rec: no for v1, Q2+ only; revisit if the
+  ledger shows Q1-qualifying games converting) · D-9 B3 inclusion despite two-soft deviation
+  (rec: yes — frontier-priced at ~free).
