@@ -247,3 +247,20 @@ or "eFG"; use percentages, not decimals.`
   contains "quality gap" and "effective FG"; no raw band colors or "pp"/"1/4-Kelly" jargon).
 - LOE: +~15 lines (template literals) → **~125–145 total**, unchanged elsewhere.
 - **PM decision D-10:** approve templates verbatim or edit wording before build.
+
+
+## A2.5 Push budget (dedup & frequency — explicit)
+
+**Never per poll.** Every subtype inserts `ON CONFLICT DO NOTHING` against the unique index
+`(game_id, alert_subtype)` — **one fire per game per type for the game's lifetime**, enforced
+atomically at the DB (no re-fire on later re-qualification; proven live via the force-test
+stale-row block this session).
+
+Per-game arithmetic: WATCHLIST = 1 push (no narration) · B = 2 (WHAT + WHY) · A = 2 ·
+ledger subtypes = 0, ever. Suppression: A ⟶ suppresses B; A/B ⟶ suppress WATCHLIST.
+Max stack (full escalation watchlist → B → A-upgrade): 5 pushes per game — rare; typical
+triggering game: 1–3. Slate expectation (4 games): ~2–4 pushes/night total.
+
+**PM decision D-11:** B keeps its second (WHY narration) push like A, or single-push?
+Rec: keep two-push parity — B is an actionable bet signal; the WHY is where sizing judgment
+lives. Revisit if B volume feels noisy after a few weeks live.
