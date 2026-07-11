@@ -12,6 +12,37 @@ Discretionary alpha = (2) − (1). Never conflate them. Append one section per s
 
 ---
 
+## 2026-07-10 (WNBA) — P&L **+$895.84**
+
+First live WATCHLIST night — fired on both DAL@TOR and GS@CON (Q2 band entry). No A/B tiers aligned on the slate (DAL@TOR collapse read stayed NO_EDGE all game; GS@CON edge existed only in Q1 before GS flipped the lead).
+
+| Game | Side | Stake | Odds | Result | P&L | Grade | System trigger? |
+|---|---|---|---|---|---|---|---|
+| DAL@TOR | DAL −2.5 live (accidental — meant ML) | $500 | −115 | Cashed out @ 108-95, ~1:13 Q4 | +$278.99 | **A− read / C exit** | WATCHLIST only (gap .208, TOR red band) |
+| DAL@TOR | DAL ML live | $1,000 | entry odds unlogged | Cashed out $1,616.85 | +$616.85 | **A− read / C exit** | same |
+| GS@CON | **PASS** (considered GS ML −190, $2K) | — | — | GS won 79-63 | $0 | **Good pass** | WATCHLIST only; no A/B; edge gone by Q2 |
+
+### Grades
+
+- **DAL@TOR A− read** — Gap .208 (meets ≥.20 discretionary bar), TOR leading on 73–93% red-band eFG with variance share ~48–56% all game: the textbook mirage shape, even though mechanical tiers never aligned (collapse NO_EDGE throughout — model edge never computed on this game). Injury layer (TOR missing 2 starters) is discretionary information the system doesn't gate on. Thesis played exactly: DAL trailed most of the game, took over Q4 (84-87 down at 8:17 → won 108-95). **File under: quality gap + Q4 execution, heat-amplified.**
+- **DAL@TOR C exit** — Two leaks. (1) Ticket-entry error: bet spread −2.5 when the read was ML. (2) Cashed a locked ticket: at 108-95 with ~1:13 left, −2.5 is ~99% to cash; sold $934.78 for $778.99 — $155.79 (36% of the profit) donated to the book. ML cash-out haircut unquantified (entry odds not logged — log them next time). Jun-24 leak was staking; tonight's leak is exits. Selection strong, execution leaks money.
+- **GS@CON good pass** — REVIEW is not a bet call, no tier aligned, −190 live offered no measured edge, and $2K would have been far oversized. Hindsight cost ~$1,053; process was right. Refinement: the answer to "strong team, weak signal" isn't $0 or $2K — it's a small discretionary size. Binary sizing is its own leak.
+
+---
+
+## 2026-07-04 (WNBA) — P&L **+$1,065** (backfilled 2026-07-10)
+
+| Game | Side | Stake | Odds | Result | P&L | Grade | System trigger? |
+|---|---|---|---|---|---|---|---|
+| GS@ATL | GSV ML live | $200 | +195 | **W** (88-83) | +$390 | **C+** (price) | No — gap ±.05, no fade shape, coll NO_EDGE all game |
+| GS@ATL | GSV ML live | $300 | +225 | **W** (88-83) | +$675 | **C+** (price) | No — same |
+
+### Grades
+
+- **GSV C+** — Near-even teams by the numbers (gap ±.05 the whole game, seesaw lead, no eFG mirage on either side). The "GSV is top tier" conviction wasn't in the standings gap at bet time. Plus-money price plays on a coin-flip game that won — same bucket as PHX Jun 24. Size down and label honestly: this is the price/variance stream, not the quality-gap stream.
+
+---
+
 ## 2026-06-24 (WNBA) — P&L **+$970**
 
 | Game | Side | Stake | Odds | Result | P&L | Grade | System trigger? |
