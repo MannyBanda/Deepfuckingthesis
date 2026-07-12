@@ -236,6 +236,31 @@ exports.handler = async (event) => {
       try { await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS carrier_share REAL`; } catch(e) {}
       try { await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS carrier_ppg REAL`; } catch(e) {}
       try { await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS player_ctx_json JSONB`; } catch(e) {}
+      // SWEETSPOT_OPS_SPEC.md — outcome columns (resolver writes nightly from post-game-agent)
+      try { await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS resolved BOOLEAN DEFAULT FALSE`; } catch(e) {}
+      try { await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS trailer_won BOOLEAN`; } catch(e) {}
+      try { await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS final_trailer_pts INT`; } catch(e) {}
+      try { await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS final_leader_pts INT`; } catch(e) {}
+      try { await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ`; } catch(e) {}
+      // SWEETSPOT_OPS_SPEC.md — nightly SS section on learnings
+      try { await sql`ALTER TABLE learnings ADD COLUMN IF NOT EXISTS ss_json JSONB DEFAULT '{}'`; } catch(e) {}
+      // SWEETSPOT_OPS_SPEC.md D-A/D-F — structured betting log (md stays narrative; rows are the join layer; PASSes logged with stake 0)
+      try { await sql`CREATE TABLE IF NOT EXISTS bets (
+        id SERIAL PRIMARY KEY,
+        placed_date TEXT NOT NULL,
+        league TEXT DEFAULT 'wnba',
+        game_id TEXT,
+        matchup TEXT, side TEXT,
+        bet_type TEXT,
+        stake REAL DEFAULT 0, odds INT,
+        result TEXT,
+        pnl REAL DEFAULT 0,
+        grade TEXT,
+        system_state TEXT,
+        entry_period INT, entry_deficit INT,
+        notes TEXT, ts TIMESTAMPTZ DEFAULT NOW()
+      )`; } catch(e) {}
+      try { await sql`CREATE INDEX IF NOT EXISTS idx_bets_date ON bets (placed_date, league)`; } catch(e) {}
 
       // Standings cache (daily refresh) — keyed BDL-canonical alias → W/L; feeds comebackProb leaderWP/trailerWP
       await sql`
@@ -720,6 +745,72 @@ exports.handler = async (event) => {
         ORDER BY s.game_id, s.ts DESC
       `;
       return { statusCode: 200, headers, body: JSON.stringify({ finals: rows }) };
+    }
+
+    // ── SWEETSPOT_OPS_SPEC.md §4 — sweetspot_alerts read access ──
+    if (action === 'get_sweetspot_alerts') {
+      const league = params.league || 'nba';
+      const limit = Math.min(parseInt(params.limit) || 50, 200);
+      const rows = await sql`
+        SELECT sa.*, g.date AS game_date, g.away_alias, g.home_alias
+        FROM sweetspot_alerts sa LEFT JOIN games g ON g.id = sa.game_id
+        WHERE sa.league = ${league}
+          AND (${params.date || null}::text IS NULL OR g.date = ${params.date || null})
+          AND (${params.game_id || null}::text IS NULL OR sa.game_id = ${params.game_id || null})
+          AND (${params.subtype || null}::text IS NULL OR sa.alert_subtype = ${params.subtype || null})
+          AND (${params.tier || null}::text IS NULL OR sa.alert_tier = ${params.tier || null})
+          AND (${params.unresolved ? true : null}::boolean IS NULL OR sa.resolved = FALSE)
+        ORDER BY sa.id DESC LIMIT ${limit}`;
+      return { statusCode: 200, headers, body: JSON.stringify({ sweetspot_alerts: rows }) };
+    }
+
+    // ── SWEETSPOT_OPS_SPEC.md §4 — one-call graduation audit (D-5 bar: n>=30, |delta|<=5pp) ──
+    if (action === 'ss_ledger_summary') {
+      const league = params.league || 'wnba';
+      const rows = await sql`
+        SELECT alert_subtype,
+          COUNT(*)::int AS n_total,
+          COUNT(*) FILTER (WHERE resolved)::int AS n_resolved,
+          COUNT(*) FILTER (WHERE resolved AND trailer_won)::int AS n_trailer_won,
+          AVG(collapse_true) FILTER (WHERE resolved) AS mean_collapse_true
+        FROM sweetspot_alerts
+        WHERE league = ${league} AND game_id != ${'SS_FORCE_TEST'}
+        GROUP BY alert_subtype ORDER BY alert_subtype`;
+      const ledger = rows.map(r => {
+        const realized = r.n_resolved > 0 ? r.n_trailer_won / r.n_resolved : null;
+        const mean = r.mean_collapse_true != null ? Number(r.mean_collapse_true) : null;
+        const delta = (realized != null && mean != null) ? +((realized - mean) * 100).toFixed(1) : null;
+        let graduation = `PENDING (${r.n_resolved}/30)`;
+        if (r.n_resolved >= 30) graduation = (delta != null && Math.abs(delta) <= 5) ? 'REVIEW (calibrated — promotion candidate)' : 'REVIEW (MISCALIBRATED — recalibrate or retire)';
+        return { alert_subtype: r.alert_subtype, n_total: r.n_total, n_resolved: r.n_resolved,
+          realized_pct: realized != null ? +(realized * 100).toFixed(1) : null,
+          predicted_pct: mean != null ? +(mean * 100).toFixed(1) : null,
+          delta_pp: delta, graduation };
+      });
+      return { statusCode: 200, headers, body: JSON.stringify({ ledger }) };
+    }
+
+    // ── SWEETSPOT_OPS_SPEC.md §3/D-A — structured betting log ──
+    if (action === 'log_bet' && event.httpMethod === 'POST') {
+      const b = JSON.parse(event.body || '{}');
+      if (!b.placed_date || !b.matchup) return { statusCode: 400, headers, body: JSON.stringify({ error: 'placed_date and matchup required' }) };
+      const ins = await sql`INSERT INTO bets (placed_date, league, game_id, matchup, side, bet_type, stake, odds, result, pnl, grade, system_state, entry_period, entry_deficit, notes)
+        VALUES (${b.placed_date}, ${b.league || 'wnba'}, ${b.game_id || null}, ${b.matchup}, ${b.side || null}, ${b.bet_type || null},
+          ${Number(b.stake) || 0}, ${b.odds != null ? parseInt(b.odds) : null}, ${b.result || 'PENDING'}, ${Number(b.pnl) || 0},
+          ${b.grade || null}, ${b.system_state || null}, ${b.entry_period != null ? parseInt(b.entry_period) : null},
+          ${b.entry_deficit != null ? parseInt(b.entry_deficit) : null}, ${b.notes || null})
+        RETURNING id`;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, id: ins[0].id }) };
+    }
+
+    if (action === 'get_bets') {
+      const limit = Math.min(parseInt(params.limit) || 100, 500);
+      const rows = await sql`SELECT * FROM bets
+        WHERE (${params.league || null}::text IS NULL OR league = ${params.league || null})
+          AND (${params.date || null}::text IS NULL OR placed_date = ${params.date || null})
+          AND (${params.result || null}::text IS NULL OR result = ${params.result || null})
+        ORDER BY placed_date DESC, id DESC LIMIT ${limit}`;
+      return { statusCode: 200, headers, body: JSON.stringify({ bets: rows }) };
     }
 
     if (action === 'backfill_xgb' && event.httpMethod === 'POST') {
