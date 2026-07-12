@@ -12,6 +12,23 @@ Discretionary alpha = (2) − (1). Never conflate them. Append one section per s
 
 ---
 
+## 2026-07-12 (WNBA) — P&L **+$1,200** (day slate; evening games pending)
+
+First slate where the majority of action rode an above-bar band game. WATCHLIST fired on both day games.
+
+| Game | Side | Stake | Odds | Result | P&L | Grade | System trigger? |
+|---|---|---|---|---|---|---|---|
+| SEA@WSH | WSH ML | $500 | +160 | **W** (84-79) | +$800 | **B+** | WATCHLIST (gap .25, edge +4.6pp, SEA orange/red early) |
+| SEA@WSH | WSH ML (add) | $500 | +100 | **W** (84-79) | +$500 | **B−** | same |
+| NY@TOR | NY ML live | $100 | +400 | **L** (91-93) | −$100 | **C+** | WATCHLIST but gap .156 below bar; collapse NO_EDGE |
+
+### Grades
+
+- **WSH +160 B+** — The framework bet: REVIEW'd trailer with gap .25 (above the ≥.20 bar), positive computed edge at the fire, leader heat elevated early. Converted 84-79. This is what the band is for.
+- **WSH +100 add B−** — Same read, 60 cents worse, $1K concentrated on one game. It paid, but the add bought a degraded price on a finished thought. Pattern to watch: pyramiding into shortened live lines.
+- **NY +400 C+** — REVIEW fired but everything under it was thin: gap .156 (below bar), TOR not a sub-.40 leader so collapse stayed NO_EDGE, heat orange not red. Elite-name bias vs what the standings actually said. The $100 size was the right call for a speculative — lost by 2, cheap lesson, correctly labeled a price play.
+---
+
 ## 2026-07-11 (WNBA) — P&L **$0** (pass)
 
 | Game | Side | Stake | Odds | Result | P&L | Grade | System trigger? |
