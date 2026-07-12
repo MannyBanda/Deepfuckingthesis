@@ -352,9 +352,9 @@ async function processLeague(sql, league, dateStr, isOverride, isDry) {
     } catch (e) { log(`Learnings check: ${e.message}`); }
   }
 
-  // Claim the row (upsert for manual reruns)
+  // Claim the row (upsert for manual reruns) — skipped in dry mode (preview must not mutate)
   try {
-    await sql`INSERT INTO learnings (date, league, games_analyzed, alerts_scored, findings, scoring_version)
+    if (!isDry) await sql`INSERT INTO learnings (date, league, games_analyzed, alerts_scored, findings, scoring_version)
       VALUES (${dateStr}, ${league}, 0, 0, 'Processing...', 'v2')
       ON CONFLICT (date, league) DO UPDATE SET findings = 'Reprocessing...', scoring_version = 'v2'`;
   } catch (e) { log(`Learnings claim: ${e.message}`); }
@@ -403,7 +403,7 @@ async function processLeague(sql, league, dateStr, isOverride, isDry) {
   if (alerts.length === 0) {
     log(`No ${leagueUpper} alerts to analyze`);
     try {
-      await sql`UPDATE learnings SET findings = ${'No alerts fired today.'} WHERE date = ${dateStr} AND league = ${league}`;
+      if (!isDry) await sql`UPDATE learnings SET findings = ${'No alerts fired today.'} WHERE date = ${dateStr} AND league = ${league}`;
     } catch (e) { log(`Save empty: ${e.message}`); }
     return { ok: true, league, message: 'No alerts', ss: ssResult };
   }
@@ -439,7 +439,7 @@ async function processLeague(sql, league, dateStr, isOverride, isDry) {
       log(`BDL empty — using games table fallback (${finalScores.length} games)`);
     } else {
       log('No final scores available');
-      try { await sql`UPDATE learnings SET findings = 'No final scores available.' WHERE date = ${dateStr} AND league = ${league}`; } catch(e) {}
+      try { if (!isDry) await sql`UPDATE learnings SET findings = 'No final scores available.' WHERE date = ${dateStr} AND league = ${league}`; } catch(e) {}
       return { ok: true, league, message: 'No final scores', ss: ssResult };
     }
   }
