@@ -780,8 +780,9 @@ exports.handler = async (event) => {
         const realized = r.n_resolved > 0 ? r.n_trailer_won / r.n_resolved : null;
         const mean = r.mean_collapse_true != null ? Number(r.mean_collapse_true) : null;
         const delta = (realized != null && mean != null) ? +((realized - mean) * 100).toFixed(1) : null;
-        let graduation = `PENDING (${r.n_resolved}/30)`;
-        if (r.n_resolved >= 30) graduation = (delta != null && Math.abs(delta) <= 5) ? 'REVIEW (calibrated — promotion candidate)' : 'REVIEW (MISCALIBRATED — recalibrate or retire)';
+        const isLedger = r.alert_subtype === 'GAP_BASE' || r.alert_subtype === 'Q4_COLLAPSE';
+        let graduation = isLedger ? `PENDING (${r.n_resolved}/30)` : 'n/a (not a ledger shape)';
+        if (isLedger && r.n_resolved >= 30) graduation = (delta != null && Math.abs(delta) <= 5) ? 'REVIEW (calibrated — promotion candidate)' : 'REVIEW (MISCALIBRATED — recalibrate or retire)';
         return { alert_subtype: r.alert_subtype, n_total: r.n_total, n_resolved: r.n_resolved,
           realized_pct: realized != null ? +(realized * 100).toFixed(1) : null,
           predicted_pct: mean != null ? +(mean * 100).toFixed(1) : null,

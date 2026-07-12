@@ -20,7 +20,7 @@ First live WATCHLIST night — fired on both DAL@TOR and GS@CON (Q2 band entry).
 |---|---|---|---|---|---|---|---|
 | DAL@TOR | DAL −2.5 live (accidental — meant ML) | $500 | −115 | Cashed out @ 108-95, ~1:13 Q4 | +$278.99 | **A− read / C exit** | WATCHLIST only (gap .208, TOR red band) |
 | DAL@TOR | DAL ML live | $1,000 | entry odds unlogged | Cashed out $1,616.85 | +$616.85 | **A− read / C exit** | same |
-| GS@CON | **PASS** (considered GS ML −190, $2K) | — | — | GS won 79-63 | $0 | **Good pass** | WATCHLIST only; no A/B; edge gone by Q2 |
+| GS@CON | **PASS** (considered GS ML −190, $2K) | — | — | GS won 79-64 | $0 | **Good pass** | WATCHLIST only; no A/B; edge gone by Q2 |
 
 ### Grades
 
