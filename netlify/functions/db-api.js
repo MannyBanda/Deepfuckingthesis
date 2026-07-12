@@ -804,6 +804,28 @@ exports.handler = async (event) => {
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, id: ins[0].id }) };
     }
 
+    // ── update_bet: revise grades/notes on existing rows (grading is iterative by design).
+    // COALESCE semantics: only provided fields change; fields cannot be set to NULL via update.
+    if (action === 'update_bet' && event.httpMethod === 'POST') {
+      const b = JSON.parse(event.body || '{}');
+      if (!b.id) return { statusCode: 400, headers, body: JSON.stringify({ error: 'id required' }) };
+      const rows = await sql`UPDATE bets SET
+        side = COALESCE(${b.side ?? null}, side),
+        bet_type = COALESCE(${b.bet_type ?? null}, bet_type),
+        stake = COALESCE(${b.stake ?? null}, stake),
+        odds = COALESCE(${b.odds ?? null}, odds),
+        result = COALESCE(${b.result ?? null}, result),
+        pnl = COALESCE(${b.pnl ?? null}, pnl),
+        grade = COALESCE(${b.grade ?? null}, grade),
+        system_state = COALESCE(${b.system_state ?? null}, system_state),
+        entry_period = COALESCE(${b.entry_period ?? null}, entry_period),
+        entry_deficit = COALESCE(${b.entry_deficit ?? null}, entry_deficit),
+        notes = COALESCE(${b.notes ?? null}, notes)
+        WHERE id = ${parseInt(b.id)} RETURNING id, grade, notes`;
+      if (rows.length === 0) return { statusCode: 404, headers, body: JSON.stringify({ error: 'bet not found' }) };
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, bet: rows[0] }) };
+    }
+
     if (action === 'get_bets') {
       const limit = Math.min(parseInt(params.limit) || 100, 500);
       const rows = await sql`SELECT * FROM bets
