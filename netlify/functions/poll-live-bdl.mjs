@@ -33,6 +33,9 @@ const WNBA_SS_ALERT_ON = process.env.WNBA_SS_ALERT_ON === '1';
 const WNBA_SS_B_ON = process.env.WNBA_SS_B_ON === '1';
 const WNBA_SS_LEDGER_ON = process.env.WNBA_SS_LEDGER_ON === '1';
 const WNBA_SS_WATCHLIST_ON = process.env.WNBA_SS_WATCHLIST_ON === '1';
+// Tap-to-open target for Sweet Spot pushes (ntfy Click header). Dashboard root for now;
+// per-game deep-link is a queued client follow-up (wnba-bdl.html has no URL-param handling yet).
+const SS_DASH_URL = 'https://poetic-starlight-aa8938.netlify.app/wnba-bdl.html';
 
 // ── XGBOOST MODEL ──────────────────────────────────────────────────────────
 // Raw stats structural model — 300 trees, 13 features (no progress), trained on 1,235 games.
@@ -631,15 +634,17 @@ return 'You are an NBA structural analyst. You receive pre-computed mechanical i
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ── NTFY PUSH NOTIFICATIONS ─────────────────────────────────────────────
-async function sendNtfy(title, body, priority = 4) {
+async function sendNtfy(title, body, priority = 4, clickUrl = null) {
   const topic = process.env.NTFY_TOPIC;
   if (!topic) return;
   try {
     // Node.js fetch requires ASCII-only headers — strip emojis/unicode from Title
     const asciiTitle = title.replace(/\u2014/g, '-').replace(/[^\x00-\x7F]/g, '').replace(/\s+/g, ' ').trim();
+    const ntfyHeaders = { 'Title': asciiTitle || 'DFT Alert', 'Priority': String(priority), 'Tags': 'basketball' };
+    if (clickUrl) ntfyHeaders['Click'] = clickUrl; // tap notification -> open URL (ntfy Click action)
     await fetch(`https://ntfy.sh/${topic}`, {
       method: 'POST',
-      headers: { 'Title': asciiTitle || 'DFT Alert', 'Priority': String(priority), 'Tags': 'basketball' },
+      headers: ntfyHeaders,
       body: body,
     });
     log(`NTFY sent: ${title}`);
@@ -888,7 +893,7 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
       log(`${aA}@${hA}: sweetspot ledger row ${ss.subtype} recorded — Q${ss.period} ${ss.trailerAl} +${ss.margin} collapse=${ss.collapseTier} fade=${ss.fadeTier || '—'} class=${ss.leadClass || '—'} (no push, ever)`);
     } else {
       const push = ssComposePush(ss);
-      await sendNtfy(push.title, push.body, push.priority);
+      await sendNtfy(push.title, push.body, push.priority, SS_DASH_URL);
       log(`${aA}@${hA}: ★ SWEET SPOT ${ss.subtype === 'WATCHLIST' ? 'WATCHLIST' : ss.tier} FIRED — ${ss.trailerAl} +${ss.margin}${ss.edge != null ? ` edge=${_pct(ss.edge)}pp` : ''} line=${_ml(ss.bestML)}${ss.softCell ? ` cell=${ss.softCell}` : ''}`);
     }
 
@@ -952,7 +957,7 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
       const narration = data.content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
       if (!narration || narration.length < 20) return;
       await sql`UPDATE sweetspot_alerts SET narration_text = ${narration} WHERE id = ${rowId}`;
-      await sendNtfy(`SWEET SPOT - why ${ss.trailerAl}`, narration, 4);
+      await sendNtfy(`SWEET SPOT - why ${ss.trailerAl}`, narration, 4, SS_DASH_URL);
       log(`${aA}@${hA}: sweetspot narration delivered (${narration.length} chars)`);
     } catch (e) { log(`${aA}@${hA}: sweetspot narration error: ${e.message}`); }
   } catch (e) { log(`${aA}@${hA}: fireSweetSpotAlert fatal: ${e.message}`); }
