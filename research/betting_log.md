@@ -14,19 +14,20 @@ Discretionary alpha = (2) − (1). Never conflate them. Append one section per s
 
 ## 2026-07-12 (WNBA) — P&L **+$1,200** (day slate; evening games pending)
 
-First slate where the majority of action rode an above-bar band game. WATCHLIST fired on both day games.
+First slate where the majority of action rode an above-bar band game. WATCHLIST fired on both day games. **Bankroll note: $22K (revised from $39K); sizing judged against this and the graduation stage — Manny is deliberately under-sizing while working up to right-size.**
 
 | Game | Side | Stake | Odds | Result | P&L | Grade | System trigger? |
 |---|---|---|---|---|---|---|---|
-| SEA@WSH | WSH ML | $500 | +160 | **W** (84-79) | +$800 | **B+** | WATCHLIST (gap .25, edge +4.6pp, SEA orange/red early) |
-| SEA@WSH | WSH ML (add) | $500 | +100 | **W** (84-79) | +$500 | **B−** | same |
-| NY@TOR | NY ML live | $100 | +400 | **L** (91-93) | −$100 | **C+** | WATCHLIST but gap .156 below bar; collapse NO_EDGE |
+| SEA@WSH | WSH ML — staged entry: $500 @ +100 first, add $500 @ +160 | $1,000 | +100 / +160 | **W** (84-79) | +$1,300 | **A−** (one position) | WATCHLIST (gap .25, edge +4.6pp, SEA orange/red early) |
+| NY@TOR | NY ML live | $100 | +400 | **L** (91-93) | −$100 | **B−** | WATCHLIST but gap .156 below bar; collapse NO_EDGE |
 
 ### Grades
 
-- **WSH +160 B+** — The framework bet: REVIEW'd trailer with gap .25 (above the ≥.20 bar), positive computed edge at the fire, leader heat elevated early. Converted 84-79. This is what the band is for.
-- **WSH +100 add B−** — Same read, 60 cents worse, $1K concentrated on one game. It paid, but the add bought a degraded price on a finished thought. Pattern to watch: pyramiding into shortened live lines.
-- **NY +400 C+** — REVIEW fired but everything under it was thin: gap .156 (below bar), TOR not a sub-.40 leader so collapse stayed NO_EDGE, heat orange not red. Elite-name bias vs what the standings actually said. The $100 size was the right call for a speculative — lost by 2, cheap lesson, correctly labeled a price play.
+- **WSH staged entry A−** — Entry order: +100 first after the REVIEW + dashboard check (position secured), then patience for the price to drift out, add at +160, and **declined a third $500 at +185** — a deliberate exposure cap. Above-bar spot (gap .25), plus money, total $1,000 = 4.5% of bankroll: intentionally under Kelly while trust builds. This is the graded template for staged entries going forward: secure the read, let price come to you, cap the position. Converted 84-79. (Prior B+/B− split superseded — the "add at worse price" critique had the entry order reversed.)
+- **NY +400 B−** — Reasoning (Manny): NY was down 20, dashboard showed the comeback developing, entry came only after the run proved bite, at a price the market hadn't repriced. Nearly hit — tied with a minute left, NY had the last shot. Credit: confirmation-based entry timing, correct speculative-stream labeling, 0.45%-of-bankroll size. Caveats that keep it below B: the origin deficit (−20) is BANKED territory — the ATL Jun-24 shape — and gap .156 + NO_EDGE leader meant the framework saw thin; at +400 the price has to carry the whole thesis. Fine as a rare, tiny, confirmation-gated speculative; not a stream to grow.
+
+**Grading convention (adopted 2026-07-12):** staged entries on one game grade as ONE position (entry discipline, price patience, and exposure cap are part of the grade); size is judged against current bankroll ($22K) and graduation stage, not absolute dollars.
+
 ---
 
 ## 2026-07-11 (WNBA) — P&L **$0** (pass)
