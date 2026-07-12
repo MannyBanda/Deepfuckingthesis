@@ -12,6 +12,18 @@ Discretionary alpha = (2) − (1). Never conflate them. Append one section per s
 
 ---
 
+## 2026-07-11 (WNBA) — P&L **$0** (pass)
+
+| Game | Side | Stake | Odds | Result | P&L | Grade | System trigger? |
+|---|---|---|---|---|---|---|---|
+| POR@ATL | **PASS** (ATL, REVIEW fired) | — | — | ATL lost 92-102 | $0 | **A (pass)** | WATCHLIST only (gap .18, POR 78.6% eFG red) |
+
+### Grades
+
+- **POR@ATL A pass** — First band game that didn't convert (pool now 2/3), and the discretionary filter caught it: Reese out (injury layer the system can't see), ATL on a skid including a prior loss to Portland itself — the exact leader they were trailing. Gap .18 was also below the ≥.20 discretionary bar, so system and instinct agreed this was thin. This is the alpha the bet join exists to measure: articulated pass reasoning on a losing band game.
+
+---
+
 ## 2026-07-10 (WNBA) — P&L **+$895.84**
 
 First live WATCHLIST night — fired on both DAL@TOR and GS@CON (Q2 band entry). No A/B tiers aligned on the slate (DAL@TOR collapse read stayed NO_EDGE all game; GS@CON edge existed only in Q1 before GS flipped the lead).
