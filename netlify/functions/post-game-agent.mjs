@@ -210,6 +210,62 @@ WNBA-SPECIFIC SIGNAL RULES (critical for analysis). Tags: [STRUCT]=direction/ord
 - [OP] Enforced XGB BUY gates: WNBA Q4 < 0.55, Q1-Q3 < 0.45 (vs NBA Q4 < 0.60, Q3 < 0.45, Q2 < 0.40).
 When evaluating WNBA arcs, weight MC and XGB over floor. Floor-based decisions are inherently suspect. [STRUCT]`;
 
+
+// Plain-English nightly digest (approved copy 2026-07-12) — subscriber-facing, zero
+// abbreviations, zero model calls. Pure function -> extractable by the fixture harness.
+// Empty sections are omitted; returns null when there is nothing to report.
+// Review-flag wording is deliberately neutral ("did not come back") — cues aren't calls,
+// and the digest can't know whether Manny played the spot.
+function ssComposeDigest(dateStr, tonight, season) {
+  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const parts = dateStr.split('-').map(Number);
+  const nice = `${months[(parts[1] || 1) - 1]} ${parts[2] || ''}`.trim();
+  const secs = [];
+  const tA = tonight.tiers.A, tB = tonight.tiers.B, w = tonight.watchlist;
+  const sA = season.A, sB = season.B, sW = season.watchlist;
+
+  // Bet alerts (Tier A / Tier B)
+  if (tA.w + tA.l + tB.w + tB.l + sA.w + sA.l + sB.w + sB.l > 0) {
+    let line;
+    if (tA.w + tA.l > 0 && tB.w + tB.l > 0) line = `Tier A went ${tA.w}-${tA.l} tonight; Tier B went ${tB.w}-${tB.l}.`;
+    else if (tA.w + tA.l > 0) line = `Tier A went ${tA.w}-${tA.l} tonight; no Tier B alerts.`;
+    else if (tB.w + tB.l > 0) line = `Tier B went ${tB.w}-${tB.l} tonight; no Tier A alerts.`;
+    else line = `No bet alerts tonight.`;
+    secs.push(`Bet alerts: ${line}\nSeason so far: Tier A ${sA.w}-${sA.l}, Tier B ${sB.w}-${sB.l}.`);
+  }
+
+  // Review flags (watchlist)
+  if (w.total > 0) {
+    let line;
+    if (w.total === 1) line = `1 game was flagged for a look tonight — the trailing team ${w.converted === 1 ? 'completed the comeback' : 'did not come back'}.`;
+    else line = `${w.total} games were flagged for a look tonight — ${w.converted} of ${w.total} trailing teams completed the comeback.`;
+    const seasonLine = sW.total > 0 ? ` Since launch, ${sW.converted} of ${sW.total} flagged teams have completed the comeback.` : '';
+    secs.push(`Review flags: ${line}${seasonLine}`);
+  }
+
+  // Background ledger (gap-only spots / deep fourth-quarter comebacks)
+  const gb = (season.ledger && season.ledger.GAP_BASE) || null;
+  const qc = (season.ledger && season.ledger.Q4_COLLAPSE) || null;
+  if (gb || qc) {
+    const bit = (l, name) => {
+      if (!l) return `${name}: 0 of 30 collected`;
+      if (l.n_resolved >= 30) return `${name}: ${l.n_resolved} collected — comebacks happened ${l.realized_pct}% of the time vs ${l.predicted_pct}% predicted`;
+      return `${name}: ${l.n_resolved} of 30 collected`;
+    };
+    const mature = (gb && gb.n_resolved >= 30) || (qc && qc.n_resolved >= 30);
+    secs.push(`Background ledger: quietly collecting situations before we judge them — ${bit(gb, 'gap-only spots')}. ${bit(qc, 'Deep fourth-quarter comebacks')}.`
+      + (mature ? '' : ' No conclusions until 30; early percentages are noise.'));
+  }
+
+  // Housekeeping
+  if (tonight.resolvedTonight > 0) {
+    secs.push(`Housekeeping: ${tonight.resolvedTonight} finished game${tonight.resolvedTonight === 1 ? ' was' : 's were'} scored and filed tonight.`);
+  }
+
+  if (secs.length === 0) return null;
+  return { title: `Sweet Spot nightly report (${nice})`, body: secs.join('\n\n') };
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // SWEET SPOT PIPELINE (SWEETSPOT_OPS_SPEC.md §5) — resolver sweep + three scoring
 // buckets + graduation watchdog. Fully isolated: any throw degrades to legacy
@@ -292,7 +348,11 @@ async function processSweetSpot(sql, league, dateStr, finalScores, isDry) {
         AVG(collapse_true) FILTER (WHERE resolved) AS mean_ct
       FROM sweetspot_alerts WHERE league = ${league} AND game_id != ${'SS_FORCE_TEST'}
       GROUP BY alert_subtype`;
+    ss.season = { A: { w: 0, l: 0 }, B: { w: 0, l: 0 }, watchlist: { total: 0, converted: 0 } };
     sumRows.forEach(r => {
+      if (r.alert_subtype === 'EFG_FADE') ss.season.A = { w: r.n_won, l: r.n_resolved - r.n_won };
+      else if (r.alert_subtype === 'EFG_FADE_SOFT') ss.season.B = { w: r.n_won, l: r.n_resolved - r.n_won };
+      else if (r.alert_subtype === 'WATCHLIST') ss.season.watchlist = { total: r.n_resolved, converted: r.n_won };
       if (!['GAP_BASE', 'Q4_COLLAPSE'].includes(r.alert_subtype)) return;
       const realized = r.n_resolved > 0 ? r.n_won / r.n_resolved : null;
       const mean = r.mean_ct != null ? Number(r.mean_ct) : null;
@@ -377,8 +437,10 @@ async function processLeague(sql, league, dateStr, isOverride, isDry) {
       const ssLine = `A ${t.A.w}-${t.A.l} | B ${t.B.w}-${t.B.l} | WATCH ${w.total} (${w.converted} converted)`
         + (ledgerBits.length ? ` | ledger ${ledgerBits.join(' ')}` : '') + ` | resolved tonight: ${ssResult.resolved_tonight}`;
       log(`SS: ${ssLine}`);
-      const ssActive = t.A.w + t.A.l + t.B.w + t.B.l + w.total + ssResult.resolved_tonight > 0;
-      if (!isDry && ssActive) await agentNtfy(`SS nightly digest (${dateStr})`, ssLine, 2);
+      const digest = ssComposeDigest(dateStr,
+        { tiers: t, watchlist: w, resolvedTonight: ssResult.resolved_tonight },
+        { A: ssResult.season.A, B: ssResult.season.B, watchlist: ssResult.season.watchlist, ledger: ssResult.ledger });
+      if (!isDry && digest) await agentNtfy(digest.title, digest.body, 2);
       // Prompt section for the Opus analysis (only used if classic alerts exist below)
       let betsRows = [];
       try { betsRows = await sql`SELECT matchup, side, bet_type, stake, odds, result, pnl, grade, system_state FROM bets WHERE league = ${league} AND placed_date = ${dateStr}`; } catch (e) {}

@@ -40,5 +40,30 @@ const crossed = (before, after) => (before || 0) < 30 && after >= 30;
 T('29→31 crosses', crossed(29, 31) === true);
 T('30→31 does not re-fire', crossed(30, 31) === false);
 T('rerun (35→35) does not re-fire', crossed(35, 35) === false);
+
+// ── ssComposeDigest (approved plain-English copy 2026-07-12) ──
+const digestSrc = extract('ssComposeDigest');
+const ssComposeDigest = new Function(`${digestSrc}; return ssComposeDigest;`)();
+const T0 = { tiers: { A: { w: 1, l: 0 }, B: { w: 0, l: 0 } }, watchlist: { total: 1, converted: 0 }, resolvedTonight: 4 };
+const S0 = { A: { w: 2, l: 0 }, B: { w: 0, l: 0 }, watchlist: { total: 3, converted: 2 }, ledger: { GAP_BASE: { n_resolved: 2, realized_pct: 100, predicted_pct: 73 } } };
+let dg = ssComposeDigest('2026-07-12', T0, S0);
+T('title plain-dated', dg.title === 'Sweet Spot nightly report (July 12)');
+T('tier line + no-B clause', dg.body.includes('Tier A went 1-0 tonight; no Tier B alerts.'));
+T('season line', dg.body.includes('Season so far: Tier A 2-0, Tier B 0-0.'));
+T('single flag, neutral non-convert wording', dg.body.includes('1 game was flagged for a look tonight — the trailing team did not come back.'));
+T('since-launch conversion', dg.body.includes('Since launch, 2 of 3 flagged teams have completed the comeback.'));
+T('ledger counts, no early percentages', dg.body.includes('gap-only spots: 2 of 30 collected') && !dg.body.includes('73%'));
+T('noise caveat pre-30', dg.body.includes('No conclusions until 30; early percentages are noise.'));
+T('absent bucket shows 0 of 30', dg.body.includes('Deep fourth-quarter comebacks: 0 of 30 collected'));
+T('housekeeping plural', dg.body.includes('4 finished games were scored and filed tonight.'));
+T('no abbreviations anywhere', !/GAP_BASE|Q4C|WATCH |SS /.test(dg.body));
+dg = ssComposeDigest('2026-07-12', { tiers: { A: { w: 0, l: 0 }, B: { w: 0, l: 0 } }, watchlist: { total: 0, converted: 0 }, resolvedTonight: 0 }, { A: { w: 0, l: 0 }, B: { w: 0, l: 0 }, watchlist: { total: 0, converted: 0 }, ledger: {} });
+T('nothing to report returns null', dg === null);
+dg = ssComposeDigest('2026-07-12', { tiers: { A: { w: 0, l: 0 }, B: { w: 0, l: 0 } }, watchlist: { total: 2, converted: 1 }, resolvedTonight: 1 }, S0);
+T('multi-flag wording', dg.body.includes('2 games were flagged for a look tonight — 1 of 2 trailing teams completed the comeback.'));
+T('housekeeping singular', dg.body.includes('1 finished game was scored and filed tonight.'));
+dg = ssComposeDigest('2026-07-12', T0, { ...S0, ledger: { GAP_BASE: { n_resolved: 31, realized_pct: 42, predicted_pct: 40 } } });
+T('post-30 shows realized vs predicted', dg.body.includes('gap-only spots: 31 collected — comebacks happened 42% of the time vs 40% predicted'));
+
 console.log(`\n═══ ${pass} passed, ${fail} failed ═══`);
 process.exit(fail ? 1 : 0);
