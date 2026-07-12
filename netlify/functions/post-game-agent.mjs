@@ -405,7 +405,7 @@ async function processLeague(sql, league, dateStr, isOverride, isDry) {
     try {
       await sql`UPDATE learnings SET findings = ${'No alerts fired today.'} WHERE date = ${dateStr} AND league = ${league}`;
     } catch (e) { log(`Save empty: ${e.message}`); }
-    return { ok: true, league, message: 'No alerts' };
+    return { ok: true, league, message: 'No alerts', ss: ssResult };
   }
 
   // Get live_tracking for game-level context
@@ -440,7 +440,7 @@ async function processLeague(sql, league, dateStr, isOverride, isDry) {
     } else {
       log('No final scores available');
       try { await sql`UPDATE learnings SET findings = 'No final scores available.' WHERE date = ${dateStr} AND league = ${league}`; } catch(e) {}
-      return { ok: true, league, message: 'No final scores' };
+      return { ok: true, league, message: 'No final scores', ss: ssResult };
     }
   }
 
@@ -965,7 +965,7 @@ RECOMMENDATIONS:
 
   log(`--- ${leagueUpper} complete ---`);
   return {
-    ok: true, league,
+    ok: true, league, ss: ssResult,
     arcs: scoredArcs.length,
     accuracy: arcAccuracy,
     arcBreakdown: {
