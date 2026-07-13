@@ -12,7 +12,7 @@ Discretionary alpha = (2) − (1). Never conflate them. Append one section per s
 
 ---
 
-## 2026-07-12 (WNBA) — P&L **+$1,200** (day slate; evening games pending)
+## 2026-07-12 (WNBA) — P&L **+$1,698.95**
 
 First slate where the majority of action rode an above-bar band game. WATCHLIST fired on both day games. **Bankroll note: $22K (revised from $39K); sizing judged against this and the graduation stage — Manny is deliberately under-sizing while working up to right-size.**
 
@@ -25,6 +25,8 @@ First slate where the majority of action rode an above-bar band game. WATCHLIST 
 
 - **WSH staged entry A−** — Entry order: +100 first after the REVIEW + dashboard check (position secured), then patience for the price to drift out, add at +160, and **declined a third $500 at +185** — a deliberate exposure cap. Above-bar spot (gap .25), plus money, total $1,000 = 4.5% of bankroll: intentionally under Kelly while trust builds. This is the graded template for staged entries going forward: secure the read, let price come to you, cap the position. Converted 84-79. (Prior B+/B− split superseded — the "add at worse price" critique had the entry order reversed.)
 - **NY +400 B−** — Reasoning (Manny): NY was down 20, dashboard showed the comeback developing, entry came only after the run proved bite, at a price the market hadn't repriced. Nearly hit — tied with a minute left, NY had the last shot. Credit: confirmation-based entry timing, correct speculative-stream labeling, 0.45%-of-bankroll size. Caveats that keep it below B: the origin deficit (−20) is BANKED territory — the ATL Jun-24 shape — and gap .156 + NO_EDGE leader meant the framework saw thin; at +400 the price has to carry the whole thesis. Fine as a rare, tiny, confirmation-gated speculative; not a stream to grow.
+
+- **CHI@DAL staged entry, B+ read / A− exit** — Gap .334 (well above bar) but CHI's lead classed STRUCTURAL — the Jun-24 POR@CHI shape that says PASS. Manny consciously overrode on a quality-conditional thesis ("a low-quality team's structure is less trustworthy than a high-quality team's variance") at deliberately reduced size ($400 = 1.8% of bankroll). Both a WATCHLIST and a **GAP_BASE ledger row** fired on this game — he bet the exact cell the ledger is accumulating, and it converted (96-91). The exit: cashed the +200 leg at $488.95 with DAL up 1 and ~1:00 left — breakeven hold probability 81.5% vs true ~60-70% → mathematically correct cash-out (contrast Jul 10: up 13 with 73 seconds, ~99% locked, sold anyway). Exit rule adopted: **judge cash-outs by breakeven probability (offer ÷ full payout) vs. honest win probability — not by feelings.** The override thesis is logged as unvalidated and feeds the team-conditional backtest.
 
 **Grading convention (adopted 2026-07-12):** staged entries on one game grade as ONE position (entry discipline, price patience, and exposure cap are part of the grade); size is judged against current bankroll ($22K) and graduation stage, not absolute dollars.
 
