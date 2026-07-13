@@ -806,7 +806,8 @@ exports.handler = async (event) => {
           ss_collapse_tier, ss_collapse_true, ss_line_used, ss_edge, ss_alert_tier, ss_alert_fired
         FROM snapshots WHERE game_id = ${gameId} ORDER BY id DESC LIMIT 1`;
       const game = await sql`
-        SELECT status, home_alias, away_alias, home_pts, away_pts, winner
+        SELECT CASE WHEN winner IS NOT NULL THEN 'closed' END AS status,
+          home_alias, away_alias, home_pts, away_pts, winner
         FROM games WHERE id = ${gameId} AND league = ${league} LIMIT 1`;
       const subs = await sql`
         SELECT DISTINCT alert_subtype FROM sweetspot_alerts
