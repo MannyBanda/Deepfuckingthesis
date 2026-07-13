@@ -1,6 +1,6 @@
 # SWEETSPOT VERDICT STRIP — Always-On Gate Synthesis, Trap Flags & Wording Fix
 
-**Date:** 2026-07-12 · **Status:** SHIPPED 2026-07-13 (D-1..D-6 approved at recs; see §10 build addendum — D-7 pending)
+**Date:** 2026-07-12 · **Status:** SHIPPED 2026-07-13 incl. row-anchoring amendment (D-1..D-8; see §10)
 **Baseline:** `f015c2b` · **Motivating incidents (same night):** (1) IND@LV — no alert fired and
 no on-screen explanation of why; Manny bet the tested-and-killed structural-underdog shape at
 +380 (−$200, graded C). (2) The scoring-comp fade card rendered "STRUCTURAL" (about IND's
@@ -129,13 +129,18 @@ the original problem), two fallback states shipped, pinned in fixtures:
 Trap eligibility was extended to VX — it is a "your read decides" zone, which is exactly
 where the kill-doc warnings earn their keep. One-line revert if PM disagrees.
 
-**D-7 (OPEN — PM decision needed): stale-row / blowout collision.** Alert rows are
-per-game-permanent, and V1/V2/V3 outrank V6/V7 per §3 priority. So a WATCHLIST row fired at
-deficit 4 in Q2 keeps the verdict on `REVIEW — … trailing by 22 … your read decides` if the
-game later blows out — at the exact moment the deficit-ceiling discipline matters most.
-Shipped **spec-literal** (V2 wins). Proposed amendment: V1 always wins, but V2/V3 only apply
-while current deficit ≤ 15 (pre-Q4) / within V7's band (Q4); beyond that, fall through to
-V6/V7. One conditional if approved.
+**D-7/D-8 (CLOSED 2026-07-13, PM-approved): row anchoring.** Alert rows are
+per-game-permanent while game state moves — this broke in BOTH directions on real data.
+(a) Blowout drift: a Q2 WATCHLIST row kept `REVIEW … trailing by 22` alive past the deficit
+ceiling. (b) Comeback completion (found live on CHI@DAL Jul 12): once the watched trailer
+takes the lead, the last snapshot's leader/trailer flip and gap goes negative, so V8 froze
+`REVIEW — CHI is the much better team (-0.33 …) … CHI did not come back.` — wrong on the
+system's own success case. Amendment shipped: `get_ss_state` returns the fired rows'
+leader/trailer anchors; V1/V2/V3 subjects and the V8 outcome anchor to the ROW (anchor
+priority = V-state priority); V8 `won` checks `row trailer === games.winner`, never snapshot
+points; V2/V3 apply only while the row's trailer still trails **1-9** (the engine's own
+WATCHLIST fire band) — deficit ≥10 falls through to V6/V7, ≤0 (flipped/tied) falls through
+to current-state reads. Pinned by the CHI@DAL, live-flip, and drift fixtures.
 
 **Minor build decisions:** V3 triggers on GAP_BASE rows only — Q4_COLLAPSE rows express
 through V7's copy, which is the same ledger message in Q4 context. V3/VX render

@@ -3692,7 +3692,28 @@ function ssVerdictCompose(st){
   var leader=st.leaderAlias||(hp>=ap?st.homeAlias:st.awayAlias)||'LEADER';
   var trailer=(leader===st.homeAlias)?st.awayAlias:st.homeAlias;trailer=trailer||'TRAILER';
   var deficit=Math.abs(hp-ap);
-  var subs=st.subtypes||[];
+  // Row anchoring (D-7/D-8 amendment): fired rows are per-game-permanent while game
+  // state moves, so row-driven states (V1/V2/V3) and the V8 outcome anchor to the ROW's
+  // leader/trailer, not the drifting snapshot. Anchor priority mirrors V-state priority.
+  var rows=st.rows||(st.subtypes||[]).map(function(s){return{subtype:s,leader:null,trailer:null};});
+  var subs=rows.map(function(r){return r.subtype;});
+  function anchorRow(){
+    var pri=['EFG_FADE','EFG_FADE_SOFT','WATCHLIST','GAP_BASE','Q4_COLLAPSE'];
+    for(var k=0;k<pri.length;k++){for(var m=0;m<rows.length;m++){if(rows[m].subtype===pri[k])return rows[m];}}
+    return null;
+  }
+  var anc=anchorRow();
+  var ancTrail=(anc&&anc.trailer)||null,ancLead=(anc&&anc.leader)||null;
+  // Signed deficit for the row's trailer at the current snapshot (+N = still trailing by N)
+  var rowDef=null;
+  if(ancTrail&&ancLead&&(ancTrail===st.homeAlias||ancTrail===st.awayAlias)){
+    var tPts=(ancTrail===st.homeAlias)?hp:ap,lPts=(ancTrail===st.homeAlias)?ap:hp;
+    rowDef=lPts-tPts;
+  }else if(anc){rowDef=deficit;ancTrail=ancTrail||trailer;ancLead=ancLead||leader;}
+  // V2/V3 live band: the row's trailer still trails by 1-9 (the engine's own WATCHLIST
+  // fire band). Deficit >=10 falls through to V6/V7 (deficit ceiling governs); <=0
+  // (comeback completed / tied) falls through to current-state reads.
+  var rowInBand=(rowDef!=null&&rowDef>=1&&rowDef<=9);
   var gap=(st.gap==null)?null:Number(st.gap);
   var gapS=ssGapFmt(gap);
   var gbN=st.gapBaseN!=null?st.gapBaseN:0,q4N=st.q4CollapseN!=null?st.q4CollapseN:0;
@@ -3703,10 +3724,10 @@ function ssVerdictCompose(st){
     text='SWEET SPOT A LIVE \u2014 see the push for price and size.';}
   else if(subs.indexOf('EFG_FADE_SOFT')>-1){v='V1';color='var(--amber)';
     text='SWEET SPOT B LIVE \u2014 see the push for price and size.';}
-  else if(subs.indexOf('WATCHLIST')>-1){v='V2';color='var(--blue)';
+  else if(subs.indexOf('WATCHLIST')>-1&&rowInBand){v='V2';color='var(--blue)';
     var bar=(gap!=null&&gap>=0.20)?', above your .20 bar':', below your .20 bar';
-    text='REVIEW \u2014 '+trailer+' is the much better team ('+(gapS||'?')+' quality gap'+bar+') trailing by '+deficit+'. Bet gates haven\u2019t aligned; your read decides.';}
-  else if(subs.indexOf('GAP_BASE')>-1){v='V3';color='var(--fg-secondary)';
+    text='REVIEW \u2014 '+ancTrail+' is the much better team ('+(gapS||'?')+' quality gap'+bar+') trailing by '+rowDef+'. Bet gates haven\u2019t aligned; your read decides.';}
+  else if(subs.indexOf('GAP_BASE')>-1&&rowInBand){v='V3';color='var(--fg-secondary)';
     text='GAP SPOT, UNPROVEN \u2014 base gates pass but the fade reads don\u2019t. The ledger is collecting this shape ('+gbN+'/30 resolved so far). Not a validated bet.';}
   else if(gap==null||gap<0.15){v='V4';color='var(--fg-dim)';
     text='NO SPOT \u2014 quality gap ('+(gapS!=null?gapS:'no standings gap')+') is below the review line (.15). Anything taken here is the speculative stream \u2014 size like it.';}
@@ -3722,7 +3743,7 @@ function ssVerdictCompose(st){
     text='NO PUSH \u2014 inside the range late ('+(gapS||'?')+' quality gap, down '+deficit+' in Q4) but the watch window closed after Q3. Nothing fired; your read decides.';}
   else{v='VX';color='var(--fg-dim)';
     text='READ FORMING \u2014 gates are live but no alert row yet (next server read lands in about a minute).';}
-  // Trap flags — overlay on V2-V5 + VX; one line max, priority T1 > T4 > T5 (spec §4)
+  // Trap flags \u2014 overlay on V2-V5 + VX; one line max, priority T1 > T4 > T5 (spec \u00a74)
   var trap=null;
   if(v==='V2'||v==='V3'||v==='V4'||v==='V5'||v==='VX'){
     var lc=st.leadClass;
@@ -3733,13 +3754,15 @@ function ssVerdictCompose(st){
     else if((st.efgBand==='red'||st.efgBand==='orange')&&(gap==null||gap<0.15)){
       trap='\u26a0 Hot leader without a quality gap \u2014 the \u201chot = mirage\u201d family is 3x killed (NBA n=1,200; player-level; team-level). Heat only matters ON TOP of a gap.';}
   }
-  // V8 — final freeze: verdict stays as computed from the last snapshot, outcome appended
+  // V8 \u2014 final freeze: current-state verdict + outcome appended. The outcome subject is
+  // the ROW's trailer (the watch's comeback candidate); won by games.winner, never by
+  // snapshot points (the last snapshot can predate a final flip).
   if(st.gameStatus==='closed'){
     var fH=st.finalHome!=null?Number(st.finalHome):hp,fA=st.finalAway!=null?Number(st.finalAway):ap;
-    var trailPts=(trailer===st.homeAlias)?fH:fA,leadPts=(trailer===st.homeAlias)?fA:fH;
-    var won=trailPts>leadPts;
+    var oTrail=ancTrail||trailer;
+    var won=st.winner!=null?(oTrail===st.winner):(((oTrail===st.homeAlias)?fH:fA)>((oTrail===st.homeAlias)?fA:fH));
     v='V8';
-    text+=' Final '+Math.max(trailPts,leadPts)+'-'+Math.min(trailPts,leadPts)+' \u2014 '+trailer+' '+(won?'completed the comeback':'did not come back')+'.';
+    text+=' Final '+Math.max(fH,fA)+'-'+Math.min(fH,fA)+' \u2014 '+oTrail+' '+(won?'completed the comeback':'did not come back')+'.';
   }
   // Garbage line at any state
   if(st.lineUsed!=null&&Math.abs(Number(st.lineUsed))>=50000)text+=' Line dead.';
@@ -3978,10 +4001,10 @@ function renderSSVerdictBox(id,cs,hA,aA){
       period:sn.period,clock:sn.clock,homePts:sn.home_pts,awayPts:sn.away_pts,
       homeAlias:gm.home_alias||hA,awayAlias:gm.away_alias||aA,leaderAlias:sn.ss_leader_alias,
       gap:sn.ss_quality_gap,efgBand:sn.ss_leader_efg_band,leadClass:sn.ss_lead_class,
-      collapseTier:sn.ss_collapse_tier,lineUsed:sn.ss_line_used,subtypes:entry.data.subtypes||[],
+      collapseTier:sn.ss_collapse_tier,lineUsed:sn.ss_line_used,rows:entry.data.rows||null,subtypes:entry.data.subtypes||[],
       gapBaseN:(_ssLedgerCache&&_ssLedgerCache.GAP_BASE)||0,
       q4CollapseN:(_ssLedgerCache&&_ssLedgerCache.Q4_COLLAPSE)||0,
-      gameStatus:gm.status,finalHome:gm.home_pts,finalAway:gm.away_pts,
+      gameStatus:gm.status,finalHome:gm.home_pts,finalAway:gm.away_pts,winner:gm.winner,
       trailerWinsStruct:tws});
   }else if(g&&(g.period||0)<2){
     verdict=ssVerdictCompose({period:g.period||0,homeAlias:hA,awayAlias:aA});

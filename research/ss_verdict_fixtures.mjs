@@ -136,16 +136,45 @@ r = C({ period: 2, homePts: 44, awayPts: 38, homeAlias: 'GS', awayAlias: 'ATL', 
 T('T5 hot=mirage exact copy', r.trap ===
   '\u26a0 Hot leader without a quality gap \u2014 the \u201chot = mirage\u201d family is 3x killed (NBA n=1,200; player-level; team-level). Heat only matters ON TOP of a gap.');
 
-// ── V8 — final freeze, both outcomes ──
-r = C({ period: 4, homePts: 91, awayPts: 88, homeAlias: 'DAL', awayAlias: 'CHI', leaderAlias: 'CHI',
-  gap: 0.33, leadClass: 'MIXED', efgBand: 'green', trailerWinsStruct: false, subtypes: ['WATCHLIST'],
-  gameStatus: 'closed', finalHome: 96, finalAway: 91 });
-T('V8 comeback freeze', r.v === 'V8' && r.text.endsWith('Final 96-91 \u2014 DAL completed the comeback.'));
-T('V8 verdict body frozen (REVIEW retained)', r.text.startsWith('REVIEW \u2014 DAL is the much better team'));
-r = C({ period: 4, homePts: 84, awayPts: 91, homeAlias: 'NY', awayAlias: 'TOR', leaderAlias: 'TOR',
-  gap: 0.21, leadClass: 'MIXED', efgBand: 'green', trailerWinsStruct: false, subtypes: ['WATCHLIST'],
-  gameStatus: 'closed', finalHome: 91, finalAway: 93 });
-T('V8 no-comeback freeze', r.v === 'V8' && r.text.endsWith('Final 93-91 \u2014 NY did not come back.'));
+// ── V8 + row anchoring (D-7/D-8 amendment) — the CHI@DAL real-data regression ──
+// Rows fired with leader CHI / trailer DAL; DAL completed the comeback so the LAST
+// snapshot has leader DAL, gap negative. Verdict must fall through to current-state V4
+// (row trailer no longer trailing) and the outcome must anchor to the ROW's trailer +
+// games.winner — never the drifting snapshot.
+const chiDalRows = [{ subtype: 'WATCHLIST', leader: 'CHI', trailer: 'DAL' }, { subtype: 'GAP_BASE', leader: 'CHI', trailer: 'DAL' }];
+r = C({ period: 4, clock: '7.7', homePts: 96, awayPts: 91, homeAlias: 'DAL', awayAlias: 'CHI',
+  leaderAlias: 'DAL', gap: -0.3339921, collapseTier: 'NO_EDGE', leadClass: 'VOLATILE', efgBand: 'green',
+  trailerWinsStruct: false, rows: chiDalRows, gameStatus: 'closed', finalHome: 96, finalAway: 91, winner: 'DAL' });
+T('CHI@DAL: row out of band → current-state V4 body', r.v === 'V8' && r.text.startsWith('NO SPOT \u2014 quality gap (-0.33) is below the review line (.15).'));
+T('CHI@DAL: no negative-gap REVIEW garbage', !r.text.includes('much better team'));
+T('CHI@DAL: outcome anchored to row trailer + winner', r.text.endsWith('Final 96-91 \u2014 DAL completed the comeback.'));
+// NY@TOR — no-comeback, winner-based
+r = C({ period: 4, homePts: 91, awayPts: 93, homeAlias: 'NY', awayAlias: 'TOR', leaderAlias: 'TOR',
+  gap: 0.21, leadClass: 'MIXED', efgBand: 'green', trailerWinsStruct: false,
+  rows: [{ subtype: 'WATCHLIST', leader: 'TOR', trailer: 'NY' }],
+  gameStatus: 'closed', finalHome: 91, finalAway: 93, winner: 'TOR' });
+T('V8 no-comeback (winner-based, row in band → REVIEW frozen)', r.v === 'V8' && r.text.startsWith('REVIEW \u2014 NY is the much better team') && r.text.endsWith('Final 93-91 \u2014 NY did not come back.'));
+
+// ── live flip: watched trailer takes the lead mid-game → falls out of V2 ──
+r = C({ period: 4, homePts: 78, awayPts: 75, homeAlias: 'DAL', awayAlias: 'CHI', leaderAlias: 'DAL',
+  gap: -0.20, collapseTier: 'NO_EDGE', leadClass: 'MIXED', efgBand: 'green', trailerWinsStruct: false,
+  rows: chiDalRows });
+T('live flip → not V2, current-state V4', r.v === 'V4' && !r.text.includes('much better team'));
+
+// ── D-7 blowout drift: stale WATCHLIST row must not outrank the deficit ceiling ──
+r = C({ period: 3, homePts: 80, awayPts: 58, homeAlias: 'CHI', awayAlias: 'ATL', leaderAlias: 'CHI',
+  gap: 0.22, collapseTier: 'SHORT', leadClass: 'MIXED', efgBand: 'green', trailerWinsStruct: false,
+  rows: [{ subtype: 'WATCHLIST', leader: 'CHI', trailer: 'ATL' }] });
+T('D-7: row down 22 pre-Q4 → V6 not V2', r.v === 'V6' && r.text.includes('ATL down 22'));
+r = C({ period: 4, homePts: 72, awayPts: 60, homeAlias: 'CHI', awayAlias: 'ATL', leaderAlias: 'CHI',
+  gap: 0.22, collapseTier: 'SHORT', leadClass: 'MIXED', efgBand: 'green', trailerWinsStruct: false,
+  rows: [{ subtype: 'WATCHLIST', leader: 'CHI', trailer: 'ATL' }], q4CollapseN: 1 });
+T('D-7: row down 12 in Q4 → V7 collect not V2', r.v === 'V7');
+
+// ── in-band control: row-anchored V2 still fires with row trailer + row deficit ──
+r = C({ period: 3, homePts: 66, awayPts: 60, homeAlias: 'CHI', awayAlias: 'DAL', leaderAlias: 'CHI',
+  gap: 0.33, leadClass: 'MIXED', efgBand: 'green', trailerWinsStruct: false, rows: chiDalRows });
+T('in-band row → V2 with row trailer, row deficit', r.v === 'V2' && r.text.includes('DAL is the much better team') && r.text.includes('trailing by 6'));
 
 // ── garbage line append ──
 r = C({ period: 3, homePts: 60, awayPts: 55, homeAlias: 'LV', awayAlias: 'IND', leaderAlias: 'LV',

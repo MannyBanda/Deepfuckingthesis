@@ -810,10 +810,11 @@ exports.handler = async (event) => {
           home_alias, away_alias, home_pts, away_pts, winner
         FROM games WHERE id = ${gameId} AND league = ${league} LIMIT 1`;
       const subs = await sql`
-        SELECT DISTINCT alert_subtype FROM sweetspot_alerts
-        WHERE game_id = ${gameId} AND league = ${league}`;
+        SELECT alert_subtype, leader_alias, trailer_alias FROM sweetspot_alerts
+        WHERE game_id = ${gameId} AND league = ${league} ORDER BY id DESC`;
       return { statusCode: 200, headers, body: JSON.stringify({
         snapshot: snap[0] || null, game: game[0] || null,
+        rows: subs.map(r => ({ subtype: r.alert_subtype, leader: r.leader_alias, trailer: r.trailer_alias })),
         subtypes: subs.map(r => r.alert_subtype) }) };
     }
 
