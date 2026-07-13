@@ -1,6 +1,6 @@
 # SWEETSPOT VERDICT STRIP — Always-On Gate Synthesis, Trap Flags & Wording Fix
 
-**Date:** 2026-07-12 · **Status:** PROPOSED — awaiting PM decisions D-1..D-6 + build go-ahead
+**Date:** 2026-07-12 · **Status:** SHIPPED 2026-07-13 (D-1..D-6 approved at recs; see §10 build addendum — D-7 pending)
 **Baseline:** `f015c2b` · **Motivating incidents (same night):** (1) IND@LV — no alert fired and
 no on-screen explanation of why; Manny bet the tested-and-killed structural-underdog shape at
 +380 (−$200, graded C). (2) The scoring-comp fade card rendered "STRUCTURAL" (about IND's
@@ -114,3 +114,30 @@ Spec approval → build (client ~150 lines + db-api ~20 + fixtures ~50) → depl
 | D-4 | Show V0 pregame/Q1 neutral state (vs hiding box) | show — silence was the original problem |
 | D-5 | T4 includes the conscious-override/probe-size note | yes — codifies the CHI@DAL convention on-screen |
 | D-6 | NBA dashboard parity | defer; WNBA is the active betting surface |
+
+## 10. Build addendum (2026-07-13) — deviations & open decision
+
+**VX fallback states (spec gap, copy added).** The V0–V7 catalog leaves one live region
+uncovered: gap ≥.15, collapse not NO_EDGE, deficit <10, and no alert row for the game.
+Reachable two ways: (a) first band entry happens **in Q4** (WATCHLIST is Q2/Q3-only), and
+(b) the one-poll latency window before a row lands. Rather than render nothing (silence was
+the original problem), two fallback states shipped, pinned in fixtures:
+- **VX (Q4):** `NO PUSH — inside the range late ({gap} quality gap, down {N} in Q4) but the
+  watch window closed after Q3. Nothing fired; your read decides.` (gray)
+- **VX (pre-Q4, transient):** `READ FORMING — gates are live but no alert row yet (next
+  server read lands in about a minute).` (dim)
+Trap eligibility was extended to VX — it is a "your read decides" zone, which is exactly
+where the kill-doc warnings earn their keep. One-line revert if PM disagrees.
+
+**D-7 (OPEN — PM decision needed): stale-row / blowout collision.** Alert rows are
+per-game-permanent, and V1/V2/V3 outrank V6/V7 per §3 priority. So a WATCHLIST row fired at
+deficit 4 in Q2 keeps the verdict on `REVIEW — … trailing by 22 … your read decides` if the
+game later blows out — at the exact moment the deficit-ceiling discipline matters most.
+Shipped **spec-literal** (V2 wins). Proposed amendment: V1 always wins, but V2/V3 only apply
+while current deficit ≤ 15 (pre-Q4) / within V7's band (Q4); beyond that, fall through to
+V6/V7. One conditional if approved.
+
+**Minor build decisions:** V3 triggers on GAP_BASE rows only — Q4_COLLAPSE rows express
+through V7's copy, which is the same ledger message in Q4 context. V3/VX render
+gray (`--fg-secondary`); no gray-blue token exists in the palette. Evidence lines carry
+compact numeric detail (`(48% eFG, V 61%)` / structure–variance splits) per the §2 example.

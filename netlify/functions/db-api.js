@@ -791,6 +791,31 @@ exports.handler = async (event) => {
       return { statusCode: 200, headers, body: JSON.stringify({ ledger }) };
     }
 
+    // ── SWEETSPOT_VERDICT_STRIP_SPEC.md §5 — server-authoritative verdict state ──
+    // Latest snapshot's ss_ gate fields + game row + which SS subtypes exist for the game.
+    // Three isolated queries by design (house rule: never extend existing SELECTs on
+    // critical paths). Client renders the verdict from this — never recomputes gates.
+    if (action === 'get_ss_state') {
+      const league = params.league || 'wnba';
+      const gameId = params.game_id;
+      if (!gameId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id required' }) };
+      const snap = await sql`
+        SELECT period, clock, home_pts, away_pts, ts,
+          ss_leader_alias, ss_leader_wp, ss_trailer_wp, ss_quality_gap, ss_leader_efg,
+          ss_leader_efg_band, ss_variance_share, ss_lead_class, ss_fade_tier,
+          ss_collapse_tier, ss_collapse_true, ss_line_used, ss_edge, ss_alert_tier, ss_alert_fired
+        FROM snapshots WHERE game_id = ${gameId} ORDER BY id DESC LIMIT 1`;
+      const game = await sql`
+        SELECT status, home_alias, away_alias, home_pts, away_pts, winner
+        FROM games WHERE id = ${gameId} AND league = ${league} LIMIT 1`;
+      const subs = await sql`
+        SELECT DISTINCT alert_subtype FROM sweetspot_alerts
+        WHERE game_id = ${gameId} AND league = ${league}`;
+      return { statusCode: 200, headers, body: JSON.stringify({
+        snapshot: snap[0] || null, game: game[0] || null,
+        subtypes: subs.map(r => r.alert_subtype) }) };
+    }
+
     // ── SWEETSPOT_OPS_SPEC.md §3/D-A — structured betting log ──
     if (action === 'log_bet' && event.httpMethod === 'POST') {
       const b = JSON.parse(event.body || '{}');

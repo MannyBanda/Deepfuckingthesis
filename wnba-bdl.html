@@ -767,6 +767,7 @@ async function loadSchedule(){
     if(dateOffset===0){
       refreshLiveCards(); // immediate first fetch — don't wait 10s
       pollTimer=setInterval(function(){refreshLiveCards();},pollInterval);
+      startSSVerdictTimer(); // SS verdict — 60s cadence, visible card only (D-3)
     }
   }catch(e){showErr(e.message);}
   finally{showLoading(false);}
@@ -1153,6 +1154,7 @@ function toggleDemo(){
     if(hasLiveDemo){
       refreshLiveCards();
       pollTimer=setInterval(function(){refreshLiveCards();},pollInterval);
+      startSSVerdictTimer(); // SS verdict — 60s cadence, visible card only (D-3)
     }
     document.querySelector('.date-nav').style.display='none';
   } else {
@@ -1194,6 +1196,7 @@ function scrollToGame(id){
   if(target){
     target.scrollIntoView({behavior:'smooth',inline:'center',block:'nearest'});
     activeGameId=id;
+    fetchSSState(id); // SS verdict — refresh on card select (D-3)
     renderPills();
     renderSwipeDots();
   }
@@ -1211,7 +1214,7 @@ function mountAllCards(){
     renderCard(g.id);
   });
   // Set first game as active
-  if(games.length>0){activeGameId=games[0].id;}
+  if(games.length>0){activeGameId=games[0].id;fetchSSState(activeGameId);}
   renderSwipeDots();
   document.getElementById('empty').style.display=games.length?'none':'block';
   // Restore ESPN WP history from localStorage, then fetch fresh for games that need it
@@ -1252,6 +1255,7 @@ document.getElementById('swipe').addEventListener('scroll',function(){
       var newActive=cards[closestIdx].dataset.gameId;
       if(newActive!==activeGameId){
         activeGameId=newActive;
+        fetchSSState(newActive); // SS verdict — refresh on swipe select (D-3)
         renderPills();
         renderSwipeDots();
         var activePill=document.querySelector('.chip.sel');
@@ -3659,6 +3663,116 @@ function divergenceRead(sc){
   return R('NO FADE','MIXED','var(--fg-dim)',L.team+' hot ('+ef+') but mixed-sourced — not a clean fade.');
 }
 
+// ── SWEETSPOT VERDICT STRIP (SWEETSPOT_VERDICT_STRIP_SPEC.md) ──
+// Server-authoritative: the verdict renders from the latest snapshot's ss_ gate fields
+// (db-api get_ss_state) — never recomputed client-side. The client PBP comp feeds only
+// the two evidence lines. Copy pinned verbatim by research/ss_verdict_fixtures.mjs.
+var _ssStateCache={};    // gameId -> { data:{snapshot,game,subtypes}, fetchedAt }
+var _ssLedgerCache=null; // subtype -> n_resolved (ss_ledger_summary, once per session)
+var _ssVerdictTimer=null;
+
+// Gap formatting: 2 decimals, except widen to 3 when rounding would cross the .15/.20
+// display thresholds from below (e.g. .148 must never render as ".15").
+function ssGapFmt(g){
+  if(g==null||isNaN(g))return null;
+  var s2=g.toFixed(2);
+  if((Math.abs(+s2-0.15)<1e-9&&g<0.15)||(Math.abs(+s2-0.20)<1e-9&&g<0.20))return g.toFixed(3).replace(/^0/,'');
+  return s2.replace(/^0/,'');
+}
+
+// Pure composer — verdict states V0-V8 + VX fallback, trap flags T1/T4/T5 (one max,
+// T1>T4>T5, overlay on V2-V5+VX). Priority top-down, first match wins (spec §3).
+// st: { period, clock, homePts, awayPts, homeAlias, awayAlias, leaderAlias, gap,
+//   efgBand, leadClass, collapseTier, lineUsed, subtypes[], gapBaseN, q4CollapseN,
+//   gameStatus, finalHome, finalAway, trailerWinsStruct }
+function ssVerdictCompose(st){
+  st=st||{};
+  var p=Number(st.period)||0;
+  var hp=Number(st.homePts)||0,ap=Number(st.awayPts)||0;
+  var leader=st.leaderAlias||(hp>=ap?st.homeAlias:st.awayAlias)||'LEADER';
+  var trailer=(leader===st.homeAlias)?st.awayAlias:st.homeAlias;trailer=trailer||'TRAILER';
+  var deficit=Math.abs(hp-ap);
+  var subs=st.subtypes||[];
+  var gap=(st.gap==null)?null:Number(st.gap);
+  var gapS=ssGapFmt(gap);
+  var gbN=st.gapBaseN!=null?st.gapBaseN:0,q4N=st.q4CollapseN!=null?st.q4CollapseN:0;
+  var v,text,color;
+  if(p<2){v='V0';color='var(--fg-dim)';
+    text='Gates open in Q2 \u2014 no verdict yet.';}
+  else if(subs.indexOf('EFG_FADE')>-1){v='V1';color='var(--green)';
+    text='SWEET SPOT A LIVE \u2014 see the push for price and size.';}
+  else if(subs.indexOf('EFG_FADE_SOFT')>-1){v='V1';color='var(--amber)';
+    text='SWEET SPOT B LIVE \u2014 see the push for price and size.';}
+  else if(subs.indexOf('WATCHLIST')>-1){v='V2';color='var(--blue)';
+    var bar=(gap!=null&&gap>=0.20)?', above your .20 bar':', below your .20 bar';
+    text='REVIEW \u2014 '+trailer+' is the much better team ('+(gapS||'?')+' quality gap'+bar+') trailing by '+deficit+'. Bet gates haven\u2019t aligned; your read decides.';}
+  else if(subs.indexOf('GAP_BASE')>-1){v='V3';color='var(--fg-secondary)';
+    text='GAP SPOT, UNPROVEN \u2014 base gates pass but the fade reads don\u2019t. The ledger is collecting this shape ('+gbN+'/30 resolved so far). Not a validated bet.';}
+  else if(gap==null||gap<0.15){v='V4';color='var(--fg-dim)';
+    text='NO SPOT \u2014 quality gap ('+(gapS!=null?gapS:'no standings gap')+') is below the review line (.15). Anything taken here is the speculative stream \u2014 size like it.';}
+  else if(st.collapseTier==='NO_EDGE'){v='V5';color='var(--fg-dim)';
+    text='NO SPOT \u2014 '+leader+' wins too much to be a fade target, whatever the heat says. Anything taken here is the speculative stream \u2014 size like it.';}
+  else if(p<4&&deficit>=10){v='V6';color='var(--coral)';
+    text='OUT OF BAND \u2014 '+trailer+' down '+deficit+': leads this size are banked (regression erases single digits, not '+deficit+'). No chasing from here.';}
+  else if(p>=4&&deficit>=10&&deficit<=15){v='V7';color='var(--fg-dim)';
+    text='Q4 DEEP \u2014 unproven ledger shape, collecting ('+q4N+'/30). Not a validated bet.';}
+  else if(p>=4&&deficit>15){v='V7';color='var(--coral)';
+    text='DEAD \u2014 out of range at this stage.';}
+  else if(p>=4){v='VX';color='var(--fg-secondary)';
+    text='NO PUSH \u2014 inside the range late ('+(gapS||'?')+' quality gap, down '+deficit+' in Q4) but the watch window closed after Q3. Nothing fired; your read decides.';}
+  else{v='VX';color='var(--fg-dim)';
+    text='READ FORMING \u2014 gates are live but no alert row yet (next server read lands in about a minute).';}
+  // Trap flags — overlay on V2-V5 + VX; one line max, priority T1 > T4 > T5 (spec §4)
+  var trap=null;
+  if(v==='V2'||v==='V3'||v==='V4'||v==='V5'||v==='VX'){
+    var lc=st.leadClass;
+    if((lc==='STRUCTURAL'||st.trailerWinsStruct===true)&&gap!=null&&gap<0.20){
+      trap='\u26a0 Trailer winning the structural battle below the gap bar is a tested-and-killed shape (Jun 21, 1-for-7 \u2014 the market prices visible structure).';}
+    else if(lc==='STRUCTURAL'&&gap!=null&&gap>=0.20){
+      trap='\u26a0 Structural leader = the pass shape (POR@CHI rule). Conscious override territory only \u2014 probe size (CHI@DAL convention).';}
+    else if((st.efgBand==='red'||st.efgBand==='orange')&&(gap==null||gap<0.15)){
+      trap='\u26a0 Hot leader without a quality gap \u2014 the \u201chot = mirage\u201d family is 3x killed (NBA n=1,200; player-level; team-level). Heat only matters ON TOP of a gap.';}
+  }
+  // V8 — final freeze: verdict stays as computed from the last snapshot, outcome appended
+  if(st.gameStatus==='closed'){
+    var fH=st.finalHome!=null?Number(st.finalHome):hp,fA=st.finalAway!=null?Number(st.finalAway):ap;
+    var trailPts=(trailer===st.homeAlias)?fH:fA,leadPts=(trailer===st.homeAlias)?fA:fH;
+    var won=trailPts>leadPts;
+    v='V8';
+    text+=' Final '+Math.max(trailPts,leadPts)+'-'+Math.min(trailPts,leadPts)+' \u2014 '+trailer+' '+(won?'completed the comeback':'did not come back')+'.';
+  }
+  // Garbage line at any state
+  if(st.lineUsed!=null&&Math.abs(Number(st.lineUsed))>=50000)text+=' Line dead.';
+  return{v:v,text:text,trap:trap,color:color};
+}
+
+// Fetch + cache. Frozen once the game is closed and a read exists; 55s min interval
+// otherwise (the 60s timer plus card-select calls share this guard). D-3: visible card only.
+async function fetchSSState(gameId,force){
+  if(!gameId||!dbReady)return;
+  var e=_ssStateCache[gameId];
+  if(e&&e.data&&e.data.game&&e.data.game.status==='closed'&&!force)return;
+  if(e&&!force&&(Date.now()-e.fetchedAt)<55000)return;
+  try{
+    if(!_ssLedgerCache){
+      try{
+        var lr=await fetch(FN+'db-api?action=ss_ledger_summary&league=wnba');
+        if(lr.ok){var lj=await lr.json();_ssLedgerCache={};(lj.ledger||[]).forEach(function(r){_ssLedgerCache[r.alert_subtype]=r.n_resolved||0;});}
+      }catch(_e){}
+      if(!_ssLedgerCache)_ssLedgerCache={};
+    }
+    var r=await fetch(FN+'db-api?action=get_ss_state&game_id='+encodeURIComponent(gameId)+'&league=wnba');
+    if(!r.ok)return;
+    var data=await r.json();
+    _ssStateCache[gameId]={data:data,fetchedAt:Date.now()};
+    renderCard(gameId);
+  }catch(err){console.log('[SS VERDICT]',err.message);}
+}
+function startSSVerdictTimer(){
+  if(_ssVerdictTimer)return;
+  _ssVerdictTimer=setInterval(function(){if(activeGameId)fetchSSState(activeGameId);},60000);
+}
+
 // ── BAD-LEADER COLLAPSE COMEBACK ENGINE (WNBA) — validated on 113-game set ──
 // Edge: a quality team trailing a BAD team whose lead is built on unsustainable shooting.
 // The market prices the deficit, not the teams. Edge is captured at entry — take & hold.
@@ -3845,6 +3959,74 @@ async function fetchPBPFromDB(gameId,force){
   }
 }
 
+// ── RENDER SS VERDICT BOX (spec §2 anatomy: verdict → trap → evidence → as-of) ──
+function renderSSVerdictBox(id,cs,hA,aA){
+  var entry=_ssStateCache[id];
+  var g=games.find(function(x){return x.id===id;});
+  var sc=cs.scoringComp;
+  var html='<div style="margin-bottom:10px;padding:9px 11px;background:var(--bg-surface-2);border:1px solid var(--hairline-strong);border-radius:var(--r-inner);font-family:var(--sans);font-size:12px;line-height:1.55;color:var(--fg-secondary)">';
+  var verdict=null,sn=null,gm=null;
+  if(entry&&entry.data&&entry.data.snapshot){
+    sn=entry.data.snapshot;gm=entry.data.game||{};
+    // trailer-wins-structural-delta (client PBP fact — feeds trap T1's second leg only)
+    var tws=null;
+    if(sc&&sc.structuralDelta!=null&&sn.ss_leader_alias){
+      var _trailAl=(sn.ss_leader_alias===(gm.home_alias||hA))?(gm.away_alias||aA):(gm.home_alias||hA);
+      tws=(_trailAl===(gm.home_alias||hA))?sc.structuralDelta>0:sc.structuralDelta<0;
+    }
+    verdict=ssVerdictCompose({
+      period:sn.period,clock:sn.clock,homePts:sn.home_pts,awayPts:sn.away_pts,
+      homeAlias:gm.home_alias||hA,awayAlias:gm.away_alias||aA,leaderAlias:sn.ss_leader_alias,
+      gap:sn.ss_quality_gap,efgBand:sn.ss_leader_efg_band,leadClass:sn.ss_lead_class,
+      collapseTier:sn.ss_collapse_tier,lineUsed:sn.ss_line_used,subtypes:entry.data.subtypes||[],
+      gapBaseN:(_ssLedgerCache&&_ssLedgerCache.GAP_BASE)||0,
+      q4CollapseN:(_ssLedgerCache&&_ssLedgerCache.Q4_COLLAPSE)||0,
+      gameStatus:gm.status,finalHome:gm.home_pts,finalAway:gm.away_pts,
+      trailerWinsStruct:tws});
+  }else if(g&&(g.period||0)<2){
+    verdict=ssVerdictCompose({period:g.period||0,homeAlias:hA,awayAlias:aA});
+  }
+  // Stale guard: snapshot ts older than 3 min during a live game → dim to updating…
+  var isStale=false;
+  if(sn&&sn.ts&&g&&g.status==='inprogress'){
+    var age=Date.now()-new Date(sn.ts).getTime();
+    if(age>180000)isStale=true;
+  }
+  if(!verdict){
+    html+='<span style="font-weight:600;color:var(--fg-dim)">VERDICT</span> \u2014 waiting for first server read\u2026';
+  }else if(isStale){
+    html+='<span style="font-weight:600;color:var(--fg-dim)">updating\u2026</span>';
+  }else{
+    var vi=verdict.text.indexOf(' \u2014 ');
+    var vHead=vi>-1?verdict.text.slice(0,vi):verdict.text;
+    var vBody=vi>-1?verdict.text.slice(vi+3):'';
+    html+='<span style="font-weight:600;color:'+verdict.color+'">'+esc(vHead)+'</span>'+(vBody?' \u2014 '+esc(vBody):'');
+    if(verdict.trap)html+='<div style="margin-top:6px;color:var(--amber)">'+esc(verdict.trap)+'</div>';
+  }
+  // Evidence lines — always, from the client PBP comp, relabeled (D-2): "structural"
+  // about the leader's own mix vs about the margin can never collide again.
+  if(sc&&sc.home&&sc.away){
+    var _hp2=sc.home.total||0,_ap2=sc.away.total||0;
+    var ldAl=(sn&&sn.ss_leader_alias)||(_hp2>=_ap2?sc.home.team:sc.away.team);
+    var ldSide=ldAl===sc.home.team?sc.home:sc.away;
+    var lv=ldSide.vPct,lefg=ldSide.efgBox;
+    var eng=lv==null?'\u2014':(lv>55?'VARIANCE':(lv<=45?'STRUCTURAL':'MIXED'));
+    var engDet=(lefg!=null&&lv!=null)?' ('+Math.round(lefg)+'% eFG, V '+Math.round(lv)+'%)':'';
+    var cls=sc.classification==='VOLATILE'?'VARIANCE-CARRIED':(sc.classification||'\u2014');
+    var sT=(sc.structuralDelta||0)>=0?sc.home.team:sc.away.team;
+    var vT=(sc.varianceDelta||0)>=0?sc.home.team:sc.away.team;
+    var clsDet=' ('+esc(sT)+' +'+Math.abs(Math.round(sc.structuralDelta||0))+' structure, '+esc(vT)+' +'+Math.abs(Math.round(sc.varianceDelta||0))+' variance)';
+    html+='<div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--hairline);font-size:11px;color:var(--fg-tertiary)">';
+    html+='<div>LEADER\u2019S ENGINE: <span style="color:var(--fg-secondary)">'+esc(eng)+'</span>'+engDet+'</div>';
+    html+='<div style="margin-top:2px">THE LEAD: <span style="color:var(--fg-secondary)">'+esc(cls)+'</span>'+clsDet+'</div>';
+    html+='</div>';
+  }
+  // as-of stamp — verdict data is poll-cadence (~60-90s behind the live PBP bars)
+  if(sn)html+='<div style="margin-top:5px;font-size:10px;color:var(--fg-dim);font-family:var(--mono)">server read as of Q'+esc(String(sn.period||'?'))+' '+esc(String(sn.clock||''))+'</div>';
+  html+='</div>';
+  return html;
+}
+
 // ── RENDER SCORING COMPOSITION ──
 function renderScoringCompSection(id,cs,hA,aA){
   var sc=cs.scoringComp;if(!sc||!sc.home||!sc.away)return'';
@@ -3868,6 +4050,9 @@ function renderScoringCompSection(id,cs,hA,aA){
   html+='</div>';
   html+='<div class="coll-body'+(isOpen?' open':'')+'">';
   html+='<div class="coll-inner">';
+
+  // ── SS VERDICT BOX (spec §2 — top of section; server-authoritative) ──
+  html+=renderSSVerdictBox(id,cs,hA,aA);
 
   html+=scoringBar(h,sc.period);
   html+=scoringBar(a,sc.period);
@@ -3927,19 +4112,9 @@ function renderScoringCompSection(id,cs,hA,aA){
     return _box(lab,col,bg,bd,setup+' true ~'+pP+'% ('+pL+'\u2013'+pH+'%) \u00b7 '+fmtML(ev.line)+' (mkt ~'+Math.round(ev.implied*100)+'%) \u00b7 <b style="color:'+col+'">EDGE +'+Math.round(ev.edge*100)+'pp</b> \u00b7 size ~'+Math.round(ev.size*100)+'% (\u00bc-Kelly) \u00b7 '+hold);
   })();
 
-  // Lead source classification
-  // Efficiency-divergence fade read (the betting action; sits above composition class)
-  if(sc.fadeRead){
-    var fr=sc.fadeRead,frStrong=fr.tier==='STRONG FADE';
-    html+='<div style="margin-top:10px;padding:8px 10px;background:'+(frStrong?'var(--coral-dim)':'var(--bg-surface-2)')+';border:1px solid '+(frStrong?'var(--coral-border)':'var(--hairline)')+';border-radius:var(--r-inner);font-family:var(--sans);font-size:12px;line-height:1.5;color:var(--fg-secondary)">';
-    html+='<span style="font-weight:600;color:'+fr.color+'">'+esc(fr.label)+'</span> — '+esc(fr.text)+'</div>';
-  }
-
-  if(sc.durability){
-    var lcCol=sc.classification==='STRUCTURAL'?'var(--green)':sc.classification==='VOLATILE'?'var(--coral)':'var(--fg-secondary)';
-    html+='<div style="margin-top:10px;padding:8px 10px;background:var(--bg-surface-2);border:1px solid var(--hairline);border-radius:var(--r-inner);font-family:var(--sans);font-size:12px;line-height:1.5;color:var(--fg-secondary)">';
-    html+='<span style="font-weight:600;color:'+lcCol+'">'+esc(sc.classification)+'</span> \u2014 '+esc(sc.durability)+'</div>';
-  }
+  // fadeRead card + classification card retired (VERDICT_STRIP D-1/D-2) — both absorbed
+  // into the verdict box as the LEADER'S ENGINE / THE LEAD evidence lines. divergenceRead
+  // itself stays: sc.fadeRead still feeds comebackProb's fragile-lead bump.
 
   html+='</div></div></div>';
   return html;
