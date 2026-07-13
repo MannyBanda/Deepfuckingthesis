@@ -1729,20 +1729,9 @@ function renderCard(id){
         html+='</div>';
       }
 
-      // ═══ MC SIGNALS — always-on MC Cum + MC PBP row ═══
+      // ═══ MC RATE DRIVERS ═══ (MC Cum/MC PBP/XGB/Floor signal band removed Jul 13 —
+      // those values live in the trend graph above; drivers decomposition kept)
       if(cs._mcCumWp!=null||cs._mcPbpWp!=null){
-        var _mcCumPct=cs._mcCumWp!=null?Math.round(cs._mcCumWp*100):null;
-        var _mcPbpPct=cs._mcPbpWp!=null?Math.round(cs._mcPbpWp*100):null;
-        var _xgbPct=null;
-        if(cs._allSnapshots&&cs._allSnapshots.length>0){var _mcls=cs._allSnapshots[cs._allSnapshots.length-1];if(_mcls.xgb_win_prob!=null)_xgbPct=Math.round(Number(_mcls.xgb_win_prob)*100);}
-        var _flPct=floor&&floor.score!=null?Math.round(floor.score*100):null;
-        function mcSigColor(v){return v==null?'var(--fg-dim)':v<40?'var(--coral)':v>70?'var(--green)':'var(--fg-secondary)';}
-        html+='<div style="display:flex;gap:2px;margin-bottom:10px;padding:6px 8px;background:var(--bg-surface-2);border-radius:var(--r-inner);border:1px solid var(--hairline)">';
-        html+='<div style="flex:1;text-align:center"><div style="font-size:8px;color:var(--fg-dim);text-transform:uppercase;letter-spacing:0.5px">MC Cum</div><div style="font-size:14px;font-weight:600;color:'+mcSigColor(_mcCumPct)+'">'+(_mcCumPct!=null?_mcCumPct+'%':'--')+'</div></div>';
-        html+='<div style="flex:1;text-align:center"><div style="font-size:8px;color:var(--fg-dim);text-transform:uppercase;letter-spacing:0.5px">MC PBP</div><div style="font-size:14px;font-weight:600;color:'+mcSigColor(_mcPbpPct)+'">'+(_mcPbpPct!=null?_mcPbpPct+'%':'--')+'</div></div>';
-        html+='<div style="flex:1;text-align:center"><div style="font-size:8px;color:var(--fg-dim);text-transform:uppercase;letter-spacing:0.5px">XGB</div><div style="font-size:14px;font-weight:600;color:'+mcSigColor(_xgbPct)+'">'+(_xgbPct!=null?_xgbPct+'%':'--')+'</div></div>';
-        html+='<div style="flex:1;text-align:center"><div style="font-size:8px;color:var(--fg-dim);text-transform:uppercase;letter-spacing:0.5px">Floor</div><div style="font-size:14px;font-weight:600;color:'+mcSigColor(_flPct)+'">'+(_flPct!=null?(_flPct/100).toFixed(2):'--')+'</div></div>';
-        html+='</div>';
         // MC Drivers — collapsible rate decomposition
         if(cs._mcDrivers&&cs._mcDrivers.length>0){
           var drvOpen=_collOpen[id+'_drv']!=null?_collOpen[id+'_drv']:false;
