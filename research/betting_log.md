@@ -12,7 +12,7 @@ Discretionary alpha = (2) − (1). Never conflate them. Append one section per s
 
 ---
 
-## 2026-07-12 (WNBA) — P&L **+$1,698.95**
+## 2026-07-12 (WNBA) — P&L **+$1,498.95**
 
 First slate where the majority of action rode an above-bar band game. WATCHLIST fired on both day games. **Bankroll note: $22K (revised from $39K); sizing judged against this and the graduation stage — Manny is deliberately under-sizing while working up to right-size.**
 
@@ -27,6 +27,8 @@ First slate where the majority of action rode an above-bar band game. WATCHLIST 
 - **NY +400 B−** — Reasoning (Manny): NY was down 20, dashboard showed the comeback developing, entry came only after the run proved bite, at a price the market hadn't repriced. Nearly hit — tied with a minute left, NY had the last shot. Credit: confirmation-based entry timing, correct speculative-stream labeling, 0.45%-of-bankroll size. Caveats that keep it below B: the origin deficit (−20) is BANKED territory — the ATL Jun-24 shape — and gap .156 + NO_EDGE leader meant the framework saw thin; at +400 the price has to carry the whole thesis. Fine as a rare, tiny, confirmation-gated speculative; not a stream to grow.
 
 - **CHI@DAL staged entry, B+ read / A− exit** — Gap .334 (well above bar) but CHI's lead classed STRUCTURAL — the Jun-24 POR@CHI shape that says PASS. Manny consciously overrode on a quality-conditional thesis ("a low-quality team's structure is less trustworthy than a high-quality team's variance") at deliberately reduced size ($400 = 1.8% of bankroll). Both a WATCHLIST and a **GAP_BASE ledger row** fired on this game — he bet the exact cell the ledger is accumulating, and it converted (96-91). The exit: cashed the +200 leg at $488.95 with DAL up 1 and ~1:00 left — breakeven hold probability 81.5% vs true ~60-70% → mathematically correct cash-out (contrast Jul 10: up 13 with 73 seconds, ~99% locked, sold anyway). Exit rule adopted: **judge cash-outs by breakeven probability (offer ÷ full payout) vs. honest win probability — not by feelings.** The override thesis is logged as unvalidated and feeds the team-conditional backtest.
+
+- **IND@LV LV +380, C** — No alert fired (gap .148 sits below even the watchlist threshold), collapse NO_EDGE, fade NO FADE. The thesis — back the trailer winning the structural battle against a high-eFG leader — is the structural-underdog shape tested and killed 2026-06-21 (1-for-7; "the market prices visible structure"; the live-dog edge lives only where the trailer is the much better team, gap >.20 → 57% vs 38% implied). IND won 102-75: the sticky-lead read cashed, LV's structural +6 evaporated. Right size (0.9% bankroll), killed shape. Rule extracted by Manny himself: no buys without an alert + real gap. Day's ledger on this: flagged above-bar positions 3-for-3 (+$2,594 incl. Jul 10); unflagged speculatives 0-for-2 (−$300).
 
 **Grading convention (adopted 2026-07-12):** staged entries on one game grade as ONE position (entry discipline, price patience, and exposure cap are part of the grade); size is judged against current bankroll ($22K) and graduation stage, not absolute dollars.
 
