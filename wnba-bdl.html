@@ -756,6 +756,7 @@ async function loadSchedule(){
         if(gs!=='PRE'){
           setTimeout(function(){fetchPBPFromDB(g.id);},800+i*200);
           setTimeout(function(){fetchOddsHistory(g.id);},1000+i*200);
+          setTimeout(function(){fetchSSState(g.id);},600+i*150); // SS verdict prefetch — warm every card so swipes render instantly (runs post-initDB, fixing the app-open dbReady race)
         }
       });
       // Initial alert poll for toast (fires after hydration)
@@ -3760,11 +3761,16 @@ function ssVerdictCompose(st){
 
 // Fetch + cache. Frozen once the game is closed and a read exists; 55s min interval
 // otherwise (the 60s timer plus card-select calls share this guard). D-3: visible card only.
+var _ssFetching={};
 async function fetchSSState(gameId,force){
-  if(!gameId||!dbReady)return;
+  if(!gameId||!dbReady||_ssFetching[gameId])return;
   var e=_ssStateCache[gameId];
   if(e&&e.data&&e.data.game&&e.data.game.status==='closed'&&!force)return;
-  if(e&&!force&&(Date.now()-e.fetchedAt)<55000)return;
+  // Empty-snapshot entries (just-tipped games, pre-first-poll) retry on a 15s TTL;
+  // populated entries hold the 55s guard (60s timer + ~60s poll cadence upstream).
+  var ttl=(e&&e.data&&!e.data.snapshot)?15000:55000;
+  if(e&&!force&&(Date.now()-e.fetchedAt)<ttl)return;
+  _ssFetching[gameId]=true;
   try{
     if(!_ssLedgerCache){
       try{
@@ -3779,6 +3785,7 @@ async function fetchSSState(gameId,force){
     _ssStateCache[gameId]={data:data,fetchedAt:Date.now()};
     renderCard(gameId);
   }catch(err){console.log('[SS VERDICT]',err.message);}
+  finally{delete _ssFetching[gameId];}
 }
 function startSSVerdictTimer(){
   if(_ssVerdictTimer)return;
@@ -3974,6 +3981,7 @@ async function fetchPBPFromDB(gameId,force){
 // ── RENDER SS VERDICT BOX (spec §2 anatomy: verdict → trap → evidence → as-of) ──
 function renderSSVerdictBox(id,cs,hA,aA){
   var entry=_ssStateCache[id];
+  if(!entry)fetchSSState(id); // render-miss kick — async, in-flight-guarded; lands + re-renders in <1s instead of waiting for the 60s timer
   var g=games.find(function(x){return x.id===id;});
   var sc=cs.scoringComp;
   var html='<div style="margin-bottom:10px;padding:9px 11px;background:var(--bg-surface-2);border:1px solid var(--hairline-strong);border-radius:var(--r-inner);font-family:var(--sans);font-size:12px;line-height:1.55;color:var(--fg-secondary)">';
