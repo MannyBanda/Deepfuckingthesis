@@ -1,8 +1,9 @@
 # TEAM_PROFILES — team identity, tier splits, form, H2H (nightly)
 
 **Date:** 2026-07-13 · **Amended:** 2026-07-14 (fixture-adjudicated: strict tier cutoff,
-aggregate eFG + fgm/fga primitives, OREB provenance tolerance — see §2a) · **Status:** SHIPPED v1
-(nightly + backfill; consumption/injection §6-§7 pending) (RE-DERIVED — original written 2026-07-04,
+aggregate eFG + fgm/fga primitives, OREB provenance tolerance — see §2a) · **Status:** SHIPPED v1+§6
+(nightly + backfill + consumption: agent prompt, formatSonnetPrompt, mechanical push one-liner —
+all behind TEAM_CTX_ON; §7 narration injection ships with NARRATION_V2 build per build order) (RE-DERIVED — original written 2026-07-04,
 lost to the expired read-only PAT; recovered from chat history Jul 13 and extended with
 §7 narration-v2 integration) · **Companion:** SWEETSPOT_NARRATION_V2_SPEC.md
 
@@ -139,9 +140,12 @@ compression; prompts always get the underlying numbers so a wrong label can't mi
   factual block, header `TEAM CONTEXT (season priors — context only, small-n: treat
   splits as direction, not probabilities)`. Degradation: missing row → omit team line;
   both missing → omit block; `updated_at` > 36h → append staleness note.
-- **Injection points (4):** alert reasoning agent prompt · formatSonnetPrompt (both call
-  sites) · Sweet Spot Stage-2 narration (§7) · one plain-English line in mechanical ntfy
-  bodies.
+- **Injection points (4):** alert reasoning agent prompt (v1 inline + buildV2AgentPrompt) ·
+  formatSonnetPrompt (inside the builder — zero call-site plumbing; hA/aA/league are params) ·
+  Sweet Spot Stage-2 narration (§7 — ships with NARRATION_V2) · one plain-English line in
+  mechanical SS push bodies (appended at fireSweetSpotAlert call site; ssComposePush copy is
+  fixture-pinned and untouched). League guard on every compose call — MIN/other aliases
+  collide across leagues; map serves wnba only.
 - **Flag:** `TEAM_CTX_ON=1` + diag mode.
 
 ## 7. Narration-v2 integration (NEW — supersedes NARRATION_V2 §7 "empty hook")

@@ -893,7 +893,15 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
       log(`${aA}@${hA}: sweetspot ledger row ${ss.subtype} recorded — Q${ss.period} ${ss.trailerAl} +${ss.margin} collapse=${ss.collapseTier} fade=${ss.fadeTier || '—'} class=${ss.leadClass || '—'} (no push, ever)`);
     } else {
       const push = ssComposePush(ss);
-      await sendNtfy(push.title, push.body, push.priority, SS_DASH_URL);
+      // TEAM_PROFILES_SPEC §6 — one plain-English profile line in mechanical push bodies.
+      // Appended at call site (ssComposePush copy is fixture-pinned); '' when flag off.
+      let _pushBody = push.body;
+      try {
+        await ensureTeamCtx(sql, league);
+        const _tcLine = composeTeamCtxLine(ss.trailerAl, ss.leaderAl, league);
+        if (_tcLine) _pushBody = push.body + '\n\n' + _tcLine;
+      } catch (e) { /* non-fatal — push goes out without the line */ }
+      await sendNtfy(push.title, _pushBody, push.priority, SS_DASH_URL);
       log(`${aA}@${hA}: ★ SWEET SPOT ${ss.subtype === 'WATCHLIST' ? 'WATCHLIST' : ss.tier} FIRED — ${ss.trailerAl} +${ss.margin}${ss.edge != null ? ` edge=${_pct(ss.edge)}pp` : ''} line=${_ml(ss.bestML)}${ss.softCell ? ` cell=${ss.softCell}` : ''}`);
     }
 
@@ -964,6 +972,93 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
 }
 
 // ── ALERT REASONING AGENT ────────────────────────────────────────────────
+
+// ── TEAM CONTEXT (TEAM_PROFILES_SPEC §6) — season identity/tier/form/H2H priors ──
+// Ships DARK (default off). Set env TEAM_CTX_ON=1 to inject into agent prompts,
+// auto-analysis prompts, and mechanical SS push bodies. WNBA-only v1.
+// Loaded once per invocation via isolated SELECT (critical-path rule — never added
+// to existing SELECTs). composeTeamContext/composeTeamCtxLine degrade to '' when
+// the flag is off, the map is unloaded, the league mismatches, or rows are missing.
+const TEAM_CTX_ON = process.env.TEAM_CTX_ON === '1';
+var _teamCtxMap = null;   // alias -> profile row (var: TDZ learning #6)
+
+async function ensureTeamCtx(sql, league) {
+  if (!TEAM_CTX_ON || league !== 'wnba' || _teamCtxMap) return;
+  try {
+    const rows = await sql`SELECT team_alias, league, season, w, l, archetype, profile, updated_at
+      FROM team_profiles WHERE league = ${'wnba'} AND season = ${2026}`;
+    _teamCtxMap = {};
+    for (const r of rows) {
+      let prof = r.profile;
+      if (typeof prof === 'string') { try { prof = JSON.parse(prof); } catch (e) { prof = null; } }
+      if (prof) _teamCtxMap[r.team_alias] = { w: r.w, l: r.l, archetype: r.archetype, profile: prof, updated_at: r.updated_at, league: r.league };
+    }
+    log(`teamCtx: loaded ${Object.keys(_teamCtxMap).length} wnba profiles`);
+  } catch (e) { _teamCtxMap = {}; log(`teamCtx load failed (degrading to empty): ${e.message}`); }
+}
+
+// Full factual block for Opus prompts (agent + auto-analysis). ~150-220 tokens.
+// Underlying numbers always included so a wrong archetype label can't mislead (§5).
+function composeTeamContext(hA, aA, league, map = _teamCtxMap) {
+  if (!TEAM_CTX_ON || league !== 'wnba' || !map || !hA || !aA) return '';
+  const fmt = (alias, oppAlias) => {
+    const t = map[alias];
+    if (!t) return null;   // degradation: missing row -> omit team line
+    const i = t.profile.identity || {}, tr = t.profile.tiers || {}, f5 = (t.profile.form || {}).l5;
+    const sp = (v) => v == null ? '?' : (v > 0 ? '+' : '') + v;
+    let s = `${alias} ${t.w}-${t.l} ${t.archetype} — eFG diff ${sp(i.efg_diff)}pp, TO margin ${sp(i.to_margin)}, FTA ${sp(i.fta_diff)}, OREB ${sp(i.oreb_diff)}`;
+    if (tr.top && tr.top.n > 0) s += ` | vs top(>.600) ${tr.top.w}-${tr.top.l} (eFG ${sp(tr.top.efg_diff)}pp), vs rest ${tr.rest.w}-${tr.rest.l}`;
+    if (tr.insufficient) s += ` [tier splits small-n]`;
+    if (f5) {
+      s += ` | L5 ${f5.w}-${f5.l}, own eFG ${sp(f5.own_efg_delta)}pp, opp eFG ${sp(f5.opp_efg_delta)}pp`;
+      const tags = [f5.own_tag, f5.opp_tag].filter(Boolean);
+      if (tags.length) s += ` [${tags.join(', ')}]`;
+    }
+    const h = (t.profile.h2h || {})[oppAlias];
+    if (h) s += ` | H2H vs ${oppAlias}: ${h.w}-${h.l} (avg ${sp(h.avg_margin)})`;
+    const sch = t.profile.schedule || {};
+    if (sch.last_game_date) s += ` | last game ${sch.last_game_date}${sch.road_streak > 1 ? ', road streak ' + sch.road_streak : ''}`;
+    return s;
+  };
+  const lines = [fmt(hA, aA), fmt(aA, hA)].filter(Boolean);
+  if (lines.length === 0) return '';   // degradation: both missing -> omit block
+  let block = `\nTEAM CONTEXT (season priors — context only, small-n: treat splits as direction, not probabilities):\n${lines.join('\n')}\n`;
+  const anyRow = map[hA] || map[aA];
+  if (anyRow && anyRow.updated_at && (Date.now() - new Date(anyRow.updated_at).getTime()) > 36 * 3600 * 1000) {
+    block += `(profiles >36h stale — nightly refresh may have missed; weight accordingly)\n`;
+  }
+  return block;
+}
+
+// ONE plain-English line for mechanical push bodies (settled D2) — no jargon,
+// subscriber-facing. Leads with the trailer (the buy side).
+function composeTeamCtxLine(trailerAl, leaderAl, league, map = _teamCtxMap) {
+  if (!TEAM_CTX_ON || league !== 'wnba' || !map) return '';
+  const PHRASE = {
+    DUAL_EDGE: 'wins on both shot-making and ball control',
+    SHOTMAKER: 'wins on shot-making',
+    POSSESSION_BULLY: 'wins on extra possessions, not shooting',
+    POSSESSION_LEAN: 'leans on ball control',
+    SHOT_DEFICIT: 'gets outshot most nights',
+    FLAT: 'has no clear identity edge',
+  };
+  const part = (alias) => {
+    const t = map[alias];
+    if (!t) return null;
+    const tr = (t.profile.tiers || {}).top;
+    let s = `${alias} ${PHRASE[t.archetype] || 'has no clear identity edge'}`;
+    if (tr && tr.n > 0) s += ` and is ${tr.w}-${tr.l} vs winning teams`;
+    const f5 = (t.profile.form || {}).l5;
+    if (f5 && f5.own_tag === 'COLD') s += ` (shooting cold lately)`;
+    if (f5 && f5.own_tag === 'HOT') s += ` (shooting hot lately)`;
+    return s;
+  };
+  const tPart = part(trailerAl), lPart = part(leaderAl);
+  if (!tPart && !lPart) return '';
+  return `Season lens: ${[tPart, lPart].filter(Boolean).join('; ')}.`;
+}
+
+
 // ── V2 AGENT PROMPT (validated 41/41 across 6 games) ──────────────────────
 // Used by v2 BWC lifecycle + BUY triggers. At cutover (Step 7), runAlertAgent
 // switches from v1 prompt to this. Until then, v1 path uses v1 prompt below.
@@ -1059,7 +1154,7 @@ OPPONENT PROFILE:
 Opponent indicators won: ${ctx.oppIndicatorCount} (${ctx.oppIndicatorsWon})
 ${ctx.oppI3Won ? 'Opponent I3 (shot quality) won — EXPECTED variance, not structural. Does NOT invalidate buy thesis.' : ''}
 ${ctx.oppIndicatorCount >= 1 && !ctx.oppI3Won ? 'WARNING: Opponent structural counter-indicators (' + ctx.oppIndicatorsWon + '), not just variance.' : ''}
-
+${composeTeamContext(ctx.homeAlias, ctx.awayAlias, ctx.league)}
 FLOOR RELIABILITY (from 1,235-game backtest):
 ${ctx.ctrlTeam} classified: ${ctx.reliabilityClass || 'NEUTRAL'} | Grip: ${ctx.floorGrip != null ? (ctx.floorGrip > 0 ? '+' : '') + ctx.floorGrip : 'N/A'}
 ${ctx.floorWPHistorical != null ? 'Historical close-game win rate at floor ' + ctx.floor + ': ' + ctx.floorWPHistorical + '% (vs ~70% population avg at this level)' : 'No historical floor WP data for this team/level'}
@@ -1337,6 +1432,7 @@ TP: ${ctx.tpClass || 'N/A'} (trailing team comeback path: STRONG>PROBABLE>CONTES
 LS: ${ctx.lsClass || 'N/A'} (leading team margin safety: SAFE>CUSHIONED>AT RISK>CRITICAL)
 Ctrl sust: ${ctx.ctrlSust || 'N/A'} | Opp sust: ${ctx.oppSust || 'N/A'}
 Window score: ${ctx.windowScore || 'N/A'}
+${composeTeamContext(ctx.homeAlias, ctx.awayAlias, ctx.league)}
 ${ctx.xgbWinProb != null ? 'XGBoost structural model: ' + (ctx.xgbWinProb * 100).toFixed(1) + '% win probability (independent raw-stats model). ' + (ctx.xgbAligned ? 'ALIGNED with floor.' : '⚠️ DIVERGENT from floor (' + (ctx.xgbDivergence > 0 ? '+' : '') + (ctx.xgbDivergence * 100).toFixed(1) + '%).') + (ctx.xgbShap ? ' SHAP: ' + ctx.xgbShap.map(s => s.f + '=' + (s.v > 0 ? '+' : '') + s.v.toFixed(2)).join(', ') : '') : ''}
 ${ctx.convictionQuality ? 'Conviction quality: ' + ctx.convictionQuality.basis + ' (' + Math.round(ctx.convictionQuality.strConcentration * 100) + '% structural / ' + Math.round(ctx.convictionQuality.volConcentration * 100) + '% volatile). Top: ' + ctx.convictionQuality.top1Feature + ' (' + Math.round(ctx.convictionQuality.top1Share * 100) + '%)' + (ctx.convictionQuality.top1IsVolatile ? ' [VOLATILE]' : '') + '. Scoreboard: ' + (ctx.convictionQuality.bigleadAnchored ? 'CONFIRMED' : ctx.convictionQuality.noScoreboardConfirmation ? 'NOT CONFIRMED' : 'PARTIAL') : ''}
 ${ctx.trajectorySignals && ctx.trajectorySignals.warnings.length > 0 ? 'Conviction warnings: ' + ctx.trajectorySignals.warnings.join(' | ') : ''}
@@ -5664,6 +5760,10 @@ function parseAnalysisText(text, homeAlias, awayAlias) {
 function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadComp, ind, clutchData, odds, espnWP, wpProfiles, analysisHistory, ctx, quarterDataFromDB, summary, conviction, graduationCtx, priorAlertTrail, floorWP, xgbData, mcData, league }) {
   let p = `${aA} @ ${hA} | Q${period} ${clock} | ${score}\n\n`;
 
+  // ── TEAM CONTEXT (TEAM_PROFILES_SPEC §6) — '' when flag off / non-WNBA / unloaded ──
+  const _tcBlock = composeTeamContext(hA, aA, league);
+  if (_tcBlock) p += _tcBlock + `\n`;
+
   // ── GROUND TRUTH (mechanical engine output — do not override) ──
   if (ind) {
     const ctrlHome = ind.controlTeam === hA;
@@ -6471,6 +6571,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
 
         const agentResult = await runAlertAgent({
           alertType: 'AUTO_ANALYSIS', alertTier: 'ANALYSIS',
+          homeAlias: hA, awayAlias: aA, league,
           controlTeam: ind.controlTeam, floor: ind.score.toFixed(2),
           margin, isTrailing: ctrlTrailing,
           period, clock, minsLeft: (period <= 4 ? ((4 - period) * 12 + parseFloat(clock?.split(':')[0] || 0)) : parseFloat(clock?.split(':')[0] || 0)).toFixed(1),
@@ -7275,6 +7376,11 @@ export default async function(req) {
     if (!apiKey) {
       continue;
     }
+
+    // TEAM_PROFILES_SPEC §6 — load season profiles once per invocation (isolated SELECT,
+    // wnba-only, no-op when TEAM_CTX_ON unset). Must precede game processing: agent and
+    // auto-analysis prompt builders read the module map synchronously.
+    await ensureTeamCtx(sql, league);
 
     const d = today();
     const pad = n => String(n).padStart(2, '0');
