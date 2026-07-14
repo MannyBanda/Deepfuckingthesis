@@ -606,10 +606,17 @@ exports.handler = async (event) => {
         fta INT, opp_fta INT,
         oreb INT, opp_oreb INT,
         fg3m INT, fg3a INT, opp_fg3m INT, opp_fg3a INT,
+        fgm INT, fga INT, opp_fgm INT, opp_fga INT,
         poss REAL,
         dft_game_id TEXT,
         PRIMARY KEY (game_id, team_alias)
       )`;
+      // spec §3a amendment (Jul 14): fgm/fga primitives required — golden fixture
+      // adjudicated eFG as attempt-weighted AGGREGATE, not per-game mean
+      await sql`ALTER TABLE team_game_stats ADD COLUMN IF NOT EXISTS fgm INT`;
+      await sql`ALTER TABLE team_game_stats ADD COLUMN IF NOT EXISTS fga INT`;
+      await sql`ALTER TABLE team_game_stats ADD COLUMN IF NOT EXISTS opp_fgm INT`;
+      await sql`ALTER TABLE team_game_stats ADD COLUMN IF NOT EXISTS opp_fga INT`;
 
       // ── TEAM_PROFILES_SPEC §3b — computed nightly, one row per team-season ──
       await sql`CREATE TABLE IF NOT EXISTS team_profiles (

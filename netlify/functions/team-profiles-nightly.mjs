@@ -37,7 +37,7 @@ function log(msg) { console.log(`[team-profiles] ${msg}`); }
 const N = (x) => Number(x) || 0; // BDL returns null for zero values + stats-as-strings
 
 // ── Constants (spec §5) ──────────────────────────────────────────────────────
-export const TIER_CUTOFF = 0.600;          // opponent win% for "top" tier (settled D1)
+export const TIER_CUTOFF = 0.600;          // opponent win% for "top" tier — STRICT > (settled D1; fixture-adjudicated Jul 14)
 export const TIER_MIN_GAMES = 8;           // tiers INSUFFICIENT until every team has ≥8 finals
 export const FORM_TAG_PP = 4.0;            // COLD/HOT at ±4.0pp eFG delta
 export const ARCH = {                      // archetype lever thresholds (pp / per-game)
@@ -85,9 +85,12 @@ export function computeProfiles(rows) {
     const won = (x) => N(x.pts) > N(x.opp_pts);
     const w = games.filter(won).length, l = g - w;
 
-    // identity — per-game means; eFG stored per-row, diffs in percentage points
-    const efg = mean(games.map((x) => N(x.efg)));
-    const oppEfg = mean(games.map((x) => N(x.opp_efg)));
+    // identity — per-game means for counts; eFG is ATTEMPT-WEIGHTED AGGREGATE over the
+    // slice (fixture-adjudicated Jul 14: the Jul 4 session numbers are aggregates —
+    // per-game mean gave −5.43 where the golden is −5.20 exact). aggEfg falls back to
+    // per-row efg mean if fgm/fga primitives are missing (pre-amendment rows).
+    const efg = aggEfg(games, 'fgm', 'fga', 'fg3m');
+    const oppEfg = aggEfg(games, 'opp_fgm', 'opp_fga', 'opp_fg3m');
     const toPg = mean(games.map((x) => N(x.to_ct)));
     const oppToPg = mean(games.map((x) => N(x.opp_to_ct)));
     const identity = {
@@ -110,14 +113,14 @@ export function computeProfiles(rows) {
       n: subset.length,
       w: subset.filter(won).length,
       l: subset.length - subset.filter(won).length,
-      efg_diff: subset.length ? r1((mean(subset.map((x) => N(x.efg))) - mean(subset.map((x) => N(x.opp_efg)))) * 100) : null,
+      efg_diff: subset.length ? r1((aggEfg(subset, 'fgm', 'fga', 'fg3m') - aggEfg(subset, 'opp_fgm', 'opp_fga', 'opp_fg3m')) * 100) : null,
       to_margin: subset.length ? r1(mean(subset.map((x) => N(x.opp_to_ct))) - mean(subset.map((x) => N(x.to_ct)))) : null,
       fta_diff: subset.length ? r1(mean(subset.map((x) => N(x.fta) - N(x.opp_fta)))) : null,
       ppg: subset.length ? r1(mean(subset.map((x) => N(x.pts)))) : null,
       opp_ppg: subset.length ? r1(mean(subset.map((x) => N(x.opp_pts)))) : null,
     });
-    const topGames = games.filter((x) => (winPct[x.opp_alias] ?? 0) >= TIER_CUTOFF);
-    const restGames = games.filter((x) => (winPct[x.opp_alias] ?? 0) < TIER_CUTOFF);
+    const topGames = games.filter((x) => (winPct[x.opp_alias] ?? 0) > TIER_CUTOFF);   // STRICT > (fixture-adjudicated: DAL at exactly .600 is REST)
+    const restGames = games.filter((x) => (winPct[x.opp_alias] ?? 0) <= TIER_CUTOFF);
     const tiers = {
       cutoff: TIER_CUTOFF,
       insufficient: tiersInsufficient,
@@ -131,8 +134,8 @@ export function computeProfiles(rows) {
       const win = games.slice(-k);
       const base = games.slice(0, g - k);
       const d = (arr, f) => mean(arr.map(f));
-      const ownDelta = (d(win, (x) => N(x.efg)) - d(base, (x) => N(x.efg))) * 100;
-      const oppDelta = (d(win, (x) => N(x.opp_efg)) - d(base, (x) => N(x.opp_efg))) * 100;
+      const ownDelta = (aggEfg(win, 'fgm', 'fga', 'fg3m') - aggEfg(base, 'fgm', 'fga', 'fg3m')) * 100;
+      const oppDelta = (aggEfg(win, 'opp_fgm', 'opp_fga', 'opp_fg3m') - aggEfg(base, 'opp_fgm', 'opp_fga', 'opp_fg3m')) * 100;
       return {
         w: win.filter(won).length,
         l: k - win.filter(won).length,
@@ -176,6 +179,20 @@ function sumRatio(games, mKey, aKey) {
   let m = 0, a = 0;
   for (const g of games) { m += N(g[mKey]); a += N(g[aKey]); }
   return a > 0 ? m / a : null;
+}
+
+// Attempt-weighted aggregate eFG over a slice: (Σfgm + 0.5·Σfg3m) / Σfga.
+// Falls back to per-row efg mean when fgm/fga primitives are absent.
+function aggEfg(games, fgmKey, fgaKey, fg3mKey) {
+  let fgm = 0, fga = 0, fg3m = 0, haveAll = true;
+  for (const g of games) {
+    if (g[fgmKey] == null || g[fgaKey] == null) { haveAll = false; break; }
+    fgm += N(g[fgmKey]); fga += N(g[fgaKey]); fg3m += N(g[fg3mKey]);
+  }
+  if (haveAll && fga > 0) return (fgm + 0.5 * fg3m) / fga;
+  const efgKey = fgmKey.startsWith('opp_') ? 'opp_efg' : 'efg';
+  const vals = games.map((x) => N(x[efgKey]));
+  return vals.length ? vals.reduce((s, x) => s + x, 0) / vals.length : null;
 }
 
 // ── BDL ingestion (spec §4 steps 1-3) ────────────────────────────────────────
@@ -263,6 +280,7 @@ async function pullTeamGameLines(gameMeta) {
       fta: self.fta, opp_fta: opp.fta,
       oreb: self.oreb, opp_oreb: opp.oreb,
       fg3m: self.fg3m, fg3a: self.fg3a, opp_fg3m: opp.fg3m, opp_fg3a: opp.fg3a,
+      fgm: self.fgm, fga: self.fga, opp_fgm: opp.fgm, opp_fga: opp.fga,
       poss: poss(self),
     });
     rows.push(mk(H, A, meta.home, meta.away, true), mk(A, H, meta.away, meta.home, false));
@@ -324,6 +342,7 @@ export default async function handler(req) {
   const isDry = url.searchParams.get('dry') === '1';
   const isBackfill = url.searchParams.get('backfill') === '1';
   const isRecomputeOnly = url.searchParams.get('recompute') === '1';
+  const isReingest = url.searchParams.get('reingest') === '1'; // ON CONFLICT DO UPDATE — schema-amendment migrations (e.g. fgm/fga primitives Jul 14)
   const league = 'wnba'; // v1 WNBA-only (spec §4)
 
   const todayAz = slateDateFromBdl(new Date().toISOString());
@@ -356,9 +375,9 @@ export default async function handler(req) {
       const found = await discoverFinalizedGames(dates);
       discovered = Object.keys(found).length;
 
-      // diff against existing rows
+      // diff against existing rows (skipped in reingest mode — everything re-pulls)
       const ids = Object.keys(found);
-      if (ids.length > 0) {
+      if (ids.length > 0 && !isReingest) {
         const existing = await sql`SELECT DISTINCT game_id FROM team_game_stats WHERE league = ${league} AND game_id = ANY(${ids})`;
         const have = new Set(existing.map((r) => r.game_id));
         skippedExisting = have.size;
@@ -370,15 +389,38 @@ export default async function handler(req) {
         await matchDftGameIds(sql, rows);
         if (!isDry) {
           for (const r of rows) {
-            await sql`INSERT INTO team_game_stats
-              (game_id, team_alias, league, season, date, opp_alias, is_home,
-               pts, opp_pts, efg, opp_efg, to_ct, opp_to_ct, fta, opp_fta,
-               oreb, opp_oreb, fg3m, fg3a, opp_fg3m, opp_fg3a, poss, dft_game_id)
-              VALUES (${r.game_id}, ${r.team_alias}, ${r.league}, ${r.season}, ${r.date},
-               ${r.opp_alias}, ${r.is_home}, ${r.pts}, ${r.opp_pts}, ${r.efg}, ${r.opp_efg},
-               ${r.to_ct}, ${r.opp_to_ct}, ${r.fta}, ${r.opp_fta}, ${r.oreb}, ${r.opp_oreb},
-               ${r.fg3m}, ${r.fg3a}, ${r.opp_fg3m}, ${r.opp_fg3a}, ${r.poss}, ${r.dft_game_id})
-              ON CONFLICT (game_id, team_alias) DO NOTHING`;
+            if (isReingest) {
+              await sql`INSERT INTO team_game_stats
+                (game_id, team_alias, league, season, date, opp_alias, is_home,
+                 pts, opp_pts, efg, opp_efg, to_ct, opp_to_ct, fta, opp_fta,
+                 oreb, opp_oreb, fg3m, fg3a, opp_fg3m, opp_fg3a,
+                 fgm, fga, opp_fgm, opp_fga, poss, dft_game_id)
+                VALUES (${r.game_id}, ${r.team_alias}, ${r.league}, ${r.season}, ${r.date},
+                 ${r.opp_alias}, ${r.is_home}, ${r.pts}, ${r.opp_pts}, ${r.efg}, ${r.opp_efg},
+                 ${r.to_ct}, ${r.opp_to_ct}, ${r.fta}, ${r.opp_fta}, ${r.oreb}, ${r.opp_oreb},
+                 ${r.fg3m}, ${r.fg3a}, ${r.opp_fg3m}, ${r.opp_fg3a},
+                 ${r.fgm}, ${r.fga}, ${r.opp_fgm}, ${r.opp_fga}, ${r.poss}, ${r.dft_game_id})
+                ON CONFLICT (game_id, team_alias) DO UPDATE SET
+                  date = EXCLUDED.date, opp_alias = EXCLUDED.opp_alias, is_home = EXCLUDED.is_home,
+                  pts = EXCLUDED.pts, opp_pts = EXCLUDED.opp_pts, efg = EXCLUDED.efg, opp_efg = EXCLUDED.opp_efg,
+                  to_ct = EXCLUDED.to_ct, opp_to_ct = EXCLUDED.opp_to_ct, fta = EXCLUDED.fta, opp_fta = EXCLUDED.opp_fta,
+                  oreb = EXCLUDED.oreb, opp_oreb = EXCLUDED.opp_oreb,
+                  fg3m = EXCLUDED.fg3m, fg3a = EXCLUDED.fg3a, opp_fg3m = EXCLUDED.opp_fg3m, opp_fg3a = EXCLUDED.opp_fg3a,
+                  fgm = EXCLUDED.fgm, fga = EXCLUDED.fga, opp_fgm = EXCLUDED.opp_fgm, opp_fga = EXCLUDED.opp_fga,
+                  poss = EXCLUDED.poss, dft_game_id = EXCLUDED.dft_game_id`;
+            } else {
+              await sql`INSERT INTO team_game_stats
+                (game_id, team_alias, league, season, date, opp_alias, is_home,
+                 pts, opp_pts, efg, opp_efg, to_ct, opp_to_ct, fta, opp_fta,
+                 oreb, opp_oreb, fg3m, fg3a, opp_fg3m, opp_fg3a,
+                 fgm, fga, opp_fgm, opp_fga, poss, dft_game_id)
+                VALUES (${r.game_id}, ${r.team_alias}, ${r.league}, ${r.season}, ${r.date},
+                 ${r.opp_alias}, ${r.is_home}, ${r.pts}, ${r.opp_pts}, ${r.efg}, ${r.opp_efg},
+                 ${r.to_ct}, ${r.opp_to_ct}, ${r.fta}, ${r.opp_fta}, ${r.oreb}, ${r.opp_oreb},
+                 ${r.fg3m}, ${r.fg3a}, ${r.opp_fg3m}, ${r.opp_fg3a},
+                 ${r.fgm}, ${r.fga}, ${r.opp_fgm}, ${r.opp_fga}, ${r.poss}, ${r.dft_game_id})
+                ON CONFLICT (game_id, team_alias) DO NOTHING`;
+            }
           }
         }
         ingested = rows.length / 2;

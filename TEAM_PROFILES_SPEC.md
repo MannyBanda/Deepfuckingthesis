@@ -1,6 +1,8 @@
 # TEAM_PROFILES — team identity, tier splits, form, H2H (nightly)
 
-**Date:** 2026-07-13 · **Status:** PROPOSED (RE-DERIVED — original written 2026-07-04,
+**Date:** 2026-07-13 · **Amended:** 2026-07-14 (fixture-adjudicated: strict tier cutoff,
+aggregate eFG + fgm/fga primitives, OREB provenance tolerance — see §2a) · **Status:** SHIPPED v1
+(nightly + backfill; consumption/injection §6-§7 pending) (RE-DERIVED — original written 2026-07-04,
 lost to the expired read-only PAT; recovered from chat history Jul 13 and extended with
 §7 narration-v2 integration) · **Companion:** SWEETSPOT_NARRATION_V2_SPEC.md
 
@@ -39,6 +41,7 @@ CREATE TABLE IF NOT EXISTS team_game_stats (
   fta INT, opp_fta INT,
   oreb INT, opp_oreb INT,
   fg3m INT, fg3a INT, opp_fg3m INT, opp_fg3a INT,
+  fgm INT, fga INT, opp_fgm INT, opp_fga INT,   -- §2a: aggregate-eFG primitives
   poss REAL,                -- estimated possessions (FGA − OREB + TO + 0.44·FTA); stored NOW so the
                             -- v2 per-possession refinement is a recompute, not a re-ingestion
   dft_game_id TEXT,         -- nullable join key to internal games.id via date+alias match at
@@ -94,7 +97,8 @@ settle (post-game-agent cron pattern). Flow per league:
    retroactively re-tiering past games (best current estimate of opponent quality).
 5. ntfy one-liner (ASCII Title): `team-profiles: wnba 15 teams updated, N games ingested`.
 
-**Modes:** default incremental · `?backfill=1&from=&to=` (season-to-date ≈150 games ≈
+**Modes:** default incremental · `?reingest=1` (backfill w/ ON CONFLICT DO UPDATE —
+schema-amendment migrations) · `?backfill=1&from=&to=` (season-to-date ≈150 games ≈
 30-40 API calls, single invocation OK for WNBA) · `?recompute=1` (skip ingestion) ·
 `?dry=1` (no writes). **Concurrency:** DB lock row (PENDING sentinel) before ingestion —
 hotfix learning #11.

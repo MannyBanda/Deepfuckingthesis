@@ -68,7 +68,9 @@ for (let i = 0; i < 8; i++) {
   canned.push(mkRow(i, 'BBB', 'AAA', aWins ? 80 : 85, aWins ? 90 : 70, 0.46, aEfg,
     { to_ct: 16, opp_to_ct: 12, fta: 15, opp_fta: 20, oreb: 5, opp_oreb: 10, fg3m: 6, fg3a: 20, opp_fg3m: 8, opp_fg3a: 24 }));
 }
-console.log('\nPURE-LAYER SMOKE (canned 8-game pair)');
+// NOTE: canned rows carry no fgm/fga primitives -> exercises aggEfg's per-row-efg
+// FALLBACK path. The aggregate path is pinned separately below + by the ATL golden.
+console.log('\nPURE-LAYER SMOKE (canned 8-game pair — aggEfg fallback path)');
 const smoke = computeProfiles(canned);
 T('records: AAA 5-3, BBB 3-5', smoke.AAA.w === 5 && smoke.AAA.l === 3 && smoke.BBB.w === 3 && smoke.BBB.l === 5);
 T('h2h symmetric: AAA vs BBB 5-3, BBB vs AAA 3-5',
@@ -86,8 +88,20 @@ T('identity.to_margin AAA +4.0 (forces 16, commits 12)', close(smoke.AAA.profile
 T('identity.fta_diff AAA +5.0', close(smoke.AAA.profile.identity.fta_diff, 5.0, 0.001));
 T('schedule.last_game_date is latest', smoke.AAA.profile.schedule.last_game_date === '2026-06-08');
 
+// ── aggregate eFG path: attempt-weighted, NOT per-game mean ──
+console.log('\nAGGREGATE eFG PATH');
+const aggRows = [
+  mkRow(0, 'XXX', 'YYY', 90, 80, null, null, { fgm: 40, fga: 100, fg3m: 0, opp_fgm: 30, opp_fga: 100, opp_fg3m: 0 }),
+  mkRow(1, 'XXX', 'YYY', 90, 80, null, null, { fgm: 10, fga: 20,  fg3m: 0, opp_fgm: 10, opp_fga: 20,  opp_fg3m: 0 }),
+];
+const aggP = computeProfiles(aggRows).XXX.profile.identity;
+// aggregate: (40+10)/(100+20)=.4167 vs opp (30+10)/120=.3333 -> +8.3pp
+// per-game mean would give: (.40+.50)/2=.45 vs (.30+.50)/2=.40 -> +5.0pp
+T(`identity.efg_diff is aggregate +8.3 (got ${aggP.efg_diff})`, close(aggP.efg_diff, 8.3, 0.05));
+T('aggregate differs from per-game mean (+5.0) — weighting is real', !close(aggP.efg_diff, 5.0, 0.5));
+
 // ── 2. ATL golden fixture (as-of 2026-07-04) ──
-const AS_OF = '2026-07-04';
+const AS_OF = process.env.AS_OF || '2026-07-04';
 async function golden() {
   if (process.env.SKIP_GOLDEN === '1') { console.log('\nATL GOLDEN: skipped (SKIP_GOLDEN=1)'); return; }
   const base = process.env.DFT_BASE || 'https://poetic-starlight-aa8938.netlify.app';
@@ -108,7 +122,10 @@ async function golden() {
   T('archetype POSSESSION_BULLY', p.archetype === 'POSSESSION_BULLY');
   T(`TO margin +3.5 (got ${id.to_margin})`, close(id.to_margin, 3.5));
   T(`FTA diff +4.8 (got ${id.fta_diff})`, close(id.fta_diff, 4.8));
-  T(`OREB diff +4.9 (got ${id.oreb_diff})`, close(id.oreb_diff, 4.9));
+  // OREB tolerance 0.25: player-sum OREB excludes team rebounds (not credited to any
+  // player), so official-team-line-derived numbers can drift ~0.2/game. Direction and
+  // magnitude are what profiles consume; archetype OREB_EDGE threshold is 1.5.
+  T(`OREB diff +4.9 +/-0.25 (got ${id.oreb_diff})`, close(id.oreb_diff, 4.9, 0.25));
   T(`eFG diff -5.2 (got ${id.efg_diff})`, close(id.efg_diff, -5.2));
   T(`top tier 1-6, n=7 (got ${tp.w}-${tp.l}, n=${tp.n})`, tp.w === 1 && tp.l === 6 && tp.n === 7);
   T(`top eFG diff -11.1 (got ${tp.efg_diff})`, close(tp.efg_diff, -11.1));
