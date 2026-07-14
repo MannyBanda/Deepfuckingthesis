@@ -591,6 +591,44 @@ exports.handler = async (event) => {
         PRIMARY KEY (team_alias, league, season)
       )`;
 
+      // ── TEAM_PROFILES_SPEC §3a — one row per team per finalized game (BDL-canonical aliases ONLY) ──
+      await sql`CREATE TABLE IF NOT EXISTS team_game_stats (
+        game_id TEXT NOT NULL,
+        team_alias TEXT NOT NULL,
+        league TEXT NOT NULL,
+        season INT NOT NULL,
+        date TEXT,
+        opp_alias TEXT,
+        is_home BOOLEAN,
+        pts INT, opp_pts INT,
+        efg REAL, opp_efg REAL,
+        to_ct INT, opp_to_ct INT,
+        fta INT, opp_fta INT,
+        oreb INT, opp_oreb INT,
+        fg3m INT, fg3a INT, opp_fg3m INT, opp_fg3a INT,
+        poss REAL,
+        dft_game_id TEXT,
+        PRIMARY KEY (game_id, team_alias)
+      )`;
+
+      // ── TEAM_PROFILES_SPEC §3b — computed nightly, one row per team-season ──
+      await sql`CREATE TABLE IF NOT EXISTS team_profiles (
+        team_alias TEXT NOT NULL,
+        league TEXT NOT NULL,
+        season INT NOT NULL,
+        w INT, l INT,
+        archetype TEXT,
+        profile JSONB,
+        updated_at TIMESTAMPTZ DEFAULT now(),
+        PRIMARY KEY (team_alias, league, season)
+      )`;
+
+      // ── Generic job lock rows (PENDING-sentinel pattern, hotfix learning #11) ──
+      await sql`CREATE TABLE IF NOT EXISTS job_locks (
+        job TEXT PRIMARY KEY,
+        ts TIMESTAMPTZ DEFAULT NOW()
+      )`;
+
       // ── WNBA Data Layer v3: official post-game truth (BDL game advanced) ──
       await sql`CREATE TABLE IF NOT EXISTS wnba_official_stats (
         bdl_game_id INTEGER NOT NULL,
@@ -2498,6 +2536,36 @@ exports.handler = async (event) => {
         ORDER BY team_alias
       `;
       return { statusCode: 200, headers, body: JSON.stringify({ profiles: rows }) };
+    }
+
+    // TEAM_PROFILES_SPEC §6 — nightly team identity/tier/form/H2H profiles
+    if (action === 'get_team_profiles') {
+      const league = params.league || 'wnba';
+      const season = Number(params.season) || 2026;
+      const team = params.team || null;
+      const rows = team
+        ? await sql`SELECT * FROM team_profiles WHERE league = ${league} AND season = ${season} AND team_alias = ${team}`
+        : await sql`SELECT * FROM team_profiles WHERE league = ${league} AND season = ${season} ORDER BY team_alias`;
+      return { statusCode: 200, headers, body: JSON.stringify({ team_profiles: rows }) };
+    }
+
+    // TEAM_PROFILES_SPEC §3a — raw team-game rows (fixture harness + research pulls)
+    if (action === 'get_team_game_stats') {
+      const league = params.league || 'wnba';
+      const season = Number(params.season) || 2026;
+      const team = params.team || null;
+      const maxDate = params.max_date || null; // as-of filter for golden-fixture reproduction
+      let rows;
+      if (team && maxDate) {
+        rows = await sql`SELECT * FROM team_game_stats WHERE league = ${league} AND season = ${season} AND team_alias = ${team} AND date <= ${maxDate} ORDER BY date`;
+      } else if (maxDate) {
+        rows = await sql`SELECT * FROM team_game_stats WHERE league = ${league} AND season = ${season} AND date <= ${maxDate} ORDER BY date`;
+      } else if (team) {
+        rows = await sql`SELECT * FROM team_game_stats WHERE league = ${league} AND season = ${season} AND team_alias = ${team} ORDER BY date`;
+      } else {
+        rows = await sql`SELECT * FROM team_game_stats WHERE league = ${league} AND season = ${season} ORDER BY date`;
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ team_game_stats: rows }) };
     }
 
     // ═══════════════════════════════════════════════════════
