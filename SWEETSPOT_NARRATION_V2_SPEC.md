@@ -76,14 +76,18 @@ Fable at high effort may take 30-90s. The current Stage-2 call is awaited inside
 poll cycle (Netlify: 120s configured, ~60s effective; unawaited promises die at handler
 return — hotfix learning #3). Inline await risks the poll budget on multi-game slates.
 
-**Option A — next-cycle pickup (RECOMMENDED):** Stage-1 mechanical push fires exactly as
-today (speed unchanged where speed matters). Row inserts with `narration_text` NULL +
-`narration_attempts` 0 (new column via init). At the TOP of each poll cycle, a narration
-sweep claims at most ONE pending A/B row (attempts < 3, oldest first), builds the rich
-prompt, calls Fable, saves + pushes. Narration lands 1-2 min post-fire — inside the
-latency budget from §1 by construction. Zero new infrastructure; the DB lock-row pattern
-guards concurrent cron invocations (PENDING sentinel before the slow call, per house
-rule on awaits >1s).
+**Option A — same-cycle tail sweep (RECOMMENDED; amended Jul 13 after PM latency
+challenge — original "top of cycle" placement would have starved polling behind a slow
+model call):** Stage-1 mechanical push fires exactly as today. Row inserts with
+`narration_text` NULL + `narration_attempts` 0 (new column via init). At the END of the
+same poll cycle — after all snapshot/alert/state work has committed — a narration sweep
+claims at most ONE pending A/B row (attempts < 3, oldest first), builds the rich prompt,
+and calls Fable under a hard timeout (AbortController, min(remaining budget − 5s, 45s)).
+Common case: narration starts ~5-20s post-fire in the same invocation. Timeout/failure →
+attempts++, next cycle retries at ITS tail; attempt 3 switches to `claude-opus-4-8`
+(fast) so narration always lands by ~T+3min worst case. DB lock row (PENDING sentinel)
+before the slow call guards concurrent cron invocations per house rule. The heartbeat is
+never blocked; nothing dies unawaited at handler return.
 
 **Option B — background function:** 15-min budget, but internal Netlify-to-Netlify
 calls historically 401 (the `_headers` scoping to `/*.html` may have fixed this —
@@ -128,7 +132,7 @@ the separately-queued backlog item this motivates.
 - **D-1** Fable 5 high effort + Opus 4.8 fallback (rec: yes)
 - **D-2** Context blocks per §2 table incl. floor exclusion (rec: as specced)
 - **D-3** Price ladder thresholds +3pp actionable / +8pp strong (rec: confirm or set)
-- **D-4** Timing: next-cycle pickup (rec: Option A)
+- **D-4** Timing: same-cycle tail sweep + hard timeout + next-cycle retry (rec: Option A as amended)
 - **D-5** Output contract ≤170 words, 4 parts with price guidance (rec: yes)
 - **D-6** TEAM_PROFILES empty-section hook now (rec: yes)
 - **D-7** Scope: A+B both get v2 (rec: yes — B keeps two-push parity; WATCHLIST/ledger
