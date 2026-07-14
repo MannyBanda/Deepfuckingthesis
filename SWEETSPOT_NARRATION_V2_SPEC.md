@@ -35,7 +35,7 @@ Blocks to add to the narration prompt, reusing the existing formatter functions
 | MC Cum + trust hierarchy line | `lt.mc` / snapshot | Quarter-appropriate weight (Q4: MC > XGB > floor) |
 | Season records + carrier ctx | already present | keep |
 | Price ladder | NEW — §3 | fire-time price vs actionable price |
-| Team profiles | FUTURE hook — §7 | archetype/form/H2H, activates when profiles ship |
+| Team profiles | TEAM_PROFILES_SPEC.md (companion, builds first) | archetype, tier splits, form, H2H — the "erased a halftime deficit vs PHX in June" sentence |
 
 **Exclusions (state explicitly in prompt-builder comments):** floor score is NOT passed
 — WNBA floor is narrative-only and wrong 80% vs MC+XGB when they disagree; in a
@@ -51,10 +51,13 @@ At fire, compute from `collapse_true` (model p) and the captured line:
 - `actionableLine` = the ML where edge = +3pp (solve implied = p − 0.03)
 - `strongLine` = the ML where edge = +8pp
 
-Passed to the prompt as pre-formatted plain-English lines, e.g. for row 304:
-"At the captured price (-310) the edge is +0.4 points — below the bet bar. This read
-becomes actionable at -175 or longer, strong at +115 or longer." Thresholds (+3/+8)
-are provisional — PM to confirm (D-3). The narration's job is to weave the ladder into
+Passed to the prompt as pre-formatted plain-English lines, e.g. for row 304 (p=.76):
+"At the captured price (-310) the edge is +0.4 points — below the bet bar. Probe
+territory at {probeLine} or longer; full tier size at {fullLine} or longer." Threshold
+mapping at p=.76: +3pp→-270 · +8pp→-213 · +15pp→-156 · +20pp→-127 · +30pp→+117.
+(Original spec text showed -175/+115 for +3/+8 — wrong math, corrected Jul 13.)
+Thresholds are D-3 — PM sets PROBE_EDGE and FULL_EDGE; ladder renders in sizing
+language (probe = small skin-in stake; full = up to the tier cap, A=$1,400). The narration's job is to weave the ladder into
 the price-guidance sentence, not to compute it. This converts the alert from a snapshot
 into a price target, matching how the position is actually traded (tonight: declined
 -310, entered +135/+120/+105).
@@ -110,12 +113,13 @@ detail shows all), plain English, every metric named in full on first use:
 Carried rules: never re-decide (A/B is mechanical), never contradict FRAMING RULES,
 never predict a specific player's shooting collapse, team names throughout.
 
-## 7. TEAM_PROFILES forward hook (D-6)
+## 7. TEAM_PROFILES integration (D-6 — resolved per PM: spec now, build together)
 
-The prompt builder reserves a `TEAM CONTEXT` section that renders empty today and
-auto-populates when the profiles layer ships (archetype, tier splits, recent form, H2H).
-Spec dependency, not a blocker: narration v2 ships without it; profiles re-derivation is
-the separately-queued backlog item this motivates.
+TEAM_PROFILES_SPEC.md (re-derived Jul 13 from the lost Jul 4 original) is the companion
+spec. Build order: profiles nightly + one backfill invocation FIRST, then narration v2's
+`TEAM CONTEXT` section consumes `composeTeamContext` output live from day one. Graceful
+degradation both directions (missing/stale profiles → section omitted) — no hard
+dependency.
 
 ## 8. Testing
 
@@ -129,15 +133,14 @@ the separately-queued backlog item this motivates.
 
 ## 9. Decisions for PM
 
-- **D-1** Fable 5 high effort + Opus 4.8 fallback (rec: yes)
-- **D-2** Context blocks per §2 table incl. floor exclusion (rec: as specced)
+- **D-1** APPROVED (PM Jul 13): Fable 5 high effort + Opus 4.8 fallback
+- **D-2** APPROVED (PM Jul 13) with amendment: TEAM CONTEXT sourced live via companion TEAM_PROFILES spec (not deferred)
 - **D-3** Price ladder thresholds +3pp actionable / +8pp strong (rec: confirm or set)
-- **D-4** Timing: same-cycle tail sweep + hard timeout + next-cycle retry (rec: Option A as amended)
-- **D-5** Output contract ≤170 words, 4 parts with price guidance (rec: yes)
-- **D-6** TEAM_PROFILES empty-section hook now (rec: yes)
-- **D-7** Scope: A+B both get v2 (rec: yes — B keeps two-push parity; WATCHLIST/ledger
-  still never narrate)
-- **D-8** New column `narration_attempts` via init (rec: yes)
+- **D-4** APPROVED (PM Jul 13): same-cycle tail sweep + hard timeout + next-cycle retry
+- **D-5** APPROVED (PM Jul 13): ≤170 words, 4 parts with price guidance
+- **D-6** RESOLVED (PM Jul 13): TEAM_PROFILES specced as companion, builds first
+- **D-7** APPROVED (PM Jul 13): A+B both; WATCHLIST/ledger still never narrate
+- **D-8** APPROVED (PM Jul 13): `narration_attempts` via init
 
 ## 10. Rollout
 
