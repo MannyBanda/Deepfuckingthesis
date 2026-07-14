@@ -37,6 +37,11 @@ T('gapFmt null returns null', ssGapFmt(null) === null);
 let r = C({ period: 1, homeAlias: 'CHI', awayAlias: 'DAL' });
 T('V0 gates closed', r.v === 'V0' && r.text === 'Gates open in Q2 \u2014 no verdict yet.');
 
+// ── V1 beats V0 (Q1 fire — PHX@MIN Jul 13, A fired Q1 0:45) ──
+r = C({ period: 1, homePts: 20, awayPts: 24, homeAlias: 'MIN', awayAlias: 'PHX', leaderAlias: 'PHX',
+  gap: 0.406, rows: [{ subtype: 'EFG_FADE', leader: 'PHX', trailer: 'MIN' }] });
+T('V1 outranks V0 on a Q1 A fire', r.v === 'V1' && r.text === 'SWEET SPOT A LIVE \u2014 see the push for price and size.');
+
 // ── V1 A beats V2 (priority collision) ──
 r = C({ period: 3, homePts: 60, awayPts: 55, homeAlias: 'DAL', awayAlias: 'CHI', leaderAlias: 'DAL',
   gap: 0.25, subtypes: ['WATCHLIST', 'EFG_FADE'] });

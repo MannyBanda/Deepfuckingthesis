@@ -3708,12 +3708,14 @@ function ssVerdictCompose(st){
   var gapS=ssGapFmt(gap);
   var gbN=st.gapBaseN!=null?st.gapBaseN:0,q4N=st.q4CollapseN!=null?st.q4CollapseN:0;
   var v,text,color;
-  if(p<2){v='V0';color='var(--fg-dim)';
-    text='Gates open in Q2 \u2014 no verdict yet.';}
-  else if(subs.indexOf('EFG_FADE')>-1){v='V1';color='var(--green)';
+  // V1 outranks V0 (Jul 13): an A can fire in Q1 (PHX@MIN fired Q1 0:45) — the strip
+  // must never contradict a live push alert.
+  if(subs.indexOf('EFG_FADE')>-1){v='V1';color='var(--green)';
     text='SWEET SPOT A LIVE \u2014 see the push for price and size.';}
   else if(subs.indexOf('EFG_FADE_SOFT')>-1){v='V1';color='var(--amber)';
     text='SWEET SPOT B LIVE \u2014 see the push for price and size.';}
+  else if(p<2){v='V0';color='var(--fg-dim)';
+    text='Gates open in Q2 \u2014 no verdict yet.';}
   else if(subs.indexOf('WATCHLIST')>-1&&rowInBand){v='V2';color='var(--blue)';
     var bar=(gap!=null&&gap>=0.20)?', above your .20 bar':', below your .20 bar';
     text='REVIEW \u2014 '+ancTrail+' is the much better team ('+(gapS||'?')+' quality gap'+bar+') trailing by '+rowDef+'. Bet gates haven\u2019t aligned; your read decides.';}
