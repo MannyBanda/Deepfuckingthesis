@@ -148,3 +148,11 @@ dependency.
 Build off-slate behind `WNBA_SS_NARRATE_V2=1`. Dry-run on row 304 → compare v1 vs v2
 narration side by side with PM → enable live → first-fire observation night → spec to
 `specs/shipped`.
+
+## Amendment (2026-07-14, PM directive — pre-build)
+
+**No-position spots still narrate context.** For qualifying-but-thin spots (e.g. FLAT-vs-FLAT
+identity, sub-band gap): the narration must SAY there is no position ("no bet here") and still
+deliver the context layer — H2H, team profile reads, form — so the subscriber gets the season
+lens without an action implication. "No position + here's what I'm seeing" is a valid and
+expected narration outcome, not a degenerate case.
