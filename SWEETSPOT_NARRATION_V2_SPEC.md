@@ -156,3 +156,15 @@ identity, sub-band gap): the narration must SAY there is no position ("no bet he
 deliver the context layer — H2H, team profile reads, form — so the subscriber gets the season
 lens without an action implication. "No position + here's what I'm seeing" is a valid and
 expected narration outcome, not a degenerate case.
+
+## Fable smoke test results (2026-07-14, test-fable.mjs — build inputs)
+
+PASSED. claude-fable-5 live on prod key. Effort shape: `output_config: {effort}` — accepted
+by BOTH fable-5 and opus-4-8, so the fallback is a model-string swap on an identical request
+builder. Latency on a narration-shaped prompt: 10.7s Fable high / 8.4s Opus — same-cycle
+tail-sweep design is safe. Response shape: Fable returns a thinking block (empty, omitted
+default) before text — extraction MUST filter type==='text'. stop_reason end_turn on betting
+content (classifiers target cyber/bio; refusal path is fallback-only insurance). Cost ~$0.03
+per narration. Quality: Fable folded the L5 OPPONENTS_HOT tag into the invalidation paragraph
+(the subtle risk read); Opus missed it — supports the Fable-primary decision. Both models ran
+175-183 words against a <=170 instruction: build with a firmer cap phrasing or accept ~185.
