@@ -48,8 +48,9 @@ descriptive (the fade gates are the leader's band/vshare — locked signal is qu
 At fire, compute from `collapse_true` (model p) and the captured line:
 
 - `edgeNow` = p − implied(lineUsed)
-- `actionableLine` = the ML where edge = +3pp (solve implied = p − 0.03)
-- `strongLine` = the ML where edge = +8pp
+- `probeLine` = the ML where edge = PROBE_EDGE (+10pp): solve implied = p − 0.10
+- `fullLine` = the ML where edge = FULL_EDGE (+20pp): solve implied = p − 0.20
+- Row 304 fixture (p=.76): probe at -196 or longer, full size at -127 or longer
 
 Passed to the prompt as pre-formatted plain-English lines, e.g. for row 304 (p=.76):
 "At the captured price (-310) the edge is +0.4 points — below the bet bar. Probe
@@ -135,7 +136,7 @@ dependency.
 
 - **D-1** APPROVED (PM Jul 13): Fable 5 high effort + Opus 4.8 fallback
 - **D-2** APPROVED (PM Jul 13) with amendment: TEAM CONTEXT sourced live via companion TEAM_PROFILES spec (not deferred)
-- **D-3** Price ladder thresholds +3pp actionable / +8pp strong (rec: confirm or set)
+- **D-3** APPROVED (PM Jul 13): PROBE_EDGE = +10pp, FULL_EDGE = +20pp — ladder renders as probe price / full-tier-size price (A cap $1,400)
 - **D-4** APPROVED (PM Jul 13): same-cycle tail sweep + hard timeout + next-cycle retry
 - **D-5** APPROVED (PM Jul 13): ≤170 words, 4 parts with price guidance
 - **D-6** RESOLVED (PM Jul 13): TEAM_PROFILES specced as companion, builds first

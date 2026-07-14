@@ -39,12 +39,23 @@ CREATE TABLE IF NOT EXISTS team_game_stats (
   fta INT, opp_fta INT,
   oreb INT, opp_oreb INT,
   fg3m INT, fg3a INT, opp_fg3m INT, opp_fg3a INT,
+  poss REAL,                -- estimated possessions (FGA − OREB + TO + 0.44·FTA); stored NOW so the
+                            -- v2 per-possession refinement is a recompute, not a re-ingestion
+  dft_game_id TEXT,         -- nullable join key to internal games.id via date+alias match at
+                            -- ingestion — required for the kNN reference-class substrate claim
   PRIMARY KEY (game_id, team_alias)
 );
 ```
 
-Substrate value beyond profiles: future reference-class work (kNN detector backlog) and
-season-boundary-safe by construction.
+Substrate value beyond profiles: future reference-class work (kNN detector backlog — the
+`dft_game_id` join key is what makes this claim real) and season-boundary-safe by
+construction.
+
+**Alias discipline (canonical rule):** all aliases in these tables are BDL-canonical
+(LV, NY, GS, WSH, LA, POR, TOR — not SR's LVA/NYL/GSV/WAS/LAS/PDX/TOY). `cfg.aliasMap`
+applies ONLY where SR-sourced data enters, never here. H2H keys, poll-side Map lookups,
+and composeTeamContext matching all assume BDL form — the aliasMap regression (WNBA fix
+breaking NBA PBP) is the standing lesson on what silent alias mixing does.
 
 ### 3b. `team_profiles` — computed nightly, one row per team-season (recovered verbatim)
 
