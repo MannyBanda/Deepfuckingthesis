@@ -535,6 +535,7 @@ exports.handler = async function(event) {
     var league = body.league || 'nba';
     var summaryData = body.summaryData;
     var thesis = body.thesis;
+    var teamCtx = (typeof body.teamCtx === 'string' && body.teamCtx.trim()) ? body.teamCtx.trim().slice(0, 1200) : null;   // P2: client-composed season priors (wnba-bdl profile store)
     var homeTeam = body.homeTeam;
     var awayTeam = body.awayTeam;
     var period = body.period;
@@ -1004,6 +1005,7 @@ exports.handler = async function(event) {
 
     // ── BUILD PROMPT ──
     var userPrompt = awayTeam + ' @ ' + homeTeam + ' | ' + period + ' | ' + score + '\n\n'
+      + (teamCtx ? teamCtx + '\n\n' : '')
       + groundTruthSection
       + (thesis ? 'THESIS:\n' + thesis + '\n' : 'No thesis.')
       + '\n' + clutchSection + oddsSection + tpLsSection + bonusSection + trackingSection + sustainabilitySection + leadCompSection

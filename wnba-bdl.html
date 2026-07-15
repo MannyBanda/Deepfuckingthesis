@@ -99,6 +99,12 @@ input,textarea,select{font-size:16px!important;}
 .ms-h2h{margin-top:12px;text-align:center;font-family:var(--mono);font-size:11px;color:var(--fg-primary);}
 .ms-foot{margin-top:8px;text-align:center;font-size:9px;color:var(--fg-dim);}
 .ms-dim{color:var(--fg-dim);font-size:9px;}
+.brief-block{margin-bottom:10px;background:var(--bg-surface-2);border:1px solid var(--hairline-strong);border-radius:var(--r-inner);overflow:hidden;}
+.brief-head{display:flex;justify-content:space-between;align-items:center;padding:7px 11px;font-family:var(--mono);font-size:10px;letter-spacing:0.05em;color:var(--fg-tertiary);cursor:pointer;}
+.brief-meta{color:var(--fg-dim);font-size:9px;letter-spacing:0;}
+.brief-body{padding:8px 11px 10px;font-family:var(--sans);font-size:12px;line-height:1.55;color:var(--fg-secondary);border-top:1px solid var(--hairline,rgba(255,255,255,0.06));}
+.brief-chip{display:block;font-family:var(--mono);font-size:8px;color:var(--fg-dim);letter-spacing:0.05em;margin-bottom:4px;text-transform:uppercase;}
+.brief-empty{color:var(--fg-dim);font-size:11px;}
 .team-sub{font-family:var(--sans);font-size:10px;color:var(--fg-tertiary);font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;}
 .score{font-family:var(--mono);font-weight:500;font-size:28px;font-feature-settings:"tnum";letter-spacing:-0.02em;color:var(--fg-primary);white-space:nowrap;padding:0 2px;}
 .score .em-dash{color:var(--fg-dim);margin:0 3px;font-weight:400;}
@@ -2878,6 +2884,7 @@ async function triggerAnalysis(gameId){
       volumeThreat:cs.volumeThreat||null,
       espnWP:cs.espnWP?{home:cs.espnWP.home,away:cs.espnWP.away,homeAlias:cs.espnWP.homeAlias,awayAlias:cs.espnWP.awayAlias}:null,
       xgbData:_ltObj&&_ltObj.xgb_win_prob!=null?{winProb:_ltObj.xgb_win_prob,divergence:_ltObj.xgb_divergence,aligned:_ltObj.xgb_aligned,shap:_ltObj.xgb_shap,convictionQuality:_ltObj.conviction_quality,trajectorySignals:_ltObj.xgb_trajectory}:null,
+      teamCtx:(_teamProfiles?composeClientTeamCtx(hA,aA,_teamProfiles):null),   // P2: season-prior block for the analyst prompt
       mcData:_ltObj?{mcWinProb:_ltObj.mc_trajectory_wp||null,investigation:_ltObj.mc&&_ltObj.mc.triggered?{pattern:_ltObj.mc.pattern,verdicts:_ltObj.mc.verdicts,currentMC:_ltObj.mc.current_mc,ctrlTeam:_ltObj.mc.ctrl_team,triggerPeriod:_ltObj.mc.trigger_period,triggerClock:_ltObj.mc.trigger_clock,triggerMargin:_ltObj.mc.trigger_margin,alertSent:_ltObj.mc.alert_sent}:null}:null,
     };
 
@@ -3678,6 +3685,59 @@ function divergenceRead(sc){
 // Server-authoritative: the verdict renders from the latest snapshot's ss_ gate fields
 // (db-api get_ss_state) — never recomputed client-side. The client PBP comp feeds only
 // the two evidence lines. Copy pinned verbatim by research/ss_verdict_fixtures.mjs.
+// ═══ BRIEFING block store (TEAM_CTX_SURFACING Phase 2, Jul 15) ═══
+var _ssNarr=null,_ssNarrAt=0;
+var SS_NARR_TTL=60*1000;   // piggybacks the SS 60s cadence via fetchSSState
+async function ensureNarrations(){
+  if(_ssNarr&&Date.now()-_ssNarrAt<SS_NARR_TTL)return _ssNarr;
+  try{
+    var r=await fetch(FN+'db-api?action=get_sweetspot_alerts&league=wnba&limit=50');
+    var d=await r.json();var rows=d.alerts||d.sweetspot_alerts||[];
+    var first=_ssNarr===null;
+    _ssNarr=rows.filter(function(x){return x.narration_text;});_ssNarrAt=Date.now();
+    if(first&&activeGameId)renderCard(activeGameId);
+  }catch(e){console.log('[NARR] load failed',e);}
+  return _ssNarr;
+}
+function briefAge(ts){if(!ts)return '';var mm=Math.round((Date.now()-new Date(ts).getTime())/60000);return mm<60?mm+'m ago':Math.round(mm/60)+'h ago';}
+function toggleBrief(gid){var cs=cardState[gid]=cardState[gid]||{};cs._briefOpen=!cs._briefOpen;renderCard(gid);}
+function briefingBlock(gid){
+  if(_ssNarr===null){ensureNarrations();return '';}   // loading or fetch error -> hidden (spec: never block card render)
+  var rows=_ssNarr.filter(function(x){return x.game_id===gid;});
+  var byNew=function(a,b){return new Date(b.created_at||b.ts||0)-new Date(a.created_at||a.ts||0);};
+  var brief=rows.filter(function(x){return x.alert_subtype==='GAME_BRIEF';}).sort(byNew)[0]||null;
+  var narr=rows.filter(function(x){return x.alert_subtype!=='GAME_BRIEF';}).sort(byNew)[0]||null;
+  var entries=[narr,brief].filter(Boolean);   // fired narration above the pregame brief
+  var cs=cardState[gid]||{};var open=!!cs._briefOpen;
+  var meta=entries[0]?esc(((entries[0].alert_subtype==='GAME_BRIEF'?'brief':entries[0].alert_subtype)||'').replace(/_/g,' ').toLowerCase())+' \u00b7 '+briefAge(entries[0].created_at||entries[0].ts):'no brief yet';
+  var html='<div class="brief-block"><div class="brief-head" onclick="toggleBrief(\''+gid+'\')"><span>BRIEFING</span><span class="brief-meta">'+meta+(open?' \u25be':' \u25b8')+'</span></div>';
+  if(open){
+    if(!entries.length)html+='<div class="brief-body brief-empty">No brief yet</div>';
+    else entries.forEach(function(e){html+='<div class="brief-body"><span class="brief-chip">'+esc(((e.alert_subtype||'').replace(/_/g,' '))+(e.alert_tier&&e.alert_tier!=='BRIEF'?' \u00b7 '+e.alert_tier:''))+'</span>'+esc(e.narration_text).replace(/\n/g,'<br>')+'</div>';});
+  }
+  return html+'</div>';
+}
+
+// ── TEAM_CTX_COMPOSE_PURE_BEGIN (fixture-extracted: research/team_ctx_client_fixtures.mjs) ──
+function composeClientTeamCtx(hA,aA,map){
+  var d=prepMatchupData(hA,aA,map||{});
+  function sp(v){return v==null?'?':(v>0?'+':'')+v;}
+  function line(t,opp){
+    if(!t)return null;
+    var s=t.alias+' '+t.w+'-'+t.l+' '+t.archetype+' \u2014 eFG diff '+sp(t.efgd)+'pp, TO margin '+sp(t.toMargin)+', FTA '+sp(t.fta)+', OREB '+sp(t.oreb);
+    if(t.top)s+=' | vs top(>.600) '+t.top.w+'-'+t.top.l+' (eFG '+sp(t.top.efgd)+'pp), vs rest '+(t.rest?t.rest.w+'-'+t.rest.l:'?');
+    if(t.insufficient)s+=' [tier splits small-n]';
+    if(t.l5){s+=' | L5 '+t.l5.w+'-'+t.l5.l+', own eFG '+sp(t.l5.own)+'pp, opp eFG '+sp(t.l5.opp)+'pp';if(t.l5.tags.length)s+=' ['+t.l5.tags.join(', ')+']';}
+    if(t.h2h)s+=' | H2H vs '+opp+': '+t.h2h.w+'-'+t.h2h.l+' (avg '+sp(t.h2h.avg)+')';
+    return s;
+  }
+  var lines=[line(d.away,hA),line(d.home,aA)].filter(Boolean);
+  if(!lines.length)return '';
+  var block='TEAM CONTEXT (season priors \u2014 context only, small-n: treat splits as direction, not probabilities; TO margin: + = forces more turnovers than it commits):\n'+lines.join('\n');
+  return block.length>1200?block.slice(0,1200):block;
+}
+// ── TEAM_CTX_COMPOSE_PURE_END ──
+
 // ═══ TEAM PROFILES store + MATCHUP SHEET (TEAM_CTX_SURFACING Phase 1, Jul 15) ═══
 // One fetch, three consumers: record badges, micro-strip, matchup sheet (analyze payload joins in P2).
 var _teamProfiles=null,_teamProfilesAt=0;
@@ -3876,6 +3936,7 @@ function ssVerdictCompose(st){
 // otherwise (the 60s timer plus card-select calls share this guard). D-3: visible card only.
 var _ssFetching={};
 async function fetchSSState(gameId,force){
+  ensureNarrations();   // TTL-guarded, rides the SS cadence (P2)
   if(!gameId||!dbReady||_ssFetching[gameId])return;
   var e=_ssStateCache[gameId];
   if(e&&e.data&&e.data.game&&e.data.game.status==='closed'&&!force)return;
@@ -4186,6 +4247,7 @@ function renderScoringCompSection(id,cs,hA,aA){
 
   // ── SS VERDICT BOX (spec §2 — top of section; server-authoritative) ──
   html+=renderSSVerdictBox(id,cs,hA,aA);
+  html+=briefingBlock(id);   // BRIEFING (TEAM_CTX_SURFACING P2)
 
   html+=scoringBar(h,sc.period);
   html+=scoringBar(a,sc.period);
