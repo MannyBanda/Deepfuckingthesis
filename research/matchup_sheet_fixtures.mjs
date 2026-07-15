@@ -8,6 +8,9 @@ const html = readFileSync(join(root, 'wnba-bdl.html'), 'utf8');
 const m = html.match(/\/\/ ── MATCHUP_SHEET_PURE_BEGIN[\s\S]*?function prepMatchupData([\s\S]*?)\/\/ ── MATCHUP_SHEET_PURE_END/);
 if (!m) { console.log('EXTRACT FAILED — markers missing'); process.exit(1); }
 const prepMatchupData = new Function('return function prepMatchupData' + m[1])();
+const m2 = html.match(/\/\/ ── MATCHUP_CMP_PURE_BEGIN[\s\S]*?function msCompare([\s\S]*?)\/\/ ── MATCHUP_CMP_PURE_END/);
+if (!m2) { console.log('CMP EXTRACT FAILED — markers missing'); process.exit(1); }
+const msCompare = new Function('return function msCompare' + m2[1])();
 
 let pass = 0, fail = 0;
 const T = (name, cond) => { if (cond) { pass++; console.log('  ✓ ' + name); } else { fail++; console.log('  ✗ ' + name); } };
@@ -53,6 +56,24 @@ T('no meetings -> h2h null', d.away.h2h === null);
 d = prepMatchupData('TOR', 'WSH', { WSH: { w: 5, l: 5, archetype: 'FLAT', profile: {} }, TOR: mk(10, 14) });
 T('bare profile degrades (levers em-dash-able, no throw)', d.away.efgd === null && d.away.l5 === null && d.away.top === null);
 T('bare profile infl falls back to 0 HONEST', d.away.badge === 'HONEST');
+
+console.log('COLOR COMPARE');
+let c = msCompare(
+  { w: 14, l: 8, efgd: 4.0, toMargin: 2.1, fta: 0.2, oreb: 0.1, top: { w: 5, l: 3 }, rest: { w: 9, l: 5 }, l5: { w: 4, l: 1 } },
+  { w: 8, l: 14, efgd: -1.0, toMargin: 1.9, fta: -0.1, oreb: -0.2, top: { w: 1, l: 7 }, rest: { w: 7, l: 7 }, l5: { w: 2, l: 3 } });
+T('clear winner -> away green (rec/efgd/top/l5)', c.rec === 'a' && c.efgd === 'a' && c.top === 'a' && c.l5 === 'a');
+T('within-floor levers grey (toMargin 2.1v1.9, fta .2v-.1, oreb .1v-.2)', c.toMargin === 'even' && c.fta === 'even' && c.oreb === 'even');
+T('vs rest .643 v .500 colored (gap > 10%/floor)', c.rest === 'a');
+c = msCompare(
+  { w: 12, l: 10, efgd: 8.0, toMargin: null, fta: 1.0, oreb: 0, top: { w: 2, l: 6 }, rest: null, l5: null },
+  { w: 11, l: 11, efgd: 7.5, toMargin: 3.0, fta: -1.0, oreb: 0, top: { w: 2, l: 5 }, rest: null, l5: { w: 3, l: 2 } });
+T('relative-10% grey (efgd 8 v 7.5)', c.efgd === 'even');
+T('record within 5pts grey (.545 v .500)', c.rec === 'even');
+T('null side -> even (toMargin, rest, l5)', c.toMargin === 'even' && c.rest === 'even' && c.l5 === 'even');
+T('fta 1 v -1 colored home-lose', c.fta === 'a');
+T('top .25 v .286 grey inside floor', c.top === 'even');
+c = msCompare(null, { w: 10, l: 14, efgd: 1 });
+T('whole side null -> all even, no throw', c.rec === 'even' && c.efgd === 'even');
 
 console.log(`\n${pass}/${pass + fail} passed${fail ? ' — FAILURES ABOVE' : ''}`);
 process.exit(fail ? 1 : 0);

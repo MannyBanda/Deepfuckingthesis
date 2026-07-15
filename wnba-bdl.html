@@ -99,6 +99,9 @@ input,textarea,select{font-size:16px!important;}
 .ms-h2h{margin-top:12px;text-align:center;font-family:var(--mono);font-size:11px;color:var(--fg-primary);}
 .ms-foot{margin-top:8px;text-align:center;font-size:9px;color:var(--fg-dim);}
 .ms-dim{color:var(--fg-dim);font-size:9px;}
+.ms-kv b.ms-win,.ms-rec.ms-win{color:var(--green,#22c55e);}
+.ms-kv b.ms-lose,.ms-rec.ms-lose{color:#f87171;}
+.ms-kv b.ms-even,.ms-rec.ms-even{color:var(--fg-tertiary);}
 .brief-block{margin-bottom:10px;background:var(--bg-surface-2);border:1px solid var(--hairline-strong);border-radius:var(--r-inner);overflow:hidden;}
 .brief-head{display:flex;justify-content:space-between;align-items:center;padding:7px 11px;font-family:var(--mono);font-size:10px;letter-spacing:0.05em;color:var(--fg-tertiary);cursor:pointer;}
 .brief-meta{color:var(--fg-dim);font-size:9px;letter-spacing:0;}
@@ -3779,6 +3782,31 @@ function prepMatchupData(hA,aA,map){
 }
 // ── MATCHUP_SHEET_PURE_END ──
 
+// ── MATCHUP_CMP_PURE_BEGIN (fixture-extracted: research/matchup_sheet_fixtures.mjs) ──
+// Green/red/grey per metric: 10% relative closeness with sanity floors so near-zero
+// values grey out (0.5 units for pp/count levers; 5 win-pts minimum for %-based rows).
+// All metrics higher-is-better (TO margin: + = forces more than commits).
+function msCompare(a,h){
+  function cmp(x,y,floor){
+    if(x==null||y==null)return 'even';
+    var dd=Math.abs(x-y);
+    if(dd<=Math.max(0.10*Math.max(Math.abs(x),Math.abs(y)),floor))return 'even';
+    return x>y?'a':'h';
+  }
+  function wpct(t,k){if(!t)return null;var o=k?t[k]:t;if(!o)return null;var n=(o.w||0)+(o.l||0);return n>0?o.w/n:null;}
+  return {
+    rec:cmp(wpct(a),wpct(h),0.05),
+    efgd:cmp(a&&a.efgd,h&&h.efgd,0.5),
+    toMargin:cmp(a&&a.toMargin,h&&h.toMargin,0.5),
+    fta:cmp(a&&a.fta,h&&h.fta,0.5),
+    oreb:cmp(a&&a.oreb,h&&h.oreb,0.5),
+    top:cmp(wpct(a,'top'),wpct(h,'top'),0.05),
+    rest:cmp(wpct(a,'rest'),wpct(h,'rest'),0.05),
+    l5:cmp(wpct(a,'l5'),wpct(h,'l5'),0.05)
+  };
+}
+// ── MATCHUP_CMP_PURE_END ──
+
 function msSigned(v,suf){if(v==null)return '\u2014';return (v>0?'+':'')+v+(suf||'');}
 function ctxStrip(gid,hA,aA){
   var m=_teamProfiles||{};var a=m[aA],h=m[hA];
@@ -3799,19 +3827,21 @@ async function openMatchupSheet(gid){
   var g=games.find(function(x){return x.id===gid;});if(!g)return;
   var hA=g.home?.alias||g.homeAlias||g.home_alias,aA=g.away?.alias||g.awayAlias||g.away_alias;
   var d=prepMatchupData(hA,aA,map);
+  var cmpAH=msCompare(d.away,d.home);   // color coding: away='a', home='h'
   closeMatchupSheet();
-  function col(t,al){
+  function col(t,al,side){
+    function kls(k){var r=cmpAH[k];return r==='even'?'ms-even':(r===side?'ms-win':'ms-lose');}
     if(!t)return '<div class="ms-col"><div class="ms-al" style="color:'+tc(al)+'">'+esc(al)+'</div><div class="ms-dim">no profile</div></div>';
     var badgeCls=t.badge==='INFLATED'?'ms-b-inf':(t.badge==='DEFLATED'?'ms-b-def':'ms-b-hon');
-    var html='<div class="ms-col"><div class="ms-al" style="color:'+tc(t.alias)+'">'+esc(t.alias)+' <span class="ms-rec">'+t.w+'-'+t.l+'</span></div>';
+    var html='<div class="ms-col"><div class="ms-al" style="color:'+tc(t.alias)+'">'+esc(t.alias)+' <span class="ms-rec '+kls('rec')+'">'+t.w+'-'+t.l+'</span></div>';
     html+='<div class="ms-arch">'+esc(t.archetype)+(t.badge?' <span class="ms-badge '+badgeCls+'">'+t.badge+(t.infl!=null?' '+msSigned(t.infl):'')+'</span>':'')+'</div>';
-    html+='<div class="ms-kv"><span>eFG diff</span><b>'+msSigned(t.efgd,'pp')+'</b></div>';
-    html+='<div class="ms-kv"><span>TO margin</span><b>'+msSigned(t.toMargin)+'</b></div>';
-    html+='<div class="ms-kv"><span>FTA</span><b>'+msSigned(t.fta)+'</b></div>';
-    html+='<div class="ms-kv"><span>OREB</span><b>'+msSigned(t.oreb)+'</b></div>';
-    html+='<div class="ms-kv"><span>vs top(&gt;.600)</span><b>'+(t.top?t.top.w+'-'+t.top.l+(t.top.efgd!=null?' ('+msSigned(t.top.efgd,'pp')+')':''):'\u2014')+(t.insufficient?' <span class="ms-dim">small-n</span>':'')+'</b></div>';
-    html+='<div class="ms-kv"><span>vs rest</span><b>'+(t.rest?t.rest.w+'-'+t.rest.l:'\u2014')+'</b></div>';
-    html+='<div class="ms-kv"><span>L5</span><b>'+(t.l5?t.l5.w+'-'+t.l5.l+' \u00b7 own '+msSigned(t.l5.own,'pp')+' \u00b7 opp '+msSigned(t.l5.opp,'pp'):'\u2014')+'</b></div>';
+    html+='<div class="ms-kv"><span>eFG diff</span><b class="'+kls('efgd')+'">'+msSigned(t.efgd,'pp')+'</b></div>';
+    html+='<div class="ms-kv"><span>TO margin</span><b class="'+kls('toMargin')+'">'+msSigned(t.toMargin)+'</b></div>';
+    html+='<div class="ms-kv"><span>FTA</span><b class="'+kls('fta')+'">'+msSigned(t.fta)+'</b></div>';
+    html+='<div class="ms-kv"><span>OREB</span><b class="'+kls('oreb')+'">'+msSigned(t.oreb)+'</b></div>';
+    html+='<div class="ms-kv"><span>vs top(&gt;.600)</span><b class="'+kls('top')+'">'+(t.top?t.top.w+'-'+t.top.l+(t.top.efgd!=null?' ('+msSigned(t.top.efgd,'pp')+')':''):'\u2014')+(t.insufficient?' <span class="ms-dim">small-n</span>':'')+'</b></div>';
+    html+='<div class="ms-kv"><span>vs rest</span><b class="'+kls('rest')+'">'+(t.rest?t.rest.w+'-'+t.rest.l:'\u2014')+'</b></div>';
+    html+='<div class="ms-kv"><span>L5</span><b class="'+kls('l5')+'">'+(t.l5?t.l5.w+'-'+t.l5.l+' \u00b7 own '+msSigned(t.l5.own,'pp')+' \u00b7 opp '+msSigned(t.l5.opp,'pp'):'\u2014')+'</b></div>';
     if(t.l5&&t.l5.tags.length)html+='<div class="ms-tags">'+t.l5.tags.map(function(x){return '<span>'+esc(x)+'</span>';}).join('')+'</div>';
     return html+'</div>';
   }
@@ -3821,7 +3851,7 @@ async function openMatchupSheet(gid){
   var age=upd?Math.round((Date.now()-new Date(upd).getTime())/3600000):null;
   var sheet='<div id="msOverlay" class="ms-overlay" onclick="if(event.target===this)closeMatchupSheet()">'
     +'<div class="ms-sheet"><div class="ms-head"><span>MATCHUP SHEET</span><span class="ms-x" onclick="closeMatchupSheet()">\u00d7</span></div>'
-    +'<div class="ms-grid">'+col(d.away,aA)+col(d.home,hA)+'</div>'
+    +'<div class="ms-grid">'+col(d.away,aA,'a')+col(d.home,hA,'h')+'</div>'
     +'<div class="ms-h2h">'+h2hLine+'</div>'
     +'<div class="ms-foot">season priors \u2014 direction, not probabilities \u00b7 TO margin + = forces more than commits'+(age!=null?' \u00b7 updated '+age+'h ago':'')+'</div>'
     +'</div></div>';
