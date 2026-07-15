@@ -1,6 +1,6 @@
 # OVERRIDE_LANE_SPEC — Discretionary WATCHLIST sizing lane + digest surfacing
 
-**Born:** Jul 15, 2026 (PM decision, post row-20 MIN bet) · **Status:** spec, awaiting build go
+**Born:** Jul 15, 2026 (PM decision, post row-20 MIN bet) · **Status:** §1 CONVENTION ADOPTED Jul 15; §2/§3 builds DEFERRED (PM call Jul 15 — LOE not justified at one lane member). BUILD TRIGGER: a second team enters the lane (membership stops being obvious). Until then, membership checked on demand by Claude (nightly ritual / session startup / on ask) from team_profiles.
 **Layer:** discretionary/narrative only — NEVER gates, never touches signal ledger or tier caps for A/B fires.
 
 ## 1. The lane (convention, effective immediately — no code needed)
@@ -20,14 +20,14 @@ max ONE open lane position at a time (single-team concentration guard);
 lane bets tagged `LANE` in bets.system_state → separately measurable discretionary stream
 (evaluate at n≥15: lane realized win% + ROI vs non-lane WATCHLIST bets).
 
-## 2. Build A — nightly digest line (~15 lines, post-game-agent.mjs)
+## 2. Build A (DEFERRED) — nightly digest line (~15 lines, post-game-agent.mjs)
 Pure composer `ssOverrideLaneLine(profiles)` → one plain-English line in the digest:
 - members: `Override lane (WATCHLIST cap $600): MIN — record understates them (infl −.11, 5-1 vs top).`
 - empty: `Override lane: empty — no top team currently under-rated by record.`
 - degraded (profiles missing/stale >48h): omit line entirely, log warning. Never guess.
 Pinned copy fixture added to digest fixtures. Reads team_profiles only — zero new queries on poll path.
 
-## 3. Build B (optional, PM decision) — push-time tag (~8 lines, ssComposePush)
+## 3. Build B (DEFERRED) — push-time tag (~8 lines, ssComposePush)
 WATCHLIST mechanical push appends one line when trailer ∈ lane:
 `Override lane: MIN qualifies — discretionary cap $600.`
 This is the moment of action (digest = daily awareness; push = decision point). Touches pinned
@@ -39,7 +39,8 @@ push copy → fixture update in ss_tier_bc_fixtures. Recompute membership from c
 - No auto-sizing output — the lane sets a CAP, Manny sets the size
 - No membership hysteresis/deadband v1 — digest prints the number; revisit only if flapping observed
 
-## 5. PM decisions open
-1. Cap $600 (B-parity, recommended) — or other number
-2. Build B push tag: yes/no
-3. One-open-position rule: adopt / drop
+## 5. PM decisions — RESOLVED Jul 15
+1. Cap: $600 (B-parity) — adopted
+2. Builds A/B: deferred, trigger = second lane member
+3. One-open-position rule: adopted
+4. Convention home until next project-doc refresh: this spec + Claude memory (tiered sizing entry)
