@@ -67,3 +67,24 @@ conventions, not byte-identical to the server block. Anti-drift = shared fixture
 A first (independent, pure UI, ~70 lines) → B (reuses A's profile cache; ~45 lines html +
 ~8 lines analyze.js + fixture file). Both are slate-safe deploys (no poll function changes;
 analyze.js redeploy is instant-cutover and user-initiated only).
+
+## 7. PM amendments (Jul 15) + revised phasing — SHIPPED THROUGH PHASE 1
+
+- **Triggers:** persistent micro-strip (always visible, pregame through final) + verdict strip
+  tap. NO team-name/logo trigger. Verdict strip copy untouched — tap target only.
+- **Rank → record:** score-row `team-rank` span now renders W-L from the profile store
+  (standings confRank removed from display; standingsCache fetch retained, now a dead-code
+  candidate for cleanup).
+- **Phase 1 (SHIPPED b8d91f3):** client profile store (15-min TTL, never-cache-empty),
+  micro-strip, Matchup Sheet (records, archetype + inflation badge ±.10 with small-n
+  fallback, identity levers w/ TO-margin convention in footer, tier splits, L5 + tags,
+  cross-referenced H2H w/ perspective label, staleness age), verdict-strip tap, rank→record,
+  tc() direct-first fix. Fixtures: research/matchup_sheet_fixtures.mjs (marker-extracted
+  from html, 18/18).
+- **Phase 2 (next):** BRIEFING block (§2) + ⚡ Analyze injection (§3) — both consume the
+  Phase 1 profile store; §3's fetch section superseded by the shared store.
+- **Phase 3 (optional, PM call):** archetype/record chips on the pregame slate list.
+- **Registered forward levers (vs-Rest / inflation deltas):** inflation badge ships now as
+  a *descriptive* label; the registered small-gap hypothesis remains under OOS validation
+  (research/2026-07-14_forward_eval_smallgap.py) and gets no predictive framing in UI until
+  it passes.
