@@ -101,3 +101,43 @@ small-gap region. They remain discretionary-sizing/narrative inputs, where the b
 already measures whether they add alpha in Manny's hands (the correct forward test, zero
 multiplicity cost). 2026-specific value ("expansion year is different") is untestable at
 current n (~50-60 small-gap spots) — revisit only with a new mechanism or next season's OOS.
+
+## Addendum 2 (same day): H2H lever + 2026-season descriptive view
+
+**H2H (powered, 2024-25):** L_h2h = as-of same-season avg margin in prior meetings, trailer
+perspective. Full frame n=612: standalone AUC 0.618 (trailer H2H+ 41.9% vs H2H− 28.0%) — looks
+alive, but corr(g0, h2h) = **0.619** and blend optimal λ = **0** (g0 alone 0.7002 on the same
+subset). Small-gap pool n=247: AUC **0.543** (38.1% vs 34.5%). **H2H is the quality gap in
+disguise — zero incremental signal, and ~nothing in the region where g0 is silent.** It also
+retroactively explains part of the WSH@TOR gut read: WSH 2-0 vs TOR was mostly restating that
+WSH was the better team.
+
+**2026 season so far (n=256 spots / 178 games; small-gap n=109, base 38.5%) — LOW POWER,
+ordering only, NOT a derivation set:**
+
+| lever | 2026 all (AUC) | 2026 small-gap (AUC) | 24-25 small-gap (ref) |
+|---|---|---|---|
+| g0 | 0.648 | 0.563 | 0.569 |
+| L_vsrest | **0.698** | **0.660** | 0.571 (best) |
+| L_infl | 0.576 | 0.651 | 0.485 |
+| L_efgd | 0.609 | 0.554 | 0.511 |
+| L_topefgd | 0.583 | 0.539 | 0.470 |
+| L_vstop | 0.602 | 0.536 | 0.497 |
+| L_h2h | 0.570 | 0.530 | 0.543 |
+| L_tom | 0.503 | 0.470 | 0.462 |
+
+Honest read: the levers ARE livelier in 2026 (Manny's expansion-year intuition), but this is
+exactly the shape 2024-alone showed before inverting in 2025, at even lower n, across 16
+lever×pool looks. One thread has cross-sample rank stability: **vs-Rest is the top lever in
+both the powered pool and 2026** (heavily record-correlated, but the only consistent riser).
+
+### FORWARD REGISTRATION (frozen 2026-07-14, evaluate ~season end)
+
+Hypothesis: in small-gap spots (|g0| < .15), L_vsrest > 0 and L_infl > 0 predict elevated
+trailer-win in the 2026 expansion environment.
+- Pool: spots with **game date > 2026-07-14** (never seen by this analysis), same frame
+  (first qualifying Q2/Q3 snapshot, trailing 1-9, ≥4 GP, dedup per game-quarter).
+- Pass: forward AUC ≥ 0.58 for the registered lever(s) on the new spots, n ≥ 60.
+- No re-derivation, no threshold tuning, no additional levers. Evaluation = rerun of this
+  script over post-Jul-14 games (pipeline: /tmp scripts + live26_states extraction method).
+- Regardless of outcome: levers remain discretionary/narrative until a forward pass.
