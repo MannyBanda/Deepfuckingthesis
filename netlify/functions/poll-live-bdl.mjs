@@ -935,13 +935,20 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
       } catch (e) { log(`${aA}@${hA}: sweetspot pctx non-fatal: ${e.message}`); _ctxText = ''; }
     }
 
-    // Stage 2 — async Opus narration (the WHY); non-fatal, never re-decides.
-    // A and B only (D-11: B keeps two-push parity). Ledger rows and WATCHLIST never narrate —
-    // but both still got the Stage 1.5 digest above (carrier ledger = forward OOS feed).
-    if (ss.ledgerOnly || ss.subtype === 'WATCHLIST') return;
+    // Stage 2 — async narration (the WHY); non-fatal, never re-decides.
+    // A/B always narrate under V2 (D-11: B keeps two-push parity). WATCHLIST narrates as a
+    // REVIEW via the sweep only (D-12, WNBA_SS_NARRATE_WATCHLIST). Ledger rows never narrate —
+    // all still got the Stage 1.5 digest above (carrier ledger = forward OOS feed).
+    if (ss.ledgerOnly) return;
     // NARRATION V2 (D-4): narration deferred to the end-of-cycle tail sweep —
     // row already has narration_text NULL + narration_attempts 0; sweep claims it.
-    if (WNBA_SS_NARRATE_V2) { log(`${aA}@${hA}: sweetspot narration deferred to tail sweep (V2)`); return; }
+    if (WNBA_SS_NARRATE_V2) {
+      if (ss.subtype === 'WATCHLIST' && !WNBA_SS_NARRATE_WATCHLIST) { log(`${aA}@${hA}: sweetspot WATCHLIST — review narration off (WNBA_SS_NARRATE_WATCHLIST)`); return; }
+      log(`${aA}@${hA}: sweetspot narration deferred to tail sweep (V2)`); return;
+    }
+    // Legacy inline path below is fade-framed (tier wording + price guidance) — it must
+    // never narrate a WATCHLIST row: it would mislabel a review cue as a B-tier fire.
+    if (ss.subtype === 'WATCHLIST') return;
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return;
     try {
@@ -979,8 +986,12 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
 // to the end-of-cycle tail sweep (D-4): Fable 5 high effort, Opus 4.8 fallback on
 // 4xx/5xx/timeout/refusal (refusals are HTTP 200 + stop_reason). WNBA_GAME_BRIEF_ON=1
 // → auto GAME_BRIEF per game (D-9b) + on-demand ?ss_brief=<gameId> (D-9a).
+// WNBA_SS_NARRATE_WATCHLIST=1 (D-12, sub-flag of V2 — inert unless V2 is also on) →
+// WATCHLIST rows narrate via the sweep as a REVIEW (priority 2, no bet directive,
+// factual price line, 2h recency window so a flag turn-on never drains stale rows).
 const WNBA_SS_NARRATE_V2 = process.env.WNBA_SS_NARRATE_V2 === '1';
 const WNBA_GAME_BRIEF_ON = process.env.WNBA_GAME_BRIEF_ON === '1';
+const WNBA_SS_NARRATE_WATCHLIST = process.env.WNBA_SS_NARRATE_WATCHLIST === '1';
 const SS_NARRATE_TIMEOUT_MS = 45000;
 const SS_NARRATE_BUDGET_MS = 55000;   // skip sweep if handler already past this
 var _briefSeeded = {};                 // per-warm-invocation guard; DB PK is the real dedup
@@ -1055,6 +1066,35 @@ function ssBuildBriefPrompt(hA, aA, ctx) {
     + `(2) The season lens: both teams' identities, the head-to-head if shown, and any recent form heat.\n`
     + `(3) What would change it: one sentence on the shape of game that would make the system speak up.\n\n`
     + `Rules: NO markdown — no bold, no asterisks, no headers (push notification body); plain English; no prices, no odds, no lean, no bet suggestion of any kind; team names throughout; if the context block is missing, say the season lens is unavailable rather than inventing one.`;
+}
+
+// D-12 WATCHLIST REVIEW contract (PM go Jul 15) — 4 parts, 150-190 target / 200 hard cap.
+// WATCHLIST = review cue, NOT a fire: the prompt must never produce a bet directive,
+// a lean, or sizing language. Price IS included (PM call) but stated as a plain fact
+// with zero edge/value claim — WATCHLIST rows routinely carry edge/collapse_true NULL.
+// The fire-ladder legend is ssClassifyTier verbatim: the model cites the row's reads
+// against it and never invents thresholds. PURE (fixture-extracted).
+function ssBuildWatchlistPrompt(row, blocks) {
+  const b = blocks || {};
+  const pct = (v, d = 0) => v == null ? '?' : (Number(v) * 100).toFixed(d);
+  const ml = (v) => v == null ? '?' : (Number(v) > 0 ? '+' + v : '' + v);
+  return `You are the narration layer of a live WNBA betting intelligence system. A WATCHLIST review cue ALREADY reached the bettor — this is NOT a fired bet alert and you must never turn it into one. Your job is season-and-live context for the bettor's own discretionary read, in plain English.\n\n`
+    + `SPOT: ${row.trailer_alias} trailing ${row.leader_alias} by ${row.margin}, Q${row.period} ${row.clock}.\n`
+    + `- Quality gap: ${row.trailer_alias} season win probability ${pct(row.trailer_wp)}% vs ${row.leader_alias} ${pct(row.leader_wp)}% (gap ${row.quality_gap != null ? Number(row.quality_gap).toFixed(2) : '?'}).\n`
+    + `- Leader shooting: effective field-goal percentage ${row.leader_efg != null ? Math.round(row.leader_efg) : '?'}% (${row.leader_efg_band || '?'} band), variance share ${row.variance_share != null ? Math.round(row.variance_share) : '?'}% of the lead from three-pointers and midrange (lead class ${row.lead_class || '?'}).\n`
+    + `- System reads on this spot: fade read ${row.fade_tier || 'none'}, collapse read ${row.collapse_tier || 'none'}, model edge ${row.edge != null ? '+' + pct(row.edge) + ' points' : 'none computed'}.\n`
+    + `- FIRE LADDER (for reference): a full A or B alert requires ALL of — a positive model edge, a collapse read of STRONG or SHORT, a fade read of STRONG FADE or LEAN FADE, and a lead class of VOLATILE or MIXED, before the fourth quarter with the deficit at 9 or less. The reads above did not clear this ladder.\n`
+    + `- Live price on ${row.trailer_alias}: ${ml(row.line_used)} (market implied ${pct(row.implied)}%).\n\n`
+    + (b.quarterFlow ? b.quarterFlow + '\n' : '')
+    + (b.snapState ? b.snapState + '\n' : '')
+    + (b.teamCtx ? b.teamCtx + '\n' : '')
+    + (b.playerCtx ? b.playerCtx + '\n' : '')
+    + `Write exactly 4 short paragraphs, aiming for 150-190 words total — 200 words is a hard cap:\n`
+    + `(1) Open with "Review only — no system bet call." then one sentence on what put this on the radar: the quality gap and the catchable deficit.\n`
+    + `(2) The live texture — how the game has flowed and what ${row.leader_alias}'s lead is actually made of${b.playerCtx ? ', naming the carrier if one is flagged' : ''}.\n`
+    + `(3) What is missing for a full alert, citing ONLY the system reads listed above against the fire ladder, and what to watch that would upgrade it; then state the current price on ${row.trailer_alias} as a plain fact with no edge or value claim.\n`
+    + `(4) The single biggest risk if the bettor takes a discretionary position anyway${b.playerCtx ? ' — if a STAR carrier is flagged above, this MUST be her sustaining at her norm' : ''}; include foul trouble on either side if present.\n\n`
+    + `Rules: NO markdown — no bold, no asterisks, no headers; plain paragraphs separated by blank lines (this is a push notification body); plain English throughout; name every metric in full on first use ("quality gap", "effective field-goal percentage"), never bare abbreviations; percentages, not decimals; team names, never "they" across paragraph boundaries; NEVER recommend a bet, a size, or a lean; never call the price good or bad; never predict a specific player's shooting will collapse; never mention floor scores.`;
 }
 
 // Model caller — output_config.effort verified on BOTH fable-5 and opus-4-8 (smoke Jul 14):
@@ -1176,6 +1216,18 @@ async function ssNarrationSweep(sql, startTime) {
         ORDER BY id ASC LIMIT 1`;
       row = r[0] || null;
     }
+    // D-12: WATCHLIST reviews claim only when no A/B fire is pending (A/B narration
+    // latency unchanged). 2h recency window — a flag turn-on must never drain the
+    // season's stale WATCHLIST rows one push per cycle. SS_FORCE_TEST rows excluded
+    // (forced mode-5 tests would otherwise auto-narrate + push within the window).
+    if (!row && WNBA_SS_NARRATE_V2 && WNBA_SS_NARRATE_WATCHLIST) {
+      const r = await sql`SELECT * FROM sweetspot_alerts
+        WHERE league = ${'wnba'} AND alert_subtype = ${'WATCHLIST'}
+          AND ntfy_sent = true AND narration_text IS NULL AND COALESCE(narration_attempts, 0) < 3
+          AND created_at > NOW() - INTERVAL '2 hours' AND game_id <> ${'SS_FORCE_TEST'}
+        ORDER BY id ASC LIMIT 1`;
+      row = r[0] || null;
+    }
     if (!row && WNBA_GAME_BRIEF_ON) {
       const r = await sql`SELECT * FROM sweetspot_alerts
         WHERE league = ${'wnba'} AND alert_subtype = ${'GAME_BRIEF'}
@@ -1196,6 +1248,12 @@ async function ssNarrationSweep(sql, startTime) {
       const liveLine = row.period ? `currently Q${row.period} ${row.clock || ''}` : '';
       prompt = ssBuildBriefPrompt(hA || '?', aA || '?', { teamCtx: blocks.teamCtx, liveLine });
       title = `GAME BRIEF ${aA || '?'} at ${hA || '?'}`;
+      priority = 2;
+    } else if (row.alert_subtype === 'WATCHLIST') {
+      // D-12 review — priority matches the mechanical cue (2), never the fade's 4.
+      // "vs" not "at": leader/trailer anchors are not home/away (row-anchoring lesson).
+      prompt = ssBuildWatchlistPrompt(row, blocks);
+      title = `WATCHLIST review - ${row.trailer_alias} vs ${row.leader_alias}`;
       priority = 2;
     } else {
       prompt = ssBuildNarrationPrompt(row, blocks);
@@ -7033,7 +7091,9 @@ export default async function(req) {
       const r = await sql`SELECT * FROM sweetspot_alerts WHERE id = ${rowId}`;
       if (!r[0]) return new Response(JSON.stringify({ ok: false, error: 'row not found' }), { status: 404 });
       const { blocks } = await ssGatherNarrationBlocks(sql, r[0]);
-      const prompt = ssBuildNarrationPrompt(r[0], blocks);
+      const prompt = r[0].alert_subtype === 'WATCHLIST'
+        ? ssBuildWatchlistPrompt(r[0], blocks)   // D-12 — dry-run mirrors sweep routing
+        : ssBuildNarrationPrompt(r[0], blocks);
       const t0 = Date.now();
       const model = url.searchParams.get('model') || 'claude-fable-5';
       const res = await ssCallNarration(prompt, model, SS_NARRATE_TIMEOUT_MS);
@@ -7054,7 +7114,8 @@ export default async function(req) {
   }
   // Modes: 1 = A (no pctx) · 2 = A + synthetic pctx (§4c) · 3 = B (B1 cell) + pctx ·
   // 4 = GAP_BASE ledger row + pctx (assert ntfy_sent=false, digest present, NO push) ·
-  // 5 = WATCHLIST + pctx (assert single priority-2 push, digest, NO narration).
+  // 5 = WATCHLIST + pctx (assert single priority-2 push, digest; sweep narration only
+  //     when WNBA_SS_NARRATE_WATCHLIST=1 — SS_FORCE_TEST rows are excluded from the claim).
   // Suppression rules apply across modes on the same test game — run ss_force_clear=1
   // between sequences; recommended order: 5 → 3 → 4 (then 5 again to see the suppress).
   const _ftMode = url.searchParams.get('ss_force_test');

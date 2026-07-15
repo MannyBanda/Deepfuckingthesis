@@ -17,9 +17,9 @@ function extractFn(src, name) {
   for (; j < src.length; j++) { if (src[j] === '{') d++; else if (src[j] === '}') { d--; if (!d) { j++; break; } } }
   return src.slice(i, j);
 }
-const fns = ['ssImpliedToML', 'ssPriceLadder', 'ssBuildNarrationPrompt', 'ssBuildBriefPrompt'];
+const fns = ['ssImpliedToML', 'ssPriceLadder', 'ssBuildNarrationPrompt', 'ssBuildBriefPrompt', 'ssBuildWatchlistPrompt'];
 const mod = new Function(`${fns.map((f) => extractFn(POLL, f)).join(';\n')}; return { ${fns.join(', ')} };`)();
-const { ssImpliedToML, ssPriceLadder, ssBuildNarrationPrompt, ssBuildBriefPrompt } = mod;
+const { ssImpliedToML, ssPriceLadder, ssBuildNarrationPrompt, ssBuildBriefPrompt, ssBuildWatchlistPrompt } = mod;
 
 let pass = 0, fail = 0;
 const T = (n, c) => { c ? pass++ : fail++; console.log(`  ${c ? '\u2713' : '\u2717'} ${n}`); };
@@ -103,6 +103,45 @@ T('markdown ban in brief', bp.includes('NO markdown'));
 T('live line rendered', bp.includes('currently Q2 5:00'));
 const bpBare = ssBuildBriefPrompt('TOR', 'WSH', {});
 T('bare brief still valid, default reason present', bpBare.includes('No position') && bpBare.includes('too thin'));
+
+// ── watchlist review prompt (D-12, PM go Jul 15) ──
+console.log('\nWATCHLIST REVIEW PROMPT');
+// Golden shape = live row 401 (Jul 15, MIN trailing LA): gap +.30, VOLATILE 61%,
+// fade NO EDGE, edge NULL, line -222 / implied 68.9% — the exact null-edge class
+// the review must render without inventing value.
+const wrow = {
+  alert_subtype: 'WATCHLIST', trailer_alias: 'MIN', leader_alias: 'LA', margin: 4,
+  period: 2, clock: '9:21', leader_efg: 58, leader_efg_band: 'green', variance_share: 61,
+  lead_class: 'VOLATILE', trailer_wp: 0.75, leader_wp: 0.45, quality_gap: 0.295,
+  fade_tier: 'NO EDGE', collapse_tier: 'NO_EDGE', collapse_true: null, edge: null,
+  implied: 0.689, line_used: -222,
+};
+const wp = ssBuildWatchlistPrompt(wrow, blocks);
+T('review framing: NOT a fired bet alert', wp.includes('NOT a fired bet alert'));
+T('opens with mandated review lead', wp.includes('Review only — no system bet call.'));
+T('4-part structure, price-as-fact in part 3', wp.includes('(3) What is missing') && wp.includes('as a plain fact with no edge or value claim'));
+T('word budget: 150-190 target + 200 hard cap', wp.includes('150-190 words') && wp.includes('200 words is a hard cap'));
+T('fire ladder legend present (ssClassifyTier verbatim semantics)', wp.includes('STRONG FADE or LEAN FADE') && wp.includes('VOLATILE or MIXED') && wp.includes('deficit at 9 or less'));
+T('null edge renders as none computed (never a number)', wp.includes('model edge none computed'));
+T('factual price line rendered (whole pct, fade-prompt parity)', wp.includes('Live price on MIN: -222') && wp.includes('(market implied 69%)'));
+T('NO ladder block ever (sizing machinery banned)', !wp.includes('PRICE LADDER') && !wp.includes('Probe territory'));
+T('no sizing/lean language anywhere in contract', wp.includes('NEVER recommend a bet, a size, or a lean') && !wp.toLowerCase().includes('kelly') && !wp.includes('probe price') && !wp.includes('full-size'));
+T('never call the price good or bad', wp.includes('never call the price good or bad'));
+T('no tier mislabel: A-tier/B-tier wording absent', !wp.includes('A-tier') && !wp.includes('B-tier'));
+T('§2 exclusion: no floor score leaks + explicit ban', !/floor[_ ]?score:? ?0?\.\d/i.test(wp) && wp.includes('never mention floor scores'));
+T('markdown ban present', wp.includes('NO markdown'));
+T('full-name metric rule present', wp.includes('effective field-goal percentage'));
+T('STAR carrier risk rule wired when playerCtx present', wp.includes('sustaining at her norm'));
+T('section order: spot -> quarter flow -> live state -> team ctx -> player ctx -> contract', (() => {
+  const idx = ['SPOT:', 'QUARTER FLOW', 'LIVE STATE', 'TEAM CONTEXT', 'PLAYER CONTEXT', 'Write exactly 4'].map((k) => wp.indexOf(k));
+  return idx.every((v, i) => v >= 0 && (i === 0 || v > idx[i - 1]));
+})());
+const wpBare = ssBuildWatchlistPrompt(wrow, {});
+T('bare blocks: carrier rule absent, still valid', !wpBare.includes('sustaining at her norm') && wpBare.includes('Review only'));
+T('all-null row degrades to ? / none, no crash', (() => {
+  const p = ssBuildWatchlistPrompt({ alert_subtype: 'WATCHLIST', trailer_alias: 'X', leader_alias: 'Y' }, {});
+  return p.includes('fade read none') && p.includes('?') && !p.includes('null');
+})());
 
 console.log(`\n${pass}/${pass + fail} passed${fail ? ' \u2014 FAILURES ABOVE' : ''}`);
 process.exit(fail ? 1 : 0);

@@ -185,3 +185,33 @@ gap holding." Never price guidance, never a lean — context without action impl
   stored `narration_text`, re-pushes. Works whether or not the auto-brief already fired.
 - (c) rejected unless (b) proves noisy.
 Brief word budget: ~90-word target, 120 hard cap (briefs stay shorter than fire narrations).
+
+---
+
+## D-12 AMENDMENT — WATCHLIST REVIEW NARRATION (PM go Jul 15, 2026)
+
+**Decision:** WATCHLIST rows narrate via the tail sweep — but through a dedicated REVIEW
+contract, never the fade prompt. Rationale: WATCHLIST spots are where Manny's discretionary
+selection edge operates; they need the richest context. The naive fix (widening the sweep
+scope) would have mislabeled reviews as B-tier fires and forced sizing language onto
+NO EDGE rows with `edge/collapse_true NULL`.
+
+**Contract (`ssBuildWatchlistPrompt`, pure, fixture-extracted):** 4 parts, 150-190 target /
+200 cap. (1) mandated lead "Review only — no system bet call." + what cleared (gap,
+deficit); (2) live texture + lead composition; (3) what's missing for a fire — model cites
+the row's mechanical reads against the ssClassifyTier ladder stated verbatim in the prompt
+(positive edge + collapse STRONG/SHORT + fade STRONG/LEAN FADE + class VOLATILE/MIXED,
+pre-Q4, deficit ≤9), never invents thresholds — then the live price stated as PLAIN FACT
+(PM call: line included; zero edge/value claim, zero sizing, no ladder block); (4) biggest
+discretionary risk (STAR carrier rule carried).
+
+**Plumbing:** flag `WNBA_SS_NARRATE_WATCHLIST` (ship dark; sub-flag of V2, inert without it).
+Sweep claims WATCHLIST only when no A/B row is pending (A/B narration latency unchanged),
+with a 2h `created_at` recency window (flag turn-on must not drain the season's 9 stale
+rows one push per cycle) and `game_id <> 'SS_FORCE_TEST'` (mode-5 forced tests must not
+auto-push). Push priority 2, matching the mechanical review cue. Title uses "vs" — leader/
+trailer anchors are not home/away (verdict-strip row-anchoring lesson). `?ss_narrate_test`
+dry-run routes by subtype. Fixtures: +18 cases (50/50), golden shape = live row 401
+(Jul 15 MIN/LA: gap +.30, VOLATILE 61%, fade NO EDGE, edge NULL, -222/69%).
+
+**Rollout:** dry-run row 401 → review output → set `WNBA_SS_NARRATE_WATCHLIST=1` in Netlify.
