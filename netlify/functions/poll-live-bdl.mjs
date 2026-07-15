@@ -1229,20 +1229,34 @@ async function ssNarrationSweep(sql, startTime) {
 // the flag is off, the map is unloaded, the league mismatches, or rows are missing.
 const TEAM_CTX_ON = process.env.TEAM_CTX_ON === '1';
 var _teamCtxMap = null;   // alias -> profile row (var: TDZ learning #6)
+var _teamCtxLoadedAt = 0; // warm-container TTL companion — nightly recompute must propagate without a redeploy
+const TEAM_CTX_TTL_MS = 15 * 60 * 1000;
 
 async function ensureTeamCtx(sql, league) {
-  if (!TEAM_CTX_ON || league !== 'wnba' || _teamCtxMap) return;
+  if (!TEAM_CTX_ON || league !== 'wnba') return;
+  // Only trust a NON-EMPTY map inside TTL. Jul 14 WSH@TOR bug: a warm container whose
+  // first load ran mid-backfill cached {} (truthy) for its whole life and served the
+  // entire game ctx-less via the silent both-rows-missing degradation path.
+  // Rules: never cache empty; never cache without expiry; on failed/empty reload keep
+  // the last good map (stale-good beats none) and retry next cycle.
+  if (_teamCtxMap && Object.keys(_teamCtxMap).length > 0 && (Date.now() - _teamCtxLoadedAt) < TEAM_CTX_TTL_MS) return;
   try {
     const rows = await sql`SELECT team_alias, league, season, w, l, archetype, profile, updated_at
       FROM team_profiles WHERE league = ${'wnba'} AND season = ${2026}`;
-    _teamCtxMap = {};
+    const next = {};
     for (const r of rows) {
       let prof = r.profile;
       if (typeof prof === 'string') { try { prof = JSON.parse(prof); } catch (e) { prof = null; } }
-      if (prof) _teamCtxMap[r.team_alias] = { w: r.w, l: r.l, archetype: r.archetype, profile: prof, updated_at: r.updated_at, league: r.league };
+      if (prof) next[r.team_alias] = { w: r.w, l: r.l, archetype: r.archetype, profile: prof, updated_at: r.updated_at, league: r.league };
     }
-    log(`teamCtx: loaded ${Object.keys(_teamCtxMap).length} wnba profiles`);
-  } catch (e) { _teamCtxMap = {}; log(`teamCtx load failed (degrading to empty): ${e.message}`); }
+    if (Object.keys(next).length > 0) {
+      _teamCtxMap = next;
+      _teamCtxLoadedAt = Date.now();
+      log(`teamCtx: loaded ${Object.keys(next).length} wnba profiles`);
+    } else {
+      log(`teamCtx: load returned 0 usable rows — keeping previous map, retry next cycle`);
+    }
+  } catch (e) { log(`teamCtx load failed — keeping previous map, retry next cycle: ${e.message}`); }
 }
 
 // Full factual block for Opus prompts (agent + auto-analysis). ~150-220 tokens.
@@ -1270,7 +1284,7 @@ function composeTeamContext(hA, aA, league, map = _teamCtxMap) {
   };
   const lines = [fmt(hA, aA), fmt(aA, hA)].filter(Boolean);
   if (lines.length === 0) return '';   // degradation: both missing -> omit block
-  let block = `\nTEAM CONTEXT (season priors — context only, small-n: treat splits as direction, not probabilities):\n${lines.join('\n')}\n`;
+  let block = `\nTEAM CONTEXT (season priors — context only, small-n: treat splits as direction, not probabilities; TO margin: + = forces more turnovers than it commits):\n${lines.join('\n')}\n`;
   const anyRow = map[hA] || map[aA];
   if (anyRow && anyRow.updated_at && (Date.now() - new Date(anyRow.updated_at).getTime()) > 36 * 3600 * 1000) {
     block += `(profiles >36h stale — nightly refresh may have missed; weight accordingly)\n`;
@@ -6701,6 +6715,7 @@ async function fireCalibrationAnalysis(sql, game, league, summary, ind, sust, le
       graduationCtx ? 'graduation' : null,
       priorAlertTrail ? 'alertTrail' : null,
     ].filter(Boolean);
+    if (composeTeamContext(hA, aA, league)) layerInventory.push('teamCtx');   // Jul 15: audit visibility — layer list previously omitted teamCtx (WSH@TOR forensics)
     const contextLayersStr = `${layerInventory.length}L: ${layerInventory.join(',')}`;
     const promptChars = userPrompt.length;
     log(`${matchup}: ${triggerTag} PROMPT — ${contextLayersStr} | ${promptChars} chars`);
