@@ -1011,33 +1011,43 @@ exports.handler = async function(event) {
       + pbpSection + volumeSection + xgbSection + mcSection + edgeSection + narrativeSection + wpSection + espnWPSection
       + '\nGAME DATA:\n' + JSON.stringify(summaryData);
 
-    var resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-opus-4-8',
-        max_tokens: 2500,
-        system: league === 'wnba' ? SYSTEM_PROMPT + SYSTEM_PROMPT_WNBA_OVERRIDE : SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: userPrompt }],
-      }),
-    });
+    // Fable 5 primary + Opus 4.8 fallback (NARRATION_V2 caller pattern, Jul 14).
+    // output_config.effort verified on BOTH models (smoke Jul 14); response parsing
+    // already filters type==='text' (Fable thinking blocks are skipped).
+    var callAnthropic = async function(model) {
+      var r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: model,
+          max_tokens: 2500,
+          output_config: { effort: 'high' },
+          system: league === 'wnba' ? SYSTEM_PROMPT + SYSTEM_PROMPT_WNBA_OVERRIDE : SYSTEM_PROMPT,
+          messages: [{ role: 'user', content: userPrompt }],
+        }),
+      });
+      var d = await r.json().catch(function() { return {}; });
+      var text = (d.content || []).filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('\n').trim();
+      return { ok: r.ok && d.stop_reason !== 'refusal' && text.length >= 20, status: r.status, data: d, text: text };
+    };
 
-    if (!resp.ok) {
-      var errText = await resp.text();
-      return { statusCode: resp.status, headers: headers, body: JSON.stringify({ error: 'Anthropic ' + resp.status + ': ' + errText.substring(0, 300) }) };
+    var result = await callAnthropic('claude-fable-5');
+    if (!result.ok) result = await callAnthropic('claude-opus-4-8');
+    if (!result.ok) {
+      var errMsg = (result.data && result.data.error && result.data.error.message) || result.data.stop_reason || 'empty response';
+      return { statusCode: result.status || 502, headers: headers, body: JSON.stringify({ error: 'Anthropic ' + (result.status || '') + ': ' + String(errMsg).substring(0, 300) }) };
     }
 
-    var data = await resp.json();
-    var analysis = data.content.filter(function(b) { return b.type === 'text'; }).map(function(b) { return b.text; }).join('\n');
+    var analysis = result.text;
 
     return {
       statusCode: 200,
       headers: headers,
-      body: JSON.stringify({ analysis: analysis, usage: data.usage, sustainabilityAudit: audit, leadComposition: leadComp }),
+      body: JSON.stringify({ analysis: analysis, usage: result.data.usage, sustainabilityAudit: audit, leadComposition: leadComp }),
     };
   } catch (err) {
     return { statusCode: 500, headers: headers, body: JSON.stringify({ error: err.message, stack: (err.stack || '').substring(0, 500) }) };
