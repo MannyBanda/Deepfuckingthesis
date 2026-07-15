@@ -343,6 +343,7 @@ export default async function handler(req) {
   const isBackfill = url.searchParams.get('backfill') === '1';
   const isRecomputeOnly = url.searchParams.get('recompute') === '1';
   const isReingest = url.searchParams.get('reingest') === '1'; // ON CONFLICT DO UPDATE — schema-amendment migrations (e.g. fgm/fga primitives Jul 14)
+  const isQuiet = url.searchParams.get('quiet') === '1';       // suppress ntfy — chunked historical backfills (Jul 14, 2024-25 Honest Gap substrate)
   const league = 'wnba'; // v1 WNBA-only (spec §4)
 
   const todayAz = slateDateFromBdl(new Date().toISOString());
@@ -451,7 +452,7 @@ export default async function handler(req) {
   const summary = `${league} ${teamsUpdated} teams updated, ${ingested} games ingested` +
     (isDry ? ' (dry)' : '') + (isBackfill ? ' (backfill)' : '');
   log(summary);
-  if (!isDry && (ingested > 0 || isBackfill)) await notify('team-profiles', summary);
+  if (!isDry && !isQuiet && (ingested > 0 || isBackfill)) await notify('team-profiles', summary);
 
   return new Response(JSON.stringify({
     ok: true, league, season, dates: [dates[0], dates[dates.length - 1]],
