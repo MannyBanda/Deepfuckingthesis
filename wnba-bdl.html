@@ -103,10 +103,9 @@ input,textarea,select{font-size:16px!important;}
 .ms-kv b.ms-win,.ms-rec.ms-win{color:var(--green,#22c55e);}
 .ms-kv b.ms-lose,.ms-rec.ms-lose{color:#f87171;}
 .ms-kv b.ms-even,.ms-rec.ms-even{color:var(--fg-tertiary);}
-.brief-block{margin-bottom:10px;background:var(--bg-surface-2);border:1px solid var(--hairline-strong);border-radius:var(--r-inner);overflow:hidden;}
-.brief-head{display:flex;justify-content:space-between;align-items:center;padding:7px 11px;font-family:var(--mono);font-size:10px;letter-spacing:0.05em;color:var(--fg-tertiary);cursor:pointer;}
-.brief-meta{color:var(--fg-dim);font-size:9px;letter-spacing:0;}
-.brief-body{padding:8px 11px 10px;font-family:var(--sans);font-size:12px;line-height:1.55;color:var(--fg-secondary);border-top:1px solid var(--hairline,rgba(255,255,255,0.06));}
+.ms-brief{margin-top:12px;padding-top:10px;border-top:1px solid var(--hairline-strong);}
+.ms-brief-label{font-family:var(--mono);font-size:10px;letter-spacing:0.06em;color:var(--fg-tertiary);margin-bottom:6px;}
+.brief-body{padding:0 0 10px;font-family:var(--sans);font-size:12px;line-height:1.55;color:var(--fg-secondary);}
 .brief-chip{display:block;font-family:var(--mono);font-size:8px;color:var(--fg-dim);letter-spacing:0.05em;margin-bottom:4px;text-transform:uppercase;}
 .brief-empty{color:var(--fg-dim);font-size:11px;}
 .team-sub{font-family:var(--sans);font-size:10px;color:var(--fg-tertiary);font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;}
@@ -3704,21 +3703,17 @@ async function ensureNarrations(){
   return _ssNarr;
 }
 function briefAge(ts){if(!ts)return '';var mm=Math.round((Date.now()-new Date(ts).getTime())/60000);return mm<60?mm+'m ago':Math.round(mm/60)+'h ago';}
-function toggleBrief(gid){var cs=cardState[gid]=cardState[gid]||{};cs._briefOpen=!cs._briefOpen;renderCard(gid);}
-function briefingBlock(gid){
-  if(_ssNarr===null){ensureNarrations();return '';}   // loading or fetch error -> hidden (spec: never block card render)
+function briefingSheetHTML(gid){
+  // Sheet-embedded (P2 amendment Jul 15): pregame + live via micro-strip; card-body mount removed.
+  if(_ssNarr===null)return '<div class="ms-brief"><div class="ms-brief-label">BRIEFING</div><div class="brief-empty">loading\u2026</div></div>';
   var rows=_ssNarr.filter(function(x){return x.game_id===gid;});
   var byNew=function(a,b){return new Date(b.created_at||b.ts||0)-new Date(a.created_at||a.ts||0);};
   var brief=rows.filter(function(x){return x.alert_subtype==='GAME_BRIEF';}).sort(byNew)[0]||null;
   var narr=rows.filter(function(x){return x.alert_subtype!=='GAME_BRIEF';}).sort(byNew)[0]||null;
   var entries=[narr,brief].filter(Boolean);   // fired narration above the pregame brief
-  var cs=cardState[gid]||{};var open=!!cs._briefOpen;
-  var meta=entries[0]?esc(((entries[0].alert_subtype==='GAME_BRIEF'?'brief':entries[0].alert_subtype)||'').replace(/_/g,' ').toLowerCase())+' \u00b7 '+briefAge(entries[0].created_at||entries[0].ts):'no brief yet';
-  var html='<div class="brief-block"><div class="brief-head" onclick="toggleBrief(\''+gid+'\')"><span>BRIEFING</span><span class="brief-meta">'+meta+(open?' \u25be':' \u25b8')+'</span></div>';
-  if(open){
-    if(!entries.length)html+='<div class="brief-body brief-empty">No brief yet</div>';
-    else entries.forEach(function(e){html+='<div class="brief-body"><span class="brief-chip">'+esc(((e.alert_subtype||'').replace(/_/g,' '))+(e.alert_tier&&e.alert_tier!=='BRIEF'?' \u00b7 '+e.alert_tier:''))+'</span>'+esc(e.narration_text).replace(/\n/g,'<br>')+'</div>';});
-  }
+  var html='<div class="ms-brief"><div class="ms-brief-label">BRIEFING</div>';
+  if(!entries.length)html+='<div class="brief-empty">No brief yet \u2014 seeds at first live poll</div>';
+  else entries.forEach(function(e){html+='<div class="brief-body"><span class="brief-chip">'+esc(((e.alert_subtype||'').replace(/_/g,' '))+(e.alert_tier&&e.alert_tier!=='BRIEF'?' \u00b7 '+e.alert_tier:''))+' \u00b7 '+briefAge(e.created_at||e.ts)+'</span>'+esc(e.narration_text).replace(/\n/g,'<br>')+'</div>';});
   return html+'</div>';
 }
 
@@ -3828,6 +3823,7 @@ function ctxStrip(gid,hA,aA){
 function closeMatchupSheet(){var el=document.getElementById('msOverlay');if(el)el.remove();}
 async function openMatchupSheet(gid){
   var map=await ensureTeamProfiles();
+  await ensureNarrations();   // brief present on open, pregame included
   var g=games.find(function(x){return x.id===gid;});if(!g)return;
   var hA=g.home?.alias||g.homeAlias||g.home_alias,aA=g.away?.alias||g.awayAlias||g.away_alias;
   var d=prepMatchupData(hA,aA,map);
@@ -3858,6 +3854,7 @@ async function openMatchupSheet(gid){
     +'<div class="ms-sheet"><div class="ms-head"><span>MATCHUP SHEET</span><span class="ms-x" onclick="closeMatchupSheet()">\u00d7</span></div>'
     +'<div class="ms-grid">'+col(d.away,aA,'a')+col(d.home,hA,'h')+'</div>'
     +'<div class="ms-h2h">'+h2hLine+'</div>'
+    +briefingSheetHTML(gid)
     +'<div class="ms-foot">season priors \u2014 direction, not probabilities \u00b7 TO margin + = forces more than commits'+(age!=null?' \u00b7 updated '+age+'h ago':'')+'</div>'
     +'</div></div>';
   document.body.insertAdjacentHTML('beforeend',sheet);
@@ -4282,7 +4279,6 @@ function renderScoringCompSection(id,cs,hA,aA){
 
   // ── SS VERDICT BOX (spec §2 — top of section; server-authoritative) ──
   html+=renderSSVerdictBox(id,cs,hA,aA);
-  html+=briefingBlock(id);   // BRIEFING (TEAM_CTX_SURFACING P2)
 
   html+=scoringBar(h,sc.period);
   html+=scoringBar(a,sc.period);
