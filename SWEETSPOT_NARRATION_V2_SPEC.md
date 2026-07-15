@@ -107,9 +107,10 @@ UNVERIFIED). More moving parts for latency nobody needs. Rejected unless A hits 
 ## 6. Output contract (D-5)
 
 Four parts, ≤170 words total (ntfy body; lock screens truncate but the dashboard/push
-detail shows all), plain English, every metric named in full on first use. Smoke finding:
-both models overshot a bare "<=170 words" instruction (175-183) — the prompt must state a
-~150-word TARGET with 170 as the hard ceiling, and the fixture asserts <=170 on dry-runs:
+detail shows all), plain English, every metric named in full on first use. **Word budget
+(PM Jul 14, supersedes <=170):** prompt gives Fable a RANGE — "aim for 150-190 words so
+relevant info fits; 200 is a hard cap." Fixture asserts <=200 on dry-runs. Overshooting
+the old 170 line is fine; clipping relevant context to hit it is not:
 
 1. Why the lead is fragile at the TEAM level — now with texture (how it was built,
    quarter flow, shot-type split, leader sust tier).
@@ -173,13 +174,14 @@ shape); (2) the season lens: both identities via profile reads, H2H, form heat; 
 would change it: "the system speaks up if <trailer-shape> falls behind by 1-9 with the
 gap holding." Never price guidance, never a lean — context without action implication.
 
-**Trigger options:**
-- (a) On-demand: `?ss_brief=<gameId>` endpoint / dashboard tap → push. Zero noise; needs a tap.
-- (b) RECOMMENDED — Auto-brief at first live poll of each WNBA game, own flag
-  `WNBA_GAME_BRIEF_ON=1`: slate is 1-6 games/day, ~$0.03 each; delivers the lens exactly
-  when watching starts; killable independently if it turns out noisy. Reuses the entire
-  narration plumbing (tail sweep, Fable caller, composeTeamContext) — ~40 extra lines.
-- (c) Proximity-triggered (deficit band entered, gap sub-threshold): more machinery,
-  fuzzy boundary, deferred unless (b) proves noisy.
-
-Awaiting PM pick before build; (b) ships inside the V2 build if approved.
+**APPROVED (PM Jul 14): (a) AND (b) both ship.**
+- (b) Auto-brief at first live poll of each WNBA game, flag `WNBA_GAME_BRIEF_ON=1` —
+  the reference-able history stream. Persisted as `sweetspot_alerts` rows with
+  `alert_subtype='GAME_BRIEF'` (existing per-game dedup PK = auto once-per-game;
+  fade-specific columns null like ledger rows; text in `narration_text`) — readable via
+  `get_sweetspot_alerts`, dashboard-renderable later.
+- (a) On-demand: `?ss_brief=<gameId>` on the poll function (diag-style early-exit param,
+  no full poll cycle). Regenerates with current score/period line when live, REPLACES the
+  stored `narration_text`, re-pushes. Works whether or not the auto-brief already fired.
+- (c) rejected unless (b) proves noisy.
+Brief word budget: ~90-word target, 120 hard cap (briefs stay shorter than fire narrations).
