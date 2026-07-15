@@ -214,6 +214,14 @@ function* dateRange(from, to) {
   while (d <= end) { yield d.toISOString().slice(0, 10); d.setUTCDate(d.getUTCDate() + 1); }
 }
 
+// Canonical BDL roster aliases (15 teams as of 2026). All-Star/exhibition sides
+// (WNBASTARS/USA 2024, CLA/COL 2025 — Team Clark/Team Collier) arrive from BDL as
+// status='post' games; one 1-game phantom alias drops minGames to 1 and flips
+// tiers.insufficient=true on EVERY live profile, silently suppressing tier splits
+// in composeTeamContext. Failure mode is deliberate: a future expansion alias
+// missing here is EXCLUDED (filtered, data preserved) — never deleted.
+export const CANONICAL_ALIASES = new Set(['ATL','CHI','CON','DAL','GS','IND','LA','LV','MIN','NY','PHX','POR','SEA','TOR','WSH']);
+
 async function discoverFinalizedGames(dates) {
   // BDL /wnba/v1/games?dates[]=… — status 'post'/'Final' marks finalized; scores are NULL
   const found = {};
@@ -224,12 +232,17 @@ async function discoverFinalizedGames(dates) {
     const j = await r.json();
     for (const g of j.data || []) {
       if (!/post|final/i.test(String(g.status))) continue;
+      const home = g.home_team?.abbreviation, away = g.visitor_team?.abbreviation;
+      if (!CANONICAL_ALIASES.has(home) || !CANONICAL_ALIASES.has(away)) {
+        log(`skip non-canonical ${away}@${home} (bdl ${g.id})`);   // All-Star / exhibition guard
+        continue;
+      }
       found[g.id] = {
         bdlId: g.id,
         season: N(g.season),
         date: slateDateFromBdl(g.date),
-        home: g.home_team?.abbreviation,
-        away: g.visitor_team?.abbreviation,
+        home,
+        away,
       };
     }
   }
@@ -432,9 +445,24 @@ export default async function handler(req) {
     }
   }
 
+  // One-time opt-in cleanup of phantom-alias rows (explicit param — never automatic,
+  // so a forgotten future expansion alias can only be filtered, not destroyed)
+  let purged = null;
+  if (url.searchParams.get('purge_noncanonical') === '1' && !isDry) {
+    const canon = [...CANONICAL_ALIASES];
+    const d1 = await sql`DELETE FROM team_game_stats WHERE league = ${league}
+      AND (NOT (team_alias = ANY(${canon})) OR NOT (opp_alias = ANY(${canon}))) RETURNING game_id`;
+    const d2 = await sql`DELETE FROM team_profiles WHERE league = ${league}
+      AND NOT (team_alias = ANY(${canon})) RETURNING team_alias`;
+    purged = { team_game_stats: d1.length, team_profiles: d2.map((r) => r.team_alias) };
+    log(`purged ${d1.length} team_game_stats rows, ${d2.length} team_profiles rows`);
+  }
+
   // Recompute all profiles for the league-season (spec §4 step 4)
   let teamsUpdated = 0, season = Number(url.searchParams.get('season')) || 2026;
-  const allRows = await sql`SELECT * FROM team_game_stats WHERE league = ${league} AND season = ${season}`;
+  const allRowsRaw = await sql`SELECT * FROM team_game_stats WHERE league = ${league} AND season = ${season}`;
+  // Belt-and-suspenders: recompute never sees non-canonical aliases even if rows exist
+  const allRows = allRowsRaw.filter((r) => CANONICAL_ALIASES.has(r.team_alias) && CANONICAL_ALIASES.has(r.opp_alias));
   if (allRows.length > 0) {
     const profiles = computeProfiles(allRows);
     if (!isDry) {
@@ -456,7 +484,7 @@ export default async function handler(req) {
 
   return new Response(JSON.stringify({
     ok: true, league, season, dates: [dates[0], dates[dates.length - 1]],
-    discovered, skippedExisting, ingested, teamsUpdated, dry: isDry,
+    discovered, skippedExisting, ingested, teamsUpdated, purged, dry: isDry,
   }));
 }
 
