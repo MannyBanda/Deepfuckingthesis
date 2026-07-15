@@ -63,3 +63,41 @@ the usage playbook + composeTeamContext narrative.
   remaining open mechanism from the Jul 12 doc is **availability-adjusted** strength (injury
   layer, §4c direction) — different data, still legal.
 - Caches: /tmp/xgb_export.json, /tmp/tgs.json, /tmp/honest_gap_spots.json.
+
+## Addendum (same day): small-gap conditional lever test — ALSO REJECTED
+
+**Hypothesis (Manny):** profile levers (eFGd, TOm, vs-Top, top-eFGd, vs-Rest, Infl) may add
+accuracy where G0 is uninformative — |gap| < .15, the NO EDGE zone — possibly as their own
+watchlist criteria. Legitimately distinct from the global test (conditional, not replacement).
+
+**Pre-registered:** pool = |g0| < .15 (PROBE threshold, principled); levers as trailer−leader
+deltas (Infl = leader_infl − trailer_infl); pass = in-pool AUC ≥ 0.58 AND both-season
+directional consistency; passers validate on 2026 live spots (2026 never used for derivation).
+
+**Pool:** n=281 (2024=104, 2025=177), base trailer-win 36.3%. MED-LOW power.
+
+| lever | AUC | 2024 | 2025 |
+|---|---|---|---|
+| g0 residual (control) | 0.569 | 0.694 | 0.502 |
+| L_vsrest | 0.571 | 0.651 | 0.528 |
+| L_efgd | 0.511 | 0.650 | **0.426 (inverts)** |
+| L_vstop | 0.497 | 0.538 | 0.485 |
+| L_infl | 0.485 | 0.486 | 0.482 |
+| L_topefgd | 0.470 | 0.569 | **0.403 (inverts)** |
+| L_tom | 0.462 | 0.502 | 0.444 |
+
+1. **Nothing passes.** Best lever (vs-Rest, 0.571) barely matches the residual g0 ordering it's
+   mostly a re-expression of, and is season-inconsistent.
+2. **The season-flip signature is the tell:** every lever with an apparent 2024 edge inverts or
+   collapses in 2025 (eFGd 0.650→0.426). Same noise pattern as the form study's seductive cell.
+3. **Inflation is the cleanest null in the study:** 0.486/0.482 — perfectly consistent at zero.
+4. **2025-only focus makes levers WORSE, not better** (all ≤0.53). A 2024-only derivation would
+   have shipped an inverted signal — the exact trap the both-season rule exists for.
+5. **No small-gap watchlist:** base 36.3%, best reliable cell ~42% — below break-even at
+   realistic small-deficit prices. Nothing advanced to 2026 validation.
+
+**Standing verdict extended:** profile levers add no mechanical accuracy globally OR in the
+small-gap region. They remain discretionary-sizing/narrative inputs, where the bets ledger
+already measures whether they add alpha in Manny's hands (the correct forward test, zero
+multiplicity cost). 2026-specific value ("expansion year is different") is untestable at
+current n (~50-60 small-gap spots) — revisit only with a new mechanism or next season's OOS.
