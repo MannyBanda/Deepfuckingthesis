@@ -222,6 +222,7 @@ exports.handler = async (event) => {
           edge REAL,
           kelly_size REAL,
           narration_text TEXT,
+          narration_attempts INT DEFAULT 0,
           ntfy_sent BOOLEAN DEFAULT false,
           outcome TEXT,
           pnl REAL,
@@ -590,6 +591,9 @@ exports.handler = async (event) => {
         updated_at TIMESTAMPTZ DEFAULT NOW(),
         PRIMARY KEY (team_alias, league, season)
       )`;
+
+      // NARRATION_V2 D-8 — retry counter for the tail-sweep narration
+      await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS narration_attempts INT DEFAULT 0`;
 
       // ── TEAM_PROFILES_SPEC §3a — one row per team per finalized game (BDL-canonical aliases ONLY) ──
       await sql`CREATE TABLE IF NOT EXISTS team_game_stats (

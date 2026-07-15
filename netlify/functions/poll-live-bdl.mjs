@@ -939,6 +939,9 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
     // A and B only (D-11: B keeps two-push parity). Ledger rows and WATCHLIST never narrate —
     // but both still got the Stage 1.5 digest above (carrier ledger = forward OOS feed).
     if (ss.ledgerOnly || ss.subtype === 'WATCHLIST') return;
+    // NARRATION V2 (D-4): narration deferred to the end-of-cycle tail sweep —
+    // row already has narration_text NULL + narration_attempts 0; sweep claims it.
+    if (WNBA_SS_NARRATE_V2) { log(`${aA}@${hA}: sweetspot narration deferred to tail sweep (V2)`); return; }
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return;
     try {
@@ -969,6 +972,251 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
       log(`${aA}@${hA}: sweetspot narration delivered (${narration.length} chars)`);
     } catch (e) { log(`${aA}@${hA}: sweetspot narration error: ${e.message}`); }
   } catch (e) { log(`${aA}@${hA}: fireSweetSpotAlert fatal: ${e.message}`); }
+}
+
+// ── SWEETSPOT NARRATION V2 (SWEETSPOT_NARRATION_V2_SPEC.md) ──────────────────
+// Ships DARK. WNBA_SS_NARRATE_V2=1 → A/B fire narration moves from inline Stage-2
+// to the end-of-cycle tail sweep (D-4): Fable 5 high effort, Opus 4.8 fallback on
+// 4xx/5xx/timeout/refusal (refusals are HTTP 200 + stop_reason). WNBA_GAME_BRIEF_ON=1
+// → auto GAME_BRIEF per game (D-9b) + on-demand ?ss_brief=<gameId> (D-9a).
+const WNBA_SS_NARRATE_V2 = process.env.WNBA_SS_NARRATE_V2 === '1';
+const WNBA_GAME_BRIEF_ON = process.env.WNBA_GAME_BRIEF_ON === '1';
+const SS_NARRATE_TIMEOUT_MS = 45000;
+const SS_NARRATE_BUDGET_MS = 55000;   // skip sweep if handler already past this
+var _briefSeeded = {};                 // per-warm-invocation guard; DB PK is the real dedup
+
+// Implied prob -> American ML. Edge-guaranteeing round: nudge less-negative/more-positive
+// until implied(ml) <= q, so the displayed "or longer" line always delivers >= the target edge.
+function ssImpliedToML(q) {
+  if (q == null || q <= 0.01 || q >= 0.99) return null;
+  let ml = q > 0.5 ? Math.round(-100 * q / (1 - q)) : Math.round(100 * (1 - q) / q);
+  for (let i = 0; i < 3; i++) {
+    const imp = ml > 0 ? 100 / (ml + 100) : (-ml) / ((-ml) + 100);
+    if (imp <= q + 1e-9) break;
+    ml += 1; if (ml === 0 || ml === -99) ml = 100; // skip the invalid -99..+99 gap
+  }
+  return ml;
+}
+
+// §3 price ladder — mechanical, the model NEVER does this math. PROBE_EDGE +10pp,
+// FULL_EDGE +20pp (D-3). Returns pre-formatted plain-English lines for the prompt.
+function ssPriceLadder(p, lineUsed) {
+  if (p == null) return { text: '' };
+  const fmtML = (ml) => ml == null ? '?' : (ml > 0 ? '+' + ml : String(ml));
+  const impliedNow = (lineUsed != null && lineUsed !== 0)
+    ? (Number(lineUsed) > 0 ? 100 / (Number(lineUsed) + 100) : (-Number(lineUsed)) / ((-Number(lineUsed)) + 100))
+    : null;
+  const edgeNowPP = impliedNow != null ? Math.round((p - impliedNow) * 1000) / 10 : null;
+  const probeLine = ssImpliedToML(p - 0.10);
+  const fullLine = ssImpliedToML(p - 0.20);
+  let text = 'PRICE LADDER (pre-computed — weave into the price paragraph, never recompute):\n';
+  if (edgeNowPP != null) {
+    text += `- At the captured price (${fmtML(Number(lineUsed))}) the edge is ${edgeNowPP >= 0 ? '+' : ''}${edgeNowPP.toFixed(1)} points${edgeNowPP >= 10 ? ' — already probe territory or better' : edgeNowPP >= 3 ? ' — above the minimum bar but thin' : ' — below the bet bar'}.\n`;
+  }
+  text += `- Probe territory (small stake): ${fmtML(probeLine)} or longer.\n`;
+  text += `- Full tier size: ${fmtML(fullLine)} or longer.\n`;
+  return { edgeNowPP, probeLine, fullLine, text };
+}
+
+// §6 output contract — 4 parts, 150-190 word target, 200 hard cap (PM Jul 14).
+// PURE (fixture-extracted): all context arrives via `blocks`, already-formatted strings.
+function ssBuildNarrationPrompt(row, blocks) {
+  const b = blocks || {};
+  const pct = (v, d = 0) => v == null ? '?' : (Number(v) * 100).toFixed(d);
+  const tier = row.alert_subtype === 'EFG_FADE' ? 'A-tier' : 'B-tier';
+  return `You are the narration layer of a live WNBA betting intelligence system. A SWEET SPOT ${tier} alert ALREADY fired and the bettor received the mechanical push — never re-decide, never contradict it. Your job is the WHY, for a bettor, in plain English.\n\n`
+    + `FIRE: ${row.trailer_alias} trailing ${row.leader_alias} by ${row.margin}, Q${row.period} ${row.clock}.\n`
+    + `- Leader shooting heat: effective field-goal percentage ${row.leader_efg != null ? Math.round(row.leader_efg) : '?'}% (${row.leader_efg_band || '?'} band), variance share ${row.variance_share != null ? Math.round(row.variance_share) : '?'}% of the lead from three-pointers and midrange (lead class ${row.lead_class || '?'}).\n`
+    + `- Quality gap: ${row.trailer_alias} season win probability ${pct(row.trailer_wp)}% vs ${row.leader_alias} ${pct(row.leader_wp)}% (gap ${row.quality_gap != null ? Number(row.quality_gap).toFixed(2) : '?'}).\n`
+    + `- Model true win probability ${pct(row.collapse_true)}% vs market implied ${pct(row.implied)}% at fire.\n\n`
+    + (b.ladderText ? b.ladderText + '\n' : '')
+    + (b.quarterFlow ? b.quarterFlow + '\n' : '')
+    + (b.snapState ? b.snapState + '\n' : '')
+    + (b.teamCtx ? b.teamCtx + '\n' : '')
+    + (b.playerCtx ? b.playerCtx + '\n' : '')
+    + `Write exactly 4 short paragraphs, aiming for 150-190 words total so the relevant information fits — 200 words is a hard cap:\n`
+    + `(1) Why ${row.leader_alias}'s lead is fragile at the TEAM level — use the quarter flow and shooting texture where available.\n`
+    + `(2) Why ${row.trailer_alias} is the better team likely to close — the structural levers they own${b.playerCtx ? ', naming their live comeback engines' : ''}.\n`
+    + `(3) Price guidance — the current edge, the probe price, and the full-size price, in plain sizing language.\n`
+    + `(4) The single biggest risk${b.playerCtx ? ' — if a STAR carrier is flagged above, this MUST be her sustaining at her norm' : ''}; include foul trouble if present; if the trailer path shows CONTESTED or BLOCK you must surface it here.\n\n`
+    + `Rules: plain English throughout; name every metric in full on first use ("quality gap", "effective field-goal percentage"), never bare abbreviations; percentages, not decimals; team names, never "they" across paragraph boundaries; never predict a specific player's shooting will collapse; never mention floor scores; never imply the leader's hot shooting is itself the predictive signal — the locked edge is quality gap plus deficit plus price.`;
+}
+
+// D-9 brief contract — 3 parts, ~90-word target, 120 hard cap, NO prices, NO lean.
+// PURE (fixture-extracted).
+function ssBuildBriefPrompt(hA, aA, ctx) {
+  const c = ctx || {};
+  return `You are the narration layer of a live WNBA betting intelligence system. No alert fired for this game — nothing here qualifies. Write a short GAME BRIEF for the bettor: the season lens, with zero action implication.\n\n`
+    + `GAME: ${aA} @ ${hA}${c.liveLine ? ` — ${c.liveLine}` : ''}.\n`
+    + `WHY NOTHING QUALIFIES: ${c.reason || 'the quality gap between these teams is too thin for the system\u2019s comeback edge'}.\n\n`
+    + (c.teamCtx ? c.teamCtx + '\n' : '')
+    + `Write exactly 3 short paragraphs, aiming for about 90 words total — 120 words is a hard cap:\n`
+    + `(1) Lead with "No position" and one plain sentence on why nothing here qualifies.\n`
+    + `(2) The season lens: both teams' identities, the head-to-head if shown, and any recent form heat.\n`
+    + `(3) What would change it: one sentence on the shape of game that would make the system speak up.\n\n`
+    + `Rules: plain English; no prices, no odds, no lean, no bet suggestion of any kind; team names throughout; if the context block is missing, say the season lens is unavailable rather than inventing one.`;
+}
+
+// Model caller — output_config.effort verified on BOTH fable-5 and opus-4-8 (smoke Jul 14):
+// fallback is a model-string swap on an identical request. Filters type==='text' (Fable
+// prepends a thinking block). Refusal = HTTP 200 + stop_reason 'refusal' → treated as failure.
+async function ssCallNarration(prompt, model, timeoutMs) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return { ok: false, error: 'no api key' };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs || SS_NARRATE_TIMEOUT_MS);
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model, max_tokens: 2500, output_config: { effort: 'high' }, messages: [{ role: 'user', content: prompt }] }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) return { ok: false, error: `http ${resp.status}: ${(data.error?.message || '').slice(0, 160)}` };
+    if (data.stop_reason === 'refusal') return { ok: false, error: 'refusal (stop_reason)' };
+    const text = (data.content || []).filter((x) => x.type === 'text').map((x) => x.text).join('\n').trim();
+    if (!text || text.length < 20) return { ok: false, error: 'empty text' };
+    return { ok: true, text, stopReason: data.stop_reason };
+  } catch (e) {
+    return { ok: false, error: e.name === 'AbortError' ? 'timeout' : e.message };
+  } finally { clearTimeout(timer); }
+}
+
+// Gather sweep-time context blocks for a fire row. Sources are PERSISTED state (the
+// fire-site locals are gone at sweep time — spec §2 parity content, rebuilt from storage):
+// alert row, player_ctx_json, latest snapshot, games.quarter_data, composeTeamContext.
+// Every block optional; each degrades to ''. Floor score deliberately never passed (§2 exclusion).
+async function ssGatherNarrationBlocks(sql, row) {
+  const blocks = { teamCtx: '', playerCtx: '', quarterFlow: '', snapState: '', ladderText: '' };
+  const norm = (al) => ((LEAGUES.wnba && LEAGUES.wnba.aliasMap) || {})[al] || al;
+  let hA = null, aA = null;
+  try {
+    const g = await sql`SELECT home_alias, away_alias, quarter_data FROM games WHERE id = ${row.game_id}`;
+    if (g[0]) {
+      hA = norm(g[0].home_alias); aA = norm(g[0].away_alias);
+      await ensureTeamCtx(sql, 'wnba');
+      blocks.teamCtx = composeTeamContext(hA, aA, 'wnba');
+      // quarter flow — proven quarter_data.diffs reader (formatSonnetPrompt pattern)
+      try {
+        let qd = g[0].quarter_data;
+        if (typeof qd === 'string') qd = JSON.parse(qd);
+        const diffs = qd && qd.diffs;
+        if (diffs) {
+          const qs = Object.keys(diffs).map(Number).filter((n) => !isNaN(n)).sort((a, b) => a - b);
+          const lines = [];
+          for (const q of qs) {
+            const d = diffs[q]; if (!d || !d.home || !d.away) continue;
+            const hp = d.home.points != null ? d.home.points : '?', ap = d.away.points != null ? d.away.points : '?';
+            lines.push(`Q${q}: ${hA} ${hp} - ${aA} ${ap} (3P ${hA} ${d.home.three_points_made || 0}/${d.home.three_points_att || 0}, ${aA} ${d.away.three_points_made || 0}/${d.away.three_points_att || 0})`);
+          }
+          if (lines.length) blocks.quarterFlow = `QUARTER FLOW (how the lead was built):\n${lines.join('\n')}\n`;
+        }
+      } catch (e) { /* omit */ }
+    }
+  } catch (e) { log(`narration blocks: game fetch — ${e.message}`); }
+  // player context — recompose from persisted digest (FRAMING RULES travel inside)
+  try {
+    if (row.player_ctx_json) {
+      const dg = typeof row.player_ctx_json === 'string' ? JSON.parse(row.player_ctx_json) : row.player_ctx_json;
+      const composed = ssComposeCtxBlock(dg);
+      if (composed && composed.text) blocks.playerCtx = composed.text;
+    }
+  } catch (e) { /* omit */ }
+  // live structural state — latest snapshot, isolated SELECT; floor_score EXCLUDED by design
+  try {
+    const sn = await sql`SELECT i1, i2, i3, i4, i5, floor_team, sust_json, tp_class, ls_class,
+        xgb_win_prob, mc_cum_win_prob, xgb_shap, period, clock
+      FROM snapshots WHERE game_id = ${row.game_id} ORDER BY id DESC LIMIT 1`;
+    if (sn[0]) {
+      const s = sn[0];
+      let sustLine = '';
+      try {
+        let sj = typeof s.sust_json === 'string' ? JSON.parse(s.sust_json) : s.sust_json;
+        if (sj && (sj.home || sj.away)) sustLine = ` | sustainability: ${hA || 'home'} ${sj.home?.tier || '?'}, ${aA || 'away'} ${sj.away?.tier || '?'}`;
+      } catch (e) { /* omit */ }
+      let shapLine = '';
+      try {
+        let sh = typeof s.xgb_shap === 'string' ? JSON.parse(s.xgb_shap) : s.xgb_shap;
+        if (Array.isArray(sh) && sh.length) shapLine = ` | top structural drivers: ${sh.slice(0, 3).map((x) => x.f).join(', ')}`;
+      } catch (e) { /* omit */ }
+      blocks.snapState = `LIVE STATE (as of Q${s.period} ${s.clock}, control team ${s.floor_team || '?'}): `
+        + `indicator reads I1-I5 (control-relative) ${[s.i1, s.i2, s.i3, s.i4, s.i5].map((v) => v != null ? Number(v).toFixed(1) : '?').join('/')}`
+        + ` | trailer comeback path (TP): ${s.tp_class || '?'} | leader safety (LS): ${s.ls_class || '?'}`
+        + ` | structural model (XGB) ${s.xgb_win_prob != null ? (s.xgb_win_prob * 100).toFixed(0) + '%' : '?'}`
+        + ` | Monte Carlo cumulative ${s.mc_cum_win_prob != null ? (s.mc_cum_win_prob * 100).toFixed(0) + '%' : '?'}`
+        + sustLine + shapLine + `\n`;
+    }
+  } catch (e) { log(`narration blocks: snapshot fetch — ${e.message}`); }
+  blocks.ladderText = ssPriceLadder(row.collapse_true != null ? Number(row.collapse_true) : null, row.line_used).text;
+  return { blocks, hA, aA };
+}
+
+// End-of-cycle tail sweep (D-4): claims at most ONE pending row per invocation —
+// fire narrations first (A/B only, D-7), then GAME_BRIEF rows. Lock row guards
+// concurrent cron invocations (hotfix #11). attempts 0-1 → Fable; attempt 3 (attempts==2)
+// → Opus 4.8 so narration always lands by ~T+3min worst case.
+async function ssNarrationSweep(sql, startTime) {
+  if (!WNBA_SS_NARRATE_V2 && !WNBA_GAME_BRIEF_ON) return;
+  if (Date.now() - startTime > SS_NARRATE_BUDGET_MS) { log('narration sweep: skipped (budget)'); return; }
+  let locked = false;
+  try {
+    const ins = await sql`INSERT INTO job_locks (job, ts) VALUES (${'ss-narration'}, NOW()) ON CONFLICT (job) DO NOTHING RETURNING job`;
+    if (ins.length === 0) {
+      const stale = await sql`UPDATE job_locks SET ts = NOW() WHERE job = ${'ss-narration'} AND ts < NOW() - INTERVAL '3 minutes' RETURNING job`;
+      if (stale.length === 0) return; // held by a live concurrent invocation
+    }
+    locked = true;
+
+    let row = null, isBrief = false;
+    if (WNBA_SS_NARRATE_V2) {
+      const r = await sql`SELECT * FROM sweetspot_alerts
+        WHERE league = ${'wnba'} AND alert_subtype IN ('EFG_FADE', 'EFG_FADE_SOFT')
+          AND ntfy_sent = true AND narration_text IS NULL AND COALESCE(narration_attempts, 0) < 3
+        ORDER BY id ASC LIMIT 1`;
+      row = r[0] || null;
+    }
+    if (!row && WNBA_GAME_BRIEF_ON) {
+      const r = await sql`SELECT * FROM sweetspot_alerts
+        WHERE league = ${'wnba'} AND alert_subtype = ${'GAME_BRIEF'}
+          AND narration_text IS NULL AND COALESCE(narration_attempts, 0) < 3
+        ORDER BY id ASC LIMIT 1`;
+      row = r[0] || null; isBrief = row != null;
+    }
+    if (!row) return;
+
+    const attempts = Number(row.narration_attempts) || 0;
+    const model = attempts >= 2 ? 'claude-opus-4-8' : 'claude-fable-5';
+    const remaining = SS_NARRATE_BUDGET_MS + 60000 - (Date.now() - startTime); // hard function ceiling guard
+    const timeoutMs = Math.max(10000, Math.min(SS_NARRATE_TIMEOUT_MS, remaining - 5000));
+
+    const { blocks, hA, aA } = await ssGatherNarrationBlocks(sql, row);
+    let prompt, title, priority;
+    if (isBrief) {
+      const liveLine = row.period ? `currently Q${row.period} ${row.clock || ''}` : '';
+      prompt = ssBuildBriefPrompt(hA || '?', aA || '?', { teamCtx: blocks.teamCtx, liveLine });
+      title = `GAME BRIEF ${aA || '?'} at ${hA || '?'}`;
+      priority = 2;
+    } else {
+      prompt = ssBuildNarrationPrompt(row, blocks);
+      title = `SWEET SPOT - why ${row.trailer_alias}`;
+      priority = 4;
+    }
+
+    const res = await ssCallNarration(prompt, model, timeoutMs);
+    if (res.ok) {
+      await sql`UPDATE sweetspot_alerts SET narration_text = ${res.text}, narration_attempts = ${attempts + 1}, ntfy_sent = true WHERE id = ${row.id}`;
+      await sendNtfy(title, res.text, priority, SS_DASH_URL);
+      log(`narration sweep: ${isBrief ? 'brief' : row.alert_subtype} row ${row.id} delivered via ${model} (${res.text.length} chars, attempt ${attempts + 1})`);
+    } else {
+      await sql`UPDATE sweetspot_alerts SET narration_attempts = ${attempts + 1} WHERE id = ${row.id}`;
+      log(`narration sweep: row ${row.id} attempt ${attempts + 1} failed via ${model} — ${res.error}`);
+    }
+  } catch (e) {
+    log(`narration sweep fatal (non-blocking): ${e.message}`);
+  } finally {
+    if (locked) { try { await sql`DELETE FROM job_locks WHERE job = ${'ss-narration'}`; } catch (e) { /* stale takeover covers */ } }
+  }
 }
 
 // ── ALERT REASONING AGENT ────────────────────────────────────────────────
@@ -6730,6 +6978,59 @@ export default async function(req) {
   }
   const sql = neon(dbUrl);
 
+  // ── NARRATION V2 on-demand brief (D-9a): ?ss_brief=<gameId> — generate NOW, upsert
+  // GAME_BRIEF row (replaces stored text on regenerate), push, return JSON. Blocking is
+  // fine: manual invocation, not the cron path.
+  if (url.searchParams.get('ss_brief')) {
+    const gameId = url.searchParams.get('ss_brief');
+    try {
+      const g = await sql`SELECT id, home_alias, away_alias FROM games WHERE id = ${gameId} AND league = ${'wnba'}`;
+      if (!g[0]) return new Response(JSON.stringify({ ok: false, error: 'game not found (wnba)' }), { status: 404 });
+      const norm = (al) => ((LEAGUES.wnba && LEAGUES.wnba.aliasMap) || {})[al] || al;
+      const hA = norm(g[0].home_alias), aA = norm(g[0].away_alias);
+      await ensureTeamCtx(sql, 'wnba');
+      // live line: latest snapshot if the game is underway
+      let liveLine = '';
+      try {
+        const sn = await sql`SELECT period, clock, home_pts, away_pts FROM snapshots WHERE game_id = ${gameId} ORDER BY id DESC LIMIT 1`;
+        if (sn[0]) liveLine = `currently ${aA} ${sn[0].away_pts} - ${hA} ${sn[0].home_pts}, Q${sn[0].period} ${sn[0].clock}`;
+      } catch (e) { /* pregame */ }
+      const prompt = ssBuildBriefPrompt(hA, aA, { teamCtx: composeTeamContext(hA, aA, 'wnba'), liveLine });
+      const res = await ssCallNarration(prompt, 'claude-fable-5', SS_NARRATE_TIMEOUT_MS);
+      const out = res.ok ? res : await ssCallNarration(prompt, 'claude-opus-4-8', SS_NARRATE_TIMEOUT_MS);
+      if (!out.ok) return new Response(JSON.stringify({ ok: false, error: out.error }), { status: 502 });
+      await sql`INSERT INTO sweetspot_alerts (game_id, league, alert_subtype, alert_tier, narration_text, narration_attempts, ntfy_sent)
+        VALUES (${gameId}, ${'wnba'}, ${'GAME_BRIEF'}, ${'BRIEF'}, ${out.text}, ${1}, ${true})
+        ON CONFLICT (game_id, alert_subtype) DO UPDATE SET narration_text = EXCLUDED.narration_text,
+          narration_attempts = COALESCE(sweetspot_alerts.narration_attempts, 0) + 1, ntfy_sent = true`;
+      await sendNtfy(`GAME BRIEF ${aA} at ${hA}`, out.text, 2, SS_DASH_URL);
+      return new Response(JSON.stringify({ ok: true, gameId, brief: out.text }), { headers: { 'Content-Type': 'application/json' } });
+    } catch (e) {
+      return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500 });
+    }
+  }
+
+  // ── NARRATION V2 dry-run (§8): ?ss_narrate_test=<rowId> — full pipeline on a historical
+  // row, NO push, NO DB write. Returns the assembled prompt + model output for review.
+  if (url.searchParams.get('ss_narrate_test')) {
+    const rowId = parseInt(url.searchParams.get('ss_narrate_test'));
+    try {
+      const r = await sql`SELECT * FROM sweetspot_alerts WHERE id = ${rowId}`;
+      if (!r[0]) return new Response(JSON.stringify({ ok: false, error: 'row not found' }), { status: 404 });
+      const { blocks } = await ssGatherNarrationBlocks(sql, r[0]);
+      const prompt = ssBuildNarrationPrompt(r[0], blocks);
+      const t0 = Date.now();
+      const model = url.searchParams.get('model') || 'claude-fable-5';
+      const res = await ssCallNarration(prompt, model, SS_NARRATE_TIMEOUT_MS);
+      return new Response(JSON.stringify({ ok: res.ok, rowId, model, latencyMs: Date.now() - t0,
+        wordCount: res.ok ? res.text.split(/\s+/).filter(Boolean).length : null,
+        error: res.error || null, narration: res.text || null, prompt }, null, 2),
+        { headers: { 'Content-Type': 'application/json' } });
+    } catch (e) {
+      return new Response(JSON.stringify({ ok: false, error: e.message }), { status: 500 });
+    }
+  }
+
   // ── SWEET-SPOT 2b FORCED TEST (TEMPORARY — remove after verifying the live path) ──
   // ?ss_force_test=1 fires ONE synthetic A alert end-to-end; ?ss_force_clear=1 deletes the test row.
   if (url.searchParams.get('ss_force_clear') === '1') {
@@ -8436,6 +8737,18 @@ export default async function(req) {
             ON CONFLICT (game_id, period, clock, home_pts, away_pts) DO NOTHING
           `;
           log(`${matchup}: snapshot saved — floor:${ind.score} I1-5:${_ci[0]},${_ci[1]},${_ci[2]},${_ci[3]},${_ci[4]} tp:${snapTp?.classification||'-'} ls:${snapLs?.classification||'-'} xgb:${_xgbWinProb != null ? _xgbWinProb.toFixed(3) : '-'}`);
+
+          // GAME_BRIEF seed (NARRATION_V2 D-9b) — first live poll of each WNBA game.
+          // In-memory guard per warm invocation; the (game_id, alert_subtype) PK is the
+          // real dedup. Row lands with narration_text NULL -> tail sweep narrates + pushes.
+          if (WNBA_GAME_BRIEF_ON && league === 'wnba' && !_briefSeeded[game.id]) {
+            try {
+              await sql`INSERT INTO sweetspot_alerts (game_id, league, alert_subtype, alert_tier, period, clock, ntfy_sent)
+                VALUES (${game.id}, ${league}, ${'GAME_BRIEF'}, ${'BRIEF'}, ${currentPeriod}, ${clock}, ${false})
+                ON CONFLICT (game_id, alert_subtype) DO NOTHING`;
+              _briefSeeded[game.id] = true;
+            } catch (e) { log(`${matchup}: brief seed non-fatal: ${e.message}`); }
+          }
 
           // Save odds to odds_history table if we got data
           if (odds) {
@@ -10340,6 +10653,10 @@ export default async function(req) {
     await Promise.all(pendingAnalyses);
     log(`All Sonnet analyses complete.`);
   }
+
+  // NARRATION V2 tail sweep (D-4) — after ALL snapshot/alert/state work has committed.
+  // Claims at most one pending narration/brief row; never blocks the heartbeat.
+  try { await ssNarrationSweep(sql, startTime); } catch (e) { log(`narration sweep outer: ${e.message}`); }
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   if (results.snapshots > 0 || results.errors.length > 0) {
