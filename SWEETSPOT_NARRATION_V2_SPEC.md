@@ -65,14 +65,21 @@ into a price target, matching how the position is actually traded (tonight: decl
 
 ## 4. Model — Fable 5 at high effort (D-1)
 
-First Fable call site in DFT (verified: every current agent call is `claude-opus-4-8`;
-generate-thesis is legacy Sonnet). Proposed: `claude-fable-5`, high effort, max_tokens
-sized for a thinking budget + ~200-word output. **Build-time smoke test required** (§8):
-verify exact request shape (effort parameter naming, any beta headers) against the live
-API via a test-agent.js-style script before wiring — do not trust recalled API shapes.
-Fallback: on 4xx/5xx or timeout, retry once with `claude-opus-4-8` and the same prompt
-(narration must degrade, never die silently). Cost note: A+B fire volume is low
-(single-digit rows/night league-wide); Fable-at-effort per fire is negligible spend.
+First Fable call site in DFT. **Smoke test PASSED (Jul 14, test-fable.mjs — kept as a
+permanent harness).** Operative facts for the request builder:
+- Model `claude-fable-5`, effort via `output_config: {effort: 'high'}` — Opus 4.8
+  accepts the IDENTICAL shape, so fallback = swap the model string, nothing else.
+- Fable prepends a thinking block (empty by default) before text: extraction MUST
+  filter `content` for `type === 'text'` — never index `content[0]`.
+- Measured latency on a narration-shaped prompt: 10.7s Fable high / 8.4s Opus (the
+  §5 45s timeout has ~4x headroom; same-cycle is the common case by a wide margin).
+- max_tokens 2500 (thinking tokens bill as output; observed 93 thinking + ~350 text).
+- Cost ~$0.03/narration at A+B volume — negligible.
+
+**Fallback triggers (retry once on `claude-opus-4-8`, same prompt):** 4xx/5xx, timeout,
+AND `stop_reason === 'refusal'` — refusals return HTTP 200 (smoke-test finding; betting
+content didn't trip classifiers and shouldn't, but a refusal must never pass silently as
+an empty narration). Narration must degrade, never die silently.
 
 ## 5. Timing architecture — deferred narration (D-4, recommendation: next-cycle pickup)
 
@@ -100,7 +107,9 @@ UNVERIFIED). More moving parts for latency nobody needs. Rejected unless A hits 
 ## 6. Output contract (D-5)
 
 Four parts, ≤170 words total (ntfy body; lock screens truncate but the dashboard/push
-detail shows all), plain English, every metric named in full on first use:
+detail shows all), plain English, every metric named in full on first use. Smoke finding:
+both models overshot a bare "<=170 words" instruction (175-183) — the prompt must state a
+~150-word TARGET with 170 as the hard ceiling, and the fixture asserts <=170 on dry-runs:
 
 1. Why the lead is fragile at the TEAM level — now with texture (how it was built,
    quarter flow, shot-type split, leader sust tier).
@@ -116,11 +125,13 @@ never predict a specific player's shooting collapse, team names throughout.
 
 ## 7. TEAM_PROFILES integration (D-6 — resolved per PM: spec now, build together)
 
-TEAM_PROFILES_SPEC.md (re-derived Jul 13 from the lost Jul 4 original) is the companion
-spec. Build order: profiles nightly + one backfill invocation FIRST, then narration v2's
-`TEAM CONTEXT` section consumes `composeTeamContext` output live from day one. Graceful
-degradation both directions (missing/stale profiles → section omitted) — no hard
-dependency.
+**SHIPPED upstream (Jul 14, commit 6428c2d).** The narration prompt's TEAM CONTEXT
+section is one call: `composeTeamContext(hA, aA, league)` — already loaded per cycle via
+`ensureTeamCtx`, already injected into the agent + auto-analysis prompts, degradation
+internal (returns `''` on missing/stale/wrong-league/unloaded; >36h staleness note
+self-appends; 30/30 fixtures in research/team_ctx_fixtures.mjs). Narration gets context
+parity with the rich agents for free. The smoke test confirmed the payoff: Fable folded
+the L5 [OPPONENTS_HOT] tag from this block into the invalidation paragraph unprompted.
 
 ## 8. Testing
 
@@ -149,22 +160,26 @@ Build off-slate behind `WNBA_SS_NARRATE_V2=1`. Dry-run on row 304 → compare v1
 narration side by side with PM → enable live → first-fire observation night → spec to
 `specs/shipped`.
 
-## Amendment (2026-07-14, PM directive — pre-build)
+## D-9 (OPEN — PM directive Jul 14): no-position game briefs
 
-**No-position spots still narrate context.** For qualifying-but-thin spots (e.g. FLAT-vs-FLAT
-identity, sub-band gap): the narration must SAY there is no position ("no bet here") and still
-deliver the context layer — H2H, team profile reads, form — so the subscriber gets the season
-lens without an action implication. "No position + here's what I'm seeing" is a valid and
-expected narration outcome, not a degenerate case.
+PM: "for spots like this [WSH@TOR] tell me there is no position but still give me the
+context we're building — H2H, team profiles." Note this CANNOT attach to existing fires:
+WSH@TOR fires nothing (gap .089 — no A/B/WATCHLIST), and D-7 keeps WATCHLIST silent. It
+is a new trigger surface with its own, simpler output contract:
 
-## Fable smoke test results (2026-07-14, test-fable.mjs — build inputs)
+**Brief contract (3 parts, ~90-word target / 110 ceiling, plain English):** (1) explicit
+lead: "No position — nothing here qualifies" + the one-line reason (gap too thin / wrong
+shape); (2) the season lens: both identities via profile reads, H2H, form heat; (3) what
+would change it: "the system speaks up if <trailer-shape> falls behind by 1-9 with the
+gap holding." Never price guidance, never a lean — context without action implication.
 
-PASSED. claude-fable-5 live on prod key. Effort shape: `output_config: {effort}` — accepted
-by BOTH fable-5 and opus-4-8, so the fallback is a model-string swap on an identical request
-builder. Latency on a narration-shaped prompt: 10.7s Fable high / 8.4s Opus — same-cycle
-tail-sweep design is safe. Response shape: Fable returns a thinking block (empty, omitted
-default) before text — extraction MUST filter type==='text'. stop_reason end_turn on betting
-content (classifiers target cyber/bio; refusal path is fallback-only insurance). Cost ~$0.03
-per narration. Quality: Fable folded the L5 OPPONENTS_HOT tag into the invalidation paragraph
-(the subtle risk read); Opus missed it — supports the Fable-primary decision. Both models ran
-175-183 words against a <=170 instruction: build with a firmer cap phrasing or accept ~185.
+**Trigger options:**
+- (a) On-demand: `?ss_brief=<gameId>` endpoint / dashboard tap → push. Zero noise; needs a tap.
+- (b) RECOMMENDED — Auto-brief at first live poll of each WNBA game, own flag
+  `WNBA_GAME_BRIEF_ON=1`: slate is 1-6 games/day, ~$0.03 each; delivers the lens exactly
+  when watching starts; killable independently if it turns out noisy. Reuses the entire
+  narration plumbing (tail sweep, Fable caller, composeTeamContext) — ~40 extra lines.
+- (c) Proximity-triggered (deficit band entered, gap sub-threshold): more machinery,
+  fuzzy boundary, deferred unless (b) proves noisy.
+
+Awaiting PM pick before build; (b) ships inside the V2 build if approved.
