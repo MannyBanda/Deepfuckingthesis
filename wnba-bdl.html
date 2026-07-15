@@ -79,6 +79,26 @@ input,textarea,select{font-size:16px!important;}
 .team-abbr{font-family:var(--sans);font-weight:600;font-size:15px;letter-spacing:0.03em;white-space:nowrap;display:flex;align-items:baseline;gap:4px;}
 .team.is-right .team-abbr{justify-content:flex-end;}
 .team-rank{font-size:10px;font-weight:500;color:var(--fg-tertiary);letter-spacing:0.02em;}
+.ctx-strip{display:flex;justify-content:space-between;gap:8px;align-items:center;margin:2px 0 8px;padding:6px 10px;background:var(--bg-surface-2);border:1px solid var(--hairline-strong);border-radius:var(--r-inner);font-family:var(--mono);font-size:10px;cursor:pointer;white-space:nowrap;overflow:hidden;}
+.ms-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:900;display:flex;align-items:flex-end;}
+.ms-sheet{width:100%;max-height:82vh;overflow-y:auto;background:var(--bg-surface,#111);border-top:1px solid var(--hairline-strong);border-radius:14px 14px 0 0;padding:14px 14px 22px;font-family:var(--sans);}
+.ms-head{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;letter-spacing:0.06em;color:var(--fg-tertiary);margin-bottom:10px;}
+.ms-x{font-size:18px;line-height:1;cursor:pointer;color:var(--fg-secondary);padding:0 4px;}
+.ms-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.ms-al{font-size:15px;font-weight:700;margin-bottom:2px;}
+.ms-rec{font-family:var(--mono);font-size:11px;color:var(--fg-secondary);font-weight:500;}
+.ms-arch{font-family:var(--mono);font-size:10px;color:var(--fg-secondary);margin-bottom:8px;}
+.ms-badge{padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;}
+.ms-b-inf{background:rgba(245,158,11,0.15);color:#f59e0b;}
+.ms-b-def{background:rgba(103,232,249,0.12);color:#67e8f9;}
+.ms-b-hon{background:var(--bg-surface-2);color:var(--fg-dim);}
+.ms-kv{display:flex;justify-content:space-between;font-size:11px;padding:3px 0;border-bottom:1px solid var(--hairline,rgba(255,255,255,0.06));color:var(--fg-secondary);}
+.ms-kv b{font-family:var(--mono);font-weight:600;color:var(--fg-primary);}
+.ms-tags{margin-top:5px;display:flex;gap:4px;flex-wrap:wrap;}
+.ms-tags span{font-family:var(--mono);font-size:8px;padding:1px 4px;border-radius:3px;background:var(--bg-surface-2);color:var(--fg-tertiary);}
+.ms-h2h{margin-top:12px;text-align:center;font-family:var(--mono);font-size:11px;color:var(--fg-primary);}
+.ms-foot{margin-top:8px;text-align:center;font-size:9px;color:var(--fg-dim);}
+.ms-dim{color:var(--fg-dim);font-size:9px;}
 .team-sub{font-family:var(--sans);font-size:10px;color:var(--fg-tertiary);font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;}
 .score{font-family:var(--mono);font-weight:500;font-size:28px;font-feature-settings:"tnum";letter-spacing:-0.02em;color:var(--fg-primary);white-space:nowrap;padding:0 2px;}
 .score .em-dash{color:var(--fg-dim);margin:0 3px;font-weight:400;}
@@ -509,7 +529,7 @@ ATL:'#E35205',CHI:'#72C5EB',CON:'#FB4F14',DAL:'#00A4E4',GS:'#AD96DC',
 IND:'#FFCD00',LA:'#FFC72C',LV:'#C8102E',MIN:'#78BE21',NY:'#6ECEB2',
 PHX:'#E56020',POR:'#E03C31',SEA:'#FBE122',TOR:'#6CACE4',WSH:'#E31837'
 };
-function tc(alias){var a=(alias||'').toUpperCase();return TC[ESPN_ALIAS_MAP[a]||a]||'var(--fg-primary)';}
+function tc(alias){var a=(alias||'').toUpperCase();return TC[a]||TC[ESPN_ALIAS_MAP[a]||a]||'var(--fg-primary)';}   // Jul 15: direct-first — TC is BDL-canonical, alias-map detour sent 7 teams to white
 
 // ── STATE ──
 var games = [], activeGameId = null, pollTimer = null, dateOffset = 0;
@@ -723,7 +743,7 @@ async function loadSchedule(){
     renderPills();
     await fetchEspnScoreboard();
     mountAllCards();
-    if(Object.keys(standingsCache).length===0)fetchStandings();
+    if(Object.keys(standingsCache).length===0)fetchStandings();ensureTeamProfiles();
 
     // ── Phase 2: DB hydration pipeline ──
     if(!dbReady)await initDB();
@@ -1471,15 +1491,16 @@ function renderCard(id){
   if(state==='PRE'){
     var ms=new Date(g.scheduled)-new Date();
     var h=Math.max(0,Math.floor(ms/3600000)),m=Math.max(0,Math.floor((ms%3600000)/60000));
-    html+='<div class="score-row"><div class="team"><span class="team-abbr" style="color:'+tc(aA)+'">'+esc(aA)+(aRank?'<span class="team-rank">'+ordinal(aRank.confRank)+'</span>':'')+'</span><span class="team-sub">'+esc(g.away?.name||'')+'</span></div>';
+    html+='<div class="score-row"><div class="team"><span class="team-abbr" style="color:'+tc(aA)+'">'+esc(aA)+recBadge(aA)+'</span><span class="team-sub">'+esc(g.away?.name||'')+'</span></div>';
     html+='<div class="score" style="font-size:20px;color:var(--fg-dim)">'+esc((h>0?h+'h ':'')+ m+'m')+'</div>';
-    html+='<div class="team is-right"><span class="team-abbr" style="color:'+tc(hA)+'">'+esc(hA)+(hRank?'<span class="team-rank">'+ordinal(hRank.confRank)+'</span>':'')+'</span><span class="team-sub">'+esc(g.home?.name||'')+'</span></div></div>';
+    html+='<div class="team is-right"><span class="team-abbr" style="color:'+tc(hA)+'">'+esc(hA)+recBadge(hA)+'</span><span class="team-sub">'+esc(g.home?.name||'')+'</span></div></div>';
   } else {
-    html+='<div class="score-row"><div class="team"><span class="team-abbr" style="color:'+tc(aA)+'">'+esc(aA)+(aRank?'<span class="team-rank">'+ordinal(aRank.confRank)+'</span>':'')+'</span><span class="team-sub">'+esc(g.away?.name||'')+'</span></div>';
+    html+='<div class="score-row"><div class="team"><span class="team-abbr" style="color:'+tc(aA)+'">'+esc(aA)+recBadge(aA)+'</span><span class="team-sub">'+esc(g.away?.name||'')+'</span></div>';
     html+='<div class="score">'+(g.awayPoints??'\u2014')+'<span class="em-dash">\u2014</span>'+(g.homePoints??'\u2014')+'</div>';
-    html+='<div class="team is-right"><span class="team-abbr" style="color:'+tc(hA)+'">'+esc(hA)+(hRank?'<span class="team-rank">'+ordinal(hRank.confRank)+'</span>':'')+'</span><span class="team-sub">'+esc(g.home?.name||'')+'</span></div></div>';
+    html+='<div class="team is-right"><span class="team-abbr" style="color:'+tc(hA)+'">'+esc(hA)+recBadge(hA)+'</span><span class="team-sub">'+esc(g.home?.name||'')+'</span></div></div>';
   }
   html+='</div>';
+  html+=ctxStrip(g.id,hA,aA);   // persistent micro-strip -> matchup sheet (TEAM_CTX_SURFACING P1)
 
   // ═══ ESPN WP CHART ═══
   if(state!=='PRE' && cs.espnWP){
@@ -3657,6 +3678,96 @@ function divergenceRead(sc){
 // Server-authoritative: the verdict renders from the latest snapshot's ss_ gate fields
 // (db-api get_ss_state) — never recomputed client-side. The client PBP comp feeds only
 // the two evidence lines. Copy pinned verbatim by research/ss_verdict_fixtures.mjs.
+// ═══ TEAM PROFILES store + MATCHUP SHEET (TEAM_CTX_SURFACING Phase 1, Jul 15) ═══
+// One fetch, three consumers: record badges, micro-strip, matchup sheet (analyze payload joins in P2).
+var _teamProfiles=null,_teamProfilesAt=0;
+var TEAM_PROFILES_TTL=15*60*1000;   // mirrors server ensureTeamCtx TTL
+async function ensureTeamProfiles(){
+  if(_teamProfiles&&Object.keys(_teamProfiles).length>0&&Date.now()-_teamProfilesAt<TEAM_PROFILES_TTL)return _teamProfiles;
+  try{
+    var r=await fetch(FN+'db-api?action=get_team_profiles&league=wnba&season=2026');
+    var d=await r.json();var rows=d.profiles||d.team_profiles||[];
+    var m={};rows.forEach(function(x){var p=x.profile;if(typeof p==='string'){try{p=JSON.parse(p);}catch(e){p=null;}}if(p)m[x.team_alias]={w:x.w,l:x.l,archetype:x.archetype,profile:p,updated_at:x.updated_at};});
+    if(Object.keys(m).length>0){var first=!_teamProfiles;_teamProfiles=m;_teamProfilesAt=Date.now();if(first&&activeGameId)renderCard(activeGameId);}   // never cache empty (server bug lesson, 6d01d8c)
+  }catch(e){console.log('[PROFILES] load failed',e);}
+  return _teamProfiles||{};
+}
+function recBadge(alias){var t=_teamProfiles&&_teamProfiles[alias];return t?'<span class="team-rank">'+t.w+'-'+t.l+'</span>':'';}
+
+// ── MATCHUP_SHEET_PURE_BEGIN (fixture-extracted: research/matchup_sheet_fixtures.mjs) ──
+function prepMatchupData(hA,aA,map){
+  map=map||{};
+  function side(al,opp){
+    var t=map[al];if(!t)return null;
+    var p=t.profile||{},i=p.identity||{},tr=p.tiers||{},f5=(p.form||{}).l5||null;
+    var top=tr.top||null,rest=tr.rest||null;
+    var gp=t.w+t.l,wp=gp>0?t.w/gp:null;
+    var wpT=(top&&(top.w+top.l)>=2)?top.w/(top.w+top.l):wp;
+    var wpR=(rest&&(rest.w+rest.l)>=2)?rest.w/(rest.w+rest.l):wp;
+    var infl=(wp!=null&&wpT!=null&&wpR!=null)?Math.round((wp-(0.5*wpT+0.5*wpR))*100)/100:null;
+    var badge=infl==null?null:(infl>=0.10?'INFLATED':(infl<=-0.10?'DEFLATED':'HONEST'));
+    var h=(p.h2h||{})[opp]||null;
+    return {alias:al,w:t.w,l:t.l,archetype:t.archetype||'\u2014',infl:infl,badge:badge,
+      efgd:i.efg_diff!=null?i.efg_diff:null,toMargin:i.to_margin!=null?i.to_margin:null,
+      fta:i.fta_diff!=null?i.fta_diff:null,oreb:i.oreb_diff!=null?i.oreb_diff:null,
+      top:top?{w:top.w,l:top.l,efgd:top.efg_diff!=null?top.efg_diff:null}:null,
+      rest:rest?{w:rest.w,l:rest.l}:null,insufficient:!!tr.insufficient,
+      l5:f5?{w:f5.w,l:f5.l,own:f5.own_efg_delta,opp:f5.opp_efg_delta,tags:[f5.own_tag,f5.opp_tag].filter(Boolean)}:null,
+      h2h:h?{w:h.w,l:h.l,avg:h.avg_margin}:null,updated:t.updated_at||null};
+  }
+  return {home:side(hA,aA),away:side(aA,hA)};
+}
+// ── MATCHUP_SHEET_PURE_END ──
+
+function msSigned(v,suf){if(v==null)return '\u2014';return (v>0?'+':'')+v+(suf||'');}
+function ctxStrip(gid,hA,aA){
+  var m=_teamProfiles||{};var a=m[aA],h=m[hA];
+  var inner;
+  if(!a&&!h){inner='<span style="color:var(--fg-dim)">season profiles \u2014 tap for matchup sheet</span>';ensureTeamProfiles();}
+  else{
+    var ah=a?esc(aA)+' '+a.w+'-'+a.l+' \u00b7 '+esc(a.archetype):esc(aA);
+    var hh=h?esc(h.archetype)+' \u00b7 '+h.w+'-'+h.l+' '+esc(hA):esc(hA);
+    var hz=a&&a.profile&&a.profile.h2h&&a.profile.h2h[hA];
+    var mid=hz?('H2H '+hz.w+'-'+hz.l):'H2H \u2014';
+    inner='<span style="color:'+tc(aA)+';font-weight:600">'+ah+'</span><span style="color:var(--fg-dim)">'+mid+'</span><span style="color:'+tc(hA)+';font-weight:600">'+hh+'</span>';
+  }
+  return '<div class="ctx-strip" onclick="openMatchupSheet(\''+gid+'\')">'+inner+'</div>';
+}
+function closeMatchupSheet(){var el=document.getElementById('msOverlay');if(el)el.remove();}
+async function openMatchupSheet(gid){
+  var map=await ensureTeamProfiles();
+  var g=games.find(function(x){return x.id===gid;});if(!g)return;
+  var hA=g.home?.alias||g.homeAlias||g.home_alias,aA=g.away?.alias||g.awayAlias||g.away_alias;
+  var d=prepMatchupData(hA,aA,map);
+  closeMatchupSheet();
+  function col(t,al){
+    if(!t)return '<div class="ms-col"><div class="ms-al" style="color:'+tc(al)+'">'+esc(al)+'</div><div class="ms-dim">no profile</div></div>';
+    var badgeCls=t.badge==='INFLATED'?'ms-b-inf':(t.badge==='DEFLATED'?'ms-b-def':'ms-b-hon');
+    var html='<div class="ms-col"><div class="ms-al" style="color:'+tc(t.alias)+'">'+esc(t.alias)+' <span class="ms-rec">'+t.w+'-'+t.l+'</span></div>';
+    html+='<div class="ms-arch">'+esc(t.archetype)+(t.badge?' <span class="ms-badge '+badgeCls+'">'+t.badge+(t.infl!=null?' '+msSigned(t.infl):'')+'</span>':'')+'</div>';
+    html+='<div class="ms-kv"><span>eFG diff</span><b>'+msSigned(t.efgd,'pp')+'</b></div>';
+    html+='<div class="ms-kv"><span>TO margin</span><b>'+msSigned(t.toMargin)+'</b></div>';
+    html+='<div class="ms-kv"><span>FTA</span><b>'+msSigned(t.fta)+'</b></div>';
+    html+='<div class="ms-kv"><span>OREB</span><b>'+msSigned(t.oreb)+'</b></div>';
+    html+='<div class="ms-kv"><span>vs top(&gt;.600)</span><b>'+(t.top?t.top.w+'-'+t.top.l+(t.top.efgd!=null?' ('+msSigned(t.top.efgd,'pp')+')':''):'\u2014')+(t.insufficient?' <span class="ms-dim">small-n</span>':'')+'</b></div>';
+    html+='<div class="ms-kv"><span>vs rest</span><b>'+(t.rest?t.rest.w+'-'+t.rest.l:'\u2014')+'</b></div>';
+    html+='<div class="ms-kv"><span>L5</span><b>'+(t.l5?t.l5.w+'-'+t.l5.l+' \u00b7 own '+msSigned(t.l5.own,'pp')+' \u00b7 opp '+msSigned(t.l5.opp,'pp'):'\u2014')+'</b></div>';
+    if(t.l5&&t.l5.tags.length)html+='<div class="ms-tags">'+t.l5.tags.map(function(x){return '<span>'+esc(x)+'</span>';}).join('')+'</div>';
+    return html+'</div>';
+  }
+  var h2hLine='H2H \u2014 no meetings yet';
+  if(d.away&&d.away.h2h)h2hLine='H2H: '+esc(aA)+' '+d.away.h2h.w+'-'+d.away.h2h.l+' vs '+esc(hA)+' \u00b7 avg '+msSigned(d.away.h2h.avg)+' ('+esc(aA)+' perspective)';
+  var upd=(d.home&&d.home.updated)||(d.away&&d.away.updated);
+  var age=upd?Math.round((Date.now()-new Date(upd).getTime())/3600000):null;
+  var sheet='<div id="msOverlay" class="ms-overlay" onclick="if(event.target===this)closeMatchupSheet()">'
+    +'<div class="ms-sheet"><div class="ms-head"><span>MATCHUP SHEET</span><span class="ms-x" onclick="closeMatchupSheet()">\u00d7</span></div>'
+    +'<div class="ms-grid">'+col(d.away,aA)+col(d.home,hA)+'</div>'
+    +'<div class="ms-h2h">'+h2hLine+'</div>'
+    +'<div class="ms-foot">season priors \u2014 direction, not probabilities \u00b7 TO margin + = forces more than commits'+(age!=null?' \u00b7 updated '+age+'h ago':'')+'</div>'
+    +'</div></div>';
+  document.body.insertAdjacentHTML('beforeend',sheet);
+}
+
 var _ssStateCache={};    // gameId -> { data:{snapshot,game,subtypes}, fetchedAt }
 var _ssLedgerCache=null; // subtype -> n_resolved (ss_ledger_summary, once per session)
 var _ssVerdictTimer=null;
@@ -3986,7 +4097,7 @@ function renderSSVerdictBox(id,cs,hA,aA){
   if(!entry)fetchSSState(id); // render-miss kick — async, in-flight-guarded; lands + re-renders in <1s instead of waiting for the 60s timer
   var g=games.find(function(x){return x.id===id;});
   var sc=cs.scoringComp;
-  var html='<div style="margin-bottom:10px;padding:9px 11px;background:var(--bg-surface-2);border:1px solid var(--hairline-strong);border-radius:var(--r-inner);font-family:var(--sans);font-size:12px;line-height:1.55;color:var(--fg-secondary)">';
+  var html='<div onclick="openMatchupSheet(\''+id+'\')" style="cursor:pointer;margin-bottom:10px;padding:9px 11px;background:var(--bg-surface-2);border:1px solid var(--hairline-strong);border-radius:var(--r-inner);font-family:var(--sans);font-size:12px;line-height:1.55;color:var(--fg-secondary)">';   // tap -> matchup sheet (TEAM_CTX_SURFACING P1)
   var verdict=null,sn=null,gm=null;
   if(entry&&entry.data&&entry.data.snapshot){
     sn=entry.data.snapshot;gm=entry.data.game||{};
