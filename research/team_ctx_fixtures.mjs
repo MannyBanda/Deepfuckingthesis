@@ -44,7 +44,7 @@ const MAP = {
 // ── full block ──
 console.log('FULL BLOCK');
 const b = composeTeamContext('MIN', 'PHX', 'wnba', MAP);
-T('header present with small-n framing', b.includes('TEAM CONTEXT (season priors — context only, small-n: treat splits as direction, not probabilities):'));
+T('header present with small-n framing + TO-margin convention', b.includes('TEAM CONTEXT (season priors — context only, small-n: treat splits as direction, not probabilities; TO margin: + = forces more turnovers than it commits):'));
 T('home line: record + archetype + levers', b.includes('MIN 18-6 SHOTMAKER — eFG diff +6.2pp, TO margin +1.4, FTA +1.9, OREB -0.3'));
 T('tier split with strict-cutoff label', b.includes('vs top(>.600) 5-1 (eFG +5.2pp), vs rest 13-5'));
 T('form with tag bracket', b.includes('L5 3-2, own eFG -1.1pp, opp eFG +10.3pp [OPPONENTS_HOT]'));
