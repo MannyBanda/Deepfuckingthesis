@@ -86,6 +86,7 @@ T('TP CONTESTED/BLOCK must-surface rule present', fp.includes('CONTESTED or BLOC
 T('§2 exclusion: no floor score leaks + explicit ban', !/floor[_ ]?score:? ?0?\.\d/i.test(fp) && fp.includes('never mention floor scores'));
 T('eFG-heat non-predictive guard present', fp.includes('quality gap plus deficit plus price'));
 T('full-name metric rule present', fp.includes('effective field-goal percentage'));
+T('markdown ban present (ntfy renders asterisks literally)', fp.includes('NO markdown'));
 const fpNoPctx = ssBuildNarrationPrompt(row, { ...blocks, playerCtx: '' });
 T('carrier rule ABSENT when no player ctx', !fpNoPctx.includes('sustaining at her norm'));
 
@@ -98,6 +99,7 @@ T('brief budget: ~90 target / 120 cap', bp.includes('90 words') && bp.includes('
 T('NO prices/odds/lean — hard rule', bp.includes('no prices, no odds, no lean'));
 T('no ladder in brief', !bp.includes('PRICE LADDER'));
 T('anti-hallucination rule when ctx missing', bp.includes('rather than inventing one'));
+T('markdown ban in brief', bp.includes('NO markdown'));
 T('live line rendered', bp.includes('currently Q2 5:00'));
 const bpBare = ssBuildBriefPrompt('TOR', 'WSH', {});
 T('bare brief still valid, default reason present', bpBare.includes('No position') && bpBare.includes('too thin'));

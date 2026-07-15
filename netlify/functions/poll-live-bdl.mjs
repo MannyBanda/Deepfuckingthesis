@@ -1039,7 +1039,7 @@ function ssBuildNarrationPrompt(row, blocks) {
     + `(2) Why ${row.trailer_alias} is the better team likely to close — the structural levers they own${b.playerCtx ? ', naming their live comeback engines' : ''}.\n`
     + `(3) Price guidance — the current edge, the probe price, and the full-size price, in plain sizing language.\n`
     + `(4) The single biggest risk${b.playerCtx ? ' — if a STAR carrier is flagged above, this MUST be her sustaining at her norm' : ''}; include foul trouble if present; if the trailer path shows CONTESTED or BLOCK you must surface it here.\n\n`
-    + `Rules: plain English throughout; name every metric in full on first use ("quality gap", "effective field-goal percentage"), never bare abbreviations; percentages, not decimals; team names, never "they" across paragraph boundaries; never predict a specific player's shooting will collapse; never mention floor scores; never imply the leader's hot shooting is itself the predictive signal — the locked edge is quality gap plus deficit plus price.`;
+    + `Rules: NO markdown — no bold, no asterisks, no headers; plain paragraphs separated by blank lines (this is a push notification body); plain English throughout; name every metric in full on first use ("quality gap", "effective field-goal percentage"), never bare abbreviations; percentages, not decimals; team names, never "they" across paragraph boundaries; never predict a specific player's shooting will collapse; never mention floor scores; never imply the leader's hot shooting is itself the predictive signal — the locked edge is quality gap plus deficit plus price.`;
 }
 
 // D-9 brief contract — 3 parts, ~90-word target, 120 hard cap, NO prices, NO lean.
@@ -1054,7 +1054,7 @@ function ssBuildBriefPrompt(hA, aA, ctx) {
     + `(1) Lead with "No position" and one plain sentence on why nothing here qualifies.\n`
     + `(2) The season lens: both teams' identities, the head-to-head if shown, and any recent form heat.\n`
     + `(3) What would change it: one sentence on the shape of game that would make the system speak up.\n\n`
-    + `Rules: plain English; no prices, no odds, no lean, no bet suggestion of any kind; team names throughout; if the context block is missing, say the season lens is unavailable rather than inventing one.`;
+    + `Rules: NO markdown — no bold, no asterisks, no headers (push notification body); plain English; no prices, no odds, no lean, no bet suggestion of any kind; team names throughout; if the context block is missing, say the season lens is unavailable rather than inventing one.`;
 }
 
 // Model caller — output_config.effort verified on BOTH fable-5 and opus-4-8 (smoke Jul 14):
