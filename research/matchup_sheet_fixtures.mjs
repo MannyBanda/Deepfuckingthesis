@@ -32,18 +32,19 @@ T('L5 + tags', d.away.l5.w === 4 && d.away.l5.tags.length === 2 && d.away.l5.tag
 T('h2h cross-referenced to opponent', d.away.h2h.w === 3 && d.away.h2h.l === 0 && d.away.h2h.avg === 7);
 T('h2h opposite perspective', d.home.h2h.w === 0 && d.home.h2h.l === 3);
 
-console.log('INFLATION BADGE');
-// wp .545 (12-10); wpTop .25 (2-6), wpRest .714 (10-4) -> adj .482 -> infl +.06 -> HONEST
-T('honest inside threshold', d.away.badge === 'HONEST' && Math.abs(d.away.infl - 0.06) < 0.011);
-// inflated: 14-8 (.636) with top 1-7 (.125), rest 13-1 (.929) -> adj .527 -> +.11 INFLATED
-d = prepMatchupData('TOR', 'WSH', { WSH: mk(14, 8, { tiers: { top: { w: 1, l: 7, n: 8, efg_diff: -5 }, rest: { w: 13, l: 1 }, insufficient: false } }), TOR: mk(10, 14) });
-T('inflated at >= +.10', d.away.badge === 'INFLATED');
-// deflated: 8-14 (.364) with top 4-4 (.5), rest 4-10 (.286) -> adj .393... make stronger: top 5-3 (.625), rest 3-11 (.214) -> adj .420 -> -.056 HONEST; use top 6-2 (.75), rest 2-12 (.143) -> adj .446 -> -.08 HONEST; top 7-1 (.875), rest 1-13 (.071) -> adj .473 -> -.11 DEFLATED
-d = prepMatchupData('TOR', 'WSH', { WSH: mk(8, 14, { tiers: { top: { w: 7, l: 1, n: 8, efg_diff: 4 }, rest: { w: 1, l: 13 }, insufficient: false } }), TOR: mk(10, 14) });
-T('deflated at <= -.10', d.away.badge === 'DEFLATED');
-// tier cells < 2 games fall back to overall -> infl 0 -> HONEST
+console.log('SCHEDULE-INFLATION BADGE (research/lane definition: vs-rest wp − vs-top wp)');
+// GS anchor: 17-7 with top 2-6 (.250), rest 15-1 (.938) -> +.69 INFLATED
+d = prepMatchupData('TOR', 'WSH', { WSH: mk(17, 7, { tiers: { top: { w: 2, l: 6, n: 8, efg_diff: -5.8 }, rest: { w: 15, l: 1 }, insufficient: false } }), TOR: mk(10, 14) });
+T('GS anchor -> INFLATED +.69', d.away.badge === 'INFLATED' && Math.abs(d.away.infl - 0.69) < 0.011);
+// IND anchor: 14-9 with top 3-2 (.600), rest 11-7 (.611) -> +.01 HONEST
+d = prepMatchupData('TOR', 'WSH', { WSH: mk(14, 9, { tiers: { top: { w: 3, l: 2, n: 5, efg_diff: 5.2 }, rest: { w: 11, l: 7 }, insufficient: false } }), TOR: mk(10, 14) });
+T('IND anchor -> HONEST +.01', d.away.badge === 'HONEST' && Math.abs(d.away.infl - 0.01) < 0.011);
+// MIN anchor: top 6-2 (.750), rest 9-5 (.643) -> -.11 DEFLATED (lane territory)
+d = prepMatchupData('TOR', 'WSH', { WSH: mk(15, 7, { tiers: { top: { w: 6, l: 2, n: 8, efg_diff: 3 }, rest: { w: 9, l: 5 }, insufficient: false } }), TOR: mk(10, 14) });
+T('MIN anchor -> DEFLATED -.11', d.away.badge === 'DEFLATED' && Math.abs(d.away.infl + 0.11) < 0.011);
+// tier cell < 2 games -> infl null, no badge (no fake HONEST 0)
 d = prepMatchupData('TOR', 'WSH', { WSH: mk(12, 10, { tiers: { top: { w: 1, l: 0, n: 1, efg_diff: 2 }, rest: { w: 11, l: 10 }, insufficient: true } }), TOR: mk(10, 14) });
-T('small-n top cell falls back (infl ~0, HONEST)', d.away.badge === 'HONEST' && Math.abs(d.away.infl) < 0.06);
+T('small-n top cell -> null badge', d.away.badge === null && d.away.infl === null);
 T('insufficient flag passthrough', d.away.insufficient === true);
 
 console.log('DEGRADATION');
@@ -55,7 +56,7 @@ d = prepMatchupData('TOR', 'WSH', { WSH: mk(12, 10, { h2h: {} }), TOR: mk(10, 14
 T('no meetings -> h2h null', d.away.h2h === null);
 d = prepMatchupData('TOR', 'WSH', { WSH: { w: 5, l: 5, archetype: 'FLAT', profile: {} }, TOR: mk(10, 14) });
 T('bare profile degrades (levers em-dash-able, no throw)', d.away.efgd === null && d.away.l5 === null && d.away.top === null);
-T('bare profile infl falls back to 0 HONEST', d.away.badge === 'HONEST');
+T('bare profile -> null badge (no schedule split)', d.away.badge === null && d.away.infl === null);
 
 console.log('COLOR COMPARE');
 let c = msCompare(

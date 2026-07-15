@@ -87,7 +87,8 @@ input,textarea,select{font-size:16px!important;}
 .ms-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
 .ms-al{font-size:15px;font-weight:700;margin-bottom:2px;}
 .ms-rec{font-family:var(--mono);font-size:11px;color:var(--fg-secondary);font-weight:500;}
-.ms-arch{font-family:var(--mono);font-size:10px;color:var(--fg-secondary);margin-bottom:8px;}
+.ms-arch{font-family:var(--mono);font-size:10px;color:var(--fg-secondary);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ms-infl{margin-bottom:8px;min-height:16px;line-height:16px;}
 .ms-badge{padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;}
 .ms-b-inf{background:rgba(245,158,11,0.15);color:#f59e0b;}
 .ms-b-def{background:rgba(103,232,249,0.12);color:#67e8f9;}
@@ -3765,10 +3766,13 @@ function prepMatchupData(hA,aA,map){
     var p=t.profile||{},i=p.identity||{},tr=p.tiers||{},f5=(p.form||{}).l5||null;
     var top=tr.top||null,rest=tr.rest||null;
     var gp=t.w+t.l,wp=gp>0?t.w/gp:null;
-    var wpT=(top&&(top.w+top.l)>=2)?top.w/(top.w+top.l):wp;
-    var wpR=(rest&&(rest.w+rest.l)>=2)?rest.w/(rest.w+rest.l):wp;
-    var infl=(wp!=null&&wpT!=null&&wpR!=null)?Math.round((wp-(0.5*wpT+0.5*wpR))*100)/100:null;
-    var badge=infl==null?null:(infl>=0.10?'INFLATED':(infl<=-0.10?'DEFLATED':'HONEST'));
+    // Schedule-inflation index = vs-rest wp − vs-top wp (research table + OVERRIDE LANE
+    // definition: GS +.69 / TOR +.56 / DAL +.44 / MIN −.11). Small-n cells (<2 games)
+    // -> null: no badge beats a fake HONEST 0.
+    var wpT=(top&&(top.w+top.l)>=2)?top.w/(top.w+top.l):null;
+    var wpR=(rest&&(rest.w+rest.l)>=2)?rest.w/(rest.w+rest.l):null;
+    var infl=(wpT!=null&&wpR!=null)?Math.round((wpR-wpT)*100)/100:null;
+    var badge=infl==null?null:(infl>=0.30?'INFLATED':(infl<=-0.05?'DEFLATED':'HONEST'));
     var h=(p.h2h||{})[opp]||null;
     return {alias:al,w:t.w,l:t.l,archetype:t.archetype||'\u2014',infl:infl,badge:badge,
       efgd:i.efg_diff!=null?i.efg_diff:null,toMargin:i.to_margin!=null?i.to_margin:null,
@@ -3834,7 +3838,8 @@ async function openMatchupSheet(gid){
     if(!t)return '<div class="ms-col"><div class="ms-al" style="color:'+tc(al)+'">'+esc(al)+'</div><div class="ms-dim">no profile</div></div>';
     var badgeCls=t.badge==='INFLATED'?'ms-b-inf':(t.badge==='DEFLATED'?'ms-b-def':'ms-b-hon');
     var html='<div class="ms-col"><div class="ms-al" style="color:'+tc(t.alias)+'">'+esc(t.alias)+' <span class="ms-rec '+kls('rec')+'">'+t.w+'-'+t.l+'</span></div>';
-    html+='<div class="ms-arch">'+esc(t.archetype)+(t.badge?' <span class="ms-badge '+badgeCls+'">'+t.badge+(t.infl!=null?' '+msSigned(t.infl):'')+'</span>':'')+'</div>';
+    html+='<div class="ms-arch">'+esc(t.archetype)+'</div>';
+    html+='<div class="ms-infl">'+(t.badge?'<span class="ms-badge '+badgeCls+'">'+t.badge+' '+msSigned(t.infl)+'</span>':'<span class="ms-dim">schedule split \u2014</span>')+'</div>';
     html+='<div class="ms-kv"><span>eFG diff</span><b class="'+kls('efgd')+'">'+msSigned(t.efgd,'pp')+'</b></div>';
     html+='<div class="ms-kv"><span>TO margin</span><b class="'+kls('toMargin')+'">'+msSigned(t.toMargin)+'</b></div>';
     html+='<div class="ms-kv"><span>FTA</span><b class="'+kls('fta')+'">'+msSigned(t.fta)+'</b></div>';
