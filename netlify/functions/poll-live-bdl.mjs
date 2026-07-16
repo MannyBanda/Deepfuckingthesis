@@ -869,18 +869,24 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
     } catch (e) { log(`${aA}@${hA}: sweetspot suppress check non-fatal: ${e.message}`); }
 
     // Stage 1a — atomic dedup insert (ledger subtypes: rows only, ntfy_sent=false)
+    // KILLER_FLAG_SPEC §2: stamp the leader's season-profile killer fields from the
+    // cached team ctx (ensureTeamCtx is TTL-cached — this is a no-op on warm cycles).
+    // Missing ctx -> NULL stamp; never computed inline on the polling path.
+    await ensureTeamCtx(sql, league);
+    const _kProf = (typeof _teamCtxMap === 'object' && _teamCtxMap) ? _teamCtxMap[ss.leaderAl] : null;
+    const _kk = _kProf && _kProf.profile && _kProf.profile.killer ? _kProf.profile.killer : null;
     let inserted;
     try {
       inserted = await sql`
         INSERT INTO sweetspot_alerts (game_id, league, alert_subtype, alert_tier, period, clock,
           leader_alias, trailer_alias, leader_wp, trailer_wp, quality_gap, leader_efg, leader_efg_band,
           variance_share, lead_class, fade_tier, collapse_tier, collapse_true, deficit, margin,
-          line_used, line_consensus, implied, edge, kelly_size, ntfy_sent)
+          line_used, line_consensus, implied, edge, kelly_size, ntfy_sent, leader_killer, leader_scalps)
         VALUES (${game.id}, ${league}, ${ss.subtype}, ${ss.tier}, ${ss.period}, ${ss.clock},
           ${ss.leaderAl}, ${ss.trailerAl}, ${ss.leaderWP}, ${ss.trailerWP}, ${ss.gap}, ${ss.leaderEfg}, ${ss.leaderBand},
           ${ss.varShare}, ${ss.leadClass}, ${ss.fadeTier}, ${ss.collapseTier}, ${ss.collapseTrue}, ${ss.margin}, ${ss.margin},
           ${ss.bestML != null ? parseInt(ss.bestML) : null}, ${ss.consensusML != null ? parseInt(ss.consensusML) : null},
-          ${ss.impliedBest}, ${ss.edge}, ${ss.kellySize}, ${!ss.ledgerOnly})
+          ${ss.impliedBest}, ${ss.edge}, ${ss.kellySize}, ${!ss.ledgerOnly}, ${_kk ? _kk.flag : null}, ${_kk ? _kk.scalps : null})
         ON CONFLICT (game_id, alert_subtype) DO NOTHING
         RETURNING id`;
     } catch (e) { log(`${aA}@${hA}: sweetspot insert failed: ${e.message}`); return; }
@@ -1348,10 +1354,15 @@ function composeTeamContext(hA, aA, league, map = _teamCtxMap) {
   const fmt = (alias, oppAlias) => {
     const t = map[alias];
     if (!t) return null;   // degradation: missing row -> omit team line
-    const i = t.profile.identity || {}, tr = t.profile.tiers || {}, f5 = (t.profile.form || {}).l5;
+    // KILLER_FLAG_SPEC §8: consumer-facing splits use tiers_elite (hysteresis definition).
+    // def-A `tiers` is internal-only (lane/registration) — never shown to agents. Falls back
+    // to def-A tiers only for pre-migration profile rows (one nightly behind).
+    const i = t.profile.identity || {}, tr = t.profile.tiers_elite || t.profile.tiers || {}, f5 = (t.profile.form || {}).l5;
     const sp = (v) => v == null ? '?' : (v > 0 ? '+' : '') + v;
     let s = `${alias} ${t.w}-${t.l} ${t.archetype} — eFG diff ${sp(i.efg_diff)}pp, TO margin ${sp(i.to_margin)}, FTA ${sp(i.fta_diff)}, OREB ${sp(i.oreb_diff)}`;
-    if (tr.top && tr.top.n > 0) s += ` | vs top(>.600) ${tr.top.w}-${tr.top.l} (eFG ${sp(tr.top.efg_diff)}pp), vs rest ${tr.rest.w}-${tr.rest.l}`;
+    if (tr.top && ((tr.top.w || 0) + (tr.top.l || 0)) > 0) s += ` | vs elite ${tr.top.w}-${tr.top.l} (eFG ${sp(tr.top.efg_diff)}pp), vs rest ${tr.rest.w}-${tr.rest.l}`;
+    const kk = t.profile.killer;
+    if (kk && kk.flag) s += ` | ELITE-KILLER profile (${kk.scalps} wins vs elite at sub-.450 record — variance-shaped wins; their LEADS historically fade harder)`;
     if (tr.insufficient) s += ` [tier splits small-n]`;
     if (f5) {
       s += ` | L5 ${f5.w}-${f5.l}, own eFG ${sp(f5.own_efg_delta)}pp, opp eFG ${sp(f5.opp_efg_delta)}pp`;
@@ -1366,7 +1377,7 @@ function composeTeamContext(hA, aA, league, map = _teamCtxMap) {
   };
   const lines = [fmt(hA, aA), fmt(aA, hA)].filter(Boolean);
   if (lines.length === 0) return '';   // degradation: both missing -> omit block
-  let block = `\nTEAM CONTEXT (season priors — context only, small-n: treat splits as direction, not probabilities; TO margin: + = forces more turnovers than it commits):\n${lines.join('\n')}\n`;
+  let block = `\nTEAM CONTEXT (season priors — context only, small-n: treat splits as direction, not probabilities; TO margin: + = forces more turnovers than it commits; elite = reached .600 with 15+ games, demoted below .550, re-admitted at .600):\n${lines.join('\n')}\n`;
   const anyRow = map[hA] || map[aA];
   if (anyRow && anyRow.updated_at && (Date.now() - new Date(anyRow.updated_at).getTime()) > 36 * 3600 * 1000) {
     block += `(profiles >36h stale — nightly refresh may have missed; weight accordingly)\n`;

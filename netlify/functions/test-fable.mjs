@@ -25,8 +25,8 @@ const NARRATION_PROMPT = `You are the narration layer of a live WNBA betting int
 ALERT: MIN trailing PHX by 7, Q1 0:45. Quality gap .406 (MIN .750 season win% vs PHX .320). PHX lead built on 5-of-8 three-point shooting (eFG 68%, season 44%); variance share 61% from threes and midrange. MIN eFG 49% vs their 52% season norm. Live line MIN +135.
 
 TEAM CONTEXT (season priors — context only, small-n: treat splits as direction, not probabilities):
-MIN 18-6 SHOTMAKER — eFG diff +6.2pp, TO margin +1.4 | vs top(>.600) 5-1 (eFG +5.2pp), vs rest 13-5 | L5 3-2, own eFG -1.1pp, opp eFG +10.3pp [OPPONENTS_HOT] | H2H vs PHX: 3-0 (avg +9.3)
-PHX 8-17 SHOT_DEFICIT — eFG diff -4.2pp, TO margin -0.3 | vs top(>.600) 2-10 (eFG -5.6pp), vs rest 6-7 | L5 1-4`;
+MIN 18-6 SHOTMAKER — eFG diff +6.2pp, TO margin +1.4 | vs elite 5-1 (eFG +5.2pp), vs rest 13-5 | L5 3-2, own eFG -1.1pp, opp eFG +10.3pp [OPPONENTS_HOT] | H2H vs PHX: 3-0 (avg +9.3)
+PHX 8-17 SHOT_DEFICIT — eFG diff -4.2pp, TO margin -0.3 | vs elite 2-10 (eFG -5.6pp), vs rest 6-7 | L5 1-4`;
 
 async function callAnthropic(model, effort, maxTokens, apiKey) {
   const base = {
