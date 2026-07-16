@@ -270,6 +270,7 @@ input,textarea,select{font-size:16px!important;}
 .sc-team-row{margin-bottom:10px;}
 .sc-team-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;}
 .sc-team-name{font-family:var(--sans);font-size:11px;font-weight:600;color:var(--fg-primary);}
+.ek-chip{display:inline-block;margin-left:4px;padding:0 4px;border-radius:3px;font-size:8px;font-weight:700;letter-spacing:.5px;color:var(--amber,#f0a832);border:1px solid var(--amber,#f0a832);opacity:.85;vertical-align:2px;cursor:default;}
 .sc-team-sv{font-family:var(--mono);font-size:10px;color:var(--fg-tertiary);}
 .sc-bar{height:20px;border-radius:4px;overflow:hidden;display:flex;background:var(--bg-surface-3);}
 .sc-seg{height:100%;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:9px;font-weight:700;color:#000;min-width:2px;}
@@ -1479,6 +1480,23 @@ function renderMCStrip(mc,gameId){
   return h;
 }
 
+// ── EK chip (KILLER_FLAG_SPEC §4): elite-killer identity badge. One profiles
+// fetch per load, 6h TTL (profiles change nightly). Degraded fetch -> no chips,
+// no error surface. Identity, not a live read — renders leading or trailing.
+var _ekSet={},_ekScalps={},_ekAt=0;
+function loadKillerSet(){
+  if(Date.now()-_ekAt<6*3600*1000)return;
+  _ekAt=Date.now();
+  fetch(FN+'db-api?action=get_team_profiles&league=wnba').then(function(r){return r.json();}).then(function(d){
+    var rows=(d&&d.team_profiles)||[];_ekSet={};_ekScalps={};
+    rows.forEach(function(r){var k=r.profile&&r.profile.killer;if(k&&k.flag){_ekSet[r.team_alias]=true;_ekScalps[r.team_alias]=k.scalps;}});
+    games.forEach(function(g){renderCard(g.id);});
+  }).catch(function(){});
+}
+function ekBadge(alias){
+  if(!_ekSet[alias])return '';
+  return '<span class="ek-chip" title="Elite killer \u2014 sub-.450 team with '+(_ekScalps[alias]||'?')+' wins vs elite teams. Their LEADS fade harder (hist 67% vs 53%).">EK</span>';
+}
 function renderCard(id){
   var el=document.getElementById('card-'+id);if(!el)return;
   var g=games.find(function(x){return x.id===id;});if(!g)return;
@@ -1500,13 +1518,13 @@ function renderCard(id){
   if(state==='PRE'){
     var ms=new Date(g.scheduled)-new Date();
     var h=Math.max(0,Math.floor(ms/3600000)),m=Math.max(0,Math.floor((ms%3600000)/60000));
-    html+='<div class="score-row"><div class="team"><span class="team-abbr" style="color:'+tc(aA)+'">'+esc(aA)+recBadge(aA)+'</span><span class="team-sub">'+esc(g.away?.name||'')+'</span></div>';
+    html+='<div class="score-row"><div class="team"><span class="team-abbr" style="color:'+tc(aA)+'">'+esc(aA)+recBadge(aA)+ekBadge(aA)+'</span><span class="team-sub">'+esc(g.away?.name||'')+'</span></div>';
     html+='<div class="score" style="font-size:20px;color:var(--fg-dim)">'+esc((h>0?h+'h ':'')+ m+'m')+'</div>';
-    html+='<div class="team is-right"><span class="team-abbr" style="color:'+tc(hA)+'">'+esc(hA)+recBadge(hA)+'</span><span class="team-sub">'+esc(g.home?.name||'')+'</span></div></div>';
+    html+='<div class="team is-right"><span class="team-abbr" style="color:'+tc(hA)+'">'+esc(hA)+recBadge(hA)+ekBadge(hA)+'</span><span class="team-sub">'+esc(g.home?.name||'')+'</span></div></div>';
   } else {
-    html+='<div class="score-row"><div class="team"><span class="team-abbr" style="color:'+tc(aA)+'">'+esc(aA)+recBadge(aA)+'</span><span class="team-sub">'+esc(g.away?.name||'')+'</span></div>';
+    html+='<div class="score-row"><div class="team"><span class="team-abbr" style="color:'+tc(aA)+'">'+esc(aA)+recBadge(aA)+ekBadge(aA)+'</span><span class="team-sub">'+esc(g.away?.name||'')+'</span></div>';
     html+='<div class="score">'+(g.awayPoints??'\u2014')+'<span class="em-dash">\u2014</span>'+(g.homePoints??'\u2014')+'</div>';
-    html+='<div class="team is-right"><span class="team-abbr" style="color:'+tc(hA)+'">'+esc(hA)+recBadge(hA)+'</span><span class="team-sub">'+esc(g.home?.name||'')+'</span></div></div>';
+    html+='<div class="team is-right"><span class="team-abbr" style="color:'+tc(hA)+'">'+esc(hA)+recBadge(hA)+ekBadge(hA)+'</span><span class="team-sub">'+esc(g.home?.name||'')+'</span></div></div>';
   }
   html+='</div>';
   html+=ctxStrip(g.id,hA,aA);   // persistent micro-strip -> matchup sheet (TEAM_CTX_SURFACING P1)
@@ -2994,7 +3012,7 @@ function closeDrawer(){
 // ── SWIPE-DOWN-TO-DISMISS ──
 (function(){
   var drawer,startY,dy,dragging;
-  document.addEventListener('DOMContentLoaded',function(){
+  document.addEventListener('DOMContentLoaded',function(){loadKillerSet();
     drawer=document.getElementById('drawer');
     drawer.addEventListener('touchstart',function(e){
       startY=e.touches[0].clientY;dy=0;dragging=false;

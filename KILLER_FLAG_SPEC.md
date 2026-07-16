@@ -10,7 +10,11 @@ One computation, three consumers. Pure fn `computeKillerFields(rows)` over team_
   ≥15 GP; DEMOTE on crossing <.550; RE-ENTER at ≥.600. Validated: identical 2026 membership
   and identical killer cells (67/45, 53/76) vs pure sticky — adopted at zero evidentiary cost.
 - `killer` {flag(bool), scalps(int)}: flag = season wp < .450 AND scalps ≥ 2, where scalps =
-  wins vs opponents in ELITE state as of that game date (strictly causal)
+  season wins vs opponents in ELITE state AS OF THE EVALUATION (recompute) DATE — causal at
+  fire time, captures early-season scalps once the opponent's eliteness is established.
+  Validated on the 2024-25 pool: 66% (n=59) vs 50% (n=62), seasons 64/69 — same edge as
+  scalp-date semantics with 30% more flagged spots. Side effect (accepted): scalp counts can
+  move when OPPONENTS enter/demote elite, not only when the team plays.
 Written as top-level fields in profile JSONB. Fixture: 2026 golden = flag set {POR(5), LA(3),
 CHI(2), SEA(2), PHX(2)}; CON(1)/TOR(1) excluded; WSH excluded (wp .545). All-Star phantom
 guard already upstream.
@@ -78,8 +82,7 @@ Two elite definitions co-reside. The contract that keeps them from cross-contami
 ## §8 ELITE LANGUAGE MIGRATION (PM decision C, Jul 16)
 Consumer-facing surfaces stop saying "vs top(>.600)" and adopt the ELITE hysteresis definition;
 def A becomes invisible internal plumbing.
-- Nightly computes a second split `tiers_elite` {top:{w,l,efg_diff}, rest:{...}} using the
-  `elite` state machine per opponent AS OF each game date (causal, same walk as scalps).
+- Nightly computes a second split `tiers_elite` {top:{w,l,efg_diff}, rest:{...}} bucketing every game by the opponent's elite state AS OF THE EVALUATION DATE (one membership set per recompute — matches the tier backtest and the scalp semantics).
   `tiers` (def A) remains computed but is INTERNAL-ONLY: override-lane infl + honest-gap
   registration. Nothing user- or agent-facing reads it anymore.
 - `composeTeamContext` swaps to `tiers_elite`, phrased "vs elite W-L (eFG ±X.Xpp), vs rest

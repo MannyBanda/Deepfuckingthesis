@@ -64,6 +64,53 @@ const mean = (a) => a.length ? a.reduce((s, x) => s + x, 0) / a.length : null;
 const r1 = (x) => x == null ? null : Math.round(x * 10) / 10;
 const r3 = (x) => x == null ? null : Math.round(x * 1000) / 1000;
 
+// ── Killer/Elite layer (KILLER_FLAG_SPEC §1+§8) ──────────────────────────────
+// Same purity contract as computeProfiles: rows for ONE league-season, any as-of
+// subset. `elite` = HYSTERESIS state machine — ENTER wp≥.600 at ≥15 GP, DEMOTE on
+// crossing <.550, RE-ENTER at ≥.600 (PM decision Jul 16; validated identical cells).
+// killer/scalps/tiers_elite all use EVALUATION-DATE membership (one elite set per
+// recompute) — validated 66%/n=59 vs 50%/n=62 on the 2024-25 pool; causal at fire
+// time. Side effect (accepted): scalp counts can move when OPPONENTS enter/demote.
+// Merged into profile JSONB by the handler; computeProfiles untouched (ATL golden
+// cannot break). Goldens (research/team_profiles_fixtures.mjs layer 3): as-of
+// 2026-07-15 killers = POR(5) LA(3) CHI(2) SEA(2) PHX(2); WSH excluded (.545).
+export function computeKillerFields(rows) {
+  const byTeam = {};
+  for (const r of rows) (byTeam[r.team_alias] = byTeam[r.team_alias] || []).push(r);
+  const elite = {};
+  for (const [team, gamesRaw] of Object.entries(byTeam)) {
+    const games = [...gamesRaw].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    let w = 0, n = 0, el = false;
+    for (const g of games) {
+      if (N(g.pts) > N(g.opp_pts)) w++;
+      n++;
+      const wp = w / n;
+      if (!el && n >= 15 && wp >= 0.600) el = true;
+      else if (el && wp < 0.550) el = false;
+    }
+    elite[team] = el;
+  }
+  const out = {};
+  for (const [team, games] of Object.entries(byTeam)) {
+    const w = games.filter((g) => N(g.pts) > N(g.opp_pts)).length;
+    const wp = games.length ? w / games.length : 0;
+    const te = games.filter((g) => elite[g.opp_alias]);
+    const re = games.filter((g) => !elite[g.opp_alias]);
+    const scalps = te.filter((g) => N(g.pts) > N(g.opp_pts)).length;
+    const wl = (a) => ({ w: a.filter((g) => N(g.pts) > N(g.opp_pts)).length,
+                         l: a.filter((g) => N(g.pts) <= N(g.opp_pts)).length });
+    const efgd = (a) => a.length
+      ? r1((aggEfg(a, 'fgm', 'fga', 'fg3m') - aggEfg(a, 'opp_fgm', 'opp_fga', 'opp_fg3m')) * 100)
+      : null;
+    out[team] = {
+      elite: elite[team],
+      killer: { flag: wp < 0.450 && scalps >= 2, scalps },
+      tiers_elite: { top: { ...wl(te), efg_diff: efgd(te) }, rest: { ...wl(re), efg_diff: efgd(re) } },
+    };
+  }
+  return out;
+}
+
 export function computeProfiles(rows) {
   const byTeam = {};
   for (const r of rows) {
@@ -465,8 +512,10 @@ export default async function handler(req) {
   const allRows = allRowsRaw.filter((r) => CANONICAL_ALIASES.has(r.team_alias) && CANONICAL_ALIASES.has(r.opp_alias));
   if (allRows.length > 0) {
     const profiles = computeProfiles(allRows);
+    const killerFields = computeKillerFields(allRows);   // KILLER_FLAG_SPEC §1+§8
     if (!isDry) {
       for (const [team, p] of Object.entries(profiles)) {
+        Object.assign(p.profile, killerFields[team] || {});
         await sql`INSERT INTO team_profiles (team_alias, league, season, w, l, archetype, profile, updated_at)
           VALUES (${team}, ${league}, ${season}, ${p.w}, ${p.l}, ${p.archetype}, ${JSON.stringify(p.profile)}, NOW())
           ON CONFLICT (team_alias, league, season)

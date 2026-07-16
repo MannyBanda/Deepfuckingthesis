@@ -216,7 +216,34 @@ When evaluating WNBA arcs, weight MC and XGB over floor. Floor-based decisions a
 // Empty sections are omitted; returns null when there is nothing to report.
 // Review-flag wording is deliberately neutral ("did not come back") — cues aren't calls,
 // and the digest can't know whether Manny played the spot.
-function ssComposeDigest(dateStr, tonight, season) {
+// ── Override-lane digest line (OVERRIDE_LANE_SPEC §2; build trigger fired Jul 16:
+// MIN −.10 + LV −.05 both lane-eligible). Reads INTERNAL def-A tiers ONLY — never
+// tiers_elite (KILLER_FLAG_SPEC §7 contract: lane/infl stay on def A). Pure ->
+// extractable by the fixture harness. Returns null on degraded/stale profiles
+// (>48h) — the digest simply omits the line, never guesses.
+function ssOverrideLaneLine(profileRows, nowMs) {
+  try {
+    if (!profileRows || !profileRows.length) return null;
+    const now = nowMs || Date.now();
+    const newest = Math.max(...profileRows.map((r) => new Date(r.updated_at || 0).getTime()));
+    if (!isFinite(newest) || now - newest > 48 * 3600 * 1000) return null;
+    const members = [];
+    for (const r of profileRows) {
+      const p = r.profile || {};
+      const tt = (p.tiers || {}).top, rt = (p.tiers || {}).rest;
+      if (!tt || !rt) continue;
+      const nT = (tt.w || 0) + (tt.l || 0), nR = (rt.w || 0) + (rt.l || 0);
+      if (!nT || !nR || nT < 5) continue;
+      const wp = ((tt.w || 0) + (rt.w || 0)) / (nT + nR);
+      const infl = (rt.w || 0) / nR - (tt.w || 0) / nT;
+      if (infl < 0 && wp >= 0.600) members.push(`${r.team_alias} (${tt.w}-${tt.l} against top teams — record understates them)`);
+    }
+    if (!members.length) return 'Override lane: empty — no top team currently under-rated by record.';
+    return `Override lane (discretionary review cap $600): ${members.join('; ')}.`;
+  } catch { return null; }
+}
+
+function ssComposeDigest(dateStr, tonight, season, laneLine) {
   const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
   const parts = dateStr.split('-').map(Number);
   const nice = `${months[(parts[1] || 1) - 1]} ${parts[2] || ''}`.trim();
@@ -256,6 +283,9 @@ function ssComposeDigest(dateStr, tonight, season) {
     secs.push(`Background ledger: quietly collecting situations before we judge them — ${bit(gb, 'gap-only spots')}. ${bit(qc, 'Deep fourth-quarter comebacks')}.`
       + (mature ? '' : ' No conclusions until 30; early percentages are noise.'));
   }
+
+  // Override lane (OVERRIDE_LANE_SPEC §2) — omitted entirely when null (degraded)
+  if (laneLine) secs.push(laneLine);
 
   // Housekeeping
   if (tonight.resolvedTonight > 0) {
@@ -437,9 +467,15 @@ async function processLeague(sql, league, dateStr, isOverride, isDry) {
       const ssLine = `A ${t.A.w}-${t.A.l} | B ${t.B.w}-${t.B.l} | WATCH ${w.total} (${w.converted} converted)`
         + (ledgerBits.length ? ` | ledger ${ledgerBits.join(' ')}` : '') + ` | resolved tonight: ${ssResult.resolved_tonight}`;
       log(`SS: ${ssLine}`);
+      let laneLine = null;
+      try {
+        const profRows = await sql`SELECT team_alias, profile, updated_at FROM team_profiles WHERE league = ${league} AND season = 2026`;
+        laneLine = ssOverrideLaneLine(profRows);
+      } catch (e) { log(`lane line: ${e.message}`); }
       const digest = ssComposeDigest(dateStr,
         { tiers: t, watchlist: w, resolvedTonight: ssResult.resolved_tonight },
-        { A: ssResult.season.A, B: ssResult.season.B, watchlist: ssResult.season.watchlist, ledger: ssResult.ledger });
+        { A: ssResult.season.A, B: ssResult.season.B, watchlist: ssResult.season.watchlist, ledger: ssResult.ledger },
+        laneLine);
       if (!isDry && digest) await agentNtfy(digest.title, digest.body, 2);
       // Prompt section for the Opus analysis (only used if classic alerts exist below)
       let betsRows = [];

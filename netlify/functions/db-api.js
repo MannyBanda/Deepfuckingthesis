@@ -621,6 +621,10 @@ exports.handler = async (event) => {
       await sql`ALTER TABLE team_game_stats ADD COLUMN IF NOT EXISTS fga INT`;
       await sql`ALTER TABLE team_game_stats ADD COLUMN IF NOT EXISTS opp_fgm INT`;
       await sql`ALTER TABLE team_game_stats ADD COLUMN IF NOT EXISTS opp_fga INT`;
+      // KILLER_FLAG_SPEC §2 — leader season-profile stamp on SS alert rows (isolated
+      // ALTERs; never added to existing SELECTs on polling paths)
+      await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS leader_killer BOOLEAN`;
+      await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS leader_scalps INT`;
 
       // ── TEAM_PROFILES_SPEC §3b — computed nightly, one row per team-season ──
       await sql`CREATE TABLE IF NOT EXISTS team_profiles (

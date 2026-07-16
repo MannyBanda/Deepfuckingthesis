@@ -20,7 +20,7 @@
 // Run: node research/team_profiles_fixtures.mjs            (from repo root)
 //      SKIP_GOLDEN=1 node research/team_profiles_fixtures.mjs
 // ════════════════════════════════════════════════════════════════════════════
-import { computeProfiles, classifyArchetype } from '../netlify/functions/team-profiles-nightly.mjs';
+import { computeProfiles, classifyArchetype, computeKillerFields } from '../netlify/functions/team-profiles-nightly.mjs';
 
 let pass = 0, fail = 0;
 const T = (n, c) => { c ? pass++ : fail++; console.log(`  ${c ? '\u2713' : '\u2717'} ${n}`); };
@@ -138,5 +138,46 @@ async function golden() {
 }
 
 await golden();
+
+// ── 3. KILLER/ELITE LAYER (KILLER_FLAG_SPEC §1+§8) — needs data, same skip rule ──
+// Goldens session-derived Jul 16 (eval-date semantics). Full-golden pinned to
+// max_date=2026-07-15 so season progress never drifts the asserts.
+async function killerLayer() {
+  if (process.env.SKIP_GOLDEN === '1') { console.log('\nKILLER/ELITE: skipped (SKIP_GOLDEN=1)'); return; }
+  const base = process.env.DFT_BASE || 'https://poetic-starlight-aa8938.netlify.app';
+  const auth = 'Basic ' + Buffer.from('manny:DFT2025!').toString('base64');
+  const pull = async (maxDate) => {
+    try {
+      const r = await fetch(`${base}/.netlify/functions/db-api?action=get_team_game_stats&league=wnba&season=2026&max_date=${maxDate}`,
+        { headers: { Authorization: auth } });
+      return r.ok ? ((await r.json()).team_game_stats || []) : [];
+    } catch { return []; }
+  };
+  const rows4 = await pull('2026-07-04'), rows15 = await pull('2026-07-15');
+  if (!rows4.length || !rows15.length) { console.log('\nKILLER/ELITE: no rows — skipped'); return; }
+
+  console.log('\nKILLER/ELITE (as-of 2026-07-04 replay)');
+  const kf4 = computeKillerFields(rows4);
+  T('hysteresis elite set (7) at Jul 4', ['ATL','DAL','GS','IND','LV','MIN','NY'].every((t) => kf4[t] && kf4[t].elite) && !kf4.WSH.elite);
+  T(`killers Jul 4: POR(4) LA(2) CHI SEA PHX (got POR=${kf4.POR.killer.scalps} LA=${kf4.LA.killer.scalps})`,
+    kf4.POR.killer.flag && kf4.POR.killer.scalps === 4 && kf4.LA.killer.scalps === 2 && kf4.CHI.killer.flag && kf4.SEA.killer.flag && kf4.PHX.killer.flag);
+  T(`IND scalps 2, tiers_elite top 2-5 (got ${kf4.IND.killer.scalps}, ${kf4.IND.tiers_elite.top.w}-${kf4.IND.tiers_elite.top.l})`,
+    kf4.IND.killer.scalps === 2 && kf4.IND.tiers_elite.top.w === 2 && kf4.IND.tiers_elite.top.l === 5);
+  T(`MIN tiers_elite 6-3 eFGd +3.3 (got ${kf4.MIN.tiers_elite.top.efg_diff})`,
+    kf4.MIN.tiers_elite.top.w === 6 && kf4.MIN.tiers_elite.top.l === 3 && close(kf4.MIN.tiers_elite.top.efg_diff, 3.3, 0.15));
+
+  console.log('\nKILLER/ELITE (as-of 2026-07-15 golden)');
+  const kf = computeKillerFields(rows15);
+  T('elite incl IND at .583 + NY (hysteresis, not current >.600)', kf.IND.elite && kf.NY.elite && ['ATL','DAL','GS','LV','MIN'].every((t) => kf[t].elite));
+  T(`killer set exact: POR(5) LA(3) CHI(2) SEA(2) PHX(2) (got POR=${kf.POR.killer.scalps} LA=${kf.LA.killer.scalps})`,
+    kf.POR.killer.flag && kf.POR.killer.scalps === 5 && kf.LA.killer.scalps === 3 && kf.CHI.killer.flag && kf.SEA.killer.flag && kf.PHX.killer.flag);
+  T('CON/TOR excluded (1 scalp); WSH excluded (.545, scalps 4)', !kf.CON.killer.flag && !kf.TOR.killer.flag && !kf.WSH.killer.flag && kf.WSH.killer.scalps === 4);
+  T(`GS tiers_elite 8-6 eFGd −0.1 (got ${kf.GS.tiers_elite.top.efg_diff})`,
+    kf.GS.tiers_elite.top.w === 8 && kf.GS.tiers_elite.top.l === 6 && close(kf.GS.tiers_elite.top.efg_diff, -0.1, 0.15));
+  T(`MIN tiers_elite 7-3 +3.0 / rest 12-3 (got ${kf.MIN.tiers_elite.top.efg_diff})`,
+    kf.MIN.tiers_elite.top.w === 7 && kf.MIN.tiers_elite.top.l === 3 && close(kf.MIN.tiers_elite.top.efg_diff, 3.0, 0.15) && kf.MIN.tiers_elite.rest.w === 12);
+}
+await killerLayer();
+
 console.log(`\n${pass}/${pass + fail} passed${fail ? ' \u2014 FAILURES ABOVE' : ''}`);
 process.exit(fail ? 1 : 0);

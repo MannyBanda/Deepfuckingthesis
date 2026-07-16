@@ -44,6 +44,8 @@ T('rerun (35→35) does not re-fire', crossed(35, 35) === false);
 // ── ssComposeDigest (approved plain-English copy 2026-07-12) ──
 const digestSrc = extract('ssComposeDigest');
 const ssComposeDigest = new Function(`${digestSrc}; return ssComposeDigest;`)();
+const laneSrc = extract('ssOverrideLaneLine');
+const ssOverrideLaneLine = new Function(`${laneSrc}; return ssOverrideLaneLine;`)();
 const T0 = { tiers: { A: { w: 1, l: 0 }, B: { w: 0, l: 0 } }, watchlist: { total: 1, converted: 0 }, resolvedTonight: 4 };
 const S0 = { A: { w: 2, l: 0 }, B: { w: 0, l: 0 }, watchlist: { total: 3, converted: 2 }, ledger: { GAP_BASE: { n_resolved: 2, realized_pct: 100, predicted_pct: 73 } } };
 let dg = ssComposeDigest('2026-07-12', T0, S0);
@@ -64,6 +66,30 @@ T('multi-flag wording', dg.body.includes('2 games were flagged for a look tonigh
 T('housekeeping singular', dg.body.includes('1 finished game was scored and filed tonight.'));
 dg = ssComposeDigest('2026-07-12', T0, { ...S0, ledger: { GAP_BASE: { n_resolved: 31, realized_pct: 42, predicted_pct: 40 } } });
 T('post-30 shows realized vs predicted', dg.body.includes('gap-only spots: 31 collected — comebacks happened 42% of the time vs 40% predicted'));
+
+
+// ── ssOverrideLaneLine (OVERRIDE_LANE_SPEC §2, built Jul 16) ──
+{
+  const mk = (t, tw, tl, rw, rl, ageH) => ({ team_alias: t, updated_at: new Date(Date.now() - (ageH || 1) * 3600 * 1000).toISOString(),
+    profile: { tiers: { top: { w: tw, l: tl }, rest: { w: rw, l: rl } } } });
+  const fresh = [mk('MIN', 5, 1, 14, 5), mk('LV', 5, 2, 12, 6), mk('GS', 1, 5, 16, 1), mk('DAL', 2, 5, 14, 3)];
+  const line = ssOverrideLaneLine(fresh);
+  T('lane: MIN + LV both named (infl<0, wp>=.600, nTop>=5)', !!line && line.includes('MIN (5-1') && line.includes('LV (5-2'));
+  T('lane: cap $600 wording pinned', !!line && line.includes('cap $600'));
+  T('lane: inflated GS/DAL excluded', !!line && !line.includes('GS (') && !line.includes('DAL ('));
+  const empty = ssOverrideLaneLine([mk('GS', 1, 5, 16, 1)]);
+  T('lane: empty copy pinned', !!empty && empty.indexOf('Override lane: empty') === 0);
+  T('lane: stale >48h -> null (digest omits, never guesses)', ssOverrideLaneLine([mk('MIN', 5, 1, 14, 5, 60)]) === null);
+  T('lane: nTop<5 n-guard excludes', (ssOverrideLaneLine([mk('MIN', 3, 0, 14, 5)]) || '').includes('empty'));
+  const dgL = ssComposeDigest('2026-07-16',
+    { tiers: { A: { w: 0, l: 0 }, B: { w: 0, l: 0 } }, watchlist: { total: 0, converted: 0 }, resolvedTonight: 1 },
+    { A: { w: 1, l: 0 }, B: { w: 0, l: 0 }, watchlist: { total: 8, converted: 5 }, ledger: {} }, line);
+  T('digest: lane section included when line passed', !!dgL && dgL.body.includes('Override lane'));
+  const dgN = ssComposeDigest('2026-07-16',
+    { tiers: { A: { w: 0, l: 0 }, B: { w: 0, l: 0 } }, watchlist: { total: 0, converted: 0 }, resolvedTonight: 1 },
+    { A: { w: 1, l: 0 }, B: { w: 0, l: 0 }, watchlist: { total: 8, converted: 5 }, ledger: {} }, null);
+  T('digest: null lane -> section absent (3-arg compat preserved)', !!dgN && !dgN.body.includes('Override lane'));
+}
 
 console.log(`\n═══ ${pass} passed, ${fail} failed ═══`);
 process.exit(fail ? 1 : 0);
