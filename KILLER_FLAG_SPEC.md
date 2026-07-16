@@ -53,26 +53,27 @@ Nightly fields+fixture ~15 lines → init cols ~4 → fire-site stamp ~6 → bac
 ledger split ~12 → dashboard ~25. Data-layer parts are poll-safe anytime; the fire-site stamp
 is 2 lines inside fireSweetSpotAlert — deploy in a slate gap. Total ≈ 90 lines + 2 fixtures.
 
-## §7 DEFINITION ALIGNMENT (cascade trace, Jul 16 — PM-requested)
-Two elite definitions now co-reside. The contract that keeps them from cross-contaminating:
-- **`tiers` (def A, current >.600 strict)** feeds: gating context, override lane infl, honest-gap
-  forward registration, all narration/brief prompt copy ("vs top(>.600)"), pending BRIEFING
-  block. NEVER feeds killer/scalps.
-- **`ever600` + `killer` (this spec)** feed: EK chip, GAP_BASE dimension, descriptive reads.
-  NEVER feed infl, lane membership, or tier gates.
+## §7 DEFINITION ALIGNMENT (cascade trace, Jul 16 — PM-requested; rev 2 post-§8)
+Two elite definitions co-reside. The contract that keeps them from cross-contaminating:
+- **`tiers` (def A, current >.600 strict) — INTERNAL-ONLY:** feeds override-lane infl and the
+  honest-gap forward registration. Nothing user- or agent-facing reads it (per §8). NEVER
+  feeds killer/scalps.
+- **`elite` (hysteresis) + `tiers_elite` + `killer` — ALL consumer-facing surfaces:** EK chip,
+  GAP_BASE dimension, teamCtx prompt copy, BRIEFING block, descriptive reads. NEVER feed infl,
+  lane membership, or gates.
 - `computeKillerFields` is a SEPARATE pure fn — computeProfiles untouched → ATL golden cannot
-  break. Killer fixture adds: as-of replay case (date-filtered rows ⇒ ever600-as-of falls out
-  of the walk for free — same property the back-tag §3 relies on), WSH/CON/TOR exclusions,
-  POR(5) golden.
-- **Dashboard coherence:** EK tooltip uses "elite at the time"; when the team-ctx BRIEFING
-  block ships (spec 7e3cd65, pending), it carries a one-line legend distinguishing "vs current
-  top (>.600)" from "scalps (at-the-time elite)". Cross-note added to that spec.
-- **Narration untouched v1:** prompts keep def-A copy; any future flag mention in narration is
+  break. Killer fixture adds: as-of replay case (date-filtered rows ⇒ elite-state-as-of falls
+  out of the walk for free — same property the §3 back-tag relies on), WSH/CON/TOR exclusions,
+  POR(5) golden, IND-at-.583-still-elite hysteresis case.
+- **Dashboard coherence:** one definition everywhere consumer-facing (§8) — no legends needed.
+- **Narration:** migrates to "vs elite" copy via §8's composeTeamContext swap; prompt-builder
+  fixtures unaffected (synthetic ctx injection). Any future KILLER-flag mention in narration is
   its own fixture-updating change gated on §5 promotion.
-- **Chip flapping accepted:** membership recomputes nightly (LA one result from the .450 edge);
-  no hysteresis v1, matching lane precedent.
+- **Chip flapping accepted:** killer membership recomputes nightly (LA one result from the .450
+  edge); no hysteresis on the .450 side v1, matching lane precedent. (Elite membership itself
+  IS hysteretic per §1.)
 - **Scope:** WNBA only (no NBA/NCAAMB profiles exist); inherits with profiles extension.
-- Project-doc next refresh: record the two-definition contract in ANALYTICAL FRAMEWORK.
+- Project-doc next refresh: record the one-consumer-definition contract in ANALYTICAL FRAMEWORK.
 
 ## §8 ELITE LANGUAGE MIGRATION (PM decision C, Jul 16)
 Consumer-facing surfaces stop saying "vs top(>.600)" and adopt the ELITE hysteresis definition;
