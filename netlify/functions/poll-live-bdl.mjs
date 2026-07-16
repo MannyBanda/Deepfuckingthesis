@@ -1361,8 +1361,6 @@ function composeTeamContext(hA, aA, league, map = _teamCtxMap) {
     const sp = (v) => v == null ? '?' : (v > 0 ? '+' : '') + v;
     let s = `${alias} ${t.w}-${t.l} ${t.archetype} — eFG diff ${sp(i.efg_diff)}pp, TO margin ${sp(i.to_margin)}, FTA ${sp(i.fta_diff)}, OREB ${sp(i.oreb_diff)}`;
     if (tr.top && ((tr.top.w || 0) + (tr.top.l || 0)) > 0) s += ` | vs elite ${tr.top.w}-${tr.top.l} (eFG ${sp(tr.top.efg_diff)}pp), vs rest ${tr.rest.w}-${tr.rest.l}`;
-    const kk = t.profile.killer;
-    if (kk && kk.flag) s += ` | ELITE-KILLER profile (${kk.scalps} wins vs elite at sub-.450 record — variance-shaped wins; their LEADS historically fade harder)`;
     if (tr.insufficient) s += ` [tier splits small-n]`;
     if (f5) {
       s += ` | L5 ${f5.w}-${f5.l}, own eFG ${sp(f5.own_efg_delta)}pp, opp eFG ${sp(f5.opp_efg_delta)}pp`;
