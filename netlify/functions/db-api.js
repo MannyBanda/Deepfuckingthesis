@@ -884,6 +884,15 @@ exports.handler = async (event) => {
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, id: ins[0].id }) };
     }
 
+    // ── update_ss_killer (KILLER_FLAG_SPEC §3): back-tag leader_killer/scalps on an SS alert row.
+    if (action === 'update_ss_killer' && event.httpMethod === 'POST') {
+      const b = JSON.parse(event.body || '{}');
+      if (!b.id) return { statusCode: 400, headers, body: JSON.stringify({ error: 'id required' }) };
+      const rows = await sql`UPDATE sweetspot_alerts SET leader_killer = ${b.leader_killer ?? null},
+        leader_scalps = ${b.leader_scalps ?? null} WHERE id = ${b.id} RETURNING id, alert_subtype, leader_killer, leader_scalps`;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, row: rows[0] || null }) };
+    }
+
     // ── update_bet: revise grades/notes on existing rows (grading is iterative by design).
     // COALESCE semantics: only provided fields change; fields cannot be set to NULL via update.
     if (action === 'update_bet' && event.httpMethod === 'POST') {
