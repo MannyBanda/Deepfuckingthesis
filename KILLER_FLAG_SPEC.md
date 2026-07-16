@@ -32,8 +32,9 @@ with output pasted into the doc. Not a recurring job.
 - On load: single `get_team_profiles&league=wnba` fetch (15 rows), build killer set,
   cache 6h (profiles only change nightly)
 - Render: amber "EK" chip next to the team name on game-card headers when that team is
-  killer-flagged. Tooltip: "Elite killer — sub-.450 team with N wins over elite teams.
-  Their LEADS fade harder (hist 67% vs 53% trailer conversion)."
+  killer-flagged. Tooltip: "Elite killer — sub-.450 team with N wins over teams that were elite AT THE TIME.
+  Their LEADS fade harder (hist 67% vs 53% trailer conversion)." (at-the-time wording is the
+  §7 alignment contract — scalp denominators differ from current def-A tier records)
 - Chip renders on the TEAM, wherever they appear (leading or trailing) — it is identity, not
   a live read. Muted styling (no red; red is reserved for live alerts)
 - Degraded: fetch fails → no chips, no error surface
@@ -50,3 +51,24 @@ Manny's bet log: note flag status on band bets now (discretionary-alpha stream).
 Nightly fields+fixture ~15 lines → init cols ~4 → fire-site stamp ~6 → back-tag script ~30 →
 ledger split ~12 → dashboard ~25. Data-layer parts are poll-safe anytime; the fire-site stamp
 is 2 lines inside fireSweetSpotAlert — deploy in a slate gap. Total ≈ 90 lines + 2 fixtures.
+
+## §7 DEFINITION ALIGNMENT (cascade trace, Jul 16 — PM-requested)
+Two elite definitions now co-reside. The contract that keeps them from cross-contaminating:
+- **`tiers` (def A, current >.600 strict)** feeds: gating context, override lane infl, honest-gap
+  forward registration, all narration/brief prompt copy ("vs top(>.600)"), pending BRIEFING
+  block. NEVER feeds killer/scalps.
+- **`ever600` + `killer` (this spec)** feed: EK chip, GAP_BASE dimension, descriptive reads.
+  NEVER feed infl, lane membership, or tier gates.
+- `computeKillerFields` is a SEPARATE pure fn — computeProfiles untouched → ATL golden cannot
+  break. Killer fixture adds: as-of replay case (date-filtered rows ⇒ ever600-as-of falls out
+  of the walk for free — same property the back-tag §3 relies on), WSH/CON/TOR exclusions,
+  POR(5) golden.
+- **Dashboard coherence:** EK tooltip uses "elite at the time"; when the team-ctx BRIEFING
+  block ships (spec 7e3cd65, pending), it carries a one-line legend distinguishing "vs current
+  top (>.600)" from "scalps (at-the-time elite)". Cross-note added to that spec.
+- **Narration untouched v1:** prompts keep def-A copy; any future flag mention in narration is
+  its own fixture-updating change gated on §5 promotion.
+- **Chip flapping accepted:** membership recomputes nightly (LA one result from the .450 edge);
+  no hysteresis v1, matching lane precedent.
+- **Scope:** WNBA only (no NBA/NCAAMB profiles exist); inherits with profiles extension.
+- Project-doc next refresh: record the two-definition contract in ANALYTICAL FRAMEWORK.

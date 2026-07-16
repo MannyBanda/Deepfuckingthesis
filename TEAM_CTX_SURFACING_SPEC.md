@@ -88,3 +88,6 @@ analyze.js redeploy is instant-cutover and user-initiated only).
   a *descriptive* label; the registered small-gap hypothesis remains under OOS validation
   (research/2026-07-14_forward_eval_smallgap.py) and gets no predictive framing in UI until
   it passes.
+
+
+## ALIGNMENT NOTE (Jul 16, from KILLER_FLAG_SPEC §7): the BRIEFING block's vs-top records are def A (current >.600). The EK chip's scalp counts are at-the-time-elite (ever600 as-of). Ship the BRIEFING block with a one-line legend distinguishing the two so the same card never shows unexplained mismatched denominators.
