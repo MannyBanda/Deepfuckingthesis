@@ -90,4 +90,4 @@ analyze.js redeploy is instant-cutover and user-initiated only).
   it passes.
 
 
-## ALIGNMENT NOTE (Jul 16, from KILLER_FLAG_SPEC §7): the BRIEFING block's vs-top records are def A (current >.600). The EK chip's scalp counts are at-the-time-elite (ever600 as-of). Ship the BRIEFING block with a one-line legend distinguishing the two so the same card never shows unexplained mismatched denominators.
+## ALIGNMENT NOTE (Jul 16, rev 2 per KILLER_FLAG_SPEC §8): BRIEFING block ships on `tiers_elite` (hysteresis definition — enter .600@15+, demote <.550, re-enter .600). All consumer-facing surfaces share this one definition; no legend needed. Def-A tiers are internal-only (lane/registration).
