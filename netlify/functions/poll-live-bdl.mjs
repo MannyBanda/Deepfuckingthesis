@@ -1192,6 +1192,28 @@ async function ssGatherNarrationBlocks(sql, row) {
   return { blocks, hA, aA };
 }
 
+// PREGAME BRIEF SEEDING (Jul 15, PM approved — quiet): skeleton GAME_BRIEF rows for
+// today's NOT-YET-STARTED games (status scheduled/created only — finished games never
+// get a nonsense pregame lens). period=0 marks the row pregame-seeded: the narration
+// sweep narrates period-0 briefs with the pregame reason and NO push (matchup sheet is
+// the pregame surface). Idempotent via (game_id, alert_subtype) PK; D-9b's
+// first-live-poll transition seed stays for live coverage.
+async function ssSeedPregameBriefs(sql, schedule) {
+  if (!WNBA_GAME_BRIEF_ON) return;
+  const sched = typeof schedule === 'string' ? JSON.parse(schedule) : (schedule || []);
+  const todo = sched.filter((g) => g && g.id && g.home_alias && g.away_alias && /scheduled|created/i.test(String(g.status || 'scheduled')));
+  if (!todo.length) return;
+  const ids = todo.map((g) => String(g.id));
+  const have = new Set((await sql`SELECT game_id FROM sweetspot_alerts WHERE league = ${'wnba'} AND alert_subtype = ${'GAME_BRIEF'} AND game_id = ANY(${ids})`).map((r) => String(r.game_id)));
+  for (const g of todo) {
+    if (have.has(String(g.id))) continue;
+    await sql`INSERT INTO sweetspot_alerts (game_id, league, alert_subtype, alert_tier, period, clock, ntfy_sent)
+      VALUES (${g.id}, ${'wnba'}, ${'GAME_BRIEF'}, ${'BRIEF'}, ${0}, ${''}, ${false})
+      ON CONFLICT (game_id, alert_subtype) DO NOTHING`;
+    log(`pregame brief seeded: ${g.away_alias}@${g.home_alias}`);
+  }
+}
+
 // End-of-cycle tail sweep (D-4): claims at most ONE pending row per invocation —
 // fire narrations first (A/B only, D-7), then GAME_BRIEF rows. Lock row guards
 // concurrent cron invocations (hotfix #11). attempts 0-1 → Fable; attempt 3 (attempts==2)
@@ -1244,9 +1266,11 @@ async function ssNarrationSweep(sql, startTime) {
 
     const { blocks, hA, aA } = await ssGatherNarrationBlocks(sql, row);
     let prompt, title, priority;
+    const quietRow = isBrief && !Number(row.period);   // pregame-seeded skeleton (Jul 15): narrate with no push
     if (isBrief) {
       const liveLine = row.period ? `currently Q${row.period} ${row.clock || ''}` : '';
-      prompt = ssBuildBriefPrompt(hA || '?', aA || '?', { teamCtx: blocks.teamCtx, liveLine });
+      const reason = row.period ? undefined : 'the game has not tipped yet \u2014 this is the pregame season lens';
+      prompt = ssBuildBriefPrompt(hA || '?', aA || '?', { teamCtx: blocks.teamCtx, liveLine, reason });
       title = `GAME BRIEF ${aA || '?'} at ${hA || '?'}`;
       priority = 2;
     } else if (row.alert_subtype === 'WATCHLIST') {
@@ -1264,8 +1288,8 @@ async function ssNarrationSweep(sql, startTime) {
     const res = await ssCallNarration(prompt, model, timeoutMs);
     if (res.ok) {
       await sql`UPDATE sweetspot_alerts SET narration_text = ${res.text}, narration_attempts = ${attempts + 1}, ntfy_sent = true WHERE id = ${row.id}`;
-      await sendNtfy(title, res.text, priority, SS_DASH_URL);
-      log(`narration sweep: ${isBrief ? 'brief' : row.alert_subtype} row ${row.id} delivered via ${model} (${res.text.length} chars, attempt ${attempts + 1})`);
+      if (!quietRow) await sendNtfy(title, res.text, priority, SS_DASH_URL);
+      log(`narration sweep: ${isBrief ? 'brief' : row.alert_subtype} row ${row.id} delivered via ${model} (${res.text.length} chars, attempt ${attempts + 1})${quietRow ? ' quiet' : ''}`);
     } else {
       await sql`UPDATE sweetspot_alerts SET narration_attempts = ${attempts + 1} WHERE id = ${row.id}`;
       log(`narration sweep: row ${row.id} attempt ${attempts + 1} failed via ${model} — ${res.error}`);
@@ -7792,6 +7816,9 @@ export default async function(req) {
         const windowStart = new Date(new Date(pollState.first_tip).getTime() - 15 * 60 * 1000);
         const windowEnd = new Date(new Date(pollState.last_tip).getTime() + 3 * 60 * 60 * 1000);
         if (now < windowStart) {
+          if (league === 'wnba' && WNBA_GAME_BRIEF_ON && pollState?.schedule_json) {
+            try { await ssSeedPregameBriefs(sql, pollState.schedule_json); await ssNarrationSweep(sql, startTime); } catch (e) { log(`pregame brief sweep: ${e.message}`); }
+          }
           log(`${league.toUpperCase()}: before game window (first tip ${new Date(pollState.first_tip).toLocaleTimeString('en-US', {timeZone:'America/New_York'})} ET) — sleeping`);
           results.skipped = 'before_window';
           continue;
@@ -7802,6 +7829,12 @@ export default async function(req) {
           results.skipped = 'past_window';
           continue;
         }
+      }
+
+      // PREGAME BRIEF SEEDING (Jul 15): mid-slate cycles seed later games' skeletons
+      // hours before their tips; the end-of-cycle sweep fills them quietly (period-0).
+      if (league === 'wnba' && WNBA_GAME_BRIEF_ON && pollState?.schedule_json) {
+        try { await ssSeedPregameBriefs(sql, pollState.schedule_json); } catch (e) { log(`pregame brief seed: ${e.message}`); }
       }
 
       // ── 0b. Client heartbeat — logged but no longer skips server polling ──
