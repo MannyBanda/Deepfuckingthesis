@@ -53,6 +53,31 @@ down ≤ 3 · ≥ 5:00 remaining in Q4 · price ≥ +200 (breakeven ≤ 33.3%).
 Everything else in Q4: pass. Log qualifying spots (bet or pass) in the nightly ritual;
 promotion requires the forward stream to hold ≥ ~45% at n ≥ 15 [pre-registered].
 
+## Amendment 1 (same night — Manny's reframe): deepest-dip conditioning
+
+Manny: "look how many of this season's review/A games were down >4 in Q4 [and won]." Correct —
+and it exposes contamination in the per-checkpoint cells: standing-at-checkpoint mixes mid-dip
+games with blowout-bound games (≤−10 converts 6.5%, n=31), dragging the down-4+ cells to 11–27%.
+
+**[BACKTEST] conversion by DEEPEST sampled Q4 deficit (same pop, n=133):**
+never trailed 96.3% (54) · bottomed −1..−3 61.9% (21) · **bottomed −4..−6 46.7% (15)** ·
+**bottomed −7..−9 41.7% (12)** · hit ≤−10 6.5% (31). Of 79 winners, 18% dipped ≤−4 in Q4.
+
+**[PROD] live 2026 tape (11 resolved review/A games):** 5 of 9 winners dipped ≤−4 in Q4
+(CHI@DAL −7, SEA@WSH −6, PHX@MIN −8 [A-tier], SEA@IND −8; + WSH@GS −6 resolving Jul 18).
+In-band deepest −4..−9: 5/6 converted (POR@CON lost). Live stream is dip-heavier than backtest
+(56% vs 18% of winners) — plausible mechanism: killer-leader skew (two-sided variance → violent
+swings; dips are the signature, not noise).
+
+**Betting caveat:** the bottom is unobservable at decision time. Standing down 4–6 in Q4 you
+cannot distinguish the 44–47% bottomed-here world from the 6.5% blowout waypoint — the
+checkpoint conditional remains the mechanical-rule number; bottom-reading is discretionary alpha.
+
+**Second registered stream (LOG-ONLY, no take rule):** Q4_DIP_WATCH — after a pre-Q4 review
+fire: down 4–6 with ≥5:00 remaining in Q4. Count conversion forward; Manny's discretionary
+takes/passes in this cell logged against it. Promotion discussion at n≥15 [pre-registered].
+Q4_REENTRY take-rule unchanged.
+
 ## Power & provenance
 
 All Q4 cells LOW (<80) [BACKTEST]. Pooled base MED-HIGH. Sensitivity: GP floor 5 vs 8 stable.
