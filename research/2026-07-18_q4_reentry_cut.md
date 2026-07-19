@@ -69,6 +69,12 @@ In-band deepest −4..−9: 5/6 converted (POR@CON lost). Live stream is dip-hea
 (56% vs 18% of winners) — plausible mechanism: killer-leader skew (two-sided variance → violent
 swings; dips are the signature, not noise).
 
+**Measurement-grain caveat (Manny, Jul 18):** dip depth is resolution-dependent — possession-level
+reality > 60s prod snapshots > 2.5-min backtest checkpoints. Deepest-dip is a max-statistic, so the
+56% vs 18% winner-dip gap is CONFOUNDED: part killer-swing, part sampling density. Q4_DIP_WATCH is
+measured at snapshot grain consistently forward (internally clean); only the backtest cross-compare
+carries the bias. Standing item: keep watching live-vs-recorded dip behavior as the stream grows.
+
 **Betting caveat:** the bottom is unobservable at decision time. Standing down 4–6 in Q4 you
 cannot distinguish the 44–47% bottomed-here world from the 6.5% blowout waypoint — the
 checkpoint conditional remains the mechanical-rule number; bottom-reading is discretionary alpha.
