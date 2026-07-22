@@ -12,6 +12,58 @@ Discretionary alpha = (2) − (1). Never conflate them. Append one section per s
 
 ---
 
+## 2026-07-20 (WNBA) — P&L **+$463.16**
+
+4-game pre-All-Star slate. Both 7pm games fired WATCHLIST reviews with the better team down 1 — instructive pair: same tier, opposite premises, opposite outcomes. **Caesars debuts in the ledger** (line-protection split alongside bet365). Flagged stream after slate: **7-1, +$5,157.16**; unflagged speculatives hold 0-2.
+
+| Game | Side | Stake | Odds | Result | P&L | Grade | System trigger? |
+|---|---|---|---|---|---|---|---|
+| MIN@SEA | MIN ML — staged 4 entries, 2 books | $800 | blended ~+95 (−210/−115/+122/+125) | **W** (105-102) | +$763.16 | **A / C− / A−** | WATCHLIST row 601 (leader SEA .222, eFG 71 red, gap .547) |
+| WSH@GS | GS ML — 2 entries | $300 | ~+150 est | **L** (WSH 88-82) | −$300 | **C+ / A / B+** | WATCHLIST row 587 (leader WSH .500, scalps 3, gap .231) |
+| NY@DAL | **PASS** (DAL, REVIEW row 545) | — | — | NY won in OT | $0 | **A (pass)** | WATCHLIST (gap .16, Bueckers out) |
+
+### Grades
+
+- **MIN@SEA A / C− / A−** — *Entry A:* strongest WATCHLIST shape yet bet — leader at .222 deep in the <.400 evidence band holding a 71% red-band lead, gap .547 *understated* by MIN's −.10 deflation. Regression played on script (SEA 71 → 59.8). *Sizing C−:* $800 vs the $600 lane cap, no pre-entry lane declaration. Cap-creep pattern named: $300 cap → row 20 breach at $500 → lane built at $600 → breached at $800. Each breach retroactively legitimized by a win; the win does not soften the grade. Do not resize off green P&L — that is the graduation bar's entire job. *Execution A−:* staged into SEA's Q4 variance push at improving prices, split across Caesars/bet365 to protect the line (the exact line-impact problem previously flagged, solved correctly).
+- **WSH@GS C+ / A / B+** — *Entry C+:* not a donkey bet — STRONG FADE was flashing at the 03:08Z window and Friday's identical matchup converted. But three known, visible checks were skipped: leader wp .500 sits **outside the <.400 band** where all conversion evidence lives (and carried **3 elite scalps** — stamped on the row); GS's +.69 schedule inflation (league max) made the .231 gap mostly phantom; GS's own eFG was green-cold 47-53 all night — no capacity to punish the regression. The fade *landed* (WSH 66.1 → 59.8) and WSH still won on the structure underneath (final lead STRUCTURAL, var 37). Lesson canonized: **the fade grades the leader's heat, not the trailer's ability to collect.** *Sizing A:* exactly at the $300 WATCHLIST cap. *Execution B+:* ~+150 entry, no chasing GS's VOLATILE Q4 lead; hedge deliberation at +800 was premise-driven (leader-band check), declined on circumstance — the good version of the hedge instinct.
+- **NY@DAL A pass** — Review row 545 fired at Q2 8:58 on a .16 gap; passed on two independent strikes: whose-variance check failed (DAL was the variance side — 59.5-63.4% eFG while even/trailing) and Bueckers out made the Bueckers-inclusive .68 wp a stale input the market had already priced. Arc validated end-to-end: DAL's heat peaked 63.4, round-tripped to 52.2, regulation ended 83-83, NY in OT. Behavioral note: FOMO named in real time and resisted without a pacifier bet — the pass IS the move.
+
+**Triage takeaway (feeds the review-chip spec):** the five peepable discriminators between the two WATCHLIST spots were leader wp band, leader scalps, schedule-inflation badges, trailer's own eFG temp, and live-line behavior — all available at or before entry.
+
+---
+
+## 2026-07-18 / 07-19 (WNBA) — P&L **$0** (weekend, no bets)
+
+| Game | Side | Stake | Result | Grade | System trigger? |
+|---|---|---|---|---|---|
+| WSH@GS (Jul 18) | no bet | — | GS converted as trailer (74-69) | — | WATCHLIST (gap .198, def 7) |
+| LA@DAL (Jul 19) | no bet | — | DAL converted vs killer LA (gap .25) | — | WATCHLIST (killer leader) |
+
+Both review-stream spots converted unbet — they feed WATCHLIST calibration (12/12 resolved, 75% vs 66% predicted), not the realized-edge stream.
+
+---
+
+## 2026-07-17 (WNBA) — P&L **+$450** *(backfilled from DB row 21)*
+
+| Game | Side | Stake | Odds | Result | P&L | Grade | System trigger? |
+|---|---|---|---|---|---|---|---|
+| SEA@IND | IND ML live | $300 | +150 | **W** | +$450 | **A / A / A** | GAP_BASE row 435 (gap .353, SEA killer-flagged — first live-stamped killer row) |
+| ATL@TOR | **PASS** | — | — | — | $0 | **A (pass)** | modest-gap no-scalp leader class; price under breakeven per addendum rule |
+
+Entry at Q3_END down 6-8 — the textbook validated cell; beat the fire-time implied price via deficit patience. The ATL@TOR pass is the price-discipline rule working as written.
+
+---
+
+## 2026-07-15 (WNBA) — P&L **+$370.37** *(backfilled from DB row 20)*
+
+| Game | Side | Stake | Odds | Result | P&L | Grade | System trigger? |
+|---|---|---|---|---|---|---|---|
+| LA@MIN | MIN ML live | $500 | −135 | **W** | +$370.37 | **A− / C / A** | WATCHLIST row 401 (gap .295, LA lead VOLATILE 61% var) |
+
+Sized $500 over the $300 WATCHLIST cap on team-quality conviction — post-hoc codified as the **Override Lane** (top team, negative schedule inflation). Declined cash-out at Q4 2:20 up 13 (BE 97.6% vs honest ~99% = correct hold). The sizing C is the lane's origin story — and the pattern row 22's C− now escalates.
+
+---
+
 ## 2026-07-12 (WNBA) — P&L **+$1,498.95**
 
 First slate where the majority of action rode an above-bar band game. WATCHLIST fired on both day games. **Bankroll note: $22K (revised from $39K); sizing judged against this and the graduation stage — Manny is deliberately under-sizing while working up to right-size.**
