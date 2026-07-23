@@ -12,6 +12,28 @@ Discretionary alpha = (2) − (1). Never conflate them. Append one section per s
 
 ---
 
+## 2026-07-22 (WNBA) — P&L **+$445.45**
+
+6-game slate, 4 in-game fires — **all WATCHLIST, zero A/B**. WATCHLIST went 3-1. The two killer-cell spots (killer leader + gap .15–.30) both converted → **killer forward stream 6-0**. Flagged stream after slate: **9-1, +$5,602.61**; unflagged speculatives hold 0-2. Two bets, two graded passes — no chasing when sweet spot/price/conviction wasn't there.
+
+| Game | Side | Stake | Odds | Result | P&L | Grade | System trigger? |
+|---|---|---|---|---|---|---|---|
+| CHI@NY | NY ML live (Q4, −7) | $100 | +400 | **W** (95-94) | +$400 | **A / A / A** | WATCHLIST row 704 (killer leader CHI .346, gap .19, var 53) |
+| MIN@SEA | MIN ML live | $100 | −220 | **W** (86-76) | +$45.45 | **A / A / B+** | WATCHLIST row 651 + GAP_BASE 649 (gap .563, SEA lead STRUCTURAL) |
+| DAL@POR | **PASS** (availability) | — | — | DAL won 101-97 | $0 | — | WATCHLIST row 785 (killer leader POR .423, gap .23 — 2nd killer cell) |
+| LV@WSH | **PASS** (thesis) | — | — | LV lost 99-100 | $0 | **A (pass)** | WATCHLIST row 736 (leader WSH .52 — outside evidence band) |
+
+### Grades
+
+- **CHI@NY A / A / A** — *Entry A:* P2 fire skipped as a thesis pass — NY .538 sits **below the .550 hysteresis demote line**, big injuries, most losses-to-the-rest among elites; the .19 gap was built on a decaying trailer. Q4 re-entry came after NY bottomed ~−7 and showed recovery bite — landing in the deepest-dip research cell (bottomed −4..−9 converts 42-47%, grain caveat) against a **+400 breakeven of 20%**. Distinct from the Jul 12 NY@TOR B− shape: origin deficit −7 is in-cell (not −20 BANKED), the game was flagged, the leader was a killer. Same entry instinct, this time inside the evidence band. *Sizing A:* $100 under the $300 cap, reduced deliberately on articulated gap-distrust — "don't have to hit the max every time." *Execution A:* +400 vs the −150 fire price — 40 implied points of discretionary alpha on the same side; graded on price-vs-cell, not the last-play down-1 finish. **DIP_WATCH stays log-only — this bet does not promote the stream.**
+- **MIN@SEA A / A / B+** — *Entry A:* highest-conviction spot on the slate (gap .563, SEA needed a career shooting night last meeting and still lost), engine correctly read SEA's lead STRUCTURAL/green — nothing to fade, pure gap+quality. *Sizing A:* token $100 because the price never reached target — **size followed price, not conviction.** *Execution B+:* shopped Caesars −220 vs −265/−270 on our feed, turning the engine's +0.4pp nothing-edge into ~9pp vs the .778 season lens; B+ not A because the target price never arrived and the position stayed token.
+- **DAL@POR availability pass** — second killer-cell spot, converted at −170 (−185 consensus). Not a thesis miss: wasn't hunting, no good price surfaced. Canonical evidence case for the **price-stalking spec** — this is exactly the bet that spec exists to capture.
+- **LV@WSH A pass** — whose-variance check applied live from memory: LV (the trailer) was the variance side; WSH's lead was structural (eFG 40.9 green, EVEN class, var 43) and WSH .52 sits outside the <.400 evidence band — the same leader-band strike that graded row 23 C+. Season wp corrected in the *other* direction too: WSH is rising on elite Q4 execution, so the .20 gap overstated LV's real edge. Validated by a 1-point LV loss. The row-23 lesson, applied three days later, saved a stake.
+
+**Pattern flagged for research:** season-long wp corrected manually in both directions on the same slate (NY overstated, WSH understated) — same staleness class as the Bueckers row-545 input. Recent-form freshness check on gap inputs opened as a research thread (no build).
+
+---
+
 ## 2026-07-20 (WNBA) — P&L **+$463.16**
 
 4-game pre-All-Star slate. Both 7pm games fired WATCHLIST reviews with the better team down 1 — instructive pair: same tier, opposite premises, opposite outcomes. **Caesars debuts in the ledger** (line-protection split alongside bet365). Flagged stream after slate: **7-1, +$5,157.16**; unflagged speculatives hold 0-2.
