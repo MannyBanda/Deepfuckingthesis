@@ -55,6 +55,9 @@
 [functions."mc-backtest"]
   timeout = 120
 
+[functions."odds-squeeze"]
+  timeout = 60
+
 [[headers]]
   for = "/*"
   [headers.values]

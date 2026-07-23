@@ -261,7 +261,13 @@ exports.handler = async (event) => {
         entry_period INT, entry_deficit INT,
         notes TEXT, ts TIMESTAMPTZ DEFAULT NOW()
       )`; } catch(e) {}
-      try { await sql`CREATE INDEX IF NOT EXISTS idx_bets_date ON bets (placed_date, league)`; } catch(e) {}
+      try { await sql`CREATE INDEX IF NOT EXISTS idx_bets_date ON bets (placed_date, league)`;
+
+      // ── SQUEEZE_WATCH_SPEC v1.2: price-stalk state on SS rows ──
+      for (const c of ['squeeze_armed BOOLEAN', 'squeeze_threshold INT', 'squeeze_last_alert_price INT',
+                       'squeeze_alert_count INT DEFAULT 0', 'squeeze_expires_at TIMESTAMPTZ', 'squeeze_state JSONB']) {
+        try { await sql(`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS ${c}`); } catch(e) {}
+      } } catch(e) {}
 
       // Standings cache (daily refresh) — keyed BDL-canonical alias → W/L; feeds comebackProb leaderWP/trailerWP
       await sql`
@@ -891,6 +897,24 @@ exports.handler = async (event) => {
       const rows = await sql`UPDATE sweetspot_alerts SET leader_killer = ${b.leader_killer ?? null},
         leader_scalps = ${b.leader_scalps ?? null} WHERE id = ${b.id} RETURNING id, alert_subtype, leader_killer, leader_scalps`;
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, row: rows[0] || null }) };
+    }
+
+    // ── SQUEEZE_WATCH_SPEC v1.2: manual arm/disarm (auto-arm lives in odds-squeeze.mjs) ──
+    if (action === 'arm_squeeze' && event.httpMethod === 'POST') {
+      const b = JSON.parse(event.body || '{}');
+      if (!b.id) return { statusCode: 400, headers, body: JSON.stringify({ error: 'id required' }) };
+      const rows = await sql`UPDATE sweetspot_alerts SET squeeze_armed = TRUE,
+        squeeze_threshold = COALESCE(${b.threshold != null ? parseInt(b.threshold) : null},
+          CASE WHEN leader_killer IS TRUE THEN -150 ELSE 117 END),
+        squeeze_expires_at = NOW() + INTERVAL '3 hours'
+        WHERE id = ${b.id} RETURNING id, squeeze_threshold, trailer_alias`;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, armed: rows[0] || null }) };
+    }
+    if (action === 'disarm_squeeze' && event.httpMethod === 'POST') {
+      const b = JSON.parse(event.body || '{}');
+      if (!b.id) return { statusCode: 400, headers, body: JSON.stringify({ error: 'id required' }) };
+      await sql`UPDATE sweetspot_alerts SET squeeze_armed = FALSE WHERE id = ${b.id}`;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, disarmed: b.id }) };
     }
 
     // ── update_bet: revise grades/notes on existing rows (grading is iterative by design).

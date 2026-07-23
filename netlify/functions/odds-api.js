@@ -37,7 +37,8 @@ exports.handler = async function(event) {
         + '?apiKey=' + apiKey
         + '&regions=us,us2'
         + '&markets=h2h'
-        + '&oddsFormat=american';
+        + '&oddsFormat=american'
+        + (params.links ? '&includeLinks=true' : '');
     }
 
     var resp = await fetch(url);
