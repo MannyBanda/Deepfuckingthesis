@@ -32,7 +32,8 @@ const TTL_HOURS = 3; // arm expiry (fire + full game window)
 const log = (m) => console.log(`[squeeze] ${m}`);
 export const implied = (a) => (a > 0 ? 100 / (a + 100) : -a / (-a + 100));
 const fmtOdds = (a) => (a > 0 ? `+${a}` : `${a}`);
-const fixLink = (l) => (l ? l.replace('{state}', process.env.SQUEEZE_STATE || 'az') : l); // Odds API links carry a {state} token
+const fixLink = (l) => (l ? l.replace('{state}', process.env.SQUEEZE_STATE || 'az')
+  .replace('{pickType}', 'single').replace('{wagerAmount}', '') : l); // Odds API link templates: state/pickType/wagerAmount tokens
 export const bandOf = (efg) => (efg == null ? null : efg >= 65 ? 'red' : efg >= 56 ? 'orange' : 'green');
 
 function aliasFromName(name) {
@@ -224,6 +225,7 @@ export function composeSqueeze({ trailer, leader, price, book, threshold, cellRa
     }
   }
   if (shopLine) lines.push(`Best: ${shopLine}.`);
+  lines.push(`Tap opens: ${BOOK_NAMES[book] || book} slip.`);
   lines.push(`${capLine} Your read - not a directive.`);
   return { title, body: lines.join('\n') };
 }

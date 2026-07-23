@@ -52,5 +52,8 @@ ok('F no-var omits clause', F.body.includes('CHI lead: 66% eFG (red).'));
 const G = composeSqueeze({ ...base, cellRate:53, price:155, threshold:117, cellName:'no-scalp cell' });
 ok('G negative cushion prints honestly', G.body.includes('(-8pp)') || G.body.includes('(+'));
 
+ok('A tap-opens line', A.body.includes('Tap opens: Caesars slip.'));
+ok('B tap-opens best book', B.body.includes('Tap opens: FanDuel slip.'));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
