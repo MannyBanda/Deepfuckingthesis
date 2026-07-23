@@ -358,3 +358,8 @@ export default async (req) => {
   const p2 = await samplePass(sql, watches, espn2, null, dry);
   return Response.json({ ok: true, watches: watches.length, pass1: p1.results, pass2: p2.results });
 };
+
+// ── SCHEDULE CONFIG ─────────────────────────────────────────────────────────
+export const config = {
+  schedule: "*/1 * * * *", // every 1 min; double-sample inside = true 30s cadence
+};
