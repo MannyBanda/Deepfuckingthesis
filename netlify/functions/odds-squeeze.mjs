@@ -332,6 +332,7 @@ async function testAlert(sql) {
 }
 
 export default async (req) => {
+  try {
   const url = new URL(req.url);
   const test = url.searchParams.get('test') === '1';
   const dry = url.searchParams.get('dry') === '1';
@@ -357,6 +358,10 @@ export default async (req) => {
   const espn2 = await fetchEspnState();
   const p2 = await samplePass(sql, watches, espn2, null, dry);
   return Response.json({ ok: true, watches: watches.length, pass1: p1.results, pass2: p2.results });
+  } catch (e) {
+    console.log('[squeeze] handler crash:', e.message, e.stack);
+    return Response.json({ ok: false, crash: e.message, at: (e.stack || '').split('\n')[1] || '' });
+  }
 };
 
 // ── SCHEDULE CONFIG ─────────────────────────────────────────────────────────
