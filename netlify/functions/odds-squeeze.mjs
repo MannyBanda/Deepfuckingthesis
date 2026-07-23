@@ -261,7 +261,7 @@ async function autoArm(sql) {
   if (process.env.WNBA_SQUEEZE_AUTOARM === '0') return 0;
   const rows = await sql`
     UPDATE sweetspot_alerts SET squeeze_armed = TRUE,
-      squeeze_threshold = CASE WHEN leader_killer IS TRUE THEN ${KILLER_THRESHOLD} ELSE ${NONKILLER_THRESHOLD} END,
+      squeeze_threshold = CASE WHEN leader_killer IS TRUE THEN ${KILLER_THRESHOLD}::int ELSE ${NONKILLER_THRESHOLD}::int END,
       squeeze_expires_at = NOW() + INTERVAL '3 hours'
     WHERE league = ${LEAGUE} AND alert_subtype = ANY(${PUSHED_SUBTYPES})
       AND ntfy_sent IS TRUE AND (resolved IS NOT TRUE)

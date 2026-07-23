@@ -908,7 +908,7 @@ exports.handler = async (event) => {
       const b = JSON.parse(event.body || '{}');
       if (!b.id) return { statusCode: 400, headers, body: JSON.stringify({ error: 'id required' }) };
       const rows = await sql`UPDATE sweetspot_alerts SET squeeze_armed = TRUE,
-        squeeze_threshold = COALESCE(${b.threshold != null ? parseInt(b.threshold) : null},
+        squeeze_threshold = COALESCE(${b.threshold != null ? parseInt(b.threshold) : null}::int,
           CASE WHEN leader_killer IS TRUE THEN -150 ELSE 117 END),
         squeeze_expires_at = NOW() + INTERVAL '3 hours'
         WHERE id = ${b.id} RETURNING id, squeeze_threshold, trailer_alias`;
