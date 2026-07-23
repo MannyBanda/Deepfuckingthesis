@@ -32,6 +32,7 @@ const TTL_HOURS = 3; // arm expiry (fire + full game window)
 const log = (m) => console.log(`[squeeze] ${m}`);
 export const implied = (a) => (a > 0 ? 100 / (a + 100) : -a / (-a + 100));
 const fmtOdds = (a) => (a > 0 ? `+${a}` : `${a}`);
+const fixLink = (l) => (l ? l.replace('{state}', process.env.SQUEEZE_STATE || 'az') : l); // Odds API links carry a {state} token
 export const bandOf = (efg) => (efg == null ? null : efg >= 65 ? 'red' : efg >= 56 ? 'orange' : 'green');
 
 function aliasFromName(name) {
@@ -73,7 +74,7 @@ function bestPrice(event, alias) {
       if (m.key !== 'h2h') continue;
       for (const o of m.outcomes || []) {
         if (aliasFromName(o.name) !== alias) continue;
-        const link = o.link || m.link || bk.link || BOOK_LINKS[bk.key] || BOOK_LINKS[DEFAULT_BOOK];
+        const link = fixLink(o.link || m.link || bk.link) || BOOK_LINKS[bk.key] || BOOK_LINKS[DEFAULT_BOOK];
         if (!best || implied(o.price) < implied(best.price) ||
             (o.price === best.price && bk.key === DEFAULT_BOOK)) {
           best = { price: o.price, book: bk.key, link };
@@ -309,7 +310,7 @@ async function testAlert(sql) {
   for (const bk of ev.bookmakers || []) if (bk.key === 'williamhill_us')
     for (const m of bk.markets || []) if (m.key === 'h2h')
       for (const o of m.outcomes || []) if (aliasFromName(o.name) === dogAlias)
-        caesars = { price: o.price, apiLink: o.link || m.link || bk.link || null };
+        caesars = { price: o.price, apiLink: fixLink(o.link || m.link || bk.link) || null };
   const link = caesars?.apiLink || best.link;
   const { title, body } = composeSqueeze({
     trailer: dogAlias, leader: favAlias, price: best.price, book: best.book,
