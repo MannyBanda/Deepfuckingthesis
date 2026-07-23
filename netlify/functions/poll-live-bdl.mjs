@@ -1141,8 +1141,6 @@ async function ssGatherNarrationBlocks(sql, row) {
     const g = await sql`SELECT home_alias, away_alias, quarter_data FROM games WHERE id = ${row.game_id}`;
     if (g[0]) {
       hA = norm(g[0].home_alias); aA = norm(g[0].away_alias);
-      await ensureTeamCtx(sql, 'wnba');
-      blocks.teamCtx = composeTeamContext(hA, aA, 'wnba');
       // quarter flow — proven quarter_data.diffs reader (formatSonnetPrompt pattern)
       try {
         let qd = g[0].quarter_data;
@@ -1161,6 +1159,26 @@ async function ssGatherNarrationBlocks(sql, row) {
       } catch (e) { /* omit */ }
     }
   } catch (e) { log(`narration blocks: game fetch — ${e.message}`); }
+  // CTX_FIX (Jul 23): pregame-seeded briefs narrate at the pre-window sweep, hours before
+  // the games row exists (it is created only by the first in-window live poll). Resolve
+  // aliases from poll_state.schedule_json — the seeder's own alias source. Isolated
+  // SELECT, fires only on the missing-games branch (pre-window in practice).
+  if (!hA || !aA) {
+    try {
+      const ps = await sql`SELECT schedule_json FROM poll_state WHERE league = ${'wnba'} ORDER BY date DESC LIMIT 1`;
+      if (ps[0] && ps[0].schedule_json) {
+        const sched = typeof ps[0].schedule_json === 'string' ? JSON.parse(ps[0].schedule_json) : ps[0].schedule_json;
+        const ent = (Array.isArray(sched) ? sched : []).find((x) => x && String(x.id) === String(row.game_id));
+        if (ent && ent.home_alias && ent.away_alias) { hA = norm(ent.home_alias); aA = norm(ent.away_alias); }
+      }
+    } catch (e) { log(`narration blocks: schedule fallback — ${e.message}`); }
+  }
+  // teamCtx hoisted out of the games-row guard (CTX_FIX): compose whenever both aliases
+  // resolve. All prior degradation paths preserved — TEAM_CTX_ON off, unloaded map, or
+  // unresolvable aliases still yield '' exactly as before.
+  if (hA && aA) {
+    try { await ensureTeamCtx(sql, 'wnba'); blocks.teamCtx = composeTeamContext(hA, aA, 'wnba'); } catch (e) { /* degrade */ }
+  }
   // player context — recompose from persisted digest (FRAMING RULES travel inside)
   try {
     if (row.player_ctx_json) {
@@ -7091,9 +7109,21 @@ export default async function(req) {
     const gameId = url.searchParams.get('ss_brief');
     try {
       const g = await sql`SELECT id, home_alias, away_alias FROM games WHERE id = ${gameId} AND league = ${'wnba'}`;
-      if (!g[0]) return new Response(JSON.stringify({ ok: false, error: 'game not found (wnba)' }), { status: 404 });
       const norm = (al) => ((LEAGUES.wnba && LEAGUES.wnba.aliasMap) || {})[al] || al;
-      const hA = norm(g[0].home_alias), aA = norm(g[0].away_alias);
+      let hA = null, aA = null;
+      if (g[0]) { hA = norm(g[0].home_alias); aA = norm(g[0].away_alias); }
+      else {
+        // CTX_FIX (Jul 23): pregame the games row doesn't exist yet (first in-window live
+        // poll creates it) — resolve from poll_state.schedule_json so briefs can be
+        // (re)generated before tip. 404 only if both sources miss.
+        try {
+          const ps = await sql`SELECT schedule_json FROM poll_state WHERE league = ${'wnba'} ORDER BY date DESC LIMIT 1`;
+          const sched = ps[0] && ps[0].schedule_json ? (typeof ps[0].schedule_json === 'string' ? JSON.parse(ps[0].schedule_json) : ps[0].schedule_json) : [];
+          const ent = (Array.isArray(sched) ? sched : []).find((x) => x && String(x.id) === String(gameId));
+          if (ent && ent.home_alias && ent.away_alias) { hA = norm(ent.home_alias); aA = norm(ent.away_alias); }
+        } catch (e) { /* fall through to 404 */ }
+      }
+      if (!hA || !aA) return new Response(JSON.stringify({ ok: false, error: 'game not found (wnba)' }), { status: 404 });
       await ensureTeamCtx(sql, 'wnba');
       // live line: latest snapshot if the game is underway
       let liveLine = '';
