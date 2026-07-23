@@ -264,10 +264,14 @@ exports.handler = async (event) => {
       try { await sql`CREATE INDEX IF NOT EXISTS idx_bets_date ON bets (placed_date, league)`;
 
       // ── SQUEEZE_WATCH_SPEC v1.2: price-stalk state on SS rows ──
-      for (const c of ['squeeze_armed BOOLEAN', 'squeeze_threshold INT', 'squeeze_last_alert_price INT',
-                       'squeeze_alert_count INT DEFAULT 0', 'squeeze_expires_at TIMESTAMPTZ', 'squeeze_state JSONB']) {
-        try { await sql(`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS ${c}`); } catch(e) {}
-      } } catch(e) {}
+      try {
+        await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS squeeze_armed BOOLEAN`;
+        await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS squeeze_threshold INT`;
+        await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS squeeze_last_alert_price INT`;
+        await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS squeeze_alert_count INT DEFAULT 0`;
+        await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS squeeze_expires_at TIMESTAMPTZ`;
+        await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS squeeze_state JSONB`;
+      } catch(e) { console.log('squeeze column migration failed:', e.message); } } catch(e) {}
 
       // Standings cache (daily refresh) — keyed BDL-canonical alias → W/L; feeds comebackProb leaderWP/trailerWP
       await sql`
