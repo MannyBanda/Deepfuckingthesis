@@ -102,7 +102,7 @@ Config & research:
 |BDL      |`ee78e074-2f89-4ee5-807a-181fc324398c`    |`BDL_API_KEY`      |GOAT tier, all leagues          |
 |SR NBA   |`HE9cr9RYzuQnPmD7PO8ueCuirC65QyyCv9jYH2cU`|`SR_API_KEY`       |trial/v8, 1 req/sec             |
 |SR NCAAMB|`OZ1P5Dnx0WjWHGy6yNFlMIT8rqQVQILftOR9xOpO`|`SR_NCAAMB_KEY`    |trial/v8, separate from NBA     |
-|SR WNBA  |`foQyHxS5MPKxDAcroxAEKaEb8OTquSOI79RE8UML`|`SR_WNBA_KEY`      |replaced May 10 after rate limit|
+|SR WNBA  |`kQEMwYyZ35p5kHcBKQEfQdyJvamU3XlCHBzGxc5C`|`SR_WNBA_KEY`      |replaced Jul 19 (prior: May 10)|
 |Anthropic|—                                         |`ANTHROPIC_API_KEY`|Opus calls                      |
 
 Other Netlify env vars: `DATABASE_URL`, `NTFY_TOPIC` (manny_nba_control), `ODDS_API_KEY` (The Odds API paid plan, 20K credits/month).
