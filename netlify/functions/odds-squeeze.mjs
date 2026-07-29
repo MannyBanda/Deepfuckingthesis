@@ -42,8 +42,10 @@ export const probToAmerican = (p) => {
 // per-row threshold: dynamic (row's own predicted p - 5pp) for non-killer A-tiers;
 // killer cell -150 (wider net, PM Jul 22); +117 derived breakeven otherwise
 export const pickThreshold = (row) => {
+  // tier trumps killer: A-tier gets the widest net regardless of flag (PM Jul 28);
+  // killer only differentiates the review tiers (B/WATCHLIST)
+  if (row.alert_subtype === 'EFG_FADE') return A_TIER_THRESHOLD;
   if (row.leader_killer) return KILLER_THRESHOLD;
-  if (row.alert_subtype === 'EFG_FADE') return A_TIER_THRESHOLD; // flat policy replaced same-day dynamic mode (PM Jul 28)
   return NONKILLER_THRESHOLD;
 };
 export const bandOf = (efg) => (efg == null ? null : efg >= 65 ? 'red' : efg >= 56 ? 'orange' : 'green');

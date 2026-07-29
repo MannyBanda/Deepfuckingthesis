@@ -22,7 +22,8 @@ alert when the best book crosses a cell-aware threshold. Alerts are eyes, never 
    ≈25¢; max 6 alerts per arm; TTL 3h).
 
 ## Thresholds (defaults; per-arm override via db-api arm_squeeze)
-- Killer cell: **-150** — policy (PM Jul 22), implied 60% vs cell 67% [PRIOR n=45] / sweet-zone 75%.
+- Killer cell (B/WATCHLIST only): **-150** — policy (PM Jul 22), implied 60% vs cell 67% [PRIOR n=45].
+  Tier trumps killer: an A-tier takes -200 whether the leader is killer-flagged or not (PM Jul 28).
 - Non-killer B/WATCHLIST: **+117** — derived, pre-registered 46% breakeven [PRIOR].
 - Non-killer A-tier (EFG_FADE): **-200** — policy (PM Jul 28), implied 66.7% vs the .70
   anchor's -233 breakeven. Supersedes the same-day dynamic mode (row p − 5pp): row-level p

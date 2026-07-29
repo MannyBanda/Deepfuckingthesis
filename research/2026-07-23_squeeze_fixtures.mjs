@@ -62,7 +62,8 @@ ok('probToAmerican clamps high', probToAmerican(0.99) === probToAmerican(0.90));
 ok('A-tier flat -200 (PM policy 7/28)', pickThreshold({ alert_subtype:'EFG_FADE', leader_killer:false, line_used:-105, edge:0.097605444 }) === -200);
 ok('row 818/26 replay: -130 crosses -200', implied(-130) <= implied(-200));
 ok('-250 does not cross -200', implied(-250) > implied(-200));
-ok('killer A keeps -150 (wider net)', pickThreshold({ alert_subtype:'EFG_FADE', leader_killer:true }) === -150);
+ok('killer A takes -200 (tier trumps killer)', pickThreshold({ alert_subtype:'EFG_FADE', leader_killer:true }) === -200);
+ok('killer WATCHLIST keeps -150', pickThreshold({ alert_subtype:'WATCHLIST', leader_killer:true }) === -150);
 ok('WATCHLIST non-killer keeps +117', pickThreshold({ alert_subtype:'WATCHLIST', leader_killer:false }) === 117);
 
 console.log(`\n${pass} passed, ${fail} failed`);
