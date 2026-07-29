@@ -24,6 +24,7 @@ const BOOK_LINKS = { // universal-link fallbacks (open installed app) when API l
 const NICK = { Lynx: 'MIN', Storm: 'SEA', Fire: 'POR', Wings: 'DAL', Sky: 'CHI', Liberty: 'NY', Aces: 'LV', Mystics: 'WSH', Sun: 'CON', Fever: 'IND', Sparks: 'LA', Mercury: 'PHX', Valkyries: 'GS', Dream: 'ATL', Tempo: 'TOR' };
 const PUSHED_SUBTYPES = ['EFG_FADE', 'EFG_FADE_SOFT', 'B1', 'B2', 'B3', 'WATCHLIST'];
 const KILLER_THRESHOLD = -150; // policy (PM Jul 22): implied 60% vs killer cell 67% [PRIOR n=45]
+const A_TIER_THRESHOLD = -200; // policy (PM Jul 28): implied 66.7% vs .70 anchor breakeven -233; wide-net eyes, breakeven check decides
 const NONKILLER_THRESHOLD = 117; // derived: pre-registered 46% breakeven on no-scalp cells [PRIOR]
 const REARM_IMPLIED_DROP = 0.035; // ~25 cents around +140; implied-prob scale crosses zero cleanly
 const MAX_ALERTS_PER_ARM = 6;
@@ -42,10 +43,7 @@ export const probToAmerican = (p) => {
 // killer cell -150 (wider net, PM Jul 22); +117 derived breakeven otherwise
 export const pickThreshold = (row) => {
   if (row.leader_killer) return KILLER_THRESHOLD;
-  if (row.alert_subtype === 'EFG_FADE' && row.line_used != null && row.edge != null) {
-    const p = implied(Number(row.line_used)) + Number(row.edge);
-    return probToAmerican(p - 0.05);
-  }
+  if (row.alert_subtype === 'EFG_FADE') return A_TIER_THRESHOLD; // flat policy replaced same-day dynamic mode (PM Jul 28)
   return NONKILLER_THRESHOLD;
 };
 export const bandOf = (efg) => (efg == null ? null : efg >= 65 ? 'red' : efg >= 56 ? 'orange' : 'green');

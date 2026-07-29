@@ -59,10 +59,11 @@ ok('B tap-opens best book', B.body.includes('Tap opens: FanDuel slip.'));
 ok('probToAmerican .65 = -186', probToAmerican(0.65) === -186);
 ok('probToAmerican .45 = +122', probToAmerican(0.45) === 122);
 ok('probToAmerican clamps high', probToAmerican(0.99) === probToAmerican(0.90));
-ok('row 818 replay: A-tier -105/+.098 -> -127', pickThreshold({ alert_subtype:'EFG_FADE', leader_killer:false, line_used:-105, edge:0.097605444 }) === -127);
-ok('killer A keeps -150 (wider net)', pickThreshold({ alert_subtype:'EFG_FADE', leader_killer:true, line_used:-105, edge:0.1 }) === -150);
-ok('WATCHLIST non-killer keeps +117', pickThreshold({ alert_subtype:'WATCHLIST', leader_killer:false, line_used:150, edge:0.2 }) === 117);
-ok('A-tier null edge falls back +117', pickThreshold({ alert_subtype:'EFG_FADE', leader_killer:false, line_used:-105, edge:null }) === 117);
+ok('A-tier flat -200 (PM policy 7/28)', pickThreshold({ alert_subtype:'EFG_FADE', leader_killer:false, line_used:-105, edge:0.097605444 }) === -200);
+ok('row 818/26 replay: -130 crosses -200', implied(-130) <= implied(-200));
+ok('-250 does not cross -200', implied(-250) > implied(-200));
+ok('killer A keeps -150 (wider net)', pickThreshold({ alert_subtype:'EFG_FADE', leader_killer:true }) === -150);
+ok('WATCHLIST non-killer keeps +117', pickThreshold({ alert_subtype:'WATCHLIST', leader_killer:false }) === 117);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

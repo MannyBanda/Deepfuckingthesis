@@ -24,10 +24,12 @@ alert when the best book crosses a cell-aware threshold. Alerts are eyes, never 
 ## Thresholds (defaults; per-arm override via db-api arm_squeeze)
 - Killer cell: **-150** — policy (PM Jul 22), implied 60% vs cell 67% [PRIOR n=45] / sweet-zone 75%.
 - Non-killer B/WATCHLIST: **+117** — derived, pre-registered 46% breakeven [PRIOR].
-- Non-killer A-tier (EFG_FADE): **dynamic** (activated 7/28) — threshold = American odds of
-  (row's own predicted p − 5pp), where p = implied(line_used) + edge, clamped [.35,.90].
-  Rationale: flat +117 is the modest-gap cell; an A-tier's own p is the honest per-row anchor.
-  NULL line/edge falls back to +117.
+- Non-killer A-tier (EFG_FADE): **-200** — policy (PM Jul 28), implied 66.7% vs the .70
+  anchor's -233 breakeven. Supersedes the same-day dynamic mode (row p − 5pp): row-level p
+  is provably shy (+12pp GAP_BASE, +9pp WATCHLIST, both sub-power n) and produced thresholds
+  below the review tiers on the system's highest-confidence cell. Threshold is attention
+  routing only — zero interaction with graduation, which gates sizing escalation via logged
+  predictions vs outcomes at n=30. Alerts are eyes; the breakeven check decides.
 
 ## Best-price routing
 Roster: williamhill_us (Caesars), espnbet, fanduel, betrivers, hardrockbet, draftkings.
