@@ -41,7 +41,7 @@ ntfy Click = outcome/market/bookmaker API link, else pinned BOOK_LINKS universal
 
 ## Alert copy
 Pinned in `research/2026-07-23_squeeze_fixtures.mjs` (24 cases, all passing). Shape:
-title `SQUEEZE: {TRAILER} {price} ({Book})`; body = implied-vs-cell cushion, deficit/clock,
+title `JUICE: {TRAILER} {price} ({Book})` (brand word, PM Jul 28; module/schema keep 'squeeze'); body = implied-vs-cell cushion, deficit/clock,
 leader eFG/band/var-share, trailer own eFG + capacity read, top-3 shop line, cap line,
 "Your read - not a directive." NULL-degrades on stale (>90s) snapshots. ASCII titles.
 

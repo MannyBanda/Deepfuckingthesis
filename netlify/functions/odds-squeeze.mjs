@@ -224,7 +224,7 @@ async function disarm(sql, w, why) {
 export function composeSqueeze({ trailer, leader, price, book, threshold, cellRate, cellName, deficit, period, clock, leaderEfg, leaderBand, leaderVar, trailerEfg, capLine, shopLine, stale }) {
   const imp = Math.round(implied(price) * 100);
   const cushion = cellRate ? `${cellRate - imp >= 0 ? '+' : ''}${cellRate - imp}pp` : 'n/a';
-  const title = `SQUEEZE: ${trailer} ${fmtOdds(price)} (${BOOK_NAMES[book] || book})`;
+  const title = `JUICE: ${trailer} ${fmtOdds(price)} (${BOOK_NAMES[book] || book})`; // brand word (PM Jul 28); internals keep 'squeeze'
   const lines = [
     `Price hit your ${fmtOdds(threshold)} line. Implied ${imp}% vs ${cellName} ${cellRate ?? '?'}% (${cushion}).`,
     `${trailer} down ${deficit}, Q${period} ${clock}.`,

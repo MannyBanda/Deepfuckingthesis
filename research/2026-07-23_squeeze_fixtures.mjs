@@ -22,7 +22,7 @@ const base = { trailer:'NY', leader:'CHI', price:-140, book:'williamhill_us', th
   capLine:'Cap $300.', shopLine:'Caesars -140 | FanDuel -145 | DK -148', stale:false };
 
 const A = composeSqueeze(base);
-ok('A title', A.title === 'SQUEEZE: NY -140 (Caesars)');
+ok('A title', A.title === 'JUICE: NY -140 (Caesars)');
 ok('A implied+cushion', A.body.includes('Implied 58% vs killer cell 67% (+9pp)'));
 ok('A leader line', A.body.includes('CHI lead: 66% eFG (red) - 58% from threes/midrange.'));
 ok('A trailer read', A.body.includes('NY own: 51% eFG (green) - room to climb.'));
@@ -33,7 +33,7 @@ ok('A ascii title', /^[\x00-\x7F]+$/.test(A.title));
 const B = composeSqueeze({ ...base, trailer:'LV', leader:'WSH', price:145, book:'fanduel',
   threshold:117, cellRate:53, cellName:'no-scalp cell', deficit:4, clock:'7:50',
   leaderEfg:61, leaderBand:'orange', leaderVar:52, trailerEfg:54, capLine:'Lane spot ($600 cap, declare before entry).' });
-ok('B title plus-price', B.title === 'SQUEEZE: LV +145 (FanDuel)');
+ok('B title plus-price', B.title === 'JUICE: LV +145 (FanDuel)');
 ok('B cushion math', B.body.includes('Implied 41% vs no-scalp cell 53% (+12pp)'));
 ok('B lane cap line', B.body.includes('Lane spot ($600 cap, declare before entry). Your read - not a directive.'));
 
