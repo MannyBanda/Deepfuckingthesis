@@ -23,7 +23,11 @@ alert when the best book crosses a cell-aware threshold. Alerts are eyes, never 
 
 ## Thresholds (defaults; per-arm override via db-api arm_squeeze)
 - Killer cell: **-150** — policy (PM Jul 22), implied 60% vs cell 67% [PRIOR n=45] / sweet-zone 75%.
-- Non-killer: **+117** — derived, pre-registered 46% breakeven [PRIOR].
+- Non-killer B/WATCHLIST: **+117** — derived, pre-registered 46% breakeven [PRIOR].
+- Non-killer A-tier (EFG_FADE): **dynamic** (activated 7/28) — threshold = American odds of
+  (row's own predicted p − 5pp), where p = implied(line_used) + edge, clamped [.35,.90].
+  Rationale: flat +117 is the modest-gap cell; an A-tier's own p is the honest per-row anchor.
+  NULL line/edge falls back to +117.
 
 ## Best-price routing
 Roster: williamhill_us (Caesars), espnbet, fanduel, betrivers, hardrockbet, draftkings.

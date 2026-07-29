@@ -34,6 +34,20 @@ export const implied = (a) => (a > 0 ? 100 / (a + 100) : -a / (-a + 100));
 const fmtOdds = (a) => (a > 0 ? `+${a}` : `${a}`);
 const fixLink = (l) => (l ? l.replace('{state}', process.env.SQUEEZE_STATE || 'az')
   .replace('{pickType}', 'single').replace('{wagerAmount}', '') : l); // Odds API link templates: state/pickType/wagerAmount tokens
+export const probToAmerican = (p) => {
+  const c = Math.min(0.90, Math.max(0.35, p)); // clamp: no absurd thresholds from bad inputs
+  return c >= 0.5 ? Math.round(-100 * c / (1 - c)) : Math.round(100 * (1 - c) / c);
+};
+// per-row threshold: dynamic (row's own predicted p - 5pp) for non-killer A-tiers;
+// killer cell -150 (wider net, PM Jul 22); +117 derived breakeven otherwise
+export const pickThreshold = (row) => {
+  if (row.leader_killer) return KILLER_THRESHOLD;
+  if (row.alert_subtype === 'EFG_FADE' && row.line_used != null && row.edge != null) {
+    const p = implied(Number(row.line_used)) + Number(row.edge);
+    return probToAmerican(p - 0.05);
+  }
+  return NONKILLER_THRESHOLD;
+};
 export const bandOf = (efg) => (efg == null ? null : efg >= 65 ? 'red' : efg >= 56 ? 'orange' : 'green');
 
 function aliasFromName(name) {
@@ -260,15 +274,18 @@ async function pushSqueezeAlert(sql, w, g, deficit, best, shopLine) {
 async function autoArm(sql) {
   if (process.env.WNBA_SQUEEZE_AUTOARM === '0') return 0;
   const rows = await sql`
-    UPDATE sweetspot_alerts SET squeeze_armed = TRUE,
-      squeeze_threshold = CASE WHEN leader_killer IS TRUE THEN ${KILLER_THRESHOLD}::int ELSE ${NONKILLER_THRESHOLD}::int END,
-      squeeze_expires_at = NOW() + INTERVAL '3 hours'
+    SELECT id, alert_subtype, leader_killer, line_used, edge FROM sweetspot_alerts
     WHERE league = ${LEAGUE} AND alert_subtype = ANY(${PUSHED_SUBTYPES})
       AND ntfy_sent IS TRUE AND (resolved IS NOT TRUE)
       AND squeeze_armed IS NULL
-      AND created_at > NOW() - INTERVAL '3 hours'
-    RETURNING id`;
-  if (rows.length) log(`auto-armed ${rows.length} row(s): ${rows.map((r) => r.id).join(',')}`);
+      AND created_at > NOW() - INTERVAL '3 hours'`;
+  for (const r of rows) {
+    const thr = pickThreshold(r);
+    await sql`UPDATE sweetspot_alerts SET squeeze_armed = TRUE,
+      squeeze_threshold = ${thr}::int, squeeze_expires_at = NOW() + INTERVAL '3 hours'
+      WHERE id = ${r.id}`;
+    log(`auto-armed row ${r.id} (${r.alert_subtype}${r.leader_killer ? ' killer' : ''}) threshold ${thr}`);
+  }
   return rows.length;
 }
 
