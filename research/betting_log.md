@@ -12,6 +12,26 @@ Discretionary alpha = (2) − (1). Never conflate them. Append one section per s
 
 ---
 
+## 2026-07-29 (WNBA) — P&L **$0** (two graded passes, one game)
+
+2-game slate, one in-game fire (ATL@DAL brief-only). GS@PHX produced the cleanest whose-variance teaching case since POR@CHI — and its mirror image in the same game. Flagged stream holds **11-1, +$6,101.45**. No bets.
+
+| Game | Side | Stake | Odds | Result | P&L | Grade | System trigger? |
+|---|---|---|---|---|---|---|---|
+| GS@PHX | **PASS** (GS, thesis) | — | — | PHX won 91-89 | $0 | **A (pass)** | WATCHLIST row 936 (P2 9:05, killer leader PHX .357, scalps 2, gap .347, PHX +5, GS +102) |
+| GS@PHX | **PASS** (PHX itch, discretionary) | — | — | PHX won 91-89 | $0 | **A (pass)** | none — killed #10 shape (worse-team trailer, down 9–13 at +600/+850) |
+
+### Grades
+
+- **GS pass A** — four independent strikes at fire time, all peepable on the row: (1) whose-variance failed — PHX's lead was green-band 43.75 eFG, var share 26, STRUCTURAL: cold-shooting and leading anyway, nothing to fade; (2) Gabby Williams out (reconditioning; Rupert also out) = the roster-news gap-distrust trigger (row-545 class) — GS's .704 wp priced a roster not on the floor; (3) GS +.69 schedule inflation (league max) made the .347 gap mostly phantom; (4) the market agreed — GS ~−120 pregame (~55% implied) vs ~80% log5 from raw records. Outcome validated: GS lost 91-89.
+- **PHX itch pass A** — GS blew it open to +13 in Q3 and the engine classified GS's lead **VOLATILE, var share 52–55%** in real time — the machine and the gut agreed on whose lead was fake. Declined at +600/+850 because the worse-team trailer is the killed #10 shape (1-for-7, negative edge across all variants). PHX then completed the comeback and won 91-89. **The win does not resurrect #10 — resulting-bias guard applies in full; this pass is graded on the decision, not the finish.** The itch is channeled, not buried: PHX = killer-flagged trailer storming back on a max-inflated elite leader → canonical teaching case for the **trailer-side killer cut** (open research item). No pacifier bet placed.
+
+**Near-miss note (Q4_REENTRY, not yet built):** GS hit the +200 price down 2 — at 4:03 on the clock, 63 seconds past the ≥5:00 gate. The stream would have been live-watching tonight.
+
+**Log maintenance flag:** Jul 25 (CON@WSH, +$153.84, bets row 26) and Jul 28 (NY@LA, +$345, row 27) are in the bets table but not yet in this log — grades need Manny's reasoning; backfill pending.
+
+---
+
 ## 2026-07-22 (WNBA) — P&L **+$445.45**
 
 6-game slate, 4 in-game fires — **all WATCHLIST, zero A/B**. WATCHLIST went 3-1. The two killer-cell spots (killer leader + gap .15–.30) both converted → **killer forward stream 6-0**. Flagged stream after slate: **9-1, +$5,602.61**; unflagged speculatives hold 0-2. Two bets, two graded passes — no chasing when sweet spot/price/conviction wasn't there.
