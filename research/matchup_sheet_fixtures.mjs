@@ -76,5 +76,28 @@ T('top .25 v .286 grey inside floor', c.top === 'even');
 c = msCompare(null, { w: 10, l: 14, efgd: 1 });
 T('whole side null -> all even, no throw', c.rec === 'even' && c.efgd === 'even');
 
+// ═══ GAP CHIP (v1 + v1+ killer-cell candidate) ═══
+const m3 = html.match(/\/\/ ── MATCHUP_GAP_PURE_BEGIN[\s\S]*?function msGapData([\s\S]*?)\/\/ ── MATCHUP_GAP_PURE_END/);
+if (!m3) { console.log('GAP EXTRACT FAILED — markers missing'); process.exit(1); }
+const msGapData = new Function('return function msGapData' + m3[1])();
+
+console.log('\nGAP CHIP');
+const side = (al, w, l, killer) => ({ alias: al, wp: w / (w + l), killer: killer || null });
+let gd = msGapData(side('IND', 18, 10), side('POR', 11, 17, { flag: true, scalps: 3 }));
+T('gap magnitude (.643-.393=.25)', Math.abs(gd.gap - 0.25) < 0.001);
+T('arrow toward better team', gd.better === 'IND');
+T('killer-cell candidate fires (gap .25, worse killer)', gd.candidate === true && gd.scalps === 3);
+gd = msGapData(side('MIN', 24, 4), side('POR', 11, 17, { flag: true, scalps: 3 }));
+T('candidate off above band (gap .464, killer worse)', gd.candidate === false && gd.scalps === null);
+gd = msGapData(side('IND', 18, 10), side('DAL', 11, 17, null));
+T('candidate off when worse not killer (same gap)', gd.candidate === false);
+gd = msGapData(side('CHI', 11, 17, { flag: true, scalps: 2 }), side('IND', 18, 10));
+T('killer as AWAY worse side still candidates', gd.candidate === true && gd.better === 'IND');
+gd = msGapData(side('NY', 14, 14), side('LA', 14, 14));
+T('equal wp -> no arrow, no candidate', gd.better === null && gd.candidate === false);
+T('missing side -> null (no fake chip)', msGapData(null, side('IND', 18, 10)) === null);
+gd = msGapData(side('A', 15, 13, null), side('B', 11, 17, { flag: true, scalps: 2 }));
+T('band edge inclusive at .15 boundary region', gd.candidate === (gd.gap >= 0.15 && gd.gap <= 0.30));
+
 console.log(`\n${pass}/${pass + fail} passed${fail ? ' — FAILURES ABOVE' : ''}`);
 process.exit(fail ? 1 : 0);

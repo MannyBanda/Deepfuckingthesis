@@ -98,6 +98,8 @@ input,textarea,select{font-size:16px!important;}
 .ms-tags{margin-top:5px;display:flex;gap:4px;flex-wrap:wrap;}
 .ms-tags span{font-family:var(--mono);font-size:8px;padding:1px 4px;border-radius:3px;background:var(--bg-surface-2);color:var(--fg-tertiary);}
 .ms-h2h{margin-top:12px;text-align:center;font-family:var(--mono);font-size:11px;color:var(--fg-primary);}
+.ms-gap{margin-top:12px;text-align:center;font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:0.5px;color:var(--fg-primary);}
+.ms-gap.ms-gap-kc{color:var(--amber,#f59e0b);}
 .ms-foot{margin-top:8px;text-align:center;font-size:9px;color:var(--fg-dim);}
 .ms-dim{color:var(--fg-dim);font-size:9px;}
 .ms-kv b.ms-win,.ms-rec.ms-win{color:var(--green,#22c55e);}
@@ -3787,7 +3789,7 @@ function prepMatchupData(hA,aA,map){
     var infl=(wpT!=null&&wpR!=null)?Math.round((wpR-wpT)*100)/100:null;
     var badge=infl==null?null:(infl>=0.30?'INFLATED':(infl<=-0.05?'DEFLATED':'HONEST'));
     var h=(p.h2h||{})[opp]||null;
-    return {alias:al,w:t.w,l:t.l,archetype:t.archetype||'\u2014',infl:infl,badge:badge,
+    return {alias:al,w:t.w,l:t.l,wp:wp,killer:p.killer||null,archetype:t.archetype||'\u2014',infl:infl,badge:badge,
       efgd:i.efg_diff!=null?i.efg_diff:null,toMargin:i.to_margin!=null?i.to_margin:null,
       fta:i.fta_diff!=null?i.fta_diff:null,oreb:i.oreb_diff!=null?i.oreb_diff:null,
       top:top?{w:top.w,l:top.l,efgd:top.efg_diff!=null?top.efg_diff:null}:null,
@@ -3823,6 +3825,23 @@ function msCompare(a,h){
   };
 }
 // ── MATCHUP_CMP_PURE_END ──
+
+// ── MATCHUP_GAP_PURE_BEGIN (fixture-extracted: research/matchup_sheet_fixtures.mjs) ──
+// Season quality gap = |wp_A − wp_B|, arrow toward the better team. Raw record gap
+// ONLY — honest/def-A-adjusted gap stays internal (one-consumer-definition contract);
+// the per-team inflation badges are the sanctioned mental adjustment.
+// v1+ killer-cell candidate: gap in [.15,.30] AND the WORSE team is killer-flagged —
+// the pregame precondition for the killer cell (killer must be the LEADER at fire
+// time, which pregame means the weaker side jumping ahead). Candidate, not signal.
+function msGapData(a,h){
+  if(!a||!h||a.wp==null||h.wp==null)return null;
+  var g=Math.abs(a.wp-h.wp);
+  var better=a.wp===h.wp?null:(a.wp>h.wp?a.alias:h.alias);
+  var worse=better==null?null:(better===a.alias?h:a);
+  var cand=!!(worse&&worse.killer&&worse.killer.flag&&g>=0.15&&g<=0.30);
+  return {gap:g,better:better,candidate:cand,scalps:cand?(worse.killer.scalps||0):null};
+}
+// ── MATCHUP_GAP_PURE_END ──
 
 function msSigned(v,suf){if(v==null)return '\u2014';return (v>0?'+':'')+v+(suf||'');}
 function ctxStrip(gid,hA,aA){
@@ -3868,9 +3887,12 @@ async function openMatchupSheet(gid){
   if(d.away&&d.away.h2h)h2hLine='H2H: '+esc(aA)+' '+d.away.h2h.w+'-'+d.away.h2h.l+' vs '+esc(hA)+' \u00b7 avg '+msSigned(d.away.h2h.avg)+' ('+esc(aA)+' perspective)';
   var upd=(d.home&&d.home.updated)||(d.away&&d.away.updated);
   var age=upd?Math.round((Date.now()-new Date(upd).getTime())/3600000):null;
+  var gd=msGapData(d.away,d.home);
+  var gapLine=gd?('<div class="ms-gap'+(gd.candidate?' ms-gap-kc':'')+'">GAP '+ssGapFmt(gd.gap)+(gd.better?' \u2192 '+esc(gd.better):'')+(gd.candidate?' \u00b7 KILLER-CELL CANDIDATE \u00b7 '+gd.scalps+' scalps':'')+'</div>'):'';
   var sheet='<div id="msOverlay" class="ms-overlay" onclick="if(event.target===this)closeMatchupSheet()">'
     +'<div class="ms-sheet"><div class="ms-head"><span>MATCHUP SHEET</span><span class="ms-x" onclick="closeMatchupSheet()">\u00d7</span></div>'
     +'<div class="ms-grid">'+col(d.away,aA,'a')+col(d.home,hA,'h')+'</div>'
+    +gapLine
     +'<div class="ms-h2h">'+h2hLine+'</div>'
     +briefingSheetHTML(gid)
     +'<div class="ms-foot">season priors \u2014 direction, not probabilities \u00b7 TO margin + = forces more than commits'+(age!=null?' \u00b7 updated '+age+'h ago':'')+'</div>'
