@@ -12,6 +12,23 @@ Discretionary alpha = (2) − (1). Never conflate them. Append one section per s
 
 ---
 
+## 2026-07-30 (WNBA) — P&L **+$133.33**
+
+IND@POR: the third A-tier scissor — and the night the D-13 bug got caught, invoiced, and fixed inside two hours. Flagged stream: **12-1, +$6,335.94** ($6,900 staked, 91.8% ROI).
+
+| Game | Side | Stake | Odds | Result | P&L | Grade | System trigger? |
+|---|---|---|---|---|---|---|---|
+| IND@POR | IND ML live | $200 | −150 | WIN 112-98 | +$133.33 | **A / B− (system-charged) / A** | EFG_FADE A row 1020 (Q2 7:40, killer POR .393, gap .250, def 4, fire −158) upgrading WATCHLIST row 1017 (Q2 8:52) |
+
+### Grades
+
+- **Entry A** — −150 taken against a −158 fire line: at-fire entry, exactly the A-tier price lesson (the fire price is the local maximum; it never came back). IND down 4 at entry, +15 by P3 6:48, won by 14. Third consecutive A-tier that didn't recover but detonated.
+- **Size B−, charged to the system, not the read** — WATCHLIST review push landed *after* the A push (stale narration retry outran its place in line: row 1017 narr_attempts 2 vs row 1020 attempts 1). Read as a downgrade → sized $200 at review level instead of ~$800 A-tier. Responding to a perceived downgrade by sizing down was **correct behavior on the information received** — the system owed clean ordering and didn't deliver. ~$400 profit left on the table = the D-13 invoice.
+- **Fix shipped same night (`dfb958e`):** stale WATCHLIST reviews now narrate quiet after a same-game A/B push; A/B pushes self-identify with "Escalated from watchlist" breadcrumb. This exact sequence can't recur.
+- **Exit A** — held to final; no cashout temptation entertained with the scissor running.
+
+---
+
 ## 2026-07-29 (WNBA) — P&L **$0** (two graded passes, one game)
 
 2-game slate, one in-game fire (ATL@DAL brief-only). GS@PHX produced the cleanest whose-variance teaching case since POR@CHI — and its mirror image in the same game. Flagged stream holds **11-1, +$6,101.45**. No bets.
