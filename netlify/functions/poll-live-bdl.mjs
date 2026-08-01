@@ -902,6 +902,17 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
       // TEAM_PROFILES_SPEC §6 — one plain-English profile line in mechanical push bodies.
       // Appended at call site (ssComposePush copy is fixture-pinned); '' when flag off.
       let _pushBody = push.body;
+      // D-13 Fix B (Jul 30): A/B fires that upgrade a delivered same-game WATCHLIST open
+      // with the escalation breadcrumb — body only, never the Title (ASCII header, hotfix #2).
+      // Stage 0 already allows watchlist-then-A/B as an upgrade; this makes the lineage explicit.
+      if (ss.subtype !== 'WATCHLIST') {
+        try {
+          const _w = await sql`SELECT period, clock FROM sweetspot_alerts WHERE game_id = ${game.id}
+            AND league = ${league} AND alert_subtype = ${'WATCHLIST'} AND ntfy_sent = true
+            ORDER BY id DESC LIMIT 1`;
+          if (_w.length) _pushBody = `Escalated from watchlist (fired Q${_w[0].period}${_w[0].clock ? ' ' + _w[0].clock : ''}).\n\n` + _pushBody;
+        } catch (e) { /* non-fatal — push goes out without the breadcrumb */ }
+      }
       try {
         await ensureTeamCtx(sql, league);
         const _tcLine = composeTeamCtxLine(ss.trailerAl, ss.leaderAl, league);
@@ -1283,6 +1294,28 @@ async function ssNarrationSweep(sql, startTime) {
     }
     if (!row) return;
 
+    // D-13 (Jul 30): ordering guards for the watchlist-then-A/B upgrade path (IND@POR
+    // rows 1017/1020 inversion — stale review pushed after the A).
+    // Fix A — a WATCHLIST review is stale once a same-game A/B fire has pushed:
+    // narrate quiet (sheet/BRIEFING keep the review text), never push a lower-tier
+    // cue after a higher-tier call.
+    // Fix B (sweep side) — A/B narrations that upgraded a delivered WATCHLIST open
+    // with the escalation breadcrumb so the WHY push carries the lineage too.
+    let quietWatch = false, escLine = '';
+    try {
+      if (row.alert_subtype === 'WATCHLIST') {
+        const sup = await sql`SELECT id FROM sweetspot_alerts WHERE game_id = ${row.game_id}
+          AND league = ${'wnba'} AND alert_subtype IN ('EFG_FADE', 'EFG_FADE_SOFT')
+          AND ntfy_sent = true LIMIT 1`;
+        quietWatch = sup.length > 0;
+      } else if (row.alert_subtype === 'EFG_FADE' || row.alert_subtype === 'EFG_FADE_SOFT') {
+        const w = await sql`SELECT period, clock FROM sweetspot_alerts WHERE game_id = ${row.game_id}
+          AND league = ${'wnba'} AND alert_subtype = ${'WATCHLIST'} AND id < ${row.id}
+          AND ntfy_sent = true ORDER BY id DESC LIMIT 1`;
+        if (w.length) escLine = `Escalated from watchlist (fired Q${w[0].period}${w[0].clock ? ' ' + w[0].clock : ''}).\n\n`;
+      }
+    } catch (e) { /* non-fatal — narration proceeds without ordering guards */ }
+
     const attempts = Number(row.narration_attempts) || 0;
     const model = attempts >= 2 ? 'claude-opus-4-8' : 'claude-fable-5';
     const remaining = SS_NARRATE_BUDGET_MS + 60000 - (Date.now() - startTime); // hard function ceiling guard
@@ -1311,9 +1344,10 @@ async function ssNarrationSweep(sql, startTime) {
 
     const res = await ssCallNarration(prompt, model, timeoutMs);
     if (res.ok) {
-      await sql`UPDATE sweetspot_alerts SET narration_text = ${res.text}, narration_attempts = ${attempts + 1}, ntfy_sent = true WHERE id = ${row.id}`;
-      if (!quietRow) await sendNtfy(title, res.text, priority, SS_DASH_URL);
-      log(`narration sweep: ${isBrief ? 'brief' : row.alert_subtype} row ${row.id} delivered via ${model} (${res.text.length} chars, attempt ${attempts + 1})${quietRow ? ' quiet' : ''}`);
+      const finalText = escLine + res.text;
+      await sql`UPDATE sweetspot_alerts SET narration_text = ${finalText}, narration_attempts = ${attempts + 1}, ntfy_sent = true WHERE id = ${row.id}`;
+      if (!quietRow && !quietWatch) await sendNtfy(title, finalText, priority, SS_DASH_URL);
+      log(`narration sweep: ${isBrief ? 'brief' : row.alert_subtype} row ${row.id} delivered via ${model} (${finalText.length} chars, attempt ${attempts + 1})${quietRow ? ' quiet' : (quietWatch ? ' quiet-superseded' : '')}${escLine ? ' +esc' : ''}`);
     } else {
       await sql`UPDATE sweetspot_alerts SET narration_attempts = ${attempts + 1} WHERE id = ${row.id}`;
       log(`narration sweep: row ${row.id} attempt ${attempts + 1} failed via ${model} — ${res.error}`);
