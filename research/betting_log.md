@@ -12,6 +12,23 @@ Discretionary alpha = (2) − (1). Never conflate them. Append one section per s
 
 ---
 
+## 2026-08-01 (WNBA) — P&L **+$720**
+
+NY@PHX: killer-cell WATCHLIST conversion, held through a live exit-rule check, sweated to a 2-point final. Flagged stream: **13-1, +$7,055.94** ($7,200 staked, 98.0% ROI).
+
+| Game | Side | Stake | Odds | Result | P&L | Grade | System trigger? |
+|---|---|---|---|---|---|---|---|
+| NY@PHX | NY ML live (2-ticket ladder) | $300 | +290 / +215 | WIN 94-92 | +$720 | **A / A / A** | WATCHLIST row 1059 (20:17Z, killer leader PHX .393, gap .172 — sweet zone) |
+
+### Grades
+
+- **Entry A** — textbook killer cell: PHX killer-flagged leader at .393, elite NY trailing, gap .172 inside the .15–.30 evidence band. Two-ticket plus-money ladder (+290 then +215) as NY converted — staged entry, price protection, one position.
+- **Size A** — $300 = WATCHLIST cap to the dollar, ladder respected as one position against the cap.
+- **Exit A** — live exit-rule check at Q4 5:54, NY +4: cashout offers were 82.7% of payout on both tickets; honest read MC Cum 0.753 +8–14pp WNBA Q4 calibration ≈ 83–87%, NY lead classed STRUCTURAL var 29. Rule said hold by a hair; held both. Collected $1,020 vs $843.60 offered (+$176.40 for the rule). PHX closed 92-94 — the killer's two-sided variance was real to the buzzer; exit grade is for applying the rule, not for the outcome landing.
+- Killer-flagged leader games now **4-0** in the flagged stream. Also logged silently: GAP_BASE row 1038 (CHI@LV, killer CHI, gap .357) — ledger stream, no action taken.
+
+---
+
 ## 2026-07-30 (WNBA) — P&L **+$133.33**
 
 IND@POR: the third A-tier scissor — and the night the D-13 bug got caught, invoiced, and fixed inside two hours. Flagged stream: **12-1, +$6,335.94** ($6,900 staked, 91.8% ROI).
