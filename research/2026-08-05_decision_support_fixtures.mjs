@@ -167,5 +167,36 @@ T('pulse sections render in order fuel→system→shadow', (() => {
 })());
 T('null pulse lines omit themselves', !A.ssComposeDigest('2026-08-05', T0, S0, null, { fuelLine: null, systemLine: null, shadowLine: null }).body.includes('pulse'));
 
+// ════════════════════════════════════════════════════════════════════════════
+// C3 — CASH surge watch (odds-squeeze.mjs; shadow mode, §11 pre-registered rule)
+// ════════════════════════════════════════════════════════════════════════════
+const { devigProb, surgeCheck, composeCashout } = await import('../netlify/functions/odds-squeeze.mjs');
+
+console.log('SURGE DE-VIG MATH');
+T('devig -450/+350 = .786 fires (>= .78)', Math.abs(devigProb(-450, 350) - 0.7864) < 0.001 && devigProb(-450, 350) >= 0.78);
+T('devig -400/+320 = .771 near-miss (#545 class, peak -400)', devigProb(-400, 320) < 0.78 && devigProb(-400, 320) > 0.76);
+T('devig null-degrades on missing side', devigProb(null, 350) === null && devigProb(-450, null) === null);
+
+console.log('SURGE TRIGGER MATRIX');
+const base3 = { coldAtFire: true, p: 0.80, lead: 3, estCash: 1900, stake: 800, alreadyFired: false };
+T('fires: cold + p.80 + lead 3 + profit locked', surgeCheck(base3).fire === true);
+T('warm-at-fire NEVER triggers (rides)', surgeCheck({ ...base3, coldAtFire: false }).why === 'not-cold-at-fire');
+T('one-shot per position', surgeCheck({ ...base3, alreadyFired: true }).why === 'one-shot');
+T('p .77 below bar', surgeCheck({ ...base3, p: 0.77 }).why === 'p-below');
+T('lead 0 blocks even at p .85 (t=0 / deep-favorite artifact guard)', surgeCheck({ ...base3, p: 0.85, lead: 0 }).why === 'no-lead');
+T('profit lock: estCash < stake blocks', surgeCheck({ ...base3, estCash: 750 }).why === 'no-profit-lock');
+T('estCash exactly = stake fires (lock is >=)', surgeCheck({ ...base3, estCash: 800 }).fire === true);
+
+console.log('CASHOUT TIP COPY (Manny-amended template, prompt never imperative)');
+const tip = composeCashout({ trailer: 'GS', elite: true, lead: 5, p: 0.81, estCash: 1130, payout: 1500, fireEfg: 52.6 });
+T('opens per template with elite tag', tip.body.startsWith('Cashout check: GS (elite) now leads by 5.'));
+T('market prob line', tip.body.includes('Market has GS ~81%.'));
+T('locks X of Y payout', tip.body.includes('Cash-out locks ~$1130 of $1500 payout'));
+T('because-clause from FIRE-TIME read', tip.body.includes('riding risks a loss because GS was cold at entry (53% eFG) and cold-start comebacks have given leads back.'));
+T('non-directive tail', tip.body.includes('Your read - not a directive.'));
+T('title ascii-safe', /^[\x00-\x7F]+$/.test(tip.title) && tip.title === 'CASHOUT CHECK: GS leads by 5');
+const tip2 = composeCashout({ trailer: 'MIN', elite: false, lead: 2, p: 0.79, estCash: 610, payout: 830, fireEfg: 48.9 });
+T('non-elite omits the tag', tip2.body.startsWith('Cashout check: MIN now leads by 2.') && !tip2.body.includes('(elite)'));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
