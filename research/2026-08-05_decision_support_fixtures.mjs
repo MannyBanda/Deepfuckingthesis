@@ -121,5 +121,51 @@ T('G5 insufficient renders nothing', S.ssFuelTempLines(S.computeFuelTemp(G[4].L,
 const L9 = S.ssFuelTempLines(S.computeFuelTemp(G[8].L, G[8].Tr, 2), 'SEA', 'IND');
 T('G9 vShare wording', L9.includes('50% of the lead from three-pointers and midrange'));
 
+// ════════════════════════════════════════════════════════════════════════════
+// C2 — REGIME PULSE + REGIME STATE (post-game-agent.mjs digest copy pins)
+// ════════════════════════════════════════════════════════════════════════════
+const AGENT = readFileSync('netlify/functions/post-game-agent.mjs', 'utf8');
+const afns = ['ssRegimeState', 'ssFuelPulseLine', 'ssSystemPulseLine', 'ssCashShadowLine', 'ssComposeDigest'];
+const A = new Function(`${afns.map((f) => extractFn(AGENT, f)).join(';\n')}; return { ${afns.join(', ')} };`)();
+
+console.log('REGIME STATE (pre-registered thresholds — spec amendment required to change)');
+T('ACTIVE at 60% n=10', A.ssRegimeState(10, 0.60) === 'TRANSIENT_COLLAPSE: ACTIVE');
+T('INVERTED at 45% n=8', A.ssRegimeState(8, 0.45) === 'INVERTED');
+T('NEUTRAL between thresholds', A.ssRegimeState(12, 0.52) === 'NEUTRAL');
+T('NEUTRAL on thin window (n=7 at 100%)', A.ssRegimeState(7, 1.0) === 'NEUTRAL');
+T('NEUTRAL on null inputs', A.ssRegimeState(null, null) === 'NEUTRAL');
+
+console.log('PULSE COPY PINS');
+const f30 = { transient: { n: 9, w: 6 }, earned: { n: 5, w: 2 } };
+const fSe = { transient: { n: 21, w: 13 }, earned: { n: 12, w: 5 } };
+const FP = A.ssFuelPulseLine(f30, fSe, 'TRANSIENT_COLLAPSE: ACTIVE');
+T('fuel pulse 30d vs season', FP.includes('transient-fed leads fell in 6 of 9 this month (season 13 of 21)') && FP.includes('earned leads fell in 2 of 5 this month (season 5 of 12)'));
+T('fuel pulse ACTIVE named', FP.includes('Regime: TRANSIENT COLLAPSE ACTIVE'));
+const FPn = A.ssFuelPulseLine(f30, fSe, 'NEUTRAL');
+T('fuel pulse NEUTRAL silent (no state claims)', !FPn.includes('Regime:'));
+const FPi = A.ssFuelPulseLine(f30, fSe, 'INVERTED');
+T('fuel pulse INVERTED flags loudly + suspends sticky', FPi.includes('Regime: INVERTED') && FPi.includes('sticky-lead caution is suspended'));
+T('fuel pulse null-degrades with zero stamps', A.ssFuelPulseLine({ transient: { n: 0, w: 0 }, earned: { n: 0, w: 0 } }, { transient: { n: 0, w: 0 }, earned: { n: 0, w: 0 } }, 'NEUTRAL') === null);
+const SP = A.ssSystemPulseLine({ A: { w: 3, l: 1 }, B: { w: 0, l: 0 }, watch: { total: 7, converted: 5 }, gap: { n: 12, realized_pct: 75, predicted_pct: 70.2 } });
+T('system pulse per-bucket, never pooled', SP === 'System pulse (last 30 days): Tier A 3-1; review flags 5 of 7 came back; gap-only spots 75% realized vs 70.2% predicted (12).');
+T('system pulse gap suppressed under n=8', !A.ssSystemPulseLine({ A: { w: 1, l: 0 }, B: { w: 0, l: 0 }, watch: { total: 0, converted: 0 }, gap: { n: 5, realized_pct: 80, predicted_pct: 70 } }).includes('gap-only'));
+T('system pulse null when all empty', A.ssSystemPulseLine({ A: { w: 0, l: 0 }, B: { w: 0, l: 0 }, watch: { total: 0, converted: 0 }, gap: null }) === null);
+const CS = A.ssCashShadowLine({ n: 3, shadow: 812, hold: 640 });
+T('cash shadow line + promotion bar restated', CS.includes('3 positions — shadow $812 vs hold $640') && CS.includes('15+ positions'));
+T('cash shadow negative money format', A.ssCashShadowLine({ n: 1, shadow: -300, hold: -300 }).includes('shadow -$300 vs hold -$300'));
+T('cash shadow null at n=0', A.ssCashShadowLine({ n: 0, shadow: 0, hold: 0 }) === null && A.ssCashShadowLine(null) === null);
+
+console.log('DIGEST WIRING (old signature unchanged; pulse sections appended)');
+const T0 = { tiers: { A: { w: 1, l: 0 }, B: { w: 0, l: 0 } }, watchlist: { total: 0, converted: 0 }, resolvedTonight: 1 };
+const S0 = { A: { w: 5, l: 1 }, B: { w: 0, l: 0 }, watchlist: { total: 0, converted: 0 }, ledger: {} };
+const dgOld = A.ssComposeDigest('2026-08-05', T0, S0, null);
+const dgNew = A.ssComposeDigest('2026-08-05', T0, S0, null, { fuelLine: FP, systemLine: SP, shadowLine: CS });
+T('4-arg call renders exactly as before (no pulse sections)', !dgOld.body.includes('Fuel pulse') && !dgOld.body.includes('System pulse'));
+T('pulse sections render in order fuel→system→shadow', (() => {
+  const i1 = dgNew.body.indexOf('Fuel pulse'), i2 = dgNew.body.indexOf('System pulse'), i3 = dgNew.body.indexOf('Cash-out shadow');
+  return i1 > -1 && i2 > i1 && i3 > i2;
+})());
+T('null pulse lines omit themselves', !A.ssComposeDigest('2026-08-05', T0, S0, null, { fuelLine: null, systemLine: null, shadowLine: null }).body.includes('pulse'));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

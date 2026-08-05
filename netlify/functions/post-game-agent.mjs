@@ -243,7 +243,56 @@ function ssOverrideLaneLine(profileRows, nowMs) {
   } catch { return null; }
 }
 
-function ssComposeDigest(dateStr, tonight, season, laneLine) {
+// ── DECISION SUPPORT v1 Component 2 (DECISION_SUPPORT_V1_SPEC.md) ─────────────
+// REGIME STATE — thresholds PRE-REGISTERED in the spec; changing them requires a
+// spec amendment, not a code tweak. n = rolling-30d transient-fed resolved games,
+// conv = their trailer-conversion rate. PURE (fixture-extracted).
+function ssRegimeState(n30, conv30) {
+  if (n30 == null || conv30 == null || n30 < 8) return 'NEUTRAL';
+  if (conv30 >= 0.60) return 'TRANSIENT_COLLAPSE: ACTIVE';
+  if (conv30 <= 0.45) return 'INVERTED';
+  return 'NEUTRAL';
+}
+// FUEL PULSE line — transient-fed vs earned conversion, 30d vs season. f objects:
+// { transient: {n, w}, earned: {n, w} }. NEUTRAL stays silent (no state claims on
+// thin windows); INVERTED flags loudly. PURE. Null-degrades when nothing stamped.
+function ssFuelPulseLine(f30, fSeason, regime) {
+  try {
+    if (!fSeason || (fSeason.transient.n + fSeason.earned.n) === 0) return null;
+    const bit = (a, b) => `${a.w} of ${a.n}` + (b ? ` this month (season ${b.w} of ${b.n})` : '');
+    let t = `Fuel pulse: transient-fed leads fell in ${bit(f30.transient, fSeason.transient)}; earned leads fell in ${bit(f30.earned, fSeason.earned)}.`;
+    if (regime === 'TRANSIENT_COLLAPSE: ACTIVE') t += ' Regime: TRANSIENT COLLAPSE ACTIVE — transient-fed leads are folding at an elevated rate this month.';
+    else if (regime === 'INVERTED') t += ' Regime: INVERTED — transient-fed leads are HOLDING this month. The sticky-lead caution is suspended until this clears; treat fuel reads as context only.';
+    return t;
+  } catch { return null; }
+}
+// SYSTEM PULSE line — 30d realized per bucket, NEVER pooled (ops doctrine).
+// sys = { A:{w,l}, B:{w,l}, watch:{total,converted}, gap:{n,realized_pct,predicted_pct} }.
+function ssSystemPulseLine(sys) {
+  try {
+    if (!sys) return null;
+    const bits = [];
+    if (sys.A && sys.A.w + sys.A.l > 0) bits.push(`Tier A ${sys.A.w}-${sys.A.l}`);
+    if (sys.B && sys.B.w + sys.B.l > 0) bits.push(`Tier B ${sys.B.w}-${sys.B.l}`);
+    if (sys.watch && sys.watch.total > 0) bits.push(`review flags ${sys.watch.converted} of ${sys.watch.total} came back`);
+    if (sys.gap && sys.gap.n >= 8 && sys.gap.realized_pct != null && sys.gap.predicted_pct != null)
+      bits.push(`gap-only spots ${sys.gap.realized_pct}% realized vs ${sys.gap.predicted_pct}% predicted (${sys.gap.n})`);
+    if (!bits.length) return null;
+    return `System pulse (last 30 days): ${bits.join('; ')}.`;
+  } catch { return null; }
+}
+// CASH SHADOW line (Component 3 accounting) — shadow-rule P&L vs hold on positions
+// since the surge-watch epoch. sh = { n, shadow, hold }. Promotion bar restated so
+// the digest carries its own governance. PURE. Null until positions exist.
+function ssCashShadowLine(sh) {
+  try {
+    if (!sh || !sh.n) return null;
+    const money = (v) => `${v < 0 ? '-' : ''}$${Math.abs(Math.round(v))}`;
+    return `Cash-out shadow (surge rule, since August 5): ${sh.n} position${sh.n === 1 ? '' : 's'} — shadow ${money(sh.shadow)} vs hold ${money(sh.hold)}. Directive language only at 15+ positions with shadow at or above hold.`;
+  } catch { return null; }
+}
+
+function ssComposeDigest(dateStr, tonight, season, laneLine, pulse) {
   const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
   const parts = dateStr.split('-').map(Number);
   const nice = `${months[(parts[1] || 1) - 1]} ${parts[2] || ''}`.trim();
@@ -286,6 +335,13 @@ function ssComposeDigest(dateStr, tonight, season, laneLine) {
 
   // Override lane (OVERRIDE_LANE_SPEC §2) — omitted entirely when null (degraded)
   if (laneLine) secs.push(laneLine);
+
+  // DS v1 C2/C3 — regime pulse + cash shadow; every line omits itself when null
+  if (pulse) {
+    if (pulse.fuelLine) secs.push(pulse.fuelLine);
+    if (pulse.systemLine) secs.push(pulse.systemLine);
+    if (pulse.shadowLine) secs.push(pulse.shadowLine);
+  }
 
   // Housekeeping
   if (tonight.resolvedTonight > 0) {
@@ -456,6 +512,85 @@ async function processLeague(sql, league, dateStr, isOverride, isDry) {
     wnbaFinals = await fetchWnbaFinals(sql, dateStr);
     ssResult = await processSweetSpot(sql, league, dateStr, wnbaFinals, isDry);
     if (ssResult && !ssResult.error) {
+      // ── DS v1 C2 — regime pulse (isolated queries; each leg degrades to null) ──
+      // Computed BEFORE the ss_json save so REGIME STATE persists on the learnings
+      // row (the ledger-summary endpoint + STICKY chip degrade read it from there).
+      let dsPulse = null;
+      try {
+        const SURGE_EPOCH = '2026-08-05'; // DS v1 ship date — cash-shadow accounting starts here
+        // FUEL PULSE — fire-time fuel stamps, deduped one row per game (earliest stamp,
+        // matching the research first-hit-per-game recipe)
+        const fuelRows = await sql`SELECT DISTINCT ON (game_id) game_id, created_at, trailer_won,
+            player_ctx_json->'fuelTemp'->>'fuel' AS fuel
+          FROM sweetspot_alerts
+          WHERE league = ${league} AND resolved = TRUE AND game_id != ${'SS_FORCE_TEST'}
+            AND player_ctx_json->'fuelTemp' IS NOT NULL
+          ORDER BY game_id, id ASC`;
+        const cut = Date.now() - 30 * 86400000;
+        const agg = (rows) => {
+          const o = { transient: { n: 0, w: 0 }, earned: { n: 0, w: 0 } };
+          for (const r of rows) {
+            const k = String(r.fuel || '').startsWith('TRANSIENT') ? 'transient' : 'earned';
+            o[k].n++; if (r.trailer_won) o[k].w++;
+          }
+          return o;
+        };
+        const fSeason = agg(fuelRows);
+        const f30 = agg(fuelRows.filter((r) => new Date(r.created_at).getTime() >= cut));
+        const regime = ssRegimeState(f30.transient.n, f30.transient.n ? f30.transient.w / f30.transient.n : null);
+        // SYSTEM PULSE — 30d realized per bucket, row units (ledger-summary framing), never pooled
+        const sysRows = await sql`SELECT alert_subtype,
+            COUNT(*) FILTER (WHERE resolved)::int AS n_res,
+            COUNT(*) FILTER (WHERE resolved AND trailer_won)::int AS n_won,
+            AVG(collapse_true) FILTER (WHERE resolved) AS mean_ct
+          FROM sweetspot_alerts
+          WHERE league = ${league} AND game_id != ${'SS_FORCE_TEST'} AND created_at > NOW() - INTERVAL '30 days'
+          GROUP BY alert_subtype`;
+        const by = {}; sysRows.forEach((r) => { by[r.alert_subtype] = r; });
+        const wl = (r) => r ? { w: r.n_won, l: r.n_res - r.n_won } : { w: 0, l: 0 };
+        const gapR = by.GAP_BASE;
+        const sys = {
+          A: wl(by.EFG_FADE), B: wl(by.EFG_FADE_SOFT),
+          watch: by.WATCHLIST ? { total: by.WATCHLIST.n_res, converted: by.WATCHLIST.n_won } : { total: 0, converted: 0 },
+          gap: gapR && gapR.n_res ? { n: gapR.n_res, realized_pct: +((gapR.n_won / gapR.n_res) * 100).toFixed(1),
+            predicted_pct: gapR.mean_ct != null ? +(Number(gapR.mean_ct) * 100).toFixed(1) : null } : null,
+        };
+        // CASH SHADOW (C3 accounting) — resolved positions since epoch vs surge stamps.
+        // A position = bets rows grouped by game + side first token (staged entries are ONE position).
+        let shadow = null;
+        try {
+          const posRows = await sql`SELECT game_id, side, stake, odds, pnl FROM bets
+            WHERE league = ${league} AND game_id IS NOT NULL AND result <> ${'PENDING'} AND placed_date >= ${SURGE_EPOCH}`;
+          const stampRows = await sql`SELECT DISTINCT ON (game_id) game_id, squeeze_state FROM sweetspot_alerts
+            WHERE league = ${league} AND squeeze_state->>'surge_fired' = ${'true'} ORDER BY game_id, id DESC`;
+          const stamps = {}; stampRows.forEach((r) => {
+            stamps[r.game_id] = typeof r.squeeze_state === 'string' ? JSON.parse(r.squeeze_state) : (r.squeeze_state || {});
+          });
+          const pos = {};
+          for (const b of posRows) {
+            const key = `${b.game_id}|${String(b.side || '').split(/\s+/)[0]}`;
+            (pos[key] = pos[key] || { game_id: b.game_id, stake: 0, pnl: 0 }).stake += Number(b.stake) || 0;
+            pos[key].pnl += Number(b.pnl) || 0;
+          }
+          const list = Object.values(pos);
+          if (list.length) {
+            let sh = 0, ho = 0;
+            for (const p of list) {
+              const st = stamps[p.game_id];
+              ho += p.pnl;
+              sh += (st && st.surge_est_cash != null) ? (Number(st.surge_est_cash) - (Number(st.surge_stake) || p.stake)) : p.pnl;
+            }
+            shadow = { n: list.length, shadow: sh, hold: ho };
+          }
+        } catch (e) { log(`cash shadow: ${e.message}`); }
+        dsPulse = {
+          regime, fuel_pulse: { d30: f30, season: fSeason }, system_pulse: sys, cash_shadow: shadow,
+          fuelLine: ssFuelPulseLine(f30, fSeason, regime), systemLine: ssSystemPulseLine(sys), shadowLine: ssCashShadowLine(shadow),
+        };
+        ssResult.regime = regime; ssResult.fuel_pulse = dsPulse.fuel_pulse;
+        ssResult.system_pulse = sys; ssResult.cash_shadow = shadow;
+        log(`DS pulse: regime=${regime} | transient 30d ${f30.transient.w}/${f30.transient.n} | earned 30d ${f30.earned.w}/${f30.earned.n}${shadow ? ` | shadow n=${shadow.n}` : ''}`);
+      } catch (e) { log(`ds pulse: ${e.message}`); }
       if (!isDry) {
         try { await sql`UPDATE learnings SET ss_json = ${JSON.stringify(ssResult)} WHERE date = ${dateStr} AND league = ${league}`; } catch (e) { log(`ss_json save: ${e.message}`); }
       }
@@ -475,7 +610,7 @@ async function processLeague(sql, league, dateStr, isOverride, isDry) {
       const digest = ssComposeDigest(dateStr,
         { tiers: t, watchlist: w, resolvedTonight: ssResult.resolved_tonight },
         { A: ssResult.season.A, B: ssResult.season.B, watchlist: ssResult.season.watchlist, ledger: ssResult.ledger },
-        laneLine);
+        laneLine, dsPulse);
       if (!isDry && digest) await agentNtfy(digest.title, digest.body, 2);
       // Prompt section for the Opus analysis (only used if classic alerts exist below)
       let betsRows = [];
