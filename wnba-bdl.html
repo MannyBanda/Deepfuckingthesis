@@ -3678,6 +3678,29 @@ function efgTier(efg,period){
   if(efg<=b[1])return{tier:'orange',color:'var(--amber)'};
   return{tier:'red',color:'var(--coral)'};
 }
+// ── DS v1 C1 — VERBATIM MIRROR of poll-live-bdl.mjs computeFuelTemp (one definition,
+// all consumers). Mirrored golden fixtures assert drift — edit BOTH copies or neither.
+var FUELTEMP_TH = { POT_MIN: 6, THREE_SHARE: 40, VSHARE: 45, TO_CLEAN: 4, MIN_FGA: 12 };
+function computeFuelTemp(leaderStats, trailerStats, period) {
+  function _n(v) { v = Number(v); return isNaN(v) ? 0 : v; }
+  function _efg(s) { var fga = _n(s && s.fga); if (fga < FUELTEMP_TH.MIN_FGA) return null; return (_n(s.fgm) + 0.5 * _n(s.fg3m)) / fga * 100; }
+  var L = leaderStats || {}, T = trailerStats || {};
+  var lEfg = _efg(L), tEfg = _efg(T);
+  if (lEfg == null || tEfg == null) return { insufficient: true };
+  var lBand = efgTier(lEfg, period).tier, tBand = efgTier(tEfg, period).tier;
+  var lPts = 2 * _n(L.fgm) + _n(L.fg3m) + _n(L.ftm);
+  var threeShare = lPts > 0 ? (3 * _n(L.fg3m)) / lPts * 100 : 0;
+  var vShare = (L.vShare != null && !isNaN(Number(L.vShare))) ? Number(L.vShare) : null;
+  var heat = lBand === 'red' || threeShare >= FUELTEMP_TH.THREE_SHARE || (vShare != null && vShare > FUELTEMP_TH.VSHARE);
+  var takeaway = _n(L.pot) >= FUELTEMP_TH.POT_MIN;
+  var fuel = heat && takeaway ? 'TRANSIENT (heat + takeaway)' : heat ? 'TRANSIENT (heat)' : takeaway ? 'TRANSIENT (takeaway)' : 'EARNED';
+  var temp = tBand === 'green' ? 'cold' : tBand === 'red' ? 'hot' : 'warm';
+  var sticky = fuel === 'EARNED' && temp === 'cold' && _n(T.to) < FUELTEMP_TH.TO_CLEAN;
+  return { insufficient: false, fuel: fuel, heat: heat, takeaway: takeaway, temp: temp, sticky: sticky,
+    leaderEfg: Math.round(lEfg * 10) / 10, leaderBand: lBand, trailerEfg: Math.round(tEfg * 10) / 10, trailerBand: tBand,
+    threeShare: Math.round(threeShare), vShare: vShare != null ? Math.round(vShare) : null,
+    pot: _n(L.pot), trailerTo: _n(T.to), period: period };
+}
 function vShareTier(v){
   if(v==null||isNaN(v))return{tier:'na',color:'var(--fg-dim)'};
   if(v<=45)return{tier:'struct',color:'var(--green)'};
@@ -4021,7 +4044,7 @@ async function fetchSSState(gameId,force){
     if(!_ssLedgerCache){
       try{
         var lr=await fetch(FN+'db-api?action=ss_ledger_summary&league=wnba');
-        if(lr.ok){var lj=await lr.json();_ssLedgerCache={};(lj.ledger||[]).forEach(function(r){_ssLedgerCache[r.alert_subtype]=r.n_resolved||0;});}
+        if(lr.ok){var lj=await lr.json();_ssLedgerCache={};(lj.ledger||[]).forEach(function(r){_ssLedgerCache[r.alert_subtype]=r.n_resolved||0;});_ssLedgerCache._regime=lj.regime||null;}
       }catch(_e){}
       if(!_ssLedgerCache)_ssLedgerCache={};
     }
@@ -4224,6 +4247,48 @@ async function fetchPBPFromDB(gameId,force){
   }
 }
 
+// ── DS v1 C1 — FUEL + TEMP read (DECISION_SUPPORT_V1_SPEC Component 1) ──
+// Renders on EVERY live card inside the fade-read (verdict) block, directly above
+// the scoring-composition evidence lines — position or no position, fire or no fire.
+// Client computes from data the card already fetches (_teamEvidence + PBP pot
+// fallback + sc vPct); insufficient data renders NOTHING (no fake reads).
+function _ftClientStats(cs,side){
+  var te=cs._teamEvidence&&cs._teamEvidence[side];if(!te)return null;
+  var bdl=cs.pbpAudit?cs.pbpAudit._bdl:null;
+  return{fgm:te.fgm,fga:te.fga,fg3m:te.fg3m,ftm:te.ftm,
+    to:te.turnovers!=null?te.turnovers:te.to,
+    pot:te.pot||(bdl?(side==='home'?bdl.potHome:bdl.potAway):0)||0};
+}
+function renderFuelTempBlock(cs,sn,gm,hA,aA){
+  var sc=cs.scoringComp;if(!sc||!sc.home||!sc.away)return'';
+  if(gm&&gm.status==='closed')return'';
+  var hp=sc.home.total||0,ap=sc.away.total||0;
+  var ldAl=(sn&&sn.ss_leader_alias)||null;
+  if(!ldAl){if(hp===ap)return'';ldAl=hp>ap?(sc.home.team||hA):(sc.away.team||aA);}
+  var ldHome=ldAl===(sc.home.team||hA);
+  var L=_ftClientStats(cs,ldHome?'home':'away'),T=_ftClientStats(cs,ldHome?'away':'home');
+  if(!L||!T)return'';
+  L.vShare=ldHome?sc.home.vPct:sc.away.vPct;
+  var ft=null;try{ft=computeFuelTemp(L,T,sc.period||0);}catch(e){ft=null;}
+  if(!ft||ft.insufficient)return'';
+  var trAl=ldHome?(sc.away.team||aA):(sc.home.team||hA);
+  var fuelCol=ft.fuel==='EARNED'?'var(--green)':'var(--coral)';
+  var tempCol=ft.temp==='cold'?'var(--green)':ft.temp==='hot'?'var(--coral)':'var(--amber)';
+  var fuelDet=ft.fuel==='EARNED'?(Math.round(ft.leaderEfg)+'% eFG ('+ft.leaderBand+') \u00b7 POT '+ft.pot)
+    :[(ft.heat?(ft.leaderBand==='red'?Math.round(ft.leaderEfg)+'% eFG (red)':ft.threeShare>=40?ft.threeShare+'% pts from 3s':(ft.vShare!=null?ft.vShare+'% lead from 3s/mid':'')):null),(ft.takeaway?'POT '+ft.pot:null)].filter(Boolean).join(' \u00b7 ');
+  var html='<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--hairline);font-size:11px;color:var(--fg-tertiary)">';
+  html+='<div>LEAD FUEL: <span style="font-weight:600;color:'+fuelCol+'">'+esc(ft.fuel)+'</span> <span style="color:'+tc(ldAl)+'">'+esc(ldAl)+'</span> \u2014 '+esc(fuelDet)+'</div>';
+  html+='<div style="margin-top:2px">TRAILER TEMP: <span style="font-weight:600;color:'+tempCol+'">'+esc(ft.temp)+'</span> <span style="color:'+tc(trAl)+'">'+esc(trAl)+'</span> \u2014 '+Math.round(ft.trailerEfg)+'% eFG ('+esc(ft.trailerBand)+')</div>';
+  if(ft.sticky){
+    // regime tripwire (Component 2): INVERTED auto-degrades the chip to neutral wording
+    var inv=_ssLedgerCache&&_ssLedgerCache._regime==='INVERTED';
+    html+=inv?'<div style="margin-top:3px;color:var(--fg-dim)">LEAD SHAPE: earned + cold, clean trailer</div>'
+      :'<div style="margin-top:3px;display:inline-block;padding:1px 7px;border:1px solid var(--amber);border-radius:9px;color:var(--amber);font-weight:600">STICKY LEAD SHAPE (2026)</div>';
+  }
+  html+='</div>';
+  return html;
+}
+
 // ── RENDER SS VERDICT BOX (spec §2 anatomy: verdict → trap → evidence → as-of) ──
 function renderSSVerdictBox(id,cs,hA,aA){
   var entry=_ssStateCache[id];
@@ -4269,6 +4334,8 @@ function renderSSVerdictBox(id,cs,hA,aA){
     html+='<span style="font-weight:600;color:'+verdict.color+'">'+esc(vHead)+'</span>'+(vBody?' \u2014 '+esc(vBody):'');
     if(verdict.trap)html+='<div style="margin-top:6px;color:var(--amber)">'+esc(verdict.trap)+'</div>';
   }
+  // DS v1 C1 — FUEL + TEMP read, directly above the scoring-composition evidence
+  try{html+=renderFuelTempBlock(cs,sn,gm,hA,aA);}catch(e){/* degrade — never break the verdict box */}
   // Evidence lines — always, from the client PBP comp, relabeled (D-2): "structural"
   // about the leader's own mix vs about the margin can never collide again.
   if(sc&&sc.home&&sc.away){

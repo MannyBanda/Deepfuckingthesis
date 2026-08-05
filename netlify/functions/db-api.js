@@ -853,7 +853,15 @@ exports.handler = async (event) => {
           predicted_pct: mean != null ? +(mean * 100).toFixed(1) : null,
           delta_pp: delta, graduation };
       });
-      return { statusCode: 200, headers, body: JSON.stringify({ ledger }) };
+      // DS v1 C2 — regime state (nightly, learnings.ss_json.regime). Isolated SELECT,
+      // NULL-degrading; the STICKY chip reads this to auto-degrade on INVERTED.
+      let regime = null;
+      try {
+        const lr = await sql`SELECT ss_json FROM learnings WHERE league = ${league} AND ss_json IS NOT NULL ORDER BY date DESC LIMIT 1`;
+        const sj = lr[0] && (typeof lr[0].ss_json === 'string' ? JSON.parse(lr[0].ss_json) : lr[0].ss_json);
+        regime = (sj && sj.regime) || null;
+      } catch (e) { /* degrade */ }
+      return { statusCode: 200, headers, body: JSON.stringify({ ledger, regime }) };
     }
 
     // ── SWEETSPOT_VERDICT_STRIP_SPEC.md §5 — server-authoritative verdict state ──

@@ -924,7 +924,7 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
 
     // Stage 1.5 — §4c player-context digest (lazy; ledger-first so calibration data survives
     // narration failure; any throw here degrades to today's context-free narration)
-    let _ctxText = '';
+    let _ctxText = '', _ctxStamped = false;
     if (pctx && pctx.modelSummary) {
       try {
         const _ldHome = ss.leaderAl === hA;
@@ -941,15 +941,24 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
             if (bp && bp.id) dg.base[bp.name] = (pctx.baselines && pctx.baselines[bp.name]) || await ssCarrierBaseline(bp.id);
           }
           dg.period = ss.period;
+          if (ss.fuelTemp) dg.fuelTemp = ss.fuelTemp; // DS v1 C1 — rides the existing ctx JSONB, no new columns
           const _composed = ssComposeCtxBlock(dg);
           _ctxText = _composed.text;
           const _c = _composed.cols;
           await sql`UPDATE sweetspot_alerts SET carrier_name = ${_c.carrier_name}, carrier_identity = ${_c.carrier_identity},
             carrier_share = ${_c.carrier_share}, carrier_ppg = ${_c.carrier_ppg}, player_ctx_json = ${JSON.stringify(dg)}
             WHERE id = ${rowId}`;
+          _ctxStamped = true;
           log(`${aA}@${hA}: sweetspot pctx — carrier=${_c.carrier_name || '?'} (${_c.carrier_identity}) share=${_c.carrier_share != null ? Math.round(_c.carrier_share * 100) : '?'}%`);
         }
       } catch (e) { log(`${aA}@${hA}: sweetspot pctx non-fatal: ${e.message}`); _ctxText = ''; }
+    }
+    // DS v1 C1 fallback — the fuel/temp stamp must survive pctx failure (surge watch
+    // + FUEL PULSE read it). Isolated UPDATE, non-fatal; degrades to no stamp.
+    if (!_ctxStamped && ss.fuelTemp) {
+      try {
+        await sql`UPDATE sweetspot_alerts SET player_ctx_json = ${JSON.stringify({ fuelTemp: ss.fuelTemp })} WHERE id = ${rowId}`;
+      } catch (e) { log(`${aA}@${hA}: fuelTemp stamp non-fatal: ${e.message}`); }
     }
 
     // Stage 2 — async narration (the WHY); non-fatal, never re-decides.
@@ -1060,6 +1069,7 @@ function ssBuildNarrationPrompt(row, blocks) {
     + (b.ladderText ? b.ladderText + '\n' : '')
     + (b.quarterFlow ? b.quarterFlow + '\n' : '')
     + (b.snapState ? b.snapState + '\n' : '')
+    + (b.fuelTemp ? b.fuelTemp + '\n' : '')
     + (b.teamCtx ? b.teamCtx + '\n' : '')
     + (b.playerCtx ? b.playerCtx + '\n' : '')
     + `Write exactly 4 short paragraphs, aiming for 150-190 words total so the relevant information fits — 200 words is a hard cap:\n`
@@ -1104,6 +1114,7 @@ function ssBuildWatchlistPrompt(row, blocks) {
     + `- Live price on ${row.trailer_alias}: ${ml(row.line_used)} (market implied ${pct(row.implied)}%).\n\n`
     + (b.quarterFlow ? b.quarterFlow + '\n' : '')
     + (b.snapState ? b.snapState + '\n' : '')
+    + (b.fuelTemp ? b.fuelTemp + '\n' : '')
     + (b.teamCtx ? b.teamCtx + '\n' : '')
     + (b.playerCtx ? b.playerCtx + '\n' : '')
     + `Write exactly 4 short paragraphs, aiming for 150-190 words total — 200 words is a hard cap:\n`
@@ -1145,7 +1156,7 @@ async function ssCallNarration(prompt, model, timeoutMs) {
 // alert row, player_ctx_json, latest snapshot, games.quarter_data, composeTeamContext.
 // Every block optional; each degrades to ''. Floor score deliberately never passed (§2 exclusion).
 async function ssGatherNarrationBlocks(sql, row) {
-  const blocks = { teamCtx: '', playerCtx: '', quarterFlow: '', snapState: '', ladderText: '' };
+  const blocks = { teamCtx: '', playerCtx: '', quarterFlow: '', snapState: '', ladderText: '', fuelTemp: '' };
   const norm = (al) => ((LEAGUES.wnba && LEAGUES.wnba.aliasMap) || {})[al] || al;
   let hA = null, aA = null;
   try {
@@ -1196,6 +1207,15 @@ async function ssGatherNarrationBlocks(sql, row) {
       const dg = typeof row.player_ctx_json === 'string' ? JSON.parse(row.player_ctx_json) : row.player_ctx_json;
       const composed = ssComposeCtxBlock(dg);
       if (composed && composed.text) blocks.playerCtx = composed.text;
+    }
+  } catch (e) { /* omit */ }
+  // DS v1 C1 — fire-time fuel/temp read (stamped into the ctx JSONB at fire). Own
+  // try/catch: a fuelTemp-only stamp (pctx-failure fallback) has no dg.leader and
+  // must still narrate the fuel lines even though ssComposeCtxBlock above degraded.
+  try {
+    if (row.player_ctx_json) {
+      const _ftDg = typeof row.player_ctx_json === 'string' ? JSON.parse(row.player_ctx_json) : row.player_ctx_json;
+      if (_ftDg && _ftDg.fuelTemp) blocks.fuelTemp = ssFuelTempLines(_ftDg.fuelTemp, row.leader_alias, row.trailer_alias);
     }
   } catch (e) { /* omit */ }
   // live structural state — latest snapshot, isolated SELECT; floor_score EXCLUDED by design
@@ -5122,6 +5142,57 @@ function efgTier(efg, period) {
   if (efg <= b[1]) return { tier:'orange', color:'var(--amber)' };
   return { tier:'red', color:'var(--coral)' };
 }
+// ── DECISION SUPPORT v1 Component 1 (DECISION_SUPPORT_V1_SPEC.md) ─────────────
+// computeFuelTemp: what the leader's lead is made of + how hot the trailer is.
+// ONE definition, all consumers (elite-definition lesson): duplicated VERBATIM in
+// wnba-bdl.html; mirrored golden fixtures assert drift (research/2026-08-05_
+// decision_support_fixtures.mjs). Thresholds pinned here — changing them requires
+// a spec amendment, not a code tweak. Insufficient data → { insufficient:true }
+// and every consumer renders NOTHING (no fake reads — the schedule-badge lesson).
+var FUELTEMP_TH = { POT_MIN: 6, THREE_SHARE: 40, VSHARE: 45, TO_CLEAN: 4, MIN_FGA: 12 };
+function computeFuelTemp(leaderStats, trailerStats, period) {
+  function _n(v) { v = Number(v); return isNaN(v) ? 0 : v; }
+  function _efg(s) { var fga = _n(s && s.fga); if (fga < FUELTEMP_TH.MIN_FGA) return null; return (_n(s.fgm) + 0.5 * _n(s.fg3m)) / fga * 100; }
+  var L = leaderStats || {}, T = trailerStats || {};
+  var lEfg = _efg(L), tEfg = _efg(T);
+  if (lEfg == null || tEfg == null) return { insufficient: true };
+  var lBand = efgTier(lEfg, period).tier, tBand = efgTier(tEfg, period).tier;
+  var lPts = 2 * _n(L.fgm) + _n(L.fg3m) + _n(L.ftm);
+  var threeShare = lPts > 0 ? (3 * _n(L.fg3m)) / lPts * 100 : 0;
+  var vShare = (L.vShare != null && !isNaN(Number(L.vShare))) ? Number(L.vShare) : null;
+  var heat = lBand === 'red' || threeShare >= FUELTEMP_TH.THREE_SHARE || (vShare != null && vShare > FUELTEMP_TH.VSHARE);
+  var takeaway = _n(L.pot) >= FUELTEMP_TH.POT_MIN;
+  var fuel = heat && takeaway ? 'TRANSIENT (heat + takeaway)' : heat ? 'TRANSIENT (heat)' : takeaway ? 'TRANSIENT (takeaway)' : 'EARNED';
+  var temp = tBand === 'green' ? 'cold' : tBand === 'red' ? 'hot' : 'warm';
+  var sticky = fuel === 'EARNED' && temp === 'cold' && _n(T.to) < FUELTEMP_TH.TO_CLEAN;
+  return { insufficient: false, fuel: fuel, heat: heat, takeaway: takeaway, temp: temp, sticky: sticky,
+    leaderEfg: Math.round(lEfg * 10) / 10, leaderBand: lBand, trailerEfg: Math.round(tEfg * 10) / 10, trailerBand: tBand,
+    threeShare: Math.round(threeShare), vShare: vShare != null ? Math.round(vShare) : null,
+    pot: _n(L.pot), trailerTo: _n(T.to), period: period };
+}
+// Plain-English fuel/temp lines for narration context (A/B fire + D-12 review).
+// PURE (fixture-extracted). Returns '' when the read is unavailable — no fake reads.
+function ssFuelTempLines(ft, leaderAl, trailerAl) {
+  if (!ft || ft.insufficient) return '';
+  var why;
+  if (ft.fuel === 'EARNED') why = 'normal shooting temperature and a low takeaway feed';
+  else {
+    var bits = [];
+    if (ft.heat) {
+      if (ft.leaderBand === 'red') bits.push('hot shooting (' + Math.round(ft.leaderEfg) + '% effective field goal, red band)');
+      else if (ft.threeShare >= FUELTEMP_TH.THREE_SHARE) bits.push(Math.round(ft.threeShare) + '% of their points from three-pointers');
+      else bits.push(Math.round(ft.vShare) + '% of the lead from three-pointers and midrange');
+    }
+    if (ft.takeaway) bits.push(ft.pot + ' points off turnovers');
+    why = bits.join(' plus ');
+  }
+  var t = 'LEAD FUEL + TRAILER TEMP [FACT-live at fire]:\n'
+    + '- LEAD FUEL: ' + ft.fuel + ' — ' + leaderAl + '\'s lead is built on ' + why + '.\n'
+    + '- TRAILER TEMP: ' + ft.temp + ' — ' + trailerAl + ' shooting ' + Math.round(ft.trailerEfg) + '% effective field goal (' + ft.trailerBand + ' band).\n';
+  if (ft.sticky) t += '- STICKY LEAD SHAPE (2026): earned lead against a cold, clean trailer (' + ft.trailerTo + ' turnovers) — this season\'s toughest comeback shape. Context only, never a gate.\n';
+  return t;
+}
+
 function _clkSec(c) { if (c == null) return 999; c = String(c); if (c.indexOf(':') > -1) { var p = c.split(':'); return (+p[0])*60 + (+p[1]); } var n = parseFloat(c); return isNaN(n) ? 999 : n; }
 function americanToImplied(ml) { if (ml == null || ml === '') return null; ml = Number(ml); if (isNaN(ml) || ml === 0) return null; return ml > 0 ? 100/(ml+100) : (-ml)/((-ml)+100); }
 function cbDepthRate(d) { if (d <= 5) return 0.68; if (d <= 9) return 0.56; if (d <= 14) return 0.50; if (d <= 19) return 0.44; return 0; }
@@ -9067,6 +9138,22 @@ export default async function(req) {
                       var _ssLeadRec = ssStandings[_ssLeadAl] || {}, _ssTrailRec = ssStandings[_ssTrailAl] || {};
                       var _ssBestBook = _ssHomeTrails ? (odds && odds.homeMLBook) : (odds && odds.awayMLBook);
                       var _ssConsML = _ssHomeTrails ? (odds && odds.homeMLConsensus) : (odds && odds.awayMLConsensus);
+                      // DS v1 C1 — fire-time fuel/temp read from the same reliable box the eFG
+                      // gate uses (v2-corrected pot preferred). Stamped into player_ctx_json at
+                      // fire; consumed by narration blocks, FUEL PULSE, and the CASH surge watch.
+                      var _ssFuelTemp = null;
+                      try {
+                        var _ftBox = function(st, v2) { st = st || {}; return {
+                          fgm: st.field_goals_made, fga: st.field_goals_att, fg3m: st.three_points_made,
+                          ftm: st.free_throws_made, to: st.turnovers != null ? st.turnovers : st.total_turnovers,
+                          pot: (v2 && v2.pot != null) ? v2.pot : st.points_off_turnovers }; };
+                        var _ftL = _ftBox(_ssHomeTrails ? summary.away?.statistics : summary.home?.statistics,
+                                          _ssHomeTrails ? game._wnbaV2?.away : game._wnbaV2?.home);
+                        var _ftT = _ftBox(_ssHomeTrails ? summary.home?.statistics : summary.away?.statistics,
+                                          _ssHomeTrails ? game._wnbaV2?.home : game._wnbaV2?.away);
+                        _ftL.vShare = _ssVar != null ? _ssVar : null;
+                        _ssFuelTemp = computeFuelTemp(_ftL, _ftT, currentPeriod);
+                      } catch (e) { _ssFuelTemp = null; }
                       var _ssPayload = {
                         period: currentPeriod, clock: clock,
                         leaderAl: _ssLeadAl, trailerAl: _ssTrailAl, leaderWP: _ssLeadWP, trailerWP: _ssTrailWP, gap: _ssGap,
@@ -9076,6 +9163,7 @@ export default async function(req) {
                         bestML: _ssTrailML, bestBook: _ssBestBook, consensusML: _ssConsML, impliedBest: _ssImplied,
                         edge: _ssEdge, kellySize: (_ssEv && _ssEv.size != null ? _ssEv.size : null),
                         margin: _ssDeficit, books: (odds && odds.books) || 0,
+                        fuelTemp: _ssFuelTemp, // DS v1 C1 — fire-time read, stamped by fireSweetSpotAlert
                       };
                       var _ssPctx = { modelSummary: modelSummary, pbp: game._bdlPbp };
                       if (_ssDoFire || _ssDoLedger) {
