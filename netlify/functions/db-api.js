@@ -815,7 +815,7 @@ exports.handler = async (event) => {
     // ── SWEETSPOT_OPS_SPEC.md §4 — sweetspot_alerts read access ──
     if (action === 'get_sweetspot_alerts') {
       const league = params.league || 'nba';
-      const limit = Math.min(parseInt(params.limit) || 50, 200);
+      const limit = Math.min(parseInt(params.limit) || 50, 1000); // cap raised for DS v1.1 C backfill full pull
       const rows = await sql`
         SELECT sa.*, g.date AS game_date, g.away_alias, g.home_alias
         FROM sweetspot_alerts sa LEFT JOIN games g ON g.id = sa.game_id
@@ -913,6 +913,19 @@ exports.handler = async (event) => {
           ${b.entry_deficit != null ? parseInt(b.entry_deficit) : null}, ${b.notes || null})
         RETURNING id`;
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, id: ins[0].id }) };
+    }
+
+    // ── DS v1.1 C — stamp_ss_fueltemp: JSONB-merge a backfilled fuel/temp read into
+    // player_ctx_json. Refuses rows that already carry a stamp (live fire-site stamps
+    // are never overwritten); merge preserves any existing player digest.
+    if (action === 'stamp_ss_fueltemp' && event.httpMethod === 'POST') {
+      const b = JSON.parse(event.body || '{}');
+      if (!b.id || !b.fuelTemp) return { statusCode: 400, headers, body: JSON.stringify({ error: 'id and fuelTemp required' }) };
+      const rows = await sql`UPDATE sweetspot_alerts
+        SET player_ctx_json = COALESCE(player_ctx_json, '{}'::jsonb) || ${JSON.stringify({ fuelTemp: b.fuelTemp })}::jsonb
+        WHERE id = ${b.id} AND player_ctx_json->'fuelTemp' IS NULL
+        RETURNING id`;
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, stamped: rows.length > 0, id: b.id }) };
     }
 
     // ── update_ss_killer (KILLER_FLAG_SPEC §3): back-tag leader_killer/scalps on an SS alert row.
