@@ -66,5 +66,53 @@ ok('killer A takes -200 (tier trumps killer)', pickThreshold({ alert_subtype:'EF
 ok('killer WATCHLIST keeps -150', pickThreshold({ alert_subtype:'WATCHLIST', leader_killer:true }) === -150);
 ok('WATCHLIST non-killer keeps +117', pickThreshold({ alert_subtype:'WATCHLIST', leader_killer:false }) === 117);
 
+// ═══ v1.3 — bandStep (grace + suspend/resume) ═══════════════════════════════
+import { bandStep } from '../netlify/functions/odds-squeeze.mjs';
+
+// unit cells
+ok('in-band fresh', bandStep(null, 5).mode === 'in_band' && bandStep(null, 5).oob === 0);
+ok('in-band resets oob', bandStep({ oob_count: 2 }, 8).mode === 'in_band' && bandStep({ oob_count: 2 }, 8).oob === 0);
+ok('def 10 = grace strike 1', bandStep({}, 10).mode === 'grace' && bandStep({}, 10).oob === 1);
+ok('def 11 = grace (collar edge)', bandStep({ oob_count: 1 }, 11).mode === 'grace' && bandStep({ oob_count: 1 }, 11).oob === 2);
+ok('def 12 = strike skip (beyond collar)', bandStep({}, 12).mode === 'strike_skip');
+ok('def 0 tie = grace (neutral-WP read)', bandStep({}, 0).mode === 'grace');
+ok('def -3 trailer leads = skip, no eval', bandStep({}, -3).mode === 'strike_skip' && bandStep({}, -3).oob === 1);
+ok('3rd oob = suspend not terminal', bandStep({ oob_count: 2 }, 10).mode === 'suspend' && bandStep({ oob_count: 2 }, 10).suspended === true);
+ok('suspended stays while oob', bandStep({ suspended: true, oob_count: 3 }, 12).mode === 'suspended');
+ok('suspended + band re-entry = resume', (() => { const s = bandStep({ suspended: true, oob_count: 3 }, 9); return s.mode === 'resume' && s.oob === 0 && s.suspended === false; })());
+
+// oscillation 9→10→9→10 never suspends (oob resets each re-entry)
+{
+  let st = {}; const modes = [];
+  for (const d of [9, 10, 9, 10, 9]) { const s = bandStep(st, d); modes.push(s.mode); st = { oob_count: s.oob, suspended: s.suspended }; }
+  ok('oscillation never suspends', modes.join(',') === 'in_band,grace,in_band,grace,in_band');
+}
+
+// hover at tie → suspend at 3 → resume when leader retakes
+{
+  let st = {}; const modes = [];
+  for (const d of [0, 0, 0, 0, 3]) { const s = bandStep(st, d); modes.push(s.mode); st = { oob_count: s.oob, suspended: s.suspended }; }
+  ok('tie hover: grace,grace,suspend,suspended,resume', modes.join(',') === 'grace,grace,suspend,suspended,resume');
+}
+
+// ── GOLDEN: row-1148 replay (Aug 4 TOR@GS incident, spec v1.3 §5) ──
+// arm at def 9 → TOR extends 10/11 (v1.2 died here blind) → suspend → GS claws back → resume
+{
+  let st = {}; const modes = [];
+  for (const d of [9, 10, 11, 11, 11, 10, 9, 8]) { const s = bandStep(st, d); modes.push(s.mode); st = { oob_count: s.oob, suspended: s.suspended }; }
+  ok('row-1148 golden: strike 1 evals price (grace)', modes[1] === 'grace');
+  ok('row-1148 golden: full arc', modes.join(',') === 'in_band,grace,grace,suspend,suspended,suspended,resume,in_band');
+}
+
+// ── v1.3 copy fixtures ──
+const H = composeSqueeze({ ...base, deficit: 10, oobGrace: true });
+ok('H grace tag on oob eval', H.body.includes('NY down 10, Q3 4:12 (out of band - grace read).'));
+const I = composeSqueeze({ ...base, deficit: 0, oobGrace: true });
+ok('I tie copy (no "down 0")', I.body.includes('NY tied it, Q3 4:12 (grace read).') && !I.body.includes('down 0'));
+const J = composeSqueeze({ ...base, resumedAt: { period: 3, clock: '6:30' } });
+ok('J resume breadcrumb', J.body.includes('Back in band since Q3 6:30.'));
+ok('A normal deficit line untagged', A.body.includes('NY down 6, Q3 4:12.') && !A.body.includes('grace'));
+ok('H ascii-safe', /^[\x00-\x7F]+$/.test(H.body) && /^[\x00-\x7F]+$/.test(I.body));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

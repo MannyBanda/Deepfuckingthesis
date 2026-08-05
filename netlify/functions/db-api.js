@@ -358,6 +358,8 @@ exports.handler = async (event) => {
         )
       `;
       await sql`CREATE INDEX IF NOT EXISTS idx_odds_game ON odds_history(game_id)`;
+      // SQUEEZE v1.3 §4a: score-state stamp on squeeze tape rows (deficit=0 = neutral-WP reads)
+      await sql`ALTER TABLE odds_history ADD COLUMN IF NOT EXISTS deficit INTEGER`;
 
       // Poll heartbeat — client writes to signal it's active, server checks before polling
       await sql`

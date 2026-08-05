@@ -1,4 +1,4 @@
-# SQUEEZE_WATCH_SPEC.md — v1.2 (shipped 2026-07-23)
+# SQUEEZE_WATCH_SPEC.md — v1.3 (band grace + suspend/resume, shipped 2026-08-04; v1.2 shipped 2026-07-23)
 
 **Purpose:** stalk the trailer's live price on every pushed sweet-spot row; push a plain-English
 alert when the best book crosses a cell-aware threshold. Alerts are eyes, never directives.
@@ -17,7 +17,9 @@ alert when the best book crosses a cell-aware threshold. Alerts are eyes, never 
 2. **Clock gate:** frozen clock (timeout/halftime) → skip odds pull, EXCEPT one catch-up pull
    on period increment (books repost during breaks). Clock advancing → full 30s cadence,
    no score-event gating (PM decision Jul 23: possession-length latency, never bundle events).
-3. Band: deficit (leader−trailer via ESPN) outside 1–9 → strike; 3 consecutive strikes → disarm.
+3. Band (v1.3): deficit outside 1–9 → strike. Strikes 1–2 GRACE-EVAL price when deficit
+   is 0 (tie) or 10–11 (band+2 collar); deficit <0 or ≥12 strikes without eval. 3 consecutive
+   strikes → SUSPEND (not terminal); band re-entry → RESUME same pass. See v1.3 section.
 4. Price: best-of-roster implied ≤ threshold implied → alert (re-arm needs ≥.035 implied drop,
    ≈25¢; max 6 alerts per arm; TTL 3h).
 
@@ -51,6 +53,38 @@ leader eFG/band/var-share, trailer own eFG + capacity read, top-3 shop line, cap
   (e.g. "does Caesars price trailing favorites best" — PM hypothesis, now measurable).
 - sweetspot_alerts += squeeze_armed/threshold/last_alert_price/alert_count/expires_at/state.
   Written only by squeeze/arm paths; never read on poll hot path; get_ss_state untouched.
+
+
+## v1.3 — Band grace + suspend/resume (PM-approved Aug 4, incident row 1148)
+
+**Incident:** A-tier watch armed at fire (TOR@GS, def 9, +100); lead extended past 9 within
+seconds; three oob samples killed the watch ~90s after arming — the oob check preceded the
+odds fetch, so zero prices were ever evaluated and zero tape rows written. Disarm was terminal
+(autoArm requires squeeze_armed IS NULL). The night's price peak (+110 books) occurred DURING
+the oob strikes; the Q3 band re-entry was invisible. Manual shop beat the machine.
+
+**State machine:** ARMED ⇄ SUSPENDED. Suspension = `squeeze_state.suspended=true` with
+`squeeze_armed` staying TRUE (loadWatches still selects; autoArm contract untouched; zero
+schema change on sweetspot_alerts). Terminal disarms unchanged: final, q4-2:00, max-alerts,
+ttl, superseded, manual db-api. `bandStep(prevState, deficit)` is the pure decision function —
+golden fixtures incl. row-1148 replay in research/2026-07-23_squeeze_fixtures.mjs.
+
+**Rules:**
+- Grace (strikes 1–2): full price pipeline runs at deficit 0 or 10–11. Tie grace is the
+  market's neutral-WP read (PM Aug 4: juice persists at ties; deficit=0 tape = implied
+  quality-gap measurement). deficit <0 = trailer leads, entry juice dead: strike, no eval.
+- Copy: grace samples tagged "(out of band - grace read)"; ties read "{trailer} tied it";
+  first alert after a resume carries "Back in band since Q{p} {clock}." (breadcrumb persists
+  in state until it rides an alert). Fixture-pinned.
+- Suspend (3rd consecutive oob): state saved (fixes v1.2's silent third-strike state loss),
+  ESPN-only sampling, no odds calls/credits, no alerts. Resume on deficit 1–9: oob=0,
+  falls through to price eval in the same pass.
+- Unchanged across suspend cycles: alert 6-cap, rearm spacing, thresholds, TTL (no extension),
+  clock-frozen guard, one-watch-per-game supersede. No cycle cap — bounded by TTL/q4-2:00/6-cap.
+
+**§4a tape stamp:** squeeze tape writes now stamp `deficit` (odds_history ADD COLUMN,
+?action=init). Tape doubles as a price-by-deficit dataset; deficit=0 rows are neutral-WP
+reads feeding honest-gap work and the WNBA E4-class price test.
 
 ## Flags & failure modes
 `WNBA_SQUEEZE_ON=0` kills module; `WNBA_SQUEEZE_AUTOARM=0` reverts to manual arm

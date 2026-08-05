@@ -39,8 +39,8 @@ export const probToAmerican = (p) => {
   const c = Math.min(0.90, Math.max(0.35, p)); // clamp: no absurd thresholds from bad inputs
   return c >= 0.5 ? Math.round(-100 * c / (1 - c)) : Math.round(100 * (1 - c) / c);
 };
-// per-row threshold: dynamic (row's own predicted p - 5pp) for non-killer A-tiers;
-// killer cell -150 (wider net, PM Jul 22); +117 derived breakeven otherwise
+// per-row threshold (flat policy, PM Jul 28 — dynamic mode retired):
+// A-tier -200 regardless of flag; killer -150 on review tiers; +117 breakeven otherwise
 export const pickThreshold = (row) => {
   // tier trumps killer: A-tier gets the widest net regardless of flag (PM Jul 28);
   // killer only differentiates the review tiers (B/WATCHLIST)
@@ -49,6 +49,28 @@ export const pickThreshold = (row) => {
   return NONKILLER_THRESHOLD;
 };
 export const bandOf = (efg) => (efg == null ? null : efg >= 65 ? 'red' : efg >= 56 ? 'orange' : 'green');
+
+// ── v1.3 band decision (SQUEEZE_WATCH_SPEC v1.3 §3-§4). Pure — golden fixtures
+//    in research/2026-07-23_squeeze_fixtures.mjs (row-1148 replay).
+//    Band 1-9. Grace evals price on oob strikes 1-2 when deficit is 0 (tie:
+//    market's neutral-WP read, juice can persist) or 10-11 (band+2 collar:
+//    sampler lag around fires). deficit < 0 = trailer leads, entry juice dead:
+//    strike, no eval. 3 consecutive oob → SUSPEND (not terminal); band
+//    re-entry → RESUME same pass, oob reset. modes:
+//    in_band | grace | strike_skip | suspend | suspended | resume
+export function bandStep(prevState, deficit) {
+  const st = prevState || {};
+  const inBand = deficit >= 1 && deficit <= 9;
+  if (st.suspended) {
+    if (inBand) return { mode: 'resume', oob: 0, suspended: false };
+    return { mode: 'suspended', oob: st.oob_count || 0, suspended: true };
+  }
+  if (inBand) return { mode: 'in_band', oob: 0, suspended: false };
+  const oob = (st.oob_count || 0) + 1;
+  if (oob >= 3) return { mode: 'suspend', oob, suspended: true };
+  const graceEval = deficit === 0 || (deficit >= 10 && deficit <= 11);
+  return { mode: graceEval ? 'grace' : 'strike_skip', oob, suspended: false };
+}
 
 function aliasFromName(name) {
   if (!name) return null;
@@ -166,14 +188,29 @@ async function samplePass(sql, watches, espn, events, dry) {
     // trailer + band via ESPN score (leader/trailer roles are the ROW's anchors)
     const scores = { [g.home.alias]: g.home.score, [g.away.alias]: g.away.score };
     const deficit = (scores[w.leader_alias] ?? 0) - (scores[w.trailer_alias] ?? 0);
-    let oob = st.oob_count || 0;
-    if (deficit < 1 || deficit > 9) { oob += 1; } else { oob = 0; }
-    if (oob >= 3) { await disarm(sql, w, 'band-exit'); res.action = 'disarm'; res.reason = 'band-exit'; continue; }
-    if (deficit < 1 || deficit > 9) {
-      res.reason = `oob(${deficit}) strike ${oob}`;
-      await saveState(sql, w, { ...st, last_clock: g.clock, last_period: g.period, oob_count: oob });
+    const step = bandStep(st, deficit);
+    if (step.mode === 'suspend') {
+      // v1.3: band-exit is no longer terminal — watch sleeps (ESPN-only), resumes on band re-entry
+      res.action = 'suspend'; res.reason = `band-exit(${deficit})`;
+      log(`suspend row ${w.id}: band-exit (deficit ${deficit})`);
+      await saveState(sql, w, { ...st, last_clock: g.clock, last_period: g.period, oob_count: step.oob, suspended: true });
       continue;
     }
+    if (step.mode === 'suspended') {
+      res.reason = `suspended(${deficit})`;
+      await saveState(sql, w, { ...st, last_clock: g.clock, last_period: g.period });
+      continue;
+    }
+    if (step.mode === 'strike_skip') {
+      res.reason = `oob(${deficit}) strike ${step.oob}`;
+      await saveState(sql, w, { ...st, last_clock: g.clock, last_period: g.period, oob_count: step.oob });
+      continue;
+    }
+    // in_band | grace | resume → full price pipeline
+    const oobGrace = step.mode === 'grace';
+    if (step.mode === 'resume') log(`resume row ${w.id}: back in band (deficit ${deficit})`);
+    const resumedAt = step.mode === 'resume' ? { period: g.period, clock: g.clock } : (st.resumed_at || null);
+    if (oobGrace) res.reason = `grace(${deficit}) strike ${step.oob}`;
 
     if (!odds) odds = await fetchOdds();
     if (!odds) { res.reason = 'odds-fail'; continue; }
@@ -186,27 +223,34 @@ async function samplePass(sql, watches, espn, events, dry) {
     const best = bestPrice(ev, w.trailer_alias);
     if (!best) { res.reason = 'no-trailer-price'; continue; }
 
-    // tape: every live sample writes odds_history (30s price tape on armed windows)
+    // tape: every live sample writes odds_history (30s price tape on armed windows).
+    // v1.3 §4a: deficit stamped — tape doubles as a price-by-deficit dataset
+    // (deficit=0 rows = market's neutral-WP reads; feeds honest-gap + E4-class price work)
     const homeBest = bestPrice(ev, w._home), awayBest = bestPrice(ev, w._away);
-    if (!dry) await sql`INSERT INTO odds_history (game_id, home_ml, away_ml, source)
-      VALUES (${w.game_id}, ${homeBest?.price ?? null}, ${awayBest?.price ?? null}, ${'squeeze:' + best.book})`;
+    if (!dry) await sql`INSERT INTO odds_history (game_id, home_ml, away_ml, deficit, source)
+      VALUES (${w.game_id}, ${homeBest?.price ?? null}, ${awayBest?.price ?? null}, ${deficit}, ${'squeeze:' + best.book})`;
 
     res.best = `${fmtOdds(best.price)} ${best.book}`;
     const crossed = implied(best.price) <= implied(w.squeeze_threshold);
     const rearmOk = w.squeeze_last_alert_price == null ||
       implied(w.squeeze_last_alert_price) - implied(best.price) >= REARM_IMPLIED_DROP;
+    let alerted = false;
     if (!crossed) { res.reason = 'below-threshold'; }
     else if (!rearmOk) { res.reason = 'rearm-wait'; }
     else if ((w.squeeze_alert_count || 0) >= MAX_ALERTS_PER_ARM) { await disarm(sql, w, 'max-alerts'); res.action = 'disarm'; res.reason = 'max-alerts'; }
     else {
       res.action = dry ? 'WOULD-ALERT' : 'ALERT';
       if (!dry) {
-        await pushSqueezeAlert(sql, w, g, deficit, best, topThreeLine(ev, w.trailer_alias));
+        await pushSqueezeAlert(sql, w, g, deficit, best, topThreeLine(ev, w.trailer_alias), oobGrace, resumedAt);
         await sql`UPDATE sweetspot_alerts SET squeeze_last_alert_price = ${best.price},
           squeeze_alert_count = COALESCE(squeeze_alert_count,0) + 1 WHERE id = ${w.id}`;
+        alerted = true;
       }
     }
-    await saveState(sql, w, { ...st, last_clock: g.clock, last_period: g.period, oob_count: 0 });
+    // resume breadcrumb persists until it rides an alert, then clears
+    const nextState = { ...st, last_clock: g.clock, last_period: g.period, oob_count: step.oob, suspended: false };
+    if (resumedAt && !alerted) nextState.resumed_at = resumedAt; else delete nextState.resumed_at;
+    await saveState(sql, w, nextState);
   }
   return { results, odds };
 }
@@ -221,14 +265,21 @@ async function disarm(sql, w, why) {
 }
 
 // ── alert copy (pinned in fixtures; plain English; never a directive) ──
-export function composeSqueeze({ trailer, leader, price, book, threshold, cellRate, cellName, deficit, period, clock, leaderEfg, leaderBand, leaderVar, trailerEfg, capLine, shopLine, stale }) {
+export function composeSqueeze({ trailer, leader, price, book, threshold, cellRate, cellName, deficit, period, clock, leaderEfg, leaderBand, leaderVar, trailerEfg, capLine, shopLine, stale, oobGrace = false, resumedAt = null }) {
   const imp = Math.round(implied(price) * 100);
   const cushion = cellRate ? `${cellRate - imp >= 0 ? '+' : ''}${cellRate - imp}pp` : 'n/a';
   const title = `JUICE: ${trailer} ${fmtOdds(price)} (${BOOK_NAMES[book] || book})`; // brand word (PM Jul 28); internals keep 'squeeze'
+  // v1.3: honest state line — tie grace = market's neutral-WP read; oob grace tagged
+  const stateLine = deficit === 0
+    ? `${trailer} tied it, Q${period} ${clock} (grace read).`
+    : oobGrace
+      ? `${trailer} down ${deficit}, Q${period} ${clock} (out of band - grace read).`
+      : `${trailer} down ${deficit}, Q${period} ${clock}.`;
   const lines = [
     `Price hit your ${fmtOdds(threshold)} line. Implied ${imp}% vs ${cellName} ${cellRate ?? '?'}% (${cushion}).`,
-    `${trailer} down ${deficit}, Q${period} ${clock}.`,
+    stateLine,
   ];
+  if (resumedAt) lines.push(`Back in band since Q${resumedAt.period} ${resumedAt.clock}.`);
   if (stale) lines.push('Live eFG read unavailable (stale snapshot).');
   else {
     lines.push(`${leader} lead: ${leaderEfg}% eFG (${leaderBand})${leaderVar != null ? ` - ${leaderVar}% from threes/midrange` : ''}.`);
@@ -244,7 +295,7 @@ export function composeSqueeze({ trailer, leader, price, book, threshold, cellRa
   return { title, body: lines.join('\n') };
 }
 
-async function pushSqueezeAlert(sql, w, g, deficit, best, shopLine) {
+async function pushSqueezeAlert(sql, w, g, deficit, best, shopLine, oobGrace = false, resumedAt = null) {
   // live eFG context from latest snapshot (NULL-degrade beyond 60s)
   let leaderEfg = null, leaderBand = null, leaderVar = null, trailerEfg = null, stale = true;
   try {
@@ -265,7 +316,7 @@ async function pushSqueezeAlert(sql, w, g, deficit, best, shopLine) {
     trailer: w.trailer_alias, leader: w.leader_alias, price: best.price, book: best.book,
     threshold: w.squeeze_threshold, cellRate: killer ? 67 : 53, cellName: killer ? 'killer cell' : 'no-scalp cell',
     deficit, period: g.period, clock: g.clock, leaderEfg, leaderBand, leaderVar, trailerEfg,
-    capLine: `Cap per tier rules.`, shopLine, stale,
+    capLine: `Cap per tier rules.`, shopLine, stale, oobGrace, resumedAt,
   });
   await sendNtfy(title, body, 5, best.link);
 }
