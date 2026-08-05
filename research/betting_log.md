@@ -12,6 +12,25 @@ Discretionary alpha = (2) − (1). Never conflate them. Append one section per s
 
 ---
 
+## 2026-08-04 (WNBA) — P&L **+$834.75**
+
+TOR@GS: fourth A-tier scissor, first staged WATCHLIST→A ladder closed with a partial cashout — and JUICE's first live A-tier arm died in ~90 seconds to a band-exit race (zero dollar cost, invoice filed below). Flagged stream: **14-1, +$7,890.69** ($8,000 staked, 98.6% ROI).
+
+| Game | Side | Stake | Odds | Result | P&L | Grade | System trigger? |
+|---|---|---|---|---|---|---|---|
+| TOR@GS | GS ML live (staged pos 1/2, bet365) | $300 | +110 | WIN 92-82 | +$330 | **A / A / A−** | WATCHLIST row 1140 (Q2 9:24, def 2, line −360) — review entry |
+| TOR@GS | GS ML live (staged pos 2/2, Caesars) | $500 | +110 | WIN (cashed $1,004.75) | +$504.75 | **A / A / A−** | EFG_FADE A row 1148 (Q2 5:15, TOR +9, eFG 73.9, var 68, VOLATILE, gap .345, fire +100) |
+
+### Grades
+
+- **Entry A** — review-alert conviction that preceded the A confirmation: read TOR's 71.9 eFG as unsustainable at the WATCHLIST push, correctly keyed whose-variance on the *leader's* heat (by A-fire: 73.9 eFG, var share 68, VOLATILE), and hunted price from −360 at review fire into the +110 window as the lead extended. Ladder escalated exactly as D-13 intends — conviction first, system confirmation second. Fourth consecutive A-tier that detonated rather than recovered.
+- **Size A** — $300 = WATCHLIST cap to the dollar. $500 A-tier add at +110, *above* the +100 fire price, self-routed to Caesars with JUICE dark, filled inside a 2-minute plus-money window. The remaining $600 stayed unstaked because the +117 full-size gate never opened — tape shows **zero** prints ≥ +117 post-fire (consensus peak +105; the manual Caesars +110 beat the tape). $800 of $1,400, staged as one position: size-follows-price executed literally.
+- **Exit A−** — cashed the $500 leg at $1,004.75 vs $1,050 max = **95.69% breakeven** with TOR −7 late Q4. Honest GS WP est. 93–97% (structurally worse trailer, 3-possession game, late) — sources straddle the breakeven → NO EDGE under the proposed EXIT_P logic; taking a generous offer while riding pos 1/2 to settlement is a defensible partial de-risk. Minus charged for the honest-WP leg running on feel: second consecutive exit decision made without EXIT_P pinned. The $45.25 forgone is result-noise, not a demerit. Ship the spec.
+- **JUICE incident (reliability invoice, $0 cost tonight):** watch armed at A-fire, TOR pushed the lead past 9, and because the out-of-band check runs *before* the price check, three oob samples disarmed the watch without a single price evaluation — then no re-arm when GS came back into band with +110 still live. First live A-tier arm, dead on arrival; Manny did the machine's job better than its own tape. Candidate fixes (spec pending PM go): re-arm on band re-entry within TTL; evaluate price before incrementing oob.
+- Also open: nightly learnings digest text blank Aug 2 + Aug 3 (resolver sweep healthy; Opus digest failing silently — under investigation).
+
+---
+
 ## 2026-08-01 (WNBA) — P&L **+$720**
 
 NY@PHX: killer-cell WATCHLIST conversion, held through a live exit-rule check, sweated to a 2-point final. Flagged stream: **13-1, +$7,055.94** ($7,200 staked, 98.0% ROI).
