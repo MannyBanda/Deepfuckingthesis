@@ -61,10 +61,34 @@ State: lead ≥4, P1–P3, leader FGA ≥12. Outcome: leader relinquishes lead a
 
 Secondary: STRONG FADE went 4/4 in the live stream — hold the standing "drop fadeRead" candidate until the mirror weighs in.
 
-## 6. Pre-registered next steps (in order)
+## 6. Loss-path study — losses are round trips (n=8 deduped losses — LOW; added Aug 5)
 
-1. **Backtest mirror (524-game historical):** within-band spots — (a) trailer eFG temp split; (b) cold-trailer sub-split on trailer TO count, pace-controlled (pot unavailable in BDL; trailer TOs are the proxy); (c) transient-vs-earned composite where reconstructable. This is the multiplicity defense; nothing ships before it.
-2. **HEAT_FLIP ledger stream (log-only, candidate):** log every hi-var 80+ state with entry price / best subsequent price / flip Y/N. Requires go-ahead + spec; promotion bar pre-registered before any push behavior.
-3. **TRAILER_COLD annotation (candidate):** fire-site trailer band + trailer TO context on SS rows; narration/review-triage only, never tier change. Requires go-ahead + spec.
+Post-fire trajectory of every deduped loss, trailer perspective:
+
+| Row | Game | T-band | Def@fire | Best margin | Path | Final |
+|---|---|---|---|---|---|---|
+| #1038 | CHI>LV | green | 0 | **+12** | FLIPPED | −1 |
+| #936 | PHX>GS | green | 5 | **+13** | FLIPPED | −2 |
+| #736 | WSH>LV | green | 1 | **+9** | FLIPPED | −1 |
+| #587 | WSH>GS (row 23, real $) | green | 1 | **+7** | FLIPPED | −6 |
+| #545 | NY>DAL | green | 1 | **+12** | FLIPPED | −1 |
+| #365 | CON>POR | red | 9 | −1 | never close | −3 |
+| #168 | TOR>NY | green | 4 | 0 | TIED | −2 |
+| #89 | POR>ATL | green | 2 | +2 | FLIPPED | −10 |
+
+- **6/8 losses flipped to a lead post-fire; 5/8 lost by ≤2.** The fade thesis converged in 7 of 8 losses — the position died in the close, not the comeback.
+- Ties to §4 flip-worth from the independent 222-game sample: cold-trailer flips revert (~50% hold), warm-trailer flips keep it (67–88%). The loss set is exactly the cold-trailer-reversion species.
+- **Doctrine pivot: TRAILER_COLD is an exit modifier, not an entry gate.** Cold trailer at fire ≠ pass — they converge anyway. It means: plan to CASH when the flip comes. Warm trailer at fire = HOLD candidate through the flip. Every flipped loss passed through cash-out-profit territory before dying.
+- Exception on file: #365 — warm trailer at deficit 9 (band edge, STRUCTURAL) never converged. Different disease; band-edge caution stands.
+- Caveats: n=8; 60s snapshots → best margins are floors; dollar quantification of the missed exits requires the post-fire price path (#7 JUICE tape).
+
+## 7. Pre-registered next steps (in order)
+
+**Framing (PM directive, Aug 5): iterate, don't build.** Findings formalize take / pass / cash-out decisions onto EXISTING surfaces — narration text, ntfy tip lines, EXIT_P inputs, D-12 review copy. No new tiers, no new engines. Stream is 14-1; the goal of every item below is protecting that accuracy, not adding machinery.
+
+1. **Backtest mirror (524-game historical):** within-band spots — (a) trailer eFG temp split; (b) cold-trailer sub-split on trailer TO count, pace-controlled (pot unavailable in BDL; trailer TOs are the proxy); (c) transient-vs-earned composite where reconstructable. Multiplicity defense; nothing ships before it.
+2. **Post-fire price path (#7 backlog, promoted):** JUICE tape analysis now quantifies the exit rule — what the round-trip losses' peaks were worth at live prices. Co-priority with the mirror; together they measure the two halves of the same doctrine (entry read + exit read).
+3. **CASH-shape tip (candidate, spec required):** when an open fade position flips with a **cold** trailer, append a plain-English cash-out line to existing narration/JUICE alert copy ("trailer was cold at fire — flips like this hold ~50%; check cash-out vs breakeven"). Warm-trailer flip appends the HOLD framing. Rides existing alert surfaces + the standing EXIT_P breakeven rule. No push behavior changes, no tier changes. Go-ahead + spec before any code.
+4. **HEAT_FLIP ledger stream (log-only, candidate):** hi-var 80+ states with entry price / best subsequent price / flip Y/N. Go-ahead + spec + promotion bar first.
 
 *No engine changes proposed or made in this session. All findings above are research-only.*
