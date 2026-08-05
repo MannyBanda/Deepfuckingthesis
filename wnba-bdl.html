@@ -4252,6 +4252,15 @@ async function fetchPBPFromDB(gameId,force){
 // the scoring-composition evidence lines — position or no position, fire or no fire.
 // Client computes from data the card already fetches (_teamEvidence + PBP pot
 // fallback + sc vPct); insufficient data renders NOTHING (no fake reads).
+// DS v1.1 B — AT FIRE stamp text for closed cards. PURE (fixture-extracted).
+// Renders the FIRE-TIME read only — a live-computed temp read of a final box is
+// period-relative machinery applied where it means nothing (no fake reads).
+function ssFuelStampText(ft,period,clock){
+  if(!ft||ft.insufficient)return null;
+  var t='AT FIRE (Q'+period+(clock?' '+clock:'')+'): '+ft.fuel+' \u00b7 trailer '+ft.temp;
+  if(ft.trailerEfg!=null)t+=' ('+Math.round(ft.trailerEfg)+'% eFG)';
+  return t;
+}
 function _ftClientStats(cs,side){
   var te=cs._teamEvidence&&cs._teamEvidence[side];if(!te)return null;
   var bdl=cs.pbpAudit?cs.pbpAudit._bdl:null;
@@ -4259,9 +4268,19 @@ function _ftClientStats(cs,side){
     to:te.turnovers!=null?te.turnovers:te.to,
     pot:te.pot||(bdl?(side==='home'?bdl.potHome:bdl.potAway):0)||0};
 }
-function renderFuelTempBlock(cs,sn,gm,hA,aA){
-  var sc=cs.scoringComp;if(!sc||!sc.home||!sc.away)return'';
-  if(gm&&gm.status==='closed')return'';
+function renderFuelTempBlock(cs,sn,gm,hA,aA,fuelAtFire){
+  var sc=cs.scoringComp;
+  // Closed game — render the stamped FIRE-TIME read only (DS v1.1 B); no stamp → nothing
+  if(gm&&gm.status==='closed'){
+    if(!fuelAtFire||!fuelAtFire.ft)return'';
+    var stampTxt=ssFuelStampText(fuelAtFire.ft,fuelAtFire.period,fuelAtFire.clock);
+    if(!stampTxt)return'';
+    var h2='<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--hairline);font-size:11px;color:var(--fg-tertiary)">'+esc(stampTxt);
+    if(fuelAtFire.ft.sticky)h2+=' <span style="display:inline-block;padding:0 6px;border:1px solid var(--amber);border-radius:9px;color:var(--amber);font-weight:600">STICKY</span>';
+    h2+='</div>';
+    return h2;
+  }
+  if(!sc||!sc.home||!sc.away)return'';
   var hp=sc.home.total||0,ap=sc.away.total||0;
   var ldAl=(sn&&sn.ss_leader_alias)||null;
   if(!ldAl){if(hp===ap)return'';ldAl=hp>ap?(sc.home.team||hA):(sc.away.team||aA);}
@@ -4335,7 +4354,7 @@ function renderSSVerdictBox(id,cs,hA,aA){
     if(verdict.trap)html+='<div style="margin-top:6px;color:var(--amber)">'+esc(verdict.trap)+'</div>';
   }
   // DS v1 C1 — FUEL + TEMP read, directly above the scoring-composition evidence
-  try{html+=renderFuelTempBlock(cs,sn,gm,hA,aA);}catch(e){/* degrade — never break the verdict box */}
+  try{html+=renderFuelTempBlock(cs,sn,gm,hA,aA,entry&&entry.data?entry.data.fuel_at_fire:null);}catch(e){/* degrade — never break the verdict box */}
   // Evidence lines — always, from the client PBP comp, relabeled (D-2): "structural"
   // about the leader's own mix vs about the margin can never collide again.
   if(sc&&sc.home&&sc.away){

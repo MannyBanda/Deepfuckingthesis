@@ -885,10 +885,21 @@ exports.handler = async (event) => {
       const subs = await sql`
         SELECT alert_subtype, leader_alias, trailer_alias FROM sweetspot_alerts
         WHERE game_id = ${gameId} AND league = ${league} ORDER BY id DESC`;
+      // DS v1.1 B — FOURTH isolated query (house rule: never extend existing SELECTs
+      // on critical paths): earliest fuel/temp stamp for the game, for the closed-card
+      // AT FIRE render. NULL-degrading; live cards keep the client's live compute.
+      let fuelAtFire = null;
+      try {
+        const fr = await sql`SELECT period, clock, player_ctx_json->'fuelTemp' AS ft
+          FROM sweetspot_alerts WHERE game_id = ${gameId} AND league = ${league}
+            AND player_ctx_json->'fuelTemp' IS NOT NULL
+          ORDER BY id ASC LIMIT 1`;
+        if (fr[0] && fr[0].ft) fuelAtFire = { period: fr[0].period, clock: fr[0].clock, ft: fr[0].ft };
+      } catch (e) { /* degrade */ }
       return { statusCode: 200, headers, body: JSON.stringify({
         snapshot: snap[0] || null, game: game[0] || null,
         rows: subs.map(r => ({ subtype: r.alert_subtype, leader: r.leader_alias, trailer: r.trailer_alias })),
-        subtypes: subs.map(r => r.alert_subtype) }) };
+        subtypes: subs.map(r => r.alert_subtype), fuel_at_fire: fuelAtFire }) };
     }
 
     // ── SWEETSPOT_OPS_SPEC.md §3/D-A — structured betting log ──

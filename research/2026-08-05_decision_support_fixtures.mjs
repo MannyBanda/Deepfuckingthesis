@@ -210,5 +210,12 @@ T('non-directive tail both paths', tipD.body.includes('Your read - not a directi
 T('title ascii-safe', /^[\x00-\x7F]+$/.test(tipD.title) && tipD.title === 'CASHOUT CHECK: GS leads by 5');
 T('non-elite omits the tag', tipP.body.startsWith('Cashout check: GS now leads by 5.'));
 
+console.log('CLOSED-CARD AT FIRE STAMP (v1.1 B, client pure fn)');
+const stampFn = new Function(`${extractFn(CLIENT, 'ssFuelStampText')}; return ssFuelStampText;`)();
+const g1ft = S.computeFuelTemp(G[0].L, G[0].Tr, 2);
+T('stamp text from row-23 golden', stampFn(g1ft, 2, '9:42') === 'AT FIRE (Q2 9:42): EARNED \u00b7 trailer cold (53% eFG)');
+T('stamp null on insufficient (no fake reads)', stampFn({ insufficient: true }, 2, '9:42') === null && stampFn(null, 2, '9:42') === null);
+T('stamp clock-less form', stampFn(g1ft, 2, '') === 'AT FIRE (Q2): EARNED \u00b7 trailer cold (53% eFG)');
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
