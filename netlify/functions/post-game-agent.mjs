@@ -569,8 +569,10 @@ async function processLeague(sql, league, dateStr, isOverride, isDry) {
           const pos = {};
           for (const b of posRows) {
             const key = `${b.game_id}|${String(b.side || '').split(/\s+/)[0]}`;
-            (pos[key] = pos[key] || { game_id: b.game_id, stake: 0, pnl: 0 }).stake += Number(b.stake) || 0;
-            pos[key].pnl += Number(b.pnl) || 0;
+            const stk = Number(b.stake) || 0;
+            const dec = b.odds != null ? (Number(b.odds) > 0 ? 1 + Number(b.odds) / 100 : 1 + 100 / (-Number(b.odds))) : 1;
+            const pp = (pos[key] = pos[key] || { game_id: b.game_id, stake: 0, payout: 0, pnl: 0 });
+            pp.stake += stk; pp.payout += stk * dec; pp.pnl += Number(b.pnl) || 0;
           }
           const list = Object.values(pos);
           if (list.length) {
@@ -578,7 +580,12 @@ async function processLeague(sql, league, dateStr, isOverride, isDry) {
             for (const p of list) {
               const st = stamps[p.game_id];
               ho += p.pnl;
-              sh += (st && st.surge_est_cash != null) ? (Number(st.surge_est_cash) - (Number(st.surge_stake) || p.stake)) : p.pnl;
+              // v1.1: shadow = stamped cash FRACTION × this position's settled payout − stake.
+              // Order-independent: works whether the bet was logged before, during, or after
+              // the tip. Legacy est_cash stamp kept as fallback for any pre-v1.1 fires.
+              if (st && st.surge_frac != null) sh += Number(st.surge_frac) * p.payout - p.stake;
+              else if (st && st.surge_est_cash != null) sh += Number(st.surge_est_cash) - (Number(st.surge_stake) || p.stake);
+              else sh += p.pnl;
             }
             shadow = { n: list.length, shadow: sh, hold: ho };
           }

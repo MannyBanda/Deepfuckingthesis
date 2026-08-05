@@ -88,3 +88,25 @@ Template mechanics: [N] = current margin from the odds row / latest snapshot; [P
 - **odds-squeeze.mjs:** `bestPrice(event, alias)` ~L106; armed-watch sample pass ~L166–223 — surge-watch exit condition hooks inside that pass (per-watch, one-shot flag on the watch row/state).
 - **post-game-agent.mjs:** digest copy fixture pattern + `ssOverrideLaneLine` as the model for FUEL/SYSTEM PULSE lines + regime state.
 - Line numbers are anchors, not gospel — fresh session re-verifies with grep before editing (files drift).
+
+---
+
+## v1.1 ADDENDUM (APPROVED Manny, Aug 5 — post-C1/C2/C3 ship, pre-slate)
+
+**Governance note:** amended at n=0 forward surge positions — pre-registration clock restarts today at zero cost. Locked after tonight.
+
+### A. CASH surge trigger amendment
+- Trigger: cold-at-fire + trailer **leads ≥1** + trailer best price **≤ −400** (`SURGE_PRICE = -400` replaces `SURGE_P` as the gate; §11 plateau −250…−1000 is flat, so this is bookkeeping not EV). De-vig p still computed + stamped every fire — calibration only.
+- Profit-lock leg, dual path (% is the DEFAULT state; $ activates when a bet row exists at that sample — watcher re-checks every 30s, so mid-game logging upgrades the path automatically):
+  - bet logged: payout × p × 0.93 ≥ stake; copy shows real $
+  - no bet: p × 0.93 ≥ implied(fire price, `line_used`); copy shows %. Identical math when entered at fire price. `line_used` NULL → lock leg unevaluable → no fire (no fake reads).
+- Stamp on fire (both paths): `surge_p`, `surge_lead`, `surge_frac` (= p × 0.93), plus `surge_est_cash`/`surge_stake` when $ path. Nightly digest computes shadow P&L as `surge_frac × settled payout − stake` from whatever bets exist by digest time — logging order is moot.
+- One-shot, supersede guard, no-tape-on-oob unchanged.
+
+### B. Closed-card AT FIRE render
+- `get_ss_state` gains a FOURTH isolated query: earliest fuelTemp stamp for the game (+ its period/clock).
+- Closed cards render `AT FIRE (Q2 9:42): EARNED · trailer cold [STICKY]` from the stamp; live cards keep the live compute; no stamp → nothing.
+
+### C. Backfill
+- `stamp_ss_fueltemp` db-api POST (JSONB merge, id-keyed, refuses rows already stamped).
+- Sandbox script recomputes fuelTemp from fire-time snapshots for all historical SS rows via the repo-extracted computeFuelTemp (no reimplementation drift); leader vShare from the row's own `variance_share`; stamps tagged `src:'backfill'`. Seeds FUEL PULSE season baseline + regime denominator tonight. Distribution reported vs research §1/§10.

@@ -50,12 +50,13 @@ export const pickThreshold = (row) => {
 };
 export const bandOf = (efg) => (efg == null ? null : efg >= 65 ? 'red' : efg >= 56 ? 'orange' : 'green');
 
-// ── DS v1 C3 — CASH surge watch (DECISION_SUPPORT_V1_SPEC Component 3; SHADOW MODE).
+// ── DS v1.1 C3 — CASH surge watch (DECISION_SUPPORT_V1_SPEC + v1.1 addendum; SHADOW).
 //    Validated §11 Aug 5: profit-locked surge rule +$2.7-3.2K vs +$1.3K hold in-sample;
 //    first-flip cashing REFUTED (−$113). Cold-at-fire positions only — warm rides.
-//    Constants pinned; changing them requires a spec amendment. Promotion to directive
-//    copy: n≥15 forward positions with shadow ≥ hold (digest tracks it).
-const SURGE_P = 0.78;        // de-vig two-sided win prob (≈ −350/−400 two-sided)
+//    v1.1 (PM, Aug 5, amended at n=0 forward — pre-registration restarts clean):
+//    gate is the RAW PRICE line Manny reads at the window, not de-vig; de-vig p is
+//    still stamped every fire for calibration. Constants pinned; spec amendment to change.
+const SURGE_PRICE = -400;    // trigger: trailer best price at/inside this line (implied >= .80)
 const SURGE_HAIRCUT = 0.93;  // 7% cash-out haircut assumption; recalibrated from real bet365 offers at n≥8
 const SURGE_MIN_LEAD = 1;    // copy asserts a lead; also kills any t=0 / tied-game artifact
 // de-vig two-sided prob from the same best-price pair the tape stores (§11 recipe)
@@ -64,23 +65,32 @@ export const devigProb = (trailerPrice, leaderPrice) => {
   const t = implied(trailerPrice), l = implied(leaderPrice);
   return (t + l) > 0 ? t / (t + l) : null;
 };
-// pure trigger — every leg must clear; warm-at-fire never reaches this (caller gates)
-export function surgeCheck({ coldAtFire, p, lead, estCash, stake, alreadyFired }) {
+// pure trigger — every leg must clear; caller evaluates the profit-lock leg (dual
+// path: $ when a bet row exists, % vs fire price otherwise) and passes lockOk.
+export function surgeCheck({ coldAtFire, price, lead, lockOk, alreadyFired }) {
   if (alreadyFired) return { fire: false, why: 'one-shot' };
   if (!coldAtFire) return { fire: false, why: 'not-cold-at-fire' };
-  if (p == null || p < SURGE_P) return { fire: false, why: 'p-below' };
+  if (price == null || implied(price) < implied(SURGE_PRICE)) return { fire: false, why: 'price-above' };
   if (lead == null || lead < SURGE_MIN_LEAD) return { fire: false, why: 'no-lead' };
-  if (estCash == null || stake == null || estCash < stake) return { fire: false, why: 'no-profit-lock' };
+  if (!lockOk) return { fire: false, why: 'no-profit-lock' };
   return { fire: true };
 }
-// tip copy — Manny-amended template (spec §3). A PROMPT, never an imperative.
-export function composeCashout({ trailer, elite, lead, p, estCash, payout, fireEfg }) {
+// tip copy — Manny-amended template (spec §3 + v1.1 dual path). A PROMPT, never an
+// imperative. dollars = { estCash, payout } when a bet is logged; null → % framing
+// (fireLine = the row's fire price for the breakeven clause; omitted when absent).
+export function composeCashout({ trailer, elite, lead, p, frac, dollars, fireLine, fireEfg }) {
   const pR = Math.round(p * 100);
   const title = `CASHOUT CHECK: ${trailer} leads by ${lead}`;
   const because = `${trailer} was cold at entry (${Math.round(fireEfg)}% eFG) and cold-start comebacks have given leads back`;
-  const body = `Cashout check: ${trailer}${elite ? ' (elite)' : ''} now leads by ${lead}. `
-    + `Market has ${trailer} ~${pR}%. Cash-out locks ~$${Math.round(estCash)} of $${Math.round(payout)} payout; `
-    + `riding risks a loss because ${because}. Your read - not a directive.`;
+  let mid;
+  if (dollars) {
+    mid = `Market has ${trailer} ~${pR}%. Cash-out locks ~$${Math.round(dollars.estCash)} of $${Math.round(dollars.payout)} payout; riding risks a loss because ${because}.`;
+  } else {
+    const fracR = Math.round(frac * 100);
+    const be = fireLine != null ? `; a ${fireLine > 0 ? '+' + fireLine : fireLine} entry breaks even at ~${Math.round(implied(fireLine) * 100)}%` : '';
+    mid = `Market has ${trailer} ~${pR}% - a fair cash-out is ~${fracR}% of your full payout${be}. Riding risks a loss because ${because}.`;
+  }
+  const body = `Cashout check: ${trailer}${elite ? ' (elite)' : ''} now leads by ${lead}. ${mid} Your read - not a directive.`;
   return { title, body };
 }
 
@@ -224,21 +234,28 @@ async function samplePass(sql, watches, espn, events, dry, openBets) {
     const deficit = (scores[w.leader_alias] ?? 0) - (scores[w.trailer_alias] ?? 0);
     const step = bandStep(st, deficit);
 
-    // ── DS v1 C3 — CASH surge watch (SHADOW MODE). Evaluated BEFORE the band-mode
-    // branches: the surge condition (trailer leading at de-vig p ≥ .78) lives almost
-    // entirely out of band, where entry logic continues without an odds pull. This
-    // block NEVER writes the price tape on oob paths (research dataset unchanged);
-    // one-shot per position; warm-at-fire rides — cold-at-fire is the only gate in.
+    // ── DS v1.1 C3 — CASH surge watch (SHADOW MODE). Evaluated BEFORE the band-mode
+    // branches: the surge condition (trailer leading at ≤ −400) lives almost entirely
+    // out of band, where entry logic continues without an odds pull. NEVER writes the
+    // price tape on oob paths (research dataset unchanged); one-shot per position.
+    // % path is the DEFAULT (no bet row required); a logged bet upgrades to $ copy at
+    // the next 30s sample. Warm-at-fire rides — cold-at-fire is the only gate in.
     try {
-      const posn = openBets && openBets[w.game_id] && openBets[w.game_id][w.trailer_alias];
-      if (posn && w._fuelTemp && w._fuelTemp.temp === 'cold' && !st.surge_fired && (-deficit) >= SURGE_MIN_LEAD) {
+      if (w._fuelTemp && w._fuelTemp.temp === 'cold' && !st.surge_fired && (-deficit) >= SURGE_MIN_LEAD) {
         if (!odds) odds = await fetchOdds();
         if (odds) {
           const ev2 = odds.find((e) => [aliasFromName(e.home_team), aliasFromName(e.away_team)].sort().join('|') === key);
           const tb = ev2 && bestPrice(ev2, w.trailer_alias), lb = ev2 && bestPrice(ev2, w.leader_alias);
           const p = tb && lb ? devigProb(tb.price, lb.price) : null;
-          const estCash = p != null ? posn.payout * p * SURGE_HAIRCUT : null;
-          const chk = surgeCheck({ coldAtFire: true, p, lead: -deficit, estCash, stake: posn.stake, alreadyFired: !!st.surge_fired });
+          const frac = p != null ? p * SURGE_HAIRCUT : null;
+          const posn = openBets && openBets[w.game_id] && openBets[w.game_id][w.trailer_alias];
+          const fireLine = w.line_used != null ? Number(w.line_used) : null;
+          // profit-lock leg, dual path: $ when logged; % vs fire price otherwise.
+          // Neither evaluable (no bet AND no fire price) → no fire (no fake reads).
+          const lockOk = frac != null && (posn
+            ? frac * posn.payout >= posn.stake
+            : (fireLine != null && frac >= implied(fireLine)));
+          const chk = surgeCheck({ coldAtFire: true, price: tb ? tb.price : null, lead: -deficit, lockOk, alreadyFired: !!st.surge_fired });
           if (chk.fire) {
             // cross-row one-shot guard: a newer watch superseding the elder must not re-tip
             let dupe = false;
@@ -254,16 +271,18 @@ async function samplePass(sql, watches, espn, events, dry, openBets) {
               elite = !!(pj && pj.elite === true); // CONSUMER hysteresis flag ONLY — never internal def-A (KILLER_FLAG_SPEC §7)
             } catch (e) { /* no tag */ }
             if (!dupe) {
-              const tip = composeCashout({ trailer: w.trailer_alias, elite, lead: -deficit, p,
-                estCash, payout: posn.payout, fireEfg: w._fuelTemp.trailerEfg });
+              const tip = composeCashout({ trailer: w.trailer_alias, elite, lead: -deficit, p, frac,
+                dollars: posn ? { estCash: frac * posn.payout, payout: posn.payout } : null,
+                fireLine, fireEfg: w._fuelTemp.trailerEfg });
               res.surge = dry ? 'WOULD-CASHTIP' : 'CASHTIP';
               if (!dry) await sendNtfy(tip.title, tip.body, 5, null);
-              log(`surge tip row ${w.id}: ${w.trailer_alias} leads ${-deficit}, p=${p.toFixed(3)}, cash ~$${Math.round(estCash)} of $${Math.round(posn.payout)} (stake $${posn.stake})${dry ? ' [dry]' : ''}`);
+              log(`surge tip row ${w.id}: ${w.trailer_alias} leads ${-deficit} at ${fmtOdds(tb.price)}, p=${p.toFixed(3)}, frac=${frac.toFixed(3)}${posn ? ` [$ path, stake $${posn.stake}]` : ' [% path]'}${dry ? ' [dry]' : ''}`);
             }
             if (!dry) {
               Object.assign(st, { surge_fired: true, surge_at: new Date().toISOString(),
-                surge_p: Math.round(p * 1000) / 1000, surge_est_cash: Math.round(estCash),
-                surge_stake: posn.stake, surge_lead: -deficit });
+                surge_p: Math.round(p * 1000) / 1000, surge_frac: Math.round(frac * 1000) / 1000,
+                surge_lead: -deficit, surge_price: tb.price,
+                ...(posn ? { surge_est_cash: Math.round(frac * posn.payout), surge_stake: posn.stake } : {}) });
               await saveState(sql, w, st);
             }
           }
@@ -426,7 +445,7 @@ async function loadWatches(sql) {
   const rows = await sql`
     SELECT sa.id, sa.game_id, sa.leader_alias, sa.trailer_alias, sa.leader_killer,
            sa.squeeze_threshold, sa.squeeze_last_alert_price, sa.squeeze_alert_count,
-           sa.squeeze_expires_at, sa.squeeze_state, sa.player_ctx_json,
+           sa.squeeze_expires_at, sa.squeeze_state, sa.player_ctx_json, sa.line_used,
            g.home_alias AS _home, g.away_alias AS _away
     FROM sweetspot_alerts sa JOIN games g ON g.id = sa.game_id
     WHERE sa.league = ${LEAGUE} AND sa.squeeze_armed IS TRUE AND (sa.resolved IS NOT TRUE)`;

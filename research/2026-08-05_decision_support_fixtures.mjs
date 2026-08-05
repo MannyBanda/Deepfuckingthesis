@@ -168,35 +168,47 @@ T('pulse sections render in order fuel→system→shadow', (() => {
 T('null pulse lines omit themselves', !A.ssComposeDigest('2026-08-05', T0, S0, null, { fuelLine: null, systemLine: null, shadowLine: null }).body.includes('pulse'));
 
 // ════════════════════════════════════════════════════════════════════════════
-// C3 — CASH surge watch (odds-squeeze.mjs; shadow mode, §11 pre-registered rule)
+// C3 — CASH surge watch (odds-squeeze.mjs; v1.1 addendum: −400 price gate,
+// dual-path profit lock, % default / $ upgrade, frac stamps)
 // ════════════════════════════════════════════════════════════════════════════
-const { devigProb, surgeCheck, composeCashout } = await import('../netlify/functions/odds-squeeze.mjs');
+const { devigProb, surgeCheck, composeCashout, implied: sqImplied } = await import('../netlify/functions/odds-squeeze.mjs');
 
-console.log('SURGE DE-VIG MATH');
-T('devig -450/+350 = .786 fires (>= .78)', Math.abs(devigProb(-450, 350) - 0.7864) < 0.001 && devigProb(-450, 350) >= 0.78);
-T('devig -400/+320 = .771 near-miss (#545 class, peak -400)', devigProb(-400, 320) < 0.78 && devigProb(-400, 320) > 0.76);
+console.log('SURGE PRICE GATE (v1.1: raw -400 line; de-vig stamped, not gating)');
+T('-450 crosses the -400 line', surgeCheck({ coldAtFire: true, price: -450, lead: 3, lockOk: true, alreadyFired: false }).fire === true);
+T('-400 exactly fires (at the line)', surgeCheck({ coldAtFire: true, price: -400, lead: 3, lockOk: true, alreadyFired: false }).fire === true);
+T('-350 does not cross (#545 class, peak -400 near-miss now fires; -350 does not)', surgeCheck({ coldAtFire: true, price: -350, lead: 3, lockOk: true, alreadyFired: false }).why === 'price-above');
+T('plus-money price never crosses', surgeCheck({ coldAtFire: true, price: 150, lead: 3, lockOk: true, alreadyFired: false }).why === 'price-above');
+T('devig still computed for stamps: -450/+350 = .786', Math.abs(devigProb(-450, 350) - 0.7864) < 0.001);
 T('devig null-degrades on missing side', devigProb(null, 350) === null && devigProb(-450, null) === null);
 
 console.log('SURGE TRIGGER MATRIX');
-const base3 = { coldAtFire: true, p: 0.80, lead: 3, estCash: 1900, stake: 800, alreadyFired: false };
-T('fires: cold + p.80 + lead 3 + profit locked', surgeCheck(base3).fire === true);
+const base3 = { coldAtFire: true, price: -420, lead: 3, lockOk: true, alreadyFired: false };
+T('fires: cold + -420 + lead 3 + lock ok', surgeCheck(base3).fire === true);
 T('warm-at-fire NEVER triggers (rides)', surgeCheck({ ...base3, coldAtFire: false }).why === 'not-cold-at-fire');
 T('one-shot per position', surgeCheck({ ...base3, alreadyFired: true }).why === 'one-shot');
-T('p .77 below bar', surgeCheck({ ...base3, p: 0.77 }).why === 'p-below');
-T('lead 0 blocks even at p .85 (t=0 / deep-favorite artifact guard)', surgeCheck({ ...base3, p: 0.85, lead: 0 }).why === 'no-lead');
-T('profit lock: estCash < stake blocks', surgeCheck({ ...base3, estCash: 750 }).why === 'no-profit-lock');
-T('estCash exactly = stake fires (lock is >=)', surgeCheck({ ...base3, estCash: 800 }).fire === true);
+T('lead 0 blocks even at -600 (t=0 / deep-favorite artifact guard)', surgeCheck({ ...base3, price: -600, lead: 0 }).why === 'no-lead');
+T('profit lock leg blocks when caller says no', surgeCheck({ ...base3, lockOk: false }).why === 'no-profit-lock');
 
-console.log('CASHOUT TIP COPY (Manny-amended template, prompt never imperative)');
-const tip = composeCashout({ trailer: 'GS', elite: true, lead: 5, p: 0.81, estCash: 1130, payout: 1500, fireEfg: 52.6 });
-T('opens per template with elite tag', tip.body.startsWith('Cashout check: GS (elite) now leads by 5.'));
-T('market prob line', tip.body.includes('Market has GS ~81%.'));
-T('locks X of Y payout', tip.body.includes('Cash-out locks ~$1130 of $1500 payout'));
-T('because-clause from FIRE-TIME read', tip.body.includes('riding risks a loss because GS was cold at entry (53% eFG) and cold-start comebacks have given leads back.'));
-T('non-directive tail', tip.body.includes('Your read - not a directive.'));
-T('title ascii-safe', /^[\x00-\x7F]+$/.test(tip.title) && tip.title === 'CASHOUT CHECK: GS leads by 5');
-const tip2 = composeCashout({ trailer: 'MIN', elite: false, lead: 2, p: 0.79, estCash: 610, payout: 830, fireEfg: 48.9 });
-T('non-elite omits the tag', tip2.body.startsWith('Cashout check: MIN now leads by 2.') && !tip2.body.includes('(elite)'));
+console.log('PROFIT-LOCK DUAL-PATH MATH (caller logic, pinned here)');
+// $ path: frac × payout >= stake · % path: frac >= implied(fire price)
+const frac81 = 0.81 * 0.93; // p .81 → frac .7533
+T('$ path locks: frac .753 × $1500 payout = $1130 >= $500 stake', frac81 * 1500 >= 500);
+T('% path equals $ path at fire price: frac .753 >= implied(+150)=.40', frac81 >= sqImplied(150));
+T('% path blocks a deep-favorite fire price: frac .753 < implied(-350)=.778', frac81 < sqImplied(-350));
+
+console.log('CASHOUT TIP COPY (Manny template; % default, $ when logged)');
+const tipD = composeCashout({ trailer: 'GS', elite: true, lead: 5, p: 0.81, frac: frac81, dollars: { estCash: 1130, payout: 1500 }, fireLine: 150, fireEfg: 52.6 });
+T('$ path opens per template with elite tag', tipD.body.startsWith('Cashout check: GS (elite) now leads by 5.'));
+T('$ path market + locks lines', tipD.body.includes('Market has GS ~81%. Cash-out locks ~$1130 of $1500 payout'));
+T('$ path because-clause from FIRE-TIME read', tipD.body.includes('riding risks a loss because GS was cold at entry (53% eFG) and cold-start comebacks have given leads back.'));
+const tipP = composeCashout({ trailer: 'GS', elite: false, lead: 5, p: 0.81, frac: frac81, dollars: null, fireLine: 150, fireEfg: 52.6 });
+T('% path fair-cash + breakeven clause', tipP.body.includes('Market has GS ~81% - a fair cash-out is ~75% of your full payout; a +150 entry breaks even at ~40%.'));
+T('% path because-clause carried', tipP.body.includes('Riding risks a loss because GS was cold at entry (53% eFG)'));
+const tipN = composeCashout({ trailer: 'MIN', elite: false, lead: 2, p: 0.80, frac: 0.80 * 0.93, dollars: null, fireLine: null, fireEfg: 48.9 });
+T('% path omits breakeven when fire price absent', tipN.body.includes('~74% of your full payout. Riding risks') && !tipN.body.includes('breaks even'));
+T('non-directive tail both paths', tipD.body.includes('Your read - not a directive.') && tipP.body.includes('Your read - not a directive.'));
+T('title ascii-safe', /^[\x00-\x7F]+$/.test(tipD.title) && tipD.title === 'CASHOUT CHECK: GS leads by 5');
+T('non-elite omits the tag', tipP.body.startsWith('Cashout check: GS now leads by 5.'));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
