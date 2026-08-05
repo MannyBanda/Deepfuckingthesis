@@ -2,7 +2,7 @@
 
 **Status:** PROPOSED — awaiting Manny go-ahead. No code until then.
 **Date:** Aug 5, 2026
-**Research basis:** research/2026-08-03_winning_profiles_cut.md (§1 trailer temp — triple-source; §4 flip-worth; §6 loss paths; §10 era check / 2026 regime)
+**Research basis:** research/2026-08-03_winning_profiles_cut.md (§1 trailer temp — triple-source; §4 flip-worth; §6 loss paths; §10 era check / 2026 regime; §11 price-path exit study)
 **Directive:** iterate, don't build. Every component rides an existing surface. No new tiers, no gates, no sizing/cap changes, no push-behavior changes. Goal = protect 14-1 accuracy by formalizing take / pass / cash-out reads.
 
 ---
@@ -56,13 +56,13 @@
 
 ## Architecture & scope estimate
 
-~300 lines total, all inline in existing files (consistent with house pattern): poll-live-bdl.mjs (~90: pure fn + narration hook + flip detector), wnba-bdl.html (~70: mirrored fn + card render), post-game-agent.mjs (~90: pulse queries + copy + regime state), fixtures (~60, three harnesses: fuel/temp goldens ×2 sides, digest copy pins, flip-tip copy pins). No schema changes required (regime state rides the existing learnings row JSON). No new module warranted at this size — flag for extraction if DS v2 grows it past ~500 lines.
+~300 lines total, all inline in existing files (consistent with house pattern): poll-live-bdl.mjs (~70: computeFuelTemp + narration hook), odds-squeeze.mjs (~40: surge-watch exit condition on the existing watcher), wnba-bdl.html (~70: mirrored fn + card render), post-game-agent.mjs (~90: pulse queries + copy + regime state + shadow-P&L line), fixtures (~60, three harnesses: fuel/temp goldens ×2 sides, digest copy pins, surge-tip copy pins). No schema changes required (regime state rides the existing learnings row JSON). No new module warranted at this size — flag for extraction if DS v2 grows it past ~500 lines.
 
 ## Test plan (ships with implementation, per testing ownership)
 
 1. computeFuelTemp goldens: 8 pinned cases incl. row 23 (earned+clean-cold → STICKY), PHX@MIN (transient-heat), LA@DAL (transient-takeaway at var 20), insufficient-data → no render. Client and server fixture files must assert identical outputs.
 2. Digest copy pins for both pulse lines + all three regime states.
-3. Flip-detector: sign-flip + 1-poll confirm + one-shot per position; tip copy pins cold/warm variants.
+3. Surge watch: trigger fires only on (cold-at-fire ∧ de-vig p≥0.78 ∧ cash≥stake), one-shot per position, warm never triggers; tape fixtures for trigger/no-trigger incl. the #545 near-miss (peak −400) and a deep-favorite entry (no t=0 artifact); tip copy pins.
 4. Regression: verdict strip 41 cases + digest fixtures still green.
 
 ## Backlogged (logged Aug 5, not in scope)
