@@ -1,6 +1,6 @@
 # DECISION_SUPPORT_V1_SPEC.md
 
-**Status:** PROPOSED — awaiting Manny go-ahead. No code until then.
+**Status:** APPROVED (Manny, Aug 5) — with amended surge-tip copy template (below). Implementation per rollout order.
 **Date:** Aug 5, 2026
 **Research basis:** research/2026-08-03_winning_profiles_cut.md (§1 trailer temp — triple-source; §4 flip-worth; §6 loss paths; §10 era check / 2026 regime; §11 price-path exit study)
 **Directive:** iterate, don't build. Every component rides an existing surface. No new tiers, no gates, no sizing/cap changes, no push-behavior changes. Goal = protect 14-1 accuracy by formalizing take / pass / cash-out reads.
@@ -45,7 +45,11 @@
 
 **Surface & infra:** rides the SQUEEZE WATCH watcher (already polling armed positions' prices) + existing push surface. No new push stream, no flip/score detection needed (pure tape trigger — no Q4 blind spot).
 
-**SHADOW MODE FIRST:** copy is a prompt, never an imperative — "Surge check: market has [trailer] ≈80%+. Cash-out locks ≈$X of $Y payout; riding risks the round trip (see #545/#587 shapes)." Digest logs shadow-rule P&L vs hold on every new position. **Promotion to directive language: n≥15 forward positions with shadow ≥ hold** (pre-registered, §11). Calibration: Manny screenshots real bet365 Cash Out offers at tip-fire; digest tracks offer-vs-fair haircut.
+**SHADOW MODE FIRST:** copy is a prompt, never an imperative. **Template (Manny-amended Aug 5):**
+
+> "Cashout check: [TRAILER][ (elite)] now leads by [N]. Market has [TRAILER] ≈[P]%. Cash-out locks ≈$[X] of $[Y] payout; riding risks a loss because [plain-English fire-time reason — e.g. '[TRAILER] was cold at entry (44% eFG) and cold-start comebacks have given leads back']."
+
+Template mechanics: [N] = current margin from the odds row / latest snapshot; [P] = de-vig prob rounded; elite tag from consumer `tiers_elite` only (one-consumer-definition contract); the because-clause is generated from the FIRE-TIME fuel/temp read. To make that readable at surge time without joins, Component 1's narration hook **stamps the computeFuelTemp result into the SS row's existing context JSONB at fire** (no new columns, no polling-path SELECT changes). Digest logs shadow-rule P&L vs hold on every new position. **Promotion to directive language: n≥15 forward positions with shadow ≥ hold** (pre-registered, §11). Calibration: Manny screenshots real bet365 Cash Out offers at tip-fire; digest tracks offer-vs-fair haircut.
 
 ## Component 4 — Pre-registered promotion bars
 
