@@ -80,3 +80,11 @@ Template mechanics: [N] = current margin from the odds row / latest snapshot; [P
 2. Component 2 (pulse + regime state) — the tripwire that keeps 1 honest
 3. Component 3 (CASH surge watch, shadow mode) — tape verified + rule validated in-sample Aug 5
 4. Bars (component 4) are governance, active from day one of logging
+
+## Implementation anchors (pinned Aug 5 pre-implementation, from live session)
+
+- **poll-live-bdl.mjs:** `EFG_BANDS` + `efgTier` at ~L5117 (reuse, don't redefine); SS narration writer at ~L948–994 (`player_ctx_json` UPDATE at ~948 is the stamp site for the fuel/temp JSONB; `narration_text` UPDATE at ~994; narration context builder note at ~L1145 lists consumers). `WNBA_SS_NARRATE_WATCHLIST` flag at ~L1011.
+- **wnba-bdl.html:** scoring composition state at `cs.scoringComp` ~L4155, renderers consuming `sc` at ~L4232 / ~L4298 — fuel/temp block renders immediately above the ~L4232 render path. Client `computeFuelTemp` mirror + period-band constants colocated there.
+- **odds-squeeze.mjs:** `bestPrice(event, alias)` ~L106; armed-watch sample pass ~L166–223 — surge-watch exit condition hooks inside that pass (per-watch, one-shot flag on the watch row/state).
+- **post-game-agent.mjs:** digest copy fixture pattern + `ssOverrideLaneLine` as the model for FUEL/SYSTEM PULSE lines + regime state.
+- Line numbers are anchors, not gospel — fresh session re-verifies with grep before editing (files drift).
