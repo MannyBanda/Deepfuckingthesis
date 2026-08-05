@@ -2450,7 +2450,7 @@ exports.handler = async (event) => {
       if (!gameId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id required' }) };
 
       const rows = await sql`
-        SELECT ts, home_spread, home_ml, away_ml, total, source
+        SELECT ts, home_spread, home_ml, away_ml, total, deficit, source
         FROM odds_history WHERE game_id = ${gameId}
         ORDER BY ts ASC
       `;
