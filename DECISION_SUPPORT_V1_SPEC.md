@@ -37,20 +37,21 @@
 - Thresholds pre-registered here; changing them requires a spec amendment, not a code tweak.
 - Surfaces: digest line always; dashboard regime chip is **v2, not in scope**.
 
-## Component 3 — CASH-shape tip (exit side)
+## Component 3 — CASH surge watch (exit side; validated by research §11, Aug 5)
 
-**Trigger:** server poll detects the trailer of an OPEN-position game (bet-logged or Manny-flagged) taking the lead (margin sign flip, 1-poll confirm).
-**Copy appended to the existing JUICE/narration push surface (no new push stream):**
-- Trailer was COLD at fire → "Flip is live. [Trailer] was cold at entry — this shape historically gives the lead back. Check cash-out vs breakeven now."
-- Trailer was WARM at fire → "Flip is live. [Trailer] was warm at entry — this shape tends to hold. Breakeven rule applies; hold is the default."
-- **No percentages in copy** until price-path validation clears (rigor rule: thin slices carry no precision on decision surfaces).
-**Prerequisite task:** odds-tape coverage assessment (odds_history + SQUEEZE-era depth for WNBA in-game). If historical tape is thin, forward SQUEEZE tape accumulates the validation sample.
+**Concept:** when a cold-at-fire position's comeback surges deep enough that the market declares it — and cash-out locks profit — prompt the cash. First-flip cashing is REFUTED (−$113 vs hold, §11.2); the profit-locked surge rule plateaus at +$2.7–3.2K vs +$1.3K hold in-sample across all thresholds −250…−1000.
+
+**Trigger (constants pinned, probability-framed, book-agnostic):** open position + trailer was COLD at fire (computeFuelTemp) + de-vig two-sided win-prob ≥ 0.78 + estimated cash-out (payout × p × 0.93) ≥ stake. One-shot per position. Warm-at-fire positions: no trigger — ride (all-pos variant underperforms cold-only at every threshold).
+
+**Surface & infra:** rides the SQUEEZE WATCH watcher (already polling armed positions' prices) + existing push surface. No new push stream, no flip/score detection needed (pure tape trigger — no Q4 blind spot).
+
+**SHADOW MODE FIRST:** copy is a prompt, never an imperative — "Surge check: market has [trailer] ≈80%+. Cash-out locks ≈$X of $Y payout; riding risks the round trip (see #545/#587 shapes)." Digest logs shadow-rule P&L vs hold on every new position. **Promotion to directive language: n≥15 forward positions with shadow ≥ hold** (pre-registered, §11). Calibration: Manny screenshots real bet365 Cash Out offers at tip-fire; digest tracks offer-vs-fair haircut.
 
 ## Component 4 — Pre-registered promotion bars
 
 - STICKY warning graduates to explicit "sub-breakeven at market prices" language only at forward ≤50% conversion, n≥12 clean-cold in-band spots.
 - Transient-cell sizing-CONFIDENCE language (within existing tier caps, NEVER tier elevation, NEVER cap changes) only at forward ≥70%, n≥15.
-- CASH tip earns numeric copy only after price-path validation on ≥10 taped flips.
+- CASH surge watch earns directive copy at n≥15 forward positions with shadow ≥ hold (§11 bar); haircut constant recalibrated from real offers at n≥8 logged.
 - All three tracked in the ledger; graduation watchdog remains propose-only.
 
 ## Architecture & scope estimate
@@ -73,5 +74,5 @@
 
 1. Component 1 (fuel/temp read + STICKY chip) — highest loss-protection value per line
 2. Component 2 (pulse + regime state) — the tripwire that keeps 1 honest
-3. Component 3 (cash tip) after tape-coverage assessment
+3. Component 3 (CASH surge watch, shadow mode) — tape verified + rule validated in-sample Aug 5
 4. Bars (component 4) are governance, active from day one of logging

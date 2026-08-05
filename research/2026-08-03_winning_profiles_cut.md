@@ -120,4 +120,18 @@ Method: sandbox re-fetch of BDL PBP for all 526 harness games; checkpoint boxes 
 
 **Status: RESURRECTED as a REGIME signal, 2026-only.** A mechanism that inverts between seasons must never be hard-coded into gates. Placement per the iterate-don't-build directive: review/narration context only, with a monthly pulse line in the ledger (does the 2026 pattern persist?). If the regime flips mid-season, the pulse catches it before the bankroll does.
 
+## 11. Post-fire price path — the exit study (added Aug 5, Manny unblocked + redirected)
+
+**Tape:** Manny corrected the spec's assumption — odds_history has poll-aligned ML on every snapshot. Verified: 100+ two-sided ML rows per game, wire-to-wire, on all 8 loss games. No SQUEEZE dependency.
+
+**Arc of the study (each step changed the answer):**
+1. **Oracle ceiling:** cashing each round-trip loss at its absolute peak (de-vig fair × 0.93 book haircut) ≈ **+$3,475 vs −$2,400 realized** at equal $300 stakes — a ~$5.9K invoice. Real but not executable.
+2. **First-flip rule — NULL:** "cold-at-fire → cash at first flip confirmation" applied to all 28 positions: **+$1,194 vs +$1,307 hold (−$113)**. At first flip the market prices ~coin-flip, cash ≈ stake; 12 strangled cold winners cancel 6 rescued losses. In our gap-qualified pool, cold-trailer flips held 12/18 (67%) — the league-wide ~50% reversion did NOT transfer to our selected population. Mechanical flip-cashing is refuted.
+3. **Artifact caught:** a naive price-threshold sweep "cashed" deep-favorite entries at t=0 (instant −7% haircut), smuggling a selection rule into an exit rule. Fix = **profit lock**: cash only when cash-out ≥ stake.
+4. **Price-threshold + profit lock (Manny's redirect) — PLATEAU:** cold-only, every threshold −250…−1000 beats hold: **+$2,739 to +$3,210 vs +$1,307**, robust to a 1.25× lock (+$2,449…+$2,861). Flat shelf, no spike → the concept (cash when the market declares the surge, with profit locked) carries the effect, not the tuning. All-positions variant runs below cold-only at every threshold → temp-conditioning adds value; warm trailers ride.
+
+**Pre-registered shadow rule (no directive until promoted):** cold-at-fire position + de-vig market win-prob ≥ 0.78 (≈ −350/−400 two-sided) + cash-out ≥ stake → surge-watch tip fires (plain-English, no imperative). Digest tracks shadow-rule P&L vs hold on every new position. **Promotion bar: directive-eligible at n≥15 forward positions with shadow ≥ hold.** Calibration task: log real bet365 Cash Out offers when tips fire, vs the 7% haircut assumption.
+
+**Caveats on record:** in-sample (28 positions, 8 losses; deep-threshold ranking hinges on 1–2 games — plateau is the finding, argmax is noise); equal-stake simulation at fire lines, not actual tickets; fair-value cash proxy; #545 (peaked −400) is the standing miss at deep thresholds; #365/#168 never surged (correctly untouched by the rule).
+
 *No engine changes proposed or made in this session. All findings above are research-only.*
