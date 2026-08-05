@@ -82,11 +82,23 @@ Post-fire trajectory of every deduped loss, trailer perspective:
 - Exception on file: #365 — warm trailer at deficit 9 (band edge, STRUCTURAL) never converged. Different disease; band-edge caution stands.
 - Caveats: n=8; 60s snapshots → best margins are floors; dollar quantification of the missed exits requires the post-fire price path (#7 JUICE tape).
 
-## 7. Pre-registered next steps (in order)
+## 8. Backtest mirror — the multiplicity defense (524 games, run Aug 5)
+
+Method: sandbox re-fetch of BDL PBP for all 526 harness games; checkpoint boxes rebuilt with the harness's own `reconstructCheckpoints` extracted verbatim — **fidelity 5,260/5,260 margins exact (100.00%)** vs the harness export. States: first pre-Q4 checkpoint with gap ≥.15 (as-of-date win%, GP≥10 both), deficit 1–9, FGA≥10 → **n=132 states, baseline conversion 60.6%**.
+
+**(a) Trailer eFG temp — REPLICATED.** Warm (orange/red) 20/28 (71%) vs cold 60/104 (58%). Weaker than live's 89/63 (expected shrinkage) but direction holds at MED-HIGH power. Trailer-warm > trailer-cold is now **triple-source**: live stream, 222-game flip interaction, 524-game mirror. Validated ordering.
+
+**(b)(c) Lead-fuel mechanism — INVERTED, KILLED.** Mirror: cold trailers with TO<4 convert **76%** vs TO≥4 **49%**; pace-controlled rate split 65/50 same direction. Earned leads fall **75%** vs transient-fed **49%**. Exact opposite of §2. Live-side rate control confirms the live pattern wasn't a clock artifact (W rate .151 vs L .105) — this is a genuine contradiction, resolved by provenance + power: n=19 post-hoc vs n=104 pre-registered. §2's mechanism reverts to logged-hypothesis status with **zero decision weight**; the forward stream is the arbiter as live n grows. The "takeaway channel" doctrinal claim is likewise demoted to hypothesis.
+
+**Context caveat:** leader-band gradient also flattened in the mirror (green 64% best) — the live leader-heat monotonicity may partly reflect engine selection (A/B heat gates) rather than raw edge in unselected states. This does NOT refute the A-tier dual gate (validated separately, 3/3 live); it cautions against extending leader-heat logic to unselected GAP_BASE states.
+
+**What survives the mirror untouched:** the loss-path/round-trip finding (§6), flip-worth (§4), and therefore the **CASH-shape tip candidate (§7.3)** — those rest on the 222-game production sample and live paths, which were never at stake here.
+
+## 9. Pre-registered next steps (updated Aug 5)
 
 **Framing (PM directive, Aug 5): iterate, don't build.** Findings formalize take / pass / cash-out decisions onto EXISTING surfaces — narration text, ntfy tip lines, EXIT_P inputs, D-12 review copy. No new tiers, no new engines. Stream is 14-1; the goal of every item below is protecting that accuracy, not adding machinery.
 
-1. **Backtest mirror (524-game historical):** within-band spots — (a) trailer eFG temp split; (b) cold-trailer sub-split on trailer TO count, pace-controlled (pot unavailable in BDL; trailer TOs are the proxy); (c) transient-vs-earned composite where reconstructable. Multiplicity defense; nothing ships before it.
+1. ~~Backtest mirror~~ **COMPLETE Aug 5 — see §8.** (a) replicated; (b)(c) inverted and killed.
 2. **Post-fire price path (#7 backlog, promoted):** JUICE tape analysis now quantifies the exit rule — what the round-trip losses' peaks were worth at live prices. Co-priority with the mirror; together they measure the two halves of the same doctrine (entry read + exit read).
 3. **CASH-shape tip (candidate, spec required):** when an open fade position flips with a **cold** trailer, append a plain-English cash-out line to existing narration/JUICE alert copy ("trailer was cold at fire — flips like this hold ~50%; check cash-out vs breakeven"). Warm-trailer flip appends the HOLD framing. Rides existing alert surfaces + the standing EXIT_P breakeven rule. No push behavior changes, no tier changes. Go-ahead + spec before any code.
 4. **HEAT_FLIP ledger stream (log-only, candidate):** hi-var 80+ states with entry price / best subsequent price / flip Y/N. Go-ahead + spec + promotion bar first.
