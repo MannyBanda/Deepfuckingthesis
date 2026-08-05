@@ -88,11 +88,11 @@ Method: sandbox re-fetch of BDL PBP for all 526 harness games; checkpoint boxes 
 
 **(a) Trailer eFG temp — REPLICATED.** Warm (orange/red) 20/28 (71%) vs cold 60/104 (58%). Weaker than live's 89/63 (expected shrinkage) but direction holds at MED-HIGH power. Trailer-warm > trailer-cold is now **triple-source**: live stream, 222-game flip interaction, 524-game mirror. Validated ordering.
 
-**(b)(c) Lead-fuel mechanism — INVERTED, KILLED.** Mirror: cold trailers with TO<4 convert **76%** vs TO≥4 **49%**; pace-controlled rate split 65/50 same direction. Earned leads fall **75%** vs transient-fed **49%**. Exact opposite of §2. Live-side rate control confirms the live pattern wasn't a clock artifact (W rate .151 vs L .105) — this is a genuine contradiction, resolved by provenance + power: n=19 post-hoc vs n=104 pre-registered. §2's mechanism reverts to logged-hypothesis status with **zero decision weight**; the forward stream is the arbiter as live n grows. The "takeaway channel" doctrinal claim is likewise demoted to hypothesis.
+**(b)(c) Lead-fuel mechanism — INVERTED, KILLED.** Mirror: cold trailers with TO<4 convert **76%** vs TO≥4 **49%**; pace-controlled rate split 65/50 same direction. Earned leads fall **75%** vs transient-fed **49%**. Exact opposite of §2. Live-side rate control confirms the live pattern wasn't a clock artifact (W rate .151 vs L .105) — this is a genuine contradiction, resolved by provenance + power: n=19 post-hoc vs n=104 pre-registered. §2's mechanism reverts to logged-hypothesis status. **[SUPERSEDED same day — see §10: Manny's era check resurrected it as a 2026 regime signal.]**
 
 **Context caveat:** leader-band gradient also flattened in the mirror (green 64% best) — the live leader-heat monotonicity may partly reflect engine selection (A/B heat gates) rather than raw edge in unselected states. This does NOT refute the A-tier dual gate (validated separately, 3/3 live); it cautions against extending leader-heat logic to unselected GAP_BASE states.
 
-**What survives the mirror untouched:** the loss-path/round-trip finding (§6), flip-worth (§4), and therefore the **CASH-shape tip candidate (§7.3)** — those rest on the 222-game production sample and live paths, which were never at stake here.
+**What survives the mirror untouched:** the loss-path/round-trip finding (§6), flip-worth (§4), and therefore the **CASH-shape tip candidate (§9.3)** — those rest on the 222-game production sample and live paths, which were never at stake here.
 
 ## 9. Pre-registered next steps (updated Aug 5)
 
@@ -102,5 +102,22 @@ Method: sandbox re-fetch of BDL PBP for all 526 harness games; checkpoint boxes 
 2. **Post-fire price path (#7 backlog, promoted):** JUICE tape analysis now quantifies the exit rule — what the round-trip losses' peaks were worth at live prices. Co-priority with the mirror; together they measure the two halves of the same doctrine (entry read + exit read).
 3. **CASH-shape tip (candidate, spec required):** when an open fade position flips with a **cold** trailer, append a plain-English cash-out line to existing narration/JUICE alert copy ("trailer was cold at fire — flips like this hold ~50%; check cash-out vs breakeven"). Warm-trailer flip appends the HOLD framing. Rides existing alert surfaces + the standing EXIT_P breakeven rule. No push behavior changes, no tier changes. Go-ahead + spec before any code.
 4. **HEAT_FLIP ledger stream (log-only, candidate):** hi-var 80+ states with entry price / best subsequent price / flip Y/N. Go-ahead + spec + promotion bar first.
+
+## 10. Era check — the lead-fuel mechanism is a 2026 regime signal (added Aug 5, Manny's call)
+
+**Why this exists:** §8 killed the lead-fuel mechanism because 2024–25 data contradicted the 2026 live stream. But that comparison changed two things at once — the season AND the selection (fired games vs all games). Manny flagged it: check all-2026 unselected before calling it coincidence. He was right.
+
+**Method:** same state recipe as the mirror, run on all 2026 tracked games — better team (gap ≥.15, true as-of-date records, GP≥10) down 1–9, Q2–Q3, first hit per game → n=67 states, 53 cold-trailer. Pipeline notes: an initial run had a date bug (get_games ignores date params; every game stamped with the last loop date → lookahead in the records). Fixed via single-call true dates; numbers below are clean. Pot attribution verified pot==pot_v2 on all sampled June–Aug snapshots; May rows predate the v2 overlay and are excluded via the GP filter + a ≥Jun-12 sensitivity cut (results unchanged).
+
+**Results (2026 unselected, verified era, cold-trailer n=47):**
+- Leader pot ≥6 → trailer converts **18/21 (86%)** vs pot <6 → 38%
+- Transient-fed lead → **70%** vs earned → **36%**
+- Trailer TO ≥4 → **73%** vs TO <4 → 43%
+- Excluding every engine-fired game (zero selection, full-season n=32): transient 67% vs earned 25%
+- vs 2024–25 mirror (n=104): transient 49% vs earned **75%** — full inversion between seasons
+
+**Verdict:** the between-season flip survives clean dates, attribution verification, and removal of all fired games. Not coincidence, not selection. Caveat kept honest: the eras also differ in data provenance (2026 = ESPN box stats; 2024–25 = play-by-play reconstruction) so pot definitions aren't identical — but the turnover-count split uses plain counts on both sides and inverts identically, so a real league/era component exists.
+
+**Status: RESURRECTED as a REGIME signal, 2026-only.** A mechanism that inverts between seasons must never be hard-coded into gates. Placement per the iterate-don't-build directive: review/narration context only, with a monthly pulse line in the ledger (does the 2026 pattern persist?). If the regime flips mid-season, the pulse catches it before the bankroll does.
 
 *No engine changes proposed or made in this session. All findings above are research-only.*
