@@ -5190,6 +5190,11 @@ function ssFuelTempLines(ft, leaderAl, trailerAl) {
     + '- LEAD FUEL: ' + ft.fuel + ' — ' + leaderAl + '\'s lead is built on ' + why + '.\n'
     + '- TRAILER TEMP: ' + ft.temp + ' — ' + trailerAl + ' shooting ' + Math.round(ft.trailerEfg) + '% effective field goal (' + ft.trailerBand + ' band).\n';
   if (ft.sticky) t += '- STICKY LEAD SHAPE (2026): earned lead against a cold, clean trailer (' + ft.trailerTo + ' turnovers) — this season\'s toughest comeback shape. Context only, never a gate.\n';
+  // Copy v1.2 (Aug 6, PM-approved): season-stat context lines. Numbers are
+  // cross-cut-converged (see research/2026-08-06_fuel_temp_gap_map.md); a regime
+  // flip (monthly pulse INVERTED) triggers a copy revisit for all (2026) lines.
+  else if (ft.fuel === 'EARNED') t += '- EARNED-LEAD CAUTION (2026): no transient feed to regress — earned leads vs in-band better trailers converted only ~37% across three independent 2026 cuts, below what the live line charges. This season\'s pass shape. Context only, never a gate.\n';
+  if (ft.takeaway) t += '- CHANNEL NOTE (2026): the takeaway feed is the market-blind transient — the live line has under-priced takeaway-fed collapse all season (trailers converted ~85%, two independent cuts). Context only, never a gate.\n';
   return t;
 }
 

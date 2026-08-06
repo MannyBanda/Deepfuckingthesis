@@ -121,6 +121,19 @@ T('G5 insufficient renders nothing', S.ssFuelTempLines(S.computeFuelTemp(G[4].L,
 const L9 = S.ssFuelTempLines(S.computeFuelTemp(G[8].L, G[8].Tr, 2), 'SEA', 'IND');
 T('G9 vShare wording', L9.includes('50% of the lead from three-pointers and midrange'));
 
+// ── Copy v1.2 pins (Aug 6): EARNED-LEAD CAUTION + CHANNEL NOTE ──
+T('G1 sticky supersedes earned caution', !L1.includes('EARNED-LEAD CAUTION'));
+const L6 = S.ssFuelTempLines(S.computeFuelTemp(G[5].L, G[5].Tr, 2), 'WSH', 'GS');
+T('G6 earned caution (non-sticky earned)', L6.includes('EARNED-LEAD CAUTION (2026): no transient feed to regress \u2014 earned leads vs in-band better trailers converted only ~37% across three independent 2026 cuts, below what the live line charges. This season\'s pass shape. Context only, never a gate.'));
+const L8 = S.ssFuelTempLines(S.computeFuelTemp(G[7].L, G[7].Tr, 2), 'LV', 'IND');
+T('G8 earned caution (hot trailer)', L8.includes('EARNED-LEAD CAUTION'));
+T('G8 no channel note on earned', !L8.includes('CHANNEL NOTE'));
+T('G3 channel note (takeaway)', L3.includes('CHANNEL NOTE (2026): the takeaway feed is the market-blind transient \u2014 the live line has under-priced takeaway-fed collapse all season (trailers converted ~85%, two independent cuts). Context only, never a gate.'));
+T('G4 channel note (heat + takeaway)', L4.includes('CHANNEL NOTE'));
+T('G2 no channel note on heat-only', !L2.includes('CHANNEL NOTE'));
+T('G2 no earned caution on transient', !L2.includes('EARNED-LEAD CAUTION'));
+T('G9 no channel note (vShare heat, pot 2)', !L9.includes('CHANNEL NOTE'));
+
 // ════════════════════════════════════════════════════════════════════════════
 // C2 — REGIME PULSE + REGIME STATE (post-game-agent.mjs digest copy pins)
 // ════════════════════════════════════════════════════════════════════════════
