@@ -226,5 +226,16 @@ T('PBP pot of 0 is trusted (no fallback to flipped value)', ftStats(mkCs(4, 0), 
 T('ESPN pot only when no PBP audit', ftStats(mkCs(4, undefined), 'home').pot === 4);
 T('turnovers key mapped to to', ftStats(mkCs(4, 6), 'home').to === 3);
 
+console.log('FIX B — POT PARSE-SOURCE FLIP (Aug 6)');
+const bte = new Function(`${extractFn(CLIENT, 'buildTeamEvidenceFromESPN')}; return buildTeamEvidenceFromESPN;`)();
+const mkBox = (side, pot) => ({ homeAway: side, statistics: [
+  { name: 'fieldGoalsMade-fieldGoalsAttempted', displayValue: '10-20' },
+  { name: 'turnoverPoints', displayValue: String(pot) }] });
+const ev = bte({ boxscore: [mkBox('home', 4), mkBox('away', 6)] }, {});
+T('ESPN home pot 4 lands on AWAY (opponent-attributed feed flipped)', ev.away.pot === 4);
+T('ESPN away pot 6 lands on HOME', ev.home.pot === 6);
+T('non-pot stats unswapped', ev.home.fgm === 10 && ev.away.fgm === 10);
+T('source tag preserved', ev.source === 'espn');
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

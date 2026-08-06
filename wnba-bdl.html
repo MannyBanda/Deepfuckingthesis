@@ -1028,6 +1028,14 @@ function buildTeamEvidenceFromESPN(espnData, game) {
     }
   }
 
+  // FIX B (Aug 6, PM go) — POT ATTRIBUTION FLIP AT SOURCE. ESPN turnoverPoints is
+  // OPPONENT-attributed (research/2026-06-10_phase4a_adjudication.md, n=81: flip takes
+  // 17%→67% exact vs SR truth, median err 0). Mirror of the server swap at the
+  // buildSummaryFromESPN call site. WNBA-only file — do NOT port to the NBA client
+  // without validation. SR/BDL evidence path carries no pot field, so this is the
+  // single source of te.pot; all consumers (Pts-off-TO row, hPOT/aPOT, fuel-read
+  // fallback) heal here. Server raw_stats_json was already post-swap (I1 unaffected).
+  var _potSwap = hStats.pot; hStats.pot = aStats.pot; aStats.pot = _potSwap;
   return { home: hStats, away: aStats, source: 'espn' };
 }
 
@@ -4374,7 +4382,7 @@ function renderSSVerdictBox(id,cs,hA,aA){
     var vT=(sc.varianceDelta||0)>=0?sc.home.team:sc.away.team;
     var clsDet=' ('+esc(sT)+' +'+Math.abs(Math.round(sc.structuralDelta||0))+' structure, '+esc(vT)+' +'+Math.abs(Math.round(sc.varianceDelta||0))+' variance)';
     html+='<div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--hairline);font-size:11px;color:var(--fg-tertiary)">';
-    html+='<div>LEADER\u2019S ENGINE: <span style="color:var(--fg-secondary)">'+esc(eng)+'</span>'+engDet+'</div>';
+    html+='<div>LEADER\u2019S ENGINE (shot mix): <span style="color:var(--fg-secondary)">'+esc(eng)+'</span>'+engDet+'</div>';
     html+='<div style="margin-top:2px">THE LEAD: <span style="color:var(--fg-secondary)">'+esc(cls)+'</span>'+clsDet+'</div>';
     html+='</div>';
   }
