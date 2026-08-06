@@ -4264,9 +4264,14 @@ function ssFuelStampText(ft,period,clock){
 function _ftClientStats(cs,side){
   var te=cs._teamEvidence&&cs._teamEvidence[side];if(!te)return null;
   var bdl=cs.pbpAudit?cs.pbpAudit._bdl:null;
+  // HOTFIX Aug 5 (live-slate, PM go): pot from the client PBP audit FIRST — own-side
+  // correct by construction. te.pot (ESPN parse) is the known UNFLIPPED source
+  // (standing backlog item: NY/SEA Q2 showed EARNED·POT 4 vs server truth pot 6);
+  // it survives only as a fallback when no PBP audit exists. Parse-site flip = fix B.
+  var bp=bdl?(side==='home'?bdl.potHome:bdl.potAway):null;
   return{fgm:te.fgm,fga:te.fga,fg3m:te.fg3m,ftm:te.ftm,
     to:te.turnovers!=null?te.turnovers:te.to,
-    pot:te.pot||(bdl?(side==='home'?bdl.potHome:bdl.potAway):0)||0};
+    pot:bp!=null?(Number(bp)||0):(te.pot||0)};
 }
 function renderFuelTempBlock(cs,sn,gm,hA,aA,fuelAtFire){
   var sc=cs.scoringComp;

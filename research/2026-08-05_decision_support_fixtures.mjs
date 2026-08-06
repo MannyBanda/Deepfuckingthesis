@@ -217,5 +217,14 @@ T('stamp text from row-23 golden', stampFn(g1ft, 2, '9:42') === 'AT FIRE (Q2 9:4
 T('stamp null on insufficient (no fake reads)', stampFn({ insufficient: true }, 2, '9:42') === null && stampFn(null, 2, '9:42') === null);
 T('stamp clock-less form', stampFn(g1ft, 2, '') === 'AT FIRE (Q2): EARNED \u00b7 trailer cold (53% eFG)');
 
+console.log('POT SOURCE PRIORITY (Aug 5 live-slate hotfix — flipped-ESPN guard)');
+const ftStats = new Function(`${extractFn(CLIENT, '_ftClientStats')}; return _ftClientStats;`)();
+const mkCs = (tePot, bdlPot) => ({ _teamEvidence: { home: { fgm: 9, fga: 16, fg3m: 2, ftm: 1, turnovers: 3, pot: tePot } },
+  pbpAudit: bdlPot === undefined ? null : { _bdl: { potHome: bdlPot, potAway: 0 } } });
+T('PBP pot wins over unflipped ESPN pot', ftStats(mkCs(4, 6), 'home').pot === 6);
+T('PBP pot of 0 is trusted (no fallback to flipped value)', ftStats(mkCs(4, 0), 'home').pot === 0);
+T('ESPN pot only when no PBP audit', ftStats(mkCs(4, undefined), 'home').pot === 4);
+T('turnovers key mapped to to', ftStats(mkCs(4, 6), 'home').to === 3);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
