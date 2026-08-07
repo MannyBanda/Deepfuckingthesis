@@ -995,41 +995,9 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
       if (ss.subtype === 'WATCHLIST' && !WNBA_SS_NARRATE_WATCHLIST) { log(`${aA}@${hA}: sweetspot WATCHLIST — review narration off (WNBA_SS_NARRATE_WATCHLIST)`); return; }
       log(`${aA}@${hA}: sweetspot narration deferred to tail sweep (V2)`); return;
     }
-    // Legacy inline path below is fade-framed (tier wording + price guidance) — it must
-    // never narrate a WATCHLIST row: it would mislabel a review cue as a B-tier fire.
-    if (ss.subtype === 'WATCHLIST') return;
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) return;
-    try {
-      const prompt = `You are narrating a live betting sweet-spot alert that has ALREADY fired — do not re-decide, just explain WHY for a bettor in plain English.\n\n`
-        + `${ss.trailerAl} (${ss.trailerW}-${ss.trailerL}) is down ${ss.margin} to ${ss.leaderAl} (${ss.leaderW}-${ss.leaderL}) in Q${ss.period} ${ss.clock}.\n`
-        + `Why the system flagged it:\n`
-        + `- ${ss.leaderAl}'s lead is built on unsustainable shooting: eFG ${ss.leaderEfg != null ? Math.round(ss.leaderEfg) : '?'}% (${ss.leaderBand} band), variance share ${ss.varShare != null ? Math.round(ss.varShare) : '?'}% (lead class ${ss.leadClass}).\n`
-        + `- ${ss.trailerAl} is the structurally better team: win% ${_pct(ss.trailerWP)} vs ${_pct(ss.leaderWP)} (quality gap ${ss.gap != null ? ss.gap.toFixed(2) : '?'}).\n`
-        + `- Model true win prob ~${_pct(ss.collapseTrue)}% vs market ~${_pct(ss.impliedBest)}% → edge +${_pct(ss.edge)}pp.\n\n`
-        + (_ctxText ? _ctxText + `\n` : ``)
-        + `Write exactly, under 110 words, no jargon, no preamble:\n`
-        + `(1) one sentence on why ${ss.leaderAl}'s lead is statistically fragile at the TEAM level (variance share / eFG band / quality gap);\n`
-        + `(2) one sentence on why ${ss.trailerAl} is the better team likely to close${_ctxText ? `, naming their live comeback engine(s)` : ``};\n`
-        + `(3) one sentence on the single biggest risk to watch${_ctxText ? ` — if a STAR carrier is flagged above this MUST be her sustaining at her norm; include foul trouble on either side if present` : ``}.\n`
-        + `State every metric in full plain English on first use — say "quality gap" and "effective field-goal percentage", never bare "gap" or "eFG"; use percentages, not decimals.\n`
-        + `Never predict a specific player's shooting will collapse.${_ctxText ? ` Never contradict the FRAMING RULES.` : ``} Use team names.`;
-      const resp = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: 'claude-opus-4-8', max_tokens: 500, messages: [{ role: 'user', content: prompt }] }),
-      });
-      if (!resp.ok) { log(`${aA}@${hA}: sweetspot narration ${resp.status}`); return; }
-      const data = await resp.json();
-      const narration = data.content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
-      if (!narration || narration.length < 20) return;
-      // F1 (Aug 6): mechanical caution append — same contract as the sweep path.
-      const _cSfx = (ss.fuelTemp && ssCautionLines(ss.fuelTemp, { lead_class: ss.leadClass })) ? '\n\nPINNED CONTEXT (mechanical, not model output):\n' + ssCautionLines(ss.fuelTemp, { lead_class: ss.leadClass }) : '';
-      const narrationFinal = narration + _cSfx;
-      await sql`UPDATE sweetspot_alerts SET narration_text = ${narrationFinal} WHERE id = ${rowId}`;
-      await sendNtfy(`SWEET SPOT - why ${ss.trailerAl}`, narrationFinal, 4, SS_DASH_URL);
-      log(`${aA}@${hA}: sweetspot narration delivered (${narrationFinal.length} chars)`);
-    } catch (e) { log(`${aA}@${hA}: sweetspot narration error: ${e.message}`); }
+    // ACA P3/B2 (Aug 6): legacy inline narration (opus-4-8, 110-word contract) DELETED —
+    // V2 tail sweep (ssCallNarration, fable-5 high-effort first) is the only narration path.
+
   } catch (e) { log(`${aA}@${hA}: fireSweetSpotAlert fatal: ${e.message}`); }
 }
 
@@ -1098,12 +1066,13 @@ function ssBuildNarrationPrompt(row, blocks) {
     + (b.fuelTemp ? b.fuelTemp + '\n' : '')
     + (b.teamCtx ? b.teamCtx + '\n' : '')
     + (b.playerCtx ? b.playerCtx + '\n' : '')
-    + `Write exactly 4 short paragraphs, aiming for 150-190 words total so the relevant information fits — 200 words is a hard cap:\n`
-    + `(1) Why ${row.leader_alias}'s lead is fragile at the TEAM level — use the quarter flow and shooting texture where available.\n`
-    + `(2) Why ${row.trailer_alias} is the better team likely to close — the structural levers they own${b.playerCtx ? ', naming their live comeback engines' : ''}.\n`
-    + `(3) Price guidance — the current edge, the probe price, and the full-size price, in plain sizing language.\n`
-    + `(4) The single biggest risk${b.playerCtx ? ' — if a STAR carrier is flagged above, this MUST be her sustaining at her norm' : ''}; include foul trouble if present; if the trailer path shows CONTESTED or BLOCK you must surface it here.\n\n`
-    + `Rules: NO markdown — no bold, no asterisks, no headers; plain paragraphs separated by blank lines (this is a push notification body); plain English throughout; name every metric in full on first use ("quality gap", "effective field-goal percentage"), never bare abbreviations; percentages, not decimals; team names, never "they" across paragraph boundaries; never predict a specific player's shooting will collapse; never mention floor scores; never imply the leader's hot shooting is itself the predictive signal — the locked edge is quality gap plus deficit plus price.`;
+    + `Write exactly 5 short paragraphs, aiming for 150-190 words total — 210 words is a hard cap:\n`
+    + `(1) THE SHAPE: one sentence naming this spot in the bettor's grading language — a clean dual-gate shape or a strong discretionary read — anchored to the fire facts above; if a pinned trap or caution line appears above, the shape sentence must reflect it.\n`
+    + `(2) THE CASE FOR: why ${row.leader_alias}'s lead is fragile and ${row.trailer_alias} closes — quarter flow, shooting texture, structural levers${b.playerCtx ? ', naming their live comeback engines' : ''}. Tag EVERY probability you cite with its provenance in brackets: [PRIOR n=...], [2026 season], or [live]. Numbers without a provenance tag are forbidden.\n`
+    + `(3) THE CASE AGAINST: the single strongest argument a disciplined bettor would make for passing this exact spot — argued honestly in two sentences, never a token caveat${b.playerCtx ? '; if a STAR carrier is flagged above, her sustaining at her norm belongs here' : ''}; include foul trouble if present; if the trailer path shows CONTESTED or BLOCK you must surface it here.\n`
+    + `(4) WATCH CONDITIONS: two concrete live observables — one that confirms the read, one that kills it — with specific levels where possible (an effective field-goal level, a takeaway-feed rate, a deficit line).\n`
+    + `(5) THE PRICE: the current edge, the probe price, and the full-size price in plain sizing language, framed as breakeven versus honest win probability.\n\n`
+    + `Rules: NO markdown — no bold, no asterisks, no headers; plain paragraphs separated by blank lines (this is a push notification body); plain English throughout; name every metric in full on first use ("quality gap", "effective field-goal percentage"), never bare abbreviations; percentages, not decimals; team names, never "they" across paragraph boundaries; never predict a specific player's shooting will collapse; never mention floor scores; never imply the leader's hot shooting is itself the predictive signal — the locked edge is quality gap plus deficit plus price; never present a fire-state rate as a live probability once the game state has moved materially.`;
 }
 
 // D-9 brief contract — 3 parts, ~90-word target, 120 hard cap, NO prices, NO lean.
@@ -1143,11 +1112,12 @@ function ssBuildWatchlistPrompt(row, blocks) {
     + (b.fuelTemp ? b.fuelTemp + '\n' : '')
     + (b.teamCtx ? b.teamCtx + '\n' : '')
     + (b.playerCtx ? b.playerCtx + '\n' : '')
-    + `Write exactly 4 short paragraphs, aiming for 150-190 words total — 200 words is a hard cap:\n`
-    + `(1) Open with "Review only — no system bet call." then one sentence on what put this on the radar: the quality gap and the catchable deficit.\n`
-    + `(2) The live texture — how the game has flowed and what ${row.leader_alias}'s lead is actually made of${b.playerCtx ? ', naming the carrier if one is flagged' : ''}.\n`
-    + `(3) What is missing for a full alert, citing ONLY the system reads listed above against the fire ladder, and what to watch that would upgrade it; then state the current price on ${row.trailer_alias} as a plain fact with no edge or value claim.\n`
-    + `(4) The single biggest risk if the bettor takes a discretionary position anyway${b.playerCtx ? ' — if a STAR carrier is flagged above, this MUST be her sustaining at her norm' : ''}; include foul trouble on either side if present.\n\n`
+    + `Write exactly 5 short paragraphs, aiming for 150-190 words total — 210 words is a hard cap:\n`
+    + `(1) Open with "Review only — no system bet call." then THE SHAPE in the bettor's grading language: a strong discretionary read or a pass shape — one sentence, and if a pinned trap or caution line appears above, the shape sentence must reflect it.\n`
+    + `(2) THE CASE FOR a discretionary take — the quality gap, the catchable deficit, and what ${row.leader_alias}'s lead is actually made of${b.playerCtx ? ', naming the carrier if one is flagged' : ''}. Tag EVERY probability with its provenance: [PRIOR n=...], [2026 season], or [live]. Untagged numbers are forbidden.\n`
+    + `(3) THE CASE AGAINST — the strongest pass argument, argued in two sentences${b.playerCtx ? ' (a flagged STAR carrier sustaining at her norm belongs here)' : ''}; cite what is missing for a full alert using ONLY the system reads listed against the fire ladder; include foul trouble on either side if present.\n`
+    + `(4) WATCH CONDITIONS — one live observable that would upgrade this toward a fire, one that would make it a hard pass, with specific levels where possible.\n`
+    + `(5) THE PRICE as plain fact — the current line and market implied, breakeven framing only.\n\n`
     + `Rules: NO markdown — no bold, no asterisks, no headers; plain paragraphs separated by blank lines (this is a push notification body); plain English throughout; name every metric in full on first use ("quality gap", "effective field-goal percentage"), never bare abbreviations; percentages, not decimals; team names, never "they" across paragraph boundaries; NEVER recommend a bet, a size, or a lean; never call the price good or bad; never predict a specific player's shooting will collapse; never mention floor scores.`;
 }
 
@@ -1235,6 +1205,13 @@ async function ssGatherNarrationBlocks(sql, row) {
       if (composed && composed.text) blocks.playerCtx = composed.text;
     }
   } catch (e) { /* omit */ }
+  // ACA P3 — regime tripwire parity (client chip precedent; extraction mirrors db-api
+  // ss_ledger_summary): INVERTED suspends the numeric (2026) lines; traps always render.
+  let _regime = null;
+  try {
+    const _lr = await sql`SELECT ss_json FROM learnings WHERE league = ${'wnba'} AND ss_json IS NOT NULL ORDER BY date DESC LIMIT 1`;
+    if (_lr[0]) { const _sj = typeof _lr[0].ss_json === 'string' ? JSON.parse(_lr[0].ss_json) : _lr[0].ss_json; _regime = (_sj && _sj.regime) || null; }
+  } catch (e) { /* omit — numbers render under the monthly-pulse revisit convention */ }
   // DS v1 C1 — fire-time fuel/temp read (stamped into the ctx JSONB at fire). Own
   // try/catch: a fuelTemp-only stamp (pctx-failure fallback) has no dg.leader and
   // must still narrate the fuel lines even though ssComposeCtxBlock above degraded.
@@ -1242,8 +1219,8 @@ async function ssGatherNarrationBlocks(sql, row) {
     if (row.player_ctx_json) {
       const _ftDg = typeof row.player_ctx_json === 'string' ? JSON.parse(row.player_ctx_json) : row.player_ctx_json;
       if (_ftDg && _ftDg.fuelTemp) {
-        blocks.fuelTemp = ssFuelTempLines(_ftDg.fuelTemp, row.leader_alias, row.trailer_alias, row);
-        blocks.cautions = ssCautionLines(_ftDg.fuelTemp, row); // F1 — appended verbatim post-model at push
+        blocks.fuelTemp = ssFuelTempLines(_ftDg.fuelTemp, row.leader_alias, row.trailer_alias, row, _regime);
+        blocks.cautions = ssCautionLines(_ftDg.fuelTemp, row, _regime); // F1 — appended verbatim post-model at push
       }
     }
   } catch (e) { /* omit */ }
@@ -1267,8 +1244,10 @@ async function ssGatherNarrationBlocks(sql, row) {
       blocks.snapState = `LIVE STATE (as of Q${s.period} ${s.clock}, control team ${s.floor_team || '?'}): `
         + `indicator reads I1-I5 (control-relative) ${[s.i1, s.i2, s.i3, s.i4, s.i5].map((v) => v != null ? Number(v).toFixed(1) : '?').join('/')}`
         + ` | trailer comeback path (TP): ${s.tp_class || '?'} | leader safety (LS): ${s.ls_class || '?'}`
-        + ` | structural model (XGB) ${s.xgb_win_prob != null ? (s.xgb_win_prob * 100).toFixed(0) + '%' : '?'}`
-        + ` | Monte Carlo cumulative ${s.mc_cum_win_prob != null ? (s.mc_cum_win_prob * 100).toFixed(0) + '%' : '?'}`
+        // ACA P3 — XGB only at validated extremes (>=.90/<.30); midrange = noise. MC line
+        // DROPPED for trailing reads (margin-echo; pins <0.30 on 64% of trailing games).
+        + (s.xgb_win_prob != null && (Number(s.xgb_win_prob) >= 0.90 || Number(s.xgb_win_prob) < 0.30)
+            ? ` | structural model (XGB) ${(Number(s.xgb_win_prob) * 100).toFixed(0)}% — EXTREME read (reads structure, not wins; only extremes are actionable)` : '')
         + sustLine + shapLine + `\n`;
     }
   } catch (e) { log(`narration blocks: snapshot fetch — ${e.message}`); }
@@ -1470,6 +1449,17 @@ function composeTeamContext(hA, aA, league, map = _teamCtxMap) {
       s += ` | L5 ${f5.w}-${f5.l}, own eFG ${sp(f5.own_efg_delta)}pp, opp eFG ${sp(f5.opp_efg_delta)}pp`;
       const tags = [f5.own_tag, f5.opp_tag].filter(Boolean);
       if (tags.length) s += ` [${tags.join(', ')}]`;
+    }
+    // ACA P3 — schedule-inflation band (matchup-badge parity): derived from internal
+    // def-A tiers; band + number only, NEVER tier labels (KILLER_FLAG_SPEC §7).
+    const _dj = t.profile.tiers || null;
+    if (_dj && _dj.top && _dj.rest) {
+      const _tn = (_dj.top.w || 0) + (_dj.top.l || 0), _rn = (_dj.rest.w || 0) + (_dj.rest.l || 0);
+      if (_tn >= 5 && _rn > 0) {
+        const _infl = ((_dj.rest.w || 0) / _rn) - ((_dj.top.w || 0) / _tn);
+        const _bd = _infl >= 0.30 ? 'INFLATED (raw record overstates true strength)' : _infl <= -0.05 ? 'DEFLATED (raw record understates true strength)' : 'HONEST';
+        s += ` | schedule ${_bd} ${_infl >= 0 ? '+' : ''}${_infl.toFixed(2)}`;
+      }
     }
     const h = (t.profile.h2h || {})[oppAlias];
     if (h) s += ` | H2H vs ${oppAlias}: ${h.w}-${h.l} (avg ${sp(h.avg_margin)})`;
@@ -5210,12 +5200,20 @@ function computeFuelTemp(leaderStats, trailerStats, period) {
 // F1 (Aug 6): caution copy lives ONLY in ssCautionLines — the prompt block includes it
 // AND the push assembly appends it verbatim post-Opus (the LA@MIN row-1197 lesson:
 // Opus paraphrased the STICKY warning away; pinned copy is never model-mediated).
-function ssCautionLines(ft, row) {
+function ssCautionLines(ft, row, regime) {
   if (!ft || ft.insufficient) return '';
   var t = '';
   // ACA P1 — trap parity: framework rules pinned here render on ALL surfaces (mechanical
   // push, narration prompt, post-model append). Copy kernel mirrors the dashboard trap.
   if (row && row.lead_class === 'STRUCTURAL') t += '- \u26a0 STRUCTURAL-LEADER TRAP: Structural leader = the pass shape (POR@CHI rule). Conscious override territory only \u2014 probe size (CHI@DAL convention).\n';
+  // ACA P3 — regime tripwire: INVERTED suspends the numeric (2026) season-stat lines
+  // (client STICKY chip precedent). Traps above are framework rules — regime-independent.
+  if (regime === 'INVERTED') {
+    if (ft.sticky) t += '- LEAD SHAPE: earned + cold, clean trailer (' + ft.trailerTo + ' turnovers). (2026 season-stat lines suspended: regime pulse INVERTED.)\n';
+    else if (ft.fuel === 'EARNED') t += '- LEAD NOTE: earned lead \u2014 no transient feed to regress. (2026 season-stat lines suspended: regime pulse INVERTED.)\n';
+    if (ft.takeaway) t += '- CHANNEL NOTE: takeaway feed present. (2026 season-stat lines suspended: regime pulse INVERTED.)\n';
+    return t;
+  }
   if (ft.sticky) t += '- STICKY LEAD SHAPE (2026): earned lead against a cold, clean trailer (' + ft.trailerTo + ' turnovers) — this season\'s toughest comeback shape. Context only, never a gate.\n';
   // Copy v1.2 (Aug 6, PM-approved): season-stat context lines. Numbers are
   // cross-cut-converged (see research/2026-08-06_fuel_temp_gap_map.md); a regime
@@ -5224,7 +5222,7 @@ function ssCautionLines(ft, row) {
   if (ft.takeaway) t += '- CHANNEL NOTE (2026): the takeaway feed is the market-blind transient — the live line has under-priced takeaway-fed collapse all season (trailers converted ~85%, two independent cuts). Context only, never a gate.\n';
   return t;
 }
-function ssFuelTempLines(ft, leaderAl, trailerAl, row) {
+function ssFuelTempLines(ft, leaderAl, trailerAl, row, regime) {
   if (!ft || ft.insufficient) return '';
   var why;
   if (ft.fuel === 'EARNED') why = 'normal shooting temperature and a low takeaway feed';
@@ -5241,7 +5239,7 @@ function ssFuelTempLines(ft, leaderAl, trailerAl, row) {
   var t = 'LEAD FUEL + TRAILER TEMP [FACT-live at fire]:\n'
     + '- LEAD FUEL: ' + ft.fuel + ' — ' + leaderAl + '\'s lead is built on ' + why + '.\n'
     + '- TRAILER TEMP: ' + ft.temp + ' — ' + trailerAl + ' shooting ' + Math.round(ft.trailerEfg) + '% effective field goal.\n'
-    + ssCautionLines(ft, row);
+    + ssCautionLines(ft, row, regime);
   return t;
 }
 

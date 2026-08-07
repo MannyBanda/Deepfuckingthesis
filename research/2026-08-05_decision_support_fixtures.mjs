@@ -145,7 +145,7 @@ const g3c = cautionFn(S.computeFuelTemp(G[2].L, G[2].Tr, 2));
 T('F1 channel note standalone (takeaway)', g3c.includes('CHANNEL NOTE (2026)') && L3.includes(g3c.trim()));
 T('F1 insufficient renders no cautions', cautionFn(S.computeFuelTemp(G[4].L, G[4].Tr, 1)) === '');
 // source-level: the mechanical append marker exists at BOTH push sites (sweep + immediate fire)
-T('F1 mechanical append at both push sites', (POLL.match(/PINNED CONTEXT \(mechanical, not model output\)/g) || []).length >= 2);
+T('F1 mechanical append at the sweep push site (legacy fire site deleted P3; T+0 FACT block covers fire-time)', (POLL.match(/PINNED CONTEXT \(mechanical, not model output\)/g) || []).length === 1);
 
 // ── ACA P1 (Aug 6): trap parity + T+0 FACT block + B1 regression net ──
 const trapC = cautionFn(S.computeFuelTemp(G[5].L, G[5].Tr, 2), { lead_class: 'STRUCTURAL' });
@@ -156,6 +156,22 @@ T('P1 trap coexists with earned caution (both pinned)', trapC.includes('EARNED-L
 T('P1 dashboard trap copy kernel mirrored in server source', POLL.includes('Structural leader = the pass shape (POR@CHI rule). Conscious override territory only'));
 T('P1 T+0 fact block wired at Stage 1b', POLL.includes('ACA P1 \u2014 T+0 FACT block') && /ssFuelTempLines\(ss\.fuelTemp, ss\.leaderAl, ss\.trailerAl, \{ lead_class: ss\.leadClass \}\)/.test(POLL));
 T('B1 breadcrumb fix in place (no push.body rebuild)', !POLL.includes("_pushBody = push.body + '\\n\\n' + _tcLine"));
+
+// ── ACA P3 (Aug 6): prompt contract v2 + regime tripwire + dead-code + feed gates ──
+T('P3 legacy inline narration deleted', !POLL.includes('under 110 words') && POLL.includes('ACA P3/B2'));
+T('P3 prompt v2: five elements in A/B builder', ['THE SHAPE','THE CASE FOR','THE CASE AGAINST','WATCH CONDITIONS','THE PRICE'].every(k => POLL.includes(`(${['THE SHAPE','THE CASE FOR','THE CASE AGAINST','WATCH CONDITIONS','THE PRICE'].indexOf(k)+1}) ${k}`)));
+T('P3 provenance-tag rule present (both builders)', (POLL.match(/provenance/g) || []).length >= 3);
+T('P3 watchlist keeps review-only opener', POLL.includes('Open with "Review only'));
+T('P3 XGB extremes-only gate in snapState', POLL.includes('EXTREME read (reads structure, not wins') && !POLL.includes('| Monte Carlo cumulative ${'));
+T('P3 inflation band line wired (def-A internal, badge parity)', POLL.includes('schedule ${_bd}') && POLL.includes('NEVER tier labels'));
+// regime tripwire behavior
+const invSticky = cautionFn(S.computeFuelTemp(G[0].L, G[0].Tr, 2), null, 'INVERTED');
+T('P3 INVERTED suspends sticky numbers', invSticky.includes('regime pulse INVERTED') && !invSticky.includes('toughest comeback shape'));
+const invTake = cautionFn(S.computeFuelTemp(G[2].L, G[2].Tr, 2), null, 'INVERTED');
+T('P3 INVERTED suspends channel numbers', invTake.includes('takeaway feed present') && !invTake.includes('~85%'));
+const invTrap = cautionFn(S.computeFuelTemp(G[5].L, G[5].Tr, 2), { lead_class: 'STRUCTURAL' }, 'INVERTED');
+T('P3 traps regime-independent', invTrap.includes('STRUCTURAL-LEADER TRAP'));
+T('P3 healthy regime unchanged', cautionFn(S.computeFuelTemp(G[0].L, G[0].Tr, 2), null, 'HEALTHY').includes('toughest comeback shape'));
 
 // ════════════════════════════════════════════════════════════════════════════
 // C2 — REGIME PULSE + REGIME STATE (post-game-agent.mjs digest copy pins)

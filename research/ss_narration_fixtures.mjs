@@ -74,9 +74,9 @@ const blocks = {
 };
 const fp = ssBuildNarrationPrompt(row, blocks);
 T('never re-decide framing present', fp.includes('never re-decide'));
-T('4-part structure with price guidance as part 3', fp.includes('(3) Price guidance'));
-T('word budget: 150-190 target + 200 hard cap', fp.includes('150-190 words') && fp.includes('200 words is a hard cap'));
-T('ladder precedes contract, model told never to recompute', fp.indexOf('PRICE LADDER') < fp.indexOf('Write exactly 4') && fp.includes('never recompute'));
+T('v2: 5-element brief — case-against argued, price as element 5', fp.includes('(3) THE CASE AGAINST') && fp.includes('(5) THE PRICE') && fp.includes('(4) WATCH CONDITIONS'));
+T('word budget: 150-190 target + 210 hard cap', fp.includes('150-190 words') && fp.includes('210 words is a hard cap'));
+T('ladder precedes contract, model told never to recompute', fp.indexOf('PRICE LADDER') < fp.indexOf('Write exactly 5') && fp.includes('never recompute'));
 T('section order: ladder -> quarter flow -> live state -> team ctx -> player ctx', (() => {
   const idx = ['PRICE LADDER', 'QUARTER FLOW', 'LIVE STATE', 'TEAM CONTEXT', 'PLAYER CONTEXT'].map((k) => fp.indexOf(k));
   return idx.every((v, i) => v >= 0 && (i === 0 || v > idx[i - 1]));
@@ -119,8 +119,8 @@ const wrow = {
 const wp = ssBuildWatchlistPrompt(wrow, blocks);
 T('review framing: NOT a fired bet alert', wp.includes('NOT a fired bet alert'));
 T('opens with mandated review lead', wp.includes('Review only — no system bet call.'));
-T('4-part structure, price-as-fact in part 3', wp.includes('(3) What is missing') && wp.includes('as a plain fact with no edge or value claim'));
-T('word budget: 150-190 target + 200 hard cap', wp.includes('150-190 words') && wp.includes('200 words is a hard cap'));
+T('v2: 5-element review — case-against cites fire ladder, price as plain fact', wp.includes('(3) THE CASE AGAINST') && wp.includes('using ONLY the system reads listed against the fire ladder') && wp.includes('(5) THE PRICE as plain fact'));
+T('word budget: 150-190 target + 210 hard cap', wp.includes('150-190 words') && wp.includes('210 words is a hard cap'));
 T('fire ladder legend present (ssClassifyTier verbatim semantics)', wp.includes('STRONG FADE or LEAN FADE') && wp.includes('VOLATILE or MIXED') && wp.includes('deficit at 9 or less'));
 T('null edge renders as none computed (never a number)', wp.includes('model edge none computed'));
 T('factual price line rendered (whole pct, fade-prompt parity)', wp.includes('Live price on MIN: -222') && wp.includes('(market implied 69%)'));
@@ -133,7 +133,7 @@ T('markdown ban present', wp.includes('NO markdown'));
 T('full-name metric rule present', wp.includes('effective field-goal percentage'));
 T('STAR carrier risk rule wired when playerCtx present', wp.includes('sustaining at her norm'));
 T('section order: spot -> quarter flow -> live state -> team ctx -> player ctx -> contract', (() => {
-  const idx = ['SPOT:', 'QUARTER FLOW', 'LIVE STATE', 'TEAM CONTEXT', 'PLAYER CONTEXT', 'Write exactly 4'].map((k) => wp.indexOf(k));
+  const idx = ['SPOT:', 'QUARTER FLOW', 'LIVE STATE', 'TEAM CONTEXT', 'PLAYER CONTEXT', 'Write exactly 5'].map((k) => wp.indexOf(k));
   return idx.every((v, i) => v >= 0 && (i === 0 || v > idx[i - 1]));
 })());
 const wpBare = ssBuildWatchlistPrompt(wrow, {});

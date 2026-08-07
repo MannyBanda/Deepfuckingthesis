@@ -4317,7 +4317,10 @@ function renderFuelTempBlock(cs,sn,gm,hA,aA,fuelAtFire,rowTrailer){
   // F3 (Aug 6, LA@MIN lesson): when the row's position team HOLDS the lead, the surface
   // speaks to the holder \u2014 the leader-side fuel read, not comfort about the opponent.
   if(rowTrailer&&ldAl===rowTrailer){
-    html+=ft.fuel==='EARNED'
+    var _hrInv=_ssLedgerCache&&_ssLedgerCache._regime==='INVERTED'; // ACA P3 — regime tripwire parity
+    html+=_hrInv
+      ?'<div style="margin-top:3px;color:var(--fg-dim)">HOLDER READ \u2014 '+esc(ldAl)+' leads on '+esc(ft.fuel)+' fuel (2026 season-stat lines suspended: regime INVERTED).</div>'
+      :ft.fuel==='EARNED'
       ?'<div style="margin-top:3px;color:var(--green)">HOLDER READ \u2014 '+esc(ldAl)+' leads EARNED \u2014 this season\u2019s strongest hold shape. (2026)</div>'
       :'<div style="margin-top:3px;color:var(--amber)">\u26a0 HOLDER READ \u2014 '+esc(ldAl)+' leads on TRANSIENT fuel: quality leads on transient fuel gave it back ~24% this season, market-priced \u2014 hold/exit territory, not comfort. (2026)</div>';
   }
