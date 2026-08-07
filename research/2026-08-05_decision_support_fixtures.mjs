@@ -30,7 +30,7 @@ function buildSide(src, extra) {
     extractVar(src, 'FUELTEMP_TH'), extractFn(src, 'computeFuelTemp')].concat(extra || []);
   return new Function(`${parts.join(';\n')}; return { computeFuelTemp: computeFuelTemp${extra ? ', ssFuelTempLines: ssFuelTempLines' : ''} };`)();
 }
-const S = buildSide(POLL, [extractFn(POLL, 'ssFuelTempLines')]);
+const S = buildSide(POLL, [extractFn(POLL, 'ssCautionLines'), extractFn(POLL, 'ssFuelTempLines')]);
 const C = buildSide(CLIENT);
 
 let pass = 0, fail = 0;
@@ -52,22 +52,22 @@ const G = [];
 G.push({ name: 'G1 row-23 real (earned+clean-cold STICKY)',
   L: { fgm: 9, fga: 16, fg3m: 2, ftm: 1, pot: 2, to: 3, vShare: 38 },
   Tr: { fgm: 8, fga: 19, fg3m: 4, ftm: 0, pot: 3, to: 2 }, p: 2,
-  exp: { fuel: 'EARNED', temp: 'cold', sticky: true, leaderBand: 'orange', leaderEfg: 62.5, trailerEfg: 52.6 } });
+  exp: { fuel: 'EARNED', temp: 'warm', sticky: true, leaderBand: 'orange', leaderEfg: 62.5, trailerEfg: 52.6 } }); // F4 decouple pin: abs-warm display, sticky (period-cold input) STILL fires
 // G2 — transient-heat (PHX@MIN archetype): red-band leader, low pot
 G.push({ name: 'G2 transient-heat (red band)',
   L: { fgm: 14, fga: 24, fg3m: 8, ftm: 2, pot: 2, to: 4, vShare: 60 },
   Tr: { fgm: 9, fga: 20, fg3m: 2, ftm: 3, pot: 4, to: 6 }, p: 2,
-  exp: { fuel: 'TRANSIENT (heat)', temp: 'cold', sticky: false, leaderBand: 'red', leaderEfg: 75 } });
+  exp: { fuel: 'TRANSIENT (heat)', sticky: false, leaderBand: 'red', leaderEfg: 75 } }); // F4: temp pin moved to abs-band pins below
 // G3 — transient-takeaway at var 20 (LA@DAL archetype): normal temp, pot 8
 G.push({ name: 'G3 transient-takeaway (var 20)',
   L: { fgm: 11, fga: 20, fg3m: 2, ftm: 4, pot: 8, to: 3, vShare: 20 },
   Tr: { fgm: 8, fga: 18, fg3m: 3, ftm: 2, pot: 2, to: 4 }, p: 2,
-  exp: { fuel: 'TRANSIENT (takeaway)', temp: 'cold', sticky: false, leaderBand: 'orange', pot: 8 } });
+  exp: { fuel: 'TRANSIENT (takeaway)', temp: 'warm', sticky: false, leaderBand: 'orange', pot: 8 } }); // F4 abs: 52.8
 // G4 — both engines transient
 G.push({ name: 'G4 heat + takeaway',
   L: { fgm: 13, fga: 22, fg3m: 9, ftm: 1, pot: 7, to: 2, vShare: 62 },
   Tr: { fgm: 10, fga: 20, fg3m: 2, ftm: 4, pot: 3, to: 5 }, p: 3,
-  exp: { fuel: 'TRANSIENT (heat + takeaway)', temp: 'cold', sticky: false, leaderBand: 'red' } });
+  exp: { fuel: 'TRANSIENT (heat + takeaway)', temp: 'hot', sticky: false, leaderBand: 'red' } }); // F4 abs: exactly 55.0 -> float 55.000..04 > 55 -> hot (boundary artifact, pinned)
 // G5 — insufficient data → no render anywhere
 G.push({ name: 'G5 insufficient (fga < 12)',
   L: { fgm: 4, fga: 8, fg3m: 1, ftm: 0, pot: 0, to: 1 },
@@ -77,12 +77,12 @@ G.push({ name: 'G5 insufficient (fga < 12)',
 G.push({ name: 'G6 earned+cold but TO 5 (no sticky)',
   L: { fgm: 9, fga: 16, fg3m: 2, ftm: 1, pot: 2, to: 3, vShare: 38 },
   Tr: { fgm: 8, fga: 19, fg3m: 4, ftm: 0, pot: 3, to: 5 }, p: 2,
-  exp: { fuel: 'EARNED', temp: 'cold', sticky: false } });
+  exp: { fuel: 'EARNED', temp: 'warm', sticky: false } }); // F4 abs: 52.6 — earned caution still renders (non-sticky earned)
 // G7 — 3PT-heavy heat without red band (orange + 64% pts from threes)
 G.push({ name: 'G7 3PT-heavy heat (orange band)',
   L: { fgm: 10, fga: 20, fg3m: 6, ftm: 2, pot: 3, to: 3, vShare: 44 },
   Tr: { fgm: 12, fga: 20, fg3m: 1, ftm: 2, pot: 4, to: 3 }, p: 3,
-  exp: { fuel: 'TRANSIENT (heat)', temp: 'warm', sticky: false, leaderBand: 'orange', threeShare: 64 } });
+  exp: { fuel: 'TRANSIENT (heat)', temp: 'hot', sticky: false, leaderBand: 'orange', threeShare: 64 } }); // F4 abs: 62.5
 // G8 — hot trailer (red band) on an earned lead
 G.push({ name: 'G8 earned + hot trailer',
   L: { fgm: 11, fga: 20, fg3m: 2, ftm: 3, pot: 2, to: 3, vShare: 30 },
@@ -92,7 +92,7 @@ G.push({ name: 'G8 earned + hot trailer',
 G.push({ name: 'G9 vShare-only heat',
   L: { fgm: 11, fga: 20, fg3m: 2, ftm: 3, pot: 2, to: 3, vShare: 50 },
   Tr: { fgm: 8, fga: 18, fg3m: 2, ftm: 2, pot: 2, to: 3 }, p: 2,
-  exp: { fuel: 'TRANSIENT (heat)', temp: 'cold', sticky: false } });
+  exp: { fuel: 'TRANSIENT (heat)', temp: 'warm', sticky: false } }); // F4 abs: 50.0
 
 for (const g of G) {
   const s = S.computeFuelTemp(g.L, g.Tr, g.p);
@@ -107,7 +107,7 @@ for (const g of G) {
 console.log('FUEL/TEMP NARRATION COPY');
 const L1 = S.ssFuelTempLines(S.computeFuelTemp(G[0].L, G[0].Tr, 2), 'WSH', 'GS');
 T('G1 fuel line', L1.includes("LEAD FUEL: EARNED \u2014 WSH's lead is built on normal shooting temperature and a low takeaway feed."));
-T('G1 temp line', L1.includes('TRAILER TEMP: cold \u2014 GS shooting 53% effective field goal (green band).'));
+T('G1 temp line (abs, no band parenthetical)', L1.includes('TRAILER TEMP: warm \u2014 GS shooting 53% effective field goal.'));
 T('G1 sticky chip', L1.includes('STICKY LEAD SHAPE (2026): earned lead against a cold, clean trailer (2 turnovers)'));
 T('G1 never-a-gate wording', L1.includes('Context only, never a gate.'));
 const L2 = S.ssFuelTempLines(S.computeFuelTemp(G[1].L, G[1].Tr, 2), 'PHX', 'MIN');
@@ -133,6 +133,19 @@ T('G4 channel note (heat + takeaway)', L4.includes('CHANNEL NOTE'));
 T('G2 no channel note on heat-only', !L2.includes('CHANNEL NOTE'));
 T('G2 no earned caution on transient', !L2.includes('EARNED-LEAD CAUTION'));
 T('G9 no channel note (vShare heat, pot 2)', !L9.includes('CHANNEL NOTE'));
+
+// ── F1 (Aug 6, row-1197 lesson): caution copy single-source + mechanical append ──
+const cautionFn = new Function(`${extractFn(POLL, 'ssCautionLines')}; return ssCautionLines;`)();
+const g1c = cautionFn(S.computeFuelTemp(G[0].L, G[0].Tr, 2));
+T('F1 sticky caution extracted standalone', g1c.includes('STICKY LEAD SHAPE (2026)'));
+T('F1 caution is a strict subset of the prompt block (single copy source)', g1c.length > 0 && L1.includes(g1c.trim()));
+const g6c = cautionFn(S.computeFuelTemp(G[5].L, G[5].Tr, 2));
+T('F1 earned caution standalone (non-sticky)', g6c.includes('EARNED-LEAD CAUTION (2026)') && L6.includes(g6c.trim()));
+const g3c = cautionFn(S.computeFuelTemp(G[2].L, G[2].Tr, 2));
+T('F1 channel note standalone (takeaway)', g3c.includes('CHANNEL NOTE (2026)') && L3.includes(g3c.trim()));
+T('F1 insufficient renders no cautions', cautionFn(S.computeFuelTemp(G[4].L, G[4].Tr, 1)) === '');
+// source-level: the mechanical append marker exists at BOTH push sites (sweep + immediate fire)
+T('F1 mechanical append at both push sites', (POLL.match(/PINNED CONTEXT \(mechanical, not model output\)/g) || []).length >= 2);
 
 // ════════════════════════════════════════════════════════════════════════════
 // C2 — REGIME PULSE + REGIME STATE (post-game-agent.mjs digest copy pins)
@@ -226,9 +239,9 @@ T('non-elite omits the tag', tipP.body.startsWith('Cashout check: GS now leads b
 console.log('CLOSED-CARD AT FIRE STAMP (v1.1 B, client pure fn)');
 const stampFn = new Function(`${extractFn(CLIENT, 'ssFuelStampText')}; return ssFuelStampText;`)();
 const g1ft = S.computeFuelTemp(G[0].L, G[0].Tr, 2);
-T('stamp text from row-23 golden', stampFn(g1ft, 2, '9:42') === 'AT FIRE (Q2 9:42): EARNED \u00b7 trailer cold (53% eFG)');
+T('stamp text from row-23 golden', stampFn(g1ft, 2, '9:42') === 'AT FIRE (Q2 9:42): EARNED \u00b7 trailer warm (53% eFG)');
 T('stamp null on insufficient (no fake reads)', stampFn({ insufficient: true }, 2, '9:42') === null && stampFn(null, 2, '9:42') === null);
-T('stamp clock-less form', stampFn(g1ft, 2, '') === 'AT FIRE (Q2): EARNED \u00b7 trailer cold (53% eFG)');
+T('stamp clock-less form', stampFn(g1ft, 2, '') === 'AT FIRE (Q2): EARNED \u00b7 trailer warm (53% eFG)');
 
 console.log('POT SOURCE PRIORITY (Aug 5 live-slate hotfix — flipped-ESPN guard)');
 const ftStats = new Function(`${extractFn(CLIENT, '_ftClientStats')}; return _ftClientStats;`)();

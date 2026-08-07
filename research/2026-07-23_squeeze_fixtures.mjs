@@ -1,6 +1,7 @@
 // SQUEEZE_WATCH_SPEC v1.2 — copy + threshold fixture harness
 // run: node research/2026-07-23_squeeze_fixtures.mjs
-import { composeSqueeze, implied, bandOf, probToAmerican, pickThreshold } from '../netlify/functions/odds-squeeze.mjs';
+import { composeSqueeze, implied, leaderBandOf, trailerTempOf, efgFromRaw, probToAmerican, pickThreshold } from '../netlify/functions/odds-squeeze.mjs';
+import { readFileSync } from 'fs';
 let pass = 0, fail = 0;
 const ok = (name, cond) => { cond ? pass++ : (fail++, console.log('FAIL:', name)); };
 
@@ -13,19 +14,33 @@ ok('-140 crosses -150', implied(-140) <= implied(-150));
 ok('-165 does not cross -150', implied(-165) > implied(-150));
 ok('rearm: +140 to +170 = drop >= .035', implied(140) - implied(170) >= 0.035);
 ok('rearm: +140 to +150 blocked', implied(140) - implied(150) < 0.035);
-ok('bands: 51 green / 58 orange / 66 red', bandOf(51)==='green' && bandOf(58)==='orange' && bandOf(66)==='red');
+// ── F2 (Aug 6): engine-mirrored bands replace static bandOf ──
+ok('leader bands Q2: 51 green / 58 orange / 66 red', leaderBandOf(51,2)==='green' && leaderBandOf(58,2)==='orange' && leaderBandOf(66,2)==='red');
+ok('leader bands Q4 shift: 59 green / 62 orange / 70 red', leaderBandOf(59,4)==='green' && leaderBandOf(62,4)==='orange' && leaderBandOf(70,4)==='red');
+ok('trailer temp absolute: 43 cold / 51 warm / 59 hot', trailerTempOf(43)==='cold' && trailerTempOf(51)==='warm' && trailerTempOf(59)==='hot');
+ok('efgFromRaw math (8fgm 2fg3m 17fga = 52.9)', Math.abs(efgFromRaw({fgm:8,fg3m:2,fga:17}) - 52.94) < 0.1);
+ok('efgFromRaw null on no attempts', efgFromRaw({fgm:0,fg3m:0,fga:0}) === null);
+// mirror contract: EFG_BANDS in squeeze must be source-identical to poll-live-bdl
+{
+  const sq = readFileSync('netlify/functions/odds-squeeze.mjs','utf8');
+  const pl = readFileSync('netlify/functions/poll-live-bdl.mjs','utf8');
+  const bandsOf = (src) => (src.match(/EFG_BANDS = \{[^}]*\}/) || [''])[0].replace(/\s+/g,'');
+  ok('EFG_BANDS mirror contract (squeeze == poll)', bandsOf(sq) !== '' && bandsOf(sq) === bandsOf(pl));
+  const abs = (sq.match(/TEMP_ABS = \{[^}]*\}/) || [''])[0];
+  ok('TEMP_ABS mirrors FUELTEMP_TH (45/55)', abs.includes('45') && abs.includes('55') && pl.includes('TEMP_ABS_COLD: 45') && pl.includes('TEMP_ABS_HOT: 55'));
+}
 
 // ── copy fixtures ──
 const base = { trailer:'NY', leader:'CHI', price:-140, book:'williamhill_us', threshold:-150,
   cellRate:67, cellName:'killer cell', deficit:6, period:3, clock:'4:12',
-  leaderEfg:66, leaderBand:'red', leaderVar:58, trailerEfg:51,
+  leaderEfg:66, leaderBand:'red', leaderVar:58, trailerEfg:51, trailerTemp:'warm', asOf:null,
   capLine:'Cap $300.', shopLine:'Caesars -140 | FanDuel -145 | DK -148', stale:false };
 
 const A = composeSqueeze(base);
 ok('A title', A.title === 'JUICE: NY -140 (Caesars)');
 ok('A implied+cushion', A.body.includes('Implied 58% vs killer cell 67% (+9pp)'));
 ok('A leader line', A.body.includes('CHI lead: 66% eFG (red) - 58% from threes/midrange.'));
-ok('A trailer read', A.body.includes('NY own: 51% eFG (green) - room to climb.'));
+ok('A trailer read (abs temp)', A.body.includes('NY own: 51% eFG (warm) - room to climb.'));
 ok('A shop line', A.body.includes('Best: Caesars -140 | FanDuel -145 | DK -148.'));
 ok('A non-directive', A.body.includes('Your read - not a directive.'));
 ok('A ascii title', /^[\x00-\x7F]+$/.test(A.title));
@@ -38,12 +53,14 @@ ok('B cushion math', B.body.includes('Implied 41% vs no-scalp cell 53% (+12pp)')
 ok('B lane cap line', B.body.includes('Lane spot ($600 cap, declare before entry). Your read - not a directive.'));
 
 const C = composeSqueeze({ ...base, stale:true });
-ok('C stale degrade', C.body.includes('Live eFG read unavailable') && !C.body.includes('CHI lead:'));
+ok('C stale degrade (no snapshot at all)', C.body.includes('Live eFG read unavailable (no snapshot)') && !C.body.includes('CHI lead:'));
+const C2 = composeSqueeze({ ...base, asOf:'read as of Q4 2:28' });
+ok('C2 aged snapshot labels, never drops', C2.body.includes('CHI lead: 66% eFG (red) - 58% from threes/midrange (read as of Q4 2:28).'));
 
-const D = composeSqueeze({ ...base, trailerEfg:43 });
+const D = composeSqueeze({ ...base, trailerEfg:43, trailerTemp:trailerTempOf(43) });
 ok('D cold trailer warning', D.body.includes('cold - may not collect'));
 
-const E = composeSqueeze({ ...base, trailerEfg:59 });
+const E = composeSqueeze({ ...base, trailerEfg:59, trailerTemp:trailerTempOf(59) });
 ok('E hot trailer read', E.body.includes('running hot themselves'));
 
 const F = composeSqueeze({ ...base, leaderVar:null });

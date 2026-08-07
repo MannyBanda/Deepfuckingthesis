@@ -1000,9 +1000,12 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
       const data = await resp.json();
       const narration = data.content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
       if (!narration || narration.length < 20) return;
-      await sql`UPDATE sweetspot_alerts SET narration_text = ${narration} WHERE id = ${rowId}`;
-      await sendNtfy(`SWEET SPOT - why ${ss.trailerAl}`, narration, 4, SS_DASH_URL);
-      log(`${aA}@${hA}: sweetspot narration delivered (${narration.length} chars)`);
+      // F1 (Aug 6): mechanical caution append — same contract as the sweep path.
+      const _cSfx = (ss.fuelTemp && ssCautionLines(ss.fuelTemp)) ? '\n\nPINNED CONTEXT (mechanical, not model output):\n' + ssCautionLines(ss.fuelTemp) : '';
+      const narrationFinal = narration + _cSfx;
+      await sql`UPDATE sweetspot_alerts SET narration_text = ${narrationFinal} WHERE id = ${rowId}`;
+      await sendNtfy(`SWEET SPOT - why ${ss.trailerAl}`, narrationFinal, 4, SS_DASH_URL);
+      log(`${aA}@${hA}: sweetspot narration delivered (${narrationFinal.length} chars)`);
     } catch (e) { log(`${aA}@${hA}: sweetspot narration error: ${e.message}`); }
   } catch (e) { log(`${aA}@${hA}: fireSweetSpotAlert fatal: ${e.message}`); }
 }
@@ -1215,7 +1218,10 @@ async function ssGatherNarrationBlocks(sql, row) {
   try {
     if (row.player_ctx_json) {
       const _ftDg = typeof row.player_ctx_json === 'string' ? JSON.parse(row.player_ctx_json) : row.player_ctx_json;
-      if (_ftDg && _ftDg.fuelTemp) blocks.fuelTemp = ssFuelTempLines(_ftDg.fuelTemp, row.leader_alias, row.trailer_alias);
+      if (_ftDg && _ftDg.fuelTemp) {
+        blocks.fuelTemp = ssFuelTempLines(_ftDg.fuelTemp, row.leader_alias, row.trailer_alias);
+        blocks.cautions = ssCautionLines(_ftDg.fuelTemp); // F1 — appended verbatim post-Opus at push
+      }
     }
   } catch (e) { /* omit */ }
   // live structural state — latest snapshot, isolated SELECT; floor_score EXCLUDED by design
@@ -1364,7 +1370,10 @@ async function ssNarrationSweep(sql, startTime) {
 
     const res = await ssCallNarration(prompt, model, timeoutMs);
     if (res.ok) {
-      const finalText = escLine + res.text;
+      // F1 (Aug 6): pinned caution copy is appended MECHANICALLY, never entrusted to the
+      // model (row-1197 lesson: Opus paraphrased the STICKY warning out of the push).
+      const cautionSuffix = (!isBrief && blocks.cautions) ? '\n\nPINNED CONTEXT (mechanical, not model output):\n' + blocks.cautions : '';
+      const finalText = escLine + res.text + cautionSuffix;
       await sql`UPDATE sweetspot_alerts SET narration_text = ${finalText}, narration_attempts = ${attempts + 1}, ntfy_sent = true WHERE id = ${row.id}`;
       if (!quietRow && !quietWatch) await sendNtfy(title, finalText, priority, SS_DASH_URL);
       log(`narration sweep: ${isBrief ? 'brief' : row.alert_subtype} row ${row.id} delivered via ${model} (${finalText.length} chars, attempt ${attempts + 1})${quietRow ? ' quiet' : (quietWatch ? ' quiet-superseded' : '')}${escLine ? ' +esc' : ''}`);
@@ -5149,7 +5158,7 @@ function efgTier(efg, period) {
 // decision_support_fixtures.mjs). Thresholds pinned here — changing them requires
 // a spec amendment, not a code tweak. Insufficient data → { insufficient:true }
 // and every consumer renders NOTHING (no fake reads — the schedule-badge lesson).
-var FUELTEMP_TH = { POT_MIN: 6, THREE_SHARE: 40, VSHARE: 45, TO_CLEAN: 4, MIN_FGA: 12 };
+var FUELTEMP_TH = { POT_MIN: 6, THREE_SHARE: 40, VSHARE: 45, TO_CLEAN: 4, MIN_FGA: 12, TEMP_ABS_COLD: 45, TEMP_ABS_HOT: 55 };
 function computeFuelTemp(leaderStats, trailerStats, period) {
   function _n(v) { v = Number(v); return isNaN(v) ? 0 : v; }
   function _efg(s) { var fga = _n(s && s.fga); if (fga < FUELTEMP_TH.MIN_FGA) return null; return (_n(s.fgm) + 0.5 * _n(s.fg3m)) / fga * 100; }
@@ -5163,8 +5172,11 @@ function computeFuelTemp(leaderStats, trailerStats, period) {
   var heat = lBand === 'red' || threeShare >= FUELTEMP_TH.THREE_SHARE || (vShare != null && vShare > FUELTEMP_TH.VSHARE);
   var takeaway = _n(L.pot) >= FUELTEMP_TH.POT_MIN;
   var fuel = heat && takeaway ? 'TRANSIENT (heat + takeaway)' : heat ? 'TRANSIENT (heat)' : takeaway ? 'TRANSIENT (takeaway)' : 'EARNED';
-  var temp = tBand === 'green' ? 'cold' : tBand === 'red' ? 'hot' : 'warm';
-  var sticky = fuel === 'EARNED' && temp === 'cold' && _n(T.to) < FUELTEMP_TH.TO_CLEAN;
+  // F4 (Aug 6): displayed temp = ABSOLUTE bands (period bands made "59% eFG" read
+  // cold at Q4). STICKY keeps its v1 period-band-cold input by design - the abs-cold
+  // sticky failed its pre-registered re-cut bar (research/2026-08-06 map addendum).
+  var temp = tEfg < FUELTEMP_TH.TEMP_ABS_COLD ? 'cold' : tEfg > FUELTEMP_TH.TEMP_ABS_HOT ? 'hot' : 'warm';
+  var sticky = fuel === 'EARNED' && tBand === 'green' && _n(T.to) < FUELTEMP_TH.TO_CLEAN;
   return { insufficient: false, fuel: fuel, heat: heat, takeaway: takeaway, temp: temp, sticky: sticky,
     leaderEfg: Math.round(lEfg * 10) / 10, leaderBand: lBand, trailerEfg: Math.round(tEfg * 10) / 10, trailerBand: tBand,
     threeShare: Math.round(threeShare), vShare: vShare != null ? Math.round(vShare) : null,
@@ -5172,6 +5184,20 @@ function computeFuelTemp(leaderStats, trailerStats, period) {
 }
 // Plain-English fuel/temp lines for narration context (A/B fire + D-12 review).
 // PURE (fixture-extracted). Returns '' when the read is unavailable — no fake reads.
+// F1 (Aug 6): caution copy lives ONLY in ssCautionLines — the prompt block includes it
+// AND the push assembly appends it verbatim post-Opus (the LA@MIN row-1197 lesson:
+// Opus paraphrased the STICKY warning away; pinned copy is never model-mediated).
+function ssCautionLines(ft) {
+  if (!ft || ft.insufficient) return '';
+  var t = '';
+  if (ft.sticky) t += '- STICKY LEAD SHAPE (2026): earned lead against a cold, clean trailer (' + ft.trailerTo + ' turnovers) — this season\'s toughest comeback shape. Context only, never a gate.\n';
+  // Copy v1.2 (Aug 6, PM-approved): season-stat context lines. Numbers are
+  // cross-cut-converged (see research/2026-08-06_fuel_temp_gap_map.md); a regime
+  // flip (monthly pulse INVERTED) triggers a copy revisit for all (2026) lines.
+  else if (ft.fuel === 'EARNED') t += '- EARNED-LEAD CAUTION (2026): no transient feed to regress — earned leads vs in-band better trailers converted only ~37% across three independent 2026 cuts, below what the live line charges. This season\'s pass shape. Context only, never a gate.\n';
+  if (ft.takeaway) t += '- CHANNEL NOTE (2026): the takeaway feed is the market-blind transient — the live line has under-priced takeaway-fed collapse all season (trailers converted ~85%, two independent cuts). Context only, never a gate.\n';
+  return t;
+}
 function ssFuelTempLines(ft, leaderAl, trailerAl) {
   if (!ft || ft.insufficient) return '';
   var why;
@@ -5188,13 +5214,8 @@ function ssFuelTempLines(ft, leaderAl, trailerAl) {
   }
   var t = 'LEAD FUEL + TRAILER TEMP [FACT-live at fire]:\n'
     + '- LEAD FUEL: ' + ft.fuel + ' — ' + leaderAl + '\'s lead is built on ' + why + '.\n'
-    + '- TRAILER TEMP: ' + ft.temp + ' — ' + trailerAl + ' shooting ' + Math.round(ft.trailerEfg) + '% effective field goal (' + ft.trailerBand + ' band).\n';
-  if (ft.sticky) t += '- STICKY LEAD SHAPE (2026): earned lead against a cold, clean trailer (' + ft.trailerTo + ' turnovers) — this season\'s toughest comeback shape. Context only, never a gate.\n';
-  // Copy v1.2 (Aug 6, PM-approved): season-stat context lines. Numbers are
-  // cross-cut-converged (see research/2026-08-06_fuel_temp_gap_map.md); a regime
-  // flip (monthly pulse INVERTED) triggers a copy revisit for all (2026) lines.
-  else if (ft.fuel === 'EARNED') t += '- EARNED-LEAD CAUTION (2026): no transient feed to regress — earned leads vs in-band better trailers converted only ~37% across three independent 2026 cuts, below what the live line charges. This season\'s pass shape. Context only, never a gate.\n';
-  if (ft.takeaway) t += '- CHANNEL NOTE (2026): the takeaway feed is the market-blind transient — the live line has under-priced takeaway-fed collapse all season (trailers converted ~85%, two independent cuts). Context only, never a gate.\n';
+    + '- TRAILER TEMP: ' + ft.temp + ' — ' + trailerAl + ' shooting ' + Math.round(ft.trailerEfg) + '% effective field goal.\n'
+    + ssCautionLines(ft);
   return t;
 }
 

@@ -12,6 +12,14 @@ Discretionary alpha = (2) − (1). Never conflate them. Append one section per s
 
 ---
 
+## Row 22 — Aug 6, 2026 — LA@MIN — MIN ML +195 — $300 — LOST (−$300)
+- Stream: FLAGGED (WATCHLIST row 1197, gap .43, fired Q2 8:38 LA up 1). Lane-eligible (MIN, override lane) but sized at base WATCHLIST cap $300.
+- Entry: off JUICE alert Q4 2:22 (−115 fired; price freefall to +195 at placement, MIN down 1-3, ~2:00 left). No dashboard check pre-entry.
+- Fire-time fuel (stamped): EARNED LA lead · MIN cold 39% · STICKY — the pass shape. NOT in the pushed review (Opus paraphrased it out) and NOT in the juice alert (stale-window drop + dead trailer-line code).
+- Outcome: MIN led 82-81 at 4:47, scored 0 the rest of the way. LA 89-82.
+- Grades: PENDING MANNY. Process note: system withheld the decisive context at both push surfaces (F1/F2 post-mortem, shipped Aug 6); the earned-sticky pass signal existed and never reached the phone.
+- Season: flagged stream 14-2, +$6,756 net.
+
 ## 2026-08-04 (WNBA) — P&L **+$834.75**
 
 TOR@GS: fourth A-tier scissor, first staged WATCHLIST→A ladder closed with a partial cashout — and JUICE's first live A-tier arm died in ~90 seconds to a band-exit race (zero dollar cost, invoice filed below). Flagged stream: **14-1, +$7,890.69** ($8,000 staked, 98.6% ROI).

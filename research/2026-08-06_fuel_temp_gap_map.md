@@ -49,3 +49,24 @@ edge = conversion − mean de-vig implied from the trailer's live ML at state ti
 **Multiplicity record:** H1–H4 pre-registered in chat before the run; recipe v2 amendment made and disclosed before any outcome cross-tab; temp/channel/deficit splits pre-labeled ordering-only.
 
 *Script: `research/2026-08-06_fuel_temp_gap_map.mjs` (repo-extracted computeFuelTemp; resumable cache; --pull / --odds phases).*
+
+---
+
+## ADDENDUM (Aug 6 evening) — F4 trailer-temp re-cut + LA@MIN post-mortem ship
+
+**Motivation:** LA@MIN Aug 6 (row 1197, flagged-stream loss −$300). Dashboard showed "cold LA — 59% eFG" in Q4 — the period-adjusted EFG_BANDS (correct for leader-fuel transience detection) were also feeding trailer temp, where the semantic is opposite (below-norm now → mean-revert up). At Q4 the green band swallows everything under 60%.
+
+**Pre-registered (before cutting):** absolute trailer-temp bands cold <45 / warm 45–55 / hot >55. Pass bars: (1) H3 warm ≥ cold ordering within band-A transient; (2) sticky (earned + abs-cold + clean) retains elevated hold.
+
+**Results (n=178 states file):**
+- Bar 1 **PASSED, sharper**: abs-cold 54% conv (mkt 55, no edge) → abs-warm 91% → abs-hot 92% (mkt ~69). Distribution informative (65/61/52 vs period bands' 128/27/23).
+- Bar 2 **FAILED**: abs-cold sticky holds 57% vs 55 implied (flat); period-cold sticky v1 holds 65% vs 53 (+12pp). Sticky's strength empirically lives in the period definition.
+
+**Decision (decouple):** displayed trailer temp = absolute bands everywhere (narration, dashboard, juice); STICKY keeps its v1 period-band-cold input unchanged. FUELTEMP_TH gains TEMP_ABS_COLD 45 / TEMP_ABS_HOT 55 (mirrored server+client). Fire-site stamps carry the new temp going forward; historical stamps keep the old definition (provenance note).
+
+**Shipped alongside (same post-mortem):**
+- **F1** — pinned caution copy (STICKY / EARNED-LEAD CAUTION / CHANNEL NOTE) extracted to `ssCautionLines`, included in the Opus prompt AND appended mechanically post-Opus at both push sites. Row-1197 lesson: Opus paraphrased the STICKY warning out of the pushed review.
+- **F2** — juice eFG block rewrite: trailer eFG dead-code fixed (raw short keys + row-alias side match), 90s staleness → age-label fallback (cumulative stat; the 2:48 poll gap at the row-1197 fire silently dropped the whole read), ss_leader_* cross-attribution guard (D-7/D-8 bug class), squeeze bands mirrored to engine EFG_BANDS + TEMP_ABS (static bandOf retired).
+- **F3** — verdict trap rescoped to entry-rule phrasing with the honest unselected number (~24%, market-priced); HOLDER READ line renders when the row's position team holds the lead (transient = amber hold/exit caution, earned = strongest-hold note).
+
+Fixtures: decision-support 98/98 (incl. F4 decouple pin G1 temp-warm+sticky-true, F1 single-source + both-push-sites pins), squeeze 61/61 (incl. EFG_BANDS/TEMP_ABS mirror contracts, age-label pin).

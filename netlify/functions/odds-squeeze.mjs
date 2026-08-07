@@ -48,7 +48,21 @@ export const pickThreshold = (row) => {
   if (row.leader_killer) return KILLER_THRESHOLD;
   return NONKILLER_THRESHOLD;
 };
-export const bandOf = (efg) => (efg == null ? null : efg >= 65 ? 'red' : efg >= 56 ? 'orange' : 'green');
+// eFG definitions — MIRRORS of poll-live-bdl (one-consumer-definition contract;
+// source-equality pinned in research/2026-07-23_squeeze_fixtures.mjs). The old static
+// bandOf (56/65) drifted from the engine's period-adjusted bands — retired Aug 6.
+const EFG_BANDS = { 1:[54,61], 2:[56,63], 3:[58,66], 4:[60,69] };
+const TEMP_ABS = { COLD: 45, HOT: 55 }; // F4 trailer-temp absolute bands (= FUELTEMP_TH.TEMP_ABS_*)
+export const leaderBandOf = (efg, period) => {
+  if (efg == null || isNaN(efg)) return null;
+  const b = EFG_BANDS[period] || EFG_BANDS[4];
+  return efg >= b[1] ? 'red' : efg >= b[0] ? 'orange' : 'green';
+};
+export const trailerTempOf = (efg) => (efg == null || isNaN(efg) ? null : efg < TEMP_ABS.COLD ? 'cold' : efg > TEMP_ABS.HOT ? 'hot' : 'warm');
+export const efgFromRaw = (t) => {
+  const fga = Number(t?.fga) || 0; if (fga < 1) return null;
+  return ((Number(t?.fgm) || 0) + 0.5 * (Number(t?.fg3m) || 0)) / fga * 100;
+};
 
 // ── DS v1.1 C3 — CASH surge watch (DECISION_SUPPORT_V1_SPEC + v1.1 addendum; SHADOW).
 //    Validated §11 Aug 5: profit-locked surge rule +$2.7-3.2K vs +$1.3K hold in-sample;
@@ -366,7 +380,7 @@ async function disarm(sql, w, why) {
 }
 
 // ── alert copy (pinned in fixtures; plain English; never a directive) ──
-export function composeSqueeze({ trailer, leader, price, book, threshold, cellRate, cellName, deficit, period, clock, leaderEfg, leaderBand, leaderVar, trailerEfg, capLine, shopLine, stale, oobGrace = false, resumedAt = null }) {
+export function composeSqueeze({ trailer, leader, price, book, threshold, cellRate, cellName, deficit, period, clock, leaderEfg, leaderBand, leaderVar, trailerEfg, trailerTemp = null, asOf = null, capLine, shopLine, stale, oobGrace = false, resumedAt = null }) {
   const imp = Math.round(implied(price) * 100);
   const cushion = cellRate ? `${cellRate - imp >= 0 ? '+' : ''}${cellRate - imp}pp` : 'n/a';
   const title = `JUICE: ${trailer} ${fmtOdds(price)} (${BOOK_NAMES[book] || book})`; // brand word (PM Jul 28); internals keep 'squeeze'
@@ -381,13 +395,12 @@ export function composeSqueeze({ trailer, leader, price, book, threshold, cellRa
     stateLine,
   ];
   if (resumedAt) lines.push(`Back in band since Q${resumedAt.period} ${resumedAt.clock}.`);
-  if (stale) lines.push('Live eFG read unavailable (stale snapshot).');
+  if (stale) lines.push('Live eFG read unavailable (no snapshot).');
   else {
-    lines.push(`${leader} lead: ${leaderEfg}% eFG (${leaderBand})${leaderVar != null ? ` - ${leaderVar}% from threes/midrange` : ''}.`);
-    if (trailerEfg != null) {
-      const tb = bandOf(trailerEfg);
-      const read = trailerEfg < 45 ? 'cold - may not collect' : tb === 'green' ? 'room to climb' : 'running hot themselves';
-      lines.push(`${trailer} own: ${trailerEfg}% eFG (${tb}) - ${read}.`);
+    if (leaderEfg != null) lines.push(`${leader} lead: ${leaderEfg}% eFG (${leaderBand})${leaderVar != null ? ` - ${leaderVar}% from threes/midrange` : ''}${asOf ? ` (${asOf})` : ''}.`);
+    if (trailerEfg != null && trailerTemp) {
+      const read = trailerTemp === 'cold' ? 'cold - may not collect' : trailerTemp === 'warm' ? 'room to climb' : 'running hot themselves';
+      lines.push(`${trailer} own: ${trailerEfg}% eFG (${trailerTemp}) - ${read}.`);
     }
   }
   if (shopLine) lines.push(`Best: ${shopLine}.`);
@@ -397,26 +410,38 @@ export function composeSqueeze({ trailer, leader, price, book, threshold, cellRa
 }
 
 async function pushSqueezeAlert(sql, w, g, deficit, best, shopLine, oobGrace = false, resumedAt = null) {
-  // live eFG context from latest snapshot (NULL-degrade beyond 60s)
-  let leaderEfg = null, leaderBand = null, leaderVar = null, trailerEfg = null, stale = true;
+  // Live eFG context — LA@MIN Aug 6 post-mortem (row 1197) rewrote this block:
+  //   (a) trailer eFG was DEAD CODE (matched `alias`/`effective_fg_pct` keys that don't
+  //       exist in raw_stats_json) — now computed from real short keys, side-matched
+  //       via the row's decorated aliases;
+  //   (b) 90s freshness on a CUMULATIVE stat dropped the whole read into a poll gap at
+  //       the exact fire moment — now: always use the latest snapshot, label age instead;
+  //   (c) ss_leader_* consumed without checking ss_leader_alias against the row anchor
+  //       (verdict-strip D-7/D-8 bug class) — now guarded, with raw-key fallback.
+  let leaderEfg = null, leaderBand = null, leaderVar = null, trailerEfg = null, trailerTemp = null, asOf = null, stale = true;
   try {
-    const snap = (await sql`SELECT ts, ss_leader_alias, ss_leader_efg, ss_leader_efg_band, ss_variance_share, raw_stats_json
+    const snap = (await sql`SELECT ts, period, clock, ss_leader_alias, ss_leader_efg, ss_leader_efg_band, ss_variance_share, raw_stats_json
       FROM snapshots WHERE game_id = ${w.game_id} ORDER BY ts DESC LIMIT 1`)[0];
-    if (snap && Date.now() - new Date(snap.ts).getTime() <= 90000) {
+    if (snap) {
       stale = false;
-      leaderEfg = snap.ss_leader_efg; leaderBand = snap.ss_leader_efg_band; leaderVar = snap.ss_variance_share;
+      if (Date.now() - new Date(snap.ts).getTime() > 90000) asOf = `read as of Q${snap.period}${snap.clock ? ' ' + snap.clock : ''}`;
       const raw = typeof snap.raw_stats_json === 'string' ? JSON.parse(snap.raw_stats_json) : snap.raw_stats_json;
-      for (const side of ['home', 'away']) {
-        const t = raw?.[side]; const stx = t?.statistics || t || {};
-        if (t?.alias === w.trailer_alias) trailerEfg = Number(stx.effective_fg_pct) || null;
+      const sideOf = (alias) => (alias === w._home ? raw?.home : alias === w._away ? raw?.away : null);
+      if (snap.ss_leader_alias === w.leader_alias && snap.ss_leader_efg != null) {
+        leaderEfg = Math.round(Number(snap.ss_leader_efg)); leaderBand = snap.ss_leader_efg_band; leaderVar = snap.ss_variance_share;
+      } else {
+        const le = efgFromRaw(sideOf(w.leader_alias));
+        if (le != null) { leaderEfg = Math.round(le); leaderBand = leaderBandOf(le, snap.period); }
       }
+      const te = efgFromRaw(sideOf(w.trailer_alias));
+      if (te != null) { trailerEfg = Math.round(te); trailerTemp = trailerTempOf(te); }
     }
   } catch (e) { log(`snap ctx fail ${e.message}`); }
   const killer = !!w.leader_killer;
   const { title, body } = composeSqueeze({
     trailer: w.trailer_alias, leader: w.leader_alias, price: best.price, book: best.book,
     threshold: w.squeeze_threshold, cellRate: killer ? 67 : 53, cellName: killer ? 'killer cell' : 'no-scalp cell',
-    deficit, period: g.period, clock: g.clock, leaderEfg, leaderBand, leaderVar, trailerEfg,
+    deficit, period: g.period, clock: g.clock, leaderEfg, leaderBand, leaderVar, trailerEfg, trailerTemp, asOf,
     capLine: `Cap per tier rules.`, shopLine, stale, oobGrace, resumedAt,
   });
   await sendNtfy(title, body, 5, best.link);

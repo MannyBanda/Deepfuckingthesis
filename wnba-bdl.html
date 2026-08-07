@@ -3688,7 +3688,7 @@ function efgTier(efg,period){
 }
 // ── DS v1 C1 — VERBATIM MIRROR of poll-live-bdl.mjs computeFuelTemp (one definition,
 // all consumers). Mirrored golden fixtures assert drift — edit BOTH copies or neither.
-var FUELTEMP_TH = { POT_MIN: 6, THREE_SHARE: 40, VSHARE: 45, TO_CLEAN: 4, MIN_FGA: 12 };
+var FUELTEMP_TH = { POT_MIN: 6, THREE_SHARE: 40, VSHARE: 45, TO_CLEAN: 4, MIN_FGA: 12, TEMP_ABS_COLD: 45, TEMP_ABS_HOT: 55 };
 function computeFuelTemp(leaderStats, trailerStats, period) {
   function _n(v) { v = Number(v); return isNaN(v) ? 0 : v; }
   function _efg(s) { var fga = _n(s && s.fga); if (fga < FUELTEMP_TH.MIN_FGA) return null; return (_n(s.fgm) + 0.5 * _n(s.fg3m)) / fga * 100; }
@@ -3702,8 +3702,11 @@ function computeFuelTemp(leaderStats, trailerStats, period) {
   var heat = lBand === 'red' || threeShare >= FUELTEMP_TH.THREE_SHARE || (vShare != null && vShare > FUELTEMP_TH.VSHARE);
   var takeaway = _n(L.pot) >= FUELTEMP_TH.POT_MIN;
   var fuel = heat && takeaway ? 'TRANSIENT (heat + takeaway)' : heat ? 'TRANSIENT (heat)' : takeaway ? 'TRANSIENT (takeaway)' : 'EARNED';
-  var temp = tBand === 'green' ? 'cold' : tBand === 'red' ? 'hot' : 'warm';
-  var sticky = fuel === 'EARNED' && temp === 'cold' && _n(T.to) < FUELTEMP_TH.TO_CLEAN;
+  // F4 (Aug 6): displayed temp = ABSOLUTE bands (period bands made "59% eFG" read
+  // cold at Q4). STICKY keeps its v1 period-band-cold input by design - the abs-cold
+  // sticky failed its pre-registered re-cut bar (research/2026-08-06 map addendum).
+  var temp = tEfg < FUELTEMP_TH.TEMP_ABS_COLD ? 'cold' : tEfg > FUELTEMP_TH.TEMP_ABS_HOT ? 'hot' : 'warm';
+  var sticky = fuel === 'EARNED' && tBand === 'green' && _n(T.to) < FUELTEMP_TH.TO_CLEAN;
   return { insufficient: false, fuel: fuel, heat: heat, takeaway: takeaway, temp: temp, sticky: sticky,
     leaderEfg: Math.round(lEfg * 10) / 10, leaderBand: lBand, trailerEfg: Math.round(tEfg * 10) / 10, trailerBand: tBand,
     threeShare: Math.round(threeShare), vShare: vShare != null ? Math.round(vShare) : null,
@@ -4014,7 +4017,7 @@ function ssVerdictCompose(st){
   if(v==='V2'||v==='V3'||v==='V4'||v==='V5'||v==='VX'){
     var lc=st.leadClass;
     if((lc==='STRUCTURAL'||st.trailerWinsStruct===true)&&gap!=null&&gap<0.20){
-      trap='\u26a0 Trailer winning the structural battle below the gap bar is a tested-and-killed shape (Jun 21, 1-for-7 \u2014 the market prices visible structure).';}
+      trap='\u26a0 Buying '+(ancTrail||trailer||'the trailer')+' below the gap bar is a tested-and-killed ENTRY (Jun 21, 1-for-7) \u2014 an entry rule, not a live win probability. Unselected 2026 read: below-bar trailers vs transient leads convert ~24%, fully market-priced.';}
     else if(lc==='STRUCTURAL'&&gap!=null&&gap>=0.20){
       trap='\u26a0 Structural leader = the pass shape (POR@CHI rule). Conscious override territory only \u2014 probe size (CHI@DAL convention).';}
     else if((st.efgBand==='red'||st.efgBand==='orange')&&(gap==null||gap<0.15)){
@@ -4281,7 +4284,7 @@ function _ftClientStats(cs,side){
     to:te.turnovers!=null?te.turnovers:te.to,
     pot:bp!=null?(Number(bp)||0):(te.pot||0)};
 }
-function renderFuelTempBlock(cs,sn,gm,hA,aA,fuelAtFire){
+function renderFuelTempBlock(cs,sn,gm,hA,aA,fuelAtFire,rowTrailer){
   var sc=cs.scoringComp;
   // Closed game — render the stamped FIRE-TIME read only (DS v1.1 B); no stamp → nothing
   if(gm&&gm.status==='closed'){
@@ -4310,7 +4313,14 @@ function renderFuelTempBlock(cs,sn,gm,hA,aA,fuelAtFire){
     :[(ft.heat?(ft.leaderBand==='red'?Math.round(ft.leaderEfg)+'% eFG (red)':ft.threeShare>=40?ft.threeShare+'% pts from 3s':(ft.vShare!=null?ft.vShare+'% lead from 3s/mid':'')):null),(ft.takeaway?'POT '+ft.pot:null)].filter(Boolean).join(' \u00b7 ');
   var html='<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--hairline);font-size:11px;color:var(--fg-tertiary)">';
   html+='<div>LEAD FUEL: <span style="font-weight:600;color:'+fuelCol+'">'+esc(ft.fuel)+'</span> <span style="color:'+tc(ldAl)+'">'+esc(ldAl)+'</span> \u2014 '+esc(fuelDet)+'</div>';
-  html+='<div style="margin-top:2px">TRAILER TEMP: <span style="font-weight:600;color:'+tempCol+'">'+esc(ft.temp)+'</span> <span style="color:'+tc(trAl)+'">'+esc(trAl)+'</span> \u2014 '+Math.round(ft.trailerEfg)+'% eFG ('+esc(ft.trailerBand)+')</div>';
+  html+='<div style="margin-top:2px">TRAILER TEMP: <span style="font-weight:600;color:'+tempCol+'">'+esc(ft.temp)+'</span> <span style="color:'+tc(trAl)+'">'+esc(trAl)+'</span> \u2014 '+Math.round(ft.trailerEfg)+'% eFG</div>';
+  // F3 (Aug 6, LA@MIN lesson): when the row's position team HOLDS the lead, the surface
+  // speaks to the holder \u2014 the leader-side fuel read, not comfort about the opponent.
+  if(rowTrailer&&ldAl===rowTrailer){
+    html+=ft.fuel==='EARNED'
+      ?'<div style="margin-top:3px;color:var(--green)">HOLDER READ \u2014 '+esc(ldAl)+' leads EARNED \u2014 this season\u2019s strongest hold shape. (2026)</div>'
+      :'<div style="margin-top:3px;color:var(--amber)">\u26a0 HOLDER READ \u2014 '+esc(ldAl)+' leads on TRANSIENT fuel: quality leads on transient fuel gave it back ~24% this season, market-priced \u2014 hold/exit territory, not comfort. (2026)</div>';
+  }
   if(ft.sticky){
     // regime tripwire (Component 2): INVERTED auto-degrades the chip to neutral wording
     var inv=_ssLedgerCache&&_ssLedgerCache._regime==='INVERTED';
@@ -4367,7 +4377,11 @@ function renderSSVerdictBox(id,cs,hA,aA){
     if(verdict.trap)html+='<div style="margin-top:6px;color:var(--amber)">'+esc(verdict.trap)+'</div>';
   }
   // DS v1 C1 — FUEL + TEMP read, directly above the scoring-composition evidence
-  try{html+=renderFuelTempBlock(cs,sn,gm,hA,aA,entry&&entry.data?entry.data.fuel_at_fire:null);}catch(e){/* degrade — never break the verdict box */}
+  try{
+    var _rtF=null,_rwsF=(entry&&entry.data&&entry.data.rows)||[];
+    for(var _ri=_rwsF.length-1;_ri>=0;_ri--){var _rr=_rwsF[_ri];if(_rr&&_rr.trailer_alias&&_rr.alert_subtype!=='GAME_BRIEF'){_rtF=_rr.trailer_alias;break;}}
+    html+=renderFuelTempBlock(cs,sn,gm,hA,aA,entry&&entry.data?entry.data.fuel_at_fire:null,_rtF);
+  }catch(e){/* degrade — never break the verdict box */}
   // Evidence lines — always, from the client PBP comp, relabeled (D-2): "structural"
   // about the leader's own mix vs about the margin can never collide again.
   if(sc&&sc.home&&sc.away){
