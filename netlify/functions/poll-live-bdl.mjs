@@ -916,8 +916,14 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
       try {
         await ensureTeamCtx(sql, league);
         const _tcLine = composeTeamCtxLine(ss.trailerAl, ss.leaderAl, league);
-        if (_tcLine) _pushBody = push.body + '\n\n' + _tcLine;
+        if (_tcLine) _pushBody = _pushBody + '\n\n' + _tcLine; // B1 fix (Aug 6): was push.body — silently dropped the D-13 escalation breadcrumb
       } catch (e) { /* non-fatal — push goes out without the line */ }
+      // ACA P1 — T+0 FACT block: fuel/temp/cautions/trap ride the mechanical push with
+      // zero model latency (row-1197 lesson: the WHAT-push is the one that gets acted on).
+      try {
+        const _ftBlock = ssFuelTempLines(ss.fuelTemp, ss.leaderAl, ss.trailerAl, { lead_class: ss.leadClass });
+        if (_ftBlock) _pushBody = _pushBody + '\n\n' + _ftBlock;
+      } catch (e) { /* non-fatal — push goes out without the fact block */ }
       await sendNtfy(push.title, _pushBody, push.priority, SS_DASH_URL);
       log(`${aA}@${hA}: ★ SWEET SPOT ${ss.subtype === 'WATCHLIST' ? 'WATCHLIST' : ss.tier} FIRED — ${ss.trailerAl} +${ss.margin}${ss.edge != null ? ` edge=${_pct(ss.edge)}pp` : ''} line=${_ml(ss.bestML)}${ss.softCell ? ` cell=${ss.softCell}` : ''}`);
     }
@@ -1001,7 +1007,7 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
       const narration = data.content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
       if (!narration || narration.length < 20) return;
       // F1 (Aug 6): mechanical caution append — same contract as the sweep path.
-      const _cSfx = (ss.fuelTemp && ssCautionLines(ss.fuelTemp)) ? '\n\nPINNED CONTEXT (mechanical, not model output):\n' + ssCautionLines(ss.fuelTemp) : '';
+      const _cSfx = (ss.fuelTemp && ssCautionLines(ss.fuelTemp, { lead_class: ss.leadClass })) ? '\n\nPINNED CONTEXT (mechanical, not model output):\n' + ssCautionLines(ss.fuelTemp, { lead_class: ss.leadClass }) : '';
       const narrationFinal = narration + _cSfx;
       await sql`UPDATE sweetspot_alerts SET narration_text = ${narrationFinal} WHERE id = ${rowId}`;
       await sendNtfy(`SWEET SPOT - why ${ss.trailerAl}`, narrationFinal, 4, SS_DASH_URL);
@@ -1219,8 +1225,8 @@ async function ssGatherNarrationBlocks(sql, row) {
     if (row.player_ctx_json) {
       const _ftDg = typeof row.player_ctx_json === 'string' ? JSON.parse(row.player_ctx_json) : row.player_ctx_json;
       if (_ftDg && _ftDg.fuelTemp) {
-        blocks.fuelTemp = ssFuelTempLines(_ftDg.fuelTemp, row.leader_alias, row.trailer_alias);
-        blocks.cautions = ssCautionLines(_ftDg.fuelTemp); // F1 — appended verbatim post-Opus at push
+        blocks.fuelTemp = ssFuelTempLines(_ftDg.fuelTemp, row.leader_alias, row.trailer_alias, row);
+        blocks.cautions = ssCautionLines(_ftDg.fuelTemp, row); // F1 — appended verbatim post-model at push
       }
     }
   } catch (e) { /* omit */ }
@@ -5187,9 +5193,12 @@ function computeFuelTemp(leaderStats, trailerStats, period) {
 // F1 (Aug 6): caution copy lives ONLY in ssCautionLines — the prompt block includes it
 // AND the push assembly appends it verbatim post-Opus (the LA@MIN row-1197 lesson:
 // Opus paraphrased the STICKY warning away; pinned copy is never model-mediated).
-function ssCautionLines(ft) {
+function ssCautionLines(ft, row) {
   if (!ft || ft.insufficient) return '';
   var t = '';
+  // ACA P1 — trap parity: framework rules pinned here render on ALL surfaces (mechanical
+  // push, narration prompt, post-model append). Copy kernel mirrors the dashboard trap.
+  if (row && row.lead_class === 'STRUCTURAL') t += '- \u26a0 STRUCTURAL-LEADER TRAP: Structural leader = the pass shape (POR@CHI rule). Conscious override territory only \u2014 probe size (CHI@DAL convention).\n';
   if (ft.sticky) t += '- STICKY LEAD SHAPE (2026): earned lead against a cold, clean trailer (' + ft.trailerTo + ' turnovers) — this season\'s toughest comeback shape. Context only, never a gate.\n';
   // Copy v1.2 (Aug 6, PM-approved): season-stat context lines. Numbers are
   // cross-cut-converged (see research/2026-08-06_fuel_temp_gap_map.md); a regime
@@ -5198,7 +5207,7 @@ function ssCautionLines(ft) {
   if (ft.takeaway) t += '- CHANNEL NOTE (2026): the takeaway feed is the market-blind transient — the live line has under-priced takeaway-fed collapse all season (trailers converted ~85%, two independent cuts). Context only, never a gate.\n';
   return t;
 }
-function ssFuelTempLines(ft, leaderAl, trailerAl) {
+function ssFuelTempLines(ft, leaderAl, trailerAl, row) {
   if (!ft || ft.insufficient) return '';
   var why;
   if (ft.fuel === 'EARNED') why = 'normal shooting temperature and a low takeaway feed';
@@ -5215,7 +5224,7 @@ function ssFuelTempLines(ft, leaderAl, trailerAl) {
   var t = 'LEAD FUEL + TRAILER TEMP [FACT-live at fire]:\n'
     + '- LEAD FUEL: ' + ft.fuel + ' — ' + leaderAl + '\'s lead is built on ' + why + '.\n'
     + '- TRAILER TEMP: ' + ft.temp + ' — ' + trailerAl + ' shooting ' + Math.round(ft.trailerEfg) + '% effective field goal.\n'
-    + ssCautionLines(ft);
+    + ssCautionLines(ft, row);
   return t;
 }
 

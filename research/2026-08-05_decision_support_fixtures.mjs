@@ -147,6 +147,16 @@ T('F1 insufficient renders no cautions', cautionFn(S.computeFuelTemp(G[4].L, G[4
 // source-level: the mechanical append marker exists at BOTH push sites (sweep + immediate fire)
 T('F1 mechanical append at both push sites', (POLL.match(/PINNED CONTEXT \(mechanical, not model output\)/g) || []).length >= 2);
 
+// ── ACA P1 (Aug 6): trap parity + T+0 FACT block + B1 regression net ──
+const trapC = cautionFn(S.computeFuelTemp(G[5].L, G[5].Tr, 2), { lead_class: 'STRUCTURAL' });
+T('P1 STRUCTURAL trap renders with row', trapC.includes('STRUCTURAL-LEADER TRAP') && trapC.includes('the pass shape (POR@CHI rule)'));
+T('P1 trap absent without row', !cautionFn(S.computeFuelTemp(G[5].L, G[5].Tr, 2)).includes('STRUCTURAL-LEADER TRAP'));
+T('P1 trap absent on VOLATILE class', !cautionFn(S.computeFuelTemp(G[5].L, G[5].Tr, 2), { lead_class: 'VOLATILE' }).includes('STRUCTURAL-LEADER TRAP'));
+T('P1 trap coexists with earned caution (both pinned)', trapC.includes('EARNED-LEAD CAUTION'));
+T('P1 dashboard trap copy kernel mirrored in server source', POLL.includes('Structural leader = the pass shape (POR@CHI rule). Conscious override territory only'));
+T('P1 T+0 fact block wired at Stage 1b', POLL.includes('ACA P1 \u2014 T+0 FACT block') && /ssFuelTempLines\(ss\.fuelTemp, ss\.leaderAl, ss\.trailerAl, \{ lead_class: ss\.leadClass \}\)/.test(POLL));
+T('B1 breadcrumb fix in place (no push.body rebuild)', !POLL.includes("_pushBody = push.body + '\\n\\n' + _tcLine"));
+
 // ════════════════════════════════════════════════════════════════════════════
 // C2 — REGIME PULSE + REGIME STATE (post-game-agent.mjs digest copy pins)
 // ════════════════════════════════════════════════════════════════════════════
