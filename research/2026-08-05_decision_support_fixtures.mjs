@@ -173,6 +173,14 @@ const invTrap = cautionFn(S.computeFuelTemp(G[5].L, G[5].Tr, 2), { lead_class: '
 T('P3 traps regime-independent', invTrap.includes('STRUCTURAL-LEADER TRAP'));
 T('P3 healthy regime unchanged', cautionFn(S.computeFuelTemp(G[0].L, G[0].Tr, 2), null, 'HEALTHY').includes('toughest comeback shape'));
 
+// ── Time-conditioned CHANNEL NOTE (PM Aug 6; takeaway-decay study) ──
+const ft4 = S.computeFuelTemp(G[2].L, G[2].Tr, 4); // takeaway fuel at Q4
+T('kernel pre-Q4 unchanged', cautionFn(S.computeFuelTemp(G[2].L, G[2].Tr, 3), { clock: '7:00' }).includes('trailers converted ~85%'));
+T('kernel Q4-early tempered (+12pp form)', cautionFn(ft4, { clock: '8:00' }).includes('held ~+12pp') && !cautionFn(ft4, { clock: '8:00' }).includes('~85%'));
+T('kernel Q4-late number suspended', cautionFn(ft4, { clock: '2:22' }).includes('regression window is closed') && !cautionFn(ft4, { clock: '2:22' }).includes('pp'));
+T('kernel Q4 sub-minute clock = late form', cautionFn(ft4, { clock: '27.2' }).includes('regression window is closed'));
+T('kernel Q4 unknown clock degrades to late (conservative)', cautionFn(ft4, {}).includes('regression window is closed'));
+
 // ════════════════════════════════════════════════════════════════════════════
 // C2 — REGIME PULSE + REGIME STATE (post-game-agent.mjs digest copy pins)
 // ════════════════════════════════════════════════════════════════════════════

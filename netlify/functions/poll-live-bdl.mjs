@@ -5219,7 +5219,20 @@ function ssCautionLines(ft, row, regime) {
   // cross-cut-converged (see research/2026-08-06_fuel_temp_gap_map.md); a regime
   // flip (monthly pulse INVERTED) triggers a copy revisit for all (2026) lines.
   else if (ft.fuel === 'EARNED') t += '- EARNED-LEAD CAUTION (2026): no transient feed to regress — earned leads vs in-band better trailers converted only ~37% across three independent 2026 cuts, below what the live line charges. This season\'s pass shape. Context only, never a gate.\n';
-  if (ft.takeaway) t += '- CHANNEL NOTE (2026): the takeaway feed is the market-blind transient — the live line has under-priced takeaway-fed collapse all season (trailers converted ~85%, two independent cuts). Context only, never a gate.\n';
+  if (ft.takeaway) {
+    // Time-conditioned kernel (PM Aug 6; research/2026-08-06_takeaway_decay.md): the
+    // effect is a STEP function — intact through early Q4 (+11-12pp), dead inside 5:00.
+    // Clock from the caller's row (fire rows and the squeeze snapshot both carry it);
+    // unknown Q4 clock degrades CONSERVATIVELY to the late form.
+    var _cm = null;
+    if (row && row.clock != null) {
+      var _m = String(row.clock).match(/^(\d+):(\d+)/);
+      _cm = _m ? Number(_m[1]) + Number(_m[2]) / 60 : (isFinite(Number(row.clock)) ? Number(row.clock) / 60 : null);
+    }
+    if (Number(ft.period) < 4) t += '- CHANNEL NOTE (2026): the takeaway feed is the market-blind transient — the live line has under-priced takeaway-fed collapse all season (trailers converted ~85%, two independent cuts). Context only, never a gate.\n';
+    else if (_cm != null && _cm >= 5) t += '- CHANNEL NOTE (2026): the takeaway feed has held ~+12pp vs the market even into early Q4 this season — but the regression window is closing. Context only, never a gate.\n';
+    else t += '- CHANNEL NOTE (2026): takeaway feed present — but the regression window is closed this late; the effect has been market-priced inside 5:00 all season. Context only, never a gate.\n';
+  }
   return t;
 }
 function ssFuelTempLines(ft, leaderAl, trailerAl, row, regime) {
