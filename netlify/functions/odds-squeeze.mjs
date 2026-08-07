@@ -59,6 +59,63 @@ export const leaderBandOf = (efg, period) => {
   return efg >= b[1] ? 'red' : efg >= b[0] ? 'orange' : 'green';
 };
 export const trailerTempOf = (efg) => (efg == null || isNaN(efg) ? null : efg < TEMP_ABS.COLD ? 'cold' : efg > TEMP_ABS.HOT ? 'hot' : 'warm');
+// ═══ MIRRORS of poll-live-bdl (ACA P2b — one-consumer-definition; source-equality
+//     pinned in research/2026-07-23_squeeze_fixtures.mjs). Netlify bundles functions
+//     separately (no cross-require) — verbatim copies + fixture contract instead.
+
+function efgTier(efg, period) {
+  if (efg == null || isNaN(efg)) return { tier:'na', color:'var(--fg-dim)' };
+  var b = EFG_BANDS[period] || EFG_BANDS[4];
+  if (efg <= b[0]) return { tier:'green', color:'var(--green)' };
+  if (efg <= b[1]) return { tier:'orange', color:'var(--amber)' };
+  return { tier:'red', color:'var(--coral)' };
+}
+var FUELTEMP_TH = { POT_MIN: 6, THREE_SHARE: 40, VSHARE: 45, TO_CLEAN: 4, MIN_FGA: 12, TEMP_ABS_COLD: 45, TEMP_ABS_HOT: 55 };
+function computeFuelTemp(leaderStats, trailerStats, period) {
+  function _n(v) { v = Number(v); return isNaN(v) ? 0 : v; }
+  function _efg(s) { var fga = _n(s && s.fga); if (fga < FUELTEMP_TH.MIN_FGA) return null; return (_n(s.fgm) + 0.5 * _n(s.fg3m)) / fga * 100; }
+  var L = leaderStats || {}, T = trailerStats || {};
+  var lEfg = _efg(L), tEfg = _efg(T);
+  if (lEfg == null || tEfg == null) return { insufficient: true };
+  var lBand = efgTier(lEfg, period).tier, tBand = efgTier(tEfg, period).tier;
+  var lPts = 2 * _n(L.fgm) + _n(L.fg3m) + _n(L.ftm);
+  var threeShare = lPts > 0 ? (3 * _n(L.fg3m)) / lPts * 100 : 0;
+  var vShare = (L.vShare != null && !isNaN(Number(L.vShare))) ? Number(L.vShare) : null;
+  var heat = lBand === 'red' || threeShare >= FUELTEMP_TH.THREE_SHARE || (vShare != null && vShare > FUELTEMP_TH.VSHARE);
+  var takeaway = _n(L.pot) >= FUELTEMP_TH.POT_MIN;
+  var fuel = heat && takeaway ? 'TRANSIENT (heat + takeaway)' : heat ? 'TRANSIENT (heat)' : takeaway ? 'TRANSIENT (takeaway)' : 'EARNED';
+  // F4 (Aug 6): displayed temp = ABSOLUTE bands (period bands made "59% eFG" read
+  // cold at Q4). STICKY keeps its v1 period-band-cold input by design - the abs-cold
+  // sticky failed its pre-registered re-cut bar (research/2026-08-06 map addendum).
+  var temp = tEfg < FUELTEMP_TH.TEMP_ABS_COLD ? 'cold' : tEfg > FUELTEMP_TH.TEMP_ABS_HOT ? 'hot' : 'warm';
+  var sticky = fuel === 'EARNED' && tBand === 'green' && _n(T.to) < FUELTEMP_TH.TO_CLEAN;
+  return { insufficient: false, fuel: fuel, heat: heat, takeaway: takeaway, temp: temp, sticky: sticky,
+    leaderEfg: Math.round(lEfg * 10) / 10, leaderBand: lBand, trailerEfg: Math.round(tEfg * 10) / 10, trailerBand: tBand,
+    threeShare: Math.round(threeShare), vShare: vShare != null ? Math.round(vShare) : null,
+    pot: _n(L.pot), trailerTo: _n(T.to), period: period };
+}
+function ssCautionLines(ft, row, regime) {
+  if (!ft || ft.insufficient) return '';
+  var t = '';
+  // ACA P1 — trap parity: framework rules pinned here render on ALL surfaces (mechanical
+  // push, narration prompt, post-model append). Copy kernel mirrors the dashboard trap.
+  if (row && row.lead_class === 'STRUCTURAL') t += '- \u26a0 STRUCTURAL-LEADER TRAP: Structural leader = the pass shape (POR@CHI rule). Conscious override territory only \u2014 probe size (CHI@DAL convention).\n';
+  // ACA P3 — regime tripwire: INVERTED suspends the numeric (2026) season-stat lines
+  // (client STICKY chip precedent). Traps above are framework rules — regime-independent.
+  if (regime === 'INVERTED') {
+    if (ft.sticky) t += '- LEAD SHAPE: earned + cold, clean trailer (' + ft.trailerTo + ' turnovers). (2026 season-stat lines suspended: regime pulse INVERTED.)\n';
+    else if (ft.fuel === 'EARNED') t += '- LEAD NOTE: earned lead \u2014 no transient feed to regress. (2026 season-stat lines suspended: regime pulse INVERTED.)\n';
+    if (ft.takeaway) t += '- CHANNEL NOTE: takeaway feed present. (2026 season-stat lines suspended: regime pulse INVERTED.)\n';
+    return t;
+  }
+  if (ft.sticky) t += '- STICKY LEAD SHAPE (2026): earned lead against a cold, clean trailer (' + ft.trailerTo + ' turnovers) — this season\'s toughest comeback shape. Context only, never a gate.\n';
+  // Copy v1.2 (Aug 6, PM-approved): season-stat context lines. Numbers are
+  // cross-cut-converged (see research/2026-08-06_fuel_temp_gap_map.md); a regime
+  // flip (monthly pulse INVERTED) triggers a copy revisit for all (2026) lines.
+  else if (ft.fuel === 'EARNED') t += '- EARNED-LEAD CAUTION (2026): no transient feed to regress — earned leads vs in-band better trailers converted only ~37% across three independent 2026 cuts, below what the live line charges. This season\'s pass shape. Context only, never a gate.\n';
+  if (ft.takeaway) t += '- CHANNEL NOTE (2026): the takeaway feed is the market-blind transient — the live line has under-priced takeaway-fed collapse all season (trailers converted ~85%, two independent cuts). Context only, never a gate.\n';
+  return t;
+}
 export const efgFromRaw = (t) => {
   const fga = Number(t?.fga) || 0; if (fga < 1) return null;
   return ((Number(t?.fgm) || 0) + 0.5 * (Number(t?.fg3m) || 0)) / fga * 100;
@@ -380,7 +437,7 @@ async function disarm(sql, w, why) {
 }
 
 // ── alert copy (pinned in fixtures; plain English; never a directive) ──
-export function composeSqueeze({ trailer, leader, price, book, threshold, cellRate, cellName, deficit, period, clock, leaderEfg, leaderBand, leaderVar, trailerEfg, trailerTemp = null, asOf = null, capLine, shopLine, stale, oobGrace = false, resumedAt = null, posLine = null }) {
+export function composeSqueeze({ trailer, leader, price, book, threshold, cellRate, cellName, deficit, period, clock, leaderEfg, leaderBand, leaderVar, trailerEfg, trailerTemp = null, asOf = null, capLine, shopLine, stale, oobGrace = false, resumedAt = null, posLine = null, shapeLine = null, cautionBlock = null }) {
   const imp = Math.round(implied(price) * 100);
   const cushion = cellRate ? `${cellRate - imp >= 0 ? '+' : ''}${cellRate - imp}pp` : 'n/a';
   const title = `JUICE: ${trailer} ${fmtOdds(price)} (${BOOK_NAMES[book] || book})`; // brand word (PM Jul 28); internals keep 'squeeze'
@@ -401,6 +458,7 @@ export function composeSqueeze({ trailer, leader, price, book, threshold, cellRa
     stateLine,
   ];
   if (posLine) lines.push(posLine);
+  if (shapeLine) lines.push(shapeLine); // ACA P2b — live shape confirmation vs fire
   if (resumedAt) lines.push(`Back in band since Q${resumedAt.period} ${resumedAt.clock}.`);
   if (stale) lines.push('Live eFG read unavailable (no snapshot).');
   else {
@@ -410,6 +468,7 @@ export function composeSqueeze({ trailer, leader, price, book, threshold, cellRa
       lines.push(`${trailer} own: ${trailerEfg}% eFG (${trailerTemp}) - ${read}.`);
     }
   }
+  if (cautionBlock) lines.push(cautionBlock.trim()); // ACA P2b — pinned kernels (one copy source)
   if (shopLine) lines.push(`Best: ${shopLine}.`);
   lines.push(`Tap opens: ${BOOK_NAMES[book] || book} slip.`);
   lines.push(`${capLine} Your read - not a directive.`);
@@ -425,7 +484,7 @@ async function pushSqueezeAlert(sql, w, g, deficit, best, shopLine, oobGrace = f
   //       the exact fire moment — now: always use the latest snapshot, label age instead;
   //   (c) ss_leader_* consumed without checking ss_leader_alias against the row anchor
   //       (verdict-strip D-7/D-8 bug class) — now guarded, with raw-key fallback.
-  let leaderEfg = null, leaderBand = null, leaderVar = null, trailerEfg = null, trailerTemp = null, asOf = null, stale = true;
+  let leaderEfg = null, leaderBand = null, leaderVar = null, trailerEfg = null, trailerTemp = null, asOf = null, stale = true, shapeLine = null, cautionBlock = null;
   try {
     const snap = (await sql`SELECT ts, period, clock, ss_leader_alias, ss_leader_efg, ss_leader_efg_band, ss_variance_share, raw_stats_json
       FROM snapshots WHERE game_id = ${w.game_id} ORDER BY ts DESC LIMIT 1`)[0];
@@ -442,6 +501,28 @@ async function pushSqueezeAlert(sql, w, g, deficit, best, shopLine, oobGrace = f
       }
       const te = efgFromRaw(sideOf(w.trailer_alias));
       if (te != null) { trailerEfg = Math.round(te); trailerTemp = trailerTempOf(te); }
+      // ACA P2b (PM Aug 6) — SHAPE CONFIRMATION: the shape is the decision variable and
+      // it can flip between fire and juice (LA@MIN went earned-sticky -> two lead changes).
+      // Live computeFuelTemp at juice time + fire-stamp comparison + pinned caution kernels.
+      try {
+        const _L = { ...(sideOf(w.leader_alias) || {}) };
+        _L.pot = _L.pot_v2 != null ? _L.pot_v2 : _L.pot;
+        if (snap.ss_leader_alias === w.leader_alias && snap.ss_variance_share != null) _L.vShare = Number(snap.ss_variance_share);
+        const _T = { ...(sideOf(w.trailer_alias) || {}) };
+        _T.pot = _T.pot_v2 != null ? _T.pot_v2 : _T.pot;
+        const _ftNow = computeFuelTemp(_L, _T, Number(snap.period) || 4);
+        if (_ftNow && !_ftNow.insufficient) {
+          shapeLine = `SHAPE NOW (Q${snap.period} ${snap.clock || ''}): ${_ftNow.fuel} - trailer ${_ftNow.temp}${_ftNow.sticky ? ' [STICKY]' : ''}.`;
+          const _ff = w._fuelTemp; // fire-time stamp (already parsed by the arm loop)
+          if (_ff && !_ff.insufficient) {
+            const _changed = _ff.fuel !== _ftNow.fuel || !!_ff.sticky !== !!_ftNow.sticky;
+            shapeLine += _changed
+              ? ` At fire: ${_ff.fuel} - trailer ${_ff.temp}${_ff.sticky ? ' [STICKY]' : ''} - SHAPE HAS CHANGED.`
+              : ' Unchanged since fire.';
+          }
+          cautionBlock = ssCautionLines(_ftNow) || null;
+        }
+      } catch (e) { /* non-fatal — juice goes out without the shape read */ }
     }
   } catch (e) { log(`snap ctx fail ${e.message}`); }
   const killer = !!w.leader_killer;
@@ -460,7 +541,7 @@ async function pushSqueezeAlert(sql, w, g, deficit, best, shopLine, oobGrace = f
     trailer: w.trailer_alias, leader: w.leader_alias, price: best.price, book: best.book,
     threshold: w.squeeze_threshold, cellRate: killer ? 67 : 53, cellName: killer ? 'killer cell' : 'no-scalp cell',
     deficit, period: g.period, clock: g.clock, leaderEfg, leaderBand, leaderVar, trailerEfg, trailerTemp, asOf,
-    capLine, shopLine, stale, oobGrace, resumedAt, posLine,
+    capLine, shopLine, stale, oobGrace, resumedAt, posLine, shapeLine, cautionBlock,
   });
   await sendNtfy(title, body, 5, best.link);
 }

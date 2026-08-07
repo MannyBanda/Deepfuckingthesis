@@ -89,7 +89,26 @@ ok('no position line when absent', !A.body.includes('ADD against the same positi
   ok('placeholder capLine retired', !sq.includes('Cap per tier rules'));
   ok('arm SELECT carries subtype + trailer_lane', sq.includes('sa.alert_subtype, sa.trailer_lane'));
   ok('fire-site lane stamp wired into INSERT', pl.includes('trailer_lane)') && pl.includes('ACA P2 \u2014 OVERRIDE_LANE trailer stamp'));
+  // ── ACA P2b: shape-confirmation mirror contracts (verbatim source equality) ──
+  const fnOf = (src, name) => {
+    const i = src.indexOf(`function ${name}(`); if (i < 0) return null;
+    let d = 0, j = src.indexOf('{', src.indexOf(')', i));
+    for (; j < src.length; j++) { if (src[j] === '{') d++; else if (src[j] === '}') { d--; if (!d) { j++; break; } } }
+    return src.slice(i, j);
+  };
+  for (const nm of ['computeFuelTemp', 'ssCautionLines', 'efgTier'])
+    ok(`${nm} mirror contract (squeeze == poll)`, fnOf(sq, nm) !== null && fnOf(sq, nm) === fnOf(pl, nm));
+  ok('FUELTEMP_TH mirror contract', (sq.match(/var FUELTEMP_TH = \{[^}]*\}/) || [''])[0] !== '' && (sq.match(/var FUELTEMP_TH = \{[^}]*\}/) || [''])[0] === (pl.match(/var FUELTEMP_TH = \{[^}]*\}/) || ['x'])[0]);
 }
+
+// P2b compose pins
+const SH = composeSqueeze({ ...base, shapeLine: 'SHAPE NOW (Q3 4:12): EARNED - trailer cold [STICKY]. Unchanged since fire.',
+  cautionBlock: '- STICKY LEAD SHAPE (2026): earned lead against a cold, clean trailer (3 turnovers) \u2014 this season\'s toughest comeback shape. Context only, never a gate.\n' });
+ok('P2b shape line renders', SH.body.includes('SHAPE NOW (Q3 4:12): EARNED - trailer cold [STICKY]. Unchanged since fire.'));
+ok('P2b caution kernel renders before shop line', SH.body.indexOf('STICKY LEAD SHAPE (2026)') > -1 && SH.body.indexOf('STICKY LEAD SHAPE (2026)') < SH.body.indexOf('Best:'));
+const SH2 = composeSqueeze({ ...base, shapeLine: 'SHAPE NOW (Q4 2:22): TRANSIENT (heat) - trailer warm. At fire: EARNED - trailer cold [STICKY] - SHAPE HAS CHANGED.' });
+ok('P2b shape-changed variant renders', SH2.body.includes('SHAPE HAS CHANGED'));
+ok('P2b absent when null', !A.body.includes('SHAPE NOW'));
 
 // ── dynamic A-tier threshold (spec §4 dynamic mode, activated 7/28) ──
 ok('probToAmerican .65 = -186', probToAmerican(0.65) === -186);
