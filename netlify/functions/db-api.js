@@ -637,6 +637,7 @@ exports.handler = async (event) => {
       // ALTERs; never added to existing SELECTs on polling paths)
       await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS leader_killer BOOLEAN`;
       await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS leader_scalps INT`;
+      await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS trailer_lane BOOLEAN`; // ACA P2
 
       // ── TEAM_PROFILES_SPEC §3b — computed nightly, one row per team-season ──
       await sql`CREATE TABLE IF NOT EXISTS team_profiles (

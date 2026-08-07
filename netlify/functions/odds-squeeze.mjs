@@ -380,7 +380,7 @@ async function disarm(sql, w, why) {
 }
 
 // ── alert copy (pinned in fixtures; plain English; never a directive) ──
-export function composeSqueeze({ trailer, leader, price, book, threshold, cellRate, cellName, deficit, period, clock, leaderEfg, leaderBand, leaderVar, trailerEfg, trailerTemp = null, asOf = null, capLine, shopLine, stale, oobGrace = false, resumedAt = null }) {
+export function composeSqueeze({ trailer, leader, price, book, threshold, cellRate, cellName, deficit, period, clock, leaderEfg, leaderBand, leaderVar, trailerEfg, trailerTemp = null, asOf = null, capLine, shopLine, stale, oobGrace = false, resumedAt = null, posLine = null }) {
   const imp = Math.round(implied(price) * 100);
   const cushion = cellRate ? `${cellRate - imp >= 0 ? '+' : ''}${cellRate - imp}pp` : 'n/a';
   const title = `JUICE: ${trailer} ${fmtOdds(price)} (${BOOK_NAMES[book] || book})`; // brand word (PM Jul 28); internals keep 'squeeze'
@@ -390,10 +390,17 @@ export function composeSqueeze({ trailer, leader, price, book, threshold, cellRa
     : oobGrace
       ? `${trailer} down ${deficit}, Q${period} ${clock} (out of band - grace read).`
       : `${trailer} down ${deficit}, Q${period} ${clock}.`;
+  // ACA P2 / F5 — cushion provenance gate: fire-state cell rates are averages over all
+  // continuations from the FIRE state; by Q4 the live path has spent most of that
+  // information (LA@MIN row-1197 lesson: '+13pp cushion' quoted at Q4 2:22 was dishonest).
+  const cushionLine = period >= 4
+    ? `Price hit your ${fmtOdds(threshold)} line. Fire-state cell rates no longer apply this late - the market re-price is the honest read. Q4 re-entry recipe: down <=3, >=5:00 left, >=+200.`
+    : `Price hit your ${fmtOdds(threshold)} line. Implied ${imp}% vs ${cellName} ${cellRate ?? '?'}% (${cushion}).`;
   const lines = [
-    `Price hit your ${fmtOdds(threshold)} line. Implied ${imp}% vs ${cellName} ${cellRate ?? '?'}% (${cushion}).`,
+    cushionLine,
     stateLine,
   ];
+  if (posLine) lines.push(posLine);
   if (resumedAt) lines.push(`Back in band since Q${resumedAt.period} ${resumedAt.clock}.`);
   if (stale) lines.push('Live eFG read unavailable (no snapshot).');
   else {
@@ -438,11 +445,22 @@ async function pushSqueezeAlert(sql, w, g, deficit, best, shopLine, oobGrace = f
     }
   } catch (e) { log(`snap ctx fail ${e.message}`); }
   const killer = !!w.leader_killer;
+  // ACA P2 — real tier caps at the decision point (was a literal placeholder), lane-aware
+  const capLine = w.alert_subtype === 'EFG_FADE' ? '$1,400 cap (A-tier). Staged adds = one position vs cap.'
+    : (w.alert_subtype === 'EFG_FADE_SOFT' || /^B\d$/.test(w.alert_subtype || '')) ? '$600 cap (B-tier). Staged adds = one position vs cap.'
+    : w.trailer_lane ? '$300 cap - LANE team: $600 if declared before entry. Staged adds = one position vs cap.'
+    : '$300 cap (WATCHLIST). Staged adds = one position vs cap.';
+  // ACA P2 — open-position awareness (isolated SELECT; only sees bets logged at entry)
+  let posLine = null;
+  try {
+    const _ob = (await sql`SELECT side, stake, odds FROM bets WHERE game_id = ${w.game_id} AND result = 'PENDING' ORDER BY id DESC LIMIT 1`)[0];
+    if (_ob) posLine = `You hold ${_ob.side} $${_ob.stake} @ ${Number(_ob.odds) > 0 ? '+' + _ob.odds : _ob.odds} - this alert is an ADD against the same position cap.`;
+  } catch (e) { /* non-fatal */ }
   const { title, body } = composeSqueeze({
     trailer: w.trailer_alias, leader: w.leader_alias, price: best.price, book: best.book,
     threshold: w.squeeze_threshold, cellRate: killer ? 67 : 53, cellName: killer ? 'killer cell' : 'no-scalp cell',
     deficit, period: g.period, clock: g.clock, leaderEfg, leaderBand, leaderVar, trailerEfg, trailerTemp, asOf,
-    capLine: `Cap per tier rules.`, shopLine, stale, oobGrace, resumedAt,
+    capLine, shopLine, stale, oobGrace, resumedAt, posLine,
   });
   await sendNtfy(title, body, 5, best.link);
 }
@@ -468,7 +486,7 @@ async function autoArm(sql) {
 
 async function loadWatches(sql) {
   const rows = await sql`
-    SELECT sa.id, sa.game_id, sa.leader_alias, sa.trailer_alias, sa.leader_killer,
+    SELECT sa.id, sa.game_id, sa.leader_alias, sa.trailer_alias, sa.leader_killer, sa.alert_subtype, sa.trailer_lane,
            sa.squeeze_threshold, sa.squeeze_last_alert_price, sa.squeeze_alert_count,
            sa.squeeze_expires_at, sa.squeeze_state, sa.player_ctx_json, sa.line_used,
            g.home_alias AS _home, g.away_alias AS _away

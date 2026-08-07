@@ -875,18 +875,35 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
     await ensureTeamCtx(sql, league);
     const _kProf = (typeof _teamCtxMap === 'object' && _teamCtxMap) ? _teamCtxMap[ss.leaderAl] : null;
     const _kk = _kProf && _kProf.profile && _kProf.profile.killer ? _kProf.profile.killer : null;
+    // ACA P2 — OVERRIDE_LANE trailer stamp: computed from internal def-A tiers ONLY
+    // (KILLER_FLAG_SPEC §7: def-A never surfaces as labels — this stamp is a boolean).
+    // Rule (OVERRIDE_LANE_SPEC): trailer wp >= .600 AND schedule inflation < 0 AND >= 5
+    // vs-top games. Same cache, same NULL-degrade as _kk.
+    let _ln = null;
+    try {
+      const _lProf = (typeof _teamCtxMap === 'object' && _teamCtxMap) ? _teamCtxMap[ss.trailerAl] : null;
+      const _lt = _lProf && _lProf.profile && _lProf.profile.tiers ? _lProf.profile.tiers : null;
+      if (_lt && _lt.top && _lt.rest) {
+        const _tn = (_lt.top.w || 0) + (_lt.top.l || 0), _rn = (_lt.rest.w || 0) + (_lt.rest.l || 0);
+        if (_tn >= 5 && _rn > 0) {
+          const _wp = ((_lt.top.w || 0) + (_lt.rest.w || 0)) / (_tn + _rn);
+          const _infl = ((_lt.rest.w || 0) / _rn) - ((_lt.top.w || 0) / _tn);
+          _ln = _wp >= 0.600 && _infl < 0;
+        }
+      }
+    } catch (e) { _ln = null; }
     let inserted;
     try {
       inserted = await sql`
         INSERT INTO sweetspot_alerts (game_id, league, alert_subtype, alert_tier, period, clock,
           leader_alias, trailer_alias, leader_wp, trailer_wp, quality_gap, leader_efg, leader_efg_band,
           variance_share, lead_class, fade_tier, collapse_tier, collapse_true, deficit, margin,
-          line_used, line_consensus, implied, edge, kelly_size, ntfy_sent, leader_killer, leader_scalps)
+          line_used, line_consensus, implied, edge, kelly_size, ntfy_sent, leader_killer, leader_scalps, trailer_lane)
         VALUES (${game.id}, ${league}, ${ss.subtype}, ${ss.tier}, ${ss.period}, ${ss.clock},
           ${ss.leaderAl}, ${ss.trailerAl}, ${ss.leaderWP}, ${ss.trailerWP}, ${ss.gap}, ${ss.leaderEfg}, ${ss.leaderBand},
           ${ss.varShare}, ${ss.leadClass}, ${ss.fadeTier}, ${ss.collapseTier}, ${ss.collapseTrue}, ${ss.margin}, ${ss.margin},
           ${ss.bestML != null ? parseInt(ss.bestML) : null}, ${ss.consensusML != null ? parseInt(ss.consensusML) : null},
-          ${ss.impliedBest}, ${ss.edge}, ${ss.kellySize}, ${!ss.ledgerOnly}, ${_kk ? _kk.flag : null}, ${_kk ? _kk.scalps : null})
+          ${ss.impliedBest}, ${ss.edge}, ${ss.kellySize}, ${!ss.ledgerOnly}, ${_kk ? _kk.flag : null}, ${_kk ? _kk.scalps : null}, ${_ln})
         ON CONFLICT (game_id, alert_subtype) DO NOTHING
         RETURNING id`;
     } catch (e) { log(`${aA}@${hA}: sweetspot insert failed: ${e.message}`); return; }

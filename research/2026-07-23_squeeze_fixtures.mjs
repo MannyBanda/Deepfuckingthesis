@@ -72,6 +72,25 @@ ok('G negative cushion prints honestly', G.body.includes('(-8pp)') || G.body.inc
 ok('A tap-opens line', A.body.includes('Tap opens: Caesars slip.'));
 ok('B tap-opens best book', B.body.includes('Tap opens: FanDuel slip.'));
 
+// ── ACA P2 (Aug 6): F5 cushion gate + real capLines + open-position line ──
+const Q4 = composeSqueeze({ ...base, period:4, clock:'2:22' });
+ok('F5: Q4 replaces cushion with provenance-honest line', Q4.body.includes('Fire-state cell rates no longer apply this late') && Q4.body.includes('Q4 re-entry recipe: down <=3, >=5:00 left, >=+200') && !Q4.body.includes('vs killer cell 67%'));
+ok('F5: Q3 keeps the cushion', A.body.includes('vs killer cell 67%'));
+const CAPS = { a:'$1,400 cap (A-tier). Staged adds = one position vs cap.', b:'$600 cap (B-tier). Staged adds = one position vs cap.',
+  lane:'$300 cap - LANE team: $600 if declared before entry. Staged adds = one position vs cap.', w:'$300 cap (WATCHLIST). Staged adds = one position vs cap.' };
+ok('capLine renders verbatim in body', composeSqueeze({ ...base, capLine:CAPS.lane }).body.includes(CAPS.lane));
+const POS = composeSqueeze({ ...base, posLine:'You hold MIN $300 @ +195 - this alert is an ADD against the same position cap.' });
+ok('open-position ADD line renders', POS.body.includes('this alert is an ADD against the same position cap'));
+ok('no position line when absent', !A.body.includes('ADD against the same position cap'));
+// source-level: placeholder capLine retired; lane stamp + column wired
+{
+  const sq = readFileSync('netlify/functions/odds-squeeze.mjs','utf8');
+  const pl = readFileSync('netlify/functions/poll-live-bdl.mjs','utf8');
+  ok('placeholder capLine retired', !sq.includes('Cap per tier rules'));
+  ok('arm SELECT carries subtype + trailer_lane', sq.includes('sa.alert_subtype, sa.trailer_lane'));
+  ok('fire-site lane stamp wired into INSERT', pl.includes('trailer_lane)') && pl.includes('ACA P2 \u2014 OVERRIDE_LANE trailer stamp'));
+}
+
 // ── dynamic A-tier threshold (spec §4 dynamic mode, activated 7/28) ──
 ok('probToAmerican .65 = -186', probToAmerican(0.65) === -186);
 ok('probToAmerican .45 = +122', probToAmerican(0.45) === 122);
