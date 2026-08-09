@@ -111,7 +111,7 @@ Other Netlify env vars: `DATABASE_URL`, `NTFY_TOPIC` (manny_nba_control), `ODDS_
 
 ### GitHub PAT
 
-`github_pat_11AEAFZZA0…` — REDACTED in this repo copy (GitHub push protection); the full token lives in the project-settings copy of this doc, which is the copy Claude reads at session start. (Fine-grained, Contents read/write, scoped to Deepfuckingthesis, issued Jul 2, 2026 — replaced the original PAT which expired on schedule Jul 2, 2026). Git config: user MannyBanda, remote uses x-access-token auth. Clone to `/home/claude/dft`, pull --rebase before push.
+`github_pat_11AEAFZZA0th…` — REDACTED in this repo copy (GitHub push protection); the full token lives in the project-settings copy of this doc, which is the copy Claude reads at session start. (Fine-grained, Contents read/write, scoped to Deepfuckingthesis, issued Aug 6, 2026 — replaced the Jul 2, 2026 PAT). Git config: user MannyBanda, remote uses x-access-token auth. Clone to `/home/claude/dft`, pull --rebase before push.
 
 ### Claude Sandbox Network Access
 
