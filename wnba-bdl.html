@@ -4266,6 +4266,42 @@ async function fetchPBPFromDB(gameId,force){
 // DS v1.1 B — AT FIRE stamp text for closed cards. PURE (fixture-extracted).
 // Renders the FIRE-TIME read only — a live-computed temp read of a final box is
 // period-relative machinery applied where it means nothing (no fake reads).
+// MIRROR of poll-live-bdl ssCautionLines (source-equality pinned in decision_support fixtures)
+function ssCautionLines(ft, row, regime) {
+  if (!ft || ft.insufficient) return '';
+  var t = '';
+  // ACA P1 — trap parity: framework rules pinned here render on ALL surfaces (mechanical
+  // push, narration prompt, post-model append). Copy kernel mirrors the dashboard trap.
+  if (row && row.lead_class === 'STRUCTURAL') t += '- \u26a0 STRUCTURAL-LEADER TRAP: Structural leader = the pass shape (POR@CHI rule). Conscious override territory only \u2014 probe size (CHI@DAL convention).\n';
+  // ACA P3 — regime tripwire: INVERTED suspends the numeric (2026) season-stat lines
+  // (client STICKY chip precedent). Traps above are framework rules — regime-independent.
+  if (regime === 'INVERTED') {
+    if (ft.sticky) t += '- LEAD SHAPE: earned + cold, clean trailer (' + ft.trailerTo + ' turnovers). (2026 season-stat lines suspended: regime pulse INVERTED.)\n';
+    else if (ft.fuel === 'EARNED') t += '- LEAD NOTE: earned lead \u2014 no transient feed to regress. (2026 season-stat lines suspended: regime pulse INVERTED.)\n';
+    if (ft.takeaway) t += '- CHANNEL NOTE: takeaway feed present. (2026 season-stat lines suspended: regime pulse INVERTED.)\n';
+    return t;
+  }
+  if (ft.sticky) t += '- STICKY LEAD SHAPE (2026): earned lead against a cold, clean trailer (' + ft.trailerTo + ' turnovers) — this season\'s toughest comeback shape. Context only, never a gate.\n';
+  // Copy v1.2 (Aug 6, PM-approved): season-stat context lines. Numbers are
+  // cross-cut-converged (see research/2026-08-06_fuel_temp_gap_map.md); a regime
+  // flip (monthly pulse INVERTED) triggers a copy revisit for all (2026) lines.
+  else if (ft.fuel === 'EARNED') t += '- EARNED-LEAD CAUTION (2026): no transient feed to regress — earned leads vs in-band better trailers converted only ~37% across three independent 2026 cuts, below what the live line charges. This season\'s pass shape. Context only, never a gate.\n';
+  if (ft.takeaway) {
+    // Time-conditioned kernel (PM Aug 6; research/2026-08-06_takeaway_decay.md): the
+    // effect is a STEP function — intact through early Q4 (+11-12pp), dead inside 5:00.
+    // Clock from the caller's row (fire rows and the squeeze snapshot both carry it);
+    // unknown Q4 clock degrades CONSERVATIVELY to the late form.
+    var _cm = null;
+    if (row && row.clock != null) {
+      var _m = String(row.clock).match(/^(\d+):(\d+)/);
+      _cm = _m ? Number(_m[1]) + Number(_m[2]) / 60 : (isFinite(Number(row.clock)) ? Number(row.clock) / 60 : null);
+    }
+    if (Number(ft.period) < 4) t += '- CHANNEL NOTE (2026): the takeaway feed is the market-blind transient — the live line has under-priced takeaway-fed collapse all season (trailers converted ~85%, two independent cuts). Context only, never a gate.\n';
+    else if (_cm != null && _cm >= 5) t += '- CHANNEL NOTE (2026): the takeaway feed has held ~+12pp vs the market even into early Q4 this season — but the regression window is closing. Context only, never a gate.\n';
+    else t += '- CHANNEL NOTE (2026): takeaway feed present — but the regression window is closed this late; the effect has been market-priced inside 5:00 all season. Context only, never a gate.\n';
+  }
+  return t;
+}
 function ssFuelStampText(ft,period,clock){
   if(!ft||ft.insufficient)return null;
   var t='AT FIRE (Q'+period+(clock?' '+clock:'')+'): '+ft.fuel+' \u00b7 trailer '+ft.temp;
@@ -4321,9 +4357,15 @@ function renderFuelTempBlock(cs,sn,gm,hA,aA,fuelAtFire,rowTrailer){
     html+=_hrInv
       ?'<div style="margin-top:3px;color:var(--fg-dim)">HOLDER READ \u2014 '+esc(ldAl)+' leads on '+esc(ft.fuel)+' fuel (2026 season-stat lines suspended: regime INVERTED).</div>'
       :ft.fuel==='EARNED'
-      ?'<div style="margin-top:3px;color:var(--green)">HOLDER READ \u2014 '+esc(ldAl)+' leads EARNED \u2014 this season\u2019s strongest hold shape. (2026)</div>'
-      :'<div style="margin-top:3px;color:var(--amber)">\u26a0 HOLDER READ \u2014 '+esc(ldAl)+' leads on TRANSIENT fuel: quality leads on transient fuel gave it back ~24% this season, market-priced \u2014 hold/exit territory, not comfort. (2026)</div>';
+      ?'<div style="margin-top:3px;color:var(--green)">HOLDER READ \u2014 '+esc(ldAl)+' leads EARNED \u2014 no transient feed to give back. (2026)</div>'
+      :'<div style="margin-top:3px;color:var(--amber)">\u26a0 HOLDER READ \u2014 '+esc(ldAl)+' leads on TRANSIENT fuel: quality leads on transient fuel gave it back ~24% this season, market-priced \u2014 hold/exit territory, not comfort. (2026; time-stable across all six buckets)</div>';
   }
+  // Dashboard parity (Aug 6): pinned caution kernels render here from the SAME mirrored
+  // source as alerts — no trap line (the verdict box owns it on this surface).
+  try{
+    var _ck=ssCautionLines(ft,{clock:(sn&&sn.clock)||null},(_ssLedgerCache&&_ssLedgerCache._regime)||null);
+    if(_ck)_ck.trim().split('\n').forEach(function(l){if(l&&l.indexOf('STRUCTURAL-LEADER TRAP')<0)html+='<div style="margin-top:3px;color:var(--fg-dim)">'+esc(l)+'</div>';});
+  }catch(e){/* degrade */}
   if(ft.sticky){
     // regime tripwire (Component 2): INVERTED auto-degrades the chip to neutral wording
     var inv=_ssLedgerCache&&_ssLedgerCache._regime==='INVERTED';

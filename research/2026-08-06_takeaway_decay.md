@@ -43,3 +43,15 @@ Q4 clock degrades conservatively to the late form. Clock rides the existing row 
 **Multiplicity record:** recipe, buckets, hypotheses, and primary metric pre-registered
 in chat before the cut; H2 rejected and reported; regime label 2026 on all numbers;
 monthly pulse remains the watchdog. Script: research/2026-08-06_takeaway_decay.mjs.
+
+## ADDENDUM — HOLDER READ six-bucket giveback cut + dashboard parity ship (same day)
+Population = the HOLDER READ surface (gap ≤ −.15, transient lead), n=250, same recipe.
+Giveback by bucket: 28/19/19/26/25/19% vs market 25/23/24/25/23/20% — **flat and
+market-priced in every bucket** (edges −5 to +3 = noise). The ~24% claim is time-robust;
+no conditioning needed — copy tagged "(time-stable across all six buckets)."
+Honesty catch: EARNED leads in this population give back 21% (n=19) vs transient ~22% —
+indistinguishable — so the green HOLDER READ superlative ("strongest hold shape")
+overclaimed for the below-bar holder context; softened to the mechanism statement
+("no transient feed to give back"). Client gained a verbatim ssCautionLines mirror
+(source-equality pinned) rendering the same time-conditioned kernels as alerts; trap
+line excluded on the dashboard (the verdict box owns it there).

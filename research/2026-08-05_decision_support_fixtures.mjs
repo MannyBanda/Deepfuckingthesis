@@ -181,6 +181,18 @@ T('kernel Q4-late number suspended', cautionFn(ft4, { clock: '2:22' }).includes(
 T('kernel Q4 sub-minute clock = late form', cautionFn(ft4, { clock: '27.2' }).includes('regression window is closed'));
 T('kernel Q4 unknown clock degrades to late (conservative)', cautionFn(ft4, {}).includes('regression window is closed'));
 
+// ── Dashboard parity (Aug 6): client ssCautionLines mirror + holder-read honesty ──
+const fnOfSrc = (src, name) => {
+  const i = src.indexOf(`function ${name}(`); if (i < 0) return null;
+  let d = 0, j = src.indexOf('{', src.indexOf(')', i));
+  for (; j < src.length; j++) { if (src[j] === '{') d++; else if (src[j] === '}') { d--; if (!d) { j++; break; } } }
+  return src.slice(i, j);
+};
+T('client ssCautionLines mirror contract (source-identical)', fnOfSrc(CLIENT, 'ssCautionLines') !== null && fnOfSrc(CLIENT, 'ssCautionLines') === fnOfSrc(POLL, 'ssCautionLines'));
+T('client renders kernels sans trap (verdict box owns it)', CLIENT.includes("indexOf('STRUCTURAL-LEADER TRAP')<0"));
+T('holder read: earned superlative softened to mechanism', CLIENT.includes('no transient feed to give back. (2026)') && !CLIENT.includes('strongest hold shape'));
+T('holder read: transient number tagged time-stable', CLIENT.includes('time-stable across all six buckets'));
+
 // ════════════════════════════════════════════════════════════════════════════
 // C2 — REGIME PULSE + REGIME STATE (post-game-agent.mjs digest copy pins)
 // ════════════════════════════════════════════════════════════════════════════
