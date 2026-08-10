@@ -1922,6 +1922,42 @@ function computeAtCheckpoint(cpSnap, homeAlias, awayAlias) {
 
 // ── PHASE: COLLECT PBP ──────────────────────────────────────────────────────
 // Fetch BDL PBP for games missing it. Run via console auto-runner.
+// ── EXPORT STATES (Aug 10 2026, read-only) ───────────────────────────────────
+// Research-support endpoint: paginated per-game export of the CACHED sr_summary
+// per-period team stats. Zero SR API calls — reads Neon only. Powers the
+// small-N historical re-test program (sticky hold, fuel/temp cells, cold-leader
+// veto, eFG-bar cells). ?phase=export_states&offset=0&limit=60
+async function phaseExportStates(sql, url) {
+  const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10));
+  const limit = Math.min(80, Math.max(1, parseInt(url.searchParams.get('limit') || '60', 10)));
+  const rows = await sql`
+    SELECT game_id, season, date, home_alias, away_alias, home_score, away_score, winner, sr_summary
+    FROM wnba_backtest WHERE sr_summary IS NOT NULL
+    ORDER BY date, game_id LIMIT ${limit} OFFSET ${offset}
+  `;
+  const total = await sql`SELECT COUNT(*) AS n FROM wnba_backtest WHERE sr_summary IS NOT NULL`;
+  const pick = (p) => p ? {
+    pts: p.points ?? null, fgm: p.field_goals_made ?? null, fga: p.field_goals_att ?? null,
+    f3m: p.three_points_made ?? null, f3a: p.three_points_att ?? null,
+    ftm: p.free_throws_made ?? null, fta: p.free_throws_att ?? null,
+    to: p.turnovers ?? null, pot: p.points_off_turnovers ?? null,
+    oreb: p.offensive_rebounds ?? null, stl: p.steals ?? null,
+  } : null;
+  const games = rows.map((r) => {
+    const s = r.sr_summary || {};
+    const hp = s.home?.statistics?.periods || [];
+    const ap = s.away?.statistics?.periods || [];
+    return {
+      game_id: r.game_id, season: r.season, date: r.date,
+      home: r.home_alias, away: r.away_alias,
+      home_score: r.home_score, away_score: r.away_score, winner: r.winner,
+      home_periods: hp.map(pk => pick(pk.statistics || pk)),
+      away_periods: ap.map(pk => pick(pk.statistics || pk)),
+    };
+  });
+  return { phase: 'export_states', offset, limit, returned: games.length, total: Number(total[0].n), games };
+}
+
 async function phaseCollectPBP(sql, url) {
   // Ensure column exists
   await sql`ALTER TABLE wnba_backtest ADD COLUMN IF NOT EXISTS bdl_pbp JSONB`;
@@ -4317,6 +4353,7 @@ export default async (req) => {
       case 'report_close_game': result = await reportCloseGame(sql); break;
       case 'report_trailing_profile': result = await reportTrailingProfile(sql); break;
       case 'report_indicator_stability': result = await reportIndicatorStability(sql); break;
+      case 'export_states':     result = await phaseExportStates(sql, url); break;
       case 'collect_pbp':       result = await phaseCollectPBP(sql, url); break;
       case 'compute_checkpoints': result = await phaseComputeCheckpoints(sql); break;
       case 'report_cp_journey': result = await reportCPJourney(sql); break;
