@@ -1958,6 +1958,36 @@ async function phaseExportStates(sql, url) {
   return { phase: 'export_states', offset, limit, returned: games.length, total: Number(total[0].n), games };
 }
 
+// ── EXPORT CHECKPOINTS (Aug 10 2026, read-only) ──────────────────────────────
+// Runs reconstructCheckpoints on CACHED bdl_pbp server-side, returns compact
+// per-checkpoint box lines (incl. PBP-reconstructed POT). Zero external API
+// calls. 2.5-min granularity for the small-N historical re-test program.
+// ?phase=export_checkpoints&offset=0&limit=15
+async function phaseExportCheckpoints(sql, url) {
+  const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10));
+  const limit = Math.min(20, Math.max(1, parseInt(url.searchParams.get('limit') || '15', 10)));
+  const rows = await sql`
+    SELECT game_id, season, date, home_alias, away_alias, home_score, away_score, winner, bdl_pbp
+    FROM wnba_backtest WHERE bdl_pbp IS NOT NULL AND bdl_pbp != '[]'::jsonb
+    ORDER BY date, game_id LIMIT ${limit} OFFSET ${offset}
+  `;
+  const total = await sql`SELECT COUNT(*) AS n FROM wnba_backtest WHERE bdl_pbp IS NOT NULL AND bdl_pbp != '[]'::jsonb`;
+  const slim = (side) => ({ pts: null, fgm: side.fgm, fga: side.fga, f3m: side.fg3m, f3a: side.fg3a,
+    ftm: side.ftm, fta: side.fta, to: side.tov, pot: side.pot, oreb: side.oreb, stl: side.stl });
+  const games = rows.map((r) => {
+    let cps = [];
+    try {
+      const snaps = reconstructCheckpoints(r.bdl_pbp, r.home_alias, r.away_alias) || [];
+      cps = snaps.map((s) => ({ label: s.cp.label, period: s.cp.period, gameSec: s.cp.gameSec,
+        home: { ...slim(s.home), pts: s.homeScore }, away: { ...slim(s.away), pts: s.awayScore } }));
+    } catch (e) { cps = []; }
+    return { game_id: r.game_id, season: r.season, date: r.date,
+      home: r.home_alias, away: r.away_alias,
+      home_score: r.home_score, away_score: r.away_score, winner: r.winner, checkpoints: cps };
+  });
+  return { phase: 'export_checkpoints', offset, limit, returned: games.length, total: Number(total[0].n), games };
+}
+
 async function phaseCollectPBP(sql, url) {
   // Ensure column exists
   await sql`ALTER TABLE wnba_backtest ADD COLUMN IF NOT EXISTS bdl_pbp JSONB`;
@@ -4354,6 +4384,7 @@ export default async (req) => {
       case 'report_trailing_profile': result = await reportTrailingProfile(sql); break;
       case 'report_indicator_stability': result = await reportIndicatorStability(sql); break;
       case 'export_states':     result = await phaseExportStates(sql, url); break;
+      case 'export_checkpoints': result = await phaseExportCheckpoints(sql, url); break;
       case 'collect_pbp':       result = await phaseCollectPBP(sql, url); break;
       case 'compute_checkpoints': result = await phaseComputeCheckpoints(sql); break;
       case 'report_cp_journey': result = await reportCPJourney(sql); break;
