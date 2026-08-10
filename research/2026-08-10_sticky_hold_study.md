@@ -62,3 +62,37 @@ WSH/CON-concentrated, OOS-unstable). RULED OUT for any betting stream.**
 STICKY_HOLD ledger build: KILLED (no Amendment scope). Manual watch may
 continue as zero-cost observation only. Revisit bar: forward 2026 sticky dog
 states n >= 25 with holds >= 60% reopens the question; nothing less.
+
+---
+
+# PHASE 3b ADDENDUM (Aug 10) — CHECKPOINT GRANULARITY, 576 GAMES: DEFINITIVE KILL
+
+**Data:** new export_checkpoints phase — cached bdl_pbp reconstructed server-side
+at 2.5-min resolution (incl. PBP-reconstructed POT), full 2024+2025 population
+(576 games, 500 contributing, 5,297 states). Zero external API calls.
+
+**Calibration PASSED at this granularity (5th gap-edge confirmation, now
+powered):** trailer WINS 56.6% at gap >= +.15 (n=113) / 36.0% neutral (n=186) /
+22.7% at gap <= -.15 (n=163). Monotone, MED-HIGH power.
+
+**Sticky at real n:**
+- Dog-leader sticky: HOLDS **29.0% (n=31)** — sign-REVERSED vs 2026's 58.3% (n=12)
+- Season-consistent: 2024 25.0% (n=12), 2025 31.6% (n=19)
+- Non-sticky dog leaders: HOLDS 50.6% (n=83) — sticky holds 21pp WORSE
+- All sticky 57.1% (n=98) vs non-sticky 66.5% (n=364)
+- 10+ leads: sticky 77.3% (n=22) vs non-sticky 93.4% (n=2109) — worse there too
+- **Pooled dog cell now n=43 (12 live + 31 hist) >= the 40 bar — and holds
+  37.2%. The bar is met and FAILED ON MERITS, not power. FINAL KILL.**
+
+**Mechanism (hindsight):** a much-worse team leading with NO fuel (no heat, no
+takeaway feed) against a cold-but-better trailer is a thin lead with 25+ min
+left — the better team just wins. The 2026 +26pp was selection noise, as tagged.
+
+**Mindset correction rider — "fear earned leads" is LEADER-QUALITY-CONDITIONED:**
+- DOG leaders (gap>=.15): EARNED holds 35.4% (n=65) vs TRANSIENT 51.7% (n=151)
+  — earned-no-fuel dog leads are the WEAKEST holds, not the strongest. The 2026
+  map's earned-hold read (n=15) does not survive scale in the dog cell.
+- QUALITY leaders (gap<0): EARNED 75.0% (n=136) ~ TRANSIENT 78.0% (n=359) —
+  quality leads hold regardless of fuel; fuel adds little there.
+- Revised card: respect the LEADER'S QUALITY first; fuel/earned reads modify
+  within quality class, and an earned dog lead is a sell, not a hold.
