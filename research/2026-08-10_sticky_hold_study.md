@@ -33,3 +33,32 @@ NOT PROMOTED to any betting stream. Forward paths:
 (b) Manual watch starting now: STICKY chip already renders client-side; PM logs
     discretionary reads in the bets ledger with a STICKY tag (zero code).
 (c) NBA arena requires NBA-recalibrated period bands — transfer risk, parked.
+
+---
+
+# PHASE 3 ADDENDUM (Aug 10) — 2025 HISTORICAL REPLICATION: FAILED
+
+**Data:** cached sr_summary per-period stats (203-game stratified 2025 sample,
+zero SR API hits, via new read-only export_states phase) + full BDL 2025
+schedule (312 finals) for unbiased as-of records. States at end-Q1/Q2/Q3
+boundaries, band mapped to next quarter, exact computeFuelTemp parity.
+
+**Calibration control PASSED — the sample can see real signals:** the
+triple-confirmed gap edge replicates a FOURTH time: trailer WINS 60.0% at
+gap >= +.15 (n=30) vs 35.1% neutral (n=57) vs 20.4% at gap <= -.15 (n=54);
+monotone again at end-Q2/Q3 (50/34/15). The instrument works.
+
+**Sticky result in the same instrument — INVERTED:**
+- All sticky band 1-9 (first per game): HOLDS 46.4% (n=28) vs non-sticky 70.0% (n=100)
+- Dog-leader sticky: HOLDS **22.2%** (n=9) vs 2026's 58.3% (n=12)
+- Pooled dog cell: 42.9% (n=21); separation vs pooled non-sticky dog ~0pp
+- Pre-registered bar: FAILED all three legs (n 21<40; hold 42.9<55; sep ~0<15)
+- 10+ leads (PM request): zero sticky states exist at 10+; non-sticky 10+
+  HOLDS 91.7% (n=168) [stratified sample inflates this — margin-bucket bias]
+
+**Verdict: dog-cell sticky edge FAILS replication with a passing calibration
+control -> the 2026 +26.4pp reads as small-sample selection noise (12 states,
+WSH/CON-concentrated, OOS-unstable). RULED OUT for any betting stream.**
+STICKY_HOLD ledger build: KILLED (no Amendment scope). Manual watch may
+continue as zero-cost observation only. Revisit bar: forward 2026 sticky dog
+states n >= 25 with holds >= 60% reopens the question; nothing less.
