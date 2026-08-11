@@ -1075,6 +1075,24 @@ function ssLeadClassDisplay(lc) {
   return null;
 }
 
+// SS_STRUCT_BEGIN — structural numbers module (PARITY_SPEC Amendment 1 v3 §1).
+// GENERATED — never hand-edit. Regenerate + verify: node research/build_ss_struct.mjs
+// Source: research/fixtures_spec_cut_states.json (2,724 deduped states, 576 games,
+// 2024+2025 checkpoint arena) + spec-pinned 2026 riders (provenance in build script).
+// Byte-equality across poll-live-bdl.mjs and wnba-bdl.html is fixture-enforced.
+// p = trailer-WIN rate unless the key says holds (lead-HOLD rate). Rules R1-R5 in spec §1.
+var SS_STRUCT = {
+  deficit:   { d13: { p: 60.8, n: 232 }, d46: { p: 39.4, n: 155 }, d79: { p: 32.0, n: 97 } },
+  deficit26: { d13: { p: 65.4, n: 104 }, d46: { p: 60.0, n: 55 }, d79: { p: 42.9, n: 35 } },
+  time:      { preQ4: { p: 53.9, n: 362 }, q4e: { p: 37.9, n: 66 }, q4l: { p: 23.2, n: 56 } },
+  gap:       { qual: { p: 44.4, n: 331 }, strong: { p: 56.2, n: 153 } },
+  leader:    { bad: { p: 51.3, n: 316 }, mid: { p: 44.0, n: 134 }, qual: { p: 35.3, n: 34 } },
+  holds:     { quality_lead: { p: 74.2, n: 264 } },
+  greenVeto: { sub45: { p: 43.2, n: 44 }, warm: { p: 66.7, n: 93 } },
+  riders26:  { hotCell: { p: 72.0, n: 50 }, killer: { p: 67, n: 45 } }
+};
+// SS_STRUCT_END
+
 // §6 output contract — 4 parts, 150-190 word target, 200 hard cap (PM Jul 14).
 // PURE (fixture-extracted): all context arrives via `blocks`, already-formatted strings.
 function ssBuildNarrationPrompt(row, blocks) {
