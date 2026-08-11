@@ -182,6 +182,12 @@ the more depleted team.
 count, minutes share, then each OUT player with mpg and a source marker (`◆` confirmed
 injury, `○` observed zero-minutes). Clean team renders "Full rotation" — never a blank.
 
+**6a-note (alignment).** Card layout contract shared with
+SWEETSPOT_DASHBOARD_PARITY_SPEC v3: gate line row -> CELL READ -> chips row
+(EK · AV · temp-color). Parity's composition rule R5 mirrors §0 from the
+other side: CELL READ / gate line never reference availability. Fixture
+suites (AVAIL_PURE mirror + SS_STRUCT equality) run in the same pre-push gate.
+
 **6b. Card chip** — `AV` chip beside the existing EK chip, amber, shown only when either
 team has ≥2 of top-8 out. Tooltip lists names. Deliberately **no** conversion number in
 the tooltip (contrast: the EK chip at line 1508 does quote "67% vs 53%" — EK earned that

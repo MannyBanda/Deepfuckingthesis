@@ -34,6 +34,9 @@ R2 every rate labeled trailer-WINS or lead-HOLDS. No bare "converts".
 R3 riders26 render only with [this season] tag, only in fade country, never
    pooled with structural numbers.
 R4 Q4 clock <5:00: numbers suppressed, suspension copy only.
+R5 availability facts NEVER enter CELL READ or the gate line — they live
+   exclusively in the AV chip / matchup AVAILABILITY block per
+   AVAILABILITY_SPEC §0 (no gate authority, no percentages).
 
 ## 2. ITEM C — CLASSIFIER DEFINITIONS CONTRACT (SHIPS FIRST — agent integrity)
 Narration prompt currently prints raw `(lead class ${row.lead_class})` with
@@ -73,6 +76,8 @@ One compact row per WNBA card, client-composed from already-fetched fields:
 - Country: FADE COUNTRY iff leader wp < .400, else WATCH-ONLY.
 - Lead descriptor per §2 precedence. Temp chip color-only (§6).
 - Pure function ssGateLine(state), fixture-covered.
+- CARD LAYOUT CONTRACT (shared w/ AVAILABILITY_SPEC): gate line row ->
+  CELL READ -> chips row (EK · AV · temp-color). Neither build reorders.
 
 ## 4. ITEM B — CELL READ v3
 1-2 line plain-English expectation. Pure function ssCellRead(state) reading
@@ -117,8 +122,12 @@ node -c / script-extract per file before every commit.
 ## 9. ROLLOUT & COMPANION QUEUE
 Order: C (server, isolated) -> A+B (client + SS_STRUCT) -> D/E/F (display).
 Three staged commits, fixtures green each stage, deploy-verify between.
-COMPANION QUEUE (separate specs, priority): (1) PREFIRE_LINEUP_SPEC — the
-staleness program, two losses of evidence, TOP. (2) Killer historical
+COMPANION QUEUE (separate specs, priority): (1) AVAILABILITY_SPEC —
+RESOLVED 2026-08-11: all four gate hypotheses FAILED pre-registered bars;
+ships display-only facts w/ NO GATE AUTHORITY as its own ladder. Its §5a
+nightly minutes capture is TIME-SENSITIVE (every uncaptured night is lost
+forward sample) and may ship ahead of this spec's stages. Recency-drift
+(trailing-10 wp) machinery from that study feeds queue item (4). (2) Killer historical
 replication (promotion bar pending). (3) Delta-cross vs absolute-cross
 timing. (4) Gap-reliability-by-GP. (5) JUICE quality-conditioned thresholds.
 (6) Regime-pulse robustness (downgraded).
