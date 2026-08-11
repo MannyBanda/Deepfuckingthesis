@@ -140,10 +140,15 @@ export function parseMin(v) {
 // { game_id, date, player_id, player_name, min }. asof (optional 'YYYY-MM-DD'):
 // STRICT date < asof, matching the study's `d < date` — omitted = all rows (nightly).
 // Returns rotation JSONB (spec §3) or null (insufficient window / empty rotation).
+// Neon returns DATE columns as JS Date objects — String() yields locale text
+// ("Wed May 27...") which made window ordering ALPHABETICAL (caught Aug 11 on the
+// first prod recompute). Normalize to ISO before any comparison.
+const normDate = (v) => v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10);
+
 export function computeRotation(rows, asof) {
   const byGame = {}; // gid -> { date, players: { pid: { min, name } } }
   for (const r of rows) {
-    const d = String(r.date).slice(0, 10);
+    const d = normDate(r.date);
     if (asof && !(d < asof)) continue;
     const g = (byGame[r.game_id] = byGame[r.game_id] || { date: d, players: {} });
     g.players[r.player_id] = { min: parseMin(r.min), name: r.player_name };
@@ -638,7 +643,7 @@ export default async function handler(req) {
     // over anything, including this function's success).
     const rotations = {};
     try {
-      const tgpRows = await sql`SELECT game_id, date, team_alias, player_id, player_name, min
+      const tgpRows = await sql`SELECT game_id, date::text AS date, team_alias, player_id, player_name, min
         FROM team_game_players WHERE league = ${league} AND season = ${season}`;
       const byTeamP = {};
       for (const r of tgpRows) {

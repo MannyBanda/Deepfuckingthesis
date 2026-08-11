@@ -1,0 +1,2770 @@
+{
+ "note": "CHI 2026 team_game_players rows from BDL, pinned 2026-08-11 for the spec §7 as-of-Aug-9 golden",
+ "rows": [
+  {
+   "game_id": "24757",
+   "date": "2026-05-09",
+   "player_id": 720,
+   "player_name": "Rickea Jackson",
+   "min": "36"
+  },
+  {
+   "game_id": "24757",
+   "date": "2026-05-09",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "25"
+  },
+  {
+   "game_id": "24757",
+   "date": "2026-05-09",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "33"
+  },
+  {
+   "game_id": "24757",
+   "date": "2026-05-09",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "34"
+  },
+  {
+   "game_id": "24757",
+   "date": "2026-05-09",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "32"
+  },
+  {
+   "game_id": "24757",
+   "date": "2026-05-09",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "15"
+  },
+  {
+   "game_id": "24757",
+   "date": "2026-05-09",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "15"
+  },
+  {
+   "game_id": "24757",
+   "date": "2026-05-09",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "6"
+  },
+  {
+   "game_id": "24757",
+   "date": "2026-05-09",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "4"
+  },
+  {
+   "game_id": "24768",
+   "date": "2026-05-13",
+   "player_id": 720,
+   "player_name": "Rickea Jackson",
+   "min": "39"
+  },
+  {
+   "game_id": "24768",
+   "date": "2026-05-13",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "27"
+  },
+  {
+   "game_id": "24768",
+   "date": "2026-05-13",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "34"
+  },
+  {
+   "game_id": "24768",
+   "date": "2026-05-13",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "31"
+  },
+  {
+   "game_id": "24768",
+   "date": "2026-05-13",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "26"
+  },
+  {
+   "game_id": "24768",
+   "date": "2026-05-13",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "13"
+  },
+  {
+   "game_id": "24768",
+   "date": "2026-05-13",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "18"
+  },
+  {
+   "game_id": "24768",
+   "date": "2026-05-13",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "12"
+  },
+  {
+   "game_id": "24768",
+   "date": "2026-05-13",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "0"
+  },
+  {
+   "game_id": "24768",
+   "date": "2026-05-13",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "0"
+  },
+  {
+   "game_id": "24775",
+   "date": "2026-05-15",
+   "player_id": 720,
+   "player_name": "Rickea Jackson",
+   "min": "32"
+  },
+  {
+   "game_id": "24775",
+   "date": "2026-05-15",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "23"
+  },
+  {
+   "game_id": "24775",
+   "date": "2026-05-15",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "12"
+  },
+  {
+   "game_id": "24775",
+   "date": "2026-05-15",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "26"
+  },
+  {
+   "game_id": "24775",
+   "date": "2026-05-15",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "29"
+  },
+  {
+   "game_id": "24775",
+   "date": "2026-05-15",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "0"
+  },
+  {
+   "game_id": "24775",
+   "date": "2026-05-15",
+   "player_id": 751,
+   "player_name": "Maddy Westbeld",
+   "min": "0"
+  },
+  {
+   "game_id": "24775",
+   "date": "2026-05-15",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "17"
+  },
+  {
+   "game_id": "24775",
+   "date": "2026-05-15",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "0"
+  },
+  {
+   "game_id": "24775",
+   "date": "2026-05-15",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "23"
+  },
+  {
+   "game_id": "24775",
+   "date": "2026-05-15",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "16"
+  },
+  {
+   "game_id": "24775",
+   "date": "2026-05-15",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "0"
+  },
+  {
+   "game_id": "24775",
+   "date": "2026-05-15",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "16"
+  },
+  {
+   "game_id": "24775",
+   "date": "2026-05-15",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "7"
+  },
+  {
+   "game_id": "24776",
+   "date": "2026-05-17",
+   "player_id": 720,
+   "player_name": "Rickea Jackson",
+   "min": "11"
+  },
+  {
+   "game_id": "24776",
+   "date": "2026-05-17",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "26"
+  },
+  {
+   "game_id": "24776",
+   "date": "2026-05-17",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "32"
+  },
+  {
+   "game_id": "24776",
+   "date": "2026-05-17",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "32"
+  },
+  {
+   "game_id": "24776",
+   "date": "2026-05-17",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "32"
+  },
+  {
+   "game_id": "24776",
+   "date": "2026-05-17",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "0"
+  },
+  {
+   "game_id": "24776",
+   "date": "2026-05-17",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "14"
+  },
+  {
+   "game_id": "24776",
+   "date": "2026-05-17",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "0"
+  },
+  {
+   "game_id": "24776",
+   "date": "2026-05-17",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "0"
+  },
+  {
+   "game_id": "24776",
+   "date": "2026-05-17",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "23"
+  },
+  {
+   "game_id": "24776",
+   "date": "2026-05-17",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "0"
+  },
+  {
+   "game_id": "24776",
+   "date": "2026-05-17",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "21"
+  },
+  {
+   "game_id": "24776",
+   "date": "2026-05-17",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "10"
+  },
+  {
+   "game_id": "24784",
+   "date": "2026-05-20",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "33"
+  },
+  {
+   "game_id": "24784",
+   "date": "2026-05-20",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "34"
+  },
+  {
+   "game_id": "24784",
+   "date": "2026-05-20",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "35"
+  },
+  {
+   "game_id": "24784",
+   "date": "2026-05-20",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "21"
+  },
+  {
+   "game_id": "24784",
+   "date": "2026-05-20",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "28"
+  },
+  {
+   "game_id": "24784",
+   "date": "2026-05-20",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "0"
+  },
+  {
+   "game_id": "24784",
+   "date": "2026-05-20",
+   "player_id": 720,
+   "player_name": "Rickea Jackson",
+   "min": "0"
+  },
+  {
+   "game_id": "24784",
+   "date": "2026-05-20",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "18"
+  },
+  {
+   "game_id": "24784",
+   "date": "2026-05-20",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "0"
+  },
+  {
+   "game_id": "24784",
+   "date": "2026-05-20",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "15"
+  },
+  {
+   "game_id": "24784",
+   "date": "2026-05-20",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "0"
+  },
+  {
+   "game_id": "24784",
+   "date": "2026-05-20",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "16"
+  },
+  {
+   "game_id": "24784",
+   "date": "2026-05-20",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "0"
+  },
+  {
+   "game_id": "24792",
+   "date": "2026-05-23",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "23"
+  },
+  {
+   "game_id": "24792",
+   "date": "2026-05-23",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "32"
+  },
+  {
+   "game_id": "24792",
+   "date": "2026-05-23",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "32"
+  },
+  {
+   "game_id": "24792",
+   "date": "2026-05-23",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "19"
+  },
+  {
+   "game_id": "24792",
+   "date": "2026-05-23",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "23"
+  },
+  {
+   "game_id": "24792",
+   "date": "2026-05-23",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "16"
+  },
+  {
+   "game_id": "24792",
+   "date": "2026-05-23",
+   "player_id": 720,
+   "player_name": "Rickea Jackson",
+   "min": "0"
+  },
+  {
+   "game_id": "24792",
+   "date": "2026-05-23",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "18"
+  },
+  {
+   "game_id": "24792",
+   "date": "2026-05-23",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "0"
+  },
+  {
+   "game_id": "24792",
+   "date": "2026-05-23",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "17"
+  },
+  {
+   "game_id": "24792",
+   "date": "2026-05-23",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "0"
+  },
+  {
+   "game_id": "24792",
+   "date": "2026-05-23",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "20"
+  },
+  {
+   "game_id": "24801",
+   "date": "2026-05-27",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "15"
+  },
+  {
+   "game_id": "24801",
+   "date": "2026-05-27",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "22"
+  },
+  {
+   "game_id": "24801",
+   "date": "2026-05-27",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "36"
+  },
+  {
+   "game_id": "24801",
+   "date": "2026-05-27",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "31"
+  },
+  {
+   "game_id": "24801",
+   "date": "2026-05-27",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "19"
+  },
+  {
+   "game_id": "24801",
+   "date": "2026-05-27",
+   "player_id": 720,
+   "player_name": "Rickea Jackson",
+   "min": "0"
+  },
+  {
+   "game_id": "24801",
+   "date": "2026-05-27",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "23"
+  },
+  {
+   "game_id": "24801",
+   "date": "2026-05-27",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "0"
+  },
+  {
+   "game_id": "24801",
+   "date": "2026-05-27",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "13"
+  },
+  {
+   "game_id": "24801",
+   "date": "2026-05-27",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "0"
+  },
+  {
+   "game_id": "24801",
+   "date": "2026-05-27",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "18"
+  },
+  {
+   "game_id": "24801",
+   "date": "2026-05-27",
+   "player_id": 67054,
+   "player_name": "Saylor Poffenbarger",
+   "min": "0"
+  },
+  {
+   "game_id": "24801",
+   "date": "2026-05-27",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "23"
+  },
+  {
+   "game_id": "24801",
+   "date": "2026-05-27",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "0"
+  },
+  {
+   "game_id": "24809",
+   "date": "2026-05-29",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "18"
+  },
+  {
+   "game_id": "24809",
+   "date": "2026-05-29",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "28"
+  },
+  {
+   "game_id": "24809",
+   "date": "2026-05-29",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "29"
+  },
+  {
+   "game_id": "24809",
+   "date": "2026-05-29",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "31"
+  },
+  {
+   "game_id": "24809",
+   "date": "2026-05-29",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "20"
+  },
+  {
+   "game_id": "24809",
+   "date": "2026-05-29",
+   "player_id": 720,
+   "player_name": "Rickea Jackson",
+   "min": "0"
+  },
+  {
+   "game_id": "24809",
+   "date": "2026-05-29",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "19"
+  },
+  {
+   "game_id": "24809",
+   "date": "2026-05-29",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "0"
+  },
+  {
+   "game_id": "24809",
+   "date": "2026-05-29",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "23"
+  },
+  {
+   "game_id": "24809",
+   "date": "2026-05-29",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "0"
+  },
+  {
+   "game_id": "24809",
+   "date": "2026-05-29",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "11"
+  },
+  {
+   "game_id": "24809",
+   "date": "2026-05-29",
+   "player_id": 67054,
+   "player_name": "Saylor Poffenbarger",
+   "min": "1"
+  },
+  {
+   "game_id": "24809",
+   "date": "2026-05-29",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "20"
+  },
+  {
+   "game_id": "24809",
+   "date": "2026-05-29",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "0"
+  },
+  {
+   "game_id": "24818",
+   "date": "2026-06-02",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "19"
+  },
+  {
+   "game_id": "24818",
+   "date": "2026-06-02",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "33"
+  },
+  {
+   "game_id": "24818",
+   "date": "2026-06-02",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "27"
+  },
+  {
+   "game_id": "24818",
+   "date": "2026-06-02",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "24"
+  },
+  {
+   "game_id": "24818",
+   "date": "2026-06-02",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "31"
+  },
+  {
+   "game_id": "24818",
+   "date": "2026-06-02",
+   "player_id": 720,
+   "player_name": "Rickea Jackson",
+   "min": "0"
+  },
+  {
+   "game_id": "24818",
+   "date": "2026-06-02",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "23"
+  },
+  {
+   "game_id": "24818",
+   "date": "2026-06-02",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "0"
+  },
+  {
+   "game_id": "24818",
+   "date": "2026-06-02",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "18"
+  },
+  {
+   "game_id": "24818",
+   "date": "2026-06-02",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "0"
+  },
+  {
+   "game_id": "24818",
+   "date": "2026-06-02",
+   "player_id": 67054,
+   "player_name": "Saylor Poffenbarger",
+   "min": "6"
+  },
+  {
+   "game_id": "24818",
+   "date": "2026-06-02",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "20"
+  },
+  {
+   "game_id": "24818",
+   "date": "2026-06-02",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "0"
+  },
+  {
+   "game_id": "24825",
+   "date": "2026-06-05",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "20"
+  },
+  {
+   "game_id": "24825",
+   "date": "2026-06-05",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "33"
+  },
+  {
+   "game_id": "24825",
+   "date": "2026-06-05",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "32"
+  },
+  {
+   "game_id": "24825",
+   "date": "2026-06-05",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "22"
+  },
+  {
+   "game_id": "24825",
+   "date": "2026-06-05",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "27"
+  },
+  {
+   "game_id": "24825",
+   "date": "2026-06-05",
+   "player_id": 720,
+   "player_name": "Rickea Jackson",
+   "min": "0"
+  },
+  {
+   "game_id": "24825",
+   "date": "2026-06-05",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "21"
+  },
+  {
+   "game_id": "24825",
+   "date": "2026-06-05",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "0"
+  },
+  {
+   "game_id": "24825",
+   "date": "2026-06-05",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "26"
+  },
+  {
+   "game_id": "24825",
+   "date": "2026-06-05",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "0"
+  },
+  {
+   "game_id": "24825",
+   "date": "2026-06-05",
+   "player_id": 67054,
+   "player_name": "Saylor Poffenbarger",
+   "min": "6"
+  },
+  {
+   "game_id": "24825",
+   "date": "2026-06-05",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "13"
+  },
+  {
+   "game_id": "24825",
+   "date": "2026-06-05",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "0"
+  },
+  {
+   "game_id": "24832",
+   "date": "2026-06-07",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "24"
+  },
+  {
+   "game_id": "24832",
+   "date": "2026-06-07",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "23"
+  },
+  {
+   "game_id": "24832",
+   "date": "2026-06-07",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "27"
+  },
+  {
+   "game_id": "24832",
+   "date": "2026-06-07",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "22"
+  },
+  {
+   "game_id": "24832",
+   "date": "2026-06-07",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "21"
+  },
+  {
+   "game_id": "24832",
+   "date": "2026-06-07",
+   "player_id": 720,
+   "player_name": "Rickea Jackson",
+   "min": "0"
+  },
+  {
+   "game_id": "24832",
+   "date": "2026-06-07",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "22"
+  },
+  {
+   "game_id": "24832",
+   "date": "2026-06-07",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "0"
+  },
+  {
+   "game_id": "24832",
+   "date": "2026-06-07",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "27"
+  },
+  {
+   "game_id": "24832",
+   "date": "2026-06-07",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "0"
+  },
+  {
+   "game_id": "24832",
+   "date": "2026-06-07",
+   "player_id": 67054,
+   "player_name": "Saylor Poffenbarger",
+   "min": "8"
+  },
+  {
+   "game_id": "24832",
+   "date": "2026-06-07",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "8"
+  },
+  {
+   "game_id": "24832",
+   "date": "2026-06-07",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "19"
+  },
+  {
+   "game_id": "24837",
+   "date": "2026-06-09",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "23"
+  },
+  {
+   "game_id": "24837",
+   "date": "2026-06-09",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "35"
+  },
+  {
+   "game_id": "24837",
+   "date": "2026-06-09",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "32"
+  },
+  {
+   "game_id": "24837",
+   "date": "2026-06-09",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "25"
+  },
+  {
+   "game_id": "24837",
+   "date": "2026-06-09",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "19"
+  },
+  {
+   "game_id": "24837",
+   "date": "2026-06-09",
+   "player_id": 720,
+   "player_name": "Rickea Jackson",
+   "min": "0"
+  },
+  {
+   "game_id": "24837",
+   "date": "2026-06-09",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "20"
+  },
+  {
+   "game_id": "24837",
+   "date": "2026-06-09",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "0"
+  },
+  {
+   "game_id": "24837",
+   "date": "2026-06-09",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "30"
+  },
+  {
+   "game_id": "24837",
+   "date": "2026-06-09",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "14"
+  },
+  {
+   "game_id": "24837",
+   "date": "2026-06-09",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "0"
+  },
+  {
+   "game_id": "24837",
+   "date": "2026-06-09",
+   "player_id": 67054,
+   "player_name": "Saylor Poffenbarger",
+   "min": "0"
+  },
+  {
+   "game_id": "24837",
+   "date": "2026-06-09",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "3"
+  },
+  {
+   "game_id": "24842",
+   "date": "2026-06-11",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "26"
+  },
+  {
+   "game_id": "24842",
+   "date": "2026-06-11",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "21"
+  },
+  {
+   "game_id": "24842",
+   "date": "2026-06-11",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "32"
+  },
+  {
+   "game_id": "24842",
+   "date": "2026-06-11",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "26"
+  },
+  {
+   "game_id": "24842",
+   "date": "2026-06-11",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "22"
+  },
+  {
+   "game_id": "24842",
+   "date": "2026-06-11",
+   "player_id": 720,
+   "player_name": "Rickea Jackson",
+   "min": "0"
+  },
+  {
+   "game_id": "24842",
+   "date": "2026-06-11",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "24"
+  },
+  {
+   "game_id": "24842",
+   "date": "2026-06-11",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "0"
+  },
+  {
+   "game_id": "24842",
+   "date": "2026-06-11",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "34"
+  },
+  {
+   "game_id": "24842",
+   "date": "2026-06-11",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "5"
+  },
+  {
+   "game_id": "24842",
+   "date": "2026-06-11",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "0"
+  },
+  {
+   "game_id": "24842",
+   "date": "2026-06-11",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "15"
+  },
+  {
+   "game_id": "24842",
+   "date": "2026-06-11",
+   "player_id": 67054,
+   "player_name": "Saylor Poffenbarger",
+   "min": "0"
+  },
+  {
+   "game_id": "24842",
+   "date": "2026-06-11",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "21"
+  },
+  {
+   "game_id": "24859",
+   "date": "2026-06-17",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "20"
+  },
+  {
+   "game_id": "24859",
+   "date": "2026-06-17",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "24"
+  },
+  {
+   "game_id": "24859",
+   "date": "2026-06-17",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "31"
+  },
+  {
+   "game_id": "24859",
+   "date": "2026-06-17",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "28"
+  },
+  {
+   "game_id": "24859",
+   "date": "2026-06-17",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "29"
+  },
+  {
+   "game_id": "24859",
+   "date": "2026-06-17",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "16"
+  },
+  {
+   "game_id": "24859",
+   "date": "2026-06-17",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "28"
+  },
+  {
+   "game_id": "24859",
+   "date": "2026-06-17",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "4"
+  },
+  {
+   "game_id": "24859",
+   "date": "2026-06-17",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "10"
+  },
+  {
+   "game_id": "24859",
+   "date": "2026-06-17",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "11"
+  },
+  {
+   "game_id": "24859",
+   "date": "2026-06-17",
+   "player_id": 67054,
+   "player_name": "Saylor Poffenbarger",
+   "min": "0"
+  },
+  {
+   "game_id": "24870",
+   "date": "2026-06-20",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "28"
+  },
+  {
+   "game_id": "24870",
+   "date": "2026-06-20",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "29"
+  },
+  {
+   "game_id": "24870",
+   "date": "2026-06-20",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "32"
+  },
+  {
+   "game_id": "24870",
+   "date": "2026-06-20",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "25"
+  },
+  {
+   "game_id": "24870",
+   "date": "2026-06-20",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "25"
+  },
+  {
+   "game_id": "24870",
+   "date": "2026-06-20",
+   "player_id": 751,
+   "player_name": "Maddy Westbeld",
+   "min": "10"
+  },
+  {
+   "game_id": "24870",
+   "date": "2026-06-20",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "11"
+  },
+  {
+   "game_id": "24870",
+   "date": "2026-06-20",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "25"
+  },
+  {
+   "game_id": "24870",
+   "date": "2026-06-20",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "0"
+  },
+  {
+   "game_id": "24870",
+   "date": "2026-06-20",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "15"
+  },
+  {
+   "game_id": "24870",
+   "date": "2026-06-20",
+   "player_id": 67054,
+   "player_name": "Saylor Poffenbarger",
+   "min": "0"
+  },
+  {
+   "game_id": "24874",
+   "date": "2026-06-22",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "26"
+  },
+  {
+   "game_id": "24874",
+   "date": "2026-06-22",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "23"
+  },
+  {
+   "game_id": "24874",
+   "date": "2026-06-22",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "20"
+  },
+  {
+   "game_id": "24874",
+   "date": "2026-06-22",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "22"
+  },
+  {
+   "game_id": "24874",
+   "date": "2026-06-22",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "21"
+  },
+  {
+   "game_id": "24874",
+   "date": "2026-06-22",
+   "player_id": 751,
+   "player_name": "Maddy Westbeld",
+   "min": "11"
+  },
+  {
+   "game_id": "24874",
+   "date": "2026-06-22",
+   "player_id": 720,
+   "player_name": "Rickea Jackson",
+   "min": "0"
+  },
+  {
+   "game_id": "24874",
+   "date": "2026-06-22",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "15"
+  },
+  {
+   "game_id": "24874",
+   "date": "2026-06-22",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "0"
+  },
+  {
+   "game_id": "24874",
+   "date": "2026-06-22",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "21"
+  },
+  {
+   "game_id": "24874",
+   "date": "2026-06-22",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "16"
+  },
+  {
+   "game_id": "24874",
+   "date": "2026-06-22",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "0"
+  },
+  {
+   "game_id": "24874",
+   "date": "2026-06-22",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "20"
+  },
+  {
+   "game_id": "24874",
+   "date": "2026-06-22",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "0"
+  },
+  {
+   "game_id": "24874",
+   "date": "2026-06-22",
+   "player_id": 67054,
+   "player_name": "Saylor Poffenbarger",
+   "min": "5"
+  },
+  {
+   "game_id": "24881",
+   "date": "2026-06-24",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "27"
+  },
+  {
+   "game_id": "24881",
+   "date": "2026-06-24",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "27"
+  },
+  {
+   "game_id": "24881",
+   "date": "2026-06-24",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "25"
+  },
+  {
+   "game_id": "24881",
+   "date": "2026-06-24",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "21"
+  },
+  {
+   "game_id": "24881",
+   "date": "2026-06-24",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "23"
+  },
+  {
+   "game_id": "24881",
+   "date": "2026-06-24",
+   "player_id": 720,
+   "player_name": "Rickea Jackson",
+   "min": "0"
+  },
+  {
+   "game_id": "24881",
+   "date": "2026-06-24",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "13"
+  },
+  {
+   "game_id": "24881",
+   "date": "2026-06-24",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "0"
+  },
+  {
+   "game_id": "24881",
+   "date": "2026-06-24",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "21"
+  },
+  {
+   "game_id": "24881",
+   "date": "2026-06-24",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "6"
+  },
+  {
+   "game_id": "24881",
+   "date": "2026-06-24",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "0"
+  },
+  {
+   "game_id": "24881",
+   "date": "2026-06-24",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "22"
+  },
+  {
+   "game_id": "24881",
+   "date": "2026-06-24",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "15"
+  },
+  {
+   "game_id": "24887",
+   "date": "2026-06-26",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "28"
+  },
+  {
+   "game_id": "24887",
+   "date": "2026-06-26",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "24"
+  },
+  {
+   "game_id": "24887",
+   "date": "2026-06-26",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "23"
+  },
+  {
+   "game_id": "24887",
+   "date": "2026-06-26",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "23"
+  },
+  {
+   "game_id": "24887",
+   "date": "2026-06-26",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "24"
+  },
+  {
+   "game_id": "24887",
+   "date": "2026-06-26",
+   "player_id": 720,
+   "player_name": "Rickea Jackson",
+   "min": "0"
+  },
+  {
+   "game_id": "24887",
+   "date": "2026-06-26",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "19"
+  },
+  {
+   "game_id": "24887",
+   "date": "2026-06-26",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "14"
+  },
+  {
+   "game_id": "24887",
+   "date": "2026-06-26",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "18"
+  },
+  {
+   "game_id": "24887",
+   "date": "2026-06-26",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "12"
+  },
+  {
+   "game_id": "24887",
+   "date": "2026-06-26",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "0"
+  },
+  {
+   "game_id": "24887",
+   "date": "2026-06-26",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "15"
+  },
+  {
+   "game_id": "24894",
+   "date": "2026-06-28",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "30"
+  },
+  {
+   "game_id": "24894",
+   "date": "2026-06-28",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "30"
+  },
+  {
+   "game_id": "24894",
+   "date": "2026-06-28",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "28"
+  },
+  {
+   "game_id": "24894",
+   "date": "2026-06-28",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "32"
+  },
+  {
+   "game_id": "24894",
+   "date": "2026-06-28",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "12"
+  },
+  {
+   "game_id": "24894",
+   "date": "2026-06-28",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "10"
+  },
+  {
+   "game_id": "24894",
+   "date": "2026-06-28",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "16"
+  },
+  {
+   "game_id": "24894",
+   "date": "2026-06-28",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "23"
+  },
+  {
+   "game_id": "24894",
+   "date": "2026-06-28",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "0"
+  },
+  {
+   "game_id": "24894",
+   "date": "2026-06-28",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "0"
+  },
+  {
+   "game_id": "24894",
+   "date": "2026-06-28",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "11"
+  },
+  {
+   "game_id": "24894",
+   "date": "2026-06-28",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "9"
+  },
+  {
+   "game_id": "24901",
+   "date": "2026-07-03",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "26"
+  },
+  {
+   "game_id": "24901",
+   "date": "2026-07-03",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "27"
+  },
+  {
+   "game_id": "24901",
+   "date": "2026-07-03",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "34"
+  },
+  {
+   "game_id": "24901",
+   "date": "2026-07-03",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "26"
+  },
+  {
+   "game_id": "24901",
+   "date": "2026-07-03",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "12"
+  },
+  {
+   "game_id": "24901",
+   "date": "2026-07-03",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "18"
+  },
+  {
+   "game_id": "24901",
+   "date": "2026-07-03",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "19"
+  },
+  {
+   "game_id": "24901",
+   "date": "2026-07-03",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "34"
+  },
+  {
+   "game_id": "24901",
+   "date": "2026-07-03",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "0"
+  },
+  {
+   "game_id": "24901",
+   "date": "2026-07-03",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "19"
+  },
+  {
+   "game_id": "24901",
+   "date": "2026-07-03",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "9"
+  },
+  {
+   "game_id": "24910",
+   "date": "2026-07-07",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "26"
+  },
+  {
+   "game_id": "24910",
+   "date": "2026-07-07",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "28"
+  },
+  {
+   "game_id": "24910",
+   "date": "2026-07-07",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "18"
+  },
+  {
+   "game_id": "24910",
+   "date": "2026-07-07",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "32"
+  },
+  {
+   "game_id": "24910",
+   "date": "2026-07-07",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "23"
+  },
+  {
+   "game_id": "24910",
+   "date": "2026-07-07",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "12"
+  },
+  {
+   "game_id": "24910",
+   "date": "2026-07-07",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "0"
+  },
+  {
+   "game_id": "24910",
+   "date": "2026-07-07",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "12"
+  },
+  {
+   "game_id": "24910",
+   "date": "2026-07-07",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "0"
+  },
+  {
+   "game_id": "24910",
+   "date": "2026-07-07",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "17"
+  },
+  {
+   "game_id": "24910",
+   "date": "2026-07-07",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "14"
+  },
+  {
+   "game_id": "24910",
+   "date": "2026-07-07",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "18"
+  },
+  {
+   "game_id": "24919",
+   "date": "2026-07-10",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "30"
+  },
+  {
+   "game_id": "24919",
+   "date": "2026-07-10",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "28"
+  },
+  {
+   "game_id": "24919",
+   "date": "2026-07-10",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "19"
+  },
+  {
+   "game_id": "24919",
+   "date": "2026-07-10",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "27"
+  },
+  {
+   "game_id": "24919",
+   "date": "2026-07-10",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "21"
+  },
+  {
+   "game_id": "24919",
+   "date": "2026-07-10",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "9"
+  },
+  {
+   "game_id": "24919",
+   "date": "2026-07-10",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "12"
+  },
+  {
+   "game_id": "24919",
+   "date": "2026-07-10",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "21"
+  },
+  {
+   "game_id": "24919",
+   "date": "2026-07-10",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "13"
+  },
+  {
+   "game_id": "24919",
+   "date": "2026-07-10",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "20"
+  },
+  {
+   "game_id": "24925",
+   "date": "2026-07-12",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "32"
+  },
+  {
+   "game_id": "24925",
+   "date": "2026-07-12",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "29"
+  },
+  {
+   "game_id": "24925",
+   "date": "2026-07-12",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "20"
+  },
+  {
+   "game_id": "24925",
+   "date": "2026-07-12",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "32"
+  },
+  {
+   "game_id": "24925",
+   "date": "2026-07-12",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "26"
+  },
+  {
+   "game_id": "24925",
+   "date": "2026-07-12",
+   "player_id": 751,
+   "player_name": "Maddy Westbeld",
+   "min": "8"
+  },
+  {
+   "game_id": "24925",
+   "date": "2026-07-12",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "11"
+  },
+  {
+   "game_id": "24925",
+   "date": "2026-07-12",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "0"
+  },
+  {
+   "game_id": "24925",
+   "date": "2026-07-12",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "11"
+  },
+  {
+   "game_id": "24925",
+   "date": "2026-07-12",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "0"
+  },
+  {
+   "game_id": "24925",
+   "date": "2026-07-12",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "14"
+  },
+  {
+   "game_id": "24925",
+   "date": "2026-07-12",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "0"
+  },
+  {
+   "game_id": "24925",
+   "date": "2026-07-12",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "17"
+  },
+  {
+   "game_id": "24931",
+   "date": "2026-07-15",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "33"
+  },
+  {
+   "game_id": "24931",
+   "date": "2026-07-15",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "28"
+  },
+  {
+   "game_id": "24931",
+   "date": "2026-07-15",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "20"
+  },
+  {
+   "game_id": "24931",
+   "date": "2026-07-15",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "30"
+  },
+  {
+   "game_id": "24931",
+   "date": "2026-07-15",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "25"
+  },
+  {
+   "game_id": "24931",
+   "date": "2026-07-15",
+   "player_id": 774,
+   "player_name": "Chloe Bibby",
+   "min": "19"
+  },
+  {
+   "game_id": "24931",
+   "date": "2026-07-15",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "0"
+  },
+  {
+   "game_id": "24931",
+   "date": "2026-07-15",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "0"
+  },
+  {
+   "game_id": "24931",
+   "date": "2026-07-15",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "10"
+  },
+  {
+   "game_id": "24931",
+   "date": "2026-07-15",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "0"
+  },
+  {
+   "game_id": "24931",
+   "date": "2026-07-15",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "17"
+  },
+  {
+   "game_id": "24931",
+   "date": "2026-07-15",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "0"
+  },
+  {
+   "game_id": "24931",
+   "date": "2026-07-15",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "19"
+  },
+  {
+   "game_id": "24938",
+   "date": "2026-07-17",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "28"
+  },
+  {
+   "game_id": "24938",
+   "date": "2026-07-17",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "24"
+  },
+  {
+   "game_id": "24938",
+   "date": "2026-07-17",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "15"
+  },
+  {
+   "game_id": "24938",
+   "date": "2026-07-17",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "32"
+  },
+  {
+   "game_id": "24938",
+   "date": "2026-07-17",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "26"
+  },
+  {
+   "game_id": "24938",
+   "date": "2026-07-17",
+   "player_id": 774,
+   "player_name": "Chloe Bibby",
+   "min": "9"
+  },
+  {
+   "game_id": "24938",
+   "date": "2026-07-17",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "16"
+  },
+  {
+   "game_id": "24938",
+   "date": "2026-07-17",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "0"
+  },
+  {
+   "game_id": "24938",
+   "date": "2026-07-17",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "5"
+  },
+  {
+   "game_id": "24938",
+   "date": "2026-07-17",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "0"
+  },
+  {
+   "game_id": "24938",
+   "date": "2026-07-17",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "28"
+  },
+  {
+   "game_id": "24938",
+   "date": "2026-07-17",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "3"
+  },
+  {
+   "game_id": "24938",
+   "date": "2026-07-17",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "14"
+  },
+  {
+   "game_id": "24944",
+   "date": "2026-07-19",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "30"
+  },
+  {
+   "game_id": "24944",
+   "date": "2026-07-19",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "24"
+  },
+  {
+   "game_id": "24944",
+   "date": "2026-07-19",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "21"
+  },
+  {
+   "game_id": "24944",
+   "date": "2026-07-19",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "32"
+  },
+  {
+   "game_id": "24944",
+   "date": "2026-07-19",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "28"
+  },
+  {
+   "game_id": "24944",
+   "date": "2026-07-19",
+   "player_id": 774,
+   "player_name": "Chloe Bibby",
+   "min": "5"
+  },
+  {
+   "game_id": "24944",
+   "date": "2026-07-19",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "16"
+  },
+  {
+   "game_id": "24944",
+   "date": "2026-07-19",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "5"
+  },
+  {
+   "game_id": "24944",
+   "date": "2026-07-19",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "19"
+  },
+  {
+   "game_id": "24944",
+   "date": "2026-07-19",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "5"
+  },
+  {
+   "game_id": "24944",
+   "date": "2026-07-19",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "15"
+  },
+  {
+   "game_id": "24951",
+   "date": "2026-07-22",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "30"
+  },
+  {
+   "game_id": "24951",
+   "date": "2026-07-22",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "25"
+  },
+  {
+   "game_id": "24951",
+   "date": "2026-07-22",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "22"
+  },
+  {
+   "game_id": "24951",
+   "date": "2026-07-22",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "32"
+  },
+  {
+   "game_id": "24951",
+   "date": "2026-07-22",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "26"
+  },
+  {
+   "game_id": "24951",
+   "date": "2026-07-22",
+   "player_id": 774,
+   "player_name": "Chloe Bibby",
+   "min": "0"
+  },
+  {
+   "game_id": "24951",
+   "date": "2026-07-22",
+   "player_id": 751,
+   "player_name": "Maddy Westbeld",
+   "min": "0"
+  },
+  {
+   "game_id": "24951",
+   "date": "2026-07-22",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "15"
+  },
+  {
+   "game_id": "24951",
+   "date": "2026-07-22",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "3"
+  },
+  {
+   "game_id": "24951",
+   "date": "2026-07-22",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "17"
+  },
+  {
+   "game_id": "24951",
+   "date": "2026-07-22",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "9"
+  },
+  {
+   "game_id": "24951",
+   "date": "2026-07-22",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "20"
+  },
+  {
+   "game_id": "24964",
+   "date": "2026-07-30",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "21"
+  },
+  {
+   "game_id": "24964",
+   "date": "2026-07-30",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "23"
+  },
+  {
+   "game_id": "24964",
+   "date": "2026-07-30",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "31"
+  },
+  {
+   "game_id": "24964",
+   "date": "2026-07-30",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "13"
+  },
+  {
+   "game_id": "24964",
+   "date": "2026-07-30",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "31"
+  },
+  {
+   "game_id": "24964",
+   "date": "2026-07-30",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "0"
+  },
+  {
+   "game_id": "24964",
+   "date": "2026-07-30",
+   "player_id": 774,
+   "player_name": "Chloe Bibby",
+   "min": "18"
+  },
+  {
+   "game_id": "24964",
+   "date": "2026-07-30",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "19"
+  },
+  {
+   "game_id": "24964",
+   "date": "2026-07-30",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "0"
+  },
+  {
+   "game_id": "24964",
+   "date": "2026-07-30",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "0"
+  },
+  {
+   "game_id": "24964",
+   "date": "2026-07-30",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "17"
+  },
+  {
+   "game_id": "24964",
+   "date": "2026-07-30",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "15"
+  },
+  {
+   "game_id": "24964",
+   "date": "2026-07-30",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "13"
+  },
+  {
+   "game_id": "24969",
+   "date": "2026-08-01",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "26"
+  },
+  {
+   "game_id": "24969",
+   "date": "2026-08-01",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "20"
+  },
+  {
+   "game_id": "24969",
+   "date": "2026-08-01",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "30"
+  },
+  {
+   "game_id": "24969",
+   "date": "2026-08-01",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "24"
+  },
+  {
+   "game_id": "24969",
+   "date": "2026-08-01",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "30"
+  },
+  {
+   "game_id": "24969",
+   "date": "2026-08-01",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "0"
+  },
+  {
+   "game_id": "24969",
+   "date": "2026-08-01",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "21"
+  },
+  {
+   "game_id": "24969",
+   "date": "2026-08-01",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "0"
+  },
+  {
+   "game_id": "24969",
+   "date": "2026-08-01",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "10"
+  },
+  {
+   "game_id": "24969",
+   "date": "2026-08-01",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "19"
+  },
+  {
+   "game_id": "24969",
+   "date": "2026-08-01",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "16"
+  },
+  {
+   "game_id": "24969",
+   "date": "2026-08-01",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "4"
+  },
+  {
+   "game_id": "24977",
+   "date": "2026-08-03",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "28"
+  },
+  {
+   "game_id": "24977",
+   "date": "2026-08-03",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "27"
+  },
+  {
+   "game_id": "24977",
+   "date": "2026-08-03",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "31"
+  },
+  {
+   "game_id": "24977",
+   "date": "2026-08-03",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "11"
+  },
+  {
+   "game_id": "24977",
+   "date": "2026-08-03",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "17"
+  },
+  {
+   "game_id": "24977",
+   "date": "2026-08-03",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "0"
+  },
+  {
+   "game_id": "24977",
+   "date": "2026-08-03",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "15"
+  },
+  {
+   "game_id": "24977",
+   "date": "2026-08-03",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "0"
+  },
+  {
+   "game_id": "24977",
+   "date": "2026-08-03",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "2"
+  },
+  {
+   "game_id": "24977",
+   "date": "2026-08-03",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "20"
+  },
+  {
+   "game_id": "24977",
+   "date": "2026-08-03",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "23"
+  },
+  {
+   "game_id": "24977",
+   "date": "2026-08-03",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "26"
+  },
+  {
+   "game_id": "24982",
+   "date": "2026-08-05",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "29"
+  },
+  {
+   "game_id": "24982",
+   "date": "2026-08-05",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "28"
+  },
+  {
+   "game_id": "24982",
+   "date": "2026-08-05",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "32"
+  },
+  {
+   "game_id": "24982",
+   "date": "2026-08-05",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "29"
+  },
+  {
+   "game_id": "24982",
+   "date": "2026-08-05",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "24"
+  },
+  {
+   "game_id": "24982",
+   "date": "2026-08-05",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "0"
+  },
+  {
+   "game_id": "24982",
+   "date": "2026-08-05",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "27"
+  },
+  {
+   "game_id": "24982",
+   "date": "2026-08-05",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "0"
+  },
+  {
+   "game_id": "24982",
+   "date": "2026-08-05",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "13"
+  },
+  {
+   "game_id": "24982",
+   "date": "2026-08-05",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "12"
+  },
+  {
+   "game_id": "24982",
+   "date": "2026-08-05",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "0"
+  },
+  {
+   "game_id": "24982",
+   "date": "2026-08-05",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "7"
+  },
+  {
+   "game_id": "24990",
+   "date": "2026-08-08",
+   "player_id": 525,
+   "player_name": "Azura Stevens",
+   "min": "20"
+  },
+  {
+   "game_id": "24990",
+   "date": "2026-08-08",
+   "player_id": 726,
+   "player_name": "Kamilla Cardoso",
+   "min": "26"
+  },
+  {
+   "game_id": "24990",
+   "date": "2026-08-08",
+   "player_id": 285,
+   "player_name": "Courtney Vandersloot",
+   "min": "25"
+  },
+  {
+   "game_id": "24990",
+   "date": "2026-08-08",
+   "player_id": 408,
+   "player_name": "Natasha Cloud",
+   "min": "27"
+  },
+  {
+   "game_id": "24990",
+   "date": "2026-08-08",
+   "player_id": 725,
+   "player_name": "Jacy Sheldon",
+   "min": "24"
+  },
+  {
+   "game_id": "24990",
+   "date": "2026-08-08",
+   "player_id": 409,
+   "player_name": "Elizabeth Williams",
+   "min": "14"
+  },
+  {
+   "game_id": "24990",
+   "date": "2026-08-08",
+   "player_id": 346,
+   "player_name": "Skylar Diggins",
+   "min": "0"
+  },
+  {
+   "game_id": "24990",
+   "date": "2026-08-08",
+   "player_id": 466,
+   "player_name": "Rachel Banham",
+   "min": "20"
+  },
+  {
+   "game_id": "24990",
+   "date": "2026-08-08",
+   "player_id": 626,
+   "player_name": "DiJonai Carrington",
+   "min": "4"
+  },
+  {
+   "game_id": "24990",
+   "date": "2026-08-08",
+   "player_id": 67023,
+   "player_name": "Aicha Coulibaly",
+   "min": "20"
+  },
+  {
+   "game_id": "24990",
+   "date": "2026-08-08",
+   "player_id": 67033,
+   "player_name": "Sydney Taylor",
+   "min": "0"
+  },
+  {
+   "game_id": "24990",
+   "date": "2026-08-08",
+   "player_id": 67027,
+   "player_name": "Gabriela Jaquez",
+   "min": "21"
+  }
+ ]
+}

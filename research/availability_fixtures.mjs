@@ -129,6 +129,26 @@ const day = (i) => `2026-06-${String(i).padStart(2, '0')}`;
   eq(rot.players[0].mpg, 20.5, 'MM:SS strings parsed inside computeRotation');
 }
 
+// ── Date-object regression (Aug 11 prod bug) ─────────────────────────────────
+// Neon returns DATE columns as JS Date objects; String(Date) is locale text and
+// made window ordering alphabetical ("Wed May 27" sorted after "Thu Aug 06").
+// Pin: Date-typed rows must produce the identical rotation as ISO-string rows.
+{
+  const mkRows = (dateFn) => {
+    const rows = [];
+    for (let i = 1; i <= 12; i++) {
+      const iso = `2026-0${i <= 9 ? 5 : 6}-${String(i <= 9 ? i + 10 : i - 9).padStart(2, '0')}`; // May 11..19, Jun 1..3 — weekday names shuffle alphabetically
+      rows.push({ game_id: `g${i}`, date: dateFn(iso), player_id: 1, player_name: 'A', min: i <= 2 ? 30 : 10 });
+      rows.push({ game_id: `g${i}`, date: dateFn(iso), player_id: 2, player_name: 'B', min: 20 });
+    }
+    return rows;
+  };
+  const rStr = computeRotation(mkRows((iso) => iso));
+  const rDat = computeRotation(mkRows((iso) => new Date(iso + 'T00:00:00Z')));
+  eq(rDat, rStr, 'Date-object rows identical to ISO-string rows');
+  eq(rDat.asof, '2026-06-03', 'Date-object rows: asof chronological, not alphabetical');
+}
+
 // ── Golden layer 2: CHI as-of 2026-08-09 (spec §7) ───────────────────────────
 const chiPath = new URL('./fixtures_rotation_chi.json', import.meta.url).pathname;
 if (existsSync(chiPath)) {
