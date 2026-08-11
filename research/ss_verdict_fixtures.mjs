@@ -83,7 +83,7 @@ T('IND@LV gap renders .148 not .15', r.text.includes('quality gap (.148) is belo
 T('IND@LV V4 exact copy', r.text ===
   'NO SPOT \u2014 quality gap (.148) is below the review line (.15). Anything taken here is the speculative stream \u2014 size like it.');
 T('IND@LV → T1 (tested-and-killed shape)', r.trap ===
-  '\u26a0 Trailer winning the structural battle below the gap bar is a tested-and-killed shape (Jun 21, 1-for-7 \u2014 the market prices visible structure).');
+  '\u26a0 Buying IND below the gap bar is a tested-and-killed ENTRY (Jun 21, 1-for-7) \u2014 an entry rule, not a live win probability. Unselected 2026 read: below-bar trailers vs transient leads convert ~24%, fully market-priced.');
 T('IND@LV T1 beats T5 despite orange band', r.trap.includes('tested-and-killed'));
 
 // ── V4 with null gap ──

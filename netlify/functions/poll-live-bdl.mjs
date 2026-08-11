@@ -1049,6 +1049,32 @@ function ssPriceLadder(p, lineUsed) {
   return { edgeNowPP, probeLine, fullLine, text };
 }
 
+// ── Item C: CLASSIFIER DEFINITIONS CONTRACT (PARITY_SPEC Amendment 1 v3 §2) ──
+// The prompt previously printed raw `(lead class ${row.lead_class})` with no
+// definition — the model was interpreting a label it was never given. This block
+// is inserted VERBATIM into BOTH narration templates (fire + watchlist) and is
+// the one copy source backing the display translation. Semantics verified against
+// code at build (Aug 11): classifier ~L5143, computeFuelTemp ~L5185, EFG_BANDS
+// ~L5159, FUELTEMP_TH temp 45/55. PURE (fixture-extracted).
+function ssClassifierDefs() {
+  return 'DEFINITIONS (fixed, do not reinterpret):\n'
+    + '- lead_class = WHAT THE MARGIN IS MADE OF. STRUCTURAL: paint+FT >= 60% of margin. VOLATILE: 3s+mid >= 60%. MIXED: neither. EVEN: margin <= 2 pts — too thin to classify (NOT "evenly composed").\n'
+    + '- fuel = LEADER\'S REGRESSION CHANNELS. EARNED: no heat markers, no takeaway feed. TRANSIENT: heat and/or takeaway present.\n'
+    + '- trailer temp = absolute bands (cold <45 / warm 45-55 / hot >55), all quarters. DISPLAY ONLY — no validated predictive weight.\n'
+    + '- leader bands (green/orange/red) = period-adjusted transience detection (Q1 54/61 -> Q4 60/69). Green means "no heat markers", NOT "cold".\n'
+    + 'Prose precedence: margin <= 2 -> thin-margin phrasing; else fuel leads, composition qualifies.\n';
+}
+// Display translation (spec §2) — the vocabulary any consumer surface uses when
+// rendering lead_class to the bettor. CELL READ v3 (Item B) mirrors this client-side
+// under a source-equality fixture. PURE (fixture-extracted).
+function ssLeadClassDisplay(lc) {
+  if (lc === 'VOLATILE') return 'variance-built';
+  if (lc === 'STRUCTURAL') return 'structurally built';
+  if (lc === 'MIXED') return 'mixed';
+  if (lc === 'EVEN') return 'margin too thin to read';
+  return null;
+}
+
 // §6 output contract — 4 parts, 150-190 word target, 200 hard cap (PM Jul 14).
 // PURE (fixture-extracted): all context arrives via `blocks`, already-formatted strings.
 function ssBuildNarrationPrompt(row, blocks) {
@@ -1060,6 +1086,7 @@ function ssBuildNarrationPrompt(row, blocks) {
     + `- Leader shooting heat: effective field-goal percentage ${row.leader_efg != null ? Math.round(row.leader_efg) : '?'}% (${row.leader_efg_band || '?'} band), variance share ${row.variance_share != null ? Math.round(row.variance_share) : '?'}% of the lead from three-pointers and midrange (lead class ${row.lead_class || '?'}).\n`
     + `- Quality gap: ${row.trailer_alias} season win probability ${pct(row.trailer_wp)}% vs ${row.leader_alias} ${pct(row.leader_wp)}% (gap ${row.quality_gap != null ? Number(row.quality_gap).toFixed(2) : '?'}).\n`
     + `- Model true win probability ${pct(row.collapse_true)}% vs market implied ${pct(row.implied)}% at fire.\n\n`
+    + ssClassifierDefs() + '\n'
     + (b.ladderText ? b.ladderText + '\n' : '')
     + (b.quarterFlow ? b.quarterFlow + '\n' : '')
     + (b.snapState ? b.snapState + '\n' : '')
@@ -1107,6 +1134,7 @@ function ssBuildWatchlistPrompt(row, blocks) {
     + `- System reads on this spot: fade read ${row.fade_tier || 'none'}, collapse read ${row.collapse_tier || 'none'}, model edge ${row.edge != null ? '+' + pct(row.edge) + ' points' : 'none computed'}.\n`
     + `- FIRE LADDER (for reference): a full A or B alert requires ALL of — a positive model edge, a collapse read of STRONG or SHORT, a fade read of STRONG FADE or LEAN FADE, and a lead class of VOLATILE or MIXED, before the fourth quarter with the deficit at 9 or less. The reads above did not clear this ladder.\n`
     + `- Live price on ${row.trailer_alias}: ${ml(row.line_used)} (market implied ${pct(row.implied)}%).\n\n`
+    + ssClassifierDefs() + '\n'
     + (b.quarterFlow ? b.quarterFlow + '\n' : '')
     + (b.snapState ? b.snapState + '\n' : '')
     + (b.fuelTemp ? b.fuelTemp + '\n' : '')

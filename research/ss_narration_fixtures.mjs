@@ -17,9 +17,9 @@ function extractFn(src, name) {
   for (; j < src.length; j++) { if (src[j] === '{') d++; else if (src[j] === '}') { d--; if (!d) { j++; break; } } }
   return src.slice(i, j);
 }
-const fns = ['ssImpliedToML', 'ssPriceLadder', 'ssBuildNarrationPrompt', 'ssBuildBriefPrompt', 'ssBuildWatchlistPrompt'];
+const fns = ['ssImpliedToML', 'ssPriceLadder', 'ssClassifierDefs', 'ssLeadClassDisplay', 'ssBuildNarrationPrompt', 'ssBuildBriefPrompt', 'ssBuildWatchlistPrompt'];
 const mod = new Function(`${fns.map((f) => extractFn(POLL, f)).join(';\n')}; return { ${fns.join(', ')} };`)();
-const { ssImpliedToML, ssPriceLadder, ssBuildNarrationPrompt, ssBuildBriefPrompt, ssBuildWatchlistPrompt } = mod;
+const { ssImpliedToML, ssPriceLadder, ssClassifierDefs, ssLeadClassDisplay, ssBuildNarrationPrompt, ssBuildBriefPrompt, ssBuildWatchlistPrompt } = mod;
 
 let pass = 0, fail = 0;
 const T = (n, c) => { c ? pass++ : fail++; console.log(`  ${c ? '\u2713' : '\u2717'} ${n}`); };
@@ -142,6 +142,38 @@ T('all-null row degrades to ? / none, no crash', (() => {
   const p = ssBuildWatchlistPrompt({ alert_subtype: 'WATCHLIST', trailer_alias: 'X', leader_alias: 'Y' }, {});
   return p.includes('fade read none') && p.includes('?') && !p.includes('null');
 })());
+
+// ── Item C: classifier definitions contract (PARITY_SPEC Amendment 1 v3 §2) ──
+console.log('CLASSIFIER DEFINITIONS CONTRACT');
+const defs = ssClassifierDefs();
+T('defs: header pinned', defs.includes('DEFINITIONS (fixed, do not reinterpret):'));
+T('defs: lead_class all four labels + EVEN caveat', defs.includes('STRUCTURAL: paint+FT >= 60% of margin') && defs.includes('VOLATILE: 3s+mid >= 60%') && defs.includes('MIXED: neither') && defs.includes('NOT "evenly composed"'));
+T('defs: fuel EARNED/TRANSIENT semantics', defs.includes('EARNED: no heat markers, no takeaway feed') && defs.includes('TRANSIENT: heat and/or takeaway present'));
+T('defs: temp bands + display-only demotion', defs.includes('cold <45 / warm 45-55 / hot >55') && defs.includes('DISPLAY ONLY — no validated predictive weight'));
+T('defs: leader bands period-adjusted + green caveat', defs.includes('Q1 54/61 -> Q4 60/69') && defs.includes('Green means "no heat markers", NOT "cold"'));
+T('defs: prose precedence rule', defs.includes('margin <= 2 -> thin-margin phrasing; else fuel leads, composition qualifies'));
+// both templates carry the block verbatim, positioned before the paragraph contract
+const npC = ssBuildNarrationPrompt({ alert_subtype: 'EFG_FADE', trailer_alias: 'MIN', leader_alias: 'CHI', margin: 7, period: 3, clock: '4:12', lead_class: 'VOLATILE' }, {});
+const wpC = ssBuildWatchlistPrompt({ alert_subtype: 'WATCHLIST', trailer_alias: 'MIN', leader_alias: 'CHI', margin: 7, period: 3, clock: '4:12', lead_class: 'VOLATILE' }, {});
+T('fire prompt carries defs VERBATIM', npC.includes(defs));
+T('watchlist prompt carries defs VERBATIM', wpC.includes(defs));
+T('fire prompt: defs after fire facts, before paragraph contract', (() => {
+  const a = npC.indexOf('FIRE:'), d = npC.indexOf('DEFINITIONS (fixed'), c = npC.indexOf('Write exactly 5');
+  return a >= 0 && d > a && c > d;
+})());
+T('watchlist prompt: defs after spot facts, before paragraph contract', (() => {
+  const a = wpC.indexOf('SPOT:'), d = wpC.indexOf('DEFINITIONS (fixed'), c = wpC.indexOf('Write exactly 5');
+  return a >= 0 && d > a && c > d;
+})());
+T('raw label still printed beside the definition (label + contract)', npC.includes('lead class VOLATILE'));
+// display translation (spec §2) — the one vocabulary for any consumer surface
+T('display: VOLATILE -> variance-built', ssLeadClassDisplay('VOLATILE') === 'variance-built');
+T('display: STRUCTURAL -> structurally built', ssLeadClassDisplay('STRUCTURAL') === 'structurally built');
+T('display: MIXED -> mixed', ssLeadClassDisplay('MIXED') === 'mixed');
+T('display: EVEN -> margin too thin to read', ssLeadClassDisplay('EVEN') === 'margin too thin to read');
+T('display: unknown/null -> null (never invents)', ssLeadClassDisplay('X') === null && ssLeadClassDisplay(null) === null);
+// brief prompt is classifier-free by design — no defs block there
+T('brief prompt carries NO defs block (no classifiers pregame)', !ssBuildBriefPrompt('IND', 'NY', {}).includes('DEFINITIONS (fixed'));
 
 console.log(`\n${pass}/${pass + fail} passed${fail ? ' \u2014 FAILURES ABOVE' : ''}`);
 process.exit(fail ? 1 : 0);
