@@ -673,6 +673,9 @@ export default async function handler(req) {
   }));
 }
 
-export const config = {
-  schedule: '30 8 * * *', // 8:30am UTC = 1:30am MST (Arizona) — after WNBA finals settle
-};
+// TEMP (§5a backfill window): schedule export disabled so the function is
+// HTTP-invocable — Netlify Edge now 403s external calls to scheduled functions
+// (platform change since the Jul 14 backfill drill). RESTORE IMMEDIATELY AFTER.
+// export const config = {
+//   schedule: '30 8 * * *', // 8:30am UTC = 1:30am MST (Arizona) — after WNBA finals settle
+// };
