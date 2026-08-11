@@ -111,6 +111,81 @@ export function computeKillerFields(rows) {
   return out;
 }
 
+// ── Rotation layer (AVAILABILITY_SPEC §1 + §5a) ──────────────────────────────
+// Byte-for-byte port of research/2026-08-11_availability_gap.py `availability()`
+// rotation construction (the primary spec). MUST NOT drift — the whole value of
+// the 2026 arm is comparability with the validated 2024/25 arm.
+//   window   = trailing 10 TEAM games (date < asof when given), min 5 required
+//   mpg      = total minutes over window / TEAM games in window (absence = 0)
+//   rotation = mpg >= 8.0; top5/top8 = highest mpg within rotation
+// Also stored, never displayed: mpg_played (minutes / games actually appeared) —
+// best-behaved sensitivity variant, preserved so season-close re-runs need no re-ingest.
+export const ROT_WINDOW = 10;
+export const ROT_MPG_FLOOR = 8.0;
+export const ROT_MIN_GAMES = 5;
+
+// Study mins(): null/'' -> 0; "MM:SS" -> MM + SS/60; else float or 0.
+export function parseMin(v) {
+  if (v == null || v === '') return 0;
+  const s = String(v);
+  if (s.includes(':')) {
+    const p = s.split(':');
+    return (Number(p[0]) || 0) + (Number(p[1]) || 0) / 60;
+  }
+  const f = Number(s);
+  return Number.isFinite(f) ? f : 0;
+}
+
+// rows: team_game_players rows for ONE team-season (any subset), each
+// { game_id, date, player_id, player_name, min }. asof (optional 'YYYY-MM-DD'):
+// STRICT date < asof, matching the study's `d < date` — omitted = all rows (nightly).
+// Returns rotation JSONB (spec §3) or null (insufficient window / empty rotation).
+export function computeRotation(rows, asof) {
+  const byGame = {}; // gid -> { date, players: { pid: { min, name } } }
+  for (const r of rows) {
+    const d = String(r.date).slice(0, 10);
+    if (asof && !(d < asof)) continue;
+    const g = (byGame[r.game_id] = byGame[r.game_id] || { date: d, players: {} });
+    g.players[r.player_id] = { min: parseMin(r.min), name: r.player_name };
+  }
+  const sched = Object.entries(byGame)
+    .map(([gid, g]) => ({ gid, date: g.date }))
+    .sort((a, b) => a.date === b.date ? String(a.gid).localeCompare(String(b.gid)) : a.date.localeCompare(b.date));
+  const prior = sched.slice(-ROT_WINDOW);
+  if (prior.length < ROT_MIN_GAMES) return null;
+  const tot = {}, appear = {}, nameOf = {};
+  for (const { gid } of prior) {
+    for (const [pid, p] of Object.entries(byGame[gid].players)) {
+      tot[pid] = (tot[pid] || 0) + p.min;
+      if (p.min > 0) appear[pid] = (appear[pid] || 0) + 1;
+      nameOf[pid] = p.name || nameOf[pid];
+    }
+  }
+  const denom = prior.length;
+  const players = [];
+  for (const pid of Object.keys(tot)) {
+    const mpg = tot[pid] / denom;                          // absences count as 0
+    if (mpg >= ROT_MPG_FLOOR) {
+      players.push({
+        pid: Number(pid), name: nameOf[pid] || '?',
+        mpg: r1(mpg),
+        mpg_played: r1(appear[pid] ? tot[pid] / appear[pid] : 0),
+        _raw: mpg,
+      });
+    }
+  }
+  if (players.length === 0) return null;
+  players.sort((a, b) => b._raw - a._raw);
+  players.forEach((p, i) => { p.rank = i + 1; delete p._raw; });
+  return {
+    asof: prior[prior.length - 1].date,   // newest game date in window (staleness-honest)
+    window: ROT_WINDOW, floor: ROT_MPG_FLOOR,
+    players,
+    top5_pids: players.slice(0, 5).map((p) => p.pid),
+    top8_pids: players.slice(0, 8).map((p) => p.pid),
+  };
+}
+
 export function computeProfiles(rows) {
   const byTeam = {};
   for (const r of rows) {
@@ -301,6 +376,7 @@ async function pullTeamGameLines(gameMeta) {
   // Proven Jul 4: 21 games → 502 rows over ~6 pages.
   const ids = Object.keys(gameMeta);
   const agg = {}; // bdlId -> { ABBR: { pts,fgm,fga,fg3m,fg3a,fta,to,oreb } }
+  const perPlayer = {}; // bdlId -> [ { team, pid, name, min, pts } ]  (AVAILABILITY_SPEC §5a — capture on the way past)
   for (let i = 0; i < ids.length; i += 10) {
     const chunk = ids.slice(i, i + 10);
     let cursor = null, pages = 0;
@@ -316,19 +392,35 @@ async function pullTeamGameLines(gameMeta) {
         t.pts += N(ps.pts); t.fgm += N(ps.fgm); t.fga += N(ps.fga);
         t.fg3m += N(ps.fg3m); t.fg3a += N(ps.fg3a); t.fta += N(ps.fta);
         t.to += N(ps.turnover); t.oreb += N(ps.oreb);
+        const pid = ps.player?.id;
+        if (pid != null) {
+          (perPlayer[gid] = perPlayer[gid] || []).push({
+            team, pid: N(pid),
+            name: `${ps.player?.first_name || ''} ${ps.player?.last_name || ''}`.trim() || '?',
+            min: parseMin(ps.min), pts: N(ps.pts),
+          });
+        }
       }
       cursor = j.meta?.next_cursor || null;
       pages++;
     } while (cursor && pages < 12);
   }
 
-  // Assemble two rows per game (one per team side)
+  // Assemble two rows per game (one per team side) + player rows for the same games
   const rows = [];
+  const playerRows = []; // team_game_players rows — only for games passing the finality guard
   for (const [gid, meta] of Object.entries(gameMeta)) {
     const t = agg[gid];
     if (!t || !t[meta.home] || !t[meta.away]) continue;
     const H = t[meta.home], A = t[meta.away];
     if (!(H.pts > 0 && A.pts > 0)) continue;   // finality guard — the nonzero-score check
+    for (const pp of perPlayer[gid] || []) {
+      playerRows.push({
+        game_id: String(gid), league: 'wnba', season: meta.season, date: meta.date,
+        team_alias: pp.team, player_id: pp.pid, player_name: pp.name,
+        min: pp.min, pts: pp.pts,
+      });
+    }
     const efg = (x) => (x.fga > 0 ? (x.fgm + 0.5 * x.fg3m) / x.fga : null);
     const poss = (x) => x.fga - x.oreb + x.to + 0.44 * x.fta;
     const mk = (self, opp, alias, oppAlias, isHome) => ({
@@ -345,7 +437,7 @@ async function pullTeamGameLines(gameMeta) {
     });
     rows.push(mk(H, A, meta.home, meta.away, true), mk(A, H, meta.away, meta.home, false));
   }
-  return rows;
+  return { rows, playerRows };
 }
 
 // Legacy SR→BDL alias map — READ-side only, for matching pre-May-16 games-table rows.
@@ -439,16 +531,44 @@ export default async function handler(req) {
       // diff against existing rows (skipped in reingest mode — everything re-pulls)
       const ids = Object.keys(found);
       if (ids.length > 0 && !isReingest) {
-        const existing = await sql`SELECT DISTINCT game_id FROM team_game_stats WHERE league = ${league} AND game_id = ANY(${ids})`;
+        // §5a self-healing diff: a game is "existing" only if it has BOTH team rows AND
+        // player rows — so games ingested pre-availability get their player rows on the
+        // next pass (backfill or trailing window) with team rows deduped by DO NOTHING.
+        const existing = await sql`SELECT DISTINCT s.game_id FROM team_game_stats s
+          WHERE s.league = ${league} AND s.game_id = ANY(${ids})
+          AND EXISTS (SELECT 1 FROM team_game_players p WHERE p.game_id = s.game_id)`;
         const have = new Set(existing.map((r) => r.game_id));
         skippedExisting = have.size;
         for (const id of ids) if (have.has(String(id))) delete found[id];
       }
 
       if (Object.keys(found).length > 0) {
-        const rows = await pullTeamGameLines(found);
+        const { rows, playerRows } = await pullTeamGameLines(found);
         await matchDftGameIds(sql, rows);
         if (!isDry) {
+          // §5a player-row inserts — batched via jsonb_to_recordset (one query per 500
+          // rows; individual awaits would blow the timeout on season backfills)
+          for (let b = 0; b < playerRows.length; b += 500) {
+            const batch = JSON.stringify(playerRows.slice(b, b + 500));
+            if (isReingest) {
+              await sql`INSERT INTO team_game_players
+                (game_id, league, season, date, team_alias, player_id, player_name, min, pts)
+                SELECT x.game_id, x.league, x.season, x.date, x.team_alias, x.player_id, x.player_name, x.min, x.pts
+                FROM jsonb_to_recordset(${batch}::jsonb)
+                AS x(game_id text, league text, season int, date date, team_alias text, player_id int, player_name text, min numeric, pts int)
+                ON CONFLICT (game_id, player_id) DO UPDATE SET
+                  date = EXCLUDED.date, team_alias = EXCLUDED.team_alias,
+                  player_name = EXCLUDED.player_name, min = EXCLUDED.min, pts = EXCLUDED.pts`;
+            } else {
+              await sql`INSERT INTO team_game_players
+                (game_id, league, season, date, team_alias, player_id, player_name, min, pts)
+                SELECT x.game_id, x.league, x.season, x.date, x.team_alias, x.player_id, x.player_name, x.min, x.pts
+                FROM jsonb_to_recordset(${batch}::jsonb)
+                AS x(game_id text, league text, season int, date date, team_alias text, player_id int, player_name text, min numeric, pts int)
+                ON CONFLICT (game_id, player_id) DO NOTHING`;
+            }
+          }
+          if (playerRows.length > 0) log(`player rows: ${playerRows.length} inserted/deduped`);
           for (const r of rows) {
             if (isReingest) {
               await sql`INSERT INTO team_game_stats
@@ -513,9 +633,25 @@ export default async function handler(req) {
   if (allRows.length > 0) {
     const profiles = computeProfiles(allRows);
     const killerFields = computeKillerFields(allRows);   // KILLER_FLAG_SPEC §1+§8
+    // AVAILABILITY_SPEC §5a — rotation baselines from team_game_players. Wrapped so a
+    // failure here can NEVER block the core profile upsert (availability has no authority
+    // over anything, including this function's success).
+    const rotations = {};
+    try {
+      const tgpRows = await sql`SELECT game_id, date, team_alias, player_id, player_name, min
+        FROM team_game_players WHERE league = ${league} AND season = ${season}`;
+      const byTeamP = {};
+      for (const r of tgpRows) {
+        if (!CANONICAL_ALIASES.has(r.team_alias)) continue;
+        (byTeamP[r.team_alias] = byTeamP[r.team_alias] || []).push(r);
+      }
+      for (const [team, trs] of Object.entries(byTeamP)) rotations[team] = computeRotation(trs);
+      log(`rotation computed for ${Object.keys(rotations).length} teams`);
+    } catch (e) { log(`rotation stage failed (profiles unaffected): ${e.message}`); }
     if (!isDry) {
       for (const [team, p] of Object.entries(profiles)) {
         Object.assign(p.profile, killerFields[team] || {});
+        p.profile.rotation = rotations[team] || null;     // NULL-degrading (spec §4)
         await sql`INSERT INTO team_profiles (team_alias, league, season, w, l, archetype, profile, updated_at)
           VALUES (${team}, ${league}, ${season}, ${p.w}, ${p.l}, ${p.archetype}, ${JSON.stringify(p.profile)}, NOW())
           ON CONFLICT (team_alias, league, season)

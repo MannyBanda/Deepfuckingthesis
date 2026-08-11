@@ -640,6 +640,15 @@ exports.handler = async (event) => {
       await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS trailer_lane BOOLEAN`; // ACA P2
 
       // ── TEAM_PROFILES_SPEC §3b — computed nightly, one row per team-season ──
+      // AVAILABILITY_SPEC §3 — raw per-player minutes, the 2026 arm's substrate.
+      // Written only by team-profiles-nightly (§5a capture-on-the-way-past).
+      await sql`CREATE TABLE IF NOT EXISTS team_game_players (
+        game_id TEXT, league TEXT, season INT, date DATE,
+        team_alias TEXT, player_id INT, player_name TEXT,
+        min NUMERIC, pts INT,
+        PRIMARY KEY (game_id, player_id)
+      )`;
+      await sql`CREATE INDEX IF NOT EXISTS tgp_team_date ON team_game_players (league, season, team_alias, date)`;
       await sql`CREATE TABLE IF NOT EXISTS team_profiles (
         team_alias TEXT NOT NULL,
         league TEXT NOT NULL,
