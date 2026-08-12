@@ -1077,18 +1077,19 @@ function ssLeadClassDisplay(lc) {
 
 // SS_STRUCT_BEGIN — structural numbers module (PARITY_SPEC Amendment 1 v3 §1).
 // GENERATED — never hand-edit. Regenerate + verify: node research/build_ss_struct.mjs
-// Source: research/fixtures_spec_cut_states.json (2,724 deduped states, 576 games,
-// 2024+2025 checkpoint arena) + spec-pinned 2026 riders (provenance in build script).
+// Source: FINE ARENA — research/fixtures_fine_states_matched.json.gz (3,113 states,
+// 30s grain, window 750-2250s, 576 games 2024+2025; adopted PM Aug 11, decisions 1+2)
+// + committed 2026 pins (granularity replay script; provenance in build script).
 // Byte-equality across poll-live-bdl.mjs and wnba-bdl.html is fixture-enforced.
 // p = trailer-WIN rate unless the key says holds (lead-HOLD rate). Rules R1-R5 in spec §1.
 var SS_STRUCT = {
-  deficit:   { d13: { p: 60.8, n: 232 }, d46: { p: 39.4, n: 155 }, d79: { p: 32.0, n: 97 } },
-  deficit26: { d13: { p: 65.4, n: 104 }, d46: { p: 60.0, n: 55 }, d79: { p: 42.9, n: 35 } },
-  time:      { preQ4: { p: 53.9, n: 362 }, q4e: { p: 37.9, n: 66 }, q4l: { p: 23.2, n: 56 } },
-  gap:       { qual: { p: 44.4, n: 331 }, strong: { p: 56.2, n: 153 } },
-  leader:    { bad: { p: 51.3, n: 316 }, mid: { p: 44.0, n: 134 }, qual: { p: 35.3, n: 34 } },
-  holds:     { quality_lead: { p: 74.2, n: 264 } },
-  greenVeto: { sub45: { p: 43.2, n: 44 }, warm: { p: 66.7, n: 93 } },
+  deficit:   { d13: { p: 54.9, n: 335 }, d46: { p: 52.2, n: 138 }, d79: { p: 35.8, n: 106 } },
+  deficit26: { d13: { p: 62.9, n: 105 }, d46: { p: 60.0, n: 55 }, d79: { p: 40.7, n: 27 } },
+  time:      { preQ4: { p: 55.3, n: 421 }, q4e: { p: 44.7, n: 85 }, q4l: { p: 31.5, n: 73 } },
+  gap:       { qual: { p: 45.9, n: 390 }, strong: { p: 60.8, n: 189 } },
+  leader:    { bad: { p: 54.3, n: 370 }, mid: { p: 47.3, n: 169 }, qual: { p: 32.5, n: 40 } },
+  holds:     { quality_lead: { p: 75.1, n: 338 } },
+  greenVeto: { sub45: { p: 46.8, n: 47 }, warm: { p: 64.6, n: 113 } },
   riders26:  { hotCell: { p: 72.0, n: 50 }, killer: { p: 67, n: 45 } }
 };
 // SS_STRUCT_END

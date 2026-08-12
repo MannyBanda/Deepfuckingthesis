@@ -60,32 +60,32 @@ T('null-safe', ssRiderEligible(null, { p: 60, n: 40 }) === false && ssRiderEligi
 console.log('CELL READ v3');
 const fadeBase = { gap: 0.20, leaderWp: 0.18, period: 3, clock: '6:00', leadClass: 'VOLATILE' };
 r = ssCellRead({ ...fadeBase, margin: 5 });
-T('fade d46 template + R1 rider (spec \u00a74 pinned)', r ===
-  'FADE SHAPE \u2014 real gap (.20) on a .18 leader. Down 4-6 like this, trailers WIN ~39% historically [n=155] \u2014 running ~60% this season [n=55].');
+T('fade d46 template — fine arena, NO rider (7.8pp <= 10 bar)', r ===
+  'FADE SHAPE \u2014 real gap (.20) on a .18 leader. Down 4-6 like this, trailers WIN ~52% historically [n=138].');
 T('fade d13: no rider (4.6pp below bar)', (() => { const x = ssCellRead({ ...fadeBase, margin: 2.5 }); return false; })() || (() => {
   const x = ssCellRead({ ...fadeBase, margin: 3 });
-  return x.includes('Down 1-3') && x.includes('~61% historically [n=232]') && !x.includes('this season');
+  return x.includes('Down 1-3') && x.includes('~55% historically [n=335]') && !x.includes('this season');
 })());
-T('fade d79: rider RENDERS (10.9pp, n=35 \u2014 mechanical R1; flagged to PM)', (() => {
+T('fade d79: fine arena, NO rider (4.9pp, n=27 — fails both R1 legs)', (() => {
   const x = ssCellRead({ ...fadeBase, margin: 8 });
-  return x.includes('Down 7-9') && x.includes('~32% historically [n=97]') && x.includes('~43% this season [n=35]');
+  return x.includes('Down 7-9') && x.includes('~36% historically [n=106]') && !x.includes('this season [n=27]');
 })());
 T('hot leader adds hotCell rider [this season]', ssCellRead({ ...fadeBase, margin: 5, leaderEfg: 58 }).includes('Hot leader adds [this season: ~72%, n=50]'));
 T('killer flag does NOT ride in v1 (EK chip owns it; hist provenance)', !ssCellRead({ ...fadeBase, margin: 5, leaderKiller: true }).includes('67'));
 T('Q4-early: q4e base, no deficit rider', (() => {
   const x = ssCellRead({ ...fadeBase, period: 4, clock: '7:12', margin: 5 });
-  return x.includes('In early Q4, trailers WIN ~38% [n=66]') && !x.includes('this season');
+  return x.includes('In early Q4, trailers WIN ~45% [n=85]') && !x.includes('this season [n=27]');
 })());
 T('R4: Q4 <5:00 suspension + HOLD copy', ssCellRead({ ...fadeBase, period: 4, clock: '4:59', margin: 5 }) ===
-  'Inside 5:00 \u2014 comeback numbers suspended. Holding side: quality leads HOLD ~74% [n=264].');
+  'Inside 5:00 \u2014 comeback numbers suspended. Holding side: quality leads HOLD ~75% [n=338].');
 T('R4: Q4 unknown clock degrades conservatively to suspension', ssCellRead({ ...fadeBase, period: 4, clock: null, margin: 5 }).includes('comeback numbers suspended'));
 T('thin margin template (spec \u00a74 pinned)', ssCellRead({ gap: 0.22, leaderWp: 0.30, period: 3, clock: '6:00', margin: 2 }) ===
-  'Margin too thin to read the lead. Gap qualified (.22); down 1-3, trailers WIN ~61% [n=232].');
+  'Margin too thin to read the lead. Gap qualified (.22); down 1-3, trailers WIN ~55% [n=335].');
 T('watch-only quality template (MIN@DAL shape, spec \u00a74 pinned)', ssCellRead({ gap: 0.19, leaderWp: 0.59, period: 3, clock: '6:00', margin: 5 }) ===
-  'WATCH-ONLY \u2014 real gap (.19) but the leader is quality (.59). The weakest qualified shape: trailers WIN ~35% [n=34, stable both seasons]. Price decides.');
+  'WATCH-ONLY \u2014 real gap (.19) but the leader is quality (.59). The weakest qualified shape: trailers WIN ~33% [n=40]. Price decides.');
 T('watch-only mid-tier variant', (() => {
   const x = ssCellRead({ gap: 0.19, leaderWp: 0.48, period: 3, clock: '6:00', margin: 5 });
-  return x.includes('mid-tier (.48)') && x.includes('WIN ~44% [n=134]') && x.includes('Price decides.');
+  return x.includes('mid-tier (.48)') && x.includes('WIN ~47% [n=169]') && x.includes('Price decides.');
 })());
 T('below-bar gap -> null (gate line owns it)', ssCellRead({ gap: 0.08, leaderWp: 0.30, period: 3, clock: '6:00', margin: 5 }) === null);
 T('out-of-band deficit -> null', ssCellRead({ ...fadeBase, margin: 12 }) === null);
