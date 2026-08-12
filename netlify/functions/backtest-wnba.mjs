@@ -1711,6 +1711,38 @@ function classifyShotZone(type, text) {
 
 // ── WNBA 2.5-MINUTE CHECKPOINTS ─────────────────────────────────────────────
 // 10-min quarters → 4 checkpoints per quarter (Q2-Q4) = 11 total + Q4_END
+// FINE_ARENA_SPEC §1: reconstructCheckpoints takes an optional marks array;
+// absent = this exact array, byte-identical output (the committed 2,724-state
+// arena stays reproducible). genGrainMarks(30) = 30s marks 630..2400.
+function genGrainMarks(grain) {
+  const marks = [];
+  for (let gs = 600 + grain; gs <= 2400; gs += grain) {
+    const period = Math.min(4, Math.ceil(gs / 600));
+    const clockSec = period * 600 - gs;
+    marks.push({ label: `Q${period}_s${clockSec}`, period, clockSec, gameSec: gs });
+  }
+  return marks;
+}
+// FINE_ARENA_SPEC §2: shot-zone classifier — VERBATIM MIRROR of poll-live-bdl.mjs
+// (Netlify bundles per-function; source-equality enforced by research/fine_arena_fixtures.mjs).
+const BDL_RIM_SET = new Set(['layup shot','driving layup shot','running layup shot','cutting layup shot','reverse layup shot','finger roll layup','layup shot putback','putback layup shot','driving reverse layup shot','running reverse layup shot','dunk shot','driving dunk shot','running dunk shot','cutting dunk shot','alley oop dunk shot','putback dunk shot','running alley oop dunk shot','tip shot','tip dunk shot']);
+const BDL_PAINT_SET = new Set(['driving floating jump shot','floating jump shot','driving hook shot','hook shot','running hook shot','driving finger roll layup','turnaround hook shot']);
+// coordinateToZoneServer mirror — WNBA plays carry no x/y (bdlCoordsValid stub
+// returns false), so classification runs on type-set -> N-foot text -> keyword
+// fallback, identical to the production path for coordinate-less plays.
+const bdlCoordsValid = () => false;
+function coordinateToZoneServer(x, y, shotType, text, scoreValue) {
+  const tl = (shotType || '').toLowerCase().trim();
+  const tx = (text || '').toLowerCase();
+  const is3 = scoreValue === 3 || tx.includes('three point');
+  if (BDL_RIM_SET.has(tl)) return 'rim';
+  if (BDL_PAINT_SET.has(tl)) return 'paint';
+  if (is3) { return 'above3'; }
+  const dm = tx.match(/(\d+)-foot/); if (dm) { const dd = parseInt(dm[1]); if (dd <= 4) return 'rim'; if (dd <= 9) return 'paint'; if (dd >= 22) return 'above3'; return 'mid'; }
+  if (tl.includes('layup') || tl.includes('dunk') || tl.includes('tip')) return 'rim';
+  if (tl.includes('hook') || tl.includes('float')) return 'paint';
+  return 'mid';
+}
 const WNBA_CHECKPOINTS = [
   { label: 'Q2_7.5', period: 2, clockSec: 450, gameSec: 750  },
   { label: 'Q2_5',   period: 2, clockSec: 300, gameSec: 900  },
@@ -1733,19 +1765,20 @@ function parseClockSec(clock) {
 
 // ── PBP BOX SCORE RECONSTRUCTION ────────────────────────────────────────────
 // Walk BDL plays chronologically, accumulate stats, snapshot at each checkpoint.
-function reconstructCheckpoints(plays, homeAbbr, awayAbbr) {
+function reconstructCheckpoints(plays, homeAbbr, awayAbbr, marks) {
+  marks = marks || WNBA_CHECKPOINTS;   // FINE_ARENA_SPEC §1 — default byte-identical
   if (!plays || plays.length === 0) return null;
   const sorted = plays.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
 
   const mk = () => ({ fgm: 0, fga: 0, fg3m: 0, fg3a: 0, ftm: 0, fta: 0,
-    oreb: 0, dreb: 0, ast: 0, stl: 0, blk: 0, tov: 0, pf: 0, pot: 0 });
+    oreb: 0, dreb: 0, ast: 0, stl: 0, blk: 0, tov: 0, pf: 0, pot: 0, paintM: 0 });
   const h = mk(), a = mk();
   let bigH = 0, bigA = 0, pendPOT = null, lastPeriod = 0;
   const snaps = [];
   let cpIdx = 0;
 
   const snap = (hScore, aScore) => ({
-    cp: WNBA_CHECKPOINTS[cpIdx],
+    cp: marks[cpIdx],
     home: { ...h, biggest_lead: bigH, three_points_pct: h.fg3a > 0 ? h.fg3m / h.fg3a * 100 : 0 },
     away: { ...a, biggest_lead: bigA, three_points_pct: a.fg3a > 0 ? a.fg3m / a.fg3a * 100 : 0 },
     homeScore: hScore, awayScore: aScore, margin: hScore - aScore,
@@ -1760,7 +1793,7 @@ function reconstructCheckpoints(plays, homeAbbr, awayAbbr) {
     if (period !== lastPeriod) { pendPOT = null; lastPeriod = period; }
 
     // Snapshot at each passed checkpoint
-    while (cpIdx < WNBA_CHECKPOINTS.length && gs >= WNBA_CHECKPOINTS[cpIdx].gameSec) {
+    while (cpIdx < marks.length && gs >= marks[cpIdx].gameSec) {
       snaps.push(snap(ev.home_score || 0, ev.away_score || 0));
       cpIdx++;
     }
@@ -1807,6 +1840,7 @@ function reconstructCheckpoints(plays, homeAbbr, awayAbbr) {
       if (isMadeFG || text.includes('makes')) {
         s.fgm++;
         if (is3) s.fg3m++;
+        else { const _z = coordinateToZoneServer(ev.x, ev.y, ev.type, ev.text, ev.score_value); if (_z === 'rim' || _z === 'paint') s.paintM++; }
         if (text.includes('assist')) s.ast++;
         if (pendPOT === tm) s.pot += (is3 ? 3 : 2);
         pendPOT = null;
@@ -1850,7 +1884,7 @@ function reconstructCheckpoints(plays, homeAbbr, awayAbbr) {
 
   // Capture remaining checkpoints
   const last = sorted[sorted.length - 1];
-  while (cpIdx < WNBA_CHECKPOINTS.length) {
+  while (cpIdx < marks.length) {
     snaps.push(snap(last?.home_score || 0, last?.away_score || 0));
     cpIdx++;
   }
@@ -1962,22 +1996,31 @@ async function phaseExportStates(sql, url) {
 // Runs reconstructCheckpoints on CACHED bdl_pbp server-side, returns compact
 // per-checkpoint box lines (incl. PBP-reconstructed POT). Zero external API
 // calls. 2.5-min granularity for the small-N historical re-test program.
-// ?phase=export_checkpoints&offset=0&limit=15
+// ?phase=export_checkpoints&offset=0&limit=15[&grain=30][&from=][&to=]
+// grain: FINE_ARENA_SPEC §1/§3 — mark spacing in seconds (absent = the 2.5-min
+// array, byte-identical to the Aug 10 export). from/to: date-range chunking.
 async function phaseExportCheckpoints(sql, url) {
   const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10));
   const limit = Math.min(20, Math.max(1, parseInt(url.searchParams.get('limit') || '15', 10)));
+  const grain = url.searchParams.get('grain') ? Math.max(10, parseInt(url.searchParams.get('grain'), 10)) : null;
+  const marks = grain ? genGrainMarks(grain) : null;
+  const from = url.searchParams.get('from') || '0000-01-01';
+  const to = url.searchParams.get('to') || '9999-12-31';
   const rows = await sql`
     SELECT game_id, season, date, home_alias, away_alias, home_score, away_score, winner, bdl_pbp
     FROM wnba_backtest WHERE bdl_pbp IS NOT NULL AND bdl_pbp != '[]'::jsonb
+    AND date >= ${from} AND date <= ${to}
     ORDER BY date, game_id LIMIT ${limit} OFFSET ${offset}
   `;
-  const total = await sql`SELECT COUNT(*) AS n FROM wnba_backtest WHERE bdl_pbp IS NOT NULL AND bdl_pbp != '[]'::jsonb`;
+  const total = await sql`SELECT COUNT(*) AS n FROM wnba_backtest WHERE bdl_pbp IS NOT NULL AND bdl_pbp != '[]'::jsonb
+    AND date >= ${from} AND date <= ${to}`;
   const slim = (side) => ({ pts: null, fgm: side.fgm, fga: side.fga, f3m: side.fg3m, f3a: side.fg3a,
-    ftm: side.ftm, fta: side.fta, to: side.tov, pot: side.pot, oreb: side.oreb, stl: side.stl });
+    ftm: side.ftm, fta: side.fta, to: side.tov, pot: side.pot, oreb: side.oreb, stl: side.stl,
+    pntm: side.paintM });
   const games = rows.map((r) => {
     let cps = [];
     try {
-      const snaps = reconstructCheckpoints(r.bdl_pbp, r.home_alias, r.away_alias) || [];
+      const snaps = reconstructCheckpoints(r.bdl_pbp, r.home_alias, r.away_alias, marks) || [];
       cps = snaps.map((s) => ({ label: s.cp.label, period: s.cp.period, gameSec: s.cp.gameSec,
         home: { ...slim(s.home), pts: s.homeScore }, away: { ...slim(s.away), pts: s.awayScore } }));
     } catch (e) { cps = []; }
