@@ -4062,43 +4062,103 @@ function ssCellRead(st){
   return t;
 }
 
-// ── Amendment 2: SEASON CONTEXT panel — tap-to-expand under CELL READ. PURE. ──
-// Reads ONLY SS_SEASON26 + state (for row highlight). R2: WIN/HOLD labels explicit.
-// R3: [2026] header tag; nothing here pools anywhere. R4: Q4 inside 5:00 -> suspension
-// copy only (unknown Q4 clock degrades conservatively, mirroring ssCellRead).
-// RAW RENDER per PM: every cell prints rate + n + power tag, no minimum-n floor.
+// ── Amendment 2 (continuum rev, PM-approved via mock): SEASON CONTEXT panel — ──
+// tap-to-expand under CELL READ. PURE. Each feature renders a horizontal track
+// (band segments + boundary ticks) with an amber dot at this game's live value
+// and the current segment's season rate highlighted. Reads ONLY SS_SEASON26 + st.
+// R2 WIN/HOLD labels · R3 [2026] header tag, zero pooling · R4 Q4<5:00 suspends
+// (conservative unknown-clock degrade, mirroring ssCellRead) · RAW RENDER per PM.
+// DEFICIT row sources st.liveMargin (g.homePoints/awayPoints — the 10s header
+// score) with st.margin (scoringComp, pbp cadence) as fallback: renderCard runs
+// every 10s tick, so the dot tracks the header with no nudge machinery needed.
 function ssSeasonPanel(st){
   st=st||{};var S=SS_SEASON26;
   var pw=function(n){return n>=200?'HIGH':n>=80?'MED':'LOW';};
-  var cell=function(label,c,hl){
-    if(c==null||c.p==null)return '<span style="color:var(--fg-dim)">'+label+' no 2026 sample</span>';
-    var s=label+' '+Number(c.p).toFixed(1)+'% [n='+c.n+' '+pw(c.n)+']';
-    return hl?'<span style="color:var(--amber);font-weight:600">'+s+'</span>':'<span>'+s+'</span>';
+  var p1=function(x){return String(parseFloat(x.toFixed(1)));};
+  var SEP='border-right:1px solid var(--hairline)';
+  var LIVE='#2d3a4d',DEAD='#21262d',HOT='#3d3426';
+  var rateTxt=function(label,c){
+    if(c==null||c.p==null)return label+' no 2026 sample';
+    return label+' '+Number(c.p).toFixed(1)+'% [n='+c.n+' '+pw(c.n)+']';
   };
+  var row=function(title,segs,ticks,dotPos,rates){
+    var h='<div style="margin-bottom:10px">';
+    h+='<div style="color:var(--fg-secondary)">'+title+'</div>';
+    h+='<div style="position:relative;height:6px;border-radius:3px;display:flex;margin:7px 0 2px">';
+    for(var i=0;i<segs.length;i++)h+='<div style="width:'+segs[i].w+'%;background:'+segs[i].bg+';'+(i<segs.length-1?SEP:'')+'"></div>';
+    if(dotPos!=null)h+='<div style="position:absolute;top:-3px;left:'+p1(dotPos)+'%;width:12px;height:12px;border-radius:50%;background:var(--amber);border:2px solid #0d1117;transform:translateX(-50%)"></div>';
+    h+='</div>';
+    h+='<div style="position:relative;height:11px;color:var(--fg-dim);font-size:9.5px">';
+    for(var t=0;t<ticks.length;t++)h+='<span style="position:absolute;left:'+ticks[t].left+'%;transform:translateX(-50%)">'+ticks[t].t+'</span>';
+    h+='</div>';
+    h+='<div style="display:flex;font-size:9.5px;color:var(--fg-tertiary)">';
+    for(var r2=0;r2<rates.length;r2++)h+='<span style="width:'+rates[r2].w+'%;text-align:center'+(rates[r2].cur?';color:var(--amber);font-weight:600':'')+'">'+rates[r2].t+'</span>';
+    h+='</div></div>';
+    return h;
+  };
+  var clockMin=function(c){var mm=String(c==null?'':c).match(/^(\d+):(\d+)/);if(mm)return Number(mm[1])+Number(mm[2])/60;var n=Number(c);return isFinite(n)&&c!=null&&c!==''?n/60:null;};
+  // R4 — Q4 inside 5:00 (unknown Q4 clock degrades conservatively)
   if(Number(st.period)>=4){
-    var cm=null;
-    if(st.clock!=null){var mm=String(st.clock).match(/^(\d+):(\d+)/);cm=mm?Number(mm[1])+Number(mm[2])/60:(isFinite(Number(st.clock))?Number(st.clock)/60:null);}
+    var cm=clockMin(st.clock);
     if(cm==null||cm<5)return '<div style="font-weight:600;color:var(--fg-secondary)">THIS SEASON [2026]</div><div>Inside 5:00 \u2014 numbers suspended (R4). Season context returns when the clock stops being the whole story.</div>';
   }
-  var m=st.margin!=null?Math.abs(Number(st.margin)):null;
-  var dk=m==null?null:m<=3?'d13':m<=6?'d46':m<=9?'d79':null;
+  // live values
+  var m=st.liveMargin!=null?Math.abs(Number(st.liveMargin)):(st.margin!=null?Math.abs(Number(st.margin)):null);
+  var g=st.gap!=null?Number(st.gap):null;
+  var lw=st.leaderWp!=null?Number(st.leaderWp):null;
+  var ef=st.leaderEfg!=null?Number(st.leaderEfg):null;
+  var dk=m==null?null:m>=1&&m<=3?'d13':m>=4&&m<=6?'d46':m>=7&&m<=9?'d79':null;
+  var gk=g==null?null:g>=0.35?'strong':g>=0.15?'qual':null;
+  var lk=lw==null?null:lw<0.400?'bad':lw<0.550?'mid':'qual';
+  var ek=ef==null?null:ef<45?'sub45':ef<=55?'warm':'hot';
   var tk;
   if(Number(st.period)<4)tk='preQ4';
-  else{var m2=String(st.clock||'').match(/^(\d+):/);tk=(m2&&Number(m2[1])>=5)?'q4e':'q4l';}
-  var g=st.gap!=null?Number(st.gap):null;
-  var gk=g==null?null:g>=0.35?'strong':g>=0.15?'qual':null;
-  var lw=st.leaderWp!=null?Number(st.leaderWp):null;
-  var lk=lw==null?null:lw<0.400?'bad':lw<0.550?'mid':'qual';
-  var ef=st.leaderEfg!=null?Number(st.leaderEfg):null;
-  var ek=ef==null?null:ef<45?'sub45':ef<=55?'warm':'hot';
-  var sep=' \u00b7 ';
-  var h='<div style="font-weight:600;color:var(--fg-secondary);margin-bottom:3px">THIS SEASON [2026] \u2014 as of '+S.asof+' \u00b7 '+S.games+' games \u00b7 trailer-WINS unless marked HOLD</div>';
-  h+='<div>DEFICIT&nbsp; '+cell('1-3',S.deficit.d13,dk==='d13')+sep+cell('4-6',S.deficit.d46,dk==='d46')+sep+cell('7-9',S.deficit.d79,dk==='d79')+'</div>';
-  h+='<div>TIME&nbsp;&nbsp;&nbsp;&nbsp; '+cell('pre-Q4',S.time.preQ4,tk==='preQ4')+sep+cell('Q4-early',S.time.q4e,tk==='q4e')+sep+cell('Q4-late',S.time.q4l,tk==='q4l')+'</div>';
-  h+='<div>GAP&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; '+cell('.15-.35',S.gap.qual,gk==='qual')+sep+cell('.35+',S.gap.strong,gk==='strong')+'</div>';
-  h+='<div>LEADER&nbsp; '+cell('<.400',S.leader.bad,lk==='bad')+sep+cell('.400-.550',S.leader.mid,lk==='mid')+sep+cell('\u2265.550',S.leader.qual,lk==='qual')+'</div>';
-  h+='<div>LDR eFG '+cell('<45',S.greenVeto.sub45,ek==='sub45')+sep+cell('45-55',S.greenVeto.warm,ek==='warm')+sep+cell('>55',S.greenVeto.hot,ek==='hot')+'</div>';
-  h+='<div>HOLDS&nbsp;&nbsp; quality-earned leads HOLD '+Number(S.holds.quality_lead.p).toFixed(1)+'% [n='+S.holds.quality_lead.n+' '+pw(S.holds.quality_lead.n)+']</div>';
+  else tk=(clockMin(st.clock)>=5)?'q4e':'q4l';
+  var clamp=function(x){return Math.max(0,Math.min(100,x));};
+  var f2=function(v){return Number(v).toFixed(2).replace(/^(-?)0\./,'$1.');};
+  var h='<div style="font-weight:600;color:var(--fg-secondary);margin-bottom:8px">THIS SEASON [2026] \u2014 as of '+S.asof+' \u00b7 '+S.games+' games \u00b7 trailer-WINS unless marked HOLD</div>';
+  // DEFICIT — domain [0.5, 9.5], live-score sourced
+  h+=row('DEFICIT \u2014 '+(m==null?'\u2014':m===0?'<b style="color:var(--amber)">tied</b>':'down <b style="color:var(--amber)">'+m+'</b>'),
+    [{w:33.33,bg:LIVE},{w:33.34,bg:LIVE},{w:33.33,bg:LIVE}],
+    [{left:33.33,t:'3|4'},{left:66.67,t:'6|7'}],
+    m==null?null:clamp((m-0.5)/9*100),
+    [{w:33.33,t:rateTxt('1-3',S.deficit.d13),cur:dk==='d13'},{w:33.34,t:rateTxt('4-6',S.deficit.d46),cur:dk==='d46'},{w:33.33,t:rateTxt('7-9',S.deficit.d79),cur:dk==='d79'}]);
+  // GAP — domain [0, .60]
+  h+=row('GAP \u2014 '+(g==null?'\u2014':'<b style="color:var(--amber)">'+f2(g)+'</b>'),
+    [{w:25,bg:DEAD},{w:33.33,bg:LIVE},{w:41.67,bg:LIVE}],
+    [{left:25,t:'.15'},{left:58.33,t:'.35'}],
+    g==null?null:clamp(g/0.6*100),
+    [{w:25,t:'below bar'},{w:33.33,t:rateTxt('.15-.35',S.gap.qual),cur:gk==='qual'},{w:41.67,t:rateTxt('.35+',S.gap.strong),cur:gk==='strong'}]);
+  // LEADER wp — domain [.15, .75]
+  h+=row('LEADER \u2014 season wp '+(lw==null?'\u2014':'<b style="color:var(--amber)">'+f2(lw)+'</b>'),
+    [{w:41.67,bg:LIVE},{w:25,bg:LIVE},{w:33.33,bg:DEAD}],
+    [{left:41.67,t:'.400'},{left:66.67,t:'.550'}],
+    lw==null?null:clamp((lw-0.15)/0.6*100),
+    [{w:41.67,t:rateTxt('&lt;.400',S.leader.bad),cur:lk==='bad'},{w:25,t:rateTxt('.400-.550',S.leader.mid),cur:lk==='mid'},{w:33.33,t:rateTxt('\u2265.550',S.leader.qual),cur:lk==='qual'}]);
+  // LEADER eFG — domain [30, 75]
+  h+=row('LDR eFG \u2014 '+(ef==null?'\u2014':'shooting <b style="color:var(--amber)">'+Number(ef).toFixed(1)+'</b>'),
+    [{w:33.33,bg:DEAD},{w:22.22,bg:LIVE},{w:44.45,bg:HOT}],
+    [{left:33.33,t:'45'},{left:55.55,t:'55'}],
+    ef==null?null:clamp((ef-30)/45*100),
+    [{w:33.33,t:rateTxt('&lt;45',S.greenVeto.sub45),cur:ek==='sub45'},{w:22.22,t:rateTxt('45-55',S.greenVeto.warm),cur:ek==='warm'},{w:44.45,t:rateTxt('&gt;55',S.greenVeto.hot),cur:ek==='hot'}]);
+  // TIME — segments 70/15/15 (readability over strict proportion; ticks are honest)
+  var tPos=null;
+  if(Number(st.period)>=2&&Number(st.period)<=4){
+    var cmT=clockMin(st.clock);
+    if(Number(st.period)<4){
+      var elMin=cmT==null?(Number(st.period)-1)*10:(Number(st.period)-1)*10+(10-cmT);
+      tPos=clamp(elMin/30*70);
+    }else{
+      var q=cmT==null?5:10-cmT;
+      tPos=q<=5?clamp(70+q/5*15):clamp(85+(q-5)/5*15);
+    }
+  }
+  h+=row('TIME \u2014 '+(st.period?'Q'+st.period+(st.clock?' '+st.clock:''):'\u2014'),
+    [{w:70,bg:LIVE},{w:15,bg:LIVE},{w:15,bg:DEAD}],
+    [{left:70,t:'Q4'},{left:85,t:'5:00'}],
+    tPos,
+    [{w:70,t:rateTxt('pre-Q4',S.time.preQ4),cur:tk==='preQ4'},{w:15,t:rateTxt('Q4e',S.time.q4e),cur:tk==='q4e'},{w:15,t:rateTxt('Q4l',S.time.q4l),cur:tk==='q4l'}]);
+  h+='<div style="color:var(--fg-tertiary)">HOLDS \u2014 quality-earned leads HOLD '+Number(S.holds.quality_lead.p).toFixed(1)+'% [n='+S.holds.quality_lead.n+' '+pw(S.holds.quality_lead.n)+']</div>';
   return h;
 }
 var _ssSeasonOpen={};
@@ -4595,6 +4655,7 @@ function renderSSVerdictBox(id,cs,hA,aA){
         var _glTp=_teamProfiles&&_teamProfiles[_glLd];
         var _glWp=(_glTp&&(_glTp.w+_glTp.l)>0)?_glTp.w/(_glTp.w+_glTp.l):null;
         var _glSt={gap:sn.ss_quality_gap!=null?Number(sn.ss_quality_gap):null,leaderWp:_glWp,
+          liveMargin:(g&&g.homePoints!=null&&g.awayPoints!=null)?Math.abs(Number(g.homePoints)-Number(g.awayPoints)):null,
           margin:Math.abs((_glSc.home.total||0)-(_glSc.away.total||0)),
           fuel:_glFt?_glFt.fuel:null,temp:_glFt?_glFt.temp:null,
           leadClass:sn.ss_lead_class,period:sn.period,clock:sn.clock,
