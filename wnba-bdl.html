@@ -3957,6 +3957,23 @@ var SS_STRUCT = {
 };
 // SS_STRUCT_END
 
+// SS_SEASON26_BEGIN — [this season] context block (PARITY_SPEC Amendment 2 §2).
+// GENERATED — never hand-edit. Regenerate + verify: node research/build_ss_season26.mjs
+// Source: research/fixtures_fine26_states.json.gz (947 states, 140 games, first-
+// perception grain; selection recipe = the committed deficit26 derivation, repro-gated
+// 3/3 exact). R3: display-only — never pools with SS_STRUCT, never read by gates,
+// sizing, or narration. RAW RENDER per PM: no minimum-n floor, power tags carry honesty.
+var SS_SEASON26 = {
+  asof: '2026-08-12', games: 140,
+  deficit: { d13: { p: 62.9, n: 105 }, d46: { p: 60.7, n: 56 }, d79: { p: 40.7, n: 27 } },
+  time: { preQ4: { p: 63.6, n: 151 }, q4e: { p: 63.0, n: 27 }, q4l: { p: 37.9, n: 29 } },
+  gap: { qual: { p: 54.9, n: 122 }, strong: { p: 66.7, n: 66 } },
+  leader: { bad: { p: 58.3, n: 127 }, mid: { p: 63.8, n: 58 }, qual: { p: null, n: 0 } },
+  holds: { quality_lead: { p: 65.0, n: 40 } },
+  greenVeto: { sub45: { p: 16.7, n: 6 }, warm: { p: 53.8, n: 39 }, hot: { p: 72.7, n: 55 } }
+};
+// SS_SEASON26_END
+
 // Display translation (PARITY_SPEC §2) — VERBATIM MIRROR of poll-live-bdl.mjs
 // ssLeadClassDisplay; function-text equality fixture-enforced (aliasMap treatment).
 function ssLeadClassDisplay(lc) {
@@ -4043,6 +4060,52 @@ function ssCellRead(st){
   // R3 rider — at most one, fade country only
   if(st.leaderEfg!=null&&Number(st.leaderEfg)>55)t+=' Hot leader adds [this season: ~'+Math.round(S.riders26.hotCell.p)+'%, n='+S.riders26.hotCell.n+'].';
   return t;
+}
+
+// ── Amendment 2: SEASON CONTEXT panel — tap-to-expand under CELL READ. PURE. ──
+// Reads ONLY SS_SEASON26 + state (for row highlight). R2: WIN/HOLD labels explicit.
+// R3: [2026] header tag; nothing here pools anywhere. R4: Q4 inside 5:00 -> suspension
+// copy only (unknown Q4 clock degrades conservatively, mirroring ssCellRead).
+// RAW RENDER per PM: every cell prints rate + n + power tag, no minimum-n floor.
+function ssSeasonPanel(st){
+  st=st||{};var S=SS_SEASON26;
+  var pw=function(n){return n>=200?'HIGH':n>=80?'MED':'LOW';};
+  var cell=function(label,c,hl){
+    if(c==null||c.p==null)return '<span style="color:var(--fg-dim)">'+label+' no 2026 sample</span>';
+    var s=label+' '+Number(c.p).toFixed(1)+'% [n='+c.n+' '+pw(c.n)+']';
+    return hl?'<span style="color:var(--amber);font-weight:600">'+s+'</span>':'<span>'+s+'</span>';
+  };
+  if(Number(st.period)>=4){
+    var cm=null;
+    if(st.clock!=null){var mm=String(st.clock).match(/^(\d+):(\d+)/);cm=mm?Number(mm[1])+Number(mm[2])/60:(isFinite(Number(st.clock))?Number(st.clock)/60:null);}
+    if(cm==null||cm<5)return '<div style="font-weight:600;color:var(--fg-secondary)">THIS SEASON [2026]</div><div>Inside 5:00 \u2014 numbers suspended (R4). Season context returns when the clock stops being the whole story.</div>';
+  }
+  var m=st.margin!=null?Math.abs(Number(st.margin)):null;
+  var dk=m==null?null:m<=3?'d13':m<=6?'d46':m<=9?'d79':null;
+  var tk;
+  if(Number(st.period)<4)tk='preQ4';
+  else{var m2=String(st.clock||'').match(/^(\d+):/);tk=(m2&&Number(m2[1])>=5)?'q4e':'q4l';}
+  var g=st.gap!=null?Number(st.gap):null;
+  var gk=g==null?null:g>=0.35?'strong':g>=0.15?'qual':null;
+  var lw=st.leaderWp!=null?Number(st.leaderWp):null;
+  var lk=lw==null?null:lw<0.400?'bad':lw<0.550?'mid':'qual';
+  var ef=st.leaderEfg!=null?Number(st.leaderEfg):null;
+  var ek=ef==null?null:ef<45?'sub45':ef<=55?'warm':'hot';
+  var sep=' \u00b7 ';
+  var h='<div style="font-weight:600;color:var(--fg-secondary);margin-bottom:3px">THIS SEASON [2026] \u2014 as of '+S.asof+' \u00b7 '+S.games+' games \u00b7 trailer-WINS unless marked HOLD</div>';
+  h+='<div>DEFICIT&nbsp; '+cell('1-3',S.deficit.d13,dk==='d13')+sep+cell('4-6',S.deficit.d46,dk==='d46')+sep+cell('7-9',S.deficit.d79,dk==='d79')+'</div>';
+  h+='<div>TIME&nbsp;&nbsp;&nbsp;&nbsp; '+cell('pre-Q4',S.time.preQ4,tk==='preQ4')+sep+cell('Q4-early',S.time.q4e,tk==='q4e')+sep+cell('Q4-late',S.time.q4l,tk==='q4l')+'</div>';
+  h+='<div>GAP&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; '+cell('.15-.35',S.gap.qual,gk==='qual')+sep+cell('.35+',S.gap.strong,gk==='strong')+'</div>';
+  h+='<div>LEADER&nbsp; '+cell('<.400',S.leader.bad,lk==='bad')+sep+cell('.400-.550',S.leader.mid,lk==='mid')+sep+cell('\u2265.550',S.leader.qual,lk==='qual')+'</div>';
+  h+='<div>LDR eFG '+cell('<45',S.greenVeto.sub45,ek==='sub45')+sep+cell('45-55',S.greenVeto.warm,ek==='warm')+sep+cell('>55',S.greenVeto.hot,ek==='hot')+'</div>';
+  h+='<div>HOLDS&nbsp;&nbsp; quality-earned leads HOLD '+Number(S.holds.quality_lead.p).toFixed(1)+'% [n='+S.holds.quality_lead.n+' '+pw(S.holds.quality_lead.n)+']</div>';
+  return h;
+}
+var _ssSeasonOpen={};
+function ssToggleSeason(id){
+  _ssSeasonOpen[id]=!_ssSeasonOpen[id];
+  var el=document.getElementById('ssSeason-'+id);if(el)el.style.display=_ssSeasonOpen[id]?'block':'none';
+  var c=document.getElementById('ssSeasonCaret-'+id);if(c)c.textContent=_ssSeasonOpen[id]?'\u25be':'\u25b8';
 }
 
 // Gap formatting: 2 decimals, except widen to 3 when rounding would cross the .15/.20
@@ -4542,7 +4605,11 @@ function renderSSVerdictBox(id,cs,hA,aA){
         var _tCol=_glSt.temp==='cold'?'#4aa3ff':_glSt.temp==='hot'?'var(--coral)':_glSt.temp==='warm'?'var(--amber)':null;
         html+='<div style="margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--hairline)">';
         html+='<div style="font-size:11px;letter-spacing:.02em;color:var(--fg-secondary)">'+esc(_gl.text)+'</div>';
-        if(_cr)html+='<div style="margin-top:3px;font-size:11px;color:var(--fg-tertiary)">'+esc(_cr)+'</div>';
+        if(_cr){
+          var _spOpen=!!_ssSeasonOpen[id];
+          html+='<div onclick="ssToggleSeason(\''+id+'\')" style="margin-top:3px;font-size:11px;color:var(--fg-tertiary);cursor:pointer">'+esc(_cr)+' <span id="ssSeasonCaret-'+id+'" style="color:var(--fg-dim)">'+(_spOpen?'\u25be':'\u25b8')+'</span></div>';
+          html+='<div id="ssSeason-'+id+'" style="display:'+(_spOpen?'block':'none')+';margin-top:4px;padding:6px 8px;border:1px solid var(--hairline);border-radius:6px;font-size:10.5px;line-height:1.55;color:var(--fg-tertiary);font-family:var(--mono)">'+ssSeasonPanel(_glSt)+'</div>';
+        }
         if(_tCol||_glSt.leaderKiller){
           html+='<div style="margin-top:3px">';
           if(_glSt.leaderKiller)html+=ekBadge(_glLd)+' ';

@@ -134,3 +134,15 @@ timing. (4) Gap-reliability-by-GP. (5) JUICE quality-conditioned thresholds.
 RISKS: prompt-text under-rigor (grep + verbatim pin) · number drift
 (equality fixture) · card height (CELL READ <=2 lines, tap-expand) ·
 get_ss_state untouched · zero polling-path SELECT changes.
+
+-----
+
+## AMENDMENT 2 — SEASON26 TAP PANEL (PM-approved Aug 13; raw-render variant)
+
+**§1 Interaction.** The CELL READ line in the verdict box becomes tappable (caret affordance). Tap → compact SEASON CONTEXT panel expands beneath it; tap again → collapses. Collapsed by default; open-state is per-game in-memory only (`_ssSeasonOpen`, survives the 60s re-render, not persisted). The row matching the current cell (deficit bucket / time phase / gap tier / leader stratum / eFG band) renders highlighted. When ssCellRead returns null (below-bar gap / out-of-band) there is no line and no panel — the gate line owns those states.
+
+**§2 Data contract.** Client-only generated block `SS_SEASON26` in wnba-bdl.html between `SS_SEASON26_BEGIN/END` markers — deficit/time/gap/leader/holds/greenVeto cells + `asof` + qualifying-game count. GENERATED, never hand-edit: `research/build_ss_season26.mjs` computes every cell from the committed `fixtures_fine26_states.json.gz` using the build_ss_struct population recipes verbatim and value-verifies the HTML block (exit 1 on mismatch — joins the pre-push gate). `SS_STRUCT` untouched; server and narration never read `SS_SEASON26` (no pooling by construction). Static-pinned v1 with printed as-of date; refresh = rerun extraction + builder + commit. Nightly auto-refresh is a v2 decision, out of scope.
+
+**§3 Composition rules.** Inherits R2 (every rate labeled trailer-WINS or lead-HOLDS), R3 (panel header carries the [2026] this-season tag; nothing pools into CELL READ or narration), R4 (Q4 inside 5:00 → suspension copy only, conservative degrade on unknown clock, mirroring ssCellRead), R5 (no availability facts). **RAW RENDER (PM decision): no minimum-n floor — every cell prints its rate, n, and power tag (HIGH ≥200 / MED ≥80 / LOW <80), including sub-n=20 cells.** Empty cells print "no 2026 sample".
+
+**§4 Implementation.** Pure renderer `ssSeasonPanel(st)` + `ssToggleSeason(id)` + `_ssSeasonOpen` global (var, per TDZ learning) in wnba-bdl.html; wired at the renderSSVerdictBox cell-read site. Zero server changes, zero schema changes, zero polling-path reads. Fixtures: `research/ss_season26_fixtures.mjs` (R4 suppression, raw low-n render, empty-cell copy, highlight selection, header tag, WIN/HOLD labels) + builder value-verify. SS_STRUCT byte-equality and ss_parity 30/30 must remain green.
