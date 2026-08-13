@@ -1,13 +1,13 @@
 # Deepfuckingthesis — Project Knowledge
 
-**Version:** 5.3
-**Last updated:** August 11, 2026
+**Version:** 5.4
+**Last updated:** August 13, 2026
 **Live URL:** https://poetic-starlight-aa8938.netlify.app
 **GitHub:** MannyBanda/Deepfuckingthesis (private)
 
-*(v5.3 integrates everything shipped and learned since v5.2: JUICE/squeeze watch, the ACA one-copy-source architecture, the FUEL×TEMP×GAP and takeaway-decay research, dashboard parity, the checkpoint-arena spec cuts, the retraction ledger, updated record/ledger state, and a formal section on how research findings get presented. NBA indicator/state-machine sections are unchanged and stable — that system is off-season.)*
+*(v5.4 is the fine-arena version: the structural substrate moved from the 2.5-minute checkpoint arena to a production-matched 30-second grain, which corrected the headline deficit finding (the "cliff at 3-4" was mostly instrument; the real break is at 6-7), dropped every 2026 rider mechanically, and re-pinned the entire consumer card to committed, regenerable numbers. It also carries parity Items A/B/C shipped (including the classifier-definitions contract that closed a live agent-integrity bug), the AVAILABILITY §5a rotation substrate, the availability-gate null result and the row-37 autopsy correction, updated lane/killer state, and the refreshed record. NBA indicator/state-machine sections are unchanged and stable — that system is off-season.)*
 
-**How we got here (Jul 17 → Aug 11):** v5.2 closed with the Sweet Spot engine live and the flagged stream 6-0. Since then: JUICE (live price stalking) shipped v1.2 → v1.3; Decision Support v1 was approved; the LA@MIN row-1197 loss triggered a full post-mortem that produced the **ACA architecture — one copy source, three surfaces** — shipped in phases P0→P3; dashboard parity closed the last surface gap. Then a research week that mattered more than any of it: the checkpoint arena (576 games, both-seasons rule) killed three candidate layers, validated the 9-point band, found the **deficit cliff at 3-4**, and forced two public retractions of my own prior claims. Real money: flagged stream **14-3 by position, +$8,566**.
+**How we got here (Aug 11 → Aug 13):** v5.3 closed with the coarse checkpoint arena as the structural source and the "deficit cliff at 3-4" as its headline. A granularity replay on the 2026 tape then measured production's true perception grain at ~26s median — 6× finer than the arena — and showed the coarse grid missing 35.4% of in-band episodes. Rebuilding the arena at 30s (FINE ARENA, 3,113 window-matched states) revealed the cliff was mostly **sampling-moment bias**: coarse sampling catches leads *parked* at a deficit, production fires on *first perception*. PM adopted the fine arena as the SS_STRUCT source, deficit26 was re-pinned from a committed derivation, and all R1 riders dropped mechanically — the card is now single-number structural at instrument-matched values. In parallel: parity A/B/C shipped, the §5a nightly-minutes substrate landed with a 245-game backfill, the availability-gate hypotheses all failed their pre-registered bars (display-only stands), and the A-tier stream went 6/6 with its first minus-money fire (row 38, CHI@GS, +$606). Real money: flagged stream **15-3 by position, +$9,172**.
 
 -----
 
@@ -30,18 +30,21 @@ Two analytical frameworks run:
 Client:
   bdl.html (~12,340)          — NBA client dashboard (MUST always be named exactly this)
   v3.html (~3,983)            — V3 NBA dashboard
-  wnba-bdl.html (~5,247)      — WNBA dashboard (verdict strip, EK chip, matchup sheet,
-                                fuel block w/ mirrored ssCautionLines)
+  wnba-bdl.html (~5,390)      — WNBA dashboard (verdict strip w/ gate line + CELL READ,
+                                EK chip, matchup sheet, fuel block w/ mirrored
+                                ssCautionLines, SS_STRUCT mirror)
   ncaamb-bdl.html (~9,846)    — NCAAMB dashboard
   debug.html (~3,295)         — Diagnostic dashboard (7 sections)
 
 Server (netlify/functions/):
-  poll-live-bdl.mjs (~11,010)      — Polling, mechanical alerts, XGB, MC, narration,
+  poll-live-bdl.mjs (~11,060)      — Polling, mechanical alerts, XGB, MC, narration,
                                      alert reasoning agent, Sweet Spot engine, fuel/temp,
-                                     caution kernels, regime tripwire, pregame briefs
-  db-api.js (~3,253)               — Database API (Neon Postgres)
+                                     caution kernels, regime tripwire, pregame briefs,
+                                     SS_STRUCT (structural numbers module)
+  db-api.js (~3,262)               — Database API (Neon Postgres)
   odds-squeeze.mjs (~704)          — JUICE: live price stalking on pushed SS rows (v1.3)
-  team-profiles-nightly.mjs (~542) — Nightly team profiles: splits, elite tiers, killer fields
+  team-profiles-nightly.mjs (~686) — Nightly team profiles: splits, elite tiers, killer
+                                     fields, rotation (§5a computeRotation)
   post-game-agent.mjs (~1,261)     — Nightly learning agent + SS resolver sweep + digest
                                      (cron 11:45pm MST)
   mc-backtest.mjs (~5,647)         — Monte Carlo backtest harness (12+ phases)
@@ -64,7 +67,7 @@ Config & research:
 
 *(Line counts drift — the startup protocol's `wc -l` is ground truth, not this table.)*
 
-**Active specs at root:** `SWEETSPOT_ENGINE_SPEC`, `SWEETSPOT_4C_SPEC`, `SWEETSPOT_TIER_BC_SPEC`, `SWEETSPOT_NARRATION_V2_SPEC`, `SWEETSPOT_VERDICT_STRIP_SPEC`, `SWEETSPOT_DASHBOARD_PARITY_SPEC` (Amendment 1 v3 — pending PM go), `ALERT_CONTEXT_ALIGNMENT_SPEC`, `SQUEEZE_WATCH_SPEC` (v1.3), `DECISION_SUPPORT_V1_SPEC`, `KILLER_FLAG_SPEC`, `OVERRIDE_LANE_SPEC`, `TEAM_PROFILES_SPEC`, `TEAM_CTX_SURFACING_SPEC`, `WNBA_PREGAME_AGENT_SPEC`.
+**Active specs at root:** `SWEETSPOT_ENGINE_SPEC`, `SWEETSPOT_4C_SPEC`, `SWEETSPOT_TIER_BC_SPEC`, `SWEETSPOT_NARRATION_V2_SPEC`, `SWEETSPOT_VERDICT_STRIP_SPEC`, `SWEETSPOT_DASHBOARD_PARITY_SPEC` (Amendment 1 v3 — Items A/B/C SHIPPED Aug 11-12; Items D/E/F queued), `ALERT_CONTEXT_ALIGNMENT_SPEC`, `SQUEEZE_WATCH_SPEC` (v1.3), `DECISION_SUPPORT_V1_SPEC`, `KILLER_FLAG_SPEC`, `OVERRIDE_LANE_SPEC`, `TEAM_PROFILES_SPEC`, `TEAM_CTX_SURFACING_SPEC`, `WNBA_PREGAME_AGENT_SPEC`, `AVAILABILITY_SPEC` (display-only, §5a shipped). The FINE ARENA was pre-registered in chat (FINE_ARENA_SPEC v1, PM go); its permanent artifacts are `research/build_ss_struct.mjs`, `research/fine_arena_states.mjs`, and the committed states files.
 
 ### Multi-League Architecture
 
@@ -122,7 +125,7 @@ Other env vars: `DATABASE_URL`, `NTFY_TOPIC` (manny_nba_control), `ODDS_API_KEY`
 
 **`bets`** — Manny's bet log (37 rows as of Aug 11). Matchup, side, odds, stake, result, pnl, grade, system_state, entry_period, entry_deficit, notes. Book: bet365 default, Caesars frequently. *Housekeeping:* result vocabulary is inconsistent across eras (`WIN`/`W`, `LOST`/`LOSS`/`L`, plus `CASHOUT`, `PASS`) — normalize before any aggregate query, or counts will be wrong.
 
-**`team_profiles`** — nightly per-team season profile JSONB (PK team_alias/league/season): splits, archetypes, schedule inflation, consumer `elite`/`killer`/`tiers_elite`, internal-only def-A tiers. Written solely by team-profiles-nightly. **`team_game_stats`** — per-game team lines feeding profiles. **`job_locks`** — nightly dedup.
+**`team_profiles`** — nightly per-team season profile JSONB (PK team_alias/league/season): splits, archetypes, schedule inflation, consumer `elite`/`killer`/`tiers_elite`, internal-only def-A tiers. Written solely by team-profiles-nightly. **`team_game_stats`** — per-game team lines feeding profiles. **`team_game_players`** (§5a) — per-player per-game minutes captured on-the-way-past in `pullTeamGameLines` (zero new API calls; 245-game backfill complete; `tgp_team_date` index; self-healing diff re-pulls player rows for any game existing with team rows only). Feeds `computeRotation` → the `rotation` key in profile JSONB (trailing-10 team games, strict-< as-of, absences-as-0 mpg, floor 8.0 inclusive, min-5 guard; `mpg_played` stored, never displayed). **`job_locks`** — nightly dedup.
 
 **`snapshots`** — raw_stats_json (BDL), **espn_raw_stats_json** (ESPN, dual-persisted), tp/ls, sust_json, xgb_win_prob, xgb_divergence, mc_win_prob, mc_cum_win_prob, `ss_*` gate columns (read by verdict strip).
 
@@ -170,40 +173,47 @@ Schedule, injuries, depth charts, seasonal splits, standings, pre-game context; 
 - NBA deficit-controlled (1,235 games): 22% → 38% → 58% monotonic
 - WNBA historical 2024–25 (524 games OOS): 16.5% → 33% → 48%
 - Checkpoint arena (576 games, 2,724 states): gap staircase invariant in **both** seasons independently
+- Fine arena (same 576 games at production-matched 30s grain, 3,113 window states): every structural axis re-confirmed at the grain production actually fires on — not an independent sample, but the transfer-correct instrument
 
 **Operative signal = quality gap (trailer win% − leader win%) + deficit + time + live line.**
 
 **The "whose variance is it?" check:** the variance-share delta must favor the LEADER. If the trailer is the variance team, the fade inverts — pass (POR@CHI Jun 24, the teaching case).
 
-### Structural shape of the edge (checkpoint arena, both-seasons validated)
+### Structural shape of the edge (FINE ARENA — adopted as SS_STRUCT source, PM Aug 11)
 
-These four axes survived every sample and are the only ones allowed to carry numbers on consumer surfaces:
+The structural substrate is now the **fine arena**: the 576 historical games (2024+2025) re-reconstructed at 30-second marks — 3,113 states in the coarse-comparable 750-2250s window — committed as `research/fixtures_fine_states_matched.json.gz` and compiled into the `SS_STRUCT` module by `research/build_ss_struct.mjs` (19 cells verified, byte-equality across poll-live-bdl.mjs and wnba-bdl.html fixture-enforced; GENERATED, never hand-edit). All rates are trailer-WIN unless the key says holds (lead-HOLD). Every number below is regenerable from committed artifacts.
 
-- **Deficit cliff at 3-4:** gap ≥.15 trailer conversion — **1-3 = 60.8% (n=232) | 4-6 = 39.4% (n=155) | 7-9 = 32.0% (n=97)** | 10-12 = 25.0% | 13-15 = 14.5%. A 21pp cliff between 1-3 and 4-6, same direction both seasons. The 1-9 band contains two different populations.
-- **The 9-point band edge is VALIDATED, not conservative** (7-9 vs 10-12 = 7pp > the 5pp bar). Band widening is dead.
-- **Continuous time decay, no Q4 cliff:** Q2e 61.0 → Q2l 54.3 → Q3e 53.3 → Q3l 44.9 → Q4e 37.9 → Q4l 23.2 (n=56). Monotone both seasons. Q4-early is comparable to a pre-Q4 deficit-4-6 state — not death. Death zone is Q4-late.
-- **Gap saturates with a top tier:** <.05 = 22.7% | .05-.15 = 43.8 | .15-.25 = 43.7 | .25-.35 = 45.5 | **.35+ = 56.2% (n=153, stable 55.9/56.7)**. The edge is a STEP, not a curve — it turns on by ~.15 then flattens to .35. A .30 gap is not better than a .16 gap. Two-tier grading, not a gradient. Gate-lowering to .05 is NOT supported (season-inconsistent).
-- **Leader strata:** <.400 = 51.3% (n=316) | .400-.550 = 44.0% | ≥.550 = 35.3%. Ordering consistent, but no adjacent pair clears 10pp in both seasons → **no new alert countries**; ordering informs copy, not tiering.
+- **The deficit break is at 6-7, not 3-4.** Gap ≥.15 trailer conversion at fine grain: **1-3 = 54.9% (n=335) | 4-6 = 52.2% (n=138) | 7-9 = 35.8% (n=106)**, both seasons. d13→d46 is a 2.7pp step; d46→d79 is a −16.4pp break. The v5.3 "cliff at 3-4" (coarse: 60.8/39.4/32.0) was mostly **sampling-moment bias** — the coarse instrument samples leads that SIT at a deficit for 2.5 minutes; the fine instrument samples the FIRST moment a deficit exists, which is what production (~26s median grid) actually perceives at fire time. A lead parked at 4-6 is a stronger lead than one passing through 4-6. **The fine prior is the transfer-correct one for fire-time reads.**
+- **2026 deficit cells (committed derivation, first time):** deficit26 = 62.9% (n=105) / 60.0% (n=55) / 40.7% (n=27). With fine-arena bases, |2026−base| = 8.0/7.8/4.9pp — **all R1 riders dropped mechanically** (≤10pp bar). The card is single-number structural at instrument-matched values.
+- **The 2026 d46 "rider" decomposed ~half instrument, half era** (four-corner: fine-2026 60.0 · coarse-2026 52.9 · fine-hist 52.2 · coarse-hist 39.4). Measured like-for-like, this season's d46 edge over history is ~+8pp, not the +20.6pp the mixed-instrument card printed.
+- **Time decay (fine):** pre-Q4 = 55.3% (n=421) | Q4-early = 44.7% (n=85) | Q4-late = 31.5% (n=73). The decay is continuous and monotone (coarse six-bucket read retained directionally); Q4-early is meaningfully more alive than the coarse arena suggested. Death zone is still Q4-late.
+- **Gap is two-tier:** qualifying .15+ = 45.9% (n=390) | strong .35+ = 60.8% (n=189). The step-not-curve finding stands — the edge turns on by ~.15 and the only second tier is .35+. Gate-lowering to .05 remains unsupported.
+- **Leader strata:** <.400 = 54.3% (n=370) | .400-.550 = 47.3% (n=169) | ≥.550 = 32.5% (n=40, LOW — weak-side season legs 28.6/34.6 at n=14/26, so the "stable both seasons" clause is softened). Ordering informs copy, not tiering.
+- **Hold side:** quality-leader leads hold **75.1% (n=338)** — the respect-the-leader's-quality-first card in one number.
+- **eFG bands (greenVeto):** leader eFG <45 = 46.8% trailer conversion (n=47) | warm 45-55 = 64.6% (n=113); the hot cell >55 = 72.0% (n=50) is **2026-only** and rides R3-tagged (`[this season]`). Killer 67% (n=45) stays on the EK chip for historical-provenance honesty.
+- **The 9-point band stands** (coarse-arena validation, 7-9 vs 10-12 > the 5pp bar, unchallenged by the fine rebuild); the fine numbers sharpen the *inside* of the band — 1-6 is one population, 7-9 is another.
 
 ### Tier System & Ledger
 
 - **A-tier (EFG_FADE):** full dual-gate sweet spot. Live since Jul 2.
 - **B-tier (B1/B2/B3):** relaxed variants. Live since Jul 12.
 - **WATCHLIST:** qualifying quality-gap spots below the alert bar, surfaced for discretionary review (D-12 review narration, 2h claim window).
-- **Ledger streams (log-only, no push):** GAP_BASE (every in-band quality-gap spot — the forward OOS sample) and Q4_COLLAPSE.
+- **Ledger streams (log-only, no push):** GAP_BASE (every in-band quality-gap spot — the forward OOS sample) and Q4_COLLAPSE — **kept LOG-ONLY per PM (Aug 12): 0/24 historically across BOTH seasons in the tier-shape replay; 2026 tape 1/7.** Never promote without a genuinely new hypothesis.
 - **GAME_BRIEF:** pregame skeletons seeded every cycle for not-yet-tipped slate games (idempotent, self-healing); period-0 briefs narrate a pregame-honest season lens with no push.
 
-**Ledger state (Aug 11):**
+**Ledger state (Aug 13):**
 
 |Stream        |n  |resolved|realized|predicted|delta |status          |
 |--------------|---|--------|--------|---------|------|----------------|
-|EFG_FADE      |5  |5       |100%    |68.6%    |+31.4 |—               |
+|EFG_FADE      |6  |6       |100%    |69.6%    |+30.4 |—               |
 |EFG_FADE_SOFT |1  |1       |100%    |71.1%    |+28.9 |—               |
-|GAP_BASE      |15 |15      |80%     |70.8%    |+9.2  |PENDING (15/30) |
+|GAP_BASE      |16 |16      |81.3%   |70.9%    |+10.4 |PENDING (16/30) |
 |WATCHLIST     |30 |30      |70%     |64.9%    |+5.1  |—               |
-|GAME_BRIEF    |69 |65      |40%     |—        |—     |context only    |
+|GAME_BRIEF    |75 |71      |39.4%   |—        |—     |context only    |
 
 **Regime:** TRANSIENT_COLLAPSE ACTIVE.
+
+**Calibration caveat (queued research, needs its own prereg):** the `comebackProb` stamps behind the predicted column are calibrated on **coarse-era 2024-25 priors** — the same instrument the fine arena just corrected — so they are likely lowballing true win probability. Part of the A-tier +30pp over-performance may be instrument artifact rather than pure small-n. Second-order effects if the stamps rise on recalibration: the edge gate opens on more prices, and the graduation "realized within ~5pp of predicted" math changes. **comebackProb recalibration vs the fine arena is research-queue slot 1** now that this doc has shipped.
 
 ### JUICE — Squeeze Watch (odds-squeeze.mjs, v1.3)
 
@@ -249,11 +259,11 @@ Origin: the LA@MIN row-1197 loss, where the decisive pass context (EARNED lead, 
 
 **Evidence:** within band, <.400 leaders — killer 67% trailer conversion (n=45) vs no-scalp 53% (n=76); concentrated in modest gaps .15–.30 (75% vs 46%). **Mechanism:** scalps are two-sided variance events (+3.9 own heat, −3.7 opp cold). The .450 extension, live tells, decay, and frequency cuts are all dead. Promotion bar (pre-registered): killer rows ≥60% at n≥15 → sizing confidence within tier caps, NEVER tier elevation.
 
-**Killer set:** POR, LA, CHI, SEA, PHX. CON/TOR: never-beats-anyone.
+**Killer set is nightly-computed — trust the profile JSONB over any doc snapshot.** As of Aug 13: POR(6), LA(5), PHX(3), CHI(3), SEA(3), **CON(2 — crossed the ≥2-scalp bar; the v5.2/v5.3 "CON never-beats-anyone" characterization is stale)**. TOR(1) remains unflagged.
 
 ### Override Lane
 
-WATCHLIST cap lifts $300 → $600 when the TRAILER is a top team (wp ≥.600) with **negative schedule inflation** (infl <0, ≥5 vs-top games, internal def-A — never tiers_elite). Members: **MIN (−.10), LV (−.05)**. Rules: declared-before-entry, max ONE open lane position, bets tagged LANE.
+WATCHLIST cap lifts $300 → $600 when the TRAILER is a top team (wp ≥.600) with **negative schedule inflation** (infl <0, ≥5 vs-top games, internal def-A — never tiers_elite). **Membership is derived nightly — trust the profile JSONB and the digest LANE LINE over any doc snapshot.** As of Aug 13 the lane is a **single member: LV (−.06)** — MIN's inflation flipped positive (+.11) and it dropped out of the lane it originally spawned. Rules: declared-before-entry, max ONE open lane position, bets tagged LANE.
 
 ### Sizing, Grading & Graduation
 
@@ -271,17 +281,22 @@ WATCHLIST cap lifts $300 → $600 when the TRAILER is a top team (wp ≥.600) wi
 
 Manny bets discretionarily on top of the signal and adds real selection edge. Measure separately: (1) **signal base edge** — all qualifying spots; (2) **realized edge** — spots he bet. Discretionary alpha = the difference. **Passes are logged as first-class rows** (row 36 DAL@MIN, graded A pass: MIN's eFG unsustainable at heavy juice, DAL elite so not a beatable leader, lead earned-ish — and MIN winning on a record shooting night does not retro-grade the pass).
 
-### Record (Aug 11, 2026)
+### Record (Aug 13, 2026)
 
-- **Flagged stream: 14-3 by position (23-4 by ticket), +$8,565.69 on $9,700 staked, 88.3% ROI**, plus 3 logged passes.
+- **Flagged stream: 15-3 by position (24-4 by ticket), +$9,171.75 on $10,700 staked, 85.7% ROI**, plus 3 logged passes.
+- **A-tier alert stream: 6/6 (7/7 with the soft cell).** Row 38 (CHI@GS Aug 12, GS ML −165 $1,000, +$606.06, graded A+) was the **first minus-money A-tier fire** — fired Q1 1:57, GS down 5, gap .355 STRONG, CHI red-band eFG + killer flag; Manny beat the −180 fire price. The implied bar is taller at minus money; the standing A-tier price lesson (take the fire price — they detonate, they don't recover) held again.
 - Unflagged / pre-system speculatives: 4-3, +$1,835.
-- All-in: +$10,400.69 on $12,070 (86.2% ROI).
-- Counting note: staged legs are separate DB rows but ONE graded position — always state which convention a number uses.
-- Loss anatomy: row 33 (LA@MIN, context-withheld → ACA), row 37 (CHI@SEA, stale gap stamp).
+- All-in: +$11,006.75 on $13,070 (84.2% ROI).
+- Counting note: staged legs are separate DB rows but ONE graded position — always state which convention a number uses. The bets-table `result` vocabulary is era-inconsistent (`WIN`/`W`, `LOST`/`LOSS`/`L`, `CASHOUT`, `PASS`) — normalize before any aggregate.
+- Loss anatomy: row 33 (LA@MIN, context-withheld → ACA), row 37 (CHI@SEA — **attribution corrected on autopsy; see the availability section**).
 
-### Open failure class: the STALE GAP STAMP
+### Availability (display-only — settled Aug 11) & the stale gap stamp
 
-The gap stamp captures team-level season quality at fire time and is blind to who is actually on the floor. **CHI@SEA (row 37)** fired on CHI .375 while CHI had two starters out plus a key shooter — the number overstated the team on the floor. Same class as the **Plum problem** on the leader side. A pre-fire personnel/injury check is the architectural fix; BDL exposes no lineups endpoint and `starter` flags are structurally absent from `/wnba/v1/player_stats`, while the ESPN boxscore parse *does* carry `starter` correctly. Injury-read track: **1-1** (Leite exit Aug 8 correctly capped-not-passed; CHI depletion Aug 10 not checked pre-fire).
+**The gate question is settled: availability carries ZERO gate authority.** All four pre-registered availability-gate hypotheses failed their bars (`research/2026-08-11_availability_gap_PREREG.md` + findings); starter headcount is a flat null. **Availability facts are display-only, and consumer surfaces never print an availability percentage.**
+
+**The row-37 autopsy inverted its own premise.** v5.3 attributed the CHI@SEA loss to a stale gap stamp — CHI .375 overstating a depleted roster. The availability study's autopsy found **SEA was the more depleted team**, meaning the gap, if anything, *understated* the edge. The named failure class survives as a concept (the stamp is team-season-level and blind to the floor; the **Plum problem** on the leader side is the cleaner example), but its founding exhibit did not survive the data. Validated injury read on the ledger: the Leite-exit cap (Aug 8) — correctly capped, not passed.
+
+**§5a substrate (shipped Aug 11):** `team_game_players` + `computeRotation` give every nightly profile a `rotation` key (trailing-10 mpg ladder, as-of-date honest — the CHI golden is fixture-pinned against the study reconstruction). This is the display-context building block; the remaining display ladder (Items D/E/F, including the season-eFG reference line) is queued. BDL exposes no lineups endpoint and `starter` flags are structurally absent from `/wnba/v1/player_stats`; the ESPN boxscore parse *does* carry `starter` correctly and remains the live-lineup source candidate.
 
 -----
 
@@ -289,9 +304,11 @@ The gap stamp captures team-level season quality at fire time and is blind to wh
 
 ### Instruments
 
-- **2026 live archive** — production snapshots, ~211 finished games, live ML tape joinable from `odds_history` (≤3-4 min). Transfer: exact production surface. Power: usually LOW per cell.
-- **Checkpoint arena** — 576 historical games reconstructed server-side to 2.5-min checkpoint box lines (incl. reconstructed POT) via `backtest-wnba?phase=export_checkpoints`; 2,724+ in-band states, splittable by season. Transfer: near-production. Power: MED–HIGH.
+- **2026 live archive** — production snapshots, ~215 finished games, live ML tape joinable from `odds_history` (≤3-4 min). Transfer: exact production surface. Power: usually LOW per cell.
+- **Checkpoint arena (coarse)** — 576 historical games reconstructed server-side to 2.5-min checkpoint box lines (incl. reconstructed POT) via `backtest-wnba?phase=export_checkpoints`; 2,724+ in-band states, splittable by season. Transfer: near-production *at the time* — superseded for fire-time priors by the fine arena. Power: MED–HIGH.
+- **FINE ARENA (adopted Aug 11)** — the same 576 games re-walked at 30s grain (`grain`/`from`/`to` params on export_checkpoints, additive; walker default byte-identical, regression gate 2,724/2,724 exact); 3,224 deduped states, 3,113 in the coarse-comparable 750-2250s window; paint accumulation via a `coordinateToZoneServer` mirror; STRICT as-of records per PM directive (fixture-pinned: closing-season 10-10 vs as-of 10-0 case). Committed: `fixtures_fine_states_matched.json.gz`, `fine_arena_states.mjs` (builder), `fine_arena_fixtures` 19/19. Transfer: **production-matched** — the granularity replay measured production's true perception grain at ~26s median (not the ~75s the coarse spec assumed). Power: MED–HIGH.
 - **Both-seasons rule:** a cut is STRUCTURAL (spec-eligible) only if it holds in 2024 **and** 2025 independently. Sign-flips are regime-contingent at best, noise at worst.
+- **Instrument-grain rule (new, from the cliff correction):** a prior is transfer-correct only at the grain production perceives. Before retiring or promoting any state-dependent concept, check whether the number is measuring the state or the *sampling moment* of the state.
 
 ### FUEL × TEMP × GAP map (Aug 6, n=178 states, ML tape 178/178)
 
@@ -330,7 +347,19 @@ Phase 1-2 looked strong: all-sticky holds +16.3pp vs market (n=28), dog cell +26
 - QUALITY leaders (gap <0): EARNED 75.0% (n=136) ≈ TRANSIENT 78.0% (n=359) — quality leads hold regardless of fuel.
 - **Revised card:** respect the LEADER'S QUALITY first; fuel/earned reads modify *within* quality class. An earned dog lead is a sell, not a hold.
 
-### Retraction ledger (Aug 10-11)
+### Granularity replay (Aug 11, 2026 tape, read-only, pre-registered)
+
+- **H0 instrument spec CORRECTED:** production's median game-time spacing is **~26s**, not ~75s — a 6× ratio vs the coarse arena.
+- **H1 CONFIRMED (material):** the coarse grid misses **35.4% of in-band episodes** (median episode 71s; 60.6% under 2 min). The PM's structural read — "your instrument can't see what production sees" — validated.
+- **H3 FLIPPED:** missed episodes convert 58.6% vs seen 57.8% — flat. The watered-down-numbers fear was NOT supported; the coarse instrument loses *sample*, not *measurement*. (The bias it does carry — sampling-moment — was found by the fine rebuild, not this test.)
+- **H2 tell:** coarse-2026 d46 (52.9) still sits 13.5pp over hist (39.4) — the d46 rider was NOT purely a granularity artifact, which the four-corner decomposition later quantified (~half/half).
+- Prereg + script + 1,907 committed states in `research/`.
+
+### Fine arena adoption & SS_STRUCT re-pin (Aug 11-12 — PM decisions 1+2+4)
+
+Verdicts in `research/2026-08-11_fine_arena_findings.md`; the shipped consequence is the structural-shape section above. Summary: (1) the deficit cliff at 3-4 was mostly instrument — real break at 6-7; (2) the 2026 d46 rider decomposed ~half instrument, half era; (3) adopting fine bases + the committed deficit26 derivation dropped **every** R1 rider mechanically (8.0/7.8/4.9pp ≤ 10 bar); (4) tier-shape replay (price-blind, fade/collapse/class verbatim): **base gates convert 59.0% (n=229, HIGH; 2024 71.6 / 2025 47.5) vs 26.6% for everything else (n=2,957)** — a +32pp separation carried by beatable-leader + real-gap + catchable-depth; A+B shape refinement adds ~+5pp at unpowered n (64.3%, n=14, ordering only); Q4_COLLAPSE **0/24 both seasons** → kept log-only. The 10pp R1 rider bar was KEPT (lifting it clears nothing defensible); a pre-registered season-close review may re-examine bar *form* (magnitude vs significance). Key card lesson: card cells are gap-country BASE RATES with no tier filters — the tier overlay's selectivity lives in the shape replay, not the cells.
+
+### Retraction ledger (Aug 10-13)
 
 Two of my own claims were withdrawn within 24 hours of being made — recorded here because the retraction is as load-bearing as the finding:
 
@@ -338,10 +367,19 @@ Two of my own claims were withdrawn within 24 hours of being made — recorded h
 2. **Trailer temp × lead type = NOISE.** Every cell flips sign across seasons; pooled trailer temp is flat (cold 48.6 / warm 46.9 / hot 50.0). The 2026 separation (cold 45 / warm 80 / hot 87 at n=22/15/15) does **not** replicate at power. "Cold trailer = edge cut in half" is **withdrawn from the mindset card**; trailer temp earns no place in CELL READ and is display-only.
 3. **Trailer eliteness adds nothing** within leader <.400 (53.3% vs 49.4%, sign flips by season) — do not add an elite-trailer field; the gap stamp already carries it.
 4. **Cut 5c — the MIN@DAL shape isolated:** elite trailer vs leader ≥.550 = 35.3% (n=34, stable across seasons) — the weakest gap-qualified shape on the board. The Aug 9 pass at −200 was correct by a wide margin, not a close call.
+5. **"Deficit cliff at 3-4" (v5.3 headline) → CORRECTED to a break at 6-7.** The 21pp coarse cliff was mostly sampling-moment bias (fine: 54.9/52.2/35.8 vs coarse 60.8/39.4/32.0, both seasons). The finding wasn't noise — it was a real property *of the instrument*. Consumer copy carrying the 3-4 cliff is stripped; the corrected numbers are pinned in SS_STRUCT.
+6. **The row-37 "stale gap stamp" attribution → INVERTED on autopsy.** SEA was the more depleted team; the gap understated, not overstated, the edge. The failure class survives conceptually (Plum problem); the exhibit does not.
 
-### Pending spec: Dashboard Parity Amendment 1 v3 (awaiting PM go)
+### Dashboard Parity Amendment 1 v3 — Items A/B/C SHIPPED (Aug 11-12); D/E/F queued
 
-`SS_STRUCT` constant block duplicated in wnba-bdl.html and poll-live-bdl.mjs with **byte-compare fixture equality** (numbers get the aliasMap treatment), values pinned at build by re-running the spec-cuts script, states file committed for permanent reproducibility. Composition rules: **R1** base = 2024-25 structural, 2026 rider appended only when |2026−base| >10pp AND live n≥30; **R2** every rate labeled trailer-WINS or lead-HOLDS, no bare "converts"; **R3** 2026 riders render only with a `[this season]` tag, only in fade country, never pooled with structural numbers; **R4** Q4 clock <5:00 suppresses numbers, suspension copy only. Ships first: the **classifier definitions contract** (lead_class / fuel / trailer temp / leader bands defined verbatim in both narration templates — the prompt currently prints raw `lead_class` with no definition, so the model has been interpreting a label it was never given).
+**Shipped:**
+- **Amendment C (first, b491577) — classifier definitions contract:** `ssClassifierDefs` pinned VERBATIM (spec §2) into both narration templates (fire + watchlist), ending the live agent-integrity bug where the model interpreted a raw `lead_class` label it was never given a definition for. Semantics verified against code at build (classifier EVEN ≤2 / STRUCT ≥60 / VOL ≥60 / MIXED; computeFuelTemp EARNED-TRANSIENT; temp 45/55 absolute; EFG_BANDS Q1 54-61 → Q4 60-69). `ssLeadClassDisplay` added as the ONE display vocabulary (variance-built / structurally built / mixed / margin too thin to read); consumer audit confirmed no surface prints raw labels.
+- **Items A+B (4494315):** `SS_STRUCT` duplicated verbatim in poll-live-bdl.mjs + wnba-bdl.html with **byte-equality + value-verify enforced by `research/build_ss_struct.mjs`** (numbers get the aliasMap treatment). `ssGateLine` (gap tier / country / lead descriptor per definitions contract; temp chip color-only) + `ssRiderEligible` (R1 mechanical: >10pp AND n≥30) + `ssCellRead` (R4 override → thin margin → country → deficit/time base + R1 rider → hotCell R3 rider only; killer stays on the EK chip for hist-provenance honesty) wired into the card verdict box per the shared layout contract (gate → cell read → chips). Trailer-cold pre-applied BLUE. `ss_parity_fixtures` 30/30.
+- **SS_STRUCT re-pin (581af30):** fine arena adopted as source; all cells recomputed from the committed substrate; parity fixtures re-pinned 30/30.
+
+**Composition rules (live):** **R1** base = 2024-25 structural, 2026 rider appended only when |2026−base| >10pp AND live n≥30 (currently: none qualify); **R2** every rate labeled trailer-WINS or lead-HOLDS, no bare "converts"; **R3** 2026 riders render only with a `[this season]` tag, only in fade country, never pooled with structural numbers; **R4** Q4 clock <5:00 suppresses numbers, suspension copy only; **R5** availability facts excluded from numeric cells.
+
+**Queued:** Items D/E/F — includes **Item E, the season-eFG reference line** under the scoring comp ("season eFG: DAL 52.2 · TOR 52.4", display-only; data already sitting in `team_game_stats`).
 
 -----
 
@@ -427,7 +465,7 @@ Dedup key `gameId_alertType_alertTier_Q{period}`; BWC re-fire 5min OR floor +0.1
 
 **NBA stack:** Bayesian recency weighting (+0.0 AUC) · change-point detection (CUSUM/sliding/BOCPD all at chance — the floor already *is* a change-point detector) · Holly auto-tuning (−0.02 AUC, overfits) · SHAP delta model · opponent rising canary (mathematically coupled) · EXIT confirmation via MC · conformal prediction · production weight re-optimization (+0.01) · position monitoring as a separate alert layer · Transition Alerts (cascade risk — trust the validated state machine).
 
-**WNBA Sweet Spot:** eFG-heat as the operative base signal (NBA deficit-controlled null, n=1,200) · structural underdog #10 (1-for-7 at Q3_END) · failure-profile 72%/44% · windowed MC for WNBA (Cum 0.801 > Wind 0.787) · killer .450 extension, live tells, decay, frequency cuts · trajectory features at 3-min resolution (+0.0003 AUC; may revisit at 60s) · **team-relative eFG bands** · **sticky hold** · **trailer temp as a predictive field** · **trailer eliteness as a card field** · band widening past 9 · gap-gate lowering to .05.
+**WNBA Sweet Spot:** eFG-heat as the operative base signal (NBA deficit-controlled null, n=1,200) · structural underdog #10 (1-for-7 at Q3_END) · failure-profile 72%/44% · windowed MC for WNBA (Cum 0.801 > Wind 0.787) · killer .450 extension, live tells, decay, frequency cuts · trajectory features at 3-min resolution (+0.0003 AUC; may revisit at 60s) · **team-relative eFG bands** · **sticky hold** · **trailer temp as a predictive field** · **trailer eliteness as a card field** · band widening past 9 · gap-gate lowering to .05 · **availability as a gate in any form** (all four pre-registered hypotheses failed; starter headcount flat null — display-only forever absent a genuinely new hypothesis) · **Q4_COLLAPSE as a bet stream** (0/24 both historical seasons).
 
 -----
 
@@ -444,6 +482,7 @@ Dedup key `gameId_alertType_alertTier_Q{period}`; BWC re-fire 5min OR floor +0.1
 - **The agent is a narrator, not just a gate** — it builds game context for all downstream alerts. Never bypass it
 - **The quality gap alone is not the sweet spot** — always run the whose-variance check
 - **Respect the leader's quality first**; fuel/earned reads modify within quality class
+- **A prior is transfer-correct only at the grain production perceives** — the sampling-moment bias lesson. Distinguish instrument artifact from real signal before retiring OR promoting a concept
 - **A-tier alerts don't recover, they detonate** (the scissor mechanic) — tier-dependent price lesson: A-tier take the fire price; B-tier/WATCHLIST need patience
 
 ### Alert / position design
@@ -457,7 +496,7 @@ Dedup key `gameId_alertType_alertTier_Q{period}`; BWC re-fire 5min OR floor +0.1
 ### Team-specific
 
 - **OKC** defense is system-driven, not star-dependent; post-deadline TO-rate discount for new ball-handlers <4 weeks; live TO gate 5+ above season avg by mid-Q3
-- **WNBA:** GS = elite with a super-elite problem (DUAL_EDGE, 0-5 vs MIN/LV); killer set POR/LA/CHI/SEA/PHX; CON/TOR never-beats-anyone; MIN + LV = deflated top teams (override lane)
+- **WNBA:** GS = elite with a super-elite problem (DUAL_EDGE, 0-5 vs MIN/LV); killer set + lane membership are nightly-derived — trust profile JSONB (as of Aug 13: killer = POR/LA/PHX/CHI/SEA/CON; lane = LV only, MIN dropped out on positive inflation)
 
 ### Engineering patterns
 
@@ -536,7 +575,7 @@ Standing instruction for any non-trivial change: **"Architect/spec required chan
 
 ### Testing Ownership
 
-Claude owns unit/integration testing; test plans ship as part of the spec. `node -c` before every commit; fixture harnesses green before push. Standing harnesses: verdict strip (41), computeKillerFields (51/51 incl. as-of replay), override lane (35/35), decision support / caution copy (124/124), squeeze (77/77), narration (50/50), matchup sheet, team ctx (server + client). **Source-equality fixtures** byte-compare any logic or copy mirrored across functions — the aliasMap regression is the canonical example of what tests catch.
+Claude owns unit/integration testing; test plans ship as part of the spec. `node -c` before every commit; fixture harnesses green before push. Standing harnesses: verdict strip (42/42), narration (67/67 incl. 17 definitions-contract pins), computeKillerFields (51/51 incl. as-of replay), override lane, decision support / caution copy (124/124), squeeze (77/77), **ss_parity (30/30)**, **availability (35/35 incl. the CHI golden + Date-object regression)**, **fine_arena (19/19)**, matchup sheet, team ctx (server + client). **Source-equality fixtures** byte-compare any logic or copy mirrored across functions — the aliasMap regression is the canonical example; SS_STRUCT is the newest member of that contract (regenerate + verify via `research/build_ss_struct.mjs`, never hand-edit).
 
 ### Diagnostic Methodology — MANDATORY before any fix
 
@@ -583,7 +622,7 @@ This doc describes the system as it exists — shipped features and decisions. A
 
 **Sweet Spot:** `get_sweetspot_alerts` · `ss_ledger_summary` · `get_ss_state` · `stamp_ss_fueltemp` · `update_ss_killer` · `arm_squeeze` · `disarm_squeeze` · `log_bet` · `get_bets` · `update_bet` · `get_team_profiles` · `get_team_game_stats` · `get_wnba_official` / `upsert_wnba_official`
 
-**Backtest:** `backtest-nba-snapshots?phase=...` (incl. `export_xgb`) · `mc-backtest?phase=...` (12+ phases; `batch=2` safe ceiling) · `backtest-wnba?phase=...` (524-game historical; read-only `export_states` and `export_checkpoints` build the checkpoint arena with zero SR API calls)
+**Backtest:** `backtest-nba-snapshots?phase=...` (incl. `export_xgb`) · `mc-backtest?phase=...` (12+ phases; `batch=2` safe ceiling) · `backtest-wnba?phase=...` (524-game historical; read-only `export_states` and `export_checkpoints` build the arenas with zero SR API calls; `export_checkpoints` now takes additive `grain`/`from`/`to` params — `grain=30` is the fine-arena walk, default remains byte-identical to the coarse arena)
 
 **Also:** rerun the learning agent via `?action=delete_learning&date=...` then `/post-game-agent?date=...`; poll directly at `/.netlify/functions/poll-live-bdl` (`?diag=1&diag_step=N`, steps 0–4 pass, 5=XGB, 6=sust).
 
@@ -630,3 +669,5 @@ When memories approach the limit: audit against this doc, remove duplicates, mig
 11. Concurrent Netlify invocations create races — use DB lock rows (PENDING sentinel) before any await >1s
 12. `cfg.aliasMap` applies only at WNBA PBP parse — global application breaks NBA
 13. Fable 5 prepends a thinking block — filter to text blocks before parsing narration
+14. Neon returns DATE columns as JS Date objects — `String()` produces locale text and silently breaks ordering/comparison (the computeRotation window went ALPHABETICAL). Use `normDate` normalization in JS and `date::text` casting in SQL
+15. Netlify Edge now 403s external HTTP calls to scheduled functions — the backfill drill is: comment out the schedule in netlify.toml → push → run chunks over HTTP → restore the schedule → push. Never leave a schedule commented out past the window
