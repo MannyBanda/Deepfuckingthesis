@@ -78,6 +78,11 @@ r = panel({ period: 2, clock: '6:40', margin: 5, gap: 0.22, leaderWp: 0.35 });
 T('missing eFG: 4 dots, no eFG band amber', dots(r) === 4 && !amberRate(r, '16.7%') && !amberRate(r, '53.8%') && !amberRate(r, '72.7%'));
 r = panel({ period: 4, clock: '7:30', margin: 5, gap: 0.22, leaderWp: 0.35 });
 T('Q4 7:30: time dot 77.5% + Q4e amber', dotAt(r, '77.5') && amberRate(r, 'Q4e 63.0%'));
+// \u00a77 fire-time review states (renderer side): Q1 fires get a time dot
+r = panel({ period: 1, clock: '1:57', margin: 5, gap: 0.355, leaderWp: 0.364, leaderEfg: 63.3 });
+T('Q1 1:57 fire: time dot 18.8% (elapsed 8.05/30*70)', dotAt(r, '18.8'));
+T('Q1 fire: pre-Q4 amber, five dots', amberRate(r, 'pre-Q4 63.6%') && dots(r) === 5);
+T('Q1 fire: gap .355 dot 59.2% + strong amber', dotAt(r, '59.2') && amberRate(r, '.35+ 66.7%'));
 
 console.log(`\nss_season26_fixtures: ${pass}/${pass + fail}${fail ? ' \u2014 FAIL' : ' \u2014 all green'}`);
 process.exit(fail ? 1 : 0);

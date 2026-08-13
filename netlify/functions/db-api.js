@@ -906,10 +906,28 @@ exports.handler = async (event) => {
           ORDER BY id ASC LIMIT 1`;
         if (fr[0] && fr[0].ft) fuelAtFire = { period: fr[0].period, clock: fr[0].clock, ft: fr[0].ft };
       } catch (e) { /* degrade */ }
+      // PARITY Amendment 2 §7 — FIFTH isolated query (same house rule): fire-time state
+      // of the highest-priority fired row, for the finals FIRE-TIME REVIEW season panel.
+      // GAME_BRIEF excluded (period-0 skeleton, no fire state); earliest row of the top
+      // subtype = the fire moment. NULL-degrading.
+      let fireReview = null;
+      try {
+        const fv = await sql`SELECT alert_subtype, period, clock, deficit, quality_gap,
+            leader_wp, leader_efg
+          FROM sweetspot_alerts WHERE game_id = ${gameId} AND league = ${league}
+            AND alert_subtype <> 'GAME_BRIEF'
+            AND (deficit IS NOT NULL OR quality_gap IS NOT NULL)
+          ORDER BY CASE alert_subtype
+            WHEN 'EFG_FADE' THEN 0 WHEN 'EFG_FADE_SOFT' THEN 1
+            WHEN 'B1' THEN 2 WHEN 'B2' THEN 2 WHEN 'B3' THEN 2
+            WHEN 'WATCHLIST' THEN 3 WHEN 'GAP_BASE' THEN 4 ELSE 5 END, id ASC
+          LIMIT 1`;
+        if (fv[0]) fireReview = fv[0];
+      } catch (e) { /* degrade */ }
       return { statusCode: 200, headers, body: JSON.stringify({
         snapshot: snap[0] || null, game: game[0] || null,
         rows: subs.map(r => ({ subtype: r.alert_subtype, leader: r.leader_alias, trailer: r.trailer_alias })),
-        subtypes: subs.map(r => r.alert_subtype), fuel_at_fire: fuelAtFire }) };
+        subtypes: subs.map(r => r.alert_subtype), fuel_at_fire: fuelAtFire, fire_review: fireReview }) };
     }
 
     // ── SWEETSPOT_OPS_SPEC.md §3/D-A — structured betting log ──

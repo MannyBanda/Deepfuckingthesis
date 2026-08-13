@@ -4143,7 +4143,7 @@ function ssSeasonPanel(st){
     [{w:33.33,t:rateTxt('&lt;45',S.greenVeto.sub45),cur:ek==='sub45'},{w:22.22,t:rateTxt('45-55',S.greenVeto.warm),cur:ek==='warm'},{w:44.45,t:rateTxt('&gt;55',S.greenVeto.hot),cur:ek==='hot'}]);
   // TIME — segments 70/15/15 (readability over strict proportion; ticks are honest)
   var tPos=null;
-  if(Number(st.period)>=2&&Number(st.period)<=4){
+  if(Number(st.period)>=1&&Number(st.period)<=4){   // §7: Q1 included — fire-time reviews can fire in Q1 (row 1400); elapsed domain [0,30] covers it
     var cmT=clockMin(st.clock);
     if(Number(st.period)<4){
       var elMin=cmT==null?(Number(st.period)-1)*10:(Number(st.period)-1)*10+(10-cmT);
@@ -4669,15 +4669,26 @@ function renderSSVerdictBox(id,cs,hA,aA){
         if(_cr){
           // Amendment 2 §6 (errata): (a) stopPropagation — the verdict box's own onclick
           // opens the matchup sheet (TEAM_CTX P1); without it a caret tap did BOTH.
-          // (b) LIVE-only — the season panel is a live decision aid; finals render the
-          // plain pre-§5 cell read (fire-time review context lives on the row stamps).
+          // (b) LIVE-only for live-state dots. §7: FINAL games with a fired row render
+          // the panel in FIRE-TIME REVIEW mode — dots at the row's fire stamps (server
+          // fire_review, fifth isolated query). No fired row -> plain cell read: no
+          // decision point, nothing to review (recommendation adopted).
           var _spLive=g&&getState(g)==='LIVE';
-          if(!_spLive){
+          var _spFire=(!_spLive&&entry&&entry.data&&entry.data.fire_review)||null;
+          if(_spFire&&_spFire.quality_gap==null&&_spFire.deficit==null)_spFire=null;
+          if(!_spLive&&!_spFire){
             html+='<div style="margin-top:3px;font-size:11px;color:var(--fg-tertiary)">'+esc(_cr)+'</div>';
           }else{
             var _spOpen=!!_ssSeasonOpen[id];
             html+='<div onclick="event.stopPropagation();ssToggleSeason(\''+id+'\')" style="margin-top:3px;font-size:11px;color:var(--fg-tertiary);cursor:pointer">'+esc(_cr)+' <span id="ssSeasonCaret-'+id+'" style="color:var(--fg-dim)">'+(_spOpen?'\u25be':'\u25b8')+'</span></div>';
-            html+='<div id="ssSeason-'+id+'" onclick="event.stopPropagation()" style="display:'+(_spOpen?'block':'none')+';margin-top:4px;padding:6px 8px;border:1px solid var(--hairline);border-radius:6px;font-size:10.5px;line-height:1.55;color:var(--fg-tertiary);font-family:var(--mono)">'+ssSeasonPanel(_glSt)+'</div>';
+            var _spSt=_spLive?_glSt:{
+              margin:_spFire.deficit!=null?Number(_spFire.deficit):null,
+              gap:_spFire.quality_gap!=null?Number(_spFire.quality_gap):null,
+              leaderWp:_spFire.leader_wp!=null?Number(_spFire.leader_wp):null,
+              leaderEfg:_spFire.leader_efg!=null?Number(_spFire.leader_efg):null,
+              period:_spFire.period,clock:_spFire.clock};
+            var _spLbl=_spLive?'':'<div style="color:var(--amber);font-weight:600;margin-bottom:6px">FIRE-TIME REVIEW \u2014 '+esc(String(_spFire.alert_subtype||''))+' fired Q'+esc(String(_spFire.period||'?'))+(_spFire.clock?' '+esc(String(_spFire.clock)):'')+'</div>';
+            html+='<div id="ssSeason-'+id+'" onclick="event.stopPropagation()" style="display:'+(_spOpen?'block':'none')+';margin-top:4px;padding:6px 8px;border:1px solid var(--hairline);border-radius:6px;font-size:10.5px;line-height:1.55;color:var(--fg-tertiary);font-family:var(--mono)">'+_spLbl+ssSeasonPanel(_spSt)+'</div>';
           }
         }
         if(_tCol||_glSt.leaderKiller){
