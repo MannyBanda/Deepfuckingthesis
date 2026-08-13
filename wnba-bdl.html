@@ -4667,9 +4667,18 @@ function renderSSVerdictBox(id,cs,hA,aA){
         html+='<div style="margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--hairline)">';
         html+='<div style="font-size:11px;letter-spacing:.02em;color:var(--fg-secondary)">'+esc(_gl.text)+'</div>';
         if(_cr){
-          var _spOpen=!!_ssSeasonOpen[id];
-          html+='<div onclick="ssToggleSeason(\''+id+'\')" style="margin-top:3px;font-size:11px;color:var(--fg-tertiary);cursor:pointer">'+esc(_cr)+' <span id="ssSeasonCaret-'+id+'" style="color:var(--fg-dim)">'+(_spOpen?'\u25be':'\u25b8')+'</span></div>';
-          html+='<div id="ssSeason-'+id+'" style="display:'+(_spOpen?'block':'none')+';margin-top:4px;padding:6px 8px;border:1px solid var(--hairline);border-radius:6px;font-size:10.5px;line-height:1.55;color:var(--fg-tertiary);font-family:var(--mono)">'+ssSeasonPanel(_glSt)+'</div>';
+          // Amendment 2 §6 (errata): (a) stopPropagation — the verdict box's own onclick
+          // opens the matchup sheet (TEAM_CTX P1); without it a caret tap did BOTH.
+          // (b) LIVE-only — the season panel is a live decision aid; finals render the
+          // plain pre-§5 cell read (fire-time review context lives on the row stamps).
+          var _spLive=g&&getState(g)==='LIVE';
+          if(!_spLive){
+            html+='<div style="margin-top:3px;font-size:11px;color:var(--fg-tertiary)">'+esc(_cr)+'</div>';
+          }else{
+            var _spOpen=!!_ssSeasonOpen[id];
+            html+='<div onclick="event.stopPropagation();ssToggleSeason(\''+id+'\')" style="margin-top:3px;font-size:11px;color:var(--fg-tertiary);cursor:pointer">'+esc(_cr)+' <span id="ssSeasonCaret-'+id+'" style="color:var(--fg-dim)">'+(_spOpen?'\u25be':'\u25b8')+'</span></div>';
+            html+='<div id="ssSeason-'+id+'" onclick="event.stopPropagation()" style="display:'+(_spOpen?'block':'none')+';margin-top:4px;padding:6px 8px;border:1px solid var(--hairline);border-radius:6px;font-size:10.5px;line-height:1.55;color:var(--fg-tertiary);font-family:var(--mono)">'+ssSeasonPanel(_glSt)+'</div>';
+          }
         }
         if(_tCol||_glSt.leaderKiller){
           html+='<div style="margin-top:3px">';
