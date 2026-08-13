@@ -4613,7 +4613,7 @@ function renderSSVerdictBox(id,cs,hA,aA){
   var g=games.find(function(x){return x.id===id;});
   var sc=cs.scoringComp;
   var html='<div onclick="openMatchupSheet(\''+id+'\')" style="cursor:pointer;margin-bottom:10px;padding:9px 11px;background:var(--bg-surface-2);border:1px solid var(--hairline-strong);border-radius:var(--r-inner);font-family:var(--sans);font-size:12px;line-height:1.55;color:var(--fg-secondary)">';   // tap -> matchup sheet (TEAM_CTX_SURFACING P1)
-  var verdict=null,sn=null,gm=null;
+  var verdict=null,sn=null,gm=null,_glRendered=false;
   if(entry&&entry.data&&entry.data.snapshot){
     sn=entry.data.snapshot;gm=entry.data.game||{};
     // trailer-wins-structural-delta (client PBP fact — feeds trap T1's second leg only)
@@ -4647,6 +4647,7 @@ function renderSSVerdictBox(id,cs,hA,aA){
     if(sn&&gm&&gm.status==='inprogress'&&(sn.period||0)>=2&&!isStale){
       var _glLd=sn.ss_leader_alias||null,_glSc=cs&&cs.scoringComp;
       if(_glLd&&_glSc&&_glSc.home&&_glSc.away){
+        _glRendered=true;   // §8: pre-gate SEASON CONTEXT line renders only when this block does not
         var _glHome=_glLd===(_glSc.home.team||hA);
         var _glL=_ftClientStats(cs,_glHome?'home':'away'),_glT=_ftClientStats(cs,_glHome?'away':'home');
         if(_glL)_glL.vShare=_glHome?_glSc.home.vPct:_glSc.away.vPct;
@@ -4701,6 +4702,34 @@ function renderSSVerdictBox(id,cs,hA,aA){
       }
     }
   }catch(_e){/* degrade — never break the verdict box */}
+  // —— Amendment 2 §8: pre-gate SEASON CONTEXT (PM-approved Aug 13) ——
+  // Before the engine's first SS read (gates open Q2) the panel has no cell-read
+  // anchor; this minimal line makes the season tracks reachable from Q1. Gap +
+  // leader wp from _teamProfiles (the gate line's own LDR source), margin from the
+  // live header score, eFG omitted until the live compute exists (dotless track).
+  // Tied game: no leader to read — margin/time dots only, honest note in header.
+  try{
+    if(!_glRendered&&g&&getState(g)==='LIVE'){
+      var _pgH=g.homePoints!=null?Number(g.homePoints):null,_pgA2=g.awayPoints!=null?Number(g.awayPoints):null;
+      if(_pgH!=null&&_pgA2!=null){
+        var _pgM=Math.abs(_pgH-_pgA2);
+        var _pgLd=_pgM===0?null:(_pgH>_pgA2?hA:aA),_pgTr=_pgM===0?null:(_pgH>_pgA2?aA:hA);
+        var _pgLwp=null,_pgGap=null;
+        if(_pgLd&&typeof _teamProfiles!=='undefined'&&_teamProfiles){
+          var _pgLp=_teamProfiles[_pgLd],_pgTp2=_teamProfiles[_pgTr];
+          if(_pgLp&&(_pgLp.w+_pgLp.l)>0)_pgLwp=_pgLp.w/(_pgLp.w+_pgLp.l);
+          if(_pgLp&&_pgTp2&&(_pgLp.w+_pgLp.l)>0&&(_pgTp2.w+_pgTp2.l)>0)_pgGap=_pgTp2.w/(_pgTp2.w+_pgTp2.l)-_pgLwp;
+        }
+        var _pgOpen=!!_ssSeasonOpen[id];
+        html+='<div style="margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--hairline)">';
+        html+='<div onclick="event.stopPropagation();ssToggleSeason(\''+id+'\')" style="font-size:11px;color:var(--fg-tertiary);cursor:pointer">SEASON CONTEXT <span id="ssSeasonCaret-'+id+'" style="color:var(--fg-dim)">'+(_pgOpen?'\u25be':'\u25b8')+'</span></div>';
+        var _pgSt={liveMargin:_pgM,gap:_pgGap,leaderWp:_pgLwp,period:g.period,clock:g.clock};
+        var _pgLbl='<div style="color:var(--fg-dim);margin-bottom:6px">engine gates not yet open \u2014 season context only'+(_pgLd?'':' (game tied \u2014 no leader to read)')+'</div>';
+        html+='<div id="ssSeason-'+id+'" onclick="event.stopPropagation()" style="display:'+(_pgOpen?'block':'none')+';margin-top:4px;padding:6px 8px;border:1px solid var(--hairline);border-radius:6px;font-size:10.5px;line-height:1.55;color:var(--fg-tertiary);font-family:var(--mono)">'+_pgLbl+ssSeasonPanel(_pgSt)+'</div>';
+        html+='</div>';
+      }
+    }
+  }catch(_e4){/* degrade — never break the verdict box */}
   if(!verdict){
     html+='<span style="font-weight:600;color:var(--fg-dim)">VERDICT</span> \u2014 waiting for first server read\u2026';
   }else if(isStale){
