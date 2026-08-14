@@ -4076,7 +4076,7 @@ function ssSeasonPanel(st){
   var pw=function(n){return n>=200?'HIGH':n>=80?'MED':'LOW';};
   var p1=function(x){return String(parseFloat(x.toFixed(1)));};
   var SEP='border-right:1px solid var(--hairline)';
-  var LIVE='#2d3a4d',DEAD='#21262d',HOT='#3d3426';
+  var LIVE='#3a4149',DEAD='#22262c',HOT='#2f3d36';   // §9 theme: grey tracks, green accents (PM)
   var rateTxt=function(label,c){
     if(c==null||c.p==null)return label+' no 2026 sample';
     return label+' '+Number(c.p).toFixed(1)+'% [n='+c.n+' '+pw(c.n)+']';
@@ -4086,13 +4086,13 @@ function ssSeasonPanel(st){
     h+='<div style="color:var(--fg-secondary)">'+title+'</div>';
     h+='<div style="position:relative;height:6px;border-radius:3px;display:flex;margin:7px 0 2px">';
     for(var i=0;i<segs.length;i++)h+='<div style="width:'+segs[i].w+'%;background:'+segs[i].bg+';'+(i<segs.length-1?SEP:'')+'"></div>';
-    if(dotPos!=null)h+='<div style="position:absolute;top:-3px;left:'+p1(dotPos)+'%;width:12px;height:12px;border-radius:50%;background:var(--amber);border:2px solid #0d1117;transform:translateX(-50%)"></div>';
+    if(dotPos!=null)h+='<div style="position:absolute;top:-3px;left:'+p1(dotPos)+'%;width:12px;height:12px;border-radius:50%;background:var(--green);border:2px solid #0d1117;transform:translateX(-50%)"></div>';
     h+='</div>';
     h+='<div style="position:relative;height:11px;color:var(--fg-dim);font-size:9.5px">';
     for(var t=0;t<ticks.length;t++)h+='<span style="position:absolute;left:'+ticks[t].left+'%;transform:translateX(-50%)">'+ticks[t].t+'</span>';
     h+='</div>';
     h+='<div style="display:flex;font-size:9.5px;color:var(--fg-tertiary)">';
-    for(var r2=0;r2<rates.length;r2++)h+='<span style="width:'+rates[r2].w+'%;text-align:center'+(rates[r2].cur?';color:var(--amber);font-weight:600':'')+'">'+rates[r2].t+'</span>';
+    for(var r2=0;r2<rates.length;r2++)h+='<span style="width:'+rates[r2].w+'%;text-align:center'+(rates[r2].cur?';color:var(--green);font-weight:600':'')+'">'+rates[r2].t+'</span>';
     h+='</div></div>';
     return h;
   };
@@ -4111,32 +4111,32 @@ function ssSeasonPanel(st){
   var gk=g==null?null:g>=0.35?'strong':g>=0.15?'qual':null;
   var lk=lw==null?null:lw<0.400?'bad':lw<0.550?'mid':'qual';
   var ek=ef==null?null:ef<45?'sub45':ef<=55?'warm':'hot';
-  var tk;
-  if(Number(st.period)<4)tk='preQ4';
-  else tk=(clockMin(st.clock)>=5)?'q4e':'q4l';
+  var tk=null,_perN=Number(st.period);
+  if(isFinite(_perN)&&_perN>=1&&_perN<4)tk='preQ4';
+  else if(isFinite(_perN)&&_perN>=4)tk=(clockMin(st.clock)>=5)?'q4e':'q4l';
   var clamp=function(x){return Math.max(0,Math.min(100,x));};
   var f2=function(v){return Number(v).toFixed(2).replace(/^(-?)0\./,'$1.');};
   var h='<div style="font-weight:600;color:var(--fg-secondary);margin-bottom:8px">THIS SEASON [2026] \u2014 as of '+S.asof+' \u00b7 '+S.games+' games \u00b7 trailer-WINS unless marked HOLD</div>';
   // DEFICIT — domain [0.5, 9.5], live-score sourced
-  h+=row('DEFICIT \u2014 '+(m==null?'\u2014':m===0?'<b style="color:var(--amber)">tied</b>':'down <b style="color:var(--amber)">'+m+'</b>'),
+  h+=row('DEFICIT \u2014 '+(m==null?'\u2014':m===0?'<b style="color:var(--green)">tied</b>':'down <b style="color:var(--green)">'+m+'</b>'),
     [{w:33.33,bg:LIVE},{w:33.34,bg:LIVE},{w:33.33,bg:LIVE}],
     [{left:33.33,t:'3|4'},{left:66.67,t:'6|7'}],
     m==null?null:clamp((m-0.5)/9*100),
     [{w:33.33,t:rateTxt('1-3',S.deficit.d13),cur:dk==='d13'},{w:33.34,t:rateTxt('4-6',S.deficit.d46),cur:dk==='d46'},{w:33.33,t:rateTxt('7-9',S.deficit.d79),cur:dk==='d79'}]);
   // GAP — domain [0, .60]
-  h+=row('GAP \u2014 '+(g==null?'\u2014':'<b style="color:var(--amber)">'+f2(g)+'</b>'),
+  h+=row('GAP \u2014 '+(g==null?'\u2014':'<b style="color:var(--green)">'+f2(g)+'</b>'),
     [{w:25,bg:DEAD},{w:33.33,bg:LIVE},{w:41.67,bg:LIVE}],
     [{left:25,t:'.15'},{left:58.33,t:'.35'}],
     g==null?null:clamp(g/0.6*100),
     [{w:25,t:'below bar'},{w:33.33,t:rateTxt('.15-.35',S.gap.qual),cur:gk==='qual'},{w:41.67,t:rateTxt('.35+',S.gap.strong),cur:gk==='strong'}]);
   // LEADER wp — domain [.15, .75]
-  h+=row('LEADER \u2014 season wp '+(lw==null?'\u2014':'<b style="color:var(--amber)">'+f2(lw)+'</b>'),
+  h+=row('LEADER \u2014 season wp '+(lw==null?'\u2014':'<b style="color:var(--green)">'+f2(lw)+'</b>'),
     [{w:41.67,bg:LIVE},{w:25,bg:LIVE},{w:33.33,bg:DEAD}],
     [{left:41.67,t:'.400'},{left:66.67,t:'.550'}],
     lw==null?null:clamp((lw-0.15)/0.6*100),
     [{w:41.67,t:rateTxt('&lt;.400',S.leader.bad),cur:lk==='bad'},{w:25,t:rateTxt('.400-.550',S.leader.mid),cur:lk==='mid'},{w:33.33,t:rateTxt('\u2265.550',S.leader.qual),cur:lk==='qual'}]);
   // LEADER eFG — domain [30, 75]
-  h+=row('LDR eFG \u2014 '+(ef==null?'\u2014':'shooting <b style="color:var(--amber)">'+Number(ef).toFixed(1)+'</b>'),
+  h+=row('LDR eFG \u2014 '+(ef==null?'\u2014':'shooting <b style="color:var(--green)">'+Number(ef).toFixed(1)+'</b>'),
     [{w:33.33,bg:DEAD},{w:22.22,bg:LIVE},{w:44.45,bg:HOT}],
     [{left:33.33,t:'45'},{left:55.55,t:'55'}],
     ef==null?null:clamp((ef-30)/45*100),
@@ -4613,7 +4613,7 @@ function renderSSVerdictBox(id,cs,hA,aA){
   var g=games.find(function(x){return x.id===id;});
   var sc=cs.scoringComp;
   var html='<div onclick="openMatchupSheet(\''+id+'\')" style="cursor:pointer;margin-bottom:10px;padding:9px 11px;background:var(--bg-surface-2);border:1px solid var(--hairline-strong);border-radius:var(--r-inner);font-family:var(--sans);font-size:12px;line-height:1.55;color:var(--fg-secondary)">';   // tap -> matchup sheet (TEAM_CTX_SURFACING P1)
-  var verdict=null,sn=null,gm=null,_glRendered=false;
+  var verdict=null,sn=null,gm=null,_scGlSt=null;
   if(entry&&entry.data&&entry.data.snapshot){
     sn=entry.data.snapshot;gm=entry.data.game||{};
     // trailer-wins-structural-delta (client PBP fact — feeds trap T1's second leg only)
@@ -4647,7 +4647,6 @@ function renderSSVerdictBox(id,cs,hA,aA){
     if(sn&&gm&&gm.status==='inprogress'&&(sn.period||0)>=2&&!isStale){
       var _glLd=sn.ss_leader_alias||null,_glSc=cs&&cs.scoringComp;
       if(_glLd&&_glSc&&_glSc.home&&_glSc.away){
-        _glRendered=true;   // §8: pre-gate SEASON CONTEXT line renders only when this block does not
         var _glHome=_glLd===(_glSc.home.team||hA);
         var _glL=_ftClientStats(cs,_glHome?'home':'away'),_glT=_ftClientStats(cs,_glHome?'away':'home');
         if(_glL)_glL.vShare=_glHome?_glSc.home.vPct:_glSc.away.vPct;
@@ -4662,36 +4661,13 @@ function renderSSVerdictBox(id,cs,hA,aA){
           leadClass:sn.ss_lead_class,period:sn.period,clock:sn.clock,
           leaderEfg:_glFt?_glFt.leaderEfg:null,leaderKiller:!!(_ekSet&&_ekSet[_glLd])};
         var _gl=ssGateLine(_glSt),_cr=ssCellRead(_glSt);
+        _scGlSt=_glSt;   // §9: feeds the persistent SEASON CONTEXT line below
         // Item F pre-applied one token: trailer-cold = BLUE (green collision is the
         // exact bug F exists to kill — never ship it even for a stage).
         var _tCol=_glSt.temp==='cold'?'#4aa3ff':_glSt.temp==='hot'?'var(--coral)':_glSt.temp==='warm'?'var(--amber)':null;
         html+='<div style="margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--hairline)">';
         html+='<div style="font-size:11px;letter-spacing:.02em;color:var(--fg-secondary)">'+esc(_gl.text)+'</div>';
-        if(_cr){
-          // Amendment 2 §6 (errata): (a) stopPropagation — the verdict box's own onclick
-          // opens the matchup sheet (TEAM_CTX P1); without it a caret tap did BOTH.
-          // (b) LIVE-only for live-state dots. §7: FINAL games with a fired row render
-          // the panel in FIRE-TIME REVIEW mode — dots at the row's fire stamps (server
-          // fire_review, fifth isolated query). No fired row -> plain cell read: no
-          // decision point, nothing to review (recommendation adopted).
-          var _spLive=g&&getState(g)==='LIVE';
-          var _spFire=(!_spLive&&entry&&entry.data&&entry.data.fire_review)||null;
-          if(_spFire&&_spFire.quality_gap==null&&_spFire.deficit==null)_spFire=null;
-          if(!_spLive&&!_spFire){
-            html+='<div style="margin-top:3px;font-size:11px;color:var(--fg-tertiary)">'+esc(_cr)+'</div>';
-          }else{
-            var _spOpen=!!_ssSeasonOpen[id];
-            html+='<div onclick="event.stopPropagation();ssToggleSeason(\''+id+'\')" style="margin-top:3px;font-size:11px;color:var(--fg-tertiary);cursor:pointer">'+esc(_cr)+' <span id="ssSeasonCaret-'+id+'" style="color:var(--fg-dim)">'+(_spOpen?'\u25be':'\u25b8')+'</span></div>';
-            var _spSt=_spLive?_glSt:{
-              margin:_spFire.deficit!=null?Number(_spFire.deficit):null,
-              gap:_spFire.quality_gap!=null?Number(_spFire.quality_gap):null,
-              leaderWp:_spFire.leader_wp!=null?Number(_spFire.leader_wp):null,
-              leaderEfg:_spFire.leader_efg!=null?Number(_spFire.leader_efg):null,
-              period:_spFire.period,clock:_spFire.clock};
-            var _spLbl=_spLive?'':'<div style="color:var(--amber);font-weight:600;margin-bottom:6px">FIRE-TIME REVIEW \u2014 '+esc(String(_spFire.alert_subtype||''))+' fired Q'+esc(String(_spFire.period||'?'))+(_spFire.clock?' '+esc(String(_spFire.clock)):'')+'</div>';
-            html+='<div id="ssSeason-'+id+'" onclick="event.stopPropagation()" style="display:'+(_spOpen?'block':'none')+';margin-top:4px;padding:6px 8px;border:1px solid var(--hairline);border-radius:6px;font-size:10.5px;line-height:1.55;color:var(--fg-tertiary);font-family:var(--mono)">'+_spLbl+ssSeasonPanel(_spSt)+'</div>';
-          }
-        }
+        if(_cr)html+='<div style="margin-top:3px;font-size:11px;color:var(--fg-tertiary)">'+esc(_cr)+'</div>';
         if(_tCol||_glSt.leaderKiller){
           html+='<div style="margin-top:3px">';
           if(_glSt.leaderKiller)html+=ekBadge(_glLd)+' ';
@@ -4702,30 +4678,66 @@ function renderSSVerdictBox(id,cs,hA,aA){
       }
     }
   }catch(_e){/* degrade — never break the verdict box */}
-  // —— Amendment 2 §8: pre-gate SEASON CONTEXT (PM-approved Aug 13) ——
-  // Before the engine's first SS read (gates open Q2) the panel has no cell-read
-  // anchor; this minimal line makes the season tracks reachable from Q1. Gap +
-  // leader wp from _teamProfiles (the gate line's own LDR source), margin from the
-  // live header score, eFG omitted until the live compute exists (dotless track).
-  // Tied game: no leader to read — margin/time dots only, honest note in header.
+  // —— Amendment 2 §9 (supersedes §1 caret, §7 silence, §8 duality): PERSISTENT ——
+  // SEASON CONTEXT line — the one and only opener for the SEASON26 panel, in the
+  // same slot every game state. Dot overlay by state:
+  //   LIVE, gates open -> _scGlSt (server-stamped gap/LDR + fuel-compute eFG + live margin)
+  //   LIVE, pre-gate   -> client state: margin from the header score, gap/LDR from
+  //                       _teamProfiles, eFG from the SAME fuel compute the gate line
+  //                       uses (§9 bug fix — pre-gate eFG was omitted while the fuel
+  //                       block proved it computable, ATL@CON Aug 13)
+  //   FINAL, fired row -> FIRE-TIME REVIEW (fire_review stamps, §7)
+  //   FINAL, no fire   -> reference-only panel, no dots ("always render" PM decision
+  //                       supersedes the §7 silence recommendation)
+  //   PRE              -> reference-only panel, no dots
   try{
-    if(!_glRendered&&g&&getState(g)==='LIVE'){
-      var _pgH=g.homePoints!=null?Number(g.homePoints):null,_pgA2=g.awayPoints!=null?Number(g.awayPoints):null;
-      if(_pgH!=null&&_pgA2!=null){
-        var _pgM=Math.abs(_pgH-_pgA2);
-        var _pgLd=_pgM===0?null:(_pgH>_pgA2?hA:aA),_pgTr=_pgM===0?null:(_pgH>_pgA2?aA:hA);
-        var _pgLwp=null,_pgGap=null;
-        if(_pgLd&&typeof _teamProfiles!=='undefined'&&_teamProfiles){
-          var _pgLp=_teamProfiles[_pgLd],_pgTp2=_teamProfiles[_pgTr];
-          if(_pgLp&&(_pgLp.w+_pgLp.l)>0)_pgLwp=_pgLp.w/(_pgLp.w+_pgLp.l);
-          if(_pgLp&&_pgTp2&&(_pgLp.w+_pgLp.l)>0&&(_pgTp2.w+_pgTp2.l)>0)_pgGap=_pgTp2.w/(_pgTp2.w+_pgTp2.l)-_pgLwp;
+    if(g){
+      var _scSt=null,_scLbl='',_scLblCol='var(--fg-dim)',_scLblBold=false;
+      var _scState=getState(g);
+      if(_scState==='LIVE'&&_scGlSt){_scSt=_scGlSt;}
+      else if(_scState==='LIVE'){
+        var _pgH=g.homePoints!=null?Number(g.homePoints):null,_pgA2=g.awayPoints!=null?Number(g.awayPoints):null;
+        if(_pgH!=null&&_pgA2!=null){
+          var _pgM=Math.abs(_pgH-_pgA2);
+          var _pgLd=_pgM===0?null:(_pgH>_pgA2?hA:aA),_pgTr=_pgM===0?null:(_pgH>_pgA2?aA:hA);
+          var _pgLwp=null,_pgGap=null,_pgFt=null;
+          if(_pgLd&&typeof _teamProfiles!=='undefined'&&_teamProfiles){
+            var _pgLp=_teamProfiles[_pgLd],_pgTp2=_teamProfiles[_pgTr];
+            if(_pgLp&&(_pgLp.w+_pgLp.l)>0)_pgLwp=_pgLp.w/(_pgLp.w+_pgLp.l);
+            if(_pgLp&&_pgTp2&&(_pgLp.w+_pgLp.l)>0&&(_pgTp2.w+_pgTp2.l)>0)_pgGap=_pgTp2.w/(_pgTp2.w+_pgTp2.l)-_pgLwp;
+          }
+          if(_pgLd){try{
+            var _pgHome=_pgLd===hA;
+            var _pgL=_ftClientStats(cs,_pgHome?'home':'away'),_pgT=_ftClientStats(cs,_pgHome?'away':'home');
+            _pgFt=(_pgL&&_pgT)?computeFuelTemp(_pgL,_pgT,g.period||0):null;
+            if(_pgFt&&_pgFt.insufficient)_pgFt=null;
+          }catch(_e5){}}
+          _scSt={liveMargin:_pgM,gap:_pgGap,leaderWp:_pgLwp,leaderEfg:_pgFt?_pgFt.leaderEfg:null,period:g.period,clock:g.clock};
+          _scLbl='engine gates not yet open \u2014 season context only'+(_pgLd?'':' (game tied \u2014 no leader to read)');
         }
-        var _pgOpen=!!_ssSeasonOpen[id];
+      }else if(_scState==='FINAL'){
+        var _scFire=(entry&&entry.data&&entry.data.fire_review)||null;
+        if(_scFire&&_scFire.quality_gap==null&&_scFire.deficit==null)_scFire=null;
+        if(_scFire){
+          _scSt={margin:_scFire.deficit!=null?Number(_scFire.deficit):null,
+            gap:_scFire.quality_gap!=null?Number(_scFire.quality_gap):null,
+            leaderWp:_scFire.leader_wp!=null?Number(_scFire.leader_wp):null,
+            leaderEfg:_scFire.leader_efg!=null?Number(_scFire.leader_efg):null,
+            period:_scFire.period,clock:_scFire.clock};
+          _scLbl='FIRE-TIME REVIEW \u2014 '+String(_scFire.alert_subtype||'')+' fired Q'+String(_scFire.period||'?')+(_scFire.clock?' '+String(_scFire.clock):'');
+          _scLblCol='var(--green)';_scLblBold=true;
+        }else{
+          _scSt={};_scLbl='no qualifying spot fired this game \u2014 season reference only';
+        }
+      }else{
+        _scSt={};_scLbl='pregame \u2014 season reference only';
+      }
+      if(_scSt!=null){
+        var _scOpen=!!_ssSeasonOpen[id];
         html+='<div style="margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--hairline)">';
-        html+='<div onclick="event.stopPropagation();ssToggleSeason(\''+id+'\')" style="font-size:11px;color:var(--fg-tertiary);cursor:pointer">SEASON CONTEXT <span id="ssSeasonCaret-'+id+'" style="color:var(--fg-dim)">'+(_pgOpen?'\u25be':'\u25b8')+'</span></div>';
-        var _pgSt={liveMargin:_pgM,gap:_pgGap,leaderWp:_pgLwp,period:g.period,clock:g.clock};
-        var _pgLbl='<div style="color:var(--fg-dim);margin-bottom:6px">engine gates not yet open \u2014 season context only'+(_pgLd?'':' (game tied \u2014 no leader to read)')+'</div>';
-        html+='<div id="ssSeason-'+id+'" onclick="event.stopPropagation()" style="display:'+(_pgOpen?'block':'none')+';margin-top:4px;padding:6px 8px;border:1px solid var(--hairline);border-radius:6px;font-size:10.5px;line-height:1.55;color:var(--fg-tertiary);font-family:var(--mono)">'+_pgLbl+ssSeasonPanel(_pgSt)+'</div>';
+        html+='<div onclick="event.stopPropagation();ssToggleSeason(\''+id+'\')" style="font-size:11px;letter-spacing:.02em;color:var(--fg-tertiary);cursor:pointer">SEASON CONTEXT <span id="ssSeasonCaret-'+id+'" style="color:var(--fg-dim)">'+(_scOpen?'\u25be':'\u25b8')+'</span></div>';
+        var _scLblHtml=_scLbl?'<div style="color:'+_scLblCol+';'+(_scLblBold?'font-weight:600;':'')+'margin-bottom:6px">'+esc(_scLbl)+'</div>':'';
+        html+='<div id="ssSeason-'+id+'" onclick="event.stopPropagation()" style="display:'+(_scOpen?'block':'none')+';margin-top:4px;padding:6px 8px;border:1px solid var(--hairline);border-radius:6px;font-size:10.5px;line-height:1.55;color:var(--fg-tertiary);font-family:var(--mono)">'+_scLblHtml+ssSeasonPanel(_scSt)+'</div>';
         html+='</div>';
       }
     }
