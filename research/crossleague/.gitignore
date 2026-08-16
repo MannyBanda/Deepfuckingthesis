@@ -1,0 +1,7 @@
+__pycache__/
+*.index.json
+working_keys.txt
+alive_keys.txt
+keytest.py
+keyhealth.py
+seasons_probe.py

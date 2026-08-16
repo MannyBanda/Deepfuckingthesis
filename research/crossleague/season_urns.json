@@ -1,0 +1,170 @@
+{
+ "Eurocup": [
+  {
+   "id": "sr:season:120713",
+   "name": "Eurocup 24/25",
+   "start": "2024-09-24",
+   "end": "2025-04-11"
+  },
+  {
+   "id": "sr:season:132244",
+   "name": "Eurocup 25/26",
+   "start": "2025-09-30",
+   "end": "2026-04-28"
+  }
+ ],
+ "GreekA1": [
+  {
+   "id": "sr:season:121387",
+   "name": "Basketball League 24/25",
+   "start": "2024-10-05",
+   "end": "2025-06-08"
+  },
+  {
+   "id": "sr:season:133539",
+   "name": "Basketball League 25/26",
+   "start": "2025-10-04",
+   "end": "2026-06-13"
+  }
+ ],
+ "IsraelSuper": [
+  {
+   "id": "sr:season:123025",
+   "name": "Super League 24/25",
+   "start": "2024-10-05",
+   "end": "2025-06-15"
+  },
+  {
+   "id": "sr:season:134753",
+   "name": "Super League 25/26",
+   "start": "2025-10-12",
+   "end": "2026-06-23"
+  }
+ ],
+ "LigaACB": [
+  {
+   "id": "sr:season:121753",
+   "name": "Liga ACB 24/25",
+   "start": "2024-09-28",
+   "end": "2025-06-25"
+  },
+  {
+   "id": "sr:season:133541",
+   "name": "Liga ACB 25/26",
+   "start": "2025-10-04",
+   "end": "2026-06-24"
+  }
+ ],
+ "TurkishBSL": [
+  {
+   "id": "sr:season:122381",
+   "name": "Super Lig 24/25",
+   "start": "2024-10-04",
+   "end": "2025-06-26"
+  },
+  {
+   "id": "sr:season:134245",
+   "name": "Super Lig 25/26",
+   "start": "2025-09-26",
+   "end": "2026-06-19"
+  }
+ ],
+ "ItalySerieA": [
+  {
+   "id": "sr:season:121763",
+   "name": "Serie A 24/25",
+   "start": "2024-09-28",
+   "end": "2025-06-17"
+  },
+  {
+   "id": "sr:season:133290",
+   "name": "Serie A 25/26",
+   "start": "2025-10-04",
+   "end": "2026-06-18"
+  }
+ ],
+ "FranceLNB": [
+  {
+   "id": "sr:season:121037",
+   "name": "Pro A 24/25",
+   "start": "2024-09-20",
+   "end": "2025-06-24"
+  },
+  {
+   "id": "sr:season:132978",
+   "name": "Pro A 25/26",
+   "start": "2025-09-26",
+   "end": "2026-06-23"
+  }
+ ],
+ "GermanyBBL": [
+  {
+   "id": "sr:season:122013",
+   "name": "BBL 24/25",
+   "start": "2024-09-20",
+   "end": "2025-06-26"
+  },
+  {
+   "id": "sr:season:132980",
+   "name": "BBL 25/26",
+   "start": "2025-09-26",
+   "end": "2026-06-21"
+  }
+ ],
+ "ABALiga": [
+  {
+   "id": "sr:season:120009",
+   "name": "Liga ABA 24/25",
+   "start": "2024-09-20",
+   "end": "2025-06-12"
+  },
+  {
+   "id": "sr:season:133631",
+   "name": "Liga ABA 25/26",
+   "start": "2025-10-03",
+   "end": "2026-06-12"
+  }
+ ],
+ "LithuaniaLKL": [
+  {
+   "id": "sr:season:122355",
+   "name": "LKL 24/25",
+   "start": "2024-09-21",
+   "end": "2025-06-21"
+  },
+  {
+   "id": "sr:season:133717",
+   "name": "LKL 25/26",
+   "start": "2025-09-20",
+   "end": "2026-06-13"
+  }
+ ],
+ "NBLAustralia": [
+  {
+   "id": "sr:season:120065",
+   "name": "NBL 24/25",
+   "start": "2024-09-19",
+   "end": "2025-03-23"
+  },
+  {
+   "id": "sr:season:131765",
+   "name": "NBL 25/26",
+   "start": "2025-09-18",
+   "end": "2026-04-05"
+  }
+ ],
+ "ChampionsLeague": [
+  {
+   "id": "sr:season:120203",
+   "name": "Champions League 24/25",
+   "start": "2024-09-17",
+   "end": "2025-05-11"
+  },
+  {
+   "id": "sr:season:132292",
+   "name": "Champions League 25/26",
+   "start": "2025-09-19",
+   "end": "2026-05-09"
+  }
+ ]
+}
