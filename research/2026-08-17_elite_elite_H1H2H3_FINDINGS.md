@@ -115,3 +115,24 @@ Every prereg cell landed LOW except gap<0 (MED). The population yielded 32 games
 ## REGENERATION
 
 `node research/2026-08-17_elite_elite_h1h2.mjs --pull` then without flags. States committed with gap, both win%, both GP, margin, gameSec/period/bucket, leader eFG/band/3P%/POT, fuel flag + source, joined trailer ML, join latency, raw and de-vig implieds, outcome.
+
+---
+
+## ADDENDUM (Aug 18 — PM price challenge; POST-HOC secondary metric, applied uniformly)
+
+**PM observation (confirmed):** elite-elite trailer prices are longer at every deficit. Median trailer ML by deficit, EE vs fade country: 1–3 **+130** (69% plus-money) vs −160 (18%); 4–6 **+200** (83%) vs −105 (48%); 7–9 **+455** (96%) vs +200 (81%). Mechanism: live price tracks the gap; small-gap populations go plus-money almost immediately. Matches the bets-ledger pattern (row 38 GS −165 at gap .355 vs row 40 WSH +150 at gap .212).
+
+**Realizable edge (conv − raw best-price implied, what a line-shopping bettor is paid) alongside the pre-registered signal edge (conv − devig):**
+
+| cell | n | conv | signal edge | realizable |
+|---|---|---|---|---|
+| gap ≥ .10 [H1 bar] | 17 | 29.4% | −16.3pp | **−11.1pp** |
+| gap 0–.10 | 47 | 46.8% | +5.5pp | **+8.3pp** |
+| gap > 0 | 64 | 42.2% | −0.3pp | **+3.1pp** |
+| gap < 0 | 97 | 17.5% | −14.2pp | −12.4pp |
+| H2 EARNED | 17 | 64.7% | +11.8pp | **+15.4pp** |
+| H2 TRANSIENT | 47 | 34.0% | −4.7pp | −1.3pp |
+
+**Guards:** (1) prereg verdicts UNCHANGED — H1/H2 were tested against de-vig per the standing primary-metric rule and this addendum does not re-adjudicate them; (2) ~+2.8pp of any realizable figure is line-shopping harvest (devig − raw) available on any bet either side; (3) the best-price tape can contain stale, unfillable quotes → realizable is an UPPER bound, signal edge a LOWER bound.
+
+**Annotated strategic read:** for best-price execution, the positive-gap elite-elite lane is breakeven-to-positive at LOW power, concentrated in SMALL gaps (0–.10) and EARNED leads — the inverse concentration of fade country. Playoff pricing (PM expectation: longer prices, all small-gap by construction) is untestable until a priced playoff tape exists; the paper ledger's at-window elite-elite calls are the designated instrument. Nothing ships.
