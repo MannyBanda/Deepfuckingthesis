@@ -1437,6 +1437,52 @@ async function ssNarrationSweep(sql, startTime) {
   }
 }
 
+// ── A-TIER WAKE ESCALATION (v1, Aug 17) ─────────────────────────────────
+// Row-39 lesson: one priority-5 push through a sleeping/pocketed phone loses the
+// fire window ($480+ on identical stake). Re-push each live A-tier fire TWICE
+// (~2 min and ~4 min post-fire, poll-cadence granular), priority 5, then stop —
+// past ~7 min the detonation has happened or the window is dead. A-tier ONLY;
+// B/WATCHLIST single-push behavior unchanged. No ack mechanism by design (PM).
+// State rides player_ctx_json.repush via JSONB merge (no schema change; same
+// pattern as stamp_ss_fueltemp). Isolated SELECT per the critical-path rule.
+// The 120s age floor also keeps fixture-inserted rows (asserted within seconds)
+// out of the sweep — do not lower it without re-checking the _ftMode contracts.
+async function ssRepushSweep(sql) {
+  if (!WNBA_SS_ALERT_ON) return;
+  try {
+    const rows = await sql`SELECT id, period, clock, leader_alias, trailer_alias, margin, line_used,
+        squeeze_last_alert_price,
+        EXTRACT(EPOCH FROM (NOW() - created_at)) AS age_s,
+        COALESCE((player_ctx_json->'repush'->>'count')::int, 0) AS rp
+      FROM sweetspot_alerts
+      WHERE league = ${'wnba'} AND alert_tier = ${'A'}
+        AND alert_subtype IN ('EFG_FADE', 'EFG_FADE_SOFT')
+        AND ntfy_sent = true AND resolved IS NOT TRUE
+        AND created_at > NOW() - INTERVAL '7 minutes'
+        AND COALESCE((player_ctx_json->'repush'->>'count')::int, 0) < 2`;
+    for (const r of rows) {
+      const age = Number(r.age_s) || 0;
+      const due = (r.rp === 0 && age >= 120) || (r.rp === 1 && age >= 240);
+      if (!due) continue;
+      const mins = Math.max(1, Math.round(age / 60));
+      const nth = r.rp + 1;
+      const title = `A-TIER STILL LIVE - Back ${r.trailer_alias} (fired ${mins}m ago)`;
+      let body = `Reminder ${nth}/2. Sweet Spot A fired Q${r.period}${r.clock ? ' ' + r.clock : ''}: ${r.trailer_alias} down ${r.margin} to ${r.leader_alias}, fire line ${r.line_used != null ? (r.line_used > 0 ? '+' + r.line_used : r.line_used) : 'n/a'}.`;
+      if (r.squeeze_last_alert_price != null) {
+        body += ` Squeeze last saw ${r.squeeze_last_alert_price > 0 ? '+' + r.squeeze_last_alert_price : r.squeeze_last_alert_price}.`;
+      }
+      body += ` Check the current price before entry - A-tier windows move fast and they detonate, they do not recover.`;
+      try {
+        await sendNtfy(title, body, 5, SS_DASH_URL);
+        await sql`UPDATE sweetspot_alerts
+          SET player_ctx_json = COALESCE(player_ctx_json, '{}'::jsonb) || ${JSON.stringify({ repush: { count: nth, last: new Date().toISOString() } })}::jsonb
+          WHERE id = ${r.id}`;
+        log(`repush sweep: A-tier row ${r.id} reminder ${nth}/2 sent (age ${Math.round(age)}s)`);
+      } catch (e) { log(`repush sweep: row ${r.id} failed — ${e.message}`); }
+    }
+  } catch (e) { log(`repush sweep (non-blocking): ${e.message}`); }
+}
+
 // ── ALERT REASONING AGENT ────────────────────────────────────────────────
 
 // ── TEAM CONTEXT (TEAM_PROFILES_SPEC §6) — season identity/tier/form/H2H priors ──
@@ -11037,6 +11083,9 @@ export default async function(req) {
   // NARRATION V2 tail sweep (D-4) — after ALL snapshot/alert/state work has committed.
   // Claims at most one pending narration/brief row; never blocks the heartbeat.
   try { await ssNarrationSweep(sql, startTime); } catch (e) { log(`narration sweep outer: ${e.message}`); }
+
+  // A-TIER WAKE ESCALATION — re-push live A fires (2/2 max, ~2/4 min). Non-blocking.
+  try { await ssRepushSweep(sql); } catch (e) { log(`repush sweep outer: ${e.message}`); }
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   if (results.snapshots > 0 || results.errors.length > 0) {
