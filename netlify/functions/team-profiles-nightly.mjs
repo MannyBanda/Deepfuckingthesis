@@ -145,6 +145,58 @@ export function parseMin(v) {
 // first prod recompute). Normalize to ISO before any comparison.
 const normDate = (v) => v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10);
 
+// ── LATE_EXECUTION_SPEC v1 (Aug 18) — display-only ball-security surface ─────
+// Phase A PASS (r=.468) authorizes the LEVEL display; Phase B FAILED so nothing
+// here gates, sizes, or directs. Copy is always a level, never a forecast.
+const LATE_EXEC_K = 10;              // shrinkage pseudo-games (prereg-fixed)
+const LATE_EXEC_MIN_GP = 10;         // below this: null, surfaces degrade
+
+// Pure. teamRows: [{late_to, late_poss, h1_to, h1_poss, late_unf_to}] for ONE
+// team-season (nulls skipped per-field). leagueRate: league late TO/100poss.
+export function computeLateExecution(teamRows, leagueRate) {
+  const g = (teamRows || []).filter((r) => r.late_to != null && Number(r.late_poss) > 0);
+  if (g.length < LATE_EXEC_MIN_GP || !(leagueRate > 0)) return null;
+  const rate = 100 * g.reduce((a, r) => a + Number(r.late_to), 0) / g.reduce((a, r) => a + Number(r.late_poss), 0);
+  const u = g.filter((r) => r.late_unf_to != null);
+  const unforced_rate = u.length >= LATE_EXEC_MIN_GP
+    ? 100 * u.reduce((a, r) => a + Number(r.late_unf_to), 0) / u.reduce((a, r) => a + Number(r.late_poss), 0) : null;
+  const shrunk = (g.length * rate + LATE_EXEC_K * leagueRate) / (g.length + LATE_EXEC_K);
+  return { rate: +rate.toFixed(2), unforced_rate: unforced_rate == null ? null : +unforced_rate.toFixed(2),
+    gp: g.length, shrunk: +shrunk.toFixed(3) };
+}
+
+// Quarter-window values for one finished game from its production snapshots.
+// H1 = cumulative at the last P2 snapshot; late = last-P4 minus last-P2 (Q3+Q4).
+// OT excluded (P<=4). Returns { [alias]: {late_to,late_poss,h1_to,h1_poss,late_unf_to} }
+// or null when boundaries are unobservable — callers degrade.
+export function lateExecFromSnapshots(snapRows, homeAlias, awayAlias) {
+  const clkSec = (c) => { if (c == null) return null; c = String(c); if (c.includes(':')) { const p = c.split(':'); return (+p[0]) * 60 + (+p[1] || 0); } const n = parseFloat(c); return isNaN(n) ? null : n; };
+  const bound = {};
+  for (const s of snapRows || []) {
+    const p = Number(s.period); const cs = clkSec(s.clock);
+    if (!(p >= 1 && p <= 4) || cs == null) continue;
+    const el = (p - 1) * 600 + (600 - cs);
+    let rs = s.raw_stats_json;
+    if (typeof rs === 'string') { try { rs = JSON.parse(rs); } catch (e) { continue; } }
+    if (!rs || !rs.home || !rs.away) continue;
+    if (!bound[p] || el >= bound[p].el) bound[p] = { el, rs };
+  }
+  if (!bound[2] || !bound[4]) return null;
+  const out = {};
+  for (const [sideKey, alias] of [['home', homeAlias], ['away', awayAlias]]) {
+    const at = (p, f) => { const v = (bound[p].rs[sideKey] || {})[f]; return v == null ? null : Number(v); };
+    const to2 = at(2, 'to'), to4 = at(4, 'to'), po2 = at(2, 'poss'), po4 = at(4, 'poss');
+    if ([to2, to4, po2, po4].some((v) => v == null)) continue;
+    const latePoss = po4 - po2;
+    if (!(po2 > 5 && latePoss > 5)) continue;
+    const u2 = at(2, 'unforced_to'), u4 = at(4, 'unforced_to');
+    out[alias] = { late_to: Math.max(0, to4 - to2), late_poss: +latePoss.toFixed(1),
+      h1_to: to2, h1_poss: +po2.toFixed(1),
+      late_unf_to: (u2 != null && u4 != null) ? Math.max(0, u4 - u2) : null };
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 export function computeRotation(rows, asof) {
   const byGame = {}; // gid -> { date, players: { pid: { min, name } } }
   for (const r of rows) {
@@ -653,10 +705,60 @@ export default async function handler(req) {
       for (const [team, trs] of Object.entries(byTeamP)) rotations[team] = computeRotation(trs);
       log(`rotation computed for ${Object.keys(rotations).length} teams`);
     } catch (e) { log(`rotation stage failed (profiles unaffected): ${e.message}`); }
+
+    // ── LATE_EXECUTION stage (spec v1): fill quarter-window columns for any
+    // season rows still missing them (self-healing, covers tonight's games and
+    // any gaps), then build the season ladder. Isolated; profiles unaffected on
+    // failure. Display-only downstream — Phase B failed, nothing gates.
+    const lateExec = {};
+    try {
+      const missing = await sql`SELECT DISTINCT dft_game_id FROM team_game_stats
+        WHERE league = ${league} AND season = ${season} AND late_to IS NULL
+        AND dft_game_id IS NOT NULL LIMIT 40`;
+      for (const m of missing) {
+        try {
+          const snaps = await sql`SELECT period, clock, raw_stats_json FROM snapshots
+            WHERE game_id = ${m.dft_game_id} ORDER BY ts ASC`;
+          const pair = await sql`SELECT team_alias, is_home FROM team_game_stats
+            WHERE dft_game_id = ${m.dft_game_id} AND league = ${league}`;
+          const home = pair.find((r) => r.is_home), away = pair.find((r) => !r.is_home);
+          if (!home || !away || snaps.length < 8) continue;
+          const q = lateExecFromSnapshots(snaps, home.team_alias, away.team_alias);
+          if (!q) continue;
+          for (const [alias, v] of Object.entries(q)) {
+            await sql`UPDATE team_game_stats SET late_to = ${v.late_to}, late_poss = ${v.late_poss},
+              h1_to = ${v.h1_to}, h1_poss = ${v.h1_poss}, late_unf_to = ${v.late_unf_to}
+              WHERE dft_game_id = ${m.dft_game_id} AND team_alias = ${alias}`;
+          }
+        } catch (e) { /* per-game degrade */ }
+      }
+      const lrows = await sql`SELECT team_alias, late_to, late_poss, h1_to, h1_poss, late_unf_to
+        FROM team_game_stats WHERE league = ${league} AND season = ${season} AND late_to IS NOT NULL`;
+      const lgTo = lrows.reduce((a, r) => a + Number(r.late_to), 0);
+      const lgPo = lrows.reduce((a, r) => a + Number(r.late_poss), 0);
+      const leagueRate = lgPo > 0 ? 100 * lgTo / lgPo : null;
+      const byTeamL = {};
+      for (const r of lrows) { if (CANONICAL_ALIASES.has(r.team_alias)) (byTeamL[r.team_alias] = byTeamL[r.team_alias] || []).push(r); }
+      const vals = [];
+      for (const [team, trs] of Object.entries(byTeamL)) {
+        const le = computeLateExecution(trs, leagueRate);
+        if (le) { lateExec[team] = le; vals.push([team, le.shrunk]); }
+      }
+      vals.sort((a, b) => a[1] - b[1]);
+      const of = vals.length;
+      vals.forEach(([team], i) => {
+        const third = Math.ceil(of / 3);
+        Object.assign(lateExec[team], { rank: i + 1, of,
+          tercile: i < third ? 'CLEAN' : i < of - third ? 'MID' : 'SLOPPY',
+          league_rate: leagueRate == null ? null : +leagueRate.toFixed(2) });
+      });
+      log(`late_exec ladder: ${of} teams (league ${leagueRate == null ? '—' : leagueRate.toFixed(1)}/100)`);
+    } catch (e) { log(`late_exec stage failed (profiles unaffected): ${e.message}`); }
     if (!isDry) {
       for (const [team, p] of Object.entries(profiles)) {
         Object.assign(p.profile, killerFields[team] || {});
         p.profile.rotation = rotations[team] || null;     // NULL-degrading (spec §4)
+        p.profile.late_exec = lateExec[team] || null;     // NULL-degrading (LATE_EXECUTION_SPEC v1)
         await sql`INSERT INTO team_profiles (team_alias, league, season, w, l, archetype, profile, updated_at)
           VALUES (${team}, ${league}, ${season}, ${p.w}, ${p.l}, ${p.archetype}, ${JSON.stringify(p.profile)}, NOW())
           ON CONFLICT (team_alias, league, season)

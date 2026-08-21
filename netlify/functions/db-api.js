@@ -633,6 +633,12 @@ exports.handler = async (event) => {
       await sql`ALTER TABLE team_game_stats ADD COLUMN IF NOT EXISTS fga INT`;
       await sql`ALTER TABLE team_game_stats ADD COLUMN IF NOT EXISTS opp_fgm INT`;
       await sql`ALTER TABLE team_game_stats ADD COLUMN IF NOT EXISTS opp_fga INT`;
+      // LATE_EXECUTION_SPEC v1 (Aug 18): quarter-window substrate, display-only surface
+      await sql`ALTER TABLE team_game_stats ADD COLUMN IF NOT EXISTS late_to INT`;
+      await sql`ALTER TABLE team_game_stats ADD COLUMN IF NOT EXISTS late_poss REAL`;
+      await sql`ALTER TABLE team_game_stats ADD COLUMN IF NOT EXISTS h1_to INT`;
+      await sql`ALTER TABLE team_game_stats ADD COLUMN IF NOT EXISTS h1_poss REAL`;
+      await sql`ALTER TABLE team_game_stats ADD COLUMN IF NOT EXISTS late_unf_to INT`;
       // KILLER_FLAG_SPEC §2 — leader season-profile stamp on SS alert rows (isolated
       // ALTERs; never added to existing SELECTs on polling paths)
       await sql`ALTER TABLE sweetspot_alerts ADD COLUMN IF NOT EXISTS leader_killer BOOLEAN`;
@@ -928,6 +934,28 @@ exports.handler = async (event) => {
         snapshot: snap[0] || null, game: game[0] || null,
         rows: subs.map(r => ({ subtype: r.alert_subtype, leader: r.leader_alias, trailer: r.trailer_alias })),
         subtypes: subs.map(r => r.alert_subtype), fuel_at_fire: fuelAtFire, fire_review: fireReview }) };
+    }
+
+    // ── LATE_EXECUTION_SPEC v1 (Aug 18) — backfill/repair upsert for quarter-window
+    // substrate. Values computed by the caller (nightly owns the live compute);
+    // this action only writes them onto existing team_game_stats rows by
+    // (dft_game_id, team_alias). Idempotent; unknown rows are counted, not created.
+    if (action === 'upsert_late_exec' && event.httpMethod === 'POST') {
+      const b = JSON.parse(event.body || '{}');
+      const rows = Array.isArray(b.rows) ? b.rows : [];
+      if (!rows.length) return { statusCode: 400, headers, body: JSON.stringify({ error: 'rows[] required' }) };
+      let updated = 0, missed = 0;
+      for (const r of rows) {
+        if (!r.dft_game_id || !r.team_alias) { missed++; continue; }
+        const res = await sql`UPDATE team_game_stats SET
+            late_to = ${r.late_to ?? null}, late_poss = ${r.late_poss ?? null},
+            h1_to = ${r.h1_to ?? null}, h1_poss = ${r.h1_poss ?? null},
+            late_unf_to = ${r.late_unf_to ?? null}
+          WHERE dft_game_id = ${r.dft_game_id} AND team_alias = ${r.team_alias}
+          RETURNING game_id`;
+        if (res.length) updated++; else missed++;
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, updated, missed }) };
     }
 
     // ── SWEETSPOT_OPS_SPEC.md §3/D-A — structured betting log ──
