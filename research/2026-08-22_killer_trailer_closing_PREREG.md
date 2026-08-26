@@ -37,3 +37,10 @@ Margin 1-3 · clock <=2:00 · margin 1-9. Reported as sensitivity regardless of 
 
 ## Promotion rule
 H1 meets bar in full -> caution-kernel candidate spec proposed to PM (display-only), with H2 mechanism informing copy. Anything less -> findings committed, backlog item closed or re-dated, no surface changes.
+
+---
+
+## AMENDMENT 1 (2026-08-22, committed before execution)
+**Change:** Add a pre-declared exploratory stratum: **margin 7-15**, same window (Q4 <=5:00), same trailer band (<.450), same killer vs no-scalp split, same one-row-per-game unit.
+**Rules:** Reported SEPARATELY from the primary cell in every findings table. Ordering only — no promotion authority, no directive language at any n, never pooled with the 1-6 primary. If the stratum shows a surprising pattern, that is a genuinely NEW hypothesis requiring its own prereg with its own bar; it cannot be promoted from this study.
+**Rationale (PM):** do not discard the high-margin games unseen. Stratification over pooling: pooling 10-15 near-dead games into the primary cell would mechanically compress killer-vs-control separation with shared zeros (closing-capacity ceiling: late runs erase single digits, not 15-25) and could fail a true H1 by dilution. Primary cell and its bar are UNCHANGED.
