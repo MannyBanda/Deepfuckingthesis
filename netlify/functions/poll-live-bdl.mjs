@@ -818,6 +818,23 @@ function ssClassifyTier(edge, period, deficit, collT, fadeT, cls) {
   return out;
 }
 
+// ── AMENDMENT 3 (2026-08-25) — Q1 price gate (D-8 reversal) ──────────────────
+// B-tier pushes and WATCHLIST fire in Q1 only when the trailer's best live ML is
+// under -150 (numerically > -150: -145 / +100 / +120 pass; -150 itself does not).
+// A-tier is EXEMPT (standing lesson: take the fire price — they detonate).
+// No line = no Q1 fire (a price gate cannot pass without a price); the next poll
+// re-evaluates, and Q2 band entry stays price-blind as before. Threshold pinned
+// in-function (fixture-extraction-safe) — changing it requires a spec amendment.
+// Provenance: 2026 tape, 69 Q1 band-entry games price-joined 69/69 — minus-money
+// entries ran ~market (73.8% conv vs 72.3% implied); the season's Q1 P&L sat in
+// plus-money entries (n=8, LOW power). -150 is the PM's line, not a fitted number.
+function ssQ1PriceOk(ml) { return ml != null && !isNaN(Number(ml)) && Number(ml) > -150; }
+function ssWatchGate(period, gap, deficit, trailML) {
+  if (gap == null || gap < 0.15 || deficit < 1 || deficit > 9) return false;
+  if (period === 2 || period === 3) return true;   // price-blind, unchanged
+  return period === 1 && ssQ1PriceOk(trailML);     // AMENDMENT 3 — Q1 open, price-gated
+}
+
 // ── PUSH COPY STANDARD (SWEETSPOT_TIER_BC_SPEC.md AMENDMENT 2, templates verbatim) ──
 // Pure function → extractable by the fixture harness. Bodies are UTF-8 (em dashes fine);
 // titles use ASCII hyphen (Node fetch requires ASCII headers — hotfix learning #2;
@@ -830,7 +847,12 @@ function ssComposePush(ss) {
   if (ss.subtype === 'WATCHLIST') {
     const band = ss.leaderBand === 'red' ? ' — running red-hot'
       : (ss.leaderBand === 'orange' ? ' — running hot' : '');
+    // AMENDMENT 3 — the review decision is price-driven; the push carries the live line.
+    const price = ss.bestML != null
+      ? `Live price: ${ss.trailerAl} ${_ml(ss.bestML)}${ss.bestBook ? ' at ' + ss.bestBook : ''}.\n`
+      : `No live line posted yet.\n`;
     const body = `${ss.trailerAl} is the much better team — wins ${_pct(ss.trailerWP)}% of games vs ${ss.leaderAl}'s ${_pct(ss.leaderWP)}% (quality gap) — and trails by ${ss.margin} in Q${ss.period}. ${ss.leaderAl} shooting ${ss.leaderEfg != null ? Math.round(ss.leaderEfg) : '?'}% effective FG${band}.\n`
+      + price
       + `System gates haven't aligned for a bet; worth a dashboard look.`;
     return { title: `REVIEW - ${ss.trailerAl} down ${ss.margin} to ${ss.leaderAl} (not a bet call)`, body: body, priority: 2 };
   }
@@ -9283,13 +9305,17 @@ export default async function(req) {
 
                     // ── 2b: fire the tier ladder — A live (WNBA_SS_ALERT_ON) · B behind
                     // WNBA_SS_B_ON · ledger rows behind WNBA_SS_LEDGER_ON · WATCHLIST behind
-                    // WNBA_SS_WATCHLIST_ON. WATCHLIST is independent (band entry, Q2/Q3 only,
-                    // gap ≥ .15, deficit 1-9); fired AFTER A/B so same-poll A/B suppresses it.
-                    var _ssDoFire = (_ssTier === 'A' && WNBA_SS_ALERT_ON) || (_ssTier === 'B' && WNBA_SS_B_ON);
+                    // WNBA_SS_WATCHLIST_ON. WATCHLIST is independent (band entry: Q2/Q3
+                    // price-blind as before, Q1 behind the AMENDMENT 3 -150 price gate via
+                    // ssWatchGate); fired AFTER A/B so same-poll A/B suppresses it.
+                    // Q1 B shapes failing the price gate push nothing AND insert nothing —
+                    // the (game_id, subtype) dedup slot stays free so a later in-band B fire
+                    // pushes normally; snapshots already carry the shape (compute-vs-fire).
+                    var _ssQ1BSupp = _ssTier === 'B' && currentPeriod === 1 && !ssQ1PriceOk(_ssTrailML);
+                    if (_ssQ1BSupp) log(`${matchup}: SS — Q1 B price-held (ML ${_ssTrailML != null ? _ssTrailML : 'none'}, gate -150) — no push, no row, dedup slot free`);
+                    var _ssDoFire = ((_ssTier === 'A' && WNBA_SS_ALERT_ON) || (_ssTier === 'B' && WNBA_SS_B_ON)) && !_ssQ1BSupp;
                     var _ssDoLedger = !_ssTier && _ssLad.ledgerSub != null && WNBA_SS_LEDGER_ON;
-                    var _ssDoWatch = WNBA_SS_WATCHLIST_ON && _ssGap != null && _ssGap >= 0.15
-                      && _ssDeficit >= 1 && _ssDeficit <= 9
-                      && (currentPeriod === 2 || currentPeriod === 3);
+                    var _ssDoWatch = WNBA_SS_WATCHLIST_ON && ssWatchGate(currentPeriod, _ssGap, _ssDeficit, _ssTrailML);
                     if (_ssDoFire || _ssDoLedger || _ssDoWatch) {
                       var _ssLeadRec = ssStandings[_ssLeadAl] || {}, _ssTrailRec = ssStandings[_ssTrailAl] || {};
                       var _ssBestBook = _ssHomeTrails ? (odds && odds.homeMLBook) : (odds && odds.awayMLBook);

@@ -264,3 +264,40 @@ triggering game: 1–3. Slate expectation (4 games): ~2–4 pushes/night total.
 **PM decision D-11:** B keeps its second (WHY narration) push like A, or single-push?
 Rec: keep two-push parity — B is an actionable bet signal; the WHY is where sizing judgment
 lives. Revisit if B volume feels noisy after a few weeks live.
+
+---
+
+# AMENDMENT 3 (2026-08-25) — Q1 eligibility with a -150 price gate (D-8 reversal)
+
+**Trigger:** D-8's pre-named revisit condition met. 2026 tape read (research/, this date): 69 Q1
+band-entry games, price-joined 69/69 — 72.5% trailer conversion vs 68.7% mean implied; flag-era
+flat ROI +13.4%; the season's Q1 P&L concentrated entirely in plus-money entries (n=8, 62.5%
+conv vs 41.1% implied, +36.5% flat ROI — LOW power). Minus-money Q1 entries ran ~market
+(73.8% vs 72.3% implied, net ~$0). The 11 never-fired fast-flip games priced -315 to -750
+(mean implied 82.2%) — the market sees Q1 flips before Q2 does.
+
+**Change (PM decision, this session):** WATCHLIST and B-tier become Q1-eligible behind a
+shared price gate — the trailer's best live ML must be UNDER -150 (numerically > -150:
+-145 / +100 / +120 pass; -150 itself and worse do not; no line = no Q1 fire). -150 is the
+PM's line, not a fitted number. Q2/Q3 behavior is UNCHANGED and price-blind. **A-tier is
+exempt everywhere** — standing lesson: take the fire price, they detonate.
+
+**Mechanics:**
+- `ssQ1PriceOk(ml)` + `ssWatchGate(period, gap, deficit, trailML)` — pure, fixture-pinned
+  (harness sections 7–9), thresholds in-function; changes require a spec amendment.
+- WATCHLIST fire condition is now `ssWatchGate(...)` at the fire site.
+- Q1 B shapes failing the gate push NOTHING and insert NOTHING — the (game_id, subtype)
+  dedup slot stays free so a later in-band B fire pushes normally; the suppressed shape is
+  already stamped on snapshots (compute-vs-fire separation). A `price-held` log line records
+  each suppression for observability.
+- WATCHLIST push copy (all periods) gains one line: `Live price: {trailer} {ML} at {book}.`
+  (`No live line posted yet.` when absent) — the review decision is price-driven.
+- Dedup, D-13 ordering guards, narration sweep, and squeeze auto-arm all key on existing
+  `ntfy_sent` / dedup semantics — no changes needed; suppressed shapes cannot narrate or arm.
+
+**Ledger convention (era note):** the WATCHLIST stream's population changes at ship date —
+future stream reads split by period or by pre/post-Amendment-3 era before pooling.
+
+**Expected volume:** ~8 Q1 pushes/season at the gate (2026 tape base rate), arriving at
+first perception instead of Q2. Revisit condition: if Q1 WATCHLIST rows resolve materially
+below the Q2/Q3 stream at n≥15, re-close or tighten the gate.

@@ -136,5 +136,43 @@ T('missing kelly → ? not NaN', p.body.includes('~?% of bankroll'));
 p = ssComposePush({ ...BASE, leaderEfg: null, varShare: null });
 T('missing efg/var → ? placeholders', p.body.includes('?% effective FG') && p.body.includes('?% of their lead'));
 
+// ── AMENDMENT 3 (2026-08-25) — Q1 price gate + WATCHLIST price line ─────────
+const ssQ1PriceOk = new Function(`${extractFn(POLL, 'ssQ1PriceOk')}; return ssQ1PriceOk;`)();
+const ssWatchGate = new Function(`${extractFn(POLL, 'ssQ1PriceOk')}; ${extractFn(POLL, 'ssWatchGate')}; return ssWatchGate;`)();
+
+console.log('\n[7] ssQ1PriceOk — the -150 line');
+T('+120 passes', ssQ1PriceOk(120) === true);
+T('+100 passes', ssQ1PriceOk(100) === true);
+T('-145 passes', ssQ1PriceOk(-145) === true);
+T('-149 passes', ssQ1PriceOk(-149) === true);
+T('-150 itself does NOT pass', ssQ1PriceOk(-150) === false);
+T('-200 fails', ssQ1PriceOk(-200) === false);
+T('null (no line) fails', ssQ1PriceOk(null) === false);
+T('string "-140" passes (DB int-as-string safety)', ssQ1PriceOk('-140') === true);
+T('non-numeric fails', ssQ1PriceOk('n/a') === false);
+
+console.log('\n[8] ssWatchGate — band entry per period');
+T('Q2 in-band, no line → fires (price-blind unchanged)', ssWatchGate(2, 0.20, 5, null) === true);
+T('Q3 in-band, -400 → fires (price-blind unchanged)', ssWatchGate(3, 0.16, 3, -400) === true);
+T('Q1 in-band, +120 → fires', ssWatchGate(1, 0.24, 2, 120) === true);
+T('Q1 in-band, -145 → fires', ssWatchGate(1, 0.24, 2, -145) === true);
+T('Q1 in-band, -150 → held', ssWatchGate(1, 0.24, 2, -150) === false);
+T('Q1 in-band, -300 → held', ssWatchGate(1, 0.35, 4, -300) === false);
+T('Q1 in-band, no line → held', ssWatchGate(1, 0.24, 2, null) === false);
+T('Q1 gap .14 → no (band gate first)', ssWatchGate(1, 0.14, 2, 120) === false);
+T('Q1 deficit 0 → no', ssWatchGate(1, 0.24, 0, 120) === false);
+T('Q1 deficit 10 → no', ssWatchGate(1, 0.24, 10, 120) === false);
+T('Q4 → never', ssWatchGate(4, 0.30, 5, 120) === false);
+T('null gap → no', ssWatchGate(2, null, 5, 120) === false);
+
+console.log('\n[9] WATCHLIST copy — live price line (AMENDMENT 3)');
+p = ssComposePush({ ...BASE, subtype: 'WATCHLIST', tier: null, period: 1, margin: 2 });
+T('price line renders with book', p.body.includes('Live price: ATL +180 at FanDuel.'));
+T('price line sits before the non-directive close', p.body.indexOf('Live price') < p.body.indexOf("System gates haven't aligned"));
+p = ssComposePush({ ...BASE, subtype: 'WATCHLIST', tier: null, bestML: null, bestBook: null });
+T('no line → honest placeholder', p.body.includes('No live line posted yet.'));
+p = ssComposePush({ ...BASE, subtype: 'WATCHLIST', tier: null, bestML: -140, bestBook: null });
+T('minus line, no book → clean render', p.body.includes('Live price: ATL -140.'));
+
 console.log(`\n═══ ${pass} passed, ${fail} failed ═══`);
 process.exit(fail ? 1 : 0);
