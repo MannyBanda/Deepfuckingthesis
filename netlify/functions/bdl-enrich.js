@@ -1,7 +1,22 @@
 // BDL Enrichment - Clutch Stats, Odds, and Tracking Data
 // Proxies BallDontLie GOAT-tier endpoints for pre-game and live enrichment
+// Season is DERIVED (netlify/lib/season.js, SEASON_CONSOLIDATION_SPEC v1). Team
+// season averages are BASELINES: each team warm-starts from the prior season
+// until it has WARM_START_GP games this season; result.baseline carries the stamp.
+
+var SEASON = require('../lib/season.js');
 
 var BDL_BASE = 'https://api.balldontlie.io';
+
+// Games played this season for a BDL team id (Final games up to today).
+async function bdlGamesPlayed(teamId, season, apiKey) {
+  var today = new Date().toISOString().slice(0, 10);
+  var d = await bdlFetch('/nba/v1/games?team_ids[]=' + teamId + '&seasons[]=' + season + '&end_date=' + today + '&per_page=100', apiKey);
+  var arr = (d && d.data) || [];
+  var gp = 0;
+  for (var i = 0; i < arr.length; i++) if (/final/i.test(String(arr[i].status || ''))) gp++;
+  return gp;
+}
 
 // BDL team IDs mapped from SR abbreviations
 var BDL_TEAMS = {
@@ -56,12 +71,29 @@ exports.handler = async function(event) {
     var homeTeam = body.homeTeam;
     var awayTeam = body.awayTeam;
     var bdlGameId = body.bdlGameId;
-    var s = body.season || 2025;
     var pulls = body.pulls;
 
     var homeId = BDL_TEAMS[homeTeam];
     var awayId = BDL_TEAMS[awayTeam];
     var result = { home: homeTeam, away: awayTeam, errors: [], sources: [] };
+
+    // Season per team: explicit body.season pins both; otherwise warm-start pick.
+    var curSeason = String(body.season || SEASON.seasonFor('nba'));
+    var sHome = curSeason, sAway = curSeason;
+    if (!body.season && homeId && awayId) {
+      try {
+        var gps = await Promise.all([bdlGamesPlayed(homeId, curSeason, apiKey), bdlGamesPlayed(awayId, curSeason, apiKey)]);
+        var pickH = SEASON.pickBaselineSeason('nba', gps[0], curSeason);
+        var pickA = SEASON.pickBaselineSeason('nba', gps[1], curSeason);
+        sHome = pickH.season; sAway = pickA.season;
+        result.baseline = { home: pickH, away: pickA, line: SEASON.baselineLine('nba', [{ alias: homeTeam, pick: pickH }, { alias: awayTeam, pick: pickA }]) };
+      } catch (e) {
+        result.errors.push('baseline pick: ' + e.message);
+        result.baseline = { home: { season: curSeason, source: 'current', gp: null }, away: { season: curSeason, source: 'current', gp: null }, line: '' };
+      }
+    } else {
+      result.baseline = { home: { season: curSeason, source: body.season ? 'explicit' : 'current' }, away: { season: curSeason, source: body.season ? 'explicit' : 'current' }, line: '' };
+    }
     var pullSet = {};
     var pullArr = pulls || ['clutch', 'odds', 'tracking'];
     for (var i = 0; i < pullArr.length; i++) pullSet[pullArr[i]] = true;
@@ -76,8 +108,8 @@ exports.handler = async function(event) {
       // -- clutch/advanced: NetRtg, OffRtg, DefRtg, Pace, eFG%, TS%
       try {
         var clutchAdvResults = await Promise.all([
-          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + homeId + '&season=' + s + '&season_type=regular&type=advanced', apiKey),
-          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + awayId + '&season=' + s + '&season_type=regular&type=advanced', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + homeId + '&season=' + sHome + '&season_type=regular&type=advanced', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + awayId + '&season=' + sAway + '&season_type=regular&type=advanced', apiKey),
         ]);
         var hA = extractStats(clutchAdvResults[0]);
         var aA = extractStats(clutchAdvResults[1]);
@@ -113,8 +145,8 @@ exports.handler = async function(event) {
       // -- clutch/base: W, L, GP, PTS, AST, STL, BLK, TOV, +/-
       try {
         var clutchBaseResults = await Promise.all([
-          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + homeId + '&season=' + s + '&season_type=regular&type=base', apiKey),
-          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + awayId + '&season=' + s + '&season_type=regular&type=base', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + homeId + '&season=' + sHome + '&season_type=regular&type=base', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + awayId + '&season=' + sAway + '&season_type=regular&type=base', apiKey),
         ]);
         var hB = extractStats(clutchBaseResults[0]);
         var aB = extractStats(clutchBaseResults[1]);
@@ -156,8 +188,8 @@ exports.handler = async function(event) {
       // -- clutch/misc: FBP, POT, paint pts, SCP (+ opponent versions)
       try {
         var clutchMiscResults = await Promise.all([
-          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + homeId + '&season=' + s + '&season_type=regular&type=misc', apiKey),
-          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + awayId + '&season=' + s + '&season_type=regular&type=misc', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + homeId + '&season=' + sHome + '&season_type=regular&type=misc', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + awayId + '&season=' + sAway + '&season_type=regular&type=misc', apiKey),
         ]);
         var hM = extractStats(clutchMiscResults[0]);
         var aM = extractStats(clutchMiscResults[1]);
@@ -189,8 +221,8 @@ exports.handler = async function(event) {
       // -- clutch/scoring: shot distribution in clutch
       try {
         var clutchScoResults = await Promise.all([
-          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + homeId + '&season=' + s + '&season_type=regular&type=scoring', apiKey),
-          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + awayId + '&season=' + s + '&season_type=regular&type=scoring', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + homeId + '&season=' + sHome + '&season_type=regular&type=scoring', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/clutch?team_id=' + awayId + '&season=' + sAway + '&season_type=regular&type=scoring', apiKey),
         ]);
         var hS = extractStats(clutchScoResults[0]);
         var aS = extractStats(clutchScoResults[1]);
@@ -298,8 +330,8 @@ exports.handler = async function(event) {
       // -- catch_and_shoot
       try {
         var casResults = await Promise.all([
-          bdlFetch('/nba/v1/team_season_averages/shotdashboard?team_id=' + homeId + '&season=' + s + '&season_type=regular&type=catch_and_shoot', apiKey),
-          bdlFetch('/nba/v1/team_season_averages/shotdashboard?team_id=' + awayId + '&season=' + s + '&season_type=regular&type=catch_and_shoot', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/shotdashboard?team_id=' + homeId + '&season=' + sHome + '&season_type=regular&type=catch_and_shoot', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/shotdashboard?team_id=' + awayId + '&season=' + sAway + '&season_type=regular&type=catch_and_shoot', apiKey),
         ]);
         var hCAS = extractStats(casResults[0]);
         var aCAS = extractStats(casResults[1]);
@@ -323,8 +355,8 @@ exports.handler = async function(event) {
       // -- pull_up
       try {
         var puResults = await Promise.all([
-          bdlFetch('/nba/v1/team_season_averages/shotdashboard?team_id=' + homeId + '&season=' + s + '&season_type=regular&type=pullups', apiKey),
-          bdlFetch('/nba/v1/team_season_averages/shotdashboard?team_id=' + awayId + '&season=' + s + '&season_type=regular&type=pullups', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/shotdashboard?team_id=' + homeId + '&season=' + sHome + '&season_type=regular&type=pullups', apiKey),
+          bdlFetch('/nba/v1/team_season_averages/shotdashboard?team_id=' + awayId + '&season=' + sAway + '&season_type=regular&type=pullups', apiKey),
         ]);
         var hPU = extractStats(puResults[0]);
         var aPU = extractStats(puResults[1]);

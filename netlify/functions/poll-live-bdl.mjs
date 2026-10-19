@@ -13,6 +13,9 @@
 import { neon } from '@neondatabase/serverless';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
+// SEASON_CONSOLIDATION_SPEC v1 — season identity is DERIVED from netlify/lib/season.js.
+// No season literal lives in this file (research/season_fixtures.mjs lints for it).
+import SEASON from '../lib/season.js';
 import { dirname, join } from 'path';
 
 // ── PHASE 1 KILL-SWITCH ─────────────────────────────────────────────────────
@@ -360,7 +363,7 @@ const LEAGUES = {
     bdlPrefix: '/nba',
     bdlHasSeasonStats: true,
     bdlHasBoxScores: true,
-    season: '2025',
+    // season: derived — SEASON.seasonFor(league) (split-year, rolls Aug 1)
     aliasMap: {},  // SR + BDL use identical NBA abbreviations — no mapping needed
     quarterMinutes: 12,
     gameMinutes: 48,
@@ -380,7 +383,7 @@ const LEAGUES = {
     bdlPrefix: '/ncaab',
     bdlHasSeasonStats: true,
     bdlHasBoxScores: false,
-    season: '2025',
+    // season: derived — SEASON.seasonFor(league) (split-year, rolls Aug 1)
     aliasMap: {},
     quarterMinutes: 20,
     gameMinutes: 40,
@@ -399,7 +402,7 @@ const LEAGUES = {
     bdlPrefix: '/wnba',
     bdlHasSeasonStats: true,
     bdlHasBoxScores: false,
-    season: '2026',  // WNBA is calendar-year league (not split-year like NBA)
+    // season: derived — SEASON.seasonFor(league) (calendar-year, rolls Apr 1 so the offseason keeps the finished season)
     aliasMap: { NYL:'NY', LVA:'LV', LAS:'LA', GSV:'GS', WAS:'WSH', PDX:'POR', TOY:'TOR' },
     quarterMinutes: 10,
     gameMinutes: 40,
@@ -733,7 +736,7 @@ function ssShotGeo(pbp, teamAlias, playerName, curPeriod) {
 // F3 — lazy season baseline for a carrier (≤3 calls per fired alert; non-fatal → UNKNOWN)
 async function ssCarrierBaseline(playerId) {
   try {
-    const yr = new Date().getFullYear();
+    const yr = SEASON.seasonFor('wnba'); // derived (calendar-year league, Apr-1 rollover)
     const d = await bdlFetch(`/wnba/v1/player_stats?seasons[]=${yr}&player_ids[]=${playerId}&per_page=100`);
     const rows = (d && d.data) || [];
     let g = 0, pts = 0, fga = 0, fta = 0;
@@ -2375,26 +2378,62 @@ async function bdlGameData(league, dateStr) {
   return { teamIds, gameIds };
 }
 
-// Fetch player season stats for a team — NCAAMB batch endpoint (works as-is)
-async function bdlSeasonStatsNCAAMB(league, bdlTeamId, season) {
+// ── Season baselines (SEASON_CONSOLIDATION_SPEC v1 §2, class BASELINES) ──
+// Player season averages feed MC team rates, 3PT baselines and the sustainability
+// personnel layer — all of which assume a mature season (gp>=10 / tFGA>=100 guards).
+// So a team with < WARM_START_GP games this season warm-starts from the PRIOR
+// season, and every result is stamped { season, source, gp }. Prior rows are stored
+// under the PRIOR season key (the data's season), never today's.
+
+// Fetch player season stats for a team — batch endpoint (NCAAMB + WNBA)
+async function bdlSeasonStatsBatch(league, bdlTeamId, season) {
   const cfg = LEAGUES[league];
-  const data = await bdlFetch(`${cfg.bdlPrefix}/v1/player_season_stats?season=${season}&team_id=${bdlTeamId}&per_page=100`);
-  if (!data || !data.data) return [];
-  return data.data;
+  const cur = season || SEASON.seasonFor(league);
+  const pull = async (ssn) => {
+    const data = await bdlFetch(`${cfg.bdlPrefix}/v1/player_season_stats?season=${ssn}&team_id=${bdlTeamId}&per_page=100`);
+    return (data && data.data) || [];
+  };
+  const curRows = await pull(cur);
+  const gp = curRows.reduce((m, r) => Math.max(m, Number(r.games_played || r.gp || 0)), 0);
+  const pick = SEASON.pickBaselineSeason(league, gp, cur);
+  const players = pick.source === 'current' ? curRows : await pull(pick.season);
+  return { players, season: pick.season, source: pick.source, gp };
+}
+// Back-compat alias (older call sites / harnesses)
+const bdlSeasonStatsNCAAMB = bdlSeasonStatsBatch;
+
+// Games played this season (Final games up to today) + the latest Final game id.
+// Fixes the pre-v1 bug where `per_page=5` with no date bound returned the first
+// five games of the season oldest-first — "recent game" was game #5, a FUTURE game
+// for the first week of every season (→ empty roster → no baselines).
+async function bdlTeamGamesPlayed(bdlTeamId, season, opts) {
+  const today = new Date().toISOString().slice(0, 10);
+  const post = opts && opts.postseason === false ? '&postseason=false' : '';
+  const d = await bdlFetch(`/nba/v1/games?team_ids[]=${bdlTeamId}&seasons[]=${season}&end_date=${today}${post}&per_page=100`);
+  const finals = ((d && d.data) || []).filter((g) => /final/i.test(String(g.status || ''))).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  return { gp: finals.length, recentGameId: finals.length ? finals[finals.length - 1].id : null };
 }
 
 // Fetch NBA season averages — per-player (BDL has no batch-by-team for NBA)
-// Step 1: Get player IDs from a recent game's box score
-// Step 2: Call /nba/v1/season_averages per player
+// Step 1: Games played this season → warm-start pick (current vs prior season)
+// Step 2: Player IDs from the latest Final game of the chosen season
+// Step 3: /nba/v1/season_averages per player, for the chosen season
 async function bdlSeasonStatsNBA(bdlTeamId, season) {
-  // Find a recent game for this team to get player IDs
-  const gamesData = await bdlFetch(`/nba/v1/games?team_ids[]=${bdlTeamId}&seasons[]=${season}&per_page=5`);
-  if (!gamesData?.data?.length) return [];
+  const cur = season || SEASON.seasonFor('nba');
+  const curGames = await bdlTeamGamesPlayed(bdlTeamId, cur);
+  const pick = SEASON.pickBaselineSeason('nba', curGames.gp, cur);
+  let recentGameId = curGames.recentGameId;
+  if (pick.source === 'prior') {
+    // Prior season: roster snapshot = last regular-season game of that season
+    const priorGames = await bdlTeamGamesPlayed(bdlTeamId, pick.season, { postseason: false });
+    recentGameId = priorGames.recentGameId;
+  }
+  const stamp = { season: pick.season, source: pick.source, gp: curGames.gp };
+  if (!recentGameId) return Object.assign({ players: [] }, stamp);
+  season = pick.season;
 
-  // Get the most recent game's box score for player IDs (BDL returns oldest first)
-  const recentGameId = gamesData.data[gamesData.data.length - 1].id;
   const statsData = await bdlFetch(`/nba/v1/stats?game_ids[]=${recentGameId}&per_page=50`);
-  if (!statsData?.data?.length) return [];
+  if (!statsData?.data?.length) return Object.assign({ players: [] }, stamp);
 
   // Filter to players on this team who played meaningful minutes
   const teamPlayers = statsData.data.filter(s => {
@@ -2420,25 +2459,34 @@ async function bdlSeasonStatsNBA(bdlTeamId, season) {
     }
   });
   await Promise.all(fetches);
-  return results;
+  return Object.assign({ players: results }, stamp);
 }
 
-// Load season cache from DB for given teams
-async function loadSeasonCache(sql, league, season, teamAbbrs) {
+// Load season cache from DB for given teams across [current, prior] seasons.
+// Per team the CURRENT-season row wins when present; a PRIOR-season row is the
+// warm-start copy. Freshness: current rows 7 days (data moves); prior rows 1 day
+// (data is immutable but the warm-start DECISION must be re-checked daily, since
+// the team may have crossed the GP bar since).
+async function loadSeasonCache(sql, league, seasons, teamAbbrs) {
   if (teamAbbrs.length === 0) return {};
+  const ssns = Array.isArray(seasons) ? seasons : [seasons];
   try {
     const rows = await sql`
-      SELECT team_alias, players_json, updated_at
+      SELECT team_alias, season, players_json, updated_at
       FROM season_cache
-      WHERE league = ${league} AND season = ${season} AND team_alias = ANY(${teamAbbrs})
+      WHERE league = ${league} AND season = ANY(${ssns}) AND team_alias = ANY(${teamAbbrs})
     `;
     const cache = {};
-    for (const r of rows) {
+    const picked = Object.values(SEASON.newestPerKey(rows, ssns, 'team_alias'));
+    for (const r of picked) {
       const age = (Date.now() - new Date(r.updated_at).getTime()) / (1000 * 60 * 60 * 24);
+      const isCurrent = String(r.season) === String(ssns[0]);
       cache[r.team_alias] = {
         players: typeof r.players_json === 'string' ? JSON.parse(r.players_json) : r.players_json,
+        season: String(r.season),
+        source: isCurrent ? 'current' : 'prior',
         ageDays: Math.round(age * 10) / 10,
-        fresh: age < 7, // fresh if under 7 days old
+        fresh: age < (isCurrent ? 7 : 1),
       };
     }
     return cache;
@@ -2462,16 +2510,23 @@ async function saveSeasonCache(sql, league, season, teamAlias, players) {
   }
 }
 
-// Get season stats for teams — cache-first, fetch stale/missing
-async function getSeasonStatsForTeams(sql, league, season, teamAbbrs, bdlTeamIds) {
+// Get season stats for teams — cache-first, fetch stale/missing. Season is derived
+// per league; each team resolves to current or prior (warm-start) independently.
+// Returns { 'BOS': [...playerStats], ... } (consumer shape unchanged); the per-team
+// { season, source, gp } stamps land in _seasonCacheMeta for logging/prompts.
+var _seasonCacheMeta = {};
+async function getSeasonStatsForTeams(sql, league, teamAbbrs, bdlTeamIds) {
   const abbrArr = Array.from(teamAbbrs);
-  const cache = await loadSeasonCache(sql, league, season, abbrArr);
+  const cur = SEASON.seasonFor(league);
+  const seasons = [cur, SEASON.priorSeason(league, cur)];
+  const cache = await loadSeasonCache(sql, league, seasons, abbrArr);
   const result = {}; // { 'BOS': [...playerStats], ... }
   const stale = []; // teams that need refresh
 
   for (const abbr of abbrArr) {
     if (cache[abbr]?.fresh) {
       result[abbr] = cache[abbr].players;
+      _seasonCacheMeta[abbr] = { season: cache[abbr].season, source: cache[abbr].source, gp: null, cached: true };
     } else {
       stale.push(abbr);
     }
@@ -2488,17 +2543,33 @@ async function getSeasonStatsForTeams(sql, league, season, teamAbbrs, bdlTeamIds
       if (!bdlId) return;
 
       try {
-        let players;
-        if (league === 'nba') {
-          players = await bdlSeasonStatsNBA(bdlId, season);
-        } else {
-          players = await bdlSeasonStatsNCAAMB(league, bdlId, season);
+        // Cheap daily re-check for a warm-started team: if it is still under the GP
+        // bar, the prior-season copy is immutable — touch it instead of re-pulling
+        // ~15 player endpoints. One games call per team per day.
+        const prior = cache[abbr];
+        if (league === 'nba' && prior && prior.source === 'prior' && Array.isArray(prior.players) && prior.players.length) {
+          const g = await bdlTeamGamesPlayed(bdlId, cur);
+          if (SEASON.pickBaselineSeason(league, g.gp, cur).source === 'prior') {
+            result[abbr] = prior.players;
+            _seasonCacheMeta[abbr] = { season: prior.season, source: 'prior', gp: g.gp, cached: true };
+            await saveSeasonCache(sql, league, prior.season, abbr, prior.players); // touch updated_at
+            log(`Season cache: ${abbr} still warm-start (gp ${g.gp}) — prior ${prior.season} copy touched`);
+            return;
+          }
         }
+        const r = league === 'nba'
+          ? await bdlSeasonStatsNBA(bdlId, cur)
+          : await bdlSeasonStatsBatch(league, bdlId, cur);
+        const players = (r && r.players) || [];
+        _seasonCacheMeta[abbr] = { season: r.season, source: r.source, gp: r.gp, cached: false };
 
         if (players.length > 0) {
           result[abbr] = players;
-          await saveSeasonCache(sql, league, season, abbr, players);
-          log(`Season cache: ${abbr} refreshed — ${players.length} players`);
+          // stored under the DATA's season (prior rows stay prior)
+          await saveSeasonCache(sql, league, r.season, abbr, players);
+          log(`Season cache: ${abbr} refreshed — ${players.length} players [${r.source} ${r.season}, gp ${r.gp}]`);
+        } else {
+          log(`Season cache: ${abbr} — no players for ${r.source} ${r.season} (gp ${r.gp})`);
         }
       } catch (e) {
         log(`Season fetch ${abbr}: ${e.message}`);
@@ -2566,7 +2637,7 @@ async function fetchStandingsCache(sql, league) {
   } catch (e) { /* table missing / read error → fall through to fetch */ }
   // 2. Stale or empty → fetch from BDL + upsert
   try {
-    const yr = new Date().getFullYear();
+    const yr = SEASON.seasonFor(league); // RECORDS: current season only (0-0 is truth)
     const data = await bdlFetch(`${cfg.bdlPrefix}/v1/standings?season=${yr}`);
     const arr = (data && data.data) || [];
     for (const s of arr) {
@@ -2653,31 +2724,35 @@ async function fetchOddsAPIBatch(league) {
 
 // Fetch tracking baselines (catch-and-shoot + pull-up eFG) — NBA only, season stats
 // Called once per game, cached on game._trackingData
+// BASELINE class (SEASON_CONSOLIDATION_SPEC v1 §2): each team warm-starts from the
+// prior season while its shotdashboard `gp` is under WARM_START_GP; the result
+// carries `baseline` + a pinned `baselineLine` for the prompt.
 async function fetchTrackingData(hA, aA, season) {
   const hId = BDL_TEAMS[hA], aId = BDL_TEAMS[aA];
   if (!hId || !aId) return null;
   try {
-    const s = season || '2025';
+    const cur = season || SEASON.seasonFor('nba');
     function extractStats(resp) {
       const entry = resp?.data?.[0];
       return entry?.stats || entry || {};
     }
-    const [hCAS, aCAS, hPU, aPU] = await Promise.all([
-      bdlFetch(`/nba/v1/team_season_averages/shotdashboard?team_id=${hId}&season=${s}&season_type=regular&type=catch_and_shoot`),
-      bdlFetch(`/nba/v1/team_season_averages/shotdashboard?team_id=${aId}&season=${s}&season_type=regular&type=catch_and_shoot`),
-      bdlFetch(`/nba/v1/team_season_averages/shotdashboard?team_id=${hId}&season=${s}&season_type=regular&type=pullups`),
-      bdlFetch(`/nba/v1/team_season_averages/shotdashboard?team_id=${aId}&season=${s}&season_type=regular&type=pullups`),
-    ]);
-    return {
-      home: {
-        catchAndShoot: { efg: extractStats(hCAS).effective_field_goal_percentage || extractStats(hCAS).efg_pct || null },
-        pullUp: { efg: extractStats(hPU).effective_field_goal_percentage || extractStats(hPU).efg_pct || null },
-      },
-      away: {
-        catchAndShoot: { efg: extractStats(aCAS).effective_field_goal_percentage || extractStats(aCAS).efg_pct || null },
-        pullUp: { efg: extractStats(aPU).effective_field_goal_percentage || extractStats(aPU).efg_pct || null },
-      },
+    const dash = (id, ssn, type) => bdlFetch(`/nba/v1/team_season_averages/shotdashboard?team_id=${id}&season=${ssn}&season_type=regular&type=${type}`);
+    // one team: current C&S + pull-up; if under the bar, re-pull both from the prior season
+    const teamDash = async (id, alias) => {
+      let [cas, pu] = await Promise.all([dash(id, cur, 'catch_and_shoot'), dash(id, cur, 'pullups')]);
+      const gp = Number(extractStats(cas).gp || extractStats(cas).games_played || 0);
+      const pick = SEASON.pickBaselineSeason('nba', gp, cur);
+      if (pick.source === 'prior') [cas, pu] = await Promise.all([dash(id, pick.season, 'catch_and_shoot'), dash(id, pick.season, 'pullups')]);
+      return {
+        catchAndShoot: { efg: extractStats(cas).effective_field_goal_percentage || extractStats(cas).efg_pct || null },
+        pullUp: { efg: extractStats(pu).effective_field_goal_percentage || extractStats(pu).efg_pct || null },
+        baseline: pick, alias,
+      };
     };
+    const [home, away] = await Promise.all([teamDash(hId, hA), teamDash(aId, aA)]);
+    const baselineLine = SEASON.baselineLine('nba', [{ alias: hA, pick: home.baseline }, { alias: aA, pick: away.baseline }]);
+    if (baselineLine) log(`${aA}@${hA}: tracking baselines warm-started — ${baselineLine.slice(0, 90)}`);
+    return { home, away, baseline: { home: home.baseline, away: away.baseline }, baselineLine };
   } catch (e) {
     log(`Tracking data fetch failed for ${hA}/${aA}: ${e.message}`);
     return null;
@@ -6688,6 +6763,7 @@ function formatSonnetPrompt({ hA, aA, period, clock, score, thesis, sust, leadCo
     p += `\nSHOOTING BASELINES:\n`;
     if (ht.catchAndShoot || at.catchAndShoot) p += `C&S: ${aA} ${at.catchAndShoot?.efg || '?'}% | ${hA} ${ht.catchAndShoot?.efg || '?'}%\n`;
     if (ht.pullUp || at.pullUp) p += `Pull-up: ${aA} ${at.pullUp?.efg || '?'}% | ${hA} ${ht.pullUp?.efg || '?'}%\n`;
+    if (ctx.trackingData.baselineLine) p += `${ctx.trackingData.baselineLine}\n`; // pinned (SEASON_CONSOLIDATION_SPEC v1 §2)
   }
 
   // ESPN WP (with divergence check)
@@ -7596,7 +7672,10 @@ export default async function(req) {
   // Load floor reliability coefficients (30 rows, once per poll cycle)
   _floorWPCoeffs = {};
   try {
-    const fwpRows = await sql`SELECT team_alias, reliability_class, grip, close_floor_wp_json FROM floor_wp_coefficients WHERE league = 'nba' AND season = '2025-26'`;
+    // ARTIFACT (SEASON_CONSOLIDATION_SPEC v1 §2): newest row <= current season wins per team
+    const _fwpSeasons = SEASON.seasonCandidates('nba', SEASON.seasonLabel);
+    const fwpRowsAll = await sql`SELECT team_alias, season, reliability_class, grip, close_floor_wp_json FROM floor_wp_coefficients WHERE league = 'nba' AND season = ANY(${_fwpSeasons})`;
+    const fwpRows = Object.values(SEASON.newestPerKey(fwpRowsAll, _fwpSeasons, 'team_alias'));
     for (const r of fwpRows) {
       _floorWPCoeffs[r.team_alias] = {
         reliabilityClass: r.reliability_class || 'NEUTRAL',
@@ -7956,14 +8035,14 @@ export default async function(req) {
         const teamAbbrs = new Set();
         for (const g of potentiallyLive) { if (g.home_alias) teamAbbrs.add(g.home_alias); if (g.away_alias) teamAbbrs.add(g.away_alias); }
         t0 = Date.now();
-        const bdlSeasonCache = await getSeasonStatsForTeams(sql, league, cfg.season, teamAbbrs, bdlData.teamIds);
+        const bdlSeasonCache = await getSeasonStatsForTeams(sql, league, teamAbbrs, bdlData.teamIds);
         _dt(`${league}: S4 seasonStats (${Object.keys(bdlSeasonCache).length} teams)`, t0);
 
         // S5: Clutch profiles
         t0 = Date.now();
         try {
-          const _cpRows = await sql`SELECT * FROM clutch_profiles WHERE league = ${league} AND season = ${'2025'}`;
-          _dt(`${league}: S5 clutchProfiles (${_cpRows.length} rows)`, t0);
+          const _cpRows = await sql`SELECT * FROM clutch_profiles WHERE league = ${league} AND season = ANY(${SEASON.seasonCandidates(league)})`;
+          _dt(`${league}: S5 clutchProfiles (${_cpRows.length} rows, seasons ${SEASON.seasonCandidates(league).join('/')})`, t0);
         } catch(e) { _dt(`${league}: S5 clutchProfiles error: ${e.message}`, t0); }
 
         // S6: WNBA player_stats batch
@@ -8232,6 +8311,14 @@ export default async function(req) {
           }
         }
 
+        // Season consistency check (SEASON_CONSOLIDATION_SPEC v1 §1): SR game objects
+        // carry season.year — if it disagrees with the derived season, say so loudly.
+        // Log-only: the derived season remains the single source of truth.
+        try {
+          const _srYear = allGames.map(g => Number(g.season?.year)).find(y => y > 0);
+          if (_srYear && String(_srYear) !== SEASON.seasonFor(league)) log(`${league.toUpperCase()}: WARN season mismatch — SR schedule says ${_srYear}, derived ${SEASON.seasonFor(league)} (set DFT_SEASON_${league.toUpperCase()} if SR is right)`);
+        } catch (e) { /* non-fatal */ }
+
         // Build minimal cache: only the fields we need per cycle
         cachedGames = allGames.map(g => ({
           id: g.id,
@@ -8351,12 +8438,25 @@ export default async function(req) {
       }
 
       // Load season stats — cache-first (DB), fetch stale/missing from BDL
-      const bdlSeasonCache = await getSeasonStatsForTeams(sql, league, cfg.season, teamAbbrs, bdlTeamIds);
+      const bdlSeasonCache = await getSeasonStatsForTeams(sql, league, teamAbbrs, bdlTeamIds);
 
       // MC: Load clutch profiles + compute team 3PT baselines (once per invocation)
       if (!_clutchMap) {
         try {
-          const _cpRows = await sql`SELECT * FROM clutch_profiles WHERE league = ${league} AND season = ${'2025'}`;
+          // BASELINE (SEASON_CONSOLIDATION_SPEC v1 §2): per team, the current-season row
+          // once it clears WARM_START_GP games, else the prior-season row.
+          const _cpSeasons = SEASON.seasonCandidates(league);
+          const _cpRowsAll = await sql`SELECT * FROM clutch_profiles WHERE league = ${league} AND season = ANY(${_cpSeasons})`;
+          const _cpPick = {};
+          for (const r of _cpRowsAll) {
+            const isCur = String(r.season) === _cpSeasons[0];
+            const have = _cpPick[r.team_alias];
+            if (!have) { _cpPick[r.team_alias] = r; continue; }
+            const haveCur = String(have.season) === _cpSeasons[0];
+            if (isCur && (Number(r.games) || 0) >= SEASON.WARM_START_GP) _cpPick[r.team_alias] = r;
+            else if (!isCur && haveCur && (Number(have.games) || 0) < SEASON.WARM_START_GP) _cpPick[r.team_alias] = r;
+          }
+          const _cpRows = Object.values(_cpPick);
           _clutchMap = {};
           for (const r of _cpRows) {
             _clutchMap[r.team_alias] = {
@@ -8665,7 +8765,7 @@ export default async function(req) {
                   await sql`INSERT INTO clutch_profiles (team_alias, league, season, games,
                     q4_fga, q4_fgm, q4_fg3a, q4_fg3m, q4_fta, q4_ftm, q4_to, q4_oreb, q4_poss,
                     full_fga, full_fgm, full_fg3a, full_fg3m, full_fta, full_ftm, full_to, full_oreb, full_poss)
-                  VALUES (${_cpTeam}, ${league}, ${'2025'}, ${1},
+                  VALUES (${_cpTeam}, ${league}, ${SEASON.seasonFor(league)}, ${1},
                     ${_cpQ4.fga}, ${_cpQ4.fgm}, ${_cpQ4.fg3a}, ${_cpQ4.fg3m}, ${_cpQ4.fta}, ${_cpQ4.ftm}, ${_cpQ4.to}, ${_cpQ4.oreb}, ${_cpQ4.poss},
                     ${Number(_cpFull.field_goals_att||0)}, ${Number(_cpFull.field_goals_made||0)},
                     ${Number(_cpFull.three_points_att||0)}, ${Number(_cpFull.three_points_made||0)},

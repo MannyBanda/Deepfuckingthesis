@@ -8,6 +8,7 @@
 //   Scheduled cron = auto-triggered pregame agent (DB write + ntfy)
 
 import { neon } from '@neondatabase/serverless';
+import SEASON from '../lib/season.js'; // SEASON_CONSOLIDATION_SPEC v1 — derived season, never a literal
 
 // ── INDICATOR WEIGHTS (aligned with live system — poll-live-bdl.mjs) ────────
 var W = { I1: 0.10, I2: 0.15, I3: 0.20, I4: 0.30, I5: 0.25 };
@@ -1037,9 +1038,10 @@ function buildNCAAMBSystemPrompt() {
 // ══════════════════════════════════════════════════════════════════════════════
 
 var LEAGUE_CFG = {
-  nba: { srBase: 'https://api.sportradar.com/nba/trial/v8/en/', srKeyEnv: 'SR_API_KEY', season: '2025' },
-  ncaamb: { srBase: 'https://api.sportradar.com/ncaamb/trial/v8/en/', srKeyEnv: 'SR_NCAAMB_KEY', season: '2025' },
+  nba: { srBase: 'https://api.sportradar.com/nba/trial/v8/en/', srKeyEnv: 'SR_API_KEY' },
+  ncaamb: { srBase: 'https://api.sportradar.com/ncaamb/trial/v8/en/', srKeyEnv: 'SR_NCAAMB_KEY' },
 };
+// season: derived per league — SEASON.seasonFor(league) (SEASON_CONSOLIDATION_SPEC v1)
 
 async function srFetchDirect(league, path) {
   var cfg = LEAGUE_CFG[league] || LEAGUE_CFG.nba;
@@ -1214,11 +1216,12 @@ async function runPregameAgent() {
   log('Generating theses for ' + toGenerate.length + ' games');
 
   // 4. Fetch shared data (once per invocation)
+  var srSeason = SEASON.seasonFor(league);
   var injuries = null, standings = null, seasonQ4 = {};
   try {
     injuries = await srFetchDirect(league, 'league/injuries.json');
     await new Promise(function(r) { setTimeout(r, 1100); });
-    standings = await srFetchDirect(league, 'seasons/' + LEAGUE_CFG[league].season + '/REG/standings.json');
+    standings = await srFetchDirect(league, 'seasons/' + srSeason + '/REG/standings.json'); // RECORDS: current only
     await new Promise(function(r) { setTimeout(r, 1100); });
   } catch (e) { log('Shared SR fetch error: ' + e.message); }
 
@@ -1240,14 +1243,14 @@ async function runPregameAgent() {
       var srCalls = [
         { key: 'homeProfile', path: 'teams/' + hId + '/profile.json' },
         { key: 'awayProfile', path: 'teams/' + aId + '/profile.json' },
-        { key: 'homeDepth', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + hId + '/depth_chart.json' },
-        { key: 'awayDepth', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + aId + '/depth_chart.json' },
-        { key: 'homeStats', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + hId + '/statistics.json' },
-        { key: 'awayStats', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + aId + '/statistics.json' },
-        { key: 'homeSplitsGame', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + hId + '/splits/game.json' },
-        { key: 'awaySplitsGame', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + aId + '/splits/game.json' },
-        { key: 'homeSplitsSchedule', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + hId + '/splits/schedule.json' },
-        { key: 'awaySplitsSchedule', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + aId + '/splits/schedule.json' },
+        { key: 'homeDepth', path: 'seasons/' + srSeason + '/REG/teams/' + hId + '/depth_chart.json' },  // RECORDS: current only
+        { key: 'awayDepth', path: 'seasons/' + srSeason + '/REG/teams/' + aId + '/depth_chart.json' },
+        { key: 'homeStats', path: SEASON.srBaselinePaths(hId, srSeason).stats },
+        { key: 'awayStats', path: SEASON.srBaselinePaths(aId, srSeason).stats },
+        { key: 'homeSplitsGame', path: SEASON.srBaselinePaths(hId, srSeason).splitsGame },
+        { key: 'awaySplitsGame', path: SEASON.srBaselinePaths(aId, srSeason).splitsGame },
+        { key: 'homeSplitsSchedule', path: SEASON.srBaselinePaths(hId, srSeason).splitsSchedule },
+        { key: 'awaySplitsSchedule', path: SEASON.srBaselinePaths(aId, srSeason).splitsSchedule },
       ];
 
       var collected = {};
@@ -1260,6 +1263,29 @@ async function runPregameAgent() {
         }
         await new Promise(function(r) { setTimeout(r, 1100); });
       }
+
+      // ── SEASON_CONSOLIDATION_SPEC v1 §2 — BASELINES warm-start ──
+      // statistics + splits are performance baselines: a team under WARM_START_GP
+      // games this season is re-pulled from the PRIOR season. Depth charts and
+      // profiles are RECORDS and stay current. The pick is pinned into the prompt.
+      var baselinePicks = [];
+      var _sides = [['home', hId, hA], ['away', aId, aA]];
+      for (var _si = 0; _si < _sides.length; _si++) {
+        var _side = _sides[_si];
+        var _pick = SEASON.pickBaselineSeason(league, SEASON.gpFromSRStats(collected[_side[0] + 'Stats']), srSeason);
+        baselinePicks.push({ alias: _side[2], pick: _pick });
+        if (_pick.source === 'prior') {
+          var _pp = SEASON.srBaselinePaths(_side[1], _pick.season);
+          var _priorCalls = [['Stats', _pp.stats], ['SplitsGame', _pp.splitsGame], ['SplitsSchedule', _pp.splitsSchedule]];
+          for (var _pi = 0; _pi < _priorCalls.length; _pi++) {
+            try { collected[_side[0] + _priorCalls[_pi][0]] = await srFetchDirect(league, _priorCalls[_pi][1]); }
+            catch (e) { log('  SR prior ' + _side[0] + _priorCalls[_pi][0] + ' failed: ' + e.message); collected[_side[0] + _priorCalls[_pi][0]] = null; }
+            await new Promise(function(r) { setTimeout(r, 1100); });
+          }
+        }
+      }
+      var baselineText = SEASON.baselineLine(league, baselinePicks);
+      if (baselineText) log('  ' + baselineText);
 
       // BDL odds
       var oddsText = '';
@@ -1338,6 +1364,7 @@ async function runPregameAgent() {
         '=== ' + aA + ' ROSTER ===\n' + sections.awayRoster + '\n\n' +
         '=== ' + hA + ' DEPTH CHART ===\n' + sections.homeDepth + '\n\n' +
         '=== ' + aA + ' DEPTH CHART ===\n' + sections.awayDepth + '\n\n' +
+        (baselineText ? '=== BASELINE SEASON ===\n' + baselineText + '\n\n' : '') +  // pinned (spec §2)
         '=== ' + hA + ' SEASON STATS ===\n' + sections.homeStats + '\n\n' +
         '=== ' + aA + ' SEASON STATS ===\n' + sections.awayStats + '\n\n' +
         '=== ' + hA + ' SPLITS (Game) ===\n' + sections.homeSplitsGame + '\n\n' +
@@ -1533,6 +1560,9 @@ export default async function(request) {
       var floor = computePreGameFloor(homeStatsRaw, awayStatsRaw, analytical.standings, seasonQ4, finalCaps, homeAlias, awayAlias);
       var conviction = floor ? computeConviction(floor) : { tier: 'NO ENTRY', combo: 'NONE', indicatorsWon: [], indicatorsLost: [] };
       var floorText = floor ? formatMechanicalFloor(floor, conviction, homeAlias, awayAlias) : '';
+      // Manual path: the client forwards the proxy's `_dft_baseline` picks; compose the pinned line server-side.
+      var manualBaselineText = '';
+      try { manualBaselineText = SEASON.baselineLine(league, Array.isArray(sections.baselinePicks) ? sections.baselinePicks : []); } catch (e) { manualBaselineText = ''; }
 
       systemPrompt = buildSystemPrompt();
       userPrompt = 'Build a complete pre-game thesis for this NBA matchup.\n\n' +
@@ -1548,6 +1578,7 @@ export default async function(request) {
         '=== ' + awayAlias + ' ROSTER ===\n' + (sections.awayRoster || '(unavailable)') + '\n\n' +
         '=== ' + homeAlias + ' DEPTH CHART ===\n' + (sections.homeDepth || '(unavailable)') + '\n\n' +
         '=== ' + awayAlias + ' DEPTH CHART ===\n' + (sections.awayDepth || '(unavailable)') + '\n\n' +
+        (manualBaselineText ? '=== BASELINE SEASON ===\n' + manualBaselineText + '\n\n' : '') +  // pinned (SEASON_CONSOLIDATION_SPEC v1 §2)
         '=== ' + homeAlias + ' SEASON STATS ===\n' + (sections.homeStats || '(unavailable)') + '\n\n' +
         '=== ' + awayAlias + ' SEASON STATS ===\n' + (sections.awayStats || '(unavailable)') + '\n\n' +
         '=== ' + homeAlias + ' SPLITS (Game) ===\n' + (sections.homeSplitsGame || '(unavailable)') + '\n\n' +

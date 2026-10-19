@@ -3798,7 +3798,7 @@ var TEAM_PROFILES_TTL=15*60*1000;   // mirrors server ensureTeamCtx TTL
 async function ensureTeamProfiles(){
   if(_teamProfiles&&Object.keys(_teamProfiles).length>0&&Date.now()-_teamProfilesAt<TEAM_PROFILES_TTL)return _teamProfiles;
   try{
-    var r=await fetch(FN+'db-api?action=get_team_profiles&league=wnba&season=2026');
+    var r=await fetch(FN+'db-api?action=get_team_profiles&league=wnba');/* season: server-derived (SEASON_CONSOLIDATION_SPEC v1) */
     var d=await r.json();var rows=d.profiles||d.team_profiles||[];
     var m={};rows.forEach(function(x){var p=x.profile;if(typeof p==='string'){try{p=JSON.parse(p);}catch(e){p=null;}}if(p)m[x.team_alias]={w:x.w,l:x.l,archetype:x.archetype,profile:p,updated_at:x.updated_at};});
     if(Object.keys(m).length>0){var first=!_teamProfiles;_teamProfiles=m;_teamProfilesAt=Date.now();if(first&&activeGameId)renderCard(activeGameId);}   // never cache empty (server bug lesson, 6d01d8c)

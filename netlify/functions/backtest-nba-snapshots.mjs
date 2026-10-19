@@ -8722,7 +8722,10 @@ async function reportFlipVolatility(sql) {
 }
 
 // ── POPULATE: FLOOR WP COEFFICIENTS — compute and save to DB ────────────────
-async function populateFloorWP(sql) {
+// A backtest labels its artifact by the DATA's season, never by today's date
+// (SEASON_CONSOLIDATION_SPEC v1 §3): `?season=YYYY-YY` is REQUIRED for this phase.
+async function populateFloorWP(sql, season) {
+  if (!/^20\d\d-\d\d$/.test(String(season || ''))) throw new Error('populate_floor_wp requires ?season=YYYY-YY (the season the snapshot data belongs to)');
   const report = await reportFlipVolatility(sql);
   const closeTeams = report.close?.teams || {};
   const closeWP = report.close?.floorWP || {};
@@ -8759,7 +8762,7 @@ async function populateFloorWP(sql) {
       INSERT INTO floor_wp_coefficients (team_alias, league, season, reliability_class, grip,
         floor_wp_json, close_floor_wp_json, post_asb_floor_wp_json,
         q4_gained_stick, total_flips, gained_stick, lost_stick, updated_at)
-      VALUES (${team}, 'nba', '2025-26', ${reliabilityClass}, ${ct.grip || ft.grip || 0},
+      VALUES (${team}, 'nba', ${season}, ${reliabilityClass}, ${ct.grip || ft.grip || 0},
         ${JSON.stringify(fullWP[team] || {})}, ${JSON.stringify(closeWP[team] || {})}, ${JSON.stringify(postASBWP[team] || {})},
         ${ct.q4?.gainedStick ?? ft.q4?.gainedStick ?? null}, ${ft.totalFlips || 0},
         ${ct.gained?.stick ?? ft.gained?.stick ?? null}, ${ct.lost?.stick ?? ft.lost?.stick ?? null}, NOW())
@@ -8830,7 +8833,7 @@ export default async (req) => {
       case 'diagnose_buy_gap': result = await diagnoseBuyGap(sql); break;
       case 'report_all':        result = await phaseReportAll(sql); break;
       case 'report_flip_volatility': result = await reportFlipVolatility(sql); break;
-      case 'populate_floor_wp': result = await populateFloorWP(sql); break;
+      case 'populate_floor_wp': result = await populateFloorWP(sql, url.searchParams.get('season')); break;
       case 'status':            result = await phaseStatus(sql); break;
       case 'wipe_indicators':    result = await phaseWipeIndicators(sql); break;
       case 'inspect':           result = await phaseInspect(sql, url); break;

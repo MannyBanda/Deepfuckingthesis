@@ -33,6 +33,8 @@
 // (computeProfiles, classifyArchetype) are importable dependency-free by
 // research/team_profiles_fixtures.mjs.
 
+import SEASON from '../lib/season.js'; // SEASON_CONSOLIDATION_SPEC v1 — derived season, never a literal
+
 function log(msg) { console.log(`[team-profiles] ${msg}`); }
 const N = (x) => Number(x) || 0; // BDL returns null for zero values + stats-as-strings
 
@@ -683,7 +685,7 @@ export default async function handler(req) {
   }
 
   // Recompute all profiles for the league-season (spec §4 step 4)
-  let teamsUpdated = 0, season = Number(url.searchParams.get('season')) || 2026;
+  let teamsUpdated = 0, season = Number(url.searchParams.get('season')) || Number(SEASON.seasonFor(league));
   const allRowsRaw = await sql`SELECT * FROM team_game_stats WHERE league = ${league} AND season = ${season}`;
   // Belt-and-suspenders: recompute never sees non-canonical aliases even if rows exist
   const allRows = allRowsRaw.filter((r) => CANONICAL_ALIASES.has(r.team_alias) && CANONICAL_ALIASES.has(r.opp_alias));

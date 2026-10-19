@@ -1,6 +1,10 @@
 // BallDontLie Multi-League API Proxy
 // Fallback data source when Sportradar is throttled
 // Supports: nba, ncaamb, wnba via ?league= param (defaults to nba)
+// Season is DERIVED (netlify/lib/season.js, SEASON_CONSOLIDATION_SPEC v1) —
+// explicit &season=YYYY overrides for viewing a past season.
+
+const SEASON = require('../lib/season.js');
 
 const BDL_BASE = 'https://api.balldontlie.io';
 
@@ -99,6 +103,7 @@ exports.handler = async (event) => {
   }
 
   const pfx = cfg.prefix;  // e.g. '/nba', '/ncaab', '/wnba'
+  const season = String(params.season || SEASON.seasonFor(league));  // one resolution per request
 
   // Build URL based on type
   let url;
@@ -171,28 +176,28 @@ exports.handler = async (event) => {
 
     case 'standings':
       // /ncaab/v1/standings?season=YYYY or /wnba/v1/standings?season=YYYY
-      url = `${BDL_BASE}${pfx}/v1/standings?season=${params.season || '2025'}`;
+      url = `${BDL_BASE}${pfx}/v1/standings?season=${season}`;
       break;
 
     case 'rankings':
       // NCAAMB only: /ncaab/v1/rankings?season=YYYY
-      url = `${BDL_BASE}${pfx}/v1/rankings?season=${params.season || '2025'}`;
+      url = `${BDL_BASE}${pfx}/v1/rankings?season=${season}`;
       break;
 
     case 'bracket':
       // NCAAMB only: /ncaab/v1/bracket?season=YYYY
-      url = `${BDL_BASE}${pfx}/v1/bracket?season=${params.season || '2025'}`;
+      url = `${BDL_BASE}${pfx}/v1/bracket?season=${season}`;
       break;
 
     case 'season_stats':
       // Player season stats (all leagues)
-      url = `${BDL_BASE}${pfx}/v1/player_season_stats?season=${params.season || '2025'}&per_page=100`;
+      url = `${BDL_BASE}${pfx}/v1/player_season_stats?season=${season}&per_page=100`;
       if (params.team_id) url += `&team_id=${params.team_id}`;
       break;
 
     case 'team_season_stats':
       // Team season stats (all leagues)
-      url = `${BDL_BASE}${pfx}/v1/team_season_stats?season=${params.season || '2025'}&per_page=50`;
+      url = `${BDL_BASE}${pfx}/v1/team_season_stats?season=${season}&per_page=50`;
       if (params.team_id) url += `&team_id=${params.team_id}`;
       break;
 

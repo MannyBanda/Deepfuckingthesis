@@ -1,12 +1,15 @@
 // Sportradar Multi-League API Proxy
 // Adds API key server-side, handles CORS, rate limit awareness
 // Supports: nba, ncaamb, wnba via ?league= param (defaults to nba)
+// Season is DERIVED (netlify/lib/season.js, SEASON_CONSOLIDATION_SPEC v1) —
+// never hardcoded here. `&season=YYYY` overrides for viewing a past season.
+
+const SEASON = require('../lib/season.js');
 
 const LEAGUES = {
   nba: {
     base: 'https://api.sportradar.com/nba/trial/v8/en/',
     keyEnv: 'SR_API_KEY',
-    season: '2025',
     seasonType: 'REG',
     hasDepthChart: true,
     hasSplits: true,
@@ -20,7 +23,6 @@ const LEAGUES = {
   ncaamb: {
     base: 'https://api.sportradar.com/ncaamb/trial/v8/en/',
     keyEnv: 'SR_NCAAMB_KEY',
-    season: '2025',
     seasonType: 'REG',
     hasDepthChart: false,
     hasSplits: false,
@@ -34,7 +36,6 @@ const LEAGUES = {
   wnba: {
     base: 'https://api.sportradar.com/wnba/trial/v8/en/',
     keyEnv: 'SR_WNBA_KEY',
-    season: '2025',
     seasonType: 'REG',
     hasDepthChart: false,
     hasSplits: true,
@@ -156,12 +157,37 @@ exports.handler = async (event) => {
   }
 
   try {
-    const path = ENDPOINTS[type](params, cfg);
-    const url = `${cfg.base}${path}?api_key=${apiKey}`;
+    // Season resolved per request: explicit &season= wins, else derived for the league.
+    const season = String(params.season || SEASON.seasonFor(league));
+    const srGet = async (ssn) => {
+      const path = ENDPOINTS[type](params, Object.assign({}, cfg, { season: ssn }));
+      const resp = await fetch(`${cfg.base}${path}?api_key=${apiKey}`);
+      if (resp.status === 429) return { rateLimited: true };
+      if (!resp.ok) { const text = await resp.text(); return { errStatus: resp.status, errText: text }; }
+      return { data: await resp.json() };
+    };
 
-    const resp = await fetch(url);
+    let r = await srGet(season);
 
-    if (resp.status === 429) {
+    // BASELINE types warm-start (SEASON_CONSOLIDATION_SPEC v1 §2): with no explicit
+    // &season=, a team under WARM_START_GP games this season is served the PRIOR
+    // season's statistics/splits, stamped as `_dft_baseline` on the JSON (SR bodies
+    // are objects, so the extra key is harmless to every consumer).
+    const BASELINE_TYPES = { statistics: SEASON.gpFromSRStats, splits_game: SEASON.gpFromSRSplits, splits_schedule: SEASON.gpFromSRSplits };
+    if (!params.season && BASELINE_TYPES[type] && r.data) {
+      const gp = BASELINE_TYPES[type](r.data);
+      const pick = SEASON.pickBaselineSeason(league, gp, season);
+      if (pick.source === 'prior') {
+        await new Promise((res) => setTimeout(res, 1100)); // SR trial: 1 req/sec
+        const pr = await srGet(pick.season);
+        if (pr.data) { r = pr; r.data._dft_baseline = pick; }
+        else r.data._dft_baseline = Object.assign({}, pick, { season, source: 'current', fallbackFailed: true });
+      } else {
+        r.data._dft_baseline = pick;
+      }
+    }
+
+    if (r.rateLimited) {
       return {
         statusCode: 429,
         headers,
@@ -169,16 +195,15 @@ exports.handler = async (event) => {
       };
     }
 
-    if (!resp.ok) {
-      const text = await resp.text();
+    if (r.errStatus) {
       return {
-        statusCode: resp.status,
+        statusCode: r.errStatus,
         headers,
-        body: JSON.stringify({ error: `SR ${resp.status}: ${text.substring(0, 200)}`, league }),
+        body: JSON.stringify({ error: `SR ${r.errStatus}: ${String(r.errText || '').substring(0, 200)}`, league }),
       };
     }
 
-    let data = await resp.json();
+    let data = r.data;
 
     // === NCAAMB Statistics Normalization ===
     // NCAAMB returns a flat { own_record, opponents, players } shape.
@@ -217,6 +242,7 @@ function normalizeNcaambStats(raw) {
   return {
     _normalized: true,
     _source: 'ncaamb_flat',
+    _dft_baseline: raw._dft_baseline || undefined, // carry the warm-start stamp through normalization
     // Team-level: wrap in team_records array with a single "total" entry
     team_records: [{
       record_type: 'total',

@@ -13,6 +13,7 @@
 // ══════════════════════════════════════════════════════════════════════════════
 
 import { neon } from '@neondatabase/serverless';
+import SEASON from '../lib/season.js'; // SEASON_CONSOLIDATION_SPEC v1 — derived season, never a literal
 
 // ── INDICATOR WEIGHTS (aligned with live system — poll-live-bdl.mjs) ────────
 var WEIGHTS = {
@@ -1090,10 +1091,11 @@ function buildSystemPrompt(league) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 var LEAGUE_CFG = {
-  nba: { srBase: 'https://api.sportradar.com/nba/trial/v8/en/', srKeyEnv: 'SR_API_KEY', season: '2025' },
-  ncaamb: { srBase: 'https://api.sportradar.com/ncaamb/trial/v8/en/', srKeyEnv: 'SR_NCAAMB_KEY', season: '2025' },
-  wnba: { srBase: 'https://api.sportradar.com/wnba/trial/v8/en/', srKeyEnv: 'SR_WNBA_KEY', season: '2026' },
+  nba: { srBase: 'https://api.sportradar.com/nba/trial/v8/en/', srKeyEnv: 'SR_API_KEY' },
+  ncaamb: { srBase: 'https://api.sportradar.com/ncaamb/trial/v8/en/', srKeyEnv: 'SR_NCAAMB_KEY' },
+  wnba: { srBase: 'https://api.sportradar.com/wnba/trial/v8/en/', srKeyEnv: 'SR_WNBA_KEY' },
 };
+// season: derived per league — SEASON.seasonFor(league) (SEASON_CONSOLIDATION_SPEC v1)
 
 async function srFetchDirect(league, path) {
   var cfg = LEAGUE_CFG[league] || LEAGUE_CFG.nba;
@@ -1270,6 +1272,7 @@ async function processLeagueTheses(sql, apiKey, league, dateKey, now, log) {
   log(leagueUpper + ': Generating theses for ' + toGenerate.length + ' games');
 
   // Fetch shared data (once per league)
+  var srSeason = SEASON.seasonFor(league);
   var injuries = null, standings = null, seasonQ4 = {};
   try {
     injuries = await srFetchDirect(league, 'league/injuries.json');
@@ -1279,7 +1282,7 @@ async function processLeagueTheses(sql, apiKey, league, dateKey, now, log) {
       injuries.teams.forEach(function(t) { t.alias = WNBA_UUID_TO_ALIAS[t.id] || t.market || t.alias; });
     }
     await new Promise(function(r) { setTimeout(r, 1100); });
-    standings = await srFetchDirect(league, 'seasons/' + LEAGUE_CFG[league].season + '/REG/standings.json');
+    standings = await srFetchDirect(league, 'seasons/' + srSeason + '/REG/standings.json'); // RECORDS: current only
     await new Promise(function(r) { setTimeout(r, 1100); });
   } catch (e) { log(leagueUpper + ': Shared SR fetch error: ' + e.message); }
 
@@ -1327,17 +1330,17 @@ async function processLeagueTheses(sql, apiKey, league, dateKey, now, log) {
       // Depth charts — NBA only (WNBA returns 404)
       if (!isWNBA) {
         srCalls.push(
-          { key: 'homeDepth', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + hId + '/depth_chart.json' },
-          { key: 'awayDepth', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + aId + '/depth_chart.json' }
+          { key: 'homeDepth', path: 'seasons/' + srSeason + '/REG/teams/' + hId + '/depth_chart.json' },  // RECORDS: current only
+          { key: 'awayDepth', path: 'seasons/' + srSeason + '/REG/teams/' + aId + '/depth_chart.json' }
         );
       }
       srCalls.push(
-        { key: 'homeStats', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + hId + '/statistics.json' },
-        { key: 'awayStats', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + aId + '/statistics.json' },
-        { key: 'homeSplitsGame', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + hId + '/splits/game.json' },
-        { key: 'awaySplitsGame', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + aId + '/splits/game.json' },
-        { key: 'homeSplitsSchedule', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + hId + '/splits/schedule.json' },
-        { key: 'awaySplitsSchedule', path: 'seasons/' + LEAGUE_CFG[league].season + '/REG/teams/' + aId + '/splits/schedule.json' }
+        { key: 'homeStats', path: SEASON.srBaselinePaths(hId, srSeason).stats },
+        { key: 'awayStats', path: SEASON.srBaselinePaths(aId, srSeason).stats },
+        { key: 'homeSplitsGame', path: SEASON.srBaselinePaths(hId, srSeason).splitsGame },
+        { key: 'awaySplitsGame', path: SEASON.srBaselinePaths(aId, srSeason).splitsGame },
+        { key: 'homeSplitsSchedule', path: SEASON.srBaselinePaths(hId, srSeason).splitsSchedule },
+        { key: 'awaySplitsSchedule', path: SEASON.srBaselinePaths(aId, srSeason).splitsSchedule }
       );
 
       var collected = {};
@@ -1350,6 +1353,29 @@ async function processLeagueTheses(sql, apiKey, league, dateKey, now, log) {
         }
         await new Promise(function(r) { setTimeout(r, 1100); });
       }
+
+      // ── SEASON_CONSOLIDATION_SPEC v1 §2 — BASELINES warm-start ──
+      // statistics + splits are performance baselines: a team under WARM_START_GP
+      // games this season is re-pulled from the PRIOR season. Depth charts and
+      // profiles are RECORDS and stay current. The pick is pinned into the prompt.
+      var baselinePicks = [];
+      var _sides = [['home', hId, hA], ['away', aId, aA]];
+      for (var _si = 0; _si < _sides.length; _si++) {
+        var _side = _sides[_si];
+        var _pick = SEASON.pickBaselineSeason(league, SEASON.gpFromSRStats(collected[_side[0] + 'Stats']), srSeason);
+        baselinePicks.push({ alias: _side[2], pick: _pick });
+        if (_pick.source === 'prior') {
+          var _pp = SEASON.srBaselinePaths(_side[1], _pick.season);
+          var _priorCalls = [['Stats', _pp.stats], ['SplitsGame', _pp.splitsGame], ['SplitsSchedule', _pp.splitsSchedule]];
+          for (var _pi = 0; _pi < _priorCalls.length; _pi++) {
+            try { collected[_side[0] + _priorCalls[_pi][0]] = await srFetchDirect(league, _priorCalls[_pi][1]); }
+            catch (e) { log('  SR prior ' + _side[0] + _priorCalls[_pi][0] + ' failed: ' + e.message); collected[_side[0] + _priorCalls[_pi][0]] = null; }
+            await new Promise(function(r) { setTimeout(r, 1100); });
+          }
+        }
+      }
+      var baselineText = SEASON.baselineLine(league, baselinePicks);
+      if (baselineText) log('  ' + baselineText);
 
       // BDL odds (league-parameterized path + alias mapping)
       var oddsText = '';
@@ -1446,7 +1472,8 @@ async function processLeagueTheses(sql, apiKey, league, dateKey, now, log) {
           '=== ' + aA + ' DEPTH CHART ===\n' + sections.awayDepth + '\n\n';
       }
 
-      userPrompt += '=== ' + hA + ' SEASON STATS ===\n' + sections.homeStats + '\n\n' +
+      userPrompt += (baselineText ? '=== BASELINE SEASON ===\n' + baselineText + '\n\n' : '') +  // pinned (spec §2)
+        '=== ' + hA + ' SEASON STATS ===\n' + sections.homeStats + '\n\n' +
         '=== ' + aA + ' SEASON STATS ===\n' + sections.awayStats + '\n\n' +
         '=== ' + hA + ' SPLITS (Game) ===\n' + sections.homeSplitsGame + '\n\n' +
         '=== ' + aA + ' SPLITS (Game) ===\n' + sections.awaySplitsGame + '\n\n' +

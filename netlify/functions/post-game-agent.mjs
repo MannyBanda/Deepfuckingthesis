@@ -14,6 +14,7 @@
 // ══════════════════════════════════════════════════════════════════════════════
 
 import { neon } from '@neondatabase/serverless';
+import SEASON from '../lib/season.js'; // SEASON_CONSOLIDATION_SPEC v1 — derived season, never a literal
 
 function log(msg) { console.log(`[post-game-agent] ${msg}`); }
 
@@ -481,8 +482,10 @@ async function processLeague(sql, league, dateStr, isOverride, isDry) {
   // Load floor reliability coefficients
   var _floorWPCoeffs = {};
   try {
-    const fwpRows = await sql`SELECT team_alias, reliability_class, grip FROM floor_wp_coefficients WHERE league = ${league} AND season = '2025-26'`;
-    for (const r of fwpRows) _floorWPCoeffs[r.team_alias] = { reliabilityClass: r.reliability_class || 'NEUTRAL', grip: r.grip || 0 };
+    // ARTIFACT (spec §2): newest row <= current season wins per team.
+    const _fwpSeasons = SEASON.seasonCandidates(league, SEASON.seasonLabel);
+    const fwpRows = await sql`SELECT team_alias, season, reliability_class, grip FROM floor_wp_coefficients WHERE league = ${league} AND season = ANY(${_fwpSeasons})`;
+    for (const r of Object.values(SEASON.newestPerKey(fwpRows, _fwpSeasons, 'team_alias'))) _floorWPCoeffs[r.team_alias] = { reliabilityClass: r.reliability_class || 'NEUTRAL', grip: r.grip || 0 };
   } catch(e) { /* table may not exist — non-fatal */ }
 
   // ── 1. COLLECT ──────────────────────────────────────────────────────────
@@ -611,7 +614,7 @@ async function processLeague(sql, league, dateStr, isOverride, isDry) {
       log(`SS: ${ssLine}`);
       let laneLine = null;
       try {
-        const profRows = await sql`SELECT team_alias, profile, updated_at FROM team_profiles WHERE league = ${league} AND season = 2026`;
+        const profRows = await sql`SELECT team_alias, profile, updated_at FROM team_profiles WHERE league = ${league} AND season = ${Number(SEASON.seasonFor(league))}`;
         laneLine = ssOverrideLaneLine(profRows);
       } catch (e) { log(`lane line: ${e.message}`); }
       const digest = ssComposeDigest(dateStr,

@@ -1056,7 +1056,7 @@ async function viewCalibration(league){
 // ── Season Cache viewer ──
 async function viewSeasonCache(league){
   log('Loading season cache for ' + league.toUpperCase() + '...', 'log-info');
-  var data = await fetchJSON(FN + 'db-api?action=get_season_cache&league=' + league + '&season=2025');
+  var data = await fetchJSON(FN + 'db-api?action=get_season_cache&league=' + league); // season: server-derived (SEASON_CONSOLIDATION_SPEC v1)
   if(!data || !data.cache){
     log('No season cache found', 'log-warn');
     contentEl.innerHTML = '<h2>📈 SEASON CACHE — ' + league.toUpperCase() + '</h2><div class="card" style="color:#94a3b8;font-size:11px">No cached season data. Cache populates when server polling runs for the first time with stale/missing teams.</div>';
@@ -1111,7 +1111,7 @@ async function buildSeasonCache(league){
     var r = await fetch(FN + 'db-api?action=build_season_cache', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({league: league, season: '2025'})
+      body: JSON.stringify({league: league}) // season: server-derived (SEASON_CONSOLIDATION_SPEC v1)
     });
     if(!r.ok) throw new Error('HTTP ' + r.status);
     var data = await r.json();

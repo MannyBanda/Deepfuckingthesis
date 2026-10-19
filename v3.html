@@ -640,7 +640,7 @@ async function buildBdlGameMap(dateStr){
 
 async function fetchStandings(){
   try{
-    var data=await bdl('standings',{season:'2025'});var arr=data.data||[];
+    var data=await bdl('standings',{});/* season: server-derived (SEASON_CONSOLIDATION_SPEC v1) */var arr=data.data||[];
     arr.forEach(function(s){var abbr=s.team?.abbreviation||'';if(!abbr)return;standingsCache[abbr]={confRank:s.conference_rank||null,w:s.wins||0,l:s.losses||0,conf:s.team?.conference||''};});
     console.log('[STANDINGS]',Object.keys(standingsCache).length,'teams');
   }catch(e){console.warn('[STANDINGS]',e.message);}

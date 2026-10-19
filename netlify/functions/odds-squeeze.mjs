@@ -7,6 +7,7 @@
 // Cadence: double-sample per invocation (t=0, sleep 30s, t=30) = 30s.
 // ═══════════════════════════════════════════════════════════════════
 import { neon } from '@neondatabase/serverless';
+import SEASON from '../lib/season.js'; // SEASON_CONSOLIDATION_SPEC v1 — derived season, never a literal
 
 const LEAGUE = 'wnba';
 const ROSTER = ['williamhill_us', 'espnbet', 'fanduel', 'betrivers', 'hardrockbet', 'draftkings'];
@@ -350,7 +351,7 @@ async function samplePass(sql, watches, espn, events, dry, openBets) {
             } catch (e) { /* guard degrades — per-watch one-shot still holds */ }
             let elite = false;
             try {
-              const pr = await sql`SELECT profile FROM team_profiles WHERE league = ${LEAGUE} AND season = 2026 AND team_alias = ${w.trailer_alias} LIMIT 1`;
+              const pr = await sql`SELECT profile FROM team_profiles WHERE league = ${LEAGUE} AND season = ${Number(SEASON.seasonFor(LEAGUE))} AND team_alias = ${w.trailer_alias} LIMIT 1`;
               const pj = pr[0] && (typeof pr[0].profile === 'string' ? JSON.parse(pr[0].profile) : pr[0].profile);
               elite = !!(pj && pj.elite === true); // CONSUMER hysteresis flag ONLY — never internal def-A (KILLER_FLAG_SPEC §7)
             } catch (e) { /* no tag */ }

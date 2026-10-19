@@ -3,6 +3,9 @@
 // Uses @neondatabase/serverless HTTP transport (no TCP needed)
 
 const { neon } = require('@neondatabase/serverless');
+// Season identity is DERIVED — netlify/lib/season.js (SEASON_CONSOLIDATION_SPEC v1).
+// Every action resolves an omitted `season` through it; explicit params still win.
+const SEASON = require('../lib/season.js');
 
 function getSQL() {
   const url = process.env.DATABASE_URL;
@@ -315,7 +318,7 @@ exports.handler = async (event) => {
         CREATE TABLE IF NOT EXISTS wp_profiles (
           team_alias TEXT NOT NULL,
           league TEXT DEFAULT 'nba',
-          season TEXT DEFAULT '2025-26',
+          season TEXT,
           games_analyzed INTEGER DEFAULT 0,
           profile_json JSONB,
           updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -390,7 +393,7 @@ exports.handler = async (event) => {
         CREATE TABLE IF NOT EXISTS season_cache (
           team_alias TEXT NOT NULL,
           league TEXT NOT NULL DEFAULT 'nba',
-          season TEXT NOT NULL DEFAULT '2025',
+          season TEXT NOT NULL,
           players_json JSONB,
           player_count INTEGER DEFAULT 0,
           updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -542,7 +545,7 @@ exports.handler = async (event) => {
       await sql`CREATE TABLE IF NOT EXISTS floor_wp_coefficients (
         team_alias TEXT NOT NULL,
         league TEXT NOT NULL DEFAULT 'nba',
-        season TEXT NOT NULL DEFAULT '2025-26',
+        season TEXT NOT NULL,
         reliability_class TEXT,
         grip INTEGER,
         floor_wp_json JSONB,
@@ -588,7 +591,7 @@ exports.handler = async (event) => {
       await sql`CREATE TABLE IF NOT EXISTS clutch_profiles (
         team_alias TEXT NOT NULL,
         league TEXT NOT NULL DEFAULT 'nba',
-        season TEXT NOT NULL DEFAULT '2025',
+        season TEXT NOT NULL,
         games INTEGER DEFAULT 0,
         q4_fga INTEGER DEFAULT 0, q4_fgm INTEGER DEFAULT 0,
         q4_fg3a INTEGER DEFAULT 0, q4_fg3m INTEGER DEFAULT 0,
@@ -1201,7 +1204,7 @@ exports.handler = async (event) => {
     if (action === 'build_season_cache' && event.httpMethod === 'POST') {
       const body = JSON.parse(event.body || '{}');
       const league = body.league || 'nba';
-      const season = body.season || '2025';
+      const season = String(body.season || SEASON.seasonFor(league));
       const forceTeams = body.teams || []; // optional: specific team aliases to refresh
       const bdlKey = process.env.BDL_API_KEY;
       if (!bdlKey) return { statusCode: 500, headers, body: JSON.stringify({ error: 'BDL_API_KEY not set' }) };
@@ -1331,32 +1334,38 @@ exports.handler = async (event) => {
     // ═══════════════════════════════════════════════════════
     if (action === 'get_season_cache') {
       const league = params.league || 'nba';
-      const season = params.season || '2025';
       const teams = params.teams ? params.teams.split(',').filter(Boolean) : [];
+      // Omitted season → [current, prior]; per team the newest row wins (spec §2 BASELINES:
+      // the poll stores warm-started teams under the PRIOR season, so a client mirror must
+      // see them too). Explicit &season= reads exactly that season.
+      const seasons = params.season ? [String(params.season)] : SEASON.seasonCandidates(league);
 
       let rows;
       if (teams.length > 0) {
         rows = await sql`
-          SELECT team_alias, players_json, player_count, updated_at
+          SELECT team_alias, season, players_json, player_count, updated_at
           FROM season_cache
-          WHERE league = ${league} AND season = ${season} AND team_alias = ANY(${teams})
+          WHERE league = ${league} AND season = ANY(${seasons}) AND team_alias = ANY(${teams})
         `;
       } else {
         rows = await sql`
-          SELECT team_alias, players_json, player_count, updated_at
+          SELECT team_alias, season, players_json, player_count, updated_at
           FROM season_cache
-          WHERE league = ${league} AND season = ${season}
+          WHERE league = ${league} AND season = ANY(${seasons})
         `;
       }
+      const picked = SEASON.newestPerKey(rows, seasons, 'team_alias');
       const cache = {};
-      for (const r of rows) {
+      for (const r of Object.values(picked)) {
         cache[r.team_alias] = {
           players: typeof r.players_json === 'string' ? JSON.parse(r.players_json) : r.players_json,
           playerCount: r.player_count,
           updatedAt: r.updated_at,
+          season: r.season,
+          source: r.season === seasons[0] ? 'current' : 'prior',
         };
       }
-      return { statusCode: 200, headers, body: JSON.stringify({ cache, count: rows.length }) };
+      return { statusCode: 200, headers, body: JSON.stringify({ cache, count: Object.keys(cache).length, seasons }) };
     }
 
     // ═══════════════════════════════════════════════════════
@@ -1366,7 +1375,7 @@ exports.handler = async (event) => {
       const body = JSON.parse(event.body || '{}');
       const teams = body.teams || [];
       const league = body.league || 'nba';
-      const season = body.season || '2025';
+      const season = String(body.season || SEASON.seasonFor(league));
       let saved = 0;
 
       for (const t of teams) {
@@ -1851,7 +1860,7 @@ exports.handler = async (event) => {
       const body = JSON.parse(event.body || '{}');
       const teams = body.teams || [];
       const league = body.league || 'nba';
-      const season = body.season || '2025-26';
+      const season = String(body.season || SEASON.seasonLabel(league));
       let saved = 0;
       for (const t of teams) {
         await sql`
@@ -1877,15 +1886,17 @@ exports.handler = async (event) => {
     // GET_FLOOR_WP — retrieve floor win probability coefficients
     if (action === 'get_floor_wp') {
       const league = params.league || 'nba';
-      const season = params.season || '2025-26';
       const teams = params.teams ? params.teams.split(',') : null;
+      // ARTIFACT (spec §2): omitted season → newest row <= current per team.
+      const seasons = params.season ? [String(params.season)] : SEASON.seasonCandidates(league, SEASON.seasonLabel);
       let rows;
       if (teams) {
-        rows = await sql`SELECT * FROM floor_wp_coefficients WHERE team_alias = ANY(${teams}) AND league = ${league} AND season = ${season}`;
+        rows = await sql`SELECT * FROM floor_wp_coefficients WHERE team_alias = ANY(${teams}) AND league = ${league} AND season = ANY(${seasons})`;
       } else {
-        rows = await sql`SELECT * FROM floor_wp_coefficients WHERE league = ${league} AND season = ${season}`;
+        rows = await sql`SELECT * FROM floor_wp_coefficients WHERE league = ${league} AND season = ANY(${seasons})`;
       }
-      return { statusCode: 200, headers, body: JSON.stringify({ coefficients: rows }) };
+      const coefficients = Object.values(SEASON.newestPerKey(rows, seasons, 'team_alias')).sort((a, b) => String(a.team_alias).localeCompare(String(b.team_alias)));
+      return { statusCode: 200, headers, body: JSON.stringify({ coefficients, seasons }) };
     }
 
     // ═══════════════════════════════════════════════════════
@@ -1906,7 +1917,7 @@ exports.handler = async (event) => {
     // ═══════════════════════════════════════════════════════
     if (action === 'invalidate_season_cache') {
       const league = params.league || 'nba';
-      const season = params.season || '2025';
+      const season = String(params.season || SEASON.seasonFor(league));
       const team = params.team; // optional — single team, or all if omitted
       let result;
       if (team) {
@@ -2625,7 +2636,7 @@ exports.handler = async (event) => {
       const body = JSON.parse(event.body || '{}');
       const profiles = body.profiles || [];
       const league = body.league || 'nba';
-      const season = body.season || '2025-26';
+      const season = String(body.season || SEASON.seasonLabel(league));
       let saved = 0;
       for (const p of profiles) {
         if (!p.team_alias) continue;
@@ -2645,25 +2656,26 @@ exports.handler = async (event) => {
     // ═══════════════════════════════════════════════════════
     if (action === 'get_wp_profiles') {
       const league = params.league || 'nba';
-      const season = params.season || '2025-26';
       const teams = params.teams ? params.teams.split(',') : null;
+      // ARTIFACT (spec §2): omitted season → newest row <= current per team.
+      const seasons = params.season ? [String(params.season)] : SEASON.seasonCandidates(league, SEASON.seasonLabel);
 
       let rows;
       if (teams && teams.length > 0) {
         rows = await sql`
-          SELECT team_alias, games_analyzed, profile_json, updated_at
+          SELECT team_alias, season, games_analyzed, profile_json, updated_at
           FROM wp_profiles
-          WHERE league = ${league} AND season = ${season} AND team_alias = ANY(${teams})
+          WHERE league = ${league} AND season = ANY(${seasons}) AND team_alias = ANY(${teams})
         `;
       } else {
         rows = await sql`
-          SELECT team_alias, games_analyzed, profile_json, updated_at
+          SELECT team_alias, season, games_analyzed, profile_json, updated_at
           FROM wp_profiles
-          WHERE league = ${league} AND season = ${season}
-          ORDER BY team_alias
+          WHERE league = ${league} AND season = ANY(${seasons})
         `;
       }
-      return { statusCode: 200, headers, body: JSON.stringify({ profiles: rows }) };
+      const profiles = Object.values(SEASON.newestPerKey(rows, seasons, 'team_alias')).sort((a, b) => String(a.team_alias).localeCompare(String(b.team_alias)));
+      return { statusCode: 200, headers, body: JSON.stringify({ profiles, seasons }) };
     }
 
     // ═══════════════════════════════════════════════════════
@@ -2671,19 +2683,32 @@ exports.handler = async (event) => {
     // ═══════════════════════════════════════════════════════
     if (action === 'get_clutch_profiles') {
       const league = params.league || 'nba';
-      const season = params.season || '2025';
+      // BASELINE (spec §2): omitted season → current row if it has >= WARM_START_GP games,
+      // else the prior-season row; explicit &season= reads exactly that season.
+      const seasons = params.season ? [String(params.season)] : SEASON.seasonCandidates(league);
       const rows = await sql`
         SELECT * FROM clutch_profiles
-        WHERE league = ${league} AND season = ${season}
+        WHERE league = ${league} AND season = ANY(${seasons})
         ORDER BY team_alias
       `;
-      return { statusCode: 200, headers, body: JSON.stringify({ profiles: rows }) };
+      const byTeam = {};
+      for (const r of rows) {
+        const cur = byTeam[r.team_alias];
+        const isCurrent = String(r.season) === seasons[0];
+        if (!cur) { byTeam[r.team_alias] = r; continue; }
+        const curIsCurrent = String(cur.season) === seasons[0];
+        // prefer the current season only once it clears the warm-start bar
+        if (isCurrent && (Number(r.games) || 0) >= SEASON.WARM_START_GP) byTeam[r.team_alias] = r;
+        else if (!isCurrent && curIsCurrent && (Number(cur.games) || 0) < SEASON.WARM_START_GP) byTeam[r.team_alias] = r;
+      }
+      const profiles = Object.values(byTeam).sort((a, b) => String(a.team_alias).localeCompare(String(b.team_alias)));
+      return { statusCode: 200, headers, body: JSON.stringify({ profiles, seasons }) };
     }
 
     // TEAM_PROFILES_SPEC §6 — nightly team identity/tier/form/H2H profiles
     if (action === 'get_team_profiles') {
       const league = params.league || 'wnba';
-      const season = Number(params.season) || 2026;
+      const season = Number(params.season) || Number(SEASON.seasonFor(league));
       const team = params.team || null;
       const rows = team
         ? await sql`SELECT * FROM team_profiles WHERE league = ${league} AND season = ${season} AND team_alias = ${team}`
@@ -2694,7 +2719,7 @@ exports.handler = async (event) => {
     // TEAM_PROFILES_SPEC §3a — raw team-game rows (fixture harness + research pulls)
     if (action === 'get_team_game_stats') {
       const league = params.league || 'wnba';
-      const season = Number(params.season) || 2026;
+      const season = Number(params.season) || Number(SEASON.seasonFor(league));
       const team = params.team || null;
       const maxDate = params.max_date || null; // as-of filter for golden-fixture reproduction
       let rows;

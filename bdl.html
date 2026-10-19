@@ -1317,7 +1317,7 @@ async function syncClutchFromDB(){
 async function syncSeasonCacheFromDB(){
   if(!dbReady) return;
   try{
-    var r = await fetch(FN+'db-api?action=get_season_cache&league=nba&season=2025');
+    var r = await fetch(FN+'db-api?action=get_season_cache&league=nba'); // season: server-derived (SEASON_CONSOLIDATION_SPEC v1)
     if(!r.ok) return;
     var data = await r.json();
     var cache = data.cache || {};
@@ -1483,7 +1483,7 @@ const standingsCache = {}; // { 'OKC': { confRank: 1, w: 55, l: 20, conf: 'Weste
 function ordinal(n){ if(!n) return ''; return n+(['st','nd','rd'][((n+90)%100-10)%10-1]||'th'); }
 async function fetchStandings(){
   try{
-    var data = await bdl('standings',{season:'2025'});
+    var data = await bdl('standings',{}); // season: server-derived (SEASON_CONSOLIDATION_SPEC v1)
     var arr = data.data||[];
     arr.forEach(function(s){
       var abbr = s.team?.abbreviation||'';
@@ -2136,7 +2136,7 @@ async function showWPProfiles(){
   overlay.style.display = 'block';
   body.innerHTML = '<div style="color:var(--t3)">Loading from DB…</div>';
   try{
-    var r = await fetch(FN+'db-api?action=get_wp_profiles&league=nba&season=2025-26');
+    var r = await fetch(FN+'db-api?action=get_wp_profiles&league=nba'); // season: server-derived (SEASON_CONSOLIDATION_SPEC v1)
     if(!r.ok) throw new Error('DB fetch failed: ' + r.status);
     var data = await r.json();
     var profiles = data.profiles || [];
@@ -2193,7 +2193,7 @@ async function showWPProfiles(){
 async function fetchWPProfilesForGame(homeAlias, awayAlias){
   if(!dbReady) return null;
   try{
-    var r = await fetch(FN+'db-api?action=get_wp_profiles&league=nba&season=2025-26&teams='+homeAlias+','+awayAlias);
+    var r = await fetch(FN+'db-api?action=get_wp_profiles&league=nba&teams='+homeAlias+','+awayAlias); // season: server-derived (SEASON_CONSOLIDATION_SPEC v1)
     if(!r.ok) return null;
     var data = await r.json();
     var profiles = data.profiles || [];
@@ -2304,7 +2304,7 @@ async function buildWPProfiles(){
       var saveResp = await fetch(FN+'db-api?action=save_wp_profile', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ profiles: profiles, league: 'nba', season: '2025-26' })
+        body: JSON.stringify({ profiles: profiles, league: 'nba' }) // season: server-derived (SEASON_CONSOLIDATION_SPEC v1)
       });
       var saveData = await saveResp.json();
       log('Saved ' + (saveData.saved||0) + ' profiles to DB');
@@ -3449,7 +3449,7 @@ async function enrichFromBDL(gameId){
         homeTeam: hA,
         awayTeam: aA,
         bdlGameId: bdlGid,
-        season: 2025,
+        // season: server-derived (SEASON_CONSOLIDATION_SPEC v1)
         pulls: ['clutch','odds','tracking'],
       })
     });
@@ -5057,6 +5057,10 @@ async function generateThesis(gameId){
       homeSplitsSchedule: safe(()=>trimSplits(c.homeSplitsSchedule), 'homeSplitsSchedule'),
       awaySplitsSchedule: safe(()=>trimSplits(c.awaySplitsSchedule), 'awaySplitsSchedule'),
       standings: safe(()=>trimStandings(c.standings), 'standings'),
+      // SEASON_CONSOLIDATION_SPEC v1 §2 — the sr-data proxy stamps `_dft_baseline` on
+      // statistics when a team was warm-started from the prior season; the server
+      // composes the pinned BASELINE SEASON line from these picks (no client wording).
+      baselinePicks: safe(()=>[{alias:homeAlias, pick:c.homeStats&&c.homeStats._dft_baseline||null},{alias:awayAlias, pick:c.awayStats&&c.awayStats._dft_baseline||null}].filter(x=>x.pick), 'baselinePicks'),
     };
 
     // ── RECENT FORM + RETURNING DETECTION (BDL recent game box scores) ──
