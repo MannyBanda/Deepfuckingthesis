@@ -95,6 +95,21 @@ function parseClockToSec(clockStr) {
   return 720;
 }
 
+// VERBATIM mirror of poll-live-bdl.mjs bdlClassifyTOS (FINE_NBA_ARENA_SPEC §1.1) — source-equality checked by research/fine_nba_canary_replay.mjs
+function bdlClassifyTOS(type, text) { const t = (type || '').toLowerCase(); const tx = (text || '').toLowerCase(); if (tx.includes('steal')) return { forced: true, type: t }; if (t.includes('bad pass')) return { forced: true, type: t }; if (t.includes('traveling') || t.includes('out of bounds') || t.includes('3-second') || t.includes('shot clock') || t.includes('offensive foul') || t.includes('double dribble') || t.includes('backcourt') || t.includes('kicked ball')) return { forced: false, type: t }; return { forced: null, type: t }; }
+
+// FINE_NBA_ARENA_SPEC §1.1 — every `grainSec` from 12:00 down to 0:00, periods 1-4.
+function buildFineSchedule(grainSec) {
+  const out = [];
+  for (let p = 1; p <= 4; p++) {
+    for (let c = 720; c >= 0; c -= grainSec) {
+      const label = c === 0 ? `Q${p}_END` : `Q${p}_${String(Math.floor(c / 60)).padStart(2, '0')}:${String(c % 60).padStart(2, '0')}`;
+      out.push({ label, period: p, clockSec: c });
+    }
+  }
+  return out;
+}
+
 // ── Snapshot-aware PBP walker ───────────────────────────────────────────────
 // Walks plays in order, accumulating state. At each checkpoint boundary,
 // emits a snapshot of cumulative team_stats + pbp_derived THROUGH that moment.
@@ -102,7 +117,9 @@ function parseClockToSec(clockStr) {
 // A checkpoint fires when we encounter the first play whose (period, clockSec)
 // is past the checkpoint's moment. "Past" means: period > cp.period, OR
 // period === cp.period && clockSec <= cp.clockSec.
-function walkAndSnapshot(plays, hA, aA) {
+// FINE_NBA_ARENA_SPEC §1.1 — `schedule` defaults to CHECKPOINTS (byte-identical
+// default output); `opts.fine` adds forced/unforced TO keys to pbp_derived.
+function walkAndSnapshot(plays, hA, aA, schedule = CHECKPOINTS, opts = {}) {
   const sorted = plays.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
 
   // State: everything accumulates; snapshots capture state-at-moment
@@ -116,6 +133,8 @@ function walkAndSnapshot(plays, hA, aA) {
     q4hPts: 0, q4aPts: 0,
     scoreLog: [],
     pendPOT: null, lastPeriod: 0,
+    // fine-mode only (emitted when opts.fine): forced/unforced turnovers per production bdlClassifyTOS
+    hTOf: 0, hTOu: 0, aTOf: 0, aTOu: 0,
   };
 
   function snapshotState() {
@@ -143,6 +162,7 @@ function walkAndSnapshot(plays, hA, aA) {
         hBigLead: state.hBigLead, aBigLead: state.aBigLead,
         hPOT: state.hPOT, aPOT: state.aPOT,
         q4hPts: state.q4hPts, q4aPts: state.q4aPts,
+        ...(opts.fine ? { hTOf: state.hTOf, hTOu: state.hTOu, aTOf: state.aTOf, aTOu: state.aTOu } : {}),
         runs6: {
           h: runs6.filter(r => r.team === hA).length,
           a: runs6.filter(r => r.team === aA).length,
@@ -169,8 +189,8 @@ function walkAndSnapshot(plays, hA, aA) {
     // ── Fire any checkpoints we've crossed BEFORE processing this play ──
     // A checkpoint fires when we reach its moment. We emit state AT that moment,
     // so we fire BEFORE applying this play if this play is the first past the boundary.
-    while (nextCpIdx < CHECKPOINTS.length) {
-      const cp = CHECKPOINTS[nextCpIdx];
+    while (nextCpIdx < schedule.length) {
+      const cp = schedule[nextCpIdx];
       const crossed = period > cp.period || (period === cp.period && clockSec <= cp.clockSec);
       if (!crossed) break;
 
@@ -295,6 +315,9 @@ function walkAndSnapshot(plays, hA, aA) {
     if (tl.includes('turnover')) {
       if (team === hA) state.h.to++;
       else if (team === aA) state.a.to++;
+      { const _tc = bdlClassifyTOS(type, text);
+        if (_tc.forced === true) { if (team === hA) state.hTOf++; else if (team === aA) state.aTOf++; }
+        else if (_tc.forced === false) { if (team === hA) state.hTOu++; else if (team === aA) state.aTOu++; } }
 
       // Steal credited in text like "(X steals)"
       const stealMatch = text.match(/\(([^)]+?)\s+steals?\)/i);
@@ -312,6 +335,8 @@ function walkAndSnapshot(plays, hA, aA) {
     if (tl.includes('foul') && tl.includes('offensive')) {
       if (team === hA) state.h.to++;
       else if (team === aA) state.a.to++;
+      // production bdlClassifyTOS: 'offensive foul' → unforced
+      if (team === hA) state.hTOu++; else if (team === aA) state.aTOu++;
       state.pendPOT = team === hA ? aA : hA;
       continue;
     }
@@ -329,8 +354,8 @@ function walkAndSnapshot(plays, hA, aA) {
 
   // Fire any remaining checkpoints after processing all plays
   // (game ended, we're "past" all remaining checkpoints)
-  while (nextCpIdx < CHECKPOINTS.length) {
-    const cp = CHECKPOINTS[nextCpIdx];
+  while (nextCpIdx < schedule.length) {
+    const cp = schedule[nextCpIdx];
     const snap = snapshotState();
     snapshots.push({
       checkpoint: cp.label,
@@ -496,6 +521,79 @@ async function bdlFetchAllPlays(gid) {
     await new Promise(r => setTimeout(r, 100));
   }
   return allPlays;
+}
+
+// ── PHASE: EXPORT_FINE (FINE_NBA_ARENA_SPEC §1.2) ────────────────────────────
+// Read-only. Re-walks BDL plays at `grain` seconds (grain=0 → legacy CHECKPOINTS,
+// regression mode) and returns states per game. No DB writes.
+//   ?phase=export_fine&grain=30&n=16&c=8&offset=0
+async function phaseExportFine(sql, url) {
+  const startTime = Date.now();
+  const TIME_BUDGET_MS = 85000;
+  const grain = parseInt(url.searchParams.get('grain') || '30');
+  const batchSize = parseInt(url.searchParams.get('n') || '16');
+  const concurrency = Math.min(parseInt(url.searchParams.get('c') || '8'), 16);
+  const offset = parseInt(url.searchParams.get('offset') || '0');
+  const fine = grain > 0;
+  const schedule = fine ? buildFineSchedule(grain) : CHECKPOINTS;
+
+  const games = await sql`
+    SELECT bt.bdl_game_id, bt.date::text AS date, bt.home_alias, bt.away_alias,
+           bt.home_pts, bt.away_pts, bt.winner_alias, bt.margin
+    FROM nba_backtest bt
+    WHERE bt.team_stats IS NOT NULL AND bt.game_type = 'regular'
+    ORDER BY bt.date ASC, bt.bdl_game_id ASC
+    LIMIT ${batchSize} OFFSET ${offset}
+  `;
+  const total = await sql`SELECT COUNT(*) AS n FROM nba_backtest WHERE team_stats IS NOT NULL AND game_type = 'regular'`;
+  if (games.length === 0) return { status: 'ok', message: 'No more games', nextStep: 'COMPLETE' };
+
+  function slim(snap, hA, aA) {
+    const h = snap.team_stats.home, a = snap.team_stats.away, pd = snap.pbp_derived;
+    let floor = null, ctrl = null;
+    try {
+      const ind = computeServer({ h, a, hA, aA, hPaint: pd.hPaint, aPaint: pd.aPaint,
+        hRimM: pd.hRimM, hRimA: pd.hRimA, aRimM: pd.aRimM, aRimA: pd.aRimA,
+        hBigLead: pd.hBigLead, aBigLead: pd.aBigLead, hPOT: pd.hPOT, aPOT: pd.aPOT,
+        runs6: pd.runs6?.detail || [], q4hPts: pd.q4hPts, q4aPts: pd.q4aPts });
+      if (ind) { floor = ind.score; ctrl = ind.composite >= 0.5 ? 'home' : 'away'; }
+    } catch (e) { /* non-fatal */ }
+    const out = { l: snap.checkpoint, p: snap.period, c: snap.clockSec,
+      h: { pts: h.pts, fgm: h.fgm, fga: h.fga, fg3m: h.fg3m, fg3a: h.fg3a, ftm: h.ftm, fta: h.fta, ast: h.ast, to: h.to, stl: h.stl, blk: h.blk, oreb: h.oreb },
+      a: { pts: a.pts, fgm: a.fgm, fga: a.fga, fg3m: a.fg3m, fg3a: a.fg3a, ftm: a.ftm, fta: a.fta, ast: a.ast, to: a.to, stl: a.stl, blk: a.blk, oreb: a.oreb },
+      pd: { hPaint: pd.hPaint, aPaint: pd.aPaint, hRimM: pd.hRimM, hRimA: pd.hRimA, aRimM: pd.aRimM, aRimA: pd.aRimA,
+            hBigLead: pd.hBigLead, aBigLead: pd.aBigLead, hPOT: pd.hPOT, aPOT: pd.aPOT,
+            ...(fine ? { hTOf: pd.hTOf, hTOu: pd.hTOu, aTOf: pd.aTOf, aTOu: pd.aTOu } : {}),
+            r6h: pd.runs6?.h || 0, r6a: pd.runs6?.a || 0 },
+      floor, ctrl };
+    return out;
+  }
+
+  const out = [], failed = [];
+  async function processGame(g) {
+    const gid = g.bdl_game_id, hA = g.home_alias, aA = g.away_alias;
+    try {
+      const plays = await bdlFetchAllPlays(gid);
+      if (plays.length === 0) return { ok: false, gid, reason: 'no plays' };
+      const snaps = walkAndSnapshot(plays, hA, aA, schedule, { fine });
+      return { ok: true, gid, date: g.date, home: hA, away: aA, winner: g.winner_alias, final_margin: g.margin,
+        home_pts: g.home_pts, away_pts: g.away_pts, plays: plays.length,
+        states: fine ? snaps.map(sn => slim(sn, hA, aA)) : snaps.map(sn => ({ checkpoint: sn.checkpoint, team_stats: sn.team_stats, pbp_derived: sn.pbp_derived })) };
+    } catch (e) { return { ok: false, gid, reason: e.message }; }
+  }
+  let processed = 0;
+  for (let i = 0; i < games.length; i += concurrency) {
+    if (Date.now() - startTime > TIME_BUDGET_MS) break;
+    const slice = games.slice(i, i + concurrency);
+    const results = await Promise.all(slice.map(processGame));
+    for (const r of results) { processed++; if (r.ok) out.push(r); else failed.push({ gid: r.gid, reason: r.reason }); }
+  }
+  const totalN = Number(total[0]?.n || 0);
+  return {
+    status: 'ok', phase: 'export_fine', grain, fine, offset, batch: batchSize, processed, failed,
+    totalAvailable: totalN, elapsed_ms: Date.now() - startTime, games: out,
+    nextStep: offset + processed >= totalN ? 'COMPLETE' : `?phase=export_fine&grain=${grain}&n=${batchSize}&c=${concurrency}&offset=${offset + processed}`,
+  };
 }
 
 // ── PHASE: INIT ─────────────────────────────────────────────────────────────
@@ -8787,6 +8885,7 @@ export default async (req) => {
     switch (phase) {
       case 'init':              result = await phaseInit(sql, url); break;
       case 'snapshot':          result = await phaseSnapshot(sql, url); break;
+      case 'export_fine':       result = await phaseExportFine(sql, url); break;
       case 'compute':           result = await phaseCompute(sql, url); break;
       case 'report_calibration': result = { calibration: await reportCalibration(sql) }; break;
       case 'report_time':       result = await reportTimeDecay(sql); break;
