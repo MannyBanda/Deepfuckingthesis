@@ -1,0 +1,105 @@
+====================================================================================================
+PHASE 1 — FINE ARENA (Instrument A). Population: production-style CLEAN, ctrl margin>=1 at trigger, one row per game.
+
+ALL (primary, Amendment 3): n=653 [HIGH] trailer-WIN  42.1% | mean proxy  41.9% | edge +0.2pp
+
+tracked_proxy stratum: n=586 [HIGH] trailer-WIN  40.4% | mean proxy  41.0% | edge -0.5pp
+
+  half H1 (< 2026-01-14): n=324 [HIGH] trailer-WIN  42.6% | mean proxy  42.7% | edge -0.1pp
+
+  half H2 (>= 2026-01-14): n=329 [HIGH] trailer-WIN  41.6% | mean proxy  41.2% | edge +0.4pp
+
+-- Corrected margin-at-trigger table (prompt constant check) --
+   ctrl margin   1-3: n=194 [MED] trailer-WIN  50.5% edge -4.0pp
+   ctrl margin   4-8: n=253 [HIGH] trailer-WIN  53.0% edge +7.1pp
+   ctrl margin  9-15: n=159 [MED] trailer-WIN  24.5% edge -4.2pp
+   ctrl margin   16+: n= 47 [LOW] trailer-WIN   8.5% edge -5.0pp
+-- Margin at PUSH (the bet-time state) --
+   ctrl trailing/tied: n= 74 [LOW] trailer-WIN  44.6% edge -5.4pp
+                  1-3: n=210 [HIGH] trailer-WIN  46.2% edge -0.1pp
+                  4-8: n=231 [HIGH] trailer-WIN  44.6% edge +1.8pp
+                 9-15: n=120 [MED] trailer-WIN  33.3% edge +1.5pp
+                  16+: n= 18 [LOW] trailer-WIN  11.1% edge -3.5pp
+-- Floor at trigger (cross_deep check: MC collapse + floor anchored vs dropping) --
+       floor >.75: n=291 [HIGH] trailer-WIN  32.0% edge -4.7pp
+    floor .60-.75: n=275 [HIGH] trailer-WIN  50.9% edge +6.7pp
+       floor <.60: n= 87 [MED] trailer-WIN  48.3% edge -4.1pp
+-- Floor at PUSH --
+       floor >.75: n=214 [HIGH] trailer-WIN  29.4% edge -2.6pp
+    floor .60-.75: n=295 [HIGH] trailer-WIN  48.5% edge +4.2pp
+       floor <.60: n=144 [MED] trailer-WIN  47.9% edge -3.9pp
+-- Trigger period --
+   Q2: n=419 [HIGH] trailer-WIN  44.6% edge +2.4pp
+   Q3: n=202 [HIGH] trailer-WIN  38.1% edge -2.6pp
+   Q4: n= 32 [LOW] trailer-WIN  34.4% edge -11.2pp
+
+====================================================================================================
+H1 — PRE-FIRE FUEL (features at trigger)
+
+F1 net POT (leader − trailer) — PRIMARY  (cuts: <0 | 0..5 | >=5)
+   T1: n=204 [HIGH]  trailer-WIN  43.6%  edge vs proxy  +0.3pp (n_proxy 204)
+   T2: n=227 [HIGH]  trailer-WIN  42.7%  edge vs proxy  +0.3pp (n_proxy 227)
+   T3: n=222 [HIGH]  trailer-WIN  40.1%  edge vs proxy  -0.1pp (n_proxy 222)
+   H1: T1 n=108  41.7% | T3 n=99  41.4% | T3−T1 -0.3pp
+   H2: T1 n=96  45.8% | T3 n=123  39.0% | T3−T1 -6.8pp
+   T3−T1: win -3.5pp | edge -0.4pp | monotone True | min n 204
+   BAR (8pp win AND 8pp edge, monotone, both halves ≥4pp same sign, n≥40): FAIL  — direction: trailer wins LESS with higher F1
+
+F2 trailer TO rate — reported alongside  (cuts: <0.13574660633484162 | 0.13574660633484162..0.18058690744920994 | >=0.18058690744920994)
+   T1: n=217 [HIGH]  trailer-WIN  45.6%  edge vs proxy  +2.1pp (n_proxy 217)
+   T2: n=218 [HIGH]  trailer-WIN  42.2%  edge vs proxy  +1.1pp (n_proxy 218)
+   T3: n=218 [HIGH]  trailer-WIN  38.5%  edge vs proxy  -2.7pp (n_proxy 218)
+   H1: T1 n=105  45.7% | T3 n=107  41.1% | T3−T1 -4.6pp
+   H2: T1 n=112  45.5% | T3 n=111  36.0% | T3−T1 -9.5pp
+   T3−T1: win -7.1pp | edge -4.9pp | monotone True | min n 217
+   BAR (8pp win AND 8pp edge, monotone, both halves ≥4pp same sign, n≥40): FAIL  — direction: trailer wins LESS with higher F2
+
+====================================================================================================
+H2 — CLEAN-UP (trailer TO rate change, trigger → push; bet-time ≈7 possessions)
+
+F3 clean-up delta (negative = cleaned up) — PRIMARY (fine, bet-time)  (cuts: <-0.1273562597121815 | -0.1273562597121815..-0.024856096284667645 | >=-0.024856096284667645)
+   T1: n=217 [HIGH]  trailer-WIN  37.8%  edge vs proxy  -1.6pp (n_proxy 217)
+   T2: n=218 [HIGH]  trailer-WIN  45.9%  edge vs proxy  +2.2pp (n_proxy 218)
+   T3: n=218 [HIGH]  trailer-WIN  42.7%  edge vs proxy  -0.1pp (n_proxy 218)
+   H1: T1 n=110  39.1% | T3 n=107  43.0% | T3−T1 +3.9pp
+   H2: T1 n=107  36.4% | T3 n=111  42.3% | T3−T1 +5.9pp
+   T3−T1: win +4.9pp | edge +1.5pp | monotone False | min n 217
+   BAR (8pp win AND 8pp edge, monotone, both halves ≥4pp same sign, n≥40): FAIL  — direction: trailer wins MORE with higher F3
+
+====================================================================================================
+DESCRIPTIVE (no bar)
+
+F4 FTA edge (leader − trailer) at trigger  (cuts: <-2 | -2..3 | >=3)
+   T1: n=203 [HIGH]  trailer-WIN  47.3%  edge vs proxy  +6.4pp (n_proxy 203)
+   T2: n=229 [HIGH]  trailer-WIN  40.2%  edge vs proxy  -2.7pp (n_proxy 229)
+   T3: n=221 [HIGH]  trailer-WIN  39.4%  edge vs proxy  -2.5pp (n_proxy 221)
+   H1: T1 n=106  46.2% | T3 n=103  38.8% | T3−T1 -7.4pp
+   H2: T1 n=97  48.5% | T3 n=118  39.8% | T3−T1 -8.6pp
+   T3−T1: win -7.9pp | edge -8.8pp | monotone True | min n 203
+
+F5 trailer unforced-TO share at trigger  (cuts: <0.16666666666666666 | 0.16666666666666666..0.3333333333333333 | >=0.3333333333333333)
+   T1: n=215 [HIGH]  trailer-WIN  43.7%  edge vs proxy  +1.4pp (n_proxy 215)
+   T2: n=181 [MED]  trailer-WIN  38.7%  edge vs proxy  -1.5pp (n_proxy 181)
+   T3: n=256 [HIGH]  trailer-WIN  43.0%  edge vs proxy  +0.3pp (n_proxy 256)
+   H1: T1 n=99  44.4% | T3 n=140  42.1% | T3−T1 -2.3pp
+   H2: T1 n=116  43.1% | T3 n=116  44.0% | T3−T1 +0.9pp
+   T3−T1: win -0.8pp | edge -1.1pp | monotone False | min n 181
+
+====================================================================================================
+SECONDARY — within-bucket controls (ordering only)
+   F1 within margin@trigger 1-3: T1 n=73  49.3% | T3 n=50  54.0% | Δ +4.7pp
+   F1 within margin@trigger 4-8: T1 n=83  50.6% | T3 n=87  55.2% | Δ +4.6pp
+   F1 within margin@trigger 9-15: T1 n=38  23.7% | T3 n=63  20.6% | Δ -3.0pp
+   F1 within floor>.75: T1 n=71  38.0% | T3 n=122  28.7% | Δ -9.3pp
+   F3 within floor>.75: T1 n=109  33.0% | T3 n=83  24.1% | Δ -8.9pp
+   F1 within floor<=.75: T1 n=133  46.6% | T3 n=100  54.0% | Δ +7.4pp
+   F3 within floor<=.75: T1 n=108  42.6% | T3 n=135  54.1% | Δ +11.5pp
+
+====================================================================================================
+COARSE EXPORT (3-min) — secondary reads
+   hindsight gap: production-style CLEAN n=171 trailer-WIN  61.4% | May post-hoc CLEAN n=204  71.6% | overlap n=119
+   coarse ctrl margin@trigger: 1-3 n=58  74.1% | 4-8 n=77  62.3% | 9-15 n=30  43.3% | 16+ n=6  16.7%
+   coarse H2 (≈20-poss window) T1: n=57 [LOW] trailer-WIN  59.6%
+   coarse H2 (≈20-poss window) T2: n=57 [LOW] trailer-WIN  59.6%
+   coarse H2 (≈20-poss window) T3: n=57 [LOW] trailer-WIN  64.9%
+   coarse H2 cuts <-0.068 | ≥0.007
