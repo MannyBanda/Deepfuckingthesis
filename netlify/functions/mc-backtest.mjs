@@ -2074,6 +2074,295 @@ async function phaseTriggeredReplay(sql, url) {
 
 
 // ══════════════════════════════════════════════════════════════════════════════
+// PHASE: CANARY_FUEL_EXPORT — per-fire rows for research/2026-10-23_canary_turnover_fuel_PREREG.md
+//   READ-ONLY research export. Mirrors the validated cross_triggered trigger +
+//   investigation (combined canary, 2-cp window, box-diff post-trigger rates,
+//   verdict thresholds .25/.40/.60, INV < 8 post-trigger poss) and adds:
+//     • ctrl-leading gate (ctrl margin >= 1 at trigger) — the production gate
+//     • production-style INCREMENTAL pattern (verbatim mirror of poll-live-bdl
+//       classifyMCPattern) alongside the May post-hoc label
+//     • seeded Math.random (mulberry32) so the export regenerates byte-for-byte
+//     • pre/post turnover + POT + FTA features per row
+//     • base_rates: leader-holds counts by checkpoint x leader-margin bucket over
+//       ALL checkpoints Q3_9..Q4_3 (fair-line proxy for the prereg)
+//   ?phase=canary_fuel_export&n=40&offset=0[&seed=20261023&sims=300&rc=0.60]
+// ══════════════════════════════════════════════════════════════════════════════
+
+function mulberry32(a) {
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    var t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+// VERBATIM mirror of poll-live-bdl.mjs classifyMCPattern (production incremental
+// classifier). If production changes, this must change with it — the Phase 0
+// script byte-compares the two bodies.
+function classifyMCPatternProd(verdicts) {
+  if (!verdicts || verdicts.length < 3) return null;
+  // Need at least one non-INV verdict
+  var meaningful = verdicts.filter(function(v) { return v !== 'INV'; });
+  if (meaningful.length < 2) return null;
+  var hitConfLikely = meaningful.some(function(v) { return v === 'CONF' || v === 'LIKELY'; });
+  var hitNorm = meaningful.some(function(v) { return v === 'NORM'; });
+  if (!hitConfLikely) {
+    // Never reached LIKELY/CONF
+    if (meaningful.length >= 3) return 'FALSE_ALARM';
+    return null; // still classifying
+  }
+  if (!hitNorm) return 'CLEAN'; // hit LIKELY/CONF but never recovered
+  // Check if it recovered then collapsed again (WAVE)
+  var lastConf = -1, lastNorm = -1;
+  for (var i = meaningful.length - 1; i >= 0; i--) {
+    if (lastConf === -1 && (meaningful[i] === 'CONF' || meaningful[i] === 'LIKELY')) lastConf = i;
+    if (lastNorm === -1 && meaningful[i] === 'NORM') lastNorm = i;
+  }
+  if (lastConf > lastNorm) return 'WAVE'; // collapsed after recovering
+  return 'NORMALIZED'; // recovered and stayed recovered
+}
+
+async function phaseCanaryFuelExport(sql, url) {
+  var batchSize = parseInt(url.searchParams.get('n') || '40');
+  var offset = parseInt(url.searchParams.get('offset') || '0');
+  var canaryThreshold = parseFloat(url.searchParams.get('canary') || '0.15');
+  var mcThreshold = parseFloat(url.searchParams.get('mc_threshold') || '0.70');
+  var simCount = parseInt(url.searchParams.get('sims') || '300');
+  var regressionCap = parseFloat(url.searchParams.get('rc') || '0.60');
+  var seed = parseInt(url.searchParams.get('seed') || '20261023');
+  var startTime = Date.now();
+
+  var gameIds = await sql`
+    SELECT DISTINCT game_id FROM nba_snapshot_backtest
+    WHERE indicators IS NOT NULL
+    ORDER BY game_id
+    LIMIT ${batchSize} OFFSET ${offset}
+  `;
+  var totalGames = await sql`SELECT COUNT(DISTINCT game_id) AS n FROM nba_snapshot_backtest WHERE indicators IS NOT NULL`;
+  if (gameIds.length === 0) return { status: 'ok', message: 'No more games', nextStep: 'COMPLETE' };
+  var ids = gameIds.map(function(r) { return r.game_id; });
+
+  var rows = await sql`
+    SELECT game_id, checkpoint, team_stats, pbp_derived,
+           (indicators->>'score')::real AS floor,
+           indicators->>'controlTeam' AS ctrl_team,
+           indicators->>'homeAlias' AS home_alias,
+           indicators->>'awayAlias' AS away_alias,
+           margin_at_snapshot AS margin,
+           ctrl_team_won, final_margin
+    FROM nba_snapshot_backtest
+    WHERE game_id = ANY(${ids}) AND indicators IS NOT NULL AND indicators->>'no_data' IS NULL
+    ORDER BY game_id, checkpoint
+  `;
+  var xgbRows = await sql`
+    SELECT game_id, checkpoint, xgb_win_prob
+    FROM mc_backtest_results
+    WHERE game_id = ANY(${ids}) AND xgb_win_prob IS NOT NULL
+  `;
+  var xgbMap = {};
+  for (var xr of xgbRows) xgbMap[xr.game_id + '_' + xr.checkpoint] = Number(xr.xgb_win_prob);
+
+  var metaRows = await sql`
+    SELECT DISTINCT bdl_game_id, date::text AS date, winner_alias, game_type
+    FROM nba_backtest WHERE bdl_game_id = ANY(${ids})
+  `;
+  var metaMap = {};
+  for (var mr of metaRows) metaMap[mr.bdl_game_id] = mr;
+  function seasonOf(dateStr) {
+    if (!dateStr) return null;
+    var y = parseInt(dateStr.slice(0, 4)), m = parseInt(dateStr.slice(5, 7));
+    return m >= 9 ? (y + '-' + String(y + 1).slice(2)) : ((y - 1) + '-' + String(y).slice(2));
+  }
+
+  function sideStats(ts, pbp, side) {
+    var s = (ts && ts[side]) || {};
+    var pre = side === 'home' ? 'h' : 'a';
+    return {
+      fgm: Number(s.fgm||0), fga: Number(s.fga||0), fg3m: Number(s.fg3m||0), fg3a: Number(s.fg3a||0),
+      ftm: Number(s.ftm||0), fta: Number(s.fta||0), to: Number(s.to||0), oreb: Number(s.oreb||0),
+      pts: Number(s.pts||0),
+      pot: pbp && pbp[pre + 'POT'] != null ? Number(pbp[pre + 'POT']) : null,
+      paint: pbp && pbp[pre + 'Paint'] != null ? Number(pbp[pre + 'Paint']) : null,
+      biglead: pbp && pbp[pre + 'BigLead'] != null ? Number(pbp[pre + 'BigLead']) : null,
+    };
+  }
+  function estPossOf(s) { return (s.fga||0) + 0.44*(s.fta||0) - (s.oreb||0) + (s.to||0); }
+  function lite(s) { return { fgm:s.fgm, fga:s.fga, fg3m:s.fg3m, fg3a:s.fg3a, ftm:s.ftm, fta:s.fta, to:s.to, oreb:s.oreb, pts:s.pts, pot:s.pot, paint:s.paint, biglead:s.biglead, poss: Math.round(estPossOf(s)*10)/10 }; }
+
+  var gameMap = {};
+  for (var r of rows) {
+    if (!gameMap[r.game_id]) gameMap[r.game_id] = [];
+    var ts = typeof r.team_stats === 'string' ? JSON.parse(r.team_stats) : r.team_stats;
+    var pbp = typeof r.pbp_derived === 'string' ? JSON.parse(r.pbp_derived) : (r.pbp_derived || {});
+    gameMap[r.game_id].push({
+      checkpoint: r.checkpoint, cpIdx: CP_INDEX[r.checkpoint],
+      home: ts ? ts.home : null, away: ts ? ts.away : null, pbp: pbp,
+      floor: r.floor, ctrl_team: r.ctrl_team,
+      home_alias: r.home_alias, away_alias: r.away_alias,
+      margin: r.margin, ctrl_team_won: r.ctrl_team_won, final_margin: r.final_margin,
+    });
+  }
+  for (var gid0 of Object.keys(gameMap)) gameMap[gid0].sort(function(a, b) { return a.cpIdx - b.cpIdx; });
+
+  // Fair-line proxy counts over ALL eligible checkpoints (Q3_9..Q4_3), leader = scoreboard leader
+  var base = {};
+  function mBucket(m) { return m <= 3 ? '1-3' : m <= 8 ? '4-8' : m <= 15 ? '9-15' : '16+'; }
+  for (var gidB of Object.keys(gameMap)) {
+    var metaB = metaMap[gidB];
+    if (!metaB || !metaB.winner_alias) continue;
+    for (var cpB of gameMap[gidB]) {
+      if (cpB.cpIdx < 6 || cpB.checkpoint === 'Q4_END' || cpB.margin == null || cpB.margin === 0) continue;
+      var leader = cpB.margin > 0 ? cpB.home_alias : cpB.away_alias;
+      var key = cpB.checkpoint + '|' + mBucket(Math.abs(cpB.margin));
+      if (!base[key]) base[key] = { n: 0, leader_won: 0 };
+      base[key].n++;
+      if (leader === metaB.winner_alias) base[key].leader_won++;
+    }
+  }
+
+  var out = [];
+  var counts = { games: 0, triggered: 0, not_leading_skips: 0, pattern_prod: {}, pattern_posthoc: {} };
+  var savedRandom = Math.random;
+  Math.random = mulberry32(seed + offset);
+  try {
+    for (var gid of Object.keys(gameMap)) {
+      if (Date.now() - startTime > 85000) break;
+      counts.games++;
+      var cps = gameMap[gid];
+      var meta = metaMap[gid] || {};
+      var parsed = cps.map(function(cp) {
+        if (!cp.home || !cp.away) return null;
+        return { home: sideStats({ home: cp.home }, cp.pbp, 'home'), away: sideStats({ away: cp.away }, cp.pbp, 'away') };
+      });
+
+      // --- Canary trigger (identical to cross_triggered, combined mode, ctrl must lead by >= 1) ---
+      var triggerIdx = null, trigMC = null, trigReason = null;
+      for (var ci = 2; ci < cps.length; ci++) {
+        var cp = cps[ci];
+        if (cp.cpIdx < 6) continue;
+        if (cp.checkpoint === 'Q4_END') continue;
+        if (!parsed[ci] || !parsed[ci-2]) continue;
+        if (!cp.ctrl_team || cp.ctrl_team === 'Neither') continue;
+        var hRates = diffToRates(parsed[ci].home, parsed[ci-2].home, 0.36, regressionCap);
+        var aRates = diffToRates(parsed[ci].away, parsed[ci-2].away, 0.36, regressionCap);
+        if (!hRates || !aRates) continue;
+        var metaCp = CP_META[cp.checkpoint]; if (!metaCp) continue;
+        var rp = estimateRemainingPoss(parsed[ci].home, parsed[ci].away, metaCp.period, metaCp.clockSec);
+        if (rp < 1) continue;
+        var ctrlHome = cp.ctrl_team === cp.home_alias;
+        var hScore = (parsed[ci].home.fgm - parsed[ci].home.fg3m)*2 + parsed[ci].home.fg3m*3 + parsed[ci].home.ftm;
+        var aScore = (parsed[ci].away.fgm - parsed[ci].away.fg3m)*2 + parsed[ci].away.fg3m*3 + parsed[ci].away.ftm;
+        var mc = runMonteCarloSim(hRates, aRates, hScore, aScore, rp, { simCount: 200, ctrlTeam: ctrlHome ? 'home' : 'away' });
+        var absFired = mc.winProb < mcThreshold;
+        var divFired = cp.floor != null && (cp.floor - mc.winProb) > canaryThreshold;
+        if (absFired || divFired) {
+          var ctrlMargin0 = ctrlHome ? (cp.margin || 0) : -(cp.margin || 0);
+          if (ctrlMargin0 < 1) { counts.not_leading_skips++; continue; }
+          triggerIdx = ci; trigMC = mc.winProb; trigReason = absFired ? 'absolute' : 'divergence'; break;
+        }
+      }
+      if (triggerIdx === null) continue;
+      counts.triggered++;
+
+      var triggerCp = cps[triggerIdx];
+      var triggerStats = parsed[triggerIdx];
+      var ctrlHome2 = triggerCp.ctrl_team === triggerCp.home_alias;
+      var ctrlTrigMargin = ctrlHome2 ? (triggerCp.margin || 0) : -(triggerCp.margin || 0);
+
+      // --- Post-trigger investigation (identical to cross_triggered) + incremental prod classifier ---
+      var verdicts = [], path = [];
+      var patternProd = null, prodIdx = null, confirmIdx = null;
+      for (var ti = triggerIdx + 1; ti < cps.length; ti++) {
+        if (cps[ti].checkpoint === 'Q4_END') continue;
+        if (!parsed[ti]) continue;
+        var hR = diffToRates(parsed[ti].home, triggerStats.home, 0.36, regressionCap);
+        var aR = diffToRates(parsed[ti].away, triggerStats.away, 0.36, regressionCap);
+        if (!hR || !aR) continue;
+        var postPoss = Math.round((hR._windowPoss + aR._windowPoss) / 2);
+        if (postPoss < 4) continue;
+        var m2 = CP_META[cps[ti].checkpoint]; if (!m2) continue;
+        var rp2 = estimateRemainingPoss(parsed[ti].home, parsed[ti].away, m2.period, m2.clockSec);
+        if (rp2 < 1) continue;
+        var hS2 = (parsed[ti].home.fgm - parsed[ti].home.fg3m)*2 + parsed[ti].home.fg3m*3 + parsed[ti].home.ftm;
+        var aS2 = (parsed[ti].away.fgm - parsed[ti].away.fg3m)*2 + parsed[ti].away.fg3m*3 + parsed[ti].away.ftm;
+        var mc2 = runMonteCarloSim(hR, aR, hS2, aS2, rp2, { simCount: simCount, ctrlTeam: ctrlHome2 ? 'home' : 'away' });
+        var v;
+        if (postPoss < 8) v = 'INV';
+        else if (mc2.winProb > 0.60) v = 'NORM';
+        else if (mc2.winProb > 0.40) v = 'CONT';
+        else if (mc2.winProb > 0.25) v = 'LIKELY';
+        else v = 'CONF';
+        verdicts.push(v);
+        var cm = ctrlHome2 ? (cps[ti].margin || 0) : -(cps[ti].margin || 0);
+        path.push({
+          cp: cps[ti].checkpoint, v: v, mc: mc2.winProb, post_poss: postPoss, ctrl_margin: cm,
+          floor: cps[ti].floor, xgb: xgbMap[gid + '_' + cps[ti].checkpoint] != null ? xgbMap[gid + '_' + cps[ti].checkpoint] : null,
+          h: lite(parsed[ti].home), a: lite(parsed[ti].away),
+        });
+        if (v === 'CONF' && confirmIdx === null) confirmIdx = path.length - 1;
+        if (patternProd === null) {
+          var pp = classifyMCPatternProd(verdicts);
+          if (pp) { patternProd = pp; prodIdx = path.length - 1; }
+        }
+      }
+
+      // --- Post-hoc pattern (identical to cross_triggered) ---
+      var everConf = verdicts.indexOf('CONF') >= 0;
+      var everLikely = verdicts.indexOf('LIKELY') >= 0 || everConf;
+      var patternPost;
+      if (!everLikely) patternPost = 'FALSE_ALARM';
+      else {
+        var firstAlarmIdx = -1;
+        for (var si2 = 0; si2 < verdicts.length; si2++) { if (verdicts[si2] === 'CONF' || verdicts[si2] === 'LIKELY') { firstAlarmIdx = si2; break; } }
+        var postAlarm = verdicts.slice(firstAlarmIdx);
+        var hasNorm = postAlarm.indexOf('NORM') >= 0;
+        if (!hasNorm) patternPost = 'CLEAN';
+        else {
+          var normIdx2 = postAlarm.indexOf('NORM');
+          var postNorm = postAlarm.slice(normIdx2);
+          patternPost = postNorm.some(function(v2) { return v2 === 'CONF' || v2 === 'LIKELY'; }) ? 'WAVE' : 'NORMALIZED';
+        }
+      }
+      var ppKey = patternProd || 'UNCLASSIFIED';
+      counts.pattern_prod[ppKey] = (counts.pattern_prod[ppKey] || 0) + 1;
+      counts.pattern_posthoc[patternPost] = (counts.pattern_posthoc[patternPost] || 0) + 1;
+
+      out.push({
+        game_id: gid, date: meta.date || null, season: seasonOf(meta.date), game_type: meta.game_type || null,
+        home: triggerCp.home_alias, away: triggerCp.away_alias,
+        ctrl: triggerCp.ctrl_team, ctrl_is_home: ctrlHome2,
+        trailer: ctrlHome2 ? triggerCp.away_alias : triggerCp.home_alias,
+        trigger_cp: triggerCp.checkpoint, trigger_idx: triggerIdx,
+        trigger_margin: ctrlTrigMargin, trigger_floor: triggerCp.floor,
+        trigger_xgb: xgbMap[gid + '_' + triggerCp.checkpoint] != null ? xgbMap[gid + '_' + triggerCp.checkpoint] : null,
+        trigger_mc: trigMC, trigger_reason: trigReason,
+        trig: { h: lite(triggerStats.home), a: lite(triggerStats.away) },
+        verdicts: verdicts, path: path,
+        pattern_posthoc: patternPost, pattern_prod: patternProd, prod_idx: prodIdx,
+        prod_cp: prodIdx != null ? path[prodIdx].cp : null,
+        confirm_idx: confirmIdx, confirm_cp: confirmIdx != null ? path[confirmIdx].cp : null,
+        ctrl_won: triggerCp.ctrl_team_won, final_margin: triggerCp.final_margin, winner: meta.winner_alias || null,
+      });
+    }
+  } finally {
+    Math.random = savedRandom;
+  }
+
+  return {
+    status: 'ok', phase: 'canary_fuel_export',
+    config: { canary_mode: 'combined', divergence: canaryThreshold, mc_threshold: mcThreshold, sims: simCount, canary_sims: 200, rc: regressionCap, seed: seed, seed_used: seed + offset, ctrl_margin_min: 1 },
+    offset: offset, batch: batchSize, gamesProcessed: counts.games, totalAvailable: Number(totalGames[0]?.n || 0),
+    counts: counts, elapsed_ms: Date.now() - startTime,
+    base_rates: base, rows: out,
+    nextStep: offset + counts.games < Number(totalGames[0]?.n || 0) && counts.games === gameIds.length
+      ? '?phase=canary_fuel_export&n=' + batchSize + '&offset=' + (offset + batchSize)
+      : (counts.games < gameIds.length ? '?phase=canary_fuel_export&n=' + batchSize + '&offset=' + (offset + counts.games) + '  (budget cut — resume here)' : 'COMPLETE'),
+  };
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
 // PHASE: SILENT_AUDIT — Games where MC never triggered but ctrl team lost
 //   What collapses are we missing? What do they look like?
 //   ?phase=silent_audit&n=200&offset=0
@@ -5141,6 +5430,7 @@ export default async function handler(req) {
       case 'floor_vs_window': result = await phaseFloorVsWindow(sql); break;
       case 'backfill_mc_cum': result = await phaseBackfillMcCum(sql, url); break;
       case 'backfill_mc_pbp': result = await phaseBackfillMcPbp(sql, url); break;
+      case 'canary_fuel_export': result = await phaseCanaryFuelExport(sql, url); break;
       case 'status': {
         var count = await sql`SELECT COUNT(*) AS n FROM mc_backtest_results`;
         var games = await sql`SELECT COUNT(DISTINCT game_id) AS n FROM mc_backtest_results`;
