@@ -1530,6 +1530,9 @@ async function runPregameAgent() {
   var allGenerated = [];
 
   for (var league of leagues) {
+    // NBA_PAUSED (Oct 27, 2026): no pregame Opus theses for the NBA while paused — the
+    // "theses ready" push below only fires when something was generated, so it goes quiet too.
+    if (league === 'nba' && process.env.NBA_PAUSED === '1') { log('NBA: paused (NBA_PAUSED=1) — pregame theses skipped'); continue; }
     try {
       var leagueResult = await processLeagueTheses(sql, apiKey, league, dateKey, now, log);
       allGenerated = allGenerated.concat(leagueResult);

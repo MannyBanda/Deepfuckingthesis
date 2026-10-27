@@ -714,9 +714,11 @@ async function processLeague(sql, league, dateStr, isOverride, isDry) {
   Object.values(alertsByGameTeam).forEach(group => {
     const { gameId, team, matchup, alerts: groupAlerts } = group;
 
-    // Separate delivered vs suppressed
+    // Separate delivered vs suppressed. PAUSED_LOG rows (NBA_PAUSED dark log: mechanical
+    // fires written with ntfy_sent=false) score as delivered when FIRED-tier — the dark run
+    // is the mechanical-only system (CANDIDATE fires log only, as FALLBACK_DROP would).
     const delivered = groupAlerts.filter(a =>
-      a.ntfy_sent === true || (a.ntfy_sent == null && a.agent_decision !== 'SUPPRESS' && a.agent_decision !== 'FALLBACK_DROP')
+      a.ntfy_sent === true || (a.agent_decision === 'PAUSED_LOG' && a.alert_tier === 'FIRED') || (a.ntfy_sent == null && a.agent_decision !== 'SUPPRESS' && a.agent_decision !== 'FALLBACK_DROP')
     );
     const suppressed = groupAlerts.filter(a => a.agent_decision === 'SUPPRESS');
 
@@ -914,8 +916,14 @@ async function processLeague(sql, league, dateStr, isOverride, isDry) {
 
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   let findings = '', patterns = '[]', recommendations = '[]';
+  // NBA_PAUSED (Oct 27, 2026): mechanical scoring above still runs on the dark log;
+  // the Opus analysis here and the nightly push below are skipped for the league.
+  const _leaguePaused = league === 'nba' && process.env.NBA_PAUSED === '1';
 
-  if (anthropicKey && scoredArcs.length > 0) {
+  if (_leaguePaused) {
+    findings = `NBA paused (NBA_PAUSED=1) — mechanical-only scoring of the dark log, no agent analysis. Arc accuracy: ${arcAccuracy != null ? arcAccuracy + '%' : '-'} (${correctArcs.length}/${scoredArcs.length}).`;
+    log(findings);
+  } else if (anthropicKey && scoredArcs.length > 0) {
     // Build enriched arc summaries for Sonnet
     const arcSummaries = scoredArcs.map(arc => {
       const steps = arc.alerts.map(a => {
@@ -1157,7 +1165,7 @@ RECOMMENDATIONS:
   // ── 6. NTFY SUMMARY ────────────────────────────────────────────────────
 
   const topic = process.env.NTFY_TOPIC;
-  if (topic && scoredArcs.length > 0) {
+  if (topic && scoredArcs.length > 0 && !_leaguePaused) {
     const pct = arcAccuracy || 0;
     const emoji = pct >= 80 ? '🟢' : pct >= 60 ? '🟡' : '🔴';
 

@@ -21,6 +21,20 @@ import { dirname, join } from 'path';
 // Every consumer gates on (WNBA_LEGACY_ALERTS_OFF && league === 'wnba') so NBA /
 // NCAAMB are byte-identical at runtime. Reversible via env flip (no redeploy).
 const WNBA_LEGACY_ALERTS_OFF = process.env.WNBA_LEGACY_ALERTS_OFF === '1';
+// ── NBA PAUSE (Oct 27, 2026) — DARK LOG ─────────────────────────────────────
+// Env NBA_PAUSED=1 (reversible via env flip, no redeploy). Polling, snapshots,
+// quarter_data, server context, XGB/MC and the live_tracking state machine all
+// continue — the dashboard and the forward tape are untouched. What stops for the
+// league: every ntfy push and every Anthropic call (alert agent, calibration
+// auto-analysis, fallback thesis, invalidation narrative). Every MECHANICAL fire
+// still writes its alert row with agent_decision='PAUSED_LOG', ntfy_sent=false;
+// FIRED-tier fires also apply their state effects (positions, exits, invalidation
+// tracking) exactly as a SEND would, CANDIDATE-tier fires log only — the same
+// convention the code already uses when the agent is unavailable (FALLBACK_SEND /
+// FALLBACK_DROP). The dark log is therefore "the mechanical system with the agent
+// removed" — scored nightly by post-game-agent (mechanical only, no Opus, no push).
+const NBA_PAUSED = process.env.NBA_PAUSED === '1';
+const _isPaused = (l) => NBA_PAUSED && l === 'nba';
 // Phase 2a sweet-spot gate compute — runs ON-for-WNBA by default (decision (a));
 // env WNBA_SS_COMPUTE_OFF=1 kills it. Compute + store only (no alert) until 2b.
 const WNBA_SS_COMPUTE_OFF = process.env.WNBA_SS_COMPUTE_OFF === '1';
@@ -8891,7 +8905,8 @@ export default async function(req) {
           const _floorWP = lookupFloorWP(_floorWPCoeffs, ind.controlTeam, ind.score);
 
           // ── FALLBACK THESIS — catch games where pregame cron missed the window ──
-          if (!_thesisAttempted.has(game.id)) {
+          // NBA_PAUSED: Opus thesis skipped (not a mechanical fire).
+          if (!_isPaused(league) && !_thesisAttempted.has(game.id)) {
             pendingAnalyses.push(
               generateFallbackThesis(sql, game, league, ind, conviction, summary, matchup, hA, aA)
                 .catch(e => log(`${matchup}: fallback thesis error: ${e.message}`))
@@ -9469,12 +9484,18 @@ export default async function(req) {
                 ? `\n${_deadTeam} had a ${(_deadRank || 'confirmed').toLowerCase()} position. The structural case supporting this position is gone. Consider exiting if you took this position.`
                 : '';
               const _deathBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\n${_deadTeam} structural edge invalidated — control shifted to ${_newCtrlTeam}. Tracking on ${_deadTeam} stopped.${_deathPosNote}`;
+              // NBA_PAUSED dark log: same row, PAUSED_LOG / ntfy_sent=false, no push.
+              const _deathPaused = _isPaused(league);
               try {
                 await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
-                  VALUES (${game.id}, ${league}, ${'TRACKING_INVALIDATED'}, ${currentPeriod}, ${clock}, ${_newCtrlTeam}, ${ind.score}, ${_v2Margin}, ${false}, ${'FIRED'}, ${'SEND'}, ${_deathBody}, ${ctrlI(ind)[0]}, ${ctrlI(ind)[1]}, ${ctrlI(ind)[2]}, ${ctrlI(ind)[3]}, ${ctrlI(ind)[4]}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${true}, ${_deadTeam}, ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
+                  VALUES (${game.id}, ${league}, ${'TRACKING_INVALIDATED'}, ${currentPeriod}, ${clock}, ${_newCtrlTeam}, ${ind.score}, ${_v2Margin}, ${false}, ${'FIRED'}, ${_deathPaused ? 'PAUSED_LOG' : 'SEND'}, ${_deathBody}, ${ctrlI(ind)[0]}, ${ctrlI(ind)[1]}, ${ctrlI(ind)[2]}, ${ctrlI(ind)[3]}, ${ctrlI(ind)[4]}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${!_deathPaused}, ${_deadTeam}, ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
               } catch (e) { log(`${matchup}: TRACKING_INVALIDATED DB insert error: ${e.message}`); }
-              await sendNtfy(`TRACKING INVALIDATED — ${matchup}`, _deathBody, 3);
-              log(`${matchup}: TRACKING_INVALIDATED ntfy sent`);
+              if (_deathPaused) {
+                log(`${matchup}: TRACKING_INVALIDATED logged (NBA_PAUSED — no push)`);
+              } else {
+                await sendNtfy(`TRACKING INVALIDATED — ${matchup}`, _deathBody, 3);
+                log(`${matchup}: TRACKING_INVALIDATED ntfy sent`);
+              }
               }
             }
 
@@ -9622,6 +9643,10 @@ export default async function(req) {
               // PHASE 1: WNBA legacy alerts off → skip the entire main-alert path
               // (PENDING lock-row, agent Opus call @runAlertAgent, alert ntfy) up front.
               if (WNBA_LEGACY_ALERTS_OFF && league === 'wnba') return { decision: 'LEGACY_OFF', sent: false };
+              // NBA_PAUSED dark log: dedup, XGB gate and lock row run as live; the agent
+              // call and the push are skipped; the row is written with PAUSED_LOG;
+              // FIRED-tier state effects apply as a SEND would (see flag block).
+              const _v2Paused = _isPaused(league);
               // Map alert type → ntfy title
               const V2_TITLE_MAP = {
                 'TRACKING': 'TRACKING',
@@ -9659,8 +9684,8 @@ export default async function(req) {
                 ntfyTitle = `${V2_TITLE_MAP[v2Type] || v2Type}${tierTag} — ${bwcTeam || ind.controlTeam}${mlStr}`;
               }
 
-              // Gather DB context (floor history with source=server, prior alerts)
-              const agentCtx = await gatherAgentContext(sql, game.id, matchup);
+              // Gather DB context (floor history with source=server, prior alerts) — prompt-only, skipped when paused
+              const agentCtx = _v2Paused ? null : await gatherAgentContext(sql, game.id, matchup);
 
               // Lazy-compute server context (rolling window, combined read, per-quarter data)
               if (!alertCtx) {
@@ -9879,13 +9904,20 @@ export default async function(req) {
                 _lockRowId = _lr[0]?.id;
               } catch(e) { log(`${matchup}: lock row insert failed: ${e.message}`); }
 
-              const v2Prompt = buildV2AgentPrompt(v2Ctx);
-              const agentResult = await runAlertAgent(v2Ctx, v2Prompt, 600);
+              const v2Prompt = _v2Paused ? null : buildV2AgentPrompt(v2Ctx);
+              const agentResult = _v2Paused ? null : await runAlertAgent(v2Ctx, v2Prompt, 600);
 
               let agentDecision = null, agentReasoning = '', shouldSend = false;
               let alertPriority = v2Type === 'EXIT' ? 5 : v2Type === 'BUY' ? 5 : 4;
+              // Dark log: state effects apply for FIRED only (CANDIDATE logs only) — mirrors FALLBACK_SEND/DROP.
+              const _applyState = _v2Paused && v2Tier === 'FIRED';
 
-              if (agentResult) {
+              if (_v2Paused) {
+                shouldSend = false;
+                agentDecision = 'PAUSED_LOG';
+                agentReasoning = `NBA paused — mechanical ${v2Tier} ${v2Type} logged, no agent, no push` + (_applyState ? ' (state applied as SEND)' : ' (log only)');
+                log(`${matchup}: ${agentReasoning}`);
+              } else if (agentResult) {
                 agentDecision = agentResult.decision;
                 agentReasoning = agentResult.reasoning;
                 if (agentDecision === 'SEND') {
@@ -9907,7 +9939,8 @@ export default async function(req) {
                 log(`${matchup}: Agent unavailable — ${agentDecision} for ${v2Tier} ${v2Type}`);
               }
 
-              if (shouldSend) {
+              if (shouldSend || _applyState) {
+                if (shouldSend) {
                 let ntfyBody = (agentResult?.body && agentResult.body.length > 20)
                   ? scoreLine + '\n' + agentResult.body
                   : scoreLine + '\n' + ind.controlTeam + ' structural floor ' + ind.score.toFixed(2)
@@ -9917,6 +9950,7 @@ export default async function(req) {
                   ntfyBody += '\nNote: ' + ind.controlTeam + ' structural reads have been less reliable in close games historically. Elevated uncertainty on this signal.';
                 }
                 await sendNtfy(ntfyTitle, ntfyBody, alertPriority);
+                } // push only when actually sending; state effects below apply to dark FIRED fires too
 
                 // Track last sent alert type for XGB invalidation gating
                 lt.last_send_type = v2Type;
@@ -10717,8 +10751,12 @@ export default async function(req) {
                     };
                     // Nudge ntfy — let Manny know to check the dashboard
                     const _mcNudgeBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\nMC canary fired — ctrl ${ind.controlTeam} MC=${(_mcCanary.winProb * 100).toFixed(1)}% vs floor ${ind.score.toFixed(2)} (${_triggerReason}). Margin +${_v2Margin} (peak +${_peakMargin}). Investigating.`;
+                    if (_isPaused(league)) {
+                      log(`${matchup}: MC INVESTIGATING (NBA_PAUSED — no push; trigger recorded in lt.mc)`);
+                    } else {
                     await sendNtfy(`MC INVESTIGATING — ${matchup}`, _mcNudgeBody, 3);
                     log(`${matchup}: MC INVESTIGATING ntfy sent`);
+                    }
                     } // close _mcIsTracked else
                   } else if ((_mcAbsFired || _mcDivFired || _xgbDropFired) && !_marginCompressed) {
                     log(`${matchup}: MC canary signal blocked by margin gate — MC=${_mcCanary.winProb.toFixed(3)} margin=${_v2Margin} peak=${_peakMargin} compressed=${_peakMargin - _v2Margin} (need >=3)`);
@@ -10768,14 +10806,19 @@ export default async function(req) {
                         const _mcInvMargin = _mcInvIsHome ? (Number(ind.homePts) - Number(ind.awayPts)) : (Number(ind.awayPts) - Number(ind.homePts));
                         const _mcBody = `${aA} ${ind.awayPts}-${ind.homePts} ${hA} · Q${currentPeriod} ${clock}\n${_mcInvTeam} structural stress detected — held control at Q${lt.mc.trigger_period} ${lt.mc.trigger_clock} but post-trigger possession rates show sustained deterioration. MC: ${(_mcInv.winProb * 100).toFixed(1)}%. Floor (${ind.score.toFixed(2)}) and XGB (${_xgbWinProb != null ? (_xgbWinProb * 100).toFixed(0) + '%' : '?'}) may be anchored to early-game data.${_mcPosNote}`;
                         const _mcPriority = _mcHasPosition ? 5 : 4;
+                        const _mcPaused = _isPaused(league); // dark log: row only, no push
                         try {
                           const _mcCSust = sust?.[_mcInvIsHome ? 'home' : 'away']?.tier || null;
                           const _mcOSust = sust?.[_mcInvIsHome ? 'away' : 'home']?.tier || null;
                           await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
-                            VALUES (${game.id}, ${league}, ${'MC_COLLAPSE'}, ${currentPeriod}, ${clock}, ${_mcInvTeam}, ${ind.score}, ${_mcInvMargin}, ${_mcInvMargin < 0}, ${null}, ${null}, ${spreadVal}, ${snapTp?.classification || null}, ${snapLs?.classification || null}, ${_mcCSust}, ${_mcOSust}, ${_mcInv.winProb}, ${'FIRED'}, ${'SEND'}, ${_mcBody}, ${ctrlI(ind)[0]}, ${ctrlI(ind)[1]}, ${ctrlI(ind)[2]}, ${ctrlI(ind)[3]}, ${ctrlI(ind)[4]}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${true}, ${_mcInvTeam}, ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
+                            VALUES (${game.id}, ${league}, ${'MC_COLLAPSE'}, ${currentPeriod}, ${clock}, ${_mcInvTeam}, ${ind.score}, ${_mcInvMargin}, ${_mcInvMargin < 0}, ${null}, ${null}, ${spreadVal}, ${snapTp?.classification || null}, ${snapLs?.classification || null}, ${_mcCSust}, ${_mcOSust}, ${_mcInv.winProb}, ${'FIRED'}, ${_mcPaused ? 'PAUSED_LOG' : 'SEND'}, ${_mcBody}, ${ctrlI(ind)[0]}, ${ctrlI(ind)[1]}, ${ctrlI(ind)[2]}, ${ctrlI(ind)[3]}, ${ctrlI(ind)[4]}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${!_mcPaused}, ${_mcInvTeam}, ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
                         } catch (e) { log(`${matchup}: MC_COLLAPSE DB insert error: ${e.message}`); }
+                        if (_mcPaused) {
+                          log(`${matchup}: MC_COLLAPSE logged (NBA_PAUSED — no push) — investigated team: ${_mcInvTeam}`);
+                        } else {
                         await sendNtfy(`STRUCTURAL STRESS — ${matchup}`, _mcBody, _mcPriority);
                         log(`${matchup}: MC_COLLAPSE ntfy sent — investigated team: ${_mcInvTeam}`);
+                        }
                       }
                       // NORMALIZED or FALSE_ALARM → reset for re-trigger
                       if (_mcPat === 'NORMALIZED' || _mcPat === 'FALSE_ALARM') {
@@ -10816,7 +10859,8 @@ export default async function(req) {
               lt.buy_invalidated = true;
 
               // Build agent context
-              const _invAgentCtx = await gatherAgentContext(sql, game.id, matchup);
+              const _invPaused = _isPaused(league); // dark log: row + state, no Opus, no push
+              const _invAgentCtx = _invPaused ? null : await gatherAgentContext(sql, game.id, matchup);
               const _invBuyTeam = lt.bwc_fired?.team || ind.controlTeam;
               const _invCtrlIsHome = ind.controlTeam === hA;
               const _invV2Ctx = {
@@ -10845,6 +10889,17 @@ export default async function(req) {
                 mcCumWinProb: _invMcCum,
               };
 
+              if (_invPaused) {
+                // NBA_PAUSED: same mechanical row the live path writes, PAUSED_LOG / ntfy_sent=false,
+                // state advanced exactly as a SEND would. No agent narrative, no push.
+                const _invPausedReason = `NBA paused — ${_invUseMC ? 'MC Cum' : 'XGB'} invalidation logged: BUY ${_invUseMC ? 'mcCum' : 'xgb'} was ${(lt.buy_send_xgb * 100).toFixed(1)}% at Q${lt.buy_send_period}, now ${(_invSignalVal * 100).toFixed(1)}% < ${_invGateLabel}. No agent, no push.`;
+                try {
+                  await sql`INSERT INTO alerts (game_id, league, alert_type, period, clock, control_team, floor_score, margin, is_trailing, edge, ml, spread, tp_class, ls_class, ctrl_sust, opp_sust, window_score, alert_tier, agent_decision, agent_reasoning, i1, i2, i3, i4, i5, conviction_tier, conviction_combo, ntfy_sent, position_team, xgb_win_prob, xgb_aligned)
+                    VALUES (${game.id}, ${league}, ${'XGB_INVALIDATED'}, ${currentPeriod}, ${clock}, ${ind.controlTeam}, ${ind.score}, ${_v2Margin}, ${ctrlTrailing}, ${ctrlEdge}, ${ctrlML ? parseInt(ctrlML) : null}, ${spreadVal}, ${snapTp?.classification || null}, ${snapLs?.classification || null}, ${_invV2Ctx.ctrlSust}, ${_invV2Ctx.oppSust}, ${_windowScore}, ${'FIRED'}, ${'PAUSED_LOG'}, ${_invPausedReason}, ${ctrlI(ind)[0]}, ${ctrlI(ind)[1]}, ${ctrlI(ind)[2]}, ${ctrlI(ind)[3]}, ${ctrlI(ind)[4]}, ${conviction?.tier || null}, ${conviction?.combo || null}, ${false}, ${_invBuyTeam}, ${_xgbWinProb != null ? Math.round(_xgbWinProb * 10000) / 10000 : null}, ${_xgbAligned})`;
+                } catch (e) { log(`${matchup}: XGB_INVALIDATED (paused) DB insert error: ${e.message}`); }
+                lt.last_send_type = 'XGB_INVALIDATED';
+                log(`${matchup}: ${_invUseMC ? 'MC' : 'XGB'} INVALIDATED logged (NBA_PAUSED — no push)`);
+              } else {
               const _invPrompt = buildV2AgentPrompt(_invV2Ctx);
               try {
                 const _invAgentResp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -10881,6 +10936,7 @@ export default async function(req) {
                 await sendNtfy(`${_invUseMC ? 'MC' : 'XGB'} INVALIDATED — ${_invBuyTeam} BUY`, _invFallback, 5);
                 lt.last_send_type = 'XGB_INVALIDATED';
               }
+              } // end else (!_invPaused)
             }
           }
           } // end if (!cfg.dryRun)
@@ -11027,7 +11083,9 @@ export default async function(req) {
                 }
 
                 // Fire Sonnet analysis only for NBA (NCAAMB: snapshot + context only)
-                if (t.sonnet) {
+                // NBA_PAUSED: the 2,500-tok Opus calibration analysis (+ its position-update
+                // agent) is skipped; CAL snapshot, quarter_data and server context above still save.
+                if (t.sonnet && !_isPaused(league)) {
                   pendingAnalyses.push(
                     fireCalibrationAnalysis(sql, game, league, summary, ind, sust, leadComp, espnWP, odds, matchup, hA, aA, currentPeriod, clock, t.trigger, lt)
                       .catch(e => log(`${matchup}: ${t.label} CAL analysis async error: ${e.message}`))
