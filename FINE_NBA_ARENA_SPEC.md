@@ -44,3 +44,33 @@ Production-shaped state machine per game, state by state:
 
 ## 5. What this does NOT change
 No alerts, no gates, no prompt text, no sizing. The canary × turnover-fuel prereg's bars and features are untouched; Amendment 2 (instrument swap: fine arena becomes Instrument A, the coarse export stays committed as the record) is written after the gate passes and before Phase 1.
+
+---
+
+## AMENDMENT 1 (2026-10-31) — second season: 2024-25 arena
+
+**Why:** the 2025-26 arena is contaminated for the MC-favored-trailer population (`research/2026-10-31_mc_trailer_buy_FINDINGS.md`, exploratory appendix `8e218ba`). `research/2026-10-31_paint_touch_PREREG.md` needs a season nobody has cut. Same walker, same grain, same integrity rule — only the game source changes.
+
+### A1.1 Collector — `backtest-nba-playoffs.mjs` (two touch points)
+- `SEASON` (line ~39, const 2025) becomes the **default** of a query param: `const season = parseInt(url.searchParams.get('season') || '2025')`, threaded into `collectSeason` → the BDL games URL (`seasons[]=${season}`, line ~626) and the `nba_backtest.season` column on insert (line ~680). `game_type` stays `'regular'` — the `season` column is the discriminator (it already exists in the schema).
+- `boxscores`, `pbp`, `compute` phases select on null columns and need no change; they pick up 2024 rows on their next chunks. **Grep-confirm `SEASON` appears nowhere else before building** (two uses today).
+- Default call (`?phase=collect_regular`) is byte-identical to today.
+
+### A1.2 Export — `backtest-nba-snapshots.mjs` `export_fine`
+- Additive `&season=` param on the `nba_backtest` selection and its COUNT. **When absent, filter `season = 2025`** — today the query has no season filter and the table holds only 2025, so this keeps the existing call byte-identical *after* 2024 rows land (an unfiltered default would silently merge seasons and break the regression gate).
+- Pagination unchanged (`ORDER BY date ASC, bdl_game_id ASC`); HTTP chunks `n=16&c=8` from the sandbox as in the first build (the function is not scheduled, so hotfix #15 does not apply).
+
+### A1.3 Committed artifact
+`research/<date>_fine_nba_states_2024.json.gz` — same shape as the 2025-26 file (`{generated, spec, phase_sha, grain, games:[{gid,date,home,away,winner,final_margin,plays,states,walk}], walk_integrity_rule}`), plus `season: 2024`. **Halves split rule:** the date that divides walk-ok regular-season games into two equal halves; reported in Phase 0b of the prereg, never chosen.
+
+### A1.4 Gates before the file is trusted
+1. **Feasibility (Phase 0a):** BDL plays exist for 2024-25 — five spot games across Oct 2024 → Apr 2025 return > 400 plays each with the fields `bdlClassifyTOS` and the paint/rim accumulators read. If BDL's historical plays are thin or missing fields, STOP and report; the alternative instrument is the 2026-27 forward tape only.
+2. **Regression:** `export_fine&season=2025&grain=30` on 60 games must reproduce the committed 2025-26 states for those games byte-for-byte (not just the `grain=0` checkpoint gate of §3 — the fine output itself).
+3. **Walk integrity:** same rule; pass rate reported next to 2025-26's (1,221/1,235).
+4. **Replay compatibility:** `research/2026-10-31_mc_trailer_buy_replay.mjs --states <2024 file>` runs unchanged; the paint fields the prereg needs are read from `pd` by the reader, so the replay gains only an additive `paint_gap` on the row.
+
+### A1.5 Cost / time
+~1,230 games × (1 games page share + 1 box + ~4–6 plays pages) ≈ 8–9k BDL calls at GOAT tier (600/min) — well under an hour of API time; the wall-clock is the chunked HTTP walk (the first build ran in sandbox chunks over a session). Zero Anthropic. No DB writes outside `nba_backtest` (new rows, `season=2024`).
+
+### A1.6 Does not change
+The 2025-26 file, the canary replay, any production path, any spec bar.
