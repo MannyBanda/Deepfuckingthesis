@@ -121,6 +121,8 @@ for (const g of games) {
         trailer: trailerAlias, trailer_side: r.trailer, deficit: r.deficit, deficit_band: dBand(r.deficit),
         mc: Math.round(r.mc * 10000) / 10000, window_poss: r.window_poss, remain: r.remain,
         floor: st.floor, ctrl: st.ctrl, floor_is_trailer: st.ctrl != null && ((st.ctrl === 'home' ? 'h' : 'a') === r.trailer),
+        // paint_touch PREREG (2026-10-31): trailer cumulative paint pts − leader's, at the fire state (additive; pd.hPaint/aPaint)
+        paint_gap: (st.pd && st.pd.hPaint != null && st.pd.aPaint != null) ? ((r.trailer === 'h' ? st.pd.hPaint - st.pd.aPaint : st.pd.aPaint - st.pd.hPaint)) : null,
         ctrl_floor_band: (st.ctrl != null && ((st.ctrl === 'home' ? 'h' : 'a') !== r.trailer)) ? floorBand(st.floor) : null,
         next_mc: next_mc == null ? null : Math.round(next_mc * 10000) / 10000, persisted,
         proxy_key: pk, proxy_n: b ? b.n : 0, fair: b && b.n ? Math.round((1 - b.leader_won / b.n) * 10000) / 10000 : null,
