@@ -38,7 +38,7 @@ const DEFICIT_MIN = 1, DEFICIT_MAX = 9;
 const P_MIN = 3, Q4_MIN_CLOCK_SEC = 60;                   // production MIN_REMAIN_MIN = 1.0 (applied to Q4 states)
 const WINDOW_POSS_TOTAL = 20, WINDOW_FGA_MIN = 5;         // production canary window
 const FG3_BASELINE = 0.36, REGRESSION_CAP = 0.60;         // disclosed: league default, not per-team
-const HALVES_SPLIT = '2026-01-14';                        // arena's established chronological split
+const HALVES_SPLIT = args.split || '2026-01-14';          // arena's established chronological split; --split for other seasons (2024-25: 2025-01-19 by the equal-halves rule)
 
 function mulberry32(a) { return function() { a |= 0; a = a + 0x6D2B79F5 | 0; var t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 const estPoss = s => (s.fga || 0) + 0.44 * (s.fta || 0) - (s.oreb || 0) + (s.to || 0);
