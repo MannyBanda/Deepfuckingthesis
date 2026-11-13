@@ -9684,8 +9684,11 @@ export default async function(req) {
                 ntfyTitle = `${V2_TITLE_MAP[v2Type] || v2Type}${tierTag} — ${bwcTeam || ind.controlTeam}${mlStr}`;
               }
 
-              // Gather DB context (floor history with source=server, prior alerts) — prompt-only, skipped when paused
-              const agentCtx = _v2Paused ? null : await gatherAgentContext(sql, game.id, matchup);
+              // Gather DB context (floor history with source=server, prior alerts). Always runs — v2Ctx below
+              // dereferences agentCtx.floorHistory / .priorAlerts even when paused (the Oct 27 "skip when paused"
+              // nulled this and every routeV2Alert fire threw before its row write — zero dark-log rows Oct 31–Nov 12).
+              // DB reads only, zero tokens.
+              const agentCtx = await gatherAgentContext(sql, game.id, matchup);
 
               // Lazy-compute server context (rolling window, combined read, per-quarter data)
               if (!alertCtx) {
@@ -10860,7 +10863,7 @@ export default async function(req) {
 
               // Build agent context
               const _invPaused = _isPaused(league); // dark log: row + state, no Opus, no push
-              const _invAgentCtx = _invPaused ? null : await gatherAgentContext(sql, game.id, matchup);
+              const _invAgentCtx = await gatherAgentContext(sql, game.id, matchup); // DB reads only; always runs (see routeV2Alert note)
               const _invBuyTeam = lt.bwc_fired?.team || ind.controlTeam;
               const _invCtrlIsHome = ind.controlTeam === hA;
               const _invV2Ctx = {
