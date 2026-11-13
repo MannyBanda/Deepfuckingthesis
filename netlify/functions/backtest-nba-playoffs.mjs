@@ -616,14 +616,16 @@ async function phaseStatus(sql) {
 // Shared collector used by both regular and playoff variants.
 // postseasonFlag: false for regular, true for playoffs.
 // gameTypeLabel: what we write to game_type column.
-async function collectSeason(sql, { postseasonFlag, gameTypeLabel }) {
+// FINE_NBA_ARENA_SPEC Amendment 1 (2026-11-13): `season` is a parameter (default SEASON = 2025 → 2025-26).
+// `?season=2024` collects 2024-25; the `season` column discriminates, game_type stays 'regular'.
+async function collectSeason(sql, { postseasonFlag, gameTypeLabel, season = SEASON }) {
   const allGames = [];
   let cursor = null;
   let pages = 0;
   const MAX_PAGES = 20;
 
   while (pages < MAX_PAGES) {
-    let path = `/nba/v1/games?seasons[]=${SEASON}&postseason=${postseasonFlag}&per_page=100`;
+    let path = `/nba/v1/games?seasons[]=${season}&postseason=${postseasonFlag}&per_page=100`;
     if (cursor) path += `&cursor=${cursor}`;
     const resp = await bdlFetch(path);
     if (!resp?.data || resp.data.length === 0) break;
@@ -677,7 +679,7 @@ async function collectSeason(sql, { postseasonFlag, gameTypeLabel }) {
           home_alias, away_alias, home_pts, away_pts, margin, margin_abs, winner_alias
         )
         VALUES (
-          ${r.id}, ${SEASON}, ${gameTypeLabel}, ${r.date},
+          ${r.id}, ${season}, ${gameTypeLabel}, ${r.date},
           ${r.homeAbbr}, ${r.awayAbbr}, ${r.homePts}, ${r.awayPts}, ${r.margin}, ${r.marginAbs}, ${r.winner}
         )
         ON CONFLICT (bdl_game_id) DO UPDATE SET
@@ -721,8 +723,9 @@ async function collectSeason(sql, { postseasonFlag, gameTypeLabel }) {
   };
 }
 
-async function phaseCollectRegular(sql) {
-  return collectSeason(sql, { postseasonFlag: false, gameTypeLabel: 'regular' });
+async function phaseCollectRegular(sql, url) {
+  const season = parseInt(url?.searchParams?.get('season') || String(SEASON)); // Amendment 1: additive, default byte-identical
+  return collectSeason(sql, { postseasonFlag: false, gameTypeLabel: 'regular', season });
 }
 
 async function phaseCollectPlayoffs(sql) {
@@ -1372,7 +1375,7 @@ export default async (req) => {
       case 'inspect':           result = await phaseInspect(sql, url); break;
       case 'reparse_one':       result = await phaseReparseOne(sql, url); break;
       case 'collect':           // alias for backward-compat
-      case 'collect_regular':   result = await phaseCollectRegular(sql); break;
+      case 'collect_regular':   result = await phaseCollectRegular(sql, url); break;
       case 'collect_playoffs':  result = await phaseCollectPlayoffs(sql); break;
       case 'boxscores':         result = await phaseBoxscores(sql, url); break;
       case 'pbp':               result = await phasePbp(sql, url); break;

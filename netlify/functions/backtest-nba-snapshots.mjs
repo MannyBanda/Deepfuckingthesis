@@ -534,6 +534,9 @@ async function phaseExportFine(sql, url) {
   const batchSize = parseInt(url.searchParams.get('n') || '16');
   const concurrency = Math.min(parseInt(url.searchParams.get('c') || '8'), 16);
   const offset = parseInt(url.searchParams.get('offset') || '0');
+  // FINE_NBA_ARENA_SPEC Amendment 1 (2026-11-13): season filter. ABSENT = 2025 — the table held only 2025-26 when
+  // this phase was built, so defaulting to 2025 keeps the existing call byte-identical after 2024-25 rows land.
+  const season = parseInt(url.searchParams.get('season') || '2025');
   const fine = grain > 0;
   const schedule = fine ? buildFineSchedule(grain) : CHECKPOINTS;
 
@@ -541,11 +544,11 @@ async function phaseExportFine(sql, url) {
     SELECT bt.bdl_game_id, bt.date::text AS date, bt.home_alias, bt.away_alias,
            bt.home_pts, bt.away_pts, bt.winner_alias, bt.margin
     FROM nba_backtest bt
-    WHERE bt.team_stats IS NOT NULL AND bt.game_type = 'regular'
+    WHERE bt.team_stats IS NOT NULL AND bt.game_type = 'regular' AND bt.season = ${season}
     ORDER BY bt.date ASC, bt.bdl_game_id ASC
     LIMIT ${batchSize} OFFSET ${offset}
   `;
-  const total = await sql`SELECT COUNT(*) AS n FROM nba_backtest WHERE team_stats IS NOT NULL AND game_type = 'regular'`;
+  const total = await sql`SELECT COUNT(*) AS n FROM nba_backtest WHERE team_stats IS NOT NULL AND game_type = 'regular' AND season = ${season}`;
   if (games.length === 0) return { status: 'ok', message: 'No more games', nextStep: 'COMPLETE' };
 
   function slim(snap, hA, aA) {
@@ -590,9 +593,9 @@ async function phaseExportFine(sql, url) {
   }
   const totalN = Number(total[0]?.n || 0);
   return {
-    status: 'ok', phase: 'export_fine', grain, fine, offset, batch: batchSize, processed, failed,
+    status: 'ok', phase: 'export_fine', grain, fine, season, offset, batch: batchSize, processed, failed,
     totalAvailable: totalN, elapsed_ms: Date.now() - startTime, games: out,
-    nextStep: offset + processed >= totalN ? 'COMPLETE' : `?phase=export_fine&grain=${grain}&n=${batchSize}&c=${concurrency}&offset=${offset + processed}`,
+    nextStep: offset + processed >= totalN ? 'COMPLETE' : `?phase=export_fine&grain=${grain}&season=${season}&n=${batchSize}&c=${concurrency}&offset=${offset + processed}`,
   };
 }
 
