@@ -116,3 +116,21 @@ Plus every standing harness green (tier B/C 81, parity 30, narration 67, ops 35,
 
 ## 7. What Phase 1 does not decide
 NBA eFG bands by period, NBA comeback priors, the GAP_BASE/WATCHLIST ledgers, the verdict strip on `bdl.html`, the A-selector — all Phase 2+ and each behind its own prereg or go. The regime prereg (hot-leader × better-trailer, Oct–Nov vs rest, both arenas) is the recommended next research step and is independent of this build.
+
+---
+
+## AMENDMENT 1 (2026-11-19, PM go "handle 1 and 1b") — pause independence + Phase 1b
+
+### A1.1 `NBA_PAUSED` does not gate Sweet Spot pushes
+`NBA_PAUSED` gates the legacy stack only (routeV2Alert, calibration Opus, pregame theses, invalidation narratives, nightly Opus). NBA Sweet Spot rows and pushes are governed solely by `SS_CFG.nba.tiers.*` — env `NBA_SS_WATCHLIST_ON`, `NBA_SS_LEDGER_ON` (both default off). Graduation stays dark while Sweet Spot pushes. Fixture-pinned: no `_isPaused` reference inside the SS block or `fireSweetSpotAlert`.
+
+### A1.2 Phase 1b — NBA WATCHLIST cue + GAP_BASE ledger (ships with Phase 1, flags off)
+- **Cue predicate (pure, `ssNbaWatchCue(shape, period, cfg)`):** gap ≥ .15 · leader eFG ≥ 57 (×100) · period ≤ 3 · deficit 1–9 · both win%s present (≥ 5 GP). Thresholds live in `SS_CFG.nba.cue`. One row per game (`ON CONFLICT (game_id, alert_subtype)` as today), subtype `WATCHLIST`, tier null. Expected ≈ 1–2/night (39 fires in 30 days on the Nov 19 tape).
+- **Ledger predicate (`ssNbaGapBase`):** gap ≥ .15 · period ≤ 3 · deficit 1–9 → subtype `GAP_BASE`, `ledgerOnly` (rows only, no push). The base rate the cue is scored against.
+- **Push composer `ssComposePushNba(ss)`** (fixture-pinned copy; priority 2; title ASCII only): records + gap in plain English · leader eFG and lead class (via `ssLeadClassDisplay`) · deficit/period/clock · ESPN fair for the trailer · `Live price: {trailer} {ML} at {book}` with **`(may be pregame)`** appended when `priceStale` · closing line: `NBA watchlist ($300 class). Eyes, not a bet call — the cell is exploratory (+24pp, n=39, one month); the forward log is the point.` No `SS_STRUCT` cells, no caution kernels, no team-ctx line, no fuel/temp block for NBA.
+- **Stale-price flag (parent §4.3, minimal):** `priceStale = trailML != null && espnTrailerWP != null && |americanToImplied(trailML) − espnTrailerWP| > 0.25`. Stamped into `player_ctx_json.priceStale` (no new column). `ss_implied/ss_edge/kelly` stay null for NBA regardless.
+- **`fireSweetSpotAlert` by config:** composer (`cfg.pushComposer`), dashboard link (`cfg.dashUrl` — `bdl.html` for NBA), team-ctx line only when `cfg.teamCtx` (false for NBA: the cached WNBA map shares aliases like `MIN`), fuel/temp block only when `cfg.fuelTempBlock`, pctx digest only when `cfg.pctx`, narration: `if (!cfg.narration) return` after the push (the tail sweep is `league='wnba'`-filtered anyway; squeeze has `LEAGUE='wnba'` hard-coded — neither can touch NBA rows).
+- **Resolver (`post-game-agent.mjs` `processSweetSpot`):** `league !== 'wnba'` → `!SS_RESOLVE_LEAGUES.includes(league)` with `['wnba','nba']`; resolves NBA rows from finals exactly as WNBA; the graduation watchdog / crossing proposals stay WNBA-only (gated inside). Runs under `NBA_PAUSED` (mechanical, no Opus).
+- **Fixtures added:** cue/ledger predicates (positive, each clause negative), `ssComposePushNba` copy pins incl. the stale suffix, stale-flag arithmetic, config pins for the two new flags, grep gate (no `_isPaused` in the SS block/fire path).
+- **Verify on the next slate with flags on:** `get_sweetspot_alerts&league=nba` shows WATCHLIST rows with `ntfy_sent=true` and GAP_BASE rows with `ntfy_sent=false`; the push body matches the composer; `get_alerts&league=nba` still only `PAUSED_LOG`; next morning `ss_ledger_summary&league=nba` has resolved counts.
+- **Size:** ~120 lines on top of Phase 1 (predicates 25 · composer 25 · fireSweetSpotAlert config branches 15 · resolver 5 · fixtures 50).
