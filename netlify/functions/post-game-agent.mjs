@@ -360,8 +360,13 @@ function ssComposeDigest(dateStr, tonight, season, laneLine, pulse) {
 // Buckets are NEVER pooled: A/B = accuracy · WATCHLIST = band conversion (a review
 // cue can't be "wrong") · ledger = calibration accumulation only.
 // ══════════════════════════════════════════════════════════════════════════════
+// Leagues whose sweetspot_alerts rows this resolver sweeps (NBA_SWEETSPOT_PORT_PHASE1_SPEC
+// Amendment 1 §A1.2: NBA WATCHLIST / GAP_BASE rows resolve from finals exactly like WNBA's).
+// The graduation-crossing push below stays WNBA-only — the NBA ledger has no comebackProb
+// stamp (collapse_true NULL), so "predicted vs realized" is undefined there.
+const SS_RESOLVE_LEAGUES = ['wnba', 'nba'];
 async function processSweetSpot(sql, league, dateStr, finalScores, isDry) {
-  if (league !== 'wnba') return null; // SS engine is WNBA-only today
+  if (!SS_RESOLVE_LEAGUES.includes(league)) return null;
   const ss = { resolved_tonight: 0, preview: [], tiers: { A: { w: 0, l: 0 }, B: { w: 0, l: 0 } }, watchlist: { total: 0, converted: 0 }, ledger: {}, graduated: [], dry: !!isDry };
   try {
     // Per-subtype resolved counts BEFORE the sweep — crossing detection is stateless,
@@ -452,7 +457,7 @@ async function processSweetSpot(sql, league, dateStr, finalScores, isDry) {
       if ((before[r.alert_subtype] || 0) < 30 && r.n_resolved >= 30) ss.graduated.push(r.alert_subtype);
     });
 
-    if (!isDry) {
+    if (!isDry && league === 'wnba') {
       for (const sub of ss.graduated) {
         const l = ss.ledger[sub];
         const withinBar = l.delta_pp != null && Math.abs(l.delta_pp) <= 5;
@@ -507,7 +512,23 @@ async function processLeague(sql, league, dateStr, isOverride, isDry) {
 
   // ── SWEET SPOT PIPELINE (SWEETSPOT_OPS_SPEC.md) — runs BEFORE the classic-arc early
   // returns below: a slate can have watchlist/ledger activity with zero classic alerts.
-  let wnbaFinals = null, ssResult = null, ssPromptText = '';
+  let wnbaFinals = null, ssResult = null, ssPromptText = '', _nbaFinalsRaw = null;
+  if (league === 'nba') {
+    // NBA Sweet Spot resolver (Phase 1b, Amendment 1): finals → trailer_won on WATCHLIST / GAP_BASE
+    // rows. Mechanical only — no digest push, no Opus, runs under NBA_PAUSED. ss_json is saved so
+    // ss_ledger_summary&league=nba has the same provenance as the WNBA ledger. The raw BDL finals
+    // are reused by the classic-arc path below (one BDL call, not two).
+    try {
+      _nbaFinalsRaw = await fetchFinalScores(dateStr, league);
+      const nbaFinals = (_nbaFinalsRaw || []).filter(g => /final/i.test(String(g.status)));
+      ssResult = await processSweetSpot(sql, league, dateStr, nbaFinals, isDry);
+      if (ssResult && !ssResult.error) {
+        const gb = ssResult.ledger.GAP_BASE;
+        log(`SS[nba]: resolved tonight ${ssResult.resolved_tonight} | WATCH season ${ssResult.season.watchlist.total} (${ssResult.season.watchlist.converted} converted) | GAP_BASE ${gb ? `${gb.n_resolved} resolved, ${gb.realized_pct != null ? gb.realized_pct + '%' : '—'} trailer-wins` : 'none'}`);
+        if (!isDry) { try { await sql`UPDATE learnings SET ss_json = ${JSON.stringify(ssResult)} WHERE date = ${dateStr} AND league = ${league}`; } catch (e) { log(`ss_json save: ${e.message}`); } }
+      }
+    } catch (e) { log(`SS[nba] resolver non-fatal: ${e.message}`); }
+  }
   if (league === 'wnba') {
     wnbaFinals = await fetchWnbaFinals(sql, dateStr);
     ssResult = await processSweetSpot(sql, league, dateStr, wnbaFinals, isDry);
@@ -660,7 +681,7 @@ async function processLeague(sql, league, dateStr, isOverride, isDry) {
   } catch (e) { log(`live_tracking query: ${e.message}`); }
 
   // Fetch final scores: NBA via BDL games endpoint; WNBA via fetchWnbaFinals (already computed above)
-  let finalScores = league === 'wnba' ? (wnbaFinals || []) : await fetchFinalScores(dateStr, league);
+  let finalScores = league === 'wnba' ? (wnbaFinals || []) : (_nbaFinalsRaw || await fetchFinalScores(dateStr, league));
   log(`BDL returned ${finalScores.length} ${leagueUpper} games`);
 
   if (finalScores.length === 0) {

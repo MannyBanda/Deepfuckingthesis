@@ -51,6 +51,42 @@ const WNBA_SS_WATCHLIST_ON = process.env.WNBA_SS_WATCHLIST_ON === '1';
 // per-game deep-link is a queued client follow-up (wnba-bdl.html has no URL-param handling yet).
 const SS_DASH_URL = 'https://poetic-starlight-aa8938.netlify.app/wnba-bdl.html';
 
+// ── SS ENGINE PER LEAGUE (NBA_SWEETSPOT_PORT_PHASE1_SPEC §2.1 + Amendment 1) ──────────
+// The WNBA block IS today's env flags — they stay the single source of truth and keep
+// exactly one consumer each (grep-gated by research/ss_league_param_fixtures.mjs).
+// Values are booleans / strings / numbers / inline literals only — never a reference to a
+// hoisted `var` defined later (EFG_BANDS lives ~5,000 lines down and would capture
+// undefined here — hotfix #6). The compute core (ssComputeShape) resolves the keys.
+// NBA_PAUSED does NOT gate any of this (Amendment 1 §A1.1): the Sweet Spot engine —
+// compute, rows, pushes — is governed by SS_CFG alone; the legacy stack stays dark.
+//   minGP          — as-of win% needs this many games (else null → no gap)
+//   efgBands       — 'wnba' = EFG_BANDS by period; null = no band (NBA bands are Phase 2)
+//   comebackModel  — 'wnba' = comebackProb priors + ssClassifyTier ladder; null = no tier/prior
+//   divergenceGate — divergenceRead (fade tiers) — WNBA-band dependent
+//   priceFields    — 'full' = implied/edge/kelly; 'line_only' = observed ML stored, no derived price
+//   ledgerModel / watchModel — which GAP_BASE / WATCHLIST predicate (ssClassifyTier+ssWatchGate vs ssNba*)
+//   tiers          — fire switches: A / B / WATCHLIST / LEDGER (LEDGER = GAP_BASE + Q4_COLLAPSE rows)
+const SS_CFG = {
+  wnba: { enabled: !WNBA_SS_COMPUTE_OFF, minGP: 4, efgBands: 'wnba', comebackModel: 'wnba', divergenceGate: true,
+          priceFields: 'full', standingsSeason: 'calendar', ledgerModel: 'wnba', watchModel: 'wnba',
+          pushComposer: 'wnba', dashUrl: SS_DASH_URL, teamCtx: true, fuelTemp: true, pctx: true, narration: true,
+          tiers: { A: WNBA_SS_ALERT_ON, B: WNBA_SS_B_ON, WATCHLIST: WNBA_SS_WATCHLIST_ON, LEDGER: WNBA_SS_LEDGER_ON } },
+  nba:  { enabled: process.env.NBA_SS_COMPUTE_OFF !== '1', minGP: 5, efgBands: null, comebackModel: null, divergenceGate: false,
+          priceFields: 'line_only', standingsSeason: 'oct_start', ledgerModel: 'nba', watchModel: 'nba',
+          pushComposer: 'nba', dashUrl: 'https://poetic-starlight-aa8938.netlify.app/bdl.html', teamCtx: false, fuelTemp: false, pctx: false, narration: false,
+          // Phase 1b cue (Amendment 1 §A1.2): gap ≥ .15 × leader eFG ≥ 57 × pre-Q4 × deficit 1-9.
+          // Exploratory cell (aaf0ec8): +24pp vs ESPN, n=39 LOW, one month — a review cue, not a bet call.
+          cue: { minGap: 0.15, minLeaderEfg: 57, maxPeriod: 3, minDeficit: 1, maxDeficit: 9 },
+          staleGapPp: 0.25, // |implied(best ML) − ESPN trailer WP| above this → "(may be pregame)"
+          tiers: { A: false, B: false, WATCHLIST: process.env.NBA_SS_WATCHLIST_ON === '1', LEDGER: process.env.NBA_SS_LEDGER_ON === '1' } },
+};
+const ssCfg = (l) => SS_CFG[l] || null;
+const ssEnabled = (l) => !!(ssCfg(l) && ssCfg(l).enabled);
+// NBA season label = the year the season started (Oct→Dec: this year; Jan→Sep: last year).
+// WNBA = calendar year. Superseded by LEAGUES[league].season when the season-consolidation
+// branch merges; byte-identical for WNBA today.
+const ssStandingsSeason = (l, d) => (ssCfg(l)?.standingsSeason === 'oct_start' && d.getMonth() < 9) ? d.getFullYear() - 1 : d.getFullYear();
+
 // ── XGBOOST MODEL ──────────────────────────────────────────────────────────
 // Raw stats structural model — 300 trees, 13 features (no progress), trained on 1,235 games.
 // Provides independent win probability from raw box score stats without using
@@ -890,6 +926,10 @@ function ssComposePush(ss) {
 async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
   const _ml = v => v == null ? '?' : (Number(v) > 0 ? '+' + v : '' + v);
   const _pct = (v, d = 0) => v == null ? '?' : (v * 100).toFixed(d);
+  // League config (NBA_SWEETSPOT_PORT_PHASE1_SPEC Amendment 1): composer, tap target, which
+  // context blocks ride the push, whether narration is enqueued. No cfg → no fire path.
+  const cfg = ssCfg(league);
+  if (!cfg) { log(`${aA}@${hA}: fireSweetSpotAlert — no SS_CFG for league ${league}, dropped`); return; }
   try {
     // Stage 0 — suppression (A2.5): A suppresses B; A/B suppress WATCHLIST. B-then-A and
     // watchlist-then-A/B remain allowed (upgrades). Indexed SELECT, rare fire path only.
@@ -909,7 +949,9 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
     // cached team ctx (ensureTeamCtx is TTL-cached — this is a no-op on warm cycles).
     // Missing ctx -> NULL stamp; never computed inline on the polling path.
     await ensureTeamCtx(sql, league);
-    const _kProf = (typeof _teamCtxMap === 'object' && _teamCtxMap) ? _teamCtxMap[ss.leaderAl] : null;
+    // cfg.teamCtx: the profile map is WNBA-only and shares aliases with the NBA (MIN, LA, …) —
+    // never read it for another league (a wrong killer/lane stamp is worse than NULL).
+    const _kProf = (cfg.teamCtx && typeof _teamCtxMap === 'object' && _teamCtxMap) ? _teamCtxMap[ss.leaderAl] : null;
     const _kk = _kProf && _kProf.profile && _kProf.profile.killer ? _kProf.profile.killer : null;
     // ACA P2 — OVERRIDE_LANE trailer stamp: computed from internal def-A tiers ONLY
     // (KILLER_FLAG_SPEC §7: def-A never surfaces as labels — this stamp is a boolean).
@@ -917,7 +959,7 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
     // vs-top games. Same cache, same NULL-degrade as _kk.
     let _ln = null;
     try {
-      const _lProf = (typeof _teamCtxMap === 'object' && _teamCtxMap) ? _teamCtxMap[ss.trailerAl] : null;
+      const _lProf = (cfg.teamCtx && typeof _teamCtxMap === 'object' && _teamCtxMap) ? _teamCtxMap[ss.trailerAl] : null;
       const _lt = _lProf && _lProf.profile && _lProf.profile.tiers ? _lProf.profile.tiers : null;
       if (_lt && _lt.top && _lt.rest) {
         const _tn = (_lt.top.w || 0) + (_lt.top.l || 0), _rn = (_lt.rest.w || 0) + (_lt.rest.l || 0);
@@ -951,7 +993,7 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
     if (ss.ledgerOnly) {
       log(`${aA}@${hA}: sweetspot ledger row ${ss.subtype} recorded — Q${ss.period} ${ss.trailerAl} +${ss.margin} collapse=${ss.collapseTier} fade=${ss.fadeTier || '—'} class=${ss.leadClass || '—'} (no push, ever)`);
     } else {
-      const push = ssComposePush(ss);
+      const push = cfg.pushComposer === 'nba' ? ssComposePushNba(ss) : ssComposePush(ss);
       // TEAM_PROFILES_SPEC §6 — one plain-English profile line in mechanical push bodies.
       // Appended at call site (ssComposePush copy is fixture-pinned); '' when flag off.
       let _pushBody = push.body;
@@ -966,18 +1008,20 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
           if (_w.length) _pushBody = `Escalated from watchlist (fired Q${_w[0].period}${_w[0].clock ? ' ' + _w[0].clock : ''}).\n\n` + _pushBody;
         } catch (e) { /* non-fatal — push goes out without the breadcrumb */ }
       }
-      try {
-        await ensureTeamCtx(sql, league);
-        const _tcLine = composeTeamCtxLine(ss.trailerAl, ss.leaderAl, league);
-        if (_tcLine) _pushBody = _pushBody + '\n\n' + _tcLine; // B1 fix (Aug 6): was push.body — silently dropped the D-13 escalation breadcrumb
-      } catch (e) { /* non-fatal — push goes out without the line */ }
+      if (cfg.teamCtx) {
+        try {
+          await ensureTeamCtx(sql, league);
+          const _tcLine = composeTeamCtxLine(ss.trailerAl, ss.leaderAl, league);
+          if (_tcLine) _pushBody = _pushBody + '\n\n' + _tcLine; // B1 fix (Aug 6): was push.body — silently dropped the D-13 escalation breadcrumb
+        } catch (e) { /* non-fatal — push goes out without the line */ }
+      }
       // ACA P1 — T+0 FACT block: fuel/temp/cautions/trap ride the mechanical push with
       // zero model latency (row-1197 lesson: the WHAT-push is the one that gets acted on).
       try {
         const _ftBlock = ssFuelTempLines(ss.fuelTemp, ss.leaderAl, ss.trailerAl, { lead_class: ss.leadClass });
         if (_ftBlock) _pushBody = _pushBody + '\n\n' + _ftBlock;
       } catch (e) { /* non-fatal — push goes out without the fact block */ }
-      await sendNtfy(push.title, _pushBody, push.priority, SS_DASH_URL);
+      await sendNtfy(push.title, _pushBody, push.priority, cfg.dashUrl);
       log(`${aA}@${hA}: ★ SWEET SPOT ${ss.subtype === 'WATCHLIST' ? 'WATCHLIST' : ss.tier} FIRED — ${ss.trailerAl} +${ss.margin}${ss.edge != null ? ` edge=${_pct(ss.edge)}pp` : ''} line=${_ml(ss.bestML)}${ss.softCell ? ` cell=${ss.softCell}` : ''}`);
     }
 
@@ -1014,10 +1058,15 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
     }
     // DS v1 C1 fallback — the fuel/temp stamp must survive pctx failure (surge watch
     // + FUEL PULSE read it). Isolated UPDATE, non-fatal; degrades to no stamp.
-    if (!_ctxStamped && ss.fuelTemp) {
+    // Amendment 1: the NBA stale-price flag rides the same JSONB (key priceStale); for
+    // leagues that never compute it the key is absent and the WNBA JSON is unchanged.
+    if (!_ctxStamped && (ss.fuelTemp || ss.priceStale)) {
+      const _stamp = {};
+      if (ss.fuelTemp) _stamp.fuelTemp = ss.fuelTemp;
+      if (ss.priceStale) _stamp.priceStale = ss.priceStale;
       try {
-        await sql`UPDATE sweetspot_alerts SET player_ctx_json = ${JSON.stringify({ fuelTemp: ss.fuelTemp })} WHERE id = ${rowId}`;
-      } catch (e) { log(`${aA}@${hA}: fuelTemp stamp non-fatal: ${e.message}`); }
+        await sql`UPDATE sweetspot_alerts SET player_ctx_json = ${JSON.stringify(_stamp)} WHERE id = ${rowId}`;
+      } catch (e) { log(`${aA}@${hA}: ctx stamp non-fatal: ${e.message}`); }
     }
 
     // Stage 2 — async narration (the WHY); non-fatal, never re-decides.
@@ -1025,6 +1074,9 @@ async function fireSweetSpotAlert(sql, game, league, hA, aA, ss, pctx = null) {
     // REVIEW via the sweep only (D-12, WNBA_SS_NARRATE_WATCHLIST). Ledger rows never narrate —
     // all still got the Stage 1.5 digest above (carrier ledger = forward OOS feed).
     if (ss.ledgerOnly) return;
+    // Amendment 1: narration is a per-league switch (NBA: none — zero Anthropic calls; the
+    // tail sweep is league='wnba'-filtered regardless, this just makes the intent explicit).
+    if (!cfg.narration) { log(`${aA}@${hA}: sweetspot ${ss.subtype} — narration off for ${league} (SS_CFG)`); return; }
     // NARRATION V2 (D-4): narration deferred to the end-of-cycle tail sweep —
     // row already has narration_text NULL + narration_attempts 0; sweep claims it.
     if (WNBA_SS_NARRATE_V2) {
@@ -2580,7 +2632,7 @@ async function fetchStandingsCache(sql, league) {
   } catch (e) { /* table missing / read error → fall through to fetch */ }
   // 2. Stale or empty → fetch from BDL + upsert
   try {
-    const yr = new Date().getFullYear();
+    const yr = ssStandingsSeason(league, new Date()); // NBA = Oct-start season year; WNBA = calendar year (byte-identical)
     const data = await bdlFetch(`${cfg.bdlPrefix}/v1/standings?season=${yr}`);
     const arr = (data && data.data) || [];
     for (const s of arr) {
@@ -5469,6 +5521,107 @@ function computeScoringComp(pbp, hA, aA, hPts, aPts) {
   else if (leadV >= absMargin*0.6) { classification = 'VOLATILE'; durability = leadTeam+' lead is variance-driven \u2014 3PT/mid drives margin with uncertain sustainability. Structural favors '+(leadS>=0?leadTeam:trailTeam)+' (+'+Math.abs(Math.round(leadS<0?leadS:leadS))+')'; }
   else { classification = 'MIXED'; durability = 'No single source dominates margin'; }
   return { home:h, away:a, structuralDelta:sDelta, varianceDelta:vDelta, leadTeam:leadTeam, classification:classification, durability:durability };
+}
+
+// ── SS COMPUTE CORE (NBA_SWEETSPOT_PORT_PHASE1_SPEC §2.4) — PURE, league-parameterized ──
+// The former inline poll block as one function: no I/O, no league literals — every
+// WNBA-calibrated step resolves through ssCfg(league) and comes back null for a league
+// without that model (bands, fade tiers, comeback prior, ladder, implied/edge/kelly).
+// Returns null when the PBP zone object is missing (the legacy early-out). WNBA output is
+// pinned field-for-field against the pre-refactor block (research/fixtures_ss_shape_golden.json,
+// sliced from git blob 3119e2f) — research/ss_league_param_fixtures.mjs.
+// eFG from the reliable box (fgm/fg3m/fga) — zone-sums drop unparseable MISSED attempts and
+// inflate eFG one-directionally (+1.6pp avg / +5.2pp max, n=18 live) → false fades.
+// Variance-share stays on PBP zones (computeScoringComp — a made-points ratio).
+function ssComputeShape(inp) {
+  var cfg = ssCfg(inp.league); if (!cfg) return null;
+  var pbp = inp.pbp;
+  if (!(pbp && pbp.home && pbp.away)) return null;
+  var hPts = Number(inp.hPts) || 0, aPts = Number(inp.aPts) || 0;
+  var sc = computeScoringComp(pbp, inp.hA, inp.aA, hPts, aPts);
+  if (!sc) return null;
+  var bEfg = function(st) {
+    var fgm = Number(st?.field_goals_made||st?.fgm||0)||0;
+    var fga = Number(st?.field_goals_att||st?.fga||0)||0;
+    var fg3m = Number(st?.three_points_made||st?.fg3m||0)||0;
+    return { efg: fga > 0 ? ((fgm + 0.5*fg3m)/fga*100) : null, fga: fga };
+  };
+  var he = bEfg(inp.summary?.home?.statistics), ae = bEfg(inp.summary?.away?.statistics);
+  sc.home.efgBox = he.efg; sc.home.fga = he.fga;
+  sc.away.efgBox = ae.efg; sc.away.fga = ae.fga;
+  sc.period = inp.period; sc.clock = inp.clock;
+  sc.fadeRead = cfg.divergenceGate ? divergenceRead(sc) : null;
+  var homeTrails = aPts > hPts;
+  var leadAl = homeTrails ? inp.aA : inp.hA, trailAl = homeTrails ? inp.hA : inp.aA;
+  var deficit = Math.abs(hPts - aPts);
+  var wp = function(al) { var r = inp.standings ? inp.standings[al] : null; if (!r) return null; var gp = (r.w||0)+(r.l||0); return gp >= cfg.minGP ? (r.w/gp) : null; };
+  var leadWP = wp(leadAl), trailWP = wp(trailAl);
+  var pr = cfg.comebackModel === 'wnba' ? comebackProb(leadWP, trailWP, deficit, inp.period, sc.fadeRead) : { tier: null };
+  var odds = inp.odds;
+  var trailML = homeTrails ? (odds && odds.homeML) : (odds && odds.awayML);
+  var ev = (cfg.priceFields === 'full' && pr.pPoint != null) ? comebackEV(pr.pPoint, trailML) : null;
+  var fadeT = sc.fadeRead ? sc.fadeRead.tier : null;
+  var collT = pr.tier;
+  var cls = sc.classification;
+  var edge = (ev && ev.edge != null) ? ev.edge : null;
+  var leadEfg = homeTrails ? sc.away.efgBox : sc.home.efgBox;
+  var leadBand = (cfg.efgBands === 'wnba' && leadEfg != null) ? efgTier(leadEfg, inp.period).tier : null;
+  var varShare = homeTrails ? sc.away.vPct : sc.home.vPct;
+  var gap = (leadWP != null && trailWP != null) ? (trailWP - leadWP) : null;
+  var implied = (cfg.priceFields === 'full' && trailML != null) ? americanToImplied(trailML) : null;
+  // Tier ladder (SWEETSPOT_TIER_BC_SPEC.md): A pristine → B one-soft/B3 → ledger shapes. Pure
+  // classifier; the snapshot records the SHAPE regardless of feature flags (compute-vs-fire).
+  var ladder = cfg.comebackModel === 'wnba' ? ssClassifyTier(edge, inp.period, deficit, collT, fadeT, cls) : { tier: null, softCell: null, ledgerSub: null };
+  if (cfg.ledgerModel === 'nba') ladder.ledgerSub = ssNbaGapBase({ gap: gap, deficit: deficit }, inp.period, cfg.cue) ? 'GAP_BASE' : null;
+  return { sc: sc, homeTrails: homeTrails, leadAl: leadAl, trailAl: trailAl, deficit: deficit,
+    leadWP: leadWP, trailWP: trailWP, gap: gap, leadEfg: leadEfg, leadBand: leadBand, varShare: varShare, cls: cls,
+    fadeT: fadeT, collT: collT,
+    pPoint: pr.pPoint != null ? pr.pPoint : null, pLow: pr.pLow != null ? pr.pLow : null, pHigh: pr.pHigh != null ? pr.pHigh : null,
+    trailML: trailML != null ? trailML : null, implied: implied, edge: edge, kelly: (ev && ev.size != null) ? ev.size : null,
+    ladder: ladder, tier: ladder.tier, fired: ladder.tier != null };
+}
+
+// ── NBA PHASE 1b PREDICATES (NBA_SWEETSPOT_PORT_PHASE1_SPEC Amendment 1 §A1.2) — PURE ──
+// Thresholds come from SS_CFG.nba.cue (never literals here) — fixture-pinned.
+// GAP_BASE (ledger, rows only, no push): the in-band quality-gap population the cue is
+// scored against — gap ≥ .15 · pre-Q4 · deficit 1-9 · both win%s present.
+function ssNbaGapBase(s, period, cue) {
+  if (!cue || s == null || s.gap == null || s.deficit == null) return false;
+  return s.gap >= cue.minGap && Number(period) <= cue.maxPeriod && s.deficit >= cue.minDeficit && s.deficit <= cue.maxDeficit;
+}
+// WATCHLIST cue (push, priority 2): GAP_BASE × hot leader (eFG ≥ 57, ×100 scale). One row per
+// game via the (game_id, alert_subtype) dedup. Exploratory cell (aaf0ec8): +24pp vs ESPN,
+// n=39 LOW, one month — eyes and a forward log, never a bet call.
+function ssNbaWatchCue(s, period, cue) {
+  return ssNbaGapBase(s, period, cue) && s.leadEfg != null && Number(s.leadEfg) >= cue.minLeaderEfg;
+}
+// Stale-price flag (NBA_SWEETSPOT_PORT_SPEC §4.3, minimal form): the Odds API stamp is often
+// the PREGAME line on the NBA tape (season audit) — flag when it disagrees with ESPN's live
+// fair for the trailer by more than gapPp. ESPN WP arrives 0-100 (espnWinProb) or 0-1
+// (WNBA espnFull) — normalized here. null when either side is missing (no fake reads).
+function ssPriceStale(trailML, espnTrailerWp, gapPp) {
+  if (trailML == null || espnTrailerWp == null || isNaN(Number(espnTrailerWp))) return null;
+  var imp = americanToImplied(trailML); if (imp == null) return null;
+  var e = Number(espnTrailerWp); if (e > 1) e = e / 100;
+  return { stale: Math.abs(imp - e) > gapPp, implied: Math.round(imp * 1000) / 1000, espnWp: Math.round(e * 1000) / 1000 };
+}
+// NBA WATCHLIST push copy (Amendment 1 §A1.2) — PURE, fixture-pinned. Same copy standard as
+// ssComposePush (terms in full, ASCII title, no jargon) with the NBA-honest frame: no model
+// probability, no cell rate, no sizing — ESPN fair + observed price + the exploratory tag.
+function ssComposePushNba(ss) {
+  const _ml = v => v == null ? '?' : (Number(v) > 0 ? '+' + v : '' + v);
+  const _pct = (v, d = 0) => v == null ? '?' : (v * 100).toFixed(d);
+  const lc = ssLeadClassDisplay(ss.leadClass);
+  const stale = ss.priceStale && ss.priceStale.stale ? ' (may be pregame)' : '';
+  const price = ss.bestML != null
+    ? `Live price: ${ss.trailerAl} ${_ml(ss.bestML)}${ss.bestBook ? ' at ' + ss.bestBook : ''}${stale}.\n`
+    : `No live line posted yet.\n`;
+  const fair = (ss.priceStale && ss.priceStale.espnWp != null) ? `ESPN live fair for ${ss.trailerAl}: ${_pct(ss.priceStale.espnWp)}%.\n` : '';
+  const body = `${ss.trailerAl} (${ss.trailerW}-${ss.trailerL}) is the better team — wins ${_pct(ss.trailerWP)}% of games vs ${ss.leaderAl}'s ${_pct(ss.leaderWP)}% (quality gap ${ss.gap != null ? Math.round(ss.gap * 100) : '?'} points) — and trails by ${ss.margin} in Q${ss.period} ${ss.clock}.\n`
+    + `${ss.leaderAl} is shooting ${ss.leaderEfg != null ? Math.round(ss.leaderEfg) : '?'}% effective FG (shooting efficiency) — hot by NBA standards${lc ? `; the lead is ${lc}` : ''}.\n`
+    + fair + price
+    + `NBA watchlist ($300 class). Eyes, not a bet call — this cell is exploratory (+24 points vs ESPN on 39 games, one month); the forward log is the point.`;
+  return { title: `NBA REVIEW - ${ss.trailerAl} down ${ss.margin} to ${ss.leaderAl} (not a bet call)`, body: body, priority: 2 };
 }
 // ── END SWEET-SPOT GATE ENGINE (Phase 2a) ─────────────────────────────────────
 
@@ -8525,7 +8678,7 @@ export default async function(req) {
       // Fetch live odds from The Odds API (one call, all games)
       // Returns { 'NYK': { homeSpread, homeML, awayML, total, books }, ... }
       const oddsAPICache = (league === 'nba' || league === 'wnba') ? await fetchOddsAPIBatch(league) : {};
-      const ssStandings = (league === 'wnba' && !WNBA_SS_COMPUTE_OFF) ? await fetchStandingsCache(sql, league) : {};
+      const ssStandings = ssEnabled(league) ? await fetchStandingsCache(sql, league) : {};
 
       for (let gi = 0; gi < potentiallyLive.length; gi++) {
         const game = potentiallyLive[gi];
@@ -9254,83 +9407,54 @@ export default async function(req) {
 
             lt = updateLiveTracking(lt, ind.controlTeam, ind.score, currentPeriod, clock, hA, currentPeriod);
 
-            // ── SWEET-SPOT GATE COMPUTE (Phase 2a) — WNBA only; compute + store, NO alert (2b fires) ──
-            // eFG from reliable box (fgm/fg3m/fga) — same source raw_stats_json serializes. Zone-sums
-            // silently drop unparseable MISSED attempts → denominator shrinks → eFG inflates one-directionally
-            // (+1.6pp avg / +5.2pp max vs box, n=18 live) → false fades. Box matches the client headline.
-            // Variance-share stays on PBP zones (computeScoringComp, untouched — a made-points ratio).
-            // A = deterministic pristine dual-gate; B left NULL (earned in the replay bucket analysis).
-            // Isolated UPDATE (does NOT touch the snapshot INSERT or the NBA path); try/catch → never breaks polling.
-            if (league === 'wnba' && !WNBA_SS_COMPUTE_OFF) {
+            // ── SWEET-SPOT COMPUTE + FIRE — league-parameterized (NBA_SWEETSPOT_PORT_PHASE1_SPEC) ──
+            // Compute core = ssComputeShape (pure; WNBA output golden-pinned against the old inline
+            // block). Every league in SS_CFG gets the ss_* snapshot columns; what is NULL for a
+            // league (bands / fade / prior / edge) is decided by its config, not by code here.
+            // Isolated UPDATE (does NOT touch the snapshot INSERT); try/catch → never breaks polling.
+            // Fire switches are SS_CFG[league].tiers — NBA_PAUSED has no say here (Amendment 1).
+            if (ssEnabled(league)) {
               try {
-                const _ssPbp = game._bdlPbp;
-                if (_ssPbp && _ssPbp.home && _ssPbp.away) {
-                  const _ssHp = Number(ind.homePts) || 0, _ssAp = Number(ind.awayPts) || 0;
-                  const _ssSc = computeScoringComp(_ssPbp, hA, aA, _ssHp, _ssAp);
-                  if (_ssSc) {
-                    const _bEfg = function(st) {
-                      var fgm = Number(st?.field_goals_made||st?.fgm||0)||0;
-                      var fga = Number(st?.field_goals_att||st?.fga||0)||0;
-                      var fg3m = Number(st?.three_points_made||st?.fg3m||0)||0;
-                      return { efg: fga > 0 ? ((fgm + 0.5*fg3m)/fga*100) : null, fga: fga };
-                    };
-                    var _ssHe = _bEfg(summary.home?.statistics), _ssAe = _bEfg(summary.away?.statistics);
-                    _ssSc.home.efgBox = _ssHe.efg; _ssSc.home.fga = _ssHe.fga;
-                    _ssSc.away.efgBox = _ssAe.efg; _ssSc.away.fga = _ssAe.fga;
-                    _ssSc.period = currentPeriod; _ssSc.clock = clock;
-                    _ssSc.fadeRead = divergenceRead(_ssSc);
-
-                    var _ssHomeTrails = _ssAp > _ssHp;
-                    var _ssLeadAl = _ssHomeTrails ? aA : hA, _ssTrailAl = _ssHomeTrails ? hA : aA;
-                    var _ssDeficit = Math.abs(_ssHp - _ssAp);
-                    var _ssWp = function(al) { var r = ssStandings[al]; if (!r) return null; var gp = (r.w||0)+(r.l||0); return gp >= 4 ? (r.w/gp) : null; };
-                    var _ssLeadWP = _ssWp(_ssLeadAl), _ssTrailWP = _ssWp(_ssTrailAl);
-                    var _ssPr = comebackProb(_ssLeadWP, _ssTrailWP, _ssDeficit, currentPeriod, _ssSc.fadeRead);
-                    var _ssTrailML = _ssHomeTrails ? (odds && odds.homeML) : (odds && odds.awayML);
-                    var _ssEv = (_ssPr.pPoint != null) ? comebackEV(_ssPr.pPoint, _ssTrailML) : null;
-
-                    var _ssFadeT = _ssSc.fadeRead ? _ssSc.fadeRead.tier : null;
-                    var _ssCollT = _ssPr.tier;
-                    var _ssClass = _ssSc.classification;
-                    var _ssEdge = (_ssEv && _ssEv.edge != null) ? _ssEv.edge : null;
-                    var _ssLeadEfg = _ssHomeTrails ? _ssSc.away.efgBox : _ssSc.home.efgBox;
-                    var _ssLeadBand = _ssLeadEfg != null ? efgTier(_ssLeadEfg, currentPeriod).tier : null;
-                    var _ssVar = _ssHomeTrails ? _ssSc.away.vPct : _ssSc.home.vPct;
-                    var _ssGap = (_ssLeadWP != null && _ssTrailWP != null) ? (_ssTrailWP - _ssLeadWP) : null;
-                    var _ssImplied = (_ssTrailML != null) ? americanToImplied(_ssTrailML) : null;
-                    // Tier ladder (SWEETSPOT_TIER_BC_SPEC.md): A pristine → B one-soft/B3 →
-                    // ledger shapes. Pure classifier; the snapshot records the SHAPE regardless
-                    // of feature flags (same compute-vs-fire separation as the original A).
-                    var _ssLad = ssClassifyTier(_ssEdge, currentPeriod, _ssDeficit, _ssCollT, _ssFadeT, _ssClass);
-                    var _ssTier = _ssLad.tier;
-                    var _ssFired = _ssTier != null;
+                const _ssCfg = ssCfg(league);
+                const _ssHp = Number(ind.homePts) || 0, _ssAp = Number(ind.awayPts) || 0;
+                const _ss = ssComputeShape({ league: league, standings: ssStandings, summary: summary, pbp: game._bdlPbp,
+                  hA: hA, aA: aA, hPts: _ssHp, aPts: _ssAp, period: currentPeriod, clock: clock, odds: odds });
+                if (_ss) {
+                    // Destructured aliases — the 2b fire block below is unchanged in form.
+                    var _ssHomeTrails = _ss.homeTrails, _ssLeadAl = _ss.leadAl, _ssTrailAl = _ss.trailAl, _ssDeficit = _ss.deficit;
+                    var _ssLeadWP = _ss.leadWP, _ssTrailWP = _ss.trailWP, _ssGap = _ss.gap, _ssLeadEfg = _ss.leadEfg, _ssLeadBand = _ss.leadBand;
+                    var _ssVar = _ss.varShare, _ssClass = _ss.cls, _ssFadeT = _ss.fadeT, _ssCollT = _ss.collT;
+                    var _ssTrailML = _ss.trailML, _ssImplied = _ss.implied, _ssEdge = _ss.edge;
+                    var _ssLad = _ss.ladder, _ssTier = _ss.tier, _ssFired = _ss.fired;
 
                     await sql`UPDATE snapshots SET
                       ss_leader_alias = ${_ssLeadAl}, ss_leader_wp = ${_ssLeadWP}, ss_trailer_wp = ${_ssTrailWP},
                       ss_quality_gap = ${_ssGap}, ss_leader_efg = ${_ssLeadEfg != null ? Math.round(_ssLeadEfg*10)/10 : null},
                       ss_leader_efg_band = ${_ssLeadBand}, ss_variance_share = ${_ssVar != null ? _ssVar : null},
                       ss_lead_class = ${_ssClass}, ss_fade_tier = ${_ssFadeT}, ss_collapse_tier = ${_ssCollT},
-                      ss_collapse_true = ${_ssPr.pPoint != null ? _ssPr.pPoint : null},
+                      ss_collapse_true = ${_ss.pPoint},
                       ss_line_used = ${_ssTrailML != null ? parseInt(_ssTrailML) : null}, ss_implied = ${_ssImplied},
                       ss_edge = ${_ssEdge != null ? Math.round(_ssEdge*100)/100 : null},
-                      ss_kelly_size = ${_ssEv && _ssEv.size != null ? Math.round(_ssEv.size*10000)/10000 : null},
+                      ss_kelly_size = ${_ss.kelly != null ? Math.round(_ss.kelly*10000)/10000 : null},
                       ss_alert_tier = ${_ssTier}, ss_alert_fired = ${_ssFired}
                       WHERE game_id = ${game.id} AND period = ${currentPeriod} AND clock = ${clock} AND home_pts = ${_ssHp} AND away_pts = ${_ssAp}`;
-                    log(`${matchup}: SS — ${_ssLeadAl} +${_ssDeficit} | collapse=${_ssCollT} fade=${_ssFadeT} class=${_ssClass} band=${_ssLeadBand||'—'} edge=${_ssEdge != null ? _ssEdge.toFixed(1) : '—'} tier=${_ssTier || 'none'}`);
+                    log(`${matchup}: SS[${league}] — ${_ssLeadAl} +${_ssDeficit} | gap=${_ssGap != null ? _ssGap.toFixed(3) : '—'} efg=${_ssLeadEfg != null ? _ssLeadEfg.toFixed(1) : '—'} collapse=${_ssCollT || '—'} fade=${_ssFadeT || '—'} class=${_ssClass} band=${_ssLeadBand||'—'} edge=${_ssEdge != null ? _ssEdge.toFixed(1) : '—'} tier=${_ssTier || 'none'}${_ssLad.ledgerSub ? ' ledger=' + _ssLad.ledgerSub : ''}`);
 
-                    // ── 2b: fire the tier ladder — A live (WNBA_SS_ALERT_ON) · B behind
-                    // WNBA_SS_B_ON · ledger rows behind WNBA_SS_LEDGER_ON · WATCHLIST behind
-                    // WNBA_SS_WATCHLIST_ON. WATCHLIST is independent (band entry: Q2/Q3
-                    // price-blind as before, Q1 behind the AMENDMENT 3 -150 price gate via
-                    // ssWatchGate); fired AFTER A/B so same-poll A/B suppresses it.
+                    // ── 2b: fire the tier ladder — switches are _ssCfg.tiers (WNBA: the env flags,
+                    // byte-equivalent · NBA: A/B hard-off, WATCHLIST/LEDGER behind NBA_SS_*_ON).
+                    // WATCHLIST is independent (WNBA band entry: Q2/Q3 price-blind, Q1 behind the
+                    // AMENDMENT 3 -150 price gate via ssWatchGate · NBA: ssNbaWatchCue, Amendment 1);
+                    // fired AFTER A/B so same-poll A/B suppresses it.
                     // Q1 B shapes failing the price gate push nothing AND insert nothing —
                     // the (game_id, subtype) dedup slot stays free so a later in-band B fire
                     // pushes normally; snapshots already carry the shape (compute-vs-fire).
                     var _ssQ1BSupp = _ssTier === 'B' && currentPeriod === 1 && !ssQ1PriceOk(_ssTrailML);
                     if (_ssQ1BSupp) log(`${matchup}: SS — Q1 B price-held (ML ${_ssTrailML != null ? _ssTrailML : 'none'}, gate -150) — no push, no row, dedup slot free`);
-                    var _ssDoFire = ((_ssTier === 'A' && WNBA_SS_ALERT_ON) || (_ssTier === 'B' && WNBA_SS_B_ON)) && !_ssQ1BSupp;
-                    var _ssDoLedger = !_ssTier && _ssLad.ledgerSub != null && WNBA_SS_LEDGER_ON;
-                    var _ssDoWatch = WNBA_SS_WATCHLIST_ON && ssWatchGate(currentPeriod, _ssGap, _ssDeficit, _ssTrailML);
+                    var _ssDoFire = ((_ssTier === 'A' && _ssCfg.tiers.A) || (_ssTier === 'B' && _ssCfg.tiers.B)) && !_ssQ1BSupp;
+                    var _ssDoLedger = !_ssTier && _ssLad.ledgerSub != null && _ssCfg.tiers.LEDGER;
+                    var _ssDoWatch = _ssCfg.tiers.WATCHLIST && (_ssCfg.watchModel === 'nba'
+                      ? ssNbaWatchCue(_ss, currentPeriod, _ssCfg.cue)
+                      : ssWatchGate(currentPeriod, _ssGap, _ssDeficit, _ssTrailML));
                     if (_ssDoFire || _ssDoLedger || _ssDoWatch) {
                       var _ssLeadRec = ssStandings[_ssLeadAl] || {}, _ssTrailRec = ssStandings[_ssTrailAl] || {};
                       var _ssBestBook = _ssHomeTrails ? (odds && odds.homeMLBook) : (odds && odds.awayMLBook);
@@ -9338,31 +9462,41 @@ export default async function(req) {
                       // DS v1 C1 — fire-time fuel/temp read from the same reliable box the eFG
                       // gate uses (v2-corrected pot preferred). Stamped into player_ctx_json at
                       // fire; consumed by narration blocks, FUEL PULSE, and the CASH surge watch.
+                      // WNBA-calibrated (bands) → computed only when _ssCfg.fuelTemp.
                       var _ssFuelTemp = null;
-                      try {
-                        var _ftBox = function(st, v2) { st = st || {}; return {
-                          fgm: st.field_goals_made, fga: st.field_goals_att, fg3m: st.three_points_made,
-                          ftm: st.free_throws_made, to: st.turnovers != null ? st.turnovers : st.total_turnovers,
-                          pot: (v2 && v2.pot != null) ? v2.pot : st.points_off_turnovers }; };
-                        var _ftL = _ftBox(_ssHomeTrails ? summary.away?.statistics : summary.home?.statistics,
-                                          _ssHomeTrails ? game._wnbaV2?.away : game._wnbaV2?.home);
-                        var _ftT = _ftBox(_ssHomeTrails ? summary.home?.statistics : summary.away?.statistics,
-                                          _ssHomeTrails ? game._wnbaV2?.home : game._wnbaV2?.away);
-                        _ftL.vShare = _ssVar != null ? _ssVar : null;
-                        _ssFuelTemp = computeFuelTemp(_ftL, _ftT, currentPeriod);
-                      } catch (e) { _ssFuelTemp = null; }
+                      if (_ssCfg.fuelTemp) {
+                        try {
+                          var _ftBox = function(st, v2) { st = st || {}; return {
+                            fgm: st.field_goals_made, fga: st.field_goals_att, fg3m: st.three_points_made,
+                            ftm: st.free_throws_made, to: st.turnovers != null ? st.turnovers : st.total_turnovers,
+                            pot: (v2 && v2.pot != null) ? v2.pot : st.points_off_turnovers }; };
+                          var _ftL = _ftBox(_ssHomeTrails ? summary.away?.statistics : summary.home?.statistics,
+                                            _ssHomeTrails ? game._wnbaV2?.away : game._wnbaV2?.home);
+                          var _ftT = _ftBox(_ssHomeTrails ? summary.home?.statistics : summary.away?.statistics,
+                                            _ssHomeTrails ? game._wnbaV2?.home : game._wnbaV2?.away);
+                          _ftL.vShare = _ssVar != null ? _ssVar : null;
+                          _ssFuelTemp = computeFuelTemp(_ftL, _ftT, currentPeriod);
+                        } catch (e) { _ssFuelTemp = null; }
+                      }
+                      // Amendment 1 — NBA stale-price flag: observed ML vs ESPN live fair for the TRAILER.
+                      // undefined (not null) for leagues with full price fields so their stamp JSON is unchanged.
+                      var _ssPriceStale = _ssCfg.priceFields === 'line_only'
+                        ? ssPriceStale(_ssTrailML, _ssHomeTrails ? espnWP?.home : espnWP?.away, _ssCfg.staleGapPp)
+                        : undefined;
                       var _ssPayload = {
                         period: currentPeriod, clock: clock,
                         leaderAl: _ssLeadAl, trailerAl: _ssTrailAl, leaderWP: _ssLeadWP, trailerWP: _ssTrailWP, gap: _ssGap,
                         leaderW: _ssLeadRec.w, leaderL: _ssLeadRec.l, trailerW: _ssTrailRec.w, trailerL: _ssTrailRec.l,
                         leaderEfg: _ssLeadEfg, leaderBand: _ssLeadBand, varShare: _ssVar, leadClass: _ssClass,
-                        fadeTier: _ssFadeT, collapseTier: _ssCollT, collapseTrue: _ssPr.pPoint, pLow: _ssPr.pLow, pHigh: _ssPr.pHigh,
+                        fadeTier: _ssFadeT, collapseTier: _ssCollT, collapseTrue: _ss.pPoint, pLow: _ss.pLow, pHigh: _ss.pHigh,
                         bestML: _ssTrailML, bestBook: _ssBestBook, consensusML: _ssConsML, impliedBest: _ssImplied,
-                        edge: _ssEdge, kellySize: (_ssEv && _ssEv.size != null ? _ssEv.size : null),
+                        edge: _ssEdge, kellySize: _ss.kelly,
                         margin: _ssDeficit, books: (odds && odds.books) || 0,
                         fuelTemp: _ssFuelTemp, // DS v1 C1 — fire-time read, stamped by fireSweetSpotAlert
+                        priceStale: _ssPriceStale, // Amendment 1 — NBA only; stamped by fireSweetSpotAlert
                       };
-                      var _ssPctx = { modelSummary: modelSummary, pbp: game._bdlPbp };
+                      // §4c player-context digest is WNBA-calibrated (carrier baselines) → cfg.pctx.
+                      var _ssPctx = _ssCfg.pctx ? { modelSummary: modelSummary, pbp: game._bdlPbp } : null;
                       if (_ssDoFire || _ssDoLedger) {
                         await fireSweetSpotAlert(sql, game, league, hA, aA, Object.assign({}, _ssPayload, {
                           subtype: _ssDoFire ? (_ssTier === 'A' ? 'EFG_FADE' : 'EFG_FADE_SOFT') : _ssLad.ledgerSub,
@@ -9375,7 +9509,6 @@ export default async function(req) {
                         }), _ssPctx);
                       }
                     }
-                  }
                 }
               } catch (e) { log(`${matchup}: sweetspot compute non-fatal: ${e.message}`); }
             }

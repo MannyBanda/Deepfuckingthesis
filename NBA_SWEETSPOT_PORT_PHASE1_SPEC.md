@@ -1,6 +1,6 @@
 # NBA SWEET SPOT PORT — Phase 1 Spec (gates + snapshot columns, store-only)
 
-**Parent:** `NBA_SWEETSPOT_PORT_SPEC.md` v1 §4 Phase 1 · **Date:** 2026-11-19 · **PM go:** "Port it regardless. Go ahead and spec" · **Status:** SPEC — nothing built.
+**Parent:** `NBA_SWEETSPOT_PORT_SPEC.md` v1 §4 Phase 1 · **Date:** 2026-11-19 · **PM go:** "Port it regardless. Go ahead and spec" → "Go ahead and handle 1 and 1b" · **Status:** BUILT 2026-11-19 (Phase 1 + Amendment 1 / Phase 1b in one commit; WNBA goldens pinned first in `385b257`). Flags `NBA_SS_WATCHLIST_ON` / `NBA_SS_LEDGER_ON` ship OFF.
 
 **Goal:** the Sweet Spot compute core runs on every NBA snapshot and writes the `ss_*` columns — quality gap, leader/trailer as-of win%, leader eFG, variance share, lead class — exactly as it does for the WNBA, with every WNBA-calibrated piece (eFG bands, comeback priors, tier ladder, edge/Kelly) **null for NBA** and every fire path **off by config**. Zero Anthropic calls. Zero pushes. Zero `sweetspot_alerts` rows. WNBA byte-identical, fixture-pinned.
 
@@ -134,3 +134,11 @@ NBA eFG bands by period, NBA comeback priors, the GAP_BASE/WATCHLIST ledgers, th
 - **Fixtures added:** cue/ledger predicates (positive, each clause negative), `ssComposePushNba` copy pins incl. the stale suffix, stale-flag arithmetic, config pins for the two new flags, grep gate (no `_isPaused` in the SS block/fire path).
 - **Verify on the next slate with flags on:** `get_sweetspot_alerts&league=nba` shows WATCHLIST rows with `ntfy_sent=true` and GAP_BASE rows with `ntfy_sent=false`; the push body matches the composer; `get_alerts&league=nba` still only `PAUSED_LOG`; next morning `ss_ledger_summary&league=nba` has resolved counts.
 - **Size:** ~120 lines on top of Phase 1 (predicates 25 · composer 25 · fireSweetSpotAlert config branches 15 · resolver 5 · fixtures 50).
+
+### A1.3 Build notes (as shipped)
+- `SS_CFG[league].tiers` keys are `A / B / WATCHLIST / LEDGER` — `LEDGER` (not `GAP_BASE` as §2.5 wrote) because the WNBA flag it mirrors, `WNBA_SS_LEDGER_ON`, gates **both** ledger subtypes (GAP_BASE and Q4_COLLAPSE). Same semantics, honest name.
+- Config also carries the per-league fire-path switches the fire function reads: `pushComposer`, `dashUrl`, `teamCtx` (gates the killer/lane stamps AND the profile line — the WNBA profile map shares aliases with the NBA), `fuelTemp`, `pctx`, `narration`, plus `ledgerModel` / `watchModel` (which GAP_BASE / WATCHLIST predicate) and, NBA only, `cue` + `staleGapPp`.
+- `ssComputeShape` resolves the NBA `GAP_BASE` predicate into `ladder.ledgerSub` itself (`ledgerModel: 'nba'`), so the 2b fire block's `_ssDoLedger` line is unchanged in form for both leagues.
+- `WNBA_SS_ALERT_ON` keeps a third, pre-existing consumer: the A-tier repush sweep (`ssRepushSweep`, `league='wnba'`-literal SQL). The grep gate pins 3 for that flag, 2 for the other four.
+- Stale-price flag stamps `player_ctx_json.priceStale = { stale, implied, espnWp }` (no new column); the WNBA stamp JSON is byte-identical (key absent).
+- Pre-existing, untouched: `research/team_ctx_fixtures.mjs` is 28/30 on `main` before and after this change (copy drift in the full block — not this work).
