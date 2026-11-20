@@ -845,6 +845,24 @@ exports.handler = async (event) => {
       return { statusCode: 200, headers, body: JSON.stringify({ sweetspot_alerts: rows }) };
     }
 
+    // ── NBA_SWEETSPOT_DASHBOARD_SPEC §3.1 — the engine's own records (standings_cache,
+    // written solely by poll-live-bdl fetchStandingsCache). ONE definition of "record" for
+    // the engine's quality gap AND the dashboard's badges / pregame read (the elite-definition
+    // lesson: never two sources for one consumer fact). Read-only; age_s = oldest row's age.
+    if (action === 'get_standings') {
+      const league = params.league || 'nba';
+      const rows = await sql`SELECT team_alias, wins, losses, updated_at FROM standings_cache WHERE league = ${league}`;
+      const standings = {};
+      let oldest = null;
+      for (const r of rows) {
+        standings[r.team_alias] = { w: Number(r.wins) || 0, l: Number(r.losses) || 0, updated_at: r.updated_at };
+        const t = r.updated_at ? new Date(r.updated_at).getTime() : null;
+        if (t != null && (oldest == null || t < oldest)) oldest = t;
+      }
+      const age_s = oldest == null ? null : Math.round((Date.now() - oldest) / 1000);
+      return { statusCode: 200, headers, body: JSON.stringify({ standings, count: rows.length, age_s }) };
+    }
+
     // ── SWEETSPOT_OPS_SPEC.md §4 — one-call graduation audit (D-5 bar: n>=30, |delta|<=5pp) ──
     if (action === 'ss_ledger_summary') {
       const league = params.league || 'wnba';
