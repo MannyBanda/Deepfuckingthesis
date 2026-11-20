@@ -10484,10 +10484,10 @@ function renderCard(game){
     <div class="chr">${state==='LIVE'?'<div class="ld"></div>':''}<span class="pb">${periodLabel}${game.clock?' '+game.clock:''}</span></div>
   </div>
   <div class="sr">
-    <div><div class="srt" style="color:${getTeamColor(aA)}">${esc(aA)}${standingsCache[aA]?'<span style="font-size:8px;color:var(--amber);font-weight:600;margin-left:3px">('+ordinal(standingsCache[aA].confRank)+')</span>':''}</div>
+    <div><div class="srt" style="color:${getTeamColor(aA)}">${esc(aA)}${standingsCache[aA]&&standingsCache[aA].confRank?'<span style="font-size:8px;color:var(--amber);font-weight:600;margin-left:3px">('+ordinal(standingsCache[aA].confRank)+')</span>':''}</div>
     <div><span class="srs">${state==='PRE'?'—':game.awayPoints??'—'}</span>${game.summary?.away?.bonus?'<span class="bonus-tag">BONUS</span>':''}</div></div>
     <span class="sr-sep">–</span>
-    <div style="text-align:right"><div class="srt" style="color:${getTeamColor(hA)}">${esc(hA)}${standingsCache[hA]?'<span style="font-size:8px;color:var(--amber);font-weight:600;margin-left:3px">('+ordinal(standingsCache[hA].confRank)+')</span>':''}</div>
+    <div style="text-align:right"><div class="srt" style="color:${getTeamColor(hA)}">${esc(hA)}${standingsCache[hA]&&standingsCache[hA].confRank?'<span style="font-size:8px;color:var(--amber);font-weight:600;margin-left:3px">('+ordinal(standingsCache[hA].confRank)+')</span>':''}</div>
     <div>${game.summary?.home?.bonus?'<span class="bonus-tag">BONUS</span>':''}<span class="srs">${state==='PRE'?'—':game.homePoints??'—'}</span></div></div>
   </div>`;
 
