@@ -246,3 +246,81 @@ One commit: A2.3 (bdl.html composer keys) → v3 block + mounts + CSS → harnes
 **Confirmed NOT portable (unchanged from N1):** EK chip · archetype · inflation badge · vs-top/vs-rest splits · L5 HOT/COLD tags · fuel/temp block · HOLDER READ · STICKY · caution kernels · SEASON26 panel · BRIEFING narration · eFG period-band colors · killer-cell candidate on the GAP line. Pills carry no SS markers in the WNBA either — nothing to port. Squeeze/JUICE is WNBA-only server-side and not a dashboard item.
 
 **Fixture additions:** `vShareTier` byte-equal to wnba-bdl.html; eFG color rule pinned at exactly 57; ctx strip pins (no standings / <5 GP / below bar / qualified both directions / H2H present-absent / cue count); fire-time line pins (present / absent / null fields); D3 golden extended with the four diffs (hand-computed from the committed finals: e.g. ATL@OKC TO/FTA/OREB from the stored boxes). Size: +~90 lines v3, +~25 lines server, +~40 harness.
+
+---
+
+## Amendment 3 — FINAL-state FIRE REVIEW + the lead-taken verdict (2026-11-19 night, after the first live slate)
+
+**PM ask:** "In the wnba app we show the final state of the game so I can analyze and research post game too, I need to be able to do so with the nba app. Not sure if we show the sweet spot sections at fire time, you'll have to research that one." Nothing in this amendment is built.
+
+### A3.1 Research — what a FINAL card shows today, both apps (verified in source + rendered from live data)
+
+**`v3.html` (shipped `203fe7d`) on tonight's four finals** — the box composes from the **last snapshot** (Q4 0:01–0:21) plus one fire-time line. Literal render, `research/2026-11-19_v3_final_card_render_OUTPUT.md` (regenerable):
+
+| game | chip | verdict head (from the last snapshot) | fire line (A2.8d) | price line |
+|---|---|---|---|---|
+| NYK@MIN (fire lost) | `SS FINAL ✗` | `REVIEW — MIN is the better team (.16 quality gap) down 3; the leader was shooting hot when the cue fired… Final 102-99 — MIN did not come back.` | `cue fired Q2 12:00 · down 7 · gap .16 · leader eFG 85%` | `engine saw MIN +1400 (implied 7%) · ESPN fair 0%` |
+| POR@MIL (fire won) | `SS FINAL ✓` | `NO SPOT — quality gap (-0.58) is below the review line (.15). Anything taken here is the speculative stream — size like it. Final 124-114 — POR completed the comeback.` | `cue fired Q2 4:23 · down 4 · gap .58 · leader eFG 59%` | `engine saw MIL +900 (implied 10%) · ESPN fair 0%` |
+| LAC@SAS (fire won) | `SS FINAL ✓` | `NO SPOT — quality gap (-0.49) is below the review line (.15)… Final 124-112 — SAS completed the comeback.` | `cue fired Q3 9:48 · down 1 · gap .49 · leader eFG 61%` | `engine saw LAC +1200 (implied 8%) · ESPN fair 0%` |
+| GSW@MEM (no row) | `SS FINAL ✗` | `NO SPOT — quality gap (-0.20) is below the review line (.15)… Final 126-98 — GSW did not come back.` | — | `no line observed` |
+
+Three defects, one root cause:
+1. **Both winning fires read `NO SPOT` under a `FINAL ✓` chip.** Once the watch trailer leads, the last snapshot's leader/trailer flip, the stamped gap goes negative, the row's `rowDef` leaves the 1–9 band and the composer falls through to the current-state V4 — correct fall-through logic (D-7/D-8), wrong moment for a closed card. This is the same mechanism as the open live item ("watch trailer has taken the lead renders NO SPOT with a negative gap") — the FINAL card is its post-game face.
+2. **The price line on a FINAL card is the garbage-time stamp** (`MIN +1400 · ESPN fair 0%`) — the fire price (`+180 · implied 36% · ESPN 32%`) appears nowhere on the card; it exists only in the push body and the row.
+3. **The gate line describes the final-state leader** (`GAP -0.58 below bar · LDR POR .643 / TRL MIL .067`), and `down 3` in the NYK@MIN head is the final margin, not the fire deficit (7).
+
+**What IS fire-time today:** the A2.8d line only (subtype · Q/clock · deficit · gap · leader eFG). Not on the card: price at fire, ESPN fair at fire, lead class / variance share at fire, the second moment when GAP_BASE and WATCHLIST fired apart (POR@MIL: gap spot Q2 6:36 down 1, cue Q2 4:23 down 4), whether the trailer took the lead, and the resolver's verdict.
+
+**`wnba-bdl.html` on a closed card — same architecture, same answer to the PM's question:** gate line / CELL READ / chips do **not** render when closed (`gm.status==='inprogress'` guard); the VERDICT head is the last snapshot (late-Q4 V6/VX copy) with V8 `Final A-B — X completed the comeback` appended; fire-time facts live in two sidebars — SEASON CONTEXT → `FIRE-TIME REVIEW — WATCHLIST fired Q2 12:00` (deficit, gap, leader wp, leader eFG; **collapsed by default**) and FUEL+TEMP → `AT FIRE (Q2 4:23): EARNED · trailer cold` — plus the fired narration in the sheet's BRIEFING (rolls off after ~50 league rows). Evidence lines read the final box. Price at fire, ESPN at fire, lead class, variance share, the other rows and `resolved/trailer_won` are not on the WNBA card either. **Verdict on the research question: neither app shows the Sweet Spot box at fire time; both show a late-Q4 read with a fire-time sidebar.**
+
+**`bdl.html` / `v3.html` legacy layers already rebuild the final state** (BDL box by date, full PBP → scoring comp, `history` snapshots → `cs._allSnapshots`, server context; `dateOffset` reopens prior slates up to 5 days back). Post-game research on everything except the Sweet Spot layer works now.
+
+### A3.2 What changes — the box has a FINAL mode: `ssFireReviewNba` (core, byte-equal) + `renderSSFireReviewNba` (per file)
+On a FINAL card with ≥1 non-GAME_BRIEF row, the verdict box renders **FIRE REVIEW** from the game's rows instead of the last snapshot: gate line, cue read, price line and the current-state verdict are **not rendered** (they describe garbage time); the FORWARD LEDGER panel (open), the evidence lines (relabeled `FINAL BOX`) and the as-of stamp (now `fired Q2 12:00 → final`) stay. The v1 V8 render remains the **transition** state (closed, rows not yet in cache) and for **no-row** finals.
+
+**Data — zero new endpoints, zero new fetches:** rows from the existing `_ssNbaRows` session cache (`get_sweetspot_alerts&league=nba&limit=400`, refreshed on FINAL by `fetchSSStateNba`) filtered by `game_id` and `alert_subtype !== 'GAME_BRIEF'`; snapshots from `cs._allSnapshots` (already hydrated); final score/winner from `_ssNbaState[id].data.game`. `resolved` / `trailer_won` arrive with the rows refresh after the 06:45 UTC sweep.
+
+**Render, one block per fire moment in fire order** (rows sharing `period`+`clock`+`deficit` collapse into one block — the WATCHLIST/GAP_BASE twin):
+```
+FIRE REVIEW — WATCHLIST + GAP_BASE fired Q2 12:00
+MIN (.733) down 7 to NYK (.571) · gap .16 qualified
+leader eFG 85% · lead: variance-built (V 58%)
+book MIN +180 (implied 36%, consensus +160) · ESPN fair 32% · price clean
+FINAL 102-99 — MIN did not come back · high-water after fire −3 (never led) [snapshots, ~60s grain]
+nightly sweep: pending                         ← after the sweep: resolved ✓ · trailer lost
+```
+```
+FIRE REVIEW — 2 moments
+① GAP_BASE Q2 6:36 (silent ledger row): POR (.643) down 1 to MIL (.067) · gap .58 STRONG · leader eFG 55% (not hot) · lead: too thin to read · book POR −260 (implied 72%) · ESPN 74% · clean
+② WATCHLIST Q2 4:23 (pushed): POR (.643) down 4 to MIL (.067) · gap .58 STRONG · leader eFG 59% · lead: variance-built (V 56%) · book POR −175 (implied 64%, consensus −235) · ESPN 62% · clean
+FINAL 124-114 — POR completed the comeback · high-water after fire +12 · nightly sweep: pending
+```
+- Win%s are the row's stamped `trailer_wp`/`leader_wp` (as-of at fire — the only honest record on a closed card; current standings are post-game). W-L is not on the row and is not reconstructed.
+- `book` = row `line_used` (+ `consensus` when it differs); `implied` and `ESPN fair` from `player_ctx_json.priceStale.{implied, espnWp}` (server stamps, not recomputed); `price clean` / `⚠ price stale (book vs ESPN >25pp — stamp may be pregame)` from `priceStale.stale`. `line_used` null → `no book line at fire`.
+- `lead:` via mirrored `ssLeadClassDisplay(lead_class)` + `(V NN%)` from `variance_share`; `deficit ≤ 2 → too thin to read`.
+- `high-water after fire` = max trailer margin over snapshots after the fire moment (`period`,`clock` ordering), `(never led)` when ≤ 0, `(took the lead)` when > 0; labeled `[snapshots, ~60s grain]`. An outcome fact, not a gate (N5). Omitted when `cs._allSnapshots` is empty.
+- Outcome by `game.winner` (never by snapshot points — the WNBA V8 rule). R2: `completed the comeback` / `did not come back`; no bare "converted".
+- Header chip on FINAL unchanged (`SS FINAL ✓/✗` by the anchored row's trailer); `FINAL` (dim) on no-row games.
+- **No-row FINAL card:** keep V8 but replace the current-state head: `NO CUE — nothing fired this game. Last read Q4 0:10: gap −.20 runs the wrong way (leader MEM is the better team). Final 126-98.` — so "why nothing fired" is answerable from the card.
+
+### A3.3 The live half — V9 LEAD TAKEN (folds the open item; same root cause)
+Before V1 in the priority chain: `anc && rowDef != null && rowDef < 0` (the anchored watch trailer now **leads**) → **V9** `LEAD TAKEN — POR (the watch trailer) leads by 6 after being down 4 at the cue. The cue did its job; cash-out territory — your read decides.` (green). Chip `SS LEAD TAKEN`. Persists while the row trailer leads; if the lead is lost again, V1/V3 (in band) or V6/V7 resume as today. V8 on close still appends the final. Gate line when the stamped gap is negative: `GAP −.58 (runs the wrong way — leader is the better team)` replaces `below bar` (the open "wrong way" wording). Both are composer changes inside `SS_NBA_CORE` → byte-equal to both pages by the harness.
+
+### A3.4 Cascading implications
+- Reads only; no server change; `fetchSSStateNba` freeze rule unchanged. The rows cache already refreshes on FINAL (`ssNbaEnsureRows(true)` at close), which is exactly when FIRE REVIEW needs it.
+- `cs._allSnapshots` is filtered to `floor_score != null` — fine for Q2+ fires; a fire whose later snapshots lack a floor degrades to "high-water —".
+- Prior-slate browsing (`dateOffset<0`): rows are keyed by `game_id` and the 400-row cache covers ~2 months at the current fire rate; `cs._allSnapshots` hydrates for FINAL cards already.
+- `bdl.html` gets the same core change (byte-equal) and its own 20-line render; behavior identical.
+- WNBA untouched. **Reverse-parity candidate (D-6):** the same FIRE REVIEW would make the WNBA closed card's primary read the fire moment instead of the late-Q4 verdict — its `fire_review`/`fuel_at_fire` sidebars (plus fuel/temp AT FIRE and the EK chip, which the NBA form lacks) would fold into it. Separate go; amendment on `SWEETSPOT_VERDICT_STRIP_SPEC`.
+- Dead code: none; the A2.8d fire line is subsumed by FIRE REVIEW on FINAL cards and stays on LIVE cards.
+
+### A3.5 Fixtures (extend `research/ss_nba_dashboard_fixtures.mjs`)
+Pure `ssFireReviewNba(rows, snaps, game)` pinned on tonight's four games from committed inputs (`research/fixtures_nba_fire_review_2026-11-19.json`: the live rows + `history` snapshots + game rows, pulled once — regenerable): NYK@MIN (twin at one moment, lost, never led, +180 clean), POR@MIL (two moments, won, high-water +12, minus-money), LAC@SAS (twin, down 1 → "too thin to read", −430), GSW@MEM (no row → NO CUE head with wrong-way gap); synthetic: stale-price row, resolved row (`trailer_won` true/false), null `line_used`, empty snapshots. V9 pins: trailer leads (live), lead lost again, V8 after V9. Wrong-way gate-line pin. Cross-file byte-equality and the §3.6/A2.6 grep gates unchanged; one new gate: FIRE REVIEW reads `_ssNbaRows`, not `fire_review`.
+
+### A3.6 Size
+`SS_NBA_CORE` +~90 lines (fire-review composer 60 · V9 + wrong-way 15 · high-water 15), per-file render +~30 each (v3.html, bdl.html), harness +~70. One commit, both pages, reversible with it.
+
+### A3.7 Decisions for the PM (added to §7)
+- **D-5 FINAL mode:** FIRE REVIEW **replaces** the current-state read on FINAL cards (recommended — the fire moment is the research object) **or** renders beneath a frozen last-read verdict (WNBA-style)?
+- **D-6 reverse parity:** port FIRE REVIEW to `wnba-bdl.html` closed cards after this ships — yes / no / later?
+- **D-7 V9 copy:** `LEAD TAKEN … cash-out territory — your read decides` (recommended, matches the stated cash-out trade) or a neutral `LEAD TAKEN — the watch trailer now leads by N`?
