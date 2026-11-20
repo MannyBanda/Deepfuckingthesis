@@ -1212,7 +1212,8 @@ function ssGateLineNba(st){
     var gs=ag==null?'—':(ssGapFmt(ag)+' (direction set by the next lead)');
     return 'TIED · gap '+gs+' · '+(st.awayAlias||'AWAY')+' '+ssWpFmt(st.awayWp)+' / '+(st.homeAlias||'HOME')+' '+ssWpFmt(st.homeWp)+' · LEAD: —';
   }
-  var gapSeg=g==null?'GAP —':'GAP '+ssGapFmt(g)+' '+ssGapTierWord(g);
+  // A3.3: a negative stamped gap means the BETTER team leads — say so instead of "below bar"
+  var gapSeg=g==null?'GAP —':(g<0?'GAP -'+ssGapFmt(-g)+' (runs the wrong way — leader is the better team)':'GAP '+ssGapFmt(g)+' '+ssGapTierWord(g));
   var ldrSeg='LDR '+(st.leaderAlias||'?')+' '+ssWpFmt(st.leaderWp)+' / TRL '+(st.trailerAlias||'?')+' '+ssWpFmt(st.trailerWp);
   var leadSeg;
   if(st.margin!=null&&Math.abs(Number(st.margin))<=2)leadSeg='LEAD: too thin to read';
@@ -1270,11 +1271,13 @@ function ssPriceLineNba(st){
   return out;
 }
 
-// ── VERDICT (spec §3.2 reduced V-table + A1.2 VT) — PURE, TOKEN-FREE (A2.3: returns a color KEY —
-// green | amber | blue | coral | dim | secondary — each file maps keys to its own tokens). First match
-// wins: V1 WATCHLIST row in band -> V3 GAP_BASE row in band -> V0 pre-Q2 -> VT tied -> V4 below bar ->
-// V6 out of band pre-Q4 -> V7 Q4 -> VX forming. Row anchoring (D-7/D-8) and the V8 freeze are copied
-// as LOGIC from the WNBA composer; the copy is NBA's. Trap: T5 only (NBA-evidenced).
+// ── VERDICT (spec §3.2 reduced V-table + A1.2 VT + A3.3 V9) — PURE, TOKEN-FREE (A2.3: returns a color
+// KEY — green | amber | blue | coral | dim | secondary — each file maps keys to its own tokens). First
+// match wins: V9 anchored trailer now LEADS -> V1 WATCHLIST row in band -> V3 GAP_BASE row in band ->
+// V0 pre-Q2 -> VT tied -> V4 below bar / wrong way -> V6 out of band pre-Q4 -> V7 Q4 -> VX forming.
+// Row anchoring (D-7/D-8) and the V8 freeze are copied as LOGIC from the WNBA composer; the copy is
+// NBA's. V8 with no row = NO CUE + the last read (A3.2). Trap: T5 only (NBA-evidenced).
+// Optional inputs: st.clock (last read, for NO CUE), st.fireDeficit (fire_review.deficit, for V9).
 function ssVerdictComposeNba(st){
   st=st||{};
   var p=Number(st.period)||0;
@@ -1298,11 +1301,16 @@ function ssVerdictComposeNba(st){
     rowDef=lPts-tPts;
   }else if(anc){rowDef=deficit;ancTrail=ancTrail||trailer;ancLead=ancLead||leader;}
   var rowInBand=(rowDef!=null&&rowDef>=1&&rowDef<=9);
+  var rowLeads=(anc!=null&&rowDef!=null&&rowDef<0); // A3.3: the anchored trailer now LEADS (the cash-out moment)
   var gap=(st.gap==null||isNaN(st.gap))?null:Number(st.gap);
   var gapS=ssGapFmt(gap);
   var gbN=st.gapBaseN!=null?st.gapBaseN:0;
+  var fd=(st.fireDeficit!=null&&!isNaN(Number(st.fireDeficit)))?Number(st.fireDeficit):null;
   var v,text,color;
-  if(subs.indexOf('WATCHLIST')>-1&&rowInBand){v='V1';color='blue';
+  if(rowLeads){v='V9';
+    var isWatch=anc.subtype==='WATCHLIST';color=isWatch?'green':'secondary';
+    text='LEAD TAKEN — '+ancTrail+' (the '+(isWatch?'watch':'gap-spot')+' trailer) leads by '+(-rowDef)+(fd!=null?' after being down '+fd+' at the cue':'')+'. '+(isWatch?'The cue did its job; cash-out territory — your read decides.':'Silent ledger row — it resolves on the final. Not a validated bet.');}
+  else if(subs.indexOf('WATCHLIST')>-1&&rowInBand){v='V1';color='blue';
     text='REVIEW — '+ancTrail+' is the better team ('+(gapS||'?')+' quality gap) down '+rowDef+'; the leader was shooting hot when the cue fired. Not a bet call; your read decides. See the push.';}
   else if(subs.indexOf('GAP_BASE')>-1&&rowInBand){v='V3';color='secondary';
     text='GAP SPOT, LOGGING — gap qualifies, leader not hot. Ledger is collecting this shape ('+gbN+'/'+SS_NBA_SWITCH_N+' resolved). Not a validated bet.';}
@@ -1317,7 +1325,8 @@ function ssVerdictComposeNba(st){
       text='TIED — gap ('+(ag!=null?ssGapFmt(ag):'no standings gap')+') is below the review line either way.';
     }}
   else if(gap==null||gap<0.15){v='V4';color='dim';
-    text='NO SPOT — quality gap ('+(gapS!=null?gapS:'no standings gap')+') is below the review line (.15). Anything taken here is the speculative stream — size like it.';}
+    if(gap!=null&&gap<0)text='NO SPOT — gap -'+ssGapFmt(-gap)+' runs the wrong way (leader '+leader+' is the better team). Anything taken here is the speculative stream — size like it.';
+    else text='NO SPOT — quality gap ('+(gapS!=null?gapS:'no standings gap')+') is below the review line (.15). Anything taken here is the speculative stream — size like it.';}
   else if(p<4&&deficit>=10){v='V6';color='coral';
     text='OUT OF BAND — '+trailer+' down '+deficit+': outside the 1–9 window. No chasing.';}
   else if(p>=4){v='V7';color='secondary';
@@ -1333,11 +1342,23 @@ function ssVerdictComposeNba(st){
   var won=null;
   if(st.gameStatus==='closed'){
     var fH=st.finalHome!=null?Number(st.finalHome):hp,fA=st.finalAway!=null?Number(st.finalAway):ap;
-    var oTrail=ancTrail||trailer;
-    if(oTrail){
+    var finS=Math.max(fH,fA)+'-'+Math.min(fH,fA);
+    if(anc){
+      // the outcome subject is the ROW's trailer, won by games.winner (never by snapshot points)
+      var oTrail=ancTrail||trailer;
       won=st.winner!=null?(oTrail===st.winner):(((oTrail===st.homeAlias)?fH:fA)>((oTrail===st.homeAlias)?fA:fH));
       v='V8';
-      text+=' Final '+Math.max(fH,fA)+'-'+Math.min(fH,fA)+' — '+oTrail+' '+(won?'completed the comeback':'did not come back')+'.';
+      text+=' Final '+finS+' — '+oTrail+' '+(won?'completed the comeback':'did not come back')+'.';
+    }else{
+      // A3.2 no-row final: NO CUE + the last read, so "why nothing fired" is answerable from the card; no subject invented
+      v='V8';color='dim';trap=null;
+      var lr;
+      if(tied)lr='tied';
+      else if(gap==null)lr='no standings gap';
+      else if(gap<0)lr='gap -'+ssGapFmt(-gap)+' runs the wrong way (leader '+leader+' is the better team)';
+      else if(gap<0.15)lr='gap '+gapS+' below bar';
+      else lr='gap '+gapS+' '+ssGapTierWord(gap)+', '+trailer+' down '+deficit+(p>=4?' in Q4 (outside the Q2–Q3 window)':'');
+      text='NO CUE — nothing fired this game. Last read Q'+p+(st.clock?' '+st.clock:'')+': '+lr+'. Final '+finS+'.';
     }
   }
   if(st.lineUsed!=null&&Math.abs(Number(st.lineUsed))>=50000)text+=' Line dead.';
@@ -1347,7 +1368,7 @@ function ssVerdictComposeNba(st){
 // ── HEADER CHIP (A2.4 #4) — PURE: the verdict head word for a collapsed section header.
 function ssNbaChipFor(verdict){
   if(!verdict)return null;
-  var m={V1:'REVIEW',V3:'GAP SPOT',V0:'PRE-GATE',VT:'TIED',V4:'NO SPOT',V6:'OUT OF BAND',V7:'Q4',VX:'FORMING'};
+  var m={V9:'LEAD TAKEN',V1:'REVIEW',V3:'GAP SPOT',V0:'PRE-GATE',VT:'TIED',V4:'NO SPOT',V6:'OUT OF BAND',V7:'Q4',VX:'FORMING'};
   if(verdict.v==='V8')return{label:verdict.won===true?'FINAL ✓':(verdict.won===false?'FINAL ✗':'FINAL'),color:verdict.won===true?'green':(verdict.won===false?'coral':'dim')};
   return m[verdict.v]?{label:m[verdict.v],color:verdict.color}:null;
 }
@@ -1362,6 +1383,89 @@ function ssNbaFireLine(fr){
   if(fr.leader_efg!=null)parts.push('leader eFG '+Math.round(Number(fr.leader_efg))+'%');
   return parts.join(' · ');
 }
+
+// ── HIGH-WATER AFTER FIRE (A3.2) — PURE: the trailer's best margin over the snapshots strictly AFTER
+// the fire moment (period asc, clock desc). An outcome fact at snapshot grain (~60s) — never a gate (N5).
+function ssClockSec(c){var m=/^(\d+):(\d+)/.exec(String(c||''));return m?Number(m[1])*60+Number(m[2]):null;}
+function ssHighWaterNba(snaps,fire,trailerAlias,homeAlias){
+  if(!snaps||!snaps.length||!fire||fire.period==null||!trailerAlias)return null;
+  var fp=Number(fire.period),fc=ssClockSec(fire.clock);
+  var best=null,n=0;
+  for(var i=0;i<snaps.length;i++){
+    var s=snaps[i];if(!s)continue;
+    var p=Number(s.period)||0,c=ssClockSec(s.clock);
+    var after=p>fp||(p===fp&&fc!=null&&c!=null&&c<fc);
+    if(!after)continue;
+    var hp=Number(s.home_pts)||0,ap=Number(s.away_pts)||0;
+    var m=(trailerAlias===homeAlias)?hp-ap:ap-hp;
+    if(best==null||m>best)best=m;n++;
+  }
+  return best==null?null:{max:best,touched:best>0,n:n};
+}
+
+// ── FIRE REVIEW (A3.2) — PURE: the FINAL-card read, composed from the game's OWN sweetspot rows — the
+// moment the engine fired (as-of win%s, gap, leader eFG, lead class, V-share, book line, implied, ESPN
+// fair, stale flag) — never from the last snapshot. One moment per distinct (period, clock, deficit);
+// the WATCHLIST/GAP_BASE twin collapses into one. Outcome by game.winner; high-water from snapshots;
+// resolver status from the rows. rows = raw sweetspot_alerts rows for ONE game.
+// Returns { title, moments:[{label, lines:[l1,l2,l3], ...}], final, sweep, trailer, won } or null.
+function ssFireReviewNba(rows,snaps,game){
+  game=game||{};
+  var rs=(rows||[]).filter(function(r){return r&&r.alert_subtype&&r.alert_subtype!=='GAME_BRIEF'&&(r.deficit!=null||r.quality_gap!=null);});
+  if(!rs.length)return null;
+  var ord=function(r){var c=ssClockSec(r.clock);return (Number(r.period)||0)*100000-(c==null?0:c);};
+  rs.sort(function(a,b){return (ord(a)-ord(b))||((Number(a.id)||0)-(Number(b.id)||0));});
+  var groups=[],byKey={};
+  rs.forEach(function(r){var k=String(r.period)+'|'+String(r.clock)+'|'+String(r.deficit);if(!byKey[k]){byKey[k]={rows:[]};groups.push(byKey[k]);}byKey[k].rows.push(r);});
+  var pri={WATCHLIST:0,GAP_BASE:1};
+  var fmtML=function(n){n=Number(n);return (n>0?'+':'')+n;};
+  var moments=groups.map(function(gr,i){
+    var rr=gr.rows.slice().sort(function(a,b){return (pri[a.alert_subtype]!=null?pri[a.alert_subtype]:9)-(pri[b.alert_subtype]!=null?pri[b.alert_subtype]:9);});
+    var r=rr[0];
+    var subs=rr.map(function(x){return x.alert_subtype;}).join(' + ');
+    var pushed=rr.some(function(x){return !!x.ntfy_sent;});
+    var when='Q'+(r.period!=null?r.period:'?')+(r.clock?' '+r.clock:'');
+    var tag=pushed?'pushed':(rr.every(function(x){return x.alert_subtype==='GAP_BASE';})?'silent ledger row':'not pushed');
+    var d=r.deficit!=null?Number(r.deficit):null;
+    var g=r.quality_gap!=null?Number(r.quality_gap):null;
+    var l1=(r.trailer_alias||'?')+' ('+ssWpFmt(r.trailer_wp)+')'+(d!=null?' down '+d:'')+' to '+(r.leader_alias||'?')+' ('+ssWpFmt(r.leader_wp)+')'+(g!=null?' · gap '+ssGapFmt(g)+' '+ssGapTierWord(g):'');
+    var efg=r.leader_efg!=null?Math.round(Number(r.leader_efg)):null;
+    var lead=(d!=null&&d<=2)?'too thin to read':(ssLeadClassDisplay(r.lead_class)||'—');
+    var l2=(efg!=null?'leader eFG '+efg+'%'+(efg<SS_NBA_HOT_EFG?' (not hot)':''):'leader eFG —')+' · lead: '+lead+(r.variance_share!=null?' (V '+Math.round(Number(r.variance_share))+'%)':'');
+    var pc=r.player_ctx_json;if(typeof pc==='string'){try{pc=JSON.parse(pc);}catch(e){pc=null;}}
+    var ps=pc&&pc.priceStale?pc.priceStale:null;
+    var l3;
+    if(r.line_used==null||r.line_used===''||isNaN(Number(r.line_used)))l3='no book line at fire';
+    else{
+      var imp=(ps&&ps.implied!=null)?Number(ps.implied):americanToImplied(r.line_used);
+      var cons=(r.line_consensus!=null&&r.line_consensus!==''&&Number(r.line_consensus)!==Number(r.line_used))?fmtML(r.line_consensus):null;
+      l3='book '+(r.trailer_alias||'?')+' '+fmtML(r.line_used);
+      if(imp!=null)l3+=' (implied '+Math.round(imp*100)+'%'+(cons?', consensus '+cons:'')+')';
+      else if(cons)l3+=' (consensus '+cons+')';
+      if(ps&&ps.espnWp!=null)l3+=' · ESPN fair '+Math.round(Number(ps.espnWp)*100)+'%';
+      if(ps&&ps.stale===true)l3+=' · ⚠ price stale (book vs ESPN >25pp — stamp may be pregame)';
+      else if(ps&&ps.stale===false)l3+=' · price clean';
+    }
+    return {label:(groups.length>1?String.fromCharCode(9312+i)+' ':'')+subs+' '+when+' ('+tag+')',when:when,subs:subs,lines:[l1,l2,l3],trailer:r.trailer_alias,period:r.period,clock:r.clock,deficit:d};
+  });
+  var first=moments[0];
+  var title=groups.length>1?'FIRE REVIEW — '+groups.length+' moments':'FIRE REVIEW — '+first.subs+' fired '+first.when;
+  var tr=first.trailer||null;
+  var hp=game.home_pts!=null?Number(game.home_pts):null,ap=game.away_pts!=null?Number(game.away_pts):null;
+  var wonOut=(game.winner&&tr)?(game.winner===tr):null;
+  var fin;
+  if(wonOut!=null&&hp!=null&&ap!=null)fin='FINAL '+Math.max(hp,ap)+'-'+Math.min(hp,ap)+' — '+tr+' '+(wonOut?'completed the comeback':'did not come back');
+  else fin='FINAL — result pending';
+  var hw=ssHighWaterNba(snaps,{period:first.period,clock:first.clock},tr,game.home_alias);
+  if(hw)fin+=' · high-water after fire '+(hw.max>0?'+':'')+hw.max+' ('+(hw.touched?'took the lead':'never led')+') [snapshots, ~60s grain]';
+  var allRes=rs.every(function(r){return !!r.resolved;});
+  var sweep=allRes?('nightly sweep: resolved ✓ · trailer '+(rs.some(function(r){return !!r.trailer_won;})?'won':'lost')):'nightly sweep: pending';
+  return {title:title,moments:moments,final:fin,sweep:sweep,trailer:tr,won:wonOut};
+}
+// the game's own rows from the session cache (every NBA row this season, refreshed on FINAL)
+function ssNbaRowsFor(gameId){return (_ssNbaRows||[]).filter(function(r){return r&&r.game_id===gameId&&r.alert_subtype!=='GAME_BRIEF';});}
+// one-shot: a FINAL card rendered before the rows cache exists pulls it and re-renders once
+function ssNbaKickRows(id,cs){if(_ssNbaRows!=null||!cs||cs._ssRowsKicked||!dbReady)return;cs._ssRowsKicked=true;ssNbaEnsureRows(false).then(function(){ssNbaRerender(id);});}
 
 // ── FORWARD LEDGER PANEL (spec §3.2 + A1.4) — PURE, returns lines. The headline Phase 1b exists
 // to produce: how the cue converts, in rows, this season. R2 labels (trailer-WINS), n, power tag.
@@ -1561,9 +1665,11 @@ function ssNbaVerdictFor(id,cs,g,hA,aA){
   var entry=_ssNbaState[id];var ledger=_ssNbaLedger||{};
   if(entry&&entry.data&&entry.data.snapshot){
     var sn=entry.data.snapshot,gm=entry.data.game||{};
-    return{sn:sn,gm:gm,entry:entry,verdict:ssVerdictComposeNba({period:sn.period,homePts:sn.home_pts,awayPts:sn.away_pts,homeAlias:gm.home_alias||hA,awayAlias:gm.away_alias||aA,leaderAlias:sn.ss_leader_alias,
+    var fr0=entry.data.fire_review||null;
+    return{sn:sn,gm:gm,entry:entry,verdict:ssVerdictComposeNba({period:sn.period,clock:sn.clock,homePts:sn.home_pts,awayPts:sn.away_pts,homeAlias:gm.home_alias||hA,awayAlias:gm.away_alias||aA,leaderAlias:sn.ss_leader_alias,
       gap:sn.ss_quality_gap,leaderEfg:sn.ss_leader_efg,leadClass:sn.ss_lead_class,lineUsed:sn.ss_line_used,rows:entry.data.rows||null,subtypes:entry.data.subtypes||[],
-      gapBaseN:Number((ledger.GAP_BASE||{}).n_resolved)||0,gameStatus:gm.status,finalHome:gm.home_pts,finalAway:gm.away_pts,winner:gm.winner})};
+      gapBaseN:Number((ledger.GAP_BASE||{}).n_resolved)||0,gameStatus:gm.status,finalHome:gm.home_pts,finalAway:gm.away_pts,winner:gm.winner,
+      fireDeficit:(fr0&&fr0.deficit!=null)?fr0.deficit:null})};
   }
   if(g&&(g.period||0)<2)return{sn:null,gm:null,entry:entry||null,verdict:ssVerdictComposeNba({period:g.period||0,homeAlias:hA,awayAlias:aA})};
   return{sn:null,gm:null,entry:entry||null,verdict:null};
@@ -1581,12 +1687,65 @@ function ctxStripNba(id,hA,aA){
   return '<div class="ssn-strip" onclick="openMatchupSheetNba(\''+id+'\')">'+esc(txt)+'</div>';
 }
 
+// ── Evidence lines (v3's own scoring comp + live box eFG, A2.8a) — shared by the live box and FIRE REVIEW ──
+function renderSSEvidenceNba(cs,sn,label){
+  var sc=cs&&cs.scoringComp;
+  if(!(sc&&sc.home&&sc.away&&((sc.home.total||0)+(sc.away.total||0))>0))return '';
+  var _hp2=sc.home.total||0,_ap2=sc.away.total||0;
+  var ldAl2=(sn&&sn.ss_leader_alias)||(_hp2>=_ap2?sc.home.team:sc.away.team);
+  var ldHome=ldAl2===sc.home.team;var ldSide=ldHome?sc.home:sc.away;
+  var be=ssNbaBoxEfg(cs);var lefg=ldHome?be.home:be.away;if(lefg==null&&sn&&sn.ss_leader_efg!=null)lefg=Number(sn.ss_leader_efg);
+  var lv=ldSide.vPct;
+  var eng=lv==null?'—':(lv>55?'VARIANCE':(lv<=45?'STRUCTURAL':'MIXED'));
+  var engDet=(lv!=null)?' ('+(lefg!=null?Math.round(lefg)+'% eFG, ':'')+'V '+Math.round(lv)+'%)':'';
+  var cls=sc.classification==='VOLATILE'?'VARIANCE-CARRIED':(sc.classification||'—');
+  var sT=(sc.structuralDelta||0)>=0?sc.home.team:sc.away.team,vT=(sc.varianceDelta||0)>=0?sc.home.team:sc.away.team;
+  var clsDet=' ('+esc(sT)+' +'+Math.abs(Math.round(sc.structuralDelta||0))+' structure, '+esc(vT)+' +'+Math.abs(Math.round(sc.varianceDelta||0))+' variance)';
+  var html='<div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--hairline);font-size:11px;color:var(--fg-tertiary)">';
+  if(label)html+='<div style="font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:var(--fg-dim);margin-bottom:2px">'+esc(label)+'</div>';
+  html+='<div>LEADER’S ENGINE (shot mix): <span style="color:var(--fg-secondary)">'+esc(eng)+'</span>'+engDet+'</div>';
+  html+='<div style="margin-top:2px">THE LEAD: <span style="color:var(--fg-secondary)">'+esc(cls)+'</span>'+clsDet+'</div>';
+  html+='</div>';
+  return html;
+}
+
+// ── RENDER: FIRE REVIEW (A3.2) — the FINAL-card box, from the game's own rows; replaces gate/cue/price/verdict ──
+function renderSSFireReviewNba(id,cs,g,hA,aA,fr,sn,ledger){
+  var html='<div onclick="openMatchupSheetNba(\''+id+'\')" style="cursor:pointer;margin-bottom:10px;padding:9px 11px;background:var(--bg-surface-2);border:1px solid var(--hairline-strong);border-radius:var(--r-inner);font-family:var(--sans);font-size:12px;line-height:1.55;color:var(--fg-secondary)">';
+  html+='<div style="font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:var(--fg-tertiary);margin-bottom:5px">SWEET SPOT <span style="letter-spacing:0;color:var(--fg-dim)">NBA · fire review</span></div>';
+  html+='<div style="font-weight:600;color:'+ssNbaColor(fr.won===true?'green':(fr.won===false?'coral':'dim'))+'">'+esc(fr.title)+'</div>';
+  fr.moments.forEach(function(m){
+    if(fr.moments.length>1)html+='<div style="margin-top:5px;font-weight:600;color:var(--fg-secondary)">'+esc(m.label)+'</div>';
+    m.lines.forEach(function(l){html+='<div style="font-size:11px;color:var(--fg-tertiary);font-family:var(--mono)">'+esc(l)+'</div>';});
+  });
+  html+='<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--hairline);font-size:11px;color:var(--fg-secondary)">'+esc(fr.final)+'</div>';
+  html+='<div style="font-size:10.5px;color:var(--fg-dim);font-family:var(--mono)">'+esc(fr.sweep)+'</div>';
+  // FORWARD LEDGER — open by default on a FINAL card with a row (the row above is one of its n)
+  var open=_ssNbaLedgerOpen[id]!=null?_ssNbaLedgerOpen[id]:true;
+  html+='<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--hairline)">';
+  html+='<div onclick="event.stopPropagation();ssNbaToggleLedger(\''+id+'\')" style="font-size:11px;letter-spacing:.02em;color:var(--fg-tertiary);cursor:pointer">FORWARD LEDGER <span style="color:var(--fg-dim)">'+(open?'▾':'▸')+'</span></div>';
+  if(open){html+='<div onclick="event.stopPropagation()" style="margin-top:4px;padding:6px 8px;border:1px solid var(--hairline);border-radius:6px;font-size:10.5px;line-height:1.55;color:var(--fg-tertiary);font-family:var(--mono);white-space:pre-wrap">'+esc(ssForwardLedgerPanelNba(ledger).join('\n'))+'</div>';}
+  html+='</div>';
+  html+=renderSSEvidenceNba(cs,null,'FINAL BOX'); // final-box leader by points, not the fire-time stamp
+  html+='<div style="margin-top:5px;font-size:10px;color:var(--fg-dim);font-family:var(--mono)">fired '+esc(fr.moments[0].when)+' → final'+(sn?' · last server read Q'+esc(String(sn.period||'?'))+' '+esc(String(sn.clock||'')):'')+'</div>';
+  html+='</div>';
+  return html;
+}
+
 // ── RENDER: live verdict box (spec §3.3 anatomy) — first inside Scoring Comp's .coll-inner ──
 function renderSSVerdictBoxNba(id,cs,g,hA,aA){
   var vf=ssNbaVerdictFor(id,cs,g,hA,aA);
   if(!vf.entry)fetchSSStateNba(id); // render-miss kick — in-flight-guarded
   var sn=vf.sn,gm=vf.gm,entry=vf.entry,verdict=vf.verdict;
   var ledger=_ssNbaLedger||{};
+  // A3.2 FINAL mode — FIRE REVIEW from the game's OWN rows (never the last snapshot); V8 stays the transition render
+  if(g&&getState(g)==='FINAL'){
+    ssNbaKickRows(id,cs);
+    var _fhp=(gm&&gm.home_pts!=null)?gm.home_pts:g.homePoints,_fap=(gm&&gm.away_pts!=null)?gm.away_pts:g.awayPoints;
+    var _fw=(gm&&gm.winner)||((_fhp!=null&&_fap!=null&&Number(_fhp)!==Number(_fap))?(Number(_fhp)>Number(_fap)?((gm&&gm.home_alias)||hA):((gm&&gm.away_alias)||aA)):null);
+    var fr=ssFireReviewNba(ssNbaRowsFor(id),cs&&cs._allSnapshots,{home_alias:(gm&&gm.home_alias)||hA,away_alias:(gm&&gm.away_alias)||aA,home_pts:_fhp,away_pts:_fap,winner:_fw});
+    if(fr)return renderSSFireReviewNba(id,cs,g,hA,aA,fr,sn,ledger);
+  }
   var html='<div onclick="openMatchupSheetNba(\''+id+'\')" style="cursor:pointer;margin-bottom:10px;padding:9px 11px;background:var(--bg-surface-2);border:1px solid var(--hairline-strong);border-radius:var(--r-inner);font-family:var(--sans);font-size:12px;line-height:1.55;color:var(--fg-secondary)">';
   html+='<div style="font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:var(--fg-tertiary);margin-bottom:5px">SWEET SPOT <span style="letter-spacing:0;color:var(--fg-dim)">NBA · forward-ledger phase</span></div>';
   var isStale=false;
@@ -1605,7 +1764,7 @@ function renderSSVerdictBoxNba(id,cs,g,hA,aA){
     if(cs&&cs.espnWP&&trAl){espnTr=(trAl===homeAl)?cs.espnWP.home:cs.espnWP.away;}
     var cardML=null;
     if(cs&&cs.oddsData&&trAl){cardML=(trAl===homeAl)?cs.oddsData.homeML:cs.oddsData.awayML;if(cardML==='')cardML=null;}
-    var pl=tied?null:ssPriceLineNba({trailerAlias:trAl,serverML:sn.ss_line_used,cardML:cardML,espnTrailerWp:espnTr});
+    var pl=(tied||(g&&getState(g)==='FINAL'))?null:ssPriceLineNba({trailerAlias:trAl,serverML:sn.ss_line_used,cardML:cardML,espnTrailerWp:espnTr}); // A3.2: no garbage-time price on a FINAL card
     html+='<div style="margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--hairline)">';
     html+='<div style="font-size:11px;letter-spacing:.02em;color:var(--fg-secondary)">'+esc(gl)+'</div>';
     if(cr)html+='<div style="margin-top:3px;font-size:11px;color:var(--fg-tertiary)">'+esc(cr)+'</div>';
@@ -1629,23 +1788,7 @@ function renderSSVerdictBoxNba(id,cs,g,hA,aA){
     if(verdict.trap)html+='<div style="margin-top:6px;color:var(--amber)">'+esc(verdict.trap)+'</div>';
   }
   // Evidence lines — v3's own scoring comp (cs.scoringComp) + live box eFG (A2.8a) over the 60s stamp
-  var sc=cs&&cs.scoringComp;
-  if(sc&&sc.home&&sc.away&&((sc.home.total||0)+(sc.away.total||0))>0){
-    var _hp2=sc.home.total||0,_ap2=sc.away.total||0;
-    var ldAl2=(sn&&sn.ss_leader_alias)||(_hp2>=_ap2?sc.home.team:sc.away.team);
-    var ldHome=ldAl2===sc.home.team;var ldSide=ldHome?sc.home:sc.away;
-    var be=ssNbaBoxEfg(cs);var lefg=ldHome?be.home:be.away;if(lefg==null&&sn&&sn.ss_leader_efg!=null)lefg=Number(sn.ss_leader_efg);
-    var lv=ldSide.vPct;
-    var eng=lv==null?'—':(lv>55?'VARIANCE':(lv<=45?'STRUCTURAL':'MIXED'));
-    var engDet=(lv!=null)?' ('+(lefg!=null?Math.round(lefg)+'% eFG, ':'')+'V '+Math.round(lv)+'%)':'';
-    var cls=sc.classification==='VOLATILE'?'VARIANCE-CARRIED':(sc.classification||'—');
-    var sT=(sc.structuralDelta||0)>=0?sc.home.team:sc.away.team,vT=(sc.varianceDelta||0)>=0?sc.home.team:sc.away.team;
-    var clsDet=' ('+esc(sT)+' +'+Math.abs(Math.round(sc.structuralDelta||0))+' structure, '+esc(vT)+' +'+Math.abs(Math.round(sc.varianceDelta||0))+' variance)';
-    html+='<div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--hairline);font-size:11px;color:var(--fg-tertiary)">';
-    html+='<div>LEADER’S ENGINE (shot mix): <span style="color:var(--fg-secondary)">'+esc(eng)+'</span>'+engDet+'</div>';
-    html+='<div style="margin-top:2px">THE LEAD: <span style="color:var(--fg-secondary)">'+esc(cls)+'</span>'+clsDet+'</div>';
-    html+='</div>';
-  }
+  html+=renderSSEvidenceNba(cs,sn,null);
   if(sn)html+='<div style="margin-top:5px;font-size:10px;color:var(--fg-dim);font-family:var(--mono)">server read as of Q'+esc(String(sn.period||'?'))+' '+esc(String(sn.clock||''))+'</div>';
   html+='</div>';
   return html;
