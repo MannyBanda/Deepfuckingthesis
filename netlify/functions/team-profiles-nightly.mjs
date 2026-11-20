@@ -526,7 +526,8 @@ async function matchDftGameIds(sql, rows) {
 // What the lite matchup sheet's season cells need and nothing more, computed from the LAST
 // snapshot of every finalized NBA game this season (raw_stats_json carries the box: fgm/fga/
 // fg3m/poss) — zero API calls, zero tokens. Writes team_profiles rows with archetype 'LITE' and
-// profile { lite:true, gp, efg, opp_efg, pace, l10, h2h, asof } and NO killer / tiers / elite /
+// profile { lite:true, gp, efg, opp_efg, efg_diff, to_margin, fta_diff, oreb_diff, pace, l10, h2h, asof }
+// (A2.8 diffs added Nov 19) and NO killer / tiers / elite /
 // identity / rotation keys, so no WNBA consumer can mistake one for a full profile
 // (ensureTeamCtx stays league==='wnba'; get_team_profiles&league=nba already works).
 // Season = Oct-start year (same formula as the engine's ssStandingsSeason) — never a literal.
@@ -538,7 +539,8 @@ export function nbaSeasonYear(d) {
 }
 export function computeNbaLiteProfiles(finals, asof) {
   const T = {};
-  const team = (al) => (T[al] = T[al] || { w: 0, l: 0, games: [], fgm: 0, fga: 0, fg3m: 0, ofgm: 0, ofga: 0, ofg3m: 0, paceSum: 0, paceN: 0, h2h: {} });
+  const team = (al) => (T[al] = T[al] || { w: 0, l: 0, games: [], fgm: 0, fga: 0, fg3m: 0, ofgm: 0, ofga: 0, ofg3m: 0, paceSum: 0, paceN: 0, h2h: {},
+    to: 0, oto: 0, fta: 0, ofta: 0, oreb: 0, ooreb: 0 });
   const efgOf = (fgm, fg3m, fga) => (fga > 0 ? Math.round(((fgm + 0.5 * fg3m) / fga) * 1000) / 10 : null);
   for (const f of finals || []) {
     const hA = f.home_alias, aA = f.away_alias;
@@ -551,13 +553,16 @@ export function computeNbaLiteProfiles(finals, asof) {
     for (const [al, opp, won, own, oth] of [[hA, aA, hWon, hb, ab], [aA, hA, !hWon, ab, hb]]) {
       const t = team(al);
       if (won) t.w++; else t.l++;
-      t.games.push({ date, won, game_id: f.game_id });
+      const hasBox = !!(own && oth && N(own.fga) > 0 && N(oth.fga) > 0);
+      t.games.push({ date, won, game_id: f.game_id, box: hasBox });
       const h = (t.h2h[opp] = t.h2h[opp] || { w: 0, l: 0 });
       if (won) h.w++; else h.l++;
       // box accumulation only when BOTH sides carry a real box (fga > 0) — a snapshot with a half-empty box is skipped for eFG, never for W/L
-      if (own && oth && N(own.fga) > 0 && N(oth.fga) > 0) {
+      if (hasBox) {
         t.fgm += N(own.fgm); t.fga += N(own.fga); t.fg3m += N(own.fg3m);
         t.ofgm += N(oth.fgm); t.ofga += N(oth.fga); t.ofg3m += N(oth.fg3m);
+        // A2.8 lite diffs — same box, per-game averages over box_gp (facts, not calibrated reads)
+        t.to += N(own.to); t.oto += N(oth.to); t.fta += N(own.fta); t.ofta += N(oth.fta); t.oreb += N(own.oreb); t.ooreb += N(oth.oreb);
         if (N(own.poss) > 0 && N(oth.poss) > 0) { t.paceSum += (N(own.poss) + N(oth.poss)) / 2; t.paceN++; }
       }
     }
@@ -566,11 +571,19 @@ export function computeNbaLiteProfiles(finals, asof) {
   for (const [al, t] of Object.entries(T)) {
     t.games.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)); // newest first (date strings — never Date objects, hotfix #14)
     const last10 = t.games.slice(0, 10);
+    const boxGp = t.games.filter((g) => g.box).length;
+    const per = (v) => (boxGp > 0 ? Math.round((v / boxGp) * 10) / 10 : null);
+    const efg = efgOf(t.fgm, t.fg3m, t.fga), oppEfg = efgOf(t.ofgm, t.ofg3m, t.ofga);
+    const efgDiff = (t.fga > 0 && t.ofga > 0) ? Math.round((((t.fgm + 0.5 * t.fg3m) / t.fga) - ((t.ofgm + 0.5 * t.ofg3m) / t.ofga)) * 1000) / 10 : null;
     out[al] = { w: t.w, l: t.l, profile: {
       lite: true, gp: t.w + t.l,
-      efg: efgOf(t.fgm, t.fg3m, t.fga), opp_efg: efgOf(t.ofgm, t.ofg3m, t.ofga),
+      efg: efg, opp_efg: oppEfg,
+      efg_diff: efgDiff,                       // own − opp eFG, pp (from unrounded sums)
+      to_margin: per(t.oto - t.to),            // opp TO − own TO per game (+ = forces more than it commits)
+      fta_diff: per(t.fta - t.ofta),           // own − opp FTA per game
+      oreb_diff: per(t.oreb - t.ooreb),        // own − opp OREB per game
       pace: t.paceN > 0 ? Math.round((t.paceSum / t.paceN) * 10) / 10 : null,
-      box_gp: t.paceN,
+      box_gp: boxGp,
       l10: { w: last10.filter((g) => g.won).length, l: last10.filter((g) => !g.won).length },
       h2h: t.h2h,
       asof: asof || null,

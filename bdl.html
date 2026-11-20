@@ -9925,18 +9925,23 @@ function renderDepthAuditVisual(id, cs, hA, aA){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// NBA SWEET SPOT DASHBOARD — NBA_SWEETSPOT_DASHBOARD_SPEC v1 + Amendment 1 (D1 live
-// view · D2 pregame read + lite matchup sheet). Honesty rules N1–N6 govern every line:
-// no WNBA-calibrated number crosses over (SS_STRUCT / SS_SEASON26 / comebackProb /
-// EFG_BANDS / fuel-temp / kernels / EK / inflation stay in wnba-bdl.html); the one
-// exploratory cell renders tagged and switches to the forward ledger at 30 resolved;
-// ESPN is the fair price; the dashboard never recomputes a gate (server stamps only).
-// Fixture harness: research/ss_nba_dashboard_fixtures.mjs (source-equality mirrors,
-// pure-function pins, grep gates). Globals are `var` (TDZ guard — hotfix learning #6).
+// NBA SWEET SPOT DASHBOARD — NBA_SWEETSPOT_DASHBOARD_SPEC v1 + Amendments 1–2 (D1 live view · D2 pregame
+// read + lite matchup sheet). Honesty rules N1–N6 govern every line: no WNBA-calibrated number crosses
+// over (SS_STRUCT / SS_SEASON26 / comebackProb / EFG_BANDS / fuel-temp / kernels / EK / inflation stay
+// in wnba-bdl.html); the one exploratory cell renders tagged and switches to the forward ledger at 30
+// resolved; ESPN is the fair price; the dashboard never recomputes a gate (server stamps only).
+// Fixture harness: research/ss_nba_dashboard_fixtures.mjs (core byte-equal bdl.html<->v3.html, server
+// mirrors, pure-function pins, grep gates). Globals are `var` (TDZ guard — hotfix learning #6).
 // ═══════════════════════════════════════════════════════════════════════════════
 // SS_NBA_BEGIN
+// SS_NBA_CORE_BEGIN — SHARED across bdl.html and v3.html, BYTE-EQUAL (fixture-enforced, the aliasMap
+// treatment; NBA_SWEETSPOT_DASHBOARD_SPEC A2.2: mirror, not a shared script — Basic Auth is scoped /*.html).
+// Everything in here is token-free and DOM-free except the session caches: constants, server mirrors,
+// pure read/verdict composers, the ensure/fetch layer. Each file supplies ssNbaRerender(id) and its
+// own render functions below the core. Edit ONE copy, then regenerate the other (or the harness fails).
 var SS_NBA_STALE_GAP = 0.25; // pinned === SS_CFG.nba.staleGapPp in poll-live-bdl.mjs (fixture grep)
 var SS_NBA_SWITCH_N = 30;    // WATCHLIST n_resolved at which the cue read drops the exploratory line
+var SS_NBA_HOT_EFG = 57;     // the cue's leader-eFG line (SS_CFG.nba.cue.minLeaderEfg) — a gate constant, not a calibrated band
 // Exploratory cell — research/2026-11-19_nba_ss_season_EXPLORATORY.md (commit aaf0ec8), declared
 // cuts, no bars, one month of 2026-27 tape. Renders ONLY with the [this season · exploratory · LOW]
 // tag, never inside the verdict head, never as a rate to act on. Values fixture-pinned to the doc.
@@ -9944,22 +9949,20 @@ var SS_NBA_EXPLORATORY = { asof: '2026-11-19', source: 'aaf0ec8',
   cue: { p: 74.4, espn: 50.1, n: 39 },          // gap >= .15 x leader eFG >= 57, Q2-Q3, trailer-WIN vs ESPN
   gapBase: { edge: 6.0, ci: 11.8, n: 66 } };    // gap >= .15 alone: +6.0 +-11.8 vs ESPN (about even)
 
-var _ssNbaState = {};       // gameId -> { data:{snapshot,game,rows,subtypes}, fetchedAt }
+var _ssNbaState = {};       // gameId -> { data:{snapshot,game,rows,subtypes,fire_review}, fetchedAt }
 var _ssNbaFetching = {};
 var _ssNbaLedger = null;    // subtype -> { n_total, n_resolved, realized_pct } ({} once fetched, even if empty)
 var _ssNbaLedgerAt = 0;
-var _ssNbaTimer = null;
 var _ssNbaStandings = null; // { ALIAS:{w,l}, _age_s, _at } from get_standings (the engine's own records)
 var _ssNbaStandingsAt = 0;
-var _ssNbaRows = null;      // every NBA sweetspot row this session (D2 cue history), one fetch + refresh on FINAL
+var _ssNbaRows = null;      // every NBA sweetspot row this session (cue history), one fetch + refresh on FINAL
 var _ssNbaRowsAt = 0;
-var _ssNbaProfiles = null;  // D3 lite profiles { ALIAS: {w,l,profile} } or {} when none exist yet
+var _ssNbaProfiles = null;  // D3 lite profiles { ALIAS: {w,l,profile,updated} } or {} when none exist yet
 var _ssNbaProfilesAt = 0;
 var _ssNbaLedgerOpen = {};  // gameId -> forward-ledger panel open?
 
-// ── MIRRORS — VERBATIM from poll-live-bdl.mjs (function-body byte-equality fixture-enforced,
-// the aliasMap treatment). Definitional, not calibrated: display vocabulary,
-// implied-odds arithmetic, the PBP scoring-composition breakdown, the stale-price flag.
+// ── MIRRORS — VERBATIM from poll-live-bdl.mjs (function-body byte-equality fixture-enforced).
+// Definitional, not calibrated: display vocabulary, implied-odds arithmetic, the stale-price flag.
 function ssLeadClassDisplay(lc) {
   if (lc === 'VOLATILE') return 'variance-built';
   if (lc === 'STRUCTURAL') return 'structurally built';
@@ -9968,45 +9971,6 @@ function ssLeadClassDisplay(lc) {
   return null;
 }
 function americanToImplied(ml) { if (ml == null || ml === '') return null; ml = Number(ml); if (isNaN(ml) || ml === 0) return null; return ml > 0 ? 100/(ml+100) : (-ml)/((-ml)+100); }
-function computeScoringComp(pbp, hA, aA, hPts, aPts) {
-  if (!pbp || !pbp.home || !pbp.away) return null;
-  function breakdown(side, total) {
-    var rimM = side.rim ? side.rim.made||0 : 0, rimA = side.rim ? side.rim.att||0 : 0;
-    var pntM = side.paint ? side.paint.made||0 : 0, pntA = side.paint ? side.paint.att||0 : 0;
-    var midM = side.mid ? side.mid.made||0 : 0, midA = side.mid ? side.mid.att||0 : 0;
-    var threeM = side.threes ? side.threes.made||0 : 0, threeA = side.threes ? side.threes.att||0 : 0;
-    var allPaintM = rimM+pntM, allPaintA = rimA+pntA;
-    var paintPts = allPaintM*2;
-    var threePts = threeM*3;
-    var midPts = midM*2;
-    var ftPts = Math.max(0, total-paintPts-threePts-midPts);
-    var ftM = ftPts, ftA = ftPts>0 ? Math.round(ftPts/0.78) : ftPts;
-    var structural = paintPts+ftPts;
-    var variance = threePts+midPts;
-    var sPct = total>0 ? Math.round(structural/total*100) : 0;
-    var paintPct = allPaintA>0 ? Math.round(allPaintM/allPaintA*100) : 0;
-    var threePct = threeA>0 ? Math.round(threeM/threeA*100) : 0;
-    var midPct = midA>0 ? Math.round(midM/midA*100) : 0;
-    return { total:total, paint:paintPts, ft:ftPts, three:threePts, midOther:midPts,
-      structural:structural, variance:variance, sPct:sPct, vPct:100-sPct,
-      paintM:allPaintM, paintA:allPaintA, paintPct:paintPct,
-      ftM:ftM, ftA:ftA,
-      tpm:threeM, tpa:threeA, threePct:threePct,
-      midM:midM, midA:midA, midPct:midPct };
-  }
-  var h = breakdown(pbp.home, hPts); var a = breakdown(pbp.away, aPts);
-  h.team = hA; a.team = aA;
-  var margin = hPts-aPts; var absMargin = Math.abs(margin);
-  var sDelta = h.structural-a.structural; var vDelta = h.variance-a.variance;
-  var leadTeam = margin>=0 ? hA : aA, trailTeam = margin>=0 ? aA : hA;
-  var leadS = margin>=0 ? sDelta : -sDelta; var leadV = margin>=0 ? vDelta : -vDelta;
-  var classification = 'MIXED', durability = '';
-  if (absMargin <= 2) { classification = 'EVEN'; durability = 'Margin too small to classify'; }
-  else if (leadS >= absMargin*0.6) { classification = 'STRUCTURAL'; durability = leadTeam+' lead is structural \u2014 paint/FT drives margin (+'+Math.abs(Math.round(leadS))+')'; }
-  else if (leadV >= absMargin*0.6) { classification = 'VOLATILE'; durability = leadTeam+' lead is variance-driven \u2014 3PT/mid drives margin with uncertain sustainability. Structural favors '+(leadS>=0?leadTeam:trailTeam)+' (+'+Math.abs(Math.round(leadS<0?leadS:leadS))+')'; }
-  else { classification = 'MIXED'; durability = 'No single source dominates margin'; }
-  return { home:h, away:a, structuralDelta:sDelta, varianceDelta:vDelta, leadTeam:leadTeam, classification:classification, durability:durability };
-}
 function ssPriceStale(trailML, espnTrailerWp, gapPp) {
   if (trailML == null || espnTrailerWp == null || isNaN(Number(espnTrailerWp))) return null;
   var imp = americanToImplied(trailML); if (imp == null) return null;
@@ -10027,6 +9991,7 @@ function ssWpFmt(v){ if(v==null||isNaN(v))return '?'; return Number(v).toFixed(3
 function ssGapTierWord(g){ if(g==null||isNaN(g))return null; g=Number(g); return g>=0.35?'STRONG':(g>=0.15?'qualified':'below bar'); }
 function ssRecWp(r){ if(!r)return null; var gp=(Number(r.w)||0)+(Number(r.l)||0); return gp>=5?(Number(r.w)||0)/gp:null; } // same >=5 GP guard as SS_CFG.nba.minGP
 function ssRecGp(r){ return r?((Number(r.w)||0)+(Number(r.l)||0)):0; }
+function ssSigned(v,suf){ if(v==null||isNaN(v))return '—'; v=Number(v); return (v>0?'+':'')+v+(suf||''); }
 
 // ── GATE LINE (spec §3.2 + A1.2) — PURE. Non-tie: GAP .39 STRONG · LDR DEN .357 / TRL POR .750 ·
 // LEAD: variance-built. No leader-quality country (no validated NBA tier), no fuel, no temp, no EK.
@@ -10064,7 +10029,7 @@ function ssCueReadNba(st,ledger){
   var w=ledger.WATCHLIST||{};var wn=Number(w.n_resolved)||0;
   var efg=st.leaderEfg!=null?Math.round(Number(st.leaderEfg)):null;
   var E=SS_NBA_EXPLORATORY;
-  if(efg!=null&&efg>=57){
+  if(efg!=null&&efg>=SS_NBA_HOT_EFG){
     var head='WATCH SHAPE — the better team is down '+d+' to a hot leader (eFG '+efg+'%). ';
     if(wn>=SS_NBA_SWITCH_N&&w.realized_pct!=null)return head+'Forward log: trailers WIN '+Math.round(Number(w.realized_pct))+'% [n='+wn+', '+ssPowerTag(wn)+'].';
     return head+'[this season · exploratory · LOW] trailers WON '+Math.round(E.cue.p)+'% vs ESPN '+Math.round(E.cue.espn)+'% on '+E.cue.n+' Q2–Q3 spots through Nov 19 — forward log collecting ('+wn+'/'+SS_NBA_SWITCH_N+').';
@@ -10097,11 +10062,11 @@ function ssPriceLineNba(st){
   return out;
 }
 
-// ── VERDICT (spec §3.2 reduced V-table + A1.2 VT) — PURE. First match wins:
-// V1 WATCHLIST row in band -> V3 GAP_BASE row in band -> V0 pre-Q2 -> VT tied -> V4 below bar ->
-// V6 out of band pre-Q4 -> V7 Q4 -> VX forming. Row anchoring (D-7/D-8) and the V8 freeze are
-// copied as LOGIC from the WNBA composer; the copy is NBA's. Trap: T5 only (NBA-evidenced).
-// Colors are bdl.html tokens (--t3 dim, --t2 secondary, --red for coral, #4aa3ff blue).
+// ── VERDICT (spec §3.2 reduced V-table + A1.2 VT) — PURE, TOKEN-FREE (A2.3: returns a color KEY —
+// green | amber | blue | coral | dim | secondary — each file maps keys to its own tokens). First match
+// wins: V1 WATCHLIST row in band -> V3 GAP_BASE row in band -> V0 pre-Q2 -> VT tied -> V4 below bar ->
+// V6 out of band pre-Q4 -> V7 Q4 -> VX forming. Row anchoring (D-7/D-8) and the V8 freeze are copied
+// as LOGIC from the WNBA composer; the copy is NBA's. Trap: T5 only (NBA-evidenced).
 function ssVerdictComposeNba(st){
   st=st||{};
   var p=Number(st.period)||0;
@@ -10129,13 +10094,13 @@ function ssVerdictComposeNba(st){
   var gapS=ssGapFmt(gap);
   var gbN=st.gapBaseN!=null?st.gapBaseN:0;
   var v,text,color;
-  if(subs.indexOf('WATCHLIST')>-1&&rowInBand){v='V1';color='#4aa3ff';
+  if(subs.indexOf('WATCHLIST')>-1&&rowInBand){v='V1';color='blue';
     text='REVIEW — '+ancTrail+' is the better team ('+(gapS||'?')+' quality gap) down '+rowDef+'; the leader was shooting hot when the cue fired. Not a bet call; your read decides. See the push.';}
-  else if(subs.indexOf('GAP_BASE')>-1&&rowInBand){v='V3';color='var(--t2)';
+  else if(subs.indexOf('GAP_BASE')>-1&&rowInBand){v='V3';color='secondary';
     text='GAP SPOT, LOGGING — gap qualifies, leader not hot. Ledger is collecting this shape ('+gbN+'/'+SS_NBA_SWITCH_N+' resolved). Not a validated bet.';}
-  else if(p<2){v='V0';color='var(--t3)';
+  else if(p<2){v='V0';color='dim';
     text='Gates read from Q2 — no verdict yet.';}
-  else if(tied){v='VT';color='var(--t3)';
+  else if(tied){v='VT';color='dim';
     var ag=gap==null?null:Math.abs(gap);
     if(ag!=null&&ag>=0.15){
       var better=gap>0?st.awayAlias:st.homeAlias; // server stamps home as leader at a tie: gap = away - home
@@ -10143,31 +10108,51 @@ function ssVerdictComposeNba(st){
     }else{
       text='TIED — gap ('+(ag!=null?ssGapFmt(ag):'no standings gap')+') is below the review line either way.';
     }}
-  else if(gap==null||gap<0.15){v='V4';color='var(--t3)';
+  else if(gap==null||gap<0.15){v='V4';color='dim';
     text='NO SPOT — quality gap ('+(gapS!=null?gapS:'no standings gap')+') is below the review line (.15). Anything taken here is the speculative stream — size like it.';}
-  else if(p<4&&deficit>=10){v='V6';color='var(--red)';
+  else if(p<4&&deficit>=10){v='V6';color='coral';
     text='OUT OF BAND — '+trailer+' down '+deficit+': outside the 1–9 window. No chasing.';}
-  else if(p>=4){v='V7';color='var(--t2)';
+  else if(p>=4){v='V7';color='secondary';
     text='Q4 — the NBA cue window closed after Q3. Nothing fires here; your read decides.';}
-  else{v='VX';color='var(--t3)';
+  else{v='VX';color='dim';
     text='READ FORMING — gap qualifies, no row yet (next server read lands in about a minute).';}
   // T5 only — hot leader without a quality gap (NBA n=1,200 deficit-controlled null + this season's
   // worse/even-trailer negative). T1/T4 are WNBA kills and never render here.
   var trap=null;
-  if((v==='V4'||v==='VT'||v==='VX')&&st.leaderEfg!=null&&Number(st.leaderEfg)>=57&&(gap==null||Math.abs(gap)<0.15)){
+  if((v==='V4'||v==='VT'||v==='VX')&&st.leaderEfg!=null&&Number(st.leaderEfg)>=SS_NBA_HOT_EFG&&(gap==null||Math.abs(gap)<0.15)){
     trap='⚠ Hot leader without a quality gap — heat alone was a null on 1,200 NBA games (deficit-controlled) and ran negative this season against a worse/even trailer. Heat only matters ON TOP of a gap.';
   }
+  var won=null;
   if(st.gameStatus==='closed'){
     var fH=st.finalHome!=null?Number(st.finalHome):hp,fA=st.finalAway!=null?Number(st.finalAway):ap;
     var oTrail=ancTrail||trailer;
     if(oTrail){
-      var won=st.winner!=null?(oTrail===st.winner):(((oTrail===st.homeAlias)?fH:fA)>((oTrail===st.homeAlias)?fA:fH));
+      won=st.winner!=null?(oTrail===st.winner):(((oTrail===st.homeAlias)?fH:fA)>((oTrail===st.homeAlias)?fA:fH));
       v='V8';
       text+=' Final '+Math.max(fH,fA)+'-'+Math.min(fH,fA)+' — '+oTrail+' '+(won?'completed the comeback':'did not come back')+'.';
     }
   }
   if(st.lineUsed!=null&&Math.abs(Number(st.lineUsed))>=50000)text+=' Line dead.';
-  return{v:v,text:text,trap:trap,color:color};
+  return{v:v,text:text,trap:trap,color:color,won:won};
+}
+
+// ── HEADER CHIP (A2.4 #4) — PURE: the verdict head word for a collapsed section header.
+function ssNbaChipFor(verdict){
+  if(!verdict)return null;
+  var m={V1:'REVIEW',V3:'GAP SPOT',V0:'PRE-GATE',VT:'TIED',V4:'NO SPOT',V6:'OUT OF BAND',V7:'Q4',VX:'FORMING'};
+  if(verdict.v==='V8')return{label:verdict.won===true?'FINAL ✓':(verdict.won===false?'FINAL ✗':'FINAL'),color:verdict.won===true?'green':(verdict.won===false?'coral':'dim')};
+  return m[verdict.v]?{label:m[verdict.v],color:verdict.color}:null;
+}
+
+// ── FIRE-TIME FACTS (A2.8d) — PURE: the row's own stamps from get_ss_state.fire_review.
+function ssNbaFireLine(fr){
+  if(!fr||(fr.period==null&&fr.deficit==null&&fr.quality_gap==null))return null;
+  var what=fr.alert_subtype==='WATCHLIST'?'cue fired':(fr.alert_subtype==='GAP_BASE'?'gap spot logged':String(fr.alert_subtype||'row').toLowerCase());
+  var parts=[what+(fr.period!=null?' Q'+fr.period:'')+(fr.clock?' '+fr.clock:'')];
+  if(fr.deficit!=null)parts.push('down '+fr.deficit);
+  if(fr.quality_gap!=null)parts.push('gap '+ssGapFmt(Number(fr.quality_gap)));
+  if(fr.leader_efg!=null)parts.push('leader eFG '+Math.round(Number(fr.leader_efg))+'%');
+  return parts.join(' · ');
 }
 
 // ── FORWARD LEDGER PANEL (spec §3.2 + A1.4) — PURE, returns lines. The headline Phase 1b exists
@@ -10189,7 +10174,7 @@ function ssForwardLedgerPanelNba(ledger,ex){
 
 // ── PREGAME READ (spec §4.1, D2) — PURE, returns lines. Both directions stated — the pregame
 // version of whose-side-is-the-gap; the only pregame "verdict" the NBA engine can honestly give.
-// st: { homeAlias, awayAlias, home:{w,l}, away:{w,l}, cueHist:{ALIAS:{n,won}}, ledger, standingsAsOf, homeML, awayML, linePregame }
+// st: { homeAlias, awayAlias, home:{w,l}, away:{w,l}, cueHist:{ALIAS:{n,won,open}}, ledger, standingsAsOf, homeML, awayML, linePregame }
 function ssPregameReadNba(st){
   st=st||{};var hA=st.homeAlias||'HOME',aA=st.awayAlias||'AWAY';
   var h=st.home||null,a=st.away||null;
@@ -10206,7 +10191,7 @@ function ssPregameReadNba(st){
     lines.push('Gap '+ssGapFmt(gap)+' is below the review line (.15) — no spot in either direction.');
   }else{
     var better=hw>aw?hA:aA,worse=hw>aw?aA:hA;
-    lines.push('If '+worse+' leads in Q2–Q3 by 1–9 → '+better+' is the watch trailer (hot-leader cue needs '+worse+' eFG ≥ 57).');
+    lines.push('If '+worse+' leads in Q2–Q3 by 1–9 → '+better+' is the watch trailer (hot-leader cue needs '+worse+' eFG ≥ '+SS_NBA_HOT_EFG+').');
     lines.push('If '+better+' leads → no spot (gap runs the wrong way).');
   }
   var ch=st.cueHist||{};
@@ -10223,7 +10208,25 @@ function ssPregameReadNba(st){
   return lines;
 }
 
-// ── FETCH LAYER (spec §3.4, multi-card grid) ──────────────────────────────────────────────────
+// ── CTX MICRO-STRIP TEXT (A2.8b) — PURE: one line under the hero, every state. Records · gap
+// direction (by the .15 line) · H2H this season (lite profiles) · WATCHLIST cue count. No archetype,
+// no inflation. st: { homeAlias, awayAlias, home:{w,l}, away:{w,l}, h2h:{alias,w,l}|null, cueN:{A:n,H:n} }
+function ssCtxStripTextNba(st){
+  st=st||{};var hA=st.homeAlias||'HOME',aA=st.awayAlias||'AWAY';
+  var h=st.home,a=st.away;
+  if(!h&&!a)return 'season records — tap for matchup sheet';
+  var rec=function(al,r){return r?al+' '+(r.w||0)+'-'+(r.l||0):al+' —';};
+  var parts=[rec(aA,a)+' · '+rec(hA,h)];
+  var hw=ssRecWp(h),aw=ssRecWp(a);
+  if(hw==null||aw==null)parts.push('gap after 5 GP');
+  else{var g=Math.abs(hw-aw);parts.push(g>=0.15?('gap '+ssGapFmt(g)+' → '+(hw>aw?hA:aA)+' watch'):('gap '+ssGapFmt(g)+' below bar'));}
+  if(st.h2h&&st.h2h.alias)parts.push('H2H '+st.h2h.w+'-'+st.h2h.l+' '+st.h2h.alias);
+  var cn=st.cueN||{};var tot=(Number(cn[aA])||0)+(Number(cn[hA])||0);
+  if(tot>0)parts.push(tot+' cue'+(tot===1?'':'s'));
+  return parts.join(' · ');
+}
+
+// ── FETCH LAYER (spec §3.4 / A2.4 #5) — identical in both files; ssNbaRerender(id) is per-file ──
 async function ssNbaEnsureLedger(force){
   if(!dbReady)return;
   if(_ssNbaLedger&&!force&&(Date.now()-_ssNbaLedgerAt)<55000)return;
@@ -10271,6 +10274,14 @@ function ssNbaCueHist(){
     c.n++;if(r.resolved){if(r.trailer_won)c.won++;}else c.open++;
   });return out;
 }
+// H2H this season for the away team's perspective (lite profiles), else home's, else null
+function ssNbaH2H(hA,aA){
+  var prof=_ssNbaProfiles||{};
+  var pa=prof[aA]&&prof[aA].profile,ph=prof[hA]&&prof[hA].profile;
+  if(pa&&pa.h2h&&pa.h2h[hA])return{alias:aA,w:pa.h2h[hA].w,l:pa.h2h[hA].l};
+  if(ph&&ph.h2h&&ph.h2h[aA])return{alias:hA,w:ph.h2h[aA].w,l:ph.h2h[aA].l};
+  return null;
+}
 async function fetchSSStateNba(gameId,force){
   if(!gameId||!dbReady||_ssNbaFetching[gameId])return;
   var e=_ssNbaState[gameId];
@@ -10286,11 +10297,72 @@ async function fetchSSStateNba(gameId,force){
     var wasClosed=e&&e.data&&e.data.game&&e.data.game.status==='closed';
     _ssNbaState[gameId]={data:data,fetchedAt:Date.now()};
     var cs=cardState[gameId];
-    if(cs&&data.rows&&data.rows.length&&!cs._ssAutoOpened){cs._sec=cs._sec||{};cs._sec.sc=true;cs._ssAutoOpened=true;} // A1.5: open once, a later manual collapse sticks
+    if(cs&&data.rows&&data.rows.length&&!cs._ssAutoOpened){cs._ssAutoOpened=true;ssNbaAutoOpen(gameId,cs);} // A1.5: open once, a later manual collapse sticks
     if(data.game&&data.game.status==='closed'&&!wasClosed){ssNbaEnsureLedger(true);ssNbaEnsureRows(true);}  // the panel's n ticks without a reload
-    var g=games.find(function(x){return x.id===gameId;});if(g)renderCard(g);
+    ssNbaRerender(gameId);
   }catch(err){console.log('[SS NBA]',err.message);}
   finally{delete _ssNbaFetching[gameId];}
+}
+function ssNbaToggleLedger(id){_ssNbaLedgerOpen[id]=!_ssNbaLedgerOpen[id];ssNbaRerender(id);}
+function ssNbaPregameState(game,cs,hA,aA){
+  var stRec=_ssNbaStandings||{};
+  var asOf=null;
+  if(_ssNbaStandings&&_ssNbaStandings._age_s!=null){var d=new Date(Date.now()-_ssNbaStandings._age_s*1000);asOf=d.toLocaleDateString(undefined,{month:'short',day:'numeric'})+' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});}
+  var od=cs&&cs.oddsData?cs.oddsData:null;
+  return {homeAlias:hA,awayAlias:aA,home:stRec[hA]||null,away:stRec[aA]||null,cueHist:ssNbaCueHist(),ledger:_ssNbaLedger||{},standingsAsOf:asOf,
+    homeML:od&&od.homeML!==''?od.homeML:null,awayML:od&&od.awayML!==''?od.awayML:null,linePregame:getState(game)==='PRE'};
+}
+function ssNbaCtxState(hA,aA){
+  var stRec=_ssNbaStandings||{};var ch=ssNbaCueHist();var cn={};cn[hA]=(ch[hA]||{}).n||0;cn[aA]=(ch[aA]||{}).n||0;
+  return {homeAlias:hA,awayAlias:aA,home:stRec[hA]||null,away:stRec[aA]||null,h2h:ssNbaH2H(hA,aA),cueN:cn};
+}
+function closeMatchupSheetNba(){var o=document.getElementById('msnOverlay');if(o)o.remove();}
+// SS_NBA_CORE_END
+// ── bdl.html-SPECIFIC (tokens: --t1/--t2/--t3, --b1/--b2, --s2, --red, --radius-sm; grid of selected cards) ──
+var SS_NBA_COLORS={green:'var(--green)',amber:'var(--amber)',blue:'#4aa3ff',coral:'var(--red)',dim:'var(--t3)',secondary:'var(--t2)'};
+function ssNbaColor(k){return SS_NBA_COLORS[k]||SS_NBA_COLORS.dim;}
+function ssNbaRerender(id){var g=games.find(function(x){return x.id===id;});if(g)renderCard(g);}
+function ssNbaAutoOpen(id,cs){cs._sec=cs._sec||{};cs._sec.sc=true;}
+// computeScoringComp — VERBATIM from poll-live-bdl.mjs (bdl.html has no scoring-comp compute of its own;
+// v3.html keeps its own and does not carry this mirror). Function-body byte-equality fixture-enforced.
+function computeScoringComp(pbp, hA, aA, hPts, aPts) {
+  if (!pbp || !pbp.home || !pbp.away) return null;
+  function breakdown(side, total) {
+    var rimM = side.rim ? side.rim.made||0 : 0, rimA = side.rim ? side.rim.att||0 : 0;
+    var pntM = side.paint ? side.paint.made||0 : 0, pntA = side.paint ? side.paint.att||0 : 0;
+    var midM = side.mid ? side.mid.made||0 : 0, midA = side.mid ? side.mid.att||0 : 0;
+    var threeM = side.threes ? side.threes.made||0 : 0, threeA = side.threes ? side.threes.att||0 : 0;
+    var allPaintM = rimM+pntM, allPaintA = rimA+pntA;
+    var paintPts = allPaintM*2;
+    var threePts = threeM*3;
+    var midPts = midM*2;
+    var ftPts = Math.max(0, total-paintPts-threePts-midPts);
+    var ftM = ftPts, ftA = ftPts>0 ? Math.round(ftPts/0.78) : ftPts;
+    var structural = paintPts+ftPts;
+    var variance = threePts+midPts;
+    var sPct = total>0 ? Math.round(structural/total*100) : 0;
+    var paintPct = allPaintA>0 ? Math.round(allPaintM/allPaintA*100) : 0;
+    var threePct = threeA>0 ? Math.round(threeM/threeA*100) : 0;
+    var midPct = midA>0 ? Math.round(midM/midA*100) : 0;
+    return { total:total, paint:paintPts, ft:ftPts, three:threePts, midOther:midPts,
+      structural:structural, variance:variance, sPct:sPct, vPct:100-sPct,
+      paintM:allPaintM, paintA:allPaintA, paintPct:paintPct,
+      ftM:ftM, ftA:ftA,
+      tpm:threeM, tpa:threeA, threePct:threePct,
+      midM:midM, midA:midA, midPct:midPct };
+  }
+  var h = breakdown(pbp.home, hPts); var a = breakdown(pbp.away, aPts);
+  h.team = hA; a.team = aA;
+  var margin = hPts-aPts; var absMargin = Math.abs(margin);
+  var sDelta = h.structural-a.structural; var vDelta = h.variance-a.variance;
+  var leadTeam = margin>=0 ? hA : aA, trailTeam = margin>=0 ? aA : hA;
+  var leadS = margin>=0 ? sDelta : -sDelta; var leadV = margin>=0 ? vDelta : -vDelta;
+  var classification = 'MIXED', durability = '';
+  if (absMargin <= 2) { classification = 'EVEN'; durability = 'Margin too small to classify'; }
+  else if (leadS >= absMargin*0.6) { classification = 'STRUCTURAL'; durability = leadTeam+' lead is structural \u2014 paint/FT drives margin (+'+Math.abs(Math.round(leadS))+')'; }
+  else if (leadV >= absMargin*0.6) { classification = 'VOLATILE'; durability = leadTeam+' lead is variance-driven \u2014 3PT/mid drives margin with uncertain sustainability. Structural favors '+(leadS>=0?leadTeam:trailTeam)+' (+'+Math.abs(Math.round(leadS<0?leadS:leadS))+')'; }
+  else { classification = 'MIXED'; durability = 'No single source dominates margin'; }
+  return { home:h, away:a, structuralDelta:sDelta, varianceDelta:vDelta, leadTeam:leadTeam, classification:classification, durability:durability };
 }
 function startSSNbaTimer(){
   if(_ssNbaTimer)return;
@@ -10299,15 +10371,22 @@ function startSSNbaTimer(){
     ids.forEach(function(id,i){var g=games.find(function(x){return x.id===id;});if(g&&getState(g)!=='PRE')setTimeout(function(){fetchSSStateNba(id);},i*150);});
   },60000);
 }
+var _ssNbaTimer=null;
 function ssNbaPrefetch(){
   var ids=selIds.slice();
   ids.forEach(function(id,i){var g=games.find(function(x){return x.id===id;});if(g&&getState(g)!=='PRE')setTimeout(function(){fetchSSStateNba(id);},600+i*150);});
   ssNbaEnsureStandings(false);ssNbaEnsureRows(false);ssNbaEnsureProfiles(false);
 }
-function ssNbaToggleLedger(id){_ssNbaLedgerOpen[id]=!_ssNbaLedgerOpen[id];var g=games.find(function(x){return x.id===id;});if(g)renderCard(g);}
+
+// ── RENDER: ctx micro-strip under the hero (A2.8b), every state; tap -> lite sheet ──
+function ctxStripNba(id,hA,aA){
+  if(!_ssNbaStandings){ssNbaEnsureStandings(false);ssNbaEnsureRows(false);ssNbaEnsureProfiles(false);}
+  var txt=ssCtxStripTextNba(ssNbaCtxState(hA,aA));
+  return '<div onclick="openMatchupSheetNba(\''+id+'\')" style="cursor:pointer;margin:0 10px 6px;padding:4px 8px;background:var(--s2);border:1px solid var(--b2);border-radius:var(--radius-sm);font-family:var(--mono);font-size:7px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(txt)+'</div>';
+}
 
 // ── RENDER: live verdict box (spec §3.3 anatomy: gate line -> cue read -> price line -> FORWARD
-// LEDGER -> VERDICT + trap -> evidence lines -> as-of). Mounted first inside SCORING COMPOSITION.
+// LEDGER (+ fire-time facts) -> VERDICT + trap -> evidence lines -> as-of). First inside SCORING COMPOSITION.
 function renderSSVerdictBoxNba(id,cs,game,hA,aA){
   var entry=_ssNbaState[id];
   if(!entry)fetchSSStateNba(id); // render-miss kick — in-flight-guarded; lands + re-renders in <1s
@@ -10344,6 +10423,8 @@ function renderSSVerdictBoxNba(id,cs,game,hA,aA){
     html+='<div style="margin:5px 0;padding-bottom:5px;border-bottom:1px solid var(--b1)">';
     html+='<div onclick="event.stopPropagation();ssNbaToggleLedger(\''+id+'\')" style="font-size:7px;letter-spacing:.06em;color:var(--t3);cursor:pointer">FORWARD LEDGER <span style="color:var(--t3)">'+(open?'▾':'▸')+'</span></div>';
     if(open){html+='<div onclick="event.stopPropagation()" style="margin-top:3px;padding:5px 7px;border:1px solid var(--b1);border-radius:5px;font-size:7.5px;line-height:1.55;color:var(--t3);font-family:var(--mono);white-space:pre-wrap">'+esc(ssForwardLedgerPanelNba(ledger).join('\n'))+'</div>';}
+    var fl=ssNbaFireLine(entry.data.fire_review);
+    if(fl)html+='<div style="margin-top:3px;font-size:7.5px;color:var(--t2);font-family:var(--mono)">'+esc(fl)+'</div>';
     html+='</div>';
     verdict=ssVerdictComposeNba({period:sn.period,homePts:sn.home_pts,awayPts:sn.away_pts,homeAlias:homeAl,awayAlias:awayAl,leaderAlias:sn.ss_leader_alias,
       gap:sn.ss_quality_gap,leaderEfg:sn.ss_leader_efg,leadClass:sn.ss_lead_class,lineUsed:sn.ss_line_used,rows:entry.data.rows||null,subtypes:entry.data.subtypes||[],
@@ -10356,7 +10437,7 @@ function renderSSVerdictBoxNba(id,cs,game,hA,aA){
   else{
     var vi=verdict.text.indexOf(' — ');
     var vHead=vi>-1?verdict.text.slice(0,vi):verdict.text,vBody=vi>-1?verdict.text.slice(vi+3):'';
-    html+='<span style="font-weight:600;color:'+verdict.color+'">'+esc(vHead)+'</span>'+(vBody?' — '+esc(vBody):'');
+    html+='<span style="font-weight:600;color:'+ssNbaColor(verdict.color)+'">'+esc(vHead)+'</span>'+(vBody?' — '+esc(vBody):'');
     if(verdict.trap)html+='<div style="margin-top:5px;color:var(--amber)">'+esc(verdict.trap)+'</div>';
   }
   // Evidence lines — the client PBP comp (same zone object shape as the server), leader eFG from the stamp
@@ -10382,14 +10463,6 @@ function renderSSVerdictBoxNba(id,cs,game,hA,aA){
 }
 
 // ── RENDER: PREGAME READ block (spec §4.1, D2) — under the hero on PRE cards. Zero tokens.
-function ssNbaPregameState(game,cs,hA,aA){
-  var stRec=_ssNbaStandings||{};
-  var asOf=null;
-  if(_ssNbaStandings&&_ssNbaStandings._age_s!=null){var d=new Date(Date.now()-_ssNbaStandings._age_s*1000);asOf=d.toLocaleDateString(undefined,{month:'short',day:'numeric'})+' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});}
-  var od=cs&&cs.oddsData?cs.oddsData:null;
-  return {homeAlias:hA,awayAlias:aA,home:stRec[hA]||null,away:stRec[aA]||null,cueHist:ssNbaCueHist(),ledger:_ssNbaLedger||{},standingsAsOf:asOf,
-    homeML:od&&od.homeML!==''?od.homeML:null,awayML:od&&od.awayML!==''?od.awayML:null,linePregame:getState(game)==='PRE'};
-}
 function renderSSPregameNba(id,cs,game,hA,aA){
   if(!_ssNbaStandings){ssNbaEnsureStandings(false);ssNbaEnsureLedger(false);ssNbaEnsureRows(false);}
   var lines=ssPregameReadNba(ssNbaPregameState(game,cs,hA,aA));
@@ -10401,8 +10474,8 @@ function renderSSPregameNba(id,cs,game,hA,aA){
   return html;
 }
 
-// ── MATCHUP SHEET (lite) — spec §4.2. Records / win% / GP guard / D3 lite season stats (— until
-// profiles exist) / cue history; GAP line + the pregame sentence pair; zero-token footer.
+// ── MATCHUP SHEET (lite) — spec §4.2 + A2.8 diff rows. Records / win% / GP guard / D3 lite season
+// stats (— until profiles exist) / cue history; GAP line + the pregame sentence pair; zero-token footer.
 async function openMatchupSheetNba(gid){
   await ssNbaEnsureStandings(false);await ssNbaEnsureLedger(false);await ssNbaEnsureRows(false);await ssNbaEnsureProfiles(false);
   var g=games.find(function(x){return x.id===gid;});if(!g)return;
@@ -10418,8 +10491,13 @@ async function openMatchupSheetNba(gid){
     html+='<div class="msn-kv"><span>win%</span><b>'+(wp!=null?ssWpFmt(wp):(r?'<5 GP — no gap yet':'—'))+'</b></div>';
     var p=prof[al]&&prof[al].profile;
     var f1=function(v){return v==null?'—':Number(v).toFixed(1);};
+    var sg=function(v,suf){var s=ssSigned(v,suf);var c=v==null?'':(Number(v)>0?' style="color:var(--green)"':(Number(v)<0?' style="color:var(--red)"':''));return '<b'+c+'>'+s+'</b>';};
     html+='<div class="msn-kv"><span>season eFG</span><b>'+(p?f1(p.efg):'—')+'</b></div>';
     html+='<div class="msn-kv"><span>opp eFG</span><b>'+(p?f1(p.opp_efg):'—')+'</b></div>';
+    html+='<div class="msn-kv"><span>eFG diff</span>'+sg(p?p.efg_diff:null,'pp')+'</div>';
+    html+='<div class="msn-kv"><span>TO margin</span>'+sg(p?p.to_margin:null)+'</div>';
+    html+='<div class="msn-kv"><span>FTA</span>'+sg(p?p.fta_diff:null)+'</div>';
+    html+='<div class="msn-kv"><span>OREB</span>'+sg(p?p.oreb_diff:null)+'</div>';
     html+='<div class="msn-kv"><span>pace</span><b>'+(p?f1(p.pace):'—')+'</b></div>';
     html+='<div class="msn-kv"><span>L10</span><b>'+(p&&p.l10?(p.l10.w+'-'+p.l10.l):'—')+'</b></div>';
     var c=ch[al];
@@ -10430,11 +10508,8 @@ async function openMatchupSheetNba(gid){
   var gapLine='';
   if(hw!=null&&aw!=null){var gp=Math.abs(hw-aw);gapLine='<div class="msn-gap">GAP '+ssGapFmt(gp)+' '+ssGapTierWord(gp)+' → '+esc(hw>aw?hA:aA)+' (better by record)</div>';}
   else gapLine='<div class="msn-gap msn-dim">GAP — (both teams need 5 GP)</div>';
-  var h2h='';
-  var ph=prof[hA]&&prof[hA].profile,pa=prof[aA]&&prof[aA].profile;
-  if(pa&&pa.h2h&&pa.h2h[hA])h2h='H2H this season: '+esc(aA)+' '+pa.h2h[hA].w+'-'+pa.h2h[hA].l+' vs '+esc(hA);
-  else if(ph&&ph.h2h&&ph.h2h[aA])h2h='H2H this season: '+esc(hA)+' '+ph.h2h[aA].w+'-'+ph.h2h[aA].l+' vs '+esc(aA);
-  else h2h='H2H — no meetings yet'+(Object.keys(prof).length?'':' (lite profiles not built yet)');
+  var hh=ssNbaH2H(hA,aA);
+  var h2h=hh?('H2H this season: '+esc(hh.alias)+' '+hh.w+'-'+hh.l+' vs '+esc(hh.alias===hA?aA:hA)):('H2H — no meetings yet'+(Object.keys(prof).length?'':' (lite profiles not built yet)'));
   var updated=(prof[hA]&&prof[hA].updated)||(prof[aA]&&prof[aA].updated)||null;
   var age=updated?Math.round((Date.now()-new Date(updated).getTime())/3600000):null;
   var sheet='<div id="msnOverlay" class="msn-overlay" onclick="if(event.target===this)closeMatchupSheetNba()">'
@@ -10443,11 +10518,10 @@ async function openMatchupSheetNba(gid){
     +gapLine
     +'<div class="msn-read">'+lines.slice(1,lines.length-1).map(function(l){return '<div>'+esc(l)+'</div>';}).join('')+'</div>'
     +'<div class="msn-h2h">'+h2h+'</div>'
-    +'<div class="msn-foot">'+esc(lines[lines.length-1])+(age!=null?' · lite profiles updated '+age+'h ago':'')+'<br>NBA pregame narration is off (zero-token mode) · records + cue history only, no WNBA-calibrated numbers</div>'
+    +'<div class="msn-foot">'+esc(lines[lines.length-1])+(age!=null?' · lite profiles updated '+age+'h ago':'')+'<br>NBA pregame narration is off (zero-token mode) · records, season box facts + cue history only — no WNBA-calibrated numbers · TO margin + = forces more than commits</div>'
     +'</div></div>';
   document.body.insertAdjacentHTML('beforeend',sheet);
 }
-function closeMatchupSheetNba(){var o=document.getElementById('msnOverlay');if(o)o.remove();}
 // SS_NBA_END
 
 function renderCard(game){
@@ -10490,6 +10564,8 @@ function renderCard(game){
     <div style="text-align:right"><div class="srt" style="color:${getTeamColor(hA)}">${esc(hA)}${standingsCache[hA]&&standingsCache[hA].confRank?'<span style="font-size:8px;color:var(--amber);font-weight:600;margin-left:3px">('+ordinal(standingsCache[hA].confRank)+')</span>':''}</div>
     <div>${game.summary?.home?.bonus?'<span class="bonus-tag">BONUS</span>':''}<span class="srs">${state==='PRE'?'—':game.homePoints??'—'}</span></div></div>
   </div>`;
+  // NBA_SWEETSPOT_DASHBOARD_SPEC A2.8b — ctx micro-strip (records · gap direction · H2H · cues), every state
+  try{ html+=ctxStripNba(id,hA,aA); }catch(_ssE0){ /* degrade */ }
 
   if(state==='PRE'){
     const ms=new Date(game.scheduled)-new Date();

@@ -14,7 +14,10 @@
     "fg3m": 9,
     "fg3a": 27,
     "poss": 107.4,
-    "pts": 112
+    "pts": 112,
+    "to": 13,
+    "fta": 21,
+    "oreb": 5
    },
    "away": {
     "fgm": 44,
@@ -22,14 +25,15 @@
     "fg3m": 20,
     "fg3a": 50,
     "poss": 102.8,
-    "pts": 117
+    "pts": 117,
+    "to": 13,
+    "fta": 12,
+    "oreb": 14
    }
   },
   "_last_snapshot": {
    "period": 4,
-   "clock": "0:00",
-   "home_pts": 112,
-   "away_pts": 117
+   "clock": "0:00"
   }
  },
  {
@@ -47,7 +51,10 @@
     "fg3m": 7,
     "fg3a": 31,
     "poss": 99.6,
-    "pts": 105
+    "pts": 105,
+    "to": 17,
+    "fta": 29,
+    "oreb": 14
    },
    "away": {
     "fgm": 40,
@@ -55,14 +62,15 @@
     "fg3m": 11,
     "fg3a": 44,
     "poss": 99.8,
-    "pts": 101
+    "pts": 101,
+    "to": 15,
+    "fta": 12,
+    "oreb": 18
    }
   },
   "_last_snapshot": {
    "period": 4,
-   "clock": "0:00",
-   "home_pts": 105,
-   "away_pts": 101
+   "clock": "0:00"
   }
  },
  {
@@ -80,7 +88,10 @@
     "fg3m": 15,
     "fg3a": 41,
     "poss": 99.6,
-    "pts": 107
+    "pts": 107,
+    "to": 20,
+    "fta": 19,
+    "oreb": 9
    },
    "away": {
     "fgm": 53,
@@ -88,14 +99,15 @@
     "fg3m": 21,
     "fg3a": 45,
     "poss": 99.8,
-    "pts": 137
+    "pts": 137,
+    "to": 14,
+    "fta": 12,
+    "oreb": 18
    }
   },
   "_last_snapshot": {
    "period": 4,
-   "clock": "0:17",
-   "home_pts": 107,
-   "away_pts": 137
+   "clock": "0:17"
   }
  }
 ]
