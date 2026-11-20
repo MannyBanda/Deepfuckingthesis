@@ -7,13 +7,13 @@
 //       (wnba-bdl.html) likewise; vShareTier (v3.html only) byte-equal to wnba-bdl.html; SS_NBA_STALE_GAP ===
 //       SS_CFG.nba.staleGapPp; SS_NBA_HOT_EFG === SS_CFG.nba.cue.minLeaderEfg
 //   [2] Exploratory constants pinned to research/2026-11-19_nba_ss_season_EXPLORATORY.md
-//   [3] Gate line (+ A3.3 wrong-way) · [4] Cue read · [5] Price line (A1.3) · [6] Verdict (color KEYS, A2.3; A3.3 V9;
-//       A3.2 NO CUE final) · [7] Ledger panel
+//   [3] Gate line (+ A3.3 wrong-way) · [4] Cue read (A3.9 copy) · [5] Price line (A1.3, A3.9 copy) · [6] Verdict (color KEYS,
+//       A2.3; A3.3 V9; A3.2 NO CUE final; A3.9 one-sentence copy) · [7] A3.9: the forward-ledger panel is GONE from the card
 //   [8] Pregame read · [8b] ctx strip text (A2.8b) · [8c] fire-time line (A2.8d) · [8d] header chip (A2.4 #4)
 //   [9] Grep gates — N1 symbols, tokens, season literals, mounts, hooks, league=nba, v3 specifics, A3 render gates
 //  [10] D3 — computeNbaLiteProfiles golden (three committed Nov 18 finals, hand-computed eFG/pace/diffs)
-//  [11] A3.2 FIRE REVIEW — ssHighWaterNba + ssFireReviewNba pinned on the Nov 19 slate (committed live rows +
-//       snapshots: research/fixtures_nba_fire_review_2026-11-19.json) plus synthetic stale / resolved / no-line cases
+//  [11] A3.2/A3.9 FIRE REVIEW — ssHighWaterNba + ssFireReviewNba (rows shape: Cue · Price · Arc · Also) pinned on the Nov 19
+//       slate (committed live rows + snapshots: research/fixtures_nba_fire_review_2026-11-19.json) plus synthetic cases
 // Run: node research/ss_nba_dashboard_fixtures.mjs
 // ═══════════════════════════════════════════════════════════════════════════════
 import { readFileSync } from 'fs';
@@ -49,10 +49,10 @@ const V3_SP = V3.slice(V3.indexOf('// SS_NBA_CORE_END'), V3.indexOf('// SS_NBA_E
 const stubs = `var dbReady=false, FN='', games=[], cardState={}, standingsCache={}, selIds=[], activeGameId=null, _collOpen={}, document={};
 function esc(s){return String(s||'');} function getTeamColor(){return '#fff';} function tc(){return '#fff';} function getState(g){return 'LIVE';} function renderCard(){} function ordinal(n){return n+'th';}
 async function fetch(){ throw new Error('no network in fixtures'); }`;
-const coreNames = ['ssGateLineNba', 'ssCueReadNba', 'ssPriceLineNba', 'ssVerdictComposeNba', 'ssForwardLedgerPanelNba', 'ssPregameReadNba', 'ssCtxStripTextNba', 'ssNbaFireLine', 'ssNbaChipFor',
+const coreNames = ['ssGateLineNba', 'ssCueReadNba', 'ssPriceLineNba', 'ssVerdictComposeNba', 'ssPregameReadNba', 'ssCtxStripTextNba', 'ssNbaFireLine', 'ssNbaChipFor',
   'ssGapFmt', 'ssLeadClassDisplay', 'americanToImplied', 'ssPriceStale', 'ssPowerTag', 'nbaSeasonYear', 'ssRecWp', 'ssSigned', 'ssHighWaterNba', 'ssFireReviewNba', 'ssClockSec'];
 const core = new Function(`${stubs}\nfunction ssNbaRerender(){} function ssNbaAutoOpen(){}\n${CORE}\nreturn { ${coreNames.join(', ')}, SS_NBA_STALE_GAP, SS_NBA_EXPLORATORY, SS_NBA_SWITCH_N, SS_NBA_HOT_EFG };`)();
-const { ssGateLineNba, ssCueReadNba, ssPriceLineNba, ssVerdictComposeNba, ssForwardLedgerPanelNba, ssPregameReadNba, ssCtxStripTextNba, ssNbaFireLine, ssNbaChipFor,
+const { ssGateLineNba, ssCueReadNba, ssPriceLineNba, ssVerdictComposeNba, ssPregameReadNba, ssCtxStripTextNba, ssNbaFireLine, ssNbaChipFor,
   ssGapFmt, ssPowerTag, nbaSeasonYear, ssRecWp, ssSigned, ssHighWaterNba, ssFireReviewNba, ssClockSec, SS_NBA_STALE_GAP, SS_NBA_EXPLORATORY: EX, SS_NBA_SWITCH_N, SS_NBA_HOT_EFG } = core;
 const bdlMod = new Function(`${stubs}\n${BLOCK}\nreturn { SS_NBA_COLORS, computeScoringComp };`)();
 const v3Mod = new Function(`${stubs}\n${BLOCK3}\nreturn { SS_NBA_COLORS, vShareTier, ssNbaEfgColor, ssNbaBoxEfg };`)();
@@ -63,7 +63,7 @@ const has = (s, sub) => typeof s === 'string' && s.indexOf(sub) > -1;
 
 // [0] core byte-equality
 T('[0] SS_NBA_CORE byte-equal bdl.html === v3.html', CORE === CORE3 && CORE.length > 10000);
-T('[0] core carries every shared pure fn + the fetch layer', ['ssGateLineNba', 'ssCueReadNba', 'ssPriceLineNba', 'ssVerdictComposeNba', 'ssForwardLedgerPanelNba', 'ssPregameReadNba', 'ssCtxStripTextNba', 'ssNbaFireLine', 'ssNbaChipFor', 'ssHighWaterNba', 'ssFireReviewNba', 'ssNbaRowsFor', 'ssNbaKickRows', 'fetchSSStateNba', 'ssNbaEnsureLedger', 'ssNbaEnsureStandings', 'ssNbaEnsureRows', 'ssNbaEnsureProfiles', 'ssNbaCueHist', 'ssNbaH2H', 'ssNbaPregameState', 'ssNbaCtxState', 'ssNbaToggleLedger', 'closeMatchupSheetNba'].every((f) => CORE.split(`function ${f}(`).length === 2));
+T('[0] core carries every shared pure fn + the fetch layer', ['ssGateLineNba', 'ssCueReadNba', 'ssPriceLineNba', 'ssVerdictComposeNba', 'ssPregameReadNba', 'ssCtxStripTextNba', 'ssNbaFireLine', 'ssNbaChipFor', 'ssHighWaterNba', 'ssFireReviewNba', 'ssNbaRowsFor', 'ssNbaKickRows', 'fetchSSStateNba', 'ssNbaEnsureLedger', 'ssNbaEnsureStandings', 'ssNbaEnsureRows', 'ssNbaEnsureProfiles', 'ssNbaCueHist', 'ssNbaH2H', 'ssNbaPregameState', 'ssNbaCtxState', 'closeMatchupSheetNba'].every((f) => CORE.split(`function ${f}(`).length === 2));
 T('[0] core is token-free and DOM-render-free', !/var\(--/.test(CORE) && !has(CORE, 'insertAdjacentHTML') && !has(CORE, 'renderCard('));
 T('[0] each file supplies ssNbaRerender + ssNbaAutoOpen + SS_NBA_COLORS outside the core', [BDL_SP, V3_SP].every((s) => has(s, 'function ssNbaRerender(') && has(s, 'function ssNbaAutoOpen(') && has(s, 'var SS_NBA_COLORS=')));
 
@@ -101,90 +101,89 @@ T('[3] A3.3 negative gap -> wrong-way wording, not "below bar"', ssGateLineNba({
   === 'GAP -.58 (runs the wrong way — leader is the better team) · LDR POR .643 / TRL MIL .067 · LEAD: structurally built');
 T('[3] A3.3 small negative gap also wrong-way (-.02)', has(ssGateLineNba({ gap: -0.02, leaderAlias: 'A', trailerAlias: 'B', margin: 5 }), 'GAP -.02 (runs the wrong way') && !has(ssGateLineNba({ gap: -0.02, leaderAlias: 'A', trailerAlias: 'B', margin: 5 }), 'below bar'));
 
-// [4] cue read
+// [4] cue read (A3.9 copy — one sentence, no ledger counters)
 const L0 = {}, L5 = { WATCHLIST: { n_total: 7, n_resolved: 5, realized_pct: 60 }, GAP_BASE: { n_total: 12, n_resolved: 9, realized_pct: 55.6 } };
 const L30 = { WATCHLIST: { n_total: 40, n_resolved: 31, realized_pct: 64.5 }, GAP_BASE: { n_total: 60, n_resolved: 50, realized_pct: 52 } };
 T('[4] tie -> null', ssCueReadNba({ tied: true, gap: 0.3, deficit: 0, period: 2 }, L0) === null);
 T('[4] gap below bar -> null', ssCueReadNba({ gap: 0.1, deficit: 5, period: 2, leaderEfg: 60 }, L0) === null);
 T('[4] gap null -> null', ssCueReadNba({ deficit: 5, period: 2, leaderEfg: 60 }, L0) === null);
 T('[4] deficit 10 -> null', ssCueReadNba({ gap: 0.3, deficit: 10, period: 2, leaderEfg: 60 }, L0) === null);
-T('[4] Q4 -> window closed line', has(ssCueReadNba({ gap: 0.3, deficit: 5, period: 4, leaderEfg: 60 }, L0), 'Q4 — cue window closed'));
-T('[4] Q1 -> gates read from Q2', has(ssCueReadNba({ gap: 0.3, deficit: 5, period: 1, leaderEfg: 60 }, L0), 'Gates read from Q2'));
+T('[4] Q4 -> window closed line', ssCueReadNba({ gap: 0.3, deficit: 5, period: 4, leaderEfg: 60 }, L0) === 'Q4 — cue window closed (Q2–Q3 only).');
+T('[4] Q1 -> gates read from Q2', ssCueReadNba({ gap: 0.3, deficit: 5, period: 1, leaderEfg: 60 }, L0) === 'Gates read from Q2.');
 const hot0 = ssCueReadNba({ gap: 0.3, deficit: 5, period: 2, leaderEfg: 63.6 }, L0);
-T('[4] hot, no ledger -> WATCH SHAPE + tagged exploratory + 0/30', has(hot0, 'WATCH SHAPE — the better team is down 5 to a hot leader (eFG 64%).') && has(hot0, '[this season · exploratory · LOW] trailers WON 74% vs ESPN 50% on 39 Q2–Q3 spots through Nov 19') && has(hot0, 'collecting (0/30)'));
-T('[4] hot, n=5 -> still exploratory, 5/30', has(ssCueReadNba({ gap: 0.3, deficit: 5, period: 3, leaderEfg: 60 }, L5), 'collecting (5/30)'));
+T('[4] hot, no ledger -> WATCH SHAPE + tagged exploratory, no counter', hot0 === 'WATCH SHAPE — better team down 5 to a hot leader (eFG 64%). [exploratory · LOW] trailers won 74% vs ESPN 50%, n=39.');
+T('[4] hot, n=5 -> still exploratory, still no counter', ssCueReadNba({ gap: 0.3, deficit: 5, period: 3, leaderEfg: 60 }, L5) === 'WATCH SHAPE — better team down 5 to a hot leader (eFG 60%). [exploratory · LOW] trailers won 74% vs ESPN 50%, n=39.' && !has(hot0, '/30'));
 const hot30 = ssCueReadNba({ gap: 0.3, deficit: 5, period: 3, leaderEfg: 60 }, L30);
-T('[4] hot, n=31 -> forward number, exploratory dropped', has(hot30, 'Forward log: trailers WIN 65% [n=31, LOW]') && !has(hot30, 'exploratory'));
+T('[4] hot, n=31 -> forward number, exploratory dropped', hot30 === 'WATCH SHAPE — better team down 5 to a hot leader (eFG 60%). Forward log: trailers win 65% (n=31, LOW).' && !has(hot30, 'exploratory'));
 T('[4] eFG exactly 57 is hot', has(ssCueReadNba({ gap: 0.2, deficit: 3, period: 2, leaderEfg: 57 }, L0), 'WATCH SHAPE'));
 const nh = ssCueReadNba({ gap: 0.2, deficit: 3, period: 2, leaderEfg: 52 }, L5);
-T('[4] not hot -> GAP SPOT, tagged about-even base, GAP_BASE n', has(nh, 'GAP SPOT — gap qualifies, leader not hot (eFG 52%).') && has(nh, '[this season · exploratory · LOW]') && has(nh, '+6.0 ±11.8, n=66') && has(nh, 'collecting it (9/30)'));
-T('[4] no WNBA rate words anywhere', ![hot0, hot30, nh].some((s) => has(s, 'HOLD') || has(s, 'fade country') || has(s, 'converts')));
+T('[4] not hot -> GAP SPOT, tagged about-even base, no counter', nh === 'GAP SPOT — gap qualifies, leader not hot (eFG 52%). [exploratory · LOW] base shape ran about even with ESPN, n=66.');
+T('[4] no WNBA rate words anywhere; no ledger words', ![hot0, hot30, nh].some((s) => has(s, 'HOLD') || has(s, 'fade country') || has(s, 'converts') || has(s, 'ledger') || has(s, 'collecting')));
 
-// [5] price line (A1.3)
-T('[5] engine stamp first, ESPN fair, card differs appended', ssPriceLineNba({ trailerAlias: 'MIN', serverML: 135, cardML: '140', espnTrailerWp: 42 })
-  === 'engine saw MIN +135 (implied 43%) · ESPN fair 42% · card line +140');
-T('[5] stale flag at > .25 gap (+300 = 25% implied vs ESPN 61%)', ssPriceLineNba({ trailerAlias: 'DEN', serverML: 300, espnTrailerWp: 61 }) === 'engine saw DEN +300 (implied 25%) · ESPN fair 61% ⚠ may be pregame');
+// [5] price line (A1.3 priority, A3.9 copy — the row label carries "price")
+T('[5] engine stamp first (bare), ESPN, card differs appended', ssPriceLineNba({ trailerAlias: 'MIN', serverML: 135, cardML: '140', espnTrailerWp: 42 }) === 'MIN +135 (43% implied) · ESPN 42% · card +140');
+T('[5] stale flag at > .25 gap (+300 = 25% implied vs ESPN 61%)', ssPriceLineNba({ trailerAlias: 'DEN', serverML: 300, espnTrailerWp: 61 }) === 'DEN +300 (25% implied) · ESPN 61% ⚠ may be pregame');
 T('[5] not stale inside .25 (+140 = 42% vs 61%)', !has(ssPriceLineNba({ trailerAlias: 'DEN', serverML: 140, espnTrailerWp: 61 }), 'may be pregame'));
 T('[5] not stale at .25 exactly (strict >)', !has(ssPriceLineNba({ trailerAlias: 'X', serverML: 100, espnTrailerWp: 0.75 }), 'may be pregame'));
-T('[5] ESPN 0-1 scale normalized', has(ssPriceLineNba({ trailerAlias: 'X', serverML: -150, espnTrailerWp: 0.6 }), 'ESPN fair 60%'));
-T('[5] no ESPN -> no fair clause, no stale flag', ssPriceLineNba({ trailerAlias: 'X', serverML: 250 }) === 'engine saw X +250 (implied 29%)');
-T('[5] stamp null -> card line labeled', ssPriceLineNba({ trailerAlias: 'X', cardML: '+180', espnTrailerWp: 40 }) === 'card line X +180 (implied 36%) · ESPN fair 40%');
-T('[5] same card and stamp -> no duplicate suffix', !has(ssPriceLineNba({ trailerAlias: 'X', serverML: 135, cardML: '135' }), 'card line'));
+T('[5] ESPN 0-1 scale normalized', has(ssPriceLineNba({ trailerAlias: 'X', serverML: -150, espnTrailerWp: 0.6 }), 'ESPN 60%'));
+T('[5] no ESPN -> no fair clause, no stale flag', ssPriceLineNba({ trailerAlias: 'X', serverML: 250 }) === 'X +250 (29% implied)');
+T('[5] stamp null -> card line labeled', ssPriceLineNba({ trailerAlias: 'X', cardML: '+180', espnTrailerWp: 40 }) === 'card: X +180 (36% implied) · ESPN 40%');
+T('[5] same card and stamp -> no duplicate suffix', !has(ssPriceLineNba({ trailerAlias: 'X', serverML: 135, cardML: '135' }), 'card'));
 T('[5] neither -> MARKET nudge', ssPriceLineNba({ trailerAlias: 'X' }) === 'no line observed — tap MARKET to add one');
 T('[5] empty-string card ML treated as absent', ssPriceLineNba({ trailerAlias: 'X', cardML: '' }) === 'no line observed — tap MARKET to add one');
 
-// [6] verdict (color KEYS — A2.3)
+// [6] verdict (color KEYS — A2.3; A3.9 one-sentence copy)
 const KEYS = ['green', 'amber', 'blue', 'coral', 'dim', 'secondary'];
 const base = { homeAlias: 'MIN', awayAlias: 'NYK' };
 let r = ssVerdictComposeNba({ ...base, period: 2, homePts: 40, awayPts: 45, leaderAlias: 'NYK', gap: 0.16, leaderEfg: 60, rows: [{ subtype: 'WATCHLIST', leader: 'NYK', trailer: 'MIN' }] });
-T('[6] V1 WATCHLIST row in band (blue)', r.v === 'V1' && has(r.text, 'REVIEW — MIN is the better team (.16 quality gap) down 5') && has(r.text, 'See the push.') && r.color === 'blue');
+T('[6] V1 WATCHLIST row in band (blue), one sentence', r.v === 'V1' && r.color === 'blue' && r.text === 'REVIEW — MIN (better team, gap .16) down 5 to a hot leader. Not a bet call — your read decides.');
 // A3.3 V9 — the anchored trailer now LEADS (the cash-out moment); supersedes the v1 fall-through to V4
 r = ssVerdictComposeNba({ ...base, period: 3, homePts: 50, awayPts: 40, leaderAlias: 'MIN', gap: -0.16, rows: [{ subtype: 'WATCHLIST', leader: 'NYK', trailer: 'MIN' }], fireDeficit: 7 });
-T('[6] V9 WATCHLIST trailer leads -> LEAD TAKEN (green), fire deficit clause, cash-out copy', r.v === 'V9' && r.color === 'green'
-  && r.text === 'LEAD TAKEN — MIN (the watch trailer) leads by 10 after being down 7 at the cue. The cue did its job; cash-out territory — your read decides.');
+T('[6] V9 WATCHLIST trailer leads -> LEAD TAKEN (green), fire deficit clause, cash-out copy', r.v === 'V9' && r.color === 'green' && r.text === 'LEAD TAKEN — MIN leads by 10 (down 7 at the cue). Cash-out territory — your read decides.');
 r = ssVerdictComposeNba({ ...base, period: 3, homePts: 50, awayPts: 44, leaderAlias: 'MIN', gap: -0.16, rows: [{ subtype: 'WATCHLIST', leader: 'NYK', trailer: 'MIN' }] });
-T('[6] V9 without a fire deficit -> clause omitted', r.v === 'V9' && r.text === 'LEAD TAKEN — MIN (the watch trailer) leads by 6. The cue did its job; cash-out territory — your read decides.');
+T('[6] V9 without a fire deficit -> clause omitted', r.v === 'V9' && r.text === 'LEAD TAKEN — MIN leads by 6. Cash-out territory — your read decides.');
 r = ssVerdictComposeNba({ ...base, period: 3, homePts: 50, awayPts: 44, leaderAlias: 'MIN', gap: -0.16, rows: [{ subtype: 'GAP_BASE', leader: 'NYK', trailer: 'MIN' }], fireDeficit: 1 });
-T('[6] V9 GAP_BASE-only anchor -> gap-spot wording, secondary color, ledger copy', r.v === 'V9' && r.color === 'secondary' && r.text === 'LEAD TAKEN — MIN (the gap-spot trailer) leads by 6 after being down 1 at the cue. Silent ledger row — it resolves on the final. Not a validated bet.');
+T('[6] V9 GAP_BASE-only anchor -> gap-spot wording, secondary color, ledger copy', r.v === 'V9' && r.color === 'secondary' && r.text === 'LEAD TAKEN — MIN leads by 6 (down 1 at the gap spot). Silent ledger row, not a validated bet.');
 T('[6] V9 outranks V1/V3/V4/V7 and never fires without a row', ssVerdictComposeNba({ ...base, period: 4, homePts: 90, awayPts: 80, leaderAlias: 'MIN', gap: -0.3, rows: [{ subtype: 'WATCHLIST', leader: 'NYK', trailer: 'MIN' }] }).v === 'V9'
   && ssVerdictComposeNba({ ...base, period: 3, homePts: 50, awayPts: 40, leaderAlias: 'MIN', gap: -0.16 }).v === 'V4');
 T('[6] V9 -> lead lost again -> V1 resumes (in band)', ssVerdictComposeNba({ ...base, period: 3, homePts: 50, awayPts: 53, leaderAlias: 'NYK', gap: 0.16, rows: [{ subtype: 'WATCHLIST', leader: 'NYK', trailer: 'MIN' }] }).v === 'V1');
 T('[6] V9 no T5 trap', ssVerdictComposeNba({ ...base, period: 3, homePts: 50, awayPts: 40, leaderAlias: 'MIN', gap: -0.16, leaderEfg: 70, rows: [{ subtype: 'WATCHLIST', leader: 'NYK', trailer: 'MIN' }] }).trap === null);
 r = ssVerdictComposeNba({ ...base, period: 3, homePts: 50, awayPts: 40, leaderAlias: 'MIN', gap: -0.16 });
-T('[6] A3.3 V4 negative gap -> wrong-way wording (no row)', r.v === 'V4' && r.text === 'NO SPOT — gap -.16 runs the wrong way (leader MIN is the better team). Anything taken here is the speculative stream — size like it.');
+T('[6] A3.3 V4 negative gap -> wrong-way wording (no row)', r.v === 'V4' && r.text === 'NO SPOT — gap -.16 runs the wrong way (MIN is the better team).');
 r = ssVerdictComposeNba({ ...base, period: 2, homePts: 40, awayPts: 50, leaderAlias: 'NYK', gap: 0.16, rows: [{ subtype: 'WATCHLIST', leader: 'NYK', trailer: 'MIN' }] });
-T('[6] anchoring: row trailer down 10 -> V6 coral', r.v === 'V6' && r.color === 'coral' && has(r.text, 'OUT OF BAND — MIN down 10: outside the 1–9 window. No chasing.'));
+T('[6] anchoring: row trailer down 10 -> V6 coral', r.v === 'V6' && r.color === 'coral' && r.text === 'OUT OF BAND — MIN down 10, outside the 1–9 window. No chasing.');
 r = ssVerdictComposeNba({ ...base, period: 2, homePts: 40, awayPts: 45, leaderAlias: 'NYK', gap: 0.2, leaderEfg: 50, rows: [{ subtype: 'GAP_BASE', leader: 'NYK', trailer: 'MIN' }], gapBaseN: 9 });
-T('[6] V3 GAP_BASE row in band (secondary)', r.v === 'V3' && r.color === 'secondary' && has(r.text, 'GAP SPOT, LOGGING') && has(r.text, '(9/30 resolved)'));
+T('[6] V3 GAP_BASE row in band (secondary), no ledger counter', r.v === 'V3' && r.color === 'secondary' && r.text === 'GAP SPOT — gap qualifies, leader not hot. Logged, not a validated bet.');
 T('[6] WATCHLIST outranks GAP_BASE', ssVerdictComposeNba({ ...base, period: 2, homePts: 40, awayPts: 45, leaderAlias: 'NYK', gap: 0.2, rows: [{ subtype: 'GAP_BASE', leader: 'NYK', trailer: 'MIN' }, { subtype: 'WATCHLIST', leader: 'NYK', trailer: 'MIN' }] }).v === 'V1');
 T('[6] V0 pre-Q2 (dim)', (() => { const x = ssVerdictComposeNba({ ...base, period: 1, homePts: 20, awayPts: 25, gap: 0.3 }); return x.v === 'V0' && x.color === 'dim'; })());
 T('[6] V0 with no snapshot', ssVerdictComposeNba({ period: 0, homeAlias: 'A', awayAlias: 'B' }).text === 'Gates read from Q2 — no verdict yet.');
 r = ssVerdictComposeNba({ ...base, period: 2, homePts: 25, awayPts: 25, leaderAlias: 'MIN', gap: -0.162 });
-T('[6] VT tied, qualified: |gap| + better team (gap<0 -> home better)', r.v === 'VT' && r.text === 'TIED — no trailer to read. The .16 gap resolves on the next lead; MIN would be the watch trailer.');
+T('[6] VT tied, qualified: |gap| + better team (gap<0 -> home better)', r.v === 'VT' && r.text === 'TIED — the .16 gap resolves on the next lead; MIN would be the watch trailer.');
 T('[6] VT tied, gap>0 -> away better', has(ssVerdictComposeNba({ ...base, period: 2, homePts: 25, awayPts: 25, leaderAlias: 'MIN', gap: 0.2 }).text, 'NYK would be the watch trailer'));
-T('[6] VT tied, below bar', ssVerdictComposeNba({ ...base, period: 3, homePts: 60, awayPts: 60, leaderAlias: 'MIN', gap: 0.08 }).text === 'TIED — gap (.08) is below the review line either way.');
-T('[6] VT tied, null gap', has(ssVerdictComposeNba({ ...base, period: 3, homePts: 60, awayPts: 60 }).text, 'gap (no standings gap) is below'));
+T('[6] VT tied, below bar', ssVerdictComposeNba({ ...base, period: 3, homePts: 60, awayPts: 60, leaderAlias: 'MIN', gap: 0.08 }).text === 'TIED — gap .08 is below the .15 line either way.');
+T('[6] VT tied, null gap', ssVerdictComposeNba({ ...base, period: 3, homePts: 60, awayPts: 60 }).text === 'TIED — gap (no standings gap) is below the .15 line either way.');
 T('[6] tied with a row (rowDef 0) -> VT not V1', ssVerdictComposeNba({ ...base, period: 2, homePts: 25, awayPts: 25, gap: 0.3, rows: [{ subtype: 'WATCHLIST', leader: 'NYK', trailer: 'MIN' }] }).v === 'VT');
 r = ssVerdictComposeNba({ ...base, period: 2, homePts: 40, awayPts: 45, leaderAlias: 'NYK', gap: 0.1 });
-T('[6] V4 below bar (dim)', r.v === 'V4' && r.color === 'dim' && has(r.text, 'NO SPOT — quality gap (.10) is below the review line (.15).') && has(r.text, 'size like it'));
-T('[6] V4 null gap wording', has(ssVerdictComposeNba({ ...base, period: 2, homePts: 40, awayPts: 45 }).text, '(no standings gap)'));
+T('[6] V4 below bar (dim)', r.v === 'V4' && r.color === 'dim' && r.text === 'NO SPOT — gap .10 is below the .15 line. Speculative stream — size like it.');
+T('[6] V4 null gap wording', ssVerdictComposeNba({ ...base, period: 2, homePts: 40, awayPts: 45 }).text === 'NO SPOT — gap (no standings gap) is below the .15 line. Speculative stream — size like it.');
 r = ssVerdictComposeNba({ ...base, period: 4, homePts: 80, awayPts: 85, leaderAlias: 'NYK', gap: 0.3 });
-T('[6] V7 Q4 window closed (secondary)', r.v === 'V7' && r.color === 'secondary' && has(r.text, 'Q4 — the NBA cue window closed after Q3.'));
+T('[6] V7 Q4 window closed (secondary)', r.v === 'V7' && r.color === 'secondary' && r.text === 'Q4 — cue window closed after Q3. Your read decides.');
 T('[6] Q4 down 15 -> V7 (no DEAD / Q4 DEEP)', (() => { const x = ssVerdictComposeNba({ ...base, period: 4, homePts: 70, awayPts: 85, leaderAlias: 'NYK', gap: 0.3 }); return x.v === 'V7' && !has(x.text, 'DEAD') && !has(x.text, 'Q4 DEEP'); })());
-T('[6] VX read forming', (() => { const x = ssVerdictComposeNba({ ...base, period: 3, homePts: 60, awayPts: 65, leaderAlias: 'NYK', gap: 0.3 }); return x.v === 'VX' && has(x.text, 'READ FORMING'); })());
+T('[6] VX read forming', (() => { const x = ssVerdictComposeNba({ ...base, period: 3, homePts: 60, awayPts: 65, leaderAlias: 'NYK', gap: 0.3 }); return x.v === 'VX' && x.text === 'READ FORMING — gap qualifies, no row yet.'; })());
 T('[6] every emitted color is a key', [
   ssVerdictComposeNba({ ...base, period: 2, homePts: 40, awayPts: 45, leaderAlias: 'NYK', gap: 0.16, rows: [{ subtype: 'WATCHLIST', leader: 'NYK', trailer: 'MIN' }] }),
   ssVerdictComposeNba({ ...base, period: 2, homePts: 40, awayPts: 45, leaderAlias: 'NYK', gap: 0.2, rows: [{ subtype: 'GAP_BASE', leader: 'NYK', trailer: 'MIN' }] }),
   ssVerdictComposeNba({ ...base, period: 1 }), ssVerdictComposeNba({ ...base, period: 2, homePts: 25, awayPts: 25, gap: 0.3 }),
   ssVerdictComposeNba({ ...base, period: 2, homePts: 40, awayPts: 45, leaderAlias: 'NYK', gap: 0.1 }), ssVerdictComposeNba({ ...base, period: 2, homePts: 40, awayPts: 55, leaderAlias: 'NYK', gap: 0.3 }),
   ssVerdictComposeNba({ ...base, period: 4, homePts: 80, awayPts: 85, leaderAlias: 'NYK', gap: 0.3 }), ssVerdictComposeNba({ ...base, period: 3, homePts: 60, awayPts: 65, leaderAlias: 'NYK', gap: 0.3 }),
+  ssVerdictComposeNba({ ...base, period: 3, homePts: 50, awayPts: 40, leaderAlias: 'MIN', gap: -0.16, rows: [{ subtype: 'WATCHLIST', leader: 'NYK', trailer: 'MIN' }] }),
 ].every((x) => KEYS.indexOf(x.color) > -1));
 T('[6] composer is token-free', !has(extractFn(CORE, 'ssVerdictComposeNba'), 'var(--') && !has(extractFn(CORE, 'ssVerdictComposeNba'), '#4aa3ff'));
 T('[6] both SS_NBA_COLORS maps cover every key', [bdlMod.SS_NBA_COLORS, v3Mod.SS_NBA_COLORS].every((m) => KEYS.every((k) => typeof m[k] === 'string' && m[k].length > 0)));
 T('[6] v3 colors are the WNBA token family, bdl colors are bdl tokens', v3Mod.SS_NBA_COLORS.dim === 'var(--fg-dim)' && v3Mod.SS_NBA_COLORS.coral === 'var(--coral)' && bdlMod.SS_NBA_COLORS.dim === 'var(--t3)' && bdlMod.SS_NBA_COLORS.coral === 'var(--red)');
 // traps
 r = ssVerdictComposeNba({ ...base, period: 2, homePts: 40, awayPts: 45, leaderAlias: 'NYK', gap: 0.1, leaderEfg: 61 });
-T('[6] T5 on V4: hot leader without a gap', r.trap != null && has(r.trap, 'Hot leader without a quality gap') && has(r.trap, '1,200 NBA games'));
+T('[6] T5 on V4: hot leader without a gap (one sentence)', r.trap === '⚠ Hot leader, no gap — heat alone was a null on 1,200 NBA games. Heat only matters on top of a gap.');
 T('[6] T5 fires on VT below bar too', ssVerdictComposeNba({ ...base, period: 2, homePts: 25, awayPts: 25, gap: 0.05, leaderEfg: 60 }).trap != null);
 T('[6] no T5 when gap qualifies', ssVerdictComposeNba({ ...base, period: 3, homePts: 60, awayPts: 65, leaderAlias: 'NYK', gap: 0.3, leaderEfg: 65 }).trap === null);
 T('[6] no T5 when leader not hot', ssVerdictComposeNba({ ...base, period: 2, homePts: 40, awayPts: 45, leaderAlias: 'NYK', gap: 0.1, leaderEfg: 56.9 }).trap === null);
@@ -197,45 +196,46 @@ T('[6] Q4 with a below-bar gap is V4 (V4 outranks V7) and carries T5 when hot', 
 T('[6] T1/T4 WNBA kills never render', !has(extractFn(CORE, 'ssVerdictComposeNba'), 'Jun 21') && !has(extractFn(CORE, 'ssVerdictComposeNba'), 'POR@CHI') && !has(extractFn(CORE, 'ssVerdictComposeNba'), '.20 bar'));
 // V8 freeze
 r = ssVerdictComposeNba({ ...base, period: 4, homePts: 100, awayPts: 98, leaderAlias: 'MIN', gap: -0.16, rows: [{ subtype: 'WATCHLIST', leader: 'NYK', trailer: 'MIN' }], gameStatus: 'closed', finalHome: 104, finalAway: 101, winner: 'MIN' });
-T('[6] V8 freeze: row trailer won by games.winner (won=true)', r.v === 'V8' && r.won === true && has(r.text, 'Final 104-101 — MIN completed the comeback.'));
+T('[6] V8 freeze: row trailer won by games.winner (won=true), V9 head', r.v === 'V8' && r.won === true && has(r.text, 'LEAD TAKEN — MIN leads by 2.') && has(r.text, 'Final 104-101 — MIN completed the comeback.'));
 r = ssVerdictComposeNba({ ...base, period: 4, homePts: 95, awayPts: 98, leaderAlias: 'NYK', gap: 0.16, rows: [{ subtype: 'WATCHLIST', leader: 'NYK', trailer: 'MIN' }], gameStatus: 'closed', finalHome: 99, finalAway: 105, winner: 'NYK' });
 T('[6] V8 freeze: did not come back (won=false)', r.v === 'V8' && r.won === false && has(r.text, 'MIN did not come back.'));
 // A3.2 — closed with NO row: NO CUE + the last read, no outcome subject invented (won null -> chip FINAL dim)
 r = ssVerdictComposeNba({ ...base, period: 4, homePts: 100, awayPts: 100, gap: 0.2, gameStatus: 'closed', finalHome: 108, finalAway: 100, winner: 'MIN' });
-T('[6] closed, no row, tied last snapshot -> NO CUE "tied", won null', r.v === 'V8' && r.won === null && r.color === 'dim' && r.text === 'NO CUE — nothing fired this game. Last read Q4: tied. Final 108-100.');
+T('[6] closed, no row, tied last snapshot -> NO CUE "tied", won null', r.v === 'V8' && r.won === null && r.color === 'dim' && r.text === 'NO CUE — nothing fired · last read Q4: tied · Final 108-100.');
 r = ssVerdictComposeNba({ homeAlias: 'MEM', awayAlias: 'GSW', period: 4, clock: '0:10', homePts: 126, awayPts: 98, leaderAlias: 'MEM', gap: -0.2, leaderEfg: 60, gameStatus: 'closed', finalHome: 126, finalAway: 98, winner: 'MEM' });
-T('[6] closed, no row, wrong-way gap (GSW@MEM) -> NO CUE with the last read; trap suppressed', r.v === 'V8' && r.won === null && r.trap === null
-  && r.text === 'NO CUE — nothing fired this game. Last read Q4 0:10: gap -.20 runs the wrong way (leader MEM is the better team). Final 126-98.');
-T('[6] closed, no row, below-bar gap', has(ssVerdictComposeNba({ ...base, period: 4, clock: '0:30', homePts: 90, awayPts: 95, leaderAlias: 'NYK', gap: 0.08, gameStatus: 'closed', finalHome: 92, finalAway: 99, winner: 'NYK' }).text, 'Last read Q4 0:30: gap .08 below bar. Final 99-92.'));
-T('[6] closed, no row, qualified gap never fired (Q4 only) -> names trailer, deficit, window', has(ssVerdictComposeNba({ ...base, period: 4, clock: '0:30', homePts: 90, awayPts: 95, leaderAlias: 'NYK', gap: 0.2, gameStatus: 'closed', finalHome: 92, finalAway: 99, winner: 'NYK' }).text, 'gap .20 qualified, MIN down 5 in Q4 (outside the Q2–Q3 window). Final 99-92.'));
-T('[6] closed, no row, null gap', has(ssVerdictComposeNba({ ...base, period: 4, homePts: 90, awayPts: 95, gameStatus: 'closed', finalHome: 92, finalAway: 99, winner: 'NYK' }).text, 'Last read Q4: no standings gap. Final 99-92.'));
+T('[6] closed, no row, wrong-way gap (GSW@MEM) -> NO CUE one-liner; trap suppressed', r.v === 'V8' && r.won === null && r.trap === null
+  && r.text === 'NO CUE — nothing fired · last read Q4 0:10: gap -.20 runs the wrong way (MEM is the better team) · Final 126-98.');
+T('[6] closed, no row, below-bar gap', has(ssVerdictComposeNba({ ...base, period: 4, clock: '0:30', homePts: 90, awayPts: 95, leaderAlias: 'NYK', gap: 0.08, gameStatus: 'closed', finalHome: 92, finalAway: 99, winner: 'NYK' }).text, 'last read Q4 0:30: gap .08 below bar · Final 99-92.'));
+T('[6] closed, no row, qualified gap never fired (Q4 only) -> names trailer, deficit, window', has(ssVerdictComposeNba({ ...base, period: 4, clock: '0:30', homePts: 90, awayPts: 95, leaderAlias: 'NYK', gap: 0.2, gameStatus: 'closed', finalHome: 92, finalAway: 99, winner: 'NYK' }).text, 'gap .20 qualified, MIN down 5 in Q4 (outside the Q2–Q3 window) · Final 99-92.'));
+T('[6] closed, no row, null gap', has(ssVerdictComposeNba({ ...base, period: 4, homePts: 90, awayPts: 95, gameStatus: 'closed', finalHome: 92, finalAway: 99, winner: 'NYK' }).text, 'last read Q4: no standings gap · Final 99-92.'));
 r = ssVerdictComposeNba({ ...base, period: 4, homePts: 110, awayPts: 100, leaderAlias: 'MIN', gap: -0.16, rows: [{ subtype: 'WATCHLIST', leader: 'NYK', trailer: 'MIN' }], fireDeficit: 7, gameStatus: 'closed', finalHome: 112, finalAway: 100, winner: 'MIN' });
-T('[6] closed with a row whose trailer won: V9 head + Final appended (transition render)', r.v === 'V8' && r.won === true && has(r.text, 'LEAD TAKEN — MIN (the watch trailer) leads by 10 after being down 7 at the cue.') && has(r.text, 'Final 112-100 — MIN completed the comeback.'));
+T('[6] closed with a row whose trailer won: V9 head + Final appended (transition render)', r.v === 'V8' && r.won === true && has(r.text, 'LEAD TAKEN — MIN leads by 10 (down 7 at the cue).') && has(r.text, 'Final 112-100 — MIN completed the comeback.'));
 T('[6] line dead suffix', has(ssVerdictComposeNba({ ...base, period: 3, homePts: 60, awayPts: 65, leaderAlias: 'NYK', gap: 0.3, lineUsed: 50000 }).text, 'Line dead.'));
 T('[6] WNBA subtypes never match (EFG_FADE rows ignored)', ssVerdictComposeNba({ ...base, period: 3, homePts: 60, awayPts: 65, leaderAlias: 'NYK', gap: 0.3, subtypes: ['EFG_FADE'] }).v === 'VX');
+T('[6] A3.9 word budget: every live verdict text is <= 110 chars', [
+  ssVerdictComposeNba({ ...base, period: 2, homePts: 40, awayPts: 45, leaderAlias: 'NYK', gap: 0.16, rows: [{ subtype: 'WATCHLIST', leader: 'NYK', trailer: 'MIN' }] }),
+  ssVerdictComposeNba({ ...base, period: 3, homePts: 50, awayPts: 40, leaderAlias: 'MIN', gap: -0.16, rows: [{ subtype: 'WATCHLIST', leader: 'NYK', trailer: 'MIN' }], fireDeficit: 7 }),
+  ssVerdictComposeNba({ ...base, period: 2, homePts: 40, awayPts: 45, leaderAlias: 'NYK', gap: 0.2, rows: [{ subtype: 'GAP_BASE', leader: 'NYK', trailer: 'MIN' }] }),
+  ssVerdictComposeNba({ ...base, period: 2, homePts: 25, awayPts: 25, leaderAlias: 'MIN', gap: -0.162 }), ssVerdictComposeNba({ ...base, period: 2, homePts: 40, awayPts: 45, leaderAlias: 'NYK', gap: 0.1 }),
+  ssVerdictComposeNba({ ...base, period: 2, homePts: 40, awayPts: 55, leaderAlias: 'NYK', gap: 0.3 }), ssVerdictComposeNba({ ...base, period: 4, homePts: 80, awayPts: 85, leaderAlias: 'NYK', gap: 0.3 }), ssVerdictComposeNba({ ...base, period: 3, homePts: 60, awayPts: 65, leaderAlias: 'NYK', gap: 0.3 }),
+].every((x) => x.text.length <= 110));
 
-// [7] forward-ledger panel
-let P = ssForwardLedgerPanelNba({});
-T('[7] A1.4 empty copy, four lines verbatim', P.length === 4 && P[0] === 'WATCHLIST  0 rows · 0 resolved · —' && P[1] === 'GAP_BASE   0 rows · 0 resolved · —'
-  && P[2] === 'origin: exploratory cell +24pp vs ESPN, n=39 LOW, as of 2026-11-19 (aaf0ec8)' && P[3] === 'switch to forward numbers at 30 resolved WATCHLIST rows');
-T('[7] rows but none resolved -> dash rate', ssForwardLedgerPanelNba({ WATCHLIST: { n_total: 3, n_resolved: 0, realized_pct: null } })[0] === 'WATCHLIST  3 rows · 0 resolved · —');
-P = ssForwardLedgerPanelNba(L5);
-T('[7] resolved -> trailer-WINS + power tag', P[0] === 'WATCHLIST  7 rows · 5 resolved · trailer-WINS 60% [LOW]' && P[1] === 'GAP_BASE   12 rows · 9 resolved · trailer-WINS 56% [LOW]');
-P = ssForwardLedgerPanelNba(L30);
-T('[7] at 31 resolved the switch line disappears', P.length === 3 && !P.some((l) => has(l, 'switch to forward')));
-T('[7] power tags', ssPowerTag(79) === 'LOW' && ssPowerTag(80) === 'MED' && ssPowerTag(199) === 'MED' && ssPowerTag(200) === 'HIGH');
+// [7] A3.9 — the forward-ledger panel is GONE from the dashboard (the digest/DB own the ledger); the n>=30 cue-read switch keeps its feed
+T('[7] no ssForwardLedgerPanelNba / toggle / open-state anywhere in either page', ['ssForwardLedgerPanelNba', '_ssNbaLedgerOpen', 'ssNbaToggleLedger', 'FORWARD LEDGER', 'switch to forward numbers', 'origin: exploratory cell'].every((k) => !has(HTML, k) && !has(V3, k)));
+T('[7] ssNbaEnsureLedger stays (feeds the cue-read forward switch) and is still called by fetchSSStateNba', has(CORE, 'async function ssNbaEnsureLedger(') && has(extractFn(CORE, 'fetchSSStateNba'), 'ssNbaEnsureLedger(false)'));
+T('[7] power tags (still used by the forward switch)', ssPowerTag(79) === 'LOW' && ssPowerTag(80) === 'MED' && ssPowerTag(199) === 'MED' && ssPowerTag(200) === 'HIGH');
 
 // [8] pregame read
 const pg = (o) => ssPregameReadNba({ homeAlias: 'DEN', awayAlias: 'POR', home: { w: 9, l: 4 }, away: { w: 4, l: 9 }, cueHist: {}, ledger: {}, standingsAsOf: 'Nov 19 03:10', ...o });
 let G = pg({});
 T('[8] head: records, win%s, gap tier', G[0] === 'PREGAME READ — as-of records POR 4-9 (.308) · DEN 9-4 (.692) · gap .38 STRONG');
 T('[8] both directions stated', G[1] === 'If POR leads in Q2–Q3 by 1–9 → DEN is the watch trailer (hot-leader cue needs POR eFG ≥ 57).' && G[2] === 'If DEN leads → no spot (gap runs the wrong way).');
-T('[8] season line with empty history + empty ledger', G[3] === 'This season: POR 0 · DEN 0. Forward ledger: WATCH 0 resolved.');
+T('[8] season line with empty history (A3.9: no ledger clause)', G[3] === 'This season: POR 0 · DEN 0.');
 T('[8] footer standings only when no line', G[4] === 'Standings as of Nov 19 03:10');
 G = pg({ homeML: -400, awayML: 310, linePregame: true });
 T('[8] footer line + pregame tag', G[4] === 'Standings as of Nov 19 03:10 · line: POR +310 / DEN -400 (pregame)');
 G = pg({ cueHist: { DEN: { n: 2, won: 2, open: 0 }, POR: { n: 1, won: 0, open: 1 } }, ledger: L5 });
-T('[8] cue history + ledger line', G[3] === 'This season: POR 1 watchlist cue as trailer (0 WON, 1 open) · DEN 2 watchlist cues as trailer (2 WON). Forward ledger: WATCH 5 resolved · 60% [LOW].');
+T('[8] cue history, no ledger line', G[3] === 'This season: POR 1 watchlist cue as trailer (0 WON, 1 open) · DEN 2 watchlist cues as trailer (2 WON).' && !has(G.join(' '), 'ledger'));
 G = pg({ away: { w: 3, l: 1 } });
 T('[8] GP guard: <5 GP team -> no gap, guard line', has(G[0], 'POR 3-1 (<5 GP — no gap yet)') && G[1] === 'No gap read until both teams reach 5 games.' && G.length === 4);
 G = pg({ away: { w: 8, l: 5 } });
@@ -296,19 +296,25 @@ T('[9] v3 hooks: 60s active-card timer at poll start, kick, select + swipe refre
 T('[9] v3 block never touches the Sonnet-signal expander or its own computeScoringComp', !has(BLOCK3, '_ssExpanded') && !has(BLOCK3, 'computeScoringComp('));
 T('[9] v3 CSS present (strip, chip, sheet) and bdl CSS present (sheet)', has(V3, '.ssn-strip{') && has(V3, '.ssn-chip{') && has(V3, '.msn-overlay{') && has(HTML, '.msn-overlay{'));
 T('[9] every fetch in both blocks passes league=nba', ![BLOCK, BLOCK3].some((b) => /db-api\?action=(get_ss_state|ss_ledger_summary|get_sweetspot_alerts|get_team_profiles|get_standings)[^'"]*league=wnba/.test(b)));
-// A3 render gates
+// A3 / A3.9 render gates — verdict-first grid on LIVE, outcome-first grid on FINAL, rows from the cache, no ledger
 T('[9] A3: both files render FIRE REVIEW on FINAL from the rows cache (ssNbaRowsFor), never from fire_review', [BDL_SP, V3_SP].every((s) => {
   const fr = extractFn(s, 'renderSSFireReviewNba'); const box = extractFn(s, 'renderSSVerdictBoxNba');
   return !has(fr, 'fire_review') && has(box, "getState(") && has(box, 'ssNbaRowsFor(id)') && has(box, 'ssNbaKickRows(id,cs)') && has(box, '_allSnapshots') && has(box, 'return renderSSFireReviewNba(');
 }));
-T('[9] A3: FIRE REVIEW render carries the ledger panel (open default true), FINAL BOX evidence, fired→final stamp, no live price/gate/cue', [BDL_SP, V3_SP].every((s) => {
+T('[9] A3.9: FIRE REVIEW render = headline + FINAL, fr.rows grid, Box row, fired→final; no price/gate/cue/ledger', [BDL_SP, V3_SP].every((s) => {
   const fr = extractFn(s, 'renderSSFireReviewNba');
-  return has(fr, '_ssNbaLedgerOpen[id]:true') && has(fr, "'FINAL BOX'") && has(fr, "→ final") && !has(fr, 'ssPriceLineNba(') && !has(fr, 'ssGateLineNba(') && !has(fr, 'ssCueReadNba(');
+  return has(fr, 'fr.headline') && has(fr, 'fr.final') && has(fr, 'fr.rows.forEach') && has(fr, "Row('Box',[ssEvidenceRowNba(cs,null") && has(fr, "→ final") && !has(fr, 'ssPriceLineNba(') && !has(fr, 'ssGateLineNba(') && !has(fr, 'ssCueReadNba(') && !has(fr, 'LEDGER');
 }));
-T('[9] A3: evidence lines factored into one per-file helper used by both renders', [BDL_SP, V3_SP].every((s) => s.split('function renderSSEvidenceNba(').length === 2 && s.split('renderSSEvidenceNba(').length === 4 && s.split('LEADER’S ENGINE').length === 2));
-T('[9] A3: no garbage-time price line on a FINAL card (no-row finals keep gate line + NO CUE head)', has(extractFn(V3_SP, 'renderSSVerdictBoxNba'), "var pl=(tied||(g&&getState(g)==='FINAL'))?null:ssPriceLineNba(") && has(extractFn(BDL_SP, 'renderSSVerdictBoxNba'), "var pl=(tied||(game&&getState(game)==='FINAL'))?null:ssPriceLineNba("));
+T('[9] A3.9: LIVE box is verdict-first, then Gate · Cue · Price · Fired · Box rows (in that order), one row helper per file', [BDL_SP, V3_SP].every((s) => {
+  const box = extractFn(s, 'renderSSVerdictBoxNba'); const rowFn = has(s, 'function ssnRow(') ? 'ssnRow' : 'ssbRow';
+  const order = ["'Gate'", "'Cue'", "'Price'", "'Fired'", "'Box'"].map((k) => box.indexOf(rowFn + '(' + k));
+  return s.split('function ' + rowFn + '(').length === 2 && order.every((x) => x > -1) && order.every((x, k) => k === 0 || x > order[k - 1]) && box.indexOf('verdict.color') < order[0] && !has(box, 'LEDGER');
+}));
+T('[9] A3.9: one Box helper per file, used by both renders; the two-line WNBA evidence block is gone from the NBA box', [BDL_SP, V3_SP].every((s) => s.split('function ssEvidenceRowNba(').length === 2 && s.split('ssEvidenceRowNba(').length === 4 && !has(s, 'LEADER’S ENGINE') && !has(s, 'THE LEAD:')));
+T('[9] A3.9: no garbage-time price line on a FINAL card', has(extractFn(V3_SP, 'renderSSVerdictBoxNba'), "var pl=(tied||(g&&getState(g)==='FINAL'))?null:ssPriceLineNba(") && has(extractFn(BDL_SP, 'renderSSVerdictBoxNba'), "var pl=(tied||(game&&getState(game)==='FINAL'))?null:ssPriceLineNba("));
 T('[9] A3: both composers receive clock + fireDeficit (NO CUE last read, V9 clause)', has(V3_SP, 'clock:sn.clock') && has(V3_SP, 'fireDeficit:(fr0&&fr0.deficit!=null)?fr0.deficit:null') && has(BDL_SP, 'clock:sn.clock') && has(BDL_SP, 'fireDeficit:(fr0&&fr0.deficit!=null)?fr0.deficit:null'));
 T('[9] A3: both pages keep the full snapshot array for the high-water read', has(extractFn(HTML, 'hydrateFromServerSnapshots'), 'cs._allSnapshots = usable;') && has(V3, 'cs._allSnapshots=usable;'));
+T('[9] A3.9: v3 grid CSS present; bdl rows are inline-styled (no WNBA tokens in the bdl block)', has(V3, '.ssn-row{') && has(V3, '.ssn-k{') && has(V3, '.ssn-v{') && !has(BLOCK, 'ssn-row'));
 T('[9] A3: the committed render script exists for the pre-amendment evidence', readFileSync('research/2026-11-19_v3_final_card_render.mjs', 'utf8').length > 500);
 
 // [10] D3 — NBA lite profiles (pure compute over the three committed finals)
@@ -344,33 +350,39 @@ const HW = [{ period: 2, clock: '12:00', home_pts: 20, away_pts: 27 }, { period:
 T('[11] high-water: strictly after the fire moment, trailer-relative, touched when > 0', (() => { const h = ssHighWaterNba(HW, { period: 2, clock: '12:00' }, 'MIN', 'MIN'); return h.max === 2 && h.touched === true && h.n === 3; })());
 T('[11] high-water: away trailer sign, never led', (() => { const h = ssHighWaterNba(HW, { period: 2, clock: '12:00' }, 'NYK', 'MIN'); return h.max === 3 && h.touched === true; })() && (() => { const h = ssHighWaterNba(HW.slice(0, 3), { period: 2, clock: '12:00' }, 'NYK', 'MIN'); return h.max === 2; })());
 T('[11] high-water: the fire snapshot itself is excluded; nothing after -> null; empty -> null', ssHighWaterNba(HW, { period: 4, clock: '0:30' }, 'MIN', 'MIN') === null && ssHighWaterNba([], { period: 2, clock: '12:00' }, 'MIN', 'MIN') === null && ssHighWaterNba(null, { period: 2 }, 'MIN', 'MIN') === null);
+const rowV = (F, k) => { const x = F.rows.find((r) => r.k === k); return x ? x.v : null; };
+const alsoV = (F) => F.rows.filter((r) => r.k === 'Also').map((r) => r.v[0]);
 let F = frOf(FRG('NYK', 'MIN'));
-T('[11] NYK@MIN: twin collapses to one moment; title', F.moments.length === 1 && F.title === 'FIRE REVIEW — WATCHLIST + GAP_BASE fired Q2 12:00' && F.moments[0].label === 'WATCHLIST + GAP_BASE Q2 12:00 (pushed)');
-T('[11] NYK@MIN: l1 as-of win%s, deficit, gap tier', F.moments[0].lines[0] === 'MIN (.733) down 7 to NYK (.571) · gap .16 qualified');
-T('[11] NYK@MIN: l2 leader eFG + lead class + V-share', F.moments[0].lines[1] === 'leader eFG 85% · lead: variance-built (V 58%)');
-T('[11] NYK@MIN: l3 book, implied (server stamp), consensus, ESPN fair, clean', F.moments[0].lines[2] === 'book MIN +180 (implied 36%, consensus +160) · ESPN fair 32% · price clean');
-T('[11] NYK@MIN: final by winner (lost), high-water -3 never led, sweep pending', F.final === 'FINAL 102-99 — MIN did not come back · high-water after fire -3 (never led) [snapshots, ~60s grain]' && F.sweep === 'nightly sweep: pending' && F.won === false && F.trailer === 'MIN');
+T('[11] NYK@MIN: headline + FINAL, lost, trailer, when', F.headline === 'MIN did not come back' && F.final === 'FINAL 102-99' && F.won === false && F.trailer === 'MIN' && F.when === 'Q2 12:00');
+T('[11] NYK@MIN: Cue row (twin collapses to the WATCHLIST moment; pushed -> no tag), two lines', JSON.stringify(rowV(F, 'Cue')) === JSON.stringify(['WATCHLIST Q2 12:00 · MIN down 7 to NYK · gap .16 qualified', 'NYK eFG 85% (hot) · variance-built']));
+T('[11] NYK@MIN: Price row (server-stamped implied, ESPN, clean)', JSON.stringify(rowV(F, 'Price')) === JSON.stringify(['MIN +180 (36% implied) · ESPN 32% · clean']));
+T('[11] NYK@MIN: Arc row (never led, high-water -3, resolver pending); no Also', JSON.stringify(rowV(F, 'Arc')) === JSON.stringify(['never led · high-water -3 · resolver pending']) && alsoV(F).length === 0 && F.rows.map((r) => r.k).join(',') === 'Cue,Price,Arc');
 F = frOf(FRG('POR', 'MIL'));
-T('[11] POR@MIL: two moments in fire order, labels ①/②, silent vs pushed', F.moments.length === 2 && F.title === 'FIRE REVIEW — 2 moments' && F.moments[0].label === '① GAP_BASE Q2 6:36 (silent ledger row)' && F.moments[1].label === '② WATCHLIST Q2 4:23 (pushed)');
-T('[11] POR@MIL ①: STRONG gap, not-hot eFG, thin margin', F.moments[0].lines[0] === 'POR (.643) down 1 to MIL (.067) · gap .58 STRONG' && F.moments[0].lines[1] === 'leader eFG 55% (not hot) · lead: too thin to read (V 56%)' && F.moments[0].lines[2] === 'book POR -260 (implied 72%, consensus -336) · ESPN fair 74% · price clean');
-T('[11] POR@MIL ②: hot eFG, variance-built, minus-money book', F.moments[1].lines[0] === 'POR (.643) down 4 to MIL (.067) · gap .58 STRONG' && F.moments[1].lines[1] === 'leader eFG 59% · lead: variance-built (V 56%)' && F.moments[1].lines[2] === 'book POR -175 (implied 64%, consensus -235) · ESPN fair 62% · price clean');
-T('[11] POR@MIL: won, high-water +12 took the lead (measured from the FIRST moment)', F.final === 'FINAL 124-114 — POR completed the comeback · high-water after fire +12 (took the lead) [snapshots, ~60s grain]' && F.won === true);
+T('[11] POR@MIL: PRIMARY = the WATCHLIST moment (4:23), not the earlier GAP_BASE; won', F.headline === 'POR completed the comeback' && F.final === 'FINAL 124-114' && F.won === true && F.when === 'Q2 4:23');
+T('[11] POR@MIL: Cue row from the push moment', JSON.stringify(rowV(F, 'Cue')) === JSON.stringify(['WATCHLIST Q2 4:23 · POR down 4 to MIL · gap .58 STRONG', 'MIL eFG 59% (hot) · variance-built']));
+T('[11] POR@MIL: Price row minus-money', JSON.stringify(rowV(F, 'Price')) === JSON.stringify(['POR -175 (64% implied) · ESPN 62% · clean']));
+T('[11] POR@MIL: Arc from the primary moment (+12 took the lead)', JSON.stringify(rowV(F, 'Arc')) === JSON.stringify(['took the lead · high-water +12 · resolver pending']));
+T('[11] POR@MIL: the silent GAP_BASE moment becomes one Also row', JSON.stringify(alsoV(F)) === JSON.stringify(['GAP_BASE Q2 6:36, silent · down 1 · eFG 55% · -260 vs ESPN 74%']) && F.rows.map((r) => r.k).join(',') === 'Cue,Price,Arc,Also');
 F = frOf(FRG('LAC', 'SAS'));
-T('[11] LAC@SAS: twin at Q3 9:48, down 1 -> too thin to read, -430 book', F.title === 'FIRE REVIEW — WATCHLIST + GAP_BASE fired Q3 9:48' && F.moments[0].lines[0] === 'SAS (.800) down 1 to LAC (.308) · gap .49 STRONG' && F.moments[0].lines[1] === 'leader eFG 61% · lead: too thin to read (V 56%)' && F.moments[0].lines[2] === 'book SAS -430 (implied 81%, consensus -580) · ESPN fair 78% · price clean');
-T('[11] LAC@SAS: won, high-water +14', F.final === 'FINAL 124-112 — SAS completed the comeback · high-water after fire +14 (took the lead) [snapshots, ~60s grain]' && F.won === true);
+T('[11] LAC@SAS: twin at Q3 9:48, down 1 -> too thin to read, -430 book, +14', F.headline === 'SAS completed the comeback' && JSON.stringify(rowV(F, 'Cue')) === JSON.stringify(['WATCHLIST Q3 9:48 · SAS down 1 to LAC · gap .49 STRONG', 'LAC eFG 61% (hot) · too thin to read'])
+  && JSON.stringify(rowV(F, 'Price')) === JSON.stringify(['SAS -430 (81% implied) · ESPN 78% · clean']) && JSON.stringify(rowV(F, 'Arc')) === JSON.stringify(['took the lead · high-water +14 · resolver pending']) && F.won === true);
 T('[11] GSW@MEM: no rows -> null (render falls back to the V8 NO CUE head)', frOf(FRG('GSW', 'MEM')) === null && ssFireReviewNba([], [], {}) === null && ssFireReviewNba(null, null, null) === null);
 T('[11] GAME_BRIEF rows and rows without deficit/gap are ignored', ssFireReviewNba([{ alert_subtype: 'GAME_BRIEF', period: 0 }, { alert_subtype: 'WATCHLIST', period: 2 }], [], {}) === null);
-// synthetic: stale price, resolved rows, null line, string ctx, no snapshots, no winner, no priceStale
+// synthetic: stale price, resolved rows, null line, string ctx, no snapshots, no winner, no priceStale, GAP_BASE-only primary
 const SY = { alert_subtype: 'WATCHLIST', id: 1, period: 2, clock: '9:00', deficit: 5, trailer_alias: 'DEN', leader_alias: 'POR', trailer_wp: 0.692, leader_wp: 0.308, quality_gap: 0.3846, leader_efg: 60.2, lead_class: 'MIXED', variance_share: 50, line_used: 300, line_consensus: 300, ntfy_sent: true, resolved: true, trailer_won: true, player_ctx_json: JSON.stringify({ priceStale: { stale: true, implied: 0.25, espnWp: 0.61 } }) };
 const SG = { home_alias: 'POR', away_alias: 'DEN', home_pts: 100, away_pts: 110, winner: 'DEN' };
 F = ssFireReviewNba([SY], [], SG);
-T('[11] synthetic: stale flag copy, consensus equal -> omitted, string ctx parsed, resolved ✓ won, no snapshots -> no high-water clause', F.moments[0].lines[2] === 'book DEN +300 (implied 25%) · ESPN fair 61% · ⚠ price stale (book vs ESPN >25pp — stamp may be pregame)' && F.sweep === 'nightly sweep: resolved ✓ · trailer won' && F.final === 'FINAL 110-100 — DEN completed the comeback' && F.moments[0].lines[1] === 'leader eFG 60% · lead: mixed (V 50%)');
+T('[11] synthetic: stale flag copy, string ctx parsed, resolved ✓ won, no snapshots -> Arc is the resolver only', JSON.stringify(rowV(F, 'Price')) === JSON.stringify(['DEN +300 (25% implied) · ESPN 61% · ⚠ stale (may be pregame)']) && JSON.stringify(rowV(F, 'Arc')) === JSON.stringify(['resolved ✓ won']) && F.headline === 'DEN completed the comeback' && F.final === 'FINAL 110-100' && JSON.stringify(rowV(F, 'Cue')) === JSON.stringify(['WATCHLIST Q2 9:00 · DEN down 5 to POR · gap .38 STRONG', 'POR eFG 60% (hot) · mixed']));
 F = ssFireReviewNba([{ ...SY, resolved: true, trailer_won: false, line_used: null, player_ctx_json: null }], [], { ...SG, winner: 'POR', home_pts: 100, away_pts: 95 });
-T('[11] synthetic: null line -> no book line at fire; resolved lost', F.moments[0].lines[2] === 'no book line at fire' && F.sweep === 'nightly sweep: resolved ✓ · trailer lost' && F.final === 'FINAL 100-95 — DEN did not come back' && F.won === false);
+T('[11] synthetic: null line -> no book line at fire; resolved lost', JSON.stringify(rowV(F, 'Price')) === JSON.stringify(['no book line at fire']) && JSON.stringify(rowV(F, 'Arc')) === JSON.stringify(['resolved ✓ lost']) && F.headline === 'DEN did not come back' && F.won === false);
 F = ssFireReviewNba([{ ...SY, resolved: false, player_ctx_json: {} }], [], { ...SG, winner: null, home_pts: null, away_pts: null });
-T('[11] synthetic: no priceStale -> implied computed, no ESPN/clean clause; no winner -> result pending, won null', F.moments[0].lines[2] === 'book DEN +300 (implied 25%)' && F.final === 'FINAL — result pending' && F.won === null && F.sweep === 'nightly sweep: pending');
-T('[11] synthetic: GAP_BASE-only single moment is "silent ledger row"; mixed resolved state stays pending', (() => { const x = ssFireReviewNba([{ ...SY, alert_subtype: 'GAP_BASE', ntfy_sent: false, resolved: true }, { ...SY, id: 2, alert_subtype: 'WATCHLIST', ntfy_sent: false, resolved: false, period: 3, clock: '2:00', deficit: 3 }], [], SG); return x.moments[0].label === '① GAP_BASE Q2 9:00 (silent ledger row)' && x.moments[1].label === '② WATCHLIST Q3 2:00 (not pushed)' && x.sweep === 'nightly sweep: pending'; })());
-T('[11] R2: no bare "converted"; no WNBA words in any line', ![frOf(FRG('NYK', 'MIN')), frOf(FRG('POR', 'MIL')), frOf(FRG('LAC', 'SAS'))].some((x) => JSON.stringify(x).match(/converted|HOLD|fade country|killer/i)));
+T('[11] synthetic: no priceStale -> implied computed, no ESPN/clean clause; no winner -> Result pending, empty final, won null', JSON.stringify(rowV(F, 'Price')) === JSON.stringify(['DEN +300 (25% implied)']) && F.headline === 'Result pending' && F.final === '' && F.won === null && JSON.stringify(rowV(F, 'Arc')) === JSON.stringify(['resolver pending']));
+F = ssFireReviewNba([{ ...SY, alert_subtype: 'GAP_BASE', ntfy_sent: false, resolved: true }, { ...SY, id: 2, alert_subtype: 'WATCHLIST', ntfy_sent: false, resolved: false, period: 3, clock: '2:00', deficit: 3 }], [], SG);
+T('[11] synthetic: a later WATCHLIST outranks an earlier GAP_BASE as primary; not-pushed WATCHLIST tagged silent; mixed resolution stays pending; Also carries the GAP_BASE', F.when === 'Q3 2:00' && rowV(F, 'Cue')[0] === 'WATCHLIST Q3 2:00, silent · DEN down 3 to POR · gap .38 STRONG' && JSON.stringify(alsoV(F)) === JSON.stringify(['GAP_BASE Q2 9:00, silent · down 5 · eFG 60% · +300 vs ESPN 61%']) && JSON.stringify(rowV(F, 'Arc')) === JSON.stringify(['resolver pending']));
+F = ssFireReviewNba([{ ...SY, alert_subtype: 'GAP_BASE', ntfy_sent: false }], [], SG);
+T('[11] synthetic: GAP_BASE-only game -> Cue row says GAP_BASE, silent', rowV(F, 'Cue')[0] === 'GAP_BASE Q2 9:00, silent · DEN down 5 to POR · gap .38 STRONG');
+T('[11] R2: no bare "converted"; no WNBA / ledger words in any line', ![frOf(FRG('NYK', 'MIN')), frOf(FRG('POR', 'MIL')), frOf(FRG('LAC', 'SAS'))].some((x) => JSON.stringify(x).match(/converted|HOLD|fade country|killer|ledger|sweep/i)));
+T('[11] A3.9 word budget: every FIRE REVIEW line is <= 80 chars', [frOf(FRG('NYK', 'MIN')), frOf(FRG('POR', 'MIL')), frOf(FRG('LAC', 'SAS'))].every((x) => x.rows.every((r) => r.v.every((l) => l.length <= 80))));
 
 function extractFnLoose(src, marker) { const i = src.indexOf(marker); const j = src.indexOf('\n    }\n', i); return src.slice(i, j); }
 
