@@ -1,7 +1,8 @@
 // ══════════════════════════════════════════════════════════════════════════════
 // team-profiles-nightly.mjs — TEAM_PROFILES_SPEC.md §4 (nightly compute) + §5 (metrics)
 //
-// Runs 1:30am MST (8:30am UTC) daily, after WNBA finals settle. WNBA-only v1.
+// Runs 1:30am MST (8:30am UTC) daily, after WNBA finals settle. WNBA-only v1 for the full
+// profile pipeline; an ISOLATED NBA lite stage (runNbaLiteStage, Nov 19) follows it.
 //   1. DISCOVER finalized games missing from team_game_stats (BDL /games, trailing
 //      4-day window — self-healing: a missed night is picked up next run)
 //   2. PULL missing games via /wnba/v1/player_stats (batched, cursor-paginated),
@@ -520,6 +521,89 @@ async function matchDftGameIds(sql, rows) {
 }
 
 // ── Lock (hotfix learning #11) ───────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// NBA LITE PROFILES — NBA_SWEETSPOT_DASHBOARD_SPEC §5 + Amendment 1 D-4 (PM go Nov 19).
+// What the lite matchup sheet's season cells need and nothing more, computed from the LAST
+// snapshot of every finalized NBA game this season (raw_stats_json carries the box: fgm/fga/
+// fg3m/poss) — zero API calls, zero tokens. Writes team_profiles rows with archetype 'LITE' and
+// profile { lite:true, gp, efg, opp_efg, pace, l10, h2h, asof } and NO killer / tiers / elite /
+// identity / rotation keys, so no WNBA consumer can mistake one for a full profile
+// (ensureTeamCtx stays league==='wnba'; get_team_profiles&league=nba already works).
+// Season = Oct-start year (same formula as the engine's ssStandingsSeason) — never a literal.
+// computeNbaLiteProfiles is PURE and exported for research/ss_nba_dashboard_fixtures.mjs.
+// ═════════════════════════════════════════════════════════════════════════════
+export function nbaSeasonYear(d) {
+  const t = new Date(new Date(d || Date.now()).getTime() - 7 * 3600000); // Arizona day (no DST)
+  return t.getUTCMonth() < 9 ? t.getUTCFullYear() - 1 : t.getUTCFullYear();
+}
+export function computeNbaLiteProfiles(finals, asof) {
+  const T = {};
+  const team = (al) => (T[al] = T[al] || { w: 0, l: 0, games: [], fgm: 0, fga: 0, fg3m: 0, ofgm: 0, ofga: 0, ofg3m: 0, paceSum: 0, paceN: 0, h2h: {} });
+  const efgOf = (fgm, fg3m, fga) => (fga > 0 ? Math.round(((fgm + 0.5 * fg3m) / fga) * 1000) / 10 : null);
+  for (const f of finals || []) {
+    const hA = f.home_alias, aA = f.away_alias;
+    if (!hA || !aA || !f.winner) continue;
+    let raw = f.raw_stats_json;
+    if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch (e) { raw = null; } }
+    const hb = raw && raw.home, ab = raw && raw.away;
+    const date = String(f.date || '').slice(0, 10);
+    const hWon = f.winner === hA;
+    for (const [al, opp, won, own, oth] of [[hA, aA, hWon, hb, ab], [aA, hA, !hWon, ab, hb]]) {
+      const t = team(al);
+      if (won) t.w++; else t.l++;
+      t.games.push({ date, won, game_id: f.game_id });
+      const h = (t.h2h[opp] = t.h2h[opp] || { w: 0, l: 0 });
+      if (won) h.w++; else h.l++;
+      // box accumulation only when BOTH sides carry a real box (fga > 0) — a snapshot with a half-empty box is skipped for eFG, never for W/L
+      if (own && oth && N(own.fga) > 0 && N(oth.fga) > 0) {
+        t.fgm += N(own.fgm); t.fga += N(own.fga); t.fg3m += N(own.fg3m);
+        t.ofgm += N(oth.fgm); t.ofga += N(oth.fga); t.ofg3m += N(oth.fg3m);
+        if (N(own.poss) > 0 && N(oth.poss) > 0) { t.paceSum += (N(own.poss) + N(oth.poss)) / 2; t.paceN++; }
+      }
+    }
+  }
+  const out = {};
+  for (const [al, t] of Object.entries(T)) {
+    t.games.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)); // newest first (date strings — never Date objects, hotfix #14)
+    const last10 = t.games.slice(0, 10);
+    out[al] = { w: t.w, l: t.l, profile: {
+      lite: true, gp: t.w + t.l,
+      efg: efgOf(t.fgm, t.fg3m, t.fga), opp_efg: efgOf(t.ofgm, t.ofg3m, t.ofga),
+      pace: t.paceN > 0 ? Math.round((t.paceSum / t.paceN) * 10) / 10 : null,
+      box_gp: t.paceN,
+      l10: { w: last10.filter((g) => g.won).length, l: last10.filter((g) => !g.won).length },
+      h2h: t.h2h,
+      asof: asof || null,
+    } };
+  }
+  return out;
+}
+async function runNbaLiteStage(sql, url, isDry, todayAz) {
+  const season = Number(url.searchParams.get('nba_season')) || nbaSeasonYear(new Date());
+  const seasonStart = `${season}-10-01`;
+  // Last snapshot per finalized game (same shape as db-api get_final_snapshots); date cast to text (hotfix #14)
+  const finals = await sql`
+    SELECT DISTINCT ON (s.game_id) s.game_id, g.date::text AS date, g.home_alias, g.away_alias,
+      g.home_pts, g.away_pts, g.winner, s.raw_stats_json
+    FROM snapshots s JOIN games g ON g.id = s.game_id
+    WHERE g.league = 'nba' AND g.winner IS NOT NULL AND g.date >= ${seasonStart}::date AND s.raw_stats_json IS NOT NULL
+    ORDER BY s.game_id, s.ts DESC`;
+  const profiles = computeNbaLiteProfiles(finals, todayAz);
+  let written = 0;
+  if (!isDry) {
+    for (const [team, p] of Object.entries(profiles)) {
+      await sql`INSERT INTO team_profiles (team_alias, league, season, w, l, archetype, profile, updated_at)
+        VALUES (${team}, ${'nba'}, ${season}, ${p.w}, ${p.l}, ${'LITE'}, ${JSON.stringify(p.profile)}, NOW())
+        ON CONFLICT (team_alias, league, season)
+        DO UPDATE SET w = EXCLUDED.w, l = EXCLUDED.l, archetype = EXCLUDED.archetype,
+          profile = EXCLUDED.profile, updated_at = NOW()`;
+      written++;
+    }
+  }
+  log(`nba lite: ${finals.length} finals -> ${Object.keys(profiles).length} teams${isDry ? ' (dry)' : ` (${written} upserted)`} season ${season}`);
+  return { season, finals: finals.length, teams: Object.keys(profiles).length, written };
+}
+
 async function acquireLock(sql, job) {
   const ins = await sql`INSERT INTO job_locks (job, ts) VALUES (${job}, NOW()) ON CONFLICT (job) DO NOTHING RETURNING job`;
   if (ins.length > 0) return true;
@@ -774,9 +858,18 @@ export default async function handler(req) {
   log(summary);
   if (!isDry && !isQuiet && (ingested > 0 || isBackfill)) await notify('team-profiles', summary);
 
+  // ── NBA LITE stage (NBA_SWEETSPOT_DASHBOARD_SPEC §5 / A1.6 D-4) — ISOLATED: a failure here can
+  // never touch the WNBA result above; no push (the lite profiles are dashboard context only).
+  // Skipped on WNBA backfill runs (chunked historical pulls should not recompute the NBA 30× over).
+  let nbaLite = null;
+  if (!isBackfill) {
+    try { nbaLite = await runNbaLiteStage(sql, url, isDry, todayAz); }
+    catch (e) { log(`nba lite stage failed (WNBA profiles unaffected): ${e.message}`); nbaLite = { error: e.message }; }
+  }
+
   return new Response(JSON.stringify({
     ok: true, league, season, dates: [dates[0], dates[dates.length - 1]],
-    discovered, skippedExisting, ingested, teamsUpdated, purged, dry: isDry,
+    discovered, skippedExisting, ingested, teamsUpdated, purged, dry: isDry, nbaLite,
   }));
 }
 

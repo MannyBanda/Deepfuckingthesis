@@ -11,16 +11,21 @@
 //   [6] Verdict (every V, row anchoring, VT both branches, T5 only, V8 freeze, line dead, no T1/T4)
 //   [7] Forward-ledger panel (A1.4 empty copy, rows, power tags, switch line)
 //   [8] Pregame read (both directions, GP guard, below bar, line + pregame tag, no line)
-//   [9] Grep gates — N1: no WNBA-calibrated symbol inside the SS_NBA block; no --hairline/--bg-surface
+//   [9] Grep gates (…)
+//  [10] D3 — computeNbaLiteProfiles golden (three committed Nov 18 finals, hand-computed eFG/pace), key
+//       contract (lite:true, no killer/tiers/elite/identity/rotation), isolation + season derivation grep gates — N1: no WNBA-calibrated symbol inside the SS_NBA block; no --hairline/--bg-surface
 //       tokens; no season literal left in fetchStandings; db-api exposes get_standings
 // Run: node research/ss_nba_dashboard_fixtures.mjs
 // ═══════════════════════════════════════════════════════════════════════════════
 import { readFileSync } from 'fs';
+import { computeNbaLiteProfiles, nbaSeasonYear as nbaSeasonYearServer } from '../netlify/functions/team-profiles-nightly.mjs';
 const HTML = readFileSync('bdl.html', 'utf8');
 const WHTML = readFileSync('wnba-bdl.html', 'utf8');
 const POLL = readFileSync('netlify/functions/poll-live-bdl.mjs', 'utf8');
 const DBAPI = readFileSync('netlify/functions/db-api.js', 'utf8');
 const EXPL = readFileSync('research/2026-11-19_nba_ss_season_EXPLORATORY.md', 'utf8');
+const TPN = readFileSync('netlify/functions/team-profiles-nightly.mjs', 'utf8');
+const LITE_IN = JSON.parse(readFileSync('research/fixtures_nba_lite_golden_inputs.json', 'utf8'));
 
 function extractFn(src, name) {
   const sig = `function ${name}(`;
@@ -211,6 +216,28 @@ T('[9] auto-open once guard', has(BLOCK, '_ssAutoOpened'));
 T('[9] pregame block mounted on PRE cards', has(HTML, 'renderSSPregameNba(id,cs,game,hA,aA)'));
 T('[9] grid starts the 60s walker + prefetch', has(HTML, 'startSSNbaTimer(); ssNbaPrefetch();'));
 T('[9] every fetch in the block passes league=nba', !/db-api\?action=(get_ss_state|ss_ledger_summary|get_sweetspot_alerts|get_team_profiles|get_standings)[^'"]*league=wnba/.test(BLOCK));
+
+// [10] D3 — NBA lite profiles (pure compute over the three committed finals)
+const LP = computeNbaLiteProfiles(LITE_IN, '2026-11-19');
+T('[10] six teams from three finals', Object.keys(LP).length === 6);
+T('[10] W/L from games.winner', LP.ATL.w === 1 && LP.ATL.l === 0 && LP.OKC.w === 0 && LP.OKC.l === 1 && LP.DEN.w === 1 && LP.BOS.l === 1 && LP.CHI.w === 1 && LP.BKN.l === 1);
+T('[10] hand-computed eFG (OKC 46+4.5 / 91 = 55.5; opp ATL 44+10 / 99 = 54.5)', LP.OKC.profile.efg === 55.5 && LP.OKC.profile.opp_efg === 54.5 && LP.ATL.profile.efg === 54.5 && LP.ATL.profile.opp_efg === 55.5);
+T('[10] hand-computed eFG (DEN 37+3.5 / 85 = 47.6; BKN 39+7.5 / 81 = 57.4; CHI 53+10.5 / 99 = 64.1)', LP.DEN.profile.efg === 47.6 && LP.DEN.profile.opp_efg === 46.4 && LP.BKN.profile.efg === 57.4 && LP.BKN.profile.opp_efg === 64.1 && LP.CHI.profile.efg === 64.1);
+T('[10] pace = mean of both poss (OKC (107.4+102.8)/2 = 105.1; DEN 99.7)', LP.OKC.profile.pace === 105.1 && LP.ATL.profile.pace === 105.1 && LP.DEN.profile.pace === 99.7);
+T('[10] l10 + gp + h2h', LP.ATL.profile.l10.w === 1 && LP.ATL.profile.l10.l === 0 && LP.ATL.profile.gp === 1 && LP.ATL.profile.h2h.OKC.w === 1 && LP.OKC.profile.h2h.ATL.l === 1 && LP.ATL.profile.box_gp === 1);
+T('[10] key contract: lite:true, asof, and NONE of the WNBA profile keys', Object.values(LP).every((p) => p.profile.lite === true && p.profile.asof === '2026-11-19' && ['killer', 'tiers', 'tiers_elite', 'elite', 'identity', 'rotation', 'archetype', 'infl', 'late_exec'].every((k) => !(k in p.profile))));
+// degradations
+const LP2 = computeNbaLiteProfiles([{ ...LITE_IN[0], raw_stats_json: { home: { fgm: 0, fga: 0 }, away: { fgm: 1, fga: 2 } } }], null);
+T('[10] half-empty box: W/L counted, eFG/pace null, box_gp 0', LP2.OKC.l === 1 && LP2.OKC.profile.efg === null && LP2.OKC.profile.pace === null && LP2.OKC.profile.box_gp === 0 && LP2.OKC.profile.asof === null);
+T('[10] string raw_stats_json parsed', computeNbaLiteProfiles([{ ...LITE_IN[1], raw_stats_json: JSON.stringify(LITE_IN[1].raw_stats_json) }]).DEN.profile.efg === 47.6);
+T('[10] no winner -> game skipped entirely', Object.keys(computeNbaLiteProfiles([{ ...LITE_IN[1], winner: null }])).length === 0);
+const L12 = []; for (let i = 0; i < 12; i++) L12.push({ game_id: 'g' + i, date: '2026-11-' + String(1 + i).padStart(2, '0'), home_alias: 'AAA', away_alias: 'B' + i, home_pts: 100, away_pts: 90, winner: i < 2 ? 'B' + i : 'AAA', raw_stats_json: { home: { fgm: 40, fga: 80, fg3m: 10, poss: 100 }, away: { fgm: 40, fga: 80, fg3m: 10, poss: 100 } } });
+T('[10] l10 is the LAST ten by date (two early losses fall out)', computeNbaLiteProfiles(L12).AAA.profile.l10.w === 10 && computeNbaLiteProfiles(L12).AAA.profile.l10.l === 0 && computeNbaLiteProfiles(L12).AAA.l === 2);
+T('[10] server nbaSeasonYear Oct-start, Arizona day', nbaSeasonYearServer('2026-11-20T02:00:00Z') === 2026 && nbaSeasonYearServer('2026-09-30T12:00:00Z') === 2025 && nbaSeasonYearServer('2026-10-01T12:00:00Z') === 2026 && nbaSeasonYearServer('2027-03-01T12:00:00Z') === 2026);
+T('[10] stage isolated in try/catch after the WNBA summary, skipped on backfill, no push', has(TPN, "try { nbaLite = await runNbaLiteStage(sql, url, isDry, todayAz); }") && has(TPN, 'if (!isBackfill) {') && TPN.lastIndexOf('runNbaLiteStage(sql, url') > TPN.indexOf("await notify('team-profiles', summary)") && !has(extractFn(TPN, 'runNbaLiteStage'), 'notify('));
+T('[10] stage writes league nba / archetype LITE, finals query = winner not null + raw present + date::text', (() => { const f = extractFn(TPN, 'runNbaLiteStage'); return has(f, "${'nba'}") && has(f, "${'LITE'}") && has(f, 'g.winner IS NOT NULL') && has(f, 's.raw_stats_json IS NOT NULL') && has(f, 'g.date::text AS date') && has(f, 'DISTINCT ON (s.game_id)'); })());
+T('[10] WNBA stage untouched: league const still wnba, ensureTeamCtx still wnba-gated', has(TPN, "const league = 'wnba'; // v1 WNBA-only (spec §4)") && has(POLL, "if (!TEAM_CTX_ON || league !== 'wnba') return;"));
+T('[10] dashboard reads lite profiles by derived season and requires profile.lite', has(BLOCK, "get_team_profiles&league=nba&season='+nbaSeasonYear(new Date())") && has(BLOCK, 'if(p&&p.lite)'));
 
 function extractFnLoose(src, marker) { const i = src.indexOf(marker); const j = src.indexOf('\n    }\n', i); return src.slice(i, j); }
 

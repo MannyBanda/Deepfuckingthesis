@@ -1,0 +1,101 @@
+[
+ {
+  "game_id": "4588e8d7-d5f9-4305-89d6-2a523ce3c3d6",
+  "date": "2026-11-18",
+  "home_alias": "OKC",
+  "away_alias": "ATL",
+  "home_pts": 112,
+  "away_pts": 117,
+  "winner": "ATL",
+  "raw_stats_json": {
+   "home": {
+    "fgm": 46,
+    "fga": 91,
+    "fg3m": 9,
+    "fg3a": 27,
+    "poss": 107.4,
+    "pts": 112
+   },
+   "away": {
+    "fgm": 44,
+    "fga": 99,
+    "fg3m": 20,
+    "fg3a": 50,
+    "poss": 102.8,
+    "pts": 117
+   }
+  },
+  "_last_snapshot": {
+   "period": 4,
+   "clock": "0:00",
+   "home_pts": 112,
+   "away_pts": 117
+  }
+ },
+ {
+  "game_id": "f20ad464-5515-4926-988c-aed1e9ce5ef3",
+  "date": "2026-11-18",
+  "home_alias": "DEN",
+  "away_alias": "BOS",
+  "home_pts": 105,
+  "away_pts": 101,
+  "winner": "DEN",
+  "raw_stats_json": {
+   "home": {
+    "fgm": 37,
+    "fga": 85,
+    "fg3m": 7,
+    "fg3a": 31,
+    "poss": 99.6,
+    "pts": 105
+   },
+   "away": {
+    "fgm": 40,
+    "fga": 98,
+    "fg3m": 11,
+    "fg3a": 44,
+    "poss": 99.8,
+    "pts": 101
+   }
+  },
+  "_last_snapshot": {
+   "period": 4,
+   "clock": "0:00",
+   "home_pts": 105,
+   "away_pts": 101
+  }
+ },
+ {
+  "game_id": "672aff49-13c3-4569-a65a-e93ee9dd7f78",
+  "date": "2026-11-18",
+  "home_alias": "BKN",
+  "away_alias": "CHI",
+  "home_pts": 107,
+  "away_pts": 137,
+  "winner": "CHI",
+  "raw_stats_json": {
+   "home": {
+    "fgm": 39,
+    "fga": 81,
+    "fg3m": 15,
+    "fg3a": 41,
+    "poss": 99.6,
+    "pts": 107
+   },
+   "away": {
+    "fgm": 53,
+    "fga": 99,
+    "fg3m": 21,
+    "fg3a": 45,
+    "poss": 99.8,
+    "pts": 137
+   }
+  },
+  "_last_snapshot": {
+   "period": 4,
+   "clock": "0:17",
+   "home_pts": 107,
+   "away_pts": 137
+  }
+ }
+]
