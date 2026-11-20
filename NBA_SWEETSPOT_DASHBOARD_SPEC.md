@@ -186,3 +186,49 @@ The SCORING COMPOSITION container today renders **only when a lead-composition o
 
 ### A1.7 Build order (supersedes §6 cadence)
 One session, three commits in order D1 → D2 → D3, each `node -c` + standing harnesses green before the next; the new harness `research/ss_nba_dashboard_fixtures.mjs` grows with each phase (source-equality + pins + grep gates per §3.6, plus the A1.2 tie pins, A1.3 priority pins, A1.4 empty-ledger pin, and the D3 golden from committed finals).
+
+---
+
+## Amendment 2 — target surface correction: `v3.html` is the phone dashboard (2026-11-19, PM: "please spec first so you're familiar with the code")
+
+**The miss:** v1 inventoried `bdl.html` and D1–D3 shipped there (`2d3a94c`, `ac9cd43`, `a15c720`). Manny runs the NBA from **`v3.html`** (the mobile single-card swipe dashboard, 4,202 lines) — the spec never asked which NBA surface he uses. Nothing in v3 reads the Sweet Spot state, and v3 carries the same `season:'2025'` standings literal (line ~643), so its hero ranks ("NYK 3rd / MIN 6th") are last season's. This amendment ports D1 + D2 to v3; D3 (server) needs nothing. `bdl.html` keeps what it has.
+
+**Size correction:** the chat estimate of ~250 lines was wrong. The pure functions travel with the port, so v3 gains ~470 lines (pure fns + fetch layer ~330 copied byte-for-byte · v3 render + mount ~120 · CSS ~15); the genuinely new design is the ~120 render lines. Harness +~40 lines.
+
+### A2.1 Why v3 is the easier port (verified against source)
+- Single active card (`activeGameId`, swipe at ~990, `scrollToGame` ~929) — the WNBA dashboard's model, so the WNBA fetch cadence (60s timer on the active card + refresh on select + render-miss kick) ports as-is; the bdl.html grid walker is not needed.
+- **Same token family as `wnba-bdl.html`** (`--bg-surface-2`, `--hairline`, `--fg-secondary/tertiary/dim`, `--coral`, `--blue`, `--r-inner`, `tc()`, `esc()`, `_collOpen/toggleColl`) — the WNBA box's inline styles port verbatim; no token mapping step.
+- `renderCard(id)` takes an id (bdl.html's takes a game object) — the fetch layer's re-render call is the one line that differs.
+- v3 already has its own `computeScoringComp` (~3298) and builds `cs.scoringComp` (`buildScoringCompForCard`) → the evidence lines read `cs.scoringComp` directly; **no `computeScoringComp` mirror in v3** (and v3's copy is left alone — it is v3's Scoring Comp, not an SS surface).
+- `cs.espnWP = {home, away, opening}` (0–100) and `cs.oddsData` exist with the same shapes.
+- `_ssExpanded` in v3 is the **Sonnet-signal** expander, not Sweet Spot — never touched; all new globals are `_ssNba*`.
+
+### A2.2 Architecture call: mirror, not a shared script
+A shared `ss-nba-core.js` would give one source for both dashboards, but `_headers` scopes Basic Auth to `/*.html` (the `/*` form breaks cron functions — hotfix #10), so a `.js` asset would be served **unauthenticated**. House pattern stands: the pure block is duplicated in `v3.html` under **cross-file function-body byte-equality** (bdl.html ↔ v3.html for every pure function and constant; server ↔ both for the mirrors). Pins run once against bdl.html; equality carries them to v3.
+
+### A2.3 Composer made token-free (touches bdl.html in the same commit)
+`ssVerdictComposeNba` currently returns bdl.html CSS tokens (`var(--t3)`, `var(--red)`, `#4aa3ff`), which would break byte-equality with v3. It returns a **color key** instead — `green | amber | blue | coral | dim | secondary` — and each render maps keys to its own tokens (`SS_NBA_COLORS` per file: bdl `{dim:'var(--t3)', secondary:'var(--t2)', coral:'var(--red)', blue:'#4aa3ff', …}`; v3 `{dim:'var(--fg-dim)', secondary:'var(--fg-secondary)', coral:'var(--coral)', blue:'var(--blue)', …}`). Fixture pins switch from token strings to keys.
+
+### A2.4 v3 mounts (exact anchors)
+1. **Standings** (`fetchStandings` ~643): same swap as bdl.html — records from `get_standings`, BDL for conference rank on `nbaSeasonYear()`, cache-first fallback. Hero rank badge (~1113–1121, both PRE and LIVE rows) renders only when `confRank` is truthy (the `()` guard from `a15c720`).
+2. **Pregame block** (hero, PRE branch ~1113): `renderSSPregameNba` appended **right after the hero**, before the `Analysis — Sonnet analysis activates at tip` placeholder (~1267), styled as a `.placeholder`-adjacent card (`--bg-surface-2`, `--hairline`, 12px sans) so it reads as part of the pregame stack.
+3. **Verdict box** (`renderScoringCompSection` ~3440): today it `return ''` when `cs.scoringComp` is missing. Amended: when `_ssNbaState[id]` exists the collapsible renders anyway — header with summary `SS only` when no comp, box first inside `.coll-inner`, `scoringBar`s + legend only when `sc` exists (A1.5 logic, v3 form). Auto-open: `_collOpen[id+'_sc'] = true` once when the game first acquires a row (`cs._ssAutoOpened`).
+4. **Header chip (v3-specific, recommended):** the Scoring Comp `.coll-summary` gains a leading pill with the verdict head word in its color — `REVIEW` / `GAP SPOT` / `NO SPOT` / `OUT OF BAND` / `TIED` / `Q4` / `FORMING` / `FINAL ✓/✗` — so the read is visible with the section collapsed, which is the resting state on a phone. Computed from the cached state at render; no fetch. PM may veto; without it the box is invisible until the section is opened or a row auto-opens it.
+5. **Fetch cadence:** `startSSNbaTimer()` beside the poll start (~743) → 60s on `activeGameId`; `fetchSSStateNba(id)` in `scrollToGame` and in the swipe handler where `activeGameId` changes (~991); initial fetch after `mountAllCards` sets the first active card (~951); render-miss kick inside the box. Ledger / rows / standings / profiles ensure-fns identical to bdl.html.
+6. **Matchup sheet (lite):** same `openMatchupSheetNba` with the WNBA `.ms-*` CSS ported under `.msn-*` (tokens identical, so byte-close to the WNBA sheet); opens from the box and the pregame block. v3's existing drawer (`openDrawer`, Deep Dive) is untouched.
+
+### A2.5 Cascading implications
+- `renderCard` runs on every 10s poll tick; the box reads cache only (no fetch in render except the guarded kick) — same cost profile as the WNBA file.
+- `_collOpen` auto-open writes once per game; the user's later collapse sticks (guard flag), matching A1.5.
+- `games` objects carry `homePoints/awayPoints/period/clock/status/scheduled/home.alias` — identical field names to bdl.html (same lineage); `getState` identical.
+- No change to v3's `computeScoringComp`, Sonnet signal, drawer, toast, odds clock, or MC strip. `NBA_PAUSED` irrelevant (reads only).
+- `bdl.html` changes in this commit are limited to A2.3 (color keys) — behavior-identical after the token map.
+
+### A2.6 Fixtures (extend `research/ss_nba_dashboard_fixtures.mjs`)
+- Cross-file equality: every function and constant in the shared pure set byte-equal between the `SS_NBA_BEGIN…END` blocks of `bdl.html` and `v3.html` (`ssGateLineNba`, `ssCueReadNba`, `ssPriceLineNba`, `ssVerdictComposeNba`, `ssForwardLedgerPanelNba`, `ssPregameReadNba`, `ssPowerTag`, `ssWpFmt`, `ssGapTierWord`, `ssRecWp`, `ssRecGp`, `nbaSeasonYear`, `ssNbaCueHist`, the ensure-fns, `SS_NBA_STALE_GAP`, `SS_NBA_SWITCH_N`, `SS_NBA_EXPLORATORY`); server mirrors (`ssLeadClassDisplay`, `americanToImplied`, `ssPriceStale`) and `ssGapFmt` byte-equal in v3 too.
+- Color-key pins (A2.3) + both files' `SS_NBA_COLORS` cover every key the composer can emit.
+- v3 grep gates: no `computeScoringComp` inside v3's SS block; no `_ssExpanded` reference inside it; N1 symbol list; `fetchStandings` literal gone; rank badge guard present in both hero rows; `renderScoringCompSection` renders on SS state; timer + select hooks present; every fetch carries `league=nba`.
+- `node -c` on v3's extracted script block.
+
+### A2.7 Order
+One commit: A2.3 (bdl.html composer keys) → v3 block + mounts + CSS → harness → `node -c` both pages → standing harnesses → push → verify on the live slate from the phone (box inside Scoring Comp, chip in the header, pregame block on a PRE card, hero ranks this season's).
