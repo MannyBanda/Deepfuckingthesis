@@ -74,9 +74,11 @@ const SS_CFG = {
   nba:  { enabled: process.env.NBA_SS_COMPUTE_OFF !== '1', minGP: 5, efgBands: null, comebackModel: null, divergenceGate: false,
           priceFields: 'line_only', standingsSeason: 'oct_start', ledgerModel: 'nba', watchModel: 'nba',
           pushComposer: 'nba', dashUrl: 'https://poetic-starlight-aa8938.netlify.app/bdl.html', teamCtx: false, fuelTemp: false, pctx: false, narration: false,
-          // Phase 1b cue (Amendment 1 §A1.2): gap ≥ .15 × leader eFG ≥ 57 × pre-Q4 × deficit 1-9.
+          // Phase 1b cue (Amendment 1 §A1.2 + A1.4): gap ≥ .15 × leader eFG ≥ 57 × Q2-Q3 × deficit 1-9.
           // Exploratory cell (aaf0ec8): +24pp vs ESPN, n=39 LOW, one month — a review cue, not a bet call.
-          cue: { minGap: 0.15, minLeaderEfg: 57, maxPeriod: 3, minDeficit: 1, maxDeficit: 9 },
+          // minPeriod 2 = the exploratory's own population (Q1 excluded there; Q1 shot samples are too
+          // thin for an eFG read and the forward log must match the cell it is scoring).
+          cue: { minGap: 0.15, minLeaderEfg: 57, minPeriod: 2, maxPeriod: 3, minDeficit: 1, maxDeficit: 9 },
           staleGapPp: 0.25, // |implied(best ML) − ESPN trailer WP| above this → "(may be pregame)"
           tiers: { A: false, B: false, WATCHLIST: process.env.NBA_SS_WATCHLIST_ON === '1', LEDGER: process.env.NBA_SS_LEDGER_ON === '1' } },
 };
@@ -5584,10 +5586,11 @@ function ssComputeShape(inp) {
 // ── NBA PHASE 1b PREDICATES (NBA_SWEETSPOT_PORT_PHASE1_SPEC Amendment 1 §A1.2) — PURE ──
 // Thresholds come from SS_CFG.nba.cue (never literals here) — fixture-pinned.
 // GAP_BASE (ledger, rows only, no push): the in-band quality-gap population the cue is
-// scored against — gap ≥ .15 · pre-Q4 · deficit 1-9 · both win%s present.
+// scored against — gap ≥ .15 · Q2-Q3 (cue.minPeriod..maxPeriod) · deficit 1-9 · both win%s present.
 function ssNbaGapBase(s, period, cue) {
   if (!cue || s == null || s.gap == null || s.deficit == null) return false;
-  return s.gap >= cue.minGap && Number(period) <= cue.maxPeriod && s.deficit >= cue.minDeficit && s.deficit <= cue.maxDeficit;
+  var p = Number(period);
+  return s.gap >= cue.minGap && p >= cue.minPeriod && p <= cue.maxPeriod && s.deficit >= cue.minDeficit && s.deficit <= cue.maxDeficit;
 }
 // WATCHLIST cue (push, priority 2): GAP_BASE × hot leader (eFG ≥ 57, ×100 scale). One row per
 // game via the (game_id, alert_subtype) dedup. Exploratory cell (aaf0ec8): +24pp vs ESPN,

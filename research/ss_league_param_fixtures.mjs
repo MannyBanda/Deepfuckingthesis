@@ -141,15 +141,15 @@ T('ssEnabled: wnba + nba on by default; ncaamb off', M.ssEnabled('wnba') && M.ss
 console.log('\n[3] Phase 1b predicates — clause negatives (thresholds from SS_CFG.nba.cue)');
 const cue = M.SS_CFG.nba.cue;
 const S = (gap, deficit, leadEfg) => ({ gap, deficit, leadEfg });
-T('cue thresholds pinned: gap .15 · eFG 57 · period ≤3 · deficit 1-9', cue.minGap === 0.15 && cue.minLeaderEfg === 57 && cue.maxPeriod === 3 && cue.minDeficit === 1 && cue.maxDeficit === 9);
+T('cue thresholds pinned: gap .15 · eFG 57 · period 2-3 (A1.4: the exploratory population excluded Q1) · deficit 1-9', cue.minGap === 0.15 && cue.minLeaderEfg === 57 && cue.minPeriod === 2 && cue.maxPeriod === 3 && cue.minDeficit === 1 && cue.maxDeficit === 9);
 T('GAP_BASE positive at every boundary (gap .15, deficit 1, Q3) and (deficit 9)', M.ssNbaGapBase(S(0.15, 1, 50), 3, cue) && M.ssNbaGapBase(S(0.15, 9, 50), 3, cue));
 T('GAP_BASE: gap .149 fails', !M.ssNbaGapBase(S(0.149, 5, 60), 2, cue));
-T('GAP_BASE: Q4 fails', !M.ssNbaGapBase(S(0.30, 5, 60), 4, cue));
+T('GAP_BASE: Q4 fails; Q1 fails (A1.4); Q2 passes', !M.ssNbaGapBase(S(0.30, 5, 60), 4, cue) && !M.ssNbaGapBase(S(0.30, 5, 60), 1, cue) && M.ssNbaGapBase(S(0.30, 5, 60), 2, cue));
 T('GAP_BASE: deficit 0 and 10 fail', !M.ssNbaGapBase(S(0.30, 0, 60), 2, cue) && !M.ssNbaGapBase(S(0.30, 10, 60), 2, cue));
 T('GAP_BASE: gap null fails (no fake reads)', !M.ssNbaGapBase(S(null, 5, 60), 2, cue));
 T('cue: eFG 57.0 passes, 56.9 fails', M.ssNbaWatchCue(S(0.20, 5, 57.0), 2, cue) && !M.ssNbaWatchCue(S(0.20, 5, 56.9), 2, cue));
 T('cue: eFG null fails even with GAP_BASE true', !M.ssNbaWatchCue(S(0.20, 5, null), 2, cue));
-T('cue: requires GAP_BASE (Q4 hot leader fails)', !M.ssNbaWatchCue(S(0.20, 5, 70), 4, cue));
+T('cue: requires GAP_BASE (Q4 hot leader fails; Q1 hot leader fails)', !M.ssNbaWatchCue(S(0.20, 5, 70), 4, cue) && !M.ssNbaWatchCue(S(0.20, 5, 70), 1, cue));
 T('cue: string period "2" accepted (BDL period parse)', M.ssNbaWatchCue(S(0.20, 5, 60), '2', cue));
 
 // ── [4] STALE-PRICE FLAG ────────────────────────────────────────────────────

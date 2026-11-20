@@ -142,3 +142,6 @@ NBA eFG bands by period, NBA comeback priors, the GAP_BASE/WATCHLIST ledgers, th
 - `WNBA_SS_ALERT_ON` keeps a third, pre-existing consumer: the A-tier repush sweep (`ssRepushSweep`, `league='wnba'`-literal SQL). The grep gate pins 3 for that flag, 2 for the other four.
 - Stale-price flag stamps `player_ctx_json.priceStale = { stale, implied, espnWp }` (no new column); the WNBA stamp JSON is byte-identical (key absent).
 - Pre-existing, untouched: `research/team_ctx_fixtures.mjs` is 28/30 on `main` before and after this change (copy drift in the full block — not this work).
+
+### A1.4 Cue period floor (2026-11-19, same day, pre-first-fire) — Q1 excluded
+The exploratory that motivates the cue (`aaf0ec8`, `research/2026-11-19_nba_ss_season_exploratory.py`) selected first perceptions from **Q2 onward** (`p<2 → skip`); §A1.2 wrote "pre-Q4" and the shipped predicate admitted Q1. Corrected before any row was written: `SS_CFG.nba.cue.minPeriod = 2` — both `ssNbaGapBase` and `ssNbaWatchCue` now require Q2–Q3, so the forward log scores exactly the population the cell was measured on, and Q1 shot samples (often <12 FGA) never drive an eFG cue. Expected volume unchanged in substance (the exploratory's n=39 / n=66 were already Q2–Q3). Fixtures updated (Q1 negative on both predicates).
