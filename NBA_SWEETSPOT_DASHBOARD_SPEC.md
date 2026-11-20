@@ -141,3 +141,48 @@ Rollback for all three: revert the commit (dashboard-only; no DB state), `NBA_SS
 - **D-2 exploratory line:** render the tagged exploratory numbers in the cue read until n=30 (recommended — it is the stated reason the cue exists), or forward-ledger-only from day one?
 - **D-3 T5 trap wording:** keep the NBA n=1,200 null reference on the dashboard (recommended) or traps off entirely for NBA?
 - **D-4 D3 scope:** build lite profiles now, or leave the sheet's season-stat cells `—` until the NBA eFG-band prereg (Phase 2) needs the same data anyway?
+
+---
+
+## Amendment 1 — pre-build corrections + PM decisions (2026-11-19, PM go: "I'm good with your recs, want to proceed with d3 too")
+
+Four gaps found on the pre-build source check, each with its resolution; then the four §7 decisions as taken. Nothing in §1–§6 is withdrawn except where a line below says so.
+
+### A1.1 Season literals — scope narrowed (corrects §3.1 and §3.5 "dead code")
+`bdl.html` carries **four** season literals, not one: `fetchStandings` (`season:'2025'`), `get_season_cache&season=2025`, and two `get_wp_profiles&season=2025-26` calls. The last three are **coupled to server-side writers that still write under the same literals on `main`** — flipping the client alone would read empty tables. They belong to the unmerged `season-consolidation` branch (`26441d3`, now stale: 1 conflict against `main` in `poll-live-bdl.mjs`), whose `bdl.html` diff is exactly those lines.
+- **D1 fixes only the standings literal**, by routing records through `get_standings` (the engine's own `standings_cache`, already written with the Oct-start season by Phase 1's `fetchStandingsCache`). The BDL fallback for conference rank derives its season client-side (`m < 9 ? y-1 : y`), never a literal.
+- The other three literals are **left untouched and named here** so the season branch keeps owning them. PM item, not this build: rebase or retire `season-consolidation`.
+
+### A1.2 Tie state (new; §3.2 gate line, cue read, verdict)
+At a tie the server stamps **home as leader, deficit 0, gap = away − home** (`ssComputeShape`: `homeTrails = aPts > hPts`), so the gap sign flips on every lead change through zero — correct for the engine, but a raw render would alternate "qualified" ↔ "NO SPOT" at 25-25. Tie is handled as its own state, detected from the snapshot score (`home_pts === away_pts`), never from the leader alias:
+- **Gate line:** `TIED · gap .16 (direction set by the next lead) · NYK .571 / MIN .733 · LEAD: —`. The gap prints as **|gap|**; both records print; no lead descriptor.
+- **Cue read:** null (the gate line owns it).
+- **Verdict VT** (after V0, before V4): `TIED — no trailer to read. The .16 gap resolves on the next lead; MIN would be the watch trailer.` (dim) · when |gap| < .15: `TIED — gap (.08) is below the review line either way.` Priority order becomes **V1 → V3 → V0 → VT → V4 → V6 → V7 → VX**, V8 freeze unchanged. A row anchored to a trailer that is now tied has `rowDef = 0`, out of band → falls through to VT as today's WNBA composer falls through to current-state reads.
+
+### A1.3 Price source priority (corrects §3.2 `ssPriceLineNba`)
+The card's MARKET line (`cs.oddsData`, BDL odds) and the engine's stamp (`ss_line_used`, The Odds API best book) are **different feeds** and can legitimately disagree; the push body quotes the engine's. One copy source (ACA): the price line leads with the **server stamp** and shows the card's line as a secondary fact.
+- `engine saw MIN +135 (implied 43%) · ESPN fair 42% ⚠ may be pregame` — ML from the snapshot's `ss_line_used` (the trailer's best ML at stamp time), fair from the card's live `cs.espnWP` for the trailer, stale via mirrored `ssPriceStale` at the pinned .25 gap.
+- `· card line +140` appended when `cs.oddsData` carries a trailer ML that differs from the stamp.
+- Stamp null, card line present → the card's line is used and labeled `card line`; neither → `no line observed — tap MARKET to add one`. ESPN absent → fair clause and stale flag omitted (no fake reads).
+
+### A1.4 Empty-ledger copy (new; §3.2 `ssForwardLedgerPanelNba`)
+`ss_ledger_summary&league=nba` returns `{ledger:[], regime:null}` until the first NBA row resolves (first slate under the flags: Nov 19). Pinned render:
+```
+WATCHLIST  0 rows · 0 resolved · —
+GAP_BASE   0 rows · 0 resolved · —
+origin: exploratory cell +24pp vs ESPN, n=39 LOW, as of 2026-11-19 (aaf0ec8)
+switch to forward numbers at 30 resolved WATCHLIST rows
+```
+Rows with `n_total > 0, n_resolved = 0` print `—` for the rate; a resolved stream prints `trailer-WINS X% [TAG]`. Row format is `{subtype}  {n_total} rows · {n_resolved} resolved · {rate}`.
+
+### A1.5 Mount mechanics (fills in §3.3)
+The SCORING COMPOSITION container today renders **only when a lead-composition object exists**. Amended: the container renders when a lead composition exists **or** the card is LIVE/FINAL with a Sweet Spot state entry; the bars render only when the composition exists; the Sweet Spot box renders first inside the body. Auto-open: when a card first acquires any `sweetspot_alerts` row, `cs._sec.sc` is set open once (`cs._ssAutoOpened` guards it, so a later manual collapse sticks). PRE cards get the D2 pregame block under the hero, not the box.
+
+### A1.6 Decisions taken (§7)
+- **D-1 mount:** inside SCORING COMPOSITION, auto-open on row (parity).
+- **D-2 exploratory line:** render the tagged exploratory numbers until `WATCHLIST n_resolved ≥ 30`, then forward only.
+- **D-3 trap:** T5 kept (NBA n=1,200 null + this season's worse/even-trailer negative).
+- **D-4 D3 scope:** **build D3 now.** Lite NBA profiles run as an isolated stage inside `team-profiles-nightly.mjs` (1:30am MST, after the WNBA stage; try/catch — a failure never touches the WNBA upsert), source = latest snapshot per finalized NBA game this season (`games.winner IS NOT NULL`, `raw_stats_json IS NOT NULL`, same query shape as `get_final_snapshots`), season = Oct-start year (same formula as `ssStandingsSeason`). Per team: `efg`, `opp_efg` (Σ(fgm+.5·fg3m)/Σfga ×100, box fields), `pace` (mean of both teams' `poss` per game), `l10 {w,l}`, `h2h {OPP:{w,l}}`, `gp`; row `w/l` from finals; `archetype = 'LITE'`; `profile = {lite:true, …, asof}` with **no** `killer`/`tiers`/`elite`/`identity`/`rotation` keys. Pure `computeNbaLiteProfiles(finals)` exported for the fixture harness.
+
+### A1.7 Build order (supersedes §6 cadence)
+One session, three commits in order D1 → D2 → D3, each `node -c` + standing harnesses green before the next; the new harness `research/ss_nba_dashboard_fixtures.mjs` grows with each phase (source-equality + pins + grep gates per §3.6, plus the A1.2 tie pins, A1.3 priority pins, A1.4 empty-ledger pin, and the D3 golden from committed finals).
