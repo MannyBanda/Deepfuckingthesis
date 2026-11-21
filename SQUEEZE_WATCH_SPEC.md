@@ -1,5 +1,7 @@
 # SQUEEZE_WATCH_SPEC.md — v1.3 (band grace + suspend/resume, shipped 2026-08-04; v1.2 shipped 2026-07-23)
 
+> **v2 (league-parameterized, NBA leg) is specced in `NBA_JUICE_SPEC.md` (Nov 21) — not built.**
+
 **Purpose:** stalk the trailer's live price on every pushed sweet-spot row; push a plain-English
 alert when the best book crosses a cell-aware threshold. Alerts are eyes, never directives.
 
