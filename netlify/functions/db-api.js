@@ -1017,7 +1017,9 @@ exports.handler = async (event) => {
       if (!b.id) return { statusCode: 400, headers, body: JSON.stringify({ error: 'id required' }) };
       const rows = await sql`UPDATE sweetspot_alerts SET squeeze_armed = TRUE,
         squeeze_threshold = COALESCE(${b.threshold != null ? parseInt(b.threshold) : null}::int,
-          CASE WHEN leader_killer IS TRUE THEN -150 ELSE 117 END),
+          -- NBA (NBA_JUICE_SPEC §5): no default here — odds-squeeze fills it from the cue price
+          -- (cfg.threshold) on its next cycle. The WNBA killer/+117 CASE never applies to NBA.
+          CASE WHEN league = 'nba' THEN NULL WHEN leader_killer IS TRUE THEN -150 ELSE 117 END),
         squeeze_expires_at = NOW() + INTERVAL '3 hours'
         WHERE id = ${b.id} RETURNING id, squeeze_threshold, trailer_alias`;
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, armed: rows[0] || null }) };
@@ -2391,7 +2393,7 @@ exports.handler = async (event) => {
           ) a ON true
           LEFT JOIN LATERAL (
             SELECT * FROM odds_history
-            WHERE game_id = g.id
+            WHERE game_id = g.id AND (source IS NULL OR source NOT LIKE 'squeeze:%')
             ORDER BY ts DESC LIMIT 1
           ) o ON true
           WHERE g.league = ${league} AND g.winner IS NOT NULL
@@ -2455,7 +2457,7 @@ exports.handler = async (event) => {
           ) a ON true
           LEFT JOIN LATERAL (
             SELECT * FROM odds_history
-            WHERE game_id = g.id AND ts <= s.ts + INTERVAL '5 minutes'
+            WHERE game_id = g.id AND ts <= s.ts + INTERVAL '5 minutes' AND (source IS NULL OR source NOT LIKE 'squeeze:%')
             ORDER BY ts DESC LIMIT 1
           ) o ON true
           WHERE g.league = ${league} AND g.winner IS NOT NULL
@@ -2620,7 +2622,7 @@ exports.handler = async (event) => {
       const oddsRows = await sql`
         SELECT DISTINCT ON (game_id) game_id, home_spread, home_ml, away_ml, total
         FROM odds_history
-        WHERE game_id = ANY(${gameIds})
+        WHERE game_id = ANY(${gameIds}) AND (source IS NULL OR source NOT LIKE 'squeeze:%')
         ORDER BY game_id, ts DESC
       `;
       const oddsMap = {};

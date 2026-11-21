@@ -1,6 +1,6 @@
 # NBA_JUICE_SPEC.md — v1: JUICE (price watch) for the NBA cue
 
-**Status:** SPEC — nothing built. **PM ask (Nov 21):** "just port over juice. Please meticulously spec."
+**Status:** BUILT Nov 21 (§15) — NBA leg ships dark until `NBA_SQUEEZE_ON=1`. **PM ask (Nov 21):** "just port over juice. Please meticulously spec." PM go: "Looks good but we can just set the thresholds we don't have to research that."
 **Parent:** `SQUEEZE_WATCH_SPEC.md` v1.3 (`odds-squeeze.mjs`, WNBA, live since Jul 23). Research for the threshold:
 `research/2026-11-21_nba_juice_threshold_replay.py` + `_OUTPUT.md`.
 
@@ -283,3 +283,25 @@ Revisit at n ≥ 80 drifted cues.
 | D-J5 | Roster | **WNBA six + BetMGM + Fanatics** | WNBA six only |
 | D-J6 | "Line" joins skip squeeze tape | **yes** | no |
 | D-J7 | Cap / re-arm | **3 / .05** | 6 / .035 (WNBA) |
+
+---
+
+## 15. Build notes (Nov 21)
+
+- **Decisions:** D-J1–D-J7 as recommended. The threshold gap is a setting, not research: env `NBA_SQUEEZE_PP`
+  (default `0.10`; anything outside 0–0.5 falls back to 0.10). It is read when a row arms and stored on
+  `squeeze_threshold`, so a change applies to the next cue, not to watches already armed.
+- **Commit A** pinned WNBA behavior from the untouched module: 22 `samplePass` traces (every DB write, every push) +
+  arm/load + pure helpers → `research/fixtures_squeeze_wnba_goldens.json`. The refactor reproduces them byte-for-byte.
+- **Pre-existing bug fixed (both leagues):** pass 2 of an invocation reused the watch object from pass 1, but an
+  alert's last price / count were written only to the DB. Pass 2 could push the same price again 30s later (and burn
+  NBA's cap of 3 in two pushes). The watch object now syncs after each alert. Two-pass fixture pins it.
+- **`?league=nba|wnba`** scopes manual `?dry=1` / `?test=1` calls. `?dry=1&league=nba` audits NBA gates with the flag
+  off; a plain `?dry=1` still runs only the legs whose flags are on.
+- **Fixture [9]:** the real `samplePass` over the committed Nov 20 tape (`research/fixtures_nba_juice_tape_nov20.json`)
+  matches the replay script (cap 3 / .05, option B, Q2–Q3) on all 5 cues: first-alert price, period, clock and count.
+  The harness neutralizes the clock gate (snapshots ~95s are coarser than the tape ~67s, so a shared snapshot is not a
+  stopped clock).
+- **Harness:** `research/squeeze_league_fixtures.mjs` 182/182; `2026-07-23_squeeze_fixtures.mjs` 77/77 untouched.
+- **Size:** `odds-squeeze.mjs` 704 → ~990 lines; `db-api.js` +4.
+
