@@ -200,7 +200,7 @@ export function bandStep(prevState, deficit) {
   return { mode: graceEval ? 'grace' : 'strike_skip', oob, suspended: false };
 }
 
-function aliasFromName(name) {
+export function aliasFromName(name) {
   if (!name) return null;
   for (const nick of Object.keys(NICK)) if (name.includes(nick)) return NICK[nick];
   return null;
@@ -231,7 +231,7 @@ async function fetchOdds() {
 }
 
 // best price for one team-alias across the roster; returns {price, book, link}
-function bestPrice(event, alias) {
+export function bestPrice(event, alias) {
   let best = null;
   for (const bk of event.bookmakers || []) {
     if (!ROSTER.includes(bk.key)) continue;
@@ -250,7 +250,7 @@ function bestPrice(event, alias) {
   return best;
 }
 
-function topThreeLine(event, alias) {
+export function topThreeLine(event, alias) {
   const all = [];
   for (const bk of event.bookmakers || []) {
     if (!ROSTER.includes(bk.key)) continue;
@@ -292,7 +292,7 @@ async function fetchEspnState() {
 const clockToSec = (c) => { const m = /^(\d+):(\d+)/.exec(c || ''); return m ? +m[1] * 60 + +m[2] : null; };
 
 // ── one sample pass over all armed watches ──
-async function samplePass(sql, watches, espn, events, dry, openBets) {
+export async function samplePass(sql, watches, espn, events, dry, openBets) {
   const results = [];
   let odds = events; // fetched lazily only if some game passes the state gate
   for (const w of watches) {
@@ -560,7 +560,7 @@ async function pushSqueezeAlert(sql, w, g, deficit, best, shopLine, oobGrace = f
 }
 
 // ── auto-arm scan: every pushed tier arms itself; ledger/brief rows never do ──
-async function autoArm(sql) {
+export async function autoArm(sql) {
   if (process.env.WNBA_SQUEEZE_AUTOARM === '0') return 0;
   const rows = await sql`
     SELECT id, alert_subtype, leader_killer, line_used, edge FROM sweetspot_alerts
@@ -578,7 +578,7 @@ async function autoArm(sql) {
   return rows.length;
 }
 
-async function loadWatches(sql) {
+export async function loadWatches(sql) {
   const rows = await sql`
     SELECT sa.id, sa.game_id, sa.leader_alias, sa.trailer_alias, sa.leader_killer, sa.alert_subtype, sa.trailer_lane,
            sa.squeeze_threshold, sa.squeeze_last_alert_price, sa.squeeze_alert_count,

@@ -1,0 +1,1071 @@
+{
+ "samplePass": {
+  "S01 in-band cross -> ALERT": {
+   "trace": [
+    {
+     "sql": "INSERT INTO odds_history (game_id, home_ml, away_ml, deficit, source) VALUES ($, $, $, $, $)",
+     "v": [
+      "g1",
+      130,
+      -145,
+      6,
+      "squeeze:fanduel"
+     ]
+    },
+    {
+     "sql": "SELECT ts, period, clock, ss_leader_alias, ss_leader_efg, ss_leader_efg_band, ss_variance_share, raw_stats_json FROM snapshots WHERE game_id = $ ORDER BY ts DESC LIMIT 1",
+     "v": [
+      "g1"
+     ]
+    },
+    {
+     "sql": "SELECT side, stake, odds FROM bets WHERE game_id = $ AND result = 'PENDING' ORDER BY id DESC LIMIT 1",
+     "v": [
+      "g1"
+     ]
+    },
+    {
+     "fetch": "https://ntfy.sh/test-topic",
+     "headers": {
+      "Title": "JUICE: MIN +130 (FanDuel)",
+      "Priority": "5",
+      "Tags": "chart_with_upwards_trend",
+      "Click": "https://sportsbook.fanduel.com/addToBetslip?marketId=1&selectionId=2"
+     },
+     "body": "Price hit your +117 line. Implied 43% vs no-scalp cell 53% (+10pp).\nMIN down 6, Q3 6:45.\nSHAPE NOW (Q3 6:45): TRANSIENT (heat + takeaway) - trailer warm.\nLV lead: 62% eFG (orange) - 58% from threes/midrange.\nMIN own: 46% eFG (warm) - room to climb.\n- CHANNEL NOTE (2026): the takeaway feed is the market-blind transient — the live line has under-priced takeaway-fed collapse all season (trailers converted ~85%, two independent cuts). Context only, never a gate.\nBest: FanDuel +130 | ESPN Bet +130 | Caesars +125.\nTap opens: FanDuel slip.\n$300 cap (WATCHLIST). Staged adds = one position vs cap. Your read - not a directive."
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_last_alert_price = $, squeeze_alert_count = COALESCE(squeeze_alert_count,0) + 1 WHERE id = $",
+     "v": [
+      130,
+      101
+     ]
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_state = $ WHERE id = $",
+     "v": [
+      "{\"last_clock\":\"6:45\",\"last_period\":3,\"oob_count\":0,\"suspended\":false}",
+      101
+     ]
+    }
+   ],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "ALERT",
+     "reason": "",
+     "best": "+130 fanduel"
+    }
+   ]
+  },
+  "S02 below threshold": {
+   "trace": [
+    {
+     "sql": "INSERT INTO odds_history (game_id, home_ml, away_ml, deficit, source) VALUES ($, $, $, $, $)",
+     "v": [
+      "g1",
+      130,
+      -145,
+      6,
+      "squeeze:fanduel"
+     ]
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_state = $ WHERE id = $",
+     "v": [
+      "{\"last_clock\":\"6:45\",\"last_period\":3,\"oob_count\":0,\"suspended\":false}",
+      101
+     ]
+    }
+   ],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "skip",
+     "reason": "below-threshold",
+     "best": "+130 fanduel"
+    }
+   ]
+  },
+  "S03 rearm wait": {
+   "trace": [
+    {
+     "sql": "INSERT INTO odds_history (game_id, home_ml, away_ml, deficit, source) VALUES ($, $, $, $, $)",
+     "v": [
+      "g1",
+      130,
+      -145,
+      6,
+      "squeeze:fanduel"
+     ]
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_state = $ WHERE id = $",
+     "v": [
+      "{\"last_clock\":\"6:40\",\"last_period\":3,\"oob_count\":0,\"suspended\":false}",
+      101
+     ]
+    }
+   ],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "skip",
+     "reason": "rearm-wait",
+     "best": "+130 fanduel"
+    }
+   ]
+  },
+  "S04 max alerts -> disarm": {
+   "trace": [
+    {
+     "sql": "INSERT INTO odds_history (game_id, home_ml, away_ml, deficit, source) VALUES ($, $, $, $, $)",
+     "v": [
+      "g1",
+      130,
+      -145,
+      6,
+      "squeeze:fanduel"
+     ]
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_armed = FALSE WHERE id = $",
+     "v": [
+      101
+     ]
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_state = $ WHERE id = $",
+     "v": [
+      "{\"last_clock\":\"6:40\",\"last_period\":3,\"oob_count\":0,\"suspended\":false}",
+      101
+     ]
+    }
+   ],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "disarm",
+     "reason": "max-alerts",
+     "best": "+130 fanduel"
+    }
+   ]
+  },
+  "S05 tie grace": {
+   "trace": [
+    {
+     "sql": "INSERT INTO odds_history (game_id, home_ml, away_ml, deficit, source) VALUES ($, $, $, $, $)",
+     "v": [
+      "g1",
+      130,
+      -145,
+      0,
+      "squeeze:fanduel"
+     ]
+    },
+    {
+     "sql": "SELECT ts, period, clock, ss_leader_alias, ss_leader_efg, ss_leader_efg_band, ss_variance_share, raw_stats_json FROM snapshots WHERE game_id = $ ORDER BY ts DESC LIMIT 1",
+     "v": [
+      "g1"
+     ]
+    },
+    {
+     "sql": "SELECT side, stake, odds FROM bets WHERE game_id = $ AND result = 'PENDING' ORDER BY id DESC LIMIT 1",
+     "v": [
+      "g1"
+     ]
+    },
+    {
+     "fetch": "https://ntfy.sh/test-topic",
+     "headers": {
+      "Title": "JUICE: MIN +130 (FanDuel)",
+      "Priority": "5",
+      "Tags": "chart_with_upwards_trend",
+      "Click": "https://sportsbook.fanduel.com/addToBetslip?marketId=1&selectionId=2"
+     },
+     "body": "Price hit your +117 line. Implied 43% vs no-scalp cell 53% (+10pp).\nMIN tied it, Q3 6:45 (grace read).\nSHAPE NOW (Q3 6:45): TRANSIENT (heat + takeaway) - trailer warm.\nLV lead: 62% eFG (orange) - 58% from threes/midrange.\nMIN own: 46% eFG (warm) - room to climb.\n- CHANNEL NOTE (2026): the takeaway feed is the market-blind transient — the live line has under-priced takeaway-fed collapse all season (trailers converted ~85%, two independent cuts). Context only, never a gate.\nBest: FanDuel +130 | ESPN Bet +130 | Caesars +125.\nTap opens: FanDuel slip.\n$300 cap (WATCHLIST). Staged adds = one position vs cap. Your read - not a directive."
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_last_alert_price = $, squeeze_alert_count = COALESCE(squeeze_alert_count,0) + 1 WHERE id = $",
+     "v": [
+      130,
+      101
+     ]
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_state = $ WHERE id = $",
+     "v": [
+      "{\"last_clock\":\"6:45\",\"last_period\":3,\"oob_count\":1,\"suspended\":false}",
+      101
+     ]
+    }
+   ],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "ALERT",
+     "reason": "grace(0) strike 1",
+     "best": "+130 fanduel"
+    }
+   ]
+  },
+  "S06 oob 10 grace strike 1": {
+   "trace": [
+    {
+     "sql": "INSERT INTO odds_history (game_id, home_ml, away_ml, deficit, source) VALUES ($, $, $, $, $)",
+     "v": [
+      "g1",
+      130,
+      -145,
+      10,
+      "squeeze:fanduel"
+     ]
+    },
+    {
+     "sql": "SELECT ts, period, clock, ss_leader_alias, ss_leader_efg, ss_leader_efg_band, ss_variance_share, raw_stats_json FROM snapshots WHERE game_id = $ ORDER BY ts DESC LIMIT 1",
+     "v": [
+      "g1"
+     ]
+    },
+    {
+     "sql": "SELECT side, stake, odds FROM bets WHERE game_id = $ AND result = 'PENDING' ORDER BY id DESC LIMIT 1",
+     "v": [
+      "g1"
+     ]
+    },
+    {
+     "fetch": "https://ntfy.sh/test-topic",
+     "headers": {
+      "Title": "JUICE: MIN +130 (FanDuel)",
+      "Priority": "5",
+      "Tags": "chart_with_upwards_trend",
+      "Click": "https://sportsbook.fanduel.com/addToBetslip?marketId=1&selectionId=2"
+     },
+     "body": "Price hit your +117 line. Implied 43% vs no-scalp cell 53% (+10pp).\nMIN down 10, Q3 6:45 (out of band - grace read).\nSHAPE NOW (Q3 6:45): TRANSIENT (heat + takeaway) - trailer warm.\nLV lead: 62% eFG (orange) - 58% from threes/midrange.\nMIN own: 46% eFG (warm) - room to climb.\n- CHANNEL NOTE (2026): the takeaway feed is the market-blind transient — the live line has under-priced takeaway-fed collapse all season (trailers converted ~85%, two independent cuts). Context only, never a gate.\nBest: FanDuel +130 | ESPN Bet +130 | Caesars +125.\nTap opens: FanDuel slip.\n$300 cap (WATCHLIST). Staged adds = one position vs cap. Your read - not a directive."
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_last_alert_price = $, squeeze_alert_count = COALESCE(squeeze_alert_count,0) + 1 WHERE id = $",
+     "v": [
+      130,
+      101
+     ]
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_state = $ WHERE id = $",
+     "v": [
+      "{\"last_clock\":\"6:45\",\"last_period\":3,\"oob_count\":1,\"suspended\":false}",
+      101
+     ]
+    }
+   ],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "ALERT",
+     "reason": "grace(10) strike 1",
+     "best": "+130 fanduel"
+    }
+   ]
+  },
+  "S07 oob 14 strike skip": {
+   "trace": [
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_state = $ WHERE id = $",
+     "v": [
+      "{\"last_clock\":\"6:45\",\"last_period\":3,\"oob_count\":1}",
+      101
+     ]
+    }
+   ],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "skip",
+     "reason": "oob(14) strike 1"
+    }
+   ]
+  },
+  "S08 third oob -> suspend": {
+   "trace": [
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_state = $ WHERE id = $",
+     "v": [
+      "{\"oob_count\":3,\"last_clock\":\"6:45\",\"last_period\":3,\"suspended\":true}",
+      101
+     ]
+    }
+   ],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "suspend",
+     "reason": "band-exit(14)"
+    }
+   ]
+  },
+  "S09 suspended -> resume + alert": {
+   "trace": [
+    {
+     "sql": "INSERT INTO odds_history (game_id, home_ml, away_ml, deficit, source) VALUES ($, $, $, $, $)",
+     "v": [
+      "g1",
+      130,
+      -145,
+      6,
+      "squeeze:fanduel"
+     ]
+    },
+    {
+     "sql": "SELECT ts, period, clock, ss_leader_alias, ss_leader_efg, ss_leader_efg_band, ss_variance_share, raw_stats_json FROM snapshots WHERE game_id = $ ORDER BY ts DESC LIMIT 1",
+     "v": [
+      "g1"
+     ]
+    },
+    {
+     "sql": "SELECT side, stake, odds FROM bets WHERE game_id = $ AND result = 'PENDING' ORDER BY id DESC LIMIT 1",
+     "v": [
+      "g1"
+     ]
+    },
+    {
+     "fetch": "https://ntfy.sh/test-topic",
+     "headers": {
+      "Title": "JUICE: MIN +130 (FanDuel)",
+      "Priority": "5",
+      "Tags": "chart_with_upwards_trend",
+      "Click": "https://sportsbook.fanduel.com/addToBetslip?marketId=1&selectionId=2"
+     },
+     "body": "Price hit your +117 line. Implied 43% vs no-scalp cell 53% (+10pp).\nMIN down 6, Q3 6:45.\nSHAPE NOW (Q3 6:45): TRANSIENT (heat + takeaway) - trailer warm.\nBack in band since Q3 6:45.\nLV lead: 62% eFG (orange) - 58% from threes/midrange.\nMIN own: 46% eFG (warm) - room to climb.\n- CHANNEL NOTE (2026): the takeaway feed is the market-blind transient — the live line has under-priced takeaway-fed collapse all season (trailers converted ~85%, two independent cuts). Context only, never a gate.\nBest: FanDuel +130 | ESPN Bet +130 | Caesars +125.\nTap opens: FanDuel slip.\n$300 cap (WATCHLIST). Staged adds = one position vs cap. Your read - not a directive."
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_last_alert_price = $, squeeze_alert_count = COALESCE(squeeze_alert_count,0) + 1 WHERE id = $",
+     "v": [
+      130,
+      101
+     ]
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_state = $ WHERE id = $",
+     "v": [
+      "{\"oob_count\":0,\"suspended\":false,\"last_clock\":\"6:45\",\"last_period\":3}",
+      101
+     ]
+    }
+   ],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "ALERT",
+     "reason": "",
+     "best": "+130 fanduel"
+    }
+   ]
+  },
+  "S10 final -> disarm": {
+   "trace": [
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_armed = FALSE WHERE id = $",
+     "v": [
+      101
+     ]
+    }
+   ],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "disarm",
+     "reason": "final"
+    }
+   ]
+  },
+  "S11 Q4 1:30 -> disarm q4-2:00": {
+   "trace": [
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_armed = FALSE WHERE id = $",
+     "v": [
+      101
+     ]
+    }
+   ],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "disarm",
+     "reason": "q4-late"
+    }
+   ]
+  },
+  "S12 Q4 5:00 cross -> F5 copy": {
+   "trace": [
+    {
+     "sql": "INSERT INTO odds_history (game_id, home_ml, away_ml, deficit, source) VALUES ($, $, $, $, $)",
+     "v": [
+      "g1",
+      130,
+      -145,
+      6,
+      "squeeze:fanduel"
+     ]
+    },
+    {
+     "sql": "SELECT ts, period, clock, ss_leader_alias, ss_leader_efg, ss_leader_efg_band, ss_variance_share, raw_stats_json FROM snapshots WHERE game_id = $ ORDER BY ts DESC LIMIT 1",
+     "v": [
+      "g1"
+     ]
+    },
+    {
+     "sql": "SELECT side, stake, odds FROM bets WHERE game_id = $ AND result = 'PENDING' ORDER BY id DESC LIMIT 1",
+     "v": [
+      "g1"
+     ]
+    },
+    {
+     "fetch": "https://ntfy.sh/test-topic",
+     "headers": {
+      "Title": "JUICE: MIN +130 (FanDuel)",
+      "Priority": "5",
+      "Tags": "chart_with_upwards_trend",
+      "Click": "https://sportsbook.fanduel.com/addToBetslip?marketId=1&selectionId=2"
+     },
+     "body": "Price hit your +117 line. Fire-state cell rates no longer apply this late - the market re-price is the honest read. Q4 re-entry recipe: down <=3, >=5:00 left, >=+200.\nMIN down 6, Q4 5:00.\nSHAPE NOW (Q3 6:45): TRANSIENT (heat + takeaway) - trailer warm.\nLV lead: 62% eFG (orange) - 58% from threes/midrange.\nMIN own: 46% eFG (warm) - room to climb.\n- CHANNEL NOTE (2026): the takeaway feed is the market-blind transient — the live line has under-priced takeaway-fed collapse all season (trailers converted ~85%, two independent cuts). Context only, never a gate.\nBest: FanDuel +130 | ESPN Bet +130 | Caesars +125.\nTap opens: FanDuel slip.\n$300 cap (WATCHLIST). Staged adds = one position vs cap. Your read - not a directive."
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_last_alert_price = $, squeeze_alert_count = COALESCE(squeeze_alert_count,0) + 1 WHERE id = $",
+     "v": [
+      130,
+      101
+     ]
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_state = $ WHERE id = $",
+     "v": [
+      "{\"last_clock\":\"5:00\",\"last_period\":4,\"oob_count\":0,\"suspended\":false}",
+      101
+     ]
+    }
+   ],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "ALERT",
+     "reason": "",
+     "best": "+130 fanduel"
+    }
+   ]
+  },
+  "S13 frozen clock skip": {
+   "trace": [
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_state = $ WHERE id = $",
+     "v": [
+      "{\"last_clock\":\"6:45\",\"last_period\":3}",
+      101
+     ]
+    }
+   ],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "skip",
+     "reason": "clock-frozen"
+    }
+   ]
+  },
+  "S14 period flip catch-up": {
+   "trace": [
+    {
+     "sql": "INSERT INTO odds_history (game_id, home_ml, away_ml, deficit, source) VALUES ($, $, $, $, $)",
+     "v": [
+      "g1",
+      130,
+      -145,
+      6,
+      "squeeze:fanduel"
+     ]
+    },
+    {
+     "sql": "SELECT ts, period, clock, ss_leader_alias, ss_leader_efg, ss_leader_efg_band, ss_variance_share, raw_stats_json FROM snapshots WHERE game_id = $ ORDER BY ts DESC LIMIT 1",
+     "v": [
+      "g1"
+     ]
+    },
+    {
+     "sql": "SELECT side, stake, odds FROM bets WHERE game_id = $ AND result = 'PENDING' ORDER BY id DESC LIMIT 1",
+     "v": [
+      "g1"
+     ]
+    },
+    {
+     "fetch": "https://ntfy.sh/test-topic",
+     "headers": {
+      "Title": "JUICE: MIN +130 (FanDuel)",
+      "Priority": "5",
+      "Tags": "chart_with_upwards_trend",
+      "Click": "https://sportsbook.fanduel.com/addToBetslip?marketId=1&selectionId=2"
+     },
+     "body": "Price hit your +117 line. Implied 43% vs no-scalp cell 53% (+10pp).\nMIN down 6, Q3 0:00.\nSHAPE NOW (Q3 6:45): TRANSIENT (heat + takeaway) - trailer warm.\nLV lead: 62% eFG (orange) - 58% from threes/midrange.\nMIN own: 46% eFG (warm) - room to climb.\n- CHANNEL NOTE (2026): the takeaway feed is the market-blind transient — the live line has under-priced takeaway-fed collapse all season (trailers converted ~85%, two independent cuts). Context only, never a gate.\nBest: FanDuel +130 | ESPN Bet +130 | Caesars +125.\nTap opens: FanDuel slip.\n$300 cap (WATCHLIST). Staged adds = one position vs cap. Your read - not a directive."
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_last_alert_price = $, squeeze_alert_count = COALESCE(squeeze_alert_count,0) + 1 WHERE id = $",
+     "v": [
+      130,
+      101
+     ]
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_state = $ WHERE id = $",
+     "v": [
+      "{\"last_clock\":\"0:00\",\"last_period\":3,\"oob_count\":0,\"suspended\":false}",
+      101
+     ]
+    }
+   ],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "ALERT",
+     "reason": "",
+     "best": "+130 fanduel"
+    }
+   ]
+  },
+  "S15 pregame": {
+   "trace": [],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "skip",
+     "reason": "pregame"
+    }
+   ]
+  },
+  "S16 no espn": {
+   "trace": [],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "skip",
+     "reason": "no-espn"
+    }
+   ]
+  },
+  "S17 surge cashtip (cold at fire, trailer leads at -450)": {
+   "trace": [
+    {
+     "sql": "SELECT 1 FROM sweetspot_alerts WHERE game_id = $ AND league = $ AND squeeze_state->>'surge_fired' = $ AND id <> $ LIMIT 1",
+     "v": [
+      "g1",
+      "wnba",
+      "true",
+      101
+     ]
+    },
+    {
+     "sql": "SELECT profile FROM team_profiles WHERE league = $ AND season = 2026 AND team_alias = $ LIMIT 1",
+     "v": [
+      "wnba",
+      "MIN"
+     ]
+    },
+    {
+     "fetch": "https://ntfy.sh/test-topic",
+     "headers": {
+      "Title": "CASHOUT CHECK: MIN leads by 3",
+      "Priority": "5",
+      "Tags": "chart_with_upwards_trend"
+     },
+     "body": "Cashout check: MIN now leads by 3. Market has MIN ~79% - a fair cash-out is ~73% of your full payout; a +140 entry breaks even at ~42%. Riding risks a loss because MIN was cold at entry (41% eFG) and cold-start comebacks have given leads back. Your read - not a directive."
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_state = $ WHERE id = $",
+     "v": [
+      "{\"surge_fired\":true,\"surge_at\":\"<ts>\",\"surge_p\":0.786,\"surge_frac\":0.731,\"surge_lead\":3,\"surge_price\":-450}",
+      101
+     ]
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_state = $ WHERE id = $",
+     "v": [
+      "{\"surge_fired\":true,\"surge_at\":\"<ts>\",\"surge_p\":0.786,\"surge_frac\":0.731,\"surge_lead\":3,\"surge_price\":-450,\"last_clock\":\"8:00\",\"last_period\":4,\"oob_count\":1}",
+      101
+     ]
+    }
+   ],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "skip",
+     "reason": "oob(-3) strike 1",
+     "surge": "CASHTIP"
+    }
+   ]
+  },
+  "S18 killer row at -150": {
+   "trace": [
+    {
+     "sql": "INSERT INTO odds_history (game_id, home_ml, away_ml, deficit, source) VALUES ($, $, $, $, $)",
+     "v": [
+      "g1",
+      130,
+      -145,
+      6,
+      "squeeze:fanduel"
+     ]
+    },
+    {
+     "sql": "SELECT ts, period, clock, ss_leader_alias, ss_leader_efg, ss_leader_efg_band, ss_variance_share, raw_stats_json FROM snapshots WHERE game_id = $ ORDER BY ts DESC LIMIT 1",
+     "v": [
+      "g1"
+     ]
+    },
+    {
+     "sql": "SELECT side, stake, odds FROM bets WHERE game_id = $ AND result = 'PENDING' ORDER BY id DESC LIMIT 1",
+     "v": [
+      "g1"
+     ]
+    },
+    {
+     "fetch": "https://ntfy.sh/test-topic",
+     "headers": {
+      "Title": "JUICE: MIN +130 (FanDuel)",
+      "Priority": "5",
+      "Tags": "chart_with_upwards_trend",
+      "Click": "https://sportsbook.fanduel.com/addToBetslip?marketId=1&selectionId=2"
+     },
+     "body": "Price hit your -150 line. Implied 43% vs killer cell 67% (+24pp).\nMIN down 6, Q3 6:45.\nSHAPE NOW (Q3 6:45): TRANSIENT (heat + takeaway) - trailer warm.\nLV lead: 62% eFG (orange) - 58% from threes/midrange.\nMIN own: 46% eFG (warm) - room to climb.\n- CHANNEL NOTE (2026): the takeaway feed is the market-blind transient — the live line has under-priced takeaway-fed collapse all season (trailers converted ~85%, two independent cuts). Context only, never a gate.\nBest: FanDuel +130 | ESPN Bet +130 | Caesars +125.\nTap opens: FanDuel slip.\n$300 cap (WATCHLIST). Staged adds = one position vs cap. Your read - not a directive."
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_last_alert_price = $, squeeze_alert_count = COALESCE(squeeze_alert_count,0) + 1 WHERE id = $",
+     "v": [
+      130,
+      101
+     ]
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_state = $ WHERE id = $",
+     "v": [
+      "{\"last_clock\":\"6:45\",\"last_period\":3,\"oob_count\":0,\"suspended\":false}",
+      101
+     ]
+    }
+   ],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "ALERT",
+     "reason": "",
+     "best": "+130 fanduel"
+    }
+   ]
+  },
+  "S19 A-tier EFG_FADE cap line + lane row": {
+   "trace": [
+    {
+     "sql": "INSERT INTO odds_history (game_id, home_ml, away_ml, deficit, source) VALUES ($, $, $, $, $)",
+     "v": [
+      "g1",
+      130,
+      -145,
+      4,
+      "squeeze:fanduel"
+     ]
+    },
+    {
+     "sql": "SELECT ts, period, clock, ss_leader_alias, ss_leader_efg, ss_leader_efg_band, ss_variance_share, raw_stats_json FROM snapshots WHERE game_id = $ ORDER BY ts DESC LIMIT 1",
+     "v": [
+      "g1"
+     ]
+    },
+    {
+     "sql": "SELECT side, stake, odds FROM bets WHERE game_id = $ AND result = 'PENDING' ORDER BY id DESC LIMIT 1",
+     "v": [
+      "g1"
+     ]
+    },
+    {
+     "fetch": "https://ntfy.sh/test-topic",
+     "headers": {
+      "Title": "JUICE: MIN +130 (FanDuel)",
+      "Priority": "5",
+      "Tags": "chart_with_upwards_trend",
+      "Click": "https://sportsbook.fanduel.com/addToBetslip?marketId=1&selectionId=2"
+     },
+     "body": "Price hit your -200 line. Implied 43% vs no-scalp cell 53% (+10pp).\nMIN down 4, Q2 3:10.\nSHAPE NOW (Q3 6:45): TRANSIENT (heat + takeaway) - trailer warm.\nLV lead: 62% eFG (orange) - 58% from threes/midrange.\nMIN own: 46% eFG (warm) - room to climb.\n- CHANNEL NOTE (2026): the takeaway feed is the market-blind transient — the live line has under-priced takeaway-fed collapse all season (trailers converted ~85%, two independent cuts). Context only, never a gate.\nBest: FanDuel +130 | ESPN Bet +130 | Caesars +125.\nTap opens: FanDuel slip.\n$1,400 cap (A-tier). Staged adds = one position vs cap. Your read - not a directive."
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_last_alert_price = $, squeeze_alert_count = COALESCE(squeeze_alert_count,0) + 1 WHERE id = $",
+     "v": [
+      130,
+      101
+     ]
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_state = $ WHERE id = $",
+     "v": [
+      "{\"last_clock\":\"3:10\",\"last_period\":2,\"oob_count\":0,\"suspended\":false}",
+      101
+     ]
+    }
+   ],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "ALERT",
+     "reason": "",
+     "best": "+130 fanduel"
+    }
+   ]
+  },
+  "S20 open bet posLine + lane": {
+   "trace": [
+    {
+     "sql": "INSERT INTO odds_history (game_id, home_ml, away_ml, deficit, source) VALUES ($, $, $, $, $)",
+     "v": [
+      "g1",
+      130,
+      -145,
+      6,
+      "squeeze:fanduel"
+     ]
+    },
+    {
+     "sql": "SELECT ts, period, clock, ss_leader_alias, ss_leader_efg, ss_leader_efg_band, ss_variance_share, raw_stats_json FROM snapshots WHERE game_id = $ ORDER BY ts DESC LIMIT 1",
+     "v": [
+      "g1"
+     ]
+    },
+    {
+     "sql": "SELECT side, stake, odds FROM bets WHERE game_id = $ AND result = 'PENDING' ORDER BY id DESC LIMIT 1",
+     "v": [
+      "g1"
+     ]
+    },
+    {
+     "fetch": "https://ntfy.sh/test-topic",
+     "headers": {
+      "Title": "JUICE: MIN +130 (FanDuel)",
+      "Priority": "5",
+      "Tags": "chart_with_upwards_trend",
+      "Click": "https://sportsbook.fanduel.com/addToBetslip?marketId=1&selectionId=2"
+     },
+     "body": "Price hit your +117 line. Implied 43% vs no-scalp cell 53% (+10pp).\nMIN down 6, Q3 6:45.\nYou hold MIN ML $300 @ +140 - this alert is an ADD against the same position cap.\nSHAPE NOW (Q3 6:45): TRANSIENT (heat + takeaway) - trailer warm.\nLV lead: 62% eFG (orange) - 58% from threes/midrange.\nMIN own: 46% eFG (warm) - room to climb.\n- CHANNEL NOTE (2026): the takeaway feed is the market-blind transient — the live line has under-priced takeaway-fed collapse all season (trailers converted ~85%, two independent cuts). Context only, never a gate.\nBest: FanDuel +130 | ESPN Bet +130 | Caesars +125.\nTap opens: FanDuel slip.\n$300 cap - LANE team: $600 if declared before entry. Staged adds = one position vs cap. Your read - not a directive."
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_last_alert_price = $, squeeze_alert_count = COALESCE(squeeze_alert_count,0) + 1 WHERE id = $",
+     "v": [
+      130,
+      101
+     ]
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_state = $ WHERE id = $",
+     "v": [
+      "{\"last_clock\":\"6:45\",\"last_period\":3,\"oob_count\":0,\"suspended\":false}",
+      101
+     ]
+    }
+   ],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "ALERT",
+     "reason": "",
+     "best": "+130 fanduel"
+    }
+   ]
+  },
+  "S21 dry run": {
+   "trace": [
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_state = $ WHERE id = $",
+     "v": [
+      "{\"last_clock\":\"6:45\",\"last_period\":3,\"oob_count\":0,\"suspended\":false}",
+      101
+     ]
+    }
+   ],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "WOULD-ALERT",
+     "reason": "",
+     "best": "+130 fanduel"
+    }
+   ]
+  },
+  "S22 no snapshot (stale copy)": {
+   "trace": [
+    {
+     "sql": "INSERT INTO odds_history (game_id, home_ml, away_ml, deficit, source) VALUES ($, $, $, $, $)",
+     "v": [
+      "g1",
+      130,
+      -145,
+      6,
+      "squeeze:fanduel"
+     ]
+    },
+    {
+     "sql": "SELECT ts, period, clock, ss_leader_alias, ss_leader_efg, ss_leader_efg_band, ss_variance_share, raw_stats_json FROM snapshots WHERE game_id = $ ORDER BY ts DESC LIMIT 1",
+     "v": [
+      "g1"
+     ]
+    },
+    {
+     "sql": "SELECT side, stake, odds FROM bets WHERE game_id = $ AND result = 'PENDING' ORDER BY id DESC LIMIT 1",
+     "v": [
+      "g1"
+     ]
+    },
+    {
+     "fetch": "https://ntfy.sh/test-topic",
+     "headers": {
+      "Title": "JUICE: MIN +130 (FanDuel)",
+      "Priority": "5",
+      "Tags": "chart_with_upwards_trend",
+      "Click": "https://sportsbook.fanduel.com/addToBetslip?marketId=1&selectionId=2"
+     },
+     "body": "Price hit your +117 line. Implied 43% vs no-scalp cell 53% (+10pp).\nMIN down 6, Q3 6:45.\nLive eFG read unavailable (no snapshot).\nBest: FanDuel +130 | ESPN Bet +130 | Caesars +125.\nTap opens: FanDuel slip.\n$300 cap (WATCHLIST). Staged adds = one position vs cap. Your read - not a directive."
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_last_alert_price = $, squeeze_alert_count = COALESCE(squeeze_alert_count,0) + 1 WHERE id = $",
+     "v": [
+      130,
+      101
+     ]
+    },
+    {
+     "sql": "UPDATE sweetspot_alerts SET squeeze_state = $ WHERE id = $",
+     "v": [
+      "{\"last_clock\":\"6:45\",\"last_period\":3,\"oob_count\":0,\"suspended\":false}",
+      101
+     ]
+    }
+   ],
+   "results": [
+    {
+     "id": 101,
+     "game": "LV@MIN",
+     "action": "ALERT",
+     "reason": "",
+     "best": "+130 fanduel"
+    }
+   ]
+  }
+ },
+ "armLoad": {
+  "armed": 3,
+  "live": [
+   {
+    "id": 302,
+    "fuel": null,
+    "st": null
+   }
+  ],
+  "trace": [
+   {
+    "sql": "SELECT id, alert_subtype, leader_killer, line_used, edge FROM sweetspot_alerts WHERE league = $ AND alert_subtype = ANY($) AND ntfy_sent IS TRUE AND (resolved IS NOT TRUE) AND squeeze_armed IS NULL AND created_at > NOW() - INTERVAL '3 hours'",
+    "v": [
+     "wnba",
+     "[\"EFG_FADE\",\"EFG_FADE_SOFT\",\"B1\",\"B2\",\"B3\",\"WATCHLIST\"]"
+    ]
+   },
+   {
+    "sql": "UPDATE sweetspot_alerts SET squeeze_armed = TRUE, squeeze_threshold = $::int, squeeze_expires_at = NOW() + INTERVAL '3 hours' WHERE id = $",
+    "v": [
+     -200,
+     201
+    ]
+   },
+   {
+    "sql": "UPDATE sweetspot_alerts SET squeeze_armed = TRUE, squeeze_threshold = $::int, squeeze_expires_at = NOW() + INTERVAL '3 hours' WHERE id = $",
+    "v": [
+     -150,
+     202
+    ]
+   },
+   {
+    "sql": "UPDATE sweetspot_alerts SET squeeze_armed = TRUE, squeeze_threshold = $::int, squeeze_expires_at = NOW() + INTERVAL '3 hours' WHERE id = $",
+    "v": [
+     117,
+     203
+    ]
+   },
+   {
+    "sql": "SELECT sa.id, sa.game_id, sa.leader_alias, sa.trailer_alias, sa.leader_killer, sa.alert_subtype, sa.trailer_lane, sa.squeeze_threshold, sa.squeeze_last_alert_price, sa.squeeze_alert_count, sa.squeeze_expires_at, sa.squeeze_state, sa.player_ctx_json, sa.line_used, g.home_alias AS _home, g.away_alias AS _away FROM sweetspot_alerts sa JOIN games g ON g.id = sa.game_id WHERE sa.league = $ AND sa.squeeze_armed IS TRUE AND (sa.resolved IS NOT TRUE)",
+    "v": [
+     "wnba"
+    ]
+   },
+   {
+    "sql": "UPDATE sweetspot_alerts SET squeeze_armed = FALSE WHERE id = $",
+    "v": [
+     303
+    ]
+   },
+   {
+    "sql": "UPDATE sweetspot_alerts SET squeeze_armed = FALSE WHERE id = $",
+    "v": [
+     301
+    ]
+   }
+  ]
+ },
+ "pure": {
+  "alias": [
+   [
+    "Minnesota Lynx",
+    "MIN"
+   ],
+   [
+    "Seattle Storm",
+    "SEA"
+   ],
+   [
+    "Portland Fire",
+    "POR"
+   ],
+   [
+    "Dallas Wings",
+    "DAL"
+   ],
+   [
+    "Chicago Sky",
+    "CHI"
+   ],
+   [
+    "New York Liberty",
+    "NY"
+   ],
+   [
+    "Las Vegas Aces",
+    "LV"
+   ],
+   [
+    "Washington Mystics",
+    "WSH"
+   ],
+   [
+    "Connecticut Sun",
+    "CON"
+   ],
+   [
+    "Indiana Fever",
+    "IND"
+   ],
+   [
+    "Los Angeles Sparks",
+    "LA"
+   ],
+   [
+    "Phoenix Mercury",
+    "PHX"
+   ],
+   [
+    "Golden State Valkyries",
+    "GS"
+   ],
+   [
+    "Atlanta Dream",
+    "ATL"
+   ],
+   [
+    "Toronto Tempo",
+    "TOR"
+   ],
+   [
+    "Lynx",
+    "MIN"
+   ],
+   [
+    "Unknown Team",
+    null
+   ],
+   [
+    "",
+    null
+   ]
+  ],
+  "bestMIN": {
+   "price": 130,
+   "book": "fanduel",
+   "link": "https://sportsbook.fanduel.com/addToBetslip?marketId=1&selectionId=2"
+  },
+  "bestLV": {
+   "price": -145,
+   "book": "draftkings",
+   "link": "https://sportsbook.draftkings.com/leagues/basketball/wnba"
+  },
+  "top3MIN": "FanDuel +130 | ESPN Bet +130 | Caesars +125",
+  "top3LV": "DraftKings -145 | Caesars -150 | FanDuel -155",
+  "thresholds": [
+   -200,
+   -150,
+   117,
+   -200
+  ],
+  "band": [
+   {
+    "mode": "in_band",
+    "oob": 0,
+    "suspended": false
+   },
+   {
+    "mode": "grace",
+    "oob": 1,
+    "suspended": false
+   },
+   {
+    "mode": "grace",
+    "oob": 1,
+    "suspended": false
+   },
+   {
+    "mode": "strike_skip",
+    "oob": 1,
+    "suspended": false
+   },
+   {
+    "mode": "suspend",
+    "oob": 3,
+    "suspended": true
+   },
+   {
+    "mode": "resume",
+    "oob": 0,
+    "suspended": false
+   },
+   {
+    "mode": "suspended",
+    "oob": 3,
+    "suspended": true
+   },
+   {
+    "mode": "strike_skip",
+    "oob": 1,
+    "suspended": false
+   }
+  ]
+ }
+}
