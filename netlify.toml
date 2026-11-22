@@ -27,6 +27,9 @@
 [functions."post-game-agent"]
   timeout = 120
 
+[functions."team-profiles-run"]
+  timeout = 60
+
 [functions."test-agent"]
   timeout = 60
 
