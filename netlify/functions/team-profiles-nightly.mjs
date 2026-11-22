@@ -1,8 +1,12 @@
 // ══════════════════════════════════════════════════════════════════════════════
 // team-profiles-nightly.mjs — TEAM_PROFILES_SPEC.md §4 (nightly compute) + §5 (metrics)
 //
-// Runs 1:30am MST (8:30am UTC) daily, after WNBA finals settle. WNBA-only v1 for the full
-// profile pipeline; an ISOLATED NBA lite stage (runNbaLiteStage, Nov 19) follows it.
+// Runs 1:30am MST (8:30am UTC) daily. NBA-CENTRIC since Nov 21: the NBA lite stage
+// (runNbaLiteStage) runs FIRST; the WNBA stage below (runWnbaStage — steps 1-5, unchanged)
+// runs only in season (May-Oct, wnbaProfilesInSeason) or when a WNBA tool param forces it.
+// The stages are isolated from each other. Every run writes one job_runs row (read it with
+// db-api ?action=get_job_runs&job=team-profiles). Manual runs: /team-profiles-run (unscheduled
+// twin — Netlify 403s external calls to scheduled functions).
 //   1. DISCOVER finalized games missing from team_game_stats (BDL /games, trailing
 //      4-day window — self-healing: a missed night is picked up next run)
 //   2. PULL missing games via /wnba/v1/player_stats (batched, cursor-paginated),
@@ -16,7 +20,7 @@
 //   5. ntfy one-liner (ASCII Title — hotfix learning #2).
 //
 // Modes: default incremental · ?backfill=1&from=YYYY-MM-DD&to=YYYY-MM-DD ·
-//        ?recompute=1 (skip ingestion) · ?dry=1 (no writes)
+//        ?recompute=1 (skip ingestion) · ?dry=1 (no writes) · ?wnba=1 (force the WNBA stage)
 // Concurrency: job_locks row (PENDING-sentinel pattern, hotfix learning #11)
 //   before ingestion; stale locks (>10 min) are taken over.
 //
@@ -594,12 +598,14 @@ export function computeNbaLiteProfiles(finals, asof) {
 async function runNbaLiteStage(sql, url, isDry, todayAz) {
   const season = Number(url.searchParams.get('nba_season')) || nbaSeasonYear(new Date());
   const seasonStart = `${season}-10-01`;
-  // Last snapshot per finalized game (same shape as db-api get_final_snapshots); date cast to text (hotfix #14)
+  // Last snapshot per finalized game (same shape as db-api get_final_snapshots); date cast to text (hotfix #14).
+  // games.date is TEXT 'YYYY-MM-DD' — compare as ISO text. A `::date` param here threw
+  // 'operator does not exist: text >= date' every night Nov 19-21 (0 NBA rows written).
   const finals = await sql`
     SELECT DISTINCT ON (s.game_id) s.game_id, g.date::text AS date, g.home_alias, g.away_alias,
       g.home_pts, g.away_pts, g.winner, s.raw_stats_json
     FROM snapshots s JOIN games g ON g.id = s.game_id
-    WHERE g.league = 'nba' AND g.winner IS NOT NULL AND g.date >= ${seasonStart}::date AND s.raw_stats_json IS NOT NULL
+    WHERE g.league = 'nba' AND g.winner IS NOT NULL AND g.date >= ${seasonStart} AND s.raw_stats_json IS NOT NULL
     ORDER BY s.game_id, s.ts DESC`;
   const profiles = computeNbaLiteProfiles(finals, todayAz);
   let written = 0;
@@ -640,33 +646,11 @@ async function notify(title, body) {
   } catch (e) { log(`ntfy failed: ${e.message}`); }
 }
 
-// ── Handler ──────────────────────────────────────────────────────────────────
-export default async function handler(req) {
-  const { neon } = await import('@neondatabase/serverless');
-  const sql = neon(process.env.DATABASE_URL);
-  const url = new URL(req.url, 'https://localhost');
-  const isDry = url.searchParams.get('dry') === '1';
-  const isBackfill = url.searchParams.get('backfill') === '1';
-  const isRecomputeOnly = url.searchParams.get('recompute') === '1';
-  const isReingest = url.searchParams.get('reingest') === '1'; // ON CONFLICT DO UPDATE — schema-amendment migrations (e.g. fgm/fga primitives Jul 14)
-  const isQuiet = url.searchParams.get('quiet') === '1';       // suppress ntfy — chunked historical backfills (Jul 14, 2024-25 Honest Gap substrate)
+// ── WNBA stage (unchanged pipeline, moved into a function Nov 21) ────────────────
+// Runs in season (May–Oct, AZ date) or when a WNBA tool param forces it. Returns the
+// fields the old handler returned at top level (backfill drivers read them).
+async function runWnbaStage(sql, url, { isDry, isBackfill, isRecomputeOnly, isReingest, isQuiet, dates }) {
   const league = 'wnba'; // v1 WNBA-only (spec §4)
-
-  const todayAz = slateDateFromBdl(new Date().toISOString());
-  let dates;
-  if (isBackfill) {
-    const from = url.searchParams.get('from'), to = url.searchParams.get('to') || todayAz;
-    if (!from) return new Response(JSON.stringify({ ok: false, error: 'backfill requires from=' }), { status: 400 });
-    dates = [...dateRange(from, to)];
-  } else {
-    // trailing 4-day window (self-healing)
-    dates = [];
-    for (let i = 3; i >= 0; i--) {
-      const d = new Date(Date.now() - i * 86400000 - 7 * 3600000);
-      dates.push(d.toISOString().slice(0, 10));
-    }
-  }
-
   let ingested = 0, discovered = 0, skippedExisting = 0;
   const lockName = `team-profiles-${league}`;
 
@@ -675,7 +659,7 @@ export default async function handler(req) {
       const got = await acquireLock(sql, lockName);
       if (!got) {
         log('lock held by concurrent invocation — bailing');
-        return new Response(JSON.stringify({ ok: false, error: 'locked' }), { status: 409 });
+        return { locked: true, error: 'locked' };
       }
     }
     try {
@@ -870,20 +854,88 @@ export default async function handler(req) {
     (isDry ? ' (dry)' : '') + (isBackfill ? ' (backfill)' : '');
   log(summary);
   if (!isDry && !isQuiet && (ingested > 0 || isBackfill)) await notify('team-profiles', summary);
+  return { league, season, dates: [dates[0], dates[dates.length - 1]], discovered, skippedExisting, ingested, teamsUpdated, purged, summary };
+}
 
-  // ── NBA LITE stage (NBA_SWEETSPOT_DASHBOARD_SPEC §5 / A1.6 D-4) — ISOLATED: a failure here can
-  // never touch the WNBA result above; no push (the lite profiles are dashboard context only).
-  // Skipped on WNBA backfill runs (chunked historical pulls should not recompute the NBA 30× over).
-  let nbaLite = null;
-  if (!isBackfill) {
-    try { nbaLite = await runNbaLiteStage(sql, url, isDry, todayAz); }
-    catch (e) { log(`nba lite stage failed (WNBA profiles unaffected): ${e.message}`); nbaLite = { error: e.message }; }
+// WNBA regular season + playoffs run May–Oct; outside that window the stage only rewrote the
+// same 15 profiles every night. Tool params (backfill/recompute/reingest/purge/?wnba=1) force it.
+export function wnbaProfilesInSeason(todayAz) {
+  const m = Number(String(todayAz || '').slice(5, 7));
+  return m >= 5 && m <= 10;
+}
+
+// ── job_runs (Nov 21): one row per run so a run can be checked without pasting logs.
+//    Never throws — a failed write can't fail the job. Self-creating (db-api init has it too).
+async function recordRun(sql, row) {
+  try {
+    await sql`CREATE TABLE IF NOT EXISTS job_runs (id BIGSERIAL PRIMARY KEY, job TEXT NOT NULL,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), finished_at TIMESTAMPTZ, ok BOOLEAN,
+      dry BOOLEAN DEFAULT FALSE, trigger TEXT, summary JSONB, error TEXT)`;
+    await sql`CREATE INDEX IF NOT EXISTS job_runs_job_started ON job_runs (job, started_at DESC)`;
+    await sql`INSERT INTO job_runs (job, started_at, finished_at, ok, dry, trigger, summary, error)
+      VALUES (${row.job}, ${row.started_at}, NOW(), ${row.ok}, ${row.dry}, ${row.trigger},
+        ${JSON.stringify(row.summary || {})}::jsonb, ${row.error || null})`;
+    await sql`DELETE FROM job_runs WHERE job = ${row.job} AND started_at < NOW() - INTERVAL '90 days'`;
+  } catch (e) { log(`job_runs write failed (job unaffected): ${e.message}`); }
+}
+
+// ── Handler (NBA-centric, Nov 21): NBA stage first; WNBA stage only in season ──────
+export default async function handler(req) {
+  const { neon } = await import('@neondatabase/serverless');
+  const sql = neon(process.env.DATABASE_URL);
+  const url = new URL(req.url, 'https://localhost');
+  const startedAt = new Date().toISOString();
+  const trigger = url.searchParams.get('trigger') === 'manual' ? 'manual' : 'cron';
+  const isDry = url.searchParams.get('dry') === '1';
+  const isBackfill = url.searchParams.get('backfill') === '1';
+  const isRecomputeOnly = url.searchParams.get('recompute') === '1';
+  const isReingest = url.searchParams.get('reingest') === '1'; // ON CONFLICT DO UPDATE — schema-amendment migrations (e.g. fgm/fga primitives Jul 14)
+  const isQuiet = url.searchParams.get('quiet') === '1';       // suppress ntfy — chunked historical backfills (Jul 14, 2024-25 Honest Gap substrate)
+  const isPurge = url.searchParams.get('purge_noncanonical') === '1';
+
+  const todayAz = slateDateFromBdl(new Date().toISOString());
+  let dates;
+  if (isBackfill) {
+    const from = url.searchParams.get('from'), to = url.searchParams.get('to') || todayAz;
+    if (!from) return new Response(JSON.stringify({ ok: false, error: 'backfill requires from=' }), { status: 400 });
+    dates = [...dateRange(from, to)];
+  } else {
+    // trailing 4-day window (self-healing)
+    dates = [];
+    for (let i = 3; i >= 0; i--) {
+      const d = new Date(Date.now() - i * 86400000 - 7 * 3600000);
+      dates.push(d.toISOString().slice(0, 10));
+    }
   }
 
-  return new Response(JSON.stringify({
-    ok: true, league, season, dates: [dates[0], dates[dates.length - 1]],
-    discovered, skippedExisting, ingested, teamsUpdated, purged, dry: isDry, nbaLite,
-  }));
+  // ── NBA stage FIRST — isolated: its failure can't touch the WNBA stage, and the reverse.
+  // Skipped on WNBA backfill chunks (they should not recompute the NBA 30× over). No push from
+  // the stage itself; a FAILURE pushes once (low priority) so a broken night can't go silent.
+  let nba = null;
+  if (!isBackfill) {
+    try { nba = await runNbaLiteStage(sql, url, isDry, todayAz); }
+    catch (e) { log(`nba stage failed: ${e.message}`); nba = { error: e.message }; }
+    if (nba && nba.error && !isDry) await notify('team-profiles NBA failed', `NBA profile stage failed: ${nba.error}`);
+  }
+
+  // ── WNBA stage — in season, or forced by a WNBA tool param
+  const wnbaForced = isBackfill || isRecomputeOnly || isReingest || isPurge || url.searchParams.get('wnba') === '1';
+  let wnba;
+  if (wnbaForced || wnbaProfilesInSeason(todayAz)) {
+    try { wnba = await runWnbaStage(sql, url, { isDry, isBackfill, isRecomputeOnly, isReingest, isQuiet, dates }); }
+    catch (e) { log(`wnba stage failed: ${e.message}`); wnba = { error: e.message }; }
+  } else {
+    wnba = { skipped: 'off-season (May-Oct only; ?wnba=1 forces)' };
+  }
+
+  const ok = !(nba && nba.error) && !wnba.error;
+  await recordRun(sql, { job: 'team-profiles', started_at: startedAt, ok, dry: isDry, trigger,
+    summary: { nba, wnba: { ...wnba, dates: undefined } }, error: [nba && nba.error && `nba: ${nba.error}`, wnba.error && `wnba: ${wnba.error}`].filter(Boolean).join(' | ') || null });
+
+  // legacy top-level WNBA fields when the stage ran (backfill drivers read ingested/teamsUpdated)
+  const legacy = wnba.skipped || wnba.error ? {} : (({ summary, locked, ...rest }) => rest)(wnba);
+  const status = wnba.locked && wnbaForced ? 409 : 200;
+  return new Response(JSON.stringify({ ok, ...legacy, nba, wnba, dry: isDry, trigger }), { status });
 }
 
 // NOTE (Aug 11): Netlify Edge now 403s external HTTP calls to scheduled functions

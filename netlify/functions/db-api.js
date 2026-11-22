@@ -672,6 +672,21 @@ exports.handler = async (event) => {
         ts TIMESTAMPTZ DEFAULT NOW()
       )`;
 
+      // ── job_runs (Nov 21): one row per scheduled-job run — read via get_job_runs, no log pasting.
+      //    Writers self-create the same shape (team-profiles-nightly recordRun); keep both in step.
+      await sql`CREATE TABLE IF NOT EXISTS job_runs (
+        id BIGSERIAL PRIMARY KEY,
+        job TEXT NOT NULL,
+        started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        finished_at TIMESTAMPTZ,
+        ok BOOLEAN,
+        dry BOOLEAN DEFAULT FALSE,
+        trigger TEXT,
+        summary JSONB,
+        error TEXT
+      )`;
+      await sql`CREATE INDEX IF NOT EXISTS job_runs_job_started ON job_runs (job, started_at DESC)`;
+
       // ── WNBA Data Layer v3: official post-game truth (BDL game advanced) ──
       await sql`CREATE TABLE IF NOT EXISTS wnba_official_stats (
         bdl_game_id INTEGER NOT NULL,
@@ -2709,6 +2724,21 @@ exports.handler = async (event) => {
         ? await sql`SELECT * FROM team_profiles WHERE league = ${league} AND season = ${season} AND team_alias = ${team}`
         : await sql`SELECT * FROM team_profiles WHERE league = ${league} AND season = ${season} ORDER BY team_alias`;
       return { statusCode: 200, headers, body: JSON.stringify({ team_profiles: rows }) };
+    }
+
+    // job_runs (Nov 21) — recent runs of scheduled jobs: ?job=team-profiles&limit=20 (job optional)
+    if (action === 'get_job_runs') {
+      const limit = Math.min(Math.max(Number(params.limit) || 20, 1), 200);
+      try {
+        const rows = params.job
+          ? await sql`SELECT * FROM job_runs WHERE job = ${params.job} ORDER BY started_at DESC LIMIT ${limit}`
+          : await sql`SELECT * FROM job_runs ORDER BY started_at DESC LIMIT ${limit}`;
+        return { statusCode: 200, headers, body: JSON.stringify({ job_runs: rows }) };
+      } catch (e) {
+        // table not created yet (no run since deploy and no ?action=init) — empty, not an error
+        if (/relation "job_runs" does not exist/.test(e.message)) return { statusCode: 200, headers, body: JSON.stringify({ job_runs: [], note: 'no runs recorded yet' }) };
+        throw e;
+      }
     }
 
     // TEAM_PROFILES_SPEC §3a — raw team-game rows (fixture harness + research pulls)
